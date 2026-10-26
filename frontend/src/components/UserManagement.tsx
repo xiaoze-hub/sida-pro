@@ -244,7 +244,7 @@ export default function UserManagement({ currentUser }: Props) {
 
   if (!isOwner) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card p-6 text-center text-[13px] text-muted-foreground">
+      <div className="card-surface rounded-xl bg-card p-6 text-center text-[14px] text-muted-foreground">
         <UserCog className="mx-auto mb-2 h-6 w-6 opacity-50" />
         仅管理员可管理用户
       </div>
@@ -252,9 +252,9 @@ export default function UserManagement({ currentUser }: Props) {
   }
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-4">
+    <div className="card-surface rounded-xl bg-card p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="flex items-center gap-2 text-[13px] font-semibold">
+        <h3 className="flex items-center gap-2 text-[14px] font-semibold">
           <Users className="h-4 w-4 text-primary" /> 用户管理({users.length})
         </h3>
         <Button size="sm" variant="outline" onClick={() => setShowCreate(v => !v)}>
@@ -263,15 +263,15 @@ export default function UserManagement({ currentUser }: Props) {
       </div>
 
       {showCreate && (
-        <div className="mb-3 space-y-2 rounded-lg border border-border/40 bg-accent/20 p-3">
+        <div className="card-surface mb-3 space-y-2 rounded-lg bg-s2 p-3">
           <input
-            className="w-full rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-[12px]"
+            className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]"
             placeholder="用户名(如: 小李)"
             value={newName}
             onChange={e => setNewName(e.target.value)}
           />
           <input
-            className="w-full rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-[12px]"
+            className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]"
             placeholder="密码(至少8位)"
             type="password"
             value={newPass}
@@ -305,7 +305,7 @@ export default function UserManagement({ currentUser }: Props) {
                 <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${u.is_deleted ? 'bg-rose-500/60' : u.is_active ? 'bg-emerald-500' : 'bg-muted'}`} />
                 <span className="font-medium">{u.username}</span>
                 <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                  className={`rounded px-1.5 py-0.5 text-[12px] ${
                     u.role === 'owner'
                       ? 'bg-amber-500/15 text-amber-600'
                       : u.role === 'pro'
@@ -318,10 +318,10 @@ export default function UserManagement({ currentUser }: Props) {
                   {u.role === 'owner' ? '管理员' : u.role === 'pro' ? 'Pro' : u.role === 'guest' ? '访客' : '成员'}
                 </span>
                 {u.is_deleted && (
-                  <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-500">已注销（宽限期）</span>
+                  <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[12px] text-rose-500">已注销（宽限期）</span>
                 )}
               </div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-4 text-[10px] text-muted-foreground">
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-4 text-[12px] text-muted-foreground">
                 <span className="truncate" title={u.email || ''}>{u.email || '无邮箱'}</span>
                 <span>注册 {formatDateTime(u.created_at) || '—'}</span>
                 <span>最后登录 {formatDateTime(u.last_login) || '从未'}</span>
@@ -331,7 +331,7 @@ export default function UserManagement({ currentUser }: Props) {
               {u.id !== currentUser?.id && (
                 <>
                 <button
-                  className="flex items-center gap-1 rounded border border-border/50 px-1.5 py-1 text-[11px] text-muted-foreground hover:border-primary/30 hover:text-primary"
+                  className="flex items-center gap-1 rounded border border-border px-1.5 py-1 text-[12px] text-muted-foreground hover:border-primary/30 hover:text-primary"
                   title="配置该用户可用的 AI 模型"
                   aria-label={`配置 ${u.username} 可用的 AI 模型`}
                   onClick={() => void openModelAccess(u)}
@@ -339,7 +339,7 @@ export default function UserManagement({ currentUser }: Props) {
                   <Boxes className="h-3 w-3" /> 模型授权
                 </button>
                 <button
-                  className="flex items-center gap-1 rounded border border-border/50 px-1.5 py-1 text-[11px] text-muted-foreground hover:border-primary/30 hover:text-primary"
+                  className="flex items-center gap-1 rounded border border-border px-1.5 py-1 text-[12px] text-muted-foreground hover:border-primary/30 hover:text-primary"
                   title="配置该用户可用的功能模块"
                   aria-label={`配置 ${u.username} 可用的功能模块`}
                   onClick={() => void openPermissionAccess(u)}
@@ -385,11 +385,11 @@ export default function UserManagement({ currentUser }: Props) {
       </div>
 
       {resetTarget && (
-        <div className="mt-3 rounded-lg border border-border/40 bg-accent/20 p-3">
+        <div className="card-surface mt-3 rounded-lg bg-s2 p-3">
           <div className="mb-2 text-[12px] font-medium">重置 {resetTarget.username} 的密码</div>
           <div className="flex gap-2">
             <input
-              className="flex-1 rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-[12px]"
+              className="flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]"
               placeholder="新密码(至少8位)"
               type="password"
               value={resetPass}
@@ -421,7 +421,7 @@ export default function UserManagement({ currentUser }: Props) {
                 {MODE_OPTIONS.map(opt => (
                   <label
                     key={opt.value}
-                    className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border/50 bg-background/50 px-3 py-2.5 transition-colors hover:border-primary/30"
+                    className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-background px-3 py-2.5 transition-colors hover:border-primary/30"
                   >
                     <input
                       type="radio"
@@ -432,7 +432,7 @@ export default function UserManagement({ currentUser }: Props) {
                     />
                     <span className="min-w-0">
                       <span className="block text-[12px] font-medium text-foreground">{opt.label}</span>
-                      <span className="block text-[11px] text-muted-foreground">{opt.hint}</span>
+                      <span className="block text-[12px] text-muted-foreground">{opt.hint}</span>
                     </span>
                   </label>
                 ))}
@@ -441,16 +441,16 @@ export default function UserManagement({ currentUser }: Props) {
               {/* 仅勾选模式下: 模型 checkbox 列表 */}
               {accessMode === 'granted' && (
                 <div>
-                  <div className="mb-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
+                  <div className="mb-1.5 flex items-center justify-between text-[12px] text-muted-foreground">
                     <span>可选模型({accessModels.length})</span>
                     <button
-                      className="text-[11px] text-primary hover:underline"
+                      className="text-[12px] text-primary hover:underline"
                       onClick={() => setCheckedIds(accessModels.map(m => m.id))}
                     >
                       全选
                     </button>
                   </div>
-                  <div className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-border/40 bg-background/40 p-2">
+                  <div className="card-surface max-h-52 space-y-1 overflow-y-auto rounded-lg bg-background p-2">
                     {accessModels.length === 0 && (
                       <div className="py-4 text-center text-[12px] text-muted-foreground">暂无可用模型</div>
                     )}
@@ -467,7 +467,7 @@ export default function UserManagement({ currentUser }: Props) {
                         />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[12px] font-medium text-foreground" title={m.name}>{m.name}</span>
-                          <span className="block truncate font-mono text-[10px] text-muted-foreground" title={`${m.model}${m.service_name ? ` · ${m.service_name}` : ''}`}>
+                          <span className="block truncate font-mono text-[12px] text-muted-foreground" title={`${m.model}${m.service_name ? ` · ${m.service_name}` : ''}`}>
                             {m.model}{m.service_name ? ` · ${m.service_name}` : ''}
                           </span>
                         </span>
@@ -478,7 +478,7 @@ export default function UserManagement({ currentUser }: Props) {
               )}
 
               {/* 操作 */}
-              <div className="flex justify-end gap-2 border-t border-border/40 pt-3">
+              <div className="flex justify-end gap-2 border-t border-border pt-3">
                 <Button size="sm" variant="outline" onClick={() => setAccessTarget(null)}>取消</Button>
                 <Button size="sm" onClick={() => void saveModelAccess()} disabled={accessSaving}>
                   {accessSaving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
@@ -510,7 +510,7 @@ export default function UserManagement({ currentUser }: Props) {
                 if (items.length === 0) return null
                 return (
                   <div key={group}>
-                    <div className="text-[11px] font-semibold text-muted-foreground mb-1.5">{group}模块</div>
+                    <div className="text-[12px] font-semibold text-muted-foreground mb-1.5">{group}模块</div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
                       {items.map(p => {
                         const isDefault = permDefaults.includes(p.key)
@@ -521,7 +521,7 @@ export default function UserManagement({ currentUser }: Props) {
                           className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[12px] transition-colors ${
                             isDefault || isGranted
                               ? 'border-primary/40 bg-primary/5 text-foreground'
-                              : 'border-border/50 text-muted-foreground hover:border-border'
+                              : 'border-border text-muted-foreground hover:border-border'
                           } ${isDefault ? 'cursor-default' : 'cursor-pointer'}`}
                         >
                           <input
@@ -533,7 +533,7 @@ export default function UserManagement({ currentUser }: Props) {
                           />
                           <span className="flex-1 min-w-0 truncate" title={p.label}>{p.label}</span>
                           {isDefault && (
-                            <span className="flex-shrink-0 rounded-full border border-border/50 px-1.5 py-px text-[10px] text-muted-foreground">
+                            <span className="flex-shrink-0 rounded-full border border-border px-1.5 py-px text-[12px] text-muted-foreground">
                               角色默认
                             </span>
                           )}
@@ -544,7 +544,7 @@ export default function UserManagement({ currentUser }: Props) {
                   </div>
                 )
               })}
-              <p className="text-[10px] text-muted-foreground leading-relaxed">
+              <p className="text-[12px] text-muted-foreground leading-relaxed">
                 说明:勾选 = 给该用户开放对应功能模块(在角色默认权限之上)。例如给成员勾选「数据源」,该用户即可进入数据源管理页。未勾选的管理类模块维持角色默认(成员不可见)。
               </p>
             </div>

@@ -85,10 +85,10 @@ export function MarketPhasePanel() {
   }
 
   return (
-    <div className="rounded border border-border/60 p-3">
+    <div className="analysis-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Gauge className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
-        <span className="text-[13px] font-semibold">市场情绪周期</span>
+        <span className="text-[14px] font-semibold">市场情绪周期</span>
         {current ? (
           <span
             className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${phaseTextClass(current.phase)}`}
@@ -96,15 +96,14 @@ export function MarketPhasePanel() {
             {current.label} · 第 {current.days} 天
           </span>
         ) : null}
-        <span className="ml-auto text-[10px] text-muted-foreground">
+        <span className="ml-auto text-[12px] text-muted-foreground">
           口径: 连板梯队 EMA α=1/3 + 2 日确认; 阈值用自有历史分位标定
         </span>
       </div>
 
       {!segs?.available ? (
-        <div className="grid place-items-center px-6 py-8 text-center">
-          <Gauge className="h-8 w-8 text-muted-foreground" strokeWidth={1.5} />
-          <p className="mt-3 text-[13px] text-foreground">尚无阶段历史</p>
+        <div className="rounded-lg bg-s2 p-4">
+          <p className="text-[14px] text-foreground">尚无阶段历史</p>
           <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
             阶段需从涨停事件回填历史后才能判定(EMA 与 2 日确认依赖完整序列)。
           </p>
@@ -118,9 +117,9 @@ export function MarketPhasePanel() {
               {busy ? '回填中…' : '回填历史阶段'}
             </button>
           ) : (
-            <p className="mt-2 text-[11px] text-muted-foreground">需管理员在后台触发回填</p>
+            <p className="mt-2 text-[12px] text-muted-foreground">需管理员在后台触发回填</p>
           )}
-          {msg ? <p className="mt-2 text-[11px] text-muted-foreground">{msg}</p> : null}
+          {msg ? <p className="mt-2 text-[12px] text-muted-foreground">{msg}</p> : null}
         </div>
       ) : (
         <div className="space-y-2">
@@ -132,7 +131,7 @@ export function MarketPhasePanel() {
                   <span
                     key={it.key}
                     title={`${it.label} 当前值在近 ${stats?.total_days ?? 0} 天历史中的百分位`}
-                    className="rounded bg-accent/40 px-1.5 py-0.5 text-[11px] text-foreground"
+                    className="rounded bg-s2 px-1.5 py-0.5 text-[12px] text-foreground"
                   >
                     {/* 2026-10-24 L3-A: 缺项不再渲染 `p--`(读作"分位是负无穷"), 显式写样本不足 */}
                     {it.label} <span className="font-mono">{v == null ? '样本不足' : `p${v}`}</span>
@@ -143,7 +142,7 @@ export function MarketPhasePanel() {
           ) : null}
 
           {rule && current ? (
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
               <span className={phaseTextClass(current.phase)}>
                 {PHASE_LABEL[current.phase]} 已持续 {current.days} 天
               </span>
@@ -154,7 +153,7 @@ export function MarketPhasePanel() {
                 <span className="flex items-center gap-1">
                   · 历史去向:
                   {rule.next.map(([label, p]) => (
-                    <span key={label} className="rounded bg-accent/40 px-1 py-0.5 text-foreground">
+                    <span key={label} className="rounded bg-s2 px-1 py-0.5 text-foreground">
                       {label} {Math.round(p * 100)}%
                     </span>
                   ))}
@@ -174,7 +173,7 @@ export function MarketPhasePanel() {
                 />
               ))}
             </div>
-            <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+            <div className="mt-1 flex flex-wrap gap-2 text-[12px] text-muted-foreground">
               {(Object.keys(PHASE_LABEL) as PhaseKey[]).map((k) => (
                 <span key={k} className="flex items-center gap-1">
                   <span className={`inline-block h-2 w-2 rounded-sm ${phaseBandClass(k)}`} />

@@ -531,8 +531,8 @@ export default function HeaderBand({
   const scoreText = suggestion ? `${suggestion.score >= 0 ? '+' : ''}${suggestion.score}` : '--'
 
   return (
-    <div className="sticky top-0 z-20 rounded border border-border/60 bg-background/95 px-3 py-2 backdrop-blur">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <div className="card-surface rounded-xl bg-card p-4 shadow-panel">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {/* 返回入口: 只有**确实知道来路**时才画(见 nav-back.ts 的三级降级); 紧凑文字按钮,
             不用卡片包 —— 与带内其它控件同一字阶(11px)。 */}
         {back ? (
@@ -541,7 +541,7 @@ export default function HeaderBand({
             onClick={back.onBack}
             title={back.label}
             aria-label={back.label}
-            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>{back.label}</span>
@@ -551,7 +551,7 @@ export default function HeaderBand({
           // 个股: 顶行(名称 + 代码 + 现价 + 涨跌色)逐字节不变
           <>
             <span className="text-[16px] font-semibold">{quote?.name || nameHint || symbol}</span>
-            <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
+            <span className="font-mono text-[12px] text-muted-foreground">{symbol}</span>
             <span className={cn('font-mono text-[16px] font-semibold', toneClass)}>
               {safePrice(quote?.current_price, 2)}
             </span>
@@ -562,11 +562,11 @@ export default function HeaderBand({
         ) : (
           // 指数/板块: 只给**裸代码**中性标签 —— 不渲染 quote 的名称/现价/涨跌
           // (同代码的个股报价是**另一标的**; 名称与数值由正文 IndexBody/BoardBody 拥有)。
-          <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
+          <span className="font-mono text-[12px] text-muted-foreground">{symbol}</span>
         )}
 
         <div className="ml-auto flex items-center gap-1">
-          <div className="flex items-center gap-0.5" role="group" aria-label="类型切换">
+          <div className="flex items-center gap-0.5 rounded-lg bg-s2 p-1" role="group" aria-label="类型切换">
             {TYPE_OPTIONS.map((o) => (
               <button
                 key={o.id}
@@ -576,9 +576,9 @@ export default function HeaderBand({
                   if (type !== o.id) onTypeChange?.(o.id)
                 }}
                 className={cn(
-                  'rounded px-1.5 py-0.5 text-[11px] transition-colors',
+                  'min-h-9 rounded-md px-2.5 py-1.5 text-[12px] transition-colors',
                   type === o.id
-                    ? 'bg-accent text-foreground'
+                    ? 'bg-card text-primary shadow-sm'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -591,7 +591,7 @@ export default function HeaderBand({
             onClick={refresh}
             title="刷新"
             aria-label="刷新"
-            className="rounded p-1 text-muted-foreground hover:text-foreground"
+            className="ui-icon-button"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
           </button>
@@ -601,9 +601,9 @@ export default function HeaderBand({
       {/* 快照行**仅个股** —— 其 cell 的值全部来自 `/quotes`(个股)/more-info/l2, 对指数/板块
           既是 `--` 噪声, 又(若发了 /quotes)会把另一标的的今开/最高/最低/成交额画出来。 */}
       {isStock ? (
-        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-border pt-3 sm:grid-cols-4 xl:grid-cols-6">
           {cells.map((c) => (
-            <div key={c.key} className="flex items-baseline gap-1 text-[11px]">
+            <div key={c.key} className="flex min-w-0 flex-col gap-1 text-[12px]">
               <span className="text-muted-foreground">{c.label}</span>
               <span className="font-mono">{c.value}</span>
             </div>
@@ -623,7 +623,7 @@ export default function HeaderBand({
               <span
                 data-testid="band1-l2-snapshot-clock"
                 title="封单额/涨停价/连板 等 /l2 读数的取数时刻; 本带无 30s 轮询, 点刷新可重取"
-                className="font-mono text-[10px] text-muted-foreground"
+                className="font-mono text-[12px] text-muted-foreground"
               >
                 快照 {clock}
               </span>
@@ -638,22 +638,22 @@ export default function HeaderBand({
           <button
             type="button"
             onClick={() => onGotoTab?.('suggest')}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded border border-border/60 px-2 py-1 text-left hover:bg-accent/40"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded border border-border px-2 py-1 text-left hover:bg-s2"
           >
             <TechnicalBadge
               label={`建议·${suggestion.action_label}`}
               tone={technicalToneFromSuggestionAction(suggestion.action, suggestion.action_label)}
               size="sm"
             />
-            <span className="font-mono text-[11px] text-muted-foreground">评分 {scoreText}</span>
-            <span className="truncate text-[11px]" title={suggestion.signal}>{suggestion.signal}</span>
+            <span className="font-mono text-[12px] text-muted-foreground">评分 {scoreText}</span>
+            <span className="truncate text-[12px]" title={suggestion.signal}>{suggestion.signal}</span>
           </button>
           {/* T19: 持仓态未知时显式标注 —— 评分按**未持仓**口径算, 不把"未知"说成"未持仓"。 */}
           {positionUnknown ? (
             <span
               data-testid="position-unknown"
               title="持仓态未知: 持仓判定源在途或取数失败, 评分暂按未持仓口径"
-              className="shrink-0 text-[10px] text-muted-foreground"
+              className="shrink-0 text-[12px] text-muted-foreground"
             >
               持仓态未知
             </span>

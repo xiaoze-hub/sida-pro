@@ -203,9 +203,9 @@ export default function HistoryPage() {
           </div>
           <div>
             <h1 className="text-[16px] md:text-xl font-bold">报告中心</h1>
-            <p className="text-[12px] md:text-[13px] text-muted-foreground">报告式阅读：目录 + 正文</p>
+            <p className="text-[12px] md:text-[14px] text-muted-foreground">报告式阅读：目录 + 正文</p>
           </div>
-          <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+          <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background border border-border text-[12px] text-muted-foreground">
             共 <span className="font-mono text-foreground">{records.length}</span> 条
           </div>
         </div>
@@ -251,13 +251,13 @@ export default function HistoryPage() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setMobileView('list')}
-                className={`h-9 rounded-md text-[12px] font-medium transition-colors ${mobileView === 'list' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
+                className={`h-9 rounded-md text-[12px] font-medium transition-colors ${mobileView === 'list' ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-s2'}`}
               >
                 目录
               </button>
               <button
                 onClick={() => setMobileView('reader')}
-                className={`h-9 rounded-md text-[12px] font-medium transition-colors ${mobileView === 'reader' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
+                className={`h-9 rounded-md text-[12px] font-medium transition-colors ${mobileView === 'reader' ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-s2'}`}
                 disabled={!selectedRecord}
               >
                 正文
@@ -267,7 +267,7 @@ export default function HistoryPage() {
 
           {/* List */}
           <div className={`md:col-span-5 overflow-hidden ${mobileView === 'reader' ? 'hidden md:block' : ''}`}>
-            <div className="flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
               <span className="text-[12px] text-muted-foreground">目录（点击查看）</span>
               <div className="flex items-center gap-1" role="group" aria-label="按生成状态筛选">
                 {(
@@ -283,10 +283,10 @@ export default function HistoryPage() {
                     data-testid={`history-filter-${value}`}
                     aria-pressed={statusFilter === value}
                     onClick={() => setStatusFilter(value)}
-                    className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+                    className={`rounded px-2 py-0.5 text-[12px] transition-colors ${
                       statusFilter === value
                         ? 'bg-primary/15 font-medium text-primary'
-                        : 'text-muted-foreground hover:bg-accent/30'
+                        : 'text-muted-foreground hover:bg-s2'
                     }`}
                   >
                     {label}
@@ -309,19 +309,19 @@ export default function HistoryPage() {
                   <button
                     key={r.id}
                     onClick={() => selectRecord(r.id)}
-                    className={`w-full text-left px-4 py-3 transition-colors ${active ? 'bg-primary/8' : 'hover:bg-accent/30'}`}
+                    className={`w-full text-left px-4 py-3 transition-colors ${active ? 'bg-primary/8' : 'hover:bg-s2'}`}
                   >
                     <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-[10px] flex-shrink-0">
+                      <Badge variant="outline" className="text-[12px] flex-shrink-0">
                         {AGENT_LABELS[r.agent_name] || r.agent_name}
                       </Badge>
                       <span
-                        className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground'}`}
+                        className={`text-[14px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground'}`}
                         title={r.title || '分析报告'}
                       >{r.title || '分析报告'}</span>
                       {isFailed(r) && (
                         <>
-                          <Badge variant="destructive" className="text-[10px] flex-shrink-0">未生成</Badge>
+                          <Badge variant="destructive" className="text-[12px] flex-shrink-0">未生成</Badge>
                           <span
                             role="button"
                             tabIndex={0}
@@ -337,7 +337,7 @@ export default function HistoryPage() {
                                 void retryRecord(r)
                               }
                             }}
-                            className="ml-auto flex-shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+                            className="ml-auto flex-shrink-0 rounded px-1.5 py-0.5 text-[12px] font-medium text-primary hover:bg-primary/10"
                           >
                             {retryingId === r.id ? '提交中…' : '重试'}
                           </span>
@@ -345,11 +345,11 @@ export default function HistoryPage() {
                       )}
                     </div>
                     {isFailed(r) && r.error && (
-                      <div className="mt-1 truncate text-[11px] text-destructive/80" title={r.error}>
+                      <div className="mt-1 truncate text-[12px] text-destructive/80" title={r.error}>
                         {r.error}
                       </div>
                     )}
-                    <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                    <div className="mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
                       <span className="font-mono">{r.analysis_date}</span>
                       <span>{formatTimeShort(displayTime(r))}</span>
                     </div>
@@ -375,8 +375,8 @@ export default function HistoryPage() {
                         <ArrowLeft className="w-4 h-4" />
                         目录
                       </Button>
-                      <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[selectedRecord.agent_name] || selectedRecord.agent_name}</Badge>
-                      <span className="text-[11px] text-muted-foreground font-mono">{formatDateTime(displayTime(selectedRecord))}</span>
+                      <Badge variant="outline" className="text-[12px]">{AGENT_LABELS[selectedRecord.agent_name] || selectedRecord.agent_name}</Badge>
+                      <span className="text-[12px] text-muted-foreground font-mono">{formatDateTime(displayTime(selectedRecord))}</span>
                     </div>
                     <div title={formatTitle(selectedRecord)} className="mt-1 text-[16px] md:text-[16px] font-semibold text-foreground truncate">
                       {formatTitle(selectedRecord)}
@@ -426,8 +426,8 @@ export default function HistoryPage() {
                 </div>
 
                 {selectedRecord.status && selectedRecord.status !== 'success' ? (
-                  <div className="mt-4 p-4 border border-destructive/30 bg-destructive/5 rounded-md">
-                    <div className="text-[13px] font-medium text-destructive">本条报告未生成（{selectedRecord.status}）</div>
+                  <div className="card-surface mt-4 p-4 bg-destructive/5 rounded-md">
+                    <div className="text-[14px] font-medium text-destructive">本条报告未生成（{selectedRecord.status}）</div>
                     {selectedRecord.error && (
                       <div className="mt-1 text-[12px] text-muted-foreground break-words">{selectedRecord.error}</div>
                     )}
@@ -440,19 +440,19 @@ export default function HistoryPage() {
                       >
                         {retryingId === selectedRecord.id ? '提交中…' : '重新生成'}
                       </Button>
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-[12px] text-muted-foreground">
                         会按你当前的自选/持仓重跑一次，覆盖这条记录
                       </span>
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
+                  <div className="mt-4 p-4 bg-s2 rounded-md prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
                     <SafeMarkdown>{selectedRecord.content}</SafeMarkdown>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="text-[13px] text-muted-foreground">请选择一条记录</div>
+              <div className="text-[14px] text-muted-foreground">请选择一条记录</div>
             )}
           </div>
         </div>
@@ -460,7 +460,7 @@ export default function HistoryPage() {
 
       {/* Detail Dialog */}
       <Dialog open={!!detailRecord} onOpenChange={open => !open && setDetailRecord(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent placement="right" className="max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{detailRecord ? formatTitle(detailRecord) : '分析详情'}</DialogTitle>
             <DialogDescription>
@@ -471,35 +471,35 @@ export default function HistoryPage() {
               )}
             </DialogDescription>
           </DialogHeader>
-          <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none">
+          <div className="mt-4 p-4 bg-s2 rounded-md prose prose-sm dark:prose-invert max-w-none">
             {detailRecord && detailRecord.status && detailRecord.status !== 'success' ? (
-              <div className="text-[13px] font-medium text-destructive">本条报告未生成（{detailRecord.status}）{detailRecord.error ? `：${detailRecord.error}` : ''}</div>
+              <div className="text-[14px] font-medium text-destructive">本条报告未生成（{detailRecord.status}）{detailRecord.error ? `：${detailRecord.error}` : ''}</div>
             ) : (
               detailRecord && <SafeMarkdown>{detailRecord.content}</SafeMarkdown>
             )}
           </div>
           {detailRecord?.prompt_stats ? (
-            <div className="mt-3 rounded-md border border-border/50 p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">Prompt 统计</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.prompt_stats, null, 2)}</pre>
+              <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.prompt_stats, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.context_payload ? (
-            <div className="mt-3 rounded-md border border-border/50 p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">上下文快照</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{JSON.stringify(detailRecord.context_payload, null, 2)}</pre>
+              <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{JSON.stringify(detailRecord.context_payload, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.news_debug ? (
-            <div className="mt-3 rounded-md border border-border/50 p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">新闻注入明细</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.news_debug, null, 2)}</pre>
+              <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.news_debug, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.prompt_context ? (
-            <div className="mt-3 rounded-md border border-border/50 p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">Prompt 原文</div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{detailRecord.prompt_context}</pre>
+              <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{detailRecord.prompt_context}</pre>
             </div>
           ) : null}
         </DialogContent>

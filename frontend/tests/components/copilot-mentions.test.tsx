@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMock = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
-  sendMessageStream: vi.fn(async () => {}),
+  sendMessageStream: vi.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue(undefined),
   createConversation: vi.fn().mockResolvedValue({ id: 21 }),
 }))
 

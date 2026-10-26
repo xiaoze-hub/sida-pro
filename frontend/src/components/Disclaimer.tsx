@@ -1,12 +1,7 @@
 import { useEffect, useState } from 'react'
-import { X, AlertTriangle } from 'lucide-react'
+import { X, Info } from 'lucide-react'
 
-/**
- * 全局免责声明底部条(合规落地, 2026-09-16)。
- * - 仅在已登录后的页面挂载(App.tsx RequireAuth 内)。
- * - 关闭后写入 localStorage, 本机不再显示。
- * - 移动端底部导航高 14(56px), 故抬高 bottom 避免遮挡。
- */
+/** 工作区状态行右侧的数据使用提示；关闭偏好按浏览器保存，跨标签页同步。 */
 
 const STORAGE_KEY = 'sida_disclaimer_dismissed'
 
@@ -30,11 +25,6 @@ export default function Disclaimer() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // L3-G(2026-10-24): 从 fixed 底栏改为**文档流页脚**。
-  // 原实现 fixed inset-x-0 bottom-*, 会压住页面最后一行(走查 9 页 + analysis 详情页均复现:
-  // 「主力意图…获利94%」被压一半)。改为随内容滚动的页脚后, 不再需要 --disclaimer-h 补偿,
-  // 也不再给 html 加 has-disclaimer 类(留着会白留一截底部 padding)。
-
   if (!visible) return null
 
   const dismiss = () => {
@@ -47,24 +37,12 @@ export default function Disclaimer() {
   }
 
   return (
-    <div
-      role="status"
-      className="pointer-events-none relative"
-    >
-      <div data-shell-disclaimer className="pointer-events-auto mx-auto flex max-w-5xl items-center gap-2 border-t border-amber-600/25 dark:border-amber-500/20 bg-card/95 px-3 py-2 backdrop-blur md:px-4 md:py-2.5">
-        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
-        <p className="flex-1 text-[11px] leading-snug text-muted-foreground md:text-[12px]">
-          本平台数据仅供参考，不构成投资建议。市场有风险，投资需谨慎。
-        </p>
-        <button
-          type="button"
-          onClick={dismiss}
-          title="关闭并不再显示"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-    </div>
+    <aside role="note" aria-label="数据使用提示" data-shell-disclaimer className="ml-auto flex min-w-0 items-center justify-end gap-2 text-[12px] text-muted-foreground">
+      <Info className="h-3.5 w-3.5 shrink-0 text-role-opp" aria-hidden="true" />
+      <p className="min-w-0 text-right leading-relaxed">本平台数据仅供参考，不构成投资建议。市场有风险，投资需谨慎。</p>
+      <button type="button" onClick={dismiss} title="关闭并不再显示" aria-label="关闭数据使用提示" className="ui-icon-button">
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </aside>
   )
 }

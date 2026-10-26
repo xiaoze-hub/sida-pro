@@ -50,6 +50,10 @@ SIDA 不重复造轮子 — 把经过验证的开源项目整合成一条流水�
 
 > 一条 `docker run` 启动应用；可观测栈为可选基础设施。
 
+## 项目导航
+
+[项目大纲与知识库](docs/knowledge-base/README.md) · [架构与代码入口](docs/knowledge-base/architecture.md) · [本地 Docker 运行](docs/knowledge-base/local-docker.md)
+
 ## 界面截图
 
 ||||

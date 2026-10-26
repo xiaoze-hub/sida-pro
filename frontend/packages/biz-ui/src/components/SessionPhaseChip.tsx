@@ -53,7 +53,7 @@ export function sessionPhaseOf(when: Date = new Date()): SessionInfo {
 export default function SessionPhaseChip({ info, className }: { info: SessionInfo; className?: string }) {
   return (
     <span
-      className={cn('inline-flex items-center gap-1.5 text-[11px] text-muted-foreground', className)}
+      className={cn('inline-flex items-center gap-1.5 text-[12px] text-muted-foreground', className)}
       data-session-phase={info.phase}
       title={`当前时段: ${info.label}(按北京时间判定)`}
     >

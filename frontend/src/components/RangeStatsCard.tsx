@@ -56,7 +56,7 @@ export default function RangeStatsCard({ stats, onClear }: RangeStatsCardProps) 
   return (
     <div
       data-testid="range-stats-card"
-      className="rounded border border-border/60 bg-card/60 p-2 text-[11px] leading-5"
+      className="card-surface rounded bg-card p-2 text-[12px] leading-5"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium text-foreground">
@@ -70,7 +70,7 @@ export default function RangeStatsCard({ stats, onClear }: RangeStatsCardProps) 
             type="button"
             onClick={onClear}
             aria-label="收起区间统计"
-            className="shrink-0 rounded px-1 text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+            className="shrink-0 rounded px-1 text-muted-foreground hover:bg-s2 hover:text-foreground"
           >
             ×
           </button>
@@ -88,14 +88,14 @@ export default function RangeStatsCard({ stats, onClear }: RangeStatsCardProps) 
         <span className="text-muted-foreground">
           明盘累计{' '}
           <span className="font-mono text-foreground">{toAmount(stats.mingNet)}</span>
-          <span className="ml-1 text-[10px]">
+          <span className="ml-1 text-[12px]">
             {stats.mingDays > 0 ? `${stats.mingDays}天` : '无数据'}
           </span>
         </span>
         <span className="text-muted-foreground">
           暗盘累计{' '}
           <span className="font-mono text-foreground">{toAmount(stats.darkNet)}</span>
-          <span className="ml-1 text-[10px]">
+          <span className="ml-1 text-[12px]">
             {stats.darkDays > 0 ? `${stats.darkDays}天` : '无数据'}
           </span>
         </span>
@@ -103,7 +103,7 @@ export default function RangeStatsCard({ stats, onClear }: RangeStatsCardProps) 
       <div className="flex flex-wrap gap-x-3 text-muted-foreground">
         <span>
           事件 <span className="text-foreground">{stats.eventTotal} 次</span>
-          {eventDetail ? <span className="ml-1 text-[10px]">({eventDetail})</span> : null}
+          {eventDetail ? <span className="ml-1 text-[12px]">({eventDetail})</span> : null}
         </span>
         {stats.priceLines.length > 0 && (
           <span>

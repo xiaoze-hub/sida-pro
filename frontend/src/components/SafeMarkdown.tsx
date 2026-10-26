@@ -83,7 +83,7 @@ export interface SafeMarkdownProps
  *  横向可滚（窄屏），并保持 11–13px 的信息密度。 */
 const mdComponents: Components = {
   table: ({ children, ...props }) => (
-    <div className="-mx-1 my-2 overflow-x-auto rounded-md border border-border/60">
+    <div className="card-surface bg-card -mx-1 my-2 overflow-x-auto rounded-md ">
       <table className="w-full border-collapse text-[12px]" {...props}>
         {children}
       </table>
@@ -96,14 +96,14 @@ const mdComponents: Components = {
   ),
   th: ({ children, ...props }) => (
     <th
-      className="whitespace-nowrap border-b border-border/60 px-2 py-1 text-left font-medium"
+      className="whitespace-nowrap border-b border-border px-2 py-1 text-left font-medium"
       {...props}
     >
       {children}
     </th>
   ),
   td: ({ children, ...props }) => (
-    <td className="border-b border-border/40 px-2 py-1 align-top font-num tabular-nums" {...props}>
+    <td className="border-b border-border px-2 py-1 align-top font-num tabular-nums" {...props}>
       {children}
     </td>
   ),
@@ -113,26 +113,26 @@ const mdComponents: Components = {
     </h2>
   ),
   h3: ({ children, ...props }) => (
-    <h3 className="mt-2 mb-1 text-[13px] font-semibold text-foreground" {...props}>
+    <h3 className="mt-2 mb-1 text-[14px] font-semibold text-foreground" {...props}>
       {children}
     </h3>
   ),
   ul: ({ children, ...props }) => (
-    <ul className="my-1 list-disc space-y-0.5 pl-5 text-[13px]" {...props}>
+    <ul className="my-1 list-disc space-y-0.5 pl-5 text-[14px]" {...props}>
       {children}
     </ul>
   ),
   ol: ({ children, ...props }) => (
-    <ol className="my-1 list-decimal space-y-0.5 pl-5 text-[13px]" {...props}>
+    <ol className="my-1 list-decimal space-y-0.5 pl-5 text-[14px]" {...props}>
       {children}
     </ol>
   ),
   blockquote: ({ children, ...props }) => (
-    <blockquote className="my-2 border-l-2 border-border-strong pl-2.5 text-muted-foreground" {...props}>
+    <blockquote className="my-2 border-l-2 border-border pl-2.5 text-muted-foreground" {...props}>
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="my-3 border-border/60" />,
+  hr: () => <hr className="my-3 border-border" />,
   code: ({ children, ...props }) => (
     <code className="rounded bg-s1 px-1 py-0.5 font-mono text-[12px]" {...props}>
       {children}

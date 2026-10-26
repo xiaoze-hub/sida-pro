@@ -19,7 +19,7 @@ export function SuggestionsTab() {
       <div className="card p-3 flex items-center justify-between gap-3">
         <div className="text-[12px] text-muted-foreground">显示过期建议</div>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground">{includeExpiredSuggestions ? '包含过期' : '仅有效'}</span>
+          <span className="text-[12px] text-muted-foreground">{includeExpiredSuggestions ? '包含过期' : '仅有效'}</span>
           <Switch
             checked={includeExpiredSuggestions}
             onCheckedChange={setIncludeExpiredSuggestions}
@@ -31,7 +31,7 @@ export function SuggestionsTab() {
         technicalFallbackSuggestion ? (
           <div className="card p-4">
             <SuggestionBadge suggestion={technicalFallbackSuggestion} stockName={resolvedName} stockSymbol={symbol} kline={klineSummary} hasPosition={!!props.hasPosition} />
-            <div className="mt-2 text-[10px] text-muted-foreground">
+            <div className="mt-2 text-[12px] text-muted-foreground">
               {autoSuggesting ? '正在自动生成 AI 建议（通常 5-15 秒）...' : '当前显示技术指标基础建议'}
             </div>
           </div>

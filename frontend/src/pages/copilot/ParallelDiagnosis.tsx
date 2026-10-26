@@ -88,7 +88,7 @@ export default function ParallelDiagnosis() {
   const done = state ? TERMINAL.has(String(state.status).toLowerCase()) : false
 
   return (
-    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-4 p-4">
+    <div className="page-container flex min-w-0 flex-col gap-4">
       <header>
         <h1 className="text-[20px] font-semibold text-foreground">并行诊断</h1>
         <p className="mt-1 text-[12px] text-muted-foreground">
@@ -96,7 +96,7 @@ export default function ParallelDiagnosis() {
         </p>
       </header>
 
-      <div className="rounded-xl border border-border bg-card p-3">
+      <div className="card-surface rounded-xl bg-card p-3">
         <label className="block text-[12px] text-muted-foreground" htmlFor="parallel-input">
           子问题（一行一个，最多 {MAX_ITEMS} 个）
         </label>
@@ -118,7 +118,7 @@ export default function ParallelDiagnosis() {
             {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
             开始诊断
           </button>
-          <span className="tabular-nums text-[11px] text-muted-foreground">
+          <span className="tabular-nums text-[12px] text-muted-foreground">
             {items.length} / {MAX_ITEMS}
             {tooMany ? ' · 超出上限，请拆成多批' : ''}
           </span>
@@ -126,20 +126,20 @@ export default function ParallelDiagnosis() {
       </div>
 
       {error ? (
-        <div className="rounded-xl border border-border bg-card p-3 text-[13px] text-stock-down">
+        <div className="card-surface rounded-xl bg-card p-3 text-[14px] text-stock-down">
           提交失败：{error}
         </div>
       ) : null}
 
       {runId && !state ? (
-        <div className="rounded-xl border border-border bg-card p-3 text-[12px] text-muted-foreground">
+        <div className="card-surface rounded-xl bg-card p-3 text-[12px] text-muted-foreground">
           已提交（{runId.slice(0, 8)}…），等待子任务登记…
         </div>
       ) : null}
 
       {summary ? (
         <>
-          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3 text-[12px]">
+          <div className="card-surface flex flex-wrap items-center gap-3 rounded-xl bg-card p-3 text-[12px]">
             <span className="font-medium text-foreground">
               {STATUS_LABEL[String(state?.status ?? '')] ?? state?.status}
             </span>
@@ -151,11 +151,11 @@ export default function ParallelDiagnosis() {
           </div>
 
           {summary.children.length === 0 ? (
-            <div className="rounded-xl border border-border bg-card p-4 text-center text-[12px] text-muted-foreground">
+            <div className="card-surface rounded-xl bg-card p-4 text-center text-[12px] text-muted-foreground">
               {summary.reason || '还没有子任务'}
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-border bg-card">
+            <div className="card-surface overflow-x-auto rounded-xl bg-card">
               <table className="w-full border-collapse text-[12px]">
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
@@ -175,7 +175,7 @@ export default function ParallelDiagnosis() {
                       <td className="px-3 py-2 text-foreground">{c.recipe_id || '未命中'}</td>
                       <td className={c.status === 'failed' ? 'px-3 py-2 text-stock-down' : 'px-3 py-2 text-foreground'}>
                         {STATUS_LABEL[c.status] ?? c.status}
-                        {c.error ? <span className="ml-1 text-[11px]">({c.error})</span> : null}
+                        {c.error ? <span className="ml-1 text-[12px]">({c.error})</span> : null}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-foreground">
                         {c.tool_calls === null || c.tool_calls === undefined ? '--' : c.tool_calls}
@@ -191,11 +191,11 @@ export default function ParallelDiagnosis() {
           )}
 
           {summary.gaps.length > 0 ? (
-            <div className="rounded-xl border border-border bg-card p-3">
+            <div className="card-surface rounded-xl bg-card p-3">
               <div className="text-[12px] font-medium text-foreground">缺口（未完成的子任务）</div>
               <ul className="mt-1 space-y-1">
                 {summary.gaps.map((g) => (
-                  <li key={g} className="text-[11px] text-amber-500">
+                  <li key={g} className="text-[12px] text-amber-500">
                     {g}
                   </li>
                 ))}

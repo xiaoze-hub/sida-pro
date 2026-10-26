@@ -291,7 +291,7 @@ export default function PriceAlertFormDialog(props: {
                     {selectedDate || '选择日期'}
                   </Button>
                   {calendarOpen && (
-                    <div className="absolute z-50 mt-1 w-[260px] rounded-xl border border-border/60 bg-card shadow-float p-2">
+                    <div className="absolute z-50 mt-1 w-[260px] rounded-xl border border-border bg-card shadow-float p-2">
                       <div className="flex items-center justify-between mb-2">
                         <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}>
                           <ChevronLeft className="w-3.5 h-3.5" />
@@ -301,7 +301,7 @@ export default function PriceAlertFormDialog(props: {
                           <ChevronRight className="w-3.5 h-3.5" />
                         </Button>
                       </div>
-                      <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-muted-foreground mb-1">
+                      <div className="grid grid-cols-7 gap-1 text-center text-[12px] text-muted-foreground mb-1">
                         {['日', '一', '二', '三', '四', '五', '六'].map(w => <div key={w}>{w}</div>)}
                       </div>
                       <div className="grid grid-cols-7 gap-1">
@@ -311,7 +311,7 @@ export default function PriceAlertFormDialog(props: {
                             type="button"
                             disabled={!c.inMonth}
                             onClick={() => c.inMonth && setSelectedDate(c.date)}
-                            className={`h-7 rounded text-[11px] ${
+                            className={`h-7 rounded text-[12px] ${
                               !c.inMonth
                                 ? 'opacity-0 cursor-default'
                                 : selectedDate === c.date
@@ -328,7 +328,7 @@ export default function PriceAlertFormDialog(props: {
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 text-[11px]"
+                          className="h-7 text-[12px]"
                           onClick={() => {
                             updateExpirePart('', '')
                             setCalendarOpen(false)
@@ -340,7 +340,7 @@ export default function PriceAlertFormDialog(props: {
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 text-[11px]"
+                          className="h-7 text-[12px]"
                           onClick={() => {
                             const now = new Date()
                             const ds = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -361,11 +361,11 @@ export default function PriceAlertFormDialog(props: {
                   onChange={e => updateExpirePart(expireDatePart, e.target.value)}
                 />
               </div>
-              <div className="mt-1 text-[10px] text-muted-foreground">留空表示永不过期</div>
+              <div className="mt-1 text-[12px] text-muted-foreground">留空表示永不过期</div>
             </div>
           </div>
 
-          <div className="rounded-lg border border-border/40 p-3">
+          <div className="card-surface bg-card rounded-lg p-3">
             <div className="text-[12px] text-muted-foreground mb-2">通知渠道（不选=系统默认）</div>
             {enabledChannels.length === 0 ? (
               <div className="text-[12px] text-muted-foreground">暂无可用渠道</div>
@@ -378,10 +378,10 @@ export default function PriceAlertFormDialog(props: {
                       key={ch.id}
                       type="button"
                       onClick={() => toggleChannel(ch.id)}
-                      className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
+                      className={`text-[12px] px-2.5 py-1 rounded-md border transition-colors ${
                         active
                           ? 'bg-primary/15 border-primary/30 text-primary'
-                          : 'bg-accent/30 border-border/50 text-muted-foreground hover:border-primary/30'
+                          : 'bg-s2 border-border text-muted-foreground hover:border-primary/30'
                       }`}
                     >
                       {ch.name}
@@ -393,10 +393,10 @@ export default function PriceAlertFormDialog(props: {
             )}
           </div>
 
-          <div className="rounded-lg border border-border/40 p-3 space-y-2">
+          <div className="card-surface bg-card rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
               <div className="text-[12px] text-muted-foreground">条件列表</div>
-              <Button variant="secondary" size="sm" className="h-7 text-[11px]" onClick={addCond}>添加条件</Button>
+              <Button variant="secondary" size="sm" className="h-7 text-[12px]" onClick={addCond}>添加条件</Button>
             </div>
             {form.items.map((it, idx) => (
               <div key={idx} className="grid grid-cols-12 gap-2">

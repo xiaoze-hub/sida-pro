@@ -87,7 +87,7 @@ function condCell(row: JbpRow, key: string) {
       <span className={`text-[12px] ${meta.cls}`} data-testid={`jbp-cond-${row.symbol}-${key}`}>
         {meta.label}
       </span>
-      <div className="text-[10px] text-muted-foreground max-w-[220px] truncate" title={c.detail}>
+      <div className="text-[12px] text-muted-foreground max-w-[220px] truncate" title={c.detail}>
         {c.detail}
       </div>
     </div>
@@ -133,8 +133,8 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
       {!embedded && (
         <div className="flex items-center gap-2 mb-3">
           <ScanSearch className="w-4 h-4 text-primary" />
-          <h2 className="text-[13px] font-semibold text-foreground">聚宝盆选股</h2>
-          <span className="text-[11px] text-muted-foreground">
+          <h2 className="text-[14px] font-semibold text-foreground">聚宝盆选股</h2>
+          <span className="text-[12px] text-muted-foreground">
             暗盘流入 + 活跃度&gt;6(更佳&gt;12) + GS在G区且G信号 + 问财
           </span>
         </div>
@@ -162,7 +162,7 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
         <Button
           size="sm"
           variant="outline"
-          className="h-8 text-[11px] px-2 text-muted-foreground hover:text-foreground"
+          className="h-8 text-[12px] px-2 text-muted-foreground hover:text-foreground"
           onClick={() => {
             setSymbols('002361, 600111, 600825, 002407, 300750')
             setKeywords('均线多头,放量突破,非ST')
@@ -173,25 +173,25 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
         </Button>
       </div>
 
-      <div className="mt-2 text-[11px] text-muted-foreground">
+      <div className="mt-2 text-[12px] text-muted-foreground">
         逐条件 AND: 缺数据显式降级、不入池(证据非建议)。
       </div>
 
       {error && (
-        <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-400">
+        <div className="card-surface mt-3 rounded-lg bg-red-500/10 p-3 text-[12px] text-red-400">
           {error}
         </div>
       )}
 
       {wencaiDown && (
-        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[12px] text-amber-500">
+        <div className="card-surface mt-3 rounded-lg bg-amber-500/10 p-3 text-[12px] text-amber-500">
           问财数据源不可用, 问财条件已显式降级, 本次不出池。{data?.note || ''}
         </div>
       )}
 
       {data && (
         <>
-          <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground" data-testid="jbp-summary">
+          <div className="mt-3 flex items-center gap-3 text-[12px] text-muted-foreground" data-testid="jbp-summary">
             <span>
               入池 <span className="text-rose-600 font-semibold">{data.in_pool}</span> / 扫描 {data.scanned}
             </span>
@@ -208,7 +208,7 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
             <div className="mt-2 overflow-x-auto">
               <table className="w-full text-[12px] border-collapse">
                 <thead>
-                  <tr className="text-left text-[11px] text-muted-foreground border-b border-border/50">
+                  <tr className="text-left text-[12px] text-muted-foreground border-b border-border">
                     <th className="py-1.5 pr-2 font-medium">标的</th>
                     <th className="py-1.5 pr-2 font-medium">暗盘资金流入</th>
                     <th className="py-1.5 pr-2 font-medium">AI活跃度&gt;6</th>
@@ -221,7 +221,7 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                   {data.rows.map((r) => (
                     <tr
                       key={r.symbol}
-                      className="border-b border-border/30 align-top"
+                      className="border-b border-border align-top"
                       data-testid={`jbp-row-${r.symbol}`}
                     >
                       <td className="py-1.5 pr-2 align-top">
@@ -231,18 +231,18 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                             <span
                               title={`强度 ${r.strength_label}（首封×封成比 · 影子运行·仅统计参考${r.strength_date ? ` · ${r.strength_date}` : ''}）`}
                               data-testid={`jbp-strength-${r.symbol}`}
-                              className={`rounded border px-0.5 text-[10px] font-medium leading-none ${
+                              className={`rounded border px-0.5 text-[12px] font-medium leading-none ${
                                 r.strength_label === 'S' ? 'text-[--stock-up] border-[--stock-up]/60'
                                   : r.strength_label === 'A' ? 'text-[--stock-up]/80 border-[--stock-up]/40'
                                     : r.strength_label === 'C' ? 'text-[--stock-down]/80 border-[--stock-down]/40'
-                                      : 'text-muted-foreground border-border/50'
+                                      : 'text-muted-foreground border-border'
                               }`}
                             >
                               {r.strength_label}
                             </span>
                           ) : null}
                         </span>
-                        <div className="font-mono text-[10px] text-muted-foreground" data-testid={`jbp-level-${r.symbol}`}>
+                        <div className="font-mono text-[12px] text-muted-foreground" data-testid={`jbp-level-${r.symbol}`}>
                           {r.activity != null ? fmtNum(r.activity, 2) : '--'}
                           {r.activity_level ? `(${r.activity_level})` : ''}
                           {r.better ? ' 更佳' : ''}
@@ -259,13 +259,13 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                         >
                           {r.in_pool ? '入选' : '未入选'}
                         </span>
-                        <div className="text-[10px] text-muted-foreground">暗盘 {fmtWan(r.dark_net)}</div>
+                        <div className="text-[12px] text-muted-foreground">暗盘 {fmtWan(r.dark_net)}</div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="mt-1 text-[10px] text-muted-foreground">
+              <div className="mt-1 text-[12px] text-muted-foreground">
                 口径: 暗盘净额&gt;0 · 活跃度&gt;6(更佳&gt;12) · GS在G区且G信号 · 问财命中(传入关键词时必过)。
               </div>
             </div>

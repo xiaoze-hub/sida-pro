@@ -1,85 +1,86 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 
-/** 用户选择的主题模式(system = 跟随系统)。 */
 export type ThemeMode = 'light' | 'dark' | 'system'
-/** 实际生效的主题(system 解析后的结果)。 */
 export type Theme = 'light' | 'dark'
-/** 界面密度档位:compact 紧凑 / normal 标准 / comfortable 舒适。 */
 export type Density = 'compact' | 'normal' | 'comfortable'
 
-const STORAGE_KEY = 'panwatch-theme'
-const DENSITY_STORAGE_KEY = 'panwatch-density'
-/** 第三档 Dim(长时盯盘): 只降对比度, 不动色相与涨跌语义。与主题/密度同源存储。 */
-const DIM_STORAGE_KEY = 'panwatch-dim'
+type Appearance = { mode: ThemeMode; density: Density; dim: boolean }
+const CHANGE_EVENT = 'sida-appearance-change'
+const KEYS = { mode: 'panwatch-theme', density: 'panwatch-density', dim: 'panwatch-dim' } as const
+let fallback: Appearance = { mode: 'dark', density: 'normal', dim: false }
 
-function readMode(): ThemeMode {
-  const stored = localStorage.getItem(STORAGE_KEY)
-  if (stored === 'light' || stored === 'dark' || stored === 'system') return stored
-  // 初始默认暗色(金融行情终端风格);用户显式设置过的 light/dark/system 原样尊重
-  return 'dark'
-}
-
-function readDensity(): Density {
-  const stored = localStorage.getItem(DENSITY_STORAGE_KEY)
-  if (stored === 'compact' || stored === 'normal' || stored === 'comfortable') return stored
-  return 'normal'
-}
-
-function readDim(): boolean {
+function readAppearance(): Appearance {
   try {
-    return localStorage.getItem(DIM_STORAGE_KEY) === '1'
+    const mode = localStorage.getItem(KEYS.mode)
+    const density = localStorage.getItem(KEYS.density)
+    return {
+      mode: mode === 'light' || mode === 'system' ? mode : 'dark',
+      density: density === 'compact' || density === 'comfortable' ? density : 'normal',
+      dim: localStorage.getItem(KEYS.dim) === '1',
+    }
   } catch {
-    return false
+    return fallback
+  }
+}
+
+/** 所有入口共用同一个存储与通知机制，同窗口和其他窗口即时同步。 */
+export function setAppearance(patch: Partial<Appearance>): void {
+  const next = { ...readAppearance(), ...patch }
+  fallback = next
+  try {
+    localStorage.setItem(KEYS.mode, next.mode)
+    localStorage.setItem(KEYS.density, next.density)
+    localStorage.setItem(KEYS.dim, next.dim ? '1' : '0')
+  } catch { /* 存储被禁用时，本窗口仍可切换。 */ }
+  window.dispatchEvent(new Event(CHANGE_EVENT))
+}
+
+function snapshot(): string {
+  const value = readAppearance()
+  return `${value.mode}|${value.density}|${value.dim ? '1' : '0'}`
+}
+
+function subscribe(onChange: () => void): () => void {
+  window.addEventListener(CHANGE_EVENT, onChange)
+  window.addEventListener('storage', onChange)
+  return () => {
+    window.removeEventListener(CHANGE_EVENT, onChange)
+    window.removeEventListener('storage', onChange)
   }
 }
 
 export function useTheme() {
-  const [mode, setMode] = useState<ThemeMode>(readMode)
-  const [density, setDensity] = useState<Density>(readDensity)
-  const [dim, setDim] = useState<boolean>(readDim)
-  const [systemDark, setSystemDark] = useState(
-    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
-  )
+  const stored = useSyncExternalStore(subscribe, snapshot, () => 'dark|normal|0')
+  const [storedMode, storedDensity, storedDim] = stored.split('|')
+  const mode = storedMode as ThemeMode
+  const density = storedDensity as Density
+  const dim = storedDim === '1'
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
 
-  // 跟随系统:监听 OS 主题变化,实时反映
   useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
+    const query = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = (event: MediaQueryListEvent) => setSystemDark(event.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
   }, [])
 
-  // 生效主题:显式 light/dark 直接用,system 则跟随当前系统
   const theme: Theme = mode === 'system' ? (systemDark ? 'dark' : 'light') : mode
-
   useEffect(() => {
     const root = document.documentElement
-    root.classList.remove('light', 'dark')
-    root.classList.add(theme)
-    localStorage.setItem(STORAGE_KEY, mode)
-  }, [theme, mode])
-
-  // Dim 档: 写 <html data-theme="dim">(暗色 token + 降对比度); 关闭时移除属性回到常规
-  useEffect(() => {
-    const root = document.documentElement
-    if (dim) root.setAttribute('data-theme', 'dim')
-    else root.removeAttribute('data-theme')
-    try {
-      localStorage.setItem(DIM_STORAGE_KEY, dim ? '1' : '0')
-    } catch {
-      /* 隐私模式忽略 */
-    }
-  }, [dim])
-
-  // 密度档位:写到 <html data-density="...">,由 index.css 的 [data-density] 规则驱动
-  useEffect(() => {
-    const root = document.documentElement
+    root.classList.toggle('dark', theme === 'dark')
+    root.classList.toggle('light', theme === 'light')
     root.setAttribute('data-density', density)
-    localStorage.setItem(DENSITY_STORAGE_KEY, density)
-  }, [density])
+    if (dim && theme === 'dark') root.setAttribute('data-theme', 'dim')
+    else root.removeAttribute('data-theme')
+    const meta = document.querySelector('meta[name="theme-color"]')
+    meta?.setAttribute('content', theme === 'dark' ? '#10121a' : '#f8f9fb')
+  }, [theme, density, dim])
 
-  // 兼容旧调用:在亮/暗间切换(会把模式落为显式 light/dark)
-  const toggleTheme = () => setMode(theme === 'dark' ? 'light' : 'dark')
-
-  return { theme, mode, setMode, toggleTheme, density, setDensity, dim, setDim }
+  return {
+    theme, mode, density, dim,
+    setMode: (value: ThemeMode) => setAppearance({ mode: value }),
+    setDensity: (value: Density) => setAppearance({ density: value }),
+    setDim: (value: boolean) => setAppearance({ dim: value }),
+    toggleTheme: () => setAppearance({ mode: theme === 'dark' ? 'light' : 'dark' }),
+  }
 }

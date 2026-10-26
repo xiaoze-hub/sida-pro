@@ -12,7 +12,7 @@ import { ProposalPanel } from '@/components/copilot/ProposalPanel'
 
 export default function ProposalsPage() {
   return (
-    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-4 p-4">
+    <div className="page-container flex min-w-0 flex-col gap-4">
       <header>
         <h1 className="text-[20px] font-semibold text-foreground">能力提案</h1>
         <p className="mt-1 text-[12px] text-muted-foreground">

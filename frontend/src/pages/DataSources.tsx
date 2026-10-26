@@ -133,7 +133,7 @@ export default function DataSourcesPage() {
   const [secretVisible, setSecretVisible] = useState(false)
   const [resetting, setResetting] = useState(false)
   // 分类折叠态:key 不存在或为 false 视为展开(默认全部展开)
-  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({})
+  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>(() => Object.fromEntries(ALL_DATASOURCE_CATEGORIES.map((category, index) => [category.key, index > 0])))
   const toggleCategory = (key: string) => setCollapsedCategories(prev => ({ ...prev, [key]: !prev[key] }))
 
   const { toast } = useToast()
@@ -271,52 +271,52 @@ export default function DataSourcesPage() {
     if (!meta) return null
     const { label, icon: Icon, color } = meta
     return (
-      <section key={type} className="border-t border-border/40 pt-4 md:pt-5">
+      <section key={type} className="space-y-3">
         <div className="flex items-center gap-2 mb-4">
           <Icon className={`w-4 h-4 ${color}`} />
-          <h3 className="text-[13px] font-semibold text-foreground">{label}</h3>
-          <span className="text-[11px] text-muted-foreground ml-auto">
+          <h3 className="text-[14px] font-semibold text-foreground">{label}</h3>
+          <span className="text-[12px] text-muted-foreground ml-auto">
             {groupedSources[type]?.length || 0} 个
           </span>
         </div>
 
         {(!groupedSources[type] || groupedSources[type].length === 0) ? (
-          <p className="text-[13px] text-muted-foreground text-center py-6">暂无{label}数据源</p>
+          <p className="text-[14px] text-muted-foreground text-center py-6">暂无{label}数据源</p>
         ) : (
           <div className="space-y-2">
             {groupedSources[type].map(source => (
                 <div
                   key={source.id}
-                  className="flex items-center justify-between gap-3 border-b border-border/40 py-2.5 transition-colors hover:bg-accent/20"
+                  className="flex items-center justify-between gap-3 border-b border-border py-2.5 transition-colors hover:bg-s2"
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <Database className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-[13px] font-medium text-foreground">{source.name}</span>
+                        <span className="text-[14px] font-medium text-foreground">{source.name}</span>
                         {source.supports_batch && (
-                          <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-700">
+                          <span className="flex items-center gap-0.5 text-[12px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-700">
                             <Layers className="w-2.5 h-2.5" />
                             批量
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <span className="text-[11px] text-muted-foreground font-mono">{source.provider}</span>
-                        <span className="text-[11px] text-muted-foreground">优先级: {source.priority}</span>
+                        <span className="text-[12px] text-muted-foreground font-mono">{source.provider}</span>
+                        <span className="text-[12px] text-muted-foreground">优先级: {source.priority}</span>
                         {source.engine_attached ? (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-700">已接入新引擎</span>
+                          <span className="text-[12px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-700">已接入新引擎</span>
                         ) : (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">旧路·待迁移</span>
+                          <span className="text-[12px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">旧路·待迁移</span>
                         )}
                         {source.is_orphan && (
-                          <Badge variant="destructive" className="text-[10px] px-1.5 py-0.5">
+                          <Badge variant="destructive" className="text-[12px] px-1.5 py-0.5">
                             <AlertTriangle className="w-2.5 h-2.5" />
                             无对应源·待清理
                           </Badge>
                         )}
                         {source.engine_attached && source.health && source.health.success_rate != null && (
-                          <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <span className="flex items-center gap-1 text-[12px] text-muted-foreground">
                             <span className={`inline-block w-1.5 h-1.5 rounded-full ${
                               source.health.success_rate >= 0.95 ? 'bg-emerald-500'
                               : source.health.success_rate >= 0.8 ? 'bg-amber-500' : 'bg-red-500'}`} />
@@ -374,8 +374,8 @@ export default function DataSourcesPage() {
     <div className="sida-page-enter">
       <div className="mb-4 md:mb-8 flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">数据源</h1>
-          <p className="text-[12px] md:text-[13px] text-muted-foreground mt-0.5 md:mt-1">管理新闻、K线、资金流向和行情数据来源</p>
+          <h2 className="text-[16px] font-semibold text-foreground">数据连接</h2>
+          <p className="text-[12px] md:text-[14px] text-muted-foreground mt-0.5 md:mt-1">管理新闻、K线、资金流向和行情数据来源</p>
         </div>
         <Button variant="outline" size="sm" className="h-8 text-[12px] flex-shrink-0" onClick={resetToSeed} disabled={resetting}>
           {resetting ? (
@@ -392,14 +392,14 @@ export default function DataSourcesPage() {
         <DataCapabilities />
         {/* C1 (2026-09-10): 行情源质量 — Engine 滚动最近 100 次的 成功率/延迟 EWMA/p50, 与顶部心跳条同源 */}
         {vendorTrust.length > 0 && (
-          <section className="border-b border-border/40 pb-3">
+          <section className="analysis-section">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-[13px] font-semibold text-muted-foreground">行情源质量</span>
-              <span className="text-[11px] text-muted-foreground">滚动最近 100 次 · {trustSummary(vendorTrust)}</span>
+              <span className="text-[14px] font-semibold text-muted-foreground">行情源质量</span>
+              <span className="text-[12px] text-muted-foreground">滚动最近 100 次 · {trustSummary(vendorTrust)}</span>
             </div>
             <div className="grid gap-1.5 md:grid-cols-2">
               {vendorTrust.map(it => (
-                <div key={it.vendor} className="flex items-center gap-2 rounded-md border border-border/40 px-2.5 py-1.5 text-[12px]">
+                <div key={it.vendor} className="card-surface bg-card flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px]">
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TRUST_TONE_CLASS[trustTone(it.score)]}`} />
                   <span className="font-medium text-foreground">{it.vendor}</span>
                   <span className="text-muted-foreground">
@@ -417,13 +417,13 @@ export default function DataSourcesPage() {
           </section>
         )}
         {!logicLoading && Object.keys(logicHealth).length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/40 pb-2 text-[12px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border pb-2 text-[12px] text-muted-foreground">
             <span>实时链路</span>
             {Object.values(logicHealth).map(s => (
               <span key={s.id} className="flex items-center gap-1.5" title={s.detail || s.status}>
                 <span className={`w-1.5 h-1.5 rounded-full ${HEALTH_DOT[s.status] || HEALTH_DOT.unknown}`} />
                 {s.name || s.id}
-                <span className="text-[11px]">({HEALTH_LABEL[s.status] || s.status})</span>
+                <span className="text-[12px]">({HEALTH_LABEL[s.status] || s.status})</span>
               </span>
             ))}
           </div>
@@ -432,21 +432,23 @@ export default function DataSourcesPage() {
           const categoryCount = category.types.reduce((sum, t) => sum + (groupedSources[t]?.length || 0), 0)
           const isOpen = collapsedCategories[category.key] !== true
           return (
-            <div key={category.key}>
+            <div key={category.key} className="analysis-section">
               <button
                 type="button"
-                className="w-full flex items-center gap-2 mb-3 py-1 text-left group"
+                aria-expanded={isOpen}
+                aria-controls={`source-category-${category.key}`}
+                className="flex min-h-9 w-full items-center gap-2 text-left group"
                 onClick={() => toggleCategory(category.key)}
               >
                 <ChevronRight className={`w-3.5 h-3.5 text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-                <span className="text-[13px] font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
+                <span className="text-[14px] font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
                   {category.label}
                 </span>
-                <span className="text-[11px] text-muted-foreground">{categoryCount} 个源</span>
+                <span className="text-[12px] text-muted-foreground">{categoryCount} 个源</span>
                 <div className="flex-1 h-px bg-border ml-2" />
               </button>
               {isOpen && (
-                <div className="space-y-6 mb-6">
+                <div id={`source-category-${category.key}`} className="mt-4 space-y-6 border-t border-border pt-4">
                   {category.types.map(type => renderTypeSection(type))}
                 </div>
               )}
@@ -515,7 +517,7 @@ export default function DataSourcesPage() {
                   高级:查看/编辑完整 config JSON
                 </summary>
                 <textarea
-                  className="mt-2 w-full font-mono text-[11px] p-2 border border-border rounded bg-background min-h-[100px]"
+                  className="mt-2 w-full font-mono text-[12px] p-2 border border-border rounded bg-background min-h-[100px]"
                   value={JSON.stringify(form.config || {}, null, 2)}
                   onChange={e => {
                     try {
@@ -546,8 +548,8 @@ export default function DataSourcesPage() {
 
       {/* Test Result Dialog */}
       <Dialog open={testResultOpen} onOpenChange={setTestResultOpen}>
-        <DialogContent
-          className="max-w-2xl w-[92vw] max-h-[85vh] overflow-y-auto scrollbar"
+        <DialogContent placement="right"
+          className="max-w-2xl"
           onInteractOutside={(e) => e.preventDefault()}
         >
           <DialogHeader>
@@ -567,27 +569,27 @@ export default function DataSourcesPage() {
 
           <div className="space-y-4 mt-2 pr-1">
             {/* Summary */}
-            <div className="flex items-center gap-4 p-3 rounded-md bg-accent/30">
+            <div className="flex items-center gap-4 p-3 rounded-md bg-s2">
               <div className="flex-1">
-                <div className="text-[11px] text-muted-foreground">状态</div>
-                <div className={`text-[13px] font-medium ${testResult?.test_passed ? 'text-emerald-600 dark:text-emerald-700' : 'text-red-600'}`}>
+                <div className="text-[12px] text-muted-foreground">状态</div>
+                <div className={`text-[14px] font-medium ${testResult?.test_passed ? 'text-emerald-600 dark:text-emerald-700' : 'text-red-600'}`}>
                   {testResult?.test_passed ? '测试成功' : '测试失败'}
                 </div>
               </div>
               <div className="flex-1">
-                <div className="text-[11px] text-muted-foreground">数据量</div>
-                <div className="text-[13px] font-medium">{testResult?.count ?? 0} 条</div>
+                <div className="text-[12px] text-muted-foreground">数据量</div>
+                <div className="text-[14px] font-medium">{testResult?.count ?? 0} 条</div>
               </div>
               <div className="flex-1">
-                <div className="text-[11px] text-muted-foreground">耗时</div>
-                <div className="text-[13px] font-medium">{testResult?.duration_ms ?? 0} ms</div>
+                <div className="text-[12px] text-muted-foreground">耗时</div>
+                <div className="text-[14px] font-medium">{testResult?.duration_ms ?? 0} ms</div>
               </div>
             </div>
 
             {/* Error message */}
             {testResult?.error && (
-              <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20">
-                <div className="text-[11px] text-red-600 font-medium mb-1">错误信息</div>
+              <div className="card-surface p-3 rounded-md bg-red-500/10 ">
+                <div className="text-[12px] text-red-600 font-medium mb-1">错误信息</div>
                 <div className="text-[12px] text-red-600 dark:text-red-400 break-words whitespace-pre-wrap">{testResult.error}</div>
               </div>
             )}
@@ -601,9 +603,9 @@ export default function DataSourcesPage() {
                 </div>
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
                   {testResult.logs.map((log, i) => (
-                    <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30 text-[11px]">
+                    <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-s2 text-[12px]">
                       <span className="text-muted-foreground font-mono flex-shrink-0">{log.timestamp}</span>
-                      <span className={`px-1 py-0.5 rounded text-[10px] flex-shrink-0 ${
+                      <span className={`px-1 py-0.5 rounded text-[12px] flex-shrink-0 ${
                         log.action === 'start' ? 'bg-blue-500/10 text-blue-600' :
                         log.action === 'success' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-700' :
                         'bg-red-500/10 text-red-600'
@@ -631,9 +633,9 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'news' && testResult.items.map((item, i) => {
                     const newsItem = item as { title?: string; time?: string }
                     return (
-                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-s2">
                         <span className="text-[12px] text-foreground flex-1">{newsItem.title}</span>
-                        <span className="text-[11px] text-muted-foreground flex-shrink-0">{newsItem.time}</span>
+                        <span className="text-[12px] text-muted-foreground flex-shrink-0">{newsItem.time}</span>
                       </div>
                     )
                   })}
@@ -642,10 +644,10 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'events' && testResult.items.map((item, i) => {
                     const ev = item as { title?: string; time?: string; event_type?: string }
                     return (
-                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30">
-                        <span className="text-[11px] font-mono text-muted-foreground flex-shrink-0">{ev.event_type || 'notice'}</span>
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-s2">
+                        <span className="text-[12px] font-mono text-muted-foreground flex-shrink-0">{ev.event_type || 'notice'}</span>
                         <span className="text-[12px] text-foreground flex-1">{ev.title}</span>
-                        <span className="text-[11px] text-muted-foreground flex-shrink-0">{ev.time}</span>
+                        <span className="text-[12px] text-muted-foreground flex-shrink-0">{ev.time}</span>
                       </div>
                     )
                   })}
@@ -654,11 +656,11 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'quote' && testResult.items.map((item, i) => {
                     const quoteItem = item as { symbol?: string; name?: string; price?: number; change_pct?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{quoteItem.name || quoteItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{safeFixed(quoteItem.price)}</span>
-                          <span className={`text-[11px] font-medium ${
+                          <span className={`text-[12px] font-medium ${
                             (quoteItem.change_pct ?? 0) > 0 ? 'text-stock-up' : (quoteItem.change_pct ?? 0) < 0 ? 'text-stock-down' : 'text-muted-foreground'
                           }`}>
                             {(quoteItem.change_pct ?? 0) > 0 ? '+' : ''}{safeFixed(quoteItem.change_pct)}%
@@ -672,11 +674,11 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'kline' && testResult.items.map((item, i) => {
                     const klineItem = item as { symbol?: string; last_close?: number; trend?: string }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{klineItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{safeFixed(klineItem.last_close)}</span>
-                          <span className="text-[11px] text-muted-foreground">{klineItem.trend}</span>
+                          <span className="text-[12px] text-muted-foreground">{klineItem.trend}</span>
                         </div>
                       </div>
                     )
@@ -686,14 +688,14 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'flash_news' && testResult.items.map((item, i) => {
                     const flashItem = item as { title?: string; time?: string; symbols?: string[] }
                     return (
-                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-s2">
                         <span className="text-[12px] text-foreground flex-1">
                           {flashItem.title}
                           {flashItem.symbols && flashItem.symbols.length > 0 && (
-                            <span className="ml-2 text-[11px] text-muted-foreground">{flashItem.symbols.join(', ')}</span>
+                            <span className="ml-2 text-[12px] text-muted-foreground">{flashItem.symbols.join(', ')}</span>
                           )}
                         </span>
-                        <span className="text-[11px] text-muted-foreground flex-shrink-0">{flashItem.time}</span>
+                        <span className="text-[12px] text-muted-foreground flex-shrink-0">{flashItem.time}</span>
                       </div>
                     )
                   })}
@@ -702,12 +704,12 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'fundamentals' && testResult.items.map((item, i) => {
                     const fundItem = item as { symbol?: string; name?: string; pe_ttm?: number; pb?: number; roe?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{fundItem.name || fundItem.symbol}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-[11px] text-muted-foreground">PE {safeFixed(fundItem.pe_ttm, 2, '-')}</span>
-                          <span className="text-[11px] text-muted-foreground">PB {safeFixed(fundItem.pb, 2, '-')}</span>
-                          <span className="text-[11px] text-muted-foreground">ROE {safeFixed(fundItem.roe, 2, '-')}%</span>
+                          <span className="text-[12px] text-muted-foreground">PE {safeFixed(fundItem.pe_ttm, 2, '-')}</span>
+                          <span className="text-[12px] text-muted-foreground">PB {safeFixed(fundItem.pb, 2, '-')}</span>
+                          <span className="text-[12px] text-muted-foreground">ROE {safeFixed(fundItem.roe, 2, '-')}%</span>
                         </div>
                       </div>
                     )
@@ -717,7 +719,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'capital_flow' && testResult.items.map((item, i) => {
                     const flowItem = item as { symbol?: string; name?: string; main_net?: number; main_pct?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{flowItem.name || flowItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className={`text-[12px] font-mono ${
@@ -725,7 +727,7 @@ export default function DataSourcesPage() {
                           }`}>
                             {(flowItem.main_net ?? 0) > 0 ? '+' : ''}{safeNum(flowItem.main_net) == null ? '--' : safeFixed(Number(flowItem.main_net) / 10000)}万
                           </span>
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-[12px] text-muted-foreground">
                             {safeFixed(flowItem.main_pct)}%
                           </span>
                         </div>
@@ -737,7 +739,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'dragon_tiger' && testResult.items.map((item, i) => {
                     const dtItem = item as { symbol?: string; name?: string; net_buy?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{dtItem.name || dtItem.symbol}</span>
                         <span className={`text-[12px] font-mono ${
                           (dtItem.net_buy ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
@@ -752,11 +754,11 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'margin' && testResult.items.map((item, i) => {
                     const marginItem = item as { symbol?: string; date?: string; total_balance?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{marginItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{safeNum(marginItem.total_balance) == null ? '--' : safeFixed(Number(marginItem.total_balance) / 10000)}万</span>
-                          <span className="text-[11px] text-muted-foreground">{marginItem.date}</span>
+                          <span className="text-[12px] text-muted-foreground">{marginItem.date}</span>
                         </div>
                       </div>
                     )
@@ -766,11 +768,11 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'shareholders' && testResult.items.map((item, i) => {
                     const shItem = item as { symbol?: string; report_date?: string; holder_num?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{shItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{shItem.holder_num?.toLocaleString() ?? '-'}</span>
-                          <span className="text-[11px] text-muted-foreground">{shItem.report_date}</span>
+                          <span className="text-[12px] text-muted-foreground">{shItem.report_date}</span>
                         </div>
                       </div>
                     )
@@ -780,11 +782,11 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'dividend' && testResult.items.map((item, i) => {
                     const divItem = item as { symbol?: string; ex_date?: string; dividend_per_share?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{divItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{safeFixed(divItem.dividend_per_share, 4, '-')} 元/股</span>
-                          <span className="text-[11px] text-muted-foreground">{divItem.ex_date}</span>
+                          <span className="text-[12px] text-muted-foreground">{divItem.ex_date}</span>
                         </div>
                       </div>
                     )
@@ -794,7 +796,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'northbound' && testResult.items.map((item, i) => {
                     const nbItem = item as { date?: string; hgt_net?: number; total_net?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-s2">
                         <span className="text-[12px] font-medium text-foreground">{nbItem.date}</span>
                         <div className="flex items-center gap-3">
                           <span className={`text-[12px] font-mono ${
@@ -802,7 +804,7 @@ export default function DataSourcesPage() {
                           }`}>
                             {(nbItem.total_net ?? 0) > 0 ? '+' : ''}{safeNum(nbItem.total_net) == null ? '--' : safeFixed(Number(nbItem.total_net) / 10000)}万
                           </span>
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-[12px] text-muted-foreground">
                             沪股通 {safeNum(nbItem.hgt_net) == null ? '--' : safeFixed(Number(nbItem.hgt_net) / 10000)}万
                           </span>
                         </div>
@@ -815,7 +817,7 @@ export default function DataSourcesPage() {
 
             {/* Test symbols info */}
             {testResult?.test_symbols && testResult.test_symbols.length > 0 && (
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-[12px] text-muted-foreground">
                 测试股票: {testResult.test_symbols.join(', ')}
               </div>
             )}

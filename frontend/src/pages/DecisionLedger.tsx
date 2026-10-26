@@ -141,10 +141,10 @@ export default function DecisionLedger() {
   const errMsg = err instanceof Error ? err.message : err ? String(err) : ''
 
   return (
-    <div className="mx-auto max-w-[1200px] p-3 md:p-4">
+    <div className="page-container space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-[20px] font-bold tracking-tight">决策账本</h1>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           信号 → 结果的账 · 命中 = T+n 收益 &gt; 0(平盘记未命中)
         </span>
         <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void load(offset, startDate, endDate)} disabled={loading}>
@@ -165,7 +165,7 @@ export default function DecisionLedger() {
       ) : (
         <>
           {!!err && (
-            <div className="mt-3 flex items-center gap-2 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground">
+            <div className="card-surface bg-card mt-3 flex items-center gap-2 rounded px-2 py-1.5 text-[12px] text-muted-foreground">
               <AlertTriangle className="h-3.5 w-3.5" />
               加载失败：{errMsg}
             </div>
@@ -176,11 +176,11 @@ export default function DecisionLedger() {
         {/* L3-C(2026-10-24): 阈值参数默认为折叠。原实现把 20+ 个阈值一行 11px 灰字全铺在
             首屏, 读起来像"配置文件泄露"; 结论（命中率表）反而在它下面。内容一个字没删。 */}
         <details>
-          <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+          <summary className="cursor-pointer select-none text-[12px] text-muted-foreground hover:text-foreground">
             计算口径（{thresholds?.length ?? 0} 个阈值，点击展开）
           </summary>
           <p
-            className="mt-1 text-[11px] text-muted-foreground"
+            className="mt-1 text-[12px] text-muted-foreground"
             title={
               thresholds && thresholds.length > 0
                 ? thresholds.map((t) => `${t.label}: ${t.value} (${t.source === 'env' ? t.env : '内置默认 ' + t.default})`).join('\n')
@@ -198,15 +198,15 @@ export default function DecisionLedger() {
       </section>
 
       {/* ① 命中率 */}
-      <section className="mt-4">
+      <section className="analysis-section">
         <h2 className="text-[16px] font-semibold">命中率</h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+        <p className="mt-0.5 text-[12px] text-muted-foreground">
           样本按自然日累积(T+5 要等一周), 样本不足时不给数字 —— 拿 3 个样本算出的百分比会误导决策。
         </p>
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-left text-[12px]">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground">
+              <tr className="border-b border-border text-muted-foreground">
                 <th className="px-2 py-1 font-medium">信号</th>
                 <th className="px-2 py-1 text-right font-medium">信号数</th>
                 <th className="px-2 py-1 text-right font-medium">T+1</th>
@@ -244,18 +244,18 @@ export default function DecisionLedger() {
           </table>
         </div>
         {allInsufficient && (
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
+          <p className="mt-1.5 text-[12px] text-muted-foreground">
             目前全部信号都处在「样本不足」阶段(需要等未来的 K 线才算得出来)—— 这是账本刚启用的正常状态, 不是没数据。
           </p>
         )}
-        {stats?.note && <p className="mt-1 text-[10px] text-muted-foreground">{stats.note}</p>}
+        {stats?.note && <p className="mt-1 text-[12px] text-muted-foreground">{stats.note}</p>}
       </section>
 
       {/* ①b 我的自选池信号质量(2026-10-11 胜率证据层 ②): 按 user_id 隔离的账本聚合, 只读/零预测。
           样本不足则显示『样本不足』; 不写任何建议, 只陈述实测。 */}
-      <section className="mt-6" data-testid="watchlist-signal-quality">
-        <h2 className="text-[16px] font-semibold">我的自选池信号质量</h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+      <details className="analysis-section" data-testid="watchlist-signal-quality"><summary className="cursor-pointer list-none"><h2 className="text-[16px] font-semibold">我的自选池信号质量</h2></summary><div className="mt-4 border-t border-border pt-4">
+
+        <p className="mt-0.5 text-[12px] text-muted-foreground">
           只看你自己自选池里出现过的信号 · 纯账本实测(零预测), 命中 = T+n 收益 &gt; 0;
           样本不足(&lt; {wl?.min_sample ?? 30})一律显示『样本不足』, 不给数字 —— 报告只陈述实测, 不构成建议。
         </p>
@@ -266,21 +266,21 @@ export default function DecisionLedger() {
         )}
         {wl?.available && (
           <div className="mt-2 space-y-3">
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[12px] text-muted-foreground">
               自选池 {numText(wl.symbols_count)} 只标的 · 回看 {numText(wl.days)} 天
             </p>
             {wl.signals.length === 0 && (
               <p className="text-[12px] text-muted-foreground">自选池标的暂无信号留痕(需盘后扫描/决策生成后入账)。</p>
             )}
             {wl.signals.map((sig) => (
-              <div key={sig.signal_kind} className="rounded border border-border/60">
-                <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-2 py-1.5">
-                  <span className="text-[13px] font-semibold">{kindLabel(sig.signal_kind)}</span>
-                  <span className="text-[11px] text-muted-foreground">
+              <div key={sig.signal_kind} className="card-surface bg-card rounded ">
+                <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-1.5">
+                  <span className="text-[14px] font-semibold">{kindLabel(sig.signal_kind)}</span>
+                  <span className="text-[12px] text-muted-foreground">
                     样本 {numText(sig.n_total)} · 覆盖 {numText(sig.symbols_count)} 只标的
                   </span>
                   {sig.regime_note && (
-                    <span className="rounded border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    <span className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground">
                       {sig.regime_note}
                     </span>
                   )}
@@ -330,20 +330,20 @@ export default function DecisionLedger() {
             ))}
           </div>
         )}
-        {wl?.note && <p className="mt-1 text-[10px] text-muted-foreground">{wl.note}</p>}
-      </section>
+        {wl?.note && <p className="mt-1 text-[12px] text-muted-foreground">{wl.note}</p>}
+      </div></details>
 
       {/* ② 信号对账(批次D hit-rate) */}
-      <section className="mt-6" data-testid="signal-reconcile">
-        <h2 className="text-[16px] font-semibold">信号对账</h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+      <details className="analysis-section" data-testid="signal-reconcile"><summary className="cursor-pointer list-none"><h2 className="text-[16px] font-semibold">信号对账</h2></summary><div className="mt-4 border-t border-border pt-4">
+
+        <p className="mt-0.5 text-[12px] text-muted-foreground">
           按信号类型统计 T+1/T+5 胜率(近 {hitRate?.days ?? 30} 天) · 只取后端值, 前端不自己算百分比;
           resonance 附官方基准对照(口径不完全一致, 仅参考)。
         </p>
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-left text-[12px]">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground">
+              <tr className="border-b border-border text-muted-foreground">
                 <th className="px-2 py-1 font-medium">信号类型</th>
                 <th className="px-2 py-1 text-right font-medium">T+1 胜率</th>
                 <th className="px-2 py-1 text-right font-medium">T+1 均值</th>
@@ -385,12 +385,12 @@ export default function DecisionLedger() {
             </tbody>
           </table>
         </div>
-      </section>
+      </div></details>
 
       {/* ③ 入场候选后验 */}
-      <section className="mt-6" data-testid="entry-outcomes">
-        <h2 className="text-[16px] font-semibold">入场候选后验</h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+      <details className="analysis-section" data-testid="entry-outcomes"><summary className="cursor-pointer list-none"><h2 className="text-[16px] font-semibold">入场候选后验</h2></summary><div className="mt-4 border-t border-border pt-4">
+
+        <p className="mt-0.5 text-[12px] text-muted-foreground">
           候选发出后按 T+n 后验: 胜率 = 后验收益 &gt; 0 的占比 · 样本不足(低于 {outcomes?.min_sample ?? 20})不给数字。
         </p>
         {outcomes && !outcomes.available && (
@@ -399,7 +399,7 @@ export default function DecisionLedger() {
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-left text-[12px]">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground">
+              <tr className="border-b border-border text-muted-foreground">
                 <th className="px-2 py-1 font-medium">Horizon</th>
                 <th className="px-2 py-1 font-medium">来源</th>
                 <th className="px-2 py-1 text-right font-medium">样本</th>
@@ -434,13 +434,13 @@ export default function DecisionLedger() {
             </tbody>
           </table>
         </div>
-        {outcomes?.note && <p className="mt-1 text-[10px] text-muted-foreground">{outcomes.note}</p>}
-      </section>
+        {outcomes?.note && <p className="mt-1 text-[12px] text-muted-foreground">{outcomes.note}</p>}
+      </div></details>
 
       {/* ④ 共振回测 */}
-      <section className="mt-6" data-testid="resonance-backtest">
-        <h2 className="text-[16px] font-semibold">三指标共振回测</h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+      <details className="analysis-section" data-testid="resonance-backtest"><summary className="cursor-pointer list-none"><h2 className="text-[16px] font-semibold">三指标共振回测</h2></summary><div className="mt-4 border-t border-border pt-4">
+
+        <p className="mt-0.5 text-[12px] text-muted-foreground">
           逐日滚动重算(单股 O(n²), 池 ≤ 50、区间 ≤ 2 年)。明盘历史无源: 默认走「双指标」(缺资金维),
           与官方四态不可直接比较 —— 结果口径见下方 basis 标记。
         </p>
@@ -465,8 +465,8 @@ export default function DecisionLedger() {
         )}
         {bt?.available && (
           <div className="mt-2" data-testid="backtest-result">
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-              <span className="rounded border border-border/60 px-2 py-0.5" data-testid="backtest-basis">
+            <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
+              <span className="rounded border border-border px-2 py-0.5" data-testid="backtest-basis">
                 口径：{bt.basis}
               </span>
               <span>样本: {numText(bt.sample?.signals)} 信号 / {numText(bt.sample?.symbols)} 股</span>
@@ -475,7 +475,7 @@ export default function DecisionLedger() {
             <div className="mt-2 overflow-x-auto">
               <table className="w-full text-left text-[12px]">
                 <thead>
-                  <tr className="border-b border-border/60 text-muted-foreground">
+                  <tr className="border-b border-border text-muted-foreground">
                     <th className="px-2 py-1 font-medium">共振态</th>
                     <th className="px-2 py-1 text-right font-medium">样本</th>
                     <th className="px-2 py-1 text-right font-medium">上涨概率</th>
@@ -504,28 +504,28 @@ export default function DecisionLedger() {
                 </tbody>
               </table>
             </div>
-            {bt.note && <p className="mt-1 text-[10px] text-muted-foreground">{bt.note}</p>}
+            {bt.note && <p className="mt-1 text-[12px] text-muted-foreground">{bt.note}</p>}
           </div>
         )}
-      </section>
+      </div></details>
 
       {/* ⑤ 明细(分页) */}
-      <section className="mt-6">
+      <section className="analysis-section">
         <h2 className="text-[16px] font-semibold">信号明细</h2>
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[12px] text-muted-foreground">
             共 {numText(total)} 条 · 当前第 {numText(offset + 1)}–{numText(offset + items.length)} 条
           </p>
           <div className="ml-auto flex items-center gap-2">
             <input
-              className="h-7 w-32 rounded-md border border-border bg-background px-2 font-mono text-[11px]"
+              className="h-7 w-32 rounded-md border border-border bg-background px-2 font-mono text-[12px]"
               placeholder="起 YYYY-MM-DD"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
               aria-label="起始日期"
             />
             <input
-              className="h-7 w-32 rounded-md border border-border bg-background px-2 font-mono text-[11px]"
+              className="h-7 w-32 rounded-md border border-border bg-background px-2 font-mono text-[12px]"
               placeholder="止 YYYY-MM-DD"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
@@ -543,9 +543,9 @@ export default function DecisionLedger() {
           </div>
         </div>
         <div className="mt-2 overflow-x-auto">
-          <table className="w-full text-left text-[11px]">
+          <table className="w-full text-left text-[12px]">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground">
+              <tr className="border-b border-border text-muted-foreground">
                 <th className="px-2 py-1 font-medium">日期</th>
                 <th className="px-2 py-1 font-medium">信号</th>
                 <th className="px-2 py-1 font-medium">标的</th>
@@ -589,7 +589,7 @@ export default function DecisionLedger() {
             </tbody>
           </table>
         </div>
-        {log?.note && <p className="mt-1 text-[10px] text-muted-foreground">{log.note}</p>}
+        {log?.note && <p className="mt-1 text-[12px] text-muted-foreground">{log.note}</p>}
       </section>
         </>
       )}

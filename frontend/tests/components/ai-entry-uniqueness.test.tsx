@@ -4,7 +4,7 @@
  *  - 个股工作台胶囊在场时，ChatWidget 的圆形 FAB 必须隐藏（只留胶囊）；
  *  - 离开工作台（胶囊注销）后，FAB 必须回来 —— 其它页面它仍是唯一入口。
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@panwatch/api', () => ({
@@ -38,7 +38,7 @@ import ChatWidget from '../../src/components/ChatWidget'
 import { CopilotCapsule } from '../../src/components/copilot/CopilotCapsule'
 import { resetCapsulePresenceForTest } from '../../src/lib/copilot/capsule-presence'
 
-const FAB_TITLE = '打开数智分析BOT'
+const FAB_TITLE = '打开 AI 分析助手'
 
 beforeEach(() => {
   localStorage.clear()
@@ -60,6 +60,17 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('AI 入口唯一性', () => {
+  it('悬浮入口显示预设引导，并随机轮换到不同文案', () => {
+    vi.useFakeTimers()
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    try {
+      render(<ChatWidget />)
+      const first = screen.getByTestId('assistant-greeting').textContent
+      act(() => vi.advanceTimersByTime(20_000))
+      expect(screen.getByTestId('assistant-greeting').textContent).not.toBe(first)
+    } finally { cleanup(); random.mockRestore(); vi.useRealTimers() }
+  })
+
   it('没有胶囊时（其它页面）保留 ChatWidget FAB', () => {
     render(<ChatWidget />)
     expect(screen.getByTitle(FAB_TITLE)).toBeTruthy()

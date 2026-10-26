@@ -90,9 +90,9 @@ export default function ResonancePanel({ className, actions }: { className?: str
   return (
     <div className={className}>
       <div className="flex items-center gap-2">
-        <span className="text-[13px] font-semibold">三指标共振</span>
-        <span className="text-[10px] text-muted-foreground">趋势 × 活跃度 × 资金</span>
-        {resp?.trade_date ? <span className="text-[10px] text-muted-foreground">· {resp.trade_date}</span> : null}
+        <span className="text-[14px] font-semibold">三指标共振</span>
+        <span className="text-[12px] text-muted-foreground">趋势 × 活跃度 × 资金</span>
+        {resp?.trade_date ? <span className="text-[12px] text-muted-foreground">· {resp.trade_date}</span> : null}
         <div className="ml-auto flex items-center gap-1">
           {actions}
           {(['resonance', 'near'] as const).map((k) => (
@@ -100,8 +100,8 @@ export default function ResonancePanel({ className, actions }: { className?: str
               key={k}
               type="button"
               onClick={() => setOnly(k)}
-              className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
-                only === k ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+              className={`rounded px-2 py-0.5 text-[12px] transition-colors ${
+                only === k ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-accent'
               }`}
             >
               {k === 'resonance' ? '共振' : '接近共振'}
@@ -110,14 +110,14 @@ export default function ResonancePanel({ className, actions }: { className?: str
         </div>
       </div>
       {resp && resp.items.length === 0 ? (
-        <div className="py-6 text-center text-[11px] text-muted-foreground">
+        <div className="py-6 text-center text-[12px] text-muted-foreground">
           {only === 'resonance' ? '今日无三指标共振标的(等待盘后扫描)' : '暂无接近共振标的'}
         </div>
       ) : (
         <div className="mt-1.5 divide-y divide-border/40">
           {/* 表头(2026-10-24): 此前只有裸数据行, 用户看到 32.43 / +0.55亿 只能猜列义。
               列宽必须与行完全一致, 否则数值列对不齐 —— 改行宽时两处一起改。 */}
-          <div className="flex w-full items-center gap-2 pb-1 text-[11px] text-muted-foreground">
+          <div className="flex w-full items-center gap-2 pb-1 text-[12px] text-muted-foreground">
             <span className="w-[70px] shrink-0">名称</span>
             <span className="w-[58px] shrink-0">代码</span>
             <span className="w-[46px] shrink-0 text-right">涨幅</span>
@@ -131,23 +131,23 @@ export default function ResonancePanel({ className, actions }: { className?: str
               key={it.symbol}
               type="button"
               onClick={() => navigate(`/quote/${it.symbol}`)}
-              className="flex w-full items-center gap-2 py-1 text-left text-[12px] hover:bg-accent/40"
+              className="flex w-full items-center gap-2 py-1 text-left text-[12px] hover:bg-s2"
             >
               <span className="w-[70px] shrink-0 truncate font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</span>
-              <span className="w-[58px] shrink-0 font-mono text-[11px] text-muted-foreground">{it.symbol}</span>
+              <span className="w-[58px] shrink-0 font-mono text-[12px] text-muted-foreground">{it.symbol}</span>
               <span className={`w-[46px] shrink-0 text-right font-mono ${(it.change_pct ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                 {it.change_pct == null ? '--' : `${it.change_pct > 0 ? '+' : ''}${safeFixed(it.change_pct, 2)}%`}
               </span>
-              <span className="w-[64px] shrink-0 text-right font-mono text-[11px]">
+              <span className="w-[64px] shrink-0 text-right font-mono text-[12px]">
                 {it.activity == null ? '--' : safeFixed(it.activity, 2)}
               </span>
-              <span className="w-[72px] shrink-0 text-right font-mono text-[11px] text-muted-foreground">{fmtYi(it.fund_net)}</span>
-              <span className="ml-auto flex shrink-0 items-center gap-0.5 text-[10px]">
+              <span className="w-[72px] shrink-0 text-right font-mono text-[12px] text-muted-foreground">{fmtYi(it.fund_net)}</span>
+              <span className="ml-auto flex shrink-0 items-center gap-0.5 text-[12px]">
                 <span className={it.hits >= 1 ? 'text-stock-up' : 'text-muted-foreground'}>趋</span>
                 <span className={it.hits >= 2 ? 'text-stock-up' : 'text-muted-foreground'}>强</span>
                 <span className={it.hits >= 3 ? 'text-stock-up' : 'text-muted-foreground'}>资</span>
               </span>
-              <span className={`w-[52px] shrink-0 text-right text-[10px] ${aiTag(it).cls}`} title={aiTag(it).tip}>
+              <span className={`w-[52px] shrink-0 text-right text-[12px] ${aiTag(it).cls}`} title={aiTag(it).tip}>
                 {aiTag(it).text}
               </span>
             </button>
@@ -156,7 +156,7 @@ export default function ResonancePanel({ className, actions }: { className?: str
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="w-full py-1.5 text-center text-[11px] text-muted-foreground hover:text-foreground"
+              className="w-full py-1.5 text-center text-[12px] text-muted-foreground hover:text-foreground"
             >
               {expanded ? '收起' : `展开全部 ${items.length} 条`}
             </button>

@@ -206,6 +206,8 @@ export const STOCK_LINK_OPTIONS: Record<string, string> = { xueqiu: '雪球' }
 
 // 2026-08-17: 全局搜索 — 各 section 可被搜的关键词(闭环修正 P0-1:用户搜'openai'应命中 AI 区块)
 export const sectionSearchHints: Record<string, string[]> = {
+  'sec-appearance': ['外观', '主题', '深色', '浅色', '密度', '布局', 'Dim'],
+  'sec-free-tier': ['试用', '免费', '限额', '档位', '设备数'],
   'sec-ai': ['AI', '服务商', '模型', 'openai', 'deepseek', 'chatgpt', 'claude', 'gpt'],
   'sec-notify': ['通知', '渠道', '微信', 'pushplus', 'server酱', 'webhook', '邮箱'],
   'sec-my-services': ['BYOK', '我的服务商', '自配', 'API Key'],

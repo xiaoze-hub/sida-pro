@@ -12,6 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Index,
     text,
+    false,
 )
 from datetime import datetime
 
@@ -49,7 +50,7 @@ class User(Base):
     avatar = Column(String(255), nullable=True)  # 头像(base64 data URL 或路径)
     # GDPR 用户数据删除(P3, 2026-09-18): 软删除标记 + 请求时间; 30 天后物理清除
     # server_default: 兼容不带该列的 raw SQL INSERT(测试种子/历史脚本)
-    is_deleted = Column(Boolean, default=False, nullable=False, server_default=text("0"))
+    is_deleted = Column(Boolean, default=False, nullable=False, server_default=false())
     deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -1370,7 +1371,7 @@ class ChatConversation(Base):
     initial_context = Column(Text, nullable=True)
     # 置顶(2026-10-22): 会话管理面板; 列表/搜索排序 pinned desc 优先。
     # server_default: 新鲜 create_all 建库即带 DB 级默认值(与 v217 迁移一致)。
-    pinned = Column(Boolean, nullable=False, default=False, server_default=text("0"))
+    pinned = Column(Boolean, nullable=False, default=False, server_default=false())
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

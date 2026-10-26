@@ -64,12 +64,12 @@ export function PositionDialog() {
     </DialogHeader>
     <div className="space-y-4 mt-2">
       {editPositionId ? (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-accent/30">
-          <span className={`text-[10px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-s2">
+          <span className={`text-[12px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
             {marketBadge(positionForm.stock_market).label}
           </span>
           <span className="font-mono text-[12px] text-muted-foreground">{positionForm.stock_symbol}</span>
-          <span className="text-[13px] text-foreground">{positionForm.stock_name}</span>
+          <span className="text-[14px] text-foreground">{positionForm.stock_name}</span>
         </div>
       ) : (
         <div>
@@ -86,10 +86,10 @@ export function PositionDialog() {
                   key={opt.value}
                   type="button"
                   onClick={() => handlePositionSearchMarketChange(opt.value)}
-                  className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+                  className={`text-[12px] px-2 py-0.5 rounded transition-colors ${
                     positionSearchMarket === opt.value
                       ? 'bg-primary text-primary-foreground'
-                      : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+                      : 'bg-s2 text-muted-foreground hover:bg-accent'
                   }`}
                 >
                   {opt.label}
@@ -115,9 +115,9 @@ export function PositionDialog() {
                     key={`${item.market}-${item.symbol}`}
                     type="button"
                     onClick={() => selectPositionStock(item)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-accent/50 text-left transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-[14px] hover:bg-s2 text-left transition-colors"
                   >
-                    <span className={`text-[10px] px-1 py-0.5 rounded ${marketBadge(item.market).style}`}>
+                    <span className={`text-[12px] px-1 py-0.5 rounded ${marketBadge(item.market).style}`}>
                       {marketBadge(item.market).label}
                     </span>
                     <span className="font-mono text-muted-foreground text-[12px]">{item.symbol}</span>
@@ -129,11 +129,11 @@ export function PositionDialog() {
           </div>
           {positionForm.stock_symbol && (
             <div className="mt-2 flex items-center gap-2">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
+              <span className={`text-[12px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
                 {marketBadge(positionForm.stock_market).label}
               </span>
               <span className="font-mono text-[12px] text-muted-foreground">{positionForm.stock_symbol}</span>
-              <span className="text-[13px] text-foreground">{positionForm.stock_name}</span>
+              <span className="text-[14px] text-foreground">{positionForm.stock_name}</span>
               <button
                 type="button"
                 onClick={() => {
@@ -172,7 +172,7 @@ export function PositionDialog() {
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label>投入资金 <span className="text-muted-foreground text-[11px]">(选填)</span></Label>
+          <Label>投入资金 <span className="text-muted-foreground text-[12px]">(选填)</span></Label>
           <Input
             value={positionForm.invested_amount}
             onChange={e => setPositionForm({ ...positionForm, invested_amount: e.target.value })}

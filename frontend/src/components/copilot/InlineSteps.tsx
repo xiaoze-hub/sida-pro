@@ -61,7 +61,7 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
       <button
         type="button"
         onClick={toggle}
-        className="flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        className="flex items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
         data-testid="inline-steps-toggle"
         aria-expanded={open}
       >
@@ -74,33 +74,33 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
       </button>
 
       {open && (
-        <div className="mt-1 border-l border-border/60 pl-2" data-testid="inline-steps-list">
+        <div className="mt-1 border-l border-border pl-2" data-testid="inline-steps-list">
           {loading && !steps && (
-            <div className="py-1 text-[11px] text-muted-foreground">步骤加载中…</div>
+            <div className="py-1 text-[12px] text-muted-foreground">步骤加载中…</div>
           )}
           {failed && !steps && !loading && (
-            <div className="py-1 text-[11px] text-muted-foreground">这一轮的步骤没取到</div>
+            <div className="py-1 text-[12px] text-muted-foreground">这一轮的步骤没取到</div>
           )}
           {(steps ?? []).map((s) => (
             <div
               key={`${s.seq}-${s.tool}`}
-              className="flex items-baseline gap-2 border-b border-border/40 py-1 last:border-b-0"
+              className="flex items-baseline gap-2 border-b border-border py-1 last:border-b-0"
               data-testid="inline-step"
             >
-              <span className="w-4 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
+              <span className="w-4 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums">
                 {s.seq}
               </span>
-              <span className="shrink-0 font-mono text-[11px] text-foreground">{s.tool}</span>
+              <span className="shrink-0 font-mono text-[12px] text-foreground">{s.tool}</span>
               {s.args && (
-                <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+                <span className="min-w-0 truncate font-mono text-[12px] text-muted-foreground">
                   {clip(s.args)}
                 </span>
               )}
-              <span className="ml-auto shrink-0 text-[11px] text-muted-foreground tabular-nums">
+              <span className="ml-auto shrink-0 text-[12px] text-muted-foreground tabular-nums">
                 {formatElapsed(s.elapsed_ms)}
               </span>
               <span
-                className={`w-3 shrink-0 text-[11px] ${s.ok ? 'text-muted-foreground' : 'text-stock-down'}`}
+                className={`w-3 shrink-0 text-[12px] ${s.ok ? 'text-muted-foreground' : 'text-stock-down'}`}
                 title={s.ok ? '成功' : '失败'}
               >
                 {s.ok ? '✓' : '✗'}
@@ -108,7 +108,7 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
             </div>
           ))}
           {(steps ?? []).length === 0 && !loading && !failed && (
-            <div className="py-1 text-[11px] text-muted-foreground">本轮没有工具调用</div>
+            <div className="py-1 text-[12px] text-muted-foreground">本轮没有工具调用</div>
           )}
         </div>
       )}

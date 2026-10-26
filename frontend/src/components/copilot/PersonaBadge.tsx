@@ -89,13 +89,13 @@ export function PersonaBadge({
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 text-[11px] text-muted-foreground ${className}`}
+      className={`inline-flex items-center gap-1.5 text-[12px] text-muted-foreground ${className}`}
       title={title}
       data-persona={resp.kind}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${DOT[resp.kind] || DOT.normal}`} aria-hidden />
       <span>{label}</span>
-      {grade && <span className="font-mono text-[10px] text-muted-foreground">{grade.trim()}</span>}
+      {grade && <span className="font-mono text-[12px] text-muted-foreground">{grade.trim()}</span>}
     </span>
   )
 }

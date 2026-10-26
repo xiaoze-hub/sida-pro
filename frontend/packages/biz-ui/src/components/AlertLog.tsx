@@ -59,30 +59,30 @@ export default function AlertLog({
   const counts = useMemo(() => items.filter((i) => i.level !== 'info').length, [items])
   return (
     <div className={cn('flex flex-col', className)} data-alert-log={items.length}>
-      <div className="flex items-center gap-2 border-b border-border/60 px-2 py-1.5">
-        <span className="text-[11px] font-medium text-muted-foreground">会话消息</span>
-        {counts > 0 && <span className="font-mono text-[10px] text-amber-500">{counts} 条非信息</span>}
+      <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
+        <span className="text-[12px] font-medium text-muted-foreground">会话消息</span>
+        {counts > 0 && <span className="font-mono text-[12px] text-amber-500">{counts} 条非信息</span>}
         {items.length > 0 && onClear && (
           <button
             type="button"
             onClick={onClear}
-            className="ml-auto rounded px-1 text-[10px] text-muted-foreground transition-colors duration-fast hover:bg-s2 hover:text-foreground"
+            className="ml-auto rounded px-1 text-[12px] text-muted-foreground transition-colors duration-fast hover:bg-s2 hover:text-foreground"
           >
             清空
           </button>
         )}
       </div>
       {items.length === 0 ? (
-        <div className="px-2 py-3 text-[11px] text-muted-foreground">{emptyHint}</div>
+        <div className="px-2 py-3 text-[12px] text-muted-foreground">{emptyHint}</div>
       ) : (
         <ul className="list-window max-h-64 overflow-y-auto">
           {items.map((it) => (
-            <li key={it.id} className="flex items-start gap-1.5 border-b border-border/40 px-2 py-1 last:border-0">
+            <li key={it.id} className="flex items-start gap-1.5 border-b border-border px-2 py-1 last:border-0">
               <span className={cn('mt-1 session-dot', LEVEL_DOT[it.level])} />
-              <span className="font-mono text-[10px] text-muted-foreground">{formatClock(it.at)}</span>
-              <span className="flex-1 text-[11px] leading-4 text-foreground">{it.text}</span>
+              <span className="font-mono text-[12px] text-muted-foreground">{formatClock(it.at)}</span>
+              <span className="flex-1 text-[12px] leading-4 text-foreground">{it.text}</span>
               {it.caliber && (
-                <span className="mt-0.5 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">{it.caliber}</span>
+                <span className="mt-0.5 rounded border border-border px-1 font-mono text-[12px] text-muted-foreground">{it.caliber}</span>
               )}
             </li>
           ))}

@@ -74,18 +74,18 @@ function Cell({
           : 'text-foreground'
   return (
     <div className="min-w-0 px-2 py-1.5" title={title}>
-      <div className="truncate text-[10px] text-muted-foreground" title={typeof label === 'string' ? label : undefined}>{label}</div>
+      <div className="truncate text-[12px] text-muted-foreground" title={typeof label === 'string' ? label : undefined}>{label}</div>
       <div className={`font-num tabular-nums text-[16px] font-semibold leading-tight ${toneCls}`}>
         {value}
       </div>
-      {sub && <div className="truncate text-[10px] text-muted-foreground" title={typeof sub === 'string' ? sub : undefined}>{sub}</div>}
+      {sub && <div className="truncate text-[12px] text-muted-foreground" title={typeof sub === 'string' ? sub : undefined}>{sub}</div>}
     </div>
   )
 }
 
 /** 失败态文案(与 '--' 缺值态严格区分: 拉取失败绝不能渲染成"没有数据") */
 const FAIL_TEXT = '加载失败'
-const FAIL_CLS = 'text-[13px] text-amber-600 dark:text-amber-500'
+const FAIL_CLS = 'text-[14px] text-amber-600 dark:text-amber-500'
 /** 跌停家数: 现接线数据源(/market/phase)不提供该字段 —— 按仓库缺值约定渲染 '--', 不用"暂无"伪装成"今天没有跌停股" */
 const LIMIT_DOWN_MISSING_TITLE = '当前数据源(/market/phase)未提供跌停家数, 以 -- 表示缺值'
 
@@ -148,7 +148,7 @@ export default function KpiBand({
       <Cell label="两市成交额" value={amountAnim == null ? '--' : `${safeFixed(amountAnim, 0)}亿`} />
       <button
         type="button"
-        className="cursor-pointer text-left transition-colors hover:bg-accent/20"
+        className="cursor-pointer text-left transition-colors hover:bg-s2"
         onClick={() => navigate('/theme-mood')}
         title="查看情绪周期详情"
       >
@@ -165,7 +165,7 @@ export default function KpiBand({
       </button>
       <button
         type="button"
-        className="cursor-pointer text-left transition-colors hover:bg-accent/20"
+        className="cursor-pointer text-left transition-colors hover:bg-s2"
         onClick={() => navigate('/opportunities')}
         title="查看主线识别"
       >

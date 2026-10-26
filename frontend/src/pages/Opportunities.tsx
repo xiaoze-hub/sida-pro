@@ -1,3 +1,5 @@
+import PageHeader from '@/components/PageHeader'
+import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, BookOpen, Filter, RefreshCw, Share2, Sparkles, ScanSearch, ThumbsDown, ThumbsUp, Download, Flame } from 'lucide-react'
 import {
@@ -1113,22 +1115,13 @@ export default function OpportunitiesPage() {
 
   return (
     <div className="page-container sida-page-enter pb-10">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
-        <div>
-          <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-primary" />
-            {t('opportunities.title')}
-          </h1>
-          <p className="text-[12px] text-muted-foreground mt-1">
-            {t('opportunities.subtitle')}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground">{snapshotDate || t('opportunities.latestSnapshot')}</span>
+      <PageHeader title={t('opportunities.title')} description={t('opportunities.subtitle')}
+        metadata={<StatusChip>快照 {snapshotDate || t('opportunities.latestSnapshot')}</StatusChip>}
+        actions={<>
           <Button
             variant="secondary"
             size="sm"
-            className="h-8 text-[12px] min-h-[44px]"
+            className="text-[12px]"
             onClick={() => setStrategyLibOpen(true)}
           >
             <BookOpen className="w-3.5 h-3.5 mr-1" />
@@ -1137,7 +1130,7 @@ export default function OpportunitiesPage() {
           <Button
             variant="secondary"
             size="sm"
-            className="h-8 text-[12px] min-h-[44px]"
+            className="text-[12px]"
             onClick={exportOpportunities}
           >
             <Download className="w-3.5 h-3.5 mr-1" />
@@ -1146,7 +1139,7 @@ export default function OpportunitiesPage() {
           <Button
             variant="secondary"
             size="sm"
-            className="h-8 text-[12px] min-h-[44px]"
+            className="text-[12px]"
             onClick={handleRefresh}
             disabled={refreshing}
           >
@@ -1162,25 +1155,25 @@ export default function OpportunitiesPage() {
               </>
             )}
           </Button>
-        </div>
-      </div>
+        </>}
+      />
 
       {/* 后台刷新任务进行中提示条:让用户知道任务在跑、预期多久 */}
       {refreshing && (
-        <div className="border-b border-border/60 px-1 py-2 mb-4 flex items-center gap-2 text-[12px] text-primary">
+        <div className="border-b border-border px-1 py-2 mb-4 flex items-center gap-2 text-[12px] text-primary">
           <span className="w-3.5 h-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin shrink-0" />
           <div className="flex-1">
             <span className="font-medium">{t('opportunities.bgRefresh')}</span>
             <span className="text-muted-foreground ml-1">{t('opportunities.bgRefreshHint')}</span>
           </div>
-          <span className="text-[11px] text-muted-foreground">{t('opportunities.submitted')}</span>
+          <span className="text-[12px] text-muted-foreground">{t('opportunities.submitted')}</span>
         </div>
       )}
 
       {/* 首屏 KPI 4 → 3（2026-10-24 L2-E）：市场池占比降级进「更多指标」，
           把结果表从 y≈520 抬到首屏内。 */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
-        <Card className="border-l-2 border-l-primary pl-3 py-1 p-3">
+        <Card className=" pl-3 py-1 p-3">
           <Stat
             label={t('opportunities.currentCandidates')}
             value={globalCoverage?.total_signals ?? '--'}
@@ -1209,7 +1202,7 @@ export default function OpportunitiesPage() {
           type="button"
           onClick={() => setViewMode('candidates')}
           className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] ${
-            viewMode === 'candidates' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+            viewMode === 'candidates' ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-accent'
           }`}
         >
           {t('opportunities.candidates')}
@@ -1217,7 +1210,7 @@ export default function OpportunitiesPage() {
         <button
           type="button"
           onClick={() => navigate('/auction')}
-          className="rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] bg-accent/50 text-muted-foreground hover:bg-accent hover:text-foreground flex items-center gap-1.5"
+          className="rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] bg-s2 text-muted-foreground hover:bg-accent hover:text-foreground flex items-center gap-1.5"
         >
           <Flame className="w-3.5 h-3.5 text-orange-500" />
           前往集合竞价专区 →
@@ -1226,7 +1219,7 @@ export default function OpportunitiesPage() {
           type="button"
           onClick={() => setViewMode('abnormal')}
           className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] ${
-            viewMode === 'abnormal' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+            viewMode === 'abnormal' ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-accent'
           }`}
         >
           {t('opportunities.abnormal')}
@@ -1254,7 +1247,7 @@ export default function OpportunitiesPage() {
               <Filter className="w-3.5 h-3.5" />
               筛选
               {activeFilterCount > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-semibold leading-none">
+                <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[12px] font-semibold leading-none">
                   {activeFilterCount}
                 </span>
               )}
@@ -1263,7 +1256,7 @@ export default function OpportunitiesPage() {
           <PopoverContent align="start" className="w-[340px] p-0">
             <div className="px-3 pt-3 pb-1 text-[12px] font-semibold text-foreground">筛选条件</div>
             <div className="px-3 pb-2 space-y-2">
-              <div className="text-[10px] font-medium text-muted-foreground pt-1">基础</div>
+              <div className="text-[12px] font-medium text-muted-foreground pt-1">基础</div>
               <div className="grid grid-cols-2 gap-2">
                 <Select value={draft.market} onValueChange={(v) => setDraft((d) => ({ ...d, market: v as OpportunityFilters['market'] }))}>
                   <SelectTrigger className="h-8 text-[12px]"><SelectValue /></SelectTrigger>
@@ -1297,7 +1290,7 @@ export default function OpportunitiesPage() {
                   <SelectItem value="wencai">问财选股</SelectItem>
                 </SelectContent>
               </Select>
-              <div className="text-[10px] font-medium text-muted-foreground pt-1">信号质量</div>
+              <div className="text-[12px] font-medium text-muted-foreground pt-1">信号质量</div>
               <div className="grid grid-cols-2 gap-2">
                 <Select value={draft.minScore} onValueChange={(v) => setDraft((d) => ({ ...d, minScore: v }))}>
                   <SelectTrigger className="h-8 text-[12px]"><SelectValue /></SelectTrigger>
@@ -1321,7 +1314,7 @@ export default function OpportunitiesPage() {
                 </Select>
               </div>
               {/* 信号策略 = 池内信号来源标签(策略目录), 与选股工具的"筛选策略"(策略库可执行规则)是两套口径 */}
-              <div className="text-[10px] font-medium text-muted-foreground pt-1">信号策略</div>
+              <div className="text-[12px] font-medium text-muted-foreground pt-1">信号策略</div>
               <Select value={draft.strategy} onValueChange={(v) => setDraft((d) => ({ ...d, strategy: v }))}>
                 <SelectTrigger className="h-8 text-[12px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -1331,7 +1324,7 @@ export default function OpportunitiesPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <div className="text-[10px] font-medium text-muted-foreground pt-1">题材</div>
+              <div className="text-[12px] font-medium text-muted-foreground pt-1">题材</div>
               <div className="relative">
                 <Input
                   value={draft.sector}
@@ -1343,9 +1336,9 @@ export default function OpportunitiesPage() {
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setSectorOpen(false); applyDraft() } }}
                 />
                 {sectorOpen && (
-                  <div className="absolute z-50 mt-1 w-full max-h-52 overflow-y-auto rounded-md border border-border/60 bg-popover p-1 ">
+                  <div className="absolute z-50 mt-1 w-full max-h-52 overflow-y-auto rounded-md border border-border bg-popover p-1 ">
                     {sectorResults.length === 0 && (
-                      <div className="px-2 py-1.5 text-[11px] text-muted-foreground">无匹配题材</div>
+                      <div className="px-2 py-1.5 text-[12px] text-muted-foreground">无匹配题材</div>
                     )}
                     {sectorResults.map((b) => (
                       <button
@@ -1361,7 +1354,7 @@ export default function OpportunitiesPage() {
                 )}
               </div>
             </div>
-            <div className="flex items-center justify-between border-t border-border/60 px-3 py-2.5">
+            <div className="flex items-center justify-between border-t border-border px-3 py-2.5">
               <Button
                 variant="ghost"
                 size="sm"
@@ -1383,7 +1376,7 @@ export default function OpportunitiesPage() {
           className={`h-8 rounded-md px-3 text-[12px] font-medium transition-colors border ${
             resonanceOnly
               ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/40'
-              : 'bg-accent/50 text-muted-foreground hover:bg-accent border-transparent'
+              : 'bg-s2 text-muted-foreground hover:bg-accent border-transparent'
           }`}
           title="只显示被 2 个及以上独立来源同时命中的候选(共振=更高置信)"
         >
@@ -1391,10 +1384,10 @@ export default function OpportunitiesPage() {
         </button>
       </div>
       {/* ── 选股工具: 共振查询 / 策略选股 / 问小达 / 问财, 主动查询, 结果并入下方候选池 ── */}
-      <div className="border-y border-border/60 py-3 mb-4">
+      <div className="border-y border-border py-3 mb-4">
         <Tabs value={toolTab} onValueChange={(v) => setToolTab(v as ToolTab)}>
           <div className="flex items-center gap-2 flex-wrap">
-            <TabsList className="bg-muted/60 p-1">
+            <TabsList className="bg-s2 p-1">
               <TabsTrigger value="resonance" className="gap-1.5 font-medium">
                 <Sparkles className="w-3.5 h-3.5 text-primary" />
                 选股铁三角共振
@@ -1465,7 +1458,7 @@ export default function OpportunitiesPage() {
                 {resLoading ? '三引擎查询中…' : '并发查询'}
               </Button>
             </div>
-            <div className="mt-1.5 text-[11px] text-muted-foreground">
+            <div className="mt-1.5 text-[12px] text-muted-foreground">
               问小达+问财同时查询合并去重;查完后切换策略即时对结果精筛(不重复调用引擎);每次查询消耗 1 次 tdx 配额
             </div>
 
@@ -1476,7 +1469,7 @@ export default function OpportunitiesPage() {
             )}
 
             {resMeta && (
-              <div className="mt-2 flex items-center gap-2 flex-wrap text-[11px] text-muted-foreground">
+              <div className="mt-2 flex items-center gap-2 flex-wrap text-[12px] text-muted-foreground">
                 <span>
                   「{resLastQuery}」合并 <span className="text-foreground font-medium">{resRows.length}</span> 只
                   (问小达 {resMeta.tdx} · 问财 {resMeta.wencai}
@@ -1493,10 +1486,10 @@ export default function OpportunitiesPage() {
                 <button
                   type="button"
                   onClick={() => setResOnly(!resOnly)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors border ${
+                  className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors border ${
                     resOnly
                       ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/40'
-                      : 'bg-accent/50 text-muted-foreground hover:bg-accent border-transparent'
+                      : 'bg-s2 text-muted-foreground hover:bg-accent border-transparent'
                   }`}
                   title="只显示被 2 个及以上引擎同时命中的候选"
                 >
@@ -1509,7 +1502,7 @@ export default function OpportunitiesPage() {
               <div className="mt-3 overflow-x-auto">
                 <table className="w-full text-[12px]">
                   <thead>
-                    <tr className="text-[11px] text-muted-foreground border-b border-border/50">
+                    <tr className="text-[12px] text-muted-foreground border-b border-border">
                       <th className="text-left py-1.5 pr-2">代码</th>
                       <th className="text-left py-1.5 pr-2">名称</th>
                       <th className="text-center py-1.5 pr-2">问小达</th>
@@ -1524,7 +1517,7 @@ export default function OpportunitiesPage() {
                       return (
                         <tr
                           key={r.symbol}
-                          className="border-b border-border/30 hover:bg-accent/40 cursor-pointer"
+                          className="border-b border-border hover:bg-s2 cursor-pointer"
                           onMouseEnter={(e) => showHover(r.symbol, r.name, e)}
                           onMouseMove={(e) => showHover(r.symbol, r.name, e)}
                           onMouseLeave={hideHover}
@@ -1604,7 +1597,7 @@ export default function OpportunitiesPage() {
               <div className="mt-3 text-[12px] text-muted-foreground">本次查询无有效结果</div>
             )}
             {!resLoading && resOnly && resRows.length > 0 && resRows.every((r) => resonanceCountOf(r) < 2) && (
-              <div className="mt-2 text-[11px] text-muted-foreground">无 ≥2 引擎共振的标的,可关闭「只看共振」查看全部</div>
+              <div className="mt-2 text-[12px] text-muted-foreground">无 ≥2 引擎共振的标的,可关闭「只看共振」查看全部</div>
             )}
           </TabsContent>
           <TabsContent value="strategy">
@@ -1636,7 +1629,7 @@ export default function OpportunitiesPage() {
                 {scanning ? '扫描中...' : '批量选股'}
               </Button>
               {scanResult && (
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   扫描 {scanResult.scanned} 只 → 命中 {scanResult.total} 只
                 </span>
               )}
@@ -1650,7 +1643,7 @@ export default function OpportunitiesPage() {
               <div className="mt-3 overflow-x-auto">
                 <table className="w-full text-[12px]">
                   <thead>
-                    <tr className="text-[11px] text-muted-foreground border-b border-border/50">
+                    <tr className="text-[12px] text-muted-foreground border-b border-border">
                       <th className="text-left py-1.5 pr-2">代码</th>
                       <th className="text-left py-1.5 pr-2">名称</th>
                       <th className="text-right py-1.5 pr-2">评分</th>
@@ -1665,7 +1658,7 @@ export default function OpportunitiesPage() {
                       const d = it.current_data || {}
                       const num = (v: unknown) => (v == null || Number.isNaN(Number(v)) ? '--' : Number(v).toFixed(2))
                       return (
-                        <tr key={it.symbol} className="border-b border-border/30 hover:bg-accent/40 cursor-pointer"
+                        <tr key={it.symbol} className="border-b border-border hover:bg-s2 cursor-pointer"
                           onMouseEnter={(e) => showHover(it.symbol, it.name, e)}
                           onMouseMove={(e) => showHover(it.symbol, it.name, e)}
                           onMouseLeave={hideHover}
@@ -1693,7 +1686,7 @@ export default function OpportunitiesPage() {
             {scanResult && scanResult.items.length === 0 && (
               <div className="mt-3 text-[12px] text-muted-foreground">
                 没有股票通过该策略的硬过滤条件
-                <span className="block mt-1 text-[11px] text-muted-foreground">
+                <span className="block mt-1 text-[12px] text-muted-foreground">
                   {new Date().getHours() < 9 || new Date().getHours() >= 15
                     ? '💡 当前为非交易时段, 腾讯行情中涨跌幅/量比/换手为 0, 依赖量能条件的策略(资金热度/放量突破)会筛不出票。建议交易时段使用, 或改选估值类策略(双低/低波质量)。'
                     : '可尝试放宽条件或切换为「自选+种子池」范围'}
@@ -1734,14 +1727,14 @@ export default function OpportunitiesPage() {
             </form>
             <div className="mt-3">
               {!tdxActiveQuery ? (
-                <div className="text-[11px] text-muted-foreground py-6 text-center">
+                <div className="text-[12px] text-muted-foreground py-6 text-center">
                   输入板块或选股条件,点击查询(每次查询消耗 1 次 tdx ask 配额)
                 </div>
               ) : tdxData == null ? (
-                <div className="text-[11px] text-red-600 py-3">查询失败,请稍后重试</div>
+                <div className="text-[12px] text-red-600 py-3">查询失败,请稍后重试</div>
               ) : (
                 <>
-                  <div className="text-[11px] text-muted-foreground mb-2">
+                  <div className="text-[12px] text-muted-foreground mb-2">
                     查询: <span className="text-foreground font-medium">{tdxActiveQuery}</span>
                     {' · '}
                     {tdxData.rows?.length || 0} 条结果
@@ -1804,7 +1797,7 @@ export default function OpportunitiesPage() {
                             created_at: '',
                             updated_at: '',
                           } as unknown as StrategySignalItem)}
-                          className={`text-left text-[11px] rounded px-2 py-1.5 flex items-center justify-between gap-2 ${
+                          className={`text-left text-[12px] rounded px-2 py-1.5 flex items-center justify-between gap-2 ${
                             clickable ? 'hover:bg-accent cursor-pointer' : 'cursor-default'
                           }`}
                         >
@@ -1825,14 +1818,14 @@ export default function OpportunitiesPage() {
                               </span>
                             )}
                             {mainNet != null && (
-                              <span className="text-[10px] text-primary">主力{String(mainNet)}</span>
+                              <span className="text-[12px] text-primary">主力{String(mainNet)}</span>
                             )}
                           </span>
                         </button>
                       )
                     })}
                     {(tdxData.rows || []).length === 0 && (
-                      <div className="text-[11px] text-muted-foreground py-3 text-center">
+                      <div className="text-[12px] text-muted-foreground py-3 text-center">
                         暂无数据(试试简化查询词,如「半导体」)
                       </div>
                     )}
@@ -1856,7 +1849,7 @@ export default function OpportunitiesPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 text-[11px] px-2 text-muted-foreground hover:text-foreground"
+                  className="h-8 text-[12px] px-2 text-muted-foreground hover:text-foreground"
                   onClick={() => setPoolSymbols('002361, 600111, 600825, 002407, 300750')}
                   title="填入今日主线与妖股龙头代码快速扫描"
                 >
@@ -1867,7 +1860,7 @@ export default function OpportunitiesPage() {
                 </Button>
               </div>
             </div>
-            <div className="mt-2 text-[11px] text-muted-foreground">
+            <div className="mt-2 text-[12px] text-muted-foreground">
               数智决策三指标共振：GS趋势 + AI机构活跃度 + L2主力净流入，三项全满足=强共振
             </div>
             {poolScanned ? (
@@ -1875,7 +1868,7 @@ export default function OpportunitiesPage() {
                 <div className="mt-2 overflow-x-auto">
                   <table className="w-full text-[12px] border-collapse">
                     <thead>
-                      <tr className="text-left text-muted-foreground border-b border-border/50">
+                      <tr className="text-left text-muted-foreground border-b border-border">
                         <th className="py-1.5 pr-2 font-medium">代码</th>
                         <th className="py-1.5 pr-2 font-medium">活跃度</th>
                         <th className="py-1.5 pr-2 font-medium">GS状态</th>
@@ -1885,7 +1878,7 @@ export default function OpportunitiesPage() {
                     </thead>
                     <tbody>
                       {poolRows.map((r) => (
-                        <tr key={r.symbol} className="border-b border-border/30">
+                        <tr key={r.symbol} className="border-b border-border">
                           <td className="py-1.5 pr-2 font-mono">{r.symbol}</td>
                           <td className="py-1.5 pr-2 font-mono">
                             {r.activity != null ? (
@@ -1944,10 +1937,10 @@ export default function OpportunitiesPage() {
                   </table>
                 </div>
               ) : (
-                <div className="mt-2 text-[11px] text-muted-foreground">无结果</div>
+                <div className="mt-2 text-[12px] text-muted-foreground">无结果</div>
               )
             ) : (
-              <div className="mt-2 text-[11px] text-muted-foreground">输入代码后点「扫描共振」查看结果</div>
+              <div className="mt-2 text-[12px] text-muted-foreground">输入代码后点「扫描共振」查看结果</div>
             )}
           </TabsContent>
           <TabsContent value="cb">
@@ -1970,49 +1963,49 @@ export default function OpportunitiesPage() {
       {/* 更多指标（2026-10-24 L2-E）：首屏只留 3 张结论 KPI，市场池占比 + 4 张因子/约束卡
           收进原生 details —— 不新增组件、不动数据口径、默认折叠。 */}
       {(globalCoverage || factorStats || constraintStats) && (
-        <details className="mb-4 border-y border-border/60 py-2">
+        <details className="mb-4 border-y border-border py-2">
           <summary className="cursor-pointer select-none text-[12px] text-muted-foreground hover:text-foreground">
             更多指标（市场池占比 · 因子与约束 5 项）
           </summary>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3">
-            <div className="border-l border-border/40 pl-3 py-1">
-              <div className="text-[11px] text-muted-foreground">{t('opportunities.marketShare')}</div>
+            <div className="border-l border-border pl-3 py-1">
+              <div className="text-[12px] text-muted-foreground">{t('opportunities.marketShare')}</div>
               <div className="text-[16px] font-bold mt-1 tabular-nums">{globalCoverage?.market_scan_share_pct != null ? `${globalCoverage.market_scan_share_pct.toFixed(1)}%` : '--'}</div>
-              <div className="text-[11px] text-muted-foreground mt-1">
+              <div className="text-[12px] text-muted-foreground mt-1">
                 {t('opportunities.marketPool')}: {globalCoverage?.market_scan_signals ?? '--'}，{t('opportunities.watchPool')}: {globalCoverage?.watchlist_signals ?? '--'}，{t('opportunities.mixed')}: {globalCoverage?.mixed_signals ?? '--'}
               </div>
             </div>
-            <div className="border-l border-border/40 pl-3 py-1">
-              <div className="text-[11px] text-muted-foreground">平均Alpha因子</div>
+            <div className="border-l border-border pl-3 py-1">
+              <div className="text-[12px] text-muted-foreground">平均Alpha因子</div>
               <div className="text-[16px] font-bold mt-1 tabular-nums">{factorStats ? factorStats.avg_alpha_score.toFixed(1) : '--'}</div>
-              <div className="text-[11px] text-muted-foreground mt-1">样本 {factorStats?.sample_size ?? '--'}</div>
+              <div className="text-[12px] text-muted-foreground mt-1">样本 {factorStats?.sample_size ?? '--'}</div>
             </div>
-            <div className="border-l border-border/40 pl-3 py-1">
-              <div className="text-[11px] text-muted-foreground">平均事件催化</div>
+            <div className="border-l border-border pl-3 py-1">
+              <div className="text-[12px] text-muted-foreground">平均事件催化</div>
               <div className="text-[16px] font-bold mt-1 tabular-nums">{factorStats ? factorStats.avg_catalyst_score.toFixed(1) : '--'}</div>
-              <div className="text-[11px] text-muted-foreground mt-1">
+              <div className="text-[12px] text-muted-foreground mt-1">
                 拥挤惩罚 {factorStats ? factorStats.avg_crowd_penalty.toFixed(1) : '--'}
               </div>
             </div>
-            <div className="border-l border-border/40 pl-3 py-1">
-              <div className="text-[11px] text-muted-foreground">平均质量/风险</div>
+            <div className="border-l border-border pl-3 py-1">
+              <div className="text-[12px] text-muted-foreground">平均质量/风险</div>
               <div className="text-[16px] font-bold mt-1 tabular-nums">
                 {factorStats ? `${factorStats.avg_quality_score.toFixed(1)} / ${factorStats.avg_risk_penalty.toFixed(1)}` : '--'}
               </div>
-              <div className="text-[11px] text-muted-foreground mt-1">质量分越高越好</div>
+              <div className="text-[12px] text-muted-foreground mt-1">质量分越高越好</div>
             </div>
-            <div className="border-l border-border/40 pl-3 py-1">
-              <div className="text-[11px] text-muted-foreground">组合约束降级</div>
+            <div className="border-l border-border pl-3 py-1">
+              <div className="text-[12px] text-muted-foreground">组合约束降级</div>
               <div className="text-[16px] font-bold mt-1 tabular-nums">{constraintStats?.constrained_top20 ?? 0}</div>
-              <div className="text-[11px] text-muted-foreground mt-1">Top20 被风控降级数量</div>
+              <div className="text-[12px] text-muted-foreground mt-1">Top20 被风控降级数量</div>
             </div>
           </div>
         </details>
       )}
 
       {(regimeSummary.length > 0 || riskSummary.length > 0) && (
-        <div className="border-y border-border/60 py-2.5 mb-4">
-          <div className="text-[11px] text-muted-foreground mb-2">市场状态与组合风险</div>
+        <div className="border-y border-border py-2.5 mb-4">
+          <div className="text-[12px] text-muted-foreground mb-2">市场状态与组合风险</div>
           <div className="flex flex-wrap gap-2">
             {regimeSummary.map((r) => (
               <SignalChip key={`regime-${r.market}`} tone={regimeTone(r.regime).tone} strength={regimeTone(r.regime).strength} title="市场状态来自策略统计; 多头=进攻(红) 空头=防守(绿)">
@@ -2020,7 +2013,7 @@ export default function OpportunitiesPage() {
               </SignalChip>
             ))}
             {riskSummary.map((r) => (
-              <span key={`risk-${r.market}`} className="text-[11px] px-2.5 py-1 rounded bg-accent/70 text-muted-foreground border border-border/60">
+              <span key={`risk-${r.market}`} className="text-[12px] px-2.5 py-1 rounded bg-s2 text-muted-foreground border border-border">
                 {marketLabel(r.market)}风险: {r.riskLevel} · 集中度{(r.concentration * 100).toFixed(0)}% · 高风险占比{(r.highRiskRatio * 100).toFixed(0)}%
               </span>
             ))}
@@ -2038,7 +2031,7 @@ export default function OpportunitiesPage() {
 
       {loading && groupedItems.length === 0 ? (
         /* 首次加载：机会列表骨架屏（已有数据时静默刷新，不闪） */
-        <div className="border-t border-border/60 pt-2">
+        <div className="border-t border-border pt-2">
           <SkeletonTable rows={6} />
         </div>
       ) : !loading && groupedItems.length === 0 ? (
@@ -2052,9 +2045,9 @@ export default function OpportunitiesPage() {
           }
         />
       ) : (
-      <div className="border-t border-border/60">
+      <div className="border-t border-border">
         {/* W3.7/D7 去卡片化: 表头(桌面端), 与扫读行列对齐 */}
-        <div className="hidden md:grid grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] gap-x-3 px-1 py-1.5 text-[10px] font-medium text-muted-foreground border-b border-border/40">
+        <div className="hidden md:grid grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] gap-x-3 px-1 py-1.5 text-[12px] font-medium text-muted-foreground border-b border-border">
           <span />
           <span>标的</span>
           <span>动作</span>
@@ -2110,7 +2103,7 @@ export default function OpportunitiesPage() {
             <div
               key={stateKey}
               data-invalid={planValid ? undefined : '1'}
-              className={`border-b border-border/40 ${toneClass(item)} ${
+              className={`border-b border-border ${toneClass(item)} ${
                 planValid ? '' : 'border-l-[3px] border-l-red-500 bg-red-500/[0.06]'
               }`}
             >
@@ -2133,24 +2126,24 @@ export default function OpportunitiesPage() {
                 onFocus={() => rowNav.setIndex(rowIndex)}
                 className={`w-full cursor-pointer row-focusable grid grid-cols-[20px_minmax(0,1fr)_auto] md:grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] items-center gap-x-3 px-1 py-2.5 text-left transition-colors duration-fast hover:bg-s2 ${rowNav.index === rowIndex ? 'row-selected' : ''}`}
               >
-                <span className={`text-[10px] text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+                <span className={`text-[12px] text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate flex items-center gap-1.5" title={item.stock_name || item.stock_symbol}>
+                  <div className="text-[14px] font-semibold truncate flex items-center gap-1.5" title={item.stock_name || item.stock_symbol}>
                     <span className="truncate" title={item.stock_name || item.stock_symbol}>{item.stock_name || item.stock_symbol}</span>
                     {/* P1: 多源共振火焰 */}
                     {resCount >= 2 && (
                       <span
-                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-500/15 text-orange-600 dark:text-orange-400"
+                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[12px] font-semibold bg-orange-500/15 text-orange-600 dark:text-orange-400"
                         title={`多源共振×${resCount}: ${resonanceSourcesLabel(item) || badgeSources.map(sourceCn).join(' + ')}`}
                       >
                         🔥×{resCount}
                       </span>
                     )}
                   </div>
-                  <div className="text-[11px] text-muted-foreground font-mono">{item.stock_market}:{item.stock_symbol}</div>
+                  <div className="text-[12px] text-muted-foreground font-mono">{item.stock_market}:{item.stock_symbol}</div>
                   {!planValid && (
                     <div
-                      className="mt-0.5 text-[10px] font-semibold text-red-500"
+                      className="mt-0.5 text-[12px] font-semibold text-red-500"
                       title={planInvalidReason}
                       data-testid="plan-invalid-badge"
                     >
@@ -2174,17 +2167,17 @@ export default function OpportunitiesPage() {
                 <div className="hidden md:block text-[12px] font-mono text-stock-up truncate" title={formatPlanPrice(targetPrice)}>{formatPlanPrice(targetPrice)}</div>
                 <div className="hidden md:flex items-center gap-1 min-w-0">
                   {badgeSources.slice(0, 2).map((s) => (
-                    <span key={s} className="inline-flex items-center px-1.5 py-0 rounded-full bg-primary/10 text-primary text-[10px]">
+                    <span key={s} className="inline-flex items-center px-1.5 py-0 rounded-full bg-primary/10 text-primary text-[12px]">
                       {sourceCn(s) || s}
                     </span>
                   ))}
-                  {badgeSources.length > 2 && <span className="text-[10px] text-muted-foreground shrink-0">+{badgeSources.length - 2}</span>}
+                  {badgeSources.length > 2 && <span className="text-[12px] text-muted-foreground shrink-0">+{badgeSources.length - 2}</span>}
                 </div>
                 <div className="hidden md:flex justify-end">
                   <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); openInsight(item) }}
-                    className="text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                    className="text-[12px] text-muted-foreground hover:text-primary transition-colors"
                     title="打开 AI 洞察"
                   >
                     洞察
@@ -2192,7 +2185,7 @@ export default function OpportunitiesPage() {
                 </div>
               </div>
               {expanded && (
-                <div className="px-1 pb-3 pt-0.5 md:pl-8 space-y-1.5 bg-accent/10">
+                <div className="px-1 pb-3 pt-0.5 md:pl-8 space-y-1.5 bg-s2">
                   {/* 移动端: 扫读行隐藏的三要素在这里补齐 */}
                   <div className="md:hidden flex flex-wrap items-center gap-x-4 gap-y-0.5 text-[12px] font-semibold">
                     <span className="text-foreground">入场 {formatEntryDisplay(item.action, entryLow, entryHigh)}</span>
@@ -2200,12 +2193,12 @@ export default function OpportunitiesPage() {
                     <span className="text-stock-up">目标 {formatPlanPrice(targetPrice)}</span>
                   </div>
                   {!planValid && (
-                    <div className="text-[11px] leading-4 font-semibold text-red-500" data-testid="plan-invalid-reason">
+                    <div className="text-[12px] leading-4 font-semibold text-red-500" data-testid="plan-invalid-reason">
                       ⚠ 计划不合法: {planInvalidReason} —— 已降级为观望, 勿按此价位执行
                     </div>
                   )}
                   <div className="text-[12px] leading-5 text-foreground">{item.signal || item.reason || '--'}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] leading-4 text-muted-foreground">
                   <span>失效 {item.invalidation || '--'}</span>
                   <span>策略 {strategyHead}{strategyTailCount > 0 ? ` +${strategyTailCount}` : ''}</span>
                   {/* P1 多源整合: 来源徽章(命中来源全部展示, 共振可视) */}
@@ -2213,7 +2206,7 @@ export default function OpportunitiesPage() {
                     {badgeSources.map((s) => (
                       <span
                         key={s}
-                        className="inline-flex items-center px-1.5 py-0 rounded-full bg-primary/10 text-primary text-[10px]"
+                        className="inline-flex items-center px-1.5 py-0 rounded-full bg-primary/10 text-primary text-[12px]"
                       >
                         {sourceCn(s) || s}
                       </span>
@@ -2221,7 +2214,7 @@ export default function OpportunitiesPage() {
                   </span>
                   <span>{sourcePoolLabel} · {sourceAgentHead}{sourceAgentTailCount > 0 ? ` +${sourceAgentTailCount}` : ''} · {item.risk_level_label || item.risk_level || '--'} · {marketRegime.regime_label || marketRegime.regime || '--'} · {item.is_holding_snapshot ? '持仓中' : '未持仓'}</span>
                 </div>
-                <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] leading-4 text-muted-foreground">
+                <div className="mt-1 flex flex-wrap gap-x-3 text-[12px] leading-4 text-muted-foreground">
                   {item.ai_score != null && <span>AI 评分 <span className="font-semibold text-foreground">{item.ai_score}</span></span>}
                   <span>α {formatMetric(breakdown.alpha_score)}</span>
                   <span>催化 {formatMetric(breakdown.catalyst_score)}</span>
@@ -2233,29 +2226,29 @@ export default function OpportunitiesPage() {
                 {item.factor_explain && (((item.factor_explain.positive?.length ?? 0) > 0) || ((item.factor_explain.negative?.length ?? 0) > 0)) && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {(item.factor_explain.positive ?? []).map((f) => (
-                      <span key={`p-${f.factor}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-green-500/15 text-green-700 dark:text-green-400">
+                      <span key={`p-${f.factor}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[12px] bg-green-500/15 text-green-700 dark:text-green-400">
                         {f.label} +{Math.abs(f.contribution).toFixed(1)}
                       </span>
                     ))}
                     {(item.factor_explain.negative ?? []).map((f) => (
-                      <span key={`n-${f.factor}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-red-500/15 text-red-700 dark:text-red-400">
+                      <span key={`n-${f.factor}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-[12px] bg-red-500/15 text-red-700 dark:text-red-400">
                         {f.label} {f.contribution.toFixed(1)}
                       </span>
                     ))}
                   </div>
                 )}
                 {item.constrained && (
-                  <div className="mt-1.5 text-[10px] text-amber-700 dark:text-amber-600">
+                  <div className="mt-1.5 text-[12px] text-amber-700 dark:text-amber-600">
                     组合约束: {(item.constraint_reasons || []).join('；') || '已自动降级'}
                   </div>
                 )}
 
               <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
-                <div className="text-[10px] text-muted-foreground">
+                <div className="text-[12px] text-muted-foreground">
                   来源: {sourceFlags.join(' + ')}
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-0.5 text-[10px]">
+                  <div className="flex items-center gap-0.5 text-[12px]">
                     <button
                       type="button"
                       disabled={feedbackPending.has(group.key)}
@@ -2288,13 +2281,13 @@ export default function OpportunitiesPage() {
                   <button
                     type="button"
                     onClick={() => setShareSignal(item)}
-                    className="inline-flex items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-primary"
+                    className="inline-flex items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-primary"
                     title="生成 AI 评分分享图"
                   >
                     <Share2 className="h-3 w-3" />
                     分享图
                   </button>
-                  <div className="text-[10px] text-muted-foreground">评估: 自动后验</div>
+                  <div className="text-[12px] text-muted-foreground">评估: 自动后验</div>
                 </div>
               </div>
                 </div>
@@ -2307,7 +2300,7 @@ export default function OpportunitiesPage() {
 
       <details className="mt-6 group">
         <summary className="cursor-pointer list-none flex items-center gap-2 text-[12px] font-medium text-muted-foreground hover:text-foreground transition-colors">
-          <span className="text-[11px] opacity-60 transition-transform group-open:rotate-90">▶</span>
+          <span className="text-[12px] opacity-60 transition-transform group-open:rotate-90">▶</span>
           因子权重与战绩
         </summary>
         <div className="mt-3">

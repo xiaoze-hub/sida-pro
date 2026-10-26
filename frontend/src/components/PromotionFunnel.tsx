@@ -25,19 +25,19 @@ export default function PromotionFunnel({
   const asc = [...levels].sort((a, b) => a.board - b.board)
   if (!asc.length) {
     return (
-      <div className="border-t border-border/60 py-3 text-[12px] text-muted-foreground">
+      <div className="border-t border-border py-3 text-[12px] text-muted-foreground">
         当日无梯队家数，无法绘制晋级漏斗。
       </div>
     )
   }
   const max = Math.max(...asc.map((l) => l.count), 1)
   return (
-    <div className="border-t border-border/60 py-2" data-testid="promotion-funnel">
+    <div className="border-t border-border py-2" data-testid="promotion-funnel">
       <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           梯队家数（长度=家数，看断崖）
         </span>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           首板→最高板共 {asc.length} 档 · 不含分层晋级率（表内未存）
         </span>
       </div>
@@ -51,10 +51,10 @@ export default function PromotionFunnel({
               : null
           return (
             <div key={lv.board} className="flex items-center gap-2" data-testid={`promotion-funnel-row-${lv.board}`}>
-              <span className="w-9 shrink-0 text-right text-[11px] text-muted-foreground">{label}</span>
-              <div className="relative h-3 min-w-0 flex-1 border-l border-border/40">
+              <span className="w-9 shrink-0 text-right text-[12px] text-muted-foreground">{label}</span>
+              <div className="relative h-3 min-w-0 flex-1 border-l border-border">
                 {lv.count === 0 ? (
-                  <span className="absolute inset-y-0 left-1 flex items-center text-[10px] text-muted-foreground">
+                  <span className="absolute inset-y-0 left-1 flex items-center text-[12px] text-muted-foreground">
                     无
                   </span>
                 ) : (
@@ -68,7 +68,7 @@ export default function PromotionFunnel({
               <span className="w-14 shrink-0 text-right font-num text-[12px] tabular-nums text-foreground">
                 {lv.count === 0 ? '--' : `${lv.count} 家`}
               </span>
-              <span className="w-16 shrink-0 text-right font-num text-[10px] tabular-nums text-muted-foreground">
+              <span className="w-16 shrink-0 text-right font-num text-[12px] tabular-nums text-muted-foreground">
                 {share != null ? `占涨停 ${share}%` : ''}
               </span>
             </div>
@@ -76,7 +76,7 @@ export default function PromotionFunnel({
         })}
       </div>
       {max <= 1 && (
-        <div className="mt-1 text-[10px] text-muted-foreground">
+        <div className="mt-1 text-[12px] text-muted-foreground">
           各档家数均 ≤1，柱长已按最小值保留 2% 宽度以便可读（真实家数以右侧数字为准）。
         </div>
       )}

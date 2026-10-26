@@ -80,8 +80,8 @@ function Section({
   children: ReactNode
 }) {
   return (
-    <section data-testid={`news-section-${id}`} className="border-b border-border/40 pb-3">
-      <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
+    <section data-testid={`news-section-${id}`} className="border-b border-border pb-3">
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12px]">
         <span className="font-medium text-foreground">{title}</span>
         {hint ? (
           <span className="text-muted-foreground" title={hint}>
@@ -89,7 +89,7 @@ function Section({
           </span>
         ) : null}
         {/* 只在有数据时给条数: 首拉在途两个数组都是 [], 恒显「共 0 条」会被读成"确无内容" */}
-        {count > 0 ? <span className="font-mono text-[10px] text-muted-foreground">共 {count} 条</span> : null}
+        {count > 0 ? <span className="font-mono text-[12px] text-muted-foreground">共 {count} 条</span> : null}
       </div>
       {children}
     </section>
@@ -102,13 +102,13 @@ function NewsTabBody() {
   return (
     <div className="mt-1 space-y-3 text-[12px]" data-testid="news-tab">
       {/* 条: 口径说明 + 空态说明(无现价/名称/涨跌 —— 带1 拥有) */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/40 pb-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2 text-[12px] text-muted-foreground">
         <span className="text-foreground">消息</span>
         <span className="text-border/60">|</span>
         <span>公告(东财, 时间窗 近7天~近180天) · 新闻(时间窗 近6小时~近7天)</span>
         {/* 如实披露: 两个端点失败被静默降级为空列表(hook 无失败位), 且首拉在途两数组也是 [] ⇒
             空态不可被读作"确无内容"(三种成因在 UI 侧不可区分) */}
-        <span className="ml-auto text-[10px]" data-testid="news-empty-caveat">
+        <span className="ml-auto text-[12px]" data-testid="news-empty-caveat">
           列表为空时「该时间窗内确无内容 / 取数失败 / 首拉在途」在此不可区分
         </span>
       </div>

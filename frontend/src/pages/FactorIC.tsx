@@ -87,7 +87,7 @@ function IcBar({ value }: { value: number | null | undefined }) {
       aria-label={`IC 发散条: ${value}（中轴为 0，右正左负）`}
       title={`IC=${value}；中轴为 0，右侧红=正相关，左侧绿=负相关`}
     >
-      <span className="relative inline-block h-1.5 w-16 rounded bg-accent/40">
+      <span className="relative inline-block h-1.5 w-16 rounded bg-s2">
         {value >= 0 ? (
           <span className="absolute left-1/2 top-0 h-1.5 rounded-r bg-stock-up" style={{ width: `${pct}%` }} />
         ) : (
@@ -154,39 +154,39 @@ export default function FactorIC() {
   const insufficient = rows.filter((r) => r.ic === null).length
 
   return (
-    <div className="mx-auto max-w-[1200px] p-4">
+    <div className="page-container space-y-4">
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <h1 className="text-[16px] font-semibold">因子有效性</h1>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           横截面 IC 为主口径 · 样本外 IC 看是否过拟合 · 参考值仅对照
         </span>
-        <div className="ml-auto flex items-center gap-2 text-[11px]">
+        <div className="ml-auto flex items-center gap-2 text-[12px]">
           <label className="text-muted-foreground">回看天数</label>
           <input
             type="number" min={7} max={365} value={days}
             onChange={(e) => setDays(Math.max(7, Math.min(365, Number(e.target.value) || 90)))}
-            className="w-16 rounded border border-border/60 bg-background px-1.5 py-0.5 font-mono"
+            className="w-16 rounded border border-border bg-background px-1.5 py-0.5 font-mono"
           />
           <label className="text-muted-foreground">持有期</label>
           <input
             type="number" min={1} max={60} value={horizon}
             onChange={(e) => setHorizon(Math.max(1, Math.min(60, Number(e.target.value) || 5)))}
-            className="w-14 rounded border border-border/60 bg-background px-1.5 py-0.5 font-mono"
+            className="w-14 rounded border border-border bg-background px-1.5 py-0.5 font-mono"
           />
           <button
             type="button" onClick={() => void load()} disabled={loading}
-            className="inline-flex items-center gap-1 rounded border border-border/60 px-2 py-0.5 hover:text-foreground disabled:opacity-60"
+            className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 hover:text-foreground disabled:opacity-60"
           >
             {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} 刷新
           </button>
         </div>
       </div>
 
-      {err && <div className="mb-3 rounded border border-border/60 p-3 text-[12px] text-muted-foreground">{err}</div>}
+      {err && <div className="card-surface bg-card mb-3 rounded p-3 text-[12px] text-muted-foreground">{err}</div>}
 
       {/* 后端计算失败: 照实显示错误, 不显示成"没数据" */}
       {data?.error && (
-        <div className="mb-3 flex items-start gap-2 rounded border border-amber-500/40 p-3 text-[12px]">
+        <div className="card-surface bg-card mb-3 flex items-start gap-2 rounded p-3 text-[12px]">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <div>
             <div className="font-medium">后端计算失败（原样显示，不代表因子无效）</div>
@@ -202,7 +202,7 @@ export default function FactorIC() {
       )}
 
       {data && !data.error && rows.length === 0 && (
-        <div className="rounded border border-border/60 p-6 text-[12px] text-muted-foreground">
+        <div className="card-surface bg-card rounded p-6 text-[12px] text-muted-foreground">
           这段区间还没有可评估的因子快照（需要"策略信号快照 + 已评估的前向收益"配对）。
           把回看天数调大一些再试。
         </div>
@@ -228,10 +228,10 @@ export default function FactorIC() {
             })()}
           </p>
 
-          <div className="overflow-x-auto rounded border border-border/60">
+          <div className="card-surface bg-card overflow-x-auto rounded ">
             <table className="w-full min-w-[860px]">
-              <thead className="border-b border-border/60 bg-accent/20">
-                <tr className="text-[11px] text-muted-foreground">
+              <thead className="border-b border-border bg-s2">
+                <tr className="text-[12px] text-muted-foreground">
                   <th className="px-2 py-1.5 text-left font-medium">因子</th>
                   <th className="px-2 py-1.5 text-right font-medium" title="横截面 IC 均值(主口径)">IC</th>
                   <th className="px-2 py-1.5 text-right font-medium" title="IC 的 t 统计量">t</th>
@@ -248,7 +248,7 @@ export default function FactorIC() {
                   const ic = icCell(r.ic, r.ic_periods, MIN_PERIODS)
                   const ho = icCell(r.ic_holdout, r.holdout_periods, MIN_HOLDOUT)
                   return (
-                    <tr key={r.code} className="border-b border-border/40 last:border-0 text-[12px]">
+                    <tr key={r.code} className="border-b border-border last:border-0 text-[12px]">
                       <td className="px-2 py-1.5 font-mono">{r.code}</td>
                       <td className={`px-2 py-1.5 text-right font-mono ${ic.cls}`} title={ic.title}>
                         {ic.text}
@@ -283,7 +283,7 @@ export default function FactorIC() {
             </table>
           </div>
 
-          <div className="mt-3 space-y-1 text-[11px] text-muted-foreground">
+          <div className="mt-3 space-y-1 text-[12px] text-muted-foreground">
             <div>
               口径：回看 {data.days} 天 · 持有期 {data.horizon} 个交易日 · 市场 {data.market || '全部'} ·
               样本外占比 {safeFixed(data.holdout_ratio * 100, 0, '--')}%。

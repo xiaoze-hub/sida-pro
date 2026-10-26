@@ -62,14 +62,14 @@ export default function AuditPage() {
     <div className="sida-page-enter w-full space-y-4 md:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 md:gap-3">
-          <div className="w-9 h-9 md:w-10 md:h-10 rounded-xl bg-accent flex items-center justify-center shadow-sm border border-border/60">
+          <div className="card-surface w-9 h-9 md:w-10 md:h-10 rounded-xl bg-accent flex items-center justify-center shadow-sm ">
             <ScrollText className="w-4 h-4 md:w-5 md:h-5 text-foreground" />
           </div>
           <div>
             <h1 className="text-[16px] md:text-xl font-bold">操作审计</h1>
-            <p className="text-[12px] md:text-[13px] text-muted-foreground">关键写操作记录(最近 200 条, 倒序)</p>
+            <p className="text-[12px] md:text-[14px] text-muted-foreground">关键写操作记录(最近 200 条, 倒序)</p>
           </div>
-          <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+          <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background border border-border text-[12px] text-muted-foreground">
             共 <span className="font-mono text-foreground">{logs.length}</span> 条
           </div>
         </div>
@@ -77,7 +77,7 @@ export default function AuditPage() {
           <select
             value={filterUser}
             onChange={e => setFilterUser(e.target.value)}
-            className="h-8 rounded-md border border-border/50 bg-background px-2 text-[12px] text-foreground focus:outline-none"
+            className="h-8 rounded-md border border-border bg-background px-2 text-[12px] text-foreground focus:outline-none"
             title="按用户筛选"
           >
             <option value="">全部用户</option>
@@ -89,7 +89,7 @@ export default function AuditPage() {
             <button
               type="button"
               onClick={() => setShowTestUsers(v => !v)}
-              className="text-[11px] text-muted-foreground hover:text-foreground underline decoration-dotted"
+              className="text-[12px] text-muted-foreground hover:text-foreground underline decoration-dotted"
               title="内部联调用账号, 默认不出现在筛选器里"
             >
               {showTestUsers ? '隐藏测试账号' : `含测试账号(${testUserCount})`}
@@ -104,9 +104,9 @@ export default function AuditPage() {
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-[13px]">
+          <table className="w-full text-left text-[14px]">
             <thead>
-              <tr className="border-b border-border/60 bg-accent/20 text-[12px] text-muted-foreground">
+              <tr className="border-b border-border bg-s2 text-[12px] text-muted-foreground">
                 <th className="px-4 py-2.5 font-medium whitespace-nowrap">时间</th>
                 <th className="px-4 py-2.5 font-medium whitespace-nowrap">用户</th>
                 <th className="px-4 py-2.5 font-medium whitespace-nowrap">操作</th>
@@ -118,7 +118,7 @@ export default function AuditPage() {
               {!loading && logs.map(row => {
                 const meta = actionMeta(row.action)
                 return (
-                  <tr key={row.id} className="hover:bg-accent/20 transition-colors">
+                  <tr key={row.id} className="hover:bg-s2 transition-colors">
                     <td className="px-4 py-2.5 whitespace-nowrap font-mono text-[12px] text-muted-foreground">
                       {formatFullDateTime(row.created_at) || '--'}
                     </td>
@@ -147,7 +147,7 @@ export default function AuditPage() {
           </div>
         )}
         {!loading && !error && logs.length === 0 && (
-          <div className="p-10 text-center text-[13px] text-muted-foreground">暂无审计记录</div>
+          <div className="p-10 text-center text-[14px] text-muted-foreground">暂无审计记录</div>
         )}
         <ErrorBanner errors={!loading && !dismissed && error ? [{ source: '审计日志', message: error, retry: () => void refetch() }] : []} onDismiss={() => setDismissed(true)} />
       </div>

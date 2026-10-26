@@ -103,9 +103,9 @@ function CardShell({ icon: Icon, title, children }: {
   children: React.ReactNode
 }) {
   return (
-    <div className="border-b border-border/40 pb-3">
+    <div className="border-b border-border pb-3">
       <div className="mb-2 flex items-center gap-2">
-        <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
+        <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-s2 text-primary ring-1 ring-border/40">
           <Icon className="h-3.5 w-3.5" />
         </div>
         <span className="text-[12px] font-semibold text-foreground">{title}</span>
@@ -214,11 +214,11 @@ function HoldingsCard({ symbol }: { symbol: string; market: string }) {
             {!editing && (
               <>
                 <button type="button" onClick={() => { setEditing('add'); setMsg('') }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-gs-go hover:bg-accent">
+                  className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-[12px] text-gs-go hover:bg-accent">
                   <Plus className="h-3 w-3" /> 加仓
                 </button>
                 <button type="button" onClick={() => { setEditing('reduce'); setMsg('') }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-gs-stop hover:bg-accent">
+                  className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-[12px] text-gs-stop hover:bg-accent">
                   <Minus className="h-3 w-3" /> 减仓
                 </button>
               </>
@@ -231,21 +231,21 @@ function HoldingsCard({ symbol }: { symbol: string; market: string }) {
                   onChange={e => setQty(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') void submitQty(editing) }}
                   placeholder="数量(股)"
-                  className="h-7 w-24 rounded-md border border-border/50 bg-background px-2 text-[11px] outline-none focus:border-primary/50"
+                  className="h-7 w-24 rounded-md border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/50"
                 />
                 <button type="button" disabled={saving} onClick={() => void submitQty(editing)}
-                  className="rounded-md bg-primary px-2 py-1 text-[11px] text-primary-foreground disabled:opacity-50">
+                  className="rounded-md bg-primary px-2 py-1 text-[12px] text-primary-foreground disabled:opacity-50">
                   {saving ? '保存中…' : '确认'}
                 </button>
                 <button type="button" onClick={() => { setEditing(null); setMsg('') }}
-                  className="rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground">
+                  className="rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:text-foreground">
                   取消
                 </button>
               </div>
             )}
-            {msg && <span className="text-[11px] text-muted-foreground">{msg}</span>}
+            {msg && <span className="text-[12px] text-muted-foreground">{msg}</span>}
           </div>
-          <p className="mt-1.5 text-[10px] text-muted-foreground">
+          <p className="mt-1.5 text-[12px] text-muted-foreground">
             加/减仓调 PUT /positions/{pos.id}(现有接口); 持仓天数接口未返回建仓时间, 如实显示 --
           </p>
         </>
@@ -325,9 +325,9 @@ function WatchlistCard({ symbol, market }: { symbol: string; market: string }) {
       <div className="text-[12px]">
         {stock ? (
           <div className="flex items-center gap-2">
-            <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600">已在自选</span>
+            <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[12px] text-emerald-600">已在自选</span>
             <button type="button" disabled={busy} onClick={() => void removeWatch()}
-              className="rounded-lg border border-border/50 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50">
+              className="rounded-lg border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-50">
               移出自选
             </button>
           </div>
@@ -335,36 +335,36 @@ function WatchlistCard({ symbol, market }: { symbol: string; market: string }) {
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground">未在自选</span>
             <button type="button" disabled={busy} onClick={() => void addWatch()}
-              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2 py-0.5 text-[11px] text-primary-foreground disabled:opacity-50">
+              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2 py-0.5 text-[12px] text-primary-foreground disabled:opacity-50">
               <ListPlus className="h-3 w-3" /> 加入自选
             </button>
           </div>
         )}
-        {msg && <span className="ml-2 text-[11px] text-muted-foreground">{msg}</span>}
+        {msg && <span className="ml-2 text-[12px] text-muted-foreground">{msg}</span>}
       </div>
 
-      <div className="mt-2.5 border-t border-border/40 pt-2">
-        <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+      <div className="mt-2.5 border-t border-border pt-2">
+        <div className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-foreground">
           <BellRing className="h-3 w-3 text-amber-500" /> 价格提醒
         </div>
         {myAlerts.length > 0 ? (
           <ul className="space-y-1">
             {myAlerts.map((a, i) => (
-              <li key={i} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <li key={i} className="flex items-center gap-2 text-[12px] text-muted-foreground">
                 <span className={a.enabled === false ? 'opacity-50' : 'text-foreground'}>{a.name || `规则${i + 1}`}</span>
-                {a.enabled === false && <span className="rounded bg-muted px-1 text-[10px]">已停用</span>}
+                {a.enabled === false && <span className="rounded bg-muted px-1 text-[12px]">已停用</span>}
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[12px] text-muted-foreground">
             暂无提醒规则 —— 前往 提醒 页创建(/alerts)
           </p>
         )}
       </div>
 
       {/* ⚠️ 设计稿要求"加入自选时间/分组标签", 但接口不返回 created_at 且无分组字段 → 如实不渲染 */}
-      <p className="mt-1.5 text-[10px] text-muted-foreground">
+      <p className="mt-1.5 text-[12px] text-muted-foreground">
         加入时间与分组标签接口未提供, 不显示(不编造)
       </p>
     </CardShell>
@@ -428,20 +428,20 @@ function OpportunitiesCard({ symbol, market }: { symbol: string; market: string 
           </div>
 
           {cand.reason && (
-            <p className="mt-2 line-clamp-3 text-[11px] leading-relaxed text-muted-foreground" title={cand.reason}>
+            <p className="mt-2 line-clamp-3 text-[12px] leading-relaxed text-muted-foreground" title={cand.reason}>
               {cand.reason}
             </p>
           )}
 
           <div className="mt-2.5 flex items-center gap-2">
             <button type="button" disabled={busy} onClick={() => void addWatch()}
-              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-[11px] text-primary-foreground disabled:opacity-50">
+              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-[12px] text-primary-foreground disabled:opacity-50">
               <ListPlus className="h-3 w-3" /> 加入自选
             </button>
-            {msg && <span className="text-[11px] text-muted-foreground">{msg}</span>}
+            {msg && <span className="text-[12px] text-muted-foreground">{msg}</span>}
           </div>
           {/* ⚠️ 设计稿要求"历史命中率", 接口无单股粒度命中率字段 → 用 score/confidence 呈现, 不冒充 */}
-          <p className="mt-1.5 text-[10px] text-muted-foreground">
+          <p className="mt-1.5 text-[12px] text-muted-foreground">
             历史命中率接口无单股字段, 以评分/置信度呈现(不冒充命中率)
           </p>
         </>
@@ -462,7 +462,7 @@ function Field({ label, value, tone, hint }: {
 }) {
   return (
     <div className="min-w-0" title={hint}>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="text-[12px] text-muted-foreground">{label}</div>
       <div title={value} className={`truncate font-mono ${
         tone === 'up' ? 'text-stock-up' : tone === 'down' ? 'text-stock-down' : 'text-foreground'
       }`}>{value}</div>

@@ -58,7 +58,7 @@ function timeAgo(iso: string): string {
 }
 
 /** 顶栏消息中心：未读红点 + 下拉列表。后台任务完成/失败在这里落地。 */
-export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
+export function NotificationBell({ size = 'md', placement = 'header' }: { size?: 'sm' | 'md'; placement?: 'header' | 'sidebar' }) {
   const nav = useNavigate()
   const [open, setOpen] = useState(false)
   const [unread, setUnread] = useState(0)
@@ -139,21 +139,21 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(v => !v)}
-        className={`${box} rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-all relative`}
+        className={`${box} rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background transition-all relative`}
         title={unread > 0 ? `${unread} 条未读消息` : '消息中心'}
       >
         <Bell className="w-4 h-4" />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-medium flex items-center justify-center ring-2 ring-card">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-rose-500 text-white text-[12px] font-medium flex items-center justify-center ring-2 ring-card">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border/60 bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)] z-[80] overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/50">
-            <span className="text-[13px] font-semibold text-foreground">
+        <div className={`absolute w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)] z-[80] overflow-hidden ${placement === 'sidebar' ? 'bottom-0 left-full ml-3' : 'right-0 mt-2'}`} data-testid="notification-popover">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
+            <span className="text-[14px] font-semibold text-foreground">
               消息中心 {unread > 0 && <span className="text-rose-500">({unread} 未读)</span>}
             </span>
             <div className="flex items-center gap-1">
@@ -174,14 +174,14 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
             ) : items.length === 0 ? (
               <div className="py-10 text-center text-[12px] text-muted-foreground">
                 暂无消息<br />
-                <span className="text-[11px] opacity-70">后台任务完成后会出现在这里</span>
+                <span className="text-[12px] opacity-70">后台任务完成后会出现在这里</span>
               </div>
             ) : (
               items.map(n => (
                 <button
                   key={n.id}
                   onClick={() => void markRead(n)}
-                  className={`w-full text-left px-4 py-3 border-b border-border/30 last:border-0 hover:bg-accent/40 transition-colors flex gap-2.5 ${
+                  className={`w-full text-left px-4 py-3 border-b border-border last:border-0 hover:bg-s2 transition-colors flex gap-2.5 ${
                     n.read ? 'opacity-60' : ''
                   }`}
                 >
@@ -189,12 +189,12 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
                   <span className="flex-1 min-w-0">
                     <span className="flex items-center gap-1.5">
                       {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 flex-shrink-0" />}
-                      <span className="text-[13px] font-medium text-foreground truncate" title={n.title}>{n.title}</span>
+                      <span className="text-[14px] font-medium text-foreground truncate" title={n.title}>{n.title}</span>
                     </span>
                     {n.body && (
                       <span className="block text-[12px] text-muted-foreground mt-0.5 line-clamp-2" title={n.body}>{n.body}</span>
                     )}
-                    <span className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
+                    <span className="flex items-center gap-2 mt-1 text-[12px] text-muted-foreground">
                       <span>{timeAgo(n.created_at)}</span>
                       {n.source && <span>· {n.source}</span>}
                       {n.push_status && (
@@ -217,7 +217,7 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
               ))
             )}
           </div>
-          <div className="border-t border-border/50 p-2">
+          <div className="border-t border-border p-2">
             <button
               type="button"
               onClick={() => { setOpen(false); nav('/notifications') }}

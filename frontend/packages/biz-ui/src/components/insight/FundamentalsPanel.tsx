@@ -54,22 +54,22 @@ export function FundamentalsPanel(props: {
       {/* 龙虎榜 */}
       {dtList.length > 0 && (
         <div className="card p-4" data-testid="dragon-tiger-section">
-          <div className="text-[11px] text-muted-foreground mb-2">
+          <div className="text-[12px] text-muted-foreground mb-2">
             龙虎榜
-            <span className="ml-2 text-[10px] text-muted-foreground">
+            <span className="ml-2 text-[12px] text-muted-foreground">
               共 {dtList.length} 条{dtList.length > DRAGON_TIGER_DEFAULT_ROWS && !dtExpanded
                 ? ` · 显示最近 ${DRAGON_TIGER_DEFAULT_ROWS} 条` : ''}
             </span>
             {!dtHasReason && (
-              <span className="ml-2 text-[10px] text-muted-foreground" data-testid="dragon-tiger-reason-missing">
+              <span className="ml-2 text-[12px] text-muted-foreground" data-testid="dragon-tiger-reason-missing">
                 · 上榜原因源未提供(该列已隐藏)
               </span>
             )}
           </div>
           <div className="overflow-x-auto -mx-1">
-            <table className="w-full text-[11px]">
+            <table className="w-full text-[12px]">
               <thead className="text-muted-foreground">
-                <tr className="border-b border-border/40">
+                <tr className="border-b border-border">
                   <th className="text-left px-1 py-1 font-normal whitespace-nowrap">日期</th>
                   {dtHasNetBuy && (
                     <th className="text-right px-1 py-1 font-normal whitespace-nowrap">净买入</th>
@@ -81,7 +81,7 @@ export function FundamentalsPanel(props: {
               </thead>
               <tbody>
                 {dtShown.map((item, i) => (
-                  <tr key={`dt-${item.trade_date || i}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
+                  <tr key={`dt-${item.trade_date || i}-${i}`} className="border-b border-border hover:bg-s2">
                     <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.trade_date || '--'}</td>
                     {dtHasNetBuy && (
                       <td className={`px-1 py-1 text-right font-mono tabular-nums whitespace-nowrap ${(item.net_buy ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
@@ -99,7 +99,7 @@ export function FundamentalsPanel(props: {
           {dtList.length > DRAGON_TIGER_DEFAULT_ROWS && (
             <button
               type="button"
-              className="mt-2 text-[11px] text-muted-foreground hover:text-primary"
+              className="mt-2 text-[12px] text-muted-foreground hover:text-primary"
               data-testid="dragon-tiger-toggle"
               onClick={() => setDtExpanded((v) => !v)}
             >
@@ -114,11 +114,11 @@ export function FundamentalsPanel(props: {
       {/* 融资融券 */}
       {mgList.length > 0 && (
         <div className="card p-4">
-          <div className="text-[11px] text-muted-foreground mb-2">融资融券</div>
+          <div className="text-[12px] text-muted-foreground mb-2">融资融券</div>
           <div className="overflow-x-auto -mx-1">
-            <table className="w-full text-[11px]">
+            <table className="w-full text-[12px]">
               <thead className="text-muted-foreground">
-                <tr className="border-b border-border/40">
+                <tr className="border-b border-border">
                   <th className="text-left px-1 py-1 font-normal whitespace-nowrap">日期</th>
                   <th className="text-right px-1 py-1 font-normal whitespace-nowrap">融资余额</th>
                   <th className="text-right px-1 py-1 font-normal whitespace-nowrap">融券余额</th>
@@ -128,7 +128,7 @@ export function FundamentalsPanel(props: {
               </thead>
               <tbody>
                 {mgList.map((item, i) => (
-                  <tr key={`mg-${item.date || i}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
+                  <tr key={`mg-${item.date || i}-${i}`} className="border-b border-border hover:bg-s2">
                     <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.date || '--'}</td>
                     <td className="px-1 py-1 text-right font-mono whitespace-nowrap">{money(item.rz_balance)}</td>
                     <td className="px-1 py-1 text-right font-mono whitespace-nowrap">{money(item.rq_balance)}</td>
@@ -145,11 +145,11 @@ export function FundamentalsPanel(props: {
       {/* 股东户数 */}
       {scList.length > 0 && (
         <div className="card p-4">
-          <div className="text-[11px] text-muted-foreground mb-2">股东户数</div>
+          <div className="text-[12px] text-muted-foreground mb-2">股东户数</div>
           <div className="overflow-x-auto -mx-1">
-            <table className="w-full text-[11px]">
+            <table className="w-full text-[12px]">
               <thead className="text-muted-foreground">
-                <tr className="border-b border-border/40">
+                <tr className="border-b border-border">
                   <th className="text-left px-1 py-1 font-normal whitespace-nowrap">日期</th>
                   <th className="text-right px-1 py-1 font-normal whitespace-nowrap">股东户数</th>
                   <th className="text-right px-1 py-1 font-normal whitespace-nowrap">变动</th>
@@ -158,7 +158,7 @@ export function FundamentalsPanel(props: {
               </thead>
               <tbody>
                 {scList.map((item, i) => (
-                  <tr key={`sc-${item.report_date || i}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
+                  <tr key={`sc-${item.report_date || i}-${i}`} className="border-b border-border hover:bg-s2">
                     <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.report_date || '--'}</td>
                     <td className="px-1 py-1 text-right font-mono whitespace-nowrap">{money(item.holder_num)}</td>
                     {/* 户数减少=筹码集中, 按 A 股习惯红涨绿跌配色 */}
@@ -179,11 +179,11 @@ export function FundamentalsPanel(props: {
       {/* 分红 */}
       {divList.length > 0 && (
         <div className="card p-4">
-          <div className="text-[11px] text-muted-foreground mb-2">分红</div>
+          <div className="text-[12px] text-muted-foreground mb-2">分红</div>
           <div className="overflow-x-auto -mx-1">
-            <table className="w-full text-[11px]">
+            <table className="w-full text-[12px]">
               <thead className="text-muted-foreground">
-                <tr className="border-b border-border/40">
+                <tr className="border-b border-border">
                   <th className="text-left px-1 py-1 font-normal">分红方案</th>
                   <th className="text-left px-1 py-1 font-normal whitespace-nowrap">除权除息日</th>
                   <th className="text-right px-1 py-1 font-normal whitespace-nowrap">每股派息</th>
@@ -198,7 +198,7 @@ export function FundamentalsPanel(props: {
                   if (item.transfer_ratio != null) parts.push(`10转${item.transfer_ratio}`)
                   if (item.bonus_ratio != null) parts.push(`10送${item.bonus_ratio}`)
                   return (
-                    <tr key={`div-${item.ex_date || i}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
+                    <tr key={`div-${item.ex_date || i}-${i}`} className="border-b border-border hover:bg-s2">
                       <td className="px-1 py-1 text-foreground whitespace-nowrap">{parts.length > 0 ? parts.join(' ') : '--'}</td>
                       <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.ex_date || '--'}</td>
                       <td className="px-1 py-1 text-right font-mono whitespace-nowrap">{item.dividend_per_share != null ? `${item.dividend_per_share.toFixed(2)}元` : '--'}</td>
@@ -215,16 +215,16 @@ export function FundamentalsPanel(props: {
       {/* 事件日历 */}
       {evList.length > 0 && (
         <div className="card p-4">
-          <div className="text-[11px] text-muted-foreground mb-2">事件日历(近7日)</div>
+          <div className="text-[12px] text-muted-foreground mb-2">事件日历(近7日)</div>
           <div className="space-y-1.5">
             {evList.map((item, i) => {
               const evDate = typeof item.publish_time === 'string' ? item.publish_time.slice(0, 10) : ''
               const title = item.title || '--'
               return (
-                <div key={`ev-${item.external_id || item.publish_time || i}-${i}`} className="flex items-start gap-2 rounded bg-accent/15 px-2 py-1.5">
-                  <span className="text-[11px] text-muted-foreground whitespace-nowrap mt-px">{evDate || '--'}</span>
+                <div key={`ev-${item.external_id || item.publish_time || i}-${i}`} className="flex items-start gap-2 rounded bg-s2 px-2 py-1.5">
+                  <span className="text-[12px] text-muted-foreground whitespace-nowrap mt-px">{evDate || '--'}</span>
                   {item.event_type && (
-                    <span className="shrink-0 rounded-full bg-accent/60 px-1.5 py-0.5 text-[10px] text-foreground">{item.event_type}</span>
+                    <span className="shrink-0 rounded-full bg-s2 px-1.5 py-0.5 text-[12px] text-foreground">{item.event_type}</span>
                   )}
                   {item.url ? (
                     <a href={item.url} target="_blank" rel="noreferrer" className="text-[12px] text-foreground leading-snug hover:text-primary hover:underline line-clamp-2" title={title}>

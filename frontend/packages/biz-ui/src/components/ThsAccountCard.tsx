@@ -56,7 +56,7 @@ export default function ThsAccountCard() {
             type="button"
             onClick={() => void load()}
             disabled={loading}
-            className="inline-flex h-7 items-center gap-1 px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            className="inline-flex h-7 items-center gap-1 px-2 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
             title="刷新"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
@@ -64,11 +64,11 @@ export default function ThsAccountCard() {
           </button>
         }
       />
-      {err ? <div className="mb-2 text-[11px] text-destructive">{err}</div> : null}
+      {err ? <div className="mb-2 text-[12px] text-destructive">{err}</div> : null}
       {loading && !acct ? (
         <div className="text-[12px] text-muted-foreground">加载中…</div>
       ) : (
-        <div className="rounded-md bg-accent/30 p-3.5">
+        <div className="rounded-md bg-s2 p-3.5">
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px]">
             <div>
               <span className="text-muted-foreground">SDK 模式: </span>
@@ -82,7 +82,7 @@ export default function ThsAccountCard() {
             </div>
           </div>
           {acct?.capabilities?.length ? (
-            <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-border/40 pt-2.5 text-[11px]">
+            <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-2.5 text-[12px]">
               {acct.capabilities.map((c) => (
                 <span key={c.key} className="inline-flex items-center gap-1 text-muted-foreground">
                   {c.ok ? (
@@ -96,7 +96,7 @@ export default function ThsAccountCard() {
             </div>
           ) : null}
           {acct?.note && !formal ? (
-            <div className="mt-1.5 text-[10px] text-amber-700 dark:text-amber-400">{acct.note}</div>
+            <div className="mt-1.5 text-[12px] text-amber-700 dark:text-amber-400">{acct.note}</div>
           ) : null}
         </div>
       )}

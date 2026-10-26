@@ -15,7 +15,7 @@ export function CapBadges({ caps }: { caps?: string[] }) {
   return (
     <span className="inline-flex items-center gap-1">
       {list.map(c => (
-        <span key={c} className={`inline-flex items-center rounded-full border px-1.5 py-px text-[10px] leading-4 ${MODEL_CAP_META[c].badge}`}>
+        <span key={c} className={`inline-flex items-center rounded-full border px-1.5 py-px text-[12px] leading-4 ${MODEL_CAP_META[c].badge}`}>
           {MODEL_CAP_META[c].label}
         </span>
       ))}

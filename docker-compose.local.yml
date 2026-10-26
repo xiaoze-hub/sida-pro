@@ -1,0 +1,95 @@
+# Standalone local stack; do not merge with docker-compose.yml.
+# See docs/knowledge-base/local-docker.md before first use.
+name: sida-local
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sida
+      POSTGRES_DB: sida
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TZ: Asia/Shanghai
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U sida -d sida']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command:
+      - /bin/sh
+      - -ec
+      - exec redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass "$$REDIS_PASSWORD"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    image: sida-local-runtime:v0.80.0
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+      args:
+        LOCAL_BASE_IMAGE: ${LOCAL_BASE_IMAGE:-ghcr.io/xiaoze-hub/stock-intelligent-data-analytics@sha256:27713687b6a2b23eaa0d41646e71915bca4ed462999958a37aaa84b459b550c9}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DOCKER: "1"
+      DATA_DIR: /app/data
+      WEB_HOST: 0.0.0.0
+      WEB_WORKERS: "1"
+      DEV_RELOAD: "1"
+      TZ: Asia/Shanghai
+      PYTHONPATH: /app/packages/marketdata/src:/app
+      SIDA_DB_URL: postgresql+psycopg2://sida:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/sida
+      DATABASE_URL_WRITE: postgresql+psycopg2://sida:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/sida
+      DATABASE_URL_READ: ""
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
+      SIDA_ENABLE_SCHEDULERS: ${LOCAL_ENABLE_SCHEDULERS:-0}
+      PLAYWRIGHT_SKIP_BROWSER_INSTALL: "1"
+      FORECAST_ENGINE_URL: ${LOCAL_FORECAST_ENGINE_URL:-http://host.docker.internal:8010}
+    ports:
+      - "127.0.0.1:${LOCAL_WEB_PORT:-8000}:8000"
+    volumes:
+      - app_data:/app/data
+      - ./src:/app/src:ro
+      - ./server.py:/app/server.py:ro
+      - ./packages:/app/packages:ro
+      - ./data_source:/app/data_source:ro
+      - ./prompts:/app/prompts:ro
+      - ./strategies:/app/strategies:ro
+      - ./VERSION:/app/VERSION:ro
+      - type: bind
+        source: ./frontend/dist
+        target: /app/static
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=10)"]
+      interval: 15s
+      timeout: 15s
+      start_period: 90s
+      retries: 5
+
+volumes:
+  pg_data:
+  redis_data:
+  app_data:

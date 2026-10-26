@@ -73,6 +73,17 @@ describe('参谋页信息架构', () => {
     expect(screen.queryByRole('button', { name: '看卡' })).toBeNull()
   })
 
+  it('手机会话面板可以展开和收回，关联按钮具有展开语义', async () => {
+    await renderPage()
+    const trigger = screen.getByRole('button', { name: '对话' })
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(document.getElementById(trigger.getAttribute('aria-controls')!)).toBeTruthy()
+    fireEvent.click(trigger)
+    expect(document.getElementById('copilot-mobile-conversations')).toBeNull()
+  })
+
   it('顶部只留「过程」，记忆/定时/提案收进「更多」', async () => {
     await renderPage()
     expect(screen.getByTestId('copilot-panel-runs')).toBeTruthy()
@@ -87,12 +98,12 @@ describe('参谋页信息架构', () => {
     await renderPage()
     // 页面本来就有 PAGE_EMPTY_HINT + PAGE_EMPTY_EXAMPLES；我在 v0.78 又加了一套，被移除。
     // 现在钉住：hint 恰好出现一次，示例按钮恰好三个。
-    await waitFor(() => expect(screen.getByText('也可以直接点一条，不用自己组织语言')).toBeTruthy())
-    expect(screen.getAllByText('也可以直接点一条，不用自己组织语言').length).toBe(1)
+    await waitFor(() => expect(screen.getByText('从一个标的或技术问题开始，分析会保留数据来源与依据')).toBeTruthy())
+    expect(screen.getAllByText('从一个标的或技术问题开始，分析会保留数据来源与依据').length).toBe(1)
     // 原有引导的交互是"点一条直接问"（不是填入输入框），钉住这个行为
     expect(screen.getAllByTestId('copilot-empty-example').length).toBe(3)
     apiMock.sendMessageStream.mockResolvedValue(undefined)
-    fireEvent.click(screen.getByRole('button', { name: /爆量抢筹/ }))
+    fireEvent.click(screen.getByRole('button', { name: /集合竞价的量价结构/ }))
     await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
   })
 })

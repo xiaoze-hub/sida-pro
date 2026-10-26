@@ -53,7 +53,7 @@ export function DisciplineCoolDownBanner() {
 
   return (
     <div
-      className="mt-2 flex items-center justify-between gap-3 rounded border border-rose-500/40 bg-rose-950/20 px-3 py-2 text-[12px] text-rose-200"
+      className="card-surface mt-2 flex items-center justify-between gap-3 rounded bg-rose-950/20 px-3 py-2 text-[12px] text-rose-200"
       data-testid="discipline-cooldown-banner"
     >
       <div className="flex items-center gap-2">
@@ -65,7 +65,7 @@ export function DisciplineCoolDownBanner() {
           全市场处于风险释放与退潮杀跌阶段。历史统计此环境下任何逆势抄底或盲目加仓动作胜率极低，请严格执行防守纪律，手绑背后切勿逆势抗单！
         </span>
       </div>
-      <div className="flex shrink-0 items-center gap-1 text-[11px] text-rose-400/80">
+      <div className="flex shrink-0 items-center gap-1 text-[12px] text-rose-400/80">
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>风控铁律：保命第一</span>
       </div>

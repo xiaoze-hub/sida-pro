@@ -69,7 +69,7 @@ export function GovernanceStrip({ runId }: { runId: string | null }) {
 
   return (
     <div
-      className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground"
+      className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[12px] text-muted-foreground"
       data-testid="governance-strip"
     >
       <span className="inline-flex items-center gap-1 text-foreground">

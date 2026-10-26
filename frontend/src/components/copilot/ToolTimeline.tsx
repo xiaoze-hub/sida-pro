@@ -79,7 +79,7 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
     return (
       <div className={className} data-testid="copilot-tool-timeline">
         <div
-          className="py-1 text-[11px] text-muted-foreground"
+          className="py-1 text-[12px] text-muted-foreground"
           data-testid="copilot-tool-timeline-empty"
         >
           本轮没有工具调用
@@ -103,7 +103,7 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
           const knownEmpty = detail ? detail.steps.length === 0 : toolCount === 0
 
           return (
-            <li key={run.run_id} className="border-b border-border/40 last:border-b-0">
+            <li key={run.run_id} className="border-b border-border last:border-b-0">
               <button
                 type="button"
                 onClick={() => toggle(run.run_id)}
@@ -117,20 +117,20 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
                 ) : (
                   <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
                 )}
-                <span className="w-[42px] shrink-0 font-mono text-[10px] text-muted-foreground">
+                <span className="w-[42px] shrink-0 font-mono text-[12px] text-muted-foreground">
                   {formatTime(run.created_at) || '--'}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-foreground">
+                <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">
                   {run.recipe || '常规'}
                 </span>
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0 font-mono text-[12px] text-muted-foreground">
                   {safeInt(run.tool_calls)} 工具
                 </span>
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0 font-mono text-[12px] text-muted-foreground">
                   {formatElapsed(run.elapsed_ms)}
                 </span>
                 <span
-                  className={`shrink-0 text-[10px] ${meta.cls}`}
+                  className={`shrink-0 text-[12px] ${meta.cls}`}
                   data-testid={`copilot-run-status-${run.run_id}`}
                 >
                   {meta.label}
@@ -139,19 +139,19 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
 
               {open ? (
                 <div
-                  className="border-l border-border/40 pb-1 pl-2"
+                  className="border-l border-border pb-1 pl-2"
                   data-testid={`copilot-run-steps-${run.run_id}`}
                 >
                   {knownEmpty ? (
                     <div
-                      className="py-1 text-[10px] text-muted-foreground"
+                      className="py-1 text-[12px] text-muted-foreground"
                       data-testid="copilot-run-empty"
                     >
                       本轮没有工具调用
                     </div>
                   ) : !detail ? (
                     <div className="space-y-1 py-1" data-testid="copilot-run-loading">
-                      <div className="text-[10px] text-muted-foreground">加载中</div>
+                      <div className="text-[12px] text-muted-foreground">加载中</div>
                       <Skeleton shape="text" className="h-2 w-1/2" />
                     </div>
                   ) : (
@@ -166,19 +166,19 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
                             title={step.args || undefined}
                             data-testid={`copilot-step-${step.seq}`}
                           >
-                            <span className="font-mono text-[11px] text-foreground">
+                            <span className="font-mono text-[12px] text-foreground">
                               {step.tool}
                             </span>
-                            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                            <span className="shrink-0 font-mono text-[12px] text-muted-foreground">
                               {formatElapsed(step.elapsed_ms)}
                             </span>
                             {step.ok ? (
-                              <span className="shrink-0 text-[10px] text-muted-foreground">ok</span>
+                              <span className="shrink-0 text-[12px] text-muted-foreground">ok</span>
                             ) : (
-                              <span className="shrink-0 text-[10px] text-red-500">失败</span>
+                              <span className="shrink-0 text-[12px] text-red-500">失败</span>
                             )}
                             {reason ? (
-                              <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
+                              <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
                                 {step.ok ? reason : `原因：${reason}`}
                               </span>
                             ) : null}

@@ -33,7 +33,7 @@ import { Profile } from '@/pages/Profile'
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/profile?section=activity']}>
       <QueryClientProvider client={client}>
         <Profile />
       </QueryClientProvider>

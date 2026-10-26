@@ -133,8 +133,8 @@ function TierRow({ label, buy, sell, net }: { label: string; buy: unknown; sell:
   const buyW = total != null && total > 0 && b != null ? (b / total) * 100 : 0
   return (
     <div className="flex items-center gap-2" data-testid="fund-structure-tier-row">
-      <span className="w-11 shrink-0 text-[11px] text-muted-foreground">{label}</span>
-      <div className="h-2.5 flex-1 overflow-hidden bg-accent/20" title={total != null ? `买 ${amtU(buy)} / 卖 ${amtU(sell)}` : '该档买卖额缺失'}>
+      <span className="w-11 shrink-0 text-[12px] text-muted-foreground">{label}</span>
+      <div className="h-2.5 flex-1 overflow-hidden bg-s2" title={total != null ? `买 ${amtU(buy)} / 卖 ${amtU(sell)}` : '该档买卖额缺失'}>
         {total != null && total > 0 ? (
           <div className="flex h-2.5">
             <div className="h-2.5 bg-stock-up/80" style={{ width: `${buyW}%` }} />
@@ -142,9 +142,9 @@ function TierRow({ label, buy, sell, net }: { label: string; buy: unknown; sell:
           </div>
         ) : null}
       </div>
-      <span className="w-16 shrink-0 text-right font-num text-[11px] text-stock-up" title="该档买入额(元)">{amtU(buy)}</span>
-      <span className="w-16 shrink-0 text-right font-num text-[11px] text-stock-down" title="该档卖出额(元)">{amtU(sell)}</span>
-      <span className={`w-16 shrink-0 text-right font-num text-[11px] ${dirClass(net)}`} title="该档主动净额(主动买−主动卖, 元)">{amtNet(net)}</span>
+      <span className="w-16 shrink-0 text-right font-num text-[12px] text-stock-up" title="该档买入额(元)">{amtU(buy)}</span>
+      <span className="w-16 shrink-0 text-right font-num text-[12px] text-stock-down" title="该档卖出额(元)">{amtU(sell)}</span>
+      <span className={`w-16 shrink-0 text-right font-num text-[12px] ${dirClass(net)}`} title="该档主动净额(主动买−主动卖, 元)">{amtNet(net)}</span>
     </div>
   )
 }
@@ -223,7 +223,7 @@ export default function FundStructurePanel({
     return (
       <div className="text-[12px] text-muted-foreground" data-testid="fund-structure-no-data">
         {noteText(loading, hasResp, failed, lastOkAt, data?.available === false ? data?.reason : '该股暂无落库记录')}
-        <div className="mt-0.5 text-[10px] text-muted-foreground">
+        <div className="mt-0.5 text-[12px] text-muted-foreground">
           {data?.data_since ? `数据自 ${fmtDay(data.data_since)} 起累积` : '数据自 2026-10-23 起累积'}（每交易日 15:45 落库）
         </div>
       </div>
@@ -233,14 +233,14 @@ export default function FundStructurePanel({
   return (
     <div className="space-y-2" data-testid="fund-structure-panel">
       {/* 口径行: 徽章 + 阈值提示 + 稀疏标注(spec EXDAY-003/005) */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted-foreground">
         {/* 2026-10-24 合并去重: 上游 CaliberBadge 已支持 tdx_exday4(main 的 08e39c1),
             不再自实现第二套徽章 —— 否则同一口径在全站会有两种样式。
             data-testid 留在外层, 既有用例继续有效。 */}
         <span data-testid="fund-structure-caliber">
           <CaliberBadge
             caliber="tdx_exday4"
-            className="text-[10px]"
+            className="text-[12px]"
             title={[
             `口径 ${data?.caliber ?? 'tdx_exday4'}(通达信 TQ get_exday_data): ${data?.direction_semantics ?? '按单笔成交金额分四档, 与逐笔/东财四档不可换算'}`,
             data?.tier_thresholds_hint ? `档位阈值(推断): ${data.tier_thresholds_hint}` : '',
@@ -253,14 +253,14 @@ export default function FundStructurePanel({
         </span>
       </div>
       {quality && quality !== 'ok' ? (
-        <div className="text-[10px] text-amber-600 dark:text-amber-400" data-testid="fund-structure-quality">
+        <div className="text-[12px] text-amber-600 dark:text-amber-400" data-testid="fund-structure-quality">
           ⚠ 数据待核：{latest.reason || quality}
         </div>
       ) : null}
 
       {/* 当日结构: 四档买卖对比(买红卖绿) */}
       <div className="space-y-1 pt-0.5" data-testid="fund-structure-tiers">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <span className="w-11 shrink-0">{fmtDay(latest.trade_date)}</span>
           <span className="flex-1" />
           <span className="w-16 shrink-0 text-right text-stock-up">买入</span>
@@ -279,59 +279,59 @@ export default function FundStructurePanel({
       </div>
 
       {/* 当日主动买卖 + 结构因子 */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border/30 pt-1.5 text-[11px] md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border pt-1.5 text-[12px] md:grid-cols-4">
         <div>
-          <div className="text-[10px] text-muted-foreground">主动买入</div>
+          <div className="text-[12px] text-muted-foreground">主动买入</div>
           <div className="font-num text-stock-up">{amtU(latest.active_buy_amt)}</div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">主动卖出</div>
+          <div className="text-[12px] text-muted-foreground">主动卖出</div>
           <div className="font-num text-stock-down">{amtU(latest.active_sell_amt)}</div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">主动买占比</div>
+          <div className="text-[12px] text-muted-foreground">主动买占比</div>
           <div className="font-num">{pctRaw(latest.active_ratio)}</div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">主力净流入占比</div>
+          <div className="text-[12px] text-muted-foreground">主力净流入占比</div>
           <div className={`font-num ${dirClass(latest.main_active_net_pct)}`} title="主力(特大+大)主动净额 / 成交额(%)">
             {pctRaw(latest.main_active_net_pct, 3)}
           </div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">散户化率</div>
+          <div className="text-[12px] text-muted-foreground">散户化率</div>
           <div className="font-num" title="小单买入额占成交额(%)">{pctRaw(latest.retail_ratio)}</div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">特大单占比</div>
+          <div className="text-[12px] text-muted-foreground">特大单占比</div>
           <div className="font-num">{pctRaw(latest.xl_share)}</div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">筹码迁移</div>
+          <div className="text-[12px] text-muted-foreground">筹码迁移</div>
           <div className={`font-num ${dirClass(latest.chip_migration)}`} title="大单主动净 − 小单主动净(元); >0 筹码向大资金集中">
             {amtNet(latest.chip_migration)}
           </div>
         </div>
         <div>
-          <div className="text-[10px] text-muted-foreground">当日成交额</div>
+          <div className="text-[12px] text-muted-foreground">当日成交额</div>
           <div className="font-num">{amtU(latest.amount)}</div>
         </div>
       </div>
 
       {/* 日期序列: ≥2 个交易日才画(spec EXDAY-005); 单日显式说明不画 */}
       {count >= 2 ? (
-        <div className="space-y-2 border-t border-border/30 pt-1.5" data-testid="fund-structure-series">
+        <div className="space-y-2 border-t border-border pt-1.5" data-testid="fund-structure-series">
           <div>
-            <div className="mb-0.5 text-[10px] text-muted-foreground">主动买占比 · 近 {count} 个交易日(%)</div>
+            <div className="mb-0.5 text-[12px] text-muted-foreground">主动买占比 · 近 {count} 个交易日(%)</div>
             <RatioBand items={items} />
           </div>
           <div>
-            <div className="mb-0.5 text-[10px] text-muted-foreground">主力(特大+大)主动净流入占比 · 红=净流入 绿=净流出(%)</div>
+            <div className="mb-0.5 text-[12px] text-muted-foreground">主力(特大+大)主动净流入占比 · 红=净流入 绿=净流出(%)</div>
             <NetBand items={items} />
           </div>
         </div>
       ) : (
-        <div className="border-t border-border/30 pt-1.5 text-[10px] text-muted-foreground" data-testid="fund-structure-single-day">
+        <div className="border-t border-border pt-1.5 text-[12px] text-muted-foreground" data-testid="fund-structure-single-day">
           仅 {count} 个交易日 —— 展示当日结构, 不画趋势（本表 2026-10-23 起累积, 历史无法回填）
         </div>
       )}

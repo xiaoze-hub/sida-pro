@@ -73,7 +73,7 @@ export default function ScanJobButton({
       disabled={busy}
       size="sm"
       variant="ghost"
-      className="h-7 px-2 text-[11px] text-muted-foreground"
+      className="h-7 px-2 text-[12px] text-muted-foreground"
       title={title ?? `${label}(后台执行, 可在「系统 → 任务」看进度或取消)`}
     >
       <RefreshCw className={`h-3.5 w-3.5 mr-1 ${busy ? 'animate-spin' : ''}`} />

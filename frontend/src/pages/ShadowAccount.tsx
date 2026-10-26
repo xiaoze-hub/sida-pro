@@ -1,3 +1,4 @@
+import PageHeader from '@/components/PageHeader'
 import { useState, useEffect } from 'react'
 import { Upload, FileText, Download, TrendingUp, Activity, Target, Shield, AlertTriangle, CheckCircle2, Loader2, RefreshCw, UserRound } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
@@ -84,13 +85,13 @@ function ruleLabel(r: any): string {
 
 function StatCard({ icon: Icon, label, value, sub, color, hint }: { icon: any; label: string; value: string; sub?: string; color: string; hint?: string }) {
   return (
-    <div className="border-l border-border/40 pl-3" title={hint}>
+    <div className="border-l border-border pl-3" title={hint}>
       <div className="flex items-center gap-2 mb-1.5">
         <Icon className={`w-3.5 h-3.5 ${color}`} />
-        <span className="text-[11px] text-muted-foreground">{label}</span>
+        <span className="text-[12px] text-muted-foreground">{label}</span>
       </div>
       <div className="text-[16px] font-semibold text-foreground">{value}</div>
-      {sub && <div className="text-[10px] text-muted-foreground mt-0.5">{sub}</div>}
+      {sub && <div className="text-[12px] text-muted-foreground mt-0.5">{sub}</div>}
     </div>
   )
 }
@@ -245,29 +246,20 @@ iframe{width:100%;height:100%;border:0}
   }
 
   return (
-    <div className="sida-page-enter max-w-5xl mx-auto px-4 py-6 space-y-6">
-      {/* 页头 */}
-      <div>
-        <h1 className="text-[16px] font-semibold text-foreground flex items-center gap-2">
-          <Shield className="w-4.5 h-4.5 text-primary" />
-          影子账户 Shadow Account
-        </h1>
-        <p className="text-[12px] text-muted-foreground mt-1">
-          上传你的交易交割单（同花顺 / 东财 / 富途 / 通用 CSV），AI 提炼你的真实交易行为画像、盈利模式与风险习惯。
-        </p>
-      </div>
+    <div className="page-container sida-page-enter space-y-5">
+      <PageHeader title="影子账户" description="上传交易交割单，分析你的真实交易行为、盈利模式与风险习惯。支持同花顺、东财、富途及通用 CSV。" />
 
       {/* §6.2 交割单标 K 线: 把你的真实成交标在该股 K 线上(买↓红箭头 / 卖↑绿箭头) */}
-      <div className="border-b border-border/40 pb-4">
+      <div className="analysis-section">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+          <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-primary" /> 交割单复盘 · 标在 K 线上
           </h2>
           {trades && trades.symbols.length > 0 && (
             <select
               value={pickSymbol}
               onChange={(e) => setPickSymbol(e.target.value)}
-              className="h-7 rounded border border-border/60 bg-transparent px-2 text-[11px] text-foreground"
+              className="h-7 rounded border border-border bg-transparent px-2 text-[12px] text-foreground"
               aria-label="选择标的"
             >
               {trades.symbols.map((sm) => (
@@ -289,7 +281,7 @@ iframe{width:100%;height:100%;border:0}
         ) : (
           <div className="space-y-2">
             <KlineChart symbol={pickSymbol} market="CN" height={320} initialDays={120} tradeMarkers={pickedMarkers} />
-            <div className="text-[11px] text-muted-foreground">
+            <div className="text-[12px] text-muted-foreground">
               本标的 {pickedMarkers.length} 笔成交已标在图上（买=红箭头在下 / 卖=绿箭头在上）；
               非交易日的成交不画（那天没有 K 线，不给假定位）。
               {trades.capped && ' 成交明细仅保留最近 400 笔，更早的未展示。'}
@@ -299,15 +291,15 @@ iframe{width:100%;height:100%;border:0}
       </div>
 
       {/* 我的画像: 进页面自动加载已存画像(users.shadow_profile_json 落库版), 不用重新上传 */}
-      <div className="border-b border-border/40 pb-4">
+      <div className="analysis-section">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+          <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
             <UserRound className="w-4 h-4 text-primary" /> 我的画像
           </h2>
           <Button
             size="sm"
             variant="outline"
-            className="h-7 text-[11px]"
+            className="h-7 text-[12px]"
             onClick={() => document.getElementById('shadow-file-input')?.click()}
           >
             <RefreshCw className="w-3 h-3 mr-1" /> 更新画像
@@ -317,18 +309,18 @@ iframe{width:100%;height:100%;border:0}
         {profileLoading ? (
           /* 加载中: 骨架屏 */
           <div className="space-y-3">
-            <div className="h-3.5 w-40 animate-pulse rounded bg-accent/30" />
-            <div className="h-3 w-full animate-pulse rounded bg-accent/20" />
-            <div className="h-3 w-3/4 animate-pulse rounded bg-accent/20" />
+            <div className="h-3.5 w-40 animate-pulse rounded bg-s2" />
+            <div className="h-3 w-full animate-pulse rounded bg-s2" />
+            <div className="h-3 w-3/4 animate-pulse rounded bg-s2" />
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-1">
               {[0, 1, 2, 3, 4].map(i => (
-                <div key={i} className="h-16 animate-pulse bg-accent/20" />
+                <div key={i} className="h-16 animate-pulse bg-s2" />
               ))}
             </div>
           </div>
         ) : profileFailed ? null : !myProfile ? (
           /* 空态: 无画像, 引导上传 */
-          <div className="flex items-center gap-3 rounded-md bg-accent/20 border border-dashed border-border px-4 py-3">
+          <div className="card-surface flex items-center gap-3 rounded-md bg-s2 px-4 py-3">
             <UserRound className="w-4 h-4 text-muted-foreground shrink-0" />
             <p className="text-[12px] text-muted-foreground">
               还没有交易画像。上传交割单后自动生成你的行为画像，下次进来直接查看。
@@ -338,11 +330,11 @@ iframe{width:100%;height:100%;border:0}
           /* 已存画像展示 */
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-[12px] text-muted-foreground">
                 更新时间: {formatDateTime(myProfile.created_at) || '--'}
               </span>
               {Array.isArray(myProfile.date_range) && myProfile.date_range.length >= 2 && (
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   交易区间: {formatDateTime(myProfile.date_range[0])} ~ {formatDateTime(myProfile.date_range[1])}
                 </span>
               )}
@@ -382,7 +374,7 @@ iframe{width:100%;height:100%;border:0}
             {myProfile.rules && myProfile.rules.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {myProfile.rules.map((r: any, i: number) => (
-                  <span key={typeof r === 'string' ? r : (r?.rule_id || i)} className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] text-primary">{ruleLabel(r)}</span>
+                  <span key={typeof r === 'string' ? r : (r?.rule_id || i)} className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-[12px] text-primary">{ruleLabel(r)}</span>
                 ))}
               </div>
             )}
@@ -393,7 +385,7 @@ iframe{width:100%;height:100%;border:0}
       {/* 上传区 */}
       <div
         className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
-          dragOver ? 'border-primary bg-primary/5' : 'border-border bg-accent/10 hover:bg-accent/20'
+          dragOver ? 'border-primary bg-primary/5' : 'border-border bg-s2 hover:bg-s2'
         }`}
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
@@ -414,19 +406,19 @@ iframe{width:100%;height:100%;border:0}
         {loading ? (
           <div className="flex flex-col items-center gap-2">
             <Loader2 className="w-8 h-8 text-primary animate-spin" />
-            <span className="text-[13px] text-muted-foreground">正在分析交割单，生成行为画像...</span>
+            <span className="text-[14px] text-muted-foreground">正在分析交割单，生成行为画像...</span>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2">
             <Upload className="w-8 h-8 text-muted-foreground" />
-            <span className="text-[13px] font-medium text-foreground">点击或拖拽上传交割单</span>
-            <span className="text-[11px] text-muted-foreground">支持 .csv / .xlsx / .pdf（同花顺、国投、东财格式自动识别）</span>
+            <span className="text-[14px] font-medium text-foreground">点击或拖拽上传交割单</span>
+            <span className="text-[12px] text-muted-foreground">支持 .csv / .xlsx / .pdf（同花顺、国投、东财格式自动识别）</span>
           </div>
         )}
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-md bg-red-500/10 border border-red-500/20 p-3 text-[12px] text-red-600">
+        <div className="card-surface flex items-center gap-2 rounded-md bg-red-500/10 p-3 text-[12px] text-red-600">
           <AlertTriangle className="w-4 h-4" /> {error}
         </div>
       )}
@@ -437,7 +429,7 @@ iframe{width:100%;height:100%;border:0}
           {/* 行为画像 */}
           {result.profile && (
             <div className="space-y-4">
-              <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+              <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-primary" /> 行为画像
               </h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -454,7 +446,7 @@ iframe{width:100%;height:100%;border:0}
               {result.profile.rules && result.profile.rules.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {result.profile.rules.map((r: any, i: number) => (
-                    <span key={typeof r === 'string' ? r : (r?.rule_id || i)} className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-[11px] text-primary">{ruleLabel(r)}</span>
+                    <span key={typeof r === 'string' ? r : (r?.rule_id || i)} className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-[12px] text-primary">{ruleLabel(r)}</span>
                   ))}
                 </div>
               )}
@@ -464,7 +456,7 @@ iframe{width:100%;height:100%;border:0}
           {/* 行为诊断 */}
           {result.behavior && (
             <div className="space-y-4">
-              <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+              <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
                 <Target className="w-4 h-4 text-primary" /> 行为诊断
               </h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -478,7 +470,7 @@ iframe{width:100%;height:100%;border:0}
           {/* 归因结果 */}
           {result.attribution && (
             <div className="space-y-4">
-              <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+              <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
                 <Shield className="w-4 h-4 text-primary" /> 归因分析
               </h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

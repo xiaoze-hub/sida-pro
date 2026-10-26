@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react'
 import echarts from '../lib/echarts-core'
-import { SIDA_THEME_NAME } from '../lib/echarts-theme'
+import { buildSidaTheme, SIDA_THEME_NAME } from '../lib/echarts-theme'
 import type { EChartsType } from 'echarts/core'
 
 /**
@@ -16,6 +16,7 @@ import type { EChartsType } from 'echarts/core'
 export function useECharts(themeName: string = SIDA_THEME_NAME) {
   const chartRef = useRef<EChartsType | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
+  const themeObserverRef = useRef<MutationObserver | null>(null)
 
   const disposeAll = useCallback(() => {
     try {
@@ -24,6 +25,8 @@ export function useECharts(themeName: string = SIDA_THEME_NAME) {
       /* ignore */
     }
     roRef.current = null
+    themeObserverRef.current?.disconnect()
+    themeObserverRef.current = null
     try {
       chartRef.current?.dispose()
     } catch {
@@ -37,9 +40,21 @@ export function useECharts(themeName: string = SIDA_THEME_NAME) {
       disposeAll()
       if (!el) return
       try {
+        if (themeName === SIDA_THEME_NAME) echarts.registerTheme(themeName, buildSidaTheme())
         const chart = echarts.init(el, themeName)
         chartRef.current = chart
         chart.resize()
+        if (themeName === SIDA_THEME_NAME) {
+          const observer = new MutationObserver(() => {
+            if (chartRef.current !== chart) return
+            const theme = buildSidaTheme()
+            const options = chart.getOption() ?? {}
+            const axes = (value: unknown) => Array.isArray(value) ? value.map(axis => axis.type === 'value' ? theme.valueAxis : theme.categoryAxis) : undefined
+            chart.setOption({ backgroundColor: theme.backgroundColor, textStyle: theme.textStyle, tooltip: theme.tooltip, xAxis: axes(options.xAxis), yAxis: axes(options.yAxis) }, { lazyUpdate: true })
+          })
+          observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
+          themeObserverRef.current = observer
+        }
       } catch (e) {
         console.warn('[useECharts] init failed', e)
         return

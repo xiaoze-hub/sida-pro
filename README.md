@@ -50,6 +50,10 @@ SIDA doesn't reinvent wheels — it integrates proven open-source projects into 
 
 > One `docker run` boots the app; the observability stack is opt-in infra.
 
+## Project guide
+
+[Project outline and knowledge base](docs/knowledge-base/README.md) · [Architecture](docs/knowledge-base/architecture.md) · [Local Docker setup](docs/knowledge-base/local-docker.md)
+
 ## Screenshots
 
 ||||

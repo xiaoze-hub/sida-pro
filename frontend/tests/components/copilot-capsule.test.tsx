@@ -64,6 +64,20 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('CopilotCapsule', () => {
+  it('内联入口忽略旧悬浮位置，收起与恢复始终在原工具栏', async () => {
+    localStorage.setItem('copilot_capsule_position', JSON.stringify({ x: 400, y: 200 }))
+    render(<CopilotCapsule symbol="600111" presentation="inline" />)
+    const toolbar = screen.getByTestId('copilot-inline-toolbar')
+    expect(toolbar.classList.contains('fixed')).toBe(false)
+    expect(toolbar.style.left).toBe('')
+    expect(toolbar.style.boxShadow).toBe('')
+    expect(screen.queryByTestId('copilot-capsule')).toBeNull()
+    fireEvent.click(screen.getByTestId('copilot-capsule-hide'))
+    expect(toolbar.contains(screen.getByTestId('copilot-capsule-restore'))).toBe(true)
+    fireEvent.click(screen.getByTestId('copilot-capsule-restore'))
+    expect(toolbar.contains(screen.getByTestId('copilot-capsule-open'))).toBe(true)
+  })
+
   it('点击后派发 panwatch-open-chat 且携带快照上下文', async () => {
     const events: CustomEvent[] = []
     const onOpen = (e: Event) => events.push(e as CustomEvent)

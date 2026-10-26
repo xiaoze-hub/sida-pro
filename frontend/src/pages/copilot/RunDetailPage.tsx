@@ -42,7 +42,7 @@ export default function RunDetailPage() {
   }, [load])
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-4" data-testid="run-detail-page">
+    <div className="page-container min-w-0" data-testid="run-detail-page">
       <div className="mb-3 flex items-center gap-3">
         <button
           type="button"
@@ -52,9 +52,9 @@ export default function RunDetailPage() {
         >
           ← 任务列表
         </button>
-        <span className="text-[13px] font-medium text-foreground">单轮证据</span>
+        <span className="text-[14px] font-medium text-foreground">单轮证据</span>
         {runId && (
-          <span className="font-mono text-[11px] text-muted-foreground">{runId.slice(0, 8)}</span>
+          <span className="font-mono text-[12px] text-muted-foreground">{runId.slice(0, 8)}</span>
         )}
         <button
           type="button"

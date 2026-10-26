@@ -73,13 +73,13 @@ export default function PioneerIndicatorsSection({
   const calibration = trend?.calibration || niuxiong?.calibration
 
   return (
-    <div className="mt-2 border-t border-border/40 pt-2" data-testid="pioneer-indicators-section">
-      <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+    <div className="mt-2 border-t border-border pt-2" data-testid="pioneer-indicators-section">
+      <div className="mb-1 text-[12px] font-medium text-muted-foreground">
         辅助指标（趋势操盘线 / 牛熊线）
       </div>
 
       {/* ① 三线现值 */}
-      <div className="flex flex-col gap-0.5 text-[11px]">
+      <div className="flex flex-col gap-0.5 text-[12px]">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
           <span className="text-muted-foreground">操盘线</span>
           {trendLines ? (
@@ -138,7 +138,7 @@ export default function PioneerIndicatorsSection({
       </div>
 
       {/* ② 买卖点枚举(证据, 非建议) */}
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px]">
         <span className="text-muted-foreground">买卖点</span>
         {signals.length === 0 ? (
           <span className="text-muted-foreground">--</span>
@@ -156,7 +156,7 @@ export default function PioneerIndicatorsSection({
       </div>
 
       {/* ③ 校准标注(逆向近似待校准) + 客观标注免责 */}
-      <div className="mt-1 text-[10px] text-muted-foreground" data-testid="pioneer-calibration">
+      <div className="mt-1 text-[12px] text-muted-foreground" data-testid="pioneer-calibration">
         {failed ? '辅助指标取数失败 · 暂不出读数' : calibration || '逆向近似待校准'} · {PIONEER_NOT_ADVICE_TEXT}
       </div>
     </div>

@@ -75,9 +75,9 @@ export default function HelpPage() {
   return (
     <div className="page-container sida-page-enter pb-10">
       {/* Hero */}
-      <div className="border-b border-border/40 p-5 md:p-7">
+      <div className="border-b border-border p-5 md:p-7">
         <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-s2 text-primary ring-1 ring-border/40">
             <HelpCircle className="h-4.5 w-4.5" />
           </div>
           <div>
@@ -92,17 +92,17 @@ export default function HelpPage() {
       {/* 功能说明卡片 */}
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {FEATURES.map(f => (
-          <section key={f.title} className="border-t border-border/40 pt-4 md:pt-5">
+          <section key={f.title} className="border-t border-border pt-4 md:pt-5">
             <div className="flex items-center gap-2.5 mb-2.5">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-s2 text-primary ring-1 ring-border/40">
                 <f.icon className="h-4 w-4" />
               </div>
-              <h3 className="text-[13px] font-semibold text-foreground">{f.title}</h3>
+              <h3 className="text-[14px] font-semibold text-foreground">{f.title}</h3>
             </div>
             <p className="text-[12px] text-foreground leading-relaxed">{f.desc}</p>
             <ul className="mt-3 space-y-1.5">
               {f.tips.map((tip, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
+                <li key={i} className="flex items-start gap-1.5 text-[12px] text-muted-foreground leading-relaxed">
                   <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border" />
                   <span>{tip}</span>
                 </li>
@@ -119,24 +119,24 @@ export default function HelpPage() {
         ))}
 
         {/* 数据导出 */}
-        <section className="border-t border-border/40 pt-4 md:pt-5">
+        <section className="border-t border-border pt-4 md:pt-5">
           <div className="flex items-center gap-2.5 mb-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-s2 text-primary ring-1 ring-border/40">
               <Download className="h-4 w-4" />
             </div>
-            <h3 className="text-[13px] font-semibold text-foreground">数据导出</h3>
+            <h3 className="text-[14px] font-semibold text-foreground">数据导出</h3>
           </div>
           <p className="text-[12px] text-foreground leading-relaxed">持仓、预测记录与机会候选均可一键导出 CSV。</p>
           <ul className="mt-3 space-y-1.5">
-            <li className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
+            <li className="flex items-start gap-1.5 text-[12px] text-muted-foreground leading-relaxed">
               <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border" />
               <span>持仓页 / 预测页 / 机会页顶部均有「导出」按钮</span>
             </li>
-            <li className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
+            <li className="flex items-start gap-1.5 text-[12px] text-muted-foreground leading-relaxed">
               <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border" />
               <span>CSV 为 UTF-8 带 BOM，Excel 直接打开中文不乱码</span>
             </li>
-            <li className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
+            <li className="flex items-start gap-1.5 text-[12px] text-muted-foreground leading-relaxed">
               <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border" />
               <span>无数据时导出空表头文件，不会报错</span>
             </li>
@@ -145,19 +145,19 @@ export default function HelpPage() {
       </div>
 
       {/* 快捷键 */}
-      <section className="border-t border-border/40 pt-4 md:pt-5 mt-4">
+      <section className="border-t border-border pt-4 md:pt-5 mt-4">
         <div className="flex items-center gap-2.5 mb-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-s2 text-primary ring-1 ring-border/40">
             <Keyboard className="h-4 w-4" />
           </div>
-          <h3 className="text-[13px] font-semibold text-foreground">快捷键</h3>
-          <span className="text-[10px] text-muted-foreground ml-auto hidden sm:inline">桌面端(≥768px)生效，输入框内普通键不触发</span>
+          <h3 className="text-[14px] font-semibold text-foreground">快捷键</h3>
+          <span className="text-[12px] text-muted-foreground ml-auto hidden sm:inline">桌面端(≥768px)生效，输入框内普通键不触发</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
           {HOTKEYS.map((h, i) => (
-            <div key={i} className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-accent/20 px-3 py-2">
-              <kbd className="font-mono text-[11px] text-primary whitespace-nowrap">{h.keys}</kbd>
-              <span className="text-[11px] text-muted-foreground text-right">{h.desc}</span>
+            <div key={i} className="card-surface flex items-center justify-between gap-3 rounded-lg bg-s2 px-3 py-2">
+              <kbd className="font-mono text-[12px] text-primary whitespace-nowrap">{h.keys}</kbd>
+              <span className="text-[12px] text-muted-foreground text-right">{h.desc}</span>
             </div>
           ))}
         </div>

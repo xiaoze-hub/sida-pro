@@ -71,7 +71,7 @@ function strengthTone(label: string | null | undefined): string {
     case 'S': return 'text-[--stock-up] border-[--stock-up]/60'
     case 'A': return 'text-[--stock-up]/80 border-[--stock-up]/40'
     case 'C': return 'text-[--stock-down]/80 border-[--stock-down]/40'
-    default: return 'text-muted-foreground border-border/50'
+    default: return 'text-muted-foreground border-border'
   }
 }
 
@@ -80,34 +80,34 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
     <span
       title={stockTitle(s)}
       data-ladder-stock={s.symbol}
-      className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border/30 px-0.5 py-0.5"
+      className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border px-0.5 py-0.5"
     >
       <DayCandle candle={s.candle} basis={basis} />
-      <span className="w-full truncate text-center text-[10px] text-foreground" title={s.name || s.symbol}>{s.name || s.symbol}</span>
+      <span className="w-full truncate text-center text-[12px] text-foreground" title={s.name || s.symbol}>{s.name || s.symbol}</span>
       {/* P0(2026-10-18 审计 F06): 无 pct 时不渲染 `--` —— 单页 820 处占位把格子塞满噪音。
           保留等高占位块(高度不变、不塌格), 缺多少就是"这格只有名称+板数"。 */}
       {s.pct != null ? (
-        <span className={`text-[10px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
+        <span className={`text-[12px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
       ) : (
         <span aria-hidden className="h-[14px] leading-[14px]" />
       )}
       {s.tag ? (
-        <span className="rounded bg-accent/50 px-0.5 text-[10px] text-muted-foreground">{s.tag}</span>
+        <span className="rounded bg-s2 px-0.5 text-[12px] text-muted-foreground">{s.tag}</span>
       ) : null}
       {s.seal_tag && s.seal_tag !== s.tag ? (
-        <span className="rounded bg-accent/40 px-0.5 text-[10px] text-muted-foreground">{s.seal_tag}</span>
+        <span className="rounded bg-s2 px-0.5 text-[12px] text-muted-foreground">{s.seal_tag}</span>
       ) : null}
       {s.strength_label ? (
         <span
           title={`强度 ${s.strength_label}（首封×封成比 · 影子运行·仅统计参考）`}
           data-testid={`ladder-strength-${s.symbol}`}
-          className={`rounded border px-0.5 text-[10px] font-medium leading-none ${strengthTone(s.strength_label)}`}
+          className={`rounded border px-0.5 text-[12px] font-medium leading-none ${strengthTone(s.strength_label)}`}
         >
           {s.strength_label}
         </span>
       ) : null}
       {s.dive ? (
-        <span className="rounded bg-[--stock-down]/20 px-0.5 text-[10px] text-[--stock-down]">跳水</span>
+        <span className="rounded bg-[--stock-down]/20 px-0.5 text-[12px] text-[--stock-down]">跳水</span>
       ) : null}
     </span>
   )
@@ -119,13 +119,13 @@ function MarkGroup({ label, marks, tone }: { label: string; marks: LadderMark[];
     ? 'border-[--stock-up]/40 text-[--stock-up]'
     : tone === 'charging'
       ? 'border-[--stock-up]/30 text-[--stock-up]/80'
-      : 'border-border/50 text-muted-foreground'
+      : 'border-border text-muted-foreground'
   return (
-    <div className={`mt-1 rounded border px-1 py-0.5 ${cls}`}>
-      <div className="text-[10px] font-medium">{label} {marks.length}</div>
+    <div className={"card-surface bg-card " + (`mt-1 rounded px-1 py-0.5 ${cls}`)}>
+      <div className="text-[12px] font-medium">{label} {marks.length}</div>
       <div
         title={marks.map((m) => `${m.name || m.symbol}(${prevBoardsLabel(m.prev_boards)})`).join('、')}
-        className="truncate text-[10px]"
+        className="truncate text-[12px]"
       >
         {marks.slice(0, 3).map((m) => m.name || m.symbol).join('、')}
         {marks.length > 3 ? ` +${marks.length - 3}` : ''}
@@ -137,26 +137,26 @@ function MarkGroup({ label, marks, tone }: { label: string; marks: LadderMark[];
 function DayColumn({ day, basis, liveAsOf }: { day: LadderDay; basis: 'qfq' | 'raw'; liveAsOf?: string | null }) {
   const sealed = day.rows.reduce((a, r) => a + r.codes.length, 0)
   return (
-    <div className="w-[170px] shrink-0 rounded border border-border/40 p-1.5">
+    <div className="card-surface bg-card w-[170px] shrink-0 rounded p-1.5">
       <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[11px] font-medium text-foreground">{fmtISODate(day.date)}</span>
-        <span className="text-[10px] text-muted-foreground">封 {sealed}</span>
+        <span className="text-[12px] font-medium text-foreground">{fmtISODate(day.date)}</span>
+        <span className="text-[12px] text-muted-foreground">封 {sealed}</span>
       </div>
       {/* 盘中列诚实标注: 未定型 + 数据截至时刻(小字徽章, 不卡片化); 定型后此列不再出现 ⇒ 徽章消失。 */}
       {day.provisional ? (
-        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[10px] text-primary">
+        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[12px] text-primary">
           盘中{liveAsOf ? ` · 截至 ${liveAsOf}` : ''}
         </div>
       ) : null}
       {day.rows.length === 0 && day.blown.length === 0 && day.broken.length === 0 ? (
-        <div className="py-2 text-center text-[10px] text-muted-foreground">无收盘封板</div>
+        <div className="py-2 text-center text-[12px] text-muted-foreground">无收盘封板</div>
       ) : (
         day.rows.map((r) => (
           <div key={r.boards} className="mb-1 last:mb-0">
-            <div className="text-[10px] font-medium text-primary">
+            <div className="text-[12px] font-medium text-primary">
               {r.boards}板
               {r.tag ?? boardTag(r.boards)
-                ? <span className="ml-1 rounded bg-primary/15 px-0.5 text-[10px]">{r.tag ?? boardTag(r.boards)}</span>
+                ? <span className="ml-1 rounded bg-primary/15 px-0.5 text-[12px]">{r.tag ?? boardTag(r.boards)}</span>
                 : null}
             </div>
             <div className="flex flex-wrap gap-1">
@@ -200,7 +200,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
   return (
     <div className="scrollbar overflow-x-auto pb-1">
       {gaps.length > 0 && (
-        <div className="mb-1 text-[11px] text-muted-foreground" data-testid="ladder-gaps">
+        <div className="mb-1 text-[12px] text-muted-foreground" data-testid="ladder-gaps">
           空档：{gaps.slice(0, 6).map((b) => `${b}板`).join('、')}
           {gaps.length > 6 ? ` 等 ${gaps.length} 档` : ''} 无个股（不是 0 家涨跌停）
         </div>
@@ -208,14 +208,14 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
       <div className="flex w-max gap-1">
         {/* 走查 2026-09-18: 板数列必须 sticky —— 横向滑到右边后仍要看到「几板」 */}
         <div className="sticky left-0 z-10 w-[64px] shrink-0 bg-background">
-          <div className="mb-1 text-[10px] text-muted-foreground">层级</div>
+          <div className="mb-1 text-[12px] text-muted-foreground">层级</div>
           {shown.map((b) => (
             <div key={b} className="mb-1 flex h-[64px] flex-col justify-center">
               <button
                 type="button"
                 onClick={() => onOnlyBoard(onlyBoard === b ? null : b)}
-                className={`rounded px-1 text-[10px] font-medium ${
-                  onlyBoard === b ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-foreground'
+                className={`rounded px-1 text-[12px] font-medium ${
+                  onlyBoard === b ? 'bg-primary text-primary-foreground' : 'bg-s2 text-foreground'
                 }`}
                 title={onlyBoard === b ? '取消只看本板' : '只看本板'}
               >
@@ -224,7 +224,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
               <button
                 type="button"
                 onClick={() => onToggleRow(b)}
-                className="mt-0.5 text-[10px] text-muted-foreground"
+                className="mt-0.5 text-[12px] text-muted-foreground"
               >
                 {collapsed.has(b) ? '展开' : '收起'}
               </button>
@@ -233,14 +233,14 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
         </div>
         {cols.map((d) => (
           <div key={d.date} className="w-[170px] shrink-0">
-            <div className="mb-1 truncate text-[10px] font-medium text-foreground" title={fmtISODate(d.date)}>
+            <div className="mb-1 truncate text-[12px] font-medium text-foreground" title={fmtISODate(d.date)}>
               {fmtISODate(d.date)}
               {d.provisional ? <span className="ml-1 text-primary">盘中{liveAsOf ? ` · 截至 ${liveAsOf}` : ''}</span> : null}
             </div>
             {shown.map((b) => {
               const row = d.rows.find((r) => r.boards === b)
               return (
-                <div key={b} className="mb-1 flex h-[64px] flex-wrap content-start gap-1 overflow-hidden rounded border border-border/30 p-0.5">
+                <div key={b} className="card-surface bg-card mb-1 flex h-[64px] flex-wrap content-start gap-1 overflow-hidden rounded p-0.5">
                   {!collapsed.has(b) && row
                     ? row.stocks.map((s) => (
                       <StockChip key={s.symbol} s={s} basis={d.provisional ? 'raw' : 'qfq'} />
@@ -298,37 +298,37 @@ export default function LadderBoard(props: {
     return next
   })
   return (
-    <div className="rounded border border-border/60 p-3">
+    <div className="analysis-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-[13px] font-semibold">连板梯队</span>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[14px] font-semibold">连板梯队</span>
+        <span className="text-[12px] text-muted-foreground">
           {mode === 'live' ? '盘中实时(60s)' : '收盘定型'}
         </span>
         {stats ? (
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-[12px] text-muted-foreground">
             昨候选 {stats.prev_candidates} · 首板 {stats.first} · 晋级 {stats.promoted} ·
             炸板 {stats.blown} · 断板 {stats.broken} · 冲板 {stats.charging}
           </span>
         ) : null}
         <span className="ml-auto flex items-center gap-2">
-          {asOf ? <span className="text-[10px] text-muted-foreground">更新 {asOf.slice(11, 19)}</span> : null}
+          {asOf ? <span className="text-[12px] text-muted-foreground">更新 {asOf.slice(11, 19)}</span> : null}
           <button
             type="button"
             onClick={handleToggleView}
-            className="rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground"
           >
             {view === 'matrix' ? '按日列视图' : '矩阵视图'}
           </button>
         </span>
       </div>
       {noteClosing ? (
-        <div className="mb-1 text-[10px] text-[--stock-up]">{noteClosing}</div>
+        <div className="mb-1 text-[12px] text-[--stock-up]">{noteClosing}</div>
       ) : null}
       {stale ? (
-        <div className="mb-1 text-[10px] text-[--stock-up]">实时源中断 {lastOk ?? ''}</div>
+        <div className="mb-1 text-[12px] text-[--stock-up]">实时源中断 {lastOk ?? ''}</div>
       ) : null}
       <div ref={ref}>
-        {view === 'cols' ? (
+        {cols.length === 0 ? <div className="py-3 text-[14px] text-muted-foreground">暂无连板梯队数据，等待收盘同步或刷新。</div> : view === 'cols' ? (
           <div className="scrollbar overflow-x-auto pb-1">
             <div className="flex w-max gap-1">
               {cols.map((d) => (

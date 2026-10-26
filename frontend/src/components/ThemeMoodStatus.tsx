@@ -48,11 +48,11 @@ const PHASE_LABEL: Record<BoardPhase, string> = {
 
 /** 徽标底色只用 token 类(不许新增 bg-accent/NN、bg-stock-* 背景 —— surface 棘轮)。 */
 const PHASE_CLASS: Record<BoardPhase, string> = {
-  pre: 'bg-muted/50 text-muted-foreground',
+  pre: 'bg-s2 text-muted-foreground',
   live: 'bg-primary/15 text-primary',
   closed_pending: 'bg-primary/10 text-foreground',
   final: 'bg-primary/15 text-primary',
-  unknown: 'bg-muted/50 text-muted-foreground',
+  unknown: 'bg-s2 text-muted-foreground',
 }
 
 /** 快照/定型时间显式标注: 空值输出「无数据」(铁律: 缺数据不填 0、不假装)。 */
@@ -84,10 +84,10 @@ export function ThemeMoodStatus(props: {
       title={note || undefined}
       className="flex items-center gap-1.5"
     >
-      <span className={`rounded px-1.5 py-0.5 text-[10px] ${PHASE_CLASS[phase]}`}>{PHASE_LABEL[phase]}</span>
-      {time ? <span className="text-[10px] text-muted-foreground">{time}</span> : null}
+      <span className={`rounded px-1.5 py-0.5 text-[12px] ${PHASE_CLASS[phase]}`}>{PHASE_LABEL[phase]}</span>
+      {time ? <span className="text-[12px] text-muted-foreground">{time}</span> : null}
       {phase === 'pre' && trading_day === false ? (
-        <span className="text-[10px] text-muted-foreground">非交易日</span>
+        <span className="text-[12px] text-muted-foreground">非交易日</span>
       ) : null}
     </span>
   )

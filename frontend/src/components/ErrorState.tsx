@@ -126,8 +126,8 @@ export function ErrorState({
       >
         {meta.icon}
       </span>
-      <p className="text-[13px] font-medium text-foreground">{displayTitle}</p>
-      <p className="mt-1 max-w-sm text-[11px] leading-relaxed text-muted-foreground">{displayDesc}</p>
+      <p className="text-[14px] font-medium text-foreground">{displayTitle}</p>
+      <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">{displayDesc}</p>
       {(onRetry || action) && (
         <div className="mt-4 flex items-center gap-2">
           {onRetry && (

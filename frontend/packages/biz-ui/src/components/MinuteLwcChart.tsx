@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MinutePoint, MinuteSwings } from '../lib/minute-types'
 import * as LW from 'lightweight-charts'
-import { readStockColors, withAlpha } from '../lib/stock-colors'
+import { readChartTheme, readStockColors, withAlpha } from '../lib/stock-colors'
 
 export type { MinutePoint } from '../lib/minute-types'
 
@@ -90,9 +90,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
     const el = ref.current
     if (!LW || !el || !points.length) return
 
-    const rootStyle = getComputedStyle(document.documentElement)
-    const bg = rootStyle.getPropertyValue('--card').trim()
-    const fg = rootStyle.getPropertyValue('--foreground').trim()
+    const theme = readChartTheme()
 
     // 涨跌色统一取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
     const { up: colorUp, down: colorDown } = readStockColors()
@@ -102,8 +100,8 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
       width: el.clientWidth,
       height,
       layout: {
-        background: { color: `hsl(${bg})` },
-        textColor: `hsl(${fg} / 0.85)`,
+        background: { color: theme.bg },
+        textColor: theme.text,
       },
       rightPriceScale: { borderVisible: false },
       timeScale: {
@@ -121,8 +119,8 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
         secondsVisible: false,
       },
       grid: {
-        vertLines: { color: 'rgba(148, 163, 184, 0.08)' },
-        horzLines: { color: 'rgba(148, 163, 184, 0.08)' },
+        vertLines: { color: theme.grid },
+        horzLines: { color: theme.grid },
       },
       crosshair: { mode: 1 },
       handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
@@ -353,8 +351,19 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
     })
     ro.observe(el)
 
+    // 只更新外观，不重建实例或重置用户选中的时间范围。
+    const themeObserver = new MutationObserver(() => {
+      const next = readChartTheme()
+      const colors = readStockColors()
+      chart.applyOptions({ layout: { background: { color: next.bg }, textColor: next.text }, grid: { vertLines: { color: next.grid }, horzLines: { color: next.grid } } })
+      priceSeries.applyOptions({ color: last >= first ? colors.up : colors.down })
+      volSeries.setData(points.map(p => ({ time: hhmmToTs(p.t), value: p.volume, color: withAlpha(p.price >= prevC ? colors.up : colors.down, 0.4) })))
+    })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
+
     return () => {
       ro.disconnect()
+      themeObserver.disconnect()
       try {
         chart.remove()
       } catch {
@@ -367,7 +376,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
     <div className="relative">
       {/* ═══ 图例(2026-08-12 v3): 说明标记含义, 左上角悬浮 */}
       {!isIndex && swingMarks.length > 0 && showLegend && (
-        <div className="absolute left-2 top-1 z-10 flex flex-col gap-0.5 rounded-md bg-background/85 backdrop-blur px-2 py-1.5 text-[10px] leading-tight shadow-sm border border-border/60">
+        <div className="absolute left-2 top-1 z-10 flex flex-col gap-0.5 rounded-md bg-background backdrop-blur px-2 py-1.5 text-[12px] leading-tight shadow-sm border border-border">
           <div className="flex items-center gap-1.5">
             <span className="inline-block w-0 h-0 border-l-[5px] border-r-[5px] border-b-[8px] border-l-transparent border-r-transparent border-b-stock-up" />
             <span>主力净买(拉升)</span>
@@ -386,14 +395,14 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" />
             <span>散户净卖(抛压)</span>
           </div>
-          <div className="flex items-center gap-1.5 mt-0.5 border-t border-border/40 pt-0.5">
+          <div className="flex items-center gap-1.5 mt-0.5 border-t border-border pt-0.5">
             <span className="inline-block w-2 h-2 bg-violet-500" />
             <span>横盘托盘出货</span>
             <span className="inline-block w-2 h-2 bg-cyan-500 ml-1" />
             <span>横盘压盘吸筹</span>
           </div>
           <button
-            className="mt-0.5 text-[10px] text-muted-foreground hover:text-foreground text-left"
+            className="mt-0.5 text-[12px] text-muted-foreground hover:text-foreground text-left"
             onClick={() => setShowLegend(false)}
           >
             收起图例 ✕
@@ -403,7 +412,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
       {/* 图例收起后: 左上角小按钮重新展开(2026-08-12 用户反馈: 只有关没有开) */}
       {!isIndex && swingMarks.length > 0 && !showLegend && (
         <button
-          className="absolute left-2 top-1 z-10 rounded-md bg-background/85 backdrop-blur px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground border border-border/60 shadow-sm"
+          className="absolute left-2 top-1 z-10 rounded-md bg-background backdrop-blur px-1.5 py-0.5 text-[12px] text-muted-foreground hover:text-foreground border border-border shadow-sm"
           onClick={() => setShowLegend(true)}
           title="显示图例"
         >
@@ -416,7 +425,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings, hei
       {/* ═══ 悬停分析 tooltip(2026-08-12 v3) */}
       {hoverMark && (
         <div
-          className="absolute z-20 rounded-md border border-border bg-background/95 backdrop-blur p-2 text-[11px] shadow-float pointer-events-none"
+          className="absolute z-20 rounded-md border border-border bg-background backdrop-blur p-2 text-[12px] shadow-float pointer-events-none"
           style={{ left: hoverMark.x, top: hoverMark.y, width: 240 }}
         >
           <SwingTooltip mark={hoverMark.mark} />
@@ -442,7 +451,7 @@ function SwingTooltip({ mark }: { mark: SwingMark }) {
         : 'text-amber-500'
   return (
     <div className="space-y-0.5">
-      <div className="font-medium text-[11px] mb-1">
+      <div className="font-medium text-[12px] mb-1">
         {mark.start}–{mark.end} {dir}段
         <span className={`ml-1.5 ${verdictCls}`}>{mark.verdict}</span>
         <span className="ml-1 text-muted-foreground">score {mark.score}</span>
@@ -467,7 +476,7 @@ function SwingTooltip({ mark }: { mark: SwingMark }) {
         </div>
       )}
       {mark.signals && mark.signals.length > 0 && (
-        <div className="text-muted-foreground border-t border-border/60 pt-0.5 mt-0.5">
+        <div className="text-muted-foreground border-t border-border pt-0.5 mt-0.5">
           {mark.signals.join('; ')}
         </div>
       )}

@@ -1,3 +1,4 @@
+import { SectionPanel } from '@/components/SectionWorkspace'
 import { useCallback, useMemo, useState } from 'react'
 import {
   Users,
@@ -191,7 +192,7 @@ function graceDeadline(deletedAt: string): string {
 
 function TableLoading({ label = '加载中…' }: { label?: string }) {
   return (
-    <div className="flex items-center justify-center gap-2 rounded-xl border border-border/50 dark:border-white/5 bg-muted/20 dark:bg-white/[0.01] py-10 text-[12px] text-muted-foreground">
+    <div className="card-surface flex items-center justify-center gap-2 rounded-xl bg-s2 py-10 text-[12px] text-muted-foreground">
       <Loader2 className="h-4 w-4 animate-spin" />
       {label}
     </div>
@@ -200,7 +201,7 @@ function TableLoading({ label = '加载中…' }: { label?: string }) {
 
 function Th({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <th className={`whitespace-nowrap px-3 py-2 text-left text-[11px] font-medium text-muted-foreground ${className}`}>
+    <th className={`whitespace-nowrap px-3 py-2 text-left text-[12px] font-medium text-muted-foreground ${className}`}>
       {children}
     </th>
   )
@@ -477,7 +478,7 @@ export default function AdminPage() {
       }
     >
       {/* ── 邀请码管理(2026-09-19 内部使用模式) ── */}
-      <InviteCodesSection />
+      <SectionPanel id="sec-invite"><InviteCodesSection /></SectionPanel>
 
       {/* ── 用户管理 ── */}
       <Section
@@ -493,29 +494,29 @@ export default function AdminPage() {
         }
       >
         {showCreate && (
-          <div className="mb-4 space-y-2 rounded-xl border border-border/50 dark:border-white/10 bg-s1 p-3">
+          <div className="card-surface mb-4 space-y-2 rounded-xl bg-s1 p-3">
             <div className="grid gap-2 sm:grid-cols-4">
               <input
-                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                className="h-8 rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
                 placeholder="用户名（2-20 位字母/数字）"
                 value={newUser.username}
                 onChange={e => setNewUser(v => ({ ...v, username: e.target.value }))}
               />
               <input
-                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                className="h-8 rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
                 placeholder="密码（至少 8 位）"
                 type="password"
                 value={newUser.password}
                 onChange={e => setNewUser(v => ({ ...v, password: e.target.value }))}
               />
               <input
-                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                className="h-8 rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
                 placeholder="邮箱（可空）"
                 value={newUser.email}
                 onChange={e => setNewUser(v => ({ ...v, email: e.target.value }))}
               />
               <select
-                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                className="h-8 rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
                 value={newUser.role}
                 onChange={e => setNewUser(v => ({ ...v, role: e.target.value }))}
               >
@@ -529,7 +530,7 @@ export default function AdminPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-7 text-[11px]"
+                className="h-7 text-[12px]"
                 onClick={() => {
                   setShowCreate(false)
                   setNewUser({ username: '', password: '', role: 'member', email: '' })
@@ -537,7 +538,7 @@ export default function AdminPage() {
               >
                 取消
               </Button>
-              <Button size="sm" className="h-7 text-[11px]" disabled={creating} onClick={() => void createUser()}>
+              <Button size="sm" className="h-7 text-[12px]" disabled={creating} onClick={() => void createUser()}>
                 {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
                 创建
               </Button>
@@ -548,19 +549,19 @@ export default function AdminPage() {
         {/* 统计卡片 */}
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">总用户</div>
+            <div className="text-[12px] text-muted-foreground">总用户</div>
             <div className="font-mono text-[20px] font-semibold text-foreground">{stats?.total_users ?? '—'}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">活跃用户</div>
+            <div className="text-[12px] text-muted-foreground">活跃用户</div>
             <div className="font-mono text-[20px] font-semibold text-cyan-400">{stats?.active_users ?? '—'}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">今日新增</div>
+            <div className="text-[12px] text-muted-foreground">今日新增</div>
             <div className="font-mono text-[20px] font-semibold text-emerald-400">{stats?.new_today ?? '—'}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">7 日新增</div>
+            <div className="text-[12px] text-muted-foreground">7 日新增</div>
             <div className="font-mono text-[20px] font-semibold text-foreground">{stats?.new_7d ?? '—'}</div>
           </InfoCard>
         </div>
@@ -570,14 +571,14 @@ export default function AdminPage() {
             {Object.entries(stats.by_role).map(([role, n]) => (
               <span
                 key={role}
-                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${ROLE_BADGE[role] || ROLE_BADGE.member}`}
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] ${ROLE_BADGE[role] || ROLE_BADGE.member}`}
               >
                 {ROLE_LABEL[role] || role}
                 <span className="font-mono">{n}</span>
               </span>
             ))}
             {stats.new_30d != null && (
-              <span className="inline-flex items-center rounded-full border border-border/50 dark:border-white/10 bg-muted/40 dark:bg-white/[0.03] px-2 py-0.5 text-[10px] text-muted-foreground">
+              <span className="inline-flex items-center rounded-full border border-border dark:border-white/10 bg-s2 dark:bg-white/[0.03] px-2 py-0.5 text-[12px] text-muted-foreground">
                 30 日新增 <span className="ml-1 font-mono">{stats.new_30d}</span>
               </span>
             )}
@@ -589,9 +590,9 @@ export default function AdminPage() {
         ) : users.length === 0 ? (
           <EmptyState icon={<Users className="h-8 w-8" />} title="暂无用户" />
         ) : (
-          <div className="max-h-[70vh] overflow-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+          <div className="card-surface max-h-[70vh] overflow-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[720px]">
-              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+              <thead className="sticky top-0 z-10 border-b border-border bg-card">
                 <tr>
                   <Th>用户名</Th>
                   <Th>邮箱</Th>
@@ -604,12 +605,12 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {paged(users, usersPage).map(u => (
-                  <tr key={u.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
+                  <tr key={u.id} className="border-b border-border last:border-0 hover:bg-s2">
                     <Td className="font-medium text-foreground">{u.username}</Td>
                     <Td className="text-muted-foreground">{u.email || '—'}</Td>
                     <Td>
                       <select
-                        className="rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 py-1 text-[11px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                        className="rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 py-1 text-[12px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
                         value={u.role}
                         disabled={userActionId === u.id}
                         onChange={e => void changeRole(u, e.target.value)}
@@ -623,19 +624,19 @@ export default function AdminPage() {
                     <Td>
                       {u.is_deleted ? (
                         <span className="inline-flex flex-col gap-0.5">
-                          <span className="inline-flex w-fit items-center rounded-full border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-400">
+                          <span className="inline-flex w-fit items-center rounded-full border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-[12px] text-red-400">
                             已注销
                           </span>
                           {u.deleted_at && (
-                            <span className="text-[10px] text-muted-foreground">宽限期至 {graceDeadline(u.deleted_at)}</span>
+                            <span className="text-[12px] text-muted-foreground">宽限期至 {graceDeadline(u.deleted_at)}</span>
                           )}
                         </span>
                       ) : u.is_active ? (
-                        <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
+                        <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[12px] text-emerald-400">
                           启用
                         </span>
                       ) : (
-                        <span className="inline-flex items-center rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-400">
+                        <span className="inline-flex items-center rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[12px] text-red-400">
                           禁用
                         </span>
                       )}
@@ -648,7 +649,7 @@ export default function AdminPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[11px] hover:border-emerald-500/30 hover:text-emerald-400"
+                            className="h-7 px-2 text-[12px] hover:border-emerald-500/30 hover:text-emerald-400"
                             disabled={userActionId === u.id}
                             onClick={() => void restoreUser(u)}
                           >
@@ -660,7 +661,7 @@ export default function AdminPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 px-2 text-[11px]"
+                              className="h-7 px-2 text-[12px]"
                               disabled={userActionId === u.id}
                               onClick={() => {
                                 setResetTarget(u)
@@ -673,7 +674,7 @@ export default function AdminPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              className={`h-7 px-2 text-[11px] ${u.is_active ? 'hover:border-red-500/30 hover:text-red-400' : 'hover:border-emerald-500/30 hover:text-emerald-400'}`}
+                              className={`h-7 px-2 text-[12px] ${u.is_active ? 'hover:border-red-500/30 hover:text-red-400' : 'hover:border-emerald-500/30 hover:text-emerald-400'}`}
                               disabled={userActionId === u.id}
                               onClick={() => void toggleActive(u)}
                             >
@@ -699,24 +700,24 @@ export default function AdminPage() {
         )}
 
         {resetTarget && (
-          <div className="mt-3 space-y-2 rounded-xl border border-border/50 dark:border-white/10 bg-s1 p-3">
+          <div className="card-surface mt-3 space-y-2 rounded-xl bg-s1 p-3">
             <div className="text-[12px] font-medium text-foreground">重置 {resetTarget.username} 的密码</div>
             <div className="flex flex-wrap items-center gap-2">
               <input
-                className="h-8 min-w-[220px] flex-1 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                className="h-8 min-w-[220px] flex-1 rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
                 placeholder="新密码（至少 8 位）"
                 type="password"
                 value={resetPwd}
                 onChange={e => setResetPwd(e.target.value)}
               />
-              <Button size="sm" className="h-8 text-[11px]" disabled={userActionId === resetTarget.id} onClick={() => void submitResetPassword()}>
+              <Button size="sm" className="h-8 text-[12px]" disabled={userActionId === resetTarget.id} onClick={() => void submitResetPassword()}>
                 确定重置
               </Button>
-              <Button size="sm" variant="ghost" className="h-8 text-[11px]" onClick={() => { setResetTarget(null); setResetPwd('') }}>
+              <Button size="sm" variant="ghost" className="h-8 text-[12px]" onClick={() => { setResetTarget(null); setResetPwd('') }}>
                 取消
               </Button>
             </div>
-            <div className="text-[10px] text-muted-foreground">重置后该用户旧登录会话立即失效，需用新密码重新登录。</div>
+            <div className="text-[12px] text-muted-foreground">重置后该用户旧登录会话立即失效，需用新密码重新登录。</div>
           </div>
         )}
 
@@ -731,13 +732,13 @@ export default function AdminPage() {
               {stats.recent_registrations.map((r, i) => (
                 <div
                   key={`${r.username}-${i}`}
-                  className="flex items-center justify-between rounded-lg border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] px-3 py-2"
+                  className="card-surface flex items-center justify-between rounded-lg bg-card px-3 py-2"
                 >
                   <div className="min-w-0">
                     <span className="text-[12px] font-medium text-foreground">{r.username}</span>
-                    {r.email && <span className="ml-2 text-[11px] text-muted-foreground">{r.email}</span>}
+                    {r.email && <span className="ml-2 text-[12px] text-muted-foreground">{r.email}</span>}
                   </div>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">{formatDateTime(r.created_at)}</span>
+                  <span className="shrink-0 text-[12px] text-muted-foreground">{formatDateTime(r.created_at)}</span>
                 </div>
               ))}
             </div>
@@ -754,19 +755,19 @@ export default function AdminPage() {
       >
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">总 Key</div>
+            <div className="text-[12px] text-muted-foreground">总 Key</div>
             <div className="font-mono text-[20px] font-semibold text-foreground">{keyStats.total}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">活跃</div>
+            <div className="text-[12px] text-muted-foreground">活跃</div>
             <div className="font-mono text-[20px] font-semibold text-emerald-400">{keyStats.active}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">已冻结</div>
+            <div className="text-[12px] text-muted-foreground">已冻结</div>
             <div className="font-mono text-[20px] font-semibold text-amber-400">{keyStats.frozen}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-muted-foreground">今日调用量</div>
+            <div className="text-[12px] text-muted-foreground">今日调用量</div>
             <div className="font-mono text-[20px] font-semibold text-cyan-400">{keyStats.totalCalls}</div>
           </InfoCard>
         </div>
@@ -776,9 +777,9 @@ export default function AdminPage() {
         ) : keys.length === 0 ? (
           <EmptyState icon={<KeyRound className="h-8 w-8" />} title="暂无 API Key" desc="用户创建 Key 后会出现在这里" />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+          <div className="card-surface overflow-x-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[860px]">
-              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+              <thead className="sticky top-0 z-10 border-b border-border bg-card">
                 <tr>
                   <Th>Key 前缀</Th>
                   <Th>用户</Th>
@@ -792,26 +793,26 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {paged(keys, keysPage).map(k => (
-                  <tr key={k.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
+                  <tr key={k.id} className="border-b border-border last:border-0 hover:bg-s2">
                     <Td>
-                      <code className="font-mono text-[12px] text-cyan-300">{k.key_prefix}…</code>
+                      <code className="font-mono text-[12px] text-primary">{k.key_prefix}…</code>
                     </Td>
                     <Td className="text-muted-foreground">{k.username || k.owner_label || '—'}</Td>
                     <Td>
                       <span
-                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${TIER_BADGE[k.tier] || TIER_BADGE.free}`}
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[12px] ${TIER_BADGE[k.tier] || TIER_BADGE.free}`}
                       >
                         {TIER_LABEL[k.tier] || k.tier}
                       </span>
                     </Td>
                     <Td>
                       {k.status === 'active' ? (
-                        <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
+                        <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[12px] text-emerald-400">
                           正常
                         </span>
                       ) : (
                         <span
-                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${
+                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[12px] ${
                             k.status === 'frozen'
                               ? 'border-amber-500/20 bg-amber-500/10 text-amber-400'
                               : 'border-red-500/20 bg-red-500/10 text-red-400'
@@ -827,7 +828,7 @@ export default function AdminPage() {
                     <Td>
                       <div className="flex items-center justify-end gap-1">
                         <select
-                          className="h-7 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-1.5 text-[11px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                          className="h-7 rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-1.5 text-[12px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
                           value={k.tier}
                           title="调整档位（日限同步为该档默认值）"
                           disabled={keyActionId === k.id}
@@ -840,7 +841,7 @@ export default function AdminPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-7 px-2 text-[11px]"
+                          className="h-7 px-2 text-[12px]"
                           disabled={keyActionId === k.id}
                           onClick={() => promptKeyLimit(k)}
                         >
@@ -850,7 +851,7 @@ export default function AdminPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[11px] hover:border-amber-500/30 hover:text-amber-400"
+                            className="h-7 px-2 text-[12px] hover:border-amber-500/30 hover:text-amber-400"
                             disabled={keyActionId === k.id}
                             onClick={() => void keyAction(k, 'freeze')}
                           >
@@ -861,7 +862,7 @@ export default function AdminPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[11px] hover:border-emerald-500/30 hover:text-emerald-400"
+                            className="h-7 px-2 text-[12px] hover:border-emerald-500/30 hover:text-emerald-400"
                             disabled={keyActionId === k.id}
                             onClick={() => void keyAction(k, 'unfreeze')}
                           >
@@ -873,7 +874,7 @@ export default function AdminPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[11px] hover:border-red-500/30 hover:text-red-400"
+                            className="h-7 px-2 text-[12px] hover:border-red-500/30 hover:text-red-400"
                             disabled={keyActionId === k.id}
                             onClick={() => void keyAction(k, 'disable')}
                           >
@@ -905,9 +906,9 @@ export default function AdminPage() {
         ) : !skillUsage?.report?.length ? (
           <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="近 7 天暂无调用" />
         ) : (
-          <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+          <div className="card-surface mb-6 overflow-x-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[640px]">
-              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+              <thead className="sticky top-0 z-10 border-b border-border bg-card">
                 <tr>
                   <Th>Key 前缀</Th>
                   <Th>Tier</Th>
@@ -918,18 +919,18 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {skillUsage.report.map((r, i) => (
-                  <tr key={`${r.key_prefix}-${i}`} className="border-b border-border/40 dark:border-white/5 last:border-0">
+                  <tr key={`${r.key_prefix}-${i}`} className="border-b border-border last:border-0">
                     <Td>
-                      <code className="font-mono text-cyan-300">{r.key_prefix}…</code>
+                      <code className="font-mono text-primary">{r.key_prefix}…</code>
                     </Td>
                     <Td>
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${TIER_BADGE[r.tier] || TIER_BADGE.free}`}>
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[12px] ${TIER_BADGE[r.tier] || TIER_BADGE.free}`}>
                         {TIER_LABEL[r.tier] || r.tier}
                       </span>
                     </Td>
                     <Td className="font-mono text-foreground">{r.total}</Td>
                     <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>{r.errors}</Td>
-                    <Td className="text-[11px] text-muted-foreground">
+                    <Td className="text-[12px] text-muted-foreground">
                       {(r.top_skills || []).map(([name, n]) => `${name}(${n})`).join('、') || '—'}
                     </Td>
                   </tr>
@@ -947,9 +948,9 @@ export default function AdminPage() {
           <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="近 7 天暂无调用" />
         ) : (
           <div className="mb-6 space-y-4">
-            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+            <div className="card-surface overflow-x-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
               <table className="w-full min-w-[560px]">
-                <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+                <thead className="sticky top-0 z-10 border-b border-border bg-card">
                   <tr>
                     <Th>Skill</Th>
                     <Th>调用</Th>
@@ -961,8 +962,8 @@ export default function AdminPage() {
                 </thead>
                 <tbody>
                   {usageLatency.by_skill.map((r) => (
-                    <tr key={r.skill} className="border-b border-border/40 dark:border-white/5 last:border-0">
-                      <Td><code className="font-mono text-cyan-300">{r.skill}</code></Td>
+                    <tr key={r.skill} className="border-b border-border last:border-0">
+                      <Td><code className="font-mono text-primary">{r.skill}</code></Td>
                       <Td className="font-mono text-foreground">{r.calls}{typeof r.users === 'number' ? ` · ${r.users}人` : ''}</Td>
                       <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>{r.errors}</Td>
                       {/* null = 没样本可算(不是 0ms): 显示 -- 并把原因放进 title */}
@@ -972,15 +973,15 @@ export default function AdminPage() {
                       <Td className="font-mono text-muted-foreground" title={r.p95_ms === null ? '没有已记录耗时的调用, 无法计算' : ''}>
                         {r.p95_ms === null ? '--' : `${r.p95_ms} ms`}
                       </Td>
-                      <Td className="font-mono text-[11px] text-muted-foreground">{r.latency_samples}</Td>
+                      <Td className="font-mono text-[12px] text-muted-foreground">{r.latency_samples}</Td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+            <div className="card-surface overflow-x-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
               <table className="w-full min-w-[420px]">
-                <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+                <thead className="sticky top-0 z-10 border-b border-border bg-card">
                   <tr>
                     <Th>日期</Th>
                     <Th>调用</Th>
@@ -991,7 +992,7 @@ export default function AdminPage() {
                 </thead>
                 <tbody>
                   {usageLatency.by_day.map((r) => (
-                    <tr key={r.day} className="border-b border-border/40 dark:border-white/5 last:border-0">
+                    <tr key={r.day} className="border-b border-border last:border-0">
                       <Td className="font-mono text-foreground">{r.day}</Td>
                       <Td className="font-mono text-foreground">{r.calls}</Td>
                       <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>{r.errors}</Td>
@@ -1003,7 +1004,7 @@ export default function AdminPage() {
               </table>
             </div>
             {/* 口径说明由后端给("未记录 ≠ 0ms"), 页面不自己措辞 */}
-            <div className="text-[11px] text-muted-foreground">{usageLatency.latency_note}</div>
+            <div className="text-[12px] text-muted-foreground">{usageLatency.latency_note}</div>
           </div>
         )}
 
@@ -1014,9 +1015,9 @@ export default function AdminPage() {
         ) : !hvUsage?.by_user_api?.length ? (
           <EmptyState icon={<Activity className="h-8 w-8" />} title="近 7 天暂无高价值接口调用" />
         ) : (
-          <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+          <div className="card-surface mb-6 overflow-x-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[640px]">
-              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+              <thead className="sticky top-0 z-10 border-b border-border bg-card">
                 <tr>
                   <Th>用户</Th>
                   <Th>接口</Th>
@@ -1026,10 +1027,10 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {hvUsage.by_user_api.map((r, i) => (
-                  <tr key={`${r.user_id}-${r.api_name}-${i}`} className="border-b border-border/40 dark:border-white/5 last:border-0">
+                  <tr key={`${r.user_id}-${r.api_name}-${i}`} className="border-b border-border last:border-0">
                     <Td className="text-foreground">{r.username || r.user_id}</Td>
                     <Td>
-                      <code className="font-mono text-[11px] text-cyan-300">{r.api_name}</code>
+                      <code className="font-mono text-[12px] text-primary">{r.api_name}</code>
                     </Td>
                     <Td className="font-mono text-foreground">{r.calls}</Td>
                     <Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(r.last_at) || '—'}</Td>
@@ -1047,9 +1048,9 @@ export default function AdminPage() {
         ) : !hvUsage?.by_day?.length ? (
           <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="近 7 天暂无按天数据" />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+          <div className="card-surface overflow-x-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[480px]">
-              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+              <thead className="sticky top-0 z-10 border-b border-border bg-card">
                 <tr>
                   <Th>日期</Th>
                   <Th>接口</Th>
@@ -1058,10 +1059,10 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {hvUsage.by_day.map((r, i) => (
-                  <tr key={`${r.day}-${r.api_name}-${i}`} className="border-b border-border/40 dark:border-white/5 last:border-0">
+                  <tr key={`${r.day}-${r.api_name}-${i}`} className="border-b border-border last:border-0">
                     <Td className="whitespace-nowrap text-muted-foreground">{r.day}</Td>
                     <Td>
-                      <code className="font-mono text-[11px] text-cyan-300">{r.api_name}</code>
+                      <code className="font-mono text-[12px] text-primary">{r.api_name}</code>
                     </Td>
                     <Td className="font-mono text-foreground">{r.calls}</Td>
                   </tr>
@@ -1080,7 +1081,7 @@ export default function AdminPage() {
         icon={<BadgeCheck className="h-4 w-4" />}
         action={
           pendingCount > 0 ? (
-            <span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-400">
+            <span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[12px] text-amber-400">
               {pendingCount} 待审核
             </span>
           ) : undefined
@@ -1091,9 +1092,9 @@ export default function AdminPage() {
         ) : !proApps?.applications?.length ? (
           <EmptyState icon={<BadgeCheck className="h-8 w-8" />} title="暂无 Pro 申请" desc="用户提交申请后会出现在这里" />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
+          <div className="card-surface overflow-x-auto rounded-xl bg-card [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[720px]">
-              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
+              <thead className="sticky top-0 z-10 border-b border-border bg-card">
                 <tr>
                   <Th>用户名</Th>
                   <Th>理由</Th>
@@ -1104,16 +1105,16 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {paged(proApps.applications, proPage).map(a => (
-                  <tr key={a.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
+                  <tr key={a.id} className="border-b border-border last:border-0 hover:bg-s2">
                     <Td className="font-medium text-foreground">{a.username}</Td>
                     <Td className="max-w-[280px]">
-                      <span className="line-clamp-2 text-[11px] text-muted-foreground" title={a.reason}>
+                      <span className="line-clamp-2 text-[12px] text-muted-foreground" title={a.reason}>
                         {a.reason || '—'}
                       </span>
                     </Td>
                     <Td>
                       <span
-                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${APP_STATUS_BADGE[a.status] || APP_STATUS_BADGE.pending}`}
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[12px] ${APP_STATUS_BADGE[a.status] || APP_STATUS_BADGE.pending}`}
                       >
                         {APP_STATUS_LABEL[a.status] || a.status}
                       </span>
@@ -1123,7 +1124,7 @@ export default function AdminPage() {
                       {a.status === 'pending' ? (
                         <div className="flex flex-col items-end gap-1">
                           <input
-                            className="h-7 w-[160px] rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[11px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                            className="h-7 w-[160px] rounded-md border border-border dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
                             placeholder="审核备注（可选）"
                             maxLength={255}
                             value={reviewNotes[a.id] || ''}
@@ -1133,7 +1134,7 @@ export default function AdminPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[11px] hover:border-emerald-500/30 hover:text-emerald-400"
+                            className="h-7 px-2 text-[12px] hover:border-emerald-500/30 hover:text-emerald-400"
                             disabled={appActionId === a.id}
                             onClick={() => void reviewApp(a, 'approve')}
                           >
@@ -1147,7 +1148,7 @@ export default function AdminPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[11px] hover:border-red-500/30 hover:text-red-400"
+                            className="h-7 px-2 text-[12px] hover:border-red-500/30 hover:text-red-400"
                             disabled={appActionId === a.id}
                             onClick={() => void reviewApp(a, 'reject')}
                           >
@@ -1156,7 +1157,7 @@ export default function AdminPage() {
                           </div>
                         </div>
                       ) : (
-                        <span className="text-[11px] text-muted-foreground">
+                        <span className="text-[12px] text-muted-foreground">
                           {a.reviewed_by ? `${a.reviewed_by} · ` : ''}
                           {formatDateTime(a.reviewed_at)}
                         </span>

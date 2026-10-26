@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Flame, Clock, ShieldCheck, Zap } from 'lucide-react'
+import PageHeader from '@/components/PageHeader'
+import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
 import AuctionAnomalyTab from '@panwatch/biz-ui/components/AuctionAnomalyTab'
 import { navBackState } from '@/lib/nav-back'
 
@@ -22,40 +23,13 @@ export default function AuctionPage() {
   )
 
   return (
-    <div className="space-y-4 p-4 lg:p-6">
-      {/* 头部战术指引卡 */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-card/60 p-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Flame className="h-5 w-5 text-orange-500" />
-            <h1 className="text-[16px] font-bold text-foreground">集合竞价·盘前打板与异动雷达</h1>
-            <span className="rounded bg-orange-500/10 px-2 py-0.5 text-[11px] font-semibold text-orange-500">
-              9:25 决战窗口
-            </span>
-          </div>
-          <p className="mt-1 text-[12px] text-muted-foreground">
-            通达信 TQ 盘口真实竞价金额与量比穿透 · 识别真金抢筹与虚假顶板 · 捕捉弱转强妖股先锋
-          </p>
-        </div>
-
-        <div className="flex items-center gap-4 text-[12px] text-muted-foreground">
-          <div className="flex items-center gap-1.5">
-            <Clock className="h-3.5 w-3.5 text-primary" />
-            <span>9:15-9:20 试盘撤单</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="h-3.5 w-3.5 text-red-500" />
-            <span>9:20-9:25 不可撤单(真金)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Zap className="h-3.5 w-3.5 text-yellow-500" />
-            <span>9:25-9:30 撮合定型</span>
-          </div>
-        </div>
-      </div>
+    <div className="page-container space-y-4">
+      <PageHeader title="集合竞价" description="对照竞价金额、量比与撤单变化，查看异常结构与数据证据。"
+        metadata={<><StatusChip>09:15–09:20 可撤单</StatusChip><StatusChip tone="info">09:20–09:25 不可撤单</StatusChip><StatusChip>09:25–09:30 撮合结果</StatusChip></>}
+      />
 
       {/* 竞价异动与爆量个股列表 */}
-      <div className="rounded-lg border border-border/40 bg-card/30 p-2">
+      <div className="analysis-section">
         <AuctionAnomalyTab market="CN" onOpenDetail={openAuctionDetail} />
       </div>
     </div>

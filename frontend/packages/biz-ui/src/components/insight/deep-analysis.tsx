@@ -52,7 +52,7 @@ export function DeepAnalysisSection({
     return (
       <div className="card p-6 text-center text-[12px] text-muted-foreground space-y-2">
         <div>暂无深度分析报告</div>
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-[12px] text-muted-foreground">
           可在持仓 / 自选页点击 🧠 深度分析按钮触发
         </div>
       </div>
@@ -66,18 +66,18 @@ export function DeepAnalysisSection({
   const costUsd = rawData.cost_usd
 
   return (
-    <div className="space-y-3 text-[13px]">
+    <div className="space-y-3 text-[14px]">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-[12px] text-muted-foreground">
           TradingAgents 深度{result?.timestamp ? ` · ${result.timestamp.slice(0, 16).replace('T', ' ')}` : ''}
         </div>
-        <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={onRefresh} disabled={loading || historyLoading}>
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={onRefresh} disabled={loading || historyLoading}>
           <RefreshCw className={`w-3.5 h-3.5 ${loading || historyLoading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
 
       {sug && (
-        <div className="rounded-lg bg-accent/30 p-4 space-y-2">
+        <div className="rounded-lg bg-s2 p-4 space-y-2">
           <div className="flex items-center gap-3">
             <span className={`text-[20px] font-bold ${DEEP_DECISION_COLOR[sug.action] || ''}`}>
               {sug.action_label}
@@ -90,7 +90,7 @@ export function DeepAnalysisSection({
           </div>
           {sug.reason && <div className="text-[12px] text-foreground">{sug.reason.slice(0, 240)}</div>}
           {typeof costUsd === 'number' && (
-            <div className="text-[10px] text-muted-foreground mt-2">成本:${costUsd.toFixed(4)}</div>
+            <div className="text-[12px] text-muted-foreground mt-2">成本:${costUsd.toFixed(4)}</div>
           )}
         </div>
       )}
@@ -98,7 +98,7 @@ export function DeepAnalysisSection({
       <DeepHistoryComparison history={history} loading={historyLoading} />
 
       {result?.content && (
-        <div className="rounded-lg border border-border/50 p-4">
+        <div className="card-surface bg-card rounded-lg p-4">
           <div className="prose prose-sm dark:prose-invert max-w-none break-words">
             <StockReportMarkdown content={result.content} />
           </div>
@@ -114,14 +114,14 @@ export function DeepAnalysisSection({
             {showAnalyst ? '▼' : '▶'} 4 位分析师报告
           </button>
           {showAnalyst && (
-            <div className="space-y-3 mt-2 pl-3 border-l-2 border-border/40">
+            <div className="space-y-3 mt-2 pl-3 border-l-2 border-border">
               {(['market', 'social', 'news', 'fundamentals'] as const).map((k) => {
                 const text = (reports as unknown as Record<string, string>)[k] || ''
                 if (!text) return null
                 return (
                   <details key={k} open className="text-[12px]">
                     <summary className="font-medium cursor-pointer">{DEEP_STAGE_LABEL[k] || k}</summary>
-                    <div className="mt-2 text-[11px] text-foreground whitespace-pre-wrap">
+                    <div className="mt-2 text-[12px] text-foreground whitespace-pre-wrap">
                       {text.slice(0, 1500)}
                       {text.length > 1500 && '... (截断)'}
                     </div>
@@ -142,7 +142,7 @@ export function DeepAnalysisSection({
             {showDebate ? '▼' : '▶'} 看多看空辩论
           </button>
           {showDebate && (
-            <div className="mt-2 pl-3 border-l-2 border-border/40 text-[11px] text-foreground whitespace-pre-wrap max-h-96 overflow-y-auto">
+            <div className="mt-2 pl-3 border-l-2 border-border text-[12px] text-foreground whitespace-pre-wrap max-h-96 overflow-y-auto">
               {debate.history}
               {debate.judge_decision && (
                 <>
@@ -155,7 +155,7 @@ export function DeepAnalysisSection({
         </div>
       )}
 
-      <div className="text-[10px] text-muted-foreground italic border-t border-border/30 pt-2">
+      <div className="text-[12px] text-muted-foreground italic border-t border-border pt-2">
         本分析由 AI 多 Agent 框架生成,仅供学习研究参考,不构成任何投资建议。
       </div>
     </div>
@@ -171,7 +171,7 @@ export function DeepHistoryComparison({
 }) {
   if (loading && !history) {
     return (
-      <div className="rounded-lg border border-border/40 p-3 text-[11px] text-muted-foreground text-center">
+      <div className="card-surface bg-card rounded-lg p-3 text-[12px] text-muted-foreground text-center">
         历史对比加载中...
       </div>
     )
@@ -186,33 +186,33 @@ export function DeepHistoryComparison({
     v == null ? 'text-muted-foreground' : v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 
   return (
-    <div className="rounded-lg border border-border/50 p-3 space-y-2">
+    <div className="card-surface bg-card rounded-lg p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="text-[12px] font-medium">历史决策 vs 实际涨跌</div>
-        <div className="text-[10px] text-muted-foreground">仅基于满 20 个交易日的决策统计</div>
+        <div className="text-[12px] text-muted-foreground">仅基于满 20 个交易日的决策统计</div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
-        <div className="rounded bg-accent/30 px-2 py-1.5">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[12px]">
+        <div className="rounded bg-s2 px-2 py-1.5">
           <div className="text-muted-foreground">总命中率</div>
           <div className="font-semibold">{fmtPct(stats.overall_hit_rate)}</div>
         </div>
-        <div className="rounded bg-accent/30 px-2 py-1.5">
+        <div className="rounded bg-s2 px-2 py-1.5">
           <div className="text-muted-foreground">买入 ({stats.buy_count})</div>
           <div className="font-semibold text-stock-up">{fmtPct(stats.buy_hit_rate)}</div>
         </div>
-        <div className="rounded bg-accent/30 px-2 py-1.5">
+        <div className="rounded bg-s2 px-2 py-1.5">
           <div className="text-muted-foreground">卖出 ({stats.sell_count})</div>
           <div className="font-semibold text-stock-down">{fmtPct(stats.sell_hit_rate)}</div>
         </div>
-        <div className="rounded bg-accent/30 px-2 py-1.5">
+        <div className="rounded bg-s2 px-2 py-1.5">
           <div className="text-muted-foreground">平均 20 日收益</div>
           <div className={`font-semibold ${retCls(stats.avg_return_20d_pct)}`}>{fmtRet(stats.avg_return_20d_pct)}</div>
         </div>
       </div>
       <div className="overflow-x-auto -mx-1 mt-2">
-        <table className="w-full text-[11px]">
+        <table className="w-full text-[12px]">
           <thead className="text-muted-foreground">
-            <tr className="border-b border-border/40">
+            <tr className="border-b border-border">
               <th className="text-left px-1 py-1 font-normal">日期</th>
               <th className="text-left px-1 py-1 font-normal">决策</th>
               <th className="text-right px-1 py-1 font-normal">分析价</th>
@@ -224,12 +224,12 @@ export function DeepHistoryComparison({
           </thead>
           <tbody>
             {history.items.map((item, i) => (
-              <tr key={`${item.analysis_date}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
+              <tr key={`${item.analysis_date}-${i}`} className="border-b border-border hover:bg-s2">
                 <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.analysis_date}</td>
                 <td className="px-1 py-1">
                   <span className={DEEP_DECISION_COLOR[item.action] || ''}>{item.action_label}</span>
                   {typeof item.confidence === 'number' && (
-                    <span className="text-muted-foreground text-[10px] ml-1">({item.confidence.toFixed(1)})</span>
+                    <span className="text-muted-foreground text-[12px] ml-1">({item.confidence.toFixed(1)})</span>
                   )}
                 </td>
                 <td className="px-1 py-1 text-right text-foreground">{item.price_at_analysis ?? '-'}</td>

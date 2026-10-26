@@ -11,7 +11,7 @@ import { readCollapsed, writeCollapsed } from '@/lib/dashboard-collapse'
  *     否则用户收起后还得再点开才能确认值 —— 那就不是折叠，是藏。
  *   · **收起时不挂 children**：重区块（面积图/列表）不该为看不见的东西跑取数与渲染。
  *   · **状态按块记**：`readCollapsed(id)` 走 localStorage，块与块互不影响。
- *   · 表头是**信息行**不是工具栏：标题 13/600、摘要 12/常规，只有右侧一个 28px 开关。
+ *   · 表头是**信息行**不是工具栏：标题 14/600、摘要 12/常规，右侧使用统一尺寸的折叠按钮。
  */
 export default function CollapsibleSection({
   id,
@@ -21,6 +21,8 @@ export default function CollapsibleSection({
   bodyClassName = '',
   defaultCollapsed = true,
   onExpand,
+  onCollapsedChange,
+  presentation = 'panel',
 }: {
   /** localStorage 键后缀（也是 data-testid 后缀），块内唯一即可 */
   id: string
@@ -32,37 +34,39 @@ export default function CollapsibleSection({
   defaultCollapsed?: boolean
   /** 首次展开时回调（用于"展开才取数"：首屏不该为看不见的块发请求） */
   onExpand?: () => void
+  onCollapsedChange?: (collapsed: boolean) => void
+  presentation?: 'panel' | 'group'
 }) {
   const [collapsed, setCollapsed] = useState(() => readCollapsed(id, defaultCollapsed))
   const toggle = useCallback(() => {
-    setCollapsed((prev) => {
-      const next = !prev
-      writeCollapsed(id, next)
-      if (!next) onExpand?.()
-      return next
-    })
-  }, [id, onExpand])
+    const next = !collapsed
+    setCollapsed(next)
+    writeCollapsed(id, next)
+    onCollapsedChange?.(next)
+    if (!next) onExpand?.()
+  }, [collapsed, id, onExpand, onCollapsedChange])
 
   return (
     <section
       data-testid={`evidence-${id}`}
       data-collapsed={collapsed ? 'true' : 'false'}
-      className={className}
+      className={'card-surface ' + (`w-full self-start ${presentation === 'group' ? 'space-y-3' : 'overflow-hidden rounded-xl bg-card shadow-panel'} ${className}`)}
     >
-      <div className="flex items-start justify-between gap-2 border-t border-border/60 pt-2.5">
+      <div className={'card-surface ' + (`flex items-center justify-between gap-3 px-4 py-3 ${presentation === 'group' ? 'rounded-xl bg-card shadow-panel' : ''}`)}>
         <div className="min-w-0 flex-1">{header}</div>
         <button
           type="button"
           data-testid={`evidence-toggle-${id}`}
           aria-expanded={!collapsed}
+          aria-controls={`evidence-body-${id}`}
           onClick={toggle}
-          className="flex min-h-[28px] shrink-0 items-center gap-0.5 rounded px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-s2 hover:text-foreground"
+          className="flex min-h-9 shrink-0 items-center gap-0.5 rounded px-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-s2 hover:text-foreground"
         >
           {collapsed ? '展开' : '收起'}
           <ChevronDown className={`h-3 w-3 transition-transform ${collapsed ? '' : 'rotate-180'}`} />
         </button>
       </div>
-      {collapsed ? null : <div className={bodyClassName || 'mt-2'}>{children}</div>}
+      {collapsed ? null : <div id={`evidence-body-${id}`} data-testid={`evidence-body-${id}`} className={`${presentation === 'group' ? 'min-w-0' : 'border-t border-border p-4'} ${bodyClassName}`}>{children}</div>}
     </section>
   )
 }

@@ -4,7 +4,7 @@ export default {
   content: [
     './index.html',
     './src/**/*.{ts,tsx}',
-    './packages/**/*.{ts,tsx}',
+    './packages/*/src/**/*.{ts,tsx}',
   ],
   theme: {
     extend: {
@@ -36,6 +36,14 @@ export default {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
         },
+        popover: {
+          DEFAULT: 'hsl(var(--popover))',
+          foreground: 'hsl(var(--popover-foreground))',
+        },
+        success: {
+          DEFAULT: 'hsl(var(--success) / <alpha-value>)',
+          foreground: 'hsl(var(--success-foreground))',
+        },
         card: {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
@@ -61,8 +69,8 @@ export default {
           p4: 'var(--heat-p4)', p5: 'var(--heat-p5)',
         },
         stock: {
-          up: '#E53935',
-          down: '#43A047',
+          up: 'var(--stock-up)',
+          down: 'var(--stock-down)',
         },
         /* GS 买卖语义色(2026-09-12 借鉴 TSP 的涨跌色治理):
            stock-up/down 只用于**价格与K线**; "买入/加仓""卖出/减仓"这类交易动作
@@ -72,6 +80,7 @@ export default {
           stop: 'var(--gs-stop)',
         },
       },
+      boxShadow: { panel: 'var(--shadow-panel)' },
       transitionDuration: {
         instant: 'var(--dur-instant)',
         fast: 'var(--dur-fast)',

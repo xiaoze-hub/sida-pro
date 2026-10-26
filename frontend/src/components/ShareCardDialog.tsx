@@ -65,7 +65,7 @@ export default function ShareCardDialog({
         </DialogHeader>
 
         {/* 预览区:外层用主题背景,内层卡片自带显式配色 */}
-        <div className="flex justify-center overflow-x-auto rounded-xl bg-accent/30 p-4 scrollbar">
+        <div className="flex justify-center overflow-x-auto rounded-xl bg-s2 p-4 scrollbar">
           {/* 导出卡片:固定宽度,所有颜色显式内联,不依赖主题 CSS 变量 */}
           <div
             ref={cardRef}

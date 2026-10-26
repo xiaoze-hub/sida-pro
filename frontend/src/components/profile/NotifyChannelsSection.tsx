@@ -72,26 +72,26 @@ export function NotifyChannelsSection() {
   }
 
   return (
-    <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+    <section className="analysis-section">
       <div className="flex items-start justify-between mb-4 gap-3">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Bell className="w-4 h-4 text-primary" />
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">通知渠道</h3>
+            <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">通知渠道</h3>
           </div>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[12px] text-muted-foreground">
             管理你的推送通道。添加/编辑请前往
             <button
               type="button"
               className="mx-0.5 text-primary underline-offset-2 hover:underline"
-              onClick={() => navigate('/settings?tab=settings')}
+              onClick={() => navigate('/settings?tab=settings&section=sec-notify')}
             >
               设置页
             </button>
             。
           </p>
         </div>
-        <Button size="sm" variant="outline" className="h-8" onClick={() => navigate('/settings?tab=settings')}>
+        <Button size="sm" variant="outline" className="h-8" onClick={() => navigate('/settings?tab=settings&section=sec-notify')}>
           <Plus className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">添加</span>
         </Button>
@@ -106,7 +106,7 @@ export function NotifyChannelsSection() {
           {channels.map(ch => (
             <div
               key={ch.id}
-              className="flex items-center justify-between gap-3 border-b border-border/40 px-1 py-2.5"
+              className="flex items-center justify-between gap-3 border-b border-border px-1 py-2.5"
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 {ch.is_default && (
@@ -114,14 +114,14 @@ export function NotifyChannelsSection() {
                 )}
                 <div className="min-w-0">
                   <span className="text-[12px] font-medium text-foreground">{ch.name}</span>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">{ch.type}</p>
+                  <p className="text-[12px] text-muted-foreground mt-0.5">{ch.type}</p>
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 px-2 text-[11px]"
+                  className="h-7 px-2 text-[12px]"
                   onClick={() => void testChannel(ch.id)}
                   disabled={testing === ch.id || !ch.enabled}
                   title="发送测试"
@@ -148,7 +148,7 @@ export function NotifyChannelsSection() {
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7"
-                  onClick={() => navigate('/settings?tab=settings')}
+                  onClick={() => navigate('/settings?tab=settings&section=sec-notify')}
                   title="编辑"
                 >
                   <Pencil className="w-3.5 h-3.5" />

@@ -28,8 +28,8 @@ export interface StockColors {
 /** 读取涨跌色令牌。图表 JS 统一入口, 禁止再硬编码 #ef4444/#22c55e 等。 */
 export function readStockColors(): StockColors {
   return {
-    up: cssVar('--stock-up', '#E53935'),
-    down: cssVar('--stock-down', '#43A047'),
+    up: cssVar('--stock-up', '#bf293b'),
+    down: cssVar('--stock-down', '#18764b'),
   }
 }
 
@@ -182,8 +182,8 @@ export function gsColorFor(side: GsSide, colors: GsColors = readGsColors()): str
 
 export function readGsColors(): GsColors {
   return {
-    go: cssVar('--gs-go', cssVar('--stock-up', '#E53935')),
-    stop: cssVar('--gs-stop', cssVar('--stock-down', '#43A047')),
+    go: cssVar('--gs-go', cssVar('--stock-up', '#bf293b')),
+    stop: cssVar('--gs-stop', cssVar('--stock-down', '#18764b')),
   }
 }
 

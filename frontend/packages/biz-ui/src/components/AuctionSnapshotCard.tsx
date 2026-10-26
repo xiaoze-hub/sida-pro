@@ -7,7 +7,7 @@ import { fetchAPI } from '@panwatch/api'
  * GET /api/auction-snapshot?symbol=XXX (fetchAPI 自动补 /api 前缀)。
  * 展示: 今日竞价 高开+3.38% | 撤单率 24.3% | 操作量 535.75万股 | 成交 5357.5万
  * available=false / 请求失败 -> 渲染 null(不占位不报错); 加载中显示暗色骨架。
- * 深色主题风格与 DarkFlowCards 一致(bg-card / border-border/50 / text-[11px])。
+ * 深色主题风格与 DarkFlowCards 一致(bg-card / border-border / text-[12px])。
  */
 
 export interface AuctionSnapshotData {
@@ -73,7 +73,7 @@ export default function AuctionSnapshotCard({ symbol, market }: { symbol: string
 
   // 加载中: 暗色骨架(与 DarkFlowCards 占位风格一致)
   if (loading) {
-    return <div className="mt-3 h-[28px] rounded-xl border border-border/50 bg-card animate-pulse bg-accent/20" />
+    return <div className="card-surface mt-3 h-[28px] rounded-xl bg-card animate-pulse bg-s2" />
   }
 
   // 无数据 / 请求失败 / 后端 available=false -> 渲染 null
@@ -89,7 +89,7 @@ export default function AuctionSnapshotCard({ symbol, market }: { symbol: string
       : '--'
 
   return (
-    <div className="mt-3 flex items-center gap-3 overflow-x-auto whitespace-nowrap rounded-xl border border-border/50 bg-card px-3 py-1.5 text-[11px] text-muted-foreground">
+    <div className="card-surface mt-3 flex items-center gap-3 overflow-x-auto whitespace-nowrap rounded-xl bg-card px-3 py-1.5 text-[12px] text-muted-foreground">
       <span className="font-medium">今日竞价</span>
       <span className={gapColor(data.direction)}>
         {data.direction === '无数据' ? '无数据' : `${data.direction}${gapText}`}

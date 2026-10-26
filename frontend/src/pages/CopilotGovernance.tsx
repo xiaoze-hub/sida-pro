@@ -11,6 +11,8 @@
  * - 统计缺失就是 `--`，不写成 0。
  */
 import { useCallback, useEffect, useState } from 'react'
+import PageHeader from '@/components/PageHeader'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@panwatch/base-ui/components/ui/tabs'
 import { safeFixed } from '@/lib/format'
 import { Loader2, Plus, RefreshCw } from 'lucide-react'
 import { authApi } from '@panwatch/api'
@@ -100,33 +102,17 @@ export default function CopilotGovernancePage() {
 
   return (
     <div className="space-y-3" data-testid="copilot-governance-page">
-      <header className="flex flex-wrap items-center gap-2">
-        <h1 className="text-[16px] font-medium">数智参谋 · 治理</h1>
-        <span className="text-[11px] text-muted-foreground">轨迹 / 成本 / 配额（客观证据 · 不构成买卖指令）</span>
-        <div className="ml-auto flex items-center gap-1">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              title={t.hint}
-              onClick={() => setTab(t.id)}
-              className={`rounded-md border px-2.5 py-1 text-[11px] ${
-                tab === t.id
-                  ? 'border-role-watch/60 bg-role-watch/10 text-foreground'
-                  : 'border-border/60 text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </header>
-
-      {tab === 'traces' ? <TracesTab /> : null}
-      {tab === 'cost' ? <CostTab /> : null}
-      {tab === 'quota' ? <QuotaTab /> : null}
-      {tab === 'memory' ? <MemoryTab /> : null}
-      {tab === 'schedule' ? <ScheduleTab /> : null}
+      <PageHeader title="数智参谋 · 治理" description="轨迹、成本、配额与偏好设置 · 客观证据不构成买卖指令" />
+      <Tabs value={tab} onValueChange={value => setTab(value as Tab)}>
+        <TabsList className="h-auto flex-wrap">
+          {TABS.map(item => <TabsTrigger key={item.id} value={item.id} title={item.hint}>{item.label}</TabsTrigger>)}
+        </TabsList>
+      <TabsContent value="traces"><TracesTab /></TabsContent>
+      <TabsContent value="cost"><CostTab /></TabsContent>
+      <TabsContent value="quota"><QuotaTab /></TabsContent>
+      <TabsContent value="memory"><MemoryTab /></TabsContent>
+      <TabsContent value="schedule"><ScheduleTab /></TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -174,16 +160,16 @@ function TracesTab() {
     <div className="space-y-3">
       {/* P3：按配方质量拆解。没有这层，就只能看到「总 ok 率」，看不出是哪份配方在坏。 */}
       {metrics && metrics.by_recipe.length > 0 ? (
-        <section className="rounded-xl border border-border/60 bg-s1" data-testid="recipe-health">
-          <div className="flex items-baseline justify-between gap-2 border-b border-border/40 px-3 py-2">
+        <section className="card-surface rounded-xl bg-s1" data-testid="recipe-health">
+          <div className="flex items-baseline justify-between gap-2 border-b border-border px-3 py-2">
             <span className="text-[12px]">按配方质量 · 近 7 天</span>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[12px] text-muted-foreground">
               总计 <span className="font-mono tabular-nums text-foreground">{num(metrics.runs)}</span> 轮 · 降级率{' '}
               <span className="font-mono tabular-nums text-foreground">{rate(metrics.degraded_rate)}</span> · 零工具{' '}
               <span className="font-mono tabular-nums text-foreground">{num(metrics.zero_tool_runs)}</span> 轮
             </span>
           </div>
-          <table className="w-full text-[11px]">
+          <table className="w-full text-[12px]">
             <thead className="text-muted-foreground">
               <tr>
                 <th className="px-2 py-1.5 text-left font-normal">配方</th>
@@ -197,7 +183,7 @@ function TracesTab() {
             </thead>
             <tbody>
               {metrics.by_recipe.map((r) => (
-                <tr key={r.recipe} className="border-t border-border/30" data-testid="recipe-health-row">
+                <tr key={r.recipe} className="border-t border-border" data-testid="recipe-health-row">
                   <td
                     className="max-w-[200px] truncate px-2 py-1.5 font-mono text-foreground"
                     title={r.recipe}
@@ -238,26 +224,26 @@ function TracesTab() {
       ) : null}
 
       <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
-          <section className="rounded-xl border border-border/60 bg-s1">
-            <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
+          <section className="card-surface rounded-xl bg-s1">
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
               <span className="text-[12px]">最近 50 轮</span>
               <button
                 type="button"
-                className="flex items-center gap-1 text-[11px] text-muted-foreground"
+                className="flex items-center gap-1 text-[12px] text-muted-foreground"
                 onClick={() => void load()}
               >
                 <RefreshCw className="h-3 w-3" /> 刷新
               </button>
           </div>
           {loading ? (
-            <div className="flex items-center gap-2 px-3 py-6 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-2 px-3 py-6 text-[12px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
             </div>
           ) : rows.length === 0 ? (
-            <div className="px-3 py-6 text-[11px] text-muted-foreground">还没有轨迹（提问一次就会产生）</div>
+            <div className="px-3 py-6 text-[12px] text-muted-foreground">还没有轨迹（提问一次就会产生）</div>
           ) : (
             <div className="max-h-[62vh] overflow-y-auto">
-              <table className="w-full text-[11px]">
+              <table className="w-full text-[12px]">
                 <thead className="sticky top-0 bg-s1 text-muted-foreground">
                   <tr>
                     <th className="px-2 py-1.5 text-left font-normal">时间</th>
@@ -273,7 +259,7 @@ function TracesTab() {
                   {rows.map((r) => (
                     <tr
                       key={r.run_id}
-                      className="cursor-pointer border-t border-border/30 hover:bg-s2"
+                      className="cursor-pointer border-t border-border hover:bg-s2"
                       onClick={() => void open(r.run_id)}
                     >
                       <td className="whitespace-nowrap px-2 py-1.5 font-mono text-muted-foreground">
@@ -298,41 +284,41 @@ function TracesTab() {
           )}
         </section>
 
-        <section className="rounded-xl border border-border/60 bg-s1">
-          <div className="border-b border-border/40 px-3 py-2 text-[12px]">回放</div>
+        <section className="card-surface rounded-xl bg-s1">
+          <div className="border-b border-border px-3 py-2 text-[12px]">回放</div>
           {detailLoading ? (
-            <div className="flex items-center gap-2 px-3 py-6 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-2 px-3 py-6 text-[12px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
             </div>
           ) : !detail ? (
-            <div className="px-3 py-6 text-[11px] text-muted-foreground">点左侧任意一行看这轮怎么跑的</div>
+            <div className="px-3 py-6 text-[12px] text-muted-foreground">点左侧任意一行看这轮怎么跑的</div>
           ) : (
             <div className="max-h-[62vh] space-y-2 overflow-y-auto px-3 py-2">
-              <div className="space-y-0.5 text-[11px]">
+              <div className="space-y-0.5 text-[12px]">
                 <div className="text-muted-foreground">
                   {detail.run.created_at} · 状态 {detail.run.status} · {detail.run.tool_calls} 个工具 · {ms(detail.run.elapsed_ms)}
                 </div>
                 <div className="text-foreground">{detail.run.question || '（无问题文本）'}</div>
               </div>
               {detail.steps.length === 0 ? (
-                <div className="text-[11px] text-muted-foreground">这轮没有工具调用（纯文本回答）</div>
+                <div className="text-[12px] text-muted-foreground">这轮没有工具调用（纯文本回答）</div>
               ) : (
                 <ol className="space-y-1.5">
                   {detail.steps.map((s) => (
-                    <li key={s.seq} className="rounded-md border border-border/50 px-2 py-1.5">
-                      <div className="flex items-center gap-1.5 text-[11px]">
+                    <li key={s.seq} className="rounded-md border border-border px-2 py-1.5">
+                      <div className="flex items-center gap-1.5 text-[12px]">
                         <span className="font-mono text-muted-foreground">#{s.seq}</span>
                         <span className="font-medium">{s.tool}</span>
                         <span className={s.ok ? 'text-role-up' : 'text-role-risk'}>{s.ok ? 'ok' : '失败'}</span>
                         <span className="ml-auto font-mono text-muted-foreground">{ms(s.elapsed_ms)}</span>
                       </div>
                       {s.args ? (
-                        <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={s.args}>
+                        <div className="mt-1 truncate font-mono text-[12px] text-muted-foreground" title={s.args}>
                           args: {s.args}
                         </div>
                       ) : null}
                       {s.result_digest ? (
-                        <div className="mt-1 whitespace-pre-wrap break-words text-[10px] text-muted-foreground">
+                        <div className="mt-1 whitespace-pre-wrap break-words text-[12px] text-muted-foreground">
                           {s.result_digest}
                         </div>
                       ) : null}
@@ -375,34 +361,34 @@ function CostTab() {
             key={d}
             type="button"
             onClick={() => setDays(d)}
-            className={`rounded-md border px-2 py-0.5 text-[11px] ${
-              days === d ? 'border-role-watch/60 text-foreground' : 'border-border/60 text-muted-foreground'
+            className={`rounded-md border px-2 py-0.5 text-[12px] ${
+              days === d ? 'border-role-watch/60 text-foreground' : 'border-border text-muted-foreground'
             }`}
           >
             近 {d} 天
           </button>
         ))}
-        <span className="ml-auto text-[11px] text-muted-foreground">
+        <span className="ml-auto text-[12px] text-muted-foreground">
           合计 token <span className="font-mono text-foreground">{num(data?.total_tokens)}</span> · 调用{' '}
           <span className="font-mono text-foreground">{num(data?.total_calls)}</span>
         </span>
       </div>
 
       {loading ? (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
         </div>
       ) : !data ? (
-        <div className="text-[11px] text-muted-foreground">成本数据读取失败</div>
+        <div className="text-[12px] text-muted-foreground">成本数据读取失败</div>
       ) : (
         <>
           {data.unpriced_models.length > 0 ? (
-            <div className="rounded-md border border-border/50 px-2 py-1.5 text-[11px] text-muted-foreground">
+            <div className="card-surface bg-card rounded-md px-2 py-1.5 text-[12px] text-muted-foreground">
               未配置单价的模型：{data.unpriced_models.join('、')} —— 这些的金额显示 `--`，不估算
             </div>
           ) : null}
 
-          <section className="rounded-xl border border-border/60 bg-s1 p-3">
+          <section className="card-surface rounded-xl bg-s1 p-3">
             <div className="mb-2 text-[12px]">按日 token</div>
             <div className="flex h-24 items-end gap-1">
               {(data.by_day || []).map((d) => (
@@ -411,19 +397,19 @@ function CostTab() {
                     className="w-full rounded-t bg-role-watch/60"
                     style={{ height: `${Math.max(2, (d.tokens / maxTokens) * 90)}px` }}
                   />
-                  <div className="mt-1 text-center text-[10px] text-muted-foreground">{String(d.date).slice(5)}</div>
+                  <div className="mt-1 text-center text-[12px] text-muted-foreground">{String(d.date).slice(5)}</div>
                 </div>
               ))}
             </div>
           </section>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <section className="rounded-xl border border-border/60 bg-s1">
-              <div className="border-b border-border/40 px-3 py-2 text-[12px]">按模型</div>
-              <table className="w-full text-[11px]">
+            <section className="card-surface rounded-xl bg-s1">
+              <div className="border-b border-border px-3 py-2 text-[12px]">按模型</div>
+              <table className="w-full text-[12px]">
                 <tbody>
                   {(data.by_model || []).map((m) => (
-                    <tr key={m.model} className="border-t border-border/30">
+                    <tr key={m.model} className="border-t border-border">
                       <td className="px-2 py-1.5 font-mono">{m.model}</td>
                       <td className="px-2 py-1.5 text-right font-mono">{num(m.tokens)}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
@@ -435,14 +421,14 @@ function CostTab() {
               </table>
             </section>
 
-            <section className="rounded-xl border border-border/60 bg-s1">
-              <div className="border-b border-border/40 px-3 py-2 text-[12px]">
+            <section className="card-surface rounded-xl bg-s1">
+              <div className="border-b border-border px-3 py-2 text-[12px]">
                 按用户{data.scope === 'self' ? '（仅自己）' : ''}
               </div>
-              <table className="w-full text-[11px]">
+              <table className="w-full text-[12px]">
                 <tbody>
                   {(data.by_user || []).map((u) => (
-                    <tr key={u.user_id} className="border-t border-border/30">
+                    <tr key={u.user_id} className="border-t border-border">
                       <td className="max-w-[160px] truncate px-2 py-1.5 font-mono">{u.user_id}</td>
                       <td className="px-2 py-1.5 text-right font-mono">{num(u.tokens)}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
@@ -533,7 +519,7 @@ function QuotaTab() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
       </div>
     )
@@ -541,16 +527,16 @@ function QuotaTab() {
 
   return (
     <div className="space-y-2">
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-[12px] text-muted-foreground">
         没有记录 = 不限。填 0 表示该维度禁止。超限时接口直接 429，不靠提示词提醒。
         {scope === 'self' ? '（普通账号只能看自己）' : ''}
       </div>
-      {error ? <div className="text-[11px] text-role-risk">{error}</div> : null}
+      {error ? <div className="text-[12px] text-role-risk">{error}</div> : null}
       {scope === 'all' && users.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/50 px-2 py-1.5">
-          <span className="text-[11px] text-muted-foreground">新增/覆盖配额</span>
+        <div className="card-surface bg-card flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5">
+          <span className="text-[12px] text-muted-foreground">新增/覆盖配额</span>
           <select
-            className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+            className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
             value={pick}
             onChange={(e) => setPick(e.target.value)}
           >
@@ -561,20 +547,20 @@ function QuotaTab() {
             ))}
           </select>
           <input
-            className="w-20 rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+            className="w-20 rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
             placeholder="轮数/天"
             value={newRuns}
             onChange={(e) => setNewRuns(e.target.value.replace(/[^0-9]/g, ''))}
           />
           <input
-            className="w-28 rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+            className="w-28 rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
             placeholder="tokens/天"
             value={newTokens}
             onChange={(e) => setNewTokens(e.target.value.replace(/[^0-9]/g, ''))}
           />
           <button
             type="button"
-            className="flex items-center gap-1 rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
             disabled={!pick || saving !== null}
             onClick={() =>
               void save(
@@ -592,9 +578,9 @@ function QuotaTab() {
       ) : null}
 
       {rows.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground">还没有任何配额记录（全员不限）</div>
+        <div className="text-[12px] text-muted-foreground">还没有任何配额记录（全员不限）</div>
       ) : (
-        <table className="w-full text-[11px]">
+        <table className="w-full text-[12px]">
           <thead className="text-muted-foreground">
             <tr>
               <th className="px-2 py-1.5 text-left font-normal">用户</th>
@@ -636,14 +622,14 @@ function QuotaRow({
   const [tokens, setTokens] = useState(row.daily_tokens == null ? '' : String(row.daily_tokens))
 
   return (
-    <tr className="border-t border-border/30">
+    <tr className="border-t border-border">
       <td className="max-w-[180px] truncate px-2 py-1.5 font-mono" title={row.user_id}>
         {nameOf(row.user_id)}
       </td>
       <td className="px-2 py-1.5 text-right font-mono">
         {num(row.used_runs)} /{' '}
         <input
-          className="w-16 rounded border border-border/60 bg-transparent px-1 text-right font-mono"
+          className="w-16 rounded border border-border bg-transparent px-1 text-right font-mono"
           value={runs}
           placeholder="不限"
           onChange={(e) => setRuns(e.target.value.replace(/[^0-9]/g, ''))}
@@ -652,7 +638,7 @@ function QuotaRow({
       <td className="px-2 py-1.5 text-right font-mono">
         {num(row.used_tokens)} /{' '}
         <input
-          className="w-24 rounded border border-border/60 bg-transparent px-1 text-right font-mono"
+          className="w-24 rounded border border-border bg-transparent px-1 text-right font-mono"
           value={tokens}
           placeholder="不限"
           onChange={(e) => setTokens(e.target.value.replace(/[^0-9]/g, ''))}
@@ -668,7 +654,7 @@ function QuotaRow({
       <td className="px-2 py-1.5 text-right">
         <button
           type="button"
-          className="rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          className="rounded border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
           disabled={saving}
           onClick={() =>
             void onSave(row, {
@@ -732,12 +718,12 @@ function MemoryTab() {
 
   return (
     <div className="space-y-2">
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-[12px] text-muted-foreground">
         只记你**明确说过**的（「记住…」「以后都…」「我的口径是…」）。删掉就不再注入；权重 ≥9 的每条都会带上。
       </div>
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/50 px-2 py-1.5">
+      <div className="card-surface bg-card flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5">
         <select
-          className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+          className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
           value={kind}
           onChange={(e) => setKind(e.target.value)}
         >
@@ -746,46 +732,46 @@ function MemoryTab() {
           ))}
         </select>
         <input
-          className="min-w-[240px] flex-1 rounded border border-border/60 bg-transparent px-2 py-0.5 text-[11px]"
+          className="min-w-[240px] flex-1 rounded border border-border bg-transparent px-2 py-0.5 text-[12px]"
           placeholder="例如：我只做主板，不碰北交所"
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
         <button
           type="button"
-          className="rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          className="rounded border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
           disabled={busy || text.trim().length < 2}
           onClick={() => void add()}
         >
           {busy ? '保存中…' : '记住'}
         </button>
       </div>
-      {error ? <div className="text-[11px] text-role-risk">{error}</div> : null}
+      {error ? <div className="text-[12px] text-role-risk">{error}</div> : null}
       {loading ? (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
         </div>
       ) : rows.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground">还没有记忆。下次直接说「记住…」就会自动记下。</div>
+        <div className="text-[12px] text-muted-foreground">还没有记忆。下次直接说「记住…」就会自动记下。</div>
       ) : (
         <ul className="space-y-1">
           {rows.map((r) => (
-            <li key={r.id} className="flex items-start gap-2 rounded-md border border-border/50 px-2 py-1.5">
-              <span className="mt-0.5 rounded bg-s2 px-1 text-[10px] text-muted-foreground">
+            <li key={r.id} className="flex items-start gap-2 rounded-md border border-border px-2 py-1.5">
+              <span className="mt-0.5 rounded bg-s2 px-1 text-[12px] text-muted-foreground">
                 {KIND_LABEL[r.kind] || r.kind}
               </span>
-              <span className="min-w-0 flex-1 text-[11px]">{r.content}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">w{r.weight} · 用{r.hits}次</span>
+              <span className="min-w-0 flex-1 text-[12px]">{r.content}</span>
+              <span className="font-mono text-[12px] text-muted-foreground">w{r.weight} · 用{r.hits}次</span>
               <button
                 type="button"
-                className="text-[10px] text-muted-foreground hover:text-foreground"
+                className="text-[12px] text-muted-foreground hover:text-foreground"
                 onClick={() => void patchMemory(r.id, false).then(() => setRows((p) => p.filter((x) => x.id !== r.id)))}
               >
                 停用
               </button>
               <button
                 type="button"
-                className="text-[10px] text-muted-foreground hover:text-role-risk"
+                className="text-[12px] text-muted-foreground hover:text-role-risk"
                 onClick={() => void deleteMemory(r.id).then(() => setRows((p) => p.filter((x) => x.id !== r.id)))}
               >
                 删
@@ -836,12 +822,12 @@ function ScheduleTab() {
 
   return (
     <div className="space-y-2">
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-[12px] text-muted-foreground">
         只在交易日执行；结果写成一条消息进会话。到点时若取不到数据，不写空内容、也不标记为已跑。
       </div>
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/50 px-2 py-1.5">
+      <div className="card-surface bg-card flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5">
         <select
-          className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+          className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
           value={kind}
           onChange={(e) => setKind(e.target.value)}
         >
@@ -849,30 +835,30 @@ function ScheduleTab() {
           <option value="daily_brief">收盘小结</option>
         </select>
         <input
-          className="w-20 rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+          className="w-20 rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
           value={at}
           onChange={(e) => setAt(e.target.value)}
           placeholder="09:25"
         />
-        <span className="text-[10px] text-muted-foreground">周一至周五</span>
+        <span className="text-[12px] text-muted-foreground">周一至周五</span>
         <button
           type="button"
-          className="rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          className="rounded border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
           disabled={busy}
           onClick={() => void add()}
         >
           {busy ? '创建中…' : '新建'}
         </button>
       </div>
-      {error ? <div className="text-[11px] text-role-risk">{error}</div> : null}
+      {error ? <div className="text-[12px] text-role-risk">{error}</div> : null}
       {loading ? (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
         </div>
       ) : rows.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground">还没有定时任务。也可以在对话里说「每天 9:25 帮我看竞价」。</div>
+        <div className="text-[12px] text-muted-foreground">还没有定时任务。也可以在对话里说「每天 9:25 帮我看竞价」。</div>
       ) : (
-        <table className="w-full text-[11px]">
+        <table className="w-full text-[12px]">
           <thead className="text-muted-foreground">
             <tr>
               <th className="px-2 py-1.5 text-left font-normal">类型</th>
@@ -884,7 +870,7 @@ function ScheduleTab() {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-t border-border/30">
+              <tr key={r.id} className="border-t border-border">
                 <td className="px-2 py-1.5">{r.kind === 'auction_digest' ? '竞价摘要' : '收盘小结'}</td>
                 <td className="px-2 py-1.5 font-mono">{r.at_hhmm}</td>
                 <td className="px-2 py-1.5 text-muted-foreground">{r.weekdays}</td>
@@ -892,7 +878,7 @@ function ScheduleTab() {
                 <td className="px-2 py-1.5 text-right">
                   <button
                     type="button"
-                    className="mr-2 text-[10px] text-muted-foreground hover:text-foreground"
+                    className="mr-2 text-[12px] text-muted-foreground hover:text-foreground"
                     onClick={() =>
                       void patchSchedule(r.id, !r.enabled).then(() =>
                         setRows((p) => p.map((x) => (x.id === r.id ? { ...x, enabled: !x.enabled } : x))),
@@ -903,7 +889,7 @@ function ScheduleTab() {
                   </button>
                   <button
                     type="button"
-                    className="text-[10px] text-muted-foreground hover:text-role-risk"
+                    className="text-[12px] text-muted-foreground hover:text-role-risk"
                     onClick={() => void deleteSchedule(r.id).then(() => setRows((p) => p.filter((x) => x.id !== r.id)))}
                   >
                     删

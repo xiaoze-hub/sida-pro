@@ -69,7 +69,7 @@ export function InfoTip({ k }: { k: string }) {
   if (!tip) return null
   return (
     <span
-      className="ml-1 inline-flex h-3 w-3 items-center justify-center rounded-full bg-muted-foreground/15 text-[10px] text-muted-foreground cursor-help"
+      className="ml-1 inline-flex h-3 w-3 items-center justify-center rounded-full bg-muted-foreground/15 text-[12px] text-muted-foreground cursor-help"
       title={tip}
     >
       ?
@@ -181,17 +181,17 @@ export function StockReportMarkdown({ content }: { content: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         table: ({ children }) => (
-          <div className="my-4 max-w-full overflow-x-auto rounded-lg border border-border/60">
+          <div className="card-surface bg-card my-4 max-w-full overflow-x-auto rounded-lg ">
             <table className="m-0 w-max min-w-full border-collapse text-[12px]">{children}</table>
           </div>
         ),
         th: ({ children }) => (
-          <th className="whitespace-nowrap border-b border-r border-border/60 bg-accent/50 px-3 py-2 text-left font-semibold last:border-r-0">
+          <th className="whitespace-nowrap border-b border-r border-border bg-s2 px-3 py-2 text-left font-semibold last:border-r-0">
             {children}
           </th>
         ),
         td: ({ children }) => (
-          <td className="min-w-[96px] border-b border-r border-border/40 px-3 py-2 align-top last:border-r-0">
+          <td className="min-w-[96px] border-b border-r border-border px-3 py-2 align-top last:border-r-0">
             {children}
           </td>
         ),
@@ -258,7 +258,7 @@ export function TechnicalIndicatorStrip(props: {
         <TechnicalBadge label={`评分 ${Number(score ?? 0).toFixed(1)}`} tone="neutral" size="xs" className="text-foreground" />
       </div>
       {evidence.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 text-[10px]">
+        <div className="flex flex-wrap gap-1.5 text-[12px]">
           {evidence.slice(0, 6).map((item, idx) => (
             <TechnicalBadge
               key={`${item.text}-${idx}`}

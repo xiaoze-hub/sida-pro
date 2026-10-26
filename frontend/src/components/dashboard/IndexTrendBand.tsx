@@ -142,7 +142,7 @@ export default function IndexTrendBand({ defaultSymbol = '000001' }: { defaultSy
               aria-selected={i.symbol === symbol}
               data-testid={`trend-tab-${i.symbol}`}
               onClick={() => setSymbol(i.symbol)}
-              className={`rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+              className={`rounded px-1.5 py-0.5 text-[12px] transition-colors ${
                 i.symbol === symbol
                   ? 'bg-accent text-foreground'
                   : 'text-muted-foreground hover:text-foreground'
@@ -152,7 +152,7 @@ export default function IndexTrendBand({ defaultSymbol = '000001' }: { defaultSy
             </button>
           ))}
         </div>
-        <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+        <span className="ml-auto shrink-0 text-[12px] text-muted-foreground">
           {dateLabel ? `基准日 ${dateLabel}` : '最近交易日'}
         </span>
       </div>
@@ -160,7 +160,7 @@ export default function IndexTrendBand({ defaultSymbol = '000001' }: { defaultSy
       {loading && !data && (
         <div
           data-testid="trend-loading"
-          className="flex items-center justify-center text-[11px] text-muted-foreground"
+          className="flex items-center justify-center text-[12px] text-muted-foreground"
           style={{ height: 120 }}
         >
           分时加载中…
@@ -170,14 +170,14 @@ export default function IndexTrendBand({ defaultSymbol = '000001' }: { defaultSy
       {error && !loading && (
         <div
           data-testid="trend-error"
-          className="flex flex-col items-center justify-center gap-1 text-[11px] text-red-500"
+          className="flex flex-col items-center justify-center gap-1 text-[12px] text-red-500"
           style={{ height: 120 }}
         >
           <span>分时取数失败：{error}</span>
           <button
             type="button"
             onClick={() => load().catch(() => {})}
-            className="rounded border border-border-strong px-2 py-0.5 text-[11px] text-foreground"
+            className="rounded border border-border px-2 py-0.5 text-[12px] text-foreground"
           >
             重试
           </button>
@@ -187,7 +187,7 @@ export default function IndexTrendBand({ defaultSymbol = '000001' }: { defaultSy
       {!error && data?.degraded && (
         <div
           data-testid="trend-degraded"
-          className="flex items-center justify-center text-[11px] text-amber-500"
+          className="flex items-center justify-center text-[12px] text-amber-500"
           style={{ height: 120 }}
         >
           分时源异常：{data.note || '数据源暂不可用'}（空列表是源故障，不等于停牌）
@@ -202,7 +202,7 @@ export default function IndexTrendBand({ defaultSymbol = '000001' }: { defaultSy
             isIndex={!!data.is_index}
             height={120}
           />
-          <dl className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+          <dl className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px]">
             <Fact
               label="日内位置"
               value={facts.position == null ? '—' : `${safeFixed(facts.position, 0)}%`}
@@ -231,7 +231,7 @@ export default function IndexTrendBand({ defaultSymbol = '000001' }: { defaultSy
       {!error && !data?.degraded && (!data || data.points.length === 0) && !loading && (
         <div
           data-testid="trend-empty"
-          className="flex items-center justify-center text-[11px] text-muted-foreground"
+          className="flex items-center justify-center text-[12px] text-muted-foreground"
           style={{ height: 120 }}
         >
           当日无分时（非交易日 / 停牌）

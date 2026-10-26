@@ -63,9 +63,9 @@ const enUS: Messages = {
     stocks: 'Quotes',
     heatmap: 'Heatmap',
     factorIC: 'Factor IC',
-    decision: 'Decision',
+    decision: 'Evidence',
     themeMood: 'Theme Mood',
-    opportunities: 'Opportunities',
+    opportunities: 'Market scan',
     auction: 'Auction',
     aiCopilot: 'AI Copilot',
     copilotRuns: 'Copilot Runs',
@@ -88,6 +88,7 @@ const enUS: Messages = {
     profile: 'Profile',
     apiKeys: 'API Key',
     system: 'System',
+    systemStatus: 'System status',
     notifications: 'Notifications',
     alerts: 'Alerts',
     settings: 'Settings',
@@ -103,6 +104,7 @@ const enUS: Messages = {
 
   // Workspace tabs (Tab Shell, 2026-10-15)
   tabs: {
+    closeAll: 'Close all tabs, keep Home',
     bar: 'Workspace tabs',
     stock: 'Stock',
     index: 'Index',

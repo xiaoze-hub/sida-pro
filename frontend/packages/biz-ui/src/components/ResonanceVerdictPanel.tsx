@@ -141,7 +141,7 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-3 text-[11px]">
+      <div className="flex items-center gap-3 text-[12px]">
         {!bare ? <span className="text-muted-foreground">三指标</span> : null}
         <span className="inline-flex items-center gap-1">
           <span className={`h-2 w-2 rounded-full ${lampClass(hits[0], known)}`} />
@@ -162,7 +162,7 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
             资金 {rule?.fund_net == null ? '—' : `${safeFixed(rule.fund_net / 1e8, 2)}亿`}
           </span>
         </span>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+        <span className="ml-auto font-mono text-[12px] text-muted-foreground">
           {known ? `规则: ${rule?.level3 || '无'}` : ruleState === 'loading' ? '加载中…' : '数据缺失'}
         </span>
       </div>
@@ -172,12 +172,12 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
           type="button"
           onClick={() => void runAi()}
           disabled={aiLoading || !known}
-          className="inline-flex shrink-0 items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] text-foreground transition-colors hover:bg-primary/20 disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-[12px] text-foreground transition-colors hover:bg-primary/20 disabled:opacity-50"
         >
           <Sparkles className="h-3 w-3" />
           {aiLoading ? 'AI 判定中…' : 'AI 分析'}
         </button>
-        <div className="min-w-0 flex-1 text-[11px]">
+        <div className="min-w-0 flex-1 text-[12px]">
           {ai == null ? (
             <span className="text-muted-foreground">
               点「AI 分析」→ 给出是否共振 + 依据/风险(仅参考, 不构成投资建议)
@@ -191,7 +191,7 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
                   {ai.ai.resonance}
                 </span>
                 {ai.ai.confidence != null ? (
-                  <span className="font-mono text-[10px] text-muted-foreground">
+                  <span className="font-mono text-[12px] text-muted-foreground">
                     置信 {safeFixed(ai.ai.confidence, 2)}
                   </span>
                 ) : null}
@@ -219,7 +219,7 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
               {ai.evidence ? (
                 <div
                   data-testid="resonance-evidence"
-                  className="mt-1 space-y-0.5 border-t border-border/40 pt-1 text-[10px]"
+                  className="mt-1 space-y-0.5 border-t border-border pt-1 text-[12px]"
                 >
                   <div className="text-foreground" data-testid="resonance-evidence-triggers">
                     触发条件: {ai.evidence.triggers.join('；')}

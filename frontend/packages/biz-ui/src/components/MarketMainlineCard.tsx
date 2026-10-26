@@ -98,20 +98,20 @@ function MainlineRow({
   const leaderDays = g.leader?.days ?? 0
 
   return (
-    <div className="border-b border-border/40 overflow-hidden">
+    <div className="border-b border-border overflow-hidden">
       {/* 主行: 可点击展开 */}
       <button
         type="button"
         onClick={onToggle}
-        className="w-full px-2.5 py-2 flex items-center gap-2 hover:bg-accent/30 transition-colors text-left"
+        className="w-full px-2.5 py-2 flex items-center gap-2 hover:bg-s2 transition-colors text-left"
       >
         <span className="text-muted-foreground shrink-0">
           {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
         </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-foreground truncate" title={g.name}>{g.name}</span>
-            <span className={`text-[10px] tabular-nums font-mono ${tone.text}`}>
+            <span className="text-[14px] font-semibold text-foreground truncate" title={g.name}>{g.name}</span>
+            <span className={`text-[12px] tabular-nums font-mono ${tone.text}`}>
               {g.score != null ? g.score.toFixed(1) : '--'}
             </span>
           </div>
@@ -124,7 +124,7 @@ function MainlineRow({
           </div>
         </div>
         {/* 关键指标: 涨停数 / 最高板 */}
-        <div className="flex items-center gap-2.5 shrink-0 text-[10px] tabular-nums">
+        <div className="flex items-center gap-2.5 shrink-0 text-[12px] tabular-nums">
           <span className="text-stock-up font-mono" title="涨停家数">
             {g.limit_up_count}家
           </span>
@@ -138,7 +138,7 @@ function MainlineRow({
         {/* 龙头 */}
         <div className="hidden md:flex items-center gap-1 shrink-0 max-w-[100px]">
           <Crown className="w-3 h-3 text-amber-500 shrink-0" />
-          <span className="text-[10px] text-amber-600 dark:text-amber-400 truncate" title={`龙头 ${leaderName} ${leaderDays}板`}>
+          <span className="text-[12px] text-amber-600 dark:text-amber-400 truncate" title={`龙头 ${leaderName} ${leaderDays}板`}>
             {leaderName}
             {leaderDays > 1 ? <span className="ml-0.5 text-muted-foreground">{leaderDays}B</span> : null}
           </span>
@@ -147,8 +147,8 @@ function MainlineRow({
 
       {/* 展开区: 成分股标签流 */}
       {expanded && g.constituents.length > 0 ? (
-        <div className="px-2.5 pb-2 pt-1 border-t border-border/30">
-          <div className="flex items-center gap-1.5 mb-1.5 text-[10px] text-muted-foreground">
+        <div className="px-2.5 pb-2 pt-1 border-t border-border">
+          <div className="flex items-center gap-1.5 mb-1.5 text-[12px] text-muted-foreground">
             <Layers className="w-3 h-3" />
             <span>成分股 {g.constituents.length} 只</span>
             <span className="text-muted-foreground">·</span>
@@ -160,16 +160,16 @@ function MainlineRow({
               return (
                 <span
                   key={c.code || c.name}
-                  className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
+                  className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[12px] transition-colors ${
                     isLeader
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                      : 'border-border/50 bg-card text-foreground hover:border-primary/40'
+                      : 'border-border bg-card text-foreground hover:border-primary/40'
                   }`}
                   title={`${c.name}(${c.code}) ${c.days}板 成交${fmtYi(c.amount)}`}
                 >
                   <span className="font-medium truncate max-w-[64px]" title={c.name}>{c.name}</span>
                   {c.days > 1 ? (
-                    <span className="text-[10px] font-mono text-stock-up shrink-0">
+                    <span className="text-[12px] font-mono text-stock-up shrink-0">
                       {c.days}B
                     </span>
                   ) : null}
@@ -221,16 +221,7 @@ export default function MarketMainlineCard() {
   }, 30000, { deps: [load] })
 
   if (loading && !data) {
-    return (
-      <div className="animate-pulse">
-        <div className="h-[20px] w-1/3 bg-muted/40 rounded mb-2" />
-        <div className="space-y-1.5">
-          {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-[36px] bg-muted/40 rounded" />
-          ))}
-        </div>
-      </div>
-    )
+    return <div role="status" className="min-w-0"><SectionHeader title="市场主线" /><p className="py-6 text-[12px] text-muted-foreground">正在加载市场主线…</p></div>
   }
 
   const ranked = data?.ranked_groups ?? []
@@ -254,12 +245,12 @@ export default function MarketMainlineCard() {
 
   if (ranked.length === 0) {
     return (
-      <div className="border-t border-border/60 pt-2.5">
+      <div className="border-t border-border pt-2.5">
         <SectionHeader
           title="市场主线"
           action={
             updatedAt ? (
-              <span className="text-[10px] text-muted-foreground font-mono">
+              <span className="text-[12px] text-muted-foreground font-mono">
                 {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
               </span>
             ) : undefined
@@ -281,12 +272,12 @@ export default function MarketMainlineCard() {
   const rest = ranked.slice(10)
 
   return (
-    <div className="border-t border-border/60 pt-2.5">
+    <div className="border-t border-border pt-2.5">
       <SectionHeader
         title="市场主线"
         action={
           <>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[12px] text-muted-foreground">
               Top {top.length}
               {rest.length > 0 ? ` / ${ranked.length}` : ''}
               {stats ? (
@@ -295,7 +286,7 @@ export default function MarketMainlineCard() {
                 </span>
               ) : null}
             </span>
-            <span className="text-[10px] text-muted-foreground font-mono">
+            <span className="text-[12px] text-muted-foreground font-mono">
               {updatedAt ? updatedAt.toLocaleTimeString('zh-CN', { hour12: false }) : ''}
             </span>
             <button
@@ -315,7 +306,7 @@ export default function MarketMainlineCard() {
 
       {/* 错误细条: 与 data 并存(上次成功数据不丢) */}
       {error ? (
-        <div className="mb-2 flex items-center gap-1.5 text-[10px] text-amber-600 dark:text-amber-500">
+        <div className="mb-2 flex items-center gap-1.5 text-[12px] text-amber-600 dark:text-amber-500">
           <AlertTriangle className="w-3 h-3" />
           <span>本次刷新失败: {error} — 仍展示上次成功数据</span>
         </div>
@@ -342,7 +333,7 @@ export default function MarketMainlineCard() {
       {/* 11-20 名折叠展示: 默认收起, 留个角标 */}
       {rest.length > 0 ? (
         <details className="mt-2">
-          <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground select-none">
+          <summary className="cursor-pointer text-[12px] text-muted-foreground hover:text-foreground select-none">
             展开 11-20 名 ({rest.length})
           </summary>
           <div className="space-y-1 mt-1">
@@ -363,15 +354,15 @@ export default function MarketMainlineCard() {
 
       {/* 未入榜 chip(涨停 <3 家) */}
       {unranked.length > 0 ? (
-        <div className="mt-2 pt-2 border-t border-border/30">
-          <div className="text-[10px] text-muted-foreground mb-1">
+        <div className="mt-2 pt-2 border-t border-border">
+          <div className="text-[12px] text-muted-foreground mb-1">
             未入榜(涨停 {"<"}3 家): {unranked.length} 个
           </div>
           <div className="flex flex-wrap gap-1">
             {unranked.map((g) => (
               <span
                 key={g.name}
-                className="inline-flex items-center gap-1 rounded-md border border-border/50 bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 text-[12px] text-muted-foreground"
                 title={`${g.name} ${g.limit_up_count}家 最高${g.max_boards}板`}
               >
                 <span>{g.name}</span>

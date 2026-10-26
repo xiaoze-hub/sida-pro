@@ -156,11 +156,11 @@ export function ConversationSidebar({
   return (
     <aside
       data-testid="copilot-conv-sidebar"
-      className="flex h-full min-h-0 w-64 shrink-0 flex-col border-r border-border/40 bg-s1"
+      className="flex h-full min-h-0 w-64 shrink-0 flex-col border-r border-border bg-s1"
       aria-label="会话列表"
     >
       {/* 顶部：新建 + 搜索 */}
-      <div className="flex items-center gap-1.5 border-b border-border/40 px-2 py-2">
+      <div className="flex items-center gap-1.5 border-b border-border px-2 py-2">
         <button
           type="button"
           onClick={onCreate}
@@ -186,7 +186,7 @@ export function ConversationSidebar({
             placeholder="搜索对话"
             aria-label="搜索对话"
             data-testid="copilot-conv-search"
-            className="h-6 w-full min-w-0 rounded-md border border-border/50 bg-s0 pl-6 pr-2 text-[12px] text-foreground outline-none transition-colors focus:border-role-watch/60"
+            className="h-6 w-full min-w-0 rounded-md border border-border bg-s0 pl-6 pr-2 text-[12px] text-foreground outline-none transition-colors focus:border-role-watch/60"
           />
         </div>
       </div>
@@ -195,7 +195,7 @@ export function ConversationSidebar({
       {conversations.length === 0 ? (
         <div className="px-3 py-4" data-testid="copilot-conv-empty">
           <div className="text-[12px] text-foreground">还没有对话</div>
-          <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          <div className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
             在右侧提问会自动开一个新对话，之后可以在这里随时翻回。
           </div>
         </div>
@@ -278,7 +278,7 @@ export function ConversationSidebar({
                       </span>
                     ) : null}
                     {c.stock_symbol ? (
-                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      <span className="shrink-0 font-mono text-[12px] text-muted-foreground">
                         {c.stock_symbol}
                       </span>
                     ) : null}
@@ -307,11 +307,11 @@ export function ConversationSidebar({
                   <div
                     role="menu"
                     data-testid={`copilot-conv-menu-${c.id}`}
-                    className="absolute right-2 top-8 z-20 w-36 overflow-hidden rounded-xl border border-border/60 bg-s1 shadow-float"
+                    className="absolute right-2 top-8 z-20 w-36 overflow-hidden rounded-xl border border-border bg-s1 shadow-float"
                   >
                     {isConfirming ? (
                       <div className="px-2 py-1.5" data-testid={`copilot-conv-confirm-box-${c.id}`}>
-                        <div className="text-[11px] text-foreground">删除这条对话？</div>
+                        <div className="text-[12px] text-foreground">删除这条对话？</div>
                         <div className="mt-1.5 flex items-center gap-1.5">
                           <button
                             type="button"
@@ -320,7 +320,7 @@ export function ConversationSidebar({
                               closeMenus()
                               onDelete(c.id)
                             }}
-                            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-role-risk transition-colors hover:bg-role-risk/10"
+                            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-role-risk transition-colors hover:bg-role-risk/10"
                           >
                             <Trash2 aria-hidden="true" className="h-3 w-3" />
                             确认删除
@@ -329,7 +329,7 @@ export function ConversationSidebar({
                             type="button"
                             data-testid={`copilot-conv-cancel-${c.id}`}
                             onClick={() => setConfirmDeleteId(null)}
-                            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-s2 hover:text-foreground"
+                            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:bg-s2 hover:text-foreground"
                           >
                             <X aria-hidden="true" className="h-3 w-3" />
                             取消
@@ -386,7 +386,7 @@ export function ConversationSidebar({
       )}
 
       {/* 提示条：键盘操作说明（不是卡片，是一行 hairline 分隔的脚注） */}
-      <div className="border-t border-border/40 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+      <div className="border-t border-border px-2.5 py-1.5 text-[12px] text-muted-foreground">
         <span className="inline-flex items-center gap-1">
           <Check aria-hidden="true" className="h-2.5 w-2.5" />
           双击标题改名 · ↑↓ 切换 · Enter 选中

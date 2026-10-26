@@ -65,7 +65,7 @@ export default function MissingFields({
   const summary = reasonSummary(items)
 
   return (
-    <div className={`text-[11px] text-muted-foreground ${className}`} data-testid="missing-fields">
+    <div className={`text-[12px] text-muted-foreground ${className}`} data-testid="missing-fields">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -81,7 +81,7 @@ export default function MissingFields({
       </button>
 
       {open && (
-        <ul className="mt-1 space-y-0.5 border-l border-border/60 pl-2" data-testid="missing-fields-list">
+        <ul className="mt-1 space-y-0.5 border-l border-border pl-2" data-testid="missing-fields-list">
           {items.map((it) => (
             <li key={`${it.label}-${it.reason}`} className="flex gap-2">
               <span className="shrink-0 text-foreground">{it.label}</span>

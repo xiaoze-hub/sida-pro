@@ -21,6 +21,8 @@ obsidian-vault/
 node_modules/
 frontend/dist/
 frontend/.vite/
+.playwright-cli/
+output/playwright/
 pnpm-debug.log*
 
 # Claude

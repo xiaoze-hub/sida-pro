@@ -67,10 +67,10 @@ function Row({ item, minSamples }: { item: CapabilityItem; minSamples?: number }
       <span className="w-[54px] shrink-0 text-muted-foreground">
         {item.enabled_count}源
       </span>
-      <span className="w-[74px] shrink-0 font-mono text-[11px] text-muted-foreground">
+      <span className="w-[74px] shrink-0 font-mono text-[12px] text-muted-foreground">
         {capabilityRateCell(item, minSamples)}
       </span>
-      <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+      <span className="ml-auto shrink-0 font-mono text-[12px] text-muted-foreground">
         {item.age_days == null ? '' : `数据滞后 ${item.age_days} 天`}
       </span>
       {showImpact && (
@@ -78,14 +78,14 @@ function Row({ item, minSamples }: { item: CapabilityItem; minSamples?: number }
           type="button"
           onClick={() => setOpen((v) => !v)}
           data-testid="impact-toggle"
-          className="shrink-0 rounded border border-border/60 px-1 text-[11px] text-muted-foreground hover:text-foreground"
+          className="shrink-0 rounded border border-border px-1 text-[12px] text-muted-foreground hover:text-foreground"
         >
           {open ? '收起影响' : '影响面'}
         </button>
       )}
     </div>
     {showImpact && open && (
-      <div className="mb-1 ml-4 border-l border-border/60 pl-2 text-[11px] text-muted-foreground" data-testid="impact-detail">
+      <div className="mb-1 ml-4 border-l border-border pl-2 text-[12px] text-muted-foreground" data-testid="impact-detail">
         <div>受影响页面：{imp.pages.length ? imp.pages.join(' · ') : '未登记'}</div>
         <div>降级时：{imp.effect}</div>
         <div>替代源：{imp.fallback}</div>
@@ -104,11 +104,11 @@ export function DataCapabilities() {
     <div className="card mb-3 p-3">
       <div className="mb-1 flex items-center gap-2">
         <Layers className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
-        <span className="text-[13px] font-semibold">数据能力矩阵</span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[14px] font-semibold">数据能力矩阵</span>
+        <span className="text-[12px] text-muted-foreground">
           按数据集看此刻可用性(不是按源罗列); 未测量的类型标灰, 不算正常
         </span>
-        <span className="ml-auto text-[11px] text-muted-foreground">
+        <span className="ml-auto text-[12px] text-muted-foreground">
           正常 {s.ok} · 降级 {s.degraded} · 未测量 {s.unknown} · 无可用源 {s.unavailable}
         </span>
       </div>
@@ -126,18 +126,17 @@ export function CapabilityPill({ collapsed = false }: { collapsed?: boolean }) {
   if (!data?.summary) return null
   const s = data.summary
   const bad = s.unavailable + s.degraded
-  if (!bad && collapsed) return null
   return (
     <button
       type="button"
       onClick={() => navigate('/system?tab=datasources')}
       title={capabilitySummary(s) + ' —— 点击查看数据能力矩阵'}
-      className="mx-2 mb-1 flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-accent/60"
+      aria-label={capabilitySummary(s) + '，查看数据能力矩阵'}
+      data-testid="sidebar-capability"
+      className={`mb-1 flex shrink-0 items-center rounded text-[12px] hover:bg-s2 ${collapsed ? 'mx-auto h-8 w-8 justify-center' : 'mx-2 min-h-8 gap-1.5 px-1.5 py-1 text-left'}`}
     >
-      <span className={`h-2 w-2 shrink-0 rounded-full ${bad ? STATUS_DOT.degraded : STATUS_DOT.ok}`} />
-      <span className="min-w-0 truncate text-muted-foreground" title={collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}>
-        {collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}
-      </span>
+      <span className={`h-2 w-2 shrink-0 rounded-full ${bad ? STATUS_DOT.degraded : s.unknown ? STATUS_DOT.unknown : STATUS_DOT.ok}`} />
+      {!collapsed && <span className="min-w-0 truncate text-muted-foreground">{capabilitySummary(s)}</span>}
     </button>
   )
 }

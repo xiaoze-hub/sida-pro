@@ -43,6 +43,7 @@ export const LEGACY_ALIAS_PATHS: readonly string[] = [
   '/help',
   '/stocks',
   '/quote',
+  '/quotes',
   '/l2',
   '/forecast',
 ]
@@ -94,6 +95,7 @@ export const ROUTE_LABEL_KEYS: Record<string, string> = {
   '/profile': 'nav.profile',
   '/api-keys': 'nav.apiKeys',
   '/system': 'nav.system',
+  '/system/status': 'nav.systemStatus',
   '/settings': 'nav.settings',
   '/developers': 'nav.developers',
   '/admin': 'nav.admin',
@@ -146,7 +148,8 @@ export function tabKeyOf(pathname: string, search = ''): string {
   if (pathname.startsWith('/stocks/')) {
     const symbol = decodeURIComponent(pathname.slice('/stocks/'.length))
     const type = normalizeType(new URLSearchParams(search).get('type'))
-    return `/stocks/${symbol}?type=${type}`
+    const market = new URLSearchParams(search).get('market')
+    return `/stocks/${symbol}?type=${type}${type === 'stock' && market && market !== 'CN' ? `&market=${encodeURIComponent(market)}` : ''}`
   }
   return pathname
 }

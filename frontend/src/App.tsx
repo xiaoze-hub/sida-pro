@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -14,7 +14,6 @@ const DashboardPage = lazyWithRetry(() => import('@/pages/Dashboard'), 'dashboar
 const OpportunitiesPage = lazyWithRetry(() => import('@/pages/Opportunities'), 'opportunities-page')
 const AuctionPage = lazyWithRetry(() => import('@/pages/Auction'), 'auction-page')
 // AI 数智参谋一级工作台(2026-10-18, 设计稿 §8.8/§9): 筹码·共振·量价·盘口·竞价·妖股因子全量穿透
-const AiCopilotPage = lazyWithRetry(() => import('@/pages/AiCopilot'), 'ai-copilot-page')
 const CopilotGovernancePage = lazyWithRetry(() => import('@/pages/CopilotGovernance'), 'copilot-governance-page')
 // 参谋任务列表(2026-10-25): 只读回放每轮问答 —— 状态/问题/配方/工具数/耗时/时间, 点行展开工具步骤
 const CopilotRunsPage = lazyWithRetry(() => import('@/pages/copilot/RunsPage'), 'copilot-runs-page')
@@ -47,6 +46,7 @@ const LoginPage = lazyWithRetry(() => import('@/pages/Login'), 'login-page')
 const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
+const QuoteEntryPage = lazyWithRetry(() => import('@/pages/QuoteEntry'), 'quote-entry-page')
 const StockWorkbenchPage = lazyWithRetry(() => import('@/pages/StockWorkbench'), 'stock-workbench-page')
 const ProfilePage = lazyWithRetry(() => import('@/pages/Profile'), 'profile-page')
 // API Key 控制台(2026-09-16): 个人中心 → 密钥管理 + 智能体一键安装
@@ -56,6 +56,7 @@ const ApiKeysPage = lazyWithRetry(() => import('@/pages/ApiKeys'), 'api-keys-pag
 // 旧路由 /forecast、/quote、/quote/:symbol、/l2 改走 LegacyForecastRedirect/LegacyL2Redirect。
 // 正文已搬入工作台(KlineChart 复用, L2 内容挪至「盘口资金」标签), 原页 Quote.tsx/L2Orderbook.tsx
 // 已于 2026-09-13 删除。
+const SystemStatusPage = lazyWithRetry(() => import('@/pages/SystemStatus'), 'system-status-page')
 const SystemPage = lazyWithRetry(() => import('@/pages/System'), 'system-page')
 const SettingsHubPage = lazyWithRetry(() => import('@/pages/SettingsHub'), 'settings-hub-page')
 // §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
@@ -74,9 +75,12 @@ const LandingPage = lazyWithRetry(() => import('@/pages/Landing'), 'landing-page
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
 const AdminPage = lazyWithRetry(() => import('@/pages/Admin'), 'admin-page')
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
-import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
+import { AssistantWorkspaceProvider, AssistantPageHost } from '@/components/AssistantWorkspace'
+import { AssistantAvatar } from '@/components/AssistantAvatar'
+import { SystemStatusProvider } from '@/components/system/SystemStatusProvider'
+import { SystemStatusIndicator } from '@/components/system/SystemStatusIndicator'
 import { BrandMark } from '@/components/BrandMark'
 import SessionPhaseChip, { sessionPhaseOf, type SessionInfo } from '@panwatch/biz-ui/components/SessionPhaseChip'
 import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
@@ -87,7 +91,6 @@ import { isNavItemActive } from '@/lib/nav-active'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
-import SelfCheckModal from '@/components/SelfCheckModal'
 import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -105,8 +108,8 @@ import { onApiFailure } from '@panwatch/api'
 const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.home', perm: 'view_dashboard' },
   // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
-  // 「行情」默认落上证指数(000001, type=index); 「盘口」项撤除(内容进工作台「盘口资金」标签)。
-  { to: '/stocks/000001?type=index', icon: LineChart, labelKey: 'nav.stocks', perm: 'view_quotes' },
+  // 行情入口按当前账号持仓/关注解析默认标的；盘口内容在工作台「盘口资金」标签。
+  { to: '/quotes', icon: LineChart, labelKey: 'nav.stocks', perm: 'view_quotes' },
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
   { to: '/heatmap', icon: LayoutGrid, labelKey: 'nav.heatmap', perm: 'view_heatmap' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
@@ -157,7 +160,7 @@ const navItems = [
 // ② 新增「决策」组 —— 之前 `/decision-ledger` 与 `/caliber-compare` **只存在于 navItems,
 //    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
 const desktopNavGroups = [
-  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
+  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/quotes', '/heatmap', '/theme-mood'].includes(n.to)) },
   { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/auction', '/dark-fund-top', '/war-report', '/replay-tree'].includes(n.to)) },
   // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
   // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
@@ -173,7 +176,7 @@ const desktopNavGroups = [
 // 提醒并入通知后底栏由 /alerts 改指 /notifications; 提醒 Tab 在通知页内直达,
 // 老书签 /alerts 仍经 LegacyTabRedirect 跳到 /notifications?tab=alerts)。
 // navItems 数组顺序保持不动, 桌面端平铺分组完全不变。
-const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/stocks/000001?type=index', '/notifications']
+const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/quotes', '/notifications']
 
 // ═══ demo 账号只读模式(2026-08-15): 从 JWT payload 解出 username/role, 按角色控制导航 ═══
 // 2026-09-12: claims 解析抽到 src/lib/jwt.ts 共用(情绪周期回填按钮也要按角色控制)。
@@ -320,7 +323,7 @@ function PageFallback() {
 }
 
 function App() {
-  const { mode, setMode } = useTheme()
+  const { mode, setMode, theme, toggleTheme } = useTheme()
   const { t } = useI18n()
   const location = useLocation()
   const [version, setVersion] = useState('')
@@ -388,7 +391,6 @@ function App() {
     try { localStorage.setItem('sida_sidebar_collapsed', c ? '0' : '1') } catch {}
     return !c
   })
-  const [selfCheckOpen, setSelfCheckOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [upgradeInfo, setUpgradeInfo] = useState<{ latest: string; url: string } | null>(null)
   const checkedUpdateRef = useRef(false)
@@ -450,7 +452,7 @@ function App() {
     // v2.0 §4.4 快捷键导航: g + {key} 序列, 6 主导航全覆盖.
     { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },           // 驾驶舱 Dashboard
     { sequence: ['g', 'p'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/portfolio')) }, // 我的 Portfolio
-    { sequence: ['g', 'm'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/stocks/000001?type=index')) },  // 行情 Market (并入工作台, 默认上证指数)
+    { sequence: ['g', 'm'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/quotes')) },  // 行情：当前账号持仓/关注
     { sequence: ['g', 'o'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/opportunities')) }, // 机会 Opportunities
     { sequence: ['g', 'r'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/reports')) },   // 投研 Reports (合并历史)
     { sequence: ['g', 'u'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/settings')) },  // 系统 User settings
@@ -519,30 +521,32 @@ function App() {
 
   return (
     <RequireAuth>
+    <SystemStatusProvider enabled={getJwtRole() === 'owner'}>
+    <AssistantWorkspaceProvider enabled={!isNavHiddenForPerm({ perm: 'view_quotes' }, myPerms)}>
     <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
       <BrowserNotificationBridge />
-      <AmbientBackground />
       {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}
-      <aside data-shell-aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card/80 backdrop-blur transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
+      <aside data-shell-aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
         {/* Logo + 折叠按钮 */}
-        <div className="flex items-center gap-2 h-14 px-3 border-b border-border shrink-0">
-          <NavLink to="/" className="flex items-center gap-2.5 min-w-0 flex-1">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm shrink-0">
-              <BrandMark className="w-4 h-4 text-white" />
+        <div className={`flex items-center gap-2 h-14 border-b border-border shrink-0 ${sidebarCollapsed ? 'justify-center px-0' : 'px-3'}`}>
+          <NavLink to="/" className={`${sidebarCollapsed ? 'hidden' : 'flex'} items-center gap-2.5 min-w-0 flex-1`}>
+            <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center shadow-sm shrink-0">
+              <BrandMark className="w-4 h-4 text-primary-foreground" />
             </div>
             {!sidebarCollapsed && (
               <>
                 <span className="text-[16px] font-bold text-foreground truncate">数智分析</span>
-                {version && <span className="text-[11px] text-muted-foreground font-normal shrink-0">v{version}</span>}
+                {version && <span className="text-[12px] text-muted-foreground font-normal shrink-0">v{version}</span>}
                 {isDemoUser() && (
-                  <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
+                  <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[12px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
                 )}
               </>
             )}
           </NavLink>
           <button
             onClick={toggleSidebar}
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            className="ui-icon-button"
+            aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
             title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
           >
             {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
@@ -550,7 +554,7 @@ function App() {
         </div>
 
         {/* 6 项主导航 */}
-        <nav className="flex-1 overflow-y-auto px-2 py-2">
+        <nav aria-label="主导航" className="scrollbar flex-1 overflow-y-auto px-3 py-4">
           {/* AI 数智参谋: 独立高亮卡(设计稿 §9.3 方案 A —— 不进分组, 组数仍 6)。
               AI 是产品第一心智, 塞进「机会」组会变成第 4 个子项 = 等于没做入口。 */}
           {(() => {
@@ -558,7 +562,6 @@ function App() {
             if (!ai) return null
             if (isNavHiddenForRole(ai) || isNavHiddenForPerm(ai, myPerms)) return null
             if (isGuestUser() && isNavHiddenForGuest(ai.to)) return null
-            const Icon = ai.icon
             const label = t(ai.labelKey)
             const active = isNavItemActive(ai.to, location.pathname)
             return (
@@ -566,23 +569,24 @@ function App() {
                 to={ai.to}
                 title={label}
                 data-testid="nav-ai-copilot"
-                className={`mb-2 flex items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors ${
+                aria-current={active ? 'page' : undefined}
+                className={`ai-tool-entry mb-4 flex min-h-16 items-center gap-2.5 rounded-xl px-3 py-3 transition-colors ${
                   sidebarCollapsed ? 'justify-center px-0' : ''
                 } ${
                   active
-                    ? 'border-role-watch/60 bg-s3 text-foreground'
-                    : 'border-role-watch/40 bg-s2 text-foreground hover:bg-s3'
+                    ? 'bg-s3 text-foreground hover:bg-s2'
+                    : 'bg-card text-foreground hover:bg-s2'
                 }`}
               >
-                <Icon className="h-4 w-4 shrink-0 text-role-watch" />
+                <AssistantAvatar size={sidebarCollapsed ? 32 : 44} />
                 {!sidebarCollapsed && (
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12px] font-medium">{label}</span>
-                    <span className="block truncate text-[10px] text-muted-foreground">
-                      筹码·共振·撤单·竞价
+                    <span className="block truncate text-[14px] font-semibold">AI 分析助手</span>
+                    <span className="mt-0.5 block truncate text-[12px] opacity-80">
+                      点击开始技术分析
                     </span>
                   </span>
-                )}
+                )}{!sidebarCollapsed && <ArrowRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
               </NavLink>
             )
           })()}
@@ -592,7 +596,7 @@ function App() {
             if (items.length === 0) return null
             return (
               <div key={group.key} className="mb-3 last:mb-0">
-                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">{t(group.labelKey)}</div>}
+                {!sidebarCollapsed && <div className="px-2 pb-1 text-[12px] font-medium tracking-wide text-muted-foreground">{t(group.labelKey)}</div>}
                 <div className="space-y-0.5">
                   {items.map(({ to, icon: Icon, labelKey }) => {
                     const isActive = isNavItemActive(to, location.pathname)
@@ -602,11 +606,12 @@ function App() {
                         key={to}
                         to={to}
                         title={sidebarCollapsed ? label : undefined}
-                        className={`flex items-center gap-2.5 rounded-xl text-[13px] font-medium transition-colors ${
+                        aria-current={isActive ? 'page' : undefined}
+                        className={`nav-item ${
                           sidebarCollapsed ? 'justify-center px-0 py-2' : 'px-2.5 py-2'
                         } ${
                           isActive
-                            ? 'bg-[linear-gradient(135deg,hsl(var(--primary)/0.14),hsl(var(--primary)/0.04))] ring-1 ring-primary/20 text-foreground'
+                            ? 'bg-s3 text-accent-foreground'
                             : 'text-muted-foreground hover:text-foreground hover:bg-accent'
                         }`}
                       >
@@ -626,7 +631,10 @@ function App() {
 
         {/* 底部: GitHub + 日志 + 通知 + 头像 */}
         <div className={`border-t border-border p-2 shrink-0 flex ${sidebarCollapsed ? 'flex-col items-center gap-1' : 'flex-row items-center justify-between'}`}>
-          <div className="flex items-center gap-0.5">
+          <div data-sidebar-tools className={`flex items-center ${sidebarCollapsed ? 'flex-col gap-1' : 'gap-0.5'}`}>
+            <button type="button" onClick={toggleTheme} className="ui-icon-button" aria-label={theme === 'dark' ? '切换浅色模式' : '切换深色模式'} title={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}>
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
             <button
               onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
               className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -641,28 +649,28 @@ function App() {
             >
               <ScrollText className="w-4 h-4" />
             </button>
-            <NotificationBell size="sm" />
+            <NotificationBell size="sm" placement="sidebar" />
           </div>
           <AccountMenu
             navItems={[]}
             mode={mode}
             onSetMode={setMode}
-            onOpenSelfCheck={() => setSelfCheckOpen(true)}
-            placement="up"
+            onOpenSelfCheck={() => navigate('/system/status')}
+            placement={sidebarCollapsed ? 'right' : 'up'}
           />
         </div>
       </aside>
 
       {/* Mobile Top Bar */}
-      <div className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2 md:hidden">
+      <div data-mobile-header className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2 md:hidden">
         <header className="card px-4">
           <div className="h-12 flex items-center justify-between">
-            <NavLink to="/" className="flex items-center gap-2 group">
-              <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
-                <BrandMark className="w-3.5 h-3.5 text-white" />
+            <NavLink to="/" className="flex shrink-0 items-center gap-2 group">
+              <div className="w-7 h-7 rounded-xl bg-primary flex items-center justify-center shadow-sm">
+                <BrandMark className="w-3.5 h-3.5 text-primary-foreground" />
               </div>
-              <span className="text-[13px] font-bold text-foreground">数智分析</span>
-              {version && <span className="text-[10px] text-muted-foreground font-normal">v{version}</span>}
+              <span className="whitespace-nowrap text-[14px] font-bold text-foreground">数智分析</span>
+              {version && <span className="hidden whitespace-nowrap text-[12px] text-muted-foreground font-normal sm:inline">v{version}</span>}
             </NavLink>
             <div className="flex items-center gap-2">
               {/* 会话态(2026-09-20): 只允许顶栏极轻指示, 禁止整页染色 */}
@@ -674,23 +682,23 @@ function App() {
                   document.documentElement.setAttribute('data-focus-mode', '0')
                   localStorage.setItem('sida_focus-mode', '0')
                 }}
-                className="items-center gap-1 rounded border border-border px-1.5 text-[10px] text-muted-foreground"
+                className="items-center gap-1 rounded border border-border px-1.5 text-[12px] text-muted-foreground"
                 title="焦点模式已开启(点击退出)"
               >
                 焦点模式
               </button>
             </div>
-            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-xl bg-accent/20 border border-border/40">
+            <div className="card-surface flex items-center gap-1.5 px-1.5 py-1 rounded-xl bg-s2 ">
               <button
                 onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
-                className="w-8 h-8 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-colors"
+                className="hidden w-8 h-8 rounded-xl items-center sm:flex justify-center text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
                 title="GitHub 项目"
               >
                 <Github className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setLogsOpen(true)}
-                className="w-8 h-8 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-colors"
+                className="hidden w-8 h-8 rounded-xl items-center sm:flex justify-center text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
                 title="查看日志"
               >
                 <ScrollText className="w-4 h-4" />
@@ -701,7 +709,7 @@ function App() {
                 navItems={(isGuestUser() ? mobileMoreNavItems.filter(n => !isNavHiddenForGuest(n.to) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)) : mobileMoreNavItems.filter(n => !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))).map(n => ({ ...n, label: t(n.labelKey) }))}
                 mode={mode}
                 onSetMode={setMode}
-                onOpenSelfCheck={() => setSelfCheckOpen(true)}
+                onOpenSelfCheck={() => navigate('/system/status')}
               />
             </div>
           </div>
@@ -709,7 +717,7 @@ function App() {
       </div>
 
       {/* Mobile Bottom Nav */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-card border-t border-border px-2 pb-[env(safe-area-inset-bottom)]">
+      <nav data-mobile-navigation className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-card border-t border-border px-2 pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center justify-around h-14">
           {mobilePrimaryNavItems.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)).map(({ to, icon: Icon, labelKey }) => {
             const isActive = isNavItemActive(to, location.pathname)
@@ -719,12 +727,12 @@ function App() {
                 to={to}
                 className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl transition-[background-color,color,box-shadow] min-w-[56px] min-h-[44px] ${
                   isActive
-                    ? 'text-primary bg-primary/8 ring-1 ring-primary/15'
-                    : 'text-muted-foreground hover:bg-accent/30'
+                    ? 'text-primary bg-s3'
+                    : 'text-muted-foreground hover:bg-s2'
                 }`}
               >
                 <Icon className="w-5 h-5" />
-                <span className="text-[10px] font-medium">{t(labelKey)}</span>
+                <span className="text-[12px] font-medium">{t(labelKey)}</span>
               </NavLink>
             )
           })}
@@ -732,12 +740,25 @@ function App() {
       </nav>
 
       {/* Content */}
-      <main data-shell-main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
+      <a href="#workspace-content" className="skip-link">跳到主要内容</a>
+      <main id="workspace-content" tabIndex={-1} data-shell-main className={`px-4 md:px-6 py-4 md:py-5 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
         {/* 页签式工作台(Tab Shell, 2026-10-15): 内容区**最顶部**是页签栏, 下面才是内容。
             页签集在 Routes **外层**持有 ⇒ 关页签只关那一个功能页, 首页常驻, 永不"全关掉"。
             真 keep-alive(2026-10-15): 每个页签一个常驻面板(同时挂载/隐藏不卸), 见 WorkspaceTabShell。
             `header` 里的壳层(如顶栏源心跳条)只渲染一次, 不随页签复制。 */}
-        <WorkspaceTabShell header={<SourceHeartbeat />}>
+        <WorkspaceTabShell header={
+          <div data-workspace-status className="mb-4 grid min-w-0 gap-2 md:grid-cols-[auto_minmax(0,1fr)] md:items-center md:gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <SystemStatusIndicator />
+              <SourceHeartbeat />
+              {!isNavHiddenForPerm({ perm: 'edit_portfolio' }, myPerms) && <Button variant="ghost" size="sm" data-testid="quick-portfolio" onClick={() => {
+                navigate('/portfolio?view=positions')
+                window.dispatchEvent(new Event('sida:portfolio-positions'))
+              }}><List className="h-4 w-4" />我的持仓</Button>}
+            </div>
+            <Disclaimer />
+          </div>
+        }>
         {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数(经 header 传入) */}
         <Suspense fallback={<PageFallback />}>
           <AppErrorBoundary
@@ -751,7 +772,7 @@ function App() {
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
               <Route path="/auction" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><AuctionPage /></PermGuard>} />
               {/* AI 数智参谋一级工作台(2026-10-18): 登录 + view_quotes 即可进(与 /stocks/:symbol 同档) */}
-              <Route path="/ai-copilot" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AiCopilotPage /></PermGuard>} />
+              <Route path="/ai-copilot" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AssistantPageHost /></PermGuard>} />
               <Route path="/copilot-governance" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotGovernancePage /></PermGuard>} />
               {/* 参谋任务列表(2026-10-25): 只读, 与治理看板同档权限(view_quotes) */}
               <Route path="/copilot/runs" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunsPage /></PermGuard>} />
@@ -785,9 +806,11 @@ function App() {
               <Route path="/index/:symbol" element={<LegacyIndexRedirect type="index" />} />
               <Route path="/boards/:blockCode" element={<LegacyIndexRedirect type="board" />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
+              <Route path="/quotes" element={<PermGuard perm="view_quotes" myPerms={myPerms}><QuoteEntryPage /></PermGuard>} />
               <Route path="/stocks/:symbol" element={<PermGuard perm="view_quotes" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
               <Route path="/stocks" element={<LegacyStocksRedirect />} />
               {/* §4.3: Agent + 数据源 → /system 二级页 */}
+              <Route path="/system/status" element={<SystemStatusPage />} />
               <Route path="/system" element={<SystemPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
               <Route path="/agents" element={<LegacyTabRedirect to="/system?tab=agents" />} />
               {/* §4.3 补齐: 历史并入报告(投研内"历史Tab"), 都是研究产出。
@@ -829,11 +852,8 @@ function App() {
         </WorkspaceTabShell>
       </main>
       <ChatWidget />
-      {/* 全局免责声明底部条(合规, 2026-09-16): 仅登录后壳层; 关闭后 localStorage 记住 */}
-      <Disclaimer />
       <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
       <LogsModal open={logsOpen} onOpenChange={setLogsOpen} />
-      <SelfCheckModal open={selfCheckOpen} onClose={() => setSelfCheckOpen(false)} />
       <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -873,7 +893,7 @@ function App() {
             <DialogTitle>键盘快捷键</DialogTitle>
             <DialogDescription>仅桌面端生效,移动端自动禁用。</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2.5 text-[13px]">
+          <div className="space-y-2.5 text-[14px]">
             {[
               { desc: '打开日志(搜索占位)', keys: ['⌘/Ctrl', 'K'] },
               { desc: '跳转设置', keys: ['⌘/Ctrl', ','] },
@@ -887,7 +907,7 @@ function App() {
                   {row.keys.map(k => (
                     <kbd
                       key={k}
-                      className="px-1.5 py-0.5 rounded-md bg-accent border border-border text-[11px] font-medium text-foreground"
+                      className="px-1.5 py-0.5 rounded-md bg-accent border border-border text-[12px] font-medium text-foreground"
                     >
                       {k}
                     </kbd>
@@ -899,6 +919,8 @@ function App() {
         </DialogContent>
       </Dialog>
     </div>
+    </AssistantWorkspaceProvider>
+    </SystemStatusProvider>
     </RequireAuth>
   )
 }

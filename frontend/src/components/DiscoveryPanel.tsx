@@ -227,7 +227,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                 setDiscoverTab('boards')
                 loadDiscovery('boards')
               }}
-              className={`rounded px-2.5 py-1 text-[11px] transition-colors ${discoverTab === 'boards' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'}`}
+              className={`rounded px-2.5 py-1 text-[12px] transition-colors ${discoverTab === 'boards' ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-accent'}`}
             >
               热门板块
             </button>
@@ -236,7 +236,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                 setDiscoverTab('stocks')
                 loadDiscovery('stocks')
               }}
-              className={`rounded px-2.5 py-1 text-[11px] transition-colors ${discoverTab === 'stocks' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'}`}
+              className={`rounded px-2.5 py-1 text-[12px] transition-colors ${discoverTab === 'stocks' ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-accent'}`}
             >
               热门股票
             </button>
@@ -271,9 +271,9 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
           {discoverLoading ? (
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
               {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="animate-pulse border-b border-border/40 py-2">
-                  <div className="mb-2 h-3 w-24 rounded bg-accent/60" />
-                  <div className="h-3 w-16 rounded bg-accent/50" />
+                <div key={i} className="animate-pulse border-b border-border py-2">
+                  <div className="mb-2 h-3 w-24 rounded bg-s2" />
+                  <div className="h-3 w-16 rounded bg-s2" />
                 </div>
               ))}
             </div>
@@ -283,7 +283,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                 {discoverError || (discoverMarket === 'CN' ? '暂无板块热度 —— 板块日线未同步或今日尚未更新，可点右上「刷新」' : `${discoverMarket === 'HK' ? '港股' : '美股'}暂不提供板块榜，已支持热门股票`)}
                 {discoverMarket !== 'CN' && (
                   <div className="mt-2">
-                    <Button variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => setDiscoverTab('stocks')}>
+                    <Button variant="ghost" size="sm" className="h-7 text-[12px]" onClick={() => setDiscoverTab('stocks')}>
                       切换到热门股票
                     </Button>
                   </div>
@@ -298,12 +298,12 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                     <button
                       key={b.code}
                       onClick={() => openBoard(b)}
-                      className="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-left transition-colors hover:bg-accent/20"
+                      className="flex items-center justify-between gap-3 border-b border-border py-2 text-left transition-colors hover:bg-s2"
                       title="查看板块成分股"
                     >
                       <div className="min-w-0">
-                        <div className="truncate text-[13px] font-medium text-foreground" title={b.name}>{b.name}</div>
-                        <div className="truncate font-mono text-[11px] text-muted-foreground" title={b.code}>{b.code}</div>
+                        <div className="truncate text-[14px] font-medium text-foreground" title={b.name}>{b.name}</div>
+                        <div className="truncate font-mono text-[12px] text-muted-foreground" title={b.code}>{b.code}</div>
                       </div>
                       <div className={`font-mono text-[12px] font-semibold ${color}`}>{safePercent(pct)}</div>
                     </button>
@@ -315,7 +315,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
             <div className="py-6 text-center text-[12px] text-muted-foreground">{discoverError || '暂无热门股票 —— 稍后重试或切换市场'}</div>
           ) : (
             <div className="space-y-2">
-              {stocksMode === 'for_you' && <div className="px-1 text-[11px] text-muted-foreground">根据持仓/自选/监控信号/风格偏好排序</div>}
+              {stocksMode === 'for_you' && <div className="px-1 text-[12px] text-muted-foreground">根据持仓/自选/监控信号/风格偏好排序</div>}
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 {visibleHotStocks.slice(0, 6).map((s) => {
                   const pct = safeNum(s.change_pct)
@@ -325,19 +325,19 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                     <div
                       key={`${s.market || discoverMarket}:${s.symbol}`}
                       onClick={() => onOpenStock(s.symbol, s.market || discoverMarket, s.name, false)}
-                      className="flex cursor-pointer items-center justify-between gap-3 border-b border-border/40 py-2 text-left transition-colors hover:bg-accent/20"
+                      className="flex cursor-pointer items-center justify-between gap-3 border-b border-border py-2 text-left transition-colors hover:bg-s2"
                       title="打开股票详情弹窗"
                     >
                       <div className="min-w-0">
-                        <div className="truncate text-[13px] font-medium text-foreground" title={s.name}>{s.name}</div>
-                        <div className="font-mono text-[11px] text-muted-foreground">{s.market || discoverMarket}:{s.symbol}</div>
+                        <div className="truncate text-[14px] font-medium text-foreground" title={s.name}>{s.name}</div>
+                        <div className="font-mono text-[12px] text-muted-foreground">{s.market || discoverMarket}:{s.symbol}</div>
                         {reasons && reasons.length > 0 && (
-                          <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={reasons.join(' · ')}>{reasons.join(' · ')}</div>
+                          <div className="mt-0.5 truncate text-[12px] text-muted-foreground" title={reasons.join(' · ')}>{reasons.join(' · ')}</div>
                         )}
                       </div>
                       <div className="text-right">
                         <div className="font-mono text-[12px] text-foreground">{typeof s.price === 'number' && isFinite(s.price) ? s.price.toFixed(2) : (s.price != null && isFinite(Number(s.price)) ? Number(s.price).toFixed(2) : '--')}</div>
-                        <div className={`font-mono text-[11px] ${color}`}>{safePercent(pct)}</div>
+                        <div className={`font-mono text-[12px] ${color}`}>{safePercent(pct)}</div>
                       </div>
                     </div>
                   )
@@ -368,15 +368,15 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                       setBoardDialogOpen(false)
                       onOpenStock(s.symbol, s.market || 'CN', s.name, false)
                     }}
-                    className="flex cursor-pointer items-center justify-between gap-3 border-b border-border/40 py-2 text-left transition-colors hover:bg-accent/20"
+                    className="flex cursor-pointer items-center justify-between gap-3 border-b border-border py-2 text-left transition-colors hover:bg-s2"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-[13px] font-medium text-foreground" title={s.name}>{s.name}</div>
-                      <div className="font-mono text-[11px] text-muted-foreground">{s.symbol}</div>
+                      <div className="truncate text-[14px] font-medium text-foreground" title={s.name}>{s.name}</div>
+                      <div className="font-mono text-[12px] text-muted-foreground">{s.symbol}</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-[12px] text-foreground">{typeof s.price === 'number' && isFinite(s.price) ? s.price.toFixed(2) : (s.price != null && isFinite(Number(s.price)) ? Number(s.price).toFixed(2) : '--')}</div>
-                      <div className={`font-mono text-[11px] ${color}`}>{safePercent(pct)}</div>
+                      <div className={`font-mono text-[12px] ${color}`}>{safePercent(pct)}</div>
                     </div>
                   </div>
                 )

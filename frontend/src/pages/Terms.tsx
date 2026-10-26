@@ -107,10 +107,10 @@ function SectionList({ sections }: { sections: { title: string; body: string[] }
     <div className="space-y-6">
       {sections.map(s => (
         <section key={s.title}>
-          <h3 className="mb-2 text-[13px] font-semibold text-foreground">{s.title}</h3>
+          <h3 className="mb-2 text-[14px] font-semibold text-foreground">{s.title}</h3>
           <ul className="space-y-1.5">
             {s.body.map((line, i) => (
-              <li key={i} className="text-[13px] leading-relaxed text-muted-foreground">
+              <li key={i} className="text-[14px] leading-relaxed text-muted-foreground">
                 {line}
               </li>
             ))}
@@ -151,17 +151,17 @@ export default function TermsPage() {
           </div>
           <div>
             <h1 className="text-[16px] font-bold text-foreground">服务条款</h1>
-            <p className="text-[11px] text-muted-foreground">用户协议与隐私政策</p>
+            <p className="text-[12px] text-muted-foreground">用户协议与隐私政策</p>
           </div>
         </div>
 
         {/* Tab 切换 */}
-        <div className="mb-6 flex gap-1 rounded-lg bg-muted/50 p-1">
+        <div className="mb-6 flex gap-1 rounded-lg bg-s2 p-1">
           <button
             type="button"
             onClick={() => setTab('agreement')}
             className={
-              'flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[13px] transition-colors ' +
+              'flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[14px] transition-colors ' +
               (tab === 'agreement'
                 ? 'bg-background font-medium text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground')
@@ -174,7 +174,7 @@ export default function TermsPage() {
             type="button"
             onClick={() => setTab('privacy')}
             className={
-              'flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[13px] transition-colors ' +
+              'flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[14px] transition-colors ' +
               (tab === 'privacy'
                 ? 'bg-background font-medium text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground')
@@ -186,12 +186,12 @@ export default function TermsPage() {
         </div>
 
         {/* 正文卡片 */}
-        <div className="card rounded-xl border border-border bg-card p-5 md:p-6 shadow-sm">
+        <div className="card-surface card rounded-xl bg-card p-5 md:p-6 shadow-sm">
           <div className="mb-5 border-b border-border pb-4">
             <h2 className="text-[16px] font-semibold text-foreground">
               {tab === 'agreement' ? '用户协议' : '隐私政策'}
             </h2>
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-[12px] text-muted-foreground">
               最近更新：2026 年 9 月 16 日 · 生效日期：即日起
             </p>
           </div>
@@ -203,7 +203,7 @@ export default function TermsPage() {
           <Button className="w-full max-w-xs" onClick={handleAgree}>
             我已阅读并同意
           </Button>
-          <p className="text-center text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-center text-[12px] leading-relaxed text-muted-foreground">
             继续注册或使用本服务，即表示您已阅读并同意《用户协议》与《隐私政策》。
             <br />
             本平台数据仅供参考，不构成投资建议。市场有风险，投资需谨慎。

@@ -5,7 +5,7 @@ export interface DayCandleOHLC { o: number; h: number; l: number; c: number }
 /** 单根日K(v0.5.85, spec §6): 红=收>=开, 绿=收<开; candle=null → 占位, 不编影线。 */
 export default function DayCandle({ candle, basis }: { candle: DayCandleOHLC | null; basis: 'qfq' | 'raw' }) {
   if (!candle) {
-    return <span title="无K数据" className="inline-block h-[26px] w-[10px] rounded-sm bg-muted/40" />
+    return <span title="无K数据" className="inline-block h-[26px] w-[10px] rounded-sm bg-s2" />
   }
   const sc = readStockColors()
   const up = candle.c >= candle.o

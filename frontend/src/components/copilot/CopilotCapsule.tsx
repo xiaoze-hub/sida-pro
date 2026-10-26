@@ -11,6 +11,7 @@ import {
   QUICK_QUESTIONS,
 } from '@/lib/copilot/copy'
 import { registerCapsulePresence } from '@/lib/copilot/capsule-presence'
+import { useTabActive } from '@panwatch/base-ui'
 import { toneBar, toneMeta } from '@/lib/copilot/tone'
 import type { CopilotBrief } from '@/lib/copilot/types'
 
@@ -103,10 +104,12 @@ export function CopilotCapsule({
   symbol,
   market = 'CN',
   stockName,
+  presentation = 'floating',
 }: {
   symbol: string
   market?: string
   stockName?: string
+  presentation?: 'inline' | 'floating'
 }) {
   const { data } = useCopilotBrief(symbol, market, { timeoutMs: 15000 })
   const [hidden, setHidden] = useState(false)
@@ -121,7 +124,8 @@ export function CopilotCapsule({
   posRef.current = pos
 
   // 入口唯一性登记：挂载即声明"工作台已有胶囊，FAB 让位"。
-  useEffect(() => registerCapsulePresence(), [])
+  const tabActive = useTabActive()
+  useEffect(() => tabActive ? registerCapsulePresence() : undefined, [tabActive])
 
   useEffect(() => {
     try {
@@ -281,6 +285,25 @@ export function CopilotCapsule({
     onClickCapture: handleClickCapture,
   }
 
+  if (presentation === 'inline') {
+    return (
+      <div data-testid="copilot-inline-toolbar" className="surface-toolbar flex flex-wrap items-center justify-between gap-2 rounded-lg bg-s2 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
+          <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+          <span className="font-medium text-foreground">AI 技术分析</span>
+          <span className="rounded bg-card px-2 py-0.5 font-mono">{symbol}</span>
+          {!hidden && <span className="hidden truncate sm:inline">{data?.verdict.intent_label || '结合当前页面数据查看分析证据'}</span>}
+        </div>
+        {hidden ? (
+          <button type="button" onClick={restore} data-testid="copilot-capsule-restore" className="rounded-md px-3 py-2 text-[12px] font-medium text-primary hover:bg-s3">展开分析入口</button>
+        ) : <div className="flex items-center gap-1">
+          <button type="button" onClick={open} data-testid="copilot-capsule-open" className="rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:bg-primary/90">打开分析</button>
+          <button type="button" onClick={collapse} data-testid="copilot-capsule-hide" aria-label={CAPSULE_HIDE} className="ui-icon-button">×</button>
+        </div>}
+      </div>
+    )
+  }
+
   if (hidden) {
     return (
       <div
@@ -321,7 +344,7 @@ export function CopilotCapsule({
         dragging ? 'cursor-grabbing' : 'cursor-grab'
       }`}
     >
-      <div className="relative flex h-14 items-stretch overflow-hidden rounded-xl border border-role-watch/40 bg-s2">
+      <div className="card-surface relative flex h-14 items-stretch overflow-hidden rounded-xl bg-s2">
         {/* 左侧色条: tone 越大越醒目(机会=琥珀/风险=红), 外发光由外壳承担 */}
         <span aria-hidden="true" className={`w-1.5 shrink-0 ${bar}`} />
         <button
@@ -338,14 +361,14 @@ export function CopilotCapsule({
           </span>
           <span className="min-w-0">
             <span className="flex items-center gap-1.5">
-              <span className="text-[10px] font-semibold text-role-watch">
+              <span className="text-[12px] font-semibold text-role-watch">
                 {meta?.icon ?? '✦'}
               </span>
-              <span className="max-w-[168px] truncate text-[13px] font-semibold text-foreground">
+              <span className="max-w-[168px] truncate text-[14px] font-semibold text-foreground">
                 {meta ? label : `${CAPSULE_FALLBACK} · ${symbol}`}
               </span>
             </span>
-            <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <span className="font-mono">{symbol}</span>
               {stockName ? <span className="max-w-[96px] truncate">{stockName}</span> : null}
               <span className="text-role-watch">点击唤醒</span>
@@ -367,7 +390,7 @@ export function CopilotCapsule({
           onClick={collapse}
           data-testid="copilot-capsule-hide"
           data-capsule-no-drag="true"
-          className="flex w-8 shrink-0 items-center justify-center border-l border-border/40 text-[13px] text-muted-foreground transition-colors hover:bg-s3 hover:text-foreground"
+          className="flex w-8 shrink-0 items-center justify-center border-l border-border text-[14px] text-muted-foreground transition-colors hover:bg-s3 hover:text-foreground"
         >
           ×
         </button>

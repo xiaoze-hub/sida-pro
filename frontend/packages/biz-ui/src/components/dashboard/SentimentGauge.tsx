@@ -128,7 +128,7 @@ export default function SentimentGauge({
         >
           {score}
         </div>
-        <div className="mt-1 text-[10px] leading-none text-[#8e8e96]">
+        <div className="mt-1 text-[12px] leading-none text-[#8e8e96]">
           市场温度 · {label}
         </div>
       </div>

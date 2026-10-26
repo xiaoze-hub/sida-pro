@@ -260,7 +260,7 @@ export default function StockPriceAlertPanel(props: {
       className={`relative inline-flex h-8 w-8 items-center justify-center rounded-full border shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         shownSummary.enabled > 0
           ? 'border-amber-500/40 bg-amber-500/12 text-amber-500 hover:bg-amber-500/20'
-          : 'border-border/60 bg-accent/30 text-muted-foreground hover:border-primary/35 hover:bg-primary/10 hover:text-primary'
+          : 'border-border bg-s2 text-muted-foreground hover:border-primary/35 hover:bg-primary/10 hover:text-primary'
       }`}
       onClick={() => setOpen(true)}
       title={shownSummary.total > 0 ? `提醒 ${shownSummary.enabled}/${shownSummary.total}` : '价格提醒'}
@@ -269,7 +269,7 @@ export default function StockPriceAlertPanel(props: {
     >
       <AlarmClock className="h-4 w-4" />
       {shownSummary.total > 0 && (
-        <span className="absolute -right-1 -top-1 h-[15px] min-w-[15px] rounded-full bg-primary px-1 text-center text-[10px] leading-[15px] text-primary-foreground ring-1 ring-card">
+        <span className="absolute -right-1 -top-1 h-[15px] min-w-[15px] rounded-full bg-primary px-1 text-center text-[12px] leading-[15px] text-primary-foreground ring-1 ring-card">
           {shownSummary.enabled}
         </span>
       )}
@@ -299,16 +299,16 @@ export default function StockPriceAlertPanel(props: {
             ) : (
               <div className="space-y-2 max-h-[48vh] overflow-y-auto scrollbar">
                 {rules.map(r => (
-                  <div key={r.id} className="rounded-lg border border-border/40 p-3">
+                  <div key={r.id} className="card-surface bg-card rounded-lg p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-[13px] font-medium truncate" title={r.name || `${props.stockName || symbol} 提醒`}>{r.name || `${props.stockName || symbol} 提醒`}</span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${r.enabled ? 'bg-emerald-500/15 text-emerald-500' : 'bg-muted text-muted-foreground'}`}>
+                          <span className="text-[14px] font-medium truncate" title={r.name || `${props.stockName || symbol} 提醒`}>{r.name || `${props.stockName || symbol} 提醒`}</span>
+                          <span className={`text-[12px] px-1.5 py-0.5 rounded ${r.enabled ? 'bg-emerald-500/15 text-emerald-500' : 'bg-muted text-muted-foreground'}`}>
                             {r.enabled ? '启用' : '暂停'}
                           </span>
                         </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">
+                        <div className="mt-1 text-[12px] text-muted-foreground">
                           {(r.condition_group?.items || []).map(conditionText).join(r.condition_group?.op === 'or' ? ' 或 ' : ' 且 ')}
                         </div>
                       </div>

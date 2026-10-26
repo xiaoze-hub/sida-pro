@@ -62,12 +62,12 @@ describe('motion token', () => {
 })
 
 describe('Dim 第三档主题', () => {
-  it('只降对比度: 色相不动(240 系), 且不引入新色相', () => {
-    const dim = css.match(/:root\[data-theme='dim'\] \{([\s\S]*?)\}/)
+  it('Dim 限定深色，保留文字和背景同一中性色系', () => {
+    const dim = css.match(/\.dark\[data-theme='dim'\] \{([\s\S]*?)\}/)
     expect(dim, 'dim 主题块缺失').toBeTruthy()
     const body = dim![1]
-    expect(body).toMatch(/--foreground: 240/)
-    expect(body).toMatch(/--chart-canvas: 240/)
+    expect(body).toMatch(/--foreground: 216/)
+    expect(body).toMatch(/--chart-canvas: 220/)
     expect(body).not.toMatch(/--stock-(up|down)/) // 涨跌色在 dim 下不动
   })
 })
@@ -106,8 +106,8 @@ describe('浮层层级与圆角(治理)', () => {
   })
 })
 
-describe('终端字阶收敛到 6 档(公开面允许第 7 档)', () => {
-  it('全仓 text-[Npx] 的取值集合 = 6 档(+公开面 Tiers/Landing 的 28/36/48)', () => {
+describe('终端字阶收敛到 4 档(公开面允许更大标题)', () => {
+  it('全仓 text-[Npx] 的取值集合 = 4 档(+公开面 Tiers/Landing 的 28/36/48)', () => {
     const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
     const walk = (dir: string, out: string[] = []): string[] => {
       for (const name of readdirSync(dir)) {
@@ -129,7 +129,7 @@ describe('终端字阶收敛到 6 档(公开面允许第 7 档)', () => {
         else sizes.add(n)
       }
     }
-    expect([...sizes].sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 16, 20])
+    expect([...sizes].sort((a, b) => a - b)).toEqual([12, 14, 16, 20])
     expect([...publicOnly].sort((a, b) => a - b)).toEqual([28, 36, 48])
   })
 

@@ -326,7 +326,7 @@ describe('StockWorkbench 三带骨架', () => {
     const root = screen.getByTestId('band1').parentElement as HTMLElement
     expect(root.className).toContain('mx-auto')
     expect(root.className).toContain('max-w-none')
-    expect(root.className).toContain('p-3')
+    expect(root.className).toContain('min-w-0')
 
     // 带2: 主图(日线 / 120 天 / 高 420)+ 右栏固定 320px
     expect(screen.getByTestId('kline').textContent).toBe('kline:002636:CN:420:1d:120')
@@ -349,7 +349,7 @@ describe('StockWorkbench 三带骨架', () => {
     }
     // 外层区域只用**顶部 hairline** 划分(与 Dashboard 同语言): 只允许 `border-t`, 不许整框/卡片底/阴影。
     const klineArena = klineBox.closest('section') as HTMLElement
-    expect(klineArena.className).toContain('border-t border-border/60')
+    expect(klineArena.className).toContain('border-t border-border')
     for (const cardChrome of ['rounded', 'shadow', 'bg-card', 'bg-background', 'p-2.5']) {
       expect(klineArena.className, `K 线区域外壳不得带卡片外衣「${cardChrome}」`).not.toContain(cardChrome)
     }
@@ -360,7 +360,7 @@ describe('StockWorkbench 三带骨架', () => {
     // 展开后: 速览内容原样回来(折叠只改展示, 不删功能)
     fireEvent.click(railToggle)
     expect(screen.getByTestId('rail').textContent).toBe('rail:002636:CN')
-    const railColumn = screen.getByTestId('rail').closest('[class*="w-[320px]"]') as HTMLElement
+    const railColumn = screen.getByTestId('rail').closest('[class*="xl:w-[300px]"]') as HTMLElement
     expect(railColumn).toBeTruthy()
     expect(railColumn.className).toContain('shrink-0')
     // rail 自身仍在可滚动容器里(长速览卡不撑破列高)
@@ -488,12 +488,12 @@ describe('StockWorkbench 三带骨架', () => {
     expect(mountedTabs()).toEqual(['l2'])
   })
 
-  it('带1 切类型: 写 ?type= 且**保留**已有 ?tab=(切类型不丢标签)', () => {
+  it('带1 切到有效指数，保留已有页内标签，不把股票代码直接当成指数', () => {
     renderAt('/stocks/002636?tab=news')
     fireEvent.click(screen.getByText('mock-to-index'))
     expect(search()).toContain('type=index')
     expect(search()).toContain('tab=news')
-    expect(screen.getByTestId('index-body').textContent).toBe('index-body:002636')
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:000001')
     expect(screen.queryByTestId('kline')).toBeNull()
     // 切到指数分支后标签组件**全部卸载**(分支不同, 不再渲染)
     expect(screen.queryByTestId('tab-news')).toBeNull()
@@ -668,7 +668,7 @@ describe('StockWorkbench 三带骨架', () => {
     await expectTabHasPosition('l2', 'false')
     expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByText('mock-to-index'))
-    expect(screen.getByTestId('index-body').textContent).toBe('index-body:002636')
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:000001')
     await new Promise((r) => setTimeout(r, 0))
     // 闸门关闭 ⇒ 不因切类型再发一次(仍恰 1 次)
     expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)

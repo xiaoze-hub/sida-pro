@@ -3,6 +3,7 @@ import json
 import logging
 import time as _time
 
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from src.web.api._scope import scoped
@@ -378,7 +379,7 @@ _MINUTE_CACHE: dict = {}  # {symbol_market: (ts, points)}
 _MINUTE_TTL = 60.0
 
 
-def _tencent_minute(symbol: str, market: str) -> tuple:
+def _tencent_minute(symbol: str, market: str, instrument: str = "auto") -> tuple:
     # 2026-10-24: 增返第4项 trade_date(腾讯 payload 自带 date=YYYYMMDD)。
     # ⚠️ 契约变更: 直接 `a,b,c = _tencent_minute(...)` 会 ValueError, 必须用下标解包。
     #    (调用方唯一一处已改为 _res[0..2], 测试同步改)
@@ -394,7 +395,7 @@ def _tencent_minute(symbol: str, market: str) -> tuple:
     # 指数约定: 沪指以 000 开头(sh), 深指以 399 开头(sz); 个股 000 开头是深市(sz)
     prefix = {"CN": "sh" if symbol.startswith(("6", "9")) else "sz",
               "HK": "hk", "US": ""}.get(market, "sh")
-    if market == "CN":
+    if market == "CN" and instrument != "stock":
         if symbol in ("000001", "000300", "000016", "000905", "000852"):
             prefix = "sh"   # 上证指数/沪深300/上证50/中证500/中证1000
         elif symbol.startswith("399"):
@@ -430,10 +431,10 @@ def _tencent_minute(symbol: str, market: str) -> tuple:
         # ⚠️ 第3/4列本身已经是"当日累计"值, 不可再累加(旧版 cum_vol += vol 是 bug,
         #    会把累计量当增量二次累加, 导致均价分母膨胀、均价线整体失真)
         # 指数识别(avg 无意义: 腾讯对指数成交额字段语义不同, 不计算均价)
-        is_index = market == "CN" and (
+        is_index = instrument == "index" or (instrument == "auto" and market == "CN" and (
             symbol in ("000001", "000300", "000016", "000905", "000852")
             or symbol.startswith("399")
-        )
+        ))
         points = []
         prev_cum_vol = 0.0
         for row in data:
@@ -459,7 +460,7 @@ def _tencent_minute(symbol: str, market: str) -> tuple:
 
 
 @router.get("/minute/{symbol}")
-async def get_minute(symbol: str, market: str = "CN"):
+async def get_minute(symbol: str, market: str = "CN", instrument: Literal["auto", "stock", "index"] = "auto"):
     """分时走势(盘中实时)。腾讯优先。含昨收(±分界线)。
 
     2026-08-12: 附加 swings 字段(顺势拉升段/瞬时下探段标记, 逐单明细判别),
@@ -469,11 +470,11 @@ async def get_minute(symbol: str, market: str = "CN"):
     (兼容既有前端), 但 **`degraded: true` + `note` 原文**; 真空态(非交易日/停牌)
     `degraded: false` 且无 note。缓存 5 元组: (ts, points, prev_close, swings, note)。
     """
-    is_index = market == "CN" and (
+    is_index = instrument == "index" or (instrument == "auto" and market == "CN" and (
         symbol in ("000001", "000300", "000016", "000905", "000852")
         or symbol.startswith("399")
-    )
-    cache_key = f"{market}:{symbol}"
+    ))
+    cache_key = f"{market}:{symbol}" + (f":{instrument}" if instrument != "auto" else "")
     cached = _MINUTE_CACHE.get(cache_key)
     if cached and (_time.time() - cached[0]) < _MINUTE_TTL:
         # 兼容旧缓存: 3元组=无 swings/note; 4元组=有 swings 无 note; 5元组=全量
@@ -485,7 +486,8 @@ async def get_minute(symbol: str, market: str = "CN"):
                 "degraded": bool(note_old), "note": note_old, "trade_date": date_old}
     # P0(2026-09-18): _tencent_minute 内是同步 urllib, 直接在 async def 调会阻塞事件循环,
     # 包 asyncio.to_thread 交给线程池; 返回三元组语义不变。
-    _res = await asyncio.to_thread(_tencent_minute, symbol, market)
+    _res = (await asyncio.to_thread(_tencent_minute, symbol, market) if instrument == "auto"
+            else await asyncio.to_thread(_tencent_minute, symbol, market, instrument))
     points, prev_close, src_note = _res[0], _res[1], _res[2]
     trade_date = _res[3] if len(_res) > 3 else None
     degraded = points is None

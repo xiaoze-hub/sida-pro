@@ -277,19 +277,19 @@ export default function DevelopersPage() {
               { step: '02', title: '获取 Key', desc: '在控制台查看/管理你的 Key', icon: <ShieldCheck className="h-4 w-4" /> },
               { step: '03', title: '发起调用', desc: '一行 curl 即可验证连通', icon: <Terminal className="h-4 w-4" /> },
             ].map(s => (
-              <div key={s.step} className="rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-4 text-center">
-                <div className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary dark:bg-cyan-500/10 dark:text-cyan-400">
+              <div key={s.step} className="card-surface rounded-xl bg-card p-4 text-center">
+                <div className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary dark:bg-cyan-500/10">
                   {s.icon}
                 </div>
                 <div className="font-mono text-[12px] text-primary/60 dark:text-cyan-500/50">{s.step}</div>
-                <div className="text-[13px] font-medium text-foreground dark:text-white">{s.title}</div>
+                <div className="text-[14px] font-medium text-foreground">{s.title}</div>
                 <div className="mt-0.5 text-[12px] text-muted-foreground">{s.desc}</div>
               </div>
             ))}
           </div>
 
           <InfoCard>
-            <div className="mb-2 text-[13px] font-medium text-foreground dark:text-white">第一次调用</div>
+            <div className="mb-2 text-[14px] font-medium text-foreground">第一次调用</div>
             <CodeBlock
               code={`curl -X POST "${base}/api/skills/get_stock_quote/run" \\
   -H "X-API-Key: sk_YOUR_KEY" \\
@@ -335,8 +335,8 @@ export default function DevelopersPage() {
           ].map((a, i) => (
             <InfoCard key={i}>
               <div className="mb-1.5 flex items-center gap-2">
-                <span className="text-[13px] font-medium text-foreground dark:text-white">{a.title}</span>
-                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[12px] font-mono text-primary dark:bg-cyan-500/10 dark:text-cyan-400">{a.badge}</span>
+                <span className="text-[14px] font-medium text-foreground">{a.title}</span>
+                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[12px] font-mono text-primary dark:bg-cyan-500/10">{a.badge}</span>
               </div>
               <p className="mb-2 text-[12px] text-muted-foreground">{a.desc}</p>
               <CodeBlock code={a.code} language="bash" />
@@ -363,7 +363,7 @@ export default function DevelopersPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-border/40 dark:border-white/10 text-muted-foreground">
+                <tr className="border-b border-border dark:border-white/10 text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">档位</th>
                   <th className="pb-2 pr-4 font-medium">日限</th>
                   <th className="pb-2 pr-4 font-medium">突发</th>
@@ -372,21 +372,21 @@ export default function DevelopersPage() {
               </thead>
               <tbody>
                 {catalog?.guest && (
-                  <tr className="border-b border-border/40 dark:border-white/5">
+                  <tr className="border-b border-border">
                     <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[12px] text-muted-foreground">游客</span></td>
-                    <td className="py-2 pr-4 font-mono text-foreground dark:text-white">{catalog.guest.daily_limit}</td>
+                    <td className="py-2 pr-4 font-mono text-foreground">{catalog.guest.daily_limit}</td>
                     <td className="py-2 pr-4 font-mono text-muted-foreground">-</td>
                     <td className="py-2 text-muted-foreground">仅 free 级 Skill，按 IP 限流</td>
                   </tr>
                 )}
                 {Object.entries(catalog?.tiers ?? {}).map(([tier, limit]) => (
-                  <tr key={tier} className="border-b border-border/40 dark:border-white/5">
+                  <tr key={tier} className="border-b border-border">
                     <td className="py-2 pr-4">
                       <span className={`rounded border px-1.5 py-0.5 text-[12px] ${TIER_BADGE[tier] || TIER_BADGE.free}`}>
                         {tier}
                       </span>
                     </td>
-                    <td className="py-2 pr-4 font-mono text-foreground dark:text-white">{limit.daily_limit}</td>
+                    <td className="py-2 pr-4 font-mono text-foreground">{limit.daily_limit}</td>
                     <td className="py-2 pr-4 font-mono text-muted-foreground">{limit.burst ?? '-'}</td>
                     <td className="py-2 text-muted-foreground">
                       {tier === 'free' && '注册即得，基础配额'}
@@ -400,7 +400,7 @@ export default function DevelopersPage() {
           </div>
         )}
 
-        <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+        <div className="card-surface mt-3 rounded-lg bg-amber-500/5 p-3">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
             <div className="text-[12px] text-amber-300/80">
@@ -440,9 +440,9 @@ export default function DevelopersPage() {
         ) : (
           <div className="space-y-2">
             {skills.map(s => (
-              <div key={s.name} className="rounded-lg border border-border/50 dark:border-white/5 bg-card/50 dark:bg-white/[0.02] p-3">
+              <div key={s.name} className="card-surface rounded-lg bg-card p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <code className="font-mono text-[12px] text-primary dark:text-cyan-300">{s.name}</code>
+                  <code className="font-mono text-[12px] text-primary">{s.name}</code>
                   <span className={`rounded border px-1.5 py-0.5 text-[12px] ${TIER_BADGE[s.tier_min] || TIER_BADGE.free}`}>
                     {s.tier_min}
                   </span>
@@ -453,7 +453,7 @@ export default function DevelopersPage() {
                 {Object.keys(s.params || {}).length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {Object.entries(s.params).map(([k, v]) => (
-                      <span key={k} className="rounded bg-muted/60 dark:bg-white/5 px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground">
+                      <span key={k} className="rounded bg-s2 dark:bg-white/5 px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground">
                         {k}{v.default !== undefined ? `=${v.default}` : ''}
                       </span>
                     ))}
@@ -519,7 +519,7 @@ export default function DevelopersPage() {
             <div className="mt-3">
               <Label className="text-[12px] text-muted-foreground">参数 (JSON)</Label>
               <textarea
-                className="mt-1 h-24 w-full rounded-lg border border-border/60 dark:border-white/10 bg-muted/40 dark:bg-[#0d0d18] p-2.5 font-mono text-[12px] text-foreground dark:text-cyan-100/80 focus:border-primary/40 dark:focus:border-cyan-500/30 focus:outline-none"
+                className="mt-1 h-24 w-full rounded-lg border border-border dark:border-white/10 bg-s2 dark:bg-[#0d0d18] p-2.5 font-mono text-[12px] text-foreground dark:text-cyan-100/80 focus:border-primary/40 dark:focus:border-cyan-500/30 focus:outline-none"
                 value={paramsJson}
                 onChange={e => setParamsJson(e.target.value)}
                 spellCheck={false}
@@ -535,7 +535,7 @@ export default function DevelopersPage() {
 
           {runResult && (
             <InfoCard>
-              <div className="mb-2 text-[13px] font-medium text-foreground dark:text-white">响应结果</div>
+              <div className="mb-2 text-[14px] font-medium text-foreground">响应结果</div>
               <CodeBlock code={runResult} language="json" />
             </InfoCard>
           )}
@@ -555,7 +555,7 @@ export default function DevelopersPage() {
             .filter((g) => g.apis.length > 0)
             .map((group, gi) => (
             <div key={gi}>
-              <h3 className="mb-3 text-[13px] font-semibold text-foreground">{group.title}</h3>
+              <h3 className="mb-3 text-[14px] font-semibold text-foreground">{group.title}</h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-[12px]">
                   <thead>
@@ -568,7 +568,7 @@ export default function DevelopersPage() {
                   </thead>
                   <tbody>
                     {group.apis.map((api, ai) => (
-                      <tr key={ai} className="border-b border-border/50">
+                      <tr key={ai} className="border-b border-border">
                         <td className="py-2 pr-3">
                           <span className={`font-mono text-[12px] font-semibold ${
                             api.method === 'GET' ? 'text-emerald-500' :
@@ -611,7 +611,7 @@ export default function DevelopersPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-border/40 dark:border-white/10 text-muted-foreground">
+                <tr className="border-b border-border dark:border-white/10 text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">数据源</th>
                   <th className="pb-2 pr-4 font-medium">口径</th>
                   <th className="pb-2 font-medium">说明</th>
@@ -619,8 +619,8 @@ export default function DevelopersPage() {
               </thead>
               <tbody>
                 {DATA_SOURCES.map(s => (
-                  <tr key={s.name} className="border-b border-border/40 dark:border-white/5">
-                    <td className="py-2 pr-4 text-foreground dark:text-white">{s.name}</td>
+                  <tr key={s.name} className="border-b border-border">
+                    <td className="py-2 pr-4 text-foreground">{s.name}</td>
                     <td className="py-2 pr-4">
                       <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[12px] text-blue-400">
                         {s.caliber}
@@ -633,7 +633,7 @@ export default function DevelopersPage() {
             </table>
           </div>
 
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+          <div className="card-surface rounded-lg bg-amber-500/5 p-3">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
               <div className="space-y-1 text-[12px] text-amber-300/80">
@@ -663,21 +663,21 @@ export default function DevelopersPage() {
             { code: 429, title: '限流', desc: '超过当日/当分钟调用限制', fix: '读取 Retry-After 头，指数退避后重试；或升级档位' },
             { code: 500, title: '服务器错误', desc: '内部处理异常', fix: '稍后重试；若持续出现请联系管理员' },
           ].map(e => (
-            <div key={e.code} className="rounded-lg border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-3">
+            <div key={e.code} className="card-surface rounded-lg bg-card p-3">
               <div className="flex items-center gap-2">
-                <span className={`font-mono text-[13px] font-bold ${
+                <span className={`font-mono text-[14px] font-bold ${
                   e.code === 401 ? 'text-amber-600 dark:text-amber-400' : e.code === 403 ? 'text-orange-600 dark:text-orange-400' : e.code === 429 ? 'text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-500'
                 }`}>{e.code}</span>
-                <span className="text-[13px] font-medium text-foreground dark:text-white">{e.title}</span>
+                <span className="text-[14px] font-medium text-foreground">{e.title}</span>
               </div>
               <p className="mt-1 text-[12px] text-muted-foreground">{e.desc}</p>
-              <p className="mt-1 text-[12px] text-primary/70 dark:text-cyan-400/60">→ {e.fix}</p>
+              <p className="mt-1 text-[12px] text-primary/70/60">→ {e.fix}</p>
             </div>
           ))}
         </div>
 
         <div className="mt-4">
-          <div className="mb-2 text-[13px] font-medium text-foreground dark:text-white">429 退避示例</div>
+          <div className="mb-2 text-[14px] font-medium text-foreground">429 退避示例</div>
           <CodeBlock
             code={`import time, random
 

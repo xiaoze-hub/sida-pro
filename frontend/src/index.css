@@ -1,149 +1,85 @@
-/* G5 收尾(2026-10-24): 键盘可达统一焦点环。
-   原实现只有 outline:auto(1px), 暗色底上几乎看不见; 统一为 2px 品牌色外环。
-   不做全局最小点击高度, 避免把图表工具栏挤爆。 */
-:focus-visible {
-  outline: 2px solid hsl(var(--ring));
-  outline-offset: 2px;
-}
+/* SIDA UI 准则 2026-10-26。主题值唯一入口；空间层级与行情语义分离。 */
+:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 3px; }
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  /* 动效降级在 **token 层**做: 所有新动效只用 --dur-*, 这一处生效全局(旧动画另有各自兜底) */
-  @media (prefers-reduced-motion: reduce) {
-    :root {
-      --dur-instant: 0ms; --dur-fast: 0ms; --dur-normal: 0ms; --dur-slow: 0ms;
-      --dur-flash: 0ms; --dur-flash-max: 0ms;
-    }
-  }
-  /* 第三主题档 Dim(长时盯盘): 只降对比度, 不动色相与涨跌语义 */
-  :root[data-theme='dim'] {
-    --s0: 240 20% 4%; --s1: 240 20% 8.5%; --s2: 240 18% 12%; --s3: 240 16% 15.5%; --s4: 240 22% 10.5%;
-    --chart-canvas: 240 20% 2.5%;
-    --background: var(--s0); --card: var(--s1);
-    --foreground: 240 15% 84%;
-    --muted-foreground: 240 10% 52%;
-    --border: 240 15% 12%;
-    --border-strong: 240 17% 27.5%;
-    --input: 240 15% 13%;
-  }
   :root {
-    /* 反AI模板 P1: 中性色色相 220→240 统一向锚点色收敛(消除 AI 灰);卡片不再纯白 */
+    color-scheme: light;
+    --s0: 225 30% 98%;
+    --s1: 0 0% 100%;
+    --s2: 225 35% 97%;
+    --s3: 230 100% 96%;
+    --s4: 0 0% 100%;
+    --chart-canvas: 0 0% 100%;
     --background: var(--s0);
-    /* P0-1: 涨跌色 CSS 变量 — 供 ECharts 主题双态引用 */
-  --stock-up: #ff5252;
-    --stock-down: #43A047;
-    /* 同色 HSL 三元组: Hex **不能**塞进 hsl() —— hsl(#E53935 / .22) 是非法声明, 浏览器整条丢弃
-       (涨跌闪 341/345 行曾因此静默失效)。凡需要「涨跌色 + alpha」一律走这两个三元组:
-         background-color: hsl(var(--stock-up-hsl) / .22)
-       值由 #E53935 / #43A047 精确换算(1.364/77.193%/55.294% 与 122.581/40.969%/44.510%),
-       往返误差 < 0.5/255; 与上面 Hex 同色不同写法, Hex 才是唯一颜色事实源, 二者由
-       tests/components/stock-flash-token.test.ts 锁死一致。 */
-  --stock-up-hsl: 0 100% 66.1%;
-    --stock-down-hsl: 122.581 40.969% 44.510%;
-    /* 闪烁底色强度(魔法数收进 token, 亮暗同值) */
-    --flash-alpha: 0.22;
-    /* ECharts 主题 token */
-    --echarts-text: #18181b;
-    --echarts-axis-label: #52525b;
-    --echarts-tooltip-bg: rgba(255,255,255,.95);
-    --echarts-tooltip-border: rgba(120,120,130,.3);
-    --echarts-tooltip-text: #18181b;
-    --echarts-split-line: rgba(120,120,130,.15);
-    --echarts-crosshair: rgba(120,120,130,.4);
-    --foreground: 240 20% 10%;
-    --card: var(--s1); /* 纸面白(极低色度),替代纯白卡 */
-    --card-foreground: 240 20% 10%;
-    --popover: 240 25% 99%; /* 纸面白(极低色度),替代纯白 */
-    --popover-foreground: 240 20% 10%;
-    /* 锚点色: A股数据感深青钢蓝,替代 shadcn 默认 234 蓝(AI模板特征) */
-    --primary: 240 70% 45%;
+    --foreground: 225 25% 17%;
+    --card: var(--s1);
+    --card-foreground: var(--foreground);
+    --popover: var(--s4);
+    --popover-foreground: var(--foreground);
+    --primary: 230 80% 56%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 15% 94%;
-    --secondary-foreground: 240 15% 40%;
-    --muted: 240 15% 94%;
-    --muted-foreground: 240 10% 48%; /* make-interfaces: 次级文字对比度余量(4.9:1) */
-    --accent: 240 15% 92%;
-    --accent-foreground: 240 20% 10%;
-    --destructive: 0 72% 51%;
+    --secondary: var(--s2);
+    --secondary-foreground: var(--foreground);
+    --muted: var(--s2);
+    --muted-foreground: 225 12% 42%;
+    --accent: var(--s3);
+    --accent-foreground: 230 65% 42%;
+    --destructive: 0 66% 42%;
     --destructive-foreground: 0 0% 100%;
-    --success: 152 60% 42%;
+    --success: 151 58% 28%;
     --success-foreground: 0 0% 100%;
-    --border: 240 15% 90%;
-    --input: 240 15% 90%;
-    --ring: 240 70% 45%; /* 跟随锚点色 */
-    /* 行情终端风格:微圆角。所有圆角档位由 tailwind.config.js 从此值派生
-       (sm=-4px / md=-2px / lg=基准 / xl=+2px / 2xl=+4px),进一步收紧只需调小此值 */
-
-    /* ── Surface 阶梯(2026-09-20 设计系统落地)──────────────────────────────
-       此前没有阶梯 token: bg-accent/xx 散落 301 处、bg-white/[0.0x] 30 处、bg-muted/xx 40 处,
-       同一视觉层级在不同页面靠手调透明度, 结果"同层不同色"。
-       阶梯只表达**空间层级**(越靠前越"浮"), 不表达涨跌。旧 token 值保持不变以免波及存量,
-       新增代码一律走 --s*; 旧写法由门禁 R12 棘轮只减不增。 */
-    --s0: 240 20% 95.5%;   /* 工作区/页底 */
-    --s1: 240 25% 99%;     /* 面板/卡片 */
-    --s2: 240 20% 96%;     /* 卡片内 hover */
-    --s3: 240 15% 92%;     /* 浮层/selected */
-    --s4: 240 25% 100%;    /* tooltip/最高浮层 */
-    /* 图表画布: 比外壳**更空一档** —— 亮色更白、暗色更黑, 让 K 线浮起来。
-       (此前 --bg-kline 亮色=99% 与卡片同亮、暗色=6% 比页底还亮 ⇒ "更空"没落地) */
-    --chart-canvas: 240 25% 99.5%;
-    /* ── motion token ────────────────────────────────────────────────────── */
-    --dur-instant: 80ms; --dur-fast: 150ms; --dur-normal: 250ms; --dur-slow: 400ms;
+    --border: 225 20% 91%;
+    --border-strong: 225 15% 81%;
+    --input: 225 18% 53%;
+    --ring: var(--primary);
+    --shadow-panel: 0 2px 4px hsl(225 35% 20% / .025), 0 8px 28px hsl(225 35% 20% / .035);
+    --shadow-overlay: 0 12px 36px hsl(220 35% 15% / .16), 0 2px 8px hsl(220 35% 15% / .08);
+    --radius: .5rem;
+    --stock-up: #bf293b;
+    --stock-down: #18764b;
+    --stock-up-hsl: 352.8 64.7% 45.5%;
+    --stock-down-hsl: 152.6 66.2% 27.8%;
+    --flash-alpha: .14;
+    --gs-go: var(--stock-up);
+    --gs-stop: var(--stock-down);
+    --stock-up-tint: 353 80% 97%;
+    --stock-down-tint: 152 50% 96%;
+    --flat-color: 218 15% 42%;
+    --threshold-line: 218 15% 52%;
+    --accent-primary: 35 80% 35%;
+    --scenario-up: #bf293b;
+    --scenario-down: #18764b;
+    --activity-bull: #7047b5;
+    --activity-strong: var(--stock-up);
+    --activity-weak: var(--stock-down);
+    --role-watch: 230 80% 56%;
+    --role-opp: 35 80% 35%;
+    --role-risk: 24 75% 37%;
+    --role-system: 218 15% 42%;
+    --echarts-text: #1d293b;
+    --echarts-axis-label: #526178;
+    --echarts-tooltip-bg: #ffffff;
+    --echarts-tooltip-border: #ccd3de;
+    --echarts-tooltip-text: #1d293b;
+    --echarts-split-line: #e9edf3;
+    --echarts-crosshair: #78879b;
+    --heat-n5: oklch(0.70 0.18 155); --heat-n4: oklch(0.75 0.16 155); --heat-n3: oklch(0.80 0.13 155);
+    --heat-n2: oklch(0.85 0.10 155); --heat-n1: oklch(0.90 0.06 155);
+    --heat-0: oklch(0.94 0.01 265);
+    --heat-p1: oklch(0.90 0.06 25); --heat-p2: oklch(0.85 0.10 25); --heat-p3: oklch(0.80 0.13 25);
+    --heat-p4: oklch(0.75 0.16 25); --heat-p5: oklch(0.70 0.20 25);
+    --font-num: "DIN Alternate", "Bahnschrift", "SF Mono", "Cascadia Code", ui-monospace, Consolas, monospace;
+    --font-cn: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --bg-kline: var(--chart-canvas);
+    --dur-instant: 80ms; --dur-fast: 150ms; --dur-normal: 220ms; --dur-slow: 320ms;
     --dur-flash: 420ms; --dur-flash-max: 700ms;
     --ease-out: cubic-bezier(0.16, 0.84, 0.44, 1);
     --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-    /* ── 角色色(只表达模块角色, 不得抢涨跌色)──────────────────────────────── */
-    --role-watch: 245 65% 62%;   /* 自选 */
-    --role-opp: 42 95% 55%;      /* 机会 */
-    --role-risk: 25 85% 50%;     /* 风险 */
-    --role-system: 240 8% 58%;   /* 系统 */
-    /* ── 涨跌强度阶(OKLCH 均匀发散; 每档文字对比度由测试锁定 ≥3:1)────────── */
-    --heat-n5: oklch(0.70 0.18 155); --heat-n4: oklch(0.75 0.16 155); --heat-n3: oklch(0.80 0.13 155);
-    --heat-n2: oklch(0.85 0.10 155); --heat-n1: oklch(0.90 0.06 155);
-    --heat-0: oklch(0.86 0.01 265);
-    --heat-p1: oklch(0.90 0.06 25);  --heat-p2: oklch(0.85 0.10 25);  --heat-p3: oklch(0.80 0.13 25);
-    --heat-p4: oklch(0.75 0.16 25);  --heat-p5: oklch(0.70 0.20 25);
-    --radius: 0.375rem;
-
-    /* 数字专用字体栈(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用。
-       DIN Alternate(macOS)/Bahnschrift(Win10+,DIN 风格系统字体)置顶,优先呈现
-       金融终端式数字;无 DIN 时回落到等宽数字字体。 */
-    --font-num: "DIN Alternate", "Bahnschrift", "SF Mono", "Cascadia Code", ui-monospace, "Roboto Mono", Consolas, monospace;
-    /* 研究报告 §4.3: 中文/UI 字体栈(终端化残留落地) */
-    --font-cn: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans CN", "Noto Sans CJK SC", sans-serif;
-    --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-    /* 研究报告 §4.3: K 线图背景(亮色纸面白; 暗色接近黑, 与终端调性一致) */
-    --bg-kline: var(--chart-canvas);
-    /* 研究报告 §4.3 剩余色板(awesome-design-html Robinhood tint 手法校准):
-       flat 平盘灰 #94A3B8; threshold 阈值线同基(使用处 alpha .5);
-       accent-primary Bloomberg 风强调橙 #F59E0B;
-       up/down-tint 涨跌淡底(涨停行/强势标记背景, 不抢 K 线主色)。
-       stock-up/down 已有(#E53935/#43A047)不动, K 线与文字涨跌同源。 */
-    --flat-color: 215 16% 57%;
-    --threshold-line: 215 16% 57%;
-    --accent-primary: 38 92% 50%;
-    --stock-up-tint: 0 85% 96%;
-    --stock-down-tint: 140 45% 94%;
-    /* GS买卖点(09-03收敛): G买入红/S卖出绿, 与 --stock-up/down 同源(同值不同名, 语义归属GS)。
-       原版同花顺 G绿S红; SIDA 按A股惯例 G红S绿, 功能等价, 验收以信号位置为准不以颜色为准。 */
-    --gs-go: var(--stock-up);
-    --gs-stop: var(--stock-down);
-    /* 情景关键位语义色(2026-10-22): 阻力/走强目标=rose(涨红), 支撑/走弱目标=emerald(跌绿)。
-       与 --stock-up/down 分开: 涨跌色=价格方向, 关键位色=位性质, 语义不同各自可演进。 */
-    --scenario-up: #e11d48;
-    --scenario-down: #059669;
-    /* 活跃度三色(研究报告§4.3): 大牛紫/强势红/生命绿; 弱档走 --flat-color(灰, 不编造第四色) */
-    --activity-bull: #8B5CF6;
-    --activity-strong: #EF4444;
-    --activity-weak: #22C55E;
-
-    /* 界面密度体系:normal(默认)= 4px 基准。
-       compact=3px / comfortable=6px 由 <html data-density> 属性覆盖(见下方)。
-       后续页面间距请用 --density-* 派生变量,例如:
-         style={{ gap: 'var(--density-2)' }}  ≈ Tailwind gap-2(8px),随档位自动缩放 */
     --density-unit: 4px;
     --density-1: var(--density-unit);
     --density-2: calc(var(--density-unit) * 2);
@@ -153,91 +89,74 @@
   }
 
   .dark {
-    /* 反AI模板 P1: 暗色统一色相 240,锚点色提亮为 240 70% 60%。
-       层级说明(oklch L 实测): bg 15.0 → card 19.8(Δ4.8)→ hover 23.1(Δ3.3)→ muted 25.1 → accent 27.9,
-       背景明度下调一档拉大与 card 的层级差(暗色层级靠明度不用阴影),卡片/悬浮保持不动。 */
-    /* P0-1: 暗色涨跌色 — 同色保持, 暗背景上更醒目 */
-    --stock-up: #ff5252;
-    --stock-down: #43A047;
-    /* 暗色同一组 HSL 三元组(见 :root 注释): 暗色不改涨跌色相, 只由上下文决定底色浓度 */
-    --stock-up-hsl: 0 100% 66.1%;
-    --stock-down-hsl: 122.581 40.969% 44.510%;
-    /* ECharts 暗色 token */
-    --echarts-text: #c4c4cb;
-    --echarts-axis-label: #8e8e96;
-    --echarts-tooltip-bg: rgba(24,24,27,.95);
-    --echarts-tooltip-border: rgba(120,120,130,.3);
-    --echarts-tooltip-text: #fafafa;
-    --echarts-split-line: rgba(120,120,130,.12);
-    --echarts-crosshair: rgba(120,120,130,.4);
-    /* Surface 阶梯(暗色): 比亮色更依赖明度差, 但每档只差 3~4 个 L, 不用大面积色块区隔 */
-    --s0: 240 24% 5.7%; --s1: 240 18% 13.5%; --s2: 240 18% 17%; --s3: 240 16% 20%; --s4: 240 18% 21%;
-    /* 图表画布比页底再低一档(5%→3.5%): "图表区更空"在暗色里 = 更黑 */
-    --chart-canvas: 240 20% 3.5%;
-    --dur-instant: 80ms; --dur-fast: 150ms; --dur-normal: 250ms; --dur-slow: 400ms;
-    --dur-flash: 420ms; --dur-flash-max: 700ms;
-    --ease-out: cubic-bezier(0.16, 0.84, 0.44, 1);
-    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-    --role-watch: 245 65% 68%; --role-opp: 42 95% 58%; --role-risk: 25 85% 58%; --role-system: 240 8% 60%;
-    /* 暗色强度阶: 亮度步长与亮色一致(0.05), 色度略提以在深底上拉开 */
+    color-scheme: dark;
+    --s0: 228 25% 8%;
+    --s1: 226 22% 14%;
+    --s2: 226 20% 18%;
+    --s3: 230 28% 23%;
+    --s4: 218 22% 25%;
+    --chart-canvas: 220 26% 6%;
+    --foreground: 216 30% 94%;
+    --muted-foreground: 216 18% 72%;
+    --primary: 230 100% 80%;
+    --primary-foreground: 220 32% 12%;
+    --accent-foreground: 214 87% 85%;
+    --destructive: 353 100% 76%;
+    --destructive-foreground: 220 32% 12%;
+    --success: 150 56% 66%;
+    --success-foreground: 220 32% 12%;
+    --border: 226 16% 23%;
+    --border-strong: 226 16% 32%;
+    --input: 216 18% 51%;
+    --shadow-panel: 0 3px 14px hsl(220 45% 2% / .2);
+    --shadow-overlay: 0 14px 40px hsl(220 45% 2% / .55), 0 2px 8px hsl(220 45% 2% / .3);
+    --stock-up: #ff7b86;
+    --stock-down: #6dcc9c;
+    --stock-up-hsl: 355 100% 74.1%;
+    --stock-down-hsl: 149.7 48.2% 61.4%;
+    --stock-up-tint: 353 35% 18%;
+    --stock-down-tint: 152 25% 17%;
+    --flat-color: 216 18% 72%;
+    --threshold-line: 216 18% 54%;
+    --accent-primary: 38 86% 70%;
+    --scenario-up: #ff7b86;
+    --scenario-down: #6dcc9c;
+    --activity-bull: #c5a5ff;
+    --role-watch: 230 100% 80%;
+    --role-opp: 38 86% 70%;
+    --role-risk: 28 90% 74%;
+    --role-system: 216 18% 72%;
+    --echarts-text: #e5edf7;
+    --echarts-axis-label: #aab9cd;
+    --echarts-tooltip-bg: #303c4d;
+    --echarts-tooltip-border: #65778e;
+    --echarts-tooltip-text: #f1f5fb;
+    --echarts-split-line: #253043;
+    --echarts-crosshair: #8296b0;
     --heat-n5: oklch(0.72 0.20 155); --heat-n4: oklch(0.67 0.17 155); --heat-n3: oklch(0.62 0.14 155);
     --heat-n2: oklch(0.57 0.10 155); --heat-n1: oklch(0.52 0.06 155);
     --heat-0: oklch(0.50 0.01 265);
-    --heat-p1: oklch(0.52 0.06 25);  --heat-p2: oklch(0.57 0.10 25);  --heat-p3: oklch(0.62 0.13 25);
-    --heat-p4: oklch(0.67 0.16 25);  --heat-p5: oklch(0.72 0.20 25);
-
-    --background: 240 20% 5%;
-    --foreground: 240 15% 90%;
-    --card: 240 18% 13.5%; /* 2026-10-24 卡片化翻案: 原 10% 与页底 5% 只差 5 个点 → 看着没底 */
-    --card-foreground: 240 15% 90%;
-    --popover: 240 16% 21%; /* 浮层必须明显高于卡片(13.5%), 否则下拉/弹层贴在一起 */
-    --popover-foreground: 240 15% 90%;
-    --primary: 240 70% 60%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 240 15% 17%;
-    --secondary-foreground: 240 15% 70%;
-    --muted: 240 15% 17%;
-    --muted-foreground: 240 10% 58%; /* make-interfaces: 暗色次级文字对比度(≈5.6:1) */
-    --accent: 240 15% 20%;
-    --accent-foreground: 240 15% 90%;
-    /* 研究报告 §4.3: K 线图背景暗色值(接近黑 hsl(222,47%,6%)) */
-    --bg-kline: var(--chart-canvas);
-    /* §4.3 剩余色板暗色值: flat/threshold 提亮保可读; tint 落深底 */
-    --flat-color: 215 16% 65%;
-    --threshold-line: 215 16% 65%;
-    --accent-primary: 38 92% 55%;
-    --stock-up-tint: 0 50% 14%;
-    --stock-down-tint: 140 40% 12%;
-    /* GS/活跃度三色暗色值: 绿系提亮保暗底可读(weak #22C55E→#4ADE80 等) */
-    --gs-go: var(--stock-up);
-    --gs-stop: var(--stock-down);
-    /* 情景关键位语义色暗色档(2026-10-22): 暗底提亮保可读(rose/emerald 提亮一档) */
-    --scenario-up: #fb7185;
-    --scenario-down: #34d399;
-    --activity-bull: #A78BFA;
-    --activity-strong: #F87171;
-    --activity-weak: #4ADE80;
-    --destructive: 0 60% 45%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 152 50% 38%;
-    --success-foreground: 0 0% 100%;
-    /* 边框降档 16%→14%: 原 16%(oklch 26.0)高于 muted 填充、比 card 亮 6.2,全局 150 处 border-border
-       全浓度描边过亮显脏;降至 14%(oklch≈24.5)落在 card(19.8)与 hover(23.1)之间,结构清晰不抢眼。 */
-    --border: 240 15% 14%;
-    --border-strong: 240 17% 27.5%; /* 卡片边界 #3a3a52, 对卡底 1.65:1(勘误 7.2) */
-    /* 输入框描边 18%→15%: 原与 accent 同亮(27.9)层级越位;降至 15%,略亮于 --border 保持输入可交互性。 */
-    --input: 240 15% 15%;
-    --ring: 240 70% 60%; /* 跟随锚点色 */
+    --heat-p1: oklch(0.52 0.06 25); --heat-p2: oklch(0.57 0.10 25); --heat-p3: oklch(0.62 0.13 25);
+    --heat-p4: oklch(0.67 0.16 25); --heat-p5: oklch(0.72 0.20 25);
   }
 
-  /* 密度档位覆盖(normal 为默认,不加选择器即保持原样):
-     compact   = 3px 基准(信息更密集,类 IDE 紧凑模式)
-     comfortable = 6px 基准(更宽松,适合大屏阅读) */
-  :root[data-density='compact'] {
-    --density-unit: 3px;
+  /* Dim 仅限深色；保留面板边界与可读文字，不影响浅色主题。 */
+  .dark[data-theme='dim'] {
+    --s0: 220 24% 9%; --s1: 218 20% 16%; --s2: 218 18% 20%;
+    --s3: 216 22% 24%; --s4: 218 20% 26%;
+    --chart-canvas: 220 24% 8%;
+    --foreground: 216 24% 89%;
+    --muted-foreground: 216 16% 71%;
+    --border: 226 15% 26%;
+    --border-strong: 226 16% 35%;
   }
-  :root[data-density='comfortable'] {
-    --density-unit: 6px;
+  :root[data-density='compact'] { --density-unit: 3px; }
+  :root[data-density='comfortable'] { --density-unit: 6px; }
+  @media (prefers-reduced-motion: reduce) {
+    :root {
+      --dur-instant: 0ms; --dur-fast: 0ms; --dur-normal: 0ms; --dur-slow: 0ms;
+      --dur-flash: 0ms; --dur-flash-max: 0ms;
+    }
   }
 }
 
@@ -247,6 +166,8 @@
   }
   body {
     @apply text-foreground antialiased bg-background;
+    font-size: 14px;
+    line-height: 1.6;
     font-family: var(--font-ui), var(--font-cn);
     min-height: 100vh;
   }
@@ -266,44 +187,54 @@
     @apply pb-10;
   }
 
-  .card {
-    @apply bg-card rounded-xl border border-border-strong shadow-[0_1px_2px_hsl(240_15%_40%/0.05),0_1px_0_hsl(var(--border)/0.35)];
+  .card, .card-hover, .analysis-section {
+    @apply rounded-xl bg-card;
+    box-shadow: var(--shadow-panel);
   }
   .card-hover {
-    @apply bg-card rounded-xl border border-border-strong transition-[background-color,border-color,box-shadow];
+    transition: box-shadow var(--dur-fast);
   }
-  /* 反AI模板④: hover 层级 = 表面亮度抬升 + 中性边框变化,去掉 primary 彩色光晕。
-     亮色: 纸面微提白 + 轻中性阴影(无彩色);暗色: 背景提亮一档 + 边框中性提亮,不用阴影。 */
-  .card-hover:hover {
-    background-color: hsl(240 25% 100%); /* 亮色: 比 --card(99%) 提亮一档的纸面白 */
-    border-color: hsl(var(--border-strong));
-    box-shadow: 0 1px 0 hsl(var(--border) / 0.4), 0 4px 14px -6px hsl(240 15% 40% / 0.16); /* 轻中性阴影,无 primary 色 */
-  }
-  .dark .card-hover:hover {
-    background-color: hsl(var(--s2)); /* 暗色: 表面亮度抬升(13.5% → 17%, 与 --card 拉开一档) */
-    border-color: hsl(var(--border-strong));
-    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.07); /* 保留卡片顶部内高光(原先 none 把浮起感抹掉了) */
-  }
-  /* 2026-10-24 卡片化翻案: 暗色下阴影不可见, 用 1px 顶部内高光表达"浮起一档"。
-     只加在暗色, 亮色已有纸面阴影。 */
-  .dark .card {
-    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.045);
-  }
-  .dark .card-hover:hover {
-    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06);
-  }
-  .card-subtle {
-    @apply rounded-xl border border-border/40 bg-accent/20;
-  }
+  .card-hover:hover { box-shadow: var(--shadow-panel); }
+  .analysis-section { padding: var(--density-4); }
+  .card-subtle { @apply rounded-lg bg-s2; }
+  /* 内容卡片禁止描边与内侧高光，层级由底色和留白建立。 */
+  .card-surface, .card, .card-hover, .card-subtle, .analysis-section { border: none !important; }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg text-[13px] font-semibold hover:bg-primary/90 active:scale-[0.96] transition-[background-color,transform];
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-[14px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-secondary text-secondary-foreground border border-border rounded-lg text-[13px] font-medium hover:bg-secondary/80 active:scale-[0.96] transition-[background-color,transform];
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-input bg-card px-4 py-2 text-[14px] font-medium text-foreground transition-colors hover:bg-s2 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .input-field {
-    @apply w-full h-10 px-3 rounded-lg border border-border bg-background text-[13px] placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors;
+    @apply h-10 w-full rounded-lg border border-input bg-card px-3 text-[14px] text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-50;
   }
+  .ui-icon-button {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:border-border hover:bg-s2 hover:text-foreground disabled:opacity-50;
+  }
+  .page-header {
+    @apply mb-5 flex min-w-0 flex-wrap items-start justify-between gap-4;
+  }
+  .page-title { @apply text-[20px] font-semibold tracking-tight text-foreground; }
+  .page-description { @apply mt-1 text-[14px] leading-relaxed text-muted-foreground; }
+  .surface-toolbar { @apply flex flex-wrap items-center gap-2 rounded-lg border border-border bg-s2 p-2; }
+  .nav-item {
+    @apply flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-2 text-[14px] font-medium text-muted-foreground transition-colors hover:bg-s2 hover:text-foreground;
+  }
+  .nav-item[aria-current='page'] { @apply bg-s3 font-semibold text-accent-foreground; }
+  .nav-item:focus-visible { outline-offset: -2px; }
+  .page-container { min-width: 0; }
+  .skip-link {
+    position: fixed; top: .75rem; left: 1rem; z-index: 100;
+    transform: translateY(-180%); padding: .6rem 1rem;
+    color: hsl(var(--primary-foreground)); background: hsl(var(--primary)); border-radius: var(--radius);
+  }
+  .skip-link:focus { transform: translateY(0); }
+  @media (pointer: coarse) {
+    .ui-icon-button, .btn-primary, .btn-secondary, [data-ui='button'], [role='tab'] { min-height: 44px; }
+    .ui-icon-button, [data-ui='button'][data-size='icon'] { min-width: 44px; }
+    input:not([type='checkbox']):not([type='radio']):not([type='range']), select, textarea { font-size: 16px; }
+  }
+
 }
 
 /* Scrollbar (opt-in via className="scrollbar") */
@@ -347,6 +278,35 @@
 }
 
 /* v0.4.7: 图表骨架扫光 */
+@keyframes sida-assistant-breathe {
+  0%, 100% { transform: scale(0.96); }
+  50% { transform: scale(1.04); }
+}
+@keyframes sida-system-flow {
+  to { stroke-dashoffset: -34; }
+}
+.system-topology {
+  background-image: radial-gradient(hsl(var(--border-strong)) 0.7px, transparent 0.7px);
+  background-size: 20px 20px;
+}
+.system-connection-flow {
+  animation: sida-system-flow 1.5s linear infinite;
+  animation-play-state: paused;
+}
+[data-flow-active="true"] .system-connection-flow { animation-play-state: running; }
+@media (prefers-reduced-motion: reduce) {
+  .system-connection-flow { animation: none; }
+}
+.assistant-avatar-motion {
+  transform-origin: center;
+  animation: sida-assistant-breathe 4s ease-in-out infinite;
+  animation-play-state: paused;
+}
+[data-animated="true"] > .assistant-avatar-motion { animation-play-state: running; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-avatar-motion { animation: none; transform: none; }
+}
+
 @keyframes shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
@@ -464,6 +424,6 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
    无关的信息不该用阴影表达, 平铺面板一律用 hairline 边框。 */
 @layer components {
   .shadow-float {
-    box-shadow: 0 8px 24px hsl(var(--foreground) / 0.10), 0 2px 6px hsl(var(--foreground) / 0.06);
+    box-shadow: var(--shadow-overlay);
   }
 }

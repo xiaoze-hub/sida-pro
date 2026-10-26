@@ -134,7 +134,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
         <Button
           variant="outline"
           size="sm"
-          className="h-7 px-2 text-[11px]"
+          className="h-7 px-2 text-[12px]"
           disabled={exporting}
           onClick={() => void exportData()}
         >
@@ -156,7 +156,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
           <button
             type="button"
             onClick={() => void loadStatus()}
-            className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary transition-colors hover:bg-s2"
+            className="rounded border border-border px-2.5 py-1 text-[12px] text-primary transition-colors hover:bg-s2"
           >
             重新查询状态
           </button>
@@ -164,7 +164,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
       )}
 
       {!statusLoading && !statusError && pending && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-[12px] leading-relaxed">
+        <div className="card-surface rounded-md bg-amber-500/5 px-3 py-2.5 text-[12px] leading-relaxed">
           <div className="font-medium text-amber-700 dark:text-amber-400">注销申请处理中</div>
           <div className="mt-1 text-muted-foreground tabular-nums">
             申请时间 {status?.deleted_at ? formatDateTime(status.deleted_at) : '未知'}
@@ -177,18 +177,18 @@ export default function DataPrivacySection({ username }: { username?: string }) 
       )}
 
       {!statusLoading && !statusError && !pending && (
-        <div className="rounded-md border border-border/40">
+        <div className="card-surface bg-card rounded-md ">
           <div className="px-3 py-2.5">
             <div className="text-[12px] text-foreground">导出个人数据</div>
-            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+            <div className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">
               下载你在本平台的账号信息、自选、持仓与预测等数据的 JSON 快照。
             </div>
           </div>
-          <div className="border-t border-border/40 px-3 py-2.5">
+          <div className="border-t border-border px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-[12px] text-foreground">注销账号</div>
-                <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                <div className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">
                   申请后账号立即停用、所有设备下线; 30 天宽限期内可由管理员恢复,
                   到期后数据被物理清除。
                 </div>
@@ -196,7 +196,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 shrink-0 px-2 text-[11px] text-destructive"
+                className="h-7 shrink-0 px-2 text-[12px] text-destructive"
                 onClick={() => setPanelOpen(v => !v)}
               >
                 <Trash2 className="h-3 w-3" />
@@ -205,9 +205,9 @@ export default function DataPrivacySection({ username }: { username?: string }) 
             </div>
 
             {panelOpen && (
-              <div className="mt-3 space-y-2.5 border-t border-border/40 pt-3">
+              <div className="mt-3 space-y-2.5 border-t border-border pt-3">
                 <div>
-                  <Label className="text-[11px]">当前密码(确认身份)</Label>
+                  <Label className="text-[12px]">当前密码(确认身份)</Label>
                   <Input
                     type="password"
                     value={password}
@@ -224,7 +224,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
                     checked={ack}
                     onChange={e => setAck(e.target.checked)}
                   />
-                  <span className="text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="text-[12px] leading-relaxed text-muted-foreground">
                     我了解: 提交后账号立即无法登录, 30 天宽限期内可由管理员恢复,
                     宽限期满后数据被物理删除且不可恢复。
                   </span>

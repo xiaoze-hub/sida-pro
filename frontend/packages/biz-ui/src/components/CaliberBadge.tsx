@@ -41,7 +41,7 @@ export default function CaliberBadge({
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded border border-border px-1 font-mono text-[10px] leading-4 text-muted-foreground',
+        'inline-flex items-center rounded border border-border px-1 font-mono text-[12px] leading-4 text-muted-foreground',
         className,
       )}
       data-caliber={caliber}

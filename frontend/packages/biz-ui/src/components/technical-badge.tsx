@@ -6,7 +6,7 @@ import { normalizeSuggestionAction, type SuggestionAction } from '@panwatch/biz-
 export type TechnicalBadgeTone = 'neutral' | 'bullish' | 'bearish' | 'warning' | 'info' | SuggestionAction
 
 const toneClassMap: Record<TechnicalBadgeTone, string> = {
-  neutral: 'bg-accent/50 text-muted-foreground',
+  neutral: 'bg-s2 text-muted-foreground',
   // 多空(方向)语义统一走涨跌令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
   bullish: 'bg-stock-up/10 text-stock-up',
   bearish: 'bg-stock-down/10 text-stock-down',

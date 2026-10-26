@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { X, Flame } from 'lucide-react'
+import { X, Flame, ListX } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
   Activity,
@@ -31,11 +31,11 @@ import { HOME_TAB_KEY, parseTabPath, tabLabel, type WorkspaceTab } from '@/lib/t
  * 工作台页签栏(Tab Shell, 2026-10-15)。
  *
  * UI 铁律落法:
- *   · **hairline 分隔取代边框** —— 整条栏只有一条 1px 下分隔线(`border-b border-border/60`),
+ *   · **hairline 分隔取代边框** —— 整条栏只有一条 1px 下分隔线(`border-b border-border`),
  *     页签之间不画竖线、不做卡片化包裹。
  *   · 层级只靠 Surface 阶梯(`bg-s2` 选中 / `hover:bg-s2` 悬停 / `bg-s3` 关闭键悬停),
  *     不手调透明度(R12 棘轮)、不用阴影(R13)。
- *   · 选中态 = 唯一的 accent 权重(`border-b-2 border-primary` 选择指示条 + 前景色),
+ *   · 选中态以实色背景与字重区分，不使用彩色描边或选择指示条,
  *     与侧栏「当前项」同一套语言。
  *   · 暗色优先: 全部走 token(--s0..s4 / --border / --primary), 亮暗两套自动成立。
  */
@@ -58,6 +58,7 @@ const TAB_ICONS: Record<string, LucideIcon> = {
   '/profile': User,
   '/api-keys': KeyRound,
   '/system': ServerCog,
+  '/system/status': Activity,
   '/settings': Settings,
   '/developers': Code2,
   '/admin': ShieldCheck,
@@ -124,8 +125,21 @@ export default function WorkspaceTabs({
         data-testid="workspace-tabs"
         role="tablist"
         aria-label={t('tabs.bar')}
+        onKeyDown={(event) => {
+          const index = tabs.findIndex((tab) => tab.key === activeKey)
+          let next = index
+          if (event.key === 'ArrowRight') next = (index + 1) % tabs.length
+          else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length
+          else if (event.key === 'Home') next = 0
+          else if (event.key === 'End') next = tabs.length - 1
+          else return
+          if (event.target instanceof HTMLElement && event.target.getAttribute('role') !== 'tab') return
+          event.preventDefault()
+          if (tabs[next]) onActivate(tabs[next])
+          event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
+        }}
         // 桌面端吸附在内容区顶部: 页签是"我在哪儿"的常驻坐标; 移动端顶部已有 sticky header, 不叠一层
-        className="mb-3 -mx-4 flex items-stretch overflow-x-auto border-b border-border/60 px-4 md:sticky md:top-0 md:z-30 md:-mx-6 md:px-6 bg-s0"
+        className="mb-4 flex items-stretch gap-1 overflow-x-auto rounded-xl border border-border bg-s2 p-1 md:sticky md:top-0 md:z-30"
       >
         {tabs.map((tab) => {
           const active = tab.key === activeKey
@@ -141,8 +155,8 @@ export default function WorkspaceTabs({
                 e.preventDefault()
                 setMenu({ key: tab.key, x: e.clientX, y: e.clientY })
               }}
-              className={`group flex shrink-0 items-stretch rounded-t-lg border-b-2 transition-colors ${
-                active ? 'border-primary bg-s2' : 'border-transparent hover:bg-s2'
+              className={`group flex shrink-0 items-stretch rounded-lg border-b-2 transition-colors ${
+                active ? 'border-transparent bg-card shadow-sm' : 'border-transparent hover:bg-s3'
               }`}
             >
               <button
@@ -150,11 +164,12 @@ export default function WorkspaceTabs({
                 role="tab"
                 data-testid="workspace-tab"
                 aria-selected={active}
+                tabIndex={active ? 0 : -1}
                 title={label}
                 onClick={() => onActivate(tab)}
-                className={`flex min-w-0 items-center gap-1.5 py-1.5 pl-3 text-[12px] font-medium transition-colors ${
+                className={`flex min-h-10 min-w-0 items-center gap-2 py-2 pl-3 text-[14px] font-medium transition-colors ${
                   tab.closable ? 'pr-1' : 'pr-3'
-                } ${active ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'}`}
+                } ${active ? 'font-semibold text-foreground' : 'text-muted-foreground group-hover:text-foreground'}`}
               >
                 {Icon && <Icon className={`h-3.5 w-3.5 shrink-0 ${active ? 'text-primary' : ''}`} />}
                 <span className="max-w-[160px] truncate">{label}</span>
@@ -170,7 +185,7 @@ export default function WorkspaceTabs({
                     e.stopPropagation()
                     onClose(tab)
                   }}
-                  className="my-1 mr-1 flex w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-s3 hover:text-foreground"
+                  className="my-1 mr-1 flex min-w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-s3 hover:text-foreground"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -178,6 +193,10 @@ export default function WorkspaceTabs({
             </div>
           )
         })}
+        {tabs.length > 1 && onCloseOthers && <button type="button" data-testid="workspace-tabs-close-all" aria-label={t('tabs.closeAll')} title={t('tabs.closeAll')} onClick={() => {
+          const home = tabs.find(tab => tab.key === HOME_TAB_KEY)
+          if (home) onCloseOthers(home)
+        }} className="sticky right-0 z-10 ml-auto flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-lg bg-s2 text-muted-foreground hover:bg-s3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"><ListX className="h-4 w-4" /></button>}
       </div>
       {/* 右键菜单挂到 body: 既不受页签栏 overflow 裁切, 也不会把菜单文案混进 tablist 的文本内容 */}
       {menuTab

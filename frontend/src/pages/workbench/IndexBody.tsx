@@ -85,6 +85,7 @@ function IndexKline({ symbol, market }: { symbol: string; market: string }) {
     <KlineChart
       symbol={symbol}
       market={market}
+      instrument="index"
       initialInterval="1d"
       initialDays={120}
       gsSignals={layer.gsSignals}
@@ -112,7 +113,7 @@ function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
           <g key={t.date}>
             <rect x={i * bw + bw * 0.2} y={H - 8 - h} width={bw * 0.6} height={h} fill="var(--primary)" opacity={0.7} rx={1} />
             {i % 5 === 0 && (
-              <text x={i * bw + bw / 2} y={H - 2} fontSize={10} fill="currentColor" textAnchor="middle">
+              <text x={i * bw + bw / 2} y={H - 2} fontSize={12} fill="currentColor" textAnchor="middle">
                 {t.date.slice(5)}
               </text>
             )}
@@ -184,16 +185,16 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
       ) : data ? (
         <>
           {/* 实时行情条(去卡片: hairline 下分隔) */}
-          <div className="border-b border-border/40 pb-3">
+          <div className="border-b border-border pb-3">
             <div className="flex items-end gap-4 flex-wrap">
               <div>
                 <div className="text-[20px] font-num font-bold tabular-nums">{safeFixed(q?.current_price)}</div>
-                <div className={`text-[13px] font-num tabular-nums ${up ? 'text-stock-up' : 'text-stock-down'}`}>
+                <div className={`text-[14px] font-num tabular-nums ${up ? 'text-stock-up' : 'text-stock-down'}`}>
                   {safeNum(q?.change_amount) !== null && Number(q?.change_amount) > 0 ? '+' : ''}{safeFixed(q?.change_amount)} ({safeFixed(q?.change_pct)}%)
                 </div>
               </div>
-              <div className="flex gap-6 text-[13px] text-muted-foreground">
-                <div><span className="block text-[10px]">昨收</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.prev_close)}</span></div>
+              <div className="flex gap-6 text-[14px] text-muted-foreground">
+                <div><span className="block text-[12px]">昨收</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.prev_close)}</span></div>
                 {/* 走查 2026-09-18: 腾讯指数 quote 对 open/high/low 常返 null —— 用**当日**最后一根日K回填, 不编造 */}
                 {(() => {
                   const last = data.klines[data.klines.length - 1]
@@ -204,13 +205,13 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
                   const low = q?.low ?? (sameDay ? last.low : null)
                   return (
                     <>
-                      <div><span className="block text-[10px]">今开</span><span className="font-mono text-foreground tabular-nums">{safeFixed(open)}</span></div>
-                      <div><span className="block text-[10px]">最高</span><span className="font-mono text-foreground tabular-nums">{safeFixed(high)}</span></div>
-                      <div><span className="block text-[10px]">最低</span><span className="font-mono text-foreground tabular-nums">{safeFixed(low)}</span></div>
+                      <div><span className="block text-[12px]">今开</span><span className="font-mono text-foreground tabular-nums">{safeFixed(open)}</span></div>
+                      <div><span className="block text-[12px]">最高</span><span className="font-mono text-foreground tabular-nums">{safeFixed(high)}</span></div>
+                      <div><span className="block text-[12px]">最低</span><span className="font-mono text-foreground tabular-nums">{safeFixed(low)}</span></div>
                     </>
                   )
                 })()}
-                <div><span className="block text-[10px]">成交量</span><span className="font-mono text-foreground tabular-nums">{q?.volume != null && Number.isFinite(Number(q.volume)) ? safeFixed(Number(q.volume) / 1e8) + '亿股' : '--'}</span></div>
+                <div><span className="block text-[12px]">成交量</span><span className="font-mono text-foreground tabular-nums">{q?.volume != null && Number.isFinite(Number(q.volume)) ? safeFixed(Number(q.volume) / 1e8) + '亿股' : '--'}</span></div>
               </div>
             </div>
           </div>
@@ -220,22 +221,22 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
             {/* P2-15: 收敛 SectionHeader(v0.5.2 收尾) */}
             <SectionHeader
               title="K线走势"
-              action={<span className="text-[10px] text-muted-foreground">MA/成交量/MACD/RSI · 日K/周K/月K 切换</span>}
+              action={<span className="text-[12px] text-muted-foreground">MA/成交量/MACD/RSI · 日K/周K/月K 切换</span>}
             />
             <IndexKline symbol={symbol || ''} market={data.market || 'CN'} />
           </div>
 
           {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
           {marketFlow && (
-            <div className="border-b border-border/40 pb-2 mb-3">
+            <div className="border-b border-border pb-2 mb-3">
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                 <div className="flex items-center gap-2">
                   <TrendingUp className="h-4 w-4 text-primary" />
                   <span className="text-[12px] font-semibold">大盘资金流</span>
-                  <span className="text-[10px] text-muted-foreground">东财 · 两市主力</span>
+                  <span className="text-[12px] text-muted-foreground">东财 · 两市主力</span>
                   {/* C2: 源故障回退旧快照的显式标注 */}
                   {marketFlow.stale && (
-                    <span className="text-[10px] text-amber-600" title="数据源暂不可用, 当前展示最后一次成功快照(非实时)">
+                    <span className="text-[12px] text-amber-600" title="数据源暂不可用, 当前展示最后一次成功快照(非实时)">
                       · 数据滞后{marketFlow.stale_age_sec != null ? ` ${Math.max(1, Math.round(marketFlow.stale_age_sec / 60))} 分钟` : ''}
                     </span>
                   )}
@@ -258,11 +259,11 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
               {(marketFlow.inflow_boards?.length || marketFlow.outflow_boards?.length) ? (
                 <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
                   {marketFlow.inflow_boards?.length ? (
-                    <div className="border-t border-border/40 pt-2">
-                      <div className="text-[11px] font-semibold text-stock-up mb-1 flex items-center gap-1"><Flame className="w-3 h-3" />资金流入板块</div>
+                    <div className="border-t border-border pt-2">
+                      <div className="text-[12px] font-semibold text-stock-up mb-1 flex items-center gap-1"><Flame className="w-3 h-3" />资金流入板块</div>
                       <div className="space-y-0.5">
                         {marketFlow.inflow_boards.map(b => (
-                          <div key={b.name} className="flex justify-between text-[11px]">
+                          <div key={b.name} className="flex justify-between text-[12px]">
                             <span className="text-muted-foreground truncate" title={b.name}>{b.name}</span>
                             <span className="font-mono text-stock-up">{safeNum(b.net_inflow) !== null ? `+${safeFixed(b.net_inflow, 1)}亿` : '--'}</span>
                           </div>
@@ -271,11 +272,11 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
                     </div>
                   ) : null}
                   {marketFlow.outflow_boards?.length ? (
-                    <div className="border-t border-border/40 pt-2">
-                      <div className="text-[11px] font-semibold text-stock-down mb-1 flex items-center gap-1"><Droplets className="w-3 h-3" />资金流出板块</div>
+                    <div className="border-t border-border pt-2">
+                      <div className="text-[12px] font-semibold text-stock-down mb-1 flex items-center gap-1"><Droplets className="w-3 h-3" />资金流出板块</div>
                       <div className="space-y-0.5">
                         {marketFlow.outflow_boards.map(b => (
-                          <div key={b.name} className="flex justify-between text-[11px]">
+                          <div key={b.name} className="flex justify-between text-[12px]">
                             <span className="text-muted-foreground truncate" title={b.name}>{b.name}</span>
                             <span className="font-mono text-stock-down">{safeNum(b.net_inflow) !== null ? `${safeFixed(b.net_inflow, 1)}亿` : '--'}</span>
                           </div>
@@ -293,10 +294,10 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
             <div className="flex items-center gap-2 mb-2">
               <BarChart3 className="h-4 w-4" />
               <span className="font-bold">成交额趋势(近20日)</span>
-              <span className="text-[10px] text-muted-foreground">单位:亿元</span>
+              <span className="text-[12px] text-muted-foreground">单位:亿元</span>
             </div>
             <AmountChart trend={data.amount_trend} />
-            {data.note && <div className="text-[10px] text-amber-700 dark:text-amber-500 mt-2">{data.note}</div>}
+            {data.note && <div className="text-[12px] text-amber-700 dark:text-amber-500 mt-2">{data.note}</div>}
           </div>
         </>
       ) : null}

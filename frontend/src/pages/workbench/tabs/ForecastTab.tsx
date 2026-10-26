@@ -99,7 +99,7 @@ function ForecastFallback({ error, onRetry }: { error: Error; onRetry: () => voi
     <div
       data-testid="forecast-tab-error"
       role="alert"
-      className="rounded border border-border/60 bg-muted/20 p-3 text-[12px]"
+      className="rounded border border-border bg-s2 p-3 text-[12px]"
     >
       <div className="flex items-center gap-2 text-foreground">
         <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
@@ -108,7 +108,7 @@ function ForecastFallback({ error, onRetry }: { error: Error; onRetry: () => voi
       <div className="mt-1 text-muted-foreground">
         成因域: 预测页代码块下载失败 / 页内渲染报错(此处不作"引擎未启动"的推断 —— 该页有自己的引擎状态位)
       </div>
-      <div className="mt-1 font-mono text-[11px] text-muted-foreground break-all">{error.message || String(error)}</div>
+      <div className="mt-1 font-mono text-[12px] text-muted-foreground break-all">{error.message || String(error)}</div>
       <button
         type="button"
         onClick={onRetry}
@@ -151,11 +151,11 @@ export default function ForecastTab({ symbol, market }: { symbol: string; market
   return (
     <div className="mt-1 text-[12px]" data-testid="forecast-tab">
       {/* 口径行: 如实说明内嵌的是哪一页 + 标的从哪来(工作台预填) */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/40 pb-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2 text-[12px] text-muted-foreground">
         <span className="text-foreground">预测</span>
         <span className="text-border/60">|</span>
         <span>四模型(预测 / 历史回测 / 预测记录 / 模型权重 / 预测报告) · 含 AI 裁判结论(verdict/理由/裁判战绩, adjust 覆盖方向显式标注) · 惰性加载, 进入本标签才下载并取数</span>
-        <span className="ml-auto text-[10px]">已按工作台标的预填代码; 可在页内搜索框更换, 再点「开始预测」</span>
+        <span className="ml-auto text-[12px]">已按工作台标的预填代码; 可在页内搜索框更换, 再点「开始预测」</span>
       </div>
 
       <div className="mt-2">

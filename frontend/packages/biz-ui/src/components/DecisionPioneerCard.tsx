@@ -91,7 +91,7 @@ export interface DecisionPioneerCardProps {
   symbol: string
   market: string
   /**
-   * bare=true: 只出数据内容, 不出自己的卡壳(`mt-3 rounded-xl border border-border/50 bg-card p-3`)
+   * bare=true: 只出数据内容, 不出自己的卡壳(`mt-3 rounded-xl border border-border bg-card p-3`)
    * 与自带标题/副标题行 —— 供「数智决策」合并卡(workbench/DecisionCard)在一张外层卡里合成,
    * 避免"卡中卡"双层边框与三级标题。默认 false, 既有调用点(DarkFlowCards/StockWorkbench)行为不变。
    */
@@ -150,9 +150,9 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
 
   if (loading && !data) {
     return bare ? (
-      <div className="h-[110px] rounded-lg bg-accent/20 animate-pulse" />
+      <div className="h-[110px] rounded-lg bg-s2 animate-pulse" />
     ) : (
-      <div className="mt-3 h-[110px] rounded-xl border border-border/50 bg-card animate-pulse bg-accent/20" />
+      <div className="card-surface mt-3 h-[110px] rounded-xl bg-card animate-pulse bg-s2" />
     )
   }
 
@@ -163,7 +163,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
         <span>数智决策三指标暂不可用({error})</span>
       </div>
     )
-    return bare ? msg : <div className="mt-3 rounded-xl border border-border/50 bg-card p-3">{msg}</div>
+    return bare ? msg : <div className="card-surface mt-3 rounded-xl bg-card p-3">{msg}</div>
   }
 
   const act = data?.institution_activity ?? null
@@ -176,27 +176,27 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
       {!bare ? (
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
-            <div className="text-[13px] font-semibold text-foreground">🧭 数智决策三指标</div>
-            <span className="text-[10px] text-muted-foreground">GS 信号 × 机构活跃度 × L2 主力净流入（明盘口径）</span>
+            <div className="text-[14px] font-semibold text-foreground">🧭 数智决策三指标</div>
+            <span className="text-[12px] text-muted-foreground">GS 信号 × 机构活跃度 × L2 主力净流入（明盘口径）</span>
           </div>
           {refreshButton}
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[12px]">
         {/* AI机构活跃度 */}
-        <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
+        <div className="rounded-lg bg-s2 px-2.5 py-1.5">
           <div className="text-muted-foreground mb-0.5">AI机构活跃度</div>
           {act ? (
             <>
               <div className="font-mono text-[16px] font-semibold" style={{ color: activityColor(act.level) }}>
                 {act.activity != null ? act.activity.toFixed(2) : '--'}
-                <span className="text-[10px] ml-1">{act.level}</span>
+                <span className="text-[12px] ml-1">{act.level}</span>
               </div>
               <div className="text-muted-foreground mt-0.5">
                 连强{act.streak_days}日{act.ma5 != null ? ` · 5日均${act.ma5.toFixed(2)}` : ''}
               </div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">
+              <div className="text-[12px] text-muted-foreground mt-0.5">
                 生命1.56/强势3/大牛6
               </div>
             </>
@@ -208,14 +208,14 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
         {/* GS 区间(机会/风险, 盘中实时) —— 口径单一事实源: 只认已确认信号, 与 K 线图层
             (gs_signals 标记 + 区间色带)逐字一致; 末根疑似交叉只标「待确认」。
             口径见 packages/biz-ui/src/lib/caliber-glossary.ts */}
-        <div className="rounded-lg bg-accent/20 px-2.5 py-1.5" title={glossaryTooltip(GS_SIGNAL)}>
+        <div className="rounded-lg bg-s2 px-2.5 py-1.5" title={glossaryTooltip(GS_SIGNAL)}>
           <div className="text-muted-foreground mb-0.5">GS 信号（机会/风险）</div>
           {gs && (gs.state || gs.pending) ? (
             <>
               <div className="font-mono text-[16px] font-semibold text-foreground">
                 {gs.state ?? gs.label ?? '无数据'}
                 {gs.pending ? (
-                  <span className="text-[10px] ml-1 text-muted-foreground">待确认</span>
+                  <span className="text-[12px] ml-1 text-muted-foreground">待确认</span>
                 ) : null}
               </div>
               <div className="text-muted-foreground mt-0.5">
@@ -223,13 +223,13 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
                 快线{gs.a0 != null ? gs.a0.toFixed(2) : '--'} / 慢线
                 {gs.bb0 != null ? gs.bb0.toFixed(2) : '--'}
               </div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">
+              <div className="text-[12px] text-muted-foreground mt-0.5">
                 {gs.pending
                   ? gs.pending_label ?? `○${gs.pending_side ?? ''} 待确认(盘中价, 收盘才定死)`
                   : `G=${GS_SIGNAL.g.meaning} · S=${GS_SIGNAL.s.meaning}`}
               </div>
               {gs.signal_date ? (
-                <div className="text-[10px] text-muted-foreground mt-0.5">
+                <div className="text-[12px] text-muted-foreground mt-0.5">
                   最近已确认 {gs.signal}（{gs.signal_date}）
                 </div>
               ) : null}
@@ -242,7 +242,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
         </div>
 
         {/* L2 主力净流入 */}
-        <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
+        <div className="rounded-lg bg-s2 px-2.5 py-1.5">
           <div className="text-muted-foreground mb-0.5">主力净流入(L2·TQ)</div>
           {l2?.available && l2.zjl_hb != null ? (
             <>
@@ -250,12 +250,12 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
                 {fmtWan(l2.zjl_hb)}
               </div>
               <div className="text-muted-foreground mt-0.5">{l2.direction ?? '平衡'}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">
+              <div className="text-[12px] text-muted-foreground mt-0.5">
                 逐笔{l2.l2_tick_num ?? 0}笔 · 委托{l2.l2_order_num ?? 0}笔
               </div>
               {/* 非交易时段回退收盘快照时显式标注(0 不冒充真实值); live 不标注 */}
               {l2.source && l2.source !== 'live' && (
-                <div className="text-[10px] text-muted-foreground mt-0.5">
+                <div className="text-[12px] text-muted-foreground mt-0.5">
                   {l2.as_of ? `${l2.as_of} 收盘` : '非实时'}
                 </div>
               )}
@@ -269,7 +269,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
       </div>
 
       {/* 机构活跃度副图(2026-09-11 升级 C): 逐日活跃度 + 生命/强势/大牛三线 + 共振日红点 */}
-      <div className="mt-3 border-t border-border/40 pt-2">
+      <div className="mt-3 border-t border-border pt-2">
         <ActivitySparkline symbol={symbol} />
       </div>
 
@@ -277,12 +277,12 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
       {bare ? (
         <div className="mt-2 flex items-center justify-end gap-2">
           {data?.data_time ? (
-            <span className="font-mono text-[10px] text-muted-foreground">更新于 {data.data_time}</span>
+            <span className="font-mono text-[12px] text-muted-foreground">更新于 {data.data_time}</span>
           ) : null}
           {refreshButton}
         </div>
       ) : data?.data_time ? (
-        <div className="text-[10px] text-muted-foreground mt-2 text-right font-mono">
+        <div className="text-[12px] text-muted-foreground mt-2 text-right font-mono">
           更新于 {data.data_time}
         </div>
       ) : null}
@@ -290,5 +290,5 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
   )
 
   // bare: 不出自己的卡壳(边框/底色/内边距), 只把内容交给外层卡(外层决定间距与边框)
-  return bare ? body : <div className="mt-3 rounded-xl border border-border/50 bg-card p-3">{body}</div>
+  return bare ? body : <div className="card-surface mt-3 rounded-xl bg-card p-3">{body}</div>
 }

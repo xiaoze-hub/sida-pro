@@ -30,12 +30,12 @@ export default function Stat({
         className,
       )}
     >
-      <div className="truncate text-[10px] leading-tight text-muted-foreground" title={typeof label === 'string' ? label : undefined}>{label}</div>
+      <div className="truncate text-[12px] leading-tight text-muted-foreground" title={typeof label === 'string' ? label : undefined}>{label}</div>
       {/* 数值一律 whitespace-nowrap：绝不截断成 `+2.1…`（读数事故）。宽度不够时由标签单行截断让位。 */}
       <div className={cn('whitespace-nowrap font-num text-[16px] font-semibold leading-snug tabular-nums', tone)} title={typeof value === 'string' ? value : undefined}>
         {value}
       </div>
-      {sub ? <div className="truncate text-[10px] leading-tight text-muted-foreground" title={typeof sub === 'string' ? sub : undefined}>{sub}</div> : null}
+      {sub ? <div className="truncate text-[12px] leading-tight text-muted-foreground" title={typeof sub === 'string' ? sub : undefined}>{sub}</div> : null}
     </div>
   )
 }

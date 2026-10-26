@@ -31,14 +31,14 @@ export function PanelLockToggle({
         className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors ${
           isLocked
             ? 'border-amber-500/40 bg-amber-500/10 text-amber-600'
-            : 'border-border/40 text-muted-foreground hover:text-foreground'
+            : 'border-border text-muted-foreground hover:text-foreground'
         }`}
       >
         {isLocked ? <Lock className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
         {isLocked ? `已锁定 ${locked}` : `跟随 ${symbol}`}
       </button>
       {diverged && (
-        <span className="text-[10px] text-muted-foreground">当前浏览 {symbol}（本面板未跟随）</span>
+        <span className="text-[12px] text-muted-foreground">当前浏览 {symbol}（本面板未跟随）</span>
       )}
     </span>
   )

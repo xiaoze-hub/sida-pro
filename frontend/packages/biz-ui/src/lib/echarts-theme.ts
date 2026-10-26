@@ -1,3 +1,5 @@
+import { hslaVar } from './stock-colors'
+
 /**
  * v0.4.8 → v0.5.0: 「终端感」ECharts 主题 — 对齐 SIDA 设计 token。
  * 双态: 从 CSS 变量读取颜色值, 自动适配 light/dark 模式。
@@ -19,7 +21,7 @@ export function buildSidaTheme() {
   return {
     /* 图表画布(2026-09-20): 用 --chart-canvas(比外壳更空一档), 不再交给默认值 ——
        生产实测过一块**白色画布**(深色主题里热力图画布底色是白的), 显式给值才不会再漂。 */
-    backgroundColor: `hsl(${cssVar('--chart-canvas', '240 20% 3.5%')})`,
+    backgroundColor: hslaVar('--chart-canvas', '228 25% 8%'),
     textStyle: { color: cssVar('--echarts-text', '#c4c4cb') },
     axisPointer: {
       lineStyle: { color: cssVar('--echarts-crosshair', 'rgba(120,120,130,.4)') },
@@ -28,7 +30,7 @@ export function buildSidaTheme() {
     categoryAxis: {
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: cssVar('--echarts-axis-label', '#8e8e96'), fontSize: 10 },
+      axisLabel: { color: cssVar('--echarts-axis-label', '#8e8e96'), fontSize: 12 },
       splitLine: { show: false },
     },
     valueAxis: {
@@ -36,7 +38,7 @@ export function buildSidaTheme() {
       axisTick: { show: false },
       axisLabel: {
         color: cssVar('--echarts-axis-label', '#8e8e96'),
-        fontSize: 10,
+        fontSize: 12,
         fontFamily: 'monospace',
       },
       splitLine: {
@@ -47,8 +49,8 @@ export function buildSidaTheme() {
       backgroundColor: cssVar('--echarts-tooltip-bg', 'rgba(24,24,27,.95)'),
       borderColor: cssVar('--echarts-tooltip-border', 'rgba(120,120,130,.3)'),
       borderWidth: 1,
-      textStyle: { color: cssVar('--echarts-tooltip-text', '#fafafa'), fontSize: 11 },
-      extraCssText: 'backdrop-filter: blur(4px); border-radius: 6px;',
+      textStyle: { color: cssVar('--echarts-tooltip-text', '#fafafa'), fontSize: 12 },
+      extraCssText: 'border-radius: 8px; padding: 10px 12px;',
     },
   }
 }

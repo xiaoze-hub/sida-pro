@@ -51,9 +51,9 @@ export function WatchlistSection() {
     <>
 {/* Watchlist */}
 {viewTab === 'watchlist' && (
-  <div className="border-b border-border/40 pb-4">
+  <div className="border-b border-border pb-4">
     <div className="flex items-center justify-between mb-3">
-      <h3 className="text-[13px] font-semibold text-foreground">关注列表</h3>
+      <h3 className="text-[14px] font-semibold text-foreground">关注列表</h3>
       <div className="flex items-center gap-1">
         {[
           { value: '', label: '全部', count: stocks.length },
@@ -64,10 +64,10 @@ export function WatchlistSection() {
           <button
             key={opt.value}
             onClick={() => setStockListFilter(opt.value)}
-            className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+            className={`text-[12px] px-2 py-0.5 rounded transition-colors ${
               stockListFilter === opt.value
                 ? 'bg-primary text-primary-foreground'
-                : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+                : 'bg-s2 text-muted-foreground hover:bg-accent'
             }`}
           >
             {opt.label} ({opt.count})
@@ -77,14 +77,14 @@ export function WatchlistSection() {
     </div>
 
     <div className="flex items-center justify-between mb-3">
-      <div className="text-[11px] text-muted-foreground">筛选</div>
+      <div className="text-[12px] text-muted-foreground">筛选</div>
       <div className="flex items-center gap-2">
         <button
           onClick={() => setWatchlistOnlyAlerts(!watchlistOnlyAlerts)}
-          className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
+          className={`text-[12px] px-2.5 py-1 rounded-md border transition-colors ${
             watchlistOnlyAlerts
               ? 'bg-rose-500/10 border-rose-500/30 text-rose-600'
-              : 'bg-accent/30 border-border/50 text-muted-foreground hover:border-rose-500/30'
+              : 'bg-s2 border-border text-muted-foreground hover:border-rose-500/30'
           }`}
           title="只显示需要关注/预警的股票"
         >
@@ -95,8 +95,8 @@ export function WatchlistSection() {
     {stocks.length === 0 ? (
       loadError ? null : (
         <div className="py-12 text-center">
-          <div className="text-[13px] text-muted-foreground">还没有添加关注股票</div>
-          <div className="mt-2 text-[11px] text-muted-foreground">点击右上角“添加股票”开始</div>
+          <div className="text-[14px] text-muted-foreground">还没有添加关注股票</div>
+          <div className="mt-2 text-[12px] text-muted-foreground">点击右上角“添加股票”开始</div>
         </div>
       )
     ) : (
@@ -145,7 +145,7 @@ export function WatchlistSection() {
                 setDraggingWatchStockId(null)
                 watchDragSnapshotRef.current = null
               }}
-              className={`group rounded-md border border-border/40 bg-background/30 hover:bg-accent/20 transition-colors px-3 py-2.5 cursor-pointer ${draggingWatchStockId === stock.id ? 'opacity-60' : ''}`}
+              className={`group rounded-md border border-border bg-background hover:bg-s2 transition-colors px-3 py-2.5 cursor-pointer ${draggingWatchStockId === stock.id ? 'opacity-60' : ''}`}
               onClick={() => {
                 if (isSuppressCardClick()) return
                 setAgentDialogStock(stock)
@@ -154,7 +154,7 @@ export function WatchlistSection() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className={`text-[10px] px-1 py-0.5 rounded ${marketBadge(stock.market).style}`}>
+                    <span className={`text-[12px] px-1 py-0.5 rounded ${marketBadge(stock.market).style}`}>
                       {marketBadge(stock.market).label}
                     </span>
                     <button
@@ -174,7 +174,7 @@ export function WatchlistSection() {
                   </div>
                 </div>
                 <div className="text-right shrink-0 whitespace-nowrap">
-                  <div className={`font-mono text-[13px] font-bold leading-tight tabular-nums ${changeColor}`}>
+                  <div className={`font-mono text-[14px] font-bold leading-tight tabular-nums ${changeColor}`}>
                     {/* A3: 自选行现价 WS 实时变动闪色(红涨绿跌); 非有限值传 null 不闪 */}
                     <FlashValue
                       value={quote?.current_price != null && Number.isFinite(Number(quote.current_price)) ? Number(quote.current_price) : null}
@@ -183,7 +183,7 @@ export function WatchlistSection() {
                       {quote?.current_price != null && Number.isFinite(Number(quote.current_price)) ? Number(quote.current_price).toFixed(2) : '--'}
                     </FlashValue>
                   </div>
-                  <div className={`font-mono text-[11px] leading-tight tabular-nums ${changeColor}`}>
+                  <div className={`font-mono text-[12px] leading-tight tabular-nums ${changeColor}`}>
                     {quote?.change_pct != null && Number.isFinite(Number(quote.change_pct)) ? `${quote.change_pct >= 0 ? '+' : ''}${Number(quote.change_pct).toFixed(2)}%` : '--'}
                   </div>
                 </div>
@@ -200,19 +200,19 @@ export function WatchlistSection() {
                     hasPosition={false}
                   />
                 ) : (
-                  <div className="text-[11px] text-muted-foreground py-2">暂无技术面/AI 分析</div>
+                  <div className="text-[12px] text-muted-foreground py-2">暂无技术面/AI 分析</div>
                 )}
               </div>
 
-              <div className="mt-1.5 pt-1.5 border-t border-border/30 flex items-center justify-between gap-2">
+              <div className="mt-1.5 pt-1.5 border-t border-border flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1 flex-wrap">
                   {stock.agents && stock.agents.length > 0 ? (
-                    <Badge variant="secondary" className="text-[10px]">{stock.agents.length} Agent</Badge>
+                    <Badge variant="secondary" className="text-[12px]">{stock.agents.length} Agent</Badge>
                   ) : (
-                    <span className="text-[10px] text-muted-foreground">未配置 Agent</span>
+                    <span className="text-[12px] text-muted-foreground">未配置 Agent</span>
                   )}
                   {runningAgents[stock.id] && (
-                    <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                    <span className="inline-flex items-center gap-1 text-[12px] text-amber-600">
                       <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
                       {agents.find(a => a.name === runningAgents[stock.id])?.display_name || runningAgents[stock.id]}
                     </span>

@@ -12,11 +12,11 @@ export function FeedbackSection() {
   return (
     <>
   {/* Feedback Stats */}
-  <section id="sec-feedback" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-5" style={{ display: sectionMatches('sec-feedback') ? undefined : 'none' }}>
+  <section id="sec-feedback" className="analysis-section" style={{ display: sectionMatches('sec-feedback') ? undefined : 'none' }}>
     <div className="flex items-center justify-between mb-4">
       <div>
-        <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">建议反馈</h3>
-        <p className="text-[11px] text-muted-foreground mt-1">用于评估推送质量与策略迭代</p>
+        <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">建议反馈</h3>
+        <p className="text-[12px] text-muted-foreground mt-1">用于评估推送质量与策略迭代</p>
       </div>
       <Button variant="secondary" size="sm" className="h-8" onClick={loadFeedbackStats} disabled={fbLoading}>
         <BarChart3 className="w-3.5 h-3.5" />
@@ -39,11 +39,11 @@ export function FeedbackSection() {
         </div>
 
         {fbStats.by_agent?.length ? (
-          <div className="rounded-md border border-border/40 bg-accent/20 p-3">
+          <div className="card-surface rounded-md bg-s2 p-3">
             <div className="text-[12px] font-semibold text-foreground">按 Agent</div>
             <div className="mt-2 space-y-1">
               {fbStats.by_agent.slice(0, 6).map(a => (
-                <div key={a.agent_name} className="flex items-center justify-between text-[11px]">
+                <div key={a.agent_name} className="flex items-center justify-between text-[12px]">
                   <span className="font-mono text-muted-foreground">{a.agent_name}</span>
                   <span className="font-mono text-muted-foreground">
                     {a.useful}/{a.total} ({Math.round(a.useful_rate * 100)}%)

@@ -70,7 +70,7 @@ describe('KPI 数值永不截断', () => {
 
   it('标签仍是单行（truncate 保留），且带 title 全文', () => {
     const { container } = render(<Stat label="上日 10-23" value="--" />)
-    const label = container.querySelector('div.truncate.text-\\[10px\\]') as HTMLElement | null
+    const label = container.querySelector('div.truncate.text-\\[12px\\]') as HTMLElement | null
     expect(label).not.toBeNull()
     expect(label!.getAttribute('title')).toBe('上日 10-23')
     expect(label!.className).toContain('truncate')

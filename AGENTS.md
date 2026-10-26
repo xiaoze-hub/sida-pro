@@ -29,6 +29,11 @@
 - TypeScript: components `PascalCase.tsx` in `frontend/src/`, hooks `use-` prefix, utilities `camelCase.ts`.
 - Prompts: one prompt file per agent in `prompts/` (e.g., `daily_report.txt`).
 
+## Frontend UI Guidelines
+- 任何 UI/交互修改须先遵循 [`docs/UI_GUIDELINES.md`](docs/UI_GUIDELINES.md)，复用 PageHeader、StatusChip 和共享基础组件。
+- 使用统一主题 token、弱边界和不透明面板；不得添加压住数据的常驻悬浮卡片。
+- 提交前执行 `pnpm --dir frontend ui:check`，并复核浅色、深色与手机宽度；不能以修改白名单绕过规则。
+
 ## Testing Guidelines
 - Backend: structure tests as `tests/test_<module>.py`; prefer fast, isolated unit tests around agents, collectors, and core.
 - Coverage: target meaningful coverage for new modules (no strict threshold yet, but include happy-path and error cases).

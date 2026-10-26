@@ -61,7 +61,7 @@ export function EmptyState({
       // data-empty-state 供布局体检断言"空态高度收敛"(禁止半屏留白) —— 规范要能被机器量到
       data-empty-state={variant}
       className={cn(
-        'flex flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/20 text-center',
+        'flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-s2 text-center',
         // 高度收敛(2026-09-20): 原先非紧凑态 py-12(≈半屏留白), 现封顶
         compact ? 'min-h-[96px] px-4 py-4' : 'min-h-[140px] px-5 py-6',
         className,
@@ -75,10 +75,10 @@ export function EmptyState({
       >
         {icon ?? VARIANT_ICON[variant]}
       </span>
-      <p className="text-[13px] font-medium text-foreground">{title}</p>
-      {body && <p className="mt-1 max-w-sm text-[11px] leading-relaxed text-muted-foreground">{body}</p>}
+      <p className="text-[14px] font-medium text-foreground">{title}</p>
+      {body && <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">{body}</p>}
       {action && <div className="mt-3">{action}</div>}
-      {caliber && <div className="mt-2 text-[10px] text-muted-foreground">{caliber}</div>}
+      {caliber && <div className="mt-2 text-[12px] text-muted-foreground">{caliber}</div>}
     </div>
   )
 }

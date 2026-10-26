@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from datetime import date, datetime
@@ -568,9 +569,9 @@ def get_scenario_matrix(symbol: str, market: str = "CN", _: User = Depends(get_c
 
 
 @router.get("/{symbol}")
-def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d"):
+def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d", instrument: Literal["auto", "stock", "index"] = "auto"):
     """K 线主数据（60s 缓存 + 同 key 单飞，防图表轮询风暴打爆取数链）。"""
-    key = f"{market}:{symbol}:{interval}:{days}"
+    key = f"{market}:{symbol}:{instrument}:{interval}:{days}"
     now = _time.time()
     hit = _kl_cache.get(key)
     if hit and now - hit[0] < _KL_TTL_S:
@@ -579,18 +580,19 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
         hit = _kl_cache.get(key)          # 双重检查：等锁期间别人可能已算完
         if hit and _time.time() - hit[0] < _KL_TTL_S:
             return hit[1]
-        data = _get_klines_uncached(symbol, market, days, interval)
+        data = (_get_klines_uncached(symbol, market, days, interval) if instrument == "auto"
+                else _get_klines_uncached(symbol, market, days, interval, instrument=instrument))
         _kl_cache[key] = (_time.time(), data)
         return data
 
 
-def _get_klines_uncached(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d"):
+def _get_klines_uncached(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d", instrument: str = "auto"):
     """获取单只股票/指数K线数据(指数代码自动识别,走指数K线源)"""
     market_code = _parse_market(market)
     # 指数识别: 已知指数代码 → 走指数K线(支持大盘详情页复用 InteractiveKline)
     from src.web.api.market import MARKET_INDICES
 
-    is_index = any(idx["symbol"] == symbol for idx in MARKET_INDICES)
+    is_index = instrument == "index" or (instrument == "auto" and any(idx["symbol"] == symbol for idx in MARKET_INDICES))
     if is_index:
         # 云服务器东财必失败(502) → 直接腾讯K线,避免每次白等 10s 超时
         import logging

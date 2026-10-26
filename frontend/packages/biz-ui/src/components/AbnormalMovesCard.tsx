@@ -30,7 +30,7 @@ import { fetchAPI } from '@panwatch/api'
  * 最接近阈值的标的" 用的, >100% 表示已经超过阈值.
  *
  * 样式对齐: hairline 分隔 + 紧凑(Phase 2 去卡片化, 不用 rounded 盒子)。
- * 标题 "text-[13px] font-semibold text-foreground" + "font-mono" 数值, 严格跟现有 token。
+ * 标题 "text-[14px] font-semibold text-foreground" + "font-mono" 数值, 严格跟现有 token。
  */
 
 export type AbnormalStatus = 'triggered' | 'edge' | 'watch' | 'normal' | 'unknown'
@@ -182,7 +182,7 @@ function Row({ row, onOpen }: RowProps) {
     <button
       type="button"
       onClick={() => onOpen(row.symbol, row)}
-      className={`grid grid-cols-[68px_1fr_70px_auto_88px_64px] items-center gap-2 px-2 py-2 hover:bg-accent/20 text-left transition-colors w-full`}
+      className={`grid grid-cols-[68px_1fr_70px_auto_88px_64px] items-center gap-2 px-2 py-2 hover:bg-s2 text-left transition-colors w-full`}
       title={`${row.symbol} ${row.name ?? ''} · 基准 ${row.benchmark?.name ?? '—'}`}
     >
       {/* 代码 */}
@@ -191,22 +191,22 @@ function Row({ row, onOpen }: RowProps) {
       {/* 名称 + 板块 + 来源 */}
       <div className="min-w-0">
         <div className="text-[12px] font-medium text-foreground truncate" title={row.name || row.symbol}>{row.name || row.symbol}</div>
-        <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+        <div className="text-[12px] text-muted-foreground flex items-center gap-1">
           <span>{row.board_name || '—'}</span>
           {row.source && row.source !== 'watchlist' ? (
-            <span className="px-1 rounded bg-accent/40 text-[10px]">竞池</span>
+            <span className="px-1 rounded bg-s2 text-[12px]">竞池</span>
           ) : null}
         </div>
       </div>
 
       {/* 最接近的窗口规则 */}
-      <span className="text-[10px] text-muted-foreground font-mono truncate" title={worstLabel(row)}>
+      <span className="text-[12px] text-muted-foreground font-mono truncate" title={worstLabel(row)}>
         {worstLabel(row)}
       </span>
 
       {/* 偏离 + 阈值 + 进度条 */}
       <div className="min-w-[88px]">
-        <div className="flex items-baseline gap-1 text-[11px] font-mono">
+        <div className="flex items-baseline gap-1 text-[12px] font-mono">
           <span className={
             dir === 'down'
               ? 'text-stock-down'
@@ -216,9 +216,9 @@ function Row({ row, onOpen }: RowProps) {
           }>
             {fmtSignedZero(deviation)}
           </span>
-          <span className="text-[10px] text-muted-foreground">/{threshold != null ? threshold.toFixed(0) : '—'}%</span>
+          <span className="text-[12px] text-muted-foreground">/{threshold != null ? threshold.toFixed(0) : '—'}%</span>
         </div>
-        <div className="h-1.5 rounded-full bg-accent/40 overflow-hidden mt-1">
+        <div className="h-1.5 rounded-full bg-s2 overflow-hidden mt-1">
           <div
             className={`h-full ${style.barBg}`}
             style={{ width: `${proxPct}%` }}
@@ -227,14 +227,14 @@ function Row({ row, onOpen }: RowProps) {
       </div>
 
       {/* 接近度数值 */}
-      <div className="text-[11px] font-mono text-right">
+      <div className="text-[12px] font-mono text-right">
         <span className={style.badgeText}>
           {row.proximity != null ? (row.proximity * 100).toFixed(0) + '%' : '—'}
         </span>
       </div>
 
       {/* 状态标签 */}
-      <div className={`justify-self-end px-1.5 py-0.5 rounded border text-[10px] font-medium ${style.badgeBg} ${style.badgeText}`}>
+      <div className={"card-surface bg-card " + (`justify-self-end px-1.5 py-0.5 rounded text-[12px] font-medium ${style.badgeBg} ${style.badgeText}`)}>
         {STATUS_LABEL[status]}
       </div>
     </button>
@@ -309,14 +309,14 @@ export default function AbnormalMovesCard({
   // 加载占位
   if (loading && !data) {
     return (
-      <div className="border-t border-border/60 pt-2.5">
+      <div className="border-t border-border pt-2.5">
         <div className="flex items-center gap-1.5 mb-2">
           <Zap className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="text-[13px] font-semibold text-foreground">异动接近度</span>
+          <span className="text-[14px] font-semibold text-foreground">异动接近度</span>
         </div>
         <div className="space-y-1.5">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-10 border-b border-border/40 animate-pulse" />
+            <div key={i} className="h-10 border-b border-border animate-pulse" />
           ))}
         </div>
       </div>
@@ -327,16 +327,16 @@ export default function AbnormalMovesCard({
   const showError = !!error && !data
 
   return (
-    <div className="border-t border-border/60 pt-2.5">
+    <div className="border-t border-border pt-2.5">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5">
           <Zap className="w-3.5 h-3.5 text-amber-500" />
-          <span className="text-[13px] font-semibold text-foreground">异动接近度</span>
-          <span className="text-[10px] text-muted-foreground ml-1">
+          <span className="text-[14px] font-semibold text-foreground">异动接近度</span>
+          <span className="text-[12px] text-muted-foreground ml-1">
             阈值 ≥{(minProximity * 100).toFixed(0)}%
           </span>
           {updatedAt && (
-            <span className="text-[10px] text-muted-foreground font-mono ml-2">
+            <span className="text-[12px] text-muted-foreground font-mono ml-2">
               {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
             </span>
           )}
@@ -355,7 +355,7 @@ export default function AbnormalMovesCard({
       </div>
 
       {showError ? (
-        <div className="flex items-center gap-2 text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+        <div className="card-surface flex items-center gap-2 text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 rounded-md px-3 py-2">
           <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
           <span>异动监控暂不可用({error})</span>
         </div>
@@ -366,7 +366,7 @@ export default function AbnormalMovesCard({
         </div>
       ) : (
         <>
-          <div className="text-[10px] text-muted-foreground mb-1.5">
+          <div className="text-[12px] text-muted-foreground mb-1.5">
             按最接近阈值的规则倒序; <span className="text-rose-700 dark:text-rose-400">红色=已触发</span> 交易所将发异动公告; <span className="text-orange-700 dark:text-orange-400">橙=边缘</span> 次日再涨即触发; <span className="text-amber-700 dark:text-amber-400">黄=观察</span>
           </div>
           <div className="space-y-0.5 max-h-[420px] overflow-y-auto">
@@ -375,7 +375,7 @@ export default function AbnormalMovesCard({
             ))}
           </div>
           {data.note && (
-            <div className="mt-2 text-[10px] text-muted-foreground">{data.note}</div>
+            <div className="mt-2 text-[12px] text-muted-foreground">{data.note}</div>
           )}
         </>
       )}

@@ -41,10 +41,10 @@ export default function LoadingState({
       {Array.from({ length: rows }).map((_, i) => (
         <div
           key={i}
-          className="h-[92px] animate-pulse rounded-xl border border-border/50 bg-card bg-accent/20"
+          className="card-surface h-[92px] animate-pulse rounded-xl bg-card bg-s2"
         />
       ))}
-      {label ? <div className="text-[11px] text-muted-foreground">{label}</div> : null}
+      {label ? <div className="text-[12px] text-muted-foreground">{label}</div> : null}
     </div>
   )
 }

@@ -185,7 +185,7 @@ export function PriceDistributionLadder({
             key={b.price}
             data-testid="price-dist-row"
             data-price={b.price}
-            className="flex items-center gap-2 text-[11px]"
+            className="flex items-center gap-2 text-[12px]"
             title={`${safeFixed(b.price, 2)} 元 · 成交 ${volText(b.volume)} · 主动买 ${pctText(
               buy,
             )} / 主动卖 ${pctText(b.sell_ratio)} · 大单占比 ${pctText(
@@ -301,7 +301,7 @@ export default function PriceDistributionPanel({
           {data.reason || '分价矩阵不可用（不冒充 0）'}
         </div>
         {data.caliber ? (
-          <div className="text-[10px] text-muted-foreground">{data.caliber}</div>
+          <div className="text-[12px] text-muted-foreground">{data.caliber}</div>
         ) : null}
       </div>
     )
@@ -321,7 +321,7 @@ export default function PriceDistributionPanel({
       <PriceDistributionConclusions items={summary} />
 
       {/* 数据血统: 交易日/快照时刻/缓存来源/偏离交叉披露 */}
-      <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-2 text-[12px] text-muted-foreground">
         <span>{data.trade_date ?? '--'}</span>
         {data.snapshot_ts ? <span>· 快照 {data.snapshot_ts}</span> : null}
         <span>
@@ -336,7 +336,7 @@ export default function PriceDistributionPanel({
       </div>
 
       {/* 全日多空 + 量能锚 */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px] md:grid-cols-4">
         <div title="竞买量 / 总成交量(腾讯分价表原页面口径)">
           <div className="text-muted-foreground">全日竞买率</div>
           <div className="font-mono text-foreground">{pctText(day?.buy_ratio)}</div>
@@ -359,7 +359,7 @@ export default function PriceDistributionPanel({
 
       {/* 多空梯队 */}
       <div className="space-y-1">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <span className="w-12 shrink-0">价位</span>
           <span className="flex-1">多空博弈（条长=成交量占比, 红=主动买 / 绿=主动卖）</span>
           <span className="w-10 text-right">占比</span>
@@ -370,12 +370,12 @@ export default function PriceDistributionPanel({
         {bins.length > 0 ? (
           <PriceDistributionLadder bins={bins} maxBins={maxBins} />
         ) : (
-          <div className="text-[11px] text-muted-foreground">无有效价档</div>
+          <div className="text-[12px] text-muted-foreground">无有效价档</div>
         )}
       </div>
 
       {/* 口径与体检（不藏起来: 回测/复盘时要能复现） */}
-      <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-2 text-[12px] text-muted-foreground">
         <span>档位 {quality?.bins ?? bins.length}</span>
         {quality?.identity_ok_ratio != null ? (
           <span>· 恒等式 {pctText(quality.identity_ok_ratio, 1)}</span>

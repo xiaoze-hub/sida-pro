@@ -34,7 +34,7 @@ interface AccountMenuProps {
   navItems: AccountNavItem[]
   mode: ThemeMode
   onSetMode: (m: ThemeMode) => void
-  /** 打开「系统自检」弹窗(状态由上层 App 托管,避免桌面/移动两个实例重复)。 */
+  /** 进入独立的系统状态页。 */
   onOpenSelfCheck: () => void
   /** 头像尺寸:桌面 md,移动端 sm。 */
   size?: 'sm' | 'md'
@@ -42,7 +42,7 @@ interface AccountMenuProps {
    * 面板展开方向。桌面实例在**全高侧栏的最底部**,向下展开会整体落到视口外
    * (主题/亮暗/退出等全部不可见) → 必须向上展开;移动端顶栏保持向下。
    */
-  placement?: 'down' | 'up'
+  placement?: 'down' | 'up' | 'right'
 }
 
 /**
@@ -71,10 +71,6 @@ export default function AccountMenu({
   const [confirmPwd, setConfirmPwd] = useState('')
   const [pwdError, setPwdError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  // 仅在支持 hover 的设备(PC)启用悬停展开;触屏维持点击
-  const [canHover] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(hover: hover)').matches,
-  )
 
   const openChangePwd = () => {
     setOpen(false)
@@ -124,32 +120,32 @@ export default function AccountMenu({
     <div
       className="relative"
       ref={ref}
-      onMouseEnter={canHover ? () => setOpen(true) : undefined}
-      onMouseLeave={canHover ? () => setOpen(false) : undefined}
+      onKeyDown={event => { if (event.key === 'Escape') { setOpen(false); ref.current?.querySelector('button')?.focus() } }}
     >
       <button
         onClick={() => setOpen(v => !v)}
-        className={`${avatarSize} rounded-full overflow-hidden bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm ring-1 transition-shadow ${
+        className={`${avatarSize} rounded-full overflow-hidden bg-primary flex items-center justify-center shadow-sm ring-1 transition-shadow ${
           open ? 'ring-primary/50' : 'ring-border/40 hover:ring-primary/40'
         }`}
         title="账户与设置"
         aria-label="账户与设置"
+        aria-expanded={open}
       >
         {avatar ? (
           <img src={avatar} alt="头像" className="w-full h-full object-cover" />
         ) : (
-          <User className={`${iconSize} text-white`} />
+          <User className={`${iconSize} text-primary-foreground`} />
         )}
       </button>
 
       {open && (
         // top-full/bottom-full + pt-2/pb-2:用透明内边距桥接头像与菜单,hover 移入不断开
         <div
-          className={`absolute right-0 z-50 ${
-            placement === 'up' ? 'bottom-full pb-2' : 'top-full pt-2'
+          className={`absolute z-50 ${
+            placement === 'right' ? 'bottom-0 left-full pl-2' : placement === 'up' ? 'right-0 bottom-full pb-2' : 'right-0 top-full pt-2'
           }`}
         >
-          <div className="w-48 rounded-xl border border-border/60 bg-card/95 backdrop-blur p-1.5 shadow-float">
+          <div className="max-h-[min(640px,calc(100dvh-6rem))] w-48 overflow-y-auto rounded-xl border border-border bg-card backdrop-blur p-1.5 shadow-float">
           {/* 原“更多”导航 */}
           {navItems.map(({ to, icon: Icon, label }) => {
             const isActive = location.pathname.startsWith(to)
@@ -161,7 +157,7 @@ export default function AccountMenu({
                 className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] transition-colors ${
                   isActive
                     ? 'bg-primary/10 text-primary'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-s2'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
@@ -179,7 +175,7 @@ export default function AccountMenu({
             className={`flex items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
               location.pathname.startsWith('/profile')
                 ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                : 'text-muted-foreground hover:text-foreground hover:bg-s2'
             }`}
           >
             <UserCog className="w-3.5 h-3.5" />
@@ -189,7 +185,7 @@ export default function AccountMenu({
           <div className="my-1 h-px bg-border/50" />
 
           {/* 主题色:亮 / 暗 / 跟随系统 */}
-          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground">{t('accountMenu.theme')}</div>
+          <div className="px-2.5 pt-0.5 pb-1 text-[12px] text-muted-foreground">{t('accountMenu.theme')}</div>
           {THEME_OPTIONS.map(({ value, icon: Icon, labelKey }) => {
             const active = mode === value
             return (
@@ -198,8 +194,8 @@ export default function AccountMenu({
                 onClick={() => onSetMode(value)}
                 className={`flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
                   active
-                    ? 'text-foreground bg-accent/40'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    ? 'text-foreground bg-s2'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-s2'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
@@ -211,7 +207,7 @@ export default function AccountMenu({
 
           <div className="my-1 h-px bg-border/50" />
           {/* 语言切换 (P2 i18n) */}
-          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground flex items-center gap-1.5">
+          <div className="px-2.5 pt-0.5 pb-1 text-[12px] text-muted-foreground flex items-center gap-1.5">
             <Languages className="w-3 h-3" />
             {t('accountMenu.language')}
           </div>
@@ -223,8 +219,8 @@ export default function AccountMenu({
                 onClick={() => setLocale(value)}
                 className={`flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
                   active
-                    ? 'text-foreground bg-accent/40'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    ? 'text-foreground bg-s2'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-s2'
                 }`}
               >
                 {label}
@@ -234,13 +230,13 @@ export default function AccountMenu({
           })}
 
           <div className="my-1 h-px bg-border/50" />
-          {/* 系统自检:打开弹窗(逐项检查数据源/AI/通知连通性) */}
+          {/* 系统自检:进入独立系统状态页面 */}
           <button
             onClick={() => {
               setOpen(false)
               onOpenSelfCheck()
             }}
-            className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+            className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-s2 transition-colors"
           >
             <Stethoscope className="w-3.5 h-3.5" />
             {t('accountMenu.selfCheck')}
@@ -251,7 +247,7 @@ export default function AccountMenu({
               <div className="my-1 h-px bg-border/50" />
               <button
                 onClick={openChangePwd}
-                className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+                className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-s2 transition-colors"
               >
                 <KeyRound className="w-3.5 h-3.5" />
                 {t('profile.changePassword')}

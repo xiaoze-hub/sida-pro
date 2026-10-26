@@ -104,16 +104,16 @@ export default function FreshnessBadge({
       }
     >
       <span className={cn('session-dot', LEVEL_CLASS[info.level].split(' ')[0])} />
-      <span className={cn('text-[10px]', stale ? 'text-muted-foreground' : 'text-muted-foreground')}>
+      <span className={cn('text-[12px]', stale ? 'text-muted-foreground' : 'text-muted-foreground')}>
         {info.label}
       </span>
       {showAge && info.ageSec !== null && (
-        <span className={cn('font-mono text-[10px]', stale ? 'text-muted-foreground' : 'text-muted-foreground')}>
+        <span className={cn('font-mono text-[12px]', stale ? 'text-muted-foreground' : 'text-muted-foreground')}>
           {formatAge(info.ageSec)}
         </span>
       )}
       {asOf !== undefined && asOf !== null && (
-        <span className={cn('font-mono text-[10px]', stale ? 'text-muted-foreground' : 'text-muted-foreground')}>
+        <span className={cn('font-mono text-[12px]', stale ? 'text-muted-foreground' : 'text-muted-foreground')}>
           {formatClock(asOf)}
         </span>
       )}

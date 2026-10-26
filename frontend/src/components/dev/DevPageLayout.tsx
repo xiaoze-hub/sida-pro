@@ -1,138 +1,24 @@
 import { useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
-import { Menu, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import PageHeader from '@/components/PageHeader'
+import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
+import { SectionWorkspace, useSectionRoute, useSectionVisible } from '@/components/SectionWorkspace'
 
-/* ── 侧边栏菜单项 ── */
-export interface SideMenuItem {
-  id: string
-  label: string
-  icon?: ReactNode
-  href?: string   // 外链/路由跳转
-  anchor?: string // 页内锚点
-}
+export interface SideMenuItem { id: string; label: string; icon?: ReactNode; href?: string; anchor?: string }
 
-/* ── 页面布局: 顶栏 + 侧边栏 + 主内容 ── */
-export function DevPageLayout({
-  title,
-  subtitle,
-  badge,
-  menu,
-  activeId,
-  onNav,
-  children,
-  headerExtra,
-}: {
-  title: string
-  subtitle: string
-  badge?: string
-  menu: SideMenuItem[]
-  activeId?: string
-  onNav?: (id: string) => void
-  children: ReactNode
-  headerExtra?: ReactNode
+/** 管理与文档共享分类工作区：选中分类只显示对应内容，避免菜单与正文错位。 */
+export function DevPageLayout({ title, subtitle, badge, menu, onNav, children, headerExtra }: {
+  title: string; subtitle: string; badge?: string; menu: SideMenuItem[]; activeId?: string;
+  onNav?: (id: string) => void; children: ReactNode; headerExtra?: ReactNode
 }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-
-  const handleClick = (item: SideMenuItem) => {
-    if (item.anchor) {
-      const el = document.getElementById(item.anchor)
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        setSidebarOpen(false)
-      }
-    }
-    onNav?.(item.id)
-    setSidebarOpen(false)
-  }
-
-  return (
-    <div className="min-h-screen bg-background text-foreground dark:bg-[#0a0a12] dark:text-white">
-      {/* 顶部标题栏 */}
-      <header className="sticky top-0 z-30 border-b border-border/50 dark:border-white/5 bg-background/80 dark:bg-[#0a0a12]/80 backdrop-blur-xl">
-        <div className="flex items-center gap-4 px-4 py-4 md:px-8">
-          {/* 移动端菜单按钮 */}
-          <button
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-white/5 dark:hover:text-white md:hidden"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
-            {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-[16px] font-bold tracking-tight text-foreground dark:text-white md:text-[20px]">{title}</h1>
-              {badge && (
-                <span className="rounded-full bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-mono text-primary dark:bg-cyan-500/10 dark:border-cyan-500/20 dark:text-cyan-400">
-                  {badge}
-                </span>
-              )}
-            </div>
-            <p className="mt-0.5 text-[12px] text-muted-foreground">{subtitle}</p>
-          </div>
-          {headerExtra}
-        </div>
-      </header>
-
-      <div className="flex">
-        {/* 侧边栏 */}
-        <aside
-          className={cn(
-            'fixed inset-y-0 left-0 z-20 w-56 border-r border-border/50 dark:border-white/5 bg-card/80 dark:bg-[#0c0c16] pt-[73px] transition-transform md:sticky md:top-[73px] md:z-0 md:h-[calc(100vh-73px)] md:translate-x-0 md:pt-0',
-            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          )}
-        >
-          <nav className="flex flex-col gap-0.5 p-3">
-            {menu.map(item => {
-              const isActive = activeId === item.id
-              if (item.href) {
-                return (
-                  <Link
-                    key={item.id}
-                    to={item.href}
-                    className={cn(
-                      'flex items-center gap-2.5 rounded-lg px-3 py-2 text-[12px] transition-colors',
-                      isActive
-                        ? 'bg-primary/10 text-primary font-medium dark:bg-cyan-500/10 dark:text-cyan-300'
-                        : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-white/5 dark:hover:text-white'
-                    )}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    {item.icon}
-                    {item.label}
-                  </Link>
-                )
-              }
-              return (
-                <button
-                  key={item.id}
-                  className={cn(
-                    'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] transition-colors',
-                    isActive
-                      ? 'bg-primary/10 text-primary font-medium dark:bg-cyan-500/10 dark:text-cyan-300'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-white/5 dark:hover:text-white'
-                  )}
-                  onClick={() => handleClick(item)}
-                >
-                  {item.icon}
-                  {item.label}
-                </button>
-              )
-            })}
-          </nav>
-        </aside>
-
-        {/* 遮罩 */}
-        {sidebarOpen && (
-          <div className="fixed inset-0 z-10 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />
-        )}
-
-        {/* 主内容 */}
-        <main className="min-w-0 flex-1 px-4 py-6 md:px-8">
-          <div className="mx-auto max-w-4xl">{children}</div>
-        </main>
-      </div>
-    </div>
-  )
+  const items = menu.filter(item => !item.href).map(item => ({ ...item, id: item.anchor ?? item.id }))
+  const [selected, select] = useSectionRoute(items, items[0]?.id ?? '')
+  return <div className="page-container text-foreground">
+    <PageHeader title={title} description={subtitle} actions={headerExtra} metadata={badge ? <StatusChip tone="info">{badge}</StatusChip> : undefined} />
+    <SectionWorkspace items={items} value={selected} label={`${title}分类`} onChange={id => { select(id); onNav?.(menu.find(item => (item.anchor ?? item.id) === id)?.id ?? id) }}>
+      {children}
+    </SectionWorkspace>
+  </div>
 }
 
 /* ── 章节块 ── */
@@ -151,13 +37,15 @@ export function Section({
   children: ReactNode
   action?: ReactNode
 }) {
+  const visible = useSectionVisible(id)
+  if (!visible) return null
   return (
-    <section id={id} className="mb-8 scroll-mt-24">
+    <section id={id} className="analysis-section">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            {icon && <span className="text-primary dark:text-cyan-400">{icon}</span>}
-            <h2 className="text-[16px] font-semibold text-foreground dark:text-white">{title}</h2>
+            {icon && <span className="text-primary">{icon}</span>}
+            <h2 className="text-[16px] font-semibold text-foreground">{title}</h2>
           </div>
           {description && <p className="mt-1 text-[12px] text-muted-foreground">{description}</p>}
         </div>
@@ -171,7 +59,7 @@ export function Section({
 /* ── 信息卡片 ── */
 export function InfoCard({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-4 backdrop-blur-sm', className)}>
+    <div className={'card-surface ' + (cn('rounded-lg bg-s2 p-4', className))}>
       {children}
     </div>
   )
@@ -187,17 +75,17 @@ export function CodeBlock({ code, language = 'bash', onCopy }: { code: string; l
     onCopy?.()
   }
   return (
-    <div className="group relative rounded-lg border border-border/50 dark:border-white/5 bg-muted/40 dark:bg-[#0d0d18]">
-      <div className="flex items-center justify-between border-b border-border/40 dark:border-white/5 px-3 py-1.5">
-        <span className="font-mono text-[10px] text-muted-foreground">{language}</span>
+    <div className="card-surface group relative rounded-lg bg-s2">
+      <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+        <span className="font-mono text-[12px] text-muted-foreground">{language}</span>
         <button
-          className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-primary dark:hover:text-cyan-400"
+          className="rounded px-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:text-primary"
           onClick={handleCopy}
         >
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-foreground dark:text-cyan-100/80">
+      <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-relaxed text-foreground">
         {code}
       </pre>
     </div>

@@ -337,8 +337,8 @@ export function DeepAnalysisModal({
         />}
 
         {stage === 'error' && (
-          <div className="space-y-3 text-[13px]">
-            <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 p-3 text-rose-600">
+          <div className="space-y-3 text-[14px]">
+            <div className="card-surface rounded-lg bg-rose-500/10 p-3 text-rose-600">
               <div className="font-semibold mb-1">分析失败</div>
               <div className="text-[12px]">{error}</div>
             </div>
@@ -367,13 +367,13 @@ function IdleView({
   const overBudget = budget?.exceeded && budget.over_budget_action === 'reject'
   const est = budget?.estimate_next_run
   return (
-    <div className="space-y-4 text-[13px]">
-      <div className="rounded-lg bg-accent/30 p-3 space-y-1.5">
+    <div className="space-y-4 text-[14px]">
+      <div className="rounded-lg bg-s2 p-3 space-y-1.5">
         <div className="font-medium">即将分析:{stockSymbol}</div>
         <div className="text-muted-foreground">
           调用 4 类分析师(技术 / 情绪 / 新闻 / 基本面) + 看多看空辩论 + 风控 + PM 整合
         </div>
-        <div className="text-[11px] text-muted-foreground mt-2 space-y-0.5">
+        <div className="text-[12px] text-muted-foreground mt-2 space-y-0.5">
           <div>⏱ 预计耗时:3-8 分钟</div>
           {est ? (
             <div>💰 预估成本:${est.cost_low_usd.toFixed(2)} - ${est.cost_high_usd.toFixed(2)} ({est.model})</div>
@@ -386,7 +386,7 @@ function IdleView({
 
       {/* 本月预算 */}
       {budget && (
-        <div className={`rounded-lg p-3 text-[12px] ${overBudget ? 'bg-rose-500/10 border border-rose-500/30' : 'bg-accent/20'}`}>
+        <div className={'card-surface ' + (`rounded-lg p-3 text-[12px] ${overBudget ? 'bg-rose-500/10 ' : 'bg-s2'}`)}>
           <div className="flex items-center justify-between">
             <span className="font-medium">本月预算</span>
             <span className={overBudget ? 'text-rose-600' : 'text-muted-foreground'}>
@@ -395,7 +395,7 @@ function IdleView({
             </span>
           </div>
           {overBudget && (
-            <div className="text-[11px] text-rose-600 mt-1">
+            <div className="text-[12px] text-rose-600 mt-1">
               ⚠️ 本月预算已用尽。如需继续,请到「设置 → Agent → TradingAgents」调高 `monthly_budget_usd`。
             </div>
           )}
@@ -424,12 +424,12 @@ function RunningView({
   const stages = progress?.stages ?? []
 
   return (
-    <div className="space-y-4 text-[13px]">
-      <div className="rounded-lg bg-accent/30 p-3 space-y-2">
+    <div className="space-y-4 text-[14px]">
+      <div className="rounded-lg bg-s2 p-3 space-y-2">
         <div className="flex items-center gap-2">
           <span className="inline-block w-3 h-3 rounded-full bg-primary animate-pulse" />
           <span className="font-medium">分析进行中...</span>
-          <span className="ml-auto text-[11px] text-muted-foreground">
+          <span className="ml-auto text-[12px] text-muted-foreground">
             已用 {formatElapsed(elapsed)} · ${cost.toFixed(4)}
           </span>
         </div>
@@ -440,7 +440,7 @@ function RunningView({
             <div className="text-[12px] text-muted-foreground">准备中...</div>
           )}
         </div>
-        <div className="text-[10px] text-muted-foreground mt-3 font-mono">
+        <div className="text-[12px] text-muted-foreground mt-3 font-mono">
           trace_id: {traceId.slice(0, 16)}...
         </div>
       </div>
@@ -503,13 +503,13 @@ export function ToolkitDiagnostics({
   }
 
   return (
-    <details className="rounded-lg border border-border/40 bg-accent/10 p-3 text-[12px]" open={defaultOpen}>
+    <details className="card-surface rounded-lg bg-s2 p-3 text-[12px]" open={defaultOpen}>
       <summary className="cursor-pointer flex items-center gap-2 flex-wrap">
         <span className="font-medium">数据注入诊断</span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           (SIDA 数据 → TradingAgents 工具)
         </span>
-        <span className="ml-auto text-[11px] whitespace-nowrap">
+        <span className="ml-auto text-[12px] whitespace-nowrap">
           <span className={ACTION_CLS.HIT}>HIT {hit}</span>
           <span className="text-muted-foreground"> · MISS {miss}</span>
           <span className={ACTION_CLS.PASSTHROUGH}> · 透传 {pass}</span>
@@ -517,14 +517,14 @@ export function ToolkitDiagnostics({
           {err > 0 && <span className="text-rose-600"> · 错误 {err}</span>}
         </span>
       </summary>
-      <div className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
+      <div className="text-[12px] text-muted-foreground mt-2 leading-relaxed">
         <span className={ACTION_CLS.HIT}>HIT</span>: 用 SIDA 数据 ·{' '}
         <span className={ACTION_CLS.MISS}>MISS</span>: 命中但 SIDA 未实现 ·{' '}
         <span className={ACTION_CLS.PASSTHROUGH}>透传</span>: 非 A 股直接走上游 vendor ·{' '}
         <span className={ACTION_CLS.FALLTHROUGH}>兜底</span>: A 股但 cache 为空,走了上游
       </div>
       {total === 0 ? (
-        <div className="text-[11px] text-muted-foreground mt-2">
+        <div className="text-[12px] text-muted-foreground mt-2">
           ⚠️ 还没有任何工具调用记录(可能 TradingAgents 还在准备阶段)。
         </div>
       ) : (
@@ -532,7 +532,7 @@ export function ToolkitDiagnostics({
           {recent.map((h, i) => {
             const action = (h.action || '').toUpperCase()
             const row = (
-              <div className="font-mono text-[10px] flex items-center gap-2 hover:bg-accent/30 px-1 rounded cursor-help w-full">
+              <div className="font-mono text-[12px] flex items-center gap-2 hover:bg-s2 px-1 rounded cursor-help w-full">
                 <span className={`${ACTION_CLS[action] || 'text-muted-foreground'} w-20 shrink-0`}>
                   {action}
                 </span>
@@ -563,12 +563,12 @@ export function ToolkitDiagnostics({
                 content={
                   <div className="space-y-2">
                     {h.reason && (
-                      <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                      <div className="text-[12px] text-amber-600 dark:text-amber-400">
                         {h.reason}
                       </div>
                     )}
                     {h.snippet && (
-                      <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug bg-accent/30 rounded p-2 text-foreground max-h-[60vh] overflow-y-auto">
+                      <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-snug bg-s2 rounded p-2 text-foreground max-h-[60vh] overflow-y-auto">
                         {h.snippet}
                         {h.chars != null && h.chars > h.snippet.length && (
                           <span className="text-muted-foreground">
@@ -606,7 +606,7 @@ function StageRow({ stage }: { stage: ProgressStage }) {
       <span className="w-4">{icon}</span>
       <span>{label}</span>
       {stage.cost_usd ? (
-        <span className="ml-auto text-[10px] opacity-70 font-mono">
+        <span className="ml-auto text-[12px] opacity-70 font-mono">
           ${stage.cost_usd.toFixed(4)}
         </span>
       ) : null}
@@ -643,18 +643,18 @@ function DoneView({
     : new Date().toISOString().slice(0, 10)
 
   return (
-    <div className="space-y-4 text-[13px]">
+    <div className="space-y-4 text-[14px]">
       {fromCache && (
-        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-2 text-[12px] text-amber-700 dark:text-amber-400 flex items-center justify-between">
+        <div className="card-surface rounded-lg bg-amber-500/10 p-2 text-[12px] text-amber-700 dark:text-amber-400 flex items-center justify-between">
           <span>ℹ️ 当日缓存:今天已经分析过这只股票,展示缓存结果(无新成本)</span>
-          <Button variant="outline" size="sm" onClick={onRerun} className="ml-3 h-7 text-[11px]">
+          <Button variant="outline" size="sm" onClick={onRerun} className="ml-3 h-7 text-[12px]">
             忽略缓存重新分析
           </Button>
         </div>
       )}
 
       {/* 顶层摘要(精简成一行:决策 + 置信度 + 成本;完整理由在"最终决策" tab) */}
-      <div className="rounded-lg bg-accent/30 px-4 py-2.5 flex items-center gap-3 flex-wrap">
+      <div className="rounded-lg bg-s2 px-4 py-2.5 flex items-center gap-3 flex-wrap">
         <span className={`text-[16px] font-bold ${DECISION_COLOR[sug.action] || ''}`}>
           {sug.action_label}
         </span>
@@ -664,12 +664,12 @@ function DoneView({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 text-[11px] ml-auto"
+          className="h-7 text-[12px] ml-auto"
           onClick={() => window.open(`/analysis/${stockSymbol}/${analysisDate}`, '_blank')}
         >
           查看详细页
         </Button>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           成本:${costUsd?.toFixed(4) ?? '-'}
         </span>
       </div>
@@ -686,7 +686,7 @@ function DoneView({
       )}
 
       {/* 免责声明 */}
-      <div className="text-[10px] text-muted-foreground italic border-t border-border/30 pt-2">
+      <div className="text-[12px] text-muted-foreground italic border-t border-border pt-2">
         本分析由 AI 多 Agent 框架生成,仅供学习研究参考,不构成任何投资建议。
         投资有风险,决策需自主判断。
       </div>
@@ -698,7 +698,7 @@ function DoneView({
 function AnalysisTabs({ sections }: { sections: AnalysisSection[] }) {
   if (sections.length === 0) return null
   return (
-    <div className="rounded-lg border border-border/50 p-4">
+    <div className="card-surface bg-card rounded-lg p-4">
       <Tabs defaultValue={sections[0].id}>
         <TabsList>
           {sections.map((s) => (

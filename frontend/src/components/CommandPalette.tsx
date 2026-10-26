@@ -1,3 +1,4 @@
+import { setAppearance } from '@/hooks/use-theme'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, TrendingUp, Plus, Zap } from 'lucide-react'
@@ -29,8 +30,8 @@ type Item =
 const PAGE_COMMANDS: PageCommand[] = [
   { to: '/', label: '首页 · 驾驶舱', group: '驾驶舱' },
   { to: '/forecast', label: '预测', group: '行情' },
-  { to: '/opportunities', label: '机会 · 选股池', group: '机会' },
-  { to: '/auction', label: '集合竞价 · 盘前打板', group: '机会' },
+  { to: '/opportunities', label: '市场扫描 · 技术特征', group: '研究' },
+  { to: '/auction', label: '集合竞价 · 量价分析', group: '研究' },
   // §4.3 补齐(2026-09-01): 历史/模拟盘/提醒 收纳后指向新地址(带 ?tab= 直达对应页签)
   { to: '/reports?tab=reports', label: '报告中心', group: '投研' },
   { to: '/reports?tab=history', label: '历史分析', group: '投研' },
@@ -66,7 +67,7 @@ const ACTION_COMMANDS: { id: string; label: string; group: string; hint?: string
   { id: 'density-comfortable', label: '密度: 宽松', group: '外观' },
   { id: 'theme-dark', label: '主题: 暗色', group: '外观' },
   { id: 'theme-light', label: '主题: 亮色', group: '外观' },
-  { id: 'theme-dim', label: '主题: Dim(长时盯盘)', group: '外观', hint: '只降对比度' },
+  { id: 'theme-dim', label: '主题: 深色舒适模式', group: '外观', hint: '保留面板边界与文字对比' },
   { id: 'focus-toggle', label: '焦点模式: 开关', group: '外观', hint: '收起侧栏/细节' },
   { id: 'copy-link', label: '复制当前页链接', group: '操作' },
 ]
@@ -83,24 +84,15 @@ function runAction(id: string, toast: (m: string, t?: 'success' | 'info' | 'erro
     }
   }
   if (id.startsWith('density-')) {
-    set('data-density', id.replace('density-', ''))
+    const density = id.replace('density-', '')
+    if (density === 'compact' || density === 'normal' || density === 'comfortable') setAppearance({ density })
     toast(`密度已切到 ${id.replace('density-', '')}`, 'success')
     return
   }
   if (id.startsWith('theme-')) {
     const want = id.replace('theme-', '')
-    // 与 useTheme 同一套存储(panwatch-theme / panwatch-dim), 保证下次启动读到的一致
-    html.classList.remove('light', 'dark')
-    if (want === 'dim') {
-      html.classList.add('dark')
-      html.setAttribute('data-theme', 'dim')
-      localStorage.setItem('panwatch-dim', '1')
-    } else {
-      html.classList.add(want)
-      html.removeAttribute('data-theme')
-      localStorage.setItem('panwatch-dim', '0')
-      localStorage.setItem('panwatch-theme', want)
-    }
+    if (want === 'dim') setAppearance({ mode: 'dark', dim: true })
+    else if (want === 'light' || want === 'dark') setAppearance({ mode: want, dim: false })
     toast(want === 'dim' ? '已切到 Dim(长时盯盘)' : '主题已切换', 'success')
     return
   }
@@ -295,10 +287,10 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="搜索股票(代码/名称) 或 功能…"
-            className="flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+            className="flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted-foreground"
             data-search-input
           />
-          <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">ESC</kbd>
+          <kbd className="rounded bg-muted px-1.5 py-0.5 text-[12px] text-muted-foreground">ESC</kbd>
         </div>
         <div className="max-h-[50vh] overflow-y-auto py-2">
           {loading && <div className="px-4 py-2 text-[12px] text-muted-foreground">搜索中…</div>}
@@ -317,34 +309,34 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               {it.type === 'stock' ? (
                 <>
                   <TrendingUp className="h-4 w-4 shrink-0 text-primary" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.name}>{it.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[14px] text-foreground" title={it.name}>{it.name}</span>
                   {i === active && (
-                    <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-primary/80">
+                    <span className="flex shrink-0 items-center gap-0.5 text-[12px] text-primary/80">
                       <Plus className="h-3 w-3" />
                       ⇧↵ 加自选
                     </span>
                   )}
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                  <span className="shrink-0 text-[12px] text-muted-foreground">
                     {it.symbol} · {it.market}
                   </span>
                 </>
               ) : it.type === 'action' ? (
                 <>
                   <Zap className="h-4 w-4 shrink-0 text-[hsl(var(--role-opp))]" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.label}>{it.label}</span>
-                  {it.hint && <span className="shrink-0 text-[10px] text-muted-foreground">{it.hint}</span>}
-                  <span className="shrink-0 text-[11px] text-muted-foreground">{it.group}</span>
+                  <span className="min-w-0 flex-1 truncate text-[14px] text-foreground" title={it.label}>{it.label}</span>
+                  {it.hint && <span className="shrink-0 text-[12px] text-muted-foreground">{it.hint}</span>}
+                  <span className="shrink-0 text-[12px] text-muted-foreground">{it.group}</span>
                 </>
               ) : (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.label}>{it.label}</span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">{it.group}</span>
+                  <span className="min-w-0 flex-1 truncate text-[14px] text-foreground" title={it.label}>{it.label}</span>
+                  <span className="shrink-0 text-[12px] text-muted-foreground">{it.group}</span>
                 </>
               )}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-3 border-t border-border px-4 py-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-3 border-t border-border px-4 py-2 text-[12px] text-muted-foreground">
           <span>
             <kbd className="rounded bg-muted px-1">↑↓</kbd> 选择
           </span>

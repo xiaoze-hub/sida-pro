@@ -152,7 +152,7 @@ function useL2(symbol: string, market: string): L2Resp | null {
 /** 卡片共用行(左标签 / 右等宽数值)。 */
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between text-[11px]">
+    <div className="flex justify-between text-[12px]">
       <span className="text-muted-foreground">{label}</span>
       <span className="font-mono">{value}</span>
     </div>
@@ -207,36 +207,36 @@ function QuoteCard({ l2 }: { l2: L2Resp | null }) {
   const m = l2?.more ?? {}
   const clock = asOfClock(l2?.as_of)
   return (
-    <div className="rounded border border-border/60 p-2">
+    <div className="card-surface bg-card rounded p-2">
       <div className="mb-1 flex items-baseline justify-between">
         <span className="text-[12px] font-semibold">盘口速览</span>
-        {clock ? <span className="font-mono text-[10px] text-muted-foreground">快照 {clock}</span> : null}
+        {clock ? <span className="font-mono text-[12px] text-muted-foreground">快照 {clock}</span> : null}
       </div>
-      {l2?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{l2.note}</div> : null}
+      {l2?.note ? <div className="mb-1 text-[12px] text-muted-foreground">{l2.note}</div> : null}
       {/* 去重: 现价/涨停价/封单额 归带1 HeaderBand, 此处不渲染(见本组件头注) */}
       <Row label="主力净额" value={fmtSignedAmount(m.zjl_hb)} />
-      <div className="mt-1 grid grid-cols-5 gap-0.5 text-[10px]">
+      <div className="mt-1 grid grid-cols-5 gap-0.5 text-[12px]">
         {(s.buyp ?? []).slice(0, 5).map((p, i) => (
           <div key={`b${i}`} className="truncate text-center text-[--stock-up]" title={lvl(p)}>
             {lvl(p)}
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-5 gap-0.5 text-[10px]">
+      <div className="grid grid-cols-5 gap-0.5 text-[12px]">
         {(s.buyv ?? []).slice(0, 5).map((v, i) => (
           <div key={`bv${i}`} className="truncate text-center text-muted-foreground" title={lvl(v)}>
             {lvl(v)}
           </div>
         ))}
       </div>
-      <div className="mt-0.5 grid grid-cols-5 gap-0.5 text-[10px]">
+      <div className="mt-0.5 grid grid-cols-5 gap-0.5 text-[12px]">
         {(s.sellp ?? []).slice(0, 5).map((p, i) => (
           <div key={`s${i}`} className="truncate text-center text-[--stock-down]" title={lvl(p)}>
             {lvl(p)}
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-5 gap-0.5 text-[10px]">
+      <div className="grid grid-cols-5 gap-0.5 text-[12px]">
         {(s.sellv ?? []).slice(0, 5).map((v, i) => (
           <div key={`sv${i}`} className="truncate text-center text-muted-foreground" title={lvl(v)}>
             {lvl(v)}
@@ -274,14 +274,14 @@ function FundamentalCard({ symbol, market, more }: { symbol: string; market: str
 
   const gb = fund?.gb
   return (
-    <div className="rounded border border-border/60 p-2">
+    <div className="card-surface bg-card rounded p-2">
       <div className="mb-1 flex items-center gap-1 text-[12px] font-semibold">
         基本面 / 股本
         {fund?.sub_new ? (
-          <span className="rounded bg-[--stock-up]/20 px-1 text-[10px] text-[--stock-up]">次新</span>
+          <span className="rounded bg-[--stock-up]/20 px-1 text-[12px] text-[--stock-up]">次新</span>
         ) : null}
       </div>
-      {fund?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{fund.note}</div> : null}
+      {fund?.note ? <div className="mb-1 text-[12px] text-muted-foreground">{fund.note}</div> : null}
       <Row label="PE(TTM)" value={safePrice(safeNum(more?.pe_ttm), 2)} />
       <Row label="PB" value={safePrice(safeNum(more?.pb), 2)} />
       {/* 股本 = 流通/总(单行容纳两个真值, 精简不丢数据); 缺值一侧 '--' */}
@@ -310,11 +310,11 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
 
   const blocks = data?.blocks ?? []
   return (
-    <div className="rounded border border-border/60 p-2">
+    <div className="card-surface bg-card rounded p-2">
       <div className="mb-1 text-[12px] font-semibold">题材 / 板块</div>
-      {data?.note ? <div className="text-[10px] text-muted-foreground">{data.note}</div> : null}
+      {data?.note ? <div className="text-[12px] text-muted-foreground">{data.note}</div> : null}
       {blocks.length === 0 && !data?.note ? (
-        <div className="text-[10px] text-muted-foreground">--</div>
+        <div className="text-[12px] text-muted-foreground">--</div>
       ) : null}
       <div className="flex flex-wrap gap-1">
         {/* key 用 code+序号: 通达信反查里「概念/指数」类关系的 code 会是 '0'(实测 002636 有 5 条),
@@ -322,16 +322,16 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
         {blocks.slice(0, BLOCKS_MAX).map((b, i) => (
           <span
             key={`${b.code}-${i}`}
-            className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground"
+            className="rounded bg-s2 px-1 py-0.5 text-[12px] text-foreground"
           >
             {b.name}
-            <span className="ml-0.5 text-[10px] text-muted-foreground">{b.type}</span>
+            <span className="ml-0.5 text-[12px] text-muted-foreground">{b.type}</span>
           </span>
         ))}
         {/* 320px 速览卡: 板块实测可达 22 条 ⇒ 截断首屏, 余量折成 +N(悬停 title 列全名)。 */}
         {blocks.length > BLOCKS_MAX ? (
           <span
-            className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-muted-foreground"
+            className="rounded bg-s2 px-1 py-0.5 text-[12px] text-muted-foreground"
             title={blocks.slice(BLOCKS_MAX).map((b) => b.name).join('、')}
           >
             +{blocks.length - BLOCKS_MAX}

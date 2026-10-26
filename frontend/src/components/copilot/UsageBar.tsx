@@ -79,7 +79,7 @@ export function UsageBar({
 
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground ${className ?? ''}`}
+      className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground ${className ?? ''}`}
       data-testid="copilot-usage-bar"
     >
       <span className="flex items-baseline gap-1">

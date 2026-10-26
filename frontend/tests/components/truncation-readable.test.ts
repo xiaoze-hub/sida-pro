@@ -22,8 +22,8 @@ describe('截断必须能看全', () => {
   })
 
   it('首页结论/理由类说明截断 → 带 title', () => {
-    const truncated = dashboard.match(/truncate text-\[11px\] text-muted-foreground/g) || []
-    const withTitle = dashboard.match(/truncate text-\[11px\] text-muted-foreground" title=/g) || []
+    const truncated = dashboard.match(/truncate text-\[12px\] text-muted-foreground/g) || []
+    const withTitle = dashboard.match(/truncate text-\[12px\] text-muted-foreground" title=/g) || []
     expect(truncated.length).toBeGreaterThan(0)
     expect(withTitle.length).toBe(truncated.length)
   })

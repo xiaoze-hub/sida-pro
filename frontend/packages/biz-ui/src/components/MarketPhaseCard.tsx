@@ -173,15 +173,16 @@ export default function MarketPhaseCard() {
 
   if (loading && !data) {
     return (
-      <div className="animate-pulse">
-        <div className="h-[200px] bg-muted/40" />
+      <div role="status" className="min-w-0">
+        <SectionHeader title="情绪周期阶段" />
+        <p className="py-6 text-[12px] text-muted-foreground">正在加载情绪阶段…</p>
       </div>
     )
   }
 
   if (error && !data) {
     return (
-      <div className="border-t border-border/60 pt-2.5">
+      <div className="border-t border-border pt-2.5">
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <ShieldAlert className="w-3.5 h-3.5" />
           <span>市场阶段数据暂不可用({error})</span>
@@ -194,7 +195,7 @@ export default function MarketPhaseCard() {
   // 不再用 phaseStyle 兜底渲染"积累中"大字 —— 那会把"没有数据"伪装成一个真实阶段。
   if (data && !data.available) {
     return (
-      <div className="border-t border-border/60 pt-2.5">
+      <div className="border-t border-border pt-2.5">
         <SectionHeader
           title="情绪周期阶段"
           action={
@@ -211,7 +212,7 @@ export default function MarketPhaseCard() {
             </button>
           }
         />
-        <div className="flex h-[154px] items-center justify-center px-3 text-center text-[11px] text-muted-foreground">
+        <div className="flex h-[154px] items-center justify-center px-3 text-center text-[12px] text-muted-foreground">
           暂无阶段数据: {data.note || '--'}
         </div>
       </div>
@@ -228,19 +229,19 @@ export default function MarketPhaseCard() {
   const style = phaseStyle(phaseKey)
 
   return (
-    <div className="border-t border-border/60 pt-2.5">
+    <div className="border-t border-border pt-2.5">
       {/* 标题 + 时间戳 */}
       <SectionHeader
         title="情绪周期阶段"
         action={
           <>
             {updatedAt && (
-              <span className="text-[10px] text-muted-foreground font-mono">
+              <span className="text-[12px] text-muted-foreground font-mono">
                 {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
               </span>
             )}
             {data?.available ? (
-              <span className="text-[10px] text-muted-foreground font-mono">近 {totalDays}d</span>
+              <span className="text-[12px] text-muted-foreground font-mono">近 {totalDays}d</span>
             ) : null}
             <button
               type="button"
@@ -265,12 +266,12 @@ export default function MarketPhaseCard() {
               {cur?.label || '积累中'}
             </div>
             {cur?.date ? (
-              <div className="text-[10px] text-muted-foreground mt-1 font-mono">{cur.date}</div>
+              <div className="text-[12px] text-muted-foreground mt-1 font-mono">{cur.date}</div>
             ) : null}
-            <div className="text-[10px] text-muted-foreground mt-1.5 leading-snug">{style.desc}</div>
+            <div className="text-[12px] text-muted-foreground mt-1.5 leading-snug">{style.desc}</div>
           </div>
           {cur ? (
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10px] shrink-0">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[12px] shrink-0">
               <Mini label="高度" value={fmtInt(cur.max_height)} tone={style.text} />
               <Mini label="首板" value={fmtInt(cur.first_board)} tone={style.text} />
               <Mini label="≥2板" value={fmtInt(cur.ge2_count)} tone={style.text} />
@@ -286,7 +287,7 @@ export default function MarketPhaseCard() {
 
       {/* 核心指标行 */}
       {cur ? (
-        <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5 text-[11px] mb-3">
+        <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5 text-[12px] mb-3">
           <Stat label="≥3板" value={fmtInt(cur.ge3_count)} />
           <Stat label="≥5板" value={fmtInt(cur.ge5_count)} />
           <Stat
@@ -310,15 +311,15 @@ export default function MarketPhaseCard() {
       {/* 30 天阶段色块时间线 */}
       <div className="mt-2">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[10px] text-muted-foreground">近 {recent.length} 个交易日阶段色带</span>
+          <span className="text-[12px] text-muted-foreground">近 {recent.length} 个交易日阶段色带</span>
           {note ? (
-            <span className="text-[10px] text-muted-foreground truncate max-w-[60%]" title={note}>
+            <span className="text-[12px] text-muted-foreground truncate max-w-[60%]" title={note}>
               {note}
             </span>
           ) : null}
         </div>
         {recent.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground py-2">
+          <div className="text-[12px] text-muted-foreground py-2">
             暂无历史数据(请先调用 POST /api/market/phase/sync)
           </div>
         ) : (
@@ -345,7 +346,7 @@ export default function MarketPhaseCard() {
               return (
                 <span
                   key={d.phase}
-                  className={`inline-flex items-center gap-1 rounded-md border ${s.border} ${s.bg} px-1.5 py-0.5 text-[10px] font-mono`}
+                  className={`inline-flex items-center gap-1 rounded-md border ${s.border} ${s.bg} px-1.5 py-0.5 text-[12px] font-mono`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
                   <span className={s.text}>{d.label}</span>
@@ -363,7 +364,7 @@ export default function MarketPhaseCard() {
 function Mini({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
     <div className="text-right">
-      <div className="text-muted-foreground text-[10px] leading-none">{label}</div>
+      <div className="text-muted-foreground text-[12px] leading-none">{label}</div>
       <div className={`font-mono tabular-nums text-[12px] font-semibold leading-tight ${tone}`}>
         {value}
       </div>
@@ -383,8 +384,8 @@ function Stat({
   icon?: React.ReactNode
 }) {
   return (
-    <div className="border-l border-border/40 pl-2 py-0.5">
-      <div className="text-muted-foreground text-[10px] flex items-center gap-0.5">
+    <div className="border-l border-border pl-2 py-0.5">
+      <div className="text-muted-foreground text-[12px] flex items-center gap-0.5">
         {icon}
         {label}
       </div>

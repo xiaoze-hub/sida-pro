@@ -256,7 +256,7 @@ describe('/theme-mood 轮询失败: 静默重试', () => {
     await tick(60_000)
 
     // 一次可见提示(不是每个周期一条), 且失败带 title(悬停可看原因)
-    const notes = screen.getAllByText('轮询失败, 自动重试中')
+    const notes = screen.getAllByText('轮询失败，自动重试中')
     expect(notes.length).toBe(1)
     expect(notes[0].getAttribute('title')).toContain('network down')
     // 旧数据没被清掉(缺数据不显示 0 / 不显示空)

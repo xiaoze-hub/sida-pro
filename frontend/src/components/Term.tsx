@@ -67,7 +67,7 @@ export function Term({ children, def, href, side = 'bottom', className }: TermPr
         onBlur={(e) => {
           if (!wrapRef.current?.contains(e.relatedTarget as Node)) setOpen(false)
         }}
-        className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-border/70 text-[12px] leading-none text-muted-foreground hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+        className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-border text-[12px] leading-none text-muted-foreground hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
       >
         ?
       </button>

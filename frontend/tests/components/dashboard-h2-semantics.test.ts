@@ -12,15 +12,15 @@ const SRC = readFileSync(join(__dirname, '../../src/pages/Dashboard.tsx'), 'utf8
 
 describe('卡片标题语义化', () => {
   it('大盘资金流用 h2，且保留原 className', () => {
-    expect(SRC).toContain('<h2 className="text-[13px] font-semibold">{t(\'dashboard.fundflow\')}</h2>')
+    expect(SRC).toContain('<h2 className="text-[14px] font-semibold">{t(\'dashboard.fundflow\')}</h2>')
   })
 
   it('市场温度用 h2', () => {
-    expect(SRC).toContain('<h2 className="text-[13px] font-semibold">市场温度</h2>')
+    expect(SRC).toContain('<h2 className="text-[14px] font-semibold">市场温度</h2>')
   })
 
   it('不再用 span 承担这两个卡片标题', () => {
-    expect(SRC).not.toContain('<span className="text-[13px] font-semibold">{t(\'dashboard.fundflow\')}</span>')
-    expect(SRC).not.toContain('<span className="text-[13px] font-semibold">市场温度</span>')
+    expect(SRC).not.toContain('<span className="text-[14px] font-semibold">{t(\'dashboard.fundflow\')}</span>')
+    expect(SRC).not.toContain('<span className="text-[14px] font-semibold">市场温度</span>')
   })
 })

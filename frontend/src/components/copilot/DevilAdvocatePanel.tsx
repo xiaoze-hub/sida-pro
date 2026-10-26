@@ -117,14 +117,14 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
   }
 
   return (
-    <div data-testid="devil-advocate-panel" className="border-t border-border/40 pt-3">
+    <div data-testid="devil-advocate-panel" className="border-t border-border pt-3">
       {/* 触发行：警示红（danger 语义色板 --destructive，与买红卖绿的行情色板无关） */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="inline-flex items-center gap-1 text-[12px] font-medium text-foreground">
           <Swords className="h-3.5 w-3.5 text-destructive" />
           红蓝对抗压力测试
         </span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           假设这笔交易已亏 15%，空头立场给 3 个死因 + 证据链 + 反驳条件
         </span>
         <button
@@ -133,7 +133,7 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
           disabled={running}
           data-testid="devil-advocate-trigger"
           title="呼叫空头司令挑刺（压力测试）：走参谋对话接口对当前标的一轮逆向风控研判 —— 只出报告，不下单、不改持仓。会新建一条参谋会话（AI 参谋页可见）；证据缺失处将标注「无数据」，无现成工具的维度标注「无数据源」。"
-          className="ml-auto inline-flex h-7 items-center gap-1 rounded border border-destructive/40 bg-destructive/10 px-2.5 text-[11px] font-medium text-destructive hover:bg-destructive/15 disabled:opacity-60"
+          className="ml-auto inline-flex h-7 items-center gap-1 rounded border border-destructive/40 bg-destructive/10 px-2.5 text-[12px] font-medium text-destructive hover:bg-destructive/15 disabled:opacity-60"
         >
           {running ? <Loader2 className="h-3 w-3 animate-spin" /> : <Swords className="h-3 w-3" />}
           {running ? '空头司令研判中…' : '呼叫空头司令挑刺（压力测试）'}
@@ -142,7 +142,7 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
 
       {/* 取数阶段提示（流式 stage 事件原文） */}
       {running && stage ? (
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground" data-testid="devil-advocate-stage">
+        <div className="mt-2 flex items-center gap-1.5 text-[12px] text-muted-foreground" data-testid="devil-advocate-stage">
           <Loader2 className="h-3 w-3 animate-spin" />
           {stage}
         </div>
@@ -150,11 +150,11 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
 
       {/* 结果：hairline 分隔，SafeMarkdown 原样渲染（GFM 表格/要点行），不做二次加工 */}
       {result ? (
-        <div className="mt-2 border-t border-border/40 pt-2" data-testid="devil-advocate-result">
+        <div className="mt-2 border-t border-border pt-2" data-testid="devil-advocate-result">
           <div className="text-[12px] leading-relaxed [&_table]:tabular-nums">
             <SafeMarkdown>{result}</SafeMarkdown>
           </div>
-          <div className="mt-2 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground">
+          <div className="mt-2 border-t border-border pt-1.5 text-[12px] text-muted-foreground">
             逆向风险情报备料，非买卖指令；压力情景为假设性研判；「无数据」= 本轮证据缺失，「无数据源」= 平台暂无该维度工具。
           </div>
         </div>
@@ -162,7 +162,7 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
 
       {/* 失败态：展示后端 error 原文，不推断原因、不谎称已生成 */}
       {phase === 'failed' ? (
-        <div className="mt-2 text-[11px] text-muted-foreground" data-testid="devil-advocate-failed">
+        <div className="mt-2 text-[12px] text-muted-foreground" data-testid="devil-advocate-failed">
           挑刺失败：本轮压力测试未完成 —— 可重试。
           {errMsg ? <span> 流中断原因（原文）：{errMsg}</span> : ' 流在给出结论前结束，未生成报告。'}
           {' 本次未发生任何交易委托。'}

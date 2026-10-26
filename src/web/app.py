@@ -1042,3 +1042,5 @@ async def version():
 
 # 2026-08-17 v0.2.65: 深度健康检查 + Prometheus 指标(挂 /api 前缀, 跟其他路由一致)
 app.include_router(health_router.router, prefix="/api")
+from src.web.api import system_status as system_status_router
+app.include_router(system_status_router.router, prefix="/api/health", tags=["system-status"])

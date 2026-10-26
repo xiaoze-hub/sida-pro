@@ -38,13 +38,13 @@ export function ChartEmpty({
       role="status"
       style={{ minHeight: `${height}px` }}
       className={cn(
-        'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/60 bg-muted/10 px-4 py-4 text-center',
+        'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border bg-s2 px-4 py-4 text-center',
         className,
       )}
     >
       <p className="text-[12px] text-muted-foreground">{title}</p>
       {description && (
-        <p className="max-w-md text-[11px] leading-relaxed text-muted-foreground">{description}</p>
+        <p className="max-w-md text-[12px] leading-relaxed text-muted-foreground">{description}</p>
       )}
       {action && <div className="mt-1.5">{action}</div>}
     </div>
