@@ -352,3 +352,76 @@ def get_parallel(
         "created_at": str(row.created_at or ""),
         "summary": agg,
     }
+
+
+# ──────────────── 治理可见化(事中口径, 只读) ────────────────
+# 背景: 预算/白名单/Frozen Ring 现在全是**事后**才知道(CI 或跑完看轨迹)。
+# 这里把"这一轮到底受什么约束"在运行时就摊开: 预算上限与实际用量、工具白名单条数、
+# 哪些东西不在自动改动范围(Frozen Ring)。
+#
+# 只读, 不做拦截 —— 真正的拦在 chat.py 的 `_REQ_BUDGET` 与 frozen 守卫里, 这里只负责让人看得见。
+
+
+@router.get("/runs/{run_id}/governance")
+def get_run_governance(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """这一轮的治理现状：预算(上限/已用)、工具白名单、Frozen Ring、限流档位。
+
+    数据来源都是既有事实（`CopilotRun` 行 + 配方 YAML），不新增埋点、不推测。
+    缺值一律 `None`（前端显示 `--`），**不补 0** —— 没记到 ≠ 用了 0 次。
+    """
+    from src.db.models import CopilotRun
+    from src.harness.recipes import load_recipes
+
+    row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+    if row is None or (row.user_id and str(row.user_id) != str(getattr(user, "id", ""))):
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    recipe = None
+    recipe_id = (row.recipe or "").strip()
+    if recipe_id:
+        try:
+            recipe = load_recipes().get(recipe_id)
+        except Exception:  # noqa: BLE001 —— 配方读不出来不能把治理看板打死
+            logger.debug("读取配方失败: %s", recipe_id, exc_info=True)
+
+    max_calls = getattr(recipe, "max_tool_calls", None) if recipe is not None else None
+    tools = list(getattr(recipe, "tools", None) or []) if recipe is not None else []
+    used = row.tool_calls
+
+    return {
+        "run_id": run_id,
+        "status": row.status,
+        "recipe": recipe_id or None,
+        "budget": {
+            "max": int(max_calls) if isinstance(max_calls, int) else None,
+            "used": int(used) if isinstance(used, int) else None,
+            # 只有两边都有数才算余量；缺一边就是 None，绝不按 0 兜底
+            "remaining": (
+                int(max_calls) - int(used)
+                if isinstance(max_calls, int) and isinstance(used, int)
+                else None
+            ),
+        },
+        "whitelist": {
+            # 空列表 = 本轮没有配方级白名单（不代表"允许所有"，前端按"未限定"显示）
+            "count": len(tools),
+            "tools": tools,
+        },
+        "frozen_ring": {
+            "guards": [
+                "symbol_guard(标的核对)",
+                "number_audit(数字审计)",
+                "caliber.py(口径守卫)",
+                "交易接口 403 守卫",
+            ],
+            "note": "以上四条属 Frozen Ring：只读可见，任何自动改动都不得覆盖",
+        },
+        "limits": {
+            "max_tool_calls": int(max_calls) if isinstance(max_calls, int) else None,
+            "recipe_tools_declared": len(tools),
+        },
+    }

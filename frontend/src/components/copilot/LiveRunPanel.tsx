@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, Loader2, Radio } from 'lucide-react'
 import { formatElapsed } from '@/components/copilot/ToolTimeline'
+import { GovernanceStrip } from '@/components/copilot/GovernanceStrip'
 
 export interface LiveStep {
   seq: number
@@ -195,6 +196,9 @@ export function LiveRunPanel({
       {state.error && done && status !== 'ok' && status !== 'succeeded' ? (
         <div className="mt-2 text-[11px] text-stock-down">{state.error}</div>
       ) : null}
+
+      {/* 治理条(2026-10-26): 预算/白名单/Frozen Ring 在运行时就可见, 不再等跑完翻轨迹 */}
+      <GovernanceStrip runId={runId} />
     </div>
   )
 }

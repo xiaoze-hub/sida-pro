@@ -755,6 +755,33 @@ export default function AiCopilotPage() {
         </div>
       </aside>
 
+        {/* 2026-10-26 三栏驾驶舱: 宽屏(xl+)常驻会话列, 窄屏仍走抽屉。
+            只渲染一份 —— 抽屉打开时不再渲染常驻列, 否则 jsdom/读屏都会看到两份同名节点。 */}
+        {!historyOpen ? (
+          <div
+            className="hidden w-64 shrink-0 overflow-y-auto border-r border-border/40 bg-s1 xl:block"
+            data-testid="copilot-conversation-column"
+          >
+            <div className="flex items-center justify-between py-2 pl-3 pr-1">
+              <span className="text-[12px] font-medium">对话</span>
+            </div>
+            <ConversationSidebar
+              conversations={convMgr.conversations.length ? convMgr.conversations : convs}
+              activeId={convId}
+              query={convQuery}
+              onQueryChange={(q) => {
+                setConvQuery(q)
+                void convMgr.list(q)
+              }}
+              onSelect={(id) => void openConversation(id)}
+              onCreate={startNewConversation}
+              onRename={(id, title) => void convMgr.rename(id, title)}
+              onPin={(id, pinned) => void convMgr.pin(id, pinned)}
+              onDelete={(id) => void convMgr.remove(id)}
+            />
+          </div>
+        ) : null}
+
         {historyOpen ? (
           <div
             className="absolute inset-y-0 left-72 z-20 w-72 overflow-y-auto border-r border-border/40 bg-s1/95 backdrop-blur"
