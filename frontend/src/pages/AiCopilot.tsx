@@ -63,7 +63,6 @@ import {
   CONTEXT_ANCHOR_PREFIX,
   COPILOT_PAGE_SUBTITLE,
   COPILOT_PAGE_TITLE,
-  DISCLAIMER,
   PAGE_EMPTY_EXAMPLES,
   PAGE_EMPTY_HINT,
   PRESET_FALLBACK_HINT,
@@ -811,34 +810,9 @@ export default function AiCopilotPage() {
             </div>
           ) : null}
   
-          {metrics && metrics.runs > 0 ? (
-            <div className="mt-auto space-y-1 rounded-lg border border-border/50 px-2.5 py-2" data-testid="copilot-metrics">
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                <span>近 7 天运行</span>
-                <span className="font-mono text-foreground">{metrics.runs}</span>
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                <span>成功率</span>
-                <span className="font-mono text-foreground">
-                  {metrics.ok_rate == null ? '--' : `${Math.round(metrics.ok_rate * 100)}%`}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                <span>平均工具数</span>
-                <span className="font-mono text-foreground">{metrics.avg_tools ?? '--'}</span>
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                <span>P95 耗时</span>
-                <span className="font-mono text-foreground">
-                  {metrics.p95_elapsed_ms == null ? '--' : `${safeFixed(metrics.p95_elapsed_ms / 1000, 1)}s`}
-                </span>
-              </div>
-            </div>
-          ) : null}
+          {/* 左栏统计已移除(2026-10-26): 与顶部 UsageBar 的 tokens/调用/配额重复, 且挤在预设列底部 */}
+
   
-          <div className={`${metrics && metrics.runs > 0 ? 'mt-2' : 'mt-auto'} text-[10px] leading-relaxed text-muted-foreground`}>
-            {DISCLAIMER}
-          </div>
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto" data-testid="left-conversation-list">
@@ -907,8 +881,10 @@ export default function AiCopilotPage() {
         ) : null}
         <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2">
           <Sparkles className="h-3.5 w-3.5 text-role-watch" />
-          <span className="text-[12px] font-medium">{COPILOT_PAGE_TITLE}</span>
-          <span className="text-[10px] text-muted-foreground">{COPILOT_PAGE_SUBTITLE}</span>
+          <span className="text-[16px] font-medium">{COPILOT_PAGE_TITLE}</span>
+          <span className="hidden text-[11px] text-muted-foreground md:inline">
+            {COPILOT_PAGE_SUBTITLE}
+          </span>
           <button
             type="button"
             className="ml-2 flex items-center gap-1 rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
@@ -1083,37 +1059,15 @@ export default function AiCopilotPage() {
         >
           {/* 实时运行面板(2026-10-25): 后台任务一提交就在这里显示工具流, 不再只有一行状态文案 */}
           <LiveRunPanel runId={liveRunId} />
-          {/* 空态(2026-10-26): 没有消息时主区原来是一整块空白，输入框孤零零钉在底部。
-              改成垂直居中的引导块 —— 空白有内容承接，视觉重心不再全压在顶部工具条。 */}
-          {msgs.length === 0 && !streaming ? (
-            <div
-              className="flex min-h-[320px] flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
-              data-testid="copilot-empty-state"
-            >
-              <div className="text-[16px] font-medium text-foreground">{COPILOT_PAGE_TITLE}</div>
-              <div className="max-w-[420px] text-[12px] leading-relaxed text-muted-foreground">
-                直接输入问题，或从左侧预设挑一条。问具体标的时会先核代码，再调数据。
-              </div>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                {['600111 现在能追吗', '今天大盘情绪如何', '我的持仓要不要调'].map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    onClick={() => setInput(q)}
-                    className="rounded-lg border border-border px-2.5 py-1 text-[12px] text-foreground hover:bg-muted"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          {/* 空态(2026-10-26): 页面本来就有一套引导(PAGE_EMPTY_HINT + PAGE_EMPTY_EXAMPLES),
+              我先前又加了一套 —— 两套推荐并存是这版最明显的错。这里只把它**居中**，
+              不新增第二套内容。 */}
           {briefSymbol ? (
             <CopilotBriefCard symbol={briefSymbol} market="CN" />
           ) : null}
 
           {!msgs.length ? (
-            <div className="mt-4 space-y-2">
+            <div className="flex min-h-[300px] flex-1 flex-col items-center justify-center space-y-3 text-center">
               <div className="text-[12px] text-muted-foreground">{PAGE_EMPTY_HINT}</div>
               <div className="flex flex-col items-start gap-1.5">
                 {PAGE_EMPTY_EXAMPLES.map((x) => (

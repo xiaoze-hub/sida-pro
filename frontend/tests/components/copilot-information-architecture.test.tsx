@@ -73,11 +73,16 @@ describe('参谋页信息架构', () => {
     expect(screen.getByTestId('copilot-panel-proposals')).toBeTruthy()
   })
 
-  it('空态给引导块与示例问题，点示例填入输入框', async () => {
+  it('空态只有一套引导（不重复），点示例填入输入框', async () => {
     await renderPage()
-    await waitFor(() => expect(screen.getByTestId('copilot-empty-state')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: '今天大盘情绪如何' }))
-    const box = document.querySelector('textarea') as HTMLTextAreaElement
-    expect(box.value).toBe('今天大盘情绪如何')
+    // 页面本来就有 PAGE_EMPTY_HINT + PAGE_EMPTY_EXAMPLES；我在 v0.78 又加了一套，被移除。
+    // 现在钉住：hint 恰好出现一次，示例按钮恰好三个。
+    await waitFor(() => expect(screen.getByText('也可以直接点一条，不用自己组织语言')).toBeTruthy())
+    expect(screen.getAllByText('也可以直接点一条，不用自己组织语言').length).toBe(1)
+    // 原有引导的交互是"点一条直接问"（不是填入输入框），钉住这个行为
+    expect(screen.getAllByTestId('copilot-empty-example').length).toBe(3)
+    apiMock.sendMessageStream.mockResolvedValue(undefined)
+    fireEvent.click(screen.getByRole('button', { name: /爆量抢筹/ }))
+    await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
   })
 })
