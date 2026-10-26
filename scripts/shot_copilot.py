@@ -20,6 +20,8 @@ TOKEN_FILE = pathlib.Path("/tmp/sida_tok.txt")
 def main() -> int:
     out = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/copilot.png")
     width = int(sys.argv[2]) if len(sys.argv) > 2 else 1600
+    route = sys.argv[3] if len(sys.argv) > 3 else "/ai-copilot"
+    height = int(sys.argv[4]) if len(sys.argv) > 4 else 1000
     token = TOKEN_FILE.read_text().strip()
     if not token:
         print("缺少 token：先写 /tmp/sida_tok.txt")
@@ -27,7 +29,7 @@ def main() -> int:
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(args=["--no-sandbox"])
-        ctx = browser.new_context(viewport={"width": width, "height": 1000})
+        ctx = browser.new_context(viewport={"width": width, "height": height})
         # 域名不带点会与重定向后的主机名不匹配 -> 用宽域 cookie
         ctx.add_cookies(
             [{"name": "sida_token", "value": token, "domain": ".hengsheng-elec.com",
@@ -37,7 +39,7 @@ def main() -> int:
         # 前端 UI 角色读 localStorage.token（后端鉴权走 cookie），两个都补上
         page.goto(BASE, wait_until="domcontentloaded", timeout=60000)
         page.evaluate("t => localStorage.setItem('token', t)", token)
-        page.goto(f"{BASE}/ai-copilot", wait_until="networkidle", timeout=60000)
+        page.goto(f"{BASE}{route}", wait_until="networkidle", timeout=60000)
         page.wait_for_timeout(2500)
         # 登录页说明 cookie 没生效
         if "/login" in page.url:

@@ -60,6 +60,18 @@ describe('defaultLauncherPoint', () => {
     expect(p.x + BALL.w).toBeLessThanOrEqual(768)
     expect(p.y + BALL.h).toBeLessThanOrEqual(1024)
   })
+
+  it('桌面端默认贴右下 20px，与旧版 bottom-5/right-5 一致（不许自己拍数）', () => {
+    const p = defaultLauncherPoint(BALL, { w: 1600, h: 1000 })
+    expect(1600 - (p.x + BALL.w)).toBe(20)
+    expect(1000 - (p.y + BALL.h)).toBe(20)
+  })
+
+  it('手机端默认抬高到底部导航之上（bottom 80 / right 16）', () => {
+    const p = defaultLauncherPoint(BALL, { w: 390, h: 844 }, { right: 16, bottom: 80 })
+    expect(390 - (p.x + BALL.w)).toBe(16)
+    expect(844 - (p.y + BALL.h)).toBe(80)
+  })
 })
 
 describe('持久化', () => {

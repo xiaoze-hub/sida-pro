@@ -38,10 +38,20 @@ export function isDragGesture(start: Point, end: Point, threshold = DRAG_THRESHO
   return Math.abs(end.x - start.x) > threshold || Math.abs(end.y - start.y) > threshold
 }
 
-/** 默认位置：右下角。按视口算，才能在平板/手机上都不跑偏。 */
-export function defaultLauncherPoint(size: Size, viewport: Size, margin = EDGE_MARGIN): Point {
+/**
+ * 默认位置：右下角。偏移量**必须由调用方按断点给出**，不能在这里自己拍一个数。
+ * 2026-10-26 踩过：这里曾写死 `margin * 10` 当底边距，结果桌面端球比旧版（bottom-5=20px）
+ * 高出 60px，浮在行情表格的数据上，被截图复核抓出来。旧版行为即：手机 bottom 80/right 16，
+ * 桌面 bottom 20/right 20。
+ */
+export function defaultLauncherPoint(
+  size: Size,
+  viewport: Size,
+  offset: { right: number; bottom: number } = { right: 20, bottom: 20 },
+  margin = EDGE_MARGIN,
+): Point {
   return clampToViewport(
-    { x: viewport.w - size.w - margin * 2, y: viewport.h - size.h - margin * 10 },
+    { x: viewport.w - size.w - offset.right, y: viewport.h - size.h - offset.bottom },
     size,
     viewport,
     margin,

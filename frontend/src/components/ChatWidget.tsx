@@ -70,7 +70,10 @@ function AssistantLauncher({
     const size = { w: el?.offsetWidth || 80, h: el?.offsetHeight || 80 }
     const viewport = viewportSize()
     const stored = readLauncherPos(storage())
-    setPoint(stored ? clampToViewport(stored, size, viewport) : defaultLauncherPoint(size, viewport))
+    const compact = viewport.w < 768
+    setPoint(stored
+      ? clampToViewport(stored, size, viewport)
+      : defaultLauncherPoint(size, viewport, compact ? { right: 16, bottom: 80 } : { right: 20, bottom: 20 }))
   }, [buttonRef])
 
   useEffect(() => {
