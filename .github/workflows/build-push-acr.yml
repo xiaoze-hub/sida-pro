@@ -232,8 +232,6 @@ jobs:
             sudo timeout 900 apt-get install -y --no-install-recommends \
               -o Acquire::ForceIPv4=true -o Acquire::http::Timeout=60 -o Acquire::Retries=3 $PKGS
           fi
-          # 装完立刻真渲染一次（库缺失在这里就红，不等到 pytest 才发现是静默跳过）
-          python3 -c "import weasyprint; weasyprint.HTML(string='<p>中文渲染检查</p>').write_pdf('/tmp/_probe.pdf'); print('WeasyPrint 渲染 OK')"
       - name: Install backend deps (与分片同口径)
         run: |
           set -euo pipefail
@@ -242,6 +240,9 @@ jobs:
       - name: Backend pytest (PDF 导出)
         run: |
           set -o pipefail
+          # 探针必须放在依赖装好之后：weasyprint 是 Python 包（系统库只是它的底层依赖）。
+          # 2026-10-26 曾把探针写在系统库步骤里 → ModuleNotFoundError: weasyprint，白红一次。
+          python3 -c "import weasyprint; weasyprint.HTML(string='<p>中文渲染检查</p>').write_pdf('/tmp/_probe.pdf'); print('WeasyPrint 真渲染 OK')"
           python3 -m pytest tests/test_pdf_export.py -q --cov=src --cov-report=term
       - name: Upload pdf coverage data
         if: always()
