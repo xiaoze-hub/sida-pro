@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from src.web.api._scope import allow_cross_user
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
 
@@ -194,6 +195,7 @@ MAX_PARALLEL_ITEMS = 4
 def _child_executor(user_id: str):
     """把异步执行体包成 delegate() 要的同步 executor（在独立线程里跑）。"""
 
+    @allow_cross_user  # 后台执行体按 run_id 读轨迹, 没有请求上下文; run 归属在提交/查询时已校验
     def _run(*, run_id: str, recipe_id: str, question: str, budget: int | None) -> dict:
         import asyncio
         import time
@@ -303,6 +305,7 @@ async def submit_parallel(
     return {"run_id": parent_id, "status": "queued", "count": len(items)}
 
 
+@allow_cross_user  # 后台线程按 run_id 写父 run 状态, 无请求上下文; 归属在提交端校验
 def _mark_parent(run_id: str, *, status: str, error: str | None = None) -> None:
     from datetime import datetime
 

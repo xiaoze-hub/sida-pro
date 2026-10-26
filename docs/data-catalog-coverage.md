@@ -6,15 +6,15 @@
 
 | 指标 | 数值 |
 | --- | --- |
-| API 路由（`src/web/api/*.py` 装饰器） | **523** |
-| 平台表（models ∪ migrations） | **138** |
-| 　其中 `models.py` `__tablename__` | 94 |
+| API 路由（`src/web/api/*.py` 装饰器） | **534** |
+| 平台表（models ∪ migrations） | **141** |
+| 　其中 `models.py` `__tablename__` | 97 |
 | 　仅 `migrations.py` 声明（含 hypertable） | 44 |
 | 目录域总数（`src/harness/data_catalog.yaml`） | **26** |
 | **有实现的域** | **26 / 26 = 100.0%** |
 | source 非空但零命中表的域 | 0 |
-| 域已触达的表 | 44 / 138 = 31.9% |
-| 未被任何域覆盖的表 | 94 |
+| 域已触达的表 | 44 / 141 = 31.2% |
+| 未被任何域覆盖的表 | 97 |
 | 域引用了不存在的表（目录写错） | 0 个域 / 0 处 |
 
 ## ① 域覆盖率：26 / 26（100.0%）
@@ -58,7 +58,7 @@
 
 口径：「已实现」= source 里至少解析出一张**真实存在**的表；source 为空或只写了模块名/路径都算待接。
 
-## ② 未被任何域覆盖的表：94 张
+## ② 未被任何域覆盖的表：97 张
 
 候选域为按表名前缀/关键词的启发式建议，仅作归类参考。
 
@@ -82,82 +82,85 @@
 | 16 | `schema_migrations` | migrations | `ops.config` | 仅 migrations 声明（ORM 未建模） |
 | 17 | `tier_configs` | models/migrations | `ops.config` | — |
 | 18 | `tier_downgrade_logs` | models/migrations | `ops.config` | — |
-| 19 | `user_ai_services` | models/migrations | `ops.config` | — |
-| 20 | `user_sessions` | models/migrations | `ops.config` | — |
-| 21 | `users` | models | `ops.config` | — |
-| 22 | `price_distribution_daily` | models | `stock.chip` | — |
-| 23 | `price_distribution_snapshots` | models | `stock.chip` | — |
-| 24 | `news_topic_snapshots` | models | `stock.dossier` | — |
-| 25 | `report_subscriptions` | models | `stock.dossier` | — |
-| 26 | `demon_factors` | migrations | `stock.factor`, `strategy.signal` | 仅 migrations 声明（ORM 未建模） |
-| 27 | `factor_weight_history` | models | `stock.factor` | — |
-| 28 | `factor_weights` | models | `stock.factor` | — |
-| 29 | `factor_winrate_daily` | models/migrations | `stock.factor` | — |
-| 30 | `dark_fund_top_snapshots` | models | `stock.flow` | — |
-| 31 | `img_orderbook_frames` | migrations | `stock.intraday` | 仅 migrations 声明（ORM 未建模） |
-| 32 | `l2_ticks` | migrations | `stock.intraday` | 仅 migrations 声明（ORM 未建模） |
-| 33 | `tick_archive` | migrations | `stock.intraday` | 仅 migrations 声明（ORM 未建模） |
-| 34 | `adj_factors` | models | `stock.kline`, `stock.factor` | — |
-| 35 | `kline_annotations` | models | `stock.kline` | — |
-| 36 | `signal_summary_daily` | models | `strategy.signal` | — |
-| 37 | `strategy_catalog` | models/migrations | `strategy.signal` | — |
-| 38 | `strategy_signal_runs` | models/migrations | `strategy.signal` | — |
-| 39 | `strategy_weight_history` | models/migrations | `strategy.signal` | — |
-| 40 | `strategy_weights` | models/migrations | `strategy.signal` | — |
-| 41 | `_m121_stock_dup` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 42 | `_m121_stock_keep` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 43 | `accounts` | models | （待归类） | — |
-| 44 | `agent_configs` | models | （待归类） | — |
-| 45 | `agent_context_runs` | models | （待归类） | — |
-| 46 | `agent_prediction_outcomes` | models | （待归类） | — |
-| 47 | `agent_runs` | models | （待归类） | — |
-| 48 | `ai_models` | models | （待归类） | — |
-| 49 | `ai_pattern_shadow` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 50 | `ai_scene_bindings` | models/migrations | （待归类） | — |
-| 51 | `ai_services` | models | （待归类） | — |
-| 52 | `analysis_history` | models/migrations | （待归类） | — |
-| 53 | `caliber_snapshots` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 54 | `cb_daily_snapshot` | models | （待归类） | — |
-| 55 | `cb_terms` | models | （待归类） | — |
-| 56 | `chat_conversations` | models/migrations | （待归类） | — |
-| 57 | `chat_messages` | models/migrations | （待归类） | — |
-| 58 | `copilot_actions` | models | （待归类） | — |
-| 59 | `copilot_feedback` | models | （待归类） | — |
-| 60 | `copilot_memories` | models | （待归类） | — |
-| 61 | `copilot_quotas` | models | （待归类） | — |
-| 62 | `copilot_runs` | models | （待归类） | — |
-| 63 | `copilot_steps` | models | （待归类） | — |
-| 64 | `decision_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 65 | `decision_log` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 66 | `decision_pioneer_history` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 67 | `entry_candidate_feedback` | models/migrations | （待归类） | — |
-| 68 | `entry_candidate_outcomes` | models/migrations | （待归类） | — |
-| 69 | `entry_candidates` | models/migrations | （待归类） | — |
-| 70 | `exday_daily` | models/migrations | （待归类） | — |
-| 71 | `harness_experiments` | models/migrations | （待归类） | — |
-| 72 | `harness_proposals` | models | （待归类） | — |
-| 73 | `high_value_api_logs` | models/migrations | （待归类） | — |
-| 74 | `manual_query_candidates` | models | （待归类） | — |
-| 75 | `market_phase_daily` | models | （待归类） | — |
-| 76 | `market_replay_daily` | models/migrations | （待归类） | — |
-| 77 | `market_scan_ranks` | models | （待归类） | — |
-| 78 | `market_scan_snapshots` | models/migrations | （待归类） | — |
-| 79 | `price_alert_hits` | models | （待归类） | — |
-| 80 | `price_alert_rules` | models | （待归类） | — |
-| 81 | `resonance_ai_verdicts` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 82 | `resonance_scan` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 83 | `skill_api_keys` | models/migrations | （待归类） | — |
-| 84 | `skill_usage` | models/migrations | （待归类） | — |
-| 85 | `stock_agents` | models | （待归类） | — |
-| 86 | `stock_context_snapshots` | models | （待归类） | — |
-| 87 | `stock_suggestions` | models | （待归类） | — |
-| 88 | `stock_universe_snapshots` | models | （待归类） | — |
-| 89 | `suggestion_feedback` | models/migrations | （待归类） | — |
-| 90 | `summary_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 91 | `tq_formula_signal_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 92 | `trading_halts` | models | （待归类） | — |
-| 93 | `war_report_daily` | models | （待归类） | — |
-| 94 | `workbench_layer_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 19 | `user_ai_prefs` | models/migrations | `ops.config` | — |
+| 20 | `user_ai_services` | models/migrations | `ops.config` | — |
+| 21 | `user_sessions` | models/migrations | `ops.config` | — |
+| 22 | `users` | models | `ops.config` | — |
+| 23 | `price_distribution_daily` | models | `stock.chip` | — |
+| 24 | `price_distribution_snapshots` | models | `stock.chip` | — |
+| 25 | `news_topic_snapshots` | models | `stock.dossier` | — |
+| 26 | `report_subscriptions` | models | `stock.dossier` | — |
+| 27 | `demon_factors` | migrations | `stock.factor`, `strategy.signal` | 仅 migrations 声明（ORM 未建模） |
+| 28 | `factor_weight_history` | models | `stock.factor` | — |
+| 29 | `factor_weights` | models | `stock.factor` | — |
+| 30 | `factor_winrate_daily` | models/migrations | `stock.factor` | — |
+| 31 | `dark_fund_top_snapshots` | models | `stock.flow` | — |
+| 32 | `img_orderbook_frames` | migrations | `stock.intraday` | 仅 migrations 声明（ORM 未建模） |
+| 33 | `l2_ticks` | migrations | `stock.intraday` | 仅 migrations 声明（ORM 未建模） |
+| 34 | `tick_archive` | migrations | `stock.intraday` | 仅 migrations 声明（ORM 未建模） |
+| 35 | `adj_factors` | models | `stock.kline`, `stock.factor` | — |
+| 36 | `kline_annotations` | models | `stock.kline` | — |
+| 37 | `recipe_versions` | models/migrations | `strategy.signal` | — |
+| 38 | `signal_summary_daily` | models | `strategy.signal` | — |
+| 39 | `strategy_catalog` | models/migrations | `strategy.signal` | — |
+| 40 | `strategy_signal_runs` | models/migrations | `strategy.signal` | — |
+| 41 | `strategy_weight_history` | models/migrations | `strategy.signal` | — |
+| 42 | `strategy_weights` | models/migrations | `strategy.signal` | — |
+| 43 | `_m121_stock_dup` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 44 | `_m121_stock_keep` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 45 | `accounts` | models | （待归类） | — |
+| 46 | `agent_configs` | models | （待归类） | — |
+| 47 | `agent_context_runs` | models | （待归类） | — |
+| 48 | `agent_prediction_outcomes` | models | （待归类） | — |
+| 49 | `agent_runs` | models | （待归类） | — |
+| 50 | `ai_models` | models | （待归类） | — |
+| 51 | `ai_pattern_shadow` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 52 | `ai_scene_bindings` | models/migrations | （待归类） | — |
+| 53 | `ai_services` | models | （待归类） | — |
+| 54 | `analysis_history` | models/migrations | （待归类） | — |
+| 55 | `caliber_snapshots` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 56 | `cb_daily_snapshot` | models | （待归类） | — |
+| 57 | `cb_terms` | models | （待归类） | — |
+| 58 | `chat_conversations` | models/migrations | （待归类） | — |
+| 59 | `chat_messages` | models/migrations | （待归类） | — |
+| 60 | `copilot_actions` | models | （待归类） | — |
+| 61 | `copilot_feedback` | models | （待归类） | — |
+| 62 | `copilot_memories` | models | （待归类） | — |
+| 63 | `copilot_quotas` | models | （待归类） | — |
+| 64 | `copilot_runs` | models | （待归类） | — |
+| 65 | `copilot_steps` | models | （待归类） | — |
+| 66 | `decision_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 67 | `decision_log` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 68 | `decision_pioneer_history` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 69 | `entry_candidate_feedback` | models/migrations | （待归类） | — |
+| 70 | `entry_candidate_outcomes` | models/migrations | （待归类） | — |
+| 71 | `entry_candidates` | models/migrations | （待归类） | — |
+| 72 | `exday_daily` | models/migrations | （待归类） | — |
+| 73 | `harness_experiments` | models/migrations | （待归类） | — |
+| 74 | `harness_proposals` | models | （待归类） | — |
+| 75 | `high_value_api_logs` | models/migrations | （待归类） | — |
+| 76 | `manual_query_candidates` | models | （待归类） | — |
+| 77 | `market_phase_daily` | models | （待归类） | — |
+| 78 | `market_replay_daily` | models/migrations | （待归类） | — |
+| 79 | `market_scan_ranks` | models | （待归类） | — |
+| 80 | `market_scan_snapshots` | models/migrations | （待归类） | — |
+| 81 | `price_alert_hits` | models | （待归类） | — |
+| 82 | `price_alert_rules` | models | （待归类） | — |
+| 83 | `resonance_ai_verdicts` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 84 | `resonance_scan` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 85 | `skill_api_keys` | models/migrations | （待归类） | — |
+| 86 | `skill_usage` | models/migrations | （待归类） | — |
+| 87 | `stock_agents` | models | （待归类） | — |
+| 88 | `stock_context_snapshots` | models | （待归类） | — |
+| 89 | `stock_suggestions` | models | （待归类） | — |
+| 90 | `stock_universe_snapshots` | models | （待归类） | — |
+| 91 | `suggestion_feedback` | models/migrations | （待归类） | — |
+| 92 | `summary_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 93 | `tq_formula_signal_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 94 | `trading_halts` | models | （待归类） | — |
+| 95 | `war_report_daily` | models | （待归类） | — |
+| 96 | `webhook_subscriptions` | models/migrations | （待归类） | — |
+| 97 | `workbench_layer_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
 
 ## ③ 域引用了不存在的表：0 个域
 
@@ -186,5 +189,5 @@
 | `stock.chip` | 1 | GET /chip-daily |
 | `limit.pool` | 1 | GET /ladder |
 
-可粗映射到域的路由：112 / 523 = 21.4%；其余属认证/运维/未归类。
+可粗映射到域的路由：112 / 534 = 21.0%；其余属认证/运维/未归类。
 
