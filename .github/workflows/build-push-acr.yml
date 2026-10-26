@@ -128,8 +128,13 @@ jobs:
         #   ② apt 加超时与重试 —— 实测 apt 源抖动时这一步能吃 19 分钟，
         #      以前没有超时，就把整条发版链拖成"越来越慢"。
         run: |
-          if ldconfig -p | grep -q 'libpango-1.0' && ldconfig -p | grep -q 'libcairo'; then
-            echo "系统库已在镜像内，跳过 apt"
+          # 三个条件都要满足才能跳过：pango + cairo + **中文字体**。
+          # 只查前两个是我第一版的错：runner 自带 pango/cairo 但没装 fonts-noto-cjk，
+          # 跳过安装后 PDF 里的中文渲染成乱码，`test_pdf_export` 两条用例直接红。
+          if ldconfig -p | grep -q 'libpango-1.0' \
+             && ldconfig -p | grep -q 'libcairo' \
+             && fc-list 2>/dev/null | grep -qi 'CJK'; then
+            echo "系统库 + 中文字体已在镜像内，跳过 apt"
             exit 0
           fi
           sudo apt-get -o Acquire::http::Timeout=30 \
