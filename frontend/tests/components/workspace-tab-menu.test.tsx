@@ -92,6 +92,16 @@ afterEach(() => {
 })
 
 describe('L2-E: 页签右键菜单', () => {
+  it('一键关闭全部只保留首页，仅一个页签时隐藏入口', () => {
+    renderShell('/')
+    expect(screen.queryByTestId('workspace-tabs-close-all')).toBeNull()
+    openTabs(['/heatmap', '/reports', '/portfolio'])
+    fireEvent.click(screen.getByTestId('workspace-tabs-close-all'))
+    expect(tabKeys()).toEqual(['/'])
+    expect(screen.getByTestId('workspace-tab').getAttribute('aria-selected')).toBe('true')
+    expect(screen.queryByTestId('workspace-tabs-close-all')).toBeNull()
+  })
+
   it('右键页签出菜单，且菜单不在 tablist 内（不污染文本断言）', () => {
     renderShell('/')
     openTabs(['/heatmap', '/opportunities'])

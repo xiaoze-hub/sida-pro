@@ -104,6 +104,7 @@ const enUS: Messages = {
 
   // Workspace tabs (Tab Shell, 2026-10-15)
   tabs: {
+    closeAll: 'Close all tabs, keep Home',
     bar: 'Workspace tabs',
     stock: 'Stock',
     index: 'Index',

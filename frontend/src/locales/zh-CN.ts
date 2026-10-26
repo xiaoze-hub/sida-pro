@@ -103,6 +103,7 @@ const zhCN = {
 
   // 工作台页签(Tab Shell, 2026-10-15): 页签栏 / 标题后缀 / 关闭键 aria-label
   tabs: {
+    closeAll: '关闭全部页签，仅保留首页',
     bar: '工作台页签',
     stock: '个股',
     index: '指数',

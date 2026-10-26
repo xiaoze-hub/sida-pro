@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { X, Flame } from 'lucide-react'
+import { X, Flame, ListX } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
   Activity,
@@ -193,6 +193,10 @@ export default function WorkspaceTabs({
             </div>
           )
         })}
+        {tabs.length > 1 && onCloseOthers && <button type="button" data-testid="workspace-tabs-close-all" aria-label={t('tabs.closeAll')} title={t('tabs.closeAll')} onClick={() => {
+          const home = tabs.find(tab => tab.key === HOME_TAB_KEY)
+          if (home) onCloseOthers(home)
+        }} className="sticky right-0 z-10 ml-auto flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-lg bg-s2 text-muted-foreground hover:bg-s3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"><ListX className="h-4 w-4" /></button>}
       </div>
       {/* 右键菜单挂到 body: 既不受页签栏 overflow 裁切, 也不会把菜单文案混进 tablist 的文本内容 */}
       {menuTab
