@@ -28,11 +28,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+from src.core.db_safe import safe_rollback
 from src.web.api._scope import allow_cross_user  # C3(2026-09-18): 见各豁免点理由
 from src.web.database import get_db
 from src.web.models import SkillApiKey, SkillUsage
@@ -140,6 +141,8 @@ OPEN_SKILLS: dict[str, dict[str, Any]] = {
 BLOCKED_SKILLS = {
     "get_portfolio", "get_watchlist", "get_notifications", "get_stock_suggestions",
     "get_web_content", "tdx_wenda", "get_irm_qa",
+    # 2026-10-22 采集层: 写本人提案行(个人数据), 且它只对内网登录态有意义 → 不外放
+    "note_new_dimension",
 }
 
 # 档位默认日限/突发/匀速 —— 硬编码兜底; 生产以 tier_configs 表为准(任务3.2)。
@@ -184,10 +187,6 @@ def refresh_tier_configs(db: Session | None = None) -> None:
             from src.db.models import TierConfig
 
             rows = db.query(TierConfig).all()
-            if not rows:
-                # 表存在但空: 也记时间戳, 避免每次请求都打库
-                _tier_cfg_loaded_at = now
-                return
             for r in rows:
                 t = (r.tier_name or "").strip().lower()
                 if t not in TIER_DAILY_LIMIT:
@@ -202,6 +201,24 @@ def refresh_tier_configs(db: Session | None = None) -> None:
                         TIER_REFILL_PER_MIN[t] = int(scope["refill_per_min"])
                 except (TypeError, ValueError) as ve:
                     logger.warning("tier_configs 行非法 tier=%s: %r", t, ve)
+
+            # B3(2026-09-29): 「免费档」面板(同一份 KV)的 tier_limits **覆盖优先** ——
+            # 未配置时为空 dict, 行为与收编前完全一致(tier_configs 表 / 硬编码兜底)。
+            try:
+                from src.core import free_tier
+
+                for t, lim in (free_tier.tier_limits(db) or {}).items():
+                    if t not in TIER_DAILY_LIMIT:
+                        continue
+                    if isinstance(lim.get("daily_limit"), int) and lim["daily_limit"] > 0:
+                        TIER_DAILY_LIMIT[t] = int(lim["daily_limit"])
+                    if isinstance(lim.get("burst_limit"), int) and lim["burst_limit"] > 0:
+                        TIER_BURST[t] = int(lim["burst_limit"])
+                    if isinstance(lim.get("refill_per_min"), int) and lim["refill_per_min"] > 0:
+                        TIER_REFILL_PER_MIN[t] = int(lim["refill_per_min"])
+            except Exception as fe:  # noqa: BLE001 —— 配置层故障不该打断档位限额读取
+                logger.debug("tier_limits(KV) 覆盖失败, 保持表/默认值: %r", fe)
+
             _tier_cfg_loaded_at = now
         except Exception as e:  # noqa: BLE001
             logger.debug("refresh_tier_configs 失败, 保持硬编码默认: %r", e)
@@ -1494,6 +1511,8 @@ def downgrade_expired_keys(db: Session | None = None) -> int:
             logger.info("到期降级任务完成: %s 个 key 降为 free", n)
         return n
     except Exception as e:  # noqa: BLE001
+        if own is None:  # 自建 session 由 finally 关闭(等价回滚), 只清理调用方的事务
+            safe_rollback(db)
         logger.warning("downgrade_expired_keys 失败: %r", e)
         return 0
     finally:
@@ -1751,8 +1770,23 @@ class KeyRegisterRequest(BaseModel):
 
 
 class SkillRunRequest(BaseModel):
+    """Skill 执行请求体。正式契约: {"args": {...}, "format": "json"}。"""
+
+    # 兼容垫片(2026-10-23): 早期文档/调试台把参数裸放顶层({"symbol": "..."}),
+    # 那时 args 恒为 {} → 所有需要参数的 skill 必败且静默丢参。
+    # 这里放开 extra 并在 args 为空时把顶层键折叠进 args; 显式 args 永远优先。
+    # 新客户端请一律走 args, 顶层裸参仅为向后兼容。
+    model_config = ConfigDict(extra="allow")
+
     args: dict[str, Any] = Field(default_factory=dict)
     format: str = Field(default="html", description="输出格式: html(默认, 内嵌 JSON) / json")
+
+    @model_validator(mode="after")
+    def _fold_legacy_top_level_args(self) -> "SkillRunRequest":
+        extra = {k: v for k, v in (self.model_extra or {}).items() if k != "format"}
+        if extra and not self.args:
+            self.args = dict(extra)
+        return self
 
 
 class SkillRunResponse(BaseModel):
@@ -1957,6 +1991,7 @@ def _log_usage(
         ))
         db.commit()
     except Exception as e:  # noqa: BLE001
+        safe_rollback(db)
         logger.warning("skill_usage 落库失败: %r", e)
 
 
@@ -2187,10 +2222,17 @@ def create_my_key(
     refresh_tier_configs(db)
     _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
-    tier = "trial" if body.trial else "free"
+    # 档位以用户身份优先: Pro/Owner 在控制台自助建 Key 必须拿到 pro 档,
+    # 之前只看 body.trial → pro 用户建出来是 free(100 次/天)。
+    role = (getattr(user, "role", "") or "").strip().lower()
     expires = None
-    if tier == "trial":
+    if role in ("pro", "owner"):
+        tier = "pro"
+    elif body.trial:
+        tier = "trial"
         expires = datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
+    else:
+        tier = "free"
     row = SkillApiKey(
         key_hash=_hash_key(raw),
         key_prefix=raw[:11],
@@ -2261,14 +2303,21 @@ def delete_my_key(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """删除自己的 Key(硬删)。用量流水(skill_usage)保留, 仅解除关联。"""
+    """删除自己的 Key(软删: status=disabled, 行保留供用量审计)。
+
+    与 `/api/keys/{id}` 语义一致; 早期这里是硬删, 导致控制台与
+    「已禁用 Key」统计/文档说法自相矛盾。
+    """
     user = _require_jwt_user(request, db)
     row = _get_owned_key(db, user, key_id)
     prefix = row.key_prefix
-    db.delete(row)
+    if row.status == "disabled":
+        return {"deleted": True, "id": key_id, "status": row.status, "message": "Key 已是删除状态"}
+    row.status = "disabled"
+    row.frozen_reason = row.frozen_reason or "用户删除"
     db.commit()
-    logger.info("user %s deleted skill key id=%s prefix=%s", user.username, key_id, prefix)
-    return {"deleted": True, "id": key_id}
+    logger.info("user %s disabled skill key id=%s prefix=%s", user.username, key_id, prefix)
+    return {"deleted": True, "id": key_id, "status": row.status, "message": "Key 已删除"}
 
 
 @router.get("/keys/my/{key_id}/usage")
@@ -2319,13 +2368,22 @@ async def _require_owner_admin(user: _User = _Dep(_get_current_user)) -> _User:
 
 @router.get("/admin/skills/keys")
 def admin_list_keys(
+    limit: int = Query(default=200, ge=1, le=1000, description="每页条数"),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: _User = Depends(_require_owner_admin),
 ) -> dict:
-    """Key 列表(不含明文, 只有 prefix/hash 前 8 位)。含今日用量与关联用户名。"""
+    """Key 列表(不含明文, 只有 prefix/hash 前 8 位)。含今日用量与关联用户名。支持分页。"""
     from sqlalchemy import func as _func
 
-    rows = db.query(SkillApiKey).order_by(SkillApiKey.created_at.desc()).limit(200).all()
+    total_keys = db.query(SkillApiKey).count()
+    rows = (
+        db.query(SkillApiKey)
+        .order_by(SkillApiKey.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     # 今日用量聚合(skill_usage.created_at 与 server_default 同源)
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2359,7 +2417,10 @@ def admin_list_keys(
                 "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
             }
             for r in rows
-        ]
+        ],
+        "total": total_keys,
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -2489,3 +2550,71 @@ def admin_usage_report(
             for kid, rec in sorted(by_key.items(), key=lambda x: -x[1]["total"])
         ],
     }
+
+# ──────────────── 外部任务提交 + Webhook 回调（P2-2.2, 2026-10-25）─────────
+# 第三方系统把追问交给参谋，结果通过 callback_url 回来。
+# 执行体**复用** `copilot_jobs` 已有的异步 run（不改 chat.py、不复制 LLM 管线）。
+
+
+@router.post("/copilot/tasks")
+async def submit_copilot_task(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    user: Any = Depends(_get_current_user),
+) -> dict:
+    """提交一次参谋任务，立即返回 run_id；可选 callback_url 收终态回调。"""
+    from src.core import webhook_delivery as wh
+    from src.db.models import WebhookSubscription
+    from src.web.api import copilot_jobs as jobs
+
+    question = str(payload.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question 不能为空")
+    if len(question) > 2000:
+        raise HTTPException(status_code=400, detail="question 过长（上限 2000 字）")
+
+    callback = str(payload.get("callback_url") or "").strip()
+    if callback:
+        try:
+            callback = wh.validate_callback_url(callback)
+        except wh.WebhookRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 直接建 queued run 并起 _execute（`/runs` 那个路由函数带 FastAPI 依赖，不能当普通函数调）
+    import asyncio
+    import uuid as _uuid
+
+    from src.core import copilot_quota as quota
+    from src.db.models import CopilotRun
+
+    run_id = str(_uuid.uuid4())
+    try:
+        quota.enforce_run_concurrency(db, user)   # 超限: 内部已写审计并抛 429
+        db.add(CopilotRun(
+            run_id=run_id,
+            conversation_id=payload.get("conversation_id"),
+            user_id=str(user.id),
+            recipe=payload.get("recipe"),
+            question=question[:500],
+            status="queued",
+            tool_calls=0,
+        ))
+        db.commit()
+    except Exception:
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        raise
+
+    task = asyncio.create_task(jobs._execute(
+        run_id, user_id=str(user.id),
+        conversation_id=payload.get("conversation_id"), question=question,
+    ))
+    jobs._TASKS[run_id] = task
+    if callback:
+        db.add(WebhookSubscription(
+            run_id=run_id, user_id=str(user.id), url=callback, status="pending",
+        ))
+        db.commit()
+    return {"run_id": run_id, "status": "queued", "callback_registered": bool(callback)}
+

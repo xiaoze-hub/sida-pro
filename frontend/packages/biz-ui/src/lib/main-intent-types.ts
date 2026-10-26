@@ -21,6 +21,7 @@ export interface MainIntentStructured {
   chip_peak?: number | null
   chip_band?: { low: number; high: number } | null
   profit_ratio?: number | null
+  concentration?: number | null
   tail_net?: number
   /** 2026-08-12: 竞价/开盘初期数据不足标记 */
   data_status?: 'ok' | 'insufficient'

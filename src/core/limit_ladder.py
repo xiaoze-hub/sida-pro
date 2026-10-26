@@ -31,8 +31,14 @@ def _sealed_by_date(events: Iterable[dict]) -> dict[str, set[str]]:
     return out
 
 
-def boards_for_date(dates: list[str], sealed: dict[str, set[str]], date: str) -> dict[str, int]:
-    """date 当日各 symbol 的连板数: 沿表内日期序列往前数连续封板日。"""
+def boards_for_date(dates: list[str], sealed: dict[str, set[str]], date: str,
+                    trading_days: dict[str, set[str]] | None = None) -> dict[str, int]:
+    """date 当日各 symbol 的连板数: 沿表内日期序列往前数连续封板日。
+    
+    A股停牌穿透规则: 若某 symbol 在上一交易日处于停牌核查/无交易状态(不在 trading_days[d] 集合中),
+    则停牌期间不中断连板计数, 自动穿透继续向前匹配上一真实交易日。
+    trading_days: 可选的 {date: set(symbols_with_trading)} 映射。
+    """
     idx = dates.index(date) if date in dates else -1
     if idx < 0:
         return {}
@@ -40,21 +46,35 @@ def boards_for_date(dates: list[str], sealed: dict[str, set[str]], date: str) ->
     for sym in sealed.get(date, set()):
         n = 1
         i = idx - 1
-        while i >= 0 and sym in sealed.get(dates[i], set()):
-            n += 1
-            i -= 1
+        while i >= 0:
+            prev_d = dates[i]
+            # 1. 如果上一日该股票也封板，连板 +1，继续往前
+            if sym in sealed.get(prev_d, set()):
+                n += 1
+                i -= 1
+                continue
+            # 2. 如果提供了 trading_days 且该股在上一日未停牌（有交易但未封板），则连板断开
+            if trading_days is not None and sym in trading_days.get(prev_d, set()):
+                break
+            # 3. 如果上一日无交易数据/未开盘（停牌特停），穿透跳过该停牌日，继续向前回溯
+            if trading_days is not None and sym not in trading_days.get(prev_d, set()):
+                i -= 1
+                continue
+            # 若未提供 trading_days，保持既有严格 break 逻辑
+            break
         out[sym] = n
     return out
 
 
 def ladder_window(dates: list[str], events: Iterable[dict],
-                  names: dict[str, str] | None = None) -> list[dict]:
+                  names: dict[str, str] | None = None,
+                  trading_days: dict[str, set[str]] | None = None) -> list[dict]:
     """窗口内每日梯队。`names` 缺省时名字回退为代码(不猜中文名)。"""
     names = names or {}
     sealed = _sealed_by_date(events)
     out: list[dict] = []
     for d in dates:
-        boards = boards_for_date(dates, sealed, d)
+        boards = boards_for_date(dates, sealed, d, trading_days=trading_days)
         grouped: dict[int, list[str]] = {}
         for sym, n in boards.items():
             grouped.setdefault(n, []).append(sym)

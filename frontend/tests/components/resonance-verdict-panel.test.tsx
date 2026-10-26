@@ -92,4 +92,39 @@ describe('ResonanceVerdictPanel 三灯 + AI 判定', () => {
     expect(screen.getByText('规则: 强')).toBeTruthy()
     expect(screen.getByText('AI 分析')).toBeTruthy()
   })
+
+  it('证据化: 追加渲染证据链/失效条件/置信度校准/相似情形(不改既有判定)', async () => {
+    const ai = {
+      ...AI_OK,
+      evidence: {
+        triggers: ['趋势 G区间(G 区向上)', '活跃度 26.68 ≥ 强势线 3.0'],
+        as_of: '20260911',
+        as_of_is_today: false,
+        as_of_note: '数据时点: 20260911(非今日, 基准日滞后)',
+        invalidation: ['若 GS 趋势转 S 区则作废'],
+        invalidation_defaulted: false,
+      },
+      confidence_calibration: {
+        calibrated: false, value: null, cap: null, n: 0, hit_rate: null,
+        note: '未校准(样本不足: n=0 < 30, 不给校准置信度)',
+      },
+      similar: { n: 0, up: null, insufficient: true, sentence: '历史相似情形样本不足(N=0 < 30), 不给百分比' },
+    }
+    mocks.fetchAPI.mockImplementation(async (url: string) => {
+      if (String(url).includes('/analyze/')) return ai
+      return RULE
+    })
+    render(<ResonanceVerdictPanel symbol="300563" />)
+    await waitFor(() => expect(screen.getByText(/趋势 G区间/)).toBeTruthy())
+    fireEvent.click(screen.getByText('AI 分析'))
+    expect(await screen.findByTestId('resonance-evidence')).toBeTruthy()
+    expect(screen.getByTestId('resonance-evidence-triggers').textContent).toContain('活跃度 26.68')
+    expect(screen.getByTestId('resonance-evidence-asof').textContent).toContain('非今日')
+    expect(screen.getByTestId('resonance-evidence-invalidation').textContent).toContain('转 S 区则作废')
+    expect(screen.getByTestId('resonance-evidence-calibration').textContent).toContain('未校准')
+    expect(screen.getByTestId('resonance-evidence-similar').textContent).toContain('样本不足')
+    // 既有判定与依据仍照常渲染(零改动)
+    expect(screen.getByText('强共振')).toBeTruthy()
+    expect(screen.getByText(/依据:/)).toBeTruthy()
+  })
 })

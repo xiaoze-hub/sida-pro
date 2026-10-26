@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { fetchAPI } from '@panwatch/api'
 // 带符号金额(元 → 万/亿)走**共享实现**(v0.6.0 遗留⑤): 带1 `HeaderBand` 的「封单额」cell 与
 // 本卡的「主力净额」行必须同一套单位映射(同类金额在两个拥有面显示不同单位会被读成两个数)。
@@ -126,24 +127,24 @@ function useL2(symbol: string, market: string): L2Resp | null {
     setL2(null)
   }, [symbol, market])
 
+  const aliveRef = useRef(true)
   useEffect(() => {
-    if (!symbol || !cn) return
-    let alive = true
-    const load = async () => {
-      try {
-        const r = await fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`)
-        if (alive) setL2(r ?? null)
-      } catch {
-        /* 保留旧值(stale-on-error) */
-      }
-    }
-    void load()
-    const t = window.setInterval(() => void load(), L2_POLL_MS)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(t)
+      aliveRef.current = false
+    }
+  }, [])
+  const load = useCallback(async () => {
+    if (!symbol || !cn) return
+    try {
+      const r = await fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`)
+      if (aliveRef.current) setL2(r ?? null)
+    } catch {
+      /* 保留旧值(stale-on-error) */
     }
   }, [symbol, cn])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次; 非 CN/无标的 ⇒ 停用。
+  usePausedInterval(load, symbol && cn ? L2_POLL_MS : 0, { deps: [symbol, cn] })
 
   return l2
 }
@@ -216,28 +217,28 @@ function QuoteCard({ l2 }: { l2: L2Resp | null }) {
       <Row label="主力净额" value={fmtSignedAmount(m.zjl_hb)} />
       <div className="mt-1 grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.buyp ?? []).slice(0, 5).map((p, i) => (
-          <div key={`b${i}`} className="truncate text-center text-[--stock-up]">
+          <div key={`b${i}`} className="truncate text-center text-[--stock-up]" title={lvl(p)}>
             {lvl(p)}
           </div>
         ))}
       </div>
       <div className="grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.buyv ?? []).slice(0, 5).map((v, i) => (
-          <div key={`bv${i}`} className="truncate text-center text-muted-foreground">
+          <div key={`bv${i}`} className="truncate text-center text-muted-foreground" title={lvl(v)}>
             {lvl(v)}
           </div>
         ))}
       </div>
       <div className="mt-0.5 grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.sellp ?? []).slice(0, 5).map((p, i) => (
-          <div key={`s${i}`} className="truncate text-center text-[--stock-down]">
+          <div key={`s${i}`} className="truncate text-center text-[--stock-down]" title={lvl(p)}>
             {lvl(p)}
           </div>
         ))}
       </div>
       <div className="grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.sellv ?? []).slice(0, 5).map((v, i) => (
-          <div key={`sv${i}`} className="truncate text-center text-muted-foreground">
+          <div key={`sv${i}`} className="truncate text-center text-muted-foreground" title={lvl(v)}>
             {lvl(v)}
           </div>
         ))}
@@ -321,7 +322,7 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
         {blocks.slice(0, BLOCKS_MAX).map((b, i) => (
           <span
             key={`${b.code}-${i}`}
-            className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground/80"
+            className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground"
           >
             {b.name}
             <span className="ml-0.5 text-[10px] text-muted-foreground">{b.type}</span>
@@ -353,7 +354,7 @@ function RailAlertLog() {
   return <AlertLog items={mapped} onClear={clearAlerts} />
 }
 
-export default function QuickRail({ symbol, market = 'CN' }: { symbol: string; market: string }) {
+export default memo(function QuickRail({ symbol, market = 'CN' }: { symbol: string; market: string }) {
   const l2 = useL2(symbol, market)
   return (
     <div className="flex flex-col gap-2">
@@ -366,4 +367,4 @@ export default function QuickRail({ symbol, market = 'CN' }: { symbol: string; m
       <RailAlertLog />
     </div>
   )
-}
+})

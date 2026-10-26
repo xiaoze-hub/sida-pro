@@ -61,24 +61,24 @@ export function SettingsHero() {
         {isOwner && (
           <>
             <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-              <span className="font-mono text-foreground/90">{services.length}</span> 服务商
+              <span className="font-mono text-foreground">{services.length}</span> 服务商
             </div>
             <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-              <span className="font-mono text-foreground/90">{allModels.length}</span> 模型
+              <span className="font-mono text-foreground">{allModels.length}</span> 模型
             </div>
           </>
         )}
         <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-          <span className="font-mono text-foreground/90">{enabledChannels.length}</span>/<span className="font-mono">{channels.length}</span> 渠道启用
+          <span className="font-mono text-foreground">{enabledChannels.length}</span>/<span className="font-mono">{channels.length}</span> 渠道启用
         </div>
         {isOwner && defaultModel ? (
           <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-            默认模型 <span className="font-mono text-foreground/90">{defaultModel.model}</span>
+            默认模型 <span className="font-mono text-foreground">{defaultModel.model}</span>
           </div>
         ) : null}
         {defaultChannel ? (
           <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-            默认通知 <span className="text-foreground/90">{defaultChannel.name}</span>
+            默认通知 <span className="text-foreground">{defaultChannel.name}</span>
           </div>
         ) : null}
       </div>
@@ -127,7 +127,7 @@ export function SettingsHero() {
         onClick={() => scrollTo(it.id)}
         className="group flex items-center gap-2 rounded-full border border-border/50 bg-background/70 px-3 py-1.5 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
       >
-        <span className="font-medium text-foreground/90 group-hover:text-foreground">{it.label}</span>
+        <span className="font-medium text-foreground group-hover:text-foreground">{it.label}</span>
         {it.hint ? <span className="opacity-60">{it.hint}</span> : null}
       </button>
     ))}
@@ -142,7 +142,7 @@ export function SettingsHero() {
           清空搜索 ×
         </button>
         {hasGlobalQuery && (
-          <span className="ml-1 text-[11px] text-muted-foreground/70">
+          <span className="ml-1 text-[11px] text-muted-foreground">
             · {matchCount} 个区块匹配
           </span>
         )}

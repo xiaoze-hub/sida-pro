@@ -19,7 +19,15 @@ from sqlalchemy import text
 logger = logging.getLogger(__name__)
 
 SUMMARY_RETENTION_DAYS = 7
-SUMMARY_PAYLOAD_MAX = 50_000  # 50KB 上限, 超过截断
+# 2026-10-01 (B1 P2 首屏慢根因②): 上限 50KB → 1MB。
+# 原 50KB 对 summary 这类富载荷太紧 —— 载荷含盘口队列/筹码/逐笔明细(gs_signals +
+# fund_flow 120 点 + main_intent_structured + orderbook queue)实测可达 60-120KB。
+# 一旦超限就走进"截断"分支, 而该分支 `json.loads(body[:5000])` 是在**非法截断串**上
+# 解析 → 抛 JSONDecodeError → 被外层 except 吞掉 → **整条缓存被静默丢弃**
+# (实测 65KB 载荷报 `Expecting property name enclosed in double quotes: line 1 column 5001`)。
+# 后果: L2 PG 永不落库 ⇒ 每次进程重启/换 worker 都冷启动重算(~26s),
+# 表现为 /portfolio 自选股 sparkline 长期空列。
+SUMMARY_PAYLOAD_MAX = 1_000_000  # 1MB 上限(列是 TEXT, 无硬上限)
 
 
 def _engine():
@@ -77,9 +85,14 @@ def put_cached_summary(symbol: str, market: str, payload: dict, ttl_s: int = 300
 
         body = json.dumps(payload or {}, ensure_ascii=False, default=str)
         if len(body) > SUMMARY_PAYLOAD_MAX:
-            body = body[:SUMMARY_PAYLOAD_MAX]
-            payload = {"truncated": True, "note": f"payload>{SUMMARY_PAYLOAD_MAX}B 截断", "head": json.loads(body[:5000])}
-            body = json.dumps(payload, ensure_ascii=False, default=str)
+            # 绝不写**残缺**载荷(前端会拿到缺字段的响应 = 数据错误), 也绝不抛异常。
+            # 直接跳过落库: 下次请求走重算, 行为等同"无缓存"。
+            # (2026-10-01: 原实现在此 json.loads 一个截断串 → 抛 → 被吞 → 静默丢缓存。)
+            logger.warning(
+                "put_cached_summary %s payload %dB 超过 %dB 上限, 跳过落库(不截断以免返回残缺数据)",
+                symbol, len(body), SUMMARY_PAYLOAD_MAX,
+            )
+            return
         # 2026-09-23: 存 **naive UTC** —— 列是 `timestamp without time zone`, 传 aware datetime 会被
         # PG 按会话时区(Asia/Shanghai)转成 CST 墙上时间, 与读侧"naive 即 UTC"的假设冲突 ⇒ 缓存永不失效。
         # 两侧统一为 naive UTC 后 age 计算才正确。

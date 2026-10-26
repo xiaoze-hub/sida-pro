@@ -17,6 +17,7 @@ import {
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import { usePausedInterval } from '@panwatch/base-ui'
 import SkeletonRows from '@/components/SkeletonRows'
 import { parseServerTime } from '@/lib/utils'
 import ErrorBanner from '@/components/ErrorBanner'
@@ -200,27 +201,28 @@ export default function NotificationsPage() {
 
   useEffect(() => { void load() }, [load])
 
-  // 30s 自动刷新:页面可见才轮询(隐藏时暂停,回到页面立即补一次),增量拉新通知;
+  // 30s 自动刷新: 页面可见才轮询(浏览器切后台由下方 visibilitychange 暂停),增量拉新通知;
   // busyRef 防请求叠加;已读状态/选中项由本地逻辑保持,列表已有数据时不闪 spinner
   const autoRefreshBusy = useRef(false)
+  const autoRefreshTick = useCallback(() => {
+    if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
+    autoRefreshBusy.current = true
+    load().finally(() => {
+      autoRefreshBusy.current = false
+    })
+  }, [load])
+  // 页签 keep-alive(2026-10-15): 走 `usePausedInterval` ⇒ **隐藏页签停表**, 回前台补一次;
+  // 原 setInterval 无首拉 ⇒ `immediate:false`。
+  usePausedInterval(autoRefreshTick, 30_000, { immediate: false })
   useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
-      autoRefreshBusy.current = true
-      load().finally(() => {
-        autoRefreshBusy.current = false
-      })
-    }
-    const timer = setInterval(tick, 30_000)
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') tick()
+      if (document.visibilityState === 'visible') autoRefreshTick()
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
-      clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [load])
+  }, [autoRefreshTick])
 
   useEffect(() => {
     if (!selectedId) {
@@ -485,7 +487,7 @@ export default function NotificationsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
                       {!item.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />}
-                      <span className={`truncate text-[13px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
+                      <span title={item.title || '未命名通知'} className={`truncate text-[13px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
                       {(item as { dupCount?: number }).dupCount && (item as { dupCount?: number }).dupCount! > 1 ? (
                         <span
                           className="shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-600"
@@ -498,13 +500,13 @@ export default function NotificationsPage() {
                         <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">正在查看</span>
                       )}
                     </span>
-                    <span className="mt-1 block line-clamp-2 text-[11px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
-                    <span className="mt-1.5 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground/70">
+                    <span title={item.body || '无正文'} className="mt-1 block line-clamp-1 text-[11px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
+                    <span className="mt-1.5 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
                       <span className="shrink-0">{formatDateTime(item.created_at)}</span>
-                      {item.push_status && <span className={`min-w-0 truncate ${item.push_status === 'failed' ? 'text-rose-600 dark:text-rose-600' : item.push_status === 'sent' ? 'text-emerald-700 dark:text-emerald-700' : ''}`}>{channelSummary(item, t)}</span>}
+                      {item.push_status && <span title={channelSummary(item, t)} className={`min-w-0 truncate ${item.push_status === 'failed' ? 'text-rose-600 dark:text-rose-600' : item.push_status === 'sent' ? 'text-emerald-700 dark:text-emerald-700' : ''}`}>{channelSummary(item, t)}</span>}
                     </span>
                   </span>
-                  <span className={`mt-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${isSelected ? 'bg-primary text-primary-foreground' : 'text-muted-foreground/50 group-hover:bg-accent group-hover:text-foreground'}`}>
+                  <span className={`mt-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${isSelected ? 'bg-primary text-primary-foreground' : 'text-muted-foreground group-hover:bg-accent group-hover:text-foreground'}`}>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </span>
                 </button>

@@ -10,6 +10,7 @@ from src.core.notifier import get_global_proxy
 from src.collectors.discovery_collector import EastMoneyDiscoveryCollector
 from src.web.database import get_db
 from src.web.models import MarketScanSnapshot, Stock
+from src.core.cn_gateway import gateway_url
 
 
 router = APIRouter()
@@ -142,7 +143,7 @@ async def _hot_stocks_live_or_snapshot(
     try:
         import requests as _req
         gw_items = _req.get(
-            "http://115.190.177.213:8100/cn/hot-stocks",
+            gateway_url("cn/hot-stocks"),
             params={"mode": mode, "limit": limit},
             timeout=6,
         ).json().get("items") or []

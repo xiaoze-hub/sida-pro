@@ -2648,6 +2648,390 @@ def _m139_mainline_rank_daily_table(conn: Connection) -> None:
         )
 
 
+def _m189_mainline_daily_snapshot_table(conn: Connection) -> None:
+    """市场主线日频快照表(2026-10-14 缓存收口)。
+
+    market_mainline 接口每次成功聚合后异步 upsert 当日一行(date 主键 → 同日覆盖为
+    最新, 收盘后那次即当日定稿)。用途: 响应缓存(biz_cache)缺失时(进程重启/换 worker/
+    新容器)直接读库, 不再冷启动 16~37s 重拉涨停池。先例: _m138 market_flow_snapshots。
+
+    字段: date(DATE) 交易日 / payload(TEXT) 完整响应 JSON / computed_ts(epoch 秒)。
+    """
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS mainline_daily_snapshot (
+                    date DATE PRIMARY KEY,
+                    payload TEXT,
+                    computed_ts DOUBLE PRECISION
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS mainline_daily_snapshot (
+                    date TEXT PRIMARY KEY,
+                    payload TEXT,
+                    computed_ts REAL
+                )
+                """
+            )
+        )
+
+
+def _m190_ladder_daily_snapshot_table(conn: Connection) -> None:
+    """连板梯队定型日快照表(2026-10-14 定型预渲染落库)。
+
+    背景(审计定性): `/api/theme-mood/ladder` 的 `_ladder_payload` **每次请求重算** ——
+    20 天全市场 limit_up_events + 1100+ 只个股 OHLC 批量查询, 代码注释自证实测 6.5s;
+    且 TTL 盘中仅 30s, 一到期就再吃一次 6.5s。但梯队**历史交易日的连板数不可变**
+    (只随 limit_up_events 落库而定), 盘中唯一会变的只有"当日行"(来自既有
+    ladder_live_state 盘中状态机)。故收盘 cron 预渲染定型 payload 落库, 请求期读库为主。
+
+    字段: window_days(INTEGER) = /ladder 的 `window` 参数(列名避开 window 关键字) /
+    mode(TEXT) auto|finalized|live / date(DATE, 落库日 CST) / payload(TEXT) 完整响应
+    JSON / computed_ts(epoch 秒)。主键 (window_days, mode, date) → 同日重跑幂等覆盖,
+    收盘后那次即当日定稿。先例: _m189 mainline_daily_snapshot(同款 DDL 风格)。
+
+    **合入提醒**: 并行分支 `feat/summary-precompute-20261014` 也申请了 190
+    (`workbench_layer_daily`) —— check_migrations 要求版本 101 起**连续唯一**, 故两支
+    只能有一支保留 190; 后落地的那支需顺延(函数名 `_m190_` → `_m191_` + 注册号 +1)。
+    """
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS ladder_daily_snapshot (
+                    window_days INTEGER NOT NULL,
+                    mode TEXT NOT NULL,
+                    date DATE NOT NULL,
+                    payload TEXT,
+                    computed_ts DOUBLE PRECISION,
+                    PRIMARY KEY (window_days, mode, date)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS ladder_daily_snapshot (
+                    window_days INTEGER NOT NULL,
+                    mode TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    payload TEXT,
+                    computed_ts REAL,
+                    PRIMARY KEY (window_days, mode, date)
+                )
+                """
+            )
+        )
+def _m191_workbench_layer_daily_table(conn: Connection) -> None:
+    """工作台日级图层派生块预落库表(2026-10-14 首屏 P0)。
+
+    为什么需要: 个股工作台首屏 `/api/klines/{symbol}/summary` 的**日级派生块**
+    (gs_signals 全量交叉序列 / fund_flow / activity_series / events / unlock_levels /
+    chips / resonance)此前**每次请求都在 `_build_layer_data` 现算** —— 其中 chips
+    (腾讯/新浪分价表)、events 的 wencai 两条查询(硬超时 10s)、resonance 的
+    compute_pool_flow(明+暗) 都是网络调用, 冷启动实测 ~26s, 撞前端 fetchAPI 的
+    20s abort。只有 300s TTL 兜底 ⇒ 隔夜首访/重启/换 worker 必重吃一遍。
+    本表让收盘批算一次 + 请求期读库, 请求期只现算"当日实时块"(口径不变)。
+
+    诚实语义: 行只在**该交易日已定型**(收盘 15:05 后)时才置 `settled=1`; 盘中写入的
+    当日行 `settled=0` **永不被读侧使用**(只作"最近访问"痕迹) —— 不拿旧块冒充当日状态。
+    读侧另用"最近已定型交易日"做新鲜度门禁(行过旧 → 回现算), 见
+    `src/core/layer_precompute.py::usable`。
+
+    字段(双方言同一 DDL: SQLite 对类型声明宽松, 与 _m183 同法):
+      symbol TEXT / market TEXT / asof TEXT('YYYY-MM-DD' 交易日)  → 联合主键(保留历史行)
+      settled INTEGER   -- 1 = 该日已定型(可被读侧使用)
+      source TEXT       -- precompute(收盘批算) / request(请求期算完落库)
+      computed_ts DOUBLE PRECISION -- 写入时刻(epoch 秒), 供"最近访问"与保留期清理
+      payload TEXT      -- 日级块 JSON(上限 1MB, 超限宁可不写, 绝不存残缺载荷)
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS workbench_layer_daily (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                asof TEXT NOT NULL,
+                settled INTEGER NOT NULL DEFAULT 0,
+                source TEXT DEFAULT '',
+                computed_ts DOUBLE PRECISION,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (symbol, market, asof)
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_workbench_layer_daily_ts "
+            "ON workbench_layer_daily(computed_ts)"
+        )
+    )
+
+
+def _m192_dragon_tiger_daily_table(conn: Connection) -> None:
+    """龙虎榜按日明细表 dragon_tiger_daily(2026-10-14 资金类落库收口)。
+
+    审计定性: `/market-data/fundamentals-detail` 经 `_lhb_from_tq` 每次请求**现拉** TQ GP
+    长序列(个股整段历史), `/dragon-tiger/{date}` 亦逐次现拉东财+ftshare。本表把拉到
+    的行**按日 upsert 落库**: 请求只读库, 仅当日(尚未落库)增量回源; 历史日永不回源。
+
+    来源合一(TQ GP 序列 / 东财-ftshare 市场级), 同 `(trade_date, symbol, market)` 唯一键 →
+    重拉幂等。TQ 侧独有字段(机构/营业部/沪深股通买卖拆解, 万元原口径)也一并落;
+    top_buyers/top_sellers 结构化列表存 JSON 文本(席位明细)。
+    """
+    if _has_table(conn, "dragon_tiger_daily"):
+        return
+    money = "DOUBLE PRECISION" if _dialect_is_pg(conn) else "REAL"
+    stamp = "TIMESTAMP" if _dialect_is_pg(conn) else "DATETIME"
+    boolt = "BOOLEAN" if _dialect_is_pg(conn) else "INTEGER"
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE dragon_tiger_daily (
+                trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT 'CN',
+                name TEXT,
+                reason TEXT,
+                close {money},
+                change_pct {money},
+                net_buy {money},
+                buy_amt {money},
+                sell_amt {money},
+                turnover_pct {money},
+                top_buyers TEXT,
+                top_sellers TEXT,
+                inst_buy_wan {money},
+                inst_sell_wan {money},
+                yyb_buy_wan {money},
+                yyb_sell_wan {money},
+                hsgt_buy_wan {money},
+                hsgt_sell_wan {money},
+                suspicious {boolt},
+                source TEXT,
+                updated_at {stamp} DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_dragon_tiger_daily UNIQUE (trade_date, symbol, market)
+            )
+            """
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_dragon_tiger_daily_sym_date",
+        "CREATE INDEX ix_dragon_tiger_daily_sym_date "
+        "ON dragon_tiger_daily (symbol, trade_date DESC)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_dragon_tiger_daily_date",
+        "CREATE INDEX ix_dragon_tiger_daily_date "
+        "ON dragon_tiger_daily (trade_date DESC, market)",
+    )
+
+
+def _m193_board_flow_snapshots_table(conn: Connection) -> None:
+    """板块资金采样快照表 board_flow_snapshots(2026-10-14)。
+
+    审计定性: `/market-data/board-capital-flow` **完全现拉**同花顺行业/概念资金, 仅用
+    biz_cache 的 stale 备份兜源故障 —— 上游一挂整块缺失。本表按 1~5min 采样落一条,
+    读侧『够新读库、过旧回源 + stale 标注』, 与 market_flow_snapshots(m138) 同思路。
+
+    字段: ts(DB 端默认时间戳) / board_type(industry|concept) / payload(整块 items JSON) /
+    item_count。行序采样(非定稿), 按 (board_type, ts DESC) 查最新。
+    """
+    if _has_table(conn, "board_flow_snapshots"):
+        return
+    pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    stamp = "TIMESTAMP" if _dialect_is_pg(conn) else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE board_flow_snapshots (
+                id {pk},
+                ts {stamp} DEFAULT CURRENT_TIMESTAMP,
+                board_type TEXT NOT NULL,
+                item_count INTEGER,
+                payload TEXT
+            )
+            """
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_board_flow_snapshots_type_ts",
+        "CREATE INDEX ix_board_flow_snapshots_type_ts "
+        "ON board_flow_snapshots (board_type, ts DESC)",
+    )
+
+
+def _m196_sentiment_selfcalc_daily(conn: Connection) -> None:
+    """情绪序列**本地自算**明细/诊断表 sentiment_selfcalc_daily(2026-10-14)。
+
+    ⚠️ 迁移号取 **196**(不是 195): 生产 `schema_migrations` 里 195 已被姊妹分支
+    `ai_pattern_shadow` 占用(实测 `195|ai_pattern_shadow|success=0`), 撞号会让
+    `has_pending_migrations` 因 checksum 不符反复重跑并互相覆盖记录。
+
+    背景(用户决策): 不购买通达信云数据 Key, SC/GP **云**函数永久放弃(生产已断在
+    2026-09-23)。情绪序列改由客户端本地接口自算(`src.core.sentiment_selfcalc`:
+    get_zdt_data + get_pricevol + get_stock_list + limit_up_events 聚合)。
+
+    为什么另起一张表而不是只写 market_sentiment_daily:
+      · 自算的封板资金是**近似**(封单量×收盘价), 需要一个显式标注位(`approximation`)
+        与原始元金额/口径标识留痕 —— market_sentiment_daily 的列是 SC 口径, 不该塞私货;
+      · 诊断量(候选数/封住数/炸板次数分布/价量缺失数/分片失败数)供审计复核,
+        不进被温度计高频读取的主表。
+    兼容列(涨停/炸板/连板/封板资金)仍**同时**写入 market_sentiment_daily,
+    温度计/API/新鲜度自检零改动即可读到。
+
+    单位: 家数=家; `seal_*_money` = 亿元(与 SC15 同口径, `money_unit` 显式登记)。
+    """
+    if _has_table(conn, "sentiment_selfcalc_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE sentiment_selfcalc_daily (
+  id {id_col},
+  trade_date TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  limit_up_count INTEGER,
+  limit_up_open_count INTEGER,
+  streak_count INTEGER,
+  seal_success_money REAL,
+  seal_fail_money REAL,
+  seal_success_rate REAL,
+  blow_ratio REAL,
+  candidates INTEGER,
+  sealed_count INTEGER,
+  open_times_gt0 INTEGER,
+  price_missing INTEGER,
+  chunks_total INTEGER NOT NULL DEFAULT 0,
+  chunks_failed INTEGER NOT NULL DEFAULT 0,
+  approximation INTEGER NOT NULL DEFAULT 1,
+  caliber TEXT NOT NULL DEFAULT 'close_ge_limit_price',
+  money_unit TEXT NOT NULL DEFAULT '亿元',
+  source TEXT NOT NULL DEFAULT 'tdx_selfcalc',
+  extra TEXT NOT NULL DEFAULT '{{}}',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "uq_sentiment_selfcalc_daily",
+        "CREATE UNIQUE INDEX uq_sentiment_selfcalc_daily "
+        "ON sentiment_selfcalc_daily(trade_date, market)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_sentiment_selfcalc_daily_date",
+        "CREATE INDEX ix_sentiment_selfcalc_daily_date "
+        "ON sentiment_selfcalc_daily(trade_date)",
+    )
+
+
+def _m194_orderbook_snapshots_table(conn: Connection) -> None:
+    """十档盘口快照采集表 orderbook_snapshots(2026-10-14, 盘口移出请求路径)。
+
+    审计定性: `/api/orderbook-ob`(硬超时 12s)与 klines summary 的 `_build_orderbook`
+    (硬超时 8s)在**请求期**直接打 thsdk 十档(order_book_bid/ask), 上游单次实测可卡 30s
+    → 卡顿/超时直接压在用户请求上。本表承载**后台采集**的十档快照, 请求端读快照优先。
+
+    一行一票(`symbol` 唯一, upsert 原地更新滚动窗): `collected_at`=采集时刻 epoch 秒
+    (陈旧度基准), `payload`=滚动窗帧 JSON(旧→新, 最多 N 帧), `latest_ts`/`frames` 便捷列。
+    节流周期 / 陈旧阈值 / universe 上限均 env 可配。
+    """
+    if _has_table(conn, "orderbook_snapshots"):
+        return
+    dbl = "DOUBLE PRECISION" if _dialect_is_pg(conn) else "REAL"
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE orderbook_snapshots (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT 'CN',
+                collected_at {dbl} NOT NULL,
+                latest_ts TEXT,
+                frames INTEGER NOT NULL DEFAULT 0,
+                payload TEXT NOT NULL,
+                source TEXT DEFAULT 'thsdk'
+            )
+            """
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "uq_orderbook_snap_symbol",
+        "CREATE UNIQUE INDEX uq_orderbook_snap_symbol "
+        "ON orderbook_snapshots (symbol)",
+    )
+
+
+def _m195_ai_pattern_shadow(conn: Connection) -> None:
+    """AI 看图形态影子表 ai_pattern_shadow(2026-10-14 胜率创新 · 主线一并行)。
+
+    **影子运行**: 每日盘后对自选∪持仓逐票做「K线渲染→视觉模型认形态」, 并与
+    `src/core/kline_patterns` 规则形态同日同票并排落库, 只写本表, **不改任何现有
+    信号/决策/展示语义** —— 供「分桶验证」(agree/conflict/仅AI/仅规则 四组 T+1/T+3
+    命中差) 使用。
+
+    一行一票(trade_date, symbol): AI 侧存主形态(最高置信)+全量形态 JSON, 规则侧存
+    规则形态 JSON + 对照结论 compare_status。缺数据/无视觉模型 → status='degraded'
+    (不出形态, 绝不编造)。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    先例: _m188 limit_strength_shadow。
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS ai_pattern_shadow (
+                trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT,
+                ai_pattern TEXT,
+                ai_confidence DOUBLE PRECISION,
+                ai_basis TEXT,
+                ai_all TEXT,
+                model_name TEXT,
+                window_n INTEGER,
+                rule_primary TEXT,
+                rule_patterns TEXT,
+                compare_status TEXT,
+                status TEXT NOT NULL DEFAULT 'no_data',
+                source TEXT,
+                captured_at TIMESTAMP,
+                PRIMARY KEY (trade_date, symbol)
+            )
+            """
+        )
+    )
+    if _has_table(conn, "ai_pattern_shadow"):
+        _create_index_if_missing(
+            conn,
+            "ix_ai_pattern_shadow_date",
+            "CREATE INDEX ix_ai_pattern_shadow_date "
+            "ON ai_pattern_shadow (trade_date DESC)",
+        )
+        _create_index_if_missing(
+            conn,
+            "ix_ai_pattern_shadow_compare",
+            "CREATE INDEX ix_ai_pattern_shadow_compare "
+            "ON ai_pattern_shadow (compare_status)",
+        )
+
+
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
     """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
 
@@ -2678,20 +3062,6 @@ def _m149_stock_universe_snapshots(conn: Connection) -> None:
     from src.db.models import StockUniverseSnapshot
 
     StockUniverseSnapshot.__table__.create(bind=conn, checkfirst=True)
-
-
-def _has_column(conn: Connection, table: str, column: str) -> bool:
-    if _dialect_is_pg(conn):
-        row = conn.execute(
-            text(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = :t AND column_name = :c LIMIT 1"
-            ),
-            {"t": table, "c": column},
-        ).first()
-        return bool(row)
-    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
-    return any(str(r[1]) == column for r in rows)
 
 
 def _m150_klines_amount_column(conn: Connection) -> None:
@@ -4756,6 +5126,1126 @@ CREATE TABLE IF NOT EXISTS market_sentiment_daily (
     )
 
 
+def _m179_tq_formula_signal_daily(conn: Connection) -> None:
+    """TQ 条件选股信号日序列(2026-09-25)。
+
+    为什么: TQ 客户端自带 **108 个条件选股公式**, 全市场扫一遍约 8s 且**无限频**
+    (对比: 问财限频 250ms; 免费行情源没有等价口径)。它给出"当日有多少只票触发某
+    技术条件"这一**市场宽度**维度 —— 而免费源只给当日快照, 没有历史序列就算不出基线。
+
+    为什么用窄表: 家数要跑 AVG/PERCENTILE 聚合(与 market_sentiment_daily 同理由)。
+    命中清单另存 `hits_json`(回看"当日是谁触发"), 上限 500 只, 超出置 `truncated`。
+
+    ⚠️ `complete=0` 表示扫描过程有分片失败 ⇒ 消费方**不得**把 `hit_count` 当
+    "全市场命中数"(那是编造); 必须显示为不完整。
+    单位: hit_count/scanned_count 均为**只**(当日全 A 口径)。
+    """
+    if _has_table(conn, "tq_formula_signal_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS tq_formula_signal_daily (
+  id {id_col},
+  trade_date TEXT NOT NULL,
+  formula_code TEXT NOT NULL,
+  formula_name TEXT NOT NULL DEFAULT '',
+  formula_arg TEXT NOT NULL DEFAULT '',
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  scanned_count INTEGER NOT NULL DEFAULT 0,
+  chunks_failed INTEGER NOT NULL DEFAULT 0,
+  complete INTEGER NOT NULL DEFAULT 1,
+  truncated INTEGER NOT NULL DEFAULT 0,
+  hits_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'tdx_tq',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_tq_formula_signal_daily "
+            "ON tq_formula_signal_daily(trade_date, formula_code, formula_arg)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_tq_formula_signal_daily_date "
+            "ON tq_formula_signal_daily(trade_date)"
+        )
+    )
+
+
+def _m180_market_breadth_daily(conn: Connection) -> None:
+    """市场广度日序列 —— 涨跌家数 + 自研广度指标（ADL/ADR/ARMS/BTI/MCL/STIX）。
+
+    为什么自研: 通达信客户端公式库有同名指标，但**必须先在客户端注册**才能被 TQ 网关
+    调用（实测 21 个高价值公式全部 `ErrorId=9: no find formula setting`），且
+    `formula_set_data*` 只能设数据、无法注册公式；故按教科书定义自研，口径透明可审计，
+    对外展示标注"自研口径"（见 src/core/market_breadth.py）。
+
+    为什么从 PG 自算: `pricevol`（`tq.breadth` 数据源）只有**当日快照**，攒不出历史基线；
+    而本库 klines 有全市场深历史（2026-09-21 及以前每日约 5480 只标的），
+    一次 SQL 即可回溯 250+ 交易日，满足分位计算（样本 <20 不给分位）。
+
+    单位: 家数=只；成交量=股（与 klines.volume 同源，不做换算）。
+    `symbols` 为当日参与统计的标的数，供消费方判断该日数据是否收全
+    （<1000 的交易日采集侧不落库，避免污染分位基线）。
+    """
+    if _has_table(conn, TABLE_NAME := "market_breadth_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+  id {id_col},
+  trade_date TEXT NOT NULL,
+  up_count INTEGER,
+  down_count INTEGER,
+  flat_count INTEGER,
+  up_volume REAL,
+  down_volume REAL,
+  adl REAL,
+  adr REAL,
+  arms REAL,
+  bti REAL,
+  bti_thrust INTEGER NOT NULL DEFAULT 0,
+  mcl REAL,
+  mcl_summation REAL,
+  stix REAL,
+  up_ratio REAL,
+  sentiment_score INTEGER,
+  symbols INTEGER,
+  source TEXT NOT NULL DEFAULT 'pg_klines',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(f"CREATE UNIQUE INDEX IF NOT EXISTS uq_market_breadth_daily_date ON {TABLE_NAME} (trade_date)")
+    )
+
+
+def _m181_img_orderbook_frames(conn: Connection) -> None:
+    """`.img` 十档盘口帧落库表 img_orderbook_frames(2026-10-02)。
+
+    把通达信 `.img` 逐帧十档盘口 + 委托队列落库(遗留 A2「.img 生产无消费方」收口),
+    供盘后回放 / 盘口队列展示。**schema 唯一入口就是本迁移**(AGENTS 铁律),
+    禁止运行时建表/加列。
+
+    - 唯一键 (user_id, market, symbol, trade_date, seq): 同日同帧序号重复导入幂等;
+      `seq` 为源文件内帧序(0 起) —— 因 .img 存在**同秒多帧**(实测 5066 帧里 22 处
+      间隔 0s), 仅用 as_of 会丢帧; trade_date 进唯一键规避 l2_ticks 的裁剪列教训。
+    - user_id: 多用户隔离(4 账号并存), 读路径一律按 user_id 过滤。
+    - source / as_of: 来源与数据时间显式标注, 不拿陈旧值冒充实时(AGENTS 硬约束)。
+    - 缺失一律写 NULL(**不补 0**): 0 是有意义的挂单量, 与「无数据」必须可区分。
+    - 单位: 价格=元, 量=股; 档位/队列以 JSON(TEXT) 保序存储。
+    """
+    if _has_table(conn, "img_orderbook_frames"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE img_orderbook_frames (
+                    trade_date TEXT NOT NULL,
+                    as_of TEXT NOT NULL,
+                    seq INTEGER NOT NULL DEFAULT 0,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    user_id TEXT NOT NULL DEFAULT 'shared',
+                    source TEXT NOT NULL DEFAULT 'img',
+                    img_path TEXT,
+                    bid_prices TEXT,
+                    bid_vols TEXT,
+                    ask_prices TEXT,
+                    ask_vols TEXT,
+                    bid_queue TEXT,
+                    ask_queue TEXT,
+                    bid_orders INTEGER,
+                    ask_orders INTEGER,
+                    spread DOUBLE PRECISION,
+                    bid_pressure DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_img_orderbook_frames UNIQUE
+                        (user_id, market, symbol, trade_date, seq)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE img_orderbook_frames (
+                    trade_date TEXT NOT NULL,
+                    as_of TEXT NOT NULL,
+                    seq INTEGER NOT NULL DEFAULT 0,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    user_id TEXT NOT NULL DEFAULT 'shared',
+                    source TEXT NOT NULL DEFAULT 'img',
+                    img_path TEXT,
+                    bid_prices TEXT,
+                    bid_vols TEXT,
+                    ask_prices TEXT,
+                    ask_vols TEXT,
+                    bid_queue TEXT,
+                    ask_queue TEXT,
+                    bid_orders INTEGER,
+                    ask_orders INTEGER,
+                    spread REAL,
+                    bid_pressure REAL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, market, symbol, trade_date, seq)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_img_orderbook_frames_sym_asof",
+        "CREATE INDEX ix_img_orderbook_frames_sym_asof "
+        "ON img_orderbook_frames (symbol, market, as_of DESC)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_img_orderbook_frames_user_asof",
+        "CREATE INDEX ix_img_orderbook_frames_user_asof "
+        "ON img_orderbook_frames (user_id, symbol, as_of DESC)",
+    )
+
+
+def _m182_theme_mood_settled_at(conn: Connection) -> None:
+    """题材情绪日表补 `settled_at`(2026-10-08): 收盘定型时间。
+
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时加列。
+
+    - 盘中行(source='intraday')恒为 NULL —— 未定型;
+    - 交易日 15:05 定型扫描(source='close')写入定型的 CST 时间戳;
+    - 幂等复跑靠 upsert 的 `COALESCE(theme_mood_daily.settled_at, excluded.settled_at)`
+      保留**首次**定型时间(不跳变), 故本列无默认值即可。
+    """
+    _add_column_if_missing(
+        conn, "theme_mood_daily", "settled_at",
+        "ALTER TABLE theme_mood_daily ADD COLUMN settled_at TIMESTAMP",
+    )
+
+
+def _m183_decision_cache(conn: Connection) -> None:
+    """decision_cache 表(2026-10-10 冗余设计): /api/decision/{symbol} 预落库 + TTL 缓存。
+
+    为什么需要: `/decision/{symbol}` 是**实时计算**端点 —— 每次现拉 120 天 K 线 + 明/暗盘
+    资金算三信号(慢接口, 前端 SDK 显式放宽到 30s 超时)。首屏/工作台反复请求会重复算。
+    落库后: 盘后批算命中直返(免重算), 非预热标的走短 TTL(盘中同标的不重复算)。
+
+    **只存全局基底**(不含个性化): 自选/持仓/风险偏好由 API 层在**读取时**叠加,
+    避免按用户维度爆炸(4 账号并存)。user_id 隔离红线不受影响 —— 基底与用户无关。
+
+    诚实语义: payload 里含 `last_close`(供读取时算浮盈); 响应另带 `computed_at`/`cached`,
+    由 API 层注入(**不写进 payload**, 因为 payload 是"计算时刻的数据快照")。
+
+    字段:
+      symbol TEXT NOT NULL / market TEXT NOT NULL  (联合主键, 双方言)
+      computed_at TIMESTAMP NOT NULL   (naive UTC, 与 summary_cache 同口径)
+      ttl_s INTEGER NOT NULL           (该行的有效秒数; 过期即视为 miss → 重算)
+      last_close REAL                  (末根收盘, 供个性化浮盈; 缺则 NULL, 不编造)
+      source TEXT                      (precompute / ttl, 供可观测)
+      payload TEXT NOT NULL            (JSON 全局基底, 上限防爆)
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS decision_cache (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                computed_at TIMESTAMP NOT NULL,
+                ttl_s INTEGER NOT NULL,
+                last_close DOUBLE PRECISION,
+                source TEXT DEFAULT '',
+                payload TEXT NOT NULL,
+                PRIMARY KEY (symbol, market)
+            )
+            """
+        )
+    )
+
+
+def _m184_decision_log_regime(conn: Connection) -> None:
+    """决策账本补 `regime` 列(2026-10-10 A 决策提胜率): 情绪周期条件化的分桶维度。
+
+    为什么需要: 三指标共振命中率此前是**全状态混算**的一个平均数(T+1 53.85%)。
+    把信号产生时的情绪周期态(冰点/修复/发酵/高潮/退潮, 见 `src.core.market_regime`)
+    落库后, `decision_log.stats` 可按 regime 分桶统计, 才能回答"哪套门槛在哪个周期
+    真管用" —— 只加聚合维度, **不建回测 UI**。
+
+    列可空(NULL = 该行产生时无 regime 数据 / 老行), 分桶时归入 'unknown'(显式缺
+    数据, 不硬编状态)。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时加列。
+    """
+    _add_column_if_missing(
+        conn, "decision_log", "regime",
+        "ALTER TABLE decision_log ADD COLUMN regime TEXT",
+    )
+    if _has_table(conn, "decision_log"):
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_decision_log_kind_regime "
+                "ON decision_log(signal_kind, regime)"
+            )
+        )
+
+
+def _m197_decision_log_outcome_state(conn: Connection) -> None:
+    """决策账本补 `outcome_state`/`outcome_note` 列(2026-10-14 回填覆盖修复): 缺失显式标注。
+
+    为什么需要(**生产实证**): 2026-09-25 为中秋休市, 当日却落了 597 条 `resonance3` 信号;
+    这类"信号日无 K 线锚点"的行 T+n **永远算不出来**, 此前只能把收益列留 NULL —— 于是与
+    "还没到 T+n"不可区分, 且每次回填都被重新选中并**占满 `LIMIT :lim` 候选窗口**
+    (生产 2026-10-10 10:17 一跑: `scanned=500, filled=0`), 后面可填的行永远轮不到;
+    分桶统计也因此"无法证实也无法证伪"(T+1 覆盖率长期停在 ~46%)。
+
+    列语义(可空, 不设默认值 → 存量行为 NULL):
+      - NULL      = 尚未定论(未到期 / 部分档已填 / 评估时取不到后续 K 线), **仍会进候选窗口**;
+      - 'no_anchor' = 信号日那根 K 线不存在而之后有 K 线(休市/停牌) → 锚点永久缺失,
+        **显式标注、收益列保持 NULL(绝不填 0)**; 以低优先级保留在候选里, K 线后续补齐即自动
+        重新评估并清空标注。
+    `outcome_note` 存人类可读原因(供明细/报告直读, 不再靠猜)。
+
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表/加列; 两列都用
+    `_add_column_if_missing` 幂等, 重复执行不报错。
+    """
+    _add_column_if_missing(
+        conn, "decision_log", "outcome_state",
+        "ALTER TABLE decision_log ADD COLUMN outcome_state TEXT",
+    )
+    _add_column_if_missing(
+        conn, "decision_log", "outcome_note",
+        "ALTER TABLE decision_log ADD COLUMN outcome_note TEXT",
+    )
+
+
+def _m198_decision_log_t_n_span(conn: Connection) -> None:
+    """决策账本补 `t_n_span` 列(2026-10-15 停牌跨期口径标注): T+n 取值日的交易日跨度。
+
+    为什么需要(**生产实证**): 决策账本的 T+n 取的是「信号日起**第 n 根可用 K 线**」——
+    遇长期停牌会把这**一个月后**的收盘当 T+1。实证 symbol=300082 信号日 20260918,
+    下一根可用 K 线是 2026-10-13(相隔 11 个交易日), `ret_t1=-0.0886` 实为一月后跌幅,
+    混进胜率会误导。用户裁决: **不重算存量数值, 只标注 + 排除统计**。
+
+    列语义(可空, 不设默认值 → 存量行为 NULL):
+      - `t_n_span` = 信号日 → T+1 取值日(信号日之后**第一根可用 K 线**)相隔的交易日数
+        (走 `src.core.trading_calendar` 交易日历, **含停牌**, `1 = 次一个交易日`);
+      - 正常票 T+1 取值日即次一交易日 → span=1; 长期停牌 → span 远大于 1;
+      - `t_n_span > 5` → 该行 `outcome_state='suspended_gap'`(覆盖原状态), note 注明跨度,
+        **收益列保持原值(绝不改写已填数值)**; 胜率/分桶统计据此排除该行并显式标注条数。
+
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时加列; 幂等(`_add_column_if_missing`)。
+    """
+    _add_column_if_missing(
+        conn, "decision_log", "t_n_span",
+        "ALTER TABLE decision_log ADD COLUMN t_n_span INTEGER",
+    )
+
+
+def _m185_dde_minute_flow_table(conn: Connection) -> None:
+    """盘中 DDE 大单逐 N 分钟采样序列表 dde_minute_flow(P3 补差 A, 2026-10-10)。
+
+    见 models.DdeMinuteFlow。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    from src.db.models import DdeMinuteFlow
+
+    DdeMinuteFlow.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m186_war_report_daily_table(conn: Connection) -> None:
+    """主力资金战报日快照表 war_report_daily(规格 §4.4, 2026-10-10)。
+
+    见 models.WarReportDaily。schema 唯一入口是本迁移, 禁止运行时建表。
+    """
+    from src.db.models import WarReportDaily
+
+    WarReportDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m187_l2_fund_snapshots(conn: Connection) -> None:
+    """L2 成品资金收盘快照表 l2_fund_snapshots(2026-10-11 P1 数据断档修复)。
+
+    背景: 工作台 L2「L2 成品资金」/ 暗盘卡「主力净流入(L2·TQ)」读 TQ
+    `get_more_info` **实时会话值**(Zjl_HB/TotalBVol/L2TicNum/L2OrderNum ...), 非交易
+    时段 TQ 一律回 0 —— UI 未回退未标注, 周末显示"0万 平衡 / 逐笔0笔·委托0笔",
+    把 0 冒充真实值误导。
+
+    修复: 交易日收盘后(15:05)采样落本表(全 0 不落); 非交易时段/会话值全 0 时 web 层
+    回退读本表最近交易日行, 并显式标注 as_of; 无快照则显式 available:false。
+
+    金额类(zjl_hb/zjl)单位=万元, 量类=股, 与 TQ get_more_info 口径一致。
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS l2_fund_snapshots (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                zjl_hb DOUBLE PRECISION,
+                zjl DOUBLE PRECISION,
+                total_buy_vol DOUBLE PRECISION,
+                total_sell_vol DOUBLE PRECISION,
+                cancel_buy DOUBLE PRECISION,
+                cancel_sell DOUBLE PRECISION,
+                l2_tick_num DOUBLE PRECISION,
+                l2_order_num DOUBLE PRECISION,
+                captured_at TIMESTAMP,
+                PRIMARY KEY (symbol, market, trade_date)
+            )
+            """
+        )
+    )
+    if _has_table(conn, "l2_fund_snapshots"):
+        _create_index_if_missing(
+            conn,
+            "ix_l2_fund_snapshots_date",
+            "CREATE INDEX ix_l2_fund_snapshots_date "
+            "ON l2_fund_snapshots (trade_date DESC)",
+        )
+
+
+def _m188_limit_strength_shadow(conn: Connection) -> None:
+    """首封时间×封成比 强度标签影子表 limit_strength_shadow(2026-10-11 胜率创新 P0-1)。
+
+    **影子运行**: 每日盘后对当日涨停股打强度分层标签(S/A/B/C), 只落本表, **不改任何
+    现有信号/决策/展示语义** —— 供只读展示(涨停池/聚宝盆徽章)与胜率验证分桶统计用。
+
+    标签口径见 src/core/limit_up_strength.py; 缺数据行 status='no_data' 且 label 为空,
+    绝不编造。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS limit_strength_shadow (
+                trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT,
+                first_time TEXT,
+                first_seal_bucket TEXT,
+                seal_amount DOUBLE PRECISION,
+                circulating_mktcap DOUBLE PRECISION,
+                seal_ratio DOUBLE PRECISION,
+                seal_ratio_grade TEXT,
+                open_times INTEGER,
+                strength_label TEXT,
+                status TEXT NOT NULL DEFAULT 'no_data',
+                source TEXT,
+                captured_at TIMESTAMP,
+                PRIMARY KEY (trade_date, symbol)
+            )
+            """
+        )
+    )
+    if _has_table(conn, "limit_strength_shadow"):
+        _create_index_if_missing(
+            conn,
+            "ix_limit_strength_shadow_date",
+            "CREATE INDEX ix_limit_strength_shadow_date "
+            "ON limit_strength_shadow (trade_date DESC)",
+        )
+
+
+def _m199_klines_period_ts_symbol_index(conn: Connection) -> None:
+    """klines 查询覆盖索引 (2026-10-16 性能优化):
+    针对 /api/theme-mood/ladder 等全市场批量查询 K 线的慢操作进行加固。
+    在 (period, adjust, ts, symbol) 上建立联合索引，消除全表扫描与 6s 阻塞。
+    """
+    try:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_klines_period_adjust_ts_symbol "
+                "ON klines(period, adjust, ts, symbol)"
+            )
+        )
+        logger.info("klines: 联合覆盖索引 ix_klines_period_adjust_ts_symbol 创建成功")
+    except Exception as e:
+        logger.warning(f"klines 索引创建失败(非致命): {e}")
+
+
+def _m200_price_distribution_tables(conn: Connection) -> None:
+    """I-8 分价博弈矩阵两张表(2026-10-18)。
+
+    · `price_distribution_snapshots`: 盘中滚动快照(缓存 + 分价时序证据), 唯一键
+      (trade_date, market, symbol, bucket_ts=5 分钟桶), 桶内原地覆盖(留最新);
+    · `price_distribution_daily`: 日终定稿归档, 唯一键 (trade_date, market, symbol),
+      历史回测/主力轨迹复盘的**永久事实源**(历史日永不回源)。
+
+    建表走 ORM `__table__.create(checkfirst=True)`: JSON 列在 PG/SQLite 都由 SQLAlchemy
+    适配, 手写 SQL 反而要分叉方言。先例: _m142 dark_fund_top_snapshots。
+    """
+    from src.db.models import PriceDistributionDaily, PriceDistributionSnapshot
+
+    PriceDistributionSnapshot.__table__.create(bind=conn, checkfirst=True)
+    PriceDistributionDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m201_auction_tick_snapshots(conn: Connection) -> None:
+    """竞价过程帧表 auction_tick_snapshots(2026-10-18 P0-a, 方案 §7.2②)。
+
+    append-only: 原 `auction_snapshots` 唯一键 (trade_date, symbol, market) 把
+    9:15-9:25 的过程压成一个 9:25 终值, 试盘/撤单/虚假封单全部丢失。本表按
+    (标的, 帧时刻, 来源) 幂等写入, 支持逐分钟过程回放。
+
+    保留期: 365 天(方案 §9), 由 `src.core.auction_tick_sampler.purge_old_frames`
+    按 `trade_date` 文本比较清理(应用层保留期契约)。
+
+    为什么没有 Timescale hypertable: `create_hypertable` 的分区列必须是时间类型,
+    而本表 `trade_date` 是 ISO 文本(与 price_distribution_* 同口径, 双方言免转换)。
+    强行转换会在 PG 上每次启动都告警失败 —— 宁可不做, 待列类型升级后再上
+    (方案 §7.5 的存储治理不在本批验收里)。索引已按 (symbol, trade_date) /
+    (trade_date) 覆盖回放与保留期清理两条主查询。
+    """
+    from src.db.models import AuctionTickSnapshot
+
+    AuctionTickSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m202_auction_wudao_daily(conn: Connection) -> None:
+    """悟道竞价多维因子日归档 auction_wudao_daily(2026-10-18 P0-a, 方案 §7.2③)。
+
+    唯一键 (trade_date, symbol, market); 悟道不可用的日子不写行(显式空, 不写 0)。
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    from src.db.models import AuctionWudaoDaily
+
+    AuctionWudaoDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m203_cb_tables(conn: Connection) -> None:
+    """可转债两张表 cb_terms + cb_daily_snapshot(2026-10-18 P0-a, 方案 §7.2④)。
+
+    · `cb_terms`: 条款版本化(版本=抓取日 as_of), 14 个业务字段 + raw 原样;
+    · `cb_daily_snapshot`: 每日折溢价/双低快照, payload 存 radar 行完整返回。
+
+    背景: 条款此前是 12h 进程内 dict(重启即失, 冷启动 N 次 kzz_info RPC), 快照
+    只进 Redis 60s —— 既不能回测, 也无法秒开。schema 唯一入口是本迁移。
+    """
+    from src.db.models import CbDailySnapshot, CbTerms
+
+    CbTerms.__table__.create(bind=conn, checkfirst=True)
+    CbDailySnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m204_more_info_daily(conn: Connection) -> None:
+    """TQ `get_more_info` 104 字段收盘定稿表 more_info_daily(2026-10-18 P0-b)。
+
+    此前只有 8 个 L2 字段进 `l2_fund_snapshots`; 封单额/封成比/委比/连板/竞价买入
+    等字段盘后一律回 0, 既不能回测也没有历史可回退。唯一键
+    (trade_date, symbol, market), raw 保留 104 字段原样以便口径比对。
+    """
+    from src.db.models import MoreInfoDaily
+
+    MoreInfoDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m205_index_daily(conn: Connection) -> None:
+    """主要指数日K表 index_daily(2026-10-18 P0-b)。
+
+    `klines` 明确不收指数(裸码撞号), spark 此前每 30 分钟重付一轮 6×指数K(≈4s)。
+    本表唯一键 (trade_date, code), 供首屏 spark 读库 + 大盘择时回测。
+    """
+    from src.db.models import IndexDaily
+
+    IndexDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m206_breadth_snapshot(conn: Connection) -> None:
+    """涨跌分布快照表(2026-10-20): 首页分布从"每次都算"改为"读库 + 增量落库"。
+
+    没有这张表时: biz_cache TTL 300s 一过就重拉新浪 79 页(~32s), 前端只能显示
+    「后台计算中」; 容器/Redis 重启后同样从零开始。落表后冷启动秒出, 并留下
+    盘中情绪扩散的历史序列。
+    """
+    from src.db.models import BreadthDistributionSnapshot
+
+    BreadthDistributionSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m207_flow_snapshot_total_amount(conn: Connection) -> None:
+    """大盘资金快照补 total_amount(2026-10-20)。
+
+    首页「两市成交额」长期显示 `--`：实时分支有值，但走库快照分支时 `_snapshot_to_response`
+    显式置空（表里没这列）。补列后快照分支也能给出成交额，不再因为"读库"丢字段。
+    """
+    if not _has_table(conn, "market_flow_snapshots"):
+        return
+    if _has_column(conn, "market_flow_snapshots", "total_amount"):
+        return
+    ddl = "DOUBLE PRECISION" if _dialect_is_pg(conn) else "REAL"
+    conn.execute(text(f"ALTER TABLE market_flow_snapshots ADD COLUMN total_amount {ddl}"))
+
+
+def _m208_copilot_trace_tables(conn: Connection) -> None:
+    """数智参谋运行时轨迹表(2026-10-20, Agent 内核 P0)。
+
+    三张表: copilot_runs(一次问答) / copilot_steps(每步工具调用) /
+    copilot_feedback(用户反馈=评测样本)。与既有 agent_runs 分开: 那张表记后台定时
+    Agent 的执行与推送, 这张表记用户对话的运行时轨迹。
+    """
+    from src.db.models import CopilotFeedback, CopilotRun, CopilotStep
+
+    CopilotRun.__table__.create(bind=conn, checkfirst=True)
+    CopilotStep.__table__.create(bind=conn, checkfirst=True)
+    CopilotFeedback.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m211_flow_snapshot_source(conn: Connection) -> None:
+    """大盘资金快照补 source 列(2026-10-20)。
+
+    缘由: 同一个表里既有「东财四档」写入的旧行, 又有「通达信 AMO/SUPAMO」汇总的新行。
+    没有来源列就无法区分, 读侧会把东财的行当成 TQ 值再标成 TQ 口径(撒谎)。
+    """
+    if not _has_table(conn, "market_flow_snapshots"):
+        return
+    if _has_column(conn, "market_flow_snapshots", "source"):
+        return
+    conn.execute(text("ALTER TABLE market_flow_snapshots ADD COLUMN source VARCHAR(32)"))
+
+
+def _m209_copilot_user_id_text(conn: Connection) -> None:
+    """把 copilot_runs/copilot_feedback 的 user_id 从 integer 改成 varchar(36)(2026-10-20)。
+
+    缘由: users.id 是 UUID 字符串(见 agent_runs.user_id 的既有约定)。_m208 误写成
+    Integer, 于是每次写轨迹都 DataError: invalid input syntax for type integer。
+    表此时必为空(读写都在同一版本), 直接 ALTER 类型即可。
+    """
+    for table in ("copilot_runs", "copilot_feedback"):
+        if not _has_table(conn, table):
+            continue
+        if not _has_column(conn, table, "user_id"):
+            continue
+        if _dialect_is_pg(conn):
+            conn.execute(text(
+                f"ALTER TABLE {table} ALTER COLUMN user_id TYPE VARCHAR(36) "
+                "USING user_id::varchar"
+            ))
+        # SQLite 是动态类型, 无需变更
+
+
+def _m213_copilot_memory_schedules(conn: Connection) -> None:
+    """长期记忆 + 会话定时任务（2026-10-21, P0）。
+
+    记忆解决"换会话就忘了你的偏好"，定时任务解决"每天 9:25 帮我看竞价"——
+    两者都不需要改 chat.py 逻辑，只是新增两张表和注入点。
+    """
+    from src.db.models import CopilotMemory, CopilotSchedule
+
+    CopilotMemory.__table__.create(bind=conn, checkfirst=True)
+    CopilotSchedule.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m212_copilot_governance(conn: Connection) -> None:
+    """P3 治理：llm_usage 归因(用户/轨迹) + 多用户配额表(2026-10-20)。
+
+    为什么必须加: 成本看板要回答"谁在烧 token", 配额要在网关层硬拒 ——
+    原先 llm_usage 只有 scene/model, 没有 user_id, 连"某用户今天用了多少"都算不出来。
+    """
+    from src.db.models import CopilotQuota
+
+    CopilotQuota.__table__.create(bind=conn, checkfirst=True)
+
+    for col, dtype in (("user_id", "VARCHAR(36)"), ("run_id", "VARCHAR(36)")):
+        if _has_table(conn, "llm_usage") and not _has_column(conn, "llm_usage", col):
+            conn.execute(text(f"ALTER TABLE llm_usage ADD COLUMN {col} {dtype}"))
+
+
+def _m210_copilot_actions_annotations(conn: Connection) -> None:
+    """动作回写 + K 线标注表(2026-10-20, P1)。
+
+    copilot_actions: AI 提议 → pending → 用户确认 → applied; 红线动作(改持仓/下单)
+    永远不在这套框架里。
+    kline_annotations: 把 AI 的结论落到图上, 让标注成为人机共用的证据语言。
+    """
+    from src.db.models import CopilotAction, KlineAnnotation
+
+    CopilotAction.__table__.create(bind=conn, checkfirst=True)
+    KlineAnnotation.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m214_cancel_rate_snapshots(conn: Connection) -> None:
+    """撤单率时序（2026-10-21）。
+
+    撤单率本体是"当日会话累计"，只能回答当前值；要回答"这半小时撤单是不是突变"
+    必须自己按分钟落点。unique(symbol, trade_date, hhmm) 让重复采样幂等。
+    """
+    from src.db.models import CancelRateSnapshot
+
+    CancelRateSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m215_stock_factor_daily(conn: Connection) -> None:
+    """个股因子日快照（2026-10-21）：诊断要"个股 × 日期"的因子，而不是信号级快照。"""
+    from src.db.models import StockFactorDaily
+
+    StockFactorDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m216_factor_concentration(conn: Connection) -> None:
+    """因子表补 CYQ 集中度与筹码峰（2026-10-21）：第 6 个因子 + 峰位迁移。"""
+    for col, dtype in (("concentration", "DOUBLE PRECISION"), ("peak_price", "DOUBLE PRECISION")):
+        if _has_table(conn, "stock_factor_daily") and not _has_column(conn, "stock_factor_daily", col):
+            conn.execute(text(f"ALTER TABLE stock_factor_daily ADD COLUMN {col} {dtype}"))
+
+
+def _m217_chat_conversation_pinned(conn: Connection) -> None:
+    """chat_conversations 加 pinned 列（2026-10-22）：会话置顶。
+
+    置顶与会话管理面板配套：置顶的会话在列表/搜索结果里排最前。
+    BOOLEAN NOT NULL DEFAULT FALSE —— 存量行默认不置顶；SQLite 动态类型下
+    `FALSE` 落库为 0, ORM 侧用 Boolean 读回布尔，语义一致。
+    幂等可重跑（列已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn,
+        "chat_conversations",
+        "pinned",
+        "ALTER TABLE chat_conversations ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+
+
+def _m218_harness_proposals(conn: Connection) -> None:
+    """新分析维度提案表（2026-10-22, P0 采集层）：只记录，不生效。
+
+    为什么建这张表：分析维度写死在手写 YAML 配方里，用户在对话里提出配方没覆盖的
+    维度（"股东户数变化""龙虎榜席位风格"）时无处落点。这张表是那份"需求账本"。
+
+    幂等：`__table__.create(checkfirst=True)` —— 表已存在就跳过（PG/SQLite 都安全）。
+
+    唯一约束 `(user_id, normalized_dimension, status)` 里**故意带 status**：
+    同一维度被拒之后再次出现可以重新提（pending 位是空的），不被历史行永久压住。
+    """
+    from src.db.models import HarnessProposal
+
+    HarnessProposal.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m219_auth_session_revocations(conn: Connection) -> None:
+    """会话吊销墓碑表(2026-10-23 线上事故补偿)。
+
+    背景: v0.45.0 把「踢设备」做成「删会话行 + 写墓碑」, 但墓碑表只在**写入路径**
+    (`permissions.mark_session_revoked` 的懒 DDL)`才建 —— 生产从未踢过人, 表就没建。
+    而 `is_session_revoked()` 在**每个鉴权请求**都会 SELECT 它 → PostgreSQL 抛
+    `UndefinedTable` 并**中止整个事务** → 该请求后续所有查询 `InFailedSqlTransaction`
+    → `/api/settings`、`/api/notifications`、`/api/users/admin/list` 等成片 500。
+
+    两条修复缺一不可:
+      1. 本迁移 —— 建表交给启动期迁移, 不再依赖「有人踢过设备」这个偶然前提;
+      2. `permissions._safe_rollback` —— 任何 fail-open 探测失败后回滚,
+         避免「可选表缺失」升级成「整站 500」。
+    SQLite 不中止事务, 单测永远是绿的, 所以这两条只能靠**显式迁移 + 回滚**保证。
+    """
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS auth_session_revocations (
+    session_id VARCHAR(64) PRIMARY KEY,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP NOT NULL
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_auth_session_revocations_expires_at "
+                "ON auth_session_revocations (expires_at)"
+            )
+        )
+    except Exception:  # noqa: BLE001 - 索引建不出来不影响正确性(仅清理效率)
+        pass
+
+
+def _m220_exday_daily(conn: Connection) -> None:
+    """TQ `get_exday_data` 四档资金结构日表(2026-10-23)。
+
+    `get_exday_data` 只返**当日 1 行**(count/start_time/date 参数实测全无效), 所以
+    四档结构的历史分位无法回填, 只能每天落库累积 —— 本表就是那个累积点。
+    金额=元、量=手; 口径 tdx_exday4(按单笔成交金额分档), 与东财四档/腾讯逐笔不可换算。
+    """
+    if _has_table(conn, "exday_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS exday_daily (
+    id {id_col},
+    trade_date VARCHAR(8) NOT NULL,
+    symbol VARCHAR(16) NOT NULL,
+    market VARCHAR(8) NOT NULL DEFAULT 'CN',
+    amount FLOAT,
+    volume_lots FLOAT,
+    active_buy_amt FLOAT,
+    active_sell_amt FLOAT,
+    active_ratio FLOAT,
+    xl_buy_amt FLOAT, lg_buy_amt FLOAT, md_buy_amt FLOAT, sm_buy_amt FLOAT,
+    xl_sell_amt FLOAT, lg_sell_amt FLOAT, md_sell_amt FLOAT, sm_sell_amt FLOAT,
+    xl_active_net FLOAT, lg_active_net FLOAT, md_active_net FLOAT, sm_active_net FLOAT,
+    retail_ratio FLOAT, xl_share FLOAT, main_active_net FLOAT, main_active_net_pct FLOAT,
+    chip_migration FLOAT,
+    b_order FLOAT, s_order FLOAT, total_b_order FLOAT, total_s_order FLOAT,
+    b_cancel FLOAT, s_cancel FLOAT, cjbs FLOAT,
+    avg_order_lots FLOAT, avg_trade_lots FLOAT, gran_hiding FLOAT, order_fill_ratio FLOAT,
+    cancel_buy_rate FLOAT, cancel_sell_rate FLOAT, cancel_skew FLOAT,
+    quality VARCHAR(16), reason VARCHAR(255), source VARCHAR(32),
+    created_at TIMESTAMP
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_exday_daily "
+                "ON exday_daily (trade_date, symbol, market)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_exday_sym_day ON exday_daily (symbol, trade_date)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_exday_day ON exday_daily (trade_date)")
+        )
+    except Exception as exc:  # noqa: BLE001 - 索引失败不该阻断建表(schema 已就位)
+        logger.warning("exday_daily 索引创建失败(表已建): %s", exc)
+
+
+def _m221_factor_winrate_daily(conn: Connection) -> None:
+    """量化因子多维分桶胜率与超额收益日快照表(2026-10-23)。
+
+    存 GS 区间/信号(原始 vs 次日确认)、AI 机构活跃度四档、GS×活跃度共振、
+    威科夫量价四标、涨停封板质量 的 T+1/T+3/T+5 实测胜率、3%达标率、盈亏比及
+    相对同池无条件基准的超额胜率/超额收益。
+    """
+    if _has_table(conn, "factor_winrate_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS factor_winrate_daily (
+    id {id_col},
+    as_of_date VARCHAR(10) NOT NULL,
+    factor_family VARCHAR(40) NOT NULL,
+    bucket_key VARCHAR(48) NOT NULL,
+    bucket_label VARCHAR(64) NOT NULL,
+    horizon INTEGER NOT NULL DEFAULT 5,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    win_count INTEGER NOT NULL DEFAULT 0,
+    untradable_skipped INTEGER NOT NULL DEFAULT 0,
+    win_rate_pct FLOAT,
+    hit3_rate_pct FLOAT,
+    avg_return_pct FLOAT,
+    median_return_pct FLOAT,
+    profit_loss_ratio FLOAT,
+    baseline_win_rate_pct FLOAT,
+    baseline_avg_return_pct FLOAT,
+    excess_win_rate_pp FLOAT,
+    excess_return_pct FLOAT,
+    universe_size INTEGER,
+    lookback_bars INTEGER,
+    source VARCHAR(32),
+    created_at TIMESTAMP
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_factor_winrate_daily "
+                "ON factor_winrate_daily (as_of_date, factor_family, bucket_key, horizon)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_factor_winrate_family_date "
+                "ON factor_winrate_daily (factor_family, as_of_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_factor_winrate_date "
+                "ON factor_winrate_daily (as_of_date)"
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("factor_winrate_daily 索引创建失败(表已建): %s", exc)
+
+
+def _m222_market_replay_daily(conn: Connection) -> None:
+    """盘后复盘日快照: 涨停/炸板/跌停/晋级率/情绪周期一站落库(2026-10-23)。
+
+    口径红线: 本表 limit_up/炸板 全部来自东财三池**同源同日**
+    (getTopicZTPool / getTopicZBPool / getTopicDTPool), 与 market_sentiment_daily 的
+    TQ 自算口径(tdx_selfcalc)并存不混算; payload 存完整证据 JSON。
+    """
+    if _has_table(conn, "market_replay_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS market_replay_daily (
+    id {id_col},
+    trade_date VARCHAR(8) NOT NULL,
+    market VARCHAR(8) NOT NULL DEFAULT 'CN',
+    limit_up_count INTEGER NOT NULL DEFAULT 0,
+    limit_up_max_streak INTEGER NOT NULL DEFAULT 0,
+    first_board_count INTEGER NOT NULL DEFAULT 0,
+    ge2_count INTEGER NOT NULL DEFAULT 0,
+    ge3_count INTEGER NOT NULL DEFAULT 0,
+    one_word_count INTEGER NOT NULL DEFAULT 0,
+    broken_count INTEGER NOT NULL DEFAULT 0,
+    break_rate_pct FLOAT,
+    seal_rate_pct FLOAT,
+    limit_down_count INTEGER NOT NULL DEFAULT 0,
+    limit_down_max_days INTEGER NOT NULL DEFAULT 0,
+    promo_rate_pct FLOAT,
+    phase VARCHAR(16),
+    phase_label VARCHAR(16),
+    mainline JSON,
+    quality VARCHAR(12),
+    missing_dims JSON,
+    source VARCHAR(32),
+    payload JSON,
+    created_at TIMESTAMP
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_market_replay_daily "
+                "ON market_replay_daily (trade_date, market)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_market_replay_date ON market_replay_daily (trade_date)")
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market_replay_daily 索引创建失败(表已建): %s", exc)
+
+
+def _m223_position_defense_price(conn: Connection) -> None:
+    """positions 加 defense_price 列(2026-10-23, 产品裁决: 硬防线方案 B)。
+
+    为什么是绝对价而不是比例: 用户在不同标的上的纪律位来源不同(有人按成本价 -8%,
+    有人按关键支撑位), 存比例就得反推价格、还会随成本价变动漂移; 存绝对价即"用户
+    拍下的那个价"。
+
+    为什么 nullable 且不填默认值: NULL 明确表达"用户未设置"。方案 B 下系统不再默认
+    -8% 告警, 若这里回填 *0.92 就等于把系统臆造的纪律位写进了用户账本。
+
+    幂等可重跑(列已存在则跳过)。
+    """
+    _add_column_if_missing(
+        conn,
+        "positions",
+        "defense_price",
+        "ALTER TABLE positions ADD COLUMN defense_price FLOAT",
+    )
+
+
+def _m224_copilot_run_heartbeat(conn: Connection) -> None:
+    """copilot_runs 加 heartbeat_at 列（2026-10-25, P0-0.1 Durable Run）。
+
+    为什么需要: 此前 run 只有 status, 进程重启/容器发布后库里会留下永久 running 的
+    "幽灵运行" —— 用户看到"正在分析"卡住, 既不会失败也不会重试, 也没人收尸。
+    有心跳才能按 run 级事实判断"还有没有人管它"(多 worker 下"进程活着"不等于"run 在跑")。
+
+    为什么 nullable 且不回填: NULL 恰好表达"这条老记录从没写过心跳"; 接管逻辑把
+    NULL 视为超时(写入它的那次进程早就不在了), 回填 now() 反而会把尸体伪装成活的。
+
+    幂等可重跑(列已存在则跳过)。
+    """
+    _add_column_if_missing(
+        conn,
+        "copilot_runs",
+        "heartbeat_at",
+        "ALTER TABLE copilot_runs ADD COLUMN heartbeat_at TIMESTAMP",
+    )
+
+
+def _m229_webhook_subscriptions(conn: Connection) -> None:
+    """外部回调订阅表（2026-10-25, P2-2.2）。
+
+    为什么落库而不是内存: 回调在 run 终态时才发, 进程可能在中间重启 ——
+    存内存等于"重启就丢", 而用户以为会收到。落库后可以补发/查失败原因。
+
+    幂等（CREATE TABLE IF NOT EXISTS）。
+    """
+    conn.execute(text(
+        """
+CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+    id SERIAL PRIMARY KEY,
+    run_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36),
+    url VARCHAR(512) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    status_snapshot VARCHAR(16),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+    ))
+    try:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_run ON webhook_subscriptions (run_id, status)"
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("m229 建索引失败(不阻断): %s", exc)
+
+
+def _m228_recipe_versions(conn: Connection) -> None:
+    """配方版本表 recipe_versions（2026-10-25, P2-2.1）。
+
+    为什么落库而不是算出来: 指纹能算"当前版本", 但算不出"上一版是什么" ——
+    而排障时真正想知道的就是"昨天那版工具清单/提示词长什么样"。
+
+    幂等（CREATE TABLE IF NOT EXISTS）。
+    """
+    conn.execute(text(
+        """
+CREATE TABLE IF NOT EXISTS recipe_versions (
+    id SERIAL PRIMARY KEY,
+    recipe_id VARCHAR(64) NOT NULL,
+    fingerprint VARCHAR(16) NOT NULL,
+    snapshot TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+    ))
+    try:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_recipe_versions_rid ON recipe_versions (recipe_id, created_at)"
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("m228 建索引失败(不阻断): %s", exc)
+
+
+def _m227_copilot_action_diff(conn: Connection) -> None:
+    """copilot_actions 加 diff_json / before_snapshot（2026-10-25, P1-1.3）。
+
+    为什么需要: propose 只写"我要加自选 600111", 用户点确认前看不到会改什么 ——
+    让人确认一件描述不清的事等于没确认。apply 后又要能撤回, 所以还要 apply 前快照。
+
+    为什么存 JSON 不拆列: 不同动作类型（自选/提醒/定时）的字段完全不同,
+    拆列每加一类动作就要迁移一次; 存 JSON 让旧记录仍可读。
+
+    幂等可重跑（列已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn, "copilot_actions", "diff_json",
+        "ALTER TABLE copilot_actions ADD COLUMN diff_json TEXT",
+    )
+    _add_column_if_missing(
+        conn, "copilot_actions", "before_snapshot",
+        "ALTER TABLE copilot_actions ADD COLUMN before_snapshot TEXT",
+    )
+
+
+def _m226_copilot_parent_run(conn: Connection) -> None:
+    """copilot_runs 加 parent_run_id 列（2026-10-25, P1-1.1 委派子 run）。
+
+    为什么需要: 委派（delegate）要能回答"这次结论里哪几条是子任务查出来的"。
+    没有 parent_run_id，子 run 只是一堆互不相干的轨迹，父 run 无法汇总，
+    也无法在子 run 失败时判断"哪一块证据缺失"。
+
+    为什么不加外键: copilot_runs 会按保留期清理，硬外键会让删父 run 失败或者
+    级联删掉子 run 的审计痕迹。这里只是弱引用（子 run 可以比父活得久）。
+
+    nullable 且不回填: NULL = 非委派的普通 run（绝大多数），回填没有意义。
+
+    幂等可重跑（列/索引已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn,
+        "copilot_runs",
+        "parent_run_id",
+        "ALTER TABLE copilot_runs ADD COLUMN parent_run_id VARCHAR(36)",
+    )
+    try:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_copilot_runs_parent ON copilot_runs (parent_run_id)"
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("m226 建索引失败(不阻断): %s", exc)
+
+
+def _m225_harness_experiments(conn: Connection) -> None:
+    """实验记录表 harness_experiments（2026-10-25, P0-0.5）。
+
+    为什么单开表: `copilot_memories` 存的是用户偏好, 混进"我改了配方、指标涨了几个点"
+    会让偏好检索被实验噪音污染。两类事实不同生命周期, 必须分表。
+
+    为什么 baseline/candidate 存 JSON 而不是拆列: 指标集会继续长(以后加 token/延迟),
+    拆列每加一项就要迁移; 存 JSON 让旧记录仍可读, 且对照结论可原样回放。
+    """
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS harness_experiments (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(36),
+    recipe_id VARCHAR(64) NOT NULL,
+    change_summary TEXT NOT NULL,
+    baseline JSON,
+    candidate JSON,
+    verdict VARCHAR(16) NOT NULL,
+    reasons JSON,
+    evidence_path VARCHAR(256),
+    note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_harness_exp_created ON harness_experiments(created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_harness_exp_recipe ON harness_experiments(recipe_id)"))
+
+
+def _m230_user_ai_prefs(conn: Connection) -> None:
+    """用户级场景模型选择表（2026-10-25, 工作台·模型选择器）。
+
+    为什么不用 ai_scene_bindings: 那张表是**全局**绑定, 用户选模型会改到所有人。
+    本表只存 (user_id, scene) -> model_id, 解析器在授权范围内优先用它;
+    不存任何凭证。SQLite/PG 双兼容（沿用既有条件建表写法）。
+    幂等（CREATE TABLE IF NOT EXISTS + 唯一索引）。
+    """
+    conn.execute(text(
+        """
+CREATE TABLE IF NOT EXISTS user_ai_prefs (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    scene VARCHAR(32) NOT NULL,
+    model_id INTEGER NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_ai_prefs_user_scene"
+        " ON user_ai_prefs (user_id, scene)"
+    ))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4878,6 +6368,108 @@ MIGRATIONS: tuple[Migration, ...] = (
     # TQ 市场级情绪日序列(2026-09-23): 涨停/炸板/连板/打板资金/两融/龙虎榜…
     # 东财类免费源只给当日快照, 这张表提供历史基线(情绪周期全靠在它上面跑聚合)
     Migration(178, "market_sentiment_daily_series", _m178_market_sentiment_daily),
+    # TQ 条件选股信号日序列(2026-09-25): 108 个条件选股公式全市场扫描的"当日触发家数"
+    # 这是免费源没有的市场宽度维度(只有当日快照, 无历史 → 算不出基线)
+    Migration(179, "tq_formula_signal_daily", _m179_tq_formula_signal_daily),
+    Migration(180, "market_breadth_daily", _m180_market_breadth_daily),
+    # .img 十档盘口帧落库(2026-10-02): 校准入库 + 多用户隔离 + source/as_of 显式
+    Migration(181, "img_orderbook_frames", _m181_img_orderbook_frames),
+    # 题材情绪收盘定型(2026-10-08): 盘中实时刷新 + 收盘 15:05 定型(settled_at)
+    Migration(182, "theme_mood_settled_at", _m182_theme_mood_settled_at),
+    # 决策合成预落库 + TTL 缓存(2026-10-10 冗余设计): /decision/{symbol} 免重复现算
+    Migration(183, "decision_cache", _m183_decision_cache),
+    # 决策账本 regime 分桶(2026-10-10 A 决策提胜率): 情绪周期条件化的聚合维度
+    Migration(184, "decision_log_regime", _m184_decision_log_regime),
+    # 盘中 DDE 大单逐 N 分钟采样序列(2026-10-10 P3 补差 A): 解锁分时突破「突」的
+    # 「DDE大单持续流入」判定 —— 现有链只有当日快照, 落序列表才能构造真序列。
+    Migration(185, "dde_minute_flow_table", _m185_dde_minute_flow_table),
+    # 主力资金战报日快照(2026-10-10 规格 §4.4): 当日主力动向汇总页的读快照底座。
+    Migration(186, "war_report_daily_table", _m186_war_report_daily_table),
+    Migration(187, "l2_fund_snapshots", _m187_l2_fund_snapshots),
+    # 首封时间×封成比 强度标签影子表(2026-10-11 胜率创新 P0-1, 影子运行): 每日盘后打标,
+    # 只读展示 + 分桶胜率验证, 不改任何现有信号/决策。
+    Migration(188, "limit_strength_shadow", _m188_limit_strength_shadow),
+    # 市场主线日频快照(2026-10-14 缓存收口): biz_cache 缺失时(重启/换 worker)读库,
+    # 免掉冷启动 16~37s 重拉涨停池; date 主键同日覆盖, 收盘后那次即当日定稿。
+    Migration(189, "mainline_daily_snapshot", _m189_mainline_daily_snapshot_table),
+    # 连板梯队定型日快照(2026-10-14 定型预渲染落库): 收盘 cron 预渲染当日定型 payload,
+    # 请求期读库为主(6.5s 现算 → 毫秒级), 盘中只叠加 live 快照的当日行; 缺行/落后回退现算。
+    Migration(190, "ladder_daily_snapshot", _m190_ladder_daily_snapshot_table),
+    # 工作台日级图层派生块预落库(2026-10-14 首屏 P0): 个股 summary 的日级块
+    # (gs_signals/fund_flow/activity/events/unlock/chips/resonance)此前每请求现算
+    # (chips/wencai/pool_flow 是网络调用, 冷启动 ~26s 撞前端 20s abort)。收盘批算 +
+    # 请求期读库, 只现算当日实时块。先例: _m183 decision_cache。
+    Migration(191, "workbench_layer_daily", _m191_workbench_layer_daily_table),
+    # 龙虎榜按日落库(2026-10-14 资金类落库收口): `_lhb_from_tq` 此前每次请求现拉 TQ
+    # GP 长序列(个股整段历史), 属审计定性「资金类仍现拉」。按日 upsert 后请求只读库 +
+    # 当日增量回源, 历史日永不回源(先例: _m156 dragon_tiger_events / _m138 快照)。
+    Migration(192, "dragon_tiger_daily_table", _m192_dragon_tiger_daily_table),
+    # 板块资金采样落库(2026-10-14): board-capital-flow 完全现拉同花顺 + 仅 stale 备份。
+    # 追加 1~5min 采样落库(仿 market_flow_snapshots 先例), 读侧够新读库/过旧回源+stale。
+    Migration(193, "board_flow_snapshots_table", _m193_board_flow_snapshots_table),
+    # 十档盘口快照采集表(2026-10-14): /api/orderbook-ob(12s 硬超时)与 klines summary
+    # 的 _build_orderbook(8s 硬超时)在请求期直接打 thsdk 十档, 上游可卡 30s → 压用户请求。
+    # 本表承载后台采集(交易时段 15~30s, 活跃票)的十档滚动窗, 请求端读快照优先 + 陈旧度标注。
+    Migration(194, "orderbook_snapshots_table", _m194_orderbook_snapshots_table),
+    # AI 看图形态影子表(2026-10-14 胜率创新 · 主线一并行, 影子运行): 盘后对自选∪持仓
+    # 「渲染→视觉 LLM 认形态」并与规则形态(kline_patterns)同日同票对照落库, 只读用,
+    # 不改任何现有信号/决策/展示。先例: _m188 limit_strength_shadow。
+    Migration(195, "ai_pattern_shadow", _m195_ai_pattern_shadow),
+    # 情绪序列本地自算(2026-10-14): 用户决策**不购通达信云数据 Key**, SC/GP 云函数永久
+    # 放弃(生产断在 2026-09-23)。情绪四指标(涨停/炸板/封板资金/连板)改由客户端本地接口
+    # 自算(+ limit_up_events 聚合), 本表存自算明细/近似标注/诊断; 兼容列同时写
+    # market_sentiment_daily, 温度计/API/新鲜度自检零改动。
+    Migration(196, "sentiment_selfcalc_daily", _m196_sentiment_selfcalc_daily),
+    # 决策账本回填覆盖修复(2026-10-14): `outcome_state`/`outcome_note` —— 让"信号日无
+    # K 线(休市/停牌)所以永远算不出 T+n"的行**显式标注**, 不再与"还没到 T+n"混为一谈,
+    # 也不再每次占满回填候选窗口(生产: 20260925 中秋休市落 597 行, 挡在 waiters 最前)。
+    Migration(197, "decision_log_outcome_state", _m197_decision_log_outcome_state),
+    # 决策账本停牌跨期口径标注(2026-10-15): `t_n_span` —— T+n 取「第 n 根可用 K 线」,
+    # 长期停牌会把一个月后的收盘当 T+1(symbol=300082 信号日 20260918 下一根是 2026-10-13)。
+    # 加跨度列后 span>5 的行标 `suspended_gap`, 胜率/分桶统计排除并显式标注条数;
+    # **不改 T+n 判定本体、不重算存量数值**(用户裁决: 只标注 + 排除统计)。
+    Migration(198, "decision_log_t_n_span", _m198_decision_log_t_n_span),
+    Migration(199, "klines_period_ts_symbol_index", _m199_klines_period_ts_symbol_index),
+    # I-8 分价博弈矩阵落库(2026-10-18, 用户硬约束): 盘中快照(缓存 + 分价时序证据)
+    # + 日终定稿归档(历史回测/主力轨迹复盘的永久事实源)。读侧读库优先, 免每次首屏
+    # 跨网打腾讯(海外节点 1~8s); 历史日永不回源(分价表只给当日)。
+    Migration(200, "price_distribution_tables", _m200_price_distribution_tables),
+    # P0 落库加固批次 1(2026-10-18 P0-a, 方案 §8): 竞价过程 append-only + 悟道竞价
+    # 独家字段 + 可转债条款/折溢价。共同目标: ① 过程可回放(原只留终值);
+    # ② 冷启动不再 N 次 RPC(条款 12h 进程内 dict → 版本化表)。
+    Migration(201, "auction_tick_snapshots", _m201_auction_tick_snapshots),
+    Migration(202, "auction_wudao_daily", _m202_auction_wudao_daily),
+    Migration(203, "cb_tables", _m203_cb_tables),
+    # P0-b(方案 §8 批次 2): more_info 104 字段收盘定稿 + 指数日K。
+    # 前者填补「盘后一律回 0」的会话值缺口, 后者让首屏 spark 零跨网。
+    Migration(204, "more_info_daily", _m204_more_info_daily),
+    Migration(205, "index_daily", _m205_index_daily),
+    Migration(206, "breadth_distribution_snapshot", _m206_breadth_snapshot),
+    Migration(207, "flow_snapshot_total_amount", _m207_flow_snapshot_total_amount),
+    Migration(208, "copilot_trace_tables", _m208_copilot_trace_tables),
+    Migration(209, "copilot_user_id_text", _m209_copilot_user_id_text),
+    Migration(210, "copilot_actions_annotations", _m210_copilot_actions_annotations),
+    Migration(211, "flow_snapshot_source", _m211_flow_snapshot_source),
+    Migration(212, "copilot_governance", _m212_copilot_governance),
+    Migration(213, "copilot_memory_schedules", _m213_copilot_memory_schedules),
+    Migration(214, "cancel_rate_snapshots", _m214_cancel_rate_snapshots),
+    Migration(215, "stock_factor_daily", _m215_stock_factor_daily),
+    Migration(216, "factor_concentration", _m216_factor_concentration),
+    Migration(217, "chat_conversation_pinned", _m217_chat_conversation_pinned),
+    Migration(218, "harness_proposals", _m218_harness_proposals),
+    # 见函数 docstring: 缺这条表 = 每个鉴权请求 500(2026-10-23 生产事故)
+    Migration(219, "auth_session_revocations", _m219_auth_session_revocations),
+    Migration(220, "exday_daily", _m220_exday_daily),
+    Migration(221, "factor_winrate_daily", _m221_factor_winrate_daily),
+    Migration(222, "market_replay_daily", _m222_market_replay_daily),
+    Migration(223, "position_defense_price", _m223_position_defense_price),
+    Migration(224, "copilot_run_heartbeat", _m224_copilot_run_heartbeat),
+    Migration(225, "harness_experiments", _m225_harness_experiments),
+    Migration(226, "copilot_parent_run", _m226_copilot_parent_run),
+    Migration(227, "copilot_action_diff", _m227_copilot_action_diff),
+    Migration(228, "recipe_versions", _m228_recipe_versions),
+    Migration(229, "webhook_subscriptions", _m229_webhook_subscriptions),
+    Migration(230, "user_ai_prefs", _m230_user_ai_prefs),
 )
 
 

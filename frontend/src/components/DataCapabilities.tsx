@@ -4,9 +4,10 @@
  *  - `DataCapabilities`: 数据源页顶部的完整矩阵(有问题的排前面);
  *  - `CapabilityPill`: 侧边栏常驻一行"数据能力 N/M · 降级项", 一眼知道自己在不在降级态。
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchAPI } from '@panwatch/api'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { Layers } from 'lucide-react'
 import {
   STATUS_DOT,
@@ -25,26 +26,27 @@ const REFRESH_MS = 5 * 60 * 1000   // 能力状态变化慢, 5 分钟一刷足�
 export function useCapabilities(): { data: CapabilitiesResp | null; loading: boolean } {
   const [data, setData] = useState<CapabilitiesResp | null>(null)
   const [loading, setLoading] = useState(true)
+  // 卸载后不 setState(原 effect 的 `alive` 闭包改为 ref, 以配合 hook 化的轮询体)。
+  const aliveRef = useRef(true)
 
   useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const res = await fetchAPI<CapabilitiesResp>('/datasources/capabilities')
-        if (alive) setData(res)
-      } catch {
-        /* 保留旧数据 */
-      } finally {
-        if (alive) setLoading(false)
-      }
-    }
-    void load()
-    const timer = window.setInterval(() => void load(), REFRESH_MS)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(timer)
+      aliveRef.current = false
     }
   }, [])
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchAPI<CapabilitiesResp>('/datasources/capabilities')
+      if (aliveRef.current) setData(res)
+    } catch {
+      /* 保留旧数据 */
+    } finally {
+      if (aliveRef.current) setLoading(false)
+    }
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(load, REFRESH_MS)
 
   return { data, loading }
 }
@@ -60,7 +62,7 @@ function Row({ item, minSamples }: { item: CapabilityItem; minSamples?: number }
     <div>
     <div className="flex items-center gap-2 py-1 text-[12px]" title={`${item.reason}${eff ? ` · 路由生效源 ${eff.provider}` : ''}`}>
       <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[item.status]}`} />
-      <span className="w-[92px] shrink-0 truncate">{item.label}</span>
+      <span className="w-[92px] shrink-0 truncate" title={item.label}>{item.label}</span>
       <span className={`w-[52px] shrink-0 ${STATUS_TEXT[item.status]}`}>{item.status_label}</span>
       <span className="w-[54px] shrink-0 text-muted-foreground">
         {item.enabled_count}源
@@ -133,7 +135,7 @@ export function CapabilityPill({ collapsed = false }: { collapsed?: boolean }) {
       className="mx-2 mb-1 flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-accent/60"
     >
       <span className={`h-2 w-2 shrink-0 rounded-full ${bad ? STATUS_DOT.degraded : STATUS_DOT.ok}`} />
-      <span className="min-w-0 truncate text-muted-foreground">
+      <span className="min-w-0 truncate text-muted-foreground" title={collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}>
         {collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}
       </span>
     </button>

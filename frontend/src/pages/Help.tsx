@@ -8,6 +8,7 @@ const FEATURES = [
   {
     icon: MessageSquare,
     title: '对话助手',
+    to: '/ai-copilot',
     desc: '全局 AI 助手，基于持仓/自选/行情上下文回答股票问题。',
     tips: [
       '右下角悬浮按钮随时唤起，支持多轮对话与历史记录',
@@ -18,6 +19,7 @@ const FEATURES = [
   {
     icon: LineChart,
     title: '预测',
+    to: '/stocks/000001?type=index',
     desc: '多模型(时序 + 机器学习)对个股未来走势做概率预测。',
     tips: [
       'Kronos / TimesFM / XGBoost 多模型加权，附分位数区间',
@@ -28,6 +30,7 @@ const FEATURES = [
   {
     icon: Sparkles,
     title: '机会',
+    to: '/opportunities',
     desc: '多源候选池 + 共振查询:一句话让问小达+问财双引擎共识选股。',
     tips: [
       '共振查询:输入题材/条件 → 双引擎并发合并,🔥×N=被 N 个引擎同时命中,双引擎共识最可信;可选策略库规则对结果精筛(只扫结果,不重复调引擎)',
@@ -39,6 +42,7 @@ const FEATURES = [
   {
     icon: Wallet,
     title: '影子账户',
+    to: '/shadow',
     desc: '用模拟资金跟踪策略表现，不占用真实资金。',
     tips: [
       '适合先验证策略，再决定是否实盘',
@@ -49,6 +53,7 @@ const FEATURES = [
   {
     icon: FileText,
     title: '报告',
+    to: '/reports',
     desc: '盘前扫描 / 盘后复盘的自动化分析报告。',
     tips: [
       '报告由 AI 聚合市场情绪、涨停结构与资金流向生成',
@@ -78,7 +83,7 @@ export default function HelpPage() {
           <div>
             <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">帮助中心</h1>
             <p className="text-[12px] text-muted-foreground mt-1">
-              PanWatch 功能速览与操作提示，数据导出与快捷键一览
+              数智分析 SIDA 功能速览与操作提示，数据导出与快捷键一览
             </p>
           </div>
         </div>
@@ -94,7 +99,7 @@ export default function HelpPage() {
               </div>
               <h3 className="text-[13px] font-semibold text-foreground">{f.title}</h3>
             </div>
-            <p className="text-[12px] text-foreground/80 leading-relaxed">{f.desc}</p>
+            <p className="text-[12px] text-foreground leading-relaxed">{f.desc}</p>
             <ul className="mt-3 space-y-1.5">
               {f.tips.map((tip, i) => (
                 <li key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
@@ -103,6 +108,13 @@ export default function HelpPage() {
                 </li>
               ))}
             </ul>
+            {/* L3-E: 每个功能给一个可点出口 —— 帮助页此前只读不进 */}
+            <a
+              href={f.to}
+              className="mt-2 inline-flex min-h-[32px] items-center text-[12px] text-primary hover:underline"
+            >
+              去试试 →
+            </a>
           </section>
         ))}
 
@@ -114,7 +126,7 @@ export default function HelpPage() {
             </div>
             <h3 className="text-[13px] font-semibold text-foreground">数据导出</h3>
           </div>
-          <p className="text-[12px] text-foreground/80 leading-relaxed">持仓、预测记录与机会候选均可一键导出 CSV。</p>
+          <p className="text-[12px] text-foreground leading-relaxed">持仓、预测记录与机会候选均可一键导出 CSV。</p>
           <ul className="mt-3 space-y-1.5">
             <li className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
               <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border" />

@@ -32,14 +32,22 @@ beforeEach(() => {
   }
 })
 
-describe('免责条为自身预留空间(P0-1)', () => {
-  it('显示时给 <html> 打 has-disclaimer(内容区据此加 padding-bottom)', () => {
+describe('免责条不再遮挡内容(P0-1, 2026-10-24 改文档流页脚)', () => {
+  it('渲染免责条但不给 <html> 打 has-disclaimer(不再需要底部补偿)', () => {
     render(<Disclaimer />)
     expect(screen.getByText(/不构成投资建议/)).toBeTruthy()
-    expect(document.documentElement.classList.contains('has-disclaimer')).toBe(true)
+    // L3-G: 从 fixed 底栏改为随内容滚动的页脚 —— 既然不压内容, 就不该再留补偿 padding
+    expect(document.documentElement.classList.contains('has-disclaimer')).toBe(false)
   })
 
-  it('点关闭后摘掉标记(不留永久空隙)', () => {
+  it('样式上不再是 fixed 覆盖层(源码级守卫, 防止改回压住最后一行)', () => {
+    const src = readFileSync(resolve(__dirname, '../../src/components/Disclaimer.tsx'), 'utf-8')
+    const rootClass = src.match(/className="([^"]*\bborder-t\b[^"]*)"/)
+    expect(rootClass).toBeTruthy()
+    expect(rootClass![1]).not.toMatch(/\bfixed\b|\bsticky\b/)
+  })
+
+  it('点关闭后不显示且不留标记', () => {
     render(<Disclaimer />)
     fireEvent.click(screen.getByTitle('关闭并不再显示'))
     expect(document.documentElement.classList.contains('has-disclaimer')).toBe(false)

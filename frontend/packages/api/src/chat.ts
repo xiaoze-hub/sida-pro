@@ -91,6 +91,8 @@ export const chatApi = {
     handlers: ChatStreamHandlers,
     signal?: AbortSignal,
     imageData?: string,
+    stock?: { symbol: string; market?: string },
+    mentions?: { type: string; value: string; label?: string }[],
   ): Promise<void> =>
     new Promise<void>((resolve, reject) => {
       fetch(`${API_BASE}/chat/conversations/${conversationId}/messages/stream`, {
@@ -99,7 +101,14 @@ export const chatApi = {
           'Content-Type': 'application/json',
           ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
         },
-        body: JSON.stringify({ content, image_data: imageData || undefined }),
+        body: JSON.stringify({
+          content,
+          image_data: imageData || undefined,
+          // 当前查看的标的：让后端把对话绑到这只票，避免模型从持仓里"猜"成别的股票
+          stock_symbol: stock?.symbol || undefined,
+          stock_market: stock?.market || undefined,
+          mentions: mentions?.length ? mentions : undefined,
+        }),
         signal,
       })
         .then(async (res) => {

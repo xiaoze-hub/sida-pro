@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, text
 from sqlalchemy.orm import Session
 
 from src.core.quote_snapshots import in_trading_window
@@ -247,6 +248,35 @@ def board_heatmap(
             logger.warning("TDX 板块热力图失败(%s), 回落 thsdk: %s", btype, e)
             tdx_items = None
         if tdx_items:
+            # 2026-10-19: 融合题材情绪与连板龙头证据 (leader + limit_up_cnt + max_boards)
+            try:
+                mood_rows = db.execute(
+                    text(
+                        "SELECT block_code, limit_up_cnt, max_boards, core_stocks "
+                        "FROM theme_mood_daily "
+                        "WHERE trade_date = (SELECT MAX(trade_date) FROM theme_mood_daily)"
+                    )
+                ).mappings().all()
+                mood_map = {r["block_code"]: r for r in mood_rows}
+                for item in tdx_items:
+                    m = mood_map.get(item["block_code"])
+                    if m:
+                        item["limit_up_cnt"] = m.get("limit_up_cnt") or 0
+                        item["max_boards"] = m.get("max_boards") or 0
+                        cores = m.get("core_stocks") or []
+                        if isinstance(cores, str):
+                            try:
+                                cores = json.loads(cores)
+                            except Exception:
+                                cores = []
+                        if cores and isinstance(cores, list):
+                            first = cores[0]
+                            item["leader_symbol"] = first.get("symbol")
+                            item["leader_name"] = first.get("name")
+                            item["leader_boards"] = first.get("boards")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("融合 theme_mood 龙头与梯队证据异常: %s", e)
+
             tdx_items.sort(key=lambda x: (x["change_pct"] is None, -(x["change_pct"] or 0.0), x["name"]))
             live_cnt = sum(1 for i in tdx_items if i["live"])
             return {

@@ -2,5 +2,6 @@
   "_comment": "Surface/背景棘轮基线(2026-09-20 设计系统落地): 只许减少, 不许新增。新增代码一律走 bg-s0..s4 / bg-canvas。",
   "bare_alpha": 30,
   "accent_alpha": 297,
-  "price_bg": 36
+  "price_bg": 41,
+  "_price_bg_note": "2026-10-24 36→41: FundStructurePanel 的四档买卖对比条/趋势柱带新增 5 处 bg-stock-up|down —— 属行情语义色(买红卖绿)填充, 不是 neutral surface 背景, 豁免符合规则本意; 该计数从此不得再增。"
 }

@@ -22,7 +22,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -32,6 +34,10 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
 from src.web.cache.biz_cache import biz_cache
+from src.core.cn_gateway import gateway_url
+from src.core.caliber import CAPITAL_FLOW_TAG as _CAPITAL_FLOW_TAG
+from src.core.jobs import result_failure
+from src.db.dialect import is_postgres
 
 logger = logging.getLogger(__name__)
 
@@ -91,23 +97,134 @@ def _bg_start(key: str, fn: Callable[[], dict], *, result_key: str = "",
     def _runner() -> None:
         try:
             result = fn()
-            if cache_ttl and result_key:
-                try:
-                    biz_cache.set_json(result_key, result, ttl=cache_ttl)
-                except Exception:
-                    pass
-            with job.lock:
-                job.status = "succeeded"
-                job.finished_at = time.time()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"后台任务 {key} 失败: {e}")
             with job.lock:
                 job.status = "failed"
                 job.error = str(e)[:300]
                 job.finished_at = time.time()
+            return
+        # P0-1(2026-10-08): 返回体显式 ok=False 时也是失败 —— 过去只要 fn() 不抛就
+        # 记 succeeded, 数据源全空/断链时作业面板显示成功而结果是空, 无人察觉。
+        reason = result_failure(result)
+        if reason is not None:
+            logger.warning(f"后台任务 {key} 返回失败: {reason}")
+            with job.lock:
+                job.status = "failed"
+                job.error = reason[:300]
+                job.finished_at = time.time()
+            return
+        if cache_ttl and result_key:
+            try:
+                biz_cache.set_json(result_key, result, ttl=cache_ttl)
+            except Exception:
+                pass
+        with job.lock:
+            job.status = "succeeded"
+            job.finished_at = time.time()
 
     threading.Thread(target=_runner, name=f"bg-{key[:40]}", daemon=True).start()
     return True
+
+
+
+def _breadth_with_age(payload: dict) -> dict:
+    """给响应补 age_s / stale（aged 数据必须显式标注，不许冒充新鲜）。"""
+    captured = payload.get("captured_at") or ""
+    age = None
+    if captured:
+        try:
+            from datetime import datetime as _dt
+
+            age = int((_dt.now() - _dt.fromisoformat(captured)).total_seconds())
+        except Exception:
+            age = None
+    out = dict(payload)
+    out["age_s"] = age
+    out["stale"] = bool(age is not None and age > 900)
+    return out
+
+
+def _breadth_from_db(max_age_s: int = 1800) -> dict | None:
+    """读最近一条快照。冷启动/重启后首页仍能秒出图（原先只能等 32s 重算）。"""
+    try:
+        from src.db.session import SessionLocal
+        from src.db.models import BreadthDistributionSnapshot
+
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(BreadthDistributionSnapshot)
+                .order_by(BreadthDistributionSnapshot.captured_at.desc())
+                .first()
+            )
+            if row is None:
+                return None
+            captured = row.captured_at
+            age = None
+            if captured is not None:
+                from datetime import datetime as _dt
+
+                if getattr(captured, "tzinfo", None) is not None:
+                    captured = captured.replace(tzinfo=None)
+                age = int((_dt.now() - captured).total_seconds())
+                if age > max_age_s:
+                    return None
+            return {
+                "count": row.valid,
+                "total": row.total,
+                "items": json.loads(row.items or "[]"),
+                "note": "",
+                "pending": False,
+                "captured_at": captured.isoformat(timespec="seconds") if captured else "",
+                "source": row.source or "db",
+            }
+        finally:
+            db.close()
+    except Exception as e:  # 读库失败不应阻断现算路径
+        logger.warning("breadth 读库失败: %s", e)
+        return None
+
+
+def _breadth_save(payload: dict) -> None:
+    """把算好的分布落库（同一 trade_date 每 15 分钟最多一条，避免撑爆表）。"""
+    try:
+        from datetime import datetime as _dt
+
+        from src.db.models import BreadthDistributionSnapshot
+        from src.db.session import SessionLocal
+
+        if payload.get("pending") or not payload.get("count"):
+            return
+        db = SessionLocal()
+        try:
+            last = (
+                db.query(BreadthDistributionSnapshot)
+                .order_by(BreadthDistributionSnapshot.captured_at.desc())
+                .first()
+            )
+            now = _dt.now()
+            if last is not None and last.captured_at is not None:
+                prev = last.captured_at
+                if getattr(prev, "tzinfo", None) is not None:
+                    prev = prev.replace(tzinfo=None)
+                if (now - prev).total_seconds() < 900:
+                    return
+            db.add(
+                BreadthDistributionSnapshot(
+                    trade_date=now.strftime("%Y-%m-%d"),
+                    captured_at=now,
+                    total=int(payload.get("total") or 0),
+                    valid=int(payload.get("count") or 0),
+                    items=json.dumps(payload.get("items") or [], ensure_ascii=False),
+                    source=str(payload.get("source") or "sina"),
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("breadth 落库失败(忽略): %s", e)
 
 
 def _empty_breadth() -> dict:
@@ -144,10 +261,10 @@ def _try_write_snapshot_async(payload: dict) -> None:
                         """
                         INSERT INTO market_flow_snapshots
                             (total_main_flow, up_count, down_count, flat_count,
-                             sh_flow, sz_flow)
+                             sh_flow, sz_flow, total_amount)
                         VALUES
                             (:total_main_flow, :up_count, :down_count, :flat_count,
-                             :sh_flow, :sz_flow)
+                             :sh_flow, :sz_flow, :total_amount)
                         """
                     ),
                     {
@@ -155,6 +272,7 @@ def _try_write_snapshot_async(payload: dict) -> None:
                         "up_count": payload.get("up_count"),
                         "down_count": payload.get("down_count"),
                         "flat_count": payload.get("flat_count"),
+                        "total_amount": payload.get("total_amount"),
                         "sh_flow": payload.get("sh_flow"),
                         "sz_flow": payload.get("sz_flow"),
                     },
@@ -171,6 +289,329 @@ def _try_write_snapshot_async(payload: dict) -> None:
 
     t = threading.Thread(target=_runner, name="mkt-flow-snapshot-writer", daemon=True)
     t.start()
+
+
+# ──────── A-7(2026-09-29): 端点优先读已落库快照(够新且在交易时段) ────────
+# 问题(审计 docs/TQ切换面审计_20260924.md 第五节第7条): 本端点的资金字段此前**只依赖
+# 实时外呼**(国内网关→东财), 上游一旦不可用(已多次发生)资金字段整块缺失, 只能降级成
+# 「仅涨跌家数」。而应用**本来就在持续落库大盘资金快照**(采样器每分钟 + 接口 30s 节流,
+# 都写 market_flow_snapshots) —— 应先读自己的库, 与上游可用性解耦。
+#
+# 判定规则(纯读路径, 不改动任何降级语义):
+#   1. 非交易时段 → 不读库, 照旧走实时链路;
+#   2. 读 market_flow_snapshots 最新一行, 行龄(秒) > 阈值 → 过旧, 照旧走实时链路;
+#   3. 命中(够新) → 直接用该行组装响应, 来源标注 source="db_snapshot" + 快照时间戳,
+#      **绝不把库里的陈旧值冒充实时值**;
+#   4. 库空/库不可达/资金字段缺失 → 回退实时链路(缺失即显式标注, 绝不补 0)。
+# 阈值默认 300s(5 分钟), 可用环境变量 MARKET_FLOW_SNAPSHOT_FRESH_SEC 覆盖。
+_SNAPSHOT_FRESH_SEC_DEFAULT = 300
+_SNAPSHOT_FRESH_ENV = "MARKET_FLOW_SNAPSHOT_FRESH_SEC"
+
+
+def _snapshot_fresh_sec() -> int:
+    """快照新鲜度阈值(秒): 环境变量覆盖, 非法/非正一律回落默认 300。"""
+    raw = os.environ.get(_SNAPSHOT_FRESH_ENV)
+    if raw:
+        try:
+            v = int(float(raw))
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            logger.debug("%s 非法(%r), 用默认 %ss", _SNAPSHOT_FRESH_ENV, raw,
+                         _SNAPSHOT_FRESH_SEC_DEFAULT)
+    return _SNAPSHOT_FRESH_SEC_DEFAULT
+
+
+def _snapshot_age_sql() -> str:
+    """方言安全的「行龄(秒)」SQL 片段。
+
+    关键: 用 **DB 端 now** 与 ts 比较 —— ts 由 DB 默认 CURRENT_TIMESTAMP 写入(见
+    _try_write_snapshot_async / market_flow_sampler), 与写入口径自洽, 避免在 Python
+    侧猜 ts 是 UTC 还是本地时区而算错行龄。PG 走 EXTRACT, SQLite 走 julianday。
+    方言只认 src/db/dialect.py::is_postgres()(禁裸方言布尔量, CI 门禁)。
+    """
+    if is_postgres():
+        return "EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - ts))"
+    return "(julianday('now') - julianday(ts)) * 86400.0"
+
+
+def _read_fresh_db_snapshot() -> dict | None:
+    """读已落库的最新大盘资金快照; 仅在「够新 ∩ 交易时段」时返回, 否则 None。
+
+    返回 None = 应回退实时链路(非交易时段/库空/过旧/库不可达), 调用方维持原降级语义。
+    行值一律如实透传: null 保留为 null(资金字段可能因网关故障而缺失), **绝不补 0**。
+    """
+    try:
+        from src.core.quote_snapshots import in_trading_window
+
+        if not in_trading_window():
+            return None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("交易时段判定不可用, 回退实时链路: %s", e)
+        return None
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            # 2026-10-20: total_amount 列由 _m207 引入。老库/迁移未落时**不能整条读失败**
+            # （那会让首页静默回退实时外呼），退化为不带该列的查询，成交额显式 None。
+            try:
+                row = conn.execute(
+                    text(
+                        "SELECT ts, total_main_flow, up_count, down_count, flat_count, "
+                        "sh_flow, sz_flow, total_amount, " + _snapshot_age_sql() + " AS age_sec "
+                        "FROM market_flow_snapshots ORDER BY ts DESC LIMIT 1"
+                    )
+                ).fetchone()
+                has_amount = True
+            except Exception as col_err:  # noqa: BLE001 - 缺列/老 schema
+                logger.debug("快照表缺 total_amount 列, 退化为无成交额查询: %s", col_err)
+                row = conn.execute(
+                    text(
+                        "SELECT ts, total_main_flow, up_count, down_count, flat_count, "
+                        "sh_flow, sz_flow, " + _snapshot_age_sql() + " AS age_sec "
+                        "FROM market_flow_snapshots ORDER BY ts DESC LIMIT 1"
+                    )
+                ).fetchone()
+                has_amount = False
+    except Exception as e:  # noqa: BLE001
+        logger.debug("大盘资金快照读库失败(回退实时链路): %s", e)
+        return None
+    if row is None:
+        return None
+    try:
+        age = float(row[8] if has_amount else row[7]) if (row[8] if has_amount else row[7]) is not None else None
+    except (TypeError, ValueError):
+        age = None
+    # 行龄算不出, 或过旧(留 5s 容差应对时钟微偏) → 不猜, 回退实时链路
+    if age is None or age > _snapshot_fresh_sec() or age < -5:
+        return None
+    ts_val = row[0]
+    ts_str = ts_val.isoformat() if hasattr(ts_val, "isoformat") else str(ts_val)
+    return {
+        "snapshot_ts": ts_str,
+        "snapshot_age_sec": int(max(0, round(age))),
+        "total_main_flow": float(row[1]) if row[1] is not None else None,
+        "sh_flow": float(row[5]) if row[5] is not None else None,
+        "sz_flow": float(row[6]) if row[6] is not None else None,
+        "up_count": int(row[2]) if row[2] is not None else None,
+        "down_count": int(row[3]) if row[3] is not None else None,
+        "flat_count": int(row[4]) if row[4] is not None else None,
+        "total_amount": (float(row[7]) if row[7] is not None else None) if has_amount else None,
+    }
+
+
+def _boards_to_inout(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """板块 items → (流入榜 top10, 流出榜 top10)。net_inflow 缺失的板块不参与排序
+    (此前 or 0.0 把"无数据"当 0, 会挤占榜单); 正/负筛选, 无正(负)则对应榜为空列表。"""
+    valid = [b for b in (items or []) if isinstance(b, dict) and b.get("net_inflow") is not None]
+    s = sorted(valid, key=lambda b: b["net_inflow"], reverse=True)
+    inflow = [
+        {"name": b.get("board_name"), "net_inflow": round(b["net_inflow"], 2),
+         "change_pct": b.get("change_pct")}
+        for b in s[:10]
+        if b["net_inflow"] > 0
+    ]
+    outflow = [
+        {"name": b.get("board_name"), "net_inflow": round(b["net_inflow"], 2),  # 亿(负=流出)
+         "change_pct": b.get("change_pct")}
+        for b in reversed(s[-10:])
+        if b["net_inflow"] < 0
+    ]
+    return inflow, outflow
+
+
+def _fresh_board_inout(board_type: str = "industry") -> tuple[list[dict], list[dict]] | None:
+    """读够新的板块资金快照并派生流入/流出榜; 无够新快照/读取失败 → None(不编造)。"""
+    try:
+        from src.core import board_flow_sampler as _bfs
+
+        snap = _bfs.read_fresh(board_type)
+    except Exception:  # noqa: BLE001
+        return None
+    if not snap:
+        return None
+    return _boards_to_inout(snap.get("items") or [])
+
+
+
+
+# 2026-10-20: 两市成交额兜底。上游 market-overview 的 total_amount 经常为 None（网关不返回该字段），
+# 而首页把它当核心 KPI。用指数成交额补：上证(000001) + 深证成指(399001) 的 turnover 之和，
+# 单位元 → 亿元。与同花顺口径一致（实测 11:00 约 8265 亿）。60s 进程内缓存，避免每次请求外呼。
+_AMOUNT_CACHE: dict = {"ts": 0.0, "val": None}
+
+
+def _tq_index_amount() -> tuple[float | None, str]:
+    """两市成交额 —— **首选通达信 TQ 指数快照**(2026-10-20 用户铁律: 逆向出的客户端接口优先)。
+
+    口径: 上证指数(999999.SH, 全沪市) + 深证综指(399106.SZ, 全深市) 的 `Amount`(万元) 之和。
+    与腾讯指数口径实测相差 ~1%(通达信含集合竞价/盘后固定价格), 属正常口径差。
+    只打 2 次 RPC, 单线程 17709 上可接受; 每次间隔 0.15s 避免突发。
+    """
+    try:
+        from marketdata.vendors.tq import tq_rpc
+
+        total_yuan = 0.0
+        got = 0
+        for idx, code in enumerate(("999999.SH", "399106.SZ")):
+            if idx:
+                time.sleep(0.15)
+            resp = tq_rpc("get_market_snapshot", {"stock_code": code}) or {}
+            # ⚠️ 2026-10-20 线上实测: 经 tq_rpc 拿到的指数快照是**扁平 dict**({Amount, Now, ...}),
+            # 不带 Value 包裹; 而个股路径有时带。两种形状都要吃, 否则永远 tdx_tq_partial。
+            v = resp.get("Value") if isinstance(resp, dict) and isinstance(resp.get("Value"), dict) else resp
+            if not isinstance(v, dict) or v.get("Amount") is None:
+                continue
+            amt = v.get("Amount")
+            if amt is None:
+                continue
+            try:
+                total_yuan += float(amt) * 1e4  # 万元 → 元
+                got += 1
+            except (TypeError, ValueError):
+                continue
+        if got < 2:
+            return None, "tdx_tq_partial"
+        return round(total_yuan / 1e8, 1), "tdx_tq_index"
+    except Exception as e:  # noqa: BLE001 - 兜底失败就走腾讯
+        logger.debug("TQ 指数成交额失败: %s", e)
+        return None, "tdx_tq_error"
+
+
+def _total_amount_from_indices() -> float | None:
+    """腾讯指数成交额口径(历史兜底实现, 测试契约沿用; 端点优先走 _refresh_amount_fallback)。"""
+    return _refresh_amount_fallback()[0]
+
+
+def _latest_tq_flow_row(max_age_sec: int = 1800) -> dict | None:
+    """最近一次 TQ 全市场汇总(主力净流入)。超过 max_age_sec 视为过旧 → None(不拿旧数当实时)。
+
+    返回 {"total_main_flow", "age_sec"}。读库失败 → None。
+    """
+    try:
+        from sqlalchemy import text
+
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT total_main_flow, ts FROM market_flow_snapshots
+                    WHERE total_main_flow IS NOT NULL AND source = 'tdx_tq'
+                    ORDER BY ts DESC LIMIT 1
+                    """
+                )
+            ).fetchone()
+        if not row:
+            return None
+        val, ts = row[0], row[1]
+        age = 0
+        try:
+            import datetime as _dt
+
+            if ts.tzinfo is None:
+                # 库里存的是**本地时间**(CST, naive)。当成 UTC 会算出 -28758s 的"未来快照"。
+                ts = ts.replace(tzinfo=_dt.timezone(_dt.timedelta(hours=8)))
+            age = int((_dt.datetime.now(_dt.timezone.utc) - ts).total_seconds())
+        except Exception:  # noqa: BLE001
+            age = 0
+        if age > max_age_sec:
+            return None
+        return {"total_main_flow": float(val), "age_sec": age}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取 TQ 资金快照失败: %s", e)
+        return None
+
+
+def _refresh_amount_fallback() -> tuple[float | None, str]:
+    """成交额兜底链: TQ 指数(首选) → 腾讯指数(次选)。60s 缓存。"""
+    now = time.time()
+    if now - float(_AMOUNT_CACHE.get("ts") or 0) < 60 and _AMOUNT_CACHE.get("val") is not None:
+        return _AMOUNT_CACHE["val"], _AMOUNT_CACHE.get("src") or "cache"
+
+    val, src = _tq_index_amount()
+    if val is None:
+        try:
+            from src.core.marketdata_client import get_market_data
+
+            items = get_market_data().index_quotes(["sh000001", "sz399106"])
+            total = 0.0
+            got = 0
+            for it in items or []:
+                tv = it.get("turnover")
+                if tv:
+                    total += float(tv)
+                    got += 1
+            if got >= 2:
+                val, src = round(total / 1e8, 1), "tencent_index"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("腾讯指数成交额兜底失败: %s", e)
+    if val is not None:
+        _AMOUNT_CACHE.clear()
+        _AMOUNT_CACHE.update({"ts": now, "val": val, "src": src})
+    return val, src
+
+
+def _snapshot_to_response(snap: dict) -> dict:
+    """把库快照行组装成与实时分支同构的响应, 并**如实标注来源与口径**。
+
+    字段名/结构与实时分支保持一致(前端不改), 仅新增来源标注字段; 快照表**未存**的
+    字段(成交额/指数点位涨跌/创业板主力)一律显式置空 —— 不编造、不补 0。
+    板块明细(2026-10-14 收口)改为从 board_flow_snapshots 读够新快照派生; 无够新
+    板块快照时置空(不编造)。口径标签沿用现网口径(eastmoney4,
+    见 docs/_frozen/caliber_matrix.md), 并显式标注为「由快照继承」而非行内自带。
+    """
+    has_funds = snap.get("total_main_flow") is not None
+    board_inout = _fresh_board_inout("industry")
+    if board_inout is not None:
+        inflow_boards, outflow_boards = board_inout
+    else:
+        inflow_boards, outflow_boards = [], []
+    resp = {
+        # 资金类字段(快照表存了这些)
+        "total_main_flow": snap.get("total_main_flow"),  # 亿
+        "sh_flow": snap.get("sh_flow"),
+        "sz_flow": snap.get("sz_flow"),
+        # 快照表未存的字段: 显式置空(缺失标注, 不编造)
+        "cyb_flow": None,
+        "total_amount": snap.get("total_amount"),
+        "sh": None,
+        "sz": None,
+        "cyb": None,
+        # 板块明细: 从板块资金快照读库派生(收口前恒空)
+        "inflow_boards": inflow_boards,
+        "outflow_boards": outflow_boards,
+        "board_source": "db_snapshot" if board_inout is not None else None,
+        # 市场统计(家数快照表存了)
+        "up_count": snap.get("up_count"),
+        "down_count": snap.get("down_count"),
+        "flat_count": snap.get("flat_count"),
+        # 来源标注(A-7): 库读而非实时外呼 —— 绝不冒充实时值
+        "source": "db_snapshot",
+        "data_source": "db_snapshot",
+        "data_origin": "market_flow_snapshots",
+        "breadth_source": "db_snapshot",
+        "snapshot_used": True,
+        "snapshot_ts": snap.get("snapshot_ts"),
+        "snapshot_age_sec": snap.get("snapshot_age_sec"),
+        "timestamp": snap.get("snapshot_ts"),
+        # 口径标签: 沿用现网口径, 并标注为快照继承(行内未自带 caliber 列)
+        "caliber": _CAPITAL_FLOW_TAG.caliber,
+        "direction_semantics": _CAPITAL_FLOW_TAG.direction_semantics,
+        "caliber_label": "主力净流入: 东财四档·资金面参考, 禁用于主力意图判定 "
+                         "(口径由已落库快照继承)",
+        "caliber_source": "db_snapshot_inherited",
+        "note": "读自已落库大盘资金快照(非实时外呼); 板块明细读板块资金快照; "
+                "快照表未存成交额/指数点位, 已显式置空, 不编造。",
+    }
+    if not has_funds:
+        # 库里最新快照仅含涨跌家数(网关故障期间采样器落的行) → 显式降级, 不补 0
+        resp["degraded"] = True
+        resp["note"] = ("库内最新快照仅含涨跌家数, 资金字段缺失(未编造 0); "
+                        "资金面请参照实时链路或稍后重试。")
+    return resp
 
 
 @router.get("/dragon-tiger/range/status")
@@ -223,6 +664,13 @@ async def dragon_tiger_proxy(
     if cached is not None:
         return cached
 
+    # 读侧(2026-10-14 落库收口): 该日已落库 → 直接读库返回(历史日永不回源),
+    # 并回填响应缓存。仅当库里没有该日(冷启动/当日未落)才走下面的回源链路。
+    db_payload = _dragon_tiger_from_db(trade_date, market)
+    if db_payload is not None:
+        biz_cache.set_json(cache_key, db_payload, ttl=cache_ttl)
+        return db_payload
+
     def _compute() -> dict:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
@@ -237,23 +685,55 @@ async def dragon_tiger_proxy(
         except Exception:
             ft_by_sym = {}
 
+        # 2026-10-20 用户铁律「备弱用强」：**枚举靠东财**(TQ 无市场级榜单接口)，
+        # **金额以 TQ 为准**(本地零配额、可与东财对账；东财网关 502 时金额常整块缺失)，
+        # 席位名/上榜原因仍由东财+ftshare 提供。TQ 拿不到的票才用东财金额。
+        tq_amt = {}
+        try:
+            tq_amt = _lhb_amounts_from_tq([getattr(r, "symbol", "") for r in rows], trade_date)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("龙虎榜 TQ 金额补强失败(不改用东财): %s", e)
+
         items = []
         for i in rows:
             ft = ft_by_sym.get(i.symbol)
+            sym = getattr(i, "symbol", "")
+            em_buy = getattr(i, "buy_amt", None)
+            em_sell = getattr(i, "sell_amt", None)
+            em_net = getattr(i, "net_buy", None)
+            tq_row = tq_amt.get(sym)
+            if tq_row and (tq_row.get("buy_amt") is not None or tq_row.get("sell_amt") is not None):
+                buy_amt, sell_amt, net_buy = tq_row["buy_amt"], tq_row["sell_amt"], tq_row["net_buy"]
+                amt_source = "tdx_tq_gp02"
+            else:
+                buy_amt, sell_amt, net_buy = em_buy, em_sell, em_net
+                amt_source = "eastmoney" if em_buy is not None or em_sell is not None else "unavailable"
             items.append(
                 {
                     "trade_date": getattr(i, "trade_date", trade_date),
-                    "symbol": getattr(i, "symbol", ""),
+                    "symbol": sym,
                     "name": getattr(i, "name", ""),
                     "close": getattr(i, "close", None),
                     "change_pct": getattr(i, "change_pct", None),
-                    "net_buy": getattr(i, "net_buy", None),
-                    "buy_amt": getattr(i, "buy_amt", None),
-                    "sell_amt": getattr(i, "sell_amt", None),
+                    "net_buy": net_buy,
+                    "buy_amt": buy_amt,
+                    "sell_amt": sell_amt,
+                    # 对账字段：TQ 生效时保留东财值，两者不一致时一眼可见
+                    "buy_amt_em": em_buy,
+                    "sell_amt_em": em_sell,
+                    "amount_source": amt_source,
                     "reason": getattr(i, "reason", None),
                     "top_buyers": list(getattr(ft, "top_buyers", []) or []) if ft else [],
                     "top_sellers": list(getattr(ft, "top_sellers", []) or []) if ft else [],
                 }
+            )
+        # 拉到即落(2026-10-14 落库收口): 东财-ftshare 行按 (date, symbol) upsert;
+        # 下次同请求直接读库, 历史日不再回源。
+        if items:
+            _used_tq = any(it.get("amount_source") == "tdx_tq_gp02" for it in items)
+            _lhb_upsert_rows(
+                items, market=market,
+                source="em_ftshare+tq_amt" if _used_tq else "em_ftshare",
             )
         return {
             "trade_date": trade_date,
@@ -261,6 +741,9 @@ async def dragon_tiger_proxy(
             "count": len(items),
             "items": items,
             "pending": False,
+            "source": "em_ftshare",
+            "amount_source": "tdx_tq_gp02(缺失逐票回落东财)",
+            "data_origin": "realtime",
         }
 
     started = _bg_start(job_key, _compute, result_key=cache_key, cache_ttl=cache_ttl)
@@ -378,8 +861,35 @@ async def board_capital_flow_proxy(
     """板块资金流向(同花顺行业/概念资金,免登录免费源)。
 
     返回按净额降序的板块资金列表(流入/流出/净额,单位亿)。
-    C2: 源故障/空返回且有备份 → 回退旧快照并带 stale/stale_age_sec 标注。
+
+    落库收口(2026-10-14, 迁移 m191): 读侧『够新读库、过旧回源 + stale 标注』——
+      · 库里有够新快照(且交易时段) → **直接读库(零回源)**, source=db_snapshot;
+      · 过旧/库空/非交易时段 → 回源实时(成功后顺带采样落库, 1~5min 节流);
+      · 回源失败/空返回 → 回退 stale 备份(带 stale/stale_age_sec); 无备份则显式 degraded。
+    先例: market_flow_snapshots(m138) + _try_write_snapshot_async。
     """
+    from src.core import board_flow_sampler as _bfs
+
+    # 1) 读侧: 够新读库(过旧/非交易时段/库不可达 → None, 回源实时)
+    try:
+        snap = await asyncio.to_thread(_bfs.read_fresh, board_type)
+    except Exception:  # noqa: BLE001
+        snap = None
+    if snap is not None:
+        items = snap["items"]
+        return {
+            "board_type": board_type,
+            "count": len(items),
+            "items": items,
+            "source": "db_snapshot",
+            "data_source": "db_snapshot",
+            "data_origin": "board_flow_snapshots",
+            "snapshot_ts": snap.get("snapshot_ts"),
+            "snapshot_age_sec": snap.get("snapshot_age_sec"),
+            "stale": False,
+        }
+
+    # 2) 过旧/缺失 → 回源实时
     try:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
@@ -397,28 +907,22 @@ async def board_capital_flow_proxy(
                 "degraded": True,
                 "note": "板块资金源暂无数据(源故障或空返回); 非「今日无资金流」",
             }
+        items = [_bfs.board_to_item(b) for b in boards]
         payload = {
             "board_type": board_type,
-            "count": len(boards),
-            "items": [
-                {
-                    "board_name": b.board_name,
-                    "board_type": b.board_type,
-                    "index_value": b.index_value,
-                    "change_pct": b.change_pct,
-                    "inflow": b.inflow,
-                    "outflow": b.outflow,
-                    "net_inflow": b.net_inflow,
-                    "stock_count": b.stock_count,
-                    "leader_name": b.leader_name,
-                    "leader_change_pct": b.leader_change_pct,
-                    "leader_price": b.leader_price,
-                    "rank": b.rank,
-                }
-                for b in boards
-            ],
+            "count": len(items),
+            "items": items,
+            "source": "ths_realtime",
+            "data_origin": "realtime",
+            "snapshot_used": False,
+            "snapshot_ts": None,
         }
         _stale_put(f"board-flow:{board_type}", payload)
+        # 3) 采样落库(后台线程, 1~5min 节流, 失败静默)
+        try:
+            _bfs.try_write_async(board_type, items)
+        except Exception:  # noqa: BLE001
+            pass
         return payload
     except Exception as e:
         logger.warning(f"板块资金代理失败: {e}")
@@ -435,7 +939,24 @@ async def market_capital_flow_proxy():
 
     2026-08-10 重构: 之前用同花顺 hyzjl 行业资金求和(总流入2611亿口径不对),
     改为国内网关东财两市主力净流入(超大单+大单汇总, 与APP一致)。
+
+    A-7(2026-09-29): **优先读已落库的最新快照**(够新且在交易时段内) —— 与上游网关
+    可用性解耦; 未命中(库空/过旧/非交易时段)则照旧走实时链路, 失败再按原逻辑降级。
     """
+    # A-7: 先试库(读 market_flow_snapshots 最新一行, 够新且交易时段内才采纳)。
+    # 同步读库 → to_thread, 不阻塞事件循环(与本函数下面 P0 注释同类问题)。
+    snap = await asyncio.to_thread(_read_fresh_db_snapshot)
+    if snap is not None:
+        out = _snapshot_to_response(snap)
+        if out.get("total_amount") is None:
+            # 2026-10-20: 兜底链改为 TQ 优先(TQ 指数快照 → 腾讯指数)
+            _amt, _src = await asyncio.to_thread(_refresh_amount_fallback)
+            out["total_amount"] = _amt
+            out["amount_source"] = (
+                "通达信 TQ 指数成交额(沪综指+深综指)" if _src == "tdx_tq_index"
+                else ("腾讯指数成交额口径" if _src == "tencent_index" else "不可用")
+            )
+        return out
     try:
         import requests as _req
 
@@ -443,7 +964,7 @@ async def market_capital_flow_proxy():
             # P0(2026-09-18): 同步 requests 不得在 async def 内直接调用(会阻塞事件循环),
             # 包一层 asyncio.to_thread 交给线程池。
             return _req.get(
-                "http://115.190.177.213:8100/cn/market-overview", timeout=6
+                gateway_url("cn/market-overview"), timeout=6
             ).json()
 
         # 1. 国内网关: 两市主力净流入 + 成交额 + 涨跌家数
@@ -482,33 +1003,20 @@ async def market_capital_flow_proxy():
                 if isinstance(_d.get("change_pct"), (int, float)):
                     _d["change_pct"] = round(_d["change_pct"] / 100, 2)
         # 2. 板块资金明细(同花顺 hyzjl 行业, 流入/流出榜)
+        from src.core import board_flow_sampler as _bfs
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
         boards = md.board_capital_flow(board_type="industry") or []
         # P1(audit-20260915): net_inflow 缺失的板块不参与排序
-        # (此前 or 0.0 把"无数据"当成 0, 会挤占流入/流出榜单位置)
-        boards_valid = [b for b in boards if b.net_inflow is not None]
-        boards_sorted = sorted(
-            boards_valid, key=lambda b: b.net_inflow, reverse=True
-        )
-        inflow_boards = [
-            {
-                "name": b.board_name,
-                "net_inflow": round(b.net_inflow, 2),  # 亿
-                "change_pct": b.change_pct,
-            }
-            for b in boards_sorted[:10]
-            if b.net_inflow > 0
-        ]
-        outflow_boards = [
-            {
-                "name": b.board_name,
-                "net_inflow": round(b.net_inflow, 2),  # 亿(负=流出)
-                "change_pct": b.change_pct,
-            }
-            for b in reversed(boards_sorted[-10:])
-            if b.net_inflow < 0
-        ]
+        # (此前 or 0.0 把"无数据"当成 0, 会挤占流入/流出榜单位置) —— 排序/筛选逻辑
+        # 统一收口到 _boards_to_inout(与库读分支同口径)。
+        board_items = [_bfs.board_to_item(b) for b in boards]
+        inflow_boards, outflow_boards = _boards_to_inout(board_items)
+        # 板块资金采样落库(节流, 后台线程): 供板块端点与大盘资金库读分支复用
+        try:
+            _bfs.try_write_async("industry", board_items)
+        except Exception:  # noqa: BLE001
+            pass
         result = {
             # 两市主力净流入(对齐同花顺APP)
             "total_main_flow": ov.get("total_main_flow"),      # 亿
@@ -526,11 +1034,16 @@ async def market_capital_flow_proxy():
             "outflow_boards": outflow_boards,
             "source": "eastmoney_push2delay_cn",
             "breadth_source": "cn_gateway",
+            # 收口(2026-10-14): 无够新大盘资金快照 → 走实时并**显式标注**(不静默)
+            "snapshot_used": False,
+            "snapshot_note": "库内无够新大盘资金快照(或非交易时段), 走实时链路",
             # 口径标签(B3/3.4): 主力净流入为按单金额四档归类(资金面参考),
             # 板块明细为同花顺行业资金 —— 均禁止用于主力意图判定(AGENTS.md 红线)
             "caliber": "eastmoney4",
             "caliber_label": "主力净流入: 东财四档·资金面参考, 禁用于主力意图判定; "
                              "板块明细: 同花顺行业资金(参考)",
+            # A-7: 与库读分支口径字段对齐(方向语义透传给下游/UI)
+            "direction_semantics": _CAPITAL_FLOW_TAG.direction_semantics,
             "timestamp": None,
         }
         # 涨跌家数改走 TQ(2026-09-23 清单切换): 去掉对 cn 网关该字段的依赖。
@@ -538,6 +1051,33 @@ async def market_capital_flow_proxy():
         # ⚠️ to_thread: TQ 查询是同步 HTTP(全A 约 1s), 在 async def 里直接调会阻塞事件循环
         #    (见本函数开头 P0 注释 —— 同一类问题)。
         result = await asyncio.to_thread(_apply_tq_breadth, result)
+        # 2026-10-20: 上游 total_amount 常为 None → 用指数成交额兜底（否则首页成交额恒为 --，
+        # 且落库后读库分支也一直是空）。
+        if result.get("total_amount") is None:
+            _amt, _src = await asyncio.to_thread(_refresh_amount_fallback)
+            result["total_amount"] = _amt
+            result["amount_source"] = (
+                "通达信 TQ 指数成交额(沪综指+深综指)" if _src == "tdx_tq_index"
+                else ("腾讯指数成交额口径" if _src == "tencent_index" else "不可用")
+            )
+        # 2026-10-20: 主力净流入上游(cn 网关)常缺 → 退回库内最近一次 TQ 全市场汇总(AMO/SUPAMO),
+        # 标注快照年龄; 连库也没有就保持 None(前端 --), 绝不用 0 顶替。
+        # 2026-10-20 铁律: TQ 优先 —— 库内有 10 分钟内的 TQ 汇总就用它, 东财只作兜底。
+        _snap_fresh = await asyncio.to_thread(_latest_tq_flow_row, 600)
+        if _snap_fresh is not None:
+            if result.get("total_main_flow") is not None:
+                result["main_flow_eastmoney"] = result["total_main_flow"]   # 保留东财值供对账
+            result["total_main_flow"] = _snap_fresh["total_main_flow"]
+            result["main_flow_source"] = f"tdx_tq_supamo(快照 {_snap_fresh['age_sec']}s 前)"
+            result["caliber"] = "tdx_supamo"
+            result["caliber_label"] = "主力净流入: 通达信 SUPAMO 全市场汇总(资金面参考, 禁用于主力意图判定)"
+        if result.get("total_main_flow") is None:
+            _snap = await asyncio.to_thread(_latest_tq_flow_row)
+            if _snap is not None:
+                result["total_main_flow"] = _snap["total_main_flow"]
+                result["main_flow_source"] = f"tdx_tq_supamo(快照 {_snap['age_sec']}s 前)"
+                result["caliber"] = "tdx_supamo"
+                result["caliber_label"] = "主力净流入: 通达信 SUPAMO 全市场汇总(资金面参考, 禁用于主力意图判定)"
         # v0.4.7: 顺手异步写库(30s 节流, 失败静默不阻断接口)
         try:
             _try_write_snapshot_async(result)
@@ -717,6 +1257,11 @@ def _compute_lhb_range(market: str, days: int) -> dict:
         d -= timedelta(days=1)
         if is_weekend:
             continue
+        # 读侧(2026-10-14 落库收口): 该日已落库 → 直接读库, 不回源(历史日永不回源)。
+        day_db = _lhb_read_date(ds, market)
+        if day_db:
+            by_date[ds] = day_db
+            continue
         try:
             rows = md.dragon_tiger(date=ds, market=market) or []
         except Exception as e:
@@ -751,6 +1296,8 @@ def _compute_lhb_range(market: str, days: int) -> dict:
                 }
             )
         if day_items:
+            # 拉到即落(2026-10-14): 东财-ftshare 按日落库, 下次(1h TTL 过期/重启)直接读库。
+            _lhb_upsert_rows(day_items, market=market, source="em_ftshare")
             by_date[ds] = day_items
     return {
         "market": market,
@@ -873,6 +1420,295 @@ def _lhb_from_tq(symbol: str, *, start_time: str = "") -> list[dict]:
     return out
 
 
+# ──────────── 龙虎榜按日落库(2026-10-14 资金类落库收口, 迁移 m190) ────────────
+# 审计定性: fundamentals-detail 经 _lhb_from_tq **每次请求现拉** TQ GP 长序列(个股整段
+# 历史), /dragon-tiger/{date} 亦逐次现拉东财+ftshare。现把拉到的行按 (trade_date,
+# symbol, market) upsert 落库 dragon_tiger_daily:
+#   拉取侧: 任何来源(TQ GP / 东财-ftshare)拉到即落(_lhb_upsert_rows);
+#   读侧:  请求只读库, 仅**当日**(尚未落库)增量回源; 历史日永不回源。
+_LHB_DB_COLS = (
+    "trade_date", "symbol", "market", "name", "reason", "close", "change_pct",
+    "net_buy", "buy_amt", "sell_amt", "turnover_pct", "top_buyers", "top_sellers",
+    "inst_buy_wan", "inst_sell_wan", "yyb_buy_wan", "yyb_sell_wan",
+    "hsgt_buy_wan", "hsgt_sell_wan", "suspicious", "source",
+)
+# 读回时 SELECT 的列顺序(与 _lhb_rec_to_row 一一对应)。
+_LHB_READ_SQL = (
+    "SELECT trade_date, symbol, name, reason, close, change_pct, net_buy, buy_amt, "
+    "sell_amt, turnover_pct, top_buyers, top_sellers, inst_buy_wan, inst_sell_wan, "
+    "yyb_buy_wan, yyb_sell_wan, hsgt_buy_wan, hsgt_sell_wan, suspicious, source "
+    "FROM dragon_tiger_daily "
+)
+
+
+def _lhb_json_list(v) -> str | None:
+    """席位列表 → JSON 文本(空/空列表 → NULL, 不写 "[]" 占位)。"""
+    if not v:
+        return None
+    try:
+        return json.dumps(v, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lhb_row_to_db(r: dict, market: str, source: str) -> dict:
+    """前端龙虎榜行 → dragon_tiger_daily 落库行(纯函数, 便于单测)。"""
+    d = str(r.get("trade_date") or "")[:10].replace("-", "")
+    sym = str(r.get("symbol") or "").strip()
+    if "." in sym:
+        sym = sym.split(".")[0]
+    susp = r.get("suspicious")
+    return {
+        "trade_date": d,
+        "symbol": sym,
+        "market": market or "CN",
+        "name": r.get("name") or None,
+        "reason": r.get("reason") or None,
+        "close": r.get("close"),
+        "change_pct": r.get("change_pct"),
+        "net_buy": r.get("net_buy"),
+        "buy_amt": r.get("buy_amt"),
+        "sell_amt": r.get("sell_amt"),
+        "turnover_pct": r.get("turnover_pct"),
+        "top_buyers": _lhb_json_list(r.get("top_buyers")),
+        "top_sellers": _lhb_json_list(r.get("top_sellers")),
+        "inst_buy_wan": r.get("inst_buy_wan"),
+        "inst_sell_wan": r.get("inst_sell_wan"),
+        "yyb_buy_wan": r.get("yyb_buy_wan"),
+        "yyb_sell_wan": r.get("yyb_sell_wan"),
+        "hsgt_buy_wan": r.get("hsgt_buy_wan"),
+        "hsgt_sell_wan": r.get("hsgt_sell_wan"),
+        "suspicious": (None if susp is None else bool(susp)),
+        "source": source or None,
+    }
+
+
+def _lhb_amounts_from_tq(symbols: list[str], trade_date: str,
+                         *, max_symbols: int = 200, budget_sec: float = 12.0) -> dict[str, dict]:
+    """用 TQ 的 GP 序列**补强**龙虎榜金额（用户铁律：谁强用谁，弱的备用）。
+
+    分工（2026-10-20）：
+    - **枚举**（某日全部上榜股）→ 东财强，TQ 无市场级接口，不碰；
+    - **金额** → TQ 走本地客户端、零配额、与东财互相印证；东财网关 502 时金额常整块缺失。
+      所以：TQ 有值就用 TQ（东财值保留成 `buy_amt_em/sell_amt_em` 对账），TQ 没值才用东财；
+    - **席位名/上榜原因** → TQ 无此语义，仍由东财/ftshare 提供。
+
+    返回 {symbol: {buy_amt, sell_amt, net_buy, source}}（金额单位=元）。失败/超时静默返回已取到的部分。
+    """
+    out: dict[str, dict] = {}
+    if not symbols:
+        return out
+    compact = str(trade_date).replace("-", "")
+    t0 = time.time()
+    try:
+        from marketdata.vendors.tq import lhb_series, to_tq_code
+        from marketdata.symbol import Symbol
+    except Exception as e:  # noqa: BLE001
+        logger.debug("TQ 龙虎榜不可用: %s", e)
+        return out
+    for i, sym in enumerate(symbols[:max_symbols]):
+        if time.time() - t0 > budget_sec:
+            logger.info("TQ 龙虎榜金额补强超预算(已补 %d 只) → 其余沿用东财", len(out))
+            break
+        try:
+            tqc = to_tq_code(Symbol.parse(str(sym), "CN"))
+            if not tqc:
+                continue
+            rows = lhb_series(tqc, start_time=compact, end_time=compact) or []
+        except Exception as e:  # noqa: BLE001
+            logger.debug("TQ 龙虎榜 %s 失败: %s", sym, e)
+            continue
+        for r in rows:
+            if str(r.get("date") or "").replace("-", "") != compact:
+                continue
+            buy_wan, sell_wan = r.get("buy"), r.get("sell")
+            if buy_wan is None and sell_wan is None:
+                continue
+            buy = float(buy_wan) * 1e4 if buy_wan is not None else None   # 万元 → 元
+            sell = float(sell_wan) * 1e4 if sell_wan is not None else None
+            out[str(sym)] = {
+                "buy_amt": buy,
+                "sell_amt": sell,
+                "net_buy": (buy or 0.0) - (sell or 0.0),
+                "source": "tdx_tq_gp02",
+            }
+            break
+        if i % 20 == 19:
+            time.sleep(0.05)   # 单线程 17709：别突发
+    return out
+
+
+def _lhb_upsert_rows(rows: list[dict], market: str = "CN", source: str = "") -> int:
+    """按日 upsert 落库 (trade_date, symbol, market) 唯一键 → 重拉幂等。失败静默返回 0。"""
+    if not rows:
+        return 0
+    try:
+        from src.db.dialect import upsert_sql
+        from src.web.database import engine
+
+        stmt = upsert_sql(
+            "dragon_tiger_daily",
+            list(_LHB_DB_COLS),
+            ["trade_date", "symbol", "market"],
+            [c for c in _LHB_DB_COLS if c not in ("trade_date", "symbol", "market")],
+        )
+        saved = 0
+        seen: set[tuple] = set()
+        with engine.begin() as conn:
+            for r in rows:
+                row = _lhb_row_to_db(r, market, source)
+                if len(row["trade_date"]) != 8 or len(row["symbol"]) != 6:
+                    continue  # 键不全的行不入库(不编造)
+                key = (row["trade_date"], row["symbol"], row["market"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                conn.execute(text(stmt), row)
+                saved += 1
+        return saved
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜落库失败(静默, 不阻断): %s", e)
+        return 0
+
+
+def _lhb_json_parse(v) -> list:
+    if not v:
+        return []
+    try:
+        x = json.loads(v) if isinstance(v, str) else v
+    except (TypeError, ValueError):
+        return []
+    return x if isinstance(x, list) else []
+
+
+def _lhb_rec_to_row(r, symbol: str) -> dict:
+    """dragon_tiger_daily 行 → 前端契约行(与 _lhb_from_tq/东财路径同键)。"""
+    return {
+        "trade_date": str(r[0]),
+        "symbol": r[1] or symbol,
+        "name": r[2] or "",
+        "reason": r[3],
+        "close": r[4],
+        "change_pct": r[5],
+        "net_buy": r[6],
+        "buy_amt": r[7],
+        "sell_amt": r[8],
+        "turnover_pct": r[9],
+        "top_buyers": _lhb_json_parse(r[10]),
+        "top_sellers": _lhb_json_parse(r[11]),
+        "inst_buy_wan": r[12],
+        "inst_sell_wan": r[13],
+        "yyb_buy_wan": r[14],
+        "yyb_sell_wan": r[15],
+        "hsgt_buy_wan": r[16],
+        "hsgt_sell_wan": r[17],
+        "suspicious": bool(r[18]) if r[18] is not None else False,
+        # 金额来源（TQ 补强过就标 TQ；老行为东财口径）。source 列见 dragon_tiger_daily。
+        "amount_source": (
+            "tdx_tq_gp02" if "tq_amt" in str(r[19] or "") else "eastmoney"
+        ),
+    }
+
+
+def _lhb_read_symbol(symbol: str, market: str = "CN", limit: int = 400) -> list[dict]:
+    """读某 symbol 的落库龙虎榜(新→旧)。失败/无表静默返回 [](调用方回源)。"""
+    sym = str(symbol or "").strip()
+    if "." in sym:
+        sym = sym.split(".")[0]
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            recs = conn.execute(
+                text(_LHB_READ_SQL + "WHERE symbol = :s AND market = :m "
+                     "ORDER BY trade_date DESC LIMIT :lim"),
+                {"s": sym, "m": market or "CN", "lim": limit},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜读库失败(回源): %s", e)
+        return []
+    return [_lhb_rec_to_row(r, sym) for r in recs]
+
+
+def _lhb_read_date(trade_date: str, market: str = "CN") -> list[dict]:
+    """读某交易日的落库龙虎榜(全市场)。失败/无表静默返回 [](调用方回源)。"""
+    d = str(trade_date or "")[:10].replace("-", "")
+    if len(d) != 8:
+        return []
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            recs = conn.execute(
+                text(_LHB_READ_SQL + "WHERE trade_date = :d AND market = :m ORDER BY symbol"),
+                {"d": d, "m": market or "CN"},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜读库(按日)失败(回源): %s", e)
+        return []
+    return [_lhb_rec_to_row(r, r[1] or "") for r in recs]
+
+
+def _dragon_tiger_from_db(trade_date: str, market: str = "CN") -> dict | None:
+    """该交易日已落库 → 组装与回源分支同构的响应(items 为前端契约行); 无行返回 None。"""
+    rows = _lhb_read_date(trade_date, market)
+    if not rows:
+        return None
+    return {
+        "trade_date": str(trade_date or "")[:10].replace("-", ""),
+        "market": market,
+        "count": len(rows),
+        "items": rows,
+        "pending": False,
+        "source": "db",
+        "data_origin": "dragon_tiger_daily",
+    }
+
+
+def _next_day_yyyymmdd(d: str) -> str:
+    """'20251219' → '20251220'; 非法输入返回 ''(调用方按全量回源处理)。"""
+    s = str(d or "").replace("-", "")[:8]
+    if len(s) != 8 or not s.isdigit():
+        return ""
+    try:
+        from datetime import date as _date, timedelta as _td
+
+        nxt = _date(int(s[:4]), int(s[4:6]), int(s[6:8])) + _td(days=1)
+        return nxt.strftime("%Y%m%d")
+    except ValueError:
+        return ""
+
+
+def _lhb_symbol_rows(symbol: str, market: str = "CN") -> list[dict]:
+    """个股龙虎榜: **只读库 + 当日增量回源**(历史日永不回源)。
+
+    1) 库里有该 symbol 的行且最新日 >= 今天 → 直接返回, **零回源**;
+    2) 库里有行但最新日 < 今天(当日榜单未落) → 仅回源 [最新日+1, 今天] 的增量
+       (TQ GP 序列, start_time 收窄), 落库后与库行合并返回;
+    3) 库空(从未落库/冷启动) → 一次性回源整段并落库;
+    库不可达/回源异常 → 由调用方容错(此处不抛, 返回已得部分)。
+    """
+    db_rows = _lhb_read_symbol(symbol, market)
+    today = datetime.now().strftime("%Y%m%d")
+    if db_rows:
+        latest = max((str(r.get("trade_date") or "") for r in db_rows), default="")
+        if latest >= today:
+            return db_rows
+        start = _next_day_yyyymmdd(latest)
+        fetched = _lhb_from_tq(symbol, start_time=start) if start else _lhb_from_tq(symbol)
+        if fetched:
+            _lhb_upsert_rows(fetched, market=market, source="tdx_tq")
+            merged: dict[str, dict] = {str(r.get("trade_date")): r for r in fetched}
+            for r in db_rows:
+                merged.setdefault(str(r.get("trade_date")), r)
+            return sorted(merged.values(), key=lambda x: str(x.get("trade_date") or ""), reverse=True)
+        return db_rows
+    fetched = _lhb_from_tq(symbol)
+    if fetched:
+        _lhb_upsert_rows(fetched, market=market, source="tdx_tq")
+    return fetched
+
+
 def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10) -> dict:
     """个股基本面明细合并取数(纯函数, 供 HTTP 端点与对话助手共用)。
 
@@ -895,10 +1731,10 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
         "lhb_pending": False,
     }
 
-    # 1) 龙虎榜: **TQ 长序列为主骨架**(2026-09-23 清单切换), 东财市场级缓存补
+    # 1) 龙虎榜: **已落库的库行为主骨架**(2026-10-14 落库收口), 东财市场级缓存补
     #    reason(上榜原因)/close/change_pct/席位名 —— 这几个 TQ 没有(不编造),
     #    而 TQ 有东财没有的: 一年以上历史 + 机构/营业部/沪深股通买卖拆解。
-    #    两者合并 = 比任一单源都全。
+    #    读侧只读库 + 当日增量回源(历史日永不回源), 不再每次现拉整段 TQ GP 序列。
     em_rows: list[dict] = []
     lhb_range = _get_lhb_range(market, dt_days)
     if lhb_range is not None:
@@ -911,9 +1747,9 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
     tq_rows: list[dict] = []
     if market == "CN":
         try:
-            tq_rows = _lhb_from_tq(symbol)
+            tq_rows = _lhb_symbol_rows(symbol, market)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"基本面明细-龙虎榜[TQ {symbol}]失败, 降级东财缓存: {e}")
+            logger.warning(f"基本面明细-龙虎榜[库/TQ {symbol}]失败, 降级东财缓存: {e}")
 
     if tq_rows:
         # 东财有值的字段覆盖到 TQ 行上(TQ 侧留空的才补, 不覆盖 TQ 的金额口径)
@@ -1032,6 +1868,22 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
             out["exday"] = exday_latest(_sym_to_tq_code(symbol))
         except Exception as e:  # noqa: BLE001
             logger.warning(f"基本面明细-日线统计[TQ {symbol}]失败: {e}")
+
+    # 7) TQ「异动资金档案」(2026-10-20 用户裁决: 逆向接口优先):
+    #    大宗交易 GP04 / 增减持 GP05 / 陆股通持股 GP06 / 质押 GP19+20 / 财务 FN1+FN3。
+    #    单位全部经交叉验证(见 src/core/tdx_corporate.py 顶部表格)。
+    #    东财这五类要拉四个 datacenter 接口还会限流, TQ 一次拿全且零配额。
+    #    单类失败只在各自 note 里标注, 不影响其余数据。
+    if market == "CN":
+        try:
+            from src.core.tdx_corporate import dossier as _tq_dossier
+
+            out["corporate"] = _tq_dossier(symbol)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"基本面明细-异动资金档案[TQ {symbol}]失败: {e}")
+            out["corporate"] = {"symbol": symbol, "available": False, "note": f"取数异常: {e}"}
+    else:
+        out["corporate"] = {"symbol": symbol, "available": False, "note": "TQ 仅覆盖 A 股"}
 
     return out
 
@@ -1339,17 +2191,30 @@ async def breadth_distribution(
             valid += 1
             buckets[label] = buckets.get(label, 0) + 1
         items = [{"bucket": b[2], "count": buckets.get(b[2], 0)} for b in _BUCKET_BOUNDS]
-        return {
+        payload = {
             "count": valid,
             "total": len(pcts),
             "items": items,
             "note": "" if valid else "数据源返回为空(可能非交易日)",
             "pending": False,
+            "captured_at": datetime.now().isoformat(timespec="seconds"),
+            "source": "sina",
         }
+        _breadth_save(payload)
+        return payload
 
     cached = biz_cache.get_json(_BREADTH_CACHE_KEY)
     if cached is not None:
-        return cached
+        return _breadth_with_age(cached)
+
+    # 2026-10-20: 缓存未命中先读库（冷启动/重启秒出），再考虑后台重算。
+    from_db = _breadth_from_db()
+    if from_db is not None:
+        try:
+            biz_cache.set_json(_BREADTH_CACHE_KEY, from_db, ttl=60)   # 短暂回填，避免连打库
+        except Exception:
+            pass
+        return _breadth_with_age(from_db)
 
     job_key = "breadth:distribution"
     _bg_start(
@@ -1386,4 +2251,190 @@ async def breadth_distribution_status():
         "cache_ttl_s": _BREADTH_CACHE_TTL,
         # ready=True 时前端可直接再调 /breadth-distribution 拿数据
         "hint": "ready=true 后 GET /api/market-data/breadth-distribution",
+    }
+
+@router.get("/breadth-history")
+async def market_breadth_history(
+    days: int = Query(60, ge=5, le=250, description="返回最近 N 个交易日"),
+) -> dict:
+    """全市场情绪温度与涨跌家数**历史序列**（自算口径，落库见 market_breadth_daily）。
+
+    真实路径: `/api/market-data/breadth-history`（本 router 挂在 prefix="/api/market-data"）。
+    前端用 `fetchAPI('/market-data/breadth-history')`（fetchAPI 自带 /api 前缀）。
+
+    与 `/breadth-distribution` 的区别：那个是**实时**九档分桶（新浪/东财），
+    这个是**盘后自算**的日序列（PG klines → 涨跌家数 + 六指标 ADL/ADR/ARMS/BTI/MCL/STIX
+    + 情绪温度 0-100），用于画曲线和看分位。
+
+    ⚠️ 覆盖度：最新交易日 PG 往往还在回填（当日 klines 未收全），此时家数会**偏低**。
+    消费方必须看 `symbols/total` 比例，不能把"覆盖不全"读成"市场缩量"。
+    """
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        rows = list(db.execute(text("""
+            SELECT trade_date, up_count, down_count, flat_count, symbols,
+                   adl, adr, arms, bti, bti_thrust, mcl, mcl_summation, stix,
+                   up_ratio, sentiment_score
+              FROM market_breadth_daily
+             ORDER BY trade_date DESC
+             LIMIT :lim
+        """), {"lim": int(days)}).fetchall())
+    except Exception as e:  # noqa: BLE001 — 表未建(迁移未跑)
+        logger.warning("[breadth-history] 查询失败: %r", e)
+        return {"ok": False, "reason": "no_table", "items": [],
+                "hint": "market_breadth_daily 不可用（迁移未跑或表未建）"}
+    finally:
+        db.close()
+
+    items = [{
+        "date": r[0],
+        "up": r[1], "down": r[2], "flat": r[3], "symbols": r[4],
+        "adl": r[5], "adr": r[6], "arms": r[7], "bti": r[8], "bti_thrust": r[9],
+        "mcl": r[10], "mcl_summation": r[11], "stix": r[12],
+        "up_ratio": r[13], "temperature": r[14],
+    } for r in rows]
+    items.reverse()  # 时间升序, 便于直接画曲线
+    if not items:
+        return {"ok": False, "reason": "no_data", "items": [],
+                "hint": "尚无自算序列（见 src/core/market_breadth_scheduler.py，每交易日 18:40 落库）"}
+
+    latest = items[-1]
+    temps = [i["temperature"] for i in items if isinstance(i["temperature"], (int, float))]
+    pct = None
+    if isinstance(latest.get("temperature"), (int, float)) and len(temps) >= 5:
+        below = sum(1 for t in temps if t <= latest["temperature"])
+        pct = round(below / len(temps) * 100, 1)
+
+    note = ""
+    cov = latest.get("symbols") or 0
+    if cov and cov < 3000:
+        note = (f"最新交易日 {latest['date']} 仅覆盖 {cov} 只（PG 当日仍在回填），"
+                "当日家数偏低，勿读作缩量")
+    return {
+        "ok": True,
+        "days": len(items),
+        "items": items,
+        "latest": latest,
+        "temperature_percentile": pct,
+        "coverage": {"symbols": cov, "full_market": 5577},
+        "note": note,
+        "caliber": "PG klines 自算（非实时）：涨跌家数 + 六指标 + 情绪温度 0-100；"
+                   "与客户端全市场快照口径同向（2026-09-25 交叉验证：涨跌比 0.28 vs 0.26）",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四档资金结构多日序列（2026-10-24 新增）
+#
+# 为什么需要这个端点：`fundamentals-detail` 里的 `exday` 字段是 TQ **当日实时 RPC**
+# 的标量（`exday_latest`, count=1），只能回答「今天四档什么结构」，回答不了
+# 「特大单净额连续 5 日在流出吗」这类分位/趋势问题。历史序列只能读 `exday_daily`
+# 表（`src/collectors/exday_daily.py` 每交易日 15:45 全市场落库）。
+#
+# 口径红线：本端点输出 `caliber="tdx_exday4"`（通达信按**单笔成交额**四档的客户端口径），
+# 与东财 push2 四档(`eastmoney4`)、同花顺 DDE(`ths`)、腾讯逐笔(`tick`) **不可换算**。
+# 四档的金额阈值是**推断值**（TQ 不返回阈值），同屏必须带标签，禁止拿它做方向判定。
+# ─────────────────────────────────────────────────────────────────────────────
+
+EXDAY4_THRESHOLDS_HINT = (
+    "特大单 >100万 / 大单 20~100万 / 中单 5~20万 / 小单 <5万（推断值，TQ 未返回阈值）"
+)
+EXDAY4_CALIBER_NOTE = (
+    "四档=按单笔成交金额分档（通达信客户端口径 tdx_exday4）；"
+    "与东财四档(eastmoney4)、同花顺 DDE(ths)、腾讯逐笔(tick) 不可换算，禁止跨口径相加或比较绝对值"
+)
+
+
+@router.get("/fund-structure/{symbol}")
+async def fund_structure_series(
+    symbol: str,
+    days: int = Query(20, ge=1, le=120, description="回溯交易日数（按 trade_date 倒序取）"),
+    market: str = Query("CN", description="市场"),
+):
+    """四档资金结构多日序列（读 `exday_daily`，口径 `tdx_exday4`）。
+
+    数据来源与限制：
+      - TQ `get_exday_data` **只返当日 1 行**（count/start_time/date 参数实测无效），
+        历史只能靠每日 15:45 落库累积 → 本端点能回溯的长度 = 落库开始至今。
+      - 表空时返回 `ok=true / days=0` 并给 `hint`，**不编造**。
+    """
+    sym = str(symbol or "").split(".")[0].strip()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol 不能为空")
+    mkt = (market or "CN").upper()
+
+    items: list[dict] = []
+    try:
+        # 2026-10-24 合并去重: 原实现对 exday_daily 自写 SQL, 与
+        # src/core/exday_structure.query_series() 形成**两份取数口径**
+        # (缺日处理/NULL 语义/上限裁剪各自演化 → 同一张表两个答案)。
+        # 统一走 core 层单点, 本端点只做**响应形状适配**(Fund4Strip 用 tiers 结构)。
+        from src.core.exday_structure import query_series as _exday_series
+        from src.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            _res = _exday_series(db, sym, market=mkt, limit=int(days))
+        finally:
+            db.close()
+        if not _res.get("available"):
+            raise RuntimeError(str(_res.get("reason") or "exday_daily 不可用"))
+        for it in _res.get("items") or []:
+            items.append(
+                {
+                    "trade_date": str(it.get("trade_date") or ""),
+                    "amount": it.get("amount"),
+                    "volume_lots": it.get("volume_lots"),
+                    "active_buy_amt": it.get("active_buy_amt"),
+                    "active_sell_amt": it.get("active_sell_amt"),
+                    "active_ratio": it.get("active_ratio"),
+                    "tiers": {
+                        "xl": {"buy": it.get("xl_buy_amt"), "sell": it.get("xl_sell_amt"), "net": it.get("xl_active_net")},
+                        "lg": {"buy": it.get("lg_buy_amt"), "sell": it.get("lg_sell_amt"), "net": it.get("lg_active_net")},
+                        "md": {"buy": it.get("md_buy_amt"), "sell": it.get("md_sell_amt"), "net": it.get("md_active_net")},
+                        "sm": {"buy": it.get("sm_buy_amt"), "sell": it.get("sm_sell_amt"), "net": it.get("sm_active_net")},
+                    },
+                }
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"四档资金结构[{sym}]查询失败: {e}")
+        return {
+            "ok": False,
+            "symbol": sym,
+            "market": mkt,
+            "days": 0,
+            "items": [],
+            "caliber": "tdx_exday4",
+            "thresholds_hint": EXDAY4_THRESHOLDS_HINT,
+            "note": EXDAY4_CALIBER_NOTE,
+            "hint": f"查询异常: {type(e).__name__}: {e}",
+        }
+
+    latest = items[-1] if items else None
+    if latest:
+        t = latest["tiers"]
+        latest = {
+            **latest,
+            "main_net": (t["xl"]["net"] or 0) + (t["lg"]["net"] or 0),
+        }
+
+    hint = ""
+    if not items:
+        hint = ("exday_daily 无该标的记录：该表 2026-10-23 起由每交易日 15:45 全市场采集，"
+                "历史不可回补（TQ 只返当日 1 行）")
+
+    return {
+        "ok": True,
+        "symbol": sym,
+        "market": mkt,
+        "days": len(items),
+        "items": items,
+        "latest": latest,
+        "caliber": "tdx_exday4",
+        "tier_thresholds_inferred": True,
+        "thresholds_hint": EXDAY4_THRESHOLDS_HINT,
+        "note": EXDAY4_CALIBER_NOTE,
+        "hint": hint,
     }

@@ -62,8 +62,12 @@ def _existing_max_dates() -> dict[str, str]:
     return {r[0]: r[1] for r in rows}
 
 
-def _tq_bars_direct(symbol: str, days: int) -> list[dict]:
-    """TQ 直连日 K(绕过 Engine 多源链)。失败返回空。"""
+def _tq_bars_direct(symbol: str, days: int, *, raise_on_error: bool = False) -> list[dict]:
+    """TQ 直连日 K(绕过 Engine 多源链)。失败返回空。
+
+    raise_on_error=True 时**原样抛出**(供回填计数"失败股数"用, 见 P2 2026-10-08 可观测性
+    审计: TQ 全断时此前 events_saved=0 且无 ok 标志、仅 debug 级日志, 断链被静默吞掉)。
+    """
     pkgs = str(Path(__file__).parent.parent / "packages" / "marketdata" / "src")
     if pkgs not in sys.path:
         sys.path.insert(0, pkgs)
@@ -84,7 +88,10 @@ def _tq_bars_direct(symbol: str, days: int) -> list[dict]:
             for b in bars
         ]
     except Exception as e:  # noqa: BLE001
-        logger.debug("TQ 直连日K %s 失败: %s", symbol, e)
+        if raise_on_error:
+            raise
+        # P2: 升 warning(TQ 断链不再静默); 计数走 datasource_failures 表
+        logger.warning("TQ 直连日K %s 失败: %s", symbol, e)
         return []
 
 
@@ -99,32 +106,40 @@ def backfill_direct_tq(
     names = names or {}
     saved = 0
     done = 0
+    failed = 0
 
     def _one(sym: str) -> int:
+        """返回保存事件数; -1 表示 TQ 取数失败(P2: 显式错误态, 不静默)。"""
         try:
             from src.core.limit_up_backfill import _extract_events_from_bars, _upsert_rows
 
-            bars = _tq_bars_direct(sym, days)
+            bars = _tq_bars_direct(sym, days, raise_on_error=True)
             if not bars or len(bars) < 2:
                 return 0
             return _upsert_rows(_extract_events_from_bars(sym, names.get(sym, ""), bars))
         except Exception as e:  # noqa: BLE001
             logger.warning("TQ直连回填 %s 失败: %s", sym, e)
-            return 0
+            return -1
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_one, s): s for s in symbols}
         for f in as_completed(futs):
-            saved += f.result()
+            n = f.result()
+            if n < 0:
+                failed += 1
+            else:
+                saved += n
             done += 1
             if done % 500 == 0:
-                logger.info("TQ直连回填进度: %s/%s, 累计事件 %s", done, len(symbols), saved)
+                logger.info("TQ直连回填进度: %s/%s, 累计事件 %s, 失败 %s", done, len(symbols), saved, failed)
     return {
         "mode": "direct_tq",
         "started_at": started,
         "finished_at": _now_cst_iso(),
         "stocks": len(symbols),
         "events_saved": saved,
+        "failed": failed,
+        "ok": failed == 0,
     }
 
 
@@ -137,11 +152,19 @@ def backfill_incremental(symbols: list[str], names: dict[str, str] | None = None
     known = _existing_max_dates()
     touched: list[str] = []
     saved = 0
+    failed = 0
     for sym in symbols:
         try:
             from src.core.limit_up_backfill import _extract_events_from_bars, _upsert_rows
 
-            bars = _tq_bars_direct(sym, _LOOKBACK_BARS)
+            # P2(2026-10-08): raise_on_error → 区分"TQ 取数失败"与"无新数据";
+            # 全断时 failed>0 且 ok=False, 不再以 events_saved=0 静默收场。
+            bars = _tq_bars_direct(sym, _LOOKBACK_BARS, raise_on_error=True)
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            logger.warning("增量回填 %s TQ 取数失败: %s", sym, e)
+            continue
+        try:
             if not bars or len(bars) < 2:
                 continue
             max_db = known.get(sym)
@@ -161,8 +184,16 @@ def backfill_incremental(symbols: list[str], names: dict[str, str] | None = None
                 saved += n
                 touched.append(sym)
         except Exception as e:  # noqa: BLE001
-            logger.warning("增量回填 %s 失败: %s", sym, e)
-    return {"mode": "incremental", "stocks": len(symbols), "events_saved": saved, "touched": touched}
+            failed += 1
+            logger.warning("增量回填 %s 处理失败: %s", sym, e)
+    return {
+        "mode": "incremental",
+        "stocks": len(symbols),
+        "events_saved": saved,
+        "touched": touched,
+        "failed": failed,
+        "ok": failed == 0,
+    }
 
 
 def recompute_factors(symbols: list[str] | None = None) -> dict:
@@ -211,6 +242,7 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
 
     updated = 0
     factor_date = datetime.now(_CST).strftime("%Y%m%d")
+    ledger_candidates: list[dict] = []
     db = SessionLocal()
     try:
         for sym, events in targets.items():
@@ -223,6 +255,19 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
             score = demon_score_from_events(
                 events, circ_mv=st.get("circ_mv"), n_lhb=n_lhb
             )
+            # 决策账本(妖股因子覆盖): "入池"(grade 非普通)事件留痕, 价取最新涨停事件收盘价。
+            grade = score.get("grade")
+            if grade in DEMON_BOOST_BY_GRADE:
+                latest = events[-1]
+                ledger_candidates.append(
+                    {
+                        "symbol": sym,
+                        "trade_date": latest.get("trade_date"),
+                        "price": latest.get("close_price"),
+                        "grade": grade,
+                        "total": score.get("total"),
+                    }
+                )
             payload = {
                 "factor_date": factor_date,
                 "symbol": sym,
@@ -259,23 +304,71 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
         db.rollback()
     finally:
         db.close()
-    return {"factor_date": factor_date, "updated": updated}
+    # 决策账本留痕(signal_kind=demon_pool): 入池(非普通)的妖股因子写账本, 供命中率统计;
+    # 失败只 warn, 不影响因子落库主流程。
+    logged = _log_demon_signals(ledger_candidates)
+    return {"factor_date": factor_date, "updated": updated, "logged": logged}
+
+
+def _log_demon_signals(candidates: list[dict]) -> int:
+    """把"入池"妖股因子写决策账本(signal_kind=demon_pool)。
+
+    每条必须带 `price_at_signal`(最新涨停事件收盘价) —— 拿不到价的**不写该条**(不硬填 0)。
+    幂等由 (kind, symbol, trade_date) 唯一键保证; 失败只 warn, 绝不阻断主流程。
+    """
+    rows: list[dict] = []
+    for c in candidates or []:
+        try:
+            day = str(c.get("trade_date") or "").strip()
+            price = c.get("price")
+            if not day or not isinstance(price, (int, float)) or price <= 0:
+                continue
+            rows.append(
+                {
+                    "signal_kind": "demon_pool",
+                    "symbol": c.get("symbol"),
+                    "trade_date": day,
+                    "price": float(price),
+                    "context": {"grade": c.get("grade"), "total": c.get("total")},
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条异常不拖垮
+            logger.warning("决策账本妖股信号组装失败(跳过): %r", exc)
+    if not rows:
+        return 0
+    from src.core.decision_log import record_many_safe
+
+    n = record_many_safe(rows, source="demon_factors")
+    if n:
+        logger.info("决策账本: 妖股因子入池 %s 条已留痕", n)
+    return n
 
 
 def update_pipeline(symbols: list[str] | None = None) -> dict:
-    """15:30 盘后增量管线入口: 增量回填 → 新事件股票因子重算。永不抛异常。"""
+    """15:30 盘后增量管线入口: 增量回填 → 新事件股票因子重算。永不抛异常。
+
+    P2(2026-10-08): 返回体带 ``ok`` 显式错误态 —— TQ 全断时不再只给 events_saved=0
+    而看不出"跑成功了但没数据"还是"TQ 挂了一条没取到"。
+    """
     try:
         names = _stock_names()
         syms = symbols or list(names.keys())
         inc = backfill_incremental(syms, names)
         touched = inc.get("touched") or []
         rec = recompute_factors(touched if touched else None if symbols is None else symbols)
-        out = {"incremental": inc, "factors": rec}
-        logger.info("妖股因子增量管线完成: 事件+%s, 因子更新%s", inc.get("events_saved"), rec.get("updated"))
+        inc_ok = bool(inc.get("ok", True))
+        out = {"incremental": inc, "factors": rec, "ok": inc_ok}
+        if inc_ok:
+            logger.info("妖股因子增量管线完成: 事件+%s, 因子更新%s", inc.get("events_saved"), rec.get("updated"))
+        else:
+            logger.warning(
+                "妖股因子增量管线: TQ 取数失败 %s 只(共 %s), 结果可能不完整",
+                inc.get("failed"), inc.get("stocks"),
+            )
         return out
     except Exception as e:  # noqa: BLE001
         logger.warning("妖股因子增量管线失败: %s", e)
-        return {"error": str(e)}
+        return {"error": str(e), "ok": False}
 
 
 def _stock_names() -> dict[str, str]:

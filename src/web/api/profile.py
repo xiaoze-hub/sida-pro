@@ -307,35 +307,18 @@ def apply_pro(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Pro 申请(2026-09-18 B.1): member 提交升级申请, 落审计等 admin 审核。"""
-    from src.core.permissions import normalize_role
+    """Pro 申请(个人中心入口)。
 
-    role = normalize_role(user.role)
-    if role in ("pro", "owner"):
-        return {"status": "already_pro", "message": "您已是 Pro/管理员, 无需申请"}
-    # 落审计: admin 在审计页可见
-    try:
-        from src.web.api.audit import log_audit
+    2026-10-23 修复: 原实现只写 AuditLog + 站内通知, **不落 ProApplication 表**,
+    导致后台 `GET /api/pro/admin/applications` 永远为空 —— 申请与审核断路。
+    现与 `POST /api/pro/apply` 共用 `pro_billing.submit_application`: 落库 + 通知 owner
+    + 拒重复 pending, 两个入口行为完全等价。
+    """
+    from src.web.api.pro_billing import _app_to_dict, submit_application
 
-        log_audit(db, user, "pro_apply", detail=f"申请理由: {(body.reason or '')[:100]}")
-    except Exception:
-        pass
-    # 通知 admin(站内通知)
-    try:
-        from src.db.models import Notification, User as UserM
-
-        admins = db.query(UserM).filter(UserM.role == "owner", UserM.is_active == True).all()  # noqa: E712
-        for admin in admins:
-            db.add(Notification(
-                user_id=admin.id,
-                title="Pro 升级申请",
-                content=f"用户 {user.username} 申请升级 Pro。理由: {(body.reason or '无')[:100]}",
-                level="info",
-            ))
-        db.commit()
-    except Exception:
-        pass
+    row = submit_application(db, user, reason=body.reason)
     return {
         "status": "pending",
+        "application": _app_to_dict(row),
         "message": "申请已提交, 请等待管理员审核(1-2 个工作日)。",
     }

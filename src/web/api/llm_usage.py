@@ -5,9 +5,12 @@
 """
 
 from datetime import datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+
+from src.web.api.auth import get_current_user
 
 from src.web.database import get_db
 from src.web.models import LLMUsage
@@ -45,11 +48,19 @@ def llm_usage_stats(
     range: str = Query("day", pattern="^(day|7d|30d)$"),
     scene: str = Query("", description="场景筛选: chat/premarket/postmarket/referee/other, 空=全部"),
     db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
 ):
-    """调用统计: 汇总(区间 + 本月)+ 最近 50 条明细。认证由路由级 dependencies 处理。"""
+    """调用统计: 汇总(区间 + 本月)+ 最近 50 条明细。
+
+    2026-10-20: llm_usage 加了 user_id 归因 → 本接口按人隔离。
+    普通用户只看自己的；历史行(user_id IS NULL, 加归因之前产生的)只有 owner/admin 能看到，
+    否则等于把别人的用量摊给所有人看。
+    """
     since = _since_days(range)
 
     q = db.query(LLMUsage).filter(LLMUsage.created_at >= since)
+    if str(getattr(user, "role", "") or "").lower() not in ("owner", "admin"):
+        q = q.filter(LLMUsage.user_id == str(getattr(user, "id", "")))
     if scene:
         q = q.filter(LLMUsage.scene == scene)
     rows = q.order_by(LLMUsage.created_at.desc()).limit(50).all()
@@ -64,6 +75,8 @@ def llm_usage_stats(
     # 本月汇总(全部场景)
     month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     mq = db.query(LLMUsage).filter(LLMUsage.created_at >= month_start)
+    if str(getattr(user, "role", "") or "").lower() not in ("owner", "admin"):
+        mq = mq.filter(LLMUsage.user_id == str(getattr(user, "id", "")))
     if scene:
         mq = mq.filter(LLMUsage.scene == scene)
     mrows = mq.all()

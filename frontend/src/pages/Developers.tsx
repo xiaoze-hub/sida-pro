@@ -93,9 +93,9 @@ const API_GROUPS = [
     title: 'API Key 管理',
     apis: [
       { method: 'GET', path: '/api/keys/my', auth: '登录', desc: '列出我的 API Key' },
-      { method: 'POST', path: '/api/keys/my', auth: '登录', desc: '创建新 Key' },
+      { method: 'POST', path: '/api/keys/my', auth: '登录', desc: '创建新 Key; 可选 body {owner_label, trial}, owner_label 为备注名(留空默认用户名); Pro/Owner 建出的 Key 直接是 pro 档' },
       { method: 'POST', path: '/api/keys/my/{id}/reset', auth: '登录', desc: '重置 Key(旧 Key 立即失效)' },
-      { method: 'DELETE', path: '/api/keys/my/{id}', auth: '登录', desc: '删除 Key(软删)' },
+      { method: 'DELETE', path: '/api/keys/my/{id}', auth: '登录', desc: '删除 Key(软删: status=disabled, 立即失效; 行与用量流水保留供审计)' },
       { method: 'GET', path: '/api/keys/my/{id}/usage', auth: '登录', desc: '查看单 Key 用量' },
     ],
   },
@@ -147,7 +147,7 @@ const API_GROUPS = [
       { method: 'GET', path: '/api/skills/catalog', auth: '公开', desc: 'Skill 目录(含限流配置)' },
       { method: 'GET', path: '/api/skills/install.sh', auth: '公开', desc: '智能体安装脚本' },
       { method: 'GET', path: '/api/skills/config', auth: '登录', desc: '我的 Skill 配置 JSON' },
-      { method: 'POST', path: '/api/skills/{name}/run', auth: 'Key/JWT/游客', desc: '调用 Skill' },
+      { method: 'POST', path: '/api/skills/{name}/run', auth: 'Key/JWT/游客', desc: '调用 Skill; 请求体 {"args": {参数...}, "format": "json"} —— 参数必须放在 args 内' },
     ],
   },
 ]
@@ -161,7 +161,7 @@ const DATA_SOURCES: { name: string; caliber: string; note: string }[] = [
 ]
 
 const TIER_BADGE: Record<string, string> = {
-  free: 'bg-slate-500/10 text-muted-foreground dark:text-slate-400 border-slate-500/20',
+  free: 'bg-slate-500/10 text-muted-foreground border-slate-500/20',
   trial: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
   pro: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
 }
@@ -239,7 +239,8 @@ export default function DevelopersPage() {
       const resp = await fetch(`${window.location.origin}/api/skills/${selectedSkill}/run`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(params),
+        // 后端契约固定为 {"args": {...}, "format": "json"}; 裸传参数会被当成未知顶层字段
+        body: JSON.stringify({ args: params, format: 'json' }),
       })
       const data = await resp.json()
       setRunResult(JSON.stringify(data, null, 2))
@@ -293,9 +294,10 @@ export default function DevelopersPage() {
               code={`curl -X POST "${base}/api/skills/get_stock_quote/run" \\
   -H "X-API-Key: sk_YOUR_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"symbol": "000001"}'`}
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`}
               language="bash"
             />
+            <p className="mt-2 text-[12px] text-muted-foreground">请求体固定为 <code className="font-mono">{'{ "args": {...}, "format": "json" }'}</code>: skill 参数一律放在 args 里。旧版表单式请求体已向后兼容, 但新接入请按此契约传参。</p>
           </InfoCard>
         </div>
       </Section>
@@ -307,13 +309,19 @@ export default function DevelopersPage() {
             {
               title: 'API Key（推荐）',
               desc: '服务端调用首选，通过 X-API-Key 请求头传递',
-              code: `curl -H "X-API-Key: sk_YOUR_KEY" "${base}/api/skills/get_stock_quote/run"`,
+              code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
+  -H "X-API-Key: sk_YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`,
               badge: '推荐',
             },
             {
               title: 'JWT Token',
               desc: '网页端登录后自动携带，与 API Key 共享配额',
-              code: `curl -H "Authorization: Bearer YOUR_JWT" "${base}/api/skills/get_stock_quote/run"`,
+              code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
+  -H "Authorization: Bearer YOUR_JWT" \\
+  -H "Content-Type: application/json" \\
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`,
               badge: '网页',
             },
             {
@@ -321,7 +329,7 @@ export default function DevelopersPage() {
               desc: '无需认证，仅限 free 级 Skill，每 IP 每天 10 次',
               code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
   -H "Content-Type: application/json" \\
-  -d '{"symbol": "000001"}'`,
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`,
               badge: '受限',
             },
           ].map((a, i) => (
@@ -340,7 +348,7 @@ export default function DevelopersPage() {
       {/* ── 限流说明 ── */}
       <Section id="sec-ratelimit" title="限流说明" description="各档位的调用限制" icon={<Gauge className="h-4 w-4" />}>
         {catLoading ? (
-          <div className="flex items-center gap-2 text-[12px] text-muted-foreground dark:text-slate-600">
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载中...
           </div>
         ) : catError ? (
@@ -365,10 +373,10 @@ export default function DevelopersPage() {
               <tbody>
                 {catalog?.guest && (
                   <tr className="border-b border-border/40 dark:border-white/5">
-                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[12px] text-muted-foreground dark:text-slate-400">游客</span></td>
+                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[12px] text-muted-foreground">游客</span></td>
                     <td className="py-2 pr-4 font-mono text-foreground dark:text-white">{catalog.guest.daily_limit}</td>
-                    <td className="py-2 pr-4 font-mono text-muted-foreground dark:text-slate-500">-</td>
-                    <td className="py-2 text-muted-foreground dark:text-slate-500">仅 free 级 Skill，按 IP 限流</td>
+                    <td className="py-2 pr-4 font-mono text-muted-foreground">-</td>
+                    <td className="py-2 text-muted-foreground">仅 free 级 Skill，按 IP 限流</td>
                   </tr>
                 )}
                 {Object.entries(catalog?.tiers ?? {}).map(([tier, limit]) => (
@@ -379,8 +387,8 @@ export default function DevelopersPage() {
                       </span>
                     </td>
                     <td className="py-2 pr-4 font-mono text-foreground dark:text-white">{limit.daily_limit}</td>
-                    <td className="py-2 pr-4 font-mono text-muted-foreground dark:text-slate-500">{limit.burst ?? '-'}</td>
-                    <td className="py-2 text-muted-foreground dark:text-slate-500">
+                    <td className="py-2 pr-4 font-mono text-muted-foreground">{limit.burst ?? '-'}</td>
+                    <td className="py-2 text-muted-foreground">
                       {tier === 'free' && '注册即得，基础配额'}
                       {tier === 'trial' && `试用 ${limit.days ?? 7} 天`}
                       {tier === 'pro' && 'Pro 付费，全量开放'}
@@ -411,7 +419,7 @@ export default function DevelopersPage() {
         icon={<ListTree className="h-4 w-4" />}
       >
         {catLoading ? (
-          <div className="flex items-center gap-2 text-[12px] text-muted-foreground dark:text-slate-600">
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载中...
           </div>
         ) : catError ? (
@@ -463,7 +471,7 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[12px] text-muted-foreground dark:text-slate-400">鉴权方式</Label>
+                <Label className="text-[12px] text-muted-foreground">鉴权方式</Label>
                 <Select value={authMode} onValueChange={(v: any) => setAuthMode(v)}>
                   <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -475,7 +483,7 @@ export default function DevelopersPage() {
               </div>
               {authMode === 'apikey' && (
                 <div>
-                  <Label className="text-[12px] text-muted-foreground dark:text-slate-400">API Key</Label>
+                  <Label className="text-[12px] text-muted-foreground">API Key</Label>
                   <Input
                     type="password"
                     className="mt-1 h-8 font-mono text-[12px]"
@@ -492,7 +500,7 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[12px] text-muted-foreground dark:text-slate-400">选择 Skill</Label>
+                <Label className="text-[12px] text-muted-foreground">选择 Skill</Label>
                 <Select value={selectedSkill} onValueChange={setSelectedSkill}>
                   <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue placeholder="请选择" /></SelectTrigger>
                   <SelectContent>
@@ -504,12 +512,12 @@ export default function DevelopersPage() {
               </div>
               {selected && (
                 <div className="flex items-end">
-                  <p className="text-[12px] text-muted-foreground dark:text-slate-500">{selected.description}</p>
+                  <p className="text-[12px] text-muted-foreground">{selected.description}</p>
                 </div>
               )}
             </div>
             <div className="mt-3">
-              <Label className="text-[12px] text-muted-foreground dark:text-slate-400">参数 (JSON)</Label>
+              <Label className="text-[12px] text-muted-foreground">参数 (JSON)</Label>
               <textarea
                 className="mt-1 h-24 w-full rounded-lg border border-border/60 dark:border-white/10 bg-muted/40 dark:bg-[#0d0d18] p-2.5 font-mono text-[12px] text-foreground dark:text-cyan-100/80 focus:border-primary/40 dark:focus:border-cyan-500/30 focus:outline-none"
                 value={paramsJson}
@@ -618,7 +626,7 @@ export default function DevelopersPage() {
                         {s.caliber}
                       </span>
                     </td>
-                    <td className="py-2 text-muted-foreground dark:text-slate-500">{s.note}</td>
+                    <td className="py-2 text-muted-foreground">{s.note}</td>
                   </tr>
                 ))}
               </tbody>

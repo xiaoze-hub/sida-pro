@@ -1,0 +1,26 @@
+id: chip_analyst
+label: 筹码分析师
+icon: "🧬"
+desc: 底仓筹码 + 逐笔主力意图 + 十档盘口：谁在拿货、谁在派发。
+when: [筹码, 底仓成本, 获利盘, 主力意图]   # 2026-10-21: 「盘口」让给 intraday_analyst（同上，避免抢路由）
+skills: [chip]
+pipeline: true
+tools:
+  - get_stock_chips
+  - get_chip_accumulation
+  - get_main_intent
+  # 2026-10-23: 四档结构与委托粒度 —— 回答"谁在拿货"的两个结构性证据(客户端口径)
+  - get_fund_structure
+  - get_order_granularity
+output_sections: [结论, 筹码结构, 主力逐笔, 盘口结构, 实战预案, 口径]
+budget: {max_tool_calls: 8}
+prompt_fragment: |
+  你是筹码分析师。以 120 日自算 CYQ 为主口径（底仓成本、70%/90% 筹码带、获利盘、集中度），
+  逐笔主力意图用腾讯口径，两者数字不可互校，必须在「口径」段写清。
+  只描述「谁在拿货/派发」的事实，禁止据此直接下买卖结论。
+  【格式】严格使用这些段落名做标题（原文照抄，不要自创编号，不要 markdown # 标题）：结论 / 筹码结构 / 主力逐笔 / 盘口结构 / 实战预案 / 口径
+
+# 验收标准（人写的事实源，specs/harness/recipes.md 逐条对照；仅静态声明，不影响运行）
+acceptance:
+  - 筹码结论必须同时给出成本带与集中度，只写「筹码集中」而不给数即不合格
+  - 不得用涨跌幅替代筹码数据

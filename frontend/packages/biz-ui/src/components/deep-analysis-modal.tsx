@@ -440,7 +440,7 @@ function RunningView({
             <div className="text-[12px] text-muted-foreground">准备中...</div>
           )}
         </div>
-        <div className="text-[10px] text-muted-foreground/70 mt-3 font-mono">
+        <div className="text-[10px] text-muted-foreground mt-3 font-mono">
           trace_id: {traceId.slice(0, 16)}...
         </div>
       </div>
@@ -517,7 +517,7 @@ export function ToolkitDiagnostics({
           {err > 0 && <span className="text-rose-600"> · 错误 {err}</span>}
         </span>
       </summary>
-      <div className="text-[10px] text-muted-foreground/80 mt-2 leading-relaxed">
+      <div className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
         <span className={ACTION_CLS.HIT}>HIT</span>: 用 PanWatch 数据 ·{' '}
         <span className={ACTION_CLS.MISS}>MISS</span>: 命中但 PanWatch 未实现 ·{' '}
         <span className={ACTION_CLS.PASSTHROUGH}>透传</span>: 非 A 股直接走上游 vendor ·{' '}
@@ -536,11 +536,11 @@ export function ToolkitDiagnostics({
                 <span className={`${ACTION_CLS[action] || 'text-muted-foreground'} w-20 shrink-0`}>
                   {action}
                 </span>
-                <span className="text-foreground/80 truncate flex-1 text-left">
+                <span className="text-foreground truncate flex-1 text-left" title={`${h.method} (${h.symbol || '-'})${h.reason ? ` · ${h.reason}` : ''}${h.chars != null ? ` · ${h.chars} 字符` : ''}${h.source ? ` · ${h.source}` : ''}`}>
                   {h.method} ({h.symbol || '-'})
                   {h.reason && <span className="text-muted-foreground"> · {h.reason}</span>}
                   {h.chars != null && <span className="text-muted-foreground"> · {h.chars} 字符</span>}
-                  {h.source && <span className="text-muted-foreground/70"> · {h.source}</span>}
+                  {h.source && <span className="text-muted-foreground"> · {h.source}</span>}
                 </span>
               </div>
             )
@@ -556,7 +556,7 @@ export function ToolkitDiagnostics({
                     <span className={ACTION_CLS[action] || 'text-muted-foreground'}>{action}</span>
                     <span className="text-muted-foreground"> · {h.method}({h.symbol || '-'})</span>
                     {h.source && (
-                      <span className="text-muted-foreground/70"> · {h.source}</span>
+                      <span className="text-muted-foreground"> · {h.source}</span>
                     )}
                   </span>
                 }
@@ -568,10 +568,10 @@ export function ToolkitDiagnostics({
                       </div>
                     )}
                     {h.snippet && (
-                      <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug bg-accent/30 rounded p-2 text-foreground/85 max-h-[60vh] overflow-y-auto">
+                      <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug bg-accent/30 rounded p-2 text-foreground max-h-[60vh] overflow-y-auto">
                         {h.snippet}
                         {h.chars != null && h.chars > h.snippet.length && (
-                          <span className="text-muted-foreground/60">
+                          <span className="text-muted-foreground">
                             {'\n\n'}...(共 {h.chars} 字符,仅展示前 {h.snippet.length})
                           </span>
                         )}
@@ -600,7 +600,7 @@ function StageRow({ stage }: { stage: ProgressStage }) {
       ? 'text-emerald-600 dark:text-emerald-400'
       : stage.status === 'running'
       ? 'text-primary'
-      : 'text-muted-foreground/60'
+      : 'text-muted-foreground'
   return (
     <div className={`flex items-center gap-2 text-[12px] ${cls}`}>
       <span className="w-4">{icon}</span>
@@ -686,7 +686,7 @@ function DoneView({
       )}
 
       {/* 免责声明 */}
-      <div className="text-[10px] text-muted-foreground/70 italic border-t border-border/30 pt-2">
+      <div className="text-[10px] text-muted-foreground italic border-t border-border/30 pt-2">
         本分析由 AI 多 Agent 框架生成,仅供学习研究参考,不构成任何投资建议。
         投资有风险,决策需自主判断。
       </div>

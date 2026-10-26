@@ -304,9 +304,11 @@ def list_error_events(limit: int = Query(50, ge=1, le=200)):
 
     2026-09-08 系统日志: recent_errors 一直没接口, 报错只能翻服务器文件。
     """
-    from src.core.error_tracker import recent_errors
+    from src.core.error_tracker import missed_counts, recent_errors
 
-    return {"items": recent_errors(limit)}
+    # missed_counts: EVENT_JOB_MISSED 不再当异常记(2026-10-22), 但也不能看不见 ——
+    # 它说明"采样频率跟不上/事件循环被堵", 单独作为指标给系统页。
+    return {"items": recent_errors(limit), "scheduler_missed": missed_counts()}
 
 
 @router.post("/frontend")

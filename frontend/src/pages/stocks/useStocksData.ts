@@ -24,6 +24,7 @@ import { parseServerTime } from '@/lib/utils'
 import { stocksApi } from '@panwatch/api'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { usePausedInterval } from '@panwatch/base-ui'
 import type { useStocksState } from './useStocksState'
 import { logger } from '@/lib/logger'
 import { navBackState } from '@/lib/nav-back'
@@ -53,7 +54,6 @@ export function useStocksData(state: ReturnType<typeof useStocksState>) {
     autoRefresh,
     refreshInterval,
     setLastRefreshTime,
-    refreshTimerRef,
     setScanning,
     setPoolSuggestions,
     setPoolSuggestionsLoading,
@@ -203,7 +203,12 @@ const load = useCallback(async () => {
     setExpandedAccounts(new Set(accountData.map((a: Account) => a.id)))
   } catch (e) {
     logger.error(e)
-    setLoadError(e instanceof Error ? e.message : '加载失败')
+    const msg = e instanceof Error ? e.message : '加载失败'
+    if (msg.includes('429')) {
+      logger.warn('页面基础数据刷新触发限流退避，沿用当前状态')
+    } else {
+      setLoadError(msg)
+    }
   } finally {
     setLoading(false)  // 提前解除阻塞
   }
@@ -239,13 +244,20 @@ const loadPortfolio = useCallback(async () => {
     } catch (e) {
       logger.warn('获取市场状态失败:', e)
     }
+    setLoadError(null)
   } catch (e) {
     logger.error(e)
-    setLoadError(e instanceof Error ? e.message : '加载失败')
+    const msg = e instanceof Error ? e.message : '加载失败'
+    // 若仅是 429 限流或网络暂态抖动且已有持仓数据，沿用既有快照，不弹红框
+    if (msg.includes('429') && portfolioRaw) {
+      logger.warn('持仓刷新触发限流退避，保留当前数据')
+    } else {
+      setLoadError(msg)
+    }
   } finally {
     setPortfolioLoading(false)
   }
-}, [setLoadError, setMarketStatus, setPortfolio, setPortfolioLoading, setPortfolioRaw])
+}, [portfolioRaw, setLoadError, setMarketStatus, setPortfolio, setPortfolioLoading, setPortfolioRaw])
 
 const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
   const items: QuoteRequestItem[] = []
@@ -336,10 +348,12 @@ const onQuoteTicks = useCallback((data: QuoteTickMap) => {
 useQuoteStream(onQuoteTicks)
 
 // 刷新 K 线摘要（并发受限的单个请求，避免批量接口慢）；并防止重入
-const refreshKlines = useCallback(async () => {
+const refreshKlines = useCallback(async (only?: Array<{ symbol: string; market?: string }>) => {
   if (klineRefreshInFlight.current) return klineRefreshInFlight.current
   const run = (async () => {
-    const items = buildQuoteItems()
+    // 2026-10-21: 允许只刷指定的几只。原来"补齐缺失"时会全量刷新，只要有一只票持续失败，
+    // 就会每轮把所有标的重新打一遍（线上把单只端点打到 1264 次/分钟，触发 429 图表空白）。
+    const items = only && only.length ? only : buildQuoteItems()
     if (items.length === 0) return
     const limit = 5
     const map: Record<string, KlineSummary> = {}
@@ -351,7 +365,7 @@ const refreshKlines = useCallback(async () => {
         try {
           // v0.4.8.1: summary 冷启动(主力意图逐笔翻页)可到 20-30s, 默认 20s 超时会导致
           // 首轮大面积 abort → 技术徽章全部回落"观望"; 显式放宽到 45s
-          const res = await fetchAPI<{ symbol: string; market: string; summary: KlineSummary }>(`/klines/${encodeURIComponent(it.symbol)}/summary?market=${encodeURIComponent(it.market)}`, { cacheMode: 'reload', timeoutMs: 45000 })
+          const res = await fetchAPI<{ symbol: string; market: string; summary: KlineSummary }>(`/klines/${encodeURIComponent(it.symbol)}/summary?market=${encodeURIComponent(it.market || 'CN')}`, { cacheMode: 'reload', timeoutMs: 45000 })
           if (res && (res as any).summary) {
             map[`${it.market}:${it.symbol}`] = (res as any).summary as KlineSummary
           }
@@ -560,7 +574,8 @@ useEffect(() => {
     const key = `${s.market || 'CN'}:${s.symbol}`
     klineMissingRetryRef.current[key] = now
   }
-  refreshKlines()
+  // 只补缺失的那几只（不再全量重刷），并限制同时最多 8 只，避免又变成风暴
+  void refreshKlines(missing.slice(0, 8))
 }, [stocks, klineSummaries, refreshKlines])
 
 // Agent 配置弹窗：预览未来触发时间（用于自检工作日/周末语义）
@@ -643,30 +658,16 @@ useEffect(() => {
 }, [portfolio, refreshKlines, loadPoolSuggestions])
 
 // Auto-refresh timer
-useEffect(() => {
-  if (autoRefresh) {
-    refreshQuotes()
-    refreshKlines()
-    loadPoolSuggestions()
-    refreshTimerRef.current = setInterval(() => {
-      refreshQuotes()
-      refreshKlines()
-      loadPoolSuggestions()
-    }, refreshInterval * 1000)
-  } else {
-    // Clear interval when disabled
-    if (refreshTimerRef.current) {
-      clearInterval(refreshTimerRef.current)
-      refreshTimerRef.current = undefined
-    }
-  }
-
-  return () => {
-    if (refreshTimerRef.current) {
-      clearInterval(refreshTimerRef.current)
-    }
-  }
-}, [autoRefresh, refreshInterval, refreshQuotes, refreshKlines, loadPoolSuggestions, refreshTimerRef])
+// 页签 keep-alive(2026-10-15): 轮询走 `usePausedInterval` ⇒ **隐藏页签停表**(不发请求), 回前台补一次;
+// 用户关掉自动刷新 ⇒ `delayMs<=0` 停用(原 `else` 分支的"清表"由此承担)。
+const autoRefreshTick = useCallback(() => {
+  refreshQuotes()
+  refreshKlines()
+  loadPoolSuggestions()
+}, [refreshQuotes, refreshKlines, loadPoolSuggestions])
+usePausedInterval(autoRefreshTick, autoRefresh ? refreshInterval * 1000 : 0, {
+  deps: [autoRefresh, refreshInterval],
+})
 
 
   return {

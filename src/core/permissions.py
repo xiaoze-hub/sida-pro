@@ -23,6 +23,8 @@ from typing import Callable
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from src.core.db_safe import safe_rollback
+
 logger = logging.getLogger(__name__)
 
 # ════════════════════════════════════════════════════════════════════
@@ -147,6 +149,26 @@ def effective_trial_limit(db=None) -> int:
         return free_tier.trial_daily_limit(db)
     except Exception:  # noqa: BLE001
         return TRIAL_DAILY_LIMIT
+
+
+def effective_max_sessions(db=None) -> int:
+    """同账号同时在线设备数上限(运行时配置优先, 读不到用默认 2)。"""
+    try:
+        from src.core import free_tier
+
+        return free_tier.max_sessions_per_user(db)
+    except Exception:  # noqa: BLE001 —— 配置层故障不该让登录失败, 回落默认
+        return MAX_SESSIONS_PER_USER
+
+
+def effective_guest_strategy(db=None) -> dict[str, int]:
+    """游客限流策略(运行时配置优先, 读不到用 GUEST_STRATEGY 常量)。"""
+    try:
+        from src.core import free_tier
+
+        return free_tier.guest_strategy(db)
+    except Exception:  # noqa: BLE001
+        return dict(GUEST_STRATEGY)
 
 
 # member 基础权限 = 通用浏览权 - pro 专属 + 热力图 + member 操作权
@@ -311,6 +333,7 @@ def _trial_incr(db: Session, user_id: str, feature: str) -> None:
         ))
         db.commit()
     except Exception as e:  # noqa: BLE001
+        safe_rollback(db)
         logger.debug("trial audit 落库失败: %r", e)
 
 
@@ -365,10 +388,36 @@ def check_alert_quota(db: Session, user) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════
+# 事务自愈(2026-10-23 线上事故)
+# ════════════════════════════════════════════════════════════════════
+def _safe_rollback(db: Session) -> None:
+    """把**已中止的事务**清理掉, 再按 fail-open 返回。
+
+    为什么必须有这一步: PostgreSQL 里任何一条 SQL 报错后, 整个事务进入 aborted
+    状态, 后续语句一律 `InFailedSqlTransaction: current transaction is aborted`。
+    下面这些函数都是「探测失败就放行」的兜底逻辑, 一旦只 `except: pass` 不回滚,
+    一条**本可以忽略**的查询失败就会被放大成「这个请求后面所有查询全部 500」。
+
+    2026-10-23 事故形态: `auth_session_revocations` 表只在「踢设备」写路径懒建,
+    生产从未写过 → 每个鉴权请求的第一条 SELECT 抛 UndefinedTable → 事务中止 →
+    `/api/settings`、`/api/notifications`、`/api/users/admin/list` 等全部 500,
+    表现为「后台/设置/通知的数据都没了」(SQLite 不会中止事务, 所以单测全绿)。
+
+    只吞异常不回滚 = 把局部故障升级成全局故障。任何 fail-open 的 DB 探测都必须
+    走这里。
+    """
+    safe_rollback(db)
+
+
+# ════════════════════════════════════════════════════════════════════
 # 设备限制(同账号同时在线 ≤2)
 # ════════════════════════════════════════════════════════════════════
 def enforce_device_limit(db: Session, user, session_id: str) -> None:
-    """登录时: 超过 2 台踢最早。"""
+    """登录时: 超过上限(默认 2 台, 运行时可调)踢最早。
+
+    B3(2026-09-29): 上限从 `free_tier.max_sessions_per_user(db)` 读(30s 缓存热生效),
+    未配置时回退 `MAX_SESSIONS_PER_USER`(=2) —— 默认行为与收编前一致。
+    """
     try:
         from src.db.models import UserSession
 
@@ -378,41 +427,232 @@ def enforce_device_limit(db: Session, user, session_id: str) -> None:
             .order_by(UserSession.last_seen.asc())
             .all()
         )
-        if len(rows) >= MAX_SESSIONS_PER_USER:
+        limit = effective_max_sessions(db)
+        if len(rows) >= limit:
+            # 上限被调小后可能一次超限多个: 从左(最早)起踢到「未过期会话 == 上限」为止
             to_kick = [r for r in rows if r.session_id != session_id]
-            if to_kick:
-                oldest = to_kick[0]
+            kicked: list = []
+            while len(rows) - len(kicked) > limit and len(kicked) < len(to_kick):
+                oldest = to_kick[len(kicked)]
+                # 2026-10-23: 删行必须同时写墓碑, 否则被踢设备的旧 JWT 仍能用
+                # (鉴权侧对「无会话行」是放行的, 见 session_is_active 第 4 点)。
+                mark_session_revoked(db, oldest.session_id, oldest.expires_at)
                 db.delete(oldest)
+                kicked.append(oldest)
+            if kicked:
                 db.commit()
-                logger.info("设备限制: 踢掉 %s 的会话 %s", user.username, oldest.session_id[:8])
+                logger.info(
+                    "设备限制(上限 %d): 踢掉 %s 的会话 %s",
+                    limit, user.username, kicked[0].session_id[:8],
+                )
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
+        _safe_rollback(db)
         logger.debug("设备限制检查失败: %r", e)
 
 
-def record_session(db: Session, user, session_id: str, expires_at: datetime) -> None:
-    """登录成功后记录会话(设备限制用)。"""
+def record_session(
+    db: Session,
+    user,
+    session_id: str,
+    expires_at: datetime,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    """登录成功后记录会话(设备限制用)。
+
+    P0(2026-10-23): `session_id` 必须是 JWT 的 `jti`(每次签发唯一)。
+    历史实现传 `token[:32]` —— JWT 头部恒定, 全平台同值, 会话表被压成一行,
+    设备上限形同虚设。
+    """
     try:
         from src.db.models import UserSession
 
+        ua = (user_agent or "")[:256] or None
         existing = db.query(UserSession).filter(UserSession.session_id == session_id).first()
         if existing:
             existing.last_seen = datetime.now(timezone.utc)
             existing.expires_at = expires_at
+            existing.ip = (ip or existing.ip) or None
+            existing.user_agent = ua or existing.user_agent
         else:
             db.add(UserSession(
                 session_id=session_id,
                 user_id=user.id,
                 expires_at=expires_at,
                 last_seen=datetime.now(timezone.utc),
+                ip=(ip or None),
+                user_agent=ua,
             ))
         db.commit()
         enforce_device_limit(db, user, session_id)
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
+        _safe_rollback(db)
         logger.debug("记录会话失败: %r", e)
+
+
+def session_is_active(db: Session, session_id: str | None, user_id: str | None = None) -> bool:
+    """会话是否仍存活(未被踢、未过期)。**fail-open** 为本函数的硬约束。
+
+    这是「踢设备」真正生效的关键: 只写会话表而鉴权不查表, 旧 JWT 仍能在
+    剩余有效期(默认 12h)内调所有接口。
+
+    判定顺序:
+      1. 无 session_id(老 token 无 jti / 非 JWT 通道) → 放行。
+      2. 命中吊销墓碑(`auth_session_revocations`) → 拒绝 —— 这是「踢」的
+         唯一确定信号(行已被删且登记了墓碑)。
+      3. 会话行存在且已过期 / 属于他人 → 拒绝。
+      4. 会话行不存在 → **放行**。原因: `create_token` 还有不经会话表的调用方
+         (`src/core/wechat_bot_worker.py` 的机器人 token), 若「无行即拒绝」会
+         把这类合法通道打成 401; 且历史 token(jti 从未落库)也会被全站踢出。
+      5. 表缺失 / 查询抛任何异常 → 放行。绝不因会话表故障导致全站 401。
+    """
+    if not session_id:
+        return True
+    try:
+        from src.db.models import UserSession
+
+        if is_session_revoked(db, session_id):
+            return False
+
+        row = db.query(UserSession).filter(UserSession.session_id == session_id).first()
+        if row is None:
+            return True  # 未登记 ≠ 被踢(见 docstring 第 4 点)
+        if user_id and row.user_id != user_id:
+            return False
+        exp = row.expires_at
+        if exp is not None:
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp <= datetime.now(timezone.utc):
+                return False
+        return True
+    except ImportError:
+        return True
+    except Exception as e:  # noqa: BLE001 - fail-open 是硬约束
+        _safe_rollback(db)
+        logger.warning("[auth] 会话存活校验异常, 按放行处理(fail-open): %r", e)
+        return True
+
+
+# ── 会话吊销墓碑(2026-10-23) ─────────────────────────────────────────
+# 语义: 「踢设备」= 删会话行 + 写墓碑。只删行是不够的 —— 无行的 token 必须
+# 仍能放行(机器人 token / 历史 token 从未登记), 否则鉴权会误杀合法通道;
+# 墓碑把「被主动踢掉」与「从未登记」区分开, 让旧 JWT 立刻 401。
+# 不用 ORM model: `src/db/models.py` 不在本次改动范围, 这里用幂等 DDL 兜底。
+_REVOCATION_DDL = """
+CREATE TABLE IF NOT EXISTS auth_session_revocations (
+    session_id VARCHAR(64) PRIMARY KEY,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP NOT NULL
+)
+"""
+
+
+def is_session_revoked(db: Session, session_id: str | None) -> bool:
+    """该 session 是否已被主动踢下线。墓碑表不可用/查询异常 → False(fail-open)。"""
+    if not session_id:
+        return False
+    try:
+        from sqlalchemy import text
+
+        row = db.execute(
+            text("SELECT 1 FROM auth_session_revocations WHERE session_id = :sid"),
+            {"sid": session_id},
+        ).first()
+        return row is not None
+    except Exception as e:  # noqa: BLE001 - 墓碑不可用不得阻断鉴权
+        # 关键: 表缺失/PG 事务中止时只 return False 会把事务留给下一个查询,
+        # 于是「一张可选表没建」变成「整站 500」。必须先回滚再放行。
+        _safe_rollback(db)
+        logger.debug("[auth] 读取会话墓碑失败(按未吊销处理): %r", e)
+        return False
+
+
+def mark_session_revoked(db: Session, session_id: str, expires_at: datetime) -> None:
+    """登记墓碑(幂等; 不 commit, 由调用方统一提交)。失败仅告警, 不阻断。"""
+    if not session_id:
+        return
+    try:
+        from sqlalchemy import text
+
+        db.execute(text(_REVOCATION_DDL))
+        exp = expires_at
+        if exp is not None and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        # 顺手清理已自然过期的墓碑(token 过期后无需再记)
+        db.execute(
+            text("DELETE FROM auth_session_revocations WHERE expires_at < :now"),
+            {"now": now},
+        )
+        db.execute(
+            text("DELETE FROM auth_session_revocations WHERE session_id = :sid"),
+            {"sid": session_id},
+        )
+        db.execute(
+            text(
+                "INSERT INTO auth_session_revocations (session_id, expires_at, revoked_at) "
+                "VALUES (:sid, :exp, :now)"
+            ),
+            {"sid": session_id, "exp": exp, "now": now},
+        )
+    except Exception as e:  # noqa: BLE001
+        _safe_rollback(db)
+        logger.warning("[auth] 登记会话墓碑失败(该设备踢出可能延迟生效): %r", e)
+
+
+def revoke_session(db: Session, session_id: str) -> bool:
+    """踢掉单个会话: 写墓碑 + 删会话行。返回是否确实删到了行。"""
+    try:
+        from src.db.models import UserSession
+
+        row = db.query(UserSession).filter(UserSession.session_id == session_id).first()
+        if row is None:
+            return False
+        mark_session_revoked(db, session_id, row.expires_at)
+        db.delete(row)
+        db.commit()
+        return True
+    except ImportError:
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[auth] 踢出会话失败: %r", e)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+
+def revoke_other_sessions(db: Session, user_id: str, keep_session_id: str | None) -> int:
+    """踢掉该用户除当前会话外的所有会话, 返回踢掉数量。"""
+    try:
+        from src.db.models import UserSession
+
+        rows = db.query(UserSession).filter(UserSession.user_id == user_id).all()
+        n = 0
+        for row in rows:
+            if keep_session_id and row.session_id == keep_session_id:
+                continue
+            mark_session_revoked(db, row.session_id, row.expires_at)
+            db.delete(row)
+            n += 1
+        if n:
+            db.commit()
+        return n
+    except ImportError:
+        return 0
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[auth] 批量踢出会话失败: %r", e)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
 
 
 # ════════════════════════════════════════════════════════════════════

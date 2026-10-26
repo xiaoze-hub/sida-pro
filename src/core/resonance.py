@@ -11,7 +11,7 @@
 | G信号 | 强势线上 | 流入 | 三指标首次共振 → 机会挖掘 | 向好 |
 | G区间 | 强势线上(较前日翻倍) | 流入(较前日翻倍) | 再次共振 → 持续关注 | 拐点 |
 | G区间 | 强势线上 | 流入 | 3指标平稳 → 关注动态 | 向好 |
-| G区间 | 强势线上 | 流出 | 1个走坏 → 警惕主力出货 | 分歧 |
+| G区间 | 强势线上 | 流出 | 1个走坏 → 警惕资金背离 | 分歧 |
 | G区间 | 跌破强势线 | 流入 | 1个走坏 → 主力还没出 | 分歧 |
 | G区间 | 跌破强势线 | 流出 | 2个走坏 → 警惕 | 分歧 |
 | S信号 | 跌破强势线 | 流出 | 全走坏 → 注意风险 | 走坏 |
@@ -31,7 +31,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-STRONG_LINE = 3.00  # 强势线(活跃度阈值)
+from src.core import thresholds as _thresholds
+
+# 强势线(活跃度阈值)来源: 统一配置层 src.core.thresholds(默认 3.00, 支持 env
+# SIDA_THRESHOLD_STRONG_LINE 覆盖); 决策路径实时读取, 不再硬编码(审计 P1-3)。
 
 # 四态回测基准(官方 2024.10-2025.10)
 BACKTEST = {
@@ -94,7 +97,7 @@ def evaluate_state(
             "note": "缺失: " + "/".join(missing),
         }
 
-    act_ok = activity >= STRONG_LINE
+    act_ok = activity >= _thresholds.strong_line()
     act_double = _is_double(activity, activity_prev)
     fund_in = fund_net > 0
     fund_double = _is_double(fund_net, fund_net_prev)
@@ -119,8 +122,8 @@ def evaluate_state(
                 return _row(2, "再次共振", "拐点", "持续关注机会", bad)
             return _row(3, "平稳", "向好", "关注指标动态", bad)
         if act_ok and not fund_in:
-            # 行4: 1个走坏(资金流出) → 警惕主力出货
-            return _row(4, "1个走坏", "分歧", "警惕-主力出货多注意风险", bad)
+            # 行4: 1个走坏(资金流出) → 警惕资金背离(只陈述可观测事实, 不做"出货"定性)
+            return _row(4, "1个走坏", "分歧", "警惕-资金背离多注意风险", bad)
         if not act_ok and fund_in:
             # 行5: 1个走坏(活跃度跌破) → 主力还没出
             return _row(5, "1个走坏", "分歧", "警惕-主力还没出持续关注", bad)
@@ -168,7 +171,7 @@ _STATE_ACTION_LABEL = {
     1: ("GO", "趋势有望启动, 建议逢低建仓", "bull"),
     2: ("GO", "三指标再次共振, 持续关注机会", "bull"),
     3: ("持有", "三指标平稳, 关注指标动态", "bull"),
-    4: ("警惕", "警惕主力出货, 多注意风险", "warn"),
+    4: ("警惕", "警惕资金背离, 多注意风险", "warn"),
     5: ("警惕", "主力还没出, 持续关注", "warn"),
     6: ("警惕", "两指标走坏, 根据行情减仓", "warn"),
     7: ("STOP", "趋势暂或结束, 建议减仓避险", "bear"),

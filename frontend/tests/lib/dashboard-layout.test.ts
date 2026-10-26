@@ -44,9 +44,10 @@ describe('toggleModule / isHidden', () => {
 
 describe('moveModule 组内排序', () => {
   it('同组与相邻交换', () => {
-    const l = moveModule(defaultLayout(), 'overview', -1) // main: [...,kpi,overview,...] → 与 kpi 换
-    expect(orderIndex(l, 'overview')).toBe(1)
-    expect(orderIndex(l, 'kpi')).toBe(2)
+    // main 组默认序: indices, overview, fundflow, resonance, kpi（2026-10-24 首屏重排后）
+    const l = moveModule(defaultLayout(), 'resonance', -1) // 与 fundflow 换
+    expect(orderIndex(l, 'resonance')).toBe(2)
+    expect(orderIndex(l, 'fundflow')).toBe(3)
   })
 
   it('组内边界 no-op(上移首个/下移末个)', () => {
@@ -57,7 +58,8 @@ describe('moveModule 组内排序', () => {
 
   it('不跨组(main 末项下移是 no-op, 即使配置序下一个是 duo 的首个)', () => {
     const l0 = defaultLayout()
-    const l1 = moveModule(l0, 'resonance', 1)
+    // KPI 带排在 main 组末位（与结论行重复，放最后做对照）
+    const l1 = moveModule(l0, 'kpi', 1)
     expect(l1.order).toEqual(l0.order)
   })
 

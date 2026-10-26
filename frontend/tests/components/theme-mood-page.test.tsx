@@ -66,7 +66,9 @@ describe('ThemeMood 页面', () => {
     expect(screen.getByText('8月')).toBeTruthy()
     expect(screen.getByText('9月')).toBeTruthy()
     expect(screen.getByText('8/31')).toBeTruthy()
-    expect(screen.getByText('9/1')).toBeTruthy()
+    // 轴 = 最新在左(2026-09-26): 最左列(最新)按跨月/首列显示 M/D, 所以是 9/11 而不是 9/1
+    expect(screen.getByText('9/11')).toBeTruthy()
+    expect(screen.getByText('1')).toBeTruthy()
     // 某概念只有 20260911 一天 → 其余三列渲染 '--' 占位
     expect(screen.getAllByText('--').length).toBeGreaterThanOrEqual(3)
   })
@@ -81,7 +83,8 @@ describe('ThemeMood 页面', () => {
     const charts = () => container.querySelectorAll('svg[role="img"]')
     expect(charts()).toHaveLength(1)
     expect(charts()[0].querySelectorAll('polyline')).toHaveLength(1)
-    expect(charts()[0].querySelector('polyline')?.getAttribute('points')).toBe('19,35.5 59,6 99,40 139,35')
+    // 轴翻转(最新在左)后 4 个点为镜像序
+    expect(charts()[0].querySelector('polyline')?.getAttribute('points')).toBe('19,35 59,40 99,6 139,35.5')
     expect(charts()[0].querySelectorAll('path')).toHaveLength(1)
   })
 
@@ -95,7 +98,7 @@ describe('ThemeMood 页面', () => {
     expect(screen.getByText('最高 78.2 · 最低 58.0 · 最新', { exact: false })).toBeTruthy()
     const polys = container.querySelectorAll('svg[role="img"] polyline')
     expect(polys).toHaveLength(2)
-    expect(polys[1].getAttribute('points')).toBe('19,62 59,45.4 99,17.4 139,6')
+    expect(polys[1].getAttribute('points')).toBe('19,6 59,17.4 99,45.4 139,62')
   })
 
   // 2026-09-14 走查缺陷: 轮动行紧贴日期表头 + 只有 10px 小字 ⇒ 读起来像表头的一部分;
@@ -130,7 +133,7 @@ describe('ThemeMood 页面', () => {
     })
   })
 
-  it('时间轴加载后默认滚到最新一端', async () => {
+  it('时间轴加载后默认滚到最新一端(最新在左 => 滚到 0)', async () => {
     const proto = HTMLElement.prototype
     const origW = Object.getOwnPropertyDescriptor(proto, 'scrollWidth')
     const origL = Object.getOwnPropertyDescriptor(proto, 'scrollLeft')
@@ -147,7 +150,9 @@ describe('ThemeMood 页面', () => {
       mocks.fetchAPI.mockResolvedValue(RESP)
       render(<ThemeMoodPage />)
       await screen.findAllByText('元件')
-      expect(writes).toContain(800)
+      // 2026-09-26: 轴改为最新在左, 故滚到 0(原为 scrollWidth=800)
+      expect(writes.length).toBeGreaterThan(0)   // 真的滚过
+      expect(Array.from(new Set(writes))).toEqual([0])
     } finally {
       if (origW) Object.defineProperty(proto, 'scrollWidth', origW)
       if (origL) Object.defineProperty(proto, 'scrollLeft', origL)

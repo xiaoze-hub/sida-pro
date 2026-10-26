@@ -1,9 +1,16 @@
 """报告中心 API: 列出/读取 Hermes cron 输出报告。
 
 数据源: ~/.hermes/cron/output/<job_id>/*.md
+
+性能(2026-10-11): /list 曾被首页每 30s 轮询, 原实现对全目录**每个** .md 都
+f.stat() + 逐行读标题(**先排序截断在后**, limit 不减扫描量), 无缓存, 生产实测
+30-45s 渲染。修法: 先 stat 全量→按 mtime 倒序→只读命中前 limit 项的标题;
+外加 mtime 签名 + TTL 缓存(新报告落盘即失效);保留期清理见
+scripts/cleanup_cron_outputs.py。
 """
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -70,6 +77,55 @@ def _strip_meta(content: str) -> str:
     return "\n".join(lines[body_start:])
 
 
+def _extract_title(raw: str) -> str:
+    """从 cron 原始报告取**真标题**(剥掉元信息噪音后的第一个一级标题)。
+
+    旧实现直接取原始首行 → 446/457 文件恒显 `# Cron Job: 任务名` 噪音(首行是
+    元信息头而非正文标题)。这里复用 _strip_meta 先剥噪, 再取正文首个 `# x`;
+    仍撞到 `# Cron Job:` 头则跳过继续找(兼容无 `## Response` 锚点的旧格式)。
+    """
+    body = _strip_meta(raw)
+    for line in body.splitlines():
+        s = line.strip()
+        if s.startswith("# ") and not s.startswith("## "):
+            title = s[2:].strip()
+            if title.lower().startswith("cron job"):
+                continue  # 元信息噪音头, 继续找真标题
+            return title[:80]
+    return ""
+
+
+# ── /list 缓存(2026-10-11) ────────────────────────────────────────────
+# 首页每 30s 轮询 /api/reports; 全量扫 457 文件的开销不该每轮重付。
+# 缓存键=(job_id, limit); 命中条件=未过 TTL **且** job 目录 mtime 签名未变。
+_CACHE_TTL_SECONDS = 30.0
+_CACHE: dict[tuple, tuple[float, tuple, dict]] = {}
+
+
+def _dir_signature() -> tuple:
+    """job 目录集 + 各自 mtime_ns 的轻量签名(只 stat 目录, 不碰文件)。
+
+    新报告落盘会改所在 job 目录的 mtime → 签名变化 → 缓存立即失效,
+    不必等 TTL 过期; 无新增时 TTL 内直接命中(避免重扫)。
+    """
+    try:
+        sig = []
+        for d in CRON_OUTPUT_DIR.iterdir():
+            if not d.is_dir():
+                continue
+            try:
+                sig.append((d.name, d.stat().st_mtime_ns))
+            except OSError:
+                continue
+        return tuple(sorted(sig))
+    except OSError:
+        return ()
+
+
+def _clear_cache() -> None:
+    """清空 /list 缓存(测试隔离用)。"""
+    _CACHE.clear()
+
 
 def _job_name_map() -> dict:
     """job_id → 人类可读任务名(从 jobs.json 读)。"""
@@ -93,12 +149,22 @@ async def list_reports(
 
     按 job_id 分组,每组按 mtime 倒序(最新在前)。
     返回: [{ job_id, job_name, file, size, mtime, title_preview }, ...]
+
+    性能: 先只 stat 全量 → mtime 倒序 → **只读命中前 limit 项**的标题
+    (旧实现对全部文件逐个读标题, limit 不减扫描量); 结果按 (job_id, limit)
+    缓存, TTL 内且 job 目录 mtime 签名未变直接命中。
     """
     if not CRON_OUTPUT_DIR.exists():
         return {"items": [], "total": 0, "jobs": []}
 
+    key = (job_id or "*", limit)
+    sig = _dir_signature()
+    cached = _CACHE.get(key)
+    if cached is not None and cached[0] > time.monotonic() and cached[1] == sig:
+        return cached[2]
+
     name_map = _job_name_map()
-    items = []
+    found: list[tuple] = []  # (mtime, size, path, jid)
     jobs_seen = set()
 
     for job_dir in sorted(CRON_OUTPUT_DIR.iterdir()):
@@ -116,32 +182,31 @@ async def list_reports(
                 stat = f.stat()
             except OSError:
                 continue
-            # 提取 md 标题(第一行非空 # 开头)
-            title_preview = ""
-            try:
-                with f.open("r", encoding="utf-8", errors="ignore") as fp:
-                    for line in fp:
-                        line = line.strip()
-                        if line.startswith("# "):
-                            title_preview = line[2:].strip()[:80]
-                            break
-            except Exception:
-                pass
-            items.append({
-                "job_id": jid,
-                "job_name": name_map.get(jid, jid),
-                "file": f.name,
-                "size": stat.st_size,
-                "mtime": int(stat.st_mtime),
-                "mtime_iso": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                "title_preview": title_preview,
-            })
+            found.append((stat.st_mtime, stat.st_size, f, jid))
 
-    # 按 mtime 倒序
-    items.sort(key=lambda x: x["mtime"], reverse=True)
-    items = items[:limit]
+    # 先排序取前 limit, 再只读命中项标题(limit 直接决定读取量)
+    found.sort(key=lambda x: x[0], reverse=True)
+    found = found[:limit]
 
-    return {
+    items = []
+    for mtime, size, f, jid in found:
+        title_preview = ""
+        try:
+            raw = f.read_text(encoding="utf-8", errors="ignore")
+            title_preview = _extract_title(raw)
+        except Exception:
+            pass
+        items.append({
+            "job_id": jid,
+            "job_name": name_map.get(jid, jid),
+            "file": f.name,
+            "size": size,
+            "mtime": int(mtime),
+            "mtime_iso": datetime.fromtimestamp(mtime).isoformat(),
+            "title_preview": title_preview,
+        })
+
+    payload = {
         "items": items,
         "total": len(items),
         "jobs": [
@@ -149,6 +214,8 @@ async def list_reports(
             for j in sorted(jobs_seen)
         ],
     }
+    _CACHE[key] = (time.monotonic() + _CACHE_TTL_SECONDS, sig, payload)
+    return payload
 
 
 @router.get("/content")
@@ -174,6 +241,15 @@ async def get_report_content(
 
     content = _strip_meta(raw)
     return {"job_id": job_id, "file": file, "content": content}
+
+
+@router.get("/broker/{symbol}")
+def get_broker_research_reports(symbol: str, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=50)):
+    """获取东方财富机构券商研报列表。"""
+    from src.collectors.eastmoney_research import fetch_eastmoney_research_reports
+
+    data = fetch_eastmoney_research_reports(symbol, page=page, page_size=page_size)
+    return {"code": 0, "success": True, "data": data}
 
 
 # 2026-08-18: 根路径 alias (前端 fetch /api/reports 直接转发到 /list)

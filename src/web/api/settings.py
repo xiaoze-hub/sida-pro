@@ -36,7 +36,12 @@ def get_app_version() -> str:
 
 
 class SettingUpdate(BaseModel):
+    # value 仍为必填: /settings/avatar 也复用本模型, 收空 body 就等于清头像,
+    # 不能让"少传字段"变成数据删除。
     value: str
+    # 2026-10-23 P0(走查 W-3): 敏感键的"清除"必须显式声明 —— 裸空值一律 400,
+    # 防止前端把未填写误当清空, 把已配置的 token 抹掉。
+    clear: bool = False
 
 
 class SettingResponse(BaseModel):
@@ -72,9 +77,39 @@ SETTING_DESCRIPTIONS = {
 }
 
 # 敏感 key:列表接口不回显完整值,只返回是否已配置
-# 安全审计 2026-09-15: http_proxy 可含内网凭证, ths_username 为账号标识, 一并掩码
-SECRET_SETTING_KEYS = {"wudao_mcp_token", "zhitu_token", "tdx_api_key", "ths_password", "ths_sdk_password", "http_proxy", "ths_username"}
+# 安全审计 2026-09-15: ths_username 为账号标识, 一并掩码
+# P0(走查 2026-10-23 W-2): http_proxy 移出敏感集合 —— 代理地址不是凭证, 掩码它只会让
+# 系统设置区预填 "********", 用户改不动也存不进(掩码拒写), 是个死路; 代理若含
+# userinfo(user:pass@)请在部署侧 env / 网关维护, 不放设置页。
+SECRET_SETTING_KEYS = {
+    "wudao_mcp_token",
+    "zhitu_token",
+    "tdx_api_key",
+    "ths_password",
+    "ths_sdk_password",
+    "ths_username",
+}
 SECRET_MASK = "********"
+# 掩码占位可能出现过的字符(半角/全角星号、中点、圆点)
+SECRET_MASK_CHARS = frozenset("*＊•·")
+
+
+def is_mask_placeholder(value) -> bool:
+    """判定一个值是否只是掩码占位(而非真凭证)。前后端共用同一判据。
+
+    P0(走查 2026-10-23 W-3): 旧判据是 ``(value or "") == SECRET_MASK`` 精确相等,
+    在掩码后多敲一个空格(" ******** ")、或把星号敲成 "·", 就能绕过拦截,
+    结果是**字面掩码被写进 DB 覆盖真 token**: 之后 zhitu/wudao 静默失效,
+    而设置页仍显示"已配置"(它判的就是 value == 掩码), 故障极难归因。
+
+    现按**形状**判定: strip 掉两侧空白后, 长度 ≥6 且只由掩码字符构成。
+    """
+    if value is None:
+        return False
+    v = str(value).strip()
+    if len(v) < 6:
+        return False
+    return all(ch in SECRET_MASK_CHARS for ch in v)
 
 SETTING_KEYS = list(SETTING_DESCRIPTIONS.keys())
 
@@ -221,7 +256,7 @@ def set_avatar(update: SettingUpdate, db: Session = Depends(get_db)):
     return {"value": fname}
 
 
-@router.put("/{key}", response_model=SettingResponse)
+@router.put("/{key}")
 def update_setting(
     key: str,
     update: SettingUpdate,
@@ -250,17 +285,28 @@ def update_setting(
         raise HTTPException(400, f"未知设置键: {key}")
     if key in ("jwt_secret", "allow_register"):
         raise HTTPException(403, "系统保留键, 拒绝直写")
-    # P1-7: 掩码值拒收兜底, 防前端把 "********" 写回毁凭证
-    if key in SECRET_SETTING_KEYS and (update.value or "") == SECRET_MASK:
-        raise HTTPException(400, "敏感值未变更(掩码占位), 拒绝写入")
+    # P0-①(走查 2026-10-23 W-3): 掩码值拒收。按**形状**判定而不是精确相等 ——
+    # " ******** " / "*********" / "········" 一律拦下, 否则字面掩码会覆盖真凭证。
+    raw_value = update.value or ""
+    value_to_store = raw_value
+    if key in SECRET_SETTING_KEYS:
+        if is_mask_placeholder(raw_value):
+            raise HTTPException(400, "敏感值未变更(掩码占位), 拒绝写入")
+        stripped = raw_value.strip()
+        if not stripped and not update.clear:
+            # 空值写入会让"已配置"变成"未配置"且无提示; 清除必须显式 clear=true
+            raise HTTPException(400, "敏感值不能为空(如需清除请显式传 clear=true)")
+        # 凭证两侧空白一律去掉: 带尾随空格/换行的 token 会静默失效
+        value_to_store = "" if update.clear else stripped
+
     setting = db.query(AppSettings).filter(AppSettings.key == key).first()
     old_value = (setting.value if setting else "") or ""
     if not setting:
         desc = SETTING_DESCRIPTIONS.get(key, "")
-        setting = AppSettings(key=key, value=update.value, description=desc)
+        setting = AppSettings(key=key, value=value_to_store, description=desc)
         db.add(setting)
     else:
-        setting.value = update.value
+        setting.value = value_to_store
 
     db.commit()
     db.refresh(setting)
@@ -277,7 +323,7 @@ def update_setting(
 
             log_audit(
                 db, user, f"settings_update:{key}",
-                detail=f"改前={_mask(old_value)!r} 改后={_mask(update.value or '')!r}",
+                detail=f"改前={_mask(old_value)!r} 改后={_mask(value_to_store)!r}",
             )
         except Exception:
             pass
@@ -290,7 +336,13 @@ def update_setting(
         except Exception:
             pass
 
-    return setting
+    # P0-②(走查 2026-10-23 W-4): 敏感键的响应体不回吐任何明文 ——
+    # 只回 {key, updated, masked}。原实现直接 return ORM 对象, 刚写入的明文会出现在
+    # 响应体 / DevTools Network / 任何请求日志里, 与 list_settings 的掩码策略自相矛盾。
+    if key in SECRET_SETTING_KEYS:
+        return {"key": key, "updated": True, "masked": SECRET_MASK}
+
+    return SettingResponse(key=setting.key, value=setting.value, description=setting.description)
 
 
 @router.get("/version")

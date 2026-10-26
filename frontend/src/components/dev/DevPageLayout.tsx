@@ -53,7 +53,7 @@ export function DevPageLayout({
         <div className="flex items-center gap-4 px-4 py-4 md:px-8">
           {/* 移动端菜单按钮 */}
           <button
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white md:hidden"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-white/5 dark:hover:text-white md:hidden"
             onClick={() => setSidebarOpen(!sidebarOpen)}
           >
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -67,7 +67,7 @@ export function DevPageLayout({
                 </span>
               )}
             </div>
-            <p className="mt-0.5 text-[12px] text-muted-foreground dark:text-slate-500">{subtitle}</p>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">{subtitle}</p>
           </div>
           {headerExtra}
         </div>
@@ -93,7 +93,7 @@ export function DevPageLayout({
                       'flex items-center gap-2.5 rounded-lg px-3 py-2 text-[12px] transition-colors',
                       isActive
                         ? 'bg-primary/10 text-primary font-medium dark:bg-cyan-500/10 dark:text-cyan-300'
-                        : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white'
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-white/5 dark:hover:text-white'
                     )}
                     onClick={() => setSidebarOpen(false)}
                   >
@@ -109,7 +109,7 @@ export function DevPageLayout({
                     'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] transition-colors',
                     isActive
                       ? 'bg-primary/10 text-primary font-medium dark:bg-cyan-500/10 dark:text-cyan-300'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:hover:bg-white/5 dark:hover:text-white'
                   )}
                   onClick={() => handleClick(item)}
                 >
@@ -159,7 +159,7 @@ export function Section({
             {icon && <span className="text-primary dark:text-cyan-400">{icon}</span>}
             <h2 className="text-[16px] font-semibold text-foreground dark:text-white">{title}</h2>
           </div>
-          {description && <p className="mt-1 text-[12px] text-muted-foreground dark:text-slate-500">{description}</p>}
+          {description && <p className="mt-1 text-[12px] text-muted-foreground">{description}</p>}
         </div>
         {action}
       </div>
@@ -189,15 +189,15 @@ export function CodeBlock({ code, language = 'bash', onCopy }: { code: string; l
   return (
     <div className="group relative rounded-lg border border-border/50 dark:border-white/5 bg-muted/40 dark:bg-[#0d0d18]">
       <div className="flex items-center justify-between border-b border-border/40 dark:border-white/5 px-3 py-1.5">
-        <span className="font-mono text-[10px] text-muted-foreground/70 dark:text-slate-600">{language}</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{language}</span>
         <button
-          className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-primary dark:text-slate-500 dark:hover:text-cyan-400"
+          className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-primary dark:hover:text-cyan-400"
           onClick={handleCopy}
         >
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-foreground/90 dark:text-cyan-100/80">
+      <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-foreground dark:text-cyan-100/80">
         {code}
       </pre>
     </div>

@@ -4,6 +4,10 @@
 
 - AI机构活跃度: 零调参纯K线波动探测器。源码 7 因子 MAX × 1.2, 阈值 1.56/3/6。
 - GS策略: BB0 慢线(MA3/7/13/27 均值) + A0 快线((H+L+2O+6C)/10) 交叉 → G买/S卖。
+  ⚠️ 面板/推送/共振的**GS 区间**不在本模块判定 —— 统一走 `src/core/gs_state.py`
+  (只消费 `gs_strategy.compute_gs_signals` 的**已确认**信号, 与 K 线图层逐字一致)。
+  本模块的 `compute_gs_signal`/`compute_gs_windows` 是**低层内核**(供 `gs_strategy`
+  复用), 其 `state` 是原始 a0/bb0 方向, **不是**官方 G/S 区间(会吃末根盘中价而抢跑)。
 - L2 主力净流入(明盘口径, 非暗盘): TQ get_more_info.Zjl_HB 成品字段 = 同花顺"主力净额"——按单笔成交金额阈值(特大/大/中/小)汇总的**明盘资金流向**,不包含拆单识别。要做真正的暗盘请用 dark_flow(腾讯逐笔 + .tck 委托号拆单识别)。
 
 盘中实时: 日线走 TQ(get_market_data period=1d 含当日), L2 走 TQ get_more_info。
@@ -16,9 +20,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ── AI 机构活跃度阈值(同花顺官方, 零调参) ──────────────────────────────
-LIFE_LINE = 1.56      # 生命线 = 1.3% × 1.2
-STRONG_LINE = 3.0     # 强势线 = 2.5% × 1.2
-BULL_LINE = 6.0       # 大牛线 = 5% × 1.2
+# 实际生效值统一走 `src.core.thresholds` 配置层(env `SIDA_THRESHOLD_*` 可覆盖);
+# 下列常量仅为**默认值镜像**(向后兼容: 他处 import LIFE_LINE 做比较), 判定时不再直用。
+# 2026-10-11 P2: 原先本模块直用硬编码常量, env 对其无效 → 与 ai_activity(已走配置层)
+# 档位不一致。现与 ai_activity 同源读配置层, 两处 level 恒一致。
+LIFE_LINE = 1.56      # 生命线默认 = 1.3% × 1.2
+STRONG_LINE = 3.0     # 强势线默认 = 2.5% × 1.2
+BULL_LINE = 6.0       # 大牛线默认 = 5% × 1.2
 ACTIVITY_MULT = 1.2   # 波动放大系数(源码写死)
 
 
@@ -77,12 +85,19 @@ def compute_institution_activity(bars: list[dict]) -> dict | None:
     if cur is None:
         return None
 
+    # 阈值实时读统一配置层(env SIDA_THRESHOLD_* 可覆盖) —— 与 ai_activity 同源, 档位一致
+    from src.core import thresholds as _thresholds
+
+    life = _thresholds.life_line()
+    strong = _thresholds.strong_line()
+    bull = _thresholds.bull_line()
+
     # level
-    if cur >= BULL_LINE:
+    if cur >= bull:
         level = "大牛"
-    elif cur >= STRONG_LINE:
+    elif cur >= strong:
         level = "强势"
-    elif cur >= LIFE_LINE:
+    elif cur >= life:
         level = "生命"
     else:
         level = "弱"
@@ -90,7 +105,7 @@ def compute_institution_activity(bars: list[dict]) -> dict | None:
     # 连强天数(活跃度 > 生命线 连续日数, 含当日)
     streak = 0
     for a in reversed(acts):
-        if a is not None and a > LIFE_LINE:
+        if a is not None and a > life:
             streak += 1
         else:
             break
@@ -104,9 +119,9 @@ def compute_institution_activity(bars: list[dict]) -> dict | None:
     return {
         "activity": round(cur, 3),
         "level": level,
-        "life_line": LIFE_LINE,
-        "strong_line": STRONG_LINE,
-        "bull_line": BULL_LINE,
+        "life_line": life,
+        "strong_line": strong,
+        "bull_line": bull,
         "streak_days": streak,
         "ma5": ma5,
         "is_yang": c >= o,
@@ -127,7 +142,11 @@ def _sma(vals: list[float], n: int) -> float | None:
 
 
 def compute_gs_signal(bars: list[dict]) -> dict | None:
-    """GS 策略(仿编版 + 自建结构, 未校准近似)。
+    """GS 策略**低层内核**(BB0/A0 交叉; 供 `gs_strategy` 复用, 勿直接做面板口径)。
+
+    ⚠️ 面板/推送/共振的 GS 区间请用 `src/core/gs_state.py::resolve_gs_state` —— 见本文件头。
+    此处 `state` 只是**原始** a0/bb0 方向(吃末根盘中价, 末根疑似交叉即翻面),
+    **不是**官方「G区/S区」(官方非函数指标要等 confirmed)。
 
     BB0 = (MA3 + MA7 + MA13 + MA27) / 4  慢线(趋势)
     A0  = (H + L + 2O + 6C) / 10          快线(收盘 60% 权重)
@@ -135,7 +154,7 @@ def compute_gs_signal(bars: list[dict]) -> dict | None:
 
     返回: {signal, state, bb0, a0, last_cross}
     - signal: 最近一次交叉方向 "G"(买) / "S"(卖) / None(无交叉)
-    - state: 当前 "G区"(a0>bb0) / "S区"(a0<bb0)
+    - state: **低层**当前方向 "G区"(a0>bb0) / "S区"(a0<bb0)
     数据不足(bar<27)返回 None。
     """
     if not bars or len(bars) < 5:
@@ -195,6 +214,10 @@ def compute_gs_windows(bars: list[dict], windows: tuple[int, ...] = (1, 3, 5)) -
 
     对 A0−BB0 差值序列, 给每个窗口统计: 窗口内 0 轴穿越次数、窗口累计差值、窗口末方向;
     并给出最近一次 0 轴穿越的方向与距今天数(0 = 最后一根)。
+
+    ⚠️ 返回体里的 `state` 是**原始 0 轴方向**(dif 符号), **不是**官方 G/S 区间 ——
+    面板/推送的区间请用 `src/core/gs_state.py::resolve_gs_state`(与 K 线图层同源)。
+    本字段保留仅作低层对照(无已确认语义, 会吃末根盘中价)。
     """
     if not bars or len(bars) < 5:
         return None
@@ -329,14 +352,51 @@ def _fallback_bars(symbol: str, market: str, days: int) -> list[dict]:
     return []
 
 
-def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
-    """盘中实时日K(走 marketdata Engine, TQ 优先, 含当日)。
+# ── 读库优先参数(与 src/web/api/klines.py::_pg_klines 同口径) ──────────────
+#: PG 命中需达到的最少根数; 低于此视作「空窗」→ 回落联网拿完整历史(避免库里只有
+#: 三五根就把历史截断, 让 GS(需≥27)等消费方算不出)。
+_PG_MIN_BARS = 30
+#: PG 最新 bar 距今允许的最大滞后(天): 超过视为陈旧网关快照 → 全量联网
+#: (与 get_klines 的 12 天陈旧策略一致, 覆盖春节级长假)。
+_MAX_PG_LAG_DAYS = 12
+#: 「仅最新 bar 联网」时向原联网通道请求的小窗口(足够覆盖周末/短假缺口)。
+_LIVE_TAIL_DAYS = 5
+#: 自然日 → bar 数换算系数(交易日 ≈ 0.68×自然日); 读库窗口放大 + 缓冲后截取末 days 根,
+#: 保持与联网同口径的「长度语义」。
+_PG_LOOKBACK_FACTOR = 1.6
 
-    两级取数(2026-09-02 修):
-      1. marketdata Engine: 按 DB 配置的 priority 主备取数(尊重线上数据源编排)
-      2. Engine 返回空/异常 → `_fallback_bars()` 直连 东财 → 新浪 → 腾讯
 
-    仍全挂才返回 [](调用方按"无数据"显式处理, 禁止编造)。
+def _pg_daily_bars(symbol: str, market: str, days: int) -> list[dict]:
+    """PG klines hypertable 读前复权日K(升序, 单位=**股**)。库/表缺失/非 CN → [](fail-soft)。
+
+    与 `src/web/api/klines.py::_pg_klines` 同一张表/同过滤条件
+    (`period='1d'` / `source='tencent'` / `adjust='qfq'`), 但走**仓储层**
+    `src/db/klines_repo.load_qfq_bars` —— core 不 import src.web(分层约束)。
+
+    `days` 是「要几根 bar」: 按自然日放大窗口读库后截取**末 days 根**, 使返回序列
+    在条数语义上与联网路径一致(联网也是返回最近 days 根)。
+    """
+    if (market or "CN").upper() != "CN":
+        return []
+    try:
+        from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
+    except Exception as e:  # noqa: BLE001 仓储层不可用 → 无从读库
+        logger.debug("fetch_bars 读库不可用(仓储层导入失败): %s", e)
+        return []
+    n = max(int(days or 60), 1)
+    lookback = int(n * _PG_LOOKBACK_FACTOR) + 10
+    try:
+        bars = load_qfq_bars(symbol, market, days=lookback) or []
+    except Exception as e:  # noqa: BLE001 查库失败 → 视为空窗(回落联网)
+        logger.warning("fetch_bars %s 读库失败, 回落联网: %s", symbol, e)
+        return []
+    return bars[-n:]
+
+
+def _network_bars(symbol: str, market: str, days: int) -> list[dict]:
+    """原两级联网取数: marketdata Engine(TQ 优先, 含当日) → `_fallback_bars` 直连兜底。
+
+    读库未命中/仅缺当日时, 当日/最新 bar 仍走本通道(单位: 日线 volume=股)。
     """
     from src.core.marketdata_client import get_market_data
 
@@ -344,10 +404,54 @@ def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
         bars = _bars_to_dicts(get_market_data().klines(symbol, market=market, days=days))
         if bars:
             return bars
-        logger.warning("fetch_bars %s 主链路返回空, 转直连兜底", symbol)
+        logger.warning("fetch_bars %s 联网主链路返回空, 转直连兜底", symbol)
     except Exception as e:  # noqa: BLE001
-        logger.warning("decision_pioneer fetch_bars %s 主链路失败: %s, 转直连兜底", symbol, e)
+        logger.warning("fetch_bars %s 联网主链路失败: %s, 转直连兜底", symbol, e)
     return _fallback_bars(symbol, market, days)
+
+
+def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
+    """日K取数(**读库优先**, AGENTS『K线读取走 PG hypertable 优先(get_klines())』)。
+
+    数智决策面板/工作台/聚宝盆/共振此前**每次全程联网现拉**(东财/新浪/腾讯直连), 与
+    已落库的 PG `klines` hypertable 脱节。现改为:
+
+      1. **历史日K 读库**: `_pg_daily_bars`(PG `klines` period='1d'/source='tencent'/
+         adjust='qfq', 单位=股, 与 `get_klines()` 同源)→ 命中且够厚(≥min(30,days))
+         且不陈旧(滞后 ≤ 12 天)时作为**基底**。
+      2. **仅当日/最新 bar 走原联网通道**: 库里未含今日时, 只向 `_network_bars`
+         (Engine TQ 优先 → 直连兜底)要**小窗口**, 取日期晚于库末根的 bar 追加
+         (覆盖周末/短假缺口)。库里**已含今日 → 零联网**直接返回。
+      3. **显式回落/标缺**: PG 空窗/过薄/陈旧 → 全量联网(改造前原路径); 联网失败
+         → 回库(序列止于末根日期, 显式缺当日, **不编造**)。
+
+    返回格式/长度语义与改造前**逐字段一致**: 单 bar =
+    `{date, open, high, low, close, volume}`, 日线 volume=**股**。消费方(gs_strategy
+    消费链/共振/聚宝盆/niuxiong/trend_pilot)无需改动。
+    """
+    n = max(int(days or 60), 1)
+    pg = _pg_daily_bars(symbol, market, n)
+    if len(pg) >= min(_PG_MIN_BARS, n):
+        from datetime import date as _date
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _TZ
+
+        today = _dt.now(_TZ("Asia/Shanghai")).date().isoformat()
+        last = str(pg[-1].get("date") or "")[:10]
+        if last >= today:
+            return pg  # 库里已含今日 → 零联网
+        try:
+            lag = (_date.fromisoformat(today) - _date.fromisoformat(last)).days
+        except ValueError:
+            lag = _MAX_PG_LAG_DAYS + 1
+        if lag <= _MAX_PG_LAG_DAYS:
+            live = _network_bars(symbol, market, min(n, _LIVE_TAIL_DAYS))
+            extra = [b for b in live if str(b.get("date") or "")[:10] > last]
+            # 无更新 bar(非交易日/盘前) → 回库基底, 不编造当日
+            return pg + extra if extra else pg
+        logger.info("fetch_bars %s PG 滞后 %d 天(> %d), 回落全量联网", symbol, lag, _MAX_PG_LAG_DAYS)
+    # PG 空窗/过薄/陈旧 → 全量联网(改造前原路径: Engine TQ 优先 → 直连兜底)
+    return _network_bars(symbol, market, n)
 
 
 def fetch_tq_l2(symbol: str, market: str = "CN") -> dict | None:
@@ -446,6 +550,30 @@ def _l2_summary(l2: dict | None) -> dict:
     }
 
 
+def _l2_direction(l2_info: dict) -> tuple[bool | None, str]:
+    """L2 资金方向**三态化**(2026-10-18 审计 A-01 P0 修复)。
+
+    返回 `(inflow, state)`:
+    - `True`  + `"inflow"`   : 可判定为净流入
+    - `False` + `"outflow"`  : 可判定为净流出
+    - `None`  + `"unknown"`  : **不可判定** —— 数据源不可用(`available=False`)、
+      净额缺失、或净额恰为 0(方向无意义)
+
+    为什么必须三态: 布尔化会把"TQ 网关断链"压成"资金流出", 进而输出方向性错误结论
+    (原实现让 G 区强势票在断链时被判成"主力正在出货")。断链只能得到"证据不足"。
+    """
+    if not l2_info or not l2_info.get("available"):
+        return None, "unknown"
+    zjl = l2_info.get("zjl_hb")
+    if not isinstance(zjl, (int, float)):
+        return None, "unknown"
+    if zjl > 0:
+        return True, "inflow"
+    if zjl < 0:
+        return False, "outflow"
+    return None, "unknown"
+
+
 def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     """组合三指标 + L2 主力净流入 + 主力意图 → 完整快照(盘中实时)。
 
@@ -453,7 +581,7 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     {
       symbol, market,
       institution_activity: {...}|None,   # AI机构活跃度
-      gs: {...}|None,                      # GS策略
+      gs: {...}|None,                      # GS区间(单一事实源, 见 gs_state.resolve_gs_state)
       l2: {...},                           # TQ L2 主力净流入(含 available 标记)
       main_intent: {...}|None,             # 主力意图(腾讯逐笔, 复用 dark_flow)
       data_time: str,
@@ -462,9 +590,34 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    bars = fetch_bars(symbol, market=market, days=60)
+    # 取数窗口与 K 线图层(_build_layer_data)对齐: 同一份 bars 才谈得上「与图表逐字一致」
+    # (窗口不同 → 窗口内是否含已确认交叉可能不同 → 区间/趋势会不一致)。
+    bars = fetch_bars(symbol, market=market, days=120)
     act = compute_institution_activity(bars)
-    gs = compute_gs_signal(bars)
+    # GS 区间:**单一事实源** —— 只消费 gs_strategy 输出(与 K 线图层逐字一致)。
+    # 此前这里用 compute_gs_signal.state(自带 a0/bb0 比较, 吃末根盘中价),
+    # 末根疑似反向交叉时面板立刻翻面, 与图表(停在上一根已确认信号)打架。
+    from src.core.gs_state import resolve_gs_state
+
+    gs_eval = resolve_gs_state(bars)
+    gs = {
+        "state": gs_eval["zone"],              # 兼容旧字段名: 现值=已确认区间(与图表同源)
+        "zone": gs_eval["zone"],
+        "label": gs_eval["label"],
+        "signal": gs_eval["signal"],           # 最近一次**已确认**信号(图表实心 ▲/▼)
+        "signal_date": gs_eval["signal_date"],
+        "signal_confirmed": gs_eval["signal_confirmed"],
+        "pending": gs_eval["pending"],         # 末根疑似交叉(图表空心 ○)
+        "pending_side": gs_eval["pending_side"],
+        "pending_date": gs_eval["pending_date"],
+        "pending_label": gs_eval["pending_label"],
+        "note": gs_eval["note"],
+        "available": gs_eval["available"],
+        "as_of": gs_eval["as_of"],             # 数据截止(末根 bar 日期)
+        # 展示项(规格 §1 面板要求可见的快/慢线): 与区间同源, 不参与判定
+        "a0": gs_eval["a0"],                   # 快线
+        "bb0": gs_eval["bb0"],                 # 慢线
+    }
     # B6.8: 1/3/5 日序列 + 0 轴穿越(接口文档点名的 P0 缺口)
     gs_windows = compute_gs_windows(bars)
     l2 = fetch_tq_l2(symbol, market=market)
@@ -490,14 +643,81 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning("decision_pioneer main_intent %s failed: %s", symbol, e)
 
+    # ── 官方口径: 同花顺决策先锋三指标共振状态机 (对标《决策先锋8问8答》§3.4) ──
+    # 铁律: 要顺不要逆(GS), 要红不要绿(暗盘/L2), 要活不要死(活跃度>=3)
+    #
+    # ⚠️ 2026-10-18 审计 A-01(P0): L2 方向必须是**三态**, 不能压成布尔 ——
+    # `available=False`(TQ 网关超时/客户端未开/非交易时段) 与"真的净流出"语义完全不同。
+    # 原实现 `available and zjl>0` 把三种情况压成 False, 于是断链时一只 G 区强势票被判成
+    # 一句"主力正在出货"(方向性误导 + 命中合规违禁词)。现在:
+    #   True=净流入 / False=净流出 / None=不可判定(断链、值为 0、字段缺失)
+    # None 只走"证据不足"分支, 绝不进"背离/出货"分支。
+    resonance_state = "三指标分歧"
+    resonance_action = "关注指标动态"
+    resonance_warning = "safe"
+
+    act_val = act.get("activity") if act else None
+    act_strong = act_val is not None and act_val >= 3.0  # 站上强势线
+    gs_signal = gs.get("signal")
+    gs_zone = gs.get("zone") or gs.get("state")
+    l2_info = _l2_summary(l2)
+    l2_inflow, l2_dir_state = _l2_direction(l2_info)
+    l2_known = l2_inflow is not None
+
+    if gs_signal == "G" and act_strong and l2_inflow is True:
+        resonance_state = "🔥 首次共振·机会挖掘"
+        resonance_action = "趋势有望启动，三指标首次共振，重点关注趋势延续性"
+        resonance_warning = "opportunity"
+    elif gs_zone in ("G", "G区", "G区间") and act_strong and l2_inflow is True:
+        resonance_state = "⭐ 共振向好·持股待涨"
+        resonance_action = "处于多方G区且资金机构共振，趋势结构完好"
+        resonance_warning = "safe"
+    elif gs_signal == "S" or (gs_zone in ("S", "S区", "S区间") and not act_strong and l2_inflow is False):
+        resonance_state = "⚠️ 全线走坏·注意风险"
+        if l2_inflow is False:
+            resonance_action = "S信号或空方S区且机构资金双撤退，注意潜在调整风险"
+        elif act_strong:
+            # S 信号已确认, 但活跃度仍强 + 资金维缺失: 不替用户编"双撤退"
+            resonance_action = "S信号（已确认空方信号），注意潜在调整风险；资金维不可用，未纳入判定"
+        else:
+            # 资金维不可判定时不许替用户"补"一句资金撤退
+            resonance_action = "S信号/空方S区，且机构活跃度低于强势线，注意潜在调整风险（资金维数据缺失）"
+        resonance_warning = "warning"
+    elif gs_zone in ("S", "S区", "S区间") and not act_strong and l2_inflow is None:
+        # 两维走坏 + 资金维不可判定: 风险态成立, 但不替用户断言"资金撤退"
+        resonance_state = "⚠️ 两维走坏·资金维缺失"
+        resonance_action = "空方S区且机构活跃度低于强势线，注意潜在调整风险；L2资金维不可用，未纳入判定"
+        resonance_warning = "warning"
+    elif gs_zone in ("G", "G区", "G区间") and l2_inflow is False:
+        # 只陈述"资金背离、上行承压"这一可观测事实, 不写"主力正在出货"这类定性结论
+        resonance_state = "⚡ 资金背离·上行承压"
+        resonance_action = "虽处G区但L2主力净额为负，上行存在抛压，观察是否放量收复"
+        resonance_warning = "caution"
+    elif gs_zone in ("G", "G区", "G区间") and l2_inflow is None:
+        # 审计 A-01 核心修复: 断链/无数据 → "证据不足"态, 不给方向性结论
+        resonance_state = "— 资金维缺失·仅双指标"
+        resonance_action = "L2主力净额不可用（网关断链/非交易时段/字段缺失），仅按GS与活跃度两维研判"
+        resonance_warning = "unknown"
+    elif not act_strong and l2_inflow is True:
+        resonance_state = "👀 潜伏吸筹·主力在买"
+        resonance_action = "活跃度未破强势线但主力暗中流入，关注蓄势突破"
+        resonance_warning = "safe"
+
     return {
         "symbol": symbol,
         "market": market,
         "institution_activity": act,
         "gs": gs,
         "gs_windows": gs_windows,
-        "l2": _l2_summary(l2),
+        "l2": l2_info,
         "main_intent": main_intent,
+        "resonance_state": resonance_state,
+        "resonance_action": resonance_action,
+        "resonance_warning": resonance_warning,
+        # 三态方向(True/False/None) + 枚举化表述, 供前端/参谋卡判断"能不能下方向结论"
+        "l2_inflow": l2_inflow,
+        "l2_direction_state": l2_dir_state,
+        "l2_evaluable": l2_known,
         "data_time": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
     }
 
@@ -516,10 +736,14 @@ def decision_pioneer_text(symbol: str, market: str = "CN") -> str:
     else:
         parts.append("机构活跃度: 无数据")
 
-    gs = d.get("gs")
-    if gs:
-        sig = {"G": "G买", "S": "S卖"}.get(gs.get("signal"), "无")
-        parts.append(f"GS策略: 当前{gs['state']}, 最近信号{sig}")
+    gs: dict = d.get("gs") or {}
+    zone = gs.get("state")            # = gs_state.zone(已确认区间, 与 K 线图层同源)
+    if zone or gs.get("pending"):
+        # 2026-10-14 图表说明同源收口: GS 文案(逐字)统一由 chart_notes.gs_state_text 产出,
+        # 与 chart-notes / K 线图 G 区色带同源 —— 推送不再自拼一份(防两处各说各话)。
+        from src.core.chart_notes import gs_state_text
+
+        parts.append(f"GS策略: {gs_state_text(gs)}")
     else:
         parts.append("GS策略: 无数据")
 
@@ -537,5 +761,11 @@ def decision_pioneer_text(symbol: str, market: str = "CN") -> str:
         parts.append(f"主力意图(逐笔): 主力净额{mn / 1e4:+.0f}万")
     elif mi:
         parts.append("主力意图(逐笔): 数据不足")
+
+    # 2026-10-18 数智参谋 §5.6: 补五态共振结论 —— 模型回答「三指标共振」时直接引用后端
+    # 状态机结论, 不再自己编。五态之一: 🔥首次共振 / ⭐共振向好 / ⚠️全线走坏 / ⚡警惕背离 / 👀潜伏吸筹。
+    rs = d.get("resonance_state")
+    if rs:
+        parts.append(f"共振状态: {rs} · {d.get('resonance_action') or ''}".rstrip(" ·"))
 
     return " | ".join(parts)

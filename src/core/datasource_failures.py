@@ -16,6 +16,13 @@ from src.db.models import DatasourceFailure
 logger = logging.getLogger(__name__)
 
 _KINDS = ("fetch", "parse", "timeout", "auth")
+# P1-6(2026-10-08): 直连 tq_rpc 失败以 TQ 方法名为 kind 上报, 并入归一白名单。
+try:
+    from src.core.tq_rpc_observability import TQ_RPC_KINDS as _TQ_RPC_KINDS
+
+    _KINDS = tuple(dict.fromkeys(_KINDS + _TQ_RPC_KINDS))
+except Exception:  # noqa: BLE001
+    pass
 _DEDUPE_WINDOW_SEC = 60.0
 _last_persist: dict[tuple[str, str], float] = {}
 

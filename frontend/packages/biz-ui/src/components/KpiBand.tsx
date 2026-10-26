@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { Activity, Crown } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import { safeFixed } from '@/lib/format'
 
@@ -74,11 +74,11 @@ function Cell({
           : 'text-foreground'
   return (
     <div className="min-w-0 px-2 py-1.5" title={title}>
-      <div className="truncate text-[10px] text-muted-foreground">{label}</div>
+      <div className="truncate text-[10px] text-muted-foreground" title={typeof label === 'string' ? label : undefined}>{label}</div>
       <div className={`font-num tabular-nums text-[16px] font-semibold leading-tight ${toneCls}`}>
         {value}
       </div>
-      {sub && <div className="truncate text-[10px] text-muted-foreground">{sub}</div>}
+      {sub && <div className="truncate text-[10px] text-muted-foreground" title={typeof sub === 'string' ? sub : undefined}>{sub}</div>}
     </div>
   )
 }
@@ -200,7 +200,7 @@ export default function KpiBand({
             <>
               <span className="text-stock-up">{phase.limitUp ?? '--'}</span>
               <span className="mx-0.5 text-muted-foreground">/</span>
-              <span className="text-stock-down">--</span>
+              <span className="text-stock-down">{phase.limitDown ?? '--'}</span>
             </>
           )
         }
@@ -213,7 +213,15 @@ export default function KpiBand({
 /** /api/market/phase 响应(前端只取本卡需要的字段) */
 export interface PhaseResp {
   available: boolean
-  current: { label: string; ge2_count: number | null; first_board: number | null; seal_rate: number | null } | null
+  current: {
+    label: string
+    ge2_count: number | null
+    first_board: number | null
+    seal_rate: number | null
+    /** 跌停家数（后端从全市场涨跌幅分布派生；口径见 limit_down_source） */
+    limit_down?: number | null
+    limit_down_source?: string
+  } | null
   note?: string | null
 }
 
@@ -230,6 +238,7 @@ export interface PhaseKpi {
   error: string | null
   unavailableNote: string | null
   limitUp: number | null
+  limitDown: number | null
   sealRate: number | null
   reload: () => void
 }
@@ -239,6 +248,7 @@ export function usePhaseLabel(): PhaseKpi {
   const [error, setError] = useState<string | null>(null)
   const [unavailableNote, setUnavailableNote] = useState<string | null>(null)
   const [limitUp, setLimitUp] = useState<number | null>(null)
+  const [limitDown, setLimitDown] = useState<number | null>(null)
   const [sealRate, setSealRate] = useState<number | null>(null)
   const aliveRef = useRef(true)
 
@@ -256,12 +266,14 @@ export function usePhaseLabel(): PhaseKpi {
         setLabel(cur.label ?? null)
         // 涨停≈首板+≥2板(当日入池口径); 跌停该接口无此字段 → 由 Cell 用 '--' 表示缺值
         setLimitUp((cur.first_board ?? 0) + (cur.ge2_count ?? 0))
+        setLimitDown(cur.limit_down ?? null)
         setSealRate(cur.seal_rate)
         setUnavailableNote(null)
         setError(null)
       } else {
         setLabel(null)
         setLimitUp(null)
+        setLimitDown(null)
         setSealRate(null)
         // 后端自己的 note 原样透传(如"尚未同步阶段数据…"), 不在前端编造原因
         setUnavailableNote(res?.note || '阶段数据源暂无数据')
@@ -283,7 +295,12 @@ export function usePhaseLabel(): PhaseKpi {
     }
   }, [load])
 
-  return { label, loading, error, unavailableNote, limitUp, sealRate, reload: load }
+  // perf(2026-10-02): 返回对象 useMemo 稳定引用 —— 首页 KpiBand 用 memo 包住, 若这里的 `phase`
+  // 每次渲染都是新对象, memo 恒失效(首页任何无关状态变更都会重渲染整条 KPI 带 + 重跑数字动画)。
+  return useMemo(
+    () => ({ label, loading, error, unavailableNote, limitUp, limitDown, sealRate, reload: load }),
+    [label, loading, error, unavailableNote, limitUp, limitDown, sealRate, load],
+  )
 }
 
 
@@ -317,5 +334,6 @@ export function useMainlineTop1(): MainlineKpi {
       aliveRef.current = false
     }
   }, [])
-  return { top, loading, error }
+  // perf(2026-10-02): 同上, 稳定引用以便首页 memo 命中。
+  return useMemo(() => ({ top, loading, error }), [top, loading, error])
 }

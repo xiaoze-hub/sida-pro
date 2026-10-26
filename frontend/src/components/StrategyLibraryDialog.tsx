@@ -5,6 +5,7 @@ import { activeOverrides, displayValue, parseParamInput } from '@/lib/strategy-p
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
+import { StockLabel } from '@/components/StockLabel'
 
 const CATEGORY_LABELS: Record<string, string> = {
   value: '价值',
@@ -21,7 +22,7 @@ const BADGE_COLORS: Record<string, string> = {
   突破: 'bg-red-500/15 text-red-600 border-red-500/30',
   反弹: 'bg-purple-500/15 text-purple-500 border-purple-500/30',
   动量: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-500 border-emerald-500/30',
-  防御: 'bg-slate-500/15 text-slate-500 border-slate-500/30',
+  防御: 'bg-slate-500/15 text-muted-foreground border-slate-500/30',
   多因子: 'bg-amber-500/15 text-amber-700 dark:text-amber-500 border-amber-500/30',
   蓝筹: 'bg-cyan-500/15 text-cyan-500 border-cyan-500/30',
 }
@@ -186,7 +187,7 @@ export default function StrategyLibraryDialog({
                       {it.ui_badge}
                     </span>
                   </div>
-                  <p className="text-xs text-muted-foreground line-clamp-2 min-h-[2.5em]">
+                  <p className="text-xs text-muted-foreground line-clamp-2 min-h-[2.5em]" title={it.description}>
                     {it.description}
                   </p>
                   <div className="flex items-center gap-2 mt-3 flex-wrap">
@@ -337,7 +338,9 @@ export default function StrategyLibraryDialog({
                                   {applyResult.passed ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
                                   {applyResult.passed ? '通过' : '未通过'}
                                 </div>
-                                <div className="text-xs text-muted-foreground">{applyResult.symbol} @ {applyResult.market}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  <StockLabel symbol={applyResult.symbol} name={applyResult.name} market={applyResult.market} /> @ {applyResult.market}
+                                </div>
                               </div>
                             </div>
                             <div className={`px-3 py-1.5 rounded-lg border text-[13px] font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`}>

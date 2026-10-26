@@ -7,7 +7,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import { Loader2, Plus, Ticket, Copy, Ban, RefreshCw } from 'lucide-react'
-import { inviteCodesApi, type InviteCodeItem, type InviteCodeUse } from '@panwatch/api'
+import { fetchAPI, inviteCodesApi, type InviteCodeItem, type InviteCodeUse } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
@@ -21,12 +21,29 @@ const MODE_LABEL: Record<string, string> = {
   closed: '已关闭注册',
 }
 
+/** 注册模式三态(2026-10-23): 后端 PUT /api/admin/register-mode, 写 app_settings 立即生效。 */
+const MODE_OPTIONS: { value: 'invite' | 'open' | 'closed'; label: string; risk?: string }[] = [
+  { value: 'invite', label: '邀请制' },
+  {
+    value: 'open',
+    label: '开放注册',
+    risk: '开放注册意味着任何人拿到地址即可自助注册（合规与滥用风险自负）。确定切换？',
+  },
+  {
+    value: 'closed',
+    label: '关闭注册',
+    risk: '关闭后所有新用户（含持有效邀请码者）都无法注册，仅管理员可在后台建号。确定切换？',
+  },
+]
+
 export function InviteCodesSection() {
   const { toast } = useToast()
   const [note, setNote] = useState('')
+  const [customCode, setCustomCode] = useState('')
   const [maxUses, setMaxUses] = useState('1')
   const [expiresDays, setExpiresDays] = useState('')
   const [creating, setCreating] = useState(false)
+  const [modeSaving, setModeSaving] = useState(false)
   const [lastCreated, setLastCreated] = useState<string>('')
   const [showUses, setShowUses] = useState(false)
 
@@ -47,13 +64,17 @@ export function InviteCodesSection() {
   const onCreate = useCallback(async () => {
     setCreating(true)
     try {
+      const code = customCode.trim()
       const item = await inviteCodesApi.create({
         note: note.trim(),
         max_uses: Number(maxUses) || 1,
         expires_in_days: expiresDays.trim() ? Number(expiresDays) : null,
+        // 留空则由后端自动生成
+        ...(code ? { code } : {}),
       })
       setLastCreated(item.code)
       setNote('')
+      setCustomCode('')
       toast('邀请码已生成', 'success')
       void refetch()
     } catch (e) {
@@ -61,7 +82,32 @@ export function InviteCodesSection() {
     } finally {
       setCreating(false)
     }
-  }, [note, maxUses, expiresDays, refetch, toast])
+  }, [note, customCode, maxUses, expiresDays, refetch, toast])
+
+  const changeMode = useCallback(
+    async (next: 'invite' | 'open' | 'closed') => {
+      if (next === mode) return
+      const opt = MODE_OPTIONS.find(o => o.value === next)
+      const tip = opt?.risk
+        ? `${opt.risk}\n\n当前：${MODE_LABEL[mode] ?? mode} → 切换为：${MODE_LABEL[next]}`
+        : `确定把注册模式从「${MODE_LABEL[mode] ?? mode}」切换为「${MODE_LABEL[next]}」？`
+      if (!window.confirm(tip)) return
+      setModeSaving(true)
+      try {
+        await fetchAPI('/admin/register-mode', {
+          method: 'PUT',
+          body: JSON.stringify({ mode: next }),
+        })
+        toast(`注册模式已切换为${MODE_LABEL[next]}`, 'success')
+        void refetch()
+      } catch (e) {
+        toast(e instanceof Error ? e.message : '切换失败', 'error')
+      } finally {
+        setModeSaving(false)
+      }
+    },
+    [mode, refetch, toast],
+  )
 
   const onDisable = useCallback(
     async (code: string) => {
@@ -100,15 +146,48 @@ export function InviteCodesSection() {
         </Button>
       }
     >
+      {/* 注册模式三态切换 */}
+      <div className="mb-4 rounded-xl border border-border/50 dark:border-white/10 bg-s1 px-3 py-2.5">
+        <div className="mb-2 text-[11px] text-muted-foreground">
+          注册模式：<span className="text-foreground">{MODE_LABEL[mode] ?? mode}</span>
+          <span className="ml-2 text-[10px] text-muted-foreground">切换后立即生效（新注册请求按新模式判定）</span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {MODE_OPTIONS.map(opt => (
+            <Button
+              key={opt.value}
+              size="sm"
+              variant={opt.value === mode ? 'default' : 'outline'}
+              className="h-7 text-[11px]"
+              disabled={modeSaving || opt.value === mode}
+              onClick={() => void changeMode(opt.value)}
+            >
+              {opt.label}
+            </Button>
+          ))}
+          {modeSaving && <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin self-center" />}
+        </div>
+      </div>
+
       {/* 生成 */}
-      <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_100px_120px_auto] sm:items-end">
+      <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_140px_100px_120px_auto] sm:items-end">
         <div>
           <Label className="text-[12px]">备注（给谁用的，便于回收）</Label>
           <Input
             className="h-9"
             value={note}
             onChange={e => setNote(e.target.value)}
-            placeholder="如：给黄磊"
+            placeholder="如：给运营同学"
+          />
+        </div>
+        <div>
+          <Label className="text-[12px]">自定义邀请码（可空）</Label>
+          <Input
+            className="h-9 font-mono"
+            value={customCode}
+            onChange={e => setCustomCode(e.target.value.toUpperCase())}
+            placeholder="留空自动生成"
+            maxLength={32}
           />
         </div>
         <div>

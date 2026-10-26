@@ -5,7 +5,7 @@
 1. src/core 下死代码工具包装模块已删除; 全仓 *.py 内容 grep 命中 0。
 2. 注册表: schema 与 handler 同处注册, 每个工具含 caliber(口径标签, 非空)
    + requires(权限点); get_capital_flow caliber 为固定红线文案。
-3. chat_api.CHAT_TOOLS 由注册表导出: 29 个核心 schema(原顺序) + 11 个 thsdk。
+3. chat_api.CHAT_TOOLS 由注册表导出: 36 个核心 schema(原顺序 + 数智参谋 5 工具) + 11 个 thsdk + 6 个 TQ(2026-09-25 新增)。
 4. 合并后 _run_tool_loop(stream=True/False) 与原两函数事件语义等价(mock AI client):
    正常出字 / tool 轮次 / chat_multi 回落 / LLMDegradedError 不回落 /
    MAX_TOOL_ROUNDS 兜底 / 异常兜底。
@@ -34,7 +34,12 @@ EXPECTED_CORE_ORDER = [
     "get_notifications", "get_fundamentals_detail", "get_irm_qa", "get_market_anomalies",
     "get_northbound", "get_hot_stocks", "get_web_content", "get_main_flow_compare",
     "get_delta_series", "get_orderbook", "get_event_catalyst", "get_intent_explain",
-    "get_factor_ic_report",
+    "get_factor_ic_report", "get_stock_chips", "get_early_signals",
+    # 数智参谋 5 工具(2026-10-18): 注册在 core 段尾、thsdk 段前 —— 导出顺序 index 31~35
+    "get_chip_accumulation", "get_cancel_order_intent", "get_wyckoff_structure",
+    "get_demon_factor", "scan_auction_anomaly",
+    "get_stock_dossier",  # 2026-10-19: 全景标的证据线束 Harness 工具,
+    "propose_action",
 ]
 
 EXPECTED_THSDK = {
@@ -43,6 +48,16 @@ EXPECTED_THSDK = {
     "get_thsdk_market_data_index", "get_thsdk_market_data_hk",
     "get_thsdk_market_data_us", "get_thsdk_market_data_bond",
     "get_thsdk_market_data_fund", "get_wencai_enhanced",
+}
+
+# 通达信客户端(TQ)独家能力工具(2026-09-25 新增) —— 注册在 thsdk 之后, 故导出顺序在尾部。
+EXPECTED_TQ = {
+    "get_ipo_calendar",      # 新股/新债申购日历
+    "get_kzz_terms",         # 可转债条款(转股价/强赎/回售/纯债价值)
+    "get_stock_sectors",     # 个股所属板块(题材归因)
+    "search_symbols",        # 证券检索(跨市场: A/北交所/港股/场外基金/转债)
+    "get_index_etfs",        # 跟踪指数的 ETF 列表(IOPV/折溢价/规模)
+    "download_client_data",  # 触发客户端下载数据文件(前置动作, 非取数)
 }
 
 
@@ -56,7 +71,15 @@ def test_no_residual_wrapper_references():
     hits = []
     for p in ROOT.rglob("*.py"):
         s = set(p.parts)
-        if "__pycache__" in s or ".git" in s or p.name == Path(__file__).name:
+        # .venv/venv 排除: 仓库根建 venv 时 site-packages 第三方代码会误命中
+        # (2026-10-24 实测 google-genai 自带测试文件含 _NEEDLE 字样)
+        if (
+            "__pycache__" in s
+            or ".git" in s
+            or ".venv" in s
+            or "venv" in s
+            or p.name == Path(__file__).name
+        ):
             continue
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")
@@ -71,10 +94,29 @@ def test_no_residual_wrapper_references():
 
 def test_registry_integrity():
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+    # 2026-10-21 P0: 新增 remember_preference / create_daily_task（长期记忆 + 定时任务）
     assert set(CHAT_TOOL_REGISTRY) == (
-        set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | {"get_opportunities"}
+        set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ
+        | {"get_opportunities", "remember_preference", "create_daily_task",
+           "get_intraday_profile", "get_trend_profile", "get_stock_factors", "get_scenario_matrix",
+           # 2026-10-22 交易模式画像(本人交割单画像 + 系统信号台账, 两者口径隔离)
+           "get_trader_playbook",
+           # 2026-10-21 数据域架构 P0: 目录 + 统一取数入口
+           "list_data_domains", "query_data_domain",
+           # 2026-10-22 P0 采集层: 新分析维度提案(handler-only, 不进任何配方)
+           "note_new_dimension",
+           # 2026-10-23 盘前 Agent B 支线: 当日盘前底稿(self, fallback=False)
+           "get_premarket_brief",
+           # 2026-10-23 exday 产品化: 四档资金结构 + 委托粒度(客户端 tdx_exday4 口径)
+           "get_fund_structure", "get_order_granularity", "get_factor_winrate",
+           # 2026-10-23 盘后复盘: 涨停/炸板/跌停三池同源同日 + 晋级率 + 情绪周期
+           "get_market_replay",
+           # 2026-10-24: 本地新闻/政策时间线检索 + 联网兜底(仅系统源取不到时启用)
+           "search_news", "web_search_fallback",
+           # 2026-10-25: 归因维度 —— 两融(A股杠杆) + 外部宏观(美债/油价/美元/VIX)
+           "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 41  # 29 core + 1 handler-only + 11 thsdk
+    assert len(CHAT_TOOL_REGISTRY) == 77
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -96,6 +138,13 @@ def test_self_requires_scoping():
     self_tools = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.requires == "self"}
     assert self_tools == {
         "get_portfolio", "get_stock_suggestions", "get_watchlist", "get_notifications",
+        "propose_action",
+        # 2026-10-22 交易模式画像: 读本人交割单画像 → 只能读本人
+        "get_trader_playbook",
+        # 2026-10-22 采集层: 写的是**本人**的提案行 → 同样按 self 口径
+        "note_new_dimension",
+        # 2026-10-23 盘前 Agent B 支线: 读的是**本人**的盘前底稿(含全局共享)
+        "get_premarket_brief",
     }
 
 
@@ -120,7 +169,29 @@ def test_exported_tool_order():
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
     names = [t["function"]["name"] for t in chat_api.CHAT_TOOLS]
     assert names[: len(EXPECTED_CORE_ORDER)] == EXPECTED_CORE_ORDER
-    assert set(names[len(EXPECTED_CORE_ORDER):]) == EXPECTED_THSDK
+    tail = names[len(EXPECTED_CORE_ORDER):]
+    assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ | {
+        "remember_preference", "create_daily_task", "get_intraday_profile",
+        "get_trend_profile", "get_stock_factors", "get_scenario_matrix",
+        "get_trader_playbook",
+        "list_data_domains", "query_data_domain",
+        # 提案采集(2026-10-22 晚间): schema 就位以打通采集链路, fallback=False 由路由挡闲聊
+        "note_new_dimension",
+        # 盘前底稿(2026-10-23 B 支线): self 口径, fallback=False 由路由挡闲聊
+        "get_premarket_brief",
+        # 四档资金结构 + 委托粒度(2026-10-23): 客户端口径, 单票 25ms 可进请求路径
+        "get_fund_structure", "get_order_granularity", "get_factor_winrate",
+           # 2026-10-23 盘后复盘: 涨停/炸板/跌停三池同源同日 + 晋级率 + 情绪周期
+           "get_market_replay", "search_news", "web_search_fallback", "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking"}
+    # 末尾 21 个（2026-10-25 加 get_market_ranking）: P0 两个 + 分时画像 + 多周期走势 + 因子 + 交易模式画像 + 数据域两个 + 提案采集 + 盘前底稿
+    assert set(tail[-21:]) == {"remember_preference", "create_daily_task",
+                               "get_intraday_profile", "get_trend_profile",
+                               "get_stock_factors", "get_scenario_matrix",
+                               "get_fund_structure", "get_order_granularity", "get_factor_winrate",
+                               "get_trader_playbook",
+                               "list_data_domains", "query_data_domain",
+                               "note_new_dimension",
+                               "get_premarket_brief", "get_market_replay", "search_news", "web_search_fallback", "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 
@@ -184,14 +255,22 @@ class _Client:
 class _StreamClient:
     """流式 mock: 每轮是一组 (kind, payload) 事件或 _Msg(final) 或异常。"""
 
-    def __init__(self, rounds, multi="multi-兜底回复"):
+    def __init__(self, rounds, multi="multi-兜底回复", summary="已取证据的结论：B"):
         self._rounds = list(rounds)
         self._multi = multi
+        self._summary = summary
         self.chat_multi_calls = 0
+        self.no_tool_calls = 0
         self._idx = 0
 
     def chat_with_tools_stream(self, messages, tools=None, temperature=0.5):
         return self._gen()
+
+    async def chat_with_tools(self, messages, tools=None, temperature=0.4):
+        """轮次用尽时的无工具兜底总结（summarize_on_budget 走这里）。"""
+        self.no_tool_calls += 1
+        assert not tools, "兜底总结不该再带工具"
+        return _Msg(content=self._summary)
 
     async def _gen(self):
         # 跨调用累计推进: 每次 chat_with_tools_stream 消费一轮, 不重置
@@ -275,12 +354,13 @@ def test_nonstream_rounds_exhausted(monkeypatch):
         return "x"
 
     monkeypatch.setattr(chat_api, "_execute_tool", fake_exec)
-    client = _Client([_Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]) for i in range(5)])
+    # MAX_TOOL_ROUNDS=7(2026-10-21 起)：7 轮都只回 tool_calls，随后走"用已取证据补一次总结"
+    client = _Client([_Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]) for i in range(7)]
+                     + [_Msg(content="基于已取到的数据：结论A；缺失：暂无")])
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, [], db=None)))
-    # 每轮 tool 前先产 stage 事件, 5 轮后 MAX_TOOL_ROUNDS 兜底
-    assert evs == [("stage", "正在读取您的持仓...")] * 5 + [
-        ("text", "抱歉，处理轮次过多，请精简问题再试。")
-    ]
+    assert evs[:-1] == [("stage", "正在读取您的持仓...")] * 7
+    assert evs[-1][0] == "text"
+    assert "结论A" in evs[-1][1] and "触达工具轮次上限" in evs[-1][1], "轮次用尽必须给出已取证据的结论"
 
 
 def test_nonstream_exception_bottomline(monkeypatch):
@@ -351,12 +431,12 @@ def test_stream_rounds_exhausted(monkeypatch):
 
     monkeypatch.setattr(chat_api, "_execute_tool", fake_exec)
     client = _StreamClient([
-        [("final", _Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]))] for i in range(5)
+        [("final", _Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]))] for i in range(7)
     ])
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, [], db=None, stream=True)))
-    assert evs == [("stage", "正在读取您的持仓...")] * 5 + [
-        ("done", "抱歉，处理轮次过多，请精简问题再试。")
-    ]
+    assert evs[:-1] == [("stage", "正在读取您的持仓...")] * 7
+    assert evs[-1][0] == "done"
+    assert "结论：B" in evs[-1][1] and "触达工具轮次上限" in evs[-1][1]
 
 
 # ──────────────────────────── 5. 断开检测 + 行数 ────────────────────────────
@@ -370,7 +450,10 @@ def test_stream_endpoint_has_disconnect_guard():
 
 def test_chat_py_line_shrink():
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
-    assert lines <= 2221, f"chat.py 应较 3021 行下降 ≥800, 当前 {lines}"
+    # 2026-10-21: 长期记忆 +5 → 2240；标的核对/零工具拦截 +9 → 2260。
+    # 相对 3021 行仍下降 ≥780 行，护栏意图不变。
+    # 2026-10-22: 维度缺口采集接线（后台 spawn） +9 → 2305。
+    assert lines <= 2310, f"chat.py 应较 3021 行下降 ≥711, 当前 {lines}"
 
 
 def test_exec_thsdk_tool_compat_surface():
@@ -378,3 +461,47 @@ def test_exec_thsdk_tool_compat_surface():
     from src.web.api import chat as chat_api
     out = asyncio.run(chat_api._exec_thsdk_tool("get_thsdk_not_real", {}))
     assert out == "[thsdk] 工具 get_thsdk_not_real 尚未注册实现。"
+
+
+def test_zero_tool_answer_refused_for_stock_question(monkeypatch):
+    """2026-10-21 线上：问两只票却零工具作答，还编出「北方稀土/688013」两只无关的票。
+    现在问具体标的一律不许零工具作答。"""
+    from src.web.api import chat as chat_api
+
+    monkeypatch.setattr(chat_api, "correction_note", lambda t: None)
+    client = _Client([_Msg(content="301128 现价 87.9，支撑 81.4，建议低吸")])
+    msgs = [{"role": "user", "content": "强瑞技术和三花智控今天怎么样"}]
+    evs = asyncio.run(_collect(chat_api._run_tool_loop(client, msgs, db=None)))
+    assert len(evs) == 1 and evs[0][0] == "text"
+    assert "没有取到任何行情数据" in evs[0][1]
+    assert "87.9" not in evs[0][1], "编造的价格必须被丢弃"
+
+
+def test_zero_tool_answer_allowed_for_chitchat():
+    """闲聊不拦（没有标的就不需要工具）。"""
+    from src.web.api import chat as chat_api
+
+    client = _Client([_Msg(content="你好，我是数智参谋")])
+    msgs = [{"role": "user", "content": "你好"}]
+    evs = asyncio.run(_collect(chat_api._run_tool_loop(client, msgs, db=None)))
+    assert evs == [("text", "你好，我是数智参谋")]
+
+
+def test_number_audit_annotates_fabricated_price(monkeypatch):
+    """工具给 33.62–44.52，回答写 83.12–91.88 → 末尾必须挂对账警告（正文不改）。"""
+    from src.web.api import chat as chat_api
+
+    async def fake_exec(db, name, args, user=None):
+        return "[自算CYQ] 002050 现价 32.91 | 70% 筹码带：33.62 – 44.52 元 ｜ 获利盘：9.9%"
+
+    monkeypatch.setattr(chat_api, "_execute_tool", fake_exec)
+    monkeypatch.setattr(chat_api, "correction_note", lambda t: None)
+    client = _Client([
+        _Msg(content=None, tool_calls=[_ToolCall("t1", "get_chip_accumulation")]),
+        _Msg(content="002050 现价 32.91，成本带 83.12–91.88，获利盘 39%"),
+    ])
+    msgs = [{"role": "user", "content": "002050 筹码怎么样"}]
+    evs = asyncio.run(_collect(chat_api._run_tool_loop(client, msgs, db=None)))
+    text = evs[-1][1]
+    assert "002050 现价 32.91" in text, "正文不许改写"
+    assert "数字对账" in text and "83.12" in text

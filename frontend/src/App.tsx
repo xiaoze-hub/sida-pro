@@ -1,57 +1,78 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { useI18n } from '@/hooks/useI18n'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
 // 2026-08-12 性能优化: 路由懒加载 — 17 个页面原本静态 import 打进单 bundle 1.2MB,
-// 点任意路由都要下载/解析整个应用。改为 React.lazy 按需加载, 首屏只下载登录页+当前页。
-const DashboardPage = lazy(() => import('@/pages/Dashboard'))
-const OpportunitiesPage = lazy(() => import('@/pages/Opportunities'))
+// 点任意路由都要下载/解析整个应用。改为按需加载, 首屏只下载登录页+当前页。
+// 2026-10-10 加载韧性: 统一走 lazyWithRetry —— 发版后旧页面点开已被删掉的 chunk(404)
+// 自动刷新一次自愈(sessionStorage 防刷新环), 不再要求用户手动刷新。
+const DashboardPage = lazyWithRetry(() => import('@/pages/Dashboard'), 'dashboard-page')
+const OpportunitiesPage = lazyWithRetry(() => import('@/pages/Opportunities'), 'opportunities-page')
+const AuctionPage = lazyWithRetry(() => import('@/pages/Auction'), 'auction-page')
+// AI 数智参谋一级工作台(2026-10-18, 设计稿 §8.8/§9): 筹码·共振·量价·盘口·竞价·妖股因子全量穿透
+const AiCopilotPage = lazyWithRetry(() => import('@/pages/AiCopilot'), 'ai-copilot-page')
+const CopilotGovernancePage = lazyWithRetry(() => import('@/pages/CopilotGovernance'), 'copilot-governance-page')
+// 参谋任务列表(2026-10-25): 只读回放每轮问答 —— 状态/问题/配方/工具数/耗时/时间, 点行展开工具步骤
+const CopilotRunsPage = lazyWithRetry(() => import('@/pages/copilot/RunsPage'), 'copilot-runs-page')
+// 2026-10-25 P2-2.4: 经验库/实验台（只读）
+const ExperimentsPage = lazyWithRetry(() => import('@/pages/Experiments'), 'experiments-page')
+// 2026-10-25 P2-2.1: Agent 目录（只读）
+const AgentCatalogPage = lazyWithRetry(() => import('@/pages/AgentCatalog'), 'agent-catalog-page')
+const ToolCatalogPage = lazyWithRetry(() => import('@/pages/copilot/ToolCatalog'), 'tool-catalog-page')
+const ProposalsPage = lazyWithRetry(() => import('@/pages/copilot/ProposalsPage'), 'proposals-page')
+const ParallelDiagnosisPage = lazyWithRetry(() => import('@/pages/copilot/ParallelDiagnosis'), 'parallel-diagnosis-page')
+const CopilotRunDetailPage = lazyWithRetry(() => import('@/pages/copilot/RunDetailPage'), 'copilot-run-detail')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
-const DarkFundTopPage = lazy(() => import('@/pages/DarkFundTop'))
-const StocksPage = lazy(() => import('@/pages/Stocks'))
+const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
+// 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总
+const WarReportPage = lazyWithRetry(() => import('@/pages/WarReport'), 'war-report-page')
+// 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池 + 梯队晋级(market_replay_daily 消费)
+const ReplayTreePage = lazyWithRetry(() => import('@/pages/ReplayTree'), 'replay-tree-page')
+const StocksPage = lazyWithRetry(() => import('@/pages/Stocks'), 'stocks-page')
 // §4.3: Settings/Agents/DataSources/Help/Audit/Forecast 已不再由 App 直接挂载 —
 // 分别由 SettingsHub / System / Quote 三个枢纽页内部懒加载, 避免首屏多拉 6 个 chunk。
 // §4.3 补齐(2026-09-01): History/Reports/PaperTrading/PriceAlerts/Notifications/
 // ShadowAccount 已由各枢纽页(ReportsHub/ShadowHub/NotificationsHub)内部懒加载,
 // App.tsx 不再直接挂载, 避免首屏多拉 6 个 chunk。
-const AnalysisDetailPage = lazy(() => import('@/pages/AnalysisDetail'))
-const LoginPage = lazy(() => import('@/pages/Login'))
+const AnalysisDetailPage = lazyWithRetry(() => import('@/pages/AnalysisDetail'), 'analysis-detail-page')
+const LoginPage = lazyWithRetry(() => import('@/pages/Login'), 'login-page')
 // 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情页的 lazy 绑定已摘除 ——
 // /index/:symbol、/boards/:blockCode 改走 LegacyIndexRedirect。正文已由 Task 7 抽成
 // IndexBody(src/pages/workbench) / BoardBody(biz-ui .../workbench) 供工作台复用, 原页已删。
 // P1-1 (2026-09-10, 借鉴 OpenTerminal): 板块热力图 treemap 页
-const HeatmapPage = lazy(() => import('@/pages/Heatmap'))
+const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
-const ThemeMoodPage = lazy(() => import('@/pages/ThemeMood'))
-const StockWorkbenchPage = lazy(() => import('@/pages/StockWorkbench'))
-const ProfilePage = lazy(() => import('@/pages/Profile'))
+const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
+const StockWorkbenchPage = lazyWithRetry(() => import('@/pages/StockWorkbench'), 'stock-workbench-page')
+const ProfilePage = lazyWithRetry(() => import('@/pages/Profile'), 'profile-page')
 // API Key 控制台(2026-09-16): 个人中心 → 密钥管理 + 智能体一键安装
-const ApiKeysPage = lazy(() => import('@/pages/ApiKeys'))
+const ApiKeysPage = lazyWithRetry(() => import('@/pages/ApiKeys'), 'api-keys-page')
 // 设计稿 v2.0 §4.3 (2026-09-01): 两个收纳枢纽页
 // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
 // 旧路由 /forecast、/quote、/quote/:symbol、/l2 改走 LegacyForecastRedirect/LegacyL2Redirect。
 // 正文已搬入工作台(KlineChart 复用, L2 内容挪至「盘口资金」标签), 原页 Quote.tsx/L2Orderbook.tsx
 // 已于 2026-09-13 删除。
-const SystemPage = lazy(() => import('@/pages/System'))
-const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
+const SystemPage = lazyWithRetry(() => import('@/pages/System'), 'system-page')
+const SettingsHubPage = lazyWithRetry(() => import('@/pages/SettingsHub'), 'settings-hub-page')
 // §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
 // 这三项属第 1 块, 产物被同步事故冲掉后重建时派活清单漏列, 对照设计稿补做。
-const ReportsHubPage = lazy(() => import('@/pages/ReportsHub'))
-const ShadowHubPage = lazy(() => import('@/pages/ShadowHub'))
-const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
+const ReportsHubPage = lazyWithRetry(() => import('@/pages/ReportsHub'), 'reports-hub-page')
+const ShadowHubPage = lazyWithRetry(() => import('@/pages/ShadowHub'), 'shadow-hub-page')
+const NotificationsHubPage = lazyWithRetry(() => import('@/pages/NotificationsHub'), 'notifications-hub-page')
 // 开发者文档(任务 2.1, 2026-09-16): /developers 公开可访问(未登录时走独立壳层)
-const DevelopersPage = lazy(() => import('@/pages/Developers'))
+const DevelopersPage = lazyWithRetry(() => import('@/pages/Developers'), 'developers-page')
 // 用户协议/隐私政策(合规落地, 2026-09-16): /terms 公开可访问
-const TermsPage = lazy(() => import('@/pages/Terms'))
-const TiersPage = lazy(() => import('@/pages/Tiers'))
-const FactorICPage = lazy(() => import('@/pages/FactorIC'))   // B9: 因子有效性(IC/样本外/参考值)   // P2-4: 公开档位对比(未登录可看)
+const TermsPage = lazyWithRetry(() => import('@/pages/Terms'), 'terms-page')
+const TiersPage = lazyWithRetry(() => import('@/pages/Tiers'), 'tiers-page')
+const FactorICPage = lazyWithRetry(() => import('@/pages/FactorIC'), 'factor-ic-page')   // B9: 因子有效性(IC/样本外/参考值)   // P2-4: 公开档位对比(未登录可看)
 // 官网落地页(2026-09-16): 未登录访问 / 时展示(对标 DeepSeek 开放平台风格)
-const LandingPage = lazy(() => import('@/pages/Landing'))
+const LandingPage = lazyWithRetry(() => import('@/pages/Landing'), 'landing-page')
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
-const AdminPage = lazy(() => import('@/pages/Admin'))
+const AdminPage = lazyWithRetry(() => import('@/pages/Admin'), 'admin-page')
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
@@ -71,9 +92,13 @@ import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
+// 页签式工作台(Tab Shell, 2026-10-15): 内容区顶部页签栏 —— 每个功能页一个页签,
+// 独立 ✕ 只关那一个功能页(首页常驻), localStorage 持久化。壳在页面**外层**, 页面内部零改动。
+import WorkspaceTabShell from '@/components/WorkspaceTabShell'
 import CaliberComparePage from '@/pages/CaliberCompare'
 import DecisionLedgerPage from '@/pages/DecisionLedger'
 import { reportFrontendError } from '@/lib/error-report'
+import { closeOpenDialogs } from '@/lib/dialog-route-guard'
 import Disclaimer from '@/components/Disclaimer'
 import { onApiFailure } from '@panwatch/api'
 
@@ -87,8 +112,17 @@ const navItems = [
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
   { to: '/theme-mood', icon: Activity, labelKey: 'nav.themeMood', perm: 'view_quotes' },
   { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
+  { to: '/auction', icon: Flame, labelKey: 'nav.auction', perm: 'view_opportunities' },
+  // AI 数智参谋(2026-10-18): 独立一级入口。**不进 desktopNavGroups** —— 侧栏里渲染成
+  // 独立高亮卡(见 Sidebar 的 aiEntry), 组数仍为 6(设计稿 §9.3 方案 A)。移动端落"更多"。
+  { to: '/ai-copilot', icon: Sparkles, labelKey: 'nav.aiCopilot', perm: 'view_quotes' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
   { to: '/dark-fund-top', icon: TrendingUp, labelKey: 'nav.darkFundTop', perm: 'view_dark' },
+  // 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总(TOP/BOTTOM + 行业分布 + 拆单/对倒)
+  { to: '/war-report', icon: TrendingUp, labelKey: 'nav.warReport', perm: 'view_forecast' },
+  // 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池 + 连板梯队与晋级率(market_replay_daily)。
+  // 复盘属机会域盘后动线, 落「机会」组; 登录可见(行情统计, 非 pro 专属)。
+  { to: '/replay-tree', icon: GitBranch, labelKey: 'nav.replayTree', perm: 'view_quotes' },
   // 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排; 属 pro 档数据 → view_forecast
   { to: '/caliber-compare', icon: Activity, labelKey: 'nav.caliberCompare', perm: 'view_forecast' },
   // 决策账本(2026-09-18, B6 前端 / 设计稿 v3.0 §六 新增"决策"一级入口): 信号→结果的账。
@@ -124,7 +158,7 @@ const navItems = [
 //    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
 const desktopNavGroups = [
   { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
-  { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
+  { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/auction', '/dark-fund-top', '/war-report', '/replay-tree'].includes(n.to)) },
   // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
   // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
   { key: 'decision', labelKey: 'nav.decision', items: navItems.filter(n => ['/decision-ledger', '/caliber-compare', '/factor-ic'].includes(n.to)) },
@@ -240,6 +274,18 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" state={{ from: location }} replace />
   }
 
+  // L2-D(2026-10-24): 首次进入落 /ai-copilot(小白先看到"能问什么"), 老用户仍落首页。
+  // 先写标记再跳转: /ai-copilot 有 PermGuard(view_quotes), 无权限用户会被弹回 `/`,
+  // 此时标记已写 → 不会来回弹致死循环。隐私模式写不进去 → 视为老用户, 不跳。
+  if (location.pathname === '/') {
+    let firstRun = false
+    try { firstRun = localStorage.getItem('sida_first_run_landed') === null } catch { /* 隐私模式 */ }
+    if (firstRun) {
+      try { localStorage.setItem('sida_first_run_landed', '1') } catch { /* 忽略 */ }
+      return <Navigate to="/ai-copilot" replace />
+    }
+  }
+
   return <>{children}</>
 }
 
@@ -280,10 +326,27 @@ function App() {
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  /** 429 告警节流: 5 分钟内只留一条(限流是自愈态, 不该按请求数刷屏)。 */
+  const last429AlertRef = useRef(0)
   /** 会话消息流接线(2026-09-22): API 失败 → 右栏 AlertLog。
    *  用注册回调(不直接改 api 包) —— 底层包不反向依赖 UI。同一条消息 30s 内只累加计数, 不刷屏。 */
   useEffect(() => {
     onApiFailure((f) => {
+      /**
+       * 429 限流(2026-10-18): 自愈型瞬时态, 各取数块已用「取数失败（上次成功 …）」标出 stale。
+       * 不再按请求数灌 "HTTP 429 ×9" —— 5 分钟最多留一条可解释的告警, 真正需要人看的
+       * 5xx/超时不被噪音挤出视野。轮询层已按 Retry-After 指数退避。
+       */
+      if (f.status === 429) {
+        if (Date.now() - last429AlertRef.current < 300_000) return
+        last429AlertRef.current = Date.now()
+        pushAlert({
+          level: 'warn',
+          text: '接口限流(429): 已自动退避重试, 数据可能短暂停滞',
+          key: 'api:429',
+        })
+        return
+      }
       pushAlert({
         level: f.status >= 500 || f.status === 0 ? 'risk' : 'warn',
         text: `${f.method} ${f.path} 失败: ${f.message}`,
@@ -315,6 +378,9 @@ function App() {
       if (saved === '1' || saved === '0') return saved === '1'   // 用户显式选择永远优先
       // P0-1(2026-09-18): **没表过态的**用户在行情终端页(个股/指数/板块工作台)默认折叠侧栏 ——
       // 铁律是"K 线是绝对主角(≥80% 屏宽)", 第一屏就该把宽度让给它; 展开一次即被记住。
+      // L2-E/G8(2026-10-24): 窄屏(<1180)默认折叠侧栏 —— 此前没有宽度规则,
+      // 1280 下"只剩图标"其实是 /stocks/ 那条规则命中(审计 G8 的 1280 描述已按源码更正)。
+      if (window.innerWidth < 1180) return true
       return /^\/stocks\//.test(window.location.pathname)
     } catch { return false }
   })
@@ -379,6 +445,8 @@ function App() {
       handler: runOnDesktop(() => setSearchOpen(true)),
     },
     { combo: 'mod+,', handler: runOnDesktop(() => navigate('/settings')) },
+    // AI 数智参谋(2026-10-18, 设计稿 §9.4): ⌘/Ctrl+J 直达一级工作台
+    { combo: 'mod+j', handler: runOnDesktop(() => navigate('/ai-copilot')) },
     // v2.0 §4.4 快捷键导航: g + {key} 序列, 6 主导航全覆盖.
     { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },           // 驾驶舱 Dashboard
     { sequence: ['g', 'p'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/portfolio')) }, // 我的 Portfolio
@@ -390,6 +458,12 @@ function App() {
     { sequence: ['g', 's'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/shadow')) },    // 我的 shadow account
     { combo: '?', preventDefault: true, handler: runOnDesktop(() => setHotkeysOpen(true)) },
   ])
+
+  // 路由切换统一关掉遗留弹层（2026-10-24, Lane B）：多标签页保活下页面不卸载，
+  // 弹窗留在 body portal 里会遮住新页面（实例：提醒规则弹窗 → 切 /admin 仍覆盖整页）。
+  useEffect(() => {
+    closeOpenDialogs()
+  }, [location.pathname, location.search])
 
   // 登录页面不显示导航
   if (location.pathname === '/login') {
@@ -459,7 +533,7 @@ function App() {
             {!sidebarCollapsed && (
               <>
                 <span className="text-[16px] font-bold text-foreground truncate">数智分析</span>
-                {version && <span className="text-[11px] text-muted-foreground/60 font-normal shrink-0">v{version}</span>}
+                {version && <span className="text-[11px] text-muted-foreground font-normal shrink-0">v{version}</span>}
                 {isDemoUser() && (
                   <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
                 )}
@@ -477,13 +551,48 @@ function App() {
 
         {/* 6 项主导航 */}
         <nav className="flex-1 overflow-y-auto px-2 py-2">
+          {/* AI 数智参谋: 独立高亮卡(设计稿 §9.3 方案 A —— 不进分组, 组数仍 6)。
+              AI 是产品第一心智, 塞进「机会」组会变成第 4 个子项 = 等于没做入口。 */}
+          {(() => {
+            const ai = navItems.find((n) => n.to === '/ai-copilot')
+            if (!ai) return null
+            if (isNavHiddenForRole(ai) || isNavHiddenForPerm(ai, myPerms)) return null
+            if (isGuestUser() && isNavHiddenForGuest(ai.to)) return null
+            const Icon = ai.icon
+            const label = t(ai.labelKey)
+            const active = isNavItemActive(ai.to, location.pathname)
+            return (
+              <NavLink
+                to={ai.to}
+                title={label}
+                data-testid="nav-ai-copilot"
+                className={`mb-2 flex items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors ${
+                  sidebarCollapsed ? 'justify-center px-0' : ''
+                } ${
+                  active
+                    ? 'border-role-watch/60 bg-s3 text-foreground'
+                    : 'border-role-watch/40 bg-s2 text-foreground hover:bg-s3'
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0 text-role-watch" />
+                {!sidebarCollapsed && (
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] font-medium">{label}</span>
+                    <span className="block truncate text-[10px] text-muted-foreground">
+                      筹码·共振·撤单·竞价
+                    </span>
+                  </span>
+                )}
+              </NavLink>
+            )
+          })()}
           {desktopNavGroups.map((group) => {
             // guest(demo): 隐藏管理/个人页面导航; 模块权限: 未授权模块隐藏入口
             const items = group.items.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))
             if (items.length === 0) return null
             return (
               <div key={group.key} className="mb-3 last:mb-0">
-                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground/50">{t(group.labelKey)}</div>}
+                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">{t(group.labelKey)}</div>}
                 <div className="space-y-0.5">
                   {items.map(({ to, icon: Icon, labelKey }) => {
                     const isActive = isNavItemActive(to, location.pathname)
@@ -502,7 +611,7 @@ function App() {
                         }`}
                       >
                         <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-primary' : ''}`} />
-                        {!sidebarCollapsed && <span className="truncate">{label}</span>}
+                        {!sidebarCollapsed && <span className="truncate" title={label}>{label}</span>}
                       </NavLink>
                     )
                   })}
@@ -553,7 +662,7 @@ function App() {
                 <BrandMark className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="text-[13px] font-bold text-foreground">数智分析</span>
-              {version && <span className="text-[10px] text-muted-foreground/60 font-normal">v{version}</span>}
+              {version && <span className="text-[10px] text-muted-foreground font-normal">v{version}</span>}
             </NavLink>
             <div className="flex items-center gap-2">
               {/* 会话态(2026-09-20): 只允许顶栏极轻指示, 禁止整页染色 */}
@@ -624,8 +733,12 @@ function App() {
 
       {/* Content */}
       <main data-shell-main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
-        {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数 */}
-        <SourceHeartbeat />
+        {/* 页签式工作台(Tab Shell, 2026-10-15): 内容区**最顶部**是页签栏, 下面才是内容。
+            页签集在 Routes **外层**持有 ⇒ 关页签只关那一个功能页, 首页常驻, 永不"全关掉"。
+            真 keep-alive(2026-10-15): 每个页签一个常驻面板(同时挂载/隐藏不卸), 见 WorkspaceTabShell。
+            `header` 里的壳层(如顶栏源心跳条)只渲染一次, 不随页签复制。 */}
+        <WorkspaceTabShell header={<SourceHeartbeat />}>
+        {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数(经 header 传入) */}
         <Suspense fallback={<PageFallback />}>
           <AppErrorBoundary
             onError={(error) =>
@@ -636,8 +749,24 @@ function App() {
 
               <Route path="/" element={<DashboardPage />} />
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
+              <Route path="/auction" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><AuctionPage /></PermGuard>} />
+              {/* AI 数智参谋一级工作台(2026-10-18): 登录 + view_quotes 即可进(与 /stocks/:symbol 同档) */}
+              <Route path="/ai-copilot" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AiCopilotPage /></PermGuard>} />
+              <Route path="/copilot-governance" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotGovernancePage /></PermGuard>} />
+              {/* 参谋任务列表(2026-10-25): 只读, 与治理看板同档权限(view_quotes) */}
+              <Route path="/copilot/runs" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunsPage /></PermGuard>} />
+              <Route path="/copilot/experiments" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ExperimentsPage /></PermGuard>} />
+              <Route path="/copilot/agents" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AgentCatalogPage /></PermGuard>} />
+              <Route path="/copilot/tools" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ToolCatalogPage /></PermGuard>} />
+              <Route path="/copilot/proposals" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ProposalsPage /></PermGuard>} />
+              <Route path="/copilot/parallel" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ParallelDiagnosisPage /></PermGuard>} />
+              {/* 单轮证据卡(2026-10-25): 详情页, 同档权限 */}
+              <Route path="/copilot/runs/:runId" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunDetailPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}
               <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
+              <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><WarReportPage /></PermGuard>} />
+              {/* 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池, 行情统计非 pro 专属 → view_quotes */}
+              <Route path="/replay-tree" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ReplayTreePage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页退役 →
                   旧路由 redirect 到 /stocks/:symbol(工作台), 内容并入「盘口资金/预测」等标签 */}
               <Route path="/forecast" element={<LegacyForecastRedirect />} />
@@ -697,6 +826,7 @@ function App() {
           </AppErrorBoundary>
 
         </Suspense>
+        </WorkspaceTabShell>
       </main>
       <ChatWidget />
       {/* 全局免责声明底部条(合规, 2026-09-16): 仅登录后壳层; 关闭后 localStorage 记住 */}

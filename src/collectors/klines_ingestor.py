@@ -42,17 +42,33 @@ _HARD_REJECT_REASONS = (
     "negative_volume",
 )
 
+#: 退化占位(2026-10-15): 今日 bar 零振幅 + 量 0 + **非停牌** = 网关盘前/集合竞价占位行
+#: (价 = 竞价指示价, 不等于前收)。量 0 会冒充真值 ⇒ **不入库**(见 ingest_symbol),
+#: 是质量判据的一部分(与 jump_beyond_limit 的可疑标记并列)。
+_DEGENERATE_REASON = "degraded_placeholder"
+
 
 def validate_bar(
-    symbol: str, k: KlineData, prev_close: float | None, *, is_st: bool | None = None
+    symbol: str,
+    k: KlineData,
+    prev_close: float | None,
+    *,
+    is_st: bool | None = None,
+    today: str | None = None,
+    is_halted: bool = False,
 ) -> str | None:
     """单根日 K 合法性校验(B1.1/KI-040)。
 
     返回 None = 通过; "jump_beyond_limit" = 可疑跳变(保留 + quality_flag=0);
+    "degraded_placeholder" = 今日退化占位行(零振幅+量0+非停牌, **必须不入库**);
     其余为硬错误(拒绝入库): unparsable / non_positive_price / ohlc_relation / negative_volume。
 
     说明: 前复权序列理论上不应出现超过涨跌停的跳变(除权已被复权抹平), 出现的
     多为 vendor 侧脏柱(见 KI-011 的 10 条缺口), 故标记而非静默接受。
+
+    退化占位判据(2026-10-15 补): 传 `today`(CST 当天)后, 若 k 就是今日那根且为
+    零振幅+零量, 在**非停牌**(is_halted=False)时判为退化占位 —— 网关盘前/集合竞价
+    写入的占位行价=竞价指示价(≠前收), 旧口径漏判; 量 0 冒充真值是红线, 故不入库。
     """
     try:
         o, h, l, c = float(k.open), float(k.high), float(k.low), float(k.close)
@@ -65,6 +81,12 @@ def validate_bar(
         return "ohlc_relation"
     if v < 0:
         return "negative_volume"
+    # 今日退化占位(网关盘前/集合竞价): 判据在 core(含日期归一), 此处只做门控。
+    if today is not None and not is_halted:
+        from src.core.live_daily_bar import is_degenerate_placeholder
+
+        if is_degenerate_placeholder(k, today):
+            return _DEGENERATE_REASON
     if prev_close and prev_close > 0:
         from src.core.limit_rules import limit_ratio
 
@@ -93,6 +115,22 @@ def _to_db_row(symbol: str, market: str, period: str, source: str, k: KlineData,
         "amount": (float(k.amount) if getattr(k, "amount", None) is not None else None),
         "quality_flag": int(quality_flag),
     }
+
+
+def _is_halted_today(symbol: str, market: MarketCode, today: str) -> bool:
+    """symbol 在 today 是否停牌(`trading_halts` 表)。异常/表缺失 → False(当未停牌)。
+
+    停牌日数据层表现为"当日无 K 线", 但网关仍可能写入零振幅零量行。停牌表**只**用于
+    避免把"真停牌"误判为退化占位(requirement: volume=0 **非停牌日** = 退化);
+    查不到就按未停牌处理 —— 宁可少留一根零量行, 也不放占位行入库(0 量冒充真值红线)。
+    """
+    try:
+        from src.core.halts import is_halted
+
+        return bool(is_halted(symbol, today, market=market.value))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("停牌判定失败 %s/%s: %r", symbol, today, e)
+        return False
 
 
 def _fetch_klines_with_vendor(symbol: str, market: MarketCode, days: int) -> tuple[list, str]:
@@ -136,13 +174,35 @@ async def ingest_symbol(
     rows: list[dict] = []
     hard_rejected = 0
     flagged = 0
+    degenerate_skipped = 0
     if not isinstance(klines, list) or not klines:
         fail_details.append({"source": source, "error": "empty/no klines"})
     else:
         # B1.1: 升序遍历, prev_close 用于跳变校验
+        today_cst = _today_cst()
+        _halt_cache: list[bool | None] = [None]
+
+        def _halted_today() -> bool:
+            """停牌判定按需触发 + 每 symbol 只查一次(fail-soft)。"""
+            if _halt_cache[0] is None:
+                _halt_cache[0] = _is_halted_today(symbol, market, today_cst)
+            return bool(_halt_cache[0])
+
+        from src.core.live_daily_bar import is_degenerate_placeholder
+
         prev_close: float | None = None
         for k in sorted(klines, key=lambda x: str(getattr(x, "date", ""))):
-            reason = validate_bar(symbol, k, prev_close, is_st=None)
+            # 停牌判定只对"今日那根"必要(历史柱不受退化判据影响), 别为每根柱打 DB。
+            # 判据(含日期归一)只在 core 一处, 此处不重复字面量比较。
+            is_halted = _halted_today() if is_degenerate_placeholder(k, today_cst) else False
+            reason = validate_bar(
+                symbol, k, prev_close, is_st=None, today=today_cst, is_halted=is_halted,
+            )
+            if reason == _DEGENERATE_REASON:
+                # 今日退化占位行(网关盘前/集合竞价): **不入库**。单列计数, 不写 fail_details
+                # —— 否则正常的盘前预缓存会被 ingest_batch 聚合逻辑误报成"三源失败"。
+                degenerate_skipped += 1
+                continue
             if reason in _HARD_REJECT_REASONS:
                 hard_rejected += 1
                 fail_details.append(
@@ -202,6 +262,10 @@ async def ingest_symbol(
                     row,
                 )
                 total += result.rowcount
+    if degenerate_skipped:
+        logger.debug(
+            "K线入库跳过今日退化占位行 %s.%s: %d 行(未落库)", symbol, period, degenerate_skipped
+        )
     return {
         "symbol": symbol,
         "market": market.value,
@@ -211,6 +275,8 @@ async def ingest_symbol(
         "fail_details": fail_details,
         "rejected": hard_rejected,
         "flagged": flagged,
+        # 今日退化占位行(量0/零振幅, 非停牌)被拒绝入库的根数; 供观测/测试断言
+        "skipped_degraded": degenerate_skipped,
     }
 
 

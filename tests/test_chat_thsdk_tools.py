@@ -65,7 +65,7 @@ class FakeL2:
             "price": 10.46,
             "total_amount_wan": 116836.13,
             "main_net_amount_wan": -5647.64,
-            "main_net_ratio": -0.6774,
+            "main_net_vol": -0.6774,
             "summary": {"代码": symbol, "主力净流入": -56476402},
             "detail": {"主动买入特大单金额": 100},
         }
@@ -151,7 +151,7 @@ def test_hs300_dict_structure():
 def test_market_data_variants_dict_structure():
     for fn, args in [
         (tt.get_thsdk_market_data_cn_extended, ("002361",)),
-        (tt.get_thsdk_market_data_index, ("000001",)),
+        # 指数**不在**此列: 2026-10-24 起它有腾讯兜底(note 标口径), 单测见 test_thsdk_index_*。
         (tt.get_thsdk_market_data_hk, ("00700",)),
         (tt.get_thsdk_market_data_us, ("AAPL",)),
         (tt.get_thsdk_market_data_bond, ("113550",)),
@@ -193,7 +193,7 @@ def test_failure_all_variants_degrades(monkeypatch):
         (tt.get_thsdk_dde, ("002361",)),
         (tt.get_thsdk_hs300_constituents, ()),
         (tt.get_thsdk_market_data_cn_extended, ("002361",)),
-        (tt.get_thsdk_market_data_index, ("000001",)),
+        # 指数单独覆盖(2026-10-24 起有腾讯兜底, note 标口径): 见 test_thsdk_index_*
         (tt.get_thsdk_market_data_hk, ("00700",)),
         (tt.get_thsdk_market_data_us, ("AAPL",)),
         (tt.get_thsdk_market_data_bond, ("113550",)),
@@ -303,3 +303,45 @@ def test_execute_tool_unknown_thskd_degrades():
 # CI 主门禁以 -m "not network" 跳过, 由 nightly 网络工作流单独跑(-m network)。
 # 置于文件末尾: pytestmark 模块级任意位置生效, 避开 docstring/__future__/import 顺序。
 pytestmark = pytest.mark.network
+
+
+def test_thsdk_index_falls_back_to_tencent_with_label(monkeypatch):
+    """指数行情: thsdk 挂 → 腾讯兜底 → available=True, 但**必须**标注口径, 不冒充 thsdk。
+
+    为什么允许 available=True: 生产实测 thsdk 因未配正式账户恒返空, 而腾讯零 key 可用
+    (首页指数条同源)。若仍要求 available=False, 参谋就永远答不出大盘点位。
+    关键红线是 **source/note 必须写明"腾讯"** —— 不能让用户以为这是同花顺数据。
+    """
+    from src.agents.chat import tools_thsdk as tt
+
+    class FailingL2:
+        def get_market_data_index(self, code):
+            raise RuntimeError("thsdk down")
+
+    monkeypatch.setattr(tt, "_l2", lambda: FailingL2())
+    monkeypatch.setattr(
+        tt, "_tencent_index_fallback",
+        lambda sym: [{"symbol": sym, "name": "上证指数", "price": 3690.48,
+                      "change_pct": 0.89, "source": "腾讯"}],
+    )
+    res = tt.get_thsdk_market_data_index("000001")
+    assert res["available"] is True
+    assert res["source"] == "腾讯"
+    assert "腾讯" in res["note"] and "非 thsdk" in res["note"]
+    assert res["data"][0]["price"] == 3690.48
+
+
+def test_thsdk_index_both_sources_down_reports_empty(monkeypatch):
+    """两路都挂 → 必须如实 available=False（不许编一个数字）. """
+    from src.agents.chat import tools_thsdk as tt
+
+    class FailingL2:
+        def get_market_data_index(self, code):
+            raise RuntimeError("thsdk down")
+
+    monkeypatch.setattr(tt, "_l2", lambda: FailingL2())
+    monkeypatch.setattr(tt, "_tencent_index_fallback", lambda sym: [])
+    res = tt.get_thsdk_market_data_index("000001")
+    assert res["available"] is False
+    assert res["data"] == []
+

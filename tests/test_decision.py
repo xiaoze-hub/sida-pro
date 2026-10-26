@@ -26,12 +26,18 @@ def test_endpoint_never_500(monkeypatch):
     import src.core.decision as core_mod
     import src.web.api.decision as mod
 
-    def _boom(symbol, market="CN"):
+    def _boom(symbol, market="CN", days=120, user_context=None):
         raise RuntimeError("nope")
 
-    def _ok(symbol, market="CN"):
+    def _ok(symbol, market="CN", days=120, user_context=None):
         return {"symbol": symbol, "verdict": "看看", "reason": "看看: 测试", "phase": "分歧",
                 "row": 3, "parts": {}}
+
+    # 2026-10-10 冗余设计: /decision 现在缓存优先。清空 decision_cache 保证本用例
+    # 走"miss→算路"分支(否则可能命中别处留下的缓存行 → 不触发 decide → 断言失真)。
+    from src.core import decision_cache as _dc
+
+    _dc.clear_decision_cache()
 
     app = FastAPI()
     app.include_router(mod.router, prefix="/d")
@@ -84,6 +90,11 @@ def test_decide_fund_net_reads_dict_field(monkeypatch):
     monkeypatch.setattr(gs, "trend_label", lambda res: "G信号")
     monkeypatch.setattr(ai_act, "eval_activity", lambda bars: {"activity": 2.5})
     monkeypatch.setattr(dpf, "compute_pool_flow", lambda s: {"main_net": 12345.0, "coverage": "full"})
+    # 2026-10-10 B: decide() CN 路径会拉七口诀(唯一 IO 口=真网络) —— 本用例只验资金口径,
+    # 以 stub 掐掉联网(禁真网络), 口诀按"难归集"(None) 处理。
+    import src.core.mnemonic_overlay as mo
+
+    monkeypatch.setattr(mo, "resolve_mnemonic", lambda symbol: None)
 
     out = core_mod.decide("002361")
     assert out["parts"]["fund_net"] == 12345.0, out

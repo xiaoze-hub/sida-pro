@@ -25,7 +25,7 @@ function row(over: Record<string, unknown> = {}) {
     name: '贵州茅台',
     ths_code: 'USHA600519',
     main_net_wan: 88000,
-    main_net_ratio: 1234,
+    main_net_vol: 1234,
     total_amount_wan: 116836.13,
     source: 'thsdk_dde',
     ...over,
@@ -115,11 +115,50 @@ describe('DarkFundTop 暗盘资金 TOP 榜', () => {
 
   it('主力净量是字符串脏数(PG DECIMAL)时不崩', async () => {
     mocks.darkFundTop.mockResolvedValue(
-      snapshot([row({ main_net_ratio: '1234.0' as unknown as number, name: '脏数股' })]),
+      snapshot([row({ main_net_vol: '1234.0' as unknown as number, name: '脏数股' })]),
     )
     render(<DarkFundTopPage />)
     await screen.findAllByText('脏数股')
 
-    expect(within(tbl()).getByText('1234')).toBeTruthy()
+    // P0(2026-10-18 审计 F17): 净量改为 2 位小数, 不再 0 位舍入
+    expect(within(tbl()).getByText('1234.00')).toBeTruthy()
+  })
+
+  it('主力净量 0.4661 显示 0.47, 不被 0 位舍入吞成 0', async () => {
+    mocks.darkFundTop.mockResolvedValue(snapshot([row({ main_net_vol: 0.4661, name: '缩影股' })]))
+    render(<DarkFundTopPage />)
+    await screen.findAllByText('缩影股')
+
+    expect(within(tbl()).getByText('0.47')).toBeTruthy()
+    expect(within(tbl()).queryByText('0')).toBeNull()
+  })
+
+  it('旧快照只有 main_net_ratio(已弃用别名)时仍能渲染, 不塌成 --', async () => {
+    // 历史落库快照用的是旧字段名; 前端必须回落读取 ratio, 否则老快照该列整列变 '-'
+    const legacy = row()
+    delete (legacy as Record<string, unknown>).main_net_vol
+    mocks.darkFundTop.mockResolvedValue(
+      snapshot([{ ...legacy, main_net_ratio: 4321, name: '老快照股' }]),
+    )
+    render(<DarkFundTopPage />)
+    await screen.findAllByText('老快照股')
+
+    expect(within(tbl()).getByText('4321.00')).toBeTruthy()
+  })
+
+  // P0(2026-10-24 设计走查): 口径错标 —— 本页数据源写死 `thsdk_dde`(同花顺 DDE 主力净流入),
+  // 徽章却声明 eastmoney4(东财四档)。两口径不可换算, 属口径红线违反。
+  it('服务端口径徽章 = ths(同花顺), 不得再出现 eastmoney4; 原始 source 文本保留', async () => {
+    mocks.darkFundTop.mockResolvedValue(snapshot([row()]))
+    const { container } = render(<DarkFundTopPage />)
+    await screen.findAllByText('贵州茅台')
+
+    const badges = Array.from(container.querySelectorAll('[data-caliber]'))
+    expect(badges.length).toBeGreaterThan(0)
+    for (const b of badges) expect(b.getAttribute('data-caliber')).not.toBe('eastmoney4')
+    // 同花顺口径(与 thsdk_dde 一致)
+    expect(container.querySelector('[data-caliber="ths"]')).not.toBeNull()
+    // 修口径不等于删来源: 页面仍如实显示 thsdk_dde
+    expect(screen.getAllByText('thsdk_dde').length).toBeGreaterThan(0)
   })
 })

@@ -23,11 +23,13 @@ export interface DashboardModuleDef {
 }
 
 export const DASHBOARD_MODULES: DashboardModuleDef[] = [
+  // 阅读顺序 = 结论 → 指数 → 情绪/主线 → 共振 → 明细。
+  // KPI 带与结论行重复, 默认排在 main 组末尾(它是可展开的对照表, 不该插在'为什么'前面)。
   { id: 'indices', label: '指数走势', group: 'main' },
-  { id: 'kpi', label: '市场 KPI 带', group: 'main' },
   { id: 'overview', label: '市场全景(情绪·主线)', group: 'main' },
   { id: 'fundflow', label: '大盘资金流', group: 'main' },
   { id: 'resonance', label: '三指标共振', group: 'main' },
+  { id: 'kpi', label: '市场 KPI 带', group: 'main' },
   { id: 'anomalies', label: '异动池', group: 'duo' },
   { id: 'breadth', label: '涨跌分布', group: 'duo' },
   { id: 'agenda', label: '今日要紧事', group: 'workspace' },

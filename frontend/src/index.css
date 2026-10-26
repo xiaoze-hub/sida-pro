@@ -1,3 +1,11 @@
+/* G5 收尾(2026-10-24): 键盘可达统一焦点环。
+   原实现只有 outline:auto(1px), 暗色底上几乎看不见; 统一为 2px 品牌色外环。
+   不做全局最小点击高度, 避免把图表工具栏挤爆。 */
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -18,14 +26,25 @@
     --foreground: 240 15% 84%;
     --muted-foreground: 240 10% 52%;
     --border: 240 15% 12%;
+    --border-strong: 240 17% 27.5%;
     --input: 240 15% 13%;
   }
   :root {
     /* 反AI模板 P1: 中性色色相 220→240 统一向锚点色收敛(消除 AI 灰);卡片不再纯白 */
     --background: var(--s0);
     /* P0-1: 涨跌色 CSS 变量 — 供 ECharts 主题双态引用 */
-    --stock-up: #E53935;
+  --stock-up: #ff5252;
     --stock-down: #43A047;
+    /* 同色 HSL 三元组: Hex **不能**塞进 hsl() —— hsl(#E53935 / .22) 是非法声明, 浏览器整条丢弃
+       (涨跌闪 341/345 行曾因此静默失效)。凡需要「涨跌色 + alpha」一律走这两个三元组:
+         background-color: hsl(var(--stock-up-hsl) / .22)
+       值由 #E53935 / #43A047 精确换算(1.364/77.193%/55.294% 与 122.581/40.969%/44.510%),
+       往返误差 < 0.5/255; 与上面 Hex 同色不同写法, Hex 才是唯一颜色事实源, 二者由
+       tests/components/stock-flash-token.test.ts 锁死一致。 */
+  --stock-up-hsl: 0 100% 66.1%;
+    --stock-down-hsl: 122.581 40.969% 44.510%;
+    /* 闪烁底色强度(魔法数收进 token, 亮暗同值) */
+    --flash-alpha: 0.22;
     /* ECharts 主题 token */
     --echarts-text: #18181b;
     --echarts-axis-label: #52525b;
@@ -112,6 +131,10 @@
        原版同花顺 G绿S红; SIDA 按A股惯例 G红S绿, 功能等价, 验收以信号位置为准不以颜色为准。 */
     --gs-go: var(--stock-up);
     --gs-stop: var(--stock-down);
+    /* 情景关键位语义色(2026-10-22): 阻力/走强目标=rose(涨红), 支撑/走弱目标=emerald(跌绿)。
+       与 --stock-up/down 分开: 涨跌色=价格方向, 关键位色=位性质, 语义不同各自可演进。 */
+    --scenario-up: #e11d48;
+    --scenario-down: #059669;
     /* 活跃度三色(研究报告§4.3): 大牛紫/强势红/生命绿; 弱档走 --flat-color(灰, 不编造第四色) */
     --activity-bull: #8B5CF6;
     --activity-strong: #EF4444;
@@ -134,8 +157,11 @@
        层级说明(oklch L 实测): bg 15.0 → card 19.8(Δ4.8)→ hover 23.1(Δ3.3)→ muted 25.1 → accent 27.9,
        背景明度下调一档拉大与 card 的层级差(暗色层级靠明度不用阴影),卡片/悬浮保持不动。 */
     /* P0-1: 暗色涨跌色 — 同色保持, 暗背景上更醒目 */
-    --stock-up: #E53935;
+    --stock-up: #ff5252;
     --stock-down: #43A047;
+    /* 暗色同一组 HSL 三元组(见 :root 注释): 暗色不改涨跌色相, 只由上下文决定底色浓度 */
+    --stock-up-hsl: 0 100% 66.1%;
+    --stock-down-hsl: 122.581 40.969% 44.510%;
     /* ECharts 暗色 token */
     --echarts-text: #c4c4cb;
     --echarts-axis-label: #8e8e96;
@@ -145,7 +171,7 @@
     --echarts-split-line: rgba(120,120,130,.12);
     --echarts-crosshair: rgba(120,120,130,.4);
     /* Surface 阶梯(暗色): 比亮色更依赖明度差, 但每档只差 3~4 个 L, 不用大面积色块区隔 */
-    --s0: 240 20% 5%; --s1: 240 20% 10%; --s2: 240 18% 13.5%; --s3: 240 16% 18%; --s4: 240 22% 12%;
+    --s0: 240 24% 5.7%; --s1: 240 18% 13.5%; --s2: 240 18% 17%; --s3: 240 16% 20%; --s4: 240 18% 21%;
     /* 图表画布比页底再低一档(5%→3.5%): "图表区更空"在暗色里 = 更黑 */
     --chart-canvas: 240 20% 3.5%;
     --dur-instant: 80ms; --dur-fast: 150ms; --dur-normal: 250ms; --dur-slow: 400ms;
@@ -162,17 +188,17 @@
 
     --background: 240 20% 5%;
     --foreground: 240 15% 90%;
-    --card: 240 20% 10%;
+    --card: 240 18% 13.5%; /* 2026-10-24 卡片化翻案: 原 10% 与页底 5% 只差 5 个点 → 看着没底 */
     --card-foreground: 240 15% 90%;
-    --popover: 240 20% 10%;
+    --popover: 240 16% 21%; /* 浮层必须明显高于卡片(13.5%), 否则下拉/弹层贴在一起 */
     --popover-foreground: 240 15% 90%;
     --primary: 240 70% 60%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 15% 15%;
+    --secondary: 240 15% 17%;
     --secondary-foreground: 240 15% 70%;
-    --muted: 240 15% 15%;
+    --muted: 240 15% 17%;
     --muted-foreground: 240 10% 58%; /* make-interfaces: 暗色次级文字对比度(≈5.6:1) */
-    --accent: 240 15% 18%;
+    --accent: 240 15% 20%;
     --accent-foreground: 240 15% 90%;
     /* 研究报告 §4.3: K 线图背景暗色值(接近黑 hsl(222,47%,6%)) */
     --bg-kline: var(--chart-canvas);
@@ -185,6 +211,9 @@
     /* GS/活跃度三色暗色值: 绿系提亮保暗底可读(weak #22C55E→#4ADE80 等) */
     --gs-go: var(--stock-up);
     --gs-stop: var(--stock-down);
+    /* 情景关键位语义色暗色档(2026-10-22): 暗底提亮保可读(rose/emerald 提亮一档) */
+    --scenario-up: #fb7185;
+    --scenario-down: #34d399;
     --activity-bull: #A78BFA;
     --activity-strong: #F87171;
     --activity-weak: #4ADE80;
@@ -195,6 +224,7 @@
     /* 边框降档 16%→14%: 原 16%(oklch 26.0)高于 muted 填充、比 card 亮 6.2,全局 150 处 border-border
        全浓度描边过亮显脏;降至 14%(oklch≈24.5)落在 card(19.8)与 hover(23.1)之间,结构清晰不抢眼。 */
     --border: 240 15% 14%;
+    --border-strong: 240 17% 27.5%; /* 卡片边界 #3a3a52, 对卡底 1.65:1(勘误 7.2) */
     /* 输入框描边 18%→15%: 原与 accent 同亮(27.9)层级越位;降至 15%,略亮于 --border 保持输入可交互性。 */
     --input: 240 15% 15%;
     --ring: 240 70% 60%; /* 跟随锚点色 */
@@ -237,22 +267,30 @@
   }
 
   .card {
-    @apply bg-card rounded-xl border border-border/60 shadow-[0_1px_2px_hsl(240_15%_40%/0.05),0_1px_0_hsl(var(--border)/0.35)];
+    @apply bg-card rounded-xl border border-border-strong shadow-[0_1px_2px_hsl(240_15%_40%/0.05),0_1px_0_hsl(var(--border)/0.35)];
   }
   .card-hover {
-    @apply bg-card rounded-xl border border-border/60 transition-[background-color,border-color,box-shadow];
+    @apply bg-card rounded-xl border border-border-strong transition-[background-color,border-color,box-shadow];
   }
   /* 反AI模板④: hover 层级 = 表面亮度抬升 + 中性边框变化,去掉 primary 彩色光晕。
      亮色: 纸面微提白 + 轻中性阴影(无彩色);暗色: 背景提亮一档 + 边框中性提亮,不用阴影。 */
   .card-hover:hover {
     background-color: hsl(240 25% 100%); /* 亮色: 比 --card(99%) 提亮一档的纸面白 */
-    border-color: hsl(var(--border));
+    border-color: hsl(var(--border-strong));
     box-shadow: 0 1px 0 hsl(var(--border) / 0.4), 0 4px 14px -6px hsl(240 15% 40% / 0.16); /* 轻中性阴影,无 primary 色 */
   }
   .dark .card-hover:hover {
-    background-color: hsl(240 20% 13.5%); /* 暗色: 表面亮度抬升(比 --card 的 10% 亮一档) */
-    border-color: hsl(240 15% 20%);       /* hover 边框提亮: 原 24% 按旧 --border 16% 校准,现随 14% 基准下调,保持相对提亮梯度 */
-    box-shadow: none;                     /* 暗色层级靠亮度,不用阴影 */
+    background-color: hsl(var(--s2)); /* 暗色: 表面亮度抬升(13.5% → 17%, 与 --card 拉开一档) */
+    border-color: hsl(var(--border-strong));
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.07); /* 保留卡片顶部内高光(原先 none 把浮起感抹掉了) */
+  }
+  /* 2026-10-24 卡片化翻案: 暗色下阴影不可见, 用 1px 顶部内高光表达"浮起一档"。
+     只加在暗色, 亮色已有纸面阴影。 */
+  .dark .card {
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.045);
+  }
+  .dark .card-hover:hover {
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06);
   }
   .card-subtle {
     @apply rounded-xl border border-border/40 bg-accent/20;
@@ -331,11 +369,11 @@
 
 /* v0.5.0 UI 全量改造 Wave1: 涨跌闪 + 页面进场 */
 @keyframes sida-flash-up {
-  0% { background-color: hsl(var(--stock-up) / 0.22); }
+  0% { background-color: hsl(var(--stock-up-hsl) / var(--flash-alpha)); }
   100% { background-color: transparent; }
 }
 @keyframes sida-flash-down {
-  0% { background-color: hsl(var(--stock-down) / 0.22); }
+  0% { background-color: hsl(var(--stock-down-hsl) / var(--flash-alpha)); }
   100% { background-color: transparent; }
 }
 .sida-flash {

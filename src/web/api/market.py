@@ -49,21 +49,35 @@ def clear_indices_cache() -> None:
 
 
 def _spark_for(idx: dict) -> list[float]:
-    """近 20 日收盘价,供首页指数走势 sparkline 用(带 30min 独立缓存)。
+    """近 20 日收盘价,供首页指数走势 sparkline 用。
 
-    fail-soft:市场码非法/取数异常/无映射一律吞掉,返回空列表,绝不影响 quote 主体。
+    读库优先(2026-10-18 P0-b): `index_daily` 有行就直接出 —— 首次回填后**零跨网**。
+    库里不够(新部署/表未迁移/该指数未映射)才回落到 `get_index_klines`, 仍走
+    30min 进程内缓存。fail-soft: 一律吞异常, 返回空列表, 绝不影响 quote 主体。
     """
     now = time.time()
     hit = _SPARK_CACHE.get(idx["symbol"])
     if hit and now - hit[0] < _SPARK_TTL_S:
         return hit[1]
+
+    spark: list[float] = []
     try:
-        market_code = MarketCode(idx["market"])
-        klines = get_index_klines(idx["symbol"], market_code, days=20)
-        spark = [k.close for k in klines] if klines else []
-    except Exception as e:
-        logger.debug(f"指数 spark 获取失败 {idx['symbol']}: {e}")
-        spark = []
+        from src.collectors.index_daily import load_recent_closes
+
+        db_closes = load_recent_closes(idx["symbol"], days=20, market=idx.get("market"))
+        if len(db_closes) >= 2:
+            spark = db_closes
+    except Exception as e:  # noqa: BLE001 - 读库失败回落取数
+        logger.debug(f"指数 spark 读库失败 {idx['symbol']}: {e}")
+
+    if not spark:
+        try:
+            market_code = MarketCode(idx["market"])
+            klines = get_index_klines(idx["symbol"], market_code, days=20)
+            spark = [k.close for k in klines] if klines else []
+        except Exception as e:
+            logger.debug(f"指数 spark 获取失败 {idx['symbol']}: {e}")
+            spark = []
     _SPARK_CACHE[idx["symbol"]] = (now, spark)
     return spark
 
@@ -236,3 +250,68 @@ async def get_index_detail(symbol: str):
         "amount_trend": amount_trend,
         "note": "大盘资金流:东财源在云服务器不可用(502),以成交额趋势替代",
     }
+
+@router.get("/replay-summary")
+async def replay_summary(market: str = "CN") -> dict:
+    """今日盘面播报底料（首页「今日市场播报」用）。
+
+    **口径说明（必须随数字一起展示，不可省）**：
+      · 涨停/炸板/封板率/晋级率来自 `market_replay_daily`（当日盘后复盘快照）；
+      · `top_sectors` 是**涨停家数按行业聚合**，不是板块涨跌幅排名 ——
+        东财板块榜接口在云服务器持续断连（push2 / push2delay 均 RemoteDisconnected），
+        所以这里用「板块涨停潮」口径替代，且必须在 UI 上写明，否则用户会误读成涨幅榜。
+      · 无数据时返回 available=False + 原因，**不返回 0 冒充有数据**。
+    """
+    from src.db.session import SessionLocal
+    from src.db.models import MarketReplayDaily
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(MarketReplayDaily)
+            .filter(MarketReplayDaily.market == market)
+            .order_by(MarketReplayDaily.trade_date.desc())
+            .first()
+        )
+        if row is None:
+            return {"available": False, "reason": "暂无盘后复盘数据（当日尚未生成）", "market": market}
+
+        ml = row.mainline or {}
+        if isinstance(ml, str):
+            import json as _json
+            try:
+                ml = _json.loads(ml)
+            except Exception:
+                ml = {}
+
+        return {
+            "available": True,
+            "market": market,
+            "trade_date": row.trade_date,
+            "quality": row.quality,
+            "phase_label": row.phase_label or row.phase,
+            "limit_up_count": row.limit_up_count,
+            "first_board_count": row.first_board_count,
+            "ge2_count": row.ge2_count,
+            "ge3_count": row.ge3_count,
+            "limit_up_max_streak": row.limit_up_max_streak,
+            "one_word_count": row.one_word_count,
+            "broken_count": row.broken_count,
+            "break_rate_pct": row.break_rate_pct,
+            "seal_rate_pct": row.seal_rate_pct,
+            "promo_rate_pct": row.promo_rate_pct,
+            "limit_down_count": row.limit_down_count,
+            "top_sectors": (ml.get("top_sectors") or [])[:6],
+            "leaders": (ml.get("leaders") or [])[:5],
+            "sector_caliber": "涨停家数按行业聚合（非板块涨跌幅榜）",
+        }
+    except Exception as e:  # noqa: BLE001 —— 播报是次要信息，绝不拖垮首页
+        logger.warning("[replay-summary] 读取失败: %s", e)
+        try:
+            from src.core.db_safe import safe_rollback
+            safe_rollback(db)
+        except Exception:
+            pass
+        return {"available": False, "reason": "盘面数据读取失败", "market": market}
+    finally:
+        db.close()

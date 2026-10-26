@@ -253,11 +253,12 @@ def _mk_engine():
     from sqlalchemy import create_engine
     from sqlalchemy.pool import StaticPool
 
-    from src.web.migrations import _m163_theme_mood_table
+    from src.web.migrations import _m163_theme_mood_table, _m182_theme_mood_settled_at
 
     eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     with eng.begin() as conn:
         _m163_theme_mood_table(conn)
+        _m182_theme_mood_settled_at(conn)   # 2026-10-08: 补 settled_at(盘中/定型两态落库需要)
     return eng
 
 

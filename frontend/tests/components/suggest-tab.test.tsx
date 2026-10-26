@@ -88,6 +88,7 @@ vi.mock('@panwatch/api', () => ({
   fundamentalsApi: {
     detail: (...a: unknown[]) => mocks.fundamentalsDetail(...a),
   },
+  fetchAPI: vi.fn(() => Promise.resolve({})),
 }))
 
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'

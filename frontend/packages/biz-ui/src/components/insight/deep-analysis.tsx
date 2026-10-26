@@ -52,7 +52,7 @@ export function DeepAnalysisSection({
     return (
       <div className="card p-6 text-center text-[12px] text-muted-foreground space-y-2">
         <div>暂无深度分析报告</div>
-        <div className="text-[11px] text-muted-foreground/70">
+        <div className="text-[11px] text-muted-foreground">
           可在持仓 / 自选页点击 🧠 深度分析按钮触发
         </div>
       </div>
@@ -88,7 +88,7 @@ export function DeepAnalysisSection({
               </span>
             )}
           </div>
-          {sug.reason && <div className="text-[12px] text-foreground/80">{sug.reason.slice(0, 240)}</div>}
+          {sug.reason && <div className="text-[12px] text-foreground">{sug.reason.slice(0, 240)}</div>}
           {typeof costUsd === 'number' && (
             <div className="text-[10px] text-muted-foreground mt-2">成本:${costUsd.toFixed(4)}</div>
           )}
@@ -121,7 +121,7 @@ export function DeepAnalysisSection({
                 return (
                   <details key={k} open className="text-[12px]">
                     <summary className="font-medium cursor-pointer">{DEEP_STAGE_LABEL[k] || k}</summary>
-                    <div className="mt-2 text-[11px] text-foreground/80 whitespace-pre-wrap">
+                    <div className="mt-2 text-[11px] text-foreground whitespace-pre-wrap">
                       {text.slice(0, 1500)}
                       {text.length > 1500 && '... (截断)'}
                     </div>
@@ -142,7 +142,7 @@ export function DeepAnalysisSection({
             {showDebate ? '▼' : '▶'} 看多看空辩论
           </button>
           {showDebate && (
-            <div className="mt-2 pl-3 border-l-2 border-border/40 text-[11px] text-foreground/80 whitespace-pre-wrap max-h-96 overflow-y-auto">
+            <div className="mt-2 pl-3 border-l-2 border-border/40 text-[11px] text-foreground whitespace-pre-wrap max-h-96 overflow-y-auto">
               {debate.history}
               {debate.judge_decision && (
                 <>
@@ -155,7 +155,7 @@ export function DeepAnalysisSection({
         </div>
       )}
 
-      <div className="text-[10px] text-muted-foreground/70 italic border-t border-border/30 pt-2">
+      <div className="text-[10px] text-muted-foreground italic border-t border-border/30 pt-2">
         本分析由 AI 多 Agent 框架生成,仅供学习研究参考,不构成任何投资建议。
       </div>
     </div>
@@ -232,7 +232,7 @@ export function DeepHistoryComparison({
                     <span className="text-muted-foreground text-[10px] ml-1">({item.confidence.toFixed(1)})</span>
                   )}
                 </td>
-                <td className="px-1 py-1 text-right text-foreground/80">{item.price_at_analysis ?? '-'}</td>
+                <td className="px-1 py-1 text-right text-foreground">{item.price_at_analysis ?? '-'}</td>
                 <td className={`px-1 py-1 text-right ${retCls(item.return_1d_pct)}`}>{fmtRet(item.return_1d_pct)}</td>
                 <td className={`px-1 py-1 text-right ${retCls(item.return_5d_pct)}`}>{fmtRet(item.return_5d_pct)}</td>
                 <td className={`px-1 py-1 text-right ${retCls(item.return_20d_pct)}`}>{fmtRet(item.return_20d_pct)}</td>

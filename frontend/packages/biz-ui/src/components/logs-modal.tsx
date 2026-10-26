@@ -256,7 +256,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
 
         <div className="card p-3 md:p-4 mb-3 space-y-3">
           <div className="relative">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input value={query} onChange={e => handleSearchInput(e.target.value)} placeholder="搜索日志内容 / trace_id / logger..." className="pl-10" />
           </div>
 
@@ -380,9 +380,9 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
                         <td className="px-4 py-2 text-muted-foreground truncate max-w-[144px]" title={log.logger_name}>{mapLoggerName(log.logger_name)}</td>
                         <td className="px-4 py-2 text-[11px] text-muted-foreground">
                           <div className="truncate" title={log.trace_id || ''}>{log.trace_id || '-'}</div>
-                          <div className="truncate">{log.event || '-'}</div>
+                          <div className="truncate" title={log.event || '-'}>{log.event || '-'}</div>
                         </td>
-                        <td className="px-4 py-2 whitespace-pre-wrap break-all text-foreground/80">{log.message}</td>
+                        <td className="px-4 py-2 whitespace-pre-wrap break-all text-foreground">{log.message}</td>
                       </tr>
                     ))}
                   </tbody>

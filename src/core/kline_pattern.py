@@ -318,15 +318,19 @@ def _detect_classic_patterns(bars: list, hits: list[PatternHit]) -> None:
         idx1 = min(range(len(bars) - 20, len(bars) - 10), key=lambda i: bars[i].low)
         idx2 = min(range(len(bars) - 10, len(bars)), key=lambda i: bars[i].low)
         lo, hi = min(idx1, idx2), max(idx1, idx2)
-        neck = max(b.high for b in bars[lo + 1:hi])
-        last = bars[-1]
-        if last.close > neck:  # 突破颈线
-            hits.append(PatternHit(
-                name="双底突破(W底)", signal="看涨", position="低位",
-                description=f"两个相近低点({low1:.2f}/{low2:.2f})构成W底,收盘突破颈线({neck:.2f}),底部确认",
-                bars=[-20, -1],
-                extra={"neck": neck},
-            ))
+        # 颈线 = 两低点之间的反弹高点。两低点相邻(hi == lo+1)时中间无 bar,
+        # 不能取空区间 max(会 ValueError, 且异常会掀翻整条形态链) → 跳过该形态(不猜)。
+        mid = bars[lo + 1:hi]
+        if mid:
+            neck = max(b.high for b in mid)
+            last = bars[-1]
+            if last.close > neck:  # 突破颈线
+                hits.append(PatternHit(
+                    name="双底突破(W底)", signal="看涨", position="低位",
+                    description=f"两个相近低点({low1:.2f}/{low2:.2f})构成W底,收盘突破颈线({neck:.2f}),底部确认",
+                    bars=[-20, -1],
+                    extra={"neck": neck},
+                ))
 
     # ---- 双顶(M头): 两个相近高点 + 跌破颈线 ----
     high1 = max(b.high for b in bars[-20:-10])
@@ -335,15 +339,18 @@ def _detect_classic_patterns(bars: list, hits: list[PatternHit]) -> None:
         idx1 = max(range(len(bars) - 20, len(bars) - 10), key=lambda i: bars[i].high)
         idx2 = max(range(len(bars) - 10, len(bars)), key=lambda i: bars[i].high)
         lo, hi = min(idx1, idx2), max(idx1, idx2)
-        neck = min(b.low for b in bars[lo + 1:hi])
-        last = bars[-1]
-        if last.close < neck:  # 跌破颈线
-            hits.append(PatternHit(
-                name="双顶破位(M头)", signal="看跌", position="高位",
-                description=f"两个相近高点({high1:.2f}/{high2:.2f})构成M头,收盘跌破颈线({neck:.2f}),顶部确认",
-                bars=[-20, -1],
-                extra={"neck": neck},
-            ))
+        # 两高点相邻时无中间 bar 可取颈线 → 跳过(不猜; 空区间 min() 会 ValueError)。
+        mid = bars[lo + 1:hi]
+        if mid:
+            neck = min(b.low for b in mid)
+            last = bars[-1]
+            if last.close < neck:  # 跌破颈线
+                hits.append(PatternHit(
+                    name="双顶破位(M头)", signal="看跌", position="高位",
+                    description=f"两个相近高点({high1:.2f}/{high2:.2f})构成M头,收盘跌破颈线({neck:.2f}),顶部确认",
+                    bars=[-20, -1],
+                    extra={"neck": neck},
+                ))
 
     # ---- 上升三角形: 水平阻力 + 上升支撑,放量突破 ----
     if len(bars) >= 20:

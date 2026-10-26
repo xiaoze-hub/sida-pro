@@ -277,27 +277,103 @@ def _fetch_from_akshare() -> list[dict]:
     return stocks
 
 
-def refresh_stock_list() -> list[dict]:
-    """拉取 A 股和港股列表并缓存"""
-    stocks = []
+def _fetch_from_tq() -> list[dict]:
+    """通达信客户端 TQ `get_stock_list(market='5', list_type=1)` 拿全 A 码表(0.3s, 零外部配额)。
 
-    # A 股: 东方财富优先，akshare 备用
-    try:
-        cn_stocks = _fetch_from_eastmoney()
-        stocks.extend(cn_stocks)
-        logger.info(f"东方财富获取 A 股列表成功: {len(cn_stocks)} 只")
-    except Exception as e:
-        logger.warning(f"东方财富获取 A 股失败: {e}")
+    2026-10-23 修复: 遵循「TQ 优先」铁律, 全 A 股列表优先走本地 TQ 网关;
+    返回 `[{"symbol": "000001", "name": "平安银行", "market": "CN"}, ...]`。
+    """
+    from marketdata.vendors.tq import tq_rpc
+
+    rows = tq_rpc("get_stock_list", {"market": "5", "list_type": 1}, timeout=15.0) or []
+    if not isinstance(rows, list):
+        return []
+    stocks: list[dict] = []
+    seen: set[str] = set()
+    for r in rows:
+        if isinstance(r, dict):
+            raw_code = str(r.get("Code") or r.get("code") or r.get("symbol") or "").strip()
+            name = str(r.get("Name") or r.get("name") or "").strip()
+        else:
+            raw_code = str(r or "").strip()
+            name = ""
+        sym = raw_code.split(".")[0] if "." in raw_code else raw_code
+        if len(sym) == 6 and sym.isdigit() and sym not in seen:
+            seen.add(sym)
+            stocks.append({"symbol": sym, "name": name, "market": "CN"})
+    return stocks
+
+
+def _fetch_from_pg() -> list[dict]:
+    """PG `klines` / `stocks` 兜底: 外部网络与 TQ 全断时从库内已有日线池恢复 CN 码表。"""
+    from sqlalchemy import text
+    from src.db.session import engine
+
+    name_map: dict[str, str] = {}
+    syms: list[str] = []
+    with engine.connect() as conn:
         try:
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(_fetch_from_akshare)
-                cn_stocks = future.result(timeout=15)
-                stocks.extend(cn_stocks)
-            logger.info(f"akshare 获取 A 股列表成功: {len(cn_stocks)} 只")
-        except concurrent.futures.TimeoutError:
-            logger.error("akshare 获取超时（15s）")
-        except Exception as e2:
-            logger.error(f"A 股数据源获取失败: {e2}")
+            for sym, name in conn.execute(
+                text("SELECT symbol, name FROM stocks WHERE market='CN' AND symbol IS NOT NULL")
+            ):
+                s = str(sym or "").strip()
+                if len(s) == 6 and s.isdigit() and s not in name_map:
+                    name_map[s] = str(name or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+        for (sym,) in conn.execute(
+            text(
+                "SELECT DISTINCT symbol FROM klines "
+                "WHERE period='1d' AND market='CN' AND ts >= now() - interval '120 days' "
+                "ORDER BY symbol"
+            )
+        ):
+            s = str(sym or "").strip()
+            if len(s) == 6 and s.isdigit():
+                syms.append(s)
+    return [{"symbol": s, "name": name_map.get(s, ""), "market": "CN"} for s in syms]
+
+
+def refresh_stock_list() -> list[dict]:
+    """拉取 A 股和港股列表并缓存（CN 顺序：TQ 优先 → 东方财富 → akshare → PG 兜底）"""
+    stocks = []
+    cn_stocks: list[dict] = []
+
+    # 1) A 股首选: 通达信 TQ 本地网关(零外部网络, 5570+ 只含北交所)
+    try:
+        cn_stocks = _fetch_from_tq()
+        if cn_stocks:
+            stocks.extend(cn_stocks)
+            logger.info(f"TQ 获取 A 股列表成功: {len(cn_stocks)} 只")
+    except Exception as e:
+        logger.debug(f"TQ 获取 A 股列表未命中(回退东财): {e}")
+
+    # 2) A 股次选: 东方财富 → akshare → PG 日线池兜底
+    if not cn_stocks:
+        try:
+            cn_stocks = _fetch_from_eastmoney()
+            stocks.extend(cn_stocks)
+            logger.info(f"东方财富获取 A 股列表成功: {len(cn_stocks)} 只")
+        except Exception as e:
+            logger.warning(f"东方财富获取 A 股失败: {e}")
+            try:
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(_fetch_from_akshare)
+                    cn_stocks = future.result(timeout=15)
+                    stocks.extend(cn_stocks)
+                logger.info(f"akshare 获取 A 股列表成功: {len(cn_stocks)} 只")
+            except concurrent.futures.TimeoutError:
+                logger.error("akshare 获取超时（15s）")
+            except Exception as e2:
+                logger.error(f"A 股数据源获取失败: {e2}")
+        if not cn_stocks:
+            try:
+                cn_stocks = _fetch_from_pg()
+                if cn_stocks:
+                    stocks.extend(cn_stocks)
+                    logger.info(f"PG 日线池兜底获取 A 股列表成功: {len(cn_stocks)} 只")
+            except Exception as e3:
+                logger.warning(f"PG 兜底获取 A 股列表失败: {e3}")
 
     # 港股: 东方财富
     try:

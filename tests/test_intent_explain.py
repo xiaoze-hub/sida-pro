@@ -91,14 +91,16 @@ def test_parse_valid_json():
     reply = json.dumps({"direction": "吸筹", "confidence": "高",
                         "why": "超大单+5967万但大单-8433万, 托盘出货嫌疑"})
     out = ie.parse_explain_reply(reply)
-    assert out == {"direction": "吸筹", "confidence": "高",
-                   "why": "超大单+5967万但大单-8433万, 托盘出货嫌疑"}
+    assert out["direction"] == "吸筹"
+    assert out["confidence"] == "高"
+    assert out["why"] == "超大单+5967万但大单-8433万, 托盘出货嫌疑"
+    assert out["invalidation"] == ""  # LLM 未给失效条件 → 空串(由证据链兜底, 不编造)
 
 
 def test_parse_json_with_markdown_fence():
     reply = '```json\n{"direction": "洗盘", "confidence": "中", "why": "压盘吸筹"}\n```'
     out = ie.parse_explain_reply(reply)
-    assert out == {"direction": "洗盘", "confidence": "中", "why": "压盘吸筹"}
+    assert out["direction"] == "洗盘" and out["confidence"] == "中" and out["why"] == "压盘吸筹"
 
 
 def test_parse_invalid_json_returns_none():
@@ -164,8 +166,13 @@ def test_explain_main_intent_ok_calls_llm_and_returns_parsed(monkeypatch):
 
     monkeypatch.setattr(ie, "_llm_chat", fake_chat)
     out = ie.explain_main_intent(_dark())
-    assert out == {"direction": "派发", "confidence": "中",
-                   "why": "超大单+5967万但大单-8433万"}
+    assert out["direction"] == "派发"
+    assert out["confidence"] == "中"
+    assert out["why"] == "超大单+5967万但大单-8433万"
+    # 证据化: 证据链(触发条件/时点/失效条件) + 置信度校准(无账本口径=未校准) 一并返回
+    assert out["evidence"]["invalidation"]
+    assert out["confidence_calibration"]["calibrated"] is False
+    assert "未校准" in out["confidence_calibration"]["note"]
 
 
 def test_explain_main_intent_llm_exception_returns_none(monkeypatch):

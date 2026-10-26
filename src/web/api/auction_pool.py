@@ -30,6 +30,7 @@ from src.core.auction_pool import (
     MISSING_FIELDS,
     MISSING_NOTE,
     fetch_auction_anomaly,
+    fetch_auction_payload,
     get_anomaly_history,
     sync_auction_to_db,
 )
@@ -52,24 +53,12 @@ def anomaly(market: str = Query("CN", description="CN/SH/SZ/BJ/ALL 或 thsdk 代
 
     2026-08-24 v0.3.2: 响应 fixed 字段 missing_fields + note, 告知前端
     数据源不提供量比(撤单率已部分填充)。前端表格对应列显 "—"。
+
+    2026-10-18 审计 A-03(P0): 追加 `data_date / trade_phase / phase_label / is_live /
+    as_of / data_clock / reason / reason_text`。**前端不得再用浏览器时钟渲染"同步时刻"**,
+    也不许把"非交易时段 / 数据源断链 / 今日无异动"压成一句空态文案。
     """
-    records = fetch_auction_anomaly(market)
-    if not records:
-        return {
-            "available": False,
-            "count": 0,
-            "records": [],
-            "missing_fields": list(MISSING_FIELDS),
-            "note": MISSING_NOTE
-            + " | thsdk 竞价异动数据暂不可用(数据源未接入/非交易时段/拉取失败)",
-        }
-    return {
-        "available": True,
-        "count": len(records),
-        "records": records,
-        "missing_fields": list(MISSING_FIELDS),
-        "note": MISSING_NOTE,
-    }
+    return fetch_auction_payload(market)
 
 
 @router.get("/anomaly/{symbol}/history")

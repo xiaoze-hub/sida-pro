@@ -132,7 +132,7 @@ export function LlmUsageSection() {
               <span className="inline-block transition-transform group-open:rotate-90">▶</span>
               调用明细
               {data.items.length > 0 && (
-                <span className="text-[10px] text-muted-foreground/70">(最近 {data.items.length} 条)</span>
+                <span className="text-[10px] text-muted-foreground">(最近 {data.items.length} 条)</span>
               )}
             </summary>
             <div className="mt-2">

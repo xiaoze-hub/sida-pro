@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { Bot, RefreshCw, ShieldAlert } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -154,14 +155,15 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 30000) // 与分时图 30s 轮询一致
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(30s 与分时图一致)。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 30000, { deps: [load] })
 
   // 加载中占位
   if (loading && !data) {

@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useTabActive } from '@panwatch/base-ui'
+
 /**
  * 统一轮询 hook (2026-08-21)
  * 抽象 DarkFlowCards / MainFlowCompareCard 手写轮询的重复逻辑:
  *   - 首次加载 + intervalMs 定时刷新, 自动清理 timer / mounted ref。
  *   - 失败时保留上次成功数据(error 与 data 并存, UI 显示顶部细条警告而非整卡替换)。
  *   - loader 依赖变化(如 symbol 切换)时自动重置并重新拉取。
+ *
+ * 页签 keep-alive(2026-10-15): 隐藏在**非活动页签**里时**停表**(不打定时器也不首拉),
+ * 回到前台自动恢复并立即刷新一次 —— 这是"N 页签 = N 路数据流"的成本闸门(见 useTabActive)。
  */
 
 export interface UsePollingOptions<T> {
@@ -70,7 +75,11 @@ export function usePolling<T>({
     void load()
   }, [load])
 
+  const tabActive = useTabActive()
+
   useEffect(() => {
+    // 隐藏页签: 既不首拉也不打表(切回前台由本 effect 重跑补一次)。
+    if (!tabActive) return
     if (immediate) void load()
     if (intervalMs && intervalMs > 0) {
       timerRef.current = window.setInterval(() => void load(), intervalMs)
@@ -78,7 +87,7 @@ export function usePolling<T>({
     return () => {
       clearTimer()
     }
-  }, [immediate, intervalMs, load, clearTimer])
+  }, [immediate, intervalMs, load, clearTimer, tabActive])
 
   // 卸载兜底: 防止卸载后 setState 警告
   useEffect(() => clearTimer, [clearTimer])

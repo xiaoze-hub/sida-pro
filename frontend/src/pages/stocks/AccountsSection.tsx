@@ -129,11 +129,11 @@ export function AccountsSection() {
           <div className="flex items-center justify-between md:justify-end gap-2 md:gap-6 pl-6 md:pl-0">
             <div className="flex items-center gap-2.5 md:gap-6 min-w-0">
               <div className="text-left md:text-right">
-                <div className="text-[10px] md:text-[11px] text-muted-foreground">市值</div>
+                <div className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground">市值</div>
                 <div className="text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.total_market_value)}</div>
               </div>
               <div className="text-left md:text-right">
-                <div className="text-[10px] md:text-[11px] text-muted-foreground">盈亏</div>
+                <div className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground">总盈亏</div>
                 <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                   {formatMoney(account.total_pnl)}
                   <span className="text-[10px] md:text-[11px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
@@ -141,7 +141,7 @@ export function AccountsSection() {
               </div>
               <div className="text-left md:text-right">
                 <div
-                  className="text-[10px] md:text-[11px] text-muted-foreground"
+                  className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground"
                   title={dailyPnlDisplayLabel(account)}
                 >
                   {dailyPnlDisplayLabel(account, true)}
@@ -151,7 +151,7 @@ export function AccountsSection() {
                 </div>
               </div>
               <div className="text-left md:text-right hidden sm:block">
-                <div className="text-[10px] md:text-[11px] text-muted-foreground">可用</div>
+                <div className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground">可用</div>
                 <div className="text-[12px] md:text-[13px] font-mono whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.available_funds)}</div>
               </div>
             </div>
@@ -175,7 +175,7 @@ export function AccountsSection() {
             {account.positions.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-10 px-4">
                 <p className="text-[13px] text-muted-foreground">该账户暂无持仓</p>
-                <p className="text-[12px] text-muted-foreground/70">点右上角「+」录入股票与成本，或到「关注」页把自选一键导入</p>
+                <p className="text-[12px] text-muted-foreground">点右上角「+」录入股票与成本，或到「关注」页把自选一键导入</p>
               </div>
             ) : (
               <>
@@ -184,22 +184,32 @@ export function AccountsSection() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-border/30 bg-accent/20">
-                        <th className="text-left px-4 py-2 text-[11px] font-semibold text-muted-foreground">股票</th>
-                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">现价</th>
-                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">涨跌</th>
-                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">成本</th>
-                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">持仓</th>
-                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">市值</th>
-                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">盈亏</th>
                         <th
-                          className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground"
+                          className="whitespace-nowrap text-left px-4 py-2 text-[11px] font-semibold text-muted-foreground">股票</th>
+                        <th
+                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">现价</th>
+                        <th
+                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">涨跌</th>
+                        <th
+                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">成本</th>
+                        <th
+                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">持仓</th>
+                        <th
+                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">市值</th>
+                        <th
+                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">持仓盈亏</th>
+                        <th
+                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground"
                           title={dailyPnlDisplayLabel(account)}
                         >
                           {dailyPnlDisplayLabel(account, true)}
                         </th>
-                        <th className="hidden lg:table-cell text-center px-4 py-2 text-[11px] font-semibold text-muted-foreground">风格</th>
-                        <th className="hidden lg:table-cell text-left px-4 py-2 text-[11px] font-semibold text-muted-foreground">Agent</th>
-                        <th className="text-center px-4 py-2 text-[11px] font-semibold text-muted-foreground">操作</th>
+                        <th
+                          className="hidden whitespace-nowrap lg:table-cell text-center px-4 py-2 text-[11px] font-semibold text-muted-foreground">风格</th>
+                        <th
+                          className="hidden whitespace-nowrap lg:table-cell text-left px-4 py-2 text-[11px] font-semibold text-muted-foreground">Agent</th>
+                        <th
+                          className="whitespace-nowrap text-center px-4 py-2 text-[11px] font-semibold text-muted-foreground">操作</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -294,7 +304,7 @@ export function AccountsSection() {
                                   {isForeign ? (
                                     <>
                                       <span>{safeMoneyUnsigned(pos.market_value)} {pos.market === 'HK' ? 'HKD' : 'USD'}</span>
-                                      {pos.market_value_cny && <span className="text-[10px] text-muted-foreground/60">≈{safeMoneyUnsigned(pos.market_value_cny)}</span>}
+                                      {pos.market_value_cny && <span className="text-[10px] text-muted-foreground">≈{safeMoneyUnsigned(pos.market_value_cny)}</span>}
                                     </>
                                   ) : <span>{safeMoneyUnsigned(pos.market_value)}</span>}
                                 </div>
@@ -325,7 +335,7 @@ export function AccountsSection() {
                                   {pos.trading_style === 'short' ? '短线' : pos.trading_style === 'long' ? '长线' : '波段'}
                                 </span>
                               ) : (
-                                <span className="text-[10px] text-muted-foreground/50">-</span>
+                                <span className="text-[10px] text-muted-foreground">-</span>
                               )}
                             </td>
                             <td className="hidden lg:table-cell px-4 py-2.5">
@@ -350,7 +360,7 @@ export function AccountsSection() {
                                       })}
                                     </div>
                                   ) : (
-                                    <span className="text-[11px] text-muted-foreground/50 flex items-center gap-1"><Bot className="w-3 h-3" /> 未配置</span>
+                                    <span className="text-[11px] text-muted-foreground flex items-center gap-1"><Bot className="w-3 h-3" /> 未配置</span>
                                   )}
                                 </button>
                               )}
@@ -439,7 +449,7 @@ export function AccountsSection() {
                               {pos.symbol}
                             </span>
                             <button
-                              className="text-[12px] text-muted-foreground hover:text-primary truncate"
+                              className="text-[12px] text-muted-foreground hover:text-primary truncate" title={pos.name}
                               onClick={() => openStockDetail(pos.symbol, pos.market, pos.name, true)}
                             >
                               {pos.name}
@@ -525,7 +535,7 @@ export function AccountsSection() {
                                 })}
                               </button>
                             ) : (
-                              <button onClick={() => stock && setAgentDialogStock(stock)} className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
+                              <button onClick={() => stock && setAgentDialogStock(stock)} className="text-[10px] text-muted-foreground flex items-center gap-1">
                                 <Bot className="w-3 h-3" /> Agent
                               </button>
                             )}

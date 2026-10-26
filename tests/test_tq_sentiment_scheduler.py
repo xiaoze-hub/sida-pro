@@ -10,10 +10,13 @@ from sqlalchemy import text
 from src.core import tq_sentiment_scheduler as sched_mod
 from src.core.tq_sentiment_scheduler import (
     BACKFILL_DAYS,
+    EXPECTED_GAP,
     MIN_SAMPLE_ROWS,
+    SC_RETIRED,
     TqSentimentScheduler,
     _is_market_day,
     _needs_backfill,
+    _sync_in_job,
 )
 
 
@@ -148,3 +151,46 @@ def test_constants_are_sane():
     # 收盘 15:00 之后才取, 否则当日 SC 值未定稿
     assert sched_mod.RUN_HOUR >= 15
     assert isinstance(datetime.now(), datetime)
+
+
+# ── 2026-10-14: SC 云序列退役 ⇒ 静默跳过(expected_gap), 零网络零告警 ──────────
+
+def test_sc_retired_flag_is_on():
+    """用户决策(不购云 Key)在代码里必须显式可查, 不能靠注释。"""
+    assert SC_RETIRED is True
+    assert EXPECTED_GAP == "expected_gap"
+
+
+def test_sync_in_job_skips_without_touching_network(monkeypatch):
+    """退役后必须**一次 TQ 都不打**: 旧行为每天打一次必然失败的云接口并记 ERROR。"""
+    import src.collectors.tq_sentiment_series as tss
+
+    def _boom(*a, **k):
+        raise AssertionError("SC 已退役, 不应该再调 sync_sentiment_series")
+
+    monkeypatch.setattr(tss, "sync_sentiment_series", _boom)
+    out = _sync_in_job()
+    assert out["skipped"] == EXPECTED_GAP
+    assert "本地自算" in out["reason"]
+    assert out["source"] == "src.core.sentiment_selfcalc"
+
+
+def test_sync_in_job_backfill_also_expected_gap():
+    out = _sync_in_job(backfill=True)
+    assert out["skipped"] == EXPECTED_GAP and out["backfill"] is True
+
+
+def test_startup_backfill_is_noop_when_retired(monkeypatch):
+    """启动回补也跳过: 云接口拿不到数据, 回补只会制造"启动即告警"。"""
+    called = []
+    monkeypatch.setattr(sched_mod, "_needs_backfill", lambda db: called.append(1) or True)
+    s = TqSentimentScheduler()
+    asyncio.run(s._startup_backfill())  # 不应触库、不应打网关
+    assert called == []
+
+
+def test_daily_job_returns_expected_gap_marker(monkeypatch):
+    s = TqSentimentScheduler()
+    monkeypatch.setattr(sched_mod, "_is_market_day", lambda: True)
+    asyncio.run(s._job())
+    assert s._running is False

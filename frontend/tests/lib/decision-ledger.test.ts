@@ -16,6 +16,13 @@ import {
   priceText,
   retClass,
   retText,
+  ratioPctText,
+  pctValueText,
+  numText,
+  ratioValueText,
+  phaseLabel,
+  signalTypeLabel,
+  insufficientHint,
 } from '@/lib/decision-ledger'
 import type { DecisionLogItem } from '@panwatch/api'
 
@@ -108,6 +115,36 @@ describe('已回填判定', () => {
   it('任一档有结果即算已回填(未来 K 线还没到 = 未回填)', () => {
     expect(isFilled(mk([0.01, null, null]))).toBe(true)
     expect(isFilled(mk([null, null, null]))).toBe(false)
+  })
+})
+
+describe('P2 新增被展示口径(回测/后验/对账)', () => {
+  it('比例与百分比数值: null → `--`, 不显示 0%', () => {
+    expect(ratioPctText(0.7524, 2)).toBe('75.24%')
+    expect(ratioPctText(null)).toBe('--')
+    expect(pctValueText(52.5, 2)).toBe('52.50%')
+    expect(pctValueText(null)).toBe('--')
+    // 0 是真值, 显示 0.00% 而非 --
+    expect(pctValueText(0, 2)).toBe('0.00%')
+  })
+
+  it('样本量/盈亏比: null 安全', () => {
+    expect(numText(40)).toBe('40')
+    expect(numText(null)).toBe('--')
+    expect(ratioValueText(3.45)).toBe('3.45')
+    expect(ratioValueText(null)).toBe('--')
+  })
+
+  it('共振态与信号类型中文名: 已知翻译、未知原样透出(不归类)', () => {
+    expect(phaseLabel('向好')).toBe('共振向好')
+    expect(phaseLabel('X')).toBe('X')
+    expect(signalTypeLabel('resonance')).toBe('三指标共振')
+    expect(signalTypeLabel('weird')).toBe('weird')
+  })
+
+  it('样本不足提示带样本数', () => {
+    expect(insufficientHint(3, 20)).toContain('样本不足')
+    expect(insufficientHint(3, 20)).toContain('< 20')
   })
 })
 

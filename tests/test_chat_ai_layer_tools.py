@@ -78,28 +78,23 @@ async def test_intent_explain_market_not_cn(mock_db):
 # ──────────────────────────────────────────────────────────
 # get_factor_ic_report
 # ──────────────────────────────────────────────────────────
-@patch("src.core.factor_ic_report.generate_factor_ic_report")
-async def test_factor_ic_report_success(mock_gen, mock_db):
-    mock_gen.return_value = {
-        "summary": "alpha_score 与 catalyst_score 有真实 alpha",
-        "factor_assessment": [
-            {"factor_code": "alpha_score", "assessment": "有效", "note": "IC=0.12 样本充足"},
-            {"factor_code": "crowd_penalty", "assessment": "存疑", "note": "IC≈0"},
-        ],
-        "adjustment_suggestion": "可考虑上调 alpha_score 权重",
-        "confidence": "高",
+@patch("src.core.factor_ic.compute")
+async def test_factor_ic_report_success(mock_compute, mock_db):
+    """2026-10-21: 改为纯本地 Spearman IC（原 LLM 归因需要 OpenAI key，实测静默降级）。"""
+    mock_compute.return_value = {
+        "available": True, "horizon": 5, "dates": ["20260901", "20261020"],
+        "factors": {"momentum_20": {"label": "20 日动量", "ic_mean": 0.031, "ir": 0.6,
+                                    "win_rate": 58.0, "days": 20}},
     }
     text = await _execute_tool(mock_db, "get_factor_ic_report", {"market": "CN"})
-    assert "[数据源: 因子IC/IR评估" in text
-    assert "alpha_score" in text
-    assert "真实 alpha" in text
-    assert "调权建议" in text
+    assert "本地计算" in text and "20 日动量" in text
+    assert "IC 均值 +0.031" in text
 
 
-@patch("src.core.factor_ic_report.generate_factor_ic_report", return_value=None)
-async def test_factor_ic_report_no_data(mock_gen, mock_db):
+@patch("src.core.factor_ic.compute", return_value={"available": False, "reason": "因子表为空"})
+async def test_factor_ic_report_no_data(mock_compute, mock_db):
     text = await _execute_tool(mock_db, "get_factor_ic_report", {"market": "CN"})
-    assert "样本不足" in text or "无法生成" in text
+    assert "因子表为空" in text or "不做推断" in text
 
 
 async def test_factor_ic_report_market_not_cn(mock_db):

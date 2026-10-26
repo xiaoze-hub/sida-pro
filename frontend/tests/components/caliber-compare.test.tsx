@@ -126,4 +126,27 @@ describe('口径对照页', () => {
     expect(await screen.findByText('请输入 6 位 A 股代码')).toBeTruthy()
     expect(getMock).toHaveBeenCalledTimes(1) // 没有第二次请求
   })
+
+  it('每列可见口径标签(契约标签渲染为徽章) + 方向判定提示', async () => {
+    // 带上后端契约字段(caliber_type / direction_semantics)的响应
+    getMock.mockResolvedValue({
+      ...RESPONSE,
+      sources: RESPONSE.sources.map((s) => ({
+        ...s,
+        caliber_type: s.key === 'tencent_dark' ? 'tick' : s.key === 'eastmoney_flow' ? 'eastmoney4' : 'ths',
+        direction_semantics: '契约方向语义',
+        directional_allowed: s.key === 'tencent_dark',
+      })),
+    })
+    render(<CaliberComparePage />)
+    await screen.findByText('明盘 L2 主力净流入（TQ / 同花顺口径）')
+
+    // 三列各自可见口径徽章(data-caliber 由 CaliberBadge 输出)
+    expect(document.querySelectorAll('[data-caliber="tick"]').length).toBeGreaterThan(0)
+    expect(document.querySelectorAll('[data-caliber="eastmoney4"]').length).toBeGreaterThan(0)
+    expect(document.querySelectorAll('[data-caliber="ths"]').length).toBeGreaterThan(0)
+    // 仅逐笔那列标「可用于方向判定」; 其余标「禁用于主力意图判定」
+    expect(screen.getByText('可用于方向判定')).toBeTruthy()
+    expect(screen.getAllByText('仅资金面参考 · 禁用于主力意图判定').length).toBe(2)
+  })
 })

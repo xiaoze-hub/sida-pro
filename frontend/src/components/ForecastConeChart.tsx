@@ -3,6 +3,7 @@ import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
 import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
 import { fetchAPI } from '@panwatch/api'
 import { safeNum } from '@/lib/format'
+import { ChartEmpty } from '@/components/ChartEmpty'
 
 interface KlineBar {
   date: string
@@ -74,9 +75,12 @@ export default function ForecastConeChart({ symbol, lastClose, lastDate, predict
 
     const histVals: (number | null)[] = hist.map((b) => safeNum(b.close))
     const lc = safeNum(lastClose)
-    // 预测线起点 = 基准价(与历史末端衔接), 无历史时起点即基准
+    // 预测线起点 = 基准价(与历史末端衔接), 无历史时起点即基准。
+    // ⚠️ 空历史(hist 为空)时 histVals.length - 1 = -1, `new Array(-1)` 直接抛
+    //    RangeError: Invalid array length → 锥图整块白屏(历史拉取失败/新股无K线时必崩)。
+    //    用 Math.max(..., 0) 兜底为长度 0。
     const predVals: (number | null)[] = [
-      ...new Array(histVals.length - 1).fill(null),
+      ...new Array(Math.max(histVals.length - 1, 0)).fill(null),
       ...(histVals.length > 0 ? [histVals[histVals.length - 1]] : []),
       ...med,
     ]
@@ -175,12 +179,29 @@ export default function ForecastConeChart({ symbol, lastClose, lastDate, predict
   if (hist === null) {
     return <div className="h-[220px] animate-pulse bg-muted/40" />
   }
+  // 空 K 线(拉取失败, 或该标的暂无 K 线): 显式空态早退, 绝不把空数组喂给图表。
+  // 这也是 RangeError 的边界: hist=[] 时 new Array(histVals.length - 1) 旧代码抛错。
+  if (hist.length === 0) {
+    return (
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[13px] font-medium">预测锥图</span>
+          <span className="text-[11px] text-muted-foreground">无历史K线 · 仅展示模型预测</span>
+        </div>
+        <ChartEmpty
+          title="无历史K线"
+          description="历史收盘拉取失败, 或该标的暂无 K 线; 锥图暂以预测段展示"
+          height={220}
+        />
+      </div>
+    )
+  }
   return (
     <div>
       <div className="mb-1 flex items-center justify-between">
         <span className="text-[13px] font-medium">预测锥图</span>
         <span className="text-[11px] text-muted-foreground">
-          灰线历史收盘{hist.length > 0 ? `(${hist.length}日)` : '(历史暂不可用)'} · 彩线模型预测
+          灰线历史收盘({hist.length}日) · 彩线模型预测
           {prediction.length > 0 && p5 && p95 ? ' · 阴影 P5-P95' : ''}
         </span>
       </div>

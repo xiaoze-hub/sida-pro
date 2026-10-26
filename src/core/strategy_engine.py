@@ -43,6 +43,95 @@ SOURCE_POOL_LABELS = {
     "mixed": "市场+关注",
 }
 
+# ── P0(2026-10-18 可信度): 计划合法性 + 信号去重 ─────────────────────────────
+# 审计实测: active 信号 30 条里 10 条 `stop_loss >= entry_high`(止损挂在入场之上),
+# 这种计划数学上不可执行; 另 30 条只对应 9 只标的(同标的同策略被重复刷屏)。
+PLAN_EPS = 1e-6
+SCORE_CAP_PLAN_INVALID = 65.0
+PLAN_INVALID_LABEL = "观望·计划不合法"
+DEDUPE_REASON = "重复信号: 同标的+同策略已聚合"
+
+
+def validate_entry_plan(
+    *,
+    entry_low: float | None,
+    entry_high: float | None,
+    stop_loss: float | None,
+    target_price: float | None,
+) -> tuple[bool, str]:
+    """校验做多计划的方向关系, 返回 (valid, reason)。
+
+    只校验**能构成矛盾**的组合(缺值不算矛盾, 由 `has_entry_plan` / plan_quality 另行表达):
+    - `stop_loss` 必须低于入场区间下沿(止损挂在入场之上 = 倒挂, 无法执行);
+    - `target_price` 必须高于入场区间上沿(目标在入场之下 = 无收益空间)。
+    entry_low/entry_high 反了就按上下沿排好再判(生成端偶有反向写值, 不该误判成倒挂)。
+    """
+    lo = _safe_float(entry_low)
+    hi = _safe_float(entry_high)
+    if lo is None and hi is None:
+        return True, ""
+    vals = [v for v in (lo, hi) if v is not None]
+    low, high = min(vals), max(vals)
+    sl = _safe_float(stop_loss)
+    tp = _safe_float(target_price)
+    if sl is not None and sl >= low - PLAN_EPS:
+        return False, f"止损 {sl:g} ≥ 入场下沿 {low:g}(止损倒挂, 计划不可执行)"
+    if tp is not None and tp <= high + PLAN_EPS:
+        return False, f"目标 {tp:g} ≤ 入场上沿 {high:g}(无风险收益空间)"
+    return True, ""
+
+
+def _plan_flags(row: StrategySignalRun) -> tuple[bool, str]:
+    """按行内字段判计划合法性(读写两侧共用, 历史行也能当场判出倒挂)。"""
+    return validate_entry_plan(
+        entry_low=row.entry_low,
+        entry_high=row.entry_high,
+        stop_loss=row.stop_loss,
+        target_price=row.target_price,
+    )
+
+
+def _signal_dedupe_key(row: StrategySignalRun) -> tuple[str, str, str, str]:
+    """去重键 `(market, symbol, snapshot_date, strategy)`。"""
+    return (
+        str(row.stock_market or "CN").strip().upper() or "CN",
+        str(row.stock_symbol or "").strip().upper(),
+        str(row.snapshot_date or "").strip(),
+        str(row.strategy_code or "").strip(),
+    )
+
+
+def _dedupe_signal_rows(rows: list[StrategySignalRun]) -> tuple[list[StrategySignalRun], list[StrategySignalRun]]:
+    """按 (market, symbol, date, strategy) 聚合, 每组留一条。
+
+    - 组优先级: 计划合法 > 分数高 > 置信度高;
+    - 输出顺序沿用每组**首次出现**的位置(调用方的 SQL 排序不被重排);
+    - 返回 (kept, dropped)。落库侧把 dropped 降级为 inactive(不物理删, 后验样本保留)。
+    """
+    order: list[tuple[str, str, str, str]] = []
+    groups: dict[tuple[str, str, str, str], list[StrategySignalRun]] = {}
+    for row in rows:
+        key = _signal_dedupe_key(row)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    kept: list[StrategySignalRun] = []
+    dropped: list[StrategySignalRun] = []
+    for key in order:
+        group = groups[key]
+        if len(group) == 1:
+            kept.append(group[0])
+            continue
+        def _rank(r: StrategySignalRun) -> tuple[int, float, float]:
+            valid, _ = _plan_flags(r)
+            return (1 if valid else 0, float(r.rank_score or 0.0), float(r.confidence or 0.0))
+        best = max(group, key=_rank)
+        kept.append(best)
+        dropped.extend([r for r in group if r is not best])
+    return kept, dropped
+
 
 def _compact_source_meta(meta: dict | None) -> dict:
     raw = meta if isinstance(meta, dict) else {}
@@ -117,6 +206,7 @@ def _normalize_action_view(
     is_holding: bool,
     rank_score: float,
     has_entry_plan: bool,
+    plan_valid: bool = True,
 ) -> tuple[str, str, float]:
     act = (action or "watch").strip().lower() or "watch"
     label = (action_label or "").strip()
@@ -153,6 +243,13 @@ def _normalize_action_view(
 
     if act in ("buy", "add") and not has_entry_plan:
         score = min(score, 66.0)
+
+    # P0(2026-10-18): 计划数学上不可执行(止损倒挂/目标低于入场)不许再显示"建仓/加仓"。
+    # 降级为观望并封顶, 具体原因由 plan_invalid_reason 透出(前端红条 + tooltip)。
+    if not plan_valid and act in ("buy", "add"):
+        act = "watch"
+        label = PLAN_INVALID_LABEL
+        score = min(score, SCORE_CAP_PLAN_INVALID)
 
     return act, label, _clamp(score, 0.0, 100.0)
 
@@ -1228,12 +1325,16 @@ def _format_signal(
             )
         )
     )
+    # P0: 计划合法性在**读侧**也算一遍 —— 库里已有的历史行(修复前落库的)同样要能判出倒挂,
+    # 否则只能等下一次全量刷新才生效。
+    plan_valid, plan_invalid_reason = _plan_flags(row)
     action, action_label, rank_score = _normalize_action_view(
         action=row.action or "watch",
         action_label=row.action_label or "",
         is_holding=bool(row.is_holding_snapshot),
         rank_score=float(row.rank_score or 0.0),
         has_entry_plan=has_entry_plan,
+        plan_valid=plan_valid,
     )
     return {
         "id": row.id,
@@ -1264,6 +1365,9 @@ def _format_signal(
         "target_price": row.target_price,
         "invalidation": row.invalidation or "",
         "plan_quality": int(row.plan_quality or 0),
+        # P0(2026-10-18): 计划合法性(前端据此画红条 + tooltip; R16 可机器判读)
+        "plan_valid": bool(plan_valid),
+        "plan_invalid_reason": plan_invalid_reason,
         "source_agent": row.source_agent or "",
         "source_suggestion_id": row.source_suggestion_id,
         "source_candidate_id": row.source_candidate_id,
@@ -1498,10 +1602,50 @@ def _compute_signal_scores(
             row.trace_id = c.source_trace_id or ""
             row.is_holding_snapshot = bool(c.is_holding_snapshot)
             row.context_quality_score = context_quality_score
+            # P0(2026-10-18) 计划合法性硬断言: 止损倒挂/目标低于入场 → 不许以"建仓/加仓"落库。
+            # 只降级动作与封顶分数(仍 active, 用户能看到并知道为什么), 不静默丢行。
+            plan_valid, plan_invalid_reason = validate_entry_plan(
+                entry_low=c.entry_low,
+                entry_high=c.entry_high,
+                stop_loss=c.stop_loss,
+                target_price=c.target_price,
+            )
+            payload["plan_valid"] = plan_valid
+            payload["plan_invalid_reason"] = "" if plan_valid else plan_invalid_reason
+            if not plan_valid:
+                row.action = "watch"
+                row.action_label = PLAN_INVALID_LABEL
+                row.rank_score = min(float(row.rank_score or 0.0), SCORE_CAP_PLAN_INVALID)
+                # 分数被降级后, 明细里的 weighted_score 与受限原因必须跟着改 ——
+                # 否则同一条信号"总分 65 / 明细 100"自相矛盾(审计同族问题: 数字互相打脸)。
+                breakdown = payload.get("score_breakdown")
+                if isinstance(breakdown, dict):
+                    breakdown["weighted_score"] = round(float(row.rank_score or 0.0), 4)
+                reasons = payload.get("constraint_reasons")
+                if not isinstance(reasons, list):
+                    reasons = []
+                payload["constraint_reasons"] = [*[str(x) for x in reasons], plan_invalid_reason][:6]
+                payload["constrained"] = True
+                logger.info(
+                    "[策略层] 计划不合法降级 %s/%s 策略=%s: %s",
+                    c.stock_market or "CN", c.stock_symbol, code, plan_invalid_reason,
+                )
             row.payload = to_jsonable(payload)
             row.updated_at = utc_now()
             touched_keys.add(key)
             touched_rows.append(row)
+
+    # P0(2026-10-18): 同 (symbol, snapshot_date, strategy) 只留一条 —— 30 条 active
+    # 只对应 9 只标的的"刷屏"在落库侧就掐掉。drop 的行降级 inactive, 不物理删(后验样本靠它)。
+    kept_rows, dropped_rows = _dedupe_signal_rows(touched_rows)
+    if dropped_rows:
+        for dup in dropped_rows:
+            _demote_signal(dup, reason=DEDUPE_REASON)
+        touched_rows = kept_rows
+        logger.info(
+            "[策略层] 信号去重(symbol+date+strategy): 保留 %d 条, 聚合 %d 条重复",
+            len(touched_rows), len(dropped_rows),
+        )
 
     constraint_stats = _apply_portfolio_constraints(rows=touched_rows)
     if constraint_stats.get("demoted", 0) > 0:
@@ -1744,6 +1888,9 @@ def list_strategy_signals(
                 q = q.filter(StrategySignalRun.id < 0)
 
         q = q.filter(StrategySignalRun.rank_score >= float(min_score or 0))
+        # P0(2026-10-18) 去重: 同 (symbol, date, strategy) 会被多条候选重复写入(历史库已存在),
+        # 读侧按组聚合。limit 在 SQL 侧先放大再收敛, 否则去重后条数会明显少于请求值。
+        fetch_limit = min(max(int(limit) * 3, int(limit) + 50), 3000)
         rows = (
             q.order_by(
                 case(
@@ -1754,9 +1901,14 @@ def list_strategy_signals(
                 StrategySignalRun.rank_score.desc(),
                 StrategySignalRun.updated_at.desc(),
             )
-            .limit(max(1, int(limit)))
+            .limit(max(1, fetch_limit))
             .all()
         )
+        dedupe_dropped = 0
+        if rows:
+            rows, dropped = _dedupe_signal_rows(rows)
+            dedupe_dropped = len(dropped)
+            rows = rows[: max(1, int(limit))]
         factor_map: dict[int, StrategyFactorSnapshot] = {}
         if rows and not include_payload:
             ids = [int(x.id) for x in rows if x.id is not None]
@@ -1778,7 +1930,14 @@ def list_strategy_signals(
             )
             for x in rows
         ]
-        return {"snapshot_date": snapshot, "count": len(items), "items": items}
+        return {
+            "snapshot_date": snapshot,
+            "count": len(items),
+            "items": items,
+            # P0 可机器判据: 聚合掉的重复条数 / 计划不合法条数(应恒为 0 才允许"建仓"入库)
+            "deduped": dedupe_dropped,
+            "invalid_plans": sum(1 for it in items if not it.get("plan_valid", True)),
+        }
     finally:
         db.close()
 

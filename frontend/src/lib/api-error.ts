@@ -9,6 +9,12 @@ export type ApiErrorKind = 'TIMEOUT' | 'HTTP_5xx' | 'HTTP_4xx' | 'NETWORK' | 'UN
 
 export function classifyApiError(e: unknown): ApiErrorKind {
   if (!e) return 'UNKNOWN'
+  // 2026-10-10: fetchAPI 现在抛**类型化**错误(带 kind, 见 packages/api client.ts) ——
+  // 优先采信显式标记, 不再靠 message 文案猜(超时文案是中文, 老的正则匹配不到)。
+  const explicit = (e as { kind?: string })?.kind
+  if (explicit === 'TIMEOUT' || explicit === 'HTTP_5xx' || explicit === 'HTTP_4xx' || explicit === 'NETWORK') {
+    return explicit
+  }
   const msg = String((e as any)?.message || e).toLowerCase()
   // Timeout
   if (msg.includes('timeout') || msg.includes('aborted') || msg.includes('timed out')) {

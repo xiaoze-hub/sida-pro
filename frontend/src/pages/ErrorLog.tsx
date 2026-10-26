@@ -37,7 +37,7 @@ function ErrorRow({ ev }: { ev: ErrorEvent }) {
           <span className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         )}
         <span className="w-[150px] shrink-0 font-mono text-[11px] text-muted-foreground">{fmtTs(ev.ts)}</span>
-        <span className="w-[180px] shrink-0 truncate font-mono text-[11px] text-rose-600 dark:text-rose-400">
+        <span className="w-[180px] shrink-0 truncate font-mono text-[11px] text-rose-600 dark:text-rose-400" title={ev.type || 'Error'}>
           {ev.type || 'Error'}
         </span>
         <span className="min-w-0 flex-1 break-words text-[12px] text-foreground">{ev.message || '(empty)'}</span>

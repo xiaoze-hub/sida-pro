@@ -40,6 +40,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# 2026-10-08: marketdata 是可编辑安装的本地包, 其 site-packages 链接指向**主库**路径;
+# 在独立 worktree 里跑测试若不前置本仓库的 packages 路径, 会 import 到主库的旧代码,
+# 本 worktree 对 packages/marketdata 的改动不被覆盖 → 测试假绿。故前置本仓库包路径。
+_PKGS_SRC = PROJECT_ROOT / "packages" / "marketdata" / "src"
+if _PKGS_SRC.is_dir() and str(_PKGS_SRC) not in sys.path:
+    sys.path.insert(0, str(_PKGS_SRC))
+
 import pytest
 
 
@@ -183,5 +190,75 @@ def _clear_module_caches():
 
         capital_flow_collector._FLOW_CACHE.clear()
     except Exception:
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_biz_cache():
+    """每个用例前清 biz 两级缓存。
+
+    2026-09-26 起 /theme-mood 的 ladder/board 走 biz_cache, 同参数的用例会读到上一个用例
+    的回填结果 -> 断言静默变绿/变红。测试隔离优先, 用例内自己 delete 关键 key。
+    """
+    try:
+        from src.web.cache.biz_cache import biz_cache
+
+        biz_cache.clear()
+    except Exception:  # noqa: BLE001 — 缓存不可用不影响测试
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_observability_state():
+    """跨测试全局状态隔离(2026-10-08 可观测性)。
+
+    数据源连续失败计数 / 失败明细限流 / 失败日志限流都是**进程级模块状态**:
+    用例 A 模拟一次 tq 失败后, 用例 B 的哨兵检查会读到残留 streak → 莫名 warn
+    (合跑挂、单跑过)。每个用例前清空, 与 _clear_module_caches 同思路。
+    """
+    try:
+        from src.core import alerting
+
+        alerting.reset_data_source_streaks()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from src.core import datasource_failures
+
+        datasource_failures.reset_dedupe()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from marketdata import log_throttle
+
+        log_throttle.reset()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from src.core import data_quality_sentinel
+
+        data_quality_sentinel.reset_tq_gateway_streak()
+    except Exception:  # noqa: BLE001
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_ratelimit():
+    """登录失败限流计数跨用例隔离(2026-10-11 CI shard 1)。
+
+    `src/core/login_ratelimit` 的失败计数是**进程级模块状态**: 用例 A 故意用
+    错口令登录(或 admin 因残留 owner 登录 401)累计的失败计数会留给用例 B →
+    用例 B 的正常登录撞 429「登录失败次数过多,请 10 分钟后重试」(合跑红、单跑绿)。
+    每个用例前清零, 与 `_reset_observability_state` 同思路。产品限流(5 次锁
+    10 分钟)行为不变 —— 只在测试进程做隔离。
+    """
+    try:
+        from src.core import login_ratelimit
+
+        login_ratelimit.reset()
+    except Exception:  # noqa: BLE001 — 模块不可用不影响测试
         pass
     yield

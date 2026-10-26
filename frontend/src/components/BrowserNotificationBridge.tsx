@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
+import { usePausedInterval } from '@panwatch/base-ui'
 import {
   BROWSER_NOTIFICATIONS_CHANGED_EVENT,
   browserNotificationsEnabled,
@@ -29,12 +30,8 @@ export default function BrowserNotificationBridge() {
     return () => window.removeEventListener(BROWSER_NOTIFICATIONS_CHANGED_EVENT, syncEnabled)
   }, [])
 
-  useEffect(() => {
-    if (!enabled) return
-    void poll()
-    const timer = window.setInterval(() => void poll(), 20_000)
-    return () => window.clearInterval(timer)
-  }, [enabled, poll])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次; 未启用时不停表也不回调。
+  usePausedInterval(() => void poll(), enabled ? 20_000 : 0, { deps: [enabled, poll] })
 
   return null
 }

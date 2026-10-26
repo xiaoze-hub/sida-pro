@@ -25,6 +25,9 @@ PRE_AUTH_POST_ENDPOINTS = (
     "/api/auth/login",         # 密码登录
     "/api/auth/login-by-email",  # 验证码登录(前缀命中 /api/auth/login)
     "/api/auth/logout",        # 清 Cookie 的幂等端点
+    # 2026-10-23: 忘记密码 —— 用户正是登不进来才走它, 匿名浏览器没有 csrf cookie。
+    # 漏这条即"忘记密码"整条链路 403(生产实测已踩)。
+    "/api/auth/reset-password-by-email",
 )
 
 
@@ -45,6 +48,19 @@ def test_send_code_without_csrf_is_not_403():
     r = c.post("/api/auth/send-code", json={"email": "csrftest@example.com", "purpose": "register"})
     assert r.status_code != 403 or "CSRF" not in r.text
     assert "CSRF token 缺失" not in r.text
+
+
+def test_reset_password_by_email_without_csrf_is_not_403():
+    """端到端复现: 忘记密码端点不带 cookie/CSRF 直接 POST，**不许是 CSRF 403**。
+
+    允许业务错（验证码错误 / 邮箱未注册），但 CSRF 拦下就等于功能不存在。
+    """
+    c = TestClient(app)
+    r = c.post(
+        "/api/auth/reset-password-by-email",
+        json={"email": "csrftest@example.com", "code": "000000", "new_password": "passpass"},
+    )
+    assert "CSRF" not in r.text, f"忘记密码端点被 CSRF 拦了: {r.status_code} {r.text[:160]}"
 
 
 def test_authenticated_endpoints_stay_protected():

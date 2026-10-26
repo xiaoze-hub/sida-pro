@@ -74,7 +74,7 @@ export default function MissingFields({
         className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:text-foreground"
       >
         {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
-        <span className="truncate">
+        <span className="truncate" title={`${head}${summary ? ` · ${summary}` : ''}`}>
           {head}
           {summary ? ` · ${summary}` : ''}
         </span>
@@ -84,8 +84,8 @@ export default function MissingFields({
         <ul className="mt-1 space-y-0.5 border-l border-border/60 pl-2" data-testid="missing-fields-list">
           {items.map((it) => (
             <li key={`${it.label}-${it.reason}`} className="flex gap-2">
-              <span className="shrink-0 text-foreground/80">{it.label}</span>
-              <span className="text-muted-foreground/80">{it.reason}</span>
+              <span className="shrink-0 text-foreground">{it.label}</span>
+              <span className="text-muted-foreground">{it.reason}</span>
             </li>
           ))}
         </ul>

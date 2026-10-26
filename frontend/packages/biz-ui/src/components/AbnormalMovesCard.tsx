@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { AlertTriangle, RefreshCw, ShieldAlert, Zap } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 
@@ -133,7 +134,7 @@ const STYLE: Record<AbnormalStatus, StatusStyle> = {
   },
   unknown: {
     badgeBg: 'bg-slate-500/10 border-slate-500/30',
-    badgeText: 'text-slate-600 dark:text-slate-400',
+    badgeText: 'text-muted-foreground',
     barBg: 'bg-slate-400',
     rowHover: 'bg-slate-500/[0.04]',
   },
@@ -189,7 +190,7 @@ function Row({ row, onOpen }: RowProps) {
 
       {/* 名称 + 板块 + 来源 */}
       <div className="min-w-0">
-        <div className="text-[12px] font-medium text-foreground truncate">{row.name || row.symbol}</div>
+        <div className="text-[12px] font-medium text-foreground truncate" title={row.name || row.symbol}>{row.name || row.symbol}</div>
         <div className="text-[10px] text-muted-foreground flex items-center gap-1">
           <span>{row.board_name || '—'}</span>
           {row.source && row.source !== 'watchlist' ? (
@@ -199,7 +200,7 @@ function Row({ row, onOpen }: RowProps) {
       </div>
 
       {/* 最接近的窗口规则 */}
-      <span className="text-[10px] text-muted-foreground font-mono truncate">
+      <span className="text-[10px] text-muted-foreground font-mono truncate" title={worstLabel(row)}>
         {worstLabel(row)}
       </span>
 
@@ -295,14 +296,15 @@ export default function AbnormalMovesCard({
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), intervalMs)
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load, intervalMs])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, intervalMs, { deps: [load, intervalMs] })
 
   // 加载占位
   if (loading && !data) {

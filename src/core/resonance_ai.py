@@ -14,25 +14,47 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# 提示词文件化(仓库约定: 一 agent 一 prompt 文件, 落在 prompts/) —— 硬编码提示词抽到文件,
+# 单一事实来源; 加载失败(部署缺文件)回落到此处**留存的**同名兜底内容, 行为不因 IO 而变。
+_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+
+
+def _load_prompt(filename: str, fallback: str = "") -> str:
+    """读 prompts/<filename>; 缺文件/读失败 → 回 fallback(不抛)。末尾换行归一(rstrip '\\n'),
+    与抽取前硬编码字符串逐字一致。"""
+    try:
+        return (_PROMPTS_DIR / filename).read_text(encoding="utf-8").rstrip("\n")
+    except Exception as exc:  # noqa: BLE001 —— 提示词缺失只降级, 不阻断
+        logger.warning("共振 AI 提示词加载失败(%s): %r", filename, exc)
+        return fallback
+
 
 VERDICT_STRONG = "强共振"
 VERDICT_WEAK = "弱共振"
 VERDICT_NONE = "未共振"
 VERDICT_UNKNOWN = "无法判定"
 
-SYSTEM_PROMPT = (
-    "你是 SIDA(数智分析)的「三指标共振」分析员。三个指标定义:\n"
-    "1) 趋势(GS策略): G区/G信号=趋势向上; S区/S信号=趋势向下; 无数据=不可用。\n"
-    "2) 强度(AI机构活跃度): 数值, 档位 弱(<1.56)/生命(1.56~3)/强势(3~6)/大牛(≥6); 阈值 1.56/3/6。\n"
-    "3) 资金(主力净流入): 正=净流入, 负=净流出, 单位元; 缺失=不可得。\n"
-    "判定口径: 趋势在 G 区 + 活跃度≥3(强势线) + 资金净流入 = **强共振**; 满足两项 = **弱共振**; "
-    "否则 **未共振**; 关键项缺失导致无法判断时, 必须输出 **无法判定** 并列出缺失项。\n"
-    "要求: 只依据给出的数据推理, 禁止脑补或引用外部信息; 语言精炼; 必须输出 JSON。\n"
-    '输出 JSON(不要多余文字): {"resonance":"强共振|弱共振|未共振|无法判定","confidence":0~1,'
-    '"summary":"一句话结论(≤40字)","reasons":["依据1","依据2"],"risks":["风险/背离1"],'
-    '"watch":["下一步该看什么1"],"missing":["缺失项(如有)"]}'
+#: 决策账本 signal_kind(与 resonance_scan.record_many 落库口径一致) —— 置信度校准/相似情形取数用
+RESONANCE_SIGNAL_KIND = "resonance3"
+
+SYSTEM_PROMPT = _load_prompt(
+    "resonance_ai.txt",
+    (
+        "你是 SIDA(数智分析)的「三指标共振」分析员。三个指标定义:\n"
+        "1) 趋势(GS策略): G区/G信号=趋势向上; S区/S信号=趋势向下; 无数据=不可用。\n"
+        "2) 强度(AI机构活跃度): 数值, 档位 弱(<1.56)/生命(1.56~3)/强势(3~6)/大牛(≥6); 阈值 1.56/3/6。\n"
+        "3) 资金(主力净流入): 正=净流入, 负=净流出, 单位元; 缺失=不可得。\n"
+        "判定口径: 趋势在 G 区 + 活跃度≥3(强势线) + 资金净流入 = **强共振**; 满足两项 = **弱共振**; "
+        "否则 **未共振**; 关键项缺失导致无法判断时, 必须输出 **无法判定** 并列出缺失项。\n"
+        "要求: 只依据给出的数据推理, 禁止脑补或引用外部信息; 语言精炼; 必须输出 JSON。\n"
+        '输出 JSON(不要多余文字): {"resonance":"强共振|弱共振|未共振|无法判定","confidence":0~1,'
+        '"summary":"一句话结论(≤40字)","reasons":["依据1","依据2"],"risks":["风险/背离1"],'
+        '"watch":["下一步该看什么1"],"missing":["缺失项(如有)"],"invalidation":["失效条件1"]}'
+    ),
 )
 
 
@@ -84,6 +106,7 @@ def parse_ai_verdict(content: str | None) -> dict:
             "risks": [],
             "watch": [],
             "missing": [],
+            "invalidation": [],
             "parse_error": True,
         }
     raw = content.strip()
@@ -103,6 +126,7 @@ def parse_ai_verdict(content: str | None) -> dict:
             "risks": [],
             "watch": [],
             "missing": [],
+            "invalidation": [],
             "parse_error": True,
         }
     verdict = str(data.get("resonance") or "").strip()
@@ -130,20 +154,78 @@ def parse_ai_verdict(content: str | None) -> dict:
         "risks": _list("risks"),
         "watch": _list("watch"),
         "missing": _list("missing"),
+        "invalidation": _list("invalidation"),
         "parse_error": False,
     }
 
 
+# ── 证据链装配(2026-10-10): 触发条件由规则数据确定性拼出, 失效条件由 LLM 给/缺失回默认 ──
+def build_verdict_triggers(detail: dict) -> list[str]:
+    """从规则三灯(detail)确定性拼出「触发条件清单」——哪几个指标条件成立。纯函数, 不编造。"""
+    from src.core.thresholds import strong_line
+
+    trig: list[str] = []
+    trend = (detail or {}).get("trend")
+    if trend in ("G信号", "G区间"):
+        trig.append(f"趋势 {trend}(G 区向上)")
+    elif trend in ("S信号", "S区间"):
+        trig.append(f"趋势 {trend}(S 区向下)")
+    elif trend:
+        trig.append(f"趋势 {trend}")
+    act = (detail or {}).get("activity")
+    if act is not None:
+        try:
+            a = float(act)
+            line = strong_line()
+            if a >= line:
+                trig.append(f"活跃度 {a:.2f} ≥ 强势线 {line}")
+            else:
+                trig.append(f"活跃度 {a:.2f} < 强势线 {line}(强度不足)")
+        except (TypeError, ValueError):
+            trig.append(f"活跃度 {act}(无法解析)")
+    fund = (detail or {}).get("fund_net")
+    if fund is not None:
+        try:
+            f = float(fund)
+            trig.append(f"主力净{'流入' if f > 0 else '流出'} {abs(f) / 1e8:.2f}亿")
+        except (TypeError, ValueError):
+            trig.append("主力资金(无法解析)")
+    return trig
+
+
+def build_verdict_evidence(detail: dict, ai: dict | None = None) -> dict:
+    """装配共振 AI 判定的证据链(触发条件 + 数据时点 + 失效条件)。纯函数, 无 IO。
+
+    - 触发条件: 确定性规则数据(build_verdict_triggers);
+    - as_of: detail.trade_date(缺失显式「时点缺失」);
+    - 失效条件: LLM `invalidation`; 缺失回**领域化**默认(G/S 反转即作废), 绝不空。
+    """
+    from src.core.evidence_chain import build_evidence_chain
+
+    ai = ai if isinstance(ai, dict) else {}
+    return build_evidence_chain(
+        triggers=build_verdict_triggers(detail),
+        as_of=(detail or {}).get("trade_date"),
+        invalidation=ai.get("invalidation"),
+        default_invalidation=[
+            "若 GS 趋势转 S 区 / 活跃度跌破强势线 / 主力资金转净流出, 则此共振判断作废",
+        ],
+    )
+
+
 # ── 盘后批量判定(2026-09-11 老板"可以": 当日共振标的批量跑, 首页行内显示) ──────────
 BATCH_CHUNK = 12  # 单次 LLM 覆盖的标的数(控制调用量与输出长度)
-BATCH_SYSTEM_PROMPT = (
-    "你是 SIDA(数智分析)的「三指标共振」分析员。三指标: 1) 趋势(GS策略): G区/G信号=向上; "
-    "2) 强度(AI机构活跃度): 阈值 1.56/3/6, 大于等于3 为强势; 3) 资金(主力净流入, 元): 正=流入。\n"
-    "判定口径: 趋势G区 + 活跃度大于等于3 + 资金净流入 = 强共振; 满足两项 = 弱共振; 否则 未共振; "
-    "关键项缺失且影响判断 = 无法判定。\n"
-    "只依据给定数据, 禁止脑补。输出 JSON 数组, 每只一行, 不要多余文字:\n"
-    '[{"symbol":"600519","verdict":"强共振|弱共振|未共振|无法判定","confidence":0~1,'
-    '"summary":"一句话(<=30字)","risk":"主要风险(<=20字, 无则空串)"}]'
+BATCH_SYSTEM_PROMPT = _load_prompt(
+    "resonance_ai_batch.txt",
+    (
+        "你是 SIDA(数智分析)的「三指标共振」分析员。三指标: 1) 趋势(GS策略): G区/G信号=向上; "
+        "2) 强度(AI机构活跃度): 阈值 1.56/3/6, 大于等于3 为强势; 3) 资金(主力净流入, 元): 正=流入。\n"
+        "判定口径: 趋势G区 + 活跃度大于等于3 + 资金净流入 = 强共振; 满足两项 = 弱共振; 否则 未共振; "
+        "关键项缺失且影响判断 = 无法判定。\n"
+        "只依据给定数据, 禁止脑补。输出 JSON 数组, 每只一行, 不要多余文字:\n"
+        '[{"symbol":"600519","verdict":"强共振|弱共振|未共振|无法判定","confidence":0~1,'
+        '"summary":"一句话(<=30字)","risk":"主要风险(<=20字, 无则空串)"}]'
+    ),
 )
 
 
@@ -198,6 +280,7 @@ def parse_batch_verdicts(content: str | None, symbols: list[str]) -> list[dict]:
                 "confidence": conf,
                 "summary": str(item.get("summary") or "").strip()[:80],
                 "risk": str(item.get("risk") or "").strip()[:60],
+                "invalidation": str(item.get("invalidation") or "").strip()[:80],
             }
         )
     return out

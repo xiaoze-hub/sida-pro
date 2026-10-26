@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SafeMarkdown from '@/components/SafeMarkdown'
 // 反AI模板 P2:精简图标导入 — 段落头去"每节一图标"惯性, 只保留要紧事/体检两个扫描区的图标
-import { RefreshCw, AlertTriangle, ShieldAlert, Share2, FileText, ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { RefreshCw, AlertTriangle, ShieldAlert, Share2, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import {
   dashboardApi,
   portfolioApi,
   recommendationsApi,
   homeApi,
   stocksApi,
-  reportsApi,
+  premarketApi,
   type DashboardMarketIndex,
   type DashboardMarketCapitalFlow,
   type DashboardMarketStatus,
@@ -20,7 +20,7 @@ import {
   type StrategySignalItem,
   type AlertHitToday,
   type PortfolioTodo,
-  type ReportItem,
+  type PremarketTodayResponse,
   type CurateCandidate,
   type CuratedItem,
   type AttributionItem,
@@ -29,6 +29,7 @@ import {
   fetchAPI,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { Skeleton } from '@/components/Skeleton'
 import { Onboarding } from '@panwatch/biz-ui/components/onboarding'
 import KpiBand, { usePhaseLabel, useMainlineTop1 } from '@panwatch/biz-ui/components/KpiBand'
@@ -48,6 +49,10 @@ import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import MarketStatusPills from '@/components/MarketStatusPills'
 import DashboardCustomizer from '@/components/DashboardCustomizer'
+import CollapsibleSection from '@/components/dashboard/CollapsibleSection'
+import IndexTrendBand from '@/components/dashboard/IndexTrendBand'
+import MarketBroadcast from '@/components/dashboard/MarketBroadcast'
+import { readCollapsed } from '@/lib/dashboard-collapse'
 import {
   isHidden,
   loadLayout,
@@ -64,7 +69,6 @@ import BenchmarkShareCard from '@/components/BenchmarkShareCard'
 import DiagnosticsShareCard from '@/components/DiagnosticsShareCard'
 import DigestShareCard from '@/components/DigestShareCard'
 import StockContextMenu, { type StockContextMenuState, type StockContextTarget } from '@/components/StockContextMenu'
-import { parseServerTime } from '@/lib/utils'
 import { useI18n } from '@/hooks/useI18n'
 import Stat from '@panwatch/biz-ui/components/Stat'
 import { navBackState } from '@/lib/nav-back'
@@ -126,24 +130,19 @@ function formatHeaderTime(d: Date): string {
   const mm = String(d.getMinutes()).padStart(2, '0')
   return `${y}-${m}-${day} 周${WEEKDAY_LABEL[d.getDay()]} · ${hh}:${mm} 已刷新`
 }
-/** 报告相对时间:1分钟内→"刚刚";1小时内→"N分钟前";当天→"今天 HH:MM";昨天→"昨天 HH:MM";更早→"M月D日 HH:MM" */
-function formatReportTime(iso: string): string {
-  if (!iso) return ''
-  const d = parseServerTime(iso)
-  if (isNaN(d.getTime())) return iso.replace('T', ' ').slice(0, 16)
-  const now = new Date()
-  const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000)
-  if (diffMin < 1) return '刚刚'
-  if (diffMin < 60) return `${diffMin}分钟前`
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const startDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-  if (startDay === startToday) return `今天 ${hm}`
-  if (startDay === startToday - 86_400_000) return `昨天 ${hm}`
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
+/** 盘前分析逐票预案动作码 → 展示文案(action 是后端枚举码, 未知码原样透出, 不吞) */
+const PLAN_ACTION_LABEL: Record<string, string> = {
+  watch: '关注',
+  hold: '持有',
+  alert: '预警',
+  avoid: '回避',
 }
+
+/** 盘前分析是否有可展示内容(空态判定: 无标题/摘要/主线/预案才算「尚未生成」) */
+function hasPremarketContent(d: PremarketTodayResponse): boolean {
+  return !!(d.title || d.summary || d.structured?.mainlines?.length || d.structured?.plans?.length)
+}
+
 const ALERT_LABEL: Record<string, string> = {
   surge: 'alerts.surge',
   plunge: 'alerts.plunge',
@@ -169,6 +168,23 @@ const MARKET_BAR_CLS: Record<string, string> = {
   HK: 'bg-orange-500',
 }
 
+// ── perf(2026-10-02) 首屏渲染缓存 ──────────────────────────────────────────────
+// 首页父组件状态极多(30s 轮询 / 数据源错误横幅 / 看板定制 / 分享弹窗 / 右键菜单 ...),
+// 任一变更都会重渲染整棵树。下列区块各自带取数 + 画布/重列表, 入参只来自自己的数据(或空),
+// 与父组件的无关状态无关 —— 用 memo 钉住, 无关变更时不重渲染(照 404c2d5 深度分析页 memo LayerKline)。
+// 注: KpiBand 依赖的 `phase` 对象已在 usePhaseLabel 内 useMemo 稳定, 否则 memo 恒失效。
+const KpiBandMemo = memo(KpiBand)
+const MarketPhaseCardMemo = memo(MarketPhaseCard)
+const MarketMainlineCardMemo = memo(MarketMainlineCard)
+const BreadthDistributionChartMemo = memo(BreadthDistributionChart)
+const FlowHistoryChartMemo = memo(FlowHistoryChart)
+const ResonancePanelMemo = memo(ResonancePanel)
+const DiscoveryPanelMemo = memo(DiscoveryPanel)
+
+/** perf(2026-10-02): 慢车道(基准/归因, 分钟级)错峰延迟 —— 让首屏关键请求先占住后端单 worker
+ *  的队列/浏览器连接池。见 load() 内「错峰」注释。 */
+const SLOW_LANE_DELAY_MS = 1200
+
 export default function DashboardPage() {
   const navigate = useNavigate()
   const { t } = useI18n()
@@ -190,14 +206,19 @@ export default function DashboardPage() {
   const [watchSymbols, setWatchSymbols] = useState<Set<string>>(new Set())
   void watchSymbols // v0.4.7: 简报移除后暂无读值场景, setter 仍用于快捷加自选
   const [marketStatus, setMarketStatus] = useState<DashboardMarketStatus[]>([])
-  // 最新报告(Hermes cron):首页速览取最近 4 条,30s 随首页自动刷新
-  const [reports, setReports] = useState<ReportItem[]>([])
-  const [reportsLoading, setReportsLoading] = useState(true)
+  // 盘前/盘后分析(入口扶正 2026-10-23): 首页速览改挂今日分析, 底稿归档留在 /reports
+  // 独立非阻塞加载: 首屏(loading 翻 false)之后才取数, 绝不与首帧请求抢连接/队列
+  const [premarket, setPremarket] = useState<PremarketTodayResponse | null>(null)
+  const [premarketState, setPremarketState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  // 空态「立即分析」触发中(防连点; run 成功后立即重取今日记录)
+  const [premarketRunning, setPremarketRunning] = useState(false)
   // 大盘资金流(同花顺源,东财 502 替代)
   const [marketFlow, setMarketFlow] = useState<DashboardMarketCapitalFlow | null>(null)
   // 异动池(东财) / 热榜(同花顺):独立加载,任一失败静默,不影响首页其他内容
   const [anomalies, setAnomalies] = useState<MarketAnomalyItem[]>([])
   const [anomaliesLoading, setAnomaliesLoading] = useState(true)
+  /** 异动池是否已取过（展开才取数；取过之后刷新才会跟着更新） */
+  const anomaliesLoadedRef = useRef(false)
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null)
   // 2026-08-17: 数据源失败显式标识 — 收集 {source, message},横幅展示具体哪个源挂了
   const [sourceErrors, setSourceErrors] = useState<Array<{ id: number; source: string; message: string; retry?: () => void }>>([])
@@ -238,15 +259,49 @@ export default function DashboardPage() {
   // 修复 2026-08-21: 默认关闭 Onboarding(原默认 true → 换浏览器/清缓存后用户被强制挡整页无法点击)
   // 改由头部"新手引导"按钮主动触发, localStorage 标志仍用于标记"已看过"以避免重复打扰
   const [showOnboarding, setShowOnboarding] = useState(false)
+  // 首屏分层(2026-10-24 重排): 不再用「一个按钮放/收全部」。
+  // 收起时要藏的是**数字堆**(异动池列表 / 资金流明细 / 重复的 KPI 带),
+  // 不是结论的支撑(情绪阶段、主线、共振、涨跌分布)—— 那几个必须常显, 否则用户读完
+  // 一句话还得再点两次才知道"为什么"。每块独立折叠, 见 components/dashboard/CollapsibleSection。
   const openOnboarding = useCallback(() => setShowOnboarding(true), [])
 
   // 慢车道:基准/归因(拉全持仓 K 线,分钟级);独立可重试,失败/为空各有明确状态
   // P1(audit-20260915): Promise.allSettled 回调需 alive 守卫(仿下方 curate 模式), 卸载后不再 setState
   const benchAliveRef = useRef(true)
+  /** perf(2026-10-02): 慢车道错峰定时器(卸载/重复 load 时清理) */
+  const benchTimerRef = useRef<number | null>(null)
+  /** perf(2026-10-02): load 并发序号 —— 丢弃过期响应(竞态守卫, 见 load 内注释) */
+  const loadSeqRef = useRef(0)
   useEffect(() => {
     benchAliveRef.current = true
-    return () => { benchAliveRef.current = false }
+    return () => {
+      benchAliveRef.current = false
+      if (benchTimerRef.current !== null) {
+        window.clearTimeout(benchTimerRef.current)
+        benchTimerRef.current = null
+      }
+    }
   }, [])
+  /** 展开异动池时才取数（首屏不为折叠块付 3.5s 的并发代价） */
+  const loadAnomalies = useCallback(() => {
+    if (anomaliesLoadedRef.current) return
+    anomaliesLoadedRef.current = true
+    setAnomaliesLoading(true)
+    dashboardApi
+      .anomalies({ limit: 10 })
+      .then((r) => setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)))
+      .catch((err) => {
+        setAnomalies([])
+        pushError(t('dashboard.errorSources.anomalies'), err?.message || t('common.serviceUnavailable'), loadAnomalies)
+      })
+      .finally(() => setAnomaliesLoading(false))
+  }, [t])
+
+  // 用户把这块持久化成"展开"了 → 挂载后补一次（不能因为默认折叠就永远不取）
+  useEffect(() => {
+    if (!readCollapsed('anomalies', true)) loadAnomalies()
+  }, [loadAnomalies])
+
   const loadBench = useCallback(() => {
     setBenchState('loading')
     Promise.allSettled([portfolioApi.benchmark({ days: 60 }), portfolioApi.attribution(60)]).then(([bn, at]) => {
@@ -262,32 +317,33 @@ export default function DashboardPage() {
   }, [])
 
   const load = useCallback(async (opts?: { skipBench?: boolean }) => {
+    // perf(2026-10-02) 竞态守卫: 手动刷新/错误重试/30s 轮询可能重叠(此前无序号, 先发后到的
+    // 旧响应会覆盖新数据 —— 例如刷新后旧 overview 又把列表打回旧值)。每次 load 取一个序号,
+    // 落地前校验; 过期的响应一律丢弃(含错误横幅, 不产生幽灵报错)。
+    const seq = ++loadSeqRef.current
+    const stale = () => seq !== loadSeqRef.current
     setLoading(true)
     setSourceErrors([])  // 清空上次错误
     // 指数 pills:独立加载不阻塞首屏(spark 冷启动可能 ~1s,数据到了自然浮现)
-    dashboardApi.indices().then(setIndices).catch((err) => pushError(t('dashboard.errorSources.indices'), err?.message || t('common.serviceUnavailable'), load))
+    dashboardApi.indices().then((v) => { if (!stale()) setIndices(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.indices'), err?.message || t('common.serviceUnavailable'), load) })
     // 大盘资金流(同花顺源):独立加载,失败聚合到全局横幅
-    dashboardApi.marketCapitalFlow().then(setMarketFlow).catch((err) => pushError(t('dashboard.errorSources.fundflow'), err?.message || t('common.serviceUnavailable'), load))
-    // 最新报告(Hermes cron):独立加载,失败静默;cacheMode reload 保证 30s 轮询必拿新数据
-    setReportsLoading(true)
-    reportsApi
-      .list({ limit: 8, cacheMode: 'reload' })
-      .then((r) => setReports((r.items || []).slice(0, 4)))
-      .catch((err) => {
-        setReports([])
-        pushError(t('dashboard.errorSources.reports'), err?.message || t('common.serviceUnavailable'), load)
-      })
-      .finally(() => setReportsLoading(false))
-    // 异动池(东财):独立加载,失败静默(端点未就绪时优雅降级为空态)
-    setAnomaliesLoading(true)
-    dashboardApi
-      .anomalies({ limit: 10 })
-      .then((r) => setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)))
-      .catch((err) => {
-        setAnomalies([])
-        pushError(t('dashboard.errorSources.anomalies'), err?.message || t('common.serviceUnavailable'), load)
-      })
-      .finally(() => setAnomaliesLoading(false))
+    dashboardApi.marketCapitalFlow().then((v) => { if (!stale()) setMarketFlow(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.fundflow'), err?.message || t('common.serviceUnavailable'), load) })
+    // 异动池(东财):**默认折叠, 展开才取数**(2026-10-24 性能实测)。
+    // 实测该接口冷启动 3545ms, 是首页 32 个并发请求里最慢的三个之一;
+    // 而它默认是收起的 —— 为看不见的列表付 3.5s 的并发与主线程代价毫无道理。
+    // 已经取过一次之后, 刷新仍会更新(不要变成"刷新不生效")。
+    if (anomaliesLoadedRef.current) {
+      setAnomaliesLoading(true)
+      dashboardApi
+        .anomalies({ limit: 10 })
+        .then((r) => { if (!stale()) setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)) })
+        .catch((err) => {
+          if (stale()) return
+          setAnomalies([])
+          pushError(t('dashboard.errorSources.anomalies'), err?.message || t('common.serviceUnavailable'), load)
+        })
+        .finally(() => { if (!stale()) setAnomaliesLoading(false) })
+    }
     // 快车道:DB/轻量查询,先让首屏(要紧事/体检分布)尽快出来
     const [sc, ov, dg, ht, td, ms] = await Promise.allSettled([
       dashboardApi.intradayScan(),
@@ -297,6 +353,7 @@ export default function DashboardPage() {
       homeApi.todos(),
       dashboardApi.marketStatus(),
     ])
+    if (stale()) return  // 已被更新的一轮 load 取代 → 丢弃本轮全部结果
     if (sc.status === 'fulfilled') setScan(sc.value.stocks || [])
     if (ov.status === 'fulfilled') setOverview(ov.value)
     if (dg.status === 'fulfilled') setDiag(dg.value)
@@ -317,19 +374,31 @@ export default function DashboardPage() {
     if (ov.status !== 'fulfilled' || !ov.value.action_center?.opportunities?.length) {
       recommendationsApi
         .listStrategySignals({ status: 'active', limit: 5 })
-        .then((r) => setOppFallback(r.items || []))
-        .catch((err) => pushError(t('dashboard.errorSources.oppFallback'), err?.message || t('common.serviceUnavailable'), load))
+        .then((r) => { if (!stale()) setOppFallback(r.items || []) })
+        .catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.oppFallback'), err?.message || t('common.serviceUnavailable'), load) })
     }
 
     // 慢车道:基准/归因需拉全持仓 K 线(分钟级),独立加载,就绪后回填超额/归因。
     // 30s 自动刷新跳过(避免每分钟级重请求 + 图表反复"计算中"),仅首载/手动刷新触发
-    if (!opts?.skipBench) loadBench()
+    //
+    // perf(2026-10-02) 错峰: 后端单个 worker 串行处理首屏 ~18 个请求, 分钟级的慢车道若与
+    // 关键画布(市场温度 /market/phase、涨跌分布)同刻挤入队列, 会直接把画布的 settle 拖到十几秒
+    // (B1 走查: 冷态 14.3s 才稳)。这里把慢车道推迟到首屏请求之后(1.2s 宏任务)再起 ——
+    // 不改变它自身语义(仍是独立的 loading/ready/empty/error 占位), 只是不再抢首屏的连接/队列。
+    if (!opts?.skipBench) {
+      if (benchTimerRef.current !== null) window.clearTimeout(benchTimerRef.current)
+      benchTimerRef.current = window.setTimeout(() => {
+        benchTimerRef.current = null
+        if (benchAliveRef.current) loadBench()
+      }, SLOW_LANE_DELAY_MS)
+    }
 
 
     // 自选股列表(判断盘前标的是否已加自选)
     stocksApi.list().then((rows) => {
+      if (stale()) return
       setWatchSymbols(new Set((rows || []).map((s) => `${s.market}:${s.symbol}`)))
-    }).catch((err) => pushError(t('dashboard.errorSources.watchlist'), err?.message || t('common.serviceUnavailable'), load))
+    }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.watchlist'), err?.message || t('common.serviceUnavailable'), load) })
   }, [loadBench, t])
 
   // 盘前标的快捷加入自选
@@ -351,27 +420,63 @@ export default function DashboardPage() {
     // 历史兼容: 已看过的用户(localStorage 标志存在)依然不会被打扰
   }, [load])
 
-  // 30s 自动刷新:页面可见才轮询(visibilitychange 隐藏时暂停,回到页面立即补一次);
-  // busyRef 防请求叠加;慢车道(基准/归因)跳过,避免每分钟级重请求
-  const autoRefreshBusy = useRef(false)
-  useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
-      autoRefreshBusy.current = true
-      load({ skipBench: true }).finally(() => {
-        autoRefreshBusy.current = false
+  // 盘前/盘后分析(入口扶正 2026-10-23): 首屏 settle(loading 翻 false)之后**独立**取一次,
+  // 与快车道/慢车道解耦 —— 失败只显式落本卡错误态, 不进全局错误横幅, 不阻塞首帧。
+  const premarketFiredRef = useRef(false)
+  const loadPremarket = useCallback(() => {
+    setPremarketState('loading')
+    premarketApi
+      .getToday({ cacheMode: 'reload' })
+      .then((d) => {
+        setPremarket(d)
+        setPremarketState('ready')
       })
+      .catch(() => {
+        setPremarket(null)
+        setPremarketState('error') // 显式「加载失败」, 不伪造空态
+      })
+  }, [])
+  useEffect(() => {
+    if (loading || premarketFiredRef.current) return
+    premarketFiredRef.current = true
+    loadPremarket()
+  }, [loading, loadPremarket])
+  // 空态「立即分析」: 入队成功后立即重取今日记录(生成是异步的, 重取仍为空就留空态+生成中)
+  const runPremarketNow = useCallback(async () => {
+    if (premarketRunning) return
+    setPremarketRunning(true)
+    try {
+      await premarketApi.run()
+      premarketFiredRef.current = true
+      await loadPremarket()
+    } catch {
+      // 入队失败: 保持空态可重试(按钮不禁用), 不回滚已展示内容
+    } finally {
+      setPremarketRunning(false)
     }
-    const timer = setInterval(tick, 30_000)
+  }, [premarketRunning, loadPremarket])
+
+  const autoRefreshBusy = useRef(false)
+  const autoRefreshTick = useCallback(() => {
+    if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
+    autoRefreshBusy.current = true
+    load({ skipBench: true }).finally(() => {
+      autoRefreshBusy.current = false
+    })
+  }, [load])
+  // 30s 自动刷新: 页面可见才轮询(浏览器切后台由下方 visibilitychange 暂停);
+  // 页签 keep-alive(2026-10-15): 走 `usePausedInterval` ⇒ **隐藏页签停表**, 回前台补一次。
+  // 原 setInterval 无首拉 ⇒ `immediate:false`(不额外补首屏请求)。
+  usePausedInterval(autoRefreshTick, 30_000, { immediate: false })
+  useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') tick()
+      if (document.visibilityState === 'visible') autoRefreshTick()
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
-      clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [load])
+  }, [autoRefreshTick])
 
   const handleOnboardingComplete = () => {
     localStorage.setItem('panwatch_onboarding_completed', 'true')
@@ -508,7 +613,14 @@ export default function DashboardPage() {
     return Math.max(...attribution.map((a) => Math.abs(a.contribution_pct)), 0.01)
   }, [attribution])
 
-  // v0.4.6 KPI 带: 情绪阶段标签 + 主线 Top1(轻量拉取, 与下方完整卡错峰复用缓存)
+  // perf(2026-10-02): ResonancePanel 的 actions 元素此前每次渲染都新建 → memo 恒失效(入参引用变)。
+  // 固定引用后, 无关状态变更不再重渲染共振区。
+  const resonanceScanAction = useMemo(
+    () => <ScanJobButton path="/resonance/scan/run" title={t('dashboard.resonanceScan')} />,
+    [t],
+  )
+
+  // v0.4.6 KPI 带: 情绪周期标签 + 主线 Top1(轻量拉取, 与下方完整卡错峰复用缓存)
   const phaseKpi = usePhaseLabel()
   const mainlineKpi = useMainlineTop1()
 
@@ -556,23 +668,61 @@ export default function DashboardPage() {
           数据**全部取自本页已有 state**(phaseKpi / marketFlow), 不新增请求; 缺数一律 `--`, 不用 0 顶。 */}
       <div
         data-testid="market-conclusion"
-        className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground"
+        className="mb-3 rounded-lg border border-border-strong px-3 py-2.5"
       >
-        <span className="font-medium text-foreground">市场情绪</span>
-        <b className="font-mono text-foreground">{phaseKpi.label ?? (phaseKpi.loading ? '加载中' : '--')}</b>
-        {phaseKpi.unavailableNote ? <span className="text-muted-foreground/80">({phaseKpi.unavailableNote})</span> : null}
-        <span className="text-border">|</span>
-        <span>涨停 <b className="font-mono text-stock-up">{phaseKpi.limitUp ?? '--'}</b></span>
-        <span>封板率 <b className="font-mono">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
-        <span className="text-border">|</span>
-        <span>涨 <b className="font-mono text-stock-up">{marketFlow?.up_count ?? '--'}</b>
-          <span className="mx-0.5">/</span>跌 <b className="font-mono text-stock-down">{marketFlow?.down_count ?? '--'}</b></span>
-        <span>成交 <b className="font-mono">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
-        <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
-        {/* 口径统一徽章(2026-09-22): 有原始口径值就给徽章, 只有中文标签就如实显示标签 */}
-        <span className="ml-auto">
-          <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
-        </span>
+        {/* 2026-10-24: 右侧曾整片留白(14% 屏高只放 6 个数字) → 挂大盘分时走势带。
+            左列宽度自适应, 右列 280–380; 窄屏(<lg)堆叠, 走势带落到数字下方。
+            分时数据独立请求, 不阻塞结论句渲染(首页冷启动结论可见已 2.7s, 不能再压)。 */}
+        <div className="grid gap-3 lg:grid-cols-[1fr_minmax(280px,380px)] lg:items-start">
+        <div className="min-w-0">
+        {/* 结论句(2026-10-24 L2-A): 首屏先给一句非数字结论 —— 此前 8 个数字并排, 读完说不出结论。
+            只用本页已有 state, 缺数如实写「未知/尚未识别」, 不用 0 顶。 */}
+        <p className="text-[16px] font-medium leading-snug text-foreground">
+          {phaseKpi.loading && !phaseKpi.label
+            ? '正在取市场状态…'
+            : `市场情绪 ${phaseKpi.label ?? '未知'}，${
+                marketFlow?.up_count != null && marketFlow?.down_count != null
+                  ? (marketFlow.up_count >= marketFlow.down_count ? '红盘占优' : '绿盘占优')
+                  : '涨跌家数未取到'
+              }，主线在${mainlineKpi.top?.name ?? (mainlineKpi.loading ? '识别中' : '尚未识别')}`}
+          {phaseKpi.unavailableNote ? <span className="ml-1 text-[12px] text-muted-foreground">（{phaseKpi.unavailableNote}）</span> : null}
+        </p>
+        {/* 3 个结论数字: 涨停 / 涨跌 / 主线强度(无强度则主线名) */}
+        <div className="mt-2 grid grid-cols-3 gap-3">
+          <div>
+            <div className="text-[11px] text-muted-foreground">涨停</div>
+            <div className="font-num text-[20px] font-semibold tabular-nums text-stock-up">{phaseKpi.limitUp ?? '--'}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-muted-foreground">涨 / 跌</div>
+            <div className="font-num text-[20px] font-semibold tabular-nums">
+              <span className="text-stock-up">{marketFlow?.up_count ?? '--'}</span>
+              <span className="mx-1 text-muted-foreground">/</span>
+              <span className="text-stock-down">{marketFlow?.down_count ?? '--'}</span>
+            </div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] text-muted-foreground">主线 Top1</div>
+            <div className="truncate font-num text-[20px] font-semibold tabular-nums text-foreground">
+              {mainlineKpi.top?.name ?? (mainlineKpi.loading ? '…' : '--')}
+            </div>
+          </div>
+        </div>
+        {/* 细项降为第二行小字: 封板率 / 成交 / 主力净流入 / 口径 */}
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/40 pt-2 text-[11px] text-muted-foreground">
+          <span>封板率 <b className="font-mono text-foreground">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
+          <span>成交 <b className="font-mono text-foreground">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
+          <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
+          <span className="ml-auto">
+            <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
+          </span>
+        </div>
+        <div className="mt-2 border-t border-border/40 pt-2">
+          <MarketBroadcast />
+        </div>
+        </div>
+        <IndexTrendBand />
+        </div>
       </div>
 
       {/* 核心接口失败横幅:失败≠空态,给出重试入口 */}
@@ -607,8 +757,17 @@ export default function DashboardPage() {
                 />
               </div>
               <FlashValue value={ix.change_pct}>
-                <span className={`shrink-0 rounded px-1 py-0.5 font-num tabular-nums text-[10px] ${pctChipCls(ix.change_pct)}`}>
-                  {ix.change_pct != null ? pct(ix.change_pct) : '--'}
+                {/* L2-A 第3步: 证据层每卡只留 1 个数字(点位) + 方向箭头。
+                    涨跌幅数值移入 title, 不再和点位并排抢首屏注意力。 */}
+                {/* 2026-10-24: 只有箭头时「涨了多少」要悬停才知道 —— 恢复数值。
+                    箭头留作方向（色盲友好），百分比给量级。 */}
+                <span
+                  className={`shrink-0 rounded px-1 py-0.5 font-num tabular-nums text-[12px] ${pctChipCls(ix.change_pct)}`}
+                  title={ix.change_pct != null ? `${pct(ix.change_pct)}（值在同名指数页）` : '无数据'}
+                >
+                  {ix.change_pct == null
+                    ? '—'
+                    : `${ix.change_pct > 0 ? '▲' : ix.change_pct < 0 ? '▼' : '→'} ${pct(ix.change_pct)}`}
                 </span>
               </FlashValue>
             </div>
@@ -623,10 +782,22 @@ export default function DashboardPage() {
       </div>
       )}
 
-      {/* v0.4.6 KPI 带(借鉴 TSP): 数字优先 6 格, 一眼看全市场状态 */}
+      {/* KPI 带与结论行 6 个数字完全重复(涨跌/净流入/成交/情绪/主线/涨停跌停),
+          默认收起但**保留模块**(看板定制里仍可开), 表头写明重复关系, 不让人以为丢了数据。 */}
       {shown('kpi') && (
-      <div style={{ order: orderIndex(layout, 'kpi') }}>
-      <KpiBand
+      <div style={{ order: orderIndex(layout, 'kpi') }} className="mb-1">
+      <CollapsibleSection
+        id="kpi"
+        header={
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h2 className="text-[13px] font-semibold">{t('dashboard.kpiBand')}</h2>
+            <span className="text-[11px] text-muted-foreground">
+              与上方结论行同源同值（涨停 / 涨跌 / 净流入 / 成交），需要横向对照时展开
+            </span>
+          </div>
+        }
+      >
+      <KpiBandMemo
         upCount={marketFlow?.up_count ?? null}
         downCount={marketFlow?.down_count ?? null}
         mainFlowYi={marketFlow?.total_main_flow ?? null}
@@ -636,63 +807,90 @@ export default function DashboardPage() {
         mainlineLoading={mainlineKpi.loading}
         mainlineError={mainlineKpi.error}
       />
+      </CollapsibleSection>
       </div>
       )}
 
-      {/* 市场全景(P1-6 首屏重排: 先市场后个人 — 情绪/主线/资金/分布前置, 个人工作台后置) */}
-      {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
+      {/* 市场全景: 情绪周期 6 阶段 / 主线识别 / 市场温度。
+          三张卡本身是**直方图 + 刻度**(实测 13 个数字), 属于「证据」不是「结论」;
+          但它们的结论(哪个阶段、主线是谁)必须常显 —— 所以放进表头, 卡体折叠。 */}
       {shown('overview') && (
-      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
-        <MarketPhaseCard />
-        <MarketMainlineCard />
-        {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
-        <PhaseGaugeCard />
+      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5">
+        <CollapsibleSection
+          id="overview"
+          header={
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <h2 className="text-[13px] font-semibold">市场全景</h2>
+              <span className="text-[12px] text-foreground">
+                情绪 <b className="font-medium">{phaseKpi.label ?? (phaseKpi.loading ? '识别中' : '未知')}</b>
+              </span>
+              <span className="text-[12px] text-foreground">
+                主线 <b className="font-medium">{mainlineKpi.top?.name ?? (mainlineKpi.loading ? '识别中' : '尚未识别')}</b>
+                {mainlineKpi.top?.leader_name ? (
+                  <span className="ml-1 text-[11px] text-muted-foreground">龙头 {mainlineKpi.top.leader_name}</span>
+                ) : null}
+              </span>
+              <span className="text-[11px] text-muted-foreground">展开看阶段分布 / 强度对比 / 温度刻度</span>
+            </div>
+          }
+        >
+          <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
+            <MarketPhaseCardMemo />
+            <MarketMainlineCardMemo />
+            {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
+            <PhaseGaugeCard />
+          </div>
+        </CollapsibleSection>
       </div>
       )}
 
       {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
       {/* 反AI模板 P2:次要列表区去卡片化 — 去掉盒子, 顶部 1px hairline + 留白, 标题/指标直排 */}
       {shown('fundflow') && marketFlow && (
-        <div style={{ order: orderIndex(layout, 'fundflow') }} className="mt-5 border-t border-border/60 pt-3">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[13px] font-semibold">{t('dashboard.fundflow')}</span>
-            <span className="text-[10px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
-            {/* B3/3.4 口径标签: 后端 caliber_label 缺失时回退静态文案 */}
-            <span
-              className="cursor-help text-[10px] text-muted-foreground/80 underline decoration-dotted underline-offset-2"
-              title={marketFlow.caliber_label || t('dashboard.caliberHint')}
-            >
-              {t('dashboard.caliberLabel')}
-            </span>
-            {/* C2 stale-on-error: 源故障回退旧快照 → 显式标注滞后年龄(过期数据+标注 > 空白) */}
-            {marketFlow.stale && (
-              <span
-                className="text-[10px] text-amber-600"
-                title={t('dashboard.staleHint')}
-              >
-                · {t('dashboard.stale')}{marketFlow.stale_age_sec != null ? t('dashboard.staleMin', { n: Math.max(1, Math.round(marketFlow.stale_age_sec / 60)) }) : ''}
-              </span>
-            )}
-          </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
-              <span className="text-muted-foreground">{t('dashboard.mainNetInflow')}
-                <b className={`font-mono text-[16px] font-semibold ${marketFlow.total_main_flow == null
-                  ? 'text-muted-foreground'
-                  : marketFlow.total_main_flow >= 0
-                    ? 'text-stock-up'
-                    : 'text-stock-down'}`}>
-                  <span className="text-muted-foreground">{safeFlow(marketFlow.total_main_flow)}</span>
+        <div style={{ order: orderIndex(layout, 'fundflow') }} className="mt-5">
+          <CollapsibleSection
+            id="fundflow"
+            header={
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <h2 className="text-[13px] font-semibold">{t('dashboard.fundflow')}</h2>
+                {/* 折叠态也要能读到方向与量级：主力净流入直接进表头 */}
+                <b
+                  className={`font-mono text-[13px] font-semibold ${marketFlow.total_main_flow == null
+                    ? 'text-muted-foreground'
+                    : marketFlow.total_main_flow >= 0
+                      ? 'text-stock-up'
+                      : 'text-stock-down'}`}
+                >
+                  {safeFlow(marketFlow.total_main_flow)}
                 </b>
-              </span>
-              <span className="text-muted-foreground">{t('dashboard.amount')} <b className="font-mono">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
-              <span className="text-muted-foreground">{t('dashboard.up')} <b className="text-stock-up font-mono">{marketFlow.up_count ?? '--'}</b>
-                <span className="mx-1">/</span>{t('dashboard.down')} <b className="text-stock-down font-mono">{marketFlow.down_count ?? '--'}</b></span>
-              <span className="text-muted-foreground">{t('dashboard.sh')} <b className="font-mono">{safeFixed(marketFlow.sh_flow, 1)}亿</b>
-                <span className="mx-1">/</span>{t('dashboard.sz')} <b className="font-mono">{safeFixed(marketFlow.sz_flow, 1)}亿</b></span>
-            </div>
-
+                <span className="text-[11px] text-muted-foreground">
+                  {t('dashboard.amount')} {marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  {t('dashboard.up')} <b className="font-mono text-stock-up">{marketFlow.up_count ?? '--'}</b>
+                  {' / '}
+                  {t('dashboard.down')} <b className="font-mono text-stock-down">{marketFlow.down_count ?? '--'}</b>
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  {t('dashboard.sh')} {safeFixed(marketFlow.sh_flow, 1)}亿 · {t('dashboard.sz')} {safeFixed(marketFlow.sz_flow, 1)}亿
+                </span>
+                <span className="text-[10px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
+                <span
+                  className="cursor-help text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2"
+                  title={marketFlow.caliber_label || t('dashboard.caliberHint')}
+                >
+                  {t('dashboard.caliberLabel')}
+                </span>
+                {marketFlow.stale && (
+                  <span className="text-[10px] text-amber-600" title={t('dashboard.staleHint')}>
+                    · {t('dashboard.stale')}{marketFlow.stale_age_sec != null ? t('dashboard.staleMin', { n: Math.max(1, Math.round(marketFlow.stale_age_sec / 60)) }) : ''}
+                  </span>
+                )}
+              </div>
+            }
+          >
           {/* v0.4.7: 日内主力净流入面积图(30s 快照序列) */}
-          <FlowHistoryChart />
+          <FlowHistoryChartMemo />
 
           {/* 板块资金明细: 流入榜 / 流出榜 */}
           {(marketFlow.inflow_boards?.length || marketFlow.outflow_boards?.length) ? (
@@ -707,7 +905,7 @@ export default function DashboardPage() {
                         <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
                           {/* 2026-09-05 质感: 纯色10% → 左实右虚渐变，有“水位感” */}
                           <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-up/25 to-stock-up/5 transition-all duration-500" style={{ width: `${Math.min(100, (b.net_inflow / maxIn) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
-                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
+                          <span className="relative z-10 truncate px-1 text-muted-foreground" title={b.name}>{b.name}</span>
                           <span className="relative z-10 font-mono tabular-nums text-stock-up">+{safeFixed(b.net_inflow, 1)}亿</span>
                         </div>
                       ))
@@ -724,7 +922,7 @@ export default function DashboardPage() {
                       return marketFlow.outflow_boards.map((b, bi) => (
                         <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
                           <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-down/25 to-stock-down/5 transition-all duration-500" style={{ width: `${Math.min(100, (Math.abs(b.net_inflow) / maxOut) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
-                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
+                          <span className="relative z-10 truncate px-1 text-muted-foreground" title={b.name}>{b.name}</span>
                           <span className="relative z-10 font-mono tabular-nums text-stock-down">{safeFixed(b.net_inflow, 1)}亿</span>
                         </div>
                       ))
@@ -734,12 +932,13 @@ export default function DashboardPage() {
               ) : null}
             </div>
           ) : null}
+          </CollapsibleSection>
         </div>
       )}
       {/* 三指标共振(2026-09-11 数智决策升级 B): 盘后全市场扫描落库结果 */}
       {shown('resonance') && (
         <div style={{ order: orderIndex(layout, 'resonance') }} className="mt-5 border-t border-border/60 pt-3">
-          <ResonancePanel actions={<ScanJobButton path="/resonance/scan/run" title={t('dashboard.resonanceScan')} />} />
+          <ResonancePanelMemo actions={resonanceScanAction} />
         </div>
       )}
       </div>{/* /A1 main 区 */}
@@ -749,18 +948,20 @@ export default function DashboardPage() {
       <div className="mt-5 grid grid-cols-1 gap-x-6 md:grid-cols-2">
         {/* 异动池(东财) — v0.4.7 与涨跌分布并排 */}
         {shown('anomalies') && (
-        <div style={{ order: orderIndex(layout, 'anomalies') }} className="border-t border-border/60 pt-2.5">
-          <SectionHeader
-            title={t('dashboard.anomalies')}
-            action={
-              <>
+        <div style={{ order: orderIndex(layout, 'anomalies') }}>
+          <CollapsibleSection
+            id="anomalies"
+            onExpand={loadAnomalies}
+            header={
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <h2 className="text-[13px] font-semibold">{t('dashboard.anomalies')}</h2>
+                <span className="font-mono text-[12px] text-foreground">
+                  {anomaliesLoading && anomalies.length === 0 ? '…' : `${anomalies.length} 只`}
+                </span>
                 <span className="text-[10px] text-muted-foreground">{t('dashboard.anomaliesSource')}</span>
-                {anomaliesLoading && anomalies.length === 0 && (
-                  <RefreshCw className="h-3 w-3 animate-spin self-center text-muted-foreground" />
-                )}
-              </>
+              </div>
             }
-          />
+          >
           {anomaliesLoading && anomalies.length === 0 ? (
             <div className="space-y-2 py-1">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -789,7 +990,7 @@ export default function DashboardPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium">{a.name || sym || '--'}</span>
+                        <span className="truncate text-[13px] font-medium" title={a.name || sym || '--'}>{a.name || sym || '--'}</span>
                         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
                         {a.is_today && (
                           <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">{t('dashboard.todayTag')}</span>
@@ -811,6 +1012,7 @@ export default function DashboardPage() {
               })}
             </div>
           )}
+          </CollapsibleSection>
         </div>
         )}
 
@@ -818,7 +1020,7 @@ export default function DashboardPage() {
         {shown('breadth') && (
         <div style={{ order: orderIndex(layout, 'breadth') }} className="border-t border-border/60 pt-2.5">
           <SectionHeader title={t('dashboard.breadth')} action={<span className="text-[10px] text-muted-foreground">{t('dashboard.breadthScope')}</span>} />
-          <BreadthDistributionChart />
+          <BreadthDistributionChartMemo />
         </div>
         )}
       </div>
@@ -869,7 +1071,7 @@ export default function DashboardPage() {
                     <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">
                       {t.type === 'no_alert' ? '加提醒' : '将到期'}
                     </span>
-                    <span className="truncate">{t.message}</span>
+                    <span className="truncate" title={t.message}>{t.message}</span>
                   </div>
                 ))}
               </div>
@@ -897,7 +1099,7 @@ export default function DashboardPage() {
                   >
                     <span className={`shrink-0 rounded px-1 text-[10px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] font-medium">{it.name || it.symbol}</div>
+                      <div className="truncate text-[13px] font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</div>
                       {it.why && <div className="truncate text-[11px] text-muted-foreground" title={it.why}>{it.why}</div>}
                     </div>
                     <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(it.change_pct)}`}>
@@ -1051,7 +1253,7 @@ export default function DashboardPage() {
                           }
                         />
                       </div>
-                      <span className="w-28 shrink-0 truncate text-right text-[11px]">
+                      <span className="w-28 shrink-0 truncate text-right text-[11px]" title={[item.name, pct(item.contribution_pct)].filter(Boolean).join(' ')}>
                         {item.name} <span className={`font-mono ${moveColor(item.contribution_pct)}`}>{pct(item.contribution_pct)}</span>
                       </span>
                     </div>
@@ -1125,7 +1327,7 @@ export default function DashboardPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium">{o.stock_name || o.stock_symbol}</span>
+                        <span className="truncate text-[13px] font-medium" title={o.stock_name || o.stock_symbol}>{o.stock_name || o.stock_symbol}</span>
                         {o.action_label && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">{o.action_label}</span>}
                       </div>
                       {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground" title={o.signal || o.reason}>{o.signal || o.reason}</div>}
@@ -1139,16 +1341,25 @@ export default function DashboardPage() {
         </div>
         )}
 
-{/* 最新报告(v0.4.6 降级): 右栏紧凑列表, 完整存档在报告页 */}
+{/* 盘前/盘后分析(入口扶正 2026-10-23, 替代「最新报告」): 今日分析速览, 底稿归档在 /reports。
+    独立非阻塞取数(首屏 settle 后), 失败显式错误态, 过期数据显式标注基准日 —— 不静默、不伪造空态 */}
         {shown('reports') && (
         <div style={{ order: orderIndex(layout, 'reports') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
           <SectionHeader
-            title="最新报告"
+            title="盘前 / 盘后分析"
             action={
               <>
-                <span className="text-[10px] text-muted-foreground">盘前/盘后</span>
                 <button
                   type="button"
+                  data-testid="dashboard-premarket-copilot"
+                  onClick={() => navigate('/ai-copilot?agent=premarket_strategist')}
+                  className="mr-2 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                >
+                  问参谋
+                </button>
+                <button
+                  type="button"
+                  data-testid="dashboard-premarket-all"
                   onClick={() => navigate('/reports')}
                   className="shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
                 >
@@ -1157,28 +1368,86 @@ export default function DashboardPage() {
               </>
             }
           />
-          {reportsLoading && reports.length === 0 ? (
+          {premarketState === 'idle' || premarketState === 'loading' ? (
             <SkeletonRows rows={3} />
-          ) : reports.length === 0 ? (
-            <div className="py-4 text-center text-[12px] text-muted-foreground">
-              报告生成后自动出现
+          ) : premarketState === 'error' ? (
+            <div data-testid="premarket-card-error" className="py-4 text-center text-[12px] text-destructive">
+              盘前分析加载失败
+            </div>
+          ) : premarket && !premarket.empty && hasPremarketContent(premarket) ? (
+            <div className="divide-y divide-border/40">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 truncate text-[13px] font-medium" title={premarket.title || '今日盘前分析'}>
+                    {premarket.title || '今日盘前分析'}
+                  </span>
+                  {premarket.is_stale && (
+                    <span
+                      data-testid="premarket-stale-badge"
+                      className="shrink-0 rounded bg-accent px-1.5 text-[10px] tabular-nums text-muted-foreground"
+                    >
+                      基准日 {premarket.date}（非今日）
+                    </span>
+                  )}
+                </div>
+                {premarket.structured?.gate?.score || premarket.structured?.gate?.position_cap ? (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {premarket.structured?.gate?.score ? (
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                        环境门禁 {premarket.structured.gate.score}
+                      </span>
+                    ) : null}
+                    {premarket.structured?.gate?.position_cap ? (
+                      <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                        仓位上限 {premarket.structured.gate.position_cap}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {premarket.structured?.mainlines && premarket.structured.mainlines.length > 0 ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {premarket.structured.mainlines.slice(0, 4).map((ml, i) => (
+                      <span key={ml.name || `mainline-${i}`} className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {ml.name}
+                        {ml.strength ? <span className="tabular-nums"> · {ml.strength}</span> : null}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              {premarket.structured?.plans && premarket.structured.plans.length > 0 ? (
+                <div>
+                  {premarket.structured.plans.slice(0, 3).map((p, i) => (
+                    <div key={p.symbol || `plan-${i}`} className="flex items-center gap-2 py-1.5">
+                      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{p.symbol}</span>
+                      <span className="min-w-0 flex-1 truncate text-[12px]" title={p.name || p.symbol}>
+                        {p.name || p.symbol}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-primary">{PLAN_ACTION_LABEL[p.action || ''] || p.action}</span>
+                      {p.trigger || p.stop ? (
+                        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                          {p.trigger ? `触发 ${p.trigger}` : ''}
+                          {p.trigger && p.stop ? ' / ' : ''}
+                          {p.stop ? `止损 ${p.stop}` : ''}
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : (
-            <div className="divide-y divide-border/40">
-              {reports.slice(0, 4).map((r) => (
-                <button
-                  key={`${r.job_id}:${r.file}`}
-                  type="button"
-                  onClick={() => navigate('/reports')}
-                  className="flex w-full items-center gap-2 py-1.5 text-left transition-colors hover:bg-accent/30"
-                >
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium">{r.title_preview || r.file}</div>
-                    <div className="truncate text-[10px] text-muted-foreground">{formatReportTime(r.mtime_iso)}</div>
-                  </div>
-                </button>
-              ))}
+            <div className="py-4 text-center">
+              <div className="text-[12px] text-muted-foreground">今日盘前分析尚未生成</div>
+              <button
+                type="button"
+                data-testid="premarket-run-now"
+                disabled={premarketRunning}
+                onClick={() => void runPremarketNow()}
+                className="mt-2 rounded border border-border/60 px-3 py-1 text-[11px] text-primary transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {premarketRunning ? '生成中…' : '▶ 立即分析'}
+              </button>
             </div>
           )}
         </div>
@@ -1189,7 +1458,7 @@ export default function DashboardPage() {
 {/* 机会发现(次级,右;1280px 以下整行) */}
         {shown('discover') && (
         <div style={{ order: orderIndex(layout, 'discover') }} className="lg:col-span-12 xl:col-span-6">
-          <DiscoveryPanel monitorStocks={scan} onOpenStock={openStock} />
+          <DiscoveryPanelMemo monitorStocks={scan} onOpenStock={openStock} />
         </div>
         )}
       </div>
@@ -1272,8 +1541,14 @@ type PhaseGaugeState =
 /** 仪表盘与各态占位共用高度: 空/失败态也占满一格, 不留死白也不跳版 */
 const GAUGE_BOX_CLS = 'flex h-[154px] items-center justify-center px-3 text-center text-[11px] text-muted-foreground'
 
-/** 导出供单测覆盖三态(失败不得渲染成"无数据"/不得常驻"同步中") */
-export function PhaseGaugeCard() {
+/** 市场温度卡 —— 自带 /market/phase 取数 + canvas。
+ *
+ *  perf(2026-10-02): memo 化。它无 props, 但此前每次父组件(首页)状态变更都会跟着重渲染 ——
+ *  首页 30s 轮询、数据源错误横幅、看板定制、分享弹窗等无关状态的任何一次变更, 都会把这块
+ *  画布区块连同 154px 占位重画一遍。memo 后仅自身 30s 定时器/重试驱动刷新。
+ *
+ *  导出供单测覆盖三态(失败不得渲染成"无数据"/不得常驻"同步中") */
+function PhaseGaugeCardInner() {
   const [state, setState] = useState<PhaseGaugeState>({ kind: 'loading' })
   const aliveRef = useRef(true)
 
@@ -1297,18 +1572,17 @@ export function PhaseGaugeCard() {
 
   useEffect(() => {
     aliveRef.current = true
-    void load()
-    const t = window.setInterval(() => void load(), 30000)
     return () => {
       aliveRef.current = false
-      window.clearInterval(t)
     }
-  }, [load])
+  }, [])
+  // 30s 轮询: 隐藏页签停表, 回前台补一次(keep-alive 成本闸门, 2026-10-15)。
+  usePausedInterval(() => void load(), 30000, { deps: [load] })
 
   return (
     <div className="border-t border-border/60 pt-2.5">
       <div className="mb-1 flex items-baseline gap-2">
-        <span className="text-[13px] font-semibold">市场温度</span>
+        <h2 className="text-[13px] font-semibold">市场温度</h2>
         <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
       </div>
       {state.kind === 'ready' ? (
@@ -1342,3 +1616,5 @@ export function PhaseGaugeCard() {
     </div>
   )
 }
+
+export const PhaseGaugeCard = memo(PhaseGaugeCardInner)

@@ -123,7 +123,7 @@ def _block_market_scan(db) -> dict:
             f"{r.get('symbol')}({r.get('level') or '-'})" for r in act
         ) or "无"
         content = (
-            f"三榜：新G点[{_syms(new_g)}]；"
+            f"三榜：新G点(待确认)[{_syms(new_g)}]；"
             f"暗盘TOP[{dark_str}]；"
             f"机构活跃[{act_str}]"
         )
@@ -140,25 +140,78 @@ def _block_market_scan(db) -> dict:
 
 
 async def _block_limit_up() -> dict:
-    """块4 涨停复盘: 涨停家数/连板梯队。"""
+    """块4 涨停复盘: 涨停家数/连板梯队/炸板率/跌停家数。
+
+    2026-10-23 修复(严重): 原实现读 `summary.get("total")` 与 `summary.get("max_days")`，
+    而 `MarketSentimentCollector.get_sentiment_summary()` 实际返回的键是
+    `limit_up_count` 与 `max_streak` —— 键名不匹配 → 两个值都取到 None → 被 `or 0` 兜成 0，
+    于是**每天摘要都写「0家涨停，最高0板」**（实测 2026-10-22 真实 44 家、10-23 真实 86 家）。
+    现在改为按真实键名读，并顺带补齐梯队/炸板/跌停，任何一项缺失都写显式缺口而不是 0。
+    """
     from src.core.report_generator import _collect_limit_up_summary
 
     try:
         summary = await _collect_limit_up_summary()
         if not isinstance(summary, dict) or summary.get("error"):
-            return {"data_status": "missing", "content": "涨停复盘数据缺失"}
-        total = summary.get("total") or 0
-        max_days = summary.get("max_days") or 0
-        break_rate = summary.get("break_rate")
+            return {
+                "data_status": "missing",
+                "content": "涨停复盘数据缺失（涨停池取数失败）",
+            }
+
+        # 真实键名：limit_up_count / max_streak / ladder / top_stocks / top_sectors
+        total = summary.get("limit_up_count")
+        max_days = summary.get("max_streak")
+        if total is None or max_days is None:
+            return {
+                "data_status": "missing",
+                "content": "涨停复盘数据缺失（涨停池字段不全）",
+            }
+
+        ladder = summary.get("ladder") or {}
+        ladder_parts = [f"{k}板{v}家" for k, v in sorted(ladder.items(), key=lambda x: -int(x[0]))]
         content = f"涨停复盘：{total}家涨停，最高{max_days}板"
-        if break_rate is not None:
-            content += f"，炸板率{break_rate}%"
-        return {
+        if ladder_parts:
+            content += "，梯队" + "/".join(ladder_parts)
+
+        block: dict = {
             "data_status": "ok",
             "content": content,
             "total": total,
             "max_days": max_days,
+            "ladder": {str(k): v for k, v in ladder.items()},
+            "top_stocks": list(summary.get("top_stocks") or [])[:5],
+            "caliber": summary.get("limit_up_source") or "unknown",
         }
+
+        # 炸板/跌停：取自 `market_replay_daily`（东财三池同源同日），缺失就写缺口不写 0
+        try:
+            from src.core.market_replay import read_latest
+
+            from src.db.session import SessionLocal
+
+            _db = SessionLocal()
+            try:
+                replay = read_latest(_db)
+            finally:
+                _db.close()
+            if replay:
+                bk = replay.get("broken") or {}
+                dt = replay.get("limit_down") or {}
+                if bk.get("break_rate_pct") is not None:
+                    block["break_rate_pct"] = bk.get("break_rate_pct")
+                    block["seal_rate_pct"] = bk.get("seal_rate_pct")
+                    content += (
+                        f"，炸板{bk.get('total')}家/{bk.get('break_rate_pct')}%"
+                        f"(封板率{bk.get('seal_rate_pct')}%)"
+                    )
+                if dt.get("total") is not None:
+                    block["limit_down"] = dt.get("total")
+                    content += f"，跌停{dt.get('total')}家"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[信号摘要] 炸板/跌停补充失败: %s", e)
+
+        block["content"] = content
+        return block
     except Exception as e:  # noqa: BLE001
         logger.warning("[信号摘要] 涨停复盘块失败: %s", e)
         return {"data_status": "missing", "content": "涨停复盘数据缺失"}

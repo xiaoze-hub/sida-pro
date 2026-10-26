@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
-import { decisionsApi, kindLabel, type DecisionLogResponse, type DecisionStatsResponse } from '@panwatch/api'
+import {
+  decisionsApi,
+  signalsReviewApi,
+  kindLabel,
+  type DecisionLogResponse,
+  type DecisionStatsResponse,
+  type DecisionBacktestResponse,
+  type EntryOutcomesResponse,
+  type SignalHitRateResponse,
+  type DecisionThresholdItem,
+  type WatchlistSignalQualityResponse,
+} from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import ErrorState from '@/components/ErrorState'
+import { StockLabel } from '@/components/StockLabel'
 import {
   contextSummary,
   hitRateText,
@@ -10,48 +23,122 @@ import {
   retClass,
   retText,
   sampleText,
+  ratioPctText,
+  pctValueText,
+  numText,
+  ratioValueText,
+  phaseLabel,
+  signalTypeLabel,
+  insufficientHint,
 } from '@/lib/decision-ledger'
 
 /**
- * 决策账本(设计稿 v3.0 §八 / 开发计划 P1-3)。
+ * 决策账本 / 复盘中心(设计稿 v3.0 §八 / 开发计划 P1-3)。
  *
  * 回答一个问题: **"信号出过以后, 到底管不管用?"**
  * 后端(v175 `decision_log`)把每个信号连同**当时的证据与价格**留痕, 事后用真实 K 线回填 T+1/3/5。
- * 本页只做两件事: ①按信号类型给命中率; ②给明细(当时凭什么、拿到的价、回填了没)。
+ *
+ * 审计(P2 合集, 2026-10-10)补齐三处「有功能没入口」+ 一处分页:
+ *  ① **共振回测**(P2-1): `GET /api/decisions/backtest` —— 后端能力原全仓零调用; 结果**带 basis
+ *     口径标记**(双指标/三指标), 明盘历史无源不能与官方四态直接比较 —— 一律显式透传, 不藏;
+ *  ② **信号对账**(P2-2): `GET /api/signals/hit-rate` —— 按信号类型 T+1/T+5 胜率 + 官方基准对照;
+ *  ③ **入场候选后验**(P2-3): `GET /api/decisions/entry-outcomes` —— 原仅 cron 写入无查询口;
+ *  ④ **账本明细分页**(P2-4): `GET /api/decisions/log` 补 offset/日期过滤, 前端翻页。
  *
  * 四条不越界的口径(与后端一致, 前端只透传):
  *  ① **样本不足不给数字**: `--` + 原因(样本按自然日累积, T+5 要等一周);
  *  ② **未回填不是 0**: 收益/命中为 null → `--`, 颜色走中性(不许把 null 当 0 上"涨红"色);
  *  ③ **当时没取到价就是 `--`**(不拿今天的价冒充当时的价);
- *  ④ 命中率**只取后端值**, 前端不自己算百分比。
+ *  ④ 命中率/胜率**只取后端值**, 前端不自己算百分比; 缺数据/降级一律显式, 不猜不编造。
  */
+const LOG_PAGE = 20
+
 export default function DecisionLedger() {
   const [stats, setStats] = useState<DecisionStatsResponse | null>(null)
   const [log, setLog] = useState<DecisionLogResponse | null>(null)
+  const [hitRate, setHitRate] = useState<SignalHitRateResponse | null>(null)
+  const [outcomes, setOutcomes] = useState<EntryOutcomesResponse | null>(null)
+  const [thresholds, setThresholds] = useState<DecisionThresholdItem[] | null>(null)
+  const [wl, setWl] = useState<WatchlistSignalQualityResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
+  // 2026-10-10 加载韧性: 存原始错误对象(带 fetchAPI 的类型化 kind)而非字符串,
+  // 供 ErrorState 正确分类(超时/网络/5xx); 标语仍用 errMsg 展示。
+  const [err, setErr] = useState<unknown>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setErr(null)
-    try {
-      const [s, l] = await Promise.all([decisionsApi.stats(180, 30), decisionsApi.log(undefined, 100)])
-      setStats(s)
-      setLog(l)
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : '加载失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const [offset, setOffset] = useState(0)
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+
+  const [btSymbols, setBtSymbols] = useState('002361')
+  const [bt, setBt] = useState<DecisionBacktestResponse | null>(null)
+  const [btLoading, setBtLoading] = useState(false)
+  const [btErr, setBtErr] = useState<string | null>(null)
+
+  const load = useCallback(
+    async (nextOffset = offset, sd = startDate, ed = endDate) => {
+      setLoading(true)
+      setErr(null)
+      try {
+        // 核心两段(stats/log)失败 → 页面报错; 附带两段(对账/后验)单独兜底, 不让一段抖动带垮整页
+        const [s, l] = await Promise.all([
+          decisionsApi.stats(180, 30),
+          decisionsApi.log(undefined, LOG_PAGE, nextOffset, sd || undefined, ed || undefined),
+        ])
+        setStats(s)
+        setLog(l)
+        setOffset(nextOffset)
+      } catch (e) {
+        setErr(e)
+      } finally {
+        setLoading(false)
+      }
+      const [hr, oc, th] = await Promise.allSettled([
+        signalsReviewApi.hitRate(undefined, 30),
+        decisionsApi.entryOutcomes(30, 20),
+        decisionsApi.thresholds(),
+      ])
+      if (hr.status === 'fulfilled') setHitRate(hr.value)
+      if (oc.status === 'fulfilled') setOutcomes(oc.value)
+      if (th.status === 'fulfilled') setThresholds(th.value.items)
+      // 自选池信号质量(2026-10-11 ②): 单独兜底, 失败不拖垮整页
+      try {
+        setWl(await decisionsApi.watchlistQuality(180, 30))
+      } catch {
+        /* 单独失败: 该卡显式空态, 页面其余部分照常 */
+      }
+    },
+    [offset, startDate, endDate],
+  )
 
   useEffect(() => {
-    void load()
-  }, [load])
+    void load(0, '', '')
+    // 首屏只加载一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const runBacktest = useCallback(async () => {
+    setBtLoading(true)
+    setBtErr(null)
+    try {
+      const r = await decisionsApi.backtest({ symbols: btSymbols, holdDays: 5, successPct: 3 })
+      setBt(r)
+    } catch (e) {
+      setBtErr(e instanceof Error ? e.message : '回测失败')
+    } finally {
+      setBtLoading(false)
+    }
+  }, [btSymbols])
 
   const rows = stats?.rows ?? []
   const items = log?.items ?? []
-  const allInsufficient = rows.length > 0 && rows.every((r) => r.horizons.t1.insufficient && r.horizons.t3.insufficient && r.horizons.t5.insufficient)
+  const total = log?.total ?? items.length
+  const hasMore = log?.has_more ?? false
+  const allInsufficient =
+    rows.length > 0 &&
+    rows.every((r) => r.horizons.t1.insufficient && r.horizons.t3.insufficient && r.horizons.t5.insufficient)
+  const hitTypes = Object.entries(hitRate?.by_type ?? {})
+  const outcomeRows = outcomes?.rows ?? []
+  const errMsg = err instanceof Error ? err.message : err ? String(err) : ''
 
   return (
     <div className="mx-auto max-w-[1200px] p-3 md:p-4">
@@ -60,18 +147,55 @@ export default function DecisionLedger() {
         <span className="text-[11px] text-muted-foreground">
           信号 → 结果的账 · 命中 = T+n 收益 &gt; 0(平盘记未命中)
         </span>
-        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void load()} disabled={loading}>
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void load(offset, startDate, endDate)} disabled={loading}>
           {loading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
           刷新
         </Button>
       </div>
 
-      {err && (
-        <div className="mt-3 flex items-center gap-2 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground">
-          <AlertTriangle className="h-3.5 w-3.5" />
-          加载失败：{err}
+      {/* 首屏门控(2026-10-10 加载韧性): 加载中显式提示 / 硬失败(核心 stats/log 取不到)显式错误态
+          + 重试 —— 不留空表冒充「无数据」, 也不无限转圈。部分失败(仍有 stats)沿用下方行内横幅。 */}
+      {loading && !stats ? (
+        <div className="mt-4 flex items-center gap-2 text-[12px] text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          加载中…
         </div>
-      )}
+      ) : err && !stats ? (
+        <ErrorState error={err} onRetry={() => void load(0, startDate, endDate)} className="mt-4" />
+      ) : (
+        <>
+          {!!err && (
+            <div className="mt-3 flex items-center gap-2 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              加载失败：{errMsg}
+            </div>
+          )}
+
+      {/* 当前生效阈值(数智决策 P1-3 只读): 运行时改阈值需权限设计, 本轮只做可配+可见, 无写回 */}
+      <section className="mt-3" data-testid="thresholds">
+        {/* L3-C(2026-10-24): 阈值参数默认为折叠。原实现把 20+ 个阈值一行 11px 灰字全铺在
+            首屏, 读起来像"配置文件泄露"; 结论（命中率表）反而在它下面。内容一个字没删。 */}
+        <details>
+          <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+            计算口径（{thresholds?.length ?? 0} 个阈值，点击展开）
+          </summary>
+          <p
+            className="mt-1 text-[11px] text-muted-foreground"
+            title={
+              thresholds && thresholds.length > 0
+                ? thresholds.map((t) => `${t.label}: ${t.value} (${t.source === 'env' ? t.env : '内置默认 ' + t.default})`).join('\n')
+                : undefined
+            }
+          >
+            当前阈值(只读)
+            {thresholds && thresholds.length > 0
+              ? `：${thresholds
+                  .map((t) => `${t.label} ${t.value}${t.source === 'env' ? '(env)' : ''}`)
+                  .join(' · ')}`
+              : '：—'}
+          </p>
+        </details>
+      </section>
 
       {/* ① 命中率 */}
       <section className="mt-4">
@@ -124,15 +248,300 @@ export default function DecisionLedger() {
             目前全部信号都处在「样本不足」阶段(需要等未来的 K 线才算得出来)—— 这是账本刚启用的正常状态, 不是没数据。
           </p>
         )}
-        {stats?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{stats.note}</p>}
+        {stats?.note && <p className="mt-1 text-[10px] text-muted-foreground">{stats.note}</p>}
       </section>
 
-      {/* ② 明细 */}
+      {/* ①b 我的自选池信号质量(2026-10-11 胜率证据层 ②): 按 user_id 隔离的账本聚合, 只读/零预测。
+          样本不足则显示『样本不足』; 不写任何建议, 只陈述实测。 */}
+      <section className="mt-6" data-testid="watchlist-signal-quality">
+        <h2 className="text-[16px] font-semibold">我的自选池信号质量</h2>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          只看你自己自选池里出现过的信号 · 纯账本实测(零预测), 命中 = T+n 收益 &gt; 0;
+          样本不足(&lt; {wl?.min_sample ?? 30})一律显示『样本不足』, 不给数字 —— 报告只陈述实测, 不构成建议。
+        </p>
+        {wl && !wl.available && (
+          <p className="mt-2 text-[12px] text-muted-foreground">
+            暂无可报告：{wl.error ?? '自选池为空或暂无账本样本'}(空即空, 不补造)。
+          </p>
+        )}
+        {wl?.available && (
+          <div className="mt-2 space-y-3">
+            <p className="text-[11px] text-muted-foreground">
+              自选池 {numText(wl.symbols_count)} 只标的 · 回看 {numText(wl.days)} 天
+            </p>
+            {wl.signals.length === 0 && (
+              <p className="text-[12px] text-muted-foreground">自选池标的暂无信号留痕(需盘后扫描/决策生成后入账)。</p>
+            )}
+            {wl.signals.map((sig) => (
+              <div key={sig.signal_kind} className="rounded border border-border/60">
+                <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-2 py-1.5">
+                  <span className="text-[13px] font-semibold">{kindLabel(sig.signal_kind)}</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    样本 {numText(sig.n_total)} · 覆盖 {numText(sig.symbols_count)} 只标的
+                  </span>
+                  {sig.regime_note && (
+                    <span className="rounded border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                      {sig.regime_note}
+                    </span>
+                  )}
+                </div>
+                <div className="overflow-x-auto px-2 py-1.5">
+                  <table className="w-full text-left text-[12px]">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="py-0.5 pr-2 font-medium">维度</th>
+                        <th className="px-2 py-0.5 text-right font-medium">样本</th>
+                        <th className="px-2 py-0.5 text-right font-medium">T+1</th>
+                        <th className="px-2 py-0.5 text-right font-medium">T+3</th>
+                        <th className="px-2 py-0.5 text-right font-medium">T+5</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/30">
+                      <tr>
+                        <td className="py-0.5 pr-2">合计</td>
+                        <td className="px-2 py-0.5 text-right font-mono">{sampleText(sig.n_total)}</td>
+                        {(['t1', 't3', 't5'] as const).map((k) => {
+                          const c = hitRateText(sig.horizons[k])
+                          return (
+                            <td key={k} title={c.title} className={`px-2 py-0.5 text-right font-mono ${c.muted ? 'text-muted-foreground' : ''}`}>
+                              {c.text}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                      {sig.regime_buckets.map((b) => (
+                        <tr key={`reg-${b.regime}`} className="text-muted-foreground">
+                          <td className="py-0.5 pr-2">周期·{b.label}</td>
+                          <td className="px-2 py-0.5 text-right font-mono">{sampleText(b.n_total)}</td>
+                          {(['t1', 't3', 't5'] as const).map((k) => {
+                            const c = hitRateText(b.horizons[k])
+                            return (
+                              <td key={k} title={c.title} className={`px-2 py-0.5 text-right font-mono ${c.muted ? 'text-muted-foreground' : ''}`}>
+                                {c.text}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {wl?.note && <p className="mt-1 text-[10px] text-muted-foreground">{wl.note}</p>}
+      </section>
+
+      {/* ② 信号对账(批次D hit-rate) */}
+      <section className="mt-6" data-testid="signal-reconcile">
+        <h2 className="text-[16px] font-semibold">信号对账</h2>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          按信号类型统计 T+1/T+5 胜率(近 {hitRate?.days ?? 30} 天) · 只取后端值, 前端不自己算百分比;
+          resonance 附官方基准对照(口径不完全一致, 仅参考)。
+        </p>
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-left text-[12px]">
+            <thead>
+              <tr className="border-b border-border/60 text-muted-foreground">
+                <th className="px-2 py-1 font-medium">信号类型</th>
+                <th className="px-2 py-1 text-right font-medium">T+1 胜率</th>
+                <th className="px-2 py-1 text-right font-medium">T+1 均值</th>
+                <th className="px-2 py-1 text-right font-medium">T+5 胜率</th>
+                <th className="px-2 py-1 text-right font-medium">T+5 均值</th>
+                <th className="px-2 py-1 text-right font-medium">官方基准</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40">
+              {hitTypes.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-2 py-3 text-[12px] text-muted-foreground">
+                    暂无对账数据 —— 每晚 18:30 对账作业写入后才有(样本按自然日累积)。
+                  </td>
+                </tr>
+              )}
+              {hitTypes.map(([t, v]) => (
+                <tr key={t}>
+                  <td className="px-2 py-1">{signalTypeLabel(t)}</td>
+                  <td
+                    className={`px-2 py-1 text-right font-mono ${v.t1.win_rate == null ? 'text-muted-foreground' : ''}`}
+                    title={v.t1.win_rate == null ? insufficientHint(v.t1.n, undefined) : `n=${v.t1.n}`}
+                  >
+                    {v.t1.win_rate == null ? '--' : pctValueText(v.t1.win_rate, 2)}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono text-muted-foreground">{pctValueText(v.t1.avg_pct, 2)}</td>
+                  <td
+                    className={`px-2 py-1 text-right font-mono ${v.t5.win_rate == null ? 'text-muted-foreground' : ''}`}
+                    title={v.t5.win_rate == null ? insufficientHint(v.t5.n, undefined) : `n=${v.t5.n}`}
+                  >
+                    {v.t5.win_rate == null ? '--' : pctValueText(v.t5.win_rate, 2)}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono text-muted-foreground">{pctValueText(v.t5.avg_pct, 2)}</td>
+                  <td className="px-2 py-1 text-right text-muted-foreground" title={v.official_benchmark?.note ?? '官方基准仅 resonance 且有样本时对照'}>
+                    {v.official_benchmark ? `${ratioValueText(v.official_benchmark.win_rate)}%` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* ③ 入场候选后验 */}
+      <section className="mt-6" data-testid="entry-outcomes">
+        <h2 className="text-[16px] font-semibold">入场候选后验</h2>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          候选发出后按 T+n 后验: 胜率 = 后验收益 &gt; 0 的占比 · 样本不足(低于 {outcomes?.min_sample ?? 20})不给数字。
+        </p>
+        {outcomes && !outcomes.available && (
+          <p className="mt-2 text-[12px] text-muted-foreground">查询失败：{outcomes.error ?? '未知原因'}(不推算)</p>
+        )}
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-left text-[12px]">
+            <thead>
+              <tr className="border-b border-border/60 text-muted-foreground">
+                <th className="px-2 py-1 font-medium">Horizon</th>
+                <th className="px-2 py-1 font-medium">来源</th>
+                <th className="px-2 py-1 text-right font-medium">样本</th>
+                <th className="px-2 py-1 text-right font-medium">胜率</th>
+                <th className="px-2 py-1 text-right font-medium">均收益</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40">
+              {outcomeRows.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-2 py-3 text-[12px] text-muted-foreground">
+                    暂无可后验样本 —— 候选到期后由 cron 逐日评估, 尚无到期记录(空即空, 不补造)。
+                  </td>
+                </tr>
+              )}
+              {outcomeRows.map((r) => (
+                <tr key={`${r.horizon_days}-${r.source}`}>
+                  <td className="px-2 py-1 font-mono">T+{r.horizon_days}</td>
+                  <td className="px-2 py-1">{r.source_label}</td>
+                  <td className="px-2 py-1 text-right font-mono">{numText(r.total)}</td>
+                  <td
+                    className={`px-2 py-1 text-right font-mono ${r.insufficient ? 'text-muted-foreground' : ''}`}
+                    title={r.insufficient ? insufficientHint(r.total, r.min_sample) : `胜 ${r.wins}/${r.total}`}
+                  >
+                    {r.insufficient ? '--' : pctValueText(r.win_rate, 2)}
+                  </td>
+                  <td className={`px-2 py-1 text-right font-mono ${r.insufficient ? 'text-muted-foreground' : retClass(r.avg_return_pct)}`}>
+                    {r.insufficient ? '--' : retText(r.avg_return_pct == null ? null : r.avg_return_pct / 100)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {outcomes?.note && <p className="mt-1 text-[10px] text-muted-foreground">{outcomes.note}</p>}
+      </section>
+
+      {/* ④ 共振回测 */}
+      <section className="mt-6" data-testid="resonance-backtest">
+        <h2 className="text-[16px] font-semibold">三指标共振回测</h2>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          逐日滚动重算(单股 O(n²), 池 ≤ 50、区间 ≤ 2 年)。明盘历史无源: 默认走「双指标」(缺资金维),
+          与官方四态不可直接比较 —— 结果口径见下方 basis 标记。
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            className="h-8 w-64 rounded-md border border-border bg-background px-2 font-mono text-[12px]"
+            placeholder="股票池, 逗号分隔, 如 002361,600519"
+            value={btSymbols}
+            onChange={(e) => setBtSymbols(e.target.value)}
+            aria-label="回测股票池"
+          />
+          <Button variant="outline" size="sm" onClick={() => void runBacktest()} disabled={btLoading}>
+            {btLoading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+            回测
+          </Button>
+        </div>
+        {btErr && <p className="mt-2 text-[12px] text-muted-foreground">回测失败：{btErr}</p>}
+        {bt && !bt.available && (
+          <p className="mt-2 text-[12px] text-muted-foreground" data-testid="backtest-unavailable">
+            回测不可用：{bt.error ?? '未跑出结果'}(口径 {bt.basis})
+          </p>
+        )}
+        {bt?.available && (
+          <div className="mt-2" data-testid="backtest-result">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="rounded border border-border/60 px-2 py-0.5" data-testid="backtest-basis">
+                口径：{bt.basis}
+              </span>
+              <span>样本: {numText(bt.sample?.signals)} 信号 / {numText(bt.sample?.symbols)} 股</span>
+              {bt.generated_at && <span>生成于 {bt.generated_at}</span>}
+            </div>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-left text-[12px]">
+                <thead>
+                  <tr className="border-b border-border/60 text-muted-foreground">
+                    <th className="px-2 py-1 font-medium">共振态</th>
+                    <th className="px-2 py-1 text-right font-medium">样本</th>
+                    <th className="px-2 py-1 text-right font-medium">上涨概率</th>
+                    <th className="px-2 py-1 text-right font-medium">盈亏比</th>
+                    <th className="px-2 py-1 text-right font-medium">官方基准</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40">
+                  {(['向好', '拐点', '分歧', '走坏'] as const).map((p) => {
+                    const agg = bt.by_phase?.[p]
+                    const off = bt.official?.[p]
+                    return (
+                      <tr key={p}>
+                        <td className="px-2 py-1">{phaseLabel(p)}</td>
+                        <td className="px-2 py-1 text-right font-mono">{numText(agg?.count)}</td>
+                        <td className={`px-2 py-1 text-right font-mono ${agg?.win_rate == null ? 'text-muted-foreground' : ''}`}>
+                          {agg?.win_rate == null ? '--' : ratioPctText(agg.win_rate, 2)}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono">{ratioValueText(agg?.profit_ratio ?? null)}</td>
+                        <td className="px-2 py-1 text-right text-muted-foreground">
+                          {off ? `${ratioValueText(off.win_rate)}% / ${ratioValueText(off.pl_ratio)}` : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {bt.note && <p className="mt-1 text-[10px] text-muted-foreground">{bt.note}</p>}
+          </div>
+        )}
+      </section>
+
+      {/* ⑤ 明细(分页) */}
       <section className="mt-6">
         <h2 className="text-[16px] font-semibold">信号明细</h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
-          最近 {items.length} 条 · 含当时的证据与价格 —— 事后能回放"凭什么出这个信号"。
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-[11px] text-muted-foreground">
+            共 {numText(total)} 条 · 当前第 {numText(offset + 1)}–{numText(offset + items.length)} 条
+          </p>
+          <div className="ml-auto flex items-center gap-2">
+            <input
+              className="h-7 w-32 rounded-md border border-border bg-background px-2 font-mono text-[11px]"
+              placeholder="起 YYYY-MM-DD"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              aria-label="起始日期"
+            />
+            <input
+              className="h-7 w-32 rounded-md border border-border bg-background px-2 font-mono text-[11px]"
+              placeholder="止 YYYY-MM-DD"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              aria-label="结束日期"
+            />
+            <Button variant="outline" size="sm" onClick={() => void load(0, startDate, endDate)} disabled={loading}>
+              过滤
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void load(Math.max(0, offset - LOG_PAGE), startDate, endDate)} disabled={loading || offset <= 0}>
+              上一页
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void load(offset + LOG_PAGE, startDate, endDate)} disabled={loading || !hasMore}>
+              下一页
+            </Button>
+          </div>
+        </div>
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-left text-[11px]">
             <thead>
@@ -151,7 +560,7 @@ export default function DecisionLedger() {
               {items.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-2 py-3 text-[12px] text-muted-foreground">
-                    暂无明细
+                    暂无明细(当前页为空 —— 可能已翻到末页或过滤条件过窄)。
                   </td>
                 </tr>
               )}
@@ -159,7 +568,10 @@ export default function DecisionLedger() {
                 <tr key={`${it.signal_kind}-${it.symbol}-${it.trade_date}-${i}`} className={isFilled(it) ? '' : 'text-muted-foreground'}>
                   <td className="px-2 py-1 font-mono">{it.trade_date}</td>
                   <td className="px-2 py-1">{kindLabel(it.signal_kind)}</td>
-                  <td className="px-2 py-1 font-mono">{it.symbol}</td>
+                  {/* 标的: 后端新响应带 `name`(决策账本老数据可能没有) ⇒ 没有名字时组件自己回退成只显示代码 */}
+                  <td className="px-2 py-1">
+                    <StockLabel symbol={it.symbol} name={it.name} className="max-w-[9rem]" />
+                  </td>
                   <td className="px-2 py-1 text-right font-mono">{priceText(it.price_at_signal)}</td>
                   <td className="px-2 py-1 text-muted-foreground" title={it.context}>
                     {contextSummary(it.context) || '—'}
@@ -177,8 +589,10 @@ export default function DecisionLedger() {
             </tbody>
           </table>
         </div>
-        {log?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{log.note}</p>}
+        {log?.note && <p className="mt-1 text-[10px] text-muted-foreground">{log.note}</p>}
       </section>
+        </>
+      )}
     </div>
   )
 }

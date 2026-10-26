@@ -96,13 +96,13 @@ export function JobPanel() {
           <div className="space-y-2">
             {active.map((j) => (
               <div key={j.id} className="flex items-center gap-3 text-[12px]">
-                <span className="w-[150px] shrink-0 truncate">{j.label}</span>
+                <span className="w-[150px] shrink-0 truncate" title={j.label}>{j.label}</span>
                 <div className="h-1.5 w-[160px] shrink-0 overflow-hidden rounded-full bg-accent/40">
                   <div className="h-full rounded-full bg-primary transition-[width]"
                        style={{ width: `${Math.max(3, j.progress)}%` }} />
                 </div>
                 <span className="w-[40px] shrink-0 font-mono text-[11px] text-muted-foreground">{j.progress}%</span>
-                <span className="min-w-0 flex-1 truncate text-muted-foreground">{j.message || j.stage}</span>
+                <span className="min-w-0 flex-1 truncate text-muted-foreground" title={j.message || j.stage}>{j.message || j.stage}</span>
                 <button
                   type="button"
                   disabled={busy === j.id}
@@ -135,7 +135,7 @@ export function JobPanel() {
             {recent.slice(0, 20).map((j) => (
               <div key={j.id} className="flex items-center gap-3 text-[12px]">
                 <span className={`w-[52px] shrink-0 ${STATUS_STYLE[j.status]}`}>{STATUS_LABEL[j.status]}</span>
-                <span className="w-[150px] shrink-0 truncate">{j.label}</span>
+                <span className="w-[150px] shrink-0 truncate" title={j.label}>{j.label}</span>
                 <span className="w-[40px] shrink-0 font-mono text-[11px] text-muted-foreground">{j.progress}%</span>
                 <span className="w-[46px] shrink-0 font-mono text-[11px] text-muted-foreground">{elapsed(j)}</span>
                 <span className="min-w-0 flex-1 truncate text-muted-foreground" title={j.error || j.message}>

@@ -319,7 +319,7 @@ function FinanceSection({ snap, cn }: { snap: CnSnapshot; cn: boolean }) {
         ))}
       </div>
       {notes.length > 0 ? (
-        <div className="mt-1.5 space-y-0.5 text-[10px] text-muted-foreground/70">
+        <div className="mt-1.5 space-y-0.5 text-[10px] text-muted-foreground">
           {notes.map((n) => (
             <div key={n}>{n}</div>
           ))}
@@ -401,7 +401,7 @@ function FundamentalTabBody({
         {/* T19: 持仓态未知(真源在途/失败) → 显式标注, 不把"未知"说成"未持仓"。
             未知与未持仓一样不渲染加仓计算器(无真实持仓数则不渲染), 但用户能看到原因。 */}
         {hasPosition === undefined ? (
-          <span data-testid="fundamental-position-unknown" className="text-muted-foreground/80">
+          <span data-testid="fundamental-position-unknown" className="text-muted-foreground">
             持仓态未知 · 加仓测算暂不显示
           </span>
         ) : null}

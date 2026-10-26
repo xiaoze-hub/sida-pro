@@ -13,6 +13,8 @@ from sqlalchemy import (
     Index,
     text,
 )
+from datetime import datetime
+
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -124,6 +126,29 @@ class UserAIService(Base):
     # 模型列表 JSON 字符串: [{"name","model","is_default","scene","capabilities"}]
     models_json = Column(Text, nullable=False, default="[]")
     created_at = Column(DateTime, server_default=func.now())
+
+
+class UserAiPref(Base):
+    """用户在某 AI 场景显式选中的模型(2026-10-25)。
+
+    为什么不是改 ai_scene_bindings: 那里是**全局**绑定(一改全员变), 用户级
+    "这轮我想用便宜模型"没有落点。本表只记 (user_id, scene) -> model_id,
+    解析器(ai_client.get_model_for_scene)在**授权范围内**优先用它。
+
+    红线:
+      - 不存凭证(key/base_url 不进这张表);
+      - model_id 缺失 = 跟随场景绑定(不用 0 之类哨兵值);
+      - 写入口与解析器两处都校验授权, 防越权写入 / 历史脏数据越权生效。
+    """
+
+    __tablename__ = "user_ai_prefs"
+    __table_args__ = (UniqueConstraint("user_id", "scene", name="uq_user_ai_prefs_user_scene"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    scene = Column(String(32), nullable=False)
+    model_id = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class AIModel(Base):
@@ -243,6 +268,9 @@ class Position(Base):
         Integer, ForeignKey("stocks.id", ondelete="CASCADE"), nullable=False
     )
     cost_price = Column(Float, nullable=False)  # 成本价
+    # 用户自设防守线(2026-10-23 方案 B): **绝对价**, 基准=成本价。
+    # NULL = 用户未设置 —— 系统不得替用户编一条 -8% 防线展示。
+    defense_price = Column(Float, nullable=True)
     quantity = Column(Integer, nullable=False)  # 持仓数量
     invested_amount = Column(Float, nullable=True)  # 投入资金（用于盘中监控）
     sort_order = Column(Integer, default=0)
@@ -1340,6 +1368,9 @@ class ChatConversation(Base):
     stock_market = Column(String, nullable=True)
     ai_model_id = Column(Integer, nullable=True)
     initial_context = Column(Text, nullable=True)
+    # 置顶(2026-10-22): 会话管理面板; 列表/搜索排序 pinned desc 优先。
+    # server_default: 新鲜 create_all 建库即带 DB 级默认值(与 v217 迁移一致)。
+    pinned = Column(Boolean, nullable=False, default=False, server_default=text("0"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -1414,7 +1445,125 @@ class LLMUsage(Base):
     prompt_tokens = Column(Integer, default=0)
     completion_tokens = Column(Integer, default=0)
     latency_ms = Column(Integer, default=0)
+    # 2026-10-20 (P3 成本看板/配额): 归因到人、归因到某轮问答。
+    # 原先只有 scene/model —— 无法回答"谁在烧 token", 也就没法做多用户配额。
+    user_id = Column(String(36), nullable=True, index=True)
+    run_id = Column(String(36), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class CopilotMemory(Base):
+    """数智参谋的长期记忆（2026-10-21, P0）。
+
+    为什么要它：会话上下文只有 20 条 + 滚动摘要，换个会话就忘了"只做主板"、
+    忘了"资金流别用东财方向位"。人是要记事的，助手也一样。
+
+    克制的三条：
+    - 只记**用户明确表达**的偏好/规则（"记住"/"以后都"/"我的口径是"），不做心理画像；
+    - 内容截断 500 字，不存原始对话；
+    - 可删、可停用（UI 里一条一条管）。
+    """
+
+    __tablename__ = "copilot_memories"
+    __table_args__ = (Index("ix_copilot_memories_user", "user_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    kind = Column(String(16), nullable=False, default="preference")  # preference/rule/fact/skill
+    content = Column(Text, nullable=False)
+    weight = Column(Integer, nullable=False, default=5)   # >=9 视为钉住(每次注入)
+    source = Column(String(16), nullable=False, default="user")  # user/ai/auto
+    run_id = Column(String(36), nullable=True)
+    hits = Column(Integer, nullable=False, default=0)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+
+class CopilotSchedule(Base):
+    """会话里创建的定时任务（2026-10-21, P0）。
+
+    目前只支持两类低风险任务：`auction_digest`（竞价摘要）与 `daily_brief`（收盘小结）。
+    执行器每分钟扫一次表，命中就生成一条 assistant 消息写进会话 —— 不走 APScheduler
+    动态注册，避免重启丢任务、也避免和用户删任务时的竞态。
+    """
+
+    __tablename__ = "copilot_schedules"
+    __table_args__ = (Index("ix_copilot_schedules_user", "user_id", "enabled"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    kind = Column(String(24), nullable=False)        # auction_digest / daily_brief
+    at_hhmm = Column(String(5), nullable=False)      # "09:25"
+    weekdays = Column(String(24), nullable=False, default="mon-fri")
+    conversation_id = Column(Integer, nullable=True)  # 结果发到哪个会话(None=新建)
+    payload = Column(JSON, default=dict)              # {symbols:[...], limit:10}
+    enabled = Column(Boolean, nullable=False, default=True)
+    last_run_date = Column(String(8), nullable=True)  # YYYYMMDD, 防同一天重复
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopilotQuota(Base):
+    """多用户 AI 配额（2026-10-20, P3）。
+
+    没有限额行 = 不限（向后兼容）；有行则按日统计 `llm_usage` 与 `copilot_runs`。
+    限额是**硬约束**（网关层拒绝），不是提示词里的"请节约"。
+    """
+
+    __tablename__ = "copilot_quotas"
+    __table_args__ = (Index("ix_copilot_quotas_user", "user_id", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    daily_runs = Column(Integer, nullable=True)        # None = 不限
+    daily_tokens = Column(Integer, nullable=True)      # None = 不限
+    enabled = Column(Boolean, nullable=False, default=True)
+    note = Column(String(120), nullable=True)
+    updated_by = Column(String(36), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class HarnessProposal(Base):
+    """新分析维度提案（2026-10-22, P0 采集层）：**只记录，不生效**。
+
+    为什么要有它：分析维度写死在手写 YAML 配方里（`src/harness/recipes/*.yaml`）。
+    用户在对话里提出配方没覆盖的维度（"股东户数变化""龙虎榜席位风格"）时无处落点，
+    反复提也没人知道该补哪个能力 —— 这张表就是那份"需求账本"。
+
+    几条刻意的设计：
+    - **不生效**：这张表不被任何问答路径读，不改任何配方；人工审核后才可能进配方；
+    - **去重**：`normalized_dimension`（去空白+大小写折叠）是去重键，同一人同一维度
+      反复提只加 `seen_count`，不插重复行 —— 出现次数就是"该补"的优先级；
+    - **唯一约束带 status**：`uq(user_id, normalized_dimension, status)` —— 同一维度被
+      拒掉之后再次出现可以**重新提**（pending 位是空的），不被历史行永久压住。
+
+    seen_count 默认 1 且 not null：新行天然就是"出现过 1 次"。
+    """
+
+    __tablename__ = "harness_proposals"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "normalized_dimension", "status",
+            name="uq_harness_proposals_user_norm_status",
+        ),
+        Index("ix_harness_proposals_user_status", "user_id", "status"),
+        Index("ix_harness_proposals_user_seen", "user_id", "seen_count"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    dimension = Column(String(40), nullable=False)          # 用户原话（去首尾空白）
+    normalized_dimension = Column(String(40), nullable=False)  # 去重键
+    reason = Column(Text, default="")                      # 为什么需要这个维度
+    evidence = Column(Text, default="")                    # 当时的对话/数据证据
+    conversation_id = Column(Integer, nullable=True)        # 哪个会话提的
+    symbol = Column(String(16), nullable=True)             # 当时的标的（可空）
+    recipe = Column(String(64), nullable=True)             # 当时的配方 id（可空）
+    status = Column(String(16), nullable=False, default="pending")  # pending/accept/reject/snooze
+    seen_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    decided_at = Column(DateTime, nullable=True)
 
 
 class Board(Base):
@@ -1580,6 +1729,67 @@ class DarkFundTopSnapshot(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class DdeMinuteFlow(Base):
+    """盘中逐 N 分钟 DDE 大单净流入采样表(P3 补差 A, 2026-10-10)。
+
+    现有链(thsdk get_dde_flow / get_main_flow_official + TQ get_more_info)只给**当日快照**,
+    `minute_breakthrough.fetch_dde_series` 只能构造单点序列 → 分时突破「突」的
+    『DDE大单持续流入』条件无法判定(生产恒显式降级)。本表落**盘中采样序列**,
+    `fetch_dde_series` 改读库构造真序列。
+
+    诚实口径:
+      - `cum_net_wan`  = 采样时刻的**当日累计**同花顺 DDE 主力净流入(万元);
+      - `delta_net_wan` = 本区间增量 = 本采样 cum − 上一采样 cum(当日首个采样 = 其 cum);
+        「持续流入」= 相邻区间 delta > 0;
+      - `main_net_vol` = 主力净量原始值(非百分比/非占比, 量纲未定, 见 dark_fund_scan);
+      - 非交易时段不落任何行(采样作业显式无数据)。
+    """
+
+    __tablename__ = "dde_minute_flow"
+    __table_args__ = (
+        UniqueConstraint(
+            "trade_date", "market", "symbol", "sample_ts",
+            name="uq_dde_minute_flow_day_sym_ts",
+        ),
+        Index("ix_dde_minute_flow_day_sym", "trade_date", "symbol"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String, nullable=False)     # YYYY-MM-DD (CST)
+    market = Column(String(8), nullable=False, default="CN")
+    symbol = Column(String(16), nullable=False)     # 6 位代码
+    sample_ts = Column(String(8), nullable=False)   # HH:MM
+    cum_net_wan = Column(Float, nullable=True)      # 当日累计主力净流入(万元)
+    delta_net_wan = Column(Float, nullable=True)    # 本区间增量(万元)
+    main_net_vol = Column(Float, nullable=True)     # 主力净量原始值(量纲未定)
+    total_amount_wan = Column(Float, nullable=True)
+    source = Column(String, default="thsdk_dde")
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class WarReportDaily(Base):
+    """主力资金战报日快照表(规格 §4.4『主力资金战报』, 2026-10-10)。
+
+    汇总当日主力动向(全市场大单净流入 TOP/BOTTOM、行业分布、个股主力净额变化、
+    拆单/对倒计数); 盘后 cron / 手动 refresh 落库, 前端读快照
+    (与 dark_fund_top_snapshots 同形)。
+
+    诚实口径: 任一子块缺源都显式 available=False + note, 绝不编造/回 0。
+    """
+
+    __tablename__ = "war_report_daily"
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "stock_market", name="uq_war_report_day_market"),
+        Index("ix_war_report_day", "snapshot_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_date = Column(String, nullable=False)  # YYYY-MM-DD
+    stock_market = Column(String, nullable=False, default="CN")
+    payload = Column(JSON, default={})  # build_daily_war_report() 的完整返回
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class SkillApiKey(Base):
     """Skill Gateway 对外开放 AppKey(2026-09-15; 统一身份 2026-09-16)。
 
@@ -1738,3 +1948,809 @@ class TierDowngradeLog(Base):
     to_daily_limit = Column(Integer, default=0)
     reason = Column(String(255), default="")
     created_at = Column(DateTime, server_default=func.now(), index=True)
+
+
+class PriceDistributionSnapshot(Base):
+    """I-8 分价博弈矩阵盘中快照(2026-10-18): 读库优先, 免每次首屏跨网打腾讯。
+
+    为什么必须落库(用户硬约束)
+    --------------------------
+    ① 分价矩阵是**盘中可回放**的微观证据: 主力在哪个价位承接/出货, 只有落成时序才能
+       做事后回测与"主力轨迹"复盘; 请求期现拉等于每天把证据丢一次。
+    ② `/api/market/price-distribution` 首屏若每次现拉腾讯(海外节点常态 1~8s), 页面
+       秒开无从谈起; 读本表一行 JSON 是毫秒级。
+
+    粒度: 一行 = (标的, 交易日, **5 分钟桶**) 的最新一次采样。为什么按桶而不是按秒:
+    分价表快照盘中每 3~5s 刷新一次, 若按秒落库, 单票一天几百行 × 30KB ≈ 十 MB 级,
+    200 只票就是 GB/天 —— 那是把"证据"存成了"录像"。5 分钟桶(48 行/天/票)既保住
+    日内轨迹, 又把体量压到 1/10; 桶内多次采样**原地覆盖**, 保留桶内最后一次(最新)。
+    老于保留期的行由 `price_distribution_store.purge_old_snapshots` 清理(默认 5 个交易日)。
+
+    口径: `payload` 是 analyzer 的**完整返回**(含 bins/support/resistance/iceberg/
+    summary/quality), 读侧直接回吐, 不在读路径重算 —— 重算会让历史行的口径随代码漂移。
+    """
+
+    __tablename__ = "price_distribution_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "trade_date", "market", "symbol", "bucket_ts",
+            name="uq_price_dist_snap_day_sym_bucket",
+        ),
+        Index("ix_price_dist_snap_sym_day", "symbol", "trade_date"),
+        Index("ix_price_dist_snap_captured", "captured_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)     # YYYY-MM-DD(交易所快照日, 非调用日)
+    market = Column(String(8), nullable=False, default="CN")
+    symbol = Column(String(16), nullable=False)         # 6 位代码
+    snapshot_ts = Column(String(8), nullable=False)     # HH:MM:SS(源表头时刻, 桶内最后一次)
+    bucket_ts = Column(String(5), nullable=False)       # HH:MM(5 分钟桶, 唯一键)
+    captured_at = Column(Float, nullable=False)         # 落库时刻 epoch 秒(缓存新鲜度基准)
+    close_price = Column(Float, nullable=True)
+    total_vol = Column(Float, nullable=True)            # 手(矩阵覆盖档合计)
+    buy_vol = Column(Float, nullable=True)
+    sell_vol = Column(Float, nullable=True)
+    net_amount = Column(Float, nullable=True)           # 元
+    buy_ratio = Column(Float, nullable=True)
+    big_ratio = Column(Float, nullable=True)
+    price_bins_json = Column(JSON, nullable=True)       # 逐档矩阵
+    support_levels = Column(JSON, nullable=True)        # 强托举位
+    resistance_levels = Column(JSON, nullable=True)     # 密集抛压带
+    iceberg_signals = Column(JSON, nullable=True)       # 算法拆单
+    payload = Column(JSON, nullable=True)               # 完整分析结果(读侧直出)
+    source = Column(String(32), default="tencent_price")
+    quality_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class PriceDistributionDaily(Base):
+    """I-8 分价博弈矩阵**日终归档**(2026-10-18): 历史回测/主力轨迹复盘的唯一事实源。
+
+    与 `PriceDistributionSnapshot` 的分工:
+      · snapshots = 盘中滚动采样(短期缓存, 会被保留期清理);
+      · daily      = 每交易日**一份定稿**(收盘归档/当日最后一次采样), 永久保留。
+
+    粒度: 唯一键 (trade_date, market, symbol), 同一交易日重复归档原地覆盖
+    (`settled_at` 记录最后一次归档时刻)。历史日**永不回源** —— 分价表只给当日,
+    回源既拿不到历史, 也会把"今天的分价"污染到历史日上。
+
+    为什么另存列而不是只留 payload: 回测要按 `symbol+trade_date` 范围扫、按
+    `net_amount`/`buy_ratio` 排序筛选, 抽 JSON 字段在 PG 上代价高(且 SQLite 不支持)。
+    """
+
+    __tablename__ = "price_distribution_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "market", "symbol", name="uq_price_dist_daily"),
+        Index("ix_price_dist_daily_sym_day", "symbol", "trade_date"),
+        Index("ix_price_dist_daily_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    symbol = Column(String(16), nullable=False)
+    snapshot_ts = Column(String(8), nullable=False)     # 定稿所用采样的源时刻
+    settled_at = Column(Float, nullable=False)          # 归档时刻 epoch 秒
+    close_price = Column(Float, nullable=True)
+    total_vol = Column(Float, nullable=True)
+    buy_vol = Column(Float, nullable=True)
+    sell_vol = Column(Float, nullable=True)
+    net_amount = Column(Float, nullable=True)
+    buy_ratio = Column(Float, nullable=True)
+    big_ratio = Column(Float, nullable=True)
+    support_price = Column(Float, nullable=True)        # 最强托举位(回测主键位)
+    resistance_price = Column(Float, nullable=True)     # 最强抛压位
+    iceberg_count = Column(Integer, default=0)
+    price_bins_json = Column(JSON, nullable=True)
+    support_levels = Column(JSON, nullable=True)
+    resistance_levels = Column(JSON, nullable=True)
+    iceberg_signals = Column(JSON, nullable=True)
+    payload = Column(JSON, nullable=True)
+    source = Column(String(32), default="tencent_price")
+    quality_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P0 落库加固(2026-10-18, docs/全量数据落库排查与持久化加固方案_20261018.md)
+#
+# 六张表分三组补齐「过程/覆盖度」缺口:
+#   · auction_tick_snapshots  —— 竞价过程逐分钟 append-only(原 auction_snapshots
+#     只留 9:25 终值, 过程被唯一键抹掉);
+#   · auction_wudao_daily     —— 悟道竞价独家字段结构化(原只存在于 30s dict 的
+#     格式化文本里, 连结构都没有);
+#   · cb_terms / cb_daily_snapshot —— 可转债条款 + 每日折溢价(原 12h 进程内 dict +
+#     Redis 60s, 冷启动 N 次 kzz_info RPC);
+#   · more_info_daily         —— TQ 104 字段收盘定稿(原只有 8 个 L2 字段落库);
+#   · index_daily             —— 指数日K(原「指数不入 klines」, 每次首屏重付 6×K线)。
+#
+# 统一口径:
+#   · trade_date 用 ISO 文本 `YYYY-MM-DD`(与 price_distribution_* 一致, 双方言免类型转换);
+#   · captured_at 用 epoch 秒 Float(新鲜度判定直接做减法, PG/SQLite 同语义);
+#   · 派生值缺失一律 NULL —— 0 不冒充缺失(方案 §7.1 铁律 4);
+#   · 每表带 source, 原始字段留 raw/payload JSON, 口径漂移时可回查比对。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class AuctionTickSnapshot(Base):
+    """竞价过程帧(2026-10-18 P0-a): append-only, 支持 9:15-9:25 逐分钟回放。
+
+    为什么必须新表: `auction_snapshots` 唯一键 (trade_date, symbol, market) 把竞价
+    压成一个 9:25 终值 —— 试盘价抬升、9:20 前撤单、虚假封单这些**过程**全部丢失,
+    竞价策略回测只能拿到结果拿不到过程(方案 §5.1/§5.2)。
+
+    粒度: 一行 = (标的, 交易日, 帧时刻, 来源)。同一帧重复采样**原地覆盖**
+    (幂等重放), 不同帧 append, 因此 `frames_per_symbol` 直接可当覆盖度指标。
+    `withdraw_rate` 由相邻两帧的 `cancel_cum` 增量除以匹配量增量推导, 输入不足
+    时写 NULL —— 不拿 0 冒充"没撤单"。
+    """
+
+    __tablename__ = "auction_tick_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "trade_date", "symbol", "market", "tick_ts", "source",
+            name="uq_auction_tick_frame",
+        ),
+        Index("ix_auction_tick_sym_day", "symbol", "trade_date"),
+        Index("ix_auction_tick_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)      # YYYY-MM-DD
+    symbol = Column(String(16), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    tick_ts = Column(String(8), nullable=False)          # HH:MM:SS
+    time_bucket = Column(String(5), nullable=False)      # HH:MM(分钟桶, 回放分组)
+    ref_price = Column(Float, nullable=True)             # 虚拟撮合价
+    match_vol = Column(Float, nullable=True)             # 已匹配量(手)
+    unmatched_vol = Column(Float, nullable=True)         # 未匹配量(手, 正=买剩)
+    bid1_price = Column(Float, nullable=True)
+    bid1_vol = Column(Float, nullable=True)
+    ask1_price = Column(Float, nullable=True)
+    ask1_vol = Column(Float, nullable=True)
+    open_amount = Column(Float, nullable=True)           # OpenAmo 竞价成交额
+    open_limit_buy = Column(Float, nullable=True)        # OpenZTBuy 一字板买量
+    prev_close = Column(Float, nullable=True)
+    open_pct = Column(Float, nullable=True)              # OpenZAF 竞价涨幅(%)
+    cancel_cum = Column(Float, nullable=True)            # 累计撤单量(手)
+    withdraw_rate = Column(Float, nullable=True)         # 本帧撤单/匹配比(0~1+)
+    verdict = Column(String(24), nullable=True)          # 帧级判定(强/弱/一字/未知)
+    source = Column(String(16), nullable=False, default="tq")
+    captured_at = Column(Float, nullable=False)
+    raw = Column(JSON, nullable=True)                    # 源字段原样
+
+
+class AuctionWudaoDaily(Base):
+    """悟道竞价多维因子日归档(2026-10-18 P0-a)。
+
+    这些字段是悟道独家(竞价一致性 / 买盘强度 / 弱转强 / 涨停反馈 / 题材强度),
+    免费源没有等价物; 此前只以**格式化中文文本**存在于 `auction_collector` 的 30s
+    缓存 dict 里, 既不可查询也不可回测。本表把它们结构化沉淀。
+
+    诚实边界: 悟道不可用的日子**不写行**(显式空), 绝不写 0 或 "无"。
+    """
+
+    __tablename__ = "auction_wudao_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "symbol", "market", name="uq_auction_wudao_daily"),
+        Index("ix_auction_wudao_day", "trade_date"),
+        Index("ix_auction_wudao_sym_day", "symbol", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)
+    symbol = Column(String(16), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    name = Column(String(64), nullable=True)
+    consistency = Column(Float, nullable=True)           # 竞价一致性
+    bid_strength = Column(Float, nullable=True)          # bidStrength 买盘强度
+    weak_to_strong = Column(Boolean, nullable=True)      # 弱转强
+    limitup_feedback = Column(Text, nullable=True)       # 涨停反馈(原文本)
+    theme = Column(String(64), nullable=True)            # 所属题材
+    theme_strength = Column(Float, nullable=True)
+    rank_in_theme = Column(Integer, nullable=True)
+    open_pct = Column(Float, nullable=True)              # 竞价涨幅(%)
+    source = Column(String(16), nullable=False, default="wudao")
+    captured_at = Column(Float, nullable=False)
+    raw = Column(JSON, nullable=True)
+
+
+class CbTerms(Base):
+    """可转债条款基础表(2026-10-18 P0-a): 14 个业务字段 + 原始 JSON。
+
+    版本化口径 = 抓取日(`as_of`), 条款只在分红/下修/强赎公告时变, 同一 `as_of`
+    重复抓取原地覆盖; 历史 `as_of` 行保留 → 可回看"当时的转股价"。
+
+    为什么落库: 原实现是 12h 进程内 dict, worker 重启即失, 冷启动要对每只转债
+    打一次 `kzz_info` RPC(N 次串行) —— 首屏秒开的头号敌人(方案 §5.3)。
+    """
+
+    __tablename__ = "cb_terms"
+    __table_args__ = (
+        UniqueConstraint("code", "as_of", name="uq_cb_terms_code_asof"),
+        Index("ix_cb_terms_code_asof", "code", "as_of"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(16), nullable=False)            # 6 位转债代码
+    as_of = Column(String(10), nullable=False)           # YYYY-MM-DD 条款版本日
+    name = Column(String(64), nullable=True)
+    stock_code = Column(String(16), nullable=True)       # 正股 6 位代码
+    conv_price = Column(Float, nullable=True)            # ZGPrice 转股价
+    force_redeem = Column(Float, nullable=True)          # ForceRedeem 强赎触发价
+    pure_bond_value = Column(Float, nullable=True)       # RealValue 纯债价值
+    rating = Column(String(16), nullable=True)           # HSScore 评级
+    list_date = Column(String(10), nullable=True)
+    maturity_date = Column(String(10), nullable=True)    # EndDate 到期日
+    conv_start = Column(String(10), nullable=True)       # ZGDate 转股起始日
+    put_back_price = Column(Float, nullable=True)        # PutBack 回售触发价
+    rest_scope = Column(Float, nullable=True)            # RestScope 剩余规模
+    cur_rate = Column(Float, nullable=True)              # CurRate 当期利率
+    source = Column(String(24), nullable=False, default="tq_kzz_info")
+    captured_at = Column(Float, nullable=False)
+    raw = Column(JSON, nullable=True)                    # kzz_info 原样 14+ 字段
+
+
+class CbDailySnapshot(Base):
+    """可转债每日折溢价/双低快照(2026-10-18 P0-a): 双低轮动回测的事实源。
+
+    一行 = (交易日, 转债)。`payload` 保存当日 radar 行的**完整返回**(含 scenarios),
+    读侧直出, 不在读路径重算 —— 重算会让历史行口径随代码漂移。
+    `rank` 是当日 radar 的展示序(场景优先级 → 溢价率), 供 `limit` 截断读库。
+    """
+
+    __tablename__ = "cb_daily_snapshot"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "code", name="uq_cb_daily_snapshot"),
+        Index("ix_cb_daily_code_day", "code", "trade_date"),
+        Index("ix_cb_daily_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)
+    code = Column(String(16), nullable=False)
+    name = Column(String(64), nullable=True)
+    stock_code = Column(String(16), nullable=True)
+    # 当日扫描的全市场转债数(原响应里的 universe)。逐行重复存是为让读库回吐的
+    # 载荷与实时构建**完全同形**(前端直接显示 "全市场 N 只"), 一天最多 N 行, 可忽略。
+    universe_size = Column(Integer, nullable=True)
+    bond_price = Column(Float, nullable=True)
+    bond_prev_close = Column(Float, nullable=True)
+    stock_price = Column(Float, nullable=True)
+    stock_prev_close = Column(Float, nullable=True)
+    conv_value = Column(Float, nullable=True)
+    premium_pct = Column(Float, nullable=True)
+    double_low = Column(Float, nullable=True)
+    double_low_rank = Column(Integer, nullable=True)
+    force_redeem_dist = Column(Float, nullable=True)     # (正股-触发价)/触发价 %
+    pure_bond_premium = Column(Float, nullable=True)
+    scenarios = Column(JSON, nullable=True)              # 命中场景 key 列表
+    rank = Column(Integer, nullable=True)                # 当日展示序
+    payload = Column(JSON, nullable=True)                # radar 行完整返回
+    source = Column(String(32), nullable=False, default="tq")
+    captured_at = Column(Float, nullable=False)
+
+
+class MoreInfoDaily(Base):
+    """TQ `get_more_info` 104 字段收盘定稿日表(2026-10-18 P0-b)。
+
+    此前只有 8 个 L2 字段收盘落 `l2_fund_snapshots`, 封单额/封成比/委比/连板数/
+    竞价买入额等高价值字段**只存在于实时会话里**, 盘后一律回 0 → 既不能回测,
+    盘后请求也没有历史可回退(方案 §4 #5, 判定 C/D)。
+
+    写入者: `more-info-daily` job(交易日 15:10, 全市场分批)。整行 104 字段原样进
+    `raw`, 派生列只增不改; 与 `l2_fund_snapshots` 同口径字段便于交叉校验。
+
+    零值不冒充: 所有字段皆为 None / 0 的标的**不落库**(见
+    `src/core/more_info_daily.py::has_live_values`)。
+    """
+
+    __tablename__ = "more_info_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "symbol", "market", name="uq_more_info_daily"),
+        Index("ix_more_info_sym_day", "symbol", "trade_date"),
+        Index("ix_more_info_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)
+    symbol = Column(String(16), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    # 行情扩展
+    turnover_rate = Column(Float, nullable=True)
+    volume_ratio = Column(Float, nullable=True)
+    commission_ratio = Column(Float, nullable=True)      # Wtb 委比
+    total_mv = Column(Float, nullable=True)
+    circ_mv = Column(Float, nullable=True)
+    # 涨幅序列
+    chg_pct = Column(Float, nullable=True)
+    chg_pct_5d = Column(Float, nullable=True)
+    chg_pct_20d = Column(Float, nullable=True)
+    chg_pct_ytd = Column(Float, nullable=True)
+    # 封单/竞价(复盘核心)
+    limit_up_amount = Column(Float, nullable=True)       # FCAmo 封单额(万元)
+    limit_up_ratio = Column(Float, nullable=True)        # FCb 封成比
+    open_amount = Column(Float, nullable=True)           # OpenAmo 竞价成交额
+    open_pct = Column(Float, nullable=True)              # OpenZAF 竞价涨幅
+    open_limit_buy = Column(Float, nullable=True)        # OpenZTBuy 一字板买量
+    # 连板
+    consecutive_limit_days = Column(Integer, nullable=True)
+    consecutive_up_days = Column(Integer, nullable=True)
+    # 估值
+    pe_dynamic = Column(Float, nullable=True)
+    pe_ttm = Column(Float, nullable=True)
+    pb = Column(Float, nullable=True)
+    dividend_yield = Column(Float, nullable=True)
+    beta = Column(Float, nullable=True)
+    # L2 微观(与 l2_fund_snapshots 同口径)
+    l2_tick_num = Column(Float, nullable=True)
+    l2_order_num = Column(Float, nullable=True)
+    total_buy_vol = Column(Float, nullable=True)
+    total_sell_vol = Column(Float, nullable=True)
+    cancel_buy = Column(Float, nullable=True)
+    cancel_sell = Column(Float, nullable=True)
+    zjl = Column(Float, nullable=True)
+    zjl_hb = Column(Float, nullable=True)
+    raw = Column(JSON, nullable=True)                    # 104 字段原样
+    source = Column(String(24), nullable=False, default="tq_more_info")
+    captured_at = Column(Float, nullable=False)
+
+
+class IndexDaily(Base):
+    """主要指数日K线(2026-10-18 P0-b): 大盘择时回测的地基 + 首屏零跨网。
+
+    现状: `klines` 明确不收指数(裸码撞号, 见 klines_minute.py), `/api/market/indices`
+    的 spark 靠 60s 内存 + 30min 进程内缓存, 每 30 分钟重付一轮 6×指数K(≈4s),
+    重启/多 worker 各自重付。落表后 spark 直接读库。
+    """
+
+    __tablename__ = "index_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "code", name="uq_index_daily"),
+        Index("ix_index_daily_code_day", "code", "trade_date"),
+        Index("ix_index_daily_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)
+    code = Column(String(16), nullable=False)            # 000001/399001/HSI/IXIC...
+    market = Column(String(8), nullable=False, default="CN")
+    name = Column(String(64), nullable=True)
+    open = Column(Float, nullable=True)
+    high = Column(Float, nullable=True)
+    low = Column(Float, nullable=True)
+    close = Column(Float, nullable=True)
+    prev_close = Column(Float, nullable=True)
+    volume = Column(Float, nullable=True)
+    amount = Column(Float, nullable=True)
+    source = Column(String(24), nullable=False, default="marketdata")
+    captured_at = Column(Float, nullable=False)
+
+
+class BreadthDistributionSnapshot(Base):
+    """全市场涨跌幅 9 档分布快照(2026-10-20)。
+
+    现状: 首页「涨跌分布」只靠 biz_cache(300s), TTL 过期/容器重启/Redis 抖动都要重拉
+    新浪 79 页(约 32s), 期间用户只能看到「后台计算中」。落表后冷启动直接读库,
+    并把盘中每 15 分钟的快照沉淀成可回看的历史序列(情绪扩散过程)。
+    """
+
+    __tablename__ = "breadth_distribution_snapshot"
+    __table_args__ = (
+        Index("ix_breadth_snapshot_day", "trade_date", "captured_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)      # YYYY-MM-DD (CST)
+    captured_at = Column(DateTime, nullable=False)       # 采集时刻(naive UTC, 与全库一致)
+    total = Column(Integer, nullable=False, default=0)   # 拉到的样本数
+    valid = Column(Integer, nullable=False, default=0)   # 有效涨跌幅样本
+    items = Column(Text, nullable=False, default="[]")   # [{"bucket","count"}...] JSON
+    source = Column(String(24), nullable=False, default="sina")
+
+
+
+
+class CopilotRun(Base):
+    """一次数智参谋问答的骨架(2026-10-20, Agent 内核 P0)。
+
+    与 `agent_runs` 分工不同: 那张表记的是**后台定时 Agent** 的执行(agent_name/
+    trigger_source/notify_*), 这张表记的是**用户对话**的运行时轨迹。没有它, 用户问
+    「为什么这么说」无法回放, 线上事故(如竞价被别名成 strongest)只能靠日志猜。
+    """
+
+    __tablename__ = "copilot_runs"
+    __table_args__ = (
+        Index("ix_copilot_runs_conv", "conversation_id", "created_at"),
+        Index("ix_copilot_runs_user", "user_id", "created_at"),
+        Index("ix_copilot_runs_parent", "parent_run_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False, unique=True)   # uuid4
+    conversation_id = Column(Integer, nullable=True)
+    user_id = Column(String(36), nullable=True)                # users.id 是 UUID 字符串
+    recipe = Column(String(48), nullable=True)                 # 配方 id(内置 6 个)
+    question = Column(Text, nullable=True)                     # 用户本轮问题(截断 500)
+    status = Column(String(16), nullable=False, default="running")  # running/ok/degraded/error
+    error = Column(Text, nullable=True)
+    tool_calls = Column(Integer, nullable=False, default=0)
+    elapsed_ms = Column(Integer, nullable=True)
+    # 2026-10-25: Durable Run 心跳。进程重启/worker 崩溃后靠它判"这个 run 还有人管吗"，
+    # 避免库里留下永久 running 的幽灵运行。见 src/core/copilot_runtime.py
+    heartbeat_at = Column(DateTime, nullable=True)
+    # 2026-10-25 (P1-1.1): 委派子 run。父 run 只汇总证据与缺口，子 run 有**独立预算**，
+    # `tool_calls` 各算各的 —— 否则一个 delegate 就能把父的预算吃穿。
+    parent_run_id = Column(String(36), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class HarnessExperiment(Base):
+    """配方改动 → 指标变化的对照记录（P0-0.5, 2026-10-25）。
+
+    与 `copilot_memories` **不混用**：那边是"用户偏好"（喜欢什么口径、常看哪些票），
+    这边是"我改了什么、指标怎么变的"。混在一起会让偏好检索被实验噪音污染。
+
+    只记事实：改动摘要 + 前后两组指标 + verdict。**不写'感觉更好'这种话**。
+    """
+
+    __tablename__ = "harness_experiments"
+    __table_args__ = (
+        Index("ix_harness_exp_created", "created_at"),
+        Index("ix_harness_exp_recipe", "recipe_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True)          # 谁发起的（多账号隔离）
+    recipe_id = Column(String(64), nullable=False)       # 被改的配方 / 智能体
+    change_summary = Column(Text, nullable=False)        # 改了什么（一句话，可复核）
+    baseline = Column(JSON, default=dict)                # summarize() 的结果
+    candidate = Column(JSON, default=dict)               # summarize() 的结果
+    verdict = Column(String(16), nullable=False)         # keep / rollback
+    reasons = Column(JSON, default=list)                 # rollback 的原因（逐条）
+    evidence_path = Column(String(256), nullable=True)   # compare-*.json 落盘位置
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class WebhookSubscription(Base):
+    """外部回调订阅（P2-2.2, 2026-10-25）。
+
+    一个 run 可以带多个回调（同一任务同时推给两个系统）。`status` 三态：
+    pending（等 run 终态）/ delivered / failed（重试完仍失败，`last_error` 写明原因）。
+    """
+
+    __tablename__ = "webhook_subscriptions"
+    __table_args__ = (Index("ix_webhook_run", "run_id", "status"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False)
+    user_id = Column(String(36), nullable=True)
+    url = Column(String(512), nullable=False)
+    status = Column(String(16), nullable=False, default="pending")
+    status_snapshot = Column(String(16), nullable=True)   # 触发时的 run 状态
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class RecipeVersion(Base):
+    """配方内容版本（P2-2.1, 2026-10-25）。
+
+    配方是 YAML 文件、不走应用写路径，所以版本靠"读到新指纹就记一条"的惰性观察。
+    `snapshot` 存那一次的 `Recipe.public()`，用于回答"上一版工具清单是什么"。
+    """
+
+    __tablename__ = "recipe_versions"
+    __table_args__ = (Index("ix_recipe_versions_rid", "recipe_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recipe_id = Column(String(64), nullable=False)
+    fingerprint = Column(String(16), nullable=False)      # YAML 内容 sha256 前 8 位
+    snapshot = Column(Text, nullable=True)                # 当次 Recipe.public() 的 JSON
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopilotStep(Base):
+    """参谋单步工具调用(2026-10-20)。
+
+    result_digest 只存摘要(前 500 字), 不存全文: 一是体积, 二是工具返回里可能带
+    用户私有持仓/自选, 全量落库等于二次留存。
+    """
+
+    __tablename__ = "copilot_steps"
+    __table_args__ = (Index("ix_copilot_steps_run", "run_id", "seq"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False)
+    seq = Column(Integer, nullable=False)                      # 本轮内序号, 从 1 开始
+    tool = Column(String(64), nullable=False)
+    args = Column(Text, nullable=True)                         # JSON, 截断 2KB
+    ok = Column(Boolean, nullable=False, default=True)
+    error = Column(Text, nullable=True)
+    result_digest = Column(Text, nullable=True)                # 前 500 字
+    elapsed_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopilotFeedback(Base):
+    """用户对某次回答的反馈(2026-10-20), 最便宜的评测样本来源。
+
+    没有它时配方/提示词好坏只能靠人工 D3 抽检(6 智能体 × 3 问), 样本量和覆盖面都不够。
+    """
+
+    __tablename__ = "copilot_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False, index=True)
+    user_id = Column(String(36), nullable=True)                # users.id 是 UUID 字符串
+    useful = Column(Boolean, nullable=False, default=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopilotAction(Base):
+    """AI 提议的动作用待确认(2026-10-20, P1 动作回写)。
+
+    「融合」的硬指标不是 AI 能读页面, 而是能改页面。但不能直接改: 所有动作先落
+    pending, 用户点确认才 apply —— 这是红线(改持仓/下单永不在这个框架里)。
+    """
+
+    __tablename__ = "copilot_actions"
+    __table_args__ = (Index("ix_copilot_actions_user", "user_id", "status", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=True)
+    user_id = Column(String(36), nullable=False)
+    kind = Column(String(24), nullable=False)        # annotation / watchlist / alert
+    payload = Column(Text, nullable=False, default="{}")   # JSON
+    status = Column(String(16), nullable=False, default="pending")  # pending/applied/rejected/rolled_back
+    result = Column(Text, nullable=True)
+    # 2026-10-25 (P1-1.3): 字段级 diff（propose 时算）与 apply 前快照（回滚用）。
+    # 存 JSON 而不是拆列：不同动作类型的字段不同，拆列会每加一类动作就要迁移。
+    diff_json = Column(Text, nullable=True)
+    before_snapshot = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    applied_at = Column(DateTime, nullable=True)
+
+
+class KlineAnnotation(Base):
+    """K 线图层标注(2026-10-20)。
+
+    产品铁律: 图表标注是人机共用的证据语言。AI 的结论要能落到图上, 而不是只活在
+    聊天记录里。price/time 二选一: 水平线用 price, 时间点用 ts。
+    """
+
+    __tablename__ = "kline_annotations"
+    __table_args__ = (Index("ix_kline_annotations_symbol", "symbol", "market", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True)
+    symbol = Column(String(12), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    period = Column(String(8), nullable=False, default="1d")
+    price = Column(Float, nullable=True)
+    ts = Column(String(32), nullable=True)           # ISO 或 "2026-10-20"
+    label = Column(String(64), nullable=False)       # 短标签, 图上直接显示
+    note = Column(Text, nullable=True)               # 依据/口径
+    color = Column(String(16), nullable=False, default="up")
+    source = Column(String(16), nullable=False, default="ai")   # ai / user
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CancelRateSnapshot(Base):
+    """撤单率时序采样（2026-10-21）。
+
+    为什么要有这张表：`md_more_info` 给的撤单率是**当日会话累计值**，
+    只能回答"现在多少"，回答不了"10:30 那波撤单是不是突然拉起来"。
+    每 30s 采一行，才能看出"买撤 60%→85%"这种变化——那才是试盘/撤单诱多的证据。
+
+    unique(symbol, trade_date, hhmm) 让同一分钟重复采样幂等（多副本/重启不产生重复行）。
+    """
+
+    __tablename__ = "cancel_rate_snapshots"
+    __table_args__ = (
+        Index("ix_cancel_rate_sym_date", "symbol", "trade_date", "hhmm", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(16), nullable=False)
+    trade_date = Column(String(8), nullable=False)      # 20261021
+    hhmm = Column(String(4), nullable=False)            # 1030（分钟粒度）
+    captured_at = Column(DateTime, nullable=False)
+    buy_cancel_rate = Column(Float, nullable=True)      # %
+    sell_cancel_rate = Column(Float, nullable=True)     # %
+    cancel_bias = Column(Float, nullable=True)
+    intent = Column(String(24), nullable=True)
+    source = Column(String(32), nullable=True)
+
+
+class StockFactorDaily(Base):
+    """个股因子日快照（2026-10-21）。
+
+    `strategy_factor_snapshots` 是信号级（只有被策略选中的票），诊断需要"个股 × 日期"。
+    只写能精确算的因子；换手率缺流通股本历史、主力净额缺逐笔历史 → 留 NULL，不拿近似值冒充。
+    rank_* 是**同日全市场横截面分位**（0~100），绝不跨日或用未来数据。
+    """
+
+    __tablename__ = "stock_factor_daily"
+    __table_args__ = (
+        Index("ix_stock_factor_sym_date", "symbol", "trade_date", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(16), nullable=False)
+    trade_date = Column(String(8), nullable=False)
+    momentum_20 = Column(Float, nullable=True)     # 20 日涨跌幅 %
+    momentum_60 = Column(Float, nullable=True)     # 60 日涨跌幅 %
+    vol_20 = Column(Float, nullable=True)          # 20 日年化波动 %
+    volume_z20 = Column(Float, nullable=True)      # 当日量能 z（对 60 日）
+    position_120 = Column(Float, nullable=True)    # 120 日区间位置 0~100
+    concentration = Column(Float, nullable=True)   # CYQ 集中度 (C90-C10)/C50
+    peak_price = Column(Float, nullable=True)      # 筹码峰价位（看峰位迁移）
+    rank_momentum_20 = Column(Float, nullable=True)
+    rank_momentum_60 = Column(Float, nullable=True)
+    rank_vol_20 = Column(Float, nullable=True)
+    rank_volume_z20 = Column(Float, nullable=True)
+    rank_position_120 = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ExdayDaily(Base):
+    """TQ `get_exday_data` 四档资金结构日表（2026-10-23）。
+
+    为什么单独建表：`get_exday_data` **只返当日 1 行**（count/start_time/date 参数
+    实测全部无效），所以「四档结构的历史分位」只能靠自己每天落库累积。
+    写入者：`src/collectors/exday_daily.py`（交易日 15:45 全市场）+ 任何调用
+    `get_fund_structure` / `get_order_granularity` 的路径顺带写穿。
+
+    口径：金额=元，量=手；`caliber = tdx_exday4`（按单笔成交金额分四档的客户端口径），
+    与东财四档(eastmoney4)、腾讯逐笔(tick) **不可换算**。
+    """
+
+    __tablename__ = "exday_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "symbol", "market", name="uq_exday_daily"),
+        Index("ix_exday_sym_day", "symbol", "trade_date"),
+        Index("ix_exday_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(8), nullable=False)
+    symbol = Column(String(16), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    # 合计
+    amount = Column(Float, nullable=True)              # 成交额(元)
+    volume_lots = Column(Float, nullable=True)         # 成交量(手)
+    active_buy_amt = Column(Float, nullable=True)      # 主动买额(元)
+    active_sell_amt = Column(Float, nullable=True)
+    active_ratio = Column(Float, nullable=True)        # 主动买占比%
+    # 四档买入额 / 主动净额
+    xl_buy_amt = Column(Float, nullable=True)          # 特大单买入额
+    lg_buy_amt = Column(Float, nullable=True)          # 大单
+    md_buy_amt = Column(Float, nullable=True)          # 中单
+    sm_buy_amt = Column(Float, nullable=True)          # 小单
+    xl_sell_amt = Column(Float, nullable=True)
+    lg_sell_amt = Column(Float, nullable=True)
+    md_sell_amt = Column(Float, nullable=True)
+    sm_sell_amt = Column(Float, nullable=True)
+    xl_active_net = Column(Float, nullable=True)       # 该档主动买−主动卖(元)
+    lg_active_net = Column(Float, nullable=True)
+    md_active_net = Column(Float, nullable=True)
+    sm_active_net = Column(Float, nullable=True)
+    # 派生因子
+    retail_ratio = Column(Float, nullable=True)        # 小单买入占比%
+    xl_share = Column(Float, nullable=True)            # 特大单占比%
+    main_active_net = Column(Float, nullable=True)     # 特大+大 主动净额(元)
+    main_active_net_pct = Column(Float, nullable=True) # 占成交额%
+    chip_migration = Column(Float, nullable=True)      # 大单净 − 小单净
+    # 委托/撤单
+    b_order = Column(Float, nullable=True)             # 买委托量(手)
+    s_order = Column(Float, nullable=True)
+    total_b_order = Column(Float, nullable=True)       # 买委托笔数
+    total_s_order = Column(Float, nullable=True)
+    b_cancel = Column(Float, nullable=True)            # 买撤单量(手)
+    s_cancel = Column(Float, nullable=True)
+    cjbs = Column(Float, nullable=True)                # 成交笔数
+    # 委托粒度
+    avg_order_lots = Column(Float, nullable=True)      # 笔均委托(手)
+    avg_trade_lots = Column(Float, nullable=True)      # 笔均成交(手)
+    gran_hiding = Column(Float, nullable=True)         # 委托/成交粒度比
+    order_fill_ratio = Column(Float, nullable=True)    # 委托/成交笔数比
+    cancel_buy_rate = Column(Float, nullable=True)     # 买撤单率%
+    cancel_sell_rate = Column(Float, nullable=True)    # 卖撤单率%
+    cancel_skew = Column(Float, nullable=True)         # 卖撤−买撤(pp)
+    # 质量
+    quality = Column(String(16), nullable=True)        # ok / suspect
+    reason = Column(String(255), nullable=True)
+    source = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FactorWinrateDaily(Base):
+    """量化因子多维分桶胜率与超额收益日快照表（2026-10-23）。
+
+    解决问题：
+    1. 回答「GS 买卖区间、AI 机构活跃度、GS×活跃度共振、威科夫量价结构、涨停封板质量
+       在真实历史样本里的 T+1/T+3/T+5 胜率、3% 达标率、盈亏比到底是多少」；
+    2. 强制同时存储**同股票池同时间窗的无条件基准**（`baseline_win_rate_pct` /
+       `baseline_avg_return_pct`）与**超额项**（`excess_win_rate_pp` / `excess_return_pct`），
+       杜绝脱离市场基准单独吹嘘绝对胜率；
+    3. 强制剔除 T+1 一字涨停不可买入样本（记入 `untradable_skipped`）。
+    """
+
+    __tablename__ = "factor_winrate_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "as_of_date", "factor_family", "bucket_key", "horizon",
+            name="uq_factor_winrate_daily",
+        ),
+        Index("ix_factor_winrate_family_date", "factor_family", "as_of_date"),
+        Index("ix_factor_winrate_date", "as_of_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of_date = Column(String(10), nullable=False)
+    factor_family = Column(String(40), nullable=False)
+    bucket_key = Column(String(48), nullable=False)
+    bucket_label = Column(String(64), nullable=False)
+    horizon = Column(Integer, nullable=False, default=5)
+    sample_count = Column(Integer, nullable=False, default=0)
+    win_count = Column(Integer, nullable=False, default=0)
+    untradable_skipped = Column(Integer, nullable=False, default=0)
+    win_rate_pct = Column(Float, nullable=True)            # 收盘收益 > 0 占比(%)
+    hit3_rate_pct = Column(Float, nullable=True)           # 期内最高涨幅 >= 3% 占比(%, 官方口径)
+    avg_return_pct = Column(Float, nullable=True)          # 均值收益(%)
+    median_return_pct = Column(Float, nullable=True)       # 中位收益(%)
+    profit_loss_ratio = Column(Float, nullable=True)       # 盈亏比 = 平均盈利 / 平均亏损
+    baseline_win_rate_pct = Column(Float, nullable=True)   # 同池无条件基准胜率(%)
+    baseline_avg_return_pct = Column(Float, nullable=True) # 同池无条件基准均值(%)
+    excess_win_rate_pp = Column(Float, nullable=True)      # 超额胜率(百分点 pp)
+    excess_return_pct = Column(Float, nullable=True)       # 超额均值收益(%)
+    universe_size = Column(Integer, nullable=True)
+    lookback_bars = Column(Integer, nullable=True)
+    source = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MarketReplayDaily(Base):
+    """盘后复盘日快照：涨停/炸板/跌停/晋级率/情绪周期一站落库（2026-10-23）。
+
+    为什么单建表而不是塞 `market_sentiment_daily`：
+    - 后者是 TQ 自算口径（`source=tdx_selfcalc`），本表是**东财三池同源同日**口径，
+      炸板率/封板率的分母必须同源才能算，混写会把两种口径搅在一起；
+    - `payload` 存完整 JSON（含全部涨停/炸板/跌停明细行），供复盘页与参谋工具直接读，
+      标量列供 SQL 聚合与胜率回测联动。
+    """
+
+    __tablename__ = "market_replay_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "market", name="uq_market_replay_daily"),
+        Index("ix_market_replay_date", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(8), nullable=False)          # YYYYMMDD
+    market = Column(String(8), nullable=False, default="CN")
+    limit_up_count = Column(Integer, nullable=False, default=0)
+    limit_up_max_streak = Column(Integer, nullable=False, default=0)
+    first_board_count = Column(Integer, nullable=False, default=0)
+    ge2_count = Column(Integer, nullable=False, default=0)   # 2板及以上
+    ge3_count = Column(Integer, nullable=False, default=0)   # 3板及以上
+    one_word_count = Column(Integer, nullable=False, default=0)
+    broken_count = Column(Integer, nullable=False, default=0)
+    break_rate_pct = Column(Float, nullable=True)            # 炸板率(%)
+    seal_rate_pct = Column(Float, nullable=True)             # 封板率(%)
+    limit_down_count = Column(Integer, nullable=False, default=0)
+    limit_down_max_days = Column(Integer, nullable=False, default=0)
+    promo_rate_pct = Column(Float, nullable=True)            # 晋级率(%)
+    phase = Column(String(16), nullable=True)                # 冰点/启动/主升/高潮/退潮/修复
+    phase_label = Column(String(16), nullable=True)
+    mainline = Column(JSON, default=dict)                    # 行业分布+龙头
+    quality = Column(String(12), nullable=True)              # ok|partial|missing
+    missing_dims = Column(JSON, default=list)
+    source = Column(String(32), nullable=True)
+    payload = Column(JSON, default=dict)                     # 完整复盘证据
+    created_at = Column(DateTime, default=datetime.utcnow)

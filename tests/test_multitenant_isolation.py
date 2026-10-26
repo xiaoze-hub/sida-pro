@@ -611,3 +611,51 @@ class TestScopeCheckerC3:
             "    return db.query(Stock).all()\n"
         )
         assert check_source(src, {"Stock"}) == []
+
+    # ── 2026-10-11 扩: SQLAlchemy 2.0 select() 覆盖 ──────────────────────
+    def test_naked_select_flagged(self):
+        """db.execute(select(Stock)...) 漏 user_id 过滤必须被门禁抓红。"""
+        check_source = self._checker()
+        src = (
+            "from sqlalchemy import select\n"
+            "def bad(db):\n"
+            "    return db.execute(select(Stock).where(Stock.symbol == '600519')).all()\n"
+        )
+        v = check_source(src, {"Stock"})
+        assert len(v) == 1
+        assert v[0]["model"] == "Stock"
+        assert v[0]["func"] == "bad"
+
+    def test_scoped_select_passes(self):
+        check_source = self._checker()
+        src = (
+            "from sqlalchemy import select\n"
+            "def good(db, user):\n"
+            "    return db.execute(\n"
+            "        select(Stock).where(Stock.user_id == user.id)\n"
+            "    ).scalars().all()\n"
+        )
+        assert check_source(src, {"Stock"}) == []
+
+    def test_select_chain_without_filter_flagged(self):
+        """方法链 (.where/.order_by) 回剥到底层 select() 仍须被抓。"""
+        check_source = self._checker()
+        src = (
+            "from sqlalchemy import select\n"
+            "def bad(db):\n"
+            "    return db.execute(\n"
+            "        select(Stock).where(Stock.market == 'CN').order_by(Stock.id)\n"
+            "    ).scalars().first()\n"
+        )
+        assert len(check_source(src, {"Stock"})) == 1
+
+    def test_select_unscoped_model_not_flagged(self):
+        """非 user-scoped 模型的 select() 不误报。"""
+        check_source = self._checker()
+        src = (
+            "from sqlalchemy import select\n"
+            "def ok(db):\n"
+            "    return db.execute(select(Kline).limit(10)).all()\n"
+        )
+        assert check_source(src, {"Stock"}) == []
+

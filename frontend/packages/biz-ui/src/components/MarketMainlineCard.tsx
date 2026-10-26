@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Layers, Crown } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
@@ -78,7 +79,7 @@ function scoreTone(score: number | null | undefined): { bar: string; text: strin
   }
   if (score >= 75) return { bar: 'bg-rose-500/80', text: 'text-rose-500', tag: '强主线' }
   if (score >= 50) return { bar: 'bg-cyan-500/80', text: 'text-cyan-500', tag: '次主线' }
-  return { bar: 'bg-slate-500/60', text: 'text-slate-400', tag: '弱主线' }
+  return { bar: 'bg-slate-500/60', text: 'text-muted-foreground', tag: '弱主线' }
 }
 
 /** 单主线行 */
@@ -109,7 +110,7 @@ function MainlineRow({
         </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-foreground truncate">{g.name}</span>
+            <span className="text-[13px] font-semibold text-foreground truncate" title={g.name}>{g.name}</span>
             <span className={`text-[10px] tabular-nums font-mono ${tone.text}`}>
               {g.score != null ? g.score.toFixed(1) : '--'}
             </span>
@@ -150,7 +151,7 @@ function MainlineRow({
           <div className="flex items-center gap-1.5 mb-1.5 text-[10px] text-muted-foreground">
             <Layers className="w-3 h-3" />
             <span>成分股 {g.constituents.length} 只</span>
-            <span className="text-muted-foreground/60">·</span>
+            <span className="text-muted-foreground">·</span>
             <span>成交额 {fmtYi(g.constituents.reduce((s, c) => s + (c.amount || 0), 0))}</span>
           </div>
           <div className="flex flex-wrap gap-1">
@@ -162,11 +163,11 @@ function MainlineRow({
                   className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
                     isLeader
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                      : 'border-border/50 bg-card text-foreground/90 hover:border-primary/40'
+                      : 'border-border/50 bg-card text-foreground hover:border-primary/40'
                   }`}
                   title={`${c.name}(${c.code}) ${c.days}板 成交${fmtYi(c.amount)}`}
                 >
-                  <span className="font-medium truncate max-w-[64px]">{c.name}</span>
+                  <span className="font-medium truncate max-w-[64px]" title={c.name}>{c.name}</span>
                   {c.days > 1 ? (
                     <span className="text-[10px] font-mono text-stock-up shrink-0">
                       {c.days}B
@@ -209,14 +210,15 @@ export default function MarketMainlineCard() {
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 30000) // 30s 刷新(后端 60s 缓存, 兜底节奏)
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(30s 刷新, 后端 60s 缓存兜底节奏)。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 30000, { deps: [load] })
 
   if (loading && !data) {
     return (
@@ -288,7 +290,7 @@ export default function MarketMainlineCard() {
               Top {top.length}
               {rest.length > 0 ? ` / ${ranked.length}` : ''}
               {stats ? (
-                <span className="ml-1.5 text-muted-foreground/70">
+                <span className="ml-1.5 text-muted-foreground">
                   (过滤 {stats.broad_filtered} 宽基 / 未入榜 {stats.below_min} / 共 {totalGroups} 题材)
                 </span>
               ) : null}
@@ -374,7 +376,7 @@ export default function MarketMainlineCard() {
               >
                 <span>{g.name}</span>
                 <span className="text-stock-up font-mono">{g.limit_up_count}家</span>
-                <span className="text-muted-foreground/60">/</span>
+                <span className="text-muted-foreground">/</span>
                 <span className="text-amber-600 dark:text-amber-400 font-mono">{g.max_boards}B</span>
               </span>
             ))}

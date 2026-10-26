@@ -60,7 +60,7 @@ export function GeneralSettingsSection() {
                 <KeyRound className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                 <div className="min-w-0">
                   <span className="text-[12px] font-medium text-foreground">{item.name}</span>
-                  <p className="text-[10px] text-muted-foreground truncate">{item.desc}</p>
+                  <p className="text-[10px] text-muted-foreground truncate" title={item.desc}>{item.desc}</p>
                 </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -95,7 +95,7 @@ export function GeneralSettingsSection() {
            aria-label={t('settings.searchPlaceholder')}/>
           {health?.timezone ? (
             <div className="hidden md:flex px-2.5 h-9 items-center rounded-md border border-border/50 bg-accent/20 text-[11px] text-muted-foreground">
-              TZ <span className="ml-1 font-mono text-foreground/90">{health.timezone}</span>
+              TZ <span className="ml-1 font-mono text-foreground">{health.timezone}</span>
             </div>
           ) : null}
         </div>
@@ -112,7 +112,7 @@ export function GeneralSettingsSection() {
             <Card key={setting.key} variant="plain" className="flex items-center justify-between gap-3 px-3 py-2.5 min-h-[44px]">
               <div className="min-w-0">
                 <span className="text-[12px] font-medium text-foreground">{setting.description || setting.key}</span>
-                <p className="text-[10px] text-muted-foreground truncate font-mono">{summary}</p>
+                <p className="text-[10px] text-muted-foreground truncate font-mono" title={summary}>{summary}</p>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 {isChanged && <span className="text-[10px] text-amber-700 dark:text-amber-400">{t('common.unsaved')}</span>}

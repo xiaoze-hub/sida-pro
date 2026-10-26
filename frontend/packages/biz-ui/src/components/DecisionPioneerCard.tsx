@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw, ShieldAlert } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { activityLevelColor } from '../lib/stock-colors'
@@ -25,9 +26,26 @@ export interface InstitutionActivity {
 
 export interface GsSignal {
   signal: 'G' | 'S' | null | string
-  state: 'G区' | 'S区' | string
-  bb0: number
-  a0: number
+  /** 区间(已确认口径): "G区"/"S区"/null(无已确认信号) —— 与 K 线图层单一事实源 */
+  state: 'G区' | 'S区' | string | null
+  /** 同 state 的另一名(gs_state.zone); 面板展示优先用 state */
+  zone?: 'G区' | 'S区' | string | null
+  bb0: number | null
+  a0: number | null
+  /** 面板主文案: G区/S区/G区·待确认/S区·待确认/无数据 */
+  label?: string | null
+  /** 最近一次**已确认**信号(图表实心 ▲/▼) */
+  signal_date?: string | null
+  signal_confirmed?: boolean
+  /** 末根疑似交叉(图表空心 ○): 未定型, 不冒充定论 */
+  pending?: boolean
+  pending_side?: 'G' | 'S' | null
+  pending_date?: string | null
+  /** "○S 待确认(盘中价, 收盘才定死)" —— 与 K 线图图例逐字一致 */
+  pending_label?: string | null
+  note?: string | null
+  /** 数据截止(末根 bar 日期) */
+  as_of?: string | null
 }
 
 export interface L2Flow {
@@ -36,6 +54,12 @@ export interface L2Flow {
   direction: string | null
   l2_tick_num: number | null
   l2_order_num: number | null
+  /** 取数来源: 'live'(实时会话) / 'snapshot' / 'seal_sample'(非交易时段回退收盘快照) 等 */
+  source?: string | null
+  /** 回退快照的交易日(YYYY-MM-DD); 仅非实时时有值 */
+  as_of?: string | null
+  /** 回退说明(非交易时段·显示 X 收盘值 / 无数据(不冒充 0)) */
+  note?: string | null
 }
 
 export interface DecisionPioneerResp {
@@ -98,14 +122,15 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 30000)
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 30000, { deps: [load] })
 
   // 手动刷新按钮: 非 bare 挂在标题行右侧; bare 时标题行被外层卡替代, 挪到卡尾
   // (与「更新于 …」同行), 否则 bare 化会静默丢掉手动刷新入口(30s 自动轮询仍在)。
@@ -171,7 +196,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
               <div className="text-muted-foreground mt-0.5">
                 连强{act.streak_days}日{act.ma5 != null ? ` · 5日均${act.ma5.toFixed(2)}` : ''}
               </div>
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground mt-0.5">
                 生命1.56/强势3/大牛6
               </div>
             </>
@@ -180,21 +205,39 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
           )}
         </div>
 
-        {/* GS 信号(AI 大数据多因子机会/风险, 盘中实时) —— 口径见 packages/biz-ui/src/lib/caliber-glossary.ts */}
+        {/* GS 区间(机会/风险, 盘中实时) —— 口径单一事实源: 只认已确认信号, 与 K 线图层
+            (gs_signals 标记 + 区间色带)逐字一致; 末根疑似交叉只标「待确认」。
+            口径见 packages/biz-ui/src/lib/caliber-glossary.ts */}
         <div className="rounded-lg bg-accent/20 px-2.5 py-1.5" title={glossaryTooltip(GS_SIGNAL)}>
           <div className="text-muted-foreground mb-0.5">GS 信号（机会/风险）</div>
-          {gs ? (
+          {gs && (gs.state || gs.pending) ? (
             <>
-              <div className="font-mono text-[16px] font-semibold text-foreground">{gs.state}</div>
+              <div className="font-mono text-[16px] font-semibold text-foreground">
+                {gs.state ?? gs.label ?? '无数据'}
+                {gs.pending ? (
+                  <span className="text-[10px] ml-1 text-muted-foreground">待确认</span>
+                ) : null}
+              </div>
               <div className="text-muted-foreground mt-0.5">
-                快线{gs.a0?.toFixed(2)} / 慢线{gs.bb0?.toFixed(2)}
+                {gs.state ? null : '尚无已确认区间 · '}
+                快线{gs.a0 != null ? gs.a0.toFixed(2) : '--'} / 慢线
+                {gs.bb0 != null ? gs.bb0.toFixed(2) : '--'}
               </div>
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
-                G={GS_SIGNAL.g.meaning} · S={GS_SIGNAL.s.meaning}
+              <div className="text-[10px] text-muted-foreground mt-0.5">
+                {gs.pending
+                  ? gs.pending_label ?? `○${gs.pending_side ?? ''} 待确认(盘中价, 收盘才定死)`
+                  : `G=${GS_SIGNAL.g.meaning} · S=${GS_SIGNAL.s.meaning}`}
               </div>
+              {gs.signal_date ? (
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  最近已确认 {gs.signal}（{gs.signal_date}）
+                </div>
+              ) : null}
             </>
           ) : (
-            <div className="text-muted-foreground">无数据</div>
+            <div className="text-muted-foreground">
+              {gs?.note ? `无数据（${gs.note}）` : '无数据'}
+            </div>
           )}
         </div>
 
@@ -207,12 +250,20 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
                 {fmtWan(l2.zjl_hb)}
               </div>
               <div className="text-muted-foreground mt-0.5">{l2.direction ?? '平衡'}</div>
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground mt-0.5">
                 逐笔{l2.l2_tick_num ?? 0}笔 · 委托{l2.l2_order_num ?? 0}笔
               </div>
+              {/* 非交易时段回退收盘快照时显式标注(0 不冒充真实值); live 不标注 */}
+              {l2.source && l2.source !== 'live' && (
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  {l2.as_of ? `${l2.as_of} 收盘` : '非实时'}
+                </div>
+              )}
             </>
           ) : (
-            <div className="text-muted-foreground">无数据(休市/TQ未连接)</div>
+            <div className="text-muted-foreground">
+              {l2?.note ? `无数据(${l2.note})` : '无数据(休市/TQ未连接)'}
+            </div>
           )}
         </div>
       </div>
@@ -226,12 +277,12 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
       {bare ? (
         <div className="mt-2 flex items-center justify-end gap-2">
           {data?.data_time ? (
-            <span className="font-mono text-[10px] text-muted-foreground/60">更新于 {data.data_time}</span>
+            <span className="font-mono text-[10px] text-muted-foreground">更新于 {data.data_time}</span>
           ) : null}
           {refreshButton}
         </div>
       ) : data?.data_time ? (
-        <div className="text-[10px] text-muted-foreground/60 mt-2 text-right font-mono">
+        <div className="text-[10px] text-muted-foreground mt-2 text-right font-mono">
           更新于 {data.data_time}
         </div>
       ) : null}

@@ -73,7 +73,7 @@ function ItemRow({ item }: { item: CheckRow }) {
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <StatusBadge status={item.status} />
-          <span className="truncate text-[12px] font-medium text-foreground">{item.name}</span>
+          <span className="truncate text-[12px] font-medium text-foreground" title={item.name}>{item.name}</span>
         </div>
         <span className="flex-shrink-0 font-mono text-[11px] text-muted-foreground">
           {item.status === 'checking' ? '…' : `${item.latency_ms}ms`}
@@ -82,7 +82,7 @@ function ItemRow({ item }: { item: CheckRow }) {
       {item.status === 'fail' && (
         <div className="mt-1.5 space-y-1">
           {item.error && (
-            <p className="truncate text-[11px] text-muted-foreground/70" title={item.error}>
+            <p className="truncate text-[11px] text-muted-foreground" title={item.error}>
               {item.error}
             </p>
           )}
@@ -90,7 +90,7 @@ function ItemRow({ item }: { item: CheckRow }) {
         </div>
       )}
       {item.status !== 'fail' && item.status !== 'checking' && item.note && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground/70">{item.note}</p>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">{item.note}</p>
       )}
     </div>
   )

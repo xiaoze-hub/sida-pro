@@ -1,18 +1,27 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { dashboardApi } from '@panwatch/api'
-import KlineChart, { type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
+import { dashboardApi, fetchAPI } from '@panwatch/api'
+import { usePausedInterval } from '@panwatch/base-ui'
+import KlineChart, { type KlineInterval, type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import { CopilotCapsule } from '@/components/copilot/CopilotCapsule'
+import { DisciplineCoolDownBanner } from '@/components/DisciplineCoolDownBanner'
+import { DefenseLineBanner } from '@/components/DefenseLineBanner'
+import Fund4Strip, { type Fund4Day } from '@panwatch/biz-ui/components/Fund4Strip'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
 import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
 import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
+import { reportViewOnce } from '@/lib/copilot/viewstate'
+import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
 // v2.1 §12: 事件图标的数据源健康裁决(不可用 → K线上灰显, 悬停标"数据源不可用")
 import { useSourceHealth } from '@/hooks/useSourceHealth'
+import { useStockNames } from '@/hooks/useStockNames'
+import { stripInternalPrefix } from '@/lib/symbol'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
 import FundamentalTab from '@/pages/workbench/tabs/FundamentalTab'
@@ -47,11 +56,13 @@ import {
  * 每个标签内部自带 `InsightProvider`(各自的 `keys`), 挂载才实例化取数 hook ⇒ 切标签 = 惰性取数,
  * 进工作台**不**触发下部接口风暴。六个标签**不得**同时挂载(否则首屏打满全部标签的端点)。
  *
- * **持仓上下文 `hasPosition`(T19 接真源)**: 见 `useHasPosition` —— 页面挂载时取
- * `GET /portfolio/summary`, 按 `market:symbol` 判定当前标的是否在真实持仓里; 三态
- * (`undefined`=未知/在途/失败), 未知时**不猜** `false`:
+ * **持仓上下文 `hasPosition` + 成本线(P1-2)**: 见 `usePositionContext` —— 页面挂载时取
+ * `GET /portfolio/summary`, 按 `market:symbol` 判定当前标的是否在真实持仓里, **并取回其成本价**;
+ * `has` 三态(`undefined`=未知/在途/失败, 未知时**不猜** `false`):
  *  ① 带1 建议条评分按非持仓口径 + 显式「持仓态未知」小标注(`HeaderBand positionUnknown`);
  *  ② 基本面标签的**加仓计算器**: 未知时不渲染(与未持仓同处置), 但在标签口径行显式标注未知。
+ *  ③ 带2 主图: 有成本价 → 在 K 线上画**持仓成本线**(水平线 + 成本轴标签), 替代原占位卡;
+ *     无持仓/取不到成本价 → 不传 `costLines`(一条不画, 不报错)。
  * 未持仓/未知都只是**不渲染**该块, **不产生假数据**。
  *
  * 真数据: 本页只取一件自己消费的数据 —— 持仓汇总(`/portfolio/summary`, 上条); 其余取数全在
@@ -70,57 +81,123 @@ import {
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
 const MARKET = 'CN'
 
-/** 持仓态轮询间隔: 盘中买卖会变, 否则建议条评分/加仓计算器要等整页刷新才更新。 */
-const POSITION_POLL_MS = 60000
+/**
+ * B1 首屏冷启动(2026-10-05): 页面局部 `memo` 包一层 K 线主图。
+ *
+ * 主图只吃稳定的 `symbol`/`market`/`costLines` 与 `useCallback` 回调(见下方 `costLines`/`setQuery`),
+ * 页面其余**无关状态**变更(右栏折叠 `railOpen`、区间统计卡收起 `statsDismissed`、`?tab=` 切换)
+ * 不再牵连 K 线主图整棵重渲染 —— 否则它内部依赖 `props.costLines` 等身份的 marker/价格线重绘
+ * effect 会反复重跑(每次重画整图标注)。
+ *
+ * 只在**本页**包(`KlineChart` 是共享件, 它自身读 CSS 变量的渲染语义不动); 右栏 `QuickRail` 的
+ * `memo` 收在其自己模块内(本页是唯一调用方), 故 <QuickRail> 的 JSX 形态保持不变。
+ */
+const MemoKlineChart = memo(KlineChart)
 
 /**
- * 持仓上下文 `hasPosition`(T19 接**真源**)。
+ * 持仓态轮询间隔: 盘中买卖会变, 否则建议条评分/加仓计算器要等整页刷新才更新。
+ * 2026-10-18: 60s → 90s —— 持仓变动以"分钟"计, 90s 足够; 配合失败指数退避,
+ * 不再出现「刷新一次页面就打满 /portfolio/summary 配额」的 429 噪音。
+ */
+const POSITION_POLL_MS = 90_000
+/** 持仓态失败退避上限(5 分钟): 限流/断网恢复后最多等 5 分钟必重试一次。 */
+const POSITION_BACKOFF_MAX_MS = 300_000
+
+/**
+ * 持仓上下文(自源 `GET /portfolio/summary`; T19 接真源, P1-2 起再带**成本价**)。
  *
- * 三态:
- *  - `undefined` —— **未知**(取数在途 / 失败 / **未启用**)。调用方**不得**把它当 `false`
- *    (那等于断言"未持仓", 对持仓用户是假陈述);
- *  - `true`/`false` —— 已从真实持仓接口判定。
+ * 返回两件, 同一次取数产出:
+ *  - `has`   三态:`undefined`=**未知**(取数在途/失败/未启用); `true`/`false`=已从真实持仓判定。
+ *            调用方**不得**把 `undefined` 当 `false`(那等于断言"未持仓", 对持仓用户是假陈述)。
+ *  - `cost`  该标的持仓成本价(元); **无持仓 / 成本价缺失 / 非有限数 / ≤0 → `null`**(禁猜、禁代填 0)。
+ *            供 K 线画持仓成本线用 —— `null` 即**不画**, 也**不报错**。
  *
  * 真源: `dashboardApi.portfolioSummary({ include_quotes: false })`(`GET /portfolio/summary`)——
  * 与 `DiscoveryPanel` 判定 `holdingSet` 用的是**同一个接口同一口径**(`accounts[].positions[]` 的
- * `market:symbol`)。不编造: 取数失败即保持 `undefined`, 由调用方展示「持仓态未知」而不是猜 `false`。
+ * `market:symbol`)。不编造: 取数失败即保持 `undefined`/`null`, 由调用方展示「持仓态未知」而不是猜 `false`。
  *
  * **`enabled` 闸门(Finding 3)**: 只有**个股视图**(`type === 'stock'`)才需要持仓态 —— 指数/板块
- * 分支既不渲染右栏/标签, 也不消费 `hasPosition`(见 `StockWorkbench` 的 `type !== 'stock'` 早分支)。
+ * 分支既不渲染右栏/标签/成本线, 也不消费本 hook(见 `StockWorkbench` 的 `type !== 'stock'` 早分支)。
  * 若不闸门, `?type=index`/`?type=board` 会白发一次 `GET /portfolio/summary` 且结果**永不被读**。
- * `enabled=false` 时本 hook **不发请求**且恒为 `undefined`(未知), 与"未启用"同态。个股视图的三态
+ * `enabled=false` 时本 hook **不发请求**且恒为未知/无成本, 与"未启用"同态。个股视图的三态
  * 语义(在册 true / 不在册 false / 在途失败 undefined)**逐字节不变**。
  */
-function useHasPosition(symbol: string, market: string, enabled: boolean): boolean | undefined {
-  const [held, setHeld] = useState<boolean | undefined>(undefined)
+interface PositionContext {
+  has: boolean | undefined
+  cost: number | null
+}
+
+function usePositionContext(symbol: string, market: string, enabled: boolean): PositionContext {
+  const [ctx, setCtx] = useState<PositionContext>({ has: undefined, cost: null })
+  // 迟到响应守卫(原 effect 内闭包 `alive` → ref); 请求序号另防"上一只票的响应落到新标的上"。
+  const aliveRef = useRef(true)
+  const seqRef = useRef(0)
+  /** 连续失败次数 → 指数退避; 成功一次即清零。 */
+  const failStreakRef = useRef(0)
+  /** 退避窗口截止时刻: 轮询 tick 到点也先看它, 窗口内不发请求(429/断网不刷屏)。 */
+  const blockedUntilRef = useRef(0)
   useEffect(() => {
-    let alive = true
-    // 换标的/关闸门先回到"未知", 避免把上一只票(或已离开的个股视图)的持仓态画到当前标的上。
-    setHeld(undefined)
-    // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
-    if (!enabled || !symbol) return () => { alive = false }
-    const want = `${market}:${symbol}`
-    const load = async () => {
-      try {
-        const r = await dashboardApi.portfolioSummary({ include_quotes: false })
-        if (!alive) return
-        const has = (r?.accounts || []).some((acc) =>
-          (acc.positions || []).some((p) => `${p.market}:${p.symbol}` === want),
-        )
-        setHeld(has)
-      } catch {
-        // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`(未知) —— 不静默当未持仓。
-      }
-    }
-    void load()
-    // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器要等整页刷新才更新。
-    const t = window.setInterval(() => void load(), POSITION_POLL_MS)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(t)
+      aliveRef.current = false
+    }
+  }, [])
+  // 换标的/关闸门先回到"未知/无成本", 避免把上一只票(或已离开的个股视图)的成本线画到当前标的上。
+  useEffect(() => {
+    seqRef.current += 1 // 作废在途响应(换标的/关闸门)
+    failStreakRef.current = 0
+    blockedUntilRef.current = 0
+    setCtx({ has: undefined, cost: null })
+  }, [symbol, market, enabled])
+
+  const load = useCallback(async () => {
+    // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
+    if (!enabled || !symbol) return
+    // 退避窗口内静默跳过: 429/超时连续失败时不再每一拍都撞上游。
+    if (Date.now() < blockedUntilRef.current) return
+    const want = `${market}:${symbol}`
+    const seq = ++seqRef.current
+    try {
+      const r = await dashboardApi.portfolioSummary({ include_quotes: false })
+      if (!aliveRef.current || seq !== seqRef.current) return
+      const hit = (r?.accounts || [])
+        .flatMap((acc) => acc.positions || [])
+        .find((p) => `${p.market}:${p.symbol}` === want)
+      // 成本价仅在**有限正数**时采用; 缺失(接口未给/NaN/Infinity/0)一律 null —— 不代填 0, 不画错线。
+      const cost =
+        hit && typeof hit.cost_price === 'number' && Number.isFinite(hit.cost_price) && hit.cost_price > 0
+          ? hit.cost_price
+          : null
+      setCtx({ has: !!hit, cost })
+      failStreakRef.current = 0
+      blockedUntilRef.current = 0
+    } catch (e) {
+      /**
+       * 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`/`null`。
+       * 429 按后端 `Retry-After` 起退避, 其它可重试错误(超时/网络/5xx)按 2^n 翻倍;
+       * 4xx 业务错误(权限/参数)不退避 —— 重试同一请求不会有不同结果。
+       */
+      const { status, retryAfterMs } = e as { status?: number; retryAfterMs?: number }
+      const retryable = status === 429 || status === 0 || status === undefined || status >= 500
+      if (!retryable) return
+      failStreakRef.current += 1
+      const base = Math.min(
+        POSITION_POLL_MS * 2 ** (failStreakRef.current - 1),
+        POSITION_BACKOFF_MAX_MS,
+      )
+      const jitter = base * 0.2 * (Math.random() * 2 - 1)
+      const wait = Math.max(base + jitter, retryAfterMs ?? 0)
+      blockedUntilRef.current = Date.now() + Math.min(wait, POSITION_BACKOFF_MAX_MS)
     }
   }, [symbol, market, enabled])
-  return held
+
+  // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器/成本线要等整页刷新才更新。
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(usePausedInterval);
+  // 指数/板块(enabled=false / 无 symbol)⇒ delayMs<=0 停用。
+  usePausedInterval(() => void load(), enabled && symbol ? POSITION_POLL_MS : 0, {
+    deps: [symbol, market, enabled],
+  })
+  return ctx
 }
 
 /**
@@ -162,7 +239,7 @@ function TabBar({ value, onChange }: { value: WorkbenchTab; onChange: (t: Workbe
       value={value}
       // 点击回传的是普通 string → 用 Task 1 的 parseTab 收敛回联合类型(非法值落 'l2')
       onChange={(key) => onChange(parseTab(key))}
-      className="mt-3"
+      className="m-0"
     />
   )
 }
@@ -208,7 +285,10 @@ function TabPanel({
 }
 
 export default function StockWorkbench() {
-  const { symbol = '' } = useParams()
+  const { symbol: rawSymbol = '' } = useParams()
+  // P0(2026-10-18 审计 F19): 路由里可能带内部前缀(竞价表点进来是 /stocks/USHT603922),
+  // 不剥掉则整页显示与所有 API 调用都用这个脏代码(页面右上是 `USZA002361`)。
+  const symbol = stripInternalPrefix(rawSymbol)
   const [sp, setSp] = useSearchParams()
   const type = normalizeType(sp.get('type'))
   const tab = parseTab(sp.get('tab'))
@@ -220,12 +300,63 @@ export default function StockWorkbench() {
    */
   const [refreshKey, setRefreshKey] = useState(0)
   /**
-   * 持仓态(T19 真源): `undefined` = 未知(在途/失败), 见 `useHasPosition` 头注。
-   * 未持仓只是**不渲染**持仓专属块, **不编造**数据; 未知时由带1/标签处显式标注(不猜 `false`)。
-   * **闸门(Finding 3)**: 只有个股视图才取 —— 指数/板块(`type !== 'stock'`)不消费 `hasPosition`,
-   * 不该为其白发一次 `GET /portfolio/summary`(见 `useHasPosition` 的 `enabled`)。
+   * 四档资金结构（2026-10-24 新增；数据源 `exday_daily`，口径 `tdx_exday4`）。
+   * 只个股取、只在 `refreshKey` 变化时重取 —— 四档是**日频**数据，盘中不会变，
+   * 不该跟着行情推送高频刷新。`fund4 === null` 表示在途（组件据此显示加载态，
+   * 而不是先画一个「无数据」再翻转，避免误读成真的没有）。
    */
-  const hasPosition = useHasPosition(symbol, MARKET, type === 'stock')
+  const [fund4, setFund4] = useState<{ days: Fund4Day[]; hint?: string } | null>(null)
+  useEffect(() => {
+    if (type !== 'stock' || !symbol) {
+      setFund4(null)
+      return
+    }
+    let cancelled = false
+    setFund4(null)
+    fetchAPI<{ items?: Fund4Day[]; hint?: string }>(
+      `/market-data/fund-structure/${encodeURIComponent(symbol)}?days=20`,
+    )
+      .then((r) => {
+        if (cancelled) return
+        setFund4({ days: Array.isArray(r?.items) ? r.items : [], hint: r?.hint })
+      })
+      .catch(() => {
+        if (!cancelled) setFund4({ days: [], hint: '四档资金结构取数失败（后端异常），非「无数据」' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [type, symbol, refreshKey])
+  /**
+   * 持仓上下文(T19 真源; P1-2 起兼带成本价): `has===undefined` = 未知(在途/失败), 见 `usePositionContext`。
+   * 未持仓只是**不渲染**持仓专属块, **不编造**数据; 未知时由带1/标签处显式标注(不猜 `false`)。
+   * **闸门(Finding 3)**: 只有个股视图才取 —— 指数/板块(`type !== 'stock'`)不消费, 不该白发一次
+   * `GET /portfolio/summary`(见 `usePositionContext` 的 `enabled`)。
+   */
+  const position = usePositionContext(symbol, MARKET, type === 'stock')
+  const hasPosition = position.has
+  /**
+   * 标的名兜底(2026-10-21, 用户反馈「只给代码看不出是哪只票」): 带1 顶行原本是 `quote?.name || symbol`,
+   * 行情快照在途/取不到 name 时就退化成裸代码。这里批量补一次名字传给 `HeaderBand.nameHint`。
+   * **只对个股取**: 指数/板块代码(000001/880xxx)与个股同号, 拿个股名字贴上去就是错名称。
+   */
+  const stockNames = useStockNames(type === 'stock' ? [symbol] : [])
+  const nameHint = stockNames[symbol]
+  /**
+   * 持仓成本线(P1-2): 有成本价才画到 K 线上(水平线, 跟随该股成本价)。**无持仓 / 取不到成本价 ⇒ 不传**
+   * (`undefined`), `KlineChart` 据此**一条不画**, 也**不报错** —— 禁猜、禁默认值(铁律: 数据缺失不编造)。
+   * title 只作轴标签用 `safePrice` 格式化(避免裸 toFixed 撞 R6 门禁)。
+   */
+  // 派生数据 memo(B1 首屏冷启动 2026-10-05): 只在**成本价真正变化**时换引用。持仓 60s 轮询
+  // 每拍都会 set 一个新的 `position` 对象, 但 cost 不变时本数组引用不变 ⇒ `MemoKlineChart`
+  // 不因无关重渲染重跑主图重绘 effect(costLines 在它的依赖里)。
+  const costLines = useMemo(
+    () =>
+      position.cost != null
+        ? [{ price: position.cost, title: `成本 ${safePrice(position.cost)}` }]
+        : undefined,
+    [position.cost],
+  )
 
   /** 返回入口(2026-09-20 用户报"从持仓进行情页没有返回按钮"): 必须在任何 early return **之前**
    *  调用(hooks 顺序固定) —— 所以放在这里, 不放渲染前。 */
@@ -236,6 +367,23 @@ export default function StockWorkbench() {
    * 解析不出(缺失/非法/`intra` 分时) → `undefined` → 图表用自身默认周期(不假装支持)。
    */
   const periodFromUrl = periodToInterval(sp.get('period'))
+
+  /**
+   * 页面即上下文（P1, 2026-10-20）：把「正在看哪只票、什么周期、哪个页面」推给参谋。
+   * 只上报视图、不改任何业务状态；失败静默（参谋那边只是少了锚点）。
+   */
+  useEffect(() => {
+    if (!symbol) return
+    reportViewOnce(
+      {
+        page: 'kline',
+        symbol,
+        market: type === 'stock' ? 'CN' : type,
+        period: periodFromUrl ?? undefined,
+      },
+      `wb:${symbol}:${periodFromUrl ?? '-'}:${type}`,
+    )
+  }, [symbol, periodFromUrl, type])
 
   /**
    * 设计稿 v2.1 §10.2④: 区间统计(拖拽选段/缩放后, 资金面板顶部那一行)。
@@ -250,123 +398,184 @@ export default function StockWorkbench() {
   const [railOpen, setRailOpen] = useState(() => {
     try { return localStorage.getItem('sida_workbench_rail') === '1' } catch { return false }
   })
-  const toggleRail = () =>
-    setRailOpen((v) => {
-      try { localStorage.setItem('sida_workbench_rail', v ? '0' : '1') } catch { /* 隐私模式忽略 */ }
-      return !v
-    })
+  const toggleRail = useCallback(
+    () =>
+      setRailOpen((v) => {
+        try { localStorage.setItem('sida_workbench_rail', v ? '0' : '1') } catch { /* 隐私模式忽略 */ }
+        return !v
+      }),
+    [],
+  )
 
-  /** 写单个 query(保留其它键, 如 ?type / ?tab / ?period 并存), 不跳页。 */
-  const setQuery = (key: 'type' | 'tab' | 'period', value: string) =>
-    setSp((prev) => ({ ...Object.fromEntries(prev), [key]: value }))
+  /** 写单个 query(保留其它键, 如 ?type / ?tab / ?period 并存), 不跳页。
+   *  引用**恒定**(`useCallback([])` + 走 ref 取最新 setter): react-router 的 `setSearchParams`
+   *  在部分版本每次渲染换身份, 直接进依赖会让 `handleIntervalChange` 等跟着变 ⇒ 击穿主图 memo。
+   *  用 ref 解耦后, 传给主图/带1/标签栏的回调跨渲染恒同一引用(配合 MemoKlineChart)。 */
+  const setSpRef = useRef(setSp)
+  setSpRef.current = setSp
+  const setQuery = useCallback(
+    (key: 'type' | 'tab' | 'period', value: string) =>
+      setSpRef.current((prev) => ({ ...Object.fromEntries(prev), [key]: value })),
+    [],
+  )
+  // 分发的稳定回调(B1 首屏冷启动 2026-10-05): 全部 `useCallback` 固定身份, 避免无关重渲染。
+  const handleTypeChange = useCallback((t: WorkbenchType) => setQuery('type', t), [setQuery])
+  const handleGotoTab = useCallback((t: WorkbenchTab) => setQuery('tab', t), [setQuery])
+  const handleIntervalChange = useCallback(
+    (i: KlineInterval) => setQuery('period', intervalToPeriod(i)),
+    [setQuery],
+  )
+  const handleRefresh = useCallback(() => setRefreshKey((k) => k + 1), [])
+  const handleRangeStats = useCallback((s: KlineRangeStats | null) => {
+    setRangeStats(s)
+    // 新区间 = 新读数: 之前手动收起过的卡在区间变化后重新出现
+    if (s) setStatsDismissed(false)
+  }, [])
 
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
 
   return (
-    <div className="mx-auto max-w-none p-3">
+    <div className="mx-auto max-w-none p-3 space-y-3">
       {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
       <HeaderBand
         symbol={symbol}
         market={MARKET}
         type={type}
+        nameHint={type === 'stock' ? nameHint : undefined}
         hasPosition={hasPosition === true}
         positionUnknown={hasPosition === undefined}
-        onTypeChange={(t) => setQuery('type', t)}
-        onGotoTab={(t) => setQuery('tab', t)}
-        onRefresh={() => setRefreshKey((k) => k + 1)}
+        onTypeChange={handleTypeChange}
+        onGotoTab={handleGotoTab}
+        onRefresh={handleRefresh}
         back={back}
       />
+
+      {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
+      {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
+
+      {/* 持仓标的硬防线击穿预警条 (持仓股专属) */}
+      {type === 'stock' && hasPosition ? (
+        <DefenseLineBanner symbol={symbol} cost={position.cost} hasPosition={hasPosition} />
+      ) : null}
 
       {type !== 'stock' ? (
         /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条)。
            遗留⑦: **不再**挂 `key={refreshKey}`(那会重挂载 ⇒ 重放入场动画 + 丢正文内部状态),
            改为把 `refreshKey` 当 `refreshToken` prop 传下去 —— 正文据此重跑取数 effect。
            `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
-        <div className="mt-3">
+        <div className="mt-3 rounded-lg border border-border/80 bg-card/40 p-2 shadow-sm">
           <IndexBoardHost type={type} symbol={symbol} refreshToken={refreshKey} />
         </div>
       ) : (
         /* 个股分支**保留** `key={refreshKey}`: `KlineChart`/`QuickRail`/六个标签都没有
            `refreshToken` 这类入参(各自"挂载即取数"), 重挂载是它们唯一的整棵重取数手段;
            给它们逐个加 token 属跨组件改造, 不在本批范围(见 tranche-4 报告 concern)。 */
-        <div key={refreshKey}>
-          {/* 带2: 首屏主体 —— 大 K 线(4 图层 + 副图) + 右栏 320px 速览卡
-              走查 2026-09-18: 右栏更高时左图下方会大片空白 —— 右栏限高与主图同高并可滚,
-              两列底部对齐, 不再被最长列撑出死白。 */}
-          <div className="mt-3 flex items-stretch gap-3">
-            <div className="min-w-0 flex-1 rounded border border-border/60 p-2">
-              <KlineChart
-                symbol={symbol}
-                market={MARKET}
-                /* §10.2①: 周期以 URL 为准; URL 无/非法 → 图表默认 '1d' */
-                initialInterval={periodFromUrl ?? '1d'}
-                initialDays={120}
-                height={420}
-                /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
-                onIntervalChange={(i) => setQuery('period', intervalToPeriod(i))}
-                /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
-                onRangeStats={(s) => {
-                  setRangeStats(s)
-                  // 新区间 = 新读数: 之前手动收起过的卡在区间变化后重新出现
-                  if (s) setStatsDismissed(false)
-                }}
-                /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
-                sourceReady={sourceReady}
-                sourceReason={sourceReason}
-                /* 2026-09-23 修: 个股分支漏迁 enableMinute —— 用户报"分时图不显示了"。
-                   IndexBody 在 P2(09-18) 由 InteractiveKline 迁到 KlineChart 时**保留**了
-                   enableMinute(见其内注释), 个股分支当时没跟着迁 ⇒ 个股页连「分时」按钮都不渲染。
-                   分时数据源本身是好的(后端 /quotes/minute 实测 603629 返回 267 点)。 */
-                enableMinute
-              />
-            </div>
-            {railOpen ? (
-              <div className="flex w-[320px] shrink-0 flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-muted-foreground">速览</span>
+        <div key={refreshKey} className="space-y-3">
+          {/* ── 【舱 2：主力博弈主战场 Kline Arena】 ────────────────────────
+              W1(2026-10-23 走查 P0): K 线**不许卡片包裹**。原先 `section`(圆角+边框+`bg-card/40`
+              +`shadow-sm`+`p-2.5`) 与内层 `div`(边框+`bg-background/50`+`p-2`)**双层**包着图表,
+              横向吃掉 40px(外 10+10+边框 1+1、内 8+8+边框 1+1), 纵向同样 40px —— 直接违反
+              「去卡片化 + K 线 ≥80% 屏宽」。现改为**单层顶部 hairline** 作区域划分(只 `border-t`,
+              不占横向宽度、不加卡片底与阴影; `shadow-float` 全站仅限框选即问浮条)。
+              内层保留 `min-w-0 flex-1`(承重: 没有 `min-w-0`, 图表 canvas 会撑破与右栏并排的 flex 行),
+              但去掉边框/底色/内边距 ⇒ 图表直接占满列宽。右栏挤压逻辑(`w-[320px]`/`w-12` + `gap-3`)不变。 */}
+          <section className="mt-3 border-t border-border/60 pt-2">
+            <div className="flex items-stretch gap-3">
+              <div className="min-w-0 flex-1">
+                <MemoKlineChart
+                  symbol={symbol}
+                  market={MARKET}
+                  /* §10.2①: 周期以 URL 为准; URL 无/非法 → 图表默认 '1d' */
+                  initialInterval={periodFromUrl ?? '1d'}
+                  initialDays={120}
+                  height={420}
+                  /* P1-2: 持仓成本线 —— 该股在真实持仓里且有正成本价时才传(画水平线 + 成本轴标签);
+                     无持仓/取不到成本价时 undefined ⇒ 一条不画, 不报错(禁猜/禁默认值)。 */
+                  costLines={costLines}
+                  /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
+                  onIntervalChange={handleIntervalChange}
+                  /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
+                  onRangeStats={handleRangeStats}
+                  /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
+                  sourceReady={sourceReady}
+                  sourceReason={sourceReason}
+                  /* 2026-09-23 修: 个股分支漏迁 enableMinute —— 用户报"分时图不显示了"。
+                     IndexBody 在 P2(09-18) 由 InteractiveKline 迁到 KlineChart 时**保留**了
+                     enableMinute(见其内注释), 个股分支当时没跟着迁 ⇒ 个股页连「分时」按钮都不渲染。
+                     分时数据源本身是好的(后端 /quotes/minute 实测 603629 返回 267 点)。 */
+                  enableMinute
+                />
+              </div>
+              {railOpen ? (
+                <div className="flex w-[320px] shrink-0 flex-col gap-2 rounded border border-border/50 bg-background/40 p-2">
+                  <div className="flex items-center justify-between pb-1 border-b border-border/40">
+                    <span className="text-[11px] font-medium text-foreground">盘面速览对账</span>
+                    <button
+                      type="button"
+                      onClick={toggleRail}
+                      title="收起速览栏(把宽度还给 K 线)"
+                      aria-label="收起速览栏"
+                      data-testid="rail-toggle"
+                      className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronRight className="h-3 w-3" />
+                    </button>
+                  </div>
+                  {/* §10.2④: 区间统计(资金面板顶部那一行) */}
+                  {rangeStats && !statsDismissed && (
+                    <RangeStatsCard stats={rangeStats} onClear={() => setStatsDismissed(true)} />
+                  )}
+                  <div className="scrollbar max-h-[420px] overflow-y-auto">
+                    <QuickRail symbol={symbol} market={MARKET} />
+                  </div>
+                </div>
+              ) : (
+                /* 折叠态: 56px 图标条。只留"展开"入口 —— 速览内容原样保留在展开态, 不删功能。 */
+                <div className="flex w-12 shrink-0 flex-col items-center gap-2 rounded border border-border/50 bg-background/30 py-2">
                   <button
                     type="button"
                     onClick={toggleRail}
-                    title="收起速览栏(把宽度还给 K 线)"
-                    aria-label="收起速览栏"
+                    title="展开速览栏"
+                    aria-label="展开速览栏"
                     data-testid="rail-toggle"
-                    className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                    className="flex h-6 w-6 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
                   >
-                    <ChevronRight className="h-3 w-3" />
+                    <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
+                  <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide text-muted-foreground">
+                    速览
+                  </span>
                 </div>
-                {/* §10.2④: 区间统计(资金面板顶部那一行) */}
-                {rangeStats && !statsDismissed && (
-                  <RangeStatsCard stats={rangeStats} onClear={() => setStatsDismissed(true)} />
-                )}
-                <div className="scrollbar max-h-[436px] overflow-y-auto">
-                  <QuickRail symbol={symbol} market={MARKET} />
-                </div>
+              )}
+            </div>
+          </section>
+
+          {/* 四档资金结构（exday_daily / tdx_exday4）：单日四档看不清趋势，
+              20 日条带才看得到「特大单连续几天在跑」。不包卡片，只一条 hairline。 */}
+          {fund4 ? (
+            <Fund4Strip days={fund4.days} hint={fund4.hint} />
+          ) : (
+            <Fund4Strip days={[]} loading />
+          )}
+
+          {/* ── 【舱 3：微观盘口与决策支持 Deep Deck】 ────────────────────── */}
+          <section className="rounded-lg border border-border/80 bg-card/40 p-3 shadow-sm">
+            <div className="mb-2 flex items-center justify-between border-b border-border/50 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="h-3.5 w-1 rounded-full bg-primary" />
+                <span className="text-[12px] font-semibold text-foreground">深度量化与盘口证据</span>
               </div>
-            ) : (
-              /* 折叠态: 56px 图标条。只留"展开"入口 —— 速览内容原样保留在展开态, 不删功能。 */
-              <div className="flex w-14 shrink-0 flex-col items-center gap-2 rounded border border-border/60 py-2">
-                <button
-                  type="button"
-                  onClick={toggleRail}
-                  title="展开速览栏"
-                  aria-label="展开速览栏"
-                  data-testid="rail-toggle"
-                  className="flex h-6 w-6 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </button>
-                <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide text-muted-foreground">
-                  速览
-                </span>
-              </div>
-            )}
-          </div>
-          {/* 带3: 下部单层标签(整宽, ?tab= 深链) */}
-          <TabBar value={tab} onChange={(t) => setQuery('tab', t)} />
-          <TabPanel tab={tab} symbol={symbol} hasPosition={hasPosition} />
+              <TabBar value={tab} onChange={handleGotoTab} />
+            </div>
+            <TabPanel tab={tab} symbol={symbol} hasPosition={hasPosition} />
+          </section>
         </div>
       )}
+
+      {/* AI 数智参谋常驻唤醒胶囊(2026-10-18, 设计稿 §9.2④): 只挂个股分支。
+          指数/板块没有筹码/撤单证据, 挂了只会给出空结论 —— 不挂。
+          挂在这一层(不在 key={refreshKey} 子树内): 页面刷新不重挂载, 胶囊不闪、不重取数。 */}
+      {type === 'stock' ? <CopilotCapsule symbol={symbol} market={MARKET} /> : null}
     </div>
   )
 }

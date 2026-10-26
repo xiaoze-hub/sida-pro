@@ -19,18 +19,34 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from marketdata.symbol import Market, Symbol
-from marketdata.types import Bar, DividendItem, MoreInfo, Quote, ShareholderItem
+from marketdata.types import (
+    Bar,
+    BoardCapitalFlow,
+    CapitalFlow,
+    DividendItem,
+    DragonTigerItem,
+    MarginItem,
+    MarketCapitalFlow,
+    MoreInfo,
+    Quote,
+    ShareholderItem,
+)
 from marketdata.vendors.base import (
+    CapitalFlowVendor,
     DividendVendor,
+    DragonTigerVendor,
     KlineVendor,
+    MarginVendor,
     MoreInfoVendor,
     QuoteVendor,
     ShareholdersVendor,
+    Vendor,
 )
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 4.0  # 正常 <100ms; 隧道断开时快速失败交给降级链
+_TIMEOUT_CONNECT_S = 2.0  # P1-10: 显式 connect 超时, 黑洞地址不再挂满整个 read timeout
 
 # ---------------------------------------------------------------------------
 # TQ 陈旧快照防护 (2026-09-04, 09-03 漏数事故)
@@ -86,14 +102,47 @@ def tq_bars_fresh(dates: list | None) -> bool:
 # 运维很难记住配 TDX_QUANT_URL, 故改为**按环境自适应探测**:
 #   1) 显式环境变量 TDX_QUANT_URL 优先(保持既有部署兼容)
 #   2) 否则按候选列表探测(默认网关 → WSL/Docker 常见网段 → 回环), 命中即缓存
-# 探测只在进程内做一次(成本 ~几十 ms), 失败保持旧默认, 行为不变。
+# 探测只在进程内做一次(成本 ~几十 ms); 探测全灭时**不回退任何具体地址** ——
+# 返回 None / 由 _rpc 抛 TqUnavailable, 调用方显式进『TQ 不可用』态(降级链/无数据)。
 # ---------------------------------------------------------------------------
+class TqUnavailable(RuntimeError):
+    """TQ 网关不可用: 候选地址探测未命中(全灭或预算耗尽)且未配置显式兜底。
+
+    调用方应据此显式进入『TQ 不可用』态(降级链 / 显式无数据), **不得**再拿一个
+    未经验证的地址去连 —— 死地址连接只会白等超时。见 _resolve_tq_url()。
+    """
+
+
 _TQ_URL_CACHE: str | None = None
-# P2-18: 失败缓存 5min 后重探(网关重启可恢复); 成功缓存永久
+# P2-18: 失败缓存 5min 后重探(网关重启可恢复)
 _TQ_URL_CACHE_OK = False
 _TQ_URL_CACHE_TS = 0.0
 _TQ_FAIL_TTL = 300.0
-_FALLBACK_URL = "http://172.18.0.1:5100/"
+# P1-5: 成功缓存复探 TTL —— 旧代码成功后永久不自愈(网关迁移/端口变化后一直连旧地址)。
+# 20min 内复用, 超时重新探测(自愈)。见 _TQ_OK_TTL。
+_TQ_OK_TTL = 1200.0
+# P1-5: 连续 N 次 _rpc 连接失败 → 主动失效成功缓存, 下次 _resolve 强制重探。
+_TQ_FAIL_STREAK = 0
+_TQ_FAIL_STREAK_THRESHOLD = 3
+# P1-4: 探测总预算与单次预算, 防止失败后调用线程被 ~12 候选 × 1.5s 同步扫挂(最坏 18s)。
+_PROBE_BUDGET_S = 3.0
+_PROBE_SINGLE_TIMEOUT_S = 1.5
+# P1-4: 最近命中的主机地址, 探测时排到最前(优先探已知可用网段)。
+_TQ_LAST_GOOD_HOST: str | None = None
+
+# P2(2026-10-11): 最近一次候选探测的诊断态 —— 供调用方(source_health / 错误文案)
+# 区分"真·候选全灭"(探完全部候选)与"预算耗尽"(3s 预算用尽, 只探了一部分)。
+# {probed: 已探候选数, total: 候选总数, budget_exhausted: 是否因预算耗尽提前 break}
+_TQ_LAST_PROBE: dict = {"probed": 0, "total": 0, "budget_exhausted": False}
+
+
+def _probe_state_desc() -> str:
+    """人类可读的探测结论(诚实区分全灭 vs 预算耗尽)。"""
+    st = _TQ_LAST_PROBE
+    probed, total = int(st.get("probed", 0)), int(st.get("total", 0))
+    if st.get("budget_exhausted"):
+        return f"候选探测未在预算内完成(已探 {probed}/{total})"
+    return f"候选地址探测全灭(已探 {probed}/{total})"
 
 
 def _host_gateway() -> str | None:
@@ -112,12 +161,16 @@ def _host_gateway() -> str | None:
 
 
 def _probe_tq(url: str, timeout: float = 1.5) -> bool:
-    """最轻探测: get_stock_list 能回 result 即视为可用。"""
+    """最轻探测: get_stock_list 能回 result 即视为可用。
+
+    P1-10: 显式 connect 超时(默认 2s) —— 纯 httpx 单值 timeout 下黑洞地址会挂满
+    整个 timeout; 探测本身也带 connect 上限。
+    """
     body = json.dumps(
         {"id": 1, "method": "get_stock_list", "params": {"market": "5", "list_type": 0}}
     ).encode("utf-8")
     try:
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(2.0, timeout))) as client:
             resp = client.post(url, content=body,
                                headers={"Content-Type": "application/json; charset=utf-8"})
             if resp.status_code != 200:
@@ -128,20 +181,57 @@ def _probe_tq(url: str, timeout: float = 1.5) -> bool:
         return False
 
 
-def _resolve_tq_url() -> str:
-    """解析可用的 TQ 网关地址(成功缓存永久, 失败缓存 5min 后重探)。"""
+def _resolve_tq_url() -> str | None:
+    """解析可用的 TQ 网关地址; **探测全灭时返回 None**(不回退任何具体地址)。
+
+    P0-3: 旧实现在候选全灭时回退 `candidates[0]`(= _host_gateway() 拼 17709 的
+    docker 桥网关, 生产永不监听) 并把死地址写进 `_TQ_URL_CACHE` 供 source_health
+    探活 → 探活永远失败却又被当成"已发现的地址"。现在:
+      - 候选全灭 → `_TQ_URL_CACHE = None`, 返回 None, 调用方显式进 TQ 不可用态;
+      - **唯一**允许的非探测兜底 = 运维显式配置的 env `TDX_QUANT_URL`;
+      - 死代码 `_FALLBACK_URL` 已删除。
+
+    P1-4: 探测总预算 `_PROBE_BUDGET_S`(≤3s), env + 最近命中主机优先, 超预算即停。
+    P1-5: 成功缓存 20min 复探 TTL; 连续连接失败主动失效(见 _note_rpc_conn_failure)。
+    """
     import time as _time
 
-    global _TQ_URL_CACHE, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS
-    if _TQ_URL_CACHE and (_TQ_URL_CACHE_OK or _time.time() - _TQ_URL_CACHE_TS < _TQ_FAIL_TTL):
+    global _TQ_URL_CACHE, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS, _TQ_LAST_GOOD_HOST
+    global _TQ_LAST_PROBE
+    now = _time.time()
+
+    # 缓存判定: 成功 → OK TTL(20min) 内复用; 失败 → FAIL TTL(5min) 内不重复阻塞探测。
+    # 成功 TTL 过期或失败 TTL 过期 → 落到下面重新探测(自愈)。
+    ttl = _TQ_OK_TTL if _TQ_URL_CACHE_OK else _TQ_FAIL_TTL
+    if _TQ_URL_CACHE_TS and now - _TQ_URL_CACHE_TS < ttl:
         return _TQ_URL_CACHE
 
     env_url = (os.environ.get("TDX_QUANT_URL") or "").strip()
+    env_norm = env_url.rstrip("/") + "/" if env_url else ""
     gw = _host_gateway()
+    host_order = [gw, "172.27.16.1", "172.28.0.1", "172.17.0.1", "172.18.0.1", "127.0.0.1"]
+    if _TQ_LAST_GOOD_HOST:  # P1-4: 最近命中主机优先探
+        host_order = [_TQ_LAST_GOOD_HOST] + [h for h in host_order if h != _TQ_LAST_GOOD_HOST]
     candidates: list[str] = []
-    if env_url:
-        candidates.append(env_url.rstrip("/") + "/")
-    for host in [gw, "172.27.16.1", "172.28.0.1", "172.17.0.1", "172.18.0.1", "127.0.0.1"]:
+    if env_norm:
+        candidates.append(env_norm)
+
+    # 2026-10-19 (P3): 优先走本地标准网关 tdx-gateway —— 它负责串行排队、熔断、契约补参
+    # (`id`/`type`/`table_list`) 与缓存；17709 是客户端单线程服务，直连并发打会把客户端打崩。
+    gw_url = (os.environ.get("TDX_GATEWAY_URL") or "").strip()
+    if gw_url:
+        gw_norm = gw_url.rstrip("/") + "/"
+        if gw_norm not in candidates:
+            candidates.append(gw_norm)
+    else:
+        try:
+            import socket as _socket
+            _socket.gethostbyname("tdx-gateway")      # 同 docker 网络内有该服务才加入候选
+            if "http://tdx-gateway:8000/" not in candidates:
+                candidates.append("http://tdx-gateway:8000/")
+        except Exception:
+            pass
+    for host in host_order:
         if not host:
             continue
         for port in (17709, 5100):
@@ -149,19 +239,52 @@ def _resolve_tq_url() -> str:
             if u not in candidates:
                 candidates.append(u)
 
+    deadline = _time.monotonic() + _PROBE_BUDGET_S
+    probed = 0
+    budget_exhausted = False
     for u in candidates:
-        if _probe_tq(u):
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0.05:
+            budget_exhausted = True
+            logger.warning(
+                "TQ 探测预算(%.1fs)耗尽, 停止探测(已探 %d/%d 个候选)",
+                _PROBE_BUDGET_S, probed, len(candidates),
+            )
+            break
+        probed += 1
+        if _probe_tq(u, timeout=min(_PROBE_SINGLE_TIMEOUT_S, remaining)):
             _TQ_URL_CACHE = u
             _TQ_URL_CACHE_OK = True
             _TQ_URL_CACHE_TS = _time.time()
+            _TQ_LAST_GOOD_HOST = httpx.URL(u).host
+            _TQ_LAST_PROBE = {"probed": probed, "total": len(candidates), "budget_exhausted": False}
             logger.info("TQ 网关自动命中: %s", u)
             return u
 
-    _TQ_URL_CACHE = candidates[0] if candidates else _FALLBACK_URL
+    # 未命中: 不回退探测出的地址; 仅 env 兜底(运维显式配置)或 None。
+    # P2(2026-10-11): 诚实区分「真·全灭」(探完所有候选) vs 「预算耗尽」(3s 用尽只探了一部分)。
+    _TQ_LAST_PROBE = {
+        "probed": probed, "total": len(candidates), "budget_exhausted": budget_exhausted,
+    }
+    _TQ_URL_CACHE = env_norm or None
     _TQ_URL_CACHE_OK = False
     _TQ_URL_CACHE_TS = _time.time()
-    logger.warning("TQ 网关探测全部失败, 沿用默认 %s(将降级其他数据源)", _TQ_URL_CACHE)
+    desc = _probe_state_desc()
+    if env_norm:
+        logger.warning("TQ 网关%s, 仅按 env TDX_QUANT_URL 兜底 %s(将降级其他数据源)", desc, env_norm)
+    else:
+        logger.warning("TQ 网关%s 且未配置 TDX_QUANT_URL → TQ 不可用(将降级其他数据源)", desc)
     return _TQ_URL_CACHE
+
+
+def _note_rpc_conn_failure() -> None:
+    """P1-5: 记录一次 _rpc 连接级失败; 连续 N 次 → 主动失效成功缓存强制重探。"""
+    global _TQ_FAIL_STREAK, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS
+    _TQ_FAIL_STREAK += 1
+    if _TQ_FAIL_STREAK >= _TQ_FAIL_STREAK_THRESHOLD and _TQ_URL_CACHE_OK:
+        logger.warning("TQ 连续 %d 次连接失败, 主动失效成功缓存触发重探", _TQ_FAIL_STREAK)
+        _TQ_URL_CACHE_OK = False
+        _TQ_URL_CACHE_TS = 0.0  # 强制下次 _resolve 重探
 
 
 def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool = False):
@@ -172,11 +295,23 @@ def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool =
     整段丢掉(实测网关**有**回 Date, 是这里被丢的)。
     """
     body = json.dumps({"id": 1, "method": method, "params": params}, ensure_ascii=False).encode("utf-8")
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(_resolve_tq_url(), content=body,
-                          headers={"Content-Type": "application/json; charset=utf-8"})
-        resp.raise_for_status()
-        data = json.loads(resp.content.decode("utf-8"))
+    url = _resolve_tq_url()
+    if not url:
+        # P0-3: 探测未命中且无 env 兜底 → 显式 TQ 不可用, 不拿死地址去连(挂满 timeout)。
+        # P2(2026-10-11): 文案诚实区分「真·全灭」与「预算耗尽」。
+        raise TqUnavailable(f"TQ 网关不可用: {_probe_state_desc()}且未配置 TDX_QUANT_URL")
+    global _TQ_FAIL_STREAK
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(_TIMEOUT_CONNECT_S, timeout))) as client:
+            resp = client.post(url, content=body,
+                              headers={"Content-Type": "application/json; charset=utf-8"})
+            resp.raise_for_status()
+            data = json.loads(resp.content.decode("utf-8"))
+    except httpx.TransportError:
+        # P1-10/P1-5: 连接级失败 → 记一次失败, 连续多次主动失效成功缓存重探。
+        _note_rpc_conn_failure()
+        raise
+    _TQ_FAIL_STREAK = 0
     if "error" in data:
         raise RuntimeError(f"TQ rpc error: {data['error']}")
     result = data.get("result") or {}
@@ -269,8 +404,16 @@ class TqQuoteVendor(QuoteVendor):
     name = "tq"
     supports_markets = {"CN"}
 
+    # 批量上限（2026-10-20）：TQ 是**逐票**RPC 且每票要再打一次 `get_more_info`
+    # （拿 PE/量比/换手），单票约 0.13~0.4s。39 只的列表页会跑成 5~17s，比腾讯批量(0.3s)慢一个量级。
+    # ⇒ 超过这个数量**主动让位**给批量源（返回空 → 引擎自动落到腾讯），
+    #    单票/小列表（详情页、K线页、5 只以内的对照）仍走 TQ 拿全字段。
+    MAX_SYMBOLS_FOR_TQ = 5
+
     def fetch(self, symbols: list[Symbol], config: dict) -> list[Quote]:
         out: list[Quote] = []
+        if len(symbols) > self.MAX_SYMBOLS_FOR_TQ:
+            return out
         for sym in symbols:
             tqc = to_tq_code(sym)
             if not tqc:
@@ -305,6 +448,20 @@ class TqQuoteVendor(QuoteVendor):
                     total_mv = _to_float(mi.get("Zsz"))
             except Exception:  # noqa: BLE001
                 pass
+            # P1-8 单位标定(2026-10-08 实盘对照, 002361.SZ): 快照 Amount 源为**万元**。
+            # 证据: TQ Amount=182560.53; 腾讯同日 parts[37]=182560.5387(万元) 且
+            # parts[35] 元额=1,825,605,387 ≈ Amount×1e4; 恒等式 Amount×1e4 /(Volume 手×100)
+            # = 10.2308 ≈ 快照 Average(VWAP 10.23)。与 stock_l2.py / tdx_boards.py 对同一
+            # 接口 Amount 的 ×1e4(万元→元) 及 types.py 契约 turnover=元 一致。
+            #
+            # P2 Volume 单位标定(2026-10-08 在线标定, 7 只 A股交叉腾讯): 快照 Volume 源为**手**,
+            # 与腾讯 qt.gtimg.cn parts[6] 同口径(比值 1.0000, 7/7); 恒等式 Volume(手)×100×Average
+            # = 1,825,454,499 元 ≈ Amount×1e4。(指数快照 Volume 亦同 parts[6] 口径。)
+            # Quote.volume 契约=手(冻结 docs/_frozen/data.md:12「腾讯 volume/outer/inner=手」;
+            # 恒等式 turnover/(price×volume×100) 见 test_vendor_missing_fields) ⇒ 此处**保持手,
+            # 不做 ×100** —— 与 Bar.volume(股)是两套契约, 别把两者混为一谈。
+            _amt_wan = _to_float(v.get("Amount"))
+            turnover_yuan = (_amt_wan * 1e4) if _amt_wan is not None else None
             out.append(
                 Quote(
                     symbol=sym.code,
@@ -317,8 +474,8 @@ class TqQuoteVendor(QuoteVendor):
                     low_price=_to_float(v.get("Min")),
                     change_amount=change_amount,
                     change_pct=change_pct,
-                    volume=_to_float(v.get("Volume")),
-                    turnover=_to_float(v.get("Amount")),
+                    volume=_to_float(v.get("Volume")),  # 手(源原生); 见上 P2 标定, 不做 ×100
+                    turnover=turnover_yuan,
                     turnover_rate=turnover_rate,
                     volume_ratio=volume_ratio,
                     volume_inner=(inside if inside is not None else None),
@@ -405,6 +562,10 @@ class TqKlineVendor(KlineVendor):
         lows = rows.get("Low") or []
         volumes = rows.get("Volume") or []
         out: list[Bar] = []
+        # P2 Volume 单位: get_market_data 的 Volume **原生即股**(与腾讯/东财 fqkline 的手不同,
+        # 那两家才需 ×100 见 vendors/kline.py)。实测 002361 日线 Volume=178,441,360 = 快照手值
+        # 1,784,413×100; 恒等式 Volume(股)×Average ≈ daily Amount(万元)×1e4 (VWAP=10.23)。
+        # 冻结 docs/_frozen/data.md K线表同样登记「TQ volume=股(原生), 无需换算」⇒ 这里**绝不 ×100**。
         for i, d in enumerate(dates):
             try:
                 out.append(
@@ -548,6 +709,395 @@ class TqDividendVendor(DividendVendor):
                     )
                 )
         return out
+
+
+# ── TQ 资金类口径标签(契约 src/core/caliber.py) ──────────────────────────────
+# TQ 资金类(get_more_info.Zjl_HB / SUPAMO 板块主力资金)= L2/主力口径, 与
+# get_decision_pioneer 同族 —— 对应契约的 "ths", **不是**东财四档(eastmoney4),
+# 禁用于主力意图/方向性判定。直接复用契约常量(不自创文案); marketdata 独立运行时
+# (src 不在 import 路径)退化为 unknown, 下游按"未标注"处理。
+def _capital_caliber() -> tuple[str, str]:
+    try:
+        from src.core.caliber import DIRECTION_THS
+
+        return "ths", DIRECTION_THS
+    except Exception:  # noqa: BLE001
+        return "unknown", ""
+
+
+def _wan_to_yuan(wan: float | None) -> float | None:
+    """万元 → 元(TQ GP/SC/get_more_info 金额字段单位是万元)。None 原样透传(不补 0)。"""
+    return round(wan * 1e4, 2) if wan is not None else None
+
+
+def _latest_table_row(data: object, table: str) -> dict:
+    """从 gp_series/sc_series/bk_series 结果里取某表最后一条(服务端按日期升序)。"""
+    if not isinstance(data, dict):
+        return {}
+    rows = data.get(table)
+    if not isinstance(rows, list) or not rows:
+        return {}
+    for rec in reversed(rows):
+        if isinstance(rec, dict):
+            return rec
+    return {}
+
+
+def _row_value(row: dict, idx: int) -> float | None:
+    """取 {Date, Value:[...]} 行的 Value[idx], 缺/非法 → None(不补 0)。"""
+    vals = row.get("Value") if isinstance(row, dict) else None
+    if isinstance(vals, (list, tuple)) and len(vals) > idx:
+        return _to_float(vals[idx])
+    return None
+
+
+def _formula_scalar(vals: object, key: str) -> float | None:
+    """取公式结果 {指标名: 值 或 [值]} 的标量(兼容 return_count>1 的列表)。"""
+    if not isinstance(vals, dict):
+        return None
+    v = vals.get(key)
+    if isinstance(v, (list, tuple)):
+        v = v[-1] if v else None
+    return _to_float(v)
+
+
+class TqCapitalFlowVendor(CapitalFlowVendor):
+    """个股资金流 TQ **备源**: get_more_info 的 Zjl_HB(主力净流入, 万元) → 元。
+
+    ⚠️ 口径(契约 src/core/caliber.py): TQ 资金类 = L2/主力口径(与
+    get_decision_pioneer 同族), **不是**东财四档(eastmoney4), 禁用于主力意图/
+    方向性判定 —— 返回值带 caliber + direction_semantics。
+    ⚠️ 单位: Zjl_HB 是**万元** → 落地成"元"必须 ×1e4(漏换算会错 1e4 倍且不报错)。
+    ⚠️ 缺字段留 None(禁补 0): TQ get_more_info 无按单金额四档拆分 → 超大/大/中/小单
+    一律 None; 无净占比/5日字段 → None。备源不臆造。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[CapitalFlow]:
+        if not symbols:
+            return []
+        caliber, direction = _capital_caliber()
+        out: list[CapitalFlow] = []
+        for sym in symbols:
+            tqc = to_tq_code(sym)
+            if not tqc:
+                continue
+            try:
+                mi = _rpc("get_more_info", {"stock_code": tqc})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ get_more_info %s failed: %s", tqc, e)
+                continue
+            if not isinstance(mi, dict):
+                continue
+            raw = _to_float(mi.get("Zjl_HB"))
+            if raw is None:
+                continue
+            out.append(
+                CapitalFlow(
+                    symbol=sym.code,
+                    name=str(mi.get("Name") or ""),
+                    main_net_inflow=raw * 1e4,   # 万元 → 元
+                    main_net_inflow_pct=None,    # TQ 无净占比字段
+                    super_net_inflow=None,       # TQ 无四档拆分 → None(禁补 0)
+                    big_net_inflow=None,
+                    mid_net_inflow=None,
+                    small_net_inflow=None,
+                    main_net_5d=None,
+                    date=_fmt_day(mi.get("HqDate")) or None,
+                    source="tq",
+                    caliber=caliber,
+                    direction_semantics=direction,
+                )
+            )
+        return out
+
+
+_MARGIN_WINDOW_DAYS = 400  # 覆盖最近若干交易日, 取最新一期
+
+
+class TqMarginVendor(MarginVendor):
+    """两融 TQ 源: GP03 融资余额(万元)/融券余量(股) + GP11 融资买入额/偿还额(万元)
+    + GP12 融券卖出量/偿还量(股), 取最新一期。
+
+    ⚠️ 单位: GP03/GP11 金额是**万元** → 落地成"元"×1e4。
+    ⚠️ 缺字段留 None(禁补 0): TQ 只给"融券余量(股)", **不给融券余额(元)** →
+    rq_balance=None; 据此 total_balance(两融余额)也不得臆造 → None。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[MarginItem]:
+        if not symbols:
+            return []
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        start = (now - timedelta(days=_MARGIN_WINDOW_DAYS)).strftime("%Y%m%d")
+        out: list[MarginItem] = []
+        for sym in symbols:
+            tqc = to_tq_code(sym)
+            if not tqc:
+                continue
+            try:
+                data = gp_series(["GP03", "GP11", "GP12"], tqc, start_time=start)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ GP03/11/12 %s failed: %s", tqc, e)
+                continue
+            gp3 = _latest_table_row(data, "GP03")
+            gp11 = _latest_table_row(data, "GP11")
+            gp12 = _latest_table_row(data, "GP12")
+            if not (gp3 or gp11 or gp12):
+                continue
+            date_src = (gp3 or gp11 or gp12).get("Date")
+            out.append(
+                MarginItem(
+                    date=_fmt_day(date_src),
+                    symbol=sym.code,
+                    rz_balance=_wan_to_yuan(_row_value(gp3, 0)),      # 融资余额(万元→元)
+                    rz_buy=_wan_to_yuan(_row_value(gp11, 0)),         # 融资买入额(万元→元)
+                    rz_repay=_wan_to_yuan(_row_value(gp11, 1)),       # 融资偿还额(万元→元)
+                    rq_balance=None,     # TQ 无融券余额(元) → None(禁补 0)
+                    rq_sell_vol=_row_value(gp12, 0),   # 股, 无需换算
+                    rq_repay_vol=_row_value(gp12, 1),
+                    total_balance=None,  # 缺 rq_balance → 不臆造
+                    source="tq",
+                )
+            )
+        return out
+
+
+# 板块主力资金公式(实测=主力额 万元, 已在 src/core/tdx_boards.board_quotes 生产使用)。
+# 为什么不用 bk_series(get_bkjy_value): 官方 BK5–BK19 只有 PE/PB/市值/涨跌停家数/两融,
+# **不含板块资金净额** → 拿不到净额; 板块代码上的 SUPAMO 主力资金公式可用。
+_BOARD_FLOW_FORMULA = "SUPAMO"
+_BOARD_FLOW_CHUNK = 500   # formula_process_mul_zb 批量实测安全值(与 tdx_boards._BATCH 同)
+_MAX_BOARDS = 600
+
+
+def _board_items(list_type: int = 1) -> list[dict]:
+    """板块目录 [{code,name,board_type}](get_sector_list)。881xxx=行业 / 880xxx=概念。"""
+    raw = sector_list(list_type)
+    out: list[dict] = []
+    for s in raw or []:
+        if not isinstance(s, dict):
+            continue
+        code = str(s.get("Code") or "").strip().upper()
+        if not (len(code) == 9 and code.endswith(".SH") and code[:6].isdigit()):
+            continue
+        out.append(
+            {
+                "code": code,
+                "name": str(s.get("Name") or "").strip(),
+                "board_type": "industry" if code.startswith("881") else "concept",
+            }
+        )
+    out.sort(key=lambda x: x["code"])
+    return out
+
+
+class TqBoardCapitalFlowVendor(Vendor):
+    """板块资金流 TQ **备源**(解同花顺单点): SUPAMO 板块主力资金(万元) → 净额(亿)。
+
+    ⚠️ 口径(契约 src/core/caliber.py): TQ 资金类 = L2/主力口径(与 get_decision_pioneer
+    同族), 带 caliber + direction_semantics, 禁用于主力意图判定。
+    ⚠️ 单位: 主力资金是**万元** → 板块净额(亿) = 万元/1e4。
+    ⚠️ 缺字段留 None(禁补 0): 同花顺给流入/流出双值, TQ 只给净额 → inflow/outflow=None;
+    指数点位/涨跌幅/领涨股 TQ 该公式不含 → None。备源不臆造。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[BoardCapitalFlow]:
+        config = config or {}
+        board_type = config.get("board_type") or "industry"
+        items = [b for b in _board_items(1) if b["board_type"] == board_type][:_MAX_BOARDS]
+        if not items:
+            return []
+        caliber, direction = _capital_caliber()
+        codes = [b["code"] for b in items]
+        name_of = {b["code"]: b["name"] for b in items}
+        fund_wan: dict[str, float] = {}
+        for i in range(0, len(codes), _BOARD_FLOW_CHUNK):
+            part = codes[i : i + _BOARD_FLOW_CHUNK]
+            try:
+                got = formula_mul(_BOARD_FLOW_FORMULA, part)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ %s 板块资金失败(%d 码): %s", _BOARD_FLOW_FORMULA, len(part), e)
+                continue
+            if not isinstance(got, dict):
+                continue
+            for code, vals in got.items():
+                key = str(code).upper()
+                if key not in name_of:   # 只接受本次请求的板块(防串味/防脏行)
+                    continue
+                v = _formula_scalar(vals, "主力资金")
+                if v is not None:
+                    fund_wan[key] = v
+        ranked = sorted(
+            ((round(wan / 1e4, 4), code) for code, wan in fund_wan.items()),
+            key=lambda r: r[0],
+            reverse=True,
+        )
+        out: list[BoardCapitalFlow] = []
+        for rank, (net_yi, code) in enumerate(ranked, start=1):
+            out.append(
+                BoardCapitalFlow(
+                    board_name=name_of.get(code, ""),
+                    board_type=board_type,
+                    net_inflow=net_yi,
+                    inflow=None,    # TQ 只给净额 → None(禁补 0)
+                    outflow=None,
+                    rank=rank,
+                    source="tq",
+                    caliber=caliber,
+                    direction_semantics=direction,
+                )
+            )
+        return out
+
+
+class TqDragonTigerVendor(DragonTigerVendor):
+    """龙虎榜 TQ **备源**: GP02/08/09/17/18 序列 → DragonTigerItem(与东财同契约)。
+
+    ⚠️ **TQ 没有市场级「某日全部上榜明细」枚举接口** —— GP02 是**个股**序列, 要还原
+    整日榜单必须遍历全市场(5577 只 × 单码 RPC, 远超 Engine 单源 8s 超时, 不可行)。
+    故本 vendor 是**候选池驱动**的: 调用方通过 ``config["symbols"]``(或显式传入的
+    ``symbols``)给出候选标的(典型=端点已知的个股长序列场景), 逐个查该标的在目标日
+    是否上榜。候选为空 → 返回 [](**不伪造**榜单, 遵守 AGENTS「禁止编造」)。
+
+    ⚠️ 单位: GP02 买卖额是**万元** → 东财 `buy_amt`/`sell_amt` 是**元**, 必须 ×1e4
+    (漏换算会错 10000 倍且不报错, 见 tq-capability-audit)。
+
+    TQ 没有的字段(上榜原因 reason / 收盘 close / 涨跌幅 / 换手 / 席位名)一律留空,
+    由调用方用东财缓存补(与端点 `_lhb_from_tq` 融合路径同口径)。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[DragonTigerItem]:
+        config = config or {}
+        date = str(config.get("date") or "").strip()
+        if not date:
+            return []  # 不猜"今天"; 与东财/ftshare vendor 同约定
+        compact = date.replace("-", "")
+        trade_date = _fmt_day(compact)
+
+        # 候选池: config["symbols"] 优先, 否则用显式传入的 symbols(市场级调用时为空)。
+        candidates: list[str] = []
+        for raw in (config.get("symbols") or []):
+            tqc = to_tq_code(Symbol.parse(str(raw), "CN"))
+            if tqc and tqc not in candidates:
+                candidates.append(tqc)
+        if not candidates:
+            for sym in symbols or []:
+                tqc = to_tq_code(sym)
+                if tqc and tqc not in candidates:
+                    candidates.append(tqc)
+        if not candidates:
+            logger.debug("TQ 龙虎榜: 无候选标的(TQ 无市场级枚举), 返回空交下一源")
+            return []
+
+        out: list[DragonTigerItem] = []
+        for tqc in candidates:
+            try:
+                rows = lhb_series(tqc, start_time=compact, end_time=compact)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ 龙虎榜 %s %s failed: %s", tqc, compact, e)
+                continue
+            for r in rows:
+                if str(r.get("date") or "").replace("-", "") != compact:
+                    continue  # 窗口外(网关可能回整段), 只取目标日
+                buy_wan, sell_wan = r.get("buy"), r.get("sell")
+                buy_yuan = buy_wan * 1e4 if buy_wan is not None else None
+                sell_yuan = sell_wan * 1e4 if sell_wan is not None else None
+                net = None
+                if buy_yuan is not None or sell_yuan is not None:
+                    net = (buy_yuan or 0.0) - (sell_yuan or 0.0)
+                out.append(
+                    DragonTigerItem(
+                        trade_date=trade_date,
+                        symbol=tqc.split(".")[0],
+                        name="",
+                        reason=None,        # TQ 无上榜原因
+                        close=None,         # TQ 无收盘价
+                        change_pct=None,    # TQ 无涨跌幅
+                        net_buy=net,
+                        buy_amt=buy_yuan,
+                        sell_amt=sell_yuan,
+                        deal_amt=None,
+                        turnover_pct=None,
+                        free_market_cap=None,
+                        top_buyers=None,    # TQ 只给金额, 无席位名/名次
+                        top_sellers=None,
+                    )
+                )
+        return out
+
+
+# 大盘资金 = 全行业板块主力资金求和。与 ThsMarketFlowVendor 的语义**逐字段对齐**
+# (同花顺=行业 net 求和; TQ=881 行业板块 SUPAMO 求和), 故 TQ 版块净额之和 == 本值。
+_MARKET_FLOW_BOARD_TYPE = "industry"
+
+
+class TqMarketFlowVendor(Vendor):
+    """大盘资金 TQ **备源**(解同花顺单点): 全 881 行业板块 SUPAMO 主力资金求和。
+
+    ⚠️ 口径(契约 src/core/caliber.py): TQ 资金类 = L2/主力口径(与 get_decision_pioneer
+    同族), 返回值带 caliber + direction_semantics, **禁用于主力意图判定**(方向性判定
+    只走 get_main_intent 逐笔)。与同花顺口径(ths)同族, 故冲突时说明差异并优先逐笔。
+
+    ⚠️ 单位: SUPAMO 主力资金按**万元**处理 → 净额(亿) = Σ万元 / 1e4 —— 与同模块
+    `TqBoardCapitalFlowVendor` 同一读数与换算, 保证「大盘 = 板块净额之和」内部一致。
+
+    ⚠️ 缺字段留 None(禁补 0): TQ 只给净额, 无流入/流出双值 → total_inflow/total_outflow
+    留空; 全行业板块都取不到 → 返回 [] 交下一源, 不伪造。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[MarketCapitalFlow]:
+        items = [b for b in _board_items(1) if b["board_type"] == _MARKET_FLOW_BOARD_TYPE][:_MAX_BOARDS]
+        if not items:
+            return []
+        caliber, direction = _capital_caliber()
+        valid = {b["code"] for b in items}
+        codes = [b["code"] for b in items]
+        total_wan = 0.0
+        boards_with_data = 0
+        for i in range(0, len(codes), _BOARD_FLOW_CHUNK):
+            part = codes[i : i + _BOARD_FLOW_CHUNK]
+            try:
+                got = formula_mul(_BOARD_FLOW_FORMULA, part)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ %s 大盘资金失败(%d 码): %s", _BOARD_FLOW_FORMULA, len(part), e)
+                continue
+            if not isinstance(got, dict):
+                continue
+            for code, vals in got.items():
+                key = str(code).upper()
+                if key not in valid:   # 只接受本次请求的板块(防串味/防脏行)
+                    continue
+                v = _formula_scalar(vals, "主力资金")
+                if v is not None:
+                    total_wan += v
+                    boards_with_data += 1
+        if boards_with_data == 0:
+            return []
+        return [
+            MarketCapitalFlow(
+                total_inflow=None,   # TQ 只给净额 → None(禁补 0)
+                total_outflow=None,
+                net_inflow=round(total_wan / 1e4, 4),
+                board_count=boards_with_data,
+                source="tq",
+                caliber=caliber,
+                direction_semantics=direction,
+            )
+        ]
 
 
 def formula_mul(
@@ -771,6 +1321,26 @@ def financial_data(tables: list[str], code: str, *, start_time: str = "",
             if k not in ("ErrorId", "Error", "run_id") and x}
 
 
+def financial_data_by_date(tables: list[str], code: str, year) -> dict:
+    """按**指定年度**取专业财务数据(get_financial_data_by_date, 与 financial_data 配套)。
+
+    用于精确回补某一年的历史财务: `financial_data` 走日期区间(report_type 决定按截止日/
+    公告日), 本接口走**年度**, 网关契约(实测自曝)是 ``table_list[]`` + ``code`` + ``year``
+    —— ⚠️ key 是 `year` 不是 start_time/end_time(references/api-contracts 标定)。
+
+    返回 {表名: 数据}; 空表/失败元数据剔除(不补 0)。year 必填(缺 → {}, 不猜当前年);
+    网关异常**原样抛**(与同模块 financial_data 一致: "{}"=无数据 ≠ 故障)。
+    """
+    if not tables or not code or year in (None, ""):
+        return {}
+    params = {"table_list": list(tables), "code": code, "year": str(year)}
+    v = _rpc("get_financial_data_by_date", params, timeout=max(_TIMEOUT_S, 30.0))
+    if not isinstance(v, dict):
+        return {}
+    return {k: x for k, x in v.items()
+            if k not in ("ErrorId", "Error", "run_id") and x}
+
+
 def zdt_snapshot(codes: list[str]) -> dict:
     """涨跌停快照(当日)。每只返回 14 字段:
 
@@ -912,16 +1482,95 @@ def relation(code: str) -> list:
     return v if isinstance(v, list) else []
 
 
-def ipo_info(ipo_type: int = 2, ipo_date: int = 1) -> list:
-    """新股/新债申购信息。ipo_type 0新股 1新债 2两者; ipo_date 0今日 1今日及以后。"""
+# 申购类型 → 中文(工具层/端点直接用)
+_IPO_TYPE_CN = {0: "新股", 1: "新发债", 2: "新股+新债"}
+
+
+def trackzs_etf_info(zs_code: str = "000300.SH") -> list[dict]:
+    """获取跟踪某指数的全部 ETF 信息 (含现价 NowPrice、IOPV 净值、折溢价率与规模)。
+    常用于国家队抄底/护盘监控 (000300.SH 沪深300 / 000016.SH 上证50 / 000905.SH 中证500 等)。
+    """
+    v = _rpc("get_trackzs_etf_info", {"zs_code": str(zs_code)})
+    if not isinstance(v, list):
+        return []
+    res = []
+    for item in v:
+        if not isinstance(item, dict) or not item.get("Code"):
+            continue
+        try:
+            now_p = float(item.get("NowPrice") or 0.0)
+            iopv = float(item.get("IOPV") or 0.0)
+            premium_rate = round(((now_p - iopv) / iopv) * 100, 3) if iopv > 0 and now_p > 0 else 0.0
+            res.append({
+                "code": item.get("Code", ""),
+                "name": item.get("Name", ""),
+                "now_price": now_p,
+                "iopv": iopv,
+                "premium_rate": premium_rate,  # 折溢价率(%), 正为溢价(买方情绪强/护盘抢筹), 负为折价
+                "pre_close": float(item.get("PreClose") or 0.0),
+                "market_cap_wan": float(item.get("Sz") or 0.0),
+                "total_shares_wan": float(item.get("Zgb") or 0.0),
+            })
+        except Exception:
+            continue
+    # 按规模降序排
+    res.sort(key=lambda x: x.get("market_cap_wan", 0.0), reverse=True)
+    return res
+
+
+def ipo_info(ipo_type: int = 2, ipo_date: int = 1) -> list[dict]:
+    """新股/新债申购日历 → **结构化行**(实测 2026-09-25, 原薄壳只透传裸 list)。
+
+    ipo_type: 0=新股 / 1=新发债 / 2=两者;  ipo_date: 0=仅今天 / 1=今天及以后。
+    返回 [{code, name, sg_date, sg_price, sg_code, max_sg, pe_issue, ipo_type, ipo_type_cn}]
+    —— 服务端**直接返 list[dict]**(不套 Value), 字段全为字符串, 按原样保留不做单位换算:
+      · sg_date 形如 "20260924"(申购日); sg_price = 申购价(元), 新债恒为 100.00;
+      · max_sg = 申购上限(**原文单位**, 客户端只给数值不给单位);
+      · pe_issue 常为 "0.00" = **未披露**, 消费侧按"缺失"处理, 不要当 0 倍市盈率展示。
+    过滤无 Code 的空壳行(服务端偶发返回)。callers: 对话工具 get_ipo_calendar。
+    """
     v = _rpc("get_ipo_info", {"ipo_type": int(ipo_type), "ipo_date": int(ipo_date)})
-    return v if isinstance(v, list) else []
+    if isinstance(v, dict):  # 某些版本可能套一层
+        v = v.get("Value") or v.get("Data") or []
+    if not isinstance(v, list):
+        return []
+    out: list[dict] = []
+    for row in v:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("Code") or "").strip()
+        if not code:
+            continue
+        out.append({
+            "code": code,
+            "name": str(row.get("Name") or "").strip(),
+            "sg_date": str(row.get("SGDate") or "").strip(),
+            "sg_price": _to_float(row.get("SGPrice")),
+            "sg_code": str(row.get("SGCode") or "").strip(),
+            "max_sg": _to_float(row.get("MaxSG")),
+            "pe_issue": _to_float(row.get("PE_Issue")),
+            "ipo_type": int(ipo_type),
+            "ipo_type_cn": _IPO_TYPE_CN.get(int(ipo_type), ""),
+        })
+    return out
 
 
 def kzz_info(code: str) -> dict:
-    """可转债基础信息。"""
+    """可转债条款/基础信息。⚠️ 必须传**带后缀**代码(如 `128136.SZ`); 裸码报 codestr error。
+
+    实测 2026-09-25 修正: 响应是 `result.Value = [ {...} ]`(**列表**), 原实现判
+    `isinstance(v, dict)` 于是**恒返 {}**(静默空)。这里取首行。
+    字段: KZZCode/KZZName/KZZNow(转债现价)/HSCode(正股)/ZGPrice(转股价)/CurRate(当期利率)/
+    RestScope(剩余规模)/ForceRedeem(强赎触发价)/PutBack(回售触发价)/ZGDate(转股日)/
+    EndPrice(到期价)/EndDate(到期日)/RealValue(纯债价值)/HSScore(评级)/ExpireYield 等。
+    查不到该转债 → {}。
+    """
     v = _rpc("get_kzz_info", {"stock_code": code})
-    return v if isinstance(v, dict) else {}
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, list) and v and isinstance(v[0], dict):
+        return v[0]
+    return {}
 
 
 def trackzs_etf(zs_code: str) -> list:
@@ -931,30 +1580,85 @@ def trackzs_etf(zs_code: str) -> list:
 
 
 def download_file(*, stock_code: str = "", down_time: str = "",
-                  down_type: int = 1) -> dict:
-    """程序化触发客户端数据下载(落 .\\PYPlugins\\data)。
+                  down_type: int = 1,
+                  timeout: float | None = None) -> dict:
+    """程序化触发客户端数据下载(落客户端 .\\PYPlugins\\data)。
 
-    down_type: 1 十大股东(下 10 名数据, down_time 只生效年份)
+    ⚠️ **这是"给客户端喂数据"的前置动作, 不是取数接口** —— 返回里只有客户端的
+    `{'ErrorId': '0', 'Msg': '下载经营分析数据文件[2026]成功。', 'run_id': '0'}`,
+    数据本身落在客户端磁盘上, 本进程读不到。别把它当查询结果用。
+
+    down_type(官方 2026-09-25 文档核对, 产品原 docstring 漏了 5):
+               1 十大股东(下指定日期**所在年度**的全部十大股东+流通股东数据)
                2 ETF 申赎清单(down_time 生效到日期)
-               3 最近舆情
-               4 综合信息文件
+               3 最近舆情(其余两项无效)
+               4 综合信息文件(其余两项无效)
+               5 经营分析数据(down_time 生效到日期, 含该年度全部数据)
+
+    ⚠️ `down_time` **必须是字符串**且形如 `YYYYMMDD`(如 `'20260924'`)。实测: 传 int
+    `20260924` → `ErrorId=10 RPC处理异常:TPyth_TdxWServer_Main_New`; 传 `'2026'` →
+    `ErrorId=3 down_time error`。故这里统一把 int/datetime/date 归一成 `YYYYMMDD` 字符串。
     """
-    v = _rpc("download_file", {"stock_code": stock_code, "down_time": down_time,
-                               "down_type": int(down_type)},
-             timeout=max(_TIMEOUT_S, 60.0))
+    payload = {"stock_code": stock_code, "down_time": _norm_down_time(down_time),
+               "down_type": int(down_type)}
+    v = _rpc("download_file", payload,
+             timeout=timeout or max(_TIMEOUT_S, 60.0))
     return v if isinstance(v, dict) else {}
 
 
-def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
-                   formula_arg: str = "", stock_period: str = "1d",
-                   start_time: str = "", end_time: str = "",
-                   return_count: int = 0, return_date: bool = True,
-                   count: int = 0, dividend_type: int = 0) -> dict:
-    """批量条件选股公式(formula_process_mul_xg) → {代码: {信号名: [{Date, Value}]}}。"""
+def _norm_down_time(down_time) -> str:
+    """把 down_time 归一成客户端要的 `YYYYMMDD` 字符串(客户端不收 int)。
+
+    接受: '20260924' / 20260924 / '2026-09-24' / '2026-09-24 00:00:00' /
+    datetime.date / datetime.datetime / ''(类型 3、4 忽略该字段)。
+    无法归一的一律按原样转 str 交给客户端报错 —— 不在这里替它猜一个日期。
+    """
+    if down_time is None or down_time == "":
+        return ""
+    if hasattr(down_time, "strftime"):            # datetime / date
+        return down_time.strftime("%Y%m%d")
+    if isinstance(down_time, int):
+        return str(down_time)
+    s = str(down_time).strip()
+    digits = "".join(ch for ch in s[:10] if ch.isdigit())
+    return digits if len(digits) >= 8 else s
+
+
+#: 服务端批次元数据键: 不属于公式结果, 解析时必须剔除(SDK 同名过滤)。
+_FORMULA_META_KEYS = frozenset({
+    "ErrorId", "Error", "BatchFormulaPaged", "batch_start_index", "batch_end_index",
+    "batch_stock_count", "stock_total", "next_stock_index", "has_more_batch",
+})
+
+#: 全市场扫描的单批标的数。**实测(2026-09-25)**: 500 只/批 = 1.6s/批,
+#: 全 A(5577) 12 批 = **24.2s** 要回 5570 只; 而 50 只/批要 112 次 ≈ 145s(踩过),
+#: 一次性传全市场则由服务端按 800 只/页分页 = 33s。故取 500。
+TQ_SCAN_CHUNK = 500
+
+#: 扫描的时间窗(自然日)。**必须给窄窗口**: 不带日期时网关按"全部历史"算,
+#: 每片响应过重, 全市场扫描从 24s 拖到分钟级(实测踩过)。
+_SCAN_LOOKBACK_DAYS = 20
+
+#: 单批翻页保护: 服务端游标不前进时不要死循环。
+_FORMULA_MAX_PAGES = 40
+
+#: 非交易信号值(视为未命中)。网关回字符串 "0"/"1", 缺失回 null。
+_FORMULA_FALSY = frozenset({"", "0", "0.0", "0.00", "none", "null", "false"})
+
+
+def _formula_raw(formula_name: str, stocks: list[str], *, formula_arg: str,
+                 stock_period: str, start_time: str, end_time: str,
+                 return_count: int, return_date: bool, count: int,
+                 dividend_type: int, batch_start_index: int) -> dict:
+    """单批原始调用。
+
+    用 `full=True` 自行判 ErrorId: **19 = "数据过大只能部分返回"** 是正常现象,
+    交给 _rpc 会抛异常(旧实现即如此), 那就永远扫不完全市场。
+    """
     params = {
         "formula_name": formula_name,
         "formula_arg": formula_arg,
-        "stock_list": list(stock_list_),
+        "stock_list": list(stocks),
         "stock_period": stock_period,
         "periodstr": stock_period,
         "start_time": start_time,
@@ -963,13 +1667,181 @@ def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
         "return_date": return_date,
         "count": count,
         "dividend_type": dividend_type,
+        "batch_start_index": int(batch_start_index),
     }
-    v = _rpc("formula_process_mul_xg", params, timeout=max(_TIMEOUT_S, 120.0))
-    if not isinstance(v, dict):
-        return {}
-    v.pop("ErrorId", None)
-    v.pop("Error", None)
-    return v
+    return _rpc("formula_process_mul_xg", params, timeout=max(_TIMEOUT_S, 120.0), full=True)
+
+
+def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
+                   formula_arg: str = "", stock_period: str = "1d",
+                   start_time: str = "", end_time: str = "",
+                   return_count: int = 0, return_date: bool = True,
+                   count: int = 0, dividend_type: int = 0,
+                   max_pages: int = _FORMULA_MAX_PAGES) -> dict:
+    """批量条件选股公式(formula_process_mul_xg) → {代码: {信号名: [{Date, Value}]}}。
+
+    ⚠️ 服务端**分页返回**: 每批带 `BatchFormulaPaged`/`next_stock_index`/`has_more_batch`,
+    必须按 `batch_start_index` 游标续取到 `has_more_batch` 为假。只取第一批会
+    **静默漏掉大部分标的**(2026-09-25 修: 旧实现无翻页, 大列表下结果残缺而看不出)。
+    `ErrorId=19`(数据过大) 时返回已取到的部分 + 记警告, **不抛**。
+    """
+    out: dict = {}
+    start = 0
+    for _ in range(max(1, int(max_pages))):
+        res = _formula_raw(formula_name, stock_list_, formula_arg=formula_arg,
+                           stock_period=stock_period, start_time=start_time,
+                           end_time=end_time, return_count=return_count,
+                           return_date=return_date, count=count,
+                           dividend_type=dividend_type, batch_start_index=start)
+        if not isinstance(res, dict):
+            break
+        err = str(res.get("ErrorId", "0"))
+        if err == "19":
+            logger.warning("TQ 条件选股 %s: 数据过大, 部分返回(已取 %d 只)",
+                           formula_name, len(out))
+        elif err not in ("0", ""):
+            raise RuntimeError(
+                f"TQ formula_process_mul_xg ErrorId={err}: {res.get('Error', '')}")
+        out.update({k: v for k, v in res.items() if k not in _FORMULA_META_KEYS})
+        if not res.get("BatchFormulaPaged") or not res.get("has_more_batch"):
+            break
+        try:
+            nxt = int(str(res.get("next_stock_index")))
+        except (TypeError, ValueError):
+            logger.warning("TQ 条件选股 %s: 批次游标异常, 停止续取", formula_name)
+            break
+        if nxt <= start:
+            logger.warning("TQ 条件选股 %s: 批次游标未前进(%d), 停止续取", formula_name, nxt)
+            break
+        start = nxt
+    return out
+
+
+def _date_rows_seen(res: dict, date: str) -> int:
+    """该日期在响应里出现的**数据行数**(不看值)。
+
+    用途: 区分"非交易日/无数据"(0 行) 与"当日无票触发"(有行但值全 0)。
+    两者都算不出命中, 但**落库含义完全不同** —— 前者写 0 会把基线拉低(等于用假期
+    稀释掉真实基线), 后者才是真的 0 家。
+    """
+    if not date:
+        return -1
+    n = 0
+    for code, block in (res or {}).items():
+        if code in _FORMULA_META_KEYS or not isinstance(block, dict):
+            continue
+        for series in block.values():
+            if isinstance(series, list):
+                n += sum(1 for r in series
+                         if isinstance(r, dict) and str(r.get("Date")) == str(date))
+    return n
+
+
+def _formula_hits(res: dict, date: str = "") -> tuple[list[dict], str]:
+    """逐日信号序列 → 命中清单。返回 (hits, 实际使用的日期)。"""
+    hits: list[dict] = []
+    used_date = date
+    for code, block in (res or {}).items():
+        if not isinstance(block, dict) or not code or code in _FORMULA_META_KEYS:
+            continue
+        for sig, series in block.items():
+            if not isinstance(series, list) or not series:
+                continue
+            row = None
+            if date:
+                row = next((r for r in series if str(r.get("Date")) == str(date)), None)
+            else:
+                row = series[-1]
+                used_date = used_date or str(row.get("Date") or "")
+            if not isinstance(row, dict):
+                continue
+            val = row.get("Value")
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text.lower() in _FORMULA_FALSY:
+                continue
+            hits.append({"symbol": code, "signal": sig,
+                         "date": str(row.get("Date") or date), "value": text})
+    return hits, used_date
+
+
+def formula_scan(formula_name: str, *, formula_arg: str = "", date: str = "",
+                 codes: list[str] | None = None, chunk: int = TQ_SCAN_CHUNK,
+                 market: str = "5", list_type: int = 1) -> dict:
+    """全市场扫一遍条件选股公式, 返回命中清单。
+
+    实测性能(2026-09-25): 500 只/批 = 1.6s → 全 A(5577) 12 批 = **24.2s**,
+    返回 5570 只(差 7 只=停牌/无数据)。分片是**硬约束** —— 批量接口超限会把
+    Windows 客户端打成假死(唯一解整机重启, 见 tq-capability-audit)。
+
+    ⚠️ 必须给**窄时间窗**: 实测不带日期(count=-1=全部历史)时每片响应过重,
+    全市场扫描会从 24s 拖到分钟级(客户端一直忙着算历史)。这里默认回看
+    `_SCAN_LOOKBACK_DAYS` 个自然日, 足够覆盖目标交易日。
+
+    诚实性: 任一分片失败都会计入 `chunks_failed` 并把 `complete` 置 False,
+    调用方**不得**把不完整结果当成"全市场命中数"(会变成编造)。
+
+    `list_type=1` 实测回全 A 5577 只(与 stock_list 文档里的 "1=持仓" 不符,
+    以实测为准; 见 CHANGELOG)。
+    """
+    pool = list(codes) if codes else [str(i.get("Code")) for i in (stock_list(market, list_type) or [])
+                                      if isinstance(i, dict) and i.get("Code")]
+    if not pool:
+        return {"formula": formula_name, "formula_arg": formula_arg, "date": date,
+                "scanned": 0, "hit_count": 0, "hits": [], "per_signal": {},
+                "chunks_failed": 0, "complete": False,
+                # P2: 早退必须带 date_has_data=False —— 否则 tq_formula_signals 判不出
+                # "该日无数据" 而落 hit_count=0, 用非交易日稀释真实基线。
+                "date_rows": 0, "date_has_data": False,
+                "error": "代码池为空(取股票列表失败)"}
+
+    # 窄窗口: end = 目标日(默认今天), start = end - N 自然日
+    end_day = _norm_day(date) or datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+    try:
+        start_day = (datetime.strptime(end_day, "%Y%m%d")
+                     - timedelta(days=_SCAN_LOOKBACK_DAYS)).strftime("%Y%m%d")
+    except ValueError:
+        start_day = ""
+
+    step = max(1, int(chunk))
+    hits: list[dict] = []
+    failed = 0
+    scanned = 0
+    resolved = date
+    date_rows = 0
+    for i in range(0, len(pool), step):
+        part = pool[i: i + step]
+        try:
+            res = formula_xg_mul(formula_name, part, formula_arg=formula_arg,
+                                 start_time=start_day, end_time=end_day)
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            logger.warning("TQ 条件选股 %s: 第 %d 片失败(%s)", formula_name, i // step + 1, e)
+            continue
+        scanned += len(part)
+        date_rows += max(0, _date_rows_seen(res, date))
+        part_hits, resolved = _formula_hits(res, date)
+        hits.extend(part_hits)
+    per_signal: dict[str, int] = {}
+    for h in hits:
+        per_signal[h["signal"]] = per_signal.get(h["signal"], 0) + 1
+    return {
+        "formula": formula_name,
+        "formula_arg": formula_arg,
+        "date": resolved or date,
+        "requested_date": date,
+        "scanned": scanned,
+        "hit_count": len(hits),
+        "hits": hits,
+        "per_signal": per_signal,
+        "chunks_failed": failed,
+        "complete": failed == 0,
+        # ⚠️ 区分两种 0: date_rows==0 = 该日**没有数据**(非交易日/窗口没覆盖),
+        # 此时 hit_count=0 **不是**"今日无票触发" —— 落库方必须跳过, 否则假期 0 会稀释基线。
+        "date_rows": date_rows,
+        "date_has_data": date_rows > 0 if date else None,
+    }
 
 
 def formula_all(formula_type: int = 0) -> list:
@@ -1221,4 +2093,80 @@ def exday_latest(code: str, *, count: int = 1, _rpc_fn=None) -> dict:
     for k, name in _EXDAY_SCALARS.items():
         out[name] = _to_float(row.get(k))
     out["date"] = str(row.get("Date") or "")
+    return out
+
+
+# ── 单标的指标公式：必须先喂 K 线数据（2026-09-25 实测）─────────────────
+#
+# 文档原文「向通达信公式设置数据 formula_set_data —— 在调用公式前须先设置公式参数」。
+# 不喂数据直接调 formula_zb 会报 `ErrorId=9: no find formula setting`（**不是**客户端没注册公式）。
+#
+# 四个实测坑:
+#   1. `formula_set_data` 报 `ErrorId=10 RPC处理异常:TPyth_TdxWServer_Func`, 必须用
+#      **`formula_set_data_info`**（文档说两者等价, 实测不等价）。
+#   2. `formula_format_data`/`tdx_formula_format_data` 网关不暴露
+#      (`MCP不支持该tqcenter方法名`) ⇒ 自己把 get_market_data 的**列式**结果转置成行式。
+#      ⚠️ 列字典里 `ErrorId` 等是**标量**不是数组, 不滤会 IndexError。
+#   3. 设置是**连接级且会被覆盖**（文档: 设置的数据在断开连接前一直生效, 后设置的覆盖前面的）
+#      ⇒ 同一连接上**不能交错跑不同标的**, 必须"喂 A 的数据 → 立刻算 A"。
+#   4. `ErrorId=9` 有两种含义, 看消息文本: `no find formula setting`=本次连接没喂过该标的;
+#      `获取公式失败或公式不存在`=公式确实不存在。
+
+_FORMULA_FEED_CACHE: dict[tuple[str, str, int], bool] = {}
+
+
+def _formula_rows(code: str, *, count: int, period: str) -> list[dict]:
+    """取 K 线并转置成公式引擎要的行式 list[dict]（只保留数组列）。"""
+    raw = _rpc("get_market_data", {"stock_list": [code], "count": int(count), "period": period})
+    cols = raw.get(code) if isinstance(raw, dict) else None
+    if not isinstance(cols, dict):
+        raise RuntimeError(f"TQ get_market_data 未返回 {code} 的行情(公式需要先喂数据)")
+    keys = [k for k in cols if isinstance(cols[k], list)]
+    if not keys:
+        raise RuntimeError(f"TQ get_market_data 返回的 {code} 行情里没有数组列")
+    n = len(cols[keys[0]])
+    return [{k: cols[k][i] for k in keys} for i in range(n)]
+
+
+def formula_feed(code: str, *, count: int = 250, period: str = "1d", force: bool = False) -> dict:
+    """把某标的的 K 线喂给公式引擎。同一 (code, period, count) 只喂一次(连接级设置会覆盖,
+    但被覆盖只影响**别**的标的, 所以自己重喂是幂等的)。"""
+    key = (code, period, int(count))
+    if not force and _FORMULA_FEED_CACHE.get(key):
+        return {"ErrorId": "0", "Msg": "cached"}
+    rows = _formula_rows(code, count=count, period=period)
+    r = _rpc(
+        "formula_set_data_info",
+        {
+            "stock_code": code,
+            "stock_period": period,
+            "stock_data": rows,
+            "count": len(rows),
+            "dividend_type": 0,
+        },
+        timeout=max(_TIMEOUT_S, 30.0),
+    )
+    _FORMULA_FEED_CACHE[key] = True
+    out = r if isinstance(r, dict) else {"ErrorId": "0", "Msg": str(r)[:80]}
+    last = rows[-1].get("Date") if rows else ""
+    out["last_date"] = _fmt_day(last) if last else ""
+    out["bars"] = len(rows)
+    return out
+
+
+def formula_zb_many(formula_names: list[str], code: str, *, count: int = 250,
+                    period: str = "1d") -> dict[str, dict]:
+    """一次喂数据, 连续跑多个指标公式 → {公式名: 返回值}。单个公式失败不影响其他。
+
+    ⚠️ 只对**同一标的**成立; 换标的必须重新喂（见文件头说明）。
+    """
+    feed = formula_feed(code, count=count, period=period)
+    out: dict[str, dict] = {}
+    out["_feed"] = feed if isinstance(feed, dict) else {}
+    for name in formula_names:
+        try:
+            v = formula_zb_single(name, code)
+            out[name] = v if isinstance(v, dict) else {}
+        except Exception as exc:  # noqa: BLE001
+            out[name] = {"_error": str(exc)[:160]}
     return out

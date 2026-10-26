@@ -35,7 +35,7 @@ export function CompanyTab({ showConcepts = true }: { showConcepts?: boolean }) 
           {companyInfo.desc && (
             <div className="card p-4">
               <div className="text-[11px] text-muted-foreground mb-1">公司简介</div>
-              <div className="text-[12px] text-foreground/90 leading-relaxed">{companyInfo.desc}</div>
+              <div className="text-[12px] text-foreground leading-relaxed">{companyInfo.desc}</div>
             </div>
           )}
           {/* 基本信息网格 */}
@@ -110,7 +110,7 @@ export function CompanyTab({ showConcepts = true }: { showConcepts?: boolean }) 
               <div className="text-[11px] text-muted-foreground mb-2">概念板块</div>
               <div className="flex flex-wrap gap-1.5">
                 {companyInfo.concepts.split(',').filter(Boolean).map((c) => (
-                  <span key={c} className="rounded-full bg-accent/50 px-2 py-0.5 text-[11px] text-foreground/80">{c.trim()}</span>
+                  <span key={c} className="rounded-full bg-accent/50 px-2 py-0.5 text-[11px] text-foreground">{c.trim()}</span>
                 ))}
               </div>
             </div>

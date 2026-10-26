@@ -52,6 +52,9 @@ PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "premarket_outlo
 
 @register_agent("premarket_outlook")
 class PremarketOutlookAgent(BaseAgent):
+    # 2026-10-20: LLM 429/超时时不再"整份不推" —— 已采集到的客观数据必须送到用户手上
+    # （盘前 09:05 的事实比全有全无更有价值）。
+    allow_degraded_notify = True
     """盘前分析 Agent"""
 
     name = "premarket_outlook"
@@ -247,7 +250,7 @@ class PremarketOutlookAgent(BaseAgent):
             market_sentiment = {}
 
         # 6. 事件驱动扫描(核心:提前发现题材,不追涨停)
-        #    全网事件流: 涨价/停产/限产/事故/灾害/战争/政策 关键词
+        #    全网事件流: 大宗涨价 + 全球重磅科技/低空突发 双轨制
         #    未来催化日历: 未来 3 天事件
         event_stream = []
         catalyst = {}
@@ -255,28 +258,45 @@ class PremarketOutlookAgent(BaseAgent):
             from src.collectors.wudao_mcp_client import WudaoMCPClient
 
             wclient = WudaoMCPClient()
-            ev_resp = wclient.call_tool(
+            ev_resp1 = wclient.call_tool(
                 "cls_news",
                 {
                     "keyword": "涨价,停产,限产,事故,灾害,战争,地震,台风,减产,提价,涨价函",
                     "hoursAgo": 48,
-                    "limit": 40,
+                    "limit": 30,
                     "format": "json",
                 },
             )
-            rows = (ev_resp or {}).get("rows") or []
-            for it in rows[:30]:
+            ev_resp2 = wclient.call_tool(
+                "cls_news",
+                {
+                    "keyword": "低空,飞行汽车,特斯拉,马斯克,SpaceX,机器人,算力,eVTOL,航空",
+                    "hoursAgo": 24,
+                    "limit": 30,
+                    "format": "json",
+                },
+            )
+            rows1 = (ev_resp1 or {}).get("rows") or []
+            rows2 = (ev_resp2 or {}).get("rows") or []
+            seen_content = set()
+            for it in (rows1 + rows2):
                 if not isinstance(it, dict):
                     continue
+                cnt = (it.get("content") or "").strip()
+                if not cnt or cnt[:50] in seen_content:
+                    continue
+                seen_content.add(cnt[:50])
                 event_stream.append(
                     {
                         "time": it.get("fullTime") or it.get("time") or "",
                         "level": it.get("level") or "",
-                        "content": (it.get("content") or "")[:200],
+                        "content": cnt[:200],
                         "subjects": it.get("subjects") or [],
                         "ref": it.get("ref") or "",
                     }
                 )
+                if len(event_stream) >= 40:
+                    break
             cat_resp = wclient.call_tool(
                 "market_catalyst_calendar",
                 {"startDate": datetime.now().strftime("%Y-%m-%d"), "endDate": (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")},
@@ -373,7 +393,8 @@ class PremarketOutlookAgent(BaseAgent):
             try:
                 from src.core.demon_factors import top_demon_factors
 
-                demon_factors = top_demon_factors(30)
+                # 扩大至 Top 50，确保覆盖主线题材中的潜在妖股先锋
+                demon_factors = top_demon_factors(50)
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 先锋组因子不可用: %s", trace_id, e)
             ambush_scored = await asyncio.to_thread(
@@ -458,6 +479,19 @@ class PremarketOutlookAgent(BaseAgent):
             logger.warning("[%s] TDX 问小达采集失败: %s", trace_id, e)
             tdx_wenda = {}
 
+        # 6.7 突发科技/大宗题材映射全市场标的(突破自选股沙盒限制)
+        theme_candidates = []
+        try:
+            import asyncio
+
+            from src.core.theme_candidate_mapper import build_fullmarket_theme_candidates
+
+            theme_candidates = await asyncio.to_thread(build_fullmarket_theme_candidates, event_stream)
+            logger.info("[%s] 突发题材全市场候选映射完成: %s 个题材", trace_id, len(theme_candidates))
+        except Exception as e:
+            logger.warning("[%s] 突发题材映射失败: %s", trace_id, e)
+            theme_candidates = []
+
         return {
             "yesterday_analysis": yesterday_analysis.content
             if yesterday_analysis
@@ -470,6 +504,7 @@ class PremarketOutlookAgent(BaseAgent):
             "news": news_items,
             "market_sentiment": market_sentiment,
             "event_stream": event_stream,
+            "theme_candidates": theme_candidates,
             "catalyst": catalyst,
             "catalyst_local": catalyst_local,
             "ambush_list": ambush_list,
@@ -482,6 +517,118 @@ class PremarketOutlookAgent(BaseAgent):
             "timestamp": datetime.now().isoformat(),
             "run_trace_id": trace_id,
         }
+
+    # ─────────── 2026-10-20 Harness 优化：事实快报 / 上下文预算 ───────────
+
+    _BUDGET_DROP_ORDER = ("突发重磅科技", "通达信问小达", "相关新闻资讯", "近48小时事件流", "埋伏榜")
+
+    @staticmethod
+    def _fmt_pct(v) -> str:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        return f"{f:+.2f}%"
+
+    def _build_fact_brief(self, data: dict, context: AgentContext, reason: str) -> str:
+        """LLM 不可用时，用已采集到的数据渲染一份纯事实快报（零推测、缺失即略）。"""
+        lines: list[str] = [
+            f"> AI 解读本轮不可用（{reason}）。以下为已采集到的客观数据，未做任何推断。",
+            "",
+            f"## 时间\n{(data.get('timestamp') or '')[:16].replace('T', ' ')}",
+        ]
+
+        def block(title: str, rows: list[str]) -> None:
+            if rows:
+                lines.extend([f"## {title}"] + rows + [""])
+
+        # 隔夜/外围
+        rows = []
+        for it in (data.get("us_indices") or [])[:5]:
+            if isinstance(it, dict):
+                rows.append(f"- {it.get('name') or it.get('symbol')}: {it.get('current')} {self._fmt_pct(it.get('change_pct'))}")
+        gi = data.get("global_indices") or {}
+        if isinstance(gi, dict):
+            for key, label in (("asia", "亚太"), ("futures", "美股期货")):
+                for it in (gi.get(key) or [])[:6]:
+                    if isinstance(it, dict) and it.get("name"):
+                        rows.append(f"- {label}·{it.get('name')}: {it.get('current')} {self._fmt_pct(it.get('change_pct'))}")
+        block("隔夜与外围", rows)
+
+        # 情绪
+        mood = data.get("mood") or {}
+        if isinstance(mood, dict) and mood:
+            bits = [f"{mood.get('stage') or mood.get('phase') or '—'}",
+                    f"温度 {mood.get('temperature', '—')}",
+                    f"涨停 {mood.get('limit_up', '—')} / 跌停 {mood.get('limit_down', '—')}"]
+            block("市场情绪", ["- " + " · ".join(bits)])
+
+        # 事件流
+        rows = []
+        for ev in (data.get("event_stream") or [])[:6]:
+            title = getattr(ev, "title", None) or (ev.get("title") if isinstance(ev, dict) else None)
+            if title:
+                rows.append(f"- {title}")
+        block("近 48 小时事件", rows)
+
+        # 题材候选（全市场，不受自选股限制）
+        rows = []
+        for tc in (data.get("theme_candidates") or [])[:5]:
+            if isinstance(tc, dict):
+                names = "、".join([(x.get("name") or x.get("symbol") or "") for x in (tc.get("leaders") or [])[:3] if isinstance(x, dict)])
+                if tc.get("theme"):
+                    rows.append(f"- {tc.get('theme')}: {names or '未匹配到龙头'}")
+        block("题材与龙头候选", rows)
+
+        # 自选股
+        rows = []
+        packs = data.get("signal_packs") or {}
+        for st in context.watchlist[:8]:
+            pack = packs.get(st.symbol)
+            q = getattr(pack, "quote", None) if pack else None
+            price = getattr(q, "current_price", None) if q else None
+            pct = getattr(q, "change_pct", None) if q else None
+            rows.append(f"- {st.name}({st.symbol}): {price if price is not None else '—'} {self._fmt_pct(pct)}")
+        block("自选股快照", rows)
+
+        # 数据源质量（缺失即真相的一部分）
+        qo = data.get("quality_overview") or {}
+        if isinstance(qo, dict) and qo:
+            failed = qo.get("failed") or qo.get("missing") or []
+            if failed:
+                block("本轮缺失的数据源", [f"- {x}" for x in list(failed)[:8]])
+
+        return "\n".join(lines).strip()
+
+    def _apply_context_budget(self, user_content: str, limit: int = 24000) -> tuple[str, list[str]]:
+        """按预算裁剪上下文：超限时按优先级整段丢弃（不截半句，避免模型读到半截事实）。"""
+        if len(user_content) <= limit:
+            return user_content, []
+        lines = user_content.split("\n")
+        # 以 "## " 开头切块，保留前导块
+        blocks: list[tuple[str, list[str]]] = []
+        cur_head, cur_body = "", []
+        for ln in lines:
+            if ln.startswith("## "):
+                blocks.append((cur_head, cur_body))
+                cur_head, cur_body = ln, []
+            else:
+                cur_body.append(ln)
+        blocks.append((cur_head, cur_body))
+
+        dropped: list[str] = []
+        for keyword in self._BUDGET_DROP_ORDER:
+            if len("\n".join(sum(([h] + b for h, b in blocks), []))) <= limit:
+                break
+            for i, (head, body) in enumerate(blocks):
+                if keyword in head and head:
+                    dropped.append(head[3:].strip())
+                    blocks[i] = ("", [])
+                    break
+        merged = "\n".join(sum(([h] + b if h else b for h, b in blocks), []))
+        if dropped:
+            merged = f"> 上下文已按预算省略：{'、'.join(dropped)}（当日该段过长）\n\n" + merged
+        return merged, dropped
 
     def build_prompt(self, data: dict, context: AgentContext) -> tuple[str, str]:
         """构建盘前分析 Prompt"""
@@ -671,7 +818,7 @@ class PremarketOutlookAgent(BaseAgent):
         df_map = data.get("demon_factors") or {}
         if df_map:
             lines.append("## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)")
-            for sym, f in list(df_map.items())[:10]:
+            for sym, f in list(df_map.items())[:15]:
                 lines.append(
                     f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) | "
                     f"近一年封板{f.get('n_sealed')}次 最高{f.get('max_streak')}连板 | {f.get('participation')}"
@@ -679,7 +826,24 @@ class PremarketOutlookAgent(BaseAgent):
             if mood.get("demon_veto"):
                 lines.append("- ⛔ 当前退潮/高潮档位: 先锋组整体禁推(妖股退潮期跌最狠), 只提示不进观察池")
             else:
-                lines.append("> 题材事件命中先锋组成员时, 该标的传导分按等级加成(极妖+3/妖+2/活跃+1); 一字板标的按排板口径自行判断")
+                lines.append("> 💡 核心选股规则: 当识别到上方事件驱动或主线题材爆发时，**优先在主线受益标的中挑选命中本先锋组（极妖/妖级）的个股**！此类标的兼具题材风口与股性记忆，极易走出超预期主升浪。")
+            lines.append("")
+
+        # 突发主线题材全市场标的推荐(突破自选股沙盒限制)
+        tc_list = data.get("theme_candidates") or []
+        if tc_list:
+            lines.append("## 突发重磅科技/大宗事件全市场受益龙头映射（不受自选股限制）")
+            lines.append("> ⚠️ 提示：以下标的由全市场题材库与妖股基因分自动匹配，重点在【第 0 节 事件驱动前瞻】中列入作战潜伏表格：")
+            for tc in tc_list:
+                theme = tc.get("theme")
+                lines.append(f"### 主题：【{theme}】（触发事件：{tc.get('sample_event', '')[:60]}...）")
+                cands = tc.get("candidates") or []
+                for c in cands:
+                    board_flag = "主板" if c.get("is_mainboard") else "创业板/科创板"
+                    demon_tag = f"【妖股分:{c.get('demon_score')}({c.get('demon_level')})】" if c.get("demon_score", 0) > 0 else ""
+                    lines.append(
+                        f"- `{c.get('symbol')}` **{c.get('name')}** ({board_flag}) {demon_tag}: {c.get('reason')}"
+                    )
             lines.append("")
 
         # 埋伏榜: 优先四维评分增强版(批次C C2/C3), 回落原始榜
@@ -1152,6 +1316,15 @@ class PremarketOutlookAgent(BaseAgent):
     ) -> tuple[str, str]:
         """构建 system/user prompt + 场景模型绑定(P3 拆分, 行为与原 analyze 前段一致)。"""
         system_prompt, user_content = self.build_prompt(data, context)
+        # 2026-10-20: 上下文预算。实测同一份报告 user_chars 在 7.8k~39.3k 之间剧烈波动，
+        # 39k 那次直接把 flash 模型拖进 429/注意力稀释。超预算按优先级整段丢弃，不截半句。
+        user_content, dropped = self._apply_context_budget(user_content)
+        data["_ctx_dropped"] = dropped
+        logger.info(
+            "上下文预算: user_chars=%s dropped=%s",
+            len(user_content or ""),
+            ",".join(dropped) or "-",
+        )
         # 统一 LLM 配置中心: reports 场景模型绑定 + 画像注入(无 db/绑定失败则原样)
         system_prompt = apply_scene_binding(context, "reports", system_prompt)
         return system_prompt, user_content
@@ -1161,7 +1334,20 @@ class PremarketOutlookAgent(BaseAgent):
     ) -> str:
         """调用 LLM 并注入模型标签(P3 拆分)。降级异常向上抛由 analyze 处理。"""
         logger.info("[%s] AI请求开始", trace_id)
-        content = await context.ai_client.chat(system_prompt, user_content)
+        content = ""
+        for attempt in (0, 1):
+            try:
+                content = await context.ai_client.chat(system_prompt, user_content)
+                break
+            except LLMDegradedError as e:
+                reason = str(getattr(e, "reason", "") or e)
+                retryable = any(k in reason.lower() for k in ("429", "限流", "timeout", "超时"))
+                if attempt == 0 and retryable:
+                    # 429/超时重试一次(3s 退避)；别的降级(模型不存在/鉴权)重试无意义
+                    logger.warning("[%s] AI 降级可重试(%s)，3s 后重试一次", trace_id, reason[:80])
+                    await asyncio.sleep(3)
+                    continue
+                raise
         logger.info("[%s] AI请求完成: response_chars=%s", trace_id, len(content or ""))
 
         if context.model_label:
@@ -1238,27 +1424,76 @@ class PremarketOutlookAgent(BaseAgent):
                 context, system_prompt, user_content, trace_id
             )
         except LLMDegradedError as e:
-            # 0.3: 降级显式失败, 历史留 degraded 记录, 不再走建议/推送链路
-            result = self._degraded_result(e)
+            # 2026-10-20: 不再"降级即静默" —— 已采集到的客观数据整理成事实快报照推。
+            # 判据仍是 degraded(status 不撒谎)，但 raw_data.fallback_brief=True 让基类放行推送。
+            brief = self._build_fact_brief(data, context, getattr(e, "reason", "") or str(e))
+            run_meta = {
+                "prompt_stats": {
+                    "prompt_chars": len(user_content or ""),
+                    "system_chars": len(system_prompt or ""),
+                    "watchlist_count": len(context.watchlist),
+                },
+                "ctx_dropped": data.get("_ctx_dropped") or [],
+                "llm_ms": int((time.monotonic() - start_ts) * 1000),
+                "degraded": True,
+                "error": str(getattr(e, "reason", "") or e)[:200],
+            }
+            title = f"【盘前事实快报】{(data.get('timestamp') or '')[:10]}（AI 解读不可用）"
+            result = AnalysisResult(
+                agent_name=self.name,
+                title=title,
+                content=brief,
+                raw_data={
+                    "status": "degraded",
+                    "error": str(getattr(e, "reason", "") or e),
+                    "fallback_brief": True,
+                    "run_meta": run_meta,
+                    "timestamp": data.get("timestamp"),
+                },
+                status="degraded",
+                error=str(getattr(e, "reason", "") or e),
+            )
             save_analysis(
                 agent_name=self.name,
                 stock_symbol="*",
                 content=result.content,
                 title=result.title,
                 user_id=_resolve_user_id(context),
-                raw_data={
-                    "status": "degraded",
-                    "error": result.error,
-                    "timestamp": data.get("timestamp"),
-                },
+                raw_data=result.raw_data,
                 status="degraded",
                 error=result.error,
+            )
+            logger.warning(
+                "[%s] LLM 降级改为事实快报: chars=%s reason=%s",
+                trace_id, len(brief), result.error[:120],
             )
             return result
 
         result, _structured, suggestions = self._parse_analysis_result(
             content, context, data
         )
+
+        # 2026-10-20: 输出契约兜底 —— 解析不出建议时补一次"只出 JSON"的结构化重试，
+        # 避免脏文本被 _parse_suggestions 正则硬抠进建议池。
+        if not suggestions and not _structured and (content or "").strip():
+            try:
+                strict_content = await self._call_llm_analysis(
+                    context,
+                    system_prompt,
+                    user_content
+                    + "\n\n【只输出 JSON】请仅输出一个 ```suggestions``` 代码块，"
+                      "必须是 JSON 数组，每项含 symbol/action/reason/triggers/invalidations/risks；"
+                      "没有把握的票不要输出。",
+                    trace_id + "-fmt",
+                )
+                result2, structured2, suggestions2 = self._parse_analysis_result(
+                    strict_content, context, data
+                )
+                if suggestions2:
+                    logger.info("[%s] 结构化重试成功: suggestions=%s", trace_id, len(suggestions2))
+                    result, _structured, suggestions = result2, structured2, suggestions2
+            except LLMDegradedError as e:
+                logger.warning("[%s] 结构化重试失败(忽略): %s", trace_id, str(e)[:100])
 
         # 保存各股票建议到建议池
         stock_map = {s.symbol: s for s in context.watchlist}
@@ -1457,7 +1692,10 @@ class PremarketOutlookAgent(BaseAgent):
                 "prompt_context": user_content[:12000],
                 "prompt_stats": {
                     "prompt_chars": len(user_content or ""),
+                    "system_chars": len(system_prompt or ""),
                     "watchlist_count": len(context.watchlist),
+                    "ctx_dropped": data.get("_ctx_dropped") or [],
+                    "llm_ms": int((time.monotonic() - start_ts) * 1000),
                 },
                 "news_debug": news_debug,
                 "suggestions": suggestions,

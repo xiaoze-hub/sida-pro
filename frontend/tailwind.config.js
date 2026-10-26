@@ -10,6 +10,8 @@ export default {
     extend: {
       colors: {
         border: 'hsl(var(--border))',
+        // 卡片边界专用(比 --border 亮一档, 对卡底 ≥1.5:1; 见 index.css --border-strong)
+        'border-strong': 'hsl(var(--border-strong))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
         background: 'hsl(var(--background))',

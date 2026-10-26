@@ -47,7 +47,7 @@ _SERIES_COLUMNS: tuple[str, ...] = (
 
 @router.get("/health")
 def sentiment_health():
-    """自检: 表内样本量/覆盖区间/最近同步时间。免登录, 方便探活。"""
+    """自检: 表内样本量/覆盖区间/最近同步时间 + 新鲜度(断链显式)。免登录, 方便探活。"""
     from src.web.database import SessionLocal
 
     db = SessionLocal()
@@ -70,13 +70,31 @@ def sentiment_health():
         db.close()
 
     n = int((row or {}).get("n") or 0)
+    last = (row or {}).get("last")
+    # 新鲜度(2026-10-11): 数据停在过去 → 显式标注, 不假装当日
+    stale = None
+    expected = None
+    stale_days = None
+    if last:
+        try:
+            from src.core.sentiment_freshness import _expected_latest
+            from src.core.sentiment_thermometer import _stale_days
+
+            expected = _expected_latest()
+            stale_days = _stale_days(str(last), expected)
+            stale = bool(stale_days is not None and stale_days > 0)
+        except Exception:  # noqa: BLE001 — 日历不可用时不标陈旧
+            stale = None
     return {
         "available": n > 0,
         "rows": n,
         "first": (row or {}).get("first"),
-        "last": (row or {}).get("last"),
+        "last": last,
         "updated_at": str((row or {}).get("updated") or ""),
         "source": source or "",
+        "expected": expected,
+        "stale": stale,
+        "stale_days": stale_days,
     }
 
 
@@ -97,6 +115,19 @@ def sentiment_baseline(days: int = Query(20, ge=5, le=250)):
         db.close()
     if not out.get("latest"):
         raise HTTPException(404, "无情绪序列数据(先 POST /sync 或等收盘后定时任务)")
+    # 新鲜度标注(2026-10-11): 数据停在过去时显式带出, 消费方(温度计/regime/战报)不冒充当日
+    out["stale"] = None
+    out["expected"] = None
+    asof = out.get("asof")
+    if asof:
+        try:
+            from src.core.sentiment_freshness import _expected_latest
+
+            expected = _expected_latest()
+            out["expected"] = expected
+            out["stale"] = bool(str(asof) < str(expected))
+        except Exception:  # noqa: BLE001 — 日历不可用时不标陈旧
+            pass
     return out
 
 

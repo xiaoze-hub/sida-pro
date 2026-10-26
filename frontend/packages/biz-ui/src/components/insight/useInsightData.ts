@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import {
   insightApi,
   stocksApi,
@@ -41,6 +42,7 @@ import type {
   HistoryRecord,
   PortfolioSummaryResponse,
   StockItem,
+  MainAccumulationChips,
 } from './types'
 
 /**
@@ -124,6 +126,7 @@ const [klineSummary, setKlineSummary] = useState<KlineSummary | null>(null)
 const [summaryOrderbook, setSummaryOrderbook] = useState<SummaryOrderbook | null>(null)
 /** 2026-08-12 预热优化: 弹窗打开即拉主力意图, 切到 K线 tab 秒显图例卡 */
 const [mainIntent, setMainIntent] = useState<MainIntentStructured | null>(null)
+const [mainAccumulationChips, setMainAccumulationChips] = useState<MainAccumulationChips | null>(null)
 // ============== SIDA Pro: K线图层标注数据 state (P1+ P2) (2026-09-01) ==============
 const [gsSignals, setGsSignals] = useState<GsSignalLike[]>([])
 const [fundFlow, setFundFlow] = useState<FundFlowBarLike[]>([])
@@ -229,6 +232,8 @@ const loadKline = useCallback(async () => {
   // 遗留④: 顶层 `orderbook`(与 summary 平级)单独存一份 —— 无条件 set(缺失即 null),
   // 否则换标的/源不可用时会把上一只票的盘口形态留在屏上。
   setSummaryOrderbook(data?.orderbook ?? null)
+  // 主力建仓期筹码沉淀模型
+  if (data?.main_accumulation_chips) setMainAccumulationChips(data.main_accumulation_chips)
   // 2026-08-12 预热优化: 顺手存主力意图, 传给 K线 tab 秒显(免组件二次请求)
   if (data?.main_intent_structured) setMainIntent(data.main_intent_structured)
   // ============== SIDA Pro: K线图层标注数据 (P1+ P2 入口) (2026-09-01) ==============
@@ -668,17 +673,21 @@ useEffect(() => {
   loadReports().catch(() => setReports([]))
 }, [props.open, symbol, enabledKeys, loadReports])
 
-useEffect(() => {
-  if (!props.open || !symbol || !autoRefreshEnabled) return
-  // Task 10 门控: 一个键都没启用时, 20s 自动刷新整体不启动(缺省全开 = 旧行为不变)。
-  if (!hasAnyResourceEnabled(enabledKeys)) return
-  const sec = Number(autoRefreshSec) > 0 ? Number(autoRefreshSec) : 20
-  const ms = Math.max(10, sec) * 1000
-  const timer = setInterval(() => {
+// 页签 keep-alive(2026-10-15): 自动刷新走 `usePausedInterval` —— 隐藏页签**停表**(不发请求),
+// 回前台补一次; 门控(面板未开/没启用任一资源键)时 `delayMs<=0` 停用, 原行为不变。
+const autoRefreshGated =
+  props.open && !!symbol && autoRefreshEnabled && hasAnyResourceEnabled(enabledKeys)
+const autoRefreshMs = Math.max(10, Number(autoRefreshSec) > 0 ? Number(autoRefreshSec) : 20) * 1000
+usePausedInterval(
+  () => {
     refreshForAuto().catch(() => undefined)
-  }, ms)
-  return () => clearInterval(timer)
-}, [props.open, symbol, autoRefreshEnabled, autoRefreshSec, enabledKeys, refreshForAuto])
+  },
+  autoRefreshGated ? autoRefreshMs : 0,
+  {
+    immediate: false,
+    deps: [props.open, symbol, autoRefreshEnabled, autoRefreshSec, enabledKeys],
+  },
+)
 
 const miniKlineExtrema = useMemo(() => {
   if (!miniKlines.length) return null
@@ -725,6 +734,7 @@ const miniKlineExtrema = useMemo(() => {
     // 遗留④: `/klines/{s}/summary` 的**顶层** orderbook(形态/最优买卖/价差/买盘占比)
     summaryOrderbook,
     mainIntent,
+    mainAccumulationChips,
     gsSignals,
     fundFlow,
     klineEvents,

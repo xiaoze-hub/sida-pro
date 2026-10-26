@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MessageCircle, X, Plus, Trash2, Send, ChevronLeft, XCircle, Settings2, Check, GripHorizontal, Newspaper, Paperclip, Loader2 } from 'lucide-react'
+import { Sparkles, X, Plus, Trash2, Send, ChevronLeft, XCircle, Settings2, Check, GripHorizontal, Newspaper, Paperclip, Loader2 } from 'lucide-react'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { chatApi, fetchAPI, type ChatConversation, type ChatMessage } from '@panwatch/api'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { parseServerTime } from '@/lib/utils'
+import { useCapsulePresent } from '@/lib/copilot/capsule-presence'
 
 interface StockContext {
   symbol: string
@@ -155,6 +156,12 @@ export default function ChatWidget() {
   const dragStateRef = useRef<DesktopChatDragState | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
+  /**
+   * 入口唯一性(2026-10-18): 个股工作台已挂 CopilotCapsule(带标的上下文的更高级入口),
+   * 全局圆形 FAB 必须让位 —— 否则右下角两个 AI 入口叠在一起, 既重复又互相遮挡。
+   * 只在"胶囊在场"时隐藏; 其它页面 FAB 仍是唯一入口, 不做全局删除。
+   */
+  const capsulePresent = useCapsulePresent()
 
   const loadConversations = useCallback(async () => {
     try {
@@ -554,7 +561,15 @@ export default function ChatWidget() {
       } as React.CSSProperties)
     : undefined
 
+  /**
+   * 入口去重（2026-10-19）：`/ai-copilot` 已是数智参谋一级页，右下角再挂一个圆形 FAB
+   * 就是同一入口两处出现 —— 页面内不再渲染 FAB（工作台另有上下文胶囊，见 CopilotCapsule）。
+   * 用 pathname 判断而非 router hook：本组件全站常驻、且单测裸渲染不带 Router。
+   */
+  const onCopilotPage = typeof window !== 'undefined' && window.location.pathname.startsWith('/ai-copilot')
+
   if (!open) {
+    if (capsulePresent || onCopilotPage) return null
     return (
       <button
         onClick={() => setOpen(true)}
@@ -562,7 +577,7 @@ export default function ChatWidget() {
         title="打开数智分析BOT"
         aria-label="打开数智分析BOT"
       >
-        <MessageCircle className="w-5 h-5" />
+        <Sparkles className="w-5 h-5" />
       </button>
     )
   }
@@ -583,7 +598,7 @@ export default function ChatWidget() {
         title="拖动标题栏移动窗口"
       >
         <div className="flex items-center gap-2">
-          <GripHorizontal className="hidden h-4 w-4 shrink-0 text-muted-foreground/50 md:block" aria-hidden="true" />
+          <GripHorizontal className="hidden h-4 w-4 shrink-0 text-muted-foreground md:block" aria-hidden="true" />
           {view === 'chat' && (
             <button
               onClick={() => { setView('list'); setStockContext(null); setSuggestedQuestions([]); loadConversations() }}
@@ -691,7 +706,7 @@ export default function ChatWidget() {
             </span>
             <button
               onClick={() => setNewsDismissed(true)}
-              className="text-[10px] text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+              className="text-[10px] text-muted-foreground transition-colors hover:text-muted-foreground"
               title="收起今日要闻"
             >
               收起
@@ -705,9 +720,9 @@ export default function ChatWidget() {
                 disabled={sending}
                 className="rounded-lg border border-border/50 bg-background/70 px-2.5 py-1.5 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
               >
-                <div className="truncate text-[12px] text-foreground">{item.title}</div>
+                <div className="truncate text-[12px] text-foreground" title={item.title}>{item.title}</div>
                 {item.body && (
-                  <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{item.body}</div>
+                  <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground" title={item.body}>{item.body}</div>
                 )}
               </button>
             ))}
@@ -720,7 +735,7 @@ export default function ChatWidget() {
         <div className="flex-1 overflow-y-auto scrollbar">
           {conversations.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[13px] gap-3">
-              <MessageCircle className="w-8 h-8 opacity-30" />
+              <Sparkles className="w-8 h-8 opacity-30" />
               <p>暂无对话</p>
               <button
                 onClick={createNewConversation}
@@ -737,7 +752,7 @@ export default function ChatWidget() {
                 className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-accent/30 transition-colors border-b border-border/20"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-[13px] text-foreground truncate">
+                  <div className="text-[13px] text-foreground truncate" title={conv.title || '新对话'}>
                     {conv.title || '新对话'}
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
@@ -747,7 +762,7 @@ export default function ChatWidget() {
                 </div>
                 <button
                   onClick={(e) => deleteConversation(conv.id, e)}
-                  className="p-1 rounded text-muted-foreground/50 hover:text-rose-700 dark:hover:text-rose-400 transition-colors shrink-0"
+                  className="p-1 rounded text-muted-foreground hover:text-rose-700 dark:hover:text-rose-400 transition-colors shrink-0"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -781,7 +796,7 @@ export default function ChatWidget() {
             )}
             {messages.length === 0 && suggestedQuestions.length === 0 && !sending && (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[13px] gap-2">
-                <MessageCircle className="w-6 h-6 opacity-30" />
+                <Sparkles className="w-6 h-6 opacity-30" />
                 <p>输入问题开始对话</p>
               </div>
             )}

@@ -28,6 +28,9 @@ const RESPONSE = {
     member_watchlist_max: 10,
     member_alert_max: 3,
     skill_tier_overrides: {},
+    max_sessions_per_user: 2,
+    guest_strategy: { watchlist_limit: 1, get_hourly_limit: 20 },
+    tier_limits: {},
   },
   defaults: {
     trial_features: { view_opportunities: '机会', view_l2: 'L2资金', view_dark: '暗盘资金' },
@@ -35,6 +38,9 @@ const RESPONSE = {
     member_watchlist_max: 10,
     member_alert_max: 3,
     skill_tier_overrides: {},
+    max_sessions_per_user: 2,
+    guest_strategy: { watchlist_limit: 1, get_hourly_limit: 20 },
+    tier_limits: {},
   },
   catalog: {
     features: [
@@ -48,6 +54,11 @@ const RESPONSE = {
       { name: 'get_stock_quote', builtin_tier: 'free' as const, effective_tier: 'free' as const, overridden: false },
       { name: 'get_auction_data', builtin_tier: 'pro' as const, effective_tier: 'pro' as const, overridden: false },
       { name: 'get_decision_pioneer', builtin_tier: 'pro' as const, effective_tier: 'pro' as const, overridden: false },
+    ],
+    tiers: [
+      { tier: 'free' as const, daily_limit: 100, burst_limit: 30, refill_per_min: 15 },
+      { tier: 'trial' as const, daily_limit: 500, burst_limit: 50, refill_per_min: 20 },
+      { tier: 'pro' as const, daily_limit: 5000, burst_limit: 100, refill_per_min: 60 },
     ],
   },
   cache_ttl_seconds: 30,
@@ -107,6 +118,29 @@ describe('免费档面板', () => {
     fireEvent.click(screen.getByText('保存'))
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(2))
     expect(updateMock.mock.calls[1][0].skill_tier_overrides).toEqual({})
+  })
+
+  it('平台限额(B3): 改设备数/游客限流/档位日限 → patch 带三组', async () => {
+    render(<FreeTierSection />)
+
+    const sessions = (await screen.findByLabelText('同时在线设备数')) as HTMLInputElement
+    expect(sessions.value).toBe('2') // 未配置 → 后端默认值
+    fireEvent.change(sessions, { target: { value: '5' } })
+
+    fireEvent.change(screen.getByLabelText('游客自选上限'), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText('游客每小时请求'), { target: { value: '40' } })
+
+    // 档位日限: 留空 = 不覆盖; 填了才写进 tier_limits
+    const freeDaily = screen.getByLabelText('free-daily_limit') as HTMLInputElement
+    expect(freeDaily.value).toBe('')
+    fireEvent.change(freeDaily, { target: { value: '300' } })
+
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1))
+    const patch = updateMock.mock.calls[0][0]
+    expect(patch.max_sessions_per_user).toBe(5)
+    expect(patch.guest_strategy).toEqual({ watchlist_limit: 2, get_hourly_limit: 40 })
+    expect(patch.tier_limits).toEqual({ free: { daily_limit: 300 } })
   })
 
   it('非 owner(403) → 整块不渲染', async () => {

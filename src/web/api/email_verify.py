@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # 验证码配置
 CODE_TTL_SECONDS = 300  # 5 分钟
 SEND_COOLDOWN_SECONDS = 60  # 每邮箱每分钟 1 次
-PURPOSES = ("register", "login")
+PURPOSES = ("register", "login", "reset")  # 2026-10-23: reset = 忘记密码
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
@@ -227,7 +227,7 @@ async def send_code(data: SendCodeRequest, request: Request):
         raise HTTPException(400, "邮箱格式不正确")
     purpose = (data.purpose or "").strip().lower()
     if purpose not in PURPOSES:
-        raise HTTPException(400, "purpose 必须是 register 或 login")
+        raise HTTPException(400, "purpose 必须是 register / login / reset")
 
     locked_msg = check_send_cooldown(email, purpose)
     if locked_msg:
@@ -272,13 +272,17 @@ async def login_by_email(
         raise HTTPException(403, "账号已禁用")
 
     ip = request.client.host if request.client else "unknown"
-    token, expires_at = create_token(user)
+    tok = create_token(user)
+    token, expires_at = tok
 
-    # 设备限制: 与密码登录口径一致
+    # 设备限制: 与密码登录口径一致(session_id = JWT jti, 2026-10-23 修复)
     try:
         from src.core.permissions import record_session
 
-        record_session(db, user, session_id=token[:32], expires_at=expires_at)
+        record_session(
+            db, user, session_id=tok.jti, expires_at=expires_at,
+            ip=ip, user_agent=request.headers.get("user-agent", ""),
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("[email_verify] record_session 失败(不阻断登录): %s", e)
 
@@ -312,4 +316,85 @@ async def login_by_email(
         "expires_at": expires_at.isoformat(),
         "user": user_to_dict(user),
         "api_key_prefix": api_key_prefix,
+    }
+
+
+# ── 忘记密码(2026-10-23) ──────────────────────────────────────────────
+# 复用 register/login 的验证码通道(purpose="reset"), 不新增短信/邮件实现。
+# 安全约束: 不返回 token(不自动登录) —— 重置后必须用新密码重新登录,
+# 同时 token_version += 1 使所有已签发 JWT 立即失效(与改密口径一致)。
+
+
+class ResetPasswordByEmailRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
+
+PASSWORD_MIN_LEN = 8
+PASSWORD_MAX_LEN = 128  # 上限防超长输入拖慢 scrypt
+
+
+@router.post("/reset-password-by-email")
+async def reset_password_by_email(
+    data: ResetPasswordByEmailRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """邮箱验证码重置密码。成功不自动登录, 旧会话全部失效。"""
+    from src.web.api.auth import get_user_by_email, hash_password
+
+    email = _normalize_email(data.email)
+    if not EMAIL_RE.fullmatch(email):
+        raise HTTPException(400, "邮箱格式不正确")
+
+    code = (data.code or "").strip()
+    if not code:
+        raise HTTPException(400, "请输入验证码")
+
+    new_password = data.new_password or ""
+    if len(new_password) < PASSWORD_MIN_LEN:
+        raise HTTPException(400, f"新密码至少 {PASSWORD_MIN_LEN} 位")
+    if len(new_password) > PASSWORD_MAX_LEN:
+        raise HTTPException(400, f"新密码不能超过 {PASSWORD_MAX_LEN} 位")
+
+    # 先校验验证码(消费一次性码), 再判断账号 —— 避免未持码的探测者枚举邮箱。
+    if not verify_code(email, "reset", code):
+        raise HTTPException(400, "验证码错误或已过期")
+
+    user = get_user_by_email(db, email)
+    if not user:
+        raise HTTPException(404, "该邮箱未注册")
+    if not user.is_active:
+        raise HTTPException(403, "账号已禁用")
+
+    user.password_hash = hash_password(new_password)
+    user.token_version = (user.token_version or 0) + 1
+    # 会话行同步清理: token_version 已能让旧 JWT 失效, 这里删行是为了
+    # 「在线设备」列表立刻干净, 不给用户看到已失效的僵尸设备。
+    try:
+        from src.core.permissions import mark_session_revoked
+        from src.db.models import UserSession
+
+        for row in db.query(UserSession).filter(UserSession.user_id == user.id).all():
+            mark_session_revoked(db, row.session_id, row.expires_at)
+            db.delete(row)
+    except Exception as e:  # noqa: BLE001 - 清理失败不阻断重置
+        logger.warning("[email_verify] 重置密码后清理会话失败(不阻断): %s", e)
+
+    db.commit()
+
+    ip = request.client.host if request.client else ""
+    try:
+        from src.web.api.audit import log_audit
+
+        log_audit(db, user, "reset_password_by_email", detail="邮箱验证码重置密码", ip=ip)
+    except Exception:  # noqa: BLE001 - 审计失败不阻断
+        pass
+
+    return {
+        "success": True,
+        "message": "密码已重置, 请用新密码登录",
+        # 显式声明: 不签发 token, 前端必须切回密码登录
+        "auto_login": False,
     }

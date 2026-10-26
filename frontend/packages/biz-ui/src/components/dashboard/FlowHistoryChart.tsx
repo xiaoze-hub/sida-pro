@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import echarts from '@panwatch/biz-ui/lib/echarts-core'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
 import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
@@ -32,29 +33,29 @@ export default function FlowHistoryChart() {
   const [rows, setRows] = useState<FlowSnapshot[] | null>(null)
   const [note, setNote] = useState('')
 
+  const aliveRef = useRef(true)
   useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const res = await fetchAPI<FlowResp>(
-          '/market-data/market-capital-flow/history?hours=4',
-        )
-        if (!alive) return
-        setRows(Array.isArray(res?.items) ? res.items : [])
-        setNote(res?.note || '')
-      } catch {
-        if (!alive) return
-        setRows((prev) => prev ?? [])
-        setNote('读取失败')
-      }
-    }
-    void load()
-    const timer = window.setInterval(() => void load(), 30000)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(timer)
+      aliveRef.current = false
     }
   }, [])
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchAPI<FlowResp>(
+        '/market-data/market-capital-flow/history?hours=4',
+      )
+      if (!aliveRef.current) return
+      setRows(Array.isArray(res?.items) ? res.items : [])
+      setNote(res?.note || '')
+    } catch {
+      if (!aliveRef.current) return
+      setRows((prev) => prev ?? [])
+      setNote('读取失败')
+    }
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(load, 30000)
 
   useEffect(() => {
     const chart = chartRef.current

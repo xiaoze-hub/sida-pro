@@ -175,9 +175,11 @@ def api_dde(symbol: str, user=Depends(get_current_user)) -> dict:
 
     2026-08-20 修复: thsdk 1.7.18 没有 `dde()` 方法(`'THS' object has no attribute 'dde'`),
     改调 `get_main_flow_official(symbol)`,内部走 `get_dde_flow()` (官方 DDE API),
-    返回 主力净流入(万元)/主力净量(占比)/总金额(万元) + 8 档明细。
+    返回 主力净流入(万元)/主力净量/总金额(万元) + 8 档明细。
 
-    注意:thsdk DDE 仅支持最近交易日(不是当日实时,游客账户可用)。
+    注意:`main_net_vol` = 同花顺 DDE「主力净量」原始值,**非百分比/非占比**(精确量纲未在
+    冻结口径矩阵登记)。旧字段名 `main_net_ratio` 作为兼容别名保留(同值, 已弃用)。
+    thsdk DDE 仅支持最近交易日(不是当日实时,游客账户可用)。
     """
     try:
         result = _dde_cached(
@@ -204,7 +206,8 @@ def api_dde(symbol: str, user=Depends(get_current_user)) -> dict:
         "ths_code": result.get("ths_code"),
         "price": result.get("price"),
         "main_net_amount_wan": result.get("main_net_amount_wan"),  # 主力净流入(万元) - 同花顺官方口径
-        "main_net_ratio": result.get("main_net_ratio"),          # 主力净量占比
+        "main_net_vol": result.get("main_net_vol"),              # 同花顺 DDE「主力净量」原始值(非百分比/非占比)
+        "main_net_ratio": result.get("main_net_vol"),            # deprecated 兼容别名(同值, 已弃用)
         "total_amount_wan": result.get("total_amount_wan"),
         "rows": rows,
         "count": 1 if rows else 0,

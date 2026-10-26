@@ -372,10 +372,10 @@ export function AiDialogs() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     {m.is_default && <Star className="w-3 h-3 text-amber-700 dark:text-amber-500 flex-shrink-0" />}
-                    <span className="text-[12px] font-medium text-foreground truncate">{m.name}</span>
+                    <span className="text-[12px] font-medium text-foreground truncate" title={m.name}>{m.name}</span>
                     <CapBadges caps={m.capabilities} />
                   </div>
-                  <p className="text-[10px] text-muted-foreground font-mono truncate">{m.model}</p>
+                  <p className="text-[10px] text-muted-foreground font-mono truncate" title={m.model}>{m.model}</p>
                 </div>
                 <div className="flex items-center gap-0.5 flex-shrink-0">
                   <Button
@@ -453,7 +453,7 @@ export function AiDialogs() {
               }`}>
                 {checked && <Check className="h-3 w-3" strokeWidth={3} />}
               </span>
-              <span className="truncate font-mono text-[13px]">{id}</span>
+              <span className="truncate font-mono text-[13px]" title={id}>{id}</span>
             </div>
             <button
               type="button"

@@ -245,7 +245,7 @@ function HoldingsCard({ symbol }: { symbol: string; market: string }) {
             )}
             {msg && <span className="text-[11px] text-muted-foreground">{msg}</span>}
           </div>
-          <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+          <p className="mt-1.5 text-[10px] text-muted-foreground">
             加/减仓调 PUT /positions/{pos.id}(现有接口); 持仓天数接口未返回建仓时间, 如实显示 --
           </p>
         </>
@@ -364,7 +364,7 @@ function WatchlistCard({ symbol, market }: { symbol: string; market: string }) {
       </div>
 
       {/* ⚠️ 设计稿要求"加入自选时间/分组标签", 但接口不返回 created_at 且无分组字段 → 如实不渲染 */}
-      <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+      <p className="mt-1.5 text-[10px] text-muted-foreground">
         加入时间与分组标签接口未提供, 不显示(不编造)
       </p>
     </CardShell>
@@ -441,7 +441,7 @@ function OpportunitiesCard({ symbol, market }: { symbol: string; market: string 
             {msg && <span className="text-[11px] text-muted-foreground">{msg}</span>}
           </div>
           {/* ⚠️ 设计稿要求"历史命中率", 接口无单股粒度命中率字段 → 用 score/confidence 呈现, 不冒充 */}
-          <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+          <p className="mt-1.5 text-[10px] text-muted-foreground">
             历史命中率接口无单股字段, 以评分/置信度呈现(不冒充命中率)
           </p>
         </>
@@ -463,7 +463,7 @@ function Field({ label, value, tone, hint }: {
   return (
     <div className="min-w-0" title={hint}>
       <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className={`truncate font-mono ${
+      <div title={value} className={`truncate font-mono ${
         tone === 'up' ? 'text-stock-up' : tone === 'down' ? 'text-stock-down' : 'text-foreground'
       }`}>{value}</div>
     </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Users, Plus, Trash2, KeyRound, Ban, CheckCircle2, UserCog, Boxes, ShieldCheck, Loader2 } from 'lucide-react'
 import { authApi, fetchAPI, UserInfo } from '@panwatch/api'
+import { formatDateTime } from '@/lib/utils'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import {
@@ -16,6 +17,22 @@ interface Props {
 }
 
 type ModelAccessMode = 'inherit' | 'granted' | 'deny_all'
+
+/**
+ * 用户行(2026-10-23): 走 /users/admin/list, 与 /admin 后台共用同一份数据 ——
+ * 补邮箱/注册时间/最后登录, 消除「设置页看不到这些、后台又建不了号」的脑裂。
+ */
+interface AdminUserRow {
+  id: string
+  username: string
+  email: string | null
+  role: string
+  is_active: boolean
+  is_deleted?: boolean
+  deleted_at?: string | null
+  created_at: string | null
+  last_login: string | null
+}
 
 interface PermissionItem {
   key: string
@@ -46,24 +63,24 @@ const MODE_OPTIONS: { value: ModelAccessMode; label: string; hint: string }[] = 
 
 export default function UserManagement({ currentUser }: Props) {
   const { toast } = useToast()
-  const [users, setUsers] = useState<UserInfo[]>([])
+  const [users, setUsers] = useState<AdminUserRow[]>([])
   const [loading, setLoading] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
   const [newPass, setNewPass] = useState('')
-  const [newRole, setNewRole] = useState<'owner' | 'member' | 'guest'>('member')
+  const [newRole, setNewRole] = useState<'owner' | 'member' | 'pro' | 'guest'>('member')
   // 改密对话框
-  const [resetTarget, setResetTarget] = useState<UserInfo | null>(null)
+  const [resetTarget, setResetTarget] = useState<AdminUserRow | null>(null)
   const [resetPass, setResetPass] = useState('')
   // 模型授权对话框
-  const [accessTarget, setAccessTarget] = useState<UserInfo | null>(null)
+  const [accessTarget, setAccessTarget] = useState<AdminUserRow | null>(null)
   const [accessLoading, setAccessLoading] = useState(false)
   const [accessSaving, setAccessSaving] = useState(false)
   const [accessMode, setAccessMode] = useState<ModelAccessMode>('inherit')
   const [accessModels, setAccessModels] = useState<ModelInfo[]>([])
   const [checkedIds, setCheckedIds] = useState<number[]>([])
   // 模块权限对话框
-  const [permTarget, setPermTarget] = useState<UserInfo | null>(null)
+  const [permTarget, setPermTarget] = useState<AdminUserRow | null>(null)
   const [permLoading, setPermLoading] = useState(false)
   const [permSaving, setPermSaving] = useState(false)
   const [permAll, setPermAll] = useState<PermissionItem[]>([])
@@ -75,7 +92,7 @@ export default function UserManagement({ currentUser }: Props) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await authApi.listUsers()
+      const data = await fetchAPI<{ users: AdminUserRow[] }>('/users/admin/list', { cacheMode: 'reload' })
       setUsers(data.users || [])
     } catch {
       /* 非 owner 无权限, 静默 */
@@ -92,7 +109,11 @@ export default function UserManagement({ currentUser }: Props) {
     if (newName.trim().length < 2) return toast('用户名至少 2 位', 'error')
     if (newPass.length < 8) return toast('密码至少 8 位', 'error')
     try {
-      await authApi.createUser({ username: newName.trim(), password: newPass, role: newRole })
+      // 走 admin 端点: 支持 pro 角色 + 写审计(旧 /api/auth/users 只认 owner/member/guest)
+      await fetchAPI('/users/admin/create', {
+        method: 'POST',
+        body: JSON.stringify({ username: newName.trim(), password: newPass, role: newRole }),
+      })
       toast('子账号创建成功', 'success')
       setShowCreate(false)
       setNewName('')
@@ -103,7 +124,7 @@ export default function UserManagement({ currentUser }: Props) {
     }
   }
 
-  const handleToggleActive = async (u: UserInfo) => {
+  const handleToggleActive = async (u: AdminUserRow) => {
     try {
       await authApi.updateUser(u.id, { is_active: !u.is_active })
       toast(u.is_active ? `已禁用 ${u.username}` : `已启用 ${u.username}`, 'success')
@@ -117,7 +138,10 @@ export default function UserManagement({ currentUser }: Props) {
     if (!resetTarget) return
     if (resetPass.length < 8) return toast('密码至少 8 位', 'error')
     try {
-      await authApi.updateUser(resetTarget.id, { password: resetPass })
+      await fetchAPI(`/users/admin/${resetTarget.id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ new_password: resetPass }),
+      })
       toast(`${resetTarget.username} 密码已重置`, 'success')
       setResetTarget(null)
       setResetPass('')
@@ -126,7 +150,7 @@ export default function UserManagement({ currentUser }: Props) {
     }
   }
 
-  const handleDelete = async (u: UserInfo) => {
+  const handleDelete = async (u: AdminUserRow) => {
     if (!window.confirm(`确定删除用户 ${u.username}?其持仓/自选/渠道将一并删除`)) return
     try {
       await authApi.deleteUser(u.id)
@@ -138,7 +162,7 @@ export default function UserManagement({ currentUser }: Props) {
   }
 
   // ── 模块权限 ────────────────────────────────────────────────────────
-  const openPermissionAccess = async (u: UserInfo) => {
+  const openPermissionAccess = async (u: AdminUserRow) => {
     setPermTarget(u)
     setPermLoading(true)
     setPermSaving(false)
@@ -177,7 +201,7 @@ export default function UserManagement({ currentUser }: Props) {
   }
 
   // ── 模型授权 ────────────────────────────────────────────────────────
-  const openModelAccess = async (u: UserInfo) => {
+  const openModelAccess = async (u: AdminUserRow) => {
     setAccessTarget(u)
     setAccessLoading(true)
     setAccessSaving(false)
@@ -258,6 +282,9 @@ export default function UserManagement({ currentUser }: Props) {
               <input type="radio" checked={newRole === 'member'} onChange={() => setNewRole('member')} /> 普通成员
             </label>
             <label className="flex items-center gap-1">
+              <input type="radio" checked={newRole === 'pro'} onChange={() => setNewRole('pro')} /> Pro
+            </label>
+            <label className="flex items-center gap-1">
               <input type="radio" checked={newRole === 'guest'} onChange={() => setNewRole('guest')} /> 访客(只读)
             </label>
             <label className="flex items-center gap-1">
@@ -272,13 +299,33 @@ export default function UserManagement({ currentUser }: Props) {
 
       <div className="divide-y divide-border/40">
         {users.map(u => (
-          <div key={u.id} className="flex items-center justify-between py-2 text-[12px]">
-            <div className="flex items-center gap-2">
-              <span className={`inline-block h-2 w-2 rounded-full ${u.is_active ? 'bg-emerald-500' : 'bg-muted'}`} />
-              <span className="font-medium">{u.username}</span>
-              <span className={`rounded px-1.5 py-0.5 text-[10px] ${u.role === 'owner' ? 'bg-amber-500/15 text-amber-600' : u.role === 'guest' ? 'bg-violet-500/15 text-violet-600' : 'bg-sky-500/15 text-sky-600'}`}>
-                {u.role === 'owner' ? '管理员' : u.role === 'guest' ? '访客' : '成员'}
-              </span>
+          <div key={u.id} className="flex items-center justify-between gap-3 py-2 text-[12px]">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${u.is_deleted ? 'bg-rose-500/60' : u.is_active ? 'bg-emerald-500' : 'bg-muted'}`} />
+                <span className="font-medium">{u.username}</span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                    u.role === 'owner'
+                      ? 'bg-amber-500/15 text-amber-600'
+                      : u.role === 'pro'
+                        ? 'bg-cyan-500/15 text-cyan-600'
+                        : u.role === 'guest'
+                          ? 'bg-violet-500/15 text-violet-600'
+                          : 'bg-sky-500/15 text-sky-600'
+                  }`}
+                >
+                  {u.role === 'owner' ? '管理员' : u.role === 'pro' ? 'Pro' : u.role === 'guest' ? '访客' : '成员'}
+                </span>
+                {u.is_deleted && (
+                  <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-500">已注销（宽限期）</span>
+                )}
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-4 text-[10px] text-muted-foreground">
+                <span className="truncate" title={u.email || ''}>{u.email || '无邮箱'}</span>
+                <span>注册 {formatDateTime(u.created_at) || '—'}</span>
+                <span>最后登录 {formatDateTime(u.last_login) || '从未'}</span>
+              </div>
             </div>
             <div className="flex items-center gap-1.5">
               {u.id !== currentUser?.id && (
@@ -419,8 +466,8 @@ export default function UserManagement({ currentUser }: Props) {
                           onChange={() => toggleModel(m.id)}
                         />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[12px] font-medium text-foreground">{m.name}</span>
-                          <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                          <span className="block truncate text-[12px] font-medium text-foreground" title={m.name}>{m.name}</span>
+                          <span className="block truncate font-mono text-[10px] text-muted-foreground" title={`${m.model}${m.service_name ? ` · ${m.service_name}` : ''}`}>
                             {m.model}{m.service_name ? ` · ${m.service_name}` : ''}
                           </span>
                         </span>
@@ -484,7 +531,7 @@ export default function UserManagement({ currentUser }: Props) {
                             disabled={isDefault}
                             onChange={() => togglePerm(p.key)}
                           />
-                          <span className="flex-1 min-w-0 truncate">{p.label}</span>
+                          <span className="flex-1 min-w-0 truncate" title={p.label}>{p.label}</span>
                           {isDefault && (
                             <span className="flex-shrink-0 rounded-full border border-border/50 px-1.5 py-px text-[10px] text-muted-foreground">
                               角色默认

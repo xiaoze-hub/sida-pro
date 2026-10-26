@@ -187,6 +187,27 @@ export function readGsColors(): GsColors {
   }
 }
 
+/**
+ * 情景关键位语义色(2026-10-22): 阻力/走强目标 = **rose**(涨红),
+ * 支撑/走弱目标 = **emerald**(跌绿) —— 中国习惯买红卖绿。
+ *
+ * 与 `--stock-up/down` 分开: 涨跌色表达**价格方向**, 情景关键位色表达**位性质**
+ * (阻力位/目标位), 两者语义不同, 各自可演进(不共用一个变量, 免得改涨跌色连带改关键位色)。
+ */
+export interface ScenarioColors {
+  /** 阻力 / 走强目标(涨, rose) */
+  up: string
+  /** 支撑 / 走弱目标(跌, emerald) */
+  down: string
+}
+
+export function readScenarioColors(): ScenarioColors {
+  return {
+    up: cssVar('--scenario-up', '#e11d48'),
+    down: cssVar('--scenario-down', '#059669'),
+  }
+}
+
 /** 活跃度档位 → 三色 (研究报告 §4.3): 大牛紫 / 强势红 / 生命绿 / 弱·未知灰(flat, 不编造)。 */
 export function activityLevelColor(level: string | null | undefined): string {
   if (level === '大牛') return cssVar('--activity-bull', '#8B5CF6')

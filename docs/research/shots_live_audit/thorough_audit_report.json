@@ -1,0 +1,11 @@
+[
+  {
+    "id": "ai_copilot_p0p1",
+    "name": "数智参谋P0P1走查",
+    "url": "https://SIDA.hengsheng-elec.com/ai-copilot?symbol=600111",
+    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/ai_copilot_p0p1.png",
+    "alerts": [],
+    "net_errs": [],
+    "console_errs": []
+  }
+]

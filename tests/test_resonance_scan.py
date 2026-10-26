@@ -72,11 +72,11 @@ def test_scan_upserts_and_is_idempotent(monkeypatch):
     monkeypatch.setattr(
         rs,
         "_fetch_daily",
-        lambda codes: {
+        lambda codes, stats=None: {
             c: [{"date": "20260911", "open": 1.0, "close": 2.0, "high": 2.0, "low": 1.0, "volume": 1.0}] for c in codes
         },
     )
-    monkeypatch.setattr(rs, "_fetch_funds", lambda codes: {c: 2e8 for c in codes})
+    monkeypatch.setattr(rs, "_fetch_funds", lambda codes, stats=None: {c: 2e8 for c in codes})
     acts = {"600519.SH": 4.5, "000001.SZ": 1.0}
     import src.core.ai_activity as ai
     import src.core.gs_strategy as gs
@@ -87,7 +87,7 @@ def test_scan_upserts_and_is_idempotent(monkeypatch):
     monkeypatch.setattr(
         rs,
         "_fetch_daily",
-        lambda codes: {
+        lambda codes, stats=None: {
             c: [{"date": "20260911", "__act": acts[c], "open": 1.0, "close": 2.0, "high": 2.0, "low": 1.0, "volume": 1.0}]
             for c in codes
         },

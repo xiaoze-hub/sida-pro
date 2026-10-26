@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { Bell, BellRing, Loader2 } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 
 /**
  * 系统域枢纽页(设计稿 v2.0 §4.3「提醒并入通知」): 通知 + 提醒 两 Tab。
@@ -13,8 +14,8 @@ import TabbedPage, { type TabDef } from '@/components/TabbedPage'
  * /notifications?tab=alerts, 书签不失效; 移动端底栏的 /alerts 入口
  * 同样经重定向直达提醒 Tab, 交互不变。
  */
-const NotificationsPage = lazy(() => import('@/pages/Notifications'))
-const PriceAlertsPage = lazy(() => import('@/pages/PriceAlerts'))
+const NotificationsPage = lazyWithRetry(() => import('@/pages/Notifications'), 'notifications-page')
+const PriceAlertsPage = lazyWithRetry(() => import('@/pages/PriceAlerts'), 'price-alerts-page')
 
 const NOTIFICATIONS_TABS: TabDef[] = [
   {

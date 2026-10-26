@@ -145,7 +145,7 @@ export function AgentDialogs() {
                         ) : (
                           <div className="mt-1 text-[11px] text-muted-foreground">—</div>
                         )}
-                        <div className="mt-1 text-[10px] text-muted-foreground/70 font-mono">schedule: {eff}</div>
+                        <div className="mt-1 text-[10px] text-muted-foreground font-mono">schedule: {eff}</div>
                       </div>
                     )
                   })()}

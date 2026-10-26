@@ -37,16 +37,37 @@ def patch_baostock_timeout() -> None:
     if getattr(_su, "_timeout_patched", False):
         return
 
-    def _connect_with_timeout(self):
+    # 2026-10-21 生产 502 修复: 签名必须跨 baostock 版本兼容。
+    #   0.9.30 及更早: SocketUtil.connect(self)
+    #   0.9.40+      : SocketUtil.connect(self, api_key), 由 login.loginout 传
+    #                  apiKey(VIP 以 "bs-" 开头 → 走 BAOSTOCK_VIP_SERVER_IP)
+    # 旧补丁只写 (self) → 生产 venv(0.9.40) 调用时 TypeError
+    # "takes 1 positional argument but 2 were given" → bs.login 失败 → 整条
+    # /predict 链路 502。故改 (self, api_key="") 并保留 VIP/普通服务器分流。
+    def _connect_with_timeout(self, api_key=""):
         try:
             sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
             sock.settimeout(_BAOSTOCK_TIMEOUT_SEC)
             import baostock.common.contants as _cons
-            sock.connect((_cons.BAOSTOCK_SERVER_IP, _cons.BAOSTOCK_SERVER_PORT))
+            is_vip = str(api_key or "").startswith("bs-")
+            host = (
+                getattr(_cons, "BAOSTOCK_VIP_SERVER_IP", _cons.BAOSTOCK_SERVER_IP)
+                if is_vip
+                else _cons.BAOSTOCK_SERVER_IP
+            )
+            sock.connect((host, _cons.BAOSTOCK_SERVER_PORT))
             setattr(_ctx, "default_socket", sock)
-        except Exception:
-            print("服务器连接失败，请稍后再试。")
+        except Exception as e:  # 与原版同语义: 吞异常, 后续 send_msg 判定连接失败
+            print("connect failed:", e)
+            try:
+                sock.close()  # type: ignore[possibly-undefined]
+            except Exception:
+                pass
 
+    # 用 __wrapped__ 记录原实现, 便于诊断/测试断言走的是哪条版本分支
+    _connect_with_timeout.__wrapped__ = getattr(  # type: ignore[attr-defined]
+        _su.SocketUtil.connect, "__wrapped__", _su.SocketUtil.connect
+    )
     _su.SocketUtil.connect = _connect_with_timeout
     _su._timeout_patched = True
 

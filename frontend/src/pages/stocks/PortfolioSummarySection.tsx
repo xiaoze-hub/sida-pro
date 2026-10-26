@@ -36,7 +36,7 @@ export function PortfolioSummarySection() {
 {/* Portfolio Total Summary */}
 {/* 2026-08-17: 加载失败横幅统一为 ErrorBanner(闭环修正 P0-3: 错误体系统一) */}
 <ErrorBanner
-  errors={loadError ? [{ source: t('stocks.loadError'), message: loadError, retry: () => { void load(); void loadPortfolio() } }] : []}
+  errors={loadError && !loadError.includes('429') ? [{ source: t('stocks.loadError'), message: loadError, retry: () => { void load(); void loadPortfolio() } }] : []}
   onDismiss={() => setLoadError && setLoadError(null)}
 />
 {portfolioLoading && !portfolio ? (
@@ -86,7 +86,8 @@ export function PortfolioSummarySection() {
       return (
         <Card variant="plain" className="border-l border-l-border/40 p-3">
           <Stat
-            label={dailyPnlDisplayLabel(portfolio.total)}
+            // 6 栏网格里全称会换行/截断成 3 行；紧凑档「上日 10-23」单行可读，全称仍在 hover 语义里
+            label={dailyPnlDisplayLabel(portfolio.total, true)}
             value={
               <>
                 {formatMoney(dayPnl)}

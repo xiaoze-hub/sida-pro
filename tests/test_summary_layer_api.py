@@ -13,6 +13,24 @@ from src.web.api import klines as kapi  # noqa: E402
 from src.core import decision_pioneer as dp  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_layer_precompute():
+    """跨用例隔离(2026-10-14): `_build_layer_data` 会把「定型日」结果落
+    `workbench_layer_daily`(见 src/core/layer_precompute.py), 同会话里**同一 symbol**
+    的后续用例会命中上一条预落库 → 拿到别的用例的 events(本文件内即可复现:
+    `test_build_layer_data_full` 落库后, `test_build_layer_data_events_limit_down`
+    读到的是它的 limit_up, 与用例自身的 bars 无关)。每个用例前清空该表,
+    保证读的是**用例自己的 bars**, 不依赖执行顺序。
+    """
+    try:
+        from src.core import layer_precompute as lp
+
+        lp.clear_layer_daily()
+    except Exception:  # noqa: BLE001 建表前/无库时清不动: 不影响用例自身断言
+        pass
+    yield
+
+
 def _mk_bars(n=40, trend=0.1, final_surge=False):
     bars = []
     price = 20.0
@@ -74,7 +92,7 @@ def _patch_bars(monkeypatch, bars):
 
 _ALL_NONE = {"gs_signals": None, "fund_flow": None, "events": None,
              "orderbook": None, "unlock_levels": None, "chips": None,
-             "activity_series": None,
+             "activity_series": None, "main_accumulation_chips": None,
              # resonance(2026-09-02): 非 A 股 → 安全默认(available=False, 不编造)
              "resonance": {"available": False, "row": 0, "phase": "无",
                             "action_label": "观望", "action_text": "趋势不明, 建议观望",
@@ -96,6 +114,8 @@ def test_build_layer_data_no_bars_only_bars_dependent_none(monkeypatch):
     数据一起拖成 None, 前端出现"整页无数据"(2026-09-02 实测)。
     """
     from src.models.market import MarketCode
+    from src.core import l4_events as l4e
+    monkeypatch.setattr(l4e, "chip_levels", lambda tc: {"peak_price": 10.0, "source": "mock"})
     _patch_bars(monkeypatch, [])
     out = kapi._build_layer_data("000977", MarketCode.CN)
     assert out["gs_signals"] is None

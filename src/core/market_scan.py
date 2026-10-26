@@ -9,7 +9,8 @@
 
 ## 数据链路(全部复用既有模块, 不新造轮子)
   K 线:        `decision_pioneer.fetch_bars`(marketdata Engine, TQ 优先, 含当日)
-  GS:          `decision_pioneer.compute_gs_signal`(BB0/A0 交叉, 与前端 InteractiveKline 已等价验证)
+  GS:          `gs_state.resolve_gs_state`(单一事实源: 只消费 `gs_strategy.compute_gs_signals`
+               的**已确认**信号; 与前端 K 线图层的标记/区间色带同源)
   活跃度:      `decision_pioneer.compute_institution_activity`(7 因子 MAX × 1.2)
   暗盘(对照):  `ohlc_dark.ohlc_dark_net`(APZJ 对照项, 已知大阳线日失真, 仅排序参考)
   ZLJC:        `marketdata_client.md_main_flow_zljc`(formula_process_mul_zb 批量)
@@ -38,11 +39,77 @@ DEFAULT_BARS_DAYS = 60
 def _valid_symbols(raw: Sequence[str]) -> list[str]:
     """6 位数字 A 股代码, 去重保序。"""
     out: list[str] = []
-    for s in raw:
-        code = (s or "").strip()
-        if code.isdigit() and len(code) == 6 and code not in out:
+    seen: set[str] = set()
+    for s in raw or []:
+        code = str(s or "").strip()
+        if "." in code:
+            code = code.split(".")[0]
+        if code.isdigit() and len(code) == 6 and code not in seen:
+            seen.add(code)
             out.append(code)
     return out
+
+
+def _default_cn_universe() -> list[str]:
+    """全市场 CN 股票池（修复 2026-10-23 `universe=0` 事故）。
+
+    根因：`get_stock_list()` 返回的字典键是 `"symbol"`（`{"symbol": "000001", "market": "CN"}`），
+    旧实现写的是 `s.get("code")` → 全员 None → `universe=0`，导致盘后三榜扫描与
+    `decision_log(signal_kind=gs_cross)` 从上线起一直 0 条。
+    此处兼容 `symbol` / `code` / `Code` 三种键名，且只取 CN 市场；若 `get_stock_list()`
+    仍为空，依次回退 TQ `get_stock_list("5",1)` 与 PG `klines` 活跃标的池。
+    """
+    raw: list[str] = []
+    try:
+        from src.collectors.stock_list import get_stock_list
+
+        for s in get_stock_list() or []:
+            if isinstance(s, dict):
+                mkt = str(s.get("market") or "CN").upper()
+                if mkt != "CN":
+                    continue
+                val = s.get("symbol") or s.get("code") or s.get("Code")
+                if val:
+                    raw.append(str(val))
+            elif isinstance(s, str):
+                raw.append(s)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("market_scan get_stock_list 失败: %s", e)
+
+    syms = _valid_symbols(raw)
+    if syms:
+        return syms
+
+    try:
+        from marketdata.vendors.tq import tq_rpc
+
+        rows = tq_rpc("get_stock_list", {"market": "5", "list_type": 1}, timeout=15.0) or []
+        raw_tq = [
+            (r.get("Code") or r.get("code") or r.get("symbol") if isinstance(r, dict) else str(r))
+            for r in rows
+        ]
+        syms = _valid_symbols([str(x) for x in raw_tq if x])
+        if syms:
+            return syms
+    except Exception as e:  # noqa: BLE001
+        logger.debug("market_scan TQ 码表兜底未命中: %s", e)
+
+    try:
+        from sqlalchemy import text
+        from src.db.session import engine
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT DISTINCT symbol FROM klines "
+                    "WHERE period='1d' AND market='CN' AND ts >= now() - interval '120 days' "
+                    "ORDER BY symbol"
+                )
+            ).fetchall()
+        return _valid_symbols([str(r[0]) for r in rows if r and r[0]])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("market_scan PG 码表兜底失败: %s", e)
+        return []
 
 
 def _per_stock_metrics(symbol: str, bars_days: int, dark_days: int = 1) -> Optional[dict]:
@@ -55,42 +122,119 @@ def _per_stock_metrics(symbol: str, bars_days: int, dark_days: int = 1) -> Optio
                    ⚠️ 不要用全部 bars 累计——60 日 OHLC 分摊会把净额放大到失真量级。
 
     返回:
-        gs_signal / gs_state / new_g(bool) / activity / activity_level /
-        dark_net(元, 对照) / close
+        gs_signal / gs_state / gs_signal_date / gs_signal_confirmed /
+        gs_cross_side + gs_cross_status + gs_cross_date + gs_cross_price(账本留痕,
+        已确认为先, 无已确认时取末根**疑似**并标「待确认」) / new_g(末根疑似 G) /
+        activity / activity_level / dark_net(元, 对照) / close
     """
     from src.core.decision_pioneer import (
-        compute_gs_signal,
         compute_institution_activity,
         fetch_bars,
     )
+    from src.core.gs_state import resolve_gs_state
     from src.core.ohlc_dark import ohlc_dark_net
 
     bars = fetch_bars(symbol, "CN", days=bars_days)
     if not bars:
         return None
 
-    gs = compute_gs_signal(bars)
+    # GS: **单一事实源**(只消费 gs_strategy 输出) —— 与 K 线图层标记/区间同源。
+    # 此前用 compute_gs_signal.state / last_cross_idx(自带 a0/bb0 比较, 吃末根盘中价)。
+    gs2 = resolve_gs_state(bars)
     act = compute_institution_activity(bars)
     dark = ohlc_dark_net(bars, days=dark_days)
 
-    n = len(bars)
-    new_g = bool(
-        gs
-        and gs.get("signal") == "G"
-        and gs.get("last_cross_idx") == n - 1   # 交叉就发生在最后一根(今日)
-    )
+    # 「今日新出 G 点」榜: 末根(今日)出现**疑似** G 交叉。官方语义下末根的交叉一律
+    # 未定型(pending) —— 榜只作候选提示, 不冒充"已确认"(见 new_g_status)。
+    new_g = bool(gs2["pending"] and gs2["pending_side"] == "G")
+
+    # 决策账本(GS 买卖点覆盖): 记最近一次交叉, 已确认为先; 无已确认时取末根疑似
+    # 并**显式标 status=待确认**(不冒充已确认)。价格/日期均取**信号当日**(非末根)。
+    cross_side = cross_status = cross_date = cross_price = None
+    if gs2["signal_confirmed"]:
+        cross_side, cross_status = gs2["signal"], "已确认"
+        cross_date, cross_price = gs2["signal_date"], gs2["signal_price"]
+    elif gs2["pending"]:
+        cross_side, cross_status = gs2["pending_side"], "待确认"
+        cross_date, cross_price = gs2["pending_date"], gs2["pending_price"]
 
     return {
         "symbol": symbol,
         "close": bars[-1].get("close"),
-        "gs_signal": gs.get("signal") if gs else None,
-        "gs_state": gs.get("state") if gs else None,
+        "close_date": _compact_date(bars[-1].get("date")),
+        "gs_signal": gs2["signal"],
+        "gs_state": gs2["zone"],
+        "gs_signal_date": gs2["signal_date"],
+        "gs_signal_confirmed": gs2["signal_confirmed"],
+        "gs_pending": gs2["pending"],
+        "gs_pending_side": gs2["pending_side"],
+        "gs_cross_side": cross_side,
+        "gs_cross_status": cross_status,
+        "gs_cross_date": cross_date,
+        "gs_cross_price": cross_price,
         "new_g": new_g,
+        "new_g_status": "待确认" if new_g else None,
         "activity": act.get("activity") if act else None,
         "activity_level": act.get("level") if act else None,
         "dark_net": dark.get("dark_net"),          # 元, 对照项
         "dark_bars_used": dark.get("bars_used"),
     }
+
+
+def _compact_date(value) -> Optional[str]:
+    """日期归一到紧凑 YYYYMMDD(决策账本口径); 无法识别原样返回(不猜)。"""
+    s = str(value or "").strip()
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s.replace("-", "")
+    return s or None
+
+
+def _log_gs_signals(metrics: Sequence[dict], trade_date: Optional[str] = None) -> int:
+    """把最近一次 GS 交叉(G 买 / S 卖)写决策账本(signal_kind=gs_cross)。
+
+    每条必须带**信号时点**收盘价(`gs_cross_price`) —— 拿不到价的**不写该条**(不硬填 0)。
+    日期/价格都取信号**当日**(不是末根 —— 交叉未必发生在末根)。
+    口径单一事实源 `gs_state`: 已确认为先; 无已确认时取末根**疑似**交叉并在
+    `context.status` 显式标「待确认」(次日转确认后按 (kind,symbol,trade_date) UPSERT 刷新)。
+    幂等由 decision_log 的 (kind, symbol, trade_date) 唯一键保证; 全程失败只 warn,
+    绝不影响扫描主链路。
+    """
+    rows: list[dict] = []
+    for m in metrics or []:
+        try:
+            side = m.get("gs_cross_side")
+            if side not in ("G", "S"):
+                continue
+            # 信号时点收盘价(不是末根收盘价 —— 交叉未必发生在末根)
+            price = m.get("gs_cross_price")
+            if not isinstance(price, (int, float)) or price <= 0:
+                continue  # 无价不写(不拿 0/之后的价冒充当时)
+            day = m.get("gs_cross_date") or trade_date
+            if not day:
+                continue
+            rows.append(
+                {
+                    "signal_kind": "gs_cross",
+                    "symbol": m.get("symbol"),
+                    "trade_date": str(day).replace("-", ""),
+                    "price": float(price),
+                    "context": {
+                        "side": side,
+                        "status": m.get("gs_cross_status") or "已确认",
+                        "gs_state": m.get("gs_state"),
+                    },
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条异常不拖垮
+            logger.warning("决策账本 GS 信号组装失败(跳过): %r", exc)
+    if not rows:
+        return 0
+    from src.core.decision_log import record_many_safe
+
+    n = record_many_safe(rows, source="market_scan_gs")
+    if n:
+        logger.info("决策账本: GS 买卖点 %s 条已留痕", n)
+    return n
 
 
 def _fund_net_of(symbol: str, bars: Sequence[dict], source: str) -> tuple[Optional[float], bool]:
@@ -171,13 +315,10 @@ def resonance_pick(
           "note": 口径说明
         }
     """
-    from src.core import ai_activity, gs_strategy, resonance
+    from src.core import ai_activity, gs_state, resonance
 
     if symbols is None:
-        from src.collectors.stock_list import get_stock_list
-
-        raw = [s.get("code") for s in get_stock_list() if isinstance(s, dict)]
-        symbols = _valid_symbols(raw)
+        symbols = _default_cn_universe()
     else:
         symbols = _valid_symbols(symbols)
 
@@ -192,8 +333,7 @@ def resonance_pick(
             if not bars:
                 return "empty", None
 
-            gs_eval = gs_strategy.eval_gs(bars)
-            trend = gs_strategy.trend_label(gs_eval)
+            trend = gs_state.trend_label(bars)
             if trend in ("无数据",):
                 return "empty", None
             if require_new_g and trend != "G信号":
@@ -305,17 +445,14 @@ def scan(
           "universe": 输入股票数,
           "computed": 成功计算数,
           "skipped": 失败/无数据数,
-          "new_g_points": [...],   # 今日新出 G 点榜(按 symbol 升序)
+          "new_g_points": [...],   # 今日新出 G 点榜(末根疑似 G, status=待确认; 按 symbol 升序)
           "dark_top": [...],       # 暗盘资金 TOP 榜(净额降序, approximation=True)
           "activity_top": [...],   # 机构活跃度 TOP 榜(活跃度降序)
           "zljc": {...} | None,    # ZLJC 主力进出(明盘参考)
         }
     """
     if symbols is None:
-        from src.collectors.stock_list import get_stock_list
-
-        raw = [s.get("code") for s in get_stock_list() if isinstance(s, dict)]
-        symbols = _valid_symbols(raw)
+        symbols = _default_cn_universe()
     else:
         symbols = _valid_symbols(symbols)
 
@@ -332,12 +469,13 @@ def scan(
             continue
         metrics.append(m)
 
-    # 榜1: 今日新出 G 点(最后一根产生 G 交叉)
+    # 榜1: 今日新出 G 点(末根产生**疑似** G 交叉 —— 官方语义下待确认, 不冒充定型)
     new_g_points = [
         {
             "symbol": m["symbol"],
             "close": m["close"],
             "gs_state": m["gs_state"],
+            "status": m.get("new_g_status") or "待确认",
         }
         for m in metrics
         if m["new_g"]
@@ -379,6 +517,10 @@ def scan(
             logger.warning("market_scan zljc failed: %s", e)
             zljc = None
 
+    # 决策账本覆盖(2026-10-10 P1-1): 把今日新出 GS 买卖点同步留痕(signal_kind=gs_cross),
+    # 使 GS 信号命中率可统计; 失败只 warn, 不影响扫描返回。
+    logged = _log_gs_signals(metrics, trade_date=datetime.now().strftime("%Y%m%d"))
+
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "universe": len(symbols),
@@ -389,4 +531,5 @@ def scan(
         "dark_top": dark_top,
         "activity_top": activity_top,
         "zljc": zljc,
+        "logged_signals": logged,
     }

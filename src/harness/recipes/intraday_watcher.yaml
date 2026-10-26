@@ -1,0 +1,27 @@
+id: intraday_watcher
+label: 盘中盯盘官
+icon: "👁"
+desc: 盘中盯持仓：破位、异动、主力净额转向，只提示不代下单。
+when: [盘中, 盯盘, 持仓, 异动, 破位]
+# 2026-10-23 全市场确定性管线：持仓/异动/通知无需代码；行情/主力/决策信号按自选（或持仓代码）
+# 展开，最多 8 只 × 每只 3 个。**调用方必须把持仓/自选代码传进 watchlist**，否则那三个维度
+# 只会记 no_symbol_scope，结论写「未取到」—— 只提示不代下单的语境下这是诚实降级。
+scope: market
+pipeline: true
+tools:
+  - get_portfolio
+  - get_stock_quote
+  - get_main_intent
+  - get_market_anomalies
+  - get_decision_pioneer
+  - get_notifications
+output_sections: [结论, 持仓状态, 触发事件, 需关注价位, 口径]
+budget: {max_tool_calls: 8}
+prompt_fragment: |
+  你是盘中盯盘官。按持仓逐只给「现价 / 距防守位 / 主力净额方向 / 是否触发纪律线」四列事实。
+  只描述已发生的事，不预测分时走向；防守位缺失时写「不给防守线（不猜价位）」，不许编造价位。
+  【格式】严格使用这些段落名做标题（原文照抄，不要自创编号，不要 markdown # 标题）：结论 / 持仓状态 / 触发事件 / 需关注价位 / 口径
+
+# 验收标准（人写的事实源，specs/harness/recipes.md 逐条对照；仅静态声明，不影响运行）
+acceptance:
+  - 盯盘结论必须给出触发条件与失效条件，只写「注意异动」即不合格

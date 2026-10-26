@@ -72,6 +72,22 @@ class _RaiseSentinel:
 _RAISE = _RaiseSentinel()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_layer_precompute():
+    """跨用例隔离(2026-10-14, 与 test_summary_layer_api 同因): `_build_layer_data` 的
+    「定型日」结果会落 `workbench_layer_daily`, 同会话里**同一 symbol** 的后续用例(含跨文件)
+    会命中上一条预落库 → 拿到别的用例的 resonance(与用例自身 bars 无关)。每个用例前清空该表,
+    保证读的是**用例自己的 bars**, 不依赖执行顺序。
+    """
+    try:
+        from src.core import layer_precompute as lp
+
+        lp.clear_layer_daily()
+    except Exception:  # noqa: BLE001 建表前/无库时清不动: 不影响用例自身断言
+        pass
+    yield
+
+
 def _assert_contract(r):
     """字段契约: 7 个键齐全, 类型/取值域正确。"""
     assert set(r.keys()) == CONTRACT_KEYS, f"契约键不符: {sorted(r.keys())}"
@@ -329,11 +345,13 @@ def test_summary_endpoint_exposes_resonance(monkeypatch):
     monkeypatch.setattr(postmarket_review, "dark_review_from_tck",
                         lambda symbol, date_=None, tck_path=None: {"available": False})
 
-    kapi._SUMMARY_CACHE.clear()
+    kapi.clear_summary_biz_cache()
+    kapi._clear_summary_caches()
     try:
         result = kapi.get_kline_summary("000977", market="CN")
     finally:
-        kapi._SUMMARY_CACHE.clear()
+        kapi.clear_summary_biz_cache()
+        kapi._clear_summary_caches()
 
     assert "resonance" in result
     _assert_contract(result["resonance"])

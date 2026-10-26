@@ -3,6 +3,15 @@ import { Lock, RefreshCw, Save, SlidersHorizontal, Loader2, CheckCircle2 } from 
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { freeTierApi, type FreeTierPatch, type FreeTierResponse } from '@panwatch/api'
 
+/** B3: 档位限额草稿(留空的子项 = 不覆盖, 用表/代码默认) */
+type TierLimitDraft = Record<string, { daily_limit?: number; burst_limit?: number; refill_per_min?: number }>
+
+const TIER_LIMIT_FIELDS = [
+  ['daily_limit', '日限'],
+  ['burst_limit', '突发'],
+  ['refill_per_min', '匀速/分'],
+] as const
+
 /**
  * 「免费档」面板(2026-09-18) —— owner 专属, 运行时调整**免费级别**。
  *
@@ -26,6 +35,11 @@ export function FreeTierSection() {
   const [watchMax, setWatchMax] = useState(10)
   const [alertMax, setAlertMax] = useState(3)
   const [skillTier, setSkillTier] = useState<Record<string, string>>({})
+  // B3: 平台限额三组(设备数 / 游客限流 / skill 档位限额)
+  const [maxSessions, setMaxSessions] = useState(2)
+  const [guestWatch, setGuestWatch] = useState(1)
+  const [guestHourly, setGuestHourly] = useState(20)
+  const [tierLimits, setTierLimits] = useState<TierLimitDraft>({})
 
   // useCallback: 下面 effect 依赖它 → 每次渲染换新引用会让 effect 反复重跑
   const apply = useCallback((d: FreeTierResponse) => {
@@ -37,6 +51,10 @@ export function FreeTierSection() {
     setWatchMax(d.config.member_watchlist_max)
     setAlertMax(d.config.member_alert_max)
     setSkillTier({ ...d.config.skill_tier_overrides })
+    setMaxSessions(d.config.max_sessions_per_user)
+    setGuestWatch(d.config.guest_strategy?.watchlist_limit ?? 1)
+    setGuestHourly(d.config.guest_strategy?.get_hourly_limit ?? 20)
+    setTierLimits({ ...(d.config.tier_limits || {}) })
   }, [])
 
   const load = async () => {
@@ -72,8 +90,11 @@ export function FreeTierSection() {
       member_watchlist_max: watchMax,
       member_alert_max: alertMax,
       skill_tier_overrides: skillTier,
+      max_sessions_per_user: maxSessions,
+      guest_strategy: { watchlist_limit: guestWatch, get_hourly_limit: guestHourly },
+      tier_limits: tierLimits,
     }
-  }, [data, trial, dailyLimit, watchMax, alertMax, skillTier])
+  }, [data, trial, dailyLimit, watchMax, alertMax, skillTier, maxSessions, guestWatch, guestHourly, tierLimits])
 
   const save = async () => {
     setSaving(true)
@@ -230,6 +251,89 @@ export function FreeTierSection() {
         <p className="text-[10px] text-muted-foreground mt-2 flex items-center gap-1">
           <Lock className="w-3 h-3" /> 与代码内置档位一致时不写覆盖（改回内置值 = 删除覆盖项）。
         </p>
+      </div>
+
+      {/* ④ 平台限额(B3, 2026-09-29): 原写死在代码/表里的三组可调项, 同一份 KV + 30s 热生效 */}
+      <div className="space-y-2">
+        <div className="text-[12px] font-medium text-foreground">平台限额</div>
+        <div className="flex flex-wrap gap-4 items-end">
+          <label className="text-[12px] text-foreground">
+            同时在线设备数
+            <input
+              type="number"
+              min={1}
+              max={100}
+              aria-label="同时在线设备数"
+              value={maxSessions}
+              onChange={(e) => setMaxSessions(Number(e.target.value))}
+              className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+            />
+            <span className="text-[10px] text-muted-foreground ml-1">默认 {d.max_sessions_per_user}</span>
+          </label>
+          <label className="text-[12px] text-foreground">
+            游客自选上限
+            <input
+              type="number"
+              min={0}
+              aria-label="游客自选上限"
+              value={guestWatch}
+              onChange={(e) => setGuestWatch(Number(e.target.value))}
+              className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+            />
+            <span className="text-[10px] text-muted-foreground ml-1">
+              默认 {d.guest_strategy.watchlist_limit}，0=不限
+            </span>
+          </label>
+          <label className="text-[12px] text-foreground">
+            游客每小时请求
+            <input
+              type="number"
+              min={1}
+              aria-label="游客每小时请求"
+              value={guestHourly}
+              onChange={(e) => setGuestHourly(Number(e.target.value))}
+              className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+            />
+            <span className="text-[10px] text-muted-foreground ml-1">默认 {d.guest_strategy.get_hourly_limit}</span>
+          </label>
+        </div>
+        <div>
+          <div className="text-[11px] text-muted-foreground mb-1">
+            skill 档位限额（留空 = 沿用 tier_configs 表 / 代码默认；当前生效值见占位）
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {data.catalog.tiers.map((t) => (
+              <div key={t.tier} className="flex items-center gap-1 text-[11px] text-foreground">
+                <span className="w-10">{t.tier}</span>
+                {TIER_LIMIT_FIELDS.map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-1">
+                    <span className="text-[10px] text-muted-foreground">{label}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      aria-label={`${t.tier}-${key}`}
+                      placeholder={t[key] == null ? '--' : String(t[key])}
+                      value={tierLimits[t.tier]?.[key] ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        setTierLimits((m) => {
+                          const next = { ...m }
+                          const cur = { ...(next[t.tier] || {}) }
+                          if (raw === '') delete cur[key]
+                          else cur[key] = Number(raw)
+                          if (Object.keys(cur).length) next[t.tier] = cur
+                          else delete next[t.tier]
+                          return next
+                        })
+                      }}
+                      className="w-16 h-6 rounded border border-border/60 bg-transparent px-1 text-[11px]"
+                    />
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )

@@ -154,7 +154,7 @@ export default function ForecastTab({ symbol, market }: { symbol: string; market
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/40 pb-2 text-[11px] text-muted-foreground">
         <span className="text-foreground">预测</span>
         <span className="text-border/60">|</span>
-        <span>四模型(预测 / 历史回测 / 预测记录 / 模型权重 / 预测报告) · 惰性加载, 进入本标签才下载并取数</span>
+        <span>四模型(预测 / 历史回测 / 预测记录 / 模型权重 / 预测报告) · 含 AI 裁判结论(verdict/理由/裁判战绩, adjust 覆盖方向显式标注) · 惰性加载, 进入本标签才下载并取数</span>
         <span className="ml-auto text-[10px]">已按工作台标的预填代码; 可在页内搜索框更换, 再点「开始预测」</span>
       </div>
 

@@ -1,0 +1,36 @@
+{===============================================================
+ SIDA-Pro 策略指标 · 通达信(TDX) 公式包
+ 公式名称: 趋势操盘线          [技术指标公式 · 主图叠加]
+ 换算来源: src/core/trend_pilot_line.py
+ 算法:    红=EMA(C,10) 黄=EMA(C,20) 绿=EMA(C,60)
+          红>=黄 = 多方带, 红<黄 = 空方带
+          买点1 = 多方带中回踩带区且收阳;  买点2 = 回踩绿线收阳;
+          卖点  = 跌势中反弹触绿线但无力突破(收<绿)。
+ 铁律:    买红(▲ COLORRED) / 卖绿(▼ COLORGREEN)。
+ 参数:    周期为 SIDA 默认值(红10/黄20/绿60); 容差 TOL=1%(trend_pilot_band_tol_pct)。
+ 语法基准: 通达信官方公式系统函数表 help.tdx.com.cn/gspt
+ 安装:    公式管理器 -> 技术指标公式 -> 新建 -> 画线方法=主图叠加 -> 粘贴 -> 测试公式
+ 用途:    客观信号标注, 不构成交易建议。
+===============================================================}
+
+{--- 三线 (EMA, 与 SIDA _ema_series 逐位一致: Y=Y'+(X-Y')*2/(N+1)) ---}
+红:EMA(C,10),COLORRED;
+黄:EMA(C,20),COLORYELLOW;
+绿:EMA(C,60),COLORGREEN;
+
+{--- 买/卖点 ---}
+TOL:=0.01;                                    {回踩容差 1%}
+BHI:=MAX(红,黄);                              {带区上沿}
+BLO:=MIN(红,黄);                              {带区下沿}
+YANG:=C>=O;                                   {收阳}
+RNG:=H>L;                                     {非一字板(排除零振幅假信号)}
+
+{买点1: 多方带 + C>绿 + 回踩带区 + 收阳}
+BUY1:=红>=黄 AND C>绿 AND RNG AND L<=BHI*(1+TOL) AND C>=BLO*(1-TOL) AND YANG;
+{买点2: C>=绿 + 回踩绿线 + 收阳}
+BUY2:=C>=绿 AND L<=绿*(1+TOL) AND YANG AND RNG;
+{卖点: C<绿 + 反弹触绿线(最高>=绿) 但收<绿}
+SELL1:=C<绿 AND RNG AND H>=绿*(1-TOL);
+
+DRAWTEXT(BUY1 OR BUY2,L*0.97,'▲'),COLORRED;   {买 红 ▲}
+DRAWTEXT(SELL1,H*1.03,'▼'),COLORGREEN;        {卖 绿 ▼}

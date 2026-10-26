@@ -27,7 +27,7 @@ export function dayKey(t: Time): number | null {
   return p.year * 10000 + p.month * 100 + p.day
 }
 
-/** 只保留时间落在首/末根 K 线之间(含)的 marker; 没有 K 线时全丢(画在空图上必崩)。 */
+/** 只保留时间落在首/末根 K 线之间(含)的 marker; 并按时间升序排(LWC 强约束: markers 必须单调递增)。 */
 export function filterMarkersInBarsRange<T extends { time: Time }>(markers: T[], barTimes: Time[]): T[] {
   if (!barTimes.length) return markers.length ? [] : []
   let lo = Infinity
@@ -39,8 +39,10 @@ export function filterMarkersInBarsRange<T extends { time: Time }>(markers: T[],
     if (k > hi) hi = k
   }
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return []
-  return markers.filter((m) => {
-    const k = dayKey(m.time)
-    return k !== null && k >= lo && k <= hi
-  })
+  return markers
+    .filter((m) => {
+      const k = dayKey(m.time)
+      return k !== null && k >= lo && k <= hi
+    })
+    .sort((a, b) => (dayKey(a.time) ?? 0) - (dayKey(b.time) ?? 0))
 }

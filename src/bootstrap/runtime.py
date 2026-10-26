@@ -25,6 +25,10 @@ from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
+from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
+from src.core.market_breadth_scheduler import MarketBreadthScheduler
+from src.core.decision_precompute import DecisionPrecomputeScheduler
+from src.core.layer_precompute import LayerPrecomputeScheduler
 from src.core.scheduler import AgentScheduler
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
@@ -55,6 +59,25 @@ kline_backfill_scheduler: KlineBackfillScheduler | None = None
 # TQ 市场级情绪日序列(2026-09-23): 每交易日收盘后拉 SCJYVALUE 序列入 PG。
 # 东财类免费源只给当日快照, 这个调度器负责把历史序列补成基线。
 tq_sentiment_scheduler: TqSentimentScheduler | None = None
+
+# TQ 条件选股信号日序列(2026-09-25): 每交易日 15:50 扫一遍 108 个条件选股公式,
+# 落"当日触发家数"。这是免费源没有的市场宽度维度(只有当日快照, 无历史 → 无基线)。
+# 15:50 而非 15:35: TQ 背后是**一个**客户端进程, 与情绪序列同点跑会把它压出假死。
+tq_formula_signal_scheduler: TqFormulaSignalScheduler | None = None
+
+# 市场广度日序列(2026-09-25): 每交易日 18:40 从 PG klines 自算每日涨跌家数与
+# 六指标(ADL/ADR/ARMS/BTI/MCL/STIX)+情绪温度。与 TQ 类调度器错开, 不抢客户端。
+market_breadth_scheduler: MarketBreadthScheduler | None = None
+
+# 决策合成预落库(2026-10-10 冗余设计): 每工作日 15:45 对全库自选∪持仓标的批算决策基底
+# 落 decision_cache, 让 /api/decision/{symbol} 盘后/次日盘前命中缓存(免重复现算)。
+decision_precompute_scheduler: DecisionPrecomputeScheduler | None = None
+
+# 工作台日级图层派生块预落库(2026-10-14 首屏 P0): 每工作日 15:40 对高频票(自选∪持仓∪
+# 最近访问)批算 gs_signals/fund_flow/activity/events/unlock/chips/resonance 落
+# workbench_layer_daily, 让 /api/klines/{symbol}/summary 的日级块在盘后/次日盘前读库
+# 零现算(此前每请求现算, 冷启动 ~26s 撞前端 20s abort)。
+layer_precompute_scheduler: LayerPrecomputeScheduler | None = None
 
 # 2026-08-17 加股 60s 快速 backfill:
 # APScheduler 跑在它自己的后台线程(没 asyncio loop),
@@ -646,6 +669,90 @@ def build_scheduler() -> AgentScheduler:
         logger.info("[mainline] 已注册主线缓存预热 job(每 3 分钟)")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"主线缓存预热 job 注册失败: {e}")
+
+    # 2026-09-27: 国内数据网关存活监控(每 15 分钟, 探**数据路径**而非 /health)。
+    # 起因: 网关 2026-09-26 整机失联且无任何监控, 直到用户发现"大盘资金流数据源调用失败"。
+    # 注意: 网关进程活着但上游被东财风控拒时 /health 仍是 200, 所以必须探取数。
+    # core 侧(src.core.cn_gateway_health)只探测, 通知在这里发 —— 分层门禁 B4.1。
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        from src.core.cn_gateway_health import GatewayWatch, probe
+
+        _gw_watch = GatewayWatch()
+
+        def _check_cn_gateway() -> None:
+            try:
+                msg = _gw_watch.observe(probe())
+                if not msg:
+                    return
+                logger.warning("[cn-gateway] %s", msg)
+                try:
+                    import asyncio
+
+                    from src.core.notifier import NotifierManager
+                    from src.web.database import SessionLocal
+                    from src.web.models import NotifyChannel
+
+                    db = SessionLocal()
+                    try:
+                        chs = (db.query(NotifyChannel)
+                               .filter(NotifyChannel.enabled == True,  # noqa: E712
+                                       NotifyChannel.is_default == True)  # noqa: E712
+                               .all())
+                    finally:
+                        db.close()
+                    n = NotifierManager()
+                    for ch in chs:
+                        n.add_channel(ch.type, ch.config or {})
+                    if chs:
+                        asyncio.run(n.notify("国内数据网关", msg))
+                except Exception as e:  # noqa: BLE001 — 推送失败不影响探测
+                    logger.warning("[cn-gateway] 告警推送失败: %s", e)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("[cn-gateway] 监控异常: %s", e)
+
+        sched.scheduler.add_job(
+            _check_cn_gateway,
+            IntervalTrigger(minutes=15),
+            id="cn_gateway_watch",
+            name="国内数据网关存活监控",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("[cn-gateway] 已注册存活监控 job(每 15 分钟)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"网关存活监控 job 注册失败: {e}")
+
+    # 2026-09-26: 题材情绪接口缓存预热(交易日 18:45, 晚于 18:40 广度同步确保数据定型)。
+    # 起因: /api/theme-mood/ladder 实测 6.5s、/board 2.4~5.8s, 每进页面都重算,
+    # 用户反馈"连板梯队要等一会才能加载出来"。收盘后预热一次写长 TTL, 用户打开即热。
+    # 注: 预热实现在 web 层, 而 core 不得反向 import web(B4.1 棘轮门禁),
+    #     故在装配层注册 —— 与 market_mainline 同款做法。
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+
+        from src.web.api.theme_mood import warm_caches as warm_theme_mood
+
+        def _warm_theme_mood() -> None:
+            try:
+                logger.info("[theme-mood] 缓存预热: %s", warm_theme_mood())
+            except Exception as e:  # noqa: BLE001 - 预热失败绝不能掀翻调度器
+                logger.warning(f"题材情绪缓存预热失败(下次再试): {e}")
+
+        sched.scheduler.add_job(
+            _warm_theme_mood,
+            CronTrigger(day_of_week="mon-fri", hour=18, minute=45),
+            id="theme_mood_warm",
+            name="题材情绪缓存预热",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("[theme-mood] 已注册缓存预热 job(交易日 18:45)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"题材情绪预热 job 注册失败: {e}")
 
     # P0(2026-09-18): JWT 密钥每 90 天自动轮换(旧密钥 grace 7 天内仍可验签)
     try:

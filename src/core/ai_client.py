@@ -47,7 +47,11 @@ class GlobalLLMCircuitBreaker:
     _instances: dict[str, "GlobalLLMCircuitBreaker"] = {}
     _instances_lock = threading.Lock()
 
-    DEFAULT_RATE = 10         # 每分钟最多 N 次
+    # 2026-10-21: 10 次/分钟对多轮 agent 太低 —— 一次深度诊断就要 6~7 轮,
+    # 两次并发立刻打满, 桶空后直接降级 → 用户看到"AI 服务暂时不可用"。
+    # 放宽到 30 并允许环境变量覆盖；真正的上游 429 由冷却窗口兜底。
+    import os as _os
+    DEFAULT_RATE = int(_os.getenv("LLM_RATE_PER_MIN", "30"))
     DEFAULT_COOLDOWN = 600    # 429 冷却秒数
 
     __slots__ = ("service", "rate", "cooldown", "_lock",
@@ -72,8 +76,17 @@ class GlobalLLMCircuitBreaker:
                 cls._instances[service] = cls(service, rate, cooldown)
             return cls._instances[service]
 
-    def acquire(self) -> bool:
-        """尝试获取一个令牌。返回 True 表示可以调用, False 表示限流/冷却中。"""
+    def acquire(self, wait_s: float = 0.0) -> bool:
+        """尝试获取一个令牌。wait_s>0 时在窗口内短暂等待（背压），而不是立刻降级。"""
+        deadline = time.time() + max(wait_s, 0.0)
+        while True:
+            if self._try_once():
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.25)
+
+    def _try_once(self) -> bool:
         now = time.time()
         with self._lock:
             if now < self._429_until:
@@ -129,6 +142,39 @@ def _is_retryable_error(e: Exception) -> bool:
     return any(x in err_name for x in ("timeout", "connection", "internalserver"))
 
 
+def _sanitize_tools(tools):
+    """把工具 schema 里所有 `description` 归一成**字符串**。
+
+    2026-10-22 线上事故：`get_stock_factors` 的 description 因为多写了一个逗号变成 tuple，
+    json 序列化后是**数组**，agnes 网关直接 500：
+        json: cannot unmarshal array into Go struct field ...description of type string
+    而且它只在**全量工具集**的兜底路径上发作（配方路径的工具子集恰好不含它），
+    表现成「问价这种最普通的问题直接报 AI 服务不可用」。多家 OpenAI 兼容网关都有这条约束，
+    所以在**发送前**统一归一，不依赖每个 schema 的作者都不手滑。
+    """
+    if not tools:
+        return tools
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if k == "description" and not isinstance(v, str):
+                    if isinstance(v, (list, tuple)):
+                        node[k] = "".join(str(x) for x in v)
+                    elif v is None:
+                        node[k] = ""
+                    else:
+                        node[k] = str(v)
+                else:
+                    _walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                _walk(v)
+
+    _walk(tools)
+    return tools
+
+
 class AIClient:
     """OpenAI 协议兼容的 AI 客户端"""
 
@@ -178,17 +224,26 @@ class AIClient:
     # fire-and-forget, 记录失败绝不阻塞主流程。
     def _log_usage(self, scene: str | None, model_name: str,
                    usage, latency_ms: int) -> None:
+        # ⚠️ 2026-10-21 线上实测: `run_in_executor` **不继承 contextvars** —— 在线程里再读
+        # `llm_context.current()` 恒为 None, 导致 llm_usage 的 user_id/run_id 永远是空
+        # (表现: 成本/配额全 0)。必须**在调用线程**先取值, 再作为参数传进去。
+        try:
+            from src.core.llm_context import current as _llm_current
+
+            ctx = _llm_current()
+        except Exception:  # noqa: BLE001
+            ctx = {}
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            self._log_usage_sync(scene, model_name, usage, latency_ms)
+            self._log_usage_sync(scene, model_name, usage, latency_ms, ctx)
             return
         loop.run_in_executor(
-            None, self._log_usage_sync, scene, model_name, usage, latency_ms,
+            None, self._log_usage_sync, scene, model_name, usage, latency_ms, ctx,
         )
 
     def _log_usage_sync(self, scene: str | None, model_name: str,
-                        usage, latency_ms: int) -> None:
+                        usage, latency_ms: int, ctx: dict | None = None) -> None:
         try:
             from src.db.models import LLMUsage
             from src.db.session import SessionLocal
@@ -196,14 +251,25 @@ class AIClient:
             completion_tokens = getattr(usage, "completion_tokens", 0) or 0
             if prompt_tokens == 0 and completion_tokens == 0:
                 return  # 无用量信息不记
+            # 2026-10-20 P3: 归因到用户与轨迹（ctx 由调用线程取出后传入，见 _log_usage 注释）
+            _ctx = ctx or {}
+            if not _ctx:
+                try:
+                    from src.core.llm_context import current as _llm_ctx
+
+                    _ctx = _llm_ctx()
+                except Exception:  # noqa: BLE001
+                    _ctx = {}
             db = SessionLocal()
             try:
                 db.add(LLMUsage(
-                    scene=(scene or self.scene or "other"),
+                    scene=(scene or _ctx.get("scene") or self.scene or "other"),
                     model_name=model_name or self.model,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     latency_ms=int(latency_ms),
+                    user_id=_ctx.get("user_id"),
+                    run_id=_ctx.get("run_id"),
                 ))
                 db.commit()
             finally:
@@ -286,7 +352,7 @@ class AIClient:
             temperature: 生成温度
         """
         # ── 限流检查: 令牌桶耗尽 → 类型化降级(0.3: 不再返回伪装成内容的字符串) ──
-        if not self._cb.acquire():
+        if not self._cb.acquire(wait_s=3.0):
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
             raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
@@ -352,7 +418,7 @@ class AIClient:
             temperature: 生成温度
         """
         # ── 限流检查: 令牌桶耗尽 → 类型化降级 ──
-        if not self._cb.acquire():
+        if not self._cb.acquire(wait_s=3.0):
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
             raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
@@ -393,16 +459,18 @@ class AIClient:
     ):
         """带 tool use 的对话调用，返回原始 message 对象。"""
         # ── 限流检查: 令牌桶耗尽 → 类型化降级 ──
-        if not self._cb.acquire():
+        if not self._cb.acquire(wait_s=3.0):
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
             raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
         create_kwargs = {
             "model": self.model,
             "messages": messages,
-            "tools": tools,
             "temperature": temperature,
         }
+        # 空 tools 有些 OpenAI 兼容服务会 400；轮次用尽时的"无工具总结"就走这条分支
+        if tools:
+            create_kwargs["tools"] = _sanitize_tools(tools)
 
         try:
             response, _latency_ms = await self._call_with_retry(
@@ -441,10 +509,11 @@ class AIClient:
         create_kwargs = {
             "model": self.model,
             "messages": messages,
-            "tools": tools,
             "temperature": temperature,
             "stream": True,
         }
+        if tools:
+            create_kwargs["tools"] = _sanitize_tools(tools)
         try:
             stream = await self.client.chat.completions.create(**create_kwargs)
         except TypeError:
@@ -520,6 +589,16 @@ class AIClient:
 # ──────────────── 统一 LLM 配置中心 (2026-08-12) ────────────────
 # 所有 AI 使用点(对话/Agent/裁判/报告/自检)统一经 get_model_for_scene 解析模型、
 # build_system_prompt 组装 system prompt(含用户交易风格画像注入)。
+
+# 场景**默认模型名**(2026-10-15): 某场景未显式绑定 AISceneBinding 时, 不用全局
+# 默认模型(is_default), 而是回落到此表登记的模型名 —— 只按“模型名”绑定, 不锁
+# model_id(换服务商/重建模型行也不失效)。新增场景默认绑定在此登记。
+#   vision: AI 看图形态影子层 + 对话发图视觉代理, 默认用 sida-pro 自带的
+#           agnes-3.0-flash(多模态, 见 ai_vision_pattern 能力探针)。
+SCENE_DEFAULT_MODEL_NAMES: dict[str, str] = {
+    "vision": "agnes-3.0-flash",
+}
+
 
 # 画像注入节流(与 src/web/api/chat.py 口径一致, 独立实现避免循环依赖):
 # profile_text 截断 + rules 只取前 N 条, 避免每次调用占过多 token
@@ -598,6 +677,14 @@ def get_model_for_scene(db, scene: str, user=None):
         if username == "demo" or role == "guest":
             return None
 
+    # 用户显式选择(2026-10-25): 只能落在**已授权**范围内, 与下面 granted 分支同一口径。
+    # 放在 deny_all 之后、BYOK 之前 —— 用户当面选了模型, 就该按他选的来;
+    # 但选不了自己没权限的模型(校验见 _resolve_user_pref)。
+    if user is not None:
+        pref = _resolve_user_pref(db, user, scene)
+        if pref is not None:
+            return pref
+
     # ① 用户 BYOK(自有服务优先于平台模型)
     if user is not None:
         byok = _resolve_user_byok(db, user, scene)
@@ -637,7 +724,7 @@ def get_model_for_scene(db, scene: str, user=None):
 
 
 def _resolve_global_model(db, scene: str):
-    """原全局解析逻辑: 场景绑定 → 默认模型(is_default) → 模型池第一个。"""
+    """原全局解析逻辑: 场景绑定 → 场景默认模型名 → 默认模型(is_default) → 模型池第一个。"""
     from src.db.models import AISceneBinding, AIModel
 
     # 1. 场景显式绑定
@@ -653,6 +740,19 @@ def _resolve_global_model(db, scene: str):
         logger.warning(
             f"场景 {scene} 绑定的模型(id={binding.model_id})已不存在, 回落默认模型"
         )
+
+    # 1.5 场景默认模型名(未显式绑定时按名回落; 见 SCENE_DEFAULT_MODEL_NAMES)
+    default_name = SCENE_DEFAULT_MODEL_NAMES.get(scene)
+    if default_name:
+        named = (
+            db.query(AIModel)
+            .filter(AIModel.model == default_name)
+            .order_by(AIModel.id)
+            .first()
+        )
+        if named:
+            return named
+        logger.debug(f"场景 {scene} 默认模型 '{default_name}' 不在模型池, 回落全局默认")
 
     # 2. 默认模型
     default = (
@@ -778,8 +878,115 @@ def build_system_prompt(db, scene: str, base_prompt: str, user) -> str:
         return base_prompt
 
     block = _build_shadow_profile_block(profile_json)
-    if not block:
-        return base_prompt
 
-    logger.debug(f"场景 {scene}: 已注入用户交易风格画像")
-    return base_prompt + "\n\n--- 用户交易风格画像 ---\n" + block
+    out = base_prompt
+    if block:
+        logger.debug(f"场景 {scene}: 已注入用户交易风格画像")
+        out = out + "\n\n--- 用户交易风格画像 ---\n" + block
+
+    # 2026-10-22 交易模式画像: 从真实回合数推导「长项/短板 + 样本量」, 与上面的交割单统计互补。
+    # 只在用户传过交割单时注入(没有数据时注入一句"样本不足"只是噪声)。
+    # block() 自带熔断: 读库失败返回空串, 绝不拖垮对话。
+    if user is not None:
+        try:
+            from src.core.trader_playbook import block as _tp_block
+
+            _tp = _tp_block(db, getattr(user, "id", None))
+        except Exception:  # noqa: BLE001 —— 旁路增强, 失败即跳过
+            logger.debug("交易模式画像注入失败(已忽略)", exc_info=True)
+            _tp = ""
+        if _tp:
+            out = out + "\n\n--- 交易模式画像（证据） ---\n" + _tp
+
+    return out
+
+def _resolve_user_pref(db, user, scene: str):
+    """用户的场景显式选择(user_ai_prefs) → AIModel | None。
+
+    两道关:
+      1. 该模型行必须存在(可能已被删);
+      2. 必须在该用户**已授权**范围内 —— deny_all 一律 None; granted 只认 model_ids;
+         inherit 视为全池可用(与全局解析一致)。
+    任何异常都回落 None(偏好读不出来 = 跟随场景绑定), 绝不让整轮对话挂掉。
+    """
+    from src.db.models import AIModel
+    from src.core.copilot_model_prefs import get_pref
+
+    access = _get_model_access(user) or {}
+    mode = str(access.get("mode") or "inherit")
+    if mode == "deny_all":
+        return None
+
+    try:
+        model_id = get_pref(db, getattr(user, "id", None), scene)
+    except Exception:  # noqa: BLE001
+        logger.debug("解析用户模型偏好失败: scene=%s", scene, exc_info=True)
+        return None
+    if model_id is None:
+        return None
+
+    model = db.query(AIModel).filter(AIModel.id == model_id).first()
+    if model is None:
+        logger.warning("用户偏好的模型 id=%s 已不存在, 回落场景绑定", model_id)
+        return None
+
+    if mode == "granted":
+        granted = {int(i) for i in (access.get("model_ids") or []) if str(i).isdigit()}
+        if model.id not in granted:
+            logger.warning(
+                "用户偏好模型 id=%s 不在授权列表内, 已忽略(防越权)", model.id
+            )
+            return None
+    return model
+
+
+def resolve_scene_model_with_source(db, scene: str, user=None) -> dict | None:
+    """带**来源**的场景模型解析(模型选择器用)。
+
+    返回 {"source": "pref|byok|scene|none", "model_id", "model", "service"}。
+    `source` 必须如实: 前端显示"跟随场景绑定"时, 实际生效的就不能是偏好模型。
+    解析不出来返回 None(由调用方决定如何降级显示)。
+    """
+    from src.db.models import AIModel, AIService
+
+    username = getattr(user, "username", None) if user is not None else None
+    role = getattr(user, "role", None) if user is not None else None
+    if user is not None and (username == "demo" or role == "guest"):
+        return {"source": "none", "model_id": None, "model": None, "service": None}
+
+    def _wrap(model, source: str) -> dict:
+        svc = None
+        if getattr(model, "service_id", None):
+            row = db.query(AIService).filter(AIService.id == model.service_id).first()
+            svc = getattr(row, "name", None) if row is not None else None
+        return {
+            "source": source,
+            "model_id": getattr(model, "id", None),
+            "model": getattr(model, "model", None),
+            "service": svc,
+        }
+
+    if user is not None:
+        pref = _resolve_user_pref(db, user, scene)
+        if pref is not None:
+            return _wrap(pref, "pref")
+        byok = _resolve_user_byok(db, user, scene)
+        if isinstance(byok, dict) and byok.get("model"):
+            return {
+                "source": "byok",
+                "model_id": None,
+                "model": byok.get("model"),
+                "service": byok.get("name"),
+            }
+
+    model = get_model_for_scene(db, scene, user=user)
+    if model is None:
+        return {"source": "none", "model_id": None, "model": None, "service": None}
+    if isinstance(model, dict):
+        return {
+            "source": "byok",
+            "model_id": None,
+            "model": model.get("model"),
+            "service": model.get("name"),
+        }
+    return _wrap(model, "scene")

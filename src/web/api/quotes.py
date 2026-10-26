@@ -136,21 +136,81 @@ async def get_quotes_batch(payload: QuoteBatchRequest):
 
 @router.get("/{symbol}/more-info")
 async def get_more_info(symbol: str, market: str = "CN"):
-    """TQ 扩展指标(104字段, 含封单/竞价/连板/估值等)。仅 CN 且 TQ 在线时有数。"""
+    """TQ 扩展指标(104字段, 含封单/竞价/连板/估值等)。仅 CN 且 TQ 在线时有数。
+
+    非交易时段/会话值全 0 回退(2026-10-11 P1): TQ get_more_info 是**实时会话值**,
+    盘后/周末一律回 0 —— 此前 UI 把 0 当真实值显示("0万 平衡 / 逐笔0笔·委托0笔"),
+    误导。现在: 会话值全 0 或非交易时段 → 回退最近收盘快照(`l2_fund_snapshots` /
+    现有 `seal_quality_samples`), 显式带 `source`/`as_of`/`note`; 无快照 → 显式
+    `available:false`(绝不返 0 冒充真实值)。
+    """
     from src.core.marketdata_client import md_more_info
 
     market_code = _parse_market(market)
     if market_code != MarketCode.CN:
         raise HTTPException(400, "more-info 仅支持 CN 市场(TQ 扩展指标)")
     rows = await asyncio.to_thread(md_more_info, [symbol], market_code.value)
-    if not rows:
-        # UX: 空数据不 404 — 前端按 available:false 空态处理
+    live = (rows[0] if rows else None) or None
+
+    from src.core.l2_fund_snapshot import FIELDS as _L2F
+    from src.core.l2_fund_snapshot import has_live_values, latest_snapshot
+    from src.core.trading_calendar import is_trading_session
+
+    in_session = is_trading_session()
+    live_vals = {f: (live or {}).get(f) for f in _L2F}
+    if live is not None and has_live_values(live_vals):
+        return {**live, "available": True, "source": "live"}
+
+    # ① 优先回退 more_info_daily(P0-b 2026-10-18): 104 字段收盘定稿, 比 8 字段的
+    #    l2 快照完整(封单额/封成比/委比/连板/竞价买入都在), 且历史可查。
+    try:
+        from src.core.more_info_daily import latest as _mi_latest
+
+        daily = await asyncio.to_thread(_mi_latest, symbol, market_code.value)
+    except Exception as e:  # noqa: BLE001 回退失败不挡端点
+        logger.warning("more-info more_info_daily 回退失败 %s: %s", symbol, e)
+        daily = None
+    if daily:
         return {
-            "available": False,
-            "note": "扩展指标不存在(TQ 未连接或该股无数据)",
+            **daily,
             "symbol": symbol,
+            "market": market_code.value,
+            "available": True,
+            "source": "more_info_daily",
+            "as_of": daily.get("trade_date"),
+            "note": f"{'非交易时段' if not in_session else '实时会话值全 0'}"
+                    f"·显示 {_fmt_trade_date(daily.get('trade_date'))} 收盘定稿",
         }
-    return {**(rows[0] or {}), "available": True}
+
+    # ② 再回退 8 字段 L2 快照(历史兜底, 先于 more_info_daily 上线)
+    snap = None
+    try:
+        snap = await asyncio.to_thread(latest_snapshot, symbol, market_code.value)
+    except Exception as e:  # noqa: BLE001 回退失败不挡端点, 走显式无数据
+        logger.warning("more-info 收盘快照回退失败 %s: %s", symbol, e)
+    if snap:
+        return {
+            **snap,
+            "symbol": symbol,
+            "market": market_code.value,
+            "available": True,
+            "source": snap.get("origin") or "snapshot",
+            "as_of": snap.get("trade_date"),
+            "note": f"{'非交易时段' if not in_session else '实时会话值全 0'}"
+                    f"·显示 {_fmt_trade_date(snap.get('trade_date'))} 收盘值",
+        }
+    if live is None:
+        return {"available": False, "source": "unavailable", "symbol": symbol,
+                "note": "扩展指标无数据(TQ 未连接或该股无数据)且无收盘快照"}
+    return {"available": False, "source": "session_closed", "symbol": symbol,
+            "note": f"{'非交易时段' if not in_session else '实时会话值全 0'}"
+                    "·无收盘快照, 无数据(不冒充 0)"}
+
+
+def _fmt_trade_date(v) -> str:
+    """YYYYMMDD → YYYY-MM-DD; 不可解析原样返回(不编造)。"""
+    s = str(v or "")
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) >= 8 and s[:8].isdigit() else s
 
 
 @router.get("/{symbol}/dark-flow-tq")
@@ -318,11 +378,14 @@ _MINUTE_CACHE: dict = {}  # {symbol_market: (ts, points)}
 _MINUTE_TTL = 60.0
 
 
-def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float | None, str | None]:
+def _tencent_minute(symbol: str, market: str) -> tuple:
+    # 2026-10-24: 增返第4项 trade_date(腾讯 payload 自带 date=YYYYMMDD)。
+    # ⚠️ 契约变更: 直接 `a,b,c = _tencent_minute(...)` 会 ValueError, 必须用下标解包。
+    #    (调用方唯一一处已改为 _res[0..2], 测试同步改)
     """腾讯分时接口。
 
     Returns:
-        (points, prev_close, error_note)
+        (points, prev_close, error_note[, trade_date])
         - points is None  → **源故障**(网络/超时/解析), error_note 有值; **不是**"无分时"
         - points == []    → 接口成功但当日真无分时(非交易日/停牌等)
         - prev_close      → 昨收(±分界线用)
@@ -344,10 +407,14 @@ def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float 
         with urllib.request.urlopen(req, timeout=10) as resp:
             import json as _json
             d = _json.load(resp)
-        data = (d.get("data") or {}).get(code, {}).get("data", {}).get("data")
+        _blk = (d.get("data") or {}).get(code, {})
+        data = (_blk.get("data") or {}).get("data")
+        # 腾讯 payload: data.<code>.data.date = "20261023"(该分时所属交易日)
+        raw_date = (_blk.get("data") or {}).get("date") or ""
+        trade_date = raw_date if (isinstance(raw_date, str) and len(raw_date) == 8 and raw_date.isdigit()) else None
         if not data:
             # 接口 200 且解析成功、但无分时行 —— 真空态(非交易日/停牌), **不是**源故障
-            return [], None, None
+            return [], None, None, trade_date
         # 昨收: qt list[4](指数与个股通用: [3]=现价 [4]=昨收 [5]=今开)
         prev_close = None
         try:
@@ -384,11 +451,11 @@ def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float 
             bar_vol = max(cum_vol - prev_cum_vol, 0.0)  # 本分钟增量成交量(手)
             prev_cum_vol = cum_vol
             points.append({"t": t, "price": price, "avg": round(avg, 2), "volume": int(bar_vol)})
-        return points, prev_close, None
+        return points, prev_close, None, trade_date
     except Exception as e:
         # KI-042: 源故障必须与"真空态"可分 —— 返回 None + note, 不再伪装成 points=[]
         logger.debug(f"腾讯分时失败 {symbol}: {e}")
-        return None, None, "分时源(腾讯)暂不可用"
+        return None, None, "分时源(腾讯)暂不可用", None
 
 
 @router.get("/minute/{symbol}")
@@ -412,12 +479,15 @@ async def get_minute(symbol: str, market: str = "CN"):
         # 兼容旧缓存: 3元组=无 swings/note; 4元组=有 swings 无 note; 5元组=全量
         swings_old = cached[3] if len(cached) > 3 else None
         note_old = cached[4] if len(cached) > 4 else None
+        date_old = cached[5] if len(cached) > 5 else None
         return {"symbol": symbol, "market": market, "points": cached[1],
                 "prev_close": cached[2], "is_index": is_index, "swings": swings_old or None,
-                "degraded": bool(note_old), "note": note_old}
+                "degraded": bool(note_old), "note": note_old, "trade_date": date_old}
     # P0(2026-09-18): _tencent_minute 内是同步 urllib, 直接在 async def 调会阻塞事件循环,
     # 包 asyncio.to_thread 交给线程池; 返回三元组语义不变。
-    points, prev_close, src_note = await asyncio.to_thread(_tencent_minute, symbol, market)
+    _res = await asyncio.to_thread(_tencent_minute, symbol, market)
+    points, prev_close, src_note = _res[0], _res[1], _res[2]
+    trade_date = _res[3] if len(_res) > 3 else None
     degraded = points is None
     if points is None:
         points = []
@@ -430,10 +500,10 @@ async def get_minute(symbol: str, market: str = "CN"):
         except Exception as e:
             logger.warning(f"minute swings 计算失败 {symbol}: {e}", exc_info=True)
             swings = None
-    _MINUTE_CACHE[cache_key] = (_time.time(), points, prev_close, swings, src_note)
+    _MINUTE_CACHE[cache_key] = (_time.time(), points, prev_close, swings, src_note, trade_date)
     return {"symbol": symbol, "market": market, "points": points,
             "prev_close": prev_close, "is_index": is_index, "swings": swings,
-            "degraded": degraded, "note": src_note}
+            "degraded": degraded, "note": src_note, "trade_date": trade_date}
 
 
 # 2026-08-18: 根路径 GET (前端默认请求, 返回自选股票列表)

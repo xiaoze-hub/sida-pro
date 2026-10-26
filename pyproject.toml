@@ -21,6 +21,13 @@ markers = [
     "network: 需要真实外部网络接口的测试(国内行情源/thsdk), CI 主门禁跳过, nightly 单独跑",
 ]
 
+[tool.coverage.run]
+# 2026-09-29: CI 把后端 pytest 拆成 4 片矩阵并行后, 各 runner 记录的是**绝对路径**,
+# 聚合作业 coverage combine 时解析不到(报 `No source for code: .../src/...`)。
+# relative_files=true 让 coverage 记录相对路径, 跨 runner 合并才成立。
+# 注意: 不能只在聚合作业加, 必须让**分片作业**也生效 —— 所以放在仓库级配置里, 两边同源。
+relative_files = true
+
 [tool.ruff]
 line-length = 110
 target-version = "py311"

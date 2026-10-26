@@ -3,6 +3,9 @@ import { Loader2, Radar } from 'lucide-react'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import { SuggestionsTab } from '@panwatch/biz-ui/components/insight/SuggestionsTab'
 import InsightProvider from '@/pages/workbench/InsightProvider'
+import { ThreeTierVerdictRow } from '@/components/ThreeTierVerdictRow'
+import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
+import { DevilAdvocatePanel } from '@/components/copilot/DevilAdvocatePanel'
 
 /**
  * 工作台标签「建议」(工作台 v2 三合一, Task 12)。
@@ -78,7 +81,15 @@ const SUGGEST_TAB_KEYS = ['suggestions', 'core'] as const
 /** 「盘中监测」的用户可见名(内部 agent 名 `intraday_monitor` 只出现在代码/契约里, 不进 UI 文案)。 */
 const INTRADAY_LABEL = '盘中监测'
 
-function SuggestTabBody() {
+function SuggestTabBody({
+  symbol,
+  market,
+  hasPosition,
+}: {
+  symbol: string
+  market: string
+  hasPosition?: boolean
+}) {
   const { suggestions, alerting, triggerIntradayOnce } = useInsight()
   // 失败态: 本路径**无前置写入**(触发前不加自选、不绑 Agent)⇒ 不存在"部分成功", 只需如实说"未提交成功"
   // + "本次未发生自选 / 绑定写入"; 失败原因**不在此处推断**(错误原文由 action 内部 toast)。
@@ -142,6 +153,20 @@ function SuggestTabBody() {
         </div>
       ) : null}
 
+      {/* 多维数智参谋卡(2026-10-18, 设计稿 §8.9): 三段式结论 —— 意图定性 / 关键防守位 / 操盘预案。
+          原位**加在最上面**一层, 旧建议列表退居"历史建议流水"(不删, 保留 AI 建议池/过期开关/
+          盘中监测/技术指标回退四条既有能力与契约测试)。自带取数(useCopilotBrief, 走 /copilot/brief),
+          不经 InsightProvider —— 不把它拖进 core 的 5 个端点串行链。 */}
+      <CopilotBriefCard symbol={symbol} market={market} hasPosition={hasPosition} />
+
+      {/* 本土三层滤网决策行 (情绪层 / 催化层 / 威科夫量价结构) */}
+      <ThreeTierVerdictRow symbol={symbol} market={market} />
+
+      {/* 空头司令挑刺（红蓝对抗压力测试，2026-10-24 创新 6）：对当前标的强制逆向风控研判。
+          走现有参谋对话 API（建会话 → 流式消息），后端按关键词确定性路由到 devil_advocate
+          配方（确定性管线取数，全现有工具）；只出报告、不下单。结果 hairline 分隔展示。 */}
+      <DevilAdvocatePanel symbol={symbol} market={market} />
+
       {/* 建议列表(含「包含过期」开关 + 空态回退技术指标基础建议) —— 全部复用恢复组件 */}
       <SuggestionsTab />
     </div>
@@ -164,7 +189,7 @@ export default function SuggestTab({
 }) {
   return (
     <InsightProvider symbol={symbol} market={market} hasPosition={hasPosition} keys={SUGGEST_TAB_KEYS}>
-      <SuggestTabBody />
+      <SuggestTabBody symbol={symbol} market={market} hasPosition={hasPosition} />
     </InsightProvider>
   )
 }

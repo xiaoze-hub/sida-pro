@@ -298,7 +298,7 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
                       title={`${r.name} · 强度 ${safeFixed(r.rotation_score, 1)}`}
                     >
                       <div className="flex items-center justify-between text-[11px] mb-0.5">
-                        <span className="truncate font-medium text-foreground group-hover:text-primary transition-colors">{r.name}</span>
+                        <span className="truncate font-medium text-foreground group-hover:text-primary transition-colors" title={r.name}>{r.name}</span>
                         <span className="font-mono ml-2 shrink-0">
                           <span className={pctColor(r.change_5d)}>{fmtPct(r.change_5d)}</span>
                           <span className="text-muted-foreground ml-1.5">{safeFixed(r.rotation_score, 0)}</span>

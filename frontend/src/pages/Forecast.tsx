@@ -7,8 +7,10 @@ import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { safeFixed, safeNum } from '@/lib/format'
 import ForecastConeChart from '@/components/ForecastConeChart'
+import { AiRefereePanel, RefereeStatsCard, type AiRefereeInfo, type RefereeStats } from '@/components/AiRefereePanel'
 
 interface KronosResult {
   median: number[]
@@ -38,6 +40,9 @@ interface PredictResult {
     adjustment_pct: number
     notes: string[]
   }
+  // AI 裁判结论(P0-2): 引擎 /predict 响应字段。verdict=adjust 时 direction 已覆盖
+  // 最终方向; 旧响应可能缺该字段 ⇒ 组件侧显式『无裁判结论』。
+  ai_referee?: AiRefereeInfo | null
   recommendation?: {
     action: string
     tone: string
@@ -69,10 +74,10 @@ interface ForecastHistoryItem {
   summary: string
   sentiment_adj: number
   created_at: string
-  // TODO(到期对照): /forecast/history 后端(list_forecasts → forecasts 表)尚未返回 outcome 字段。
-  // 待后端在 forecast_lib/forecast_history.py 里按 target_date 对照实际行情后补充以下字段
-  // （如 outcome_return_pct: 实际涨跌幅%, outcome_status: 'hit'|'miss'|'pending'），
-  // 前端历史表会自动展示"到期对照"列，无需再改这里。
+  // 到期对照(2026-09-29 落地): 应用侧 /forecast/history 已按 target_date 对照实际行情补以下字段
+  // (实现见 src/core/forecast_outcome.py): outcome_return_pct=实际涨跌幅%,
+  // outcome_status='hit'|'miss'|'pending'|'no_data'(取不到行情=null + 'no_data', 不填 0)。
+  // 前端历史表据此自动展示"到期对照"列, 无需再改这里。
   outcome_return_pct?: number
   outcome_status?: 'hit' | 'miss' | 'pending' | string
 }
@@ -99,6 +104,203 @@ interface BacktestReport {
   symbol: string
   dashboard_md: string
   detail_md: string
+}
+
+/**
+ * 到期对照判定(2026-10-24 修 P0): 后端四态 `hit|miss|pending|no_data`
+ * (见 `src/core/forecast_outcome.py::_judge_status` / `evaluate_history_item`)。
+ *
+ * 旧逻辑只分 `hit` / `!hit` 两支, 于是 `no_data`(到期但取不到行情)被画成 `✗` ——
+ * **把缺失数据当结论**, 违反「缺失必显式标无数据」铁律。这里把 `no_data` 提成独立态:
+ *   - `pending`  目标日未到 / 未过收盘 → 未到期, **不进命中率分母**
+ *   - `no_data`  到期但行情缺失 / 方向无法判定 → 无数据, **不进命中率分母**, 中性灰印章
+ *   - `hit`/`miss` 方向兑现 / 未兑现 → 只有这两态进分母
+ *   - `none`     后端连 outcome 字段都没给 → 不是一次评估, 显示 `—`
+ */
+export type OutcomeKind = 'hit' | 'miss' | 'pending' | 'no_data' | 'none'
+
+/** 判定输入(字段全可选: 后端各字段都可能缺; 缺就按缺失处理, 不补默认值)。 */
+export interface OutcomeInput {
+  direction?: string
+  outcome_status?: string
+  outcome_return_pct?: number
+}
+
+/** 方向 vs 实际涨跌幅 → hit/miss; 方向不可识别或无涨跌幅 → no_data(与后端 `_judge_status` 同口径)。 */
+export function judgeOutcomeByDirection(direction?: string, pct?: number): OutcomeKind {
+  if (typeof pct !== 'number' || !Number.isFinite(pct)) return 'no_data'
+  const dir = String(direction ?? '').trim().toLowerCase()
+  if (dir === 'up') return pct > 0 ? 'hit' : 'miss'
+  if (dir === 'down') return pct < 0 ? 'hit' : 'miss'
+  if (dir === 'flat') return pct === 0 ? 'hit' : 'miss'
+  return 'no_data'
+}
+
+/**
+ * 单条历史记录的到期对照态: 优先后端 `outcome_status`; 后端没给时才按
+ * 「预测方向 vs 实际涨跌」自行推算(此时若涨跌幅缺失 → no_data, 不猜 hit/miss)。
+ */
+export function resolveOutcome(h: OutcomeInput): OutcomeKind {
+  const status = String(h.outcome_status ?? '').trim().toLowerCase()
+  if (status === 'hit' || status === 'miss' || status === 'pending' || status === 'no_data') return status
+  // 未知状态串一律按「无数据」处理, 绝不退化成 hit/miss
+  if (status) return 'no_data'
+  if (typeof h.outcome_return_pct !== 'number' || !Number.isFinite(h.outcome_return_pct)) return 'none'
+  return judgeOutcomeByDirection(h.direction, h.outcome_return_pct)
+}
+
+/**
+ * 到期对照汇总。**命中率分母 = hit + miss**, `pending` 与 `no_data` 一律排除并单独计数
+ * (样本数铁律: 只报命中率等于隐去分母)。`hitRatePct=null` 表示没有任何已判定样本,
+ * 调用方须显示「暂无已判定记录」而不是 0%。
+ */
+export function summarizeOutcomes(items: OutcomeInput[]) {
+  const s = { hit: 0, miss: 0, pending: 0, noData: 0 }
+  for (const it of items) {
+    const k = resolveOutcome(it)
+    if (k === 'hit') s.hit += 1
+    else if (k === 'miss') s.miss += 1
+    else if (k === 'pending') s.pending += 1
+    else if (k === 'no_data') s.noData += 1
+  }
+  const judged = s.hit + s.miss
+  return { ...s, judged, hitRatePct: judged > 0 ? (s.hit / judged) * 100 : null }
+}
+
+/** 权重展示顺序(与 forecast_lib/model_weights.py 的 MODEL_NAMES 对齐, 含 timesfm)。 */
+const WEIGHT_MODEL_ORDER: { key: string; label: string }[] = [
+  { key: 'kronos', label: 'Kronos' },
+  { key: 'chronos', label: 'Chronos' },
+  { key: 'xgboost', label: 'XGB' },
+  { key: 'linreg', label: '线性回归' },
+  { key: 'timesfm', label: 'TimesFM' },
+]
+
+export interface WeightRow { key: string; label: string; pct: number }
+
+/**
+ * 权重行: **只渲染 `/forecast/weights` 真实返回的数值**; 接口没给就返回空数组。
+ *
+ * 禁止回落历史回测快照(kronos 0.4414 / chronos 0.3379 / xgboost 0.1103 / linreg 0.1103,
+ * 2026-08-13 backtest)。那组数字与当前模型无关, 却刚好四行合计 100.00%, 视觉上完全自洽,
+ * 属最难被发现的「假精确」(见 docs/design/20261023_04 §1.2)。
+ */
+export function buildWeightRows(weights: Record<string, number> | null): WeightRow[] {
+  if (!weights) return []
+  const rows: WeightRow[] = []
+  for (const { key, label } of WEIGHT_MODEL_ORDER) {
+    const v = weights[key]
+    if (typeof v === 'number' && Number.isFinite(v)) rows.push({ key, label, pct: v * 100 })
+  }
+  return rows
+}
+
+/**
+ * 权重透明度区块(权重区 UI 唯一出口, 便于独立回归)。
+ *
+ * 三态: loading → 「权重加载中…」; unavailable → 「权重不可用（接口未就绪）」+ 一行
+ * 「历史参考快照仅用于回测，不代表当前权重」; ok → 只渲染接口返回的真实百分比。
+ */
+export function WeightTransparency({
+  weights,
+  source,
+  state,
+}: {
+  weights: Record<string, number> | null
+  source: string
+  state: 'loading' | 'ok' | 'unavailable'
+}) {
+  const weightRows = buildWeightRows(weights)
+  if (weightRows.length === 0) {
+    return (
+      <div className="mb-2">
+        <div className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+          <span>当前模型权重</span>
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {state === 'loading' ? '权重加载中…' : '权重不可用（接口未就绪）'}
+          </span>
+        </div>
+        {state !== 'loading' && (
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
+            历史参考快照仅用于回测，不代表当前权重
+          </div>
+        )}
+      </div>
+    )
+  }
+  const weightSum = weightRows.reduce((acc, r) => acc + r.pct, 0)
+  const sourceText =
+    source === 'history'
+      ? '实时回测统计'
+      : source === 'file'
+        ? '最近回测落盘'
+        : source === 'default'
+          ? '暂无回测数据, 使用引擎默认权重'
+          : '权重来源未标注'
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+      <span>当前模型权重</span>
+      {weightRows.map((r, i) => (
+        <span key={r.key} className="flex items-center gap-x-1.5">
+          {i > 0 && <span>·</span>}
+          <span className="font-num font-medium tabular-nums text-foreground">
+            {r.label} {safeFixed(r.pct, 1)}%
+          </span>
+        </span>
+      ))}
+      <span className="opacity-70">
+        (已返回 {weightRows.length} 支 · 合计{' '}
+        <span className="font-num tabular-nums">{safeFixed(weightSum, 1)}%</span> · {sourceText})
+      </span>
+    </div>
+  )
+}
+
+/**
+ * 到期对照印章(到期对照列的唯一出口)。
+ * `no_data` → 中性灰虚线「无数据」; `pending` → 「待验证」; `none` → 「—」;
+ * 只有 `hit`/`miss` 才出 ✓/✗。旧实现在 `!hit` 分支里把 no_data 画成 ✗。
+ */
+export function OutcomeBadge({ item }: { item: OutcomeInput & { expected_pct?: number } }) {
+  const kind = resolveOutcome(item)
+  const pct = item.outcome_return_pct
+  const pctText = typeof pct === 'number' && Number.isFinite(pct) ? `${pct > 0 ? '+' : ''}${pct}%` : null
+  const predText = `预测${
+    typeof item.expected_pct === 'number' ? `${item.expected_pct > 0 ? '+' : ''}${item.expected_pct}%` : '无数据'
+  }`
+  // 未到期: 不是错也不是对, 不进命中率分母
+  if (kind === 'pending') {
+    return <span className="text-[11px] text-muted-foreground">待验证</span>
+  }
+  // 后端连 outcome 字段都没给: 一次评估都没发生, 不摆结论
+  if (kind === 'none') {
+    return <span className="text-[11px] text-muted-foreground">—</span>
+  }
+  // 无数据(取不到行情/方向不可判): 独立中性态 —— 灰虚线印章 + 「无数据」,
+  // 不带任何涨跌色语义, 也不计入命中率分母。
+  if (kind === 'no_data') {
+    return (
+      <span className="inline-flex flex-col items-end gap-0.5">
+        <span className="rounded border border-dashed border-border/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+          无数据
+        </span>
+        <span className="font-num tabular-nums text-[10px] text-muted-foreground">
+          {predText}
+          {pctText && <> vs 实际{pctText}</>}
+        </span>
+      </span>
+    )
+  }
+  const hit = kind === 'hit'
+  return (
+    <span className={hit ? 'text-emerald-500' : 'text-rose-500'}>
+      {hit ? '✓' : '✗'}{' '}
+      <span className="font-mono text-xs">
+        {predText}
+        {pctText && <> vs 实际{pctText}</>}
+      </span>
+    </span>
+  )
 }
 
 /**
@@ -172,7 +374,7 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
             <span className="w-28 shrink-0 truncate text-right font-mono text-[11px]">
               {safeFixed(r.start)} → {safeFixed(r.end)}
               {r.band && (
-                <span className="block text-[10px] text-muted-foreground/80">
+                <span className="block text-[10px] text-muted-foreground">
                   P5 {safeFixed(r.band.lo)} ~ P95 {safeFixed(r.band.hi)}
                 </span>
               )}
@@ -213,6 +415,12 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
   const [showDetail, setShowDetail] = useState(false)
   const [modelWeights, setModelWeights] = useState<Record<string, number> | null>(null)
   const [weightsSource, setWeightsSource] = useState('')
+  // 权重三态: loading(请求中) / ok(拿到真实值) / unavailable(接口未就绪或无权重)。
+  // 不再有「静默回退硬编码快照」这一态 —— 拿不到就显式说拿不到。
+  const [weightsState, setWeightsState] = useState<'loading' | 'ok' | 'unavailable'>('loading')
+  // 裁判战绩卡片(P0-2): 消费 /api/forecast/referee-stats(代理引擎 referee_impact_stats)。
+  const [refereeStats, setRefereeStats] = useState<RefereeStats | null>(null)
+  const [refereeStatsLoading, setRefereeStatsLoading] = useState(false)
   const { toast } = useToast()
 
   // 股票搜索(输入名称/代码) — 用 数智分析 自带 /stocks/search(返回 list)
@@ -325,19 +533,49 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
   useEffect(() => { loadHistory() }, [])
 
   // 运行时拉取模型权重(权重透明度: 后端按历史回测命中率动态调整)
-  // 失败时回退硬编码默认(见下方渲染处的 fallback), 不阻塞页面
+  // 2026-10-24: 删掉「失败回退硬编码快照」—— 那组 0.4414/0.3379/0.1103 与当前权重无关,
+  // 却刚好合计 100%, 属假精确。取不到就置 unavailable, 由渲染处显式说明。
   useEffect(() => {
     let cancelled = false
     fetchAPI<{ weights: Record<string, number>; source?: string }>('/forecast/weights')
       .then(d => {
-        if (!cancelled && d?.weights) {
+        if (cancelled) return
+        if (d?.weights && Object.keys(d.weights).length > 0) {
           setModelWeights(d.weights)
           setWeightsSource(d.source || '')
+          setWeightsState('ok')
+        } else {
+          setModelWeights(null)
+          setWeightsState('unavailable')
         }
       })
-      .catch(() => { /* 引擎未起/接口未就绪: 保留硬编码 fallback */ })
+      .catch(() => {
+        if (cancelled) return
+        setModelWeights(null)
+        setWeightsState('unavailable')
+      })
     return () => { cancelled = true }
   }, [])
+
+  // P0-2: 裁判战绩(介入前后命中率) — 出结果后随标的拉取; 契约「永不 500」,
+  // 网络层异常也降级成显式空态, 不阻塞页面。
+  const loadRefereeStats = async (sym: string) => {
+    if (!/^\d{6}$/.test(sym)) return
+    setRefereeStatsLoading(true)
+    try {
+      const d = await fetchAPI<RefereeStats>(`/forecast/referee-stats?symbol=${sym}`)
+      setRefereeStats(d)
+    } catch (e: any) {
+      setRefereeStats({ total: 0, symbol: sym, message: e?.message || '裁判战绩暂不可得' })
+    } finally {
+      setRefereeStatsLoading(false)
+    }
+  }
+
+  // 依赖 result.symbol: 换标的重新拉; 未出结果时不请求(空态由卡片文案承载)
+  useEffect(() => {
+    if (result?.symbol) loadRefereeStats(result.symbol)
+  }, [result?.symbol])
 
   // 检测引擎状态(可手动刷新调用)
   const checkEngine = () => {
@@ -350,18 +588,9 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       .catch(() => setEngineStatus('down'))
   }
 
-  useEffect(() => {
-    // 每 30 秒轮询引擎状态(引擎可能在页面打开后启动)
-    let cancelled = false
-    const timer = setInterval(() => {
-      if (!cancelled) checkEngine()
-    }, 30000)
-    checkEngine()
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [])
+  // 引擎状态轮询(引擎可能在页面打开后启动): 挂载补一次 + 每 30s 一次。
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(checkEngine, 30000)
 
   const refreshEngine = () => checkEngine()
 
@@ -541,31 +770,19 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
   const dirColor = (dir: string) =>
     dir === 'up' ? 'text-stock-up' : dir === 'down' ? 'text-stock-down' : 'text-muted-foreground'
 
-  // 到期对照: 仅当后端 /forecast/history 返回 outcome 字段时展示该列(见 ForecastHistoryItem 的 TODO)
+  // 到期对照: 仅当后端 /forecast/history 返回 outcome 字段时展示该列(见 ForecastHistoryItem)
   const historyHasOutcome = history.some(
     h => h.outcome_return_pct !== undefined || h.outcome_status !== undefined
   )
-  const renderOutcome = (h: ForecastHistoryItem) => {
-    if (h.outcome_status === 'pending') {
-      return <span className="text-xs text-muted-foreground">未到期</span>
-    }
-    if (h.outcome_return_pct === undefined && !h.outcome_status) {
-      return <span className="text-xs text-muted-foreground">—</span>
-    }
-    // hit 判定: 优先用后端 outcome_status; 否则按 实际涨跌方向 vs 预测方向 推算
-    const actualDir = (h.outcome_return_pct ?? 0) > 0 ? 'up' : (h.outcome_return_pct ?? 0) < 0 ? 'down' : 'flat'
-    const hit = h.outcome_status === 'hit' || (!h.outcome_status && h.direction === actualDir && actualDir !== 'flat')
-    const pct = h.outcome_return_pct
-    return (
-      <span className={hit ? 'text-emerald-500' : 'text-rose-500'}>
-        {hit ? '✓' : '✗'}{' '}
-        <span className="font-mono text-xs">
-          预测{typeof h.expected_pct === 'number' ? `${h.expected_pct > 0 ? '+' : ''}${h.expected_pct}%` : '-'}
-          {pct !== undefined && <> vs 实际{pct > 0 ? '+' : ''}{pct}%</>}
-        </span>
-      </span>
-    )
-  }
+  // 到期对照汇总: 命中率分母只含 hit/miss; pending(未验证)与 no_data(无数据)单独计数
+  const outcomeSummary = summarizeOutcomes(history)
+  const outcomeSummaryTitle =
+    outcomeSummary.judged > 0
+      ? `已判定 ${outcomeSummary.judged} 条: 命中 ${outcomeSummary.hit} / 未命中 ${outcomeSummary.miss}` +
+        `（${safeFixed(outcomeSummary.hitRatePct, 0)}%）; 无数据 ${outcomeSummary.noData} 条、待验证 ` +
+        `${outcomeSummary.pending} 条不计入分母`
+      : `暂无已判定记录; 无数据 ${outcomeSummary.noData} 条、待验证 ${outcomeSummary.pending} 条不计入分母`
+  const renderOutcome = (h: ForecastHistoryItem) => <OutcomeBadge item={h} />
 
   return (
     <div className="sida-page-enter space-y-6">
@@ -712,7 +929,12 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               <span>预测结果：{result.symbol}{result.stock_name ? ` ${result.stock_name}` : ''}</span>
               <span className={`text-[16px] font-bold ${dirColor(result.direction)}`}>
                 {/* 反AI模板⑤: 预测方向/幅度必须带"模型预测"限定,防既成事实表述(用户幻觉敏感) */}
-                <span className="mr-1.5 align-middle text-xs font-medium text-muted-foreground">模型预测</span>
+                {/* P0-2 修订: 若裁判 adjust 已覆盖最终方向, 限定词改为"裁判调整后" —— 不能把裁判改过的方向标成纯模型输出 */}
+                <span className="mr-1.5 align-middle text-xs font-medium text-muted-foreground">
+                  {result.ai_referee?.verdict === 'adjust' && (result.ai_referee.direction === 'up' || result.ai_referee.direction === 'down')
+                    ? '裁判调整后'
+                    : '模型预测'}
+                </span>
                 {result.direction === 'up' ? '↑ 看多' : result.direction === 'down' ? '↓ 看空' : '→ 横盘'}
                 {' '}({result.expected_pct > 0 ? '+' : ''}{result.expected_pct}%)
               </span>
@@ -813,27 +1035,22 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                   模型加权方向 {result.direction === 'up' ? '↑ 看多' : result.direction === 'down' ? '↓ 看空' : '→ 横盘'} (模型预测 {result.expected_pct > 0 ? '+' : ''}{result.expected_pct}%)
                 </span>
               </div>
-              {/* 模型权重透明度: 4 模型投票权重。
+              {/* 模型权重透明度: 5 模型投票权重(含 timesfm)。
                   数据源: 引擎 /forecast/weights(按历史回测命中率动态调整,
-                  贝叶斯收缩 + 双写闭环, 见 forecast_lib/model_weights.py);
-                  接口未就绪时回退历史快照 (kronos 0.4414 / chronos 0.3379 /
-                  xgboost 0.1103 / linreg 0.1103, 2026-08-13 backtest)。 */}
-              <div className="mb-2 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-                <span>当前模型权重</span>
-                <span className="font-mono font-medium text-foreground/80">Kronos {Math.round(((modelWeights?.kronos ?? 0.4414)) * 100)}%</span>
-                <span>·</span>
-                <span className="font-mono font-medium text-foreground/80">Chronos {Math.round(((modelWeights?.chronos ?? 0.3379)) * 100)}%</span>
-                <span>·</span>
-                <span className="font-mono font-medium text-foreground/80">XGB {Math.round(((modelWeights?.xgboost ?? 0.1103)) * 100)}%</span>
-                <span>·</span>
-                <span className="font-mono font-medium text-foreground/80">线性回归 {Math.round(((modelWeights?.linreg ?? 0.1103)) * 100)}%</span>
-                <span className="opacity-70">
-                  (按历史命中率动态调整{weightsSource === 'default' ? ' · 暂无回测数据, 使用默认权重' : weightsSource === 'history' ? ' · 实时回测统计' : weightsSource === 'file' ? ' · 最近回测落盘' : ' · 最近回测 2026-08-13'})
-                </span>
-              </div>
+                  贝叶斯收缩 + 双写闭环, 见 forecast_lib/model_weights.py)。
+                  2026-10-24 修 P0: 接口失败/未返回时**不展示任何数字** —— 旧代码用
+                  `?? 0.4414 / 0.3379 / 0.1103 / 0.1103` 回落 2026-08-13 回测快照,
+                  四行刚好合计 100%, 用户无法分辨那是历史快照而非当前权重。 */}
+              <WeightTransparency weights={modelWeights} source={weightsSource} state={weightsState} />
               <ModelDivergenceChart result={result} />
             </div>
             </div>{/* 预测价格 + 四模型对比 两栏 grid 结束 */}
+
+            {/* AI 裁判结论(P0-2): verdict/方向/理由全文; adjust 覆盖最终方向时显式标注 */}
+            <AiRefereePanel referee={result.ai_referee} />
+
+            {/* 裁判战绩卡片(P0-2): 介入前后命中率对比, 样本不足显式 */}
+            <RefereeStatsCard stats={refereeStats} loading={refereeStatsLoading} />
 
             {/* 消息情绪面 */}
             {result.sentiment && (
@@ -1040,8 +1257,13 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                   <th className="text-right">止损</th>
                   <th className="text-left">操作建议</th>
                   <th className="text-left">置信</th>
-                  {/* TODO(到期对照): 后端返回 outcome 字段后自动出现该列, 见 ForecastHistoryItem */}
-                  {historyHasOutcome && <th className="text-right">到期对照</th>}
+                  {/* 到期对照列: 后端返回 outcome 字段时自动出现(见 ForecastHistoryItem)。
+                      title 报出分母: 命中率只按「已判定」算, 无数据/待验证单独计数。 */}
+                  {historyHasOutcome && (
+                    <th className="text-right" title={outcomeSummaryTitle}>
+                      到期对照
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>

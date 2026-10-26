@@ -20,12 +20,12 @@ describe('fmtScore', () => {
 })
 
 describe('cellColorClass', () => {
-  it('低分灰/中性淡/高分渐强', () => {
+  it('四态可命名: 走弱(绿)/震荡(中性)/走强(红)/无数据(灰)', () => {
     expect(cellColorClass(null)).toBe('bg-muted/30')
-    expect(cellColorClass(45)).toBe('bg-muted/40')
-    expect(cellColorClass(62)).toBe('bg-stock-up/15')
-    expect(cellColorClass(78)).toBe('bg-stock-up/30')
-    expect(cellColorClass(90)).toBe('bg-stock-up/45')
+    expect(cellColorClass(45)).toBe('bg-stock-down/20') // 走弱 <50
+    expect(cellColorClass(62)).toBe('bg-muted/60') // 震荡 50-70
+    expect(cellColorClass(78)).toBe('bg-stock-up/30') // 走强 ≥70
+    expect(cellColorClass(90)).toBe('bg-stock-up/30') // 走强不再分 3 档(6 色带已收敛)
   })
 })
 
@@ -58,9 +58,10 @@ describe('axisDates', () => {
     { date: '20260902', score: 66.0, limit_up_cnt: 3 },
   ]
   it('优先共享轴, 缺省回退首个题材 cells, 并按窗口截断', () => {
-    expect(axisDates(['20260901', '20260902', '20260903'], cells, 2)).toEqual(['20260902', '20260903'])
-    expect(axisDates(undefined, cells, 20)).toEqual(['20260901', '20260902'])
-    expect(axisDates([], cells, 20)).toEqual(['20260901', '20260902'])
+    // 顺序 = 最新在左(2026-09-26 用户口径): 与连板梯队一致
+    expect(axisDates(['20260901', '20260902', '20260903'], cells, 2)).toEqual(['20260903', '20260902'])
+    expect(axisDates(undefined, cells, 20)).toEqual(['20260902', '20260901'])
+    expect(axisDates([], cells, 20)).toEqual(['20260902', '20260901'])
     expect(axisDates(undefined, [], 20)).toEqual([])
   })
 })

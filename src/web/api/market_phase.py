@@ -96,6 +96,39 @@ def _row_to_dict(r: MarketPhaseDaily) -> dict:
 
 
 # ─────────────────────────── GET ───────────────────────────
+
+
+def _limit_down_from_breadth() -> int | None:
+    """跌停家数：读最近一条全市场涨跌幅分布快照的「跌停」档。
+
+    口径 = 全市场涨跌幅 ≤ -9.8%（自算，普通跌停）；ST 5% 跌停落在 "-5~-3%" 档，
+    不计入 —— 这是自算口径，接口会同时返回 `limit_down_source` 说明，前端可悬停查看。
+    读不到就返回 None（前端显式 `--`），绝不补 0。
+    """
+    try:
+        import json as _json
+
+        from src.db.models import BreadthDistributionSnapshot
+        from src.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(BreadthDistributionSnapshot)
+                .order_by(BreadthDistributionSnapshot.captured_at.desc())
+                .first()
+            )
+            if row is None:
+                return None
+            for item in _json.loads(row.items or "[]"):
+                if isinstance(item, dict) and item.get("bucket") == "跌停":
+                    return int(item.get("count") or 0)
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001 - 缺数不影响阶段主链路
+        logger.debug("[market-phase] 跌停家数读取失败: %s", e)
+    return None
+
 @router.get("/phase")
 def get_phase() -> dict:
     """当前阶段 + 近 30 天序列 + 分布统计。
@@ -136,9 +169,14 @@ def get_phase() -> dict:
         dist_raw = phase_distribution(phases_all)
         dist_ordered = ordered_distribution(dist_raw)
 
+        current = _row_to_dict(cur)
+        # 2026-10-20: 跌停家数原先前端写死 '--'（/phase 无此字段）。改为从全市场涨跌幅
+        # 分布快照派生，并显式标注口径；拿不到就保持 None。
+        current["limit_down"] = _limit_down_from_breadth()
+        current["limit_down_source"] = "自算·全市场涨跌幅≤-9.8%"
         payload = {
             "available": True,
-            "current": _row_to_dict(cur),
+            "current": current,
             "recent_30d": [_row_to_dict(r) for r in recent],
             "recent_days": [_row_to_dict(r) for r in recent],
             "distribution": [

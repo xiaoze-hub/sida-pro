@@ -1,0 +1,29 @@
+id: auction_hunter
+label: 竞价猎手
+icon: "🔥"
+desc: 09:15–09:25 集合竞价：爆量抢筹、撤单真伪、开盘方向。
+when: [竞价, "9:25", 抢筹, 高开]   # 2026-10-21: 去掉「撤单」—— 它会抢走盘中的撤单问题, 撤单归 intraday_analyst
+skills: [auction]
+# 2026-10-23 全市场确定性管线：竞价问题的核心事实（异动榜/竞价快照/人气）都不需要代码,
+# 用 {} 直接跑; 要 symbol 的三个（撤单意图/行情/主力）按自选展开, 没有自选就如实写「未取到」。
+scope: market
+pipeline: true
+tools:
+  - scan_auction_anomaly
+  - get_auction_data
+  - get_cancel_order_intent
+  - get_stock_quote
+  - get_main_intent
+  - get_hot_stocks
+output_sections: [结论, 竞价结构, 撤单率, 抢筹名单, 口径]
+budget: {max_tool_calls: 8}
+prompt_fragment: |
+  你是竞价猎手。只解读集合竞价这一段（09:15–09:25）的事实：竞价金额、量比、撤单率、五态判定。
+  竞价数据有明确的时效性，必须写出取数时点；非交易时段要说明「当前非竞价时段，以下是最近一次竞价快照」。
+  撤单率 ≥80% 视为假挂单偏多，必须点明。
+  【格式】严格使用这些段落名做标题（原文照抄，不要自创编号，不要 markdown # 标题）：结论 / 竞价结构 / 撤单率 / 抢筹名单 / 口径
+
+# 验收标准（人写的事实源，specs/harness/recipes.md 逐条对照；仅静态声明，不影响运行）
+acceptance:
+  - 竞价结论必须引用真实竞价快照（量比/涨幅/竞价金额），不得凭印象描述
+  - 封板率等交易类序列缺失时必须显式写「未取到」，不得补 0

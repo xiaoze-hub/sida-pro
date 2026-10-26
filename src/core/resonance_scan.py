@@ -1,7 +1,7 @@
 """三指标共振判定 + 全市场扫描(2026-09-11, 老板"都做")。
 
 三指标(全部用**我们自己的实现**, 非客户端复刻公式 —— 规避双源分叉):
-  趋势 = GS策略(gs_strategy.trend_label(eval_gs(bars)))  → G区/G信号 视为趋势对
+  趋势 = GS策略(gs_state.trend_label(bars))  → G区/G信号 视为趋势对
   强度 = AI机构活跃度(ai_activity.eval_activity)          → >= 强势线 3.0 视为强度对
   资金 = 主力净流入(通达信 SUPAMO 批量, 万元→元)          → > 0 视为资金对
 
@@ -11,6 +11,11 @@
 
 数据: 通达信客户端批量(日线 get_market_data / 资金 SUPAMO 公式), 全市场约 1~2 分钟;
 落库(迁移 v161)供页面/回看; 单票失败跳过不编造。
+
+完整性契约(对齐公式引擎 tq_formula_batch, 审计钦定范本): `scan()` 返回体**永远**带
+`chunks_failed` / `chunks_total` / `complete`(complete = chunks_failed == 0)。
+全断(零数据) → `ok=False`; 部分失败 → `ok=True + complete=False + note 显式`
+(消费方不得当全市场口径用)。
 """
 from __future__ import annotations
 
@@ -20,13 +25,18 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
+from src.core import thresholds as _thresholds
+
 logger = logging.getLogger(__name__)
 
 _CST = ZoneInfo("Asia/Shanghai")
 _TABLE = "resonance_scan"
-_STRONG_LINE = 3.0  # 与 ai_activity.STRONG_LINE 同源(强势线)
 _BARS = 90          # 扫描用日线根数(BB0 需 28, 活跃度需 2; 90 富余)
 _KLINE_CHUNK = 100  # 单次批量日线代码数(TDX get_market_data 实测单次上限 ~100 码, 超出静默截断)
+# 完整性契约(对齐公式引擎 tq_formula_batch, 审计钦定范本): 返回体永远带
+# `chunks_failed` / `chunks_total` / `complete`(complete = chunks_failed == 0);
+# 全断(零数据) → ok=False; 部分失败 → ok=True + complete=False + note 显式。
+# 不再用魔法阈值(_MAX_FAILED_CHUNK_RATIO=0.5)判全断 —— 那会把"只坏一半"当成功放过去。
 _COLS = (
     "trade_date", "symbol", "name", "trend", "activity", "level",
     "fund_net", "hits", "resonance", "near", "close", "change_pct", "source", "created_at",
@@ -82,7 +92,7 @@ def resonance_level(*, trend_zone_g: bool, activity: float | None, fund_net: flo
     if not trend_zone_g:
         return LEVEL_NONE, 0
     score = 0
-    if isinstance(activity, (int, float)) and activity >= _STRONG_LINE:
+    if isinstance(activity, (int, float)) and activity >= _thresholds.strong_line():
         score += 1
     if isinstance(fund_net, (int, float)) and fund_net > 0:
         score += 1
@@ -100,15 +110,15 @@ def evaluate_one(bars: list[dict], fund_net: float | None) -> dict:
     数据不足/缺失 → 对应项 False 并在 note 标注(不猜)。
     """
     from src.core.ai_activity import eval_activity
-    from src.core.gs_strategy import eval_gs, trend_label
+    from src.core.gs_state import trend_label
 
-    trend = trend_label(eval_gs(bars)) if bars else "无数据"
+    trend = trend_label(bars) if bars else "无数据"
     act = eval_activity(bars) if bars else {}
     activity = act.get("activity") if isinstance(act, dict) else None
     level = act.get("level") if isinstance(act, dict) else None
 
     hit_trend = trend in ("G信号", "G区间")
-    hit_strength = activity is not None and activity >= _STRONG_LINE
+    hit_strength = activity is not None and activity >= _thresholds.strong_line()
     hit_fund = fund_net is not None and fund_net > 0
     hits = [hit_trend, hit_strength, hit_fund]
     n = sum(1 for h in hits if h)
@@ -140,12 +150,21 @@ def _stock_pool() -> list[tuple[str, str]]:
     return out
 
 
-def _fetch_daily(codes: list[str]) -> dict[str, list[dict]]:
-    """通达信批量日线(前复权) → {code: bars}。分片, 单片失败跳过。"""
+def _fetch_daily(codes: list[str], stats: dict | None = None) -> dict[str, list[dict]]:
+    """通达信批量日线(前复权) → {code: bars}。分片, 单片失败跳过。
+
+    诚实性审计 P0-2(2026-10-08): 过去每片 `except → continue` 不留痕, TQ 断链时
+    静默返回空 dict, 上游却报 `ok=True, scanned=0` —— 断链三天无人发现。现在把分片
+    健康度写进 `stats`(调用方传入的 dict), 让 scan 能显式判定"全断"。失败片 =
+    抛异常 **或** 返回空(rpc 通但无数据, 对 6000 只池子同样意味着链路不通)。
+    """
     from marketdata.vendors.tq import tq_rpc
 
     out: dict[str, list[dict]] = {}
+    failed = 0
+    total = 0
     for i in range(0, len(codes), _KLINE_CHUNK):
+        total += 1
         part = codes[i : i + _KLINE_CHUNK]
         try:
             v = tq_rpc(
@@ -154,7 +173,12 @@ def _fetch_daily(codes: list[str]) -> dict[str, list[dict]]:
                 timeout=120,
             )
         except Exception as e:  # noqa: BLE001
+            failed += 1
             logger.warning("共振扫描: 日线批量失败(%d 码): %s", len(part), e)
+            continue
+        if not v:
+            failed += 1
+            logger.warning("共振扫描: 日线批量空返回(%d 码)", len(part))
             continue
         for code, rows in (v or {}).items():
             if not isinstance(rows, dict):
@@ -183,15 +207,21 @@ def _fetch_daily(codes: list[str]) -> dict[str, list[dict]]:
                     continue
             if bars:
                 out[code] = bars
+    if stats is not None:
+        stats["chunks_failed"] = failed
+        stats["chunks_total"] = total
     return out
 
 
-def _fetch_funds(codes: list[str]) -> dict[str, float | None]:
-    """通达信 SUPAMO 批量主力资金(万元→元)。分片, 失败跳过。"""
+def _fetch_funds(codes: list[str], stats: dict | None = None) -> dict[str, float | None]:
+    """通达信 SUPAMO 批量主力资金(万元→元)。分片, 失败跳过并计数(同 _fetch_daily)。"""
     from marketdata.vendors.tq import tq_rpc
 
     out: dict[str, float | None] = {}
+    failed = 0
+    total = 0
     for i in range(0, len(codes), 500):
+        total += 1
         part = codes[i : i + 500]
         try:
             v = tq_rpc(
@@ -210,11 +240,19 @@ def _fetch_funds(codes: list[str]) -> dict[str, float | None]:
                 timeout=120,
             )
         except Exception as e:  # noqa: BLE001
+            failed += 1
             logger.warning("共振扫描: 资金批量失败(%d 码): %s", len(part), e)
+            continue
+        if not v:
+            failed += 1
+            logger.warning("共振扫描: 资金批量空返回(%d 码)", len(part))
             continue
         for code, rec in (v or {}).items():
             val = _num((rec or {}).get("主力资金")) if isinstance(rec, dict) else None
             out[code] = val * 1e4 if val is not None else None
+    if stats is not None:
+        stats["chunks_failed"] = failed
+        stats["chunks_total"] = total
     return out
 
 
@@ -247,11 +285,67 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
     report(0.1, f"股票池 {len(pool)} 只")
 
     report(0.12, "拉日K")
-    bars_by = _fetch_daily(pool)
+    daily_health: dict = {}
+    bars_by = _fetch_daily(pool, daily_health)
     report(0.5, f"日K就绪 {len(bars_by)} 只")
+
+    # P0-2(2026-10-08)/完整性契约(对齐公式引擎): 分片健康度显式透传 —— 全断(零数据)
+    # 必须 ok=False; 部分失败仍 ok=True 但 complete=False + note 显式, 消费方不得当全市场口径用。
+    daily_failed = int(daily_health.get("chunks_failed", 0))
+    daily_total = int(daily_health.get("chunks_total", 0))
+    daily_complete = daily_failed == 0
+    if pool and (not bars_by or (daily_total > 0 and daily_failed >= daily_total)):
+        reason = (
+            "TQ 日线全断(零数据)"
+            if not bars_by
+            else f"TQ 日线所有分片失败({daily_failed}/{daily_total} 片)"
+        )
+        logger.warning("共振扫描未成: %s", reason)
+        return {
+            "ok": False,
+            "reason": reason,
+            "trade_date": trade_date or datetime.now(_CST).strftime("%Y%m%d"),
+            "scanned": 0,
+            "chunks_failed": daily_failed,
+            "chunks_total": daily_total,
+            "fund_chunks_failed": 0,
+            "fund_chunks_total": 0,
+            "complete": False,
+            "note": "日线全断, 无可用数据; 不产出任何口径结果",
+        }
+
     report(0.52, "拉资金")
-    funds = _fetch_funds([c for c in pool if c in bars_by])
+    fund_health: dict = {}
+    funds = _fetch_funds([c for c in pool if c in bars_by], fund_health)
     report(0.7, f"资金就绪 {len(funds)} 只")
+    fund_failed = int(fund_health.get("chunks_failed", 0))
+    fund_total = int(fund_health.get("chunks_total", 0))
+    fund_complete = fund_failed == 0
+    # 资金全断(零数据)同样不能静默: 三指标会集体缺"资金"这一维, 共振结果失真。
+    if fund_total and fund_failed >= fund_total:
+        reason = f"TQ 资金全断({fund_failed}/{fund_total} 片): 三指标缺资金维, 共振口径失真"
+        logger.warning("共振扫描未成: %s", reason)
+        return {
+            "ok": False,
+            "reason": reason,
+            "trade_date": trade_date or datetime.now(_CST).strftime("%Y%m%d"),
+            "scanned": 0,
+            "chunks_failed": daily_failed,
+            "chunks_total": daily_total,
+            "fund_chunks_failed": fund_failed,
+            "fund_chunks_total": fund_total,
+            "complete": False,
+            "note": "资金全断, 三指标缺一维; 不产出共振结果",
+        }
+    # 完整性: 每一片(日线+资金)都成功才 complete=True(对齐公式引擎 not missing 语义)。
+    complete = bool(daily_complete and fund_complete)
+    parts: list[str] = []
+    if not daily_complete:
+        parts.append(f"日线失败 {daily_failed}/{daily_total} 片")
+    if not fund_complete:
+        parts.append(f"资金失败 {fund_failed}/{fund_total} 片")
+    note = (None if complete
+            else "分片失败: 命中数不是全市场口径, 不得当全市场结果使用(" + "; ".join(parts) + ")")
     day = trade_date or datetime.now(_CST).strftime("%Y%m%d")
     rows = []
     total = max(1, len(pool))
@@ -300,14 +394,27 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
         from src.core.decision_log import record_many
         from src.db.session import get_write_engine
 
+        # 情绪周期 regime(2026-10-10 A): 扫描时取当前态, 落到每行供账本分桶统计。
+        regime = "unknown"
+        try:
+            from src.core.market_regime import current_regime
+
+            regime = current_regime().get("regime") or "unknown"
+        except Exception as _re:  # noqa: BLE001 —— 取不到按 unknown(不猜)
+            logger.debug("共振扫描: regime 解析失败 %r", _re)
+
         payload = [
             {
                 "signal_kind": "resonance3",
                 "symbol": r["symbol"],
                 "trade_date": r["trade_date"],
                 "price": r.get("close"),
+                "regime": regime,
                 "context": {
-                    k: r.get(k) for k in ("trend", "activity", "level", "fund_net", "hits", "near")
+                    **{k: r.get(k) for k in ("trend", "activity", "level", "fund_net", "hits", "near")},
+                    # 完整性标注: complete=False 时该信号来自"部分失败"的扫描, 命中/口径不完整
+                    "scan_complete": complete,
+                    "regime": regime,
                 },
             }
             for r in rows
@@ -319,8 +426,25 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
     except Exception as e:  # noqa: BLE001
         logger.warning("决策日志留痕失败(不影响扫描): %r", e)
     n_near = sum(1 for r in rows if r["near"])
-    logger.info("共振扫描完成: %s 只入池, 共振 %s / 接近 %s", len(rows), n_res, n_near)
-    return {"ok": True, "trade_date": day, "scanned": len(rows), "resonance": n_res, "near": n_near, "inserted": inserted, "logged": n_logged}
+    logger.info("共振扫描完成: %s 只入池, 共振 %s / 接近 %s (complete=%s)",
+                len(rows), n_res, n_near, complete)
+    return {
+        "ok": True,
+        "trade_date": day,
+        "scanned": len(rows),
+        "resonance": n_res,
+        "near": n_near,
+        "inserted": inserted,
+        "logged": n_logged,
+        # 分片健康度 + 完整性契约: 返回体**永远**带 chunks_failed/chunks_total/complete,
+        # 个别片失败(chunks_failed>0 ⇒ complete=False)上游可见、不静默。
+        "chunks_failed": daily_failed,
+        "chunks_total": daily_total,
+        "fund_chunks_failed": fund_failed,
+        "fund_chunks_total": fund_total,
+        "complete": complete,
+        "note": note,
+    }
 
 
 def _upsert(rows: list[dict]) -> int:
@@ -401,8 +525,8 @@ def activity_series(symbol: str, days: int = 120) -> dict:
 
     从日线口径逐日滚动计算(数据不足的头部为 None, 不补零)。
     """
-    from src.core.ai_activity import eval_activity, BULL_LINE, LIFE_LINE, STRONG_LINE
-    from src.core.gs_strategy import eval_gs, trend_label
+    from src.core.ai_activity import eval_activity
+    from src.core.gs_state import trend_label
 
     code = _tdx_code(symbol)
     bars = (_fetch_daily([code]) or {}).get(code) or []
@@ -416,7 +540,7 @@ def activity_series(symbol: str, days: int = 120) -> dict:
         window = bars[: i + 1]
         act = eval_activity(window) or {}
         activity = act.get("activity")
-        trend = trend_label(eval_gs(window))
+        trend = trend_label(window)
         lvl, _ = resonance_level(trend_zone_g=trend in ("G信号", "G区间"), activity=activity, fund_net=fund_net if i == len(bars) - 1 else None)
         items.append(
             {
@@ -432,7 +556,7 @@ def activity_series(symbol: str, days: int = 120) -> dict:
     return {
         "symbol": symbol,
         "available": True,
-        "lines": {"life": LIFE_LINE, "strong": STRONG_LINE, "bull": BULL_LINE},
+        "lines": {"life": _thresholds.life_line(), "strong": _thresholds.strong_line(), "bull": _thresholds.bull_line()},
         "fund_net": fund_net,
         "count": len(items),
         "items": items,

@@ -59,9 +59,9 @@ AGENT_SEED_SPECS: tuple[AgentSeedSpec, ...] = (
     AgentSeedSpec(
         name="premarket_outlook",
         display_name="盘前分析",
-        description="开盘前综合昨日分析和隔夜信息，展望今日走势",
+        description="每天 09:05 综合昨日分析、涨价供给与科技低空突发，展望今日走势",
         enabled=False,
-        schedule="0 9 * * 1-5",
+        schedule="5 9 * * 1-5",
         execution_mode="batch",
         kind=AGENT_KIND_WORKFLOW,
         visible=True,
@@ -167,8 +167,8 @@ AGENT_SEED_SPECS: tuple[AgentSeedSpec, ...] = (
     AgentSeedSpec(
         name="theme_launch_detector",
         display_name="题材启动识别",
-        description="9:45 识别题材启动信号与首板候选(潜伏池)",
-        enabled=False,
+        description="每天 09:45 结合主力资金抢筹与首板梯队识别新题材启动信号",
+        enabled=True,
         schedule="45 9 * * 1-5",
         execution_mode="batch",
         kind=AGENT_KIND_WORKFLOW,

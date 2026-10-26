@@ -226,6 +226,7 @@ def test_summary_orderbook_falls_back_to_thsdk(monkeypatch):
     from src.core import decision_pioneer as dp
     from src.web.api import klines as kapi
 
+    monkeypatch.setattr("src.core.quote_snapshots.in_trading_window", lambda *a, **k: True)
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=120: _bars(40))
     monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
     monkeypatch.setattr(obe, "fetch_snapshot", lambda code: obe.img_frame_to_snapshot(
@@ -242,6 +243,7 @@ def test_summary_orderbook_none_when_all_fail(monkeypatch):
     from src.core import decision_pioneer as dp
     from src.web.api import klines as kapi
 
+    monkeypatch.setattr("src.core.quote_snapshots.in_trading_window", lambda *a, **k: True)
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=120: _bars(40))
     monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
     monkeypatch.setattr(obe, "fetch_snapshot",

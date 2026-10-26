@@ -94,7 +94,30 @@ def _get_owner_shadow_profile() -> dict | None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "kronos_ready": get_predictor() is not None, "time": datetime.now().isoformat()}
+    """引擎健康探针。
+
+    ⚠️ **绝不 500**: Kronos 是 5 票模型之一且可缺(源码 `~/Kronos` 未装/加载失败时,
+    `/predict` 用其余模型加权), 探针必须如实标注 `kronos_ready=false` + 原因, 而不是把
+    "可选模型没装好" 升级成 "引擎挂了"(旧实现 `get_predictor() is not None` 会让
+    ModuleNotFoundError 直接 500 → 主服务 `_forecast_engine_probe` 误判 down)。
+    """
+    kronos_ready = False
+    kronos_error = None
+    try:
+        kronos_ready = get_predictor() is not None
+    except HTTPException as e:
+        # 模型正在加载中(get_predictor 抛 503)也算"未就绪", 不是引擎故障
+        kronos_error = str(getattr(e, "detail", e))[:120]
+    except Exception as e:  # noqa: BLE001 - 探针绝不 500
+        kronos_error = f"{type(e).__name__}: {e}"[:120]
+    body = {
+        "status": "ok",
+        "kronos_ready": kronos_ready,
+        "time": datetime.now().isoformat(),
+    }
+    if kronos_error:
+        body["kronos_error"] = kronos_error
+    return body
 
 
 def _predict_with_guard(symbol: str, days: int, task_id: str, target_date: str, force: bool):
@@ -845,6 +868,33 @@ def forecast_weights():
         "model_stats": stats,
         "updated_at": None,  # 由 DB 聚合实时计算, 无固定时间戳
     }
+
+
+@app.get("/referee/stats")
+def referee_stats(symbol: str = ""):
+    """AI 裁判介入前后命中率对比(供前端「裁判战绩」卡片消费)。
+
+    口径与实现见 forecast_lib.ai_referee.referee_impact_stats(裁判结论落库在
+    prediction_referee_evals, 介入前方向用模型预测价中位数重算, 不用已被裁判
+    改过的 final_direction)。
+
+    **永不 500**: 无记录/统计异常一律返回显式 no-data(message 说明原因),
+    统计是增量信息, 不能拖垮前端。前端据此如实标注「样本不足/无记录」,
+    绝不伪造命中率。
+    """
+    try:
+        try:
+            from forecast_lib.ai_referee import referee_impact_stats
+        except ImportError:
+            from ai_referee import referee_impact_stats
+        return referee_impact_stats(symbol)
+    except Exception as e:  # noqa: BLE001 - 统计失败绝不 500
+        logger.warning("裁判战绩统计失败 symbol=%s: %s", symbol, e)
+        return {
+            "total": 0,
+            "symbol": symbol or "all",
+            "message": f"裁判战绩统计不可用: {e}",
+        }
 
 
 @app.get("/forecast/models")

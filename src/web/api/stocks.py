@@ -179,6 +179,37 @@ def search(q: str = Query("", min_length=1), market: str = Query("")):
     return search_stocks(q, market)
 
 
+#: 批量取名字的单词上限 —— 账本一页 500 行也就 500 个符号, 200 足够页面用, 且防滥用。
+STOCK_NAMES_MAX_SYMBOLS = 200
+
+
+@router.get("/names")
+def get_stock_names(
+    symbols: str = Query("", description="逗号分隔代码, 最多 200 个(可带 sz/002050.SZ 等前缀后缀)"),
+    market: str = Query("CN", description="市场: CN(默认)/HK/US"),
+    _: User = Depends(get_current_user),
+):
+    """代码 → 中文名批量解析(2026-10-21)。
+
+    页面只拿到代码时用它一次补齐名字, 免得每个页面前端各自维护一份代码表。
+    **缺失语义**: 取不到的名字不出现在 `names` 里、改为列在 `missing`(前端显示 `--`);
+    绝不拿代码冒充名字, 也不返回空串 —— 空串会被当成"名字是空字符串", 而"名字未知"是缺键。
+    """
+    from src.core.stock_names import names_for
+
+    raw = [s.strip() for s in (symbols or "").split(",") if s.strip()]
+    uniq = list(dict.fromkeys(raw))  # 去重保序, 不改变调用方语义
+    if len(uniq) > STOCK_NAMES_MAX_SYMBOLS:
+        # 显式 400: 静默截断会让 `missing` 骗人(被丢掉的符号既不在 names 也不在 missing)
+        raise HTTPException(
+            status_code=400,
+            detail=f"symbols 最多 {STOCK_NAMES_MAX_SYMBOLS} 个, 收到 {len(uniq)} 个",
+        )
+    mk = (market or "CN").strip().upper() or "CN"
+    names = names_for(uniq, market=mk)
+    return {"names": names, "missing": [s for s in uniq if s not in names]}
+
+
 @router.get("/{symbol}/l2")
 def get_stock_l2(symbol: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """单股 L2 字段: 通达信 snapshot + more_info。
@@ -192,13 +223,17 @@ def get_stock_l2(symbol: str, user: User = Depends(get_current_user), db: Sessio
     from src.core.hv_api_log import log_high_value_call
 
     log_high_value_call(db, user, "l2", symbol)
-    from src.core.stock_l2 import fetch_stock_l2
+    from src.core.stock_l2 import fetch_stock_l2_ex
 
-    data = fetch_stock_l2(symbol)
+    # 铁律『数据缺失显式降级、永不 500』(2026-10-10 P1): 上游(TQ 网关)不可用 /
+    # 非交易日无数据 / RPC 抛异常 → 200 + available:false + note(真实原因),
+    # 不裸 500。契约与同族 /api/stocks/{symbol}/dark-flow-tq 一致。
+    data, reason = fetch_stock_l2_ex(symbol)
     if not data:
-        return {"symbol": symbol, "snapshot": {}, "more": {}, "as_of": None,
-                "note": "无L2数据(通达信源不可用)"}
-    return {**data, "note": None}
+        return {"symbol": symbol, "available": False, "snapshot": {}, "more": {},
+                "as_of": None, "note": reason or "无L2数据(通达信源不可用)"}
+    # 部分源缺失(如更多信息源异常)时把真实原因带到 note; 两源皆正常 → reason None
+    return {**data, "available": True, "note": reason}
 
 
 @router.get("/{symbol}/blocks")
@@ -299,11 +334,16 @@ def get_quotes(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 @router.post("", response_model=StockResponse)
 def create_stock(stock: StockCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    # demo 账号: 自选数量上限 1 只(演示体验; 防公开账号堆积垃圾数据)
-    if user.username == "demo":
-        own_count = db.query(Stock).filter(Stock.user_id == user.id).count()
-        if own_count >= 1:
-            raise HTTPException(403, "演示账号仅可添加 1 只自选股。请先删除当前自选,再添加其他股票体验。")
+    # demo 账号: 自选数量上限(演示体验; 防公开账号堆积垃圾数据)
+    # B3(2026-09-29): 上限从「免费档」面板的 guest_strategy.watchlist_limit 读, 未配置 → 1
+    if str(getattr(user, "username", "")) == "demo" or str(getattr(user, "role", "")) == "guest":
+        from src.core import free_tier
+
+        watch_limit = int(free_tier.guest_strategy(db).get("watchlist_limit", 1))
+        if watch_limit > 0:
+            own_count = db.query(Stock).filter(Stock.user_id == user.id).count()
+            if own_count >= watch_limit:
+                raise HTTPException(403, f"演示账号仅可添加 {watch_limit} 只自选股。请先删除当前自选,再添加其他股票体验。")
     # 权限体系 2026-09-15: 普通账号自选≤10, pro/owner 无限
     from src.core.permissions import check_watchlist_quota
 

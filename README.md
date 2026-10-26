@@ -5,7 +5,7 @@
 **Proprietary personal stock-trading analytics platform** — dual data sources (TDX `.tck`/`.img`/TQ + THS `thsdk`) → full-market scanning → K-line overlay annotation → AI data steward. Self-hosted, all-in-one.
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.13.9-blue) <!-- bump together with VERSION file on every release -->
+![Version](https://img.shields.io/badge/version-v0.51.0-blue) <!-- bump together with VERSION file on every release -->
 
 *Language: [中文](README.zh-CN.md)*
 
@@ -20,11 +20,13 @@ Most A-share tools show you **data**. SIDA closes the loop: it **reads the marke
 > **The honest pitch: SIDA is a well-engineered "franken-build" — a deliberate assembly of proven parts.** Instead of reinventing quant wheels, it wires the best open-source projects — TradingAgents, Kronos, Chronos-Bolt, XGBoost, TA-Lib, TimescaleDB — into one coherent pipeline that actually closes the loop. Each part is proven; the integration is the product.
 
 - 🔍 **Main-force intent analysis** — tick-level order flow: accumulation/distribution detection, order-splitting recognition, support/resistance game — with physics guards that reject implausible readings instead of guessing
+- 🧱 **Wyckoff K-line Layer & Localized 3-Tier Filter** — Volume-price structural analysis (Spring probe, effort divergence, LPS confirmation), unified 3-tier defense filter (sentiment cycle + catalyst + volume-price), and -8% hard defense line breach guard
 - 🔮 **Foundation-model prediction ensemble + verification loop** — Kronos (AAAI 2026) + Chronos-Bolt + XGBoost weighted voting, **weights dynamically adjusted by historical hit rate**, every prediction auto-checked when it expires (hit/miss vs actual returns)
 - 🤖 **Multi-agent AI analysis powered by [TradingAgents](https://github.com/TauricResearch/TradingAgents)** — a team of specialized LLM analysts (researchers, bull/bear debaters, traders) that run, argue, and reach conclusions on any stock
-- 🏆 **Event-driven opportunity discovery** — 7 strategy signals, tri-engine resonance screening (Wenxiaoda + Wencai + strategy library cross-confirmed), anomaly pool, theme-launch detection — find themes *before* they take off
+- 🏆 **Event-driven dual-track scanning** — Pre-market 09:05 dual-track radar (commodity supply constraint + global tech/eVTOL breakthroughs), intraday capital surge detector, and theme-launch detection — find themes *before* they take off
+- 🪜 **Limit-up ladder with suspension penetration** — Restores full market limit-up progression tiers, supporting suspension penetration for halted stocks so trading halts do not falsely break streaks
 - 📱 **WeChat two-way dialog** — bind your personal WeChat via iLink protocol, ask about any stock from your phone, receive push reports; multimodal chat understands images, files and links
-- 📊 **Auto reports** — pre-market (8:30) / post-market (15:30) reports with real data + AI commentary, generated daily by cron
+- 📊 **Auto reports** — pre-market (09:05) / post-market (15:30) reports with real data + AI commentary + discipline action constraints, generated daily by cron
 
 ## 🧩 Built on Open Source
 
@@ -121,6 +123,14 @@ cd frontend && pnpm install && pnpm dev
 | **Reports** | Auto-generated pre/post-market reports, PDF export |
 | **Alerts** | Price/condition alerts pushed to your phone |
 | **AI Agents** | TradingAgents multi-agent runs with full reasoning traces |
+
+### TDX formula pack (paste into your 通达信 client)
+
+The strategy indicators can be exported as **native 通达信 (TDX) formula source** — see
+[`docs/tq-formulas/`](docs/tq-formulas/README.md): AI institutional activity, trend pilot line,
+bull/bear line, dark-pool flow, GS swing, and a limit-up strength screener. Each `.txt` is
+paste-ready (formula manager → new → paste → test), with per-formula parameter tables,
+install steps, and an explicit **divergence statement** vs. the SIDA implementation.
 
 ## Multi-user & AI config
 

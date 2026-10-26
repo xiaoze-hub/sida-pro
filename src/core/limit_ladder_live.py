@@ -54,9 +54,11 @@ def merge_state(prev: dict, round_states: dict, ts: str) -> dict:
     """把本轮三态并入累计态。first_at 不覆写; 回封清 opened_at 并置 resealed; 每次炸板 open_count+1。"""
     out = {k: dict(v) for k, v in (prev or {}).items()}
     for sym, st in (round_states or {}).items():
+        if st not in (STATE_SEALED, STATE_BLOWN):
+            continue
         rec = out.get(sym) or {"ever_sealed": False, "first_at": None, "last_sealed_at": None,
                               "opened_at": None, "open_count": 0, "resealed": False}
-        if rec["first_at"] is None:
+        if rec["first_at"] is None and st == STATE_SEALED:
             rec["first_at"] = ts
         if st == STATE_SEALED:
             if rec["opened_at"] is not None:
@@ -103,7 +105,10 @@ def build_live_day(state: dict, quotes: dict, yesterday_boards: dict,
     seal_amounts = seal_amounts or {}
     groups: dict[int, list[dict]] = {}
     blown, broken, charging = [], [], []
-    for sym, rec in (state or {}).items():
+    # 遍历在板/炸板累计态，以及昨日有连板（今日可能断板）的个股
+    candidate_symbols = set((state or {}).keys()) | {s for s, b in (yesterday_boards or {}).items() if b >= 2}
+    for sym in candidate_symbols:
+        rec = (state or {}).get(sym) or {}
         q = (quotes or {}).get(sym) or {}
         yb = (yesterday_boards or {}).get(sym, 0)
         st = classify(q.get("price"), q.get("limit_px"), bool(rec.get("ever_sealed")),
@@ -148,15 +153,20 @@ def build_live_day(state: dict, quotes: dict, yesterday_boards: dict,
             "charging": charging, "provisional": True}
 
 
-def _is_intraday(now) -> bool:
-    """交易时段(含集合竞价后~收盘后 5min 缓冲)才跑 live; 否则 None/降级。"""
+def _is_intraday(now=None) -> bool:
+    """交易时段(含集合竞价后~收盘后 5min 缓冲，以及午盘休市缓冲 11:30~13:00)才跑 live; 否则 None/降级。"""
     from src.core.trading_calendar import is_trading_day
 
-    dt = now or datetime.now(_CST)
+    dt = now if now is not None else datetime.now(ZoneInfo("Asia/Shanghai"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    else:
+        dt = dt.astimezone(ZoneInfo("Asia/Shanghai"))
     if not is_trading_day(dt):
         return False
     mins = dt.hour * 60 + dt.minute
-    return (9 * 60 + 25 <= mins <= 11 * 60 + 30) or (13 * 60 <= mins <= 15 * 60 + 5)
+    # 覆盖 09:25 直至 15:05 全天时段（含午盘 11:30~13:00 仍可查看最新上午战果）
+    return (9 * 60 + 25 <= mins <= 15 * 60 + 5)
 
 
 def scan_tick(now=None, deps=None):
@@ -164,7 +174,11 @@ def scan_tick(now=None, deps=None):
     from src.core.limit_rules import limit_ratio, limit_up_price
 
     d = deps or _default_deps()
-    dt = now or datetime.now(_CST)
+    dt = now if now is not None else datetime.now(ZoneInfo("Asia/Shanghai"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    else:
+        dt = dt.astimezone(ZoneInfo("Asia/Shanghai"))
     if not _is_intraday(dt):
         return None
     date = dt.strftime("%Y%m%d")
@@ -179,6 +193,7 @@ def scan_tick(now=None, deps=None):
         d.save_fn(d.cli, date, d.load_fn(d.cli, date), meta)
         logger.warning("ladder-live: 扫描失败(rounds_failed=%s): %s", failed, e)
         return None
+    logger.info("ladder-live: 获取全市场代码 %d 只, 快照 %d 只", len(codes) if codes else 0, len(raw) if raw else 0)
     if not raw:
         return None
     names = d.names_fn()
@@ -244,6 +259,7 @@ def scan_tick(now=None, deps=None):
     d.save_fn(d.cli, date, state, meta)
     live_day = build_live_day(state, quotes, yb, names, date, seal_amounts)
     d.save_day_fn(d.cli, date, live_day)
+    logger.info("ladder-live: 成功保存盘中 live_day (date=%s, rows=%d, blown=%d)", date, len(live_day.get("rows") or []), len(live_day.get("blown") or []))
     return {"date": date, "state": state, "quotes": quotes, "meta": meta,
             "live_day": live_day}
 
@@ -260,11 +276,28 @@ def _default_deps():
     from src.core.tdx_boards import pricevol_only
 
     def universe_fn():
+        from src.core.tdx_boards import name_map
+
+        # 优先通达信原生代码目录（5569 只本地高速），免去第三方网络采集阻塞
+        try:
+            m = name_map()
+            if m and len(m) > 1000:
+                return list(m.keys())
+        except Exception as e:
+            logger.debug("ladder-live name_map 兜底: %s", e)
         from src.collectors.stock_list import get_stock_list
 
         return merge_universe(a_share_universe(get_stock_list()), limit_up_symbols())
 
     def names_fn():
+        from src.core.tdx_boards import name_map
+
+        try:
+            m = name_map()
+            if m and len(m) > 1000:
+                return m
+        except Exception:
+            pass
         from src.collectors.stock_list import get_stock_list
 
         return {s["symbol"]: s.get("name") for s in get_stock_list() if s.get("symbol")}
@@ -279,12 +312,13 @@ def _default_deps():
         with SessionLocal() as db:
             dates = [r[0] for r in db.execute(
                 text("SELECT DISTINCT trade_date FROM limit_up_events "
-                     "ORDER BY trade_date DESC LIMIT 2")).fetchall()]
-            if len(dates) < 2:
+                     "ORDER BY trade_date DESC LIMIT 30")).fetchall()]
+            if not dates:
                 return {}
+            min_date = sorted(dates)[0]
             ev = db.execute(
                 text("SELECT trade_date, symbol, is_sealed_close FROM limit_up_events "
-                     "WHERE trade_date >= :a"), {"a": dates[0]}).mappings().fetchall()
+                     "WHERE trade_date >= :a"), {"a": min_date}).mappings().fetchall()
         return boards_for_date(sorted(dates), _sealed_by_date(list(ev)), sorted(dates)[-1])
 
     def seal_amounts_fn():

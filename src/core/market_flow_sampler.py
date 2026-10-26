@@ -14,10 +14,11 @@ import logging
 from datetime import datetime
 
 from sqlalchemy import text
+from src.core.cn_gateway import gateway_url
 
 logger = logging.getLogger(__name__)
 
-_GATEWAY = "http://115.190.177.213:8100/cn/market-overview"
+_GATEWAY = gateway_url("cn/market-overview")
 _TIMEOUT_S = 6.0
 
 

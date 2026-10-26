@@ -80,11 +80,44 @@ def scan_dark_fund_top(
           "top": [{
              "symbol", "name", "ths_code",
              "main_net_wan": 主力净流入(万元),
-             "main_net_ratio": 主力净量占比,
+             "main_net_vol": 同花顺 DDE「主力净量」原始值(非百分比/非占比; 量纲未定),
+             "main_net_ratio": main_net_vol 的兼容别名(同值, 已弃用),
              "total_amount_wan": 总成交额(万元),
              "source": "thsdk_dde",
           }]  按 main_net_wan 降序
         }
+    """
+    if l2 is None:
+        from data_source.thsdk_l2 import THSDKL2
+
+        l2 = THSDKL2()
+
+    uni = scan_dde_universe(markets=markets, batch_size=batch_size, l2=l2)
+    rows = list(uni["rows"])
+    rows.sort(key=lambda x: -x["main_net_wan"])
+    return {
+        "generated_at": uni["generated_at"],
+        "universe": uni["universe"],
+        "computed": uni["computed"],
+        "top": rows[:top_n],
+        # P1: 返回值带 caliber(B3/3.4), 下游不得据此做主力意图/方向性判定
+        "caliber": "ths",
+        "direction_semantics": DIRECTION_THS,
+    }
+
+
+def scan_dde_universe(
+    markets: tuple[str, ...] = DEFAULT_MARKETS,
+    batch_size: int = DEFAULT_BATCH,
+    l2=None,
+) -> dict:
+    """全市场 thsdk DDE 主力净流入扫描 → **归一化行**(不排序/不截断)。
+
+    供 `scan_dark_fund_top`(TOP 榜)与 `war_report`(TOP+BOTTOM 主力动向)复用。
+    返回:
+      {"generated_at": iso, "universe": 全市场代码数, "computed": 成功拿到资金流的股票数,
+       "rows": [归一化行(字段同 scan_dark_fund_top 的 top 项)]}
+    行已过滤 int32 溢出哨兵; 金额单位 万元。
     """
     if l2 is None:
         from data_source.thsdk_l2 import THSDKL2
@@ -108,14 +141,27 @@ def scan_dark_fund_top(
             except Exception as e:  # noqa: BLE001
                 logger.warning("[暗盘TOP] %s 第%d批失败: %s", mkt, i // batch_size, str(e)[:80])
 
-    # 组装榜单
+    rows = _normalize_rows(all_rows, name_map)
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "universe": universe,
+        "computed": len(rows),
+        "rows": rows,
+    }
+
+
+def _normalize_rows(all_rows: list[dict], name_map: dict[str, str]) -> list[dict]:
+    """thsdk DDE 原始行 → 归一化行(代码/名称/主力净流入(万)/净量/总额/口径)。
+
+    过滤 int32 溢出哨兵值(盘后无真实数据的次新股返回 2^31-1/2^31 占位)。
+    """
     def _f(v):
         try:
             return float(v)
         except (TypeError, ValueError):
             return None
 
-    top_rows: list[dict] = []
+    out: list[dict] = []
     for r in all_rows:
         raw_code = str(r.get("代码", ""))
         six = raw_code[4:] if raw_code[:4] in ("USHA", "USZA", "USTM") else raw_code
@@ -125,20 +171,22 @@ def scan_dark_fund_top(
         # 过滤 int32 溢出哨兵值(盘后无真实数据的次新股返回 2^31-1/2^31 占位)
         if abs(main_net) >= INT32_SENTINEL:
             continue
-        # 主力净量同理过滤溢出(2147483648)
+        # 主力净量同理过滤溢出(2147483648)。同花顺 DDE「主力净量」**非百分比/非占比**,
+        # 精确量纲未登记 → 以中性名 main_net_vol 暴露(旧名 main_net_ratio 兼容别名, 已弃用)。
         ratio = _f(r.get("主力净量"))
         if ratio is not None and abs(ratio) >= INT32_SENTINEL:
             ratio = None
         total_amt = _f(r.get("总金额"))
         if total_amt is not None and abs(total_amt) >= INT32_SENTINEL:
             total_amt = None
-        top_rows.append(
+        out.append(
             {
                 "symbol": six,
                 "name": name_map.get(six, ""),
                 "ths_code": raw_code,
                 "main_net_wan": round(main_net / 1e4, 2),       # 元 → 万元
-                "main_net_ratio": ratio,
+                "main_net_vol": ratio,
+                "main_net_ratio": ratio,  # deprecated 兼容别名(旧快照消费者)
                 # 总金额溢出/缺失 → None(不编造成 0)
                 "total_amount_wan": round(total_amt / 1e4, 2) if total_amt is not None else None,
                 "source": "thsdk_dde",
@@ -146,19 +194,7 @@ def scan_dark_fund_top(
                 "caliber": "ths",
             }
         )
-
-    top_rows.sort(key=lambda x: -x["main_net_wan"])
-    top = top_rows[:top_n]
-
-    return {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "universe": universe,
-        "computed": len(top_rows),
-        "top": top,
-        # P1: 返回值带 caliber(B3/3.4), 下游不得据此做主力意图/方向性判定
-        "caliber": "ths",
-        "direction_semantics": DIRECTION_THS,
-    }
+    return out
 
 
 def attach_tck_dark(top: list[dict], positions_symbols: list[str]) -> list[dict]:

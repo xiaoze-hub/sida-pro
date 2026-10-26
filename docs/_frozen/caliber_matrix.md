@@ -16,7 +16,7 @@
 | 主力意图/暗盘主动买卖 | 腾讯逐笔明细 `dark_flow.compute_dark_flow`（`get_main_intent` 底层，`src/core/dark_flow.py:1052`） | **tick** | 逐笔主动买−主动卖（含主力/超大单/参与度/买占比），唯一具备方向语义的口径 | 元 | **可以**（唯一口径） |
 | L2 主力净流入 | 通达信 TQ `marketdata/vendors/tq.py`（本机网关 127.0.0.1:5100，`get_decision_pioneer` L2 字段） | ths*（TQ 扩展口径，非逐笔、非东财四档） | TQ 口径大单归类净流入，与逐笔/东财四档均不同 | 元 | **禁止**（资金面参考；与逐笔冲突时说明差异） |
 | DDE 大单（暗盘资金 TOP） | 同花顺 thsdk DDE（`data_source/thsdk_l2.py`，`compute_dark_flow_l2(source="thsdk")`） | ths | 同花顺 DDE 大单口径（逐单大单归类），与逐笔/东财四档均不同 | 万元（main_net_wan） | **禁止**（仅资金面参考） |
-| 大盘/两市主力净流入 | 国内网关 `115.190.177.213:8100/cn/market-overview`（东财两市超大+大单汇总，`/api/market-data/market-capital-flow`） | eastmoney4 | 两市按单金额四档归类汇总 | 亿元 | **禁止**（仅资金面参考） |
+| 大盘/两市主力净流入 | 国内网关 `101.35.244.238:8100/cn/market-overview`（东财两市超大+大单汇总，`/api/market-data/market-capital-flow`） | eastmoney4 | 两市按单金额四档归类汇总 | 亿元 | **禁止**（仅资金面参考） |
 | 板块/行业资金 | 同花顺 `marketdata/vendors/ths_flow.py`（data.10jqka.com.cn/funds/hyzjl|gnzjl） | ths | 同花顺行业资金净额（流入/流出榜），口径独立 | 亿元 | **禁止**（参考） |
 | 北向资金 | 同花顺 hexin `marketdata/vendors/northbound.py`（东财 kamt 自 2024-08 断供） | ths | hexin 当日分钟累计净买入（市场级） | 元 | 参考（市场级情绪，无个股方向语义） |
 | 龙虎榜 | 东财 datacenter（`marketdata` dragon_tiger，datasources 健康检查含此类型） | eastmoney4 | 榜单营业部净买入归类（日频 T-1），非实时方向语义 | 元 | **禁止**（参考） |

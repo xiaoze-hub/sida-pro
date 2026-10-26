@@ -406,19 +406,63 @@ def test_api_health_data_sources_endpoint():
 # ---------------------------------------------------------------------------
 
 
-def test_tq_moreinfo_never_discovered_is_degraded(monkeypatch):
-    """未配 TDX_QUANT_URL 且 vendor 无缓存 → degraded(诚实, 不编造)。"""
+def test_tq_moreinfo_before_discovery_is_degraded(monkeypatch):
+    """未配 TDX_QUANT_URL, 解析器不可用(旧模块)且无缓存 → degraded(诚实, 不编造)。"""
     monkeypatch.delenv("TDX_QUANT_URL", raising=False)
     import marketdata.vendors.tq as tqmod
+    monkeypatch.delattr(tqmod, "_resolve_tq_url", raising=False)
     monkeypatch.setattr(tqmod, "_TQ_URL_CACHE", None, raising=False)
     r = sh.check_source("tq_moreinfo", use_cache=False)
     assert r["id"] == "tq_moreinfo"
     assert r["status"] == "degraded"
     assert r["status"] in VALID_STATUS
+    assert "尚未" in (r["detail"] or "")
 
 
-def test_tq_moreinfo_unreachable_is_degraded(monkeypatch):
-    """地址配了但探不通 → degraded(配了但当前拿不到数据)。"""
-    monkeypatch.setenv("TDX_QUANT_URL", "http://127.0.0.1:9/")
+def test_tq_moreinfo_after_discovery_is_connected(monkeypatch):
+    """真实解析器发现到可用地址 → connected(修: 不再只读被动缓存而漏报)。"""
+    monkeypatch.delenv("TDX_QUANT_URL", raising=False)
+    import marketdata.vendors.tq as tqmod
+    monkeypatch.setattr(tqmod, "_resolve_tq_url",
+                        lambda: "http://172.27.16.1:17709/", raising=False)
+    monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=2.0: True, raising=False)
     r = sh.check_source("tq_moreinfo", use_cache=False)
-    assert r["status"] in {"degraded", "unknown"}
+    assert r["status"] == "connected"
+    assert "172.27.16.1" in (r["detail"] or "")
+
+
+def test_tq_moreinfo_resolver_none_is_explicitly_unavailable(monkeypatch):
+    """解析器候选全灭返 None(v0.13.49 新语义) → degraded 且**显式『TQ 不可用』**,
+    不再是含糊的『尚未自动发现』。"""
+    monkeypatch.delenv("TDX_QUANT_URL", raising=False)
+    import marketdata.vendors.tq as tqmod
+    monkeypatch.setattr(tqmod, "_resolve_tq_url", lambda: None, raising=False)
+    r = sh.check_source("tq_moreinfo", use_cache=False)
+    assert r["status"] == "degraded"
+    assert "TQ 不可用" in (r["detail"] or "")
+    assert "尚未" not in (r["detail"] or "")
+
+
+def test_tq_moreinfo_env_configured_unreachable_is_degraded(monkeypatch):
+    """env 配了但探不通 → degraded 带原因(不静默, 不编造 connected)。"""
+    monkeypatch.setenv("TDX_QUANT_URL", "http://127.0.0.1:9/")
+    import marketdata.vendors.tq as tqmod
+    monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=2.0: False, raising=False)
+    r = sh.check_source("tq_moreinfo", use_cache=False)
+    assert r["status"] == "degraded"
+    assert "TDX_QUANT_URL" in (r["detail"] or "")
+
+
+def test_tq_moreinfo_probe_exception_is_unknown(monkeypatch):
+    """探测抛异常 → unknown(附原因), 不吞掉也不假装连通。"""
+    monkeypatch.delenv("TDX_QUANT_URL", raising=False)
+    import marketdata.vendors.tq as tqmod
+
+    def _boom(*a, **k):
+        raise RuntimeError("probe blew up")
+
+    monkeypatch.setattr(tqmod, "_resolve_tq_url", _boom, raising=False)
+    r = sh.check_source("tq_moreinfo", use_cache=False)
+    assert r["status"] == "unknown"
+    assert "probe blew up" in (r["detail"] or "")
+

@@ -78,13 +78,24 @@ def test_scheduler_listener_catches_job_error(monkeypatch, tmp_path):
     assert any((i.get("context") or {}).get("source") == "scheduler" for i in items)
 
 
-def test_scheduler_missed_job_reported(monkeypatch, tmp_path):
-    _client(monkeypatch, tmp_path)
+def test_scheduler_missed_job_is_metric_not_error(monkeypatch, tmp_path):
+    """契约变更(2026-10-22): missed 是调度事件, 不是异常。
+
+    实测 24h 内 725 条 "scheduler job missed" 把错误表灌满, 真故障反而看不见。
+    现在: missed → 计数(missed_counts) + /logs/errors 的 scheduler_missed 字段;
+    **不再**写进错误列表。真正的 job 异常仍照旧落盘(见上一个用例)。
+    """
+    c = _client(monkeypatch, tmp_path)
     sched = _StubScheduler()
     et.install_scheduler_error_tracking(sched)
     cb, _ = sched.listeners[0]
+    et._clear_state()
     cb(_FakeEvent(job_id="nightly", exc=None))
-    assert et.recent_errors(10), "missed job 应落盘"
+
+    assert not et.recent_errors(10), "missed 不该再进错误列表"
+    assert et.missed_counts().get("nightly") == 1, "missed 必须被计数, 不能完全看不见"
+    body = c.get("/logs/errors").json()
+    assert body["scheduler_missed"].get("nightly") == 1
 
 
 def test_frontend_report_endpoint(monkeypatch, tmp_path):

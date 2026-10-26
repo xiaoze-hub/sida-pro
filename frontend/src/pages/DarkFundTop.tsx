@@ -79,7 +79,7 @@ export default function DarkFundTopPage() {
     const val = (r: DarkFundTopRow) =>
       sort.key === 'main' ? r.main_net_wan ?? 0
       : sort.key === 'amount' ? r.total_amount_wan ?? 0
-      : r.main_net_ratio ?? 0
+      : r.main_net_vol ?? r.main_net_ratio ?? 0
     return rows.sort((a, b) => (val(a) - val(b)) * (sort.dir === -1 ? -1 : 1))
   }, [data, sort])
   const sortMark = (key: 'main' | 'amount' | 'ratio') =>
@@ -164,8 +164,10 @@ export default function DarkFundTopPage() {
                 {' · '}{t('common.source')} <span className="font-mono">thsdk_dde</span>({t('darkFundTop.sourceNote')})
                 {' · '}
                 {/* 口径统一徽章(2026-09-22): 10px 等宽 + tooltip, 中性色 —— 口径是"数据出处",
-                    不是行情方向, 所以不随涨跌上色(AGENTS 硬约束: 资金面必须可见口径标签)。 */}
-                <CaliberBadge caliber="eastmoney4" label={t('darkFundTop.caliberTag')} title={t('darkFundTop.caliberHint')} />
+                    不是行情方向, 所以不随涨跌上色(AGENTS 硬约束: 资金面必须可见口径标签)。
+                    P0 修复(2026-10-24): 本页数据源是 `thsdk_dde`(同花顺 DDE 主力净流入, 见上一行),
+                    徽章曾标成东财四档(按单金额分档), 属口径红线违反 —— 两种口径不可换算, 现改 ths。 */}
+                <CaliberBadge caliber="ths" label={t('darkFundTop.caliberTag')} title={t('darkFundTop.caliberHint')} />
                 {' · '}{t('common.updatedAt')} <span className="font-mono">{data.updated_at ?? '-'}</span>
               </p>
             </div>
@@ -241,7 +243,9 @@ export default function DarkFundTopPage() {
                         {toAmountFromWan(r.main_net_wan)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {safeFixed(r.main_net_ratio, 0, '-')}
+                        {/* P0(2026-10-18 审计 F17): 0 位舍入把 0.4661 亿显示成 0(5/20 行"无净量")。
+                            净量以「亿股」计, 2 位小数才有区分度。 */}
+                        {safeFixed(r.main_net_vol ?? r.main_net_ratio, 2, '-')}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                         {toAmountFromWanUnsigned(r.total_amount_wan)}
@@ -261,7 +265,7 @@ export default function DarkFundTopPage() {
                               {toAmountFromWan(r.tck_dark_net_wan)}
                             </span>
                           ) : (
-                            <span className="text-muted-foreground/50">--</span>
+                            <span className="text-muted-foreground">--</span>
                           )}
                         </td>
                       ) : null}
@@ -292,7 +296,7 @@ export default function DarkFundTopPage() {
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-[10px] text-muted-foreground">#{i + 1}</span>
                         <span className="font-mono text-[13px] text-primary font-medium">{r.symbol}</span>
-                        <span className="text-[12px] text-foreground truncate">{r.name ?? '-'}</span>
+                        <span className="text-[12px] text-foreground truncate" title={r.name ?? '-'}>{r.name ?? '-'}</span>
                       </div>
                       <div className="mt-1 text-[10px] text-muted-foreground">{r.source}</div>
                     </div>

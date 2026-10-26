@@ -2,7 +2,7 @@ import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, AlertTriangle, Crown } from 'lucide-react'
+import { Target, Star, Briefcase, UserRound, Upload, X, KeyRound, AlertTriangle, Crown } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -12,6 +12,8 @@ import { formatDateTime } from '@/lib/utils'
 import { submitChangePassword } from '@/lib/change-password'
 import { useApiQuery } from '@/hooks/useApiQuery'
 import NotifyChannelsSection from '@/components/profile/NotifyChannelsSection'
+import SessionDevicesSection from '@/components/profile/SessionDevicesSection'
+import DataPrivacySection from '@/components/profile/DataPrivacySection'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import { useI18n } from '@/hooks/useI18n'
 
@@ -34,6 +36,30 @@ interface ProfileStats {
   watchlist_count: number
   position_count: number
   has_shadow_profile: boolean
+}
+
+/** 分 Agent 命中榜(GET /profile/stats/accuracy)。字段全可选, 防后端/传输异常时崩。 */
+interface AccuracyAgent {
+  agent: string
+  hit: number
+  total: number
+  hit_rate: number | null
+  avg_return_pct: number | null
+  qualified: boolean
+}
+
+interface AccuracyBoard {
+  since: string | null
+  scope: string
+  note?: string
+  overall?: {
+    hit_count: number
+    total: number
+    hit_rate: number | null
+    avg_return_pct: number | null
+    scope: string
+  }
+  agents?: AccuracyAgent[]
 }
 
 /** 头像首字母圆形色块(无头像时兜底); 240 色相实底, 不用渐变。 */
@@ -82,12 +108,15 @@ export function Profile() {
   const { data: profile, isLoading, error: profileError, refetch: refetchProfile, isFetching: profileFetching } =
     useApiQuery<ProfileInfo>(['profile'], '/profile')
   const { data: stats, error: statsError } = useApiQuery<ProfileStats>(['profile', 'stats'], '/profile/stats')
+  // 2026-10-10 AI 链路 P1: 分 Agent 命中榜(此前后端已实现、零前端消费)。独立 query, 不拖累账号区。
+  const { data: board, error: boardError } = useApiQuery<AccuracyBoard>(
+    ['profile', 'stats', 'accuracy'],
+    '/profile/stats/accuracy',
+  )
   const [nicknameDraft, setNicknameDraft] = useState('')
   const [avatarDraft, setAvatarDraft] = useState('') // '' = 未设置; 由头像是否改动区分
   const [avatarChanged, setAvatarChanged] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
-  const [pasteOpen, setPasteOpen] = useState(false)
-  const [pasteValue, setPasteValue] = useState('')
 
   // ── 安全中心(修改密码) ──
   const [oldPwd, setOldPwd] = useState('')
@@ -121,22 +150,6 @@ export function Profile() {
     }
   }
 
-  const onPasteAvatar = () => {
-    const v = (pasteValue || '').trim()
-    if (!v) return
-    if (!v.startsWith('data:image/')) {
-      toast('请粘贴图片 data URL(data:image/... 开头)', 'error')
-      return
-    }
-    if (v.length > 100_000) {
-      toast('图片过大, 请压缩到 75KB 以内', 'error')
-      return
-    }
-    setAvatarDraft(v)
-    setAvatarChanged(true)
-    setPasteValue('')
-    setPasteOpen(false)
-  }
 
   const saveProfile = async () => {
     const nickname = nicknameDraft.trim()
@@ -217,16 +230,13 @@ export function Profile() {
           <SectionHeader title={t('profile.personalInfo')} className="mb-4" />
 
           <div className="flex items-start gap-4">
-            {/* 头像: 默认用户名首字母色块; 可上传或粘贴 data URL */}
+            {/* 头像: 默认用户名首字母色块; 可上传 */}
             <div className="flex flex-col items-center gap-2 shrink-0">
               <AvatarCircle name={displayName} avatar={avatarDraft} />
               <div className="flex flex-col items-center gap-1">
                 <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
                 <Button variant="secondary" size="sm" className="h-7 text-[11px]" onClick={() => fileRef.current?.click()}>
                   <Upload className="w-3 h-3" /> 上传
-                </Button>
-                <Button variant="ghost" size="sm" className="h-6 text-[11px]" onClick={() => setPasteOpen(v => !v)}>
-                  粘贴 data URL
                 </Button>
                 {avatarChanged && avatarDraft === '' && (
                   <span className="text-[10px] text-muted-foreground">头像将清空</span>
@@ -235,22 +245,6 @@ export function Profile() {
             </div>
 
             <div className="flex-1 min-w-0 space-y-4">
-              {pasteOpen && (
-                <div className="rounded-md border border-border/40 bg-accent/20 p-3 space-y-2">
-                  <Label className="text-[11px]">粘贴图片 data URL(200KB 以内)</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={pasteValue}
-                      onChange={e => setPasteValue(e.target.value)}
-                      placeholder="data:image/png;base64,..."
-                      className="h-8 text-[11px] font-mono"
-                    />
-                    <Button size="sm" className="h-8 shrink-0" onClick={onPasteAvatar}>
-                      <Check className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                </div>
-              )}
 
               <div>
                 <Label className="text-[11px]">昵称(1-32 字)</Label>
@@ -282,7 +276,10 @@ export function Profile() {
           <SectionHeader title={t('profile.security')} className="mb-4" />
           
           {/* 当前账号 */}
-          <div className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2">
+          <div
+            className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2"
+            data-testid="profile-account-card"
+          >
             {/*
               2026-09-14 走查 B: 账号/角色/注册时间此前无论加载失败还是真缺值都渲染 '--' —— 用户
               分不清"没拉到"和"本来就是空的"。已登录用户的 username/role/created_at 恒存在,
@@ -312,7 +309,7 @@ export function Profile() {
               ].map(row => (
                 <div key={row.k} className="flex items-center justify-between gap-3 text-[12px]">
                   <span className="text-muted-foreground">{row.k}</span>
-                  <span className="font-medium text-foreground truncate">{row.v}</span>
+                  <span className="font-medium text-foreground truncate" title={row.v}>{row.v}</span>
                 </div>
               ))
             )}
@@ -338,6 +335,9 @@ export function Profile() {
               {changingPwd ? t('accountMenu.submitting') : t('profile.changePassword')}
             </Button>
           </div>
+
+          {/* 在线设备(2026-10-23): 设备限制真正生效后的可运维面 */}
+          <SessionDevicesSection />
         </section>
 
         {/* ③ 我的 API Key(2026-09-16 控制台) */}
@@ -389,6 +389,81 @@ export function Profile() {
               accent={stats?.has_shadow_profile ? 'text-emerald-600' : 'text-muted-foreground'}
             />
           </div>
+
+          {/* 分 Agent 命中榜(2026-10-10 AI 链路 P1): 谁准谁不准, 一眼见。
+              消费 GET /profile/stats/accuracy(此前后端已实现、零前端消费)。
+              样本不足(qualified=false)显式标注不参评; 失败/空态显式, 不编造。 */}
+          <div className="mt-5 border-t border-border/40 pt-4" data-testid="profile-agent-board">
+            <div className="mb-3 flex flex-wrap items-baseline gap-2">
+              <span className="text-[12px] font-semibold text-foreground">Agent 命中榜</span>
+              <span className="text-[10px] text-muted-foreground">
+                分智能体预测命中率 · 近 30 天 · 样本不足不参评(按全平台统计, 预测记录无用户维度)
+              </span>
+            </div>
+            {boardError ? (
+              <div className="text-[11px] text-amber-600 dark:text-amber-500" data-testid="profile-agent-board-error">
+                Agent 命中榜加载失败: {boardError instanceof Error ? boardError.message : '未知错误'}
+              </div>
+            ) : !board ? (
+              <div className="text-[11px] text-muted-foreground">加载中…</div>
+            ) : (board.agents ?? []).length === 0 ? (
+              <div className="text-[11px] text-muted-foreground" data-testid="profile-agent-board-empty">
+                暂无已评估的 Agent 预测(近 30 天无样本)
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="border-b border-border/40 text-muted-foreground">
+                      <th className="px-2 py-1 font-medium">Agent</th>
+                      <th className="px-2 py-1 text-right font-medium">命中率</th>
+                      <th className="px-2 py-1 text-right font-medium">命中</th>
+                      <th className="px-2 py-1 text-right font-medium">平均收益</th>
+                      <th className="px-2 py-1 text-right font-medium">参评</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {(board.agents ?? []).map(a => (
+                      <tr key={a.agent} data-testid={`profile-agent-row-${a.agent}`}>
+                        <td className="px-2 py-1 text-foreground">{a.agent}</td>
+                        <td className="px-2 py-1 text-right font-mono text-foreground">
+                          {a.hit_rate != null ? `${a.hit_rate}%` : '--'}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-muted-foreground">
+                          {a.hit}/{a.total}
+                        </td>
+                        <td
+                          className={`px-2 py-1 text-right font-mono ${
+                            a.avg_return_pct == null
+                              ? 'text-muted-foreground'
+                              : a.avg_return_pct > 0
+                                ? 'text-stock-up'
+                                : a.avg_return_pct < 0
+                                  ? 'text-stock-down'
+                                  : 'text-foreground'
+                          }`}
+                        >
+                          {a.avg_return_pct != null ? `${a.avg_return_pct > 0 ? '+' : ''}${a.avg_return_pct}%` : '--'}
+                        </td>
+                        <td className="px-2 py-1 text-right">
+                          {a.qualified ? (
+                            <span className="text-muted-foreground">参评</span>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-500">样本不足</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ④½ 数据与隐私(2026-10-23): 导出/注销此前有后端无前端 */}
+        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+          <DataPrivacySection username={profile?.username} />
         </section>
 
         {/* ⑤ Pro 升级(B.1) */}

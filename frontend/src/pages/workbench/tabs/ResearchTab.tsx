@@ -1,8 +1,11 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { fetchAPI } from '@panwatch/api'
+import { safeFixed } from '@/lib/format'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import { ReportsTab } from '@panwatch/biz-ui/components/insight/ReportsTab'
 import { DeepTab } from '@panwatch/biz-ui/components/insight/DeepTab'
 import InsightProvider from '@/pages/workbench/InsightProvider'
+import DecisionVerdictCard from '@/pages/workbench/DecisionVerdictCard'
 
 /**
  * 工作台标签「研究」(工作台 v2 三合一, Task 15)。
@@ -27,7 +30,9 @@ import InsightProvider from '@/pages/workbench/InsightProvider'
  *    —— 见 `DeepTab.tsx`), 本文件**不再造第二个入口**(否则同屏两个按钮指向同一路径)。
  *  - 两个恢复文件**一字未改**: 改它们会让本标签与其它消费方(T9 恢复面)分叉;
  *  - 本文件自建的只有: 一层 `InsightProvider` + 段头(标题/口径/条数, 恢复组件里没有)
- *    + 两段**如实的空态说明**(见下「诚实空态」)。
+ *    + 两段**如实的空态说明**(见下「诚实空态」)
+ *    + ⓪ 一段「决策合成」(`GET /api/decision/{symbol}` → 动手/看看/别碰 + 一行理由, P0-3 2026-10-10;
+ *      由 `@/pages/workbench/DecisionVerdictCard` 自带取数/竞态守卫/三态 —— 见该文件头注)。
  *
  * 取数键 `keys={['reports','deep']}`(控制器裁定, 见 progress「Task 15 Ruling」):
  *  - `'reports'` → `insightApi.history({agent_name: premarket_outlook|daily_report|news_digest,
@@ -118,8 +123,130 @@ function Section({
   )
 }
 
+interface BrokerReportItem {
+  info_code: string
+  title: string
+  org_name: string
+  author: string
+  publish_date: string
+  rating: string
+  target_price: number | null
+  industry_name: string
+  pdf_url: string | null
+  detail_url: string | null
+}
+
+function BrokerResearchSection({ symbol }: { symbol: string }) {
+  const [items, setItems] = useState<BrokerReportItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchAPI<{ items: BrokerReportItem[]; total: number }>(`/reports/broker/${symbol}`)
+      .then((res) => {
+        if (cancelled) return
+        setItems(res?.items || [])
+        setError(null)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [symbol])
+
+  if (loading) {
+    return <div className="py-3 text-[11px] text-muted-foreground">正在同步东方财富机构研报...</div>
+  }
+
+  if (error) {
+    return <div className="py-2 text-[11px] text-destructive">研报加载异常: {error}</div>
+  }
+
+  if (items.length === 0) {
+    return <div className="py-2 text-[11px] text-muted-foreground">暂无该标的机构研报</div>
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="overflow-x-auto rounded border border-border/50">
+        <table className="w-full text-left text-[11px]">
+          <thead className="bg-muted/40 text-[10px] text-muted-foreground">
+            <tr>
+              <th className="py-1.5 pl-2.5 font-medium">研报标题</th>
+              <th className="py-1.5 px-2 font-medium">发布机构</th>
+              <th className="py-1.5 px-2 font-medium">评级</th>
+              <th className="py-1.5 px-2 font-medium">目标价</th>
+              <th className="py-1.5 px-2 font-medium">分析师</th>
+              <th className="py-1.5 px-2 font-medium">日期</th>
+              <th className="py-1.5 pr-2.5 text-right font-medium">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/30">
+            {items.map((r) => (
+              <tr key={r.info_code || r.title} className="hover:bg-muted/20 transition-colors">
+                <td className="py-1.5 pl-2.5 max-w-[280px] truncate text-foreground font-medium" title={r.title}>
+                  {r.title}
+                </td>
+                <td className="py-1.5 px-2 text-foreground">{r.org_name || '--'}</td>
+                <td className="py-1.5 px-2">
+                  <span className={`inline-block rounded px-1.5 py-0.2 text-[10px] font-medium ${
+                    r.rating.includes('买入') || r.rating.includes('强推')
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      : r.rating.includes('增持')
+                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      : 'bg-muted text-muted-foreground'
+                  }`}>
+                    {r.rating}
+                  </span>
+                </td>
+                <td className="py-1.5 px-2 font-mono text-foreground">
+                  {typeof r.target_price === 'number' ? `${safeFixed(r.target_price, 2)}元` : '--'}
+                </td>
+                <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[80px]" title={r.author}>
+                  {r.author || '--'}
+                </td>
+                <td className="py-1.5 px-2 font-mono text-muted-foreground whitespace-nowrap">{r.publish_date}</td>
+                <td className="py-1.5 pr-2.5 text-right whitespace-nowrap">
+                  {r.detail_url ? (
+                    <a
+                      href={r.detail_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary hover:underline mr-2"
+                    >
+                      原文 ↗
+                    </a>
+                  ) : null}
+                  {r.pdf_url ? (
+                    <a
+                      href={r.pdf_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      PDF
+                    </a>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 /** 标签正文(在 Provider 内消费 useInsight; 见文件头注)。 */
-function ResearchTabBody({ symbol }: { symbol: string }) {
+function ResearchTabBody({ symbol, market }: { symbol: string; market: string }) {
   const { reports, activeReport, deepLoaded, deepResult, deepHistory } = useInsight()
   // 历史对比的条数: 只用于**如实陈述**"历史部分取到了几条", 不参与任何推断。
   const historyCount = deepHistory?.items?.length ?? 0
@@ -133,7 +260,30 @@ function ResearchTabBody({ symbol }: { symbol: string }) {
         <span>AI 报告(盘前 / 盘后 / 新闻 三子页签 + 正文) · 深度分析(TradingAgents)</span>
       </div>
 
-      {/* ① AI 报告(三子页签 + 正文由恢复组件 ReportsTab 自带) */}
+      {/*
+        ⓪ 决策合成(P0-3, 2026-10-10): `GET /api/decision/{symbol}` 三信号 → 动手/看看/别碰 + 一行理由。
+        全库此前**零调用**(后端已挂载, 前端 API 已定义), 本段是它唯一的消费方。取数**独立**于
+        InsightProvider 的 keys(自带竞态守卫与三态), 故本标签的取数门控 `['reports','deep']` 不变
+        —— 决策段另发一条 `/decision`。布局: 复用本标签 Section 原子(hairline 分节), **不改布局密度**。
+      */}
+      <Section
+        id="decision"
+        title="决策合成"
+        hint={`三信号(趋势 × 活跃度 × 资金) → 动手 / 看看 / 别碰 + 一行理由 · /decision/${symbol}`}
+      >
+        <DecisionVerdictCard symbol={symbol} market={market} />
+      </Section>
+
+      {/* ① 机构研报(东方财富研报中心直连) */}
+      <Section
+        id="broker-reports"
+        title="券商机构研报"
+        hint={`东方财富机构研报中心权威收录 · 标的 ${symbol}`}
+      >
+        <BrokerResearchSection symbol={symbol} />
+      </Section>
+
+      {/* ② AI 报告(三子页签 + 正文由恢复组件 ReportsTab 自带) */}
       <Section
         id="reports"
         title="AI 报告"
@@ -145,7 +295,7 @@ function ResearchTabBody({ symbol }: { symbol: string }) {
         {reports.length === 0 ? (
           <div
             data-testid="research-reports-caveat"
-            className="mt-2 text-[10px] text-muted-foreground/70"
+            className="mt-2 text-[10px] text-muted-foreground"
           >
             报告列表为空时「该标的三个 agent 均无已存报告 / 取数失败 / 首拉在途」在此不可区分
           </div>
@@ -154,7 +304,7 @@ function ResearchTabBody({ symbol }: { symbol: string }) {
         {reports.length > 0 && !activeReport ? (
           <div
             data-testid="research-reports-agent-missing"
-            className="mt-2 text-[10px] text-muted-foreground/70"
+            className="mt-2 text-[10px] text-muted-foreground"
           >
             已取到 {reports.length} 份报告, 但当前子页签对应的 agent 不在其中 —— 换个子页签, 或等该 agent 产出
           </div>
@@ -170,7 +320,7 @@ function ResearchTabBody({ symbol }: { symbol: string }) {
         <DeepTab />
         {/* 已加载且无结果: 「确无分析 / 取数失败」不可区分(hook 无失败位) —— 如实说明, 不猜原因 */}
         {deepLoaded && !deepResult ? (
-          <div data-testid="research-deep-caveat" className="mt-2 text-[10px] text-muted-foreground/70">
+          <div data-testid="research-deep-caveat" className="mt-2 text-[10px] text-muted-foreground">
             未取到最近一次深度分析结果{historyCount > 0 ? `(历史决策对比已取到 ${historyCount} 条)` : ''}
             —— 「该标的尚无深度分析 / 取数失败」在此不可区分
           </div>
@@ -211,7 +361,7 @@ export default function ResearchTab({
       hasPosition={hasPosition}
       keys={RESEARCH_TAB_KEYS}
     >
-      <ResearchTabBody symbol={symbol} />
+      <ResearchTabBody symbol={symbol} market={mkt} />
     </InsightProvider>
   )
 }

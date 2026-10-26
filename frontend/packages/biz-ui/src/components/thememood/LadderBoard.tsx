@@ -18,6 +18,8 @@ export interface LadderStock {
   last_sealed?: string | null
   seal_amount?: number | null
   seal_ratio?: number | null
+  /** 首封×封成比 强度标签 S/A/B/C(影子运行, 仅统计参考; 无数据为 null/缺省) */
+  strength_label?: string | null
 }
 export interface LadderRow { boards: number; codes: string[]; names: string[]; tag: string | null; stocks: LadderStock[] }
 export interface LadderMark extends LadderStock { prev_boards: number | null }
@@ -48,7 +50,8 @@ function stockTitle(s: LadderStock): string {
   const parts = [s.name || s.symbol]
   if (s.tag) parts.push(s.tag)
   if (s.plate_type) parts.push(s.plate_type)
-  parts.push(fmtPct(s.pct))
+  // 无 pct 时不往 tooltip 里塞 `--`(2026-10-18 P0: 缺数不占位)
+  if (s.pct != null) parts.push(fmtPct(s.pct))
   if (s.first_time) parts.push(`首封 ${s.first_time}`)
   if (s.last_sealed) parts.push(`尾封 ${s.last_sealed}`)
   if (s.open_count) parts.push(`开板 ${s.open_count}次`)
@@ -58,23 +61,50 @@ function stockTitle(s: LadderStock): string {
   if (s.seal_amount != null) parts.push(`封单 ${fmtAmount(s.seal_amount)}`)
   if (s.seal_ratio != null) parts.push(`封成比 ${fmtPct(s.seal_ratio * 100)}`)
   if (s.amount != null) parts.push(`额 ${fmtAmount(s.amount)}`)
+  if (s.strength_label) parts.push(`强度 ${s.strength_label}（影子运行·仅统计参考）`)
   return parts.join(' · ')
+}
+
+/** 强度标签色调: 强(S/A)=涨停红, 中(B)=中性, 弱(C)=跌绿(买卖红绿铁律)。 */
+function strengthTone(label: string | null | undefined): string {
+  switch (label) {
+    case 'S': return 'text-[--stock-up] border-[--stock-up]/60'
+    case 'A': return 'text-[--stock-up]/80 border-[--stock-up]/40'
+    case 'C': return 'text-[--stock-down]/80 border-[--stock-down]/40'
+    default: return 'text-muted-foreground border-border/50'
+  }
 }
 
 function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw' }) {
   return (
     <span
       title={stockTitle(s)}
+      data-ladder-stock={s.symbol}
       className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border/30 px-0.5 py-0.5"
     >
       <DayCandle candle={s.candle} basis={basis} />
-      <span className="w-full truncate text-center text-[10px] text-foreground/80">{s.name}</span>
-      <span className={`text-[10px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
+      <span className="w-full truncate text-center text-[10px] text-foreground" title={s.name || s.symbol}>{s.name || s.symbol}</span>
+      {/* P0(2026-10-18 审计 F06): 无 pct 时不渲染 `--` —— 单页 820 处占位把格子塞满噪音。
+          保留等高占位块(高度不变、不塌格), 缺多少就是"这格只有名称+板数"。 */}
+      {s.pct != null ? (
+        <span className={`text-[10px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
+      ) : (
+        <span aria-hidden className="h-[14px] leading-[14px]" />
+      )}
       {s.tag ? (
         <span className="rounded bg-accent/50 px-0.5 text-[10px] text-muted-foreground">{s.tag}</span>
       ) : null}
       {s.seal_tag && s.seal_tag !== s.tag ? (
         <span className="rounded bg-accent/40 px-0.5 text-[10px] text-muted-foreground">{s.seal_tag}</span>
+      ) : null}
+      {s.strength_label ? (
+        <span
+          title={`强度 ${s.strength_label}（首封×封成比 · 影子运行·仅统计参考）`}
+          data-testid={`ladder-strength-${s.symbol}`}
+          className={`rounded border px-0.5 text-[10px] font-medium leading-none ${strengthTone(s.strength_label)}`}
+        >
+          {s.strength_label}
+        </span>
       ) : null}
       {s.dive ? (
         <span className="rounded bg-[--stock-down]/20 px-0.5 text-[10px] text-[--stock-down]">跳水</span>
@@ -104,16 +134,19 @@ function MarkGroup({ label, marks, tone }: { label: string; marks: LadderMark[];
   )
 }
 
-function DayColumn({ day, basis }: { day: LadderDay; basis: 'qfq' | 'raw' }) {
+function DayColumn({ day, basis, liveAsOf }: { day: LadderDay; basis: 'qfq' | 'raw'; liveAsOf?: string | null }) {
   const sealed = day.rows.reduce((a, r) => a + r.codes.length, 0)
   return (
     <div className="w-[170px] shrink-0 rounded border border-border/40 p-1.5">
       <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[11px] font-medium text-foreground/85">{fmtISODate(day.date)}</span>
+        <span className="text-[11px] font-medium text-foreground">{fmtISODate(day.date)}</span>
         <span className="text-[10px] text-muted-foreground">封 {sealed}</span>
       </div>
+      {/* 盘中列诚实标注: 未定型 + 数据截至时刻(小字徽章, 不卡片化); 定型后此列不再出现 ⇒ 徽章消失。 */}
       {day.provisional ? (
-        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[10px] text-primary">盘中</div>
+        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[10px] text-primary">
+          盘中{liveAsOf ? ` · 截至 ${liveAsOf}` : ''}
+        </div>
       ) : null}
       {day.rows.length === 0 && day.blown.length === 0 && day.broken.length === 0 ? (
         <div className="py-2 text-center text-[10px] text-muted-foreground">无收盘封板</div>
@@ -140,12 +173,13 @@ function DayColumn({ day, basis }: { day: LadderDay; basis: 'qfq' | 'raw' }) {
 }
 
 /** 矩阵视图(借鉴 quicktiny 多日天梯): 行=板高, 列=日期, 格=该(日,板高)个股。 */
-function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
+function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, liveAsOf }: {
   cols: LadderDay[]
   collapsed: Set<number>
   onlyBoard: number | null
   onToggleRow: (b: number) => void
   onOnlyBoard: (b: number | null) => void
+  liveAsOf?: string | null
 }) {
   const boards = useMemo(() => {
     const set = new Set<number>()
@@ -153,8 +187,24 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
     return [...set].sort((a, b) => b - a)
   }, [cols])
   const shown = onlyBoard != null ? boards.filter((b) => b === onlyBoard) : boards
+  // L3-A(2026-10-24): 空档显式化。板高是「有数据的档位」集合, 4板/5板没人时列会直接消失,
+  // 视觉上从 3板 跳到 6板 —— 读者会以为数据缺了。这里把缺的档位点名写出来(不是 0 家)。
+  const gaps = useMemo(() => {
+    if (boards.length === 0) return [] as number[]
+    const present = new Set(boards)
+    const max = Math.max(...boards)
+    const out: number[] = []
+    for (let b = max; b >= 1; b--) if (!present.has(b)) out.push(b)
+    return out
+  }, [boards])
   return (
     <div className="scrollbar overflow-x-auto pb-1">
+      {gaps.length > 0 && (
+        <div className="mb-1 text-[11px] text-muted-foreground" data-testid="ladder-gaps">
+          空档：{gaps.slice(0, 6).map((b) => `${b}板`).join('、')}
+          {gaps.length > 6 ? ` 等 ${gaps.length} 档` : ''} 无个股（不是 0 家涨跌停）
+        </div>
+      )}
       <div className="flex w-max gap-1">
         {/* 走查 2026-09-18: 板数列必须 sticky —— 横向滑到右边后仍要看到「几板」 */}
         <div className="sticky left-0 z-10 w-[64px] shrink-0 bg-background">
@@ -165,7 +215,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
                 type="button"
                 onClick={() => onOnlyBoard(onlyBoard === b ? null : b)}
                 className={`rounded px-1 text-[10px] font-medium ${
-                  onlyBoard === b ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-foreground/80'
+                  onlyBoard === b ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-foreground'
                 }`}
                 title={onlyBoard === b ? '取消只看本板' : '只看本板'}
               >
@@ -183,9 +233,9 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
         </div>
         {cols.map((d) => (
           <div key={d.date} className="w-[170px] shrink-0">
-            <div className="mb-1 truncate text-[10px] font-medium text-foreground/85">
+            <div className="mb-1 truncate text-[10px] font-medium text-foreground" title={fmtISODate(d.date)}>
               {fmtISODate(d.date)}
-              {d.provisional ? <span className="ml-1 text-primary">盘中</span> : null}
+              {d.provisional ? <span className="ml-1 text-primary">盘中{liveAsOf ? ` · 截至 ${liveAsOf}` : ''}</span> : null}
             </div>
             {shown.map((b) => {
               const row = d.rows.find((r) => r.boards === b)
@@ -215,14 +265,32 @@ export default function LadderBoard(props: {
   noteClosing?: string | null
   stats?: LadderStats | null
   asOf?: string | null
+  liveAsOf?: string | null
 }) {
-  const { ladder, liveDay, mode, stale, lastOk, noteClosing, stats, asOf } = props
+  const { ladder, liveDay, mode, stale, lastOk, noteClosing, stats, asOf, liveAsOf } = props
   const ref = useRef<HTMLDivElement>(null)
-  const [view, setView] = useState<'cols' | 'matrix'>('cols')
+  const [view, setView] = useState<'cols' | 'matrix'>(() => {
+    try {
+      const saved = localStorage.getItem('sida_ladder_view')
+      if (saved === 'cols' || saved === 'matrix') return saved
+    } catch {}
+    return 'matrix'
+  })
+  const handleToggleView = () => {
+    const next = view === 'matrix' ? 'cols' : 'matrix'
+    setView(next)
+    try {
+      localStorage.setItem('sida_ladder_view', next)
+    } catch {}
+  }
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const [onlyBoard, setOnlyBoard] = useState<number | null>(null)
   useEffect(() => { scrollToLatest(ref.current) }, [ladder, liveDay, view])
+  // 按日列视图: **最新在左**(2026-09-26 用户口径), 与题材情绪矩阵/连板梯队一致。
+  // 显式按日期降序排(不依赖接口返回顺序), 盘中 live 那天日期最大 -> 自然落在最左。
   const cols = [...ladder, ...(liveDay ? [liveDay] : [])]
+    .slice()
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)))
   const toggleRow = (b: number) => setCollapsed((prev) => {
     const next = new Set(prev)
     if (next.has(b)) next.delete(b)
@@ -246,10 +314,10 @@ export default function LadderBoard(props: {
           {asOf ? <span className="text-[10px] text-muted-foreground">更新 {asOf.slice(11, 19)}</span> : null}
           <button
             type="button"
-            onClick={() => setView(view === 'cols' ? 'matrix' : 'cols')}
+            onClick={handleToggleView}
             className="rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
           >
-            {view === 'cols' ? '矩阵视图' : '按日列视图'}
+            {view === 'matrix' ? '按日列视图' : '矩阵视图'}
           </button>
         </span>
       </div>
@@ -264,13 +332,13 @@ export default function LadderBoard(props: {
           <div className="scrollbar overflow-x-auto pb-1">
             <div className="flex w-max gap-1">
               {cols.map((d) => (
-                <DayColumn key={`${d.date}-${d.provisional ? 'live' : 'fin'}`} day={d} basis={d.provisional ? 'raw' : 'qfq'} />
+                <DayColumn key={`${d.date}-${d.provisional ? 'live' : 'fin'}`} day={d} basis={d.provisional ? 'raw' : 'qfq'} liveAsOf={liveAsOf} />
               ))}
             </div>
           </div>
         ) : (
           <MatrixView cols={cols} collapsed={collapsed} onlyBoard={onlyBoard}
-            onToggleRow={toggleRow} onOnlyBoard={setOnlyBoard} />
+            onToggleRow={toggleRow} onOnlyBoard={setOnlyBoard} liveAsOf={liveAsOf} />
         )}
       </div>
     </div>

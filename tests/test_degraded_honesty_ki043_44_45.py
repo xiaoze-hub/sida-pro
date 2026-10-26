@@ -3,7 +3,20 @@
 import asyncio
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.web.api import stocks as stocks_mod
+
+
+@pytest.fixture(autouse=True)
+def _isolate_board_snapshot(monkeypatch):
+    """板块资金落库(2026-10-14): 本文件测「空返回 → degraded」实时分支, 须屏蔽
+    读库路径(否则前序用例落的快照行被读回, 走不到 degraded 断言)。"""
+    import src.core.board_flow_sampler as bfs
+
+    monkeypatch.setattr(bfs, "read_fresh", lambda board_type: None)
+    monkeypatch.setattr(bfs, "try_write_async", lambda board_type, items: None)
+    yield
 
 
 def test_get_quotes_degraded_markets():

@@ -39,6 +39,11 @@ export interface DecisionStatsResponse {
 export interface DecisionLogItem {
   signal_kind: string
   symbol: string
+  /**
+   * 标的名称(2026-10-21 后端新增; **老数据/老后端没有该字段**)。
+   * 展示层用 `<StockLabel name={...}>`: 空则回退成只显示代码, 不写占位符。
+   */
+  name?: string | null
   trade_date: string
   /** 信号产生时的价格(元); **null = 当时没取到价, 不是 0** */
   price_at_signal: number | null
@@ -52,8 +57,85 @@ export interface DecisionLogItem {
 
 export interface DecisionLogResponse {
   count: number
+  /** 过滤后总行数(供翻页; 旧后端无此字段时回退 count) */
+  total?: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   items: DecisionLogItem[]
   note: string
+}
+
+/** 回测单个共振态聚合(可实现口径 close_to_close)。 */
+export interface BacktestPhaseAgg {
+  count: number
+  win_rate: number | null
+  profit_ratio: number | null
+  avg_gain: number | null
+  avg_loss: number | null
+  basis?: string
+  /** 路径极值(仅统计参考, 不可交易) */
+  path_max_gain_avg: number | null
+  path_max_loss_avg: number | null
+}
+
+export interface DecisionBacktestResponse {
+  /** false = 未跑出结果(缺股票池/计算失败), 页面显式标注, 不编造 */
+  available: boolean
+  error?: string
+  params: Record<string, unknown>
+  /** 口径标记: 双指标(缺资金维) / 三指标(资金=OHLC对照项) —— 必须透传到 UI */
+  basis: string
+  sample: { symbols: number; signals: number }
+  by_phase?: Record<string, BacktestPhaseAgg>
+  /** 官方 2024.10-2025.10 基准(仅对照, 不同口径不可直接比优劣) */
+  official?: Record<string, { win_rate: number; pl_ratio: number }>
+  generated_at?: string
+  note: string
+}
+
+/** 入场候选后验一行(horizon×来源)。 */
+export interface EntryOutcomeRow {
+  horizon_days: number
+  source: string
+  source_label: string
+  total: number
+  wins: number
+  /** 样本不足(min_sample)时为 null —— 不给小样本算出的百分比 */
+  win_rate: number | null
+  avg_return_pct: number | null
+  insufficient: boolean
+  min_sample: number
+}
+
+export interface EntryOutcomesResponse {
+  window_days: number
+  min_sample: number
+  available: boolean
+  error?: string
+  rows: EntryOutcomeRow[]
+  total_samples?: number
+  note: string
+}
+
+/** 信号对账(批次D)单个时间档。 */
+export interface SignalHorizonStat {
+  n: number
+  win_rate: number | null
+  avg_pct: number | null
+}
+
+export interface SignalHitRateResponse {
+  days: number
+  by_type: Record<
+    string,
+    {
+      t1: SignalHorizonStat
+      t5: SignalHorizonStat
+      /** 官方基准对照(resonance; 样本足够时才由后端附带) */
+      official_benchmark?: { win_rate: number; pl_ratio: number; note: string }
+    }
+  >
 }
 
 /** 命中率统计(样本不足时不返回数字, 由调用方如实展示)。 */
@@ -64,11 +146,135 @@ export function fetchDecisionStats(days = 180, minSample = 30) {
   )
 }
 
-/** 信号明细(kind 省略 = 全部类型)。 */
-export function fetchDecisionLog(kind?: string, limit = 100) {
-  const q = new URLSearchParams({ limit: String(limit) })
+/** 信号明细(kind 省略 = 全部类型); 支持 offset/日期过滤分页。 */
+export function fetchDecisionLog(
+  kind?: string,
+  limit = 100,
+  offset = 0,
+  startDate?: string,
+  endDate?: string,
+) {
+  const q = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (kind) q.set('kind', kind)
+  if (startDate) q.set('start_date', startDate)
+  if (endDate) q.set('end_date', endDate)
   return fetchAPI<DecisionLogResponse>(`/decisions/log?${q.toString()}`, { cacheMode: 'reload' })
+}
+
+/**
+ * 三指标共振回测(P2-1)。缺股票池/计算失败后端显式 `available=false`(永不 500), 页面须如实标注。
+ * 默认 `fundSource` 空 = 双指标(缺资金维) —— 与官方四态不可直接比较, `basis` 标记必须上屏。
+ */
+export function fetchDecisionBacktest(params: {
+  symbols: string
+  startDate?: string
+  endDate?: string
+  holdDays?: number
+  successPct?: number
+  fundSource?: string
+  activityLine?: number
+  maxSymbols?: number
+}) {
+  const q = new URLSearchParams({ symbols: params.symbols })
+  if (params.startDate) q.set('start_date', params.startDate)
+  if (params.endDate) q.set('end_date', params.endDate)
+  if (params.holdDays != null) q.set('hold_days', String(params.holdDays))
+  if (params.successPct != null) q.set('success_pct', String(params.successPct))
+  if (params.fundSource) q.set('fund_source', params.fundSource)
+  if (params.activityLine != null) q.set('activity_line', String(params.activityLine))
+  if (params.maxSymbols != null) q.set('max_symbols', String(params.maxSymbols))
+  return fetchAPI<DecisionBacktestResponse>(`/decisions/backtest?${q.toString()}`, { cacheMode: 'reload' })
+}
+
+/** 入场候选后验(P2-3): 按 horizon×来源给胜率; 样本不足 `insufficient=true`(不给数字)。 */
+export function fetchEntryOutcomes(days = 30, minSample = 20) {
+  const q = new URLSearchParams({ days: String(days), min_sample: String(minSample) })
+  return fetchAPI<EntryOutcomesResponse>(`/decisions/entry-outcomes?${q.toString()}`, { cacheMode: 'reload' })
+}
+
+/** 信号对账(批次D): 按信号类型 T+1/T+5 胜率; resonance 附官方基准对照。 */
+export function fetchSignalHitRate(signalType?: string, days = 30) {
+  const q = new URLSearchParams({ days: String(days) })
+  if (signalType) q.set('signal_type', signalType)
+  return fetchAPI<SignalHitRateResponse>(`/signals/hit-rate?${q.toString()}`, { cacheMode: 'reload' })
+}
+
+/** 自选池信号质量: 单个时间档(与 DecisionHorizon 同口径: 样本不足不给数字)。 */
+export interface WatchlistQualityHorizon {
+  n: number
+  hit_rate: number | null
+  insufficient: boolean
+  note: string
+}
+
+export interface WatchlistQualitySymbolRow {
+  symbol: string
+  n_total: number
+  horizons: Record<'t1' | 't3' | 't5', WatchlistQualityHorizon>
+}
+
+export interface WatchlistQualityRegimeBucket {
+  regime: string
+  label: string
+  n_total: number
+  horizons: Record<'t1' | 't3' | 't5', WatchlistQualityHorizon>
+}
+
+export interface WatchlistQualitySignal {
+  signal_kind: string
+  n_total: number
+  symbols_count: number
+  horizons: Record<'t1' | 't3' | 't5', WatchlistQualityHorizon>
+  by_symbol: WatchlistQualitySymbolRow[]
+  regime_buckets: WatchlistQualityRegimeBucket[]
+  /** 如『该信号仅在发酵期样本足够』; 无定论为空串 */
+  regime_note: string
+}
+
+export interface WatchlistSignalQualityResponse {
+  /** false = 无法隔离/自选为空/查询失败(带 error) */
+  available: boolean
+  user_id: string
+  days: number
+  min_sample: number
+  symbols_count: number
+  signals: WatchlistQualitySignal[]
+  error?: string
+  note: string
+}
+
+/** 自选池专属信号质量(2026-10-11 ②): 按 user_id 隔离的账本聚合, 只陈述实测。 */
+export function fetchWatchlistSignalQuality(days = 180, minSample = 30) {
+  const q = new URLSearchParams({ days: String(days), min_sample: String(minSample) })
+  return fetchAPI<WatchlistSignalQualityResponse>(
+    `/decisions/watchlist-signal-quality?${q.toString()}`,
+    { cacheMode: 'reload' },
+  )
+}
+
+/** 决策阈值只读快照一项(数智决策 P1-3 可配置化)。 */
+export interface DecisionThresholdItem {
+  key: string
+  /** 中文名(生命线/强势线/大牛线) */
+  label: string
+  /** 当前生效值 */
+  value: number
+  /** 来源: default=内置默认 / env=环境变量覆盖 */
+  source: 'default' | 'env'
+  /** 内置默认值(未覆盖时的值) */
+  default: number
+  /** 覆盖用的环境变量名(如 SIDA_THRESHOLD_STRONG_LINE) */
+  env: string
+}
+
+export interface DecisionThresholdsResponse {
+  items: DecisionThresholdItem[]
+  note: string
+}
+
+/** 决策阈值只读快照(当前生效值 + 来源); 无写入口。 */
+export function fetchDecisionThresholds() {
+  return fetchAPI<DecisionThresholdsResponse>('/decisions/thresholds', { cacheMode: 'reload' })
 }
 
 /** 信号类型的中文名(后端用机器名, 页面给人看)。 */
@@ -87,5 +293,15 @@ export function kindLabel(kind: string): string {
 /** 对象式导出(与本包既有风格一致: `xxxApi.get(...)`) */
 export const decisionsApi = {
   stats: (days = 180, minSample = 30) => fetchDecisionStats(days, minSample),
-  log: (kind?: string, limit = 100) => fetchDecisionLog(kind, limit),
+  log: (kind?: string, limit = 100, offset = 0, startDate?: string, endDate?: string) =>
+    fetchDecisionLog(kind, limit, offset, startDate, endDate),
+  backtest: (params: Parameters<typeof fetchDecisionBacktest>[0]) => fetchDecisionBacktest(params),
+  entryOutcomes: (days = 30, minSample = 20) => fetchEntryOutcomes(days, minSample),
+  thresholds: () => fetchDecisionThresholds(),
+  watchlistQuality: (days = 180, minSample = 30) => fetchWatchlistSignalQuality(days, minSample),
+}
+
+/** 信号对账(批次D)对象式导出。 */
+export const signalsReviewApi = {
+  hitRate: (signalType?: string, days = 30) => fetchSignalHitRate(signalType, days),
 }

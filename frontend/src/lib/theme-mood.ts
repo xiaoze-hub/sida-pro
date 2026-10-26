@@ -12,13 +12,27 @@ export function fmtScore(v: number | null | undefined): string {
   return safeFixed(v, 1)
 }
 
+/**
+ * 情绪分 → 底色（2026-10-24 L3-A：6 色收敛为 3 语义 + 灰）
+ *
+ * 原来 6 档（muted/40、muted/60、up/15、up/30、up/45）肉眼看不出 40% 与 60% 的差别，
+ * 读者无法把颜色翻译成结论。现收敛为四种可命名状态：
+ *   走弱(<50) 绿 / 震荡(50-70) 中性 / 走强(≥70) 红 / 无数据 灰
+ * 语义沿用 A 股口径：红=走强、绿=走弱，不引入第四种色相。
+ */
 export function cellColorClass(score: number | null | undefined): string {
   if (score == null || !Number.isFinite(score)) return 'bg-muted/30'
-  if (score < 50) return 'bg-muted/40'
-  if (score < 60) return 'bg-muted/60'
-  if (score < 70) return 'bg-stock-up/15'
-  if (score < 82) return 'bg-stock-up/30'
-  return 'bg-stock-up/45'
+  if (score < 50) return 'bg-stock-down/20'
+  if (score < 70) return 'bg-muted/60'
+  return 'bg-stock-up/30'
+}
+
+/** 与 cellColorClass 一一对应的人话标签（图例/悬停共用，避免两处文案漂移） */
+export function cellColorLabel(score: number | null | undefined): string {
+  if (score == null || !Number.isFinite(score)) return '无数据'
+  if (score < 50) return '走弱'
+  if (score < 70) return '震荡'
+  return '走强'
 }
 
 export function cellTextClass(score: number | null | undefined): string {
@@ -134,10 +148,18 @@ export function dayLabels(dates: string[]): string[] {
   })
 }
 
-/** 共享时间轴: 优先接口 dates, 缺省回退首个题材的 cells(兼容旧响应), 再按窗口截断。 */
+/**
+ * 共享时间轴: 优先接口 dates, 缺省回退首个题材的 cells(兼容旧响应), 再按窗口截断。
+ *
+ * **顺序 = 最新在左**(2026-09-26 用户口径): 与页面下方「连板梯队」一致(那边本就 `sort((a,b)=>b-a)`)。
+ * 理由: 看盘时最新一天最该先被看到, 横向滚动条往右翻的是历史。
+ * ⚠️ 全页共用这条轴(矩阵列 + 走势折线 + 月带 + 日标签), 所以折线的横轴也随之为"右旧左新";
+ *    改顺序时这几处必须一起看, 否则折线会与列错位。
+ */
 export function axisDates(dates: string[] | undefined, fallback: MoodCell[], window: number): string[] {
   const src = dates && dates.length ? dates : fallback.map((c) => c.date)
-  return window > 0 ? src.slice(-window) : src
+  const asc = window > 0 ? src.slice(-window) : src
+  return asc.slice().reverse()
 }
 
 /** 单元格按日期索引(轴列渲染用; 缺该交易日的题材显示空位)。 */

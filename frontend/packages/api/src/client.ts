@@ -1,5 +1,12 @@
 export const API_BASE = '/api'
-const DEFAULT_TIMEOUT_MS = 20000
+// 2026-10-10 前端加载韧性: 默认超时 20s → 15s。
+// 后端偶发 502 闪断/慢时, 无超时的 fetch 会让组件**永久 loading**(用户只能刷新浏览器)。
+// 收紧到 15s 后由下面的 AbortController 抛类型化超时错误, 页面转显式错误态+重试;
+// 调用方仍可用 `timeoutMs` 覆盖(重 POST/慢接口各自语义不变, 不受此默认值影响)。
+const DEFAULT_TIMEOUT_MS = 15000
+
+/** GET 幂等请求失败自动重试次数(2026-10-10): 超时/网络错误/5xx 各重试一次; POST 永不重试。 */
+const MAX_GET_RETRIES = 1
 
 interface ApiResponse<T> {
   code: number
@@ -8,15 +15,39 @@ interface ApiResponse<T> {
   message: string
 }
 
+/** 错误类型标记(2026-10-10): 页面/错误态据此分类, 不靠 message 文案猜。 */
+export type ClientErrorKind = 'TIMEOUT' | 'NETWORK' | 'HTTP_5xx' | 'HTTP_4xx' | 'UNKNOWN'
+
 /** fetchAPI 抛出的错误(2026-09-18): 带状态码与"权限类拒绝"的结构化标记 */
 export interface ApiError extends Error {
   status?: number
   code?: number
+  /** 类型化标记(2026-10-10): TIMEOUT / NETWORK / HTTP_5xx / HTTP_4xx。 */
+  kind?: ClientErrorKind
+  /** 超时错误带上本次实际超时毫秒(排查用)。 */
+  timeoutMs?: number
   /**
    * 权限类拒绝标记 —— 后端标记 pro 专属/需升级时带上, 页面据此弹升级引导,
    * 不用去猜错误文案(文案会改, 标记不会)。
    */
   proGate?: { proOnly: boolean; feature?: string }
+  /** 429 限流时后端 `Retry-After` 头换算的等待毫秒(可能缺失) —— 供轮询层做退避。 */
+  retryAfterMs?: number
+}
+
+/**
+ * 请求超时(类型化, 2026-10-10)。
+ * 与网络错误的区别: 超时 = 后端在响应但太慢/没响应; 网络错误 = 连不上。
+ * 页面错误态(`ErrorState.inferErrorType`)认 `kind`, 不靠文案猜。
+ */
+export class ApiTimeoutError extends Error implements ApiError {
+  readonly name = 'ApiTimeoutError'
+  readonly kind: ClientErrorKind = 'TIMEOUT'
+  readonly timeoutMs: number
+  constructor(timeoutMs: number, message = '请求超时，请稍后重试') {
+    super(message)
+    this.timeoutMs = timeoutMs
+  }
 }
 
 /**
@@ -98,6 +129,23 @@ export interface ApiRequestOptions extends RequestInit {
 const _RESP_CACHE = new Map<string, { ts: number; data: unknown }>()
 const _CACHE_TTL_DEFAULT = 30_000 // 30s
 
+/**
+ * 2026-10-02 首屏并发化: 同一 GET 的**在途**请求合并(single-flight)。
+ *
+ * 背景(B1 首页冷态走查代码定位): 首页「市场温度」被 3 个组件各打一次 `/market/phase`
+ * (`usePhaseLabel` / `MarketPhaseCard` / `PhaseGaugeCard`), 「主线 Top1」被 2 个组件各打一次
+ * `/market/mainline` —— 冷启动时它们与首屏其余 15+ 个请求一起争抢浏览器**同域连接池**
+ * (HTTP/1.1 默认 6 条), 关键画布(`/market/phase`)实际排在自己的重复请求后面。
+ * 与既有 30s 响应缓存同一取舍(GET 幂等): 并发同键**共享一次真实请求**, 响应回来后各调用方
+ * 拿到同一份 data; 在途合并只在“上游还没回”这段窗口内生效, 不改变缓存 TTL 语义。
+ *
+ * 跳过条件(任一):
+ *   - `cacheMode:'reload' | false` —— 调用方显式要新数据(如实时端点/手动刷新);
+ *   - 自带 `signal` —— 取消权归调用方, 共享会让一方 abort 影响另一方;
+ *   - 非 GET(ckey 为 null)。
+ */
+const _INFLIGHT = new Map<string, Promise<unknown>>()
+
 function _cacheKey(path: string, options?: ApiRequestOptions): string | null {
   if (!options || options.method === undefined || options.method === 'GET' || options.method === null) {
     return `${getToken()?.slice(0, 8) || 'anon'}:${path}`
@@ -149,18 +197,50 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     }
   }
 
-  const timeoutController = options?.signal ? null : new AbortController()
-  const timeoutMs = typeof options?.timeoutMs === 'number' && options.timeoutMs > 0
-    ? options.timeoutMs
-    : DEFAULT_TIMEOUT_MS
+  // 2026-10-02: 在途同键合并(见 _INFLIGHT 注释)。仅对“可缓存 GET”生效。
+  const dedupable =
+    !!ckey && options?.cacheMode !== 'reload' && options?.cacheMode !== false && !options?.signal
+  if (dedupable) {
+    const inflight = _INFLIGHT.get(ckey as string)
+    if (inflight) return inflight as Promise<T>
+  }
+
+  const p = _fetchNow<T>(path, options, headers, ckey)
+  if (dedupable) {
+    const key = ckey as string
+    _INFLIGHT.set(key, p as Promise<unknown>)
+    const cleanup = () => {
+      if (_INFLIGHT.get(key) === (p as Promise<unknown>)) _INFLIGHT.delete(key)
+    }
+    // .then(cleanup, cleanup) 而非 .finally: finally 派生的 promise 在拒绝时无人处理
+    // 会冒 unhandled rejection; then 双分支返回的 promise 一定 resolved。
+    void (p as Promise<unknown>).then(cleanup, cleanup)
+  }
+  return p
+}
+
+/**
+ * 单次 fetch 尝试(带本次尝试自己的超时计时器), 失败抛**类型化**错误。
+ *
+ *  - 超时(本函数注入的 AbortController 触发) → `ApiTimeoutError`(kind='TIMEOUT');
+ *  - 调用方自带 `signal` 且已 abort → 原样抛该错误(取消权归调用方, 不误报超时/不重试);
+ *  - 其它网络层失败 → **保留原错误对象**(带原始 message), 打上 `kind='NETWORK'` 标记后再抛。
+ */
+async function _attemptFetch(
+  path: string,
+  options: ApiRequestOptions | undefined,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<Response> {
+  const callerSignal = options?.signal ?? null
+  const timeoutController = callerSignal ? null : new AbortController()
   const timeoutId = timeoutController
     ? window.setTimeout(() => timeoutController.abort(), timeoutMs)
     : null
 
-  let res: Response
   try {
     const { timeoutMs: _timeoutMs, cacheMode: _cacheMode, ...requestOptions } = options || {}
-    res = await fetch(`${API_BASE}${path}`, {
+    return await fetch(`${API_BASE}${path}`, {
       // P0(2026-09-18): 始终携带 Cookie(httpOnly sida_token + csrf_token)
       credentials: 'include',
       ...requestOptions,
@@ -172,16 +252,27 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     })
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      reportFailure({ path, method: (options?.method ?? 'GET').toUpperCase(), status: 0, message: '请求超时' })
-      throw new Error('请求超时，请稍后重试')
+      if (callerSignal?.aborted) throw error // 调用方取消: 原样抛
+      throw new ApiTimeoutError(timeoutMs)   // 我们的超时计时器触发
     }
-    throw error
+    const netErr: Error = error instanceof Error ? error : new Error(String(error))
+    ;(netErr as ApiError).kind = 'NETWORK'
+    throw netErr
   } finally {
     if (timeoutId !== null) {
       window.clearTimeout(timeoutId)
     }
   }
+}
 
+/** 解析响应: 401 登出 / 业务码判定 / GET 写缓存。 */
+async function _parseResponse<T>(
+  res: Response,
+  path: string,
+  method: string,
+  options: ApiRequestOptions | undefined,
+  ckey: string | null,
+): Promise<T> {
   if (res.status === 401) {
     logout()
     throw new Error('登录已过期')
@@ -205,7 +296,16 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     }
     err.status = res.status
     err.code = body.code
-    reportFailure({ path, method: (options?.method ?? 'GET').toUpperCase(), status: res.status, message: err.message })
+    // 429: 把 Retry-After 换算成毫秒挂到错误上, 轮询层据此退避(不靠猜固定间隔)。
+    if (res.status === 429) {
+      const retryAfter = Number(res.headers?.get?.('Retry-After'))
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        err.retryAfterMs = Math.min(retryAfter, 3600) * 1000
+      }
+    }
+    // 类型化(2026-10-10): 5xx/4xx 归类, 页面错误态不再靠 message 里的数字猜。
+    err.kind = res.status >= 500 ? 'HTTP_5xx' : res.status >= 400 ? 'HTTP_4xx' : 'UNKNOWN'
+    reportFailure({ path, method, status: res.status, message: err.message })
     throw err
   }
   // 2026-08-12: GET 成功后写缓存
@@ -215,9 +315,70 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
   return body.data
 }
 
-/** 2026-08-12: 清空前端响应缓存(登出/手动刷新时调用) */
+/**
+ * fetchAPI 的实际取数(与在途合并解耦, 便于同键共享同一份 promise)。
+ *
+ * 2026-10-10 加载韧性: **GET 幂等请求失败(超时 / 网络错误 / 5xx)自动重试一次**;
+ * POST/PUT/PATCH/DELETE 一律不重试(可能已产生副作用)。调用方自带 `signal` 时也不重试
+ * (取消权归调用方, 重试会违背其取消意图)。重试在**同一次 fetchAPI 调用内**进行, 对外仍是
+ * "一次调用 / 一份 promise" —— 在途合并与 30s 缓存的语义都不受影响。
+ */
+async function _fetchNow<T>(
+  path: string,
+  options: ApiRequestOptions | undefined,
+  headers: Record<string, string>,
+  ckey: string | null,
+): Promise<T> {
+  const method = (options?.method ?? 'GET').toUpperCase()
+  const callerSignal = options?.signal ?? null
+  const canRetry = method === 'GET' && !callerSignal
+  const timeoutMs = typeof options?.timeoutMs === 'number' && options.timeoutMs > 0
+    ? options.timeoutMs
+    : DEFAULT_TIMEOUT_MS
+
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= MAX_GET_RETRIES; attempt++) {
+    const canRetryThisRound = canRetry && attempt < MAX_GET_RETRIES
+    let res: Response
+    try {
+      res = await _attemptFetch(path, options, headers, timeoutMs)
+    } catch (error) {
+      const kind = error instanceof ApiTimeoutError ? 'TIMEOUT' : (error as ApiError | undefined)?.kind
+      const retryable = kind === 'TIMEOUT' || kind === 'NETWORK'
+      if (retryable && canRetryThisRound) {
+        lastError = error
+        continue
+      }
+      // 终态失败(不可重试 / 重试已用尽): 广播给右栏 AlertLog 后抛类型化错误
+      if (retryable) {
+        reportFailure({
+          path,
+          method,
+          status: 0,
+          message: kind === 'TIMEOUT' ? '请求超时' : ((error as Error)?.message || '网络错误'),
+        })
+      }
+      throw error
+    }
+
+    // 5xx 视为可重试(服务端瞬时故障); 4xx 是确定性错误, 重试无意义。
+    if (res.status >= 500 && canRetryThisRound) {
+      lastError = Object.assign(new Error(`HTTP ${res.status}`), { status: res.status, kind: 'HTTP_5xx' })
+      continue
+    }
+    return await _parseResponse<T>(res, path, method, options, ckey)
+  }
+
+  // 理论不可达(循环内必定 return 或 throw); 兜底抛最后一次错误。
+  throw lastError ?? new Error('请求失败')
+}
+
+/** 2026-08-12: 清空前端响应缓存(登出/手动刷新时调用)
+ *  2026-10-02: 一并清掉在途合并表 —— 登出/显式刷新语义上是「别再复用这一轮的结果」,
+ *  在途项被移除后, 新调用会重新发起真实请求(在途的旧 promise 仍会 resolve 给原调用方)。 */
 export function clearResponseCache() {
   _RESP_CACHE.clear()
+  _INFLIGHT.clear()
 }
 
 export const apiClient = {

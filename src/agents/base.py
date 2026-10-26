@@ -337,9 +337,19 @@ class BaseAgent(ABC):
             error=str(error),
         )
 
+    # 2026-10-20: AI 降级时是否允许推"事实快报"（只有明确给出 fallback_brief 的子类可以）。
+    # 0.3 的"非 success 一律不推"总闸保留，这里只开一个显式、可审计的例外口。
+    allow_degraded_notify: bool = False
+
     async def should_notify(self, result: AnalysisResult) -> bool:
-        """是否需要通知，子类可重写。非 success 一律不推(0.3 推送总闸)。"""
+        """是否需要通知，子类可重写。非 success 默认不推(0.3 推送总闸)。"""
         if result.status != "success":
+            if self.allow_degraded_notify and (result.raw_data or {}).get("fallback_brief"):
+                logger.warning(
+                    "[%s] AI 不可用(status=%s), 改推事实快报: %s",
+                    self.name, result.status, result.error,
+                )
+                return True
             logger.warning(
                 "[%s] 分析未成功(status=%s), 跳过推送: %s",
                 self.name, result.status, result.error,

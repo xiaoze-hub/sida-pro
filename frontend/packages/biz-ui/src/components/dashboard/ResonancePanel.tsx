@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { fetchAPI } from '@panwatch/api'
 import { useNavigate } from 'react-router-dom'
 import { safeFixed } from '@/lib/format'
@@ -30,11 +31,11 @@ interface ScanItem {
 
 function aiTag(it: ScanItem): { text: string; cls: string; tip: string } {
   if (!it.ai_verdict) {
-    return { text: '--', cls: 'text-muted-foreground/50', tip: 'AI 判定待生成(盘后 15:50 自动批量)' }
+    return { text: '--', cls: 'text-muted-foreground', tip: 'AI 判定待生成(盘后 15:50 自动批量)' }
   }
   const conf = it.ai_confidence == null ? '' : ` · 置信 ${Math.round(it.ai_confidence * 100)}%`
   const cls =
-    it.ai_verdict === '强共振' ? 'text-stock-up' : it.ai_verdict === '弱共振' ? 'text-amber-500' : 'text-muted-foreground/70'
+    it.ai_verdict === '强共振' ? 'text-stock-up' : it.ai_verdict === '弱共振' ? 'text-amber-500' : 'text-muted-foreground'
   return { text: it.ai_verdict, cls, tip: `AI ${it.ai_verdict}${conf}${it.ai_summary ? `\n${it.ai_summary}` : ''}` }
 }
 
@@ -58,27 +59,30 @@ export default function ResonancePanel({ className, actions }: { className?: str
   const [expanded, setExpanded] = useState(false)
   const PREVIEW_N = 20
 
+  const aliveRef = useRef(true)
   useEffect(() => {
-    let alive = true
-    // 首页并发高(20+ 请求), 首拉易排队超时 → 失败/空结果保留上次数据并自动重试
-    const load = async () => {
-      try {
-        const res = await fetchAPI<ScanResp>(`/resonance/scan?only=${only}&limit=30`, { cacheMode: 'reload' })
-        if (alive && res?.items?.length) setResp(res)
-        else if (alive) setResp((prev) => (prev && prev.items.length > 0 && prev.trade_date ? prev : { trade_date: null, count: 0, items: [] }))
-      } catch {
-        if (alive) setResp((prev) => prev ?? { trade_date: null, count: 0, items: [] })
-      }
-    }
-    void load()
-    const retry = window.setTimeout(() => void load(), 8000)
-    const timer = window.setInterval(() => void load(), 60000)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearTimeout(retry)
-      window.clearInterval(timer)
+      aliveRef.current = false
+    }
+  }, [])
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchAPI<ScanResp>(`/resonance/scan?only=${only}&limit=30`, { cacheMode: 'reload' })
+      if (!aliveRef.current) return
+      if (res?.items?.length) setResp(res)
+      else setResp((prev) => (prev && prev.items.length > 0 && prev.trade_date ? prev : { trade_date: null, count: 0, items: [] }))
+    } catch {
+      if (aliveRef.current) setResp((prev) => prev ?? { trade_date: null, count: 0, items: [] })
     }
   }, [only])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(load, 60000, { deps: [only] })
+  // 首页并发高(20+ 请求), 首拉易排队超时 → 8s 后一次性兜底重试(非周期轮询, 不进闸门)。
+  useEffect(() => {
+    const retry = window.setTimeout(() => void load(), 8000)
+    return () => window.clearTimeout(retry)
+  }, [load])
 
   const items = resp?.items ?? []
   const visible = expanded ? items : items.slice(0, PREVIEW_N)
@@ -111,6 +115,17 @@ export default function ResonancePanel({ className, actions }: { className?: str
         </div>
       ) : (
         <div className="mt-1.5 divide-y divide-border/40">
+          {/* 表头(2026-10-24): 此前只有裸数据行, 用户看到 32.43 / +0.55亿 只能猜列义。
+              列宽必须与行完全一致, 否则数值列对不齐 —— 改行宽时两处一起改。 */}
+          <div className="flex w-full items-center gap-2 pb-1 text-[11px] text-muted-foreground">
+            <span className="w-[70px] shrink-0">名称</span>
+            <span className="w-[58px] shrink-0">代码</span>
+            <span className="w-[46px] shrink-0 text-right">涨幅</span>
+            <span className="w-[64px] shrink-0 text-right" title="活跃度(≥3 视为强度达标)">活跃度</span>
+            <span className="w-[72px] shrink-0 text-right">资金净额</span>
+            <span className="ml-auto shrink-0">三指标</span>
+            <span className="w-[52px] shrink-0 text-right" title="盘后 LLM 复核结论">AI</span>
+          </div>
           {visible.map((it) => (
             <button
               key={it.symbol}
@@ -118,7 +133,7 @@ export default function ResonancePanel({ className, actions }: { className?: str
               onClick={() => navigate(`/quote/${it.symbol}`)}
               className="flex w-full items-center gap-2 py-1 text-left text-[12px] hover:bg-accent/40"
             >
-              <span className="w-[70px] shrink-0 truncate font-medium">{it.name || it.symbol}</span>
+              <span className="w-[70px] shrink-0 truncate font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</span>
               <span className="w-[58px] shrink-0 font-mono text-[11px] text-muted-foreground">{it.symbol}</span>
               <span className={`w-[46px] shrink-0 text-right font-mono ${(it.change_pct ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                 {it.change_pct == null ? '--' : `${it.change_pct > 0 ? '+' : ''}${safeFixed(it.change_pct, 2)}%`}

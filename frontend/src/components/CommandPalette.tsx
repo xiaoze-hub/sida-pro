@@ -30,6 +30,7 @@ const PAGE_COMMANDS: PageCommand[] = [
   { to: '/', label: '首页 · 驾驶舱', group: '驾驶舱' },
   { to: '/forecast', label: '预测', group: '行情' },
   { to: '/opportunities', label: '机会 · 选股池', group: '机会' },
+  { to: '/auction', label: '集合竞价 · 盘前打板', group: '机会' },
   // §4.3 补齐(2026-09-01): 历史/模拟盘/提醒 收纳后指向新地址(带 ?tab= 直达对应页签)
   { to: '/reports?tab=reports', label: '报告中心', group: '投研' },
   { to: '/reports?tab=history', label: '历史分析', group: '投研' },
@@ -294,7 +295,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="搜索股票(代码/名称) 或 功能…"
-            className="flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60"
+            className="flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
             data-search-input
           />
           <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">ESC</kbd>
@@ -316,7 +317,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               {it.type === 'stock' ? (
                 <>
                   <TrendingUp className="h-4 w-4 shrink-0 text-primary" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{it.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.name}>{it.name}</span>
                   {i === active && (
                     <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-primary/80">
                       <Plus className="h-3 w-3" />
@@ -330,13 +331,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               ) : it.type === 'action' ? (
                 <>
                   <Zap className="h-4 w-4 shrink-0 text-[hsl(var(--role-opp))]" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{it.label}</span>
-                  {it.hint && <span className="shrink-0 text-[10px] text-muted-foreground/70">{it.hint}</span>}
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.label}>{it.label}</span>
+                  {it.hint && <span className="shrink-0 text-[10px] text-muted-foreground">{it.hint}</span>}
                   <span className="shrink-0 text-[11px] text-muted-foreground">{it.group}</span>
                 </>
               ) : (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{it.label}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.label}>{it.label}</span>
                   <span className="shrink-0 text-[11px] text-muted-foreground">{it.group}</span>
                 </>
               )}

@@ -10,6 +10,9 @@ interface Props {
   prevClose: number | null
   isIndex: boolean
   swings?: MinuteSwings | null
+  /** 图高(px)。默认 300=个股详情页满高；首页「大盘走势带」用 120–140 紧凑档。
+   *  2026-10-24: 原先硬编码 300，无法在总结卡里复用。 */
+  height?: number
 }
 
 /** 万格式化: 4693万 → "+4693万" / -1241万 → "-1241万" */
@@ -76,7 +79,7 @@ function hhmmToTs(t: string): number {
  * + 下方成交量柱(红涨绿跌, pane 1)。与日K 同一库(Lightweight v5), 砍掉 ECharts 依赖。
  * 午休时段(11:30-13:00)无数据点, 时间戳连续 → 天然留空隙, 无需 whitespace。
  */
-export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: Props) {
+export default function MinuteLwcChart({ points, prevClose, isIndex, swings, height = 300 }: Props) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [swingMarks, setSwingMarks] = useState<SwingMark[]>([])
   const [hoverMark, setHoverMark] = useState<{ x: number; y: number; mark: SwingMark } | null>(null)
@@ -97,7 +100,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
 
     const chart = LW.createChart(el, {
       width: el.clientWidth,
-      height: 300,
+      height,
       layout: {
         background: { color: `hsl(${bg})` },
         textColor: `hsl(${fg} / 0.85)`,
@@ -358,7 +361,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
         /* ignore */
       }
     }
-  }, [points, prevClose, isIndex, swings])
+  }, [points, prevClose, isIndex, swings, height])
 
   return (
     <div className="relative">
@@ -408,7 +411,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
         </button>
       )}
 
-      <div ref={ref} className="w-full h-[300px]" />
+      <div ref={ref} className="w-full" style={{ height }} />
 
       {/* ═══ 悬停分析 tooltip(2026-08-12 v3) */}
       {hoverMark && (

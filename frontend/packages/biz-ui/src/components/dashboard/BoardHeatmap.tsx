@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { AlertTriangle, RefreshCw, Zap } from 'lucide-react'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
 import { hslaVar, readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
@@ -7,6 +8,7 @@ import {
   formatHeatPct,
   hasDrawableArea,
   hasUsableVolume,
+  heatCellColor,
   labelTierFor,
   pickLabelColor,
   toTreemapCells,
@@ -219,6 +221,13 @@ function tooltipHtml(c: TreemapCell): string {
     ['量能', fmtMoney(c.volume)],
     ['资金净流入', fmtMoney(c.fundNet)],
   ]
+  if (c.limitUpCnt !== undefined && c.limitUpCnt > 0) {
+    rows.push(['涨停家数', `${c.limitUpCnt}家`])
+  }
+  if (c.leaderName) {
+    const bStr = c.leaderBoards && c.leaderBoards > 1 ? ` (${c.leaderBoards}板)` : ''
+    rows.push(['板块领涨龙头', `${c.leaderName}${bStr}`])
+  }
   if (c.volumeRatio !== null && c.volumeRatio !== undefined && isFinite(c.volumeRatio)) {
     rows.push(['量比', safeFixed(c.volumeRatio, 2)])
   }
@@ -268,29 +277,33 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
     onOpenRef.current = onOpenBoard
   }, [onOpenBoard])
 
+  const aliveRef = useRef(true)
+  const seqRef = useRef(0)
   useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const res = await fetchAPI<HeatmapResp>(`/boards/heatmap?type=${btype}`)
-        if (!alive) return
-        setData(res)
-        setError(null)
-      } catch (e) {
-        if (!alive) return
-        setError(e)
-      } finally {
-        if (alive) setLoading(false)
-      }
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
     }
+  }, [])
+  const load = useCallback(async () => {
+    const seq = ++seqRef.current
+    try {
+      const res = await fetchAPI<HeatmapResp>(`/boards/heatmap?type=${btype}`)
+      if (!aliveRef.current || seq !== seqRef.current) return
+      setData(res)
+      setError(null)
+    } catch (e) {
+      if (!aliveRef.current || seq !== seqRef.current) return
+      setError(e)
+    } finally {
+      if (aliveRef.current && seq === seqRef.current) setLoading(false)
+    }
+  }, [btype])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(() => {
     setLoading(true)
     void load()
-    const t = window.setInterval(() => void load(), POLL_MS)
-    return () => {
-      alive = false
-      window.clearInterval(t)
-    }
-  }, [btype, reloadKey])
+  }, POLL_MS, { deps: [btype, reloadKey] })
 
   const fresh = data !== null && data.type === btype
   const items = fresh && data ? data.items : NO_ITEMS
@@ -359,7 +372,13 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
                 const tier = p?.data?.labelTier ?? 2
                 if (tier === 0) return ''
                 if (tier === 1) return `${p?.name ?? ''}`
-                return `${p?.name ?? ''}\n${formatHeatPct(p?.data?.changePct)}`
+                const d = p?.data
+                const pctStr = formatHeatPct(d?.changePct)
+                if (d?.leaderName && (d.limitUpCnt || 0) > 0) {
+                  const bStr = d.leaderBoards && d.leaderBoards > 1 ? `${d.leaderBoards}B` : '首板'
+                  return `${p?.name ?? ''} (${d.limitUpCnt}停)\n${pctStr} [${d.leaderName} ${bStr}]`
+                }
+                return `${p?.name ?? ''}\n${pctStr}`
               },
             },
             data: cells,
@@ -401,20 +420,32 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </button>
         ))}
         <span className="mx-1 h-4 w-px bg-border/60" />
-        {(['volume', 'equal'] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => setAreaMetric(m)}
-            className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
-              areaMetric === m
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-accent/50 text-muted-foreground hover:bg-accent'
-            }`}
+        {/* L3-A(2026-10-24): 面积口径是**排序/权重**维度, 不是分类, 不该和「行业/概念」同款按钮并排。
+            改成明确的下拉, 分类仍是左侧 segmented。 */}
+        <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          面积
+          <select
+            aria-label="色块面积口径"
+            value={areaMetric}
+            onChange={(e) => setAreaMetric(e.target.value as HeatAreaMetric)}
+            className="h-7 rounded border border-border/60 bg-background px-1.5 text-[11px] text-foreground"
           >
-            {m === 'volume' ? '面积:量能' : '面积:等权'}
-          </button>
-        ))}
+            <option value="volume">按量能</option>
+            <option value="equal">等权</option>
+          </select>
+        </label>
+        {/* L3-A: 色阶图例 —— 此前整页没有任何图例, 读者不知道「红多深=涨多少」「灰=平盘」 */}
+        <span className="hidden items-center gap-1 text-[11px] text-muted-foreground md:flex" aria-label="色阶图例">
+          {[-3, -1.5, 1.5, 3].map((v) => (
+            <span
+              key={v}
+              className="h-2.5 w-4 rounded-sm"
+              style={{ backgroundColor: heatCellColor(v, buildPalette(), 3) }}
+              title={`${v > 0 ? '+' : ''}${v}%`}
+            />
+          ))}
+          <span className="ml-1 whitespace-nowrap">-3% → +3%，灰=平盘</span>
+        </span>
         <div className="ml-auto flex items-center gap-2">
           {fresh && data.source ? (
             <span className="rounded bg-accent/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -517,7 +548,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           style={{ minHeight: `${CHART_EMPTY_HEIGHT}px` }}
         >
           <span className="text-[12px] text-muted-foreground">暂无板块数据（等待每日同步）</span>
-          <span className="text-[11px] text-muted-foreground/80">
+          <span className="text-[11px] text-muted-foreground">
             每日 15:30 后同步板块行情；若长期为空，请在「数据源」页检查东财板块源
           </span>
         </div>

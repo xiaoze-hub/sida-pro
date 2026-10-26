@@ -73,14 +73,14 @@ export default function AlertLog({
         )}
       </div>
       {items.length === 0 ? (
-        <div className="px-2 py-3 text-[11px] text-muted-foreground/70">{emptyHint}</div>
+        <div className="px-2 py-3 text-[11px] text-muted-foreground">{emptyHint}</div>
       ) : (
         <ul className="list-window max-h-64 overflow-y-auto">
           {items.map((it) => (
             <li key={it.id} className="flex items-start gap-1.5 border-b border-border/40 px-2 py-1 last:border-0">
               <span className={cn('mt-1 session-dot', LEVEL_DOT[it.level])} />
-              <span className="font-mono text-[10px] text-muted-foreground/70">{formatClock(it.at)}</span>
-              <span className="flex-1 text-[11px] leading-4 text-foreground/90">{it.text}</span>
+              <span className="font-mono text-[10px] text-muted-foreground">{formatClock(it.at)}</span>
+              <span className="flex-1 text-[11px] leading-4 text-foreground">{it.text}</span>
               {it.caliber && (
                 <span className="mt-0.5 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">{it.caliber}</span>
               )}

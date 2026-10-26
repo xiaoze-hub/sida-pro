@@ -36,11 +36,15 @@ from src.web.api import (
     forecast,
     calendar,
     market_data,
+    cancel_profile,
+    price_distribution,
     tdx,
     shadow,
     ths,
     darkflow,
     decision_pioneer,
+    pioneer_indicators,
+    war_report,
     decision,
     resonance,
     stock_pool,
@@ -48,10 +52,13 @@ from src.web.api import (
     main_flow,
     theme_mood,
     auction_pool,
+    cb_radar,
+    copilot,
     abnormal_moves,
     gap_study,
     market_phase,
     chat_upload,
+    chat_admin,
     my_ai_services,
     users,
     llm_usage,
@@ -61,12 +68,15 @@ from src.web.api import (
     audit,
     market_mainline,
     sentiment_series,
+    market_replay,
     market_scan,
     seal_quality,
     demon_pool,
+    fund_structure,
     signals_review,
     market_archive,
 )
+from src.web.api import copilot_jobs, copilot_workbench
 from src.web.api import factors
 from src.web.api import jobs as jobs_api
 from src.web.api import notifications
@@ -268,11 +278,15 @@ async def demo_isolation_middleware(request: Request, call_next):
     # ── guest(demo) 隔离: 行为保持现状 ──────────────────────────────
     if username == "demo" or role == "guest":
         msg = "演示账号为只读浏览模式,不可修改数据或访问管理页面。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"
-        # 0) GET 限流: 每小时 20 次 API 请求(防爬虫刷数据源配额)
+        # 0) GET 限流: 每小时 N 次 API 请求(防爬虫刷数据源配额); N 可在「免费档」面板调
         if method in ("GET", "HEAD"):
-            from src.core.demo_limit import allow_api_get
-            if not allow_api_get(str(payload.get("sub", ""))):
-                return JSONResponse(status_code=429, content={"code": 429, "success": False, "message": "演示账号请求过于频繁(每小时限 20 次)。请稍后再试,或自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"})
+            from src.core.demo_limit import allow_api_get, get_hourly_limit
+
+            # 注意: 这里只传用户名(1 参) —— 既有单测用 `lambda uid: True` 打桩本函数,
+            # 改签名会连带改测试; 限额配置由 demo_limit 自己读(无 db 时自建只读 session)。
+            if not allow_api_get(str((payload or {}).get("sub", ""))):
+                _hourly = get_hourly_limit()
+                return JSONResponse(status_code=429, content={"code": 429, "success": False, "message": f"演示账号请求过于频繁(每小时限 {_hourly} 次)。请稍后再试,或自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"})
         # demo 专属例外: 自选增删(自己的数据, user_id 隔离; 数量上限在接口层)
         is_own_watchlist_write = (
             (method == "POST" and path.rstrip("/") == "/api/stocks")
@@ -366,6 +380,14 @@ app.include_router(
     tags=["market-sentiment"],
     dependencies=protected,
 )
+# 盘后复盘三池序列 + 连板晋级树(创新 1, 2026-10-24): market_replay_daily 只读快照。
+# 行情类纯读数据(不含用户数据) → data_read 双轨(用户 JWT / 服务 token), 同 /api/quotes。
+app.include_router(
+    market_replay.router,
+    prefix="/api/market/replay",
+    tags=["market-replay"],
+    dependencies=data_read,
+)
 app.include_router(
     stocks.router, prefix="/api/stocks", tags=["stocks"], dependencies=protected
 )
@@ -394,6 +416,15 @@ app.include_router(
     catalyst_router.router,
     prefix="/api/catalyst",
     tags=["catalyst"],
+    dependencies=protected,
+)
+# 盘前分析 Agent (2026-10-23): 底稿读取 + 手动触发 + 结构化证据层; 需登录
+from src.web.api import premarket as premarket_api
+
+app.include_router(
+    premarket_api.router,
+    prefix="/api/premarket",
+    tags=["premarket"],
     dependencies=protected,
 )
 app.include_router(
@@ -570,6 +601,16 @@ app.include_router(
     tags=["paper-trading"],
     dependencies=protected,
 )
+# 会话管理端点(2026-10-22: 重命名/置顶/搜索/删单条消息/会话轨迹)。
+# 会话管理（改名/置顶/删单条消息/会话轨迹/搜索）。搜索走独立路径
+# `/conversations/search`，不与 chat.py 的 GET /conversations 同路径 —— 同路径靠注册顺序
+# 决定 winner，实测 openapi 与实际路由会对不上，坑太深。
+app.include_router(
+    chat_admin.router,
+    prefix="/api/chat",
+    tags=["chat-admin"],
+    dependencies=protected,
+)
 app.include_router(
     chat.router,
     prefix="/api/chat",
@@ -640,6 +681,22 @@ app.include_router(
     # 数智决策三指标(机构活跃度 + GS + L2主力净流入 TQ 口径): pro 专属
     dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
 )
+# 决策先锋辅助指标(P3 补差, 2026-10-10): 趋势操盘线 / 牛熊线 / 分时突破。
+# 同属数智决策档(pro, view_forecast)。信号是证据不是建议; 缺数据显式降级, 不编造。
+app.include_router(
+    pioneer_indicators.router,
+    prefix="/api/indicators",
+    tags=["pioneer-indicators"],
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
+# 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总(TOP/BOTTOM + 行业分布 + 净额变化 +
+# 拆单/对倒计数)。同属数智决策档(pro, view_forecast); 缺源显式降级, 不编造。
+app.include_router(
+    war_report.router,
+    prefix="/api/war-report",
+    tags=["war-report"],
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
 # 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排, 消歧不合并。
 # 三个源都属于 pro 档数据 → 同样按 view_forecast 收口。
 app.include_router(
@@ -678,6 +735,37 @@ app.include_router(
     tags=["stock-pool"],
     dependencies=protected,
 )
+# 可转债-正股联动套利雷达(I-4, 2026-10-18): 折溢价/双低/强赎距离 + 四类场景
+app.include_router(
+    cb_radar.router,
+    prefix="/api/cb-radar",
+    tags=["cb-radar"],
+    dependencies=protected,
+)
+
+# AI 数智参谋(Copilot, 2026-10-18): 确定性判定引擎 + 证据聚合 + 一级页指令池
+app.include_router(
+    copilot.router,
+    prefix="/api",
+    tags=["copilot"],
+    dependencies=protected,
+)
+
+# 工作台写入型接口(2026-10-25): 模型选择等按用户落库的能力。与只读 copilot 分开。
+app.include_router(
+    copilot_workbench.router,
+    prefix="/api",
+    tags=["copilot-workbench"],
+    dependencies=protected,
+)
+# 参谋任务异步化(P0-0.2, 2026-10-25): 提交即返 run_id + SSE 事件 + 取消。
+# 与上面的 copilot 分开成独立模块: 那边是只读视图, 这里是写入型运行时。
+app.include_router(
+    copilot_jobs.router,
+    prefix="/api",
+    tags=["copilot-jobs"],
+    dependencies=protected,
+)
 # 三指标共振(2026-09-11 数智决策升级): 全市场盘后扫描结果 + 活跃度序列
 app.include_router(
     resonance.router,
@@ -712,6 +800,24 @@ app.include_router(
     seal_quality.router,
     prefix="/api/seal-quality",
     tags=["seal-quality"],
+    dependencies=protected,
+)
+# 首封时间×封成比 强度因子(2026-10-11 胜率创新 P0-1, 影子运行): 只读标签 + 手动打标
+from src.web.api import limit_strength as limit_strength_router  # noqa: E402
+
+app.include_router(
+    limit_strength_router.router,
+    prefix="/api/limit-strength",
+    tags=["limit-strength"],
+    dependencies=protected,
+)
+# AI 看图形态 影子证据层(2026-10-14 胜率创新 · 主线一并行, 影子运行): 只读对照 + 手动识别
+from src.web.api import ai_pattern as ai_pattern_router  # noqa: E402
+
+app.include_router(
+    ai_pattern_router.router,
+    prefix="/api/ai-pattern",
+    tags=["ai-pattern"],
     dependencies=protected,
 )
 # 妖股池/股性雷达(批次B, 2026-09-06): 六维妖股评分, 题材轮动先锋名单
@@ -766,11 +872,46 @@ app.include_router(
     tags=["market-phase"],
     dependencies=protected,
 )
+# I-3 委托行为画像(2026-10-18): 撤单率 60 日基线 + 动态 z 坐标系。
+# prefix 复用 /api/market, 端点 /cancel-profile/{symbol}(与 market_phase 的 /phase 共存)
+app.include_router(
+    cancel_profile.router,
+    prefix="/api/market",
+    tags=["market-cancel-profile"],
+    dependencies=protected,
+)
+# I-8 分价博弈矩阵(2026-10-18): 逐档多空力量 + 托举/抛压/拆单三形态, 读库优先。
+# prefix 复用 /api/market, 端点 /price-distribution/{symbol}(含 /history、/archive 子路径)
+app.include_router(
+    price_distribution.router,
+    prefix="/api/market",
+    tags=["market-price-distribution"],
+    dependencies=protected,
+)
+# 四档资金结构日序列(2026-10-24): exday_daily 消费 MVP。口径 tdx_exday4(按单笔成交金额
+# 分档, 与逐笔/东财四档不可换算); 表 2026-10-23 起累积, 缺日期不补 0, 单日不画趋势。
+app.include_router(
+    fund_structure.router,
+    prefix="/api/market",
+    tags=["market-fund-structure"],
+    dependencies=protected,
+)
 # 全市场三榜扫描(2026-09-01, §6.1): 读快照 + 手动触发
 app.include_router(
     market_scan.router,
     prefix="/api/market-scan",
     tags=["market-scan"],
+    dependencies=protected,
+)
+# TQ 条件选股信号(2026-09-25): 每交易日全市场扫 108 个条件选股公式的"当日触发家数"。
+# 数据源=通达信客户端 TQ 网关(免费/无限频), 免费源没有"某技术条件当日多少只触发"的口径。
+# 诚实性: complete=False 表示分片失败, hit_count 不是全市场家数, 前端必须标注。
+from src.web.api import formula_signals as formula_signals_router  # noqa: E402
+
+app.include_router(
+    formula_signals_router.router,
+    prefix="/api/formula-signals",
+    tags=["formula-signals"],
     dependencies=protected,
 )
 

@@ -16,9 +16,17 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
+from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas, charge_tool_budget
+from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
+from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
+from src.core import gap_collector
+from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
+from src.core.copilot_memory import memory_block
+from src.harness.viewstate import append_view_state_block
+from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
+from src.core.copilot_quota import enforce as enforce_copilot_quota, error_message as quota_error_message
 from src.web.api.auth import get_current_user, get_user_or_service
 from src.web.database import SessionLocal, get_db
 from src.web.models import (
@@ -40,6 +48,8 @@ from src.web.models import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+from src.agents.chat.capability_notes import CAPABILITY_NOTES
+
 SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analytics 数智分析)的 AI 投资助手。
 
 你可以使用工具获取用户的投资数据。当用户的问题涉及具体数据时，主动调用工具获取，不要让用户自己提供。
@@ -57,13 +67,44 @@ SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analyti
 - 数智决策三指标(2026-08-30): 用户问「数智决策/三指标共振/GS策略/G买G卖/机构活跃度/AI机构活跃度/暗盘资金」时, 调用 get_decision_pioneer(机构活跃度+GS策略+L2主力净流入三合一)。「主力意图/吸筹派发」仍走 get_main_intent; 问「L2主力净流入」用 get_decision_pioneer 的 L2 字段(TQ口径), 问「东财四档资金流向」用 get_capital_flow。三者口径不同, 数字冲突时须说明口径差异, 不可混用下结论。
 - 口径标注规则(2026-08-13): 工具返回文本开头自带数据源口径标注(get_main_intent 为「腾讯逐笔·主力意图口径」, get_capital_flow 为「东财四档·资金流向口径」)。回答涉及「主力净流入/净流出」等具体数字时, 必须说明所用口径(逐笔 or 东财四档), 不得省略; 若两个口径数字不同, 要指出差异原因(统计方式不同: 逐笔主动买卖盘 vs 按大中小单四档归类), 再给结论。
 - thsdk 数据源指引(2026-08-20): thsdk 数据源包含 19 个同花顺独有接口, 游客账户可用 15 个(主力净流入/指数/港股返 0)。用户问个股新闻/公司行动/DDE/沪深300/可转债/基金/增强版问财时, 优先用 thsdk 工具(get_thsdk_news/get_thsdk_corporate_action/get_thsdk_dde/get_thsdk_hs300_constituents/get_thsdk_market_data_bond/get_thsdk_market_data_fund/get_wencai_enhanced 等)。thsdk 数据源不可用(工具返回 available=false 或提示数据源不可用)时, 如实告知并回退到其他数据源(东财/腾讯/通达信)。
-- 网页链接处理(2026-08-14): 用户发送网页链接(如 mp.weixin.qq.com 微信公众号文章、新闻/研报网页)或要求分析某链接内容时, 必须先调用 get_web_content 工具抓取链接正文, 再基于抓取内容回答; 严禁不抓取就凭空猜测或编造链接内容。若抓取失败(链接非法/超时/非网页/网络错误), 如实告知用户无法获取链接内容及原因, 不得伪造抓取结果。"""
+- 网页链接处理(2026-08-14): 用户发送网页链接(如 mp.weixin.qq.com 微信公众号文章、新闻/研报网页)或要求分析某链接内容时, 必须先调用 get_web_content 工具抓取链接正文, 再基于抓取内容回答; 严禁不抓取就凭空猜测或编造链接内容。若抓取失败(链接非法/超时/非网页/网络错误), 如实告知用户无法获取链接内容及原因, 不得伪造抓取结果。
+- 数智参谋盘口工具路由(2026-10-18):
+  * 【个股全面分析核心 Harness】当用户询问「这只股票怎么样 / 帮我分析某股票 / 该不该买 / 持仓诊断 / 最近有什么公告 / 有没有利好消息 / K线什么形态」等综合个股问题时，**必须优先调用 `get_stock_dossier` 工具**！该工具一次性由内核并发抓取 9 维全景证据档案：【实时量价 + 均线技术面 + K线形态(同花顺29形态/TA-Lib) + 腾讯逐笔主力意图 + 120日底仓筹码沉淀 + 数智决策GS色带/机构活跃度 + 东方财富券商研报 + 近15日公司公告 + 近7日利好/利空消息(规则筛选含命中词)】，切忌单点零散盲探。
+    - 公告与消息引用必须保留原文标题与来源，不得改写或推断未出现的利好；档案里标注「暂无」的维度如实说暂无，严禁编造。
+    - 利好面消息是规则筛出的候选，须与公告/研报交叉验证后再定性，不得只凭标题断言利好。命中词仅用于说明筛选依据。
+  * 极简输入（不要反问用户补充）: 用户只发一个股票名称或 6 位代码（如「北方稀土」「002361」）时，视为要求全面诊断 → 直接调 `get_stock_dossier` 后按模板作答。用户说「这个/它/现在呢」且上文有标的时，沿用上文标的。
+  * 【标的一律锁定，禁止替换】优先级：用户本条消息里明确写的代码/名称 > 系统提示里「当前对话关联股票」 > 用户说的「这个/它」。三者都没有时，**必须先问「你要看哪只股票？给我 6 位代码就行」**，绝不允许拿持仓、自选、影子账户画像或历史会话里的其它股票顶替（曾把 600111 分析成 002361）。`get_stock_dossier` 返回「请提供股票代码」时同理：先问，不许自己挑一只。
+  * 「底仓在哪 / 底仓成本 / 筹码集中不集中 / 获利盘多少 / 跌到哪算破位」→ get_chip_accumulation（自算CYQ口径）;
+    若用户明确说「筹码峰公式 / SSRP / 主力控盘度」→ get_stock_chips（客户端公式口径）。两口径数字冲突时,
+    说明口径差异后只采用一个口径作答, 禁止混算或取平均。
+  * 「撤单多不多 / 有没有假托单 / 买方在诱多吗 / 卖压重不重」→ get_cancel_order_intent（撤单行为）;
+    「十档挂单 / 托单压单队列 / 幽灵单」→ get_orderbook（静态挂单）。两者不可互相替代。
+  * 「洗盘还是出货 / 弹簧针 / 放量滞涨 / 缩量沉淀 / 突破有效吗」→ get_wyckoff_structure;
+    必须保留「弹簧待确认」「放量突破须回踩确认」的不确定性表述, 不得说成"已见底/已突破"。
+  * 「妖不妖 / 连板身位 / 在不在妖股池」→ get_demon_factor; 同时说明这是历史事件画像, 非当日热度。
+  * 「分时怎么样 / 尾盘有没有资金 / 是不是放量上攻 / 盘口压不压」→ get_intraday_profile
+    （日内位置 + 均价线 + 分时段量能 + 内外盘 + 五档；不要凭K线形态推分时结论）;
+  * 「今天竞价谁爆量 / 全市场竞价异动」→ scan_auction_anomaly（全市场扫描, 较慢）;
+    「某只票竞价怎么样」→ get_auction_data / 竞价快照。个股竞价不要用 scan_auction_anomaly。
+  * 一次回答最多 7 轮工具（MAX_TOOL_ROUNDS=7）; 优先「1 个主证据 + 1 个反向验证」的组合。\n    用户一次问**多只股票**时：每只票只取 1~2 个主证据、分标的段落作答，不要对每只都跑全景诊断（会撞轮次上限）。
+    推荐组合: 该不该追 → get_chip_accumulation + get_cancel_order_intent; 洗盘还是出货 →
+    get_wyckoff_structure + get_decision_pioneer; 能不能成妖 → get_demon_factor + get_auction_data。
+- 结论一致性: 若工具返回的数字与用户给出的数字冲突, 以工具为准并指出差异; 不得为了顺应用户而改数。
+- 参谋结论引用: 用户在个股工作台提问时, system 里会带一段「页面快照」(含 brief 的 verdict)。
+  若快照的 as_of 超过 5 分钟, 必须先调工具刷新再回答, 并说明「快照时间 vs 现在」。
+- 参谋回答模板(三段式, 与工作台卡片结构一致):
+  【结论】<一句话: 倾向 + 定性>, 置信度 x/10（基于 N/7 项证据）
+  【依据】<逐条列工具返回的真实数字与口径>
+  【预案】持仓者: …（含具体价位）; 空仓者: …（含具体价位）
+  【口径】<自算CYQ / TQ撤单 / 三指标(TQ口径) / 竞价异动池>
+  末尾固定一行: 以上为客观数据推演, 不构成投资建议。"""
 
 MAX_HISTORY_MESSAGES = 20
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 7
 
 # 工具名 → 流式阶段提示文案(tool 执行前推送给前端, 消除长等待白屏)
 _TOOL_STAGE_LABELS = {
+    "get_stock_dossier": "正在并行聚合标的全景档案(量价+逐笔主力+底仓筹码+GS色带+研报)...",
     "get_portfolio": "正在读取您的持仓...",
     "get_stock_quote": "正在查询实时行情...",
     "get_technical_analysis": "正在获取技术面分析...",
@@ -99,12 +140,21 @@ _TOOL_STAGE_LABELS = {
     "get_thsdk_market_data_bond": "正在查询可转债行情...",
     "get_thsdk_market_data_fund": "正在查询基金/ETF行情...",
     "get_wencai_enhanced": "正在执行增强版问财检索...",
+    "get_ipo_calendar": "正在查询新股/新债申购日历(通达信)...",
+    "get_kzz_terms": "正在查询可转债条款(通达信)...",
+    "get_stock_sectors": "正在查询股票所属板块(通达信)...",
     "get_main_flow_compare": "正在比对主力双源(腾讯逐笔/同花顺L2)...",
     "get_delta_series": "正在计算秒级Delta序列(逐笔穿透)...",
     "get_orderbook": "正在采集盘口演变快照(THS L2 20档)...",
     "get_event_catalyst": "正在推理事件催化与预期差(公告→受益链)...",
     "get_intent_explain": "正在解读主力意图(规则结论+AI解释)...",
     "get_factor_ic_report": "正在生成因子IC归因报告...",
+    # 数智参谋 5 工具(2026-10-18): 少一条用户就以为卡死; 竞价全市场扫描必须给时长预期
+    "get_chip_accumulation": "正在计算 120 日底仓筹码沉淀…",
+    "get_cancel_order_intent": "正在分析盘口撤单意图…",
+    "get_wyckoff_structure": "正在识别威科夫量价结构…",
+    "get_demon_factor": "正在读取妖股因子画像…",
+    "scan_auction_anomaly": "正在扫描全市场竞价异动（约 20–60 秒）…",
 }
 
 # 画像注入节流: profile_text 截断 + rules 只取前 N 条, 避免每次对话占过多 token
@@ -483,6 +533,10 @@ def _format_fundamentals_text(symbol: str, market: str, data: dict) -> str:
         src = r.get("source") or ""
         lines.append(f"- [{ts}] {r.get('title') or '—'} ({src})")
 
+    # 6) TQ 异动资金档案(大宗/增减持/北向/质押/财务)；渲染逻辑在 src/core/tdx_corporate.py
+    from src.core.tdx_corporate import render_lines as _corp_lines
+    lines.extend(_corp_lines(data.get("corporate") or {}, _fmt_num, _fmt_yi))
+
     return "\n".join(lines)
 
 
@@ -688,6 +742,27 @@ def get_web_content(url: str) -> str:
         return f"抓取失败: {str(e)[:120]}。"
 
 
+
+# 标的/配方上下文统一放在 src/harness/context.py（chat.py 有行数护栏）。
+from src.harness.context import (  # noqa: E402
+    Mention,
+    REQ_BOUND as _REQ_BOUND,
+    REQ_BUDGET as _REQ_BUDGET,
+    REQ_RECIPE_LABEL as _REQ_RECIPE_LABEL,
+    REQ_TEXT as _REQ_TEXT,
+    REQ_TOOLS as _REQ_TOOLS,
+    route_with_persona as _route_with_persona,
+    bind_recipe_trace as _bind_recipe_trace,
+    enter_request_ctx as _enter_request_ctx,
+    exit_request_ctx as _exit_request_ctx,
+    inject_recipe as _inject_recipe,
+    sync_conv_symbol as _sync_conv_symbol,
+)
+from src.harness.routing import route_for_request as _route_for_request
+from src.harness.pipeline_router import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
+from src.harness.pipeline import session_context as _pipeline_ctx
+
+
 async def _execute_tool(
     db: Session, name: str, args: dict, user: User | None = None
 ) -> str:
@@ -700,9 +775,34 @@ async def _execute_tool(
     S5(2026-08-26): user 沿工具链下传, 数据类工具(get_portfolio/get_stock_suggestions/
     get_watchlist/get_notifications)只读当前用户自己的数据(requires="self")。
     """
+    # 守卫先于查表：白名单/预算必须对"未注册的工具名"同样生效（否则模型写错名字就绕过了预算）
+    # 内置智能体白名单：配方没列的工具一律不执行（可审计、可回归）
+    allow = _REQ_TOOLS.get()
+    if allow is not None and name not in allow:
+        label = _REQ_RECIPE_LABEL.get() or "当前智能体"
+        return (f"{label} 本轮不使用工具 `{name}`。可用工具：{', '.join(sorted(allow))}。"
+                f"请用已有工具回答，或直接说明数据不足。")
+
+    if (deny := charge_tool_budget(_REQ_BUDGET.get(), name, _REQ_RECIPE_LABEL.get() or "当前智能体")):
+        return deny
+
     tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:
         return f"未知工具: {name}"
+
+    # 标的锁定守卫：只作用于"按单只股票取全维度"的工具
+    if name == "get_stock_dossier":
+        bound = _REQ_BOUND.get()
+        asked = (args or {}).get("symbol") or ""
+        mentioned = _extract_repeat_stock_code(_REQ_TEXT.get() or "")
+        if bound and not mentioned and asked and asked != bound:
+            # 对话已锁定标的，用户本轮又没点别的票 → 强制用锁定标的，顺手把模型的越界改掉
+            args = {**(args or {}), "symbol": bound}
+            logger.info("标的锁定: get_stock_dossier 请求 %s → 改用会话标的 %s", asked, bound)
+        elif not bound and not mentioned:
+            return ("本次对话还没有绑定股票，用户也没给出代码。请先问用户「你要看哪只股票？给我 6 位代码就行」，"
+                    "不要自己从持仓/自选/画像里挑一只。")
+
     try:
         return await tool.handler(db, args or {}, user)
     except Exception as e:
@@ -767,7 +867,7 @@ _REPEAT_QUESTION_INTENT_ALIASES = {
 
 
 def _extract_repeat_stock_code(text: str) -> str | None:
-    """从用户消息中提取 A 股 6 位股票代码(仅用于重复检测, 不校验存在性)。
+    r"""从用户消息中提取 A 股 6 位股票代码(仅用于重复检测, 不校验存在性)。
 
     只认 0/3/4/6/8/9 开头的 6 位数字(沪深主板/创业板/科创板/北交所);
     前后不接数字, 排除日期(2026xxxx)、金额等常见误报;
@@ -872,13 +972,20 @@ async def _describe_image(image_data: str, user=None) -> str:
                     "content": [
                         {
                             "type": "text",
-                            "text": "请用中文简要描述这张图片: 包含内容、颜色、形状、文字、图表类型等, 50字以内。",
+                            "text": (
+                                "你是A股行情截图解析助手。请客观转写图片内容，禁止推测：\n"
+                                "1) 行情/K线图：股票名称与代码、最新价与涨跌幅、周期(分时/日K/周K)、"
+                                "可见指标(MA/MACD/成交量/筹码分布)、图上出现的所有可见文字与数字；\n"
+                                "2) 交割单/持仓表：逐行转写 日期/代码/名称/买卖方向/价格/数量/金额；\n"
+                                "3) 研报/公告截图：转写标题、机构、评级、日期、核心结论要点。\n"
+                                "看不清的地方写「不清晰」，不得编造数字。控制在 400 字内。"
+                            ),
                         },
                         {"type": "image_url", "image_url": {"url": image_data}},
                     ],
                 }
             ],
-            "max_tokens": 200,
+            "max_tokens": 700,
         }
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
@@ -900,7 +1007,7 @@ async def _build_ai_messages(
 
     send_message(非流式)与 send_message_stream(流式)共用, 保证两条链路逻辑一致。
     """
-    system_content = SYSTEM_PROMPT
+    system_content = SYSTEM_PROMPT + CAPABILITY_NOTES
 
     # 绑定股票提示
     if conv.stock_symbol and conv.stock_market:
@@ -960,6 +1067,10 @@ async def _build_ai_messages(
 
     # 注入基础上下文（持仓 + 绑定股票的行情/建议）— S5: 按当前用户过滤
     context_parts: list[str] = []
+    # 长期记忆(P0): 自动捕获"记住/以后都…" + 注入历史偏好; 内部吞异常, 失败等于没有
+    _mem = memory_block(db, getattr(user, "id", None), (history[-1].content if history else ""))
+    if _mem:
+        context_parts.append(_mem)
 
     # 用户持仓
     portfolio_ctx = _build_portfolio_context(db, user=user)
@@ -977,6 +1088,9 @@ async def _build_ai_messages(
         stock_ctx = _build_stock_context(db, conv.stock_symbol, conv.stock_market, user=user)
         if stock_ctx:
             context_parts.append(stock_ctx)
+
+    # 页面即上下文(P1): 只补空 —— 用户文字里的代码/@提及/会话绑定已在前面生效
+    append_view_state_block(messages_for_ai, getattr(user, "id", None), conv.id)
 
     if context_parts:
         # 把上下文追加到 system message
@@ -999,9 +1113,18 @@ async def _build_ai_messages(
     return messages_for_ai
 
 
-async def _run_tool_loop(
+async def _tool_executor(name: str, args: dict, *, db: Session, user: User | None = None) -> str:
+    """运行时与 `_execute_tool` 之间的适配器。
+
+    `_execute_tool(db, name, args, user=...)` 的首参是 db, 而 `AgentRuntime.call`
+    的统一签名是 (name, args, **kwargs); 这层适配让两边都不用改形状。
+    """
+    return await _execute_tool(db, name, args, user=user)
+
+async def _run_tool_loop_inner(
     ai_client: AIClient, messages_for_ai: list[dict], db: Session,
     user: User | None = None, *, stream: bool = False,
+    runtime: AgentRuntime | None = None,
 ):
     """带 tool use 的多轮对话(异步生成器, 流式/非流式统一, W3.3 合并)。
 
@@ -1015,6 +1138,56 @@ async def _run_tool_loop(
     放大) / 轮次上限兜底 / 异常兜底。send_message 非流式路径同样消费本生成器。
     S5(2026-08-26): user 下传到 _execute_tool, 工具读数限本人数据。
     """
+    # 标的核对：用户写的名字（可能有错字）先拿 TQ 核一遍，不一致就在回答前先更正
+    _utext = next((m.get("content") for m in reversed(messages_for_ai)
+                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
+    _stock_q = is_stock_question(_utext)  # 问具体标的时才缓冲首轮(防幻觉)，闲聊照常流式
+
+    # 问价快答: 纯读数问题直接排版工具结果，不走模型（实测 70s → ~3s）
+    if _stock_q:
+        from src.harness.quick_answer import answer as _quick
+        if _qa := await _quick(db, _utext, _REQ_BOUND.get(), user, runtime):
+            yield ("delta" if stream else "text"), _qa
+            if stream:
+                yield ("done", _qa)
+            return
+    # 确定性路由(2026-10-21): 命中配方关键词 → 工具白名单收紧 + 温度降到 0.2。
+    # 实测同一问题工具集合 Jaccard 仅 0.52，方差主要来自"模型自选工具"，不是模型能力。
+    _route, _ptxt = _route_with_persona(db, _utext, _REQ_BOUND.get(), _stock_q, CHAT_TOOLS, _REQ_TOOLS.get())
+    if _ptxt: messages_for_ai.insert(0, {"role": "system", "content": _ptxt})
+    if _route.recipe is not None:
+        _bind_recipe_trace(runtime, _route.recipe)   # 轨迹回写配方 id（治理页看命中率）
+        _REQ_TOOLS.set(frozenset(_route.recipe.tools))
+        _REQ_RECIPE_LABEL.set(_route.recipe.label)
+        _REQ_BUDGET.set({"max": _route.recipe.max_tool_calls, "used": 0})
+        _inject_recipe(messages_for_ai, _route.recipe)
+    _tools, _temp = _route.tools, _route.temperature
+    if _route.recipe is not None and getattr(_route.recipe, "pipeline", False):
+        # 管线模式：harness 按固定顺序取数，模型只写结论（工具选择方差 → 0）
+        async def _px(name, args):
+            return await _execute_tool(db, name, args, user)
+
+        _trace = runtime.trace if runtime else None
+        _pctx = _pipeline_ctx(messages_for_ai, SYSTEM_PROMPT)  # 记忆/持仓/画像/视图，管线不许丢
+        if stream:
+            _hit = False
+            async for _k, _v in _pipeline_answer_stream(
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user
+            ):
+                _hit = True
+                yield _k, _v
+            if _hit:
+                return
+        else:
+            _ptxt = await _pipeline_answer(
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user
+            )
+            if _ptxt:
+                yield "text", _ptxt
+                return
+    _note = correction_note(_utext)
+    if _note:
+        messages_for_ai.insert(0, {"role": "system", "content": _note})
     try:
         for _round in range(MAX_TOOL_ROUNDS):
             response_msg = None
@@ -1022,16 +1195,18 @@ async def _run_tool_loop(
             try:
                 if stream:
                     async for kind, payload in ai_client.chat_with_tools_stream(
-                        messages_for_ai, tools=CHAT_TOOLS, temperature=0.5
+                        messages_for_ai, tools=_tools, temperature=_temp
                     ):
                         if kind == "delta":
                             acc.append(payload)
-                            yield "delta", payload
+                            # 首轮先缓冲：万一是"没调工具就作答"的幻觉，直接丢掉别让用户看见
+                            if _round or not _stock_q:
+                                yield "delta", payload
                         else:
                             response_msg = payload
                 else:
                     response_msg = await ai_client.chat_with_tools(
-                        messages_for_ai, tools=CHAT_TOOLS, temperature=0.5,
+                        messages_for_ai, tools=_tools, temperature=_temp,
                     )
             except LLMDegradedError:
                 # 0.3: 服务降级≠工具不支持, 不许走 chat_multi 兜底重试放大
@@ -1039,6 +1214,10 @@ async def _run_tool_loop(
             except Exception:
                 logger.info("流式 tool use 不可用，使用普通对话" if stream else "Tool use 不可用，使用普通对话")
                 ai_response = await ai_client.chat_multi(messages_for_ai, temperature=0.5)
+                if _stock_q:
+                    # 工具链不可用时同样不许凭记忆报数
+                    logger.warning("tool use 不可用且问的是具体标的 → 拒绝无数据作答")
+                    ai_response = zero_tool_refusal()
                 if stream:
                     yield "delta", ai_response
                     yield "done", ai_response
@@ -1051,10 +1230,19 @@ async def _run_tool_loop(
             else:
                 no_calls = not response_msg.tool_calls
             if no_calls:
-                if stream:
-                    yield "done", "".join(acc)
-                else:
-                    yield "text", (response_msg.content or "")
+                text = "".join(acc) if stream else (response_msg.content or "")
+                # 数字对账: 回答里的硬数字逐个回查工具原文(查不到就标出来, 不改正文)
+                # 证据池 = 工具返回 + 注入的 system 上下文（上下文里的数也是出处，
+                # 否则「持仓成本 36.522」会被误判成编造 —— 2026-10-22 实测）
+                _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
+                                 if m.get("role") in ("tool", "system"))
+                if text and _ev:
+                    text = _audit_annotate(text, _audit_numbers(text, _ev, _utext))
+                if _round == 0 and _stock_q:
+                    # 2026-10-21 幻觉事故：问两只票却零工具作答、还编出别的股票 → 一律不给结论
+                    logger.warning("零工具作答已拦截(问的是具体标的): %s", _utext[:40])
+                    text = zero_tool_refusal()
+                yield ("done" if stream else "text"), text
                 return
 
             # 执行 tool calls
@@ -1074,23 +1262,74 @@ async def _run_tool_loop(
                 tool_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
                 logger.info(f"Tool call: {tc.function.name}({tool_args})")
                 yield "stage", _TOOL_STAGE_LABELS.get(tc.function.name, f"正在调用 {tc.function.name}...")
-                result = await _execute_tool(db, tc.function.name, tool_args, user=user)
+                if runtime is not None:
+                    result = await runtime.call(
+                        tc.function.name, tool_args, _tool_executor, db=db, user=user,
+                    )
+                else:
+                    result = await _execute_tool(db, tc.function.name, tool_args, user=user)
                 messages_for_ai.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": result,
                 })
         else:
-            if stream:
-                yield "done", "抱歉，处理轮次过多，请精简问题再试。"
-            else:
-                yield "text", (response_msg.content or "抱歉，处理轮次过多，请精简问题再试。")
+            # 轮次用尽(2026-10-21): 先用已取到的证据补一次无工具总结, 实在没有才给建议文案
+            _sum = await summarize_on_budget(ai_client, messages_for_ai)
+            _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
+                             if m.get("role") in ("tool", "system"))
+            if _sum and _ev:
+                _sum = _audit_annotate(_sum, _audit_numbers(_sum, _ev, _utext))
+            yield ("done" if stream else "text"), (_sum or budget_exhausted_hint())
     except Exception as e:
         logger.error(f"AI {'流式' if stream else ''}对话失败: {e}")
         if stream:
             yield "done", f"抱歉，AI 服务暂时不可用：{e}"
         else:
             yield "text", f"抱歉，AI 服务暂时不可用：{e}"
+
+
+
+async def _run_tool_loop(
+    ai_client: AIClient, messages_for_ai: list[dict], db: Session,
+    user: User | None = None, *, stream: bool = False,
+    conversation_id: int | None = None, recipe: str | None = None,
+    question: str | None = None,
+):
+    """参谋一轮问答的外壳(Agent 内核 P0, 2026-10-20)。
+
+    只做三件事: 开一条轨迹 → 交给 `_run_tool_loop_inner` → 无论正常结束、
+    超轮次还是抛异常都收尾。轨迹是旁路, `start_copilot_run` 失败会返回 None,
+    此时行为与拆分前完全一致。
+    """
+    trace = start_copilot_run(
+        conversation_id=conversation_id,
+        user_id=getattr(user, "id", None),
+        recipe=recipe,
+        question=question,
+    )
+    bind_llm_context(user, trace)   # P3: 把本轮归因写进 contextvar(成本/配额用)
+
+    runtime = AgentRuntime(trace=trace)
+    status, error = "ok", None
+    answer = ""
+    try:
+        async for kind, payload in _run_tool_loop_inner(
+            ai_client, messages_for_ai, db, user, stream=stream, runtime=runtime,
+        ):
+            if kind in ("text", "done"):
+                answer += str(payload or "")
+            yield kind, payload
+    except Exception as exc:  # noqa: BLE001 - 记录后原样抛出, 不改既有降级语义
+        status, error = "error", f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        finish_copilot_run(trace, status=status, error=error)
+        # 维度缺口采集: 后台跑, 不占响应时间; 只在深度诊断 + 回答里有「未取到」时触发
+        gap_collector.spawn(
+            ai_client, question=question, answer=answer, user_id=getattr(user, "id", None),
+            conversation_id=conversation_id, symbol=_REQ_BOUND.get(), recipe=recipe,
+        )
 
 
 def _sse_event(event: str, data: dict) -> str:
@@ -1117,6 +1356,12 @@ class CreateConversationBody(BaseModel):
 class SendMessageBody(BaseModel):
     content: str
     image_data: str | None = None  # 可选: 图片 base64 data URL(多模态, 模型看图)
+    # @ 提及（股票 / 内置智能体）
+    mentions: list[Mention] = []
+    # 2026-10-19: 前端当前查看的标的。没有它时模型只能靠"猜" —— 实测会把正在看的 600111
+    # 分析成用户主仓 002361（神剑股份），或直接报"没有股票标的"。
+    stock_symbol: str | None = None
+    stock_market: str | None = None
 
 
 def _client_from_scene_cfg(db: Session, cfg) -> AIClient | None:
@@ -1473,9 +1718,12 @@ async def _fetch_kline_pattern_context(symbol: str, market: str) -> str:
         # TA-Lib 标准形态
         talib_hits = _detect_talib_patterns(list(bars))
         if talib_hits:
-            text += "\n\n【TA-Lib 标准形态】"
+            text += (
+                "\n\n【TA-Lib 标准形态】(TA-Lib 原始输出仅 ±100 方向标记，无强弱分级；"
+                "同一根K线常同时触发多种同义形态，条数多不代表共振强)"
+            )
             for p in talib_hits[:8]:
-                text += f"\n- {p['cn_name']}({p['name']}) {p['signal']} 强度{p['strength']}"
+                text += f"\n- {p['cn_name']}({p['name']}) {p['signal']}"
         # 附带最近价格信息
         last = bars[-1]
         head = f"{market}:{symbol} 最近K线({last.date}): 开{last.open} 高{last.high} 低{last.low} 收{last.close}\n"
@@ -1485,11 +1733,20 @@ async def _fetch_kline_pattern_context(symbol: str, market: str) -> str:
         return f"K线形态识别失败: {e}"
 
 
-async def _fetch_auction_context(scene: str, limit: int = 10) -> str:
-    """集合竞价数据(auction_collector: 悟道优先, 腾讯批量降级, 30s 缓存)。"""
+async def _fetch_auction_context(
+    scene: str, limit: int = 10, symbols: list[str] | None = None,
+    db=None, user=None,
+) -> str:
+    """集合竞价数据(auction_collector: 悟道优先, 腾讯批量降级, 30s 缓存)。
+
+    2026-10-20 修复: `watchlist` 原先被别名成 `strongest`（全市场前 N），于是
+    "查我持仓/自选的竞价"只能得到"不在榜单里" —— 把"没进榜单"误说成"没有竞价数据"。
+    现在 `watchlist` / `symbols` 走逐票快照（每只票一行，取不到就明写取不到）。
+    """
     from src.collectors.auction_collector import (
         fetch_auction_overview,
         fetch_auction_strongest,
+        fetch_auction_symbols,
         fetch_auction_theme,
         fetch_auction_weak_to_strong,
         fetch_auction_risk,
@@ -1497,7 +1754,21 @@ async def _fetch_auction_context(scene: str, limit: int = 10) -> str:
 
     scene = (scene or "overview").strip() or "overview"
     try:
-        if scene in ("strongest", "watchlist"):
+        if scene in ("watchlist", "symbols") or symbols:
+            syms = list(symbols or [])
+            if scene == "watchlist" and not syms and db is not None:
+                from sqlalchemy import or_
+
+                from src.db.models import Stock
+
+                q = db.query(Stock)
+                if getattr(user, "id", None) is not None:
+                    q = q.filter(or_(Stock.user_id == user.id, Stock.user_id.is_(None)))
+                syms = [s.symbol for s in q.order_by(Stock.sort_order.asc()).limit(limit).all()]
+            if not syms:
+                return "没有可查的标的：既没传 symbols，当前账号也没有自选股。"
+            return fetch_auction_symbols(syms, limit=max(limit, 10))
+        if scene == "strongest":
             return fetch_auction_strongest(limit=limit)
         if scene == "theme":
             return fetch_auction_theme(limit=limit)
@@ -1783,6 +2054,18 @@ def delete_conversation(
     return {"ok": True}
 
 
+
+def _bind_conv_symbol(db, conv, body: "SendMessageBody") -> None:
+    """把前端"正在看的标的"绑到对话上(页面切换时跟随更新)。
+
+    判定口径在 src/harness/context.py::resolve_bound_symbol:
+        文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定
+    2026-10-22 事故: 旧实现"对话已绑定就不改" → 002548 页面聊完再问 002114,
+    参谋仍按 002548 作答(系统提示与取数上下文全串在旧票上)。
+    """
+    _sync_conv_symbol(db, conv, body)
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
     conversation_id: int,
@@ -1797,6 +2080,7 @@ async def send_message(
     """
     db = SessionLocal()
     try:
+        enforce_copilot_quota(db, user)   # P3: 多用户配额, 网关层硬拒
         owner_filter = (
             ChatConversation.user_id.is_(None)
             if getattr(user, "is_service", False)
@@ -1813,13 +2097,15 @@ async def send_message(
         if not conv:
             raise HTTPException(404, "对话不存在")
 
+        _bind_conv_symbol(db, conv, body)
+
         # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
         if user.username == "demo":
             from src.core.demo_limit import allow
             if not allow(user.id):
                 raise HTTPException(429, "演示账号每日对话次数已用完(10次/天)。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics")
 
-        # 多模态: 图片先由 agnes 视觉代理转成文字描述(在保存前处理, 保证 DB 历史连贯)
+        # 多模态: 图片先由视觉代理转文字(保存前处理, 保 DB 历史连贯)
         if body.image_data:
             desc = await _describe_image(body.image_data, user=user)
             if desc:
@@ -1845,9 +2131,16 @@ async def send_message(
         messages_for_ai = await _build_ai_messages(db, conv, user, image_data=body.image_data)
         ai_client = _get_ai_client(db, conv.ai_model_id, user=user)
         ai_response = ""
-        async for _kind, payload in _run_tool_loop(ai_client, messages_for_ai, db, user=user):
-            if _kind == "text":
-                ai_response = payload
+        _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
+        try:
+            async for _kind, payload in _run_tool_loop(
+                ai_client, messages_for_ai, db, user=user,
+                conversation_id=conv.id, question=body.content,
+            ):
+                if _kind == "text":
+                    ai_response = payload
+        finally:
+            _exit_request_ctx(_toks)
 
         # 保存 AI 回复
         assistant_msg = ChatMessage(
@@ -1893,6 +2186,10 @@ async def send_message_stream(
     async def gen():
         db = SessionLocal()
         try:
+            _qmsg = quota_error_message(db, user)
+            if _qmsg:
+                yield _sse_event("error", {"message": _qmsg})
+                return
             conv = (
                 db.query(ChatConversation)
                 .filter(
@@ -1904,6 +2201,8 @@ async def send_message_stream(
             if not conv:
                 yield _sse_event("error", {"message": "对话不存在"})
                 return
+
+            _bind_conv_symbol(db, conv, body)
 
             # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
             if user.username == "demo":
@@ -1948,9 +2247,11 @@ async def send_message_stream(
             # 多轮 tool use + 真流式(2026-08-23 U1): 边流式出字边执行工具
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
+            _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
             try:
                 async for kind, payload in _run_tool_loop(
-                    ai_client, messages_for_ai, db, user=user, stream=True
+                    ai_client, messages_for_ai, db, user=user, stream=True,
+                    conversation_id=conv.id, question=body.content,
                 ):
                     if await request.is_disconnected():
                         logger.info("客户端断开, 中止 LLM 工具循环(停止计费)")
@@ -1964,6 +2265,8 @@ async def send_message_stream(
             except asyncio.CancelledError:
                 logger.info("流被取消, 清理上游 LLM 调用")
                 raise
+            finally:
+                _exit_request_ctx(_toks)
 
             # 保存 AI 回复(全文落库, 与 send_message 一致)
             assistant_msg = ChatMessage(

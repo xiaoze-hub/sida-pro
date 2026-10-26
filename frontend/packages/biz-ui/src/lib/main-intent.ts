@@ -165,10 +165,45 @@ export interface IntentPriceLine {
 }
 
 /** 筹码峰 + 成本带上/下沿(与 IK 同色同线型) */
-export function intentPriceLinesFor(mi: MainIntentStructured | null | undefined): IntentPriceLine[] {
-  if (!intentRenderable(mi)) return []
+export function intentPriceLinesFor(
+  mi: MainIntentStructured | null | undefined,
+  acc?: { main_cost?: number; cost_70_low?: number; cost_70_high?: number } | null,
+): IntentPriceLine[] {
   const out: IntentPriceLine[] = []
-  if (mi!.chip_peak != null) {
+
+  // 1. 若有主力筹码沉淀模型，绘制主力底仓均价线与70%核心底仓带
+  if (acc?.main_cost != null && acc.main_cost > 0) {
+    out.push({
+      price: acc.main_cost,
+      color: 'rgba(239, 68, 68, 0.85)', // 亮红
+      lineWidth: 2,
+      lineStyle: 0, // solid 实线，突出主力生命线
+      title: '🔴 主力成本',
+      axisLabelVisible: true,
+    })
+    if (acc.cost_70_low != null && acc.cost_70_high != null) {
+      out.push({
+        price: acc.cost_70_high,
+        color: 'rgba(245, 158, 11, 0.6)', // 琥珀橙
+        lineWidth: 1,
+        lineStyle: 2, // dashed 虚线
+        title: '70%成本顶沿',
+        axisLabelVisible: true,
+      })
+      out.push({
+        price: acc.cost_70_low,
+        color: 'rgba(16, 185, 129, 0.6)', // 翡翠绿
+        lineWidth: 1,
+        lineStyle: 2, // dashed 虚线
+        title: '70%成本底沿',
+        axisLabelVisible: true,
+      })
+    }
+  }
+
+  if (!intentRenderable(mi)) return out
+
+  if (mi!.chip_peak != null && (!acc || Math.abs(mi!.chip_peak - (acc.main_cost || 0)) > 0.05)) {
     out.push({
       price: mi!.chip_peak,
       color: 'rgba(234, 179, 8, 0.6)',
@@ -178,7 +213,7 @@ export function intentPriceLinesFor(mi: MainIntentStructured | null | undefined)
       axisLabelVisible: true,
     })
   }
-  if (mi!.chip_band) {
+  if (mi!.chip_band && !acc) {
     out.push({
       price: mi!.chip_band.high,
       color: 'rgba(148, 163, 184, 0.45)',

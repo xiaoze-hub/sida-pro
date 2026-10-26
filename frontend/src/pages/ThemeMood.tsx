@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
+import { RefreshCw } from 'lucide-react'
+import MarketMoodChart from '@/components/MarketMoodChart'
 import LadderBoard, { type LadderDay } from '@panwatch/biz-ui/components/thememood/LadderBoard'
+import { usePausedInterval } from '@panwatch/base-ui'
+import { safeFixed } from '@/lib/format'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import ScanJobButton from '@/components/ScanJobButton'
+import ThemeMoodStatus, { parseBoardPhase, type BoardPhase } from '@/components/ThemeMoodStatus'
 import {
   AXIS_CELL_W,
   AXIS_PITCH,
@@ -19,6 +24,16 @@ import {
   type TrendLine,
   type TrendDot,
 } from '@/lib/theme-mood'
+
+/** 全市场情绪温度序列(自算口径, 见后端 market_breadth_daily) */
+interface MarketMoodResp {
+  ok: boolean
+  items: Array<{ date: string; up: number | null; down: number | null; flat: number | null; symbols: number | null; temperature: number | null }>
+  latest?: { date: string; up: number | null; down: number | null; flat: number | null; symbols: number | null; temperature: number | null }
+  temperature_percentile?: number | null
+  note?: string
+  caliber?: string
+}
 
 /**
  * 题材情绪页(2026-09-12, 老板口径): 收盘确认口径的题材×日情绪矩阵。
@@ -72,6 +87,8 @@ interface LadderResp {
   note?: string
   mode?: 'live' | 'finalized'
   as_of?: string | null
+  /** 盘中快照的数据时刻(scan_tick last_ok, HH:MM); 定型后为 null。 */
+  live_as_of?: string | null
   stale?: boolean
   degraded?: string | null
   live_day?: LadderDay | null
@@ -95,14 +112,26 @@ interface BoardResp {
   market?: { date: string; score: number | null }[]
   rotation?: RotationDay[]
   rotation_top_k?: number
+  /** 2026-10-08 实时契约(后端同步实现, 字段可能缺失 → parseBoardPhase 容错): 板级数据状态。 */
+  phase?: string | null
+  as_of?: string | null
+  settled_at?: string | null
+  trading_day?: boolean | null
+  note?: string | null
 }
 
 const WINDOWS = [10, 20, 30] as const
 const DIMS = ['涨停结构', '题材扩散', '核心强度', '接力反馈', '连续性'] as const
 const MARKET_CURVE_H = 46
 const DETAIL_CURVE_H = 68
+/** 盘中实时轮询周期: phase=live 时 60s 拉一次 board(缓存由后端控制, 这里只负责频率)。 */
+const LIVE_POLL_MS = 60_000
+/** 非 live 也未定型时的兜底轮询(沿用原 120s board 节奏): pre/closed_pending/未知态。 */
+const IDLE_POLL_MS = 120_000
+/** 连板梯队盘中 60s 轮询(v0.5.87 既有口径)。 */
+const LADDER_POLL_MS = 60_000
 
-/** 轴长度变化时把滚动容器拉回"最新"一端(轮询刷新不打扰用户已滚动的位置)。 */
+/** 轴长度变化时把滚动容器拉回"最新"一端(轮询刷新不打扰用户已滚动的位置)。最新在左 => 滚到 0。 */
 function useAutoScrollToLatest(axisLen: number) {
   const ref = useRef<HTMLDivElement | null>(null)
   const lastLen = useRef(0)
@@ -110,7 +139,8 @@ function useAutoScrollToLatest(axisLen: number) {
     const el = ref.current
     if (!el || axisLen === 0 || axisLen === lastLen.current) return
     lastLen.current = axisLen
-    el.scrollLeft = el.scrollWidth
+    // 最新在左 -> 回到最左端即"最新"(2026-09-26 顺序调整前这里是 scrollWidth)
+    el.scrollLeft = 0
   }, [axisLen])
   return ref
 }
@@ -158,12 +188,46 @@ function TrendChart({ trend, width, height, label, hint, ariaLabel }: {
   )
 }
 
+interface EtfTrackResp {
+  zs_code?: string
+  total?: number
+  status?: string
+  premium_count?: number
+  discount_count?: number
+  etfs?: Array<{
+    code: string
+    name: string
+    now_price: number
+    iopv: number
+    premium_rate: number
+    market_cap_wan: number
+  }>
+}
+
 export default function ThemeMoodPage() {
   const [windowDays, setWindowDays] = useState<number>(20)
   const [resp, setResp] = useState<BoardResp | null>(null)
   const [ladder, setLadder] = useState<LadderResp | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // 通达信官方 ETF 折溢价与国家队护盘信号
+  const [etfTrack, setEtfTrack] = useState<EtfTrackResp | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetchAPI<EtfTrackResp>('/tdx/etf-track?zs_code=000300.SH')
+      .then((r) => { if (alive) setEtfTrack(r) })
+      .catch(() => { if (alive) setEtfTrack(null) })
+    return () => { alive = false }
+  }, [reloadKey])
+  // 全市场情绪温度曲线(2026-09-25): 自算口径, 见后端 /api/market-breadth/history
+  const [mood, setMood] = useState<MarketMoodResp | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetchAPI<MarketMoodResp>(`/market-data/breadth-history?days=${windowDays}`, { cacheMode: 'reload' })
+      .then((r) => { if (alive) setMood(r) })
+      .catch(() => { if (alive) setMood(null) })
+    return () => { alive = false }
+  }, [windowDays, reloadKey])
   const [showAllRows, setShowAllRows] = useState(false)
   // P1-1(2026-09-18): 右侧题材列表默认只给**主线 12 条**(分层第一层)。
   // 实测该列原先一次渲染 516 行且逐行画 1px 分隔线 → hairline 526、密度 9680, 是典型"表格墙"。
@@ -172,49 +236,85 @@ export default function ThemeMoodPage() {
     () => localStorage.getItem('tm-board-collapsed') === '1',
   )
 
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const res = await fetchAPI<BoardResp>(`/theme-mood/board?window=${windowDays}&top=15`, { cacheMode: 'reload' })
-        if (alive) setResp(res)
-      } catch {
-        /* 保留旧数据 */
-      }
-      try {
-        const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, { cacheMode: 'reload' })
-        if (alive) setLadder(lad)
-      } catch {
-        if (alive) setLadder(null)
-      }
-    }
-    void load()
-    const timer = window.setInterval(() => void load(), 120000)
-    return () => {
-      alive = false
-      window.clearInterval(timer)
-    }
-  }, [windowDays, reloadKey])
+  // ── 数据状态 + 盘中实时轮询状态(2026-10-08)───────────────────────────────
+  const [boardPhase, setBoardPhase] = useState<BoardPhase>('unknown')
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [manualRefreshing, setManualRefreshing] = useState(false)
+  /** board 请求序号: 只有**最新**一次请求的响应能落地(竞态守卫 —— 旧/慢响应不覆盖新的)。 */
+  const boardSeq = useRef(0)
+  /** 轮询调度读 ref(不读 state): loadBoard 一回来就能决定下一拍节奏, 不必等 re-render。 */
+  const phaseRef = useRef<BoardPhase>('unknown')
 
-  // 盘中实时(v0.5.87): 梯队单独 60s 轮询(board 仍 120s); live_day/stale/note_closing 由 /ladder 带出
+  /** 拉一次 board。失败保留旧数据, 且只把"失败"记一次(liveError), 不弹错误风暴。 */
+  const loadBoard = useCallback(async () => {
+    const seq = ++boardSeq.current
+    try {
+      const res = await fetchAPI<BoardResp>(`/theme-mood/board?window=${windowDays}&top=15`, { cacheMode: 'reload' })
+      if (seq !== boardSeq.current) return   // 已有更新的请求发出 → 丢弃本响应
+      setResp(res)
+      const ph = parseBoardPhase(res)
+      phaseRef.current = ph
+      setBoardPhase(ph)
+      setLiveError(null)
+    } catch (e) {
+      if (seq !== boardSeq.current) return
+      setLiveError(e instanceof Error ? e.message : '刷新失败')
+    }
+  }, [windowDays])
+
+  const loadLadder = useCallback(async () => {
+    try {
+      const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, { cacheMode: 'reload' })
+      setLadder(lad)
+    } catch {
+      /* 保留旧数据 */
+    }
+  }, [windowDays])
+
+  /** 手动刷新(状态条按钮): 立即重拉 board + ladder, 期间展示 loading 态。 */
+  const manualRefresh = useCallback(async () => {
+    setManualRefreshing(true)
+    try {
+      await Promise.all([loadBoard(), loadLadder()])
+    } finally {
+      setManualRefreshing(false)
+    }
+  }, [loadBoard, loadLadder])
+
+  // 连板梯队(v0.5.87): 挂载拉一次 + 60s 轮询; live_day/stale/note_closing 由 /ladder 带出。
+  // 页签 keep-alive(2026-10-15): 走 `usePausedInterval` —— 隐藏页签**停表**(不发请求), 回前台补一次。
+  usePausedInterval(() => void loadLadder(), LADDER_POLL_MS, { deps: [loadLadder, reloadKey] })
+
+  // 题材 board 实时轮询(2026-10-08): phase=live 每 60s; final 停止; 页面隐藏暂停(回前台立即补一次)。
+  // 非 live/未定型沿用 120s 兜底节奏; 切窗口/手动刷新(含 ScanJobButton 的 reloadKey)会重挂本 effect。
+  // 请求频率之外不缓存 —— 缓存口径由后端控制(每次都 cacheMode:'reload' 向服务端要真值)。
   useEffect(() => {
     let alive = true
-    const poll = async () => {
-      try {
-        const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, {
-          cacheMode: 'reload',
-        })
-        if (alive) setLadder(lad)
-      } catch {
-        /* 保留旧数据 */
+    let timer: number | undefined
+    const sleep = (ms: number) => new Promise<void>((resolve) => { timer = window.setTimeout(resolve, ms) })
+    const onVisibility = () => {
+      // 从后台回到前台: 立即补拉一次, 不等下一个周期。
+      if (alive && typeof document !== 'undefined' && !document.hidden) void loadBoard()
+    }
+    const run = async () => {
+      await loadBoard()
+      while (alive) {
+        if (phaseRef.current === 'final') return               // 收盘定型 → 停止轮询
+        const wait = phaseRef.current === 'live' ? LIVE_POLL_MS : IDLE_POLL_MS
+        await sleep(wait)
+        if (!alive) return
+        if (typeof document !== 'undefined' && document.hidden) continue   // 页面隐藏 → 暂停本次拉取
+        await loadBoard()
       }
     }
-    const timer = window.setInterval(() => void poll(), 60000)
+    void run()
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
     return () => {
       alive = false
-      window.clearInterval(timer)
+      if (timer !== undefined) window.clearTimeout(timer)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [windowDays, reloadKey])
+  }, [loadBoard, reloadKey])
 
   const items = resp?.items ?? []
   const rotationByDate = useMemo(
@@ -227,7 +327,8 @@ export default function ThemeMoodPage() {
   const axis = axisDates(resp?.dates, items[0]?.cells ?? [], windowDays)
   const bands = monthBands(axis)
   const labels = dayLabels(axis)
-  const latestDate = axis.length ? axis[axis.length - 1] : null
+  // 轴已改为最新在左(见 lib/theme-mood.axisDates), 故最新日取 index 0
+  const latestDate = axis.length ? axis[0] : null
   const detail = items.find((it) => it.block_code === active) ?? null
   const dims = detail ? [detail.s1, detail.s2, detail.s3, detail.s4, detail.s5] : []
   const axisW = axisWidth(axis.length)
@@ -240,6 +341,11 @@ export default function ThemeMoodPage() {
     detail && axis.length ? scoreTrend(axis.map((d) => detailCells?.get(d)?.score ?? null), { height: DETAIL_CURVE_H }) : null
 
   // 时间轴默认对齐"最新"一端; 仅轴长度变化(首次加载/切窗口)时回滚, 轮询刷新不动用户的滚动位置。
+
+  // 轴改成"最新在左"后, trend.last 是**最旧**那端(空间上最右), 不能再拿它当标量标签。
+  // 绘制本身仍按轴顺序(最左 = 最新), 高亮点用 trend.last 是对的。
+  const newestMarketScore = axis.length ? (marketByDate.get(axis[0]) ?? null) : null
+  const newestDetailScore = detail && axis.length ? (detailCells?.get(axis[0])?.score ?? null) : null
   const scrollRef = useAutoScrollToLatest(axis.length)
   const detailScrollRef = useAutoScrollToLatest(axis.length)
 
@@ -248,9 +354,34 @@ export default function ThemeMoodPage() {
       <div className="mb-3 flex items-center gap-3">
         <h1 className="text-[16px] font-semibold">题材情绪</h1>
         <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">收盘确认口径</span>
-        {resp?.trade_date ? <span className="text-[11px] text-muted-foreground">{resp.trade_date}</span> : null}
+        <ThemeMoodStatus
+          phase={boardPhase}
+          as_of={resp?.as_of}
+          settled_at={resp?.settled_at}
+          trading_day={resp?.trading_day}
+          note={resp?.note}
+        />
+        {/* 基准日/快照时间显式标注(铁律): 缺数据显式「无数据」, 不填 0 也不留空 */}
+        {resp ? (
+          <span className="text-[11px] text-muted-foreground">基准日 {resp.trade_date ?? '无数据'}</span>
+        ) : null}
+        {liveError ? (
+          <span className="text-[10px] text-stock-up" title={liveError}>
+            轮询失败, 自动重试中
+          </span>
+        ) : null}
         <div className="ml-auto flex items-center gap-1">
           <ScanJobButton path="/theme-mood/scan/run" onDone={() => setReloadKey((k) => k + 1)} />
+          <button
+            type="button"
+            onClick={() => void manualRefresh()}
+            disabled={manualRefreshing}
+            title="立即拉取最新题材情绪(盘中 phase=live 时每 60s 自动刷新)"
+            className="flex items-center rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-60"
+          >
+            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${manualRefreshing ? 'animate-spin' : ''}`} />
+            {manualRefreshing ? '刷新中…' : '刷新'}
+          </button>
           {WINDOWS.map((w) => (
             <button
               key={w}
@@ -270,15 +401,67 @@ export default function ThemeMoodPage() {
         <MarketPhasePanel />
       </div>
 
+      {mood?.ok ? (
+        <div className="mb-3 border-b border-border/40 pb-2">
+          <div className="mb-1 flex items-baseline gap-2">
+            <span className="text-[11px] text-foreground">全市场情绪温度</span>
+            <span className="font-mono text-[12px] font-medium text-primary">{mood.latest?.temperature ?? '—'}</span>
+            <span className="text-[10px] text-muted-foreground">
+              近 {mood.items?.length ?? 0} 日分位 {typeof mood.temperature_percentile === 'number' ? `${mood.temperature_percentile}%` : '—'}
+            </span>
+            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+              涨 {mood.latest?.up ?? '—'} / 跌 {mood.latest?.down ?? '—'} / 平 {mood.latest?.flat ?? '—'}（{mood.latest?.symbols ?? '—'} 只有效）
+            </span>
+          </div>
+          <MarketMoodChart
+            data={(mood.items ?? []).map((i) => i.temperature).filter((v): v is number => typeof v === 'number')}
+            width={1000}
+            height={56}
+            ariaLabel={`全市场情绪温度曲线, 最新 ${mood.latest?.temperature ?? '—'}`}
+          />
+          <div className="mt-0.5 text-[10px] text-muted-foreground">
+            口径：{mood.caliber}{mood.note ? ` ⚠️ ${mood.note}` : ''}
+          </div>
+        </div>
+      ) : null}
+
+      {/* 通达信 300ETF IOPV 折溢价护盘雷达 (国家队抄底与流动性异动) */}
+      {etfTrack ? (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded border border-border/40 bg-card/40 px-3 py-1.5 text-[11px]">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-foreground">沪深300 ETF 护盘雷达:</span>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold text-primary">
+              {etfTrack.status || '平价运行'}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              共跟踪 {etfTrack.total ?? 0} 只 ETF · 溢价 {etfTrack.premium_count ?? 0} 只 / 折价 {etfTrack.discount_count ?? 0} 只
+            </span>
+          </div>
+          {etfTrack.etfs && etfTrack.etfs.length > 0 ? (
+            <div className="flex items-center gap-3 font-mono text-[10px]">
+              {etfTrack.etfs.slice(0, 3).map((e) => (
+                <span key={e.code} className="flex items-center gap-1">
+                  <span className="text-muted-foreground">{e.name.replace('沪深300ETF', '')}:</span>
+                  <span className={e.premium_rate > 0.05 ? 'text-red-500 font-medium' : e.premium_rate < -0.05 ? 'text-green-500 font-medium' : 'text-foreground'}>
+                    {e.premium_rate > 0 ? `+${safeFixed(e.premium_rate, 2)}%` : `${safeFixed(e.premium_rate, 2)}%`}
+                  </span>
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <LadderBoard
         ladder={ladder?.ladder ?? []}
         liveDay={ladder?.live_day ?? null}
         mode={ladder?.mode ?? 'finalized'}
         stale={ladder?.stale ?? false}
-        lastOk={null}
+        lastOk={ladder?.live_as_of ?? null}
         noteClosing={ladder?.note_closing ?? null}
         stats={ladder?.stats ?? null}
         asOf={ladder?.as_of ?? null}
+        liveAsOf={ladder?.live_as_of ?? null}
       />
 
       <button
@@ -322,7 +505,7 @@ export default function ThemeMoodPage() {
                   active === it.block_code ? 'bg-accent/60' : ''
                 }`}
               >
-                <span className="truncate">
+                <span className="truncate" title={it.block_name || it.block_code}>
                   {it.block_name || it.block_code}
                   {it.core ? <span className="ml-1 rounded bg-stock-up/15 px-1 text-[10px] text-stock-up">核心</span> : null}
                 </span>
@@ -360,12 +543,13 @@ export default function ThemeMoodPage() {
               <span className="text-[10px]">曲线=当日前 20 均值</span>
               <span className="ml-auto flex items-center gap-1 text-[10px]">
                 色阶
+                {/* 2026-10-24 L3-A: 图例与 lib/theme-mood.ts 的 cellColorClass 对齐 ——
+                    此前少一档 null(无数据, bg-muted/30), 读者会以为"灰=最低分"。 */}
                 {[
-                  ['<50', 'bg-muted/40'],
-                  ['50-60', 'bg-muted/60'],
-                  ['60-70', 'bg-stock-up/15'],
-                  ['70-82', 'bg-stock-up/30'],
-                  ['≥82', 'bg-stock-up/45'],
+                  ['走弱 <50', 'bg-stock-down/20'],
+                  ['震荡 50-70', 'bg-muted/60'],
+                  ['走强 ≥70', 'bg-stock-up/30'],
+                  ['无数据', 'bg-muted/30'],
                 ].map(([label, cls]) => (
                   <span key={label} className="flex items-center gap-0.5">
                     <span className={`inline-block h-2.5 w-3.5 rounded-sm ${cls}`} />
@@ -383,7 +567,7 @@ export default function ThemeMoodPage() {
                   {bands.map((b) => (
                     <span
                       key={b.key}
-                      className="border-b border-border/70 pb-0.5 text-center text-[11px] font-medium leading-4 text-foreground/60"
+                      className="border-b border-border/70 pb-0.5 text-center text-[11px] font-medium leading-4 text-foreground"
                       style={{ width: b.count * AXIS_PITCH - (AXIS_PITCH - AXIS_CELL_W) }}
                     >
                       {b.label}
@@ -392,7 +576,7 @@ export default function ThemeMoodPage() {
                 </div>
               </div>
               <div className="mb-1 flex w-max min-w-full items-center gap-1">
-                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-foreground/60">
+                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-foreground">
                   日期
                 </span>
                 <div className="flex gap-0.5">
@@ -401,7 +585,7 @@ export default function ThemeMoodPage() {
                       key={d}
                       title={`${d}${i === axis.length - 1 ? ' · 最新收盘' : ''}`}
                       className={`w-[38px] shrink-0 text-center text-[12px] leading-4 ${
-                        i === axis.length - 1 ? 'font-semibold text-primary' : 'text-foreground/80'
+                        i === axis.length - 1 ? 'font-semibold text-primary' : 'text-foreground'
                       }`}
                     >
                       {labels[i]}
@@ -432,7 +616,7 @@ export default function ThemeMoodPage() {
                         title={r
                           ? `${d} 新进 Top${resp?.rotation_top_k ?? 10}: ${r.new_codes.join('、') || '无'}\n退榜: ${r.exit_codes.join('、') || '无'}`
                           : d}
-                        className="w-[38px] shrink-0 text-center text-[11px] leading-4 text-foreground/60"
+                        className="w-[38px] shrink-0 text-center text-[11px] leading-4 text-foreground"
                       >
                         {entered || exited ? (
                           <>
@@ -455,12 +639,12 @@ export default function ThemeMoodPage() {
                     trend={marketTrend}
                     width={axisW}
                     height={MARKET_CURVE_H}
-                    ariaLabel={`强势题材情绪走势, 最新 ${fmtScore(marketTrend.last?.score)}`}
+                    ariaLabel={`强势题材情绪走势, 最新 ${fmtScore(newestMarketScore)}`}
                     hint={(d) => `${axis[d.i]} · 前20均值 ${fmtScore(d.score)}`}
                     label={
                       <>
-                        <span className="text-[11px] text-foreground/60">情绪走势</span>
-                        <span className="font-mono text-[12px] font-medium text-primary">{fmtScore(marketTrend.last?.score)}</span>
+                        <span className="text-[11px] text-foreground">情绪走势</span>
+                        <span className="font-mono text-[12px] font-medium text-primary">{fmtScore(newestMarketScore)}</span>
                       </>
                     }
                   />
@@ -547,10 +731,10 @@ export default function ThemeMoodPage() {
               {detailTrend ? (
                 <div className="mt-3">
                   <div className="mb-1 flex items-baseline gap-2 text-[11px]">
-                    <span className="text-foreground/70">情绪走势(近 {axis.length} 个交易日)</span>
+                    <span className="text-foreground">情绪走势(近 {axis.length} 个交易日)</span>
                     <span className="ml-auto text-muted-foreground">
                       最高 {fmtScore(detailTrend.hi)} · 最低 {fmtScore(detailTrend.lo)} · 最新{' '}
-                      <span className="font-mono text-foreground">{fmtScore(detailTrend.last?.score)}</span>
+                      <span className="font-mono text-foreground">{fmtScore(newestDetailScore)}</span>
                     </span>
                   </div>
                   <div ref={detailScrollRef} className="scrollbar overflow-x-auto pb-1">
@@ -558,7 +742,7 @@ export default function ThemeMoodPage() {
                       trend={detailTrend}
                       width={axisW}
                       height={DETAIL_CURVE_H}
-                      ariaLabel={`${detail.block_name || detail.block_code} 情绪走势, 最新 ${fmtScore(detailTrend.last?.score)}`}
+                      ariaLabel={`${detail.block_name || detail.block_code} 情绪走势, 最新 ${fmtScore(newestDetailScore)}`}
                       hint={(d) => `${axis[d.i]} · 情绪分 ${fmtScore(d.score)}`}
                     />
                   </div>

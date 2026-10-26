@@ -25,11 +25,14 @@
  *    "层级平淡"其实是"级数失控"。规范只留 6 级: 10 辅助 / 11 次要 / 12 正文 / 13 区块标题 /
  *    16 页面标题 / 20 大数字。**已有文件按 baseline 只降不升**, 新文件一律 0(基线见
  *    scripts/ui-rules-font-baseline.json)。
+ * R10b 10px 棘轮(2026-10-24 G1 第 1 步): 全仓 `text-[10px]` 730 处, 不能一次收敛。
+ *    按**文件**冻结存量, 只减不增(基线 scripts/ui-rules-font10-baseline.json,
+ *    由 `--write-font10-baseline` 生成)。10px 收敛到 0 后才允许从 FONT_ALLOWED 移除 10。
  * R9 禁外部 CDN 脚本(2026-09-18 UI 走查): index.html 不许再引 unpkg/jsdelivr 之类外部域。
  *    生产实测 CSP/国内网络任一环节拦掉 CDN, 图表库直接加载失败、主视觉区空白。
  *    图表库已随 biz-ui 依赖打包(localhost 自托管), 无需 CDN。
  */
-import { readFileSync, readdirSync, statSync } from 'fs'
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -90,7 +93,9 @@ for (const f of files) {
     if (
       !/lib\/stock-colors\.ts$/.test(f.replace(/\\/g, '/')) &&
       !R4_SKIP_LINE.some((p) => p.test(ln)) &&
-      /Kline|GsColors|stock-colors|GsSignal|gs/i.test(f) &&
+      // 判据用**文件名**(而非全路径): 全路径会误伤 checkout 目录名含 "gs" 的情况
+      // (worktree /home/ubuntu/wt/gs-fund-layer 下, 无辜的 SentimentGauge.tsx 会被当成 GS 文件)。
+      /Kline|GsColors|stock-colors|GsSignal|gs/i.test(f.split('/').pop() ?? f) &&
       /#E53935|#43A047|#ef4444|#22c55e|#EF4444|#22C55E/i.test(ln)
     )
       bad('R4-NO-HARDCODED-GS-COLOR', rel(f), n, ln)
@@ -190,6 +195,54 @@ for (const f of files) {
 }
 for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R10] ${k}: 0 — 可从 baseline 删除`)
 
+// ── R10b: 10px 棘轮(2026-10-24, G1 字号收敛第 1 步)────────────────────────────
+// 背景: 审计 G1 要把字号收敛到 {12,13,16,28}, 但全仓 `text-[10px]` 有 730 处 ——
+// 一次改完无法目检。改为分三步: ①先按**文件**冻结存量(本条), ②各页 lane 逐页收敛并调低,
+// ③全仓归零后才动 FONT_ALLOWED。
+// 与 R10 职责分离: R10 管「有没有非法档位」, R10b 管「10px 有没有变多」。
+// 基线由 `node scripts/check_ui_rules.mjs --write-font10-baseline` 生成, 不许手敲。
+{
+  const F10_BASELINE_FILE = join(ROOT, 'scripts', 'ui-rules-font10-baseline.json')
+  const WRITE_F10 = process.argv.includes('--write-font10-baseline')
+  let f10 = {}
+  try { f10 = JSON.parse(readFileSync(F10_BASELINE_FILE, 'utf8')) } catch { /* 无基线 → 全量新规 */ }
+  const counts = {}
+  for (const f of files) {
+    const c = (readFileSync(f, 'utf8').match(/text-\[10px\]/g) || []).length
+    if (c === 0) continue
+    const key = f.replace(/\\/g, '/').split('/frontend/')[1] || rel(f)
+    counts[key] = c
+  }
+  if (WRITE_F10) {
+    const total = Object.values(counts).reduce((a, b) => a + b, 0)
+    const payload = {
+      _note: '2026-10-24 建立(G1 第 1 步)。规则: 每文件 text-[10px] 只减不增; 收敛到 0 的文件从本表删除。'
+        + ' 全仓归零后才允许把 FONT_ALLOWED 的 10 移除。本文件由 node scripts/check_ui_rules.mjs --write-font10-baseline 生成, 不许手改数字。',
+      _total: total,
+      ...counts,
+    }
+    writeFileSync(F10_BASELINE_FILE, `${JSON.stringify(payload, null, 2)}\n`)
+    console.log(`[R10b] baseline written: ${Object.keys(counts).length} files / ${total} 处 text-[10px]`)
+    process.exit(0)
+  }
+  const f10Seen = new Set()
+  for (const [key, c] of Object.entries(counts)) {
+    f10Seen.add(key)
+    const base = f10[key]
+    if (base === undefined) {
+      bad('R10b-FONT-10-RATCHET', key, 1, `${c} 处 text-[10px] 且无 baseline —— 新代码从 12px 起, 见 docs/design 勘误 7.1`)
+    } else if (c > base) {
+      bad('R10b-FONT-10-RATCHET', key, 1, `${c} 处 10px > baseline ${base} —— 只减不增; 需要收敛请用 12px`)
+    } else if (c < base) {
+      console.log(`[R10b] ${key}: ${c} < baseline ${base} — 可调低 baseline`)
+    }
+  }
+  for (const k of Object.keys(f10)) {
+    if (k.startsWith('_')) continue
+    if (!f10Seen.has(k)) console.log(`[R10b] ${k}: 0 — 可从 baseline 删除`)
+  }
+}
+
 // R11: 只允许两个 K 线引导模块(见文件头 R11 说明)
 {
   const ALLOWED_BOOTSTRAP = new Set([
@@ -239,6 +292,58 @@ for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R
     const rd = (src.match(/\brounded-(2xl|3xl)\b/g) || [])
     if (sh.length) bad('R13-ELEVATION', rel(f), sh.length, `shadow-${sh[0].split('-')[1]} —— 浮层只用 .shadow-float, 平铺面板用 hairline 边框`)
     if (rd.length) bad('R13-ELEVATION', rel(f), rd.length, `${rd[0]} —— 圆角上限 rounded-xl(随 --radius)`)
+  }
+}
+
+// ── R14: 文字禁止用透明度做层级(2026-10-24)──────────────────────────────
+// 依据: 全站 313 处 text-*\/NN（text-muted-foreground/70 就有 130 处）。暗色次级色本身
+// 是 4.92:1（刚过 AA），叠 70% alpha 后实测掉到 **2.22:1** —— 侧栏分组标题「行情/机会/决策」
+// 就是这么变灰的，而它在肉眼上只像"稍微淡一点"，不会有人报 bug。
+// 层级用**字号/字重**表达；有色底（primary/white/destructive）上的 alpha 不在此列。
+{
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    const hits = (src.match(/\btext-(?:muted-)?foreground\/(?:[1-9][0-9]?)\b/g) || [])
+    if (hits.length) {
+      bad(
+        'R14-TEXT-ALPHA',
+        rel(f),
+        hits.length,
+        `${hits[0]} —— 文字不要用透明度降级(实测 2.22:1, AA 需 4.5); 更弱的层级用字号/字重`,
+      )
+    }
+  }
+}
+
+// ── R15: 文字色禁止直接用 Tailwind 调色板(2026-10-24)──────────────────────
+// 依据: 全站 119 处 text-slate/gray/zinc/neutral/stone-NN。这些色绕过设计令牌,
+// 在暗色下必然偏灰 —— `/admin` 的「总用户/活跃用户/今日新增」实测 **2.60:1**（AA 需 4.5），
+// 正是 43 处 text-slate-600 造成的。文字色只允许: text-foreground / text-muted-foreground /
+// 语义色(stock-up|stock-down|amber|primary|destructive) / 白字(在有色底上)。
+{
+  const PAL = /\btext-(?:slate|gray|zinc|neutral|stone)-(?:[1-9][0-9]?|[1-9]00)\b/g
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    const hits = (src.match(PAL) || [])
+    if (hits.length) {
+      bad('R15-PALETTE-TEXT', rel(f), hits.length, `${hits[0]} —— 文字色只用语义令牌(实测 2.60:1, AA 需 4.5)`)
+    }
+  }
+}
+
+// ── R16: 禁止裸 `text-amber`（2026-10-25）────────────────────────────────
+// 依据: tailwind.config.js 的 colors 里没有裸 `amber` 键（只有 amber-50..950），
+// 所以 `text-amber` **不产生任何颜色** —— 降级徽标会和「成功」同色，而且没有任何报错。
+// 实测三处中招: InlineSteps / MarketBroadcast / RunsPage。这类"静默失效的 class"
+// 比写错颜色更危险：它看起来对，编译也过，只是不生效。
+{
+  const BARE = /\btext-amber(?![\w-])/g
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    const hits = (src.match(BARE) || [])
+    if (hits.length) {
+      bad('R16-BARE-AMBER', rel(f), hits.length, 'text-amber 无此令牌(不生效), 用 text-amber-500')
+    }
   }
 }
 

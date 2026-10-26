@@ -1,0 +1,30 @@
+{
+  "exclude": [
+    "**/tests/**",
+    "**/migrations/**",
+    "**/node_modules/**",
+    "**/venv/**"
+  ],
+  "rules": [
+    {
+      "path": "src/harness/**/*.py",
+      "rule": "Focus on: silent exception swallowing that hides configuration errors; concurrency correctness in asyncio.gather / create_task / cancel (must await cancelled tasks); whether the recipe tool whitelist can fail open and expose tools that should stay hidden."
+    },
+    {
+      "path": "src/agents/chat/**/*.py",
+      "rule": "Focus on: every chat tool must declare a non-empty caliber (data-provenance caveat); permission checks (requires) must be enforced before the handler runs; SQL must use parameterized queries; SessionLocal must not be used directly inside async def (blocks the event loop)."
+    },
+    {
+      "path": "src/web/api/**/*.py",
+      "rule": "Focus on: blocking DB calls inside async def endpoints; user input reaching SQL or HTML without escaping; missing authz on state-changing endpoints; response shape drift versus the OpenAPI contract."
+    },
+    {
+      "path": "src/core/**/*.py",
+      "rule": "Focus on: correctness of numeric conversions and units; data-provenance caveats in returned conclusions; None handling on optional fields; timezone-aware datetimes."
+    },
+    {
+      "path": "src/db/**/*.py",
+      "rule": "Focus on: missing indexes on frequently filtered columns; transaction boundaries and rollback; N+1 query patterns; schema migration safety."
+    }
+  ]
+}

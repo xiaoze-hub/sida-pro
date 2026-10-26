@@ -61,7 +61,8 @@ describe('scrollToLatest', () => {
   it('滚到最右', () => {
     const el = { scrollWidth: 900, scrollLeft: 0 } as unknown as HTMLElement
     scrollToLatest(el)
-    expect(el.scrollLeft).toBe(900)
+    // 2026-09-26 起按日列视图最新在左 -> 滚到 0(原为 scrollWidth)
+    expect(el.scrollLeft).toBe(0)
   })
   it('null 安全', () => expect(() => scrollToLatest(null)).not.toThrow())
 })

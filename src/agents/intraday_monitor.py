@@ -294,6 +294,7 @@ def _main_intent_structured(symbol: str) -> dict | None:
                 if band:
                     out["chip_band"] = {"low": band["low"], "high": band["high"]}
                 out["profit_ratio"] = chips.get("profit_ratio")
+                out["concentration"] = chips.get("concentration")
         except Exception as e:
             # P1: 筹码辅助数据降级路径, 不静默
             logger.debug("筹码分布获取失败(降级跳过) %s: %s", symbol, e)
@@ -721,10 +722,14 @@ def _append_decision_pioneer(lines: list, symbol: str) -> None:
             )
         else:
             lines.append("- AI机构活跃度：无数据")
-        gs = d.get("gs")
-        if gs:
-            sig = {"G": "G买(上穿)", "S": "S卖(下穿)"}.get(gs.get("signal"), "无")
-            lines.append(f"- GS趋势：{gs['state']}(方向过滤, 买卖点滞后仅参考, 最近{sig})")
+        gs: dict = d.get("gs") or {}
+        zone = gs.get("state")        # 已确认区间(与 K 线图层单一事实源)
+        if zone or gs.get("pending"):
+            # 2026-10-14 图表说明同源收口: 三指标段 GS 文案统一走 chart_notes.gs_state_text
+            # (与 K 线图 GS 标记 / chart-notes **同源**), 不再自拼一份。
+            from src.core.chart_notes import gs_state_text
+
+            lines.append(f"- GS趋势：{gs_state_text(gs, style='trend')}")
         else:
             lines.append("- GS趋势：无数据")
         l2 = d.get("l2") or {}
@@ -822,6 +827,89 @@ def build_ma_critical_warnings(current_price: float | None, ma_values: dict[str,
                 f"只能说'贴近/在{ma_name}{pos}'"
             )
     return warnings
+
+
+def evaluate_defense_breach(
+    *,
+    defense_price: float | None,
+    current_price: float | None,
+    cost_price: float | None = None,
+) -> dict | None:
+    """判定"用户自设防守线"是否被击穿(方案 B, 2026-10-23)。
+
+    为什么不是 `loss_ratio <= -0.08`: 那条 -8% 是系统替用户定的假设, 用户从没认过、
+    也没法改。产品裁决下纪律位只能来自用户自己设的绝对价(positions.defense_price)。
+
+    Returns:
+        None —— 用户未设防线(不告警) **或** 缺现价(无法判断, 不猜)。
+        否则返回 {"defense_price", "current_price", "cost_price", "loss_pct", "breached"}。
+    """
+    try:
+        d = float(defense_price) if defense_price is not None else None
+    except (TypeError, ValueError):
+        d = None
+    # 未设置 / 非法值一律视为"没有纪律位": 静默跳过, 不退回 -8%。
+    if d is None or d <= 0:
+        return None
+    try:
+        cur = float(current_price) if current_price is not None else None
+    except (TypeError, ValueError):
+        cur = None
+    if cur is None or cur <= 0:
+        return None
+
+    loss_pct: float | None = None
+    try:
+        c = float(cost_price) if cost_price is not None else 0.0
+        if c > 0:
+            loss_pct = (cur - c) / c * 100
+    except (TypeError, ValueError):
+        loss_pct = None
+    return {
+        "defense_price": d,
+        "current_price": cur,
+        "cost_price": float(cost_price) if cost_price else None,
+        "loss_pct": loss_pct,
+        "breached": cur <= d,
+    }
+
+
+def load_defense_lines(symbol: str, user_id: str | None = None) -> list[dict]:
+    """读某标的的**用户自设**防守线(positions.defense_price 非 NULL 的那些)。
+
+    为什么直接查库而不是走 `context.portfolio`: 组合上下文里的 PositionInfo 不携带
+    用户的纪律位(那是风控口径而非持仓口径字段), 且这里必须能区分"没设"与"设了但
+    等于某个默认值" —— 只有原始列能表达。
+
+    user_id 隔离与其它持仓口径一致: 传了 user_id 就取"自己的 + 历史遗留全局(NULL)"。
+    """
+    from sqlalchemy import or_
+
+    from src.db.models import Position, Stock
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        q = (
+            db.query(Position)
+            .join(Stock, Stock.id == Position.stock_id)
+            .filter(Stock.symbol == symbol, Position.defense_price.isnot(None))
+        )
+        if user_id:
+            q = q.filter(or_(Position.user_id == user_id, Position.user_id.is_(None)))
+        else:
+            q = q.filter(Position.user_id.is_(None))
+        return [
+            {
+                "position_id": p.id,
+                "cost_price": p.cost_price,
+                "defense_price": p.defense_price,
+                "user_id": p.user_id,
+            }
+            for p in q.all()
+        ]
+    finally:
+        db.close()
 
 
 # 标准化操作建议
@@ -1826,9 +1914,10 @@ class IntradayMonitorAgent(BaseAgent):
         return obj
 
     def _format_human_readable_content(
-        self, stock: StockData, suggestion: dict, raw_content: str
+        self, stock: StockData, suggestion: dict, raw_content: str, data: dict | None = None
     ) -> str:
         """当模型返回 JSON 时，生成可读通知内容。"""
+        data = data or {}
         action_label = suggestion.get("action_label") or "观望"
         signal = suggestion.get("signal") or "无明显新信号"
         reason = suggestion.get("reason") or "请结合盘面与风控策略审慎判断。"
@@ -1860,6 +1949,60 @@ class IntradayMonitorAgent(BaseAgent):
         intent = _main_intent_summary(stock.symbol)
         if intent:
             lines.append(f"主力意图：{intent}")
+        # 威科夫量价形态与硬防线 (2026-10-16 纪律探针增强)
+        try:
+            from src.core.wyckoff import analyze_wyckoff
+            kline_list = data.get("kline_data") or []
+            if kline_list:
+                wyck = analyze_wyckoff(kline_list)
+                if wyck and wyck.get("phase"):
+                    sig_str = "、".join([s.get("name", "") for s in wyck.get("signals", []) if s.get("name")]) or "无显著异动"
+                    lines.append(f"威科夫结构：{wyck.get('phase_desc', wyck.get('phase'))}（{sig_str}）")
+        except Exception:
+            pass
+        # 用户自设防守线击穿预警(方案 B 2026-10-23)
+        # 口径: 只认 positions.defense_price(用户自己设的绝对价)。未设置 → 跳过,
+        # 不再默认 -8% —— 系统臆造的纪律位不该替用户报警。
+        pos_info = data.get("position") or {}
+        try:
+            _uid = data.get("user_id") or pos_info.get("user_id")
+            cur_price = getattr(stock, "current_price", None)
+            for line in load_defense_lines(stock.symbol, user_id=_uid):
+                verdict = evaluate_defense_breach(
+                    defense_price=line.get("defense_price"),
+                    current_price=cur_price,
+                    cost_price=line.get("cost_price"),
+                )
+                if not verdict or not verdict.get("breached"):
+                    continue
+                loss_txt = (
+                    f"浮亏 {verdict['loss_pct']:.2f}%，" if verdict.get("loss_pct") is not None else ""
+                )
+                alert_line = (
+                    f"🚨【触发防守线警报】：成本 {float(line.get('cost_price') or 0):.2f}，"
+                    f"现价 {verdict['current_price']:.2f}，{loss_txt}"
+                    f"已跌破用户设定防守线 {verdict['defense_price']:.2f}，"
+                    f"请执行你自己定下的纪律，别临场改口！"
+                )
+                lines.append(alert_line)
+                # 2026-10-16: 击穿直接触发微信/钉钉等外部高优先级通道外发
+                try:
+                    from src.core.notify_center import push_notification
+                    push_notification(
+                        title=f"🚨【防守线击穿】{stock.name}（{stock.symbol}）",
+                        body=alert_line,
+                        category="risk_warning",
+                        level="critical",
+                        source="intraday_monitor",
+                        also_push=True,
+                        user_id=_uid,
+                    )
+                except Exception as n_err:
+                    logger.warning(f"防守线微信外发异常: {n_err}")
+                # 同一标的多账户同设防线时, 一次告警足够, 不重复外发。
+                break
+        except Exception as dps_err:  # noqa: BLE001
+            logger.warning(f"防守线预警计算失败: {dps_err}")
         # 数智决策三指标(2026-08-30): 精简一行(GS+机构活跃度+L2)
         try:
             from src.core.decision_pioneer import decision_pioneer_text
@@ -1944,7 +2087,7 @@ class IntradayMonitorAgent(BaseAgent):
         )
         # JSON/类 JSON 输出时，统一转换为可读通知文本，避免渠道直接推送原始 JSON
         if try_parse_action_json(raw_content) or self._try_parse_loose_json(raw_content):
-            content = self._format_human_readable_content(stock, suggestion, raw_content)
+            content = self._format_human_readable_content(stock, suggestion, raw_content, data=data)
 
         # M3(2026-08-23): 提取触发用户 UUID 喂给建议池, 多账号各自决策互不干扰
         _user_id = None

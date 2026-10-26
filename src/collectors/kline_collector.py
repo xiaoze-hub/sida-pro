@@ -77,6 +77,38 @@ def _is_auction_time(now: datetime | None = None) -> bool:
     return is_auction_time(now)
 
 
+def _last_bar_provisional(last_date, market: MarketCode, now: datetime | None = None) -> bool:
+    """末根日K是否=当日且**尚未收盘**(竞价/盘中/午休) → 该柱技术指标为盘中值, 收盘后会被改写。
+
+    与 `gs_strategy` 的 confirmed/pending 同精神(防 repaint): 不在已收盘的柱上误标,
+    也不在未收盘的柱上谎称"已定死"。判定异常一律按"已收盘"处理(不阻塞取数),
+    但 -- 与所有降级一致 -- 绝不把未知当已确认的额外承诺。
+    """
+    try:
+        d = str(last_date or "")[:10]
+        if not d:
+            return False
+        tz = ZoneInfo("Asia/Shanghai")
+        now_cst = now.astimezone(tz) if now is not None else datetime.now(tz)
+        if d != now_cst.date().isoformat():
+            return False  # 末根不是今天 → 已定死的收盘柱
+        md = MARKETS.get(market)
+        if md is None or not md.sessions:
+            return False
+        if market == MarketCode.CN:
+            from src.core.trading_calendar import is_trading_day
+
+            if not is_trading_day(now_cst.date()):
+                return False
+        elif now_cst.weekday() >= 5:
+            return False
+        last_close = max(s.end for s in md.sessions)
+        return now_cst.time() < last_close  # 收盘前 = 盘中(含竞价/午休) → 未定死
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[kline] 末根盘中判定异常, 按已收盘处理: %r", e)
+        return False
+
+
 def _kline_cache_ttl(market: MarketCode) -> float:
     try:
         # W2.6(B6): 竞价档提前到 is_trading_time 之外判断 —— 旧写法竞价档嵌在
@@ -96,6 +128,38 @@ def clear_kline_cache() -> None:
     """清空 K线内存缓存与失败冷却标记(测试隔离用)。"""
     _KLINE_CACHE.clear()
     _FAIL_UNTIL.clear()
+
+
+def _drop_degenerate_today_bar(
+    bars: list["KlineData"], symbol: str, market: MarketCode
+) -> list["KlineData"]:
+    """剔除末根「今日退化占位行」(零振幅 + 零量, 非停牌) —— 见 src/core/live_daily_bar。
+
+    PG 日线分区里 TQ 网关盘前/集合竞价会写入今日占位行(OHLC 全等、量 0, 价 = 竞价
+    指示价, 不等于前收)。若原样返回, 下游(summary 技术指标 / 预测 / 图)会把 volume=0
+    与占位价当真值(「0 冒充」红线; 生产实测 600111 的 summary.last_close=34.08)。
+
+    仅在 A 股、末根 = 今日且形态退化、且**非停牌日**时剔除(按「今日无真 bar」处理,
+    由上层读时合成/标注); 停牌日保留其真实(零成交)bar。fail-soft: 任何异常原样返回
+    (宁可不动, 绝不误删真数据)。
+    """
+    if market != MarketCode.CN or not bars:
+        return bars
+    try:
+        from src.core.live_daily_bar import is_degenerate_placeholder
+
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        if not is_degenerate_placeholder(bars[-1], today):
+            return bars
+        from src.core.halts import is_halted
+
+        if is_halted(symbol, today, market=market.value):
+            return bars
+        logger.info("[kline-degrade] %s: 剔除今日退化占位行(量0/零振幅 %s)", symbol, today)
+        return bars[:-1]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[kline-degrade] %s 退化判定失败(原样返回): %r", symbol, e)
+        return bars
 
 
 def get_index_klines(index_code: str, market: MarketCode, days: int = 120) -> list[KlineData]:
@@ -619,6 +683,9 @@ class KlineCollector:
         3. HTTP 全挂 → 服务同复权维度的陈旧 PG 数据(宁陈旧, 不混维度), 再不行才空。
         """
         pg = self._pg_read(symbol, days, adjust)
+        # 2026-10-15: 剔除末根「今日退化占位行」(零振幅+零量, 非停牌) —— 否则
+        # summary/预测/图 会把网关盘前占位价与 volume=0 当真值端出去(0 冒充红线)。
+        pg = _drop_degenerate_today_bar(pg, symbol, self.market)
         if pg and self._pg_usable(pg, days):
             return pg
 
@@ -629,8 +696,10 @@ class KlineCollector:
             bars, _vendor = get_market_data().klines_with_vendor(
                 symbol, market=self.market.value, days=want, min_count=need)
             if bars:
-                return [KlineData(date=b.date, open=b.open, close=b.close, high=b.high,
-                                  low=b.low, volume=b.volume) for b in bars]
+                out = [KlineData(date=b.date, open=b.open, close=b.close, high=b.high,
+                                 low=b.low, volume=b.volume) for b in bars]
+                # 同一道防线: 实时源盘前也可能返回今日占位行(量0/零振幅)
+                return _drop_degenerate_today_bar(out, symbol, self.market)
         else:
             # v0.4.9.1 引入的新浪直拉兜底; 1.2 起仅服务不复权请求
             sina = self._sina_fallback(symbol, days)
@@ -835,12 +904,16 @@ class KlineCollector:
             boll_upper, boll_mid, boll_lower, boll_width = boll_result
 
         # 量能分析
+        # 2026-10-23 审计修复：量比分母改用**前 5 日均量**（不含当日）。原实现
+        # `volumes[-1] / volume_ma5` 把当日量算进 ma5，放量时分母自我抬高 →
+        # 2 倍量显示成 1.67，「放量」判定被系统性压低（1.5 阈值实际要求 1.8 倍）。
         volume_ma5 = _calculate_ma(volumes, 5) if volumes else None
         volume_ma10 = _calculate_ma(volumes, 10) if volumes else None
         volume_ratio = None
         volume_trend = None
-        if volumes and volume_ma5 and volume_ma5 > 0:
-            volume_ratio = volumes[-1] / volume_ma5
+        prev5 = _calculate_ma(volumes[:-1], 5) if len(volumes) >= 6 else None
+        if volumes and prev5 and prev5 > 0:
+            volume_ratio = volumes[-1] / prev5
             if volume_ratio > 1.5:
                 volume_trend = "放量"
             elif volume_ratio < 0.7:
@@ -952,11 +1025,14 @@ class KlineCollector:
         indicators = self.get_technical_indicators(klines=klines)
 
         # 最近5日表现
-        recent_5 = klines[-5:] if len(klines) >= 5 else klines
+        # 2026-10-23 审计修复：原来取 klines[-5:] 再 `if i > 0` 比较，等于只比了
+        # 4 次（第 1 根没有前收），"近 5 日上涨天数" 永远 ≤4 —— 5 连阳会报 4。
+        # 现在多取 1 根作前收基准，正好 5 次比较。
+        recent_5 = klines[-6:] if len(klines) >= 6 else klines
         up_days = sum(
             1
-            for i, k in enumerate(recent_5)
-            if i > 0 and k.close > recent_5[i - 1].close
+            for i in range(1, len(recent_5))
+            if recent_5[i].close > recent_5[i - 1].close
         )
 
         # 趋势判断
@@ -1021,12 +1097,22 @@ class KlineCollector:
 
         last_date = klines[-1].date if klines else None
         now = datetime.now(timezone.utc).isoformat()
+        # 防 repaint(技术指标层): 末根若=当日且未收盘, 下面所有指标/形态都是盘中值,
+        # 收盘前会随最后一根 K 线改写 → 显式标注(值不变, 只加诚实标记; 与 gs_signals
+        # 的 confirmed/pending 同口径)。已收盘/历史柱 → False, 行为与改造前一致。
+        provisional = _last_bar_provisional(last_date, self.market)
 
         return {
             # meta
             "timeframe": "1d",
             "computed_at": now,
             "asof": last_date,
+            "provisional": provisional,
+            "provisional_note": (
+                "末根为盘中未收盘bar: 以下技术指标/形态为盘中值, 收盘前可能被改写(勿当已确认)"
+                if provisional
+                else None
+            ),
             "params": {
                 "ma": [5, 10, 20, 60],
                 "macd": {"fast": 12, "slow": 26, "signal": 9},

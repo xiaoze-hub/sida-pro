@@ -133,6 +133,20 @@ class MarketSentimentCollector:
 
         return pool
 
+    def _limit_up_pool_zdt_tq(self) -> list[dict]:
+        """涨跌停快照备源(TQ get_zdt_data, 审计 A-6, 2026-09-28)。
+
+        主源 `_limit_up_pool_tq` 全市场 K线扫描挂掉(客户端断/连续失败)时,
+        这里只对"真涨停"的分片取快照 —— 直接拿到 TQ 独有字段:
+          · first_time   首封时间(快照真值, 主源 K线路径恒为空串)
+          · open_times   炸板次数(TQ 独有, 主源/wudao/东财都没有)
+          · order_amount 封单量(手×100→股, 主源恒为 0)
+        连板数仍走 K 线自算(build_pool_items, 口径钉子不动), 主源不动。
+        """
+        from src.core.limit_pool_zdt import zdt_fallback_pool
+
+        return zdt_fallback_pool(None)
+
     def _limit_up_pool_wudao(self, date: str) -> list[dict]:
         """wudao 涨停事件池(limit_up_filter) → 统一字段。
 
@@ -181,12 +195,14 @@ class MarketSentimentCollector:
                     "reason": str(item.get("reasonType") or item.get("reason_type") or ""),
                     "turnover_rate": _f(item.get("turnoverRate")),
                     "order_amount": _f(item.get("orderAmount")),
+                    # P2(2026-10-08): 统一标来源, 降级链各源可追溯
+                    "source": "wudao",
                 }
             )
         return out
 
     def get_limit_up_pool(self, date: str | None = None) -> list[dict]:
-        """获取涨停池: **通达信(TQ) 主源** → 东财兜底 → wudao(可选)。
+        """获取涨停池: **通达信(TQ) 主源** → TQ 涨跌停快照备源 → wudao → 东财兜底。
 
         2026-09-23 换主源: 原"wudao 优先 + 东财兜底"在 wudao 挂掉(wudao 当日全挂 SSLEOF)
         时降级到东财 —— 而东财两个缺陷(连板数读错字段、pagesize=60 截断且按封板时间排序丢尾盘)
@@ -213,14 +229,23 @@ class MarketSentimentCollector:
             except Exception:
                 return date
 
-        # ⓿ 通达信(TQ)主源(2026-09-23)。空/异常 → 落到下面的东财兜底, 不阻塞。
+        # ⓿ 通达信(TQ)主源(2026-09-23)。空/异常 → 先试快照备源, 再降级 wudao/东财。
         try:
             tq_pool = self._limit_up_pool_tq()
             if tq_pool:
                 return tq_pool
-            logger.warning("涨停池(TQ)为空 → 降级东财兜底")
+            logger.warning("涨停池(TQ)为空 → 先试涨跌停快照备源, 再降级 wudao/东财兜底")
         except Exception as e:  # noqa: BLE001
-            logger.warning("涨停池(TQ)异常 → 降级东财兜底: %s", e)
+            logger.warning("涨停池(TQ)异常 → 先试涨跌停快照备源, 再降级 wudao/东财兜底: %s", e)
+
+        # ⓿b TQ 涨跌停快照备源(A-6, 2026-09-28): 主源全市场 K线扫描挂掉时,
+        # 快照只需对"真涨停"分片取数, 且自带首封/炸板/封单真值。空/异常 → 继续 wudao/东财。
+        try:
+            zdt_pool = self._limit_up_pool_zdt_tq()
+            if zdt_pool:
+                return zdt_pool
+        except Exception as e:  # noqa: BLE001
+            logger.warning("涨停池(TQ备源-快照)失败 → 继续 wudao/东财: %s", e)
 
         # ① wudao 优先:找最近非空交易日(最多 5 天)。wudao 字段更全(题材/原因/封单/换手)
         for back in range(6):
@@ -349,9 +374,19 @@ class MarketSentimentCollector:
                 "first_time": _first_time_str(p),
                 "turnover_rate": p.get("turnover_rate"),
                 "order_amount": p.get("order_amount"),
+                "source": p.get("source") or "",
             }
             for p in candidates[:12]
         ]
+
+        # P2(2026-10-08): 透传降级来源 —— 池子各条已带 source, 这里汇总出主源,
+        # 让消费方/前端能一眼看出"这份涨停池来自哪个源"(tq/tq_zdt/wudao/eastmoney),
+        # 不再把降级结果当主源静默使用。
+        src_counts: dict[str, int] = {}
+        for p in pool:
+            s = p.get("source") or "unknown"
+            src_counts[s] = src_counts.get(s, 0) + 1
+        limit_up_source = max(src_counts, key=lambda k: src_counts[k]) if src_counts else "unknown"
 
         return {
             "limit_up_count": total,
@@ -362,6 +397,8 @@ class MarketSentimentCollector:
                 {"name": k, "count": v} for k, v in top_sectors
             ],
             "candidates": candidate_list,
+            "limit_up_source": limit_up_source,
+            "limit_up_sources": src_counts,
         }
 
     def get_sector_rotation(self, top_n: int = 10) -> dict:

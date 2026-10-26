@@ -302,8 +302,8 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                       title="查看板块成分股"
                     >
                       <div className="min-w-0">
-                        <div className="truncate text-[13px] font-medium text-foreground">{b.name}</div>
-                        <div className="truncate font-mono text-[11px] text-muted-foreground">{b.code}</div>
+                        <div className="truncate text-[13px] font-medium text-foreground" title={b.name}>{b.name}</div>
+                        <div className="truncate font-mono text-[11px] text-muted-foreground" title={b.code}>{b.code}</div>
                       </div>
                       <div className={`font-mono text-[12px] font-semibold ${color}`}>{safePercent(pct)}</div>
                     </button>
@@ -329,10 +329,10 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                       title="打开股票详情弹窗"
                     >
                       <div className="min-w-0">
-                        <div className="truncate text-[13px] font-medium text-foreground">{s.name}</div>
+                        <div className="truncate text-[13px] font-medium text-foreground" title={s.name}>{s.name}</div>
                         <div className="font-mono text-[11px] text-muted-foreground">{s.market || discoverMarket}:{s.symbol}</div>
                         {reasons && reasons.length > 0 && (
-                          <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{reasons.join(' · ')}</div>
+                          <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={reasons.join(' · ')}>{reasons.join(' · ')}</div>
                         )}
                       </div>
                       <div className="text-right">
@@ -371,7 +371,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                     className="flex cursor-pointer items-center justify-between gap-3 border-b border-border/40 py-2 text-left transition-colors hover:bg-accent/20"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-[13px] font-medium text-foreground">{s.name}</div>
+                      <div className="truncate text-[13px] font-medium text-foreground" title={s.name}>{s.name}</div>
                       <div className="font-mono text-[11px] text-muted-foreground">{s.symbol}</div>
                     </div>
                     <div className="text-right">

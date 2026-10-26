@@ -43,7 +43,7 @@ def _env_int(name: str, default: int) -> int:
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 # 2026-08-21 限流分级: 全局默认 60 → 300 req/min
 # 原因: Dashboard 单次刷新并发 26 个 GET, 60/min 下多 tab/连续操作极易误伤(实测生产触发)
-RATE_LIMIT_DEFAULT = _env_int("RATE_LIMIT_DEFAULT", 300)  # 默认 300 req / minute / IP
+RATE_LIMIT_DEFAULT = _env_int("RATE_LIMIT_DEFAULT", 1200)  # 默认 1200 req / minute (适应数据密集大屏多组件并发加载)
 RATE_LIMIT_WINDOW = 60  # 60 秒滑动窗口
 RATE_LIMIT_BURST = _env_int("RATE_LIMIT_BURST", 10)  # 突发容忍 10 个
 # 敏感端点单独严格档(防爆破/防滥用): 登录/改密等写操作
@@ -207,6 +207,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             count = await redis_client.incr(redis_key, ttl_seconds=RATE_LIMIT_WINDOW)
             if count is not None and count > limit:
                 allowed = False
+            elif count is not None and count == 240:
+                # 到 240/min（300 的 80%）还没被拦，说明有轮询风暴在打同一个端点：留一条可查的告警
+                logger.warning("限流告警: %s 在 %ss 内已 %s 次（path=%s ua=%s）",
+                               bucket_key, RATE_LIMIT_WINDOW, count, path,
+                               request.headers.get("user-agent", "")[:60])
         else:
             allowed = _in_memory_bucket.allow((bucket_key, endpoint), limit=limit)
 
@@ -497,6 +502,12 @@ CSRF_EXEMPT_PREFIXES = (
     # 表现就是"点了发送验证码没反应/报错", 邮箱注册整条流程走不通。
     # 安全性: 该端点自带发送冷却(check_send_cooldown)+ 全局限流, 与 login 同级对待。
     "/api/auth/send-code",
+    # 2026-10-23 修: 「忘记密码」是**未登录**流程的第一步 —— 用户正是登不进来才要走它,
+    # 浏览器没有 csrf_token cookie, 不放行 ⇒ 永远 403「CSRF token 缺失」,
+    # 忘记密码整条链路不可用(实测生产: POST 该端点恒 403)。
+    # 安全性: 必须持有该邮箱的有效验证码(purpose=reset)才能改密, 且成功即踢全部旧 token;
+    # 与 login/register 同级对待。
+    "/api/auth/reset-password-by-email",
     "/api/webhooks/",
     # 2026-09-24 修: POST /api/keys 是「领 AppKey」的注册端点, 与 /api/auth/register 同理,
     # 是**无任何凭证前**就要调用的第一个端点(此时既无 JWT 也无 sk_ key 也无 csrf cookie)。

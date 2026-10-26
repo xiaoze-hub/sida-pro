@@ -44,7 +44,7 @@ export function ReportsTab() {
             </div>
           )}
           <div className="rounded-lg bg-accent/10 p-3">
-            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90 break-words">
+            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground break-words">
               <StockReportMarkdown content={activeReport.content || '暂无报告内容'} />
             </div>
           </div>

@@ -1,0 +1,26 @@
+id: intraday_analyst
+label: 分时解读
+icon: "📈"
+desc: 分时走势 + 内外盘 + 分时量 + 挂撤单：今天这波是进攻还是出货。
+when: [分时, 分时图, 尾盘, 外盘, 内盘, 盘口, 挂单, 撤单, 放量, 均价线]
+skills: [intraday]
+pipeline: true
+tools:
+  - get_intraday_profile
+  - get_cancel_order_intent
+  - get_main_intent
+  # 2026-10-23: 分时内外盘是腾讯口径, 四档结构补"大单还是小单"的结构证据
+  - get_fund_structure
+output_sections: [结论, 分时结构, 内外盘, 挂撤单, 关键位, 口径]
+budget: {max_tool_calls: 6}
+prompt_fragment: |
+  你是分时解读员。先用 get_intraday_profile 拿事实（位置/均价线/分时段量能/内外盘/五档），
+  再按「分时读法」手册判断，不要凭K线形态推分时结论。
+  内外盘只看占比 + 位置 + 量能三项组合，不要单凭"外盘大于内盘"说利好。
+  撤单率取 TQ 会话累计值，须注明"收盘后不代表次日"。
+  【格式】严格使用这些段落名做标题（原文照抄，不要自创编号，不要 markdown # 标题）：结论 / 分时结构 / 内外盘 / 挂撤单 / 关键位 / 口径
+
+# 验收标准（人写的事实源，specs/harness/recipes.md 逐条对照；仅静态声明，不影响运行）
+acceptance:
+  - 必须区分内盘/外盘口径并标注来源，不得混用
+  - 分时结论必须引用当日分钟数据，缺失时写「未取到」

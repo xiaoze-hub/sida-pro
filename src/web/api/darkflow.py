@@ -13,17 +13,21 @@ GET /api/dark-flow/002361
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from marketdata import Symbol as MDSymbol
 from marketdata.vendors.tencent import TencentQuoteVendor
 from src.core.dark_flow import (
     _judge_mnemonic,
     _position_from_range,
+    _tencent_code,
     clear_ticks_cache,
     compute_dark_flow,
     compute_tck_active_ratio,  # v0.4.79: .tck 主动率(口诀活代码化)
+    tick_snapshot_info,  # 2026-10-14: 逐笔缓存快照元数据(后台增量采集后的 diag)
 )
 from src.web.api.auth import require_owner
+from src.web.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +177,15 @@ def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict
 
     # 2026-09-04 P1-5: stale 只标停滞(data_status 不动, 不断口诀链路)。
     _stale = _tick_staleness(dark.get("last_tick_t"), trade_date)
+    # 2026-10-14: 逐笔缓存快照元数据(后台增量采集)。请求端常态读的是后台刚推进过的
+    # 缓存(零翻页); 缓存空/跨日时走请求期兜底(冷启动一次)。年龄/游标/来源/降级
+    # 全部显式暴露 —— 一眼可辨"新鲜缓存"还是"上游降级兜底", 不靠猜。
+    try:
+        _tcode = _tencent_code(symbol)
+        _snap = tick_snapshot_info(_tcode) if _tcode else None
+    except Exception:  # noqa: BLE001
+        _snap = None
+    _snap = _snap or {}
     # 2026-09-04 #5: suspect/stale 推通知(全局渠道, 同股同类每日一次, 失败静默)。
     try:
         from src.core.darkflow_alerts import maybe_alert_anomaly
@@ -212,6 +225,22 @@ def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict
             "stale": _stale["stale"],
             "tick_lag_sec": _stale["lag_sec"],
             "source": used_source,  # 2026-09-04 #2: 本次实际数据源
+            # 2026-10-14(后台增量采集): 缓存快照的年龄/游标/来源/降级显式化。
+            # cache_origin: cache(命中) / incremental(游标续拉) / cold(冷启动兜底)
+            # / reset(跨日重拉) / l2(外部源) / none(无缓存); pages_fetched=本轮翻页数
+            # (0 = 全程零翻页读缓存)。degraded=True 时 degraded_reason 给出原因。
+            "cache_origin": _snap.get("origin"),
+            "snapshot_age_sec": _snap.get("snapshot_age_sec"),
+            "cache_fresh": _snap.get("fresh"),
+            "tick_cursor": {
+                "page": _snap.get("cursor_page"),
+                "seq": _snap.get("cursor_seq"),
+            },
+            "pages_fetched": _snap.get("pages_fetched"),
+            "degraded": bool(_snap.get("degraded")),
+            "degrade_reason": _snap.get("degraded_reason"),
+            "degrade_sec": _snap.get("degraded_sec"),
+            "cache_day": _snap.get("day"),
         },
     }
 
@@ -248,6 +277,86 @@ def _tick_staleness(
     except Exception:  # noqa: BLE001
         pass
     return info
+
+
+def build_intent_explain_response(symbol_code: str, db: Session | None = None) -> dict:
+    """主力意图 AI 解读的组装(懒触发入口, 供 endpoint 与测试直接调用)。
+
+    规则结论仍由 `compute_dark_flow`(逐笔口径)给出; AI 只补「为什么 + 置信度 + 方向」,
+    **不改规则结论**(见 `src/core/intent_explain.py` 设计原则)。数据不足 / LLM 失败一律
+    `available=False` + `reason` 显式, 绝不编造 —— 前端按钮点击才调, 不自动跑(省 token)。
+
+    Returns:
+        {available, reason, rule_signal, direction, confidence, why, data_status}
+    """
+    symbol = _validate_symbol(symbol_code)
+    try:
+        dark = compute_dark_flow(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"intent-explain compute 异常 {symbol_code}: {e}")
+        dark = None
+
+    if not dark:
+        return {
+            "available": False,
+            "reason": "主力意图数据获取失败(可能非交易时段或无成交)",
+            "rule_signal": None,
+            "direction": None,
+            "confidence": None,
+            "why": None,
+            "data_status": None,
+        }
+
+    data_status = dark.get("data_status", "ok")
+    rule_signal = dark.get("signal")
+    if data_status in ("insufficient", "suspect"):
+        reason = (
+            "逐笔成交异常(疑重复计数), 本轮不做 AI 解读"
+            if data_status == "suspect"
+            else "逐笔数据不足, 不做 AI 解读"
+        )
+        return {
+            "available": False,
+            "reason": reason,
+            "rule_signal": rule_signal,
+            "direction": None,
+            "confidence": None,
+            "why": None,
+            "data_status": data_status,
+        }
+
+    from src.core.intent_explain import explain_main_intent
+
+    try:
+        result = explain_main_intent(dark, db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"intent-explain LLM 异常 {symbol_code}: {e}")
+        result = None
+
+    if not result:
+        return {
+            "available": False,
+            "reason": "AI 解读失败(超时/未配置模型), 不影响上方规则结论",
+            "rule_signal": rule_signal,
+            "direction": None,
+            "confidence": None,
+            "why": None,
+            "data_status": data_status,
+        }
+
+    return {
+        "available": True,
+        "reason": None,
+        "rule_signal": rule_signal,
+        "direction": result.get("direction"),
+        "confidence": result.get("confidence"),
+        "why": result.get("why"),
+        "data_status": data_status,
+        # 证据化(2026-10-10): 证据链(触发条件/数据时点/失效条件) + 置信度校准(无账本口径=未校准) + 相似情形
+        "evidence": result.get("evidence"),
+        "confidence_calibration": result.get("confidence_calibration"),
+        "similar": result.get("similar"),
+    }
 
 
 @router.post("/cache/clear")
@@ -332,6 +441,21 @@ def archive_darkflow_day(
     return {"archived": ok, "symbol": symbol, "tick_count": dark.get("tick_count")}
 
 
+@router.post("/collect")
+def collect_darkflow_ticks(owner=Depends(require_owner)):
+    """手动触发一轮暗盘逐笔增量采集(运维杠杆, 仅管理员)。
+
+    2026-10-14: 逐笔冷启动已挪到后台采集器(`src/core/dark_flow_sampler.py`, 交易
+    时段 60s 一轮对"热码 + 自选∪持仓池"做增量续拉), 请求端常态读缓存零翻页。本接口
+    是运维"立刻推一轮"的开关(缓存被清后 / 怀疑盘中停更时), 返回本轮摘要 + 采集器状态。
+    非交易时段直接 skip(零网络请求), 与调度器同语义。
+    """
+    from src.core.dark_flow_sampler import collect_once, sampler_stats
+
+    out = collect_once()
+    return {**out, "sampler": sampler_stats()}
+
+
 @router.get("/series")
 def darkflow_series(
     symbol: str = Query(..., description="6位A股代码, 如 002361"),
@@ -356,3 +480,13 @@ def dark_flow(
 def dark_flow_path(symbol: str, source: str | None = Query(default=None, description="灰度数据源")):
     """路径式别名: /api/dark-flow/002361。"""
     return build_darkflow_response(symbol, source=source)
+
+
+@router.get("/{symbol}/intent-explain")
+def dark_flow_intent_explain(symbol: str, db: Session = Depends(get_db)):
+    """主力意图 AI 解读(懒触发: 前端「AI 解读」按钮点击才调, 不自动跑以省 token)。
+
+    规则结论仍由逐笔口径(`compute_dark_flow`)给出, AI 只补「为什么 + 置信度 + 方向」,
+    不改规则结论。数据不足 / LLM 失败一律 `available=false` + `reason` 显式, 绝不编造。
+    """
+    return build_intent_explain_response(symbol, db=db)

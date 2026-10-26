@@ -518,3 +518,101 @@ async def fetch_auction_risk_async(limit: int = 10) -> str:
 
 async def fetch_auction_raw_async() -> dict:
     return await to_async(fetch_auction_raw)
+
+
+def fetch_auction_structured(limit: int = 200) -> dict:
+    """竞价**结构化**视图(2026-10-18 P0-a, 方案 §8 批次 1)。
+
+    与 `fetch_auction_raw` 的区别: 后者回吐悟道原始 JSON(各工具形状不一), 本函数
+    把它归一化成"每只票一行"的结构, 供 `auction_wudao_daily` 落库与 API 直出。
+
+    返回: `{available, trade_date, rows[], limited, error, source}`。
+    悟道不可用/返回只有文本 → `available=False` + `error`, **rows 为空**
+    (显式空, 不写 0 行冒充"当日无竞价因子")。
+    """
+    from src.core.trade_phase import cn_now
+
+    raw = fetch_auction_raw() or {}
+    try:
+        from src.core.auction_wudao_store import extract_rows
+
+        rows = extract_rows(raw)
+    except Exception as e:  # noqa: BLE001 - 解析失败如实降级
+        return {
+            "available": False,
+            "trade_date": cn_now().date().isoformat(),
+            "rows": [],
+            "limited": bool(raw.get("limited")),
+            "error": f"竞价结构化解析失败: {e}",
+            "source": "wudao",
+        }
+    if limit and limit > 0:
+        rows = rows[:limit]
+    return {
+        "available": bool(rows),
+        "trade_date": cn_now().date().isoformat(),
+        "rows": rows,
+        "limited": bool(raw.get("limited")),
+        "error": None if rows else (raw.get("error") or "悟道竞价无结构化行"),
+        "source": "wudao",
+    }
+
+def _fmt_yi(v: float | None) -> str:
+    if v is None:
+        return "—"
+    if abs(v) >= 1e8:
+        return f"{v / 1e8:.2f} 亿"
+    if abs(v) >= 1e4:
+        return f"{v / 1e4:.0f} 万"
+    return f"{v:.0f} 元"
+
+
+def fetch_auction_symbols(symbols: list[str], limit: int = 20) -> str:
+    """逐票竞价快照（2026-10-20）。
+
+    修复: `scene=watchlist` 原先被静默别名成 `strongest`（全市场前十），于是"我的自选股
+    竞价怎么样"只能得到"不在榜单里 ⇒ 没有竞价强度"——把"没进榜单"说成"没有数据"。
+    现在按票直取：TQ `get_more_info`(OpenZAF/OpenAmo/OpenZTBuy) 为主，缺票再用
+    thsdk 超级盘口补（慢，最多补 3 只）。**每只票都给一行结论**，取不到就明写取不到。
+    """
+    syms = [s for s in (symbols or []) if s][:limit]
+    if not syms:
+        return "未提供标的（symbols 为空），无法逐票查询竞价。"
+
+    rows = fetch_auction_snapshots_tq(syms, limit=limit)
+    missing = [s for s in syms if s not in rows][:3]
+    if missing:
+        rows.update(fetch_auction_snapshots_thsdk(missing, limit=len(missing)))
+
+    lines = ["## 逐票竞价快照（TQ 为主 / 同花顺补）"]
+    for sym in syms:
+        r = rows.get(sym) or {}
+        if not r:
+            lines.append(f"- {sym}: 无竞价快照（TQ/同花顺均未返回，可能停牌或客户端未连）")
+            continue
+        if r.get("source") == "thsdk":
+            lines.append(
+                f"- {sym}: 竞价方向 {r.get('direction') or '—'}，"
+                f"开盘 {r.get('open') or '—'}，撤单率近似 {r.get('cancel_rate') or '—'}"
+            )
+            continue
+        open_px = r.get("open")
+        open_pct = r.get("open_pct")
+        parts = [
+            f"开盘 {open_px if open_px is not None else '—'}"
+            + (f"（{open_pct:+.2f}%）" if isinstance(open_pct, (int, float)) else ""),
+            f"竞价成交额 {_fmt_yi(r.get('open_amount'))}",
+        ]
+        if r.get("open_limit_buy"):
+            parts.append(f"一字买量 {_fmt_yi(r.get('open_limit_buy'))}")
+        if r.get("buy1") is not None:
+            parts.append(f"买一 {r.get('buy1')}×{r.get('buy1_vol') or '—'}")
+        if r.get("sell1") is not None:
+            parts.append(f"卖一 {r.get('sell1')}×{r.get('sell1_vol') or '—'}")
+        lines.append(f"- {sym}: " + "，".join(parts))
+
+    lines.append("")
+    lines.append("口径：开盘涨幅=OpenZAF；竞价成交额=OpenAmo（元）；撤单率需竞价逐帧序列（TQ 快照不含）。"
+                 "「无竞价快照」≠「竞价没强度」，只代表该票没取到读数。")
+    return "\n".join(lines)
+

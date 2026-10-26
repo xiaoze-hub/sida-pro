@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw, ShieldAlert, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
@@ -92,14 +93,14 @@ const PHASE_STYLE: Record<
   },
   repair: {
     bg: 'bg-gray-500/10',
-    text: 'text-gray-700 dark:text-gray-400',
+    text: 'text-muted-foreground',
     border: 'border-gray-500/40',
     dot: 'bg-gray-500',
     desc: '不满足任何正向规则, 修复兜底',
   },
   accumulating: {
     bg: 'bg-slate-500/10',
-    text: 'text-slate-700 dark:text-slate-400',
+    text: 'text-muted-foreground',
     border: 'border-slate-500/40',
     dot: 'bg-slate-500',
     desc: '历史不足 5 天, 信号不可信',
@@ -160,14 +161,15 @@ export default function MarketPhaseCard() {
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 30000) // 30s
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(30s)。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 30000, { deps: [load] })
 
   if (loading && !data) {
     return (
@@ -259,7 +261,7 @@ export default function MarketPhaseCard() {
       <div className={`border-l-2 ${style.border} pl-3 py-1 mb-3`}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className={`text-[20px] font-bold ${style.text} leading-none tracking-tight truncate`}>
+            <div className={`text-[20px] font-bold ${style.text} leading-none tracking-tight truncate`} title={cur?.label || '积累中'}>
               {cur?.label || '积累中'}
             </div>
             {cur?.date ? (
@@ -310,7 +312,7 @@ export default function MarketPhaseCard() {
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[10px] text-muted-foreground">近 {recent.length} 个交易日阶段色带</span>
           {note ? (
-            <span className="text-[10px] text-muted-foreground/70 truncate max-w-[60%]" title={note}>
+            <span className="text-[10px] text-muted-foreground truncate max-w-[60%]" title={note}>
               {note}
             </span>
           ) : null}

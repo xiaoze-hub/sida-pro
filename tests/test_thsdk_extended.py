@@ -162,7 +162,7 @@ def test_dde_endpoint(client, auth_token, monkeypatch):
         "price": 11.27,
         "total_amount_wan": 12345.0,
         "main_net_amount_wan": -2365.0,
-        "main_net_ratio": -0.078,
+        "main_net_vol": -0.078,
         "summary": {"价格": 11.27, "主力净流入": -23650000.0, "总金额": 123450000.0},
         "detail": {
             "主动买入特大单金额": 0.0,
@@ -179,7 +179,11 @@ def test_dde_endpoint(client, auth_token, monkeypatch):
     body = resp.json()["data"]
     assert body["symbol"] == "USZA002361"
     assert body["main_net_amount_wan"] == -2365.0
+    # 规范字段名 main_net_vol(非百分比口径); 旧名 main_net_ratio 保留为兼容别名(同值)
+    assert body["main_net_vol"] == -0.078
     assert body["main_net_ratio"] == -0.078
+    # 顶层行不再出现误导性「占比」表述
+    assert "占比" not in str(body.get("main_net_vol"))
     # rows 至少 1 行(顶层 row) + summary + detail
     assert body["count"] >= 1
 

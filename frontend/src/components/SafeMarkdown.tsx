@@ -11,6 +11,8 @@ import { type ComponentPropsWithoutRef } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { normalizeMarkdownTables } from '@/lib/markdown-normalize'
+
 /**
  * 只允许 http/https/相对路径(含 #hash / ?query / /path)。
  * 协议相对 URL(//evil.com)与 javascript:/data: 等一律返回空串。
@@ -75,15 +77,79 @@ export interface SafeMarkdownProps
   components?: Components
 }
 
+/** 表格/标题/列表的排版（2026-10-25）：react-markdown 默认输出裸标签，
+ *  Tailwind 下既无边框也无对齐，数据表看起来像一堆错位的字。
+ *  这里统一成「数据表」：表头浅底、数值右对齐由内容自己控制（tabular-nums）、
+ *  横向可滚（窄屏），并保持 11–13px 的信息密度。 */
+const mdComponents: Components = {
+  table: ({ children, ...props }) => (
+    <div className="-mx-1 my-2 overflow-x-auto rounded-md border border-border/60">
+      <table className="w-full border-collapse text-[12px]" {...props}>
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children, ...props }) => (
+    <thead className="bg-s1 text-muted-foreground" {...props}>
+      {children}
+    </thead>
+  ),
+  th: ({ children, ...props }) => (
+    <th
+      className="whitespace-nowrap border-b border-border/60 px-2 py-1 text-left font-medium"
+      {...props}
+    >
+      {children}
+    </th>
+  ),
+  td: ({ children, ...props }) => (
+    <td className="border-b border-border/40 px-2 py-1 align-top font-num tabular-nums" {...props}>
+      {children}
+    </td>
+  ),
+  h2: ({ children, ...props }) => (
+    <h2 className="mt-3 mb-1 text-[16px] font-semibold text-foreground" {...props}>
+      {children}
+    </h2>
+  ),
+  h3: ({ children, ...props }) => (
+    <h3 className="mt-2 mb-1 text-[13px] font-semibold text-foreground" {...props}>
+      {children}
+    </h3>
+  ),
+  ul: ({ children, ...props }) => (
+    <ul className="my-1 list-disc space-y-0.5 pl-5 text-[13px]" {...props}>
+      {children}
+    </ul>
+  ),
+  ol: ({ children, ...props }) => (
+    <ol className="my-1 list-decimal space-y-0.5 pl-5 text-[13px]" {...props}>
+      {children}
+    </ol>
+  ),
+  blockquote: ({ children, ...props }) => (
+    <blockquote className="my-2 border-l-2 border-border-strong pl-2.5 text-muted-foreground" {...props}>
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-3 border-border/60" />,
+  code: ({ children, ...props }) => (
+    <code className="rounded bg-s1 px-1 py-0.5 font-mono text-[12px]" {...props}>
+      {children}
+    </code>
+  ),
+}
+
 export default function SafeMarkdown({ children, components, remarkPlugins, ...rest }: SafeMarkdownProps) {
   const merged: Components = {
+    ...mdComponents,
     a: defaultAnchor,
     ...components,
   }
   const plugins = [remarkGfm, ...(remarkPlugins || [])]
   return (
     <ReactMarkdown remarkPlugins={plugins} urlTransform={safeUrlTransform} components={merged} {...rest}>
-      {children ?? ''}
+      {normalizeMarkdownTables(children ?? '')}
     </ReactMarkdown>
   )
 }

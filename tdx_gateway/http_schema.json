@@ -1,0 +1,943 @@
+{
+  "source": "/tmp/tqcenter.py",
+  "count": 58,
+  "methods": {
+    "get_divid_factors": {
+      "line": 1456,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 4,
+        "stock_code": "$stock_code",
+        "start_time": "$start_time",
+        "end_time": "$end_time"
+      },
+      "defaults": {
+        "start_time": "",
+        "end_time": ""
+      },
+      "denied": false
+    },
+    "get_stock_info": {
+      "line": 1556,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 2,
+        "stock_code": "$stock_code"
+      },
+      "defaults": {
+        "field_list": []
+      },
+      "denied": false
+    },
+    "get_market_snapshot": {
+      "line": 1597,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 3,
+        "stock_code": "$stock_code"
+      },
+      "defaults": {
+        "field_list": []
+      },
+      "denied": false
+    },
+    "send_message": {
+      "line": 1638,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 2,
+        "msg_str": "$msg_str"
+      },
+      "defaults": {},
+      "denied": false
+    },
+    "send_file": {
+      "line": 1670,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 3,
+        "file_path": "$file_path"
+      },
+      "defaults": {},
+      "denied": false
+    },
+    "send_warn": {
+      "line": 1702,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 4,
+        "stock_list": "$stock_list",
+        "time_list": "$time_list",
+        "price_list": "$price_list",
+        "close_list": "$close_list",
+        "volum_list": "$volum_list",
+        "bs_flag_list": "$bs_flag_list",
+        "warn_type_list": "$warn_type_list",
+        "reason_list": "$reason_list",
+        "count": "$count"
+      },
+      "defaults": {
+        "stock_list": [],
+        "time_list": [],
+        "price_list": [],
+        "close_list": [],
+        "volum_list": [],
+        "bs_flag_list": [],
+        "warn_type_list": [],
+        "reason_list": [],
+        "count": 1
+      },
+      "denied": false
+    },
+    "send_bt_data": {
+      "line": 1758,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 5,
+        "stock_code": "$stock_code",
+        "time_list": "$time_list",
+        "data_list": "$data_list",
+        "count": "$count"
+      },
+      "defaults": {
+        "stock_code": "",
+        "time_list": [],
+        "data_list": [],
+        "count": 1
+      },
+      "denied": false
+    },
+    "send_user_block": {
+      "line": 1802,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 1,
+        "block_code": "$block_code",
+        "stock_list": "$stock_list",
+        "show": {
+          "$expr": "1 if show else 0"
+        }
+      },
+      "defaults": {
+        "block_code": "",
+        "stock_list": [],
+        "show": false
+      },
+      "denied": false
+    },
+    "get_sector_list": {
+      "line": 1839,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 5,
+        "list_type": "$list_type"
+      },
+      "defaults": {
+        "list_type": 0
+      },
+      "denied": false
+    },
+    "get_user_sector": {
+      "line": 1873,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 19
+      },
+      "defaults": {},
+      "denied": false
+    },
+    "get_stock_list_in_sector": {
+      "line": 1905,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 6,
+        "block_code": "$block_code",
+        "block_type": "$block_type",
+        "list_type": "$list_type"
+      },
+      "defaults": {
+        "block_type": 0,
+        "list_type": 0
+      },
+      "denied": false
+    },
+    "get_financial_data": {
+      "line": 1974,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 1,
+        "stock_list": "$stock_list",
+        "table_list": "$field_list",
+        "start_time": "$start_time",
+        "end_time": "$end_time",
+        "report_type": "$report_type"
+      },
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "start_time": "",
+        "end_time": "",
+        "report_type": "report_time"
+      },
+      "denied": false
+    },
+    "get_financial_data_by_date": {
+      "line": 2027,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 2,
+        "stock_list": "$stock_list",
+        "table_list": "$field_list",
+        "year": "$year",
+        "mmdd": "$mmdd"
+      },
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "denied": false
+    },
+    "get_gpjy_value": {
+      "line": 2061,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 3,
+        "stock_list": "$stock_list",
+        "table_list": "$field_list",
+        "start_time": "$start_time",
+        "end_time": "$end_time"
+      },
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "start_time": "",
+        "end_time": ""
+      },
+      "denied": false
+    },
+    "get_gpjy_value_by_date": {
+      "line": 2104,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 4,
+        "stock_list": "$stock_list",
+        "table_list": "$field_list",
+        "year": "$year",
+        "mmdd": "$mmdd"
+      },
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "denied": false
+    },
+    "get_bkjy_value": {
+      "line": 2138,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 5,
+        "stock_list": "$stock_list",
+        "table_list": "$field_list",
+        "start_time": "$start_time",
+        "end_time": "$end_time"
+      },
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "start_time": "",
+        "end_time": ""
+      },
+      "denied": false
+    },
+    "get_bkjy_value_by_date": {
+      "line": 2182,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 6,
+        "stock_list": "$stock_list",
+        "table_list": "$field_list",
+        "year": "$year",
+        "mmdd": "$mmdd"
+      },
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "denied": false
+    },
+    "get_scjy_value": {
+      "line": 2217,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 7,
+        "code": "999999.SH",
+        "table_list": "$field_list",
+        "start_time": "$start_time",
+        "end_time": "$end_time"
+      },
+      "defaults": {
+        "field_list": [],
+        "start_time": "",
+        "end_time": ""
+      },
+      "denied": false
+    },
+    "get_scjy_value_by_date": {
+      "line": 2261,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 8,
+        "code": "999999.SH",
+        "table_list": "$field_list",
+        "year": "$year",
+        "mmdd": "$mmdd"
+      },
+      "defaults": {
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "denied": false
+    },
+    "get_gp_one_data": {
+      "line": 2296,
+      "transport": "GetProDataInStr",
+      "body": {
+        "id": "$run_id",
+        "type": 9,
+        "stock_list": "$stock_list",
+        "table_list": "$field_list"
+      },
+      "defaults": {
+        "stock_list": [],
+        "field_list": []
+      },
+      "denied": false
+    },
+    "get_trading_calendar": {
+      "line": 2327,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 12,
+        "market": "$market",
+        "start_time": "$start_time",
+        "end_time": "$end_time",
+        "count": -1
+      },
+      "defaults": {},
+      "denied": false
+    },
+    "get_trading_dates": {
+      "line": 2371,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 12,
+        "market": "$market",
+        "start_time": "$start_time",
+        "end_time": "$end_time",
+        "count": "$count"
+      },
+      "defaults": {
+        "count": -1
+      },
+      "denied": false
+    },
+    "get_stock_list": {
+      "line": 2416,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 0,
+        "market": "$market",
+        "list_type": "$list_type"
+      },
+      "defaults": {
+        "market": null,
+        "list_type": 0
+      },
+      "denied": false
+    },
+    "subscribe_hq": {
+      "line": 2544,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 102,
+        "stock_list": "$stock_list",
+        "sub_type": 0
+      },
+      "defaults": {
+        "stock_list": [],
+        "callback": null
+      },
+      "denied": false
+    },
+    "unsubscribe_hq": {
+      "line": 2613,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 102,
+        "stock_list": "$stock_list",
+        "sub_type": 1
+      },
+      "defaults": {
+        "stock_list": []
+      },
+      "denied": false
+    },
+    "refresh_cache": {
+      "line": 2680,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 16,
+        "market": "$market",
+        "force": "$force"
+      },
+      "defaults": {
+        "market": "AG",
+        "force": false
+      },
+      "denied": false
+    },
+    "refresh_kline": {
+      "line": 2712,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 17,
+        "stock_list": "$stock_list",
+        "period": "$period"
+      },
+      "defaults": {
+        "stock_list": [],
+        "period": ""
+      },
+      "denied": false
+    },
+    "download_file": {
+      "line": 2754,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 18,
+        "stock_code": "$stock_code",
+        "down_time": "$down_time",
+        "down_type": "$down_type"
+      },
+      "defaults": {
+        "stock_code": "",
+        "down_time": "",
+        "down_type": 1
+      },
+      "denied": false
+    },
+    "create_sector": {
+      "line": 2796,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 11,
+        "block_code": "$block_code",
+        "block_name": "$block_name"
+      },
+      "defaults": {
+        "block_code": "",
+        "block_name": ""
+      },
+      "denied": false
+    },
+    "delete_sector": {
+      "line": 2835,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 12,
+        "block_code": "$block_code"
+      },
+      "defaults": {
+        "block_code": ""
+      },
+      "denied": false
+    },
+    "rename_sector": {
+      "line": 2869,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 13,
+        "block_code": "$block_code",
+        "block_name": "$block_name"
+      },
+      "defaults": {
+        "block_code": "",
+        "block_name": ""
+      },
+      "denied": false
+    },
+    "clear_sector": {
+      "line": 2908,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 14,
+        "block_code": "$block_code"
+      },
+      "defaults": {
+        "block_code": ""
+      },
+      "denied": false
+    },
+    "get_kzz_info": {
+      "line": 2942,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 8,
+        "stock_code": "$stock_code"
+      },
+      "defaults": {
+        "stock_code": "",
+        "field_list": []
+      },
+      "denied": false
+    },
+    "get_ipo_info": {
+      "line": 2982,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 9,
+        "ipo_type": "$ipo_type",
+        "ipo_date": "$ipo_date"
+      },
+      "defaults": {
+        "ipo_type": 0,
+        "ipo_date": 0
+      },
+      "denied": false
+    },
+    "formula_set_data": {
+      "line": 3082,
+      "transport": "TdxFuncMain",
+      "body": {
+        "id": "$run_id",
+        "type": 0,
+        "stock_code": "$stock_code",
+        "stock_period": "$stock_period",
+        "stock_data": "$stock_data",
+        "count": "$count",
+        "dividend_type": "$dividend_type"
+      },
+      "defaults": {
+        "stock_code": "",
+        "stock_period": "1d",
+        "stock_data": [],
+        "count": 1,
+        "dividend_type": 0
+      },
+      "denied": false
+    },
+    "formula_set_data_info": {
+      "line": 3131,
+      "transport": "TdxFuncMain",
+      "body": {
+        "id": "$run_id",
+        "type": 1,
+        "stock_code": "$stock_code",
+        "stock_period": "$stock_period",
+        "start_time": "$start_time",
+        "end_time": "$end_time",
+        "count": "$count",
+        "dividend_type": "$dividend_type"
+      },
+      "defaults": {
+        "stock_code": "",
+        "stock_period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": 0
+      },
+      "denied": false
+    },
+    "formula_get_data": {
+      "line": 3184,
+      "transport": "TdxFuncMain",
+      "body": {
+        "id": "$run_id",
+        "type": 2
+      },
+      "defaults": {},
+      "denied": false
+    },
+    "tdx_formula": {
+      "line": 3212,
+      "transport": "TdxFuncMain",
+      "body": {
+        "id": "$run_id",
+        "type": 3,
+        "formula_type": "$formula_type",
+        "formula_name": "$formula_name",
+        "formula_arg": "$formula_list",
+        "xsflag": "$xsflag"
+      },
+      "defaults": {
+        "formula_type": 0,
+        "formula_name": "",
+        "formula_arg": "",
+        "xsflag": -1
+      },
+      "denied": false
+    },
+    "get_more_info": {
+      "line": 3274,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 20,
+        "stock_code": "$stock_code"
+      },
+      "defaults": {
+        "stock_code": "",
+        "field_list": []
+      },
+      "denied": false
+    },
+    "get_gb_info": {
+      "line": 3315,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 21,
+        "stock_code": "$stock_code",
+        "date_list": "$date_list",
+        "count": "$count",
+        "gb_type": 0
+      },
+      "defaults": {
+        "stock_code": "",
+        "date_list": [],
+        "count": 1
+      },
+      "denied": false
+    },
+    "get_gb_info_by_date": {
+      "line": 3361,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 21,
+        "stock_code": "$stock_code",
+        "start_date": "$start_date_fmt",
+        "end_date": "$end_date_fmt",
+        "gb_type": 1
+      },
+      "defaults": {
+        "stock_code": "",
+        "start_date": "",
+        "end_date": ""
+      },
+      "denied": false
+    },
+    "formula_process_mul": {
+      "line": 3406,
+      "transport": "TdxFuncMain",
+      "body": {
+        "id": "$run_id",
+        "type": 4,
+        "formula_name": "$formula_name",
+        "formula_arg": "$formula_list",
+        "formula_type": "$formula_type",
+        "xsflag": "$xsflag",
+        "return_count": "$return_count",
+        "return_date": "$return_date",
+        "stock_list": "$stock_list",
+        "stock_period": "$stock_period",
+        "start_time": "$start_time",
+        "end_time": "$end_time",
+        "count": "$count",
+        "dividend_type": "$dividend_type"
+      },
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "formula_type": 0,
+        "return_count": 1,
+        "return_date": false,
+        "xsflag": -1,
+        "stock_list": [],
+        "stock_period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": 0
+      },
+      "denied": false
+    },
+    "get_trackzs_etf_info": {
+      "line": 3574,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 22,
+        "zs_code": "$zs_code"
+      },
+      "defaults": {
+        "zs_code": ""
+      },
+      "denied": false
+    },
+    "stock_account": {
+      "line": 3609,
+      "transport": "GetOrderStr",
+      "body": {
+        "id": "$run_id",
+        "type": 0,
+        "account": "$account",
+        "account_type": "$account_type"
+      },
+      "defaults": {
+        "account": "",
+        "account_type": "stock"
+      },
+      "denied": true
+    },
+    "query_stock_asset": {
+      "line": 3642,
+      "transport": "GetOrderStr",
+      "body": {
+        "id": "$run_id",
+        "type": 1,
+        "account_id": "$account_id"
+      },
+      "defaults": {
+        "account_id": -1
+      },
+      "denied": true
+    },
+    "query_stock_orders": {
+      "line": 3676,
+      "transport": "GetOrderStr",
+      "body": {
+        "id": "$run_id",
+        "type": 2,
+        "account_id": "$account_id",
+        "stock_code": "$stock_code",
+        "cancelable_only": "$cancelable_only"
+      },
+      "defaults": {
+        "account_id": -1,
+        "stock_code": "",
+        "cancelable_only": false
+      },
+      "denied": true
+    },
+    "query_stock_positions": {
+      "line": 3716,
+      "transport": "GetOrderStr",
+      "body": {
+        "id": "$run_id",
+        "type": 3,
+        "account_id": "$account_id"
+      },
+      "defaults": {
+        "account_id": -1
+      },
+      "denied": true
+    },
+    "order_stock": {
+      "line": 3750,
+      "transport": "GetOrderStr",
+      "body": {
+        "id": "$run_id",
+        "type": 4,
+        "account_id": "$account_id",
+        "stock_code": "$stock_code",
+        "order_type": "$order_type",
+        "order_volume": "$order_volume",
+        "price_type": "$price_type",
+        "price": "$price",
+        "notify": "$notify"
+      },
+      "defaults": {
+        "account_id": -1,
+        "stock_code": "",
+        "order_type": 0,
+        "order_volume": 0,
+        "price_type": 0,
+        "price": 0.0,
+        "notify": 0
+      },
+      "denied": true
+    },
+    "cancel_order_stock": {
+      "line": 3807,
+      "transport": "GetOrderStr",
+      "body": {
+        "id": "$run_id",
+        "type": 5,
+        "account_id": "$account_id",
+        "stock_code": "$stock_code",
+        "order_id": "$order_id"
+      },
+      "defaults": {
+        "account_id": -1,
+        "stock_code": "",
+        "order_id": ""
+      },
+      "denied": true
+    },
+    "get_relation": {
+      "line": 3852,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 23,
+        "stock_code": "$stock_code"
+      },
+      "defaults": {
+        "stock_code": ""
+      },
+      "denied": false
+    },
+    "exec_to_tdx": {
+      "line": 3886,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 15,
+        "url": "$url"
+      },
+      "defaults": {
+        "url": ""
+      },
+      "denied": true
+    },
+    "get_pricevol": {
+      "line": 3915,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 24,
+        "stock_list": "$stock_list"
+      },
+      "defaults": {
+        "stock_list": []
+      },
+      "denied": false
+    },
+    "formula_get_all": {
+      "line": 3943,
+      "transport": "TdxFuncMain",
+      "body": {
+        "id": "$run_id",
+        "type": 5,
+        "formula_type": "$formula_type"
+      },
+      "defaults": {
+        "formula_type": 0
+      },
+      "denied": false
+    },
+    "formula_get_info": {
+      "line": 3973,
+      "transport": "TdxFuncMain",
+      "body": {
+        "id": "$run_id",
+        "type": 6,
+        "formula_type": "$formula_type",
+        "formula_code": "$formula_code"
+      },
+      "defaults": {
+        "formula_type": 0,
+        "formula_code": ""
+      },
+      "denied": false
+    },
+    "get_match_stkinfo": {
+      "line": 4006,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 7,
+        "key_word": "$key_word"
+      },
+      "defaults": {
+        "key_word": ""
+      },
+      "denied": false
+    },
+    "get_exday_data": {
+      "line": 4038,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 25,
+        "stock_code": "$stock_code",
+        "count": "$count"
+      },
+      "defaults": {
+        "stock_code": "",
+        "count": 1
+      },
+      "denied": false
+    },
+    "get_zdt_data": {
+      "line": 4072,
+      "transport": "GetTdxDataStr",
+      "body": {
+        "id": "$run_id",
+        "type": 26,
+        "stock_list": "$stock_list"
+      },
+      "defaults": {
+        "stock_list": []
+      },
+      "denied": false
+    },
+    "send_source": {
+      "line": 4104,
+      "transport": "?",
+      "body": {
+        "id": "$run_id",
+        "type": 16,
+        "py_code": "$py_code",
+        "handle_type": "$handle_type"
+      },
+      "defaults": {
+        "py_code": "",
+        "handle_type": 0
+      },
+      "denied": false
+    }
+  }
+}

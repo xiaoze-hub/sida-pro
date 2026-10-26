@@ -54,20 +54,31 @@ TIER_LABELS = {
 
 
 def _to_tq_code(symbol: str) -> Optional[str]:
-    """6位A股代码 → TQ格式(000001.SZ / 600519.SH)。"""
+    """6位A股代码 → TQ格式(000001.SZ / 600519.SH / 430047.BJ / 920001.BJ)。
+
+    P2(2026-10-08): 统一复用 ``marketdata.vendors.tq.to_tq_code``(支持北交所
+    4/8/92 前缀 → BJ), 删掉本地副本 —— 本地版缺 4/8/920 → BJ 分支, 对北交所
+    代码静默返回 None(数据缺失且无声)。
+    """
     s = (symbol or "").strip()
-    if not s.isdigit() or len(s) != 6:
+    if not s:
         return None
-    if s[0] in ("6", "9") or s.startswith("688"):
-        return f"{s}.SH"
-    if s[0] in ("0", "2", "3"):
-        return f"{s}.SZ"
-    return None
+    try:
+        from marketdata.symbol import Market, Symbol
+        from marketdata.vendors.tq import to_tq_code as _md_to_tq_code
+
+        return _md_to_tq_code(Symbol(Market.CN, s))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _rpc(method: str, params: dict, timeout: float = 4.0):
-    """TQ JSON-RPC 调用(复用 tq.py 的网关发现)。"""
-    from marketdata.vendors.tq import _rpc as tq_rpc
+    """TQ JSON-RPC 调用(复用 tq.py 的网关发现)。
+
+    P1-6(2026-10-08): 走公开入口 ``tq_rpc``(等同 _rpc), 该入口被观测包装覆盖,
+    失败会进数据源失败指标 —— 不再只在本模块静默降级。
+    """
+    from marketdata.vendors.tq import tq_rpc
 
     return tq_rpc(method, params, timeout=timeout)
 

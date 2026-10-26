@@ -51,7 +51,7 @@ export function AiSection() {
               <Cpu className="w-3.5 h-3.5 text-primary flex-shrink-0" />
               <div className="min-w-0">
                 <span className="text-[12px] font-medium text-foreground">{svc.name}</span>
-                <p className="text-[10px] text-muted-foreground truncate font-mono">{svc.base_url}</p>
+                <p className="text-[10px] text-muted-foreground truncate font-mono" title={svc.base_url}>{svc.base_url}</p>
               </div>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -96,11 +96,16 @@ export function AiSection() {
             <div key={b.scene} className="flex items-center justify-between gap-3 border-b border-border/40 px-1 py-2">
               <div className="min-w-0">
                 <span className="text-[12px] font-semibold text-foreground">{b.display_name}</span>
-                <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{b.description}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5 truncate" title={b.description}>{b.description}</p>
               </div>
               <div className="flex-shrink-0 w-[220px] sm:w-[280px]">
                 {b.scene === 'vision' && (
-                  <p className="mb-1 text-[10px] text-sky-700/90 dark:text-sky-400/90">优先选择含视觉(vision)能力的模型</p>
+                  <p className="mb-1 text-[10px] text-sky-700/90 dark:text-sky-400/90">
+                    {b.is_bound
+                      ? `当前绑定: ${b.model_name || '—'}`
+                      : `默认: ${b.default_model_name || b.effective_model_name || '默认模型'}`}
+                    <span className="text-muted-foreground"> · 优先含 vision 能力的模型</span>
+                  </p>
                 )}
                 <Select
                   value={b.model_id != null ? String(b.model_id) : SCENE_DEFAULT_VALUE}
@@ -111,7 +116,11 @@ export function AiSection() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={SCENE_DEFAULT_VALUE}>默认模型</SelectItem>
+                    <SelectItem value={SCENE_DEFAULT_VALUE}>
+                      {b.scene === 'vision' && b.default_model_name
+                        ? `默认(${b.default_model_name})`
+                        : '默认模型'}
+                    </SelectItem>
                     {sceneOptionsFor(b.scene).map(opt => (
                       <SelectItem key={opt.id} value={String(opt.id)}>
                         <span className="flex items-center gap-1.5">

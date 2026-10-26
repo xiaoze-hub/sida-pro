@@ -194,8 +194,12 @@ def test_read_ohlc_filters_none_rows_and_short_circuits(monkeypatch):
     monkeypatch.setattr("src.db.session.engine", fake_engine)
     out = api._read_ohlc(["20260911"], ["A", "B"])
     assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2, "amount": 1.5e8}}  # B 缺 high 被丢
-    # 2026-09-18: 日期改 BETWEEN(2 参) + symbol 分批, 不再 20 日期 IN 列表
-    assert conn.last_params == {"d0": "2026-09-11", "d1": "2026-09-11", "codes": ("A", "B")}
+    # 2026-10-16: 日期改原生时间戳区间(2 参) + symbol 分批, 消除 CAST 慢查询
+    assert conn.last_params == {
+        "ts_start": "2026-09-11 00:00:00+08",
+        "ts_end": "2026-09-11 23:59:59+08",
+        "codes": ("A", "B"),
+    }
     assert api._read_ohlc([], ["A"]) == {}
     assert api._read_ohlc(["20260911"], []) == {}
 
@@ -305,6 +309,23 @@ def test_ladder_no_snapshot_degrades_finalized(monkeypatch):
     c = _ladder_client(monkeypatch, None)
     d = c.get("/api/theme-mood/ladder?mode=live").json()["data"]  # live 请求但无快照
     assert d["mode"] == "finalized" and d["live_day"] is None
+
+
+def test_ladder_live_as_of_carries_tick_data_time(monkeypatch):
+    """live 响应带盘中**数据时刻** live_as_of(scan_tick 的 last_ok), 不是请求时刻。
+
+    定型(无快照)时显式 None —— 不得残留旧值, 也不得拿请求 as_of 冒充数据时刻。
+    """
+    snap = {"live_day": {"date": "20260912", "rows": [], "blown": [], "broken": [],
+                         "provisional": True},
+            "meta": {"stale": False, "last_ok": "14:31"}, "date": "20260912", "closing": False}
+    c = _ladder_client(monkeypatch, snap)
+    d = c.get("/api/theme-mood/ladder?mode=auto").json()["data"]
+    assert d["mode"] == "live" and d["live_as_of"] == "14:31"
+
+    monkeypatch.setattr(api, "_live_snapshot", lambda: None)  # 降级定型
+    d = c.get("/api/theme-mood/ladder?mode=finalized").json()["data"]
+    assert d["mode"] == "finalized" and d["live_as_of"] is None
 
 
 def test_ladder_stats_from_latest_finalized(monkeypatch):

@@ -239,3 +239,95 @@ def test_health_forecast_engine_probe_cached(monkeypatch):
         "httpx.get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("缓存窗口内不得再探测"))
     )
     assert health_api._forecast_engine_probe() == {"status": "ok", "url": "cached"}
+
+
+# ---------- 8000: 引擎健康透传(失败显式, 不 500) ----------
+
+def test_forecast_health_proxy_unreachable_not_500(monkeypatch, main_client):
+    """引擎停机 → GET /api/forecast/health 返回显式 unreachable(HTTP 200), 绝不 500。"""
+    from src.web.api import forecast as forecast_api
+
+    class _Exploding:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            raise httpx.ConnectError("connection refused")
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(forecast_api.httpx, "AsyncClient", _Exploding)
+    resp = main_client.get("/api/forecast/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "unreachable"
+    assert "engine_url" in body
+
+
+def test_forecast_health_proxy_passthrough_when_up(monkeypatch, main_client):
+    """引擎在线 → /api/forecast/health 原样透传引擎 /health 载荷。"""
+    from src.web.api import forecast as forecast_api
+
+    class _HealthResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ok", "kronos_ready": True}
+
+    class _HealthClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params=None):
+            return _HealthResp()
+
+    monkeypatch.setattr(forecast_api.httpx, "AsyncClient", _HealthClient)
+    resp = main_client.get("/api/forecast/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "kronos_ready": True}
+
+
+# ---------- 引擎侧 /health: Kronos 缺失不得 500 ----------
+
+def test_engine_health_never_500_when_kronos_missing(monkeypatch):
+    """Kronos 源码缺失(get_predictor 抛 ModuleNotFoundError) → /health 仍 200 + kronos_ready=false。
+
+    回归: 旧实现 `get_predictor() is not None` 让探测异常直接 500, 主服务 health 探针
+    把"可选模型没装好"误判成"引擎 down"(生产实测)。
+    """
+    import forecast_server
+    from fastapi.testclient import TestClient
+
+    def _boom():
+        raise ModuleNotFoundError("No module named 'model'")
+
+    monkeypatch.setattr(forecast_server, "get_predictor", _boom)
+    resp = TestClient(forecast_server.app).get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["kronos_ready"] is False
+    assert "model" in body.get("kronos_error", "")
+
+
+def test_engine_health_ok_when_kronos_ready(monkeypatch):
+    """Kronos 可用 → /health kronos_ready=true, 无 error 字段。"""
+    import forecast_server
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(forecast_server, "get_predictor", lambda: object())
+    resp = TestClient(forecast_server.app).get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kronos_ready"] is True
+    assert "kronos_error" not in body

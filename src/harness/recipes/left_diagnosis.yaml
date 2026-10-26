@@ -1,0 +1,60 @@
+id: left_diagnosis
+label: 左侧埋伏诊断
+icon: "⛏"
+desc: 左侧超跌专用：情绪→催化→量价三层滤网逐步过筛，便宜不等于买点，未过的层要说明是观察而非买点。
+# 与现有配方无关键词重叠：破位/盘中归 intraday_watcher，回撤/止损归 risk_judge，
+# 「底部」「见底」只在问左侧时出现，不被趋势类配方占用。
+when: [左侧, 超跌, 见底, 底部, 埋伏, 低估, 三层滤网, 威科夫, 抄底, 跌透了]
+skills: [left]
+pipeline: true
+tools:
+  - get_sentiment_cycle
+  - get_event_catalyst
+  - get_wyckoff_structure
+  - get_kline_patterns
+  - get_technical_analysis
+  - get_chip_accumulation
+  - get_stock_chips
+  - get_fundamentals_detail
+  - get_stock_factors
+  - get_factor_ic_report
+  - get_factor_winrate
+  - get_northbound
+  - get_stock_dossier
+output_sections: [结论, 三层滤网（情绪·催化·量价）, 估值与筹码, 基本面拐点, 左侧确认位, 失效条件, 口径]
+priority: 4
+budget: {max_tool_calls: 13}
+prompt_fragment: |
+  你是左侧埋伏诊断员。左侧的本质是**在证据不全时承担不确定性**，所以本报告的核心不是给评级，
+  而是把「三层滤网各自过没过」摆出来。取数顺序：量价结构（wyckoff/kline/technical）→ 筹码
+  （chip_accumulation/chips）→ 基本面与因子（fundamentals_detail/factors/ic_report/northbound/dossier）。
+
+  【三层滤网，顺序不许换：情绪 → 催化 → 量价】
+  第一层 情绪周期（市场级）：看当前处于冰点/修复/发酵/高潮/退潮，左侧只在冰点末期到修复初期有意义；
+       退潮期里的「超跌」还能更超跌。情绪层用 get_sentiment_cycle 取市场级周期；若该轮未取到，
+       必须写「情绪层：未取到（情绪周期接口无数据）」，禁止用个股资金流或涨跌幅冒充市场情绪。
+  第二层 催化（涨价/产业/政策/订单）：本轮未挂 get_event_catalyst，催化层只能引用 get_stock_dossier
+       里的公告、研报、新闻原文（带日期与来源）；取不到就写「催化层：未取到（无事件推理与有效公告）」，
+       禁止把「没有催化数据」说成「没有催化」。
+  第三层 量价结构（威科夫）：用 get_wyckoff_structure 的阶段判定（A 止跌构建 / B 筹码沉淀 /
+       C 终极测试 / D-E 突破）与结构标记（放量滞涨、弹簧试探、缩量沉淀、放量突破），
+       配 kline_patterns 的形态与 technical 的均线斜率，回答「抛压是否耗尽」。
+
+  【写死的口径红线】
+  ① 左侧不等于便宜：必须分别给出 逻辑（催化）/ 筹码 / 量价 三层各自「通过 / 未通过 / 未取到」，
+     任一层未通过或未取到，结论就必须写「这是左侧观察，不是买点」，并说明缺哪一层。
+  ② 禁止「无主力、资金流出所以不行」这类话术：左侧本来就没有主力，等主力进场价格已不在左侧；
+     同理禁止只用「跌得够多」「估值低」当理由。
+  ③ 数据缺失写「未取到（原因）」，不许补 0、不许推测；因子（get_stock_factors / get_factor_ic_report）
+     是横向分位与有效性证据，不是方向结论。
+  ④ 「左侧确认位」只写条件与价位（地量后放量不破前低、前低/前平台、均线走平的位置），
+     写成「条件 → 价位 → 观察点」，不写方向预测。
+  【格式】严格使用这些段落名做标题（原文照抄，不要自创编号，不要 markdown # 标题）：
+  结论 / 三层滤网（情绪·催化·量价）/ 估值与筹码 / 基本面拐点 / 左侧确认位 / 失效条件 / 口径
+  「口径」段写清：三层各自的数据来源与未取到项、筹码是自算 CYQ 还是腾讯口径、因子是分位还是 IC。
+
+# 验收标准（人写的事实源，specs/harness/recipes.md 逐条对照；仅静态声明，不影响运行）
+acceptance:
+  - 三层滤网必须逐层给出：情绪周期 / 事件催化 / 量价结构，缺任一层即不合格
+  - 任一层数据缺失必须显式写「未取到」，不得用个股资金流冒充市场情绪
+  - 左侧结论必须给出确认位与失效位，不得只写「可以埋伏」

@@ -1989,6 +1989,9 @@ def _persist_candidates(
             )
 
         db.commit()
+        # 决策账本覆盖(2026-10-10 P1-1): 竞价池候选留痕(signal_kind=auction_pool)。
+        # 只对已成功落库的候选记账; 失败只 warn(旁路), 不影响候选池主流程。
+        _log_auction_signals(scored_items, snapshot=snapshot)
     except Exception as e:
         db.rollback()
         logger.error(f"刷新入场候选失败: {e}")
@@ -1996,6 +1999,48 @@ def _persist_candidates(
     finally:
         db.close()
     return items
+
+
+def _log_auction_signals(scored_items: list[dict], *, snapshot: str) -> int:
+    """把竞价池候选写决策账本(signal_kind=auction_pool)。
+
+    每条必须带 `price_at_signal`(候选时点价 current_price) —— 拿不到价的**不写该条**
+    (不硬填 0)。幂等由 (kind, symbol, trade_date) 唯一键保证; 失败只 warn, 不阻断主流程。
+    """
+    day = str(snapshot or "").replace("-", "")[:8]
+    if len(day) != 8 or not day.isdigit():
+        return 0
+    rows: list[dict] = []
+    for it in scored_items or []:
+        try:
+            if (it.get("candidate_source") or "").strip() != "auction":
+                continue
+            price = _safe_float((it.get("quote") or {}).get("current_price"))
+            if price is None or price <= 0:
+                continue
+            rows.append(
+                {
+                    "signal_kind": "auction_pool",
+                    "symbol": it.get("symbol"),
+                    "trade_date": day,
+                    "price": float(price),
+                    "context": {
+                        "action": it.get("action"),
+                        "signal": it.get("signal"),
+                        "score": it.get("score"),
+                    },
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条异常不拖垮
+            logger.warning("决策账本竞价信号组装失败(跳过): %r", exc)
+    if not rows:
+        return 0
+    from src.core.decision_log import record_many_safe
+
+    n = record_many_safe(rows, source="entry_candidates_auction")
+    if n:
+        logger.info("决策账本: 竞价池候选 %s 条已留痕", n)
+    return n
 
 
 def refresh_entry_candidates(
@@ -2914,6 +2959,70 @@ def get_entry_candidate_stats(*, days: int = 30) -> dict:
             "by_strategy": by_strategy[:20],
             "coverage": coverage,
             "outcomes": outcome_summary,
+        }
+    finally:
+        db.close()
+
+
+def entry_outcomes_summary(*, days: int = 30, min_sample: int = 20) -> dict:
+    """入场候选后验只读汇总(审计 P2-3): 按 horizon×来源给胜率/均收益。
+
+    暴露 `evaluate_entry_candidate_outcomes` 落库结果的查询口(原仅 cron 写入, 无查询端点)。
+    诚实口径: 样本量 `total < min_sample` 时**不给胜率**(`win_rate=None` + `insufficient=True`),
+    只回样本数 —— 拿 3 个样本算出的百分比会误导决策。空库返回空 rows(显式, 不编造)。
+    """
+    days = max(1, min(int(days or 30), 365))
+    min_sample = max(1, int(min_sample or 20))
+    since = utc_now() - timedelta(days=days)
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(
+                EntryCandidateOutcome.horizon_days,
+                EntryCandidateOutcome.candidate_source,
+                func.count(EntryCandidateOutcome.id).label("total"),
+                func.sum(case((EntryCandidateOutcome.outcome_return_pct > 0, 1), else_=0)).label("wins"),
+                func.avg(EntryCandidateOutcome.outcome_return_pct).label("avg_ret"),
+            )
+            .filter(
+                EntryCandidateOutcome.created_at >= since,
+                EntryCandidateOutcome.outcome_status.in_(("evaluated", "hit_target", "hit_stop")),
+            )
+            .group_by(EntryCandidateOutcome.horizon_days, EntryCandidateOutcome.candidate_source)
+            .all()
+        )
+        out: list[dict] = []
+        total_samples = 0
+        for h, src, total_eval, wins, avg_ret in rows:
+            total_eval = int(total_eval or 0)
+            wins = int(wins or 0)
+            total_samples += total_eval
+            insufficient = total_eval < min_sample
+            out.append(
+                {
+                    "horizon_days": int(h or 0),
+                    "source": src or "watchlist",
+                    "source_label": _candidate_source_label(src or "watchlist"),
+                    "total": total_eval,
+                    "wins": wins,
+                    # 样本不足不给胜率(诚实口径); 有样本才给
+                    "win_rate": None if insufficient else round((wins / total_eval * 100.0), 2),
+                    "avg_return_pct": round(float(avg_ret or 0.0), 3) if total_eval else None,
+                    "insufficient": insufficient,
+                    "min_sample": min_sample,
+                }
+            )
+        out.sort(key=lambda x: (x["horizon_days"], x["total"]), reverse=True)
+        return {
+            "window_days": days,
+            "min_sample": min_sample,
+            "available": True,
+            "rows": out,
+            "total_samples": total_samples,
+            "note": (
+                "胜率 = 后验收益 > 0 的占比(按 horizon×来源); 样本不足不给数字。"
+                " 后验结出口径与官方基准不可直接比较。"
+            ),
         }
     finally:
         db.close()

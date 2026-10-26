@@ -4,7 +4,7 @@ from pydantic import BaseModel, field_validator
 
 from src.web.database import get_db
 from src.web.models import AIService, AIModel, AISceneBinding
-from src.core.ai_client import AIClient
+from src.core.ai_client import AIClient, SCENE_DEFAULT_MODEL_NAMES
 
 router = APIRouter()
 
@@ -18,7 +18,9 @@ SCENES = {
     "referee": {"name": "AI 裁判", "desc": "多模型结果裁决 / 交叉验证"},
     "selfcheck": {"name": "自检", "desc": "AI 自检 / 质量检查"},
     "insights": {"name": "机会评分", "desc": "投资机会评分 / 洞察"},
-    "vision": {"name": "视觉代理(图片识别)", "desc": "图片内容理解(需支持视觉的多模态模型, 对话/微信发图时自动调用)"},
+    "vision": {"name": "视觉代理(图片识别)",
+               "desc": "图片内容理解 / AI 看图形态(需支持视觉的多模态模型; "
+                       "默认 agnes-3.0-flash)"},
 }
 
 
@@ -30,32 +32,59 @@ class SceneBindingResponse(BaseModel):
     model_name: str | None = None
     service_id: int | None = None
     is_bound: bool = False
+    # 未显式绑定时的默认模型名(如 vision → agnes-3.0-flash); 无默认 → None
+    default_model_name: str | None = None
+    # 无默认模型时回落"全局默认模型"的说明(供前端显示当前生效模型)
+    effective_model_name: str | None = None
 
 
 class SceneBindingUpdate(BaseModel):
     model_id: int | None = None  # None = 解绑, 回落默认模型
 
 
+def _default_model_name(scene: str) -> str | None:
+    """场景默认模型名(按名绑定, 见 ai_client.SCENE_DEFAULT_MODEL_NAMES); 无 → None。"""
+    return SCENE_DEFAULT_MODEL_NAMES.get(scene) or None
+
+
+def _scene_binding_response(db: Session, scene: str, binding) -> dict:
+    """统一组装场景绑定响应(含当前绑定 + 默认模型名 + 生效模型名)。"""
+    meta = SCENES[scene]
+    model = None
+    if binding is not None and binding.model_id is not None:
+        model = db.query(AIModel).filter(AIModel.id == binding.model_id).first()
+    default_name = _default_model_name(scene)
+    # 生效模型名: 已绑定 → 绑定模型; 未绑定 → 默认模型名(若有)或全局默认模型名
+    if model is not None:
+        effective = model.name
+    elif default_name:
+        effective = default_name
+    else:
+        gm = (
+            db.query(AIModel)
+            .filter(AIModel.is_default == True)  # noqa: E712
+            .order_by(AIModel.id)
+            .first()
+        ) or db.query(AIModel).order_by(AIModel.id).first()
+        effective = gm.name if gm else None
+    return {
+        "scene": scene,
+        "display_name": meta["name"],
+        "description": meta["desc"],
+        "model_id": model.id if model else None,
+        "model_name": model.name if model else None,
+        "service_id": model.service_id if model else None,
+        "is_bound": model is not None,
+        "default_model_name": default_name,
+        "effective_model_name": effective,
+    }
+
+
 @router.get("/scene-bindings", response_model=list[SceneBindingResponse])
 def list_scene_bindings(db: Session = Depends(get_db)):
     """返回全部场景的绑定状态(含未绑定场景), 前端据此渲染绑定 UI。"""
     bindings = {b.scene: b for b in db.query(AISceneBinding).all()}
-    result = []
-    for scene, meta in SCENES.items():
-        binding = bindings.get(scene)
-        model = None
-        if binding and binding.model_id is not None:
-            model = db.query(AIModel).filter(AIModel.id == binding.model_id).first()
-        result.append({
-            "scene": scene,
-            "display_name": meta["name"],
-            "description": meta["desc"],
-            "model_id": model.id if model else None,
-            "model_name": model.name if model else None,
-            "service_id": model.service_id if model else None,
-            "is_bound": model is not None,
-        })
-    return result
+    return [_scene_binding_response(db, scene, bindings.get(scene)) for scene in SCENES]
 
 
 @router.put("/scene-bindings/{scene}", response_model=SceneBindingResponse)
@@ -80,18 +109,7 @@ def update_scene_binding(
     db.commit()
     db.refresh(binding)
 
-    model = None
-    if binding.model_id is not None:
-        model = db.query(AIModel).filter(AIModel.id == binding.model_id).first()
-    return {
-        "scene": scene,
-        "display_name": SCENES[scene]["name"],
-        "description": SCENES[scene]["desc"],
-        "model_id": model.id if model else None,
-        "model_name": model.name if model else None,
-        "service_id": model.service_id if model else None,
-        "is_bound": model is not None,
-    }
+    return _scene_binding_response(db, scene, binding)
 
 
 # --- Service ---
