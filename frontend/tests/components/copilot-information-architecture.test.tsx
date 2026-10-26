@@ -47,20 +47,30 @@ async function renderPage() {
 }
 
 describe('参谋页信息架构', () => {
-  it('会话列表并入左侧栏 tab，不再单独占一条竖带', async () => {
+  it('左栏只有对话列表：预设与预设 tab 都已移除', async () => {
     await renderPage()
-    // 原来那条独立会话列必须消失
     expect(screen.queryByTestId('copilot-conversation-column')).toBeNull()
-    // 左侧栏是两个 tab
-    expect(screen.getByTestId('left-tab-presets')).toBeTruthy()
-    expect(screen.getByTestId('left-tab-conversations')).toBeTruthy()
+    expect(screen.queryByTestId('left-tab-presets')).toBeNull()
+    expect(screen.queryByTestId('left-tab-conversations')).toBeNull()
+    expect(screen.getByTestId('copilot-conversation-rail')).toBeTruthy()
   })
 
-  it('切到「对话」tab 才渲染会话列表', async () => {
+  it('对话栏可折叠，折叠后能从工具条再展开', async () => {
     await renderPage()
-    expect(screen.queryByTestId('left-conversation-list')).toBeNull()
-    fireEvent.click(screen.getByTestId('left-tab-conversations'))
-    await waitFor(() => expect(screen.getByTestId('left-conversation-list')).toBeTruthy())
+    expect(screen.getByTestId('copilot-conversation-rail')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('copilot-rail-collapse'))
+    await waitFor(() => expect(screen.queryByTestId('copilot-conversation-rail')).toBeNull())
+    fireEvent.click(screen.getByTestId('copilot-rail-expand'))
+    await waitFor(() => expect(screen.getByTestId('copilot-conversation-rail')).toBeTruthy())
+  })
+
+  it('工具条不再有「历史」与「代码输入 + 看卡」（与对话/主输入重复）', async () => {
+    await renderPage()
+    expect(screen.queryByTestId('copilot-history-toggle')).toBeNull()
+    expect(screen.queryByTestId('copilot-history-drawer')).toBeNull()
+    // 代码输入框（看卡）已移除
+    expect(screen.queryByLabelText('输入股票代码查看参谋卡')).toBeNull()
+    expect(screen.queryByRole('button', { name: '看卡' })).toBeNull()
   })
 
   it('顶部只留「过程」，记忆/定时/提案收进「更多」', async () => {

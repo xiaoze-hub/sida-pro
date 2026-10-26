@@ -86,25 +86,18 @@ describe('数智参谋 P0/P1', () => {
     // 不主动请求参谋卡
     expect(screen.queryByTestId('brief-card')).toBeNull()
 
-    // 点「看卡」才拉
-    fireEvent.click(screen.getByText('看卡'))
-    await waitFor(() => expect(screen.getByTestId('brief-card').textContent).toBe('600111'))
+    // 2026-10-26: 「代码输入 + 看卡」已按用户指令移除（与主输入框重复）
+    expect(screen.queryByText('看卡')).toBeNull()
+    expect(screen.queryByTestId('brief-card')).toBeNull()
   })
 
-  it('指令池分层：今日推荐 3 条 + 更多可展开', async () => {
+  it('预设入口已整体移除（用户裁定不需要）', async () => {
     render(<AiCopilotPage />)
-    await screen.findByText('全景数智深度诊断')
-
-    const more = screen.getByTestId('copilot-preset-more')
-    expect(more.textContent).toContain('更多指令')
-
-    // 排序随时段变化（跑测试的时刻不同，推荐项也不同）→ 只断言「数量」不写死具体项
-    const labels = PRESETS.map((p) => p.label)
-    const visibleCount = () => labels.filter((l) => screen.queryByText(l)).length
-    expect(visibleCount()).toBe(3)
-
-    fireEvent.click(more)
-    await waitFor(() => expect(visibleCount()).toBe(5))
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
+    // 预设卡片、预设"更多"折叠、移动端预设条都不应存在
+    expect(screen.queryByTestId('copilot-preset-more')).toBeNull()
+    expect(screen.queryByTestId('copilot-mobile-chip')).toBeNull()
+    expect(screen.queryByText('全景数智深度诊断')).toBeNull()
   })
 
   it('结构化回答渲染成卡片：置信度、依据折叠、追问 chips', async () => {
@@ -112,7 +105,7 @@ describe('数智参谋 P0/P1', () => {
       handlers.onDelta(STRUCTURED)
     })
     render(<AiCopilotPage />)
-    await screen.findByText('全景数智深度诊断')
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
 
     fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '600111 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
@@ -138,7 +131,7 @@ describe('数智参谋 P0/P1', () => {
       handlers.onDelta('今天两市成交 1.2 万亿，情绪回暖。')
     })
     render(<AiCopilotPage />)
-    await screen.findByText('全景数智深度诊断')
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
 
     fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '今天市场怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
@@ -155,8 +148,9 @@ describe('标的锁定（2026-10-19 修复：看 600111 却分析成 002361）',
     apiMock.sendMessageStream.mockImplementation(async () => {})
     render(<AiCopilotPage />)
 
-    await screen.findByText('全景数智深度诊断')
-    fireEvent.click(screen.getAllByText('全景数智深度诊断')[0])
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
+    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '全面分析' } })
+    fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
     const [, prompt, , , , stock] = apiMock.sendMessageStream.mock.calls[0]
@@ -172,7 +166,7 @@ describe('标的锁定（2026-10-19 修复：看 600111 却分析成 002361）',
     apiMock.sendMessageStream.mockImplementation(async () => {})
     render(<AiCopilotPage />)
 
-    await screen.findByText('全景数智深度诊断')
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
     fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '002361 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 

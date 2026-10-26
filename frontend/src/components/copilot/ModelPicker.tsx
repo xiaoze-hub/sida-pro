@@ -136,7 +136,7 @@ export function ModelPicker({ className = '' }: { className?: string }) {
             ? `读取模型列表失败：${loadError}`
             : '选择参谋本轮使用的模型（只在你已获授权的模型里）'
         }
-        className="flex h-9 items-center gap-1 rounded-lg border border-border/60 px-2 text-[11px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed"
+        className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed"
       >
         {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
         <span className="tabular-nums">{current?.model ?? (loadError ? '读取失败' : '--')}</span>

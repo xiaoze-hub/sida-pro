@@ -8,7 +8,7 @@ import {
   type CopilotMetrics,
   type PendingAction,
 } from '@/lib/copilot/api'
-import { ChevronDown, ChevronRight, History, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
+import { ChevronRight, Loader2, PanelLeftClose, PanelLeftOpen, Paperclip, Send, Sparkles, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
@@ -25,8 +25,6 @@ import {
 import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
-import { SESSION_LABEL, orderPresetsForSession, sessionOf } from '@/lib/copilot/presets-order'
-import { getCopilotPresets } from '@/lib/copilot/api'
 import { extractSymbolChips, marketOf } from '@/lib/copilot/symbolChips'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
 import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
@@ -41,7 +39,7 @@ import { UsageBar } from '@/components/copilot/UsageBar'
 import { PersonaBadge } from '@/components/copilot/PersonaBadge'
 import { ModelPicker } from '@/components/copilot/ModelPicker'
 import { LiveRunPanel } from '@/components/copilot/LiveRunPanel'
-import { resolveShortcut } from '@/lib/copilot/layout'
+import { RAIL_KEY, readBoolPref, resolveShortcut, writePref } from '@/lib/copilot/layout'
 import { useConversations } from '@/hooks/useConversations'
 import { useCopilotRuns } from '@/hooks/useCopilotRuns'
 import {
@@ -62,17 +60,10 @@ import {
   CONTEXT_ANCHOR_CLEAR,
   CONTEXT_ANCHOR_PREFIX,
   COPILOT_PAGE_SUBTITLE,
-  COPILOT_PAGE_TITLE,
   PAGE_EMPTY_EXAMPLES,
   PAGE_EMPTY_HINT,
-  PRESET_FALLBACK_HINT,
-  PRESET_GROUP_LABEL,
-  PRESET_MORE_COLLAPSE,
-  PRESET_MORE_LABEL,
-  PRESET_PRIMARY_LABEL,
   SEND,
 } from '@/lib/copilot/copy'
-import type { CopilotPreset } from '@/lib/copilot/types'
 
 /** 与服务端 /api/chat/upload 上限保持一致（20MB）。 */
 const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024
@@ -106,52 +97,6 @@ interface PendingAttachment {
 }
 
 /** 指令池接口失败时的本地兜底（只影响"有没有快捷按钮"，不影响能不能提问）。 */
-const LOCAL_PRESETS: CopilotPreset[] = [
-  {
-    // 旗舰项必须进兜底：接口抖动时只剩 4 条本地指令、把「全景诊断」丢掉是最伤的降级
-    id: 'full_dossier',
-    icon: '🧬',
-    label: '全景数智深度诊断(多维Harness)',
-    prompt:
-      '请调用标的全景档案工具，对我当前查看的股票进行全面深度分析：整合实时量价、K线形态、腾讯逐笔主力意图、120日底仓筹码沉淀、数智决策GS多空色带、东方财富机构研报、近期公司公告与利好/利空消息面，给出明确结论与实战作战预案。',
-    group: 'dossier',
-    requires_perm: null,
-  },
-  {
-    id: 'chip_cost',
-    icon: '🎯',
-    label: '诊断底仓成本与获利盘',
-    prompt:
-      '用我的持仓列表，逐只给出底仓成本(COST50)、70% 筹码区间与当前获利盘比例，标出已跌破 70% 筹码下沿的票。',
-    group: 'chip',
-    requires_perm: null,
-  },
-  {
-    id: 'cancel_intent',
-    icon: '🛡️',
-    label: '盘口撤单有没有假托单',
-    prompt: '帮我看看持仓里哪几只盘口买盘撤单率异常偏高，有没有假托单的迹象，分别说明依据。',
-    group: 'defense',
-    requires_perm: null,
-  },
-  {
-    id: 'wyckoff_stage',
-    icon: '〰️',
-    label: '现在是洗盘还是派发',
-    prompt: '挑一只我持仓里的票，用日K量价结构判断现在处于哪个阶段，指出最近的弹簧试探或放量滞涨标记。',
-    group: 'chip',
-    requires_perm: null,
-  },
-  {
-    id: 'auction_strong',
-    icon: '🔥',
-    label: '扫描今日 9:25 爆量抢筹',
-    prompt:
-      '扫描今天集合竞价里爆量抢筹(竞价金额>2000万且量比>2.5)的股票，按竞价金额降序给出前 10 只，并标注每只的五态判定与竞价撤单率。',
-    group: 'auction',
-    requires_perm: 'view_auction',
-  },
-]
 
 type Msg = {
   role: 'user' | 'assistant'
@@ -177,8 +122,6 @@ const SYMBOL_RE = /^[03468]\d{5}$/
  * 不在这里解析流；渲染走 SafeMarkdown（统一 sanitize 策略）。
  */
 export default function AiCopilotPage() {
-  const [presets, setPresets] = useState<CopilotPreset[]>(LOCAL_PRESETS)
-  const [presetFailed, setPresetFailed] = useState(false)
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [stage, setStage] = useState('')
@@ -196,8 +139,10 @@ export default function AiCopilotPage() {
     symbol?: string
   } | null>(null)
   const [streaming, setStreaming] = useState(false)
-  // 左侧栏两个 tab: 预设 / 对话（合并成一条竖带，避免页面被切成多条）
-  const [leftTab, setLeftTab] = useState<'presets' | 'conversations'>('presets')
+  // 左栏（对话列表）可折叠：默认展开，状态持久化
+  const [railOpen, setRailOpen] = useState<boolean>(() =>
+    readBoolPref(typeof window === 'undefined' ? null : window.localStorage, RAIL_KEY),
+  )
   // 右面板折叠 = panelTab 为空(它本来就是可开可关的滑出面板);
   // 用 lastPanelTabRef 记住上次那个页签, 快捷键才能"关掉再打开回原来那页"
   const lastPanelTabRef = useRef<PanelTab>('runs')
@@ -209,7 +154,6 @@ export default function AiCopilotPage() {
   const [convId, setConvId] = useState<number | null>(null)
   // 历史对话（2026-10-20）：后端的 conversations 接口早就有了，但面板一直没有入口，
   // 刷新即丢上下文。这里补抽屉：列出/打开/删除历史，并把 conversation_id 续上。
-  const [historyOpen, setHistoryOpen] = useState(false)
   // 2026-10-22 工作台对齐 Codex/Hermes：右侧面板（过程 / 记忆 / 定时 / 提案）+ 会话管理。
   // 过程=每轮工具时间线（治理页是全局视角，这里只看当前会话）；
   // 提案=参谋缺的分析维度（配方没覆盖的）→ 人裁决，采纳不等于生效（见 ProposalPanel 头注）。
@@ -220,9 +164,7 @@ export default function AiCopilotPage() {
   // 代价是打开会话多一个轻请求（limit 20），换来「答案下面直接能看到调过什么」。
   const runsState = useCopilotRuns({ conversationId: convId, enabled: true })
   const [convs, setConvs] = useState<{ id: number; title: string; created_at: string }[]>([])
-  const [historyLoading, setHistoryLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [symbol, setSymbol] = useState('')
   /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
   const [anchorSymbol, setAnchorSymbol] = useState('')
   /** 参谋卡只在用户主动点「看卡」时请求（brief 接口较重，常 10s+） */
@@ -239,7 +181,6 @@ export default function AiCopilotPage() {
   const [mentions, setMentions] = useState<(MentionStock | MentionAgent)[]>([])
   /** 中文输入法组合期间不触发 @ 面板（否则打拼音会边打边跳、回车误选） */
   const composingRef = useRef(false)
-  const [showMorePresets, setShowMorePresets] = useState(false)
   const [attach, setAttach] = useState<PendingAttachment | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -255,10 +196,7 @@ export default function AiCopilotPage() {
     if (typeof window === 'undefined') return
     const sp = new URLSearchParams(window.location.search)
     const sym = (sp.get('symbol') || '').trim()
-    if (SYMBOL_RE.test(sym)) {
-      setSymbol(sym)
-      setAnchorSymbol(sym)
-    }
+    if (SYMBOL_RE.test(sym)) setAnchorSymbol(sym)
     const q = (sp.get('q') || '').trim()
     if (q) setInput(q)
     // 入口扶正 2026-10-23: ?agent= 预填 @ 参谋 mention chip(只预填不自动发送, 等用户点发送);
@@ -277,34 +215,6 @@ export default function AiCopilotPage() {
       setMentions((m) => (m.some((x) => mentionKey(x) === mentionKey(chip)) ? m : [...m, chip]))
     }
     void sp.get('date')
-  }, [])
-
-  useEffect(() => {
-    let alive = true
-    // 冷启动偶发失败：重试一次再降级，避免用户当场看到残缺指令池
-    const load = (attempt: number) =>
-      getCopilotPresets()
-        .then((rows) => {
-          if (!alive) return
-          if (rows?.length) {
-            setPresets(rows)
-            setPresetFailed(false)
-          } else {
-            setPresetFailed(true)
-          }
-        })
-        .catch(() => {
-          if (!alive) return
-          if (attempt === 0) {
-            window.setTimeout(() => void load(1), 800)
-            return
-          }
-          setPresetFailed(true)
-        })
-    void load(0)
-    return () => {
-      alive = false
-    }
   }, [])
 
   useEffect(() => {
@@ -381,20 +291,20 @@ export default function AiCopilotPage() {
     setMentionHit(null)
   }
 
-  const session = sessionOf()
-  const { primary: primaryPresets, more: morePresets } = orderPresetsForSession(presets, session)
 
+  /** 拉最近会话（左栏对话列表的数据源；抽屉取消后仍需在挂载时拉一次）。 */
   const loadHistory = useCallback(async () => {
-    setHistoryLoading(true)
     try {
       const rows = await chatApi.listConversations(60)
       setConvs((rows || []).map((c) => ({ id: c.id, title: c.title || '未命名对话', created_at: c.created_at })))
     } catch {
       setConvs([])
-    } finally {
-      setHistoryLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    void loadHistory()
+  }, [loadHistory])
 
   const openConversation = useCallback(async (id: number) => {
     try {
@@ -406,11 +316,7 @@ export default function AiCopilotPage() {
           .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       )
       const sym = detail.conversation?.stock_symbol || ''
-      if (sym) {
-        setSymbol(sym)
-        setAnchorSymbol(sym)
-      }
-      setHistoryOpen(false)
+      if (sym) setAnchorSymbol(sym)
       setError(null)
     } catch (e) {
       setError(`打开历史对话失败：${e instanceof Error ? e.message : '未知错误'}`)
@@ -420,14 +326,10 @@ export default function AiCopilotPage() {
   const startNewConversation = useCallback(() => {
     setConvId(null)
     setMsgs([])
-    setHistoryOpen(false)
     setError(null)
   }, [])
 
 
-  useEffect(() => {
-    if (historyOpen) void loadHistory()
-  }, [historyOpen, loadHistory])
 
   /**
    * 后台执行（2026-10-25，P0-0.2 前端）。
@@ -715,107 +617,30 @@ export default function AiCopilotPage() {
     <div className="relative flex h-[calc(100vh-9rem)] gap-3" data-testid="ai-copilot-page">
       {/* 左：战术指令池（按时段分层：今日推荐 3 + 更多） */}
       {/*
-        2026-10-26 去三块化：原来「预设池 + 常驻会话列」是两条竖带，各带一道边框，
-        整页被切成几块。现在合成**一条侧栏 + 两个 tab**（预设 / 对话），
-        主工作台是一整块连续画布 —— 会话列表不再单独占一条。
+        2026-10-26 二次精简（按用户指令）：预设整块去掉，左栏只保留**对话列表**，
+        并给它一个可折叠开关（状态存 localStorage）。页面不再有"预设/对话"两个 tab。
       */}
-      <aside className="hidden w-[248px] shrink-0 flex-col gap-2 lg:flex" data-testid="copilot-left-rail">
-        <div className="flex items-center gap-1 rounded-lg border border-border/50 p-0.5" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={leftTab === 'presets'}
-            data-testid="left-tab-presets"
-            onClick={() => setLeftTab('presets')}
-            className={
-              leftTab === 'presets'
-                ? 'flex-1 rounded-md bg-muted px-2 py-1 text-[11px] text-foreground'
-                : 'flex-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground'
-            }
-          >
-            预设
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={leftTab === 'conversations'}
-            data-testid="left-tab-conversations"
-            onClick={() => setLeftTab('conversations')}
-            className={
-              leftTab === 'conversations'
-                ? 'flex-1 rounded-md bg-muted px-2 py-1 text-[11px] text-foreground'
-                : 'flex-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground'
-            }
-          >
-            对话
-          </button>
-        </div>
-
-        {leftTab === 'presets' ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <span className="text-[12px] font-medium text-muted-foreground">{PRESET_PRIMARY_LABEL}</span>
-            <span className="text-[10px] text-muted-foreground">{SESSION_LABEL[session]}</span>
+      {railOpen ? (
+        <aside
+          className="hidden w-[248px] shrink-0 flex-col lg:flex"
+          data-testid="copilot-conversation-rail"
+        >
+          <div className="flex items-center justify-between px-1 py-1">
+            <span className="text-[12px] font-medium text-foreground">对话</span>
+            <button
+              type="button"
+              onClick={() => {
+                setRailOpen(false)
+                writePref(window.localStorage, RAIL_KEY, '0')
+              }}
+              aria-label="收起对话栏"
+              data-testid="copilot-rail-collapse"
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" />
+            </button>
           </div>
-          <div className="space-y-1.5">
-            {primaryPresets.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => void send(p.prompt)}
-                disabled={streaming}
-                className="w-full rounded-lg border border-role-watch/35 bg-s1 px-2.5 py-2 text-left text-[12px] hover:bg-s2 disabled:opacity-60"
-              >
-                <span className="mr-1">{p.icon}</span>
-                {p.label}
-              </button>
-            ))}
-            {presetFailed ? (
-              <div className="rounded-lg border border-border/50 px-2.5 py-2 text-[11px] text-muted-foreground">
-                {PRESET_FALLBACK_HINT}
-              </div>
-            ) : null}
-          </div>
-  
-          {morePresets.length ? (
-            <div className="space-y-1.5">
-              <button
-                type="button"
-                onClick={() => setShowMorePresets((v) => !v)}
-                data-testid="copilot-preset-more"
-                className="flex w-full items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-              >
-                <ChevronDown className={`h-3 w-3 transition-transform ${showMorePresets ? 'rotate-180' : ''}`} />
-                {showMorePresets ? PRESET_MORE_COLLAPSE : `${PRESET_MORE_LABEL} ${morePresets.length}`}
-              </button>
-              {showMorePresets
-                ? morePresets.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => void send(p.prompt)}
-                      disabled={streaming}
-                      className="w-full rounded-lg border border-border/60 bg-s1 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-s2 hover:text-foreground disabled:opacity-60"
-                    >
-                      <span className="mr-1">{p.icon}</span>
-                      {p.label}
-                      {p.group ? (
-                        <span className="ml-1 text-[10px] text-muted-foreground">
-                          {PRESET_GROUP_LABEL[p.group] || ''}
-                        </span>
-                      ) : null}
-                    </button>
-                  ))
-                : null}
-            </div>
-          ) : null}
-  
-          {/* 左栏统计已移除(2026-10-26): 与顶部 UsageBar 的 tokens/调用/配额重复, 且挤在预设列底部 */}
-
-  
-          </div>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto" data-testid="left-conversation-list">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <ConversationSidebar
               conversations={convMgr.conversations.length ? convMgr.conversations : convs}
               activeId={convId}
@@ -831,38 +656,13 @@ export default function AiCopilotPage() {
               onDelete={(id) => void convMgr.remove(id)}
             />
           </div>
-        )}
-      </aside>
+        </aside>
+      ) : null}
 
         {/* 常驻会话列已撤除(2026-10-26): 会话列表并入左侧栏的「对话」tab, 页面不再被切成多条竖带 */}
 
-        {historyOpen ? (
-          <div
-            className="absolute inset-y-0 left-72 z-20 w-72 overflow-y-auto border-r border-border/40 bg-s1/95 backdrop-blur"
-            data-testid="copilot-history-drawer"
-          >
-            <div className="flex items-center justify-between py-2 pl-3 pr-1">
-              <span className="text-[12px] font-medium">对话</span>
-              <button type="button" aria-label="关闭" onClick={() => setHistoryOpen(false)}>
-                <X className="h-3.5 w-3.5 text-muted-foreground" />
-              </button>
-            </div>
-            <ConversationSidebar
-              conversations={convMgr.conversations.length ? convMgr.conversations : convs}
-              activeId={convId}
-              query={convQuery}
-              onQueryChange={(q) => {
-                setConvQuery(q)
-                void convMgr.list(q)
-              }}
-              onSelect={(id) => void openConversation(id)}
-              onCreate={startNewConversation}
-              onRename={(id, title) => void convMgr.rename(id, title)}
-              onPin={(id, pinned) => void convMgr.pin(id, pinned)}
-              onDelete={(id) => void convMgr.remove(id)}
-            />
-          </div>
-        ) : null}
+        {/* 历史抽屉已移除(2026-10-26): 与左栏对话列表重复 */}
+
 
       {/* 右：交互工作台 */}
       <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-border/60 bg-s1">
@@ -879,22 +679,28 @@ export default function AiCopilotPage() {
             ))}
           </div>
         ) : null}
-        <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border/40 px-3 py-1.5">
+          {!railOpen ? (
+            <button
+              type="button"
+              onClick={() => {
+                setRailOpen(true)
+                writePref(window.localStorage, RAIL_KEY, '1')
+              }}
+              aria-label="展开对话栏"
+              data-testid="copilot-rail-expand"
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <PanelLeftOpen className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           <Sparkles className="h-3.5 w-3.5 text-role-watch" />
-          <span className="text-[16px] font-medium">{COPILOT_PAGE_TITLE}</span>
-          <span className="hidden text-[11px] text-muted-foreground md:inline">
+          {/* 页面名已在顶部页签与左侧菜单出现两次，工具条里不再重复第三次；
+              这里只留"这页能问什么"的一句话，作为功能锚点 */}
+          <span className="hidden max-w-[280px] truncate text-[11px] text-muted-foreground md:inline">
             {COPILOT_PAGE_SUBTITLE}
           </span>
-          <button
-            type="button"
-            className="ml-2 flex items-center gap-1 rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-            onClick={() => setHistoryOpen((v) => !v)}
-            data-testid="copilot-history-toggle"
-          >
-            {historyLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
-            历史
-            {convs.length > 0 ? <span className="font-mono text-[10px]">{convs.length}</span> : null}
-          </button>
+
           {convId !== null ? (
             <button
               type="button"
@@ -913,10 +719,10 @@ export default function AiCopilotPage() {
               key={tab}
               type="button"
               data-testid={`copilot-panel-${tab}`}
-              className={`rounded-md border px-2 py-0.5 text-[11px] transition ${
+              className={`h-7 rounded-md px-2 text-[12px] transition ${
                 panelTab === tab
-                  ? 'border-role-watch/60 text-role-watch'
-                  : 'border-border/60 text-muted-foreground hover:text-foreground'
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               }`}
               onClick={() => setPanelTab((v) => (v === tab ? null : tab))}
             >
@@ -924,7 +730,7 @@ export default function AiCopilotPage() {
             </button>
           ))}
           <details className="relative" data-testid="copilot-more-panels">
-            <summary className="cursor-pointer list-none rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground">
+            <summary className="h-7 cursor-pointer list-none rounded-md px-2 text-[12px] leading-7 text-muted-foreground hover:bg-muted hover:text-foreground">
               更多
             </summary>
             <div className="absolute left-0 top-full z-30 mt-1 flex w-[120px] flex-col gap-0.5 rounded-lg border border-border bg-card p-1">
@@ -947,7 +753,7 @@ export default function AiCopilotPage() {
           </details>
           <a
             href="/copilot-governance"
-            className="rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            className="h-7 rounded-md px-2 text-[12px] leading-7 text-muted-foreground hover:bg-muted hover:text-foreground"
             data-testid="copilot-governance-link"
           >
             治理
@@ -965,30 +771,8 @@ export default function AiCopilotPage() {
             {anchorSymbol ? <PersonaBadge symbol={anchorSymbol} /> : null}
             <ModelPicker className="hidden md:block" />
           </div>
-          <form
-            className="ml-1 flex items-center gap-1"
-            onSubmit={(e) => {
-              e.preventDefault()
-              const code = symbol.trim()
-              const ok = SYMBOL_RE.test(code)
-              setBriefSymbol(ok ? code : '')
-              if (ok) setAnchorSymbol(code)
-            }}
-          >
-            <input
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-              placeholder="输入代码看参谋卡"
-              aria-label="输入股票代码查看参谋卡"
-              className="h-6 w-[132px] rounded border border-border/60 bg-s0 px-1.5 font-mono text-[11px] outline-none focus:border-role-watch/60"
-            />
-            <button
-              type="submit"
-              className="h-6 rounded border border-border/50 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
-            >
-              看卡
-            </button>
-          </form>
+          {/* 代码输入 + 看卡已移除(2026-10-26): 用户指出与主输入框重复, 且挤占工具条 */}
+
         </div>
 
         {anchorSymbol ? (
@@ -1003,7 +787,6 @@ export default function AiCopilotPage() {
               onClick={() => {
                 setBriefSymbol('')
                 setAnchorSymbol('')
-                setSymbol('')
               }}
               className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
@@ -1067,9 +850,11 @@ export default function AiCopilotPage() {
           ) : null}
 
           {!msgs.length ? (
-            <div className="flex min-h-[300px] flex-1 flex-col items-center justify-center space-y-3 text-center">
+            <div className="flex min-h-[300px] flex-1 flex-col items-center justify-center gap-3 text-center">
               <div className="text-[12px] text-muted-foreground">{PAGE_EMPTY_HINT}</div>
-              <div className="flex flex-col items-start gap-1.5">
+              {/* w-full + items-stretch: 之前是 items-start, 按钮 w-full 在居中容器里宽度塌成 0,
+                  结果只剩右侧 › 可见(视觉复核发现的"空描边横条") */}
+              <div className="flex w-full max-w-[420px] flex-col items-stretch gap-1.5">
                 {PAGE_EMPTY_EXAMPLES.map((x) => (
                   <button
                     key={x}
@@ -1202,21 +987,7 @@ export default function AiCopilotPage() {
         </div>
 
         <div className="border-t border-border/40 p-2">
-          {/* 移动端入口（<lg 左栏整块隐藏，这里补一条横向指令条） */}
-          <div className="scrollbar mb-1.5 flex gap-1.5 overflow-x-auto lg:hidden">
-            {primaryPresets.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => void send(p.prompt)}
-                disabled={streaming}
-                data-testid="copilot-mobile-chip"
-                className="shrink-0 rounded-full border border-role-watch/35 px-2 py-0.5 text-[11px] text-role-watch disabled:opacity-50"
-              >
-                {p.icon} {p.label}
-              </button>
-            ))}
-          </div>
+          {/* 预设入口已整体移除(2026-10-26): 用户裁定不需要, 空态示例已承担引导 */}
 
           {/* 待发送附件预览（图片显示缩略图，其它显示文件名） */}
           {attach ? (

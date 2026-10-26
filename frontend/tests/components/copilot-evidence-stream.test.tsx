@@ -92,7 +92,7 @@ describe('证据齐套度条接线', () => {
     })
 
     render(<AiCopilotPage />)
-    await screen.findByText('全景数智深度诊断')
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
 
     fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '600111 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
@@ -128,7 +128,7 @@ describe('证据齐套度条接线', () => {
     })
 
     render(<AiCopilotPage />)
-    await screen.findByText('全景数智深度诊断')
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
     fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '看看' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
@@ -145,7 +145,7 @@ describe('回答内价格锚定接线', () => {
     })
 
     render(<AiCopilotPage />)
-    await screen.findByText('全景数智深度诊断')
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
     fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '600111 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 

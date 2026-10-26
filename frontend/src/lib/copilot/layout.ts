@@ -12,7 +12,23 @@ export const CONV_DEFAULT = 256
 export const STORAGE_KEYS = {
   convWidth: 'sida.copilot.convWidth',
   panelOpen: 'sida.copilot.panelOpen',
+  railOpen: 'sida.copilot.railOpen',
 } as const
+
+/** 左栏（对话列表）折叠状态键：'0' = 收起，缺省 = 展开。 */
+export const RAIL_KEY = STORAGE_KEYS.railOpen
+
+/** 读布尔偏好（缺省 true）：只有明确 '0'/'false'/'off' 才算关。 */
+export function readBoolPref(
+  storage: Pick<Storage, 'getItem'> | null | undefined,
+  key: string,
+): boolean {
+  try {
+    return parseBoolPref(storage?.getItem(key))
+  } catch {
+    return true
+  }
+}
 
 /** 宽度夹紧：非数/NaN 回默认值，绝不把布局拖成 0 或负数。 */
 export function clampConvWidth(raw: unknown): number {
