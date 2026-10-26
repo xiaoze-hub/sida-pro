@@ -65,7 +65,8 @@ describe('GovernanceStrip', () => {
     expect(screen.getByText('3 / 11')).toBeTruthy()
     expect(screen.getByText('11 个工具')).toBeTruthy()
     expect(screen.getByText('4')).toBeTruthy()
-    expect(screen.getByText(/只读展示，不参与拦截/)).toBeTruthy()
+    // 文案已改为「拦截记录可查」（治理条只展示, 拦截由后端执行）
+    expect(screen.getByText(/拦截记录可查/)).toBeTruthy()
   })
 
   it('没有 run_id 时不渲染也不请求', () => {

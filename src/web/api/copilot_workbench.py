@@ -424,4 +424,74 @@ def get_run_governance(
             "max_tool_calls": int(max_calls) if isinstance(max_calls, int) else None,
             "recipe_tools_declared": len(tools),
         },
+        # 事中拦截是**真发生了**才记：这里只回查审计里属于本 run 的记录，
+        # 没被拦过就是空列表（不是"没拦"的能力声明）
+        "interceptions": _interceptions_for_run(db, run_id, str(getattr(user, "id", ""))),
     }
+
+
+def _interceptions_for_run(db: Session, run_id: str, user_id: str) -> list[dict]:
+    """从审计里捞本 run 的拦截记录（预算超限 / 并发超限）。
+
+    审计 detail 是 `run=<id> used=.. limit=..` 这种半结构化文本，按 `run=<id>` 前缀匹配。
+    只查本人：审计表按 user_id 过滤，避免看到别人的拦截。
+    """
+    from src.db.models import AuditLog
+
+    try:
+        rows = (
+            db.query(AuditLog)
+            .filter(AuditLog.user_id == user_id)
+            .filter(AuditLog.action.like("copilot_%"))
+            .filter(AuditLog.detail.like(f"%run={run_id}%"))
+            .order_by(AuditLog.id.desc())
+            .limit(10)
+            .all()
+        )
+    except Exception:  # noqa: BLE001 —— 审计查不出来不能把治理看板打死
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        logger.debug("查询拦截审计失败: run=%s", run_id, exc_info=True)
+        return []
+    return [
+        {
+            "action": r.action,
+            "detail": r.detail or "",
+            "created_at": str(getattr(r, "created_at", "") or ""),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/governance/interceptions")
+def list_interceptions(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """本人最近的**事中拦截**记录（预算超限 / 并发超限）。
+
+    只回查已发生的事实：没有记录 = 没被拦过，不代表"不会拦"。
+    """
+    from src.db.models import AuditLog
+
+    n = max(1, min(100, int(limit)))
+    uid = str(getattr(user, "id", "") or "")
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.user_id == uid)
+        .filter(AuditLog.action.like("copilot_%"))
+        .order_by(AuditLog.id.desc())
+        .limit(n)
+        .all()
+    )
+    items = [
+        {
+            "action": r.action,
+            "detail": r.detail or "",
+            "created_at": str(getattr(r, "created_at", "") or ""),
+        }
+        for r in rows
+    ]
+    return {"count": len(items), "items": items}

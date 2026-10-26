@@ -22,6 +22,8 @@ export interface RunGovernance {
   whitelist: { count: number; tools: string[] }
   frozen_ring: { guards: string[]; note: string }
   limits: { max_tool_calls: number | null; recipe_tools_declared: number }
+  /** 本 run 真被拦过才有记录（预算/并发）；空 = 没被拦过，不是"不会拦" */
+  interceptions?: { action: string; detail: string; created_at: string }[]
 }
 
 export const getRunGovernance = (runId: string, signal?: AbortSignal) =>
@@ -87,7 +89,15 @@ export function GovernanceStrip({ runId }: { runId: string | null }) {
           <span title={data?.frozen_ring.note ?? ''}>
             Frozen Ring <span className="tabular-nums text-foreground">{data ? data.frozen_ring.guards.length : '--'}</span> 条
           </span>
-          <span>只读展示，不参与拦截</span>
+          {data && (data.interceptions?.length ?? 0) > 0 ? (
+            <span
+              className="text-stock-down"
+              title={(data.interceptions ?? []).map((i) => i.detail).join('\n')}
+            >
+              被拦截 {data.interceptions?.length} 次
+            </span>
+          ) : null}
+          <span>拦截记录可查</span>
         </>
       )}
     </div>

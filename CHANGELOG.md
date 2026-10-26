@@ -1,3 +1,27 @@
+## release: v0.76.0（事中拦截可查：治理页 + 运行级拦截标记）
+
+### 背景核实：拦截本来就在真拦
+`copilot_jobs._budget_watch` 早已在**执行体外层** cancel 整轮（不是工具层软拒绝）、
+并写审计 `copilot_tool_budget_exceeded` / `copilot_concurrency_exceeded`。缺的是**查不到**。
+本轮只补可见性，不改拦截逻辑。
+
+### 新增
+- `GET /copilot/runs/{id}/governance` 增 `interceptions`：这一轮自己有没有被拦过、
+  拦的什么、`used=12 limit=11` 原始事实。
+- `GET /copilot/governance/interceptions`：本人最近拦截记录（预算/并发），只查本人。
+- 运行面板治理条：被拦过的 run 直接标红「被拦截 N 次」，hover 给 detail 原文。
+- 新页 `/copilot/governance`：类型 / 事实 / 时间 / 证据页跳转；空态明写
+  「没被拦过，不代表不会拦」——不用空表格暗示"系统不会拦"。
+
+### 口径
+- 拦截记录是**已发生事实**：空列表 ≠ 不会拦；
+- `run=` 前缀从 detail 里拆出来做证据页链接，认不出的片段原样保留，不猜。
+
+### 验证
+- 后端：`test_copilot_interceptions`(4) 新增，连同治理/并行/模型/工具目录/MCP 共 36 例全绿；
+  静态门禁 `check_scoped_queries` / `check_is_pg_scope` OK。
+- 前端：tsc 0 / eslint 0 / ui-rules OK / **234 files · 1802 tests 全绿**（+1 文件 +6 例）。
+
 ## release: v0.75.0（工作台化第三批：三栏驾驶舱 / 治理条 / 定时简报核实）
 
 ### 三栏驾驶舱

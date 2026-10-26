@@ -74,6 +74,7 @@ const enUS: Messages = {
     copilotTools: 'Tools',
     copilotProposals: 'Proposals',
     copilotParallel: 'Parallel',
+    copilotGovernance: 'Governance',
     darkFundTop: 'Dark Flow TOP',
     caliberCompare: 'Caliber Compare',
     decisionLedger: 'Decision Ledger',

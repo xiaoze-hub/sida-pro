@@ -80,6 +80,7 @@ export const ROUTE_LABEL_KEYS: Record<string, string> = {
   '/copilot/tools': 'nav.copilotTools',
   '/copilot/proposals': 'nav.copilotProposals',
   '/copilot/parallel': 'nav.copilotParallel',
+  '/copilot/governance': 'nav.copilotGovernance',
   '/dark-fund-top': 'nav.darkFundTop',
   '/war-report': 'nav.warReport',
   '/replay-tree': 'nav.replayTree',
