@@ -126,18 +126,17 @@ export function CapabilityPill({ collapsed = false }: { collapsed?: boolean }) {
   if (!data?.summary) return null
   const s = data.summary
   const bad = s.unavailable + s.degraded
-  if (!bad && collapsed) return null
   return (
     <button
       type="button"
       onClick={() => navigate('/system?tab=datasources')}
       title={capabilitySummary(s) + ' —— 点击查看数据能力矩阵'}
-      className="mx-2 mb-1 flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] hover:bg-s2"
+      aria-label={capabilitySummary(s) + '，查看数据能力矩阵'}
+      data-testid="sidebar-capability"
+      className={`mb-1 flex shrink-0 items-center rounded text-[12px] hover:bg-s2 ${collapsed ? 'mx-auto h-8 w-8 justify-center' : 'mx-2 min-h-8 gap-1.5 px-1.5 py-1 text-left'}`}
     >
-      <span className={`h-2 w-2 shrink-0 rounded-full ${bad ? STATUS_DOT.degraded : STATUS_DOT.ok}`} />
-      <span className="min-w-0 truncate text-muted-foreground" title={collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}>
-        {collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}
-      </span>
+      <span className={`h-2 w-2 shrink-0 rounded-full ${bad ? STATUS_DOT.degraded : s.unknown ? STATUS_DOT.unknown : STATUS_DOT.ok}`} />
+      {!collapsed && <span className="min-w-0 truncate text-muted-foreground">{capabilitySummary(s)}</span>}
     </button>
   )
 }

@@ -58,7 +58,7 @@ function timeAgo(iso: string): string {
 }
 
 /** 顶栏消息中心：未读红点 + 下拉列表。后台任务完成/失败在这里落地。 */
-export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
+export function NotificationBell({ size = 'md', placement = 'header' }: { size?: 'sm' | 'md'; placement?: 'header' | 'sidebar' }) {
   const nav = useNavigate()
   const [open, setOpen] = useState(false)
   const [unread, setUnread] = useState(0)
@@ -151,7 +151,7 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)] z-[80] overflow-hidden">
+        <div className={`absolute w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)] z-[80] overflow-hidden ${placement === 'sidebar' ? 'bottom-0 left-full ml-3' : 'right-0 mt-2'}`} data-testid="notification-popover">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
             <span className="text-[14px] font-semibold text-foreground">
               消息中心 {unread > 0 && <span className="text-rose-500">({unread} 未读)</span>}

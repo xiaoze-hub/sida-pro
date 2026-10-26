@@ -527,8 +527,8 @@ function App() {
       {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}
       <aside data-shell-aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
         {/* Logo + 折叠按钮 */}
-        <div className="flex items-center gap-2 h-14 px-3 border-b border-border shrink-0">
-          <NavLink to="/" className="flex items-center gap-2.5 min-w-0 flex-1">
+        <div className={`flex items-center gap-2 h-14 border-b border-border shrink-0 ${sidebarCollapsed ? 'justify-center px-0' : 'px-3'}`}>
+          <NavLink to="/" className={`${sidebarCollapsed ? 'hidden' : 'flex'} items-center gap-2.5 min-w-0 flex-1`}>
             <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center shadow-sm shrink-0">
               <BrandMark className="w-4 h-4 text-primary-foreground" />
             </div>
@@ -630,7 +630,7 @@ function App() {
 
         {/* 底部: GitHub + 日志 + 通知 + 头像 */}
         <div className={`border-t border-border p-2 shrink-0 flex ${sidebarCollapsed ? 'flex-col items-center gap-1' : 'flex-row items-center justify-between'}`}>
-          <div className="flex items-center gap-0.5">
+          <div data-sidebar-tools className={`flex items-center ${sidebarCollapsed ? 'flex-col gap-1' : 'gap-0.5'}`}>
             <button type="button" onClick={toggleTheme} className="ui-icon-button" aria-label={theme === 'dark' ? '切换浅色模式' : '切换深色模式'} title={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}>
               {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
@@ -648,14 +648,14 @@ function App() {
             >
               <ScrollText className="w-4 h-4" />
             </button>
-            <NotificationBell size="sm" />
+            <NotificationBell size="sm" placement="sidebar" />
           </div>
           <AccountMenu
             navItems={[]}
             mode={mode}
             onSetMode={setMode}
             onOpenSelfCheck={() => navigate('/system/status')}
-            placement="up"
+            placement={sidebarCollapsed ? 'right' : 'up'}
           />
         </div>
       </aside>
