@@ -35,7 +35,6 @@ import { ToolTimeline } from '@/components/copilot/ToolTimeline'
 import { MemoryPanel } from '@/components/copilot/MemoryPanel'
 import { SchedulePanel } from '@/components/copilot/SchedulePanel'
 import { ProposalPanel } from '@/components/copilot/ProposalPanel'
-import { UsageBar } from '@/components/copilot/UsageBar'
 import { PersonaBadge } from '@/components/copilot/PersonaBadge'
 import { ModelPicker } from '@/components/copilot/ModelPicker'
 import { LiveRunPanel } from '@/components/copilot/LiveRunPanel'
@@ -59,7 +58,6 @@ import {
   ATTACH_TOO_LARGE,
   CONTEXT_ANCHOR_CLEAR,
   CONTEXT_ANCHOR_PREFIX,
-  COPILOT_PAGE_SUBTITLE,
   PAGE_EMPTY_EXAMPLES,
   PAGE_EMPTY_HINT,
   SEND,
@@ -695,11 +693,8 @@ export default function AiCopilotPage() {
             </button>
           ) : null}
           <Sparkles className="h-3.5 w-3.5 text-role-watch" />
-          {/* 页面名已在顶部页签与左侧菜单出现两次，工具条里不再重复第三次；
-              这里只留"这页能问什么"的一句话，作为功能锚点 */}
-          <span className="hidden max-w-[280px] truncate text-[11px] text-muted-foreground md:inline">
-            {COPILOT_PAGE_SUBTITLE}
-          </span>
+          {/* 2026-10-26: 原来这里还有一句"筹码·共振·价量·盘口·竞价·妖股因子"，
+              与输入框 placeholder 逐字重复 → 删除（页面名同样不再重复第三次） */}
 
           {convId !== null ? (
             <button
@@ -760,13 +755,9 @@ export default function AiCopilotPage() {
           </a>
           <div className="ml-auto flex items-center gap-2">
             {metrics ? (
-              <UsageBar
-                tokens={null}
-                cost={null}
-                calls={metrics.runs}
-                label={`近 ${metrics.days} 天`}
-                className="hidden xl:flex"
-              />
+              <span className="hidden text-[11px] text-muted-foreground xl:inline">
+                近 {metrics.days} 天 <span className="tabular-nums text-foreground">{metrics.runs}</span> 次
+              </span>
             ) : null}
             {anchorSymbol ? <PersonaBadge symbol={anchorSymbol} /> : null}
             <ModelPicker className="hidden md:block" />
