@@ -123,32 +123,16 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install system libs for WeasyPrint (PDF export tests)
-        # 2026-09-18: 缺这一步 ⇒ PDF 用例在 CI 渲染出乱码二进制而红(`test_pdf_export` 断言正文文本)
-        # 2026-10-26 加固: ① 已装就跳过(runner 镜像常自带 libpango/libcairo)；
-        #   ② apt 加超时与重试 —— 实测 apt 源抖动时这一步能吃 19 分钟，
-        #      以前没有超时，就把整条发版链拖成"越来越慢"。
-        run: |
-          # 三个条件都要满足才能跳过：pango + cairo + **中文字体**。
-          # 只查前两个是我第一版的错：runner 自带 pango/cairo 但没装 fonts-noto-cjk，
-          # 跳过安装后 PDF 里的中文渲染成乱码，`test_pdf_export` 两条用例直接红。
-          if ldconfig -p | grep -q 'libpango-1.0' \
-             && ldconfig -p | grep -q 'libcairo' \
-             && fc-list 2>/dev/null | grep -qi 'CJK'; then
-            echo "系统库 + 中文字体已在镜像内，跳过 apt"
-            exit 0
-          fi
-          # 2026-10-26 二次修正: 上一版把硬超时设成 420s, 而这台 runner 实测装完要 ~1131s
-          # (apt 走 IPv6 卡住), 结果"慢"被我自己变成了"红"(exit 124)。
-          # 现在: 强制 IPv4 + 放宽到 1500s + 打印进度, 让慢可见而不是无声挂死。
-          sudo apt-get -o Acquire::ForceIPv4=true \
-                       -o Acquire::http::Timeout=60 \
-                       -o Acquire::https::Timeout=60 \
-                       -o Acquire::Retries=3 \
-                       update -qq || true
-          timeout 1500 sudo apt-get install -y -qq -o Acquire::ForceIPv4=true \
-            -o Dpkg::Use-Pty=0 \
-            libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
-            libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
+        # 2026-10-26 三次迭代后的最终方案：
+        #  ① 原来裸 apt-get：实测单次装 ~1131s（apt 走 IPv6 卡住），是发版"越来越慢"的主因；
+        #  ② 我先加 420s 硬超时 → 把"慢"变成"红"(exit 124)，错；
+        #  ③ 现在改用 cache-apt-pkgs-action：.deb 走 Actions 缓存，
+        #     首次仍是慢的（不可避免），之后**命中缓存秒级恢复**，且不依赖外网 apt 源。
+        # 顺带解决字体问题：缓存键包含包清单，缺 fonts-noto-cjk 时自动重装。
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9  # v1.6.3
+        with:
+          packages: libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
+          version: 1.0
       - name: Install backend deps (requirements-lock.txt)
         run: |
           set -o pipefail
