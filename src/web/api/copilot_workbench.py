@@ -167,3 +167,185 @@ def set_copilot_model(
         raise HTTPException(status_code=500, detail="保存模型选择失败") from exc
 
     return {"ok": True, "current": _current_selection(db, user)}
+
+
+# ──────────────── 并行诊断（多子 run） ────────────────
+# 一个提问 → N 个子 run，每个子 run 一条轨迹（G1 可回放），预算各自独立。
+#
+# ⚠️ 为什么不是"勾选配方": 配方路由在 chat.py 内自动完成（route_for_request 只收工具白名单，
+# 不收配方 id），要强制指定就得改 chat.py（2310 行护栏挡住）。所以这里**不假装**能选配方：
+# 用户给 N 个子问题，每个子 run 自动路由，面板如实显示各自**实际命中**了哪个配方。
+
+
+class ParallelItem(BaseModel):
+    question: str
+
+
+class ParallelBody(BaseModel):
+    items: list[ParallelItem]
+    budget: int | None = None
+
+
+# 单次最多 4 个子任务：串行执行（delegate_many 是串行，避免上游 429），
+# 再多就是让用户干等 —— 上限卡在这里比事后解释便宜。
+MAX_PARALLEL_ITEMS = 4
+
+
+def _child_executor(user_id: str):
+    """把异步执行体包成 delegate() 要的同步 executor（在独立线程里跑）。"""
+
+    def _run(*, run_id: str, recipe_id: str, question: str, budget: int | None) -> dict:
+        import asyncio
+        import time
+
+        from src.db.models import CopilotRun
+        from src.db.session import SessionLocal
+        from src.web.api import copilot_jobs
+
+        t0 = time.time()
+        asyncio.run(
+            copilot_jobs.run_copilot_question(
+                user_id=user_id, conversation_id=None, question=question, run_id=run_id
+            )
+        )
+        elapsed = int((time.time() - t0) * 1000)
+        # tool_calls 以轨迹行里的实际计数为准（不猜）
+        db = SessionLocal()
+        try:
+            row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+            return {"tool_calls": int(getattr(row, "tool_calls", 0) or 0), "elapsed_ms": elapsed}
+        finally:
+            db.close()
+
+    return _run
+
+
+@router.post("/parallel")
+async def submit_parallel(
+    body: ParallelBody,
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """提交并行诊断：立即返回 parent run_id，子 run 在后台串行执行。"""
+    import asyncio
+    import uuid
+
+    from src.core import copilot_quota as quota
+    from src.core.delegate import delegate_many
+    from src.db.models import CopilotRun
+    from src.db.session import SessionLocal
+
+    items = [i.question.strip() for i in (body.items or []) if i.question and i.question.strip()]
+    if not items:
+        raise HTTPException(status_code=400, detail="至少要一个子问题")
+    if len(items) > MAX_PARALLEL_ITEMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"最多 {MAX_PARALLEL_ITEMS} 个子问题（当前 {len(items)} 个）",
+        )
+
+    uid = getattr(user, "id", None)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    parent_id = str(uuid.uuid4())
+    db = SessionLocal()
+    try:
+        quota.enforce_run_concurrency(db, user)  # 复用既有并发上限，超限 429
+        db.add(
+            CopilotRun(
+                run_id=parent_id,
+                conversation_id=None,
+                user_id=str(uid),
+                recipe="parallel",
+                question=f"并行诊断 · {len(items)} 个子任务",
+                status="queued",
+                tool_calls=0,
+            )
+        )
+        db.commit()
+    except HTTPException:
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        raise
+    except Exception as exc:  # noqa: BLE001
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        logger.warning("创建并行诊断父 run 失败: %s", exc)
+        raise HTTPException(status_code=500, detail="创建任务失败") from exc
+    finally:
+        db.close()
+
+    def _work() -> None:
+        """后台线程：建 N 个子 run → 串行执行 → 汇总。"""
+        from src.db.session import SessionLocal as SL
+
+        wdb = SL()
+        try:
+            _mark_parent(parent_id, status="running")
+            delegate_many(
+                wdb,
+                parent_run_id=parent_id,
+                user_id=str(uid),
+                tasks=[("", q) for q in items],  # 配方留空 = 由路由决定（不假装能指定）
+                executor=_child_executor(str(uid)),
+                budget=body.budget,
+            )
+            _mark_parent(parent_id, status="ok")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("并行诊断执行失败 parent=%s: %s", parent_id, exc)
+            _mark_parent(parent_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:400])
+        finally:
+            wdb.close()
+
+    asyncio.get_running_loop().run_in_executor(None, _work)
+    return {"run_id": parent_id, "status": "queued", "count": len(items)}
+
+
+def _mark_parent(run_id: str, *, status: str, error: str | None = None) -> None:
+    from datetime import datetime
+
+    from src.db.models import CopilotRun
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+        if row is None:
+            return
+        row.status = status
+        row.error = error
+        if status in ("ok", "failed"):
+            row.finished_at = datetime.utcnow()
+        db.commit()
+    except Exception:  # noqa: BLE001
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+    finally:
+        db.close()
+
+
+@router.get("/parallel/{run_id}")
+def get_parallel(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """并行诊断进度：父状态 + 每个子 run 的事实 + 缺口汇总。"""
+    from src.core.delegate import aggregate
+    from src.db.models import CopilotRun
+
+    row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+    if row is None or (row.user_id and str(row.user_id) != str(getattr(user, "id", ""))):
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    agg = aggregate(db, run_id)
+    return {
+        "run_id": run_id,
+        "status": row.status,
+        "error": row.error,
+        "created_at": str(row.created_at or ""),
+        "summary": agg,
+    }

@@ -79,6 +79,7 @@ export const ROUTE_LABEL_KEYS: Record<string, string> = {
   // 2026-10-25: 工具目录（插件面板）/ 能力提案审核台
   '/copilot/tools': 'nav.copilotTools',
   '/copilot/proposals': 'nav.copilotProposals',
+  '/copilot/parallel': 'nav.copilotParallel',
   '/dark-fund-top': 'nav.darkFundTop',
   '/war-report': 'nav.warReport',
   '/replay-tree': 'nav.replayTree',

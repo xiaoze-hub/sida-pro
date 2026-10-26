@@ -40,6 +40,7 @@ import { ProposalPanel } from '@/components/copilot/ProposalPanel'
 import { UsageBar } from '@/components/copilot/UsageBar'
 import { PersonaBadge } from '@/components/copilot/PersonaBadge'
 import { ModelPicker } from '@/components/copilot/ModelPicker'
+import { LiveRunPanel } from '@/components/copilot/LiveRunPanel'
 import { useConversations } from '@/hooks/useConversations'
 import { useCopilotRuns } from '@/hooks/useCopilotRuns'
 import {
@@ -195,6 +196,8 @@ export default function AiCopilotPage() {
     symbol?: string
   } | null>(null)
   const [streaming, setStreaming] = useState(false)
+  // 2026-10-25: 正在跟踪的后台 run（实时面板用 SSE 订阅它的工具流）
+  const [liveRunId, setLiveRunId] = useState<string | null>(null)
   // 2026-10-25: 后台执行开关(长问题用: 提交即返回, 可离开页面)
   const [bgMode, setBgMode] = useState(false)
   const [convId, setConvId] = useState<number | null>(null)
@@ -448,6 +451,7 @@ export default function AiCopilotPage() {
 
       try {
         const submitted = await submitCopilotRun(question, convId)
+        setLiveRunId(submitted.run_id)
         const deadline = Date.now() + 10 * 60 * 1000
         let last = null as Awaited<ReturnType<typeof getCopilotRunStatus>> | null
         while (Date.now() < deadline) {
@@ -944,6 +948,8 @@ export default function AiCopilotPage() {
           }}
           className="scrollbar flex-1 space-y-3 overflow-y-auto px-3 py-3"
         >
+          {/* 实时运行面板(2026-10-25): 后台任务一提交就在这里显示工具流, 不再只有一行状态文案 */}
+          <LiveRunPanel runId={liveRunId} />
           {briefSymbol ? (
             <CopilotBriefCard symbol={briefSymbol} market="CN" />
           ) : null}

@@ -1,3 +1,32 @@
+## release: v0.74.0（工作台化第二批：实时运行面板 / 并行诊断 / MCP 出口）
+
+### P0-3 实时运行面板（把已有的 SSE 真正接上）
+后端 `GET /copilot/runs/{id}/events` **存在很久了，前端一次都没调用过**——后台任务只有一行
+状态文案，工具调用要等跑完才出现。新增 `LiveRunPanel`：
+- EventSource（cookie 认证，不把 token 拼进 URL）订阅状态迁移 + 步骤逐步到达；
+- 终态自动关闭并给"证据页"入口；**断流显式标"已断开"**，不用"执行中"掩盖；
+- 缺耗时/工具数显示 `--`，不补 0。
+- 单测抓到一个真 bug：`done` 事件原先不合并状态，面板会停在「执行中」——已修。
+
+### P1-7 并行诊断（多子 run）
+- 新增 `POST /copilot/parallel`（新模块 `copilot_workbench.py`）+ `GET /copilot/parallel/{id}`：
+  一次 2~4 个子问题 → 每子 run 独立轨迹、独立预算、失败不重跑 → 汇总只报事实与缺口。
+- 新页 `/copilot/parallel`：按子任务分列（子问题 / **实际命中配方** / 状态 / 工具数 / 耗时）+ 缺口单列。
+- ⚠️ **不能勾选配方**：配方路由在 `chat.py` 里自动完成（`route_for_request` 只收工具白名单），
+  强制指定要改 chat.py（2310 行护栏）。所以页面展示的是**实际命中**而非"我指定的"——不做假控制。
+
+### P2-8 MCP server 出口
+- 新增 `scripts/sida_mcp_server.py`（stdio JSON-RPC）：让 Claude Code / Codex 原生调用 SIDA 数据能力，
+  不再只能 `curl | bash` 装 skill。
+- 只是**协议适配层**：数据仍走既有 `/api/skills/catalog` + `/api/skills/{name}/run`（API Key / 配额 / 口径标注全部复用）。
+- **只读边界**：交易类名字（trade/order/buy/sell/cancel_…）既不列出也拒绝执行。
+- 端到端实测：生产目录返回 **22 个能力**，initialize 握手正常。
+
+### 验证
+- 后端：`test_copilot_parallel`(6) + `test_mcp_server`(10) + 注册表/迁移/依赖回归 200 例全绿。
+- 前端：tsc 0 / eslint 0 / ui-rules OK / **232 files · 1790 tests 全绿**（+2 文件 +13 例）。
+- `chat.py` 仍未越界：**2309/2310 行**。
+
 ## release: v0.73.1（工作台化第一批：工具目录 / 提案审核台 / 模型选择器）
 
 方案《数智参谋工作台化》对照后开工的第一批。**三路并行子代理全部被 provider 429 打掉**，
