@@ -22,7 +22,7 @@ export function StocksSkeleton() {
       {/* Summary Cards Skeleton */}
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="rounded-lg border border-border/40 p-3">
+          <div key={i} className="rounded-lg border border-border p-3">
             <Skeleton className="mb-2 h-4 w-16" />
             <Skeleton className="h-6 w-24" />
           </div>
@@ -36,7 +36,7 @@ export function StocksSkeleton() {
       <div className="space-y-4">
         {[...Array(2)].map((_, i) => (
           <div key={i}>
-            <div className="border-b border-border/50 px-4 py-3">
+            <div className="border-b border-border px-4 py-3">
               <Skeleton className="h-5 w-32" />
             </div>
             <div className="divide-y divide-border/50">

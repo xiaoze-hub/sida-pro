@@ -57,7 +57,7 @@ export function KeyDialogs() {
               placeholder={configured ? '已配置（输入新 Key 可替换，留空保存不变）' : '未配置，输入接口 Key'}
             />
             {!isChanged && configured && (
-              <span className="absolute right-10 top-1/2 -translate-y-1/2 text-[10px] text-emerald-700 dark:text-emerald-500">已配置</span>
+              <span className="absolute right-10 top-1/2 -translate-y-1/2 text-[12px] text-emerald-700 dark:text-emerald-500">已配置</span>
             )}
             <Button
               type="button" variant="ghost" size="icon"
@@ -91,7 +91,7 @@ export function KeyDialogs() {
         <>
           <DialogHeader>
             <DialogTitle>{setting.description || setting.key}</DialogTitle>
-            <DialogDescription className="font-mono text-[11px]">{setting.key}</DialogDescription>
+            <DialogDescription className="font-mono text-[12px]">{setting.key}</DialogDescription>
           </DialogHeader>
           {setting.key === 'stock_link_platform' ? (
             <Select

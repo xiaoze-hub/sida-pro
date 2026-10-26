@@ -51,11 +51,11 @@ function FieldRow({ label, value, unit }: { label: string; value: number | null;
         ? safeInt(value as number)
         : safeMoney(value as number)
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1 border-b border-border/30 last:border-0">
-      <span className="text-[11px] text-muted-foreground">{label}</span>
-      <span className={`text-[13px] tabular-nums ${unit === '%' || unit === '笔' ? '' : valueColor(value)}`}>
+    <div className="flex items-baseline justify-between gap-3 py-1 border-b border-border last:border-0">
+      <span className="text-[12px] text-muted-foreground">{label}</span>
+      <span className={`text-[14px] tabular-nums ${unit === '%' || unit === '笔' ? '' : valueColor(value)}`}>
         {text}
-        {unit && unit !== '%' && unit !== '笔' && <span className="text-[10px] text-muted-foreground ml-1">{unit}</span>}
+        {unit && unit !== '%' && unit !== '笔' && <span className="text-[12px] text-muted-foreground ml-1">{unit}</span>}
       </span>
     </div>
   )
@@ -67,25 +67,25 @@ const SourceColumn = memo(function SourceColumn({ s }: { s: CaliberSource }) {
   const rawCaliber = s.caliber_type ?? s.caliber_tag?.caliber
   const dirSemantics = s.direction_semantics ?? s.caliber_tag?.direction_semantics ?? s.caliber
   return (
-    <div className="min-w-0 border-l border-border/40 pl-3 first:border-0 first:pl-0">
+    <div className="min-w-0 border-l border-border pl-3 first:border-0 first:pl-0">
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[12px] font-semibold text-foreground truncate" title={s.name}>
           {s.name}
         </span>
         {s.available ? (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500">可用</span>
+          <span className="text-[12px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500">可用</span>
         ) : (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">无数据</span>
+          <span className="text-[12px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">无数据</span>
         )}
       </div>
       {/* 硬性要求: 每列都要可见口径标签 + 能否用于方向判定 */}
       <div className="flex flex-wrap items-center gap-2 mb-1.5">
         <CaliberBadge caliber={caliberOf(rawCaliber)} title={dirSemantics} />
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           {s.directional_allowed ? '可用于方向判定' : '仅资金面参考 · 禁用于主力意图判定'}
         </span>
       </div>
-      <div className="text-[10px] text-muted-foreground leading-relaxed mb-2">{s.caliber}</div>
+      <div className="text-[12px] text-muted-foreground leading-relaxed mb-2">{s.caliber}</div>
 
       {s.available ? (
         <div>
@@ -95,13 +95,13 @@ const SourceColumn = memo(function SourceColumn({ s }: { s: CaliberSource }) {
         </div>
       ) : (
         /* 诚实口径: 无数据就写"无数据 + 原因", 不画 0 / 不画空表 */
-        <div className="text-[11px] text-amber-500/90 py-2 leading-relaxed">
+        <div className="text-[12px] text-amber-500/90 py-2 leading-relaxed">
           无数据{s.note ? ` —— ${s.note}` : ''}
         </div>
       )}
 
       {s.available && s.note && (
-        <div className="text-[10px] text-amber-500/90 mt-2 leading-relaxed flex gap-1">
+        <div className="text-[12px] text-amber-500/90 mt-2 leading-relaxed flex gap-1">
           <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
           <span>{s.note}</span>
         </div>
@@ -131,7 +131,7 @@ const WhyDifferentPanel = memo(function WhyDifferentPanel({ data }: { data: Cali
   const pairDiffs = data.pair_diffs ?? []
   return (
     <div>
-      <h2 className="text-[13px] font-semibold text-foreground mb-2 flex items-center gap-2">
+      <h2 className="text-[14px] font-semibold text-foreground mb-2 flex items-center gap-2">
         <Info className="w-3.5 h-3.5 text-primary" /> 为什么三个数字不一样
       </h2>
       <div className="space-y-2">
@@ -139,8 +139,8 @@ const WhyDifferentPanel = memo(function WhyDifferentPanel({ data }: { data: Cali
         {data.direction_reconcile && (
           <div
             data-testid="direction-reconcile"
-            className={`border-l-2 pl-3 text-[11px] text-muted-foreground ${
-              data.direction_reconcile.agree ? 'border-border/50' : 'border-destructive/60'
+            className={`border-l-2 pl-3 text-[12px] text-muted-foreground ${
+              data.direction_reconcile.agree ? 'border-border' : 'border-destructive/60'
             }`}
           >
             <span className="text-foreground">口径裁决：</span>
@@ -151,11 +151,11 @@ const WhyDifferentPanel = memo(function WhyDifferentPanel({ data }: { data: Cali
         {pairDiffs.length > 0 && (
           <div className="mt-4">
             <div className="mb-1.5 flex flex-wrap items-center gap-2">
-              <span className="text-[13px] font-medium text-foreground">差异归因</span>
+              <span className="text-[14px] font-medium text-foreground">差异归因</span>
               {data.diff_conclusion && (
                 <span
                   data-testid="diff-conclusion"
-                  className={`rounded px-1.5 py-0.5 text-[11px] ${
+                  className={`rounded px-1.5 py-0.5 text-[12px] ${
                     data.diff_conclusion.level === 'alert'
                       ? 'bg-destructive/10 text-destructive'
                       : data.diff_conclusion.level === 'warn'
@@ -174,12 +174,12 @@ const WhyDifferentPanel = memo(function WhyDifferentPanel({ data }: { data: Cali
               )}
             </div>
             {data.diff_conclusion && (
-              <p className="mb-2 text-[11px] text-muted-foreground">{data.diff_conclusion.hint}</p>
+              <p className="mb-2 text-[12px] text-muted-foreground">{data.diff_conclusion.hint}</p>
             )}
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-[11px]">
+              <table className="w-full text-left text-[12px]">
                 <thead>
-                  <tr className="border-b border-border/60 text-muted-foreground">
+                  <tr className="border-b border-border text-muted-foreground">
                     <th className="px-2 py-1 font-medium">对比</th>
                     <th className="px-2 py-1 text-right font-medium">差值</th>
                     <th className="px-2 py-1 text-right font-medium">相对差</th>
@@ -223,9 +223,9 @@ const WhyDifferentPanel = memo(function WhyDifferentPanel({ data }: { data: Cali
         )}
 
         {data.differences.map((d) => (
-          <div key={d.topic} className="border-l-2 border-border/50 pl-3">
+          <div key={d.topic} className="border-l-2 border-border pl-3">
             <div className="text-[12px] text-foreground">{d.topic}</div>
-            <div className="text-[11px] text-muted-foreground leading-relaxed">{d.detail}</div>
+            <div className="text-[12px] text-muted-foreground leading-relaxed">{d.detail}</div>
           </div>
         ))}
       </div>
@@ -281,9 +281,9 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
   const sources = Object.keys(data?.field_by_source ?? {})
 
   return (
-    <div className="mt-6 border-t border-border/40 pt-4">
+    <div className="mt-6 border-t border-border pt-4">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-        <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+        <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
           <Info className="w-3.5 h-3.5 text-primary" /> 口径漂移（逐日留痕）
         </h2>
         <div className="flex items-center gap-1">
@@ -293,10 +293,10 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
               type="button"
               onClick={() => setDays(d)}
               data-drift-days={d}
-              className={`text-[11px] px-2 py-0.5 rounded border ${
+              className={`text-[12px] px-2 py-0.5 rounded border ${
                 days === d
                   ? 'border-primary/50 text-foreground bg-primary/10'
-                  : 'border-border/50 text-muted-foreground hover:text-foreground'
+                  : 'border-border text-muted-foreground hover:text-foreground'
               }`}
             >
               近 {d} 天
@@ -306,7 +306,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
         </div>
       </div>
 
-      <p className="text-[11px] text-muted-foreground leading-relaxed mb-3">
+      <p className="text-[12px] text-muted-foreground leading-relaxed mb-3">
         逐日留痕来自收盘后定时采集（交易日 15:55）。每源各说各的 —— 这里<span className="text-foreground">不取平均、不互相校准</span>；
         跨源差异是<span className="text-foreground">口径差异，不是误差</span>（两家对"主力"的定义本来就不同）。
       </p>
@@ -314,9 +314,9 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
       {err && <div className="text-[12px] text-red-500 mb-2">漂移数据加载失败：{err}</div>}
 
       {!err && series.length === 0 && !loading && (
-        <div data-drift-empty className="rounded-md border border-dashed border-border/60 bg-muted/10 px-3 py-4">
+        <div data-drift-empty className="rounded-md border border-dashed border-border bg-s2 px-3 py-4">
           <div className="text-[12px] text-muted-foreground">暂无留痕（近 {days} 天）</div>
-          <div className="text-[11px] text-muted-foreground mt-1">
+          <div className="text-[12px] text-muted-foreground mt-1">
             交易日 15:55 自动采集三源口径；采集后次日即可在此对比。留痕缺失时这里不会用 0 或推算值填补。
           </div>
         </div>
@@ -326,12 +326,12 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
         <div className="overflow-x-auto">
           <table className="w-full text-[12px] tabular-nums">
             <thead>
-              <tr className="text-[10px] text-muted-foreground">
+              <tr className="text-[12px] text-muted-foreground">
                 <th className="text-left font-normal py-1 pr-3">交易日</th>
                 {sources.map((k) => (
                   <th key={k} className="text-right font-normal py-1 px-3">
                     {SOURCE_SHORT[k] ?? k}
-                    <span className="block text-[10px] text-muted-foreground">
+                    <span className="block text-[12px] text-muted-foreground">
                       {data?.field_by_source?.[k]}
                     </span>
                   </th>
@@ -340,7 +340,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
             </thead>
             <tbody>
               {series.map((row) => (
-                <tr key={row.trade_date} className="border-t border-border/30">
+                <tr key={row.trade_date} className="border-t border-border">
                   <td className="py-1 pr-3 text-muted-foreground">{row.trade_date}</td>
                   {sources.map((k) => {
                     const pt = row.sources?.[k]
@@ -351,7 +351,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
                           <span className={valueColor(pt.value as number)}>
                             {safeMoney(pt.value as number)}
                             {pt.quality === 'suspect' && (
-                              <span className="ml-1 text-[10px] text-amber-500" title="该源自标数据可疑">
+                              <span className="ml-1 text-[12px] text-amber-500" title="该源自标数据可疑">
                                 ⚠
                               </span>
                             )}
@@ -373,13 +373,13 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
 
       {(data?.comparisons?.length ?? 0) > 0 && (
         <div className="mt-3 space-y-1.5">
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-[12px] text-muted-foreground">
             跨源差异（只统计两端都有留痕的天；样本不足时如实显示 0 天）
           </div>
           {data!.comparisons.map((c) => (
             <div
               key={`${c.left.source}-${c.right.source}`}
-              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]"
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12px]"
             >
               <span className="text-foreground">
                 {SOURCE_SHORT[c.left.source] ?? c.left.source}「{c.left.field}」
@@ -477,16 +477,16 @@ export default function CaliberComparePage() {
           <h1 className="text-[16px] font-semibold text-foreground flex items-center gap-2">
             <Search className="w-4 h-4 text-primary" /> 口径对照
           </h1>
-          <p className="text-[11px] text-muted-foreground mt-1">
+          <p className="text-[12px] text-muted-foreground mt-1">
             同一只票同一时刻, 明盘 L2 / 暗盘逐笔 / 东财四档 并排看 —— 数字不一样是「口径不一样」,
             不合成单一“权威数字”。
           </p>
         </div>
       {/* 口径词典(2026-09-18 官方投教口径): 这三个词在页面上反复出现, 就地解释一次,
           避免读者把明盘/暗盘当成同一件事的两个说法。文案来自 caliber-glossary(单一来源)。 */}
-      <div className="mt-3 rounded border border-border/60 px-3 py-2" data-testid="caliber-glossary">
-        <div className="text-[11px] font-medium text-muted-foreground">口径词典</div>
-        <div className="mt-1 space-y-0.5 text-[11px]">
+      <div className="mt-3 rounded border border-border px-3 py-2" data-testid="caliber-glossary">
+        <div className="text-[12px] font-medium text-muted-foreground">口径词典</div>
+        <div className="mt-1 space-y-0.5 text-[12px]">
           <div title={glossaryTooltip(MINGPAN)}>
             <span className="text-foreground">{MINGPAN.name}</span>
             <span className="text-muted-foreground"> —— {MINGPAN.oneLine}（单笔 &gt;30 万，散户也计入，不代表真正主力）</span>
@@ -509,9 +509,9 @@ export default function CaliberComparePage() {
             onKeyDown={(e) => e.key === 'Enter' && void load(code)}
             aria-label="股票代码"
             placeholder="6 位代码"
-            className="h-8 w-28 rounded border border-border/60 bg-transparent px-2 text-[12px] text-foreground"
+            className="h-8 w-28 rounded border border-border bg-transparent px-2 text-[12px] text-foreground"
           />
-          <Button size="sm" className="h-8 text-[11px]" disabled={loading} onClick={() => void load(code)}>
+          <Button size="sm" className="h-8 text-[12px]" disabled={loading} onClick={() => void load(code)}>
             {loading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-1" />}
             查询
           </Button>
@@ -530,11 +530,11 @@ export default function CaliberComparePage() {
           {slow && (
             <div
               data-testid="caliber-compare-slow"
-              className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-amber-600"
+              className="mb-3 flex flex-wrap items-center gap-2 text-[12px] text-amber-600"
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               <span>三源取数较慢，仍在等待 —— 这里不会用 0 或估算值顶上。</span>
-              <Button size="sm" className="h-7 text-[11px]" onClick={() => void load(querySymbol || code)}>
+              <Button size="sm" className="h-7 text-[12px]" onClick={() => void load(querySymbol || code)}>
                 重试
               </Button>
             </div>
@@ -544,7 +544,7 @@ export default function CaliberComparePage() {
               <div
                 key={i}
                 data-testid="caliber-compare-shell-col"
-                className="h-28 rounded border border-dashed border-border/40 bg-muted/10"
+                className="h-28 rounded border border-dashed border-border bg-s2"
               />
             ))}
           </div>
@@ -553,7 +553,7 @@ export default function CaliberComparePage() {
 
       {data && (
         <>
-          <div className="flex items-center gap-3 text-[11px] text-muted-foreground mb-3">
+          <div className="flex items-center gap-3 text-[12px] text-muted-foreground mb-3">
             <span>{data.symbol}（{data.market}）</span>
             <span>取数时间 {data.as_of.replace('T', ' ').slice(0, 19)}</span>
             <span className={data.available_count > 0 ? 'text-emerald-500' : 'text-amber-500'}>

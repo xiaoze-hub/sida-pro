@@ -90,18 +90,18 @@ export function JobPanel() {
         <div className="card p-3">
           <div className="mb-2 flex items-center gap-2">
             <ListChecks className="h-4 w-4 text-primary" strokeWidth={1.8} />
-            <span className="text-[13px] font-semibold">进行中</span>
-            <span className="ml-auto text-[11px] text-muted-foreground">重复点击会复用同一任务, 不会并发起第二个</span>
+            <span className="text-[14px] font-semibold">进行中</span>
+            <span className="ml-auto text-[12px] text-muted-foreground">重复点击会复用同一任务, 不会并发起第二个</span>
           </div>
           <div className="space-y-2">
             {active.map((j) => (
               <div key={j.id} className="flex items-center gap-3 text-[12px]">
                 <span className="w-[150px] shrink-0 truncate" title={j.label}>{j.label}</span>
-                <div className="h-1.5 w-[160px] shrink-0 overflow-hidden rounded-full bg-accent/40">
+                <div className="h-1.5 w-[160px] shrink-0 overflow-hidden rounded-full bg-s2">
                   <div className="h-full rounded-full bg-primary transition-[width]"
                        style={{ width: `${Math.max(3, j.progress)}%` }} />
                 </div>
-                <span className="w-[40px] shrink-0 font-mono text-[11px] text-muted-foreground">{j.progress}%</span>
+                <span className="w-[40px] shrink-0 font-mono text-[12px] text-muted-foreground">{j.progress}%</span>
                 <span className="min-w-0 flex-1 truncate text-muted-foreground" title={j.message || j.stage}>{j.message || j.stage}</span>
                 <button
                   type="button"
@@ -121,8 +121,8 @@ export function JobPanel() {
       <div className="card p-3">
         <div className="mb-2 flex items-center gap-2">
           <ListChecks className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
-          <span className="text-[13px] font-semibold">近期任务</span>
-          <span className="ml-auto text-[11px] text-muted-foreground">
+          <span className="text-[14px] font-semibold">近期任务</span>
+          <span className="ml-auto text-[12px] text-muted-foreground">
             超过 15 分钟无进度更新会被判卡死(重启遗留的任务也会自愈)
           </span>
         </div>
@@ -136,12 +136,12 @@ export function JobPanel() {
               <div key={j.id} className="flex items-center gap-3 text-[12px]">
                 <span className={`w-[52px] shrink-0 ${STATUS_STYLE[j.status]}`}>{STATUS_LABEL[j.status]}</span>
                 <span className="w-[150px] shrink-0 truncate" title={j.label}>{j.label}</span>
-                <span className="w-[40px] shrink-0 font-mono text-[11px] text-muted-foreground">{j.progress}%</span>
-                <span className="w-[46px] shrink-0 font-mono text-[11px] text-muted-foreground">{elapsed(j)}</span>
+                <span className="w-[40px] shrink-0 font-mono text-[12px] text-muted-foreground">{j.progress}%</span>
+                <span className="w-[46px] shrink-0 font-mono text-[12px] text-muted-foreground">{elapsed(j)}</span>
                 <span className="min-w-0 flex-1 truncate text-muted-foreground" title={j.error || j.message}>
                   {j.error || j.message}
                 </span>
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{j.created_at.slice(5, 16)}</span>
+                <span className="shrink-0 font-mono text-[12px] text-muted-foreground">{j.created_at.slice(5, 16)}</span>
               </div>
             ))}
           </div>

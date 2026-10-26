@@ -210,7 +210,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
     <div className="card p-3 md:p-4">
       {/* 顶栏: 09:25 同步时间 + 总数 + 刷新 */}
       <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Eye className="w-3.5 h-3.5" />
           {data?.is_live ? (
             <span>
@@ -220,7 +220,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
           ) : (
             <span>
               竞价池 · 数据日 <span className="font-mono text-foreground">{dataDate}</span>
-              <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px]">
+              <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[12px]">
                 {data?.mode === 'replay'
                   ? '盘后回放'
                   : data?.is_today
@@ -242,19 +242,19 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
               </>
             )}
           </span>
-          <CaliberBadge caliber="ths" label="thsdk 竞价" className="text-[10px]" />
+          <CaliberBadge caliber="ths" label="thsdk 竞价" className="text-[12px]" />
         </div>
         <Button variant="secondary" size="sm" className="h-7 text-[12px]" onClick={() => { setLoading(true); void load() }} disabled={loading}>
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> 刷新
         </Button>
       </div>
 
-      {error && <div className="text-[11px] text-amber-600 dark:text-amber-500 mb-2">{error}</div>}
-      {data && !data.available && <div className="text-[11px] text-muted-foreground mb-2">{data.note || '竞价异动数据暂不可用'}</div>}
+      {error && <div className="text-[12px] text-amber-600 dark:text-amber-500 mb-2">{error}</div>}
+      {data && !data.available && <div className="text-[12px] text-muted-foreground mb-2">{data.note || '竞价异动数据暂不可用'}</div>}
 
       {records.length === 0 && !loading ? (
-        <div className="rounded-xl border border-dashed border-border/70 px-4 py-5 text-center" data-auction-empty="1">
-          <div className="text-[13px] font-medium text-foreground">{emptyReason}</div>
+        <div className="rounded-xl border border-dashed border-border px-4 py-5 text-center" data-auction-empty="1">
+          <div className="text-[14px] font-medium text-foreground">{emptyReason}</div>
           <div className="mt-1 text-[12px] text-muted-foreground">
             竞价池每天 09:15 开始刷新、09:25 撮合定型；非交易日展示最近一个交易日的快照。
           </div>
@@ -268,7 +268,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
       <div className="overflow-x-auto">
         <table className="w-full text-[12px]">
           <thead>
-            <tr className="text-[11px] text-muted-foreground border-b border-border/60">
+            <tr className="text-[12px] text-muted-foreground border-b border-border">
               <th className="text-left py-1.5 pr-2 w-9">#</th>
               <th className="text-left py-1.5 pr-2" title="证券代码；点击可查看详情">代码</th>
               <th className="text-left py-1.5 pr-2" title="证券简称；带「极妖」徽标表示妖股评分 ≥75">名称</th>
@@ -292,9 +292,9 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
               return (
                 <tr
                   key={code || i}
-                  className={`border-b border-border/30 hover:bg-accent/40 ${gapRowClass(gap)}`}
+                  className={`border-b border-border hover:bg-s2 ${gapRowClass(gap)}`}
                 >
-                  <td className="py-1.5 pr-2 text-[10px] text-muted-foreground">{i + 1}</td>
+                  <td className="py-1.5 pr-2 text-[12px] text-muted-foreground">{i + 1}</td>
                   <td
                     className="py-1.5 pr-2 font-mono text-muted-foreground cursor-pointer hover:text-primary"
                     title="查看详情"
@@ -310,7 +310,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                     <div className="flex items-center gap-1.5">
                       <span>{name}</span>
                       {r.demon_score && r.demon_score >= 75 ? (
-                        <span className="rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-semibold text-red-500 border border-red-500/20">
+                        <span className="rounded bg-red-500/10 px-1 py-0.5 text-[12px] font-semibold text-red-500 border border-red-500/20">
                           {r.demon_grade || '极妖'}
                         </span>
                       ) : null}
@@ -324,7 +324,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                       const ratio = (r as { anomaly_ratio?: number | null }).anomaly_ratio
                       if (ratio == null || gap == null || Math.abs(ratio - gap) < 0.05) return null
                       return (
-                        <span className="mt-0.5 block text-[10px] font-sans text-muted-foreground"
+                        <span className="mt-0.5 block text-[12px] font-sans text-muted-foreground"
                               title="异动幅度：9:25 那一瞬的涨速，不等于相对昨收的竞价涨幅">
                           异动 {ratio > 0 ? '+' : ''}{safeFixed(ratio, 2)}%
                         </span>
@@ -334,7 +334,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                       const badge = chaseBadge(gapStudy, gap)
                       return badge ? (
                         <span
-                          className="mt-0.5 block text-[10px] font-sans text-red-600 dark:text-red-400"
+                          className="mt-0.5 block text-[12px] font-sans text-red-600 dark:text-red-400"
                           title={badge.note}
                         >
                           {badge.label}
@@ -354,7 +354,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                   <td className="py-1.5 px-2 text-left">
                     {r.verdict_tag ? (
                       <div className="flex items-center gap-1.5">
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${
                           r.verdict_level === 'strong_buy' ? 'bg-red-500/20 text-red-500 font-bold' :
                           r.verdict_level === 'buy' ? 'bg-amber-500/20 text-amber-500 font-semibold' :
                           r.verdict_level === 'warning' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' :
@@ -363,12 +363,12 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                         }`}>
                           {r.verdict_tag}
                         </span>
-                        <span className="text-[11px] text-muted-foreground truncate max-w-[200px]" title={r.verdict_action || ''}>
+                        <span className="text-[12px] text-muted-foreground truncate max-w-[200px]" title={r.verdict_action || ''}>
                           {r.verdict_action}
                         </span>
                       </div>
                     ) : (
-                      <span className="text-[11px] text-muted-foreground">常态观察</span>
+                      <span className="text-[12px] text-muted-foreground">常态观察</span>
                     )}
                   </td>
                   <td className="py-1.5 text-right">
@@ -376,7 +376,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-6 px-1.5 text-[10px]"
+                        className="h-6 px-1.5 text-[12px]"
                         disabled={isAdding}
                         onClick={() => void addToWatchlist(r)}
                       >
@@ -399,7 +399,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
       </div>
       )}
       {loading && records.length === 0 && (
-        <div className="mt-3 h-[120px] rounded-xl border border-border/50 animate-pulse bg-accent/20" />
+        <div className="mt-3 h-[120px] rounded-xl border border-border animate-pulse bg-s2" />
       )}
     </div>
   )

@@ -37,7 +37,7 @@ function isUnavailable(r: WarReportResp): r is WarReportUnavailable {
 function WarReportSkeleton() {
   return (
     <div className="sida-page-enter space-y-4" aria-busy aria-live="polite">
-      <div className="border-b border-border/40 pb-3">
+      <div className="border-b border-border pb-3">
         <Skeleton className="h-5 w-48" />
         <Skeleton className="mt-2 h-3 w-72" />
       </div>
@@ -56,8 +56,8 @@ function RowTable({ rows, onPick }: { rows: WarReportRow[]; onPick: (s: string) 
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-[12px]">
-        <thead className="bg-muted/60">
-          <tr className="border-b border-border/60 text-[11px] text-muted-foreground">
+        <thead className="bg-s2">
+          <tr className="border-b border-border text-[12px] text-muted-foreground">
             <th className="px-3 py-2 font-medium">{t('warReport.rank')}</th>
             <th className="px-3 py-2 font-medium">{t('warReport.code')}</th>
             <th className="px-3 py-2 font-medium">{t('warReport.name')}</th>
@@ -73,7 +73,7 @@ function RowTable({ rows, onPick }: { rows: WarReportRow[]; onPick: (s: string) 
             return (
               <tr
                 key={`${r.symbol}-${i}`}
-                className="cursor-pointer hover:bg-accent/20"
+                className="cursor-pointer hover:bg-s2"
                 onClick={() => onPick(r.symbol)}
                 title={`${r.symbol}`}
               >
@@ -83,7 +83,7 @@ function RowTable({ rows, onPick }: { rows: WarReportRow[]; onPick: (s: string) 
                 <td className={`px-3 py-2 text-right font-mono ${main > 0 ? 'text-stock-up' : main < 0 ? 'text-stock-down' : ''}`}>
                   {toAmountFromWan(main)}
                 </td>
-                <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{r.source ?? '--'}</td>
+                <td className="px-3 py-2 font-mono text-[12px] text-muted-foreground">{r.source ?? '--'}</td>
               </tr>
             )
           })}
@@ -144,7 +144,7 @@ export default function WarReportPage() {
       <div className="space-y-4">
         <Card className="p-6 text-center">
           <AlertTriangle className="mx-auto h-8 w-8 text-amber-500" />
-          <div className="mt-3 text-[13px] font-medium text-foreground">{t('warReport.noSnapshot')}</div>
+          <div className="mt-3 text-[14px] font-medium text-foreground">{t('warReport.noSnapshot')}</div>
           <p className="mt-1.5 whitespace-pre-wrap text-[12px] text-muted-foreground">{data.note}</p>
           <div className="mt-4">
             <Button onClick={refresh} disabled={refreshing} size="sm" className="min-h-[44px]">
@@ -177,14 +177,14 @@ export default function WarReportPage() {
 
   return (
     <div className="sida-page-enter space-y-4" data-testid="war-report">
-      <div className="border-b border-border/40 pb-3">
+      <div className="border-b border-border pb-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-stock-up" />
-              <h2 className="text-[13px] font-medium text-foreground">{t('warReport.title')}</h2>
+              <h2 className="text-[14px] font-medium text-foreground">{t('warReport.title')}</h2>
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-[12px] text-muted-foreground">
               {t('common.snapshotDate')} <span className="font-mono">{data.snapshot_date}</span>
               {' · '}{t('warReport.universe')} <span className="font-mono">{data.universe ?? '-'}</span>
               {' · '}{t('warReport.computed')} <span className="font-mono">{data.computed ?? '-'}</span>
@@ -206,8 +206,8 @@ export default function WarReportPage() {
       {/* 结论层（2026-10-24 1-D）：首屏先给三句结论，榜单降到第二屏。
           与暗盘资金页的差异化定位：暗盘=榜单，战报=叙事。 */}
       <section className="grid gap-3 md:grid-cols-3" data-testid="war-report-conclusion">
-        <div className="rounded-xl border border-border/60 p-3">
-          <div className="text-[11px] text-muted-foreground">{t('warReport.directionLabel')}</div>
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-[12px] text-muted-foreground">{t('warReport.directionLabel')}</div>
           {inflow.length > 0 || outflow.length > 0 ? (
             <div className={`mt-1 text-[20px] font-semibold tabular-nums ${netWan > 0 ? 'text-stock-up' : netWan < 0 ? 'text-stock-down' : 'text-muted-foreground'}`}>
               {netWan > 0 ? '+' : ''}{toAmountFromWan(netWan)}
@@ -215,13 +215,13 @@ export default function WarReportPage() {
           ) : (
             <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.conclusionEmpty')}</div>
           )}
-          <div className="mt-1 text-[11px] text-muted-foreground">
+          <div className="mt-1 text-[12px] text-muted-foreground">
             {t('warReport.directionInflow')} {toAmountFromWan(inflowWan)} · {t('warReport.directionOutflow')} {toAmountFromWan(outflowWan)}
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">{t('warReport.directionHint')}</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.directionHint')}</div>
         </div>
-        <div className="rounded-xl border border-border/60 p-3">
-          <div className="text-[11px] text-muted-foreground">{t('warReport.topIndustry')}</div>
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-[12px] text-muted-foreground">{t('warReport.topIndustry')}</div>
           {topIndustries.length > 0 ? (
             <ul className="mt-1 space-y-0.5">
               {topIndustries.map((row) => (
@@ -236,10 +236,10 @@ export default function WarReportPage() {
           ) : (
             <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.conclusionEmpty')}</div>
           )}
-          <div className="mt-1 text-[11px] text-muted-foreground">{t('warReport.topIndustryHint')}</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.topIndustryHint')}</div>
         </div>
-        <div className="rounded-xl border border-border/60 p-3">
-          <div className="text-[11px] text-muted-foreground">{t('warReport.topStock')}</div>
+        <div className="rounded-xl border border-border p-3">
+          <div className="text-[12px] text-muted-foreground">{t('warReport.topStock')}</div>
           {topStocks.length > 0 ? (
             <ul className="mt-1 space-y-0.5">
               {topStocks.map((row) => (
@@ -259,31 +259,31 @@ export default function WarReportPage() {
           ) : (
             <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.conclusionEmpty')}</div>
           )}
-          <div className="mt-1 text-[11px] text-muted-foreground">{t('warReport.topStockHint')}</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.topStockHint')}</div>
         </div>
       </section>
 
       {/* 大单净流入 TOP */}
-      <section className="overflow-hidden rounded-xl border border-border/60 bg-card">
-        <div className="border-b border-border/40 px-3 py-2 text-[13px] font-medium text-foreground">
+      <section className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="border-b border-border px-3 py-2 text-[14px] font-medium text-foreground">
           {t('warReport.topInflow')}
         </div>
         <RowTable rows={data.top_inflow || []} onPick={pick} />
       </section>
 
       {/* 大单净流出 TOP */}
-      <section className="overflow-hidden rounded-xl border border-border/60 bg-card">
-        <div className="border-b border-border/40 px-3 py-2 text-[13px] font-medium text-foreground">
+      <section className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="border-b border-border px-3 py-2 text-[14px] font-medium text-foreground">
           {t('warReport.topOutflow')}
         </div>
         <RowTable rows={data.top_outflow || []} onPick={pick} />
       </section>
 
       {/* 行业分布 */}
-      <section className="rounded-xl border border-border/60 bg-card">
-        <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
-          <span className="text-[13px] font-medium text-foreground">{t('warReport.industryTitle')}</span>
-          <span className="text-[10px] text-muted-foreground">{t('warReport.industryHint')}</span>
+      <section className="rounded-xl border border-border bg-card">
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <span className="text-[14px] font-medium text-foreground">{t('warReport.industryTitle')}</span>
+          <span className="text-[12px] text-muted-foreground">{t('warReport.industryHint')}</span>
         </div>
         {industry?.available && (industry.top?.length ?? 0) > 0 ? (
           <ul className="divide-y divide-border/40">
@@ -304,10 +304,10 @@ export default function WarReportPage() {
       </section>
 
       {/* 拆单 / 对倒计数 */}
-      <section className="rounded-xl border border-border/60 bg-card">
-        <div className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
+      <section className="rounded-xl border border-border bg-card">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-[13px] font-medium text-foreground">{t('warReport.splitWashTitle')}</span>
+          <span className="text-[14px] font-medium text-foreground">{t('warReport.splitWashTitle')}</span>
         </div>
         {split?.available ? (
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-3 py-3 text-[12px]">
@@ -317,7 +317,7 @@ export default function WarReportPage() {
             <span className="text-muted-foreground">
               {t('warReport.washCount')}: <span className="font-mono text-foreground">{t('warReport.washNoSource')}</span>
             </span>
-            <span className="text-[10px] text-muted-foreground">{split.note}</span>
+            <span className="text-[12px] text-muted-foreground">{split.note}</span>
           </div>
         ) : (
           <div className="px-3 py-3 text-[12px] text-muted-foreground">
@@ -326,7 +326,7 @@ export default function WarReportPage() {
         )}
       </section>
 
-      <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+      <div className="border-t border-border px-3 py-1.5 text-[12px] text-muted-foreground">
         {t('warReport.footerLegend')}{' · '}
         <a href="/api/war-report/daily" className="text-primary hover:underline min-h-[44px] inline-flex items-center">
           /api/war-report/daily

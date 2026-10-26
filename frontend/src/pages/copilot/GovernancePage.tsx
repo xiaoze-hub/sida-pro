@@ -94,11 +94,11 @@ export default function GovernancePage() {
           <Skeleton className="h-10 w-full" />
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-border bg-card p-4 text-[13px] text-stock-down">
+        <div className="rounded-xl border border-border bg-card p-4 text-[14px] text-stock-down">
           读取失败：{error}
         </div>
       ) : !items || items.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card p-6 text-center text-[13px] text-muted-foreground">
+        <div className="rounded-xl border border-border bg-card p-6 text-center text-[14px] text-muted-foreground">
           没有拦截记录
         </div>
       ) : (

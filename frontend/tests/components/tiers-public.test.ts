@@ -19,7 +19,7 @@ function stripComments(src: string): string {
 }
 
 /** 公开面字阶白名单(与 Landing/Developers 一致, ui-rules R10 公开面 ≤7 档) */
-const PUBLIC_SIZES = new Set(['12', '13', '16', '20', '28', '36'])
+const PUBLIC_SIZES = new Set(['12', '14', '16', '20', '28', '36'])
 
 describe('档位页: 公开可访问', () => {
   it('未登录时独立渲染(与 /terms /developers 同款)', () => {

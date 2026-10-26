@@ -177,7 +177,7 @@ export default function ForecastConeChart({ symbol, lastClose, lastDate, predict
   }, [hist, prediction, direction, p5, p95, lastClose, chartRef])
 
   if (hist === null) {
-    return <div className="h-[220px] animate-pulse bg-muted/40" />
+    return <div className="h-[220px] animate-pulse bg-s2" />
   }
   // 空 K 线(拉取失败, 或该标的暂无 K 线): 显式空态早退, 绝不把空数组喂给图表。
   // 这也是 RangeError 的边界: hist=[] 时 new Array(histVals.length - 1) 旧代码抛错。
@@ -185,8 +185,8 @@ export default function ForecastConeChart({ symbol, lastClose, lastDate, predict
     return (
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <span className="text-[13px] font-medium">预测锥图</span>
-          <span className="text-[11px] text-muted-foreground">无历史K线 · 仅展示模型预测</span>
+          <span className="text-[14px] font-medium">预测锥图</span>
+          <span className="text-[12px] text-muted-foreground">无历史K线 · 仅展示模型预测</span>
         </div>
         <ChartEmpty
           title="无历史K线"
@@ -199,8 +199,8 @@ export default function ForecastConeChart({ symbol, lastClose, lastDate, predict
   return (
     <div>
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-[13px] font-medium">预测锥图</span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[14px] font-medium">预测锥图</span>
+        <span className="text-[12px] text-muted-foreground">
           灰线历史收盘({hist.length}日) · 彩线模型预测
           {prediction.length > 0 && p5 && p95 ? ' · 阴影 P5-P95' : ''}
         </span>

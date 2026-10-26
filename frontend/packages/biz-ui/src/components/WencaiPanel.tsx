@@ -114,8 +114,8 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
       {!embedded && (
         <div className="flex items-center gap-2 mb-3">
           <Sparkles className="w-4 h-4 text-primary" />
-          <h2 className="text-[13px] font-semibold text-foreground">问财选股</h2>
-          <span className="text-[11px] text-muted-foreground">同花顺 AI 自然语言选股(需 L2 问财数据源)</span>
+          <h2 className="text-[14px] font-semibold text-foreground">问财选股</h2>
+          <span className="text-[12px] text-muted-foreground">同花顺 AI 自然语言选股(需 L2 问财数据源)</span>
         </div>
       )}
 
@@ -127,10 +127,10 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
             type="button"
             onClick={() => applyPreset(q)}
             disabled={loading}
-            className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+            className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
               lastQuery === q
                 ? 'border-primary/50 bg-primary/10 text-primary'
-                : 'border-border/50 bg-accent/30 text-muted-foreground hover:border-primary/35 hover:text-foreground'
+                : 'border-border bg-s2 text-muted-foreground hover:border-primary/35 hover:text-foreground'
             } disabled:opacity-50`}
           >
             {q}
@@ -155,9 +155,9 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
 
       {/* 数据源未接入: 置灰说明 */}
       {dataSourceDown && (
-        <div className="mt-3 rounded-lg border border-border/40 bg-accent/20 p-3 text-[12px] text-muted-foreground opacity-70">
+        <div className="mt-3 rounded-lg border border-border bg-s2 p-3 text-[12px] text-muted-foreground opacity-70">
           <div className="font-medium text-foreground">L2 问财数据源未接入</div>
-          <div className="mt-1 text-[11px]">{note || '服务端未启用同花顺 L2 问财能力, 面板暂不可用'}</div>
+          <div className="mt-1 text-[12px]">{note || '服务端未启用同花顺 L2 问财能力, 面板暂不可用'}</div>
         </div>
       )}
 
@@ -188,7 +188,7 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-[12px]">
             <thead>
-              <tr className="text-[11px] text-muted-foreground border-b border-border/50">
+              <tr className="text-[12px] text-muted-foreground border-b border-border">
                 <th className="text-left py-1.5 pr-2">代码</th>
                 <th className="text-left py-1.5 pr-2">名称</th>
                 {extraCols.map(c => (
@@ -198,7 +198,7 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
             </thead>
             <tbody>
               {shownRows.map(r => (
-                <tr key={r.symbol || `${r.name}-${Math.random()}`} className="border-b border-border/30 hover:bg-accent/40">
+                <tr key={r.symbol || `${r.name}-${Math.random()}`} className="border-b border-border hover:bg-s2">
                   {/* P0(2026-10-18 审计 F19): 问财给的是 thsdk 前缀码(USZA000006), 展示层必须归一成 6 位 */}
                   <td className="py-1.5 pr-2 font-mono text-muted-foreground" data-symbol={r.symbol || ''}>{normSymbol(r.symbol) || '--'}</td>
                   <td className="py-1.5 pr-2 font-medium text-foreground whitespace-nowrap">{r.name || '--'}</td>
@@ -212,11 +212,11 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
             </tbody>
           </table>
           {rows.length > MAX_DISPLAY_ROWS && (
-            <div className="mt-2 text-[11px] text-muted-foreground">
+            <div className="mt-2 text-[12px] text-muted-foreground">
               共命中 {rows.length} 只, 仅展示前 {MAX_DISPLAY_ROWS} 只
             </div>
           )}
-          <div className="mt-1 text-[11px] text-muted-foreground">{note}</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">{note}</div>
         </div>
       )}
     </div>

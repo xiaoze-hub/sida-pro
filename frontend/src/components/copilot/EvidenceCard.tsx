@@ -79,21 +79,21 @@ export function EvidenceCard({ run, steps, loading, error }: EvidenceCardProps) 
   const body = () => {
     if (loading) {
       return (
-        <div className="py-1 text-[11px] text-muted-foreground" data-testid="evidence-card-loading">
+        <div className="py-1 text-[12px] text-muted-foreground" data-testid="evidence-card-loading">
           证据加载中…
         </div>
       )
     }
     if (error) {
       return (
-        <div className="py-1 text-[11px] text-stock-down" data-testid="evidence-card-error">
+        <div className="py-1 text-[12px] text-stock-down" data-testid="evidence-card-error">
           证据读取失败{reason ? `（${reason}）` : ''}
         </div>
       )
     }
     if (!list || list.length === 0) {
       return (
-        <div className="py-1 text-[11px] text-muted-foreground" data-testid="evidence-card-empty">
+        <div className="py-1 text-[12px] text-muted-foreground" data-testid="evidence-card-empty">
           本轮没有工具调用
         </div>
       )
@@ -110,29 +110,29 @@ export function EvidenceCard({ run, steps, loading, error }: EvidenceCardProps) 
           return (
             <li
               key={`${s.seq}-${s.tool}`}
-              className={`border-b border-border/40 py-1 last:border-b-0 ${s.ok ? '' : 'text-stock-down'}`}
+              className={`border-b border-border py-1 last:border-b-0 ${s.ok ? '' : 'text-stock-down'}`}
               data-testid={`evidence-step-${s.seq}`}
               data-ok={s.ok ? 'true' : 'false'}
               data-has-elapsed={ms === null ? 'false' : 'true'}
             >
               <div className="flex items-baseline gap-1.5">
-                <span className={`w-5 shrink-0 text-right text-[11px] tabular-nums ${soft}`}>
+                <span className={`w-5 shrink-0 text-right text-[12px] tabular-nums ${soft}`}>
                   {s.seq}
                 </span>
-                <span className={`shrink-0 text-[11px] ${soft}`} aria-hidden>
+                <span className={`shrink-0 text-[12px] ${soft}`} aria-hidden>
                   ·
                 </span>
-                <span className={`min-w-0 flex-1 truncate font-mono text-[11px] ${tone}`}>
+                <span className={`min-w-0 flex-1 truncate font-mono text-[12px] ${tone}`}>
                   {s.tool || '--'}
                 </span>
-                <span className={`shrink-0 text-[11px] tabular-nums ${soft}`}>
+                <span className={`shrink-0 text-[12px] tabular-nums ${soft}`}>
                   {formatElapsed(s.elapsed_ms)}
                 </span>
-                <span className={`shrink-0 text-[11px] ${soft}`} aria-hidden>
+                <span className={`shrink-0 text-[12px] ${soft}`} aria-hidden>
                   ·
                 </span>
                 <span
-                  className={`w-3 shrink-0 text-[11px] ${s.ok ? 'text-muted-foreground' : 'text-stock-down'}`}
+                  className={`w-3 shrink-0 text-[12px] ${s.ok ? 'text-muted-foreground' : 'text-stock-down'}`}
                   title={s.ok ? '成功' : '失败'}
                   data-testid={`evidence-step-mark-${s.seq}`}
                 >
@@ -141,7 +141,7 @@ export function EvidenceCard({ run, steps, loading, error }: EvidenceCardProps) 
               </div>
               {args ? (
                 <div
-                  className={`mt-0.5 pl-[26px] font-mono text-[11px] ${soft}`}
+                  className={`mt-0.5 pl-[26px] font-mono text-[12px] ${soft}`}
                   title={s.args || undefined}
                   data-testid={`evidence-step-args-${s.seq}`}
                 >
@@ -150,7 +150,7 @@ export function EvidenceCard({ run, steps, loading, error }: EvidenceCardProps) 
               ) : null}
               {digest ? (
                 <div
-                  className={`pl-[26px] font-mono text-[11px] ${soft}`}
+                  className={`pl-[26px] font-mono text-[12px] ${soft}`}
                   title={s.result_digest || undefined}
                   data-testid={`evidence-step-digest-${s.seq}`}
                 >
@@ -166,7 +166,7 @@ export function EvidenceCard({ run, steps, loading, error }: EvidenceCardProps) 
 
   return (
     <div
-      className="rounded-md border border-border/40 px-2 py-1.5"
+      className="rounded-md border border-border px-2 py-1.5"
       data-testid="evidence-card"
       data-run-id={run?.run_id || undefined}
     >
@@ -179,20 +179,20 @@ export function EvidenceCard({ run, steps, loading, error }: EvidenceCardProps) 
           {question || '--'}
         </span>
         <span
-          className={`shrink-0 text-[11px] ${statusCls}`}
+          className={`shrink-0 text-[12px] ${statusCls}`}
           data-testid="evidence-card-status"
           data-status={status || 'unknown'}
         >
           {statusLabel}
         </span>
         <span
-          className="shrink-0 text-[11px] tabular-nums text-muted-foreground"
+          className="shrink-0 text-[12px] tabular-nums text-muted-foreground"
           data-testid="evidence-card-meta"
         >
           {countText} 步 · {elapsedText}
         </span>
       </div>
-      <div className="mt-1 border-t border-border/40 pt-1">{body()}</div>
+      <div className="mt-1 border-t border-border pt-1">{body()}</div>
     </div>
   )
 }

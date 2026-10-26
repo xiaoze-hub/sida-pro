@@ -58,7 +58,7 @@ export class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundar
           </div>
           <div>
             <h1 className="text-[16px] font-semibold">页面遇到了问题</h1>
-            <p className="text-[13px] text-muted-foreground mt-1.5">
+            <p className="text-[14px] text-muted-foreground mt-1.5">
               渲染时发生了一个意外错误, 已阻止整页崩溃。
             </p>
             {/* 2026-09-04: 生产也显示错误摘要 + 一键复制(此前只在 DEV 显示,
@@ -70,7 +70,7 @@ export class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundar
               <summary className="text-[12px] text-muted-foreground cursor-pointer hover:text-foreground">
                 错误详情(发开发者)
               </summary>
-              <pre className="mt-2 text-left text-[11px] bg-muted p-3 rounded-lg overflow-auto max-h-40">
+              <pre className="mt-2 text-left text-[12px] bg-muted p-3 rounded-lg overflow-auto max-h-40">
                 {error.stack || '无堆栈'}
               </pre>
               <button
@@ -92,14 +92,14 @@ export class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundar
             <button
               type="button"
               onClick={this.reset}
-              className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 bg-primary text-primary-foreground text-[13px] hover:bg-primary/90 transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 bg-primary text-primary-foreground text-[14px] hover:bg-primary/90 transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               重试
             </button>
             <a
               href="/"
-              className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 border border-border text-[13px] hover:bg-accent transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 border border-border text-[14px] hover:bg-accent transition-colors"
             >
               回到首页
             </a>

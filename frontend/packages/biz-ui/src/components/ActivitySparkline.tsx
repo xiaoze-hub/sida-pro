@@ -107,17 +107,17 @@ export default function ActivitySparkline({ symbol, days = 120 }: { symbol: stri
     )
   }, [resp, chartRef])
 
-  if (!resp) return <div className="h-[110px] animate-pulse rounded bg-accent/10" />
+  if (!resp) return <div className="h-[110px] animate-pulse rounded bg-s2" />
   if (!resp.available) {
     return (
-      <div className="flex h-[110px] items-center justify-center text-[11px] text-muted-foreground">
+      <div className="flex h-[110px] items-center justify-center text-[12px] text-muted-foreground">
         {resp.reason || '暂无活跃度序列'}
       </div>
     )
   }
   return (
     <div>
-      <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+      <div className="mb-1 flex items-center gap-2 text-[12px] text-muted-foreground">
         <span>AI机构活跃度</span>
         <span className="text-[#94a3b8]">生命线 {DEFAULT_LINES.life}</span>
         <span className="text-[#ed915f]">强势线 {DEFAULT_LINES.strong}</span>

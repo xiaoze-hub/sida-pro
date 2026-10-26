@@ -171,8 +171,8 @@ export function AiDialogs() {
           </Button>
         </div>
       </div>
-      <div className="rounded-md border border-border/50 bg-accent/20 p-3 space-y-3">
-        <p className="text-[11px] font-medium text-foreground">模型（单模型简化配置，可留空稍后补充）</p>
+      <div className="rounded-md border border-border bg-s2 p-3 space-y-3">
+        <p className="text-[12px] font-medium text-foreground">模型（单模型简化配置，可留空稍后补充）</p>
         <div>
           <Label>模型标识</Label>
           <Input
@@ -221,10 +221,10 @@ export function AiDialogs() {
                       ? mySvcForm.capabilities.filter(c => c !== cap)
                       : [...mySvcForm.capabilities, cap],
                   })}
-                  className={`px-2 py-1 rounded-md text-[11px] border transition-colors ${
+                  className={`px-2 py-1 rounded-md text-[12px] border transition-colors ${
                     mySvcForm.capabilities.includes(cap)
                       ? 'border-primary/40 bg-primary/10 text-primary'
-                      : 'border-border/60 bg-background/60 text-muted-foreground hover:text-foreground'
+                      : 'border-border bg-background text-muted-foreground hover:text-foreground'
                   }`}
                 >
                   {cap === 'chat' ? '对话' : cap === 'vision' ? '视觉' : '工具'}
@@ -311,10 +311,10 @@ export function AiDialogs() {
                     ? modelForm.capabilities.filter(c => c !== cap)
                     : [...modelForm.capabilities, cap],
                 })}
-                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
                   checked
                     ? `${meta.badge} border-transparent`
-                    : 'border-border/60 bg-background/60 text-muted-foreground hover:text-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:text-foreground'
                 }`}
               >
                 {checked && <Check className="h-3 w-3" strokeWidth={3} />}
@@ -341,10 +341,10 @@ export function AiDialogs() {
       <>
         <DialogHeader>
           <DialogTitle>管理模型 · {modelsSvc.name}</DialogTitle>
-          <DialogDescription className="font-mono text-[11px]">{modelsSvc.base_url}</DialogDescription>
+          <DialogDescription className="font-mono text-[12px]">{modelsSvc.base_url}</DialogDescription>
         </DialogHeader>
         <div className="mb-3 flex items-center justify-between gap-2">
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[12px] text-muted-foreground">
             共 <span className="font-mono text-foreground">{modelsSvc.models.length}</span> 个模型
           </span>
           <div className="flex items-center gap-2">
@@ -368,14 +368,14 @@ export function AiDialogs() {
         ) : (
           <div className="max-h-[55vh] space-y-1.5 overflow-y-auto scrollbar pr-1">
             {modelsSvc.models.map(m => (
-              <div key={m.id} className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+              <div key={m.id} className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     {m.is_default && <Star className="w-3 h-3 text-amber-700 dark:text-amber-500 flex-shrink-0" />}
                     <span className="text-[12px] font-medium text-foreground truncate" title={m.name}>{m.name}</span>
                     <CapBadges caps={m.capabilities} />
                   </div>
-                  <p className="text-[10px] text-muted-foreground font-mono truncate" title={m.model}>{m.model}</p>
+                  <p className="text-[12px] text-muted-foreground font-mono truncate" title={m.model}>{m.model}</p>
                 </div>
                 <div className="flex items-center gap-0.5 flex-shrink-0">
                   <Button
@@ -444,7 +444,7 @@ export function AiDialogs() {
               setBatchChecked(next)
             }}
             className={`flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition-colors ${
-              checked ? 'border-primary/60 bg-primary/10' : 'border-border/50 hover:border-border hover:bg-muted/40'
+              checked ? 'border-primary/60 bg-primary/10' : 'border-border hover:border-border hover:bg-s2'
             }`}
           >
             <div className="flex min-w-0 items-center gap-2.5">
@@ -453,7 +453,7 @@ export function AiDialogs() {
               }`}>
                 {checked && <Check className="h-3 w-3" strokeWidth={3} />}
               </span>
-              <span className="truncate font-mono text-[13px]" title={id}>{id}</span>
+              <span className="truncate font-mono text-[14px]" title={id}>{id}</span>
             </div>
             <button
               type="button"
@@ -465,7 +465,7 @@ export function AiDialogs() {
                   if (!checked) { const next = new Set(batchChecked); next.add(id); setBatchChecked(next) }
                 }
               }}
-              className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-colors ${
+              className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[12px] transition-colors ${
                 isDefault ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               }`}
             >

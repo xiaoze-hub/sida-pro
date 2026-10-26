@@ -298,11 +298,11 @@ export default function AnalysisDetailPage() {
         const Icon = SECTION_ICON[s.id]
         return (
           <section key={s.id} id={`sec-${s.id}`} className="mb-12 scroll-mt-24">
-            <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border/40">
+            <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border">
               {Icon && <Icon className="w-[18px] h-[18px] text-primary/70 shrink-0" />}
               {s.title}
             </h2>
-            <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[16px] prose-h4:text-[13px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
+            <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[16px] prose-h4:text-[14px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={headingComponents(s.id)}>
                 {s.markdown}
               </ReactMarkdown>
@@ -316,8 +316,8 @@ export default function AnalysisDetailPage() {
   // 目录头(标题 + 二级目录开关),桌面右栏 / 移动下拉共用
   const tocHeader = (
     <div className="flex items-center justify-between gap-2 mb-2 px-2">
-      <span className="text-[11px] font-medium text-muted-foreground">目录</span>
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <span className="text-[12px] font-medium text-muted-foreground">目录</span>
+      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
         <span className="cursor-pointer select-none" onClick={() => setShowSub((v) => !v)}>
           二级目录
         </span>
@@ -328,7 +328,7 @@ export default function AnalysisDetailPage() {
 
   // 目录列表(桌面右栏 / 移动下拉共用);onAfter 用于移动端选完自动收起
   const tocNav = (onAfter?: () => void) => (
-    <nav className="space-y-0.5 text-[13px]">
+    <nav className="space-y-0.5 text-[14px]">
       {toc.map((t) => (
         <button
           key={t.id}
@@ -342,7 +342,7 @@ export default function AnalysisDetailPage() {
           } ${
             activeId === t.id
               ? 'bg-accent text-foreground font-medium'
-              : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
+              : 'text-muted-foreground hover:text-foreground hover:bg-s2'
           }`}
         >
           {t.title}
@@ -357,7 +357,7 @@ export default function AnalysisDetailPage() {
         {/* 左列:标题栏 + 正文(标题栏只占左列宽度,不压到右侧目录) */}
         <div className="flex-1 min-w-0 max-w-3xl">
           {/* 顶部栏 */}
-          <div className="border-b border-border/40 pb-3 mb-4 flex items-center gap-3">
+          <div className="border-b border-border pb-3 mb-4 flex items-center gap-3">
             <button
               onClick={() => navigate(-1)}
               className="w-8 h-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
@@ -369,7 +369,7 @@ export default function AnalysisDetailPage() {
             <span className="text-[12px] text-muted-foreground shrink-0">{date}</span>
             <button
               onClick={() => setShareOpen(true)}
-              className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border/50 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               title="生成可分享的结论卡片图"
             >
               <ImageDown className="w-3.5 h-3.5" />
@@ -378,7 +378,7 @@ export default function AnalysisDetailPage() {
             <button
               onClick={handleExportPdf}
               disabled={pdfBusy}
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border/50 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
               title="导出 PDF 文件"
             >
               <FileDown className="w-3.5 h-3.5" />
@@ -390,14 +390,14 @@ export default function AnalysisDetailPage() {
           <article>
           {/* 决策摘要(移动端在正文顶部;桌面端移到右侧目录区,见下方 aside) */}
           {sug && (
-            <div className="lg:hidden border-b border-border/40 pb-3 mb-6 flex items-center gap-3 flex-wrap">
+            <div className="lg:hidden border-b border-border pb-3 mb-6 flex items-center gap-3 flex-wrap">
               <span className={`text-[20px] font-bold ${DECISION_COLOR[sug.action] || ''}`}>
                 {sug.action_label}
               </span>
-              <span className="text-[13px] text-muted-foreground">
+              <span className="text-[14px] text-muted-foreground">
                 置信度 {safeFixed(sug.confidence, 1, '-')} / 10
               </span>
-              <span className="ml-auto text-[11px] text-muted-foreground">
+              <span className="ml-auto text-[12px] text-muted-foreground">
                 成本 ${safeFixed(rawData.cost_usd, 4, '-')}
               </span>
             </div>
@@ -410,7 +410,7 @@ export default function AnalysisDetailPage() {
             <div className="relative">
               <button
                 onClick={() => setTocOpen((o) => !o)}
-                className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-md border border-border/50 bg-card/95 backdrop-blur text-[13px] font-medium shadow-sm"
+                className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-md border border-border bg-card backdrop-blur text-[14px] font-medium shadow-sm"
               >
                 <List className="w-4 h-4 shrink-0" />
                 <span title={currentTitle || '目录'} className="truncate">{currentTitle || '目录'}</span>
@@ -421,7 +421,7 @@ export default function AnalysisDetailPage() {
               {tocOpen && (
                 <>
                   <div className="fixed inset-0 z-0" onClick={() => setTocOpen(false)} />
-                  <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-md border border-border/50 bg-card/95 backdrop-blur  max-h-[60vh] overflow-y-auto scrollbar p-2">
+                  <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-md border border-border bg-card backdrop-blur  max-h-[60vh] overflow-y-auto scrollbar p-2">
                     {tocHeader}
                     {tocNav(() => setTocOpen(false))}
                   </div>
@@ -435,7 +435,7 @@ export default function AnalysisDetailPage() {
               perf(2026-10-02): 主图只依赖 URL 的 symbol/market, 不再等分析请求 —— 首屏即挂载,
               K线/图层取数与 /analysis 并发; 未找到记录(result=null 且非加载中)时不显示。 */}
           {(loading || !!result) && (
-            <div className="mb-10 border-b border-border/40 pb-4">
+            <div className="mb-10 border-b border-border pb-4">
               <LayerKline symbol={symbol} market={inferMarket(symbol)} />
             </div>
           )}
@@ -464,33 +464,33 @@ export default function AnalysisDetailPage() {
 
           {/* 历史决策对比 */}
           <section id="sec-history" className="mb-10 scroll-mt-24">
-            <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border/40">
+            <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border">
               <History className="w-[18px] h-[18px] text-primary/70 shrink-0" />
               历史决策 vs 实际涨跌
             </h2>
             {stats && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-[13px]">
-                <div className="border-t border-border/40 pt-2">
-                  <div className="text-[11px] text-muted-foreground mb-1">总命中率</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-[14px]">
+                <div className="border-t border-border pt-2">
+                  <div className="text-[12px] text-muted-foreground mb-1">总命中率</div>
                   <div className="font-bold">{safeNum(stats.overall_hit_rate) !== null ? `${(Number(stats.overall_hit_rate) * 100).toFixed(0)}%` : '-'}</div>
                 </div>
-                <div className="border-t border-border/40 pt-2">
-                  <div className="text-[11px] text-muted-foreground mb-1">买入命中</div>
+                <div className="border-t border-border pt-2">
+                  <div className="text-[12px] text-muted-foreground mb-1">买入命中</div>
                   <div className="font-bold">{safeNum(stats.buy_hit_rate) !== null ? `${(Number(stats.buy_hit_rate) * 100).toFixed(0)}%` : '-'}</div>
                 </div>
-                <div className="border-t border-border/40 pt-2">
-                  <div className="text-[11px] text-muted-foreground mb-1">卖出命中</div>
+                <div className="border-t border-border pt-2">
+                  <div className="text-[12px] text-muted-foreground mb-1">卖出命中</div>
                   <div className="font-bold">{safeNum(stats.sell_hit_rate) !== null ? `${(Number(stats.sell_hit_rate) * 100).toFixed(0)}%` : '-'}</div>
                 </div>
-                <div className="border-t border-border/40 pt-2">
-                  <div className="text-[11px] text-muted-foreground mb-1">平均 20 日收益</div>
+                <div className="border-t border-border pt-2">
+                  <div className="text-[12px] text-muted-foreground mb-1">平均 20 日收益</div>
                   <div className={`font-bold ${pctClass(stats.avg_return_20d_pct)}`}>{fmtPct(stats.avg_return_20d_pct)}</div>
                 </div>
               </div>
             )}
             {items.length > 0 ? (
               <div className="overflow-x-auto">
-                <table className="w-full text-[13px]">
+                <table className="w-full text-[14px]">
                   <thead>
                     <tr className="border-b border-border text-muted-foreground text-[12px]">
                       <th className="text-left py-2 pr-3">日期</th>
@@ -504,7 +504,7 @@ export default function AnalysisDetailPage() {
                   </thead>
                   <tbody>
                     {items.map((it, i) => (
-                      <tr key={i} className="border-b border-border/50">
+                      <tr key={i} className="border-b border-border">
                         <td className="py-2 pr-3">{it.analysis_date}</td>
                         <td className="py-2 px-2">{it.action_label}{safeNum(it.confidence) !== null ? ` (${Number(it.confidence).toFixed(1)})` : ''}</td>
                         <td className="text-right py-2 px-2">{it.price_at_analysis ?? '-'}</td>
@@ -518,12 +518,12 @@ export default function AnalysisDetailPage() {
                 </table>
               </div>
             ) : (
-              <div className="text-[13px] text-muted-foreground py-4">暂无历史决策记录</div>
+              <div className="text-[14px] text-muted-foreground py-4">暂无历史决策记录</div>
             )}
           </section>
 
           {/* 免责 */}
-          <div className="text-[11px] text-muted-foreground italic border-t border-border/30 pt-4">
+          <div className="text-[12px] text-muted-foreground italic border-t border-border pt-4">
             本分析由 AI 多 Agent 框架生成,仅供学习研究参考,不构成任何投资建议。投资有风险,决策需自主判断。
           </div>
             </>
@@ -535,21 +535,21 @@ export default function AnalysisDetailPage() {
             依赖分析结果 → 仅 result 就绪后渲染(加载中右栏空着, 不显示半截目录) */}
         {result && (
         <aside className="hidden lg:block w-52 shrink-0">
-          <div className="sticky top-24 border-l border-border/40 pl-4">
+          <div className="sticky top-24 border-l border-border pl-4">
             {/* 最终决策摘要 */}
             {sug && (
-              <div className="pb-3 border-b border-border/40">
+              <div className="pb-3 border-b border-border">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className={`text-[20px] font-bold leading-none ${DECISION_COLOR[sug.action] || ''}`}>
                     {sug.action_label}
                   </span>
-                  <span className="text-[11px] text-muted-foreground shrink-0">
+                  <span className="text-[12px] text-muted-foreground shrink-0">
                     ${safeFixed(rawData.cost_usd, 4, '-')}
                   </span>
                 </div>
                 {sug.confidence != null && (
                   <div className="mt-2.5">
-                    <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1">
+                    <div className="flex items-center justify-between text-[12px] text-muted-foreground mb-1">
                       <span>置信度</span>
                       <span className="font-medium text-foreground">{safeFixed(sug.confidence, 1, '-')} / 10</span>
                     </div>

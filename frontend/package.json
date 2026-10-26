@@ -9,6 +9,7 @@
     "typecheck": "tsc -b",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
     "lint": "eslint .",
+    "ui:check": "node ../scripts/check_ui_rules.mjs && node --test ../scripts/test_ui_design_rules.mjs",
     "test": "vitest run",
     "preview": "vite preview"
   },

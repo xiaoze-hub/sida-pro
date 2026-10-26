@@ -27,20 +27,20 @@ export default function Pager({
   const end = Math.min(total, page * pageSize)
   if (total <= pageSize) {
     return (
-      <div className="flex items-center justify-end px-1 py-2 text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-end px-1 py-2 text-[12px] text-muted-foreground">
         共 {total} {unit}
       </div>
     )
   }
   return (
-    <div className="flex items-center justify-end gap-2 px-1 py-2 text-[11px] text-muted-foreground">
+    <div className="flex items-center justify-end gap-2 px-1 py-2 text-[12px] text-muted-foreground">
       <span className="tabular-nums">
         {start}–{end} / 共 {total} {unit}
       </span>
       <Button
         variant="outline"
         size="sm"
-        className="h-7 px-2 text-[11px]"
+        className="h-7 px-2 text-[12px]"
         disabled={page <= 1}
         onClick={() => onPage(page - 1)}
         data-testid="pager-prev"
@@ -53,7 +53,7 @@ export default function Pager({
       <Button
         variant="outline"
         size="sm"
-        className="h-7 px-2 text-[11px]"
+        className="h-7 px-2 text-[12px]"
         disabled={page >= pages}
         onClick={() => onPage(page + 1)}
         data-testid="pager-next"

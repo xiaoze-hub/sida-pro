@@ -147,10 +147,10 @@ export function InviteCodesSection() {
       }
     >
       {/* 注册模式三态切换 */}
-      <div className="mb-4 rounded-xl border border-border/50 dark:border-white/10 bg-s1 px-3 py-2.5">
-        <div className="mb-2 text-[11px] text-muted-foreground">
+      <div className="mb-4 rounded-xl border border-border dark:border-white/10 bg-s1 px-3 py-2.5">
+        <div className="mb-2 text-[12px] text-muted-foreground">
           注册模式：<span className="text-foreground">{MODE_LABEL[mode] ?? mode}</span>
-          <span className="ml-2 text-[10px] text-muted-foreground">切换后立即生效（新注册请求按新模式判定）</span>
+          <span className="ml-2 text-[12px] text-muted-foreground">切换后立即生效（新注册请求按新模式判定）</span>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {MODE_OPTIONS.map(opt => (
@@ -158,7 +158,7 @@ export function InviteCodesSection() {
               key={opt.value}
               size="sm"
               variant={opt.value === mode ? 'default' : 'outline'}
-              className="h-7 text-[11px]"
+              className="h-7 text-[12px]"
               disabled={modeSaving || opt.value === mode}
               onClick={() => void changeMode(opt.value)}
             >
@@ -221,7 +221,7 @@ export function InviteCodesSection() {
         <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
           <Ticket className="h-4 w-4 text-primary" />
           <span className="text-[12px] text-muted-foreground">刚生成的邀请码（只在这里显示一次）：</span>
-          <code className="font-mono text-[13px] font-semibold tracking-widest text-foreground">{lastCreated}</code>
+          <code className="font-mono text-[14px] font-semibold tracking-widest text-foreground">{lastCreated}</code>
           <Button size="sm" variant="ghost" className="h-7" onClick={() => copy(lastCreated)}>
             <Copy className="h-3.5 w-3.5" />
             复制
@@ -240,7 +240,7 @@ export function InviteCodesSection() {
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]">
             <thead>
-              <tr className="border-b border-border/40 text-left text-muted-foreground">
+              <tr className="border-b border-border text-left text-muted-foreground">
                 <th className="py-2 pr-4 font-normal">邀请码</th>
                 <th className="py-2 pr-4 font-normal">备注</th>
                 <th className="py-2 pr-4 font-normal">已用/可用</th>
@@ -251,7 +251,7 @@ export function InviteCodesSection() {
             </thead>
             <tbody>
               {items.map(it => (
-                <tr key={it.code} className="border-b border-border/20">
+                <tr key={it.code} className="border-b border-border">
                   <td className="py-2 pr-4 font-mono tracking-wider">{it.code}</td>
                   <td className="py-2 pr-4 text-muted-foreground">{it.note || '--'}</td>
                   <td className="py-2 pr-4 tabular-nums">
@@ -300,7 +300,7 @@ export function InviteCodesSection() {
             ) : (
               <table className="w-full text-[12px]">
                 <thead>
-                  <tr className="border-b border-border/40 text-left text-muted-foreground">
+                  <tr className="border-b border-border text-left text-muted-foreground">
                     <th className="py-2 pr-4 font-normal">邀请码</th>
                     <th className="py-2 pr-4 font-normal">使用人</th>
                     <th className="py-2 pr-4 font-normal">IP</th>
@@ -309,7 +309,7 @@ export function InviteCodesSection() {
                 </thead>
                 <tbody>
                   {uses.map((u, i) => (
-                    <tr key={`${u.code}-${i}`} className="border-b border-border/20">
+                    <tr key={`${u.code}-${i}`} className="border-b border-border">
                       <td className="py-2 pr-4 font-mono">{u.code}</td>
                       <td className="py-2 pr-4">{u.username || '--'}</td>
                       <td className="py-2 pr-4 font-mono text-muted-foreground">{u.client_ip || '--'}</td>

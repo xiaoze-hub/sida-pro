@@ -31,7 +31,7 @@ const TONE_CLASS: Record<SignalTone, string> = {
 /** 强度: 0 无边框 / 1 hairline / 2 hairline+600 / 3 双档边框(与色相无关, 换配色不影响强弱) */
 const STRENGTH_CLASS: Record<SignalStrength, string> = {
   0: 'border-transparent font-normal',
-  1: 'border-border/60 font-normal',
+  1: 'border-border font-normal',
   2: 'border-current/40 font-semibold',
   3: 'border-current font-bold',
 }
@@ -58,7 +58,7 @@ export default function SignalChip({
       onClick={onClick}
       title={title}
       className={cn(
-        'inline-flex h-[18px] items-center rounded border px-1 text-[11px] leading-none',
+        'inline-flex h-[18px] items-center rounded border px-1 text-[12px] leading-none',
         TONE_CLASS[tone],
         STRENGTH_CLASS[strength],
         className,

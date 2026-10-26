@@ -309,18 +309,18 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
 
   return (
     <section className={`flex flex-col gap-3 ${className}`} data-testid="copilot-schedule-panel">
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      <p className="text-[12px] leading-relaxed text-muted-foreground">
         定时任务按工作日到点执行，结果写成一条消息进会话
       </p>
 
       {/* 录入带：类型 + 时间 + 工作日多选 + 创建 */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-2">
         <select
           aria-label="任务类型"
           data-testid="schedule-kind-select"
           value={kind}
           onChange={(e) => setKind(e.target.value)}
-          className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px] text-foreground"
+          className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px] text-foreground"
         >
           {KIND_OPTIONS.map((k) => (
             <option key={k.value} value={k.value}>
@@ -333,7 +333,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
           data-testid="schedule-time-input"
           type="time"
           step={60}
-          className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px] text-foreground"
+          className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px] text-foreground"
           value={at}
           onChange={(e) => setAt(e.target.value)}
         />
@@ -353,10 +353,10 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                 aria-label={`周${w.label}`}
                 data-testid={`schedule-weekday-${w.key}`}
                 onClick={() => toggleWeekday(w.key)}
-                className={`h-5 w-5 rounded text-[10px] transition-colors ${
+                className={`h-5 w-5 rounded text-[12px] transition-colors ${
                   on
-                    ? 'border border-border/60 bg-s3 text-foreground'
-                    : 'border border-border/60 text-muted-foreground'
+                    ? 'border border-border bg-s3 text-foreground'
+                    : 'border border-border text-muted-foreground'
                 }`}
               >
                 {w.label}
@@ -369,25 +369,25 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
           data-testid="schedule-create-btn"
           disabled={creating || !isValidHhmm(at) || weekdays.length === 0}
           onClick={() => void create()}
-          className="rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          className="rounded border border-border px-2 py-0.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           {creating ? '创建中…' : '创建'}
         </button>
       </div>
 
       {error ? (
-        <p role="alert" className="text-[11px] text-role-risk">
+        <p role="alert" className="text-[12px] text-role-risk">
           {error}
         </p>
       ) : null}
 
       {loading ? (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
           读取中…
         </div>
       ) : rows.length === 0 ? (
-        <p data-testid="schedule-empty" className="py-3 text-[11px] text-muted-foreground">
+        <p data-testid="schedule-empty" className="py-3 text-[12px] text-muted-foreground">
           还没有定时任务。可以让我每天 9:20 给你发竞价摘要。
         </p>
       ) : (
@@ -401,7 +401,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                 key={row.id}
                 data-testid="schedule-row"
                 data-schedule-id={row.id}
-                className="flex items-start gap-2 border-b border-border/30 py-2 transition-opacity duration-200"
+                className="flex items-start gap-2 border-b border-border py-2 transition-opacity duration-200"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -410,20 +410,20 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                     </span>
                     <span
                       data-testid="schedule-time"
-                      className="font-mono text-[11px] text-muted-foreground"
+                      className="font-mono text-[12px] text-muted-foreground"
                     >
                       {row.at_hhmm || '--'}
                     </span>
-                    <span data-testid="schedule-weekdays-text" className="text-[11px] text-muted-foreground">
+                    <span data-testid="schedule-weekdays-text" className="text-[12px] text-muted-foreground">
                       {formatWeekdays(row.weekdays)}
                     </span>
                     {!row.enabled ? (
-                      <span className="rounded bg-s2 px-1 text-[10px] text-muted-foreground">
+                      <span className="rounded bg-s2 px-1 text-[12px] text-muted-foreground">
                         已停用
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
                     <span data-testid="schedule-last-run">
                       上次 {formatLastRun(row.last_run_date)}
                     </span>
@@ -435,12 +435,12 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                 <div className="flex shrink-0 items-center gap-1">
                   {confirming ? (
                     <>
-                      <span className="text-[10px] text-role-risk">确认删除？</span>
+                      <span className="text-[12px] text-role-risk">确认删除？</span>
                       <button
                         type="button"
                         data-testid="schedule-delete-confirm"
                         onClick={() => void remove(row)}
-                        className="rounded border border-role-risk/50 px-1.5 py-0.5 text-[10px] text-role-risk"
+                        className="rounded border border-role-risk/50 px-1.5 py-0.5 text-[12px] text-role-risk"
                       >
                         确认
                       </button>
@@ -448,7 +448,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                         type="button"
                         data-testid="schedule-delete-cancel"
                         onClick={() => setConfirmId(null)}
-                        className="rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                        className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground"
                       >
                         取消
                       </button>

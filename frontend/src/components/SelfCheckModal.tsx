@@ -69,28 +69,28 @@ function StatusBadge({ status }: { status: RowStatus }) {
 
 function ItemRow({ item }: { item: CheckRow }) {
   return (
-    <div className="rounded-lg bg-background/60 px-3 py-2">
+    <div className="rounded-lg bg-background px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <StatusBadge status={item.status} />
           <span className="truncate text-[12px] font-medium text-foreground" title={item.name}>{item.name}</span>
         </div>
-        <span className="flex-shrink-0 font-mono text-[11px] text-muted-foreground">
+        <span className="flex-shrink-0 font-mono text-[12px] text-muted-foreground">
           {item.status === 'checking' ? '…' : `${item.latency_ms}ms`}
         </span>
       </div>
       {item.status === 'fail' && (
         <div className="mt-1.5 space-y-1">
           {item.error && (
-            <p className="truncate text-[11px] text-muted-foreground" title={item.error}>
+            <p className="truncate text-[12px] text-muted-foreground" title={item.error}>
               {item.error}
             </p>
           )}
-          {item.hint && <p className="text-[11px] font-medium text-rose-600">{item.hint}</p>}
+          {item.hint && <p className="text-[12px] font-medium text-rose-600">{item.hint}</p>}
         </div>
       )}
       {item.status !== 'fail' && item.status !== 'checking' && item.note && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">{item.note}</p>
+        <p className="mt-1.5 text-[12px] text-muted-foreground">{item.note}</p>
       )}
     </div>
   )
@@ -192,7 +192,7 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
     const catRows = rows.filter((r) => r.category === cat)
     if (catRows.length === 0) return null
     return (
-      <div key={cat} className="rounded-xl border border-border/40 bg-accent/20 p-3">
+      <div key={cat} className="rounded-xl border border-border bg-s2 p-3">
         <div className="mb-2 text-[12px] font-semibold text-foreground">
           {CATEGORY_LABELS[cat] ?? cat}
         </div>
@@ -200,11 +200,11 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
           <div className="space-y-3">
             {groupByService(catRows).map(([svc, models]) => (
               <div key={svc}>
-                <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[12px] text-muted-foreground">
                   <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
                   {svc}
                 </div>
-                <div className="ml-3 space-y-2 border-l border-border/40 pl-3">
+                <div className="ml-3 space-y-2 border-l border-border pl-3">
                   {models.map((m) => <ItemRow key={m.key} item={m} />)}
                 </div>
               </div>
@@ -229,7 +229,7 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
         {/* 渐变 Hero:进度条 + 总数/正常/异常 */}
         <div className={`relative overflow-hidden rounded-xl ${heroGradient} p-4 text-white shadow-float`}>
           <div className="flex items-center justify-between gap-2">
-            <div className="text-[13px] font-semibold">
+            <div className="text-[14px] font-semibold">
               {running ? '正在检查…' : finished ? '检查完成' : '准备检查'}
             </div>
             <div className="text-[12px] font-mono opacity-90">{progress}%</div>
@@ -243,19 +243,19 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
           <div className="mt-4 grid grid-cols-3 gap-2 text-center">
             <div>
               <div className="text-[20px] font-bold leading-none tabular-nums">{total}</div>
-              <div className="mt-1 text-[11px] opacity-80">总数</div>
+              <div className="mt-1 text-[12px] opacity-80">总数</div>
             </div>
             <div>
               <div className="text-[20px] font-bold leading-none tabular-nums">{okCount}</div>
-              <div className="mt-1 text-[11px] opacity-80">正常</div>
+              <div className="mt-1 text-[12px] opacity-80">正常</div>
             </div>
             <div>
               <div className="text-[20px] font-bold leading-none tabular-nums">{failCount}</div>
-              <div className="mt-1 text-[11px] opacity-80">异常</div>
+              <div className="mt-1 text-[12px] opacity-80">异常</div>
             </div>
           </div>
           {finished && failCount > 0 && (
-            <div className="mt-3 rounded-lg bg-white/15 px-3 py-1.5 text-[11px]">
+            <div className="mt-3 rounded-lg bg-white/15 px-3 py-1.5 text-[12px]">
               发现 {failCount} 项异常,请查看下方修复建议。
             </div>
           )}
@@ -275,7 +275,7 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
 
         {listError && <div className="mt-3 text-[12px] text-rose-600">{listError}</div>}
         {!listError && total === 0 && !running && (
-          <div className="mt-4 rounded-xl border border-border/40 bg-accent/20 p-4 text-center text-[12px] text-muted-foreground">
+          <div className="mt-4 rounded-xl border border-border bg-s2 p-4 text-center text-[12px] text-muted-foreground">
             未配置 数据源 / AI / 通知,先去设置里配置后再自检。
           </div>
         )}

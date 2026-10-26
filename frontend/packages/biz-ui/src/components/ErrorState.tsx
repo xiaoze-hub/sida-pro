@@ -61,13 +61,13 @@ export default function ErrorState({
 }: ErrorStateProps) {
   const display = message ? friendlyHttpMessage(message) : ''
   return (
-    <div className={cn('rounded-xl border border-border/50 bg-card p-3', className)}>
+    <div className={cn('rounded-xl border border-border bg-card p-3', className)}>
       <div className="flex items-center gap-2">
         <ShieldAlert className="w-4 h-4 shrink-0 text-muted-foreground" />
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-semibold text-foreground">{title}</div>
+          <div className="text-[14px] font-semibold text-foreground">{title}</div>
           {display ? (
-            <div className="mt-0.5 break-words text-[11px] text-muted-foreground">{display}</div>
+            <div className="mt-0.5 break-words text-[12px] text-muted-foreground">{display}</div>
           ) : null}
         </div>
         {onRetry ? (

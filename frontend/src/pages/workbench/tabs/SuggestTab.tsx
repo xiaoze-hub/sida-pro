@@ -115,14 +115,14 @@ function SuggestTabBody({
   return (
     <div className="mt-1 space-y-3 text-[12px]" data-testid="suggest-tab">
       {/* 条: 口径说明 + 来源/条数 + 「触发盘中监测」(现价/名称/评分归带1, 本标签不渲染) */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/40 pb-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2 text-[12px] text-muted-foreground">
         <span className="text-foreground">建议</span>
         <span className="text-border/60">|</span>
         <span>
           AI 建议(后端建议池, 源含「{INTRADAY_LABEL}」等 Agent) · 无 AI 建议时回退技术指标基础建议
         </span>
         {suggestions.length > 0 ? (
-          <span className="font-mono text-[10px]">
+          <span className="font-mono text-[12px]">
             共 {suggestions.length} 条
             {sources.length > 0 ? <span className="font-sans"> · 来源: {sources.join(' · ')}</span> : null}
           </span>
@@ -130,7 +130,7 @@ function SuggestTabBody({
         {/* 可见 note(不只藏 title): 本按钮是**一次性**触发 —— 后端 stock_id<=0 + allow_unbound 走
             "不落库"分支(src/web/api/stocks.py:523-533), 既不加自选也不绑 Agent, 故如实这么写。
             KI-058: 旧「一键设提醒」(handleSetAlert 持久化路径)已删; 恢复需产品重做独立入口。 */}
-        <span className="ml-auto text-[10px]" data-testid="suggest-trigger-note">
+        <span className="ml-auto text-[12px]" data-testid="suggest-trigger-note">
           一次性触发: 不加入自选、不绑定{INTRADAY_LABEL}
         </span>
         <button
@@ -138,7 +138,7 @@ function SuggestTabBody({
           onClick={onTrigger}
           disabled={alerting}
           title={`立即向后端提交一轮「${INTRADAY_LABEL}」AI 作业(一次性触发): 不加入自选、不绑定该 Agent、不外发该 Agent 的通知渠道。注意: 运行本身仍会留一条运行记录与一条站内「任务完成」通知(通知中心可见)。提交成功后新建议通常 5-15 秒出现(来源标「${INTRADAY_LABEL}」)。`}
-          className="inline-flex h-6 items-center gap-1 rounded border border-border/50 px-2 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-60"
+          className="inline-flex h-6 items-center gap-1 rounded border border-border px-2 text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-60"
         >
           {alerting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Radar className="h-3 w-3" />}
           {alerting ? '提交中…' : `触发${INTRADAY_LABEL}`}
@@ -146,7 +146,7 @@ function SuggestTabBody({
       </div>
 
       {triggerFailed ? (
-        <div className="rounded border border-border/50 px-3 py-2 text-[11px] text-muted-foreground" data-testid="suggest-trigger-failed">
+        <div className="rounded border border-border px-3 py-2 text-[12px] text-muted-foreground" data-testid="suggest-trigger-failed">
           触发失败: {INTRADAY_LABEL}作业未提交成功 —— 可重试; 失败原因不在此处推断(若出现错误提示, 以其为准)。
           {/* 如实陈述写入状况: 本路径触发前后都没有任何持久化写入(不加自选/不绑 Agent), 故固定这一句。 */}
           {' 本次未发生自选 / 绑定写入。'}

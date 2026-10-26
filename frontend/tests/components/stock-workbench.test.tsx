@@ -326,7 +326,7 @@ describe('StockWorkbench 三带骨架', () => {
     const root = screen.getByTestId('band1').parentElement as HTMLElement
     expect(root.className).toContain('mx-auto')
     expect(root.className).toContain('max-w-none')
-    expect(root.className).toContain('p-3')
+    expect(root.className).toContain('min-w-0')
 
     // 带2: 主图(日线 / 120 天 / 高 420)+ 右栏固定 320px
     expect(screen.getByTestId('kline').textContent).toBe('kline:002636:CN:420:1d:120')
@@ -349,7 +349,7 @@ describe('StockWorkbench 三带骨架', () => {
     }
     // 外层区域只用**顶部 hairline** 划分(与 Dashboard 同语言): 只允许 `border-t`, 不许整框/卡片底/阴影。
     const klineArena = klineBox.closest('section') as HTMLElement
-    expect(klineArena.className).toContain('border-t border-border/60')
+    expect(klineArena.className).toContain('border-t border-border')
     for (const cardChrome of ['rounded', 'shadow', 'bg-card', 'bg-background', 'p-2.5']) {
       expect(klineArena.className, `K 线区域外壳不得带卡片外衣「${cardChrome}」`).not.toContain(cardChrome)
     }
@@ -360,7 +360,7 @@ describe('StockWorkbench 三带骨架', () => {
     // 展开后: 速览内容原样回来(折叠只改展示, 不删功能)
     fireEvent.click(railToggle)
     expect(screen.getByTestId('rail').textContent).toBe('rail:002636:CN')
-    const railColumn = screen.getByTestId('rail').closest('[class*="w-[320px]"]') as HTMLElement
+    const railColumn = screen.getByTestId('rail').closest('[class*="xl:w-[300px]"]') as HTMLElement
     expect(railColumn).toBeTruthy()
     expect(railColumn.className).toContain('shrink-0')
     // rail 自身仍在可滚动容器里(长速览卡不撑破列高)

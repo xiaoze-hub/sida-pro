@@ -149,7 +149,7 @@ describe('① 多页签同时存在(隐藏不卸)', () => {
   it('打开两个功能页 → 两个面板都在 DOM 里, 非活动的那个隐藏但不卸载', () => {
     renderShell('/heatmap')
     go('/opportunities')
-    expect(tabLabels()).toEqual(['首页', '板块热力', '机会'])
+    expect(tabLabels()).toEqual(['首页', '板块热力', '市场扫描'])
     expect(screen.getAllByTestId('workspace-tab-pane').length).toBe(3)
     const heat = paneOf('/heatmap')
     expect(heat.getAttribute('data-active')).toBe('false')
@@ -303,7 +303,7 @@ describe('持久化: 恢复的页签也各就各位', () => {
       JSON.stringify({ v: 1, tabs: [{ key: '/heatmap', path: '/heatmap' }, { key: '/opportunities', path: '/opportunities' }] }),
     )
     renderShell('/opportunities')
-    expect(tabLabels()).toEqual(['首页', '板块热力', '机会'])
+    expect(tabLabels()).toEqual(['首页', '板块热力', '市场扫描'])
     expect(activeKey()).toBe('/opportunities')
     expect(paneOf('/heatmap').hidden).toBe(true)
     expect(within(paneOf('/heatmap')).getByTestId('page').textContent).toContain('热力内容')

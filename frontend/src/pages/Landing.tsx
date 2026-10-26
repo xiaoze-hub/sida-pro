@@ -98,11 +98,11 @@ function TW({ t, s = 45 }: { t: string; s?: number }) {
 /* ── 玻璃卡片 ── */
 function Glass({ tag, title, desc }: { tag: string; title: string; desc: string }) {
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-border/60 dark:border-cyan-400/10 bg-card/60 dark:bg-gradient-to-b dark:from-cyan-500/[0.05] dark:to-blue-600/[0.02] backdrop-blur-xl p-7 transition-all duration-500 hover:border-primary/30 dark:hover:border-cyan-400/25">
+    <div className="group relative overflow-hidden rounded-xl border border-border dark:border-cyan-400/10 bg-card dark:bg-gradient-to-b dark:from-cyan-500/[0.05] dark:to-blue-600/[0.02] backdrop-blur-xl p-7 transition-all duration-500 hover:border-primary/30 dark:hover:border-cyan-400/25">
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 dark:via-cyan-400/25 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
       <span className="mb-4 inline-block font-mono text-[12px] uppercase tracking-[0.2em] text-primary/70 dark:text-cyan-400/70">{tag}</span>
       <h3 className="mb-2.5 text-[16px] font-semibold text-foreground dark:text-white/90">{title}</h3>
-      <p className="text-[13px] leading-relaxed text-muted-foreground">{desc}</p>
+      <p className="text-[14px] leading-relaxed text-muted-foreground">{desc}</p>
     </div>
   )
 }
@@ -111,10 +111,10 @@ function Glass({ tag, title, desc }: { tag: string; title: string; desc: string 
 function Term({ cmd }: { cmd: string }) {
   const [ok, setOk] = useState(false)
   return (
-    <div className="flex items-center justify-between rounded-xl border border-border/60 dark:border-cyan-400/10 bg-card/80 dark:bg-[#080c18]/80 backdrop-blur-sm px-5 py-3.5">
+    <div className="flex items-center justify-between rounded-xl border border-border dark:border-cyan-400/10 bg-card dark:bg-[#080c18]/80 backdrop-blur-sm px-5 py-3.5">
       <div className="flex items-center gap-3 overflow-x-auto">
-        <span className="font-mono text-[13px] text-primary/60 dark:text-cyan-500/50">$</span>
-        <code className="font-mono text-[13px] text-foreground dark:text-cyan-100/80">{cmd}</code>
+        <span className="font-mono text-[14px] text-primary/60 dark:text-cyan-500/50">$</span>
+        <code className="font-mono text-[14px] text-foreground dark:text-cyan-100/80">{cmd}</code>
       </div>
       <button className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-primary dark:hover:bg-white/5 dark:hover:text-cyan-300 transition-colors" onClick={() => { navigator.clipboard.writeText(cmd); setOk(true); setTimeout(() => setOk(false), 2000) }}>
         {ok ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
@@ -146,7 +146,7 @@ export default function LandingPage() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 h-[500px] w-[1000px] rounded-full bg-primary/[0.04] dark:bg-blue-600/[0.05] blur-[150px] pointer-events-none z-0" />
 
       {/* 导航 */}
-      <header className="sticky top-0 z-50 border-b border-border/40 dark:border-cyan-500/5 bg-background/80 dark:bg-[#030814]/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-50 border-b border-border dark:border-cyan-500/5 bg-background dark:bg-[#030814]/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <Link to="/" className="flex items-center gap-2">
             <BrandMark />
@@ -174,13 +174,13 @@ export default function LandingPage() {
           给盯 A 股的开发者与操盘手：<span className="text-primary dark:text-cyan-300">一次注册</span>就能用
           行情、资金、情报、决策四类能力，接口直接调、也能在终端里看。
         </p>
-        <p className="mx-auto mt-4 max-w-xl text-[13px] leading-relaxed text-muted-foreground md:text-[16px]">
+        <p className="mx-auto mt-4 max-w-xl text-[14px] leading-relaxed text-muted-foreground md:text-[16px]">
           <TW t="SIDA 开发者预览版面向全球开发者开放。行情、资金、情报、决策等全部分析能力均通过标准 REST API 开放，可自由组合与集成。" />
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link to="/login?mode=register" className="rounded-lg bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-500 dark:to-blue-600 px-5 py-2 text-[13px] font-semibold text-primary-foreground dark:text-white shadow-[0_0_18px_rgba(34,211,238,0.15)] dark:shadow-[0_0_18px_rgba(34,211,238,0.2)] hover:shadow-[0_0_28px_rgba(34,211,238,0.25)] dark:hover:shadow-[0_0_28px_rgba(34,211,238,0.35)] transition-all">开始使用</Link>
-          <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card/40 dark:bg-white/[0.03] px-5 py-2 text-[13px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">开发者文档</Link>
-          <Link to="/api-keys" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card/40 dark:bg-white/[0.03] px-5 py-2 text-[13px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">API Key</Link>
+          <Link to="/login?mode=register" className="rounded-lg bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-500 dark:to-blue-600 px-5 py-2 text-[14px] font-semibold text-primary-foreground dark:text-white shadow-[0_0_18px_rgba(34,211,238,0.15)] dark:shadow-[0_0_18px_rgba(34,211,238,0.2)] hover:shadow-[0_0_28px_rgba(34,211,238,0.25)] dark:hover:shadow-[0_0_28px_rgba(34,211,238,0.35)] transition-all">开始使用</Link>
+          <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card dark:bg-white/[0.03] px-5 py-2 text-[14px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">开发者文档</Link>
+          <Link to="/api-keys" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card dark:bg-white/[0.03] px-5 py-2 text-[14px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">API Key</Link>
         </div>
       </section>
 
@@ -209,7 +209,7 @@ export default function LandingPage() {
         <h2 className="text-[28px] font-bold tracking-tight md:text-[36px]">
           数据 = 行情 + <span className="bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-300 dark:to-blue-500 bg-clip-text text-transparent">分析</span>
         </h2>
-        <p className="mx-auto mt-4 max-w-lg text-[13px] leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-4 max-w-lg text-[14px] leading-relaxed text-muted-foreground">
           SIDA 让数据在真实场景中产生价值。行情是原料，分析是引擎，API 是出口。
         </p>
       </section>
@@ -231,13 +231,13 @@ export default function LandingPage() {
         <div className="grid grid-cols-1 gap-10 md:grid-cols-2 md:gap-16">
           <div>
             <h3 className="mb-3 text-[16px] font-semibold text-primary dark:text-cyan-300">一切皆接口</h3>
-            <p className="text-[13px] leading-relaxed text-muted-foreground">
+            <p className="text-[14px] leading-relaxed text-muted-foreground">
               SIDA 的全部分析能力均通过标准 REST API 开放。行情查询、资金流向、AI 分析、策略信号——所有功能都有对应的 Skill 接口，可通过 API Key 直接调用，也可在网页端实时体验。
             </p>
           </div>
           <div>
             <h3 className="mb-3 text-[16px] font-semibold text-primary dark:text-cyan-300">口径透明可追溯</h3>
-            <p className="text-[13px] leading-relaxed text-muted-foreground">
+            <p className="text-[14px] leading-relaxed text-muted-foreground">
               每个接口都标注数据口径（tick/eastmoney4/ths），资金类指标必须声明方向语义。数据缺失显式标注「无数据」，绝不编造数字。多源数据自动降级，口径标签始终可见。
             </p>
           </div>
@@ -249,8 +249,8 @@ export default function LandingPage() {
       {/* 代码示例 */}
       <section className="relative z-10 mx-auto max-w-3xl px-6 py-16">
         <h2 className="mb-6 text-center text-[16px] font-semibold text-foreground dark:text-white/90">调用示例</h2>
-        <div className="overflow-hidden rounded-xl border border-border/60 dark:border-cyan-400/10 bg-card/80 dark:bg-[#080c18]/80 backdrop-blur-sm">
-          <div className="flex items-center gap-2 border-b border-border/50 dark:border-cyan-400/10 px-4 py-2.5">
+        <div className="overflow-hidden rounded-xl border border-border dark:border-cyan-400/10 bg-card dark:bg-[#080c18]/80 backdrop-blur-sm">
+          <div className="flex items-center gap-2 border-b border-border dark:border-cyan-400/10 px-4 py-2.5">
             <div className="flex gap-1.5">
               <div className="h-2.5 w-2.5 rounded-full bg-red-500/50" />
               <div className="h-2.5 w-2.5 rounded-full bg-yellow-500/50" />
@@ -281,12 +281,12 @@ export default function LandingPage() {
       {/* CTA */}
       <section className="relative z-10 mx-auto max-w-3xl px-6 py-16 text-center">
         <h2 className="text-[20px] font-bold tracking-tight md:text-[28px] text-foreground dark:text-white/90">开始构建</h2>
-        <p className="mx-auto mt-3 max-w-md text-[13px] text-muted-foreground">
+        <p className="mx-auto mt-3 max-w-md text-[14px] text-muted-foreground">
           注册账号，获取 API Key，立即接入 SIDA 的全部分析能力。
         </p>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <Link to="/login?mode=register" className="rounded-lg bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-500 dark:to-blue-600 px-5 py-2 text-[13px] font-semibold text-primary-foreground dark:text-white shadow-[0_0_18px_rgba(34,211,238,0.15)] dark:shadow-[0_0_18px_rgba(34,211,238,0.2)] hover:shadow-[0_0_28px_rgba(34,211,238,0.25)] dark:hover:shadow-[0_0_28px_rgba(34,211,238,0.35)] transition-all">免费注册</Link>
-          <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card/40 dark:bg-white/[0.03] px-5 py-2 text-[13px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">阅读文档</Link>
+          <Link to="/login?mode=register" className="rounded-lg bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-500 dark:to-blue-600 px-5 py-2 text-[14px] font-semibold text-primary-foreground dark:text-white shadow-[0_0_18px_rgba(34,211,238,0.15)] dark:shadow-[0_0_18px_rgba(34,211,238,0.2)] hover:shadow-[0_0_28px_rgba(34,211,238,0.25)] dark:hover:shadow-[0_0_28px_rgba(34,211,238,0.35)] transition-all">免费注册</Link>
+          <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card dark:bg-white/[0.03] px-5 py-2 text-[14px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">阅读文档</Link>
         </div>
         <div className="mt-6 flex justify-center gap-4 font-mono text-[12px]">
           <Link to="/developers" className="text-muted-foreground hover:text-primary dark:hover:text-cyan-400 transition-colors">开发者文档</Link>
@@ -296,7 +296,7 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="relative z-10 border-t border-border/40 dark:border-cyan-500/5 px-6 py-8">
+      <footer className="relative z-10 border-t border-border dark:border-cyan-500/5 px-6 py-8">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 md:flex-row">
           <div className="flex items-center gap-2">
             <BrandMark />

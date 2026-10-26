@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SafeMarkdown from '@/components/SafeMarkdown'
 // 反AI模板 P2:精简图标导入 — 段落头去"每节一图标"惯性, 只保留要紧事/体检两个扫描区的图标
-import { RefreshCw, AlertTriangle, ShieldAlert, Share2, ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { Clock3, RefreshCw, AlertTriangle, ShieldAlert, Share2, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import {
   dashboardApi,
   portfolioApi,
@@ -48,6 +48,8 @@ import FlashValue from '@panwatch/biz-ui/components/FlashValue'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import MarketStatusPills from '@/components/MarketStatusPills'
+import PageHeader from '@/components/PageHeader'
+import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
 import DashboardCustomizer from '@/components/DashboardCustomizer'
 import CollapsibleSection from '@/components/dashboard/CollapsibleSection'
 import IndexTrendBand from '@/components/dashboard/IndexTrendBand'
@@ -244,6 +246,7 @@ export default function DashboardPage() {
   const [shareDigest, setShareDigest] = useState(false)
   // A1 看板轻量定制(2026-09-10): 模块显隐/分区排序, 偏好 localStorage 持久化
   const [layout, setLayout] = useState<DashboardLayout>(() => loadLayout())
+  const [anomaliesCollapsed, setAnomaliesCollapsed] = useState(() => readCollapsed('anomalies'))
   const [customizerOpen, setCustomizerOpen] = useState(false)
   const updateLayout = useCallback((updater: (l: DashboardLayout) => DashboardLayout) => {
     setLayout(prev => {
@@ -627,48 +630,29 @@ export default function DashboardPage() {
 
   return (
     <div className="page-container sida-page-enter pb-10">
-      {/* 顶部:标题 + 刷新 + 日期/市场状态 pills */}
-      <div className="mb-3 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:justify-between">
-        <div className="flex shrink-0 items-center gap-2">
-          <h1 className="text-[20px] font-bold tracking-tight text-foreground">{t('dashboard.subtitle')}</h1>
-          <Button onClick={() => load()} disabled={loading} size="sm" variant="ghost" className="h-7 px-2 min-h-[44px] min-w-[44px]" aria-label={t('common.refresh')}>
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+      <PageHeader
+        title={t('dashboard.subtitle')}
+        actions={<>
+          <Button onClick={() => load()} disabled={loading} size="sm" variant="ghost">
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />{t('common.refresh')}
           </Button>
-          {/* 修复 2026-08-21: Onboarding 默认不弹, 加个低存在感入口让用户主动触发 */}
-          <Button
-            onClick={openOnboarding}
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-[11px] text-muted-foreground min-h-[44px]"
-            title={t('dashboard.onboarding')}
-          >
-            {t('dashboard.onboarding')}
+          <Button onClick={openOnboarding} size="sm" variant="ghost">{t('dashboard.onboarding')}</Button>
+          <Button onClick={() => setCustomizerOpen(true)} size="sm" variant="ghost" title={t('dashboard.customize')}>
+            <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />{t('dashboard.customize')}
           </Button>
-          {/* A1: 看板模块显隐/排序入口 */}
-          <Button
-            onClick={() => setCustomizerOpen(true)}
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-[11px] text-muted-foreground min-h-[44px]"
-            title={t('dashboard.customize')}
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5 mr-1" />
-            {t('dashboard.customize')}
-          </Button>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          {refreshedAt && <span className="text-muted-foreground">{formatHeaderTime(refreshedAt)}</span>}
-          {/* A4: 三地开闭市徽标(交易中高亮) + 交易时段(桌面档直显, 悬停含当地时间) */}
+        </>}
+        metadata={<>
+          {refreshedAt && <StatusChip><Clock3 className="h-3 w-3" aria-hidden="true" />{formatHeaderTime(refreshedAt)}</StatusChip>}
           <MarketStatusPills items={marketStatus} />
-        </div>
-      </div>
+        </>}
+      />
 
       {/* P0-2 收尾(2026-09-18): 首屏「结论行」—— 一行读完市场状态(情绪阶段/涨跌家数/成交/主力净流入/口径)。
           为什么: 首页此前是"一堆碎片各自成块", 首屏读完说不出结论; 密度实测 784 也偏低。
           数据**全部取自本页已有 state**(phaseKpi / marketFlow), 不新增请求; 缺数一律 `--`, 不用 0 顶。 */}
       <div
         data-testid="market-conclusion"
-        className="mb-3 rounded-lg border border-border-strong px-3 py-2.5"
+        className="mb-4 rounded-xl border border-border bg-card p-4"
       >
         {/* 2026-10-24: 右侧曾整片留白(14% 屏高只放 6 个数字) → 挂大盘分时走势带。
             左列宽度自适应, 右列 280–380; 窄屏(<lg)堆叠, 走势带落到数字下方。
@@ -690,11 +674,11 @@ export default function DashboardPage() {
         {/* 3 个结论数字: 涨停 / 涨跌 / 主线强度(无强度则主线名) */}
         <div className="mt-2 grid grid-cols-3 gap-3">
           <div>
-            <div className="text-[11px] text-muted-foreground">涨停</div>
+            <div className="text-[12px] text-muted-foreground">涨停</div>
             <div className="font-num text-[20px] font-semibold tabular-nums text-stock-up">{phaseKpi.limitUp ?? '--'}</div>
           </div>
           <div>
-            <div className="text-[11px] text-muted-foreground">涨 / 跌</div>
+            <div className="text-[12px] text-muted-foreground">涨 / 跌</div>
             <div className="font-num text-[20px] font-semibold tabular-nums">
               <span className="text-stock-up">{marketFlow?.up_count ?? '--'}</span>
               <span className="mx-1 text-muted-foreground">/</span>
@@ -702,14 +686,14 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="min-w-0">
-            <div className="text-[11px] text-muted-foreground">主线 Top1</div>
+            <div className="text-[12px] text-muted-foreground">主线 Top1</div>
             <div className="truncate font-num text-[20px] font-semibold tabular-nums text-foreground">
               {mainlineKpi.top?.name ?? (mainlineKpi.loading ? '…' : '--')}
             </div>
           </div>
         </div>
         {/* 细项降为第二行小字: 封板率 / 成交 / 主力净流入 / 口径 */}
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/40 pt-2 text-[11px] text-muted-foreground">
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[12px] text-muted-foreground">
           <span>封板率 <b className="font-mono text-foreground">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
           <span>成交 <b className="font-mono text-foreground">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
           <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
@@ -717,7 +701,7 @@ export default function DashboardPage() {
             <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
           </span>
         </div>
-        <div className="mt-2 border-t border-border/40 pt-2">
+        <div className="mt-2 border-t border-border pt-2">
           <MarketBroadcast />
         </div>
         </div>
@@ -730,10 +714,10 @@ export default function DashboardPage() {
       <ErrorBanner errors={sourceErrors} onDismiss={(id) => setSourceErrors(prev => prev.filter(e => e.id !== id))} retryAll={load} />
 
       {/* A1 看板定制: main 区(全宽纵列) flex 容器 — style.order 实现分区内排序 */}
-      <div className="flex flex-col">
+      <div className="flex flex-col gap-4">
       {/* 指数走势 pills */}
       {shown('indices') && (
-      <div style={{ order: orderIndex(layout, 'indices') }} className="mb-3 grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
+      <div style={{ order: orderIndex(layout, 'indices') }} className="grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
         {loading && indices.length === 0
           ? Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="p-2.5">
@@ -746,7 +730,7 @@ export default function DashboardPage() {
           <button
             key={`${ix.market}:${ix.symbol}`}
             onClick={() => navigate(`/index/${ix.symbol}`)}
-            className="relative rounded-md border border-border/40 p-2.5 text-left hover:border-primary/40 transition-colors cursor-pointer min-h-[44px] bg-card"
+            className="relative rounded-md border border-border p-2.5 text-left hover:border-primary/40 transition-colors cursor-pointer min-h-[44px] bg-card"
           >
             <div className="flex items-start justify-between gap-1">
               <div className="min-w-0">
@@ -785,13 +769,13 @@ export default function DashboardPage() {
       {/* KPI 带与结论行 6 个数字完全重复(涨跌/净流入/成交/情绪/主线/涨停跌停),
           默认收起但**保留模块**(看板定制里仍可开), 表头写明重复关系, 不让人以为丢了数据。 */}
       {shown('kpi') && (
-      <div style={{ order: orderIndex(layout, 'kpi') }} className="mb-1">
+      <div style={{ order: orderIndex(layout, 'kpi') }} className="min-w-0">
       <CollapsibleSection
         id="kpi"
         header={
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <h2 className="text-[13px] font-semibold">{t('dashboard.kpiBand')}</h2>
-            <span className="text-[11px] text-muted-foreground">
+            <h2 className="text-[14px] font-semibold">{t('dashboard.kpiBand')}</h2>
+            <span className="text-[12px] text-muted-foreground">
               与上方结论行同源同值（涨停 / 涨跌 / 净流入 / 成交），需要横向对照时展开
             </span>
           </div>
@@ -815,30 +799,31 @@ export default function DashboardPage() {
           三张卡本身是**直方图 + 刻度**(实测 13 个数字), 属于「证据」不是「结论」;
           但它们的结论(哪个阶段、主线是谁)必须常显 —— 所以放进表头, 卡体折叠。 */}
       {shown('overview') && (
-      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5">
+      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="min-w-0">
         <CollapsibleSection
           id="overview"
+          presentation="group"
           header={
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-              <h2 className="text-[13px] font-semibold">市场全景</h2>
+              <h2 className="text-[14px] font-semibold">市场全景</h2>
               <span className="text-[12px] text-foreground">
                 情绪 <b className="font-medium">{phaseKpi.label ?? (phaseKpi.loading ? '识别中' : '未知')}</b>
               </span>
               <span className="text-[12px] text-foreground">
                 主线 <b className="font-medium">{mainlineKpi.top?.name ?? (mainlineKpi.loading ? '识别中' : '尚未识别')}</b>
                 {mainlineKpi.top?.leader_name ? (
-                  <span className="ml-1 text-[11px] text-muted-foreground">龙头 {mainlineKpi.top.leader_name}</span>
+                  <span className="ml-1 text-[12px] text-muted-foreground">龙头 {mainlineKpi.top.leader_name}</span>
                 ) : null}
               </span>
-              <span className="text-[11px] text-muted-foreground">展开看阶段分布 / 强度对比 / 温度刻度</span>
+              <span className="text-[12px] text-muted-foreground">展开看阶段分布 / 强度对比 / 温度刻度</span>
             </div>
           }
         >
-          <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
-            <MarketPhaseCardMemo />
-            <MarketMainlineCardMemo />
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+            <div className="analysis-section min-w-0"><MarketPhaseCardMemo /></div>
+            <div className="analysis-section min-w-0"><MarketMainlineCardMemo /></div>
             {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
-            <PhaseGaugeCard />
+            <div className="analysis-section min-w-0"><PhaseGaugeCard /></div>
           </div>
         </CollapsibleSection>
       </div>
@@ -847,15 +832,15 @@ export default function DashboardPage() {
       {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
       {/* 反AI模板 P2:次要列表区去卡片化 — 去掉盒子, 顶部 1px hairline + 留白, 标题/指标直排 */}
       {shown('fundflow') && marketFlow && (
-        <div style={{ order: orderIndex(layout, 'fundflow') }} className="mt-5">
+        <div style={{ order: orderIndex(layout, 'fundflow') }} className="min-w-0">
           <CollapsibleSection
             id="fundflow"
             header={
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-                <h2 className="text-[13px] font-semibold">{t('dashboard.fundflow')}</h2>
+                <h2 className="text-[14px] font-semibold">{t('dashboard.fundflow')}</h2>
                 {/* 折叠态也要能读到方向与量级：主力净流入直接进表头 */}
                 <b
-                  className={`font-mono text-[13px] font-semibold ${marketFlow.total_main_flow == null
+                  className={`font-mono text-[14px] font-semibold ${marketFlow.total_main_flow == null
                     ? 'text-muted-foreground'
                     : marketFlow.total_main_flow >= 0
                       ? 'text-stock-up'
@@ -863,26 +848,26 @@ export default function DashboardPage() {
                 >
                   {safeFlow(marketFlow.total_main_flow)}
                 </b>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   {t('dashboard.amount')} {marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}
                 </span>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   {t('dashboard.up')} <b className="font-mono text-stock-up">{marketFlow.up_count ?? '--'}</b>
                   {' / '}
                   {t('dashboard.down')} <b className="font-mono text-stock-down">{marketFlow.down_count ?? '--'}</b>
                 </span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   {t('dashboard.sh')} {safeFixed(marketFlow.sh_flow, 1)}亿 · {t('dashboard.sz')} {safeFixed(marketFlow.sz_flow, 1)}亿
                 </span>
-                <span className="text-[10px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
+                <span className="text-[12px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
                 <span
-                  className="cursor-help text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2"
+                  className="cursor-help text-[12px] text-muted-foreground underline decoration-dotted underline-offset-2"
                   title={marketFlow.caliber_label || t('dashboard.caliberHint')}
                 >
                   {t('dashboard.caliberLabel')}
                 </span>
                 {marketFlow.stale && (
-                  <span className="text-[10px] text-amber-600" title={t('dashboard.staleHint')}>
+                  <span className="text-[12px] text-amber-600" title={t('dashboard.staleHint')}>
                     · {t('dashboard.stale')}{marketFlow.stale_age_sec != null ? t('dashboard.staleMin', { n: Math.max(1, Math.round(marketFlow.stale_age_sec / 60)) }) : ''}
                   </span>
                 )}
@@ -897,12 +882,12 @@ export default function DashboardPage() {
             <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
               {marketFlow.inflow_boards?.length ? (
                 <div>
-                  <div className="mb-1 text-[11px] font-semibold text-stock-up">{t('dashboard.inflowBoards')}</div>
+                  <div className="mb-1 text-[12px] font-semibold text-stock-up">{t('dashboard.inflowBoards')}</div>
                   <div className="space-y-0.5">
                     {(() => {
                       const maxIn = Math.max(...(marketFlow.inflow_boards?.map(x => x.net_inflow) || [1]), 0.01)
                       return marketFlow.inflow_boards.map((b, bi) => (
-                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
+                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[12px]">
                           {/* 2026-09-05 质感: 纯色10% → 左实右虚渐变，有“水位感” */}
                           <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-up/25 to-stock-up/5 transition-all duration-500" style={{ width: `${Math.min(100, (b.net_inflow / maxIn) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
                           <span className="relative z-10 truncate px-1 text-muted-foreground" title={b.name}>{b.name}</span>
@@ -915,12 +900,12 @@ export default function DashboardPage() {
               ) : null}
               {marketFlow.outflow_boards?.length ? (
                 <div>
-                  <div className="mb-1 text-[11px] font-semibold text-stock-down">{t('dashboard.outflowBoards')}</div>
+                  <div className="mb-1 text-[12px] font-semibold text-stock-down">{t('dashboard.outflowBoards')}</div>
                   <div className="space-y-0.5">
                     {(() => {
                       const maxOut = Math.max(...(marketFlow.outflow_boards?.map(x => Math.abs(x.net_inflow)) || [1]), 0.01)
                       return marketFlow.outflow_boards.map((b, bi) => (
-                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
+                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[12px]">
                           <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-down/25 to-stock-down/5 transition-all duration-500" style={{ width: `${Math.min(100, (Math.abs(b.net_inflow) / maxOut) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
                           <span className="relative z-10 truncate px-1 text-muted-foreground" title={b.name}>{b.name}</span>
                           <span className="relative z-10 font-mono tabular-nums text-stock-down">{safeFixed(b.net_inflow, 1)}亿</span>
@@ -937,7 +922,7 @@ export default function DashboardPage() {
       )}
       {/* 三指标共振(2026-09-11 数智决策升级 B): 盘后全市场扫描落库结果 */}
       {shown('resonance') && (
-        <div style={{ order: orderIndex(layout, 'resonance') }} className="mt-5 border-t border-border/60 pt-3">
+        <div style={{ order: orderIndex(layout, 'resonance') }} className="analysis-section">
           <ResonancePanelMemo actions={resonanceScanAction} />
         </div>
       )}
@@ -945,20 +930,21 @@ export default function DashboardPage() {
 
       {/* 异动池(东财) | 热榜(同花顺):并排双列,移动端堆叠;独立加载,任一失败静默不影响首页 */}
       {/* 反AI模板 P2:异动/热榜同为列表感区块, 去卡片化 — 与大盘资金流一致 hairline 分隔 */}
-      <div className="mt-5 grid grid-cols-1 gap-x-6 md:grid-cols-2">
+      {(shown('anomalies') || shown('breadth')) && <div data-testid="dashboard-duo" className={`mt-5 grid grid-cols-1 items-start gap-4 ${!anomaliesCollapsed && shown('anomalies') && shown('breadth') ? 'md:grid-cols-2' : ''}`}>
         {/* 异动池(东财) — v0.4.7 与涨跌分布并排 */}
         {shown('anomalies') && (
         <div style={{ order: orderIndex(layout, 'anomalies') }}>
           <CollapsibleSection
             id="anomalies"
+            onCollapsedChange={setAnomaliesCollapsed}
             onExpand={loadAnomalies}
             header={
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <h2 className="text-[13px] font-semibold">{t('dashboard.anomalies')}</h2>
+                <h2 className="text-[14px] font-semibold">{t('dashboard.anomalies')}</h2>
                 <span className="font-mono text-[12px] text-foreground">
                   {anomaliesLoading && anomalies.length === 0 ? '…' : `${anomalies.length} 只`}
                 </span>
-                <span className="text-[10px] text-muted-foreground">{t('dashboard.anomaliesSource')}</span>
+                <span className="text-[12px] text-muted-foreground">{t('dashboard.anomaliesSource')}</span>
               </div>
             }
           >
@@ -986,25 +972,25 @@ export default function DashboardPage() {
                       if (!sym) return
                       openStockContextMenu(e, { symbol: sym, name: a.name || sym, market: a.market || 'CN', hasPosition: false })
                     }}
-                    className="flex w-full items-center gap-2.5 py-1.5 text-left transition-colors hover:bg-accent/30 min-h-[44px]"
+                    className="flex w-full items-center gap-2.5 py-1.5 text-left transition-colors hover:bg-s2 min-h-[44px]"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium" title={a.name || sym || '--'}>{a.name || sym || '--'}</span>
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
+                        <span className="truncate text-[14px] font-medium" title={a.name || sym || '--'}>{a.name || sym || '--'}</span>
+                        <span className="shrink-0 font-mono text-[12px] text-muted-foreground">{sym}</span>
                         {a.is_today && (
-                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">{t('dashboard.todayTag')}</span>
+                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[12px] text-amber-500">{t('dashboard.todayTag')}</span>
                         )}
                       </div>
-                      {rule && <div className="truncate text-[11px] text-muted-foreground" title={rule}>{rule}</div>}
+                      {rule && <div className="truncate text-[12px] text-muted-foreground" title={rule}>{rule}</div>}
                     </div>
                     {dev != null && (
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                      <span className="shrink-0 text-[12px] text-muted-foreground">
                         {t('dashboard.deviation')} {pct(dev)}
                         {days ? ` · ${t('dashboard.days', { n: days })}` : ''}
                       </span>
                     )}
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(a.change_pct)}`}>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[12px] ${pctChipCls(a.change_pct)}`}>
                       {a.change_pct != null ? pct(a.change_pct) : '--'}
                     </span>
                   </button>
@@ -1018,12 +1004,12 @@ export default function DashboardPage() {
 
         {/* v0.4.7: 全市场涨跌分布(双向柱) */}
         {shown('breadth') && (
-        <div style={{ order: orderIndex(layout, 'breadth') }} className="border-t border-border/60 pt-2.5">
-          <SectionHeader title={t('dashboard.breadth')} action={<span className="text-[10px] text-muted-foreground">{t('dashboard.breadthScope')}</span>} />
+        <div style={{ order: orderIndex(layout, 'breadth') }} className="analysis-section">
+          <SectionHeader title={t('dashboard.breadth')} action={<span className="text-[12px] text-muted-foreground">{t('dashboard.breadthScope')}</span>} />
           <BreadthDistributionChartMemo />
         </div>
         )}
-      </div>
+      </div>}
       {/* 热榜已移除(v0.4.7): 与发现页重复 */}
 
       {/* 主体:PC 工作台 3 列(要紧事3 | 体检6 | 机会3);次级 2 列(简报6 | 机会发现6)。1280px 以下回退 7/5-5/7 两行布局 */}
@@ -1031,17 +1017,17 @@ export default function DashboardPage() {
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* 今日要紧事(左列,窄) */}
         {shown('agenda') && (
-        <div style={{ order: orderIndex(layout, 'agenda') }} className="border-t border-border/60 pt-3 lg:col-span-7 xl:col-span-3">
+        <div style={{ order: orderIndex(layout, 'agenda') }} className="analysis-section lg:col-span-7 xl:col-span-3">
           <SectionHeader
             title="今日要紧事"
             action={
               <>
-                <span className="hidden text-[11px] text-muted-foreground xl:inline">你的持仓/自选里今天该关注的</span>
+                <span className="hidden text-[12px] text-muted-foreground xl:inline">你的持仓/自选里今天该关注的</span>
                 {feed.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setShareDigest(true)}
-                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                    className="inline-flex items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-primary"
                     title="生成今日盯盘分享图"
                   >
                     <Share2 className="h-3.5 w-3.5" />
@@ -1057,18 +1043,18 @@ export default function DashboardPage() {
           ) : candidates.length === 0 ? (
             todos.length > 0 ? (
               <div className="space-y-1.5 py-1">
-                <div className="text-[11px] text-muted-foreground">今日暂无异动/触发 ✓ · 待办:</div>
+                <div className="text-[12px] text-muted-foreground">今日暂无异动/触发 ✓ · 待办:</div>
                 {todos.map((t, i) => (
                   <div
                     key={i}
-                    className={`flex items-center gap-2 py-1 text-[12px] ${t.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
+                    className={`flex items-center gap-2 py-1 text-[12px] ${t.symbol ? 'cursor-pointer hover:bg-s2' : ''}`}
                     onClick={() => t.symbol && openStock(t.symbol, t.market || 'CN', '')}
                     onContextMenu={(e) => {
                       if (!t.symbol) return
                       openStockContextMenu(e, { symbol: t.symbol, name: t.symbol, market: t.market || 'CN', hasPosition: false })
                     }}
                   >
-                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">
+                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[12px] text-amber-500">
                       {t.type === 'no_alert' ? '加提醒' : '将到期'}
                     </span>
                     <span className="truncate" title={t.message}>{t.message}</span>
@@ -1085,7 +1071,7 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={i}
-                    className={`flex items-center gap-3 py-2 min-h-[44px] ${it.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
+                    className={`flex items-center gap-3 py-2 min-h-[44px] ${it.symbol ? 'cursor-pointer hover:bg-s2' : ''}`}
                     onClick={() => it.symbol && openStock(it.symbol, it.market || 'CN', it.name || '')}
                     onContextMenu={(e) => {
                       if (!it.symbol) return
@@ -1097,12 +1083,12 @@ export default function DashboardPage() {
                       })
                     }}
                   >
-                    <span className={`shrink-0 rounded px-1 text-[10px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
+                    <span className={`shrink-0 rounded px-1 text-[12px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</div>
-                      {it.why && <div className="truncate text-[11px] text-muted-foreground" title={it.why}>{it.why}</div>}
+                      <div className="truncate text-[14px] font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</div>
+                      {it.why && <div className="truncate text-[12px] text-muted-foreground" title={it.why}>{it.why}</div>}
                     </div>
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(it.change_pct)}`}>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[12px] ${pctChipCls(it.change_pct)}`}>
                       {it.change_pct != null ? pct(it.change_pct) : '--'}
                     </span>
                   </div>
@@ -1115,23 +1101,23 @@ export default function DashboardPage() {
 
         {/* 组合体检(中列,宽) */}
         {shown('portfolio') && (
-        <div style={{ order: orderIndex(layout, 'portfolio') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-6">
+        <div style={{ order: orderIndex(layout, 'portfolio') }} className="analysis-section lg:col-span-5 xl:col-span-6">
           <div className="mb-2 flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-primary" />
-            <h2 className="text-[13px] font-semibold">组合体检</h2>
+            <h2 className="text-[14px] font-semibold">组合体检</h2>
             {(benchReady || hasHoldings) && (
               /* v0.4.7: 两个分享入口合并为一个下拉, 减少头部按钮拥挤 */
               <details className="relative ml-auto">
-                <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary">
+                <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-primary">
                   <Share2 className="h-3.5 w-3.5" />
                   分享 ▾
                 </summary>
-                <div className="absolute right-0 z-20 mt-1 w-28 rounded-md border border-border/60 bg-card py-1 ">
+                <div className="absolute right-0 z-20 mt-1 w-28 rounded-md border border-border bg-card py-1 ">
                   {benchReady && (
                     <button
                       type="button"
                       onClick={(e) => { setShareBench(true); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}
-                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-accent/30"
+                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-s2"
                     >
                       成绩单图
                     </button>
@@ -1140,7 +1126,7 @@ export default function DashboardPage() {
                     <button
                       type="button"
                       onClick={(e) => { setShareDiag(true); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}
-                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-accent/30"
+                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-s2"
                     >
                       体检图
                     </button>
@@ -1164,7 +1150,7 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-3 text-[12px]">
               {/* 图例行:色块 + 我的组合/基准收益 + 超额 chip */}
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
                 <div className="flex items-center gap-3">
                   <span className="flex items-center gap-1.5">
                     <span className="h-[3px] w-3.5 rounded-full bg-primary" />
@@ -1188,7 +1174,7 @@ export default function DashboardPage() {
               {benchState === 'ready' && bench?.curve && bench.curve.length >= 2 ? (
                 <BenchChart curve={bench.curve} />
               ) : (
-                <div className="flex h-[150px] flex-col items-center justify-center gap-2 border border-dashed border-border/50 text-[11px] text-muted-foreground">
+                <div className="flex h-[150px] flex-col items-center justify-center gap-2 border border-dashed border-border text-[12px] text-muted-foreground">
                   {benchState === 'loading' && <span>基准对比计算中…(需拉全部持仓 K 线,约 1 分钟)</span>}
                   {benchState === 'empty' && <span>{bench?.reason || '数据不足,暂无法计算基准对比'}</span>}
                   {benchState === 'error' && (
@@ -1197,7 +1183,7 @@ export default function DashboardPage() {
                       <button
                         type="button"
                         onClick={loadBench}
-                        className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary hover:bg-accent/30"
+                        className="rounded border border-border px-2.5 py-1 text-[12px] text-primary hover:bg-s2"
                       >
                         重试
                       </button>
@@ -1216,7 +1202,7 @@ export default function DashboardPage() {
               {/* 市场分布:stacked 单条 */}
               {marketSegs.length > 0 && (
                 <div>
-                  <div className="flex h-2 overflow-hidden rounded-full bg-accent/30">
+                  <div className="flex h-2 overflow-hidden rounded-full bg-s2">
                     {marketSegs.map((seg, i) => (
                       <div
                         key={seg.market}
@@ -1225,7 +1211,7 @@ export default function DashboardPage() {
                       />
                     ))}
                   </div>
-                  <div className="mt-1 text-[10px] text-muted-foreground">
+                  <div className="mt-1 text-[12px] text-muted-foreground">
                     {marketSegs.map((seg) => `${seg.market} ${seg.pct.toFixed(0)}%`).join(' · ')}
                   </div>
                 </div>
@@ -1241,8 +1227,8 @@ export default function DashboardPage() {
                   const positive = item.contribution_pct >= 0
                   return (
                     <div key={label} className="flex items-center gap-2">
-                      <span className="w-8 shrink-0 text-[10px] text-muted-foreground">{label}</span>
-                      <div className="relative h-1.5 flex-1 rounded-full bg-accent/30">
+                      <span className="w-8 shrink-0 text-[12px] text-muted-foreground">{label}</span>
+                      <div className="relative h-1.5 flex-1 rounded-full bg-s2">
                         <div className="absolute inset-y-0 left-1/2 w-px bg-border" />
                         <div
                           className={`absolute inset-y-0 rounded-full ${positive ? 'bg-stock-up' : 'bg-stock-down'}`}
@@ -1253,7 +1239,7 @@ export default function DashboardPage() {
                           }
                         />
                       </div>
-                      <span className="w-28 shrink-0 truncate text-right text-[11px]" title={[item.name, pct(item.contribution_pct)].filter(Boolean).join(' ')}>
+                      <span className="w-28 shrink-0 truncate text-right text-[12px]" title={[item.name, pct(item.contribution_pct)].filter(Boolean).join(' ')}>
                         {item.name} <span className={`font-mono ${moveColor(item.contribution_pct)}`}>{pct(item.contribution_pct)}</span>
                       </span>
                     </div>
@@ -1263,20 +1249,20 @@ export default function DashboardPage() {
               {diag!.alerts.length > 0 ? (
                 <div className="space-y-1 pt-1">
                   {diag!.alerts.map((a, i) => (
-                    <div key={i} className="flex items-start gap-1 text-[11px] text-amber-500">
+                    <div key={i} className="flex items-start gap-1 text-[12px] text-amber-500">
                       <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                       <span>{a}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="pt-1 text-[11px] text-stock-up">✓ 集中度/分布未见明显风险</div>
+                <div className="pt-1 text-[12px] text-stock-up">✓ 集中度/分布未见明显风险</div>
               )}
               <button
                 type="button"
                 onClick={runAiReview}
                 disabled={aiReviewLoading}
-                className="mt-1 w-full rounded border border-border/60 py-1 text-[11px] text-primary hover:bg-accent/30 disabled:opacity-60"
+                className="mt-1 w-full rounded border border-border py-1 text-[12px] text-primary hover:bg-s2 disabled:opacity-60"
               >
                 {aiReviewLoading ? 'AI 体检中…' : 'AI 体检报告'}
               </button>
@@ -1292,14 +1278,14 @@ export default function DashboardPage() {
 
         {/* 机会精选(右列,窄) */}
         {shown('picks') && (
-        <div style={{ order: orderIndex(layout, 'picks') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
+        <div style={{ order: orderIndex(layout, 'picks') }} className="analysis-section lg:col-span-5 xl:col-span-3">
           {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描区的图标 */}
           <SectionHeader
             title="机会精选"
             action={
               <button
                 type="button"
-                className="text-[11px] text-muted-foreground hover:text-foreground"
+                className="text-[12px] text-muted-foreground hover:text-foreground"
                 onClick={() => navigate('/opportunities')}
               >
                 进入机会页
@@ -1314,7 +1300,7 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={`${o.stock_market}:${o.stock_symbol}`}
-                    className="flex cursor-pointer items-center gap-2 py-2 hover:bg-accent/30"
+                    className="flex cursor-pointer items-center gap-2 py-2 hover:bg-s2"
                     onClick={() => openStock(o.stock_symbol, o.stock_market, o.stock_name || o.stock_symbol)}
                     onContextMenu={(e) =>
                       openStockContextMenu(e, {
@@ -1327,10 +1313,10 @@ export default function DashboardPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium" title={o.stock_name || o.stock_symbol}>{o.stock_name || o.stock_symbol}</span>
-                        {o.action_label && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">{o.action_label}</span>}
+                        <span className="truncate text-[14px] font-medium" title={o.stock_name || o.stock_symbol}>{o.stock_name || o.stock_symbol}</span>
+                        {o.action_label && <span className="rounded bg-primary/10 px-1 text-[12px] text-primary">{o.action_label}</span>}
                       </div>
-                      {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground" title={o.signal || o.reason}>{o.signal || o.reason}</div>}
+                      {(o.signal || o.reason) && <div className="truncate text-[12px] text-muted-foreground" title={o.signal || o.reason}>{o.signal || o.reason}</div>}
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                   </div>
@@ -1344,7 +1330,7 @@ export default function DashboardPage() {
 {/* 盘前/盘后分析(入口扶正 2026-10-23, 替代「最新报告」): 今日分析速览, 底稿归档在 /reports。
     独立非阻塞取数(首屏 settle 后), 失败显式错误态, 过期数据显式标注基准日 —— 不静默、不伪造空态 */}
         {shown('reports') && (
-        <div style={{ order: orderIndex(layout, 'reports') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
+        <div style={{ order: orderIndex(layout, 'reports') }} className="analysis-section lg:col-span-5 xl:col-span-3">
           <SectionHeader
             title="盘前 / 盘后分析"
             action={
@@ -1353,7 +1339,7 @@ export default function DashboardPage() {
                   type="button"
                   data-testid="dashboard-premarket-copilot"
                   onClick={() => navigate('/ai-copilot?agent=premarket_strategist')}
-                  className="mr-2 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                  className="mr-2 text-[12px] text-muted-foreground transition-colors hover:text-primary"
                 >
                   问参谋
                 </button>
@@ -1361,7 +1347,7 @@ export default function DashboardPage() {
                   type="button"
                   data-testid="dashboard-premarket-all"
                   onClick={() => navigate('/reports')}
-                  className="shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                  className="shrink-0 text-[12px] text-muted-foreground transition-colors hover:text-primary"
                 >
                   全部 →
                 </button>
@@ -1378,13 +1364,13 @@ export default function DashboardPage() {
             <div className="divide-y divide-border/40">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="min-w-0 truncate text-[13px] font-medium" title={premarket.title || '今日盘前分析'}>
+                  <span className="min-w-0 truncate text-[14px] font-medium" title={premarket.title || '今日盘前分析'}>
                     {premarket.title || '今日盘前分析'}
                   </span>
                   {premarket.is_stale && (
                     <span
                       data-testid="premarket-stale-badge"
-                      className="shrink-0 rounded bg-accent px-1.5 text-[10px] tabular-nums text-muted-foreground"
+                      className="shrink-0 rounded bg-accent px-1.5 text-[12px] tabular-nums text-muted-foreground"
                     >
                       基准日 {premarket.date}（非今日）
                     </span>
@@ -1393,12 +1379,12 @@ export default function DashboardPage() {
                 {premarket.structured?.gate?.score || premarket.structured?.gate?.position_cap ? (
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {premarket.structured?.gate?.score ? (
-                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[12px] text-primary">
                         环境门禁 {premarket.structured.gate.score}
                       </span>
                     ) : null}
                     {premarket.structured?.gate?.position_cap ? (
-                      <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                      <span className="rounded bg-accent px-1.5 py-0.5 text-[12px] tabular-nums text-muted-foreground">
                         仓位上限 {premarket.structured.gate.position_cap}
                       </span>
                     ) : null}
@@ -1407,7 +1393,7 @@ export default function DashboardPage() {
                 {premarket.structured?.mainlines && premarket.structured.mainlines.length > 0 ? (
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {premarket.structured.mainlines.slice(0, 4).map((ml, i) => (
-                      <span key={ml.name || `mainline-${i}`} className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      <span key={ml.name || `mainline-${i}`} className="rounded bg-accent px-1.5 py-0.5 text-[12px] text-muted-foreground">
                         {ml.name}
                         {ml.strength ? <span className="tabular-nums"> · {ml.strength}</span> : null}
                       </span>
@@ -1419,13 +1405,13 @@ export default function DashboardPage() {
                 <div>
                   {premarket.structured.plans.slice(0, 3).map((p, i) => (
                     <div key={p.symbol || `plan-${i}`} className="flex items-center gap-2 py-1.5">
-                      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{p.symbol}</span>
+                      <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground">{p.symbol}</span>
                       <span className="min-w-0 flex-1 truncate text-[12px]" title={p.name || p.symbol}>
                         {p.name || p.symbol}
                       </span>
-                      <span className="shrink-0 text-[11px] text-primary">{PLAN_ACTION_LABEL[p.action || ''] || p.action}</span>
+                      <span className="shrink-0 text-[12px] text-primary">{PLAN_ACTION_LABEL[p.action || ''] || p.action}</span>
                       {p.trigger || p.stop ? (
-                        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                        <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">
                           {p.trigger ? `触发 ${p.trigger}` : ''}
                           {p.trigger && p.stop ? ' / ' : ''}
                           {p.stop ? `止损 ${p.stop}` : ''}
@@ -1444,7 +1430,7 @@ export default function DashboardPage() {
                 data-testid="premarket-run-now"
                 disabled={premarketRunning}
                 onClick={() => void runPremarketNow()}
-                className="mt-2 rounded border border-border/60 px-3 py-1 text-[11px] text-primary transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                className="mt-2 rounded border border-border px-3 py-1 text-[12px] text-primary transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {premarketRunning ? '生成中…' : '▶ 立即分析'}
               </button>
@@ -1539,7 +1525,7 @@ type PhaseGaugeState =
   | { kind: 'unavailable'; note: string }
   | { kind: 'error'; message: string }
 /** 仪表盘与各态占位共用高度: 空/失败态也占满一格, 不留死白也不跳版 */
-const GAUGE_BOX_CLS = 'flex h-[154px] items-center justify-center px-3 text-center text-[11px] text-muted-foreground'
+const GAUGE_BOX_CLS = 'flex h-[154px] items-center justify-center px-3 text-center text-[12px] text-muted-foreground'
 
 /** 市场温度卡 —— 自带 /market/phase 取数 + canvas。
  *
@@ -1580,15 +1566,15 @@ function PhaseGaugeCardInner() {
   usePausedInterval(() => void load(), 30000, { deps: [load] })
 
   return (
-    <div className="border-t border-border/60 pt-2.5">
+    <div className="min-w-0">
       <div className="mb-1 flex items-baseline gap-2">
-        <h2 className="text-[13px] font-semibold">市场温度</h2>
-        <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
+        <h2 className="text-[14px] font-semibold">市场温度</h2>
+        <span className="text-[12px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
       </div>
       {state.kind === 'ready' ? (
         <>
           {state.refreshError && (
-            <div className="mb-1 text-[10px] text-amber-600 dark:text-amber-500">
+            <div className="mb-1 text-[12px] text-amber-600 dark:text-amber-500">
               本次刷新失败: {state.refreshError} — 仍展示上次成功数据
             </div>
           )}
@@ -1605,7 +1591,7 @@ function PhaseGaugeCardInner() {
           <button
             type="button"
             onClick={() => void load()}
-            className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary hover:bg-accent/30"
+            className="rounded border border-border px-2.5 py-1 text-[12px] text-primary hover:bg-s2"
           >
             重试
           </button>

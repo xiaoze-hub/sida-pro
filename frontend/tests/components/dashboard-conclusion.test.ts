@@ -14,9 +14,9 @@ import { describe, expect, it } from 'vitest'
 const SRC = readFileSync(join(__dirname, '../../src/pages/Dashboard.tsx'), 'utf8')
 
 describe('首屏结论层（B1）', () => {
-  it('结论层存在，且用强边框与后面内容分层', () => {
+  it('结论层存在，使用独立面板与后面内容分层', () => {
     expect(SRC).toContain('data-testid="market-conclusion"')
-    expect(SRC).toMatch(/data-testid="market-conclusion"[\s\S]{0,120}border-border-strong/)
+    expect(SRC).toMatch(/data-testid="market-conclusion"[\s\S]{0,120}border-border/)
   })
 
   it('有一句非数字结论（含主线与红绿盘判断）', () => {
@@ -37,7 +37,7 @@ describe('首屏结论层（B1）', () => {
 
   it('细项（封板率/成交/净流入）降为第二行小字，不再与结论同权', () => {
     const block = SRC.slice(SRC.indexOf('data-testid="market-conclusion"'), SRC.indexOf('核心接口失败横幅'))
-    expect(block).toContain('border-t border-border/40 pt-2')
-    expect(block).toContain('text-[11px]')
+    expect(block).toContain('border-t border-border pt-2')
+    expect(block).toContain('text-[12px]')
   })
 })

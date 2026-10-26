@@ -29,6 +29,20 @@ function renderDialog(overrides: Record<string, unknown> = {}) {
 }
 
 describe('DashboardCustomizer', () => {
+  it('弹窗面板不透明，列表独立滚动，完成与关闭都能退出', () => {
+    const onOpenChange = vi.fn()
+    renderDialog({ onOpenChange })
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.classList.contains('bg-popover')).toBe(true)
+    expect(dialog.classList.contains('overflow-hidden')).toBe(true)
+    expect(screen.getByTestId('dashboard-customizer-list').classList.contains('overflow-y-auto')).toBe(true)
+    expect(screen.getByTestId('dashboard-customizer-footer').classList.contains('shrink-0')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+    fireEvent.click(screen.getByRole('button', { name: '关闭弹窗' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
   it('列出全部 12 个模块与 3 个分区标题', () => {
     renderDialog()
     for (const id of MODULE_IDS) {

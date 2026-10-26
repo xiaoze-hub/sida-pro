@@ -13,14 +13,14 @@ import PioneerIndicatorsSection from '@panwatch/biz-ui/components/PioneerIndicat
  * 两个子组件的内部实现与各自轮询/缓存策略一律复用，不在本卡重写、不重复请求。
  *
  * 单卡外观(复审修复): 两个子组件都传 `bare` —— 它们各自不出自己的卡壳/标题
- * (DecisionPioneerCard 的 `mt-3 rounded-xl border border-border/50 bg-card p-3` + 「🧭 数智决策三指标」,
+ * (DecisionPioneerCard 的 `mt-3 rounded-xl border border-border bg-card p-3` + 「🧭 数智决策三指标」,
  * ResonanceVerdictPanel 的「三指标」标签), 于是本卡**只有一层边框**、**只有一个顶层标题**。
  * 子组件默认 `bare=false`, 其它调用点(DarkFlowCards / 旧行情页 / 工作台现状)行为逐字不变。
  */
 
 export default function DecisionCard({ symbol, market }: { symbol: string; market: string }) {
   return (
-    <div className="rounded border border-border/60 p-2">
+    <div className="rounded border border-border p-2">
       {/* 全卡唯一顶层标题 */}
       <div className="text-[12px] font-semibold">数智决策</div>
 
@@ -30,11 +30,11 @@ export default function DecisionCard({ symbol, market }: { symbol: string; marke
       </div>
 
       {/* 细分隔线: 读数 vs 判定 */}
-      <div className="my-2 border-t border-border/40" />
+      <div className="my-2 border-t border-border" />
 
       {/* 下半: 共振判定(规则三灯 + AI 分析) —— 子面板的三灯行自带「趋势/强度/资金」自解释,
           故只留这一个分段小标题(比顶层 12px 小一级), 「三指标读数」冗余副标题已删 */}
-      <div className="text-[11px] text-muted-foreground">共振判定</div>
+      <div className="text-[12px] text-muted-foreground">共振判定</div>
       <div className="mt-1.5">
         <ResonanceVerdictPanel symbol={symbol} bare />
       </div>

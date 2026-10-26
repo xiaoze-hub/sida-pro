@@ -45,7 +45,7 @@ function phaseCls(label: string | null): string {
 function PageSkeleton() {
   return (
     <div className="sida-page-enter space-y-4" aria-busy aria-live="polite">
-      <div className="border-b border-border/40 pb-3">
+      <div className="border-b border-border pb-3">
         <Skeleton className="h-5 w-40" />
         <Skeleton className="mt-2 h-3 w-72" />
       </div>
@@ -58,9 +58,9 @@ function PageSkeleton() {
 
 function SectionTitle({ text, hint }: { text: string; hint?: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-t border-border/60 pt-2">
-      <span className="text-[13px] font-medium text-foreground">{text}</span>
-      {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
+    <div className="flex items-baseline justify-between gap-3 border-t border-border pt-2">
+      <span className="text-[14px] font-medium text-foreground">{text}</span>
+      {hint && <span className="text-[12px] text-muted-foreground">{hint}</span>}
     </div>
   )
 }
@@ -118,17 +118,17 @@ export default function ReplayTreePage() {
   if (!isTreeAvailable(tree)) {
     return (
       <div className="sida-page-enter space-y-4" data-testid="replay-tree-unavailable">
-        <div className="border-b border-border/40 pb-3">
+        <div className="border-b border-border pb-3">
           <div className="flex items-center gap-2">
             <GitBranch className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-[16px] font-medium text-foreground">{t('replayTree.title')}</h2>
           </div>
         </div>
         <div className="py-6 text-center">
-          <div className="text-[13px] text-foreground">{t('replayTree.noSnapshot')}</div>
+          <div className="text-[14px] text-foreground">{t('replayTree.noSnapshot')}</div>
           <p className="mt-1.5 text-[12px] text-muted-foreground">{tree.note}</p>
           {tree.latest_date && (
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-[12px] text-muted-foreground">
               {t('replayTree.latestIs')}{' '}
               <span className="font-mono">{tree.latest_date_iso}</span>
             </p>
@@ -165,14 +165,14 @@ export default function ReplayTreePage() {
   return (
     <div className="sida-page-enter space-y-4" data-testid="replay-tree">
       {/* 页头 */}
-      <div className="border-b border-border/40 pb-3">
+      <div className="border-b border-border pb-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <GitBranch className="h-4 w-4 text-stock-up" />
               <h2 className="text-[16px] font-medium text-foreground">{t('replayTree.title')}</h2>
             </div>
-            <p className="mt-1 flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 flex flex-wrap items-center gap-x-1 text-[12px] text-muted-foreground">
               <span className="font-mono">{tree.trade_date_iso}</span>
               {' · '}{t('replayTree.sourceLabel')}{' '}
               <span className="font-mono">{tree.source ?? '无数据'}</span>
@@ -218,11 +218,11 @@ export default function ReplayTreePage() {
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 py-2 text-[12px]">
           <span className="text-muted-foreground">
             {t('replayTree.limitUp')}{' '}
-            <span className="text-[13px] font-medium tabular-nums text-stock-up">
+            <span className="text-[14px] font-medium tabular-nums text-stock-up">
               {safeInt(tree.limit_up_count, '--')}
             </span>
             {prev?.available && prev.delta_limit_up != null && (
-              <span className="ml-1 tabular-nums text-[10px] text-muted-foreground">
+              <span className="ml-1 tabular-nums text-[12px] text-muted-foreground">
                 ({prev.delta_limit_up >= 0 ? '+' : ''}
                 {prev.delta_limit_up})
               </span>
@@ -230,23 +230,23 @@ export default function ReplayTreePage() {
           </span>
           <span className="text-muted-foreground">
             {t('replayTree.broken')}{' '}
-            <span className="text-[13px] font-medium tabular-nums text-stock-down">
+            <span className="text-[14px] font-medium tabular-nums text-stock-down">
               {safeInt(tree.broken_count, '--')}
             </span>
             {tree.break_rate_pct != null && (
-              <span className="ml-1 tabular-nums text-[11px] text-stock-down">
+              <span className="ml-1 tabular-nums text-[12px] text-stock-down">
                 {t('replayTree.breakRate')} {safeFixed(tree.break_rate_pct, 2, '--')}%
               </span>
             )}
             {tree.break_rate_pct == null && (
-              <span className="ml-1 text-[11px] text-muted-foreground">
+              <span className="ml-1 text-[12px] text-muted-foreground">
                 {t('replayTree.breakRate')} {t('replayTree.noData')}
               </span>
             )}
           </span>
           <span className="text-muted-foreground">
             {t('replayTree.limitDown')}{' '}
-            <span className="text-[13px] font-medium tabular-nums text-stock-down">
+            <span className="text-[14px] font-medium tabular-nums text-stock-down">
               {safeInt(tree.limit_down_count, '--')}
             </span>
           </span>
@@ -268,11 +268,11 @@ export default function ReplayTreePage() {
           </span>
         </div>
         {/* 晋级率 + 三件套(REPTREE-002) */}
-        <div className="border-t border-border/40 py-2 text-[11px]" data-testid="replay-tree-promotion">
+        <div className="border-t border-border py-2 text-[12px]" data-testid="replay-tree-promotion">
           <span className="text-muted-foreground">
             {t('replayTree.promoRate')}{' '}
             {promo.available ? (
-              <span className="text-[13px] font-medium tabular-nums text-stock-up">
+              <span className="text-[14px] font-medium tabular-nums text-stock-up">
                 {safeFixed(promo.promo_rate_pct, 2, '--')}%
               </span>
             ) : (
@@ -331,7 +331,7 @@ export default function ReplayTreePage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-border/60 text-[10px] text-muted-foreground">
+                <tr className="border-b border-border text-[12px] text-muted-foreground">
                   <th className="py-1.5 pr-3 font-medium">{t('replayTree.colDate')}</th>
                   <th className="py-1.5 pr-3 text-right font-medium">{t('replayTree.limitUp')}</th>
                   <th className="py-1.5 pr-3 text-right font-medium">{t('replayTree.broken')}</th>
@@ -350,10 +350,10 @@ export default function ReplayTreePage() {
                     data-testid={`replay-series-row-${it.trade_date}`}
                     onClick={() => setTreeDate(it.trade_date)}
                   >
-                    <td className="py-1.5 pr-3 font-mono text-[11px] text-muted-foreground">
+                    <td className="py-1.5 pr-3 font-mono text-[12px] text-muted-foreground">
                       {it.trade_date_iso}
                       {!it.available && (
-                        <span className="ml-1 text-[10px]">{t('replayTree.missingDay')}</span>
+                        <span className="ml-1 text-[12px]">{t('replayTree.missingDay')}</span>
                       )}
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums text-stock-up">
@@ -381,7 +381,7 @@ export default function ReplayTreePage() {
                     <td className="py-1.5 pr-3 text-right tabular-nums text-foreground">
                       {it.available ? safeInt(it.max_streak, '--') : '--'}
                     </td>
-                    <td className={`py-1.5 pr-3 text-[11px] ${phaseCls(it.phase_label)}`}>
+                    <td className={`py-1.5 pr-3 text-[12px] ${phaseCls(it.phase_label)}`}>
                       {it.available ? it.phase_label || t('replayTree.noData') : '--'}
                     </td>
                   </tr>
@@ -395,7 +395,7 @@ export default function ReplayTreePage() {
       {/* 口径与缺口 */}
       <section>
         <SectionTitle text={t('replayTree.caliberGaps')} />
-        <ul className="divide-y divide-border/40 text-[11px] text-muted-foreground" data-testid="replay-tree-gaps">
+        <ul className="divide-y divide-border/40 text-[12px] text-muted-foreground" data-testid="replay-tree-gaps">
           <li className="flex flex-wrap items-center gap-x-2 py-1.5">
             <span data-testid="replay-tree-cross-check">
               {t('replayTree.crossCheck')}:{' '}
@@ -430,7 +430,7 @@ export default function ReplayTreePage() {
         </ul>
       </section>
 
-      <div className="border-t border-border/50 px-3 py-1.5 text-[10px] text-muted-foreground">
+      <div className="border-t border-border px-3 py-1.5 text-[12px] text-muted-foreground">
         {t('replayTree.footerLegend')}
       </div>
     </div>

@@ -67,7 +67,7 @@ export function PortfolioSummarySection() {
         value={
           <>
             {formatMoney(portfolio.total.total_pnl)}
-            <span className="text-[13px] ml-1.5">
+            <span className="text-[14px] ml-1.5">
               ({safeNum(portfolio.total.total_pnl_pct) === null ? '--' : `${portfolio.total.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(portfolio.total.total_pnl_pct)}%`})
             </span>
           </>
@@ -91,7 +91,7 @@ export function PortfolioSummarySection() {
             value={
               <>
                 {formatMoney(dayPnl)}
-                <span className="text-[13px] ml-1.5">({pct != null && Number.isFinite(pct) ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : '--'})</span>
+                <span className="text-[14px] ml-1.5">({pct != null && Number.isFinite(pct) ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : '--'})</span>
               </>
             }
             sub={portfolioMarketStatusLabel || undefined}

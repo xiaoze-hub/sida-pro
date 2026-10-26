@@ -94,7 +94,7 @@ export function CancelProfileBand({ profile }: { profile: CancelProfile }) {
 
   return (
     <div data-testid="cancel-profile-band" className="space-y-1">
-      <div className="relative h-16 w-full border-b border-border/40">
+      <div className="relative h-16 w-full border-b border-border">
         {medianPct != null ? (
           <div
             data-testid="cancel-profile-median-line"
@@ -121,7 +121,7 @@ export function CancelProfileBand({ profile }: { profile: CancelProfile }) {
           })}
         </div>
       </div>
-      <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+      <div className="flex justify-between font-mono text-[12px] text-muted-foreground">
         <span>{series[0]?.date ?? ''}</span>
         <span>
           {series.length} 日 · 归一上限 {rateText(scale)}
@@ -182,7 +182,7 @@ export default function CancelProfilePanel({
         {profile.conclusion || verdict?.desc || '--'}
       </div>
       <CancelProfileBand profile={profile} />
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px] md:grid-cols-4">
         <div title="今日买盘撤单率（BCancel/BOrder, 日线统计口径）">
           <div className="text-muted-foreground">今日买撤</div>
           <div className="font-mono text-foreground">{rateText(buy?.rate)}</div>
@@ -204,7 +204,7 @@ export default function CancelProfilePanel({
           </div>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-2 text-[12px] text-muted-foreground">
         <span>基线 {buy?.n ?? 0} 日</span>
         {sell?.z != null ? <span>· 卖撤 z {safeFixed(sell.z, 2)}</span> : null}
         {profile.as_of ? <span>· 数据日 {profile.as_of}</span> : null}

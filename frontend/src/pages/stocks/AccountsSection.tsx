@@ -103,15 +103,15 @@ export function AccountsSection() {
         <Building2 className="w-6 h-6 text-primary" />
       </div>
       <p className="text-[16px] font-semibold text-foreground">还没有账户</p>
-      <p className="text-[13px] text-muted-foreground mt-1.5">点击"添加账户"创建你的第一个交易账户</p>
+      <p className="text-[14px] text-muted-foreground mt-1.5">点击"添加账户"创建你的第一个交易账户</p>
     </div>
   ) : (
     <div className="space-y-4">
       {portfolio?.accounts.map(account => (
-        <div key={account.id} className="border-b border-border/40">
+        <div key={account.id} className="border-b border-border">
         {/* Account Header */}
         <div
-          className="flex flex-col md:flex-row md:items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-accent/30 transition-colors gap-2"
+          className="flex flex-col md:flex-row md:items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-s2 transition-colors gap-2"
           onClick={() => toggleAccountExpanded(account.id)}
         >
           <div className="flex items-center gap-2 md:gap-3">
@@ -121,38 +121,38 @@ export function AccountsSection() {
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
             )}
             <Building2 className="w-4 h-4 text-primary" />
-            <span className="text-[13px] md:text-[16px] font-semibold text-foreground">{account.name}</span>
-            <span className="text-[11px] md:text-[12px] text-muted-foreground">
+            <span className="text-[14px] md:text-[16px] font-semibold text-foreground">{account.name}</span>
+            <span className="text-[12px] md:text-[12px] text-muted-foreground">
               {account.positions.length} 只
             </span>
           </div>
           <div className="flex items-center justify-between md:justify-end gap-2 md:gap-6 pl-6 md:pl-0">
             <div className="flex items-center gap-2.5 md:gap-6 min-w-0">
               <div className="text-left md:text-right">
-                <div className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground">市值</div>
-                <div className="text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.total_market_value)}</div>
+                <div className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground">市值</div>
+                <div className="text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.total_market_value)}</div>
               </div>
               <div className="text-left md:text-right">
-                <div className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground">总盈亏</div>
-                <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                <div className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground">总盈亏</div>
+                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                   {formatMoney(account.total_pnl)}
-                  <span className="text-[10px] md:text-[11px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
+                  <span className="text-[12px] md:text-[12px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
                 </div>
               </div>
               <div className="text-left md:text-right">
                 <div
-                  className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground"
+                  className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground"
                   title={dailyPnlDisplayLabel(account)}
                 >
                   {dailyPnlDisplayLabel(account, true)}
                 </div>
-                <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                   {formatMoney(account.total_daily_pnl)}
                 </div>
               </div>
               <div className="text-left md:text-right hidden sm:block">
-                <div className="whitespace-nowrap text-[10px] md:text-[11px] text-muted-foreground">可用</div>
-                <div className="text-[12px] md:text-[13px] font-mono whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.available_funds)}</div>
+                <div className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground">可用</div>
+                <div className="text-[12px] md:text-[14px] font-mono whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.available_funds)}</div>
               </div>
             </div>
             <div className="flex items-center gap-0 md:gap-1 shrink-0" onClick={e => e.stopPropagation()}>
@@ -171,10 +171,10 @@ export function AccountsSection() {
 
         {/* Positions */}
         {expandedAccounts.has(account.id) && (
-          <div className="border-t border-border/30">
+          <div className="border-t border-border">
             {account.positions.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-10 px-4">
-                <p className="text-[13px] text-muted-foreground">该账户暂无持仓</p>
+                <p className="text-[14px] text-muted-foreground">该账户暂无持仓</p>
                 <p className="text-[12px] text-muted-foreground">点右上角「+」录入股票与成本，或到「关注」页把自选一键导入</p>
               </div>
             ) : (
@@ -183,33 +183,33 @@ export function AccountsSection() {
                 <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead>
-                      <tr className="border-b border-border/30 bg-accent/20">
+                      <tr className="border-b border-border bg-s2">
                         <th
-                          className="whitespace-nowrap text-left px-4 py-2 text-[11px] font-semibold text-muted-foreground">股票</th>
+                          className="whitespace-nowrap text-left px-4 py-2 text-[12px] font-semibold text-muted-foreground">股票</th>
                         <th
-                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">现价</th>
+                          className="whitespace-nowrap text-right px-4 py-2 text-[12px] font-semibold text-muted-foreground">现价</th>
                         <th
-                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">涨跌</th>
+                          className="whitespace-nowrap text-right px-4 py-2 text-[12px] font-semibold text-muted-foreground">涨跌</th>
                         <th
-                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">成本</th>
+                          className="whitespace-nowrap text-right px-4 py-2 text-[12px] font-semibold text-muted-foreground">成本</th>
                         <th
-                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">持仓</th>
+                          className="whitespace-nowrap text-right px-4 py-2 text-[12px] font-semibold text-muted-foreground">持仓</th>
                         <th
-                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">市值</th>
+                          className="whitespace-nowrap text-right px-4 py-2 text-[12px] font-semibold text-muted-foreground">市值</th>
                         <th
-                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">持仓盈亏</th>
+                          className="whitespace-nowrap text-right px-4 py-2 text-[12px] font-semibold text-muted-foreground">持仓盈亏</th>
                         <th
-                          className="whitespace-nowrap text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground"
+                          className="whitespace-nowrap text-right px-4 py-2 text-[12px] font-semibold text-muted-foreground"
                           title={dailyPnlDisplayLabel(account)}
                         >
                           {dailyPnlDisplayLabel(account, true)}
                         </th>
                         <th
-                          className="hidden whitespace-nowrap lg:table-cell text-center px-4 py-2 text-[11px] font-semibold text-muted-foreground">风格</th>
+                          className="hidden whitespace-nowrap lg:table-cell text-center px-4 py-2 text-[12px] font-semibold text-muted-foreground">风格</th>
                         <th
-                          className="hidden whitespace-nowrap lg:table-cell text-left px-4 py-2 text-[11px] font-semibold text-muted-foreground">Agent</th>
+                          className="hidden whitespace-nowrap lg:table-cell text-left px-4 py-2 text-[12px] font-semibold text-muted-foreground">Agent</th>
                         <th
-                          className="whitespace-nowrap text-center px-4 py-2 text-[11px] font-semibold text-muted-foreground">操作</th>
+                          className="whitespace-nowrap text-center px-4 py-2 text-[12px] font-semibold text-muted-foreground">操作</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -259,10 +259,10 @@ export function AccountsSection() {
 // <tr> 的热区由内容撑(表格行不吃 min-height), 故不加 row-hit
                             data-row-index={rowIndexByKey.get(`${account.id}:${pos.id}`) ?? undefined}
                             onFocus={() => rowNav.setIndex(rowIndexByKey.get(`${account.id}:${pos.id}`) ?? -1)}
-                            className={`group row-focusable transition-colors duration-fast hover:bg-s2 ${i > 0 ? 'border-t border-border/20' : ''} ${draggingPositionId === pos.id ? 'opacity-60' : ''} ${rowNav.index === rowIndexByKey.get(`${account.id}:${pos.id}`) ? 'row-selected' : ''}`}
+                            className={`group row-focusable transition-colors duration-fast hover:bg-s2 ${i > 0 ? 'border-t border-border' : ''} ${draggingPositionId === pos.id ? 'opacity-60' : ''} ${rowNav.index === rowIndexByKey.get(`${account.id}:${pos.id}`) ? 'row-selected' : ''}`}
                           >
                             <td className="px-4 py-2.5">
-                              <span className={`text-[10px] px-1 py-0.5 rounded mr-1.5 ${badge.style}`}>{badge.label}</span>
+                              <span className={`text-[12px] px-1 py-0.5 rounded mr-1.5 ${badge.style}`}>{badge.label}</span>
                               <span className="font-mono text-[12px] font-semibold text-foreground">
                                 {pos.symbol}
                               </span>
@@ -304,7 +304,7 @@ export function AccountsSection() {
                                   {isForeign ? (
                                     <>
                                       <span>{safeMoneyUnsigned(pos.market_value)} {pos.market === 'HK' ? 'HKD' : 'USD'}</span>
-                                      {pos.market_value_cny && <span className="text-[10px] text-muted-foreground">≈{safeMoneyUnsigned(pos.market_value_cny)}</span>}
+                                      {pos.market_value_cny && <span className="text-[12px] text-muted-foreground">≈{safeMoneyUnsigned(pos.market_value_cny)}</span>}
                                     </>
                                   ) : <span>{safeMoneyUnsigned(pos.market_value)}</span>}
                                 </div>
@@ -314,7 +314,7 @@ export function AccountsSection() {
                               {pos.pnl != null ? (
                                 <div className="flex flex-col items-end">
                                   <span>{formatMoney(pos.pnl)}</span>
-                                  <span className="text-[10px] opacity-70">{pos.pnl_pct != null && Number.isFinite(Number(pos.pnl_pct)) ? `${pos.pnl_pct >= 0 ? '+' : ''}${Number(pos.pnl_pct).toFixed(2)}%` : ''}{isForeign && ' CNY'}</span>
+                                  <span className="text-[12px] opacity-70">{pos.pnl_pct != null && Number.isFinite(Number(pos.pnl_pct)) ? `${pos.pnl_pct >= 0 ? '+' : ''}${Number(pos.pnl_pct).toFixed(2)}%` : ''}{isForeign && ' CNY'}</span>
                                 </div>
                               ) : '—'}
                             </td>
@@ -325,17 +325,17 @@ export function AccountsSection() {
                               {pos.daily_pnl != null ? (
                                 <div className="flex flex-col items-end">
                                   <span>{formatMoney(pos.daily_pnl)}</span>
-                                  <span className="text-[10px] opacity-70">{pos.daily_pnl_pct != null && Number.isFinite(Number(pos.daily_pnl_pct)) ? `${pos.daily_pnl_pct >= 0 ? '+' : ''}${Number(pos.daily_pnl_pct).toFixed(2)}%` : ''}</span>
+                                  <span className="text-[12px] opacity-70">{pos.daily_pnl_pct != null && Number.isFinite(Number(pos.daily_pnl_pct)) ? `${pos.daily_pnl_pct >= 0 ? '+' : ''}${Number(pos.daily_pnl_pct).toFixed(2)}%` : ''}</span>
                                 </div>
                               ) : '—'}
                             </td>
                             <td className="hidden lg:table-cell px-4 py-2.5 text-center">
                               {pos.trading_style ? (
-                                <span className={`text-[10px] px-1.5 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                                <span className={`text-[12px] px-1.5 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
                                   {pos.trading_style === 'short' ? '短线' : pos.trading_style === 'long' ? '长线' : '波段'}
                                 </span>
                               ) : (
-                                <span className="text-[10px] text-muted-foreground">-</span>
+                                <span className="text-[12px] text-muted-foreground">-</span>
                               )}
                             </td>
                             <td className="hidden lg:table-cell px-4 py-2.5">
@@ -348,9 +348,9 @@ export function AccountsSection() {
                                         const isRunning = runningAgents[stock.id] === sa.agent_name
                                         return (
                                           <span key={sa.agent_name} className="inline-flex items-center gap-1">
-                                            <Badge variant="default" className="text-[10px]">{agent?.display_name || sa.agent_name}</Badge>
+                                            <Badge variant="default" className="text-[12px]">{agent?.display_name || sa.agent_name}</Badge>
                                             {isRunning && (
-                                              <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                                              <span className="inline-flex items-center gap-1 text-[12px] text-amber-600">
                                                 <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
                                                 执行中
                                               </span>
@@ -360,7 +360,7 @@ export function AccountsSection() {
                                       })}
                                     </div>
                                   ) : (
-                                    <span className="text-[11px] text-muted-foreground flex items-center gap-1"><Bot className="w-3 h-3" /> 未配置</span>
+                                    <span className="text-[12px] text-muted-foreground flex items-center gap-1"><Bot className="w-3 h-3" /> 未配置</span>
                                   )}
                                 </button>
                               )}
@@ -439,12 +439,12 @@ export function AccountsSection() {
                           setDraggingPositionAccountId(null)
                           positionDragSnapshotRef.current = null
                         }}
-                        className={`px-3 py-2.5 hover:bg-accent/30 transition-colors ${draggingPositionId === pos.id ? 'opacity-60' : ''}`}
+                        className={`px-3 py-2.5 hover:bg-s2 transition-colors ${draggingPositionId === pos.id ? 'opacity-60' : ''}`}
                       >
                         {/* Row 1: Stock info + Current price */}
                         <div className="flex items-center justify-between gap-2 mb-1.5">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`shrink-0 text-[10px] px-1 py-0.5 rounded ${badge.style}`}>{badge.label}</span>
+                            <span className={`shrink-0 text-[12px] px-1 py-0.5 rounded ${badge.style}`}>{badge.label}</span>
                             <span className="shrink-0 font-mono text-[12px] font-semibold text-foreground">
                               {pos.symbol}
                             </span>
@@ -455,14 +455,14 @@ export function AccountsSection() {
                               {pos.name}
                             </button>
                             {pos.trading_style && (
-                              <span className={`shrink-0 text-[10px] px-1 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                              <span className={`shrink-0 text-[12px] px-1 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
                                 {pos.trading_style === 'short' ? '短' : pos.trading_style === 'long' ? '长' : '波'}
                               </span>
                             )}
                           </div>
-                          <div className={`font-mono text-[13px] font-medium whitespace-nowrap shrink-0 tabular-nums ${changeColor}`}>
+                          <div className={`font-mono text-[14px] font-medium whitespace-nowrap shrink-0 tabular-nums ${changeColor}`}>
                             {safePrice(pos.current_price) === '--' ? '—' : safePrice(pos.current_price)}
-                            {pos.change_pct != null && Number.isFinite(Number(pos.change_pct)) && <span className="text-[11px] ml-1">{pos.change_pct >= 0 ? '+' : ''}{Number(pos.change_pct).toFixed(2)}%</span>}
+                            {pos.change_pct != null && Number.isFinite(Number(pos.change_pct)) && <span className="text-[12px] ml-1">{pos.change_pct >= 0 ? '+' : ''}{Number(pos.change_pct).toFixed(2)}%</span>}
                           </div>
                         </div>
                         {/* Row 2 (Suggestion badge, dedicated row to avoid wrapping mess) */}
@@ -482,28 +482,28 @@ export function AccountsSection() {
                           ) : null
                         })()}
                         {/* Row 3: Stats grid (4 cols, whitespace-nowrap to prevent "万" wrapping) */}
-                        <div className="grid grid-cols-4 gap-2 text-[11px]">
+                        <div className="grid grid-cols-4 gap-2 text-[12px]">
                           <div className="min-w-0">
-                            <div className="text-[10px] text-muted-foreground">成本</div>
+                            <div className="text-[12px] text-muted-foreground">成本</div>
                             <div className="font-mono text-foreground truncate tabular-nums" title={String(pos.cost_price)}>{formatPrice(pos.cost_price)}</div>
                           </div>
                           <div className="min-w-0">
-                            <div className="text-[10px] text-muted-foreground">数量</div>
+                            <div className="text-[12px] text-muted-foreground">数量</div>
                             <div className="font-mono text-foreground truncate tabular-nums" title={String(pos.quantity)}>{pos.quantity}</div>
                           </div>
                           <div className="min-w-0">
-                            <div className="text-[10px] text-muted-foreground">盈亏</div>
+                            <div className="text-[12px] text-muted-foreground">盈亏</div>
                             <div className={`font-mono whitespace-nowrap tabular-nums ${pnlColor}`}>
                               {pos.pnl != null ? `${pos.pnl >= 0 ? '+' : ''}${formatMoney(pos.pnl)}` : '—'}
                             </div>
                             {pos.pnl_pct != null && (
-                              <div className={`text-[10px] font-mono tabular-nums ${pnlColor} opacity-80`}>
+                              <div className={`text-[12px] font-mono tabular-nums ${pnlColor} opacity-80`}>
                                 {safeNum(pos.pnl_pct) === null ? '' : `${pos.pnl_pct >= 0 ? '+' : ''}${safeFixed(pos.pnl_pct)}%`}
                               </div>
                             )}
                           </div>
                           <div className="min-w-0">
-                            <div className="text-[10px] text-muted-foreground">
+                            <div className="text-[12px] text-muted-foreground">
                               {dailyPnlDisplayLabel(summarizeDailyPnlPeriod([
                                 { period: pos.daily_pnl_period, date: pos.quote_date },
                               ]), true)}
@@ -514,7 +514,7 @@ export function AccountsSection() {
                           </div>
                         </div>
                         {/* Row 4: Actions */}
-                        <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border/20">
+                        <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border">
                           <div>
                             {stock && stock.agents && stock.agents.length > 0 ? (
                               <button onClick={() => setAgentDialogStock(stock)} className="flex items-center gap-1">
@@ -523,9 +523,9 @@ export function AccountsSection() {
                                   const isRunning = runningAgents[stock.id] === sa.agent_name
                                   return (
                                     <span key={sa.agent_name} className="inline-flex items-center gap-1">
-                                      <Badge variant="secondary" className="text-[10px]">{agent?.display_name || sa.agent_name}</Badge>
+                                      <Badge variant="secondary" className="text-[12px]">{agent?.display_name || sa.agent_name}</Badge>
                                       {isRunning && (
-                                        <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                                        <span className="inline-flex items-center gap-1 text-[12px] text-amber-600">
                                           <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
                                           执行中
                                         </span>
@@ -535,7 +535,7 @@ export function AccountsSection() {
                                 })}
                               </button>
                             ) : (
-                              <button onClick={() => stock && setAgentDialogStock(stock)} className="text-[10px] text-muted-foreground flex items-center gap-1">
+                              <button onClick={() => stock && setAgentDialogStock(stock)} className="text-[12px] text-muted-foreground flex items-center gap-1">
                                 <Bot className="w-3 h-3" /> Agent
                               </button>
                             )}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 // A4 三地市场状态 (2026-09-10): 开闭市徽标(status_text) + 交易时段 + 当地时间的紧凑展示。
@@ -32,7 +32,7 @@ describe('MarketStatusPills (A4)', () => {
     expect(cn.querySelector('.bg-muted-foreground\\/40')).toBeTruthy()
   })
 
-  it('悬停 title 含交易时段与当地时间; 桌面档直显时段文案', () => {
+  it('交易时段默认收拢，点击后展示完整时段与当地时间', () => {
     const { container } = render(<MarketStatusPills items={ITEMS} />)
     const cn = container.querySelector('[data-market="CN"]')!
     const title = cn.getAttribute('title') || ''
@@ -40,7 +40,12 @@ describe('MarketStatusPills (A4)', () => {
     expect(title).toContain('13:00-15:00')
     expect(title).toContain('当地 21:19')
     // 桌面档(lg:inline)时段直显: DOM 里存在时段文本
-    expect(cn.textContent).toContain('09:30-11:30/13:00-15:00')
+    expect(cn.textContent).not.toContain('09:30')
+    fireEvent.click(cn)
+    const details = screen.getByRole('dialog', { name: 'A股交易时段' })
+    expect(details.textContent).toContain('09:30-11:30')
+    expect(details.textContent).toContain('13:00-15:00')
+    expect(details.textContent).toContain('21:19')
   })
 
   it('空列表不渲染(无状态可报≠故障)', () => {

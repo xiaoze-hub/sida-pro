@@ -28,7 +28,7 @@ export default function MarketMoodChart({
   const gradId = useId()
   const vals = (data || []).filter((v) => typeof v === 'number' && Number.isFinite(v))
   if (vals.length < 2) {
-    return <div className="py-2 text-[10px] text-muted-foreground">情绪温度序列不足 2 个交易日, 暂不画线</div>
+    return <div className="py-2 text-[12px] text-muted-foreground">情绪温度序列不足 2 个交易日, 暂不画线</div>
   }
 
   const n = vals.length

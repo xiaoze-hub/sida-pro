@@ -44,42 +44,42 @@ export default function StockHoverPreview({
   const pct = s.now != null && s.last_close ? ((s.now - s.last_close) / s.last_close) * 100 : null
   return (
     <div
-      className="pointer-events-none fixed z-50 w-[220px] rounded border border-border/70 bg-background/95 p-2 shadow-float"
+      className="pointer-events-none fixed z-50 w-[220px] rounded border border-border bg-background p-2 shadow-float"
       style={{ left: Math.min(x + 12, window.innerWidth - 240), top: Math.min(y + 12, window.innerHeight - 160) }}
     >
       <div className="mb-1 flex items-baseline gap-1 text-[12px] font-semibold">
         {data.name || data.symbol}
-        <span className="text-[10px] font-normal text-muted-foreground">{data.symbol}</span>
+        <span className="text-[12px] font-normal text-muted-foreground">{data.symbol}</span>
         {m.ever_zt_count ? (
-          <span className="rounded bg-[--stock-up]/20 px-0.5 text-[10px] text-[--stock-up]">{m.ever_zt_count}板</span>
+          <span className="rounded bg-[--stock-up]/20 px-0.5 text-[12px] text-[--stock-up]">{m.ever_zt_count}板</span>
         ) : null}
       </div>
-      <div className="flex justify-between text-[11px]">
+      <div className="flex justify-between text-[12px]">
         <span className="text-muted-foreground">现价</span>
         <span className="font-mono">{s.now != null ? s.now : '--'}</span>
       </div>
-      <div className="flex justify-between text-[11px]">
+      <div className="flex justify-between text-[12px]">
         <span className="text-muted-foreground">涨跌</span>
         <span className={`font-mono ${pct == null ? 'text-muted-foreground' : pct >= 0 ? 'text-[--stock-up]' : 'text-[--stock-down]'}`}>
           {fmtPct(pct)}
         </span>
       </div>
-      <div className="flex justify-between text-[11px]">
+      <div className="flex justify-between text-[12px]">
         <span className="text-muted-foreground">封单</span>
         <span className="font-mono">{m.fcamo != null ? fmtAmount(m.fcamo) : '--'}</span>
       </div>
-      <div className="flex justify-between text-[11px]">
+      <div className="flex justify-between text-[12px]">
         <span className="text-muted-foreground">PE(TTM)</span>
         <span className="font-mono">{m.pe_ttm != null ? String(m.pe_ttm) : '--'}</span>
       </div>
       {blocks.length > 0 ? (
         <div className="mt-1 flex flex-wrap gap-0.5">
           {blocks.slice(0, 4).map((b) => (
-            <span key={b.name} className="rounded bg-accent/50 px-0.5 text-[10px] text-foreground">{b.name}</span>
+            <span key={b.name} className="rounded bg-s2 px-0.5 text-[12px] text-foreground">{b.name}</span>
           ))}
         </div>
       ) : null}
-      <div className="mt-1 text-[10px] text-muted-foreground">点击进个股工作台</div>
+      <div className="mt-1 text-[12px] text-muted-foreground">点击进个股工作台</div>
     </div>
   )
 }

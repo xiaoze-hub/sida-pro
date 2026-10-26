@@ -142,7 +142,7 @@ export default function StrategyLibraryDialog({
 
         {/* 来源声明 */}
         <div className="card-subtle p-3 text-xs text-muted-foreground">
-          💡 策略数据源:<code className="text-[10px]">strategies/panwatch_strategies.yaml</code> ·
+          💡 策略数据源:<code className="text-[12px]">strategies/panwatch_strategies.yaml</code> ·
           实时字段(腾讯)可直接跑, 盘后字段(PE/PB/市值)需等东财恢复。
           <a className="text-primary hover:underline ml-2" href="https://github.com/ZhuLinsen/alphasift" target="_blank" rel="noreferrer">原始项目 ↗</a>
         </div>
@@ -156,7 +156,7 @@ export default function StrategyLibraryDialog({
           <select
             value={categoryFilter}
             onChange={e => setCategoryFilter(e.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-3 text-[13px]"
+            className="h-9 rounded-md border border-input bg-background px-3 text-[14px]"
           >
             <option value="">全部分类</option>
             {categories.map(c => (
@@ -174,7 +174,7 @@ export default function StrategyLibraryDialog({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filtered.map(it => {
-              const badgeCls = BADGE_COLORS[it.ui_badge] || 'bg-accent/30 text-foreground border-border'
+              const badgeCls = BADGE_COLORS[it.ui_badge] || 'bg-s2 text-foreground border-border'
               return (
                 <button
                   key={it.id}
@@ -182,8 +182,8 @@ export default function StrategyLibraryDialog({
                   className="card-subtle p-4 text-left hover:border-primary/40 transition-colors"
                 >
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <h3 className="font-semibold text-[13px] flex-1">{it.display_name}</h3>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full border ${badgeCls}`}>
+                    <h3 className="font-semibold text-[14px] flex-1">{it.display_name}</h3>
+                    <span className={`text-[12px] px-2 py-0.5 rounded-full border ${badgeCls}`}>
                       {it.ui_badge}
                     </span>
                   </div>
@@ -192,21 +192,21 @@ export default function StrategyLibraryDialog({
                   </p>
                   <div className="flex items-center gap-2 mt-3 flex-wrap">
                     {it.tags.slice(0, 3).map(t => (
-                      <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-accent/40 text-muted-foreground">
+                      <span key={t} className="text-[12px] px-1.5 py-0.5 rounded bg-s2 text-muted-foreground">
                         {t}
                       </span>
                     ))}
                   </div>
-                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
-                    <div className="text-[10px] text-muted-foreground">
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
+                    <div className="text-[12px] text-muted-foreground">
                       {it.source}
                     </div>
                     {it.available_now ? (
-                      <span className="text-[10px] text-emerald-700 dark:text-emerald-500 flex items-center gap-1">
+                      <span className="text-[12px] text-emerald-700 dark:text-emerald-500 flex items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" /> 实时
                       </span>
                     ) : (
-                      <span className="text-[10px] text-yellow-500 flex items-center gap-1">
+                      <span className="text-[12px] text-yellow-500 flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" /> 需盘后
                       </span>
                     )}
@@ -225,15 +225,15 @@ export default function StrategyLibraryDialog({
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
                     {selected.display_name}
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full border ${BADGE_COLORS[selected.ui_badge] || 'bg-accent/30'}`}>
+                    <span className={`text-[12px] px-2 py-0.5 rounded-full border ${BADGE_COLORS[selected.ui_badge] || 'bg-s2'}`}>
                       {selected.ui_badge}
                     </span>
                     {selected.available_now ? (
-                      <span className="text-[10px] text-emerald-700 dark:text-emerald-500 flex items-center gap-1">
+                      <span className="text-[12px] text-emerald-700 dark:text-emerald-500 flex items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" /> 实时可用
                       </span>
                     ) : (
-                      <span className="text-[10px] text-yellow-500 flex items-center gap-1">
+                      <span className="text-[12px] text-yellow-500 flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" /> 需盘后数据
                       </span>
                     )}
@@ -252,7 +252,7 @@ export default function StrategyLibraryDialog({
                         <button
                           type="button"
                           onClick={() => setOverrides({})}
-                          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+                          className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
                           title="清掉本次覆盖, 回到策略原值"
                         >
                           <RotateCcw className="w-3 h-3" /> 恢复默认({Object.keys(overrides).length})
@@ -266,7 +266,7 @@ export default function StrategyLibraryDialog({
                           const changed = p.key in overrides
                           return (
                             <label key={p.key} className="block" title={p.help || p.key}>
-                              <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                              <span className="flex items-center gap-1 text-[12px] text-muted-foreground">
                                 {p.label}
                                 {changed && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
                               </span>
@@ -284,7 +284,7 @@ export default function StrategyLibraryDialog({
                                   }}
                                   className={`h-7 w-20 text-[12px] font-mono ${changed ? 'border-primary/50' : ''}`}
                                 />
-                                {p.unit && <span className="text-[10px] text-muted-foreground">{p.unit}</span>}
+                                {p.unit && <span className="text-[12px] text-muted-foreground">{p.unit}</span>}
                               </span>
                             </label>
                           )
@@ -293,7 +293,7 @@ export default function StrategyLibraryDialog({
                     ) : (
                       <div className="flex flex-wrap gap-1.5">
                         {Object.entries(selected.filter || {}).map(([k, v]) => (
-                          <span key={k} className="text-[10px] px-2 py-0.5 rounded bg-accent/40 font-mono">
+                          <span key={k} className="text-[12px] px-2 py-0.5 rounded bg-s2 font-mono">
                             {k}: {String(v)}
                           </span>
                         ))}
@@ -325,7 +325,7 @@ export default function StrategyLibraryDialog({
                   {applyResult && (
                     <div className={`card-subtle p-4 ${applyResult.passed ? 'border-emerald-500/30' : 'border-amber-500/30'}`}>
                       {applyResult.error ? (
-                        <div className="text-red-600 text-[13px] flex items-center gap-1.5"><XCircle className="w-4 h-4 shrink-0" />{applyResult.error}</div>
+                        <div className="text-red-600 text-[14px] flex items-center gap-1.5"><XCircle className="w-4 h-4 shrink-0" />{applyResult.error}</div>
                       ) : (
                         <>
                           <div className="flex items-center justify-between mb-3">
@@ -334,7 +334,7 @@ export default function StrategyLibraryDialog({
                                 {applyResult.score.toFixed(1)}
                               </div>
                               <div>
-                                <div className={`text-[13px] font-medium inline-flex items-center gap-1.5 ${applyResult.passed ? 'text-emerald-700 dark:text-emerald-500' : 'text-amber-700 dark:text-amber-500'}`}>
+                                <div className={`text-[14px] font-medium inline-flex items-center gap-1.5 ${applyResult.passed ? 'text-emerald-700 dark:text-emerald-500' : 'text-amber-700 dark:text-amber-500'}`}>
                                   {applyResult.passed ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
                                   {applyResult.passed ? '通过' : '未通过'}
                                 </div>
@@ -343,7 +343,7 @@ export default function StrategyLibraryDialog({
                                 </div>
                               </div>
                             </div>
-                            <div className={`px-3 py-1.5 rounded-lg border text-[13px] font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`}>
+                            <div className={`px-3 py-1.5 rounded-lg border text-[14px] font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`}>
                               {applyResult.score >= 75 ? '强推荐' : applyResult.score >= 50 ? '中性' : '弱'}
                             </div>
                           </div>
@@ -384,7 +384,7 @@ export default function StrategyLibraryDialog({
                                 </thead>
                                 <tbody>
                                   {applyResult.score_breakdown.map((b, i) => (
-                                    <tr key={i} className="border-t border-border/30">
+                                    <tr key={i} className="border-t border-border">
                                       <td className="py-1 font-mono">{b.factor}</td>
                                       <td className="py-1 text-muted-foreground">{String(b.raw)}</td>
                                       <td className={`py-1 text-right font-mono ${scoreColor(b.score)}`}>{b.score.toFixed(1)}</td>
@@ -399,7 +399,7 @@ export default function StrategyLibraryDialog({
                           {applyResult.current_data && Object.keys(applyResult.current_data).length > 0 && (
                             <details className="mt-3 text-xs text-muted-foreground">
                               <summary className="cursor-pointer">查看实时数据</summary>
-                              <pre className="mt-2 p-2 rounded bg-accent/30 text-[10px] overflow-x-auto">
+                              <pre className="mt-2 p-2 rounded bg-s2 text-[12px] overflow-x-auto">
 {JSON.stringify(applyResult.current_data, null, 2)}
                               </pre>
                             </details>

@@ -129,21 +129,21 @@ export default function ExperimentsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-[16px] font-semibold text-foreground">经验库 · 实验台</h1>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-[12px] text-muted-foreground">
             每条实验只记事实：改了什么、基准与候选的指标、结论（保留/回滚）。
           </p>
         </div>
         <button
           type="button"
           onClick={() => void load()}
-          className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-s2"
+          className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[12px] text-foreground hover:bg-s2"
           data-testid="experiments-refresh"
         >
           <RefreshCw size={12} /> 刷新
         </button>
       </div>
 
-      <div className="flex gap-4 text-[11px] text-muted-foreground" data-testid="experiments-stats">
+      <div className="flex gap-4 text-[12px] text-muted-foreground" data-testid="experiments-stats">
         <span>共 {list?.total ?? 0} 条</span>
         <span>保留 {stats.keep ?? 0}</span>
         <span>回滚 {stats.rollback ?? 0}</span>
@@ -170,7 +170,7 @@ export default function ExperimentsPage() {
 
       {state === 'ok' && (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <table className="w-full text-[11px] tabular-nums">
+          <table className="w-full text-[12px] tabular-nums">
             <thead>
               <tr className="border-b border-border text-left text-muted-foreground">
                 <th className="px-2 py-1.5 font-normal">改动</th>
@@ -205,24 +205,24 @@ export default function ExperimentsPage() {
                             <span className="text-muted-foreground">读取中…</span>
                           ) : (
                             <div className="space-y-2">
-                              <div className="grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
+                              <div className="grid grid-cols-3 gap-2 text-[12px] text-muted-foreground">
                                 <span>指标</span>
                                 <span>基准</span>
                                 <span>候选</span>
                               </div>
                               {metricPairs(detail.baseline, detail.candidate).map((p) => (
-                                <div key={p.key} className="grid grid-cols-3 gap-2 text-[11px] tabular-nums">
+                                <div key={p.key} className="grid grid-cols-3 gap-2 text-[12px] tabular-nums">
                                   <span className="text-foreground">{p.key}</span>
                                   <span className="text-muted-foreground">{cell(p.before)}</span>
                                   <span className="text-foreground">{cell(p.after)}</span>
                                 </div>
                               ))}
                               {(detail.reasons ?? []).length > 0 && (
-                                <div className="text-[11px] text-stock-down">
+                                <div className="text-[12px] text-stock-down">
                                   回滚原因：{(detail.reasons ?? []).join('；')}
                                 </div>
                               )}
-                              <div className="text-[11px] text-muted-foreground">
+                              <div className="text-[12px] text-muted-foreground">
                                 证据：
                                 {detail.evidence_path
                                   ? detail.evidence_exists

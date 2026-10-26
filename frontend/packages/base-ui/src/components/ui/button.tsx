@@ -4,22 +4,22 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '../../cn'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-[13px] font-semibold transition-[background-color,border-color,box-shadow,transform] active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-[14px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-50',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-white hover:bg-primary/90',
+        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
         secondary: 'bg-secondary border border-border text-foreground hover:bg-secondary/80',
-        outline: 'border border-border bg-background text-foreground hover:bg-accent',
+        outline: 'border border-input bg-card text-foreground hover:bg-accent',
         destructive: 'bg-destructive/10 text-destructive hover:bg-destructive/15',
         ghost: 'text-muted-foreground hover:text-foreground hover:bg-accent',
         link: 'text-primary underline-offset-4 hover:underline',
       },
       size: {
         default: 'h-10 px-4 py-2.5',
-        sm: 'h-8 px-3 text-[12px]',
+        sm: 'h-9 px-3 text-[12px]',
         lg: 'h-11 px-6',
-        icon: 'h-9 w-9',
+        icon: 'h-10 w-10',
       },
     },
     defaultVariants: {
@@ -42,6 +42,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        data-ui="button"
+        data-size={size ?? 'default'}
         {...props}
       />
     )

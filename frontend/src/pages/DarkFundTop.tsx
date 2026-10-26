@@ -45,7 +45,7 @@ function isUnavailable(r: DarkFundTopResp): r is DarkFundTopUnavailable {
 function DarkFundTopSkeleton() {
   return (
     <div className="sida-page-enter space-y-4" aria-busy aria-live="polite">
-      <div className="border-b border-border/40 pb-3">
+      <div className="border-b border-border pb-3">
         <Skeleton className="h-5 w-48" />
         <Skeleton className="mt-2 h-3 w-72" />
       </div>
@@ -132,7 +132,7 @@ export default function DarkFundTopPage() {
       <div className="space-y-4">
         <Card className="p-6 text-center">
           <AlertTriangle className="mx-auto h-8 w-8 text-amber-500" />
-          <div className="mt-3 text-[13px] font-medium text-foreground">{t('darkFundTop.noSnapshot')}</div>
+          <div className="mt-3 text-[14px] font-medium text-foreground">{t('darkFundTop.noSnapshot')}</div>
           <p className="mt-1.5 whitespace-pre-wrap text-[12px] text-muted-foreground">{data.note}</p>
           <div className="mt-4">
             <Button onClick={refresh} disabled={refreshing} size="sm" className="min-h-[44px]">
@@ -149,14 +149,14 @@ export default function DarkFundTopPage() {
     return (
       <div className="sida-page-enter space-y-4">
         {/* 顶部摘要 + 操作栏 */}
-        <div className="border-b border-border/40 pb-3">
+        <div className="border-b border-border pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-stock-up" />
-                <h2 className="text-[13px] font-medium text-foreground">{t('darkFundTop.title')}</h2>
+                <h2 className="text-[14px] font-medium text-foreground">{t('darkFundTop.title')}</h2>
               </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-[12px] text-muted-foreground">
                 {t('common.snapshotDate')} <span className="font-mono">{data.snapshot_date}</span>
                 {' · '}{t('darkFundTop.universe')} <span className="font-mono">{data.universe ?? '-'}</span>
                 {' · '}{t('darkFundTop.computed')} <span className="font-mono">{data.computed ?? '-'}</span>
@@ -182,8 +182,8 @@ export default function DarkFundTopPage() {
           {/* 桌面端: 表格 */}
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-[12px]">
-              <thead className="sticky top-0 bg-muted/80 backdrop-blur">
-                <tr className="border-b border-border/60 text-[11px] text-muted-foreground">
+              <thead className="sticky top-0 bg-s2 backdrop-blur">
+                <tr className="border-b border-border text-[12px] text-muted-foreground">
                   <th className="px-3 py-2 font-medium">{t('darkFundTop.rank')}</th>
                   <th className="px-3 py-2 font-medium">{t('darkFundTop.code')}</th>
                   <th className="px-3 py-2 font-medium">{t('darkFundTop.name')}</th>
@@ -226,7 +226,7 @@ export default function DarkFundTopPage() {
                   return (
                     <tr
                       key={`${r.symbol}-${i}`}
-                      className="hover:bg-accent/20 cursor-pointer"
+                      className="hover:bg-s2 cursor-pointer"
                       onClick={() => navigate(`/stocks/${encodeURIComponent(r.symbol)}`, { state: navBackState('/dark-fund-top', '暗盘资金榜') })}
                       title={`${r.symbol} → ${t('nav.stocks')}`}
                     >
@@ -269,7 +269,7 @@ export default function DarkFundTopPage() {
                           )}
                         </td>
                       ) : null}
-                      <td className="px-3 py-2 font-mono text-[10px] text-muted-foreground">
+                      <td className="px-3 py-2 font-mono text-[12px] text-muted-foreground">
                         {r.source}
                       </td>
                     </tr>
@@ -294,23 +294,23 @@ export default function DarkFundTopPage() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] text-muted-foreground">#{i + 1}</span>
-                        <span className="font-mono text-[13px] text-primary font-medium">{r.symbol}</span>
+                        <span className="font-mono text-[12px] text-muted-foreground">#{i + 1}</span>
+                        <span className="font-mono text-[14px] text-primary font-medium">{r.symbol}</span>
                         <span className="text-[12px] text-foreground truncate" title={r.name ?? '-'}>{r.name ?? '-'}</span>
                       </div>
-                      <div className="mt-1 text-[10px] text-muted-foreground">{r.source}</div>
+                      <div className="mt-1 text-[12px] text-muted-foreground">{r.source}</div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className={`font-mono text-[13px] font-semibold ${positive ? 'text-stock-up' : negative ? 'text-stock-down' : 'text-muted-foreground'}`}>
+                      <div className={`font-mono text-[14px] font-semibold ${positive ? 'text-stock-up' : negative ? 'text-stock-down' : 'text-muted-foreground'}`}>
                         {toAmountFromWan(r.main_net_wan)}
                       </div>
-                      <div className="text-[10px] text-muted-foreground font-mono">
+                      <div className="text-[12px] text-muted-foreground font-mono">
                         {toAmountFromWanUnsigned(r.total_amount_wan)}
                       </div>
                     </div>
                   </div>
                   {hasTckData && r.tck_dark_net_wan != null && (
-                    <div className="mt-1.5 text-[10px] text-muted-foreground">
+                    <div className="mt-1.5 text-[12px] text-muted-foreground">
                       {t('darkFundTop.tckDark')}: <span className={`font-mono ${r.tck_dark_net_wan > 0 ? 'text-stock-up' : r.tck_dark_net_wan < 0 ? 'text-stock-down' : ''}`}>{toAmountFromWan(r.tck_dark_net_wan)}</span>
                     </div>
                   )}
@@ -319,7 +319,7 @@ export default function DarkFundTopPage() {
             })}
           </div>
 
-          <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+          <div className="border-t border-border px-3 py-1.5 text-[12px] text-muted-foreground">
             {t('darkFundTop.footerLegend')} ·{' '}
             {hasTckData
               ? t('darkFundTop.tckHasData')

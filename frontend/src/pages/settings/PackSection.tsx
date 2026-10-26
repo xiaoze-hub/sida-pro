@@ -27,11 +27,11 @@ export function PackSection() {
     <>
   {/* Config Pack (Templates) */}
   {isOwner && (
-  <section id="sec-pack" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-7" style={{ display: sectionMatches('sec-pack') ? undefined : 'none' }}>
+  <section id="sec-pack" className="border-t border-border pt-4 md:pt-5 lg:col-span-7" style={{ display: sectionMatches('sec-pack') ? undefined : 'none' }}>
     <div className="flex items-start justify-between mb-4 gap-3">
       <div>
-        <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">配置包</h3>
-        <p className="text-[11px] text-muted-foreground mt-1">一键导入/导出 Agent、关注列表与系统设置</p>
+        <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">配置包</h3>
+        <p className="text-[12px] text-muted-foreground mt-1">一键导入/导出 Agent、关注列表与系统设置</p>
       </div>
       <div className="flex items-center gap-2">
         <Button variant="secondary" size="sm" className="h-8" onClick={exportTemplate} disabled={exporting}>
@@ -52,7 +52,7 @@ export function PackSection() {
     </div>
 
     <div className="flex items-center gap-2 mb-4">
-      <div className="text-[11px] text-muted-foreground">导入模式</div>
+      <div className="text-[12px] text-muted-foreground">导入模式</div>
       <Select value={importMode} onValueChange={(v) => setImportMode(v as any)}>
         <SelectTrigger className="h-8 w-[160px] text-[12px]">
           <SelectValue />
@@ -83,14 +83,14 @@ export function PackSection() {
       }}
     />
 
-    <div className="rounded-md border border-border/40 bg-accent/20 p-3">
+    <div className="rounded-md border border-border bg-s2 p-3">
       <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
         <FileJson className="w-4 h-4 text-muted-foreground" />
         官方模板
       </div>
       <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
         {builtinTemplates.map(t => (
-          <div key={t.name} className="rounded-md border border-border/40 bg-background/30 p-3">
+          <div key={t.name} className="rounded-md border border-border bg-background p-3">
             <div className="flex items-center justify-between">
               <div className="text-[12px] font-semibold text-foreground">{t.name}</div>
               <Button
@@ -102,7 +102,7 @@ export function PackSection() {
                 <span className="text-[12px]">应用</span>
               </Button>
             </div>
-            <div className="mt-1 text-[11px] text-muted-foreground">{t.desc}</div>
+            <div className="mt-1 text-[12px] text-muted-foreground">{t.desc}</div>
           </div>
         ))}
       </div>

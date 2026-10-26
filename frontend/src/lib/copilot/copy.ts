@@ -36,7 +36,7 @@ export const TONE_META: Record<Tone, { label: string; badge: string; bar: string
   },
   neutral: {
     label: '中性',
-    badge: 'bg-s3 text-muted-foreground border-border/60',
+    badge: 'bg-s3 text-muted-foreground border-border',
     bar: 'bg-role-system',
     icon: '＝',
   },
@@ -165,14 +165,14 @@ export const FOLLOW_UP_QUESTIONS = [
 export const PRESET_PRIMARY_LABEL = '今日推荐'
 export const PRESET_MORE_LABEL = '更多指令'
 export const PRESET_MORE_COLLAPSE = '收起更多'
-export const PAGE_EMPTY_HINT = '也可以直接点一条，不用自己组织语言'
+export const PAGE_EMPTY_HINT = '从一个标的或技术问题开始，分析会保留数据来源与依据'
 
 /** 上下文锚点：从个股工作台带着标的进来时显示。 */
 export const CONTEXT_ANCHOR_PREFIX = '正在看'
 export const CONTEXT_ANCHOR_CLEAR = '换个标的'
 
 export const PAGE_EMPTY_EXAMPLES = [
-  '今天 9:25 谁在爆量抢筹？',
-  '600111 底仓成本多少，现在追安全吗？',
-  '我的持仓里谁已经跌破 70% 筹码下沿？',
+  '分析今天集合竞价的量价结构与异常变化',
+  '分析 600111 的趋势、筹码分布与数据局限',
+  '对照我的持仓，检查价格与筹码区间的关系',
 ]

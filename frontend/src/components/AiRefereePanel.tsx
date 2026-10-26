@@ -65,7 +65,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
       <div
         data-testid="ai-referee-panel"
         data-verdict="none"
-        className="rounded-md border border-border/60 px-3 py-2 text-[12px] text-muted-foreground"
+        className="rounded-md border border-border px-3 py-2 text-[12px] text-muted-foreground"
       >
         无裁判结论（本条预测未包含 AI 裁判结果，不作任何推测）
       </div>
@@ -85,7 +85,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
       ? 'border-amber-500/40 bg-amber-500/10 text-amber-600'
       : isAbstain
         ? 'border-slate-400/40 bg-slate-400/10 text-muted-foreground'
-        : 'border-border/60 text-foreground'
+        : 'border-border text-foreground'
 
   const reason = (referee.reason || '').trim()
 
@@ -93,11 +93,11 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
     <div
       data-testid="ai-referee-panel"
       data-verdict={verdict || 'unknown'}
-      className="rounded-md border border-border/60 px-3 py-2 space-y-1.5"
+      className="rounded-md border border-border px-3 py-2 space-y-1.5"
     >
       <div className="flex flex-wrap items-center gap-2">
         <Gavel className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-[13px] font-medium">AI 裁判</span>
+        <span className="text-[14px] font-medium">AI 裁判</span>
         <span
           data-testid="ai-referee-badge"
           className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-medium ${badgeCls}`}
@@ -154,7 +154,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
 export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | null; loading?: boolean }) {
   if (loading && !stats) {
     return (
-      <div data-testid="referee-stats-card" className="rounded-md border border-border/60 px-3 py-2 text-[12px] text-muted-foreground">
+      <div data-testid="referee-stats-card" className="rounded-md border border-border px-3 py-2 text-[12px] text-muted-foreground">
         裁判战绩：加载中…
       </div>
     )
@@ -167,9 +167,9 @@ export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | nu
       <div
         data-testid="referee-stats-card"
         data-empty="true"
-        className="rounded-md border border-border/60 px-3 py-2 text-[12px] text-muted-foreground space-y-1"
+        className="rounded-md border border-border px-3 py-2 text-[12px] text-muted-foreground space-y-1"
       >
-        <div className="text-[13px] font-medium text-foreground">裁判战绩</div>
+        <div className="text-[14px] font-medium text-foreground">裁判战绩</div>
         <div>{stats?.message || '暂无裁判记录（裁判层尚未介入过预测）。'}</div>
         <div>样本不足，暂不展示命中率。</div>
       </div>
@@ -187,11 +187,11 @@ export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | nu
     <div
       data-testid="referee-stats-card"
       data-empty="false"
-      className="rounded-md border border-border/60 px-3 py-2 space-y-1.5"
+      className="rounded-md border border-border px-3 py-2 space-y-1.5"
     >
       <div className="flex items-center gap-2">
-        <span className="text-[13px] font-medium">裁判战绩</span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[14px] font-medium">裁判战绩</span>
+        <span className="text-[12px] text-muted-foreground">
           {stats.symbol && stats.symbol !== 'all' ? (
             <span className="inline-flex items-baseline gap-1">
               标的 <StockLabel symbol={stats.symbol} />
@@ -221,7 +221,7 @@ export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | nu
           调整 {adjustCount}（命中率 {adjustCount === 0 || adjustAcc === null ? '样本不足' : `${oneDecimal(adjustAcc)}%`}）
         </span>
       </div>
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-[12px] text-muted-foreground">
         口径：介入前方向用模型预测价中位数重算，介入后按 verdict（confirm 维持 / adjust 用裁判方向），对照 target_date 实际方向。
       </div>
     </div>

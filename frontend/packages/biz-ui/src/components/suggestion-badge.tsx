@@ -187,7 +187,7 @@ export function SuggestionBadge({
     const klineMetaStr = formatKlineMeta(suggestion.meta)
     return (
       <>
-        <div className="pt-3 border-t border-border/30">
+        <div className="pt-3 border-t border-border">
           <div className="flex items-start gap-3">
             <div className="shrink-0 flex items-center gap-2">
               <AiSuggestionBadge
@@ -218,13 +218,13 @@ export function SuggestionBadge({
                 <p className="text-[12px] font-medium text-foreground mb-0.5">{suggestion.signal}</p>
               )}
               {suggestion.reason ? (
-                <p className="text-[11px] text-muted-foreground">{suggestion.reason}</p>
+                <p className="text-[12px] text-muted-foreground">{suggestion.reason}</p>
               ) : suggestion.raw && !suggestion.signal ? (
-                <p className="text-[11px] text-muted-foreground">{suggestion.raw}</p>
+                <p className="text-[12px] text-muted-foreground">{suggestion.raw}</p>
               ) : null}
 
               {(suggestion.agent_label || timeStr) && (
-                <div className="mt-1 text-[10px] text-muted-foreground">
+                <div className="mt-1 text-[12px] text-muted-foreground">
                   来源: {suggestion.agent_label || (isAI ? 'AI' : '未知')}
                   {timeStr && ` · ${timeStr}`}
                   {suggestion.is_expired && <span className="ml-1 text-amber-600">(已过期)</span>}
@@ -232,7 +232,7 @@ export function SuggestionBadge({
               )}
 
               {klineMetaStr && (
-                <div className="mt-1 text-[10px] text-muted-foreground">
+                <div className="mt-1 text-[12px] text-muted-foreground">
                   {klineMetaStr}
                 </div>
               )}
@@ -258,14 +258,14 @@ export function SuggestionBadge({
                 />
                 {/* AI 标签已前置到按钮文案，不再重复 */}
                 {stockName && (
-                  <span className="text-[13px] font-normal text-muted-foreground">
+                  <span className="text-[14px] font-normal text-muted-foreground">
                     {stockName} {stockSymbol && `(${stockSymbol})`}
                   </span>
                 )}
               </DialogTitle>
               {/* 来源信息 */}
               {(suggestion.agent_label || suggestion.created_at) && (
-                <div className="text-[11px] text-muted-foreground mt-1">
+                <div className="text-[12px] text-muted-foreground mt-1">
                   来源: {suggestion.agent_label || '未知'}
                   {suggestion.created_at && ` · ${formatSuggestionDateTime(suggestion.created_at)}`}
                   {suggestion.is_expired && <span className="ml-2 text-amber-500">(已过期)</span>}
@@ -277,7 +277,7 @@ export function SuggestionBadge({
               {/* Feedback */}
               {canFeedback && (
                 <div>
-                  <div className="text-[11px] text-muted-foreground mb-1">这条建议是否有用？</div>
+                  <div className="text-[12px] text-muted-foreground mb-1">这条建议是否有用？</div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => submitFeedback(true)}
@@ -285,7 +285,7 @@ export function SuggestionBadge({
                       className={`text-[12px] px-3 py-1.5 rounded-md border transition-colors ${
                         feedback === 'useful'
                           ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700'
-                          : 'bg-background/40 border-border/60 text-muted-foreground hover:text-foreground'
+                          : 'bg-background border-border text-muted-foreground hover:text-foreground'
                       }`}
                     >
                       有用
@@ -296,13 +296,13 @@ export function SuggestionBadge({
                       className={`text-[12px] px-3 py-1.5 rounded-md border transition-colors ${
                         feedback === 'useless'
                           ? 'bg-rose-500/10 border-rose-500/30 text-rose-700'
-                          : 'bg-background/40 border-border/60 text-muted-foreground hover:text-foreground'
+                          : 'bg-background border-border text-muted-foreground hover:text-foreground'
                       }`}
                     >
                       没用
                     </button>
                     {feedback && (
-                      <span className="text-[11px] text-muted-foreground">已记录，感谢反馈</span>
+                      <span className="text-[12px] text-muted-foreground">已记录，感谢反馈</span>
                     )}
                   </div>
                 </div>
@@ -311,16 +311,16 @@ export function SuggestionBadge({
               {/* 信号 */}
               {suggestion.signal && (
                 <div>
-                  <div className="text-[11px] text-muted-foreground mb-1">信号</div>
-                  <p className="text-[13px] font-medium text-foreground">{suggestion.signal}</p>
+                  <div className="text-[12px] text-muted-foreground mb-1">信号</div>
+                  <p className="text-[14px] font-medium text-foreground">{suggestion.signal}</p>
                 </div>
               )}
 
               {/* 理由 */}
               {(suggestion.reason || suggestion.raw) && (
                 <div>
-                  <div className="text-[11px] text-muted-foreground mb-1">理由</div>
-                  <p className="text-[13px] text-foreground">
+                  <div className="text-[12px] text-muted-foreground mb-1">理由</div>
+                  <p className="text-[14px] text-foreground">
                     {suggestion.reason || suggestion.raw}
                   </p>
                 </div>
@@ -329,7 +329,7 @@ export function SuggestionBadge({
               {/* 技术指标 */}
               {kline && (
                 <div className="space-y-3">
-                  <div className="text-[11px] text-muted-foreground">技术指标</div>
+                  <div className="text-[12px] text-muted-foreground">技术指标</div>
                   <KlineIndicators summary={kline as any} />
                 </div>
               )}
@@ -337,8 +337,8 @@ export function SuggestionBadge({
               {/* AI 原始响应 */}
               {suggestion.ai_response && (
                 <div>
-                  <div className="text-[11px] text-muted-foreground mb-1">AI 响应</div>
-                  <div className="text-[12px] text-foreground whitespace-pre-wrap bg-accent/30 rounded p-2 max-h-32 overflow-y-auto scrollbar">
+                  <div className="text-[12px] text-muted-foreground mb-1">AI 响应</div>
+                  <div className="text-[12px] text-foreground whitespace-pre-wrap bg-s2 rounded p-2 max-h-32 overflow-y-auto scrollbar">
                     {suggestion.ai_response}
                   </div>
                 </div>
@@ -347,10 +347,10 @@ export function SuggestionBadge({
               {/* Prompt 上下文 */}
               {suggestion.prompt_context && (
                 <details className="group">
-                  <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
-                    Prompt 上下文 <span className="text-[10px]">(点击展开)</span>
+                  <summary className="text-[12px] text-muted-foreground cursor-pointer hover:text-foreground">
+                    Prompt 上下文 <span className="text-[12px]">(点击展开)</span>
                   </summary>
-                  <div className="mt-2 text-[11px] text-muted-foreground whitespace-pre-wrap bg-accent/20 rounded p-2 max-h-48 overflow-y-auto scrollbar">
+                  <div className="mt-2 text-[12px] text-muted-foreground whitespace-pre-wrap bg-s2 rounded p-2 max-h-48 overflow-y-auto scrollbar">
                     {suggestion.prompt_context}
                   </div>
                 </details>
@@ -443,7 +443,7 @@ export function SuggestionBadge({
         </div>
         {/* 来源和时间（显示在徽章下方，仅 AI 建议以增强区分）*/}
         {isAI && (
-          <div className="mt-1 text-[10px] text-muted-foreground">
+          <div className="mt-1 text-[12px] text-muted-foreground">
             来源: {suggestion.agent_label || 'AI'}{timeStr && ` · ${timeStr}`}
             {suggestion.is_expired && <span className="ml-1 text-amber-600">(已过期)</span>}
           </div>
@@ -467,14 +467,14 @@ export function SuggestionBadge({
                 size="md"
               />
               {stockName && (
-                <span className="text-[13px] font-normal text-muted-foreground">
+                <span className="text-[14px] font-normal text-muted-foreground">
                   {stockName} {stockSymbol && `(${stockSymbol})`}
                 </span>
               )}
             </DialogTitle>
             {/* 来源信息 */}
             {(suggestion.agent_label || suggestion.created_at) && (
-              <div className="text-[11px] text-muted-foreground mt-1">
+              <div className="text-[12px] text-muted-foreground mt-1">
                 来源: {suggestion.agent_label || '未知'}
                 {suggestion.created_at && ` · ${formatSuggestionDateTime(suggestion.created_at)}`}
                 {suggestion.is_expired && <span className="ml-2 text-amber-500">(已过期)</span>}
@@ -486,7 +486,7 @@ export function SuggestionBadge({
             {/* Feedback */}
             {canFeedback && (
               <div>
-                <div className="text-[11px] text-muted-foreground mb-1">这条建议是否有用？</div>
+                <div className="text-[12px] text-muted-foreground mb-1">这条建议是否有用？</div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => submitFeedback(true)}
@@ -494,7 +494,7 @@ export function SuggestionBadge({
                     className={`text-[12px] px-3 py-1.5 rounded-md border transition-colors ${
                       feedback === 'useful'
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700'
-                        : 'bg-background/40 border-border/60 text-muted-foreground hover:text-foreground'
+                        : 'bg-background border-border text-muted-foreground hover:text-foreground'
                     }`}
                   >
                     有用
@@ -505,13 +505,13 @@ export function SuggestionBadge({
                     className={`text-[12px] px-3 py-1.5 rounded-md border transition-colors ${
                       feedback === 'useless'
                         ? 'bg-rose-500/10 border-rose-500/30 text-rose-700'
-                        : 'bg-background/40 border-border/60 text-muted-foreground hover:text-foreground'
+                        : 'bg-background border-border text-muted-foreground hover:text-foreground'
                     }`}
                   >
                     没用
                   </button>
                   {feedback && (
-                    <span className="text-[11px] text-muted-foreground">已记录，感谢反馈</span>
+                    <span className="text-[12px] text-muted-foreground">已记录，感谢反馈</span>
                   )}
                 </div>
               </div>
@@ -520,16 +520,16 @@ export function SuggestionBadge({
             {/* 信号 */}
             {suggestion.signal && (
               <div>
-                <div className="text-[11px] text-muted-foreground mb-1">信号</div>
-                <p className="text-[13px] font-medium text-foreground">{suggestion.signal}</p>
+                <div className="text-[12px] text-muted-foreground mb-1">信号</div>
+                <p className="text-[14px] font-medium text-foreground">{suggestion.signal}</p>
               </div>
             )}
 
             {/* 理由 */}
             {(suggestion.reason || suggestion.raw) && (
               <div>
-                <div className="text-[11px] text-muted-foreground mb-1">理由</div>
-                <p className="text-[13px] text-foreground">
+                <div className="text-[12px] text-muted-foreground mb-1">理由</div>
+                <p className="text-[14px] text-foreground">
                   {suggestion.reason || suggestion.raw}
                 </p>
               </div>
@@ -538,7 +538,7 @@ export function SuggestionBadge({
             {/* 技术指标 */}
             {kline && (
               <div className="space-y-3">
-                <div className="text-[11px] text-muted-foreground">技术指标</div>
+                <div className="text-[12px] text-muted-foreground">技术指标</div>
                 <KlineIndicators summary={kline as any} />
               </div>
             )}
@@ -546,8 +546,8 @@ export function SuggestionBadge({
             {/* AI 原始响应 */}
             {suggestion.ai_response && (
               <div>
-                <div className="text-[11px] text-muted-foreground mb-1">AI 响应</div>
-                <div className="text-[12px] text-foreground whitespace-pre-wrap bg-accent/30 rounded p-2 max-h-32 overflow-y-auto">
+                <div className="text-[12px] text-muted-foreground mb-1">AI 响应</div>
+                <div className="text-[12px] text-foreground whitespace-pre-wrap bg-s2 rounded p-2 max-h-32 overflow-y-auto">
                   {suggestion.ai_response}
                 </div>
               </div>
@@ -556,10 +556,10 @@ export function SuggestionBadge({
             {/* Prompt 上下文 */}
             {suggestion.prompt_context && (
               <details className="group">
-                <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
-                  Prompt 上下文 <span className="text-[10px]">(点击展开)</span>
+                <summary className="text-[12px] text-muted-foreground cursor-pointer hover:text-foreground">
+                  Prompt 上下文 <span className="text-[12px]">(点击展开)</span>
                 </summary>
-                <div className="mt-2 text-[11px] text-muted-foreground whitespace-pre-wrap bg-accent/20 rounded p-2 max-h-48 overflow-y-auto">
+                <div className="mt-2 text-[12px] text-muted-foreground whitespace-pre-wrap bg-s2 rounded p-2 max-h-48 overflow-y-auto">
                   {suggestion.prompt_context}
                 </div>
               </details>

@@ -57,10 +57,10 @@ export function AddStockDialog() {
                 key={opt.value}
                 type="button"
                 onClick={() => handleSearchMarketChange(opt.value)}
-                className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+                className={`text-[12px] px-2 py-0.5 rounded transition-colors ${
                   searchMarket === opt.value
                     ? 'bg-primary text-primary-foreground'
-                    : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+                    : 'bg-s2 text-muted-foreground hover:bg-accent'
                 }`}
               >
                 {opt.label}
@@ -71,7 +71,7 @@ export function AddStockDialog() {
             type="button"
             onClick={refreshStockListCache}
             disabled={refreshingStockList}
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors ml-2"
+            className="text-[12px] text-muted-foreground hover:text-foreground transition-colors ml-2"
             title="搜索不到？点击刷新股票列表"
           >
             {refreshingStockList ? (
@@ -104,7 +104,7 @@ export function AddStockDialog() {
                 key={`${item.market}-${item.symbol}`}
                 type="button"
                 onClick={() => selectStock(item)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-[13px] hover:bg-accent/50 text-left transition-colors"
+                className="w-full flex items-center gap-3 px-4 py-3 text-[14px] hover:bg-s2 text-left transition-colors"
               >
                 <span className="font-mono text-muted-foreground text-[12px] w-14">{item.symbol}</span>
                 <span className="flex-1 font-medium text-foreground">{item.name}</span>

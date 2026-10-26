@@ -48,7 +48,7 @@ export function CopilotBriefCard({
   if (!data && loading) {
     return (
       <div
-        className="rounded-xl border border-border/60 bg-s1 px-3 py-3"
+        className="rounded-xl border border-border bg-s1 px-3 py-3"
         data-testid="copilot-card-loading"
       >
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
@@ -62,7 +62,7 @@ export function CopilotBriefCard({
   if (!data) {
     return (
       <div
-        className="rounded-xl border border-border/60 bg-s1 px-3 py-3"
+        className="rounded-xl border border-border bg-s1 px-3 py-3"
         data-testid="copilot-card-error"
       >
         <div className="flex items-center gap-2">
@@ -70,14 +70,14 @@ export function CopilotBriefCard({
           <button
             type="button"
             onClick={() => void reload()}
-            className="ml-auto inline-flex h-6 items-center gap-1 rounded border border-border/50 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+            className="ml-auto inline-flex h-6 items-center gap-1 rounded border border-border px-2 text-[12px] text-muted-foreground hover:text-foreground"
           >
             <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
             {RETRY}
           </button>
         </div>
-        <div className="mt-1 text-[11px] text-muted-foreground">{error || DEGRADED_HINT(null)}</div>
-        <div className="mt-2 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground">
+        <div className="mt-1 text-[12px] text-muted-foreground">{error || DEGRADED_HINT(null)}</div>
+        <div className="mt-2 border-t border-border pt-1.5 text-[12px] text-muted-foreground">
           {DISCLAIMER}
         </div>
       </div>
@@ -104,34 +104,34 @@ function BriefBody({
   const missing = EVIDENCE_KEYS.filter((k) => evidenceState(data.evidence[k]) === 'missing')
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border/60 bg-s1" data-testid="copilot-card">
+    <div className="overflow-hidden rounded-xl border border-border bg-s1" data-testid="copilot-card">
       {/* 头：tone 色条 + 意图定性 + 置信 + 刷新 */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/40 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3 py-2">
         <span className={`h-4 w-[3px] rounded ${toneBar(v.intent_tone)}`} />
         <span className="text-[12px] font-medium text-foreground">{CARD_TITLE}</span>
-        <span className={`rounded border px-1.5 text-[10px] leading-4 ${meta.badge}`}>
+        <span className={`rounded border px-1.5 text-[12px] leading-4 ${meta.badge}`}>
           {meta.icon} {meta.label}
         </span>
         <span className="min-w-0 truncate text-[12px] text-foreground" title={v.intent_label}>
           {v.intent_label}
         </span>
-        <span className="font-mono text-[10px] text-muted-foreground">
+        <span className="font-mono text-[12px] text-muted-foreground">
           置信 {confidenceOfTen(v.confidence)}
         </span>
-        <span className="rounded border border-border/60 px-1 text-[10px] text-muted-foreground">
+        <span className="rounded border border-border px-1 text-[12px] text-muted-foreground">
           {SESSION_LABEL[data.session.phase] || data.session.phase}
         </span>
         {data.session.stale ? (
-          <span className="text-[10px] text-role-watch">{STALE_HINT}</span>
+          <span className="text-[12px] text-role-watch">{STALE_HINT}</span>
         ) : null}
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground" title={data.as_of}>
+        <span className="ml-auto font-mono text-[12px] text-muted-foreground" title={data.as_of}>
           {safeFixed(data.quote.close, 2)} ({safePercent(data.quote.change_pct, 2, true)})
         </span>
         <button
           type="button"
           onClick={() => void onRefresh()}
           title={`${REFRESH}（${data.cache?.hit ? '命中缓存' : '重新取数'}）`}
-          className="inline-flex h-5 w-5 items-center justify-center rounded border border-border/50 text-muted-foreground hover:text-foreground"
+          className="inline-flex h-5 w-5 items-center justify-center rounded border border-border text-muted-foreground hover:text-foreground"
           data-testid="copilot-refresh"
         >
           <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
@@ -145,16 +145,16 @@ function BriefBody({
         </p>
 
         {/* 证据条：used / gated / missing 三态可区分 */}
-        <div className="flex flex-wrap items-center gap-1 text-[10px]">
+        <div className="flex flex-wrap items-center gap-1 text-[12px]">
           <span className="text-muted-foreground">{EVIDENCE_LABEL}:</span>
           {EVIDENCE_KEYS.map((k) => {
             const st = evidenceState(data.evidence[k])
             const cls =
               st === 'ok'
-                ? 'border-border/60 text-muted-foreground'
+                ? 'border-border text-muted-foreground'
                 : st === 'gated'
                   ? 'border-role-watch/40 text-role-watch'
-                  : 'border-border/40 text-muted-foreground line-through'
+                  : 'border-border text-muted-foreground line-through'
             const txt = st === 'gated' ? `${EVIDENCE_NAME[k]}·升级解锁` : EVIDENCE_NAME[k]
             return (
               <span key={k} className={`rounded border px-1 ${cls}`} data-evidence={k} data-state={st}>
@@ -166,7 +166,7 @@ function BriefBody({
 
         {/* gated: 权限不足 ≠ 没数据 —— 给升级指引，不给 `--` */}
         {gated.length ? (
-          <div className="rounded border border-role-watch/40 px-2 py-1 text-[10px] text-role-watch">
+          <div className="rounded border border-role-watch/40 px-2 py-1 text-[12px] text-role-watch">
             {GATED_HINT}：{gated.map((k) => EVIDENCE_NAME[k]).join(' · ')}
           </div>
         ) : null}
@@ -175,7 +175,7 @@ function BriefBody({
         <CopilotPlanBlock plans={v.action_plans} hasPosition={hasPosition} />
 
         {v.risk_flags?.length ? (
-          <div className="flex flex-wrap gap-1 text-[10px]">
+          <div className="flex flex-wrap gap-1 text-[12px]">
             {v.risk_flags.slice(0, 6).map((f) => (
               <span key={f} className="rounded border border-role-risk/40 px-1 text-role-risk">
                 {f}
@@ -185,20 +185,20 @@ function BriefBody({
         ) : null}
 
         {/* 口径 + 缺失原因 + 合规尾注 */}
-        <div className="space-y-0.5 border-t border-border/40 pt-1.5">
+        <div className="space-y-0.5 border-t border-border pt-1.5">
           {v.caliber_notes?.length ? (
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-[12px] text-muted-foreground">
               口径：{v.caliber_notes.slice(0, 4).join(' · ')}
             </div>
           ) : null}
           {missing.length ? (
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-[12px] text-muted-foreground">
               {missing
                 .map((k) => `${EVIDENCE_NAME[k]} ${DEGRADED_HINT(data.evidence[k].degraded_reason)}`)
                 .join(' ｜ ')}
             </div>
           ) : null}
-          <div className="text-[10px] text-muted-foreground">
+          <div className="text-[12px] text-muted-foreground">
             {v.disclaimer || DISCLAIMER}
             {v.rule_id ? <span className="ml-1 font-mono">[{v.rule_id}]</span> : null}
           </div>

@@ -36,7 +36,7 @@ describe('P0-1 个股工作台: 右栏默认折叠 + 宽度全部给 K 线', () 
   })
 
   it('容器放开 1500px 上限(工作台独占整宽)', () => {
-    expect(workbench).toContain('mx-auto max-w-none p-3')
+    expect(workbench).toContain('mx-auto min-w-0 max-w-none')
     expect(workbench).not.toContain('max-w-[1500px]')
   })
 })

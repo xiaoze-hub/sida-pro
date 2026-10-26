@@ -160,15 +160,15 @@ export default function ToolCatalog() {
           <Skeleton className="h-8 w-full" />
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-border bg-card p-4 text-[13px] text-stock-down">
+        <div className="rounded-xl border border-border bg-card p-4 text-[14px] text-stock-down">
           读取工具目录失败：{error}
         </div>
       ) : !data || data.tools.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card p-6 text-center text-[13px] text-muted-foreground">
+        <div className="rounded-xl border border-border bg-card p-6 text-center text-[14px] text-muted-foreground">
           注册表里没有工具
         </div>
       ) : rows.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card p-6 text-center text-[13px] text-muted-foreground">
+        <div className="rounded-xl border border-border bg-card p-6 text-center text-[14px] text-muted-foreground">
           当前过滤条件下没有工具
         </div>
       ) : (
@@ -188,7 +188,7 @@ export default function ToolCatalog() {
                 <tr key={t.name} className="border-b border-border last:border-0">
                   <td className="px-3 py-2 align-top">
                     <div className="font-medium text-foreground">{t.name}</div>
-                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                    <div className="mt-0.5 text-[12px] text-muted-foreground">
                       {t.description || '--'}
                     </div>
                   </td>
@@ -202,7 +202,7 @@ export default function ToolCatalog() {
                           <span
                             key={r}
                             title={r}
-                            className="rounded-md border border-border px-1.5 py-0.5 text-[11px] text-foreground"
+                            className="rounded-md border border-border px-1.5 py-0.5 text-[12px] text-foreground"
                           >
                             {recipeLabel(r)}
                           </span>

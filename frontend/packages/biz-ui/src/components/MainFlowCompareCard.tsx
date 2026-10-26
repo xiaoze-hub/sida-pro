@@ -93,7 +93,7 @@ function ConsistencyRing({ value }: { value: number | null | undefined }) {
         />
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className={`font-mono tabular-nums text-[10px] ${c.text}`}>
+        <span className={`font-mono tabular-nums text-[12px] ${c.text}`}>
           {value != null && Number.isFinite(value) ? `${Math.round(value)}` : '--'}
         </span>
       </div>
@@ -104,12 +104,12 @@ function ConsistencyRing({ value }: { value: number | null | undefined }) {
 /** 单数据源列 */
 function SourceCol({ label, tag, net }: { label: string; tag: string; net: number | null | undefined }) {
   return (
-    <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
+    <div className="rounded-lg bg-s2 px-2.5 py-1.5">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] text-muted-foreground">{label}</span>
-        <span className="text-[10px] text-muted-foreground border border-border/50 rounded px-1 py-px">{tag}</span>
+        <span className="text-[12px] text-muted-foreground">{label}</span>
+        <span className="text-[12px] text-muted-foreground border border-border rounded px-1 py-px">{tag}</span>
       </div>
-      <div className={`font-mono tabular-nums text-[13px] font-semibold mt-0.5 ${upColor(net)}`}>{fmtYi(net)}</div>
+      <div className={`font-mono tabular-nums text-[14px] font-semibold mt-0.5 ${upColor(net)}`}>{fmtYi(net)}</div>
     </div>
   )
 }
@@ -150,7 +150,7 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
   }, 60000, { deps: [load] })
 
   if (loading && !data) {
-    return <div className="h-[96px] rounded-xl border border-border/50 bg-card animate-pulse bg-accent/20" />
+    return <div className="h-[96px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
   }
 
   const hasData = data?.tencent?.available || data?.thsdk?.available
@@ -163,7 +163,7 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
 
   if (!hasData) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card p-3">
+      <div className="rounded-xl border border-border bg-card p-3">
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           {error || data?.note || '主力意图双源对比暂不可用(非A股/数据源不可用)'}
         </div>
@@ -172,12 +172,12 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
   }
 
   return (
-    <div className={`rounded-xl border bg-card p-3 ${lowConsistency ? 'border-amber-500/40' : 'border-border/50'}`}>
+    <div className={`rounded-xl border bg-card p-3 ${lowConsistency ? 'border-amber-500/40' : 'border-border'}`}>
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
-          <div className="text-[13px] font-semibold text-foreground">主力意图双源对比</div>
+          <div className="text-[14px] font-semibold text-foreground">主力意图双源对比</div>
           {updatedAt && (
-            <span className="text-[10px] text-muted-foreground font-mono">
+            <span className="text-[12px] text-muted-foreground font-mono">
               {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
             </span>
           )}
@@ -199,17 +199,17 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
             <span className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 ${cn.ring}`}>
               <ConsistencyRing value={consistency} />
               <span className="leading-tight">
-                <span className={`block text-[11px] font-semibold ${cn.text}`}>一致性 {fmtSignedPct(consistency)}</span>
-                <span className="block text-[10px] text-muted-foreground">双源对比</span>
+                <span className={`block text-[12px] font-semibold ${cn.text}`}>一致性 {fmtSignedPct(consistency)}</span>
+                <span className="block text-[12px] text-muted-foreground">双源对比</span>
               </span>
             </span>
           }
           content={
-            <div className="text-[11px] leading-relaxed max-w-[220px]">
+            <div className="text-[12px] leading-relaxed max-w-[220px]">
               {lowConsistency
                 ? '双源差异大, 建议人工复核'
                 : '两数据源主力净额方向与量级的一致程度(thsdk L2 vs 腾讯逐笔)'}
-              <div className="text-[10px] text-muted-foreground mt-1">delta {fmtSignedPct(delta)}</div>
+              <div className="text-[12px] text-muted-foreground mt-1">delta {fmtSignedPct(delta)}</div>
             </div>
           }
           side="top"
@@ -224,12 +224,12 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
       </div>
 
       {lowConsistency && (
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-500">
+        <div className="mt-2 flex items-center gap-1.5 text-[12px] text-amber-600 dark:text-amber-500">
           <AlertTriangle className="w-3.5 h-3.5" />
           差异幅度 delta {fmtSignedPct(delta)}, 建议人工复核
         </div>
       )}
-      {data?.note ? <div className="mt-1.5 text-[10px] text-muted-foreground">{data.note}</div> : null}
+      {data?.note ? <div className="mt-1.5 text-[12px] text-muted-foreground">{data.note}</div> : null}
     </div>
   )
 }

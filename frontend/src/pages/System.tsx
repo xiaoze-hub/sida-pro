@@ -1,3 +1,4 @@
+import PageHeader from '@/components/PageHeader'
 import { Suspense } from 'react'
 import { Bot, Database, ListChecks, Loader2, ShieldAlert } from 'lucide-react'
 
@@ -75,6 +76,9 @@ function TabLoading() {
 
 export default function SystemPage({ myPerms, isOwner }: { myPerms?: Set<string> | null; isOwner?: () => boolean }) {
   return (
+    <div className="page-container">
+      <PageHeader title="系统与数据" description="管理分析任务、数据来源与运行状态" />
     <TabbedPage tabs={SYSTEM_TABS} defaultTab="agents" myPerms={myPerms} isOwner={isOwner} />
+    </div>
   )
 }

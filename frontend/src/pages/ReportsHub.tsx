@@ -136,7 +136,7 @@ export default function ReportsHubPage({ myPerms, isOwner }: { myPerms?: Set<str
           data-testid="premarket-run-btn"
           onClick={() => void startRun()}
           disabled={running}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border/60 px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-[12px] font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
         >
           {running ? (
             <>
@@ -157,7 +157,7 @@ export default function ReportsHubPage({ myPerms, isOwner }: { myPerms?: Set<str
           问参谋
         </button>
         {runState === 'error' && runError ? (
-          <span data-testid="premarket-run-error" className="text-[11px] text-destructive">
+          <span data-testid="premarket-run-error" className="text-[12px] text-destructive">
             {runError}
           </span>
         ) : null}

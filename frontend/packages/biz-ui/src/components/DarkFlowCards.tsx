@@ -169,8 +169,8 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
   if (loading && !data) {
     return (
       <div className="mt-3 grid gap-2">
-        <div className="h-[92px] rounded-xl border border-border/50 bg-card animate-pulse bg-accent/20" />
-        <div className="h-[120px] rounded-xl border border-border/50 bg-card animate-pulse bg-accent/20" />
+        <div className="h-[92px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
+        <div className="h-[120px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
       </div>
     )
   }
@@ -178,7 +178,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
   // 加载失败降级
   if (error && !data) {
     return (
-      <div className="mt-3 rounded-xl border border-border/50 bg-card p-3">
+      <div className="mt-3 rounded-xl border border-border bg-card p-3">
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <ShieldAlert className="w-3.5 h-3.5" />
           <span>暗盘/主力意图数据暂不可用({error})</span>
@@ -208,19 +208,19 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
   return (
     <div className="mt-3 grid gap-2">
       {/* ============ 卡片①: 主力意图 ============ */}
-      <div className="rounded-xl border border-border/50 bg-card p-3">
+      <div className="rounded-xl border border-border bg-card p-3">
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
-            <div className="text-[13px] font-semibold text-foreground">🎯 主力意图</div>
+            <div className="text-[14px] font-semibold text-foreground">🎯 主力意图</div>
             {updatedAt && (
-              <span className="text-[10px] text-muted-foreground font-mono">
+              <span className="text-[12px] text-muted-foreground font-mono">
                 {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
               </span>
             )}
             {/* 2026-09-04 P1-5: 停滞徽标, stale 才出现 */}
             {diag?.stale ? (
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30"
+                className="text-[12px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30"
                 title={diag?.tick_lag_sec != null ? `末笔落后 ${Math.round(diag.tick_lag_sec / 60)} 分钟` : '逐笔数据停滞'}
               >
                 ⚠️ 数据停滞
@@ -255,7 +255,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
                 📢 {mi.verdict_note}
               </div>
             ) : null}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-[11px]">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-[12px]">
               <Stat label="主力净额" value={fmtWan(mi.main_net)} valueClass={upColor(mi.main_net)} hint="明盘口径主力净额 = 大单 + 超大单净额(万元)" />
               <Stat label="超大单净额" value={fmtWan(mi.big_net)} valueClass={upColor(mi.big_net)} hint="超大单(≥100万)净额(万元)" />
               <Stat label="大单净额" value={fmtWan(mi.mid_net)} valueClass={upColor(mi.mid_net)} hint="大单(20万-100万)净额(万元)" />
@@ -265,7 +265,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             </div>
             {/* 2026-09-04: 数据行(逐笔总数/末笔/页数), 小字不抢戏 */}
             {diag?.tick_count != null ? (
-              <div className="mt-2 text-[10px] text-muted-foreground font-mono">
+              <div className="mt-2 text-[12px] text-muted-foreground font-mono">
                 逐笔 {diag.tick_count} 笔{diag.last_tick_t ? ` · 末笔 ${diag.last_tick_t}` : ''}
                 {diag.tick_pages != null ? ` · ${diag.tick_pages} 页` : ''}
               </div>
@@ -273,7 +273,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             {/* 2026-09-05 P1: 明盘三源交叉(腾讯+thSdk+TQ), 一致绿/分歧 amber */}
             {data?.mainflow_tri && data.mainflow_tri.n_ok >= 2 ? (
               <div
-                className={`mt-2 rounded px-2 py-1 text-[10px] leading-4 ${
+                className={`mt-2 rounded px-2 py-1 text-[12px] leading-4 ${
                   data.mainflow_tri.agree
                     ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                     : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
@@ -288,7 +288,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             {/* 2026-09-05 P2: 撤单率(TQ独家), 有信号才展示 */}
             {data?.l2?.cancel_signal ? (
               <div
-                className="mt-2 rounded bg-violet-500/10 px-2 py-1 text-[10px] leading-4 text-violet-700 dark:text-violet-400"
+                className="mt-2 rounded bg-violet-500/10 px-2 py-1 text-[12px] leading-4 text-violet-700 dark:text-violet-400"
                 title={`撤单率 ${data.l2.cancel_rate ?? '--'}% · 撤单偏向 ${data.l2.cancel_bias ?? '--'}%(+买方撤多/-卖方撤多)`}
               >
                 🔄 {data.l2.cancel_signal}({data.l2.cancel_rate ?? '--'}%)
@@ -302,19 +302,19 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
 
       {/* ============ 卡片: 暗盘资金(拆单识别, 2026-08-30) ============ */}
       {darkOrder && darkOrder.net != null ? (
-        <div className="rounded-xl border border-border/50 bg-card p-3">
+        <div className="rounded-xl border border-border bg-card p-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[13px] font-semibold text-foreground">🕵️ 暗盘资金(拆单识别)</div>
-            <span className="text-[10px] text-muted-foreground">主力伪装的中小单·逆势+位置确认</span>
+            <div className="text-[14px] font-semibold text-foreground">🕵️ 暗盘资金(拆单识别)</div>
+            <span className="text-[12px] text-muted-foreground">主力伪装的中小单·逆势+位置确认</span>
           </div>
           {/* 2026-09-04 C计划定论: 涨停日散户获利了结潮与主力拆单在L1逐笔不可区分,
               涨停股暗盘方向可能反, 降权提示(非涨停股对账1.01/0.76可信)。 */}
           {data?.inner_outer?.change_pct != null && data.inner_outer.change_pct >= 9.5 && (
-            <div className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[10px] leading-4 text-amber-700 dark:text-amber-400">
+            <div className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[12px] leading-4 text-amber-700 dark:text-amber-400">
               涨停日散户潮污染：获利了结盘与主力拆单无法区分，方向仅供参考
             </div>
           )}
-          <div className="grid grid-cols-3 gap-2 text-[11px]">
+          <div className="grid grid-cols-3 gap-2 text-[12px]">
             <Stat label="暗盘净额" value={fmtWan(darkOrder.net)} valueClass={upColor(darkOrder.net)} hint="暗盘口径净额 = 疑似主力买 − 疑似主力卖(万元, 盘后逐笔还原)" />
             <Stat label="疑似主力买" value={fmtWan(darkOrder.main_buy ?? darkOrder.buy_amt)} valueClass={upColor(darkOrder.main_buy ?? darkOrder.buy_amt)} hint="按拆单特征识别的主力买入额(万元)" />
             <Stat label="疑似主力卖" value={fmtWan(darkOrder.main_sell ?? darkOrder.sell_amt)} valueClass={upColor(darkOrder.main_sell ?? darkOrder.sell_amt)} hint="按拆单特征识别的主力卖出额(万元)" />
@@ -322,9 +322,9 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             <Stat label="散户卖(解套)" value={fmtWan(darkOrder.herd_sell)} valueClass={upColor(darkOrder.herd_sell)} hint="解套/割肉型的中小单卖出额(万元)" />
           </div>
           {darkOrder.groups?.length ? (
-            <div className="mt-2 space-y-1 border-t border-border/50 pt-2">
+            <div className="mt-2 space-y-1 border-t border-border pt-2">
               {darkOrder.groups.slice(0, 5).map((g, i) => (
-                <div key={i} className="flex items-center justify-between text-[11px]">
+                <div key={i} className="flex items-center justify-between text-[12px]">
                   <span className={`font-mono ${g.d === 'B' ? 'text-stock-up' : 'text-stock-down'}`}>
                     {g.d === 'B' ? '买' : '卖'} {g.n}笔 {fmtWan(g.amt)}
                   </span>
@@ -339,15 +339,15 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
       ) : null}
 
       {/* ============ 卡片②: 内盘外盘 ============ */}
-      <div className="rounded-xl border border-border/50 bg-card p-3">
-        <div className="text-[13px] font-semibold text-foreground mb-2">📊 内盘外盘</div>
+      <div className="rounded-xl border border-border bg-card p-3">
+        <div className="text-[14px] font-semibold text-foreground mb-2">📊 内盘外盘</div>
 
         {io && (io.buy_pct != null || io.sell_pct != null) ? (
           <>
             {/* 内外盘占比进度条: 外盘(买)红 / 内盘(卖)绿 */}
-            <div className="flex items-center gap-2 text-[11px] mb-1">
+            <div className="flex items-center gap-2 text-[12px] mb-1">
               <span className="text-stock-up font-mono">外盘 {fmtPct(io.buy_pct)}</span>
-              <div className="flex-1 h-1.5 rounded-full bg-accent/40 overflow-hidden flex">
+              <div className="flex-1 h-1.5 rounded-full bg-s2 overflow-hidden flex">
                 <div
                   className="h-full bg-stock-up/80"
                   style={{ width: `${Math.min(100, Math.max(0, io.buy_pct ?? 0))}%` }}
@@ -359,7 +359,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
               </div>
               <span className="text-stock-down font-mono">内盘 {fmtPct(io.sell_pct)}</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px] mt-2">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[12px] mt-2">
               <Stat label="量比" value={io.volume_ratio != null ? io.volume_ratio.toFixed(2) : '--'} hint="当前每分钟成交量 / 过去5日同段均量; >1 放量" />
               <Stat
                 label="涨跌"
@@ -390,7 +390,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
 
         {/* 口诀提示 */}
         {mn ? (
-          <div className="mt-2 rounded-lg bg-accent/20 border border-border/50 px-3 py-2 flex items-start justify-between gap-2">
+          <div className="mt-2 rounded-lg bg-s2 border border-border px-3 py-2 flex items-start justify-between gap-2">
             <div className="text-[12px] leading-relaxed">
               <span className="font-medium text-foreground">⚠️ {mn.mnemonic}</span>
               {mn.detail ? <span className="text-muted-foreground ml-1">— {mn.detail}</span> : null}
@@ -430,7 +430,7 @@ function Stat({
   hint?: string
 }) {
   return (
-    <div className="rounded-lg bg-accent/20 px-2.5 py-1.5" title={hint}>
+    <div className="rounded-lg bg-s2 px-2.5 py-1.5" title={hint}>
       <div className="text-muted-foreground">{label}</div>
       <div className={`font-mono ${valueClass ?? 'text-foreground'}`}>{value}</div>
     </div>

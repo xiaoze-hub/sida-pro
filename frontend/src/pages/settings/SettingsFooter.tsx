@@ -9,7 +9,7 @@ export function SettingsFooter() {
     <>
 {/* Version Footer */}
 {version && (
-  <div className="mt-8 text-center text-[11px] text-muted-foreground">
+  <div className="mt-8 text-center text-[12px] text-muted-foreground">
     数智分析 v{version}
   </div>
 )}

@@ -133,7 +133,7 @@ export default function MarketBroadcast() {
 
   if (loading) {
     return (
-      <div className="text-[11px] text-muted-foreground" data-testid="broadcast-loading">
+      <div className="text-[12px] text-muted-foreground" data-testid="broadcast-loading">
         盘面播报加载中…
       </div>
     )
@@ -141,7 +141,7 @@ export default function MarketBroadcast() {
 
   if (err) {
     return (
-      <div className="text-[11px] text-muted-foreground" data-testid="broadcast-error">
+      <div className="text-[12px] text-muted-foreground" data-testid="broadcast-error">
         {err}（可点右上「刷新」重试）
       </div>
     )
@@ -149,7 +149,7 @@ export default function MarketBroadcast() {
 
   if (!data?.available) {
     return (
-      <div className="text-[11px] text-muted-foreground" data-testid="broadcast-empty">
+      <div className="text-[12px] text-muted-foreground" data-testid="broadcast-empty">
         {data?.reason || '今日盘后复盘尚未生成，暂无播报'}
       </div>
     )
@@ -165,15 +165,15 @@ export default function MarketBroadcast() {
     <div data-testid="broadcast">
       {/* 横向 4 格：标题加重、值一行内截断 —— 原来是 5 行竖排，把卡片撑高、中间留空 */}
       <div className="flex items-baseline gap-2">
-        <span className="text-[11px] font-semibold text-foreground">今日盘面</span>
+        <span className="text-[12px] font-semibold text-foreground">今日盘面</span>
         {dateText && (
-          <span className="text-[11px] text-muted-foreground tabular-nums">基准日 {dateText}</span>
+          <span className="text-[12px] text-muted-foreground tabular-nums">基准日 {dateText}</span>
         )}
         {data.phase_label && (
-          <span className="rounded bg-s1 px-1.5 py-0.5 text-[11px] text-foreground">{data.phase_label}</span>
+          <span className="rounded bg-s1 px-1.5 py-0.5 text-[12px] text-foreground">{data.phase_label}</span>
         )}
         {data.quality && data.quality !== 'ok' && (
-          <span className="text-[11px] text-amber-500">数据{data.quality === 'partial' ? '不全' : '缺失'}</span>
+          <span className="text-[12px] text-amber-500">数据{data.quality === 'partial' ? '不全' : '缺失'}</span>
         )}
       </div>
 
@@ -214,10 +214,10 @@ function Cell({
   return (
     <div className="min-w-0">
       <div className="flex items-baseline gap-1">
-        <span className="text-[11px] font-semibold text-foreground">{title}</span>
+        <span className="text-[12px] font-semibold text-foreground">{title}</span>
         {hint && (
           <span
-            className="cursor-help text-[11px] text-muted-foreground"
+            className="cursor-help text-[12px] text-muted-foreground"
             data-testid={caliberId}
             title={hintTitle}
           >
@@ -226,7 +226,7 @@ function Cell({
         )}
       </div>
       <div
-        className="mt-0.5 truncate text-[11px] leading-tight text-muted-foreground tabular-nums"
+        className="mt-0.5 truncate text-[12px] leading-tight text-muted-foreground tabular-nums"
         data-testid={testId}
       >
         {value}

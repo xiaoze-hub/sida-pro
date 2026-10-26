@@ -35,11 +35,11 @@ export function SettingsHero() {
   return (
     <>
 {/* Hero */}
-<div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
+<div className="relative overflow-hidden border-b border-border p-5 md:p-7">
   <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-accent/30" />
   <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
     <div className="min-w-0">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
         <input ref={avatarFileRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
         <button
           type="button"
@@ -60,24 +60,24 @@ export function SettingsHero() {
         <span className="mx-1 hidden h-4 w-px bg-border/50 sm:block" />
         {isOwner && (
           <>
-            <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+            <div className="px-2.5 py-1 rounded-full bg-background border border-border text-[12px] text-muted-foreground">
               <span className="font-mono text-foreground">{services.length}</span> 服务商
             </div>
-            <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+            <div className="px-2.5 py-1 rounded-full bg-background border border-border text-[12px] text-muted-foreground">
               <span className="font-mono text-foreground">{allModels.length}</span> 模型
             </div>
           </>
         )}
-        <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+        <div className="px-2.5 py-1 rounded-full bg-background border border-border text-[12px] text-muted-foreground">
           <span className="font-mono text-foreground">{enabledChannels.length}</span>/<span className="font-mono">{channels.length}</span> 渠道启用
         </div>
         {isOwner && defaultModel ? (
-          <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+          <div className="px-2.5 py-1 rounded-full bg-background border border-border text-[12px] text-muted-foreground">
             默认模型 <span className="font-mono text-foreground">{defaultModel.model}</span>
           </div>
         ) : null}
         {defaultChannel ? (
-          <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+          <div className="px-2.5 py-1 rounded-full bg-background border border-border text-[12px] text-muted-foreground">
             默认通知 <span className="text-foreground">{defaultChannel.name}</span>
           </div>
         ) : null}
@@ -111,7 +111,7 @@ export function SettingsHero() {
         <button
           type="button"
           onClick={() => setGlobalQuery('')}
-          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          className="text-[12px] text-muted-foreground hover:text-foreground transition-colors"
         >
           清空
         </button>
@@ -125,7 +125,7 @@ export function SettingsHero() {
       <button
         key={it.id}
         onClick={() => scrollTo(it.id)}
-        className="group flex items-center gap-2 rounded-full border border-border/50 bg-background/70 px-3 py-1.5 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
+        className="group flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
       >
         <span className="font-medium text-foreground group-hover:text-foreground">{it.label}</span>
         {it.hint ? <span className="opacity-60">{it.hint}</span> : null}
@@ -133,7 +133,7 @@ export function SettingsHero() {
     ))}
     {/* 2026-08-17: 清空搜索 快捷按钮 */}
     {trimmedGlobal && (
-      <div className="ml-auto flex items-center gap-2 text-[11px]">
+      <div className="ml-auto flex items-center gap-2 text-[12px]">
         <button
           type="button"
           onClick={() => setGlobalQuery('')}
@@ -142,7 +142,7 @@ export function SettingsHero() {
           清空搜索 ×
         </button>
         {hasGlobalQuery && (
-          <span className="ml-1 text-[11px] text-muted-foreground">
+          <span className="ml-1 text-[12px] text-muted-foreground">
             · {matchCount} 个区块匹配
           </span>
         )}

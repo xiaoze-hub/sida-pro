@@ -109,7 +109,7 @@ function toneClass(tone: CbScenario['tone']): string {
     case 'watch':
       return 'bg-yellow-500/15 text-yellow-600 dark:text-yellow-400 border-yellow-500/25'
     default:
-      return 'bg-muted text-muted-foreground border-border/50'
+      return 'bg-muted text-muted-foreground border-border'
   }
 }
 
@@ -184,8 +184,8 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
   return (
     <div className="space-y-3">
       {/* 顶栏: 数据日 / 交易阶段 / 是否实时 + 刷新 */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-card/60 px-3 py-2">
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
           <Link2 className="h-3.5 w-3.5 text-primary" />
           {data?.is_live ? (
             <span>
@@ -195,7 +195,7 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
           ) : (
             <span>
               转债雷达 · 数据日 <span className="font-mono text-foreground">{data?.data_date ?? '--'}</span>
-              <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px]">
+              <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[12px]">
                 {data?.phase_label ?? '未知阶段'}
                 {data?.is_today ? ' · 今日已定型' : ' · 历史快照'}
               </span>
@@ -210,9 +210,9 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
             caliber="unknown"
             label="TQ 条款"
             title="通达信 TQ: get_kzz_info 条款(转股价/强赎触发价/纯债价值, 客户端原值) + get_pricevol 批量行情"
-            className="text-[10px]"
+            className="text-[12px]"
           />
-          {data?.cached ? <span className="text-[10px] opacity-70">缓存 {data.age_s ?? 0}s</span> : null}
+          {data?.cached ? <span className="text-[12px] opacity-70">缓存 {data.age_s ?? 0}s</span> : null}
         </div>
         <Button
           variant="secondary"
@@ -230,22 +230,22 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
 
       {/* 场景计数条 */}
       <div className="flex flex-wrap gap-2">
-        <div className="flex items-center gap-1.5 rounded-lg border border-border/50 bg-card/40 px-2.5 py-1.5 text-[11px]">
+        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
           <TrendingDown className="h-3.5 w-3.5 text-stock-up" />
           <span className="text-muted-foreground">折价套利</span>
           <span className="font-mono font-semibold text-foreground">{counts.discount_arb ?? 0}</span>
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg border border-border/50 bg-card/40 px-2.5 py-1.5 text-[11px]">
+        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
           <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
           <span className="text-muted-foreground">强赎触发区</span>
           <span className="font-mono font-semibold text-foreground">{counts.force_redeem_breached ?? 0}</span>
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg border border-border/50 bg-card/40 px-2.5 py-1.5 text-[11px]">
+        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
           <Radio className="h-3.5 w-3.5 text-primary" />
           <span className="text-muted-foreground">正股封板·转债滞后</span>
           <span className="font-mono font-semibold text-foreground">{counts.stock_limit_up_lag ?? 0}</span>
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg border border-border/50 bg-card/40 px-2.5 py-1.5 text-[11px]">
+        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
           <span className="text-muted-foreground">双低前列</span>
           <span className="font-mono font-semibold text-foreground">{counts.double_low_top ?? 0}</span>
         </div>
@@ -258,10 +258,10 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
             key={f.key}
             type="button"
             onClick={() => setFilter(f.key)}
-            className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+            className={`rounded-md border px-2 py-1 text-[12px] transition-colors ${
               filter === f.key
                 ? 'border-primary/40 bg-primary/10 text-primary'
-                : 'border-border/50 bg-card/30 text-muted-foreground hover:text-foreground'
+                : 'border-border bg-card text-muted-foreground hover:text-foreground'
             }`}
           >
             {f.label}
@@ -269,18 +269,18 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
         ))}
       </div>
 
-      {error ? <div className="text-[11px] text-amber-600 dark:text-amber-500">{error}</div> : null}
+      {error ? <div className="text-[12px] text-amber-600 dark:text-amber-500">{error}</div> : null}
       {data && !data.available ? (
-        <div className="rounded-lg border border-border/50 bg-card/30 px-3 py-6 text-center text-[11px] text-muted-foreground">
+        <div className="rounded-lg border border-border bg-card px-3 py-6 text-center text-[12px] text-muted-foreground">
           {data.note || '转债数据暂不可用'}
         </div>
       ) : null}
 
       {data?.available ? (
-        <div className="overflow-x-auto rounded-lg border border-border/40">
+        <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-[12px]">
             <thead>
-              <tr className="border-b border-border/60 text-[11px] text-muted-foreground">
+              <tr className="border-b border-border text-[12px] text-muted-foreground">
                 <th className="px-2 py-2 text-left font-medium">转债 / 正股</th>
                 <th className="px-2 py-2 text-right font-medium">债价</th>
                 <th className="px-2 py-2 text-right font-medium">债涨幅</th>
@@ -302,7 +302,7 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
             </thead>
             <tbody>
               {shown.map((r) => (
-                <tr key={r.code} className="border-b border-border/30 hover:bg-s2">
+                <tr key={r.code} className="border-b border-border hover:bg-s2">
                   <td className="px-2 py-1.5">
                     <button
                       type="button"
@@ -313,10 +313,10 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-foreground">{r.name}</span>
                         {r.rating ? (
-                          <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{r.rating}</span>
+                          <span className="rounded bg-muted px-1 py-0.5 text-[12px] text-muted-foreground">{r.rating}</span>
                         ) : null}
                       </div>
-                      <div className="font-mono text-[10px] text-muted-foreground">
+                      <div className="font-mono text-[12px] text-muted-foreground">
                         {r.code} · 正股 {r.stock_code || '--'}
                       </div>
                     </button>
@@ -336,7 +336,7 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
                   <td className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground">
                     {fmtNum(r.double_low)}
                     {r.double_low_rank ? (
-                      <span className="ml-1 text-[10px] text-muted-foreground">#{r.double_low_rank}</span>
+                      <span className="ml-1 text-[12px] text-muted-foreground">#{r.double_low_rank}</span>
                     ) : null}
                   </td>
                   <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${redeemClass(r.redeem_distance_pct)}`}>
@@ -350,20 +350,20 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
                       {(r.scenarios ?? []).map((s) => (
                         <span
                           key={s.key}
-                          className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${toneClass(s.tone)}`}
+                          className={`rounded border px-1.5 py-0.5 text-[12px] font-medium ${toneClass(s.tone)}`}
                           title={s.detail}
                         >
                           {s.label}
                         </span>
                       ))}
-                      {(r.scenarios?.length ?? 0) === 0 ? <span className="text-[10px] text-muted-foreground">常态</span> : null}
+                      {(r.scenarios?.length ?? 0) === 0 ? <span className="text-[12px] text-muted-foreground">常态</span> : null}
                     </div>
                   </td>
                 </tr>
               ))}
               {shown.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-[11px] text-muted-foreground">
+                  <td colSpan={9} className="py-8 text-center text-[12px] text-muted-foreground">
                     当前筛选下无转债（共评估 {rows.length} 只）
                   </td>
                 </tr>
@@ -374,11 +374,11 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
       ) : null}
 
       {loading && rows.length === 0 ? (
-        <div className="h-[140px] animate-pulse rounded-lg border border-border/50 bg-s2" />
+        <div className="h-[140px] animate-pulse rounded-lg border border-border bg-s2" />
       ) : null}
 
       {data?.available ? (
-        <p className="text-[10px] leading-relaxed text-muted-foreground">
+        <p className="text-[12px] leading-relaxed text-muted-foreground">
           口径: {data.caliber || '—'}。数据源: {data.source || '—'}。折价率与强赎距离均为事实计算，未计交易费用、T+1
           与强赎公告不确定性，不构成投资建议。
         </p>

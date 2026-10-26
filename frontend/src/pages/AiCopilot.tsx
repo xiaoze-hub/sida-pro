@@ -1,3 +1,4 @@
+import { useViewportPanel } from '@/hooks/useViewportPanel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { safeFixed } from '@/lib/format'
 import {
@@ -141,6 +142,8 @@ export default function AiCopilotPage() {
   const [railOpen, setRailOpen] = useState<boolean>(() =>
     readBoolPref(typeof window === 'undefined' ? null : window.localStorage, RAIL_KEY),
   )
+  const viewportPanel = useViewportPanel()
+  const [mobileConversationsOpen, setMobileConversationsOpen] = useState(false)
   // 右面板折叠 = panelTab 为空(它本来就是可开可关的滑出面板);
   // 用 lastPanelTabRef 记住上次那个页签, 快捷键才能"关掉再打开回原来那页"
   const lastPanelTabRef = useRef<PanelTab>('runs')
@@ -614,8 +617,25 @@ export default function AiCopilotPage() {
 
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
 
+  const conversationList = (
+    <ConversationSidebar
+              conversations={convMgr.conversations.length ? convMgr.conversations : convs}
+              activeId={convId}
+              query={convQuery}
+              onQueryChange={(q) => {
+                setConvQuery(q)
+                void convMgr.list(q)
+              }}
+              onSelect={(id) => { void openConversation(id); setMobileConversationsOpen(false) }}
+              onCreate={() => { startNewConversation(); setMobileConversationsOpen(false) }}
+              onRename={(id, title) => void convMgr.rename(id, title)}
+              onPin={(id, pinned) => void convMgr.pin(id, pinned)}
+              onDelete={(id) => void convMgr.remove(id)}
+            />
+  )
+
   return (
-    <div className="relative flex h-[calc(100vh-9rem)] gap-3" data-testid="ai-copilot-page">
+    <div ref={viewportPanel} className="relative flex min-h-[240px] h-[calc(100dvh-15rem)] gap-4 lg:h-[calc(100dvh-10rem)]" data-testid="ai-copilot-page">
       {/* 左：战术指令池（按时段分层：今日推荐 3 + 更多） */}
       {/*
         2026-10-26 二次精简（按用户指令）：预设整块去掉，左栏只保留**对话列表**，
@@ -623,7 +643,7 @@ export default function AiCopilotPage() {
       */}
       {railOpen ? (
         <aside
-          className="hidden w-[248px] shrink-0 flex-col lg:flex"
+          className="card hidden w-[232px] shrink-0 flex-col p-3 lg:flex"
           data-testid="copilot-conversation-rail"
         >
           <div className="flex items-center justify-between px-1 py-1">
@@ -636,26 +656,13 @@ export default function AiCopilotPage() {
               }}
               aria-label="收起对话栏"
               data-testid="copilot-rail-collapse"
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="ui-icon-button"
             >
               <PanelLeftClose className="h-3.5 w-3.5" />
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <ConversationSidebar
-              conversations={convMgr.conversations.length ? convMgr.conversations : convs}
-              activeId={convId}
-              query={convQuery}
-              onQueryChange={(q) => {
-                setConvQuery(q)
-                void convMgr.list(q)
-              }}
-              onSelect={(id) => void openConversation(id)}
-              onCreate={startNewConversation}
-              onRename={(id, title) => void convMgr.rename(id, title)}
-              onPin={(id, pinned) => void convMgr.pin(id, pinned)}
-              onDelete={(id) => void convMgr.remove(id)}
-            />
+            {!mobileConversationsOpen ? conversationList : null}
           </div>
         </aside>
       ) : null}
@@ -666,12 +673,12 @@ export default function AiCopilotPage() {
 
 
       {/* 右：交互工作台 */}
-      <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-border/60 bg-s1">
+      <section className="card flex min-w-0 flex-1 flex-col overflow-hidden">
         {pending.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-2 border-b border-border/40 bg-role-watch/5 px-3 py-2" data-testid="copilot-pending-actions">
-            <span className="text-[11px] text-muted-foreground">待确认动作</span>
+          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-role-watch/5 px-3 py-2" data-testid="copilot-pending-actions">
+            <span className="text-[12px] text-muted-foreground">待确认动作</span>
             {pending.slice(0, 3).map((a) => (
-              <span key={a.id} className="flex items-center gap-1 rounded-md border border-border/60 px-2 py-0.5 text-[11px]">
+              <span key={a.id} className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[12px]">
                 <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : '盯盘提醒'}</span>
                 <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
                 <button type="button" className="text-role-watch hover:underline" onClick={() => void act(a.id, 'apply')}>确认</button>
@@ -680,7 +687,10 @@ export default function AiCopilotPage() {
             ))}
           </div>
         ) : null}
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-border/40 px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5">
+          <button type="button" className="flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-[12px] text-foreground hover:bg-s2 lg:hidden" aria-expanded={mobileConversationsOpen} aria-controls="copilot-mobile-conversations" onClick={() => setMobileConversationsOpen((value) => !value)}>
+            <PanelLeftOpen className="h-4 w-4" /> 对话
+          </button>
           {!railOpen ? (
             <button
               type="button"
@@ -690,7 +700,7 @@ export default function AiCopilotPage() {
               }}
               aria-label="展开对话栏"
               data-testid="copilot-rail-expand"
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="ui-icon-button hidden lg:inline-flex"
             >
               <PanelLeftOpen className="h-3.5 w-3.5" />
             </button>
@@ -702,7 +712,7 @@ export default function AiCopilotPage() {
           {convId !== null ? (
             <button
               type="button"
-              className="rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+              className="rounded-md border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
               onClick={startNewConversation}
             >
               新对话
@@ -739,8 +749,8 @@ export default function AiCopilotPage() {
                   data-testid={`copilot-panel-${tab}`}
                   className={
                     panelTab === tab
-                      ? 'rounded-md px-2 py-1 text-left text-[11px] text-role-watch'
-                      : 'rounded-md px-2 py-1 text-left text-[11px] text-foreground hover:bg-muted'
+                      ? 'rounded-md px-2 py-1 text-left text-[12px] text-role-watch'
+                      : 'rounded-md px-2 py-1 text-left text-[12px] text-foreground hover:bg-muted'
                   }
                   onClick={() => setPanelTab((v) => (v === tab ? null : tab))}
                 >
@@ -758,7 +768,7 @@ export default function AiCopilotPage() {
           </a>
           <div className="ml-auto flex items-center gap-2">
             {metrics ? (
-              <span className="hidden text-[11px] text-muted-foreground xl:inline">
+              <span className="hidden text-[12px] text-muted-foreground xl:inline">
                 近 {metrics.days} 天 <span className="tabular-nums text-foreground">{metrics.runs}</span> 次
               </span>
             ) : null}
@@ -769,20 +779,26 @@ export default function AiCopilotPage() {
 
         </div>
 
+        {mobileConversationsOpen ? (
+          <div id="copilot-mobile-conversations" className="max-h-[320px] overflow-y-auto border-b border-border bg-card p-3 lg:hidden">
+            {conversationList}
+          </div>
+        ) : null}
+
         {anchorSymbol ? (
           <div
             data-testid="copilot-context-anchor"
-            className="flex items-center gap-1.5 border-b border-border/40 bg-s2 px-3 py-1.5"
+            className="flex items-center gap-1.5 border-b border-border bg-s2 px-3 py-1.5"
           >
-            <span className="text-[10px] text-muted-foreground">{CONTEXT_ANCHOR_PREFIX}</span>
-            <span className="font-mono text-[11px] text-role-watch">{anchorSymbol}</span>
+            <span className="text-[12px] text-muted-foreground">{CONTEXT_ANCHOR_PREFIX}</span>
+            <span className="font-mono text-[12px] text-role-watch">{anchorSymbol}</span>
             <button
               type="button"
               onClick={() => {
                 setBriefSymbol('')
                 setAnchorSymbol('')
               }}
-              className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              className="ml-auto text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
               {CONTEXT_ANCHOR_CLEAR}
             </button>
@@ -792,19 +808,19 @@ export default function AiCopilotPage() {
         {priceAnchor ? (
           <div
             data-testid="copilot-price-anchor"
-            className="flex flex-wrap items-center gap-1.5 border-b border-border/40 px-3 py-1"
+            className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-1"
           >
-            <span className="text-[10px] text-muted-foreground">K线锚点</span>
-            <span className="font-mono text-[11px] tabular-nums text-role-watch">
+            <span className="text-[12px] text-muted-foreground">K线锚点</span>
+            <span className="font-mono text-[12px] tabular-nums text-role-watch">
               {safeFixed(priceAnchor.value, 2)}
             </span>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[12px] text-muted-foreground">
               {anchorKindLabel(priceAnchor.kind, priceAnchor.context)}
             </span>
             {priceAnchor.symbol ? (
               <a
                 href={`/stocks/${priceAnchor.symbol}`}
-                className="rounded border border-role-watch/40 px-1 text-[10px] text-role-watch hover:bg-role-watch/10"
+                className="rounded border border-role-watch/40 px-1 text-[12px] text-role-watch hover:bg-role-watch/10"
               >
                 {priceAnchor.symbol} 工作台 ↗
               </a>
@@ -812,7 +828,7 @@ export default function AiCopilotPage() {
             <button
               type="button"
               onClick={() => setPriceAnchor(null)}
-              className="ml-auto text-[10px] text-muted-foreground hover:text-foreground"
+              className="ml-auto text-[12px] text-muted-foreground hover:text-foreground"
             >
               清除
             </button>
@@ -872,11 +888,11 @@ export default function AiCopilotPage() {
                     lastRun ? 'bg-card text-foreground hover:bg-muted' : 'bg-card text-muted-foreground'
                   }`}
                 >
-                  <span className="text-[11px] text-muted-foreground">最近一次</span>
+                  <span className="text-[12px] text-muted-foreground">最近一次</span>
                   {lastRun ? (
                     <span className="mt-1 min-w-0">
                       <span className="block truncate">{lastRun.question || '未命名问题'}</span>
-                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                      <span className="mt-0.5 block text-[12px] text-muted-foreground">
                         {lastRun.status} · {lastRun.tool_calls ?? '--'} 次工具
                       </span>
                     </span>
@@ -894,7 +910,7 @@ export default function AiCopilotPage() {
                 className={
                   m.role === 'user'
                     ? 'inline-block max-w-[86%] rounded-lg bg-s3 px-2.5 py-1.5 text-[12px]'
-                    : 'rounded-lg border border-border/50 bg-s2 px-2.5 py-2 text-[12px] leading-relaxed'
+                    : 'rounded-lg border border-border bg-s2 px-2.5 py-2 text-[12px] leading-relaxed'
                 }
               >
                 {m.role === 'user' ? (
@@ -949,7 +965,7 @@ export default function AiCopilotPage() {
                   })()
                 )}
                 {m.role === 'user' && m.attachment ? (
-                  <span className="mt-1 block text-[10px] text-muted-foreground">
+                  <span className="mt-1 block text-[12px] text-muted-foreground">
                     📎 {m.attachment.name}
                   </span>
                 ) : null}
@@ -958,7 +974,7 @@ export default function AiCopilotPage() {
                       <a
                         key={s}
                         href={`/stocks/${s}`}
-                        className="mr-1 mt-1 inline-block rounded border border-role-watch/40 px-1.5 text-[11px] text-role-watch"
+                        className="mr-1 mt-1 inline-block rounded border border-role-watch/40 px-1.5 text-[12px] text-role-watch"
                       >
                         {s} 工作台 ↗
                       </a>
@@ -990,19 +1006,19 @@ export default function AiCopilotPage() {
             />
           ) : null}
           {stage && !parseStageLabel(stage) ? (
-            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               {stage}
             </div>
           ) : null}
           {error ? (
-            <div className="rounded border border-role-risk/40 px-2 py-1.5 text-[11px] text-role-risk">
+            <div className="rounded border border-role-risk/40 px-2 py-1.5 text-[12px] text-role-risk">
               {error}
             </div>
           ) : null}
         </div>
 
-        <div className="border-t border-border/40 p-2">
+        <div className="border-t border-border p-2">
           {/* 预设入口已整体移除(2026-10-26): 用户裁定不需要, 空态示例已承担引导 */}
 
           {/* 待发送附件预览（图片显示缩略图，其它显示文件名） */}
@@ -1015,13 +1031,13 @@ export default function AiCopilotPage() {
                   className="h-9 w-9 shrink-0 rounded object-cover"
                 />
               ) : (
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-s3 text-[10px] text-muted-foreground">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-s3 text-[12px] text-muted-foreground">
                   {attach.name.split('.').pop()?.slice(0, 4).toUpperCase() || 'FILE'}
                 </span>
               )}
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[11px] text-foreground">{attach.name}</div>
-                <div className="text-[10px] text-muted-foreground">
+                <div className="truncate text-[12px] text-foreground">{attach.name}</div>
+                <div className="text-[12px] text-muted-foreground">
                   {attach.text
                     ? `${attach.text.length} 字已解析，可一起提问`
                     : attach.imageData
@@ -1043,7 +1059,7 @@ export default function AiCopilotPage() {
           ) : null}
 
           {uploading ? (
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               {ATTACH_PARSING}
             </div>
@@ -1057,7 +1073,7 @@ export default function AiCopilotPage() {
               aria-label={ATTACH_HINT}
               title={ATTACH_HINT}
               data-testid="copilot-attach"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 text-muted-foreground hover:bg-s2 hover:text-foreground disabled:opacity-40"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-s2 hover:text-foreground disabled:opacity-40"
             >
               {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
             </button>
@@ -1094,7 +1110,7 @@ export default function AiCopilotPage() {
                   {mentions.map((m) => (
                     <span
                       key={mentionKey(m)}
-                      className="flex items-center gap-1 rounded-full border border-role-watch/40 bg-role-watch/10 px-2 py-0.5 text-[10px] text-role-watch"
+                      className="flex items-center gap-1 rounded-full border border-role-watch/40 bg-role-watch/10 px-2 py-0.5 text-[12px] text-role-watch"
                     >
                       {m.type === 'stock' ? `@${m.name || m.symbol}` : `@${m.label}`}
                       <button
@@ -1180,7 +1196,7 @@ export default function AiCopilotPage() {
               placeholder={
                 attach ? '补充说明…' : '问点什么…（Enter 发送 / Shift+Enter 换行）'
               }
-              className="scrollbar min-h-[44px] w-full resize-none rounded-lg border border-border/60 bg-s0 px-2 py-1.5 text-[12px] outline-none focus:border-role-watch/60"
+              className="scrollbar min-h-[44px] w-full resize-none rounded-lg border border-input bg-card px-3 py-2 text-[14px] leading-relaxed focus-visible:ring-2 focus-visible:ring-ring"
             />
             </div>
             <button
@@ -1189,7 +1205,7 @@ export default function AiCopilotPage() {
               aria-pressed={bgMode}
               data-testid="copilot-bg-toggle"
               title="后台执行：提交后即可离开页面，回来在会话里看结果"
-              className={`flex h-9 shrink-0 items-center rounded-lg px-2 text-[11px] transition-colors ${
+              className={`flex h-9 shrink-0 items-center rounded-lg px-2 text-[12px] transition-colors ${
                 bgMode
                   ? 'bg-role-watch/20 text-role-watch'
                   : 'text-muted-foreground hover:text-foreground'
@@ -1212,7 +1228,7 @@ export default function AiCopilotPage() {
 
       {panelTab ? (
         <aside
-          className="absolute inset-y-0 right-0 z-20 flex w-[320px] flex-col border-l border-border/40 bg-s1/95 backdrop-blur"
+          className="absolute inset-y-0 right-0 z-20 flex w-[320px] flex-col border-l border-border bg-s1 backdrop-blur"
           data-testid="copilot-side-panel"
         >
           <div className="flex items-center justify-between py-2 pl-3 pr-1">

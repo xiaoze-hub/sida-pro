@@ -129,7 +129,7 @@ export default function AccountMenu({
     >
       <button
         onClick={() => setOpen(v => !v)}
-        className={`${avatarSize} rounded-full overflow-hidden bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm ring-1 transition-shadow ${
+        className={`${avatarSize} rounded-full overflow-hidden bg-primary flex items-center justify-center shadow-sm ring-1 transition-shadow ${
           open ? 'ring-primary/50' : 'ring-border/40 hover:ring-primary/40'
         }`}
         title="账户与设置"
@@ -138,7 +138,7 @@ export default function AccountMenu({
         {avatar ? (
           <img src={avatar} alt="头像" className="w-full h-full object-cover" />
         ) : (
-          <User className={`${iconSize} text-white`} />
+          <User className={`${iconSize} text-primary-foreground`} />
         )}
       </button>
 
@@ -149,7 +149,7 @@ export default function AccountMenu({
             placement === 'up' ? 'bottom-full pb-2' : 'top-full pt-2'
           }`}
         >
-          <div className="w-48 rounded-xl border border-border/60 bg-card/95 backdrop-blur p-1.5 shadow-float">
+          <div className="w-48 rounded-xl border border-border bg-card backdrop-blur p-1.5 shadow-float">
           {/* 原“更多”导航 */}
           {navItems.map(({ to, icon: Icon, label }) => {
             const isActive = location.pathname.startsWith(to)
@@ -161,7 +161,7 @@ export default function AccountMenu({
                 className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] transition-colors ${
                   isActive
                     ? 'bg-primary/10 text-primary'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-s2'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
@@ -179,7 +179,7 @@ export default function AccountMenu({
             className={`flex items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
               location.pathname.startsWith('/profile')
                 ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                : 'text-muted-foreground hover:text-foreground hover:bg-s2'
             }`}
           >
             <UserCog className="w-3.5 h-3.5" />
@@ -189,7 +189,7 @@ export default function AccountMenu({
           <div className="my-1 h-px bg-border/50" />
 
           {/* 主题色:亮 / 暗 / 跟随系统 */}
-          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground">{t('accountMenu.theme')}</div>
+          <div className="px-2.5 pt-0.5 pb-1 text-[12px] text-muted-foreground">{t('accountMenu.theme')}</div>
           {THEME_OPTIONS.map(({ value, icon: Icon, labelKey }) => {
             const active = mode === value
             return (
@@ -198,8 +198,8 @@ export default function AccountMenu({
                 onClick={() => onSetMode(value)}
                 className={`flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
                   active
-                    ? 'text-foreground bg-accent/40'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    ? 'text-foreground bg-s2'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-s2'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
@@ -211,7 +211,7 @@ export default function AccountMenu({
 
           <div className="my-1 h-px bg-border/50" />
           {/* 语言切换 (P2 i18n) */}
-          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground flex items-center gap-1.5">
+          <div className="px-2.5 pt-0.5 pb-1 text-[12px] text-muted-foreground flex items-center gap-1.5">
             <Languages className="w-3 h-3" />
             {t('accountMenu.language')}
           </div>
@@ -223,8 +223,8 @@ export default function AccountMenu({
                 onClick={() => setLocale(value)}
                 className={`flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
                   active
-                    ? 'text-foreground bg-accent/40'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    ? 'text-foreground bg-s2'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-s2'
                 }`}
               >
                 {label}
@@ -240,7 +240,7 @@ export default function AccountMenu({
               setOpen(false)
               onOpenSelfCheck()
             }}
-            className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+            className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-s2 transition-colors"
           >
             <Stethoscope className="w-3.5 h-3.5" />
             {t('accountMenu.selfCheck')}
@@ -251,7 +251,7 @@ export default function AccountMenu({
               <div className="my-1 h-px bg-border/50" />
               <button
                 onClick={openChangePwd}
-                className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+                className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-s2 transition-colors"
               >
                 <KeyRound className="w-3.5 h-3.5" />
                 {t('profile.changePassword')}

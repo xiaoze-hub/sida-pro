@@ -43,10 +43,10 @@ export function NewsDialog() {
       <span className="text-[12px] text-muted-foreground">筛选:</span>
       <button
         onClick={() => { setNewsDialogSymbol(''); loadNews() }}
-        className={`text-[11px] px-2.5 py-1 rounded-md transition-colors ${
+        className={`text-[12px] px-2.5 py-1 rounded-md transition-colors ${
           !newsDialogSymbol
             ? 'bg-primary text-primary-foreground'
-            : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+            : 'bg-s2 text-muted-foreground hover:bg-accent'
         }`}
       >
         全部
@@ -55,17 +55,17 @@ export function NewsDialog() {
         <button
           key={stock.symbol}
           onClick={() => { setNewsDialogSymbol(stock.name); loadNews(stock.name) }}
-          className={`text-[11px] px-2.5 py-1 rounded-md transition-colors ${
+          className={`text-[12px] px-2.5 py-1 rounded-md transition-colors ${
             newsDialogSymbol === stock.name
               ? 'bg-primary text-primary-foreground'
-              : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+              : 'bg-s2 text-muted-foreground hover:bg-accent'
           }`}
         >
           {stock.name}
         </button>
       ))}
       {stocks.length > 10 && (
-        <span className="text-[10px] text-muted-foreground">+{stocks.length - 10}</span>
+        <span className="text-[12px] text-muted-foreground">+{stocks.length - 10}</span>
       )}
     </div>
 
@@ -74,10 +74,10 @@ export function NewsDialog() {
       {newsLoading ? (
         <div className="flex items-center justify-center py-12">
           <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-          <span className="ml-2 text-[13px] text-muted-foreground">加载中...</span>
+          <span className="ml-2 text-[14px] text-muted-foreground">加载中...</span>
         </div>
       ) : news.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground text-[13px]">
+        <div className="text-center py-12 text-muted-foreground text-[14px]">
           暂无相关资讯
         </div>
       ) : (
@@ -85,12 +85,12 @@ export function NewsDialog() {
           {news.map((item, idx) => (
             <div
               key={`${item.source}-${item.external_id}-${idx}`}
-              className="border-b border-border/40 py-2.5 hover:bg-accent/20 transition-colors"
+              className="border-b border-border py-2.5 hover:bg-s2 transition-colors"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                    <span className={`text-[12px] px-1.5 py-0.5 rounded ${
                       item.source === 'eastmoney' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-600' :
                       item.source === 'eastmoney_news' ? 'bg-blue-500/10 text-blue-600' :
                       'bg-emerald-500/10 text-emerald-600 dark:text-emerald-700'
@@ -98,11 +98,11 @@ export function NewsDialog() {
                       {item.source_label}
                     </span>
                     {item.importance >= 2 && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-600">
+                      <span className="text-[12px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-600">
                         重要
                       </span>
                     )}
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-[12px] text-muted-foreground">
                       {item.publish_time}
                     </span>
                   </div>
@@ -110,7 +110,7 @@ export function NewsDialog() {
                     href={item.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[13px] font-medium text-foreground hover:text-primary transition-colors block"
+                    className="text-[14px] font-medium text-foreground hover:text-primary transition-colors block"
                   >
                     {item.title}
                   </a>
@@ -123,14 +123,14 @@ export function NewsDialog() {
                           <button
                             key={sym}
                             onClick={() => { setNewsDialogSymbol(stockName); loadNews(stockName) }}
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono hover:bg-primary/20 transition-colors"
+                            className="text-[12px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono hover:bg-primary/20 transition-colors"
                           >
                             {stockName}
                           </button>
                         )
                       })}
                       {item.symbols.length > 5 && (
-                        <span className="text-[10px] text-muted-foreground">+{item.symbols.length - 5}</span>
+                        <span className="text-[12px] text-muted-foreground">+{item.symbols.length - 5}</span>
                       )}
                     </div>
                   )}
@@ -153,7 +153,7 @@ export function NewsDialog() {
 
     {/* 底部刷新按钮 */}
     <div className="flex items-center justify-between pt-2 border-t">
-      <span className="text-[11px] text-muted-foreground">
+      <span className="text-[12px] text-muted-foreground">
         共 {news.length} 条资讯
       </span>
       <Button variant="secondary" size="sm" onClick={() => loadNews(newsDialogSymbol || undefined)} disabled={newsLoading}>

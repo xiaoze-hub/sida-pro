@@ -74,3 +74,7 @@ python3 scripts/build_project_knowledge.py --baseline HEAD --check
 当前快照的复核命令使用 `--baseline d774ae01`。后续更新源码后先选定新的 commit，再生成索引并同步本页、架构、契约和运行手册的基线与覆盖范围。索引列出的模块说明来自源码 docstring，历史措辞仍需人工核对。
 
 规划、研究或审计文档必须保留基线、完整对象路径和覆盖/未覆盖范围三个要素。知识库不得收录 `.env` 值、JWT、API Key、数据库导出或真实账户资料。
+
+## UI 设计入口
+
+当前界面与交互规则见 [UI_GUIDELINES.md](../UI_GUIDELINES.md)，覆盖主题、Header/Toolbar、Chip、数据网格、浮层、移动端与 CI 门禁。历史视觉研究不替代当前规范。

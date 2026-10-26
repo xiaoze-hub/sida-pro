@@ -238,18 +238,18 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
 
   return (
     <section className={`flex flex-col gap-3 ${className}`} data-testid="copilot-memory-panel">
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      <p className="text-[12px] leading-relaxed text-muted-foreground">
         记忆会在每次提问时注入，只记你明确说过的偏好与规则
       </p>
 
       {/* 录入带：一行输入 + 类型 + 权重 + 记住 */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-2">
         <select
           aria-label="记忆类型"
           data-testid="memory-kind-select"
           value={draft.kind}
           onChange={(e) => setDraft((prev) => ({ ...prev, kind: e.target.value }))}
-          className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px] text-foreground"
+          className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px] text-foreground"
         >
           {KIND_ORDER.map((k) => (
             <option key={k} value={k}>
@@ -260,7 +260,7 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
         <input
           aria-label="记忆内容"
           data-testid="memory-content-input"
-          className="min-w-[220px] flex-1 rounded border border-border/60 bg-transparent px-2 py-0.5 text-[11px] text-foreground"
+          className="min-w-[220px] flex-1 rounded border border-border bg-transparent px-2 py-0.5 text-[12px] text-foreground"
           placeholder="例如：我只做主板，不碰北交所"
           value={draft.content}
           onChange={(e) => setDraft((prev) => ({ ...prev, content: e.target.value }))}
@@ -268,7 +268,7 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
             if (e.key === 'Enter') void add()
           }}
         />
-        <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+        <label className="flex items-center gap-1 text-[12px] text-muted-foreground">
           权重
           <input
             aria-label="权重"
@@ -276,7 +276,7 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
             type="number"
             min={1}
             max={10}
-            className="w-10 rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px] text-foreground"
+            className="w-10 rounded border border-border bg-transparent px-1 py-0.5 text-[12px] text-foreground"
             value={draft.weight}
             onChange={(e) => setDraft((prev) => ({ ...prev, weight: e.target.value }))}
           />
@@ -286,25 +286,25 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
           data-testid="memory-add-btn"
           disabled={saving || draft.content.trim().length < 2}
           onClick={() => void add()}
-          className="rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          className="rounded border border-border px-2 py-0.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
           {saving ? '保存中…' : '记住'}
         </button>
       </div>
 
       {error ? (
-        <p role="alert" className="text-[11px] text-role-risk">
+        <p role="alert" className="text-[12px] text-role-risk">
           {error}
         </p>
       ) : null}
 
       {loading ? (
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
           读取中…
         </div>
       ) : rows.length === 0 ? (
-        <p data-testid="memory-empty" className="py-3 text-[11px] text-muted-foreground">
+        <p data-testid="memory-empty" className="py-3 text-[12px] text-muted-foreground">
           还没有记忆。对参谋说「记住：…」或在这里手动添加。
         </p>
       ) : (
@@ -318,11 +318,11 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
                 key={row.id}
                 data-testid="memory-row"
                 data-memory-id={row.id}
-                className="flex items-start gap-2 border-b border-border/30 py-2 transition-opacity duration-200"
+                className="flex items-start gap-2 border-b border-border py-2 transition-opacity duration-200"
               >
                 <span
                   data-testid="memory-kind-badge"
-                  className="mt-0.5 shrink-0 rounded bg-s2 px-1 text-[10px] text-muted-foreground"
+                  className="mt-0.5 shrink-0 rounded bg-s2 px-1 text-[12px] text-muted-foreground"
                 >
                   {kindLabel(row.kind)}
                 </span>
@@ -333,7 +333,7 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
                       autoFocus
                       aria-label="编辑记忆内容"
                       data-testid="memory-edit-input"
-                      className="w-full rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px] text-foreground"
+                      className="w-full rounded border border-border bg-transparent px-1 py-0.5 text-[12px] text-foreground"
                       value={editDraft}
                       onChange={(e) => setEditDraft(e.target.value)}
                       onBlur={() => {
@@ -358,14 +358,14 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
                       data-testid="memory-content"
                       title="双击可编辑"
                       onDoubleClick={() => startEdit(row)}
-                      className={`cursor-text text-[11px] leading-snug line-clamp-2 ${
+                      className={`cursor-text text-[12px] leading-snug line-clamp-2 ${
                         row.enabled ? 'text-foreground' : 'text-muted-foreground'
                       }`}
                     >
                       {row.content}
                     </p>
                   )}
-                  <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <div className="mt-1 flex items-center gap-2 text-[12px] text-muted-foreground">
                     <span data-testid="memory-weight">权重 {safeInt(row.weight, '--')}</span>
                     <span data-testid="memory-hits">命中 {safeInt(row.hits, '--')} 次</span>
                     {row.source ? <span className="truncate">来源 {row.source}</span> : null}
@@ -376,12 +376,12 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
                 <div className="flex shrink-0 items-center gap-1">
                   {confirming ? (
                     <>
-                      <span className="text-[10px] text-role-risk">确认删除？</span>
+                      <span className="text-[12px] text-role-risk">确认删除？</span>
                       <button
                         type="button"
                         data-testid="memory-delete-confirm"
                         onClick={() => void remove(row)}
-                        className="rounded border border-role-risk/50 px-1.5 py-0.5 text-[10px] text-role-risk"
+                        className="rounded border border-role-risk/50 px-1.5 py-0.5 text-[12px] text-role-risk"
                       >
                         确认
                       </button>
@@ -389,7 +389,7 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
                         type="button"
                         data-testid="memory-delete-cancel"
                         onClick={() => setConfirmId(null)}
-                        className="rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                        className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground"
                       >
                         取消
                       </button>

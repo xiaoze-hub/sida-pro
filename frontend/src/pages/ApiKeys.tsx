@@ -182,11 +182,11 @@ export default function ApiKeysPage() {
         <div className="mb-6 rounded-xl border border-amber-600/30 dark:border-amber-500/30 bg-amber-500/5 p-4">
           <div className="mb-2 flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-            <span className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">请立即复制保存你的 API Key</span>
+            <span className="text-[14px] font-semibold text-amber-700 dark:text-amber-300">请立即复制保存你的 API Key</span>
           </div>
-          <p className="mb-3 text-[11px] text-amber-700/80 dark:text-amber-400/70">此 Key 仅显示一次，关闭或刷新后将无法再次查看。</p>
+          <p className="mb-3 text-[12px] text-amber-700/80 dark:text-amber-400/70">此 Key 仅显示一次，关闭或刷新后将无法再次查看。</p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-lg bg-muted/60 dark:bg-black/30 px-3 py-2 font-mono text-[12px] text-primary dark:text-cyan-300">
+            <code className="flex-1 overflow-x-auto rounded-lg bg-s2 dark:bg-black/30 px-3 py-2 font-mono text-[12px] text-primary dark:text-cyan-300">
               {plaintext}
             </code>
             <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={() => copyText(plaintext)}>
@@ -213,12 +213,12 @@ export default function ApiKeysPage() {
             maxLength={64}
             aria-label="备注名"
             placeholder="备注名（如：本地 Hermes / 量化脚本）"
-            className="h-8 w-full min-w-0 rounded-lg border border-border/60 bg-transparent px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none sm:max-w-xs"
+            className="h-8 w-full min-w-0 rounded-lg border border-border bg-transparent px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none sm:max-w-xs"
           />
           <Button size="sm" className="h-8 shrink-0" onClick={createKey} disabled={creating}>
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} 创建 Key
           </Button>
-          <span className="text-[11px] text-muted-foreground">留空则使用用户名作为备注名</span>
+          <span className="text-[12px] text-muted-foreground">留空则使用用户名作为备注名</span>
         </div>
         {keysLoading ? (
           <SkeletonTable rows={3} />
@@ -244,41 +244,41 @@ export default function ApiKeysPage() {
         ) : (
           <div className="space-y-2">
             {keyList.map(k => (
-              <div key={k.id} className="rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-4">
+              <div key={k.id} className="rounded-xl border border-border dark:border-white/5 bg-card dark:bg-white/[0.02] p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <code className="font-mono text-[13px] text-primary dark:text-cyan-300">{k.key_prefix}...</code>
+                      <code className="font-mono text-[14px] text-primary dark:text-cyan-300">{k.key_prefix}...</code>
                       {k.owner_label && (
                         <span className="max-w-[180px] truncate text-[12px] text-foreground" title={k.owner_label}>{k.owner_label}</span>
                       )}
-                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${TIER_COLOR[k.tier] || TIER_COLOR.free}`}>
+                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[12px] ${TIER_COLOR[k.tier] || TIER_COLOR.free}`}>
                         {TIER_LABEL[k.tier] || k.tier}
                       </span>
                       {k.status !== 'active' && (
-                        <span className="inline-flex items-center rounded-full bg-red-500/10 border border-red-500/20 px-2 py-0.5 text-[10px] text-red-600 dark:text-red-400">
+                        <span className="inline-flex items-center rounded-full bg-red-500/10 border border-red-500/20 px-2 py-0.5 text-[12px] text-red-600 dark:text-red-400">
                           {k.status === 'frozen' ? '已冻结' : '已禁用'}
                         </span>
                       )}
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-muted-foreground">
+                    <div className="mt-1 flex flex-wrap gap-3 text-[12px] text-muted-foreground">
                       <span>日限 {k.daily_limit}</span>
                       {k.created_at && <span>创建 {formatDateTime(k.created_at)}</span>}
                       {k.last_used_at && <span>最后使用 {formatDateTime(k.last_used_at)}</span>}
                       {k.expires_at && <span>到期 {formatDateTime(k.expires_at)}</span>}
                     </div>
                     {k.frozen_reason && (
-                      <p className="mt-1 text-[10px] text-red-600/80 dark:text-red-400/70">冻结原因: {k.frozen_reason}</p>
+                      <p className="mt-1 text-[12px] text-red-600/80 dark:text-red-400/70">冻结原因: {k.frozen_reason}</p>
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => setExpandedUsage(expandedUsage === k.id ? null : k.id)}>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-[12px]" onClick={() => setExpandedUsage(expandedUsage === k.id ? null : k.id)}>
                       <BarChart3 className="h-3 w-3" /> 用量
                     </Button>
-                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => resetKey(k.id)} disabled={resettingId === k.id}>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-[12px]" onClick={() => resetKey(k.id)} disabled={resettingId === k.id}>
                       {resettingId === k.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} 重置
                     </Button>
-                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px] hover:text-red-400 hover:border-red-500/30" onClick={() => deleteKey(k.id)} disabled={deletingId === k.id}>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-[12px] hover:text-red-400 hover:border-red-500/30" onClick={() => deleteKey(k.id)} disabled={deletingId === k.id}>
                       {deletingId === k.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} 删除
                     </Button>
                   </div>
@@ -312,27 +312,27 @@ export default function ApiKeysPage() {
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
               <Zap className="h-4 w-4 text-primary dark:text-cyan-400" />
-              <span className="text-[13px] font-medium text-foreground dark:text-white">方式一：Shell 脚本</span>
+              <span className="text-[14px] font-medium text-foreground dark:text-white">方式一：Shell 脚本</span>
             </div>
-            <p className="mb-3 text-[11px] text-muted-foreground">复制以下命令到终端执行，自动配置环境变量和客户端。</p>
+            <p className="mb-3 text-[12px] text-muted-foreground">复制以下命令到终端执行，自动配置环境变量和客户端。</p>
             <CodeBlock code={installCmd} language="bash" />
           </InfoCard>
 
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
               <FileJson className="h-4 w-4 text-primary dark:text-cyan-400" />
-              <span className="text-[13px] font-medium text-foreground dark:text-white">方式二：配置 JSON</span>
+              <span className="text-[14px] font-medium text-foreground dark:text-white">方式二：配置 JSON</span>
             </div>
-            <p className="mb-3 text-[11px] text-muted-foreground">适用于支持 JSON 配置的 AI 框架（LangChain、AutoGPT 等）。</p>
+            <p className="mb-3 text-[12px] text-muted-foreground">适用于支持 JSON 配置的 AI 框架（LangChain、AutoGPT 等）。</p>
             <CodeBlock code={configJson} language="json" />
           </InfoCard>
 
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-primary dark:text-cyan-400" />
-              <span className="text-[13px] font-medium text-foreground dark:text-white">安全提示</span>
+              <span className="text-[14px] font-medium text-foreground dark:text-white">安全提示</span>
             </div>
-            <ul className="space-y-1 text-[11px] text-muted-foreground">
+            <ul className="space-y-1 text-[12px] text-muted-foreground">
               <li>• 不要将 API Key 提交到代码仓库</li>
               <li>• 不要在客户端 JavaScript 中暴露 Key</li>
               <li>• 怀疑 Key 泄露时立即重置</li>
@@ -348,28 +348,28 @@ export default function ApiKeysPage() {
 /* ── 单 Key 用量面板 ── */
 function KeyUsagePanel({ keyId }: { keyId: number }) {
   const { data: usage } = useApiQuery<KeyUsage>(['key-usage', String(keyId)], `/keys/my/${keyId}/usage`)
-  if (!usage) return <div className="mt-3 text-[11px] text-muted-foreground">加载用量中...</div>
+  if (!usage) return <div className="mt-3 text-[12px] text-muted-foreground">加载用量中...</div>
 
   const pct = usage.daily_limit > 0 ? Math.round((usage.used_today / usage.daily_limit) * 100) : 0
   return (
     <div className="mt-3 grid grid-cols-2 gap-3 border-t border-white/5 pt-3 sm:grid-cols-4">
       <div>
-        <div className="text-[10px] text-muted-foreground">今日已用</div>
+        <div className="text-[12px] text-muted-foreground">今日已用</div>
         <div className="font-mono text-[16px] font-semibold text-white">{usage.used_today}</div>
         <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/5">
           <div className="h-full rounded-full bg-cyan-500 transition-all" style={{ width: `${Math.min(pct, 100)}%` }} />
         </div>
       </div>
       <div>
-        <div className="text-[10px] text-muted-foreground">今日剩余</div>
+        <div className="text-[12px] text-muted-foreground">今日剩余</div>
         <div className="font-mono text-[16px] font-semibold text-cyan-400">{usage.remaining_today}</div>
       </div>
       <div>
-        <div className="text-[10px] text-muted-foreground">近 7 天</div>
+        <div className="text-[12px] text-muted-foreground">近 7 天</div>
         <div className="font-mono text-[16px] font-semibold text-white">{usage.used_7d}</div>
       </div>
       <div>
-        <div className="text-[10px] text-muted-foreground">近 30 天</div>
+        <div className="text-[12px] text-muted-foreground">近 30 天</div>
         <div className="font-mono text-[16px] font-semibold text-white">{usage.used_30d}</div>
       </div>
     </div>
@@ -384,19 +384,19 @@ function UsageOverview({ keys }: { keys: MyApiKey[] }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <InfoCard>
-        <div className="text-[10px] text-muted-foreground">活跃 Key</div>
+        <div className="text-[12px] text-muted-foreground">活跃 Key</div>
         <div className="font-mono text-[20px] font-semibold text-white">{activeKeys.length}</div>
       </InfoCard>
       <InfoCard>
-        <div className="text-[10px] text-muted-foreground">总日限</div>
+        <div className="text-[12px] text-muted-foreground">总日限</div>
         <div className="font-mono text-[20px] font-semibold text-white">{totalLimit}</div>
       </InfoCard>
       <InfoCard>
-        <div className="text-[10px] text-muted-foreground">已冻结</div>
+        <div className="text-[12px] text-muted-foreground">已冻结</div>
         <div className="font-mono text-[20px] font-semibold text-white">{keys.filter(k => k.status === 'frozen').length}</div>
       </InfoCard>
       <InfoCard>
-        <div className="text-[10px] text-muted-foreground">已禁用</div>
+        <div className="text-[12px] text-muted-foreground">已禁用</div>
         <div className="font-mono text-[20px] font-semibold text-red-400">{keys.filter(k => k.status === 'disabled').length}</div>
       </InfoCard>
     </div>

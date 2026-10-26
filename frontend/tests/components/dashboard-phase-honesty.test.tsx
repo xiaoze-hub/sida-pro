@@ -47,6 +47,7 @@ const basePhase = (over: Partial<PhaseKpi>): PhaseKpi => ({
   error: null,
   unavailableNote: null,
   limitUp: null,
+  limitDown: null,
   sealRate: null,
   reload: () => {},
   ...over,

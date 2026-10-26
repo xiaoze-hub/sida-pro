@@ -119,7 +119,7 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
 
   if (state.status === 'loading') {
     return (
-      <div data-testid="decision-loading" className="text-[11px] text-muted-foreground">
+      <div data-testid="decision-loading" className="text-[12px] text-muted-foreground">
         决策合成加载中…
       </div>
     )
@@ -127,7 +127,7 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
 
   if (state.status === 'error') {
     return (
-      <div data-testid="decision-error" className="text-[11px] text-muted-foreground">
+      <div data-testid="decision-error" className="text-[12px] text-muted-foreground">
         决策合成取数失败 — 暂无法给出「动手 / 看看 / 别碰」
         {state.message ? <span className="text-muted-foreground">({state.message})</span> : null}
       </div>
@@ -138,7 +138,7 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
   // verdict 缺失/表外: 不猜方向(空态显式)
   if (!verdict || !KNOWN_VERDICTS.has(verdict)) {
     return (
-      <div data-testid="decision-empty" className="text-[11px] text-muted-foreground">
+      <div data-testid="decision-empty" className="text-[12px] text-muted-foreground">
         决策无数据(verdict 缺失或不在表内) — 不猜方向
       </div>
     )
@@ -156,36 +156,36 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="decision-verdict-card">
         <span
           data-testid="decision-badge"
-          className={`inline-flex items-center rounded border border-border/60 px-1.5 py-0.5 text-[12px] font-semibold ${VERDICT_TONE[verdict]}`}
+          className={`inline-flex items-center rounded border border-border px-1.5 py-0.5 text-[12px] font-semibold ${VERDICT_TONE[verdict]}`}
         >
           {verdict}
         </span>
         {reason ? (
-          <span data-testid="decision-reason" className="text-[11px] text-muted-foreground" title={reason}>
+          <span data-testid="decision-reason" className="text-[12px] text-muted-foreground" title={reason}>
             {reason}
           </span>
         ) : (
           // verdict 已有而 reason 缺失: 不编造理由(显式缺数据)
-          <span data-testid="decision-reason-missing" className="text-[11px] text-muted-foreground">
+          <span data-testid="decision-reason-missing" className="text-[12px] text-muted-foreground">
             理由无数据
           </span>
         )}
       </div>
       {/* P2-7: 非 CN 资金维无源 —— 显式标注, 不冒充三信号 */}
       {twoDimension ? (
-        <span data-testid="decision-fund-missing" className="mt-0.5 block text-[10px] text-muted-foreground">
+        <span data-testid="decision-fund-missing" className="mt-0.5 block text-[12px] text-muted-foreground">
           {fundNote} — 仅趋势 × 活跃度双维判定
         </span>
       ) : null}
       {/* P1-2: 个性化注记(哪部分因个性化调整, 可解释) */}
       {personalizationNote ? (
-        <span data-testid="decision-personalization" className="mt-0.5 block text-[10px] text-muted-foreground">
+        <span data-testid="decision-personalization" className="mt-0.5 block text-[12px] text-muted-foreground">
           个性化调整：{personalizationNote}
         </span>
       ) : null}
       {/* P1-2: 持仓参考行(不改 verdict 语义) */}
       {positionNote ? (
-        <span data-testid="decision-position" className="mt-0.5 block text-[10px] text-muted-foreground">
+        <span data-testid="decision-position" className="mt-0.5 block text-[12px] text-muted-foreground">
           {positionNote}
         </span>
       ) : null}
@@ -193,7 +193,7 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
       {evidence ? (
         <div
           data-testid="decision-evidence"
-          className="mt-1 space-y-0.5 border-t border-border/40 pt-1 text-[10px]"
+          className="mt-1 space-y-0.5 border-t border-border pt-1 text-[12px]"
         >
           <div className="text-foreground" data-testid="decision-evidence-triggers">
             触发条件: {evidence.triggers.join('；')}

@@ -140,7 +140,7 @@ export function ModelPicker({ className = '' }: { className?: string }) {
       >
         {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
         <span className="tabular-nums">{current?.model ?? (loadError ? '读取失败' : '--')}</span>
-        <span className="text-[11px]">{sourceLabel(current?.source)}</span>
+        <span className="text-[12px]">{sourceLabel(current?.source)}</span>
         <ChevronDown className="h-3 w-3" />
       </button>
 
@@ -157,7 +157,7 @@ export function ModelPicker({ className = '' }: { className?: string }) {
           <div className="my-1 h-px bg-border" />
           <div className="max-h-[260px] overflow-y-auto">
             {(state?.models ?? []).length === 0 ? (
-              <div className="px-2 py-2 text-[11px] text-muted-foreground">
+              <div className="px-2 py-2 text-[12px] text-muted-foreground">
                 没有可用模型（权限或模型池为空）
               </div>
             ) : (
@@ -170,7 +170,7 @@ export function ModelPicker({ className = '' }: { className?: string }) {
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate text-[12px] text-foreground">{m.model}</span>
-                    <span className="truncate text-[11px] text-muted-foreground">
+                    <span className="truncate text-[12px] text-muted-foreground">
                       {m.service}
                       {m.is_default ? ' · 默认' : ''}
                     </span>
@@ -184,7 +184,7 @@ export function ModelPicker({ className = '' }: { className?: string }) {
       ) : null}
 
       {error ? (
-        <div className="absolute bottom-full right-0 mb-1 w-[260px] rounded-lg border border-border bg-card p-2 text-[11px] text-stock-down">
+        <div className="absolute bottom-full right-0 mb-1 w-[260px] rounded-lg border border-border bg-card p-2 text-[12px] text-stock-down">
           保存失败：{error}
         </div>
       ) : null}

@@ -62,9 +62,9 @@ const zhCN = {
     stocks: '行情',
     heatmap: '板块热力',
     factorIC: '因子有效性',
-    decision: '决策',
+    decision: '分析证据',
     themeMood: '题材情绪',
-    opportunities: '机会',
+    opportunities: '市场扫描',
     auction: '集合竞价',
     aiCopilot: '数智参谋',
     copilotRuns: '参谋任务',
@@ -213,8 +213,8 @@ const zhCN = {
   },
 
   opportunities: {
-    title: '机会页',
-    subtitle: '市场池优先，候选必须具备可执行入场计划',
+    title: '市场扫描',
+    subtitle: '基于已有数据对照技术特征，查看分析依据、来源与时点',
     strategyLib: '策略库',
     export: '导出',
     refresh: '刷新',

@@ -44,11 +44,11 @@ export function AppearanceSection() {
   }
 
   return (
-    <section id="sec-appearance" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-7">
+    <section id="sec-appearance" className="analysis-section lg:col-span-7">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">外观</h3>
-          <p className="text-[11px] text-muted-foreground mt-1">
+          <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">外观</h3>
+          <p className="text-[12px] text-muted-foreground mt-1">
             密度只收紧内容、不收紧可点热区(热区下限 32px 由门禁保证)
           </p>
         </div>
@@ -56,7 +56,7 @@ export function AppearanceSection() {
 
       {/* 主题 */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="w-12 shrink-0 text-[11px] text-muted-foreground">主题</span>
+        <span className="w-12 shrink-0 text-[12px] text-muted-foreground">主题</span>
         {THEME_OPTIONS.map((o) => {
           const Icon = o.icon
           const active = mode === o.id
@@ -67,7 +67,7 @@ export function AppearanceSection() {
               aria-pressed={active}
               onClick={() => setMode(o.id)}
               className={cn(
-                'inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] transition-colors duration-fast',
+                'inline-flex items-center gap-1 rounded border px-2 py-1 text-[12px] transition-colors duration-fast',
                 active ? 'border-[hsl(var(--ring))] bg-s3 text-foreground' : 'border-border text-muted-foreground hover:bg-s2',
               )}
             >
@@ -80,7 +80,7 @@ export function AppearanceSection() {
 
       {/* 密度 */}
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="w-12 shrink-0 text-[11px] text-muted-foreground">密度</span>
+        <span className="w-12 shrink-0 text-[12px] text-muted-foreground">密度</span>
         {DENSITY_OPTIONS.map((o) => {
           const active = density === o.id
           return (
@@ -91,7 +91,7 @@ export function AppearanceSection() {
               title={o.hint}
               onClick={() => setDensity(o.id)}
               className={cn(
-                'rounded border px-2 py-1 text-[11px] transition-colors duration-fast',
+                'rounded border px-2 py-1 text-[12px] transition-colors duration-fast',
                 active ? 'border-[hsl(var(--ring))] bg-s3 text-foreground' : 'border-border text-muted-foreground hover:bg-s2',
               )}
             >
@@ -103,12 +103,12 @@ export function AppearanceSection() {
 
       {/* Dim / 焦点模式 */}
       <div className="mt-3 flex flex-wrap items-center gap-4">
-        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <label className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
           <input type="checkbox" checked={dim} onChange={(e) => setDim(e.target.checked)} />
           <ZoomIn className="h-3.5 w-3.5" />
-          Dim(长时盯盘: 只降对比度, 不动色相与涨跌语义)
+          深色舒适模式（浅色主题下不启用）
         </label>
-        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <label className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
           <input type="checkbox" checked={focusOn} onChange={toggleFocus} />
           焦点模式(收起侧栏与免责条, 只留一枚 chip)
         </label>

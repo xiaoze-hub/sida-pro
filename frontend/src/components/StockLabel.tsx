@@ -8,7 +8,7 @@ import { useStockNames } from '@/hooks/useStockNames'
  * 背景: 决策账本明细 / 聚宝盆选股 / 策略应用结果 / 裁判战绩 / 行情页头部等多处只显示
  * 6 位代码, 用户看不出是哪只票。本组件是全站唯一展示口径, 规则三条:
  *
- *  ① 有名称 ⇒ **名称为主**、代码为辅(`font-mono text-[11px] text-muted-foreground`);
+ *  ① 有名称 ⇒ **名称为主**、代码为辅(`font-mono text-[12px] text-muted-foreground`);
  *  ② 拿不到名称 ⇒ **只显示代码** —— 不写「未知」、不写「--」、不占位。诚实但克制:
  *     名称是锦上添花, 缺了不影响这一行还是可读的(代码本身是真信息);
  *  ③ 不新增卡片、不加边框、不做数据堆砌 —— 就是一串文字, 可塞进表格单元格/标题/徽标行。
@@ -65,7 +65,7 @@ export function StockLabel({
         {resolved}
       </span>
       {showCode ? (
-        <span className="font-mono text-[11px] text-muted-foreground">{code}</span>
+        <span className="font-mono text-[12px] text-muted-foreground">{code}</span>
       ) : null}
     </span>
   )

@@ -216,12 +216,12 @@ export function WeightTransparency({
       <div className="mb-2">
         <div className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
           <span>当前模型权重</span>
-          <span className="text-[11px] font-medium text-muted-foreground">
+          <span className="text-[12px] font-medium text-muted-foreground">
             {state === 'loading' ? '权重加载中…' : '权重不可用（接口未就绪）'}
           </span>
         </div>
         {state !== 'loading' && (
-          <div className="mt-0.5 text-[11px] text-muted-foreground">
+          <div className="mt-0.5 text-[12px] text-muted-foreground">
             历史参考快照仅用于回测，不代表当前权重
           </div>
         )}
@@ -270,21 +270,21 @@ export function OutcomeBadge({ item }: { item: OutcomeInput & { expected_pct?: n
   }`
   // 未到期: 不是错也不是对, 不进命中率分母
   if (kind === 'pending') {
-    return <span className="text-[11px] text-muted-foreground">待验证</span>
+    return <span className="text-[12px] text-muted-foreground">待验证</span>
   }
   // 后端连 outcome 字段都没给: 一次评估都没发生, 不摆结论
   if (kind === 'none') {
-    return <span className="text-[11px] text-muted-foreground">—</span>
+    return <span className="text-[12px] text-muted-foreground">—</span>
   }
   // 无数据(取不到行情/方向不可判): 独立中性态 —— 灰虚线印章 + 「无数据」,
   // 不带任何涨跌色语义, 也不计入命中率分母。
   if (kind === 'no_data') {
     return (
       <span className="inline-flex flex-col items-end gap-0.5">
-        <span className="rounded border border-dashed border-border/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+        <span className="rounded border border-dashed border-border px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">
           无数据
         </span>
-        <span className="font-num tabular-nums text-[10px] text-muted-foreground">
+        <span className="font-num tabular-nums text-[12px] text-muted-foreground">
           {predText}
           {pctText && <> vs 实际{pctText}</>}
         </span>
@@ -338,9 +338,9 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
   const anchorPct = pct(last_close)
 
   return (
-    <div className="space-y-1.5 text-[13px]">
+    <div className="space-y-1.5 text-[14px]">
       {/* 基准价锚点刻度 */}
-      <div className="relative h-4 text-[10px] text-muted-foreground">
+      <div className="relative h-4 text-[12px] text-muted-foreground">
         <div className="absolute inset-y-0 border-l border-dashed border-muted-foreground/40" style={{ left: `${anchorPct}%` }}>
           <span className="ml-1.5">基准 {last_close}</span>
         </div>
@@ -351,11 +351,11 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
         const widthPct = Math.max(pct(r.end) - leftPct, 0)
         return (
           <div key={r.label} className="flex items-center gap-2">
-            <span className="w-24 shrink-0 truncate text-[11px] text-muted-foreground">
+            <span className="w-24 shrink-0 truncate text-[12px] text-muted-foreground">
               {r.label}
-              {r.sub && <span className="ml-0.5 text-[10px] opacity-70">({r.sub})</span>}
+              {r.sub && <span className="ml-0.5 text-[12px] opacity-70">({r.sub})</span>}
             </span>
-            <div className="relative h-5 min-w-0 flex-1 rounded bg-muted/50">
+            <div className="relative h-5 min-w-0 flex-1 rounded bg-s2">
               {/* Kronos P5-P95 不确定性阴影带 */}
               {r.band && (
                 <div
@@ -371,10 +371,10 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
               {/* 基准价锚点竖线 */}
               <div className="absolute inset-y-0 w-px bg-border/80" style={{ left: `${anchorPct}%` }} />
             </div>
-            <span className="w-28 shrink-0 truncate text-right font-mono text-[11px]">
+            <span className="w-28 shrink-0 truncate text-right font-mono text-[12px]">
               {safeFixed(r.start)} → {safeFixed(r.end)}
               {r.band && (
-                <span className="block text-[10px] text-muted-foreground">
+                <span className="block text-[12px] text-muted-foreground">
                   P5 {safeFixed(r.band.lo)} ~ P95 {safeFixed(r.band.hi)}
                 </span>
               )}
@@ -791,11 +791,11 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
           <h1 className="text-[20px] font-bold flex items-center gap-2">
             <TrendingUp className="h-6 w-6" /> 预测回测
           </h1>
-          <p className="text-[13px] text-muted-foreground mt-1">
+          <p className="text-[14px] text-muted-foreground mt-1">
             Kronos + Chronos-Bolt + XGBoost + 线性回归 四模型加权投票预测（AI裁判评估，数据源：baostock 不复权）
           </p>
         </div>
-        <div className="flex items-center gap-2 text-[13px]">
+        <div className="flex items-center gap-2 text-[14px]">
           <span className={`h-2.5 w-2.5 rounded-full ${engineStatus === 'ok' ? 'bg-green-500' : engineStatus === 'down' ? 'bg-red-500' : 'bg-yellow-400'}`} />
           <span className="text-muted-foreground">
             预测引擎 {engineStatus === 'ok' ? '运行中' : engineStatus === 'down' ? '未启动' : '检测中'}
@@ -816,7 +816,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       {/* 三列工作台(设计蓝本): 输入(窄) | 结果/模型对比(宽); 移动端堆叠 */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
       {/* 输入区 */}
-      <div className="border-b border-border/60 pb-4 xl:col-span-3 xl:border-b-0 xl:border-r xl:pb-0 xl:pr-4">
+      <div className="border-b border-border pb-4 xl:col-span-3 xl:border-b-0 xl:border-r xl:pb-0 xl:pr-4">
         <div className="mb-3">
           <div className="text-[16px] font-bold">发起预测</div>
         </div>
@@ -838,7 +838,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                     <button
                       key={i}
                       type="button"
-                      className="w-full text-left px-3 py-2 hover:bg-muted/50 text-[13px] flex justify-between"
+                      className="w-full text-left px-3 py-2 hover:bg-s2 text-[14px] flex justify-between"
                       onClick={() => selectStock(s)}
                     >
                       <span>{s.name}</span>
@@ -901,7 +901,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
 
       {/* 预测进度日志 */}
       {(loading || taskLogs.length > 0) && (
-        <div className="border-t border-border/60 pt-3 xl:col-span-9">
+        <div className="border-t border-border pt-3 xl:col-span-9">
           <div className="flex items-center gap-2 mb-2">
             <span className={`h-2.5 w-2.5 rounded-full ${taskStatus === 'done' ? 'bg-green-500' : taskStatus === 'error' ? 'bg-red-500' : 'bg-blue-500 animate-pulse'}`} />
             <span className="font-medium">
@@ -909,7 +909,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             </span>
             {loading && <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
-          <div className="bg-muted/50 rounded p-3 font-mono text-xs space-y-1 max-h-48 overflow-y-auto">
+          <div className="bg-s2 rounded p-3 font-mono text-xs space-y-1 max-h-48 overflow-y-auto">
             {taskLogs.length === 0 ? (
               <div className="text-muted-foreground">正在连接预测引擎...</div>
             ) : (
@@ -923,7 +923,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
 
       {/* 预测结果 */}
       {result && (
-        <div className="border-t border-border/60 pt-3 xl:col-span-9">
+        <div className="border-t border-border pt-3 xl:col-span-9">
           <div className="mb-3">
             <div className="flex items-center justify-between">
               <span>预测结果：{result.symbol}{result.stock_name ? ` ${result.stock_name}` : ''}</span>
@@ -956,7 +956,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             </div>
           </div>
           <div className="space-y-4">
-            <div className="text-[13px] text-muted-foreground">
+            <div className="text-[14px] text-muted-foreground">
               基准价 {result.last_close}（{result.last_date}）→ 预测 {result.pred_days} 天，耗时 {result.elapsed_ms}ms
               {(() => {
                 const today = new Date().toISOString().slice(0, 10);
@@ -980,7 +980,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                     置信度{result.recommendation.confidence}
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-x-6 gap-y-1 text-[13px] text-muted-foreground">
+                <div className="flex flex-wrap gap-x-6 gap-y-1 text-[14px] text-muted-foreground">
                   {/* 反AI模板⑤: 目标价/预期均为模型输出,标签带"模型"限定 */}
                   <span>模型目标价：<span className="font-num font-bold text-foreground tabular-nums">{result.recommendation.target_price}</span></span>
                   <span>止损参考：<span className="font-num font-bold text-foreground tabular-nums">{result.recommendation.stop_loss}</span></span>
@@ -1004,10 +1004,10 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             {/* 预测价格序列 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div>
-              <div className="text-[13px] font-medium mb-2">预测价格（综合投票）</div>
+              <div className="text-[14px] font-medium mb-2">预测价格（综合投票）</div>
               <div className="flex flex-wrap gap-2">
                 {result.prediction.map((p, i) => (
-                  <div key={i} className="border border-border/50 rounded px-3 py-2 text-center">
+                  <div key={i} className="border border-border rounded px-3 py-2 text-center">
                     <div className="text-xs text-muted-foreground">T+{i + 1}</div>
                     <div className={`font-num font-bold tabular-nums ${p > result.last_close ? 'text-stock-up' : 'text-stock-down'}`}>
                       {safeFixed(p)}
@@ -1029,7 +1029,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             {/* 四模型对比 + 分歧度区间条图 */}
             <div>
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-[13px] font-medium">四模型对比</span>
+                <span className="text-[14px] font-medium">四模型对比</span>
                 <span className={`text-xs font-medium ${dirColor(result.direction)}`}>
                   {/* 反AI模板⑤: 加权方向括号内标"模型预测" */}
                   模型加权方向 {result.direction === 'up' ? '↑ 看多' : result.direction === 'down' ? '↓ 看空' : '→ 横盘'} (模型预测 {result.expected_pct > 0 ? '+' : ''}{result.expected_pct}%)
@@ -1055,8 +1055,8 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             {/* 消息情绪面 */}
             {result.sentiment && (
               <div>
-                <div className="text-[13px] font-medium mb-2">消息情绪面</div>
-                <div className={`rounded px-3 py-2 text-[13px] mb-2 ${result.sentiment.adjustment_pct >= 0 ? 'bg-stock-up/10 text-stock-up' : 'bg-stock-down/10 text-stock-down'}`}>
+                <div className="text-[14px] font-medium mb-2">消息情绪面</div>
+                <div className={`rounded px-3 py-2 text-[14px] mb-2 ${result.sentiment.adjustment_pct >= 0 ? 'bg-stock-up/10 text-stock-up' : 'bg-stock-down/10 text-stock-down'}`}>
                   情绪修正系数：{result.sentiment.adjustment_pct > 0 ? '+' : ''}{result.sentiment.adjustment_pct}%
                   {result.sentiment.notes?.length > 0 && (
                     <span className="text-muted-foreground ml-2 text-xs">
@@ -1089,7 +1089,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
 
       {/* 预测报告（双格式） */}
       {report && (
-        <div className="border-t border-border/60 pt-3 space-y-3">
+        <div className="border-t border-border pt-3 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileText className="h-4 w-4" />
@@ -1111,7 +1111,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             </div>
           </div>
           {/* Dashboard 短版 */}
-          <div className="border border-border/50 p-4">
+          <div className="border border-border p-4">
             <div className="text-xs text-muted-foreground mb-2">精简版（Dashboard）</div>
             <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-table:my-2 prose-th:px-2 prose-th:py-1 prose-td:px-2 prose-td:py-1 prose-table:text-[12px] prose-strong:text-foreground">
               <SafeMarkdown>{report.dashboard_md}</SafeMarkdown>
@@ -1119,7 +1119,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
           </div>
           {/* Detail 完整版（可折叠） */}
           {showDetail && (
-            <div className="rounded-md border border-border/50 p-4">
+            <div className="rounded-md border border-border p-4">
               <div className="text-xs text-muted-foreground mb-2">完整版（Detail）</div>
               <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
                 <SafeMarkdown>{report.detail_md}</SafeMarkdown>
@@ -1131,7 +1131,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
 
       {/* 回测结果 */}
       {backtest && (
-        <div className="border-t border-border/60 pt-3">
+        <div className="border-t border-border pt-3">
           <div className="mb-3">
             <div className="flex items-center justify-between">
               <div className="text-[16px] font-bold">回测结果：{backtest.symbol}</div>
@@ -1163,7 +1163,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             </div>
             {backtest.recent_samples.length > 0 && (
               <div className="overflow-x-auto">
-                <table className="w-full text-[13px]">
+                <table className="w-full text-[14px]">
                   <thead>
                     <tr className="border-b">
                       <th className="text-left py-2">日期</th>
@@ -1195,7 +1195,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
           {backtestReport && (
             <div className="mt-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-medium">回测报告（双格式）</span>
+                <span className="text-[14px] font-medium">回测报告（双格式）</span>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1205,13 +1205,13 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                   <Send className="mr-1 h-3.5 w-3.5" /> 推送企微
                 </Button>
               </div>
-              <div className="border border-border/50 p-4">
+              <div className="border border-border p-4">
                 <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-table:my-2 prose-th:px-2 prose-th:py-1 prose-td:px-2 prose-td:py-1 prose-table:text-[12px] prose-strong:text-foreground">
                   <SafeMarkdown>{backtestReport.dashboard_md}</SafeMarkdown>
                 </div>
               </div>
-              <details className="rounded-md border border-border/50 p-4">
-                <summary className="cursor-pointer text-[13px] text-muted-foreground">查看完整版回测报告</summary>
+              <details className="rounded-md border border-border p-4">
+                <summary className="cursor-pointer text-[14px] text-muted-foreground">查看完整版回测报告</summary>
                 <div className="mt-3 prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
                   <SafeMarkdown>{backtestReport.detail_md}</SafeMarkdown>
                 </div>
@@ -1222,7 +1222,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       )}
 
       {/* 历史预测列表 */}
-      <div className="border-t border-border/60 pt-3">
+      <div className="border-t border-border pt-3">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4" />
@@ -1239,12 +1239,12 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
           </div>
         </div>
         {history.length === 0 ? (
-          <div className="text-[13px] text-muted-foreground py-4 text-center">
+          <div className="text-[14px] text-muted-foreground py-4 text-center">
             暂无预测记录，先发起一次预测
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
+            <table className="w-full text-[14px]">
               <thead>
                 <tr className="border-b text-muted-foreground">
                   <th className="text-left py-2">代码</th>
@@ -1268,7 +1268,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               </thead>
               <tbody>
                 {history.map(h => (
-                  <tr key={h.id} className="border-b hover:bg-muted/30 cursor-pointer" onClick={() => setDetail(h)}>
+                  <tr key={h.id} className="border-b hover:bg-s2 cursor-pointer" onClick={() => setDetail(h)}>
                     <td className="py-2 font-mono">{h.symbol}{h.stock_name ? ` ${h.stock_name}` : ''}</td>
                     <td>{h.last_date}</td>
                     <td className="font-mono">{h.target_date || '-'}</td>
@@ -1306,7 +1306,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               <button className="text-muted-foreground hover:text-foreground" onClick={() => setDetail(null)}>✕</button>
             </div>
 
-            <div className="space-y-3 text-[13px]">
+            <div className="space-y-3 text-[14px]">
               <div className={`rounded-md border px-3 py-2 ${detail.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : detail.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : ''}`}>
                 <div className="font-bold">
                   {/* 反AI模板⑤: 历史详情弹窗的方向/幅度同样标"模型预测" */}
@@ -1320,27 +1320,27 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="bg-muted/40 rounded px-2 py-1.5">
+                <div className="bg-s2 rounded px-2 py-1.5">
                   <div className="text-muted-foreground">基准日</div>
                   <div className="font-mono font-bold">{detail.last_date}</div>
                 </div>
-                <div className="bg-muted/40 rounded px-2 py-1.5">
+                <div className="bg-s2 rounded px-2 py-1.5">
                   <div className="text-muted-foreground">目标日</div>
                   <div className="font-mono font-bold">{detail.target_date || '-'}</div>
                 </div>
-                <div className="bg-muted/40 rounded px-2 py-1.5">
+                <div className="bg-s2 rounded px-2 py-1.5">
                   <div className="text-muted-foreground">基准价</div>
                   <div className="font-mono font-bold">{detail.last_close}</div>
                 </div>
-                <div className="bg-muted/40 rounded px-2 py-1.5">
+                <div className="bg-s2 rounded px-2 py-1.5">
                   <div className="text-muted-foreground">模型目标价</div>
                   <div className="font-mono font-bold">{detail.target_price ?? '-'}</div>
                 </div>
-                <div className="bg-muted/40 rounded px-2 py-1.5">
+                <div className="bg-s2 rounded px-2 py-1.5">
                   <div className="text-muted-foreground">止损参考</div>
                   <div className="font-mono font-bold">{detail.stop_loss ?? '-'}</div>
                 </div>
-                <div className="bg-muted/40 rounded px-2 py-1.5">
+                <div className="bg-s2 rounded px-2 py-1.5">
                   <div className="text-muted-foreground">情绪修正</div>
                   <div className={`font-mono font-bold ${(detail.sentiment_adj || 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                     {(detail.sentiment_adj || 0) > 0 ? '+' : ''}{detail.sentiment_adj || 0}%
@@ -1353,8 +1353,8 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                   <div className="text-muted-foreground text-xs mb-1">预测序列（T+1 起）</div>
                   <div className="flex flex-wrap gap-1.5">
                     {detail.prediction.map((p, i) => (
-                      <div key={i} className="bg-muted/40 rounded px-2 py-1 text-center">
-                        <div className="text-[10px] text-muted-foreground">T+{i + 1}</div>
+                      <div key={i} className="bg-s2 rounded px-2 py-1 text-center">
+                        <div className="text-[12px] text-muted-foreground">T+{i + 1}</div>
                         <div className={`font-mono font-bold text-xs ${p >= detail.last_close ? 'text-stock-up' : 'text-stock-down'}`}>{p}</div>
                       </div>
                     ))}
@@ -1368,7 +1368,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                 </div>
               )}
 
-              <div className="text-[10px] text-muted-foreground">
+              <div className="text-[12px] text-muted-foreground">
                 预测时间：{detail.created_at}
               </div>
             </div>

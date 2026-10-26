@@ -49,7 +49,7 @@ export function DevPageLayout({
   return (
     <div className="min-h-screen bg-background text-foreground dark:bg-[#0a0a12] dark:text-white">
       {/* 顶部标题栏 */}
-      <header className="sticky top-0 z-30 border-b border-border/50 dark:border-white/5 bg-background/80 dark:bg-[#0a0a12]/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-border dark:border-white/5 bg-background dark:bg-[#0a0a12]/80 backdrop-blur-xl">
         <div className="flex items-center gap-4 px-4 py-4 md:px-8">
           {/* 移动端菜单按钮 */}
           <button
@@ -62,7 +62,7 @@ export function DevPageLayout({
             <div className="flex items-center gap-2.5">
               <h1 className="text-[16px] font-bold tracking-tight text-foreground dark:text-white md:text-[20px]">{title}</h1>
               {badge && (
-                <span className="rounded-full bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-mono text-primary dark:bg-cyan-500/10 dark:border-cyan-500/20 dark:text-cyan-400">
+                <span className="rounded-full bg-primary/10 border border-primary/20 px-2 py-0.5 text-[12px] font-mono text-primary dark:bg-cyan-500/10 dark:border-cyan-500/20 dark:text-cyan-400">
                   {badge}
                 </span>
               )}
@@ -77,7 +77,7 @@ export function DevPageLayout({
         {/* 侧边栏 */}
         <aside
           className={cn(
-            'fixed inset-y-0 left-0 z-20 w-56 border-r border-border/50 dark:border-white/5 bg-card/80 dark:bg-[#0c0c16] pt-[73px] transition-transform md:sticky md:top-[73px] md:z-0 md:h-[calc(100vh-73px)] md:translate-x-0 md:pt-0',
+            'fixed inset-y-0 left-0 z-20 w-56 border-r border-border dark:border-white/5 bg-card dark:bg-[#0c0c16] pt-[73px] transition-transform md:sticky md:top-[73px] md:z-0 md:h-[calc(100vh-73px)] md:translate-x-0 md:pt-0',
             sidebarOpen ? 'translate-x-0' : '-translate-x-full'
           )}
         >
@@ -171,7 +171,7 @@ export function Section({
 /* ── 信息卡片 ── */
 export function InfoCard({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-4 backdrop-blur-sm', className)}>
+    <div className={cn('rounded-xl border border-border dark:border-white/5 bg-card dark:bg-white/[0.02] p-4 backdrop-blur-sm', className)}>
       {children}
     </div>
   )
@@ -187,17 +187,17 @@ export function CodeBlock({ code, language = 'bash', onCopy }: { code: string; l
     onCopy?.()
   }
   return (
-    <div className="group relative rounded-lg border border-border/50 dark:border-white/5 bg-muted/40 dark:bg-[#0d0d18]">
-      <div className="flex items-center justify-between border-b border-border/40 dark:border-white/5 px-3 py-1.5">
-        <span className="font-mono text-[10px] text-muted-foreground">{language}</span>
+    <div className="group relative rounded-lg border border-border dark:border-white/5 bg-s2 dark:bg-[#0d0d18]">
+      <div className="flex items-center justify-between border-b border-border dark:border-white/5 px-3 py-1.5">
+        <span className="font-mono text-[12px] text-muted-foreground">{language}</span>
         <button
-          className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-primary dark:hover:text-cyan-400"
+          className="rounded px-1.5 py-0.5 text-[12px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-primary dark:hover:text-cyan-400"
           onClick={handleCopy}
         >
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-foreground dark:text-cyan-100/80">
+      <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-relaxed text-foreground dark:text-cyan-100/80">
         {code}
       </pre>
     </div>

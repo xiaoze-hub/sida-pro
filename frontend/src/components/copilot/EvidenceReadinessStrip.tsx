@@ -8,7 +8,7 @@ import { readinessProgressLabel, statusText } from '@/lib/copilot/evidence-readi
  * 流中实时更新，回答定稿后仍留在回答顶部 —— 用户能回看「这份结论到底取到了哪几路证据」。
  *
  * 版式（行情终端口径，不是卡片仪表盘）：
- *  - 没有新卡片：上下各一条 hairline（border-border/40）+ 行距分隔；
+ *  - 没有新卡片：上下各一条 hairline（border-border）+ 行距分隔；
  *  - 没有阴影（popover 之外禁 elevation）、没有彩色背景；
  *  - 字号只有 10px；数字 tabular-nums 防跳动；
  *  - 颜色只带语义：失败用 role-risk，其余一律 muted —— 成功不是「喜庆绿」。
@@ -37,18 +37,18 @@ export function EvidenceReadinessStrip({
     <div
       data-testid="evidence-readiness"
       aria-label={`证据齐套度 ${progress}`}
-      className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-y border-border/40 py-1"
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-y border-border py-1"
     >
-      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{progress}</span>
+      <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{progress}</span>
       {failedCount > 0 ? (
         <span
           data-testid="evidence-readiness-failed-count"
-          className="shrink-0 text-[10px] tabular-nums text-role-risk"
+          className="shrink-0 text-[12px] tabular-nums text-role-risk"
         >
           未取到 {failedCount}
         </span>
       ) : null}
-      <span aria-hidden className="shrink-0 text-[10px] text-muted-foreground">
+      <span aria-hidden className="shrink-0 text-[12px] text-muted-foreground">
         ·
       </span>
       {items.map((it) => {
@@ -57,8 +57,8 @@ export function EvidenceReadinessStrip({
           it.status === 'failed'
             ? 'border-role-risk/40 text-role-risk'
             : it.status === 'ok'
-              ? 'border-border/40 text-muted-foreground'
-              : 'border-border/60 text-foreground'
+              ? 'border-border text-muted-foreground'
+              : 'border-border text-foreground'
         return (
           <span
             key={it.key}
@@ -67,10 +67,10 @@ export function EvidenceReadinessStrip({
             data-status={it.status}
             data-group={it.group}
             title={`${it.label}（${it.group}）`}
-            className={`inline-flex shrink-0 items-baseline gap-1 rounded border px-1 py-[1px] text-[10px] tabular-nums ${tone}`}
+            className={`inline-flex shrink-0 items-baseline gap-1 rounded border px-1 py-[1px] text-[12px] tabular-nums ${tone}`}
           >
             <span>{it.label}</span>
-            <span className="text-[10px]">{text}</span>
+            <span className="text-[12px]">{text}</span>
           </span>
         )
       })}

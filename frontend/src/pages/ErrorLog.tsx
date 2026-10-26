@@ -23,7 +23,7 @@ function ErrorRow({ ev }: { ev: ErrorEvent }) {
   const [open, setOpen] = useState(false)
   const hasDetail = !!(ev.traceback || ev.context)
   return (
-    <div className="border-b border-border/40 py-2">
+    <div className="border-b border-border py-2">
       <button
         type="button"
         onClick={() => hasDetail && setOpen((v) => !v)}
@@ -36,8 +36,8 @@ function ErrorRow({ ev }: { ev: ErrorEvent }) {
         ) : (
           <span className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         )}
-        <span className="w-[150px] shrink-0 font-mono text-[11px] text-muted-foreground">{fmtTs(ev.ts)}</span>
-        <span className="w-[180px] shrink-0 truncate font-mono text-[11px] text-rose-600 dark:text-rose-400" title={ev.type || 'Error'}>
+        <span className="w-[150px] shrink-0 font-mono text-[12px] text-muted-foreground">{fmtTs(ev.ts)}</span>
+        <span className="w-[180px] shrink-0 truncate font-mono text-[12px] text-rose-600 dark:text-rose-400" title={ev.type || 'Error'}>
           {ev.type || 'Error'}
         </span>
         <span className="min-w-0 flex-1 break-words text-[12px] text-foreground">{ev.message || '(empty)'}</span>
@@ -45,12 +45,12 @@ function ErrorRow({ ev }: { ev: ErrorEvent }) {
       {open && hasDetail && (
         <div className="mt-2 space-y-2 pl-6">
           {ev.traceback && (
-            <pre className="max-h-[240px] overflow-auto rounded bg-accent/20 p-2 text-[11px] text-muted-foreground whitespace-pre-wrap break-words">
+            <pre className="max-h-[240px] overflow-auto rounded bg-s2 p-2 text-[12px] text-muted-foreground whitespace-pre-wrap break-words">
               {ev.traceback}
             </pre>
           )}
           {ev.context && Object.keys(ev.context).length > 0 && (
-            <pre className="max-h-[200px] overflow-auto rounded bg-accent/20 p-2 text-[11px] text-muted-foreground whitespace-pre-wrap break-words">
+            <pre className="max-h-[200px] overflow-auto rounded bg-s2 p-2 text-[12px] text-muted-foreground whitespace-pre-wrap break-words">
               {JSON.stringify(ev.context, null, 2)}
             </pre>
           )}
@@ -88,7 +88,7 @@ export default function ErrorLogPage() {
           <ShieldAlert className="h-3.5 w-3.5" />
           后端未处理异常 / 调度漏跑 / 前端上报(去重聚合, 仅 owner 可见)
         </div>
-        <Button variant="secondary" size="sm" className="h-7 px-2.5 text-[11px]" onClick={() => void load()} disabled={loading}>
+        <Button variant="secondary" size="sm" className="h-7 px-2.5 text-[12px]" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={`mr-1 h-3 w-3 ${loading ? 'animate-spin' : ''}`} /> 刷新
         </Button>
       </div>
@@ -103,7 +103,7 @@ export default function ErrorLogPage() {
         <div className="card p-6 text-center text-[12px] text-muted-foreground">最近没有错误事件 🎉</div>
       ) : (
         <div className="card p-4">
-          <div className="mb-1 flex items-center gap-2 border-b border-border/60 pb-1 text-[11px] text-muted-foreground">
+          <div className="mb-1 flex items-center gap-2 border-b border-border pb-1 text-[12px] text-muted-foreground">
             <span className="w-[150px] shrink-0">时间</span>
             <span className="w-[180px] shrink-0">类型</span>
             <span className="flex-1">消息(点击展开堆栈/上下文)</span>

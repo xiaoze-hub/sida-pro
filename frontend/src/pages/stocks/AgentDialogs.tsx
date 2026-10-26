@@ -53,25 +53,25 @@ export function AgentDialogs() {
     </DialogHeader>
     <div className="space-y-3 mt-2">
       {agents.length === 0 ? (
-        <p className="text-[13px] text-muted-foreground py-4 text-center">暂无可用 Agent</p>
+        <p className="text-[14px] text-muted-foreground py-4 text-center">暂无可用 Agent</p>
       ) : (
         agents.map(agent => {
           const stockAgent = agentDialogStock?.agents?.find(a => a.agent_name === agent.name)
           const isAssigned = !!stockAgent
           const isBatchMode = agent.execution_mode === 'batch'
           return (
-            <div key={agent.name} className="border-b border-border/40 hover:bg-accent/20 transition-colors overflow-hidden">
+            <div key={agent.name} className="border-b border-border hover:bg-s2 transition-colors overflow-hidden">
               <div className="flex items-center justify-between p-3.5">
                 <div className="flex items-center gap-3">
                   <div className={`w-2 h-2 rounded-full ${agent.enabled ? 'bg-emerald-500' : 'bg-border'}`} />
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-medium text-foreground">{agent.display_name}</span>
-                      <Badge variant="secondary" className="text-[10px]">
+                      <span className="text-[14px] font-medium text-foreground">{agent.display_name}</span>
+                      <Badge variant="secondary" className="text-[12px]">
                         {isBatchMode ? '批量' : '逐只'}
                       </Badge>
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">{agent.description}</p>
+                    <p className="text-[12px] text-muted-foreground mt-0.5">{agent.description}</p>
                   </div>
                 </div>
                 <Switch
@@ -82,7 +82,7 @@ export function AgentDialogs() {
               </div>
               {isAssigned && isBatchMode && (
                 <div className="px-3.5 pb-3.5 pt-0">
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[12px] text-muted-foreground">
                     调度、AI模型、通知渠道请在 <a href="/system?tab=agents" className="text-primary hover:underline">Agent 配置</a> 页面统一设置
                   </p>
                 </div>
@@ -96,7 +96,7 @@ export function AgentDialogs() {
                       value={stockAgent?.schedule || '__default__'}
                       onValueChange={val => agentDialogStock && updateStockAgentSchedule(agentDialogStock, agent.name, val === '__default__' ? '' : val)}
                     >
-                      <SelectTrigger className="h-7 text-[11px] w-auto min-w-[140px] px-2.5 bg-accent/50 border-border/50">
+                      <SelectTrigger className="h-7 text-[12px] w-auto min-w-[140px] px-2.5 bg-s2 border-border">
                         <SelectValue placeholder="执行间隔" />
                       </SelectTrigger>
                       <SelectContent>
@@ -109,7 +109,7 @@ export function AgentDialogs() {
                         <SelectItem value="*/30 9-15 * * 1-5">每 30 分钟</SelectItem>
                       </SelectContent>
                     </Select>
-                    <span className="text-[10px] text-muted-foreground">交易时段</span>
+                    <span className="text-[12px] text-muted-foreground">交易时段</span>
                   </div>
 
                   {/* Schedule Preview */}
@@ -120,9 +120,9 @@ export function AgentDialogs() {
                     const isLoading = eff ? !!schedulePreviewLoading[eff] : false
                     if (!eff) return null
                     return (
-                      <div className="ml-[22px] rounded-md border border-border/40 bg-background/30 px-2.5 py-2">
+                      <div className="ml-[22px] rounded-md border border-border bg-background px-2.5 py-2">
                         <div className="flex items-center justify-between">
-                          <div className="text-[11px] text-muted-foreground">
+                          <div className="text-[12px] text-muted-foreground">
                             未来触发时间预览{isFollowingGlobal ? <span className="ml-1 opacity-70">(跟随全局)</span> : null}
                           </div>
                           {isLoading && (
@@ -130,11 +130,11 @@ export function AgentDialogs() {
                           )}
                         </div>
                         {'error' in (preview || {}) ? (
-                          <div className="mt-1 text-[11px] text-muted-foreground">{(preview as any).error}</div>
+                          <div className="mt-1 text-[12px] text-muted-foreground">{(preview as any).error}</div>
                         ) : (preview as SchedulePreview | undefined)?.next_runs?.length ? (
-                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
                             {(preview as SchedulePreview).next_runs.map((t, i) => (
-                              <span key={i} className="px-1.5 py-0.5 rounded border border-border/60 bg-accent/20 font-mono" title={t}>
+                              <span key={i} className="px-1.5 py-0.5 rounded border border-border bg-s2 font-mono" title={t}>
                                 {formatPreviewTime(t, (preview as SchedulePreview).timezone)}
                               </span>
                             ))}
@@ -143,9 +143,9 @@ export function AgentDialogs() {
                             ) : null}
                           </div>
                         ) : (
-                          <div className="mt-1 text-[11px] text-muted-foreground">—</div>
+                          <div className="mt-1 text-[12px] text-muted-foreground">—</div>
                         )}
-                        <div className="mt-1 text-[10px] text-muted-foreground font-mono">schedule: {eff}</div>
+                        <div className="mt-1 text-[12px] text-muted-foreground font-mono">schedule: {eff}</div>
                       </div>
                     )
                   })()}
@@ -157,7 +157,7 @@ export function AgentDialogs() {
                       value={stockAgent?.ai_model_id?.toString() ?? '__default__'}
                       onValueChange={val => agentDialogStock && updateStockAgentModel(agentDialogStock, agent.name, val === '__default__' ? null : parseInt(val))}
                     >
-                      <SelectTrigger className="h-7 text-[11px] w-auto min-w-[140px] px-2.5 bg-accent/50 border-border/50">
+                      <SelectTrigger className="h-7 text-[12px] w-auto min-w-[140px] px-2.5 bg-s2 border-border">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -185,10 +185,10 @@ export function AgentDialogs() {
                           <button
                             key={ch.id}
                             onClick={() => agentDialogStock && toggleStockAgentChannel(agentDialogStock, agent.name, ch.id)}
-                            className={`text-[10px] px-2 py-0.5 rounded-md border transition-colors ${
+                            className={`text-[12px] px-2 py-0.5 rounded-md border transition-colors ${
                               isSelected
                                 ? 'bg-primary/10 border-primary/30 text-primary font-medium'
-                                : 'bg-accent/30 border-border/50 text-muted-foreground hover:border-primary/30'
+                                : 'bg-s2 border-border text-muted-foreground hover:border-primary/30'
                             }`}
                           >
                             {ch.name}
@@ -196,14 +196,14 @@ export function AgentDialogs() {
                         )
                       })}
                       {(stockAgent?.notify_channel_ids || []).length === 0 && (
-                        <span className="text-[10px] text-muted-foreground">系统默认</span>
+                        <span className="text-[12px] text-muted-foreground">系统默认</span>
                       )}
                     </div>
                   )}
                   {/* Trigger Button */}
                   <div className="flex items-center gap-2 pt-1">
                     <Button
-                      variant="secondary" size="sm" className="h-7 text-[11px] px-2.5"
+                      variant="secondary" size="sm" className="h-7 text-[12px] px-2.5"
                       disabled={triggeringAgent === agent.name}
                       onClick={() => agentDialogStock && triggerStockAgent(agentDialogStock.id, agent.name)}
                     >
@@ -232,17 +232,17 @@ export function AgentDialogs() {
       <DialogTitle className="text-base">{agentResultDialog?.title}</DialogTitle>
       <DialogDescription className="flex items-center gap-2 pt-1">
         {agentResultDialog?.should_alert ? (
-          <Badge variant="default" className="text-[10px]">建议关注</Badge>
+          <Badge variant="default" className="text-[12px]">建议关注</Badge>
         ) : (
-          <Badge variant="secondary" className="text-[10px]">无需关注</Badge>
+          <Badge variant="secondary" className="text-[12px]">无需关注</Badge>
         )}
         {agentResultDialog?.notified && (
-          <Badge variant="outline" className="text-[10px]">已发送通知</Badge>
+          <Badge variant="outline" className="text-[12px]">已发送通知</Badge>
         )}
       </DialogDescription>
     </DialogHeader>
-    <div className="mt-2 p-3 bg-accent/30 rounded-md">
-      <pre className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed">
+    <div className="mt-2 p-3 bg-s2 rounded-md">
+      <pre className="text-[14px] whitespace-pre-wrap font-sans leading-relaxed">
         {agentResultDialog?.content}
       </pre>
     </div>

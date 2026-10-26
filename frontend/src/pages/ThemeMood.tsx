@@ -353,7 +353,7 @@ export default function ThemeMoodPage() {
     <div className="mx-auto max-w-[1400px] p-4">
       <div className="mb-3 flex items-center gap-3">
         <h1 className="text-[16px] font-semibold">题材情绪</h1>
-        <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">收盘确认口径</span>
+        <span className="rounded bg-accent px-1.5 py-0.5 text-[12px] text-muted-foreground">收盘确认口径</span>
         <ThemeMoodStatus
           phase={boardPhase}
           as_of={resp?.as_of}
@@ -363,10 +363,10 @@ export default function ThemeMoodPage() {
         />
         {/* 基准日/快照时间显式标注(铁律): 缺数据显式「无数据」, 不填 0 也不留空 */}
         {resp ? (
-          <span className="text-[11px] text-muted-foreground">基准日 {resp.trade_date ?? '无数据'}</span>
+          <span className="text-[12px] text-muted-foreground">基准日 {resp.trade_date ?? '无数据'}</span>
         ) : null}
         {liveError ? (
-          <span className="text-[10px] text-stock-up" title={liveError}>
+          <span className="text-[12px] text-stock-up" title={liveError}>
             轮询失败, 自动重试中
           </span>
         ) : null}
@@ -377,7 +377,7 @@ export default function ThemeMoodPage() {
             onClick={() => void manualRefresh()}
             disabled={manualRefreshing}
             title="立即拉取最新题材情绪(盘中 phase=live 时每 60s 自动刷新)"
-            className="flex items-center rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-60"
+            className="flex items-center rounded px-2 py-0.5 text-[12px] text-muted-foreground hover:bg-accent disabled:opacity-60"
           >
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${manualRefreshing ? 'animate-spin' : ''}`} />
             {manualRefreshing ? '刷新中…' : '刷新'}
@@ -387,8 +387,8 @@ export default function ThemeMoodPage() {
               key={w}
               type="button"
               onClick={() => setWindowDays(w)}
-              className={`rounded px-2 py-0.5 text-[11px] ${
-                windowDays === w ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+              className={`rounded px-2 py-0.5 text-[12px] ${
+                windowDays === w ? 'bg-primary text-primary-foreground' : 'bg-s2 text-muted-foreground hover:bg-accent'
               }`}
             >
               {w}日
@@ -402,14 +402,14 @@ export default function ThemeMoodPage() {
       </div>
 
       {mood?.ok ? (
-        <div className="mb-3 border-b border-border/40 pb-2">
+        <div className="mb-3 border-b border-border pb-2">
           <div className="mb-1 flex items-baseline gap-2">
-            <span className="text-[11px] text-foreground">全市场情绪温度</span>
+            <span className="text-[12px] text-foreground">全市场情绪温度</span>
             <span className="font-mono text-[12px] font-medium text-primary">{mood.latest?.temperature ?? '—'}</span>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[12px] text-muted-foreground">
               近 {mood.items?.length ?? 0} 日分位 {typeof mood.temperature_percentile === 'number' ? `${mood.temperature_percentile}%` : '—'}
             </span>
-            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+            <span className="ml-auto font-mono text-[12px] text-muted-foreground">
               涨 {mood.latest?.up ?? '—'} / 跌 {mood.latest?.down ?? '—'} / 平 {mood.latest?.flat ?? '—'}（{mood.latest?.symbols ?? '—'} 只有效）
             </span>
           </div>
@@ -419,7 +419,7 @@ export default function ThemeMoodPage() {
             height={56}
             ariaLabel={`全市场情绪温度曲线, 最新 ${mood.latest?.temperature ?? '—'}`}
           />
-          <div className="mt-0.5 text-[10px] text-muted-foreground">
+          <div className="mt-0.5 text-[12px] text-muted-foreground">
             口径：{mood.caliber}{mood.note ? ` ⚠️ ${mood.note}` : ''}
           </div>
         </div>
@@ -427,18 +427,18 @@ export default function ThemeMoodPage() {
 
       {/* 通达信 300ETF IOPV 折溢价护盘雷达 (国家队抄底与流动性异动) */}
       {etfTrack ? (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded border border-border/40 bg-card/40 px-3 py-1.5 text-[11px]">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded border border-border bg-card px-3 py-1.5 text-[12px]">
           <div className="flex items-center gap-2">
             <span className="font-medium text-foreground">沪深300 ETF 护盘雷达:</span>
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold text-primary">
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[12px] font-semibold text-primary">
               {etfTrack.status || '平价运行'}
             </span>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[12px] text-muted-foreground">
               共跟踪 {etfTrack.total ?? 0} 只 ETF · 溢价 {etfTrack.premium_count ?? 0} 只 / 折价 {etfTrack.discount_count ?? 0} 只
             </span>
           </div>
           {etfTrack.etfs && etfTrack.etfs.length > 0 ? (
-            <div className="flex items-center gap-3 font-mono text-[10px]">
+            <div className="flex items-center gap-3 font-mono text-[12px]">
               {etfTrack.etfs.slice(0, 3).map((e) => (
                 <span key={e.code} className="flex items-center gap-1">
                   <span className="text-muted-foreground">{e.name.replace('沪深300ETF', '')}:</span>
@@ -473,7 +473,7 @@ export default function ThemeMoodPage() {
             return n
           })
         }
-        className="mb-1 mt-3 w-full rounded border border-border/50 py-1 text-center text-[11px] text-muted-foreground"
+        className="mb-1 mt-3 w-full rounded border border-border py-1 text-center text-[12px] text-muted-foreground"
       >
         {boardCollapsed ? '展开题材表' : '折叠题材表'}
       </button>
@@ -488,46 +488,46 @@ export default function ThemeMoodPage() {
             boardCollapsed ? 'hidden xl:hidden' : ''
           }`}
         >
-          <div className="sticky top-0 z-10 mb-1 grid grid-cols-[1fr_56px_56px_44px] gap-1 bg-background px-2 py-1 text-[10px] text-muted-foreground">
+          <div className="sticky top-0 z-10 mb-1 grid grid-cols-[1fr_56px_56px_44px] gap-1 bg-background px-2 py-1 text-[12px] text-muted-foreground">
             <span>题材</span>
             <span className="text-right">情绪分</span>
             <span className="text-right">日变化</span>
             <span className="text-right">置信</span>
           </div>
           {/* 留白分隔取代逐行 1px 线(设计稿 v3.0 §七 6.3): 行线由 516 条降到 0 条, 层级交给分组与间距 */}
-          <div className="rounded border border-border/60">
+          <div className="rounded border border-border">
             {visibleThemes.map((it) => (
               <button
                 key={it.block_code}
                 type="button"
                 onClick={() => setActive(it.block_code)}
-                className={`grid w-full grid-cols-[1fr_56px_56px_44px] items-center gap-1 px-2 py-2 text-left text-[12px] hover:bg-accent/40 ${
-                  active === it.block_code ? 'bg-accent/60' : ''
+                className={`grid w-full grid-cols-[1fr_56px_56px_44px] items-center gap-1 px-2 py-2 text-left text-[12px] hover:bg-s2 ${
+                  active === it.block_code ? 'bg-s2' : ''
                 }`}
               >
                 <span className="truncate" title={it.block_name || it.block_code}>
                   {it.block_name || it.block_code}
-                  {it.core ? <span className="ml-1 rounded bg-stock-up/15 px-1 text-[10px] text-stock-up">核心</span> : null}
+                  {it.core ? <span className="ml-1 rounded bg-stock-up/15 px-1 text-[12px] text-stock-up">核心</span> : null}
                 </span>
                 <span className={`text-right font-mono ${cellTextClass(it.score)}`}>{fmtScore(it.score)}</span>
                 <span
-                  className={`text-right font-mono text-[11px] ${
+                  className={`text-right font-mono text-[12px] ${
                     (it.delta ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'
                   }`}
                 >
                   {it.delta == null ? '--' : `${it.delta > 0 ? '+' : ''}${fmtScore(it.delta)}`}
                 </span>
-                <span className="text-right font-mono text-[11px] text-muted-foreground">{it.confidence ?? '--'}</span>
+                <span className="text-right font-mono text-[12px] text-muted-foreground">{it.confidence ?? '--'}</span>
               </button>
             ))}
             {resp && resp.items.length === 0 ? (
-              <div className="py-6 text-center text-[11px] text-muted-foreground">暂无题材情绪数据(等待盘后扫描)</div>
+              <div className="py-6 text-center text-[12px] text-muted-foreground">暂无题材情绪数据(等待盘后扫描)</div>
             ) : null}
             {items.length > 12 ? (
               <button
                 type="button"
                 onClick={() => setShowAllThemes((v) => !v)}
-                className="w-full px-2 py-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                className="w-full px-2 py-1.5 text-[12px] text-muted-foreground hover:text-foreground"
               >
                 {showAllThemes ? '收起(只看主线 12 条)' : `展开全部 ${items.length} 条题材`}
               </button>
@@ -536,20 +536,20 @@ export default function ThemeMoodPage() {
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="rounded border border-border/60 p-2">
-            <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+          <div className="rounded border border-border p-2">
+            <div className="mb-1 flex items-center gap-2 text-[12px] text-muted-foreground">
               <span>题材 × 日期(近 {windowDays} 个交易日 · 色块=情绪分)</span>
               {latestDate ? <span>最新 {latestDate}</span> : null}
-              <span className="text-[10px]">曲线=当日前 20 均值</span>
-              <span className="ml-auto flex items-center gap-1 text-[10px]">
+              <span className="text-[12px]">曲线=当日前 20 均值</span>
+              <span className="ml-auto flex items-center gap-1 text-[12px]">
                 色阶
                 {/* 2026-10-24 L3-A: 图例与 lib/theme-mood.ts 的 cellColorClass 对齐 ——
-                    此前少一档 null(无数据, bg-muted/30), 读者会以为"灰=最低分"。 */}
+                    此前少一档 null(无数据, bg-s2), 读者会以为"灰=最低分"。 */}
                 {[
                   ['走弱 <50', 'bg-stock-down/20'],
-                  ['震荡 50-70', 'bg-muted/60'],
+                  ['震荡 50-70', 'bg-s2'],
                   ['走强 ≥70', 'bg-stock-up/30'],
-                  ['无数据', 'bg-muted/30'],
+                  ['无数据', 'bg-s2'],
                 ].map(([label, cls]) => (
                   <span key={label} className="flex items-center gap-0.5">
                     <span className={`inline-block h-2.5 w-3.5 rounded-sm ${cls}`} />
@@ -567,7 +567,7 @@ export default function ThemeMoodPage() {
                   {bands.map((b) => (
                     <span
                       key={b.key}
-                      className="border-b border-border/70 pb-0.5 text-center text-[11px] font-medium leading-4 text-foreground"
+                      className="border-b border-border pb-0.5 text-center text-[12px] font-medium leading-4 text-foreground"
                       style={{ width: b.count * AXIS_PITCH - (AXIS_PITCH - AXIS_CELL_W) }}
                     >
                       {b.label}
@@ -576,7 +576,7 @@ export default function ThemeMoodPage() {
                 </div>
               </div>
               <div className="mb-1 flex w-max min-w-full items-center gap-1">
-                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-foreground">
+                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[12px] leading-4 text-foreground">
                   日期
                 </span>
                 <div className="flex gap-0.5">
@@ -597,11 +597,11 @@ export default function ThemeMoodPage() {
                   加分隔线 + 上间距, 标签升到 11px 并补 title 说明自身口径。 */}
               <div
                 data-testid="thememood-rotation-row"
-                className="mb-1 mt-2 flex w-max min-w-full items-center gap-1 border-t border-border/40 pt-1.5"
+                className="mb-1 mt-2 flex w-max min-w-full items-center gap-1 border-t border-border pt-1.5"
               >
                 <span
                   title={`轮动: 每日新进 / 退出 Top${resp?.rotation_top_k ?? 10} 的题材数(绿色 = 新进, 划线 = 退出)`}
-                  className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-muted-foreground"
+                  className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[12px] leading-4 text-muted-foreground"
                 >
                   轮动
                 </span>
@@ -616,7 +616,7 @@ export default function ThemeMoodPage() {
                         title={r
                           ? `${d} 新进 Top${resp?.rotation_top_k ?? 10}: ${r.new_codes.join('、') || '无'}\n退榜: ${r.exit_codes.join('、') || '无'}`
                           : d}
-                        className="w-[38px] shrink-0 text-center text-[11px] leading-4 text-foreground"
+                        className="w-[38px] shrink-0 text-center text-[12px] leading-4 text-foreground"
                       >
                         {entered || exited ? (
                           <>
@@ -632,7 +632,7 @@ export default function ThemeMoodPage() {
               </div>
               {marketTrend ? (
                 <div
-                  className="mb-1 border-b border-border/40 pb-1"
+                  className="mb-1 border-b border-border pb-1"
                   title="情绪走势 = 当日情绪分前 20 名题材的均值(领先端), 不是全市场均值"
                 >
                   <TrendChart
@@ -643,7 +643,7 @@ export default function ThemeMoodPage() {
                     hint={(d) => `${axis[d.i]} · 前20均值 ${fmtScore(d.score)}`}
                     label={
                       <>
-                        <span className="text-[11px] text-foreground">情绪走势</span>
+                        <span className="text-[12px] text-foreground">情绪走势</span>
                         <span className="font-mono text-[12px] font-medium text-primary">{fmtScore(newestMarketScore)}</span>
                       </>
                     }
@@ -661,7 +661,7 @@ export default function ThemeMoodPage() {
                       type="button"
                       onClick={() => setActive(it.block_code)}
                       className={`group flex w-max min-w-full items-center gap-1 rounded ${
-                        active === it.block_code ? 'bg-accent/50' : 'hover:bg-accent/30'
+                        active === it.block_code ? 'bg-s2' : 'hover:bg-s2'
                       }`}
                     >
                       <span
@@ -669,7 +669,7 @@ export default function ThemeMoodPage() {
                           `${it.block_name || it.block_code}`
                           + (it.top_days ? `\n窗口内在榜 ${it.top_days} 天(${it.first_top_date} ~ ${it.last_top_date})` : '')
                         }
-                        className={`sticky left-0 z-10 w-[76px] shrink-0 truncate bg-background px-1 text-left text-[11px] ${
+                        className={`sticky left-0 z-10 w-[76px] shrink-0 truncate bg-background px-1 text-left text-[12px] ${
                           active === it.block_code ? 'font-semibold text-primary' : faded ? 'text-muted-foreground' : ''
                         }`}
                       >
@@ -684,7 +684,7 @@ export default function ThemeMoodPage() {
                             <span
                               key={d}
                               title={`${it.block_name || it.block_code} · ${d} · 情绪分 ${fmtScore(c?.score)} · 涨停 ${c?.limit_up_cnt ?? 0}`}
-                              className={`flex h-[22px] w-[38px] shrink-0 items-center justify-center rounded text-[10px] ${cellColorClass(
+                              className={`flex h-[22px] w-[38px] shrink-0 items-center justify-center rounded text-[12px] ${cellColorClass(
                                 c?.score,
                               )} ${cellTextClass(c?.score)} ${
                                 i === axis.length - 1 ? 'ring-1 ring-inset ring-primary/50' : ''
@@ -703,7 +703,7 @@ export default function ThemeMoodPage() {
                 <button
                   type="button"
                   onClick={() => setShowAllRows((v) => !v)}
-                  className="mt-1 w-full rounded border border-border/50 py-1 text-center text-[11px] text-muted-foreground hover:bg-accent/40"
+                  className="mt-1 w-full rounded border border-border py-1 text-center text-[12px] text-muted-foreground hover:bg-s2"
                 >
                   {showAllRows ? '收起' : `展开其余 ${items.length - 15} 行(含窗口内退榜题材)`}
                 </button>
@@ -712,25 +712,25 @@ export default function ThemeMoodPage() {
           </div>
 
           {detail ? (
-            <div className="mt-3 rounded border border-border/60 p-3 text-[12px]">
+            <div className="mt-3 rounded border border-border p-3 text-[12px]">
               <div className="mb-2 flex items-center gap-2">
                 <span className="font-semibold">{detail.block_name || detail.block_code}</span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   {detail.block_type === 'industry' ? '行业' : '概念'} · {detail.block_code}
                 </span>
-                <span className="ml-auto text-[10px] text-muted-foreground">历史分位/连续性使用当期成分回看</span>
+                <span className="ml-auto text-[12px] text-muted-foreground">历史分位/连续性使用当期成分回看</span>
               </div>
               <div className="grid grid-cols-5 gap-2">
                 {DIMS.map((label, i) => (
-                  <div key={label} className="rounded bg-accent/40 p-2">
-                    <div className="text-[10px] text-muted-foreground">{label}</div>
-                    <div className={`font-mono text-[13px] ${cellTextClass(dims[i])}`}>{fmtScore(dims[i])}</div>
+                  <div key={label} className="rounded bg-s2 p-2">
+                    <div className="text-[12px] text-muted-foreground">{label}</div>
+                    <div className={`font-mono text-[14px] ${cellTextClass(dims[i])}`}>{fmtScore(dims[i])}</div>
                   </div>
                 ))}
               </div>
               {detailTrend ? (
                 <div className="mt-3">
-                  <div className="mb-1 flex items-baseline gap-2 text-[11px]">
+                  <div className="mb-1 flex items-baseline gap-2 text-[12px]">
                     <span className="text-foreground">情绪走势(近 {axis.length} 个交易日)</span>
                     <span className="ml-auto text-muted-foreground">
                       最高 {fmtScore(detailTrend.hi)} · 最低 {fmtScore(detailTrend.lo)} · 最新{' '}
@@ -751,7 +751,7 @@ export default function ThemeMoodPage() {
               {detail.core_stocks.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {detail.core_stocks.slice(0, 2).map((s) => (
-                    <span key={s.symbol} className="rounded bg-accent/40 px-2 py-1 text-[11px]">
+                    <span key={s.symbol} className="rounded bg-s2 px-2 py-1 text-[12px]">
                       {s.name || s.symbol} · {s.boards ?? '--'}板 · 核心分 {fmtScore(s.score)}
                       {s.prob != null ? ` · 连续概率 ${Math.round(s.prob * 100)}%` : ''}
                     </span>
@@ -760,7 +760,7 @@ export default function ThemeMoodPage() {
               ) : null}
             </div>
           ) : (
-            <div className="mt-3 rounded border border-dashed border-border/60 p-4 text-center text-[11px] text-muted-foreground">
+            <div className="mt-3 rounded border border-dashed border-border p-4 text-center text-[12px] text-muted-foreground">
               点击左侧题材查看五维明细与核心股
             </div>
           )}

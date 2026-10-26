@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useId } from 'react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 
 import PageTabs, { type PageTabItem } from './PageTabs'
@@ -34,6 +35,7 @@ export default function TabbedPage({
   className?: string
 }) {
   const [params, setParams] = useSearchParams()
+  const tabId = useId()
 
   const visible = tabs.filter((t) => {
     if (t.ownerOnly && isOwner && !isOwner()) return false
@@ -68,7 +70,7 @@ export default function TabbedPage({
 
   if (visible.length === 0) {
     return (
-      <div className="py-8 text-center text-[13px] text-muted-foreground">
+      <div className="py-8 text-center text-[14px] text-muted-foreground">
         无可用页签(权限不足)
       </div>
     )
@@ -83,13 +85,15 @@ export default function TabbedPage({
         value={resolved}
         onChange={onChange}
         className={className}
+        idPrefix={tabId}
+        panelId={`${tabId}-panel`}
       />
-      <div className="min-w-0">
+      <div className="min-w-0" role="tabpanel" id={`${tabId}-panel`} aria-labelledby={`${tabId}-${resolved}`} tabIndex={0}>
         {activeTab?.render ? (
           activeTab.render()
         ) : (
           <div className="py-8 text-center">
-            <div className="text-[13px] font-medium text-foreground">
+            <div className="text-[14px] font-medium text-foreground">
               「{activeTab?.label ?? resolved}」待接入
             </div>
             <p className="mt-1 text-[12px] text-muted-foreground">

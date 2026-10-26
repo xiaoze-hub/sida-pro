@@ -1,3 +1,4 @@
+import PageHeader from '@/components/PageHeader'
 import { Suspense } from 'react'
 import { HelpCircle, Loader2, Settings, ShieldCheck } from 'lucide-react'
 
@@ -61,6 +62,9 @@ function TabLoading() {
 
 export default function SettingsHubPage({ myPerms, isOwner }: { myPerms?: Set<string> | null; isOwner?: () => boolean }) {
   return (
+    <div className="page-container">
+      <PageHeader title="设置" description="管理外观、账户偏好与系统设置" />
     <TabbedPage tabs={SETTINGS_TABS} defaultTab="settings" myPerms={myPerms} isOwner={isOwner} />
+    </div>
   )
 }

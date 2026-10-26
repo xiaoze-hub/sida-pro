@@ -70,12 +70,12 @@ export function ErrorBanner({ errors, onDismiss, retryAll, maxDisplay = DEFAULT_
         />
       ))}
       {hidden > 0 && (
-        <div className="px-3 py-1 text-[11px] text-muted-foreground">
+        <div className="px-3 py-1 text-[12px] text-muted-foreground">
           还有 {hidden} 个源失败(已隐藏以避免横幅占满页面)
         </div>
       )}
       {retryAll && errors.some(e => e.retry) && (
-        <div className="flex items-center justify-end gap-2 text-[11px]">
+        <div className="flex items-center justify-end gap-2 text-[12px]">
           <button
             type="button"
             onClick={retryAll}
@@ -118,7 +118,7 @@ function ErrorItem({ err, onDismiss }: { err: SourceError; onDismiss?: () => voi
         <button
           type="button"
           onClick={() => err.retry?.()}
-          className="flex items-center gap-0.5 rounded-md px-2 py-0.5 text-[11px] text-primary transition-colors hover:text-primary/80"
+          className="flex items-center gap-0.5 rounded-md px-2 py-0.5 text-[12px] text-primary transition-colors hover:text-primary/80"
           title="重试"
         >
           <RotateCw className="h-3 w-3" />

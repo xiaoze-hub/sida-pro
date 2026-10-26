@@ -51,7 +51,7 @@ const RULE = {
 function cardShells(root: HTMLElement): Element[] {
   return Array.from(root.querySelectorAll('*')).filter((el) => {
     const cls = el.getAttribute('class') ?? ''
-    return cls.includes('border-border/') && /(^|\s)border(\s|$)/.test(cls) && /(^|\s)rounded/.test(cls)
+    return /(^|\s)border-border(?:-strong)?(\s|$)/.test(cls) && /(^|\s)border(\s|$)/.test(cls) && /(^|\s)rounded/.test(cls)
   })
 }
 
@@ -84,7 +84,7 @@ describe('DecisionCard 合并卡 · 单卡外观', () => {
     // 数据态: 仍然只有一层边框 —— 不存在"卡中卡"
     const shells = cardShells(container)
     expect(shells.length).toBe(1)
-    expect(shells[0].getAttribute('class')).toContain('border-border/60')
+    expect(shells[0].getAttribute('class')).toContain('border-border')
 
     // 一个顶层标题: 子卡的「🧭 数智决策三指标」与「三指标读数」副标题、共振面板的「三指标」标签都被 bare 抑制
     const titles = screen.getAllByText('数智决策')
@@ -96,7 +96,7 @@ describe('DecisionCard 合并卡 · 单卡外观', () => {
 
     // 分段小标题(比顶层小一级), 且两段数据内容都在
     const sub = screen.getByText('共振判定')
-    expect(sub.getAttribute('class')).toContain('text-[11px]')
+    expect(sub.getAttribute('class')).toContain('text-[12px]')
     expect(screen.getByText('AI机构活跃度')).toBeTruthy()
     expect(screen.getByText('规则: 强')).toBeTruthy()
 
@@ -110,7 +110,7 @@ describe('DecisionCard 合并卡 · 单卡外观', () => {
 
     const shells = cardShells(container)
     expect(shells.length).toBe(1)
-    expect(shells[0].getAttribute('class')).toContain('mt-3 rounded-xl border border-border/50 bg-card p-3')
+    expect(shells[0].getAttribute('class')).toContain('mt-3 rounded-xl border border-border bg-card p-3')
     expect(screen.getByText('🧭 数智决策三指标')).toBeTruthy()
     expect(screen.getByText('GS 信号 × 机构活跃度 × L2 主力净流入（明盘口径）')).toBeTruthy()
     expect(screen.getAllByTitle('刷新').length).toBe(1)

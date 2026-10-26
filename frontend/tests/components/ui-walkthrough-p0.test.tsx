@@ -40,11 +40,11 @@ describe('免责条不再遮挡内容(P0-1, 2026-10-24 改文档流页脚)', () 
     expect(document.documentElement.classList.contains('has-disclaimer')).toBe(false)
   })
 
-  it('样式上不再是 fixed 覆盖层(源码级守卫, 防止改回压住最后一行)', () => {
-    const src = readFileSync(resolve(__dirname, '../../src/components/Disclaimer.tsx'), 'utf-8')
-    const rootClass = src.match(/className="([^"]*\bborder-t\b[^"]*)"/)
-    expect(rootClass).toBeTruthy()
-    expect(rootClass![1]).not.toMatch(/\bfixed\b|\bsticky\b/)
+  it('提示作为状态行内联信息，不作为固定覆盖层', () => {
+    render(<Disclaimer />)
+    const notice = screen.getByRole('note', { name: '数据使用提示' })
+    expect(notice.className).not.toMatch(/fixed|sticky/)
+    expect(notice.classList.contains('ml-auto')).toBe(true)
   })
 
   it('点关闭后不显示且不留标记', () => {
@@ -69,9 +69,13 @@ describe('CSS 变量确实定义了补偿高度(P0-1)', () => {
     expect(css).toMatch(/max-width:\s*767px/)
   })
 
-  it('App 外壳用 var(--disclaimer-h) 补偿底部', () => {
+  it('提示与数据源共用工作区状态行，窄屏自然换行', () => {
     const app = readFileSync(resolve(__dirname, '../../src/App.tsx'), 'utf-8')
-    expect(app).toContain('--disclaimer-h')
+    const main = app.slice(app.indexOf('<main id="workspace-content"'), app.indexOf('</main>'))
+    const status = main.slice(main.indexOf('data-workspace-status'), main.indexOf('</WorkspaceTabShell>'))
+    expect(status).toContain('<SourceHeartbeat />')
+    expect(status).toContain('<Disclaimer />')
+    expect(status).toContain('md:grid-cols-[auto_minmax(0,1fr)]')
   })
 })
 

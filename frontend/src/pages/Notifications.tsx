@@ -81,7 +81,7 @@ const LEVEL_META = {
 const PUSH_META: Record<string, { labelKey: string; className: string }> = {
   sent: { labelKey: 'notifications.push.sent', className: 'text-emerald-700 dark:text-emerald-700 bg-emerald-500/10' },
   failed: { labelKey: 'notifications.push.failed', className: 'text-rose-600 dark:text-rose-600 bg-rose-500/10' },
-  skipped: { labelKey: 'notifications.push.skipped', className: 'text-muted-foreground bg-accent/60' },
+  skipped: { labelKey: 'notifications.push.skipped', className: 'text-muted-foreground bg-s2' },
   pending: { labelKey: 'notifications.push.pending', className: 'text-amber-700 dark:text-amber-500 bg-amber-500/10' },
 }
 
@@ -132,13 +132,13 @@ function normalizeInternalLink(link: string): string {
 
 function MarkdownBlock({ content }: { content: string }) {
   return (
-    <div className="overflow-x-auto rounded-md border border-border/40 bg-background/40 p-4 text-[13px] leading-6 text-foreground">
+    <div className="overflow-x-auto rounded-md border border-border bg-background p-4 text-[14px] leading-6 text-foreground">
       <SafeMarkdown
         components={{
           table: ({ children }) => <table className="my-3 min-w-full border-collapse text-[12px]">{children}</table>,
-          th: ({ children }) => <th className="border border-border/50 bg-accent/50 px-3 py-2 text-left font-medium">{children}</th>,
-          td: ({ children }) => <td className="border border-border/50 px-3 py-2 align-top">{children}</td>,
-          code: ({ children }) => <code className="rounded bg-accent/70 px-1 py-0.5 text-[12px]">{children}</code>,
+          th: ({ children }) => <th className="border border-border bg-s2 px-3 py-2 text-left font-medium">{children}</th>,
+          td: ({ children }) => <td className="border border-border px-3 py-2 align-top">{children}</td>,
+          code: ({ children }) => <code className="rounded bg-s2 px-1 py-0.5 text-[12px]">{children}</code>,
           ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
           ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
           p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
@@ -377,8 +377,8 @@ export default function NotificationsPage() {
 
       <ErrorBanner errors={error ? [{ source: t('nav.notifications'), message: error, retry: () => void load() }] : []} onDismiss={() => setError('')} />
 
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
-        <div className="flex shrink-0 items-center gap-1 rounded-md bg-background/45 p-1">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-2">
+        <div className="flex shrink-0 items-center gap-1 rounded-md bg-background p-1">
           {([
             ['all', t('notifications.all'), items.length],
             ['unread', t('notifications.unread'), unread],
@@ -389,14 +389,14 @@ export default function NotificationsPage() {
               type="button"
               title={label}
               onClick={() => setFilter(key)}
-              className={`inline-flex h-9 min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[11px] font-medium transition-colors ${
+              className={`inline-flex h-9 min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[12px] font-medium transition-colors ${
                 filter === key
                   ? 'bg-primary text-primary-foreground shadow-sm'
-                  : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+                  : 'text-muted-foreground hover:bg-s2 hover:text-foreground'
               }`}
             >
               <span>{label}</span>
-              <span className={`min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[10px] leading-3 ${filter === key ? 'bg-white/18 text-white' : 'bg-accent text-foreground'}`}>
+              <span className={`min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[12px] leading-3 ${filter === key ? 'bg-white/18 text-white' : 'bg-accent text-foreground'}`}>
                 {value}
               </span>
             </button>
@@ -409,7 +409,7 @@ export default function NotificationsPage() {
           <button
             type="button"
             onClick={() => setCategory('')}
-            className={`h-9 min-h-[44px] whitespace-nowrap rounded-md px-2.5 text-[11px] transition-colors ${!category ? 'bg-primary/12 font-medium text-primary' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+            className={`h-9 min-h-[44px] whitespace-nowrap rounded-md px-2.5 text-[12px] transition-colors ${!category ? 'bg-primary/12 font-medium text-primary' : 'text-muted-foreground hover:bg-s2 hover:text-foreground'}`}
           >
             {t('common.all')}
           </button>
@@ -418,7 +418,7 @@ export default function NotificationsPage() {
               key={value}
               type="button"
               onClick={() => setCategory(value)}
-              className={`h-7 whitespace-nowrap rounded-md px-2.5 text-[11px] transition-colors ${category === value ? 'bg-primary/12 font-medium text-primary' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+              className={`h-7 whitespace-nowrap rounded-md px-2.5 text-[12px] transition-colors ${category === value ? 'bg-primary/12 font-medium text-primary' : 'text-muted-foreground hover:bg-s2 hover:text-foreground'}`}
             >
               {CATEGORY_KEYS[value] ? t(CATEGORY_KEYS[value]) : value}
             </button>
@@ -427,13 +427,13 @@ export default function NotificationsPage() {
 
         <span className="hidden h-5 w-px bg-border/60 sm:block" />
 
-        <label className="relative flex h-8 shrink-0 items-center rounded-md border border-border/50 bg-background/45 pl-7 text-muted-foreground transition-colors focus-within:border-primary/40 focus-within:text-primary">
+        <label className="relative flex h-8 shrink-0 items-center rounded-md border border-border bg-background pl-7 text-muted-foreground transition-colors focus-within:border-primary/40 focus-within:text-primary">
           <Send className="pointer-events-none absolute left-2.5 h-3 w-3" />
           <select
             aria-label="按推送渠道筛选"
             value={channelFilter}
             onChange={event => setChannelFilter(event.target.value)}
-            className="h-full max-w-[150px] cursor-pointer bg-transparent pl-0 pr-2 text-[11px] text-foreground outline-none"
+            className="h-full max-w-[150px] cursor-pointer bg-transparent pl-0 pr-2 text-[12px] text-foreground outline-none"
           >
             <option value="">全部渠道</option>
             {channelOptions.map(option => (
@@ -446,10 +446,10 @@ export default function NotificationsPage() {
       </div>
 
       <div className="grid min-h-[560px] lg:grid-cols-[minmax(320px,0.82fr)_minmax(0,1.45fr)]">
-        <section className="border-b border-border/50 lg:border-b-0 lg:border-r">
-          <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
+        <section className="border-b border-border lg:border-b-0 lg:border-r">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <span className="text-[12px] font-medium text-foreground">通知列表</span>
-            <span className="text-[11px] text-muted-foreground">{displayList.length} 条</span>
+            <span className="text-[12px] text-muted-foreground">{displayList.length} 条</span>
           </div>
           <div className="max-h-[420px] overflow-y-auto lg:max-h-[620px]">
             {loading && items.length === 0 ? (
@@ -478,7 +478,7 @@ export default function NotificationsPage() {
                   className={`group relative flex w-full gap-3 border-b border-l-[3px] px-4 py-3.5 min-h-[44px] text-left transition-[border-color,background-color,box-shadow] last:border-b-0 ${
                     isSelected
                       ? 'border-b-primary/20 border-l-primary bg-primary/12 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.18)]'
-                      : 'border-b-border/30 border-l-transparent hover:border-l-primary/35 hover:bg-accent/35'
+                      : 'border-b-border/30 border-l-transparent hover:border-l-primary/35 hover:bg-s2'
                   }`}
                 >
                   <span className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-shadow ${meta.className} ${isSelected ? 'ring-2 ring-primary/30 ring-offset-2 ring-offset-card' : ''}`}>
@@ -487,21 +487,21 @@ export default function NotificationsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
                       {!item.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />}
-                      <span title={item.title || '未命名通知'} className={`truncate text-[13px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
+                      <span title={item.title || '未命名通知'} className={`truncate text-[14px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
                       {(item as { dupCount?: number }).dupCount && (item as { dupCount?: number }).dupCount! > 1 ? (
                         <span
-                          className="shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-600"
+                          className="shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[12px] font-medium text-rose-600"
                           title="24h 内同文案失败通知已折叠, 此为最新一条"
                         >
                           ×{(item as { dupCount?: number }).dupCount}
                         </span>
                       ) : null}
                       {isSelected && (
-                        <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">正在查看</span>
+                        <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[12px] font-medium text-primary-foreground">正在查看</span>
                       )}
                     </span>
-                    <span title={item.body || '无正文'} className="mt-1 block line-clamp-1 text-[11px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
-                    <span className="mt-1.5 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
+                    <span title={item.body || '无正文'} className="mt-1 block line-clamp-1 text-[12px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
+                    <span className="mt-1.5 flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
                       <span className="shrink-0">{formatDateTime(item.created_at)}</span>
                       {item.push_status && <span title={channelSummary(item, t)} className={`min-w-0 truncate ${item.push_status === 'failed' ? 'text-rose-600 dark:text-rose-600' : item.push_status === 'sent' ? 'text-emerald-700 dark:text-emerald-700' : ''}`}>{channelSummary(item, t)}</span>}
                     </span>
@@ -520,7 +520,7 @@ export default function NotificationsPage() {
             filtered.length > 0 ? (
               /* Phase 4 走查修: 有列表无选中 ≠ 无数据, 右栏给选择提示而非第二个"暂无通知" */
               <div className="flex min-h-[280px] flex-col items-center justify-center px-6 text-center">
-                <div className="text-[13px] text-muted-foreground">从左侧选择一条通知查看详情</div>
+                <div className="text-[14px] text-muted-foreground">从左侧选择一条通知查看详情</div>
               </div>
             ) : (
               /* 空列表时右栏留白(左栏 EmptyState 已传达空态, 不重复第二个) */
@@ -528,7 +528,7 @@ export default function NotificationsPage() {
             )
           ) : (
             <div className="p-5 md:p-6">
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/40 pb-5">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
                 <div className="flex min-w-0 gap-3">
                   <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${selectedLevel.className}`}>
                     <SelectedLevelIcon className="h-5 w-5" />
@@ -536,10 +536,10 @@ export default function NotificationsPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-[16px] font-semibold text-foreground">{selected.title || '未命名通知'}</h2>
-                      <span className="rounded-full bg-accent/60 px-2 py-0.5 text-[10px] text-muted-foreground">{CATEGORY_KEYS[selected.category] ? t(CATEGORY_KEYS[selected.category]) : selected.category || t('notifications.categories.system')}</span>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] ${selected.read ? 'bg-accent/60 text-muted-foreground' : 'bg-rose-500/10 text-rose-600 dark:text-rose-600'}`}>{selected.read ? '已读' : '未读'}</span>
+                      <span className="rounded-full bg-s2 px-2 py-0.5 text-[12px] text-muted-foreground">{CATEGORY_KEYS[selected.category] ? t(CATEGORY_KEYS[selected.category]) : selected.category || t('notifications.categories.system')}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[12px] ${selected.read ? 'bg-s2 text-muted-foreground' : 'bg-rose-500/10 text-rose-600 dark:text-rose-600'}`}>{selected.read ? '已读' : '未读'}</span>
                     </div>
-                    <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(selected.created_at)}</div>
+                    <div className="mt-1 text-[12px] text-muted-foreground">{formatDateTime(selected.created_at)}</div>
                   </div>
                 </div>
                 {linkedPage && (
@@ -550,20 +550,20 @@ export default function NotificationsPage() {
                 )}
               </div>
 
-              <div className="grid gap-3 border-b border-border/40 py-5 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-md bg-accent/30 p-3">
-                  <div className="text-[10px] text-muted-foreground">站内状态</div>
+              <div className="grid gap-3 border-b border-border py-5 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-md bg-s2 p-3">
+                  <div className="text-[12px] text-muted-foreground">站内状态</div>
                   <div className="mt-1 flex items-center gap-1.5 text-[12px] font-medium text-foreground"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-700" />已送达消息中心</div>
                 </div>
-                <div className="rounded-md bg-accent/30 p-3">
-                  <div className="text-[10px] text-muted-foreground">推送渠道</div>
+                <div className="rounded-md bg-s2 p-3">
+                  <div className="text-[12px] text-muted-foreground">推送渠道</div>
                   {(selected.push_channels || []).length > 0 ? (
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
                       {selected.push_channels.map((channel, index) => (
                         <span
                           key={`${channel.id || channel.type}-${index}`}
                           title={channel.error || ''}
-                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium ${
                             channel.status === 'sent'
                               ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-700'
                               : channel.status === 'failed'
@@ -579,24 +579,24 @@ export default function NotificationsPage() {
                     </div>
                   ) : (
                     <div className="mt-1.5 space-y-1.5">
-                      <div className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium ${selectedPush?.className || 'bg-accent text-muted-foreground'}`}>
+                      <div className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[12px] font-medium ${selectedPush?.className || 'bg-accent text-muted-foreground'}`}>
                         <Send className="h-3 w-3" />
                         {selected.push_status === 'sent' || selected.push_status === 'failed' ? t('notifications.push.noChannelRecord') : (selectedPush?.labelKey ? t(selectedPush.labelKey) : t('common.notSet'))}
                       </div>
                       {(selected.push_status === 'sent' || selected.push_status === 'failed') && configuredChannels.length > 0 && (
-                        <div className="text-[10px] leading-4 text-muted-foreground" title="当前配置不代表该条历史通知当时实际使用的渠道">
+                        <div className="text-[12px] leading-4 text-muted-foreground" title="当前配置不代表该条历史通知当时实际使用的渠道">
                           {configuredChannels.map(channel => channel.name || (CHANNEL_TYPE_KEYS[channel.type]?.startsWith('notifications.') ? t(CHANNEL_TYPE_KEYS[channel.type]) : CHANNEL_TYPE_KEYS[channel.type]) || channel.type).join('、')}
                         </div>
                       )}
                     </div>
                   )}
                 </div>
-                <div className="rounded-md bg-accent/30 p-3">
-                  <div className="text-[10px] text-muted-foreground">来源</div>
+                <div className="rounded-md bg-s2 p-3">
+                  <div className="text-[12px] text-muted-foreground">来源</div>
                   <div className="mt-1 truncate text-[12px] font-medium text-foreground" title={selected.source}>{selected.source || '系统'}</div>
                 </div>
-                <div className="rounded-md bg-accent/30 p-3">
-                  <div className="text-[10px] text-muted-foreground">级别</div>
+                <div className="rounded-md bg-s2 p-3">
+                  <div className="text-[12px] text-muted-foreground">级别</div>
                   <div className="mt-1 text-[12px] font-medium text-foreground">{t(selectedLevel.labelKey)}</div>
                 </div>
               </div>
@@ -604,15 +604,15 @@ export default function NotificationsPage() {
               {selected.push_error && (
                 <div className="mt-5 rounded-md border border-rose-500/25 bg-rose-500/8 p-4">
                   <div className="flex items-center gap-2 text-[12px] font-medium text-rose-600 dark:text-rose-600"><AlertCircle className="h-4 w-4" />推送失败详情</div>
-                  <div className="mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-rose-700 dark:text-rose-400">{selected.push_error}</div>
+                  <div className="mt-2 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-rose-700 dark:text-rose-400">{selected.push_error}</div>
                 </div>
               )}
 
               <div className="mt-5">
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-[11px] font-medium text-muted-foreground">任务执行详情</span>
+                  <span className="text-[12px] font-medium text-muted-foreground">任务执行详情</span>
                   {task && (
-                    <div className="flex flex-wrap items-center justify-end gap-1.5 text-[10px]">
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 text-[12px]">
                       <span className={`rounded-full px-2 py-0.5 font-medium ${
                         task.status === 'success'
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-700'
@@ -622,13 +622,13 @@ export default function NotificationsPage() {
                       }`}>
                         {task.status === 'success' ? '执行成功' : task.status === 'skipped' ? '已跳过' : '执行失败'}
                       </span>
-                      {task.duration_ms > 0 && <span className="rounded-full bg-accent/60 px-2 py-0.5 text-muted-foreground">耗时 {(task.duration_ms / 1000).toFixed(1)}s</span>}
-                      {task.model_label && <span className="max-w-[220px] truncate rounded-full bg-accent/60 px-2 py-0.5 text-muted-foreground" title={task.model_label}>{task.model_label}</span>}
+                      {task.duration_ms > 0 && <span className="rounded-full bg-s2 px-2 py-0.5 text-muted-foreground">耗时 {(task.duration_ms / 1000).toFixed(1)}s</span>}
+                      {task.model_label && <span className="max-w-[220px] truncate rounded-full bg-s2 px-2 py-0.5 text-muted-foreground" title={task.model_label}>{task.model_label}</span>}
                     </div>
                   )}
                 </div>
                 {detailLoading ? (
-                  <div className="flex min-h-28 items-center justify-center rounded-md border border-border/40 bg-background/30 text-[12px] text-muted-foreground">
+                  <div className="flex min-h-28 items-center justify-center rounded-md border border-border bg-background text-[12px] text-muted-foreground">
                     <RefreshCw className="mr-2 h-4 w-4 animate-spin" />正在读取本次任务结果…
                   </div>
                 ) : detailError ? (
@@ -638,25 +638,25 @@ export default function NotificationsPage() {
                 ) : task?.result ? (
                   <MarkdownBlock content={task.result} />
                 ) : selected.trace_id ? (
-                  <div className="rounded-md border border-dashed border-border/60 px-4 py-6 text-center text-[12px] text-muted-foreground">已有任务追踪编号，但未找到对应的执行结果。</div>
+                  <div className="rounded-md border border-dashed border-border px-4 py-6 text-center text-[12px] text-muted-foreground">已有任务追踪编号，但未找到对应的执行结果。</div>
                 ) : (
-                  <div className="rounded-md border border-dashed border-border/60 px-4 py-6 text-center text-[12px] text-muted-foreground">该类通知没有关联 Agent 执行记录。</div>
+                  <div className="rounded-md border border-dashed border-border px-4 py-6 text-center text-[12px] text-muted-foreground">该类通知没有关联 Agent 执行记录。</div>
                 )}
               </div>
 
               <div className="mt-5">
-                <div className="mb-2 text-[11px] font-medium text-muted-foreground">通知正文</div>
+                <div className="mb-2 text-[12px] font-medium text-muted-foreground">通知正文</div>
                 {selected.body ? (
                   <MarkdownBlock content={selected.body} />
                 ) : (
-                  <div className="rounded-md border border-dashed border-border/60 px-4 py-8 text-center text-[12px] text-muted-foreground">该通知没有正文。</div>
+                  <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-[12px] text-muted-foreground">该通知没有正文。</div>
                 )}
               </div>
 
               {(selected.trace_id || linkedPage) && (
-                <details className="mt-5 rounded-md border border-border/40 bg-accent/20 px-4 py-3">
-                  <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">技术详情</summary>
-                  <dl className="mt-3 grid gap-2 text-[11px] sm:grid-cols-[88px_1fr]">
+                <details className="mt-5 rounded-md border border-border bg-s2 px-4 py-3">
+                  <summary className="cursor-pointer text-[12px] font-medium text-muted-foreground">技术详情</summary>
+                  <dl className="mt-3 grid gap-2 text-[12px] sm:grid-cols-[88px_1fr]">
                     {selected.trace_id && <><dt className="text-muted-foreground">Trace ID</dt><dd className="break-all font-mono text-foreground">{selected.trace_id}</dd></>}
                     {linkedPage && <><dt className="text-muted-foreground">关联地址</dt><dd className="break-all font-mono text-foreground">{linkedPage}</dd></>}
                   </dl>

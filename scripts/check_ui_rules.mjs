@@ -35,10 +35,12 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import { fileURLToPath } from 'url'
+import { auditPresentation, auditThemeAliases } from './lib/ui-design-rules.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SRC = join(ROOT, 'frontend', 'src')
 const PKG_BIZ = join(ROOT, 'frontend', 'packages', 'biz-ui', 'src')
+const PKG_BASE = join(ROOT, 'frontend', 'packages', 'base-ui', 'src')
 
 let fails = 0
 const bad = (rule, file, line, hit) => {
@@ -49,8 +51,8 @@ const bad = (rule, file, line, hit) => {
 function walk(dir, out = []) {
   for (const e of readdirSync(dir)) {
     const p = join(dir, e)
-    if (statSync(p).isDirectory()) out.push(...walk(p, []))
-    else if (['.ts', '.tsx'].includes(extname(p))) out.push(p)
+    if (statSync(p).isDirectory() && e !== '__tests__') out.push(...walk(p, []))
+    else if (['.ts', '.tsx'].includes(extname(p)) && !/\.(test|spec)\./.test(e)) out.push(p)
   }
   return out
 }
@@ -58,11 +60,11 @@ function walk(dir, out = []) {
 const rel = (p) => p.replace(ROOT, '')
 
 // R3 先行: 读文件即检 CRLF
-for (const f of [...walk(SRC), ...walk(PKG_BIZ)]) {
+for (const f of [...walk(SRC), ...walk(PKG_BIZ), ...walk(PKG_BASE)]) {
   const buf = readFileSync(f)
   if (buf.includes('\r')) bad('R3-CRLF', rel(f), 1, 'file contains CR')
 }
-const files = [...walk(SRC), ...walk(PKG_BIZ)].filter((f) => !readFileSync(f).includes('\r'))
+const files = [...walk(SRC), ...walk(PKG_BIZ), ...walk(PKG_BASE)].filter((f) => !readFileSync(f).includes('\r'))
 
 // R7 豁免清单(带理由, 见循环内注释)
 const R7_SKIP_LINE = [/macdVals\s*=\s*macd\.map/, /difVals\s*=\s*dif\.map/]
@@ -149,10 +151,10 @@ try {
 } catch { /* index.html 不存在则跳过 */ }
 
 // R10: 字阶棘轮(见文件头说明)
-const FONT_ALLOWED = new Set([10, 11, 12, 13, 16, 20])
+const FONT_ALLOWED = new Set([12, 14, 16, 20])
 // 公开面(官网/开发者文档)是营销与文档场景, 允许比终端宽的字阶 —— 上限 7 档
 // (设计稿 v3.0 §三 3.2)。判定按**文件**分流, 不是放宽终端口径。
-const FONT_ALLOWED_PUBLIC = new Set([12, 13, 16, 20, 28, 36, 48])
+const FONT_ALLOWED_PUBLIC = new Set([12, 14, 16, 20, 28, 36, 48])
 const PUBLIC_SURFACE = [
   'frontend/src/pages/Landing.tsx',
   'frontend/src/pages/Developers.tsx',
@@ -347,5 +349,14 @@ for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R
   }
 }
 
+// 2026-10-26 系统准则：与存量棘轮并行，基础组件同样受检。
+for (const file of files) {
+  for (const issue of auditPresentation(readFileSync(file, 'utf8'))) {
+    bad(issue.rule, rel(file), issue.line, `${issue.hit} — ${issue.message}`)
+  }
+}
+for (const issue of auditThemeAliases(readFileSync(join(SRC, 'index.css'), 'utf8'))) {
+  bad('R20-THEME-ALIASES', 'frontend/src/index.css', 1, issue)
+}
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)

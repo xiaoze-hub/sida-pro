@@ -58,11 +58,11 @@ function AnchoredText({
             data-kind={a.kind}
             title={`${label === '--' ? '价位' : label} ${a.value} · 点到 K 线`}
             onClick={() => onAnchor({ value: a.value, kind: a.kind, context: a.context })}
-            className="mx-[1px] inline-flex items-baseline gap-0.5 rounded border border-border/60 px-1 align-baseline font-mono text-[10px] tabular-nums text-foreground hover:border-role-watch/60 hover:text-role-watch"
+            className="mx-[1px] inline-flex items-baseline gap-0.5 rounded border border-border px-1 align-baseline font-mono text-[12px] tabular-nums text-foreground hover:border-role-watch/60 hover:text-role-watch"
           >
             <span>{seg.text}</span>
             {label !== '--' ? (
-              <span className="text-[10px] text-muted-foreground">{label}</span>
+              <span className="text-[12px] text-muted-foreground">{label}</span>
             ) : null}
           </button>
         )
@@ -122,17 +122,17 @@ export function AnswerCard({
         <div className="rounded-lg border border-role-watch/40 bg-role-watch/8 px-2.5 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <Sparkles className="h-3 w-3 shrink-0 text-role-watch" />
-            <span className="text-[10px] font-medium text-role-watch">{ANSWER_VERDICT_LABEL}</span>
+            <span className="text-[12px] font-medium text-role-watch">{ANSWER_VERDICT_LABEL}</span>
             {parsed.confidence != null ? (
               <span
                 data-testid="copilot-answer-confidence"
-                className="rounded border border-role-watch/40 px-1 text-[10px] text-role-watch"
+                className="rounded border border-role-watch/40 px-1 text-[12px] text-role-watch"
               >
                 {ANSWER_CONFIDENCE_LABEL} {parsed.confidence}/10
               </span>
             ) : null}
           </div>
-          <div className="mt-1 text-[13px] leading-relaxed text-foreground">
+          <div className="mt-1 text-[14px] leading-relaxed text-foreground">
             <AnchoredText text={parsed.verdict} onAnchor={onAnchoredPrice} />
           </div>
         </div>
@@ -140,10 +140,10 @@ export function AnswerCard({
 
       {/* 2. 依据 */}
       {parsed.evidence.length ? (
-        <div className="rounded-lg border border-border/50 bg-s1 px-2.5 py-2">
+        <div className="rounded-lg border border-border bg-s1 px-2.5 py-2">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-medium text-muted-foreground">{ANSWER_EVIDENCE_LABEL}</span>
-            <span className="text-[10px] text-muted-foreground">{parsed.evidence.length} 条</span>
+            <span className="text-[12px] font-medium text-muted-foreground">{ANSWER_EVIDENCE_LABEL}</span>
+            <span className="text-[12px] text-muted-foreground">{parsed.evidence.length} 条</span>
           </div>
           <ul className="mt-1 space-y-1">
             {shownEvidence.map((e, i) => (
@@ -160,7 +160,7 @@ export function AnswerCard({
               type="button"
               onClick={() => setExpanded((v) => !v)}
               data-testid="copilot-answer-expand"
-              className="mt-1.5 flex items-center gap-1 text-[11px] text-role-watch hover:underline"
+              className="mt-1.5 flex items-center gap-1 text-[12px] text-role-watch hover:underline"
             >
               <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
               {expanded
@@ -173,8 +173,8 @@ export function AnswerCard({
 
       {/* 3. 预案 */}
       {parsed.plan ? (
-        <div className="rounded-lg border border-border/50 bg-s1 px-2.5 py-2">
-          <div className="text-[10px] font-medium text-muted-foreground">{ANSWER_PLAN_LABEL}</div>
+        <div className="rounded-lg border border-border bg-s1 px-2.5 py-2">
+          <div className="text-[12px] font-medium text-muted-foreground">{ANSWER_PLAN_LABEL}</div>
           <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-foreground">
             {parsed.plan}
           </div>
@@ -184,14 +184,14 @@ export function AnswerCard({
       {/* 4. 口径 + 动作 */}
       <div className="flex flex-wrap items-center gap-1.5">
         {parsed.caliber ? (
-          <span className="rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          <span className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground">
             {ANSWER_CALIBER_LABEL}: {parsed.caliber}
           </span>
         ) : null}
         {symbol ? (
           <a
             href={`/stocks/${symbol}`}
-            className="rounded border border-role-watch/40 px-1.5 py-0.5 text-[10px] text-role-watch hover:bg-role-watch/10"
+            className="rounded border border-role-watch/40 px-1.5 py-0.5 text-[12px] text-role-watch hover:bg-role-watch/10"
           >
             {symbol} {ANSWER_ACTION_WORKBENCH} ↗
           </a>
@@ -199,7 +199,7 @@ export function AnswerCard({
         <button
           type="button"
           onClick={() => void copy()}
-          className="flex items-center gap-1 rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
         >
           {copied ? <Check className="h-2.5 w-2.5" /> : <Copy className="h-2.5 w-2.5" />}
           {copied ? ANSWER_ACTION_COPIED : ANSWER_ACTION_COPY}
@@ -209,13 +209,13 @@ export function AnswerCard({
       {/* 5. 追问：答完不知道问什么是最常见的断点 */}
       {onFollowUp ? (
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-          <span className="text-[10px] text-muted-foreground">{ANSWER_FOLLOWUP_LABEL}</span>
+          <span className="text-[12px] text-muted-foreground">{ANSWER_FOLLOWUP_LABEL}</span>
           {FOLLOW_UP_QUESTIONS.map((q) => (
             <button
               key={q}
               type="button"
               onClick={() => onFollowUp(q)}
-              className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:border-role-watch/50 hover:text-foreground"
+              className="rounded-full border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:border-role-watch/50 hover:text-foreground"
             >
               {q}
             </button>
@@ -223,7 +223,7 @@ export function AnswerCard({
         </div>
       ) : null}
 
-      <div className="text-[10px] leading-relaxed text-muted-foreground">{parsed.disclaimer}</div>
+      <div className="text-[12px] leading-relaxed text-muted-foreground">{parsed.disclaimer}</div>
     </div>
   )
 }

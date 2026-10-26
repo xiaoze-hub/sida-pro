@@ -95,7 +95,7 @@ jobs:
           pnpm typecheck
           pnpm lint
           pnpm test
-          node ../scripts/check_ui_rules.mjs
+          pnpm ui:check
 
   # 2026-09-29: 原全量 pytest(~20min, 单 runner 串行)拆成 4 片矩阵并行。
   # 覆盖测试一份不少: 分片集合 = 原门禁测试集合(tests/test_*.py 去掉两个 CI --ignore 文件),

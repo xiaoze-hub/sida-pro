@@ -114,11 +114,11 @@ export default function FlowHistoryChart() {
   }, [rows, chartRef])
 
   if (rows === null) {
-    return <div className="h-[150px] animate-pulse rounded-lg bg-accent/10" />
+    return <div className="h-[150px] animate-pulse rounded-lg bg-s2" />
   }
   if (rows.length === 0) {
     return (
-      <div className="flex h-[150px] items-center justify-center px-4 text-center text-[11px] text-muted-foreground">
+      <div className="flex h-[150px] items-center justify-center px-4 text-center text-[12px] text-muted-foreground">
         {note || '盘中每30秒积累一条 · 暂无历史快照'}
       </div>
     )
@@ -127,7 +127,7 @@ export default function FlowHistoryChart() {
     <div>
       <div ref={ref} className="h-[150px] w-full" />
       {note ? (
-        <div className="mt-1 text-[10px] text-muted-foreground">{note}</div>
+        <div className="mt-1 text-[12px] text-muted-foreground">{note}</div>
       ) : null}
     </div>
   )

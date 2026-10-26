@@ -21,9 +21,9 @@ export function fmtScore(v: number | null | undefined): string {
  * 语义沿用 A 股口径：红=走强、绿=走弱，不引入第四种色相。
  */
 export function cellColorClass(score: number | null | undefined): string {
-  if (score == null || !Number.isFinite(score)) return 'bg-muted/30'
+  if (score == null || !Number.isFinite(score)) return 'bg-s2'
   if (score < 50) return 'bg-stock-down/20'
-  if (score < 70) return 'bg-muted/60'
+  if (score < 70) return 'bg-s2'
   return 'bg-stock-up/30'
 }
 

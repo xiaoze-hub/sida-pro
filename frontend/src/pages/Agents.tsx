@@ -510,13 +510,13 @@ export default function AgentsPage() {
       />
       <div className="mb-4 md:mb-8">
         <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">Agent</h1>
-        <p className="text-[12px] md:text-[13px] text-muted-foreground mt-0.5 md:mt-1">自动化任务管理与调度</p>
+        <p className="text-[12px] md:text-[14px] text-muted-foreground mt-0.5 md:mt-1">自动化任务管理与调度</p>
       </div>
 
       {/* Scheduler Health */}
-      <div className="border-b border-border/40 pb-4 mb-4">
+      <div className="border-b border-border pb-4 mb-4">
         <div className="flex items-center justify-between">
-          <div className="text-[13px] font-semibold text-foreground">调度健康</div>
+          <div className="text-[14px] font-semibold text-foreground">调度健康</div>
           <Button variant="secondary" size="sm" className="h-8" onClick={loadHealth} disabled={healthLoading}>
             {healthLoading ? (
               <span className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin" />
@@ -540,11 +540,11 @@ export default function AgentsPage() {
 
       {loadError ? (
         <div className="flex flex-col items-center justify-center py-20">
-          <p className="text-[13px] text-muted-foreground">加载失败{loadError ? `: ${loadError}` : ''}</p>
+          <p className="text-[14px] text-muted-foreground">加载失败{loadError ? `: ${loadError}` : ''}</p>
           <button
             type="button"
             onClick={() => void load()}
-            className="mt-3 rounded-md px-2 py-1 text-[11px] text-primary transition-colors hover:bg-accent"
+            className="mt-3 rounded-md px-2 py-1 text-[12px] text-primary transition-colors hover:bg-accent"
           >
             重试
           </button>
@@ -555,7 +555,7 @@ export default function AgentsPage() {
             <Bot className="w-6 h-6 text-primary" />
           </div>
           <p className="text-[16px] font-semibold text-foreground">暂无 Agent</p>
-          <p className="text-[13px] text-muted-foreground mt-1.5">启动后台服务后 Agent 会自动注册</p>
+          <p className="text-[14px] text-muted-foreground mt-1.5">启动后台服务后 Agent 会自动注册</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -567,33 +567,33 @@ export default function AgentsPage() {
               ? `${boundStocks.slice(0, 3).map(s => s.name || s.symbol).join('、')}${boundStocks.length > 3 ? '、...更多' : ''}`
               : '未绑定股票'
             return (
-              <div key={agent.name} className="border-b border-border/40 pb-4 md:pb-5">
+              <div key={agent.name} className="border-b border-border pb-4 md:pb-5">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 sm:gap-6">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">
                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${agent.enabled ? 'bg-emerald-500' : 'bg-border'}`} />
                       <h3 className="text-[16px] font-semibold text-foreground">{agent.display_name}</h3>
-                      <Badge variant="secondary" className="text-[10px]">{modeLabel}</Badge>
+                      <Badge variant="secondary" className="text-[12px]">{modeLabel}</Badge>
                       <button
                         type="button"
                         onClick={() => openBindDialog(agent)}
-                        className={`max-w-[320px] truncate px-2 py-0.5 rounded-md border text-[11px] transition-colors ${
+                        className={`max-w-[320px] truncate px-2 py-0.5 rounded-md border text-[12px] transition-colors ${
                           boundStocks.length > 0
                             ? 'bg-primary/12 border-primary/35 text-primary hover:bg-primary/18'
-                            : 'bg-accent/30 border-border/60 text-muted-foreground hover:border-primary/30'
+                            : 'bg-s2 border-border text-muted-foreground hover:border-primary/30'
                         }`}
                         title={`${boundSummary}（已绑定 ${getAgentBoundCount(agent.name)} / ${stocks.length}）`}
                       >
                         {boundSummary}
                       </button>
                     </div>
-                    <p className="text-[13px] text-muted-foreground mt-2.5 ml-[22px] leading-relaxed">{agent.description}</p>
+                    <p className="text-[14px] text-muted-foreground mt-2.5 ml-[22px] leading-relaxed">{agent.description}</p>
 
                     {/* 执行周期 - 可点击编辑 */}
                     <div className="flex items-center gap-2.5 mt-3.5 ml-[22px] flex-wrap">
                       <button
                         onClick={() => openScheduleDialog(agent)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-accent/50 hover:bg-accent transition-colors"
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-s2 hover:bg-accent transition-colors"
                       >
                         <Clock className="w-3.5 h-3.5 text-muted-foreground" />
                         <span className="text-[12px] text-foreground">{formatSchedule(agent.schedule)}</span>
@@ -613,16 +613,16 @@ export default function AgentsPage() {
 
                     {/* 未来触发时间（按调度时区） */}
                     {'error' in (preview || {}) ? (
-                      <div className="mt-2 ml-[22px] text-[11px] text-muted-foreground">
+                      <div className="mt-2 ml-[22px] text-[12px] text-muted-foreground">
                         未来触发时间：{(preview as { error: string }).error}
                       </div>
                     ) : (preview as SchedulePreview | undefined)?.next_runs?.length ? (
-                      <div className="mt-2 ml-[22px] flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <div className="mt-2 ml-[22px] flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
                         <span className="opacity-80">未来 3 次：</span>
                         {(preview as SchedulePreview).next_runs.map((t, i) => (
                           <span
                             key={i}
-                            className="px-1.5 py-0.5 rounded border border-border/60 bg-accent/30 font-mono"
+                            className="px-1.5 py-0.5 rounded border border-border bg-s2 font-mono"
                             title={t}
                           >
                             {formatPreviewTime(t, (preview as SchedulePreview).timezone)}
@@ -637,7 +637,7 @@ export default function AgentsPage() {
                     {/* L3-F: 模型/推送渠道是次级配置, 默认折叠成「高级设置」——
                         原实现与「未来 3 次」同权铺在卡上, 读者分不清主次。 */}
                     <details className="mt-4 ml-[22px]">
-                      <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+                      <summary className="cursor-pointer select-none text-[12px] text-muted-foreground hover:text-foreground">
                         高级设置（模型 / 推送渠道）
                       </summary>
                       <div className="mt-2 space-y-3">
@@ -648,7 +648,7 @@ export default function AgentsPage() {
                           value={agent.ai_model_id?.toString() ?? '__default__'}
                           onValueChange={val => updateAgentModel(agent, val === '__default__' ? null : parseInt(val))}
                         >
-                          <SelectTrigger className="h-7 text-[12px] w-auto min-w-[140px] px-2.5 bg-accent/50 border-border/50">
+                          <SelectTrigger className="h-7 text-[12px] w-auto min-w-[140px] px-2.5 bg-s2 border-border">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -677,10 +677,10 @@ export default function AgentsPage() {
                               <button
                                 key={ch.id}
                                 onClick={() => toggleAgentChannel(agent, ch.id)}
-                                className={`text-[11px] px-2 py-0.5 rounded-md border transition-colors ${
+                                className={`text-[12px] px-2 py-0.5 rounded-md border transition-colors ${
                                   isSelected
                                     ? 'bg-primary/10 border-primary/30 text-primary font-medium'
-                                    : 'bg-accent/30 border-border/50 text-muted-foreground hover:border-primary/30'
+                                    : 'bg-s2 border-border text-muted-foreground hover:border-primary/30'
                                 }`}
                               >
                                 {ch.name}
@@ -688,7 +688,7 @@ export default function AgentsPage() {
                             )
                           })}
                           {(agent.notify_channel_ids || []).length === 0 && (
-                            <span className="text-[11px] text-muted-foreground">系统默认</span>
+                            <span className="text-[12px] text-muted-foreground">系统默认</span>
                           )}
                         </div>
                       )}
@@ -731,7 +731,7 @@ export default function AgentsPage() {
                 </div>
 
                 {runsOpen[agent.name] && (
-                  <div className="mt-4 ml-[22px] sm:ml-0 rounded-md border border-border/40 bg-accent/20 p-3">
+                  <div className="mt-4 ml-[22px] sm:ml-0 rounded-md border border-border bg-s2 p-3">
                     <div className="flex items-center justify-between">
                       <div className="text-[12px] font-medium text-foreground">最近 5 次运行</div>
                       {runsLoading[agent.name] && (
@@ -741,29 +741,29 @@ export default function AgentsPage() {
                     {(() => {
                       const data = runs[agent.name]
                       if (!data) {
-                        return <div className="mt-2 text-[11px] text-muted-foreground">加载中…</div>
+                        return <div className="mt-2 text-[12px] text-muted-foreground">加载中…</div>
                       }
                       if ('error' in data) {
-                        return <div className="mt-2 text-[11px] text-muted-foreground">{data.error}</div>
+                        return <div className="mt-2 text-[12px] text-muted-foreground">{data.error}</div>
                       }
                       if (data.length === 0) {
-                        return <div className="mt-2 text-[11px] text-muted-foreground">暂无记录</div>
+                        return <div className="mt-2 text-[12px] text-muted-foreground">暂无记录</div>
                       }
                       return (
                         <div className="mt-2 space-y-2">
                           {data.map(r => (
                             <div key={r.id} className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <div className="text-[11px] text-muted-foreground">
+                                <div className="text-[12px] text-muted-foreground">
                                   <span className={`inline-block w-1.5 h-1.5 rounded-full mr-2 ${r.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'}`} />
                                   <span className="font-mono">{r.created_at}</span>
                                   <span className="ml-2 font-mono opacity-70">{Math.round((r.duration_ms || 0) / 1000)}s</span>
                                 </div>
                                 {r.error ? (
-                                  <div className="mt-0.5 text-[11px] text-rose-600 break-words">{r.error}</div>
+                                  <div className="mt-0.5 text-[12px] text-rose-600 break-words">{r.error}</div>
                                 ) : null}
                               </div>
-                              <div className="text-[10px] text-muted-foreground font-mono">{r.status}</div>
+                              <div className="text-[12px] text-muted-foreground font-mono">{r.status}</div>
                             </div>
                           ))}
                         </div>
@@ -811,7 +811,7 @@ export default function AgentsPage() {
                   value={scheduleConfig.time || '15:30'}
                   onChange={e => setScheduleConfig({ ...scheduleConfig, time: e.target.value })}
                 />
-                <p className="text-[11px] text-muted-foreground mt-1">
+                <p className="text-[12px] text-muted-foreground mt-1">
                   {scheduleConfig.type === 'weekdays' ? '周一至周五' : '每天'}在此时间执行
                 </p>
               </div>
@@ -847,14 +847,14 @@ export default function AgentsPage() {
                   placeholder="0 15 * * 1-5"
                   className="font-mono"
                 />
-                <p className="text-[11px] text-muted-foreground mt-1">
+                <p className="text-[12px] text-muted-foreground mt-1">
                   格式：分 时 日 月 周（如 0 15 * * 1-5 表示工作日 15:00）
                 </p>
               </div>
             )}
 
             {/* Preview */}
-            <div className="rounded-md border border-border/50 bg-accent/20 p-3">
+            <div className="rounded-md border border-border bg-s2 p-3">
               <div className="flex items-center justify-between">
                 <div className="text-[12px] font-medium text-foreground">未来触发时间预览</div>
                 {schedulePreviewLoading && (
@@ -862,15 +862,15 @@ export default function AgentsPage() {
                 )}
               </div>
               {'error' in (schedulePreview || {}) ? (
-                <div className="mt-2 text-[11px] text-muted-foreground">
+                <div className="mt-2 text-[12px] text-muted-foreground">
                   {(schedulePreview as { error: string }).error}
                 </div>
               ) : (schedulePreview as SchedulePreview | null)?.next_runs?.length ? (
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
                   {(schedulePreview as SchedulePreview).next_runs.map((t, i) => (
                     <span
                       key={i}
-                      className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 font-mono"
+                      className="px-1.5 py-0.5 rounded border border-border bg-background font-mono"
                       title={t}
                     >
                       {formatPreviewTime(t, (schedulePreview as SchedulePreview).timezone)}
@@ -881,9 +881,9 @@ export default function AgentsPage() {
                   ) : null}
                 </div>
               ) : (
-                <div className="mt-2 text-[11px] text-muted-foreground">—</div>
+                <div className="mt-2 text-[12px] text-muted-foreground">—</div>
               )}
-              <div className="mt-2 text-[11px] text-muted-foreground font-mono">
+              <div className="mt-2 text-[12px] text-muted-foreground font-mono">
                 schedule: {configToCron(scheduleConfig)}
               </div>
             </div>
@@ -916,17 +916,17 @@ export default function AgentsPage() {
 
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-1.5">
-                <Button variant={bindFilter === 'all' ? 'default' : 'secondary'} size="sm" className="h-7 text-[11px]" onClick={() => setBindFilter('all')}>全部</Button>
-                <Button variant={bindFilter === 'bound' ? 'default' : 'secondary'} size="sm" className="h-7 text-[11px]" onClick={() => setBindFilter('bound')}>已绑定</Button>
-                <Button variant={bindFilter === 'unbound' ? 'default' : 'secondary'} size="sm" className="h-7 text-[11px]" onClick={() => setBindFilter('unbound')}>未绑定</Button>
+                <Button variant={bindFilter === 'all' ? 'default' : 'secondary'} size="sm" className="h-7 text-[12px]" onClick={() => setBindFilter('all')}>全部</Button>
+                <Button variant={bindFilter === 'bound' ? 'default' : 'secondary'} size="sm" className="h-7 text-[12px]" onClick={() => setBindFilter('bound')}>已绑定</Button>
+                <Button variant={bindFilter === 'unbound' ? 'default' : 'secondary'} size="sm" className="h-7 text-[12px]" onClick={() => setBindFilter('unbound')}>未绑定</Button>
               </div>
               <div className="flex items-center gap-1.5">
-                <Button variant="secondary" size="sm" className="h-7 text-[11px]" disabled={!bindDialogAgent || bindSavingStockIds.size > 0} onClick={() => applyBulkBindingForAgent(true)}>批量绑定</Button>
-                <Button variant="secondary" size="sm" className="h-7 text-[11px]" disabled={!bindDialogAgent || bindSavingStockIds.size > 0} onClick={() => applyBulkBindingForAgent(false)}>批量解绑</Button>
+                <Button variant="secondary" size="sm" className="h-7 text-[12px]" disabled={!bindDialogAgent || bindSavingStockIds.size > 0} onClick={() => applyBulkBindingForAgent(true)}>批量绑定</Button>
+                <Button variant="secondary" size="sm" className="h-7 text-[12px]" disabled={!bindDialogAgent || bindSavingStockIds.size > 0} onClick={() => applyBulkBindingForAgent(false)}>批量解绑</Button>
               </div>
             </div>
 
-            <div className="max-h-[40vh] overflow-y-auto rounded border border-border/50 p-3">
+            <div className="max-h-[40vh] overflow-y-auto rounded border border-border p-3">
               {filteredBindStocks.length === 0 ? (
                 <div className="p-4 text-[12px] text-muted-foreground text-center">无可选股票</div>
               ) : (
@@ -943,7 +943,7 @@ export default function AgentsPage() {
                         className={`h-8 px-3 rounded-full text-[12px] border transition-colors disabled:opacity-60 ${
                           bound
                             ? 'bg-primary/12 border-primary/35 text-primary hover:bg-primary/18'
-                            : 'bg-accent/30 border-border/60 text-muted-foreground hover:border-primary/30'
+                            : 'bg-s2 border-border text-muted-foreground hover:border-primary/30'
                         }`}
                         title={`${s.name} (${s.symbol})`}
                       >
@@ -969,11 +969,11 @@ export default function AgentsPage() {
             <DialogTitle>TradingAgents 深度配置</DialogTitle>
             <DialogDescription>
               双模型分档 / 月度预算 / 超时 / 模拟盘对接。完整说明见
-              <code className="ml-1 text-[11px] bg-accent/40 px-1">.docs/tradingagents/USER_GUIDE.md § 12</code>
+              <code className="ml-1 text-[12px] bg-s2 px-1">.docs/tradingagents/USER_GUIDE.md § 12</code>
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-5 mt-2 text-[13px]">
+          <div className="space-y-5 mt-2 text-[14px]">
             {/* 模型分档(可选)— 从 Agent 默认 model 所在的同一 AI Service 选 */}
             {(() => {
               // Agent 卡片上选的默认 model 决定 service;深度/快速只能从同 service 里选
@@ -994,7 +994,7 @@ export default function AgentsPage() {
                   <div className="font-medium mb-2">模型分档(可选)</div>
 
                   {/* 显示 Agent 默认模型来源,让用户知道 service 上下文 */}
-                  <div className="rounded-md bg-accent/30 border border-border/40 p-2 text-[11px] text-muted-foreground mb-3">
+                  <div className="rounded-md bg-s2 border border-border p-2 text-[12px] text-muted-foreground mb-3">
                     {defaultModel && agentService ? (
                       <>当前 Agent 默认模型: <span className="text-foreground font-medium">{defaultModel.model}</span>
                        <span className="opacity-70"> (来自 {agentService.name})</span></>
@@ -1048,7 +1048,7 @@ export default function AgentsPage() {
                       </Select>
                     </div>
                   </div>
-                  <div className="text-[11px] text-muted-foreground mt-2 space-y-0.5">
+                  <div className="text-[12px] text-muted-foreground mt-2 space-y-0.5">
                     <div>• 留空 = 用 Agent 默认模型,不分档</div>
                     <div>• 两个分档必须在同一个 AI 服务下(TradingAgents 共用 backend_url)</div>
                     <div className="text-amber-600">⚠️ 不要选推理模型 (如 deepseek-r1 / o1) — 它们在 langchain agent loop 里会输出乱码。用 chat 类: claude-sonnet / deepseek-chat / gpt-4o-mini</div>
@@ -1073,7 +1073,7 @@ export default function AgentsPage() {
                 <div>
                   <Label className="text-[12px]">超预算行为</Label>
                   <select
-                    className="w-full h-9 rounded-md border border-border bg-background px-3 text-[13px]"
+                    className="w-full h-9 rounded-md border border-border bg-background px-3 text-[14px]"
                     value={(taConfigForm.over_budget_action as string) || 'reject'}
                     onChange={e => setTaConfigForm({ ...taConfigForm, over_budget_action: e.target.value })}
                   >
@@ -1118,7 +1118,7 @@ export default function AgentsPage() {
                   把 BUY 决策写入模拟盘信号
                 </label>
               </div>
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-[12px] text-muted-foreground">
                 启用后,TA 输出 BUY 决策时会写一条 StrategySignalRun,PaperTradingEngine 下个 tick 自动开模拟仓
                 (止损 -5%,止盈 +10%)。<strong>默认关闭</strong> 防止误开仓。SELL 不会自动平仓。
               </div>
@@ -1165,7 +1165,7 @@ export default function AgentsPage() {
                       />
                     </div>
                   </div>
-                  <div className="text-[11px] text-muted-foreground">
+                  <div className="text-[12px] text-muted-foreground">
                     启用后,intraday_monitor 分析时若发现 |涨跌幅| ≥ 阈值,自动 fire-and-forget 触发 TA 深度分析。
                     冷却时间内同一标的不会重复触发;月度预算用尽也会停止。<strong>默认关闭</strong> 避免成本失控。
                   </div>
@@ -1179,7 +1179,7 @@ export default function AgentsPage() {
                 高级:完整 config JSON
               </summary>
               <textarea
-                className="mt-2 w-full font-mono text-[11px] p-2 border border-border rounded bg-background min-h-[120px]"
+                className="mt-2 w-full font-mono text-[12px] p-2 border border-border rounded bg-background min-h-[120px]"
                 value={JSON.stringify(taConfigForm, null, 2)}
                 onChange={e => {
                   try {

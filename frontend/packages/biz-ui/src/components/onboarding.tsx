@@ -53,7 +53,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               className={`flex-1 h-1 rounded-full transition-colors ${
                 i <= ['welcome', 'ai', 'notify', 'complete'].indexOf(step)
                   ? 'bg-primary'
-                  : 'bg-accent/50'
+                  : 'bg-s2'
               }`}
             />
           ))}
@@ -68,7 +68,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 欢迎使用数智分析 SIDA
               </h2>
-              <p className="text-[13px] text-muted-foreground mb-6">
+              <p className="text-[14px] text-muted-foreground mb-6">
                 {hasStocks
                   ? '你的自选股已就绪，可以开始使用了'
                   : '我们已为你添加了 5 只热门股票作为示例，你可以立即查看实时行情'
@@ -76,30 +76,30 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               </p>
 
               <div className="space-y-3 text-left mb-6">
-                <div className="flex items-start gap-3 p-3 rounded-xl bg-accent/30">
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-s2">
                   <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center flex-shrink-0">
                     <TrendingUp className="w-4 h-4 text-blue-500" />
                   </div>
                   <div>
-                    <p className="text-[13px] font-medium text-foreground">实时行情监控</p>
+                    <p className="text-[14px] font-medium text-foreground">实时行情监控</p>
                     <p className="text-[12px] text-muted-foreground">跟踪自选股价格变动，快速发现异动</p>
                   </div>
                 </div>
-                <div className="flex items-start gap-3 p-3 rounded-xl bg-accent/30">
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-s2">
                   <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
                     <Bot className="w-4 h-4 text-primary" />
                   </div>
                   <div>
-                    <p className="text-[13px] font-medium text-foreground">AI 智能分析</p>
+                    <p className="text-[14px] font-medium text-foreground">AI 智能分析</p>
                     <p className="text-[12px] text-muted-foreground">数智分析BOT 对话 · 主力意图 · 技术面 · 4模型预测</p>
                   </div>
                 </div>
-                <div className="flex items-start gap-3 p-3 rounded-xl bg-accent/30">
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-s2">
                   <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center flex-shrink-0">
                     <Bell className="w-4 h-4 text-amber-500" />
                   </div>
                   <div>
-                    <p className="text-[13px] font-medium text-foreground">智能通知推送</p>
+                    <p className="text-[14px] font-medium text-foreground">智能通知推送</p>
                     <p className="text-[12px] text-muted-foreground">Telegram、企业微信等多渠道推送</p>
                   </div>
                 </div>
@@ -127,20 +127,20 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 配置 AI 分析
               </h2>
-              <p className="text-[13px] text-muted-foreground mb-4">
+              <p className="text-[14px] text-muted-foreground mb-4">
                 连接 AI 服务后，可获得智能分析功能
               </p>
 
-              <div className="space-y-2 text-left mb-6 p-4 rounded-xl bg-accent/30">
-                <div className="flex items-center gap-2 text-[13px]">
+              <div className="space-y-2 text-left mb-6 p-4 rounded-xl bg-s2">
+                <div className="flex items-center gap-2 text-[14px]">
                   <Sparkles className="w-4 h-4 text-primary" />
                   <span className="text-foreground">盘后日报自动分析</span>
                 </div>
-                <div className="flex items-center gap-2 text-[13px]">
+                <div className="flex items-center gap-2 text-[14px]">
                   <Sparkles className="w-4 h-4 text-primary" />
                   <span className="text-foreground">异动 AI 建议</span>
                 </div>
-                <div className="flex items-center gap-2 text-[13px]">
+                <div className="flex items-center gap-2 text-[14px]">
                   <Sparkles className="w-4 h-4 text-primary" />
                   <span className="text-foreground">技术图表分析</span>
                 </div>
@@ -169,20 +169,20 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 配置通知渠道
               </h2>
-              <p className="text-[13px] text-muted-foreground mb-4">
+              <p className="text-[14px] text-muted-foreground mb-4">
                 配置后可收到实时推送通知
               </p>
 
-              <div className="space-y-2 text-left mb-6 p-4 rounded-xl bg-accent/30">
-                <div className="flex items-center gap-2 text-[13px]">
+              <div className="space-y-2 text-left mb-6 p-4 rounded-xl bg-s2">
+                <div className="flex items-center gap-2 text-[14px]">
                   <Bell className="w-4 h-4 text-amber-500" />
                   <span className="text-foreground">盘中异动提醒</span>
                 </div>
-                <div className="flex items-center gap-2 text-[13px]">
+                <div className="flex items-center gap-2 text-[14px]">
                   <Bell className="w-4 h-4 text-amber-500" />
                   <span className="text-foreground">AI 分析报告推送</span>
                 </div>
-                <div className="flex items-center gap-2 text-[13px]">
+                <div className="flex items-center gap-2 text-[14px]">
                   <Bell className="w-4 h-4 text-amber-500" />
                   <span className="text-foreground">止盈止损预警</span>
                 </div>
@@ -211,7 +211,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 设置完成
               </h2>
-              <p className="text-[13px] text-muted-foreground mb-6">
+              <p className="text-[14px] text-muted-foreground mb-6">
                 你可以随时在「设置」页面修改配置
               </p>
 

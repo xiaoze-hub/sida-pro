@@ -24,12 +24,12 @@ export default function AuctionPage() {
   return (
     <div className="space-y-4 p-4 lg:p-6">
       {/* 头部战术指引卡 */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-card/60 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-4">
         <div>
           <div className="flex items-center gap-2">
             <Flame className="h-5 w-5 text-orange-500" />
             <h1 className="text-[16px] font-bold text-foreground">集合竞价·盘前打板与异动雷达</h1>
-            <span className="rounded bg-orange-500/10 px-2 py-0.5 text-[11px] font-semibold text-orange-500">
+            <span className="rounded bg-orange-500/10 px-2 py-0.5 text-[12px] font-semibold text-orange-500">
               9:25 决战窗口
             </span>
           </div>
@@ -55,7 +55,7 @@ export default function AuctionPage() {
       </div>
 
       {/* 竞价异动与爆量个股列表 */}
-      <div className="rounded-lg border border-border/40 bg-card/30 p-2">
+      <div className="rounded-lg border border-border bg-card p-2">
         <AuctionAnomalyTab market="CN" onOpenDetail={openAuctionDetail} />
       </div>
     </div>

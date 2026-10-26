@@ -410,10 +410,10 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
             key={t}
             type="button"
             onClick={() => setBtype(t)}
-            className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
+            className={`rounded px-2.5 py-1 text-[12px] transition-colors ${
               btype === t
                 ? 'bg-primary text-primary-foreground'
-                : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+                : 'bg-s2 text-muted-foreground hover:bg-accent'
             }`}
           >
             {t === 'industry' ? '行业' : '概念'}
@@ -422,20 +422,20 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
         <span className="mx-1 h-4 w-px bg-border/60" />
         {/* L3-A(2026-10-24): 面积口径是**排序/权重**维度, 不是分类, 不该和「行业/概念」同款按钮并排。
             改成明确的下拉, 分类仍是左侧 segmented。 */}
-        <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+        <label className="flex items-center gap-1 text-[12px] text-muted-foreground">
           面积
           <select
             aria-label="色块面积口径"
             value={areaMetric}
             onChange={(e) => setAreaMetric(e.target.value as HeatAreaMetric)}
-            className="h-7 rounded border border-border/60 bg-background px-1.5 text-[11px] text-foreground"
+            className="h-7 rounded border border-border bg-background px-1.5 text-[12px] text-foreground"
           >
             <option value="volume">按量能</option>
             <option value="equal">等权</option>
           </select>
         </label>
         {/* L3-A: 色阶图例 —— 此前整页没有任何图例, 读者不知道「红多深=涨多少」「灰=平盘」 */}
-        <span className="hidden items-center gap-1 text-[11px] text-muted-foreground md:flex" aria-label="色阶图例">
+        <span className="hidden items-center gap-1 text-[12px] text-muted-foreground md:flex" aria-label="色阶图例">
           {[-3, -1.5, 1.5, 3].map((v) => (
             <span
               key={v}
@@ -448,17 +448,17 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
         </span>
         <div className="ml-auto flex items-center gap-2">
           {fresh && data.source ? (
-            <span className="rounded bg-accent/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            <span className="rounded bg-s2 px-1.5 py-0.5 text-[12px] text-muted-foreground">
               {data.source === 'tdx' ? '通达信' : '同花顺'}
             </span>
           ) : null}
           {liveMode ? (
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-500">
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-600 dark:text-emerald-500">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
               实时{liveClock ? ` · ${liveClock}` : ''}
             </span>
           ) : fresh && data.trade_date ? (
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-[12px] text-muted-foreground">
               数据截至 {data.trade_date}
               {noDataCount > 0 ? ` · ${noDataCount} 个暂无当日数据` : ''}
             </span>
@@ -481,7 +481,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       </div>
 
       {stale && (
-        <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-600 dark:text-amber-500">
+        <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[12px] text-amber-600 dark:text-amber-500">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           刷新失败，当前展示上次数据
         </div>
@@ -490,7 +490,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       {liveMode && liveAnomalies.length > 0 && (
         <div
           data-testid="heatmap-anomalies"
-          className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]"
+          className="mb-2 flex flex-wrap items-center gap-1.5 text-[12px]"
         >
           <span className="inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-500">
             <Zap className="h-3.5 w-3.5" />
@@ -521,11 +521,11 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           style={{ height: CHART_HEIGHT }}
         >
           <span>{items.length} 个板块的成交额全部缺失，面积无法区分板块 —— 已停绘，避免把保底面积误读成量能。</span>
-          <span className="text-[11px]">可切到「面积:等权」看涨跌分布，或稍后点刷新重试。</span>
+          <span className="text-[12px]">可切到「面积:等权」看涨跌分布，或稍后点刷新重试。</span>
           <button
             type="button"
             onClick={() => setAreaMetric('equal')}
-            className="rounded border border-border bg-secondary px-2.5 py-1 text-[11px] text-foreground transition-colors hover:bg-secondary/80"
+            className="rounded border border-border bg-secondary px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-secondary/80"
           >
             切换面积:等权
           </button>
@@ -544,11 +544,11 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
         <div
           data-testid="heatmap-empty"
           data-compact="1"
-          className="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/60 bg-muted/10 text-center"
+          className="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border bg-s2 text-center"
           style={{ minHeight: `${CHART_EMPTY_HEIGHT}px` }}
         >
           <span className="text-[12px] text-muted-foreground">暂无板块数据（等待每日同步）</span>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[12px] text-muted-foreground">
             每日 15:30 后同步板块行情；若长期为空，请在「数据源」页检查东财板块源
           </span>
         </div>

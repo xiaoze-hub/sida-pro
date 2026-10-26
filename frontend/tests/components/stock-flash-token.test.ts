@@ -66,8 +66,8 @@ function hslVarUsages(source: string): Array<{ name: string; line: number; snipp
   return out
 }
 
-function hslTriplet(name: string): [number, number, number] {
-  const m = DECLS.get(name)![0].match(/(\d+(?:\.\d+)?)(?:deg)?\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%/)
+function hslTriplet(name: string, index = 0): [number, number, number] {
+  const m = DECLS.get(name)![index].match(/(\d+(?:\.\d+)?)(?:deg)?\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%/)
   expect(m, `${name} 不是 HSL 三元组`).toBeTruthy()
   return [Number(m![1]), Number(m![2]), Number(m![3])]
 }
@@ -103,9 +103,9 @@ function hslToRgb8(h: number, s: number, l: number): [number, number, number] {
 }
 
 describe('涨跌色: Hex 事实源 + HSL 三元组派生', () => {
-  it('--stock-up / --stock-down 的 Hex 值保持原样(组件/ECharts/--gs-go 依赖)', () => {
-    expect(DECLS.get('--stock-up')).toEqual(['#ff5252', '#ff5252'])
-    expect(DECLS.get('--stock-down')).toEqual(['#43A047', '#43A047'])
+  it('深浅主题分别提供可读的涨跌色，图表与文字使用同一事实源', () => {
+    expect(DECLS.get('--stock-up')).toEqual(['#bf293b', '#ff7b86'])
+    expect(DECLS.get('--stock-down')).toEqual(['#18764b', '#6dcc9c'])
   })
 
   it('亮/暗两套主题都定义了 --stock-up-hsl / --stock-down-hsl(且都是 HSL 三元组)', () => {
@@ -122,9 +122,10 @@ describe('涨跌色: Hex 事实源 + HSL 三元组派生', () => {
       ['--stock-up', '--stock-up-hsl'],
       ['--stock-down', '--stock-down-hsl'],
     ] as const) {
-      const hex = DECLS.get(hexVar)![0]
+      for (const index of [0, 1]) {
+      const hex = DECLS.get(hexVar)![index]
       const [eh, es, el] = hexToHsl(hex)
-      const [h, s, l] = hslTriplet(hslVar)
+      const [h, s, l] = hslTriplet(hslVar, index)
       const back = hslToRgb8(h, s, l)
       const orig = [0, 2, 4].map((i) => parseInt(hex.slice(1 + i, 3 + i), 16))
       back.forEach((v, i) => {
@@ -133,6 +134,7 @@ describe('涨跌色: Hex 事实源 + HSL 三元组派生', () => {
       expect(Math.abs(h - eh), `${hslVar} 色相偏差`).toBeLessThan(0.5)
       expect(Math.abs(s - es), `${hslVar} 饱和度偏差`).toBeLessThan(0.5)
       expect(Math.abs(l - el), `${hslVar} 亮度偏差`).toBeLessThan(0.5)
+      }
     }
   })
 })

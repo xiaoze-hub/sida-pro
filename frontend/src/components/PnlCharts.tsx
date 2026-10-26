@@ -7,7 +7,7 @@ import { computeRealizedPnlSeries, type TradeLike } from '@/lib/trades'
 export function DrawdownChart({ data }: { data: EquityPoint[] }) {
   const series = computeDrawdownSeries(data)
   if (series.length < 2) {
-    return <div className="h-40 flex items-center justify-center text-muted-foreground text-[13px]">暂无足够数据绘制回撤</div>
+    return <div className="h-40 flex items-center justify-center text-muted-foreground text-[14px]">暂无足够数据绘制回撤</div>
   }
 
   const width = 600
@@ -32,7 +32,7 @@ export function DrawdownChart({ data }: { data: EquityPoint[] }) {
       {[{ v: 0, y: pad.top }, { v: worst, y: pad.top + h }].map((t, i) => (
         <g key={i}>
           <line x1={pad.left} x2={width - pad.right} y1={t.y} y2={t.y} stroke="hsl(var(--border))" strokeWidth={0.5} />
-          <text x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10}>
+          <text x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={12}>
             {`${t.v.toFixed(1)}%`}
           </text>
         </g>
@@ -40,7 +40,7 @@ export function DrawdownChart({ data }: { data: EquityPoint[] }) {
       <path d={areaD} fill={withAlpha(sc.down, 0.12)} />
       <path d={pathD} fill="none" stroke={sc.down} strokeWidth={2} />
       {xIndices.map(i => (
-        <text key={i} x={points[i].x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={10}>
+        <text key={i} x={points[i].x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={12}>
           {series[i].date.slice(5)}
         </text>
       ))}
@@ -52,7 +52,7 @@ export function DrawdownChart({ data }: { data: EquityPoint[] }) {
 export function RealizedPnlChart({ trades }: { trades: TradeLike[] }) {
   const series = computeRealizedPnlSeries(trades)
   if (series.length < 2) {
-    return <div className="h-40 flex items-center justify-center text-muted-foreground text-[13px]">暂无足够成交绘制已实现盈亏</div>
+    return <div className="h-40 flex items-center justify-center text-muted-foreground text-[14px]">暂无足够成交绘制已实现盈亏</div>
   }
   const width = 600
   const height = 140
@@ -80,7 +80,7 @@ export function RealizedPnlChart({ trades }: { trades: TradeLike[] }) {
     <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
       <line x1={pad.left} x2={width - pad.right} y1={zeroY} y2={zeroY} stroke="hsl(var(--border))" strokeDasharray="3 3" />
       {[{ v: maxV, y: yOf(maxV) }, { v: 0, y: zeroY }, { v: minV, y: yOf(minV) }].map((t, i) => (
-        <text key={i} x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10}>
+        <text key={i} x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={12}>
           {t.v.toFixed(0)}
         </text>
       ))}
@@ -89,7 +89,7 @@ export function RealizedPnlChart({ trades }: { trades: TradeLike[] }) {
         <circle key={i} cx={p.x} cy={p.y} r={2} fill={p.pnl >= 0 ? sc.up : sc.down} />
       ))}
       {xIndices.map(i => (
-        <text key={i} x={points[i].x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={10}>
+        <text key={i} x={points[i].x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={12}>
           {series[i].date.slice(5)}
         </text>
       ))}

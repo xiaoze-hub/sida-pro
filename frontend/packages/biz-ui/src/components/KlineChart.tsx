@@ -785,7 +785,7 @@ export default function KlineChart(props: {
         },
       })
     })
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
 
     // ── v2.1 §10.2 K线大图交互规范 ──
     // (1) 双击还原: fitContent() 全局视角
@@ -1939,7 +1939,7 @@ export default function KlineChart(props: {
             {opt.label}
           </button>
         ))}
-        <span className="ml-2 text-[11px] text-muted-foreground">
+        <span className="ml-2 text-[12px] text-muted-foreground">
           {loading
             ? '加载中…'
             : error
@@ -2039,8 +2039,8 @@ export default function KlineChart(props: {
                 sampledIndices.push(i)
               }
               return (
-                <div className="h-full flex flex-col justify-between py-1 bg-background/80 dark:bg-black/60 backdrop-blur-md rounded p-1.5 border border-border/60 shadow-float pointer-events-auto">
-                  <div className="flex items-center justify-between text-[10px] text-muted-foreground pb-1 border-b border-border/40 select-none">
+                <div className="h-full flex flex-col justify-between py-1 bg-background dark:bg-black/60 backdrop-blur-md rounded p-1.5 border border-border shadow-float pointer-events-auto">
+                  <div className="flex items-center justify-between text-[12px] text-muted-foreground pb-1 border-b border-border select-none">
                     <span className="font-medium">筹码分布 (CYQ)</span>
                     <span className="font-mono text-amber-500 font-bold">¥{safeFixed(effAccumulationChips.main_cost, 2)}</span>
                   </div>
@@ -2053,10 +2053,10 @@ export default function KlineChart(props: {
                       const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.25
                       return (
                         <div key={p} className="flex items-center justify-end h-1.5 gap-1" title={`¥${safeFixed(p, 2)}: 占比 ${widthPct}%`}>
-                          <span className="font-mono text-[10px] text-muted-foreground w-8 text-right select-none leading-none">
+                          <span className="font-mono text-[12px] text-muted-foreground w-8 text-right select-none leading-none">
                             {safeFixed(p, 1)}
                           </span>
-                          {isPeak && <span className="text-[10px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
+                          {isPeak && <span className="text-[12px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
                           <div
                             className={`h-1.5 rounded-sm shadow-sm transition-all ${
                               isPeak
@@ -2087,7 +2087,7 @@ export default function KlineChart(props: {
       {lastBarDate && (
         <div
           data-testid="kline-freshness"
-          className="mt-1 text-[11px] text-muted-foreground"
+          className="mt-1 text-[12px] text-muted-foreground"
         >
           {lastBarDate === new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()) ? (
             <>最新K线 {lastBarDate}（含今日盘中）</>
@@ -2111,7 +2111,7 @@ export default function KlineChart(props: {
       {effGsSignals.length > 0 && (
         <div
           data-testid="gs-legend"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">GS 买卖点</span>
           <span>
@@ -2126,7 +2126,7 @@ export default function KlineChart(props: {
           {effZoneNote && (
             <span
               data-testid="gs-legend-why"
-              className="text-[10px] cursor-help"
+              className="text-[12px] cursor-help"
               title={markerWhy(effZoneNote)}
             >
               为什么? (悬停: {effZoneNote.label})
@@ -2140,7 +2140,7 @@ export default function KlineChart(props: {
       {effPatterns.length > 0 && (
         <div
           data-testid="pattern-legend"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">K线形态</span>
           {effPatterns.map((m, i) => {
@@ -2160,7 +2160,7 @@ export default function KlineChart(props: {
               </span>
             )
           })}
-          <span className="text-[10px]">客观标注 · 非投资建议</span>
+          <span className="text-[12px]">客观标注 · 非投资建议</span>
         </div>
       )}
 
@@ -2171,7 +2171,7 @@ export default function KlineChart(props: {
       {showScenarioLayer && effScenarioLines.length > 0 && (
         <div
           data-testid="scenario-legend"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">情景关键位</span>
           {effScenarioLines.map((l) => (
@@ -2184,13 +2184,13 @@ export default function KlineChart(props: {
               <span className="font-mono">{safeFixed(l.price, 2)}</span>
             </span>
           ))}
-          <span className="text-[10px]">条件-反应 · 非方向预测</span>
+          <span className="text-[12px]">条件-反应 · 非方向预测</span>
         </div>
       )}
       {!showScenarioLayer && props.layersVisible?.scenario === undefined && (
         <div
           data-testid="scenario-layer-toggle"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <button
             type="button"
@@ -2200,7 +2200,7 @@ export default function KlineChart(props: {
           >
             显示情景关键位
           </button>
-          <span className="text-[10px]">阻力/支撑/目标位 · 条件-反应 · 非投资建议</span>
+          <span className="text-[12px]">阻力/支撑/目标位 · 条件-反应 · 非投资建议</span>
         </div>
       )}
 
@@ -2209,7 +2209,7 @@ export default function KlineChart(props: {
       {props.layersVisible?.trendLine !== false && effTrendLine?.available && effTrendLine.lines && (
         <div
           data-testid="trend-line-legend"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">操盘线</span>
           <span>
@@ -2224,13 +2224,13 @@ export default function KlineChart(props: {
           {effTrendLine.trend ? <span>{effTrendLine.trend}</span> : null}
           {effTrendLine.band?.state ? <span>{effTrendLine.band.state}</span> : null}
           <span>买▲红 / 卖▼绿</span>
-          <span className="text-[10px]">{PIONEER_NOT_ADVICE_TEXT}</span>
+          <span className="text-[12px]">{PIONEER_NOT_ADVICE_TEXT}</span>
         </div>
       )}
       {props.layersVisible?.niuxiong !== false && effNiuxiong?.available && effNiuxiong.lines && (
         <div
           data-testid="niuxiong-legend"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">牛熊线</span>
           <span>
@@ -2253,7 +2253,7 @@ export default function KlineChart(props: {
           ) : (
             <span>近期无交叉</span>
           )}
-          <span className="text-[10px]">{PIONEER_NOT_ADVICE_TEXT}</span>
+          <span className="text-[12px]">{PIONEER_NOT_ADVICE_TEXT}</span>
         </div>
       )}
 
@@ -2262,7 +2262,7 @@ export default function KlineChart(props: {
       {interval === '1d' && props.layersVisible?.signal !== false && effGsSignals.length > 0 && (
         <div
           data-testid="gs-zone-legend"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">GS 区间</span>
           <span>
@@ -2271,7 +2271,7 @@ export default function KlineChart(props: {
           <span>
             <span className="text-[hsl(var(--gs-stop))]">S区</span> 绿柱(趋势偏空)
           </span>
-          <span className="text-[10px]">非函数指标 · 信号后不消失直至反向 · 客观标注</span>
+          <span className="text-[12px]">非函数指标 · 信号后不消失直至反向 · 客观标注</span>
         </div>
       )}
 
@@ -2280,7 +2280,7 @@ export default function KlineChart(props: {
       {subchart === 'dark_pool' && (
         <div
           data-testid="dark-pool-legend"
-          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">暗盘资金</span>
           <span>
@@ -2289,9 +2289,9 @@ export default function KlineChart(props: {
           <span>
             <span className="text-[hsl(var(--gs-stop))]">绿柱</span> 流出
           </span>
-          <span className="text-[10px]">历史日=OHLC分摊近似 · {DARK_POOL_CONFIDENCE}</span>
-          <span className="text-[10px]">涨+红持股 / 跌+绿回避 / 跌+红吸筹 / 涨+绿诱多</span>
-          <span className="text-[10px]">客观标注 · 非投资建议</span>
+          <span className="text-[12px]">历史日=OHLC分摊近似 · {DARK_POOL_CONFIDENCE}</span>
+          <span className="text-[12px]">涨+红持股 / 跌+绿回避 / 跌+红吸筹 / 涨+绿诱多</span>
+          <span className="text-[12px]">客观标注 · 非投资建议</span>
         </div>
       )}
 
@@ -2300,7 +2300,7 @@ export default function KlineChart(props: {
       {minuteBreakthrough && (
         <div
           data-testid="minute-breakthrough-bar"
-          className={`mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] ${
+          className={`mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] ${
             minuteBreakthrough.available && minuteBreakthrough.signalType
               ? 'text-foreground'
               : 'text-muted-foreground'
@@ -2324,7 +2324,7 @@ export default function KlineChart(props: {
                   {minuteBreakthrough.metConditions.join(' · ')}
                 </span>
               ) : null}
-              <span className="text-[10px]">{PIONEER_NOT_ADVICE_TEXT}</span>
+              <span className="text-[12px]">{PIONEER_NOT_ADVICE_TEXT}</span>
             </>
           ) : minuteBreakthrough.available ? (
             <span>暂未触发「突/积」</span>
@@ -2342,7 +2342,7 @@ export default function KlineChart(props: {
                 {minuteDegradeText(minuteBreakthrough.reasons)}
               </span>
               {minuteBreakthrough.reasons.length > 0 ? (
-                <span className="text-[10px]">（{minuteBreakthrough.reasons.join(' · ')}）</span>
+                <span className="text-[12px]">（{minuteBreakthrough.reasons.join(' · ')}）</span>
               ) : null}
             </>
           )}
@@ -2353,7 +2353,7 @@ export default function KlineChart(props: {
       {intentRenderable(intent) && intentLegend && (
         <div
           data-testid="main-intent-legend"
-          className="mt-3 rounded-lg border border-rose-500/15 bg-rose-500/5 px-2.5 py-2 text-[11px] text-foreground"
+          className="mt-3 rounded-lg border border-rose-500/15 bg-rose-500/5 px-2.5 py-2 text-[12px] text-foreground"
         >
           <span className="mr-2 font-medium text-rose-700 dark:text-rose-400">主力意图</span>
           <span className={intentLegend.cls}>{intentLegend.text}</span>
@@ -2385,7 +2385,7 @@ export default function KlineChart(props: {
           {effAccumulationChips?.main_cost != null && (
             <span className="ml-2 text-rose-500 font-medium">
               底仓成本 <span className="font-mono">¥{safeFixed(effAccumulationChips.main_cost, 2)}</span>
-              <span className="text-[10px] ml-1 text-muted-foreground">({effAccumulationChips.pattern})</span>
+              <span className="text-[12px] ml-1 text-muted-foreground">({effAccumulationChips.pattern})</span>
             </span>
           )}
         </div>
@@ -2397,7 +2397,7 @@ export default function KlineChart(props: {
       {effChartNotes.length > 0 && (
         <div
           data-testid="chart-notes-bar"
-          className="mt-1 text-[11px] text-muted-foreground"
+          className="mt-1 text-[12px] text-muted-foreground"
           title={effChartNotes.map((n) => markerWhy(n)).join('\n')}
         >
           <span className="font-medium text-foreground">图表说明</span>
@@ -2416,7 +2416,7 @@ export default function KlineChart(props: {
       {/* KI-056: 每 pane 信息栏 —— 悬停十字光标时显示主图 OHLC + 成交量; 未悬停显示副图口径 */}
       <div
         data-testid="kline-pane-info"
-        className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground font-mono"
+        className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted-foreground font-mono"
       >
         {hoverReadout ? (
           <>
@@ -2466,7 +2466,7 @@ export default function KlineChart(props: {
             )}
           </>
         ) : (
-          <span className="text-[10px]">
+          <span className="text-[12px]">
             悬停查看该根 K 线读数 · 副图: {SUBCHART_OPTS.find(([k]) => k === subchart)?.[1] ?? subchart}
           </span>
         )}

@@ -435,7 +435,7 @@ export default function StockWorkbench() {
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
 
   return (
-    <div className="mx-auto max-w-none p-3 space-y-3">
+    <div className="mx-auto min-w-0 max-w-none space-y-4">
       {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
       <HeaderBand
         symbol={symbol}
@@ -450,6 +450,8 @@ export default function StockWorkbench() {
         back={back}
       />
 
+      {type === 'stock' ? <CopilotCapsule symbol={symbol} market={MARKET} presentation="inline" /> : null}
+
       {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
       {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
 
@@ -463,7 +465,7 @@ export default function StockWorkbench() {
            遗留⑦: **不再**挂 `key={refreshKey}`(那会重挂载 ⇒ 重放入场动画 + 丢正文内部状态),
            改为把 `refreshKey` 当 `refreshToken` prop 传下去 —— 正文据此重跑取数 effect。
            `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
-        <div className="mt-3 rounded-lg border border-border/80 bg-card/40 p-2 shadow-sm">
+        <div className="mt-3 rounded-lg border border-border bg-card p-2 shadow-sm">
           <IndexBoardHost type={type} symbol={symbol} refreshToken={refreshKey} />
         </div>
       ) : (
@@ -472,15 +474,15 @@ export default function StockWorkbench() {
            给它们逐个加 token 属跨组件改造, 不在本批范围(见 tranche-4 报告 concern)。 */
         <div key={refreshKey} className="space-y-3">
           {/* ── 【舱 2：主力博弈主战场 Kline Arena】 ────────────────────────
-              W1(2026-10-23 走查 P0): K 线**不许卡片包裹**。原先 `section`(圆角+边框+`bg-card/40`
-              +`shadow-sm`+`p-2.5`) 与内层 `div`(边框+`bg-background/50`+`p-2`)**双层**包着图表,
+              W1(2026-10-23 走查 P0): K 线**不许卡片包裹**。原先 `section`(圆角+边框+`bg-card`
+              +`shadow-sm`+`p-2.5`) 与内层 `div`(边框+`bg-background`+`p-2`)**双层**包着图表,
               横向吃掉 40px(外 10+10+边框 1+1、内 8+8+边框 1+1), 纵向同样 40px —— 直接违反
               「去卡片化 + K 线 ≥80% 屏宽」。现改为**单层顶部 hairline** 作区域划分(只 `border-t`,
               不占横向宽度、不加卡片底与阴影; `shadow-float` 全站仅限框选即问浮条)。
               内层保留 `min-w-0 flex-1`(承重: 没有 `min-w-0`, 图表 canvas 会撑破与右栏并排的 flex 行),
               但去掉边框/底色/内边距 ⇒ 图表直接占满列宽。右栏挤压逻辑(`w-[320px]`/`w-12` + `gap-3`)不变。 */}
-          <section className="mt-3 border-t border-border/60 pt-2">
-            <div className="flex items-stretch gap-3">
+          <section className="mt-3 border-t border-border pt-2">
+            <div className="flex flex-col items-stretch gap-4 xl:flex-row">
               <div className="min-w-0 flex-1">
                 <MemoKlineChart
                   symbol={symbol}
@@ -507,16 +509,16 @@ export default function StockWorkbench() {
                 />
               </div>
               {railOpen ? (
-                <div className="flex w-[320px] shrink-0 flex-col gap-2 rounded border border-border/50 bg-background/40 p-2">
-                  <div className="flex items-center justify-between pb-1 border-b border-border/40">
-                    <span className="text-[11px] font-medium text-foreground">盘面速览对账</span>
+                <div className="card flex w-full shrink-0 flex-col gap-3 p-4 xl:w-[300px]">
+                  <div className="flex items-center justify-between pb-1 border-b border-border">
+                    <span className="text-[12px] font-medium text-foreground">盘面速览对账</span>
                     <button
                       type="button"
                       onClick={toggleRail}
                       title="收起速览栏(把宽度还给 K 线)"
                       aria-label="收起速览栏"
                       data-testid="rail-toggle"
-                      className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                      className="ui-icon-button"
                     >
                       <ChevronRight className="h-3 w-3" />
                     </button>
@@ -531,18 +533,18 @@ export default function StockWorkbench() {
                 </div>
               ) : (
                 /* 折叠态: 56px 图标条。只留"展开"入口 —— 速览内容原样保留在展开态, 不删功能。 */
-                <div className="flex w-12 shrink-0 flex-col items-center gap-2 rounded border border-border/50 bg-background/30 py-2">
+                <div className="card flex w-full shrink-0 flex-row items-center gap-2 px-3 py-2 xl:w-12 xl:flex-col xl:px-0">
                   <button
                     type="button"
                     onClick={toggleRail}
                     title="展开速览栏"
                     aria-label="展开速览栏"
                     data-testid="rail-toggle"
-                    className="flex h-6 w-6 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                    className="ui-icon-button"
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
-                  <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide text-muted-foreground">
+                  <span className="[writing-mode:vertical-rl] text-[12px] tracking-wide text-muted-foreground">
                     速览
                   </span>
                 </div>
@@ -559,8 +561,8 @@ export default function StockWorkbench() {
           )}
 
           {/* ── 【舱 3：微观盘口与决策支持 Deep Deck】 ────────────────────── */}
-          <section className="rounded-lg border border-border/80 bg-card/40 p-3 shadow-sm">
-            <div className="mb-2 flex items-center justify-between border-b border-border/50 pb-2">
+          <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
               <div className="flex items-center gap-2">
                 <span className="h-3.5 w-1 rounded-full bg-primary" />
                 <span className="text-[12px] font-semibold text-foreground">深度量化与盘口证据</span>
@@ -575,7 +577,7 @@ export default function StockWorkbench() {
       {/* AI 数智参谋常驻唤醒胶囊(2026-10-18, 设计稿 §9.2④): 只挂个股分支。
           指数/板块没有筹码/撤单证据, 挂了只会给出空结论 —— 不挂。
           挂在这一层(不在 key={refreshKey} 子树内): 页面刷新不重挂载, 胶囊不闪、不重取数。 */}
-      {type === 'stock' ? <CopilotCapsule symbol={symbol} market={MARKET} /> : null}
+
     </div>
   )
 }

@@ -135,8 +135,8 @@ describe('点左侧菜单: 未开过→新开, 已开过→切过去(不重复�
   it('再点另一个功能页 → 新开页签, 前一个功能页签**还在**(不是整页切走)', () => {
     renderShell('/heatmap')
     fireEvent.click(screen.getByTestId('go-opps'))
-    expect(labels()).toEqual(['首页', '板块热力', '机会'])
-    expect(activeLabel()).toBe('机会')
+    expect(labels()).toEqual(['首页', '板块热力', '市场扫描'])
+    expect(activeLabel()).toBe('市场扫描')
     expect(page()).toBe('机会内容')
   })
 
@@ -144,7 +144,7 @@ describe('点左侧菜单: 未开过→新开, 已开过→切过去(不重复�
     renderShell('/heatmap')
     fireEvent.click(screen.getByTestId('go-opps'))
     fireEvent.click(screen.getByTestId('go-heatmap'))
-    expect(labels()).toEqual(['首页', '板块热力', '机会'])
+    expect(labels()).toEqual(['首页', '板块热力', '市场扫描'])
     expect(activeLabel()).toBe('板块热力')
     expect(page()).toBe('热力图内容')
   })
@@ -155,7 +155,7 @@ describe('点左侧菜单: 未开过→新开, 已开过→切过去(不重复�
     clickTab('首页')
     expect(activeLabel()).toBe('首页')
     expect(page()).toBe('首页内容')
-    expect(labels()).toEqual(['首页', '板块热力', '机会'])
+    expect(labels()).toEqual(['首页', '板块热力', '市场扫描'])
   })
 
   it('个股按 symbol 分页签: 两个股票 = 两个页签; 同票回切不新开', () => {
@@ -188,8 +188,8 @@ describe('✕ 关闭: 只关那一个功能页', () => {
     renderShell('/heatmap')
     fireEvent.click(screen.getByTestId('go-opps'))
     closeTab('板块热力')
-    expect(labels()).toEqual(['首页', '机会'])
-    expect(activeLabel()).toBe('机会')
+    expect(labels()).toEqual(['首页', '市场扫描'])
+    expect(activeLabel()).toBe('市场扫描')
     expect(page()).toBe('机会内容')
   })
 
@@ -207,9 +207,9 @@ describe('✕ 关闭: 只关那一个功能页', () => {
     closeTab('板块热力')
     // 现在只剩 首页 + 机会; 再开一个, 然后关掉非当前的那个
     fireEvent.click(screen.getByTestId('go-heatmap'))
-    expect(labels()).toEqual(['首页', '机会', '板块热力'])
+    expect(labels()).toEqual(['首页', '市场扫描', '板块热力'])
     expect(activeLabel()).toBe('板块热力')
-    closeTab('机会')
+    closeTab('市场扫描')
     expect(labels()).toEqual(['首页', '板块热力'])
     expect(activeLabel()).toBe('板块热力')
     expect(page()).toBe('热力图内容')
@@ -220,8 +220,8 @@ describe('✕ 关闭: 只关那一个功能页', () => {
     fireEvent.click(screen.getByTestId('go-opps'))
     fireEvent.click(screen.getByTestId('go-600111'))
     closeTab('600111 个股')
-    expect(labels()).toEqual(['首页', '板块热力', '机会'])
-    closeTab('机会')
+    expect(labels()).toEqual(['首页', '板块热力', '市场扫描'])
+    closeTab('市场扫描')
     expect(labels()).toEqual(['首页', '板块热力'])
     closeTab('板块热力')
     expect(labels()).toEqual(['首页'])
@@ -234,7 +234,7 @@ describe('持久化: 刷新后恢复', () => {
     renderShell('/heatmap')
     fireEvent.click(screen.getByTestId('go-opps'))
     expect(storedTabs().map((x) => x.key)).toEqual(['/', '/heatmap', '/opportunities'])
-    closeTab('机会')
+    closeTab('市场扫描')
     expect(storedTabs().map((x) => x.key)).toEqual(['/', '/heatmap'])
   })
 
@@ -244,8 +244,8 @@ describe('持久化: 刷新后恢复', () => {
     fireEvent.click(screen.getByTestId('go-600111'))
     cleanup()
     renderShell('/opportunities')
-    expect(labels()).toEqual(['首页', '板块热力', '机会', '600111 个股'])
-    expect(activeLabel()).toBe('机会')
+    expect(labels()).toEqual(['首页', '板块热力', '市场扫描', '600111 个股'])
+    expect(activeLabel()).toBe('市场扫描')
     expect(page()).toBe('机会内容')
   })
 
@@ -253,8 +253,8 @@ describe('持久化: 刷新后恢复', () => {
     renderShell('/heatmap')
     cleanup()
     renderShell('/opportunities')
-    expect(labels()).toEqual(['首页', '板块热力', '机会'])
-    expect(activeLabel()).toBe('机会')
+    expect(labels()).toEqual(['首页', '板块热力', '市场扫描'])
+    expect(activeLabel()).toBe('市场扫描')
   })
 })
 

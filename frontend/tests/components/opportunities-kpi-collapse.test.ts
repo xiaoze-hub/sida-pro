@@ -30,7 +30,7 @@ describe('机会页首屏结构（L2-E）', () => {
   })
 
   it('「更多指标」用原生 details 实现，不新增组件依赖', () => {
-    expect(SRC).toMatch(/<details className="mb-4 border-y border-border\/60 py-2">/)
+    expect(SRC).toMatch(/<details className="mb-4 border-y border-border py-2">/)
     expect(SRC).toMatch(/<summary[^>]*>[\s\S]{0,80}更多指标/)
   })
 })

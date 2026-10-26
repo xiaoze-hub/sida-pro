@@ -204,35 +204,35 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
       )}
       {loading && !detail ? (
         <div className="grid gap-3">
-          <div className="h-[92px] rounded-md border border-border/50 animate-pulse bg-accent/20" />
-          <div className="h-[220px] rounded-md border border-border/50 animate-pulse bg-accent/20" />
+          <div className="h-[92px] rounded-md border border-border animate-pulse bg-s2" />
+          <div className="h-[220px] rounded-md border border-border animate-pulse bg-s2" />
         </div>
       ) : (
         <>
           {/* 关键指标 */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
             {metrics.map((m) => (
-              <div key={m.label} className="border-l border-border/40 pl-3">
-                <div className="text-[11px] text-muted-foreground">{m.label}</div>
+              <div key={m.label} className="border-l border-border pl-3">
+                <div className="text-[12px] text-muted-foreground">{m.label}</div>
                 <div className={`text-[20px] font-bold mt-1 font-mono tabular-nums ${m.cls}`}>{m.value}</div>
-                <div className="text-[10px] text-muted-foreground mt-1">{m.note}</div>
+                <div className="text-[12px] text-muted-foreground mt-1">{m.note}</div>
               </div>
             ))}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             {/* 成分股表 */}
-            <div className="lg:col-span-2 border-b border-border/40 pb-3 md:pb-4">
+            <div className="lg:col-span-2 border-b border-border pb-3 md:pb-4">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-[13px] font-semibold text-foreground">成分股</h2>
-                <span className="text-[11px] text-muted-foreground">
+                <h2 className="text-[14px] font-semibold text-foreground">成分股</h2>
+                <span className="text-[12px] text-muted-foreground">
                   共 {constituents?.count ?? 0} 只 · 口径 {constituents?.source === 'tdx' ? '通达信实时' : 'thsdk 实时'}
                 </span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-[12px]">
                   <thead>
-                    <tr className="text-[11px] text-muted-foreground border-b border-border/60">
+                    <tr className="text-[12px] text-muted-foreground border-b border-border">
                       <th className="text-left py-1.5 pr-2 w-8">#</th>
                       <th className="text-left py-1.5 pr-2">代码</th>
                       <th className="text-left py-1.5 pr-2">名称</th>
@@ -255,8 +255,8 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
                       const chg = pickNum(row, 'change_pct', ...(chgKey ? [chgKey] : []))
                       const amt = pickNum(row, 'amount', ...(amtKey ? [amtKey] : []))
                       return (
-                        <tr key={rowCode || i} className="border-b border-border/30 hover:bg-accent/40">
-                          <td className="py-1 pr-2 text-[10px] text-muted-foreground">{i + 1}</td>
+                        <tr key={rowCode || i} className="border-b border-border hover:bg-s2">
+                          <td className="py-1 pr-2 text-[12px] text-muted-foreground">{i + 1}</td>
                           <td className="py-1 pr-2 font-mono text-muted-foreground">{rowCode || '--'}</td>
                           <td className="py-1 pr-2 font-medium text-foreground">{name || '--'}</td>
                           <td className="py-1 pr-2 text-right font-mono tabular-nums text-muted-foreground">
@@ -269,7 +269,7 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
                     })}
                     {!constituents && (
                       <tr>
-                        <td colSpan={6} className="py-8 text-center text-[11px] text-muted-foreground">
+                        <td colSpan={6} className="py-8 text-center text-[12px] text-muted-foreground">
                           成分股暂不可用(数据源未接入 / 拉取失败)
                         </td>
                       </tr>
@@ -280,13 +280,13 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
             </div>
 
             {/* 板块轮动 Top5 横条 */}
-            <div className="border-b border-border/40 pb-3 md:pb-4">
+            <div className="border-b border-border pb-3 md:pb-4">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[13px] font-semibold text-foreground">板块轮动 Top 5</h2>
-                <span className="text-[10px] text-muted-foreground">近{rotation?.days ?? 5}日 · click进入详情</span>
+                <h2 className="text-[14px] font-semibold text-foreground">板块轮动 Top 5</h2>
+                <span className="text-[12px] text-muted-foreground">近{rotation?.days ?? 5}日 · click进入详情</span>
               </div>
               {rotItemsTop.length === 0 ? (
-                <div className="text-[11px] text-muted-foreground py-8 text-center">暂无轮动数据</div>
+                <div className="text-[12px] text-muted-foreground py-8 text-center">暂无轮动数据</div>
               ) : (
                 <div className="space-y-2.5">
                   {rotItemsTop.map((r) => (
@@ -297,14 +297,14 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
                       onClick={() => navigate(`/boards/${r.block_code}`)}
                       title={`${r.name} · 强度 ${safeFixed(r.rotation_score, 1)}`}
                     >
-                      <div className="flex items-center justify-between text-[11px] mb-0.5">
+                      <div className="flex items-center justify-between text-[12px] mb-0.5">
                         <span className="truncate font-medium text-foreground group-hover:text-primary transition-colors" title={r.name}>{r.name}</span>
                         <span className="font-mono ml-2 shrink-0">
                           <span className={pctColor(r.change_5d)}>{fmtPct(r.change_5d)}</span>
                           <span className="text-muted-foreground ml-1.5">{safeFixed(r.rotation_score, 0)}</span>
                         </span>
                       </div>
-                      <div className="h-1.5 rounded-full bg-accent/40 overflow-hidden">
+                      <div className="h-1.5 rounded-full bg-s2 overflow-hidden">
                         <div
                           className="h-full rounded-full transition-[width]"
                           style={{ width: `${(r.rotation_score / maxScore) * 100}%`, backgroundColor: rotBarColor(r) }}
@@ -314,7 +314,7 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
                   ))}
                 </div>
               )}
-              <div className="mt-3 text-[10px] text-muted-foreground">强度分: 动量+资金+连续性 0-100 降序</div>
+              <div className="mt-3 text-[12px] text-muted-foreground">强度分: 动量+资金+连续性 0-100 降序</div>
             </div>
           </div>
         </>

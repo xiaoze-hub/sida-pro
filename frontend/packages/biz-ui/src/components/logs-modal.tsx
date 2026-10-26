@@ -265,7 +265,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
               <button
                 key={opt.value}
                 onClick={() => setDomain(opt.value)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${domain === opt.value ? 'bg-primary text-white' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
+                className={`px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-all ${domain === opt.value ? 'bg-primary text-primary-foreground' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
               >
                 {opt.label}
               </button>
@@ -275,12 +275,12 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
               <button
                 key={range.value}
                 onClick={() => setTimeRange(range.value)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${timeRange === range.value ? 'bg-primary text-white' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
+                className={`px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-all ${timeRange === range.value ? 'bg-primary text-primary-foreground' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
               >
                 {range.label}
               </button>
             ))}
-            <span className="ml-auto text-[11px] text-muted-foreground font-medium">{total} 条记录</span>
+            <span className="ml-auto text-[12px] text-muted-foreground font-medium">{total} 条记录</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
@@ -288,7 +288,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
               <button
                 key={level}
                 onClick={() => toggleLevel(level)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${selectedLevels.includes(level) ? 'bg-primary text-white' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-all ${selectedLevels.includes(level) ? 'bg-primary text-primary-foreground' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${selectedLevels.includes(level) ? 'bg-white/70' : LEVEL_DOT[level]}`} />
                 {level}
@@ -301,7 +301,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
               <button
                 key={flow.key || 'all'}
                 onClick={() => setSelectedFlow(flow.key)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${selectedFlow === flow.key ? 'bg-primary text-white' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
+                className={`px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-all ${selectedFlow === flow.key ? 'bg-primary text-primary-foreground' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
               >
                 {flow.label}
               </button>
@@ -311,12 +311,12 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowAllLoggerFilters(v => !v)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-accent text-muted-foreground hover:text-foreground"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-accent text-muted-foreground hover:text-foreground"
             >
               Logger过滤
               <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAllLoggerFilters ? 'rotate-180' : ''}`} />
             </button>
-            <div className="text-[11px] text-muted-foreground">默认链路会自动包含 `src.agents.base` 决策日志</div>
+            <div className="text-[12px] text-muted-foreground">默认链路会自动包含 `src.agents.base` 决策日志</div>
           </div>
           {showAllLoggerFilters && (
             <div className="flex flex-wrap items-center gap-1.5">
@@ -324,7 +324,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
                 <button
                   key={opt.key}
                   onClick={() => toggleLogger(opt.key)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${selectedLoggers.includes(opt.key) ? 'bg-primary text-white' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-all ${selectedLoggers.includes(opt.key) ? 'bg-primary text-primary-foreground' : 'bg-accent text-muted-foreground hover:text-foreground'}`}
                   title={opt.key}
                 >
                   {opt.label}
@@ -333,8 +333,8 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
             </div>
           )}
 
-          <div className="flex items-center gap-2 text-[11px]">
-            <div className="flex-1 rounded-md border border-border/50 px-2.5 py-1.5 text-muted-foreground bg-background/40">
+          <div className="flex items-center gap-2 text-[12px]">
+            <div className="flex-1 rounded-md border border-border px-2.5 py-1.5 text-muted-foreground bg-background">
               过滤器：{filterSummary}
             </div>
             <Button variant="ghost" size="sm" className="h-7" onClick={clearFilters}>清空过滤</Button>
@@ -352,24 +352,24 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
                 <ScrollText className="w-6 h-6 text-primary" />
               </div>
               <p className="text-[16px] font-semibold text-foreground">暂无日志</p>
-              <p className="text-[13px] text-muted-foreground mt-1.5">后台运行后日志会自动出现在这里</p>
+              <p className="text-[14px] text-muted-foreground mt-1.5">后台运行后日志会自动出现在这里</p>
             </div>
           ) : (
             <div className="card overflow-hidden h-full flex flex-col">
               <div className="overflow-x-auto overflow-y-auto flex-1 min-h-0 relative scrollbar">
                 <table className="w-full text-[12px] font-mono">
-                  <thead className="sticky top-0 bg-card z-10 border-b border-border/50">
+                  <thead className="sticky top-0 bg-card z-10 border-b border-border">
                     <tr>
-                      <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-32">时间</th>
-                      <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-20">级别</th>
-                      <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-36">Logger</th>
-                      <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-44">链路</th>
-                      <th className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">消息</th>
+                      <th className="text-left px-4 py-3 text-[12px] font-semibold text-muted-foreground uppercase tracking-wider w-32">时间</th>
+                      <th className="text-left px-4 py-3 text-[12px] font-semibold text-muted-foreground uppercase tracking-wider w-20">级别</th>
+                      <th className="text-left px-4 py-3 text-[12px] font-semibold text-muted-foreground uppercase tracking-wider w-36">Logger</th>
+                      <th className="text-left px-4 py-3 text-[12px] font-semibold text-muted-foreground uppercase tracking-wider w-44">链路</th>
+                      <th className="text-left px-4 py-3 text-[12px] font-semibold text-muted-foreground uppercase tracking-wider">消息</th>
                     </tr>
                   </thead>
                   <tbody>
                     {logs.map((log, i) => (
-                      <tr key={log.id} className={`hover:bg-accent/30 transition-colors ${i > 0 ? 'border-t border-border/20' : ''}`}>
+                      <tr key={log.id} className={`hover:bg-s2 transition-colors ${i > 0 ? 'border-t border-border' : ''}`}>
                         <td className="px-4 py-2 text-muted-foreground whitespace-nowrap">{formatTime(log.timestamp)}</td>
                         <td className="px-4 py-2 whitespace-nowrap">
                           <span className="inline-flex items-center gap-1.5">
@@ -378,7 +378,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
                           </span>
                         </td>
                         <td className="px-4 py-2 text-muted-foreground truncate max-w-[144px]" title={log.logger_name}>{mapLoggerName(log.logger_name)}</td>
-                        <td className="px-4 py-2 text-[11px] text-muted-foreground">
+                        <td className="px-4 py-2 text-[12px] text-muted-foreground">
                           <div className="truncate" title={log.trace_id || ''}>{log.trace_id || '-'}</div>
                           <div className="truncate" title={log.event || '-'}>{log.event || '-'}</div>
                         </td>
@@ -394,7 +394,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
                 )}
               </div>
 
-              <div className="flex items-center justify-between px-5 py-3 border-t border-border/30">
+              <div className="flex items-center justify-between px-5 py-3 border-t border-border">
                 <span className="text-[12px] text-muted-foreground">已加载 {logs.length} / {total}</span>
                 <Button
                   variant="ghost"

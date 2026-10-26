@@ -66,12 +66,12 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
   // 加载中轻量骨架(首次加载、尚无数据时)
   if (loading && !data) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card p-3">
+      <div className="rounded-xl border border-border bg-card p-3">
         <div className="flex items-center gap-1.5 mb-2">
           <Activity className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="text-[13px] font-semibold text-foreground">OB 盘口失衡</span>
+          <span className="text-[14px] font-semibold text-foreground">OB 盘口失衡</span>
         </div>
-        <div className="h-2 rounded-full bg-accent/40 animate-pulse" />
+        <div className="h-2 rounded-full bg-s2 animate-pulse" />
       </div>
     )
   }
@@ -91,9 +91,9 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
   const tagClass = ob >= 0.3 ? 'text-stock-up' : ob <= -0.3 ? 'text-stock-down' : 'text-muted-foreground'
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-3">
+    <div className="rounded-xl border border-border bg-card p-3">
       <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
+        <div className="text-[14px] font-semibold text-foreground flex items-center gap-1.5">
           <Activity className="w-3.5 h-3.5 text-muted-foreground" />
           OB 盘口失衡
         </div>
@@ -111,16 +111,16 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
       </div>
 
       {/* 买|卖比例横条: 买(红)左 / 卖(绿)右 */}
-      <div className="flex items-center gap-2 text-[11px] mb-1.5">
+      <div className="flex items-center gap-2 text-[12px] mb-1.5">
         <span className="text-stock-up font-mono shrink-0">买 {buyPct.toFixed(1)}%</span>
-        <div className="flex-1 h-2 rounded-full bg-accent/40 overflow-hidden flex">
+        <div className="flex-1 h-2 rounded-full bg-s2 overflow-hidden flex">
           <div className="h-full bg-stock-up/80 transition-all" style={{ width: `${buyPct}%` }} />
           <div className="h-full bg-stock-down/80 transition-all" style={{ width: `${sellPct}%` }} />
         </div>
         <span className="text-stock-down font-mono shrink-0">卖 {sellPct.toFixed(1)}%</span>
       </div>
 
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between text-[12px] text-muted-foreground">
         <span>
           OB <span className={`font-mono font-medium ${tagClass}`}>{ob >= 0 ? '+' : ''}{ob.toFixed(3)}</span>
           <span className={`ml-1.5 font-medium ${tagClass}`}>{tag}</span>
@@ -129,7 +129,7 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
       </div>
 
       {data.note ? (
-        <div className="mt-1.5 text-[11px] text-muted-foreground truncate" title={data.note}>
+        <div className="mt-1.5 text-[12px] text-muted-foreground truncate" title={data.note}>
           {data.note}
         </div>
       ) : null}

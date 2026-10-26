@@ -244,7 +244,7 @@ export function DefenseLineBanner({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 text-[11px] tabular-nums"
+                className="h-7 px-2 text-[12px] tabular-nums"
                 onClick={() => setDraft(safeFixed(presetPrice(costVal, p.pct), 2, ''))}
               >
                 {p.label} · {safeFixed(presetPrice(costVal, p.pct), 2)}
@@ -259,7 +259,7 @@ export function DefenseLineBanner({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  className="h-7 px-2 text-[11px] text-muted-foreground"
+                  className="h-7 px-2 text-[12px] text-muted-foreground"
                   disabled={saving}
                   onClick={() => void saveDefense(null)}
                 >
@@ -272,7 +272,7 @@ export function DefenseLineBanner({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 text-[11px]"
+                className="h-7 px-2 text-[12px]"
                 onClick={() => setDialogOpen(false)}
               >
                 取消
@@ -280,7 +280,7 @@ export function DefenseLineBanner({
               <Button
                 type="button"
                 size="sm"
-                className="h-7 px-2 text-[11px]"
+                className="h-7 px-2 text-[12px]"
                 disabled={saving}
                 onClick={submitDraft}
                 data-testid="defense-line-save"
@@ -308,14 +308,14 @@ export function DefenseLineBanner({
             <span>
               成本 <span className="tabular-nums">{safeFixed(costVal, 2)}</span>，
               参考 -8% = <span className="tabular-nums">{safeFixed(presetPrice(costVal, -8), 2)}</span>
-              <span className="ml-1 text-[11px] opacity-70">(系统参考值，非你的纪律位)</span>
+              <span className="ml-1 text-[12px] opacity-70">(系统参考值，非你的纪律位)</span>
             </span>
           </div>
           <Button
             type="button"
             size="sm"
             variant="outline"
-            className="h-7 shrink-0 px-2 text-[11px]"
+            className="h-7 shrink-0 px-2 text-[12px]"
             onClick={() => openDialog(presetPrice(costVal, -8))}
             data-testid="defense-line-set"
           >
@@ -358,7 +358,7 @@ export function DefenseLineBanner({
           type="button"
           size="sm"
           variant="ghost"
-          className="h-7 shrink-0 px-2 text-[11px] text-muted-foreground"
+          className="h-7 shrink-0 px-2 text-[12px] text-muted-foreground"
           onClick={() => openDialog(defense)}
         >
           修改
@@ -393,7 +393,7 @@ export function DefenseLineBanner({
             {lossPct != null ? ` · 浮亏 ${safeFixed(lossPct, 2)}%` : ''}
             {!isBreached && distancePct != null ? ` · 距防线 ${safeFixed(distancePct, 2)}%` : ''}
           </span>
-          <span className="text-[11px] opacity-70">
+          <span className="text-[12px] opacity-70">
             成本 <span className="tabular-nums">{safeFixed(costVal, 2)}</span>
           </span>
         </div>
@@ -401,7 +401,7 @@ export function DefenseLineBanner({
           type="button"
           size="sm"
           variant="ghost"
-          className="h-7 shrink-0 px-2 text-[11px] opacity-80"
+          className="h-7 shrink-0 px-2 text-[12px] opacity-80"
           onClick={() => openDialog(defense)}
         >
           修改

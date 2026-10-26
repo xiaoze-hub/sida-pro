@@ -12,7 +12,7 @@ export function StocksTabsBar() {
     <>
 {/* Tabs: Positions / Watchlist */}
 <div className="mb-4">
-  <div className="inline-flex items-center gap-1 p-1 rounded-md bg-accent/30">
+  <div className="inline-flex items-center gap-1 p-1 rounded-md bg-s2">
     <button
       onClick={() => setViewTab('positions')}
       className={`px-3 py-1.5 rounded-md text-[12px] transition-colors ${
@@ -21,7 +21,7 @@ export function StocksTabsBar() {
           : 'text-muted-foreground hover:text-foreground'
       }`}
     >
-      持仓 <span className="ml-1 font-mono text-[11px] opacity-70">{positionsCount}</span>
+      持仓 <span className="ml-1 font-mono text-[12px] opacity-70">{positionsCount}</span>
     </button>
     <button
       onClick={() => setViewTab('watchlist')}
@@ -31,7 +31,7 @@ export function StocksTabsBar() {
           : 'text-muted-foreground hover:text-foreground'
       }`}
     >
-      关注 <span className="ml-1 font-mono text-[11px] opacity-70">{watchlistCount}</span>
+      关注 <span className="ml-1 font-mono text-[12px] opacity-70">{watchlistCount}</span>
     </button>
   </div>
 </div>

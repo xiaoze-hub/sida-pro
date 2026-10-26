@@ -129,29 +129,29 @@ export function FreeTierSection() {
   const proSkills = data.catalog.skills
 
   return (
-    <div className="lg:col-span-12 border border-border/50 rounded-lg p-4 space-y-4">
+    <div className="lg:col-span-12 border border-border rounded-lg p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+        <h3 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
           <SlidersHorizontal className="w-4 h-4 text-primary" /> 免费档（免费级别）
         </h3>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => void load()}>
+          <Button size="sm" variant="outline" className="h-7 text-[12px]" onClick={() => void load()}>
             <RefreshCw className="w-3 h-3 mr-1" /> 重新读取
           </Button>
-          <Button size="sm" className="h-7 text-[11px]" disabled={saving} onClick={() => void save()}>
+          <Button size="sm" className="h-7 text-[12px]" disabled={saving} onClick={() => void save()}>
             {saving ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Save className="w-3 h-3 mr-1" />}
             保存
           </Button>
         </div>
       </div>
 
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[12px] text-muted-foreground">
         决定 <b>member(免费用户)</b> 能用什么、每天几次。数智决策三指标与集合竞价池默认是
         <b> pro 专属</b>（不在免费层级）—— 这里勾上即临时放开试用。
       </p>
 
       {(msg || err) && (
-        <div className={`text-[11px] ${err ? 'text-red-500' : 'text-emerald-500'} flex items-center gap-1`}>
+        <div className={`text-[12px] ${err ? 'text-red-500' : 'text-emerald-500'} flex items-center gap-1`}>
           {!err && <CheckCircle2 className="w-3.5 h-3.5" />}
           {err || msg}
         </div>
@@ -171,9 +171,9 @@ export function FreeTierSection() {
               />
               {f.label}
               {d.trial_features[f.perm] ? (
-                <span className="text-[10px] text-muted-foreground">（默认就给）</span>
+                <span className="text-[12px] text-muted-foreground">（默认就给）</span>
               ) : (
-                <span className="text-[10px] text-amber-500">（默认 pro 专属）</span>
+                <span className="text-[12px] text-amber-500">（默认 pro 专属）</span>
               )}
             </label>
           ))}
@@ -191,9 +191,9 @@ export function FreeTierSection() {
             aria-label="试用日限"
             value={dailyLimit}
             onChange={(e) => setDailyLimit(Number(e.target.value))}
-            className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+            className="ml-2 w-20 h-7 rounded border border-border bg-transparent px-2 text-[12px]"
           />
-          <span className="text-[10px] text-muted-foreground ml-1">默认 {d.trial_daily_limit}，0=不给试用</span>
+          <span className="text-[12px] text-muted-foreground ml-1">默认 {d.trial_daily_limit}，0=不给试用</span>
         </label>
         <label className="text-[12px] text-foreground">
           member 自选上限
@@ -203,7 +203,7 @@ export function FreeTierSection() {
             aria-label="自选上限"
             value={watchMax}
             onChange={(e) => setWatchMax(Number(e.target.value))}
-            className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+            className="ml-2 w-20 h-7 rounded border border-border bg-transparent px-2 text-[12px]"
           />
         </label>
         <label className="text-[12px] text-foreground">
@@ -214,7 +214,7 @@ export function FreeTierSection() {
             aria-label="预警上限"
             value={alertMax}
             onChange={(e) => setAlertMax(Number(e.target.value))}
-            className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+            className="ml-2 w-20 h-7 rounded border border-border bg-transparent px-2 text-[12px]"
           />
         </label>
       </div>
@@ -224,7 +224,7 @@ export function FreeTierSection() {
         <div className="text-[12px] font-medium text-foreground mb-2">外部 Skill 最低档位</div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
           {proSkills.map((s) => (
-            <label key={s.name} className="flex items-center justify-between gap-2 text-[11px] text-foreground">
+            <label key={s.name} className="flex items-center justify-between gap-2 text-[12px] text-foreground">
               <span className="truncate" title={s.name}>{s.name}</span>
               <select
                 aria-label={`档位-${s.name}`}
@@ -237,8 +237,8 @@ export function FreeTierSection() {
                     return next
                   })
                 }
-                className={`h-6 rounded border bg-transparent px-1 text-[11px] ${
-                  s.effective_tier === 'pro' ? 'border-amber-500/50' : 'border-border/60'
+                className={`h-6 rounded border bg-transparent px-1 text-[12px] ${
+                  s.effective_tier === 'pro' ? 'border-amber-500/50' : 'border-border'
                 }`}
               >
                 <option value="free">free</option>
@@ -248,7 +248,7 @@ export function FreeTierSection() {
             </label>
           ))}
         </div>
-        <p className="text-[10px] text-muted-foreground mt-2 flex items-center gap-1">
+        <p className="text-[12px] text-muted-foreground mt-2 flex items-center gap-1">
           <Lock className="w-3 h-3" /> 与代码内置档位一致时不写覆盖（改回内置值 = 删除覆盖项）。
         </p>
       </div>
@@ -266,9 +266,9 @@ export function FreeTierSection() {
               aria-label="同时在线设备数"
               value={maxSessions}
               onChange={(e) => setMaxSessions(Number(e.target.value))}
-              className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+              className="ml-2 w-20 h-7 rounded border border-border bg-transparent px-2 text-[12px]"
             />
-            <span className="text-[10px] text-muted-foreground ml-1">默认 {d.max_sessions_per_user}</span>
+            <span className="text-[12px] text-muted-foreground ml-1">默认 {d.max_sessions_per_user}</span>
           </label>
           <label className="text-[12px] text-foreground">
             游客自选上限
@@ -278,9 +278,9 @@ export function FreeTierSection() {
               aria-label="游客自选上限"
               value={guestWatch}
               onChange={(e) => setGuestWatch(Number(e.target.value))}
-              className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+              className="ml-2 w-20 h-7 rounded border border-border bg-transparent px-2 text-[12px]"
             />
-            <span className="text-[10px] text-muted-foreground ml-1">
+            <span className="text-[12px] text-muted-foreground ml-1">
               默认 {d.guest_strategy.watchlist_limit}，0=不限
             </span>
           </label>
@@ -292,22 +292,22 @@ export function FreeTierSection() {
               aria-label="游客每小时请求"
               value={guestHourly}
               onChange={(e) => setGuestHourly(Number(e.target.value))}
-              className="ml-2 w-20 h-7 rounded border border-border/60 bg-transparent px-2 text-[12px]"
+              className="ml-2 w-20 h-7 rounded border border-border bg-transparent px-2 text-[12px]"
             />
-            <span className="text-[10px] text-muted-foreground ml-1">默认 {d.guest_strategy.get_hourly_limit}</span>
+            <span className="text-[12px] text-muted-foreground ml-1">默认 {d.guest_strategy.get_hourly_limit}</span>
           </label>
         </div>
         <div>
-          <div className="text-[11px] text-muted-foreground mb-1">
+          <div className="text-[12px] text-muted-foreground mb-1">
             skill 档位限额（留空 = 沿用 tier_configs 表 / 代码默认；当前生效值见占位）
           </div>
           <div className="flex flex-wrap gap-3">
             {data.catalog.tiers.map((t) => (
-              <div key={t.tier} className="flex items-center gap-1 text-[11px] text-foreground">
+              <div key={t.tier} className="flex items-center gap-1 text-[12px] text-foreground">
                 <span className="w-10">{t.tier}</span>
                 {TIER_LIMIT_FIELDS.map(([key, label]) => (
                   <label key={key} className="flex items-center gap-1">
-                    <span className="text-[10px] text-muted-foreground">{label}</span>
+                    <span className="text-[12px] text-muted-foreground">{label}</span>
                     <input
                       type="number"
                       min={1}
@@ -326,7 +326,7 @@ export function FreeTierSection() {
                           return next
                         })
                       }}
-                      className="w-16 h-6 rounded border border-border/60 bg-transparent px-1 text-[11px]"
+                      className="w-16 h-6 rounded border border-border bg-transparent px-1 text-[12px]"
                     />
                   </label>
                 ))}

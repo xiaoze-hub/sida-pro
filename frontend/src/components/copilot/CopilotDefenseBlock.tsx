@@ -26,21 +26,21 @@ export function CopilotDefenseBlock({
   const closeTxt = safeFixed(close, 2)
 
   return (
-    <section className="rounded-lg border border-border/60 bg-s2 p-2" data-testid="copilot-defense">
-      <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+    <section className="rounded-lg border border-border bg-s2 p-2" data-testid="copilot-defense">
+      <div className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground">
         <Shield className="h-3 w-3" />
         {SECTION_DEFENSE}
-        <span className="ml-auto font-mono text-[10px]">现价 {closeTxt}</span>
+        <span className="ml-auto font-mono text-[12px]">现价 {closeTxt}</span>
       </div>
 
       {rows.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground">{NO_DEFENSE_HINT}</div>
+        <div className="text-[12px] text-muted-foreground">{NO_DEFENSE_HINT}</div>
       ) : (
         <div className="space-y-1">
           {[...supports, ...resistances].map((l) => (
             <div
               key={`${l.slot}-${l.price}`}
-              className="flex items-baseline gap-1.5 text-[11px]"
+              className="flex items-baseline gap-1.5 text-[12px]"
               data-testid={`copilot-defense-${l.slot}`}
             >
               <span
@@ -51,10 +51,10 @@ export function CopilotDefenseBlock({
                 {DEFENSE_LABEL[l.slot] || l.label}
               </span>
               <span className="font-mono text-[12px] text-foreground">{safeFixed(l.price, 2)}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">
+              <span className="font-mono text-[12px] text-muted-foreground">
                 {safePercent(l.distance_pct, 2, true)}
               </span>
-              <span className="ml-auto truncate text-[10px] text-muted-foreground" title={l.basis}>
+              <span className="ml-auto truncate text-[12px] text-muted-foreground" title={l.basis}>
                 {l.basis || (l.side === 'support' ? '支撑' : '压制')}
               </span>
             </div>

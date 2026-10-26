@@ -147,8 +147,8 @@ function Section({
   children: ReactNode
 }) {
   return (
-    <section data-testid={`fundamental-section-${id}`} className="border-b border-border/40 pb-3">
-      <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
+    <section data-testid={`fundamental-section-${id}`} className="border-b border-border pb-3">
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12px]">
         <span className="font-medium text-foreground">{title}</span>
         {hint ? (
           <span className="text-muted-foreground" title={hint}>
@@ -175,7 +175,7 @@ function Cell({
 }) {
   return (
     <div data-testid={testid} title={hint}>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="text-[12px] text-muted-foreground">{label}</div>
       <div className="font-mono text-foreground">{value}</div>
     </div>
   )
@@ -310,7 +310,7 @@ function FinanceSection({ snap, cn }: { snap: CnSnapshot; cn: boolean }) {
       title="财务 / 股本"
       hint="估值: 通达信 get_more_info(L2) · 股本/上市/次新: GET /stocks/{s}/fundamental"
       extra={
-        gbDate ? <span className="ml-auto font-mono text-[10px] text-muted-foreground">股本 {gbDate}</span> : null
+        gbDate ? <span className="ml-auto font-mono text-[12px] text-muted-foreground">股本 {gbDate}</span> : null
       }
     >
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
@@ -319,7 +319,7 @@ function FinanceSection({ snap, cn }: { snap: CnSnapshot; cn: boolean }) {
         ))}
       </div>
       {notes.length > 0 ? (
-        <div className="mt-1.5 space-y-0.5 text-[10px] text-muted-foreground">
+        <div className="mt-1.5 space-y-0.5 text-[12px] text-muted-foreground">
           {notes.map((n) => (
             <div key={n}>{n}</div>
           ))}
@@ -342,7 +342,7 @@ function AddPositionSection({ symbol, market }: { symbol: string; market: string
 
   if (!holdingLoaded) {
     return (
-      <div data-testid="fundamental-add-position" className="text-[11px] text-muted-foreground">
+      <div data-testid="fundamental-add-position" className="text-[12px] text-muted-foreground">
         加仓测算: 读取当前持仓…
       </div>
     )
@@ -354,7 +354,7 @@ function AddPositionSection({ symbol, market }: { symbol: string; market: string
       <div
         data-testid="fundamental-add-position"
         data-state="no-holding-data"
-        className="text-[11px] text-muted-foreground"
+        className="text-[12px] text-muted-foreground"
       >
         加仓测算: {holdingLoadError ? '持仓汇总取数失败' : '持仓汇总中无该标的'}, 未取到当前持仓数 ——
         需真实持仓数才能算, 不代填 0
@@ -394,7 +394,7 @@ function FundamentalTabBody({
   return (
     <div className="mt-1 space-y-3 text-[12px]" data-testid="fundamental-tab">
       {/* 条: 口径说明(名称/现价/涨停价归带1; 题材/板块归右栏 —— 本标签一概不渲染, 去重表) */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/40 pb-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2 text-[12px] text-muted-foreground">
         <span className="text-foreground">基本面</span>
         <span className="text-border/60">|</span>
         <span>财务/股本 · 龙虎榜/融资融券/股东户数 · 公司简介/基本信息{hasPosition ? ' · 加仓测算' : ''}</span>

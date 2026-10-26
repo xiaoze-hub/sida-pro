@@ -185,14 +185,14 @@ export default function CopilotRunsPage() {
           onClick={() => void load(true)}
           disabled={loading}
           data-testid="runs-refresh"
-          className="ml-auto flex items-center gap-1 rounded-md border border-border/40 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-60"
+          className="ml-auto flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-60"
         >
           <RefreshCw className="h-3 w-3" aria-hidden />
           刷新
         </button>
       </header>
 
-      <div className="text-[11px] text-muted-foreground" data-testid="runs-summary">
+      <div className="text-[12px] text-muted-foreground" data-testid="runs-summary">
         近 <span className="tabular-nums text-foreground">{loading || error ? '--' : summary.total}</span> 次运行 · 成功率{' '}
         <span className="tabular-nums text-foreground">
           {loading || error ? '--' : rateText(summary.okRate)}
@@ -204,33 +204,33 @@ export default function CopilotRunsPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-2 rounded-xl border border-border/40 bg-s1 px-3 py-3" data-testid="runs-loading">
-          <div className="text-[11px] text-muted-foreground">读取中…</div>
+        <div className="space-y-2 rounded-xl border border-border bg-s1 px-3 py-3" data-testid="runs-loading">
+          <div className="text-[12px] text-muted-foreground">读取中…</div>
           <Skeleton shape="text" className="h-3 w-3/4" />
           <Skeleton shape="text" className="h-3 w-1/2" />
           <Skeleton shape="text" className="h-3 w-2/3" />
         </div>
       ) : error ? (
         <div
-          className="rounded-xl border border-border/40 bg-s1 px-3 py-6 text-[11px] text-muted-foreground"
+          className="rounded-xl border border-border bg-s1 px-3 py-6 text-[12px] text-muted-foreground"
           data-testid="runs-error"
         >
           读取失败（可点刷新重试）
         </div>
       ) : rows.length === 0 ? (
         <div
-          className="rounded-xl border border-border/40 bg-s1 px-3 py-6 text-[12px] text-muted-foreground"
+          className="rounded-xl border border-border bg-s1 px-3 py-6 text-[12px] text-muted-foreground"
           data-testid="runs-empty"
         >
           暂无运行记录
-          <div className="mt-1 text-[11px]">在「数智参谋」里提一次问题，这里就会出现那一轮的轨迹。</div>
+          <div className="mt-1 text-[12px]">在「数智参谋」里提一次问题，这里就会出现那一轮的轨迹。</div>
         </div>
       ) : (
-        <section className="rounded-xl border border-border/40 bg-s1" data-testid="runs-table-wrap">
+        <section className="rounded-xl border border-border bg-s1" data-testid="runs-table-wrap">
           <div className="max-h-[70vh] overflow-y-auto">
             <table className="w-full text-[12px]">
               <thead className="sticky top-0 z-10 bg-s1 text-muted-foreground">
-                <tr className="border-b border-border/40">
+                <tr className="border-b border-border">
                   <th className="px-2 py-1.5 text-left font-normal">状态</th>
                   <th className="px-2 py-1.5 text-left font-normal">问题</th>
                   <th className="px-2 py-1.5 text-left font-normal">配方</th>
@@ -250,7 +250,7 @@ export default function CopilotRunsPage() {
                         onClick={() => void toggle(row.run_id)}
                         aria-expanded={open}
                         data-testid={`run-row-${row.run_id}`}
-                        className="cursor-pointer border-t border-border/40 hover:bg-s2"
+                        className="cursor-pointer border-t border-border hover:bg-s2"
                       >
                         <td className={`whitespace-nowrap px-2 py-1.5 ${meta.cls}`}>
                           <span className="flex items-center gap-1">
@@ -288,11 +288,11 @@ export default function CopilotRunsPage() {
                         </td>
                       </tr>
                       {open ? (
-                        <tr className="border-t border-border/40" data-testid={`run-steps-${row.run_id}`}>
+                        <tr className="border-t border-border" data-testid={`run-steps-${row.run_id}`}>
                           <td colSpan={6} className="px-2 py-1.5">
                             {detail ? (
                               detail.steps.length === 0 ? (
-                                <div className="text-[11px] text-muted-foreground">
+                                <div className="text-[12px] text-muted-foreground">
                                   本轮没有工具调用（纯文本回答）
                                 </div>
                               ) : (
@@ -304,17 +304,17 @@ export default function CopilotRunsPage() {
                                       title={step.args || undefined}
                                       data-testid={`run-step-${row.run_id}-${step.seq}`}
                                     >
-                                      <span className="w-8 shrink-0 font-mono tabular-nums text-[11px] text-muted-foreground">
+                                      <span className="w-8 shrink-0 font-mono tabular-nums text-[12px] text-muted-foreground">
                                         #{step.seq}
                                       </span>
-                                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
+                                      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground">
                                         {step.tool || '--'}
                                       </span>
-                                      <span className="shrink-0 font-mono tabular-nums text-[11px] text-muted-foreground">
+                                      <span className="shrink-0 font-mono tabular-nums text-[12px] text-muted-foreground">
                                         {formatElapsed(step.elapsed_ms)}
                                       </span>
                                       <span
-                                        className={`shrink-0 text-[11px] ${
+                                        className={`shrink-0 text-[12px] ${
                                           step.ok ? 'text-muted-foreground' : 'text-stock-down'
                                         }`}
                                       >
@@ -325,24 +325,24 @@ export default function CopilotRunsPage() {
                                 </ol>
                               )
                             ) : detailError === row.run_id ? (
-                              <div className="text-[11px] text-muted-foreground">
+                              <div className="text-[12px] text-muted-foreground">
                                 工具步骤读取失败（收起后再展开可重试）
                               </div>
                             ) : detailLoading === row.run_id ? (
                               <div className="space-y-1" data-testid={`run-steps-loading-${row.run_id}`}>
-                                <div className="text-[11px] text-muted-foreground">读取中…</div>
+                                <div className="text-[12px] text-muted-foreground">读取中…</div>
                                 <Skeleton shape="text" className="h-2 w-1/2" />
                               </div>
                             ) : null}
                             {/* 2026-10-25: 展开只是速览; 要分享/细看走独立证据页 */}
-                            <div className="mt-1 border-t border-border/40 pt-1">
+                            <div className="mt-1 border-t border-border pt-1">
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   navigate(`/copilot/runs/${encodeURIComponent(row.run_id)}`)
                                 }}
-                                className="text-[11px] text-muted-foreground hover:text-foreground"
+                                className="text-[12px] text-muted-foreground hover:text-foreground"
                                 data-testid={`run-open-detail-${row.run_id}`}
                               >
                                 打开证据卡 ↗
@@ -357,7 +357,7 @@ export default function CopilotRunsPage() {
               </tbody>
             </table>
           </div>
-          <div className="flex flex-wrap items-center gap-2 border-t border-border/40 px-2 py-1.5 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2 border-t border-border px-2 py-1.5 text-[12px] text-muted-foreground">
             <span>
               第 <span className="tabular-nums text-foreground">{page}</span> /{' '}
               <span className="tabular-nums text-foreground">{totalPages}</span> 页
@@ -371,7 +371,7 @@ export default function CopilotRunsPage() {
                 data-testid="runs-prev"
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="rounded-md border border-border/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                className="rounded-md border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
                 上一页
               </button>
@@ -380,7 +380,7 @@ export default function CopilotRunsPage() {
                 data-testid="runs-next"
                 disabled={!canNext}
                 onClick={() => setPage((p) => p + 1)}
-                className="rounded-md border border-border/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                className="rounded-md border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
                 下一页
               </button>

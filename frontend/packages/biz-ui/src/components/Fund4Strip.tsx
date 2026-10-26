@@ -112,8 +112,8 @@ export default function Fund4Strip({
   const w = Math.max(days.length * dayWidth(days.length), 120)
 
   return (
-    <section className={cn('border-t border-border/60 pt-2', className)}>
-      <header className="mb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+    <section className={cn('border-t border-border pt-2', className)}>
+      <header className="mb-1 flex items-center gap-1.5 text-[12px] text-muted-foreground">
         <span className="text-[12px] text-foreground">四档资金结构</span>
         <CaliberBadge caliber="tdx_exday4" />
         <span className="opacity-70">主力净额 = 特大 + 大（买红卖绿）</span>
@@ -124,10 +124,10 @@ export default function Fund4Strip({
         )}
       </header>
 
-      {loading && <div className="py-6 text-center text-[11px] text-muted-foreground">四档数据加载中…</div>}
+      {loading && <div className="py-6 text-center text-[12px] text-muted-foreground">四档数据加载中…</div>}
 
       {!loading && days.length === 0 && (
-        <div className="py-5 text-[11px] text-muted-foreground">
+        <div className="py-5 text-[12px] text-muted-foreground">
           {hint || '暂无四档历史（该表自 2026-10-23 起每交易日 15:45 采集，历史不可回补）'}
         </div>
       )}
@@ -136,7 +136,7 @@ export default function Fund4Strip({
         <>
           <div className="flex items-stretch gap-1.5">
             {/* 档位图例：纵向对齐柱区 */}
-            <div className="flex flex-col justify-between py-0 text-[10px] leading-none text-muted-foreground">
+            <div className="flex flex-col justify-between py-0 text-[12px] leading-none text-muted-foreground">
               {TIERS.map((t) => (
                 <span key={t.key} title={t.hint}>
                   {t.label}
@@ -169,7 +169,7 @@ export default function Fund4Strip({
               </svg>
             </div>
           </div>
-          <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+          <div className="mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
             <span title="档位阈值 TQ 未返回，界面上标注为推断值">
               档位阈值：特大&gt;100万 · 大20~100万 · 中5~20万 · 小&lt;5万（推断值）
             </span>

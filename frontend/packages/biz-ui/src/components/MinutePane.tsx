@@ -76,10 +76,10 @@ export default function MinutePane({ symbol, market, height = 360, pollMs = 3000
 
   return (
     <div data-testid="minute-pane" className="w-full" style={{ minHeight: height }}>
-      {loading && <div className="py-2 text-[11px] text-muted-foreground">分时加载中…</div>}
-      {error && <div className="py-2 text-[11px] text-red-500">分时加载失败：{error}</div>}
+      {loading && <div className="py-2 text-[12px] text-muted-foreground">分时加载中…</div>}
+      {error && <div className="py-2 text-[12px] text-red-500">分时加载失败：{error}</div>}
       {!error && degradedNote && (
-        <div className="py-2 text-[11px] text-amber-500">
+        <div className="py-2 text-[12px] text-amber-500">
           分时源异常：{degradedNote}（空列表是源故障，不等于停牌）
         </div>
       )}
@@ -87,7 +87,7 @@ export default function MinutePane({ symbol, market, height = 360, pollMs = 3000
         <MinuteLwcChart points={points} prevClose={prevClose} isIndex={isIndex} swings={swings} />
       )}
       {!error && !loading && points.length === 0 && !degradedNote && (
-        <div data-minute-empty className="py-4 text-center text-[11px] text-muted-foreground">
+        <div data-minute-empty className="py-4 text-center text-[12px] text-muted-foreground">
           分时暂无数据（非交易时段属正常；盘中长时间为空可能是分时源故障）
         </div>
       )}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -35,17 +35,20 @@ describe('SourceHeartbeat', () => {
     })
     renderBar()
     const bar = screen.getByTestId('source-heartbeat')
-    expect(bar.querySelectorAll('[data-vendor]').length).toBe(3)
-    expect(bar.querySelector('[data-vendor="tq"]')?.getAttribute('data-tone')).toBe('ok')
-    expect(bar.querySelector('[data-vendor="tencent"]')?.getAttribute('data-tone')).toBe('warn')
-    expect(bar.querySelector('[data-vendor="never"]')?.getAttribute('data-tone')).toBe('unknown')
+    fireEvent.click(screen.getByRole('button', { name: '查看数据源状态' }))
+    const details = screen.getByRole('dialog', { name: '数据源质量详情' })
+    expect(details.querySelectorAll('[data-vendor]').length).toBe(3)
+    expect(details.querySelector('[data-vendor="tq"]')?.getAttribute('data-tone')).toBe('ok')
+    expect(details.querySelector('[data-vendor="tencent"]')?.getAttribute('data-tone')).toBe('warn')
+    expect(details.querySelector('[data-vendor="never"]')?.getAttribute('data-tone')).toBe('unknown')
     expect(bar.textContent).toContain('3 源')
     // 98→ok, 60→warn, null→unknown ⇒ 1 正常 · 1 需关注 · 1 无样本
     expect(bar.textContent).toContain('1 正常')
     expect(bar.textContent).toContain('1 需关注')
+    expect(bar.querySelector('[data-attention]')?.classList.contains('text-role-opp')).toBe(true)
     expect(bar.textContent).toContain('1 无样本')
-    expect(bar.textContent).toContain('28ms') // 首源 EWMA 直读
-    expect(bar.querySelector('[data-vendor="tq"]')?.getAttribute('title')).toContain('EWMA')
+    expect(details.textContent).toContain('28ms') // 首源 EWMA 直读
+    expect(details.querySelector('[data-vendor="tq"]')?.getAttribute('title')).toContain('EWMA')
   })
 
   it('从未有样本 → 不渲染(无源可报≠故障, 避免空条噪音)', () => {
@@ -67,7 +70,8 @@ describe('SourceHeartbeat', () => {
       error: true,
     })
     renderBar()
-    expect(screen.getByTestId('source-heartbeat').textContent).toContain('28ms')
+    fireEvent.click(screen.getByRole('button', { name: '查看数据源状态' }))
+    expect(screen.getByRole('dialog').textContent).toContain('28ms')
     expect(screen.getByText(/刷新失败/)).toBeTruthy()
   })
 })

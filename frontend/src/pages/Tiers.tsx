@@ -27,7 +27,7 @@ function GroupList({ row, otherItems }: { row: TierRow; otherItems: Set<string> 
             {g.items.map((it) => {
               const only = !otherItems.has(it)
               return (
-                <li key={it} className="flex items-start gap-1.5 text-[13px] leading-relaxed">
+                <li key={it} className="flex items-start gap-1.5 text-[14px] leading-relaxed">
                   <Check className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${only ? 'text-primary' : 'text-muted-foreground'}`} />
                   <span className={only ? 'font-medium text-foreground' : 'text-muted-foreground'}>{it}</span>
                   {only && <span className="ml-1 shrink-0 rounded bg-primary/10 px-1 text-[12px] text-primary">更高档位独有</span>}
@@ -95,25 +95,25 @@ export default function Tiers() {
     <div className="min-h-screen bg-background">
       <div className="mx-auto max-w-3xl px-6 py-16">
         <h1 className="text-[28px] font-bold tracking-tight">档位</h1>
-        <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+        <p className="mt-3 text-[14px] leading-relaxed text-muted-foreground">
           免费档可直接注册使用；Pro 面向需要完整决策链路的用户，目前为内测邀请制。
         </p>
         {data && (
-          <p className="mt-2 text-[13px] font-medium text-primary">{data.note}</p>
+          <p className="mt-2 text-[14px] font-medium text-primary">{data.note}</p>
         )}
 
         {loading && (
-          <div className="mt-10 flex items-center gap-2 text-[13px] text-muted-foreground">
+          <div className="mt-10 flex items-center gap-2 text-[14px] text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> 正在读取档位信息…
           </div>
         )}
-        {err && <div className="mt-10 rounded-lg border border-border/60 p-4 text-[13px] text-muted-foreground">{err}</div>}
+        {err && <div className="mt-10 rounded-lg border border-border p-4 text-[14px] text-muted-foreground">{err}</div>}
 
         {data && (
           <>
             <div className="mt-10 grid gap-6 md:grid-cols-2">
               {[free, pro].map((t, i) => t && (
-                <div key={t.key} className={`rounded-xl border p-5 ${i === 1 ? 'border-primary/40 bg-primary/[0.03]' : 'border-border/60'}`}>
+                <div key={t.key} className={`rounded-xl border p-5 ${i === 1 ? 'border-primary/40 bg-primary/[0.03]' : 'border-border'}`}>
                   <div className="flex items-baseline justify-between">
                     <div className="text-[20px] font-bold">{t.label}</div>
                     <div className="text-[12px] text-muted-foreground">{t.count} 项能力</div>
@@ -134,9 +134,9 @@ export default function Tiers() {
             </div>
 
             {data.member_limits && (
-              <div className="mt-6 rounded-lg border border-border/60 p-4">
-                <div className="text-[13px] font-semibold">免费档当前上限</div>
-                <ul className="mt-2 space-y-1 text-[13px] text-muted-foreground">
+              <div className="mt-6 rounded-lg border border-border p-4">
+                <div className="text-[14px] font-semibold">免费档当前上限</div>
+                <ul className="mt-2 space-y-1 text-[14px] text-muted-foreground">
                   <li>自选股：{data.member_limits.watchlist_max} 只</li>
                   <li>价格预警：{data.member_limits.alert_max} 条</li>
                   <li>试用类功能：每日 {data.member_limits.trial_daily_limit} 次</li>
@@ -145,7 +145,7 @@ export default function Tiers() {
               </div>
             )}
             {!data.member_limits && (
-              <div className="mt-6 rounded-lg border border-border/60 p-4 text-[13px] text-muted-foreground">
+              <div className="mt-6 rounded-lg border border-border p-4 text-[14px] text-muted-foreground">
                 {data.limits_note}
               </div>
             )}
@@ -155,7 +155,7 @@ export default function Tiers() {
             {/* 转化 ≤2 步: 未登录 → 注册(1 步) → 申请(2 步); 已登录 → 直接申请 */}
             <div className="mt-10 flex flex-wrap items-center gap-3">
               {!loggedIn && (
-                <Link to="/login?mode=register" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground">
+                <Link to="/login?mode=register" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[14px] font-semibold text-primary-foreground">
                   免费注册 <ArrowRight className="h-3.5 w-3.5" />
                 </Link>
               )}
@@ -164,23 +164,23 @@ export default function Tiers() {
                   type="button"
                   onClick={onApply}
                   disabled={applying || appStatus === 'pending'}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[14px] font-semibold text-primary-foreground disabled:opacity-60"
                 >
                   {applying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
                   {appStatus === 'pending' ? '申请审核中' : '申请 Pro'}
                 </button>
               )}
               {loggedIn && statusText && (
-                <span className="text-[13px] text-muted-foreground">当前状态：{statusText}</span>
+                <span className="text-[14px] text-muted-foreground">当前状态：{statusText}</span>
               )}
-              <Link to="/developers" className="text-[13px] text-muted-foreground underline-offset-4 hover:underline">
+              <Link to="/developers" className="text-[14px] text-muted-foreground underline-offset-4 hover:underline">
                 接口文档
               </Link>
-              <Link to="/" className="text-[13px] text-muted-foreground underline-offset-4 hover:underline">
+              <Link to="/" className="text-[14px] text-muted-foreground underline-offset-4 hover:underline">
                 返回首页
               </Link>
             </div>
-            {msg && <div className="mt-3 text-[13px] text-muted-foreground">{msg}</div>}
+            {msg && <div className="mt-3 text-[14px] text-muted-foreground">{msg}</div>}
           </>
         )}
       </div>

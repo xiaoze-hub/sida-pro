@@ -80,7 +80,7 @@ function BenchChartSvg({
               x={padLeft + innerW + 6}
               y={y}
               dominantBaseline="middle"
-              fontSize={10}
+              fontSize={12}
               fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
               fill="hsl(var(--muted-foreground))"
             >

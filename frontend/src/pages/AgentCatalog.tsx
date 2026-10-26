@@ -87,14 +87,14 @@ export default function AgentCatalogPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-[16px] font-semibold text-foreground">Agent 目录</h1>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-[12px] text-muted-foreground">
             每个配方是一类问题的固定打法。版本号是 YAML 内容指纹，改一个字就变。
           </p>
         </div>
         <button
           type="button"
           onClick={() => void load()}
-          className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-s2"
+          className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[12px] text-foreground hover:bg-s2"
           data-testid="agent-catalog-refresh"
         >
           <RefreshCw size={12} /> 刷新
@@ -132,21 +132,21 @@ export default function AgentCatalogPage() {
                   className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-s2"
                   data-testid={`agent-row-${a.id}`}
                 >
-                  <span className="text-[13px]">{a.icon || '🤖'}</span>
+                  <span className="text-[14px]">{a.icon || '🤖'}</span>
                   <span className="text-[12px] font-medium text-foreground">{a.label}</span>
-                  <span className="text-[11px] text-muted-foreground">{a.id}</span>
-                  <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+                  <span className="text-[12px] text-muted-foreground">{a.id}</span>
+                  <span className="ml-auto text-[12px] tabular-nums text-muted-foreground">
                     {a.tools?.length ?? 0} 工具 · {a.version || '--'}
                   </span>
                 </button>
                 {isOpen && (
                   <div className="bg-s1 px-3 py-2" data-testid={`agent-detail-${a.id}`}>
                     {detailError ? (
-                      <div className="text-[11px] text-stock-down">详情读取失败：{detailError}</div>
+                      <div className="text-[12px] text-stock-down">详情读取失败：{detailError}</div>
                     ) : !detail ? (
-                      <div className="text-[11px] text-muted-foreground">读取中…</div>
+                      <div className="text-[12px] text-muted-foreground">读取中…</div>
                     ) : (
-                      <div className="space-y-1.5 text-[11px]">
+                      <div className="space-y-1.5 text-[12px]">
                         <div className="text-muted-foreground">{detail.item?.desc || '--'}</div>
                         <div>
                           <span className="text-muted-foreground">适用问法：</span>

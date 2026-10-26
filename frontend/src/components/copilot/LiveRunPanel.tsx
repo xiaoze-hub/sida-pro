@@ -164,7 +164,7 @@ export function LiveRunPanel({
         </div>
         <a
           href={`/copilot/runs/${encodeURIComponent(runId)}`}
-          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
         >
           证据页
           <ExternalLink className="h-3 w-3" />
@@ -172,7 +172,7 @@ export function LiveRunPanel({
       </div>
 
       {broken && !done ? (
-        <div className="mt-2 text-[11px] text-amber-500">
+        <div className="mt-2 text-[12px] text-amber-500">
           事件流已断开（任务可能仍在跑），可到证据页看最终状态
         </div>
       ) : null}
@@ -180,7 +180,7 @@ export function LiveRunPanel({
       {state.steps.length > 0 ? (
         <ol className="scrollbar mt-2 max-h-[180px] space-y-1 overflow-y-auto">
           {state.steps.map((s) => (
-            <li key={s.seq} className="flex items-center gap-2 text-[11px]">
+            <li key={s.seq} className="flex items-center gap-2 text-[12px]">
               <span className="w-5 shrink-0 tabular-nums text-muted-foreground">{s.seq}</span>
               <span className={s.ok ? 'text-foreground' : 'text-stock-down'}>{s.tool}</span>
               <span className="ml-auto tabular-nums text-muted-foreground">
@@ -190,11 +190,11 @@ export function LiveRunPanel({
           ))}
         </ol>
       ) : (
-        <div className="mt-2 text-[11px] text-muted-foreground">还没有工具调用</div>
+        <div className="mt-2 text-[12px] text-muted-foreground">还没有工具调用</div>
       )}
 
       {state.error && done && status !== 'ok' && status !== 'succeeded' ? (
-        <div className="mt-2 text-[11px] text-stock-down">{state.error}</div>
+        <div className="mt-2 text-[12px] text-stock-down">{state.error}</div>
       ) : null}
 
       {/* 治理条(2026-10-26): 预算/白名单/Frozen Ring 在运行时就可见, 不再等跑完翻轨迹 */}

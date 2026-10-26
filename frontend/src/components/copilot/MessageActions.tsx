@@ -136,7 +136,7 @@ export function MessageActions({
 
       {confirming ? (
         <span className="flex items-center gap-1 pl-1" data-testid="message-delete-confirm-box">
-          <span className="text-[11px] text-role-risk">删除？</span>
+          <span className="text-[12px] text-role-risk">删除？</span>
           <button
             type="button"
             aria-label="确认删除消息"
@@ -145,7 +145,7 @@ export function MessageActions({
               setConfirming(false)
               onDelete?.()
             }}
-            className="flex h-6 items-center rounded-md px-1.5 text-[11px] text-role-risk transition-colors hover:bg-role-risk/10"
+            className="flex h-6 items-center rounded-md px-1.5 text-[12px] text-role-risk transition-colors hover:bg-role-risk/10"
           >
             确认
           </button>
@@ -154,7 +154,7 @@ export function MessageActions({
             aria-label="取消删除"
             data-testid="message-action-delete-cancel"
             onClick={() => setConfirming(false)}
-            className="flex h-6 items-center rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-s2 hover:text-foreground"
+            className="flex h-6 items-center rounded-md px-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-s2 hover:text-foreground"
           >
             取消
           </button>

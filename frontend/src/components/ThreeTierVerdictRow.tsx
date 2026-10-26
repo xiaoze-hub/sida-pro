@@ -154,7 +154,7 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
 
   return (
     <div
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded border border-border/40 bg-card/40 px-3 py-2 text-[11px] text-muted-foreground"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded border border-border bg-card px-3 py-2 text-[12px] text-muted-foreground"
       data-testid="three-tier-verdict-row"
     >
       <div className="flex items-center gap-1.5 font-medium text-foreground">
@@ -231,12 +231,12 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
       <div className="flex items-center gap-1">
         <span className="text-muted-foreground">纪律约束:</span>
         <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+          className={`rounded px-1.5 py-0.5 text-[12px] font-semibold ${
             phaseData?.includes('退潮') || phaseData?.includes('冰点')
               ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
               : wyckoffStage?.includes('突破') || wyckoffStage?.includes('弹簧')
               ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-              : 'bg-muted/40 text-muted-foreground border border-border/40'
+              : 'bg-s2 text-muted-foreground border border-border'
           }`}
           data-testid="three-tier-discipline-constraint"
         >
@@ -252,7 +252,7 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         </span>
       </div>
 
-      <span className="ml-auto text-[10px] text-muted-foreground">
+      <span className="ml-auto text-[12px] text-muted-foreground">
         客观证据 · 不构成买卖指令
       </span>
     </div>

@@ -24,14 +24,14 @@ export function CopilotPlanBlock({
     : list
 
   return (
-    <section className="rounded-lg border border-border/60 bg-s2 p-2" data-testid="copilot-plan">
-      <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+    <section className="rounded-lg border border-border bg-s2 p-2" data-testid="copilot-plan">
+      <div className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground">
         <Compass className="h-3 w-3" />
         {SECTION_PLAN}
       </div>
 
       {ordered.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground">{NO_PLAN_HINT}</div>
+        <div className="text-[12px] text-muted-foreground">{NO_PLAN_HINT}</div>
       ) : (
         <div className="grid gap-1.5 md:grid-cols-2">
           {ordered.map((p) => {
@@ -41,20 +41,20 @@ export function CopilotPlanBlock({
               <div
                 key={p.audience}
                 className={`rounded border p-1.5 ${
-                  active ? 'border-role-watch/40 bg-s3' : 'border-border/50'
+                  active ? 'border-role-watch/40 bg-s3' : 'border-border'
                 }`}
                 data-testid={`copilot-plan-${p.audience}`}
               >
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <div className="flex items-center gap-1 text-[12px] text-muted-foreground">
                   {AUDIENCE_LABEL[p.audience]}
                   {active ? <span className="text-role-watch">· 你的位置</span> : null}
                 </div>
                 <div className="mt-0.5 text-[12px] font-medium text-foreground">{p.title}</div>
-                <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{p.text}</div>
+                <div className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">{p.text}</div>
                 {p.triggers?.length ? (
                   <ul className="mt-1 space-y-0.5">
                     {p.triggers.slice(0, 3).map((t, i) => (
-                      <li key={`${p.audience}-${i}`} className="text-[10px] text-muted-foreground">
+                      <li key={`${p.audience}-${i}`} className="text-[12px] text-muted-foreground">
                         <span className="font-mono text-foreground">
                           {safeNum(t.price) === null ? '--' : safeFixed(t.price, 2)}
                         </span>

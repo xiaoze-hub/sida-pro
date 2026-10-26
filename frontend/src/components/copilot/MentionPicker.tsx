@@ -31,16 +31,16 @@ export function MentionPicker({
   return (
     <div
       data-testid="copilot-mention-panel"
-      className="absolute bottom-full left-0 z-30 mb-1 w-[320px] overflow-hidden rounded-lg border border-border/70 bg-s1 shadow-float"
+      className="absolute bottom-full left-0 z-30 mb-1 w-[320px] overflow-hidden rounded-lg border border-border bg-s1 shadow-float"
     >
-      <div className="flex border-b border-border/60">
+      <div className="flex border-b border-border">
         {(['stock', 'agent'] as MentionTab[]).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => onTab(t)}
             data-testid={`copilot-mention-tab-${t}`}
-            className={`flex-1 px-2 py-1.5 text-[11px] ${
+            className={`flex-1 px-2 py-1.5 text-[12px] ${
               tab === t ? 'bg-s2 text-role-watch' : 'text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -51,10 +51,10 @@ export function MentionPicker({
 
       <div className="max-h-[220px] overflow-y-auto py-1">
         {loading && rows.length === 0 ? (
-          <div className="px-2.5 py-2 text-[11px] text-muted-foreground">检索中…</div>
+          <div className="px-2.5 py-2 text-[12px] text-muted-foreground">检索中…</div>
         ) : null}
         {!loading && rows.length === 0 ? (
-          <div className="px-2.5 py-2 text-[11px] text-muted-foreground">
+          <div className="px-2.5 py-2 text-[12px] text-muted-foreground">
             {tab === 'stock' ? '自选里没有匹配的股票' : '没有匹配的智能体'}
           </div>
         ) : null}
@@ -81,7 +81,7 @@ export function MentionPicker({
                 <span className="block truncate text-[12px] text-foreground">
                   {isStock ? item.name : (item as MentionAgent).label}
                 </span>
-                <span className="block truncate text-[10px] text-muted-foreground">
+                <span className="block truncate text-[12px] text-muted-foreground">
                   {isStock ? `${item.symbol}${item.py ? ` · ${item.py}` : ''}` : (item as MentionAgent).desc}
                 </span>
               </span>
@@ -90,7 +90,7 @@ export function MentionPicker({
         })}
       </div>
 
-      <div className="border-t border-border/60 px-2 py-1 text-[10px] text-muted-foreground">
+      <div className="border-t border-border px-2 py-1 text-[12px] text-muted-foreground">
         ↑↓ 选择 · Enter 确认 · Esc 关闭
       </div>
     </div>

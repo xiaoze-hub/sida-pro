@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -74,7 +74,6 @@ const LandingPage = lazyWithRetry(() => import('@/pages/Landing'), 'landing-page
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
 const AdminPage = lazyWithRetry(() => import('@/pages/Admin'), 'admin-page')
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
-import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
 import { BrandMark } from '@/components/BrandMark'
@@ -320,7 +319,7 @@ function PageFallback() {
 }
 
 function App() {
-  const { mode, setMode } = useTheme()
+  const { mode, setMode, theme, toggleTheme } = useTheme()
   const { t } = useI18n()
   const location = useLocation()
   const [version, setVersion] = useState('')
@@ -521,28 +520,28 @@ function App() {
     <RequireAuth>
     <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
       <BrowserNotificationBridge />
-      <AmbientBackground />
       {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}
-      <aside data-shell-aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card/80 backdrop-blur transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
+      <aside data-shell-aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
         {/* Logo + 折叠按钮 */}
         <div className="flex items-center gap-2 h-14 px-3 border-b border-border shrink-0">
           <NavLink to="/" className="flex items-center gap-2.5 min-w-0 flex-1">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm shrink-0">
-              <BrandMark className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center shadow-sm shrink-0">
+              <BrandMark className="w-4 h-4 text-primary-foreground" />
             </div>
             {!sidebarCollapsed && (
               <>
                 <span className="text-[16px] font-bold text-foreground truncate">数智分析</span>
-                {version && <span className="text-[11px] text-muted-foreground font-normal shrink-0">v{version}</span>}
+                {version && <span className="text-[12px] text-muted-foreground font-normal shrink-0">v{version}</span>}
                 {isDemoUser() && (
-                  <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
+                  <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[12px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
                 )}
               </>
             )}
           </NavLink>
           <button
             onClick={toggleSidebar}
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            className="ui-icon-button"
+            aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
             title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
           >
             {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
@@ -550,7 +549,7 @@ function App() {
         </div>
 
         {/* 6 项主导航 */}
-        <nav className="flex-1 overflow-y-auto px-2 py-2">
+        <nav aria-label="主导航" className="scrollbar flex-1 overflow-y-auto px-3 py-4">
           {/* AI 数智参谋: 独立高亮卡(设计稿 §9.3 方案 A —— 不进分组, 组数仍 6)。
               AI 是产品第一心智, 塞进「机会」组会变成第 4 个子项 = 等于没做入口。 */}
           {(() => {
@@ -566,19 +565,20 @@ function App() {
                 to={ai.to}
                 title={label}
                 data-testid="nav-ai-copilot"
-                className={`mb-2 flex items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors ${
+                aria-current={active ? 'page' : undefined}
+                className={`nav-item mb-3 border border-border ${
                   sidebarCollapsed ? 'justify-center px-0' : ''
                 } ${
                   active
-                    ? 'border-role-watch/60 bg-s3 text-foreground'
-                    : 'border-role-watch/40 bg-s2 text-foreground hover:bg-s3'
+                    ? 'bg-s3 text-accent-foreground'
+                    : 'bg-card text-foreground hover:bg-s2'
                 }`}
               >
                 <Icon className="h-4 w-4 shrink-0 text-role-watch" />
                 {!sidebarCollapsed && (
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12px] font-medium">{label}</span>
-                    <span className="block truncate text-[10px] text-muted-foreground">
+                    <span className="block truncate text-[12px] text-muted-foreground">
                       筹码·共振·撤单·竞价
                     </span>
                   </span>
@@ -592,7 +592,7 @@ function App() {
             if (items.length === 0) return null
             return (
               <div key={group.key} className="mb-3 last:mb-0">
-                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">{t(group.labelKey)}</div>}
+                {!sidebarCollapsed && <div className="px-2 pb-1 text-[12px] font-medium tracking-wide text-muted-foreground">{t(group.labelKey)}</div>}
                 <div className="space-y-0.5">
                   {items.map(({ to, icon: Icon, labelKey }) => {
                     const isActive = isNavItemActive(to, location.pathname)
@@ -602,11 +602,12 @@ function App() {
                         key={to}
                         to={to}
                         title={sidebarCollapsed ? label : undefined}
-                        className={`flex items-center gap-2.5 rounded-xl text-[13px] font-medium transition-colors ${
+                        aria-current={isActive ? 'page' : undefined}
+                        className={`nav-item ${
                           sidebarCollapsed ? 'justify-center px-0 py-2' : 'px-2.5 py-2'
                         } ${
                           isActive
-                            ? 'bg-[linear-gradient(135deg,hsl(var(--primary)/0.14),hsl(var(--primary)/0.04))] ring-1 ring-primary/20 text-foreground'
+                            ? 'bg-s3 text-accent-foreground'
                             : 'text-muted-foreground hover:text-foreground hover:bg-accent'
                         }`}
                       >
@@ -627,6 +628,9 @@ function App() {
         {/* 底部: GitHub + 日志 + 通知 + 头像 */}
         <div className={`border-t border-border p-2 shrink-0 flex ${sidebarCollapsed ? 'flex-col items-center gap-1' : 'flex-row items-center justify-between'}`}>
           <div className="flex items-center gap-0.5">
+            <button type="button" onClick={toggleTheme} className="ui-icon-button" aria-label={theme === 'dark' ? '切换浅色模式' : '切换深色模式'} title={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}>
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
             <button
               onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
               className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -657,12 +661,12 @@ function App() {
       <div className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2 md:hidden">
         <header className="card px-4">
           <div className="h-12 flex items-center justify-between">
-            <NavLink to="/" className="flex items-center gap-2 group">
-              <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
-                <BrandMark className="w-3.5 h-3.5 text-white" />
+            <NavLink to="/" className="flex shrink-0 items-center gap-2 group">
+              <div className="w-7 h-7 rounded-xl bg-primary flex items-center justify-center shadow-sm">
+                <BrandMark className="w-3.5 h-3.5 text-primary-foreground" />
               </div>
-              <span className="text-[13px] font-bold text-foreground">数智分析</span>
-              {version && <span className="text-[10px] text-muted-foreground font-normal">v{version}</span>}
+              <span className="whitespace-nowrap text-[14px] font-bold text-foreground">数智分析</span>
+              {version && <span className="hidden whitespace-nowrap text-[12px] text-muted-foreground font-normal sm:inline">v{version}</span>}
             </NavLink>
             <div className="flex items-center gap-2">
               {/* 会话态(2026-09-20): 只允许顶栏极轻指示, 禁止整页染色 */}
@@ -674,23 +678,23 @@ function App() {
                   document.documentElement.setAttribute('data-focus-mode', '0')
                   localStorage.setItem('sida_focus-mode', '0')
                 }}
-                className="items-center gap-1 rounded border border-border px-1.5 text-[10px] text-muted-foreground"
+                className="items-center gap-1 rounded border border-border px-1.5 text-[12px] text-muted-foreground"
                 title="焦点模式已开启(点击退出)"
               >
                 焦点模式
               </button>
             </div>
-            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-xl bg-accent/20 border border-border/40">
+            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-xl bg-s2 border border-border">
               <button
                 onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
-                className="w-8 h-8 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-colors"
+                className="hidden w-8 h-8 rounded-xl items-center sm:flex justify-center text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
                 title="GitHub 项目"
               >
                 <Github className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setLogsOpen(true)}
-                className="w-8 h-8 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-colors"
+                className="hidden w-8 h-8 rounded-xl items-center sm:flex justify-center text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
                 title="查看日志"
               >
                 <ScrollText className="w-4 h-4" />
@@ -709,7 +713,7 @@ function App() {
       </div>
 
       {/* Mobile Bottom Nav */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-card border-t border-border px-2 pb-[env(safe-area-inset-bottom)]">
+      <nav data-mobile-navigation className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-card border-t border-border px-2 pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center justify-around h-14">
           {mobilePrimaryNavItems.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)).map(({ to, icon: Icon, labelKey }) => {
             const isActive = isNavItemActive(to, location.pathname)
@@ -719,12 +723,12 @@ function App() {
                 to={to}
                 className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl transition-[background-color,color,box-shadow] min-w-[56px] min-h-[44px] ${
                   isActive
-                    ? 'text-primary bg-primary/8 ring-1 ring-primary/15'
-                    : 'text-muted-foreground hover:bg-accent/30'
+                    ? 'text-primary bg-s3'
+                    : 'text-muted-foreground hover:bg-s2'
                 }`}
               >
                 <Icon className="w-5 h-5" />
-                <span className="text-[10px] font-medium">{t(labelKey)}</span>
+                <span className="text-[12px] font-medium">{t(labelKey)}</span>
               </NavLink>
             )
           })}
@@ -732,12 +736,18 @@ function App() {
       </nav>
 
       {/* Content */}
-      <main data-shell-main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
+      <a href="#workspace-content" className="skip-link">跳到主要内容</a>
+      <main id="workspace-content" tabIndex={-1} data-shell-main className={`px-4 md:px-6 py-4 md:py-5 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
         {/* 页签式工作台(Tab Shell, 2026-10-15): 内容区**最顶部**是页签栏, 下面才是内容。
             页签集在 Routes **外层**持有 ⇒ 关页签只关那一个功能页, 首页常驻, 永不"全关掉"。
             真 keep-alive(2026-10-15): 每个页签一个常驻面板(同时挂载/隐藏不卸), 见 WorkspaceTabShell。
             `header` 里的壳层(如顶栏源心跳条)只渲染一次, 不随页签复制。 */}
-        <WorkspaceTabShell header={<SourceHeartbeat />}>
+        <WorkspaceTabShell header={
+          <div data-workspace-status className="mb-4 grid min-w-0 gap-2 md:grid-cols-[auto_minmax(0,1fr)] md:items-center md:gap-4">
+            <SourceHeartbeat />
+            <Disclaimer />
+          </div>
+        }>
         {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数(经 header 传入) */}
         <Suspense fallback={<PageFallback />}>
           <AppErrorBoundary
@@ -829,8 +839,6 @@ function App() {
         </WorkspaceTabShell>
       </main>
       <ChatWidget />
-      {/* 全局免责声明底部条(合规, 2026-09-16): 仅登录后壳层; 关闭后 localStorage 记住 */}
-      <Disclaimer />
       <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
       <LogsModal open={logsOpen} onOpenChange={setLogsOpen} />
       <SelfCheckModal open={selfCheckOpen} onClose={() => setSelfCheckOpen(false)} />
@@ -873,7 +881,7 @@ function App() {
             <DialogTitle>键盘快捷键</DialogTitle>
             <DialogDescription>仅桌面端生效,移动端自动禁用。</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2.5 text-[13px]">
+          <div className="space-y-2.5 text-[14px]">
             {[
               { desc: '打开日志(搜索占位)', keys: ['⌘/Ctrl', 'K'] },
               { desc: '跳转设置', keys: ['⌘/Ctrl', ','] },
@@ -887,7 +895,7 @@ function App() {
                   {row.keys.map(k => (
                     <kbd
                       key={k}
-                      className="px-1.5 py-0.5 rounded-md bg-accent border border-border text-[11px] font-medium text-foreground"
+                      className="px-1.5 py-0.5 rounded-md bg-accent border border-border text-[12px] font-medium text-foreground"
                     >
                       {k}
                     </kbd>

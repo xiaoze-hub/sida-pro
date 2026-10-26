@@ -64,7 +64,7 @@ interface AccuracyBoard {
 
 /** 头像首字母圆形色块(无头像时兜底); 240 色相实底, 不用渐变。 */
 function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: string; size?: 'lg' | 'sm' }) {
-  const cls = size === 'lg' ? 'w-16 h-16 text-[20px]' : 'w-9 h-9 text-[13px]'
+  const cls = size === 'lg' ? 'w-16 h-16 text-[20px]' : 'w-9 h-9 text-[14px]'
   if (avatar) {
     return (
       <div className={`${cls} rounded-full overflow-hidden shrink-0 ring-1 ring-border/40 bg-background`}>
@@ -73,7 +73,7 @@ function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: str
     )
   }
   return (
-    <div className={`${cls} rounded-full shrink-0 bg-primary flex items-center justify-center text-white font-semibold ring-1 ring-primary/40`}>
+    <div className={`${cls} rounded-full shrink-0 bg-primary flex items-center justify-center text-primary-foreground font-semibold ring-1 ring-primary/40`}>
       {(name || '?').charAt(0).toUpperCase()}
     </div>
   )
@@ -81,13 +81,13 @@ function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: str
 
 function StatTile({ icon: Icon, label, value, sub, accent }: { icon: any; label: string; value: string; sub?: string; accent: string }) {
   return (
-    <div className="rounded-md border border-border/40 bg-accent/25 p-3.5">
+    <div className="rounded-md border border-border bg-s2 p-3.5">
       <div className="flex items-center gap-2 mb-1.5">
         <Icon className={`w-3.5 h-3.5 ${accent}`} />
-        <span className="text-[11px] text-muted-foreground">{label}</span>
+        <span className="text-[12px] text-muted-foreground">{label}</span>
       </div>
       <div className="text-[16px] font-semibold text-foreground">{value}</div>
-      {sub && <div className="text-[10px] text-muted-foreground mt-1 leading-4">{sub}</div>}
+      {sub && <div className="text-[12px] text-muted-foreground mt-1 leading-4">{sub}</div>}
     </div>
   )
 }
@@ -215,7 +215,7 @@ export function Profile() {
   return (
     <div className="sida-page-enter">
       {/* 页头 */}
-      <div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
+      <div className="relative overflow-hidden border-b border-border p-5 md:p-7">
         <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div className="min-w-0">
             <h1 className="text-[16px] md:text-[16px] font-bold text-foreground">{t('profile.title')}</h1>
@@ -226,7 +226,7 @@ export function Profile() {
 
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* ① 个人资料 */}
-        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-7">
+        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-7">
           <SectionHeader title={t('profile.personalInfo')} className="mb-4" />
 
           <div className="flex items-start gap-4">
@@ -235,11 +235,11 @@ export function Profile() {
               <AvatarCircle name={displayName} avatar={avatarDraft} />
               <div className="flex flex-col items-center gap-1">
                 <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
-                <Button variant="secondary" size="sm" className="h-7 text-[11px]" onClick={() => fileRef.current?.click()}>
+                <Button variant="secondary" size="sm" className="h-7 text-[12px]" onClick={() => fileRef.current?.click()}>
                   <Upload className="w-3 h-3" /> 上传
                 </Button>
                 {avatarChanged && avatarDraft === '' && (
-                  <span className="text-[10px] text-muted-foreground">头像将清空</span>
+                  <span className="text-[12px] text-muted-foreground">头像将清空</span>
                 )}
               </div>
             </div>
@@ -247,7 +247,7 @@ export function Profile() {
             <div className="flex-1 min-w-0 space-y-4">
 
               <div>
-                <Label className="text-[11px]">昵称(1-32 字)</Label>
+                <Label className="text-[12px]">昵称(1-32 字)</Label>
                 <Input
                   value={nicknameDraft}
                   onChange={e => setNicknameDraft(e.target.value)}
@@ -272,12 +272,12 @@ export function Profile() {
         </section>
 
         {/* ② 安全中心 */}
-        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-5">
+        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-5">
           <SectionHeader title={t('profile.security')} className="mb-4" />
           
           {/* 当前账号 */}
           <div
-            className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2"
+            className="mb-5 rounded-md border border-border bg-s2 p-3.5 space-y-2"
             data-testid="profile-account-card"
           >
             {/*
@@ -296,7 +296,7 @@ export function Profile() {
                   type="button"
                   onClick={() => void refetchProfile()}
                   disabled={profileFetching}
-                  className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary transition-colors hover:bg-accent/30 disabled:opacity-60"
+                  className="rounded border border-border px-2.5 py-1 text-[12px] text-primary transition-colors hover:bg-s2 disabled:opacity-60"
                 >
                   {profileFetching ? '重试中…' : '重试'}
                 </button>
@@ -318,15 +318,15 @@ export function Profile() {
           {/* 修改密码(复用 /api/auth/change-password) */}
           <div className="space-y-3">
             <div>
-              <Label className="text-[11px]">{t('profile.oldPassword')}</Label>
+              <Label className="text-[12px]">{t('profile.oldPassword')}</Label>
               <Input type="password" value={oldPwd} onChange={e => { setOldPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.oldPwdPlaceholder')} autoComplete="current-password" className="mt-1.5 h-9 min-h-[44px]" />
             </div>
             <div>
-              <Label className="text-[11px]">{t('profile.newPassword')}</Label>
+              <Label className="text-[12px]">{t('profile.newPassword')}</Label>
               <Input type="password" value={newPwd} onChange={e => { setNewPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.newPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
             </div>
             <div>
-              <Label className="text-[11px]">{t('profile.confirmPassword')}</Label>
+              <Label className="text-[12px]">{t('profile.confirmPassword')}</Label>
               <Input type="password" value={confirmPwd} onChange={e => { setConfirmPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.confirmPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
             </div>
             {pwdError && <div className="text-[12px] text-destructive">{pwdError}</div>}
@@ -344,10 +344,10 @@ export function Profile() {
         <MyApiKeyCard />
 
         {/* ④ 我的数据 */}
-        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
           <div className="flex items-center gap-2 mb-4">
             <Target className="w-4 h-4 text-primary" />
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">我的数据</h3>
+            <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">我的数据</h3>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -393,28 +393,28 @@ export function Profile() {
           {/* 分 Agent 命中榜(2026-10-10 AI 链路 P1): 谁准谁不准, 一眼见。
               消费 GET /profile/stats/accuracy(此前后端已实现、零前端消费)。
               样本不足(qualified=false)显式标注不参评; 失败/空态显式, 不编造。 */}
-          <div className="mt-5 border-t border-border/40 pt-4" data-testid="profile-agent-board">
+          <div className="mt-5 border-t border-border pt-4" data-testid="profile-agent-board">
             <div className="mb-3 flex flex-wrap items-baseline gap-2">
               <span className="text-[12px] font-semibold text-foreground">Agent 命中榜</span>
-              <span className="text-[10px] text-muted-foreground">
+              <span className="text-[12px] text-muted-foreground">
                 分智能体预测命中率 · 近 30 天 · 样本不足不参评(按全平台统计, 预测记录无用户维度)
               </span>
             </div>
             {boardError ? (
-              <div className="text-[11px] text-amber-600 dark:text-amber-500" data-testid="profile-agent-board-error">
+              <div className="text-[12px] text-amber-600 dark:text-amber-500" data-testid="profile-agent-board-error">
                 Agent 命中榜加载失败: {boardError instanceof Error ? boardError.message : '未知错误'}
               </div>
             ) : !board ? (
-              <div className="text-[11px] text-muted-foreground">加载中…</div>
+              <div className="text-[12px] text-muted-foreground">加载中…</div>
             ) : (board.agents ?? []).length === 0 ? (
-              <div className="text-[11px] text-muted-foreground" data-testid="profile-agent-board-empty">
+              <div className="text-[12px] text-muted-foreground" data-testid="profile-agent-board-empty">
                 暂无已评估的 Agent 预测(近 30 天无样本)
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-[11px]">
+                <table className="w-full text-left text-[12px]">
                   <thead>
-                    <tr className="border-b border-border/40 text-muted-foreground">
+                    <tr className="border-b border-border text-muted-foreground">
                       <th className="px-2 py-1 font-medium">Agent</th>
                       <th className="px-2 py-1 text-right font-medium">命中率</th>
                       <th className="px-2 py-1 text-right font-medium">命中</th>
@@ -462,15 +462,15 @@ export function Profile() {
         </section>
 
         {/* ④½ 数据与隐私(2026-10-23): 导出/注销此前有后端无前端 */}
-        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
           <DataPrivacySection username={profile?.username} />
         </section>
 
         {/* ⑤ Pro 升级(B.1) */}
-        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
           <div className="flex items-center gap-2 mb-4">
             <Crown className="w-4 h-4 text-amber-500" />
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">Pro 升级</h3>
+            <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">Pro 升级</h3>
           </div>
           {profile?.role === 'owner' || profile?.role === 'pro' ? (
             <div className="rounded-md border border-emerald-700/25 bg-emerald-500/10 p-3.5 text-[12px] text-emerald-700 dark:text-emerald-400">
@@ -499,27 +499,27 @@ function MyApiKeyCard() {
   const current = keys.find(k => k.status === 'active') || keys[0] || null
 
   return (
-    <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+    <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
       <div className="flex items-center gap-2 mb-4">
         <KeyRound className="w-4 h-4 text-primary" />
-        <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">我的 API Key</h3>
+        <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">我的 API Key</h3>
       </div>
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-md border border-border/40 bg-accent/20 p-3.5">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-md border border-border bg-s2 p-3.5">
         <div className="min-w-0 flex-1">
           {isLoading ? (
             <div className="text-[12px] text-muted-foreground">加载中…</div>
           ) : current ? (
             <>
               <div className="flex items-center gap-2 flex-wrap">
-                <code className="font-mono text-[13px] text-foreground font-medium">{current.key_prefix}...</code>
-                <span className="text-[10px] rounded border border-border/60 bg-background/50 px-1.5 py-0.5 text-muted-foreground">
+                <code className="font-mono text-[14px] text-foreground font-medium">{current.key_prefix}...</code>
+                <span className="text-[12px] rounded border border-border bg-background px-1.5 py-0.5 text-muted-foreground">
                   {current.tier === 'pro' ? 'Pro' : current.tier === 'trial' ? '试用' : '免费'}
                 </span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   共 {keys.length} 个 Key
                 </span>
               </div>
-              <div className="text-[11px] text-muted-foreground mt-1">
+              <div className="text-[12px] text-muted-foreground mt-1">
                 用于 Skill Gateway / 智能体接入; 完整明文仅创建时可见一次
               </div>
             </>
@@ -571,13 +571,13 @@ function ProApplyCard() {
     <div className="space-y-3">
       {/* P2-4(2026-09-18): 这里原来**硬编码**了一串 Pro 能力清单 —— 权限一改就变成假话。
           改成指向档位页, 由后端 `GET /api/tiers` 从权限定义实时生成(单一来源)。 */}
-      <div className="rounded-md border border-border/50 bg-accent/20 p-3.5 text-[12px] text-muted-foreground">
+      <div className="rounded-md border border-border bg-s2 p-3.5 text-[12px] text-muted-foreground">
         Pro 可使用全部功能。完整对比见
         <Link to="/tiers" className="mx-1 underline underline-offset-4 hover:text-foreground">档位页</Link>
         （清单由服务端按当前权限实时生成）。
       </div>
       <div>
-        <Label className="text-[11px]">申请理由（可选）</Label>
+        <Label className="text-[12px]">申请理由（可选）</Label>
         <Input
           value={reason}
           onChange={e => setReason(e.target.value)}

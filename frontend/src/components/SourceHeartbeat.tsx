@@ -1,8 +1,11 @@
 import { NavLink } from 'react-router-dom'
+import { AlertTriangle, ChevronDown, Database, CheckCircle2 } from 'lucide-react'
+import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
+import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/components/ui/popover'
 
 import { useSourceHealth, type SourceHealthItem } from '@/hooks/useSourceHealth'
 import { useVendorTrust } from '@/hooks/useVendorTrust'
-import { TRUST_TONE_CLASS, formatLatency, trustSummary, trustTone, trustTooltip } from '@/lib/vendor-trust'
+import { TRUST_TONE_CLASS, formatLatency, trustTone, trustTooltip } from '@/lib/vendor-trust'
 
 /**
  * 顶部源心跳条 (C1, 2026-09-10 借鉴 OpenTerminal tracked() 顶部展示):
@@ -21,7 +24,7 @@ export function SourceHeartbeat() {
   if (items.length === 0) {
     if (error && !loading && !hasLogicReady) {
       return (
-        <div className="mb-2 text-[11px] text-muted-foreground flex items-center gap-1.5" role="status">
+        <div className="text-[12px] text-muted-foreground flex items-center gap-1.5" role="status">
           <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
           <span>源心跳连接中...</span>
         </div>
@@ -30,42 +33,39 @@ export function SourceHeartbeat() {
     return null
   }
 
-  const primary = items[0]
-  // L2-E/G6(2026-10-24): 全部正常时只留一个状态圆点, 有异常(刷新失败/非 ok 档)才展开文字。
+  const attention = items.filter(it => ['warn', 'bad'].includes(trustTone(it.score))).length
+  const unknown = items.filter(it => trustTone(it.score) === 'unknown').length
+  const normal = items.filter(it => trustTone(it.score) === 'ok').length
   const allOk = !error && items.every((it) => trustTone(it.score) === 'ok')
   return (
-    <NavLink
-      to="/system?tab=datasources"
-      className="mb-2.5 flex items-center gap-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-      title="数据源质量(滚动最近 100 次) — 点击进入数据源页"
-      data-testid="source-heartbeat"
-    >
-      <span className="shrink-0 text-muted-foreground">源心跳</span>
-      <span className="flex items-center gap-[3px]" role="img" aria-label={trustSummary(items)}>
-        {items.map((it) => (
-          <span
-            key={it.vendor}
-            data-vendor={it.vendor}
-            data-tone={trustTone(it.score)}
-            className={`h-1.5 w-5 rounded-full ${TRUST_TONE_CLASS[trustTone(it.score)]}`}
-            title={trustTooltip(it)}
-          />
-        ))}
-      </span>
-      {allOk && (
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" title={trustSummary(items)} />
-      )}
-      {/* 文字保留在 DOM(sr-only), 不卸载 —— 既有测试依赖 textContent 与 data-vendor 数量 */}
-      <span className={allOk ? 'sr-only' : 'inline-flex items-center gap-2'}>
-        <span>{trustSummary(items)}</span>
-        {primary && primary.ewma_latency_ms != null && (
-          <span className="text-muted-foreground">
-            {primary.vendor} {formatLatency(primary.ewma_latency_ms)}
-          </span>
-        )}
-      </span>
-      {error && <span className="text-amber-600">刷新失败(显示上次快照)</span>}
-    </NavLink>
+    <div className="flex flex-wrap items-center gap-2" data-testid="source-heartbeat">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button type="button" className="rounded-full hover:bg-s3" aria-label="查看数据源状态">
+            <span className="inline-flex min-h-8 flex-wrap items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1 text-[12px] text-muted-foreground">
+              <Database className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>数据源 <b className="font-medium text-foreground">{items.length} 源</b></span>
+              <span className={allOk ? 'inline-flex items-center gap-1 text-success' : ''}>{allOk && <CheckCircle2 className="h-3 w-3" />}{normal} 正常</span>
+              {attention > 0 && <StatusChip tone="warning" className="min-h-6 px-2 py-0.5" data-attention="true"><AlertTriangle className="h-3 w-3" aria-hidden="true" />{attention} 需关注</StatusChip>}
+              {unknown > 0 && <span>{unknown} 无样本</span>}
+              <ChevronDown className="h-3 w-3" aria-hidden="true" />
+            </span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] space-y-3" aria-label="数据源质量详情">
+          <p className="text-[14px] font-semibold">数据源质量</p>
+          <p className="text-[12px] text-muted-foreground">滚动最近 100 次请求；无样本不代表可用。</p>
+          <ul className="space-y-2">
+            {items.map(it => <li key={it.vendor} data-vendor={it.vendor} data-tone={trustTone(it.score)} title={trustTooltip(it)} className="flex items-center justify-between gap-3 text-[12px]">
+              <span className="flex items-center gap-2"><span className={`h-1.5 w-1.5 rounded-full ${TRUST_TONE_CLASS[trustTone(it.score)]}`} />{it.vendor}</span>
+              <span className="text-muted-foreground">{it.samples} 次 · {it.ewma_latency_ms != null ? formatLatency(it.ewma_latency_ms) : '无延迟数据'}</span>
+            </li>)}
+          </ul>
+          <NavLink to="/system?tab=datasources" className="inline-flex min-h-9 items-center text-[12px] font-medium text-primary">管理数据源 →</NavLink>
+        </PopoverContent>
+      </Popover>
+      {error && <StatusChip tone="warning">刷新失败(显示上次快照)</StatusChip>}
+    </div>
   )
 }
 

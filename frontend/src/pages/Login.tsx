@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
-import { Lock, Eye, EyeOff, User, Mail, ShieldCheck, Ticket } from 'lucide-react'
+import { Lock, Eye, EyeOff, User, Mail, ShieldCheck, Ticket, Sun, Moon } from 'lucide-react'
+import { useTheme } from '@/hooks/use-theme'
 import { authApi, fetchAPI, type AuthTokenPayload } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -19,6 +20,7 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { toast } = useToast()
+  const { theme, toggleTheme } = useTheme()
   const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -333,23 +335,25 @@ export default function LoginPage() {
     { key: 'password' as AuthMode, label: '密码登录' },
     ...(registerMode === 'closed' ? [] : [{ key: 'register' as AuthMode, label: '注册' }]),
     { key: 'email-code' as AuthMode, label: '验证码登录' },
-    { key: 'reset' as AuthMode, label: '忘记密码' },
   ]
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-10">
+      <div className="w-full max-w-md">
         {/* Logo */}
-        <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 rounded-xl bg-primary flex items-center justify-center mb-4">
-            <BrandMark className="w-9 h-9 text-white" />
+        <div className="relative flex flex-col items-center mb-7">
+          <button type="button" className="ui-icon-button absolute right-0 top-0" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}>
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
+          <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center mb-4">
+            <BrandMark className="w-7 h-7 text-primary-foreground" />
           </div>
           <h1 className="text-[20px] font-bold text-foreground">数智分析 SIDA</h1>
-          <p className="text-[13px] text-muted-foreground mt-1">行情 · 资金 · 情报 · 决策，一个工作台看完</p>
+          <p className="text-[14px] text-muted-foreground mt-2">基于数据与证据的 AI 股票技术分析</p>
         </div>
 
         {/* Form(P2 轻量化: card 底 → hairline, 零逻辑改动) */}
-        <div className="border-t border-border/40 pt-6">
+        <div className="card p-5 sm:p-7">
           <div className="flex items-center gap-2 mb-4">
             <Lock className="w-5 h-5 text-primary" />
             <h2 className="text-[16px] font-semibold">
@@ -359,16 +363,17 @@ export default function LoginPage() {
 
           {/* 三种模式切换 Tab */}
           {showModeTabs && (
-            <div className="flex gap-1 mb-6 p-1 rounded-lg bg-muted/50">
+            <div className="flex gap-1 mb-6 p-1 rounded-lg border border-border bg-s2" aria-label="登录方式">
               {modeTabs.map(tab => (
                 <button
                   key={tab.key}
                   type="button"
                   onClick={() => switchMode(tab.key)}
+                  aria-pressed={mode === tab.key}
                   className={
-                    'flex-1 py-1.5 text-[13px] rounded-md transition-colors ' +
+                    'min-h-10 flex-1 px-1 py-2 text-[12px] rounded-md transition-colors ' +
                     (mode === tab.key
-                      ? 'bg-background text-foreground font-medium shadow-sm'
+                      ? 'bg-card text-foreground font-medium shadow-sm ring-1 ring-border'
                       : 'text-muted-foreground hover:text-foreground')
                   }
                 >
@@ -379,7 +384,7 @@ export default function LoginPage() {
           )}
 
           {isSetup && !isRegister && !isEmailCode && (
-            <p className="text-[13px] text-muted-foreground mb-4">
+            <p className="text-[14px] text-muted-foreground mb-4">
               首次使用，请设置访问密码以保护您的数据
             </p>
           )}
@@ -388,11 +393,12 @@ export default function LoginPage() {
             {/* 邀请制(2026-09-19 内部使用): 注册需管理员发放的邀请码; closed 模式直接不给填 */}
             {isRegister && registerMode === 'invite' && (
               <div>
-                <Label>邀请码</Label>
+                <Label htmlFor="invite-code">邀请码</Label>
                 <div className="relative">
                   <Ticket className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     type="text"
+                    id="invite-code"
                     value={inviteCode}
                     onChange={e => setInviteCode(e.target.value.toUpperCase())}
                     placeholder="请输入管理员发放的邀请码"
@@ -408,11 +414,12 @@ export default function LoginPage() {
             )}
             {(isRegister || isEmailCode || isReset) && (
               <div>
-                <Label>邮箱</Label>
+                <Label htmlFor="email">邮箱</Label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     type="email"
+                    id="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
                     placeholder="请输入邮箱地址"
@@ -434,7 +441,7 @@ export default function LoginPage() {
 
             {(isRegister || isEmailCode || isReset) && (
               <div>
-                <Label>验证码</Label>
+                <Label htmlFor="verification-code">验证码</Label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
                     <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -442,7 +449,8 @@ export default function LoginPage() {
                       type="text"
                       inputMode="numeric"
                       maxLength={6}
-                      value={code}
+                      id="verification-code"
+                    value={code}
                       onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
                       placeholder="6 位数字验证码"
                       className="pl-10 tracking-widest"
@@ -469,13 +477,14 @@ export default function LoginPage() {
 
             {!isEmailCode && !isReset && (
               <div>
-                <Label>
+                <Label htmlFor="username">
                   {isRegister ? '用户名(可选)' : '用户名'}
                 </Label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     type="text"
+                    id="username"
                     value={username}
                     onChange={e => setUsername(e.target.value)}
                     placeholder={isRegister ? '可选, 不填则用邮箱前缀' : '请输入用户名'}
@@ -489,11 +498,12 @@ export default function LoginPage() {
 
             {!isEmailCode && (
               <div>
-                <Label>{isReset ? '新密码' : '密码'}</Label>
+                <Label htmlFor="password">{isReset ? '新密码' : '密码'}</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     type={showPassword ? 'text' : 'password'}
+                    id="password"
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     placeholder={isRegister || isSetup || isReset ? '至少 8 位' : '请输入密码'}
@@ -506,6 +516,8 @@ export default function LoginPage() {
                     size="icon"
                     className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    aria-pressed={showPassword}
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </Button>
@@ -518,7 +530,7 @@ export default function LoginPage() {
               <div className="-mt-1 text-right">
                 <button
                   type="button"
-                  className="text-[11px] text-primary transition-colors hover:underline"
+                  className="text-[12px] text-primary transition-colors hover:underline"
                   onClick={() => switchMode('reset')}
                 >
                   忘记密码？
@@ -528,10 +540,11 @@ export default function LoginPage() {
 
             {(isRegister || isSetup || isReset) && !isEmailCode && (
               <div>
-                <Label>确认密码</Label>
+                <Label htmlFor="confirm-password">确认密码</Label>
                 <Input
                   type={showPassword ? 'text' : 'password'}
-                  value={confirmPassword}
+                  id="confirm-password"
+                    value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   placeholder="再次输入密码"
                   autoComplete="new-password"
@@ -590,7 +603,7 @@ export default function LoginPage() {
 
           {/* 模式切换链接(Tab 备用, 保持轻量入口) */}
           {showModeTabs && (
-            <div className="mt-4 text-center text-[13px]">
+            <div className="mt-4 text-center text-[14px]">
               {isRegister ? (
                 <span className="text-muted-foreground">
                   已有账号？{' '}
@@ -652,14 +665,14 @@ export default function LoginPage() {
             aria-modal="true"
             aria-labelledby="issued-key-title"
           >
-            <div className="w-full max-w-md rounded-lg border border-border/60 bg-background p-5 shadow-float">
+            <div className="w-full max-w-md rounded-lg border border-border bg-background p-5 shadow-float">
               <h2 id="issued-key-title" className="text-[16px] font-semibold text-foreground">
                 你的 API Key，仅显示这一次
               </h2>
               <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
                 关闭后无法再次查看明文。请立即复制并妥善保存。
               </p>
-              <pre className="mt-3 max-h-32 overflow-auto rounded-md border border-border/40 bg-muted/40 p-3 font-mono text-[12px] text-foreground whitespace-pre-wrap break-all">
+              <pre className="mt-3 max-h-32 overflow-auto rounded-md border border-border bg-s2 p-3 font-mono text-[12px] text-foreground whitespace-pre-wrap break-all">
                 {issuedApiKey}
               </pre>
               <div className="mt-3 flex gap-2">
@@ -675,7 +688,7 @@ export default function LoginPage() {
                   我已保存
                 </Button>
               </div>
-              <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
+              <p className="mt-2.5 text-[12px] leading-relaxed text-muted-foreground">
                 之后可在
                 <Link to="/api-keys" className="mx-0.5 text-primary hover:underline">
                   我的 API Key

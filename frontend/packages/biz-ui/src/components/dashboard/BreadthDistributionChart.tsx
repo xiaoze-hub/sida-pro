@@ -181,7 +181,7 @@ export default function BreadthDistributionChart() {
   if (items === null) {
     // 先出壳: 首次取数/后台计算期间占满同高度(160px), 文案显式 —— 不跳版, 也不用 0 柱假装有分布
     return (
-      <div className="flex h-[160px] items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
+      <div className="flex h-[160px] items-center justify-center px-2 text-center text-[12px] text-muted-foreground">
         {failed
           ? '涨跌分布加载失败, 稍后自动重试'
           : pending
@@ -192,7 +192,7 @@ export default function BreadthDistributionChart() {
   }
   if (items.length === 0 || items.every((i) => i.count === 0)) {
     return (
-      <div className="flex h-[160px] items-center justify-center text-[11px] text-muted-foreground">
+      <div className="flex h-[160px] items-center justify-center text-[12px] text-muted-foreground">
         {note || '暂无分布数据'}
       </div>
     )

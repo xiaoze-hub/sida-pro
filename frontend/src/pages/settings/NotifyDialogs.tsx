@@ -51,29 +51,29 @@ export function NotifyDialogs() {
     <div className="mt-2 flex flex-col items-center gap-3">
       {wechatQr && (
         <>
-          <div className="rounded-md border border-border/50 bg-white p-3">
+          <div className="rounded-md border border-border bg-white p-3">
             <QRCodeSVG value={wechatQr.qrcode_url} size={200} />
           </div>
-          <p className="text-[11px] text-muted-foreground text-center">
+          <p className="text-[12px] text-muted-foreground text-center">
             请用微信「扫一扫」扫描二维码(约 3 分钟内有效)
           </p>
           <button
             type="button"
             onClick={() => void copyWechatLink(wechatQr.qrcode_url)}
-            className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/50 bg-accent/30 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-s2 px-2.5 py-1.5 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
             title="点击复制链接"
           >
             <Copy className="h-3 w-3 flex-shrink-0" />
             <span className="truncate font-mono" title={wechatQr.qrcode_url}>{wechatQr.qrcode_url}</span>
           </button>
           {wechatQrStatus === 'waiting' && (
-            <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <p className="flex items-center gap-2 text-[12px] text-muted-foreground">
               <span className="h-3 w-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
               等待扫码确认…
             </p>
           )}
           {wechatQrStatus === 'expired' && (
-            <p className="text-[11px] text-destructive">二维码已过期，请关闭后重新发起绑定</p>
+            <p className="text-[12px] text-destructive">二维码已过期，请关闭后重新发起绑定</p>
           )}
         </>
       )}
@@ -119,12 +119,12 @@ export function NotifyDialogs() {
         </Select>
       </div>
       {channelForm.type === 'wechat_ilink' ? (
-        <div className="rounded-md border border-border/50 bg-accent/20 p-4">
+        <div className="rounded-md border border-border bg-s2 p-4">
           <div className="flex items-start gap-2.5">
             <QrCode className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
             <div>
               <div className="text-[12px] font-medium text-foreground">扫码绑定个人微信</div>
-              <p className="mt-0.5 text-[10px] text-muted-foreground">
+              <p className="mt-0.5 text-[12px] text-muted-foreground">
                 无需填写地址与密钥。点击下方按钮，用微信扫码确认后自动创建「个人微信」渠道。
               </p>
             </div>

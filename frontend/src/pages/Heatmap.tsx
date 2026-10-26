@@ -19,7 +19,7 @@ export default function HeatmapPage() {
       </div>
       {/* 主内容面板不用 .card(12px 圆角+阴影 = "卡片包")——铁律: 主内容不该被卡片包住;
           改为 4px 圆角 + hairline 边框, 视觉几乎不变但不再是"卡片" */}
-      <div className="rounded border border-border/60 bg-card p-3">
+      <div className="rounded border border-border bg-card p-3">
         <BoardHeatmap
           onOpenBoard={(blockCode) => navigate(`/boards/${encodeURIComponent(blockCode)}`, { state: navBackState('/heatmap', '板块热力图') })}
         />
