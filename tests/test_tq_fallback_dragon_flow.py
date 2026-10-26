@@ -1,6 +1,6 @@
 """dragon_tiger / market_capital_flow 的 TQ 备源 + get_financial_data_by_date (2026-10-02)。
 
-覆盖审计 docs/TQ切换面审计_20260924.md 剩余缺口:
+覆盖审计 docs/_archive/20261026_design/TQ切换面审计_20260924.md 剩余缺口:
   · ① dragon_tiger registry 注册 TQ 备源: GP02/08/09/17/18 序列 → DragonTigerItem,
        **万元→元 ×1e4**(与东财 BILLBOARD_*_AMT 元口径对齐);
   · ② market_capital_flow registry 注册 TQ 备源: 全 881 行业板块 SUPAMO 主力资金求和

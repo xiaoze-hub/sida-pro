@@ -1,6 +1,6 @@
 """TQ get_financial_data_by_date 接入 (2026-10-02)。
 
-覆盖审计 docs/TQ切换面审计_20260924.md 覆盖清单第 ③ 项: `get_financial_data_by_date`
+覆盖审计 docs/_archive/20261026_design/TQ切换面审计_20260924.md 覆盖清单第 ③ 项: `get_financial_data_by_date`
 (与已有 `get_financial_data` 配套, 按**年度**取专业财务数据, 精确回补历史财务)。
 
 网关契约(来自 tq-capability-audit references/api-contracts 实测标定):

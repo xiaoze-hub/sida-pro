@@ -45,7 +45,7 @@ say "后端: pytest(凭据扫描 + 契约 + 真实数据断言 —— 前端改�
     tests/test_resonance_scan.py -q -p no:cacheprovider -o addopts="" ) || { echo "✗ pytest 失败"; rc=1; }
 
 if [ -z "${SKIP_AUDIT:-}" ]; then
-  say "设计验收(终端 8 页) —— 数字回填 docs/开发计划_v3.0_20260918.md §六 台账"
+  say "设计验收(终端 8 页) —— 数字回填 docs/_archive/20261026_design/开发计划_v3.0_20260918.md §六 台账"
   if [ -n "${SIDA_SHOT_PW:-}" ]; then
     ( cd "$ROOT" && "$PY" scripts/terminal_audit.py --base "$BASE" --json /tmp/audit_terminal.json ) \
       || echo "⚠ 有越线项: 按设计稿要求写进 CHANGELOG 说明(不硬拦)"

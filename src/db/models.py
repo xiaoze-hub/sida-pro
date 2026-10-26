@@ -2053,7 +2053,7 @@ class PriceDistributionDaily(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# P0 落库加固(2026-10-18, docs/全量数据落库排查与持久化加固方案_20261018.md)
+# P0 落库加固(2026-10-18, docs/_archive/20261026_design/全量数据落库排查与持久化加固方案_20261018.md)
 #
 # 六张表分三组补齐「过程/覆盖度」缺口:
 #   · auction_tick_snapshots  —— 竞价过程逐分钟 append-only(原 auction_snapshots

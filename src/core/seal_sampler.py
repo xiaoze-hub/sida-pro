@@ -8,7 +8,7 @@
 
 诚实标注:
 - BCancel/SCancel 走差分口径依据 TQ9 实测(收盘后字段不归零, 当日累计);
-  周一盘中实测若发现为快照值, 口径改为直接采样值(docs/innov-dev-plan.md 风险项)。
+  周一盘中实测若发现为快照值, 口径改为直接采样值(docs/_archive/20261026_design/innov-dev-plan.md 风险项)。
 - is_sealed 用昨收×涨停幅度推算, ST 由名称判断; 采样池来自涨停池(已在板),
   误判影响面仅 seal_success_rate, 不影响撤单率主线。
 """

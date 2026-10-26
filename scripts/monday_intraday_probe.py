@@ -1,6 +1,6 @@
 """周一盘中实测探针(批次A/B/C 字段口径验证, 2026-09-06 28号)。
 
-验证清单(对应 docs/innov-dev-plan.md 风险项 + 发版邮件承诺):
+验证清单(对应 docs/_archive/20261026_design/innov-dev-plan.md 风险项 + 发版邮件承诺):
 1. BCancel/SCancel 口径: 间隔 60s 两次采样 fetch_tq_l2 累计字段,
    差分 ≥0 且随交易增长 → 差分口径成立; 若数值恒定 → 快照值, 需改口径
 2. FCAmo 语义: more_info 原始字段 vs 涨停池封单额(wudao) 对照

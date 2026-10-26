@@ -64,7 +64,7 @@ _RHYTHM_DAY_NET = 500e4   # 尾盘异动: 全天四段合计 |净额| > 500万
 _RHYTHM_TAIL_RATIO = 0.4  # 尾盘异动: 尾盘 |净额| > 40% * 四段绝对值之和
 
 # ── 主力意图判据共享常量(2026-08-25 抽公共, 防逻辑漂移)──────────────────────
-# 审计建议5(docs/audit_main_intent_20260825.md §6.2): 以下阈值此前在
+# 审计建议5(docs/_archive/20261026_design/audit_main_intent_20260825.md §6.2): 以下阈值此前在
 #   src/core/dark_flow.py::_judge_signal 与 src/agents/intraday_monitor.py::
 #   _main_intent_both_inner 两处独立写死(500e4/35/48), 存在漂移风险。
 # 现收敛为公共常量, dark_flow 内直接引用; intraday_monitor 应改为 import 本模块
@@ -926,7 +926,7 @@ _MNEMONIC_OSCILLATE = 3.0     # ⑥ 震荡: 0.5 < |涨跌%| <= 3%(有波动无�
 _MNEMONIC_TCK_DUAL_SMALL = 30.0   # ⑥ 双小单: 大单占比 < 30%(市场冷清, 主力未参与)
 _MNEMONIC_TCK_DUAL_LARGE = 85.0   # ⑦ 双大单: 大单占比 > 85%(主力频繁进出, 疑似对倒)
 
-# 2026-08-25 腾讯数据源适配(审计修复, 见 docs/audit_main_intent_20260825.md):
+# 2026-08-25 腾讯数据源适配(审计修复, 见 docs/_archive/20261026_design/audit_main_intent_20260825.md):
 # 腾讯口径 volume≈外盘+内盘(active_ratio≈100%), 原 ⑥ active_ratio<30% 永不触发、
 # ⑦ active_ratio>85% 恒真。改用量比/内外失衡替代, 保留用户七口诀语义。
 _MNEMONIC_IMBALANCE = 15.0    # ⑦ 对倒: 内外盘失衡 |买%-卖%| < 15%(方向模糊)

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-# ── 阈值(即文档; 调参必须同步改 docs/本土三层滤网_设计_20261016.md §3) ──
+# ── 阈值(即文档; 调参必须同步改 docs/_archive/20261026_design/本土三层滤网_设计_20261016.md §3) ──
 VOL_SPIKE = 1.8        # 放量: 量 ≥1.8×20 日均量
 VOL_BREAKOUT = 1.5     # 突破放量: 量 ≥1.5×20 日均量
 VOL_DRY = 0.6          # 缩量: 量 ≤0.6×20 日均量

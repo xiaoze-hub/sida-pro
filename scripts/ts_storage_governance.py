@@ -11,7 +11,7 @@
    TimescaleDB 要求唯一索引必须包含分区列 → 直接 `create_hypertable` 会失败。
    且 `ts` 存的是**入库时间**(每批同一个 `now`, 见 `history_store.persist_l2_ticks`),
    不是行情时间 → 简单把 `ts` 加进唯一键会**破坏重拉幂等**(重复入库)。
-   正确改法涉及语义变更, 见 docs/数据落库与共享缓存设计_20260910.md §5 附注, 待决策。
+   正确改法涉及语义变更, 见 docs/_archive/20261026_design/数据落库与共享缓存设计_20260910.md §5 附注, 待决策。
 
 用法:
     python scripts/ts_storage_governance.py            # 体检(只读)

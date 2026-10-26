@@ -739,7 +739,7 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"AI 看图形态影子打标注册失败: {e}")
 
-        # ── P0 落库加固(2026-10-18, docs/全量数据落库排查与持久化加固方案_20261018.md) ──
+        # ── P0 落库加固(2026-10-18, docs/_archive/20261026_design/全量数据落库排查与持久化加固方案_20261018.md) ──
         # 批次 1(P0-a): 竞价过程逐分钟采样 → auction_tick_snapshots(append-only)。
         # 原 auction_snapshots 唯一键 (trade_date,symbol,market) 只留 9:25 终值,
         # 试盘/9:20 前撤单/虚假封单过程全丢。窗口/交易日由作业内自守卫, 窗口外直接 skip。

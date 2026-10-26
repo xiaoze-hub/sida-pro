@@ -114,7 +114,7 @@ def _norm_date(d) -> Optional[str]:
 
 
 # 抖动合并窗口(天): 相邻反向信号间隔 ≤ 该值视为震荡 whipsaw, 成对丢弃。
-# 校准依据: docs/GS校准报告_原版视频口径.md(上证 501 根 16/62 间隔≤3 天)。
+# 校准依据: docs/_archive/20261026_design/GS校准报告_原版视频口径.md(上证 501 根 16/62 间隔≤3 天)。
 WHIPSAW_MERGE_DAYS = 3
 
 
