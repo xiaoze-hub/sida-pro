@@ -299,7 +299,7 @@ export default function StockPriceAlertPanel(props: {
             ) : (
               <div className="space-y-2 max-h-[48vh] overflow-y-auto scrollbar">
                 {rules.map(r => (
-                  <div key={r.id} className="rounded-lg border border-border p-3">
+                  <div key={r.id} className="card-surface bg-card rounded-lg p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">

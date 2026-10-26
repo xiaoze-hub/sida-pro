@@ -45,7 +45,7 @@ function phaseCls(label: string | null): string {
 function PageSkeleton() {
   return (
     <div className="sida-page-enter space-y-4" aria-busy aria-live="polite">
-      <div className="border-b border-border pb-3">
+      <div className="analysis-section">
         <Skeleton className="h-5 w-40" />
         <Skeleton className="mt-2 h-3 w-72" />
       </div>
@@ -118,7 +118,7 @@ export default function ReplayTreePage() {
   if (!isTreeAvailable(tree)) {
     return (
       <div className="sida-page-enter space-y-4" data-testid="replay-tree-unavailable">
-        <div className="border-b border-border pb-3">
+        <div className="analysis-section">
           <div className="flex items-center gap-2">
             <GitBranch className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-[16px] font-medium text-foreground">{t('replayTree.title')}</h2>
@@ -165,7 +165,7 @@ export default function ReplayTreePage() {
   return (
     <div className="sida-page-enter space-y-4" data-testid="replay-tree">
       {/* 页头 */}
-      <div className="border-b border-border pb-3">
+      <div className="analysis-section">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">

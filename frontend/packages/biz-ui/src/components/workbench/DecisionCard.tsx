@@ -20,7 +20,7 @@ import PioneerIndicatorsSection from '@panwatch/biz-ui/components/PioneerIndicat
 
 export default function DecisionCard({ symbol, market }: { symbol: string; market: string }) {
   return (
-    <div className="rounded border border-border p-2">
+    <div className="card-surface bg-card rounded p-2">
       {/* 全卡唯一顶层标题 */}
       <div className="text-[12px] font-semibold">数智决策</div>
 

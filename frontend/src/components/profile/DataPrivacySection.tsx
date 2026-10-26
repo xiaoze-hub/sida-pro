@@ -164,7 +164,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
       )}
 
       {!statusLoading && !statusError && pending && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-[12px] leading-relaxed">
+        <div className="card-surface rounded-md bg-amber-500/5 px-3 py-2.5 text-[12px] leading-relaxed">
           <div className="font-medium text-amber-700 dark:text-amber-400">注销申请处理中</div>
           <div className="mt-1 text-muted-foreground tabular-nums">
             申请时间 {status?.deleted_at ? formatDateTime(status.deleted_at) : '未知'}
@@ -177,7 +177,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
       )}
 
       {!statusLoading && !statusError && !pending && (
-        <div className="rounded-md border border-border">
+        <div className="card-surface bg-card rounded-md ">
           <div className="px-3 py-2.5">
             <div className="text-[12px] text-foreground">导出个人数据</div>
             <div className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">

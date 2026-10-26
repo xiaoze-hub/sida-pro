@@ -363,7 +363,7 @@ export default function LoginPage() {
 
           {/* 三种模式切换 Tab */}
           {showModeTabs && (
-            <div className="flex gap-1 mb-6 p-1 rounded-lg border border-border bg-s2" aria-label="登录方式">
+            <div className="card-surface flex gap-1 mb-6 p-1 rounded-lg bg-s2" aria-label="登录方式">
               {modeTabs.map(tab => (
                 <button
                   key={tab.key}
@@ -433,7 +433,7 @@ export default function LoginPage() {
 
             {/* 邮件服务未配置: 这条路径发不出验证码 —— 直说, 别让用户白填一遍 */}
             {!emailReady && (isRegister || isEmailCode || isReset) && (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px] leading-relaxed">
+              <div className="card-surface rounded-lg bg-amber-500/5 px-3 py-2 text-[12px] leading-relaxed">
                 邮件服务暂未开通，验证码发不出去。请把邮箱发给管理员手工开通账号，
                 或改用「密码登录」。
               </div>

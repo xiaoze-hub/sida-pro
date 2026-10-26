@@ -12,7 +12,7 @@ export function FeedbackSection() {
   return (
     <>
   {/* Feedback Stats */}
-  <section id="sec-feedback" className="border-t border-border pt-4 md:pt-5 lg:col-span-5" style={{ display: sectionMatches('sec-feedback') ? undefined : 'none' }}>
+  <section id="sec-feedback" className="analysis-section" style={{ display: sectionMatches('sec-feedback') ? undefined : 'none' }}>
     <div className="flex items-center justify-between mb-4">
       <div>
         <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">建议反馈</h3>
@@ -39,7 +39,7 @@ export function FeedbackSection() {
         </div>
 
         {fbStats.by_agent?.length ? (
-          <div className="rounded-md border border-border bg-s2 p-3">
+          <div className="card-surface rounded-md bg-s2 p-3">
             <div className="text-[12px] font-semibold text-foreground">按 Agent</div>
             <div className="mt-2 space-y-1">
               {fbStats.by_agent.slice(0, 6).map(a => (

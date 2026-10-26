@@ -206,7 +206,7 @@ export default function WarReportPage() {
       {/* 结论层（2026-10-24 1-D）：首屏先给三句结论，榜单降到第二屏。
           与暗盘资金页的差异化定位：暗盘=榜单，战报=叙事。 */}
       <section className="grid gap-3 md:grid-cols-3" data-testid="war-report-conclusion">
-        <div className="rounded-xl border border-border p-3">
+        <div className="card p-4">
           <div className="text-[12px] text-muted-foreground">{t('warReport.directionLabel')}</div>
           {inflow.length > 0 || outflow.length > 0 ? (
             <div className={`mt-1 text-[20px] font-semibold tabular-nums ${netWan > 0 ? 'text-stock-up' : netWan < 0 ? 'text-stock-down' : 'text-muted-foreground'}`}>
@@ -220,7 +220,7 @@ export default function WarReportPage() {
           </div>
           <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.directionHint')}</div>
         </div>
-        <div className="rounded-xl border border-border p-3">
+        <div className="card p-4">
           <div className="text-[12px] text-muted-foreground">{t('warReport.topIndustry')}</div>
           {topIndustries.length > 0 ? (
             <ul className="mt-1 space-y-0.5">
@@ -238,7 +238,7 @@ export default function WarReportPage() {
           )}
           <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.topIndustryHint')}</div>
         </div>
-        <div className="rounded-xl border border-border p-3">
+        <div className="card p-4">
           <div className="text-[12px] text-muted-foreground">{t('warReport.topStock')}</div>
           {topStocks.length > 0 ? (
             <ul className="mt-1 space-y-0.5">
@@ -264,7 +264,7 @@ export default function WarReportPage() {
       </section>
 
       {/* 大单净流入 TOP */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <section className="card-surface overflow-hidden rounded-xl bg-card">
         <div className="border-b border-border px-3 py-2 text-[14px] font-medium text-foreground">
           {t('warReport.topInflow')}
         </div>
@@ -272,7 +272,7 @@ export default function WarReportPage() {
       </section>
 
       {/* 大单净流出 TOP */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <section className="card-surface overflow-hidden rounded-xl bg-card">
         <div className="border-b border-border px-3 py-2 text-[14px] font-medium text-foreground">
           {t('warReport.topOutflow')}
         </div>
@@ -280,7 +280,7 @@ export default function WarReportPage() {
       </section>
 
       {/* 行业分布 */}
-      <section className="rounded-xl border border-border bg-card">
+      <section className="card-surface rounded-xl bg-card">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <span className="text-[14px] font-medium text-foreground">{t('warReport.industryTitle')}</span>
           <span className="text-[12px] text-muted-foreground">{t('warReport.industryHint')}</span>
@@ -304,7 +304,7 @@ export default function WarReportPage() {
       </section>
 
       {/* 拆单 / 对倒计数 */}
-      <section className="rounded-xl border border-border bg-card">
+      <section className="card-surface rounded-xl bg-card">
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="text-[14px] font-medium text-foreground">{t('warReport.splitWashTitle')}</span>

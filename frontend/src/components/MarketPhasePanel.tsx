@@ -85,7 +85,7 @@ export function MarketPhasePanel() {
   }
 
   return (
-    <div className="rounded border border-border p-3">
+    <div className="analysis-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Gauge className="h-4 w-4 text-muted-foreground" strokeWidth={1.8} />
         <span className="text-[14px] font-semibold">市场情绪周期</span>
@@ -102,9 +102,8 @@ export function MarketPhasePanel() {
       </div>
 
       {!segs?.available ? (
-        <div className="grid place-items-center px-6 py-8 text-center">
-          <Gauge className="h-8 w-8 text-muted-foreground" strokeWidth={1.5} />
-          <p className="mt-3 text-[14px] text-foreground">尚无阶段历史</p>
+        <div className="rounded-lg bg-s2 p-4">
+          <p className="text-[14px] text-foreground">尚无阶段历史</p>
           <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
             阶段需从涨停事件回填历史后才能判定(EMA 与 2 日确认依赖完整序列)。
           </p>

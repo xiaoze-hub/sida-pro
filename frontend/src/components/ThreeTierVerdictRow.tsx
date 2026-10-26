@@ -154,7 +154,7 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
 
   return (
     <div
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded border border-border bg-card px-3 py-2 text-[12px] text-muted-foreground"
+      className="card-surface flex flex-wrap items-center gap-x-4 gap-y-2 rounded bg-card px-3 py-2 text-[12px] text-muted-foreground"
       data-testid="three-tier-verdict-row"
     >
       <div className="flex items-center gap-1.5 font-medium text-foreground">

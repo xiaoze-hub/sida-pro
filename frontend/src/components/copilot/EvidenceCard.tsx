@@ -166,7 +166,7 @@ export function EvidenceCard({ run, steps, loading, error }: EvidenceCardProps) 
 
   return (
     <div
-      className="rounded-md border border-border px-2 py-1.5"
+      className="card-surface bg-card rounded-md px-2 py-1.5"
       data-testid="evidence-card"
       data-run-id={run?.run_id || undefined}
     >

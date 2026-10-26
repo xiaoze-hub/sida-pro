@@ -120,7 +120,7 @@ export function AgentDialogs() {
                     const isLoading = eff ? !!schedulePreviewLoading[eff] : false
                     if (!eff) return null
                     return (
-                      <div className="ml-[22px] rounded-md border border-border bg-background px-2.5 py-2">
+                      <div className="card-surface ml-[22px] rounded-md bg-background px-2.5 py-2">
                         <div className="flex items-center justify-between">
                           <div className="text-[12px] text-muted-foreground">
                             未来触发时间预览{isFollowingGlobal ? <span className="ml-1 opacity-70">(跟随全局)</span> : null}

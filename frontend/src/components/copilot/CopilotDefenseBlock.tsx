@@ -26,7 +26,7 @@ export function CopilotDefenseBlock({
   const closeTxt = safeFixed(close, 2)
 
   return (
-    <section className="rounded-lg border border-border bg-s2 p-2" data-testid="copilot-defense">
+    <section className="card-surface rounded-lg bg-s2 p-2" data-testid="copilot-defense">
       <div className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground">
         <Shield className="h-3 w-3" />
         {SECTION_DEFENSE}

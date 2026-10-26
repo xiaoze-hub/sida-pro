@@ -171,7 +171,7 @@ export function AiDialogs() {
           </Button>
         </div>
       </div>
-      <div className="rounded-md border border-border bg-s2 p-3 space-y-3">
+      <div className="card-surface rounded-md bg-s2 p-3 space-y-3">
         <p className="text-[12px] font-medium text-foreground">模型（单模型简化配置，可留空稍后补充）</p>
         <div>
           <Label>模型标识</Label>
@@ -368,7 +368,7 @@ export function AiDialogs() {
         ) : (
           <div className="max-h-[55vh] space-y-1.5 overflow-y-auto scrollbar pr-1">
             {modelsSvc.models.map(m => (
-              <div key={m.id} className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2">
+              <div key={m.id} className="card-surface flex items-center justify-between gap-2 rounded-md bg-background px-3 py-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     {m.is_default && <Star className="w-3 h-3 text-amber-700 dark:text-amber-500 flex-shrink-0" />}
@@ -443,9 +443,9 @@ export function AiDialogs() {
               else next.add(id)
               setBatchChecked(next)
             }}
-            className={`flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition-colors ${
-              checked ? 'border-primary/60 bg-primary/10' : 'border-border hover:border-border hover:bg-s2'
-            }`}
+            className={'card-surface ' + (`flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2.5 transition-colors ${
+ checked ? ' bg-primary/10' : ' hover:bg-s2'
+ }`)}
           >
             <div className="flex min-w-0 items-center gap-2.5">
               <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${

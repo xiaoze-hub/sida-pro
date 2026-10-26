@@ -204,7 +204,7 @@ export default function CopilotRunsPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-2 rounded-xl border border-border bg-s1 px-3 py-3" data-testid="runs-loading">
+        <div className="card-surface space-y-2 rounded-xl bg-s1 px-3 py-3" data-testid="runs-loading">
           <div className="text-[12px] text-muted-foreground">读取中…</div>
           <Skeleton shape="text" className="h-3 w-3/4" />
           <Skeleton shape="text" className="h-3 w-1/2" />
@@ -212,21 +212,21 @@ export default function CopilotRunsPage() {
         </div>
       ) : error ? (
         <div
-          className="rounded-xl border border-border bg-s1 px-3 py-6 text-[12px] text-muted-foreground"
+          className="card-surface rounded-xl bg-s1 px-3 py-6 text-[12px] text-muted-foreground"
           data-testid="runs-error"
         >
           读取失败（可点刷新重试）
         </div>
       ) : rows.length === 0 ? (
         <div
-          className="rounded-xl border border-border bg-s1 px-3 py-6 text-[12px] text-muted-foreground"
+          className="card-surface rounded-xl bg-s1 px-3 py-6 text-[12px] text-muted-foreground"
           data-testid="runs-empty"
         >
           暂无运行记录
           <div className="mt-1 text-[12px]">在「数智参谋」里提一次问题，这里就会出现那一轮的轨迹。</div>
         </div>
       ) : (
-        <section className="rounded-xl border border-border bg-s1" data-testid="runs-table-wrap">
+        <section className="card-surface rounded-xl bg-s1" data-testid="runs-table-wrap">
           <div className="max-h-[70vh] overflow-y-auto">
             <table className="w-full text-[12px]">
               <thead className="sticky top-0 z-10 bg-s1 text-muted-foreground">

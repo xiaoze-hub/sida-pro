@@ -66,7 +66,7 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
   // 加载中轻量骨架(首次加载、尚无数据时)
   if (loading && !data) {
     return (
-      <div className="rounded-xl border border-border bg-card p-3">
+      <div className="card-surface rounded-xl bg-card p-3">
         <div className="flex items-center gap-1.5 mb-2">
           <Activity className="w-3.5 h-3.5 text-muted-foreground" />
           <span className="text-[14px] font-semibold text-foreground">OB 盘口失衡</span>
@@ -91,7 +91,7 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
   const tagClass = ob >= 0.3 ? 'text-stock-up' : ob <= -0.3 ? 'text-stock-down' : 'text-muted-foreground'
 
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
+    <div className="card-surface rounded-xl bg-card p-3">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="text-[14px] font-semibold text-foreground flex items-center gap-1.5">
           <Activity className="w-3.5 h-3.5 text-muted-foreground" />

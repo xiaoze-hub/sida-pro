@@ -907,11 +907,11 @@ export default function AiCopilotPage() {
           {msgs.map((m, i) => (
             <div key={`${m.role}-${i}`} className={m.role === 'user' ? 'text-right' : ''}>
               <div
-                className={
-                  m.role === 'user'
-                    ? 'inline-block max-w-[86%] rounded-lg bg-s3 px-2.5 py-1.5 text-[12px]'
-                    : 'rounded-lg border border-border bg-s2 px-2.5 py-2 text-[12px] leading-relaxed'
-                }
+                className={'card-surface ' + (
+ m.role === 'user'
+ ? 'inline-block max-w-[86%] rounded-lg bg-s3 px-2.5 py-1.5 text-[12px]'
+ : 'rounded-lg bg-s2 px-2.5 py-2 text-[12px] leading-relaxed'
+ )}
               >
                 {m.role === 'user' ? (
                   m.content
@@ -1012,7 +1012,7 @@ export default function AiCopilotPage() {
             </div>
           ) : null}
           {error ? (
-            <div className="rounded border border-role-risk/40 px-2 py-1.5 text-[12px] text-role-risk">
+            <div className="card-surface bg-card rounded px-2 py-1.5 text-[12px] text-role-risk">
               {error}
             </div>
           ) : null}
@@ -1023,7 +1023,7 @@ export default function AiCopilotPage() {
 
           {/* 待发送附件预览（图片显示缩略图，其它显示文件名） */}
           {attach ? (
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-role-watch/35 bg-s2 px-2 py-1.5">
+            <div className="card-surface mb-2 flex items-center gap-2 rounded-lg bg-s2 px-2 py-1.5">
               {attach.imageData ? (
                 <img
                   src={attach.imageData}

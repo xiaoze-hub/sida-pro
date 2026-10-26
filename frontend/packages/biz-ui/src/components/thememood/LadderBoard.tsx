@@ -121,7 +121,7 @@ function MarkGroup({ label, marks, tone }: { label: string; marks: LadderMark[];
       ? 'border-[--stock-up]/30 text-[--stock-up]/80'
       : 'border-border text-muted-foreground'
   return (
-    <div className={`mt-1 rounded border px-1 py-0.5 ${cls}`}>
+    <div className={"card-surface bg-card " + (`mt-1 rounded px-1 py-0.5 ${cls}`)}>
       <div className="text-[12px] font-medium">{label} {marks.length}</div>
       <div
         title={marks.map((m) => `${m.name || m.symbol}(${prevBoardsLabel(m.prev_boards)})`).join('、')}
@@ -137,7 +137,7 @@ function MarkGroup({ label, marks, tone }: { label: string; marks: LadderMark[];
 function DayColumn({ day, basis, liveAsOf }: { day: LadderDay; basis: 'qfq' | 'raw'; liveAsOf?: string | null }) {
   const sealed = day.rows.reduce((a, r) => a + r.codes.length, 0)
   return (
-    <div className="w-[170px] shrink-0 rounded border border-border p-1.5">
+    <div className="card-surface bg-card w-[170px] shrink-0 rounded p-1.5">
       <div className="mb-1 flex items-baseline justify-between">
         <span className="text-[12px] font-medium text-foreground">{fmtISODate(day.date)}</span>
         <span className="text-[12px] text-muted-foreground">封 {sealed}</span>
@@ -240,7 +240,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
             {shown.map((b) => {
               const row = d.rows.find((r) => r.boards === b)
               return (
-                <div key={b} className="mb-1 flex h-[64px] flex-wrap content-start gap-1 overflow-hidden rounded border border-border p-0.5">
+                <div key={b} className="card-surface bg-card mb-1 flex h-[64px] flex-wrap content-start gap-1 overflow-hidden rounded p-0.5">
                   {!collapsed.has(b) && row
                     ? row.stocks.map((s) => (
                       <StockChip key={s.symbol} s={s} basis={d.provisional ? 'raw' : 'qfq'} />
@@ -298,7 +298,7 @@ export default function LadderBoard(props: {
     return next
   })
   return (
-    <div className="rounded border border-border p-3">
+    <div className="analysis-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-[14px] font-semibold">连板梯队</span>
         <span className="text-[12px] text-muted-foreground">
@@ -328,7 +328,7 @@ export default function LadderBoard(props: {
         <div className="mb-1 text-[12px] text-[--stock-up]">实时源中断 {lastOk ?? ''}</div>
       ) : null}
       <div ref={ref}>
-        {view === 'cols' ? (
+        {cols.length === 0 ? <div className="py-3 text-[14px] text-muted-foreground">暂无连板梯队数据，等待收盘同步或刷新。</div> : view === 'cols' ? (
           <div className="scrollbar overflow-x-auto pb-1">
             <div className="flex w-max gap-1">
               {cols.map((d) => (

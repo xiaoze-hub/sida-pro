@@ -154,7 +154,7 @@ export default function FactorIC() {
   const insufficient = rows.filter((r) => r.ic === null).length
 
   return (
-    <div className="mx-auto max-w-[1200px] p-4">
+    <div className="page-container space-y-4">
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <h1 className="text-[16px] font-semibold">因子有效性</h1>
         <span className="text-[12px] text-muted-foreground">
@@ -182,11 +182,11 @@ export default function FactorIC() {
         </div>
       </div>
 
-      {err && <div className="mb-3 rounded border border-border p-3 text-[12px] text-muted-foreground">{err}</div>}
+      {err && <div className="card-surface bg-card mb-3 rounded p-3 text-[12px] text-muted-foreground">{err}</div>}
 
       {/* 后端计算失败: 照实显示错误, 不显示成"没数据" */}
       {data?.error && (
-        <div className="mb-3 flex items-start gap-2 rounded border border-amber-500/40 p-3 text-[12px]">
+        <div className="card-surface bg-card mb-3 flex items-start gap-2 rounded p-3 text-[12px]">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <div>
             <div className="font-medium">后端计算失败（原样显示，不代表因子无效）</div>
@@ -202,7 +202,7 @@ export default function FactorIC() {
       )}
 
       {data && !data.error && rows.length === 0 && (
-        <div className="rounded border border-border p-6 text-[12px] text-muted-foreground">
+        <div className="card-surface bg-card rounded p-6 text-[12px] text-muted-foreground">
           这段区间还没有可评估的因子快照（需要"策略信号快照 + 已评估的前向收益"配对）。
           把回看天数调大一些再试。
         </div>
@@ -228,7 +228,7 @@ export default function FactorIC() {
             })()}
           </p>
 
-          <div className="overflow-x-auto rounded border border-border">
+          <div className="card-surface bg-card overflow-x-auto rounded ">
             <table className="w-full min-w-[860px]">
               <thead className="border-b border-border bg-s2">
                 <tr className="text-[12px] text-muted-foreground">

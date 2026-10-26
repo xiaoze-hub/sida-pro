@@ -22,7 +22,7 @@ export function StocksSkeleton() {
       {/* Summary Cards Skeleton */}
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="rounded-lg border border-border p-3">
+          <div key={i} className="card-surface bg-card rounded-lg p-3">
             <Skeleton className="mb-2 h-4 w-16" />
             <Skeleton className="h-6 w-24" />
           </div>

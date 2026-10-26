@@ -234,7 +234,7 @@ function Row({ row, onOpen }: RowProps) {
       </div>
 
       {/* 状态标签 */}
-      <div className={`justify-self-end px-1.5 py-0.5 rounded border text-[12px] font-medium ${style.badgeBg} ${style.badgeText}`}>
+      <div className={"card-surface bg-card " + (`justify-self-end px-1.5 py-0.5 rounded text-[12px] font-medium ${style.badgeBg} ${style.badgeText}`)}>
         {STATUS_LABEL[status]}
       </div>
     </button>
@@ -355,7 +355,7 @@ export default function AbnormalMovesCard({
       </div>
 
       {showError ? (
-        <div className="flex items-center gap-2 text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+        <div className="card-surface flex items-center gap-2 text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 rounded-md px-3 py-2">
           <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
           <span>异动监控暂不可用({error})</span>
         </div>

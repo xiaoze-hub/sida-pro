@@ -16,7 +16,7 @@ const SRC = readFileSync(join(__dirname, '../../src/pages/Dashboard.tsx'), 'utf8
 describe('首屏结论层（B1）', () => {
   it('结论层存在，使用独立面板与后面内容分层', () => {
     expect(SRC).toContain('data-testid="market-conclusion"')
-    expect(SRC).toMatch(/data-testid="market-conclusion"[\s\S]{0,120}border-border/)
+    expect(SRC).toMatch(/data-testid="market-conclusion"[\s\S]{0,120}card-surface/)
   })
 
   it('有一句非数字结论（含主线与红绿盘判断）', () => {

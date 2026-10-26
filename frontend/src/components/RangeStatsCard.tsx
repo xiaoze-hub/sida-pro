@@ -56,7 +56,7 @@ export default function RangeStatsCard({ stats, onClear }: RangeStatsCardProps) 
   return (
     <div
       data-testid="range-stats-card"
-      className="rounded border border-border bg-card p-2 text-[12px] leading-5"
+      className="card-surface rounded bg-card p-2 text-[12px] leading-5"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium text-foreground">

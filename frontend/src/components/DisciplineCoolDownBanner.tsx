@@ -53,7 +53,7 @@ export function DisciplineCoolDownBanner() {
 
   return (
     <div
-      className="mt-2 flex items-center justify-between gap-3 rounded border border-rose-500/40 bg-rose-950/20 px-3 py-2 text-[12px] text-rose-200"
+      className="card-surface mt-2 flex items-center justify-between gap-3 rounded bg-rose-950/20 px-3 py-2 text-[12px] text-rose-200"
       data-testid="discipline-cooldown-banner"
     >
       <div className="flex items-center gap-2">

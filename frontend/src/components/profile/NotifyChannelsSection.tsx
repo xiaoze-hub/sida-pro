@@ -72,7 +72,7 @@ export function NotifyChannelsSection() {
   }
 
   return (
-    <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
+    <section className="analysis-section">
       <div className="flex items-start justify-between mb-4 gap-3">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -84,14 +84,14 @@ export function NotifyChannelsSection() {
             <button
               type="button"
               className="mx-0.5 text-primary underline-offset-2 hover:underline"
-              onClick={() => navigate('/settings?tab=settings')}
+              onClick={() => navigate('/settings?tab=settings&section=sec-notify')}
             >
               设置页
             </button>
             。
           </p>
         </div>
-        <Button size="sm" variant="outline" className="h-8" onClick={() => navigate('/settings?tab=settings')}>
+        <Button size="sm" variant="outline" className="h-8" onClick={() => navigate('/settings?tab=settings&section=sec-notify')}>
           <Plus className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">添加</span>
         </Button>
@@ -148,7 +148,7 @@ export function NotifyChannelsSection() {
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7"
-                  onClick={() => navigate('/settings?tab=settings')}
+                  onClick={() => navigate('/settings?tab=settings&section=sec-notify')}
                   title="编辑"
                 >
                   <Pencil className="w-3.5 h-3.5" />

@@ -73,7 +73,7 @@ export default function AuctionSnapshotCard({ symbol, market }: { symbol: string
 
   // 加载中: 暗色骨架(与 DarkFlowCards 占位风格一致)
   if (loading) {
-    return <div className="mt-3 h-[28px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
+    return <div className="card-surface mt-3 h-[28px] rounded-xl bg-card animate-pulse bg-s2" />
   }
 
   // 无数据 / 请求失败 / 后端 available=false -> 渲染 null
@@ -89,7 +89,7 @@ export default function AuctionSnapshotCard({ symbol, market }: { symbol: string
       : '--'
 
   return (
-    <div className="mt-3 flex items-center gap-3 overflow-x-auto whitespace-nowrap rounded-xl border border-border bg-card px-3 py-1.5 text-[12px] text-muted-foreground">
+    <div className="card-surface mt-3 flex items-center gap-3 overflow-x-auto whitespace-nowrap rounded-xl bg-card px-3 py-1.5 text-[12px] text-muted-foreground">
       <span className="font-medium">今日竞价</span>
       <span className={gapColor(data.direction)}>
         {data.direction === '无数据' ? '无数据' : `${data.direction}${gapText}`}

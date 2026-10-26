@@ -338,7 +338,7 @@ export function DeepAnalysisModal({
 
         {stage === 'error' && (
           <div className="space-y-3 text-[14px]">
-            <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 p-3 text-rose-600">
+            <div className="card-surface rounded-lg bg-rose-500/10 p-3 text-rose-600">
               <div className="font-semibold mb-1">分析失败</div>
               <div className="text-[12px]">{error}</div>
             </div>
@@ -386,7 +386,7 @@ function IdleView({
 
       {/* 本月预算 */}
       {budget && (
-        <div className={`rounded-lg p-3 text-[12px] ${overBudget ? 'bg-rose-500/10 border border-rose-500/30' : 'bg-s2'}`}>
+        <div className={'card-surface ' + (`rounded-lg p-3 text-[12px] ${overBudget ? 'bg-rose-500/10 ' : 'bg-s2'}`)}>
           <div className="flex items-center justify-between">
             <span className="font-medium">本月预算</span>
             <span className={overBudget ? 'text-rose-600' : 'text-muted-foreground'}>
@@ -503,7 +503,7 @@ export function ToolkitDiagnostics({
   }
 
   return (
-    <details className="rounded-lg border border-border bg-s2 p-3 text-[12px]" open={defaultOpen}>
+    <details className="card-surface rounded-lg bg-s2 p-3 text-[12px]" open={defaultOpen}>
       <summary className="cursor-pointer flex items-center gap-2 flex-wrap">
         <span className="font-medium">数据注入诊断</span>
         <span className="text-[12px] text-muted-foreground">
@@ -645,7 +645,7 @@ function DoneView({
   return (
     <div className="space-y-4 text-[14px]">
       {fromCache && (
-        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-2 text-[12px] text-amber-700 dark:text-amber-400 flex items-center justify-between">
+        <div className="card-surface rounded-lg bg-amber-500/10 p-2 text-[12px] text-amber-700 dark:text-amber-400 flex items-center justify-between">
           <span>ℹ️ 当日缓存:今天已经分析过这只股票,展示缓存结果(无新成本)</span>
           <Button variant="outline" size="sm" onClick={onRerun} className="ml-3 h-7 text-[12px]">
             忽略缓存重新分析
@@ -698,7 +698,7 @@ function DoneView({
 function AnalysisTabs({ sections }: { sections: AnalysisSection[] }) {
   if (sections.length === 0) return null
   return (
-    <div className="rounded-lg border border-border p-4">
+    <div className="card-surface bg-card rounded-lg p-4">
       <Tabs defaultValue={sections[0].id}>
         <TabsList>
           {sections.map((s) => (

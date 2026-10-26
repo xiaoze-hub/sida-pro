@@ -1366,7 +1366,7 @@ function ChipsSection({
 
       {/* 主力筹码结构研判与操盘建议 */}
       {acc ? (
-        <div className="mt-2.5 rounded border border-border bg-s1 p-2 text-[12px]">
+        <div className="card-surface mt-2.5 rounded bg-s1 p-2 text-[12px]">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-1.5">
               <span className={`px-1.5 py-0.5 rounded text-[12px] font-semibold ${

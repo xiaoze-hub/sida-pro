@@ -33,7 +33,7 @@ export function WatchlistDialogs() {
     </DialogHeader>
     {removeWatchStock && (
       <div className="space-y-4 mt-2">
-        <div className="rounded-md border border-border bg-s2 p-3">
+        <div className="card-surface rounded-md bg-s2 p-3">
           <div className="text-[14px] font-semibold text-foreground">
             {removeWatchStock.name}
             <span className="ml-2 font-mono text-[12px] text-muted-foreground">{removeWatchStock.symbol}</span>

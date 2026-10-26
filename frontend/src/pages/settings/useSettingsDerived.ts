@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { SECRET_MASK } from './types'
 import { SECRET_SETTING_KEYS } from './types'
 import type { useSettingsState } from './useSettingsState'
@@ -7,6 +8,7 @@ export function useSettingsDerived(
   state: ReturnType<typeof useSettingsState>,
   data: ReturnType<typeof useSettingsData>,
 ) {
+  const [params, setParams] = useSearchParams()
   const {
     settings,
     services,
@@ -62,9 +64,10 @@ const jumpItems: Array<{ id: string; label: string; hint?: string }> = [
 ]
 
 const scrollTo = (id: string) => {
-  const el = document.getElementById(id)
-  if (!el) return
-  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  state.setGlobalQuery('')
+  const next = new URLSearchParams(params)
+  next.set('section', id)
+  setParams(next)
 }
 
 

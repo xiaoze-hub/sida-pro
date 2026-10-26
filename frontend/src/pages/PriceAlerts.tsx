@@ -384,7 +384,7 @@ export default function PriceAlertsPage() {
       />
 
       <Dialog open={hitsOpen} onOpenChange={setHitsOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent placement="right" className="max-w-3xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>命中历史</DialogTitle>
             <DialogDescription>{hitRule?.name || '--'}</DialogDescription>
@@ -393,7 +393,7 @@ export default function PriceAlertsPage() {
             {hits.length === 0 ? (
               <div className="text-[12px] text-muted-foreground text-center py-6">暂无命中记录</div>
             ) : hits.map(h => (
-              <div key={h.id} className="rounded border border-border p-3">
+              <div key={h.id} className="card-surface bg-card rounded p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[12px] text-muted-foreground">{fmt(h.trigger_time)}</div>
                   <div className={`text-[12px] ${h.notify_success ? 'text-emerald-700' : 'text-rose-600'}`}>

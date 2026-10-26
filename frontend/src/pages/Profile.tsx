@@ -1,3 +1,6 @@
+import PageHeader from '@/components/PageHeader'
+import { SectionWorkspace, SectionPanel, useSectionRoute } from '@/components/SectionWorkspace'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -14,7 +17,6 @@ import { useApiQuery } from '@/hooks/useApiQuery'
 import NotifyChannelsSection from '@/components/profile/NotifyChannelsSection'
 import SessionDevicesSection from '@/components/profile/SessionDevicesSection'
 import DataPrivacySection from '@/components/profile/DataPrivacySection'
-import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import { useI18n } from '@/hooks/useI18n'
 
 interface ProfileInfo {
@@ -81,7 +83,7 @@ function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: str
 
 function StatTile({ icon: Icon, label, value, sub, accent }: { icon: any; label: string; value: string; sub?: string; accent: string }) {
   return (
-    <div className="rounded-md border border-border bg-s2 p-3.5">
+    <div className="card-surface rounded-md bg-s2 p-3.5">
       <div className="flex items-center gap-2 mb-1.5">
         <Icon className={`w-3.5 h-3.5 ${accent}`} />
         <span className="text-[12px] text-muted-foreground">{label}</span>
@@ -113,6 +115,10 @@ export function Profile() {
     ['profile', 'stats', 'accuracy'],
     '/profile/stats/accuracy',
   )
+  const [editOpen, setEditOpen] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  const profileSections = [{ id: 'account', label: '资料与安全' }, { id: 'activity', label: '分析记录与数据' }, { id: 'notifications', label: '通知渠道' }, { id: 'access', label: 'API 与权益' }, { id: 'privacy', label: '数据与隐私' }]
+  const [selected, select] = useSectionRoute(profileSections, 'account')
   const [nicknameDraft, setNicknameDraft] = useState('')
   const [avatarDraft, setAvatarDraft] = useState('') // '' = 未设置; 由头像是否改动区分
   const [avatarChanged, setAvatarChanged] = useState(false)
@@ -175,6 +181,7 @@ export function Profile() {
         window.dispatchEvent(new CustomEvent('panwatch:avatar-changed'))
       }
       toast('资料已保存', 'success')
+      setEditOpen(false)
     } catch (e) {
       toast(e instanceof Error ? e.message : '保存失败', 'error')
     } finally {
@@ -194,6 +201,7 @@ export function Profile() {
       onError: setPwdError,
       onSuccess: () => {
         toast('密码已更新', 'success')
+        setPasswordOpen(false)
         setOldPwd('')
         setNewPwd('')
         setConfirmPwd('')
@@ -214,70 +222,18 @@ export function Profile() {
 
   return (
     <div className="sida-page-enter">
-      {/* 页头 */}
-      <div className="relative overflow-hidden border-b border-border p-5 md:p-7">
-        <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-[16px] md:text-[16px] font-bold text-foreground">{t('profile.title')}</h1>
-            <p className="text-[12px] text-muted-foreground mt-1">{t('profile.subtitle')}</p>
-          </div>
-        </div>
+      <PageHeader title={t('profile.title')} description={t('profile.subtitle')} />
+      <div className="card mb-5 flex flex-wrap items-center gap-4 p-4">
+        <AvatarCircle name={displayName} avatar={profile?.avatar || ''} />
+        <div className="min-w-0 flex-1 basis-[180px]"><p className="text-[20px] font-semibold">{displayName || '个人账户'}</p><p className="mt-1 text-[12px] text-muted-foreground">管理个人资料、分析记录与账户安全</p></div>
+        <div className="flex flex-wrap gap-2 sm:ml-auto"><Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>编辑资料</Button>
+        <Button variant="ghost" size="sm" onClick={() => setPasswordOpen(true)}><KeyRound className="h-4 w-4" />修改密码</Button></div>
       </div>
-
-      <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* ① 个人资料 */}
-        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-7">
-          <SectionHeader title={t('profile.personalInfo')} className="mb-4" />
-
-          <div className="flex items-start gap-4">
-            {/* 头像: 默认用户名首字母色块; 可上传 */}
-            <div className="flex flex-col items-center gap-2 shrink-0">
-              <AvatarCircle name={displayName} avatar={avatarDraft} />
-              <div className="flex flex-col items-center gap-1">
-                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
-                <Button variant="secondary" size="sm" className="h-7 text-[12px]" onClick={() => fileRef.current?.click()}>
-                  <Upload className="w-3 h-3" /> 上传
-                </Button>
-                {avatarChanged && avatarDraft === '' && (
-                  <span className="text-[12px] text-muted-foreground">头像将清空</span>
-                )}
-              </div>
-            </div>
-
-            <div className="flex-1 min-w-0 space-y-4">
-
-              <div>
-                <Label className="text-[12px]">昵称(1-32 字)</Label>
-                <Input
-                  value={nicknameDraft}
-                  onChange={e => setNicknameDraft(e.target.value)}
-                  placeholder={profile?.username || '输入昵称'}
-                  maxLength={32}
-                  className="mt-1.5 h-9"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button size="sm" className="h-8" onClick={saveProfile} disabled={savingProfile}>
-                  {savingProfile ? '保存中...' : '保存资料'}
-                </Button>
-                {avatarChanged && avatarDraft !== '' && (
-                  <Button variant="ghost" size="sm" className="h-8 text-[12px]" onClick={clearAvatar} disabled={savingProfile}>
-                    <X className="w-3.5 h-3.5" /> 清除头像
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ② 安全中心 */}
-        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-5">
-          <SectionHeader title={t('profile.security')} className="mb-4" />
-          
-          {/* 当前账号 */}
+      <SectionWorkspace items={profileSections} value={selected} onChange={select} label="个人中心分类">
+        <SectionPanel id="account">
+          <section className="analysis-section"><h2 className="mb-4 text-[16px] font-semibold">账户信息</h2>
           <div
-            className="mb-5 rounded-md border border-border bg-s2 p-3.5 space-y-2"
+            className="space-y-3"
             data-testid="profile-account-card"
           >
             {/*
@@ -315,36 +271,11 @@ export function Profile() {
             )}
           </div>
 
-          {/* 修改密码(复用 /api/auth/change-password) */}
-          <div className="space-y-3">
-            <div>
-              <Label className="text-[12px]">{t('profile.oldPassword')}</Label>
-              <Input type="password" value={oldPwd} onChange={e => { setOldPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.oldPwdPlaceholder')} autoComplete="current-password" className="mt-1.5 h-9 min-h-[44px]" />
-            </div>
-            <div>
-              <Label className="text-[12px]">{t('profile.newPassword')}</Label>
-              <Input type="password" value={newPwd} onChange={e => { setNewPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.newPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
-            </div>
-            <div>
-              <Label className="text-[12px]">{t('profile.confirmPassword')}</Label>
-              <Input type="password" value={confirmPwd} onChange={e => { setConfirmPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.confirmPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
-            </div>
-            {pwdError && <div className="text-[12px] text-destructive">{pwdError}</div>}
-            <Button className="h-8 w-full min-h-[44px]" onClick={handleChangePassword} disabled={changingPwd}>
-              <KeyRound className="w-3.5 h-3.5" />
-              {changingPwd ? t('accountMenu.submitting') : t('profile.changePassword')}
-            </Button>
-          </div>
-
-          {/* 在线设备(2026-10-23): 设备限制真正生效后的可运维面 */}
-          <SessionDevicesSection />
-        </section>
-
-        {/* ③ 我的 API Key(2026-09-16 控制台) */}
-        <MyApiKeyCard />
-
-        {/* ④ 我的数据 */}
-        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
+          </section>
+          <section className="analysis-section"><SessionDevicesSection /></section>
+        </SectionPanel>
+        <SectionPanel id="activity">        {/* ④ 我的数据 */}
+        <section className="analysis-section">
           <div className="flex items-center gap-2 mb-4">
             <Target className="w-4 h-4 text-primary" />
             <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">我的数据</h3>
@@ -461,19 +392,19 @@ export function Profile() {
           </div>
         </section>
 
-        {/* ④½ 数据与隐私(2026-10-23): 导出/注销此前有后端无前端 */}
-        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
-          <DataPrivacySection username={profile?.username} />
-        </section>
+        </SectionPanel>
+        <SectionPanel id="notifications"><NotifyChannelsSection /></SectionPanel>
+        <SectionPanel id="access">        {/* ③ 我的 API Key(2026-09-16 控制台) */}
+        <MyApiKeyCard />
 
         {/* ⑤ Pro 升级(B.1) */}
-        <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
+        <section className="analysis-section">
           <div className="flex items-center gap-2 mb-4">
             <Crown className="w-4 h-4 text-amber-500" />
             <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">Pro 升级</h3>
           </div>
           {profile?.role === 'owner' || profile?.role === 'pro' ? (
-            <div className="rounded-md border border-emerald-700/25 bg-emerald-500/10 p-3.5 text-[12px] text-emerald-700 dark:text-emerald-400">
+            <div className="card-surface rounded-md bg-emerald-500/10 p-3.5 text-[12px] text-emerald-700 dark:text-emerald-400">
               您已是 {profile.role === 'owner' ? '管理员' : 'Pro 用户'}，可使用全部功能。
             </div>
           ) : (
@@ -481,14 +412,86 @@ export function Profile() {
           )}
         </section>
 
-        {/* ⑥ 通知渠道(B.4) */}
-        <NotifyChannelsSection />
-      </div>
+        </SectionPanel>
+        <SectionPanel id="privacy">        {/* ④½ 数据与隐私(2026-10-23): 导出/注销此前有后端无前端 */}
+        <section className="analysis-section">
+          <DataPrivacySection username={profile?.username} />
+        </section>
+
+        </SectionPanel>
+      </SectionWorkspace>
+      <Dialog open={editOpen} onOpenChange={setEditOpen}><DialogContent><DialogHeader><DialogTitle>编辑个人资料</DialogTitle><DialogDescription>调整昵称和头像，保存后生效。</DialogDescription></DialogHeader>
+<div className="space-y-4">
+
+
+          <div className="flex items-start gap-4">
+            {/* 头像: 默认用户名首字母色块; 可上传 */}
+            <div className="flex flex-col items-center gap-2 shrink-0">
+              <AvatarCircle name={displayName} avatar={avatarDraft} />
+              <div className="flex flex-col items-center gap-1">
+                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
+                <Button variant="secondary" size="sm" className="h-7 text-[12px]" onClick={() => fileRef.current?.click()}>
+                  <Upload className="w-3 h-3" /> 上传
+                </Button>
+                {avatarChanged && avatarDraft === '' && (
+                  <span className="text-[12px] text-muted-foreground">头像将清空</span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-0 space-y-4">
+
+              <div>
+                <Label htmlFor="profile-nickname" className="text-[12px]">昵称(1-32 字)</Label>
+                <Input
+                  id="profile-nickname" value={nicknameDraft}
+                  onChange={e => setNicknameDraft(e.target.value)}
+                  placeholder={profile?.username || '输入昵称'}
+                  maxLength={32}
+                  className="mt-1.5 h-9"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button size="sm" className="h-8" onClick={saveProfile} disabled={savingProfile}>
+                  {savingProfile ? '保存中...' : '保存资料'}
+                </Button>
+                {avatarChanged && avatarDraft !== '' && (
+                  <Button variant="ghost" size="sm" className="h-8 text-[12px]" onClick={clearAvatar} disabled={savingProfile}>
+                    <X className="w-3.5 h-3.5" /> 清除头像
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>      </DialogContent></Dialog>
+      <Dialog open={passwordOpen} onOpenChange={open => { setPasswordOpen(open); if (!open) { setOldPwd(''); setNewPwd(''); setConfirmPwd(''); setPwdError(null) } }}><DialogContent><DialogHeader><DialogTitle>修改密码</DialogTitle><DialogDescription>验证当前密码后设置新密码。</DialogDescription></DialogHeader>
+          {/* 修改密码(复用 /api/auth/change-password) */}
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="profile-old-password" className="text-[12px]">{t('profile.oldPassword')}</Label>
+              <Input id="profile-old-password" type="password" value={oldPwd} onChange={e => { setOldPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.oldPwdPlaceholder')} autoComplete="current-password" className="mt-1.5 h-9 min-h-[44px]" />
+            </div>
+            <div>
+              <Label htmlFor="profile-new-password" className="text-[12px]">{t('profile.newPassword')}</Label>
+              <Input id="profile-new-password" type="password" value={newPwd} onChange={e => { setNewPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.newPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
+            </div>
+            <div>
+              <Label htmlFor="profile-confirm-password" className="text-[12px]">{t('profile.confirmPassword')}</Label>
+              <Input id="profile-confirm-password" type="password" value={confirmPwd} onChange={e => { setConfirmPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.confirmPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
+            </div>
+            {pwdError && <div className="text-[12px] text-destructive">{pwdError}</div>}
+            <Button className="h-8 w-full min-h-[44px]" onClick={handleChangePassword} disabled={changingPwd}>
+              <KeyRound className="w-3.5 h-3.5" />
+              {changingPwd ? t('accountMenu.submitting') : t('profile.changePassword')}
+            </Button>
+          </div>
+
+      </DialogContent></Dialog>
     </div>
   )
 }
 
-/** 我的 API Key 卡片(2026-09-16): 显示当前 key 前缀 + 跳转控制台。 */
 function MyApiKeyCard() {
   const navigate = useNavigate()
   const { data, isLoading } = useApiQuery<{ keys: Array<{ key_prefix: string; status: string; tier: string }> }>(
@@ -499,12 +502,12 @@ function MyApiKeyCard() {
   const current = keys.find(k => k.status === 'active') || keys[0] || null
 
   return (
-    <section className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
+    <section className="analysis-section">
       <div className="flex items-center gap-2 mb-4">
         <KeyRound className="w-4 h-4 text-primary" />
         <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">我的 API Key</h3>
       </div>
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-md border border-border bg-s2 p-3.5">
+      <div className="card-surface flex flex-col sm:flex-row sm:items-center gap-3 rounded-md bg-s2 p-3.5">
         <div className="min-w-0 flex-1">
           {isLoading ? (
             <div className="text-[12px] text-muted-foreground">加载中…</div>
@@ -561,7 +564,7 @@ function ProApplyCard() {
 
   if (applied) {
     return (
-      <div className="rounded-md border border-primary/25 bg-primary/5 p-3.5 text-[12px] text-foreground">
+      <div className="card-surface rounded-md bg-primary/5 p-3.5 text-[12px] text-foreground">
         申请已提交，等待管理员审核。审核通过后您的账号将升级为 Pro。
       </div>
     )
@@ -571,7 +574,7 @@ function ProApplyCard() {
     <div className="space-y-3">
       {/* P2-4(2026-09-18): 这里原来**硬编码**了一串 Pro 能力清单 —— 权限一改就变成假话。
           改成指向档位页, 由后端 `GET /api/tiers` 从权限定义实时生成(单一来源)。 */}
-      <div className="rounded-md border border-border bg-s2 p-3.5 text-[12px] text-muted-foreground">
+      <div className="card-surface rounded-md bg-s2 p-3.5 text-[12px] text-muted-foreground">
         Pro 可使用全部功能。完整对比见
         <Link to="/tiers" className="mx-1 underline underline-offset-4 hover:text-foreground">档位页</Link>
         （清单由服务端按当前权限实时生成）。

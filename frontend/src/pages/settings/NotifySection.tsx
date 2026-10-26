@@ -34,7 +34,7 @@ export function NotifySection() {
   return (
     <>
   {/* Notify Channel Section */}
-  <section id="sec-notify" className="border-t border-border pt-4 md:pt-5 lg:col-span-5" style={{ display: sectionMatches('sec-notify') ? undefined : 'none' }}>
+  <section id="sec-notify" className="analysis-section" style={{ display: sectionMatches('sec-notify') ? undefined : 'none' }}>
     <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
       <div>
         <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">通知渠道</h3>
@@ -45,7 +45,7 @@ export function NotifySection() {
         <span className="hidden sm:inline">添加</span>
       </Button>
     </div>
-    <div className="mb-3 rounded-md border border-border bg-s2 p-3.5">
+    <div className="card-surface mb-3 rounded-md bg-s2 p-3.5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
           <MonitorUp className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
@@ -74,7 +74,7 @@ export function NotifySection() {
       )}
     </div>
     {/* 个人微信(iLink): 扫码绑定 */}
-    <div className="mb-3 rounded-md border border-border bg-s2 p-3.5">
+    <div className="card-surface mb-3 rounded-md bg-s2 p-3.5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
           <QrCode className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />

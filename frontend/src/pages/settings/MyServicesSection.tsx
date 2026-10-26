@@ -17,7 +17,7 @@ export function MyServicesSection() {
   return (
     <>
   {/* 我的服务商(BYOK): 用户自定义 LLM 服务商, 用自己的 API Key(2026-08-15) */}
-  <section id="sec-my-services" className="border-t border-border pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-my-services') ? undefined : 'none' }}>
+  <section id="sec-my-services" className="analysis-section" style={{ display: sectionMatches('sec-my-services') ? undefined : 'none' }}>
     <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
       <div>
         <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">我的服务商 (BYOK)</h3>
@@ -34,7 +34,7 @@ export function MyServicesSection() {
     </div>
 
     {isDemo ? (
-      <div className="rounded-md border border-border bg-s2 p-3.5 text-[12px] text-muted-foreground">
+      <div className="card-surface rounded-md bg-s2 p-3.5 text-[12px] text-muted-foreground">
         演示账号为只读浏览模式，不可配置自己的服务商。
       </div>
     ) : myServicesLoading ? (

@@ -119,7 +119,7 @@ export function AnswerCard({
     <div data-testid="copilot-answer-card" className="space-y-2">
       {/* 1. 裁决条 */}
       {parsed.verdict ? (
-        <div className="rounded-lg border border-role-watch/40 bg-role-watch/8 px-2.5 py-2">
+        <div className="card-surface rounded-lg bg-role-watch/8 px-2.5 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <Sparkles className="h-3 w-3 shrink-0 text-role-watch" />
             <span className="text-[12px] font-medium text-role-watch">{ANSWER_VERDICT_LABEL}</span>
@@ -140,7 +140,7 @@ export function AnswerCard({
 
       {/* 2. 依据 */}
       {parsed.evidence.length ? (
-        <div className="rounded-lg border border-border bg-s1 px-2.5 py-2">
+        <div className="card-surface rounded-lg bg-s1 px-2.5 py-2">
           <div className="flex items-center justify-between">
             <span className="text-[12px] font-medium text-muted-foreground">{ANSWER_EVIDENCE_LABEL}</span>
             <span className="text-[12px] text-muted-foreground">{parsed.evidence.length} 条</span>
@@ -173,7 +173,7 @@ export function AnswerCard({
 
       {/* 3. 预案 */}
       {parsed.plan ? (
-        <div className="rounded-lg border border-border bg-s1 px-2.5 py-2">
+        <div className="card-surface rounded-lg bg-s1 px-2.5 py-2">
           <div className="text-[12px] font-medium text-muted-foreground">{ANSWER_PLAN_LABEL}</div>
           <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-foreground">
             {parsed.plan}

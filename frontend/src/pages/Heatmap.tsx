@@ -1,3 +1,4 @@
+import PageHeader from '@/components/PageHeader'
 /**
  * 板块热力图页面 (P1-1, 2026-09-10, 借鉴 OpenTerminal treemap 热力图):
  * 行业/概念板块 treemap, 面积=成交额或等权, 颜色=涨跌幅(A股红涨绿跌, ±3% 夹紧),
@@ -11,15 +12,8 @@ export default function HeatmapPage() {
   const navigate = useNavigate()
   return (
     <div className="sida-page-enter space-y-4">
-      <div>
-        <h1 className="text-[16px] font-semibold">板块热力图</h1>
-        <p className="mt-0.5 text-[12px] text-muted-foreground">
-          面积=量能(成交额口径，缺失板块以最小面积保底)或等权；颜色=当日涨跌幅(±3% 夹紧，平盘/无数据为灰)。点击色块查看成分股。
-        </p>
-      </div>
-      {/* 主内容面板不用 .card(12px 圆角+阴影 = "卡片包")——铁律: 主内容不该被卡片包住;
-          改为 4px 圆角 + hairline 边框, 视觉几乎不变但不再是"卡片" */}
-      <div className="rounded border border-border bg-card p-3">
+      <PageHeader title="板块热力" description="面积表示量能或等权，颜色表示涨跌幅（±3%）；无数据为灰色。点击板块查看成分股。" />
+      <div className="analysis-section">
         <BoardHeatmap
           onOpenBoard={(blockCode) => navigate(`/boards/${encodeURIComponent(blockCode)}`, { state: navBackState('/heatmap', '板块热力图') })}
         />

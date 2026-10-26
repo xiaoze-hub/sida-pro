@@ -38,7 +38,6 @@
     --ring: var(--primary);
     --shadow-panel: 0 2px 4px hsl(225 35% 20% / .025), 0 8px 28px hsl(225 35% 20% / .035);
     --shadow-overlay: 0 12px 36px hsl(220 35% 15% / .16), 0 2px 8px hsl(220 35% 15% / .08);
-    --panel-highlight: inset 0 1px 0 hsl(0 0% 100% / .75);
     --radius: .5rem;
     --stock-up: #bf293b;
     --stock-down: #18764b;
@@ -111,7 +110,6 @@
     --input: 216 18% 51%;
     --shadow-panel: 0 3px 14px hsl(220 45% 2% / .2);
     --shadow-overlay: 0 14px 40px hsl(220 45% 2% / .55), 0 2px 8px hsl(220 45% 2% / .3);
-    --panel-highlight: inset 0 1px 0 hsl(216 40% 90% / .055);
     --stock-up: #ff7b86;
     --stock-down: #6dcc9c;
     --stock-up-hsl: 355 100% 74.1%;
@@ -190,15 +188,17 @@
   }
 
   .card, .card-hover, .analysis-section {
-    @apply rounded-xl border border-border bg-card;
-    box-shadow: var(--panel-highlight), var(--shadow-panel);
+    @apply rounded-xl bg-card;
+    box-shadow: var(--shadow-panel);
   }
   .card-hover {
-    transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+    transition: box-shadow var(--dur-fast);
   }
-  .card-hover:hover { border-color: hsl(var(--border-strong)); box-shadow: var(--shadow-panel); }
+  .card-hover:hover { box-shadow: var(--shadow-panel); }
   .analysis-section { padding: var(--density-4); }
-  .card-subtle { @apply rounded-lg border border-border bg-s2; }
+  .card-subtle { @apply rounded-lg bg-s2; }
+  /* 内容卡片禁止描边与内侧高光，层级由底色和留白建立。 */
+  .card-surface, .card, .card-hover, .card-subtle, .analysis-section { border: none !important; }
   .btn-primary {
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-[14px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50;
   }

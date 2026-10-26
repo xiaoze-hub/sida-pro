@@ -334,7 +334,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
           )}
 
           <div className="flex items-center gap-2 text-[12px]">
-            <div className="flex-1 rounded-md border border-border px-2.5 py-1.5 text-muted-foreground bg-background">
+            <div className="card-surface flex-1 rounded-md px-2.5 py-1.5 text-muted-foreground bg-background">
               过滤器：{filterSummary}
             </div>
             <Button variant="ghost" size="sm" className="h-7" onClick={clearFilters}>清空过滤</Button>

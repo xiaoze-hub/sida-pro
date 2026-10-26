@@ -83,7 +83,7 @@ export interface SafeMarkdownProps
  *  横向可滚（窄屏），并保持 11–13px 的信息密度。 */
 const mdComponents: Components = {
   table: ({ children, ...props }) => (
-    <div className="-mx-1 my-2 overflow-x-auto rounded-md border border-border">
+    <div className="card-surface bg-card -mx-1 my-2 overflow-x-auto rounded-md ">
       <table className="w-full border-collapse text-[12px]" {...props}>
         {children}
       </table>

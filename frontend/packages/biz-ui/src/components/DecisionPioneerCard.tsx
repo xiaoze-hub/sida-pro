@@ -152,7 +152,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
     return bare ? (
       <div className="h-[110px] rounded-lg bg-s2 animate-pulse" />
     ) : (
-      <div className="mt-3 h-[110px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
+      <div className="card-surface mt-3 h-[110px] rounded-xl bg-card animate-pulse bg-s2" />
     )
   }
 
@@ -163,7 +163,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
         <span>数智决策三指标暂不可用({error})</span>
       </div>
     )
-    return bare ? msg : <div className="mt-3 rounded-xl border border-border bg-card p-3">{msg}</div>
+    return bare ? msg : <div className="card-surface mt-3 rounded-xl bg-card p-3">{msg}</div>
   }
 
   const act = data?.institution_activity ?? null
@@ -290,5 +290,5 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
   )
 
   // bare: 不出自己的卡壳(边框/底色/内边距), 只把内容交给外层卡(外层决定间距与边框)
-  return bare ? body : <div className="mt-3 rounded-xl border border-border bg-card p-3">{body}</div>
+  return bare ? body : <div className="card-surface mt-3 rounded-xl bg-card p-3">{body}</div>
 }

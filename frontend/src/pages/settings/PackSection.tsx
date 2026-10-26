@@ -27,7 +27,7 @@ export function PackSection() {
     <>
   {/* Config Pack (Templates) */}
   {isOwner && (
-  <section id="sec-pack" className="border-t border-border pt-4 md:pt-5 lg:col-span-7" style={{ display: sectionMatches('sec-pack') ? undefined : 'none' }}>
+  <section id="sec-pack" className="analysis-section" style={{ display: sectionMatches('sec-pack') ? undefined : 'none' }}>
     <div className="flex items-start justify-between mb-4 gap-3">
       <div>
         <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">配置包</h3>
@@ -83,14 +83,14 @@ export function PackSection() {
       }}
     />
 
-    <div className="rounded-md border border-border bg-s2 p-3">
+    <div className="card-surface rounded-md bg-s2 p-3">
       <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
         <FileJson className="w-4 h-4 text-muted-foreground" />
         官方模板
       </div>
       <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
         {builtinTemplates.map(t => (
-          <div key={t.name} className="rounded-md border border-border bg-background p-3">
+          <div key={t.name} className="card-surface rounded-md bg-background p-3">
             <div className="flex items-center justify-between">
               <div className="text-[12px] font-semibold text-foreground">{t.name}</div>
               <Button

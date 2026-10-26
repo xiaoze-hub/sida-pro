@@ -481,7 +481,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       </div>
 
       {stale && (
-        <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[12px] text-amber-600 dark:text-amber-500">
+        <div className="card-surface mb-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[12px] text-amber-600 dark:text-amber-500">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           刷新失败，当前展示上次数据
         </div>
@@ -544,7 +544,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
         <div
           data-testid="heatmap-empty"
           data-compact="1"
-          className="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border bg-s2 text-center"
+          className="card-surface flex flex-col items-center justify-center gap-1 rounded-lg bg-s2 text-center"
           style={{ minHeight: `${CHART_EMPTY_HEIGHT}px` }}
         >
           <span className="text-[12px] text-muted-foreground">暂无板块数据（等待每日同步）</span>

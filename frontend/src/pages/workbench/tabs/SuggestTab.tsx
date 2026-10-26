@@ -146,7 +146,7 @@ function SuggestTabBody({
       </div>
 
       {triggerFailed ? (
-        <div className="rounded border border-border px-3 py-2 text-[12px] text-muted-foreground" data-testid="suggest-trigger-failed">
+        <div className="card-surface bg-card rounded px-3 py-2 text-[12px] text-muted-foreground" data-testid="suggest-trigger-failed">
           触发失败: {INTRADAY_LABEL}作业未提交成功 —— 可重试; 失败原因不在此处推断(若出现错误提示, 以其为准)。
           {/* 如实陈述写入状况: 本路径触发前后都没有任何持久化写入(不加自选/不绑 Agent), 故固定这一句。 */}
           {' 本次未发生自选 / 绑定写入。'}

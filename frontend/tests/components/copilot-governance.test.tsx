@@ -111,7 +111,7 @@ describe('copilot governance', () => {
 
   it('marks unpriced models and shows -- instead of a fake cost', async () => {
     render(<CopilotGovernancePage />)
-    fireEvent.click(screen.getByRole('button', { name: '成本' }))
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '成本' }))
     expect(await screen.findByText(/未配置单价的模型/)).toBeTruthy()
     // 两处 `--`（按模型/按用户），只要求存在且不出现伪造金额
     expect(screen.getAllByText('--').length).toBeGreaterThan(0)
@@ -120,7 +120,7 @@ describe('copilot governance', () => {
 
   it('saves quota via PUT', async () => {
     render(<CopilotGovernancePage />)
-    fireEvent.click(screen.getByRole('button', { name: '配额' }))
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '配额' }))
     const save = await screen.findByRole('button', { name: '保存' })
     fireEvent.click(save)
     await waitFor(() => expect(api.putCopilotQuota).toHaveBeenCalled())
@@ -130,9 +130,9 @@ describe('copilot governance', () => {
 
   it('shows memories and schedules tabs', async () => {
     render(<CopilotGovernancePage />)
-    fireEvent.click(screen.getByRole('button', { name: '记忆' }))
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '记忆' }))
     expect(await screen.findByText(/别用东财方向位/)).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: '定时' }))
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '定时' }))
     expect(await screen.findByText('09:25')).toBeTruthy()
   })

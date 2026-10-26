@@ -244,7 +244,7 @@ export default function UserManagement({ currentUser }: Props) {
 
   if (!isOwner) {
     return (
-      <div className="rounded-xl border border-border bg-card p-6 text-center text-[14px] text-muted-foreground">
+      <div className="card-surface rounded-xl bg-card p-6 text-center text-[14px] text-muted-foreground">
         <UserCog className="mx-auto mb-2 h-6 w-6 opacity-50" />
         仅管理员可管理用户
       </div>
@@ -252,7 +252,7 @@ export default function UserManagement({ currentUser }: Props) {
   }
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
+    <div className="card-surface rounded-xl bg-card p-4">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-[14px] font-semibold">
           <Users className="h-4 w-4 text-primary" /> 用户管理({users.length})
@@ -263,7 +263,7 @@ export default function UserManagement({ currentUser }: Props) {
       </div>
 
       {showCreate && (
-        <div className="mb-3 space-y-2 rounded-lg border border-border bg-s2 p-3">
+        <div className="card-surface mb-3 space-y-2 rounded-lg bg-s2 p-3">
           <input
             className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]"
             placeholder="用户名(如: 小李)"
@@ -385,7 +385,7 @@ export default function UserManagement({ currentUser }: Props) {
       </div>
 
       {resetTarget && (
-        <div className="mt-3 rounded-lg border border-border bg-s2 p-3">
+        <div className="card-surface mt-3 rounded-lg bg-s2 p-3">
           <div className="mb-2 text-[12px] font-medium">重置 {resetTarget.username} 的密码</div>
           <div className="flex gap-2">
             <input
@@ -450,7 +450,7 @@ export default function UserManagement({ currentUser }: Props) {
                       全选
                     </button>
                   </div>
-                  <div className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-border bg-background p-2">
+                  <div className="card-surface max-h-52 space-y-1 overflow-y-auto rounded-lg bg-background p-2">
                     {accessModels.length === 0 && (
                       <div className="py-4 text-center text-[12px] text-muted-foreground">暂无可用模型</div>
                     )}

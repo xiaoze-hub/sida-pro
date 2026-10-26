@@ -79,7 +79,7 @@ export function SkeletonCard({ className }: { className?: string }) {
   return (
     <div
       aria-hidden
-      className={cn('rounded-xl border border-border bg-card p-4 space-y-3', className)}
+      className={'card-surface ' + (cn('rounded-xl bg-card p-4 space-y-3', className))}
     >
       <div className="flex items-center gap-3">
         <SkeletonAvatar size={32} />
@@ -122,7 +122,7 @@ export function SkeletonChart({ height = 280, className }: { height?: number; cl
   return (
     <div
       aria-hidden
-      className={cn('relative overflow-hidden rounded-xl border border-border bg-card', className)}
+      className={'card-surface ' + (cn('relative overflow-hidden rounded-xl bg-card', className))}
       style={{ height }}
     >
       {/* 顶部标签 */}

@@ -24,7 +24,7 @@ export function CopilotPlanBlock({
     : list
 
   return (
-    <section className="rounded-lg border border-border bg-s2 p-2" data-testid="copilot-plan">
+    <section className="card-surface rounded-lg bg-s2 p-2" data-testid="copilot-plan">
       <div className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground">
         <Compass className="h-3 w-3" />
         {SECTION_PLAN}
@@ -40,9 +40,9 @@ export function CopilotPlanBlock({
             return (
               <div
                 key={p.audience}
-                className={`rounded border p-1.5 ${
-                  active ? 'border-role-watch/40 bg-s3' : 'border-border'
-                }`}
+                className={"card-surface " + (`rounded p-1.5 ${
+ active ? ' bg-s3' : ''
+ }`)}
                 data-testid={`copilot-plan-${p.audience}`}
               >
                 <div className="flex items-center gap-1 text-[12px] text-muted-foreground">

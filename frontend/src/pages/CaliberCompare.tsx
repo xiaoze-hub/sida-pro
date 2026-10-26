@@ -1,5 +1,7 @@
+import PageHeader from '@/components/PageHeader'
+import { Input } from '@panwatch/base-ui/components/ui/input'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Info, Loader2, RefreshCw, Search } from 'lucide-react'
+import { AlertTriangle, Info, Loader2, RefreshCw } from 'lucide-react'
 import {
   caliberCompareApi,
   caliberDriftApi,
@@ -67,7 +69,7 @@ const SourceColumn = memo(function SourceColumn({ s }: { s: CaliberSource }) {
   const rawCaliber = s.caliber_type ?? s.caliber_tag?.caliber
   const dirSemantics = s.direction_semantics ?? s.caliber_tag?.direction_semantics ?? s.caliber
   return (
-    <div className="min-w-0 border-l border-border pl-3 first:border-0 first:pl-0">
+    <div className="analysis-section min-w-0">
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[12px] font-semibold text-foreground truncate" title={s.name}>
           {s.name}
@@ -116,7 +118,7 @@ const SourceColumn = memo(function SourceColumn({ s }: { s: CaliberSource }) {
  */
 const SourceGrid = memo(function SourceGrid({ sources }: { sources: CaliberSource[] }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-3 mb-6">
       {sources.map((s) => (
         <SourceColumn key={s.key} s={s} />
       ))}
@@ -130,8 +132,8 @@ const SourceGrid = memo(function SourceGrid({ sources }: { sources: CaliberSourc
 const WhyDifferentPanel = memo(function WhyDifferentPanel({ data }: { data: CaliberCompareResponse }) {
   const pairDiffs = data.pair_diffs ?? []
   return (
-    <div>
-      <h2 className="text-[14px] font-semibold text-foreground mb-2 flex items-center gap-2">
+    <div className="analysis-section">
+      <h2 className="text-[16px] font-semibold text-foreground mb-3 flex items-center gap-2">
         <Info className="w-3.5 h-3.5 text-primary" /> 为什么三个数字不一样
       </h2>
       <div className="space-y-2">
@@ -281,7 +283,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
   const sources = Object.keys(data?.field_by_source ?? {})
 
   return (
-    <div className="mt-6 border-t border-border pt-4">
+    <div className="analysis-section mt-5">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
           <Info className="w-3.5 h-3.5 text-primary" /> 口径漂移（逐日留痕）
@@ -314,7 +316,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
       {err && <div className="text-[12px] text-red-500 mb-2">漂移数据加载失败：{err}</div>}
 
       {!err && series.length === 0 && !loading && (
-        <div data-drift-empty className="rounded-md border border-dashed border-border bg-s2 px-3 py-4">
+        <div data-drift-empty className="card-surface rounded-md bg-s2 px-3 py-4">
           <div className="text-[12px] text-muted-foreground">暂无留痕（近 {days} 天）</div>
           <div className="text-[12px] text-muted-foreground mt-1">
             交易日 15:55 自动采集三源口径；采集后次日即可在此对比。留痕缺失时这里不会用 0 或推算值填补。
@@ -471,21 +473,19 @@ export default function CaliberComparePage() {
   const showDrift = !!querySymbol && !err
 
   return (
-    <div className="sida-page-enter max-w-6xl mx-auto px-4 py-6">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <div>
-          <h1 className="text-[16px] font-semibold text-foreground flex items-center gap-2">
-            <Search className="w-4 h-4 text-primary" /> 口径对照
-          </h1>
-          <p className="text-[12px] text-muted-foreground mt-1">
-            同一只票同一时刻, 明盘 L2 / 暗盘逐笔 / 东财四档 并排看 —— 数字不一样是「口径不一样」,
-            不合成单一“权威数字”。
-          </p>
-        </div>
+    <div className="page-container sida-page-enter">
+      <PageHeader title="口径对照" description="同一只票同一时刻，明盘 L2 / 暗盘逐笔 / 东财四档并排看。数字不一样是口径不一样，不合成单一权威数字。"
+        actions={<div className="flex items-center gap-2">
+          <Input value={code} onChange={e => setCode(e.target.value)} onKeyDown={e => e.key === 'Enter' && void load(code)} aria-label="股票代码" placeholder="6 位代码" className="w-32" />
+          <Button size="sm" disabled={loading} onClick={() => void load(code)}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}查询
+          </Button>
+        </div>}
+      />
       {/* 口径词典(2026-09-18 官方投教口径): 这三个词在页面上反复出现, 就地解释一次,
           避免读者把明盘/暗盘当成同一件事的两个说法。文案来自 caliber-glossary(单一来源)。 */}
-      <div className="mt-3 rounded border border-border px-3 py-2" data-testid="caliber-glossary">
-        <div className="text-[12px] font-medium text-muted-foreground">口径词典</div>
+      <div className="analysis-section mb-5" data-testid="caliber-glossary">
+        <h2 className="text-[16px] font-semibold">口径词典</h2>
         <div className="mt-1 space-y-0.5 text-[12px]">
           <div title={glossaryTooltip(MINGPAN)}>
             <span className="text-foreground">{MINGPAN.name}</span>
@@ -502,21 +502,6 @@ export default function CaliberComparePage() {
         </div>
       </div>
 
-        <div className="flex items-center gap-2">
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void load(code)}
-            aria-label="股票代码"
-            placeholder="6 位代码"
-            className="h-8 w-28 rounded border border-border bg-transparent px-2 text-[12px] text-foreground"
-          />
-          <Button size="sm" className="h-8 text-[12px]" disabled={loading} onClick={() => void load(code)}>
-            {loading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-1" />}
-            查询
-          </Button>
-        </div>
-      </div>
 
       {err && <div className="text-[12px] text-red-500 mb-3">{err}</div>}
 
@@ -544,7 +529,7 @@ export default function CaliberComparePage() {
               <div
                 key={i}
                 data-testid="caliber-compare-shell-col"
-                className="h-28 rounded border border-dashed border-border bg-s2"
+                className="card-surface h-28 rounded bg-s2"
               />
             ))}
           </div>
@@ -553,7 +538,7 @@ export default function CaliberComparePage() {
 
       {data && (
         <>
-          <div className="flex items-center gap-3 text-[12px] text-muted-foreground mb-3">
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-[12px] text-muted-foreground">
             <span>{data.symbol}（{data.market}）</span>
             <span>取数时间 {data.as_of.replace('T', ' ').slice(0, 19)}</span>
             <span className={data.available_count > 0 ? 'text-emerald-500' : 'text-amber-500'}>

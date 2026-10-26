@@ -1,3 +1,4 @@
+import PageHeader from '@/components/PageHeader'
 import { useState, useEffect } from 'react'
 import { Upload, FileText, Download, TrendingUp, Activity, Target, Shield, AlertTriangle, CheckCircle2, Loader2, RefreshCw, UserRound } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
@@ -245,20 +246,11 @@ iframe{width:100%;height:100%;border:0}
   }
 
   return (
-    <div className="sida-page-enter max-w-5xl mx-auto px-4 py-6 space-y-6">
-      {/* 页头 */}
-      <div>
-        <h1 className="text-[16px] font-semibold text-foreground flex items-center gap-2">
-          <Shield className="w-4.5 h-4.5 text-primary" />
-          影子账户 Shadow Account
-        </h1>
-        <p className="text-[12px] text-muted-foreground mt-1">
-          上传你的交易交割单（同花顺 / 东财 / 富途 / 通用 CSV），AI 提炼你的真实交易行为画像、盈利模式与风险习惯。
-        </p>
-      </div>
+    <div className="page-container sida-page-enter space-y-5">
+      <PageHeader title="影子账户" description="上传交易交割单，分析你的真实交易行为、盈利模式与风险习惯。支持同花顺、东财、富途及通用 CSV。" />
 
       {/* §6.2 交割单标 K 线: 把你的真实成交标在该股 K 线上(买↓红箭头 / 卖↑绿箭头) */}
-      <div className="border-b border-border pb-4">
+      <div className="analysis-section">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-primary" /> 交割单复盘 · 标在 K 线上
@@ -299,7 +291,7 @@ iframe{width:100%;height:100%;border:0}
       </div>
 
       {/* 我的画像: 进页面自动加载已存画像(users.shadow_profile_json 落库版), 不用重新上传 */}
-      <div className="border-b border-border pb-4">
+      <div className="analysis-section">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
             <UserRound className="w-4 h-4 text-primary" /> 我的画像
@@ -328,7 +320,7 @@ iframe{width:100%;height:100%;border:0}
           </div>
         ) : profileFailed ? null : !myProfile ? (
           /* 空态: 无画像, 引导上传 */
-          <div className="flex items-center gap-3 rounded-md bg-s2 border border-dashed border-border px-4 py-3">
+          <div className="card-surface flex items-center gap-3 rounded-md bg-s2 px-4 py-3">
             <UserRound className="w-4 h-4 text-muted-foreground shrink-0" />
             <p className="text-[12px] text-muted-foreground">
               还没有交易画像。上传交割单后自动生成你的行为画像，下次进来直接查看。
@@ -426,7 +418,7 @@ iframe{width:100%;height:100%;border:0}
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-md bg-red-500/10 border border-red-500/20 p-3 text-[12px] text-red-600">
+        <div className="card-surface flex items-center gap-2 rounded-md bg-red-500/10 p-3 text-[12px] text-red-600">
           <AlertTriangle className="w-4 h-4" /> {error}
         </div>
       )}

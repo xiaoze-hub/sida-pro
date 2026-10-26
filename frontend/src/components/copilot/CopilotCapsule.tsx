@@ -342,7 +342,7 @@ export function CopilotCapsule({
         dragging ? 'cursor-grabbing' : 'cursor-grab'
       }`}
     >
-      <div className="relative flex h-14 items-stretch overflow-hidden rounded-xl border border-role-watch/40 bg-s2">
+      <div className="card-surface relative flex h-14 items-stretch overflow-hidden rounded-xl bg-s2">
         {/* 左侧色条: tone 越大越醒目(机会=琥珀/风险=红), 外发光由外壳承担 */}
         <span aria-hidden="true" className={`w-1.5 shrink-0 ${bar}`} />
         <button

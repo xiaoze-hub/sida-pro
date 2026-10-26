@@ -51,7 +51,7 @@ export function NotifyDialogs() {
     <div className="mt-2 flex flex-col items-center gap-3">
       {wechatQr && (
         <>
-          <div className="rounded-md border border-border bg-white p-3">
+          <div className="card-surface rounded-md bg-white p-3">
             <QRCodeSVG value={wechatQr.qrcode_url} size={200} />
           </div>
           <p className="text-[12px] text-muted-foreground text-center">
@@ -119,7 +119,7 @@ export function NotifyDialogs() {
         </Select>
       </div>
       {channelForm.type === 'wechat_ilink' ? (
-        <div className="rounded-md border border-border bg-s2 p-4">
+        <div className="card-surface rounded-md bg-s2 p-4">
           <div className="flex items-start gap-2.5">
             <QrCode className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
             <div>

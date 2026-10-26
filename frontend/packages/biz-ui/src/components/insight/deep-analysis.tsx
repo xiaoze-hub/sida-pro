@@ -98,7 +98,7 @@ export function DeepAnalysisSection({
       <DeepHistoryComparison history={history} loading={historyLoading} />
 
       {result?.content && (
-        <div className="rounded-lg border border-border p-4">
+        <div className="card-surface bg-card rounded-lg p-4">
           <div className="prose prose-sm dark:prose-invert max-w-none break-words">
             <StockReportMarkdown content={result.content} />
           </div>
@@ -171,7 +171,7 @@ export function DeepHistoryComparison({
 }) {
   if (loading && !history) {
     return (
-      <div className="rounded-lg border border-border p-3 text-[12px] text-muted-foreground text-center">
+      <div className="card-surface bg-card rounded-lg p-3 text-[12px] text-muted-foreground text-center">
         历史对比加载中...
       </div>
     )
@@ -186,7 +186,7 @@ export function DeepHistoryComparison({
     v == null ? 'text-muted-foreground' : v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 
   return (
-    <div className="rounded-lg border border-border p-3 space-y-2">
+    <div className="card-surface bg-card rounded-lg p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="text-[12px] font-medium">历史决策 vs 实际涨跌</div>
         <div className="text-[12px] text-muted-foreground">仅基于满 20 个交易日的决策统计</div>

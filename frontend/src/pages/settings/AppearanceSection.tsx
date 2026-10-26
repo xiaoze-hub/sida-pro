@@ -44,7 +44,7 @@ export function AppearanceSection() {
   }
 
   return (
-    <section id="sec-appearance" className="analysis-section lg:col-span-7">
+    <section id="sec-appearance" className="analysis-section">
       <div className="flex items-center justify-between mb-3">
         <div>
           <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">外观</h3>

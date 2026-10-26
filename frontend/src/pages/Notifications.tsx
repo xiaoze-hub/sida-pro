@@ -132,7 +132,7 @@ function normalizeInternalLink(link: string): string {
 
 function MarkdownBlock({ content }: { content: string }) {
   return (
-    <div className="overflow-x-auto rounded-md border border-border bg-background p-4 text-[14px] leading-6 text-foreground">
+    <div className="card-surface overflow-x-auto rounded-md bg-background p-4 text-[14px] leading-6 text-foreground">
       <SafeMarkdown
         components={{
           table: ({ children }) => <table className="my-3 min-w-full border-collapse text-[12px]">{children}</table>,
@@ -350,7 +350,7 @@ export default function NotificationsPage() {
   const selectedPush = selected ? (PUSH_META[selected.push_status] || null) : null
 
   return (
-    <div className="sida-page-enter mx-auto w-full max-w-[1480px] space-y-4">
+    <div className="page-container sida-page-enter space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight text-foreground md:text-[20px]">
@@ -602,7 +602,7 @@ export default function NotificationsPage() {
               </div>
 
               {selected.push_error && (
-                <div className="mt-5 rounded-md border border-rose-500/25 bg-rose-500/8 p-4">
+                <div className="card-surface mt-5 rounded-md bg-rose-500/8 p-4">
                   <div className="flex items-center gap-2 text-[12px] font-medium text-rose-600 dark:text-rose-600"><AlertCircle className="h-4 w-4" />推送失败详情</div>
                   <div className="mt-2 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-rose-700 dark:text-rose-400">{selected.push_error}</div>
                 </div>
@@ -628,19 +628,19 @@ export default function NotificationsPage() {
                   )}
                 </div>
                 {detailLoading ? (
-                  <div className="flex min-h-28 items-center justify-center rounded-md border border-border bg-background text-[12px] text-muted-foreground">
+                  <div className="card-surface flex min-h-28 items-center justify-center rounded-md bg-background text-[12px] text-muted-foreground">
                     <RefreshCw className="mr-2 h-4 w-4 animate-spin" />正在读取本次任务结果…
                   </div>
                 ) : detailError ? (
-                  <div className="rounded-md border border-rose-500/25 bg-rose-500/8 p-4 text-[12px] text-rose-600 dark:text-rose-600">{detailError}</div>
+                  <div className="card-surface rounded-md bg-rose-500/8 p-4 text-[12px] text-rose-600 dark:text-rose-600">{detailError}</div>
                 ) : task?.error ? (
-                  <div className="rounded-md border border-rose-500/25 bg-rose-500/8 p-4 font-mono text-[12px] leading-6 text-rose-700 dark:text-rose-400 whitespace-pre-wrap break-words">{task.error}</div>
+                  <div className="card-surface rounded-md bg-rose-500/8 p-4 font-mono text-[12px] leading-6 text-rose-700 dark:text-rose-400 whitespace-pre-wrap break-words">{task.error}</div>
                 ) : task?.result ? (
                   <MarkdownBlock content={task.result} />
                 ) : selected.trace_id ? (
-                  <div className="rounded-md border border-dashed border-border px-4 py-6 text-center text-[12px] text-muted-foreground">已有任务追踪编号，但未找到对应的执行结果。</div>
+                  <div className="card-surface bg-card rounded-md px-4 py-6 text-center text-[12px] text-muted-foreground">已有任务追踪编号，但未找到对应的执行结果。</div>
                 ) : (
-                  <div className="rounded-md border border-dashed border-border px-4 py-6 text-center text-[12px] text-muted-foreground">该类通知没有关联 Agent 执行记录。</div>
+                  <div className="card-surface bg-card rounded-md px-4 py-6 text-center text-[12px] text-muted-foreground">该类通知没有关联 Agent 执行记录。</div>
                 )}
               </div>
 
@@ -649,12 +649,12 @@ export default function NotificationsPage() {
                 {selected.body ? (
                   <MarkdownBlock content={selected.body} />
                 ) : (
-                  <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-[12px] text-muted-foreground">该通知没有正文。</div>
+                  <div className="card-surface bg-card rounded-md px-4 py-8 text-center text-[12px] text-muted-foreground">该通知没有正文。</div>
                 )}
               </div>
 
               {(selected.trace_id || linkedPage) && (
-                <details className="mt-5 rounded-md border border-border bg-s2 px-4 py-3">
+                <details className="card-surface mt-5 rounded-md bg-s2 px-4 py-3">
                   <summary className="cursor-pointer text-[12px] font-medium text-muted-foreground">技术详情</summary>
                   <dl className="mt-3 grid gap-2 text-[12px] sm:grid-cols-[88px_1fr]">
                     {selected.trace_id && <><dt className="text-muted-foreground">Trace ID</dt><dd className="break-all font-mono text-foreground">{selected.trace_id}</dd></>}

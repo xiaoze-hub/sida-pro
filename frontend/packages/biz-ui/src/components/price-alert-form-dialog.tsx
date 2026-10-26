@@ -365,7 +365,7 @@ export default function PriceAlertFormDialog(props: {
             </div>
           </div>
 
-          <div className="rounded-lg border border-border p-3">
+          <div className="card-surface bg-card rounded-lg p-3">
             <div className="text-[12px] text-muted-foreground mb-2">通知渠道（不选=系统默认）</div>
             {enabledChannels.length === 0 ? (
               <div className="text-[12px] text-muted-foreground">暂无可用渠道</div>
@@ -393,7 +393,7 @@ export default function PriceAlertFormDialog(props: {
             )}
           </div>
 
-          <div className="rounded-lg border border-border p-3 space-y-2">
+          <div className="card-surface bg-card rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
               <div className="text-[12px] text-muted-foreground">条件列表</div>
               <Button variant="secondary" size="sm" className="h-7 text-[12px]" onClick={addCond}>添加条件</Button>

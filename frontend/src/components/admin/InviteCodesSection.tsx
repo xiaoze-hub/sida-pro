@@ -147,7 +147,7 @@ export function InviteCodesSection() {
       }
     >
       {/* 注册模式三态切换 */}
-      <div className="mb-4 rounded-xl border border-border dark:border-white/10 bg-s1 px-3 py-2.5">
+      <div className="card-surface mb-4 rounded-xl bg-s1 px-3 py-2.5">
         <div className="mb-2 text-[12px] text-muted-foreground">
           注册模式：<span className="text-foreground">{MODE_LABEL[mode] ?? mode}</span>
           <span className="ml-2 text-[12px] text-muted-foreground">切换后立即生效（新注册请求按新模式判定）</span>
@@ -218,7 +218,7 @@ export function InviteCodesSection() {
       </div>
 
       {lastCreated && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+        <div className="card-surface mb-4 flex items-center gap-3 rounded-lg bg-primary/5 px-3 py-2">
           <Ticket className="h-4 w-4 text-primary" />
           <span className="text-[12px] text-muted-foreground">刚生成的邀请码（只在这里显示一次）：</span>
           <code className="font-mono text-[14px] font-semibold tracking-widest text-foreground">{lastCreated}</code>

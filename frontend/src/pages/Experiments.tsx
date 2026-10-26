@@ -157,19 +157,19 @@ export default function ExperimentsPage() {
       )}
 
       {state === 'error' && (
-        <div className="rounded-xl border border-border bg-card p-3 text-[12px] text-stock-down" data-testid="experiments-error">
+        <div className="card-surface rounded-xl bg-card p-3 text-[12px] text-stock-down" data-testid="experiments-error">
           读取失败：{error}
         </div>
       )}
 
       {state === 'empty' && (
-        <div className="rounded-xl border border-border bg-card p-3 text-[12px] text-muted-foreground" data-testid="experiments-empty">
+        <div className="card-surface rounded-xl bg-card p-3 text-[12px] text-muted-foreground" data-testid="experiments-empty">
           还没有实验记录。跑一次对照（改配方 → 同批问题对比 → 记 verdict）就会出现在这里。
         </div>
       )}
 
       {state === 'ok' && (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="card-surface overflow-hidden rounded-xl bg-card">
           <table className="w-full text-[12px] tabular-nums">
             <thead>
               <tr className="border-b border-border text-left text-muted-foreground">

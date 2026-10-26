@@ -178,13 +178,13 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
       </div>
 
       {error && (
-        <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-400">
+        <div className="card-surface mt-3 rounded-lg bg-red-500/10 p-3 text-[12px] text-red-400">
           {error}
         </div>
       )}
 
       {wencaiDown && (
-        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[12px] text-amber-500">
+        <div className="card-surface mt-3 rounded-lg bg-amber-500/10 p-3 text-[12px] text-amber-500">
           问财数据源不可用, 问财条件已显式降级, 本次不出池。{data?.note || ''}
         </div>
       )}

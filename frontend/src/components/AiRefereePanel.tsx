@@ -65,7 +65,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
       <div
         data-testid="ai-referee-panel"
         data-verdict="none"
-        className="rounded-md border border-border px-3 py-2 text-[12px] text-muted-foreground"
+        className="card-surface bg-card rounded-md px-3 py-2 text-[12px] text-muted-foreground"
       >
         无裁判结论（本条预测未包含 AI 裁判结果，不作任何推测）
       </div>
@@ -93,7 +93,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
     <div
       data-testid="ai-referee-panel"
       data-verdict={verdict || 'unknown'}
-      className="rounded-md border border-border px-3 py-2 space-y-1.5"
+      className="card-surface bg-card rounded-md px-3 py-2 space-y-1.5"
     >
       <div className="flex flex-wrap items-center gap-2">
         <Gavel className="h-3.5 w-3.5 text-muted-foreground" />
@@ -154,7 +154,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
 export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | null; loading?: boolean }) {
   if (loading && !stats) {
     return (
-      <div data-testid="referee-stats-card" className="rounded-md border border-border px-3 py-2 text-[12px] text-muted-foreground">
+      <div data-testid="referee-stats-card" className="card-surface bg-card rounded-md px-3 py-2 text-[12px] text-muted-foreground">
         裁判战绩：加载中…
       </div>
     )
@@ -167,7 +167,7 @@ export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | nu
       <div
         data-testid="referee-stats-card"
         data-empty="true"
-        className="rounded-md border border-border px-3 py-2 text-[12px] text-muted-foreground space-y-1"
+        className="card-surface bg-card rounded-md px-3 py-2 text-[12px] text-muted-foreground space-y-1"
       >
         <div className="text-[14px] font-medium text-foreground">裁判战绩</div>
         <div>{stats?.message || '暂无裁判记录（裁判层尚未介入过预测）。'}</div>
@@ -187,7 +187,7 @@ export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | nu
     <div
       data-testid="referee-stats-card"
       data-empty="false"
-      className="rounded-md border border-border px-3 py-2 space-y-1.5"
+      className="card-surface bg-card rounded-md px-3 py-2 space-y-1.5"
     >
       <div className="flex items-center gap-2">
         <span className="text-[14px] font-medium">裁判战绩</span>

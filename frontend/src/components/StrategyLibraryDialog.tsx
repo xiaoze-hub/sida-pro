@@ -179,7 +179,7 @@ export default function StrategyLibraryDialog({
                 <button
                   key={it.id}
                   onClick={() => { setSelected(it); setApplyResult(null); setOverrides({}) }}
-                  className="card-subtle p-4 text-left hover:border-primary/40 transition-colors"
+                  className="card-subtle p-4 text-left transition-colors"
                 >
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <h3 className="font-semibold text-[14px] flex-1">{it.display_name}</h3>
@@ -323,7 +323,7 @@ export default function StrategyLibraryDialog({
 
                   {/* 结果 */}
                   {applyResult && (
-                    <div className={`card-subtle p-4 ${applyResult.passed ? 'border-emerald-500/30' : 'border-amber-500/30'}`}>
+                    <div className={`card-subtle p-4 ${applyResult.passed ? '' : ''}`}>
                       {applyResult.error ? (
                         <div className="text-red-600 text-[14px] flex items-center gap-1.5"><XCircle className="w-4 h-4 shrink-0" />{applyResult.error}</div>
                       ) : (
@@ -343,7 +343,7 @@ export default function StrategyLibraryDialog({
                                 </div>
                               </div>
                             </div>
-                            <div className={`px-3 py-1.5 rounded-lg border text-[14px] font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`}>
+                            <div className={"card-surface bg-card " + (`px-3 py-1.5 rounded-lg text-[14px] font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`)}>
                               {applyResult.score >= 75 ? '强推荐' : applyResult.score >= 50 ? '中性' : '弱'}
                             </div>
                           </div>

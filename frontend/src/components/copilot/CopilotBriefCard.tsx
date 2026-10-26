@@ -48,7 +48,7 @@ export function CopilotBriefCard({
   if (!data && loading) {
     return (
       <div
-        className="rounded-xl border border-border bg-s1 px-3 py-3"
+        className="card-surface rounded-xl bg-s1 px-3 py-3"
         data-testid="copilot-card-loading"
       >
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
@@ -62,7 +62,7 @@ export function CopilotBriefCard({
   if (!data) {
     return (
       <div
-        className="rounded-xl border border-border bg-s1 px-3 py-3"
+        className="card-surface rounded-xl bg-s1 px-3 py-3"
         data-testid="copilot-card-error"
       >
         <div className="flex items-center gap-2">
@@ -104,7 +104,7 @@ function BriefBody({
   const missing = EVIDENCE_KEYS.filter((k) => evidenceState(data.evidence[k]) === 'missing')
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-s1" data-testid="copilot-card">
+    <div className="card-surface overflow-hidden rounded-xl bg-s1" data-testid="copilot-card">
       {/* 头：tone 色条 + 意图定性 + 置信 + 刷新 */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3 py-2">
         <span className={`h-4 w-[3px] rounded ${toneBar(v.intent_tone)}`} />
@@ -166,7 +166,7 @@ function BriefBody({
 
         {/* gated: 权限不足 ≠ 没数据 —— 给升级指引，不给 `--` */}
         {gated.length ? (
-          <div className="rounded border border-role-watch/40 px-2 py-1 text-[12px] text-role-watch">
+          <div className="card-surface bg-card rounded px-2 py-1 text-[12px] text-role-watch">
             {GATED_HINT}：{gated.map((k) => EVIDENCE_NAME[k]).join(' · ')}
           </div>
         ) : null}

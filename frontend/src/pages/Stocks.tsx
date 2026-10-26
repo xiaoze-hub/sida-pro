@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import StockContextMenu from '@/components/StockContextMenu'
 import { StocksContext } from './stocks/context'
 import { useStocksState } from './stocks/useStocksState'
@@ -23,6 +24,13 @@ export default function StocksPage() {
   const derived = useStocksDerived(state, data)
   const actions = useStocksActions(state, data)
   const ctx = { ...state, ...data, ...derived, ...actions }
+  const { setViewTab } = state
+  useEffect(() => {
+    const showPositions = () => setViewTab('positions')
+    if (new URLSearchParams(window.location.search).get('view') === 'positions') showPositions()
+    window.addEventListener('sida:portfolio-positions', showPositions)
+    return () => window.removeEventListener('sida:portfolio-positions', showPositions)
+  }, [setViewTab])
 
   return (
     <StocksContext.Provider value={ctx}>

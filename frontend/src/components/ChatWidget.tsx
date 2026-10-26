@@ -818,7 +818,7 @@ export default function ChatWidget() {
                       <SafeMarkdown
                         components={{
                           table: ({ children }) => (
-                            <div className="my-2 max-w-full overflow-x-auto rounded-lg border border-border">
+                            <div className="card-surface bg-card my-2 max-w-full overflow-x-auto rounded-lg ">
                               <table className="m-0 w-max min-w-full border-collapse text-[12px]">{children}</table>
                             </div>
                           ),

@@ -155,7 +155,7 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
 
       {/* 数据源未接入: 置灰说明 */}
       {dataSourceDown && (
-        <div className="mt-3 rounded-lg border border-border bg-s2 p-3 text-[12px] text-muted-foreground opacity-70">
+        <div className="card-surface mt-3 rounded-lg bg-s2 p-3 text-[12px] text-muted-foreground opacity-70">
           <div className="font-medium text-foreground">L2 问财数据源未接入</div>
           <div className="mt-1 text-[12px]">{note || '服务端未启用同花顺 L2 问财能力, 面板暂不可用'}</div>
         </div>
@@ -163,7 +163,7 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
 
       {/* 查询失败 */}
       {error && (
-        <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-400">
+        <div className="card-surface mt-3 rounded-lg bg-red-500/10 p-3 text-[12px] text-red-400">
           {error}
         </div>
       )}

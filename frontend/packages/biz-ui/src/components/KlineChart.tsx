@@ -2353,7 +2353,7 @@ export default function KlineChart(props: {
       {intentRenderable(intent) && intentLegend && (
         <div
           data-testid="main-intent-legend"
-          className="mt-3 rounded-lg border border-rose-500/15 bg-rose-500/5 px-2.5 py-2 text-[12px] text-foreground"
+          className="card-surface mt-3 rounded-lg bg-rose-500/5 px-2.5 py-2 text-[12px] text-foreground"
         >
           <span className="mr-2 font-medium text-rose-700 dark:text-rose-400">主力意图</span>
           <span className={intentLegend.cls}>{intentLegend.text}</span>

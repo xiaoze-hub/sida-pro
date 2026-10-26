@@ -1,3 +1,4 @@
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useMemo, useState } from 'react'
 import {
   KeyRound,
@@ -5,7 +6,6 @@ import {
   Copy,
   RefreshCw,
   Trash2,
-  AlertTriangle,
   Terminal,
   FileJson,
   Loader2,
@@ -66,7 +66,6 @@ const TIER_COLOR: Record<string, string> = {
 
 const MENU: SideMenuItem[] = [
   { id: 'keys', label: '我的 Key', icon: <KeyRound className="h-3.5 w-3.5" />, anchor: 'sec-keys' },
-  { id: 'create', label: '创建 Key', icon: <Plus className="h-3.5 w-3.5" />, anchor: 'sec-create' },
   { id: 'usage', label: '用量统计', icon: <BarChart3 className="h-3.5 w-3.5" />, anchor: 'sec-usage' },
   { id: 'agent', label: '智能体安装', icon: <Terminal className="h-3.5 w-3.5" />, anchor: 'sec-agent' },
 ]
@@ -75,6 +74,7 @@ export default function ApiKeysPage() {
   const { toast } = useToast()
   const { t } = useI18n()
   const [activeSection, setActiveSection] = useState('keys')
+  const [createOpen, setCreateOpen] = useState(false)
   const [plaintext, setPlaintext] = useState<string | null>(null)
   const [expandedUsage, setExpandedUsage] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
@@ -103,6 +103,7 @@ export default function ApiKeysPage() {
         method: 'POST',
         body: JSON.stringify({ owner_label: ownerLabel.trim() }),
       })
+      setCreateOpen(false)
       setPlaintext(r.api_key)
       setOwnerLabel('')
       toast('Key 已创建，请立即复制保存', 'success')
@@ -171,33 +172,30 @@ export default function ApiKeysPage() {
       activeId={activeSection}
       onNav={setActiveSection}
       headerExtra={
-        <Button size="sm" className="h-8 shrink-0" onClick={createKey} disabled={creating}>
+        <Button size="sm" className="h-8 shrink-0" onClick={() => setCreateOpen(true)} disabled={creating}>
           {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
           <span className="hidden sm:inline">创建 Key</span>
         </Button>
       }
     >
-      {/* 明文 Key 提示 */}
-      {plaintext && (
-        <div className="mb-6 rounded-xl border border-amber-600/30 dark:border-amber-500/30 bg-amber-500/5 p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-            <span className="text-[14px] font-semibold text-amber-700 dark:text-amber-300">请立即复制保存你的 API Key</span>
-          </div>
-          <p className="mb-3 text-[12px] text-amber-700/80 dark:text-amber-400/70">此 Key 仅显示一次，关闭或刷新后将无法再次查看。</p>
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent><DialogHeader><DialogTitle>创建 API Key</DialogTitle><DialogDescription>为凭证设置用途备注，便于后续识别和撤销。</DialogDescription></DialogHeader>
+        <label htmlFor="key-owner-label" className="text-[14px] font-medium">备注名（可选）</label>
+        <input id="key-owner-label" value={ownerLabel} onChange={e => setOwnerLabel(e.target.value)} maxLength={64} placeholder="留空则使用用户名" className="input-field mt-2" />
+        <div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={() => setCreateOpen(false)}>取消</Button><Button onClick={createKey} disabled={creating}>{creating ? '创建中…' : '确认创建'}</Button></div>
+      </DialogContent></Dialog>
+      <Dialog open={!!plaintext} onOpenChange={open => !open && setPlaintext(null)}><DialogContent><DialogHeader><DialogTitle>保存你的 API Key</DialogTitle><DialogDescription>完整凭证仅展示一次，请复制并妥善保存。</DialogDescription></DialogHeader>
           <div className="flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-lg bg-s2 dark:bg-black/30 px-3 py-2 font-mono text-[12px] text-primary dark:text-cyan-300">
+            <code className="flex-1 overflow-x-auto rounded-lg bg-s2 px-3 py-2 font-mono text-[12px] text-primary">
               {plaintext}
             </code>
-            <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={() => copyText(plaintext)}>
+            <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={() => copyText(plaintext || '')}>
               <Copy className="h-3.5 w-3.5" />
             </Button>
             <Button size="sm" variant="ghost" className="h-8 shrink-0" onClick={() => setPlaintext(null)}>
               我已保存
             </Button>
           </div>
-        </div>
-      )}
+      </DialogContent></Dialog>
 
       {/* ── 我的 Key ── */}
       <Section
@@ -206,20 +204,7 @@ export default function ApiKeysPage() {
         description="每个 Key 独立计量，可随时重置或删除"
         icon={<KeyRound className="h-4 w-4" />}
       >
-        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-          <input
-            value={ownerLabel}
-            onChange={e => setOwnerLabel(e.target.value)}
-            maxLength={64}
-            aria-label="备注名"
-            placeholder="备注名（如：本地 Hermes / 量化脚本）"
-            className="h-8 w-full min-w-0 rounded-lg border border-border bg-transparent px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none sm:max-w-xs"
-          />
-          <Button size="sm" className="h-8 shrink-0" onClick={createKey} disabled={creating}>
-            {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} 创建 Key
-          </Button>
-          <span className="text-[12px] text-muted-foreground">留空则使用用户名作为备注名</span>
-        </div>
+        <p className="mb-4 text-[12px] text-muted-foreground">创建新的凭证后可按用途设置备注，完整明文仅展示一次。</p>
         {keysLoading ? (
           <SkeletonTable rows={3} />
         ) : keysError ? (
@@ -236,7 +221,7 @@ export default function ApiKeysPage() {
             desc="创建一个 Key 即可开始调用 Skill API"
             compact
             action={
-              <Button size="sm" onClick={createKey} disabled={creating}>
+              <Button size="sm" onClick={() => setCreateOpen(true)} disabled={creating}>
                 <Plus className="h-3.5 w-3.5" /> 创建 Key
               </Button>
             }
@@ -244,11 +229,11 @@ export default function ApiKeysPage() {
         ) : (
           <div className="space-y-2">
             {keyList.map(k => (
-              <div key={k.id} className="rounded-xl border border-border dark:border-white/5 bg-card dark:bg-white/[0.02] p-4">
+              <div key={k.id} className="card-surface rounded-xl bg-card p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <code className="font-mono text-[14px] text-primary dark:text-cyan-300">{k.key_prefix}...</code>
+                      <code className="font-mono text-[14px] text-primary">{k.key_prefix}...</code>
                       {k.owner_label && (
                         <span className="max-w-[180px] truncate text-[12px] text-foreground" title={k.owner_label}>{k.owner_label}</span>
                       )}
@@ -311,8 +296,8 @@ export default function ApiKeysPage() {
         <div className="space-y-4">
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
-              <Zap className="h-4 w-4 text-primary dark:text-cyan-400" />
-              <span className="text-[14px] font-medium text-foreground dark:text-white">方式一：Shell 脚本</span>
+              <Zap className="h-4 w-4 text-primary" />
+              <span className="text-[14px] font-medium text-foreground">方式一：Shell 脚本</span>
             </div>
             <p className="mb-3 text-[12px] text-muted-foreground">复制以下命令到终端执行，自动配置环境变量和客户端。</p>
             <CodeBlock code={installCmd} language="bash" />
@@ -320,8 +305,8 @@ export default function ApiKeysPage() {
 
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
-              <FileJson className="h-4 w-4 text-primary dark:text-cyan-400" />
-              <span className="text-[14px] font-medium text-foreground dark:text-white">方式二：配置 JSON</span>
+              <FileJson className="h-4 w-4 text-primary" />
+              <span className="text-[14px] font-medium text-foreground">方式二：配置 JSON</span>
             </div>
             <p className="mb-3 text-[12px] text-muted-foreground">适用于支持 JSON 配置的 AI 框架（LangChain、AutoGPT 等）。</p>
             <CodeBlock code={configJson} language="json" />
@@ -329,8 +314,8 @@ export default function ApiKeysPage() {
 
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-primary dark:text-cyan-400" />
-              <span className="text-[14px] font-medium text-foreground dark:text-white">安全提示</span>
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              <span className="text-[14px] font-medium text-foreground">安全提示</span>
             </div>
             <ul className="space-y-1 text-[12px] text-muted-foreground">
               <li>• 不要将 API Key 提交到代码仓库</li>

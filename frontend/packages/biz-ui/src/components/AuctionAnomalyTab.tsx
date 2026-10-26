@@ -253,7 +253,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
       {data && !data.available && <div className="text-[12px] text-muted-foreground mb-2">{data.note || '竞价异动数据暂不可用'}</div>}
 
       {records.length === 0 && !loading ? (
-        <div className="rounded-xl border border-dashed border-border px-4 py-5 text-center" data-auction-empty="1">
+        <div className="card-surface bg-card rounded-xl px-4 py-5 text-center" data-auction-empty="1">
           <div className="text-[14px] font-medium text-foreground">{emptyReason}</div>
           <div className="mt-1 text-[12px] text-muted-foreground">
             竞价池每天 09:15 开始刷新、09:25 撮合定型；非交易日展示最近一个交易日的快照。
@@ -399,7 +399,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
       </div>
       )}
       {loading && records.length === 0 && (
-        <div className="mt-3 h-[120px] rounded-xl border border-border animate-pulse bg-s2" />
+        <div className="card-surface mt-3 h-[120px] rounded-xl animate-pulse bg-s2" />
       )}
     </div>
   )

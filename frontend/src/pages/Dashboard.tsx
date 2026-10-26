@@ -652,7 +652,7 @@ export default function DashboardPage() {
           数据**全部取自本页已有 state**(phaseKpi / marketFlow), 不新增请求; 缺数一律 `--`, 不用 0 顶。 */}
       <div
         data-testid="market-conclusion"
-        className="mb-4 rounded-xl border border-border bg-card p-4"
+        className="card-surface mb-4 rounded-xl bg-card p-4"
       >
         {/* 2026-10-24: 右侧曾整片留白(14% 屏高只放 6 个数字) → 挂大盘分时走势带。
             左列宽度自适应, 右列 280–380; 窄屏(<lg)堆叠, 走势带落到数字下方。

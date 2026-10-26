@@ -181,7 +181,7 @@ export function StockReportMarkdown({ content }: { content: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         table: ({ children }) => (
-          <div className="my-4 max-w-full overflow-x-auto rounded-lg border border-border">
+          <div className="card-surface bg-card my-4 max-w-full overflow-x-auto rounded-lg ">
             <table className="m-0 w-max min-w-full border-collapse text-[12px]">{children}</table>
           </div>
         ),

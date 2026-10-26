@@ -155,7 +155,7 @@ export default function HelpPage() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
           {HOTKEYS.map((h, i) => (
-            <div key={i} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-s2 px-3 py-2">
+            <div key={i} className="card-surface flex items-center justify-between gap-3 rounded-lg bg-s2 px-3 py-2">
               <kbd className="font-mono text-[12px] text-primary whitespace-nowrap">{h.keys}</kbd>
               <span className="text-[12px] text-muted-foreground text-right">{h.desc}</span>
             </div>

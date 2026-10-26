@@ -49,7 +49,7 @@ export function ReportsTab() {
             </div>
           </div>
           {(activeReport.prompt_context || activeReport.context_payload || activeReport.news_debug) && (
-            <details className="rounded-lg border border-border bg-s2 p-3">
+            <details className="card-surface rounded-lg bg-s2 p-3">
               <summary className="cursor-pointer text-[12px] text-muted-foreground select-none">查看分析上下文</summary>
               {activeReport.prompt_stats ? (
                 <div className="mt-2">

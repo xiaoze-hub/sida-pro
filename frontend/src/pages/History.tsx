@@ -426,7 +426,7 @@ export default function HistoryPage() {
                 </div>
 
                 {selectedRecord.status && selectedRecord.status !== 'success' ? (
-                  <div className="mt-4 p-4 border border-destructive/30 bg-destructive/5 rounded-md">
+                  <div className="card-surface mt-4 p-4 bg-destructive/5 rounded-md">
                     <div className="text-[14px] font-medium text-destructive">本条报告未生成（{selectedRecord.status}）</div>
                     {selectedRecord.error && (
                       <div className="mt-1 text-[12px] text-muted-foreground break-words">{selectedRecord.error}</div>
@@ -460,7 +460,7 @@ export default function HistoryPage() {
 
       {/* Detail Dialog */}
       <Dialog open={!!detailRecord} onOpenChange={open => !open && setDetailRecord(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent placement="right" className="max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{detailRecord ? formatTitle(detailRecord) : '分析详情'}</DialogTitle>
             <DialogDescription>
@@ -479,25 +479,25 @@ export default function HistoryPage() {
             )}
           </div>
           {detailRecord?.prompt_stats ? (
-            <div className="mt-3 rounded-md border border-border p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">Prompt 统计</div>
               <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.prompt_stats, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.context_payload ? (
-            <div className="mt-3 rounded-md border border-border p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">上下文快照</div>
               <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{JSON.stringify(detailRecord.context_payload, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.news_debug ? (
-            <div className="mt-3 rounded-md border border-border p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">新闻注入明细</div>
               <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.news_debug, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.prompt_context ? (
-            <div className="mt-3 rounded-md border border-border p-3">
+            <div className="card-surface bg-card mt-3 rounded-md p-3">
               <div className="text-[12px] font-medium mb-1">Prompt 原文</div>
               <pre className="text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{detailRecord.prompt_context}</pre>
             </div>

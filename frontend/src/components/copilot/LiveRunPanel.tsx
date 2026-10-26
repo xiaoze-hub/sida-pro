@@ -146,7 +146,7 @@ export function LiveRunPanel({
   const done = isTerminalStatus(status)
 
   return (
-    <div className={`rounded-xl border border-border bg-card p-3 ${className}`} data-testid="live-run-panel">
+    <div className={'card-surface ' + (`rounded-xl bg-card p-3 ${className}`)} data-testid="live-run-panel">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[12px] text-foreground">
           {done ? (

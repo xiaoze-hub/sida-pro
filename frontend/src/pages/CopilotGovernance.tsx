@@ -11,6 +11,8 @@
  * - 统计缺失就是 `--`，不写成 0。
  */
 import { useCallback, useEffect, useState } from 'react'
+import PageHeader from '@/components/PageHeader'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@panwatch/base-ui/components/ui/tabs'
 import { safeFixed } from '@/lib/format'
 import { Loader2, Plus, RefreshCw } from 'lucide-react'
 import { authApi } from '@panwatch/api'
@@ -100,33 +102,17 @@ export default function CopilotGovernancePage() {
 
   return (
     <div className="space-y-3" data-testid="copilot-governance-page">
-      <header className="flex flex-wrap items-center gap-2">
-        <h1 className="text-[16px] font-medium">数智参谋 · 治理</h1>
-        <span className="text-[12px] text-muted-foreground">轨迹 / 成本 / 配额（客观证据 · 不构成买卖指令）</span>
-        <div className="ml-auto flex items-center gap-1">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              title={t.hint}
-              onClick={() => setTab(t.id)}
-              className={`rounded-md border px-2.5 py-1 text-[12px] ${
-                tab === t.id
-                  ? 'border-role-watch/60 bg-role-watch/10 text-foreground'
-                  : 'border-border text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </header>
-
-      {tab === 'traces' ? <TracesTab /> : null}
-      {tab === 'cost' ? <CostTab /> : null}
-      {tab === 'quota' ? <QuotaTab /> : null}
-      {tab === 'memory' ? <MemoryTab /> : null}
-      {tab === 'schedule' ? <ScheduleTab /> : null}
+      <PageHeader title="数智参谋 · 治理" description="轨迹、成本、配额与偏好设置 · 客观证据不构成买卖指令" />
+      <Tabs value={tab} onValueChange={value => setTab(value as Tab)}>
+        <TabsList className="h-auto flex-wrap">
+          {TABS.map(item => <TabsTrigger key={item.id} value={item.id} title={item.hint}>{item.label}</TabsTrigger>)}
+        </TabsList>
+      <TabsContent value="traces"><TracesTab /></TabsContent>
+      <TabsContent value="cost"><CostTab /></TabsContent>
+      <TabsContent value="quota"><QuotaTab /></TabsContent>
+      <TabsContent value="memory"><MemoryTab /></TabsContent>
+      <TabsContent value="schedule"><ScheduleTab /></TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -174,7 +160,7 @@ function TracesTab() {
     <div className="space-y-3">
       {/* P3：按配方质量拆解。没有这层，就只能看到「总 ok 率」，看不出是哪份配方在坏。 */}
       {metrics && metrics.by_recipe.length > 0 ? (
-        <section className="rounded-xl border border-border bg-s1" data-testid="recipe-health">
+        <section className="card-surface rounded-xl bg-s1" data-testid="recipe-health">
           <div className="flex items-baseline justify-between gap-2 border-b border-border px-3 py-2">
             <span className="text-[12px]">按配方质量 · 近 7 天</span>
             <span className="text-[12px] text-muted-foreground">
@@ -238,7 +224,7 @@ function TracesTab() {
       ) : null}
 
       <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
-          <section className="rounded-xl border border-border bg-s1">
+          <section className="card-surface rounded-xl bg-s1">
             <div className="flex items-center justify-between border-b border-border px-3 py-2">
               <span className="text-[12px]">最近 50 轮</span>
               <button
@@ -298,7 +284,7 @@ function TracesTab() {
           )}
         </section>
 
-        <section className="rounded-xl border border-border bg-s1">
+        <section className="card-surface rounded-xl bg-s1">
           <div className="border-b border-border px-3 py-2 text-[12px]">回放</div>
           {detailLoading ? (
             <div className="flex items-center gap-2 px-3 py-6 text-[12px] text-muted-foreground">
@@ -397,12 +383,12 @@ function CostTab() {
       ) : (
         <>
           {data.unpriced_models.length > 0 ? (
-            <div className="rounded-md border border-border px-2 py-1.5 text-[12px] text-muted-foreground">
+            <div className="card-surface bg-card rounded-md px-2 py-1.5 text-[12px] text-muted-foreground">
               未配置单价的模型：{data.unpriced_models.join('、')} —— 这些的金额显示 `--`，不估算
             </div>
           ) : null}
 
-          <section className="rounded-xl border border-border bg-s1 p-3">
+          <section className="card-surface rounded-xl bg-s1 p-3">
             <div className="mb-2 text-[12px]">按日 token</div>
             <div className="flex h-24 items-end gap-1">
               {(data.by_day || []).map((d) => (
@@ -418,7 +404,7 @@ function CostTab() {
           </section>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <section className="rounded-xl border border-border bg-s1">
+            <section className="card-surface rounded-xl bg-s1">
               <div className="border-b border-border px-3 py-2 text-[12px]">按模型</div>
               <table className="w-full text-[12px]">
                 <tbody>
@@ -435,7 +421,7 @@ function CostTab() {
               </table>
             </section>
 
-            <section className="rounded-xl border border-border bg-s1">
+            <section className="card-surface rounded-xl bg-s1">
               <div className="border-b border-border px-3 py-2 text-[12px]">
                 按用户{data.scope === 'self' ? '（仅自己）' : ''}
               </div>
@@ -547,7 +533,7 @@ function QuotaTab() {
       </div>
       {error ? <div className="text-[12px] text-role-risk">{error}</div> : null}
       {scope === 'all' && users.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border px-2 py-1.5">
+        <div className="card-surface bg-card flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5">
           <span className="text-[12px] text-muted-foreground">新增/覆盖配额</span>
           <select
             className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
@@ -735,7 +721,7 @@ function MemoryTab() {
       <div className="text-[12px] text-muted-foreground">
         只记你**明确说过**的（「记住…」「以后都…」「我的口径是…」）。删掉就不再注入；权重 ≥9 的每条都会带上。
       </div>
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border px-2 py-1.5">
+      <div className="card-surface bg-card flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5">
         <select
           className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
           value={kind}
@@ -839,7 +825,7 @@ function ScheduleTab() {
       <div className="text-[12px] text-muted-foreground">
         只在交易日执行；结果写成一条消息进会话。到点时若取不到数据，不写空内容、也不标记为已跑。
       </div>
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border px-2 py-1.5">
+      <div className="card-surface bg-card flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5">
         <select
           className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px]"
           value={kind}

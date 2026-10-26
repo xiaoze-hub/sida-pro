@@ -133,7 +133,7 @@ export default function DataSourcesPage() {
   const [secretVisible, setSecretVisible] = useState(false)
   const [resetting, setResetting] = useState(false)
   // 分类折叠态:key 不存在或为 false 视为展开(默认全部展开)
-  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({})
+  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>(() => Object.fromEntries(ALL_DATASOURCE_CATEGORIES.map((category, index) => [category.key, index > 0])))
   const toggleCategory = (key: string) => setCollapsedCategories(prev => ({ ...prev, [key]: !prev[key] }))
 
   const { toast } = useToast()
@@ -271,7 +271,7 @@ export default function DataSourcesPage() {
     if (!meta) return null
     const { label, icon: Icon, color } = meta
     return (
-      <section key={type} className="border-t border-border pt-4 md:pt-5">
+      <section key={type} className="space-y-3">
         <div className="flex items-center gap-2 mb-4">
           <Icon className={`w-4 h-4 ${color}`} />
           <h3 className="text-[14px] font-semibold text-foreground">{label}</h3>
@@ -374,7 +374,7 @@ export default function DataSourcesPage() {
     <div className="sida-page-enter">
       <div className="mb-4 md:mb-8 flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">数据源</h1>
+          <h2 className="text-[16px] font-semibold text-foreground">数据连接</h2>
           <p className="text-[12px] md:text-[14px] text-muted-foreground mt-0.5 md:mt-1">管理新闻、K线、资金流向和行情数据来源</p>
         </div>
         <Button variant="outline" size="sm" className="h-8 text-[12px] flex-shrink-0" onClick={resetToSeed} disabled={resetting}>
@@ -392,14 +392,14 @@ export default function DataSourcesPage() {
         <DataCapabilities />
         {/* C1 (2026-09-10): 行情源质量 — Engine 滚动最近 100 次的 成功率/延迟 EWMA/p50, 与顶部心跳条同源 */}
         {vendorTrust.length > 0 && (
-          <section className="border-b border-border pb-3">
+          <section className="analysis-section">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-[14px] font-semibold text-muted-foreground">行情源质量</span>
               <span className="text-[12px] text-muted-foreground">滚动最近 100 次 · {trustSummary(vendorTrust)}</span>
             </div>
             <div className="grid gap-1.5 md:grid-cols-2">
               {vendorTrust.map(it => (
-                <div key={it.vendor} className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-[12px]">
+                <div key={it.vendor} className="card-surface bg-card flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px]">
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TRUST_TONE_CLASS[trustTone(it.score)]}`} />
                   <span className="font-medium text-foreground">{it.vendor}</span>
                   <span className="text-muted-foreground">
@@ -432,10 +432,12 @@ export default function DataSourcesPage() {
           const categoryCount = category.types.reduce((sum, t) => sum + (groupedSources[t]?.length || 0), 0)
           const isOpen = collapsedCategories[category.key] !== true
           return (
-            <div key={category.key}>
+            <div key={category.key} className="analysis-section">
               <button
                 type="button"
-                className="w-full flex items-center gap-2 mb-3 py-1 text-left group"
+                aria-expanded={isOpen}
+                aria-controls={`source-category-${category.key}`}
+                className="flex min-h-9 w-full items-center gap-2 text-left group"
                 onClick={() => toggleCategory(category.key)}
               >
                 <ChevronRight className={`w-3.5 h-3.5 text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
@@ -446,7 +448,7 @@ export default function DataSourcesPage() {
                 <div className="flex-1 h-px bg-border ml-2" />
               </button>
               {isOpen && (
-                <div className="space-y-6 mb-6">
+                <div id={`source-category-${category.key}`} className="mt-4 space-y-6 border-t border-border pt-4">
                   {category.types.map(type => renderTypeSection(type))}
                 </div>
               )}
@@ -546,8 +548,8 @@ export default function DataSourcesPage() {
 
       {/* Test Result Dialog */}
       <Dialog open={testResultOpen} onOpenChange={setTestResultOpen}>
-        <DialogContent
-          className="max-w-2xl w-[92vw] max-h-[85vh] overflow-y-auto scrollbar"
+        <DialogContent placement="right"
+          className="max-w-2xl"
           onInteractOutside={(e) => e.preventDefault()}
         >
           <DialogHeader>
@@ -586,7 +588,7 @@ export default function DataSourcesPage() {
 
             {/* Error message */}
             {testResult?.error && (
-              <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20">
+              <div className="card-surface p-3 rounded-md bg-red-500/10 ">
                 <div className="text-[12px] text-red-600 font-medium mb-1">错误信息</div>
                 <div className="text-[12px] text-red-600 dark:text-red-400 break-words whitespace-pre-wrap">{testResult.error}</div>
               </div>

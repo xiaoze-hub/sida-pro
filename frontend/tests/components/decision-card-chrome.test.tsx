@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * DecisionCard 合并卡的**视觉契约**(复审修复: 嵌套卡壳 + 重复/倒挂标题)。
  *
  * 与 decision-card.test.tsx(mock 两个子组件, 守去重/透传)不同, 本文件渲染**真实子组件**,
- * 直接量 DOM 里"卡壳"(圆角 + 四边完整 token 边框)与标题层级的数量 —— 这正是复审 finding
- * 的判定面: 合并后必须**只有一层边框**、**只有一个顶层标题**。
+ * 直接量 DOM 里"卡壳"(圆角 + 不透明卡片底)与标题层级的数量 —— 这正是复审 finding
+ * 的判定面: 合并后必须**只有一层内容面板**、**只有一个顶层标题**。
  *
  * 同时回归"默认路径不变": 不传 `bare` 时 `DecisionPioneerCard` 仍出自己的卡壳与
  * 「🧭 数智决策三指标」标题(旧调用点 DarkFlowCards / 旧行情页行为逐字不变)。
@@ -47,11 +47,11 @@ const RULE = {
   hits: [true, true, true],
 }
 
-/** 卡壳 = 圆角 + 四边完整边框 + token 边框色(border-t 细分隔线与 border-primary 按钮不算) */
+/** 卡壳 = 显式内容面板标记 + 圆角 + 不透明卡片底；卡片无描边 */
 function cardShells(root: HTMLElement): Element[] {
   return Array.from(root.querySelectorAll('*')).filter((el) => {
     const cls = el.getAttribute('class') ?? ''
-    return /(^|\s)border-border(?:-strong)?(\s|$)/.test(cls) && /(^|\s)border(\s|$)/.test(cls) && /(^|\s)rounded/.test(cls)
+    return /(^|\s)card-surface(\s|$)/.test(cls) && /(^|\s)bg-card(\s|$)/.test(cls) && /(^|\s)rounded/.test(cls)
   })
 }
 
@@ -81,10 +81,10 @@ describe('DecisionCard 合并卡 · 单卡外观', () => {
 
     await waitFor(() => expect(screen.getByText('GS 信号（机会/风险）')).toBeTruthy())
 
-    // 数据态: 仍然只有一层边框 —— 不存在"卡中卡"
+    // 数据态: 仍然只有一层内容面板 —— 不存在"卡中卡"
     const shells = cardShells(container)
     expect(shells.length).toBe(1)
-    expect(shells[0].getAttribute('class')).toContain('border-border')
+    expect(shells[0].getAttribute('class')).not.toMatch(/(^|\s)border(?:-|\s)/)
 
     // 一个顶层标题: 子卡的「🧭 数智决策三指标」与「三指标读数」副标题、共振面板的「三指标」标签都被 bare 抑制
     const titles = screen.getAllByText('数智决策')
@@ -110,7 +110,7 @@ describe('DecisionCard 合并卡 · 单卡外观', () => {
 
     const shells = cardShells(container)
     expect(shells.length).toBe(1)
-    expect(shells[0].getAttribute('class')).toContain('mt-3 rounded-xl border border-border bg-card p-3')
+    expect(shells[0].getAttribute('class')).toContain('mt-3 rounded-xl bg-card p-3')
     expect(screen.getByText('🧭 数智决策三指标')).toBeTruthy()
     expect(screen.getByText('GS 信号 × 机构活跃度 × L2 主力净流入（明盘口径）')).toBeTruthy()
     expect(screen.getAllByTitle('刷新').length).toBe(1)

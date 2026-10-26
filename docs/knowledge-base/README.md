@@ -78,3 +78,5 @@ python3 scripts/build_project_knowledge.py --baseline HEAD --check
 ## UI 设计入口
 
 当前界面与交互规则见 [UI_GUIDELINES.md](../UI_GUIDELINES.md)，覆盖主题、Header/Toolbar、Chip、数据网格、浮层、移动端与 CI 门禁。历史视觉研究不替代当前规范。
+
+模块与菜单的布局、分类、折叠和浮层选择见 [UI 模块复查记录](../UI_MODULE_REVIEW_20261026.md)。

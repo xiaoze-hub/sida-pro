@@ -70,7 +70,7 @@ export default function GovernancePage() {
   }, [load])
 
   return (
-    <div className="mx-auto flex w-full max-w-[1000px] flex-col gap-4 p-4">
+    <div className="page-container flex min-w-0 flex-col gap-4">
       <header className="flex items-end justify-between gap-3">
         <div>
           <h1 className="text-[20px] font-semibold text-foreground">治理 · 拦截记录</h1>
@@ -94,15 +94,15 @@ export default function GovernancePage() {
           <Skeleton className="h-10 w-full" />
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-border bg-card p-4 text-[14px] text-stock-down">
+        <div className="card-surface rounded-xl bg-card p-4 text-[14px] text-stock-down">
           读取失败：{error}
         </div>
       ) : !items || items.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card p-6 text-center text-[14px] text-muted-foreground">
+        <div className="card-surface rounded-xl bg-card p-6 text-center text-[14px] text-muted-foreground">
           没有拦截记录
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border bg-card">
+        <div className="card-surface overflow-x-auto rounded-xl bg-card">
           <table className="w-full border-collapse text-[12px]">
             <thead>
               <tr className="border-b border-border text-left text-muted-foreground">

@@ -13,7 +13,7 @@ export default function PageHeader({ title, description, actions, metadata }: {
         <h1 className="page-title">{title}</h1>
         {description && <div className="page-description">{description}</div>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border bg-card p-1">{actions}</div>}
+      {actions && <div className="card-surface flex flex-wrap items-center gap-1 rounded-lg bg-card p-1">{actions}</div>}
       {metadata && <div className="flex w-full flex-wrap items-center gap-2">{metadata}</div>}
     </header>
   )

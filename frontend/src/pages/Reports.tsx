@@ -208,7 +208,7 @@ export default function ReportsPage() {
 
       {/* 报告详情 Dialog */}
       <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}>
-        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+        <DialogContent placement="right" className="max-w-4xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-base">
               {selected?.item.title_preview || selected?.item.file}

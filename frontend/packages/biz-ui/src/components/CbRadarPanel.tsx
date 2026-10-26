@@ -184,7 +184,7 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
   return (
     <div className="space-y-3">
       {/* 顶栏: 数据日 / 交易阶段 / 是否实时 + 刷新 */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
+      <div className="card-surface flex flex-wrap items-center justify-between gap-2 rounded-lg bg-card px-3 py-2">
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
           <Link2 className="h-3.5 w-3.5 text-primary" />
           {data?.is_live ? (
@@ -230,22 +230,22 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
 
       {/* 场景计数条 */}
       <div className="flex flex-wrap gap-2">
-        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
+        <div className="card-surface flex items-center gap-1.5 rounded-lg bg-card px-2.5 py-1.5 text-[12px]">
           <TrendingDown className="h-3.5 w-3.5 text-stock-up" />
           <span className="text-muted-foreground">折价套利</span>
           <span className="font-mono font-semibold text-foreground">{counts.discount_arb ?? 0}</span>
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
+        <div className="card-surface flex items-center gap-1.5 rounded-lg bg-card px-2.5 py-1.5 text-[12px]">
           <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
           <span className="text-muted-foreground">强赎触发区</span>
           <span className="font-mono font-semibold text-foreground">{counts.force_redeem_breached ?? 0}</span>
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
+        <div className="card-surface flex items-center gap-1.5 rounded-lg bg-card px-2.5 py-1.5 text-[12px]">
           <Radio className="h-3.5 w-3.5 text-primary" />
           <span className="text-muted-foreground">正股封板·转债滞后</span>
           <span className="font-mono font-semibold text-foreground">{counts.stock_limit_up_lag ?? 0}</span>
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px]">
+        <div className="card-surface flex items-center gap-1.5 rounded-lg bg-card px-2.5 py-1.5 text-[12px]">
           <span className="text-muted-foreground">双低前列</span>
           <span className="font-mono font-semibold text-foreground">{counts.double_low_top ?? 0}</span>
         </div>
@@ -271,13 +271,13 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
 
       {error ? <div className="text-[12px] text-amber-600 dark:text-amber-500">{error}</div> : null}
       {data && !data.available ? (
-        <div className="rounded-lg border border-border bg-card px-3 py-6 text-center text-[12px] text-muted-foreground">
+        <div className="card-surface rounded-lg bg-card px-3 py-6 text-center text-[12px] text-muted-foreground">
           {data.note || '转债数据暂不可用'}
         </div>
       ) : null}
 
       {data?.available ? (
-        <div className="overflow-x-auto rounded-lg border border-border">
+        <div className="card-surface bg-card overflow-x-auto rounded-lg ">
           <table className="w-full text-[12px]">
             <thead>
               <tr className="border-b border-border text-[12px] text-muted-foreground">
@@ -374,7 +374,7 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
       ) : null}
 
       {loading && rows.length === 0 ? (
-        <div className="h-[140px] animate-pulse rounded-lg border border-border bg-s2" />
+        <div className="card-surface h-[140px] animate-pulse rounded-lg bg-s2" />
       ) : null}
 
       {data?.available ? (

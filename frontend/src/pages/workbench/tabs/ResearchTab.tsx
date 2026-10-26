@@ -176,7 +176,7 @@ function BrokerResearchSection({ symbol }: { symbol: string }) {
 
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto rounded border border-border">
+      <div className="card-surface bg-card overflow-x-auto rounded ">
         <table className="w-full text-left text-[12px]">
           <thead className="bg-s2 text-[12px] text-muted-foreground">
             <tr>

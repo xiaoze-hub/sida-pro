@@ -30,7 +30,7 @@ export function AiSection() {
     <>
   {/* AI Services + Models Section */}
   {isOwner && (
-  <section id="sec-ai" className="border-t border-border pt-4 md:pt-5 lg:col-span-7" style={{ display: sectionMatches('sec-ai') ? undefined : 'none' }}>
+  <section id="sec-ai" className="analysis-section" style={{ display: sectionMatches('sec-ai') ? undefined : 'none' }}>
     <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
       <div>
         <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">AI 服务商 & 模型</h3>
@@ -81,7 +81,8 @@ export function AiSection() {
     )}
 
     {/* 场景分配(统一 LLM 配置中心): 每个使用点绑定模型池里的模型 */}
-    <div className="mt-5 pt-4 border-t">
+    <details className="mt-5 rounded-lg bg-s2 p-4">
+      <summary className="cursor-pointer text-[14px] font-medium">场景模型分配 <span className="ml-2 text-[12px] font-normal text-muted-foreground">按分析用途单独指定模型</span></summary>
       <div className="mb-3">
         <h4 className="text-[12px] font-semibold text-foreground">场景分配</h4>
         <p className="text-[12px] text-muted-foreground mt-0.5">各 AI 使用点绑定的模型，未绑定则使用默认模型</p>
@@ -93,12 +94,12 @@ export function AiSection() {
       ) : (
         <div className="space-y-2">
           {sceneBindings.map(b => (
-            <div key={b.scene} className="flex items-center justify-between gap-3 border-b border-border px-1 py-2">
+            <div key={b.scene} className="flex flex-col gap-3 border-b border-border py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <span className="text-[12px] font-semibold text-foreground">{b.display_name}</span>
                 <p className="text-[12px] text-muted-foreground mt-0.5 truncate" title={b.description}>{b.description}</p>
               </div>
-              <div className="flex-shrink-0 w-[220px] sm:w-[280px]">
+              <div className="w-full shrink-0 sm:w-[240px]">
                 {b.scene === 'vision' && (
                   <p className="mb-1 text-[12px] text-sky-700/90 dark:text-sky-400/90">
                     {b.is_bound
@@ -136,7 +137,7 @@ export function AiSection() {
           ))}
         </div>
       )}
-    </div>
+    </details>
   </section>
   )}
     </>

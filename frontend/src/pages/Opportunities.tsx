@@ -1173,7 +1173,7 @@ export default function OpportunitiesPage() {
       {/* 首屏 KPI 4 → 3（2026-10-24 L2-E）：市场池占比降级进「更多指标」，
           把结果表从 y≈520 抬到首屏内。 */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
-        <Card className="border-l-2 border-l-primary pl-3 py-1 p-3">
+        <Card className=" pl-3 py-1 p-3">
           <Stat
             label={t('opportunities.currentCandidates')}
             value={globalCoverage?.total_signals ?? '--'}

@@ -204,8 +204,8 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
       )}
       {loading && !detail ? (
         <div className="grid gap-3">
-          <div className="h-[92px] rounded-md border border-border animate-pulse bg-s2" />
-          <div className="h-[220px] rounded-md border border-border animate-pulse bg-s2" />
+          <div className="card-surface h-[92px] rounded-md animate-pulse bg-s2" />
+          <div className="card-surface h-[220px] rounded-md animate-pulse bg-s2" />
         </div>
       ) : (
         <>

@@ -169,8 +169,8 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
   if (loading && !data) {
     return (
       <div className="mt-3 grid gap-2">
-        <div className="h-[92px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
-        <div className="h-[120px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
+        <div className="card-surface h-[92px] rounded-xl bg-card animate-pulse bg-s2" />
+        <div className="card-surface h-[120px] rounded-xl bg-card animate-pulse bg-s2" />
       </div>
     )
   }
@@ -178,7 +178,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
   // 加载失败降级
   if (error && !data) {
     return (
-      <div className="mt-3 rounded-xl border border-border bg-card p-3">
+      <div className="card-surface mt-3 rounded-xl bg-card p-3">
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <ShieldAlert className="w-3.5 h-3.5" />
           <span>暗盘/主力意图数据暂不可用({error})</span>
@@ -208,7 +208,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
   return (
     <div className="mt-3 grid gap-2">
       {/* ============ 卡片①: 主力意图 ============ */}
-      <div className="rounded-xl border border-border bg-card p-3">
+      <div className="card-surface rounded-xl bg-card p-3">
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
             <div className="text-[14px] font-semibold text-foreground">🎯 主力意图</div>
@@ -241,7 +241,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
         </div>
 
         {insufficient ? (
-          <div className="text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+          <div className="card-surface text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2">
             数据不足(盘中数据未积累)
           </div>
         ) : mi && mi.main_net != null ? (
@@ -251,7 +251,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             ) : null}
             {/* 2026-09-04 P1-4: 结论翻转注记, 有值才展示 */}
             {mi.verdict_note ? (
-              <div className="text-[12px] text-sky-700 dark:text-sky-400 bg-sky-500/10 border border-sky-500/20 rounded-lg px-3 py-2 mb-2">
+              <div className="card-surface text-[12px] text-sky-700 dark:text-sky-400 bg-sky-500/10 rounded-lg px-3 py-2 mb-2">
                 📢 {mi.verdict_note}
               </div>
             ) : null}
@@ -302,7 +302,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
 
       {/* ============ 卡片: 暗盘资金(拆单识别, 2026-08-30) ============ */}
       {darkOrder && darkOrder.net != null ? (
-        <div className="rounded-xl border border-border bg-card p-3">
+        <div className="card-surface rounded-xl bg-card p-3">
           <div className="flex items-center justify-between mb-2">
             <div className="text-[14px] font-semibold text-foreground">🕵️ 暗盘资金(拆单识别)</div>
             <span className="text-[12px] text-muted-foreground">主力伪装的中小单·逆势+位置确认</span>
@@ -339,7 +339,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
       ) : null}
 
       {/* ============ 卡片②: 内盘外盘 ============ */}
-      <div className="rounded-xl border border-border bg-card p-3">
+      <div className="card-surface rounded-xl bg-card p-3">
         <div className="text-[14px] font-semibold text-foreground mb-2">📊 内盘外盘</div>
 
         {io && (io.buy_pct != null || io.sell_pct != null) ? (
@@ -390,7 +390,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
 
         {/* 口诀提示 */}
         {mn ? (
-          <div className="mt-2 rounded-lg bg-s2 border border-border px-3 py-2 flex items-start justify-between gap-2">
+          <div className="card-surface mt-2 rounded-lg bg-s2 px-3 py-2 flex items-start justify-between gap-2">
             <div className="text-[12px] leading-relaxed">
               <span className="font-medium text-foreground">⚠️ {mn.mnemonic}</span>
               {mn.detail ? <span className="text-muted-foreground ml-1">— {mn.detail}</span> : null}

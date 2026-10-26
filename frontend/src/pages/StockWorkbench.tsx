@@ -465,7 +465,7 @@ export default function StockWorkbench() {
            遗留⑦: **不再**挂 `key={refreshKey}`(那会重挂载 ⇒ 重放入场动画 + 丢正文内部状态),
            改为把 `refreshKey` 当 `refreshToken` prop 传下去 —— 正文据此重跑取数 effect。
            `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
-        <div className="mt-3 rounded-lg border border-border bg-card p-2 shadow-sm">
+        <div className="card-surface mt-3 rounded-lg bg-card p-2 shadow-sm">
           <IndexBoardHost type={type} symbol={symbol} refreshToken={refreshKey} />
         </div>
       ) : (
@@ -561,7 +561,7 @@ export default function StockWorkbench() {
           )}
 
           {/* ── 【舱 3：微观盘口与决策支持 Deep Deck】 ────────────────────── */}
-          <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
+          <section className="card-surface rounded-lg bg-card p-3 shadow-sm">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
               <div className="flex items-center gap-2">
                 <span className="h-3.5 w-1 rounded-full bg-primary" />

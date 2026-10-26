@@ -973,7 +973,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
 
             {/* 操作建议 */}
             {result.recommendation && (
-              <div className={`rounded-md border px-4 py-3 ${result.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : result.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : 'border-gray-500/30 bg-gray-500/5'}`}>
+              <div className={"card-surface " + (`rounded-md px-4 py-3 ${result.direction === 'up' ? ' bg-stock-up/5' : result.direction === 'down' ? ' bg-stock-down/5' : ' bg-gray-500/5'}`)}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-bold text-[16px]">操作建议：{result.recommendation.action}</span>
                   <span className={`text-xs px-2 py-0.5 rounded-full ${result.recommendation.confidence === '高' ? 'bg-emerald-500/15 text-emerald-500' : result.recommendation.confidence === '中' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>
@@ -1007,7 +1007,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               <div className="text-[14px] font-medium mb-2">预测价格（综合投票）</div>
               <div className="flex flex-wrap gap-2">
                 {result.prediction.map((p, i) => (
-                  <div key={i} className="border border-border rounded px-3 py-2 text-center">
+                  <div key={i} className="card-surface bg-card  rounded px-3 py-2 text-center">
                     <div className="text-xs text-muted-foreground">T+{i + 1}</div>
                     <div className={`font-num font-bold tabular-nums ${p > result.last_close ? 'text-stock-up' : 'text-stock-down'}`}>
                       {safeFixed(p)}
@@ -1119,7 +1119,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
           </div>
           {/* Detail 完整版（可折叠） */}
           {showDetail && (
-            <div className="rounded-md border border-border p-4">
+            <div className="card-surface bg-card rounded-md p-4">
               <div className="text-xs text-muted-foreground mb-2">完整版（Detail）</div>
               <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
                 <SafeMarkdown>{report.detail_md}</SafeMarkdown>
@@ -1210,7 +1210,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                   <SafeMarkdown>{backtestReport.dashboard_md}</SafeMarkdown>
                 </div>
               </div>
-              <details className="rounded-md border border-border p-4">
+              <details className="card-surface bg-card rounded-md p-4">
                 <summary className="cursor-pointer text-[14px] text-muted-foreground">查看完整版回测报告</summary>
                 <div className="mt-3 prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
                   <SafeMarkdown>{backtestReport.detail_md}</SafeMarkdown>
@@ -1307,7 +1307,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             </div>
 
             <div className="space-y-3 text-[14px]">
-              <div className={`rounded-md border px-3 py-2 ${detail.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : detail.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : ''}`}>
+              <div className={"card-surface " + (`rounded-md px-3 py-2 ${detail.direction === 'up' ? ' bg-stock-up/5' : detail.direction === 'down' ? ' bg-stock-down/5' : ''}`)}>
                 <div className="font-bold">
                   {/* 反AI模板⑤: 历史详情弹窗的方向/幅度同样标"模型预测" */}
                   <span className="mr-1 text-xs font-medium text-muted-foreground">模型预测</span>

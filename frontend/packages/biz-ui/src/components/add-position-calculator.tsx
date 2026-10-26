@@ -268,7 +268,7 @@ export default function AddPositionCalculator({
           </div>
 
           {aiResult && (
-            <div className="space-y-1 rounded border border-border p-2">
+            <div className="card-surface bg-card space-y-1 rounded p-2">
               <div className="flex items-center gap-2">
                 <span
                   className={`rounded border px-2 py-0.5 text-[12px] ${

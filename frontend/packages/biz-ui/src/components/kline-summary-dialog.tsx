@@ -270,7 +270,7 @@ export function KlineSummaryDialog({
         ) : (
           <div className="space-y-3">
             {suggestion && (
-              <div className="p-3 rounded-lg bg-s2 border border-border">
+              <div className="card-surface p-3 rounded-lg bg-s2 ">
                 <div className="flex items-center justify-between gap-2">
                   <TechnicalBadge
                     label={suggestion.action_label}
@@ -698,7 +698,7 @@ export function KlineSummaryDialog({
                 />
               )}
               {mainIntent && (
-                <div className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/5 px-3 py-2">
+                <div className="card-surface mt-2 rounded-md bg-rose-500/5 px-3 py-2">
                   <div className="text-[12px] font-medium text-rose-400">主力意图 (逐笔V14+筹码)</div>
                   <div className="mt-0.5 text-[12px] leading-relaxed text-foreground">{mainIntent}</div>
                 </div>

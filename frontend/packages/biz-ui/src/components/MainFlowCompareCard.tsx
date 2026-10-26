@@ -150,7 +150,7 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
   }, 60000, { deps: [load] })
 
   if (loading && !data) {
-    return <div className="h-[96px] rounded-xl border border-border bg-card animate-pulse bg-s2" />
+    return <div className="card-surface h-[96px] rounded-xl bg-card animate-pulse bg-s2" />
   }
 
   const hasData = data?.tencent?.available || data?.thsdk?.available
@@ -163,7 +163,7 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
 
   if (!hasData) {
     return (
-      <div className="rounded-xl border border-border bg-card p-3">
+      <div className="card-surface rounded-xl bg-card p-3">
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           {error || data?.note || '主力意图双源对比暂不可用(非A股/数据源不可用)'}
         </div>
@@ -172,7 +172,7 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
   }
 
   return (
-    <div className={`rounded-xl border bg-card p-3 ${lowConsistency ? 'border-amber-500/40' : 'border-border'}`}>
+    <div className={'card-surface ' + (`rounded-xl bg-card p-3 ${lowConsistency ? '' : ''}`)}>
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <div className="text-[14px] font-semibold text-foreground">主力意图双源对比</div>

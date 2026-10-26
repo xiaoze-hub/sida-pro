@@ -109,19 +109,19 @@ export default function AgentCatalogPage() {
       )}
 
       {state === 'error' && (
-        <div className="rounded-xl border border-border bg-card p-3 text-[12px] text-stock-down" data-testid="agent-catalog-error">
+        <div className="card-surface rounded-xl bg-card p-3 text-[12px] text-stock-down" data-testid="agent-catalog-error">
           读取失败：{error}
         </div>
       )}
 
       {state === 'empty' && (
-        <div className="rounded-xl border border-border bg-card p-3 text-[12px] text-muted-foreground" data-testid="agent-catalog-empty">
+        <div className="card-surface rounded-xl bg-card p-3 text-[12px] text-muted-foreground" data-testid="agent-catalog-empty">
           没有配方。检查 <code>src/harness/recipes/*.yaml</code> 是否存在。
         </div>
       )}
 
       {state === 'ok' && (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="card-surface overflow-hidden rounded-xl bg-card">
           {items.map((a) => {
             const isOpen = openId === a.id
             return (
@@ -129,7 +129,8 @@ export default function AgentCatalogPage() {
                 <button
                   type="button"
                   onClick={() => void toggle(a.id)}
-                  className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-s2"
+                  aria-expanded={isOpen}
+                  className="flex min-h-11 w-full flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-s2"
                   data-testid={`agent-row-${a.id}`}
                 >
                   <span className="text-[14px]">{a.icon || '🤖'}</span>

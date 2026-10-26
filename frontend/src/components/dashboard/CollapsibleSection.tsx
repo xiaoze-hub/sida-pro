@@ -50,9 +50,9 @@ export default function CollapsibleSection({
     <section
       data-testid={`evidence-${id}`}
       data-collapsed={collapsed ? 'true' : 'false'}
-      className={`w-full self-start ${presentation === 'group' ? 'space-y-3' : 'overflow-hidden rounded-xl border border-border bg-card shadow-panel'} ${className}`}
+      className={'card-surface ' + (`w-full self-start ${presentation === 'group' ? 'space-y-3' : 'overflow-hidden rounded-xl bg-card shadow-panel'} ${className}`)}
     >
-      <div className={`flex items-center justify-between gap-3 px-4 py-3 ${presentation === 'group' ? 'rounded-xl border border-border bg-card shadow-panel' : ''}`}>
+      <div className={'card-surface ' + (`flex items-center justify-between gap-3 px-4 py-3 ${presentation === 'group' ? 'rounded-xl bg-card shadow-panel' : ''}`)}>
         <div className="min-w-0 flex-1">{header}</div>
         <button
           type="button"

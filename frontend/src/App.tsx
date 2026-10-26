@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -566,23 +566,23 @@ function App() {
                 title={label}
                 data-testid="nav-ai-copilot"
                 aria-current={active ? 'page' : undefined}
-                className={`nav-item mb-3 border border-border ${
+                className={`ai-tool-entry mb-4 flex min-h-16 items-center gap-2.5 rounded-lg px-3 py-3 transition-colors border border-transparent ${
                   sidebarCollapsed ? 'justify-center px-0' : ''
                 } ${
                   active
-                    ? 'bg-s3 text-accent-foreground'
-                    : 'bg-card text-foreground hover:bg-s2'
+                    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    : 'bg-s3 text-accent-foreground hover:bg-primary/10'
                 }`}
               >
-                <Icon className="h-4 w-4 shrink-0 text-role-watch" />
+                <Icon className="h-5 w-5 shrink-0" />
                 {!sidebarCollapsed && (
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12px] font-medium">{label}</span>
-                    <span className="block truncate text-[12px] text-muted-foreground">
-                      筹码·共振·撤单·竞价
+                    <span className="block truncate text-[14px] font-semibold">AI 分析助手</span>
+                    <span className="mt-0.5 block truncate text-[12px] opacity-80">
+                      点击开始技术分析
                     </span>
                   </span>
-                )}
+                )}{!sidebarCollapsed && <ArrowRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
               </NavLink>
             )
           })()}
@@ -684,7 +684,7 @@ function App() {
                 焦点模式
               </button>
             </div>
-            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-xl bg-s2 border border-border">
+            <div className="card-surface flex items-center gap-1.5 px-1.5 py-1 rounded-xl bg-s2 ">
               <button
                 onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
                 className="hidden w-8 h-8 rounded-xl items-center sm:flex justify-center text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
@@ -744,7 +744,13 @@ function App() {
             `header` 里的壳层(如顶栏源心跳条)只渲染一次, 不随页签复制。 */}
         <WorkspaceTabShell header={
           <div data-workspace-status className="mb-4 grid min-w-0 gap-2 md:grid-cols-[auto_minmax(0,1fr)] md:items-center md:gap-4">
-            <SourceHeartbeat />
+            <div className="flex flex-wrap items-center gap-2">
+              <SourceHeartbeat />
+              {!isNavHiddenForPerm({ perm: 'edit_portfolio' }, myPerms) && <Button variant="ghost" size="sm" data-testid="quick-portfolio" onClick={() => {
+                navigate('/portfolio?view=positions')
+                window.dispatchEvent(new Event('sida:portfolio-positions'))
+              }}><List className="h-4 w-4" />我的持仓</Button>}
+            </div>
             <Disclaimer />
           </div>
         }>

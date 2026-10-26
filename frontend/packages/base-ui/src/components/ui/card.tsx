@@ -14,10 +14,11 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(({ className, variant =
     <div
       ref={ref}
       className={cn(
+        'card-surface',
         variant === 'default' && 'card',
         variant === 'hover' && 'card-hover',
         variant === 'subtle' && 'card-subtle',
-        variant === 'plain' && 'rounded-xl border border-border bg-card',
+        variant === 'plain' && 'rounded-xl bg-card',
         className,
       )}
       {...props}

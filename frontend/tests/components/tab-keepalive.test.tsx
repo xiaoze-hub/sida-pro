@@ -269,14 +269,19 @@ describe('⑥ 页签上限: 挤掉最久未访问的非首页页签并提示(L2-
       '/notifications',
       '/profile',
     ]
-    for (const r of extras) go(r)
+    for (const r of extras) {
+      go(r)
+      if (r === '/decision-ledger') {
+        expect(screen.getByText(new RegExp(`页签最多 ${MAX_TABS} 个`)).textContent).toContain('板块热力')
+      }
+    }
     expect(tabLabels().length).toBe(MAX_TABS)
     expect(tabLabels()[0]).toBe('首页')
     expect(tabLabels()).not.toContain('板块热力') // 最早的非首页页签被挤掉
     expect(tabLabels()).toContain('个人中心') // 刚开的还在
     const toasts = screen.getAllByText(new RegExp(`页签最多 ${MAX_TABS} 个`))
-    expect(toasts.length).toBeGreaterThan(0)
-    expect(toasts[0].textContent).toContain('板块热力')
+    expect(toasts.length).toBe(3) // 连续打开多个页面也只保留最近三条，避免遮住内容
+    expect(toasts.at(-1)?.textContent).toContain('主力战报')
     // 被挤掉的页签面板也不在 DOM 里了(它的状态随之释放)
     expect(
       document.querySelector('[data-testid="workspace-tab-pane"][data-tab-key="/heatmap"]'),

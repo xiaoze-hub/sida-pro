@@ -207,7 +207,7 @@ function QuoteCard({ l2 }: { l2: L2Resp | null }) {
   const m = l2?.more ?? {}
   const clock = asOfClock(l2?.as_of)
   return (
-    <div className="rounded border border-border p-2">
+    <div className="card-surface bg-card rounded p-2">
       <div className="mb-1 flex items-baseline justify-between">
         <span className="text-[12px] font-semibold">盘口速览</span>
         {clock ? <span className="font-mono text-[12px] text-muted-foreground">快照 {clock}</span> : null}
@@ -274,7 +274,7 @@ function FundamentalCard({ symbol, market, more }: { symbol: string; market: str
 
   const gb = fund?.gb
   return (
-    <div className="rounded border border-border p-2">
+    <div className="card-surface bg-card rounded p-2">
       <div className="mb-1 flex items-center gap-1 text-[12px] font-semibold">
         基本面 / 股本
         {fund?.sub_new ? (
@@ -310,7 +310,7 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
 
   const blocks = data?.blocks ?? []
   return (
-    <div className="rounded border border-border p-2">
+    <div className="card-surface bg-card rounded p-2">
       <div className="mb-1 text-[12px] font-semibold">题材 / 板块</div>
       {data?.note ? <div className="text-[12px] text-muted-foreground">{data.note}</div> : null}
       {blocks.length === 0 && !data?.note ? (

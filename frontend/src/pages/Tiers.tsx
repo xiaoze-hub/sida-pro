@@ -107,13 +107,13 @@ export default function Tiers() {
             <Loader2 className="h-4 w-4 animate-spin" /> 正在读取档位信息…
           </div>
         )}
-        {err && <div className="mt-10 rounded-lg border border-border p-4 text-[14px] text-muted-foreground">{err}</div>}
+        {err && <div className="card-surface bg-card mt-10 rounded-lg p-4 text-[14px] text-muted-foreground">{err}</div>}
 
         {data && (
           <>
             <div className="mt-10 grid gap-6 md:grid-cols-2">
               {[free, pro].map((t, i) => t && (
-                <div key={t.key} className={`rounded-xl border p-5 ${i === 1 ? 'border-primary/40 bg-primary/[0.03]' : 'border-border'}`}>
+                <div key={t.key} className={"card-surface " + (`rounded-xl p-5 ${i === 1 ? ' bg-primary/[0.03]' : ''}`)}>
                   <div className="flex items-baseline justify-between">
                     <div className="text-[20px] font-bold">{t.label}</div>
                     <div className="text-[12px] text-muted-foreground">{t.count} 项能力</div>
@@ -134,7 +134,7 @@ export default function Tiers() {
             </div>
 
             {data.member_limits && (
-              <div className="mt-6 rounded-lg border border-border p-4">
+              <div className="card-surface bg-card mt-6 rounded-lg p-4">
                 <div className="text-[14px] font-semibold">免费档当前上限</div>
                 <ul className="mt-2 space-y-1 text-[14px] text-muted-foreground">
                   <li>自选股：{data.member_limits.watchlist_max} 只</li>
@@ -145,7 +145,7 @@ export default function Tiers() {
               </div>
             )}
             {!data.member_limits && (
-              <div className="mt-6 rounded-lg border border-border p-4 text-[14px] text-muted-foreground">
+              <div className="card-surface bg-card mt-6 rounded-lg p-4 text-[14px] text-muted-foreground">
                 {data.limits_note}
               </div>
             )}

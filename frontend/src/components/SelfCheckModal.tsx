@@ -192,7 +192,7 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
     const catRows = rows.filter((r) => r.category === cat)
     if (catRows.length === 0) return null
     return (
-      <div key={cat} className="rounded-xl border border-border bg-s2 p-3">
+      <div key={cat} className="card-surface rounded-xl bg-s2 p-3">
         <div className="mb-2 text-[12px] font-semibold text-foreground">
           {CATEGORY_LABELS[cat] ?? cat}
         </div>
@@ -275,7 +275,7 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
 
         {listError && <div className="mt-3 text-[12px] text-rose-600">{listError}</div>}
         {!listError && total === 0 && !running && (
-          <div className="mt-4 rounded-xl border border-border bg-s2 p-4 text-center text-[12px] text-muted-foreground">
+          <div className="card-surface mt-4 rounded-xl bg-s2 p-4 text-center text-[12px] text-muted-foreground">
             未配置 数据源 / AI / 通知,先去设置里配置后再自检。
           </div>
         )}

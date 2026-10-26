@@ -54,14 +54,14 @@ export function PortfolioSummarySection() {
   </div>
 ) : portfolio ? (
   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4 mb-6">
-    <Card variant="plain" className="border-l border-l-border/40 p-3">
+    <Card variant="plain" className=" p-3">
       <Stat
         label={t('stocks.totalMarketValue')}
         value={fmtAmount(portfolio.total.total_market_value)}
         className="[&>div:nth-child(2)]:text-[20px]"
       />
     </Card>
-    <Card variant="plain" className="border-l border-l-border/40 p-3">
+    <Card variant="plain" className=" p-3">
       <Stat
         label={t('stocks.totalPnl')}
         value={
@@ -84,7 +84,7 @@ export function PortfolioSummarySection() {
       const pct = prevMv > 0 ? (dayPnl / prevMv * 100) : 0
       const isUp = dayPnl >= 0
       return (
-        <Card variant="plain" className="border-l border-l-border/40 p-3">
+        <Card variant="plain" className=" p-3">
           <Stat
             // 6 栏网格里全称会换行/截断成 3 行；紧凑档「上日 10-23」单行可读，全称仍在 hover 语义里
             label={dailyPnlDisplayLabel(portfolio.total, true)}
@@ -102,14 +102,14 @@ export function PortfolioSummarySection() {
       )
     })()}
 
-    <Card variant="plain" className="border-l border-l-border/40 p-3">
+    <Card variant="plain" className=" p-3">
       <Stat label={t('stocks.availableCash')} value={fmtAmount(portfolio.total.available_funds)} className="[&>div:nth-child(2)]:text-[20px]" />
     </Card>
-    <Card variant="plain" className="border-l border-l-border/40 p-3">
+    <Card variant="plain" className=" p-3">
       <Stat label={t('stocks.totalAssets')} value={fmtAmount(portfolio.total.total_assets)} className="[&>div:nth-child(2)]:text-[20px]" />
     </Card>
 
-    <Card variant="plain" className="border-l border-l-border/40 p-3">
+    <Card variant="plain" className=" p-3">
       <Stat
         label={t('stocks.positionRatio')}
         value={positionRatio && safeNum(positionRatio.pct) !== null ? `${positionRatio.pct.toFixed(1)}%` : '--'}

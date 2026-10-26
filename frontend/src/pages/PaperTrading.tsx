@@ -353,8 +353,8 @@ export default function PaperTradingPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shrink-0">
-            <Activity className="w-4 h-4 text-white" />
+          <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center shrink-0">
+            <Activity className="w-4 h-4 text-primary-foreground" />
           </div>
           <h1 className="text-[16px] font-bold">模拟盘</h1>
           {account && (
@@ -472,13 +472,13 @@ export default function PaperTradingPage() {
       )}
 
       {/* Equity Curve */}
-      <div className="border-b border-border pb-4">
+      <div className="analysis-section">
         <h2 className="text-[14px] font-semibold mb-3">收益曲线</h2>
         <EquityChart data={equityCurve} />
       </div>
 
       {/* Drawdown Curve (B5.1) */}
-      <div className="border-b border-border pb-4">
+      <div className="analysis-section">
         <h2 className="text-[14px] font-semibold mb-3">
           回撤曲线
           <span className="ml-2 text-xs font-normal text-muted-foreground">从峰值回撤(%), 越深风险越大</span>
@@ -487,7 +487,7 @@ export default function PaperTradingPage() {
       </div>
 
       {/* Realized PnL (B5.2) */}
-      <div className="border-b border-border pb-4">
+      <div className="analysis-section">
         <h2 className="text-[14px] font-semibold mb-3">
           已实现盈亏
           <span className="ml-2 text-xs font-normal text-muted-foreground">按平仓日累计(元)</span>
@@ -497,7 +497,7 @@ export default function PaperTradingPage() {
 
       {/* Strategy Performance */}
       {strategyPerf.length > 0 && (
-        <div className="border-b border-border pb-4">
+        <div className="analysis-section">
           <h2 className="text-[14px] font-semibold mb-3">策略绩效</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-[14px]">
@@ -541,7 +541,7 @@ export default function PaperTradingPage() {
       )}
 
       {/* Open Positions */}
-      <div className="border-b border-border pb-4">
+      <div className="analysis-section">
         <h2 className="text-[14px] font-semibold mb-3">当前持仓 ({positions.length})</h2>
         {positions.length === 0 ? (
           <div className="text-center text-muted-foreground text-[14px] py-8">暂无持仓</div>
@@ -599,7 +599,7 @@ export default function PaperTradingPage() {
 
       {/* Trade History Dialog */}
       <Dialog open={tradesOpen} onOpenChange={setTradesOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogContent placement="right" className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>已平仓记录 ({tradesTotal})</DialogTitle>
             <DialogDescription>历史交易详情</DialogDescription>

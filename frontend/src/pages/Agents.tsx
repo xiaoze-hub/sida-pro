@@ -1,3 +1,4 @@
+import { SidePanel } from '@/components/SidePanel'
 import { useState, useEffect } from 'react'
 import { Play, Power, Clock, Cpu, Bot, Bell, Settings2 } from 'lucide-react'
 import { fetchAPI, type AIService, type NotifyChannel } from '@panwatch/api'
@@ -180,6 +181,7 @@ export default function AgentsPage() {
   const [schedulePreview, setSchedulePreview] = useState<SchedulePreview | { error: string } | null>(null)
   const [schedulePreviewLoading, setSchedulePreviewLoading] = useState(false)
 
+  const [advancedAgent, setAdvancedAgent] = useState<string | null>(null)
   const [runsOpen, setRunsOpen] = useState<Record<string, boolean>>({})
   const [runsLoading, setRunsLoading] = useState<Record<string, boolean>>({})
   const [runs, setRuns] = useState<Record<string, AgentRun[] | { error: string }>>({})
@@ -418,7 +420,7 @@ export default function AgentsPage() {
 
   const toggleRuns = async (agentName: string) => {
     const nextOpen = !runsOpen[agentName]
-    setRunsOpen(prev => ({ ...prev, [agentName]: nextOpen }))
+    setRunsOpen(nextOpen ? { [agentName]: true } : {})
     if (!nextOpen) return
 
     if (runs[agentName] || runsLoading[agentName]) return
@@ -508,13 +510,10 @@ export default function AgentsPage() {
         errors={loadError ? [{ source: 'Agent 配置', message: loadError, retry: () => void load() }] : []}
         onDismiss={() => setLoadError(null)}
       />
-      <div className="mb-4 md:mb-8">
-        <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">Agent</h1>
-        <p className="text-[12px] md:text-[14px] text-muted-foreground mt-0.5 md:mt-1">自动化任务管理与调度</p>
-      </div>
+      <div className="mb-4"><h2 className="text-[16px] font-semibold">分析任务</h2><p className="mt-1 text-[12px] text-muted-foreground">按任务查看计划、执行状态与上下文配置。</p></div>
 
       {/* Scheduler Health */}
-      <div className="border-b border-border pb-4 mb-4">
+      <div className="analysis-section mb-4">
         <div className="flex items-center justify-between">
           <div className="text-[14px] font-semibold text-foreground">调度健康</div>
           <Button variant="secondary" size="sm" className="h-8" onClick={loadHealth} disabled={healthLoading}>
@@ -567,10 +566,10 @@ export default function AgentsPage() {
               ? `${boundStocks.slice(0, 3).map(s => s.name || s.symbol).join('、')}${boundStocks.length > 3 ? '、...更多' : ''}`
               : '未绑定股票'
             return (
-              <div key={agent.name} className="border-b border-border pb-4 md:pb-5">
+              <div key={agent.name} className="analysis-section">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 sm:gap-6">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${agent.enabled ? 'bg-emerald-500' : 'bg-border'}`} />
                       <h3 className="text-[16px] font-semibold text-foreground">{agent.display_name}</h3>
                       <Badge variant="secondary" className="text-[12px]">{modeLabel}</Badge>
@@ -636,10 +635,8 @@ export default function AgentsPage() {
 
                     {/* L3-F: 模型/推送渠道是次级配置, 默认折叠成「高级设置」——
                         原实现与「未来 3 次」同权铺在卡上, 读者分不清主次。 */}
-                    <details className="mt-4 ml-[22px]">
-                      <summary className="cursor-pointer select-none text-[12px] text-muted-foreground hover:text-foreground">
-                        高级设置（模型 / 推送渠道）
-                      </summary>
+                    <Button variant="ghost" size="sm" className="mt-3 ml-[22px]" onClick={() => setAdvancedAgent(agent.name)}>模型与通知设置</Button>
+                    <SidePanel open={advancedAgent === agent.name} onOpenChange={open => !open && setAdvancedAgent(null)} title={`${agent.display_name} · 模型与通知`} description="调整此任务使用的模型和推送渠道，保留独立的任务配置。">
                       <div className="mt-2 space-y-3">
                       {/* AI Model select */}
                       <div className="flex items-center gap-2">
@@ -693,7 +690,7 @@ export default function AgentsPage() {
                         </div>
                       )}
                       </div>
-                    </details>
+                                        </SidePanel>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 ml-[22px] sm:ml-0">
                     <Button
@@ -730,8 +727,7 @@ export default function AgentsPage() {
                   </div>
                 </div>
 
-                {runsOpen[agent.name] && (
-                  <div className="mt-4 ml-[22px] sm:ml-0 rounded-md border border-border bg-s2 p-3">
+                <SidePanel open={!!runsOpen[agent.name]} onOpenChange={open => !open && setRunsOpen({})} title={`${agent.display_name} · 最近运行`} description="最近 5 次执行的状态、耗时和错误信息。">
                     <div className="flex items-center justify-between">
                       <div className="text-[12px] font-medium text-foreground">最近 5 次运行</div>
                       {runsLoading[agent.name] && (
@@ -769,8 +765,8 @@ export default function AgentsPage() {
                         </div>
                       )
                     })()}
-                  </div>
-                )}
+                </SidePanel>
+
               </div>
             )
           })}
@@ -854,7 +850,7 @@ export default function AgentsPage() {
             )}
 
             {/* Preview */}
-            <div className="rounded-md border border-border bg-s2 p-3">
+            <div className="card-surface rounded-md bg-s2 p-3">
               <div className="flex items-center justify-between">
                 <div className="text-[12px] font-medium text-foreground">未来触发时间预览</div>
                 {schedulePreviewLoading && (
@@ -897,7 +893,7 @@ export default function AgentsPage() {
       </Dialog>
 
       <Dialog open={!!bindDialogAgent} onOpenChange={(open) => !open && setBindDialogAgent(null)}>
-        <DialogContent>
+        <DialogContent placement="right">
           <DialogHeader>
             <DialogTitle>
               {bindDialogAgent ? `${bindDialogAgent.display_name} 股票绑定` : '股票绑定'}
@@ -926,7 +922,7 @@ export default function AgentsPage() {
               </div>
             </div>
 
-            <div className="max-h-[40vh] overflow-y-auto rounded border border-border p-3">
+            <div className="card-surface bg-card max-h-[40vh] overflow-y-auto rounded p-3">
               {filteredBindStocks.length === 0 ? (
                 <div className="p-4 text-[12px] text-muted-foreground text-center">无可选股票</div>
               ) : (
@@ -964,7 +960,7 @@ export default function AgentsPage() {
 
       {/* TradingAgents 深度配置弹窗 */}
       <Dialog open={!!taConfigAgent} onOpenChange={open => !open && setTaConfigAgent(null)}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent placement="right" className="max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>TradingAgents 深度配置</DialogTitle>
             <DialogDescription>
@@ -994,7 +990,7 @@ export default function AgentsPage() {
                   <div className="font-medium mb-2">模型分档(可选)</div>
 
                   {/* 显示 Agent 默认模型来源,让用户知道 service 上下文 */}
-                  <div className="rounded-md bg-s2 border border-border p-2 text-[12px] text-muted-foreground mb-3">
+                  <div className="card-surface rounded-md bg-s2 p-2 text-[12px] text-muted-foreground mb-3">
                     {defaultModel && agentService ? (
                       <>当前 Agent 默认模型: <span className="text-foreground font-medium">{defaultModel.model}</span>
                        <span className="opacity-70"> (来自 {agentService.name})</span></>

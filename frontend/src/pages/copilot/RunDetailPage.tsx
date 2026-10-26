@@ -42,7 +42,7 @@ export default function RunDetailPage() {
   }, [load])
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-4" data-testid="run-detail-page">
+    <div className="page-container min-w-0" data-testid="run-detail-page">
       <div className="mb-3 flex items-center gap-3">
         <button
           type="button"

@@ -43,7 +43,7 @@ export function LlmUsageSection() {
   const fmtCost = (n: number) => `¥${(n ?? 0).toFixed(2)}`
 
   return (
-    <section id="sec-llm-usage" className="border-t border-border pt-4 md:pt-5 lg:col-span-12">
+    <section id="sec-llm-usage" className="analysis-section">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="flex items-center gap-2 text-[14px] font-semibold">
           <Activity className="h-4 w-4 text-primary" />
@@ -102,7 +102,7 @@ export function LlmUsageSection() {
               ['区间 Token', fmtNum(data.summary.tokens), ''],
               ['区间费用', fmtCost(data.summary.cost), '估算'],
             ].map(([label, val, suffix]) => (
-              <div key={label} className="rounded-md border border-border bg-s2 px-3 py-2.5">
+              <div key={label} className="card-surface rounded-md bg-s2 px-3 py-2.5">
                 <div className="text-[12px] text-muted-foreground">{label}</div>
                 <div className="font-mono text-[14px] font-semibold text-foreground tabular-nums">
                   {val}
@@ -116,7 +116,7 @@ export function LlmUsageSection() {
               ['本月调用', fmtNum(data.summary.month_calls), '次'],
               ['本月费用', fmtCost(data.summary.month_cost), '估算'],
             ].map(([label, val, suffix]) => (
-              <div key={label} className="rounded-md border border-border bg-s2 px-3 py-2.5">
+              <div key={label} className="card-surface rounded-md bg-s2 px-3 py-2.5">
                 <div className="text-[12px] text-muted-foreground">{label}</div>
                 <div className="font-mono text-[14px] font-semibold text-foreground tabular-nums">
                   {val}

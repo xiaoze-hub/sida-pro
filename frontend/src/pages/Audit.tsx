@@ -62,7 +62,7 @@ export default function AuditPage() {
     <div className="sida-page-enter w-full space-y-4 md:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 md:gap-3">
-          <div className="w-9 h-9 md:w-10 md:h-10 rounded-xl bg-accent flex items-center justify-center shadow-sm border border-border">
+          <div className="card-surface w-9 h-9 md:w-10 md:h-10 rounded-xl bg-accent flex items-center justify-center shadow-sm ">
             <ScrollText className="w-4 h-4 md:w-5 md:h-5 text-foreground" />
           </div>
           <div>
