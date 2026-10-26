@@ -6,7 +6,7 @@
 
 | 指标 | 数值 |
 | --- | --- |
-| API 路由（`src/web/api/*.py` 装饰器） | **537** |
+| API 路由（`src/web/api/*.py` 装饰器） | **541** |
 | 平台表（models ∪ migrations） | **141** |
 | 　其中 `models.py` `__tablename__` | 97 |
 | 　仅 `migrations.py` 声明（含 hypertable） | 44 |
@@ -172,7 +172,7 @@
 
 | 域 id | 匹配路由数 | 示例路径 |
 | --- | --- | --- |
-| `ops.config` | 33 | GET /secrets/status, GET /health, POST /login |
+| `ops.config` | 34 | GET /secrets/status, GET /health, POST /login |
 | `portfolio.risk` | 14 | GET /positions, POST /positions, PUT /positions/{position_id} |
 | `stock.flow` | 14 | GET /fund-structure/{symbol}, GET /{symbol}/pool-flow-series, GET /capital-flow/{symbol} |
 | `strategy.signal` | 11 | GET /backtest, GET /strategy-catalog, GET /strategy-signals |
@@ -189,5 +189,5 @@
 | `stock.chip` | 1 | GET /chip-daily |
 | `limit.pool` | 1 | GET /ladder |
 
-可粗映射到域的路由：112 / 537 = 20.9%；其余属认证/运维/未归类。
+可粗映射到域的路由：113 / 541 = 20.9%；其余属认证/运维/未归类。
 

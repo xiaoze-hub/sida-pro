@@ -1,3 +1,33 @@
+## release: v0.81.0（合并今日两支：统一分析工作台 + Actions 依赖升级）
+
+按「先取今日分支、合并部署」执行。今日有提交的分支只有两支：
+
+### 1. `feat/ui-system-20261026`（9 提交 / 354 文件 / +8461 −6132）
+- 统一分析工作台界面与交互准则（无描边卡片、模块交互重整）
+- 助手动画形象与共享迷你会话、缓存增量刷新的系统状态拓扑
+- 侧栏收起底部工具与浮层越界修复、仅保留首页的页签「关闭全部」
+- 持仓关注股切换并隔离同码（个股/指数）
+- 全新数据库布尔字段默认值修复（`src/db/models.py` + 37 例新测试）
+- 新增 `tests/test_system_status.py`(148 行)、`tests/test_schema_boolean_defaults.py`
+
+**冲突两处，逐处说明：**
+- `deep-analysis-modal.tsx`：分支把字号 11→12px 并仍写「PanWatch」，本仓已改「SIDA」
+  → 取**分支的 12px** + 保留本仓 SIDA 文案。
+- `CHANGELOG.md`：两侧条目全部保留（本仓 docs 清理条目 + 分支 76 行）。
+
+**新依赖**：`lottie-web@5.13.0`（助手动画），`pnpm install` 已装。
+
+### 2. `dependabot/github_actions`（9 个 Actions 版本升级）
+只动 `.github/workflows/`（pullfrog / spec-gate / nightly 等），7 文件 29 行。
+它自己的 PR run 曾是红的 —— 原因是**基于旧基线的注册表计数钉子**（77 vs 78），
+本机那批已在 v0.80.0 修好，合并后不复现。
+
+### 合并后门禁（本机实测）
+- 前端：tsc 0 / eslint 0 / ui-rules OK / **250 files · 1878 tests 全绿**（合并带来 14 文件 60 例）
+- 后端定向：注册表/工具目录/体检报告/系统状态/去重 **196 例全绿**
+- 静态：`check_scoped_queries` / `check_is_pg_scope` / `gen_data_catalog --check` 全 OK
+- 数据目录文档随分支新增 4 条路由更新：537 → **541**
+
 ## docs: 清空 docs 根层的开发设计/方案/审计文档（2026-10-26）
 
 用户要求「docs 文件夹下面不要把开发设计方案留在上面」。按用途把根层 49 份 md 分成两类：
