@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Monitor, Moon, Sun, ZoomIn } from 'lucide-react'
 import { cn } from '@panwatch/base-ui'
 import { useTheme, type Density } from '@/hooks/use-theme'
+import { AssistantAvatarPicker } from '@/components/AssistantAvatarPicker'
 
 /**
  * 外观设置(2026-09-22): 密度 / 主题 / Dim / 焦点模式。
@@ -113,6 +114,7 @@ export function AppearanceSection() {
           焦点模式(收起侧栏与免责条, 只留一枚 chip)
         </label>
       </div>
+      <AssistantAvatarPicker />
     </section>
   )
 }

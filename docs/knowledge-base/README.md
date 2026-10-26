@@ -80,3 +80,5 @@ python3 scripts/build_project_knowledge.py --baseline HEAD --check
 当前界面与交互规则见 [UI_GUIDELINES.md](../UI_GUIDELINES.md)，覆盖主题、Header/Toolbar、Chip、数据网格、浮层、移动端与 CI 门禁。历史视觉研究不替代当前规范。
 
 模块与菜单的布局、分类、折叠和浮层选择见 [UI 模块复查记录](../UI_MODULE_REVIEW_20261026.md)。
+
+AI 助手由 `frontend/src/components/AssistantWorkspace.tsx` 持有单一会话实例，完整页与迷你窗复用 `frontend/src/pages/AiCopilot.tsx`；形象和本机偏好入口为 `AssistantAvatar.tsx`、`AssistantAvatarPicker.tsx` 与 `lib/assistant-avatar.ts`。动画与显示规范见 [UI 准则第 8 节](../UI_GUIDELINES.md#8-ai-助手形象与会话)。

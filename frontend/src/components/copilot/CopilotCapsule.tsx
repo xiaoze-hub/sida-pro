@@ -11,6 +11,7 @@ import {
   QUICK_QUESTIONS,
 } from '@/lib/copilot/copy'
 import { registerCapsulePresence } from '@/lib/copilot/capsule-presence'
+import { useTabActive } from '@panwatch/base-ui'
 import { toneBar, toneMeta } from '@/lib/copilot/tone'
 import type { CopilotBrief } from '@/lib/copilot/types'
 
@@ -123,7 +124,8 @@ export function CopilotCapsule({
   posRef.current = pos
 
   // 入口唯一性登记：挂载即声明"工作台已有胶囊，FAB 让位"。
-  useEffect(() => registerCapsulePresence(), [])
+  const tabActive = useTabActive()
+  useEffect(() => tabActive ? registerCapsulePresence() : undefined, [tabActive])
 
   useEffect(() => {
     try {

@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
 
 /** 对话工作区使用实际顶栏高度计算可见区域，状态换行和手机底部导航不能挡住输入。 */
-export function useViewportPanel() {
+export function useViewportPanel(enabled = true) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const panel = ref.current
+    if (!enabled) { panel?.style.removeProperty('height'); return }
     if (!panel || typeof ResizeObserver === 'undefined') return
     const update = () => {
       const rect = panel.getBoundingClientRect()
@@ -29,6 +30,6 @@ export function useViewportPanel() {
       window.removeEventListener('resize', update)
       window.visualViewport?.removeEventListener('resize', update)
     }
-  }, [])
+  }, [enabled])
   return ref
 }

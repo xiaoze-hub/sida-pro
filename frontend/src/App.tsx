@@ -14,7 +14,6 @@ const DashboardPage = lazyWithRetry(() => import('@/pages/Dashboard'), 'dashboar
 const OpportunitiesPage = lazyWithRetry(() => import('@/pages/Opportunities'), 'opportunities-page')
 const AuctionPage = lazyWithRetry(() => import('@/pages/Auction'), 'auction-page')
 // AI 数智参谋一级工作台(2026-10-18, 设计稿 §8.8/§9): 筹码·共振·量价·盘口·竞价·妖股因子全量穿透
-const AiCopilotPage = lazyWithRetry(() => import('@/pages/AiCopilot'), 'ai-copilot-page')
 const CopilotGovernancePage = lazyWithRetry(() => import('@/pages/CopilotGovernance'), 'copilot-governance-page')
 // 参谋任务列表(2026-10-25): 只读回放每轮问答 —— 状态/问题/配方/工具数/耗时/时间, 点行展开工具步骤
 const CopilotRunsPage = lazyWithRetry(() => import('@/pages/copilot/RunsPage'), 'copilot-runs-page')
@@ -76,6 +75,8 @@ const AdminPage = lazyWithRetry(() => import('@/pages/Admin'), 'admin-page')
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
+import { AssistantWorkspaceProvider, AssistantPageHost } from '@/components/AssistantWorkspace'
+import { AssistantAvatar } from '@/components/AssistantAvatar'
 import { BrandMark } from '@/components/BrandMark'
 import SessionPhaseChip, { sessionPhaseOf, type SessionInfo } from '@panwatch/biz-ui/components/SessionPhaseChip'
 import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
@@ -518,6 +519,7 @@ function App() {
 
   return (
     <RequireAuth>
+    <AssistantWorkspaceProvider enabled={!isNavHiddenForPerm({ perm: 'view_quotes' }, myPerms)}>
     <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
       <BrowserNotificationBridge />
       {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}
@@ -557,7 +559,6 @@ function App() {
             if (!ai) return null
             if (isNavHiddenForRole(ai) || isNavHiddenForPerm(ai, myPerms)) return null
             if (isGuestUser() && isNavHiddenForGuest(ai.to)) return null
-            const Icon = ai.icon
             const label = t(ai.labelKey)
             const active = isNavItemActive(ai.to, location.pathname)
             return (
@@ -566,15 +567,15 @@ function App() {
                 title={label}
                 data-testid="nav-ai-copilot"
                 aria-current={active ? 'page' : undefined}
-                className={`ai-tool-entry mb-4 flex min-h-16 items-center gap-2.5 rounded-lg px-3 py-3 transition-colors border border-transparent ${
+                className={`ai-tool-entry mb-4 flex min-h-16 items-center gap-2.5 rounded-xl px-3 py-3 transition-colors ${
                   sidebarCollapsed ? 'justify-center px-0' : ''
                 } ${
                   active
-                    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                    : 'bg-s3 text-accent-foreground hover:bg-primary/10'
+                    ? 'bg-s3 text-foreground hover:bg-s2'
+                    : 'bg-card text-foreground hover:bg-s2'
                 }`}
               >
-                <Icon className="h-5 w-5 shrink-0" />
+                <AssistantAvatar size={sidebarCollapsed ? 32 : 44} />
                 {!sidebarCollapsed && (
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-semibold">AI 分析助手</span>
@@ -658,7 +659,7 @@ function App() {
       </aside>
 
       {/* Mobile Top Bar */}
-      <div className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2 md:hidden">
+      <div data-mobile-header className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2 md:hidden">
         <header className="card px-4">
           <div className="h-12 flex items-center justify-between">
             <NavLink to="/" className="flex shrink-0 items-center gap-2 group">
@@ -767,7 +768,7 @@ function App() {
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
               <Route path="/auction" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><AuctionPage /></PermGuard>} />
               {/* AI 数智参谋一级工作台(2026-10-18): 登录 + view_quotes 即可进(与 /stocks/:symbol 同档) */}
-              <Route path="/ai-copilot" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AiCopilotPage /></PermGuard>} />
+              <Route path="/ai-copilot" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AssistantPageHost /></PermGuard>} />
               <Route path="/copilot-governance" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotGovernancePage /></PermGuard>} />
               {/* 参谋任务列表(2026-10-25): 只读, 与治理看板同档权限(view_quotes) */}
               <Route path="/copilot/runs" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunsPage /></PermGuard>} />
@@ -913,6 +914,7 @@ function App() {
         </DialogContent>
       </Dialog>
     </div>
+    </AssistantWorkspaceProvider>
     </RequireAuth>
   )
 }

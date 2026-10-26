@@ -278,6 +278,20 @@
 }
 
 /* v0.4.7: 图表骨架扫光 */
+@keyframes sida-assistant-breathe {
+  0%, 100% { transform: scale(0.96); }
+  50% { transform: scale(1.04); }
+}
+.assistant-avatar-motion {
+  transform-origin: center;
+  animation: sida-assistant-breathe 4s ease-in-out infinite;
+  animation-play-state: paused;
+}
+[data-animated="true"] > .assistant-avatar-motion { animation-play-state: running; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-avatar-motion { animation: none; transform: none; }
+}
+
 @keyframes shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }

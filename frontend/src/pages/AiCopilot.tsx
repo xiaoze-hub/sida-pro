@@ -1,4 +1,6 @@
 import { useViewportPanel } from '@/hooks/useViewportPanel'
+import { AssistantAvatar } from '@/components/AssistantAvatar'
+import type { AssistantEntry } from '@/components/AssistantWorkspace'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { safeFixed } from '@/lib/format'
 import {
@@ -120,7 +122,9 @@ const SYMBOL_RE = /^[03468]\d{5}$/
  * 复用而非重写：SSE 走 `chatApi.sendMessageStream`（已含 stage/delta/done/error 与 signal），
  * 不在这里解析流；渲染走 SafeMarkdown（统一 sanitize 策略）。
  */
-export default function AiCopilotPage() {
+export default function AiCopilotPage({ presentation = 'page', visible = true, onBusyChange, entry, entrySearch }: {
+  presentation?: 'page' | 'mini'; visible?: boolean; onBusyChange?: (busy: boolean) => void; entry?: AssistantEntry | null; entrySearch?: string
+} = {}) {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [stage, setStage] = useState('')
@@ -138,11 +142,14 @@ export default function AiCopilotPage() {
     symbol?: string
   } | null>(null)
   const [streaming, setStreaming] = useState(false)
+  const [backgroundPending, setBackgroundPending] = useState(false)
+  const consumedEntry = useRef<number | null>(null)
+  const initialContext = useRef<AssistantEntry | null>(null)
   // 左栏（对话列表）可折叠：默认展开，状态持久化
   const [railOpen, setRailOpen] = useState<boolean>(() =>
     readBoolPref(typeof window === 'undefined' ? null : window.localStorage, RAIL_KEY),
   )
-  const viewportPanel = useViewportPanel()
+  const viewportPanel = useViewportPanel(presentation === 'page')
   const [mobileConversationsOpen, setMobileConversationsOpen] = useState(false)
   // 右面板折叠 = panelTab 为空(它本来就是可开可关的滑出面板);
   // 用 lastPanelTabRef 记住上次那个页签, 快捷键才能"关掉再打开回原来那页"
@@ -163,7 +170,7 @@ export default function AiCopilotPage() {
   const convMgr = useConversations()
   // 2026-10-25: 内联步骤条要用 runs，所以不再只在 panelTab==='runs' 时拉取。
   // 代价是打开会话多一个轻请求（limit 20），换来「答案下面直接能看到调过什么」。
-  const runsState = useCopilotRuns({ conversationId: convId, enabled: true })
+  const runsState = useCopilotRuns({ conversationId: convId, enabled: visible })
   const [convs, setConvs] = useState<{ id: number; title: string; created_at: string }[]>([])
   const [error, setError] = useState<string | null>(null)
   /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
@@ -186,7 +193,22 @@ export default function AiCopilotPage() {
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const mounted = useRef(true)
   const scroller = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false; abortRef.current?.abort() }
+  }, [])
+  useEffect(() => { onBusyChange?.(streaming || uploading || backgroundPending) }, [streaming, uploading, backgroundPending, onBusyChange])
+  useEffect(() => {
+    if (!entry || entry.id === consumedEntry.current || streaming || backgroundPending) return
+    consumedEntry.current = entry.id
+    initialContext.current = entry
+    setConvId(null)
+    setMsgs([])
+    setError(null)
+    setAnchorSymbol(entry.symbol)
+  }, [entry, streaming, backgroundPending])
 
   /**
    * 上下文带入（P0）：从个股工作台/外部链接进来时带 `?symbol=600111`，
@@ -195,7 +217,7 @@ export default function AiCopilotPage() {
    */
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const sp = new URLSearchParams(window.location.search)
+    const sp = new URLSearchParams(entrySearch ?? window.location.search)
     const sym = (sp.get('symbol') || '').trim()
     if (SYMBOL_RE.test(sym)) setAnchorSymbol(sym)
     const q = (sp.get('q') || '').trim()
@@ -216,11 +238,11 @@ export default function AiCopilotPage() {
       setMentions((m) => (m.some((x) => mentionKey(x) === mentionKey(chip)) ? m : [...m, chip]))
     }
     void sp.get('date')
-  }, [])
+  }, [entrySearch])
 
   useEffect(() => {
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
-  }, [msgs, stage])
+    scroller.current?.scrollTo({ top: msgs.length || stage ? scroller.current.scrollHeight : 0 })
+  }, [msgs, stage, presentation])
 
   /**
    * 选择附件：图片走多模态（`image_data` 直传模型），PDF/Excel/txt 走服务端解析文本。
@@ -297,6 +319,7 @@ export default function AiCopilotPage() {
   const loadHistory = useCallback(async () => {
     try {
       const rows = await chatApi.listConversations(60)
+      if (!mounted.current) return
       setConvs((rows || []).map((c) => ({ id: c.id, title: c.title || '未命名对话', created_at: c.created_at })))
     } catch {
       setConvs([])
@@ -310,6 +333,7 @@ export default function AiCopilotPage() {
   const openConversation = useCallback(async (id: number) => {
     try {
       const detail = await chatApi.getConversation(id)
+      if (!mounted.current) return
       setConvId(id)
       setMsgs(
         (detail.messages || [])
@@ -325,6 +349,7 @@ export default function AiCopilotPage() {
   }, [])
 
   const startNewConversation = useCallback(() => {
+    initialContext.current = null
     setConvId(null)
     setMsgs([])
     setError(null)
@@ -343,6 +368,7 @@ export default function AiCopilotPage() {
    */
   const runInBackground = useCallback(
     async (question: string, attachment?: { name: string; isImage: boolean }) => {
+      setBackgroundPending(true)
       setMsgs((m) => [...m, { role: 'user', content: question, attachment }])
       setInput('')
       setAttach(null)
@@ -360,19 +386,24 @@ export default function AiCopilotPage() {
 
       try {
         const submitted = await submitCopilotRun(question, convId)
+        if (!mounted.current) return
         setLiveRunId(submitted.run_id)
         const deadline = Date.now() + 10 * 60 * 1000
         let last = null as Awaited<ReturnType<typeof getCopilotRunStatus>> | null
-        while (Date.now() < deadline) {
+        while (mounted.current && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 2000))
+          if (!mounted.current) return
           last = await getCopilotRunStatus(submitted.run_id)
+          if (!mounted.current) return
           patch(`⏳ ${progressText(last)}`)
           if (isTerminalStatus(last.status)) {
             // 竞态（2026-10-25 生产实测）：轨迹先写终态，执行体随后才补 conversation_id，
             // 前端一看到终态就断开会读到 null。补拉几次，拿到会话 id 为止（最多 ~2s）。
             for (let k = 0; k < 4 && !last.conversation_id; k += 1) {
               await new Promise((r) => setTimeout(r, 500))
+              if (!mounted.current) return
               last = await getCopilotRunStatus(submitted.run_id)
+              if (!mounted.current) return
             }
             break
           }
@@ -398,6 +429,8 @@ export default function AiCopilotPage() {
         }
       } catch (e) {
         patch(`❌ 提交失败：${e instanceof Error ? e.message : String(e)}`)
+      } finally {
+        if (mounted.current) setBackgroundPending(false)
       }
     },
     [convId, openConversation],
@@ -449,12 +482,13 @@ export default function AiCopilotPage() {
             sym
               ? {
                   stock_symbol: sym,
-                  stock_market: marketOf(sym),
-                  initial_context: `用户从【数智参谋】一级页进入，当前标的 ${sym}。`,
+                  stock_market: initialContext.current?.symbol === sym ? initialContext.current.market || marketOf(sym) : marketOf(sym),
+                  initial_context: initialContext.current?.symbol === sym && initialContext.current.pageContext ? initialContext.current.pageContext : `用户从【数智参谋】进入，当前标的 ${sym}。`,
                 }
               : { initial_context: '用户从【数智参谋】一级页进入，尚未指定标的。' },
           )
           id = conv.id
+          if (!mounted.current) return
           setConvId(id)
         }
         const ac = new AbortController()
@@ -498,24 +532,26 @@ export default function AiCopilotPage() {
       } catch (e) {
         setError(e instanceof Error ? e.message : '对话失败')
       } finally {
-        setStreaming(false)
-        // 2026-10-25: 答完刷新 run 列表 —— 否则内联步骤条摘要用的是打开会话那一刻的快照
-        // （实测新回答显示 "0 步 · -- · running"，因为 run 行在发问前就抓好了）
-        runsState.reload()
-        // 后端 run 行的最终状态可能比 SSE 收尾晚一拍，再补一次
-        window.setTimeout(() => runsState.reload(), 1600)
-        setStage('')
-        // 定稿：pending → ok（流结束了，取数阶段已经过去），然后把这条痕固化到助手消息上。
-        // 没有助手消息（首字都没出来就失败）时不铺空条 —— 空 ≠ 0/0。
-        const settled = settleReadiness(readinessRef.current)
-        readinessRef.current = emptyReadiness()
-        setReadiness(emptyReadiness())
-        if (settled.items.length) {
-          setMsgs((prev) => {
-            const last = prev[prev.length - 1]
-            if (!last || last.role !== 'assistant') return prev
-            return [...prev.slice(0, -1), { ...last, readiness: settled }]
-          })
+        if (mounted.current) {
+          setStreaming(false)
+          // 2026-10-25: 答完刷新 run 列表 —— 否则内联步骤条摘要用的是打开会话那一刻的快照
+          // （实测新回答显示 "0 步 · -- · running"，因为 run 行在发问前就抓好了）
+          runsState.reload()
+          // 后端 run 行的最终状态可能比 SSE 收尾晚一拍，再补一次
+          window.setTimeout(() => { if (mounted.current) runsState.reload() }, 1600)
+          setStage('')
+          // 定稿：pending → ok（流结束了，取数阶段已经过去），然后把这条痕固化到助手消息上。
+          // 没有助手消息（首字都没出来就失败）时不铺空条 —— 空 ≠ 0/0。
+          const settled = settleReadiness(readinessRef.current)
+          readinessRef.current = emptyReadiness()
+          setReadiness(emptyReadiness())
+          if (settled.items.length) {
+            setMsgs((prev) => {
+              const last = prev[prev.length - 1]
+              if (!last || last.role !== 'assistant') return prev
+              return [...prev.slice(0, -1), { ...last, readiness: settled }]
+            })
+          }
         }
       }
     },
@@ -531,13 +567,15 @@ export default function AiCopilotPage() {
       .catch(() => setPending([]))
   }, [])
   useEffect(() => {
+    if (!visible) return
     loadPending()
     const timer = window.setInterval(loadPending, 20_000)
     return () => window.clearInterval(timer)
-  }, [loadPending])
+  }, [loadPending, visible])
 
   // 治理块（P3, 2026-10-20）：近 7 天运行数 / 成功率 / 平均工具数 / P95 耗时。
   useEffect(() => {
+    if (!visible) return
     let cancelled = false
     const load = () => {
       void getCopilotMetrics(7)
@@ -550,7 +588,7 @@ export default function AiCopilotPage() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [])
+  }, [visible])
 
   const act = useCallback(
     async (id: number, kind: 'apply' | 'reject') => {
@@ -574,7 +612,9 @@ export default function AiCopilotPage() {
    * 判定逻辑在 lib/copilot/layout.ts（可单测），这里只做接线。
    */
   useEffect(() => {
+    if (!visible) return
     const onKey = (e: KeyboardEvent) => {
+      if (presentation === 'mini' && !viewportPanel.current?.contains(document.activeElement)) return
       const t = e.target as HTMLElement | null
       const tag = (t?.tagName ?? '').toLowerCase()
       const inEditable =
@@ -608,7 +648,7 @@ export default function AiCopilotPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [input, send, streaming, startNewConversation, setPanelTab])
+  }, [input, send, streaming, startNewConversation, setPanelTab, visible, presentation, viewportPanel])
 
   /** 空态第四格用：最近一次运行（真实数据；没有就是 null，界面显示"还没有运行记录"） */
   const lastRun = runsState.runs.length > 0 ? runsState.runs[0] : null
@@ -616,6 +656,8 @@ export default function AiCopilotPage() {
   const runForMessage = (i: number) => matchRunForMessage(msgs, runsState.runs, i)
 
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
+  const awaitingAssistant = streaming && !streamingAssistant
+  const lastAssistantIndex = msgs.reduce((last, message, index) => message.role === 'assistant' ? index : last, -1)
 
   const conversationList = (
     <ConversationSidebar
@@ -635,13 +677,13 @@ export default function AiCopilotPage() {
   )
 
   return (
-    <div ref={viewportPanel} className="relative flex min-h-[240px] h-[calc(100dvh-15rem)] gap-4 lg:h-[calc(100dvh-10rem)]" data-testid="ai-copilot-page">
+    <div ref={viewportPanel} className={`relative flex min-h-0 gap-4 ${presentation === 'mini' ? 'h-full' : 'min-h-[240px] h-[calc(100dvh-15rem)] lg:h-[calc(100dvh-10rem)]'}`} data-testid="ai-copilot-page" data-presentation={presentation}>
       {/* 左：战术指令池（按时段分层：今日推荐 3 + 更多） */}
       {/*
         2026-10-26 二次精简（按用户指令）：预设整块去掉，左栏只保留**对话列表**，
         并给它一个可折叠开关（状态存 localStorage）。页面不再有"预设/对话"两个 tab。
       */}
-      {railOpen ? (
+      {railOpen && presentation === 'page' ? (
         <aside
           className="card hidden w-[232px] shrink-0 flex-col p-3 lg:flex"
           data-testid="copilot-conversation-rail"
@@ -688,10 +730,10 @@ export default function AiCopilotPage() {
           </div>
         ) : null}
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5">
-          <button type="button" className="flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-[12px] text-foreground hover:bg-s2 lg:hidden" aria-expanded={mobileConversationsOpen} aria-controls="copilot-mobile-conversations" onClick={() => setMobileConversationsOpen((value) => !value)}>
+          <button type="button" className={`flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-[12px] text-foreground hover:bg-s2 ${presentation === 'page' ? 'lg:hidden' : ''}`} aria-expanded={mobileConversationsOpen} aria-controls="copilot-mobile-conversations" onClick={() => setMobileConversationsOpen((value) => !value)}>
             <PanelLeftOpen className="h-4 w-4" /> 对话
           </button>
-          {!railOpen ? (
+          {!railOpen && presentation === 'page' ? (
             <button
               type="button"
               onClick={() => {
@@ -780,7 +822,7 @@ export default function AiCopilotPage() {
         </div>
 
         {mobileConversationsOpen ? (
-          <div id="copilot-mobile-conversations" className="max-h-[320px] overflow-y-auto border-b border-border bg-card p-3 lg:hidden">
+          <div id="copilot-mobile-conversations" className={`max-h-[320px] overflow-y-auto border-b border-border bg-card p-3 ${presentation === 'page' ? 'lg:hidden' : ''}`}>
             {conversationList}
           </div>
         ) : null}
@@ -861,6 +903,7 @@ export default function AiCopilotPage() {
 
           {!msgs.length ? (
             <div className="flex min-h-[300px] flex-1 flex-col items-center justify-center gap-3 text-center">
+              <AssistantAvatar size={presentation === 'mini' ? 80 : 112} label="AI 分析助手" />
               <div className="text-[12px] text-muted-foreground">{PAGE_EMPTY_HINT}</div>
               {/* w-full + items-stretch: 之前是 items-start, 按钮 w-full 在居中容器里宽度塌成 0,
                   结果只剩右侧 › 可见(视觉复核发现的"空描边横条") */}
@@ -875,7 +918,7 @@ export default function AiCopilotPage() {
                     onClick={() => void send(x)}
                     disabled={streaming}
                     data-testid="copilot-empty-example"
-                    className="group flex min-h-[64px] items-start gap-2 rounded-xl border border-border bg-card p-3 text-left text-[12px] leading-relaxed text-foreground transition-colors hover:border-role-watch/60 hover:bg-muted disabled:opacity-60"
+                    className="card-surface group flex min-h-[64px] items-start gap-2 rounded-xl bg-s2 p-3 text-left text-[14px] leading-relaxed text-foreground transition-colors hover:bg-s3 disabled:opacity-60"
                   >
                     <span className="min-w-0 flex-1">{x}</span>
                     <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground group-hover:text-role-watch" />
@@ -884,7 +927,7 @@ export default function AiCopilotPage() {
                 <a
                   href={lastRun ? `/copilot/runs/${lastRun.run_id}` : undefined}
                   data-testid="copilot-empty-last-run"
-                  className={`flex min-h-[64px] flex-col justify-between rounded-xl border border-border p-3 text-left text-[12px] ${
+                  className={`card-surface flex min-h-[64px] flex-col justify-between rounded-xl p-3 text-left text-[14px] ${
                     lastRun ? 'bg-card text-foreground hover:bg-muted' : 'bg-card text-muted-foreground'
                   }`}
                 >
@@ -905,12 +948,13 @@ export default function AiCopilotPage() {
           ) : null}
 
           {msgs.map((m, i) => (
-            <div key={`${m.role}-${i}`} className={m.role === 'user' ? 'text-right' : ''}>
+            <div key={`${m.role}-${i}`} className={m.role === 'user' ? 'flex justify-end text-right' : 'flex items-start gap-3'} data-assistant-bubble={m.role === 'assistant' ? i === lastAssistantIndex && !awaitingAssistant ? 'latest' : 'history' : undefined}>
+              {m.role === 'assistant' && (i === lastAssistantIndex && !awaitingAssistant ? <AssistantAvatar size={40} busy={streamingAssistant || backgroundPending} /> : <span className="w-10 shrink-0" aria-hidden="true" />)}
               <div
                 className={'card-surface ' + (
  m.role === 'user'
- ? 'inline-block max-w-[86%] rounded-lg bg-s3 px-2.5 py-1.5 text-[12px]'
- : 'rounded-lg bg-s2 px-2.5 py-2 text-[12px] leading-relaxed'
+ ? 'inline-block max-w-[86%] rounded-xl bg-s3 px-3 py-2 text-[14px]'
+ : 'min-w-0 flex-1 rounded-xl bg-s2 px-3 py-3 text-[14px] leading-relaxed'
  )}
               >
                 {m.role === 'user' ? (
@@ -997,7 +1041,7 @@ export default function AiCopilotPage() {
 
           {/* 首字未到、但已经在取数：齐套度条先挂在流尾（气泡一出现就挪进气泡顶部）。
               能认出工具的 stage 不进这条 spinner —— 它已经被上面的 pill 取代。 */}
-          {readiness.items.length && !streamingAssistant ? (
+          {readiness.items.length && !streamingAssistant && !awaitingAssistant ? (
             <EvidenceReadinessStrip
               items={readiness.items}
               done={readiness.done}
@@ -1005,7 +1049,15 @@ export default function AiCopilotPage() {
               failed={readiness.failed}
             />
           ) : null}
-          {stage && !parseStageLabel(stage) ? (
+          {awaitingAssistant ? (
+            <div className="flex items-start gap-3" data-assistant-bubble="pending">
+              <AssistantAvatar size={40} busy />
+              <div className="min-w-0 flex-1 space-y-2 rounded-xl bg-s2 px-3 py-3 text-[14px] text-muted-foreground" role="status">
+                {!!readiness.items.length && <EvidenceReadinessStrip items={readiness.items} done={readiness.done} total={readiness.total} failed={readiness.failed} />}
+                <p>{parseStageLabel(stage) ? '正在整理分析证据…' : stage || '正在分析数据…'}</p>
+              </div>
+            </div>
+          ) : stage && !parseStageLabel(stage) ? (
             <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               {stage}

@@ -6,7 +6,7 @@
  *  - 回答按【结论】/【依据】渲染成卡片，依据可展开、带追问 chips；
  *  - 非模板回答回退 markdown 原文（不吃掉回答）。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMock = vi.hoisted(() => ({
@@ -43,6 +43,9 @@ vi.mock('../../src/lib/copilot/symbolChips', () => ({
 vi.mock('../../src/components/SafeMarkdown', () => ({
   default: ({ children }: { children: string }) => <div data-testid="md-fallback">{children}</div>,
 }))
+vi.mock('../../src/components/AssistantAvatar', () => ({
+  AssistantAvatar: ({ busy = false }: { busy?: boolean }) => <span data-testid="bot-avatar" data-busy={String(busy)} />,
+}))
 vi.mock('../../src/components/copilot/CopilotBriefCard', () => ({
   CopilotBriefCard: ({ symbol }: { symbol: string }) => <div data-testid="brief-card">{symbol}</div>,
 }))
@@ -77,6 +80,44 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('数智参谋 P0/P1', () => {
+  it('退出助手时中止当前回复流，避免跨账号保留请求', async () => {
+    let finish!: () => void
+    let signal: AbortSignal | undefined
+    apiMock.sendMessageStream.mockImplementation((_id, _content, _handlers, streamSignal) => {
+      signal = streamSignal
+      return new Promise<void>(resolve => { finish = resolve })
+    })
+    const view = render(<AiCopilotPage />)
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '检查界面状态' } })
+    fireEvent.click(screen.getByLabelText('发送'))
+    await waitFor(() => expect(signal).toBeTruthy())
+    view.unmount()
+    expect(signal?.aborted).toBe(true)
+    await act(async () => finish())
+  })
+
+  it('仅最后一个 AI 气泡显示形象，等待与流式书写时提速，完成后回到空闲态', async () => {
+    apiMock.sendMessageStream.mockImplementation(async (_id, _content, handlers) => { handlers.onDelta('首条界面测试说明。') })
+    const view = render(<AiCopilotPage />)
+    const input = screen.getByPlaceholderText(/问点什么|补充说明/)
+    fireEvent.change(input, { target: { value: '测试首条说明' } })
+    fireEvent.click(screen.getByLabelText('发送'))
+    await waitFor(() => expect(view.container.querySelector('[data-assistant-bubble="latest"] [data-busy="false"]')).toBeTruthy())
+    let finish!: () => void
+    let delta!: (text: string) => void
+    apiMock.sendMessageStream.mockImplementation((_id, _content, handlers) => new Promise<void>(resolve => { finish = resolve; delta = handlers.onDelta }))
+    fireEvent.change(input, { target: { value: '再次说明' } })
+    fireEvent.click(screen.getByLabelText('发送'))
+    await waitFor(() => expect(view.container.querySelector('[data-assistant-bubble="pending"] [data-busy="true"]')).toBeTruthy())
+    expect(view.container.querySelector('[data-assistant-bubble="history"] [data-testid="bot-avatar"]')).toBeNull()
+    await waitFor(() => expect(delta).toBeTypeOf('function'))
+    act(() => delta('正在书写新的界面测试说明。'))
+    await waitFor(() => expect(view.container.querySelector('[data-assistant-bubble="latest"] [data-busy="true"]')).toBeTruthy())
+    expect(view.container.querySelector('[data-assistant-bubble="pending"]')).toBeNull()
+    await act(async () => finish())
+    await waitFor(() => expect(view.container.querySelector('[data-assistant-bubble="latest"] [data-busy="false"]')).toBeTruthy())
+    expect(view.container.querySelectorAll('[data-assistant-bubble] [data-testid="bot-avatar"]').length).toBe(1)
+  })
   it('?symbol= 只带入锚点，不自动拉参谋卡（brief 接口重，避免进页面就卡 10s+）', async () => {
     window.history.pushState({}, '', '/ai-copilot?symbol=600111')
     render(<AiCopilotPage />)
