@@ -123,7 +123,11 @@ def test_cold_start_then_incremental_only_after_cursor(monkeypatch):
     t2 = df._fetch_all_ticks(CODE)
 
     assert 0 not in fake.requested, "增量续拉不得重翻第 0 页"
-    assert fake.requested == sorted(fake.requested)
+    # ⚠️ 不能再断言全局有序：抓取是 ThreadPoolExecutor(5) **批内并发**，
+    # 请求到达顺序天然乱序（CI 上实测 [1,3,4,2]）。这里验真正的意图：
+    #   ① 同一页不重复请求；② 全部落在游标之后（不倒退、不重翻）。
+    assert len(fake.requested) == len(set(fake.requested)), "同一页被重复请求"
+    assert min(fake.requested) >= cursor_page, "增量续拉出现了游标之前的页"
     assert min(fake.requested) == cursor_page, "必须从缓存末游标(重拉末页)起"
     assert len(t2) == 210                        # 3 页去重合并(旧 140 + 新尾页增量)
     assert df._FETCH_META[CODE]["origin"] == "incremental"
