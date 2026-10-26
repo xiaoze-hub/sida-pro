@@ -11,7 +11,7 @@ NC='\033[0m' # No Color
 VERSION=${1:-"latest"}
 IMAGE_NAME="xiaoze-hub/stock-intelligent-data-analytics"
 
-echo -e "${GREEN}🚀 PanWatch 构建脚本${NC}"
+echo -e "${GREEN}🚀 SIDA 构建脚本${NC}"
 echo -e "版本: ${YELLOW}${VERSION}${NC}"
 echo ""
 

@@ -52,7 +52,7 @@ class TestPayload:
 
 class TestEndpoint:
     def _resp(self, r):
-        """PanWatch 统一响应包装: {code, success, data}"""
+        """SIDA 统一响应包装: {code, success, data}"""
         return r.json().get("data", r.json())
 
     def test_no_secret_env_disabled(self):
@@ -75,7 +75,7 @@ class TestEndpoint:
             r = client.post(
                 "/api/webhooks/tradingview",
                 json={"ticker": "600519", "close": 1234.5},
-                headers={"X-PanWatch-Secret": "wrong"},
+                headers={"X-SIDA-Secret": "wrong"},
             )
             assert r.status_code == 200
             assert self._resp(r)["ok"] is False
@@ -91,7 +91,7 @@ class TestEndpoint:
                 r = client.post(
                     "/api/webhooks/tradingview",
                     json={"ticker": "600519", "close": 1234.5, "message": "买"},
-                    headers={"X-PanWatch-Secret": "test-secret-123"},
+                    headers={"X-SIDA-Secret": "test-secret-123"},
                 )
                 assert r.status_code == 200
                 assert self._resp(r)["ok"] is True

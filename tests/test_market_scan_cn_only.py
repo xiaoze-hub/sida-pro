@@ -309,7 +309,7 @@ class TestStocksDedupeMigration:
         """对当前 data/panwatch.db 的副本跑迁移, 确认可成功执行且不报错。"""
         import os
         import shutil
-        src = "/tmp/PanWatch/data/panwatch.db"
+        src = "/tmp/SIDA/data/panwatch.db"
         dst = tmp_path / "copy.db"
         if not os.path.exists(src):
             pytest.skip("开发库不存在")

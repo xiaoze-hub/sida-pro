@@ -28,7 +28,7 @@ from src.agents.tradingagents.llm_adapter import (
     inject_api_key_env,
 )
 from src.agents.tradingagents.progress import (
-    PanWatchProgressHandler,
+    SIDAProgressHandler,
     aggregate_progress,
     STAGES_ORDER,
 )
@@ -245,7 +245,7 @@ class TestToolkitAdapter(unittest.TestCase):
 class TestProgress(unittest.TestCase):
     def test_progress_handler_records_cost(self):
         """ProgressHandler — record_cost 累加 total_cost"""
-        handler = PanWatchProgressHandler(trace_id="test-123")
+        handler = SIDAProgressHandler(trace_id="test-123")
         handler.record_cost(0.01)
         handler.record_cost(0.02)
         self.assertAlmostEqual(handler._total_cost, 0.03)

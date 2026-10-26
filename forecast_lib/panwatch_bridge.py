@@ -1,4 +1,4 @@
-"""从 PanWatch 主后端(8000, 容器内 marketdata/tdx 数据源)获取主力资金数据。
+"""从 SIDA 主后端(8000, 容器内 marketdata/tdx 数据源)获取主力资金数据。
 
 为什么不用 8010 直连:
 - 8010 宿主机没有 marketdata 包(在 8000 容器内)
@@ -11,7 +11,7 @@
   见 https://www.tdx.com.cn/skillhub/ §21。skill 模板是问小达经过训练的固定 prompt,
   MCP 层仍走 tdx_screener,只是 message 用更精准的 skill 触发句。
 
-依赖: `SIDA_MAIN_API_URL` 指向健康可访问的 PanWatch 主后端。
+依赖: `SIDA_MAIN_API_URL` 指向健康可访问的 SIDA 主后端。
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def _parse_extra_columns(d) -> dict:
 
 
 def fetch_capital_flow(symbol: str, days: int = 5) -> list:
-    """获取主力资金数据(经 PanWatch 8000, tdx-main-position skill 模板)。
+    """获取主力资金数据(经 SIDA 8000, tdx-main-position skill 模板)。
 
     返回 list of dict(单元素或聚合), 结构:
       [{

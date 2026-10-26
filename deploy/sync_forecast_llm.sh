@@ -1,9 +1,9 @@
 #!/bin/bash
 # ============================================================
-# 同步 PanWatch 默认 AI 模型 → 预测引擎配置
-# 用途: 预测引擎的 LLM 情绪打分跟随 PanWatch 设置页的默认模型
+# 同步 SIDA 默认 AI 模型 → 预测引擎配置
+# 用途: 预测引擎的 LLM 情绪打分跟随 SIDA 设置页的默认模型
 # 用法: bash sync_forecast_llm.sh
-# 效果: 读 PanWatch providers API(默认模型) → 写 ~/.panwatch_forecast.env
+# 效果: 读 SIDA providers API(默认模型) → 写 ~/.panwatch_forecast.env
 #       (LLM_BASE_URL / LLM_MODEL / LLM_API_KEY)
 # ============================================================
 set -e
@@ -17,7 +17,7 @@ if [ -z "$PASSWORD" ]; then
 fi
 ENV_FILE="${ENV_FILE:-$HOME/.panwatch_forecast.env}"
 
-echo "▶ 登录 PanWatch..."
+echo "▶ 登录 SIDA..."
 TOKEN=$(curl -s -X POST "$PANWATCH_URL/api/auth/login" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | \

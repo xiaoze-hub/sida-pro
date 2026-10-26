@@ -1,6 +1,6 @@
 """预测回测 API:代理到独立预测引擎服务(:8010)。
 
-PanWatch 前端预测页调用本 API,后端转发到 Hermes 主机的
+SIDA 前端预测页调用本 API,后端转发到 Hermes 主机的
 forecast_server.py(:8010),避免前端直连内部端口。
 """
 from __future__ import annotations
@@ -73,7 +73,7 @@ FORECAST_ENGINE_URL = _detect_engine_url()
 
 
 def _log_forecast(level: str, msg: str, task_id: str = "", **extra):
-    """把预测日志写入 PanWatch 统一日志表(带 agent_name=forecast)。
+    """把预测日志写入 SIDA 统一日志表(带 agent_name=forecast)。
 
     用 log_context 绑定 agent_name + trace_id,前端日志中心可筛选"预测"链路。
     """
@@ -460,7 +460,7 @@ async def forecast_report_get(
 async def forecast_report_push(payload: dict):
     """推送报告到企微(经 Hermes webhook 中转)。
 
-    推送前调 PanWatch 已配置的资金流数据源(marketdata/tdx/wudao)拿准确的
+    推送前调 SIDA 已配置的资金流数据源(marketdata/tdx/wudao)拿准确的
     东财口径主力净流入, 注入 payload.capital_flow, 供 8010 拼报告使用。
     """
     try:

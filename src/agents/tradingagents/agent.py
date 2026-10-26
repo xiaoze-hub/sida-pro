@@ -1,9 +1,9 @@
-"""TradingAgentsAgent — PanWatch 的 BaseAgent 子类,集成 TauricResearch/TradingAgents。
+"""TradingAgentsAgent — SIDA 的 BaseAgent 子类,集成 TauricResearch/TradingAgents。
 
 设计要点(详见 .docs/tradingagents/02-technical-design.md):
-1. collect() 走 PanWatch Provider Orchestrator,4 类数据并发拉
+1. collect() 走 SIDA Provider Orchestrator,4 类数据并发拉
 2. analyze() 重写,不走单次 ai_client.chat,而是调 TradingAgentsGraph
-3. monkeypatch route_to_vendor 让 TradingAgents 拿到 PanWatch 数据(A 股专用)
+3. monkeypatch route_to_vendor 让 TradingAgents 拿到 SIDA 数据(A 股专用)
 4. progress callback + cost tracker + 月度预算 + 同日缓存
 """
 
@@ -31,7 +31,7 @@ from src.agents.tradingagents.portfolio_context import (
     build_stock_metadata_context,
     patch_propagator,
 )
-from src.agents.tradingagents.progress import PanWatchProgressHandler
+from src.agents.tradingagents.progress import SIDAProgressHandler
 from src.agents.tradingagents.result_mapper import map_state_to_result
 from src.agents.tradingagents.toolkit_adapter import (
     panwatch_data_context,
@@ -242,7 +242,7 @@ class TradingAgentsAgent(BaseAgent):
     # ---- BaseAgent 抽象方法 ----
 
     async def collect(self, context: AgentContext) -> dict:
-        """从 PanWatch 数据体系收集数据,并发拉 4 类(走 marketdata 包)。"""
+        """从 SIDA 数据体系收集数据,并发拉 4 类(走 marketdata 包)。"""
         if not context.watchlist:
             raise ValueError("TradingAgents 需要至少 1 只股票")
         # 单只标的为粒度;若 watchlist 多只,取第一只
@@ -397,7 +397,7 @@ class TradingAgentsAgent(BaseAgent):
         )
 
         # 3) 进度回调
-        progress_handler = PanWatchProgressHandler(trace_id, self.name)
+        progress_handler = SIDAProgressHandler(trace_id, self.name)
 
         # 4) 渲染上下文(标的元信息 + 用户持仓)注入到 TA 的 past_context 通道
         current_price = (data.get("quote") or {}).get("current_price")
@@ -626,7 +626,7 @@ class TradingAgentsAgent(BaseAgent):
 
         步骤:
         1. inject_api_key_env 注入 API key 到环境变量
-        2. patch_route_to_vendor 让 A 股请求路由到 PanWatch 数据
+        2. patch_route_to_vendor 让 A 股请求路由到 SIDA 数据
         3. TradingAgentsGraph.propagate 跑 3-5 分钟
         4. 返回 decision + final_state + cost_usd
         """
@@ -638,7 +638,7 @@ class TradingAgentsAgent(BaseAgent):
         apply_compat_patches()
         inject_api_key_env(ai_client)
 
-        # patch + 数据上下文,确保 TradingAgents 调 route_to_vendor 时拿到 PanWatch 数据
+        # patch + 数据上下文,确保 TradingAgents 调 route_to_vendor 时拿到 SIDA 数据
         trace_id_for_ctx = getattr(progress_handler, "trace_id", "") if progress_handler else ""
         with patch_route_to_vendor(), panwatch_data_context(panwatch_data, trace_id=trace_id_for_ctx):
             graph = TradingAgentsGraph(

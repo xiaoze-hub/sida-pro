@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 
 /**
- * PanWatch PC 快捷键体系(2026-08-12)。
+ * SIDA PC 快捷键体系(2026-08-12)。
  *
  * useHotkeys 在 window 上注册全局 keydown 监听,支持:
  *  - 组合键:'mod+k' / 'mod+,' / '?'('mod' = macOS Cmd,其它平台 Ctrl;兼容 meta)

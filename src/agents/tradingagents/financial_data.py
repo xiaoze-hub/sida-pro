@@ -1,6 +1,6 @@
 """A 股财务数据采集 — 用 akshare 拉真实财务报表给 TradingAgents 分析师用。
 
-之前 PanWatch 没采集财报,fundamentals/balance/cashflow/income 工具都返回占位文本,
+之前 SIDA 没采集财报,fundamentals/balance/cashflow/income 工具都返回占位文本,
 LLM 没法做真正的基本面分析。本模块用 akshare 的 stock_financial_abstract 拉最近 2 期
 真实数据(归母净利润 / 营收 / ROE / 毛利率 / 资产负债率 / 经营现金流等),塞给
 对应工具。
@@ -118,7 +118,7 @@ def render_fundamentals_summary(data: dict) -> str:
     if not periods or not ind:
         return "[No financial data available]"
 
-    lines = ["[Real Financial Data from PanWatch (akshare)]"]
+    lines = ["[Real Financial Data from SIDA (akshare)]"]
     lines.append(f"Reporting periods: {' | '.join(_fmt_period(p) for p in periods)}")
     lines.append("")
 
@@ -154,7 +154,7 @@ def render_income_statement(data: dict) -> str:
     ind = data.get("indicators", {})
     if not periods or not ind:
         return "[No income statement data]"
-    lines = ["[Income Statement (real data from PanWatch / akshare)]"]
+    lines = ["[Income Statement (real data from SIDA / akshare)]"]
     lines.append(f"Periods: {' | '.join(_fmt_period(p) for p in periods)}")
     lines.append("")
     metrics = [
@@ -182,7 +182,7 @@ def render_balance_sheet(data: dict) -> str:
     ind = data.get("indicators", {})
     if not periods or not ind:
         return "[No balance sheet data]"
-    lines = ["[Balance Sheet (real data from PanWatch / akshare)]"]
+    lines = ["[Balance Sheet (real data from SIDA / akshare)]"]
     lines.append(f"Periods: {' | '.join(_fmt_period(p) for p in periods)}")
     lines.append("")
     metrics = [
@@ -208,7 +208,7 @@ def render_cashflow(data: dict) -> str:
     ind = data.get("indicators", {})
     if not periods or not ind:
         return "[No cash flow data]"
-    lines = ["[Cash Flow Statement (real data from PanWatch / akshare)]"]
+    lines = ["[Cash Flow Statement (real data from SIDA / akshare)]"]
     lines.append(f"Periods: {' | '.join(_fmt_period(p) for p in periods)}")
     lines.append("")
     metrics = [

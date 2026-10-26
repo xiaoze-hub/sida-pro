@@ -1,7 +1,7 @@
-"""TA load_ohlcv 接管:A股/港股走 PanWatch K线,美股透传 yfinance。
+"""TA load_ohlcv 接管:A股/港股走 SIDA K线,美股透传 yfinance。
 
 新上游 get_verified_market_snapshot → load_ohlcv 直连 yfinance,A股(无 .SS)拉不到
-→ NoMarketDataError 整个分析失败。这里验证 PanWatch 接管能为 A股构建 OHLCV,且不误伤美股。
+→ NoMarketDataError 整个分析失败。这里验证 SIDA 接管能为 A股构建 OHLCV,且不误伤美股。
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def test_build_df_columns_and_date_filter(monkeypatch):
 
 
 def test_load_ohlcv_routes_a_share_to_panwatch(monkeypatch):
-    """A股调用走 PanWatch,不触发原生 yfinance load_ohlcv。"""
+    """A股调用走 SIDA,不触发原生 yfinance load_ohlcv。"""
     monkeypatch.setattr(KlineCollector, "get_klines", lambda self, symbol, days=60: _sample_klines(10))
     real_calls = {"n": 0}
 
@@ -69,7 +69,7 @@ def test_load_ohlcv_routes_a_share_to_panwatch(monkeypatch):
 
 
 def test_load_ohlcv_passthrough_for_us(monkeypatch):
-    """美股放行原生 load_ohlcv(yfinance),不被 PanWatch 接管。"""
+    """美股放行原生 load_ohlcv(yfinance),不被 SIDA 接管。"""
     sentinel = pd.DataFrame({"Date": [pd.to_datetime("2026-01-01")], "Close": [1.0]})
     monkeypatch.setattr(ta, "_real_load_ohlcv", lambda symbol, curr_date, *a, **k: sentinel)
     out = ta._panwatch_load_ohlcv("AAPL", "2026-06-18")

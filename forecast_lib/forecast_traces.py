@@ -286,7 +286,7 @@ def record_referee_eval(
         verdict: "confirm" | "adjust"
         direction: "up" | "down" | None (confirm 时可为 None)
         reason: 裁判理由文本
-        conv_id: PanWatch 对话助手会话 id
+        conv_id: SIDA 对话助手会话 id
     """
     if not run_id:
         try:

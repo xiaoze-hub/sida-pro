@@ -29,7 +29,7 @@ _YAHOO_SYMBOLS: dict[str, str] = {
     "恒生指数": "^HSI",
 }
 
-_UA = {"User-Agent": "Mozilla/5.0 (PanWatch/1.0)"}
+_UA = {"User-Agent": "Mozilla/5.0 (SIDA/1.0)"}
 _CACHE_TTL = 300.0  # 5 分钟进程内缓存
 _cache: tuple[float, dict] | None = None
 

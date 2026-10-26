@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""SIDA / PanWatch 一键初始化数据库 (2026-08-31 新增).
+"""SIDA / SIDA 一键初始化数据库 (2026-08-31 新增).
 
 解决: 仓库无独立初始化脚本 (alembic init / setup_db / migrations.sh 都无),
 新克隆者第一次跑不动。脚本直接调用 src.web.database.init_db(), 由其负责:
@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="SIDA/PanWatch DB 一键初始化")
+    parser = argparse.ArgumentParser(description="SIDA/SIDA DB 一键初始化")
     parser.add_argument("--print-db", action="store_true", help="只打印当前 DB URL 然后退出")
     args = parser.parse_args()
 

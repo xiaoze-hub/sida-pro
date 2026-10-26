@@ -1,15 +1,15 @@
-"""把 PanWatch Provider 体系适配进 TradingAgents 数据流。
+"""把 SIDA Provider 体系适配进 TradingAgents 数据流。
 
 TradingAgents 上游(0.2.x)默认通过 `tradingagents.dataflows.interface.route_to_vendor`
 把数据请求路由到 yfinance / alpha_vantage 等 vendor。**没有公开 toolkit 注入入口**。
 
 我们的策略:**monkeypatch route_to_vendor**。当 LangGraph 节点调用 `get_stockstats_*`
-等方法时,我们的 patch 检测 symbol 是 A 股代码(6 位数字)就走 PanWatch Provider,
+等方法时,我们的 patch 检测 symbol 是 A 股代码(6 位数字)就走 SIDA Provider,
 否则放行到上游默认 vendor(yfinance 等)。
 
 这避免:
 - TradingAgents 用 yfinance 拉 A 股拉不到(A 股 yfinance 不全)
-- 重复请求外部 API(PanWatch 已有缓存的 quote/kline 直接复用)
+- 重复请求外部 API(SIDA 已有缓存的 quote/kline 直接复用)
 
 也保留:
 - US/HK 走上游 yfinance vendor 不变
@@ -30,7 +30,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-# 缓存:在 patch 上下文里把 PanWatch 拉好的数据塞这里,patch 命中时直接返回。
+# 缓存:在 patch 上下文里把 SIDA 拉好的数据塞这里,patch 命中时直接返回。
 # 用 ContextVar 而非模块级 dict:深度分析跑在 asyncio.to_thread worker 线程,
 # to_thread 会 copy_context(),每个并发任务拿到独立副本 —— 避免两只标的并发
 # 分析时互相覆盖数据(广汽 601238 的报告混入赛力斯 601127 的 K线/新闻)。
@@ -45,7 +45,7 @@ _CURRENT_TRACE_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 
 def _cache() -> dict[str, Any]:
-    """读当前 context 的 PanWatch 数据快照(并发隔离)。"""
+    """读当前 context 的 SIDA 数据快照(并发隔离)。"""
     return _PANWATCH_DATA.get()
 
 
@@ -98,10 +98,10 @@ def is_hk_share(symbol: str) -> bool:
 
 
 def is_panwatch_routable(symbol: str) -> bool:
-    """该 ticker 是否应该走 PanWatch 数据(而不是上游 yfinance)。
+    """该 ticker 是否应该走 SIDA 数据(而不是上游 yfinance)。
 
     A 股(6 位数字)yfinance 拉不到,港股(5 位数字)yfinance 也要 .HK 后缀,
-    都需要 PanWatch 兜底。美股(字母 ticker)继续走 yfinance。
+    都需要 SIDA 兜底。美股(字母 ticker)继续走 yfinance。
     """
     return is_a_share(symbol) or is_hk_share(symbol)
 
@@ -113,7 +113,7 @@ def _looks_like_cn_keyword(symbol: str) -> bool:
 
 
 def hk_symbol_to_yfinance(symbol: str) -> str:
-    """港股 PanWatch 5 位代码 → yfinance 格式。
+    """港股 SIDA 5 位代码 → yfinance 格式。
 
     阿里健康 00241 → 0241.HK
     腾讯 00700 → 0700.HK
@@ -173,7 +173,7 @@ _real_route_to_vendor = None  # 真 route_to_vendor(走上游 vendor 时用)
 
 
 def _patched_route_to_vendor(method_name: str, *args, **kwargs):
-    """模块级无状态 patch:A 股走 PanWatch(读 _cache()),港股先试上游再兜底,其余放行。
+    """模块级无状态 patch:A 股走 SIDA(读 _cache()),港股先试上游再兜底,其余放行。
 
     与上游 route_to_vendor(method, *args, **kwargs) 完全同签名。上游所有 toolkit
     都用 positional 传 ticker:
@@ -203,7 +203,7 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
         if is_panwatch_routable(cached_symbol):
             symbol = cached_symbol
 
-    # A 股:yfinance/finnhub 拉不到,直接走 PanWatch
+    # A 股:yfinance/finnhub 拉不到,直接走 SIDA
     if is_a_share(symbol) and _cache():
         try:
             result = _serve_from_panwatch(method_name, symbol, kwargs, args=args)
@@ -218,14 +218,14 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
         except NotImplementedError:
             _emit_toolkit_log(
                 "info", "MISS", method_name, symbol,
-                reason="PanWatch 未实现该 method,放行到上游",
+                reason="SIDA 未实现该 method,放行到上游",
             )
         except Exception as e:
             _emit_toolkit_log("warning", "ERROR", method_name, symbol, error=str(e)[:200])
-            return f"[PanWatch error: {e}]"
+            return f"[SIDA error: {e}]"
 
     # 港股:先把 ticker 转成 yfinance 格式(00241 → 0241.HK)试上游,
-    # yfinance 返回有数据就用,无数据(No data found / 极短返回)fallback 到 PanWatch。
+    # yfinance 返回有数据就用,无数据(No data found / 极短返回)fallback 到 SIDA。
     if is_hk_share(symbol):
         yf_symbol = hk_symbol_to_yfinance(symbol)
         new_args = list(args)
@@ -252,7 +252,7 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
             )
             return upstream_result
 
-        # yfinance 没数据 → fallback 到 PanWatch = HIT(PanWatch 兜底提供数据)
+        # yfinance 没数据 → fallback 到 SIDA = HIT(SIDA 兜底提供数据)
         if _cache():
             try:
                 result = _serve_from_panwatch(method_name, symbol, kwargs, args=args)
@@ -268,7 +268,7 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
                 pass
             except Exception as e:
                 _emit_toolkit_log("warning", "ERROR", method_name, symbol, error=str(e)[:200])
-                return f"[PanWatch error: {e}]"
+                return f"[SIDA error: {e}]"
         # 港股两边都没 = ERROR
         _emit_toolkit_log(
             "warning", "ERROR", method_name, symbol,
@@ -321,7 +321,7 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
 def patch_route_to_vendor():
     """Monkeypatch tradingagents.dataflows.interface.route_to_vendor + 所有 import sites。
 
-    当请求 A 股代码时,从 _PANWATCH_DATA(当前 context)返回 PanWatch 已拉的数据。
+    当请求 A 股代码时,从 _PANWATCH_DATA(当前 context)返回 SIDA 已拉的数据。
     非 A 股放行到原函数。
 
     引用计数 + 锁:并发的多个深度分析共享同一次安装,第一个进入者装、最后一个
@@ -347,7 +347,7 @@ def patch_route_to_vendor():
         return
 
     # 同时接管 load_ohlcv:新上游 get_verified_market_snapshot 绕过 route_to_vendor
-    # 直连 yfinance,A股/港股拉不到会 NoMarketDataError(永久安装,非 PanWatch 标的透传)。
+    # 直连 yfinance,A股/港股拉不到会 NoMarketDataError(永久安装,非 SIDA 标的透传)。
     _ensure_load_ohlcv_patched()
 
     import importlib
@@ -387,8 +387,8 @@ def patch_route_to_vendor():
 # load_ohlcv 接管
 # 新上游 get_verified_market_snapshot → market_data_validator.load_ohlcv 直连 yfinance,
 # 不经 route_to_vendor。A股(无 .SS)/港股(无 .HK)yfinance 拉不到 → NoMarketDataError,
-# 整个 TradingAgents 分析失败。这里把 A股/港股的 load_ohlcv 改走 PanWatch K线;
-# 非 PanWatch 标的(美股)透传原生 yfinance,故进程级永久安装安全、无需卸载。
+# 整个 TradingAgents 分析失败。这里把 A股/港股的 load_ohlcv 改走 SIDA K线;
+# 非 SIDA 标的(美股)透传原生 yfinance,故进程级永久安装安全、无需卸载。
 # ---------------------------------------------------------------------------
 _LOAD_OHLCV_PATCHED = False
 _real_load_ohlcv: Any = None
@@ -399,7 +399,7 @@ _LOAD_OHLCV_IMPORT_SITES = (
 
 
 def _build_panwatch_ohlcv_df(symbol: str, curr_date: str):
-    """用 PanWatch K线构建与原生 load_ohlcv 同结构的 DataFrame(Date/Open/High/Low/Close/Volume)。"""
+    """用 SIDA K线构建与原生 load_ohlcv 同结构的 DataFrame(Date/Open/High/Low/Close/Volume)。"""
     import pandas as pd
 
     from src.collectors.kline_collector import KlineCollector
@@ -433,9 +433,9 @@ def _build_panwatch_ohlcv_df(symbol: str, curr_date: str):
 
 
 def _panwatch_load_ohlcv(symbol: str, curr_date: str, *args, **kwargs):
-    """A股/港股走 PanWatch K线;美股等非 PanWatch 标的放行原生 yfinance。
+    """A股/港股走 SIDA K线;美股等非 SIDA 标的放行原生 yfinance。
 
-    A股/港股 PanWatch 拉空时**不回退 yfinance**(A股/港股在 Yahoo 无数据 + 限流,回退只会
+    A股/港股 SIDA 拉空时**不回退 yfinance**(A股/港股在 Yahoo 无数据 + 限流,回退只会
     把"K线获取失败"变成误导的"Yahoo no rows"),直接抛 NoMarketDataError 报清晰错。
     """
     if is_panwatch_routable(symbol):
@@ -443,7 +443,7 @@ def _panwatch_load_ohlcv(symbol: str, curr_date: str, *args, **kwargs):
         try:
             df = _build_panwatch_ohlcv_df(symbol, curr_date)
         except Exception as e:
-            logger.warning(f"[TA toolkit] load_ohlcv PanWatch 取数异常 symbol={symbol}: {e}")
+            logger.warning(f"[TA toolkit] load_ohlcv SIDA 取数异常 symbol={symbol}: {e}")
         if df is not None and not df.empty:
             _emit_toolkit_log("info", "panwatch", "load_ohlcv", symbol, rows=int(len(df)))
             return df
@@ -453,17 +453,17 @@ def _panwatch_load_ohlcv(symbol: str, curr_date: str, *args, **kwargs):
             from tradingagents.dataflows.errors import NoMarketDataError
             raise NoMarketDataError(
                 symbol, symbol,
-                "PanWatch K线获取失败(A股/港股不回退 Yahoo,请检查代理分流/数据源是否可达)",
+                "SIDA K线获取失败(A股/港股不回退 Yahoo,请检查代理分流/数据源是否可达)",
             )
         except ImportError:
             raise RuntimeError(
-                f"PanWatch K线获取失败 symbol={symbol}(A股/港股不回退 Yahoo,请检查代理/数据源)"
+                f"SIDA K线获取失败 symbol={symbol}(A股/港股不回退 Yahoo,请检查代理/数据源)"
             )
     return _real_load_ohlcv(symbol, curr_date, *args, **kwargs)
 
 
 def _ensure_load_ohlcv_patched() -> None:
-    """进程级幂等安装 load_ohlcv 补丁(含所有 import sites);非 PanWatch 标的透传,无需卸载。"""
+    """进程级幂等安装 load_ohlcv 补丁(含所有 import sites);非 SIDA 标的透传,无需卸载。"""
     global _LOAD_OHLCV_PATCHED, _real_load_ohlcv
     if _LOAD_OHLCV_PATCHED:
         return
@@ -489,7 +489,7 @@ def _ensure_load_ohlcv_patched() -> None:
                 mod.load_ohlcv = _panwatch_load_ohlcv
                 logger.debug(f"[TA toolkit] patched load_ohlcv in {module_path}")
         _LOAD_OHLCV_PATCHED = True
-        logger.info("[TA toolkit] load_ohlcv 已接管(A股/港股走 PanWatch,防 yfinance NoMarketData)")
+        logger.info("[TA toolkit] load_ohlcv 已接管(A股/港股走 SIDA,防 yfinance NoMarketData)")
 
 
 def _args_summary(args: tuple) -> str:
@@ -631,7 +631,7 @@ def _serve_from_panwatch(method_name: str, symbol: str, kwargs: dict, args: tupl
         klines = _cache().get("klines") or []
         if klines:
             return f"{header}\n\n{_klines_to_csv(klines)}"
-        return f"{header}\n\n[No kline data available from PanWatch for {symbol}]"
+        return f"{header}\n\n[No kline data available from SIDA for {symbol}]"
 
     # 2) 公告/事件/新闻:get_finnhub_news / get_news / get_events / get_global_news / get_insider_*
     # A股增强:在事件/公告基础上,附加题材情绪数据(涨停历史/题材归属/市场情绪/游资活跃度),
@@ -806,7 +806,7 @@ def _quote_to_lightweight_fundamentals(symbol: str) -> str:
     if not isinstance(quote, dict):
         return f"[No lightweight fundamentals available for {symbol}]"
 
-    lines = ["[Lightweight Fundamentals (from PanWatch real-time quote)]"]
+    lines = ["[Lightweight Fundamentals (from SIDA real-time quote)]"]
     fields = [
         ("PE ratio", "pe_ratio"),
         ("Total market cap", "total_market_value"),

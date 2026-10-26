@@ -1,6 +1,6 @@
 """A 股(茅台 600519)所有数据通路的端到端单测。
 
-覆盖 TradingAgents 上游工具调用的所有路径,确保 PanWatch 数据真的塞进了上下文:
+覆盖 TradingAgents 上游工具调用的所有路径,确保 SIDA 数据真的塞进了上下文:
 - get_stock_data        → K 线 CSV
 - get_indicators        → 单指标精炼输出(不再返回 5008 字 K 线 8 次重复)
 - get_news / get_global_news → 公告/事件列表(或 fallback 明确禁止全球新闻)

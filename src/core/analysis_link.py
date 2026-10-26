@@ -1,4 +1,4 @@
-"""PanWatch 内部页面链接生成：深度分析详情页等。
+"""SIDA 内部页面链接生成：深度分析详情页等。
 
 全局设置 key: panwatch_base_url(公开访问地址,用于通知里的详情页绝对链接)。
 读取模式与 stock_link.py 一致(AppSettings,miss 回退默认)。

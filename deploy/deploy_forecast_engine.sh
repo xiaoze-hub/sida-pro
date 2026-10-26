@@ -162,7 +162,7 @@ log "env 已写: $ENV_FILE (HOST=$BIND_HOST DB=$DB_PATH)"
 mkdir -p "$UNIT_DIR"
 cat > "$UNIT_DIR/$UNIT_NAME" <<UNITEOF
 [Unit]
-Description=PanWatch A-Share Forecast Engine (Kronos + XGBoost + Chronos-Bolt + TimesFM + LinearReg)
+Description=SIDA A-Share Forecast Engine (Kronos + XGBoost + Chronos-Bolt + TimesFM + LinearReg)
 Documentation=file:$INSTALL_DIR/forecast_server.py
 After=network-online.target docker.service
 Wants=network-online.target

@@ -38,7 +38,7 @@ class TwelveDataQuoteVendor(QuoteVendor):
             code = self._to_td_symbol(s)
             url = f"{_BASE}?symbol={urllib.parse.quote(code)}&apikey={urllib.parse.quote(api_key)}"
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "PanWatch/1.0"})
+                req = urllib.request.Request(url, headers={"User-Agent": "SIDA/1.0"})
                 with urllib.request.urlopen(req, timeout=20) as resp:
                     data = resp.read().decode("utf-8", "replace")
                 quote = self._parse(data, s)

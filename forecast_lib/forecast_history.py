@@ -206,7 +206,7 @@ def _attach_outcome(r: dict) -> None:
 
     status: hit(方向对) / miss(方向错) / pending(未到期) / no_data(取不到K线)。
     优先经 8000 /api/klines 取实际行情(与 UI 同源、key/配置实时),
-    失败兜底 baostock(预测引擎自带依赖, 不依赖 PanWatch src — 修复
+    失败兜底 baostock(预测引擎自带依赖, 不依赖 SIDA src — 修复
     预测进程 import src.collectors 失败导致 outcome 恒为 no_data 的问题)。
     按 target_date 收盘 vs last_close 判方向。失败/无数据 → no_data(不阻断列表)。
     """

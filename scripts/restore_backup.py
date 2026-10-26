@@ -31,7 +31,7 @@ logger = logging.getLogger("restore_backup")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="SIDA/PanWatch 数据库恢复")
+    parser = argparse.ArgumentParser(description="SIDA/SIDA 数据库恢复")
     parser.add_argument("--list", action="store_true", help="列出可用备份后退出")
     parser.add_argument("--file", default=None, help="要恢复的备份文件路径")
     parser.add_argument("--latest", action="store_true", help="恢复最新备份")

@@ -1,7 +1,7 @@
 """短线归因 Agent:判断一只股票短线上涨/涨停/异动的核心原因。
 
 方法论移植自 wudao-stock-attribution skill(5W 证据收集 + 触发/主因/载体三拆解 +
-三一致性评分)。数据源全部走 PanWatch 原生 MarketData(东财/腾讯,免 key):
+三一致性评分)。数据源全部走 SIDA 原生 MarketData(东财/腾讯,免 key):
 - dragon_tiger:龙虎榜(资金证据)
 - events:公告/事件(信息证据)
 - capital_flow:资金流(资金证据)

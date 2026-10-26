@@ -32,7 +32,7 @@ logger = logging.getLogger("backup_auto")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="SIDA/PanWatch 数据库自动备份")
+    parser = argparse.ArgumentParser(description="SIDA/SIDA 数据库自动备份")
     parser.add_argument("--list", action="store_true", help="列出可用备份后退出")
     parser.add_argument("--cleanup-only", action="store_true", help="只清理过期备份")
     parser.add_argument("--retention-days", type=int, default=None, help="保留天数(默认 30)")

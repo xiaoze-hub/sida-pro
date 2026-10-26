@@ -1,4 +1,4 @@
-"""8010 接入 PanWatch 市场数据源(龙虎榜) — 经 8000 HTTP 代理端点。
+"""8010 接入 SIDA 市场数据源(龙虎榜) — 经 8000 HTTP 代理端点。
 
 设计原则(符合"所有 key 在设置→接口Key 维护"的要求):
 - 不直接连 marketdata 包/读 DB 副本(那样 key 不实时)
@@ -8,7 +8,7 @@
 - 这样 8010 永远拿到 UI 维护的最新 key, 国内外服务器只要 UI 配好源即可
 
 认证: 8000 端点带 protected 依赖(需 Bearer token)，Compose 模式使用
-PanWatch 共享数据库签发的短时 Token，不保存用户密码。
+SIDA 共享数据库签发的短时 Token，不保存用户密码。
 """
 from __future__ import annotations
 

@@ -9,7 +9,7 @@
   - 同花顺 q.10jqka.com.cn API 海外 404 ❌
   - 结论: **海外节点无法取板块资金流**;vendor 仍按 SKILL 实现写完,
     海外调用会 fast-fail 抛清晰错误(避免静默返回 0 行被误读成"今日无异动")。
-  - 国内服务器直接 push2 直连可用;海外 server 跑 PanWatch 时应在配置文件里
+  - 国内服务器直接 push2 直连可用;海外 server 跑 SIDA 时应在配置文件里
     把 board_fund_flow vendor 标记 disabled,免得浪费重试配额。
 
 接口范式:市场级、单源、非 symbol 模型——与 discovery.py 同 pattern,不继承 Vendor。

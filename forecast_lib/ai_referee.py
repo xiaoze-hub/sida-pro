@@ -1,4 +1,4 @@
-"""AI 裁判层: 模型预测交给 PanWatch 对话助手(8000)评估, 可改最终方向(B方案)。
+"""AI 裁判层: 模型预测交给 SIDA 对话助手(8000)评估, 可改最终方向(B方案)。
 
 流程:
 - 预测引擎(8010) 4 模型加权投票后(2026-08-13 起独立 LLM 情绪打分已停用,
@@ -311,7 +311,7 @@ def evaluate_prediction(
     user_profile: dict | None = None,
     model_cfg: dict | None = None,
 ) -> dict:
-    """把模型预测交给 PanWatch 对话助手评估, 返回裁判结论。
+    """把模型预测交给 SIDA 对话助手评估, 返回裁判结论。
 
     Args:
         symbol: 6 位 A 股代码
@@ -377,7 +377,7 @@ def evaluate_prediction(
         )
         conv_resp.raise_for_status()
         conv_data = conv_resp.json()
-        # PanWatch API 统一包装: {"code":0,"success":true,"data":{...},"message":""}
+        # SIDA API 统一包装: {"code":0,"success":true,"data":{...},"message":""}
         conv_payload = conv_data.get("data") if isinstance(conv_data, dict) and isinstance(conv_data.get("data"), dict) else conv_data
         conv_id = conv_payload.get("id")
         if not conv_id:

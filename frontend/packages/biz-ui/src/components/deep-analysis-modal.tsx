@@ -507,7 +507,7 @@ export function ToolkitDiagnostics({
       <summary className="cursor-pointer flex items-center gap-2 flex-wrap">
         <span className="font-medium">数据注入诊断</span>
         <span className="text-[11px] text-muted-foreground">
-          (PanWatch 数据 → TradingAgents 工具)
+          (SIDA 数据 → TradingAgents 工具)
         </span>
         <span className="ml-auto text-[11px] whitespace-nowrap">
           <span className={ACTION_CLS.HIT}>HIT {hit}</span>
@@ -518,8 +518,8 @@ export function ToolkitDiagnostics({
         </span>
       </summary>
       <div className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
-        <span className={ACTION_CLS.HIT}>HIT</span>: 用 PanWatch 数据 ·{' '}
-        <span className={ACTION_CLS.MISS}>MISS</span>: 命中但 PanWatch 未实现 ·{' '}
+        <span className={ACTION_CLS.HIT}>HIT</span>: 用 SIDA 数据 ·{' '}
+        <span className={ACTION_CLS.MISS}>MISS</span>: 命中但 SIDA 未实现 ·{' '}
         <span className={ACTION_CLS.PASSTHROUGH}>透传</span>: 非 A 股直接走上游 vendor ·{' '}
         <span className={ACTION_CLS.FALLTHROUGH}>兜底</span>: A 股但 cache 为空,走了上游
       </div>

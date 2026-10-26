@@ -488,7 +488,7 @@ def generate_report(
 
     detail_lines.append("")
     detail_lines.append("---")
-    detail_lines.append(f"*本报告由 PanWatch 预测引擎自动生成 · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+    detail_lines.append(f"*本报告由 SIDA 预测引擎自动生成 · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
 
     detail_md = "\n".join(detail_lines)
 
@@ -590,7 +590,7 @@ def generate_backtest_report(
 
     detail_lines.append("")
     detail_lines.append("---")
-    detail_lines.append(f"*PanWatch 预测引擎回测 · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+    detail_lines.append(f"*SIDA 预测引擎回测 · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
 
     return "\n".join(dash_lines), "\n".join(detail_lines)
 
@@ -718,7 +718,7 @@ def generate_wecom_report(result: dict, backtest_data: dict | None = None) -> st
         L.append(f"- {notes}")
     L.append("")
     L.append("---")
-    # 资金面(东财口径主力净流入, 经 PanWatch tdx)
+    # 资金面(东财口径主力净流入, 经 SIDA tdx)
     cf = result.get("capital_flow") or []
     # ✨ 借鉴 Vibe-Trading「估算不了就声明」: 即使 cf 非空也可能缺关键日期
     # 用 return_data_status=True 拿到数据完整度,据此显式标注
@@ -817,10 +817,10 @@ def generate_wecom_report(result: dict, backtest_data: dict | None = None) -> st
     L.append("---")
     # ✨ AI 免责声明(借鉴 TSP「本报告由 AI 基于公开行情数据生成,仅供参考,不构成任何投资建议」)
     L.append("> ⚠️ 本报告由数智分析 AI 生成,基于公开行情数据与多模型融合预测,**仅供学习研究,不构成任何投资建议**。交易有风险,入市需谨慎。")
-    L.append(f"*PanWatch 自动生成 · {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+    L.append(f"*SIDA 自动生成 · {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
 
     text = "\n".join(L)
     # 长度保护(企微 4096 字节, 中文 3 字节/字)
     if len(text.encode("utf-8")) > 3800:
-        text = text[:1200].rstrip() + "\n…(完整版见 PanWatch App)"
+        text = text[:1200].rstrip() + "\n…(完整版见 SIDA App)"
     return text

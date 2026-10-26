@@ -26,7 +26,7 @@ from src.core.strategy_library import (  # noqa: F401  (W4.2: 实现下沉 core,
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# 策略 YAML 路径(借鉴 alphasift 的格式, 翻译为 PanWatch 可用字段子集)
+# 策略 YAML 路径(借鉴 alphasift 的格式, 翻译为 SIDA 可用字段子集)
 STRATEGIES_FILE = Path(__file__).parent.parent.parent.parent / "strategies" / "panwatch_strategies.yaml"
 
 

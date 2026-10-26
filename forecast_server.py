@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 def _get_owner_shadow_profile() -> dict | None:
     """拉当前 owner 的影子画像(经 8000 GET /api/shadow/profile, 服务 token)。
 
-    预测引擎是独立进程(8010), 不能直查 PanWatch DB(users.shadow_profile_json 在
+    预测引擎是独立进程(8010), 不能直查 SIDA DB(users.shadow_profile_json 在
     8000 容器内), 走 HTTP 拿落库画像。响应是统一包装 {code, success, data, message},
     data 即 {profile: {...}|None, saved: bool}。
     任何失败返回 None —— 裁判按无画像运行, 不阻断预测主流程。
@@ -323,7 +323,7 @@ def _do_predict(symbol: str, days: int = 5, task_id: str = "", target_date: str 
     adjust_pct = 0.0
     _log(tid, "情绪打分已停用(2026-08-13 用户决策: AI 裁判接管消息面/情绪判断), adjustment_pct=0")
 
-    # 主力资金面(东财口径, 经 PanWatch 8000 tdx 接口)
+    # 主力资金面(东财口径, 经 SIDA 8000 tdx 接口)
     _log(tid, "拉取主力资金流(panwatch-tdx)...")
     try:
         from panwatch_bridge import fetch_capital_flow
@@ -435,7 +435,7 @@ def _do_predict(symbol: str, days: int = 5, task_id: str = "", target_date: str 
 
     direction = "up" if final[-1] > last_close else "down" if final[-1] < last_close else "flat"
 
-    # --- AI 裁判层(2026-08-12, B方案): 预测交给 PanWatch 对话助手(8000)评估, 可改最终方向 ---
+    # --- AI 裁判层(2026-08-12, B方案): 预测交给 SIDA 对话助手(8000)评估, 可改最终方向 ---
     # 裁判用对话助手的工具(主力意图/资金流/技术面/K线形态)核实盘面后给 verdict;
     # verdict=adjust 且给出方向时强势覆盖 direction; 任何异常按 abstain 处理
     # (维持模型方向, 绝不伪造成"裁判确认过", 2026-09-08 风险方案 0.0), 不阻断主流程。
@@ -848,7 +848,7 @@ def history(symbol: str = "", limit: int = 50):
 def forecast_weights():
     """当前 4 模型投票权重(按历史回测命中率动态调整)。
 
-    供 PanWatch 前端预测页展示权重透明度; 同时返回权重来源与
+    供 SIDA 前端预测页展示权重透明度; 同时返回权重来源与
     各模型样本/命中统计, 便于用户判断"该不该信"。
     """
     try:
@@ -913,16 +913,16 @@ def forecast_models():
             {"name": "XGBoost", "module": "投票模型", "model_id": "XGBRegressor(n_estimators=100, depth=3)",
              "location": "pip 包", "configurable": "参数在代码内"},
             {"name": "LLM情绪打分", "module": "公告/新闻语义判断", "model_id": cfg.get("model", "agnes-2.5-flash"),
-             "location": cfg.get("base_url", ""), "configurable": "PanWatch 设置→预测引擎 LLM（Compose 自动生效）",
+             "location": cfg.get("base_url", ""), "configurable": "SIDA 设置→预测引擎 LLM（Compose 自动生效）",
              "api_key_set": bool(cfg.get("api_key"))},
-            {"name": "PanWatch AI", "module": "AI对话/Agent 分析", "model_id": "AIModel 表默认",
-             "location": "PanWatch 设置→AI 服务商", "configurable": "PanWatch 设置页(已有)"},
-            {"name": "AI裁判", "module": "预测结果裁判层(可改方向,B方案)", "model_id": "PanWatch 对话助手(8000)",
+            {"name": "SIDA AI", "module": "AI对话/Agent 分析", "model_id": "AIModel 表默认",
+             "location": "SIDA 设置→AI 服务商", "configurable": "SIDA 设置页(已有)"},
+            {"name": "AI裁判", "module": "预测结果裁判层(可改方向,B方案)", "model_id": "SIDA 对话助手(8000)",
              "location": "forecast_lib/ai_referee.py", "configurable": "自动调用对话助手工具核实盘面"},
         ],
         "config_file": env_path,
         "config_file_exists": os.path.exists(env_path),
-        "note": "修改 LLM 情绪打分模型：PanWatch 设置→预测引擎 LLM，Compose 部署下保存后自动生效",
+        "note": "修改 LLM 情绪打分模型：SIDA 设置→预测引擎 LLM，Compose 部署下保存后自动生效",
     }
 
 
@@ -1249,7 +1249,7 @@ def _wecom_friendly_md(md: str, max_len: int = 3500) -> str:
     text = "\n".join(out).strip()
     # 截断(按字符, 企微限制 4096 字节, 中文 3 字节/字, 留余量)
     if len(text) > max_len:
-        text = text[:max_len].rstrip() + "\n…(报告较长, 完整版见 PanWatch)"
+        text = text[:max_len].rstrip() + "\n…(报告较长, 完整版见 SIDA)"
     return text
 
 

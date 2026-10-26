@@ -492,7 +492,7 @@ def get_brief(
     """盘前/盘后 AI 简报(复用 premarket_outlook / daily_report agent 的最新报告)。
 
     S5(2026-08-26): 仅返回本人报告 + user_id=NULL 共享行, 跨账号不可见。
-    premarket 类型: PanWatch 自己的报告缺失时,回退读 Hermes 盘前产物
+    premarket 类型: SIDA 自己的报告缺失时,回退读 Hermes 盘前产物
     (挂载 /app/data/premarket-reports/<日期>/premarket.txt),并解析股票标的
     (格式: 名称(6位代码))供前端快捷加自选。
     """

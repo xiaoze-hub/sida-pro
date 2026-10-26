@@ -188,7 +188,7 @@ def llm_sentiment_score(events_text: str, _run_id: int = 0, fundflow_text: str =
 def fetch_sentiment(symbol: str, _run_id: int = 0) -> dict:
     """消息情绪面: 个股公告/新闻 + 板块共振 + 市场情绪。
 
-    复用 PanWatch 数据体系(wudao MCP + 东财涨停池),输出事件修正系数。
+    复用 SIDA 数据体系(wudao MCP + 东财涨停池),输出事件修正系数。
     方法论: a-share-multi-model-prediction skill Pitfall #9(隔夜事件)。
     - 重大利好事件 + 板块宽度≥4 → +0.5%~+1.5%
     - 重大利空事件 → 对称下修
@@ -199,7 +199,7 @@ def fetch_sentiment(symbol: str, _run_id: int = 0) -> dict:
         "adjustment_pct": 0.0, "notes": [],
     }
     try:
-        # 1. wudao 个股公告/事件(近7天) — 直接 HTTP 调 MCP(与 PanWatch 容器内同机制)
+        # 1. wudao 个股公告/事件(近7天) — 直接 HTTP 调 MCP(与 SIDA 容器内同机制)
         import requests as _req
         import os as _os
 

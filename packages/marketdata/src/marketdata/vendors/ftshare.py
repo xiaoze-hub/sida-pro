@@ -82,7 +82,7 @@ def _strip_suffix(symbol: str) -> str:
 class FtshareMCPClient:
     """FTShare MCP 轻量客户端:initialize 一次拿 session id,后续调用复用。
 
-    线程安全(模块级单例,PanWatch 多 Agent 并发取数共享)。
+    线程安全(模块级单例,SIDA 多 Agent 并发取数共享)。
     """
 
     _lock = threading.Lock()

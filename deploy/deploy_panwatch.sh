@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# PanWatch 部署/重建恢复脚本
-# 用途: 把 fork 仓库(xiaoze-hub/PanWatch)的自定义改动部署进容器
+# SIDA 部署/重建恢复脚本
+# 用途: 把 fork 仓库(xiaoze-hub/SIDA)的自定义改动部署进容器
 #       容器 docker rm + 重建后代码会丢(数据库配置在卷里保留),
 #       运行本脚本即可恢复全部代码改动。
 #
@@ -11,12 +11,12 @@
 #   ./deploy_panwatch.sh --list   # 列出部署清单
 #
 # 前提:
-#   - /tmp/PanWatch 是 xiaoze-hub/PanWatch 的 git clone(含全部改动)
+#   - /tmp/SIDA 是 xiaoze-hub/SIDA 的 git clone(含全部改动)
 #   - 容器名 panwatch, 数据卷 panwatch_data
 # ============================================================
 set -euo pipefail
 
-REPO_DIR="${PANWATCH_REPO:-/tmp/PanWatch}"
+REPO_DIR="${PANWATCH_REPO:-/tmp/SIDA}"
 CONTAINER="panwatch"
 # P1-14: 与 CI 保持一致, 拉 ACR 版本镜像(默认 latest, 发版传 PANWATCH_VERSION=vX.Y.Z)
 ACR="crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz"
@@ -96,13 +96,13 @@ FILES=(
 )
 
 echo "=============================================="
-echo " PanWatch 部署脚本"
+echo " SIDA 部署脚本"
 echo " 仓库: $REPO_DIR"
 echo " 容器: $CONTAINER"
 echo "=============================================="
 
 if [ ! -d "$REPO_DIR/.git" ]; then
-  echo "❌ 仓库不存在: $REPO_DIR (先 git clone https://github.com/xiaoze-hub/PanWatch.git)"
+  echo "❌ 仓库不存在: $REPO_DIR (先 git clone https://github.com/xiaoze-hub/SIDA.git)"
   exit 1
 fi
 

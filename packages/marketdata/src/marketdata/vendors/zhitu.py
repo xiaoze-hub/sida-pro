@@ -1,7 +1,7 @@
 """智兔数服 vendor:分红送配(东财分红的免费备源)。
 
 智兔(zhituapi.com)是纯 HTTP GET + token 参数,比 ftshare 的 MCP 协议更简单,
-PanWatch 容器内可直接 urllib 请求,无需 MCP 客户端。
+SIDA 容器内可直接 urllib 请求,无需 MCP 客户端。
 
 实测(2026-08-07,云服务器容器内直连 200):
 - 分红送配历史: GET https://api.zhituapi.com/hs/gs/jnff/{code}?token=...

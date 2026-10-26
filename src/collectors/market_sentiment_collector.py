@@ -1,7 +1,7 @@
 """市场情绪采集器:涨停池 + 涨跌家数统计 + 连板梯队。
 
 数据源:东财 push2ex getTopicZTPool(涨停池) + push2 ulist.np(指数)。
-替代 PanWatch 缺失的 wudao short_term_emotion / limit_up_pool 能力,
+替代 SIDA 缺失的 wudao short_term_emotion / limit_up_pool 能力,
 纯东财 HTTP 直连,免 key,适配云服务器环境。
 """
 from __future__ import annotations
@@ -479,7 +479,7 @@ class MarketSentimentCollector:
 
     def get_index_snapshot(self) -> list[dict]:
         """主要指数快照(上证/深成/创业板)。优先腾讯接口(更稳),失败退回东财。"""
-        # 腾讯行情接口(和 PanWatch quote vendor 同源,稳定)
+        # 腾讯行情接口(和 SIDA quote vendor 同源,稳定)
         try:
             import requests
 

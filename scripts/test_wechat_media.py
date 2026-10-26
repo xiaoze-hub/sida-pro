@@ -1,4 +1,4 @@
-"""PanWatch 微信媒体功能验证脚本(不依赖真实微信消息/网络)。
+"""SIDA 微信媒体功能验证脚本(不依赖真实微信消息/网络)。
 
 验证:
 1. media_utils 能 import(容器依赖)
@@ -13,8 +13,8 @@ import os
 import sys
 from io import BytesIO
 
-os.environ.setdefault("DATA_DIR", "/tmp/PanWatch/data")
-sys.path.insert(0, "/tmp/PanWatch")
+os.environ.setdefault("DATA_DIR", "/tmp/SIDA/data")
+sys.path.insert(0, "/tmp/SIDA")
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -46,14 +46,14 @@ print("[1] PASS: OCR 提取出中文文字且图片已留档\n")
 # ---- 2. file_to_text: txt / csv / xlsx ----
 import csv
 
-txt = "/tmp/PanWatch/data/wx_test.txt"
+txt = "/tmp/SIDA/data/wx_test.txt"
 with open(txt, "w", encoding="utf-8") as f:
     f.write("测试持仓:\n贵州茅台 500股\n宁德时代 200股\n")
 t = media_utils.file_to_text(txt)
 assert "贵州茅台" in t and "宁德时代" in t
 print(f"[2] txt 解析 OK: {t.splitlines()[0]!r}")
 
-csv_path = "/tmp/PanWatch/data/wx_test.csv"
+csv_path = "/tmp/SIDA/data/wx_test.csv"
 with open(csv_path, "w", newline="", encoding="utf-8") as f:
     w = csv.writer(f)
     w.writerow(["代码", "名称", "涨跌幅"])
@@ -63,7 +63,7 @@ t = media_utils.file_to_text(csv_path)
 assert "600519" in t and "贵州茅台" in t
 print(f"[2] csv 解析 OK: {t.splitlines()[1] if len(t.splitlines())>1 else t!r}")
 
-xlsx_path = "/tmp/PanWatch/data/wx_test.xlsx"
+xlsx_path = "/tmp/SIDA/data/wx_test.xlsx"
 try:
     import openpyxl  # noqa: F401
     df = pandas.DataFrame({"代码": ["600519", "300750"], "名称": ["贵州茅台", "宁德时代"], "涨跌幅": [3.21, -1.05]})
@@ -75,7 +75,7 @@ except ImportError:
     print("[2] xlsx 跳过(openpyxl 不可用)")
 
 # 不支持的扩展名 → 空
-assert media_utils.file_to_text("/tmp/PanWatch/data/wx_test.zip") == ""
+assert media_utils.file_to_text("/tmp/SIDA/data/wx_test.zip") == ""
 print("[2] 不支持扩展名返回空 OK\n")
 
 # ---- 3. wechat_ilink AES + key 解析 + CDN URL ----

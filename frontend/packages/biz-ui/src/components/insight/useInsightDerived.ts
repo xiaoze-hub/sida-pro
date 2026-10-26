@@ -194,7 +194,7 @@ const shareCardPayload = useMemo(() => {
 const shareText = useMemo(() => {
   const { marketLabel, price, chg, action, signal, reason, risks, trigger, invalidation, technicalBrief, levelsBrief, source, ts } = shareCardPayload
   const lines = [
-    `【PanWatch 洞察】${resolvedName}（${symbol} · ${marketLabel}）`,
+    `【SIDA 洞察】${resolvedName}（${symbol} · ${marketLabel}）`,
     `时间：${ts}`,
     `现价：${price}（${chg}）`,
     `建议：${action}`,

@@ -1,4 +1,4 @@
-"""PanWatch 统一服务入口 —— W3.2/D1 起为兼容 shim, 实现在 src/bootstrap/。
+"""SIDA 统一服务入口 —— W3.2/D1 起为兼容 shim, 实现在 src/bootstrap/。
 
 app 装配=bootstrap/app.py; agent 注册表=agents.py(@register_agent 自动发现);
 数据源种子=datasources.py; 调度器/触发=runtime.py; 启动编排=startup.py;

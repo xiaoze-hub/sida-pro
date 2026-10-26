@@ -66,7 +66,7 @@ try:
     from forecast_paths import FORECAST_DB_PATH  # forecast_lib 在 sys.path(direct 运行)
 except ImportError:  # pragma: no cover
     try:
-        from forecast_lib.forecast_paths import FORECAST_DB_PATH  # /tmp/PanWatch 在 sys.path
+        from forecast_lib.forecast_paths import FORECAST_DB_PATH  # /tmp/SIDA 在 sys.path
     except ImportError:  # pragma: no cover
         FORECAST_DB_PATH = os.path.join(os.path.expanduser("~"), ".panwatch_forecast.db")
 

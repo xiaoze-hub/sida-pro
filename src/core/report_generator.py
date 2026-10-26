@@ -1,6 +1,6 @@
 """SIDA 内置报告生成器(盘前/盘后)。
 
-不依赖海外 Hermes cron: 直接调用 PanWatch 自身的数据能力采集数据,
+不依赖海外 Hermes cron: 直接调用 SIDA 自身的数据能力采集数据,
 经 LLM(场景 reports)生成结构化 Markdown 报告, 写入报告中心目录
 (CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS.md), 报告中心 API
 (src/web/api/reports.py) 无需改动即可读取。

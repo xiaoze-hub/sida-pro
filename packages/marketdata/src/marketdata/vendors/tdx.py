@@ -1,7 +1,7 @@
 """通达信问小达 MCP 客户端(HTTP 直连,免 Hermes)。
 
 通过 MCP JSON-RPC 协议调用 tdx 问小达工具(实际工具名 tdx_screener, 参数 message),
-为 PanWatch 提供通达信独家数据: 个股行情/智能选股/板块排行/财务/技术/资金流向。
+为 SIDA 提供通达信独家数据: 个股行情/智能选股/板块排行/财务/技术/资金流向。
 
 配置优先级: 显式参数 > DB(AppSettings.tdx_api_key) > 环境变量 TDX_API_KEY。
 MCP endpoint: https://txmcp.tdx.com.cn:3001/txmcp
@@ -47,7 +47,7 @@ def _parse_sse(raw: str) -> dict | None:
 
 
 def _load_token() -> str:
-    """从 PanWatch AppSettings 表读取 tdx_api_key(DB 优先于环境变量)。
+    """从 SIDA AppSettings 表读取 tdx_api_key(DB 优先于环境变量)。
 
     用 lazy import 避免与 src.web 循环依赖; 读取失败(非 web 环境)返回空,
     由调用方回退到环境变量。

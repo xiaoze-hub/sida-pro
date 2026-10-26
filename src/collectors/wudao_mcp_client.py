@@ -1,11 +1,11 @@
 """wudao MCP 竞价数据采集器(HTTP 直连,免 Hermes)。
 
 通过 MCP JSON-RPC 协议调用 wudao 竞价工具(auction_opening_snapshot /
-auction_theme_strength / auction_market_scan 等),为 PanWatch 竞价复盘
+auction_theme_strength / auction_market_scan 等),为 SIDA 竞价复盘
 Agent 提供 wudao 独家数据:consistency(题材一致性)/ bidStrength(竞价强度)/
 limitBuyAmountAfter920(9:20后留存委买) 等。
 
-配置:环境变量 WUDAO_MCP_URL + WUDAO_MCP_TOKEN,或 PanWatch 设置页数据源。
+配置:环境变量 WUDAO_MCP_URL + WUDAO_MCP_TOKEN,或 SIDA 设置页数据源。
 """
 from __future__ import annotations
 

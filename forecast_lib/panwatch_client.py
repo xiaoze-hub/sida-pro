@@ -1,4 +1,4 @@
-"""PanWatch HTTP client shared by forecast bridge modules.
+"""SIDA HTTP client shared by forecast bridge modules.
 
 认证(2026-09-08 风险方案 0.0): forecast 容器只持只读服务凭据 ——
 ``PANWATCH_SERVICE_TOKEN``(与主服务 ``SIDA_SERVICE_TOKEN`` 同值, 经 .env 注入),
@@ -26,7 +26,7 @@ _TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
 
 
 def get_panwatch_url() -> str:
-    """Return the PanWatch base URL configured for this process.
+    """Return the SIDA base URL configured for this process.
 
     D5(2026-09-09): 主服务地址环境变量统一为 ``SIDA_MAIN_API_URL``(旧名已废弃,
     forecast_lib 内禁止出现旧名字样, 见 CI 依赖方向断言 tests/test_w36_dependency_direction.py);
@@ -83,7 +83,7 @@ def get_token() -> str:
     try:
         token = _login_with_explicit_credentials()
     except Exception as exc:
-        logger.warning("PanWatch 显式凭据登录失败: %s", exc)
+        logger.warning("SIDA 显式凭据登录失败: %s", exc)
         return ""
     if token:
         _TOKEN_CACHE.update(token=token, expires_at=now + 240)
@@ -110,7 +110,7 @@ def has_credentials() -> bool:
 
 
 def request_json(path: str, timeout: float = 30) -> Any:
-    """GET a protected PanWatch endpoint and retry once after a 401.
+    """GET a protected SIDA endpoint and retry once after a 401.
 
     认证双轨: X-Service-Token(服务令牌, 首选) / Bearer(显式 token 或凭据登录)。
     无任何凭据时抛 RuntimeError —— 失败必须可见, 不允许静默回落。
@@ -118,7 +118,7 @@ def request_json(path: str, timeout: float = 30) -> Any:
     url = f"{get_panwatch_url()}/{path.lstrip('/')}"
     if not has_credentials():
         raise RuntimeError(
-            "PanWatch 无可用凭据: 请在 forecast 容器注入 PANWATCH_SERVICE_TOKEN"
+            "SIDA 无可用凭据: 请在 forecast 容器注入 PANWATCH_SERVICE_TOKEN"
             "(与主服务 SIDA_SERVICE_TOKEN 同值)或 PANWATCH_TOKEN/账号密码"
         )
     for attempt in range(2):
