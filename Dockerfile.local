@@ -1,0 +1,11 @@
+# Local development only: reuse the installed runtime, mount current source in compose.
+# The default digest is the arm64 runtime already present on this Mac.
+# On another host, override LOCAL_BASE_IMAGE with a compatible runtime image.
+ARG LOCAL_BASE_IMAGE=ghcr.io/xiaoze-hub/stock-intelligent-data-analytics@sha256:27713687b6a2b23eaa0d41646e71915bca4ed462999958a37aaa84b459b550c9
+FROM ${LOCAL_BASE_IMAGE}
+
+USER root
+# This baseline matches requirements-lock.txt except for the newly added pypinyin.
+RUN python -m ensurepip && \
+    python -m pip install --no-cache-dir pypinyin==0.55.0
+USER app

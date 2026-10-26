@@ -1,5 +1,12 @@
 ## 2026-10-26
 
+### docs-建立项目知识库与独立本地运行入口
+
+- 新增 `docs/knowledge-base/`：项目大纲、架构入口、业务契约、本地 Docker 手册，以及基于指定 Git commit 静态解析的 610 个 Python 模块和前端路由索引；保留旧本地知识库。
+- 新增可重复生成与校验索引的 `scripts/build_project_knowledge.py`，不导入业务代码或读取密钥。
+- 新增本机 arm64 `Dockerfile.local` 与独立 `docker-compose.local.yml`，挂载当前源码/前端，以独立 PG/Redis 数据卷运行；默认关闭自动调度，预测引擎另行配置。
+- 验证：前端构建通过，本地三服务健康，主服务版本 v0.80.0；首次 PG 建库修复的后端回归 9 项通过。
+
 ### fix-修复全新 PostgreSQL 数据库的布尔默认值
 
 - `users.is_deleted` 与 `chat_conversations.pinned` 使用 SQLAlchemy 布尔默认值，避免 PostgreSQL 首次建表报整数与布尔类型不匹配；既有版本化迁移已使用 `DEFAULT FALSE`，无需修改已有库结构。
