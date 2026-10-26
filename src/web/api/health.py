@@ -16,7 +16,7 @@ import asyncio
 import hmac
 import logging
 import platform
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Request, Response
 try:
@@ -295,6 +295,191 @@ def _request_from_internal(req: Request) -> bool:
     return addr.is_private or addr.is_loopback
 
 
+async def _check_components(on_component: Callable[[str, dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    components = {}
+
+    async def publish(key: str) -> None:
+        if on_component is not None:
+            on_component(key, dict(components[key]))
+            await asyncio.sleep(0)
+
+    overall_ok = True
+
+    # ─── DB 检查 ───
+    try:
+        from src.web.database import engine
+        from sqlalchemy import text
+        start = time.perf_counter()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        components["database"] = {
+            "status": "ok",
+            "latency_ms": latency_ms,
+            # 0.4② (2026-09-08): 方言标签, 一眼看出连的是哪个库(sqlite/postgresql)
+            "dialect": engine.url.get_backend_name(),
+            "url": str(engine.url).split("@")[-1] if "@" in str(engine.url) else "sqlite",
+        }
+        record_component_status("database", True)  # P4: 喂 Prometheus 告警
+    except Exception as e:
+        try:
+            from src.db.dialect import declared_backend
+
+            _declared = declared_backend()
+        except Exception:
+            _declared = "unknown"
+        components["database"] = {
+            "status": "down",
+            "dialect": _declared,
+            "error": str(e)[:100],
+        }
+        record_component_status("database", False)  # P4: 喂 Prometheus 告警
+        # 告警(2026-09-18 tier1): DB 连接失败 → db_connection_error
+        try:
+            from src.core.alerting import notify_db_connection_error
+
+            notify_db_connection_error(str(e)[:300])
+        except Exception:
+            pass
+        overall_ok = False
+
+    await publish("database")
+
+    # ─── Redis 检查 ───
+    try:
+        from src.web.cache.redis_client import redis_client
+        if not redis_client._enabled:
+            components["redis"] = {"status": "disabled"}
+            record_component_status("redis", True)  # P4: disabled 是预期降级, 不告警
+        elif await redis_client.ping():
+            from src.web.cache.redis_client import REDIS_URL
+            from src.web.cache.biz_cache import _mask_url
+            # 2026-09-08 T9: /health 未鉴权, 只回显 host 段, 不回完整连接串(可能带密码)
+            components["redis"] = {"status": "ok", "url": _mask_url(REDIS_URL)}
+            record_component_status("redis", True)  # P4
+        else:
+            components["redis"] = {"status": "down", "url": "n/a"}
+            record_component_status("redis", False)  # P4
+            # Redis 降级 OK — 不影响 overall
+    except Exception as e:
+        components["redis"] = {"status": "down", "error": str(e)[:100]}
+        record_component_status("redis", False)  # P4
+
+    await publish("redis")
+
+    # ─── 业务缓存层(biz_cache: L1 内存 + L2 Redis)检查 ───
+    try:
+        from src.web.cache.biz_cache import biz_cache
+        components["biz_cache"] = biz_cache.stats()
+    except Exception as e:
+        components["biz_cache"] = {"status": "down", "error": str(e)[:100]}
+
+    await publish("biz_cache")
+
+    # ─── 调度器存活检查 ───
+    try:
+        import server as srv_mod
+        schedulers = []
+        schedulers_status = {"running": 0, "shutdown": 0}
+        for attr_name in ("scheduler", "price_alert_scheduler", "paper_trading_scheduler",
+                          "context_maintenance_scheduler", "kline_backfill_scheduler"):
+            sched = getattr(srv_mod, attr_name, None)
+            if sched is not None:
+                name = attr_name.replace("_scheduler", "")
+                # 存活判定优先用内部 APScheduler 实例的 .running(真·运行状态)。
+                # 注意: 封装类的 _running 是 job 重入锁(扫描开始置 True、结束置 False,
+                # 平时恒为 False),不能作为调度器存活依据。
+                inner = getattr(sched, "scheduler", None)
+                if inner is not None and hasattr(inner, "running"):
+                    running = bool(inner.running)
+                elif hasattr(sched, "running"):
+                    running = bool(sched.running)
+                elif hasattr(sched, "_running"):
+                    running = bool(sched._running)
+                else:
+                    running = False
+                schedulers.append(name)
+                if running:
+                    schedulers_status["running"] += 1
+                else:
+                    schedulers_status["shutdown"] += 1
+        components["scheduler"] = {
+            "status": "ok" if schedulers_status["running"] >= 2 else "degraded",
+            "schedulers": schedulers,
+            **schedulers_status,
+        }
+        if schedulers_status["running"] >= 2:
+            record_component_status("scheduler_leader", True)  # A3
+        if schedulers_status["running"] < 2:
+            # 2026-08-23 Q1; 2026-09-08 A3: leader_state() 三态区分
+            # "合法让位(standby)"与"fail-closed 没敢当(failed)"。
+            from src.core.scheduler_leader import leader_state
+            state = leader_state()
+            if schedulers_status["running"] == 0 and state == "standby":
+                components["scheduler"] = {
+                    "status": "ok",
+                    "schedulers": [],
+                    "running": 0,
+                    "shutdown": 0,
+                    "leader_state": state,
+                    "note": "non-leader worker(调度器由 leader 进程运行)",
+                }
+            else:
+                overall_ok = False
+                # failed = 选主失败/Redis 不可用, 无任何实例在跑调度 → 告警。
+                # (standby 不记 0: 合法让位不该响 SidaSchedulerLeaderDown)
+                record_component_status("scheduler_leader", False)  # A3
+                components["scheduler"]["leader_state"] = state
+                components["scheduler"]["note"] = (
+                    "选主失败(fail-closed: Redis 不可用, 无实例在跑调度)"
+                    if state == "failed" else f"leader 调度器不足 2 个(state={state})"
+                )
+    except Exception as e:
+        components["scheduler"] = {"status": "down", "error": str(e)[:100]}
+        overall_ok = False
+
+    await publish("scheduler")
+
+    # ─── 限流状态 ───
+    try:
+        from src.web.middleware import get_rate_limit_stats
+        components["rate_limit"] = get_rate_limit_stats()
+    except Exception:
+        components["rate_limit"] = {"enabled": False, "error": "not loaded"}
+
+    # ─── 预测引擎(8010)可达性(D5/3.6): 停机时明确反映, 不翻转 overall ───
+    components["forecast_engine"] = _forecast_engine_probe()
+
+    await publish("forecast_engine")
+
+    # ─── service info ───
+    import os
+    try:
+        with open("/app/VERSION") as f:
+            version = f.read().strip()
+    except Exception:
+        version = os.getenv("APP_VERSION", "unknown")
+
+    # ─── 整体状态 ───
+    if overall_ok and components["redis"]["status"] in ("ok", "disabled"):
+        overall = "ok"
+    elif overall_ok:
+        overall = "degraded"  # Redis 挂了但其他 OK
+    else:
+        overall = "down"
+
+    return {
+        "status": overall,
+        "version": version,
+        "components": components,
+        "service": {
+            "name": "SIDA",
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+        },
+    }
+
+
 @router.get("/health")
 async def health(request: Request) -> dict[str, Any]:
     """深度健康检查 — 返回各组件状态
@@ -320,174 +505,6 @@ async def health(request: Request) -> dict[str, Any]:
 
     HEALTH_TIMEOUT = 5.0  # 防 thsdk 等外部故障拖垮 health 端点(Docker healthcheck 10s)
 
-    async def _check() -> dict[str, Any]:
-        components = {}
-        overall_ok = True
-
-        # ─── DB 检查 ───
-        try:
-            from src.web.database import engine
-            from sqlalchemy import text
-            start = time.perf_counter()
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            components["database"] = {
-                "status": "ok",
-                "latency_ms": latency_ms,
-                # 0.4② (2026-09-08): 方言标签, 一眼看出连的是哪个库(sqlite/postgresql)
-                "dialect": engine.url.get_backend_name(),
-                "url": str(engine.url).split("@")[-1] if "@" in str(engine.url) else "sqlite",
-            }
-            record_component_status("database", True)  # P4: 喂 Prometheus 告警
-        except Exception as e:
-            try:
-                from src.db.dialect import declared_backend
-
-                _declared = declared_backend()
-            except Exception:
-                _declared = "unknown"
-            components["database"] = {
-                "status": "down",
-                "dialect": _declared,
-                "error": str(e)[:100],
-            }
-            record_component_status("database", False)  # P4: 喂 Prometheus 告警
-            # 告警(2026-09-18 tier1): DB 连接失败 → db_connection_error
-            try:
-                from src.core.alerting import notify_db_connection_error
-
-                notify_db_connection_error(str(e)[:300])
-            except Exception:
-                pass
-            overall_ok = False
-
-        # ─── Redis 检查 ───
-        try:
-            from src.web.cache.redis_client import redis_client
-            if not redis_client._enabled:
-                components["redis"] = {"status": "disabled"}
-                record_component_status("redis", True)  # P4: disabled 是预期降级, 不告警
-            elif await redis_client.ping():
-                from src.web.cache.redis_client import REDIS_URL
-                from src.web.cache.biz_cache import _mask_url
-                # 2026-09-08 T9: /health 未鉴权, 只回显 host 段, 不回完整连接串(可能带密码)
-                components["redis"] = {"status": "ok", "url": _mask_url(REDIS_URL)}
-                record_component_status("redis", True)  # P4
-            else:
-                components["redis"] = {"status": "down", "url": "n/a"}
-                record_component_status("redis", False)  # P4
-                # Redis 降级 OK — 不影响 overall
-        except Exception as e:
-            components["redis"] = {"status": "down", "error": str(e)[:100]}
-            record_component_status("redis", False)  # P4
-
-        # ─── 业务缓存层(biz_cache: L1 内存 + L2 Redis)检查 ───
-        try:
-            from src.web.cache.biz_cache import biz_cache
-            components["biz_cache"] = biz_cache.stats()
-        except Exception as e:
-            components["biz_cache"] = {"status": "down", "error": str(e)[:100]}
-
-        # ─── 调度器存活检查 ───
-        try:
-            import server as srv_mod
-            schedulers = []
-            schedulers_status = {"running": 0, "shutdown": 0}
-            for attr_name in ("scheduler", "price_alert_scheduler", "paper_trading_scheduler",
-                              "context_maintenance_scheduler", "kline_backfill_scheduler"):
-                sched = getattr(srv_mod, attr_name, None)
-                if sched is not None:
-                    name = attr_name.replace("_scheduler", "")
-                    # 存活判定优先用内部 APScheduler 实例的 .running(真·运行状态)。
-                    # 注意: 封装类的 _running 是 job 重入锁(扫描开始置 True、结束置 False,
-                    # 平时恒为 False),不能作为调度器存活依据。
-                    inner = getattr(sched, "scheduler", None)
-                    if inner is not None and hasattr(inner, "running"):
-                        running = bool(inner.running)
-                    elif hasattr(sched, "running"):
-                        running = bool(sched.running)
-                    elif hasattr(sched, "_running"):
-                        running = bool(sched._running)
-                    else:
-                        running = False
-                    schedulers.append(name)
-                    if running:
-                        schedulers_status["running"] += 1
-                    else:
-                        schedulers_status["shutdown"] += 1
-            components["scheduler"] = {
-                "status": "ok" if schedulers_status["running"] >= 2 else "degraded",
-                "schedulers": schedulers,
-                **schedulers_status,
-            }
-            if schedulers_status["running"] >= 2:
-                record_component_status("scheduler_leader", True)  # A3
-            if schedulers_status["running"] < 2:
-                # 2026-08-23 Q1; 2026-09-08 A3: leader_state() 三态区分
-                # "合法让位(standby)"与"fail-closed 没敢当(failed)"。
-                from src.core.scheduler_leader import leader_state
-                state = leader_state()
-                if schedulers_status["running"] == 0 and state == "standby":
-                    components["scheduler"] = {
-                        "status": "ok",
-                        "schedulers": [],
-                        "running": 0,
-                        "shutdown": 0,
-                        "leader_state": state,
-                        "note": "non-leader worker(调度器由 leader 进程运行)",
-                    }
-                else:
-                    overall_ok = False
-                    # failed = 选主失败/Redis 不可用, 无任何实例在跑调度 → 告警。
-                    # (standby 不记 0: 合法让位不该响 SidaSchedulerLeaderDown)
-                    record_component_status("scheduler_leader", False)  # A3
-                    components["scheduler"]["leader_state"] = state
-                    components["scheduler"]["note"] = (
-                        "选主失败(fail-closed: Redis 不可用, 无实例在跑调度)"
-                        if state == "failed" else f"leader 调度器不足 2 个(state={state})"
-                    )
-        except Exception as e:
-            components["scheduler"] = {"status": "down", "error": str(e)[:100]}
-            overall_ok = False
-
-        # ─── 限流状态 ───
-        try:
-            from src.web.middleware import get_rate_limit_stats
-            components["rate_limit"] = get_rate_limit_stats()
-        except Exception:
-            components["rate_limit"] = {"enabled": False, "error": "not loaded"}
-
-        # ─── 预测引擎(8010)可达性(D5/3.6): 停机时明确反映, 不翻转 overall ───
-        components["forecast_engine"] = _forecast_engine_probe()
-
-        # ─── service info ───
-        import os
-        try:
-            with open("/app/VERSION") as f:
-                version = f.read().strip()
-        except Exception:
-            version = os.getenv("APP_VERSION", "unknown")
-
-        # ─── 整体状态 ───
-        if overall_ok and components["redis"]["status"] in ("ok", "disabled"):
-            overall = "ok"
-        elif overall_ok:
-            overall = "degraded"  # Redis 挂了但其他 OK
-        else:
-            overall = "down"
-
-        return {
-            "status": overall,
-            "version": version,
-            "components": components,
-            "service": {
-                "name": "SIDA",
-                "python": platform.python_version(),
-                "platform": platform.platform(),
-            },
-        }
-
     def _strip_external(payload: dict[str, Any]) -> dict[str, Any]:
         # P1(audit-20260915): 外部匿名请求只回存活态, 不泄组件细节
         return {
@@ -496,7 +513,7 @@ async def health(request: Request) -> dict[str, Any]:
         }
 
     try:
-        result = await asyncio.wait_for(_check(), timeout=HEALTH_TIMEOUT)
+        result = await asyncio.wait_for(_check_components(), timeout=HEALTH_TIMEOUT)
         return result if _request_from_internal(request) else _strip_external(result)
     except asyncio.TimeoutError:
         logging.getLogger(__name__).warning(

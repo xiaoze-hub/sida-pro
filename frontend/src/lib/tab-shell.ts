@@ -94,6 +94,7 @@ export const ROUTE_LABEL_KEYS: Record<string, string> = {
   '/profile': 'nav.profile',
   '/api-keys': 'nav.apiKeys',
   '/system': 'nav.system',
+  '/system/status': 'nav.systemStatus',
   '/settings': 'nav.settings',
   '/developers': 'nav.developers',
   '/admin': 'nav.admin',

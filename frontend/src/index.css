@@ -282,6 +282,21 @@
   0%, 100% { transform: scale(0.96); }
   50% { transform: scale(1.04); }
 }
+@keyframes sida-system-flow {
+  to { stroke-dashoffset: -34; }
+}
+.system-topology {
+  background-image: radial-gradient(hsl(var(--border-strong)) 0.7px, transparent 0.7px);
+  background-size: 20px 20px;
+}
+.system-connection-flow {
+  animation: sida-system-flow 1.5s linear infinite;
+  animation-play-state: paused;
+}
+[data-flow-active="true"] .system-connection-flow { animation-play-state: running; }
+@media (prefers-reduced-motion: reduce) {
+  .system-connection-flow { animation: none; }
+}
 .assistant-avatar-motion {
   transform-origin: center;
   animation: sida-assistant-breathe 4s ease-in-out infinite;

@@ -58,6 +58,7 @@ const TAB_ICONS: Record<string, LucideIcon> = {
   '/profile': User,
   '/api-keys': KeyRound,
   '/system': ServerCog,
+  '/system/status': Activity,
   '/settings': Settings,
   '/developers': Code2,
   '/admin': ShieldCheck,

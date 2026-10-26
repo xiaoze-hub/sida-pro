@@ -88,6 +88,7 @@ const enUS: Messages = {
     profile: 'Profile',
     apiKeys: 'API Key',
     system: 'System',
+    systemStatus: 'System status',
     notifications: 'Notifications',
     alerts: 'Alerts',
     settings: 'Settings',

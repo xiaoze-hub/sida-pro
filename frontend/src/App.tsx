@@ -55,6 +55,7 @@ const ApiKeysPage = lazyWithRetry(() => import('@/pages/ApiKeys'), 'api-keys-pag
 // 旧路由 /forecast、/quote、/quote/:symbol、/l2 改走 LegacyForecastRedirect/LegacyL2Redirect。
 // 正文已搬入工作台(KlineChart 复用, L2 内容挪至「盘口资金」标签), 原页 Quote.tsx/L2Orderbook.tsx
 // 已于 2026-09-13 删除。
+const SystemStatusPage = lazyWithRetry(() => import('@/pages/SystemStatus'), 'system-status-page')
 const SystemPage = lazyWithRetry(() => import('@/pages/System'), 'system-page')
 const SettingsHubPage = lazyWithRetry(() => import('@/pages/SettingsHub'), 'settings-hub-page')
 // §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
@@ -77,6 +78,8 @@ import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
 import { AssistantWorkspaceProvider, AssistantPageHost } from '@/components/AssistantWorkspace'
 import { AssistantAvatar } from '@/components/AssistantAvatar'
+import { SystemStatusProvider } from '@/components/system/SystemStatusProvider'
+import { SystemStatusIndicator } from '@/components/system/SystemStatusIndicator'
 import { BrandMark } from '@/components/BrandMark'
 import SessionPhaseChip, { sessionPhaseOf, type SessionInfo } from '@panwatch/biz-ui/components/SessionPhaseChip'
 import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
@@ -87,7 +90,6 @@ import { isNavItemActive } from '@/lib/nav-active'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
-import SelfCheckModal from '@/components/SelfCheckModal'
 import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -388,7 +390,6 @@ function App() {
     try { localStorage.setItem('sida_sidebar_collapsed', c ? '0' : '1') } catch {}
     return !c
   })
-  const [selfCheckOpen, setSelfCheckOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [upgradeInfo, setUpgradeInfo] = useState<{ latest: string; url: string } | null>(null)
   const checkedUpdateRef = useRef(false)
@@ -519,6 +520,7 @@ function App() {
 
   return (
     <RequireAuth>
+    <SystemStatusProvider enabled={getJwtRole() === 'owner'}>
     <AssistantWorkspaceProvider enabled={!isNavHiddenForPerm({ perm: 'view_quotes' }, myPerms)}>
     <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
       <BrowserNotificationBridge />
@@ -652,7 +654,7 @@ function App() {
             navItems={[]}
             mode={mode}
             onSetMode={setMode}
-            onOpenSelfCheck={() => setSelfCheckOpen(true)}
+            onOpenSelfCheck={() => navigate('/system/status')}
             placement="up"
           />
         </div>
@@ -706,7 +708,7 @@ function App() {
                 navItems={(isGuestUser() ? mobileMoreNavItems.filter(n => !isNavHiddenForGuest(n.to) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)) : mobileMoreNavItems.filter(n => !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))).map(n => ({ ...n, label: t(n.labelKey) }))}
                 mode={mode}
                 onSetMode={setMode}
-                onOpenSelfCheck={() => setSelfCheckOpen(true)}
+                onOpenSelfCheck={() => navigate('/system/status')}
               />
             </div>
           </div>
@@ -746,6 +748,7 @@ function App() {
         <WorkspaceTabShell header={
           <div data-workspace-status className="mb-4 grid min-w-0 gap-2 md:grid-cols-[auto_minmax(0,1fr)] md:items-center md:gap-4">
             <div className="flex flex-wrap items-center gap-2">
+              <SystemStatusIndicator />
               <SourceHeartbeat />
               {!isNavHiddenForPerm({ perm: 'edit_portfolio' }, myPerms) && <Button variant="ghost" size="sm" data-testid="quick-portfolio" onClick={() => {
                 navigate('/portfolio?view=positions')
@@ -805,6 +808,7 @@ function App() {
               <Route path="/stocks/:symbol" element={<PermGuard perm="view_quotes" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
               <Route path="/stocks" element={<LegacyStocksRedirect />} />
               {/* §4.3: Agent + 数据源 → /system 二级页 */}
+              <Route path="/system/status" element={<SystemStatusPage />} />
               <Route path="/system" element={<SystemPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
               <Route path="/agents" element={<LegacyTabRedirect to="/system?tab=agents" />} />
               {/* §4.3 补齐: 历史并入报告(投研内"历史Tab"), 都是研究产出。
@@ -848,7 +852,6 @@ function App() {
       <ChatWidget />
       <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
       <LogsModal open={logsOpen} onOpenChange={setLogsOpen} />
-      <SelfCheckModal open={selfCheckOpen} onClose={() => setSelfCheckOpen(false)} />
       <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -915,6 +918,7 @@ function App() {
       </Dialog>
     </div>
     </AssistantWorkspaceProvider>
+    </SystemStatusProvider>
     </RequireAuth>
   )
 }

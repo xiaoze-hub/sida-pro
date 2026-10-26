@@ -1,7 +1,7 @@
 # SIDA 界面与交互准则
 
-> 基线：`009a2d65`（VERSION `v0.80.0`）及 2026-10-26 AI 助手形象改造；规范随同本次代码提交生效。
-> 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`。
+> 基线：`c3e4ab5d`（VERSION `v0.80.0`）及 2026-10-26 系统状态拓扑改造；规范随同本次代码提交生效。
+> 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
 > 覆盖：全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
 > 未覆盖：交易算法准确性、外部行情接口可用性、生产数据与全部页面的完整业务验收；不以 UI 验证代替口径、权限和多用户测试。
 
@@ -128,3 +128,14 @@ git diff --check
 动画资源随应用托管，不引用外部 CDN；每个播放器使用独立数据副本并在卸载/切换形象时释放实例。播放器控制遵循 [Lottie 官方用法](https://github.com/airbnb/lottie-web/wiki/Usage)。不得为动画放宽 CSP 或额外添加 JavaScript 持续帧循环。
 
 悬浮形象桌面 96px、手机 80px；左侧小气泡随机显示预设技术分析引导，20 秒后更换且不连续重复，工作中显示进度提示，不做读屏轮播；点击形象或气泡均打开助手。加载时不显示旧图标或静态占位，播放器准备好后再显示。迷你窗停靠右下，手机留出顶栏、底部导航和键盘区域，正文独立滚动；展开到完整页保持同一会话。关闭窗口恢复入口焦点，回复完成不能抢走用户在其他区域的输入焦点。
+
+
+## 9. 系统状态与连接图
+
+“系统自检”入口直接进入 `/system/status` 完整页面，不再打开自检弹窗。系统页的状态页签复用 `SystemStatusPanel`，通过“详细数据”进入完整页，仅管理员查看运维状态。状态行左侧的 `SystemStatusIndicator` 显示核心状态，点击小面板查看摘要并前往主页面。采用无边框模块节点、依赖连线、状态 Chip 与点击后的右侧详情；手机在图内横向滚动，不能撑宽页面。详情显示检测依据并提供配置入口，禁止只依赖鼠标悬停。
+
+打开先渲染完整模块布局，按账号读取本会话的脱敏缓存并显示记录时间；首次无缓存也展示 9 个未知状态节点。刷新时叠加加载提示、节点更新标记与实际完成进度，不能清空为单独的 loading。只读 `/api/health/system/stream` 通过 SSE 逐模块覆盖新结果，未返回项保留旧值且不流动，完整更新才替换缓存时间。图标与完整页共用 `SystemStatusProvider` 的一个流，前台每 30 秒更新，窗口隐藏暂停；隐藏页面只暂停自身连线动画。基础健康收集不调用 AI 或发送通知。保留原公开 `/api/health` 的内外网裁剪；新快照不含连接串、凭据或原始系统错误。失败保留已取得的数据并停止流动；缺失项显示未检测，不能伪造为正常或未配置。
+
+流动表示最近检测连通，不代表真实请求流量。未配置、未知、待命、异常连接不流动；历史数据源统计不等同当前连接，通知仅校验配置不等同投递成功。调度器 standby 必须说明当前进程待命且主实例未验证。尊重减少动态效果，隐藏页签停止流动。
+
+主动检测必须由用户点击，使用 POST，避免 GET 缓存和自动重试重复调用模型或发通知；并发上限 4。AI 检测的用量与通知真实发送开关必须可见，通知默认不发送。只探测当前账号和共享通知渠道，不测试他人渠道；CLI 保留原有全局自检用法。主动探测结果最多点亮线路 60 秒，长时间未验证回到未知状态。

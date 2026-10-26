@@ -1,4 +1,5 @@
 import PageHeader from '@/components/PageHeader'
+import { SystemStatusPanel } from '@/components/system/SystemStatusPanel'
 import { Suspense } from 'react'
 import { Bot, Database, ListChecks, Loader2, ShieldAlert } from 'lucide-react'
 
@@ -19,6 +20,7 @@ const ErrorLogPage = lazyWithRetry(() => import('@/pages/ErrorLog'), 'error-log-
 const JobPanelPage = lazyWithRetry(() => import('@/components/JobPanel').then(m => ({ default: m.JobPanel })), 'job-panel-page')
 
 const SYSTEM_TABS: TabDef[] = [
+  { key: 'status', label: '系统状态', icon: ListChecks, ownerOnly: true, render: () => <div className="card-surface rounded-xl bg-card p-4"><SystemStatusPanel compact /></div> },
   {
     key: 'agents',
     label: 'Agent',

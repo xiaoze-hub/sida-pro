@@ -87,6 +87,7 @@ const zhCN = {
     profile: '个人中心',
     apiKeys: 'API Key',
     system: '系统',
+    systemStatus: '系统状态',
     notifications: '通知',
     alerts: '提醒',
     settings: '设置',

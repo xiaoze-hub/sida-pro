@@ -231,7 +231,7 @@ async def _guard(coro, fallback: dict) -> dict:
                      "fail", 0, str(e))
 
 
-def _enumerate(db, include_system: bool = True) -> list[dict]:
+def _enumerate(db, include_system: bool = True, user_id: str | None = None) -> list[dict]:
     """枚举所有待检项(身份 + ORM 引用),不探测。include_system 加 DB/磁盘/调度 系统基础项。"""
     from src.db.models import AIModel, AIService, DataSource, NotifyChannel
 
@@ -250,7 +250,10 @@ def _enumerate(db, include_system: bool = True) -> list[dict]:
         # group = 服务商名,供前端做「服务商 → 模型」两级层级
         targets.append({"category": "ai", "key": f"ai:{model.id}", "name": model.name or model.model,
                         "group": service.name, "_kind": "ai", "_obj": model, "_service": service})
-    for ch in db.query(NotifyChannel).filter(NotifyChannel.enabled.is_(True)).all():
+    channels = db.query(NotifyChannel).filter(NotifyChannel.enabled.is_(True))
+    if user_id is not None:
+        channels = channels.filter((NotifyChannel.user_id == user_id) | NotifyChannel.user_id.is_(None))
+    for ch in channels.all():
         targets.append({"category": "notify", "key": f"nc:{ch.id}", "name": ch.name or ch.type,
                         "group": None, "_kind": "nc", "_obj": ch})
     return targets
@@ -275,24 +278,24 @@ def _probe_for(t: dict, notify_send: bool, db=None):
     return probe_notify_channel(t["_obj"], send=notify_send)
 
 
-def list_selfcheck_items(*, db=None, include_system: bool = True) -> list[dict]:
+def list_selfcheck_items(*, db=None, include_system: bool = True, user_id: str | None = None) -> list[dict]:
     """只枚举待检项身份(category/key/name/group),不探测;供前端先渲染列表再逐项检查。"""
     own = db is None
     db = db or SessionLocal()
     try:
-        return [_identity(t) for t in _enumerate(db, include_system)]
+        return [_identity(t) for t in _enumerate(db, include_system, user_id)]
     finally:
         if own:
             db.close()
 
 
-async def run_selfcheck(*, db=None, notify_send: bool = False, keys=None, include_system: bool = True) -> dict:
+async def run_selfcheck(*, db=None, notify_send: bool = False, keys=None, include_system: bool = True, user_id: str | None = None) -> dict:
     """探测待检项,返回看板。keys 非空时只探测这些 key(供前端逐项更新进度)。"""
     own = db is None
     db = db or SessionLocal()
     try:
         keyset = set(keys) if keys is not None else None
-        targets = [t for t in _enumerate(db, include_system) if keyset is None or t["key"] in keyset]
+        targets = [t for t in _enumerate(db, include_system, user_id) if keyset is None or t["key"] in keyset]
         tasks = [_guard(_probe_for(t, notify_send, db), _identity(t)) for t in targets]
         items = list(await asyncio.gather(*tasks)) if tasks else []
         summary = {
