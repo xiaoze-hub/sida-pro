@@ -44,6 +44,9 @@ DEFAULT_BASE_URL = "https://SIDA.hengsheng-elec.com"
 #: 交易相关一律不出现在这个出口（只读数据 server 的安全底线）
 FORBIDDEN_NAME_PARTS = ("trade", "order", "buy", "sell", "place_", "cancel_", "withdraw")
 
+#: 单批最多几项：串行执行，多了就是让调用方干等（与并行诊断同一上限口径）
+MAX_BATCH = 4
+
 
 class ToolError(Exception):
     """工具层错误：以 MCP `isError` 返回给客户端，不终止 server。"""
@@ -93,6 +96,33 @@ TOOLS: list[dict] = [
             "实施任何取数前先调它，按 name 再调 sida_run_skill。"
         ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "sida_batch_run",
+        "description": (
+            "一次跑 2~4 个能力（串行，避免上游限流），逐项返回结果或失败原因。"
+            "失败的项如实返回 error，**不会**替你重试或编造数据。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "calls": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "params": {"type": "object"},
+                        },
+                        "required": ["name"],
+                    },
+                }
+            },
+            "required": ["calls"],
+            "additionalProperties": False,
+        },
     },
     {
         "name": "sida_run_skill",
@@ -165,7 +195,61 @@ def make_handlers(
         text = json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data
         return {"content": [{"type": "text", "text": text}]}
 
-    return {"sida_list_skills": list_skills, "sida_run_skill": run_skill}
+    def batch_run(args: dict) -> dict:
+        calls = args.get("calls")
+        if not isinstance(calls, list) or not calls:
+            raise ToolError("缺少 calls（非空数组）")
+        if len(calls) > MAX_BATCH:
+            raise ToolError(f"最多 {MAX_BATCH} 项（当前 {len(calls)} 项）")
+
+        results = []
+        for item in calls:
+            if not isinstance(item, dict):
+                results.append({"ok": False, "error": "调用项必须是对象"})
+                continue
+            name = str(item.get("name") or "").strip()
+            params = item.get("params") or {}
+            if not name:
+                results.append({"ok": False, "error": "缺少 name"})
+                continue
+            if is_forbidden(name):
+                results.append({"ok": False, "name": name, "error": "该出口只读，不含交易能力"})
+                continue
+            try:
+                data = _unwrap(http("POST", f"{base}/api/skills/{name}/run", body={"params": params}))
+                results.append({"ok": True, "name": name, "result": data})
+            except ToolError as exc:
+                # 单项失败不打断整批：如实记录，后续项继续
+                results.append({"ok": False, "name": name, "error": str(exc)})
+
+        ok = sum(1 for r in results if r.get("ok"))
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "count": len(results),
+                            "ok": ok,
+                            "failed": len(results) - ok,
+                            "gaps": [
+                                f"{r.get('name') or '?'}: {r.get('error')}"
+                                for r in results
+                                if not r.get("ok")
+                            ],
+                            "results": results,
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ]
+        }
+
+    return {
+        "sida_list_skills": list_skills,
+        "sida_run_skill": run_skill,
+        "sida_batch_run": batch_run,
+    }
 
 
 def handle(payload: dict, handlers: dict[str, Callable[[dict], dict]]) -> dict | None:

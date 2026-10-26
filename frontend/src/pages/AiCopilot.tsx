@@ -41,6 +41,14 @@ import { UsageBar } from '@/components/copilot/UsageBar'
 import { PersonaBadge } from '@/components/copilot/PersonaBadge'
 import { ModelPicker } from '@/components/copilot/ModelPicker'
 import { LiveRunPanel } from '@/components/copilot/LiveRunPanel'
+import {
+  CONV_MIN,
+  clampConvWidth,
+  readConvWidth,
+  resolveShortcut,
+  STORAGE_KEYS,
+  writePref,
+} from '@/lib/copilot/layout'
 import { useConversations } from '@/hooks/useConversations'
 import { useCopilotRuns } from '@/hooks/useCopilotRuns'
 import {
@@ -196,6 +204,15 @@ export default function AiCopilotPage() {
     symbol?: string
   } | null>(null)
   const [streaming, setStreaming] = useState(false)
+  // 2026-10-26 布局偏好: 左会话列宽度可拖、右面板可折叠（都持久化）
+  const [convWidth, setConvWidth] = useState<number>(() =>
+    readConvWidth(typeof window === 'undefined' ? null : window.localStorage),
+  )
+  // 右面板折叠 = panelTab 为空(它本来就是可开可关的滑出面板);
+  // 用 lastPanelTabRef 记住上次那个页签, 快捷键才能"关掉再打开回原来那页"
+  const lastPanelTabRef = useRef<PanelTab>('runs')
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
+
   // 2026-10-25: 正在跟踪的后台 run（实时面板用 SSE 订阅它的工具流）
   const [liveRunId, setLiveRunId] = useState<string | null>(null)
   // 2026-10-25: 后台执行开关(长问题用: 提交即返回, 可离开页面)
@@ -660,6 +677,47 @@ export default function AiCopilotPage() {
    * 气泡已出现就贴在气泡顶部（定稿时原地不动），还没首字就先挂在对话流尾部。
    */
 
+  /**
+   * 快捷键（2026-10-26）：Cmd/Ctrl+Enter 发送、Cmd/Ctrl+K 新会话、Cmd/Ctrl+\ 折叠右面板。
+   * 判定逻辑在 lib/copilot/layout.ts（可单测），这里只做接线。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      const tag = (t?.tagName ?? '').toLowerCase()
+      const inEditable =
+        tag === 'input' || tag === 'textarea' || Boolean(t?.isContentEditable)
+      const action = resolveShortcut(
+        { key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey,
+          isComposing: (e as KeyboardEvent & { isComposing?: boolean }).isComposing },
+        { inEditable, streaming },
+      )
+      if (!action) return
+      if (action === 'send') {
+        e.preventDefault()
+        void send(input)
+        return
+      }
+      if (action === 'new-conversation') {
+        e.preventDefault()
+        startNewConversation()
+        return
+      }
+      if (action === 'toggle-panel') {
+        e.preventDefault()
+        setPanelTab((cur) => {
+          if (cur) {
+            lastPanelTabRef.current = cur
+            return null
+          }
+          return lastPanelTabRef.current
+        })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [input, send, streaming, startNewConversation, setPanelTab])
+
   const runForMessage = (i: number) => matchRunForMessage(msgs, runsState.runs, i)
 
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
@@ -759,7 +817,8 @@ export default function AiCopilotPage() {
             只渲染一份 —— 抽屉打开时不再渲染常驻列, 否则 jsdom/读屏都会看到两份同名节点。 */}
         {!historyOpen ? (
           <div
-            className="hidden w-64 shrink-0 overflow-y-auto border-r border-border/40 bg-s1 xl:block"
+            className="relative hidden shrink-0 overflow-y-auto border-r border-border/40 bg-s1 xl:block"
+            style={{ width: `${convWidth}px` }}
             data-testid="copilot-conversation-column"
           >
             <div className="flex items-center justify-between py-2 pl-3 pr-1">
@@ -778,6 +837,36 @@ export default function AiCopilotPage() {
               onRename={(id, title) => void convMgr.rename(id, title)}
               onPin={(id, pinned) => void convMgr.pin(id, pinned)}
               onDelete={(id) => void convMgr.remove(id)}
+            />
+            {/* 拖拽把手：双击回默认宽度（用户拖歪了不用去清 localStorage） */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整会话列宽度"
+              data-testid="conversation-column-resizer"
+              onDoubleClick={() => {
+                setConvWidth(clampConvWidth(undefined))
+                writePref(window.localStorage, STORAGE_KEYS.convWidth, String(clampConvWidth(undefined)))
+              }}
+              onPointerDown={(e) => {
+                dragRef.current = { startX: e.clientX, startW: convWidth }
+                ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+              }}
+              onPointerMove={(e) => {
+                const d = dragRef.current
+                if (!d) return
+                const next = clampConvWidth(d.startW + (e.clientX - d.startX))
+                setConvWidth(next)
+              }}
+              onPointerUp={(e) => {
+                if (dragRef.current) {
+                  writePref(window.localStorage, STORAGE_KEYS.convWidth, String(convWidth))
+                }
+                dragRef.current = null
+                ;(e.target as HTMLElement).releasePointerCapture?.(e.pointerId)
+              }}
+              className="absolute inset-y-0 right-0 w-1 cursor-col-resize bg-transparent hover:bg-border"
+              title={`拖动调整宽度（${CONV_MIN}–360px），双击复位`}
             />
           </div>
         ) : null}

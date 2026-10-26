@@ -67,7 +67,7 @@ def test_tools_list_exposes_two_meta_tools(env):
     handlers, _ = env
     out = handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, handlers)
     names = [t["name"] for t in out["result"]["tools"]]
-    assert names == ["sida_list_skills", "sida_run_skill"]
+    assert names == ["sida_list_skills", "sida_batch_run", "sida_run_skill"]
     # 每个工具都必须有 inputSchema，否则客户端无法构造调用
     assert all("inputSchema" in t for t in out["result"]["tools"])
 
@@ -158,3 +158,48 @@ def test_is_forbidden_matrix():
         assert is_forbidden(bad) is True
     for ok in ["quote", "chip_analyst", "main_intent", "kline"]:
         assert is_forbidden(ok) is False
+
+
+def test_batch_run_串行逐项返回且失败不打断(env):
+    handlers, calls = env
+    out = handle(
+        {"jsonrpc": "2.0", "id": 20, "method": "tools/call",
+         "params": {"name": "sida_batch_run",
+                    "arguments": {"calls": [
+                        {"name": "quote", "params": {"symbol": "600111"}},
+                        {"name": "place_order"},
+                        {"name": "chip", "params": {}},
+                    ]}}},
+        handlers,
+    )
+    body = json.loads(out["result"]["content"][0]["text"])
+    assert body["count"] == 3
+    assert body["ok"] == 2
+    assert body["failed"] == 1
+    assert any("place_order" in g for g in body["gaps"])
+    # 交易类拒绝后仍继续跑后面的项（不整批失败）
+    assert [r.get("name") for r in body["results"]] == ["quote", "place_order", "chip"]
+    runs = [c for c in calls if c[1].endswith("/run")]
+    assert len(runs) == 2  # place_order 根本没发请求
+
+
+def test_batch_run_超过上限被拒(env):
+    handlers, _ = env
+    out = handle(
+        {"jsonrpc": "2.0", "id": 21, "method": "tools/call",
+         "params": {"name": "sida_batch_run",
+                    "arguments": {"calls": [{"name": "quote"} for _ in range(5)]}}},
+        handlers,
+    )
+    assert out["result"]["isError"] is True
+    assert "最多 4 项" in out["result"]["content"][0]["text"]
+
+
+def test_batch_run_空输入被拒(env):
+    handlers, _ = env
+    out = handle(
+        {"jsonrpc": "2.0", "id": 22, "method": "tools/call",
+         "params": {"name": "sida_batch_run", "arguments": {"calls": []}}},
+        handlers,
+    )
+    assert out["result"]["isError"] is True
