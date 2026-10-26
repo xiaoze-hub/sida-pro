@@ -101,8 +101,8 @@ def test_传code时透传个股参数(monkeypatch):
 def test_工具已在注册表末尾且带口径(monkeypatch):
     names = list(reg.CHAT_TOOL_REGISTRY)
     # 新增工具一律追加在末尾（保证 core 前缀导出顺序不变），只要求它在尾部区
-    # 2026-10-25: get_market_ranking 追加到末尾后，末尾窗口要放宽到 4
-    assert "get_margin_trading" in names[-4:], names[-4:]
+    # 2026-10-26: get_stock_report 归位末尾后，末尾窗口放宽到 6
+    assert "get_margin_trading" in names[-6:], names[-6:]
     assert reg.CHAT_TOOL_REGISTRY["get_margin_trading"].caliber.strip()
     desc = reg.CHAT_TOOL_REGISTRY["get_margin_trading"].schema["function"]["description"]
     assert "杠杆" in desc

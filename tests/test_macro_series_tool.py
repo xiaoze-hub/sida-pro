@@ -90,8 +90,9 @@ def test_工具默认取三个指标(monkeypatch):
 
 def test_工具已注册且带口径():
     names = list(reg.CHAT_TOOL_REGISTRY)
-    # 新增工具都在尾部区（顺序：两融 → 宏观 → 区间走势）
-    assert {"get_margin_trading", "get_macro_series"} <= set(names[-4:]), names[-4:]
+    # 新增工具都在尾部区（顺序：两融 → 宏观 → 区间走势 → 体检报告 → 市场排行）
+    # 2026-10-26: get_stock_report 归位末尾后窗口放宽到 6
+    assert {"get_margin_trading", "get_macro_series"} <= set(names[-6:]), names[-6:]
     t = reg.CHAT_TOOL_REGISTRY["get_macro_series"]
     assert t.caliber.strip()
     assert "Yahoo" in t.caliber
