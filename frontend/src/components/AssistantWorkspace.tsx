@@ -62,7 +62,7 @@ export function AssistantWorkspaceProvider({ children, enabled = true }: { child
     {children}
     <div ref={parking} hidden aria-hidden="true" />
     {started && enabled && createPortal(<TabActiveProvider active={visible}>
-      <ErrorBoundary fallback={(_error, retry) => <div className="p-4 text-[14px]">助手暂时无法显示。<button type="button" className="ml-2 text-primary" onClick={retry}>重新加载</button></div>}><Suspense fallback={<div className="grid h-full place-items-center text-[14px] text-muted-foreground">正在打开 AI 助手…</div>}>
+      <ErrorBoundary fallback={(_error, retry) => <div className="p-4 text-[14px]">数智参谋暂时无法显示。<button type="button" className="ml-2 text-primary" onClick={retry}>重新加载</button></div>}><Suspense fallback={<div className="grid h-full place-items-center text-[14px] text-muted-foreground">正在打开数智参谋…</div>}>
         <Conversation presentation={pageHost ? 'page' : 'mini'} visible={visible} onBusyChange={setBusy} entry={entry} entrySearch={pageHost ? location.search : undefined} />
       </Suspense></ErrorBoundary>
     </TabActiveProvider>, container)}

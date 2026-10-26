@@ -1,3 +1,42 @@
+## release: v0.82.0（发版提速 + 助手悬浮球自由拖拽 / 全屏 / 改名数智参谋）
+
+### 1. CI：把 PDF 系统库彻底移出分片（用户裁定「改 2」）
+发版慢的**唯一异常项**就是它：`tests/test_pdf_export.py` 是全仓**唯一**需要
+pango/cairo + `fonts-noto-cjk` 的文件，而装这些库实测 700~1130s（apt 走公网，慢且随机），
+以前 **4 个分片各自付一遍**。
+
+- 分片选择里 `continue` 掉该文件 → 四片共 546 个测试文件，不再装系统库（省 ~700s × 4）
+- 新增独立作业 `pdf-gate`：只跑这一个文件，`.deb` 走 `cache-apt-pkgs-action`（缓存已预热）
+- 覆盖率数据由 4 片变 5 片（`coverage.combined.pdf`），`coverage-ratchet` 断言 4→5
+  并 `needs` 加上 `pdf-gate` —— **不能让 PDF 相关源码的覆盖凭空消失把棘轮算松**
+
+### 2. 助手悬浮球：全屏自由拖拽（原先固定右下角）
+- 新增 `frontend/src/lib/copilot/draggable.ts`：`clampToViewport` / `isDragGesture` /
+  `readLauncherPos` / `writeLauncherPos` / `bubbleSide`，纯函数，无 DOM 依赖
+- Pointer Events + `setPointerCapture`：鼠标/触摸/触控笔同一套，手指移出球体也不丢事件
+- 位移 ≤4px 判为点击；拖拽结束后的**补发 click 被挡掉**（否则「拖完顺手打开面板」）
+- 位置记 `localStorage`（键 `sida:copilot:launcher-pos`），旋转平板/软键盘弹出后重新夹进视口
+- 气泡朝向随位置翻转（球在右半屏朝左、左半屏朝右），不再被屏幕边缘裁掉
+
+### 3. 全屏模式（平板/窄屏更好用）
+- 迷你窗头部新增全屏开关（`Maximize2` / `Minimize2`），全屏时 `inset-0 h-[100dvh] rounded-none`
+- Esc 语义：**先退全屏，再按一次才关窗**（此前一次 Esc 直接关掉整个会话）
+- 头部按钮 `<md` 用 44px 触摸目标（`h-11 w-11`），`md+` 回 36px
+- 迷你窗在 `lg+` 放宽到 560px，底部加 `env(safe-area-inset-bottom)`
+- （侧栏在 <1180px 本就默认折叠，平板已是图标轨，无需再改）
+
+### 4. 改名：AI 分析助手 → 数智参谋
+`App.tsx` 侧栏入口、`ChatWidget` 三处（title / aria-label / 迷你窗标题）、
+`AiCopilot` 头像 label、`AssistantWorkspace` 加载与降级文案、`Help` 页条目 —— 全部统一。
+相关测试断言同步改（`ai-entry-uniqueness` 按 title、`assistant-workspace` 按 aria-label，
+两处口径不同，已分别对齐）。
+
+### 门禁（本机实测）
+- 前端：tsc 0 / eslint 0 / ui-rules OK / **252 files · 1897 tests 全绿**（+2 文件 +19 例）
+- 新增用例：`tests/lib/copilot-draggable.test.ts`（13 例，纯函数边界）
+  + `tests/components/copilot-launcher-drag.test.tsx`（6 例，真实拖拽/误触/全屏/Esc）
+- `tests/test_pdf_export.py` 本机 5 passed
+
 ## release: v0.81.0（合并今日两支：统一分析工作台 + Actions 依赖升级）
 
 按「先取今日分支、合并部署」执行。今日有提交的分支只有两支：

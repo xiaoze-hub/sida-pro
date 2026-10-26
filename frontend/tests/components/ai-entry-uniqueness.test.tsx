@@ -38,7 +38,7 @@ import ChatWidget from '../../src/components/ChatWidget'
 import { CopilotCapsule } from '../../src/components/copilot/CopilotCapsule'
 import { resetCapsulePresenceForTest } from '../../src/lib/copilot/capsule-presence'
 
-const FAB_TITLE = '打开 AI 分析助手'
+const FAB_TITLE = '拖动可移动 · 点击打开数智参谋'
 
 beforeEach(() => {
   localStorage.clear()

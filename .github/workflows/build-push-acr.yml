@@ -122,17 +122,6 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      - name: Install system libs for WeasyPrint (PDF export tests)
-        # 2026-10-26 三次迭代后的最终方案：
-        #  ① 原来裸 apt-get：实测单次装 ~1131s（apt 走 IPv6 卡住），是发版"越来越慢"的主因；
-        #  ② 我先加 420s 硬超时 → 把"慢"变成"红"(exit 124)，错；
-        #  ③ 现在改用 cache-apt-pkgs-action：.deb 走 Actions 缓存，
-        #     首次仍是慢的（不可避免），之后**命中缓存秒级恢复**，且不依赖外网 apt 源。
-        # 顺带解决字体问题：缓存键包含包清单，缺 fonts-noto-cjk 时自动重装。
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9  # v1.6.3
-        with:
-          packages: libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
-          version: 1.0
       - name: Install backend deps (requirements-lock.txt)
         run: |
           set -o pipefail
@@ -151,6 +140,11 @@ jobs:
             for f in tests/test_*.py; do
               case "$f" in
                 tests/test_dark_l2_engine.py|tests/test_thsdk_extended.py) continue ;;
+                # 2026-10-26: PDF 导出测试要 pango/cairo + 中文字体, 而装系统库实测要 700~1130s
+                # (apt 慢且随机)。它是**唯一**需要这些库的文件, 却让 4 个分片各自付一遍安装费
+                # —— 这就是发版"越来越慢"的唯一异常项。改为独立作业 pdf-gate 单跑,
+                # 系统库只在那里装一次, 且走 Actions 缓存。
+                tests/test_pdf_export.py) continue ;;
               esac
               printf '%s %s\n' "$(grep -cE '^[[:space:]]*(async[[:space:]]+)?def test_' "$f")" "$f"
             done | sort -k1,1nr -k2,2 | awk -v n="$SHARDS" -v k="$SHARD" 'NR % n == k - 1 {print $2}'
@@ -193,9 +187,53 @@ jobs:
   # 不能让棘轮静默失效: 缺 `[run] source = src` 时, 从未被任何用例导入的 src 文件不会进报告,
   # 覆盖率会被算高(棘轮变松)。这里显式给同口径配置, 并已在本地实证 combine 结果与
   # 单次全量跑的报告**逐文件一致**。
+  # 2026-10-26: PDF 导出测试独立作业。
+  # 动因: 它是全仓**唯一**需要 pango/cairo + fonts-noto-cjk 的文件, 而装这些库实测 700~1130s
+  # (apt 走公网, 慢且随机)。以前 4 个分片各自装一遍 → 发版门禁被这一项拖到 15~20 分钟。
+  # 现在: 分片彻底不装(见分片选择里的 continue), 只在本文档装一次, 且 .deb 走 Actions 缓存,
+  # 二次发版起命中缓存的恢复是秒级。四片 + 本作业的覆盖率数据由 coverage-ratchet 合并判棘轮。
+  pdf-gate:
+    name: Backend pytest (PDF 导出 · 独立)
+    needs: gates
+    runs-on: ubuntu-latest
+    env:
+      # 与分片同机制: pytest-cov 写哪个文件由 COVERAGE_FILE 决定,
+      # 不设它会写成 .coverage, coverage-ratchet 的 `coverage.combined.*` 就少一片。
+      COVERAGE_FILE: coverage.combined.pdf
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python 3.11 (与生产一致)
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Install system libs for WeasyPrint
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9  # v1.6.3
+        with:
+          packages: libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
+          version: 1.0
+      - name: Install backend deps (与分片同口径)
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q -r requirements-lock.txt pytest-timeout pytest-cov
+          python3 -m pip install -q --no-deps -e ./packages/marketdata
+      - name: Backend pytest (PDF 导出)
+        run: |
+          set -o pipefail
+          python3 -m pytest tests/test_pdf_export.py -q \
+            --cov=src --cov-report=term
+      - name: Upload pdf coverage data
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-shard-pdf
+          path: coverage.combined.pdf
+          if-no-files-found: warn
+          retention-days: 7
+
   coverage-ratchet:
     name: Backend coverage ratchet (combine 4 shards)
-    needs: [gates, backend-pytest]
+    needs: [gates, backend-pytest, pdf-gate]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -220,8 +258,10 @@ jobs:
           ls -l coverage.combined.*
           # 硬断言: 4 片数据少一片就是漏跑, 宁可红也别按部分覆盖率放行
           data=(coverage.combined.*)
-          if [ "${#data[@]}" -ne 4 ]; then
-            echo "::error::期望 4 片覆盖率数据(coverage.combined.1..4), 实际匹配 ${#data[@]} 个"
+          # 2026-10-26: 4 片 → 5 片(PDF 导出测试独立成 pdf-gate, 覆盖率数据同样要并入,
+          # 否则 PDF 相关源码的覆盖会凭空消失, 棘轮会被算松)。
+          if [ "${#data[@]}" -ne 5 ]; then
+            echo "::error::期望 5 片覆盖率数据(coverage.combined.1..4 + coverage.combined.pdf), 实际匹配 ${#data[@]} 个"
             exit 1
           fi
           COVERAGE_FILE=coverage.combined python3 -m coverage combine

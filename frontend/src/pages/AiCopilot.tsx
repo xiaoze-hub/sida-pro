@@ -903,7 +903,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
 
           {!msgs.length ? (
             <div className="flex min-h-[300px] flex-1 flex-col items-center justify-center gap-3 text-center">
-              <AssistantAvatar size={presentation === 'mini' ? 80 : 112} label="AI 分析助手" />
+              <AssistantAvatar size={presentation === 'mini' ? 80 : 112} label="数智参谋" />
               <div className="text-[12px] text-muted-foreground">{PAGE_EMPTY_HINT}</div>
               {/* w-full + items-stretch: 之前是 items-start, 按钮 w-full 在居中容器里宽度塌成 0,
                   结果只剩右侧 › 可见(视觉复核发现的"空描边横条") */}

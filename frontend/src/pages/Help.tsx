@@ -7,9 +7,9 @@ import { MessageSquare, LineChart, Sparkles, Wallet, FileText, Keyboard, Downloa
 const FEATURES = [
   {
     icon: MessageSquare,
-    title: '对话助手',
+    title: '数智参谋',
     to: '/ai-copilot',
-    desc: '全局 AI 助手，基于持仓/自选/行情上下文回答股票问题。',
+    desc: '数智参谋：基于持仓/自选/行情上下文回答股票问题，分析保留数据来源。',
     tips: [
       '右下角悬浮按钮随时唤起，支持多轮对话与历史记录',
       '可直接问“今天该看什么”“某只票怎么走”，回答会引用行情与新闻',

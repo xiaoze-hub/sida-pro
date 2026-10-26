@@ -581,7 +581,7 @@ function App() {
                 <AssistantAvatar size={sidebarCollapsed ? 32 : 44} />
                 {!sidebarCollapsed && (
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] font-semibold">AI 分析助手</span>
+                    <span className="block truncate text-[14px] font-semibold">数智参谋</span>
                     <span className="mt-0.5 block truncate text-[12px] opacity-80">
                       点击开始技术分析
                     </span>
