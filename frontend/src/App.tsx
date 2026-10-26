@@ -46,6 +46,7 @@ const LoginPage = lazyWithRetry(() => import('@/pages/Login'), 'login-page')
 const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
+const QuoteEntryPage = lazyWithRetry(() => import('@/pages/QuoteEntry'), 'quote-entry-page')
 const StockWorkbenchPage = lazyWithRetry(() => import('@/pages/StockWorkbench'), 'stock-workbench-page')
 const ProfilePage = lazyWithRetry(() => import('@/pages/Profile'), 'profile-page')
 // API Key 控制台(2026-09-16): 个人中心 → 密钥管理 + 智能体一键安装
@@ -107,8 +108,8 @@ import { onApiFailure } from '@panwatch/api'
 const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.home', perm: 'view_dashboard' },
   // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
-  // 「行情」默认落上证指数(000001, type=index); 「盘口」项撤除(内容进工作台「盘口资金」标签)。
-  { to: '/stocks/000001?type=index', icon: LineChart, labelKey: 'nav.stocks', perm: 'view_quotes' },
+  // 行情入口按当前账号持仓/关注解析默认标的；盘口内容在工作台「盘口资金」标签。
+  { to: '/quotes', icon: LineChart, labelKey: 'nav.stocks', perm: 'view_quotes' },
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
   { to: '/heatmap', icon: LayoutGrid, labelKey: 'nav.heatmap', perm: 'view_heatmap' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
@@ -159,7 +160,7 @@ const navItems = [
 // ② 新增「决策」组 —— 之前 `/decision-ledger` 与 `/caliber-compare` **只存在于 navItems,
 //    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
 const desktopNavGroups = [
-  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
+  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/quotes', '/heatmap', '/theme-mood'].includes(n.to)) },
   { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/auction', '/dark-fund-top', '/war-report', '/replay-tree'].includes(n.to)) },
   // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
   // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
@@ -175,7 +176,7 @@ const desktopNavGroups = [
 // 提醒并入通知后底栏由 /alerts 改指 /notifications; 提醒 Tab 在通知页内直达,
 // 老书签 /alerts 仍经 LegacyTabRedirect 跳到 /notifications?tab=alerts)。
 // navItems 数组顺序保持不动, 桌面端平铺分组完全不变。
-const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/stocks/000001?type=index', '/notifications']
+const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/quotes', '/notifications']
 
 // ═══ demo 账号只读模式(2026-08-15): 从 JWT payload 解出 username/role, 按角色控制导航 ═══
 // 2026-09-12: claims 解析抽到 src/lib/jwt.ts 共用(情绪周期回填按钮也要按角色控制)。
@@ -451,7 +452,7 @@ function App() {
     // v2.0 §4.4 快捷键导航: g + {key} 序列, 6 主导航全覆盖.
     { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },           // 驾驶舱 Dashboard
     { sequence: ['g', 'p'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/portfolio')) }, // 我的 Portfolio
-    { sequence: ['g', 'm'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/stocks/000001?type=index')) },  // 行情 Market (并入工作台, 默认上证指数)
+    { sequence: ['g', 'm'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/quotes')) },  // 行情：当前账号持仓/关注
     { sequence: ['g', 'o'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/opportunities')) }, // 机会 Opportunities
     { sequence: ['g', 'r'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/reports')) },   // 投研 Reports (合并历史)
     { sequence: ['g', 'u'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/settings')) },  // 系统 User settings
@@ -805,6 +806,7 @@ function App() {
               <Route path="/index/:symbol" element={<LegacyIndexRedirect type="index" />} />
               <Route path="/boards/:blockCode" element={<LegacyIndexRedirect type="board" />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
+              <Route path="/quotes" element={<PermGuard perm="view_quotes" myPerms={myPerms}><QuoteEntryPage /></PermGuard>} />
               <Route path="/stocks/:symbol" element={<PermGuard perm="view_quotes" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
               <Route path="/stocks" element={<LegacyStocksRedirect />} />
               {/* §4.3: Agent + 数据源 → /system 二级页 */}

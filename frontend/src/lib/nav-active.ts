@@ -1,4 +1,4 @@
-// 侧栏/底栏导航项"选中态"纯函数(2026-09-13 修复: 「行情」项永不选中)。
+// 侧栏/底栏导航项选中态；/quotes 为账号持仓/关注入口，详情仍在 /stocks/:symbol。
 //
 // 背景: navItems 的「行情」项现指向 `/stocks/000001?type=index`(个股工作台,
 // 默认上证指数)。旧判定是 `location.pathname.startsWith(to)`, 而 pathname 永不含
@@ -14,8 +14,8 @@
 export function isNavItemActive(to: string, pathname: string): boolean {
   if (to === '/') return pathname === '/'
   const toPath = to.split('?')[0]
-  if (toPath === '/stocks' || toPath.startsWith('/stocks/')) {
-    return pathname === '/stocks' || pathname.startsWith('/stocks/')
+  if (toPath === '/quotes' || toPath === '/stocks' || toPath.startsWith('/stocks/')) {
+    return pathname === '/quotes' || pathname === '/stocks' || pathname.startsWith('/stocks/')
   }
   return pathname.startsWith(toPath)
 }

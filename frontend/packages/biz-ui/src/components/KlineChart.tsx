@@ -338,6 +338,7 @@ function computeMacd(closes: number[]) {
 export default function KlineChart(props: {
   symbol: string
   market: string
+  instrument?: 'stock' | 'index'
   /** 初始周期; 切换后写回 (留给父组件保存 URL 用) */
   /**
    * 开启「分时 / K线」切换(P1, 2026-09-18)。
@@ -961,7 +962,7 @@ export default function KlineChart(props: {
       setError('')
       try {
         const days = props.initialDays ?? 120
-        const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(interval)}`
+        const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(interval)}${props.instrument ? `&instrument=${props.instrument}` : ''}`
         const res = await fetchAPI<KlinesResponse>(query)
         if (cancelled) return
         setLiveBar(res.live_bar ?? null)
@@ -1028,7 +1029,7 @@ export default function KlineChart(props: {
     return () => {
       cancelled = true
     }
-  }, [props.symbol, props.market, interval, props.initialDays])
+  }, [props.symbol, props.market, props.instrument, interval, props.initialDays])
 
   // ── 图层数据: 按需自取 summary(仅父未接管的分量才发请求) ────────
   useEffect(() => {
@@ -2078,7 +2079,7 @@ export default function KlineChart(props: {
         )}
       </div>
       {props.enableMinute && mode === 'minute' && (
-        <MinutePane symbol={props.symbol} market={props.market} height={props.height ?? 360} />
+        <MinutePane symbol={props.symbol} market={props.market} instrument={props.instrument} height={props.height ?? 360} />
       )}
 
       {/* 最新K线新鲜度(2026-09-23): 报障"今日日K不显示"。后端已修(剔桩+补实时),

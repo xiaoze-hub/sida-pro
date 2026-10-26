@@ -85,6 +85,7 @@ function IndexKline({ symbol, market }: { symbol: string; market: string }) {
     <KlineChart
       symbol={symbol}
       market={market}
+      instrument="index"
       initialInterval="1d"
       initialDays={120}
       gsSignals={layer.gsSignals}

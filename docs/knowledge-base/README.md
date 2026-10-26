@@ -84,3 +84,5 @@ python3 scripts/build_project_knowledge.py --baseline HEAD --check
 AI 助手由 `frontend/src/components/AssistantWorkspace.tsx` 持有单一会话实例，完整页与迷你窗复用 `frontend/src/pages/AiCopilot.tsx`；形象和本机偏好入口为 `AssistantAvatar.tsx`、`AssistantAvatarPicker.tsx` 与 `lib/assistant-avatar.ts`。动画与显示规范见 [UI 准则第 8 节](../UI_GUIDELINES.md#8-ai-助手形象与会话)。
 
 系统状态：`frontend/src/components/system/` 共用状态图标、摘要小面板、系统状态页签和 `/system/status` 完整页面；自检入口直接进入完整页。`src/web/api/system_status.py` 提供脱敏快照与 SSE 增量更新，`useSystemStatus.ts` 按账号缓存并显示真实进度；主动探测复用 `src/core/selfcheck.py`，管理员权限与通知账号隔离由后端执行。
+
+行情入口：`frontend/src/pages/QuoteEntry.tsx` 与 `frontend/src/lib/quote-universe.ts` 决定当前账号默认标的；`QuoteSymbolPicker.tsx` 提供持仓/关注搜索切换。`StockWorkbench.tsx` 保留市场，日 K/分时显式区分 stock/index，相关缓存身份见 `src/web/api/klines.py`、`src/web/api/quotes.py`。

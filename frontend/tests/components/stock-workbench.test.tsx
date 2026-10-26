@@ -488,12 +488,12 @@ describe('StockWorkbench 三带骨架', () => {
     expect(mountedTabs()).toEqual(['l2'])
   })
 
-  it('带1 切类型: 写 ?type= 且**保留**已有 ?tab=(切类型不丢标签)', () => {
+  it('带1 切到有效指数，保留已有页内标签，不把股票代码直接当成指数', () => {
     renderAt('/stocks/002636?tab=news')
     fireEvent.click(screen.getByText('mock-to-index'))
     expect(search()).toContain('type=index')
     expect(search()).toContain('tab=news')
-    expect(screen.getByTestId('index-body').textContent).toBe('index-body:002636')
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:000001')
     expect(screen.queryByTestId('kline')).toBeNull()
     // 切到指数分支后标签组件**全部卸载**(分支不同, 不再渲染)
     expect(screen.queryByTestId('tab-news')).toBeNull()
@@ -668,7 +668,7 @@ describe('StockWorkbench 三带骨架', () => {
     await expectTabHasPosition('l2', 'false')
     expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByText('mock-to-index'))
-    expect(screen.getByTestId('index-body').textContent).toBe('index-body:002636')
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:000001')
     await new Promise((r) => setTimeout(r, 0))
     // 闸门关闭 ⇒ 不因切类型再发一次(仍恰 1 次)
     expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)

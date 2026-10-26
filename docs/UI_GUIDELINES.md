@@ -1,7 +1,7 @@
 # SIDA 界面与交互准则
 
-> 基线：`c3e4ab5d`（VERSION `v0.80.0`）及 2026-10-26 系统状态拓扑改造；规范随同本次代码提交生效。
-> 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
+> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；规范随同本次代码提交生效。
+> 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/health.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/klines.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/quotes.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
 > 覆盖：全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
 > 未覆盖：交易算法准确性、外部行情接口可用性、生产数据与全部页面的完整业务验收；不以 UI 验证代替口径、权限和多用户测试。
 
@@ -143,3 +143,11 @@ git diff --check
 流动表示最近检测连通，不代表真实请求流量。未配置、未知、待命、异常连接不流动；历史数据源统计不等同当前连接，通知仅校验配置不等同投递成功。调度器 standby 必须说明当前进程待命且主实例未验证。尊重减少动态效果，隐藏页签停止流动。
 
 主动检测必须由用户点击，使用 POST，避免 GET 缓存和自动重试重复调用模型或发通知；并发上限 4。AI 检测的用量与通知真实发送开关必须可见，通知默认不发送。只探测当前账号和共享通知渠道，不测试他人渠道；CLI 保留原有全局自检用法。主动探测结果最多点亮线路 60 秒，长时间未验证回到未知状态。
+
+## 10. 行情标的与切换
+
+行情导航经 `/quotes` 读取当前账号持仓与关注列表，优先恢复仍在列表内的上次选择，否则先持仓、再关注；两者都没有才显示默认指数，并明确说明默认原因。接口失败必须显示读取失败和重试，不能当作没有股票。
+
+工作台常驻可搜索的持仓/关注切换入口，按市场与代码去重，提供股票列表管理入口。选择时保留 CN/HK/US 市场，账号偏好隔离；同代码不同市场的页签不能合并。切换类型必须指向有效标的，不能只改 type 后把原股票代码当作指数/板块。
+
+个股与指数可能同代码，日 K 与分时请求必须显式传递 instrument，后端取数和缓存都纳入类型。页面名称、行情、图表和持仓成本线必须属于同一个市场和标的；不可用时显示真实空态/错误，不用另一个标的数据兜底。

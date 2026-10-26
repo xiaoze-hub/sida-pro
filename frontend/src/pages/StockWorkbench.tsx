@@ -1,10 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { dashboardApi, fetchAPI } from '@panwatch/api'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval, useTabActive } from '@panwatch/base-ui'
 import KlineChart, { type KlineInterval, type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import { QuoteSymbolPicker } from '@/components/QuoteSymbolPicker'
+import { loadQuoteUniverse, preferredQuote, quotePath, rememberQuote } from '@/lib/quote-universe'
 import { CopilotCapsule } from '@/components/copilot/CopilotCapsule'
 import { DisciplineCoolDownBanner } from '@/components/DisciplineCoolDownBanner'
 import { DefenseLineBanner } from '@/components/DefenseLineBanner'
@@ -44,7 +46,8 @@ import {
  *  带2 主图 `KlineChart`(flex-1) + 右栏 `QuickRail`(320px) —— 个股专属(spec §1.3: 指数/板块无右栏);
  *  带3 `TabBar`(`WORKBENCH_TABS` 6 键, ?tab= 深链) + `TabPanel`(选中标签正文, 整宽单层)。
  *
- * 类型切换**不跳页**: `?type=` 只改本路由的 query(spec §1.3「工作台内切类型」); 标签同理走 `?tab=`。
+ * 类型切换选择有效标的：指数进入默认指数，个股读取当前账号持仓/关注，板块进入热力图选择。
+ * 不把原股票代码直接改 type 冒充指数/板块；切换指数或个股保留页内 tab。
  * 指数/板块在本路由内渲染 `IndexBoardHost`, **不渲染**右栏与 6 标签。
  *
  * **Ruling B**(保证本任务单独可编译/可走查, 后续任务逐一替换):
@@ -79,7 +82,7 @@ import {
  */
 
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
-const MARKET = 'CN'
+
 
 /**
  * B1 首屏冷启动(2026-10-05): 页面局部 `memo` 包一层 K 线主图。
@@ -253,7 +256,7 @@ function TabBar({ value, onChange }: { value: WorkbenchTab; onChange: (t: Workbe
  * `switch` 覆盖联合类型全部六值后 TS 收敛为 `never`(下面 `neverTab` 的穷尽性守卫),
  * 将来 `WorkbenchTab` 加键时 `tsc -b` 会在此处报错, 逼人补分支(不静默漏渲染)。
  *
- * 传参: `symbol`/`market` 一律 `MARKET`('CN'); `hasPosition` 见头注「持仓上下文」。
+ * 市场随所选标的保留；CN 专属指标由子组件门控，持仓上下文按市场与代码匹配。
  * `ResearchTab` 另收可选 `stockName`, 本页无名称来源(带1 自己取)故不传 —— 其兜底链会回退到
  * symbol 匹配, 不编造名称。`ForecastTab` 不消费 `symbol`/`market`(签名同形, 只为统一接线)。
  */
@@ -261,7 +264,9 @@ function TabPanel({
   tab,
   symbol,
   hasPosition,
+  market: MARKET,
 }: {
+  market: string
   tab: WorkbenchTab
   symbol: string
   hasPosition: boolean | undefined
@@ -291,6 +296,10 @@ export default function StockWorkbench() {
   const symbol = stripInternalPrefix(rawSymbol)
   const [sp, setSp] = useSearchParams()
   const type = normalizeType(sp.get('type'))
+  const MARKET = ['CN', 'HK', 'US'].includes(sp.get('market') ?? '') ? sp.get('market')! : 'CN'
+  const navigate = useNavigate()
+  const active = useTabActive()
+  useEffect(() => { if (active && type === 'stock' && symbol) rememberQuote({ symbol, market: MARKET }) }, [active, type, symbol, MARKET])
   const tab = parseTab(sp.get('tab'))
   /**
    * 页面级刷新计数器(Finding 1; 用法自遗留⑦ 起**分成两种**, 详见文件头注「页面级刷新」):
@@ -307,7 +316,7 @@ export default function StockWorkbench() {
    */
   const [fund4, setFund4] = useState<{ days: Fund4Day[]; hint?: string } | null>(null)
   useEffect(() => {
-    if (type !== 'stock' || !symbol) {
+    if (type !== 'stock' || MARKET !== 'CN' || !symbol) {
       setFund4(null)
       return
     }
@@ -326,7 +335,7 @@ export default function StockWorkbench() {
     return () => {
       cancelled = true
     }
-  }, [type, symbol, refreshKey])
+  }, [type, symbol, MARKET, refreshKey])
   /**
    * 持仓上下文(T19 真源; P1-2 起兼带成本价): `has===undefined` = 未知(在途/失败), 见 `usePositionContext`。
    * 未持仓只是**不渲染**持仓专属块, **不编造**数据; 未知时由带1/标签处显式标注(不猜 `false`)。
@@ -340,7 +349,7 @@ export default function StockWorkbench() {
    * 行情快照在途/取不到 name 时就退化成裸代码。这里批量补一次名字传给 `HeaderBand.nameHint`。
    * **只对个股取**: 指数/板块代码(000001/880xxx)与个股同号, 拿个股名字贴上去就是错名称。
    */
-  const stockNames = useStockNames(type === 'stock' ? [symbol] : [])
+  const stockNames = useStockNames(type === 'stock' && MARKET === 'CN' ? [symbol] : [])
   const nameHint = stockNames[symbol]
   /**
    * 持仓成本线(P1-2): 有成本价才画到 K 线上(水平线, 跟随该股成本价)。**无持仓 / 取不到成本价 ⇒ 不传**
@@ -419,7 +428,14 @@ export default function StockWorkbench() {
     [],
   )
   // 分发的稳定回调(B1 首屏冷启动 2026-10-05): 全部 `useCallback` 固定身份, 避免无关重渲染。
-  const handleTypeChange = useCallback((t: WorkbenchType) => setQuery('type', t), [setQuery])
+  const handleTypeChange = useCallback(async (target: WorkbenchType) => {
+    if (target === type) return
+    if (target === 'index') { navigate(`/stocks/000001?type=index&tab=${tab}`); return }
+    if (target === 'board') { navigate('/heatmap'); return }
+    const universe = await loadQuoteUniverse()
+    const choice = preferredQuote(universe)
+    navigate(`${choice ? quotePath(choice) : '/stocks/000001?type=stock&market=CN'}&tab=${tab}`)
+  }, [type, tab, navigate])
   const handleGotoTab = useCallback((t: WorkbenchTab) => setQuery('tab', t), [setQuery])
   const handleIntervalChange = useCallback(
     (i: KlineInterval) => setQuery('period', intervalToPeriod(i)),
@@ -436,6 +452,7 @@ export default function StockWorkbench() {
 
   return (
     <div className="mx-auto min-w-0 max-w-none space-y-4">
+      <QuoteSymbolPicker symbol={symbol} market={MARKET} type={type} defaultIndex={sp.get('default') === '1'} />
       {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
       <HeaderBand
         symbol={symbol}
@@ -487,6 +504,7 @@ export default function StockWorkbench() {
                 <MemoKlineChart
                   symbol={symbol}
                   market={MARKET}
+                  instrument="stock"
                   /* §10.2①: 周期以 URL 为准; URL 无/非法 → 图表默认 '1d' */
                   initialInterval={periodFromUrl ?? '1d'}
                   initialDays={120}
@@ -569,7 +587,7 @@ export default function StockWorkbench() {
               </div>
               <TabBar value={tab} onChange={handleGotoTab} />
             </div>
-            <TabPanel tab={tab} symbol={symbol} hasPosition={hasPosition} />
+            <TabPanel tab={tab} symbol={symbol} market={MARKET} hasPosition={hasPosition} />
           </section>
         </div>
       )}
