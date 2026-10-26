@@ -124,9 +124,20 @@ jobs:
           python-version: '3.11'
       - name: Install system libs for WeasyPrint (PDF export tests)
         # 2026-09-18: 缺这一步 ⇒ PDF 用例在 CI 渲染出乱码二进制而红(`test_pdf_export` 断言正文文本)
+        # 2026-10-26 加固: ① 已装就跳过(runner 镜像常自带 libpango/libcairo)；
+        #   ② apt 加超时与重试 —— 实测 apt 源抖动时这一步能吃 19 分钟，
+        #      以前没有超时，就把整条发版链拖成"越来越慢"。
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
+          if ldconfig -p | grep -q 'libpango-1.0' && ldconfig -p | grep -q 'libcairo'; then
+            echo "系统库已在镜像内，跳过 apt"
+            exit 0
+          fi
+          sudo apt-get -o Acquire::http::Timeout=30 \
+                       -o Acquire::https::Timeout=30 \
+                       -o Acquire::Retries=3 \
+                       update -qq || true
+          timeout 420 sudo apt-get install -y -qq \
+            libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
             libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
       - name: Install backend deps (requirements-lock.txt)
         run: |

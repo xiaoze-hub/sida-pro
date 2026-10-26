@@ -3675,3 +3675,19 @@ async def _tool_get_market_ranking(db: Session, args: dict, user: User | None = 
         lines.append("注：涨/跌家数是板块内上涨与下跌家数，不是涨停家数。")
     return "\n".join(lines)
 
+
+
+# ── 注册顺序修正（2026-10-26）─────────────────────────────────────────────
+# `get_stock_report` 当初被插在「核心段」与「thsdk 段」之间，破坏了本仓
+# **"新工具一律追加到注册表末尾"** 的纪律，直接后果是 `chat_tool_schemas()` 的
+# 索引钉子整体错位（`names[38]` 本该是 thsdk 段，变成了 get_stock_report）。
+#
+# 这里不动函数定义（挪代码风险大、diff 也难审），只在注册完成后**重排**尾部：
+#   … → get_stock_report → get_market_ranking（最新）
+# 结果：38 恢复为 thsdk 段，末位仍是最新工具；两条既有钉子同时成立。
+_REORDER_TAIL = ("get_stock_report", "get_market_ranking")
+_moved = {name: CHAT_TOOL_REGISTRY.pop(name) for name in _REORDER_TAIL if name in CHAT_TOOL_REGISTRY}
+for _name in _REORDER_TAIL:
+    if _name in _moved:
+        CHAT_TOOL_REGISTRY[_name] = _moved[_name]
+del _moved, _name

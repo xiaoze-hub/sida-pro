@@ -109,5 +109,5 @@ def test_子run默认预算比父小():
 def test_委派不新增chat工具():
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 77, "委派是内部能力，不许变成模型可调工具"
+    assert len(CHAT_TOOL_REGISTRY) == 78, "委派是内部能力，不许变成模型可调工具"
     assert "delegate" not in CHAT_TOOL_REGISTRY
