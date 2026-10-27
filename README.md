@@ -2,153 +2,109 @@
 
 # SIDA Pro · Stock Intelligent Data Analytics
 
-**Proprietary personal stock-trading analytics platform** — dual data sources (TDX `.tck`/`.img`/TQ + THS `thsdk`) → full-market scanning → K-line overlay annotation → AI data steward. Self-hosted, all-in-one.
+**An AI workspace for stock technical research — market context, charts, watchlists and traceable analysis in one place.**
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.51.0-blue) <!-- bump together with VERSION file on every release -->
+![Version](https://img.shields.io/badge/version-v0.82.2-blue) <!-- Keep aligned with VERSION. -->
 
-*Language: [中文](README.zh-CN.md)*
+[中文](README.zh-CN.md) · [Operation demos](#operation-demos) · [Setup guide](#getting-started) · [Knowledge base](docs/knowledge-base/README.md)
 
 </div>
 
----
+![SIDA Pro stock research workspace](frontend/public/media/product/workbench-desktop.webp)
 
-## Why SIDA?
+SIDA connects the steps of personal stock research: understand the market, inspect a symbol, ask a technical question, then review the data and tool calls behind the analysis. It is self-hostable and proprietary; third-party projects retain their own licenses.
 
-Most A-share tools show you **data**. SIDA closes the loop: it **reads the market, reasons about it with an AI analyst team, predicts it with time-series foundation models, verifies its own predictions against reality, and talks to you on WeChat** — every step traceable, every call auditable.
+> Screenshots and recordings: **2026-10-27 · v0.82.2**, real local browser sessions. Quotes are historical capture snapshots, not live prices or performance claims. Missing data, unconfigured models and disconnected optional services are preserved honestly.
 
-> **The honest pitch: SIDA is a well-engineered "franken-build" — a deliberate assembly of proven parts.** Instead of reinventing quant wheels, it wires the best open-source projects — TradingAgents, Kronos, Chronos-Bolt, XGBoost, TA-Lib, TimescaleDB — into one coherent pipeline that actually closes the loop. Each part is proven; the integration is the product.
+## Operation demos
 
-- 🔍 **Main-force intent analysis** — tick-level order flow: accumulation/distribution detection, order-splitting recognition, support/resistance game — with physics guards that reject implausible readings instead of guessing
-- 🧱 **Wyckoff K-line Layer & Localized 3-Tier Filter** — Volume-price structural analysis (Spring probe, effort divergence, LPS confirmation), unified 3-tier defense filter (sentiment cycle + catalyst + volume-price), and -8% hard defense line breach guard
-- 🔮 **Foundation-model prediction ensemble + verification loop** — Kronos (AAAI 2026) + Chronos-Bolt + XGBoost weighted voting, **weights dynamically adjusted by historical hit rate**, every prediction auto-checked when it expires (hit/miss vs actual returns)
-- 🤖 **Multi-agent AI analysis powered by [TradingAgents](https://github.com/TauricResearch/TradingAgents)** — a team of specialized LLM analysts (researchers, bull/bear debaters, traders) that run, argue, and reach conclusions on any stock
-- 🏆 **Event-driven dual-track scanning** — Pre-market 09:05 dual-track radar (commodity supply constraint + global tech/eVTOL breakthroughs), intraday capital surge detector, and theme-launch detection — find themes *before* they take off
-- 🪜 **Limit-up ladder with suspension penetration** — Restores full market limit-up progression tiers, supporting suspension penetration for halted stocks so trading halts do not falsely break streaks
-- 📱 **WeChat two-way dialog** — bind your personal WeChat via iLink protocol, ask about any stock from your phone, receive push reports; multimodal chat understands images, files and links
-- 📊 **Auto reports** — pre-market (09:05) / post-market (15:30) reports with real data + AI commentary + discipline action constraints, generated daily by cron
+[![Short preview — open the market walkthrough](frontend/public/media/product/preview.gif)](frontend/public/media/product/market.mp4)
 
-## 🧩 Built on Open Source
+**Click the preview to open the MP4.** The public landing page provides an inline player, poster, Chinese captions and written steps. GitHub may open repository videos as files rather than inline players.
 
-SIDA doesn't reinvent wheels — it integrates proven open-source projects into one pipeline (all wired into the codebase, nothing decorative):
+| Walkthrough | What it demonstrates | Video / captions |
+| --- | --- | --- |
+| Market workspace · 31 s | Open holdings/watchlist picker, switch K-line periods and toggle MACD | [MP4](frontend/public/media/product/market.mp4) · [VTT](frontend/public/media/product/market.zh.vtt) |
+| AI workspace · 25 s | Reopen an existing conversation, expand tool steps and inspect the run panel | [MP4](frontend/public/media/product/assistant.mp4) · [VTT](frontend/public/media/product/assistant.zh.vtt) |
+| System status · 18 s | Inspect module connections, open database details and refresh the snapshot | [MP4](frontend/public/media/product/system.mp4) · [VTT](frontend/public/media/product/system.zh.vtt) |
+| Mobile assistant · 16 s | Full-screen conversation, single-line input and Enter for a new line | [MP4](frontend/public/media/product/mobile.mp4) · [VTT](frontend/public/media/product/mobile.zh.vtt) |
 
-| Project | What SIDA uses it for |
-|---|---|
-| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | Multi-agent LLM analyst framework behind the AI Agents workspace |
-| [Kronos](https://github.com/shiyu-coder/Kronos) (AAAI 2026) | First open K-line foundation model — candlestick forecasting in the ensemble |
-| [Chronos-Bolt](https://github.com/amazon-science/chronos-forecasting) | Amazon's time-series foundation model, second model in the ensemble |
-| [XGBoost](https://github.com/dmlc/xgboost) · [scikit-learn](https://github.com/scikit-learn/scikit-learn) | Gradient boosting + feature engineering; ensemble weights tuned by hit rate |
-| [TA-Lib](https://github.com/ta-lib/ta-lib-python) | Battle-tested technical indicator library |
-| [FastAPI](https://github.com/fastapi/fastapi) + SQLAlchemy 2.0 | Async API layer over PostgreSQL |
-| [TimescaleDB](https://github.com/timescale/timescaledb) | Time-series hypertable storing multi-source K-lines with fast range queries |
-| [Redis](https://github.com/redis/redis) | Two-tier business cache + scheduler leader election (no double-cron in multi-worker deploys) |
-| [Lightweight Charts™](https://github.com/tradingview/lightweight-charts) | TradingView-grade candlestick rendering in the browser |
-| React 18 + [Vite](https://github.com/vitejs/vite) + [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) | Frontend toolchain |
-| [Prometheus](https://github.com/prometheus/prometheus) · [Grafana](https://github.com/grafana/grafana) · [Loki](https://github.com/grafana/loki) | Metrics, dashboards, log aggregation — one command via `docker-compose.infra.yml` |
-| [Playwright](https://github.com/microsoft/playwright) | Headless-browser collection where no clean API exists |
-| [akshare](https://github.com/akfamily/akshare) | Open-source China market data interface library |
+The AI clip replays an existing tool history; it does not generate or imply a new AI conclusion. The mobile clip edits a draft without submitting it. Recording scope, limitations and reusable promotion copy are in [the media guide](docs/PRODUCT_DEMO.md).
 
-> One `docker run` boots the app; the observability stack is opt-in infra.
+## A connected research workflow
 
-## Project guide
+| Module | Purpose |
+| --- | --- |
+| **Market overview** | Index charts, market context and collapsible, customizable dashboard sections |
+| **Stock workspace** | Symbol picker for holdings/watchlists; K-line periods, technical overlays, chips and source labels |
+| **AI assistant** | Full workspace and floating mini view share a conversation; tool steps and run records remain available for review |
+| **Analysis evidence** | Caliber comparison, decision ledger and factor-validity views help distinguish data definitions and evidence |
+| **Personal workspace** | Account-scoped holdings/watchlists, shadow-account trade-journal import and analysis |
+| **Reports & notifications** | Review reports and configure subscriptions/channels; scheduling and delivery require configuration |
+| **System status** | Module dependency map, cached snapshot time, incremental refresh and connection evidence |
+| **Settings & API** | Categorized model/provider, appearance and notification settings; API Key / Skill integration |
 
-[Project outline and knowledge base](docs/knowledge-base/README.md) · [Architecture](docs/knowledge-base/architecture.md) · [Local Docker setup](docs/knowledge-base/local-docker.md)
+### Interface gallery
 
-## Screenshots
+| Market overview | Analysis process |
+| --- | --- |
+| ![Market overview](frontend/public/media/product/dashboard-dark.webp) | ![Existing AI tool history](frontend/public/media/product/assistant-process.webp) |
+| **Service connection map** | **Categorized settings** |
+| ![System status](frontend/public/media/product/system-light.webp) | ![Settings](frontend/public/media/product/settings-light.webp) |
 
-||||
-|:---:|:---:|:---:|
-| ![home](docs/screenshots/home.png) | ![kline-mainintent](docs/screenshots/kline-mainintent.png) | ![forecast](docs/screenshots/forecast.png) |
-| ![opportunities](docs/screenshots/opportunities.png) | ![chat](docs/screenshots/chat.png) | ![portfolio](docs/screenshots/portfolio.png) |
+<details>
+<summary>View the mobile assistant</summary>
 
-*Dashboard · K-line + main-force intent · Forecast & verification · Opportunities · AI chat · Paper trading*
+<img src="frontend/public/media/product/mobile-assistant.webp" width="320" alt="Mobile AI assistant with full-screen layout and single-line composer" />
 
+</details>
 
+## Data and capability boundaries
 
-## Quick Start
+- **Sources are distinct.** Tick-based intent, Eastmoney amount buckets and TQ L2 figures use different definitions. Source/caliber labels matter; they must not be treated as interchangeable directional signals.
+- **Missing means missing.** Unavailable fields show `--` / no data, with baseline dates and availability hints where applicable.
+- **AI is configurable.** Configure a model/provider before using AI. Outputs depend on that model and the available inputs; no guaranteed accuracy or returns.
+- **Optional services stay optional.** Forecast engines, notification delivery, private data gateways and automated schedules need their own setup. A healthy HTTP endpoint does not prove every data source works.
+- **Multi-user context matters.** Holdings, watchlists, conversations and user channel settings are scoped to accounts.
 
-### Docker (recommended)
+## Getting started
 
-```bash
-# GitHub Container Registry (global) or Aliyun ACR (fast in China)
-docker pull ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
-# or: docker pull crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:$(cat VERSION)  # version follows the repo VERSION file
+Choose the setup that matches your environment. **Production uses PostgreSQL/TimescaleDB; SQLite is only for local development and isolated tests.** Redis supports shared caching and coordination.
 
-docker run -d --name sida -p 8000:8000 --restart unless-stopped \
-  -v panwatch_data:/app/data \
-  -e AUTH_USERNAME=admin \
-  -e AUTH_PASSWORD=your_password \
-  -e TZ=Asia/Shanghai \
-  ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
-```
-
-Open http://localhost:8000 — that's it. Optional observability stack: `docker-compose.infra.yml` (Prometheus + Grafana + Loki).
-
-### Development
+| Path | Instructions |
+| --- | --- |
+| Existing instance | Open its home page, watch the demos and sign in. Registration depends on the administrator's policy. |
+| Local Docker development | Follow [Local Docker setup](docs/knowledge-base/local-docker.md): app + PostgreSQL + Redis, source mounts and optional forecast engine. Its cached arm64 runtime is host-specific; review the base-image requirements. |
+| Standard deployment | Review [architecture and environment](docs/knowledge-base/architecture.md), `.env.example` and `docker-compose.yml`; set credentials, database/cache access and optional service configuration before starting. |
+| Source development | Prepare the database and `.env`, then run the commands below in separate terminals. |
 
 ```bash
-# Backend
-pip install -r requirements.txt
-python server.py
+# Backend :8000 (creates the virtual environment and installs dependencies)
+make dev-api
 
-# Frontend
-cd frontend && pnpm install && pnpm dev
+# Frontend :5183 (installs dependencies and starts Vite)
+make dev-web
+
+# Validate media, TypeScript and the production frontend build
+pnpm --dir frontend build
 ```
 
-## Architecture
+Use hot reload or rebuild the frontend for routine source changes. Rebuild the Docker image when packaged dependencies or release assets change. Do not delete data volumes during routine updates.
 
-```
-┌─────────────┐   ┌──────────────┐   ┌───────────────┐   ┌────────────┐
-│ Market data │ → │ AI analysis  │ → │  Prediction   │ → │  Reports   │
-│ Tencent/EM/ │   │ main-force   │   │ Kronos+Chronos│   │ pre/post   │
-│ THS/auction/│   │ technicals   │   │ +XGB ensemble │   │ auto-gen   │
-│ TDX/wencai  │   │ TradingAgents│   │ + AI referee  │   │ + verify   │
-└─────────────┘   └──────────────┘   └───────────────┘   └────────────┘
-      │                  │                   │                 │
-      └──── AI assistant (SIDA Bot) ←────────┘                 │
-                    │ image/file/link multimodal               │
-                    ▼                                          ▼
-            ┌─────────────┐                        ┌────────────────────┐
-            │ WeChat push │                        │ PostgreSQL+TSDB ·  │
-            │  iLink P2P  │                        │ Redis · Prometheus │
-            └─────────────┘                        │ Grafana · Loki     │
-                                                   └────────────────────┘
-```
+## Architecture and integrations
 
-## Features Overview
+React + TypeScript + Vite → FastAPI → PostgreSQL/TimescaleDB + Redis. Collectors supply market data; agents and Skill APIs coordinate analysis; model providers and notification channels are configured separately.
 
-| Module | What you get |
-|---|---|
-| **Dashboard** | Real-time indices, market breadth, hot boards, sentiment |
-| **Stock detail** | K-line, tick-level main-force intent, technicals, events, themes, shareholders |
-| **Forecast** | 4-model ensemble + AI adjudicator, expiry-verified hit/miss history |
-| **Opportunities** | Event-driven candidates, resonance screening across 3 engines, anomaly pool |
-| **Paper trading** | Shadow account, trade-journal parsing, behavior profiling |
-| **Reports** | Auto-generated pre/post-market reports, PDF export |
-| **Alerts** | Price/condition alerts pushed to your phone |
-| **AI Agents** | TradingAgents multi-agent runs with full reasoning traces |
+Integrations include [TradingAgents](https://github.com/TauricResearch/TradingAgents), [Kronos](https://github.com/shiyu-coder/Kronos), [Chronos](https://github.com/amazon-science/chronos-forecasting), XGBoost and TA-Lib. Availability depends on the installed engines, runtime and data. Charts use [Lightweight Charts](https://github.com/tradingview/lightweight-charts); optional observability configuration lives in `docker-compose.infra.yml`.
 
-### TDX formula pack (paste into your 通达信 client)
-
-The strategy indicators can be exported as **native 通达信 (TDX) formula source** — see
-[`docs/tq-formulas/`](docs/tq-formulas/README.md): AI institutional activity, trend pilot line,
-bull/bear line, dark-pool flow, GS swing, and a limit-up strength screener. Each `.txt` is
-paste-ready (formula manager → new → paste → test), with per-formula parameter tables,
-install steps, and an explicit **divergence statement** vs. the SIDA implementation.
-
-## Multi-user & AI config
-
-- **Account isolation**: positions, watchlists, notification channels, WeChat bindings are per-user
-- **Unified LLM config center**: multi-provider model pools, scene bindings (chat/reports/adjudicator/vision…), BYOK-friendly
-- **Notification channels**: WeChat (iLink) / WeCom / PushPlus / ServerChan / Email
-
-## Data sources
-
-Tencent / Eastmoney / THS / Sina / TDX (Wenxiaoda) / Cninfo (Hudongyi investor Q&A) — quotes, K-lines, minute data, capital flow, tick-level trades, auctions, limit-up pools, hot boards, dragon-tiger lists, margin trading and more. Free sources, no paid keys required.
+- [Project guide](docs/knowledge-base/README.md) · [Architecture](docs/knowledge-base/architecture.md)
+- [UI guidelines](docs/UI_GUIDELINES.md) · [Demo media and promotion copy](docs/PRODUCT_DEMO.md)
+- [TDX formula pack](docs/tq-formulas/README.md): installation steps, parameters and divergence statements versus SIDA
 
 ## Disclaimer
 
-This project is for technical research and learning only. All AI-generated analysis, predictions, and reports are for reference only and **do not constitute investment advice**. Markets are risky; invest with caution.
+SIDA is a technical research tool. AI outputs, chart annotations, forecasts and reports are for reference only, **not investment advice or stock recommendations**. They do not guarantee returns. Market data may be delayed, incomplete or unavailable. Markets involve risk; decisions remain your responsibility.
 
 ---
 

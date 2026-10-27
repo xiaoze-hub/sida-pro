@@ -1,8 +1,8 @@
 # SIDA 界面与交互准则
 
-> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce`、表单边界基于 `3f6032a0`、浏览器全屏基于 `2de25970` 更新，规范随同本次代码提交生效。
+> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce`、表单边界基于 `3f6032a0`、浏览器全屏基于 `2de25970`、官网演示基于 `2691c3eb` 更新，规范随同本次代码提交生效。
 > 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/health.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/klines.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/quotes.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
-> 覆盖：全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
+> 覆盖：公开官网与媒体展示、全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
 > 未覆盖：交易算法准确性、外部行情接口可用性、生产数据与全部页面的完整业务验收；不以 UI 验证代替口径、权限和多用户测试。
 
 本规范是新建或修改 UI 的统一入口。此前视觉研究文档仅供历史参考；冲突时按本规范执行。产品定位是基于现有数据的 AI 股票技术分析，表达分析证据、来源、时点和不确定性，不用“推荐”“稳赚”“现在买入”等营销话术包装分析入口。
@@ -157,3 +157,9 @@ git diff --check
 工作台常驻可搜索的持仓/关注切换入口，按市场与代码去重，提供股票列表管理入口。选择时保留 CN/HK/US 市场，账号偏好隔离；同代码不同市场的页签不能合并。切换类型必须指向有效标的，不能只改 type 后把原股票代码当作指数/板块。
 
 个股与指数可能同代码，日 K 与分时请求必须显式传递 instrument，后端取数和缓存都纳入类型。页面名称、行情、图表和持仓成本线必须属于同一个市场和标的；不可用时显示真实空态/错误，不用另一个标的数据兜底。
+
+## 11. 官网与产品演示
+
+公开官网使用产品概览、功能、操作演示、部署文档、常见问题的正式导航层级，手机提供具备展开状态与关闭行为的菜单。使用与应用相同的主题 token、无描边内容卡片和共享按钮；公开页可用较大标题与阅读宽度。
+
+截图与视频必须来自真实操作，注明日期 / 版本 / 环境；缺失数据与未配置服务不伪装正常。视频默认显示实际封面、播放动作与时长，点击后才加载播放器；切换示例停止旧播放。加载失败提供重试或下载，不能留整片空白。每次构建检查封面、字幕与视频资源，并验证构建后实际 HTTP 响应及浅色 / 深色 / 手机排版。官网与中英文 README 共用 `frontend/public/media/product/` 素材。

@@ -35,8 +35,15 @@ def _mount_spa(app) -> None:
 
     _SPA_ASSET_EXT = (
         ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
-        ".ico", ".woff", ".woff2", ".ttf", ".map", ".json",
+        ".ico", ".woff", ".woff2", ".ttf", ".map", ".json", ".mp4", ".webm", ".vtt",
     )
+    # 精简容器的系统 MIME 表可能缺少这些类型，尤其 WebVTT 必须以 text/vtt 提供。
+    media_types = {
+        ".webp": "image/webp",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".vtt": "text/vtt",
+    }
 
     @app.get("/{path:path}")
     async def serve_spa(path: str):
@@ -63,7 +70,9 @@ def _mount_spa(app) -> None:
 
             return _Resp(status_code=404)
         if os.path.isfile(file_path):
-            return FileResponse(file_path)
+            return FileResponse(
+                file_path, media_type=media_types.get(os.path.splitext(path)[1].lower())
+            )
         # 资源类路径不存在 → 404(绝不回退 index.html)
         if path.startswith("assets/") or path.lower().endswith(_SPA_ASSET_EXT):
             from fastapi.responses import Response

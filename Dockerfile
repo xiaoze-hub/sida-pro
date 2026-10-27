@@ -48,6 +48,7 @@ RUN pnpm install --frozen-lockfile
 # 2026-09-18: Docker 内 tsc 因 biz-ui 依赖解析失败, 本地 tsc 已过 → 跳过 tsc 只跑 vite build
 COPY frontend/ ./
 COPY VERSION ./
+COPY scripts/check_product_media.mjs /app/scripts/check_product_media.mjs
 RUN VERSION_VAL="${VERSION}"; \
     if [ "${VERSION}" = "dev" ] && [ -f VERSION ] && [ -s VERSION ]; then \
       VERSION_VAL="$(cat VERSION | tr -d '[:space:]')"; \
@@ -60,7 +61,7 @@ RUN VERSION_VAL="${VERSION}"; \
       echo "WARNING: public/sw.js 未找到 __SW_VERSION__ 占位符 —— SW 缓存名未注入版本号," \
            "发版后浏览器可能继续使用旧缓存! 请勿把占位符改成写死的版本串。" >&2; \
     fi; \
-    npx vite build
+    node ../scripts/check_product_media.mjs && npx vite build
 
 
 # ===== Stage 2: Python 运行环境 =====
