@@ -1,3 +1,18 @@
+## release: v0.84.1（修「需要更高权限 … 已开通 Pro」并排的自相矛盾）
+
+v0.84.0 上线后自查发现的显示矛盾：`CopilotBriefCard` 的 gated 提示行里，
+已开通账号（owner/pro）会在「需要更高权限」后面看到一枚「已开通 Pro」芯片 —— 自相矛盾。
+
+根因：`ProApplyCTA` 在内联场景没有「已开通就别显示」的开关。补充 `hideWhenApproved`：
+内联在"权限不足"提示后时（`CopilotBriefCard` / `ErrorState` 401·403 两处）传 true，
+已开通账号整枚芯片不渲染。**语义澄清**：已开通却仍被 gated，说明是"权限没授予"（管理员配置问题），
+不该引导用户去申请 Pro。
+
+`NoAccessPage` 的整块卡片**保持显示**（那里是整页无权限，需要明确告知状态）。
+
+门禁：前端 **257 files · 1932 tests** 全绿、tsc 0、eslint 0、ui-rules OK；
+新增 1 例钉住"已开通 + hideWhenApproved 时整枚不渲染"。
+
 ## release: v0.84.0（普通用户撞权限门后有出路：一键申请 Pro）
 
 动因：普通用户碰到权限门时，页面上**只有一行静态提示**（甚至更糟 —— 静默跳回首页），

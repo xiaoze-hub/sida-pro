@@ -100,6 +100,13 @@ describe('ProApplyCTA', () => {
     expect(api.applyPro).not.toHaveBeenCalled()
   })
 
+  it('已开通 + hideWhenApproved：整枚芯片不渲染（避免"需要更高权限…已开通 Pro"自相矛盾）', async () => {
+    api.fetchProApplyStatus.mockResolvedValue(status({ role: 'owner' }))
+    const { container } = renderCTA({ hideWhenApproved: true })
+    await waitFor(() => expect(api.fetchProApplyStatus).toHaveBeenCalled())
+    expect(container.querySelector('[data-pro-apply-cta]')).toBeNull()
+  })
+
   it('被拒：显示「重新申请」且可点', async () => {
     api.fetchProApplyStatus.mockResolvedValue(status({ app: 'rejected' }))
     renderCTA()

@@ -131,7 +131,7 @@ export function ErrorState({
       <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">{displayDesc}</p>
       {/* 2026-10-27: 权限类错误必须给出路 —— 提示后面直接挂一键申请 */}
       {resolved === 'permission' && (
-        <ProApplyCTA variant="inline" className="mt-3" label="申请开通权限" reason="权限不足：接口 401/403" />
+        <ProApplyCTA variant="inline" className="mt-3" label="申请开通权限" reason="权限不足：接口 401/403" hideWhenApproved />
       )}
       {(onRetry || action) && (
         <div className="mt-4 flex items-center gap-2">
