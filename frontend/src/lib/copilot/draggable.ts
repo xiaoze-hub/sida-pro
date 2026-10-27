@@ -11,7 +11,7 @@
 export type Point = { x: number; y: number }
 export type Size = { w: number; h: number }
 
-/** 位置持久化键。`sida:` 前缀，与旧 `panwatch_*` 键分开，不互相覆盖。 */
+/** 位置持久化键。`sida:` 前缀，与旧 `sida_*` 键分开，不互相覆盖。 */
 export const LAUNCHER_POS_KEY = 'sida:copilot:launcher-pos'
 
 /** 拖拽判定阈值（CSS px）。低于它就当点击。 */

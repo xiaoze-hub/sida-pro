@@ -21,7 +21,7 @@ const H = vi.hoisted(() => ({
   patterns: [] as Array<Record<string, unknown>>,
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   API_BASE: '/api',
   fetchAPI: vi.fn((url: string) => {
@@ -41,7 +41,7 @@ vi.mock('@panwatch/api', () => ({
   }),
 }))
 
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 
 const PATTERNS = [
   {

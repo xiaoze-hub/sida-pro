@@ -30,8 +30,8 @@
 
 | id     | 检查内容                                                         |
 |--------|------------------------------------------------------------------|
-| tck    | `PANWATCH_TCK_DIR` 已配且目录内有 `.tck` 文件                     |
-| img    | `PANWATCH_IMG_DIR` 已配且目录内有 `.img` 文件                     |
+| tck    | `SIDA_TCK_DIR` 已配且目录内有 `.tck` 文件                     |
+| img    | `SIDA_IMG_DIR` 已配且目录内有 `.img` 文件                     |
 | wencai | thsdk 可 import 且 `THS_USERNAME`/`THS_PASSWORD` 均已注入          |
 | shadow | 数据库可连且 `paper_trading_trades` 表可查                        |
 | tq_moreinfo | TQ 网关: `TDX_QUANT_URL` 优先, 否则走真实解析器 `_resolve_tq_url()` 自动发现 |
@@ -56,8 +56,8 @@ STATUS_UNKNOWN = "unknown"
 _HEALTH_CACHE: dict[str, tuple[float, dict]] = {}
 _HEALTH_TTL = 30.0
 
-TCK_DIR_ENV = "PANWATCH_TCK_DIR"
-IMG_DIR_ENV = "PANWATCH_IMG_DIR"
+TCK_DIR_ENV = "SIDA_TCK_DIR"
+IMG_DIR_ENV = "SIDA_IMG_DIR"
 
 # data_sources 表的健康累计列(2026-09-01 新增, 与 Hermes 方案合并时保留)。
 # 值 = 建列用的 DDL 类型片段, 供 /health/data-sources 在老库上自动补齐。

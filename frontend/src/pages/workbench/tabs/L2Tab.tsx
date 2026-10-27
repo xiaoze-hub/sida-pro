@@ -1,13 +1,13 @@
-import { ANPAN, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
+import { ANPAN, MINGPAN, glossaryTooltip } from '@sida/biz-ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { insightApi, fetchAPI } from '@panwatch/api'
-import { usePausedInterval } from '@panwatch/base-ui'
-import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
+import { insightApi, fetchAPI } from '@sida/api'
+import { usePausedInterval } from '@sida/base-ui'
+import { HoverPopover } from '@sida/base-ui/components/ui/hover-popover'
 import { Info, RefreshCw } from 'lucide-react'
 import InsightProvider from '@/pages/workbench/InsightProvider'
-import { useInsight } from '@panwatch/biz-ui/components/insight/context'
-import type { DarkFlowTqResponse, MoreInfoResponse, SummaryOrderbook } from '@panwatch/biz-ui/components/insight/types'
-import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
+import { useInsight } from '@sida/biz-ui/components/insight/context'
+import type { DarkFlowTqResponse, MoreInfoResponse, SummaryOrderbook } from '@sida/biz-ui/components/insight/types'
+import type { MainIntentStructured } from '@sida/biz-ui/lib/main-intent-types'
 import { safeFixed, safeInt, safeNum, safePrice, toAmount } from '@/lib/format'
 import MissingFields from '@/components/MissingFields'
 import CancelProfilePanel, { type CancelProfile } from '@/components/CancelProfilePanel'
@@ -119,7 +119,7 @@ interface SealResp {
 
 /**
  * 资金流水行(`/klines/{s}/summary`.fund_flow)。
- * 后端实际下发 `ming_net`/`dark_net`, 而 `@panwatch/biz-ui` 的 `FundFlowBarLike` 写成 `open_net`
+ * 后端实际下发 `ming_net`/`dark_net`, 而 `@sida/biz-ui` 的 `FundFlowBarLike` 写成 `open_net`
  * —— 两种键都读(见报告 concern), 不因字段命名漂移把明盘列渲染成 `--`。
  */
 interface FundFlowRow {
@@ -275,7 +275,7 @@ function Cell({
  * 取数(本标签自有的两个端点: 盘口 OB + 封单成色)
  * ------------------------------------------------------------------ */
 
-/** 单端点取数态(**stale-on-error**, 与 `@panwatch/biz-ui` 的 `usePolling` 同规则)。 */
+/** 单端点取数态(**stale-on-error**, 与 `@sida/biz-ui` 的 `usePolling` 同规则)。 */
 interface Feed<T> {
   data: T | null
   /** 最近一次取数失败; 与 data 可**并存**(此时 data 就是上次成功值) */

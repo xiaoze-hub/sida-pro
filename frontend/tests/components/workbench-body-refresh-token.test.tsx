@@ -16,24 +16,24 @@ import { MemoryRouter } from 'react-router-dom'
  *     `sida-page-enter` 入场动画并丢掉正文自己的内部状态, 这正是遗留⑦ 要消掉的);
  *  ③ token 不变的重渲染 ⇒ **不多取**(依赖数组没写错成"每次渲染都取"); 换标的 ⇒ 仍按 symbol 重取。
  *
- * 真数据纪律: mock 的是**网络层**(`@panwatch/api` 的 `fetchAPI`), 组件取数/渲染走真实代码;
+ * 真数据纪律: mock 的是**网络层**(`@sida/api` 的 `fetchAPI`), 组件取数/渲染走真实代码;
  * `InteractiveKline`(echarts 主图)与本守卫无关, 用替身避免把图表库拉进 jsdom。
  */
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
 
 // IndexBody 的 K线主图与本守卫无关(它自己另有取数), 用替身避免拉入 echarts。
 // P2(2026-09-18): IndexBody 已由 InteractiveKline 迁到 KlineChart → mock 目标跟着换
-vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
+vi.mock('@sida/biz-ui/components/KlineChart', () => ({
   default: (p: { symbol: string }) => <div data-testid="kline-stub">{`kline:${p.symbol}`}</div>,
 }))
 
 import IndexBody from '@/pages/workbench/IndexBody'
-import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
+import BoardBody from '@sida/biz-ui/components/workbench/BoardBody'
 
 /** 指数详情夹具(形状对齐 `src/web/api/market.py` 的 /market/indices/{symbol} 消费方声明)。 */
 const INDEX_DETAIL = {

@@ -1,4 +1,4 @@
-import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { readStockColors } from '@sida/biz-ui/lib/stock-colors'
 
 export interface DayCandleOHLC { o: number; h: number; l: number; c: number }
 

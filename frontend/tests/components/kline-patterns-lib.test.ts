@@ -15,7 +15,7 @@ import {
   normalizePatterns,
   patternHoverLabels,
   type PatternMark,
-} from '@panwatch/biz-ui/lib/kline-patterns'
+} from '@sida/biz-ui/lib/kline-patterns'
 
 const COLORS = { up: '#red', down: '#green', neutral: '#gray' }
 const toTime = (d: string) => d

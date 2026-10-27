@@ -3,7 +3,7 @@
 // 「凑」一个 eastmoney4 顶上 —— DarkFundTop / WarReport 的口径错标就是这么来的。
 // 本文件钉住: thsdk* → ths, 且其他口径不被顺手改写(四口径仍不可换算)。
 import { describe, expect, it } from 'vitest'
-import { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
+import { caliberOf } from '@sida/biz-ui/components/CaliberBadge'
 
 describe('caliberOf 口径归类', () => {
   it('thsdk* 前缀一律归为 ths(同花顺口径), 不再落到 unknown', () => {

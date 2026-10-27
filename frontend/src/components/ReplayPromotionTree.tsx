@@ -11,7 +11,7 @@
  */
 import PromotionFunnel from './PromotionFunnel'
 import { ChevronRight } from 'lucide-react'
-import type { ReplayTreeLevel } from '@panwatch/api'
+import type { ReplayTreeLevel } from '@sida/api'
 import { toAmountFromWanUnsigned } from '@/lib/format'
 
 function MemberRow({

@@ -7,9 +7,9 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { fetchAPI } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { AlertTriangle, Laptop, LogOut, MonitorSmartphone, ShieldCheck } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
 

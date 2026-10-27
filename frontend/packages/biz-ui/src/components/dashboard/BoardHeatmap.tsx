@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { AlertTriangle, RefreshCw, Zap } from 'lucide-react'
-import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
-import { hslaVar, readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { useECharts } from '@sida/biz-ui/hooks/useECharts'
+import { hslaVar, readStockColors } from '@sida/biz-ui/lib/stock-colors'
 import {
   detectHeatAnomaly,
   formatHeatPct,
@@ -17,13 +17,13 @@ import {
   type HeatAreaMetric,
   type HeatPalette,
   type TreemapCell,
-} from '@panwatch/biz-ui/lib/board-heatmap'
-import type { Rgb } from '@panwatch/biz-ui/lib/board-heatmap'
+} from '@sida/biz-ui/lib/board-heatmap'
+import type { Rgb } from '@sida/biz-ui/lib/board-heatmap'
 import type { EChartsType } from 'echarts/core'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { safeFixed } from '@/lib/format'
-import ErrorState from '@panwatch/biz-ui/components/ErrorState'
-import LoadingState from '@panwatch/biz-ui/components/LoadingState'
+import ErrorState from '@sida/biz-ui/components/ErrorState'
+import LoadingState from '@sida/biz-ui/components/LoadingState'
 
 /**
  * 板块热力图 (P1-1, 2026-09-10, 借鉴 OpenTerminal treemap 热力图):

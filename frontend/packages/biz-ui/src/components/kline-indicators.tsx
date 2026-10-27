@@ -1,6 +1,6 @@
-import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
-import type { KlineSummaryData } from '@panwatch/biz-ui/components/kline-summary-dialog'
-import { TechnicalBadge } from '@panwatch/biz-ui/components/technical-badge'
+import { HoverPopover } from '@sida/base-ui/components/ui/hover-popover'
+import type { KlineSummaryData } from '@sida/biz-ui/components/kline-summary-dialog'
+import { TechnicalBadge } from '@sida/biz-ui/components/technical-badge'
 
 interface KlineIndicatorsProps {
   summary: KlineSummaryData

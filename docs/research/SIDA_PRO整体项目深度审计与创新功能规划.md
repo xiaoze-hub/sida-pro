@@ -201,7 +201,7 @@ for r in all_records:                       # ← 池子约 1000 行（vendor do
 
 1. **降维**：五态研判真正需要的只有 `OpenZAF / OpenVolPre1 / OpenAmo / OpenZTBuy / BCancel+TotalBVol`。其中前三项在 thsdk 池子里已部分具备，`gap_pct` 已有。**先按"候选过滤"再增强**：只对 `gap_pct` 非空或 `open_amount` 缺失的前 200 行做 TQ 增强（Top-N 才是用户会看的），其余标 `enhanced=False`。
 2. **批量**：`get_more_info` 只能单票，但 `get_pricevol` 支持 500 只/批（实测 587 码 84 ms，`tdx_boards.py:10`）。价格/量/涨幅维度全部走批量，仅"撤单/封单"这类必须单票的字段走 Top-N。
-3. **单飞 + 跨进程缓存**：同一 key 加 Redis 锁（`panwatch-redis` 已在 compose 里），把 4 worker 收敛成 1 次计算；TTL 按阶段给：竞价窗口 5 s、盘中 15 s、收盘后 300 s、非交易日 3600 s。
+3. **单飞 + 跨进程缓存**：同一 key 加 Redis 锁（`sida-redis` 已在 compose 里），把 4 worker 收敛成 1 次计算；TTL 按阶段给：竞价窗口 5 s、盘中 15 s、收盘后 300 s、非交易日 3600 s。
 
 **验收**：竞价池 P95 < 3 s；单次刷新 RPC 次数 < 250（可从 `tq_rpc_observability` 计数断言）。
 

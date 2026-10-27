@@ -34,7 +34,7 @@ from src.agents.tradingagents.portfolio_context import (
 from src.agents.tradingagents.progress import SIDAProgressHandler
 from src.agents.tradingagents.result_mapper import map_state_to_result
 from src.agents.tradingagents.toolkit_adapter import (
-    panwatch_data_context,
+    sida_data_context,
     patch_route_to_vendor,
 )
 from src.core.analysis_history import get_analysis, save_analysis
@@ -447,7 +447,7 @@ class TradingAgentsAgent(BaseAgent):
                     market=stock.market.value,
                     ta_config=ta_config,
                     progress_handler=progress_handler,
-                    panwatch_data=data,
+                    sida_data=data,
                     portfolio_context_text=portfolio_context_text,
                 ),
                 timeout=self.timeout_minutes * 60,
@@ -619,7 +619,7 @@ class TradingAgentsAgent(BaseAgent):
         market: str,
         ta_config: dict,
         progress_handler,
-        panwatch_data: dict,
+        sida_data: dict,
         portfolio_context_text: str = "",
     ) -> dict[str, Any]:
         """在 worker 线程跑同步 TradingAgents 流程。
@@ -640,7 +640,7 @@ class TradingAgentsAgent(BaseAgent):
 
         # patch + 数据上下文,确保 TradingAgents 调 route_to_vendor 时拿到 SIDA 数据
         trace_id_for_ctx = getattr(progress_handler, "trace_id", "") if progress_handler else ""
-        with patch_route_to_vendor(), panwatch_data_context(panwatch_data, trace_id=trace_id_for_ctx):
+        with patch_route_to_vendor(), sida_data_context(sida_data, trace_id=trace_id_for_ctx):
             graph = TradingAgentsGraph(
                 selected_analysts=ta_config["selected_analysts"],
                 debug=False,

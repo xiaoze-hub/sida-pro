@@ -15,10 +15,10 @@ import {
   Plus,
   RotateCcw,
 } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import Pager from '@/components/Pager'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { formatDateTime } from '@/lib/utils'
 import { useApiQuery } from '@/hooks/useApiQuery'
 import {

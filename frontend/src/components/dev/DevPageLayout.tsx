@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Copy } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { cn } from '@/lib/utils'
 import PageHeader from '@/components/PageHeader'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
 import { SectionWorkspace, useSectionRoute, useSectionVisible } from '@/components/SectionWorkspace'
 
 export interface SideMenuItem { id: string; label: string; icon?: ReactNode; href?: string; anchor?: string }

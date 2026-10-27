@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 import { AiRefereePanel, RefereeStatsCard } from '@/components/AiRefereePanel'
 
 /**
@@ -28,7 +28,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 
 const api = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   clearToken: () => {},
   fetchAPI: (...a: unknown[]) => api.fetchAPI(...a),

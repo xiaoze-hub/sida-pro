@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Term } from '../../src/components/Term'
 import { EmptyState } from '../../src/components/EmptyState'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 
 afterEach(cleanup)
 

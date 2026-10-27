@@ -19,8 +19,8 @@ ACTION_ALIASES = {
 }
 
 
-TAG_START = "<!--PANWATCH_JSON-->"
-TAG_END = "<!--/PANWATCH_JSON-->"
+TAG_START = "<!--SIDA_JSON-->"
+TAG_END = "<!--/SIDA_JSON-->"
 
 
 def try_parse_action_json(text: str) -> dict | None:
@@ -65,9 +65,9 @@ def try_extract_tagged_json(
     """Extract a tagged JSON object from a larger text.
 
     Expected format at the end of the response:
-    <!--PANWATCH_JSON-->
+    <!--SIDA_JSON-->
     { ... }
-    <!--/PANWATCH_JSON-->
+    <!--/SIDA_JSON-->
     """
 
     raw = text or ""

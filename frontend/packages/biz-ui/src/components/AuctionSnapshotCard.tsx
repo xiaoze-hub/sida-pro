@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 /**
  * 竞价快览单行卡(2026-08-19)

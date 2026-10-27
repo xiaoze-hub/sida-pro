@@ -190,7 +190,7 @@ def dark_review_from_tck(symbol: str, date_: str | None = None,
 
         path = tck_path or find_tck_file(symbol, date_) or find_tck_file(symbol)
         if not path:
-            base["note"] = "无 .tck 文件(需配置 PANWATCH_TCK_DIR)"
+            base["note"] = "无 .tck 文件(需配置 SIDA_TCK_DIR)"
             return base
         trades, orders, cancels = parse_tck(path)
         if not trades:

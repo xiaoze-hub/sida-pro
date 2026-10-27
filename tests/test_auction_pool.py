@@ -147,7 +147,7 @@ def test_fetch_thsdk_module_missing(monkeypatch):
     assert auction_pool.fetch_auction_anomaly("CN") == []
 
 
-# ── DB 读写: 用独立内存 SQLite 引擎, 避免污染真实 data/panwatch.db ──────────
+# ── DB 读写: 用独立内存 SQLite 引擎, 避免污染真实 data/sida.db ──────────
 @pytest.fixture
 def in_mem_db(monkeypatch):
     """注入内存 SQLite 引擎 + 建 auction_anomaly_records 表, 全程隔离真实 DB。"""

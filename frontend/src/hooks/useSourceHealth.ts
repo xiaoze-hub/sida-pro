@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { datasourcesApi } from '@panwatch/api'
-import { usePausedInterval } from '@panwatch/base-ui'
-import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
+import { datasourcesApi } from '@sida/api'
+import { usePausedInterval } from '@sida/base-ui'
+import { pushAlert } from '@sida/biz-ui/lib/alert-bus'
 
 /**
  * 设计稿 v2.1 §12: 数据源健康状态订阅。

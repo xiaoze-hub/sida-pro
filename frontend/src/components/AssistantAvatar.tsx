@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import type { AnimationItem } from 'lottie-web'
-import { useTabActive } from '@panwatch/base-ui'
+import { useTabActive } from '@sida/base-ui'
 import { AssistantActivityContext, loadAssistantAnimation, setAvatarPlayback, useAssistantAvatar, type AssistantAvatarId } from '@/lib/assistant-avatar'
 
 /** 所有助手入口与气泡共用；空闲慢速循环，工作时恢复正常速度。 */

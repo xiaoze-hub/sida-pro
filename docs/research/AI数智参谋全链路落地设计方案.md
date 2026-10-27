@@ -1433,7 +1433,7 @@ export function useCopilotBrief(symbol: string, market = 'CN', opts?: { enabled?
 `api.ts`：
 
 ```ts
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import type { CopilotBrief } from './types'
 
 /** fetchAPI 自带 /api 前缀 → 这里写 /copilot/... 而非 /api/copilot/... */
@@ -1771,7 +1771,7 @@ export function CopilotPlanBlock({
 
 ### 8.7 `CopilotCapsule.tsx`（右下角常驻胶囊 + 零输入唤醒）
 
-**核心机制（不新写一套聊天）**：胶囊只做两件事 —— ① 轻量展示"当前标的 tone + 一句话结论"；② 点击时 `dispatchEvent('panwatch-open-chat', { detail })`，由既有 `ChatWidget` 创建带 `initial_context` 的新会话（`ChatWidget.tsx:188-213` 已实现）。**零新增聊天通道、零 SSE 重复实现。**
+**核心机制（不新写一套聊天）**：胶囊只做两件事 —— ① 轻量展示"当前标的 tone + 一句话结论"；② 点击时 `dispatchEvent('sida-open-chat', { detail })`，由既有 `ChatWidget` 创建带 `initial_context` 的新会话（`ChatWidget.tsx:188-213` 已实现）。**零新增聊天通道、零 SSE 重复实现。**
 
 ```tsx
 import { useEffect, useState } from 'react'
@@ -1817,7 +1817,7 @@ export function CopilotCapsule({
       : `[页面] 个股 ${symbol}，用户从工作台胶囊进入，尚无参谋快照。`
 
     window.dispatchEvent(
-      new CustomEvent('panwatch-open-chat', {
+      new CustomEvent('sida-open-chat', {
         detail: { symbol, market, stockName: stockName || '', pageContext: snapshot },
       }),
     )
@@ -1869,7 +1869,7 @@ expect(a.bottom <= b.top || a.top >= b.bottom).toBe(true)
 ```tsx
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Send } from 'lucide-react'
-import { chatApi, fetchAPI } from '@panwatch/api'
+import { chatApi, fetchAPI } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { copilotPresets } from '@/lib/copilot/api'
@@ -2218,7 +2218,7 @@ logger.info("copilot_brief symbol=%s rule=%s tone=%s used=%d missing=%d ms=%d ca
 | :--- | :--- |
 | `copilot-brief-card.test.tsx` | tone 徽章文本正确；`evidence_missing>=2` 时横幅出现；`gated` 块显示「升级解锁」而非 `--`；点击刷新调用 `reload` |
 | `copilot-defense-block.test.tsx` | 空数组 → 显示「不给防守线（不猜价位）」；4 条以上截断；`distance_pct` 为 null → `--` |
-| `copilot-capsule.test.tsx` | 点击后 `window.dispatchEvent` 收到 `panwatch-open-chat` 且 `detail.pageContext` 含「数智参谋快照」与 `as_of`；收起写 localStorage |
+| `copilot-capsule.test.tsx` | 点击后 `window.dispatchEvent` 收到 `sida-open-chat` 且 `detail.pageContext` 含「数智参谋快照」与 `as_of`；收起写 localStorage |
 | `copilot-copy-contract.test.ts` | §7.4 合规正则 |
 | `ai-copilot-page.test.tsx` | 空态提示；点预设 → 发消息；流式 delta 追加到同一条 assistant 消息（不新增气泡） |
 | 布局探针 | 胶囊与 chat FAB 的 `getBoundingClientRect` 不相交（桌面 + 移动两档） |

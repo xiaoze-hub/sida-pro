@@ -1,6 +1,6 @@
-import DecisionPioneerCard from '@panwatch/biz-ui/components/DecisionPioneerCard'
-import ResonanceVerdictPanel from '@panwatch/biz-ui/components/ResonanceVerdictPanel'
-import PioneerIndicatorsSection from '@panwatch/biz-ui/components/PioneerIndicatorsSection'
+import DecisionPioneerCard from '@sida/biz-ui/components/DecisionPioneerCard'
+import ResonanceVerdictPanel from '@sida/biz-ui/components/ResonanceVerdictPanel'
+import PioneerIndicatorsSection from '@sida/biz-ui/components/PioneerIndicatorsSection'
 
 /**
  * 「数智决策」合并卡(工作台 v2 三合一, spec §4.2 / 去重表第 1 项)。

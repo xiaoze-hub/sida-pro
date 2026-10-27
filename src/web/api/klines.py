@@ -1331,7 +1331,7 @@ def _build_events(symbol: str, bars: list[dict]) -> list[dict]:
 
     数据源与缺数处理(全部"缺即空", 不编造):
       - 涨停/跌停  : bars 自算, 阈值 ±9.8%(与前端 InteractiveKline 同口径)
-      - 拆单簇/撤单: .tck 文件(需 PANWATCH_TCK_DIR), 无文件 → 空
+      - 拆单簇/撤单: .tck 文件(需 SIDA_TCK_DIR), 无文件 → 空
       - 龙虎榜/公告: wencai(thsdk), 不可用 → 空
       - 我的买卖点: paper_trading 交割单(DB), 无记录 → 空
 

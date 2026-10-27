@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { insightApi } from '@panwatch/api'
+import { insightApi } from '@sida/api'
 
 /**
  * P0-3 决策合成接 UI(2026-10-10): `GET /api/decision/{symbol}` 三信号合成

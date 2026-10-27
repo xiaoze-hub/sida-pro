@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { ExternalLink, Maximize2, Minimize2, Settings2, X } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { AssistantAvatar } from './AssistantAvatar'
 import { useAssistantWorkspace } from './AssistantWorkspace'
 import { useCapsulePresent } from '@/lib/copilot/capsule-presence'

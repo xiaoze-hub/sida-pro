@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@sida/base-ui/components/ui/dialog'
 import { useMemo, useState } from 'react'
 import {
   KeyRound,
@@ -13,9 +13,9 @@ import {
   ShieldCheck,
   Zap,
 } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { fetchAPI } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { formatDateTime } from '@/lib/utils'
 import { useApiQuery } from '@/hooks/useApiQuery'
 import { DevPageLayout, Section, InfoCard, CodeBlock, EmptyState, type SideMenuItem } from '@/components/dev/DevPageLayout'

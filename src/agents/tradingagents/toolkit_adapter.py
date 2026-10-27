@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 # 用 ContextVar 而非模块级 dict:深度分析跑在 asyncio.to_thread worker 线程,
 # to_thread 会 copy_context(),每个并发任务拿到独立副本 —— 避免两只标的并发
 # 分析时互相覆盖数据(广汽 601238 的报告混入赛力斯 601127 的 K线/新闻)。
-_PANWATCH_DATA: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-    "_TA_PANWATCH_DATA", default={}
+_SIDA_DATA: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "_TA_SIDA_DATA", default={}
 )
 
 # 跟随当前请求的 trace_id;toolkit hit/miss 日志归属到这次分析
@@ -46,11 +46,11 @@ _CURRENT_TRACE_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 def _cache() -> dict[str, Any]:
     """读当前 context 的 SIDA 数据快照(并发隔离)。"""
-    return _PANWATCH_DATA.get()
+    return _SIDA_DATA.get()
 
 
 @contextmanager
-def panwatch_data_context(data: dict[str, Any], trace_id: str = ""):
+def sida_data_context(data: dict[str, Any], trace_id: str = ""):
     """在调用 TradingAgents 的代码块周围用本 context manager 注入数据。
 
     Args:
@@ -60,12 +60,12 @@ def panwatch_data_context(data: dict[str, Any], trace_id: str = ""):
     退出 context 时还原数据。基于 ContextVar,并发任务(及其 to_thread worker)
     互不干扰。
     """
-    token = _PANWATCH_DATA.set(dict(data))
+    token = _SIDA_DATA.set(dict(data))
     tid_token = _CURRENT_TRACE_ID.set(trace_id or "")
     try:
         yield
     finally:
-        _PANWATCH_DATA.reset(token)
+        _SIDA_DATA.reset(token)
         _CURRENT_TRACE_ID.reset(tid_token)
 
 
@@ -97,7 +97,7 @@ def is_hk_share(symbol: str) -> bool:
     return bool(symbol) and len(symbol) == 5 and symbol.isdigit()
 
 
-def is_panwatch_routable(symbol: str) -> bool:
+def is_sida_routable(symbol: str) -> bool:
     """该 ticker 是否应该走 SIDA 数据(而不是上游 yfinance)。
 
     A 股(6 位数字)yfinance 拉不到,港股(5 位数字)yfinance 也要 .HK 后缀,
@@ -164,7 +164,7 @@ _ROUTE_TO_VENDOR_IMPORT_SITES = (
 
 # patch 引用计数:多个并发深度分析共享同一次安装,第一个进入者保存真
 # route_to_vendor 并装到所有 import site,最后一个退出才恢复。数据隔离靠
-# _PANWATCH_DATA(ContextVar),patch 本身只需进程级安装一次 —— 消除原先
+# _SIDA_DATA(ContextVar),patch 本身只需进程级安装一次 —— 消除原先
 # "A 退出时把全局恢复成 B 的 _patched"的嵌套竞态。
 _patch_lock = threading.Lock()
 _patch_refcount = 0
@@ -200,18 +200,18 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
     if not symbol:
         cached_stock = _cache().get("stock")
         cached_symbol = getattr(cached_stock, "symbol", "") if cached_stock else ""
-        if is_panwatch_routable(cached_symbol):
+        if is_sida_routable(cached_symbol):
             symbol = cached_symbol
 
     # A 股:yfinance/finnhub 拉不到,直接走 SIDA
     if is_a_share(symbol) and _cache():
         try:
-            result = _serve_from_panwatch(method_name, symbol, kwargs, args=args)
+            result = _serve_from_sida(method_name, symbol, kwargs, args=args)
             _emit_toolkit_log(
                 "info", "HIT", method_name, symbol,
                 chars=len(result),
                 snippet=str(result)[:4000],
-                source="panwatch",
+                source="sida",
                 extra_args=_args_summary(args),
             )
             return result
@@ -255,12 +255,12 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
         # yfinance 没数据 → fallback 到 SIDA = HIT(SIDA 兜底提供数据)
         if _cache():
             try:
-                result = _serve_from_panwatch(method_name, symbol, kwargs, args=args)
+                result = _serve_from_sida(method_name, symbol, kwargs, args=args)
                 _emit_toolkit_log(
                     "info", "HIT", method_name, symbol,
                     chars=len(result),
                     snippet=str(result)[:4000],
-                    source="panwatch HK fallback",
+                    source="sida HK fallback",
                     extra_args=_args_summary(args),
                 )
                 return result
@@ -273,20 +273,20 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
         _emit_toolkit_log(
             "warning", "ERROR", method_name, symbol,
             chars=len(upstream_str), snippet=upstream_str[:4000],
-            source=f"upstream HK(→{yf_symbol}) + panwatch 均空",
+            source=f"upstream HK(→{yf_symbol}) + sida 均空",
             error="HK no data from either source",
         )
         return upstream_result
 
     # 行业/主题新闻:get_news 的 query 不是 ticker(中文行业词等) → 实时搜中文新闻(东方财富),
     # 替代拉不到中文数据的上游 vendor。
-    if symbol and "news" in method_name.lower() and not is_panwatch_routable(symbol) and _looks_like_cn_keyword(symbol):
+    if symbol and "news" in method_name.lower() and not is_sida_routable(symbol) and _looks_like_cn_keyword(symbol):
         try:
             result = _serve_keyword_news(symbol)
             _emit_toolkit_log(
                 "info", "HIT", method_name, symbol,
                 chars=len(result), snippet=result[:4000],
-                source="panwatch keyword news", extra_args=_args_summary(args),
+                source="sida keyword news", extra_args=_args_summary(args),
             )
             return result
         except Exception as e:
@@ -321,7 +321,7 @@ def _patched_route_to_vendor(method_name: str, *args, **kwargs):
 def patch_route_to_vendor():
     """Monkeypatch tradingagents.dataflows.interface.route_to_vendor + 所有 import sites。
 
-    当请求 A 股代码时,从 _PANWATCH_DATA(当前 context)返回 SIDA 已拉的数据。
+    当请求 A 股代码时,从 _SIDA_DATA(当前 context)返回 SIDA 已拉的数据。
     非 A 股放行到原函数。
 
     引用计数 + 锁:并发的多个深度分析共享同一次安装,第一个进入者装、最后一个
@@ -398,7 +398,7 @@ _LOAD_OHLCV_IMPORT_SITES = (
 )
 
 
-def _build_panwatch_ohlcv_df(symbol: str, curr_date: str):
+def _build_sida_ohlcv_df(symbol: str, curr_date: str):
     """用 SIDA K线构建与原生 load_ohlcv 同结构的 DataFrame(Date/Open/High/Low/Close/Volume)。"""
     import pandas as pd
 
@@ -432,20 +432,20 @@ def _build_panwatch_ohlcv_df(symbol: str, curr_date: str):
     return df.reset_index(drop=True)
 
 
-def _panwatch_load_ohlcv(symbol: str, curr_date: str, *args, **kwargs):
+def _sida_load_ohlcv(symbol: str, curr_date: str, *args, **kwargs):
     """A股/港股走 SIDA K线;美股等非 SIDA 标的放行原生 yfinance。
 
     A股/港股 SIDA 拉空时**不回退 yfinance**(A股/港股在 Yahoo 无数据 + 限流,回退只会
     把"K线获取失败"变成误导的"Yahoo no rows"),直接抛 NoMarketDataError 报清晰错。
     """
-    if is_panwatch_routable(symbol):
+    if is_sida_routable(symbol):
         df = None
         try:
-            df = _build_panwatch_ohlcv_df(symbol, curr_date)
+            df = _build_sida_ohlcv_df(symbol, curr_date)
         except Exception as e:
             logger.warning(f"[TA toolkit] load_ohlcv SIDA 取数异常 symbol={symbol}: {e}")
         if df is not None and not df.empty:
-            _emit_toolkit_log("info", "panwatch", "load_ohlcv", symbol, rows=int(len(df)))
+            _emit_toolkit_log("info", "sida", "load_ohlcv", symbol, rows=int(len(df)))
             return df
         _emit_toolkit_log("warning", "miss", "load_ohlcv", symbol)
         # A股/港股不回退 yahoo:抛 TA 期望的 NoMarketDataError,报清晰真因
@@ -479,14 +479,14 @@ def _ensure_load_ohlcv_patched() -> None:
         if _LOAD_OHLCV_PATCHED:
             return
         _real_load_ohlcv = stockstats_utils.load_ohlcv
-        stockstats_utils.load_ohlcv = _panwatch_load_ohlcv
+        stockstats_utils.load_ohlcv = _sida_load_ohlcv
         for module_path in _LOAD_OHLCV_IMPORT_SITES:
             try:
                 mod = importlib.import_module(module_path)
             except ImportError:
                 continue
             if getattr(mod, "load_ohlcv", None) is not None:
-                mod.load_ohlcv = _panwatch_load_ohlcv
+                mod.load_ohlcv = _sida_load_ohlcv
                 logger.debug(f"[TA toolkit] patched load_ohlcv in {module_path}")
         _LOAD_OHLCV_PATCHED = True
         logger.info("[TA toolkit] load_ohlcv 已接管(A股/港股走 SIDA,防 yfinance NoMarketData)")
@@ -600,7 +600,7 @@ def _a_share_sentiment_to_text(senti: dict, symbol: str) -> str:
     return "\n".join(lines)
 
 
-def _serve_from_panwatch(method_name: str, symbol: str, kwargs: dict, args: tuple = ()) -> str:
+def _serve_from_sida(method_name: str, symbol: str, kwargs: dict, args: tuple = ()) -> str:
     """从 _cache()(当前 context 的数据)构造 TradingAgents 期望的数据格式(CSV / JSON 字符串)。
 
     上游各 vendor 方法返回类型不一,通常是 str(已格式化的 CSV/表格/JSON)。
@@ -695,7 +695,7 @@ def _serve_from_panwatch(method_name: str, symbol: str, kwargs: dict, args: tupl
         )
 
     # 未识别:让上游走默认 vendor
-    raise NotImplementedError(f"no panwatch backing for {method_name}")
+    raise NotImplementedError(f"no sida backing for {method_name}")
 
 
 def _serve_keyword_news(keyword: str) -> str:

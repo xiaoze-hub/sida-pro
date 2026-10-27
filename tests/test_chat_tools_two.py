@@ -48,33 +48,33 @@ def test_to_ths_code_differs_from_tencent_style():
 
 
 def test_find_tck_file_no_dir(monkeypatch):
-    monkeypatch.delenv("PANWATCH_TCK_DIR", raising=False)
+    monkeypatch.delenv("SIDA_TCK_DIR", raising=False)
     assert ds.find_tck_file("000977") is None
 
 
 def test_find_tck_file_hit(monkeypatch, tmp_path):
     (tmp_path / "sz000977_20260831.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
     assert ds.find_tck_file("000977").endswith("sz000977_20260831.tck")
 
 
 def test_find_tck_file_filters_by_date(monkeypatch, tmp_path):
     (tmp_path / "sz000977_20260830.tck").write_bytes(b"x")
     (tmp_path / "sz000977_20260831.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
     assert ds.find_tck_file("000977", "2026-08-31").endswith("20260831.tck")
     assert ds.find_tck_file("000977", "20260830").endswith("20260830.tck")
 
 
 def test_find_tck_file_date_miss(monkeypatch, tmp_path):
     (tmp_path / "sz000977_20260830.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
     assert ds.find_tck_file("000977", "2026-09-01") is None
 
 
 def test_find_tck_file_ignores_other_ext(monkeypatch, tmp_path):
     (tmp_path / "000977.dat").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
     assert ds.find_tck_file("000977") is None
 
 
@@ -135,4 +135,4 @@ def test_dark_flow_from_tck_empty_marks_no_data():
     assert r["net"] is None and r["active_net"] is None
     assert r["note"] == "无数据"
 
-
+

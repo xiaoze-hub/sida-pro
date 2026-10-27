@@ -1,8 +1,8 @@
 import type { MouseEventHandler } from 'react'
 import { AlarmClock } from 'lucide-react'
-import { cn } from '@panwatch/base-ui'
-import { BadgeChip, type BadgeChipSize } from '@panwatch/biz-ui/components/badge-chip'
-import { normalizeSuggestionAction, resolveSuggestionColorClass, resolveSuggestionLabel } from '@panwatch/biz-ui/components/suggestion-action'
+import { cn } from '@sida/base-ui'
+import { BadgeChip, type BadgeChipSize } from '@sida/biz-ui/components/badge-chip'
+import { normalizeSuggestionAction, resolveSuggestionColorClass, resolveSuggestionLabel } from '@sida/biz-ui/components/suggestion-action'
 
 interface AiSuggestionBadgeProps {
   action?: string

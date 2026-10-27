@@ -79,7 +79,7 @@ def test_insert_ignore_sql_follows_is_postgres(monkeypatch):
 
 
 def test_declared_backend_is_sqlite_in_tests():
-    # conftest 固定 SIDA_DB_URL=sqlite:///{tmp}/panwatch_test.db
+    # conftest 固定 SIDA_DB_URL=sqlite:///{tmp}/sida_test.db
     from src.db.dialect import declared_backend
 
     assert declared_backend() == "sqlite"

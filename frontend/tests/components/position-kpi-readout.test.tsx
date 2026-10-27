@@ -13,7 +13,7 @@
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import Stat from '@panwatch/biz-ui/components/Stat'
+import Stat from '@sida/biz-ui/components/Stat'
 import { dailyPnlDisplayLabel } from '@/pages/stocks/shared'
 
 const meta = (

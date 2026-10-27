@@ -23,12 +23,12 @@ import {
   tradingAgentsApi,
   type DeepAnalysisResult,
   type HistoryComparisonResponse,
-} from '@panwatch/api'
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+} from '@sida/api'
+import { Switch } from '@sida/base-ui/components/ui/switch'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 import ErrorState from '@/components/ErrorState'
 import { useKlineLayer } from '@/hooks/useKlineLayer'
-import { buildAnalysisSections, type AnalysisSection } from '@panwatch/biz-ui/analysis-sections'
+import { buildAnalysisSections, type AnalysisSection } from '@sida/biz-ui/analysis-sections'
 import ShareCardModal from '../components/ShareCardModal'
 
 const DECISION_COLOR: Record<string, string> = {
@@ -49,7 +49,7 @@ const SECTION_ICON: Record<string, LucideIcon> = {
 }
 
 /** 二级目录显示开关的 localStorage 键(记住用户选择) */
-const TOC_SUB_KEY = 'panwatch_toc_show_sub'
+const TOC_SUB_KEY = 'sida_toc_show_sub'
 
 /** 从代码粗略推断市场:6 位数字=A股, 5 位数字=港股, 其余=美股 */
 

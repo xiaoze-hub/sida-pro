@@ -119,7 +119,7 @@ def test_pushed_llm_config_wins_over_local_env(monkeypatch):
 
     monkeypatch.setattr(
         "os.path.exists",
-        lambda p: False if ("panwatch_forecast" in str(p) or "agnes_key" in str(p)) else bool(p),
+        lambda p: False if ("sida_forecast" in str(p) or "agnes_key" in str(p)) else bool(p),
     )
     forecast_sentiment.set_runtime_llm_config(
         {"base_url": "https://pushed.example/v1", "model": "pushed-model", "api_key": "k-push"}

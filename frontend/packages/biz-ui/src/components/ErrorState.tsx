@@ -1,5 +1,5 @@
 import { Loader2, ShieldAlert } from 'lucide-react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /**
  * 统一错误展示组件 + 技术错误翻译 (2026-08-21)

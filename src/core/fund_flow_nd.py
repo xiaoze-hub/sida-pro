@@ -48,13 +48,13 @@ MING_HISTORY_NOTE = (
 )
 
 # 明盘历史开关: 需 TQ 网关可达 + ZLJC 单位校验通过后才能开(默认关, 见 ming_history_tq)
-MING_HISTORY_ENABLED = __import__("os").environ.get("PANWATCH_MING_HISTORY", "0").strip() == "1"
+MING_HISTORY_ENABLED = __import__("os").environ.get("SIDA_MING_HISTORY", "0").strip() == "1"
 
 
 def ming_history_tq(symbol: str, days: int) -> Optional[dict]:
     """明盘历史(通达信 TQ `ZLJC` 主力进出) → N 日累计净额(元)。
 
-    **为什么默认关**(环境变量 `PANWATCH_MING_HISTORY=1` 才启用):
+    **为什么默认关**(环境变量 `SIDA_MING_HISTORY=1` 才启用):
 
     1. **TQ 网关依赖**: ZLJC 走通达信客户端 JSON-RPC(127.0.0.1:17709)。
        生产小主机跑着通达信客户端 → **可达**; 本机/容器无客户端 → 返空 `{}`
@@ -64,7 +64,7 @@ def ming_history_tq(symbol: str, days: int) -> Optional[dict]:
 
     **启用前的校验方法**(一步即可):
         拿当日 ZLJC 换算值 与 `big_order_flow` 明盘真值(已与官方扩展1 精确到元对齐)
-        对比量级, 一致才把 `PANWATCH_MING_HISTORY` 置 1。
+        对比量级, 一致才把 `SIDA_MING_HISTORY` 置 1。
 
     Returns:
         {"net": 元, "days": n, "source": "tq_zljc", "confidence": "proxy_approximation"}

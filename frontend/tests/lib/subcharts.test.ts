@@ -5,7 +5,7 @@ import {
   subChartReadouts,
   visibleSubCharts,
   type SubChartRow,
-} from '@panwatch/biz-ui/lib/subcharts'
+} from '@sida/biz-ui/lib/subcharts'
 
 const row = (over: Partial<SubChartRow> = {}): SubChartRow => ({
   date: '2026-09-11', volume: 123456, volMa5: 100000, volMa10: 90000,

@@ -60,8 +60,8 @@ const mocks = vi.hoisted(() => ({
  * Task 19: 页面自取持仓汇总(`dashboardApi.portfolioSummary`)。只替这一个方法, 其余导出透传
  * (页面只用到它; `importOriginal` 保真其余导出, 避免误伤)。
  */
-vi.mock('@panwatch/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@panwatch/api')>()
+vi.mock('@sida/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@sida/api')>()
   return {
     ...actual,
     dashboardApi: {
@@ -95,7 +95,7 @@ vi.mock('@/pages/workbench/tabs/NewsTab', makeTabMock('news'))
 vi.mock('@/pages/workbench/tabs/ResearchTab', makeTabMock('research'))
 vi.mock('@/pages/workbench/tabs/ForecastTab', makeTabMock('forecast'))
 
-vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
+vi.mock('@sida/biz-ui/components/KlineChart', () => ({
   default: (p: {
     symbol: string
     market: string
@@ -157,7 +157,7 @@ vi.mock('@/pages/workbench/IndexBody', async () => {
   return { default: IndexBodyMock }
 })
 
-vi.mock('@panwatch/biz-ui/components/workbench/BoardBody', async () => {
+vi.mock('@sida/biz-ui/components/workbench/BoardBody', async () => {
   const { useEffect } = await import('react')
   function BoardBodyMock(p: { code: string; refreshToken?: number }) {
     useEffect(() => {
@@ -171,7 +171,7 @@ vi.mock('@panwatch/biz-ui/components/workbench/BoardBody', async () => {
   return { default: BoardBodyMock }
 })
 
-vi.mock('@panwatch/biz-ui/components/workbench/HeaderBand', () => ({
+vi.mock('@sida/biz-ui/components/workbench/HeaderBand', () => ({
   default: (p: {
     symbol: string
     market: string
@@ -199,7 +199,7 @@ vi.mock('@panwatch/biz-ui/components/workbench/HeaderBand', () => ({
   ),
 }))
 
-vi.mock('@panwatch/biz-ui/components/workbench/QuickRail', () => ({
+vi.mock('@sida/biz-ui/components/workbench/QuickRail', () => ({
   default: (p: { symbol: string; market: string }) => (
     <div data-testid="rail">{`rail:${p.symbol}:${p.market}`}</div>
   ),

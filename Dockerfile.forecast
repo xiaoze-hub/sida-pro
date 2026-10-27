@@ -4,7 +4,7 @@
 #       + 回测调度 + 报告生成(企微/dashboard 双格式)
 # 端口: 8010
 #
-# 自包含: 不依赖 panwatch-kronos:base 私有镜像,
+# 自包含: 不依赖 sida-kronos:base 私有镜像,
 #         完全从 dockerhub python:3.11-slim 构建,自带 torch cpu + Kronos 源码。
 # 构建: sudo docker build -f Dockerfile.forecast \
 #       -t ghcr.io/xiaoze-hub/stock-intelligent-data-analytics-forecast:0.1.4 .

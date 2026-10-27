@@ -15,13 +15,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({ fetchAPI: vi.fn(), getToken: vi.fn(() => 'tok') }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => api.fetchAPI(...args),
   getToken: () => api.getToken(),
 }))
 
-import { TabActiveProvider, useTabActive } from '@panwatch/base-ui'
-import { usePolling } from '@panwatch/biz-ui/hooks/usePolling'
+import { TabActiveProvider, useTabActive } from '@sida/base-ui'
+import { usePolling } from '@sida/biz-ui/hooks/usePolling'
 
 import { useApiQuery } from '@/hooks/useApiQuery'
 import { useQuoteStream } from '@/realtime/useQuoteStream'

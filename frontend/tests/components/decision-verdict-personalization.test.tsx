@@ -6,11 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * P1-2(个性化) + P2-7(跨市场) 前端契约: `DecisionVerdictCard` 对后端新增字段的**显式**渲染,
  * 且旧响应(无这些字段)行为与旧版逐字一致(向后兼容)。
  *
- * 真数据纪律: mock 的是**网络层**(`@panwatch/api` 的 `insightApi.decision`), 组件走真实代码。
+ * 真数据纪律: mock 的是**网络层**(`@sida/api` 的 `insightApi.decision`), 组件走真实代码。
  */
 const mocks = vi.hoisted(() => ({ decision: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   insightApi: {
     decision: (...a: unknown[]) => mocks.decision(...a),
   },

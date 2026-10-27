@@ -2,7 +2,7 @@
 
 发版铁律里"三重验证"的可执行版 —— 判"部署成没成"只看**生产实证**, 不看看门狗日志、不看 CI 结论:
   ① 生产 `/api/health` 的 `version` == 目标 tag;
-  ② 容器真实镜像 tag(`docker inspect panwatch --format '{{.Config.Image}}'`) == 目标 tag;
+  ② 容器真实镜像 tag(`docker inspect sida --format '{{.Config.Image}}'`) == 目标 tag;
   ③ 设计稿 v3.0 验收线巡检(终端 8 页 + 公开面 4 页);
   ④ 新增页面 smoke(`/decision-ledger` 无 pageerror、两段表格在)。
 
@@ -78,8 +78,8 @@ def main() -> int:
             # 没给 SSH 密码 ≠ 部署失败: 只降级为"未验证", 不计入硬失败(凭据一律走环境变量)
             print("② 容器镜像/ VERSION 未验证(需要 SIDA_SSH_PW; 不加 --skip-ssh 时给上更稳)")
         else:
-            img = _ssh("docker inspect panwatch --format '{{.Config.Image}}'")
-            vfile = _ssh("docker exec panwatch cat /app/VERSION")
+            img = _ssh("docker inspect sida --format '{{.Config.Image}}'")
+            vfile = _ssh("docker exec sida cat /app/VERSION")
             print(f"② 容器镜像 = {img}")
             print(f"   容器 VERSION = {vfile}")
             if args.tag not in img or vfile.strip() != args.tag:

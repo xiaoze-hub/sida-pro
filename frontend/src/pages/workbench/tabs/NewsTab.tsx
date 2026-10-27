@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
-import { useInsight } from '@panwatch/biz-ui/components/insight/context'
-import { AnnouncementsTab } from '@panwatch/biz-ui/components/insight/AnnouncementsTab'
-import { NewsTab as InsightNewsTab } from '@panwatch/biz-ui/components/insight/NewsTab'
+import { useInsight } from '@sida/biz-ui/components/insight/context'
+import { AnnouncementsTab } from '@sida/biz-ui/components/insight/AnnouncementsTab'
+import { NewsTab as InsightNewsTab } from '@sida/biz-ui/components/insight/NewsTab'
 import InsightProvider from '@/pages/workbench/InsightProvider'
 
 /**

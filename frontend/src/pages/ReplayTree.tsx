@@ -19,8 +19,8 @@ import {
   type ReplaySeriesResp,
   type ReplayTreeResp,
   type ReplayTreeResult,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { Skeleton } from '@/components/Skeleton'
 import ReplayPromotionTree from '@/components/ReplayPromotionTree'
 import { useI18n } from '@/hooks/useI18n'

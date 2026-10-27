@@ -6,10 +6,10 @@
 #   docker-compose.yml 里的 `forecast:8010` 服务只是早期规划描述, ACR/ghcr 上
 #   从未发布过 `*-forecast` 镜像(生产实测 `docker manifest inspect` 不存在该仓库)。
 #   生产真实形态 = 主机 venv 里 `python3 forecast_server.py`, 由 systemd 单元
-#   `panwatch-forecast.service` 常驻 + 开机自启; 历史库 `~/.panwatch_forecast.db`。
+#   `sida-forecast.service` 常驻 + 开机自启; 历史库 `~/.sida_forecast.db`。
 #   详见 deploy/FORECAST_ENGINE_DEPLOY.md。
 #
-# 为什么要绑 0.0.0.0: 主服务(panwatch)在容器里, 它经 `_detect_engine_url()` 从
+# 为什么要绑 0.0.0.0: 主服务(sida)在容器里, 它经 `_detect_engine_url()` 从
 #   容器默认网关推出引擎地址(如 http://172.19.0.1:8010, 即宿主机在 compose 网络上的
 #   IP)。裸进程若只听 127.0.0.1, 容器侧连接必然被拒。故 FORECAST_HOST 默认 0.0.0.0
 #   (与 `-p 8000:8000` 同口径; 生产主机 ufw inactive, 与主服务暴露面一致)。
@@ -20,11 +20,11 @@
 #   sudo bash deploy/deploy_forecast_engine.sh
 # 主要可覆盖变量:
 #   FORECAST_SOURCE_DIR    仓库根(含 forecast_server.py / forecast_lib/), 默认本脚本上级
-#   FORECAST_INSTALL_DIR   安装目录, 默认 /opt/panwatch-forecast
+#   FORECAST_INSTALL_DIR   安装目录, 默认 /opt/sida-forecast
 #   FORECAST_VENV_DIR      venv 目录, 默认 $FORECAST_INSTALL_DIR/venv
 #   FORECAST_MAIN_API_URL  主服务地址, 默认 http://127.0.0.1:8000(容器 8000 已发布到宿主机)
 #   FORECAST_HOST          引擎绑定地址, 默认 0.0.0.0(容器可达所必需, 见上)
-#   FORECAST_DB_PATH       历史库路径, 默认 $HOME/.panwatch_forecast.db
+#   FORECAST_DB_PATH       历史库路径, 默认 $HOME/.sida_forecast.db
 #   FORECAST_SKIP_DEPS=1   跳过依赖安装
 #   FORECAST_DEPLOY_STUB=1 干跑(不建 venv/不装 unit/不拉起, 供 stub 测试)
 # ============================================================
@@ -32,18 +32,18 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="${FORECAST_SOURCE_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-INSTALL_DIR="${FORECAST_INSTALL_DIR:-/opt/panwatch-forecast}"
+INSTALL_DIR="${FORECAST_INSTALL_DIR:-/opt/sida-forecast}"
 VENV_DIR="${FORECAST_VENV_DIR:-$INSTALL_DIR/venv}"
 ENV_FILE="${FORECAST_ENV_FILE:-$INSTALL_DIR/forecast.env}"
 UNIT_DIR="${FORECAST_SYSTEMD_DIR:-/etc/systemd/system}"
-UNIT_NAME="${FORECAST_UNIT_NAME:-panwatch-forecast.service}"
+UNIT_NAME="${FORECAST_UNIT_NAME:-sida-forecast.service}"
 SERVICE="${UNIT_NAME%.service}"
 PYTHON="${FORECAST_PYTHON:-python3}"
 MAIN_API_URL="${FORECAST_MAIN_API_URL:-http://127.0.0.1:8000}"
 BIND_HOST="${FORECAST_HOST:-0.0.0.0}"
-DB_PATH="${FORECAST_DB_PATH:-$HOME/.panwatch_forecast.db}"
+DB_PATH="${FORECAST_DB_PATH:-$HOME/.sida_forecast.db}"
 PIP_MIRROR="${FORECAST_PIP_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
-LOG_FILE="${FORECAST_LOG_FILE:-/var/log/panwatch-forecast.log}"
+LOG_FILE="${FORECAST_LOG_FILE:-/var/log/sida-forecast.log}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 PORT="${FORECAST_PORT:-8010}"
 STUB="${FORECAST_DEPLOY_STUB:-0}"

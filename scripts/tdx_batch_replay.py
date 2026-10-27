@@ -43,7 +43,7 @@ TDX_DIR = Path(r"C:\new_tdx64")
 ZST_CACHE = TDX_DIR / "T0002" / "zst_cache"
 
 # 目标目录(容器可读)
-OUTPUT_DIR = Path(r"\\wsl$\docker-desktop-data\data\docker\volumes\panwatch-tck\_data")
+OUTPUT_DIR = Path(r"\\wsl$\docker-desktop-data\data\docker\volumes\sida-tck\_data")
 # 备用: 直接复制到项目 data/tck
 FALLBACK_OUTPUT = Path(__file__).parent.parent / "data" / "tck"
 

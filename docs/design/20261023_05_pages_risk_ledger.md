@@ -28,7 +28,7 @@
 
 **覆盖范围（已审）**：上表 16 个文件中的 UI 结构、按钮族、状态表达、空/错态、口径文案。
 **明确未审**：
-1. `@panwatch/biz-ui` 内 `price-alert-form-dialog`、`CaliberBadge`、`TabbedPage` 三个外部组件内部实现（本次只看到调用方传参）；
+1. `@sida/biz-ui` 内 `price-alert-form-dialog`、`CaliberBadge`、`TabbedPage` 三个外部组件内部实现（本次只看到调用方传参）；
 2. `src/agents/war_report*` 战报数据生产侧（只审了消费端渲染）；
 3. 决策账本写入侧（cron 回填 T+1/3/5 的作业）与 `GET /api/decisions/log` 的 SQL；
 4. 移动端真机布局（只读 class，未渲染）；
@@ -317,7 +317,7 @@
 
 ### 8.1 触发条件表单：能力齐但藏在 Dialog 里，主页面无摘要
 
-- **现状**：表单在外部包 `@panwatch/biz-ui/components/price-alert-form-dialog`（`:8` 引入，`:349-360` 调用），支持 `price / change_pct / turnover / volume / volume_ratio` 五类型 + `and/or` 组合（`conditionText:71-83` 的映射即证据）；`DEFAULT_FORM`（`:51-62`）默认 `cooldown_minutes: 30`、`max_triggers_per_day: 3`、`repeat_mode: 'repeat'`、`market_hours_mode: 'trading_only'`。**该组件内部结构本次未取到，不做评价。**
+- **现状**：表单在外部包 `@sida/biz-ui/components/price-alert-form-dialog`（`:8` 引入，`:349-360` 调用），支持 `price / change_pct / turnover / volume / volume_ratio` 五类型 + `and/or` 组合（`conditionText:71-83` 的映射即证据）；`DEFAULT_FORM`（`:51-62`）默认 `cooldown_minutes: 30`、`max_triggers_per_day: 3`、`repeat_mode: 'repeat'`、`market_hours_mode: 'trading_only'`。**该组件内部结构本次未取到，不做评价。**
 - **问题**：① `:320` 列表页把条件拼成一行文本 `价格 >= 6.5 且 涨跌幅% >= 3`，读起来是代码而非自然语言（`>=` `.join(' 且 ')`）。② 冷却/日上限（`:322-324`）是一串「冷却 30 分钟 · 日上限 3 次 · 最近触发 --」，`--` 与真时间同色，扫不出「从未触发」。③ 预填逻辑（`:126-159`）从 URL 自动建股票，但失败时静默 fallback 到手动选择（`:145-147` `catch {}`），用户会以为预填坏了。
 - **改法**：① 条件文案自然化：`价格 ≥ 6.50`、`涨幅 ≥ 3%`、区间 `价格 6.00–7.00`（`between` 已在 `:79-81` 处理，只需换 `∈ [a,b]` 为 `a–b`）；② 「最近触发」为空时用 `text-muted-foreground/60` + 文案「未触发」；③ 预填失败给一次 `toast('未能自动带入该标的，请手动选择', 'info')`。
 - **验收线**：列表条件行不出现 `>=`/`∈` 符号；「未触发」与真时间视觉可辨。

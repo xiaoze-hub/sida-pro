@@ -506,7 +506,7 @@ def test_p1_11_ws_token_extraction_priority():
         "raw_path": b"/",
         "query_string": b"token=QUERY_TOKEN",
         "headers": [
-            (b"sec-websocket-protocol", b"panwatch.auth.bearer, HEADER_TOKEN"),
+            (b"sec-websocket-protocol", b"sida.auth.bearer, HEADER_TOKEN"),
         ],
         "client": ("127.0.0.1", 12345),
         "server": ("test", 80),
@@ -517,7 +517,7 @@ def test_p1_11_ws_token_extraction_priority():
 
     token, sub = asyncio.run(_extract_ws_token(req))
     assert token == "HEADER_TOKEN", f"SWP 优先, 应取 HEADER_TOKEN, 得到 {token}"
-    assert sub == "panwatch.auth.bearer"
+    assert sub == "sida.auth.bearer"
 
     # 场景 2: 无 SWP 头, 仅 ?token=
     scope2 = dict(scope)

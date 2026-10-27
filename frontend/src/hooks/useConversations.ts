@@ -19,7 +19,7 @@
  * 与本 hook 的 `list(q)` 契约一致。
  */
 import { useCallback, useRef, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { describeApiError } from '@/lib/api-error'
 
 /** 会话行（后端 chat_conversations 的前端投影，字段缺失一律 null，不猜）。 */

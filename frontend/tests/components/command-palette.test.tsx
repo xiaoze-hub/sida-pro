@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A2 命令面板动作化 (2026-09-10): Enter=跳转, Shift+Enter=加自选; 重复添加给显式提示。
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn(), navigate: vi.fn(), toast: vi.fn() }))
-vi.mock('@panwatch/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
+vi.mock('@sida/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
   return { ...actual, useNavigate: () => mocks.navigate }
 })
-vi.mock('@panwatch/base-ui/components/ui/toast', () => ({
+vi.mock('@sida/base-ui/components/ui/toast', () => ({
   useToast: () => ({ toast: mocks.toast }),
 }))
 

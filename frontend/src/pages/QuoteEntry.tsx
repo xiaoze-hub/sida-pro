@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, Link } from 'react-router-dom'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import PageHeader from '@/components/PageHeader'
 import { loadQuoteUniverse, preferredQuote, quotePath } from '@/lib/quote-universe'
 

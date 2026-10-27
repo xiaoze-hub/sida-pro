@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { healthApi, type SystemStatusUpdate } from '@panwatch/api'
+import { healthApi, type SystemStatusUpdate } from '@sida/api'
 import { useSystemStatus } from '@/hooks/useSystemStatus'
 import { emptySystemStatus, readSystemStatusCache, saveSystemStatusCache } from '@/lib/system-status'
 
-vi.mock('@panwatch/api', () => ({ healthApi: { streamSystemStatus: vi.fn(), selfcheckList: vi.fn(), selfcheckKeys: vi.fn() } }))
+vi.mock('@sida/api', () => ({ healthApi: { streamSystemStatus: vi.fn(), selfcheckList: vi.fn(), selfcheckKeys: vi.fn() } }))
 beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear() })
 afterEach(cleanup)
 it('首次即渲染全部模块，等待时叠加更新进度，未检测不能显示正常', () => {

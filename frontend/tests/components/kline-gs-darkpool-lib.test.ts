@@ -1,10 +1,10 @@
 // GS 区间色带 + 暗盘资金 纯逻辑单测(2026-10-11 决策先锋主图 §1 / 副图1 §2)。
 import { describe, expect, it } from 'vitest'
 
-import { gsZonePoints, GS_ZONE_COLOR } from '@panwatch/biz-ui/lib/gs-zones'
-import { DARK_POOL_CONFIDENCE, darkPoolBarPoint, darkPoolCombo } from '@panwatch/biz-ui/lib/dark-pool'
-import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
-import type { KlineInterval } from '@panwatch/biz-ui/lib/fund-bar'
+import { gsZonePoints, GS_ZONE_COLOR } from '@sida/biz-ui/lib/gs-zones'
+import { DARK_POOL_CONFIDENCE, darkPoolBarPoint, darkPoolCombo } from '@sida/biz-ui/lib/dark-pool'
+import { readStockColors } from '@sida/biz-ui/lib/stock-colors'
+import type { KlineInterval } from '@sida/biz-ui/lib/fund-bar'
 
 const SC = readStockColors()
 const INT: KlineInterval = '1d'

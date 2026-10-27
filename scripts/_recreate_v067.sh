@@ -1,23 +1,23 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
-IMG=panwatch:v0.6.7
+CT=sida
+IMG=sida:v0.6.7
 # save env from current
-docker inspect $CT --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/panwatch_env.txt
-echo "env_lines=$(wc -l < /tmp/panwatch_env.txt)"
+docker inspect $CT --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/sida_env.txt
+echo "env_lines=$(wc -l < /tmp/sida_env.txt)"
 docker stop $CT
 docker rm $CT
 ENVARGS=()
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   ENVARGS+=("-e" "$line")
-done < /tmp/panwatch_env.txt
+done < /tmp/sida_env.txt
 docker run -d --name $CT \
   --restart=always \
   -p 8000:8000 \
-  --network panwatch-net \
-  -v panwatch-data:/app/data \
-  -v panwatch-tck:/app/data/tck \
+  --network sida-net \
+  -v sida-data:/app/data \
+  -v sida-tck:/app/data/tck \
   --memory 1500m --memory-swap 1500m --cpus 1.5 \
   "${ENVARGS[@]}" \
   $IMG

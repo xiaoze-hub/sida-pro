@@ -233,7 +233,7 @@
 
 ### W-7 系统设置无任何值校验，填错静默失效
 
-- **现状**：`notify_quiet_hours` 的描述是"HH:MM-HH:MM"（`:54`），`notify_retry_attempts` 是整数（`:55`），`notify_dedupe_ttl_overrides` 是 JSON（`:57`），`panwatch_base_url` 是 URL（`:59`）；PUT 处理器（`:224-293`）**不做任何格式校验**。真正消费方 `src/bootstrap/runtime.py:439-460` 用 `float(backoff_raw)` / 直接读字符串，`panwatch_base_url` 由 `src/core/analysis_link.py:16` 拼进通知链接。
+- **现状**：`notify_quiet_hours` 的描述是"HH:MM-HH:MM"（`:54`），`notify_retry_attempts` 是整数（`:55`），`notify_dedupe_ttl_overrides` 是 JSON（`:57`），`sida_base_url` 是 URL（`:59`）；PUT 处理器（`:224-293`）**不做任何格式校验**。真正消费方 `src/bootstrap/runtime.py:439-460` 用 `float(backoff_raw)` / 直接读字符串，`sida_base_url` 由 `src/core/analysis_link.py:16` 拼进通知链接。
 - **问题**：`notify_quiet_hours = "23:00~07:00"`（波浪号写错）会被静默保存，`runtime` 里解析失败后按"关闭"处理——**用户以为开了静默，实际半夜仍在推**。`notify_dedupe_ttl_overrides` 填错 JSON 同理。这类"配置写进去了但没生效"的故障，UI 上零反馈。
 - **改法**：`settings.py` 增加 `_VALIDATORS: dict[str, Callable[[str], str]]`，PUT 时按 key 校验并 400 带人话错误（"静默时段需形如 23:00-07:00"）；前端 `KeyDialogs` 的 sysDialog 按 key 切控件（时段用两个 time input、重试次数用 number、JSON 用 textarea + 保存前 `JSON.parse`）。
 - **验收线**：非法格式保存返回 400 且错误文案指出期望格式；前端在提交前即拦截并高亮字段。

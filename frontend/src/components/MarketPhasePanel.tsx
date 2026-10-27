@@ -5,7 +5,7 @@
  * 空态为"可操作空态": 无历史时给回填入口(owner 限定), 而不是一句"暂无数据"。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { getJwtRole } from '@/lib/jwt'
 import { Gauge } from 'lucide-react'
 import {

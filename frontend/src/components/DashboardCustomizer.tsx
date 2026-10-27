@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronUp, RotateCcw } from 'lucide-react'
 
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -8,8 +8,8 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@panwatch/base-ui/components/ui/dialog'
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
+} from '@sida/base-ui/components/ui/dialog'
+import { Switch } from '@sida/base-ui/components/ui/switch'
 import {
   DASHBOARD_GROUP_LABEL,
   DASHBOARD_MODULES,

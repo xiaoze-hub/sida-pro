@@ -19,11 +19,11 @@ echo "$TOKEN" | docker login ghcr.io -u xiaoze-hub --password-stdin
 cp /mnt/c/Users/tianxiang/sida-work/Dockerfile.fast . 2>/dev/null || true
 if [ ! -f Dockerfile.fast ]; then
   echo "Dockerfile.fast 不存在, 用原 Dockerfile"
-  docker build --platform linux/amd64 --build-arg VERSION=v0.7.1 -t panwatch:v0.7.1 . 2>&1 | tail -20
+  docker build --platform linux/amd64 --build-arg VERSION=v0.7.1 -t sida:v0.7.1 . 2>&1 | tail -20
 else
   # 需要 static/ 不被 dockerignore
   sed -i 's|^static/|# static/|' .dockerignore 2>/dev/null || true
-  docker build --platform linux/amd64 --build-arg VERSION=v0.7.1 -f Dockerfile.fast -t panwatch:v0.7.1 . 2>&1 | tail -20
+  docker build --platform linux/amd64 --build-arg VERSION=v0.7.1 -f Dockerfile.fast -t sida:v0.7.1 . 2>&1 | tail -20
 fi
 
 echo "BUILD_EXIT=$?"

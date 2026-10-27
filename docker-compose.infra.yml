@@ -1,11 +1,11 @@
 # 生产 infra-only 编排(2026-08-18)
 # 仅启动 Redis / Prom / Loki / Promtail / Grafana 5 容器
-# 主后端 panwatch + 预测引擎 forecast 仍由手工 docker run 管理
+# 主后端 sida + 预测引擎 forecast 仍由手工 docker run 管理
 #
-# 网络: 全部加入外部网络 panwatch-net,这样:
-#   - Prometheus 可解析 panwatch:8000 抓 /metrics
+# 网络: 全部加入外部网络 sida-net,这样:
+#   - Prometheus 可解析 sida:8000 抓 /metrics
 #   - Loki 可接收 Promtail 日志
-#   - panwatch 容器未来可通过 REDIS_URL=redis://panwatch-redis:6379 连 Redis
+#   - sida 容器未来可通过 REDIS_URL=redis://sida-redis:6379 连 Redis
 #
 # 用法: sudo docker compose -f docker-compose.infra.yml up -d
 # 停:   sudo docker compose -f docker-compose.infra.yml down
@@ -14,7 +14,7 @@
 services:
   redis:
     image: redis:7-alpine
-    container_name: panwatch-redis
+    container_name: sida-redis
     restart: unless-stopped
     profiles: ["infra"]
     # 安全审计 2026-09-15: 加 requirepass(密码从 .env 必读) + 127.0.0.1 绑定,
@@ -25,11 +25,11 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - TZ=Asia/Shanghai
     ports:
-      - "127.0.0.1:6379:6379"   # 只本机,经 SSH 访问; compose 内经 panwatch-redis:6379 + 密码
+      - "127.0.0.1:6379:6379"   # 只本机,经 SSH 访问; compose 内经 sida-redis:6379 + 密码
     volumes:
       - redis_data:/data
     networks:
-      - panwatch-net
+      - sida-net
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 30s
@@ -41,7 +41,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.51.0
-    container_name: panwatch-prometheus
+    container_name: sida-prometheus
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -54,14 +54,14 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=15d"
     networks:
-      - panwatch-net
+      - sida-net
     mem_limit: 512m
     memswap_limit: 512m
 
   # T11(2026-09-08 审计): 告警通知出口(接收 deploy/alertmanager.yml 路由到 Hermes 企微桥)
   alertmanager:
     image: prom/alertmanager:v0.27.0
-    container_name: panwatch-alertmanager
+    container_name: sida-alertmanager
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -73,13 +73,13 @@ services:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
     networks:
-      - panwatch-net
+      - sida-net
     mem_limit: 128m
     memswap_limit: 128m
 
   loki:
     image: grafana/loki:2.9.4
-    container_name: panwatch-loki
+    container_name: sida-loki
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -88,13 +88,13 @@ services:
       - ./deploy/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
     networks:
-      - panwatch-net
+      - sida-net
     mem_limit: 512m
     memswap_limit: 512m
 
   promtail:
     image: grafana/promtail:2.9.4
-    container_name: panwatch-promtail
+    container_name: sida-promtail
     restart: unless-stopped
     profiles: ["infra"]
     volumes:
@@ -103,13 +103,13 @@ services:
       - ./deploy/promtail-config.yml:/etc/promtail/config.yml:ro
     command: -config.file=/etc/promtail/config.yml
     networks:
-      - panwatch-net
+      - sida-net
     mem_limit: 192m
     memswap_limit: 192m
 
   grafana:
     image: grafana/grafana:10.4.2
-    container_name: panwatch-grafana
+    container_name: sida-grafana
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -125,23 +125,23 @@ services:
       - prometheus
       - loki
     networks:
-      - panwatch-net
+      - sida-net
     mem_limit: 512m
     memswap_limit: 512m
 
 volumes:
   redis_data:
-    name: panwatch_redis_data
+    name: sida_redis_data
   prometheus_data:
-    name: panwatch_prometheus_data
+    name: sida_prometheus_data
   alertmanager_data:
-    name: panwatch_alertmanager_data
+    name: sida_alertmanager_data
   loki_data:
-    name: panwatch_loki_data
+    name: sida_loki_data
   grafana_data:
-    name: panwatch_grafana_data
+    name: sida_grafana_data
 
 networks:
-  panwatch-net:
+  sida-net:
     external: true
-    name: panwatch-net
+    name: sida-net

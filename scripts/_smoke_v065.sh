@@ -1,8 +1,8 @@
 #!/bin/bash
 set -uo pipefail
 echo "=== container ==="
-docker ps --filter name=panwatch --format "{{.Names}} | {{.Image}} | {{.Status}}"
-docker exec panwatch cat /app/VERSION
+docker ps --filter name=sida --format "{{.Names}} | {{.Image}} | {{.Status}}"
+docker exec sida cat /app/VERSION
 echo
 echo "=== /api/version ==="
 curl -sS -w "\nhttp=%{http_code}\n" http://127.0.0.1:8000/api/version
@@ -29,5 +29,5 @@ curl -sS -o /tmp/k.json -w "http=%{http_code}\n" "http://127.0.0.1:8000/api/klin
 head -c 200 /tmp/k.json; echo
 echo
 echo "=== thsdk breaker presence (v0.6.5 backend change) ==="
-docker exec panwatch python -c "from src.core.thsdk_breaker import call_with_hard_timeout, breaker_status; print('breaker ok', breaker_status())"
+docker exec sida python -c "from src.core.thsdk_breaker import call_with_hard_timeout, breaker_status; print('breaker ok', breaker_status())"
 echo SMOKE_DONE

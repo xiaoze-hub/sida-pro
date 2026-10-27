@@ -3,8 +3,8 @@
  * 判据(诚实口径): **时间未知不能说实时**; 收盘后不许把静态数据标成 live; 年龄没有就是 `--` 不是 0。
  */
 import { describe, expect, it } from 'vitest'
-import { formatAge, freshnessOf } from '@panwatch/biz-ui/components/FreshnessBadge'
-import { sessionPhaseOf } from '@panwatch/biz-ui/components/SessionPhaseChip'
+import { formatAge, freshnessOf } from '@sida/biz-ui/components/FreshnessBadge'
+import { sessionPhaseOf } from '@sida/biz-ui/components/SessionPhaseChip'
 
 const NOW = Date.parse('2026-09-20T06:00:00Z') // 北京时间 14:00(交易时段内)
 const iso = (secAgo: number) => new Date(NOW - secAgo * 1000).toISOString()

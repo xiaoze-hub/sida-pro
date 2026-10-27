@@ -8,13 +8,13 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import MinutePane from '@panwatch/biz-ui/components/MinutePane'
+import MinutePane from '@sida/biz-ui/components/MinutePane'
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }))
-vi.mock('@panwatch/api', () => ({ fetchAPI: fetchMock }))
+vi.mock('@sida/api', () => ({ fetchAPI: fetchMock }))
 
 // 分时图组件自己也会建 lightweight-charts → 这里换成可断言的占位
-vi.mock('@panwatch/biz-ui/components/MinuteLwcChart', () => ({
+vi.mock('@sida/biz-ui/components/MinuteLwcChart', () => ({
   default: ({ points, prevClose }: { points: unknown[]; prevClose: number | null }) => (
     <div data-testid="minute-lwc" data-points={points.length} data-prev={String(prevClose)} />
   ),

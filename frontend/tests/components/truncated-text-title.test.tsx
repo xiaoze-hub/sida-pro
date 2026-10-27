@@ -19,13 +19,13 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
-vi.mock('@panwatch/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
+vi.mock('@sida/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
 
 import MissingFields from '@/components/MissingFields'
 import ThemeMoodPage from '@/pages/ThemeMood'
-import Stat from '@panwatch/biz-ui/components/Stat'
-import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
-import LadderBoard from '@panwatch/biz-ui/components/thememood/LadderBoard'
+import Stat from '@sida/biz-ui/components/Stat'
+import SectionHeader from '@sida/biz-ui/components/SectionHeader'
+import LadderBoard from '@sida/biz-ui/components/thememood/LadderBoard'
 
 afterEach(cleanup)
 

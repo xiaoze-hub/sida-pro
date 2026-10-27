@@ -16,21 +16,21 @@ const calls = vi.hoisted(() => ({
   resonance: [] as Array<{ symbol: string; bare?: boolean }>,
 }))
 
-vi.mock('@panwatch/biz-ui/components/DecisionPioneerCard', () => ({
+vi.mock('@sida/biz-ui/components/DecisionPioneerCard', () => ({
   default: (props: { symbol: string; market: string; bare?: boolean }) => {
     calls.pioneer.push(props)
     return <div data-testid="pioneer">{`pioneer:${props.symbol}:${props.market}`}</div>
   },
 }))
 
-vi.mock('@panwatch/biz-ui/components/ResonanceVerdictPanel', () => ({
+vi.mock('@sida/biz-ui/components/ResonanceVerdictPanel', () => ({
   default: (props: { symbol: string; bare?: boolean }) => {
     calls.resonance.push(props)
     return <div data-testid="resonance">{`resonance:${props.symbol}`}</div>
   },
 }))
 
-import DecisionCard from '@panwatch/biz-ui/components/workbench/DecisionCard'
+import DecisionCard from '@sida/biz-ui/components/workbench/DecisionCard'
 
 describe('DecisionCard 合并卡', () => {
   afterEach(() => {

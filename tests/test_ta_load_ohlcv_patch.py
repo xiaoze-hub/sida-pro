@@ -46,14 +46,14 @@ def _sample_klines(n: int = 40) -> list[KlineData]:
 def test_build_df_columns_and_date_filter(monkeypatch):
     """构建的 DataFrame 含 Date/OHLCV 列,Date 为 datetime,且按 curr_date 截断。"""
     monkeypatch.setattr(KlineCollector, "get_klines", lambda self, symbol, days=60: _sample_klines(40))
-    df = ta._build_panwatch_ohlcv_df("601238", "2026-04-20")
+    df = ta._build_sida_ohlcv_df("601238", "2026-04-20")
     assert list(df.columns) == ["Date", "Open", "High", "Low", "Close", "Volume"]
     assert str(df["Date"].dtype).startswith("datetime64")
     assert (df["Date"] <= pd.to_datetime("2026-04-20")).all()
     assert len(df) == 20  # 04-01..04-20
 
 
-def test_load_ohlcv_routes_a_share_to_panwatch(monkeypatch):
+def test_load_ohlcv_routes_a_share_to_sida(monkeypatch):
     """A股调用走 SIDA,不触发原生 yfinance load_ohlcv。"""
     monkeypatch.setattr(KlineCollector, "get_klines", lambda self, symbol, days=60: _sample_klines(10))
     real_calls = {"n": 0}
@@ -63,7 +63,7 @@ def test_load_ohlcv_routes_a_share_to_panwatch(monkeypatch):
         return pd.DataFrame()
 
     monkeypatch.setattr(ta, "_real_load_ohlcv", fake_real)
-    df = ta._panwatch_load_ohlcv("601238", "2026-06-18")
+    df = ta._sida_load_ohlcv("601238", "2026-06-18")
     assert not df.empty
     assert real_calls["n"] == 0, "A股不应回落到 yfinance"
 
@@ -72,7 +72,7 @@ def test_load_ohlcv_passthrough_for_us(monkeypatch):
     """美股放行原生 load_ohlcv(yfinance),不被 SIDA 接管。"""
     sentinel = pd.DataFrame({"Date": [pd.to_datetime("2026-01-01")], "Close": [1.0]})
     monkeypatch.setattr(ta, "_real_load_ohlcv", lambda symbol, curr_date, *a, **k: sentinel)
-    out = ta._panwatch_load_ohlcv("AAPL", "2026-06-18")
+    out = ta._sida_load_ohlcv("AAPL", "2026-06-18")
     assert out is sentinel
 
 
@@ -100,7 +100,7 @@ def test_load_ohlcv_a_share_no_klines_raises_not_fallback(monkeypatch):
 
     monkeypatch.setattr(ta, "_real_load_ohlcv", fake_real)
     with pytest.raises(expected):
-        ta._panwatch_load_ohlcv("601238", "2026-06-18")
+        ta._sida_load_ohlcv("601238", "2026-06-18")
     assert real_calls["n"] == 0, "A股拉空不应回退 yfinance"
 
 

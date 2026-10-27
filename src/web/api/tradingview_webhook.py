@@ -13,7 +13,7 @@
 - 绝不抛异常(webhook 回调失败不能 500 刷屏)
 
 安全: 不依赖登录态(TradingView 服务器无法带 SIDA token), 用共享 secret 鉴权。
-secret 来源: 环境变量 PANWATCH_TV_WEBHOOK_SECRET; 未配置时端点禁用(503)。
+secret 来源: 环境变量 SIDA_TV_WEBHOOK_SECRET; 未配置时端点禁用(503)。
 """
 import hmac
 import os
@@ -27,7 +27,7 @@ router = APIRouter()
 def _webhook_secret() -> str:
     """每次请求动态读取 env(2026-08-12): 模块级常量在 import 时求值,
     测试/多环境切换时 env 可能未就绪, 动态读保证 secret 变更/测试隔离生效。"""
-    return os.environ.get("PANWATCH_TV_WEBHOOK_SECRET", "")
+    return os.environ.get("SIDA_TV_WEBHOOK_SECRET", "")
 
 
 class TVAlertPayload(BaseModel):

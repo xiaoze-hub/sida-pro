@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
-import echarts from '@panwatch/biz-ui/lib/echarts-core'
-import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
-import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
-import { fetchAPI } from '@panwatch/api'
+import { usePausedInterval } from '@sida/base-ui'
+import echarts from '@sida/biz-ui/lib/echarts-core'
+import { useECharts } from '@sida/biz-ui/hooks/useECharts'
+import { readStockColors, withAlpha } from '@sida/biz-ui/lib/stock-colors'
+import { fetchAPI } from '@sida/api'
 
 /**
  * 主力净流入日内面积图(v0.4.7, Dashboard 大盘资金流区)。

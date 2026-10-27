@@ -6,7 +6,7 @@
  * 给"一次性确认"(如保存成功)。
  */
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 import { formatClock } from './FreshnessBadge'
 
 export type AlertLevel = 'info' | 'warn' | 'risk'

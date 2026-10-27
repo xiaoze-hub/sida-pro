@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /**
  * Task 12 标签「建议」守五件事:
@@ -34,7 +34,7 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    在 Provider 内直调: 仍是 list → create(加自选) → updateAgents(绑 Agent) → 用**真实 stock.id**
  *    触发(无 `allow_unbound`), 且仍回传 `SetAlertOutcome` 如实陈述部分成功。
  *
- * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsight*`/
+ * 真数据纪律: mock 的是**网络层**(`@sida/api`), 组件与 `InsightProvider`/`useInsight*`/
  * `SuggestionsTab`/`SuggestionBadge` 全走真实代码。用例统一 `hasPosition={true}` —— 让
  * Provider 的「未持仓自动建议」路径不参与(`hasHolding` 为真即早退), 从而 `triggerAgent`
  * 的调用次数只可能来自本标签的按钮。
@@ -61,7 +61,7 @@ const mocks = vi.hoisted(() => ({
   fundamentalsDetail: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),
     moreInfo: (...a: unknown[]) => mocks.moreInfo(...a),

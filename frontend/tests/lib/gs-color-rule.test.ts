@@ -21,7 +21,7 @@ import {
   directionColorKind,
   gsColorFor,
   gsColorKind,
-} from '@panwatch/biz-ui'
+} from '@sida/biz-ui'
 
 // ── 色相工具(把 #rgb / #rrggbb / rgb() / hsl() 统一成 hue) ──────────────────
 function toRgb(color: string): [number, number, number] | null {

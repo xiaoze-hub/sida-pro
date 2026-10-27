@@ -19,9 +19,9 @@ import logging
 from typing import Optional
 
 try:
-    from .panwatch_client import request_json
+    from .sida_client import request_json
 except ImportError:  # forecast_server.py 将 forecast_lib 直接加入 sys.path
-    from panwatch_client import request_json
+    from sida_client import request_json
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def fetch_capital_flow(symbol: str, days: int = 5) -> list:
         "main_net": float,        # 主力净流入(元)
         "institution_hold": float|None,  # 机构持股总量(股), skill 模板特有
         "institution_count": float|None, # 机构数量(家), skill 模板特有
-        "source": "panwatch-tdx",
+        "source": "sida-tdx",
         "note": "tdx-main-position skill(东财口径主力净额+机构持仓)"
       }]
     """
@@ -118,7 +118,7 @@ def fetch_capital_flow(symbol: str, days: int = 5) -> list:
         item = {
             "date": date_label,
             "main_net": today_net,
-            "source": "panwatch-tdx",
+            "source": "sida-tdx",
             "note": "tdx-main-position skill(东财口径主力净额+机构持仓)",
         }
         if extras:
@@ -131,7 +131,7 @@ def fetch_capital_flow(symbol: str, days: int = 5) -> list:
         out.append({
             "date": f"近{days}日",
             "main_net": net_5,
-            "source": "panwatch-tdx",
+            "source": "sida-tdx",
             "note": "东财口径(近5日合计)",
         })
     return out

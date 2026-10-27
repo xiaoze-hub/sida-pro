@@ -4,7 +4,7 @@ set -euo pipefail
 
 TAG="${1:-1.0.0}"
 NAME=tdx-gateway
-NET=panwatch-net
+NET=sida-net
 UPSTREAM="${TDX_UPSTREAM:-http://172.27.16.1:17709/}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

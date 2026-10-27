@@ -13,14 +13,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
  */
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a),
 }))
-vi.mock('@panwatch/biz-ui/components/ActivitySparkline', () => ({
+vi.mock('@sida/biz-ui/components/ActivitySparkline', () => ({
   default: () => <div data-testid="activity-sparkline" />,
 }))
 
-import DecisionPioneerCard from '@panwatch/biz-ui/components/DecisionPioneerCard'
+import DecisionPioneerCard from '@sida/biz-ui/components/DecisionPioneerCard'
 
 function _resp(l2: Record<string, unknown>) {
   return {

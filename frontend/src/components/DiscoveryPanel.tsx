@@ -9,13 +9,13 @@ import {
   type DashboardWatchStock,
   type HotStockItem,
   type HotBoardItem,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@sida/base-ui/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@sida/base-ui/components/ui/dialog'
 import { useLocalStorage } from '@/lib/utils'
 import { safeNum, safePercent } from '@/lib/format'
-import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
+import SectionHeader from '@sida/biz-ui/components/SectionHeader'
 
 interface Props {
   monitorStocks: DashboardMonitorStock[]
@@ -27,10 +27,10 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
   const [watchlist, setWatchlist] = useState<DashboardWatchStock[]>([])
   const [portfolioRaw, setPortfolioRaw] = useState<DashboardPortfolioSummary | null>(null)
 
-  const [discoverTab, setDiscoverTab] = useLocalStorage<'boards' | 'stocks'>('panwatch_dashboard_discoverTab', 'boards')
-  const [discoverMarket, setDiscoverMarket] = useLocalStorage<'CN' | 'HK' | 'US'>('panwatch_dashboard_discoverMarket', 'CN')
-  const [stocksMode, setStocksMode] = useLocalStorage<'turnover' | 'gainers' | 'for_you'>('panwatch_dashboard_stocksMode', 'for_you')
-  const [boardsMode, setBoardsMode] = useLocalStorage<'gainers' | 'turnover'>('panwatch_dashboard_boardsMode', 'gainers')
+  const [discoverTab, setDiscoverTab] = useLocalStorage<'boards' | 'stocks'>('sida_dashboard_discoverTab', 'boards')
+  const [discoverMarket, setDiscoverMarket] = useLocalStorage<'CN' | 'HK' | 'US'>('sida_dashboard_discoverMarket', 'CN')
+  const [stocksMode, setStocksMode] = useLocalStorage<'turnover' | 'gainers' | 'for_you'>('sida_dashboard_stocksMode', 'for_you')
+  const [boardsMode, setBoardsMode] = useLocalStorage<'gainers' | 'turnover'>('sida_dashboard_boardsMode', 'gainers')
   const [hotStocks, setHotStocks] = useState<HotStockItem[]>([])
   const [hotBoards, setHotBoards] = useState<HotBoardItem[]>([])
   const [discoverLoading, setDiscoverLoading] = useState(false)

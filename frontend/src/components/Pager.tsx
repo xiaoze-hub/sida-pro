@@ -1,4 +1,4 @@
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 
 /**
  * 后台长列表的分页条（2026-10-24，Admin 20598px 页高治理）。

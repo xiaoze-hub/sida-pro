@@ -15,11 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * 另守两条诚实边界: verdict 缺失/表外 ⇒ 显式无数据(不冒充方向); verdict 有而 reason 缺 ⇒ 显式
  * 「理由无数据」(不编造)。
  *
- * 真数据纪律: mock 的是**网络层**(`@panwatch/api` 的 `insightApi.decision`), 组件走真实代码。
+ * 真数据纪律: mock 的是**网络层**(`@sida/api` 的 `insightApi.decision`), 组件走真实代码。
  */
 const mocks = vi.hoisted(() => ({ decision: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   insightApi: {
     decision: (...a: unknown[]) => mocks.decision(...a),
   },

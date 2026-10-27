@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // A3 价格 Flash (既有组件 2026-09-05, 2026-09-10 A3 复用扩展时补行为测试):
 // 值变大→up(红) / 变小→down(绿) / 首挂载/相同/null 不闪 / reduced-motion 不闪。
-import FlashValue from '@panwatch/biz-ui/components/FlashValue'
+import FlashValue from '@sida/biz-ui/components/FlashValue'
 
 afterEach(() => {
   cleanup()

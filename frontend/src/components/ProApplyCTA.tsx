@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, Check, Loader2, Lock } from 'lucide-react'
-import { applyPro, fetchProApplyStatus, isAuthenticated, type ProApplyStatus } from '@panwatch/api'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { applyPro, fetchProApplyStatus, isAuthenticated, type ProApplyStatus } from '@sida/api'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { cn } from '@/lib/utils'
 
 /**

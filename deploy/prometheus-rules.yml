@@ -26,7 +26,7 @@ groups:
 
       # 实例无指标(心跳丢失)
       - alert: SidaInstanceDown
-        expr: up{job="sida-panwatch"} == 0
+        expr: up{job="sida-sida"} == 0
         for: 2m
         labels:
           severity: critical
@@ -42,7 +42,7 @@ groups:
           severity: critical
         annotations:
           summary: "SIDA PG 不可用(/health database=down)"
-          description: "PG 连接失败, K线/持仓/审计全挂, 检查 panwatch-postgres(--network-alias postgres 是否在)"
+          description: "PG 连接失败, K线/持仓/审计全挂, 检查 sida-postgres(--network-alias postgres 是否在)"
 
       # 调度器选主失效(A3, 2026-09-08): fail-closed 下 Redis 不可用则无实例跑调度
       # (standby 合法让位不记 0, 不误报; 只有无实例在跑才响)
@@ -53,7 +53,7 @@ groups:
           severity: critical
         annotations:
           summary: "SIDA 调度器选主失效(/health scheduler_leader=down)"
-          description: "无任何实例在跑调度(Redis 不可用 fail-closed 或 leader 调度器停摆), 定时 Agent/报告全停, 检查 panwatch-redis 与选主日志"
+          description: "无任何实例在跑调度(Redis 不可用 fail-closed 或 leader 调度器停摆), 定时 Agent/报告全停, 检查 sida-redis 与选主日志"
 
   - name: sida-quality
     rules:
@@ -75,4 +75,4 @@ groups:
           severity: warning
         annotations:
           summary: "SIDA Redis 不可用(biz_cache 降级回内存)"
-          description: "Redis 连接失败, 缓存/限流/Streams 已降级, 检查 panwatch-redis"
+          description: "Redis 连接失败, 缓存/限流/Streams 已降级, 检查 sida-redis"

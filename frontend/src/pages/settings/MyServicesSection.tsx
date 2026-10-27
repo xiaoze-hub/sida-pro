@@ -1,4 +1,4 @@
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { Cpu } from 'lucide-react'
 import { Pencil } from 'lucide-react'
 import { Plus } from 'lucide-react'

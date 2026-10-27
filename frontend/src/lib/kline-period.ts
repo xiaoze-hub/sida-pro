@@ -12,7 +12,7 @@
  * 解析到 `intra` 时返回 `undefined` → 调用方落回图表默认周期, **不假装支持**。
  */
 
-import type { KlineInterval } from '@panwatch/biz-ui/components/KlineChart'
+import type { KlineInterval } from '@sida/biz-ui/components/KlineChart'
 
 /** URL 取值 → 图表周期(缺项 = 该取值本图表不支持) */
 const PERIOD_TO_INTERVAL: Readonly<Record<string, KlineInterval>> = {

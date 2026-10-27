@@ -19,7 +19,7 @@
   SIDA_DB_URL="postgresql+psycopg2://user:pw@host:5432/sida" \\
     python scripts/backfill_decision_spans.py --limit 20000
   # 本地 sqlite
-  python scripts/backfill_decision_spans.py --db sqlite:///data/panwatch.db
+  python scripts/backfill_decision_spans.py --db sqlite:///data/sida.db
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _dsn(args) -> str:
         v = os.environ.get(env)
         if v:
             return v
-    return "sqlite:///data/panwatch.db"
+    return "sqlite:///data/sida.db"
 
 
 def main() -> int:

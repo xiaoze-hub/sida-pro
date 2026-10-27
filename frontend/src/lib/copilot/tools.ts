@@ -1,5 +1,5 @@
 /** 工具目录接口（参谋工作台·插件面板）。走 fetchAPI，自带 /api 前缀。 */
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 export interface ChatToolRow {
   name: string

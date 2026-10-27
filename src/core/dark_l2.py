@@ -13,7 +13,7 @@ L2 逐笔数据源(thsdk 同花顺 + 通达信 .tck, 双实现)
 
     [{"d": "B"/"S"/"M", "amt": 金额(元), "vol": 手数, "price": 价格, "t": "HH:MM:SS"}]
 
-接入方式: 设置环境变量 `PANWATCH_DARK_SOURCE=thsdk`(或 tdx_tck) 后 dark_flow 自动分发。
+接入方式: 设置环境变量 `SIDA_DARK_SOURCE=thsdk`(或 tdx_tck) 后 dark_flow 自动分发。
 本模块惰性加载 thsdk/解析器: 主进程导入不报错, dark_flow 捕获异常后自动回退腾讯逐笔。
 
 **thsdk 实测口径(2026-08-19 国内服务器 101.35.244.238, thsdk 1.7.18 游客模式)**:
@@ -236,11 +236,11 @@ def _fetch_tdx_tck(code: str) -> list[dict]:
     """
     from src.core.tdx_tick_parser import parse_tck, ticks_from_tck
 
-    # 2026-09-02 修: 生产实际注入的是 **PANWATCH_TCK_DIR**(与 l4_events / dark_split
+    # 2026-09-02 修: 生产实际注入的是 **SIDA_TCK_DIR**(与 l4_events / dark_split
     # 同一套约定, 文件如 /app/data/tck/sz002361_20260827.tck)。此前这里只读 TDX_TCK_DIR,
     # 两边目录不一致 → 事件侧(.tck 拆单/撤单)能找到文件、暗盘侧却找不到, "通达信 + 同花顺
-    # 互补" 会断在这一环。统一以 PANWATCH_TCK_DIR 为主, TDX_TCK_DIR 仅作历史兼容。
-    tck_dir = (os.environ.get("PANWATCH_TCK_DIR")
+    # 互补" 会断在这一环。统一以 SIDA_TCK_DIR 为主, TDX_TCK_DIR 仅作历史兼容。
+    tck_dir = (os.environ.get("SIDA_TCK_DIR")
                or os.environ.get("TDX_TCK_DIR")
                or "/app/data/tck")
     base = Path(tck_dir)

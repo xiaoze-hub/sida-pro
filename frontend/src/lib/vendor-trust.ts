@@ -3,7 +3,7 @@
  * /datasources/trust 的 分数/延迟 读数 → 心跳条色档 + tooltip 文案 + 汇总。
  * 口径: 无样本(score/success_rate/延迟为 null)一律显式"未知/—", 绝不冒充数字。
  */
-import type { VendorTrustItem } from '@panwatch/api'
+import type { VendorTrustItem } from '@sida/api'
 
 import { safeFixed } from './format'
 

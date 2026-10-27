@@ -12,8 +12,8 @@ const api = vi.hoisted(() => ({
   fetchAPI: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', async () => ({
-  ...(await vi.importActual<Record<string, unknown>>('@panwatch/api')),
+vi.mock('@sida/api', async () => ({
+  ...(await vi.importActual<Record<string, unknown>>('@sida/api')),
   ...api,
 }))
 

@@ -2,7 +2,7 @@
 //
 // 2026-10-10 AI 链路 P1: `GET /profile/stats/accuracy`(分 Agent 命中榜)此前零前端消费。
 // 本用例把"命中榜上屏 + 样本不足显式 + 失败显式 + 缺值不编造"钉死。
-// mock 的是**网络层**(@panwatch/api.fetchAPI), 组件与 useApiQuery 走真实代码。
+// mock 的是**网络层**(@sida/api.fetchAPI), 组件与 useApiQuery 走真实代码。
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
   stats: {} as unknown,
 }))
 
-vi.mock('@panwatch/api', async (importOriginal) => {
+vi.mock('@sida/api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   return {
     ...actual,

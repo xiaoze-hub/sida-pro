@@ -1,6 +1,6 @@
 """M8(2026-09-10): 悟道 token 读取源回归。
 
-问题: `WudaoMCPClient._db_token()` 原先直读 **sqlite** `/app/data/panwatch.db`, 而应用
+问题: `WudaoMCPClient._db_token()` 原先直读 **sqlite** `/app/data/sida.db`, 而应用
 跑在 **PG**(设置页写 PG) → 在设置页换 token(如买套餐)后代码仍读到旧 sqlite 值,
 表现为"改 key 不生效"。现改为优先读规范库(`src.db.session`), sqlite 仅兜底。
 """

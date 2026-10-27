@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const fetchAPIMock = vi.fn()
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => fetchAPIMock(...args),
 }))
 

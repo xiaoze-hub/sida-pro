@@ -7,8 +7,8 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-} from '@panwatch/base-ui/components/ui/dialog'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+} from '@sida/base-ui/components/ui/dialog'
+import { Button } from '@sida/base-ui/components/ui/button'
 
 interface ShareCardDialogProps {
   open: boolean

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { AlertTriangle, WifiOff, ShieldAlert, ServerCrash, Clock, RefreshCw } from 'lucide-react'
 import { ProApplyCTA } from '@/components/ProApplyCTA'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { cn } from '@/lib/utils'
 import { classifyApiError, type ApiErrorKind } from '@/lib/api-error'
 

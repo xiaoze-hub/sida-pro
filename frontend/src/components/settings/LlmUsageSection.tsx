@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Activity } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 interface LlmUsageItem {
   time: string

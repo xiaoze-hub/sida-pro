@@ -1,17 +1,17 @@
-import StockPriceAlertPanel from '@panwatch/biz-ui/components/stock-price-alert-panel'
-import { Badge } from '@panwatch/base-ui/components/ui/badge'
+import StockPriceAlertPanel from '@sida/biz-ui/components/stock-price-alert-panel'
+import { Badge } from '@sida/base-ui/components/ui/badge'
 import { BarChart3 } from 'lucide-react'
 import { Brain } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { ExternalLink } from 'lucide-react'
 import { Newspaper } from 'lucide-react'
-import { SuggestionBadge } from '@panwatch/biz-ui/components/suggestion-badge'
-import FlashValue from '@panwatch/biz-ui/components/FlashValue'
+import { SuggestionBadge } from '@sida/biz-ui/components/suggestion-badge'
+import FlashValue from '@sida/biz-ui/components/FlashValue'
 import { X } from 'lucide-react'
 import { useStocks } from './context'
 import { useMemo } from 'react'
 import { useBatchCloses } from '@/hooks/useBatchCloses'
-import Sparkline from '@panwatch/biz-ui/components/Sparkline'
+import Sparkline from '@sida/biz-ui/components/Sparkline'
 
 export function WatchlistSection() {
   const {

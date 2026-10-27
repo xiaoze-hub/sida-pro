@@ -1,5 +1,5 @@
 import { useInsight } from './context'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { DeepAnalysisSection } from './deep-analysis'
 
 export function DeepTab() {

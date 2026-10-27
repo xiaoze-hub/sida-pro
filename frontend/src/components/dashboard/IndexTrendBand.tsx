@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { safeFixed } from '@/lib/format'
-import MinuteLwcChart, { type MinutePoint } from '@panwatch/biz-ui/components/MinuteLwcChart'
+import MinuteLwcChart, { type MinutePoint } from '@sida/biz-ui/components/MinuteLwcChart'
 
 /**
  * 大盘实时走势带（2026-10-24，替换总结卡右侧的大片留白）。

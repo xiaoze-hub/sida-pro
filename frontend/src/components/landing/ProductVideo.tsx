@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { AlertCircle, Play, RotateCcw } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 
 type ProductVideoProps = {
   title: string

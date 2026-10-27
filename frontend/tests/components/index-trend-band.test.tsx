@@ -4,18 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
 // lightweight-charts 需要 canvas，jsdom 跑不了 → 只验证数据/状态，不验证绘图
-vi.mock('@panwatch/biz-ui/components/MinuteLwcChart', () => ({
+vi.mock('@sida/biz-ui/components/MinuteLwcChart', () => ({
   default: ({ points, height }: { points: unknown[]; height?: number }) => (
     <div data-testid="lwc-stub" data-points={points.length} data-height={height} />
   ),
 }))
 
 import IndexTrendBand, { computeFacts } from '@/components/dashboard/IndexTrendBand'
-import type { MinutePoint } from '@panwatch/biz-ui/components/MinuteLwcChart'
+import type { MinutePoint } from '@sida/biz-ui/components/MinuteLwcChart'
 
 const pt = (t: string, price: number, volume: number): MinutePoint => ({ t, price, avg: price, volume })
 

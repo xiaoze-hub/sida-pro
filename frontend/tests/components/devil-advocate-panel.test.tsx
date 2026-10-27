@@ -14,13 +14,13 @@
  * ⑥ **流静默结束（既无 done 也无 error）按失败处理**，有部分增量则保留正文不误报失败。
  * ⑦ **集成锚点**：SuggestTab（工作台「建议」页）必须真的挂载本面板。
  *
- * 真数据纪律：mock 的是网络层（@panwatch/api 的 chatApi/insightApi 等）与 SafeMarkdown（探针），
+ * 真数据纪律：mock 的是网络层（@sida/api 的 chatApi/insightApi 等）与 SafeMarkdown（探针），
  * 组件逻辑全走真实代码。不触发真实对话/交易，也没有任何下单路径（只出报告）。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /** sendMessageStream 的第 3 个参数（本组件只用这四个回调）。 */
 interface StreamHandlers {
@@ -58,7 +58,7 @@ const mocks = vi.hoisted(() => ({
   fundamentalsDetail: vi.fn<(...a: unknown[]) => Promise<unknown>>(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   chatApi: {
     createConversation: (...a: unknown[]) => mocks.createConversation(...a),
     sendMessageStream: (...a: unknown[]) => mocks.sendMessageStream(...a),

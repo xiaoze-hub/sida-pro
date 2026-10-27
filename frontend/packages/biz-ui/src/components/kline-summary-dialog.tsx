@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Sparkles } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { fetchAPI } from '@sida/api'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@sida/base-ui/components/ui/dialog'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import { parseServerTime } from '@/lib/utils'
-import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
-import { TechnicalBadge, technicalToneFromSuggestionAction } from '@panwatch/biz-ui/components/technical-badge'
+import { HoverPopover } from '@sida/base-ui/components/ui/hover-popover'
+import { TechnicalBadge, technicalToneFromSuggestionAction } from '@sida/biz-ui/components/technical-badge'
 
 // K线形态中文解释(悬停查看含义;TA-Lib 标准形态 + 同花顺教学形态)
 const TALIB_PATTERN_EXPLAIN: Record<string, string> = {
@@ -233,7 +233,7 @@ export function KlineSummaryDialog({
         parts.push(`评分依据：${suggestion.items.map(e => `${e.text}(${e.delta > 0 ? '+' : ''}${e.delta})`).join('；')}`)
       }
     }
-    window.dispatchEvent(new CustomEvent('panwatch-open-chat', {
+    window.dispatchEvent(new CustomEvent('sida-open-chat', {
       detail: { symbol, market, stockName: stockName || symbol, pageContext: parts.join('\n') }
     }))
     onOpenChange(false)

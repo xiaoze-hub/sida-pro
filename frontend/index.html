@@ -58,12 +58,12 @@
     <script>
       (function () {
         try {
-          var m = localStorage.getItem('panwatch-theme');
+          var m = localStorage.getItem('sida-theme');
           if (m !== 'light' && m !== 'dark' && m !== 'system') m = 'dark';
           var dark = m === 'dark' || (m === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
           document.documentElement.classList.add(dark ? 'dark' : 'light');
-          if (dark && localStorage.getItem('panwatch-dim') === '1') document.documentElement.setAttribute('data-theme', 'dim');
-          var density = localStorage.getItem('panwatch-density');
+          if (dark && localStorage.getItem('sida-dim') === '1') document.documentElement.setAttribute('data-theme', 'dim');
+          var density = localStorage.getItem('sida-density');
           if (density === 'compact' || density === 'normal' || density === 'comfortable') document.documentElement.setAttribute('data-density', density);
         } catch (e) {
           document.documentElement.classList.add('dark');

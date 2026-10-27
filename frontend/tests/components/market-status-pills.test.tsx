@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 // A4 三地市场状态 (2026-09-10): 开闭市徽标(status_text) + 交易时段 + 当地时间的紧凑展示。
 import MarketStatusPills from '../../src/components/MarketStatusPills'
-import type { DashboardMarketStatus } from '@panwatch/api'
+import type { DashboardMarketStatus } from '@sida/api'
 
 const ITEMS: DashboardMarketStatus[] = [
   { code: 'CN', name: 'A股', status: 'after_hours', status_text: '已收盘', is_trading: false, sessions: ['09:30-11:30', '13:00-15:00'], local_time: '21:19' },

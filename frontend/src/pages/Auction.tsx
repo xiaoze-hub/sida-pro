@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import PageHeader from '@/components/PageHeader'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
-import AuctionAnomalyTab from '@panwatch/biz-ui/components/AuctionAnomalyTab'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
+import AuctionAnomalyTab from '@sida/biz-ui/components/AuctionAnomalyTab'
 import { navBackState } from '@/lib/nav-back'
 
 /**

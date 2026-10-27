@@ -14,18 +14,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  */
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn(), setOption: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({
     ref: () => {},
     chartRef: { current: { setOption: mocks.setOption, on: vi.fn(), off: vi.fn(), resize: vi.fn() } },
   }),
 }))
 
-import DecisionCard from '@panwatch/biz-ui/components/workbench/DecisionCard'
-import DecisionPioneerCard from '@panwatch/biz-ui/components/DecisionPioneerCard'
+import DecisionCard from '@sida/biz-ui/components/workbench/DecisionCard'
+import DecisionPioneerCard from '@sida/biz-ui/components/DecisionPioneerCard'
 
 const PIONEER = {
   symbol: '002636',

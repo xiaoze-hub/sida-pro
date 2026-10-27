@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { useTabActive } from '@panwatch/base-ui'
+import { useTabActive } from '@sida/base-ui'
 
 /**
  * 统一轮询 hook (2026-08-21)

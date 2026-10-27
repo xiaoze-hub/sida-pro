@@ -117,11 +117,11 @@ sida-pro/ (主仓库: github.com/xiaoze-hub/sida-pro, private)
 ┌──────────────────────────▼─────────────────────────────────────┐
 │ 小主机 N150 (100.91.30.35, Win11 + WSL Ubuntu 22.04)         │
 │  ┌───────────────────────────────────────────────────┐         │
-│  │ WSL Docker 网络 (panwatch-net)                    │         │
+│  │ WSL Docker 网络 (sida-net)                    │         │
 │  │ ┌────────────────┐  ┌────────────────┐  ┌───────┐  │         │
-│  │ │  panwatch       │  │ panwatch-  │  │panwatch-│  │         │
+│  │ │  sida       │  │ sida-  │  │sida-│  │         │
 │  │ │  (v0.4.63)      │  │ postgres   │  │ redis  │  │         │
-│  │ │  PanWatch 主容器 │  │ TimescaleDB │  │ Redis7 │  │         │
+│  │ │  SIDA 主容器 │  │ TimescaleDB │  │ Redis7 │  │         │
 │  │ │  8000 ← HTTP │  │  PG16 │  │        │  │         │
 │  │ └────────────────┘  └────────────────┘  └───────┘  │         │
 │  │                                                     │         │
@@ -336,10 +336,10 @@ wsl -e bash -lc "<部署命令>"
    ↓
 1. docker pull crpi-xxx:v0.4.X
 2. docker tag ... v0.4.X
-3. docker rm -f panwatch (停旧)
-4. docker run -d --name panwatch ... (启动新)
+3. docker rm -f sida (停旧)
+4. docker run -d --name sida ... (启动新)
    ↓
-5. docker exec panwatch cat /app/VERSION (验证)
+5. docker exec sida cat /app/VERSION (验证)
 6. curl http://localhost:8000/api/health (200)
 ```
 
@@ -350,10 +350,10 @@ wsl -e bash -lc "<部署命令>"
 set -uo pipefail
 IMG=crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:v0.4.X
 docker pull $IMG || { echo PULL_FAILED; exit 1; }
-docker rm -f panwatch 2>/dev/null
-docker run -d --name panwatch \
+docker rm -f sida 2>/dev/null
+docker run -d --name sida \
   -p 8000:8000 \
-  -v panwatch_data:/app/data \
+  -v sida_data:/app/data \
   -v /home/ubuntu/.hermes:/hermes:ro \
   -e HERMES_HOME=/hermes \
   -e AUTH_USERNAME=admin \
@@ -361,17 +361,17 @@ docker run -d --name panwatch \
   -e WEB_HOST=0.0.0.0 \
   -e TZ=Asia/Shanghai \
   -e DATA_DIR=/app/data \
-  -e 'SIDA_DB_URL=postgresql+psycopg2://sida:PanWatch2026PG@postgres:5432/sida' \
+  -e 'SIDA_DB_URL=postgresql+psycopg2://sida:SIDA2026PG@postgres:5432/sida' \
   -e 'REDIS_URL=redis://redis:6379/0' \
   -e 'THS_USERNAME=mx_8lj4le6qd' \
   -e 'THS_PASSWORD=xzxwz170530' \
-  -e 'PANWATCH_TCK_DIR=/app/data/tck' \
-  --network panwatch-net \
+  -e 'SIDA_TCK_DIR=/app/data/tck' \
+  --network sida-net \
   --restart unless-stopped \
   $IMG
 sleep 3
-docker ps --filter name=panwatch --format '{{.Image}} {{.Status}}'
-docker exec panwatch cat /app/VERSION
+docker ps --filter name=sida --format '{{.Image}} {{.Status}}'
+docker exec sida cat /app/VERSION
 ```
 
 **使用方式**：打包成 base64，通过 ssh 传到小主机 wsl 执行（避免引号嵌套问题）
@@ -396,16 +396,16 @@ sshpass -p '980530' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
 | `SIDA_DB_URL` | PG 连接串 | ✅ |
 | `REDIS_URL` | Redis 连接串 | ✅ |
 | `THS_USERNAME` / `THS_PASSWORD` | 同花顺 L2 凭据 | ✅ |
-| `PANWATCH_TCK_DIR=/app/data/tck` | 通达信委托回放目录 | ✅ |
+| `SIDA_TCK_DIR=/app/data/tck` | 通达信委托回放目录 | ✅ |
 
 ### 7.4 关键挂载
 
 | 挂载 | 说明 |
 |---|---|
 | `-p 8000:8000` | Web UI |
-| `-v panwatch_data:/app/data` | named volume（DB + .tck + Playwright 浏览器）|
+| `-v sida_data:/app/data` | named volume（DB + .tck + Playwright 浏览器）|
 | `-v /home/ubuntu/.hermes:/hermes:ro` | cron 输出（只读）|
-| `--network panwatch-net` | 必须加，让 panwatch 解析 `postgres`/`redis` 主机名 |
+| `--network sida-net` | 必须加，让 sida 解析 `postgres`/`redis` 主机名 |
 | `--restart unless-stopped` | 机器重启自动拉起 |
 
 ### 7.5 端到端验证清单
@@ -426,10 +426,10 @@ curl -H "Authorization: Bearer $TOKEN" \
 curl -I https://www.sida.hengsheng-elec.com/api/health
 
 # 5. TQ 网关
-docker logs panwatch | grep "TQ 网关自动命中"
+docker logs sida | grep "TQ 网关自动命中"
 
 # 6. thsdk 连接
-docker logs panwatch | grep -i "thsdk\|账户"
+docker logs sida | grep -i "thsdk\|账户"
 ```
 
 ---

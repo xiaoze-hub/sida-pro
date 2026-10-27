@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 
 import TabPane from './TabPane'
 import WorkspaceTabs from './WorkspaceTabs'

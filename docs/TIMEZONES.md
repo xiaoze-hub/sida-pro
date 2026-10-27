@@ -6,7 +6,7 @@
 
 | 来源 | 时区/格式 | 示例 |
 |---|---|---|
-| **容器日志** `docker logs panwatch` | **北京时间 UTC+8**（容器 `TZ=Asia/Shanghai`）| `2026-09-02 13:44:19` |
+| **容器日志** `docker logs sida` | **北京时间 UTC+8**（容器 `TZ=Asia/Shanghai`）| `2026-09-02 13:44:19` |
 | **邮件 `created_at`** (AgentMail / QQ Mail) | **UTC** | `2026-09-02T05:44:19Z` |
 | **通达信 TQ `HqDate`** | **交易日 `YYYYMMDD`**（无时区概念）| `20260827` |
 | 业务侧日期字段（事件 date / K 线 date） | `YYYY-MM-DD`（v0.4.57 起统一）| `2026-08-27` |
@@ -38,8 +38,8 @@ xiaoze6096（盘后 Agent 同事）以后邮件中时刻统一标注 `HH:mm (UTC
 
 ```bash
 # 容器时间
-docker exec panwatch date                # 容器内部时间（UTC+8）
-docker logs panwatch --since "2026-09-02 13:30:00" --until "2026-09-02 14:00:00"
+docker exec sida date                # 容器内部时间（UTC+8）
+docker logs sida --since "2026-09-02 13:30:00" --until "2026-09-02 14:00:00"
 # 注：docker logs 时间参数是 UTC+8（容器本地时区）
 
 # cron 同步时间（cron 默认 UTC，Hermes 部署时已显式 TZ=Asia/Shanghai）

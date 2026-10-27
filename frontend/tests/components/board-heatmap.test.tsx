@@ -10,17 +10,17 @@ const mocks = vi.hoisted(() => ({
   off: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({
     ref: () => {},
     chartRef: { current: { setOption: mocks.setOption, on: mocks.on, off: mocks.off, resize: vi.fn() } },
   }),
 }))
 
-import BoardHeatmap from '@panwatch/biz-ui/components/dashboard/BoardHeatmap'
+import BoardHeatmap from '@sida/biz-ui/components/dashboard/BoardHeatmap'
 
 const RESP = {
   type: 'industry',

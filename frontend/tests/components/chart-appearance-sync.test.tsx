@@ -3,11 +3,11 @@ import { cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ init: vi.fn(), registerTheme: vi.fn(), setOption: vi.fn(), dispose: vi.fn(), applyOptions: vi.fn(), remove: vi.fn(), setRange: vi.fn(), createChart: vi.fn() }))
-vi.mock('@panwatch/biz-ui/lib/echarts-core', () => ({ default: { init: mocks.init, registerTheme: mocks.registerTheme } }))
+vi.mock('@sida/biz-ui/lib/echarts-core', () => ({ default: { init: mocks.init, registerTheme: mocks.registerTheme } }))
 vi.mock('lightweight-charts', () => ({ createChart: mocks.createChart, LineSeries: {}, HistogramSeries: {} }))
 
-import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
-import MinuteLwcChart from '@panwatch/biz-ui/components/MinuteLwcChart'
+import { useECharts } from '@sida/biz-ui/hooks/useECharts'
+import MinuteLwcChart from '@sida/biz-ui/components/MinuteLwcChart'
 
 function Harness() { const chart = useECharts(); return <div ref={chart.ref} /> }
 beforeEach(() => {

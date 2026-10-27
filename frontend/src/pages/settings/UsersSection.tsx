@@ -1,4 +1,4 @@
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
+import { Switch } from '@sida/base-ui/components/ui/switch'
 import UserManagement from '@/components/UserManagement'
 import { MailCheck } from 'lucide-react'
 import { useSettings } from './context'

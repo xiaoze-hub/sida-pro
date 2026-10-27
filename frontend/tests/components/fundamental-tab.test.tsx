@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /**
  * Task 13 标签「基本面」守七件事:
@@ -26,7 +26,7 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    suggestions/news/history/deep 零调用; 本标签只打 4 个端点(`fundamentals-detail` + `company` +
  *    自有的 `/stocks/{s}/l2`、`/stocks/{s}/fundamental`; 持仓时 +`/portfolio/summary`)。
  *
- * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsight*`/
+ * 真数据纪律: mock 的是**网络层**(`@sida/api`), 组件与 `InsightProvider`/`useInsight*`/
  * `FundamentalsPanel`/`CompanyTab`/`AddPositionCalculator` 全走真实代码。
  */
 
@@ -52,7 +52,7 @@ const mocks = vi.hoisted(() => ({
   fundamentalsDetail: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a),
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),

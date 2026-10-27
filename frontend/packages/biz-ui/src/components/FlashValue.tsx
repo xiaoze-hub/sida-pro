@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /**
  * 涨跌闪(2026-09-05 UI 全量改造 Wave1)。

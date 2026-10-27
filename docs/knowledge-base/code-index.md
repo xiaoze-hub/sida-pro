@@ -104,7 +104,7 @@
 
 | 模块 | 源码说明 | 公开入口 | 路由声明数 |
 | --- | --- | --- | ---: |
-| [forecast_lib/ai_referee.py](../../forecast_lib/ai_referee.py) | AI 裁判层: 模型预测交给 PanWatch 对话助手(8000)评估, 可改最终方向(B方案)。 | RefereeConfigUnavailable, resolve_referee_model_cfg, evaluate_prediction, referee_impact_stats | 0 |
+| [forecast_lib/ai_referee.py](../../forecast_lib/ai_referee.py) | AI 裁判层: 模型预测交给 SIDA 对话助手(8000)评估, 可改最终方向(B方案)。 | RefereeConfigUnavailable, resolve_referee_model_cfg, evaluate_prediction, referee_impact_stats | 0 |
 | [forecast_lib/forecast_history.py](../../forecast_lib/forecast_history.py) | 无模块说明 | patch_baostock_timeout, get_stock_name, save_forecast, list_forecasts | 0 |
 | [forecast_lib/forecast_models.py](../../forecast_lib/forecast_models.py) | 无模块说明 | get_predictor, load_kline, kronos_predict, xgboost_predict, linreg_predict, get_chronos_predictor, get_timesfm_predictor, timesfm_predict, chronos_predict | 0 |
 | [forecast_lib/forecast_paths.py](../../forecast_lib/forecast_paths.py) | Filesystem paths used by the forecast engine. | resolve_forecast_db_path | 0 |
@@ -112,10 +112,10 @@
 | [forecast_lib/forecast_sentiment.py](../../forecast_lib/forecast_sentiment.py) | 无模块说明 | set_runtime_llm_config, llm_sentiment_score, fetch_sentiment | 0 |
 | [forecast_lib/forecast_traces.py](../../forecast_lib/forecast_traces.py) | 无模块说明 | start_run, record_model_output, record_referee_eval, record_sentiment_eval, finalize_run, get_run, list_model_outputs, list_referee_evals, list_sentiment_evals, list_runs_for_symbol …（共 21 个） | 0 |
 | [forecast_lib/forecast_utils.py](../../forecast_lib/forecast_utils.py) | 无模块说明 | new_task, direction_label, calc_capital_score, build_recommendation | 0 |
-| [forecast_lib/marketdata_bridge.py](../../forecast_lib/marketdata_bridge.py) | 8010 接入 PanWatch 市场数据源(龙虎榜) — 经 8000 HTTP 代理端点。 | get_dragon_tiger | 0 |
+| [forecast_lib/marketdata_bridge.py](../../forecast_lib/marketdata_bridge.py) | 8010 接入 SIDA 市场数据源(龙虎榜) — 经 8000 HTTP 代理端点。 | get_dragon_tiger | 0 |
 | [forecast_lib/model_weights.py](../../forecast_lib/model_weights.py) | 模型权重动态调整 — 预测质量闭环(后端) | last_weights_source, load_weights, update_weights_after_backtest | 0 |
-| [forecast_lib/panwatch_bridge.py](../../forecast_lib/panwatch_bridge.py) | 从 PanWatch 主后端(8000, 容器内 marketdata/tdx 数据源)获取主力资金数据。 | fetch_capital_flow | 0 |
-| [forecast_lib/panwatch_client.py](../../forecast_lib/panwatch_client.py) | PanWatch HTTP client shared by forecast bridge modules. | get_panwatch_url, get_service_token, invalidate_token, get_token, auth_headers, has_credentials, request_json | 0 |
+| [forecast_lib/sida_bridge.py](../../forecast_lib/sida_bridge.py) | 从 SIDA 主后端(8000, 容器内 marketdata/tdx 数据源)获取主力资金数据。 | fetch_capital_flow | 0 |
+| [forecast_lib/sida_client.py](../../forecast_lib/sida_client.py) | SIDA HTTP client shared by forecast bridge modules. | get_sida_url, get_service_token, invalidate_token, get_token, auth_headers, has_credentials, request_json | 0 |
 | [forecast_lib/trading_days.py](../../forecast_lib/trading_days.py) | forecast 独立进程的交易日工具(KI-007, 2026-09-18; 2026-09-18 二次修 D5)。 | TradingCalendarError, is_trading_day, is_trading_day_or_weekday, next_trading_day, next_trading_days, add_trading_days | 0 |
 | [forecast_lib/zhitu_bridge.py](../../forecast_lib/zhitu_bridge.py) | 无模块说明 | fetch_capital_flow | 0 |
 | [forecast_server.py](../../forecast_server.py) | A股预测引擎服务 (:8010) — 主入口 | health, predict, predict_post, predict_status, backtest, history, forecast_weights, referee_stats, forecast_models, stocks_search …（共 16 个） | 16 |
@@ -136,16 +136,16 @@
 | [packages/marketdata/src/marketdata/vendors/alphavantage.py](../../packages/marketdata/src/marketdata/vendors/alphavantage.py) | Alpha Vantage 行情 vendor(美股/全球, 免费 25 req/day, 多 key 池可放大额度)。 | AlphaVantageQuoteVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/base.py](../../packages/marketdata/src/marketdata/vendors/base.py) | Vendor 抽象:每个 vendor 只负责"一家源怎么抓 + 解析成标准类型",内部无 fallback。 | on_vendor_failure, emit_vendor_failure, Vendor, QuoteVendor, KlineVendor, CapitalFlowVendor, EventsVendor, FlashNewsVendor, NewsVendor, FundamentalsVendor …（共 16 个） | 0 |
 | [packages/marketdata/src/marketdata/vendors/board_fund_flow.py](../../packages/marketdata/src/marketdata/vendors/board_fund_flow.py) | 板块资金流向 vendor:东财 push2 clist 接口（仅国内可用，海外 502）。 | BoardFundFlowVendor | 0 |
-| [packages/marketdata/src/marketdata/vendors/capital_flow.py](../../packages/marketdata/src/marketdata/vendors/capital_flow.py) | 资金流向 vendor:东财 + 新浪(CN)。移植自 PanWatch capital_flow_collector 抓取核。 | EastmoneyCapitalFlowVendor, SinaCapitalFlowVendor | 0 |
+| [packages/marketdata/src/marketdata/vendors/capital_flow.py](../../packages/marketdata/src/marketdata/vendors/capital_flow.py) | 资金流向 vendor:东财 + 新浪(CN)。移植自 SIDA capital_flow_collector 抓取核。 | EastmoneyCapitalFlowVendor, SinaCapitalFlowVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/cninfo_irm.py](../../packages/marketdata/src/marketdata/vendors/cninfo_irm.py) | 互动易问答 vendor:巨潮 cninfo(海外可达,公司对传闻/利好的官方回应信源)。 | CninfoIrmVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/discovery.py](../../packages/marketdata/src/marketdata/vendors/discovery.py) | 发现(东财热门榜)vendor:单源、市场级、非 symbol 模型。 | DiscoveryVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/eastmoney.py](../../packages/marketdata/src/marketdata/vendors/eastmoney.py) | 东财 CN 报价 vendor(quote 第二源)。push2 stock/get,单只查询,逐只循环取批量。 | EastmoneyQuoteVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/em_anomaly.py](../../packages/marketdata/src/marketdata/vendors/em_anomaly.py) | 日内异动池 vendor:东财 dycalchis.eastmoney.com(海外可达)。 | AnomalyItem, EmAnomalyVendor, EmAnomalyCountVendor | 0 |
-| [packages/marketdata/src/marketdata/vendors/events.py](../../packages/marketdata/src/marketdata/vendors/events.py) | 事件 vendor:东财公告(单源)。移植自 PanWatch EastMoneyEventsCollector.fetch_events 抓取核 | EventsVendor | 0 |
+| [packages/marketdata/src/marketdata/vendors/events.py](../../packages/marketdata/src/marketdata/vendors/events.py) | 事件 vendor:东财公告(单源)。移植自 SIDA EastMoneyEventsCollector.fetch_events 抓取核 | EventsVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/flash_news.py](../../packages/marketdata/src/marketdata/vendors/flash_news.py) | 快讯(7×24)vendor:cls(财联社)/ sina(新浪直播)/ eastmoney(东财快讯),均市场级、单源。 | ClsFlashNewsVendor, SinaFlashNewsVendor, EastmoneyFlashNewsVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/ftshare.py](../../packages/marketdata/src/marketdata/vendors/ftshare.py) | FTShare vendor:龙虎榜 / 融资融券(东财 datacenter 的免费备源)。 | FtshareMCPClient, FtshareDragonTigerVendor, FtshareMarginVendor, fetch_financial_calendar | 0 |
 | [packages/marketdata/src/marketdata/vendors/fundamentals.py](../../packages/marketdata/src/marketdata/vendors/fundamentals.py) | 基本面/财务 vendor:腾讯(CN,~数组)+ 东财(CN push2 / US·HK datacenter GMAININDICATOR)。 | TencentFundamentalsVendor, EastmoneyFundamentalsVendor | 0 |
-| [packages/marketdata/src/marketdata/vendors/kline.py](../../packages/marketdata/src/marketdata/vendors/kline.py) | K 线 vendors:腾讯(全市场)/ Stooq(US)/ 东财(CN/HK)/ Yahoo(US/HK)。移植自 PanWatch kline_collector 抓取核。 | fetch_sina_index_kline, fetch_tencent_kline_raw, fetch_tencent_minute_kline, TencentKlineVendor, StooqKlineVendor, fetch_eastmoney_kline, EastmoneyKlineVendor, YahooKlineVendor | 0 |
+| [packages/marketdata/src/marketdata/vendors/kline.py](../../packages/marketdata/src/marketdata/vendors/kline.py) | K 线 vendors:腾讯(全市场)/ Stooq(US)/ 东财(CN/HK)/ Yahoo(US/HK)。移植自 SIDA kline_collector 抓取核。 | fetch_sina_index_kline, fetch_tencent_kline_raw, fetch_tencent_minute_kline, TencentKlineVendor, StooqKlineVendor, fetch_eastmoney_kline, EastmoneyKlineVendor, YahooKlineVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/market_flow.py](../../packages/marketdata/src/marketdata/vendors/market_flow.py) | 市场/资金面 vendor:龙虎榜 / 融资融券 / 股东户数 / 分红,均走东财 datacenter 同构接口 | EastmoneyDragonTigerVendor, fetch_lhb_institutions, fetch_lhb_seat_details, EastmoneyMarginVendor, EastmoneyShareholdersVendor, EastmoneyDividendVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/news.py](../../packages/marketdata/src/marketdata/vendors/news.py) | 新闻资讯 vendor:xueqiu(雪球个股新闻)/ eastmoney_news(东财个股新闻搜索)/ | XueqiuNewsVendor, EastmoneyStockNewsVendor, EastmoneyAnnNewsVendor | 0 |
 | [packages/marketdata/src/marketdata/vendors/northbound.py](../../packages/marketdata/src/marketdata/vendors/northbound.py) | 北向资金 vendor:同花顺(ths/hexin)当日分钟累计净买入,市场级(symbols 恒空)。 | HexinNorthboundVendor | 0 |
@@ -190,7 +190,7 @@
 | [packages/marketdata/tests/test_types.py](../../packages/marketdata/tests/test_types.py) | 无模块说明 | test_request_cache_key_stable, test_response_is_empty, test_quote_defaults_optional_fields_none | 0 |
 | [packages/marketdata/tests/test_yahoo_kline.py](../../packages/marketdata/tests/test_yahoo_kline.py) | 无模块说明 | test_yahoo_kline_parses_us, test_yahoo_kline_parses_hk, test_yahoo_kline_prefers_adjclose, test_yahoo_kline_skips_null_bar, test_yahoo_kline_truncates_to_days, test_yahoo_kline_empty_result_returns_empty, test_yahoo_kline_none_response_returns_empty, test_yahoo_kline_no_symbols_returns_empty, test_yahoo_kline_rejects_cn_market, test_yahoo_kline_passes_proxy | 0 |
 | [packages/marketdata/tests/test_yfinance_quote.py](../../packages/marketdata/tests/test_yfinance_quote.py) | 无模块说明 | test_yfinance_parses, test_yfinance_missing_lib_raises | 0 |
-| [server.py](../../server.py) | PanWatch 统一服务入口 —— W3.2/D1 起为兼容 shim, 实现在 src/bootstrap/。 |  | 0 |
+| [server.py](../../server.py) | SIDA 统一服务入口 —— W3.2/D1 起为兼容 shim, 实现在 src/bootstrap/。 |  | 0 |
 | [src/__init__.py](../../src/__init__.py) | 无模块说明 |  | 0 |
 | [src/agents/__init__.py](../../src/agents/__init__.py) | 无模块说明 |  | 0 |
 | [src/agents/auction_review.py](../../src/agents/auction_review.py) | 竞价复盘 Agent(9:30 触发):wudao 竞价数据 + 竞价博弈方法论。 | AuctionReviewAgent, json_dumps | 0 |
@@ -210,20 +210,20 @@
 | [src/agents/stock_attribution.py](../../src/agents/stock_attribution.py) | 短线归因 Agent:判断一只股票短线上涨/涨停/异动的核心原因。 | md_quote_rows_wrapper, StockAttributionAgent | 0 |
 | [src/agents/theme_launch_detector.py](../../src/agents/theme_launch_detector.py) | 题材启动识别 Agent(9:45 触发)。 | ThemeLaunchDetectorAgent | 0 |
 | [src/agents/tradingagents/__init__.py](../../src/agents/tradingagents/__init__.py) | TradingAgents 集成模块。 |  | 0 |
-| [src/agents/tradingagents/agent.py](../../src/agents/tradingagents/agent.py) | TradingAgentsAgent — PanWatch 的 BaseAgent 子类,集成 TauricResearch/TradingAgents。 | get_market_data, TradingAgentsUnavailable, TradingAgentsAgent | 0 |
+| [src/agents/tradingagents/agent.py](../../src/agents/tradingagents/agent.py) | TradingAgentsAgent — SIDA 的 BaseAgent 子类,集成 TauricResearch/TradingAgents。 | get_market_data, TradingAgentsUnavailable, TradingAgentsAgent | 0 |
 | [src/agents/tradingagents/auto_trigger.py](../../src/agents/tradingagents/auto_trigger.py) | 盘中急涨/急跌联动:自动触发 TradingAgents 深度分析。 | should_auto_trigger, fire_and_forget_trigger, try_auto_trigger | 0 |
 | [src/agents/tradingagents/backfill.py](../../src/agents/tradingagents/backfill.py) | 把 analysis_history 里历史 TradingAgents 记录回填到 stock_suggestions。 | backfill_tradingagents_suggestions | 0 |
 | [src/agents/tradingagents/cost_tracker.py](../../src/agents/tradingagents/cost_tracker.py) | TradingAgents 月度成本预算与单次成本估算。 | check_budget, estimate_cost, get_today_cache_key | 0 |
 | [src/agents/tradingagents/financial_data.py](../../src/agents/tradingagents/financial_data.py) | A 股财务数据采集 — 用 akshare 拉真实财务报表给 TradingAgents 分析师用。 | fetch_financial_abstract, render_fundamentals_summary, render_income_statement, render_balance_sheet, render_cashflow | 0 |
 | [src/agents/tradingagents/history_comparison.py](../../src/agents/tradingagents/history_comparison.py) | TradingAgents 历史决策 vs 实际涨跌对比。 | build_history_comparison | 0 |
 | [src/agents/tradingagents/langchain_compat.py](../../src/agents/tradingagents/langchain_compat.py) | LangChain 兼容性补丁:让小模型(Qwen 7B 等)返回的 tool_calls 也能通过校验。 | apply_compat_patches | 0 |
-| [src/agents/tradingagents/llm_adapter.py](../../src/agents/tradingagents/llm_adapter.py) | 桥接 PanWatch AIClient 配置 → TradingAgents LLM config。 | build_ta_llm_config, inject_api_key_env | 0 |
+| [src/agents/tradingagents/llm_adapter.py](../../src/agents/tradingagents/llm_adapter.py) | 桥接 SIDA AIClient 配置 → TradingAgents LLM config。 | build_ta_llm_config, inject_api_key_env | 0 |
 | [src/agents/tradingagents/paper_trading_bridge.py](../../src/agents/tradingagents/paper_trading_bridge.py) | TradingAgents 决策 → 模拟盘 StrategySignalRun 信号。 | maybe_emit_paper_trading_signal | 0 |
-| [src/agents/tradingagents/portfolio_context.py](../../src/agents/tradingagents/portfolio_context.py) | 把 PanWatch 的 PortfolioInfo 渲染成 TradingAgents past_context 文本。 | build_main_intent_context, build_stock_metadata_context, build_portfolio_context, patch_propagator | 0 |
+| [src/agents/tradingagents/portfolio_context.py](../../src/agents/tradingagents/portfolio_context.py) | 把 SIDA 的 PortfolioInfo 渲染成 TradingAgents past_context 文本。 | build_main_intent_context, build_stock_metadata_context, build_portfolio_context, patch_propagator | 0 |
 | [src/agents/tradingagents/presets/__init__.py](../../src/agents/tradingagents/presets/__init__.py) | Swarm Preset 路由层 — 8 个 A 股可用的智能体团队预设。 | AgentSpec, PresetConfig, list_presets, get_preset, build_swarm_context, run_preset | 0 |
-| [src/agents/tradingagents/progress.py](../../src/agents/tradingagents/progress.py) | TradingAgents 进度回调。 | PanWatchProgressHandler, aggregate_progress | 0 |
-| [src/agents/tradingagents/result_mapper.py](../../src/agents/tradingagents/result_mapper.py) | TradingAgents 输出 → PanWatch AnalysisResult 映射。 | map_state_to_result | 0 |
-| [src/agents/tradingagents/toolkit_adapter.py](../../src/agents/tradingagents/toolkit_adapter.py) | 把 PanWatch Provider 体系适配进 TradingAgents 数据流。 | panwatch_data_context, is_a_share, is_hk_share, is_panwatch_routable, hk_symbol_to_yfinance, patch_route_to_vendor | 0 |
+| [src/agents/tradingagents/progress.py](../../src/agents/tradingagents/progress.py) | TradingAgents 进度回调。 | SIDAProgressHandler, aggregate_progress | 0 |
+| [src/agents/tradingagents/result_mapper.py](../../src/agents/tradingagents/result_mapper.py) | TradingAgents 输出 → SIDA AnalysisResult 映射。 | map_state_to_result | 0 |
+| [src/agents/tradingagents/toolkit_adapter.py](../../src/agents/tradingagents/toolkit_adapter.py) | 把 SIDA Provider 体系适配进 TradingAgents 数据流。 | sida_data_context, is_a_share, is_hk_share, is_sida_routable, hk_symbol_to_yfinance, patch_route_to_vendor | 0 |
 | [src/bootstrap/__init__.py](../../src/bootstrap/__init__.py) | src.bootstrap — W3.2/D1 从 server.py 拆出的启动装配层。 |  | 0 |
 | [src/bootstrap/agents.py](../../src/bootstrap/agents.py) | Agent 注册表 + 装饰器自动发现(W3.2/D1)。 | register_agent, discover_agents, seed_agents | 0 |
 | [src/bootstrap/app.py](../../src/bootstrap/app.py) | FastAPI 应用装配(W3.2/D1): agent 自动发现 → lifespan 挂载 → SPA 兜底。 | create_app | 1 |
@@ -273,14 +273,14 @@
 | [src/core/ambush_score.py](../../src/core/ambush_score.py) | 埋伏四维评分合成(批次C C2, 2026-09-06 28号)。 | score_event, score_transmission, demon_boost, score_mood, score_signal, risk_deduction, build_invalidations, enrich_ambush_list | 0 |
 | [src/core/analog_finder.py](../../src/core/analog_finder.py) | 历史相似分形对标（2026-10-23）。 | find_analogs, render, build | 0 |
 | [src/core/analysis_history.py](../../src/core/analysis_history.py) | 分析历史记录管理 | save_analysis, get_analysis, get_latest_analysis, get_analysis_history, get_latest_ta_verdict_row, get_latest_ta_verdict | 0 |
-| [src/core/analysis_link.py](../../src/core/analysis_link.py) | PanWatch 内部页面链接生成：深度分析详情页等。 | get_base_url, analysis_detail_url, analysis_detail_markdown | 0 |
+| [src/core/analysis_link.py](../../src/core/analysis_link.py) | SIDA 内部页面链接生成：深度分析详情页等。 | get_base_url, analysis_detail_url, analysis_detail_markdown | 0 |
 | [src/core/apm.py](../../src/core/apm.py) | APM 轻量追踪 (P1 稳定性, 2026-09-18)。 | apm_slow_threshold_ms, apm_sample_rate, apm_enabled, new_trace_id, get_trace_id, set_trace_id, clear_trace_id, trace_scope, get_apm_stats, record_op …（共 15 个） | 0 |
 | [src/core/auction_pool.py](../../src/core/auction_pool.py) | 竞价异动池 v0.3.2 (2026-08-24, 修正 gap_pct/withdraw_rate 计算口径)。 | clear_cache, normalize_auction_volume_ratio, fetch_auction_anomaly, fetch_auction_payload, sync_auction_to_db, get_anomaly_history, register_cron | 0 |
 | [src/core/auction_tick_sampler.py](../../src/core/auction_tick_sampler.py) | 竞价过程帧采样器(2026-10-18 P0-a, 方案 §7.2② / §8 批次 1)。 | limit_threshold, classify_verdict, withdraw_rate, frame_from_snapshot, upsert_frames, load_frames, replay, purge_old_frames, fetch_frame_rows, pool_symbols …（共 12 个） | 0 |
 | [src/core/auction_wudao_store.py](../../src/core/auction_wudao_store.py) | 悟道竞价多维因子结构化落库(2026-10-18 P0-a, 方案 §7.2③)。 | normalize_row, extract_rows, upsert_daily, load_daily, capture_daily, run_auction_wudao_job | 0 |
 | [src/core/auth_tokens.py](../../src/core/auth_tokens.py) | JWT 令牌与密钥(中立层, KI-039 第二阶段, 2026-09-09)。 | invalidate_jwt_secret_cache, get_jwt_secret, get_verification_secrets, TokenResult, create_token, session_id_from_payload, decode_token, principal_from_payload | 0 |
 | [src/core/backfill_guard.py](../../src/core/backfill_guard.py) | 回填防污染契约(v0.5.80 B3)。 | check_ident, coverage_gate, count_by_field, purge_rows_outside | 0 |
-| [src/core/backtest/__init__.py](../../src/core/backtest/__init__.py) | PanWatch 回测模块(Phase 0 地基)。 |  | 0 |
+| [src/core/backtest/__init__.py](../../src/core/backtest/__init__.py) | SIDA 回测模块(Phase 0 地基)。 |  | 0 |
 | [src/core/backtest/cost_model.py](../../src/core/backtest/cost_model.py) | A 股交易成本模型 —— 回测(Phase 0)与模拟盘(Phase 1)共用。 | CostConfig, Fill, CostModel | 0 |
 | [src/core/backtest/data_adapter.py](../../src/core/backtest/data_adapter.py) | 回测数据适配:PG klines(优先) → KlineCollector(兜底) → PriceBar。 | PriceBar, from_klines, load_price_history, first_index_after | 0 |
 | [src/core/backtest/engine.py](../../src/core/backtest/engine.py) | 轻量事件式回测内核(纯 Python,无第三方依赖)。 | Signal, BTTrade, BacktestResult, simulate_exit, fixed_cash_sizer, Backtester, horizon_return | 0 |
@@ -432,7 +432,7 @@
 | [src/core/market_replay.py](../../src/core/market_replay.py) | 盘后复盘统一证据装配器（2026-10-23）。 | build_replay, to_row, persist, read_latest, render, run_scheduled | 0 |
 | [src/core/market_scan.py](../../src/core/market_scan.py) | 全市场三榜扫描(P2.3)。 | resonance_pick, scan | 0 |
 | [src/core/market_scan_jobs.py](../../src/core/market_scan_jobs.py) | 盘后扫描 cron 入口(KI-039 第二阶段, 2026-09-09)。 | run_market_scan_job, run_dark_fund_top_job | 0 |
-| [src/core/marketdata_client.py](../../src/core/marketdata_client.py) | PanWatch ↔ marketdata 接线:DB 配置端口 + 单例 + flag 门控的报价兼容层。 | DbConfigProvider, get_market_data, reset_market_data, md_quote_rows, md_news, md_news_by_keyword, md_stock_data, md_more_info, md_dark_flow_tq, md_formula_mul …（共 11 个） | 0 |
+| [src/core/marketdata_client.py](../../src/core/marketdata_client.py) | SIDA ↔ marketdata 接线:DB 配置端口 + 单例 + flag 门控的报价兼容层。 | DbConfigProvider, get_market_data, reset_market_data, md_quote_rows, md_news, md_news_by_keyword, md_stock_data, md_more_info, md_dark_flow_tq, md_formula_mul …（共 11 个） | 0 |
 | [src/core/md_metrics_sink.py](../../src/core/md_metrics_sink.py) | vendor 调用统计落库(MetricsSink 装饰器)。 | DbCountingMetricsSink, get_metrics_sink | 0 |
 | [src/core/md_redis_cache.py](../../src/core/md_redis_cache.py) | marketdata 的 Redis 共享缓存后端(批次1-B, 2026-09-10)。 | redis_cache_enabled, RedisTTLCache, redis_cache_factory | 0 |
 | [src/core/media_utils.py](../../src/core/media_utils.py) | 媒体内容文本化工具: 图片 OCR + 文件文本提取。 | save_bytes, image_to_text, file_to_text | 0 |
@@ -706,7 +706,7 @@
 | [src/web/database.py](../../src/web/database.py) | 数据库引擎与会话入口(薄壳, W3.1/D2; KI-039 切片 A 后再薄一层; | init_db | 0 |
 | [src/web/log_handler.py](../../src/web/log_handler.py) | Custom logging handler that writes log entries to SQLite. | get_log_handler_stats, DBLogHandler | 0 |
 | [src/web/middleware.py](../../src/web/middleware.py) | 统一网关中间件 (2026-08-17 v0.2.65 — Phase 1) | JWTDecodeMiddleware, RateLimitMiddleware, RequestLoggerMiddleware, get_rate_limit_stats, AuditMiddleware, SecurityHeadersMiddleware, issue_csrf_token, CSRFProtectionMiddleware | 0 |
-| [src/web/migrations.py](../../src/web/migrations.py) | Versioned database migrations for PanWatch. | Migration, has_pending_migrations, run_versioned_migrations | 0 |
+| [src/web/migrations.py](../../src/web/migrations.py) | Versioned database migrations for SIDA. | Migration, has_pending_migrations, run_versioned_migrations | 0 |
 | [src/web/models.py](../../src/web/models.py) | 兼容 shim(KI-039 切片 B, 2026-09-09): ORM 模型已下沉到 'src/db/models.py'。 |  | 0 |
 | [src/web/notifications/__init__.py](../../src/web/notifications/__init__.py) | 通知模块 (v0.4.36+): |  | 0 |
 | [src/web/notifications/ws_hub.py](../../src/web/notifications/ws_hub.py) | WebSocket 通知 Hub (v0.4.36 P0 派活 1)。 | attach_event_loop, broadcast_notification, broadcast_global, install_pubsub_listener, incr_unread, get_unread, reset_unread, ws_notifications_handler, stats | 0 |

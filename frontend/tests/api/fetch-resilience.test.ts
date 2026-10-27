@@ -10,7 +10,7 @@
 //   4. POST 失败**不重试**(可能已产生副作用); 4xx 是确定性错误也不重试;
 //      调用方自带 `signal` 时取消权归调用方, 原样抛(不误报超时/不重试)。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiTimeoutError, clearResponseCache, fetchAPI } from '@panwatch/api'
+import { ApiTimeoutError, clearResponseCache, fetchAPI } from '@sida/api'
 
 /** 最小 Response 替身(fetchAPI 只读 status / json())。 */
 function okResponse(data: unknown): Response {

@@ -1,6 +1,6 @@
 import { RefreshCw } from 'lucide-react'
-import { type DeepAnalysisResult, type HistoryComparisonResponse } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { type DeepAnalysisResult, type HistoryComparisonResponse } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { StockReportMarkdown } from './helpers'
 
 export const DEEP_DECISION_COLOR: Record<string, string> = {

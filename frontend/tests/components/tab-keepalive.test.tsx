@@ -24,8 +24,8 @@ import {
 } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
-import { useTabActive } from '@panwatch/base-ui'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
+import { useTabActive } from '@sida/base-ui'
 
 import WorkspaceTabShell from '@/components/WorkspaceTabShell'
 import { MAX_TABS, TABS_STORAGE_KEY } from '@/lib/tab-shell'

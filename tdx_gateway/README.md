@@ -41,7 +41,7 @@ docker logs -f tdx-gateway            # 日志
 curl -s localhost:17710/health        # 自检
 ```
 
-容器 `tdx-gateway` 挂在 `panwatch-net` 上，SIDA 容器用 `http://tdx-gateway:8000/` 直连；
+容器 `tdx-gateway` 挂在 `sida-net` 上，SIDA 容器用 `http://tdx-gateway:8000/` 直连；
 也可对外发布 `127.0.0.1:17710`。
 
 ## 契约从哪来（可重跑）

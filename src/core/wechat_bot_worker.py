@@ -18,8 +18,8 @@ from src.core import wechat_ilink
 
 logger = logging.getLogger(__name__)
 
-# 内部对话助手 API(PANWATCH_URL 默认 127.0.0.1:8000, 容器内即主服务)
-PANWATCH_URL = os.getenv("PANWATCH_URL", "http://127.0.0.1:8000").rstrip("/")
+# 内部对话助手 API(SIDA_URL 默认 127.0.0.1:8000, 容器内即主服务)
+SIDA_URL = os.getenv("SIDA_URL", "http://127.0.0.1:8000").rstrip("/")
 POLL_INTERVAL = 1.0  # 两次长轮询之间的间隔(秒)
 MAX_MSG_IDS = 500  # 每账号去重窗口
 REPLY_TIMEOUT = 90.0  # AI 回复超时(工具调用可能较慢)
@@ -66,14 +66,14 @@ async def _ask_ai(
         payload["image_data"] = image_data
     async with httpx.AsyncClient(timeout=REPLY_TIMEOUT) as client:
         if not conv_id:
-            r = await client.post(f"{PANWATCH_URL}/api/chat/conversations", json={}, headers=headers)
+            r = await client.post(f"{SIDA_URL}/api/chat/conversations", json={}, headers=headers)
             r.raise_for_status()
             data = r.json()
             conv_id = str((data.get("data") or data).get("id") or "")
         if not conv_id:
             raise RuntimeError("对话会话创建失败")
         r = await client.post(
-            f"{PANWATCH_URL}/api/chat/conversations/{conv_id}/messages",
+            f"{SIDA_URL}/api/chat/conversations/{conv_id}/messages",
             json=payload,
             headers=headers,
         )

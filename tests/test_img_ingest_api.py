@@ -212,7 +212,7 @@ def test_api_as_of_before_all_frames_degrades(engine):
 
 def test_api_no_data_is_explicit_no_data(engine, monkeypatch):
     """既无入库帧又无本地 .img → available:false + 「无数据」占位, 不补 0。"""
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
+    monkeypatch.delenv("SIDA_IMG_DIR", raising=False)
     out = obmod.get_img_orderbook(CODE, user_id="shared")
     assert out["available"] is False
     assert out["source"] == "img"
@@ -225,7 +225,7 @@ def test_api_no_data_is_explicit_no_data(engine, monkeypatch):
 
 def test_api_user_scope_isolated(engine, monkeypatch):
     """别的用户入库的帧, 当前 scope 读不到(不能只验自己账号)。"""
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
+    monkeypatch.delenv("SIDA_IMG_DIR", raising=False)
     store.ingest_img_file(FIX_OPEN, symbol=CODE, user_id="u1")
     out = obmod.get_img_orderbook(CODE, user_id="shared")
     assert out["available"] is False
@@ -236,7 +236,7 @@ def test_api_file_fallback_marks_source(engine, monkeypatch, tmp_path):
     """未入库但本地有 .img → source=img-file + as_of=文件内帧时间(标非实时)。"""
     img = tmp_path / "sz002361_20260827.img"
     shutil.copyfile(FIX_OPEN, img)
-    monkeypatch.setenv("PANWATCH_IMG_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_IMG_DIR", str(tmp_path))
     out = obmod.get_img_orderbook(CODE, user_id="shared")
     assert out["available"] is True
     assert out["source"] == "img-file" and out["origin"] == "file"
@@ -289,7 +289,7 @@ def test_endpoint_img_requires_symbol_not_shadowed(engine):
 
 
 def test_endpoint_img_degraded_is_200(engine, monkeypatch):
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
+    monkeypatch.delenv("SIDA_IMG_DIR", raising=False)
     resp = _client().get("/api/orderbook-ob/img", params={"symbol": CODE})
     assert resp.status_code == 200
     body = resp.json()
@@ -321,7 +321,7 @@ def test_existing_orderbook_endpoint_degrades_200(engine, monkeypatch):
 
     monkeypatch.setattr(obmod.orderbook_engine, "run", _down)
     monkeypatch.setattr(obmod, "_RETRY_BACKOFF_S", 0.0)
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
+    monkeypatch.delenv("SIDA_IMG_DIR", raising=False)
     resp = _client().get("/api/orderbook-ob", params={"symbol": CODE})
     assert resp.status_code == 200
     body = resp.json()

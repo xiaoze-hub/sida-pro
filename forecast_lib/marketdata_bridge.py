@@ -15,9 +15,9 @@ from __future__ import annotations
 import logging
 
 try:
-    from .panwatch_client import request_json
+    from .sida_client import request_json
 except ImportError:  # forecast_server.py 将 forecast_lib 直接加入 sys.path
-    from panwatch_client import request_json
+    from sida_client import request_json
 
 logger = logging.getLogger(__name__)
 

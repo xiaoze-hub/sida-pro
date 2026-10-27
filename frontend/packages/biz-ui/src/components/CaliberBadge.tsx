@@ -6,7 +6,7 @@
  *
  * 铁律: **口径徽章不随涨跌上色** —— 它是"数据出处", 不是"行情方向"。
  */
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 export type Caliber = 'tick' | 'eastmoney4' | 'tdx_exday4' | 'ths' | 'unknown'
 

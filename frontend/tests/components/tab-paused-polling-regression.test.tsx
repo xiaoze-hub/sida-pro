@@ -17,8 +17,8 @@
 import { cleanup, render, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
-import { TabActiveProvider } from '@panwatch/base-ui'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
+import { TabActiveProvider } from '@sida/base-ui'
 
 const mocks = vi.hoisted(() => ({
   fetchAPI: vi.fn(),
@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   setOption: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a),
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),
@@ -75,7 +75,7 @@ vi.mock('@panwatch/api', () => ({
   fundamentalsApi: { detail: (...a: unknown[]) => mocks.fundamentalsDetail(...a) },
 }))
 
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({
     ref: () => {},
     chartRef: { current: { setOption: mocks.setOption, on: vi.fn(), off: vi.fn(), resize: vi.fn() } },
@@ -84,7 +84,7 @@ vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
 
 import ThemeMoodPage from '@/pages/ThemeMood'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
-import BoardHeatmap from '@panwatch/biz-ui/components/dashboard/BoardHeatmap'
+import BoardHeatmap from '@sida/biz-ui/components/dashboard/BoardHeatmap'
 
 /** 让"隐藏时确实没发"有个可观测的时间窗(不用假定时器 —— 这些页面还带图表/动画)。 */
 const settle = () => new Promise((r) => setTimeout(r, 60))

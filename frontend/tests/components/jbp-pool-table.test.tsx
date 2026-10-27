@@ -8,11 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  */
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
 
-import JbpPoolTable from '@panwatch/biz-ui/components/JbpPoolTable'
+import JbpPoolTable from '@sida/biz-ui/components/JbpPoolTable'
 
 function cond(key: string, status: string, detail: string) {
   return {

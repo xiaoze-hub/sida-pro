@@ -1,4 +1,4 @@
-# PanWatch Dockerfile
+# SIDA Dockerfile
 # 多阶段构建，减小最终镜像大小
 # 基础镜像源: 默认用 DaoCloud 公开镜像(docker.m.daocloud.io)—— 国内 ACR 构建
 # 环境访问 docker.io 超时、阿里云 library 需登录, DaoCloud 免登录实测可用(2026-08-14)。
@@ -56,7 +56,7 @@ RUN VERSION_VAL="${VERSION}"; \
     echo "SW version: ${VERSION_VAL}"; \
     if grep -q "__SW_VERSION__" public/sw.js; then \
       sed -i "s/__SW_VERSION__/${VERSION_VAL}/g" public/sw.js; \
-      echo "SW cache name: $(grep -o "panwatch-[^']*" public/sw.js | head -1)"; \
+      echo "SW cache name: $(grep -o "sida-[^']*" public/sw.js | head -1)"; \
     else \
       echo "WARNING: public/sw.js 未找到 __SW_VERSION__ 占位符 —— SW 缓存名未注入版本号," \
            "发版后浏览器可能继续使用旧缓存! 请勿把占位符改成写死的版本串。" >&2; \

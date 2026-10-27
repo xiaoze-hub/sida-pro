@@ -21,8 +21,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Trash2 } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
+import { fetchAPI } from '@sida/api'
+import { Switch } from '@sida/base-ui/components/ui/switch'
 import { safeInt } from '@/lib/format'
 
 interface MemoryRow {

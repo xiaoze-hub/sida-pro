@@ -1,6 +1,6 @@
 #!/bin/bash
 set -uo pipefail
-CT=panwatch
+CT=sida
 for i in $(seq 1 24); do
   ST=$(docker inspect --format '{{.State.Health.Status}}' "$CT" 2>/dev/null || echo unknown)
   echo "[$i] $ST"

@@ -306,10 +306,10 @@ class TestStocksDedupeMigration:
         assert any(m.version == 121 and m.name == "dedupe_stocks_unique" for m in MIGRATIONS)
 
     def test_runs_on_real_dev_db_copy(self, tmp_path):
-        """对当前 data/panwatch.db 的副本跑迁移, 确认可成功执行且不报错。"""
+        """对当前 data/sida.db 的副本跑迁移, 确认可成功执行且不报错。"""
         import os
         import shutil
-        src = "/tmp/SIDA/data/panwatch.db"
+        src = "/tmp/SIDA/data/sida.db"
         dst = tmp_path / "copy.db"
         if not os.path.exists(src):
             pytest.skip("开发库不存在")

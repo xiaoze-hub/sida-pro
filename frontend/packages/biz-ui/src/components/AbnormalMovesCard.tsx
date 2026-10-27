@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { AlertTriangle, RefreshCw, ShieldAlert, Zap } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 /**
  * 异动接近度面板(任务 C, 2026-08-24)
  * 数据 GET /api/abnormal-moves?min_proximity=0.5 (fetchAPI 自动补 /api 前缀)。
  * 60s 自动刷新; 点击行触发 onOpenDetail(symbol) (默认行为: 派发
- * 'panwatch-open-stock-insight' 事件, 与现有的 stock-insight-modal 复用)。
+ * 'sida-open-stock-insight' 事件, 与现有的 stock-insight-modal 复用)。
  *
  * 数据格式与 src.core.abnormal_moves.analyze_abnormal_moves 一致:
  *   {
@@ -79,7 +79,7 @@ export interface AbnormalMovesResp {
 export interface AbnormalMovesCardProps {
   /** 直接覆盖最小接近度 (默认 0.5, 任务 C 要求; 若想收到全部 6 条 cancel 用 0) */
   minProximity?: number
-  /** 行点击回调; 默认派发 panwatch-open-stock-insight 事件 */
+  /** 行点击回调; 默认派发 sida-open-stock-insight 事件 */
   onOpenDetail?: (symbol: string, row: AbnormalRow) => void
   /** 轮询间隔 ms; 默认 60000 (60s, 对齐后端缓存 TTL) */
   intervalMs?: number
@@ -263,7 +263,7 @@ export default function AbnormalMovesCard({
       // 默认: 复用现有 stock-insight-modal 入口
       try {
         window.dispatchEvent(
-          new CustomEvent('panwatch-open-stock-insight', {
+          new CustomEvent('sida-open-stock-insight', {
             detail: { symbol, market: 'CN', pageContext: `异动接近度 ${row.proximity != null ? (row.proximity * 100).toFixed(0) + '%' : '—'} (${STATUS_LABEL[row.status as AbnormalStatus] ?? '—'})` },
           }),
         )

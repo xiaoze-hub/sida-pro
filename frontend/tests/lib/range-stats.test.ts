@@ -6,8 +6,8 @@
 //  ③ 明盘/暗盘累计只累非 null 值并给出"有值天数"; 整段无数据时累计必须是 null 而不是 0;
 //  ④ 资金柱/事件按**日期**落区间(与 K 线同一日期集合), 不按时间戳近似。
 import { describe, expect, it } from 'vitest'
-import { computeRangeStats, type RangeBar } from '@panwatch/biz-ui/lib/range-stats'
-import type { KlineEventPoint } from '@panwatch/biz-ui/klineEvents'
+import { computeRangeStats, type RangeBar } from '@sida/biz-ui/lib/range-stats'
+import type { KlineEventPoint } from '@sida/biz-ui/klineEvents'
 
 const DAY = 86400
 

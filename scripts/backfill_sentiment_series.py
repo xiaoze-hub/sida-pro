@@ -9,7 +9,7 @@
 
 用法:
   # 本地 sqlite
-  python scripts/backfill_sentiment_series.py --db sqlite:///data/panwatch.db
+  python scripts/backfill_sentiment_series.py --db sqlite:///data/sida.db
   # 生产 PG(需写权限; 会真写库)
   SIDA_DB_URL="postgresql+psycopg2://user:pw@host:5432/sida" \\
     python scripts/backfill_sentiment_series.py
@@ -34,7 +34,7 @@ def _dsn(args) -> str:
         v = os.environ.get(env)
         if v:
             return v
-    return "sqlite:///data/panwatch.db"
+    return "sqlite:///data/sida.db"
 
 
 def main() -> int:

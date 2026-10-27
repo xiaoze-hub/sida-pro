@@ -1,6 +1,6 @@
 """W2.2/E4 (2026-09-09): 测试进程不得触碰真实 DATA_DIR 与真实库文件。
 
-背景: conftest 的 autouse init_db 曾把全部迁移跑进仓库 data/panwatch.db
+背景: conftest 的 autouse init_db 曾把全部迁移跑进仓库 data/sida.db
 (实测 2026-09-08~09 期间留下 7 个迁移备份 .bak), error_tracker/disk_cache/
 media_utils 等在模块 import 时就把 DATA_DIR 烤进模块级常量 —— 隔离必须在
 任何 src.* 导入前生效(conftest 顶层), 不能靠 fixture。
@@ -18,13 +18,13 @@ def test_data_dir_isolated_to_tmp():
     d = Path(os.environ["DATA_DIR"])
     assert d.is_relative_to(Path(tempfile.gettempdir())), f"DATA_DIR 未隔离: {d}"
     assert not d.is_relative_to(PROJECT_ROOT), f"DATA_DIR 指向仓库内: {d}"
-    assert Path(os.environ["PANWATCH_DATA_DIR"]) == d
+    assert Path(os.environ["SIDA_DATA_DIR"]) == d
 
 
 def test_default_db_url_isolated():
     """显式传 SIDA_DB_URL 的工作流(test_error_tracker 头注释)不受 conftest
     影响; 未显式传时, conftest 必须把默认 SQLite 指进临时目录, 而不是仓库
-    data/panwatch.db(database.py 的 DB_PATH 与 DATA_DIR 无关)。"""
+    data/sida.db(database.py 的 DB_PATH 与 DATA_DIR 无关)。"""
     from src.web import database
 
     if os.environ.get("SIDA_DB_URL_ETL_EXTERNAL") == "1":  # pragma: no cover
@@ -50,7 +50,7 @@ def test_error_tracker_file_isolated():
 def test_delenv_sida_db_url_reload_stays_isolated(tmp_path):
     """结构性回归(E4 核心): delenv SIDA_DB_URL 后(模拟 test_pg_default 的
     reload 路径), 默认库必须落在 DATA_DIR 内(依托 database.py DB_PATH 跟随
-    DATA_DIR), 而不是仓库 data/panwatch.db。
+    DATA_DIR), 而不是仓库 data/sida.db。
 
     子进程验证: 不在进程内 reload database 模块 —— reload 会重执行模块级
     代码, 对其它测试是全局状态污染源; 子进程同时覆盖"全新进程首启"的真实

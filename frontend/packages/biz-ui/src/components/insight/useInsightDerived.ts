@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react'
-import { getMarketBadge } from '@panwatch/biz-ui'
-import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { getMarketBadge } from '@sida/biz-ui'
+import { readStockColors } from '@sida/biz-ui/lib/stock-colors'
 import { buildKlineSuggestion } from '@/lib/kline-scorer'
-import type { SuggestionInfo } from '@panwatch/biz-ui/components/suggestion-badge'
+import type { SuggestionInfo } from '@sida/biz-ui/components/suggestion-badge'
 import type { StockInsightModalProps, HistoryRecord } from './types'
 import {
   parseSuggestionJson,

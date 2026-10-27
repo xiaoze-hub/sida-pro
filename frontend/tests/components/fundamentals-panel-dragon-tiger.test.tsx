@@ -3,7 +3,7 @@
 // 契约: 全空不渲染该列(标题注明源未提供); 默认最多 10 行, 超出折叠可展开。
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { FundamentalsPanel } from '@panwatch/biz-ui/components/insight/FundamentalsPanel'
+import { FundamentalsPanel } from '@sida/biz-ui/components/insight/FundamentalsPanel'
 
 afterEach(() => cleanup())
 

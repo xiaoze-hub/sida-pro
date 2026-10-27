@@ -10,7 +10,7 @@ import {
   getAlerts,
   pushAlert,
   subscribeAlerts,
-} from '@panwatch/biz-ui/lib/alert-bus'
+} from '@sida/biz-ui/lib/alert-bus'
 
 beforeEach(() => {
   __resetAlerts()

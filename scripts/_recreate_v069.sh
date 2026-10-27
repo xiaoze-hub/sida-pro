@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
-IMG=panwatch:v0.6.9
+CT=sida
+IMG=sida:v0.6.9
 docker inspect "$CT" --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/env_69.txt
 grep -v '^WEB_WORKERS=' /tmp/env_69.txt > /tmp/env_69b.txt
 echo "WEB_WORKERS=4" >> /tmp/env_69b.txt
@@ -12,8 +12,8 @@ while IFS= read -r line; do
   [ -z "$line" ] && continue
   ENVARGS+=("-e" "$line")
 done < /tmp/env_69b.txt
-docker run -d --name "$CT" --restart=always -p 8000:8000 --network panwatch-net \
-  -v panwatch-data:/app/data -v panwatch-tck:/app/data/tck \
+docker run -d --name "$CT" --restart=always -p 8000:8000 --network sida-net \
+  -v sida-data:/app/data -v sida-tck:/app/data/tck \
   --memory 1500m --memory-swap 1500m --cpus 1.5 \
   "${ENVARGS[@]}" "$IMG"
 echo "waiting healthy (90s start-period expected)..."

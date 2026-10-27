@@ -1,6 +1,6 @@
 # TQ 客户端「未被消费」能力的组合创新与新因子（研究，2026-10-23）
 
-- **基线**：`1f355dd`（VERSION `v0.46.0`），生产容器 `panwatch`（镜像 v0.46.0）
+- **基线**：`1f355dd`（VERSION `v0.46.0`），生产容器 `sida`（镜像 v0.46.0）
 - **实测对象**：真网关 `172.27.16.1:17709`（通达信客户端 TdxW.exe 自带 HTTP）
   — `get_exday_data` / `get_more_info` / `get_market_data` / `get_bkjy_value` / `get_scjy_value`
 - **覆盖范围**：`src/core/{tdx_corporate,cancel_profile,cancel_order_intent,fund_flow_nd,decision_pioneer,tdx_boards}.py`、

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import DayCandle from '@panwatch/biz-ui/components/thememood/DayCandle'
+import DayCandle from '@sida/biz-ui/components/thememood/DayCandle'
 
 afterEach(cleanup)
 

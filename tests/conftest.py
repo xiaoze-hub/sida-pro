@@ -16,22 +16,22 @@ os.environ.setdefault("SIDA_ALLOW_SQLITE", "1")
 os.environ.setdefault("SKILL_KEY_SALT", "test-fixed-salt-2f9c1d4e7a3b5086")
 
 # W2.2/E4 (2026-09-09) 测试隔离: 测试绝不触碰真实 DATA_DIR 与真实库文件。
-# 实测仓库 data/panwatch.db 被测试跑迁移留下 7 个 .bak(2026-09-08~09)。
+# 实测仓库 data/sida.db 被测试跑迁移留下 7 个 .bak(2026-09-08~09)。
 # 必须在任何 src.* 导入之前设置 —— error_tracker(_FILE)/disk_cache(_CACHE_DIR)/
 # media_utils(MEDIA_DIR) 都在模块 import 时把 DATA_DIR 烤进模块级常量,
 # fixture 里再改 env 为时已晚。
 _ORIG_DATA_DIR = os.environ.get("DATA_DIR")  # 留给 _verify_real_data_untouched 快照
 _TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="sida_test_data_"))
 os.environ["DATA_DIR"] = str(_TEST_DATA_DIR)
-os.environ["PANWATCH_DATA_DIR"] = str(_TEST_DATA_DIR)
-os.environ["PANWATCH_CACHE_DIR"] = str(_TEST_DATA_DIR / "cache")
+os.environ["SIDA_DATA_DIR"] = str(_TEST_DATA_DIR)
+os.environ["SIDA_CACHE_DIR"] = str(_TEST_DATA_DIR / "cache")
 # zhitu vendor 的本地库回退路径(marketdata/vendors/zhitu.py _DB_PATH)也一并隔离
-os.environ.setdefault("PANWATCH_DB", str(_TEST_DATA_DIR / "panwatch.db"))
+os.environ.setdefault("SIDA_DB", str(_TEST_DATA_DIR / "sida.db"))
 # 默认 SQLite 库一并隔离: database.py 的 DB_PATH 跟随 DATA_DIR(见 database.py
 # W2.2/E4 注), 再配 SIDA_DB_URL setdefault 双保险。显式传 SIDA_DB_URL 的工作流
 # (test_error_tracker 头注释)不受影响(setdefault)。
 os.environ.setdefault(
-    "SIDA_DB_URL", f"sqlite:///{(_TEST_DATA_DIR / 'panwatch_test.db')}"
+    "SIDA_DB_URL", f"sqlite:///{(_TEST_DATA_DIR / 'sida_test.db')}"
 )
 
 # 项目根目录

@@ -8,16 +8,16 @@ cd /root/sida-pro
 git pull --rebase origin main
 
 for f in src/core/alerting.py src/core/db_backup_auto.py src/core/ai_client.py src/core/datasource_failures.py src/core/md_metrics_sink.py src/web/middleware.py src/web/api/health.py src/bootstrap/runtime.py; do
-  docker cp "/mnt/c/Users/tianxiang/sida-work/$f" "panwatch:/app/$f" 2>/dev/null
+  docker cp "/mnt/c/Users/tianxiang/sida-work/$f" "sida:/app/$f" 2>/dev/null
 done
 
 rm -rf static
 cp -r /mnt/c/Users/tianxiang/sida-work/frontend/dist static
-docker cp static/. panwatch:/app/static/
+docker cp static/. sida:/app/static/
 
-docker restart panwatch
+docker restart sida
 sleep 20
 curl -s http://localhost:8000/api/version
 echo
-docker inspect --format='{{.State.Health.Status}}' panwatch
+docker inspect --format='{{.State.Health.Status}}' sida
 echo "TIER1_MERGED"

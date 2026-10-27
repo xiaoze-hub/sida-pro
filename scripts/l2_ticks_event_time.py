@@ -4,15 +4,15 @@
 只能在**非交易时段**执行(08:00-17:00 上海时间为保守禁改窗口), 且必须先做表级
 pg_dump 备份(--confirm-backup 门禁, 备份命令见下方 usage)。
 
-用法(panwatch 容器内):
+用法(sida 容器内):
   干跑校验:   python scripts/l2_ticks_event_time.py
   正式执行:   python scripts/l2_ticks_event_time.py --apply --confirm-backup
   (脚本自带 sys.path 引导, 容器内无需预设 PYTHONPATH)
 
-备份(panwatch-postgres 容器, 宿主 WSL):
-  docker exec panwatch-postgres sh -c \\
+备份(sida-postgres 容器, 宿主 WSL):
+  docker exec sida-postgres sh -c \\
     'pg_dump -U "$POSTGRES_USER" -Fc -t l2_ticks -f /tmp/l2_ticks_backup.dump'
-  docker cp panwatch-postgres:/tmp/l2_ticks_backup.dump <宿主备份目录>/
+  docker cp sida-postgres:/tmp/l2_ticks_backup.dump <宿主备份目录>/
 
 步骤(分事务, 失败可重跑; 回填产物 l2_ticks_new 先建后换):
   A) 预检: PG/timescaledb/非交易时段/未被迁移过; 记录快照起点

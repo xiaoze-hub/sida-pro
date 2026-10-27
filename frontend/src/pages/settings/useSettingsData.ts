@@ -1,19 +1,19 @@
 import { useEffect, useCallback } from 'react'
-import type { AIService } from '@panwatch/api'
+import type { AIService } from '@sida/api'
 import type { AgentsHealth } from './types'
 import type { FeedbackStats } from './types'
 import type { KeyDataSource } from './types'
 import type { MyAIService } from './types'
-import type { NotifyChannel } from '@panwatch/api'
-import type { SceneBinding } from '@panwatch/api'
+import type { NotifyChannel } from '@sida/api'
+import type { SceneBinding } from '@sida/api'
 import type { Setting } from './types'
 import type { TemplatePayload } from './types'
-import type { UserInfo } from '@panwatch/api'
-import { authApi } from '@panwatch/api'
-import { fetchAPI } from '@panwatch/api'
-import { listSceneBindings } from '@panwatch/api'
-import { setSceneBinding } from '@panwatch/api'
-import { wechatBindGet } from '@panwatch/api'
+import type { UserInfo } from '@sida/api'
+import { authApi } from '@sida/api'
+import { fetchAPI } from '@sida/api'
+import { listSceneBindings } from '@sida/api'
+import { setSceneBinding } from '@sida/api'
+import { wechatBindGet } from '@sida/api'
 import type { useSettingsState } from './useSettingsState'
 
 export function useSettingsData(state: ReturnType<typeof useSettingsState>) {
@@ -130,7 +130,7 @@ const exportTemplate = async () => {
   try {
     const data = await fetchAPI<TemplatePayload>('/templates/export')
     const date = new Date().toISOString().slice(0, 10)
-    downloadJson(`panwatch-config-${date}.json`, data)
+    downloadJson(`sida-config-${date}.json`, data)
     toast('配置包已导出', 'success')
   } catch (e) {
     toast(e instanceof Error ? e.message : '导出失败', 'error')

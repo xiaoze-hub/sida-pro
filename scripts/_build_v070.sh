@@ -22,8 +22,8 @@ docker build --platform linux/amd64 \
   --build-arg VERSION=v0.7.0 \
   -t xiaoze-hub/stock-intelligent-data-analytics:v0.7.0 \
   -t xiaoze-hub/stock-intelligent-data-analytics:latest \
-  -t panwatch:v0.7.0 \
+  -t sida:v0.7.0 \
   . 2>&1 | tail -30
 echo "BUILD_EXIT=$?"
-docker images | grep -E "v0.7.0|panwatch" | head -5
+docker images | grep -E "v0.7.0|sida" | head -5
 echo BUILD_DONE

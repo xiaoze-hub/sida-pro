@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const fetchAPI = vi.fn()
-vi.mock('@panwatch/api', () => ({ fetchAPI: (...a: unknown[]) => fetchAPI(...a) }))
+vi.mock('@sida/api', () => ({ fetchAPI: (...a: unknown[]) => fetchAPI(...a) }))
 
 import MarketBroadcast, { computeBroadcast } from '@/components/dashboard/MarketBroadcast'
 

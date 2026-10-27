@@ -3,7 +3,7 @@ import { safeFixed, safeNum, safeThousand } from '@/lib/format'
 import { computeEquityAxis } from '@/lib/equity-axis'
 import { ChartEmpty } from '@/components/ChartEmpty'
 import { DrawdownChart, RealizedPnlChart } from '@/components/PnlCharts'
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
 import {
   paperTradingApi,
@@ -14,13 +14,13 @@ import {
   type StrategyPerformanceItem,
   type NotifyChannelItem,
   type MarketView,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Switch } from '@sida/base-ui/components/ui/switch'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@sida/base-ui/components/ui/dialog'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import ErrorBanner from '@/components/ErrorBanner'
-import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
+import { readStockColors, withAlpha } from '@sida/biz-ui/lib/stock-colors'
 
 const EXIT_REASON_MAP: Record<string, string> = {
   stop_loss: '止损',

@@ -31,7 +31,7 @@ const H = vi.hoisted(() => {
   }
 })
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   API_BASE: '/api',
   fetchAPI: vi.fn((url: string) => {
@@ -42,7 +42,7 @@ vi.mock('@panwatch/api', () => ({
   }),
 }))
 
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 
 function bars(n: number, base = 10) {
   return Array.from({ length: n }, (_, i) => ({

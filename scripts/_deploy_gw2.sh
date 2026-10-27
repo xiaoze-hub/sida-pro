@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
+CT=sida
 cp /mnt/c/Users/tianxiang/sida-work/src/web/api/skills_gateway.py /tmp/skills_gateway.py
 docker cp /tmp/skills_gateway.py "$CT:/app/src/web/api/skills_gateway.py"
 docker exec -u root "$CT" chown app:app /app/src/web/api/skills_gateway.py

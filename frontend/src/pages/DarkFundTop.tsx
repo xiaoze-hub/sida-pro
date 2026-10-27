@@ -15,7 +15,7 @@
  *
  * P2 (2026-09-18): i18n + Card 组件 + 窄屏表格转卡片 + 骨架屏
  */
-import { ANPAN, MINGPAN } from '@panwatch/biz-ui'
+import { ANPAN, MINGPAN } from '@sida/biz-ui'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, RefreshCw, TrendingUp } from 'lucide-react'
@@ -25,14 +25,14 @@ import {
   type DarkFundTopResp,
   type DarkFundTopSnapshot,
   type DarkFundTopUnavailable,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Card } from '@panwatch/base-ui/components/ui/card'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Card } from '@sida/base-ui/components/ui/card'
 import { Skeleton } from '@/components/Skeleton'
 import { safeFixed, toAmountFromWan, toAmountFromWanUnsigned } from '@/lib/format'
 import { useI18n } from '@/hooks/useI18n'
 import { navBackState } from '@/lib/nav-back'
-import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
+import CaliberBadge from '@sida/biz-ui/components/CaliberBadge'
 
 function isSnapshot(r: DarkFundTopResp): r is DarkFundTopSnapshot {
   return r.available === true

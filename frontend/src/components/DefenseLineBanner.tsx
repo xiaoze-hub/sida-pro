@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { AlertOctagon, Loader2, ShieldAlert, ShieldPlus } from 'lucide-react'
 import { safeFixed } from '@/lib/format'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from '@panwatch/base-ui/components/ui/dialog'
+} from '@sida/base-ui/components/ui/dialog'
 
 /**
  * 持仓防线击穿与止损预警条 (DefenseLineBanner)

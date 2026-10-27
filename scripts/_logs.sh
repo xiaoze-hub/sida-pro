@@ -1,4 +1,4 @@
 #!/bin/bash
-docker logs panwatch --tail 50 2>&1
+docker logs sida --tail 50 2>&1
 echo "=== ps ==="
-docker ps -a --filter name=panwatch --format "{{.Status}}"
+docker ps -a --filter name=sida --format "{{.Status}}"

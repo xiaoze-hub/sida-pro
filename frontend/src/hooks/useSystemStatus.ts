@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { healthApi, type SelfCheckItem, type SystemStatusSnapshot } from '@panwatch/api'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { healthApi, type SelfCheckItem, type SystemStatusSnapshot } from '@sida/api'
+import { usePausedInterval } from '@sida/base-ui'
 import { emptySystemStatus, readSystemStatusCache, saveSystemStatusCache, withProbeResults } from '@/lib/system-status'
 
 export const SystemStatusContext = createContext<ReturnType<typeof useLocalSystemStatus> | null>(null)

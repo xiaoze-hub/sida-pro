@@ -18,7 +18,7 @@ const { compareMock, driftMock } = vi.hoisted(() => ({
   driftMock: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   caliberCompareApi: { get: compareMock },
   caliberDriftApi: { get: driftMock },
 }))

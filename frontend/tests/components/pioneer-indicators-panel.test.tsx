@@ -12,7 +12,7 @@ const H = vi.hoisted(() => ({
   niuxiong: {} as Record<string, unknown>,
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   API_BASE: '/api',
   fetchAPI: vi.fn((url: string) => {
@@ -24,14 +24,14 @@ vi.mock('@panwatch/api', () => ({
   }),
 }))
 
-vi.mock('@panwatch/biz-ui/components/DecisionPioneerCard', () => ({
+vi.mock('@sida/biz-ui/components/DecisionPioneerCard', () => ({
   default: () => <div data-testid="dpc">dpc</div>,
 }))
-vi.mock('@panwatch/biz-ui/components/ResonanceVerdictPanel', () => ({
+vi.mock('@sida/biz-ui/components/ResonanceVerdictPanel', () => ({
   default: () => <div data-testid="rvp">rvp</div>,
 }))
 
-import DecisionCard from '@panwatch/biz-ui/components/workbench/DecisionCard'
+import DecisionCard from '@sida/biz-ui/components/workbench/DecisionCard'
 
 beforeEach(() => {
   H.calls.length = 0

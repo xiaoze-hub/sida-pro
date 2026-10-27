@@ -21,10 +21,10 @@ import {
   type WarReportResp,
   type WarReportRow,
   type WarReportUnavailable,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Card } from '@panwatch/base-ui/components/ui/card'
-import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Card } from '@sida/base-ui/components/ui/card'
+import CaliberBadge from '@sida/biz-ui/components/CaliberBadge'
 import { Skeleton } from '@/components/Skeleton'
 import { useI18n } from '@/hooks/useI18n'
 import { navBackState } from '@/lib/nav-back'

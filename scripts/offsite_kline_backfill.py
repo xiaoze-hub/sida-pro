@@ -77,7 +77,7 @@ def fetch(sym: str):
 def main() -> int:
     import base64
     qb = base64.b64encode(b"SELECT DISTINCT symbol, market FROM stocks;").decode()
-    inner = (f"echo {qb} | base64 -d | sudo docker exec -i panwatch-postgres "
+    inner = (f"echo {qb} | base64 -d | sudo docker exec -i sida-postgres "
                "psql -U sida -d sida -t -A -F,")
     raw = ssh(wsl_bash(inner))
     syms = [l.split(",") for l in raw.strip().splitlines() if "," in l]
@@ -102,7 +102,7 @@ def main() -> int:
         sql = ("INSERT INTO klines (ts,symbol,market,period,source,open,high,low,close,volume,"
                "quality_flag) VALUES\n" + ",\n".join(vals) +
                "\nON CONFLICT (symbol, market, period, ts, source) DO NOTHING;")
-        ssh(wsl_bash("sudo docker exec -i panwatch-postgres psql -U sida -d sida "
+        ssh(wsl_bash("sudo docker exec -i sida-postgres psql -U sida -d sida "
                        "-v ON_ERROR_STOP=1"),
             stdin=sql.encode())
     print(f"OK date={TARGET_DATE} symbols={len(syms)} rows={len(vals)} skipped={len(skipped)}")

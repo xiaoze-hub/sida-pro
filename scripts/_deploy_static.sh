@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
+CT=sida
 DIST=/root/sida-pro/frontend/dist
 echo "=== static deploy (no restart) ==="
 ls "$DIST/index.html"

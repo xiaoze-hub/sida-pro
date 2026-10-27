@@ -5,7 +5,7 @@ P1: refresh_entry_candidates 幂等 upsert — 二轮刷新后消失的候选标
 P2: 共振加分真正进评分 — 两条评分路径(_score_suggestion/_score_market_scan_candidate)
     从种子 meta 读 resonance_bonus(此前一条路径读错对象、一条路径完全没读)。
 
-使用 9999xx 伪代码隔离真实数据, 测试后清理(防 panwatch.db 污染)。
+使用 9999xx 伪代码隔离真实数据, 测试后清理(防 sida.db 污染)。
 """
 from __future__ import annotations
 

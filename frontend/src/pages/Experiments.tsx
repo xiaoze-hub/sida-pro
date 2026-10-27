@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { safeFixed } from '@/lib/format'
 import { Skeleton } from '@/components/Skeleton'
 

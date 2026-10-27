@@ -6,8 +6,8 @@ import { Link } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
 import { ProductVideo } from '@/components/landing/ProductVideo'
 import { useTheme } from '@/hooks/use-theme'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@panwatch/base-ui/components/ui/tabs'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@sida/base-ui/components/ui/tabs'
 
 const media = '/media/product/'
 const navigation = [{ href: '#overview', label: '产品概览' }, { href: '#workflow', label: '产品功能' }, { href: '#demo', label: '操作演示' }, { href: '#resources', label: '部署与文档' }, { href: '#faq', label: '常见问题' }]

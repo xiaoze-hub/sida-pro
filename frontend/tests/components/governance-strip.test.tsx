@@ -10,11 +10,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 
-// 组件内部走 @panwatch/api 的 fetchAPI, 这里 mock 那一层(url 分发), 不 mock 组件模块
+// 组件内部走 @sida/api 的 fetchAPI, 这里 mock 那一层(url 分发), 不 mock 组件模块
 const api = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', async () => ({
-  ...(await vi.importActual<Record<string, unknown>>('@panwatch/api')),
+vi.mock('@sida/api', async () => ({
+  ...(await vi.importActual<Record<string, unknown>>('@sida/api')),
   ...api,
 }))
 

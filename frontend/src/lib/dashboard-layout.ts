@@ -45,7 +45,7 @@ export const DASHBOARD_GROUP_LABEL: Record<DashboardGroup, string> = {
   workspace: '工作台与次级',
 }
 
-export const DASHBOARD_LAYOUT_KEY = 'panwatch_dashboard_layout_v1'
+export const DASHBOARD_LAYOUT_KEY = 'sida_dashboard_layout_v1'
 
 export interface DashboardLayout {
   /** 全局顺序(渲染时各组取交集并按此排序) */

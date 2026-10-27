@@ -130,7 +130,7 @@ def main():
         print(f"验证: {dest.name} ({size:,} bytes)")
         print()
         print("下一步: 在容器中测试解析")
-        print(f'  docker exec panwatch python -c "')
+        print(f'  docker exec sida python -c "')
         print(f'  from src.core.tdx_tick_parser import parse_tck')
         print(f'  trades, orders, cancels = parse_tck(\'/app/data/tck/{tck_name}\')')
         print(f'  print(f\'成交 {{len(trades)}} 笔, 委托 {{len(orders)}} 笔, 撤单 {{len(cancels)}} 笔\')')

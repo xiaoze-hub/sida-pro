@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ANPAN, GS_SIGNAL, MINGPAN, gsBadge, glossaryTooltip } from '@panwatch/biz-ui'
+import { ANPAN, GS_SIGNAL, MINGPAN, gsBadge, glossaryTooltip } from '@sida/biz-ui'
 
 describe('GS 信号: 机会/风险, 盘中实时', () => {
   it('一句话定义说清是 AI 多因子机会/风险 + 盘中实时', () => {

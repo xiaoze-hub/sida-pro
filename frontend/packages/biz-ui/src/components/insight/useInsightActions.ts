@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { stocksApi } from '@panwatch/api'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { stocksApi } from '@sida/api'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import type { StockInsightModalProps } from './types'
 import { isResourceEnabled, type ResourceKey } from './useInsightData'
 import type { useInsightData } from './useInsightData'
@@ -117,7 +117,7 @@ const handleExportShareImage = useCallback(async () => {
     const png = canvas.toDataURL('image/png')
     const a = document.createElement('a')
     a.href = png
-    a.download = `panwatch-${symbol}-${Date.now()}.png`
+    a.download = `sida-${symbol}-${Date.now()}.png`
     a.click()
     toast('分享图片已生成并下载', 'success')
   } catch {

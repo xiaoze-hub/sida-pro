@@ -16,7 +16,7 @@ const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
 
 // 页面现在还会拉「口径漂移」(B5): 这里给它一个空留痕的稳定返回值,
 // 让原有 4 条断言只针对对照区(漂移区另有专门测试文件)。
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   caliberCompareApi: { get: getMock },
   caliberDriftApi: {
     get: vi.fn().mockResolvedValue({

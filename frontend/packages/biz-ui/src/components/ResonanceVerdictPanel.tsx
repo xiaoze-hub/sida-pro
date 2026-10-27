@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { Sparkles } from 'lucide-react'
 import { safeFixed } from '@/lib/format'
 

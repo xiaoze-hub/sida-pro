@@ -2,10 +2,10 @@
 import os, json, time
 from datetime import datetime, timedelta
 
-# D5(2026-09-09): 原 _detect_panwatch_url(网关探测 + 硬编码网关 IP 兜底)
+# D5(2026-09-09): 原 _detect_sida_url(网关探测 + 硬编码网关 IP 兜底)
 # 与 _load_llm_config 里的 /api/providers/services 回调整体删除 —— 8010 不再
 # 回调 8000 取配置, LLM 配置由 8000 编排方在 /predict 请求体里推送
-# (set_runtime_llm_config), 独立进程兜底本地 ~/.panwatch_forecast.env。
+# (set_runtime_llm_config), 独立进程兜底本地 ~/.sida_forecast.env。
 RUNTIME_LLM_CONFIG: dict = {}
 
 
@@ -20,7 +20,7 @@ def _load_llm_config() -> dict:
     """加载 LLM 情绪打分配置。
 
     优先级: /predict payload 推送(D5, set_runtime_llm_config) > 本地配置
-    (~/.panwatch_forecast.env) > 硬编码兜底(agnes key 文件/环境变量)。
+    (~/.sida_forecast.env) > 硬编码兜底(agnes key 文件/环境变量)。
     """
     import os as _os
     import json as _json
@@ -33,7 +33,7 @@ def _load_llm_config() -> dict:
         return cfg
 
     # 1. 本地配置覆盖
-    env_path = _os.path.expanduser("~/.panwatch_forecast.env")
+    env_path = _os.path.expanduser("~/.sida_forecast.env")
     if _os.path.exists(env_path):
         try:
             for line in open(env_path):

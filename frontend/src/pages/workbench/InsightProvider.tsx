@@ -1,9 +1,9 @@
 import { useMemo, type ReactNode } from 'react'
-import { InsightContext } from '@panwatch/biz-ui/components/insight/context'
-import { useInsightData, type ResourceKey } from '@panwatch/biz-ui/components/insight/useInsightData'
-import { useInsightDerived } from '@panwatch/biz-ui/components/insight/useInsightDerived'
-import { useInsightActions } from '@panwatch/biz-ui/components/insight/useInsightActions'
-import type { StockInsightModalProps } from '@panwatch/biz-ui/components/insight/types'
+import { InsightContext } from '@sida/biz-ui/components/insight/context'
+import { useInsightData, type ResourceKey } from '@sida/biz-ui/components/insight/useInsightData'
+import { useInsightDerived } from '@sida/biz-ui/components/insight/useInsightDerived'
+import { useInsightActions } from '@sida/biz-ui/components/insight/useInsightActions'
+import type { StockInsightModalProps } from '@sida/biz-ui/components/insight/types'
 
 /** 供 Task 11–16 声明「本标签需要哪些端点」时直接 import 的类型。 */
 export type { ResourceKey }

@@ -1,6 +1,6 @@
 import { useInsight } from './context'
-import { SuggestionBadge } from '@panwatch/biz-ui/components/suggestion-badge'
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
+import { SuggestionBadge } from '@sida/biz-ui/components/suggestion-badge'
+import { Switch } from '@sida/base-ui/components/ui/switch'
 
 export function SuggestionsTab() {
   const {

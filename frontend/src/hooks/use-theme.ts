@@ -6,7 +6,7 @@ export type Density = 'compact' | 'normal' | 'comfortable'
 
 type Appearance = { mode: ThemeMode; density: Density; dim: boolean }
 const CHANGE_EVENT = 'sida-appearance-change'
-const KEYS = { mode: 'panwatch-theme', density: 'panwatch-density', dim: 'panwatch-dim' } as const
+const KEYS = { mode: 'sida-theme', density: 'sida-density', dim: 'sida-dim' } as const
 let fallback: Appearance = { mode: 'dark', density: 'normal', dim: false }
 
 function readAppearance(): Appearance {

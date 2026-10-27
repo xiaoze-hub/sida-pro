@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
+CT=sida
 for f in src/web/api/skills_gateway.py server.py; do
   base=$(basename "$f")
   cp "/mnt/c/Users/tianxiang/sida-work/$f" "/tmp/$base"
@@ -19,10 +19,10 @@ while IFS= read -r line; do
   [ -z "$line" ] && continue
   ENVARGS+=("-e" "$line")
 done < /tmp/env_gw2.txt
-docker run -d --name "$CT" --restart=always -p 8000:8000 --network panwatch-net \
-  -v panwatch-data:/app/data -v panwatch-tck:/app/data/tck \
+docker run -d --name "$CT" --restart=always -p 8000:8000 --network sida-net \
+  -v sida-data:/app/data -v sida-tck:/app/data/tck \
   --memory 1500m --memory-swap 1500m --cpus 1.5 \
-  "${ENVARGS[@]}" panwatch:v0.6.8
+  "${ENVARGS[@]}" sida:v0.6.8
 echo "waiting healthy..."
 for i in $(seq 1 40); do
   ST=$(docker inspect --format '{{.State.Health.Status}}' "$CT" 2>/dev/null || echo unknown)

@@ -37,7 +37,7 @@ const H = vi.hoisted(() => {
   return { deferreds, defer, klineProps, sectionsCallsRef: () => sectionsCalls, bumpSections: () => { sectionsCalls += 1 }, resetSections: () => { sectionsCalls = 0 } }
 })
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   fetchAPI: vi.fn(() => Promise.resolve({ klines: [], gs_signals: [], fund_flow: [], events: [], unlock_levels: [], activity_series: [] })),
   tradingAgentsApi: {
@@ -48,7 +48,7 @@ vi.mock('@panwatch/api', () => ({
 }))
 
 // 记录挂载与收到的图层 props(真 KlineChart 会建 lightweight-charts, jsdom 无 canvas)
-vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
+vi.mock('@sida/biz-ui/components/KlineChart', () => ({
   default: (props: { symbol: string; activitySeries?: unknown[]; gsSignals?: unknown[] }) => {
     H.klineProps.push({
       symbol: props.symbol,
@@ -64,7 +64,7 @@ vi.mock('@/hooks/useKlineLayer', () => ({
 }))
 
 // 真 analysis-sections + 计数包装
-vi.mock('@panwatch/biz-ui/analysis-sections', async (orig) => {
+vi.mock('@sida/biz-ui/analysis-sections', async (orig) => {
   const real = (await orig()) as { buildAnalysisSections: (...a: unknown[]) => unknown }
   return {
     buildAnalysisSections: (...a: unknown[]) => { H.bumpSections(); return real.buildAnalysisSections(...a) },

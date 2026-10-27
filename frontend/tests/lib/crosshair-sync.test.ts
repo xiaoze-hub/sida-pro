@@ -4,7 +4,7 @@
  * ③ 卸载必须反注册(否则跨页残留, 新页面一动鼠标就带着上一页的图跑)。
  */
 import { describe, expect, it } from 'vitest'
-import { __subscriberCount, broadcastCrosshair, registerCrosshair } from '@panwatch/biz-ui/lib/crosshair-sync'
+import { __subscriberCount, broadcastCrosshair, registerCrosshair } from '@sida/biz-ui/lib/crosshair-sync'
 
 describe('crosshair-sync', () => {
   it('注册后互相收到广播, 但**跳过自己**', () => {

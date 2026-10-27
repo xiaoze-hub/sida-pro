@@ -20,8 +20,8 @@ const H = vi.hoisted(() => ({
   klineRenders: [] as Array<Record<string, unknown>>,
 }))
 
-vi.mock('@panwatch/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@panwatch/api')>()
+vi.mock('@sida/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@sida/api')>()
   return {
     ...actual,
     fetchAPI: vi.fn(() => Promise.resolve({})),
@@ -45,9 +45,9 @@ vi.mock('@/pages/workbench/tabs/NewsTab', () => ({ default: () => <div data-test
 vi.mock('@/pages/workbench/tabs/ResearchTab', () => ({ default: () => <div data-testid="tab-research" /> }))
 vi.mock('@/pages/workbench/tabs/ForecastTab', () => ({ default: () => <div data-testid="tab-forecast" /> }))
 vi.mock('@/pages/workbench/IndexBody', () => ({ default: () => <div data-testid="index-body" /> }))
-vi.mock('@panwatch/biz-ui/components/workbench/BoardBody', () => ({ default: () => <div data-testid="board-body" /> }))
+vi.mock('@sida/biz-ui/components/workbench/BoardBody', () => ({ default: () => <div data-testid="board-body" /> }))
 
-vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
+vi.mock('@sida/biz-ui/components/KlineChart', () => ({
   default: (props: Record<string, unknown>) => {
     H.klineRenders.push(props)
     // costLines 未传 = 一条成本线都不画(页面在无持仓/未知时**不传**, 禁猜/禁代填)
@@ -55,11 +55,11 @@ vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
   },
 }))
 
-vi.mock('@panwatch/biz-ui/components/workbench/QuickRail', () => ({
+vi.mock('@sida/biz-ui/components/workbench/QuickRail', () => ({
   default: () => <div data-testid="rail" />,
 }))
 
-vi.mock('@panwatch/biz-ui/components/workbench/HeaderBand', () => ({
+vi.mock('@sida/biz-ui/components/workbench/HeaderBand', () => ({
   default: (p: { positionUnknown?: boolean }) => (
     <div data-testid="band1">
       <span data-testid="band1-position-unknown">{`unknown:${String(!!p.positionUnknown)}`}</span>

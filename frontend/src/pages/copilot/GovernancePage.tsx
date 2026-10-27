@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, ShieldAlert } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { Skeleton } from '@/components/Skeleton'
 
 export interface Interception {

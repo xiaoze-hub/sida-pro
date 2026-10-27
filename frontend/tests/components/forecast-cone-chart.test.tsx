@@ -17,17 +17,17 @@ const mocks = vi.hoisted(() => ({
   setOption: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({
     ref: () => {},
     // 预置图表实例: 强制 effect 走 setOption 分支(旧代码的 RangeError 就在这条路径上)
     chartRef: { current: { setOption: mocks.setOption, resize: vi.fn() } },
   }),
 }))
-vi.mock('@panwatch/biz-ui/lib/stock-colors', () => ({
+vi.mock('@sida/biz-ui/lib/stock-colors', () => ({
   readStockColors: () => ({ up: '#ef4444', down: '#22c55e' }),
   withAlpha: (c: string) => c,
 }))

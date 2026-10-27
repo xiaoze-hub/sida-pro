@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
-import { getToken } from '@panwatch/api'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { getToken } from '@sida/api'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 
 import type { useStocksState } from './useStocksState'
 import type { useStocksData } from './useStocksData'

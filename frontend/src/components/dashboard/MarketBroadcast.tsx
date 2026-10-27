@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { safeFixed } from '@/lib/format'
 
 /**

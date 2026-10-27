@@ -5,7 +5,7 @@
 #       作为 Dockerfile.forecast 的基础镜像,避免重复下载 torch (~1GB)
 #
 # 构建: sudo docker build -f Dockerfile.kronos \
-#       -t ghcr.io/xiaoze-hub/panwatch-kronos:base .
+#       -t ghcr.io/xiaoze-hub/sida-kronos:base .
 # 不需要推送(私有 fork 内部依赖),但用户需要本地 build 才能用 forecast 镜像。
 
 FROM python:3.11-slim AS builder
@@ -58,4 +58,4 @@ RUN useradd --uid 10001 --create-home app && chown -R app:app /app
 USER app
 
 # 这个镜像只装环境,不启动服务。CMD 由 forecast Dockerfile 覆盖。
-CMD ["python", "-c", "from model import KronosPredictor; print('panwatch-kronos:base ready')"]
+CMD ["python", "-c", "from model import KronosPredictor; print('sida-kronos:base ready')"]

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useCallback } from 'react'
-import type { AIService } from '@panwatch/api'
+import type { AIService } from '@sida/api'
 import type { Account } from './shared'
 import type { AgentConfig } from './shared'
-import type { KlineSummary } from '@panwatch/biz-ui/components/suggestion-badge'
+import type { KlineSummary } from '@sida/biz-ui/components/suggestion-badge'
 import type { MarketStatus } from './shared'
 import type { NewsItem } from './shared'
-import type { NotifyChannel } from '@panwatch/api'
+import type { NotifyChannel } from '@sida/api'
 import type { PoolSuggestion } from './shared'
 import type { PortfolioSummary } from './shared'
 import type { Position } from './shared'
@@ -17,14 +17,14 @@ import type { SchedulePreview } from './shared'
 import type { Stock } from './shared'
 import type { StockAgentInfo } from './shared'
 import type { StockContextTarget } from '@/components/StockContextMenu'
-import { fetchAPI, normalizeNewsEnvelope } from '@panwatch/api'
+import { fetchAPI, normalizeNewsEnvelope } from '@sida/api'
 import { useQuoteStream, type QuoteTickMap } from '@/realtime/useQuoteStream'
 import { mergePortfolioQuotes } from './shared'
 import { parseServerTime } from '@/lib/utils'
-import { stocksApi } from '@panwatch/api'
+import { stocksApi } from '@sida/api'
 import { useNavigate } from 'react-router-dom'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { useToast } from '@sida/base-ui/components/ui/toast'
+import { usePausedInterval } from '@sida/base-ui'
 import type { useStocksState } from './useStocksState'
 import { logger } from '@/lib/logger'
 import { navBackState } from '@/lib/nav-back'
@@ -164,7 +164,7 @@ const commitPositionReorder = useCallback(async (accountId: number) => {
 
 const isSuppressCardClick = () => {
   try {
-    const until = (window as any).__panwatch_suppress_card_click_until
+    const until = (window as any).__sida_suppress_card_click_until
     return typeof until === 'number' && Date.now() < until
   } catch {
     return false

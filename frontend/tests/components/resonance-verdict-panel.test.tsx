@@ -5,11 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 决策先锋共振判定面板 (2026-09-11): 规则三灯(GET /resonance/symbol) + AI 判定(POST /resonance/analyze)。
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
 
-import ResonanceVerdictPanel from '@panwatch/biz-ui/components/ResonanceVerdictPanel'
+import ResonanceVerdictPanel from '@sida/biz-ui/components/ResonanceVerdictPanel'
 
 const RULE = {
   symbol: '300563',

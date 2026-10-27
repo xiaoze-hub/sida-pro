@@ -71,7 +71,7 @@ def test_diag_forwarded(monkeypatch):
     })
     # stale 走真实时钟会 flaky: 固定它, staleness 另有纯函数单测
     monkeypatch.setattr(api, "_tick_staleness", lambda *a, **k: {"stale": False, "lag_sec": 5})
-    # 活跃源来自环境变量(DARK_SOURCE = PANWATCH_DARK_SOURCE or "tencent_ticks"), 在 CI 里
+    # 活跃源来自环境变量(DARK_SOURCE = SIDA_DARK_SOURCE or "tencent_ticks"), 在 CI 里
     # 可能被设成 thsdk/tdx_tck → diag["source"] 与断言不符(2026-09-18 CI 实测踩到, 本地因默认值
     # 恰好是 tencent_ticks 而通过)。这里**固定**它, 让断言不依赖跑测机器环境。
     import src.core.dark_flow as df_mod
@@ -242,7 +242,7 @@ def test_gray_bypasses_shared_cache(monkeypatch):
     canned = [{"d": "B", "amt": 5.0, "vol": 1.0, "price": 10.0, "t": "10:00:00"}]
     import src.core.dark_l2 as _l2
     monkeypatch.setattr(_l2, "fetch_l2_ticks", lambda code, src: list(canned))
-    # 默认源来自环境变量(PANWATCH_DARK_SOURCE) —— 若跑测机器把默认源设成 thsdk, 下面的 ctx="thsdk"
+    # 默认源来自环境变量(SIDA_DARK_SOURCE) —— 若跑测机器把默认源设成 thsdk, 下面的 ctx="thsdk"
     # 就不再是"灰度(非默认源)"路径, 用例语义会失效。**固定默认源**, 让"灰度"定义不随环境漂移。
     monkeypatch.setattr(_df, "DARK_SOURCE", "tencent_ticks", raising=True)
     tok = _df._DARK_SOURCE_CTX.set("thsdk")

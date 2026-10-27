@@ -7,11 +7,11 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import { Loader2, Plus, Ticket, Copy, Ban, RefreshCw } from 'lucide-react'
-import { fetchAPI, inviteCodesApi, type InviteCodeItem, type InviteCodeUse } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Label } from '@panwatch/base-ui/components/ui/label'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { fetchAPI, inviteCodesApi, type InviteCodeItem, type InviteCodeUse } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Label } from '@sida/base-ui/components/ui/label'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { useApiQuery } from '@/hooks/useApiQuery'
 import { Section, EmptyState } from '@/components/dev/DevPageLayout'
 

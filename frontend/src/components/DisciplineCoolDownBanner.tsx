@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { AlertTriangle, ShieldX } from 'lucide-react'
 import { PHASE_LABEL, type PhaseKey } from '@/lib/market-phase'
 

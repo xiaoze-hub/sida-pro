@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
-import { fmtAmount, fmtPct } from '@panwatch/biz-ui/lib/ladder-format'
+import { fetchAPI } from '@sida/api'
+import { fmtAmount, fmtPct } from '@sida/biz-ui/lib/ladder-format'
 
 /**
  * 个股 hover 预览卡(v0.5.93 工作台③, 老板"模态降级为 hover 预览")。

@@ -6,7 +6,7 @@
  * （`DarkFundTop.tsx` 曾把 `thsdk_dde` 标成 `eastmoney4`）。
  */
 import { describe, expect, it } from 'vitest'
-import { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
+import { caliberOf } from '@sida/biz-ui/components/CaliberBadge'
 
 describe('四档口径识别', () => {
   it('tdx_exday4 归一成自己的口径，不并进 eastmoney4', () => {

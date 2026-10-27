@@ -12,10 +12,10 @@ cd /root/sida-pro
 git pull --rebase origin main
 rm -rf static
 cp -r /mnt/c/Users/tianxiang/sida-work/frontend/dist static
-docker cp static/. panwatch:/app/static/
-docker restart panwatch
+docker cp static/. sida:/app/static/
+docker restart sida
 sleep 20
 curl -s http://localhost:8000/api/version
 echo
-docker inspect --format='{{.State.Health.Status}}' panwatch
+docker inspect --format='{{.State.Health.Status}}' sida
 echo "DONE"

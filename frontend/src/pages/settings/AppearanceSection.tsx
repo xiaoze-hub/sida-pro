@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Monitor, Moon, Sun, ZoomIn } from 'lucide-react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 import { useTheme, type Density } from '@/hooks/use-theme'
 import { AssistantAvatarPicker } from '@/components/AssistantAvatarPicker'
 
@@ -9,7 +9,7 @@ import { AssistantAvatarPicker } from '@/components/AssistantAvatarPicker'
  *
  * 之前这四样**只**能通过命令面板(Cmd/Ctrl+K)改 —— 命令面板对熟手快, 但"设置页里找不到外观"
  * 是新用户的第一反应(而且外观类设置本来就该在设置里有一格)。
- * 这里只是把同一套存储(panwatch-theme / panwatch-density / panwatch-dim / sida_focus-mode)
+ * 这里只是把同一套存储(sida-theme / sida-density / sida-dim / sida_focus-mode)
  * 接到 UI 上 —— 不引入第二套状态源。
  */
 const DENSITY_OPTIONS: { id: Density; label: string; hint: string }[] = [

@@ -8,7 +8,7 @@ docker build --platform linux/amd64 \
   --build-arg VERSION=v0.6.6 \
   -t xiaoze-hub/stock-intelligent-data-analytics:v0.6.6 \
   -t xiaoze-hub/stock-intelligent-data-analytics:latest \
-  -t panwatch:v0.6.6 \
+  -t sida:v0.6.6 \
   . >> /tmp/build_v066.log 2>&1
 echo "DOCKER_BUILD_EXIT=$?" | tee -a /tmp/build_v066.log
 docker images | grep -E "v0.6.6" | tee -a /tmp/build_v066.log

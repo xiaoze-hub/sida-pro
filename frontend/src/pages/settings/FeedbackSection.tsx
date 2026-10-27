@@ -1,5 +1,5 @@
 import { BarChart3 } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { useSettings } from './context'
 
 export function FeedbackSection() {

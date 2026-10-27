@@ -249,8 +249,8 @@ async def _extract_ws_token(websocket) -> tuple[str, str]:
     if swp:
         parts = [p.strip() for p in swp.split(",") if p.strip()]
         for i, p in enumerate(parts):
-            if p == "panwatch.auth.bearer" and i + 1 < len(parts):
-                return parts[i + 1], ("panwatch.auth.bearer" if "panwatch.auth.bearer" in parts else parts[0])
+            if p == "sida.auth.bearer" and i + 1 < len(parts):
+                return parts[i + 1], ("sida.auth.bearer" if "sida.auth.bearer" in parts else parts[0])
         # 没有标记 → 整串当 token
         if parts:
             return parts[-1], parts[0]
@@ -266,10 +266,10 @@ async def websocket_quote_handler(websocket):
     前端连 ws://host/api/quotes/ws?token=<jwt>。
 
     P1-11 (2026-08-23 审计): 保留 ?token= 向后兼容(桌面 App 依赖), 同时推荐
-    `Sec-WebSocket-Protocol: panwatch.auth.bearer, <jwt>` 方式携带 token
+    `Sec-WebSocket-Protocol: sida.auth.bearer, <jwt>` 方式携带 token
     (避免 nginx/access log 记录 JWT)。优先级: Sec-WebSocket-Protocol > ?token=。
     客户端示例:
-        new WebSocket(url, ["panwatch.auth.bearer", "<jwt>"])  // 推荐
+        new WebSocket(url, ["sida.auth.bearer", "<jwt>"])  // 推荐
         new WebSocket(`${url}?token=${jwt}`)                    // 兼容旧客户端
     """
     token = ""

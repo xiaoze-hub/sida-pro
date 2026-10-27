@@ -11223,7 +11223,7 @@
           "dashboard"
         ],
         "summary": "Get Brief",
-        "description": "盘前/盘后 AI 简报(复用 premarket_outlook / daily_report agent 的最新报告)。\n\nS5(2026-08-26): 仅返回本人报告 + user_id=NULL 共享行, 跨账号不可见。\npremarket 类型: PanWatch 自己的报告缺失时,回退读 Hermes 盘前产物\n(挂载 /app/data/premarket-reports/<日期>/premarket.txt),并解析股票标的\n(格式: 名称(6位代码))供前端快捷加自选。",
+        "description": "盘前/盘后 AI 简报(复用 premarket_outlook / daily_report agent 的最新报告)。\n\nS5(2026-08-26): 仅返回本人报告 + user_id=NULL 共享行, 跨账号不可见。\npremarket 类型: SIDA 自己的报告缺失时,回退读 Hermes 盘前产物\n(挂载 /app/data/premarket-reports/<日期>/premarket.txt),并解析股票标的\n(格式: 名称(6位代码))供前端快捷加自选。",
         "operationId": "get_brief_api_dashboard_brief_get",
         "security": [
           {
@@ -12093,7 +12093,7 @@
           "forecast"
         ],
         "summary": "Forecast Report Push",
-        "description": "推送报告到企微(经 Hermes webhook 中转)。\n\n推送前调 PanWatch 已配置的资金流数据源(marketdata/tdx/wudao)拿准确的\n东财口径主力净流入, 注入 payload.capital_flow, 供 8010 拼报告使用。",
+        "description": "推送报告到企微(经 Hermes webhook 中转)。\n\n推送前调 SIDA 已配置的资金流数据源(marketdata/tdx/wudao)拿准确的\n东财口径主力净流入, 注入 payload.capital_flow, 供 8010 拼报告使用。",
         "operationId": "forecast_report_push_api_forecast_report_push_post",
         "requestBody": {
           "content": {

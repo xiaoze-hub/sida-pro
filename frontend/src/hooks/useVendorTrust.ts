@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { datasourcesApi, type VendorTrustItem } from '@panwatch/api'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { datasourcesApi, type VendorTrustItem } from '@sida/api'
+import { usePausedInterval } from '@sida/base-ui'
 
 /**
  * vendor 质量分订阅 (C1, 2026-09-10): 默认 60s 轮询 /datasources/trust。

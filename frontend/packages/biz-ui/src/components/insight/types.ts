@@ -1,5 +1,5 @@
-import type { KlineSummary } from '@panwatch/biz-ui/components/suggestion-badge'
-import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
+import type { KlineSummary } from '@sida/biz-ui/components/suggestion-badge'
+import type { MainIntentStructured } from '@sida/biz-ui/lib/main-intent-types'
 
 export interface StockInsightModalProps {
   open: boolean

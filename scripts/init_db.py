@@ -10,7 +10,7 @@
   5. 跑完打印 pending=0 即视为 OK
 
 用法:
-  python scripts/init_db.py              # 默认连 SQLite ./data/panwatch.db
+  python scripts/init_db.py              # 默认连 SQLite ./data/sida.db
   SIDA_DB_URL=postgresql+psycopg2://... python scripts/init_db.py
   python scripts/init_db.py --print-db   # 只打印当前 DB URL, 不动
 

@@ -1,10 +1,10 @@
 #!/bin/bash
 # v0.6.5 覆盖层部署 runbook (照 v0.5.x 既定路径)
-# 本机 WSL = 生产; 容器 panwatch
+# 本机 WSL = 生产; 容器 sida
 set -euo pipefail
 REPO=/root/sida-pro
 VER=v0.6.5
-CT=panwatch
+CT=sida
 BAK=/root/app_backup_pre_v065_$(date +%Y%m%d_%H%M%S).tar.gz
 OVERLAY=/root/overlay_v065.tar
 

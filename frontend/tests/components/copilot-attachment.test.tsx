@@ -14,7 +14,7 @@ const apiMock = vi.hoisted(() => ({
   createConversation: vi.fn().mockResolvedValue({ id: 7 }),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   chatApi: apiMock,
 }))
 

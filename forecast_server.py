@@ -7,7 +7,7 @@
 - forecast_lib/forecast_sentiment.py 情绪面(LLM+公告+板块)
 - forecast_lib/forecast_utils.py     工具(任务/推荐)
 
-启动: python3 forecast_server.py (systemd: panwatch-forecast)
+启动: python3 forecast_server.py (systemd: sida-forecast)
 """
 import os
 import sys
@@ -77,7 +77,7 @@ def _get_owner_shadow_profile() -> dict | None:
     任何失败返回 None —— 裁判按无画像运行, 不阻断预测主流程。
     """
     try:
-        from panwatch_client import request_json
+        from sida_client import request_json
         resp = request_json("/api/shadow/profile", timeout=10)
     except Exception as exc:
         logger.warning("获取用户画像失败(裁判按无画像运行): %s", exc)
@@ -170,7 +170,7 @@ def predict(symbol: str, days: int = 5, task_id: str = "", target_date: str = ""
 def predict_post(body: dict):
     """D5(2026-09-09) 编排入口: 8000 经 POST body 推送预测参数与情绪 LLM 配置,
     8010 不再自行回调 8000 取配置(GET /predict 保留给 systemd/手动调用,
-    其 LLM 配置走本地 ~/.panwatch_forecast.env 兜底)。
+    其 LLM 配置走本地 ~/.sida_forecast.env 兜底)。
 
     body: {symbol, days, task_id, target_date, force, llm_config:{base_url,model,api_key}}
     """
@@ -324,9 +324,9 @@ def _do_predict(symbol: str, days: int = 5, task_id: str = "", target_date: str 
     _log(tid, "情绪打分已停用(2026-08-13 用户决策: AI 裁判接管消息面/情绪判断), adjustment_pct=0")
 
     # 主力资金面(东财口径, 经 SIDA 8000 tdx 接口)
-    _log(tid, "拉取主力资金流(panwatch-tdx)...")
+    _log(tid, "拉取主力资金流(sida-tdx)...")
     try:
-        from panwatch_bridge import fetch_capital_flow
+        from sida_bridge import fetch_capital_flow
         capital_flow = fetch_capital_flow(symbol, days=5)
         if capital_flow:
             _log(tid, f"资金面: {[r['date']+':'+str(round(r['main_net']/1e8,2))+'亿' for r in capital_flow]}")
@@ -902,7 +902,7 @@ def forecast_models():
     """预测引擎模型清单(设置页展示)。"""
     cfg = _load_llm_config()
     kronos_root = os.path.expanduser("~/Kronos")
-    env_path = os.path.expanduser("~/.panwatch_forecast.env")
+    env_path = os.path.expanduser("~/.sida_forecast.env")
 
     return {
         "models": [
@@ -1158,7 +1158,7 @@ def _push_to_wecom_via_hermes(text: str, event_type: str = "forecast_report") ->
     """通过 Hermes webhook 中转推送文本到企微。
 
     容器内访问 172.17.0.1:8644 (localhost 指容器自己)。
-    secret 从 /hermes/webhook_subscriptions.json 的 panwatch-notify.secret 读取。
+    secret 从 /hermes/webhook_subscriptions.json 的 sida-notify.secret 读取。
     wecom adapter 期望 payload 含 title + body 字段。
     返回 {"ok": bool, "message": str}。
     """
@@ -1175,13 +1175,13 @@ def _push_to_wecom_via_hermes(text: str, event_type: str = "forecast_report") ->
         try:
             with open(cand) as f:
                 subs = _json.load(f)
-            secret = (subs.get("panwatch-notify") or {}).get("secret", "")
+            secret = (subs.get("sida-notify") or {}).get("secret", "")
             if secret:
                 break
         except Exception:
             continue
     if not secret:
-        return {"ok": False, "message": "未找到 panwatch-notify webhook secret"}
+        return {"ok": False, "message": "未找到 sida-notify webhook secret"}
 
     # 拆 text 为 title(首行) + body(剩余)
     _lines = (text or "").split("\n", 1)
@@ -1195,7 +1195,7 @@ def _push_to_wecom_via_hermes(text: str, event_type: str = "forecast_report") ->
     }, ensure_ascii=False)
     sig = "sha256=" + hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
-    url = "http://172.17.0.1:8644/webhooks/panwatch-notify"
+    url = "http://172.17.0.1:8644/webhooks/sida-notify"
     try:
         import urllib.request
         req = urllib.request.Request(

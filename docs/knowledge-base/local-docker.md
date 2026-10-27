@@ -15,7 +15,7 @@
 
 登录使用仓库现有 `.env` 的 `AUTH_USERNAME` / `AUTH_PASSWORD`。新环境在独立数据库中初始化该账号，不继承旧数据库的会话、持仓和用户。密码、JWT 和接口 Key 不写入本手册。
 
-原有 `panwatch`、`panwatch-postgres`、`panwatch-redis` 保持停用，旧容器与旧数据卷保留。本地新栈不复用它们，避免新版本迁移改变旧运行数据。
+原有 `sida`、`sida-postgres`、`sida-redis` 保持停用，旧容器与旧数据卷保留。本地新栈不复用它们，避免新版本迁移改变旧运行数据。
 
 ## 首次启动
 
@@ -101,4 +101,4 @@ PY
 
 新 PG 启动时发现两处 `BOOLEAN DEFAULT 0` 导致建表失败，已在 `d774ae01` 改为 SQLAlchemy `false()`。独立测试容器执行 `test_schema_boolean_defaults.py` 与 `test_admin_user_console.py`，9 项通过；真实全新 PG 随后完成启动。此验证未运行全量测试。
 
-镜像清理先确认替换服务健康，只删除没有被任何容器引用的旧 PanWatch/临时验证镜像；保留被停用容器引用的镜像、所有数据卷和共享构建缓存。
+镜像清理先确认替换服务健康，只删除没有被任何容器引用的旧 SIDA/临时验证镜像；保留被停用容器引用的镜像、所有数据卷和共享构建缓存。

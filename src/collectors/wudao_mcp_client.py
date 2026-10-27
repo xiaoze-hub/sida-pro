@@ -46,11 +46,11 @@ class WudaoMCPClient:
 
     @staticmethod
     def _sqlite_token() -> str:
-        """兜底: 老 sqlite 部署读 `/app/data/panwatch.db`(PG 部署下本函数通常返回 '')。"""
+        """兜底: 老 sqlite 部署读 `/app/data/sida.db`(PG 部署下本函数通常返回 '')。"""
         import os
         import sqlite3
 
-        db_path = os.getenv("PANWATCH_DB", "/app/data/panwatch.db")
+        db_path = os.getenv("SIDA_DB", "/app/data/sida.db")
         try:
             if not os.path.exists(db_path):
                 return ""
@@ -71,7 +71,7 @@ class WudaoMCPClient:
         """设置页 DB(app_settings.wudao_mcp_token) > env。改 key 立即生效,无需重建容器。
 
         M8(2026-09-10): **改走应用的规范库**(`src.db.session`, 即 PG) —— 原先直读
-        sqlite `/app/data/panwatch.db`, 而应用早已跑 PG: 设置页改 token 后代码读到的
+        sqlite `/app/data/sida.db`, 而应用早已跑 PG: 设置页改 token 后代码读到的
         仍是旧 sqlite 值 → "改 key 不生效"(会挡住买套餐后换 token)。sqlite 仅作兜底。
 
         支持多 token 池化: DB 值若为逗号分隔多个 token, 按模块级轮换索引依次返回(多 key 分摊额度)。
@@ -125,7 +125,7 @@ class WudaoMCPClient:
             "params": {
                 "protocolVersion": _PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "panwatch-wudao", "version": "1.0"},
+                "clientInfo": {"name": "sida-wudao", "version": "1.0"},
             },
         }
         # initialize 1 次重试(网络抖动兜底)

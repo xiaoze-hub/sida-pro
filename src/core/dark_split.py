@@ -308,12 +308,12 @@ def ming_net_from_big_orders(ticks: Iterable[dict]) -> dict:
 # .tck 委托号级暗盘还原(2026-09-01, Hermes 0831 口径)
 # ---------------------------------------------------------------------------
 def find_tck_file(symbol: str, date_: str | None = None) -> str | None:
-    """在 PANWATCH_TCK_DIR 下按代码(可选日期)找 .tck 文件。
+    """在 SIDA_TCK_DIR 下按代码(可选日期)找 .tck 文件。
 
     约定文件名包含 6 位代码; 传了 date_ 则再要求包含该日期(支持 `2026-08-31`
     与 `20260831` 两种写法)。目录未配置或文件不存在 → None(调用方显式"无数据")。
     """
-    base = (os.environ.get("PANWATCH_TCK_DIR") or "").strip()
+    base = (os.environ.get("SIDA_TCK_DIR") or "").strip()
     if not base or not os.path.isdir(base):
         return None
     code = (symbol or "").strip()

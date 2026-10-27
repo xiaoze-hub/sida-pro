@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import {
   insightApi,
   stocksApi,
@@ -8,14 +8,14 @@ import {
   type FundamentalsDetail,
   type DeepAnalysisResult,
   type HistoryComparisonResponse,
-} from '@panwatch/api'
+} from '@sida/api'
 import { useLocalStorage } from '@/lib/utils'
 import { useNavigate } from 'react-router-dom'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
-import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
-import type { KlineSummary, SuggestionInfo } from '@panwatch/biz-ui/components/suggestion-badge'
+import { useToast } from '@sida/base-ui/components/ui/toast'
+import type { MainIntentStructured } from '@sida/biz-ui/lib/main-intent-types'
+import type { KlineSummary, SuggestionInfo } from '@sida/biz-ui/components/suggestion-badge'
 
-/** KI-045: 本地归一(不依赖 @panwatch/api mock 面) —— 信封 `{items,degraded,note}` 或旧裸 list。 */
+/** KI-045: 本地归一(不依赖 @sida/api mock 面) —— 信封 `{items,degraded,note}` 或旧裸 list。 */
 function normalizeNewsEnvelopeLocal<T = unknown>(raw: unknown): { items: T[]; degraded: boolean; note: string | null } {
   if (Array.isArray(raw)) return { items: raw as T[], degraded: false, note: null }
   if (raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown }).items)) {

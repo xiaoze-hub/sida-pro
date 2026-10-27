@@ -19,7 +19,7 @@ const apiMock = vi.hoisted(() => ({
   createConversation: vi.fn().mockResolvedValue({ id: 11 }),
 }))
 
-vi.mock('@panwatch/api', () => ({ chatApi: apiMock }))
+vi.mock('@sida/api', () => ({ chatApi: apiMock }))
 vi.mock('../../src/lib/copilot/api', () => ({
   getCopilotMetrics: vi.fn(async () => ({ days: 7, runs: 0, ok_rate: null, avg_tools: null, p95_elapsed_ms: null, by_recipe: [] })),
   getPendingActions: vi.fn(async () => []),

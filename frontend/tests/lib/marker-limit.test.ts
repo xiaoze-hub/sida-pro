@@ -5,7 +5,7 @@
  * 这里锁死两件事：①只留最近 N 个；②返回仍**升序**（markers 同样要求时间有序）。
  */
 import { describe, expect, it } from 'vitest'
-import { latestMarkers } from '@panwatch/biz-ui/lib/marker-limit'
+import { latestMarkers } from '@sida/biz-ui/lib/marker-limit'
 
 const m = (time: number, text = String(time)) => ({ time: time as never, text })
 

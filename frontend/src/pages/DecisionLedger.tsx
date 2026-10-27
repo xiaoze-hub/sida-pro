@@ -11,8 +11,8 @@ import {
   type SignalHitRateResponse,
   type DecisionThresholdItem,
   type WatchlistSignalQualityResponse,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 import ErrorState from '@/components/ErrorState'
 import { StockLabel } from '@/components/StockLabel'
 import {

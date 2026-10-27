@@ -10,7 +10,7 @@
  * 口径：`limit` 固定 50（后端夹 1..200；设计文档 §8）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import type { ProposalAction, ProposalRow, ProposalStats, ProposalTab } from '@/lib/copilot/proposals'
 
 /** 面板固定取 50 条（设计文档 §8）。 */

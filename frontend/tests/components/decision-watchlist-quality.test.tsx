@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   watchlistQuality: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   decisionsApi: {
     stats: (...a: unknown[]) => mocks.stats(...a),
     log: (...a: unknown[]) => mocks.log(...a),

@@ -1,4 +1,4 @@
-# SIDA-Pro 项目结构地图（2026-09-09 修订, 原 PanWatch; B3/3.4 口径红线修订版）
+# SIDA-Pro 项目结构地图（2026-09-09 修订, 原 SIDA; B3/3.4 口径红线修订版）
 
 > 基线: 本仓 c28f9a0（W3.4/B3 口径红线修订时点, 对应发版 v0.5.21）
 > 对象: 本仓全仓（部署拓扑 / 目录结构 / 关键数据链路）
@@ -6,17 +6,17 @@
 
 ## 部署拓扑
 - **8000** = FastAPI 主后端，跑在 **Docker 容器**内（镜像 `ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest`）
-  - 容器挂载：`/home/ubuntu/.hermes:/hermes`(ro)、`panwatch_data:/app/data`
-  - **没有挂载 `/tmp/PanWatch:/app`** → 改 8000 代码需 `docker cp` 进容器 + 重启，或重建镜像。直接改 `/tmp/PanWatch` 副本**不生效**
+  - 容器挂载：`/home/ubuntu/.hermes:/hermes`(ro)、`sida_data:/app/data`
+  - **没有挂载 `/tmp/SIDA:/app`** → 改 8000 代码需 `docker cp` 进容器 + 重启，或重建镜像。直接改 `/tmp/SIDA` 副本**不生效**
   - 容器内装了 `marketdata` 包（数据源抽象层），宿主机没有
 - **8010** = 独立预测引擎，跑在**宿主机**（`/home/ubuntu/forecast_server.py` + `/home/ubuntu/forecast_lib/`），systemd 自启（hermes venv）
-  - 宿主机**没有 marketdata 包** → 调不到 PanWatch 数据源，只能走 HTTP 调 8000
-- **前端** = React 18 + TS，源码 `/tmp/PanWatch/frontend`，构建产物 `dist/`（容器内只有 build 产物）
+  - 宿主机**没有 marketdata 包** → 调不到 SIDA 数据源，只能走 HTTP 调 8000
+- **前端** = React 18 + TS，源码 `/tmp/SIDA/frontend`，构建产物 `dist/`（容器内只有 build 产物）
 - 代理层：8000 `src/web/api/forecast.py` 用 `FORECAST_ENGINE_URL` 转发到 8010
 
 ## 核心目录
 ```
-PanWatch/
+SIDA/
 ├── server.py              # 8000 入口 (FastAPI)
 ├── forecast_server.py     # 8010 入口 (预测引擎, 我主要改的)
 ├── packages/marketdata/   # ★ 数据源抽象层 (vendor: tdx/eastmoney/sina/tencent/ftshare/zhitu/northbound...)
@@ -27,8 +27,8 @@ PanWatch/
 │   ├── models/            # MarketCode / 数据库模型
 │   └── agents/            # TradingAgents 多 Agent
 ├── strategies/
-│   └── panwatch_strategies.yaml  # 策略目录(含"资金热度(短线)"等)
-├── forecast_lib/          # 8010 预测库 (forecast_traces/forecast_reports/forecast_utils/panwatch_bridge)
+│   └── sida_strategies.yaml  # 策略目录(含"资金热度(短线)"等)
+├── forecast_lib/          # 8010 预测库 (forecast_traces/forecast_reports/forecast_utils/sida_bridge)
 └── frontend/
 ```
 
@@ -57,17 +57,17 @@ vendors 里 `capital_flow.py` 调东财 `push2his.eastmoney.com/api/qt/stock/ffl
 - `src/web/api/klines.py` / `quotes.py` / `news.py` — 行情/新闻直出
 
 ## 我的改动在架构里的位置
-- `forecast_lib/panwatch_bridge.py` — 8010 经 8000 `/api/tdx/ask`（问小达）拿资金流
+- `forecast_lib/sida_bridge.py` — 8010 经 8000 `/api/tdx/ask`（问小达）拿资金流
   → **野路子**：应优先改成调 8000 规范化端点（discovery 的热点板块等）。
   ⚠️ **口径红线（B3/3.4 修订）**：8010 取资金面应走 `get_main_intent`（逐笔口径，
   可用于方向性判断）；`get_capital_flow` 仅作东财四档资金面参考，**禁止**用于
   主力意图判定（AGENTS.md "SIDA 业务硬约束" 口径条目）。
-- `forecast_server.py` predict 流程 — 调 panwatch_bridge 拿东财口径资金流（已撤掉错的 zhitu）
+- `forecast_server.py` predict 流程 — 调 sida_bridge 拿东财口径资金流（已撤掉错的 zhitu）
 - `forecast_lib/forecast_reports.py` `generate_wecom_report` — 企微版加资金面段（东财口径）
 - `forecast_lib/forecast_utils.py` `calc_capital_score` / `build_recommendation` — 资金面参与权重+策略
 
 ## 待办/可扩展（你提到的"tdx 入口能拿很多数据"）
-1. panwatch_bridge 改用 8000 规范化端点（discovery/chat）而非 tdx ask 自然语言
+1. sida_bridge 改用 8000 规范化端点（discovery/chat）而非 tdx ask 自然语言
 2. 资金面之外：把 marketdata 的 `dragon_tiger`(龙虎榜/游资)、`northbound`(北向)、`hot_boards`(板块) 接进 8010 预测特征
 3. 考虑 8010 预测 vs 8000 策略引擎（strategy_engine + YAML）的关系：是否打通/避免重复
 4. 铁律：改 8000 容器代码 = docker cp + 重启；不改 marketdata/tdx 底层逻辑，只复用已有接口

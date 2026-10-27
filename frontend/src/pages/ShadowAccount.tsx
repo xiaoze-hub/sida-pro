@@ -1,8 +1,8 @@
 import PageHeader from '@/components/PageHeader'
 import { useState, useEffect } from 'react'
 import { Upload, FileText, Download, TrendingUp, Activity, Target, Shield, AlertTriangle, CheckCircle2, Loader2, RefreshCw, UserRound } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { fetchAPI } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { formatDateTime } from '@/lib/utils'
 
 /**
@@ -14,7 +14,7 @@ function marketCn(list?: string[] | null): string {
   const names = (list || []).map((m) => MARKET_CN[String(m).toUpperCase()] || m)
   return names.join('、') || '--'
 }
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 
 /** §6.2: /api/shadow/trades 的成交明细(落库版, 上限见后端 MAX_STORED_TRADES) */
 interface ShadowTrade {

@@ -1,12 +1,12 @@
 #!/bin/bash
-docker exec -u root panwatch chown -R app:app /app/src /app/server.py /app/static /app/packages 2>/dev/null || true
-docker exec -u app panwatch python -m compileall -q /app/src /app/server.py
-docker restart panwatch
+docker exec -u root sida chown -R app:app /app/src /app/server.py /app/static /app/packages 2>/dev/null || true
+docker exec -u app sida python -m compileall -q /app/src /app/server.py
+docker restart sida
 sleep 25
-docker logs panwatch --tail 25 2>&1
-docker inspect panwatch --format '{{.State.Health.Status}}'
+docker logs sida --tail 25 2>&1
+docker inspect sida --format '{{.State.Health.Status}}'
 for i in $(seq 1 20); do
-  ST=$(docker inspect --format '{{.State.Health.Status}}' panwatch 2>/dev/null || echo unknown)
+  ST=$(docker inspect --format '{{.State.Health.Status}}' sida 2>/dev/null || echo unknown)
   echo "[$i] $ST"
   [ "$ST" = "healthy" ] && break
   sleep 5

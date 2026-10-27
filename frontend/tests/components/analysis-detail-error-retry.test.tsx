@@ -35,7 +35,7 @@ const RESULT = {
   timestamp: '2026-08-06',
 }
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   fetchAPI: vi.fn(() => Promise.resolve({ klines: [], gs_signals: [], fund_flow: [], events: [], unlock_levels: [], activity_series: [] })),
   tradingAgentsApi: {
@@ -52,7 +52,7 @@ vi.mock('@panwatch/api', () => ({
   },
 }))
 
-vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({ default: () => <div data-testid="kline-stub" /> }))
+vi.mock('@sida/biz-ui/components/KlineChart', () => ({ default: () => <div data-testid="kline-stub" /> }))
 vi.mock('@/hooks/useKlineLayer', () => ({
   useKlineLayer: () => ({ gsSignals: [], fundFlow: [], events: [], supportPressure: [], activitySeries: [], loaded: true }),
 }))

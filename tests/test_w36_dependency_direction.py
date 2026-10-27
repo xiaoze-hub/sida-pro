@@ -4,7 +4,7 @@
 服务, 依赖必须单向 8000→8010; 8010 侧不得再"探测网关/回调拉配置"。本文件
 用源码扫描把方向约束固化成 CI 门禁(权威依赖图见 docs/dependency_direction.md):
 
-  1. forecast_lib/ 禁止出现旧环境变量名 PANWATCH_URL(已更名 SIDA_MAIN_API_URL);
+  1. forecast_lib/ 禁止出现旧环境变量名 SIDA_URL(已更名 SIDA_MAIN_API_URL);
   2. forecast_lib/ 禁止硬编码网关 IP 兜底(172.17.0.1/172.18.0.1/10.8.0.1);
   3. forecast_lib/ 禁止内联硬编码调 8000 拉配置;
   4. forecast_lib/ 与 forecast_server.py 禁止 import src.*; src/ 禁止
@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FORECAST_LIB = ROOT / "forecast_lib"
 
-_BANNED_LEGACY_ENV = re.compile(r"PANWATCH_URL")
+_BANNED_LEGACY_ENV = re.compile(r"SIDA_URL")
 _BANNED_GATEWAY_IP = re.compile(r"172\.17\.0\.1|172\.18\.0\.1|10\.8\.0\.1")
 _BANNED_INLINE_8000 = re.compile(r"""requests\.get\(\s*f?["']http://[^"']*8000""")
 _BANNED_SRC_IMPORT = re.compile(r"^\s*(?:from|import)\s+src\b", re.MULTILINE)
@@ -35,7 +35,7 @@ def _hits(files: list[Path], pattern: re.Pattern) -> list[str]:
     return [p.name for p in files if pattern.search(p.read_text(encoding="utf-8"))]
 
 
-def test_forecast_lib_no_legacy_panwatch_env():
+def test_forecast_lib_no_legacy_sida_env():
     files = _py_files(FORECAST_LIB)
     assert _hits(files, _BANNED_LEGACY_ENV) == [], (
         "forecast_lib 禁止出现旧环境变量名(已更名 SIDA_MAIN_API_URL, D5)"
@@ -45,7 +45,7 @@ def test_forecast_lib_no_legacy_panwatch_env():
 def test_forecast_lib_no_gateway_ip_fallback():
     files = _py_files(FORECAST_LIB)
     assert _hits(files, _BANNED_GATEWAY_IP) == [], (
-        "forecast_lib 禁止硬编码网关 IP 探测兜底(D5 已删 _detect_panwatch_url)"
+        "forecast_lib 禁止硬编码网关 IP 探测兜底(D5 已删 _detect_sida_url)"
     )
 
 
@@ -87,7 +87,7 @@ def test_dde_endpoint_unique():
 def test_compose_forecast_env_renamed():
     text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "SIDA_MAIN_API_URL" in text, "compose 预测引擎主服务地址须用新名 SIDA_MAIN_API_URL"
-    assert "PANWATCH_URL=" not in text, "compose 禁止再出现旧环境变量名 PANWATCH_URL=（D5）"
+    assert "SIDA_URL=" not in text, "compose 禁止再出现旧环境变量名 SIDA_URL=（D5）"
 
 
 def test_dependency_direction_doc_exists():

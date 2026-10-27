@@ -12,7 +12,7 @@
  */
 import { useEffect, useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 export interface RunGovernance {
   run_id: string

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@sida/base-ui/components/ui/dialog'
 
 /** 用户主动打开的上下文详情；正文独立滚动，关闭后回到原触发控件。 */
 export function SidePanel({ open, onOpenChange, title, description, children, footer }: {

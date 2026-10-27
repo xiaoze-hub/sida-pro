@@ -64,11 +64,11 @@ Hermes：全量审查完成。代码获取无受限——本机 SSH deploy key �
 现象：东财/网关路径 `/100.0` 存成小数（12.34%→0.1234），腾讯路径原样透传整数（12→12%）。消费端 get_capital_flow_summary(283-295) 按 >10/>5 百分数阈值判断——走东财源时任何真实占比都判成"小幅流入/流出"，影响 AI/策略提示语。
 修复：统一百分数口径并在 types.CapitalFlow 注明单位。
 
-**P1-14【deploy/deploy_panwatch.sh:21,156-171；docker-compose.yml:102,107-119】部署配置与宣称拓扑三方脱节（ACR/PG/Redis 三条链路生产是摆设）**
-现象：①deploy 脚本和 compose 写死 ghcr 镜像，CI 推的 ACR 镜像（build-push-acr.yml:67-68）全仓无任何引用——"ACR→小主机拉镜像"无落地物；②全仓只有 database.py:22 读 SIDA_DB_URL，compose/deploy/.env.example 均未设置且无 PG 服务 → 生产实际静默跑 SQLite，hypertable 链路是死路径（失败被 except 吞成 debug）；③手工 docker run 的 panwatch 不在 panwatch-net、未传 REDIS_URL → biz_cache 连 localhost:6379 恒失败，Redis L2/限流/调度选主静默降级，prometheus.yml 抓 panwatch:8000 恒失败。
-修复：deploy 改 ACR 地址；compose 加 PG 并设 SIDA_DB_URL；panwatch 入网并注入 REDIS_URL。
+**P1-14【deploy/deploy_sida.sh:21,156-171；docker-compose.yml:102,107-119】部署配置与宣称拓扑三方脱节（ACR/PG/Redis 三条链路生产是摆设）**
+现象：①deploy 脚本和 compose 写死 ghcr 镜像，CI 推的 ACR 镜像（build-push-acr.yml:67-68）全仓无任何引用——"ACR→小主机拉镜像"无落地物；②全仓只有 database.py:22 读 SIDA_DB_URL，compose/deploy/.env.example 均未设置且无 PG 服务 → 生产实际静默跑 SQLite，hypertable 链路是死路径（失败被 except 吞成 debug）；③手工 docker run 的 sida 不在 sida-net、未传 REDIS_URL → biz_cache 连 localhost:6379 恒失败，Redis L2/限流/调度选主静默降级，prometheus.yml 抓 sida:8000 恒失败。
+修复：deploy 改 ACR 地址；compose 加 PG 并设 SIDA_DB_URL；sida 入网并注入 REDIS_URL。
 
-**P1-15【deploy/deploy_panwatch.sh:148-155；.env.example:27；server.py:688-690；src/core/dark_l2.py:8】真实密钥硬编码入库**
+**P1-15【deploy/deploy_sida.sh:148-155；.env.example:27；server.py:688-690；src/core/dark_l2.py:8】真实密钥硬编码入库**
 现象：ALPHAVANTAGE_KEYS/TWELVEDATA_KEYS 真实 key 作为脚本默认值；.env.example 提交真实智兔 ZHITU_TOKEN UUID；server.py:688-690 DATA_SOURCE_SEEDS 明文智兔 api_keys 两枚；dark_l2.py:8 写入正式账户 ID mx_8lj4le6qd（docs 自定"禁提交仓库"）。
 修复：默认值清空 fail-fast、.env.example 换占位符、源码删 ID；已泄露 key 全部轮换。
 
@@ -105,7 +105,7 @@ Hermes：全量审查完成。代码获取无受限——本机 SSH deploy key �
 23. src/collectors/capital_flow_collector.py:170-172 — _today_cn 用宿主本地日期（UTC 宿主 0-8 点日期错一天），应 ZoneInfo("Asia/Shanghai")；215-267 行悟道合并分支不可达（死分支）
 24. data_source/thsdk_l2.py:156-162,977-988,1109-1126 — _WENCAI_CACHE/_SNAPSHOT_CACHE 无上限；复用 TTLCache(max_size)
 25. src/core/dark_l2.py:131-149 — ImportError 降级分支 config 键名错（ths_username vs username），当前死代码但走到必静默变游客
-26. deploy/deploy_panwatch.sh:49-91 — 热补丁清单缺 data_source/，thsdk_l2.py 改动进不了容器
+26. deploy/deploy_sida.sh:49-91 — 热补丁清单缺 data_source/，thsdk_l2.py 改动进不了容器
 27. .github/workflows/build-push-acr.yml:11-36 — 生产镜像构建无 tsc/pytest 门禁（坏 tag 可直推生产）；`REF_NAME==refs/tags/v*` 永不匹配（应用 GITHUB_REF_TYPE=='tag'），当前靠 elif 运气正确
 
 ━━━━━━━━━━━━━━━━━━━━

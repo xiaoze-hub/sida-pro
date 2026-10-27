@@ -29,7 +29,7 @@
 | KI-010 | P2 | ~~ShadowAccount window.open 兜底 401~~ ✅ 已关(改显式报错) | 2026-09-08 | TianXiang |
 | KI-011 | P2 | 主板 K 线"不可能缺口"残留 10 条(vendor 源头级) | 2026-09-09 | TianXiang |
 | KI-012 | P3 | 港美市场无交易日历, 盘中判定维持周末口径 | 2026-09-09 | unassigned |
-| KI-013 | P3 | ~~forecast PANWATCH_DB sqlite 遗留~~ ✅ 已关(compose 已无该 env) | 2026-09-08 | TianXiang |
+| KI-013 | P3 | ~~forecast SIDA_DB sqlite 遗留~~ ✅ 已关(compose 已无该 env) | 2026-09-08 | TianXiang |
 | KI-014 | P2 | ~~应用容器无 pg_dump~~ ✅ 已关(Dockerfile+inspector 降级) | 2026-09-09 | TianXiang |
 | KI-015 | P2 | ~~前端 6 处手抄 fmt~~ ✅ 已关(DataSources 预览区 safeFixed) | 2026-09-08 | TianXiang |
 | KI-016 | P2 | 前端设计债 7 项(W3.7 审计重跑产出) | 2026-09-09 | TianXiang |
@@ -104,10 +104,10 @@
 - 涉及文件: src/web/models/market.py、src/core/trading_calendar.py。
 - 建议修复: 港美标的占比上升时, 按同一静态表机制补 HK/US 日历。
 
-### KI-013 forecast 容器 PANWATCH_DB 遗留 (P3)
+### KI-013 forecast 容器 SIDA_DB 遗留 (P3)
 
 - 发现: 2026-09-08(feat/pg-default-0908)
-- 现象: forecast 容器的 PANWATCH_DB 仍指 sqlite 文件路径, PG 生产下该文件不存在; 预测引擎读设置走 HTTP 不走文件, sqlite 直读仅遗留兜底。
+- 现象: forecast 容器的 SIDA_DB 仍指 sqlite 文件路径, PG 生产下该文件不存在; 预测引擎读设置走 HTTP 不走文件, sqlite 直读仅遗留兜底。
 - 影响: 无实际故障(兜底路径静默失败), 仅为配置陈旧易误导排查。
 - 涉及文件: docker-compose.yml forecast 服务(注释已标注遗留兜底)。
 - 建议修复: 8010 首次部署时清理该 env 或指向真实只读通道。

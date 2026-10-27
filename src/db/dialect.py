@@ -23,15 +23,15 @@ from sqlalchemy.pool import NullPool
 # - 容器内(DOCKER=1)无 SIDA_DB_URL 直接 fail-fast, 禁止静默落 sqlite
 #   (历史教训: env 丢失 → 生产跑在容器内 sqlite → database is locked + 数据丢)
 #   唯一逃生口: 显式 SIDA_ALLOW_SQLITE=1(仅本地开发/测试容器)
-# - 本地开发(DOCKER 未设)默认 data/panwatch.db, 显式 SIDA_DB_URL 可切 PG
-# - 例: SIDA_DB_URL="postgresql+psycopg2://sida:xxx@panwatch-postgres:5432/sida"
+# - 本地开发(DOCKER 未设)默认 data/sida.db, 显式 SIDA_DB_URL 可切 PG
+# - 例: SIDA_DB_URL="postgresql+psycopg2://sida:xxx@sida-postgres:5432/sida"
 # W2.2/E4 (2026-09-09): DATA_DIR 是数据根的唯一口径 —— 设了 DATA_DIR(容器/
 # 测试隔离), 默认库文件必须跟着进去。否则 delenv SIDA_DB_URL + reload 的测试
-# 路径会解析回仓库 data/panwatch.db(实测测试曾把迁移跑进真实库, 留下 7 个 .bak)。
+# 路径会解析回仓库 data/sida.db(实测测试曾把迁移跑进真实库, 留下 7 个 .bak)。
 if os.environ.get("DATA_DIR"):
-    DB_PATH = os.path.join(os.path.abspath(os.environ["DATA_DIR"]), "panwatch.db")
+    DB_PATH = os.path.join(os.path.abspath(os.environ["DATA_DIR"]), "sida.db")
 else:
-    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "panwatch.db")
+    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sida.db")
 
 if (
     os.environ.get("DOCKER") == "1"
@@ -46,6 +46,27 @@ if (
     )
 
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+
+def _adopt_legacy_sqlite(legacy_name: str = "panwatch.db") -> None:
+    """把旧品牌名的本地 sqlite 迁到新文件名（2026-10-27 改名）。
+
+    生产走 postgres 不受影响；这只服务于本地开发/测试等落到文件库的场景。
+    语义：**新文件已存在就绝不动**（避免覆盖真数据）；旧文件复制而非移动，
+    留一份原样备份，确认无碍后人工删除即可。
+    """
+    import shutil as _shutil
+
+    legacy = os.path.join(os.path.dirname(DB_PATH), legacy_name)
+    if os.path.exists(DB_PATH) or not os.path.exists(legacy):
+        return
+    try:
+        _shutil.copy2(legacy, DB_PATH)
+    except OSError:
+        pass
+
+
+_adopt_legacy_sqlite()
 
 DB_URL = os.environ.get("SIDA_DB_URL", f"sqlite:///{DB_PATH}")
 

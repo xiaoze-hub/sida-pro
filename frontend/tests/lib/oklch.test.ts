@@ -3,7 +3,7 @@
  * 判据: 端点必须准(白/黑/纯色的已知值), 越界必须裁剪而不是给 NaN(画布上 NaN = 整块不画)。
  */
 import { describe, expect, it } from 'vitest'
-import { oklchStringToHex, oklchToRgb, parseOklch, rgbToHex } from '@panwatch/biz-ui/lib/oklch'
+import { oklchStringToHex, oklchToRgb, parseOklch, rgbToHex } from '@sida/biz-ui/lib/oklch'
 
 describe('parseOklch', () => {
   it('解析 oklch(L C H) 与百分号写法; 解析不了返回 null(不猜)', () => {

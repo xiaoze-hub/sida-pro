@@ -6,7 +6,7 @@
  * - navigator.sendBeacon 优先(页面崩溃时也能送达), 降级 fetch(keepalive)
  * - 未登录无 token 时直接丢弃(后端要求登录, 不做匿名通道)
  */
-import { API_BASE, getToken } from '@panwatch/api'
+import { API_BASE, getToken } from '@sida/api'
 
 // API_BASE 本身已是 '/api'(packages/api/src/client.ts), 这里不能再带一次 /api
 // —— 之前拼成 /api/api/logs/frontend 恒 405, 前端崩溃在服务端**零记录**(2026-09-12 排查时发现)。

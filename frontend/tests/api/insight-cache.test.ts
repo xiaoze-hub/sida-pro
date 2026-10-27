@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearResponseCache, fetchAPI, insightApi } from '@panwatch/api'
+import { clearResponseCache, fetchAPI, insightApi } from '@sida/api'
 
 /**
  * 复审 Finding 2 的**回归护栏**: `/orderbook-ob` 与 `/seal-quality` 是**实时**端点, 必须默认
@@ -11,7 +11,7 @@ import { clearResponseCache, fetchAPI, insightApi } from '@panwatch/api'
  * 的缓存 30s 窗口内 ⇒ 缓存命中 ⇒ 真实取数退化成 ~60s。同端点兄弟组件 `OrderBookObBar`
  * 正因此显式传了 `cacheMode:'reload'`。
  *
- * 判据走**真** `fetchAPI`(不 mock `@panwatch/api`), 只 stub `globalThis.fetch` 数真实请求次数;
+ * 判据走**真** `fetchAPI`(不 mock `@sida/api`), 只 stub `globalThis.fetch` 数真实请求次数;
  * 对照组 `fetchAPI('/some-cached-endpoint')`(普通 GET)必须**保持**原缓存行为 —— 证明本修复
  * 没有扩大到其他端点。
  */

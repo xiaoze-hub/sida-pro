@@ -2,7 +2,7 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /**
  * Task 19 去重核对(spec §三 / `DATA_OWNERSHIP`): **每个数据点全站只出现一次**。
@@ -40,7 +40,7 @@ const mocks = vi.hoisted(() => ({
   fundamentalsDetail: vi.fn(), decisionPioneer: vi.fn(), resonance: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a),
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),
@@ -64,8 +64,8 @@ vi.mock('@panwatch/api', () => ({
   fundamentalsApi: { detail: (...a: unknown[]) => mocks.fundamentalsDetail(...a) },
 }))
 
-import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
-import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
+import HeaderBand from '@sida/biz-ui/components/workbench/HeaderBand'
+import QuickRail from '@sida/biz-ui/components/workbench/QuickRail'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
 import FundamentalTab from '@/pages/workbench/tabs/FundamentalTab'
 

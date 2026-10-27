@@ -190,7 +190,7 @@ def test_project_map_no_longer_recommends_get_capital_flow():
     text = (ROOT / "docs" / "PROJECT_MAP.md").read_text(encoding="utf-8")
     # 旧推荐话术必须删除
     assert "chat 的 get_capital_flow" not in text
-    # 现行口径: panwatch_bridge 资金面走逐笔, get_capital_flow 标禁用
+    # 现行口径: sida_bridge 资金面走逐笔, get_capital_flow 标禁用
     assert "get_main_intent" in text
     assert "禁止" in text and "get_capital_flow" in text
 

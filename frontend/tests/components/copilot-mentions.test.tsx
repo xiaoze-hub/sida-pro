@@ -40,7 +40,7 @@ const copilotMock = vi.hoisted(() => ({
   })),
 }))
 
-vi.mock('@panwatch/api', () => ({ chatApi: apiMock }))
+vi.mock('@sida/api', () => ({ chatApi: apiMock }))
 vi.mock('../../src/lib/copilot/api', () => copilotMock)
 vi.mock('../../src/lib/copilot/symbolChips', () => ({
   extractSymbolChips: () => [],

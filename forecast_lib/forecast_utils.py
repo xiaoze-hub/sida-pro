@@ -47,7 +47,7 @@ def calc_capital_score(
 
     兼容两种结构:
     - 每日序列: [{date, main_net}, ...]  (旧)
-    - 聚合结构: [{date:"当日", main_net}, {date:"近5日", main_net}]  (panwatch-tdx 新)
+    - 聚合结构: [{date:"当日", main_net}, {date:"近5日", main_net}]  (sida-tdx 新)
 
     逻辑:
     - 当日主力净流入 → 当日方向(+)

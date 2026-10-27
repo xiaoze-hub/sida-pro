@@ -81,7 +81,7 @@ def test_setup_logging_attaches_filter_to_DB_handler() -> None:
                 "DB handler 必须挂 _TransportNoiseFilter —— 否则开盘日志噪音会再次打满 CPU/PG"
             )
 
-        console_handlers = [h for h in root.handlers if getattr(h, "_panwatch_console", False)]
+        console_handlers = [h for h in root.handlers if getattr(h, "_sida_console", False)]
         assert console_handlers, "setup_logging 应挂上控制台 handler"
         for h in console_handlers:
             assert any(isinstance(f, _TransportNoiseFilter) for f in h.filters), (

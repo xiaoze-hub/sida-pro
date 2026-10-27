@@ -1,4 +1,4 @@
-# 数智分析 (PanWatch fork) 一键部署编排
+# 数智分析 (SIDA fork) 一键部署编排
 #
 # 用途: 朋友在新服务器上 fork 仓库 + 拉公开镜像后,一条命令启主后端 + 预测引擎
 # 镜像源: ghcr.io/xiaoze-hub/stock-intelligent-data-analytics(主) + -forecast(预测)
@@ -9,8 +9,8 @@
 # 日志: docker compose logs -f
 #
 # 数据持久化:
-#   - 命名卷 panwatch_data(主后端 DB + Playwright 浏览器)
-#   - 命名卷 panwatch_forecast_data(预测引擎 SQLite + 回测报告)
+#   - 命名卷 sida_data(主后端 DB + Playwright 浏览器)
+#   - 命名卷 sida_forecast_data(预测引擎 SQLite + 回测报告)
 #   - 可选 bind 挂载 ~/.hermes(cron 输出只读, 报告中心数据源)
 
 services:
@@ -19,11 +19,11 @@ services:
   # - Redis 7: 缓存 + 限流 + Redis Streams
   # - Prometheus: 抓 /metrics 指标
   # - Loki: 收日志(配 Promtail)
-  # - Promtail: 收 panwatch logs 送到 Loki
+  # - Promtail: 收 sida logs 送到 Loki
   # - Grafana: 大盘 (预置 Prometheus + Loki 数据源)
   redis:
     image: redis:7-alpine
-    container_name: panwatch-redis
+    container_name: sida-redis
     restart: unless-stopped
     profiles: ["infra"]
     # T10(2026-09-08 审计): 加 requirepass —— 原注释自认"未加密码避免打断现有容器",
@@ -42,7 +42,7 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - TZ=Asia/Shanghai
     # P1-3 (2026-08-23 审计): 6379 绑主机 127.0.0.1 而非 0.0.0.0, 防未授权访问;
-    # compose 内其它服务通过 panwatch-redis:6379 + 密码访问, 主机仅 localhost 可达。
+    # compose 内其它服务通过 sida-redis:6379 + 密码访问, 主机仅 localhost 可达。
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -61,7 +61,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.51.0
-    container_name: panwatch-prometheus
+    container_name: sida-prometheus
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -86,7 +86,7 @@ services:
 
   loki:
     image: grafana/loki:2.9.4
-    container_name: panwatch-loki
+    container_name: sida-loki
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -106,7 +106,7 @@ services:
 
   promtail:
     image: grafana/promtail:2.9.4
-    container_name: panwatch-promtail
+    container_name: sida-promtail
     restart: unless-stopped
     profiles: ["infra"]
     volumes:
@@ -125,7 +125,7 @@ services:
 
   grafana:
     image: grafana/grafana:10.4.2
-    container_name: panwatch-grafana
+    container_name: sida-grafana
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -154,7 +154,7 @@ services:
   # T11(2026-09-08 审计): 告警通知出口 —— 五条规则此前触发后无任何通知
   alertmanager:
     image: prom/alertmanager:v0.27.0
-    container_name: panwatch-alertmanager
+    container_name: sida-alertmanager
     restart: unless-stopped
     profiles: ["infra"]
     ports:
@@ -175,10 +175,10 @@ services:
       - TZ=Asia/Shanghai
 
   # ============== 主后端 8000 (FastAPI) ==============
-  panwatch:
+  sida:
     # P1-14: 与 CI 一致拉 ACR(发版号替换 latest); forecast 镜像仍走 ghcr(独立构建链)
     image: crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:latest
-    container_name: panwatch
+    container_name: sida
     restart: unless-stopped
     # 安全审计 2026-09-15: 主服务 8000 绑 127.0.0.1 而非 0.0.0.0,
     # 防止容器外网卡直接暴露; 外部访问需经前置反代(nginx 等)。
@@ -190,10 +190,10 @@ services:
       # 指向同 compose 网络内的 forecast 服务(Docker DNS 自动解析)
       - FORECAST_ENGINE_URL=http://forecast:8010
       # P1-14: Redis L2/限流/调度选主走 compose 内 redis(T10: 带 requirepass 密码)
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?请在 .env 设置 REDIS_PASSWORD}@panwatch-redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?请在 .env 设置 REDIS_PASSWORD}@sida-redis:6379/0
       # PG 主库(默认生产口径; 本地无 PG 时才落 SQLite, 见 P1-14):
       # T10: 密码强制从 .env 读取(原 :-sida_dev_only 弱默认静默兜底)
-      - SIDA_DB_URL=postgresql+psycopg2://sida:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@panwatch-postgres:5432/sida
+      - SIDA_DB_URL=postgresql+psycopg2://sida:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@sida-postgres:5432/sida
       # Hermes cron 输出根目录(可选,挂载 ~/.hermes 后自动可用)
       - HERMES_HOME=/hermes
       # 数据源 key 在「设置 → 接口Key」UI 维护;此处只传 Hermes 必需的环境变量
@@ -205,7 +205,7 @@ services:
       # 外部全 502。下次 WSL/Docker 重启一定要带上,否则复发。
       - WEB_HOST=0.0.0.0
     volumes:
-      - panwatch_data:/app/data
+      - sida_data:/app/data
       # 可选: Hermes cron 输出(报告中心读取 cron 报告用)
       # ⚠️ 朋友请改成自己的路径,不存在会自动创建空目录不影响服务启动
       - ~/.hermes:/hermes:ro
@@ -226,7 +226,7 @@ services:
       redis:
         condition: service_healthy
         required: false
-      panwatch-postgres:
+      sida-postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()"]
@@ -238,27 +238,27 @@ services:
   # ============== 预测引擎 8010 (Kronos/XGBoost/Lag-Llama/LinearReg) ==============
   forecast:
     image: ghcr.io/xiaoze-hub/stock-intelligent-data-analytics-forecast:latest
-    container_name: panwatch-forecast
+    container_name: sida-forecast
     restart: unless-stopped
     expose:
       - "8010"   # 不暴露给主机,仅 compose 网络内访问
     environment:
       # 预测引擎经 8000 拿资金面/龙虎榜数据(fork 镜像里 /api/market-data/* 已就绪)
-      # D5(2026-09-09): 原 PANWATCH_URL 更名 —— forecast_lib 内禁止 PANWATCH_URL
+      # D5(2026-09-09): 原 SIDA_URL 更名 —— forecast_lib 内禁止 SIDA_URL
       # 字样(CI 依赖方向断言), 8010 情绪 LLM 配置改由 8000 经 POST /predict payload 推送
-      - SIDA_MAIN_API_URL=http://panwatch:8000
+      - SIDA_MAIN_API_URL=http://sida:8000
       # T7(2026-09-08): 配置通道走 HTTP —— 服务 token(与主服务 SIDA_SERVICE_TOKEN
       # 同值, 在 .env 设置)鉴权读 /api/service/forecast-config, 下发 forecast_llm_* +
       # 裁判场景绑定。2026-09-08 风险方案 0.0: 原 sqlite 直读主库的环境变量与主数据
       # 卷只读挂载已整体删除, 8010 对主库零接触; 配置不可得时裁判按 abstain 处理。
-      - PANWATCH_SERVICE_TOKEN=${SIDA_SERVICE_TOKEN:-}
-      # 预测历史必须落到 panwatch_forecast_data 命名卷
-      - FORECAST_DB_PATH=/app/data/panwatch_forecast.db
+      - SIDA_SERVICE_TOKEN=${SIDA_SERVICE_TOKEN:-}
+      # 预测历史必须落到 sida_forecast_data 命名卷
+      - FORECAST_DB_PATH=/app/data/sida_forecast.db
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
     volumes:
       # 预测历史 SQLite(回测报告/预测记录/资金面 LLM 情绪记录)
-      - panwatch_forecast_data:/app/data
+      - sida_forecast_data:/app/data
     mem_limit: 4g
     # E7(2026-09-09): 4g 沿用 P1-14 既定值 —— 本机 8010 未部署(0.0 勘查既定,
     # /api/health forecast_engine=down), 推理峰值内存无法实测校准, 已登记
@@ -279,9 +279,9 @@ services:
       retries: 3
 
   # ============== PG 主库(默认生产口径; SQLite 仅本地无 PG 时的开发退路) ==============
-  panwatch-postgres:
+  sida-postgres:
     image: postgres:16-alpine
-    container_name: panwatch-postgres
+    container_name: sida-postgres
     restart: unless-stopped
     environment:
       - POSTGRES_USER=sida
@@ -290,7 +290,7 @@ services:
       - POSTGRES_DB=sida
       - TZ=Asia/Shanghai
     volumes:
-      - panwatch_pg_data:/var/lib/postgresql/data
+      - sida_pg_data:/var/lib/postgresql/data
     mem_limit: 1g
     memswap_limit: 1g
     mem_reservation: 256m
@@ -307,19 +307,19 @@ services:
       retries: 5
 
 volumes:
-  panwatch_pg_data:
-    name: panwatch_pg_data
-  panwatch_data:
-    name: panwatch_data
-  panwatch_forecast_data:
-    name: panwatch_forecast_data
+  sida_pg_data:
+    name: sida_pg_data
+  sida_data:
+    name: sida_data
+  sida_forecast_data:
+    name: sida_forecast_data
   redis_data:
-    name: panwatch_redis_data
+    name: sida_redis_data
   alertmanager_data:
-    name: panwatch_alertmanager_data
+    name: sida_alertmanager_data
   prometheus_data:
-    name: panwatch_prometheus_data
+    name: sida_prometheus_data
   loki_data:
-    name: panwatch_loki_data
+    name: sida_loki_data
   grafana_data:
-    name: panwatch_grafana_data
+    name: sida_grafana_data

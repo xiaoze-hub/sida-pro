@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { Bot, RefreshCw, ShieldAlert } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { fetchAPI } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 import OrderBookObBar from './OrderBookObBar'
 import MainFlowCompareCard from './MainFlowCompareCard'
 import DecisionPioneerCard from './DecisionPioneerCard'
@@ -199,7 +199,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
       ? `主力意图与盘口背离:${mn.mnemonic}${mn.detail ? `(${mn.detail})` : ''} symbol=${symbol}`
       : `主力意图与盘口分析 symbol=${symbol} market=${market}`
     window.dispatchEvent(
-      new CustomEvent('panwatch-open-chat', {
+      new CustomEvent('sida-open-chat', {
         detail: { symbol, market, pageContext: ctx },
       }),
     )

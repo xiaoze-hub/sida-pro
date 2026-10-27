@@ -1,5 +1,5 @@
 /** 并行诊断接口（工作台·多子 run）。走 fetchAPI，自带 /api 前缀。 */
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 export interface ParallelChild {
   run_id: string

@@ -10,8 +10,8 @@
 import { useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 
-import { useTabActive } from '@panwatch/base-ui'
-import { fetchAPI, type ApiRequestOptions } from '@panwatch/api'
+import { useTabActive } from '@sida/base-ui'
+import { fetchAPI, type ApiRequestOptions } from '@sida/api'
 
 let _queryClient: QueryClient | null = null
 

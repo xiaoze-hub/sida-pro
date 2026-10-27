@@ -1,4 +1,4 @@
-import type { DeepAnalysisResult } from '@panwatch/api'
+import type { DeepAnalysisResult } from '@sida/api'
 
 export interface AnalysisSection {
   id: string

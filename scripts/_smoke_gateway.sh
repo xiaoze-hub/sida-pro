@@ -1,6 +1,6 @@
 #!/bin/bash
 set -uo pipefail
-CT=panwatch
+CT=sida
 for f in src/web/api/skills_gateway.py src/db/models.py src/web/migrations.py src/web/app.py; do
   base=$(basename "$f")
   cp "/mnt/c/Users/tianxiang/sida-work/$f" "/tmp/$base"
