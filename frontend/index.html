@@ -22,6 +22,8 @@
     <!-- Meta -->
     <meta name="description" content="SIDA Pro 数智分析：把市场全景、个股 K 线、关注列表与 AI 技术分析放进同一个工作台。观看真实操作演示，查看数据来源与分析过程。" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <!-- FastAPI 为公开介绍页注入独立 SEO 元信息；直接访问开发静态页默认不索引。 -->
+    <meta name="robots" content="noindex,follow" />
 
     <!--
       修复(S-1, 2026-08-23) — JWT 仍存 localStorage, 加严格 CSP meta 缓解 XSS→token 抽取:

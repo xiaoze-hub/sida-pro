@@ -19,6 +19,8 @@ SIDA connects the steps of personal stock research: understand the market, inspe
 
 ## Operation demos
 
+Project repository: [SIDA Pro](https://github.com/xiaoze-hub/sida-pro). For the free self-hosted community edition, visit [Stock-Intelligent-Data-Analytics](https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics) and its deployment guide. The community edition uses AGPL-3.0; its capabilities and releases are separate from this Pro instance.
+
 [![Short preview — open the market walkthrough](frontend/public/media/product/preview.gif)](frontend/public/media/product/market.mp4)
 
 **Click the preview to open the MP4.** The public landing page provides an inline player, poster, Chinese captions and written steps. GitHub may open repository videos as files rather than inline players.
@@ -91,6 +93,8 @@ pnpm --dir frontend build
 ```
 
 Use hot reload or rebuild the frontend for routine source changes. Rebuild the Docker image when packaged dependencies or release assets change. Do not delete data volumes during routine updates.
+
+The official public site is [sida.win](https://sida.win/). Public overview, developer docs and account plans share server-generated SEO metadata, social previews and a three-page sitemap. Self-hosted deployments can set `SIDA_PUBLIC_SITE_URL` to their own origin and `SIDA_SEO_INDEXABLE=false` for private instances; localhost HTML and workspace routes are not indexed. These settings are documented in `.env.example` and passed through the main Compose service.
 
 ## Architecture and integrations
 

@@ -1,0 +1,23 @@
+{
+  "siteUrl": "https://sida.win",
+  "siteName": "SIDA Pro 数智分析",
+  "repository": "https://github.com/xiaoze-hub/sida-pro",
+  "image": "/media/product/workbench-desktop.webp",
+  "pages": {
+    "/": {
+      "title": "数智分析 SIDA Pro｜AI 股票技术分析工作台",
+      "heading": "AI 股票技术分析，让研究有据可查。",
+      "description": "SIDA Pro 数智分析整合市场全景、个股 K 线、关注列表与 AI 技术分析。观看真实操作演示，查看数据来源、工具过程与研究记录，了解社区开源部署。"
+    },
+    "/developers": {
+      "title": "开发者文档与 Skill API 接入｜SIDA Pro 数智分析",
+      "heading": "开发者文档",
+      "description": "查看 SIDA Pro 开发者文档：API Key 鉴权、Skill 接口目录、限流说明、在线调试和数据口径。获取 GitHub 项目地址与社区版开源部署说明。"
+    },
+    "/tiers": {
+      "title": "账户方案与社区开源部署｜SIDA Pro 数智分析",
+      "heading": "选择适合你的研究方式",
+      "description": "比较 SIDA Pro 当前实例的免费账户与 Pro 权限，查看实时能力与额度，了解申请流程；也可前往 GitHub 获取 AGPL-3.0 社区开源版自行部署。"
+    }
+  }
+}

@@ -1,5 +1,13 @@
+import { Link, useSearchParams } from 'react-router-dom'
+import { usePublicSeo } from '@/hooks/use-public-seo'
+import { PublicSiteFrame } from '@/components/public/PublicSiteChrome'
+import { PROJECT_REPOSITORY, COMMUNITY_REPOSITORY, COMMUNITY_DEPLOYMENT, COMMUNITY_LICENSE } from '@/lib/product-links'
+import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
 import { useEffect, useMemo, useState } from 'react'
 import {
+  ArrowUpRight,
+  Github,
+  Server,
   KeyRound,
   ShieldCheck,
   Gauge,
@@ -74,6 +82,7 @@ const MENU: SideMenuItem[] = [
   { id: 'playground', label: '在线调试', icon: <Play className="h-3.5 w-3.5" />, anchor: 'sec-playground' },
   { id: 'api-ref', label: 'API 参考', icon: <BookOpen className="h-3.5 w-3.5" />, anchor: 'sec-api-ref' },
   { id: 'datasources', label: '数据来源', icon: <Database className="h-3.5 w-3.5" />, anchor: 'sec-datasources' },
+  { id: 'selfhost', label: '开源与部署', icon: <Server className="h-3.5 w-3.5" />, anchor: 'sec-selfhost' },
   { id: 'errors', label: '错误码', icon: <Bug className="h-3.5 w-3.5" />, anchor: 'sec-errors' },
 ]
 
@@ -100,7 +109,7 @@ const API_GROUPS = [
     ],
   },
   {
-    title: 'Pro 付费',
+    title: 'Pro 申请与审核',
     apis: [
       { method: 'POST', path: '/api/pro/apply', auth: '登录', desc: '提交 Pro 升级申请' },
       { method: 'GET', path: '/api/pro/apply/status', auth: '登录', desc: '查询申请状态' },
@@ -161,13 +170,17 @@ const DATA_SOURCES: { name: string; caliber: string; note: string }[] = [
 ]
 
 const TIER_BADGE: Record<string, string> = {
-  free: 'bg-slate-500/10 text-muted-foreground border-slate-500/20',
-  trial: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  pro: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+  free: 'bg-s2 text-muted-foreground',
+  trial: 'bg-s2 text-foreground',
+  pro: 'bg-s3 text-primary',
 }
 
 export default function DevelopersPage() {
+  usePublicSeo('/developers')
   const { t } = useI18n()
+  const [loggedIn] = useState(() => isAuthenticated())
+  const [, setSearchParams] = useSearchParams()
+  const [catalogQuery, setCatalogQuery] = useState('')
   // 2026-09-19(用户报障): 文档是**公开面**(匿名可见), 但里面列了 12 个 owner 专用端点
   // (用户列表/改角色/全部 API Key/轮换密钥/审核申请…) —— 那不是给普通用户看的内部面。
   // 处理: 按角色过滤, **非 owner 不渲染 owner 条目**; 匿名访客自然也只看到公开/登录级端点。
@@ -193,6 +206,7 @@ export default function DevelopersPage() {
   const [selectedSkill, setSelectedSkill] = useState('')
   const [paramsJson, setParamsJson] = useState('{}')
   const [runResult, setRunResult] = useState<string | null>(null)
+  const [runError, setRunError] = useState('')
   const [running, setRunning] = useState(false)
 
   const loadCatalog = () => {
@@ -209,6 +223,7 @@ export default function DevelopersPage() {
   useEffect(() => { loadCatalog() }, [])
 
   const skills = useMemo(() => catalog?.skills ?? [], [catalog])
+  const visibleSkills = useMemo(() => skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(catalogQuery.trim().toLowerCase())), [skills, catalogQuery])
   const selected = useMemo(() => skills.find(s => s.name === selectedSkill), [skills, selectedSkill])
 
   // 自动填默认参数
@@ -223,11 +238,14 @@ export default function DevelopersPage() {
 
   const runSkill = async () => {
     if (!selectedSkill) return
+    setRunError('')
+    if (authMode === 'apikey' && !apiKey.trim()) { setRunError('请先填写 API Key，或切换为游客模式。'); return }
+    if (authMode === 'jwt' && !loggedIn) { setRunError('请先登录当前实例，或选择其他鉴权方式。'); return }
     setRunning(true)
     setRunResult(null)
     try {
       let params: Record<string, unknown>
-      try { params = JSON.parse(paramsJson) } catch { setRunResult('参数 JSON 格式错误'); return }
+      try { params = JSON.parse(paramsJson) } catch { setRunError('参数 JSON 格式错误'); return }
 
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (authMode === 'apikey' && apiKey) headers['X-API-Key'] = apiKey
@@ -245,7 +263,7 @@ export default function DevelopersPage() {
       const data = await resp.json()
       setRunResult(JSON.stringify(data, null, 2))
     } catch (e: any) {
-      setRunResult(`请求失败: ${e?.message || e}`)
+      setRunError(`请求失败: ${e?.message || e}`)
     } finally {
       setRunning(false)
     }
@@ -254,34 +272,34 @@ export default function DevelopersPage() {
   const base = typeof window !== 'undefined' ? window.location.origin : ''
 
   return (
+    <PublicSiteFrame enabled={!loggedIn}>
     <DevPageLayout
+      publicView={!loggedIn}
       title={t('developers.title')}
-      subtitle={t('developers.subtitle')}
-      badge="v1.0"
+      subtitle="从一条请求开始接入当前实例。查看鉴权方式、可用接口与数据口径，或了解社区版开源部署。"
+      badge="Skill API"
       menu={MENU}
       activeId={activeSection}
       onNav={setActiveSection}
-      headerExtra={
-        <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={() => window.location.href = '/api-keys'}>
-          <KeyRound className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">API Key</span>
-        </Button>
-      }
+      headerExtra={<>
+        <Button asChild className="h-11"><Link to={loggedIn ? '/api-keys' : '/login?mode=register'}><KeyRound size={16} />{loggedIn ? '管理 API Key' : '注册并获取 Key'}</Link></Button>
+        <Button asChild variant="ghost" className="h-11"><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer"><Github size={16} />项目仓库<ArrowUpRight size={16} /></a></Button>
+      </>}
     >
       {/* ── 快速开始 ── */}
       <Section id="sec-quickstart" title="快速开始" description="三步接入 SIDA Skill API" icon={<Rocket className="h-4 w-4" />}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             {[
-              { step: '01', title: '注册账号', desc: '邮箱注册，自动签发 API Key', icon: <KeyRound className="h-4 w-4" /> },
-              { step: '02', title: '获取 Key', desc: '在控制台查看/管理你的 Key', icon: <ShieldCheck className="h-4 w-4" /> },
+              { step: '01', title: '注册账号', desc: '注册或登录当前实例', icon: <KeyRound className="h-4 w-4" /> },
+              { step: '02', title: '获取 Key', desc: '在 API Key 管理页创建与管理密钥', icon: <ShieldCheck className="h-4 w-4" /> },
               { step: '03', title: '发起调用', desc: '一行 curl 即可验证连通', icon: <Terminal className="h-4 w-4" /> },
             ].map(s => (
-              <div key={s.step} className="card-surface rounded-xl bg-card p-4 text-center">
-                <div className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary dark:bg-cyan-500/10">
+              <div key={s.step} className="card-surface rounded-lg bg-s2 p-4">
+                <div className="mb-3 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-card text-primary">
                   {s.icon}
                 </div>
-                <div className="font-mono text-[12px] text-primary/60 dark:text-cyan-500/50">{s.step}</div>
+                <div className="font-mono text-[12px] text-muted-foreground">{s.step}</div>
                 <div className="text-[14px] font-medium text-foreground">{s.title}</div>
                 <div className="mt-0.5 text-[12px] text-muted-foreground">{s.desc}</div>
               </div>
@@ -326,7 +344,7 @@ export default function DevelopersPage() {
             },
             {
               title: '游客模式',
-              desc: '无需认证，仅限 free 级 Skill，每 IP 每天 10 次',
+              desc: '无需认证，仅限 free 级 Skill；当前配额见限流说明',
               code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
   -H "Content-Type: application/json" \\
   -d '{"args": {"symbol": "000001"}, "format": "json"}'`,
@@ -336,7 +354,7 @@ export default function DevelopersPage() {
             <InfoCard key={i}>
               <div className="mb-1.5 flex items-center gap-2">
                 <span className="text-[14px] font-medium text-foreground">{a.title}</span>
-                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[12px] font-mono text-primary dark:bg-cyan-500/10">{a.badge}</span>
+                <span className="rounded bg-s3 px-1.5 py-0.5 text-[12px] font-mono text-primary">{a.badge}</span>
               </div>
               <p className="mb-2 text-[12px] text-muted-foreground">{a.desc}</p>
               <CodeBlock code={a.code} language="bash" />
@@ -360,10 +378,10 @@ export default function DevelopersPage() {
             compact
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[12px]">
+          <div className="overflow-x-auto rounded-lg bg-s2 p-4">
+            <table className="w-full min-w-[560px] text-left text-[14px]">
               <thead>
-                <tr className="border-b border-border dark:border-white/10 text-muted-foreground">
+                <tr className="border-b border-border  text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">档位</th>
                   <th className="pb-2 pr-4 font-medium">日限</th>
                   <th className="pb-2 pr-4 font-medium">突发</th>
@@ -373,7 +391,7 @@ export default function DevelopersPage() {
               <tbody>
                 {catalog?.guest && (
                   <tr className="border-b border-border">
-                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[12px] text-muted-foreground">游客</span></td>
+                    <td className="py-2 pr-4"><span className="rounded bg-s2 px-1.5 py-0.5 text-[12px] text-muted-foreground">游客</span></td>
                     <td className="py-2 pr-4 font-mono text-foreground">{catalog.guest.daily_limit}</td>
                     <td className="py-2 pr-4 font-mono text-muted-foreground">-</td>
                     <td className="py-2 text-muted-foreground">仅 free 级 Skill，按 IP 限流</td>
@@ -382,7 +400,7 @@ export default function DevelopersPage() {
                 {Object.entries(catalog?.tiers ?? {}).map(([tier, limit]) => (
                   <tr key={tier} className="border-b border-border">
                     <td className="py-2 pr-4">
-                      <span className={`rounded border px-1.5 py-0.5 text-[12px] ${TIER_BADGE[tier] || TIER_BADGE.free}`}>
+                      <span className={`rounded px-1.5 py-0.5 text-[12px] ${TIER_BADGE[tier] || TIER_BADGE.free}`}>
                         {tier}
                       </span>
                     </td>
@@ -391,7 +409,7 @@ export default function DevelopersPage() {
                     <td className="py-2 text-muted-foreground">
                       {tier === 'free' && '注册即得，基础配额'}
                       {tier === 'trial' && `试用 ${limit.days ?? 7} 天`}
-                      {tier === 'pro' && 'Pro 付费，全量开放'}
+                      {tier === 'pro' && '以当前实例授权为准'}
                     </td>
                   </tr>
                 ))}
@@ -400,10 +418,10 @@ export default function DevelopersPage() {
           </div>
         )}
 
-        <div className="card-surface mt-3 rounded-lg bg-amber-500/5 p-3">
+        <div className="card-surface mt-3 rounded-lg bg-s2 p-4">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-            <div className="text-[12px] text-amber-300/80">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-role-watch" />
+            <div className="text-[12px] text-muted-foreground">
               <strong>429 限流响应</strong> 会携带 <code className="font-mono">Retry-After</code> 头（秒）。
               建议实现指数退避 + 抖动：首次等待 Retry-After，后续每次翻倍，上限 60s。
             </div>
@@ -438,22 +456,25 @@ export default function DevelopersPage() {
             compact
           />
         ) : (
-          <div className="space-y-2">
-            {skills.map(s => (
-              <div key={s.name} className="card-surface rounded-lg bg-card p-3">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3"><Input aria-label="搜索 Skill 目录" type="search" placeholder="搜索接口名称或用途" value={catalogQuery} onChange={event => setCatalogQuery(event.target.value)} className="h-11 max-w-md text-[16px] sm:text-[14px]" /><span className="text-[12px] text-muted-foreground">{visibleSkills.length} / {skills.length} 个接口</span></div>
+            {visibleSkills.length === 0 && <div className="rounded-lg bg-s2 p-5 text-[14px] text-muted-foreground">没有匹配的接口。<Button variant="ghost" className="ml-2 h-11" onClick={() => setCatalogQuery('')}>清除搜索</Button></div>}
+            {visibleSkills.map(s => (
+              <div key={s.name} className="card-surface rounded-lg bg-s2 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <code className="font-mono text-[12px] text-primary">{s.name}</code>
-                  <span className={`rounded border px-1.5 py-0.5 text-[12px] ${TIER_BADGE[s.tier_min] || TIER_BADGE.free}`}>
+                  <span className={`rounded px-1.5 py-0.5 text-[12px] ${TIER_BADGE[s.tier_min] || TIER_BADGE.free}`}>
                     {s.tier_min}
                   </span>
                   {s.slow && <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-[12px] text-orange-600 dark:text-orange-400">慢</span>}
                   {s.caliber && <CaliberBadge caliber={caliberOf(s.caliber)} className="mr-1.5 align-middle" />}{false && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[12px] text-blue-600 dark:text-blue-400">{s.caliber}</span>}
                 </div>
                 <p className="mt-1 text-[12px] text-muted-foreground">{s.description}</p>
+                <Button variant="ghost" className="mt-2 h-11 px-0" onClick={() => { setSelectedSkill(s.name); setSearchParams(previous => { const next = new URLSearchParams(previous); next.set('section', 'sec-playground'); return next }) }}><Play size={14} />调试此接口</Button>
                 {Object.keys(s.params || {}).length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {Object.entries(s.params).map(([k, v]) => (
-                      <span key={k} className="rounded bg-s2 dark:bg-white/5 px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground">
+                      <span key={k} className="rounded bg-s2  px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground">
                         {k}{v.default !== undefined ? `=${v.default}` : ''}
                       </span>
                     ))}
@@ -471,9 +492,9 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[12px] text-muted-foreground">鉴权方式</Label>
+                <Label htmlFor="dev-auth" className="text-[12px] text-muted-foreground">鉴权方式</Label>
                 <Select value={authMode} onValueChange={(v: any) => setAuthMode(v)}>
-                  <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="dev-auth" className="mt-1 h-11 text-[16px] sm:text-[14px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="apikey">API Key</SelectItem>
                     <SelectItem value="jwt">JWT（需登录）</SelectItem>
@@ -483,10 +504,10 @@ export default function DevelopersPage() {
               </div>
               {authMode === 'apikey' && (
                 <div>
-                  <Label className="text-[12px] text-muted-foreground">API Key</Label>
+                  <Label htmlFor="dev-api-key" className="text-[12px] text-muted-foreground">API Key</Label>
                   <Input
-                    type="password"
-                    className="mt-1 h-8 font-mono text-[12px]"
+                    id="dev-api-key" type="password"
+                    aria-label="API Key" className="mt-1 h-11 font-mono text-[16px] sm:text-[14px]"
                     placeholder="sk_..."
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
@@ -500,9 +521,9 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[12px] text-muted-foreground">选择 Skill</Label>
+                <Label htmlFor="dev-skill" className="text-[12px] text-muted-foreground">选择 Skill</Label>
                 <Select value={selectedSkill} onValueChange={setSelectedSkill}>
-                  <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue placeholder="请选择" /></SelectTrigger>
+                  <SelectTrigger id="dev-skill" className="mt-1 h-11 text-[16px] sm:text-[14px]"><SelectValue placeholder="请选择" /></SelectTrigger>
                   <SelectContent>
                     {skills.map(s => (
                       <SelectItem key={s.name} value={s.name}>{s.name}</SelectItem>
@@ -517,22 +538,23 @@ export default function DevelopersPage() {
               )}
             </div>
             <div className="mt-3">
-              <Label className="text-[12px] text-muted-foreground">参数 (JSON)</Label>
+              <Label htmlFor="dev-params" className="text-[12px] text-muted-foreground">参数 (JSON)</Label>
               <textarea
-                className="mt-1 h-24 w-full rounded-lg border border-border dark:border-white/10 bg-s2 dark:bg-[#0d0d18] p-2.5 font-mono text-[12px] text-foreground dark:text-cyan-100/80 focus:border-primary/40 dark:focus:border-cyan-500/30 focus:outline-none"
+                id="dev-params" aria-label="参数 JSON" className="mt-1 h-36 w-full rounded-lg border border-input bg-s2 p-3 font-mono text-[16px] text-foreground sm:text-[14px]"
                 value={paramsJson}
                 onChange={e => setParamsJson(e.target.value)}
                 spellCheck={false}
               />
             </div>
             <div className="mt-3 flex justify-end">
-              <Button size="sm" className="h-8" onClick={runSkill} disabled={running || !selectedSkill}>
+              <Button size="sm" className="h-11" onClick={runSkill} disabled={running || !selectedSkill}>
                 {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                 运行
               </Button>
             </div>
           </InfoCard>
 
+          {runError && <p role="alert" className="rounded-lg bg-s2 p-4 text-[14px] text-foreground">{runError}</p>}
           {runResult && (
             <InfoCard>
               <div className="mb-2 text-[14px] font-medium text-foreground">响应结果</div>
@@ -556,8 +578,8 @@ export default function DevelopersPage() {
             .map((group, gi) => (
             <div key={gi}>
               <h3 className="mb-3 text-[14px] font-semibold text-foreground">{group.title}</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-[12px]">
+              <div className="overflow-x-auto rounded-lg bg-s2 p-4">
+                <table className="w-full min-w-[560px] text-left text-[14px]">
                   <thead>
                     <tr className="border-b border-border text-muted-foreground">
                       <th className="pb-2 pr-3 font-medium">方法</th>
@@ -608,10 +630,10 @@ export default function DevelopersPage() {
         icon={<Database className="h-4 w-4" />}
       >
         <div className="space-y-3">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[12px]">
+          <div className="overflow-x-auto rounded-lg bg-s2 p-4">
+            <table className="w-full min-w-[560px] text-left text-[14px]">
               <thead>
-                <tr className="border-b border-border dark:border-white/10 text-muted-foreground">
+                <tr className="border-b border-border  text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">数据源</th>
                   <th className="pb-2 pr-4 font-medium">口径</th>
                   <th className="pb-2 font-medium">说明</th>
@@ -633,10 +655,10 @@ export default function DevelopersPage() {
             </table>
           </div>
 
-          <div className="card-surface rounded-lg bg-amber-500/5 p-3">
+          <div className="card-surface rounded-lg bg-s2 p-4">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-              <div className="space-y-1 text-[12px] text-amber-300/80">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-role-watch" />
+              <div className="space-y-1 text-[12px] text-muted-foreground">
                 <p>
                   <strong>方向语义必须声明。</strong>
                   资金类指标返回值须携带 <code className="font-mono">caliber</code>（tick / eastmoney4 / ths / unknown）
@@ -663,15 +685,15 @@ export default function DevelopersPage() {
             { code: 429, title: '限流', desc: '超过当日/当分钟调用限制', fix: '读取 Retry-After 头，指数退避后重试；或升级档位' },
             { code: 500, title: '服务器错误', desc: '内部处理异常', fix: '稍后重试；若持续出现请联系管理员' },
           ].map(e => (
-            <div key={e.code} className="card-surface rounded-lg bg-card p-3">
+            <div key={e.code} className="card-surface rounded-lg bg-s2 p-4">
               <div className="flex items-center gap-2">
                 <span className={`font-mono text-[14px] font-bold ${
-                  e.code === 401 ? 'text-amber-600 dark:text-amber-400' : e.code === 403 ? 'text-orange-600 dark:text-orange-400' : e.code === 429 ? 'text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-500'
+                  e.code === 401 ? 'text-amber-600 dark:text-role-watch' : e.code === 403 ? 'text-orange-600 dark:text-orange-400' : e.code === 429 ? 'text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-500'
                 }`}>{e.code}</span>
                 <span className="text-[14px] font-medium text-foreground">{e.title}</span>
               </div>
               <p className="mt-1 text-[12px] text-muted-foreground">{e.desc}</p>
-              <p className="mt-1 text-[12px] text-primary/70/60">→ {e.fix}</p>
+              <p className="mt-1 text-[12px] text-foreground">→ {e.fix}</p>
             </div>
           ))}
         </div>
@@ -693,6 +715,19 @@ def call_with_retry(fn, max_retries=3):
           />
         </div>
       </Section>
+      <Section id="sec-selfhost" title="开源与部署" description="社区开源版与当前实例分别维护" icon={<Github size={18} />}>
+        <div className="space-y-5">
+          <div className="rounded-lg bg-s2 p-5"><h3 className="text-[16px] font-semibold">SIDA Pro 项目仓库</h3><p className="mt-2 text-[14px] leading-7 text-muted-foreground">当前项目的源码、版本记录与问题反馈，以项目仓库及其许可说明为准。</p><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex min-h-11 max-w-full items-center gap-2 break-all text-[14px] font-medium"><Github size={16} />github.com/xiaoze-hub/sida-pro<ArrowUpRight size={16} className="shrink-0" /></a></div>
+          <div className="flex flex-wrap items-center gap-2"><StatusChip>社区版</StatusChip><StatusChip>AGPL-3.0</StatusChip></div>
+          <h3 className="text-[20px] font-semibold">在自己的环境中部署 SIDA</h3>
+          <p className="text-[14px] leading-7 text-muted-foreground">免费获取社区版源码，按仓库说明部署、配置模型和数据源。社区版功能与版本以仓库为准；本页 Skill API 文档对应当前实例，接入前请核对目标服务的接口目录。</p>
+          <div className="rounded-lg bg-s2 p-5"><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-start gap-2 break-all text-[14px] font-medium"><Github size={18} className="mt-0.5 shrink-0" />xiaoze-hub/Stock-Intelligent-Data-Analytics<ArrowUpRight size={16} className="shrink-0" /></a></div>
+          <CodeBlock code={`git clone ${COMMUNITY_REPOSITORY}.git`} language="bash" />
+          <div className="flex flex-wrap gap-2"><Button asChild className="h-11"><a href={COMMUNITY_DEPLOYMENT} target="_blank" rel="noopener noreferrer"><Server size={16} />查看部署说明<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><a href={COMMUNITY_LICENSE} target="_blank" rel="noopener noreferrer">阅读开源许可<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><Link to="/tiers">查看账户方案</Link></Button></div>
+          <p className="text-[12px] leading-6 text-muted-foreground">自行部署需准备运行环境，模型调用和外部数据服务可能需要单独配置与承担费用。当前 Pro 实例遵循自己的许可和权限规则。</p>
+        </div>
+      </Section>
     </DevPageLayout>
+    </PublicSiteFrame>
   )
 }
