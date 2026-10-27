@@ -1,7 +1,8 @@
 import { NoAccessPage } from '@/components/NoAccessPage'
+import { GithubMark } from '@/components/icons/GithubMark'
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -644,7 +645,7 @@ function App() {
               className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               title="GitHub 项目"
             >
-              <Github className="w-4 h-4" />
+              <GithubMark className="w-4 h-4" />
             </button>
             <button
               onClick={() => setLogsOpen(true)}
@@ -698,7 +699,7 @@ function App() {
                 className="hidden w-8 h-8 rounded-xl items-center sm:flex justify-center text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
                 title="GitHub 项目"
               >
-                <Github className="w-4 h-4" />
+                <GithubMark className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setLogsOpen(true)}

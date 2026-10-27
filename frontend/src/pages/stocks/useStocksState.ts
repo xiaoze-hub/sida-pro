@@ -120,7 +120,7 @@ const [positionSearchMarket, setPositionSearchMarket] = useState('')  // 搜索�
 const [positionSearchResults, setPositionSearchResults] = useState<SearchResult[]>([])
 const [positionSearching, setPositionSearching] = useState(false)
 const [showPositionDropdown, setShowPositionDropdown] = useState(false)
-const positionSearchTimer = useRef<ReturnType<typeof setTimeout>>()
+const positionSearchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 const positionDropdownRef = useRef<HTMLDivElement>(null)
 
 // Agent dialog

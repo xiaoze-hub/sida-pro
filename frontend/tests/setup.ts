@@ -15,3 +15,23 @@ if (typeof document !== 'undefined') {
 }
 
 export {}
+
+// 2026-10-27（依赖升级到 jsdom 新版后）：jsdom 不再内置 window.matchMedia，
+// 而很多组件与测试都会 `vi.spyOn(window, 'matchMedia')` —— 目标为 undefined 时
+// 直接抛 "can only spy on a function"。这里补一个最小实现（非测试专用，生产不受影响）。
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: (query: string): MediaQueryList => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList),
+  })
+}

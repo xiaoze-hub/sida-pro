@@ -1,3 +1,35 @@
+## release: v0.85.0（前端依赖组升级：React 19 / Router 7 / Radix 新版 / vite 8）
+
+合并 `dependabot/npm_and_yarn/frontend/npm-deps-46a42206cb`。**这不是补丁级升级**：
+React 18→19、react-router 6→7、lucide 0.300→1.61、tailwind-merge 2→3、
+react-day-picker 9→10、Radix 全家桶主版本、vite 5→8（rolldown 内核）、vitest 3→5。
+
+### 升级后必须改的代码（13 处，逐类说明）
+| 类别 | 现象 | 修法 |
+|---|---|---|
+| `lucide-react` v1 | 移除品牌图标，`import { Github }` → TS2305（App / PublicSiteChrome / Developers / Tiers 四处） | 自建 `src/components/icons/GithubMark.tsx`（官方 octocat 路径，认 `className` 和 `size`），**不新增依赖** |
+| React 19 类型 | `useRef<T>()` 无参不再合法（5 处：logs-modal ×2、DevPageLayout、useStocksData、useStocksState） | 补 `useRef<T \| undefined>(undefined)` |
+| React 19 RefObject | `RefObject<T>` 现含 `null`（ChatWidget） | 回调 props 类型放宽为 `RefObject<T \| null>` |
+| react-router 7 | `UNSAFE_NavigationContext` 的 navigator 类型新增 `useTransitions`（TabPane） | 上下文补 `useTransitions: false` |
+| jsdom 新版 | 不再内置 `window.matchMedia`，而测试会 `vi.spyOn` 它 → "can only spy on a function" | `tests/setup.ts` 补最小 polyfill（仅测试环境） |
+| vite 8 | 默认改用 lightningcss 压 CSS，本项目有它不接受的选择器（`Unexpected token Delim('.')`）→ 构建失败 | `build.cssMinify: 'esbuild'` + 显式安装 `esbuild`（vite 8 不再自带） |
+
+### 三个「升上去会炸」的依赖：**钉回兼容版本**（这是本次的取舍）
+| 包 | dependabot 目标 | 实际保留 | 原因 |
+|---|---|---|---|
+| `tailwindcss` | 4.3 | **^3.4.19** | v4 需迁移到 `@tailwindcss/postcss` + CSS 入口改 `@import` + `@config`，是独立迁移工程（UI 全站观感），不该塞进依赖升级里偷做 |
+| `typescript` | 7.0 | **^5.9.3** | `typescript-eslint` 明确报 "does not support TS 7.0"；TS 7 还把 `lib/typescript.js` 结构改了，`check_ui_rules.mjs` 直接 ERR_MODULE_NOT_FOUND |
+| `eslint` | 10.13 | **^9.39.2** | 与 typescript-eslint 8 的兼容矩阵只到 9 |
+
+这三条不是"懒得升"，而是**工具链还没跟上**：升级后门禁跑不起来，等于用"绿不了的门禁"换版本号。
+
+### 门禁（本机实测）
+- `tsc --noEmit` **0 错**
+- `eslint . --max-warnings=0` **0**
+- `check_ui_rules.mjs` **OK**
+- `vitest run` **262 files · 1960 tests 全绿**
+- `vite build` **通过**（5.6s，dist 7.2M）
+
 ## release: v0.84.2（修 pro 用户「盘中扫描」必 403）
 
 用户报：pro 账号首页点「盘中扫描」报 `无权限访问该管理功能, 请联系管理员`。

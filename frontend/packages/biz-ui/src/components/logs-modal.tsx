@@ -97,8 +97,8 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
   const [showAllLoggerFilters, setShowAllLoggerFilters] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [beforeId, setBeforeId] = useState<number>(0)
-  const refreshTimer = useRef<ReturnType<typeof setInterval>>()
-  const searchTimer = useRef<ReturnType<typeof setTimeout>>()
+  const refreshTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const limit = 200
 
   const loggerPreset = useMemo(
