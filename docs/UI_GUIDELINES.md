@@ -1,6 +1,6 @@
 # SIDA 界面与交互准则
 
-> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce`、表单边界基于 `3f6032a0` 更新，规范随同本次代码提交生效。
+> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce`、表单边界基于 `3f6032a0`、浏览器全屏基于 `2de25970` 更新，规范随同本次代码提交生效。
 > 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/health.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/klines.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/quotes.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
 > 覆盖：全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
 > 未覆盖：交易算法准确性、外部行情接口可用性、生产数据与全部页面的完整业务验收；不以 UI 验证代替口径、权限和多用户测试。
@@ -16,6 +16,8 @@
 收起侧栏时所有底部工具必须纵向排列且完全落在 64px 宽度内，能力摘要只显示有完整可访问名称的状态圆点。窄侧栏里的账号、消息浮层向右打开并限制高度，不能向左或屏幕底部越界。账号菜单统一点击展开，避免悬停开启与点击切换相互冲突。
 
 顶部“关闭全部”图标仅在多个页签时显示，执行后只保留常驻首页并返回首页；仅剩首页时隐藏按钮。图标必须有明确名称，沿用批量关闭、卸载与页签持久化流程。
+
+浏览器全屏入口在桌面页签栏右侧、手机顶栏；调用 Fullscreen API 对整个 documentElement 全屏，不改变工作台、会话和页签状态。图标/名称跟随 fullscreenchange，同步 Esc 或浏览器菜单退出的状态；请求失败如实提示并允许重试，不支持原生全屏的浏览器隐藏入口。手机按钮保留 44px 热区，窄屏适当收起时段摘要以避免顶栏越界。
 
 模块边界由空间、底色和分组建立。**内容卡片统一 `border: none`，禁止普通、悬停和选中态描边、装饰 ring、内侧高光及用 inset 阴影模拟边框。** 此项为 2026-10-26 用户最终裁决，取代此前“细弱卡片边线”的约定。共享 Card 所有变体与手写内容容器都遵守同一规则；可以使用轻微外部阴影，不能每层容器重复包卡片。
 
