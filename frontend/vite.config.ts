@@ -37,6 +37,11 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1200,
+    // 2026-10-27（vite 8 升级）：vite 8 默认用 lightningcss 压 CSS，
+    // 本项目现有样式里有它不接受的选择器写法（`Unexpected token Delim('.')`），
+    // 构建直接失败。先固定回 esbuild 压缩（vite 5 时代的默认），
+    // 让依赖升级能落地；迁移到 lightningcss 单独排期（需要逐页截图比对）。
+    cssMinify: 'esbuild',
     rollupOptions: {
       output: {
         manualChunks(id) {

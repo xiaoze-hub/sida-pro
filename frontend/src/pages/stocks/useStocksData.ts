@@ -170,7 +170,7 @@ const isSuppressCardClick = () => {
     return false
   }
 }
-const searchTimer = useRef<ReturnType<typeof setTimeout>>()
+const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 const dropdownRef = useRef<HTMLDivElement>(null)
 
 // 非核心数据后台加载（不阻塞 UI）

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { GithubMark } from '@/components/icons/GithubMark'
 import { usePublicSeo } from '@/hooks/use-public-seo'
 import { Link } from 'react-router-dom'
-import { ArrowRight, ArrowUpRight, Check, Github, Loader2, Server } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, Check, Loader2, Server } from 'lucide-react'
 import { applyPro, fetchProApplyStatus, fetchTiers, isAuthenticated } from '@panwatch/api'
 import type { ProApplyStatus, TierRow, TiersResp } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -82,11 +83,11 @@ export default function Tiers() {
       </header>}
 
       <section aria-labelledby="community-title" className="grid items-center gap-6 rounded-xl bg-card p-6 sm:p-8 lg:grid-cols-[minmax(0,1fr)_auto]">
-        <div className="min-w-0"><div className="mb-3 flex flex-wrap items-center gap-2"><Github size={20} /><h2 id="community-title" className="text-[20px] font-semibold">社区开源版 · 免费自行部署</h2><StatusChip>AGPL-3.0</StatusChip></div>
+        <div className="min-w-0"><div className="mb-3 flex flex-wrap items-center gap-2"><GithubMark size={20} /><h2 id="community-title" className="text-[20px] font-semibold">社区开源版 · 免费自行部署</h2><StatusChip>AGPL-3.0</StatusChip></div>
           <p className="max-w-2xl text-[14px] leading-7 text-muted-foreground">源码公开，按仓库说明安装并配置数据源与模型。社区版功能和发布节奏以仓库为准；当前实例的账户权限与用量上限由本实例管理员管理。</p>
           <a className="mt-3 inline-flex min-h-11 max-w-full items-center gap-2 break-all text-[12px] text-muted-foreground hover:text-foreground" href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer">xiaoze-hub/Stock-Intelligent-Data-Analytics<ArrowUpRight size={14} className="shrink-0" /></a>
         </div>
-        <div className="flex flex-wrap gap-2 lg:flex-col"><Button asChild variant="outline" className="h-11"><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer"><Github size={16} />查看开源仓库<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><a href={COMMUNITY_DEPLOYMENT} target="_blank" rel="noopener noreferrer"><Server size={16} />部署说明<ArrowUpRight size={16} /></a></Button></div>
+        <div className="flex flex-wrap gap-2 lg:flex-col"><Button asChild variant="outline" className="h-11"><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer"><GithubMark size={16} />查看开源仓库<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><a href={COMMUNITY_DEPLOYMENT} target="_blank" rel="noopener noreferrer"><Server size={16} />部署说明<ArrowUpRight size={16} /></a></Button></div>
       </section>
 
       <section aria-labelledby="account-plans-title" className="space-y-5">
@@ -108,7 +109,7 @@ export default function Tiers() {
           {data.demo_note && <p className="text-[12px] leading-6 text-muted-foreground">{data.demo_note}</p>}
         </>}
       </section>
-      <section className="flex flex-wrap items-center justify-between gap-5 rounded-xl bg-s2 p-6"><div><h2 className="text-[16px] font-semibold">准备接入自己的工具？</h2><p className="mt-2 text-[14px] leading-7 text-muted-foreground">查看 API 鉴权、实时目录与调用说明。社区版使用与修改请遵循仓库许可。</p></div><div className="flex flex-wrap gap-3"><Button asChild variant="outline" className="h-11"><Link to="/developers">开发者文档<ArrowRight size={16} /></Link></Button><Button asChild variant="ghost" className="h-11"><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer"><Github size={16} />Pro 项目仓库<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><a href={COMMUNITY_LICENSE} target="_blank" rel="noopener noreferrer">开源许可<ArrowUpRight size={16} /></a></Button></div></section>
+      <section className="flex flex-wrap items-center justify-between gap-5 rounded-xl bg-s2 p-6"><div><h2 className="text-[16px] font-semibold">准备接入自己的工具？</h2><p className="mt-2 text-[14px] leading-7 text-muted-foreground">查看 API 鉴权、实时目录与调用说明。社区版使用与修改请遵循仓库许可。</p></div><div className="flex flex-wrap gap-3"><Button asChild variant="outline" className="h-11"><Link to="/developers">开发者文档<ArrowRight size={16} /></Link></Button><Button asChild variant="ghost" className="h-11"><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer"><GithubMark size={16} />Pro 项目仓库<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><a href={COMMUNITY_LICENSE} target="_blank" rel="noopener noreferrer">开源许可<ArrowUpRight size={16} /></a></Button></div></section>
     </main>
   </PublicSiteFrame>
 }

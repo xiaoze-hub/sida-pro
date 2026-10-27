@@ -1,4 +1,5 @@
 import { Link, useSearchParams } from 'react-router-dom'
+import { GithubMark } from '@/components/icons/GithubMark'
 import { usePublicSeo } from '@/hooks/use-public-seo'
 import { PublicSiteFrame } from '@/components/public/PublicSiteChrome'
 import { PROJECT_REPOSITORY, COMMUNITY_REPOSITORY, COMMUNITY_DEPLOYMENT, COMMUNITY_LICENSE } from '@/lib/product-links'
@@ -6,7 +7,6 @@ import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
 import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowUpRight,
-  Github,
   Server,
   KeyRound,
   ShieldCheck,
@@ -283,7 +283,7 @@ export default function DevelopersPage() {
       onNav={setActiveSection}
       headerExtra={<>
         <Button asChild className="h-11"><Link to={loggedIn ? '/api-keys' : '/login?mode=register'}><KeyRound size={16} />{loggedIn ? '管理 API Key' : '注册并获取 Key'}</Link></Button>
-        <Button asChild variant="ghost" className="h-11"><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer"><Github size={16} />项目仓库<ArrowUpRight size={16} /></a></Button>
+        <Button asChild variant="ghost" className="h-11"><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer"><GithubMark size={16} />项目仓库<ArrowUpRight size={16} /></a></Button>
       </>}
     >
       {/* ── 快速开始 ── */}
@@ -715,13 +715,13 @@ def call_with_retry(fn, max_retries=3):
           />
         </div>
       </Section>
-      <Section id="sec-selfhost" title="开源与部署" description="社区开源版与当前实例分别维护" icon={<Github size={18} />}>
+      <Section id="sec-selfhost" title="开源与部署" description="社区开源版与当前实例分别维护" icon={<GithubMark size={18} />}>
         <div className="space-y-5">
-          <div className="rounded-lg bg-s2 p-5"><h3 className="text-[16px] font-semibold">SIDA Pro 项目仓库</h3><p className="mt-2 text-[14px] leading-7 text-muted-foreground">当前项目的源码、版本记录与问题反馈，以项目仓库及其许可说明为准。</p><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex min-h-11 max-w-full items-center gap-2 break-all text-[14px] font-medium"><Github size={16} />github.com/xiaoze-hub/sida-pro<ArrowUpRight size={16} className="shrink-0" /></a></div>
+          <div className="rounded-lg bg-s2 p-5"><h3 className="text-[16px] font-semibold">SIDA Pro 项目仓库</h3><p className="mt-2 text-[14px] leading-7 text-muted-foreground">当前项目的源码、版本记录与问题反馈，以项目仓库及其许可说明为准。</p><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex min-h-11 max-w-full items-center gap-2 break-all text-[14px] font-medium"><GithubMark size={16} />github.com/xiaoze-hub/sida-pro<ArrowUpRight size={16} className="shrink-0" /></a></div>
           <div className="flex flex-wrap items-center gap-2"><StatusChip>社区版</StatusChip><StatusChip>AGPL-3.0</StatusChip></div>
           <h3 className="text-[20px] font-semibold">在自己的环境中部署 SIDA</h3>
           <p className="text-[14px] leading-7 text-muted-foreground">免费获取社区版源码，按仓库说明部署、配置模型和数据源。社区版功能与版本以仓库为准；本页 Skill API 文档对应当前实例，接入前请核对目标服务的接口目录。</p>
-          <div className="rounded-lg bg-s2 p-5"><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-start gap-2 break-all text-[14px] font-medium"><Github size={18} className="mt-0.5 shrink-0" />xiaoze-hub/Stock-Intelligent-Data-Analytics<ArrowUpRight size={16} className="shrink-0" /></a></div>
+          <div className="rounded-lg bg-s2 p-5"><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-start gap-2 break-all text-[14px] font-medium"><GithubMark size={18} className="mt-0.5 shrink-0" />xiaoze-hub/Stock-Intelligent-Data-Analytics<ArrowUpRight size={16} className="shrink-0" /></a></div>
           <CodeBlock code={`git clone ${COMMUNITY_REPOSITORY}.git`} language="bash" />
           <div className="flex flex-wrap gap-2"><Button asChild className="h-11"><a href={COMMUNITY_DEPLOYMENT} target="_blank" rel="noopener noreferrer"><Server size={16} />查看部署说明<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><a href={COMMUNITY_LICENSE} target="_blank" rel="noopener noreferrer">阅读开源许可<ArrowUpRight size={16} /></a></Button><Button asChild variant="ghost" className="h-11"><Link to="/tiers">查看账户方案</Link></Button></div>
           <p className="text-[12px] leading-6 text-muted-foreground">自行部署需准备运行环境，模型调用和外部数据服务可能需要单独配置与承担费用。当前 Pro 实例遵循自己的许可和权限规则。</p>

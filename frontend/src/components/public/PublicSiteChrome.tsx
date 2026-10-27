@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react'
+import { GithubMark } from '@/components/icons/GithubMark'
 import { Link, useLocation } from 'react-router-dom'
-import { ArrowUpRight, Github, Menu, Moon, Sun, X } from 'lucide-react'
+import { ArrowUpRight, Menu, Moon, Sun, X } from 'lucide-react'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { BrandMark } from '@/components/BrandMark'
 import { useTheme } from '@/hooks/use-theme'
@@ -30,13 +31,13 @@ export function PublicSiteHeader() {
       </Link>
       <nav aria-label="官网导航" className="hidden items-center gap-1 lg:flex">{navLinks}</nav>
       <div className="flex items-center gap-1 sm:gap-2">
-        <Button asChild variant="ghost" size="icon" className="hidden h-11 w-11 sm:inline-flex"><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" aria-label="GitHub 项目仓库"><Github size={18} /></a></Button>
+        <Button asChild variant="ghost" size="icon" className="hidden h-11 w-11 sm:inline-flex"><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" aria-label="GitHub 项目仓库"><GithubMark size={18} /></a></Button>
         <Button variant="ghost" size="icon" className="h-11 w-11" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}>{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</Button>
         <Button asChild variant="ghost" className="h-11 px-2 sm:px-3"><Link to="/login">登录工作台<ArrowUpRight size={16} className="hidden sm:block" /></Link></Button>
         <Button ref={trigger} variant="ghost" size="icon" className="h-11 w-11 lg:hidden" aria-label={open ? '收起网站导航' : '展开网站导航'} aria-expanded={open} aria-controls="public-mobile-nav" onClick={() => setOpen(!open)}>{open ? <X size={20} /> : <Menu size={20} />}</Button>
       </div>
     </div>
-    {open && <nav id="public-mobile-nav" aria-label="手机网站导航" className="grid border-t border-border bg-card px-5 py-3 lg:hidden">{navLinks}<a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="flex min-h-11 items-center gap-2 px-3 text-[14px] text-muted-foreground"><Github size={16} />GitHub 项目仓库<ArrowUpRight size={14} /></a></nav>}
+    {open && <nav id="public-mobile-nav" aria-label="手机网站导航" className="grid border-t border-border bg-card px-5 py-3 lg:hidden">{navLinks}<a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="flex min-h-11 items-center gap-2 px-3 text-[14px] text-muted-foreground"><GithubMark size={16} />GitHub 项目仓库<ArrowUpRight size={14} /></a></nav>}
   </header>
 }
 
@@ -44,7 +45,7 @@ export function PublicSiteFooter() {
   return <footer className="border-t border-border bg-card">
     <div className="mx-auto flex max-w-7xl flex-wrap justify-between gap-6 px-5 py-8 text-[12px] text-muted-foreground sm:px-8">
       <div><p className="font-medium text-foreground">SIDA Pro · 数智分析</p><p className="mt-2">技术研究与数据分析 · 非投资建议</p></div>
-      <nav aria-label="页脚导航" className="flex flex-wrap items-start gap-5"><Link to="/developers" className="hover:text-foreground">开发者文档</Link><Link to="/tiers" className="hover:text-foreground">账户方案</Link><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-foreground"><Github size={14} />GitHub 项目仓库<ArrowUpRight size={14} /></a><Link to="/terms" className="hover:text-foreground">使用条款</Link></nav>
+      <nav aria-label="页脚导航" className="flex flex-wrap items-start gap-5"><Link to="/developers" className="hover:text-foreground">开发者文档</Link><Link to="/tiers" className="hover:text-foreground">账户方案</Link><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-foreground"><GithubMark size={14} />GitHub 项目仓库<ArrowUpRight size={14} /></a><Link to="/terms" className="hover:text-foreground">使用条款</Link></nav>
     </div>
   </footer>
 }

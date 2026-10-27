@@ -65,7 +65,7 @@ function AssistantLauncher({
   onClick,
   storageKey,
 }: {
-  buttonRef: RefObject<HTMLButtonElement>
+  buttonRef: RefObject<HTMLButtonElement | null>
   busy: boolean
   onClick: () => void
   storageKey: string

@@ -159,7 +159,7 @@ export default function TabPane({
   }, [active, outerLocation, tabKey])
 
   const navigationContext = useMemo(
-    () => ({ basename: '/', navigator, static: false, future: { v7_relativeSplatPath: false } }),
+    () => ({ basename: '/', navigator, static: false, future: { v7_relativeSplatPath: false }, useTransitions: false }),
     [navigator],
   )
   const locationContext = useMemo(() => ({ location, navigationType: NavigationType.Pop }), [location])

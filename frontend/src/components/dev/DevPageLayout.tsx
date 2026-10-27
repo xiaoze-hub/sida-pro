@@ -72,7 +72,7 @@ export function InfoCard({ children, className }: { children: ReactNode; classNa
 export function CodeBlock({ code, language = 'bash', onCopy }: { code: string; language?: string; onCopy?: () => void }) {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>()
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
   const handleCopy = async () => {
     try {
