@@ -29,6 +29,7 @@ import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-ancho
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import { extractSymbolChips, marketOf } from '@/lib/copilot/symbolChips'
+import { publicAssistantContent } from '@/lib/copilot/public-content'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
 import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
 import { MentionPicker, type MentionTab } from '@/components/copilot/MentionPicker'
@@ -981,7 +982,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                   m.content
                 ) : (
                   (() => {
-                    const parsed = parseAnswer(m.content)
+                    const displayContent = publicAssistantContent(m.content)
+                    const parsed = parseAnswer(displayContent)
                     const symbolInMsg = extractSymbolChips(m.content)[0] || anchorSymbol
                     // 定稿消息带自己的痕；流式中的最后一条用实时态（定稿瞬间原地换成固化值）
                     const strip =
@@ -1008,7 +1010,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                             }
                           />
                         ) : (
-                          <SafeMarkdown>{m.content}</SafeMarkdown>
+                          <SafeMarkdown>{displayContent}</SafeMarkdown>
                         )}
                         {(() => {
                           const r = runForMessage(i)
@@ -1046,7 +1048,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                   : null}
                 <MessageActions
                   role={m.role}
-                  copyText={m.content}
+                  copyText={m.role === 'assistant' ? publicAssistantContent(m.content) : m.content}
                   canRegenerate={m.role === 'assistant' && i === msgs.length - 1 && !streaming}
                   onEdit={m.role === 'user' ? () => setInput(m.content) : undefined}
                   onCopy={() => {}}

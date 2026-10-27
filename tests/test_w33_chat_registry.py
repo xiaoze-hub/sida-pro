@@ -346,7 +346,7 @@ def test_nonstream_llm_degraded_no_retry():
     from src.web.api import chat as chat_api
     client = _Client([LLMDegradedError("服务降级", scene="chat")])
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, [], db=None)))
-    assert evs == [("text", "抱歉，AI 服务暂时不可用：LLM 降级(chat): 服务降级")]
+    assert evs == [("text", "抱歉，AI 服务暂时不可用，请稍后重试。")]
     assert client.chat_multi_calls == 0
 
 
@@ -380,7 +380,7 @@ def test_nonstream_exception_bottomline(monkeypatch):
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, [], db=None)))
     # stage 先产出, 随后异常穿透到外层兜底
     assert len(evs) == 2 and evs[0][0] == "stage" and evs[1][0] == "text"
-    assert evs[1][1].startswith("抱歉，AI 服务暂时不可用：")
+    assert evs[1][1] == "抱歉，AI 服务暂时不可用，请稍后重试。"
 
 
 def test_stream_delta_and_done():
@@ -422,7 +422,7 @@ def test_stream_llm_degraded_no_retry():
     from src.web.api import chat as chat_api
     client = _StreamClient([LLMDegradedError("服务降级", scene="chat")])
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, [], db=None, stream=True)))
-    assert evs == [("done", "抱歉，AI 服务暂时不可用：LLM 降级(chat): 服务降级")]
+    assert evs == [("done", "抱歉，AI 服务暂时不可用，请稍后重试。")]
     assert client.chat_multi_calls == 0
 
 
