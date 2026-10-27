@@ -2,7 +2,12 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!--
+      interactive-widget=resizes-content (2026-10-27): 手机输入法弹起时让**布局视口**跟着缩,
+      否则 100dvh / fixed 布局的底部输入框会被键盘盖住(安卓 Chrome/WebView 生效;
+      iOS Safari 不吃这个声明, 由 useViewportPanel 的 visualViewport 兜)。
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>数智分析 | SIDA</title>
 
     <!-- PWA -->

@@ -75,29 +75,36 @@ function strengthTone(label: string | null | undefined): string {
   }
 }
 
-function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw' }) {
+function StockChip({ s, basis = 'qfq', dense = false }: { s: LadderStock; basis?: 'qfq' | 'raw'; dense?: boolean }) {
+  // 2026-10-27 修「涨幅只显示一半」：格子固定 52px 宽/64px 高,
+  //   - px-0.5 把内容区挤到 46px, 而 `+10.01%` 在 12px 等宽数字下要 48px → 左右各溢出 1px 被裁;
+  //   - 名称/涨幅行高按默认 1.5(18px), 加 K 线 26px + 徽章行后整格 72~110px, 被单元格
+  //     `overflow-hidden` 从底部切掉 —— 被切掉的正好是最下面那行涨幅。
+  // 现在: 去掉横向内边距(内容 50px)、行高压到 14px、基础三行 = 60px 落在 64px 格内。
   return (
     <span
       title={stockTitle(s)}
       data-ladder-stock={s.symbol}
-      className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border px-0.5 py-0.5"
+      className="flex w-[52px] flex-col items-center gap-0 rounded border border-border px-0 py-0.5"
     >
       <DayCandle candle={s.candle} basis={basis} />
-      <span className="w-full truncate text-center text-[12px] text-foreground" title={s.name || s.symbol}>{s.name || s.symbol}</span>
+      <span className="w-full truncate text-center text-[12px] leading-[14px] text-foreground" title={s.name || s.symbol}>{s.name || s.symbol}</span>
       {/* P0(2026-10-18 审计 F06): 无 pct 时不渲染 `--` —— 单页 820 处占位把格子塞满噪音。
           保留等高占位块(高度不变、不塌格), 缺多少就是"这格只有名称+板数"。 */}
       {s.pct != null ? (
-        <span className={`text-[12px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
+        <span className={`whitespace-nowrap text-[12px] leading-[14px] tabular-nums ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
       ) : (
         <span aria-hidden className="h-[14px] leading-[14px]" />
       )}
-      {s.tag ? (
+      {/* 矩阵视图是「一格一种股票」的密集图(64px 高), 再加状态徽章会撑破格子被裁;
+          徽章信息全部保留在 tooltip 与按日列视图里, 这里不重复。 */}
+      {!dense && s.tag ? (
         <span className="rounded bg-s2 px-0.5 text-[12px] text-muted-foreground">{s.tag}</span>
       ) : null}
-      {s.seal_tag && s.seal_tag !== s.tag ? (
+      {!dense && s.seal_tag && s.seal_tag !== s.tag ? (
         <span className="rounded bg-s2 px-0.5 text-[12px] text-muted-foreground">{s.seal_tag}</span>
       ) : null}
-      {s.strength_label ? (
+      {!dense && s.strength_label ? (
         <span
           title={`强度 ${s.strength_label}（首封×封成比 · 影子运行·仅统计参考）`}
           data-testid={`ladder-strength-${s.symbol}`}
@@ -106,7 +113,7 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
           {s.strength_label}
         </span>
       ) : null}
-      {s.dive ? (
+      {!dense && s.dive ? (
         <span className="rounded bg-[--stock-down]/20 px-0.5 text-[12px] text-[--stock-down]">跳水</span>
       ) : null}
     </span>
@@ -243,7 +250,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
                 <div key={b} className="card-surface bg-card mb-1 flex h-[64px] flex-wrap content-start gap-1 overflow-hidden rounded p-0.5">
                   {!collapsed.has(b) && row
                     ? row.stocks.map((s) => (
-                      <StockChip key={s.symbol} s={s} basis={d.provisional ? 'raw' : 'qfq'} />
+                      <StockChip key={s.symbol} s={s} basis={d.provisional ? 'raw' : 'qfq'} dense />
                     ))
                     : null}
                 </div>

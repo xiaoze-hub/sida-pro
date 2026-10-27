@@ -124,6 +124,17 @@ pango/cairo + `fonts-noto-cjk` 的文件，而装这些库实测 700~1130s（apt
   移动会破坏契约；且它们已在子目录里，不属于"留在上面"。
 - 归档目录加 `README.md` 说明来由与"三类文件不要误删"。
 
+## 2026-10-27
+
+### fix-修复选模型下拉被裁-手机输入法遮挡输入框-连板梯队涨幅截断
+
+用户手机端报的三处界面问题，逐条修根因（不是调边距）：
+
+- **数智参谋·选模型列表被上面挡住**：下拉原为 `absolute bottom-full`（向上弹）挂在顶部工具条内，工具条贴近视口顶时整块面板翻出屏幕，只剩被裁掉的一条。改用 Radix Popover：Portal 挂到 body（不受任何 overflow 祖先裁剪）+ 碰撞检测自动上下翻转/左右避让，列表高度吃 `--radix-popover-content-available-height`；保存失败提示同时从按钮上方挪到下方。
+- **手机版键入时输入法遮挡输入框**：`index.html` viewport 增加 `interactive-widget=resizes-content`（安卓 Chrome/WebView 让布局视口随键盘收缩）；`useViewportPanel` 改为计入 `visualViewport.offsetTop`、同时监听 `resize` 与 `scroll`（部分浏览器键盘弹起只发 scroll）、rAF 合并同一帧多次事件、可见高度下限由 240 放宽到 160（横屏键盘弹起后硬撑 240 会把输入框顶到键盘下面）。
+- **连板梯队涨幅只显示一半**：格子固定 52×64px，chip 基础三行 + 徽章实测 93px，被单元格 `overflow-hidden` 从底部切掉 —— 被切掉的正好是最下面那行涨幅；同时 `px-0.5` 把内容区压到 46px，而 `+10.01%` 在 12px 等宽数字下要 48px，左右各溢出 1px。改为去掉横向内边距（内容 50px）、名称/涨幅行高 14px（基础三行 60px 落在 64px 格内）、涨幅 `tabular-nums whitespace-nowrap`；矩阵视图（64px 密集格）不再渲染状态徽章，徽章信息保留在 tooltip 与按日列视图。
+- 验证：新增 13 项回归测试（`useViewportPanel` 5 / `ModelPicker` 4 / 连板梯队 4）钉死三种成因，并同步调整原有「强度徽章」用例到按日列视图；无头浏览器实测 chip 高度 93px→60px、`+10.01%` 完整落在 50px 内容区内、3 格仍恰好铺满 170px；前端 **255 files · 1912 tests 全绿**，eslint 0、tsc 0、ui-rules OK、build OK。
+
 ## 2026-10-26
 
 ### feat-支持持仓关注股切换并隔离同码个股指数

@@ -78,7 +78,10 @@ describe('LadderBoard', () => {
   })
 
   // 2026-10-11 首封×封成比 强度徽章(影子运行): 有标签出徽章, 无标签不出(降级不编造)。
+  // 2026-10-27 调整: 徽章只在「按日列视图」(行高自适应)渲染; 矩阵视图是一格一种股票的
+  // 64px 密集图, 加徽章会撑破格子把最下面的涨幅行裁掉, 所以那里改由 tooltip 承载。
   it('强度徽章: 有标签出、无标签不出', () => {
+    window.localStorage.setItem('sida_ladder_view', 'cols')
     const d = {
       ...day,
       date: '20260920',
@@ -98,6 +101,7 @@ describe('LadderBoard', () => {
     expect(badge.textContent).toBe('S')
     expect(badge.getAttribute('title')).toContain('影子运行')
     expect(screen.queryByTestId('ladder-strength-F')).toBeNull()
+    window.localStorage.removeItem('sida_ladder_view')
   })
 
   // 2026-10-13 盘中徽章: live 列带「盘中 · 截至 xx:xx」小字(不卡片化); 定型后徽章消失。
