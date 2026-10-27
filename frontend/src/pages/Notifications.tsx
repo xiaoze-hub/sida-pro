@@ -427,7 +427,7 @@ export default function NotificationsPage() {
 
         <span className="hidden h-5 w-px bg-border/60 sm:block" />
 
-        <label className="relative flex h-8 shrink-0 items-center rounded-md border border-border bg-background pl-7 text-muted-foreground transition-colors focus-within:border-primary/40 focus-within:text-primary">
+        <label className="form-control-group relative flex h-8 shrink-0 items-center rounded-md border border-input bg-background pl-7 text-muted-foreground transition-colors">
           <Send className="pointer-events-none absolute left-2.5 h-3 w-3" />
           <select
             aria-label="按推送渠道筛选"

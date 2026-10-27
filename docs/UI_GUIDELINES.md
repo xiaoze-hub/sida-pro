@@ -1,6 +1,6 @@
 # SIDA 界面与交互准则
 
-> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce` 更新，规范随同本次代码提交生效。
+> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce`、表单边界基于 `3f6032a0` 更新，规范随同本次代码提交生效。
 > 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/health.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/klines.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/quotes.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
 > 覆盖：全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
 > 未覆盖：交易算法准确性、外部行情接口可用性、生产数据与全部页面的完整业务验收；不以 UI 验证代替口径、权限和多用户测试。
@@ -19,7 +19,7 @@
 
 模块边界由空间、底色和分组建立。**内容卡片统一 `border: none`，禁止普通、悬停和选中态描边、装饰 ring、内侧高光及用 inset 阴影模拟边框。** 此项为 2026-10-26 用户最终裁决，取代此前“细弱卡片边线”的约定。共享 Card 所有变体与手写内容容器都遵守同一规则；可以使用轻微外部阴影，不能每层容器重复包卡片。
 
-输入框轮廓、表格内部行分隔、页签栏、浮层边界和键盘焦点各有用途，可使用对应 token；它们不属于卡片装饰描边。不得给卡片随意添加 role 或定位来绕过检查。
+输入框轮廓、表格内部行分隔、页签栏、浮层边界和键盘焦点各有用途，可使用对应 token；它们不属于卡片装饰描边。输入框、文本域、原生下拉与共享 Select 使用中性浅灰边框，禁止聚焦时的彩色外圈、outline、ring 和发光阴影；焦点只通过同一条边框的中性灰变化体现。复选框、开关、按钮及链接保留原有可访问焦点指示。不得给卡片随意添加 role 或定位来绕过检查。
 
 ## 2. Token 与主题
 
@@ -29,7 +29,7 @@
 - 主按钮固定使用 `bg-primary text-primary-foreground`，不能硬写白字；暗色主按钮也要满足对比度。
 - 涨跌使用 `stock-up/stock-down`；中性指标不能染成涨跌。风险、成功、关注等只在有实际语义时用对应 token。
 - 切换主题、密度、舒适模式统一通过 `setAppearance()`；同窗口组件、其他标签页与系统主题变化必须同步。舒适模式仅改变深色外观，不能覆盖浅色。
-- 正文与次要文字相对内容底色至少 4.5:1；表单轮廓至少 3:1。深色卡片与页面底色必须能区分。`token-contrast.test.ts` 负责回归检查。
+- 正文与次要文字相对内容底色至少 4.5:1；表单常态边框按用户裁决使用浅灰，聚焦边框使用 `--input-focus` 中性灰并保持至少 3:1。深色卡片与页面底色必须能区分。`token-contrast.test.ts` 负责回归检查。
 
 ## 3. 字体、留白、密度
 

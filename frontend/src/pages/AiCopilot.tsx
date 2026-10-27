@@ -1261,7 +1261,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                   attach ? '补充说明…' : '问点什么…'
                 }
                 aria-label="分析问题"
-                className="scrollbar block max-h-40 min-h-11 w-full resize-none rounded-lg border border-input bg-card px-3 py-2 text-[16px] leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-[80px] md:text-[14px]"
+                className="scrollbar block max-h-40 min-h-11 w-full resize-none rounded-lg border border-input bg-card px-3 py-2 text-[16px] leading-relaxed md:min-h-[80px] md:text-[14px]"
               />
             </div>
             <div className="flex items-center gap-2">
