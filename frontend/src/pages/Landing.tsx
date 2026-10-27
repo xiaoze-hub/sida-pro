@@ -1,316 +1,196 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
+import { ArrowDown, ArrowRight, Check, PlayCircle, Code2, Database, Moon, ShieldCheck, Smartphone, Sun, Menu, X, BookOpen, Server, ArrowUpRight, Download } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { Copy, Check } from 'lucide-react'
 import { BrandMark } from '@/components/BrandMark'
+import { ProductVideo } from '@/components/landing/ProductVideo'
 import { useTheme } from '@/hooks/use-theme'
+import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@panwatch/base-ui/components/ui/tabs'
 
-/* ═══════════════════════════════════════════════════
-   深海粒子场 — 气泡上浮 + 光点连线
-   暗色：青蓝光点 on 深海；亮色：淡蓝灰点 on 纸面（降对比防抢内容）
-   ═══════════════════════════════════════════════════ */
-function DeepSeaBg({ theme }: { theme: 'light' | 'dark' }) {
-  const ref = useRef<HTMLCanvasElement>(null)
-  useEffect(() => {
-    const c = ref.current; if (!c) return
-    const x = c.getContext('2d'); if (!x) return
-    let id: number
-    const P: { px: number; py: number; r: number; v: number; o: number; h: number }[] = []
-    const N = 140
-    const isDark = theme === 'dark'
-    const rs = () => { c.width = innerWidth; c.height = innerHeight }
-    rs(); addEventListener('resize', rs)
-    for (let i = 0; i < N; i++) P.push({
-      px: Math.random() * c.width, py: Math.random() * c.height,
-      r: Math.random() * 2 + 0.4, v: Math.random() * 0.35 + 0.08,
-      // 亮色降低不透明度，避免粒子抢内容对比度
-      o: (Math.random() * 0.45 + 0.1) * (isDark ? 1 : 0.45),
-      h: 190 + Math.random() * 30,
-    })
-    const d = () => {
-      const g = x.createLinearGradient(0, 0, 0, c.height)
-      if (isDark) {
-        g.addColorStop(0, 'rgba(4,8,22,0.35)'); g.addColorStop(0.5, 'rgba(2,6,18,0.25)'); g.addColorStop(1, 'rgba(0,2,10,0.45)')
-      } else {
-        // 亮色：极淡冷灰，几乎不遮内容
-        g.addColorStop(0, 'rgba(230,236,245,0.20)'); g.addColorStop(0.5, 'rgba(240,244,250,0.12)'); g.addColorStop(1, 'rgba(220,228,240,0.22)')
-      }
-      x.fillStyle = g; x.fillRect(0, 0, c.width, c.height)
-      for (const p of P) {
-        p.py -= p.v; p.px += Math.sin(p.py * 0.004) * 0.2
-        if (p.py < -8) { p.py = c.height + 8; p.px = Math.random() * c.width }
-        x.beginPath(); x.arc(p.px, p.py, p.r, 0, Math.PI * 2)
-        x.fillStyle = isDark
-          ? `hsla(${p.h},75%,62%,${p.o})`
-          : `hsla(${p.h},55%,48%,${p.o})`
-        x.fill()
-        if (p.r > 1.4) {
-          x.beginPath(); x.arc(p.px, p.py, p.r * 3.5, 0, Math.PI * 2)
-          x.fillStyle = isDark
-            ? `hsla(${p.h},75%,62%,${p.o * 0.07})`
-            : `hsla(${p.h},55%,48%,${p.o * 0.05})`
-          x.fill()
-        }
-      }
-      for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
-        const dx = P[i].px - P[j].px, dy = P[i].py - P[j].py, dd = Math.sqrt(dx * dx + dy * dy)
-        if (dd < 110) {
-          x.beginPath(); x.moveTo(P[i].px, P[i].py); x.lineTo(P[j].px, P[j].py)
-          x.strokeStyle = isDark
-            ? `rgba(56,189,248,${0.07 * (1 - dd / 110)})`
-            : `rgba(14,116,144,${0.06 * (1 - dd / 110)})`
-          x.lineWidth = 0.5; x.stroke()
-        }
-      }
-      id = requestAnimationFrame(d)
-    }
-    d()
-    return () => { cancelAnimationFrame(id); removeEventListener('resize', rs) }
-  }, [theme])
-  return <canvas ref={ref} className="fixed inset-0 z-0" style={{ pointerEvents: 'none' }} />
-}
+const media = '/media/product/'
+const navigation = [{ href: '#overview', label: '产品概览' }, { href: '#workflow', label: '产品功能' }, { href: '#demo', label: '操作演示' }, { href: '#resources', label: '部署与文档' }, { href: '#faq', label: '常见问题' }]
+const demos = [
+  {
+    id: 'market', title: '行情工作台', label: '01 / 看数据',
+    description: '从持仓与关注列表进入标的，在图表里切换周期、叠加指标。',
+    poster: 'market-poster.webp', duration: '00:31',
+    steps: ['打开持仓 / 关注股切换器，确认市场与代码。', '切换日 K、周 K，叠加 MACD 等技术指标。', '结合来源、最新 K 线日期与缺失提示阅读数据。'],
+    note: '录制中的股票仅用于演示界面操作，不代表推荐。',
+  },
+  {
+    id: 'assistant', title: '数智参谋', label: '02 / 查过程',
+    description: '围绕一个技术问题组织对话，展开工具调用，查看分析经过。',
+    poster: 'assistant-poster.webp', duration: '00:25',
+    steps: ['在完整工作台中打开已有会话。', '展开“过程”，查看工具、参数与执行耗时。', '打开过程面板，继续追溯已有运行记录。'],
+    note: '演示回放已有工具记录，未生成新的 AI 结论；使用 AI 需配置模型。',
+  },
+  {
+    id: 'system', title: '系统状态', label: '03 / 知状态',
+    description: '把服务依赖和连接依据放在一张图里，哪里需要配置一眼可见。',
+    poster: 'system-poster.webp', duration: '00:18',
+    steps: ['查看数据库、缓存、AI、调度等模块的状态。', '点击数据库节点，在侧边面板查看检测依据。', '刷新状态，按模块更新结果并保留快照。'],
+    note: '流动表示最近检测连通，非实时请求流量；未配置与异常如实显示。',
+  },
+] as const
 
-/* ── ASCII 原子 ── */
-const ATOMS = [
-  `    .  *  .
-  *   \\|/   *
-.  -- ( @ ) --  .
-  *   /|\\   .
-    .  *  .`,
-  `    *  .  *
-  .   \\|/   .
-*  -- ( @ ) --  *
-  .   /|\\   .
-    *  .  *`,
+const capabilities = [
+  { icon: Database, title: '先确认数据，再讨论结论', text: '行情、K 线与资金指标保留来源和口径。没有取到的数据明确显示缺失，不用猜测填补。' },
+  { icon: ShieldCheck, title: '每一步都有上下文', text: '会话、工具过程、运行记录与口径对照各有位置，让你能回头检查分析所依据的内容。' },
+  { icon: Code2, title: '按自己的方式接入', text: '通过设置管理模型与通知，使用 API Key 调用 Skill 接口。具体能力取决于数据源与服务配置。' },
 ]
-function AsciiAtom() {
-  const [f, setF] = useState(0)
-  useEffect(() => { const t = setInterval(() => setF(v => (v + 1) % ATOMS.length), 700); return () => clearInterval(t) }, [])
-  return <pre className="select-none font-mono text-[12px] leading-[1.15] text-cyan-400/20 dark:text-cyan-400/20 text-primary/25 md:text-[12px]">{ATOMS[f]}</pre>
-}
 
-/* ── 打字机 ── */
-function TW({ t, s = 45 }: { t: string; s?: number }) {
-  const [d, setD] = useState(''); const [e, setE] = useState(false)
-  useEffect(() => { let i = 0; const x = setInterval(() => { if (i < t.length) { setD(t.slice(0, i + 1)); i++ } else { setE(true); clearInterval(x) } }, s); return () => clearInterval(x) }, [t, s])
-  return <span>{d}{!e && <span className="animate-pulse text-primary">|</span>}</span>
-}
-
-/* ── 玻璃卡片 ── */
-function Glass({ tag, title, desc }: { tag: string; title: string; desc: string }) {
-  return (
-    <div className="card-surface group relative overflow-hidden rounded-xl bg-card dark:bg-gradient-to-b dark:from-cyan-500/[0.05] dark:to-blue-600/[0.02] backdrop-blur-xl p-7 transition-all duration-500 ">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 dark:via-cyan-400/25 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-      <span className="mb-4 inline-block font-mono text-[12px] uppercase tracking-[0.2em] text-primary/70 dark:text-cyan-400/70">{tag}</span>
-      <h3 className="mb-2.5 text-[16px] font-semibold text-foreground dark:text-white/90">{title}</h3>
-      <p className="text-[14px] leading-relaxed text-muted-foreground">{desc}</p>
-    </div>
-  )
-}
-
-/* ── 终端块 ── */
-function Term({ cmd }: { cmd: string }) {
-  const [ok, setOk] = useState(false)
-  return (
-    <div className="card-surface flex items-center justify-between rounded-xl bg-card dark:bg-[#080c18]/80 backdrop-blur-sm px-5 py-3.5">
-      <div className="flex items-center gap-3 overflow-x-auto">
-        <span className="font-mono text-[14px] text-primary/60 dark:text-cyan-500/50">$</span>
-        <code className="font-mono text-[14px] text-foreground dark:text-cyan-100/80">{cmd}</code>
-      </div>
-      <button className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-primary dark:hover:bg-white/5 dark:hover:text-cyan-300 transition-colors" onClick={() => { navigator.clipboard.writeText(cmd); setOk(true); setTimeout(() => setOk(false), 2000) }}>
-        {ok ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
-    </div>
-  )
-}
-
-/* ── 分隔线 ── */
-function Div() {
-  return (
-    <div className="flex items-center justify-center gap-3 py-1">
-      <span className="h-px flex-1 bg-gradient-to-r from-transparent to-primary/20 dark:to-cyan-500/15" />
-      <span className="font-mono text-[12px] text-primary/30 dark:text-cyan-500/25">◆</span>
-      <span className="h-px flex-1 bg-gradient-to-l from-transparent to-primary/20 dark:to-cyan-500/15" />
-    </div>
-  )
-}
-
-/* ═══ 主页面 ═══ */
 export default function LandingPage() {
-  const [tab, setTab] = useState<'quick' | 'source'>('quick')
-  const { theme } = useTheme()
-  const base = typeof window !== 'undefined' ? window.location.origin : ''
-
+  const { theme, toggleTheme } = useTheme()
+  const [menuOpen, setMenuOpen] = useState(false)
   return (
-    <div className="relative min-h-screen bg-background text-foreground dark:bg-[#030814] dark:text-white">
-      <DeepSeaBg theme={theme} />
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 h-[500px] w-[1000px] rounded-full bg-primary/[0.04] dark:bg-blue-600/[0.05] blur-[150px] pointer-events-none z-0" />
-
-      {/* 导航 */}
-      <header className="sticky top-0 z-50 border-b border-border dark:border-cyan-500/5 bg-background dark:bg-[#030814]/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <Link to="/" className="flex items-center gap-2">
-            <BrandMark />
-            <span className="text-[16px] font-semibold tracking-wide">SIDA</span>
-            <span className="hidden font-mono text-[12px] text-primary/50 dark:text-cyan-500/40 sm:inline">v1.0</span>
+    <div className="min-h-screen bg-background text-foreground">
+      <a href="#landing-main" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:bg-card focus:p-4">跳到主要内容</a>
+      <header className="sticky top-0 z-30 border-b border-border bg-card" onKeyDown={event => { if (event.key === 'Escape') setMenuOpen(false) }}>
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-3 sm:px-8">
+          <Link to="/" className="flex shrink-0 items-center gap-3" aria-label="SIDA 数智分析首页">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground"><BrandMark className="h-6 w-6" /></span>
+            <span className="hidden leading-tight min-[360px]:block"><span className="block text-[16px] font-semibold tracking-tight">SIDA Pro</span><span className="mt-1 block text-[12px] text-muted-foreground">数智分析</span></span>
           </Link>
-          <nav className="flex items-center gap-5">
-            <Link to="/tiers" className="font-mono text-[12px] text-muted-foreground hover:text-primary dark:hover:text-cyan-300 transition-colors">tiers</Link>
-            <Link to="/developers" className="font-mono text-[12px] text-muted-foreground hover:text-primary dark:hover:text-cyan-300 transition-colors">docs</Link>
-            <Link to="/login" className="font-mono text-[12px] text-muted-foreground hover:text-primary dark:hover:text-cyan-300 transition-colors">login</Link>
-            <Link to="/login?mode=register" className="rounded-lg border border-primary/25 dark:border-cyan-400/25 bg-primary/10 dark:bg-cyan-500/10 px-4 py-1.5 font-mono text-[12px] text-primary dark:text-cyan-300 hover:bg-primary/20 dark:hover:bg-cyan-500/20 transition-all">register</Link>
+          <nav aria-label="官网导航" className="hidden items-center gap-1 lg:flex">
+            {navigation.map(item => <a key={item.href} href={item.href} className="inline-flex min-h-11 items-center rounded-lg px-3 text-[14px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">{item.label}</a>)}
           </nav>
+          <div className="flex items-center gap-1 sm:gap-2">
+            <Button variant="ghost" size="icon" className="h-11 w-11" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}>
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </Button>
+            <Button asChild variant="ghost" className="h-11 px-2 text-foreground sm:px-3"><Link to="/login">登录工作台<ArrowUpRight size={16} className="hidden sm:block" /></Link></Button>
+            <Button variant="ghost" size="icon" className="h-11 w-11 lg:hidden" aria-label={menuOpen ? '收起网站导航' : '展开网站导航'} aria-expanded={menuOpen} aria-controls="landing-mobile-nav" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X size={20} /> : <Menu size={20} />}</Button>
+          </div>
         </div>
+        {menuOpen && <nav id="landing-mobile-nav" aria-label="手机网站导航" className="grid border-t border-border bg-card px-5 py-3 lg:hidden">{navigation.map(item => <a key={item.href} href={item.href} onClick={() => setMenuOpen(false)} className="flex min-h-11 items-center rounded-lg px-3 text-[14px] font-medium hover:bg-accent">{item.label}</a>)}</nav>}
       </header>
 
-      {/* Hero */}
-      <section className="relative z-10 mx-auto max-w-3xl px-6 pt-24 pb-16 text-center">
-        <div className="mb-4 flex justify-center opacity-50"><AsciiAtom /></div>
-        <div className="mb-4 font-mono text-[12px] tracking-[0.3em] text-primary/60 dark:text-cyan-400/50">[ AI-POWERED ANALYSIS PLATFORM ]</div>
-        <h1 className="text-[36px] font-bold leading-tight tracking-tight md:text-[48px]">
-          一切皆<span className="bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-300 dark:to-blue-500 bg-clip-text text-transparent">接口</span>
-        </h1>
-        {/* 首屏必须回答"给谁用 · 解决什么"(设计稿 v3.0 §三): 原文只有"面向开发者开放", 没说给谁。 */}
-        <p className="mx-auto mt-4 max-w-xl text-[16px] font-medium text-foreground dark:text-white/90">
-          给盯 A 股的开发者与操盘手：<span className="text-primary dark:text-cyan-300">一次注册</span>就能用
-          行情、资金、情报、决策四类能力，接口直接调、也能在终端里看。
-        </p>
-        <p className="mx-auto mt-4 max-w-xl text-[14px] leading-relaxed text-muted-foreground md:text-[16px]">
-          <TW t="SIDA 开发者预览版面向全球开发者开放。行情、资金、情报、决策等全部分析能力均通过标准 REST API 开放，可自由组合与集成。" />
-        </p>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link to="/login?mode=register" className="rounded-lg bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-500 dark:to-blue-600 px-5 py-2 text-[14px] font-semibold text-primary-foreground dark:text-white shadow-[0_0_18px_rgba(34,211,238,0.15)] dark:shadow-[0_0_18px_rgba(34,211,238,0.2)] hover:shadow-[0_0_28px_rgba(34,211,238,0.25)] dark:hover:shadow-[0_0_28px_rgba(34,211,238,0.35)] transition-all">开始使用</Link>
-          <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card dark:bg-white/[0.03] px-5 py-2 text-[14px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">开发者文档</Link>
-          <Link to="/api-keys" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card dark:bg-white/[0.03] px-5 py-2 text-[14px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">API Key</Link>
-        </div>
-      </section>
-
-      <div className="relative z-10 mx-auto max-w-3xl px-6"><Div /></div>
-
-      {/* 安装区 */}
-      <section className="relative z-10 mx-auto max-w-3xl px-6 py-16">
-        <h2 className="mb-6 text-center text-[16px] font-semibold text-foreground dark:text-white/90">一键使用</h2>
-        <div className="mb-4 flex justify-center gap-1">
-          {([['quick', '快速体验'], ['source', '源码安装']] as const).map(([k, l]) => (
-            <button key={k} className={`rounded-lg px-4 py-1.5 font-mono text-[12px] transition-colors ${tab === k ? 'bg-primary/10 dark:bg-cyan-500/10 text-primary dark:text-cyan-300 border border-primary/20 dark:border-cyan-500/20' : 'text-muted-foreground hover:text-foreground dark:hover:text-muted-foreground'}`} onClick={() => setTab(k)}>{l}</button>
-          ))}
-        </div>
-        <Term cmd={tab === 'quick' ? `curl -sL ${base}/api/skills/install.sh | bash -s -- YOUR_API_KEY` : 'git clone https://github.com/your-org/sida-pro.git'} />
-        <div className="mt-4 flex justify-center gap-4 font-mono text-[12px]">
-          <Link to="/developers" className="text-muted-foreground hover:text-primary dark:hover:text-cyan-400 transition-colors">查看文档</Link>
-          <Link to="/api-keys" className="text-muted-foreground hover:text-primary dark:hover:text-cyan-400 transition-colors">API Key</Link>
-          <Link to="/developers" className="text-muted-foreground hover:text-primary dark:hover:text-cyan-400 transition-colors">Skill 目录</Link>
-        </div>
-      </section>
-
-      <div className="relative z-10 mx-auto max-w-3xl px-6"><Div /></div>
-
-      {/* 公式标题 */}
-      <section className="relative z-10 mx-auto max-w-3xl px-6 py-16 text-center">
-        <h2 className="text-[28px] font-bold tracking-tight md:text-[36px]">
-          数据 = 行情 + <span className="bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-300 dark:to-blue-500 bg-clip-text text-transparent">分析</span>
-        </h2>
-        <p className="mx-auto mt-4 max-w-lg text-[14px] leading-relaxed text-muted-foreground">
-          SIDA 让数据在真实场景中产生价值。行情是原料，分析是引擎，API 是出口。
-        </p>
-      </section>
-
-      {/* 三列特性 */}
-      <section className="relative z-10 mx-auto max-w-5xl px-6 pb-16">
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-          <Glass tag="DATA ENGINE" title="数据引擎" desc="聚合多家行情与资讯源，自动健康检查与降级切换。K 线、逐笔、资金流、新闻全覆盖。" />
-          <Glass tag="AI ANALYSIS" title="AI 分析" desc="内置 Agent 覆盖复盘、研报、机会挖掘。主力意图识别、拆单追踪、情绪周期判定。" />
-          <Glass tag="API GATEWAY" title="API 网关" desc="30+ Skill 接口标准化输出。Key 鉴权、按量限流、多档位配额，即插即用。" />
-        </div>
-      </section>
-
-      <div className="relative z-10 mx-auto max-w-5xl px-6"><Div /></div>
-
-      {/* 设计思路 */}
-      <section className="relative z-10 mx-auto max-w-5xl px-6 py-16">
-        <h2 className="mb-10 text-center text-[20px] font-bold tracking-tight md:text-[28px] text-foreground dark:text-white/90">设计思路</h2>
-        <div className="grid grid-cols-1 gap-10 md:grid-cols-2 md:gap-16">
-          <div>
-            <h3 className="mb-3 text-[16px] font-semibold text-primary dark:text-cyan-300">一切皆接口</h3>
-            <p className="text-[14px] leading-relaxed text-muted-foreground">
-              SIDA 的全部分析能力均通过标准 REST API 开放。行情查询、资金流向、AI 分析、策略信号——所有功能都有对应的 Skill 接口，可通过 API Key 直接调用，也可在网页端实时体验。
-            </p>
-          </div>
-          <div>
-            <h3 className="mb-3 text-[16px] font-semibold text-primary dark:text-cyan-300">口径透明可追溯</h3>
-            <p className="text-[14px] leading-relaxed text-muted-foreground">
-              每个接口都标注数据口径（tick/eastmoney4/ths），资金类指标必须声明方向语义。数据缺失显式标注「无数据」，绝不编造数字。多源数据自动降级，口径标签始终可见。
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <div className="relative z-10 mx-auto max-w-3xl px-6"><Div /></div>
-
-      {/* 代码示例 */}
-      <section className="relative z-10 mx-auto max-w-3xl px-6 py-16">
-        <h2 className="mb-6 text-center text-[16px] font-semibold text-foreground dark:text-white/90">调用示例</h2>
-        <div className="card-surface overflow-hidden rounded-xl bg-card dark:bg-[#080c18]/80 backdrop-blur-sm">
-          <div className="flex items-center gap-2 border-b border-border dark:border-cyan-400/10 px-4 py-2.5">
-            <div className="flex gap-1.5">
-              <div className="h-2.5 w-2.5 rounded-full bg-red-500/50" />
-              <div className="h-2.5 w-2.5 rounded-full bg-yellow-500/50" />
-              <div className="h-2.5 w-2.5 rounded-full bg-green-500/50" />
+      <main id="landing-main">
+        <section id="overview" className="mx-auto max-w-7xl scroll-mt-24 px-5 pb-12 pt-10 sm:px-8 sm:pt-14">
+          <div className="grid items-end gap-8 lg:grid-cols-12 lg:gap-12">
+            <div className="lg:col-span-7">
+              <p className="mb-5 text-[12px] font-medium tracking-widest text-primary">股票研究 · 数据分析 · 过程追溯</p>
+              <h1 className="text-[36px] font-semibold leading-tight tracking-tight sm:text-[48px] lg:text-[48px]">AI 股票技术分析，<br />让研究有据可查。</h1>
             </div>
-            <span className="ml-2 font-mono text-[12px] text-primary/50 dark:text-cyan-500/40">bash</span>
+            <div className="lg:col-span-5">
+              <p className="max-w-lg text-[16px] leading-8 text-muted-foreground">整合市场全景、个股图表、关注列表与 AI 对话，连接数据查看、技术分析和过程复核，构建完整的个人研究工作流。</p>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <Button asChild size="lg" className="h-12 gap-5 rounded-xl px-5"><Link to="/login">进入研究工作台<ArrowUpRight size={20} /></Link></Button>
+                <Button asChild size="lg" variant="ghost" className="h-12 gap-3 px-2 text-foreground hover:bg-transparent hover:text-primary"><a href="#demo"><PlayCircle size={22} /><span className="underline decoration-border underline-offset-4">浏览操作演示</span></a></Button>
+              </div>
+              <p className="mt-4 text-[12px] leading-6 text-muted-foreground">基于已有数据的技术分析 · 非投资建议 · 支持自行部署</p>
+            </div>
           </div>
-          <pre className="overflow-x-auto p-5 font-mono text-[12px] leading-[1.9]">
-            <code>
-              <span className="text-primary/60 dark:text-cyan-500/50">$ </span>
-              <span className="text-primary dark:text-cyan-400">curl</span>
-              <span className="text-muted-foreground"> -X POST </span>
-              <span className="text-emerald-700 dark:text-emerald-400">"{base}/api/skills/get_stock_quote/run"</span>
-              <span className="text-muted-foreground"> \</span>{'\n'}
-              <span className="text-muted-foreground">  -H </span>
-              <span className="text-emerald-700 dark:text-emerald-400">"X-API-Key: sk_YOUR_KEY"</span>
-              <span className="text-muted-foreground"> \</span>{'\n'}
-              <span className="text-muted-foreground">  -d </span>
-              <span className="text-emerald-700 dark:text-emerald-400">'&#123;"symbol": "000001"&#125;'</span>{'\n\n'}
-              <span className="text-muted-foreground dark:text-cyan-500/40"># → &#123;"code": 0, "data": &#123;"price": 11.82, ...&#125;&#125;</span>
-            </code>
-          </pre>
-        </div>
-      </section>
+          <figure className="mt-10 overflow-hidden rounded-xl bg-card p-3 shadow-sm sm:mt-12 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-card px-1 pb-3 pt-1 text-[12px] text-muted-foreground sm:px-5">
+              <span className="font-medium text-foreground">个股研究工作台</span>
+              <a href="#demo" className="inline-flex items-center gap-1 hover:text-primary">查看实际操作<ArrowDown size={14} /></a>
+            </div>
+            <img src={`${media}workbench-desktop.webp`} width="1440" height="1100" alt="SIDA 深色个股工作台实拍：行情摘要、日 K、技术指标与筹码标注" fetchPriority="high" className="aspect-[1440/1100] h-auto w-full rounded-xl bg-s2 object-contain" />
+            <figcaption className="px-4 py-3 text-[12px] leading-6 text-muted-foreground sm:px-5">真实界面录制于 2026-10-27 · v0.82.2 本地环境。画面为当时的数据与配置快照，非当前行情。</figcaption>
+          </figure>
+        </section>
 
-      <div className="relative z-10 mx-auto max-w-3xl px-6"><Div /></div>
-
-      {/* CTA */}
-      <section className="relative z-10 mx-auto max-w-3xl px-6 py-16 text-center">
-        <h2 className="text-[20px] font-bold tracking-tight md:text-[28px] text-foreground dark:text-white/90">开始构建</h2>
-        <p className="mx-auto mt-3 max-w-md text-[14px] text-muted-foreground">
-          注册账号，获取 API Key，立即接入 SIDA 的全部分析能力。
-        </p>
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <Link to="/login?mode=register" className="rounded-lg bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-500 dark:to-blue-600 px-5 py-2 text-[14px] font-semibold text-primary-foreground dark:text-white shadow-[0_0_18px_rgba(34,211,238,0.15)] dark:shadow-[0_0_18px_rgba(34,211,238,0.2)] hover:shadow-[0_0_28px_rgba(34,211,238,0.25)] dark:hover:shadow-[0_0_28px_rgba(34,211,238,0.35)] transition-all">免费注册</Link>
-          <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card dark:bg-white/[0.03] px-5 py-2 text-[14px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">阅读文档</Link>
-        </div>
-        <div className="mt-6 flex justify-center gap-4 font-mono text-[12px]">
-          <Link to="/developers" className="text-muted-foreground hover:text-primary dark:hover:text-cyan-400 transition-colors">开发者文档</Link>
-          <Link to="/api-keys" className="text-muted-foreground hover:text-primary dark:hover:text-cyan-400 transition-colors">API Key</Link>
-          <Link to="/login" className="text-muted-foreground hover:text-primary dark:hover:text-cyan-400 transition-colors">登录</Link>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="relative z-10 border-t border-border dark:border-cyan-500/5 px-6 py-8">
-        <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 md:flex-row">
-          <div className="flex items-center gap-2">
-            <BrandMark />
-            <span className="font-mono text-[12px] text-muted-foreground">开源 · © 2026 SIDA</span>
+        <section id="demo" className="scroll-mt-24 bg-card py-14 sm:py-20" aria-labelledby="demo-title">
+          <div className="mx-auto max-w-7xl px-5 sm:px-8">
+            <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+              <div><p className="mb-3 text-[12px] font-medium tracking-widest text-primary">PRODUCT IN ACTION</p><h2 id="demo-title" className="text-[28px] font-semibold tracking-tight sm:text-[36px]">核心功能操作演示</h2></div>
+              <p className="max-w-md text-[14px] leading-7 text-muted-foreground">真实浏览器操作，剪去等待时间。点击播放，支持字幕、进度拖动和全屏观看。</p>
+            </div>
+            <Tabs defaultValue="market">
+              <TabsList aria-label="产品操作演示" className="mb-6 gap-3 border-b border-border pb-2">
+                {demos.map(demo => <TabsTrigger key={demo.id} value={demo.id} className="min-h-12 rounded-none bg-transparent px-3 text-[14px] text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=active]:bg-transparent data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:underline data-[state=active]:decoration-2 data-[state=active]:underline-offset-8">{demo.title}</TabsTrigger>)}
+              </TabsList>
+              {demos.map(demo => (
+                <TabsContent value={demo.id} key={demo.id}>
+                  <div className="grid items-start gap-6 lg:grid-cols-12 lg:gap-8">
+                    <div className="min-w-0 lg:col-span-9">
+                      <ProductVideo key={demo.id} title={demo.title} src={`${media}${demo.id}.mp4`} poster={`${media}${demo.poster}`} captions={`${media}${demo.id}.zh.vtt`} duration={demo.duration} />
+                    </div>
+                    <div className="lg:col-span-3">
+                      <p className="text-[12px] font-medium text-primary">{demo.label}</p>
+                      <h3 className="mt-3 text-[20px] font-semibold">{demo.title}</h3>
+                      <p className="mt-3 text-[14px] leading-7 text-muted-foreground">{demo.description}</p>
+                      <ol className="mt-5 space-y-4 text-[14px] leading-6">
+                        {demo.steps.map((step, index) => <li key={step} className="flex gap-3"><span className="font-mono text-muted-foreground">0{index + 1}</span><span>{step}</span></li>)}
+                      </ol>
+                      <p className="mt-5 text-[12px] leading-6 text-muted-foreground">{demo.note}</p>
+                      <a href={`${media}${demo.id}.mp4`} download className="mt-4 inline-flex min-h-11 items-center gap-2 text-[14px] font-medium text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"><Download size={15} />下载演示视频<ArrowDown size={15} /></a>
+                    </div>
+                  </div>
+                </TabsContent>
+              ))}
+            </Tabs>
           </div>
-          <div className="flex items-center gap-4 font-mono text-[12px] text-muted-foreground">
-            <Link to="/developers" className="hover:text-primary dark:hover:text-cyan-400 transition-colors">docs</Link>
-            <Link to="/login" className="hover:text-primary dark:hover:text-cyan-400 transition-colors">login</Link>
-            <Link to="/login?mode=register" className="hover:text-primary dark:hover:text-cyan-400 transition-colors">register</Link>
+        </section>
+
+        <section id="workflow" className="mx-auto max-w-7xl scroll-mt-24 px-5 py-14 sm:px-8 sm:py-20" aria-labelledby="workflow-title">
+          <p className="mb-3 text-[12px] font-medium tracking-widest text-primary">A CONNECTED WORKSPACE</p>
+          <h2 id="workflow-title" className="max-w-2xl text-[28px] font-semibold tracking-tight sm:text-[36px]">从市场到标的，<br className="sm:hidden" />从问题到证据。</h2>
+          <div className="mt-9 grid gap-6 lg:grid-cols-2">
+            <figure className="overflow-hidden rounded-xl bg-card p-3">
+              <img src={`${media}dashboard-dark.webp`} width="1440" height="960" alt="市场全景首页，显示指数走势、市场状态与可折叠看板" loading="lazy" className="h-auto w-full rounded-xl" />
+              <figcaption className="p-6"><h3 className="text-[20px] font-semibold">先建立市场上下文</h3><p className="mt-2 text-[14px] leading-7 text-muted-foreground">指数、市场全景与组合工作台集中展示。按需要折叠和定制看板，缺失的数据保留说明。</p></figcaption>
+            </figure>
+            <figure className="overflow-hidden rounded-xl bg-card p-3">
+              <img src={`${media}assistant-process.webp`} width="1440" height="960" alt="数智参谋已有会话展开五步工具调用的真实记录" loading="lazy" className="h-auto w-full rounded-xl" />
+              <figcaption className="p-6"><h3 className="text-[20px] font-semibold">把问题带进分析过程</h3><p className="mt-2 text-[14px] leading-7 text-muted-foreground">完整页与迷你助手共用会话。结合图表提出问题，回看工具步骤与已有运行记录。</p></figcaption>
+            </figure>
           </div>
-        </div>
-        <p className="mt-4 text-center font-mono text-[12px] text-muted-foreground">
-          本平台不构成投资建议 · market involves risk · invest with caution
-        </p>
+          <div className="mt-10 grid gap-8 md:grid-cols-3">
+            {capabilities.map(({ icon: Icon, title, text }) => <div key={title}><Icon className="mb-4 text-primary" size={22} /><h3 className="text-[16px] font-semibold">{title}</h3><p className="mt-3 text-[14px] leading-7 text-muted-foreground">{text}</p></div>)}
+          </div>
+        </section>
+
+        <section className="bg-card py-14 sm:py-20" aria-labelledby="mobile-title">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 px-5 sm:px-8 lg:grid-cols-2 lg:gap-20">
+            <div>
+              <Smartphone className="mb-5 text-primary" size={26} />
+              <h2 id="mobile-title" className="text-[28px] font-semibold leading-tight tracking-tight sm:text-[36px]">桌面与移动端，<br />一致的分析体验。</h2>
+              <p className="mt-5 max-w-md text-[16px] leading-8 text-muted-foreground">手机打开助手即可覆盖可用空间。输入默认一行，回车换行；由你点击输入，不自动唤起键盘。</p>
+              <ul className="mt-6 space-y-3 text-[14px]">
+                {['桌面与手机自适应布局', '浅色、深色与外观偏好', '持仓与关注股按账号管理'].map(text => <li key={text} className="flex items-center gap-3"><Check size={16} className="text-primary" />{text}</li>)}
+              </ul>
+              <a href={`${media}mobile-assistant.webp`} target="_blank" rel="noreferrer" className="mt-6 inline-flex min-h-11 items-center gap-2 text-[14px] font-medium text-primary">查看手机截图<ArrowRight size={16} /></a>
+            </div>
+            <figure className="mx-auto w-full max-w-xs overflow-hidden rounded-xl">
+              <ProductVideo title="手机助手" src={`${media}mobile.mp4`} poster={`${media}mobile-assistant.webp`} captions={`${media}mobile.zh.vtt`} duration="00:16" portrait />
+            </figure>
+          </div>
+        </section>
+
+        <section id="resources" className="mx-auto max-w-7xl scroll-mt-24 px-5 pt-14 sm:px-8 sm:pt-20" aria-labelledby="resources-title">
+          <div className="grid items-center gap-8 rounded-xl bg-card p-6 sm:p-8 lg:grid-cols-2">
+            <div><Server size={24} className="mb-4 text-primary" /><h2 id="resources-title" className="text-[28px] font-semibold tracking-tight">可管理、可配置的研究环境</h2><p className="mt-4 text-[14px] leading-7 text-muted-foreground">通过系统状态确认依赖连接，在设置中管理模型与通知。自行部署使用 PostgreSQL 与 Redis；预测引擎按需单独配置。</p><Button asChild variant="ghost" className="mt-5 gap-3 px-0 text-foreground hover:bg-transparent hover:text-primary"><Link to="/developers"><BookOpen size={18} />查阅开发者文档<ArrowUpRight size={16} /></Link></Button><p className="mt-3 text-[12px] text-muted-foreground">文档与 API 管理需登录当前实例。</p></div>
+            <figure><img src={`${media}system-light.webp`} width="1440" height="960" alt="系统状态连接图：服务、数据库与缓存正常，未配置和异常模块明确标记" loading="lazy" className="h-auto w-full rounded-lg" /><figcaption className="mt-3 text-[12px] leading-6 text-muted-foreground">系统状态实拍 · 点击节点查看连接依据与检测结果</figcaption></figure>
+          </div>
+        </section>
+
+        <section id="faq" className="mx-auto max-w-7xl scroll-mt-24 px-5 py-14 sm:px-8 sm:py-20" aria-labelledby="faq-title">
+          <div className="grid gap-8 lg:grid-cols-12 lg:gap-16">
+            <div className="lg:col-span-5"><p className="mb-3 text-[12px] font-medium tracking-widest text-primary">BEFORE YOU START</p><h2 id="faq-title" className="text-[28px] font-semibold tracking-tight sm:text-[36px]">使用与配置说明</h2><p className="mt-5 text-[14px] leading-7 text-muted-foreground">工具帮助你整理与核查数据。分析由可用数据与模型共同决定，最终判断始终由你完成。</p></div>
+            <div className="space-y-3 lg:col-span-7">
+              {[
+                ['它会推荐买卖股票吗？', 'SIDA 用于股票技术分析与研究。AI 输出、图表标注、预测和报告均不构成投资建议，也不保证收益。'],
+                ['部署后所有功能都能直接用吗？', '不能。行情取决于来源网络、权限与历史数据；AI 需配置模型服务；通知需配置渠道；预测引擎需单独部署。系统状态会区分正常、未检测、未配置与异常。'],
+                ['怎样开始使用？', '通过“进入工作台”登录，注册是否开放由实例管理员决定。自行部署请先准备 PostgreSQL、Redis 与认证配置，再按仓库运行手册启动。'],
+                ['截图里的数据是实时的吗？', '此页视频和截图录制于 2026-10-27，保留了当时的来源、时间与缺失提示。它们是产品操作演示，不是实时行情或实盘业绩。'],
+              ].map(([question, answer]) => <details key={question} className="rounded-xl bg-card p-5"><summary className="cursor-pointer text-[16px] font-medium">{question}</summary><p className="mt-4 text-[14px] leading-7 text-muted-foreground">{answer}</p></details>)}
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-s2 px-5 py-14 text-center sm:px-8 sm:py-20">
+          <p className="text-[12px] font-medium tracking-widest text-primary">YOUR NEXT ANALYSIS STARTS HERE</p>
+          <h2 className="mt-4 text-[28px] font-semibold tracking-tight sm:text-[36px]">开启你的下一次技术分析</h2>
+          <p className="mt-4 text-[16px] leading-8 text-muted-foreground">打开图表，提出问题，让每次分析都有据可查。</p>
+          <Button asChild size="lg" className="mt-7 h-12 gap-5 rounded-xl px-6"><Link to="/login">进入研究工作台<ArrowUpRight size={20} /></Link></Button>
+          <p className="mt-5 text-[12px] text-muted-foreground">已有账号直接登录 · 新账号遵循当前实例的注册规则</p>
+        </section>
+      </main>
+      <footer className="mx-auto flex max-w-7xl flex-col justify-between gap-5 px-5 py-8 text-[12px] leading-6 text-muted-foreground sm:px-8 md:flex-row">
+        <p>© 2026 SIDA Pro · 数智分析<br />本平台数据仅供参考，不构成投资建议。市场有风险，投资需谨慎。</p>
+        <nav aria-label="页脚导航" className="flex flex-wrap gap-6"><a href="#demo" className="hover:text-primary">操作演示</a><Link to="/developers" className="hover:text-primary">开发者文档</Link><Link to="/tiers" className="hover:text-primary">账户方案</Link><Link to="/login" className="hover:text-primary">登录工作台</Link></nav>
       </footer>
     </div>
   )

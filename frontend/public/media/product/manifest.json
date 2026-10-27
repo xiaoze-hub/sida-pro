@@ -1,0 +1,124 @@
+{
+  "capture_date": "2026-10-27",
+  "version": "v0.82.2",
+  "baseline": "2691c3eb64f45031cdb09637d2455551e81e2516",
+  "environment": "Local authenticated browser; real UI and existing tool history; no new AI request",
+  "files": [
+    {
+      "file": "assistant-dark.webp",
+      "bytes": 42530,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "assistant-poster.webp",
+      "bytes": 44084,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "assistant-process.webp",
+      "bytes": 44942,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "assistant.mp4",
+      "bytes": 249825,
+      "width": 1440,
+      "height": 960,
+      "duration": 25.416667
+    },
+    {
+      "file": "assistant.zh.vtt",
+      "bytes": 301
+    },
+    {
+      "file": "dashboard-dark.webp",
+      "bytes": 70332,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "market-poster.webp",
+      "bytes": 103444,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "market.mp4",
+      "bytes": 991347,
+      "width": 1440,
+      "height": 960,
+      "duration": 30.833333
+    },
+    {
+      "file": "market.zh.vtt",
+      "bytes": 305
+    },
+    {
+      "file": "mobile-assistant.webp",
+      "bytes": 15590,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "mobile.mp4",
+      "bytes": 90461,
+      "width": 390,
+      "height": 844,
+      "duration": 15.541667
+    },
+    {
+      "file": "mobile.zh.vtt",
+      "bytes": 225
+    },
+    {
+      "file": "preview.gif",
+      "bytes": 900153,
+      "width": 640,
+      "height": 426
+    },
+    {
+      "file": "settings-light.webp",
+      "bytes": 46558,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "system-dark.webp",
+      "bytes": 52736,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "system-light.webp",
+      "bytes": 51304,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "system-poster.webp",
+      "bytes": 54366,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "file": "system.mp4",
+      "bytes": 304386,
+      "width": 1440,
+      "height": 960,
+      "duration": 17.5
+    },
+    {
+      "file": "system.zh.vtt",
+      "bytes": 313
+    },
+    {
+      "file": "workbench-desktop.webp",
+      "bytes": 100690,
+      "width": 1440,
+      "height": 1100
+    }
+  ]
+}
