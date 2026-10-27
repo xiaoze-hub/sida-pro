@@ -17,6 +17,7 @@ import {
 } from '@/lib/copilot/copy'
 import { confidenceOfTen, evidenceState, toneBar, toneMeta } from '@/lib/copilot/tone'
 import { EVIDENCE_KEYS, type CopilotBrief } from '@/lib/copilot/types'
+import { ProApplyCTA } from '@/components/ProApplyCTA'
 import { CopilotDefenseBlock } from './CopilotDefenseBlock'
 import { CopilotPlanBlock } from './CopilotPlanBlock'
 
@@ -166,8 +167,10 @@ function BriefBody({
 
         {/* gated: 权限不足 ≠ 没数据 —— 给升级指引，不给 `--` */}
         {gated.length ? (
-          <div className="card-surface bg-card rounded px-2 py-1 text-[12px] text-role-watch">
-            {GATED_HINT}：{gated.map((k) => EVIDENCE_NAME[k]).join(' · ')}
+          <div className="card-surface flex flex-wrap items-center gap-x-2 gap-y-1 rounded bg-card px-2 py-1 text-[12px] text-role-watch">
+            <span>{GATED_HINT}：{gated.map((k) => EVIDENCE_NAME[k]).join(' · ')}</span>
+            {/* 2026-10-27: 只给提示没出路 —— 提示后面直接挂可点的申请入口 */}
+            <ProApplyCTA reason={`权限不足：${gated.map((k) => EVIDENCE_NAME[k]).join('/')}`} />
           </div>
         ) : null}
 

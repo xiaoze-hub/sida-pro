@@ -6,7 +6,8 @@
  *  - 防守位为空时明说「不给防守线（不猜价位）」；
  *  - 持仓者预案置顶。
  */
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render as rtlRender, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ state: { data: null as unknown, loading: false, error: null as string | null } }))
@@ -15,6 +16,8 @@ vi.mock('../../src/hooks/useCopilotBrief', () => ({
 }))
 
 import { CopilotBriefCard } from '../../src/components/copilot/CopilotBriefCard'
+
+const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(<MemoryRouter>{ui}</MemoryRouter>)
 
 const BASE = {
   symbol: '600111',

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { AlertTriangle, WifiOff, ShieldAlert, ServerCrash, Clock, RefreshCw } from 'lucide-react'
+import { ProApplyCTA } from '@/components/ProApplyCTA'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { cn } from '@/lib/utils'
 import { classifyApiError, type ApiErrorKind } from '@/lib/api-error'
@@ -128,6 +129,10 @@ export function ErrorState({
       </span>
       <p className="text-[14px] font-medium text-foreground">{displayTitle}</p>
       <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">{displayDesc}</p>
+      {/* 2026-10-27: 权限类错误必须给出路 —— 提示后面直接挂一键申请 */}
+      {resolved === 'permission' && (
+        <ProApplyCTA variant="inline" className="mt-3" label="申请开通权限" reason="权限不足：接口 401/403" />
+      )}
       {(onRetry || action) && (
         <div className="mt-4 flex items-center gap-2">
           {onRetry && (

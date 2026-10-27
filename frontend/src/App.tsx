@@ -1,3 +1,4 @@
+import { NoAccessPage } from '@/components/NoAccessPage'
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
 import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
@@ -305,7 +306,9 @@ function PermGuard({ perm, myPerms, children }: { perm?: string; myPerms: Set<st
       </div>
     )
   }
-  if (!myPerms.has(perm)) return <Navigate to="/" replace />
+  // 2026-10-27: 原来是静默 <Navigate to="/" replace /> —— 用户点了导航却回到首页,
+  // 既不知道发生了什么也不知道怎么拿权限。改为明确的说明 + 一键申请 Pro。
+  if (!myPerms.has(perm)) return <NoAccessPage perm={perm} />
   return <>{children}</>
 }
 

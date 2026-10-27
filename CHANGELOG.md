@@ -1,3 +1,41 @@
+## release: v0.84.0（普通用户撞权限门后有出路：一键申请 Pro）
+
+动因：普通用户碰到权限门时，页面上**只有一行静态提示**（甚至更糟 —— 静默跳回首页），
+知道被挡住了但不知道去哪申请。这一版把那行提示变成可点的动作。
+
+### 新增 `ProApplyCTA`（`src/components/ProApplyCTA.tsx`）
+一个组件，四种真实状态，全部按后端 `GET /api/pro/apply/status` 显示：
+
+| 状态 | 表现 |
+|---|---|
+| 未登录 | 「注册后申请 Pro」→ `/login?mode=register`（转化 ≤2 步，不直接调接口）|
+| 未申请 / 被拒 | 「申请开通 Pro」/「重新申请」，**点一下就提交**，不跳页面 |
+| 审核中 | 「申请审核中」禁用，不重复提交 |
+| 已开通（`pro` / `owner` / `admin` / `application=approved`）| 「已开通 Pro」，不再给按钮 |
+
+**取不到状态时不猜**：退回可申请态，用户点了会拿到真实结果（而不是假显示"已开通"）。
+
+### 三个落点
+1. **`CopilotBriefCard` 的 gated 提示**：`需要更高权限，升级后可见：xxx` 后面直接挂药丸按钮
+2. **`PermGuard` → 新增 `NoAccessPage`**：原来无权限是 `<Navigate to="/" replace />` **静默弹回首页**，
+   用户点了导航却"回到首页"，既不知发生了什么也不知怎么拿权限。现在明确三段式：
+   缺什么权限（中文名 + 权限码）→ 一键申请 → 或先回首页
+3. **`ErrorState` 的 permission 类型（401/403）**：提示后面挂「申请开通权限」
+
+权限中文名只映射常见项，未知权限码**照原样显示**——宁可露出代码，也不编一个听起来对但会误导申请的中文名。
+
+### 实测发现的两个坑（已修）
+- **admin 账号的 `role` 是 `owner`，不是 `admin`**：后端 `submit_application` 对 owner/pro 直接 400 拒绝，
+  前端若不认 owner，点一下会弹「owner 无需申请 Pro」的错误 toast。已把 owner 计入已开通。
+- UI 门禁两条：`text-[13px]` 不在允许档位（12/14/16/20）；`text-muted-foreground/60` 属文字透明度降级（R14）。
+  两处都已改。
+
+### 门禁
+- 前端 **257 files · 1931 tests 全绿**、tsc 0、eslint 0、ui-rules OK
+- 新增 `tests/components/pro-apply-cta.test.tsx`（10 例：未登录 / 提交 / 审核中 / 已开通 / owner /
+  被拒 / 状态接口失联 / NoAccessPage ×2 / ErrorState 权限类才挂）
+- `tests/components/copilot-brief-card.test.tsx` 补 MemoryRouter（卡片现在含路由链接）
+
 ## release: v0.83.0（Lottie 场景层：扫描 / 成功 / 空态三处动效）
 
 目标：让界面"动得有理由"，而不是到处撒动画。新增一层可复用的 Lottie 基础设施，
