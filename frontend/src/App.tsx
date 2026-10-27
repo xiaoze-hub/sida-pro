@@ -78,6 +78,7 @@ const AdminPage = lazyWithRetry(() => import('@/pages/Admin'), 'admin-page')
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
+import BrowserFullscreenButton from '@/components/BrowserFullscreenButton'
 import { AssistantWorkspaceProvider, AssistantPageHost } from '@/components/AssistantWorkspace'
 import { AssistantAvatar } from '@/components/AssistantAvatar'
 import { SystemStatusProvider } from '@/components/system/SystemStatusProvider'
@@ -675,7 +676,7 @@ function App() {
               <span className="whitespace-nowrap text-[14px] font-bold text-foreground">数智分析</span>
               {version && <span className="hidden whitespace-nowrap text-[12px] text-muted-foreground font-normal sm:inline">v{version}</span>}
             </NavLink>
-            <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 min-[420px]:flex">
               {/* 会话态(2026-09-20): 只允许顶栏极轻指示, 禁止整页染色 */}
               <SessionPhaseChip info={session} />
               <button
@@ -706,6 +707,7 @@ function App() {
               >
                 <ScrollText className="w-4 h-4" />
               </button>
+              <BrowserFullscreenButton />
               <NotificationBell size="sm" />
               <AccountMenu
                 size="sm"

@@ -1,7 +1,7 @@
 import { useViewportPanel } from '@/hooks/useViewportPanel'
 import { AssistantAvatar } from '@/components/AssistantAvatar'
 import type { AssistantEntry } from '@/components/AssistantWorkspace'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { safeFixed } from '@/lib/format'
 import {
   applyPendingAction,
@@ -127,6 +127,26 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
 } = {}) {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const editor = inputRef.current
+    if (!editor || !visible) return
+    const resize = () => {
+      const minimum = window.innerWidth < 768 ? 44 : 80
+      const limit = Math.max(minimum, Math.min(160, Math.floor((window.visualViewport?.height ?? window.innerHeight) * 0.3)))
+      editor.style.height = 'auto'
+      const contentHeight = editor.scrollHeight + 2
+      editor.style.height = `${Math.min(limit, Math.max(minimum, contentHeight))}px`
+      editor.style.overflowY = contentHeight > limit ? 'auto' : 'hidden'
+    }
+    resize()
+    window.addEventListener('resize', resize)
+    window.visualViewport?.addEventListener('resize', resize)
+    return () => {
+      window.removeEventListener('resize', resize)
+      window.visualViewport?.removeEventListener('resize', resize)
+    }
+  }, [input, visible, presentation])
   const [stage, setStage] = useState('')
   /**
    * 证据齐套度（2026-10-23）：把 stage 流折成按维度的 ✓/⏳/未取到。
@@ -715,7 +735,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
 
 
       {/* 右：交互工作台 */}
-      <section className="card flex min-w-0 flex-1 flex-col overflow-hidden">
+      <section className="card flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {pending.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2 border-b border-border bg-role-watch/5 px-3 py-2" data-testid="copilot-pending-actions">
             <span className="text-[12px] text-muted-foreground">待确认动作</span>
@@ -890,7 +910,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               void handleFile(f)
             }
           }}
-          className="scrollbar flex-1 space-y-3 overflow-y-auto px-3 py-3"
+          className="scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3"
         >
           {/* 实时运行面板(2026-10-25): 后台任务一提交就在这里显示工具流, 不再只有一行状态文案 */}
           <LiveRunPanel runId={liveRunId} />
@@ -1070,7 +1090,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           ) : null}
         </div>
 
-        <div className="border-t border-border p-2">
+        <div className="shrink-0 border-t border-border bg-card p-3" data-testid="copilot-composer">
           {/* 预设入口已整体移除(2026-10-26): 用户裁定不需要, 空态示例已承担引导 */}
 
           {/* 待发送附件预览（图片显示缩略图，其它显示文件名） */}
@@ -1117,18 +1137,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             </div>
           ) : null}
 
-          <div className="flex items-end gap-2">
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              disabled={streaming || uploading}
-              aria-label={ATTACH_HINT}
-              title={ATTACH_HINT}
-              data-testid="copilot-attach"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-s2 hover:text-foreground disabled:opacity-40"
-            >
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-            </button>
+          <div className="flex flex-col gap-2">
             <input
               ref={fileRef}
               type="file"
@@ -1141,7 +1150,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                 void handleFile(f)
               }}
             />
-            <div className="relative flex-1">
+            <div className="relative min-w-0">
               {mentionHit ? (
                 <MentionPicker
                   tab={mentionTab}
@@ -1177,103 +1186,121 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                   ))}
                 </div>
               ) : null}
-            <textarea
-              value={input}
-              onChange={(e) => {
-                const v = e.target.value
-                setInput(v)
-                if (composingRef.current) {
-                  setMentionHit(null)
-                  return
-                }
-                const caret = e.target.selectionStart ?? v.length
-                const hit = detectMention(v, caret)
-                setMentionHit(hit)
-                if (hit) setMentionIdx(0)
-              }}
-              onCompositionStart={() => {
-                composingRef.current = true
-                setMentionHit(null)
-              }}
-              onCompositionEnd={(e) => {
-                composingRef.current = false
-                // 组合结束必须补一次检测：中文输入法里 `@`/`@北方` 是当作组合输入提交的，
-                // 组合期我们刻意不弹面板，若这里不再检测，就只能等用户再敲一个字符才出现
-                // —— 表现就是「只有英文 @ 才会带出面板」。
-                const el = e.target as HTMLTextAreaElement
-                const hit = detectMention(el.value, el.selectionStart ?? el.value.length)
-                setMentionHit(hit)
-                if (hit) setMentionIdx(0)
-              }}
-              onPaste={(e) => {
-                // 直接粘贴截图（截图工具 → Ctrl+V）是最常见的用法，不能只支持点选文件
-                const item = Array.from(e.clipboardData?.items || []).find((it) =>
-                  it.type.startsWith('image/'),
-                )
-                const file = item?.getAsFile()
-                if (file) {
-                  e.preventDefault()
-                  void handleFile(file)
-                }
-              }}
-              onKeyDown={(e) => {
-                if (mentionHit && mentionRows.length) {
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault()
-                    setMentionIdx((i) => (i + 1) % mentionRows.length)
-                    return
-                  }
-                  if (e.key === 'ArrowUp') {
-                    e.preventDefault()
-                    setMentionIdx((i) => (i - 1 + mentionRows.length) % mentionRows.length)
-                    return
-                  }
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    pickMention(mentionRows[Math.min(mentionIdx, mentionRows.length - 1)])
-                    return
-                  }
-                  if (e.key === 'Escape') {
-                    e.preventDefault()
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setInput(v)
+                  if (composingRef.current) {
                     setMentionHit(null)
                     return
                   }
+                  const caret = e.target.selectionStart ?? v.length
+                  const hit = detectMention(v, caret)
+                  setMentionHit(hit)
+                  if (hit) setMentionIdx(0)
+                }}
+                onCompositionStart={() => {
+                  composingRef.current = true
+                  setMentionHit(null)
+                }}
+                onCompositionEnd={(e) => {
+                  composingRef.current = false
+                  // 组合结束必须补一次检测：中文输入法里 `@`/`@北方` 是当作组合输入提交的，
+                  // 组合期我们刻意不弹面板，若这里不再检测，就只能等用户再敲一个字符才出现
+                  // —— 表现就是「只有英文 @ 才会带出面板」。
+                  const el = e.target as HTMLTextAreaElement
+                  const hit = detectMention(el.value, el.selectionStart ?? el.value.length)
+                  setMentionHit(hit)
+                  if (hit) setMentionIdx(0)
+                }}
+                onPaste={(e) => {
+                  // 直接粘贴截图（截图工具 → Ctrl+V）是最常见的用法，不能只支持点选文件
+                  const item = Array.from(e.clipboardData?.items || []).find((it) =>
+                    it.type.startsWith('image/'),
+                  )
+                  const file = item?.getAsFile()
+                  if (file) {
+                    e.preventDefault()
+                    void handleFile(file)
+                  }
+                }}
+                onKeyDown={(e) => {
+                  // 手机的回车键用于换行，发送由明确的发送按钮完成。
+                  if (window.innerWidth < 768 && e.key === 'Enter' && !e.ctrlKey && !e.metaKey) return
+                  if (mentionHit && mentionRows.length) {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault()
+                      setMentionIdx((i) => (i + 1) % mentionRows.length)
+                      return
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault()
+                      setMentionIdx((i) => (i - 1 + mentionRows.length) % mentionRows.length)
+                      return
+                    }
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      pickMention(mentionRows[Math.min(mentionIdx, mentionRows.length - 1)])
+                      return
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      setMentionHit(null)
+                      return
+                    }
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    void send(input)
+                  }
+                }}
+                rows={1}
+                placeholder={
+                  attach ? '补充说明…' : '问点什么…'
                 }
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  void send(input)
-                }
-              }}
-              rows={2}
-              placeholder={
-                attach ? '补充说明…' : '问点什么…（Enter 发送 / Shift+Enter 换行）'
-              }
-              className="scrollbar min-h-[44px] w-full resize-none rounded-lg border border-input bg-card px-3 py-2 text-[14px] leading-relaxed focus-visible:ring-2 focus-visible:ring-ring"
-            />
+                aria-label="分析问题"
+                className="scrollbar block max-h-40 min-h-11 w-full resize-none rounded-lg border border-input bg-card px-3 py-2 text-[16px] leading-relaxed md:min-h-[80px] md:text-[14px]"
+              />
             </div>
-            <button
-              type="button"
-              onClick={() => setBgMode((v) => !v)}
-              aria-pressed={bgMode}
-              data-testid="copilot-bg-toggle"
-              title="后台执行：提交后即可离开页面，回来在会话里看结果"
-              className={`flex h-9 shrink-0 items-center rounded-lg px-2 text-[12px] transition-colors ${
-                bgMode
-                  ? 'bg-role-watch/20 text-role-watch'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {bgMode ? '后台中' : '后台'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void send(input)}
-              disabled={streaming || uploading || (!input.trim() && !attach)}
-              className="flex h-9 w-9 items-center justify-center rounded-lg bg-role-watch/15 text-role-watch hover:bg-role-watch/25 disabled:opacity-40"
-              aria-label={SEND}
-            >
-              {streaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                disabled={streaming || uploading}
+                aria-label={ATTACH_HINT}
+                title={ATTACH_HINT}
+                data-testid="copilot-attach"
+                className="flex h-11 w-11 md:h-9 md:w-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-s2 hover:text-foreground disabled:opacity-40"
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+              </button>
+              <span className="hidden text-[12px] text-muted-foreground md:inline">Enter 发送 · Shift+Enter 换行</span>
+              <button
+                type="button"
+                onClick={() => setBgMode((v) => !v)}
+                aria-pressed={bgMode}
+                data-testid="copilot-bg-toggle"
+                title="后台执行：提交后即可离开页面，回来在会话里看结果"
+                className={`ml-auto flex h-11 shrink-0 items-center rounded-lg px-3 text-[12px] transition-colors md:h-9 ${
+                  bgMode
+                    ? 'bg-role-watch/20 text-role-watch'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {bgMode ? '后台中' : '后台'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void send(input)}
+                disabled={streaming || uploading || (!input.trim() && !attach)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-role-watch/15 text-role-watch hover:bg-role-watch/25 disabled:opacity-40 md:h-9 md:w-9"
+                aria-label={SEND}
+              >
+                {streaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
         </div>
       </section>

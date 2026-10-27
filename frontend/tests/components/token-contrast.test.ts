@@ -17,9 +17,12 @@ describe.each<UiTheme>(['light', 'dark', 'dim'])('%s 主题可读性与边界', 
       }
     }
   })
-  it('结构边界可见，输入框边界至少 3:1', () => {
+  it('结构边界可见，输入框以中性灰聚焦边界保持 3:1', () => {
     expect(contrast(color('--border-strong'), color('--s1'))).toBeGreaterThanOrEqual(1.5)
-    expect(contrast(color('--input'), color('--s1'))).toBeGreaterThanOrEqual(3)
+    expect(contrast(color('--input-focus'), color('--s1'))).toBeGreaterThanOrEqual(3)
+    expect(color('--input').split(/\s+/)[1]).toBe('0%')
+    expect(color('--input-focus').split(/\s+/)[1]).toBe('0%')
+    if (theme === 'light') expect(Number.parseFloat(color('--input').split(/\s+/)[2])).toBeGreaterThanOrEqual(80)
     if (theme !== 'light') expect(contrast(color('--s0'), color('--s1'))).toBeGreaterThanOrEqual(1.15)
   })
   it('主题别名保持同一空间来源', () => {

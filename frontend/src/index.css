@@ -5,6 +5,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 表单统一使用中性灰边界；覆盖存量页面的 focus ring/outline，避免重复彩色外圈。
+   仅针对输入控件，按钮、链接、复选框等继续保留原有键盘焦点指示。 */
+:where(
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='button'], [type='submit'], [type='reset'], [type='image'], [type='hidden']),
+  textarea, select, [role='combobox'], .form-control-group
+) {
+  border-color: hsl(var(--input)) !important;
+  outline: none !important;
+  box-shadow: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+:where(
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='button'], [type='submit'], [type='reset'], [type='image'], [type='hidden']),
+  textarea, select, [role='combobox'], .form-control-group
+):is(:focus, :focus-visible, :focus-within) {
+  border-color: hsl(var(--input-focus)) !important;
+}
+
 @layer base {
   :root {
     color-scheme: light;
@@ -34,7 +53,8 @@
     --success-foreground: 0 0% 100%;
     --border: 225 20% 91%;
     --border-strong: 225 15% 81%;
-    --input: 225 18% 53%;
+    --input: 0 0% 84%;
+    --input-focus: 0 0% 56%;
     --ring: var(--primary);
     --shadow-panel: 0 2px 4px hsl(225 35% 20% / .025), 0 8px 28px hsl(225 35% 20% / .035);
     --shadow-overlay: 0 12px 36px hsl(220 35% 15% / .16), 0 2px 8px hsl(220 35% 15% / .08);
@@ -107,7 +127,8 @@
     --success-foreground: 220 32% 12%;
     --border: 226 16% 23%;
     --border-strong: 226 16% 32%;
-    --input: 216 18% 51%;
+    --input: 0 0% 40%;
+    --input-focus: 0 0% 62%;
     --shadow-panel: 0 3px 14px hsl(220 45% 2% / .2);
     --shadow-overlay: 0 14px 40px hsl(220 45% 2% / .55), 0 2px 8px hsl(220 45% 2% / .3);
     --stock-up: #ff7b86;
@@ -206,7 +227,7 @@
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-input bg-card px-4 py-2 text-[14px] font-medium text-foreground transition-colors hover:bg-s2 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .input-field {
-    @apply h-10 w-full rounded-lg border border-input bg-card px-3 text-[14px] text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-50;
+    @apply h-10 w-full rounded-lg border border-input bg-card px-3 text-[14px] text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50;
   }
   .ui-icon-button {
     @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:border-border hover:bg-s2 hover:text-foreground disabled:opacity-50;
