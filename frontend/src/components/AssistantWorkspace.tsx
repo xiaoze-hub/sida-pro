@@ -1,12 +1,10 @@
-import { createContext, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { TabActiveProvider, useTabActive } from '@sida/base-ui'
-import { lazyWithRetry } from '@/lib/lazy-with-retry'
-import ErrorBoundary from '@/components/ErrorBoundary'
+import { AssistantConversationLoader } from '@/components/AssistantConversationLoader'
 import { AssistantActivityContext } from '@/lib/assistant-avatar'
 
-const Conversation = lazyWithRetry(() => import('@/pages/AiCopilot'), 'assistant-conversation')
 export interface AssistantEntry { id: number; symbol: string; market?: string; pageContext?: string }
 interface AssistantController {
   open: boolean; setOpen: (open: boolean) => void; busy: boolean; enabled: boolean; pageActive: boolean
@@ -62,9 +60,7 @@ export function AssistantWorkspaceProvider({ children, enabled = true }: { child
     {children}
     <div ref={parking} hidden aria-hidden="true" />
     {started && enabled && createPortal(<TabActiveProvider active={visible}>
-      <ErrorBoundary fallback={(_error, retry) => <div className="p-4 text-[14px]">数智参谋暂时无法显示。<button type="button" className="ml-2 text-primary" onClick={retry}>重新加载</button></div>}><Suspense fallback={<div className="grid h-full place-items-center text-[14px] text-muted-foreground">正在打开数智参谋…</div>}>
-        <Conversation presentation={pageHost ? 'page' : 'mini'} visible={visible} onBusyChange={setBusy} entry={entry} entrySearch={pageHost ? location.search : undefined} />
-      </Suspense></ErrorBoundary>
+      <AssistantConversationLoader presentation={pageHost ? 'page' : 'mini'} visible={visible} onBusyChange={setBusy} entry={entry} entrySearch={pageHost ? location.search : undefined} />
     </TabActiveProvider>, container)}
   </AssistantActivityContext.Provider></Context.Provider>
 }
