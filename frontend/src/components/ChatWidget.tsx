@@ -40,6 +40,16 @@ function storage(): Storage | null {
   }
 }
 
+function greetingStorageKey() {
+  try {
+    const user = JSON.parse(storage()?.getItem('user') || '{}')
+    return `sida_assistant_greeting_dismissed:${user.id ?? 'local'}`
+  } catch { return 'sida_assistant_greeting_dismissed:local' }
+}
+
+// 浏览器禁用存储时，打开/关闭迷你窗也不重新显示已关闭的引导。
+const dismissedGreetings = new Set<string>()
+
 /**
  * 悬浮球 —— 2026-10-26 起可在**全屏任意位置拖动**，位置记在 localStorage。
  *
@@ -53,11 +63,17 @@ function AssistantLauncher({
   buttonRef,
   busy,
   onClick,
+  storageKey,
 }: {
   buttonRef: RefObject<HTMLButtonElement>
   busy: boolean
   onClick: () => void
+  storageKey: string
 }) {
+  const [dismissed, setDismissed] = useState(() => {
+    if (dismissedGreetings.has(storageKey)) return true
+    try { return storage()?.getItem(storageKey) === '1' } catch { return false }
+  })
   const [greeting, setGreeting] = useState(() => Math.floor(Math.random() * GREETINGS.length))
   const [point, setPoint] = useState<Point | null>(null)
   const drag = useRef<{ startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null)
@@ -93,13 +109,20 @@ function AssistantLauncher({
   }, [buttonRef])
 
   useEffect(() => {
-    if (busy || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (dismissed || busy || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'hidden') return
       setGreeting(previous => (previous + 1 + Math.floor(Math.random() * (GREETINGS.length - 1))) % GREETINGS.length)
     }, 20_000)
     return () => window.clearInterval(timer)
-  }, [busy])
+  }, [busy, dismissed])
+
+  const dismissGreeting = () => {
+    dismissedGreetings.add(storageKey)
+    setDismissed(true)
+    try { storage()?.setItem(storageKey, '1') } catch { /* 本窗口仍保留关闭状态 */ }
+    buttonRef.current?.focus({ preventScroll: true })
+  }
 
   const onPointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return
@@ -142,47 +165,52 @@ function AssistantLauncher({
   const side = point ? bubbleSide(point, viewportSize()) : 'left'
 
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      onClick={event => {
-        if (suppressClick.current) {
-          suppressClick.current = false
-          event.preventDefault()
-          event.stopPropagation()
-          return
-        }
-        onClick()
-      }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={event => finishDrag(event, true)}
-      onPointerCancel={event => finishDrag(event, false)}
+    <div
       style={point ? { left: point.x, top: point.y } : undefined}
-      className={[
-        'fixed z-40 flex h-20 w-20 touch-none items-center justify-center rounded-full',
-        'transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring',
-        'active:scale-95 motion-reduce:active:scale-100 md:h-24 md:w-24',
-        point ? 'cursor-grab active:cursor-grabbing' : 'bottom-20 right-4 md:bottom-5 md:right-5',
-      ].join(' ')}
-      title={`拖动可移动 · 点击打开${ASSISTANT_NAME}`}
-      aria-label={`打开${ASSISTANT_NAME}`}
-      data-testid="assistant-launcher"
-      data-draggable="true"
+      className={['fixed z-40 flex h-20 w-20 items-center justify-center md:h-24 md:w-24', point ? '' : 'bottom-20 right-4 md:bottom-5 md:right-5'].join(' ')}
     >
-      <span
-        aria-hidden="true"
+      {!dismissed && <div
         className={[
-          'pointer-events-none absolute w-44 rounded-xl bg-popover px-3 py-2.5 text-left text-[12px] leading-relaxed text-popover-foreground shadow-float md:w-48',
+          'absolute flex w-48 items-center rounded-xl bg-popover text-popover-foreground shadow-float md:w-56',
           side === 'left' ? 'right-[calc(100%+4px)]' : 'left-[calc(100%+4px)]',
         ].join(' ')}
         data-testid="assistant-greeting"
       >
-        {busy ? '正在分析与整理依据，点击查看进度…' : GREETINGS[greeting]}
-        <span className={['absolute top-1/2 h-2 w-2 -translate-y-1/2 rotate-45 bg-popover', side === 'left' ? '-right-1' : '-left-1'].join(' ')} />
-      </span>
-      <AssistantAvatar size={96} busy={busy} className="max-h-full max-w-full" />
-    </button>
+        <button type="button" onClick={onClick} aria-label="查看数智参谋引导" className="min-h-11 min-w-0 flex-1 rounded-l-xl py-2.5 pl-3 pr-1 text-left text-[12px] leading-relaxed focus-visible:ring-2 focus-visible:ring-ring">
+          {busy ? '正在分析与整理依据，点击查看进度…' : GREETINGS[greeting]}
+        </button>
+        <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" aria-label="不再显示 AI 引导气泡" title="不再显示" onClick={dismissGreeting}><X className="h-4 w-4" /></Button>
+        <span aria-hidden="true" className={['pointer-events-none absolute top-1/2 h-2 w-2 -translate-y-1/2 rotate-45 bg-popover', side === 'left' ? '-right-1' : '-left-1'].join(' ')} />
+      </div>}
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={event => {
+          if (suppressClick.current) {
+            suppressClick.current = false
+            event.preventDefault()
+            event.stopPropagation()
+            return
+          }
+          onClick()
+        }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={event => finishDrag(event, true)}
+        onPointerCancel={event => finishDrag(event, false)}
+        className={[
+          'flex h-full w-full touch-none items-center justify-center rounded-full',
+          'transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring',
+          'active:scale-95 motion-reduce:active:scale-100 cursor-grab active:cursor-grabbing',
+        ].join(' ')}
+        title={`拖动可移动 · 点击打开${ASSISTANT_NAME}`}
+        aria-label={`打开${ASSISTANT_NAME}`}
+        data-testid="assistant-launcher"
+        data-draggable="true"
+      >
+        <AssistantAvatar size={96} busy={busy} className="max-h-full max-w-full" />
+      </button>
+    </div>
   )
 }
 
@@ -270,7 +298,8 @@ export default function ChatWidget() {
   if (onPage) return null
   if (!open) {
     if (capsulePresent) return null
-    return <AssistantLauncher buttonRef={launcher} busy={assistant?.busy ?? false} onClick={() => assistant ? assistant.setOpen(true) : window.location.assign('/ai-copilot')} />
+    const storageKey = greetingStorageKey()
+    return <AssistantLauncher key={storageKey} storageKey={storageKey} buttonRef={launcher} busy={assistant?.busy ?? false} onClick={() => assistant ? assistant.setOpen(true) : window.location.assign('/ai-copilot')} />
   }
 
   return (
