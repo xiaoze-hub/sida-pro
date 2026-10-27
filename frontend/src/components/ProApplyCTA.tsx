@@ -27,6 +27,12 @@ export type ProApplyCTAProps = {
   className?: string
   /** 提交成功后的回调（调用方可用来刷新自身数据） */
   onApplied?: () => void
+  /**
+   * 内联在"权限不足"提示后面时传 true：已开通账号**不显示**这枚芯片。
+   * 否则会出现「需要更高权限 … 已开通 Pro」并排的自相矛盾（2026-10-27 自查发现）。
+   * 这时的正确语义是"权限没授予"，属于管理员配置问题，不该引导去申请 Pro。
+   */
+  hideWhenApproved?: boolean
 }
 
 const BTN_INLINE =
@@ -38,7 +44,7 @@ const BTN_BLOCK =
   'transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ' +
   'disabled:cursor-not-allowed disabled:opacity-60'
 
-export function ProApplyCTA({ reason = '权限不足页面申请', label = '申请开通 Pro', variant = 'inline', className, onApplied }: ProApplyCTAProps) {
+export function ProApplyCTA({ reason = '权限不足页面申请', label = '申请开通 Pro', variant = 'inline', className, onApplied, hideWhenApproved = false }: ProApplyCTAProps) {
   const [loggedIn] = useState(() => {
     try { return isAuthenticated() } catch { return false }
   })
@@ -90,6 +96,8 @@ export function ProApplyCTA({ reason = '权限不足页面申请', label = '申�
   // 后端 `submit_application` 对 owner/pro 直接 400 拒绝，前端必须先认这两个角色，
   // 否则 owner 点了会拿到一条"owner 无需申请 Pro"的错误 toast（2026-10-27 实测 admin 的 role 就是 owner）
   const approved = appStatus === 'approved' || role === 'pro' || role === 'owner' || role === 'admin'
+
+  if (approved && hideWhenApproved) return null
 
   const button = approved ? (
     <span

@@ -170,7 +170,7 @@ function BriefBody({
           <div className="card-surface flex flex-wrap items-center gap-x-2 gap-y-1 rounded bg-card px-2 py-1 text-[12px] text-role-watch">
             <span>{GATED_HINT}：{gated.map((k) => EVIDENCE_NAME[k]).join(' · ')}</span>
             {/* 2026-10-27: 只给提示没出路 —— 提示后面直接挂可点的申请入口 */}
-            <ProApplyCTA reason={`权限不足：${gated.map((k) => EVIDENCE_NAME[k]).join('/')}`} />
+            <ProApplyCTA reason={`权限不足：${gated.map((k) => EVIDENCE_NAME[k]).join('/')}`} hideWhenApproved />
           </div>
         ) : null}
 
