@@ -2,6 +2,7 @@ import PageHeader from '@/components/PageHeader'
 import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, BookOpen, Filter, RefreshCw, Share2, Sparkles, ScanSearch, ThumbsDown, ThumbsUp, Download, Flame } from 'lucide-react'
+import { LotionScene } from '@/components/motion/LotionScene'
 import {
   getToken,
   fetchAPI,
@@ -358,6 +359,9 @@ export default function OpportunitiesPage() {
   const { t } = useI18n()
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  // 2026-10-27: 刷新成功后短暂显示一次 Lottie 对勾（1.6s 后自动收起）——
+  // 比 toast 更"就地"，用户视线不用离开列表。
+  const [justRefreshed, setJustRefreshed] = useState(false)
   // 防重复提交锁:提交/轮询期间置 true,轮询结束或同步失败后复位
   const refreshingRef = useRef(false)
   // P2-12: 请求序号 + 挂载守卫
@@ -716,6 +720,7 @@ export default function OpportunitiesPage() {
             } else {
               setError('')
               toast('刷新完成,机会列表已更新', 'success')
+              setJustRefreshed(true)
             }
             await Promise.all([load(), loadStats()])
             return
@@ -1145,8 +1150,18 @@ export default function OpportunitiesPage() {
           >
             {refreshing ? (
               <>
-                <span className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin mr-1" />
+                <LotionScene scene="scan" size={14} className="mr-1 text-current" />
                 {t('opportunities.refreshing')}
+              </>
+            ) : justRefreshed ? (
+              <>
+                <LotionScene
+                  scene="check"
+                  size={14}
+                  className="mr-1 text-emerald-600"
+                  onComplete={() => window.setTimeout(() => setJustRefreshed(false), 1600)}
+                />
+                {t('common.refresh')}
               </>
             ) : (
               <>
@@ -1161,7 +1176,8 @@ export default function OpportunitiesPage() {
       {/* 后台刷新任务进行中提示条:让用户知道任务在跑、预期多久 */}
       {refreshing && (
         <div className="border-b border-border px-1 py-2 mb-4 flex items-center gap-2 text-[12px] text-primary">
-          <span className="w-3.5 h-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin shrink-0" />
+          {/* 2026-10-27: CSS spinner → Lottie 雷达脉冲（同尺寸 16px，不改变布局占位） */}
+          <LotionScene scene="scan" size={16} className="text-primary" label="后台扫描中" />
           <div className="flex-1">
             <span className="font-medium">{t('opportunities.bgRefresh')}</span>
             <span className="text-muted-foreground ml-1">{t('opportunities.bgRefreshHint')}</span>
@@ -2037,6 +2053,7 @@ export default function OpportunitiesPage() {
       ) : !loading && groupedItems.length === 0 ? (
         <EmptyState
           className="mt-4"
+          illustration={<LotionScene scene="grow" size={{ w: 120, h: 72 }} className="text-muted-foreground" />}
           title={error ? '暂无满足条件的机会' : '暂无机会快照'}
           description={
             error

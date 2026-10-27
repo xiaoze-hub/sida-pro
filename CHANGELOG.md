@@ -1,3 +1,43 @@
+## release: v0.83.0（Lottie 场景层：扫描 / 成功 / 空态三处动效）
+
+目标：让界面"动得有理由"，而不是到处撒动画。新增一层可复用的 Lottie 基础设施，
+只接三个**用户真的会盯着看**的位置。
+
+### 1. 自绘资产，不依赖外部素材（`frontend/scripts/gen-lotion-scenes.py`）
+三个场景手工生成 bodymovin v5.7.0 JSON，**各 1.6~4KB**（素材站同类通常 25~200KB）：
+- `scan`：雷达三圈脉冲 + 中心呼吸点，96×96，循环 → 「刷新中 / 扫描中」
+- `check`：外圈描线 + 对勾描线，48×48，**只播一次** → 「操作成功」
+- `grow`：上扬折线生长 + 末端光点，120×72，播一次停住 → 「暂无数据」
+
+颜色一律写成中性灰并标 `nm: "token:*"`，运行时按容器计算色替换 → **同一份资产浅色/深色都对**，
+不需要维护两套文件。
+
+### 2. 基础设施（`src/lib/lotion.ts` + `src/components/motion/LotionScene.tsx`）
+- **动态 import lottie-web**（~250KB）→ 只在使用处按需加载，不进首屏主 chunk；
+- 资产缓存 + `structuredClone`（lottie 会就地改写数据，多实例必须独立副本）；
+- `prefers-reduced-motion` → 不播，**直接停在末帧**（末帧是完整图形，不是半截）；
+- 页面隐藏 / 标签页非活动 / 滚出视口 → 暂停，不留后台 RAF；
+- 资产 404 或结构非法 → **等尺寸占位**，绝不抛错、绝不塌布局；
+- 装饰性动效默认 `aria-hidden`，有语义时传 `label` 才进无障碍树。
+
+### 3. 落点（3 处，全在「市场扫描」）
+- 后台刷新提示条：CSS spinner → `scan`（16px，同尺寸不改变布局占位）
+- 刷新按钮：刷新中 `scan`(14px)；**完成后播一次 `check` 对勾，1.6s 自动收起**
+- 空态：`EmptyState` 新增 `illustration` 插槽（有插画时替换默认图标底板，避免"图标套图标"），
+  市场扫描空态改用 `grow` 折线动画
+
+### 4. 手写 bodymovin 的两个坑（已写进脚本注释）
+- **trim 修饰符顺序**：`shape → stroke → trim` ✅ / `shape → trim → stroke` ✅ /
+  `trim → stroke → shape` ❌ 路径变空 `d="M0 0"` / `trim → shape → stroke` ❌ trim 被忽略。
+  这是用四种排列实测出来的，别凭直觉排。
+- **判据不能用 `stroke-dasharray`**：lottie 的 trim 是**直接裁路径几何**，不写 dash 属性。
+  正确判据是比对 `getTotalLength()` 比例（实测：check 圆环 15→132、grow 折线 6→112）。
+
+### 门禁
+- 前端 **256 files · 1921 tests 全绿**、eslint 0、ui-rules OK
+- 新增 `tests/components/lotion-scene.test.tsx`（9 例：载入成功 / token 染色 / 404 降级 /
+  非法结构降级 / a11y 语义 / 卸载销毁 / parseColor 三组）
+
 ## release: v0.82.2（修悬浮球默认位置回归：桌面端浮在表格数据上）
 
 v0.82.1 的生产截图复核抓出一个**我自己引入的回归**：

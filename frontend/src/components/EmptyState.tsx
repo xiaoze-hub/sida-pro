@@ -14,6 +14,11 @@ export type EmptyStateVariant = 'default' | 'error' | 'loading'
 
 export interface EmptyStateProps {
   icon?: ReactNode
+  /**
+   * 空态插画插槽（2026-10-27）：放 Lottie 场景等**动效**插画，
+   * 与 `icon` 的区别是它替换掉默认的圆形图标底板而不是叠加。
+   */
+  illustration?: ReactNode
   title: string
   description?: string
   /** 兼容旧调用（DevPageLayout 原 API 用 desc） */
@@ -45,6 +50,7 @@ const VARIANT_ICON_WRAP: Record<EmptyStateVariant, string> = {
 
 export function EmptyState({
   icon,
+  illustration,
   title,
   description,
   desc,
@@ -67,14 +73,19 @@ export function EmptyState({
         className,
       )}
     >
-      <span
-        className={cn(
-          'mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full',
-          VARIANT_ICON_WRAP[variant],
-        )}
-      >
-        {icon ?? VARIANT_ICON[variant]}
-      </span>
+      {illustration ? (
+        // 有插画时替换默认图标底板：叠在一起会变成"图标套图标"，视觉噪音
+        <div className="mb-2 flex items-center justify-center text-muted-foreground">{illustration}</div>
+      ) : (
+        <span
+          className={cn(
+            'mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full',
+            VARIANT_ICON_WRAP[variant],
+          )}
+        >
+          {icon ?? VARIANT_ICON[variant]}
+        </span>
+      )}
       <p className="text-[14px] font-medium text-foreground">{title}</p>
       {body && <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">{body}</p>}
       {action && <div className="mt-3">{action}</div>}
