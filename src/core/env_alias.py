@@ -24,7 +24,14 @@ _applied = False
 
 
 def alias_legacy_env() -> None:
-    """把旧前缀环境变量双向补齐到新前缀（只补缺，不覆盖）。幂等。"""
+    """把旧前缀环境变量补到新前缀（只补缺、不覆盖）。幂等。
+
+    **只做单向（PANWATCH_ → SIDA_）**。曾经做过双向，结果是一个真实的坑：
+    `SIDA_DB_URL` 被反向写成 `PANWATCH_DB_URL` 留在 os.environ 里，子进程继承后
+    兼容层又把 `PANWATCH_DB_URL` 映射回 `SIDA_DB_URL` —— 表现为「测试里已经
+    delenv 的变量在子进程里复活」，测试隔离直接失效（2026-10-27 CI 实测）。
+    方向永远只有一个：旧名喂新名，新名绝不回写旧名。
+    """
     global _applied
     if _applied:
         return
@@ -33,9 +40,6 @@ def alias_legacy_env() -> None:
     for key, value in list(os.environ.items()):
         if key.startswith(LEGACY_PREFIX):
             target = CURRENT_PREFIX + key[len(LEGACY_PREFIX):]
-            os.environ.setdefault(target, value)
-        elif key.startswith(CURRENT_PREFIX):
-            target = LEGACY_PREFIX + key[len(CURRENT_PREFIX):]
             os.environ.setdefault(target, value)
 
 

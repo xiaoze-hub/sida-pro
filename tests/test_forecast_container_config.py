@@ -17,7 +17,6 @@ def test_sida_client_service_token_no_forge(tmp_path, monkeypatch):
         "SIDA_PASSWORD",
         "AUTH_USERNAME",
         "AUTH_PASSWORD",
-        "SIDA_SERVICE_TOKEN",
     ):
         monkeypatch.delenv(key, raising=False)
 

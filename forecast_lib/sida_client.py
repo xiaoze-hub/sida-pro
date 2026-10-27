@@ -37,10 +37,7 @@ def get_sida_url() -> str:
 
 def get_service_token() -> str:
     """只读服务令牌(与主服务 SIDA_SERVICE_TOKEN 同值, compose 经 .env 注入)。"""
-    return (
-        os.getenv("SIDA_SERVICE_TOKEN", "").strip()
-        or os.getenv("SIDA_SERVICE_TOKEN", "").strip()
-    )
+    return os.getenv("SIDA_SERVICE_TOKEN", "").strip()
 
 
 def invalidate_token() -> None:

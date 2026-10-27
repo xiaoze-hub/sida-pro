@@ -65,3 +65,23 @@ def test_alias_is_idempotent(monkeypatch):
     import os
 
     assert os.environ.get("SIDA_IDEMPOTENT_DEMO") == "a"
+
+
+def test_alias_never_writes_back_to_legacy(fresh_alias, monkeypatch):
+    """只进不出：新名绝不回写旧名。
+
+    曾经的坑：反向映射会把 `SIDA_DB_URL` 写成 `PANWATCH_DB_URL` 留在 os.environ，
+    子进程继承后兼容层再把它映射回 `SIDA_DB_URL` —— 测试里已经 delenv 的变量
+    在子进程「复活」，隔离失效（2026-10-27 CI 红在 test_conftest_isolation）。
+    """
+    import os
+
+    monkeypatch.delenv("PANWATCH_ONEWAY_DEMO", raising=False)
+    monkeypatch.setenv("SIDA_ONEWAY_DEMO", "only-new")
+
+    fresh_alias.alias_legacy_env()
+
+    assert os.environ.get("SIDA_ONEWAY_DEMO") == "only-new"
+    assert os.environ.get("PANWATCH_ONEWAY_DEMO") is None, (
+        "新前缀被回写成了旧前缀 —— 子进程会把已删除的变量复活"
+    )
