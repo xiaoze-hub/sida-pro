@@ -1,0 +1,77 @@
+name: pdf-gate
+
+# 2026-10-27 独立工作流：PDF 导出（WeasyPrint + 中文字体）真实渲染校验。
+#
+# 为什么不放在 build-push-acr.yml 里：装 pango/cairo/fonts-noto-cjk 在 GitHub runner 上
+# 实测 14s~1130s 无规律（apt 走公网），历史上三次把发版卡住（含一次 20 分钟挂死、
+# 一次挂在我自己设的 420s 超时上）。它属于「深度校验」，不该成为发版时钟的一部分。
+#
+# 关键设计：
+#  · `SIDA_REQUIRE_WEASYPRINT=1` —— 缺库必须**红**。此前该文件的「中文进文本层」断言
+#    全写在 `if not _WEASY: return` 之后，没有 WeasyPrint 时整组静默通过，CI 假绿了很久。
+#  · `.deb` 走 Actions 缓存 + 步骤硬超时 12 分钟，挂死也不会把 runner 拖到 6 小时上限。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/core/pdf_export.py'
+      - 'src/web/api/reports.py'
+      - 'tests/test_pdf_export.py'
+      - '.github/workflows/pdf-gate.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '30 18 * * *'   # 每天 UTC 18:30（北京 02:30）兜底跑一次
+
+jobs:
+  pdf-render:
+    name: PDF 导出真实渲染
+    runs-on: ubuntu-latest
+    env:
+      SIDA_REQUIRE_WEASYPRINT: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python 3.11 (与生产一致)
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Restore apt .deb cache
+        id: aptcache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/apt-debs
+          key: apt-pdf-libs-v3-${{ runner.os }}
+      - name: Install system libs for WeasyPrint
+        timeout-minutes: 12
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          PKGS="libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk"
+          CACHE="${{ runner.temp }}/apt-debs"
+          # 已经具备就立刻退出：runner 偶尔预装，别白装一遍
+          if dpkg -s libpango-1.0-0 >/dev/null 2>&1; then
+            echo "pango 已就绪，跳过安装"
+            exit 0
+          fi
+          if [ "${{ steps.aptcache.outputs.cache-hit }}" = "true" ] && ls "$CACHE"/*.deb >/dev/null 2>&1; then
+            echo "缓存命中：离线安装 $(ls "$CACHE"/*.deb | wc -l) 个 .deb"
+            sudo timeout 300 dpkg -i "$CACHE"/*.deb || sudo timeout 300 apt-get -f install -y --no-install-recommends
+          else
+            echo "缓存未命中：联网下载并安装"
+            mkdir -p "$CACHE"
+            sudo timeout 600 apt-get update -qq -o Acquire::ForceIPv4=true || true
+            ( cd "$CACHE" && sudo timeout 600 apt-get download -o Acquire::ForceIPv4=true $PKGS ) || true
+            sudo timeout 600 apt-get install -y --no-install-recommends \
+              -o Acquire::ForceIPv4=true -o Dpkg::Options::=--force-confold $PKGS
+          fi
+      - name: Install backend deps
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q -r requirements-lock.txt pytest-timeout
+          python3 -m pip install -q --no-deps -e ./packages/marketdata
+      - name: PDF 导出测试（缺 WeasyPrint 直接红）
+        run: |
+          set -o pipefail
+          python3 -c "import weasyprint; weasyprint.HTML(string='<p>中文渲染检查</p>').write_pdf('/tmp/_probe.pdf'); print('WeasyPrint 真渲染 OK')"
+          python3 -m pytest tests/test_pdf_export.py -q
