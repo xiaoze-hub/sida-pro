@@ -77,9 +77,49 @@ beforeEach(() => {
   window.history.pushState({}, '', '/ai-copilot')
 })
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('数智参谋 P0/P1', () => {
+  it('手机输入框初始一行，回车保留原生换行行为，仅点击发送才提交', async () => {
+    vi.stubGlobal('innerWidth', 390)
+    render(<AiCopilotPage presentation="mini" />)
+    const editor = await screen.findByRole('textbox', { name: '分析问题' }) as HTMLTextAreaElement
+    expect(editor.rows).toBe(1)
+    expect(editor.style.height).toBe('44px')
+    fireEvent.change(editor, { target: { value: '第一行' } })
+    expect(fireEvent.keyDown(editor, { key: 'Enter' })).toBe(true)
+    expect(apiMock.sendMessageStream).not.toHaveBeenCalled()
+    Object.defineProperty(editor, 'scrollHeight', { configurable: true, value: 70 })
+    fireEvent.change(editor, { target: { value: '第一行\n第二行' } })
+    expect(editor.style.height).toBe('72px')
+    apiMock.sendMessageStream.mockResolvedValue(undefined)
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
+    expect(apiMock.sendMessageStream.mock.calls[0][1]).toBe('第一行\n第二行')
+  })
+
+  it('桌面保留 Enter 发送，Shift+Enter 换行', async () => {
+    apiMock.sendMessageStream.mockResolvedValue(undefined)
+    render(<AiCopilotPage />)
+    const editor = await screen.findByRole('textbox', { name: '分析问题' })
+    fireEvent.change(editor, { target: { value: '桌面问题' } })
+    expect(fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(apiMock.sendMessageStream).not.toHaveBeenCalled()
+    expect(fireEvent.keyDown(editor, { key: 'Enter' })).toBe(false)
+    await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
+  })
+  it('输入区独占一行，工具操作独立排列，打开和切换承载位置不自动聚焦', async () => {
+    const view = render(<AiCopilotPage presentation="mini" />)
+    const editor = await screen.findByRole('textbox', { name: '分析问题' })
+    const attachment = screen.getByTestId('copilot-attach')
+    expect(editor.getAttribute('placeholder')).toBe('问点什么…')
+    expect(editor.parentElement).not.toBe(attachment.parentElement)
+    expect(document.activeElement).not.toBe(editor)
+    fireEvent.change(editor, { target: { value: '第一行\n第二行' } })
+    view.rerender(<AiCopilotPage presentation="page" />)
+    expect((editor as HTMLTextAreaElement).value).toBe('第一行\n第二行')
+    expect(document.activeElement).not.toBe(editor)
+  })
   it('退出助手时中止当前回复流，避免跨账号保留请求', async () => {
     let finish!: () => void
     let signal: AbortSignal | undefined

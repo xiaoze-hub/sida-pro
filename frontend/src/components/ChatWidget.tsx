@@ -235,7 +235,7 @@ export default function ChatWidget() {
     return () => register(null)
   }, [register, open, onPage])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) {
       setFullscreen(false)
       return
@@ -243,33 +243,27 @@ export default function ChatWidget() {
     if (onPage) return
     const updateViewport = () => {
       if (!panel.current) return
-      if (fullscreen) {
-        // 全屏时交回 CSS 类控制尺寸，清掉内联值，否则会被上面的 maxHeight 压回去。
-        panel.current.style.maxHeight = ''
-        panel.current.style.bottom = '0px'
-        return
-      }
       const viewport = window.visualViewport
       const height = viewport?.height ?? window.innerHeight
       const mobile = window.innerWidth < 768
-      const navigation = mobile ? document.querySelector('[data-mobile-navigation]')?.getBoundingClientRect().height ?? 56 : 0
-      const bottom = mobile ? navigation + 16 : 20
-      const top = mobile ? (document.querySelector('[data-mobile-header]')?.getBoundingClientRect().bottom ?? 64) + 12 : 20
+      if (mobile || fullscreen) {
+        // 手机直接占满可视区；键盘弹起后跟随 visualViewport，输入区始终留在键盘上方。
+        Object.assign(panel.current.style, {
+          top: `${viewport?.offsetTop ?? 0}px`, left: `${viewport?.offsetLeft ?? 0}px`,
+          width: `${viewport?.width ?? window.innerWidth}px`, height: `${height}px`,
+          maxHeight: 'none', bottom: 'auto', right: 'auto',
+        })
+        return
+      }
+      for (const property of ['top', 'left', 'width', 'height', 'right']) panel.current.style.removeProperty(property)
       const keyboard = Math.max(0, window.innerHeight - height - (viewport?.offsetTop ?? 0))
-      panel.current.style.maxHeight = `${Math.max(180, height - bottom - top)}px`
-      panel.current.style.bottom = `${bottom + keyboard}px`
+      panel.current.style.maxHeight = `${Math.max(180, height - 40)}px`
+      panel.current.style.bottom = `${20 + keyboard}px`
     }
     updateViewport()
     window.addEventListener('resize', updateViewport)
     window.visualViewport?.addEventListener('resize', updateViewport)
     window.visualViewport?.addEventListener('scroll', updateViewport)
-    const focusEditor = () => {
-      const editor = host.current?.querySelector('textarea')
-      if (editor) { editor.focus({ preventScroll: true }); observer?.disconnect() }
-    }
-    const observer = typeof MutationObserver === 'undefined' ? null : new MutationObserver(focusEditor)
-    if (host.current) observer?.observe(host.current, { childList: true, subtree: true })
-    focusEditor()
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
       // 先退全屏、再关窗 —— 否则按一次 Esc 会把整个会话关掉。
@@ -282,7 +276,7 @@ export default function ChatWidget() {
     }
     window.addEventListener('keydown', escape)
     return () => {
-      window.removeEventListener('keydown', escape); observer?.disconnect()
+      window.removeEventListener('keydown', escape)
       window.removeEventListener('resize', updateViewport)
       window.visualViewport?.removeEventListener('resize', updateViewport)
       window.visualViewport?.removeEventListener('scroll', updateViewport)
@@ -310,26 +304,27 @@ export default function ChatWidget() {
       aria-label={`${ASSISTANT_NAME}迷你窗口`}
       data-fullscreen={fullscreen ? 'true' : undefined}
       className={[
-        'fixed z-40 flex flex-col overflow-hidden bg-popover shadow-float',
+        'fixed flex flex-col overflow-hidden bg-popover shadow-float',
         fullscreen
-          ? 'inset-0 h-[100dvh] w-full rounded-none'
-          : 'bottom-20 right-4 h-[min(680px,calc(100dvh-8rem))] w-[min(480px,calc(100vw-2rem))] rounded-xl md:bottom-5 md:right-5 lg:w-[min(560px,calc(100vw-3rem))]',
+          ? 'inset-0 z-[60] h-[100dvh] w-full rounded-none'
+          : 'inset-0 z-[60] h-[100dvh] w-full rounded-none md:inset-auto md:bottom-5 md:right-5 md:z-40 md:h-[min(680px,calc(100dvh-8rem))] md:w-[min(480px,calc(100vw-2rem))] md:rounded-xl lg:w-[min(560px,calc(100vw-3rem))]',
       ].join(' ')}
       data-testid="assistant-mini-window"
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <AssistantAvatar size={32} />
-        <div className="min-w-0 flex-1"><span className="block text-[14px] font-semibold">{ASSISTANT_NAME}</span><span className="text-[12px] text-muted-foreground">{assistant?.busy ? '正在分析与书写…' : '与完整工作台共用同一会话'}</span></div>
-        <Button variant="ghost" className="h-11 w-11 md:h-9 md:w-9" aria-label="设置助手形象" title="设置助手形象" onClick={() => assistant?.configure()}><Settings2 className="h-4 w-4" /></Button>
+        <div className="min-w-0 flex-1"><span className="block text-[14px] font-semibold">{ASSISTANT_NAME}</span><span className="hidden text-[12px] text-muted-foreground md:block">{assistant?.busy ? '正在分析与书写…' : '与完整工作台共用同一会话'}</span></div>
+        <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 md:h-9 md:w-9" aria-label="设置助手形象" title="设置助手形象" onClick={() => assistant?.configure()}><Settings2 className="h-4 w-4" /></Button>
         <Button
           variant="ghost"
-          className="h-11 w-11 md:h-9 md:w-9"
+          size="icon"
+          className="hidden h-9 w-9 shrink-0 md:inline-flex"
           aria-label={fullscreen ? '退出全屏' : '全屏显示'}
           title={fullscreen ? '退出全屏（Esc）' : '全屏显示（平板 / 窄屏更好用）'}
           onClick={() => setFullscreen(previous => !previous)}
         >{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</Button>
-        <Button variant="ghost" className="h-11 w-11 md:h-9 md:w-9" aria-label="在完整工作台打开" title="在完整工作台打开" onClick={() => assistant?.expand()}><ExternalLink className="h-4 w-4" /></Button>
-        <Button variant="ghost" className="h-11 w-11 md:h-9 md:w-9" aria-label="关闭迷你助手" title="关闭迷你助手" onClick={() => assistant?.setOpen(false)}><X className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 md:h-9 md:w-9" aria-label="在完整工作台打开" title="在完整工作台打开" onClick={() => assistant?.expand()}><ExternalLink className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 md:h-9 md:w-9" aria-label="关闭迷你助手" title="关闭迷你助手" onClick={() => assistant?.setOpen(false)}><X className="h-4 w-4" /></Button>
       </header>
       <div ref={host} className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]" data-assistant-mini-host />
     </section>

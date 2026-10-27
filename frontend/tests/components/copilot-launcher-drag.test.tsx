@@ -9,7 +9,7 @@
  *  · 全屏开关切换 data-fullscreen；Esc 先退全屏、再按一次才关窗。
  */
 import { useState } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,7 +17,7 @@ vi.mock('@/components/AssistantAvatar', () => ({ AssistantAvatar: () => <span>�
 vi.mock('@/pages/AiCopilot', () => ({
   default: function MockConversation() {
     const [draft, setDraft] = useState('')
-    return <input aria-label="共享会话草稿" value={draft} onChange={event => setDraft(event.target.value)} />
+    return <textarea aria-label="共享会话草稿" value={draft} onChange={event => setDraft(event.target.value)} />
   },
 }))
 
@@ -40,7 +40,7 @@ beforeEach(() => {
   window.history.replaceState({}, '', '/')
 })
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('悬浮球拖拽', () => {
   it('标记为可拖动，并给出位置提示', () => {
@@ -121,5 +121,59 @@ describe('迷你窗全屏', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByTestId('assistant-mini-window')).toBeNull())
+  })
+})
+
+describe('手机可视区与输入焦点', () => {
+  it('打开即覆盖手机可视区，键盘和滚动变化只更新尺寸、不自动聚焦', async () => {
+    vi.stubGlobal('innerWidth', 390)
+    const viewport = Object.assign(new EventTarget(), { width: 390, height: 844, offsetTop: 0, offsetLeft: 0 })
+    vi.stubGlobal('visualViewport', viewport)
+    renderWidget()
+    fireEvent.click(screen.getByTestId('assistant-launcher'))
+    const editor = await screen.findByRole('textbox', { name: '共享会话草稿' })
+    const panel = screen.getByTestId('assistant-mini-window')
+    expect(panel.style.width).toBe('390px')
+    expect(panel.style.height).toBe('844px')
+    expect(panel.style.top).toBe('0px')
+    expect(document.activeElement).not.toBe(editor)
+    fireEvent.change(editor, { target: { value: '保留手机草稿' } })
+    act(() => {
+      viewport.height = 420
+      viewport.offsetTop = 24
+      viewport.dispatchEvent(new Event('resize'))
+      viewport.dispatchEvent(new Event('scroll'))
+    })
+    expect(panel.style.height).toBe('420px')
+    expect(panel.style.top).toBe('24px')
+    expect(document.activeElement).not.toBe(editor)
+    act(() => { editor.focus() })
+    expect(document.activeElement).toBe(editor)
+    fireEvent.click(screen.getByRole('button', { name: '关闭迷你助手' }))
+    fireEvent.click(screen.getByTestId('assistant-launcher'))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('保留手机草稿')
+    expect(document.activeElement).not.toBe(editor)
+    act(() => {
+      viewport.height = 844
+      viewport.offsetTop = 0
+      viewport.dispatchEvent(new Event('resize'))
+    })
+    expect(panel.isConnected).toBe(false)
+    expect(screen.getByTestId('assistant-mini-window').style.height).toBe('844px')
+  })
+
+  it('桌面全屏退出后恢复浮窗尺寸，输入框始终不被程序聚焦', async () => {
+    renderWidget()
+    fireEvent.click(screen.getByTestId('assistant-launcher'))
+    const editor = await screen.findByRole('textbox', { name: '共享会话草稿' })
+    const panel = screen.getByTestId('assistant-mini-window')
+    fireEvent.click(screen.getByRole('button', { name: '全屏显示' }))
+    expect(panel.style.width).toBe(`${window.innerWidth}px`)
+    expect(document.activeElement).not.toBe(editor)
+    fireEvent.click(screen.getByRole('button', { name: '退出全屏' }))
+    expect(panel.style.width).toBe('')
+    expect(panel.style.height).toBe('')
+    expect(panel.style.top).toBe('')
+    expect(document.activeElement).not.toBe(editor)
   })
 })

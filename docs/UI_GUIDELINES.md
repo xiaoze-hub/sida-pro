@@ -1,6 +1,6 @@
 # SIDA 界面与交互准则
 
-> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219` 更新，规范随同本次代码提交生效。
+> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce` 更新，规范随同本次代码提交生效。
 > 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/health.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/klines.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/quotes.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
 > 覆盖：全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
 > 未覆盖：交易算法准确性、外部行情接口可用性、生产数据与全部页面的完整业务验收；不以 UI 验证代替口径、权限和多用户测试。
@@ -131,7 +131,9 @@ git diff --check
 
 动画资源随应用托管，不引用外部 CDN；每个播放器使用独立数据副本并在卸载/切换形象时释放实例。播放器控制遵循 [Lottie 官方用法](https://github.com/airbnb/lottie-web/wiki/Usage)。不得为动画放宽 CSP 或额外添加 JavaScript 持续帧循环。
 
-悬浮形象桌面 96px、手机 80px；左侧小气泡随机显示预设技术分析引导，20 秒后更换且不连续重复，工作中显示进度提示，不做读屏轮播；点击形象或气泡均打开助手。加载时不显示旧图标或静态占位，播放器准备好后再显示。迷你窗停靠右下，手机留出顶栏、底部导航和键盘区域，正文独立滚动；展开到完整页保持同一会话。关闭窗口恢复入口焦点，回复完成不能抢走用户在其他区域的输入焦点。
+悬浮形象桌面 96px、手机 80px；左侧小气泡随机显示预设技术分析引导，20 秒后更换且不连续重复，工作中显示进度提示，不做读屏轮播；点击形象或气泡均打开助手。加载时不显示旧图标或静态占位，播放器准备好后再显示。桌面迷你窗停靠右下，手机打开即覆盖完整可视区并位于应用顶栏和底栏上方，仅在窗口内部保留安全区；跟随 visualViewport 的高度和偏移适配键盘与旋转，正文独立滚动。手机不显示冗余的全屏切换按钮，桌面保留全屏/浮窗切换；展开到完整页保持同一会话。
+
+打开、重新打开和切换全屏均不得自动聚焦输入框，避免手机立即弹出键盘；输入由用户主动点击。输入框独占整行，手机默认一行、回车换行、点击发送按钮提交；文字增加时自动增高，达到高度上限后仅在输入框内部滚动。手机字号至少 16px，附件、后台与发送操作另起工具行，手机点击热区至少 44px；桌面保留 Enter 发送、Shift+Enter 换行。关闭窗口恢复入口焦点，回复完成不能抢走用户在其他区域的输入焦点。
 
 引导气泡必须提供独立关闭按钮，不得在打开助手的按钮内嵌套关闭按钮。关闭偏好按账号保存在本机，刷新、切页、重新打开迷你窗和忙碌状态变化均不再显示文字气泡，并停止文案轮换；动画入口继续保留，关闭后焦点返回入口。浏览器拒绝持久化时仍在当前窗口记住关闭状态。
 
