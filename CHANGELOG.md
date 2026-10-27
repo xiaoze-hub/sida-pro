@@ -1,3 +1,40 @@
+## release: v0.84.2（修 pro 用户「盘中扫描」必 403）
+
+用户报：pro 账号首页点「盘中扫描」报 `无权限访问该管理功能, 请联系管理员`。
+
+### 根因（不是权限配置错，是接口放错了区）
+`POST /api/agents/intraday/scan` 是**用户侧功能**（扫当前用户自己的持仓与监测股，
+首页和个股页都在调），但路径落在 `/api/agents` 这个管理区前缀下，中间件要求
+`manage_agents` —— 而该权限只有 owner 有：
+
+| 角色 | 权限点 | 含 manage_agents |
+|---|---|---|
+| member | 9 | ✗ |
+| pro | 14 | ✗ |
+| owner | 23 | ✓ |
+
+所以 **pro 和 member 一定 403，只有 owner 能用**。不是这一个用户的问题，是所有非 owner 用户。
+
+### 为什么漏到线上
+开发/验收环境只有 owner 账号，端到端永远复现不出来；这条路径也没有任何单测覆盖。
+
+### 修法（最小、不放宽管理区）
+1. 新增 `_USER_FACING_ADMIN_EXCEPTIONS = {("POST", "/api/agents/intraday/scan")}` ——
+   **只放行精确路径**，不放行整段 `/api/agents`；写配置（`PUT` / `DELETE` / `{name}/trigger`）仍需 `manage_agents`。
+2. 把中间件里散着的循环抽成纯函数 `admin_prefix_denied(method, path, perms)` —— 可单测，
+   并且**防 query 串/尾斜杠**误判（防御 `?analyze=true`）。
+3. 新增 `tests/test_admin_prefix_permissions.py`（11 例）：
+   - 钉死「pro 没有 manage_agents」这个前提（哪天给它加了，测试会红，逼人重新审视边界）；
+   - 盘中扫描对 pro / member / owner 全部放行；带 query / 尾斜杠也放行；
+   - Trigger / PUT / DELETE 仍需 manage_agents；
+   - `/api/agents` 的 GET 照旧放行；settings/users/datasources/admin 行为不变；guest 仍被拦；
+   - **端到端**：TestClient + 真实 JWT + 打桩 role=pro，断言不再返回那条 403。
+4. 例外表必须是 `(method, 精确路径)`，禁止通配 —— 有测试守着，防止以后图省事写 `/api/agents/*`。
+
+### 门禁
+- 后端 `tests/test_admin_prefix_permissions.py` **11 passed**
+- 权限/鉴权相关回归 **116 passed**（`-k permission or auth or rbac or middleware`）
+
 ## 2026-10-27
 
 ### chore-合并公开文档与官网SEO调整

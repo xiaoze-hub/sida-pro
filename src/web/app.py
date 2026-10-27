@@ -212,6 +212,40 @@ _ADMIN_PREFIX_PERMISSIONS = {
 # 管理区中允许 GET 浏览的路径(敏感 key 已掩码, 只读无风险)
 _READABLE_ADMIN_PREFIXES = ("/api/settings", "/api/providers", "/api/agents")
 
+# 用户侧功能、却因路径落在管理区前缀下而被误拦的端点（2026-10-27 线上事故）。
+# 「盘中扫描」POST /api/agents/intraday/scan 是首页与个股页的用户功能
+# （扫的是当前用户自己的持仓与监测股），但它在 /api/agents 前缀下，
+# 于是被 manage_agents 拦住 —— pro / member 点「盘中扫描」必定 403
+# 「无权限访问该管理功能」，只有 owner 能用。放行**精确路径**，
+# 不放行整段前缀：写配置（PUT / DELETE / trigger）仍然要 manage_agents。
+_USER_FACING_ADMIN_EXCEPTIONS = frozenset({
+    ("POST", "/api/agents/intraday/scan"),
+})
+
+
+def admin_prefix_denied(method: str, path: str, perms: set) -> bool:
+    """管理区前缀鉴权判定（中间件用）。True = 应当 403。
+
+    抽成纯函数是为了能单测：这条 403 影响所有 pro/member 用户，
+    而开发环境通常只有 owner 账号，端到端根本复现不出来（本次就是这样漏到线上的）。
+    """
+    # 防御性去掉 query/fragment：中间件拿的是 request.url.path（本无 query），
+    # 但这个纯函数要能被直接调用/单测，别让调用方多传一个参数就判错。
+    normalized = path.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+    if (method.upper(), normalized) in _USER_FACING_ADMIN_EXCEPTIONS:
+        return False
+    for prefix, required in _ADMIN_PREFIX_PERMISSIONS.items():
+        if not normalized.startswith(prefix):
+            continue
+        if required in perms:
+            return False
+        # 只读浏览例外: settings/providers/agents 的 GET（敏感 key 已掩码）
+        if method.upper() in ("GET", "HEAD") and prefix in _READABLE_ADMIN_PREFIXES:
+            return False
+        return True
+    return False
+
+
 
 def _resolve_user_auth(username: str) -> tuple[str | None, set[str]]:
     """查 DB 取用户 role + users.permissions 白名单权限点(失败返回 (None, 空集))。
@@ -311,17 +345,12 @@ async def demo_isolation_middleware(request: Request, call_next):
     if path.startswith("/api/users/me/permissions") and method in ("GET", "HEAD"):
         return await call_next(request)
 
-    for prefix, required in _ADMIN_PREFIX_PERMISSIONS.items():
-        if path.startswith(prefix):
-            if required in perms:
-                break
-            # 只读浏览例外: settings/providers GET(敏感 key 已掩码)
-            if method in ("GET", "HEAD") and prefix in _READABLE_ADMIN_PREFIXES:
-                break
-            return JSONResponse(
-                status_code=403,
-                content={"code": 403, "success": False, "message": "无权限访问该管理功能, 请联系管理员"},
-            )
+    # 管理区鉴权统一走纯函数（可单测）: 见 admin_prefix_denied 的注释
+    if admin_prefix_denied(method, path, perms):
+        return JSONResponse(
+            status_code=403,
+            content={"code": 403, "success": False, "message": "无权限访问该管理功能, 请联系管理员"},
+        )
     return await call_next(request)
 
 # 认证路由（无需登录）
