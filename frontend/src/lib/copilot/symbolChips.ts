@@ -4,13 +4,13 @@
  * 纯函数，单测覆盖两类误判：
  *  - 日期（2026-10-18 的 20261018 不是 6 位；但 "2026年10月18日" 里的 202610 也不能当代码）；
  *  - 金额 / 数量（120000 手、350000 万元）。
- * 做法：要求代码左右**不是数字**，且不能紧跟「年/月/日/手/万/元/%」这类量纲字。
+ * 做法：要求代码左右不是字母、数字或下划线（允许 SH/SZ/BJ 市场前缀），且不能紧跟「年/月/日/手/万/元/%」这类量纲字。
  */
-const CODE_RE = /(?:^|\D)([034689]\d{5})(?!\d)/g
+const CODE_RE = /(?:^|[^A-Za-z0-9_])(?:SH|SZ|BJ)?([034689]\d{5})(?![A-Za-z0-9_])/gi
 const UNIT_AFTER = /^[\s]*(?:年|月|日|手|万|亿|元|%|股|倍|点)/
 
 export function extractSymbolChips(text: string, limit = 6): string[] {
-  if (!text) return []
+  if (!text || /^\s*(?:抱歉，)?AI 服务暂时不可用[：:]/.test(text)) return []
   const out: string[] = []
   for (const m of text.matchAll(CODE_RE)) {
     const code = m[1]

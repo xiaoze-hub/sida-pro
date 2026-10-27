@@ -1284,9 +1284,9 @@ async def _run_tool_loop_inner(
     except Exception as e:
         logger.error(f"AI {'流式' if stream else ''}对话失败: {e}")
         if stream:
-            yield "done", f"抱歉，AI 服务暂时不可用：{e}"
+            yield "done", "抱歉，AI 服务暂时不可用，请稍后重试。"
         else:
-            yield "text", f"抱歉，AI 服务暂时不可用：{e}"
+            yield "text", "抱歉，AI 服务暂时不可用，请稍后重试。"
 
 
 
@@ -2290,7 +2290,7 @@ async def send_message_stream(
         except Exception as e:
             logger.error(f"流式对话失败: {e}")
             try:
-                yield _sse_event("error", {"message": f"AI 服务暂时不可用：{e}"})
+                yield _sse_event("error", {"message": "AI 服务暂时不可用，请稍后重试。"})
             except Exception:
                 pass
         finally:
