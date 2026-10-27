@@ -185,6 +185,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
+      - SIDA_PUBLIC_SITE_URL=${SIDA_PUBLIC_SITE_URL:-https://sida.win}
+      - SIDA_SEO_INDEXABLE=${SIDA_SEO_INDEXABLE:-true}
       # 指向同 compose 网络内的 forecast 服务(Docker DNS 自动解析)
       - FORECAST_ENGINE_URL=http://forecast:8010
       # P1-14: Redis L2/限流/调度选主走 compose 内 redis(T10: 带 requirepass 密码)

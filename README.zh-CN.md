@@ -19,6 +19,8 @@ SIDA 面向个人股票技术研究：先了解市场，再查看标的，通过
 
 ## 操作演示
 
+项目仓库：[SIDA Pro](https://github.com/xiaoze-hub/sida-pro)。免费自行部署请前往[社区开源版 Stock-Intelligent-Data-Analytics](https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics)，按仓库说明安装。社区版采用 AGPL-3.0，其功能与发布节奏和当前 Pro 实例分别维护。
+
 [![操作预览，点击打开行情演示视频](frontend/public/media/product/preview.gif)](frontend/public/media/product/market.mp4)
 
 **点击预览图打开 MP4 视频。** 官网落地页内置封面、播放器、中文字幕与文字步骤；GitHub 可能以文件形式打开仓库视频，不保证直接内嵌播放。
@@ -61,6 +63,8 @@ AI 短片回放已有工具历史，没有生成或暗示新的 AI 结论；手�
 </details>
 
 ## 数据与能力边界
+
+正式官网：[sida.win](https://sida.win/)。公开首页、开发者文档与账户方案共用服务端 SEO 元信息、分享预览与三页 sitemap；自部署可用 `SIDA_PUBLIC_SITE_URL` 指定自己的公开域名，私有实例设 `SIDA_SEO_INDEXABLE=false` 关闭索引。本地 HTML 与工作区功能页不参与索引，配置示例见 `.env.example`，主 Compose 服务已透传。
 
 - **口径明确区分。** 腾讯逐笔意图、东财按单金额四档和 TQ L2 指标的定义不同，不能把它们当作可互换的方向性信号。使用时保留来源、口径和基准日。
 - **缺失就是缺失。** 不可用的字段显示 `--` / 无数据，不能用猜测补齐。

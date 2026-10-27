@@ -1,7 +1,7 @@
 # SIDA 界面与交互准则
 
-> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce`、表单边界基于 `3f6032a0`、浏览器全屏基于 `2de25970`、官网演示基于 `2691c3eb` 更新，规范随同本次代码提交生效。
-> 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/health.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/klines.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/quotes.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
+> 基线：`b161a986`（VERSION `v0.80.0`）及 2026-10-26 行情标的切换改造；2026-10-27 气泡关闭行为基于 `e0ff5219`、手机对话布局基于 `1a0e3cce`、表单边界基于 `3f6032a0`、浏览器全屏基于 `2de25970`、官网演示基于 `2691c3eb`、公开文档与账户方案基于 `0d26a249`（`v0.84.1`）更新，规范随同本次代码提交生效。
+> 对象完整路径：`/Users/winter/Documents/zicalWork/sida-pro/frontend`、`/Users/winter/Documents/zicalWork/sida-pro/scripts/check_ui_rules.mjs`、`/Users/winter/Documents/zicalWork/sida-pro/src/bootstrap/app.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/public_seo.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/system_status.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/health.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/klines.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/web/api/quotes.py`、`/Users/winter/Documents/zicalWork/sida-pro/src/core/selfcheck.py`。
 > 覆盖：公开官网与媒体展示、全站主题 token、共享基础组件、导航、页面标题/工具栏、首页、AI 对话、个股工作台、设置及生产 TSX 展示类；检查覆盖 `src`、`packages/base-ui`、`packages/biz-ui`。
 > 未覆盖：交易算法准确性、外部行情接口可用性、生产数据与全部页面的完整业务验收；不以 UI 验证代替口径、权限和多用户测试。
 
@@ -161,5 +161,11 @@ git diff --check
 ## 11. 官网与产品演示
 
 公开官网使用产品概览、功能、操作演示、部署文档、常见问题的正式导航层级，手机提供具备展开状态与关闭行为的菜单。使用与应用相同的主题 token、无描边内容卡片和共享按钮；公开页可用较大标题与阅读宽度。
+
+公开开发者文档与账户方案共用官网导航、主题切换和页脚；登录后复用应用壳层，不重复叠加官网导航。开发者文档按分类挂载，目录可搜索并将所选接口带入调试台。代码复制必须等剪贴板写入成功才显示成功；失败允许手动复制。手机表格与代码仅在自身容器内滚动。
+
+项目仓库统一链接 `https://github.com/xiaoze-hub/sida-pro`；免费社区部署版使用 `https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics`，明确 AGPL-3.0 与独立功能/版本边界，不将两个仓库混称。当前实例账户的权限、额度、收费状态和申请状态均来自后端；未知状态先读取/重试，不能猜成未开通。已开通角色不重复申请，成功提交后的状态刷新失败不误报为提交失败。
+
+正式官网为用户确认的 `https://sida.win`。公开首页、开发者文档、账户方案的标题、描述、canonical、OG/Twitter 及结构化数据由同一份 `frontend/public/site-seo.json` 驱动，服务端首响应和客户端切页同步；canonical 不包含跟踪或分类查询参数。sitemap 仅列这三个公开 URL；私有功能页与本地响应 noindex，可通过部署变量为私有实例整体关闭索引。结构化数据不虚构价格、评分、评价或使用效果。JavaScript 关闭时提供简要介绍与可抓取链接，不将其宣称为完整界面的服务端渲染。参考 [Google JavaScript SEO](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics)。
 
 截图与视频必须来自真实操作，注明日期 / 版本 / 环境；缺失数据与未配置服务不伪装正常。视频默认显示实际封面、播放动作与时长，点击后才加载播放器；切换示例停止旧播放。加载失败提供重试或下载，不能留整片空白。每次构建检查封面、字幕与视频资源，并验证构建后实际 HTTP 响应及浅色 / 深色 / 手机排版。官网与中英文 README 共用 `frontend/public/media/product/` 素材。

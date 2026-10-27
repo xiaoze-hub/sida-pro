@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { usePublicSeo } from '@/hooks/use-public-seo'
+import { PROJECT_REPOSITORY, COMMUNITY_REPOSITORY } from '@/lib/product-links'
 import { ArrowDown, ArrowRight, Check, PlayCircle, Code2, Database, Moon, ShieldCheck, Smartphone, Sun, Menu, X, BookOpen, Server, ArrowUpRight, Download } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
@@ -40,6 +42,7 @@ const capabilities = [
 ]
 
 export default function LandingPage() {
+  usePublicSeo('/')
   const { theme, toggleTheme } = useTheme()
   const [menuOpen, setMenuOpen] = useState(false)
   return (
@@ -161,7 +164,7 @@ export default function LandingPage() {
 
         <section id="resources" className="mx-auto max-w-7xl scroll-mt-24 px-5 pt-14 sm:px-8 sm:pt-20" aria-labelledby="resources-title">
           <div className="grid items-center gap-8 rounded-xl bg-card p-6 sm:p-8 lg:grid-cols-2">
-            <div><Server size={24} className="mb-4 text-primary" /><h2 id="resources-title" className="text-[28px] font-semibold tracking-tight">可管理、可配置的研究环境</h2><p className="mt-4 text-[14px] leading-7 text-muted-foreground">通过系统状态确认依赖连接，在设置中管理模型与通知。自行部署使用 PostgreSQL 与 Redis；预测引擎按需单独配置。</p><Button asChild variant="ghost" className="mt-5 gap-3 px-0 text-foreground hover:bg-transparent hover:text-primary"><Link to="/developers"><BookOpen size={18} />查阅开发者文档<ArrowUpRight size={16} /></Link></Button><p className="mt-3 text-[12px] text-muted-foreground">文档与 API 管理需登录当前实例。</p></div>
+            <div><Server size={24} className="mb-4 text-primary" /><h2 id="resources-title" className="text-[28px] font-semibold tracking-tight">可管理、可配置的研究环境</h2><p className="mt-4 text-[14px] leading-7 text-muted-foreground">通过系统状态确认依赖连接，在设置中管理模型与通知。自行部署使用 PostgreSQL 与 Redis；预测引擎按需单独配置。</p><Button asChild variant="ghost" className="mt-5 gap-3 px-0 text-foreground hover:bg-transparent hover:text-primary"><Link to="/developers"><BookOpen size={18} />查阅开发者文档<ArrowUpRight size={16} /></Link></Button><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex min-h-11 items-center gap-2 text-[14px] font-medium hover:text-primary">GitHub 社区版开源部署<ArrowUpRight size={16} /></a><p className="mt-2 text-[12px] leading-6 text-muted-foreground">开发者文档可公开阅读；API Key 管理需登录。免费社区版按 AGPL-3.0 开源，与本实例的 Pro 权限分别管理。</p></div>
             <figure><img src={`${media}system-light.webp`} width="1440" height="960" alt="系统状态连接图：服务、数据库与缓存正常，未配置和异常模块明确标记" loading="lazy" className="h-auto w-full rounded-lg" /><figcaption className="mt-3 text-[12px] leading-6 text-muted-foreground">系统状态实拍 · 点击节点查看连接依据与检测结果</figcaption></figure>
           </div>
         </section>
@@ -190,7 +193,7 @@ export default function LandingPage() {
       </main>
       <footer className="mx-auto flex max-w-7xl flex-col justify-between gap-5 px-5 py-8 text-[12px] leading-6 text-muted-foreground sm:px-8 md:flex-row">
         <p>© 2026 SIDA Pro · 数智分析<br />本平台数据仅供参考，不构成投资建议。市场有风险，投资需谨慎。</p>
-        <nav aria-label="页脚导航" className="flex flex-wrap gap-6"><a href="#demo" className="hover:text-primary">操作演示</a><Link to="/developers" className="hover:text-primary">开发者文档</Link><Link to="/tiers" className="hover:text-primary">账户方案</Link><Link to="/login" className="hover:text-primary">登录工作台</Link></nav>
+        <nav aria-label="页脚导航" className="flex flex-wrap gap-6"><a href="#demo" className="hover:text-primary">操作演示</a><Link to="/developers" className="hover:text-primary">开发者文档</Link><Link to="/tiers" className="hover:text-primary">账户方案</Link><a href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer" className="hover:text-primary">GitHub 项目仓库</a><Link to="/login" className="hover:text-primary">登录工作台</Link></nav>
       </footer>
     </div>
   )

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
+from starlette.requests import Request
+from starlette.responses import Response
 
 from src.bootstrap.env import REPO_ROOT
 
@@ -32,10 +34,11 @@ def _mount_spa(app) -> None:
     if not os.path.exists(static_dir):
         return
     from fastapi.responses import FileResponse
+    from src.web.public_seo import indexable_host, load_site, render_page, site_origin, sitemap
 
     _SPA_ASSET_EXT = (
         ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
-        ".ico", ".woff", ".woff2", ".ttf", ".map", ".json", ".mp4", ".webm", ".vtt",
+        ".ico", ".woff", ".woff2", ".ttf", ".map", ".json", ".mp4", ".webm", ".vtt", ".xml", ".txt",
     )
     # 精简容器的系统 MIME 表可能缺少这些类型，尤其 WebVTT 必须以 text/vtt 提供。
     media_types = {
@@ -45,8 +48,29 @@ def _mount_spa(app) -> None:
         ".vtt": "text/vtt",
     }
 
+    @app.get("/robots.txt", include_in_schema=False)
+    async def public_robots() -> Response:
+        from fastapi.responses import PlainTextResponse
+
+        site = load_site(static_dir)
+        content = "User-agent: *\nAllow: /\nDisallow: /api/\n"
+        if os.getenv("SIDA_SEO_INDEXABLE", "true").lower() in ("0", "false", "no"):
+            content = "User-agent: *\nDisallow: /\n"
+        if site:
+            content += f"Sitemap: {site_origin(site)}/sitemap.xml\n"
+        return PlainTextResponse(content)
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    async def public_sitemap() -> Response:
+        from fastapi.responses import Response
+
+        site = load_site(static_dir)
+        if site is None:
+            return Response(status_code=404)
+        return Response(sitemap(site), media_type="application/xml")
+
     @app.get("/{path:path}")
-    async def serve_spa(path: str):
+    async def serve_spa(path: str, request: Request):
         # /api/* 未注册的端点 → 返 404 JSON 而非 SPA HTML(避免前端 JSON.parse(HTML) 触发 ErrorBoundary)
         if path.startswith("api/"):
             from fastapi.responses import JSONResponse
@@ -78,7 +102,17 @@ def _mount_spa(app) -> None:
             from fastapi.responses import Response
 
             return Response(status_code=404)
-        return FileResponse(os.path.join(static_dir, "index.html"))
+        site = load_site(static_dir)
+        if site is None:
+            return FileResponse(os.path.join(static_dir, "index.html"))
+        from fastapi.responses import HTMLResponse
+        from pathlib import Path
+
+        source = Path(static_dir, "index.html").read_text(encoding="utf-8")
+        page_path = "/" + path.rstrip("/")
+        indexable = indexable_host(request.url.hostname)
+        robots = "index,follow" if indexable and page_path in site["pages"] else "noindex,follow"
+        return HTMLResponse(render_page(source, page_path, site, indexable), headers={"X-Robots-Tag": robots})
 
     logger.info(f"静态文件服务已启用: {static_dir}")
 
