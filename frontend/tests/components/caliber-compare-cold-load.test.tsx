@@ -65,7 +65,7 @@ const H = vi.hoisted(() => {
   }
 })
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   caliberCompareApi: {
     get: vi.fn((symbol: string) => {
       H.args.compare.push([symbol])
@@ -81,7 +81,7 @@ vi.mock('@panwatch/api', () => ({
 }))
 
 // 计数渲染次数: SourceGrid(memo) 内每列都渲染 CaliberBadge → 徽章重渲即三列重渲。
-vi.mock('@panwatch/biz-ui/components/CaliberBadge', () => ({
+vi.mock('@sida/biz-ui/components/CaliberBadge', () => ({
   default: ({ caliber }: { caliber?: string }) => {
     H.inc('badge')
     return <span data-testid="caliber-badge" data-caliber={caliber} />

@@ -1,6 +1,6 @@
 # Prometheus 抓取配置 (2026-08-17 v0.2.65 — Phase 1)
 #
-# 默认抓 panwatch 容器的 /metrics 端点
+# 默认抓 sida 容器的 /metrics 端点
 # 如果用 Docker Compose 网络, hostname 用服务名
 
 global:
@@ -20,13 +20,13 @@ alerting:
 
 scrape_configs:
   # 主后端 SIDA
-  - job_name: 'sida-panwatch'
+  - job_name: 'sida-sida'
     metrics_path: '/api/metrics'
     static_configs:
-      # Docker Compose 网络内 DNS 解析: panwatch:8000
-      - targets: ['panwatch:8000']
+      # Docker Compose 网络内 DNS 解析: sida:8000
+      - targets: ['sida:8000']
         labels:
-          service: 'panwatch'
+          service: 'sida'
           env: 'production'
 
   # Prometheus 自身指标

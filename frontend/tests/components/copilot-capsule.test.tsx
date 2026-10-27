@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * 唤醒胶囊（设计稿 §8.7 / §12.3）：
- *  - 点击派发 `panwatch-open-chat`，detail.pageContext 必须含「数智参谋快照」与 as_of；
+ *  - 点击派发 `sida-open-chat`，detail.pageContext 必须含「数智参谋快照」与 as_of；
  *  - 收起写 localStorage（按标的），并且**仍可恢复**（否则误点一次就永久失去入口）。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -78,10 +78,10 @@ describe('CopilotCapsule', () => {
     expect(toolbar.contains(screen.getByTestId('copilot-capsule-open'))).toBe(true)
   })
 
-  it('点击后派发 panwatch-open-chat 且携带快照上下文', async () => {
+  it('点击后派发 sida-open-chat 且携带快照上下文', async () => {
     const events: CustomEvent[] = []
     const onOpen = (e: Event) => events.push(e as CustomEvent)
-    window.addEventListener('panwatch-open-chat', onOpen)
+    window.addEventListener('sida-open-chat', onOpen)
 
     render(<CopilotCapsule symbol="600111" />)
     await waitFor(() => expect(screen.getByText(/低位单峰/)).toBeTruthy())
@@ -94,7 +94,7 @@ describe('CopilotCapsule', () => {
     expect(detail.pageContext).toContain(BRIEF.as_of)
     expect(detail.pageContext).toContain('底仓成本')
 
-    window.removeEventListener('panwatch-open-chat', onOpen)
+    window.removeEventListener('sida-open-chat', onOpen)
   })
 
   it('收起写入 localStorage，回访仍是收起态，但可恢复', async () => {
@@ -117,20 +117,20 @@ describe('CopilotCapsule', () => {
     mocks.getCopilotBrief.mockRejectedValue(new Error('404'))
     const events: CustomEvent[] = []
     const onOpen = (e: Event) => events.push(e as CustomEvent)
-    window.addEventListener('panwatch-open-chat', onOpen)
+    window.addEventListener('sida-open-chat', onOpen)
 
     render(<CopilotCapsule symbol="600111" />)
     await waitFor(() => expect(screen.getByText(/盘口参谋/)).toBeTruthy())
     fireEvent.click(screen.getByTestId('copilot-capsule-open'))
     expect((events[0].detail as { pageContext: string }).pageContext).toContain('尚无参谋快照')
 
-    window.removeEventListener('panwatch-open-chat', onOpen)
+    window.removeEventListener('sida-open-chat', onOpen)
   })
 
   it('拖拽后吸附左边缘并持久化位置；松手那一下不误触唤醒', async () => {
     const events: CustomEvent[] = []
     const onOpen = (e: Event) => events.push(e as CustomEvent)
-    window.addEventListener('panwatch-open-chat', onOpen)
+    window.addEventListener('sida-open-chat', onOpen)
 
     render(<CopilotCapsule symbol="600111" />)
     const capsule = await screen.findByTestId('copilot-capsule')
@@ -154,6 +154,6 @@ describe('CopilotCapsule', () => {
     fireEvent.click(screen.getByTestId('copilot-capsule-open'))
     expect(events).toHaveLength(1)
 
-    window.removeEventListener('panwatch-open-chat', onOpen)
+    window.removeEventListener('sida-open-chat', onOpen)
   })
 })

@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /**
  * Task 16 标签「预测」守六件事:
@@ -28,7 +28,7 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    实例放组件 state, 「重试」时换**全新**实例 ⇒ 工厂被再次调用。本文件 ④ 的"计数 == 2"正是这条
  *    的回归守卫; 若有人把实现改回模块级常量, ④ 会立刻失败(计数停在 1)。
  * ⑤ **形态差异可观测(未走 `InsightProvider`)** —— 与 T11–T15 不同, 本标签不引用
- *    `InsightProvider`(控制器裁定: 预测页自包含)。断言挂载期间真 `@panwatch/api` 零调用 ——
+ *    `InsightProvider`(控制器裁定: 预测页自包含)。断言挂载期间真 `@sida/api` 零调用 ——
  *    若有人给本标签补上 provider 取数, 这条会立刻失败。
  * ⑥ **`ForecastPage` 的 props 面(接口事实, 由 TS 守卫)** —— 它**只**吃可选 `initialSymbol`
  *    (v0.6.0 遗留②: 本标签据此预选标的)。对真实模块用 `@ts-expect-error` 断言
@@ -59,7 +59,7 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    的薄包装读 `mocks.gate` 决定 —— `pending` 返回**永不 settle** 的 promise(真实"在途"),
  *    `reject` 返回 **rejected** promise(真实"下载失败")。这两条路径正是本标签要覆盖的边界行为,
  *    且**是 `import()` 层面的失败**, 不是"已 resolve 的组件再抛错"。
- *  - `@panwatch/api` 也替成真模块形状的最小面(getToken/clearToken/fetchAPI/stocksApi.list),
+ *  - `@sida/api` 也替成真模块形状的最小面(getToken/clearToken/fetchAPI/stocksApi.list),
  *    即使将来预测页被真的加载(如断言⑥)也不会打到网络。
  *
  * 工厂计数怎么来(与"真数据纪律"一致, 见下):
@@ -118,7 +118,7 @@ vi.mock('@/pages/Forecast', () => ({
   default: FakeForecastPage,
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => null,
   clearToken: () => {},
   fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a),
@@ -263,7 +263,7 @@ describe('Task 16 预测: chunk 失败就近兜底 + 重试真重发 import()', 
 })
 
 describe('Task 16 预测: 形态差异(未走 InsightProvider, 零取数)', () => {
-  it('挂载期间不经 provider 取数: 真 @panwatch/api 全零(与 T11–T15 的 keys 形态不同)', async () => {
+  it('挂载期间不经 provider 取数: 真 @sida/api 全零(与 T11–T15 的 keys 形态不同)', async () => {
     render(tree())
 
     await screen.findByTestId('fake-forecast-page')

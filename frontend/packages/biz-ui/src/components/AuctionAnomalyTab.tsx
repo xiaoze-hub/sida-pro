@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { RefreshCw, UserPlus, Eye } from 'lucide-react'
-import { fetchAPI, stocksApi } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { fetchAPI, stocksApi } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { chaseBadge, type GapStudyResp } from '@/lib/gap-study'
 import { safeFixed } from '@/lib/format'
 import { normSymbol } from '@/lib/symbol'
-import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
+import CaliberBadge from '@sida/biz-ui/components/CaliberBadge'
 
 /**
  * 竞价异动池 Tab(2026-08-24, v0.3.1 修复字段口径)

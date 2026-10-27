@@ -1,4 +1,4 @@
-# PanWatch 部署文档(同事版)
+# SIDA 部署文档(同事版)
 
 镜像地址:**ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest**
 
@@ -14,7 +14,7 @@ sudo docker pull ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
 
 ### 2. 创建配置(账号/token 可选)
 ```bash
-mkdir -p ~/panwatch && cd ~/panwatch
+mkdir -p ~/sida && cd ~/sida
 cat > .env <<'EOF'
 AUTH_USERNAME=admin
 AUTH_PASSWORD=<请替换为至少 8 位强密码>
@@ -28,11 +28,11 @@ EOF
 ### 3. 启动容器
 ```bash
 sudo docker run -d \
-  --name panwatch \
+  --name sida \
   --restart unless-stopped \
   -p 8000:8000 \
-  --env-file ~/panwatch/.env \
-  -v panwatch_data:/app/data \
+  --env-file ~/sida/.env \
+  -v sida_data:/app/data \
   ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
 ```
 
@@ -44,10 +44,10 @@ sudo docker run -d \
 
 ```bash
 sudo docker run -d \
-  --name panwatch \
+  --name sida \
   --restart unless-stopped \
-  -v panwatch_data:/app/data \
-  --env-file ~/panwatch/.env \
+  -v sida_data:/app/data \
+  --env-file ~/sida/.env \
   ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
 # 注意: 容器只监听 127.0.0.1:8000,需要 Caddy 反代并加 iptables 挡公网 8000
 ```
@@ -65,12 +65,12 @@ https://your-domain.com {
 
 ## 数据持久化
 
-所有数据(自选股/历史报告/AI 分析)存在 Docker 命名卷 `panwatch_data` 里。
+所有数据(自选股/历史报告/AI 分析)存在 Docker 命名卷 `sida_data` 里。
 **升级镜像** = 拉新镜像 + 重建容器(数据卷不动),**数据全在**:
 ```bash
 sudo docker pull ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
-sudo docker stop panwatch && sudo docker rm panwatch
-sudo docker run -d --name panwatch -p 8000:8000 --env-file ~/panwatch/.env -v panwatch_data:/app/data ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
+sudo docker stop sida && sudo docker rm sida
+sudo docker run -d --name sida -p 8000:8000 --env-file ~/sida/.env -v sida_data:/app/data ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
 ```
 
 ## 镜像版本
@@ -81,7 +81,7 @@ sudo docker run -d --name panwatch -p 8000:8000 --env-file ~/panwatch/.env -v pa
 ## 故障排查
 
 - **拉不到镜像**: 检查 `sudo docker login` 状态(公开仓库免登录,但 Docker Hub 限流可能影响)
-- **容器起不来**: `sudo docker logs panwatch`
+- **容器起不来**: `sudo docker logs sida`
 - **页面 502**: 容器内 8000 端口未启动,等 30 秒(Gunicorn 启动慢)
 - **功能受限**: 登录后看「设置 → 接口 Key」配置各数据源 token
 

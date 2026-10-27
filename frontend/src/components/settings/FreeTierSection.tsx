@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Lock, RefreshCw, Save, SlidersHorizontal, Loader2, CheckCircle2 } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { freeTierApi, type FreeTierPatch, type FreeTierResponse } from '@panwatch/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { freeTierApi, type FreeTierPatch, type FreeTierResponse } from '@sida/api'
 
 /** B3: 档位限额草稿(留空的子项 = 不覆盖, 用表/代码默认) */
 type TierLimitDraft = Record<string, { daily_limit?: number; burst_limit?: number; refill_per_min?: number }>

@@ -5,7 +5,7 @@ import PageHeader from '@/components/PageHeader'
  * 点击色块下钻成分股(复用 /boards/:blockCode 详情页)。
  */
 import { useNavigate } from 'react-router-dom'
-import BoardHeatmap from '@panwatch/biz-ui/components/dashboard/BoardHeatmap'
+import BoardHeatmap from '@sida/biz-ui/components/dashboard/BoardHeatmap'
 import { navBackState } from '@/lib/nav-back'
 
 export default function HeatmapPage() {

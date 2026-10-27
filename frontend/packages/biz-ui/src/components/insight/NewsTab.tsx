@@ -1,6 +1,6 @@
 import { useInsight } from './context'
 import { ExternalLink } from 'lucide-react'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@sida/base-ui/components/ui/select'
 import { formatTime } from './helpers'
 
 export function NewsTab() {

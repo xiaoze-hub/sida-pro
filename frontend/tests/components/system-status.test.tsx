@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TabActiveProvider } from '@panwatch/base-ui'
-import type { SelfCheckItem, SystemStatusSnapshot } from '@panwatch/api'
+import { TabActiveProvider } from '@sida/base-ui'
+import type { SelfCheckItem, SystemStatusSnapshot } from '@sida/api'
 import { withProbeResults } from '@/lib/system-status'
 import { SystemTopology } from '@/components/system/SystemTopology'
 

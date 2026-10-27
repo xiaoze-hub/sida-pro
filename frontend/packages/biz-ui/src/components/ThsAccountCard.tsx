@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, CheckCircle2, XCircle } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { cn } from '@panwatch/base-ui'
-import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
+import { fetchAPI } from '@sida/api'
+import { cn } from '@sida/base-ui'
+import SectionHeader from '@sida/biz-ui/components/SectionHeader'
 
 /**
  * 同花顺账号卡(2026-09-05 精简: 扫码登录已下线, 只展示 SDK 模式 + 已验证能力)。

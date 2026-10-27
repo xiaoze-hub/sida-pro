@@ -138,7 +138,7 @@ class FtshareMCPClient:
                 "params": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": {"name": "panwatch-marketdata", "version": "1.0"},
+                    "clientInfo": {"name": "sida-marketdata", "version": "1.0"},
                 },
             }
         )

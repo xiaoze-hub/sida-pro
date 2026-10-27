@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Bell, Pencil, Plus, Send, Star, Trash2 } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
-import { fetchAPI, type NotifyChannel } from '@panwatch/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Switch } from '@sida/base-ui/components/ui/switch'
+import { useToast } from '@sida/base-ui/components/ui/toast'
+import { fetchAPI, type NotifyChannel } from '@sida/api'
 import { useNavigate } from 'react-router-dom'
 
 /**

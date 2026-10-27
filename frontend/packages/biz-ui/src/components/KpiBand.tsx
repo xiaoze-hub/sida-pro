@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { Activity, Crown } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { safeFixed } from '@/lib/format'
 
 /**

@@ -27,29 +27,29 @@ import {
   type PortfolioAiReview,
   type MarketAnomalyItem,
   fetchAPI,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { usePausedInterval } from '@panwatch/base-ui'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { usePausedInterval } from '@sida/base-ui'
 import { Skeleton } from '@/components/Skeleton'
-import { Onboarding } from '@panwatch/biz-ui/components/onboarding'
-import KpiBand, { usePhaseLabel, useMainlineTop1 } from '@panwatch/biz-ui/components/KpiBand'
-import MarketPhaseCard from '@panwatch/biz-ui/components/MarketPhaseCard'
-import MarketMainlineCard from '@panwatch/biz-ui/components/MarketMainlineCard'
-import BreadthDistributionChart from '@panwatch/biz-ui/components/dashboard/BreadthDistributionChart'
-import SentimentGauge from '@panwatch/biz-ui/components/dashboard/SentimentGauge'
-import FlowHistoryChart from '@panwatch/biz-ui/components/dashboard/FlowHistoryChart'
-import ResonancePanel from '@panwatch/biz-ui/components/dashboard/ResonancePanel'
+import { Onboarding } from '@sida/biz-ui/components/onboarding'
+import KpiBand, { usePhaseLabel, useMainlineTop1 } from '@sida/biz-ui/components/KpiBand'
+import MarketPhaseCard from '@sida/biz-ui/components/MarketPhaseCard'
+import MarketMainlineCard from '@sida/biz-ui/components/MarketMainlineCard'
+import BreadthDistributionChart from '@sida/biz-ui/components/dashboard/BreadthDistributionChart'
+import SentimentGauge from '@sida/biz-ui/components/dashboard/SentimentGauge'
+import FlowHistoryChart from '@sida/biz-ui/components/dashboard/FlowHistoryChart'
+import ResonancePanel from '@sida/biz-ui/components/dashboard/ResonancePanel'
 import ScanJobButton from '@/components/ScanJobButton'
 import DiscoveryPanel from '@/components/DiscoveryPanel'
 import SkeletonRows from '@/components/SkeletonRows'
 import Sparkline from '@/components/Sparkline'
-import AnimatedNumber from '@panwatch/biz-ui/components/AnimatedNumber'
-import FlashValue from '@panwatch/biz-ui/components/FlashValue'
-import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
+import AnimatedNumber from '@sida/biz-ui/components/AnimatedNumber'
+import FlashValue from '@sida/biz-ui/components/FlashValue'
+import SectionHeader from '@sida/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import MarketStatusPills from '@/components/MarketStatusPills'
 import PageHeader from '@/components/PageHeader'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
 import DashboardCustomizer from '@/components/DashboardCustomizer'
 import CollapsibleSection from '@/components/dashboard/CollapsibleSection'
 import IndexTrendBand from '@/components/dashboard/IndexTrendBand'
@@ -72,9 +72,9 @@ import DiagnosticsShareCard from '@/components/DiagnosticsShareCard'
 import DigestShareCard from '@/components/DigestShareCard'
 import StockContextMenu, { type StockContextMenuState, type StockContextTarget } from '@/components/StockContextMenu'
 import { useI18n } from '@/hooks/useI18n'
-import Stat from '@panwatch/biz-ui/components/Stat'
+import Stat from '@sida/biz-ui/components/Stat'
 import { navBackState } from '@/lib/nav-back'
-import CaliberBadge, { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
+import CaliberBadge, { caliberOf } from '@sida/biz-ui/components/CaliberBadge'
 
 /** 安全 toFixed: 处理 string / null / undefined / 非有限数, 一律返回 fallback。
  *  修复 2026-08-21: Dashboard 报 TypeError: c.price.toFixed is not a function
@@ -482,7 +482,7 @@ export default function DashboardPage() {
   }, [autoRefreshTick])
 
   const handleOnboardingComplete = () => {
-    localStorage.setItem('panwatch_onboarding_completed', 'true')
+    localStorage.setItem('sida_onboarding_completed', 'true')
     setShowOnboarding(false)
   }
 

@@ -1,7 +1,7 @@
-import type { DashboardMarketStatus } from '@panwatch/api'
+import type { DashboardMarketStatus } from '@sida/api'
 import { ChevronDown } from 'lucide-react'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
-import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/components/ui/popover'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
+import { Popover, PopoverContent, PopoverTrigger } from '@sida/base-ui/components/ui/popover'
 
 /**
  * 三地市场状态徽标 (A4, 2026-09-10 借鉴 OpenTerminal):

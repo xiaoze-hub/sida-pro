@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /**
  * Task 11 标签「盘口资金」守三件事:
@@ -16,7 +16,7 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *   三个端点(`/orderbook-ob`、`/seal-quality`、I-3 的 `/market/cancel-profile/{s}`); watchlist/news/
  *    suggestions/reports 一个都不发。
  *
- * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsight*` 走真实代码。
+ * 真数据纪律: mock 的是**网络层**(`@sida/api`), 组件与 `InsightProvider`/`useInsight*` 走真实代码。
  */
 
 const mocks = vi.hoisted(() => ({
@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => ({
   fundamentalsDetail: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a),
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),

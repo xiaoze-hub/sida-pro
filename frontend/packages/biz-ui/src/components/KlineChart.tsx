@@ -30,7 +30,7 @@ import {
   type SeriesMarker,
 } from 'lightweight-charts'
 
-import { fetchAPI, fetchScenario, type ScenarioMatrixResponse } from '@panwatch/api'
+import { fetchAPI, fetchScenario, type ScenarioMatrixResponse } from '@sida/api'
 import MinutePane from './MinutePane'
 import {
   intentLabelFor,

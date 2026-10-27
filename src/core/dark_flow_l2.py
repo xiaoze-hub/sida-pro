@@ -41,7 +41,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # 暗盘主线开关(运维可关: 置 0 则整体回退腾讯逐笔)
-DARK_L2_ENABLED = os.environ.get("PANWATCH_DARK_L2", "1").strip() == "1"
+DARK_L2_ENABLED = os.environ.get("SIDA_DARK_L2", "1").strip() == "1"
 
 # 置信度标识: 与 dark_pool_flow.DARK_CONFIDENCE("L1_approx") 区分
 DARK_CONFIDENCE_L2 = "l2_thsdk"

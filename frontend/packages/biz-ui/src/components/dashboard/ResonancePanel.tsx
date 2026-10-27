@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
-import { fetchAPI } from '@panwatch/api'
+import { usePausedInterval } from '@sida/base-ui'
+import { fetchAPI } from '@sida/api'
 import { useNavigate } from 'react-router-dom'
 import { safeFixed } from '@/lib/format'
 

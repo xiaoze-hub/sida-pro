@@ -3,7 +3,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@panwatch/api', () => ({ getToken: () => 'test.jwt.token' }))
+vi.mock('@sida/api', () => ({ getToken: () => 'test.jwt.token' }))
 
 import { useQuoteStream } from '@/realtime/useQuoteStream'
 
@@ -50,7 +50,7 @@ describe('useQuoteStream (KI-025)', () => {
     renderHook(() => useQuoteStream(onTicks))
     const ws = FakeWS.instances[0]
     expect(ws).toBeTruthy()
-    expect(ws.protocols).toEqual(['panwatch.auth.bearer', 'test.jwt.token'])
+    expect(ws.protocols).toEqual(['sida.auth.bearer', 'test.jwt.token'])
     expect(ws.url).toContain('/api/quotes/ws')
     expect(ws.url).not.toContain('token=')
   })

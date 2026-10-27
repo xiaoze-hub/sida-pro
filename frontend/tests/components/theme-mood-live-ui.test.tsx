@@ -13,13 +13,13 @@
  *  ④ 竞态守卫: 已被更新请求取代的旧响应**不落地**; as_of/基准日显式标注, 缺数据显示「无数据」。
  *
  * 铁律: 布局/密度/分层零改动 → 本文件不做结构性断言(那是 theme-mood-layering/density 钉子);
- * 测试禁真实网络(全程 mock `@panwatch/api` 的 fetchAPI)。
+ * 测试禁真实网络(全程 mock `@sida/api` 的 fetchAPI)。
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
-vi.mock('@panwatch/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
+vi.mock('@sida/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
 
 import ThemeMoodPage from '@/pages/ThemeMood'
 import ThemeMoodStatus, { parseBoardPhase } from '@/components/ThemeMoodStatus'

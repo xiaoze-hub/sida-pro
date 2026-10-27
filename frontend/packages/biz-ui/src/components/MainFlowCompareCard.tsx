@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
+import { fetchAPI } from '@sida/api'
+import { HoverPopover } from '@sida/base-ui/components/ui/hover-popover'
 
 /**
  * 主力意图双源对比卡(2026-08-20, v0.3.0)

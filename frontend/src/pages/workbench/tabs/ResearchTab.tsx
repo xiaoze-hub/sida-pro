@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { safeFixed } from '@/lib/format'
-import { useInsight } from '@panwatch/biz-ui/components/insight/context'
-import { ReportsTab } from '@panwatch/biz-ui/components/insight/ReportsTab'
-import { DeepTab } from '@panwatch/biz-ui/components/insight/DeepTab'
+import { useInsight } from '@sida/biz-ui/components/insight/context'
+import { ReportsTab } from '@sida/biz-ui/components/insight/ReportsTab'
+import { DeepTab } from '@sida/biz-ui/components/insight/DeepTab'
 import InsightProvider from '@/pages/workbench/InsightProvider'
 import DecisionVerdictCard from '@/pages/workbench/DecisionVerdictCard'
 

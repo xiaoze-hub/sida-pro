@@ -3,11 +3,11 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
 import { Lock, Eye, EyeOff, User, Mail, ShieldCheck, Ticket, Sun, Moon } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
-import { authApi, fetchAPI, type AuthTokenPayload } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Label } from '@panwatch/base-ui/components/ui/label'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { authApi, fetchAPI, type AuthTokenPayload } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Label } from '@sida/base-ui/components/ui/label'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 
 // 邮箱注册(2026-09-16): 前端格式校验(与后端 EMAIL_RE 同口径)
 const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/

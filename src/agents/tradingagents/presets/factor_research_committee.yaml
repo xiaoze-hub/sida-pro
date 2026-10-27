@@ -1,6 +1,6 @@
 name: factor_research_committee
 title: "因子研究委员会"
-description: "因子挖掘 → 因子验证 → 因子合成 → 回测评审:量化基金内部研究流程。适配 PanWatch 策略库的 6 个内置策略(双低/资金热度/放量突破/超卖反弹/动量质量/低波质量)。"
+description: "因子挖掘 → 因子验证 → 因子合成 → 回测评审:量化基金内部研究流程。适配 SIDA 策略库的 6 个内置策略(双低/资金热度/放量突破/超卖反弹/动量质量/低波质量)。"
 metadata:
   category: 量化研究
   analyst_types: [market, fundamentals]
@@ -35,7 +35,7 @@ agents:
       4. 数据源(财务/行情/基本面/另类)
       5. 预期特征(预期 IC 方向 / 适用市值 / 适用行业)
 
-      ### III. 适配 PanWatch 数据源
+      ### III. 适配 SIDA 数据源
       - 市场行情: 腾讯 + 东财(经 marketdata tdx vendor)
       - 资金面: 东财口径(超大+大单净买入,经 8000 tdx ask)
       - 龙虎榜: marketdata ftshare
@@ -92,7 +92,7 @@ agents:
       ## 任务
       基于验证过的有效因子,做因子合成,要求:
       - 输出可落地的合成方案(权重 / 转换方式)
-      - 适配 PanWatch 策略库 YAML 格式(可直接落地)
+      - 适配 SIDA 策略库 YAML 格式(可直接落地)
 
       ## 合成方法
 
@@ -107,7 +107,7 @@ agents:
       - Z-score 标准化
       - 行业中性化(扣除申万一级均值)
 
-      ### III. 落地为 PanWatch 策略 YAML
+      ### III. 落地为 SIDA 策略 YAML
       ```yaml
       my_strategy:
         display_name: "复合 alpha 策略"
@@ -123,7 +123,7 @@ agents:
 
       ## 必需产出
       1. 合成方案(权重 + 转换)
-      2. 完整 YAML 草案(可直接 cp 到 PanWatch 策略库)
+      2. 完整 YAML 草案(可直接 cp 到 SIDA 策略库)
       3. 与现有 6 个策略的相关性 + 互补性
 
   - id: risk_reviewer

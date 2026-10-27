@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
-import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
-import { fetchAPI } from '@panwatch/api'
+import { useECharts } from '@sida/biz-ui/hooks/useECharts'
+import { readStockColors, withAlpha } from '@sida/biz-ui/lib/stock-colors'
+import { fetchAPI } from '@sida/api'
 import { safeNum } from '@/lib/format'
 import { ChartEmpty } from '@/components/ChartEmpty'
 

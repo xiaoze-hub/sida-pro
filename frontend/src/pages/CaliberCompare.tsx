@@ -1,5 +1,5 @@
 import PageHeader from '@/components/PageHeader'
-import { Input } from '@panwatch/base-ui/components/ui/input'
+import { Input } from '@sida/base-ui/components/ui/input'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Info, Loader2, RefreshCw } from 'lucide-react'
 import {
@@ -8,13 +8,13 @@ import {
   type CaliberCompareResponse,
   type CaliberDriftResponse,
   type CaliberSource,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { safeMoney, safePercent, safeInt, safeFixed } from '@/lib/format'
 // 口径徽章(契约标签可视化: 资金面展示处**必须可见口径**, AGENTS.md 硬约束)
-import CaliberBadge, { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
+import CaliberBadge, { caliberOf } from '@sida/biz-ui/components/CaliberBadge'
 // 口径词典(单一来源, 见 packages/biz-ui/src/lib/caliber-glossary.ts): 官方投教口径, 各页共用
-import { ANPAN, GS_SIGNAL, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
+import { ANPAN, GS_SIGNAL, MINGPAN, glossaryTooltip } from '@sida/biz-ui'
 
 /**
  * 口径对照页(2026-09-18, 老板需求 A2 第一步)。

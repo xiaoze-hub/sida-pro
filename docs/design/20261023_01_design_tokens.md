@@ -25,7 +25,7 @@
 | 12 | `frontend/src/components/DefenseLineBanner.tsx` | 1–101（关键段） | `-8%` 硬防线现状 |
 | 13 | 目录/计数探针 | `frontend/src/components/`、`frontend/packages/{api,base-ui,biz-ui}`、`grep` 计数 | class 存量统计（`bg-white/` 39、`shadow-float` 14、`.card*` 15、`text-[10px]` 461） |
 
-**未取到**：K 线渲染组件内部实现（`frontend/src/components/` 下无独立 KLine 组件文件命中，图表实现在页面内或 `@panwatch/biz-ui` 内，本轮未读）；`JobPanel.tsx` 内部实现（仅从目录清单确认存在）。凡涉及这两处，本文只写约束与验收线，不描述实现细节。
+**未取到**：K 线渲染组件内部实现（`frontend/src/components/` 下无独立 KLine 组件文件命中，图表实现在页面内或 `@sida/biz-ui` 内，本轮未读）；`JobPanel.tsx` 内部实现（仅从目录清单确认存在）。凡涉及这两处，本文只写约束与验收线，不描述实现细节。
 
 ---
 

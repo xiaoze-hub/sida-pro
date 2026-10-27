@@ -25,7 +25,7 @@
  * 本模块不 import 图表库、不碰 DOM ⇒ 可独立单测(vitest 纯函数用例)。
  */
 
-import type { ScenarioMatrixResponse, ScenarioItem } from '@panwatch/api'
+import type { ScenarioMatrixResponse, ScenarioItem } from '@sida/api'
 
 /** 关键位种类(4 种, 与后端 levels/scenarios 一一对应)。 */
 export type ScenarioLineKind = 'resist' | 'support' | 'target_strong' | 'target_weak'

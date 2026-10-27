@@ -48,7 +48,7 @@ def test_gate_allows_explicit_pg_url(monkeypatch):
 
 
 def test_gate_allows_explicit_sqlite_url(monkeypatch):
-    monkeypatch.setenv("SIDA_DB_URL", "sqlite:///./data/panwatch.db")
+    monkeypatch.setenv("SIDA_DB_URL", "sqlite:///./data/sida.db")
     monkeypatch.setattr(sc, "is_postgres", lambda: False)
     ok, msg = sc.check_db_dialect_explicit()
     assert ok is True

@@ -1,4 +1,4 @@
-import type { SuggestionInfo, KlineSummary } from '@panwatch/biz-ui/components/suggestion-badge'
+import type { SuggestionInfo, KlineSummary } from '@sida/biz-ui/components/suggestion-badge'
 /** W5.3: Stocks 页的类型/常量/纯函数(从 Stocks.tsx 逐字抽出)。 */
 
 export interface AgentResult {

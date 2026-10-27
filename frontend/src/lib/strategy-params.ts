@@ -3,7 +3,7 @@
  * 后端 `params` 是唯一事实源(它派生自求值器真读的阈值键), 前端只负责:
  *  ① 显示"当前生效值"(默认值或用户覆盖值); ② 只把**真的改过**的键作为 overrides 发出去。
  */
-import type { StrategyParam } from '@panwatch/api'
+import type { StrategyParam } from '@sida/api'
 
 export function displayValue(p: StrategyParam, overrides: Record<string, number>): number {
   return p.key in overrides ? overrides[p.key] : p.value

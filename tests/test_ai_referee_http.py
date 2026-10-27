@@ -59,7 +59,7 @@ def _fake_requests(post_results):
 
 @pytest.fixture()
 def _http_env(monkeypatch):
-    monkeypatch.setattr(ai_referee, "get_panwatch_url", lambda: "http://panwatch-test:8000")
+    monkeypatch.setattr(ai_referee, "get_sida_url", lambda: "http://sida-test:8000")
     monkeypatch.setattr(ai_referee, "auth_headers", lambda: {"X-Service-Token": "t0"})
     recorded = []
     monkeypatch.setattr(
@@ -72,7 +72,7 @@ def _http_env(monkeypatch):
 
 def test_resolve_binding_hit(monkeypatch):
     monkeypatch.setattr(
-        ai_referee.panwatch_client,
+        ai_referee.sida_client,
         "request_json",
         lambda *a, **k: {
             "code": 0,
@@ -94,7 +94,7 @@ def test_resolve_binding_hit(monkeypatch):
 def test_resolve_fallback_to_forecast_llm(monkeypatch):
     """无 referee 绑定时回落设置页显式配置的 forecast_llm_*(非硬编码)。"""
     monkeypatch.setattr(
-        ai_referee.panwatch_client,
+        ai_referee.sida_client,
         "request_json",
         lambda *a, **k: {
             "data": {
@@ -110,7 +110,7 @@ def test_resolve_fallback_to_forecast_llm(monkeypatch):
 
 def test_resolve_raises_when_nothing_configured(monkeypatch):
     monkeypatch.setattr(
-        ai_referee.panwatch_client,
+        ai_referee.sida_client,
         "request_json",
         lambda *a, **k: {"data": {"referee": None, "llm": {}}},
     )
@@ -122,14 +122,14 @@ def test_resolve_raises_on_api_down(monkeypatch):
     def _boom(*a, **k):
         raise ConnectionError("connection refused")
 
-    monkeypatch.setattr(ai_referee.panwatch_client, "request_json", _boom)
+    monkeypatch.setattr(ai_referee.sida_client, "request_json", _boom)
     with pytest.raises(ai_referee.RefereeConfigUnavailable, match="不可达"):
         ai_referee.resolve_referee_model_cfg()
 
 
 def test_resolve_raises_on_non_dict(monkeypatch):
     monkeypatch.setattr(
-        ai_referee.panwatch_client, "request_json", lambda *a, **k: "not-a-dict"
+        ai_referee.sida_client, "request_json", lambda *a, **k: "not-a-dict"
     )
     with pytest.raises(ai_referee.RefereeConfigUnavailable):
         ai_referee.resolve_referee_model_cfg()
@@ -190,7 +190,7 @@ def test_evaluate_abstain_when_config_unavailable(_http_env, monkeypatch):
     def _deny(*a, **k):
         raise ai_referee.RefereeConfigUnavailable("referee 场景未绑定模型")
 
-    monkeypatch.setattr(ai_referee.panwatch_client, "request_json", _deny)
+    monkeypatch.setattr(ai_referee.sida_client, "request_json", _deny)
     fake, calls = _fake_requests([AssertionError("不该发请求")])
     monkeypatch.setattr(ai_referee, "requests", fake)
     res = ai_referee.evaluate_prediction("600519", "贵州茅台", 1700.0, {}, "up", 1.0)

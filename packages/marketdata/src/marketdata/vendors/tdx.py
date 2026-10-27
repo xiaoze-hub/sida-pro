@@ -133,7 +133,7 @@ class TdxMCPClient:
                 "params": {
                     "protocolVersion": _PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "panwatch-marketdata", "version": "1.0"},
+                    "clientInfo": {"name": "sida-marketdata", "version": "1.0"},
                 },
             }
         )

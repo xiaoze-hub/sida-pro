@@ -11,10 +11,10 @@ const mocks = vi.hoisted(() => ({
   setOption: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
-vi.mock('@panwatch/biz-ui/lib/echarts-core', () => ({
+vi.mock('@sida/biz-ui/lib/echarts-core', () => ({
   default: {
     graphic: {
       LinearGradient: class {
@@ -23,18 +23,18 @@ vi.mock('@panwatch/biz-ui/lib/echarts-core', () => ({
     },
   },
 }))
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({
     ref: () => {},
     chartRef: { current: { setOption: mocks.setOption, on: vi.fn(), off: vi.fn(), resize: vi.fn() } },
   }),
 }))
-vi.mock('@panwatch/biz-ui/lib/stock-colors', () => ({
+vi.mock('@sida/biz-ui/lib/stock-colors', () => ({
   readStockColors: () => ({ up: '#ef4444', down: '#22c55e' }),
   withAlpha: (c: string) => c,
 }))
 
-import FlowHistoryChart from '@panwatch/biz-ui/components/dashboard/FlowHistoryChart'
+import FlowHistoryChart from '@sida/biz-ui/components/dashboard/FlowHistoryChart'
 
 /** 最近一次 setOption 的折线数据 */
 function lastSeriesData(): Array<number | null> {

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchAPI } from '@panwatch/api'
-import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { fetchAPI } from '@sida/api'
+import { readStockColors } from '@sida/biz-ui/lib/stock-colors'
 import { safeFixed } from '@/lib/format'
 
 /**
  * 板块正文(Task 7, 三合一 spec §1.3): 从 `pages/BoardDetail.tsx` **原样搬移**的取数与渲染。
  *
  * 归属 `packages/biz-ui/src/components/workbench/`(计划 §文件结构): 正文只依赖
- * `@panwatch/api` / `@panwatch/biz-ui/lib/stock-colors` / `@/lib/format` —— 后者的 biz-ui → `@/lib/*`
+ * `@sida/api` / `@sida/biz-ui/lib/stock-colors` / `@/lib/format` —— 后者的 biz-ui → `@/lib/*`
  * 依赖是本仓既有形态(`kline-summary-dialog.tsx:6`、`workbench/HeaderBand.tsx:8`), 包边界不新开边。
  * (兄弟 `IndexBody` 需 `@/components/ErrorBanner`(app 层), 故落在 `src/pages/workbench/`。)
  *

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Link2, ShieldAlert, TrendingDown, Radio } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { fetchAPI } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { safeFixed } from '@/lib/format'
-import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
+import CaliberBadge from '@sida/biz-ui/components/CaliberBadge'
 
 /**
  * 转债 - 正股联动套利雷达(I-4 初版, 2026-10-18)

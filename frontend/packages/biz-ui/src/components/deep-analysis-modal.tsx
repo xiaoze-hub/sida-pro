@@ -10,18 +10,18 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { buildAnalysisSections, type AnalysisSection } from '../analysis-sections'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@panwatch/base-ui/components/ui/tabs'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
-import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@sida/base-ui/components/ui/dialog'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@sida/base-ui/components/ui/tabs'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
+import { HoverPopover } from '@sida/base-ui/components/ui/hover-popover'
 import {
   tradingAgentsApi,
   type BudgetInfo,
   type DeepAnalysisResult,
   type ProgressResponse,
   type ProgressStage,
-} from '@panwatch/api'
+} from '@sida/api'
 
 const STAGE_LABEL: Record<string, string> = {
   market_analyst: '技术分析师',
@@ -45,7 +45,7 @@ const DECISION_COLOR: Record<string, string> = {
 const POLL_INTERVAL_MS = 2000
 
 /** localStorage 里记录某只股票最近一次触发的 trace_id;关闭重开弹窗时恢复 polling */
-const STORAGE_KEY_PREFIX = 'panwatch:tradingagents:running:'
+const STORAGE_KEY_PREFIX = 'sida:tradingagents:running:'
 /** trace_id 持续多久后认为可能已不再运行(避免显示过期 trace 的 idle) */
 const TRACE_MAX_AGE_MS = 20 * 60 * 1000  // 20 分钟
 

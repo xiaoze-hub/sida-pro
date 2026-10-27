@@ -1,5 +1,5 @@
 import PageHeader from '@/components/PageHeader'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, BookOpen, Filter, RefreshCw, Share2, Sparkles, ScanSearch, ThumbsDown, ThumbsUp, Download, Flame } from 'lucide-react'
 import { LotionScene } from '@/components/motion/LotionScene'
@@ -19,32 +19,32 @@ import {
   type StrategyStatsResponse,
   type TdxAskResponse,
   type WencaiRow,
-} from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
-import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/components/ui/popover'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@panwatch/base-ui/components/ui/tabs'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+} from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@sida/base-ui/components/ui/select'
+import { Popover, PopoverContent, PopoverTrigger } from '@sida/base-ui/components/ui/popover'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@sida/base-ui/components/ui/tabs'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { useLocalStorage } from '@/lib/utils'
 import { normSymbol } from '@/lib/symbol'
 import { useNavigate } from 'react-router-dom'
-import StockHoverPreview, { type HoverPreviewData } from '@panwatch/biz-ui/components/StockHoverPreview'
+import StockHoverPreview, { type HoverPreviewData } from '@sida/biz-ui/components/StockHoverPreview'
 import FactorWeightsPanel from '@/components/FactorWeightsPanel'
 import SignalScoreShareCard from '@/components/SignalScoreShareCard'
-import WencaiPanel from '@panwatch/biz-ui/components/WencaiPanel'
-import JbpPoolTable from '@panwatch/biz-ui/components/JbpPoolTable'
-import CbRadarPanel from '@panwatch/biz-ui/components/CbRadarPanel'
-import AbnormalMovesCard from '@panwatch/biz-ui/components/AbnormalMovesCard'
+import WencaiPanel from '@sida/biz-ui/components/WencaiPanel'
+import JbpPoolTable from '@sida/biz-ui/components/JbpPoolTable'
+import CbRadarPanel from '@sida/biz-ui/components/CbRadarPanel'
+import AbnormalMovesCard from '@sida/biz-ui/components/AbnormalMovesCard'
 import StrategyLibraryDialog from '@/components/StrategyLibraryDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { SkeletonTable } from '@/components/Skeleton'
-import { Card } from '@panwatch/base-ui/components/ui/card'
-import Stat from '@panwatch/biz-ui/components/Stat'
+import { Card } from '@sida/base-ui/components/ui/card'
+import Stat from '@sida/biz-ui/components/Stat'
 import { useI18n } from '@/hooks/useI18n'
 import { navBackState } from '@/lib/nav-back'
-import { useRowNav } from '@panwatch/biz-ui/hooks/useRowNav'
-import SignalChip, { type SignalStrength, type SignalTone } from '@panwatch/biz-ui/components/SignalChip'
+import { useRowNav } from '@sida/biz-ui/hooks/useRowNav'
+import SignalChip, { type SignalStrength, type SignalTone } from '@sida/biz-ui/components/SignalChip'
 
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
@@ -379,28 +379,28 @@ export default function OpportunitiesPage() {
   const [strategyCatalog, setStrategyCatalog] = useState<StrategyCatalogItem[]>([])
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set())
 
-  const [market, setMarket] = useLocalStorage<'ALL' | 'CN' | 'HK' | 'US'>('panwatch_opportunities_market_v3', DEFAULT_FILTERS.market)
-  const [source, setSource] = useLocalStorage<SourceFilter>('panwatch_opportunities_source_v3', DEFAULT_FILTERS.source)
+  const [market, setMarket] = useLocalStorage<'ALL' | 'CN' | 'HK' | 'US'>('sida_opportunities_market_v3', DEFAULT_FILTERS.market)
+  const [source, setSource] = useLocalStorage<SourceFilter>('sida_opportunities_source_v3', DEFAULT_FILTERS.source)
   // P1 多源整合: 只看共振开关(默认关)
-  const [resonanceOnly, setResonanceOnly] = useLocalStorage('panwatch_opportunities_resonance_v1', false)
-  const [holding, setHolding] = useLocalStorage<HoldingFilter>('panwatch_opportunities_holding_v3', DEFAULT_FILTERS.holding)
-  const [strategy, setStrategy] = useLocalStorage('panwatch_opportunities_strategy_v3', DEFAULT_FILTERS.strategy)
-  const [risk, setRisk] = useLocalStorage<RiskFilter>('panwatch_opportunities_risk_v3', DEFAULT_FILTERS.risk)
-  const [minScore, setMinScore] = useLocalStorage('panwatch_opportunities_min_score_v3', DEFAULT_FILTERS.minScore)
-  const [sector, setSector] = useLocalStorage('panwatch_opportunities_sector_v3', '')
+  const [resonanceOnly, setResonanceOnly] = useLocalStorage('sida_opportunities_resonance_v1', false)
+  const [holding, setHolding] = useLocalStorage<HoldingFilter>('sida_opportunities_holding_v3', DEFAULT_FILTERS.holding)
+  const [strategy, setStrategy] = useLocalStorage('sida_opportunities_strategy_v3', DEFAULT_FILTERS.strategy)
+  const [risk, setRisk] = useLocalStorage<RiskFilter>('sida_opportunities_risk_v3', DEFAULT_FILTERS.risk)
+  const [minScore, setMinScore] = useLocalStorage('sida_opportunities_min_score_v3', DEFAULT_FILTERS.minScore)
+  const [sector, setSector] = useLocalStorage('sida_opportunities_sector_v3', '')
   const [sectorOpen, setSectorOpen] = useState(false)
   const [sectorQuery, setSectorQuery] = useState('')
   const [sectorResults, setSectorResults] = useState<{ code: string; name: string }[]>([])
   const [snapshotDate, setSnapshotDate] = useState('')
 
   // 机会页 Tab: 候选池 / 竞价异动(2026-08-20, v0.3.0)
-  const [viewMode, setViewMode] = useLocalStorage<'candidates' | 'auction' | 'abnormal'>('panwatch_opportunities_viewmode_v2', 'candidates')
+  const [viewMode, setViewMode] = useLocalStorage<'candidates' | 'auction' | 'abnormal'>('sida_opportunities_viewmode_v2', 'candidates')
 
   // 统一筛选入口(2026-08-22): draft 模式 — Popover 内改草稿, 「应用」才写回持久化 state 并加载
   const [filterOpen, setFilterOpen] = useState(false)
   const [draft, setDraft] = useState<OpportunityFilters>({ market, source, holding, strategy, risk, minScore, sector })
   // 选股工具 tab: 共振查询(默认)/ 策略选股 / 问小达 / 问财
-  const [toolTab, setToolTab] = useLocalStorage<ToolTab>('panwatch_opportunities_tool_tab_v1', 'resonance')
+  const [toolTab, setToolTab] = useLocalStorage<ToolTab>('sida_opportunities_tool_tab_v1', 'resonance')
 
   // 个股 AI 评分分享卡:当前分享的信号
   const [shareSignal, setShareSignal] = useState<StrategySignalItem | null>(null)
@@ -754,7 +754,7 @@ export default function OpportunitiesPage() {
   const [resLastQuery, setResLastQuery] = useState('')
   const [resMeta, setResMeta] = useState<{ tdx: number; wencai: number; strategy: number; dropped: number; enginesDown: string } | null>(null)
   const [resError, setResError] = useState('')
-  const [resOnly, setResOnly] = useLocalStorage('panwatch_opportunities_res_only_v1', false)
+  const [resOnly, setResOnly] = useLocalStorage('sida_opportunities_res_only_v1', false)
 
   // 策略精筛: 只对缓存的双引擎合并结果调 scan(symbols ≤100), 与并发查询解耦
   const applyResFilter = useCallback(async (strategyId: string, base: ResonanceRow[]) => {

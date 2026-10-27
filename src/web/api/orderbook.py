@@ -425,7 +425,7 @@ def get_img_orderbook(
 ) -> dict:
     """`.img` 十档盘口(已入库优先, 本地 .img 兜底)纯函数, 显式错误态。
 
-    顺序: 入库帧(user_id 隔离) → 本地 `PANWATCH_IMG_DIR` 下 .img → 显式「无数据」。
+    顺序: 入库帧(user_id 隔离) → 本地 `SIDA_IMG_DIR` 下 .img → 显式「无数据」。
     任一环节失败不抛, 返回 available:false + 真实 note; 缺档不补 0。
     """
     from src.core import img_orderbook_store as store

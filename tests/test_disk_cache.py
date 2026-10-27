@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-os.environ.setdefault("PANWATCH_CACHE_DIR", "/tmp/panwatch_test_cache")
+os.environ.setdefault("SIDA_CACHE_DIR", "/tmp/sida_test_cache")
 
 from src.core.disk_cache import DiskCache
 
@@ -16,7 +16,7 @@ from src.core.disk_cache import DiskCache
 @pytest.fixture()
 def clean_cache_dir():
     import shutil
-    d = "/tmp/panwatch_test_cache"
+    d = "/tmp/sida_test_cache"
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d, exist_ok=True)
     yield d

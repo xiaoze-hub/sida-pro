@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react'
 import { Loader2, ScanSearch } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
+import { fetchAPI } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
 import { StockLabel } from '@/components/StockLabel'
 
 /**

@@ -10,11 +10,11 @@
  * 文案必须诚实: 宽限期内 admin 可恢复, 到期由 purge_expired_deletions() 物理清除。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { fetchAPI, API_BASE } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Label } from '@panwatch/base-ui/components/ui/label'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { fetchAPI, API_BASE } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Label } from '@sida/base-ui/components/ui/label'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { AlertTriangle, Download, Trash2 } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
 

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ portfolio: vi.fn(), stocks: vi.fn() }))
-vi.mock('@panwatch/api', () => ({ dashboardApi: { portfolioSummary: mocks.portfolio }, stocksApi: { list: mocks.stocks } }))
+vi.mock('@sida/api', () => ({ dashboardApi: { portfolioSummary: mocks.portfolio }, stocksApi: { list: mocks.stocks } }))
 import { loadQuoteUniverse, preferredQuote, quotePath, rememberQuote } from '@/lib/quote-universe'
 import { QuoteSymbolPicker } from '@/components/QuoteSymbolPicker'
 import QuoteEntry from '@/pages/QuoteEntry'

@@ -234,7 +234,7 @@ def _build_watchlist_context(db: Session, user: User | None = None) -> str:
 
 # ──────────────── 系统数据工具(2026-08-13): 预测/机会/策略信号/通知 ────────────────
 
-_FORECAST_DB_PATH = os.path.join(os.path.expanduser("~"), ".panwatch_forecast.db")
+_FORECAST_DB_PATH = os.path.join(os.path.expanduser("~"), ".sida_forecast.db")
 
 # 预测方向英文 → 中文
 _FORECAST_DIRECTION_CN = {"up": "看涨", "down": "看跌", "sideways": "横盘", "neutral": "中性"}
@@ -258,7 +258,7 @@ _FORECAST_COLUMN_MAP = {
 
 
 def _resolve_forecast_db_path() -> str:
-    """解析预测引擎 SQLite 路径(与 forecast_lib.forecast_paths 同源: 环境变量优先, 默认 ~/.panwatch_forecast.db)。"""
+    """解析预测引擎 SQLite 路径(与 forecast_lib.forecast_paths 同源: 环境变量优先, 默认 ~/.sida_forecast.db)。"""
     configured = os.getenv("FORECAST_DB_PATH", "")
     return os.path.abspath(os.path.expanduser(configured or _FORECAST_DB_PATH))
 

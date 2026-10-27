@@ -16,24 +16,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn(), setOption: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({
     ref: () => {},
     chartRef: { current: { setOption: mocks.setOption, on: vi.fn(), off: vi.fn(), resize: vi.fn() } },
   }),
 }))
-vi.mock('@panwatch/biz-ui/lib/echarts-core', () => ({
+vi.mock('@sida/biz-ui/lib/echarts-core', () => ({
   default: { graphic: { LinearGradient: class {} } },
 }))
-vi.mock('@panwatch/biz-ui/lib/stock-colors', () => ({
+vi.mock('@sida/biz-ui/lib/stock-colors', () => ({
   readStockColors: () => ({ up: '#ef4444', down: '#22c55e' }),
   withAlpha: (c: string) => c,
 }))
 
-import BreadthDistributionChart from '@panwatch/biz-ui/components/dashboard/BreadthDistributionChart'
+import BreadthDistributionChart from '@sida/biz-ui/components/dashboard/BreadthDistributionChart'
 
 const BUCKETS = ['涨停', '>5%', '3~5%', '1~3%', '-1~1%', '-3~-1%', '-5~-3%', '<-5%', '跌停']
 function items(n: number) {

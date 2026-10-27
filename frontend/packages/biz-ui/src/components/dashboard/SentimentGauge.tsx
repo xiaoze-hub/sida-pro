@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
+import { useECharts } from '@sida/biz-ui/hooks/useECharts'
 
 /**
  * 市场温度仪表盘(v0.4.7, Dashboard 情绪周期区)。

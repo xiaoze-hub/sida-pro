@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
-IMG=panwatch:v0.6.8
+CT=sida
+IMG=sida:v0.6.8
 # save env
 docker inspect $CT --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/env_v068.txt
 grep -v '^WEB_WORKERS=' /tmp/env_v068.txt > /tmp/env_v068b.txt
@@ -16,9 +16,9 @@ done < /tmp/env_v068b.txt
 docker run -d --name $CT \
   --restart=always \
   -p 8000:8000 \
-  --network panwatch-net \
-  -v panwatch-data:/app/data \
-  -v panwatch-tck:/app/data/tck \
+  --network sida-net \
+  -v sida-data:/app/data \
+  -v sida-tck:/app/data/tck \
   --memory 1500m --memory-swap 1500m --cpus 1.5 \
   "${ENVARGS[@]}" \
   $IMG

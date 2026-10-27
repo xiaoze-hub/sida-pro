@@ -13,7 +13,7 @@
 //   3. `cacheMode:'reload' | false` 与自带 `signal` 一律**不合并**(实时端点/手动刷新语义不变);
 //   4. 失败广播给所有调用方, 并且**下一次调用会重试**(在途表已清理, 不会永久卡住)。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearResponseCache, fetchAPI } from '@panwatch/api'
+import { clearResponseCache, fetchAPI } from '@sida/api'
 
 /** 最小 Response 替身(fetchAPI 只读 status / json())。 */
 function okResponse(data: unknown): Response {

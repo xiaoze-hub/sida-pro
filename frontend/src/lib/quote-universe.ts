@@ -1,4 +1,4 @@
-import { dashboardApi, stocksApi } from '@panwatch/api'
+import { dashboardApi, stocksApi } from '@sida/api'
 
 export interface QuoteChoice { symbol: string; market: string; name: string; source: 'position' | 'watchlist' }
 export interface QuoteUniverse { positions: QuoteChoice[]; watchlist: QuoteChoice[]; errors: string[] }

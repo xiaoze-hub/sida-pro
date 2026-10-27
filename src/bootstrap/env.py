@@ -130,7 +130,7 @@ def setup_logging():
     for h in list(root.handlers):
         if (
             isinstance(h, DBLogHandler)
-            or getattr(h, "_panwatch_console", False)
+            or getattr(h, "_sida_console", False)
             or type(h).__name__ == "LokiLogHandler"
         ):
             root.removeHandler(h)
@@ -141,7 +141,7 @@ def setup_logging():
 
     # 控制台输出: 按 LOG_LEVEL 过滤,且丢弃三方库的低级别噪音
     console = logging.StreamHandler()
-    console._panwatch_console = True  # type: ignore[attr-defined]
+    console._sida_console = True  # type: ignore[attr-defined]
     console.setLevel(console_level)
     console.addFilter(_TransportNoiseFilter())
     console.setFormatter(

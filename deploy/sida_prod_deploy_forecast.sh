@@ -6,7 +6,7 @@
 #   deploy/deploy_forecast_engine.sh(在目标主机上以 root 运行); 本脚本只负责
 #   "把仓库快照送到目标主机 + 触发它", 复用主服务发版链的 SSH/WSL 送达惯例。
 #
-# 与主服务发版链的关系: `~/.hermes/scripts/sida_prod_deploy.sh`(部署 panwatch 容器)
+# 与主服务发版链的关系: `~/.hermes/scripts/sida_prod_deploy.sh`(部署 sida 容器)
 #   末尾**非致命**调用本脚本(`|| echo`), 引擎失败不翻转主服务判定。
 #   可用 SIDA_SKIP_FORECAST_DEPLOY=1 关闭。
 #
@@ -27,7 +27,7 @@ REPO_DIR="${SIDA_REPO_DIR:-/home/ubuntu/sida-pro}"
 HOST="${SIDA_PROD_HOST:-TIANXIANG@100.91.30.35}"
 WIN_DIR="${SIDA_WIN_DIR:-C:/Users/tianxiang}"
 # 远端展开目录(送到的 tar 解到这里, deploy_forecast_engine.sh 在此运行)
-REMOTE_SRC="${SIDA_FORECAST_REMOTE_SRC:-/opt/panwatch-forecast-src}"
+REMOTE_SRC="${SIDA_FORECAST_REMOTE_SRC:-/opt/sida-forecast-src}"
 TS="$(date +%Y%m%d%H%M%S)"
 
 if [ ! -f "$REPO_DIR/forecast_server.py" ] || [ ! -d "$REPO_DIR/forecast_lib" ]; then

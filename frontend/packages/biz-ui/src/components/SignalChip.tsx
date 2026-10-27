@@ -7,7 +7,7 @@
  * 语法: 几何统一(高 18px / 字号 11 / 圆角 4px); **强度用字重与边框表达**, 色相只承担语义
  * (4 种: 机会/风险/中性/系统), 不靠堆色相区分强弱。
  */
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /**
  * 语义色调:

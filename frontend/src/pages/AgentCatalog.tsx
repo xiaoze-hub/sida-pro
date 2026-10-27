@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { Skeleton } from '@/components/Skeleton'
 
 type AgentRow = {

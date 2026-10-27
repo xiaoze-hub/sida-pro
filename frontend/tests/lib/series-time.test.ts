@@ -9,7 +9,7 @@
  * 这里用真实事故数值做 fixture，锁死「重复 / 乱序 / 负值 / NaN / 非数值 time」五种脏数据。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { ascendSeries, ascendSeriesWithStats, timeOf } from '@panwatch/biz-ui/lib/series-time'
+import { ascendSeries, ascendSeriesWithStats, timeOf } from '@sida/biz-ui/lib/series-time'
 
 const p = (time: number, extra: Record<string, unknown> = {}) => ({ time: time as never, ...extra })
 

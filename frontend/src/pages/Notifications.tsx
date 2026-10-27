@@ -15,9 +15,9 @@ import {
   Trash2,
 } from 'lucide-react'
 import SafeMarkdown from '@/components/SafeMarkdown'
-import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { fetchAPI } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { usePausedInterval } from '@sida/base-ui'
 import SkeletonRows from '@/components/SkeletonRows'
 import { parseServerTime } from '@/lib/utils'
 import ErrorBanner from '@/components/ErrorBanner'

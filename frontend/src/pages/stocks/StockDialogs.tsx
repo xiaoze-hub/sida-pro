@@ -1,6 +1,6 @@
-import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
-import { KlineSummaryDialog } from '@panwatch/biz-ui/components/kline-summary-dialog'
-import { MinuteDialog } from '@panwatch/biz-ui/components/minute-dialog'
+import { DeepAnalysisModal } from '@sida/biz-ui/components/deep-analysis-modal'
+import { KlineSummaryDialog } from '@sida/biz-ui/components/kline-summary-dialog'
+import { MinuteDialog } from '@sida/biz-ui/components/minute-dialog'
 import { useStocks } from './context'
 
 export function StockDialogs() {

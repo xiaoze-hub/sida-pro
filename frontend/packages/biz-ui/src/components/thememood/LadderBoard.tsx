@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { boardTag, fmtAmount, fmtISODate, fmtPct, prevBoardsLabel, scrollToLatest } from '@panwatch/biz-ui/lib/ladder-format'
+import { boardTag, fmtAmount, fmtISODate, fmtPct, prevBoardsLabel, scrollToLatest } from '@sida/biz-ui/lib/ladder-format'
 import DayCandle, { type DayCandleOHLC } from './DayCandle'
 
 export interface LadderStock {

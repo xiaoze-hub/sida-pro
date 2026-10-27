@@ -1,6 +1,6 @@
-export const BROWSER_NOTIFICATIONS_KEY = 'panwatch_browser_notifications_enabled'
-export const BROWSER_NOTIFICATIONS_LAST_ID_KEY = 'panwatch_browser_notifications_last_id'
-export const BROWSER_NOTIFICATIONS_CHANGED_EVENT = 'panwatch-browser-notifications-changed'
+export const BROWSER_NOTIFICATIONS_KEY = 'sida_browser_notifications_enabled'
+export const BROWSER_NOTIFICATIONS_LAST_ID_KEY = 'sida_browser_notifications_last_id'
+export const BROWSER_NOTIFICATIONS_CHANGED_EVENT = 'sida-browser-notifications-changed'
 
 export interface BrowserNotificationItem {
   id: number
@@ -39,7 +39,7 @@ export async function showBrowserNotification(item: BrowserNotificationItem): Pr
     body: (item.body || '').slice(0, 400),
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    tag: `panwatch-${item.id}`,
+    tag: `sida-${item.id}`,
     data: { url: item.link || '/' },
   }
 

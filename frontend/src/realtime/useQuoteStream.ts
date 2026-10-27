@@ -6,15 +6,15 @@
  *  - 兼容旧裸帧(parseFrame 兜底 seq=0, 走 payload.type 分支)
  *
  * 本 hook 承接 `envelope.ts`(此前就绪但无页面消费), 负责:
- *  1. 鉴权走 `Sec-WebSocket-Protocol: panwatch.auth.bearer, <jwt>`(不进 URL / access log);
+ *  1. 鉴权走 `Sec-WebSocket-Protocol: sida.auth.bearer, <jwt>`(不进 URL / access log);
  *  2. 断线重连带 `last_seq`, 服务端补发 ring 内 missed 帧;
  *  3. 指数退避(1s→30s 封顶), 4401 鉴权失败不重连(重连也白搭);
  *  4. 回传连接状态, 页面据此决定是否退回轮询。
  */
 import { useEffect, useRef, useState } from 'react'
-import { getToken } from '@panwatch/api'
+import { getToken } from '@sida/api'
 
-import { useTabActive } from '@panwatch/base-ui'
+import { useTabActive } from '@sida/base-ui'
 
 import { parseFrame, reconnectUrl } from './envelope'
 
@@ -29,7 +29,7 @@ export type QuoteTickMap = Record<string, QuoteTick>
 export type QuoteStreamStatus = 'connecting' | 'live' | 'offline'
 
 const WS_PATH = '/api/quotes/ws'
-const SWP_BEARER = 'panwatch.auth.bearer'
+const SWP_BEARER = 'sida.auth.bearer'
 const MAX_BACKOFF_MS = 30_000
 
 /** 从一帧里取出 {symbol: tick}; 非行情帧返回 null。 */

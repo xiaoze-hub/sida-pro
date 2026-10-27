@@ -1,4 +1,4 @@
-import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
+import CaliberBadge from '@sida/biz-ui/components/CaliberBadge'
 import { safeFixed, safeNum, toAmount } from '@/lib/format'
 
 /**

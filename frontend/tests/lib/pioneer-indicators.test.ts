@@ -21,7 +21,7 @@ import {
   trendLineSeries,
   trendSignalMarkers,
   wmaSeries,
-} from '@panwatch/biz-ui/lib/pioneer-indicators'
+} from '@sida/biz-ui/lib/pioneer-indicators'
 
 const COLORS = { buy: '#red', sell: '#green' }
 const toTime = (d: string) => d

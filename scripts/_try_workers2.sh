@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
+CT=sida
 docker inspect $CT --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/env.txt
 grep -v '^WEB_WORKERS=' /tmp/env.txt > /tmp/env2.txt
 echo "WEB_WORKERS=2" >> /tmp/env2.txt
@@ -12,10 +12,10 @@ while IFS= read -r line; do
   ENVARGS+=("-e" "$line")
 done < /tmp/env2.txt
 docker run -d --name $CT \
-  --restart=always -p 8000:8000 --network panwatch-net \
-  -v panwatch-data:/app/data -v panwatch-tck:/app/data/tck \
+  --restart=always -p 8000:8000 --network sida-net \
+  -v sida-data:/app/data -v sida-tck:/app/data/tck \
   --memory 1500m --memory-swap 1500m --cpus 1.5 \
-  "${ENVARGS[@]}" panwatch:v0.6.7
+  "${ENVARGS[@]}" sida:v0.6.7
 echo "waiting..."
 for i in $(seq 1 36); do
   ST=$(docker inspect --format '{{.State.Health.Status}}' $CT 2>/dev/null || echo unknown)
@@ -36,10 +36,10 @@ for i in $(seq 1 36); do
       [ -z "$line" ] && continue
       ENVARGS+=("-e" "$line")
     done < /tmp/env3.txt
-    docker run -d --name $CT --restart=always -p 8000:8000 --network panwatch-net \
-      -v panwatch-data:/app/data -v panwatch-tck:/app/data/tck \
+    docker run -d --name $CT --restart=always -p 8000:8000 --network sida-net \
+      -v sida-data:/app/data -v sida-tck:/app/data/tck \
       --memory 1500m --memory-swap 1500m --cpus 1.5 \
-      "${ENVARGS[@]}" panwatch:v0.6.7
+      "${ENVARGS[@]}" sida:v0.6.7
     for j in $(seq 1 24); do
       ST=$(docker inspect --format '{{.State.Health.Status}}' $CT 2>/dev/null || echo unknown)
       echo "  r[$j] $ST"

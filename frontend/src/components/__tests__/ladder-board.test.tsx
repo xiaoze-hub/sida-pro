@@ -14,7 +14,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import LadderBoard, { type LadderDay } from '@panwatch/biz-ui/components/thememood/LadderBoard'
+import LadderBoard, { type LadderDay } from '@sida/biz-ui/components/thememood/LadderBoard'
 
 const candle = { o: 10, h: 11, l: 9.8, c: 11 }
 

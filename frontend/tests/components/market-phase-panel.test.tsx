@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn(), role: vi.fn(() => 'owner') }))
-vi.mock('@panwatch/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
+vi.mock('@sida/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
 vi.mock('@/lib/jwt', () => ({ getJwtRole: () => mocks.role() }))
 
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'

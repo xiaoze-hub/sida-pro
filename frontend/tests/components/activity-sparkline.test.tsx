@@ -5,17 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 机构活跃度副图 (2026-09-11 决策先锋升级 C): 逐日活跃度 + 三阈值线 + 共振红点。
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn(), setOption: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({
     ref: () => {},
     chartRef: { current: { setOption: mocks.setOption, on: vi.fn(), off: vi.fn(), resize: vi.fn() } },
   }),
 }))
 
-import ActivitySparkline from '@panwatch/biz-ui/components/ActivitySparkline'
+import ActivitySparkline from '@sida/biz-ui/components/ActivitySparkline'
 
 const RESP = {
   symbol: '600519',

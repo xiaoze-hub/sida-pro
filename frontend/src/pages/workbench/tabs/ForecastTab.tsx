@@ -15,7 +15,7 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  * 惰性怎么工作(计划 Step 1 的字面要求: `React.lazy` + `Suspense`, 仅激活标签时加载):
  *  - `lazy(importForecastPage)` 的工厂(即 `() => import('@/pages/Forecast')`)只在**首次渲染**
  *    这个 lazy 组件时调用 ⇒ Vite/Rollup 把 `Forecast.tsx` 及其依赖(`ReactMarkdown` /
- *    `ForecastConeChart` / `@panwatch/api` 的 stocksApi 等)拆成**独立 chunk**, 与工作台首屏包分离;
+ *    `ForecastConeChart` / `@sida/api` 的 stocksApi 等)拆成**独立 chunk**, 与工作台首屏包分离;
  *  - 本文件是**默认导出**, 但索引本身是静态导入(与 T11–T15 同形态: 标签组件都不在路由表上)
  *    ⇒ 只要没人渲染本组件就不会触发工厂。Task 17 的 `TabPanel` 按 `?tab=` **只渲染激活标签**
  *    ⇒ 非预测标签下这段 `import()` 一次都不发生(首屏不拉预测接口、不下载预测 chunk);
@@ -44,7 +44,7 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  * 取数 + `data-testid="*-tab"` 根节点"; 本标签**不引用 `InsightProvider`**(控制器裁定, 见
  * progress「Task 16 Ruling」: 预测页自包含, 不走 provider 的 `ResourceKey` 资源面), 且预测页
  * 是既有生产页、**一字未改** ⇒ 不给它套额外的 `data-testid` 包裹层(那要动 `Forecast.tsx`)。
- * 本条口径的机器守卫见测试里的「形态差异」用例(断言挂载期间真 `@panwatch/api` 零调用
+ * 本条口径的机器守卫见测试里的「形态差异」用例(断言挂载期间真 `@sida/api` 零调用
  * —— 正是"没走 provider"的可观测后果)。
  *
  * 诚实加载 / 错误态(never fabricate):

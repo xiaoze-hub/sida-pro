@@ -26,7 +26,7 @@ docker build --platform linux/amd64 \
   --build-arg VERSION=v0.6.6 \
   -t xiaoze-hub/stock-intelligent-data-analytics:v0.6.6 \
   -t xiaoze-hub/stock-intelligent-data-analytics:latest \
-  -t panwatch:v0.6.6 \
+  -t sida:v0.6.6 \
   . 2>&1 | tail -40
 echo "BUILD_PIPE_EXIT=$?"
 docker images | grep -E "v0.6.6|stock-intelligent" | head -5

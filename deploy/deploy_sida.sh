@@ -6,28 +6,28 @@
 #       运行本脚本即可恢复全部代码改动。
 #
 # 用法:
-#   ./deploy_panwatch.sh          # 部署代码改动 + 重启
-#   ./deploy_panwatch.sh --full   # 完整重建容器(含环境变量)
-#   ./deploy_panwatch.sh --list   # 列出部署清单
+#   ./deploy_sida.sh          # 部署代码改动 + 重启
+#   ./deploy_sida.sh --full   # 完整重建容器(含环境变量)
+#   ./deploy_sida.sh --list   # 列出部署清单
 #
 # 前提:
 #   - /tmp/SIDA 是 xiaoze-hub/SIDA 的 git clone(含全部改动)
-#   - 容器名 panwatch, 数据卷 panwatch_data
+#   - 容器名 sida, 数据卷 sida_data
 # ============================================================
 set -euo pipefail
 
-REPO_DIR="${PANWATCH_REPO:-/tmp/SIDA}"
-CONTAINER="panwatch"
-# P1-14: 与 CI 保持一致, 拉 ACR 版本镜像(默认 latest, 发版传 PANWATCH_VERSION=vX.Y.Z)
+REPO_DIR="${SIDA_REPO:-/tmp/SIDA}"
+CONTAINER="sida"
+# P1-14: 与 CI 保持一致, 拉 ACR 版本镜像(默认 latest, 发版传 SIDA_VERSION=vX.Y.Z)
 ACR="crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz"
-IMAGE="${ACR}:${PANWATCH_VERSION:-latest}"
+IMAGE="${ACR}:${SIDA_VERSION:-latest}"
 TOKEN="${WUDAO_MCP_TOKEN:-}"
 # DOCKER 可用环境变量覆盖(stub 测试用 DOCKER=echo; 默认 sudo docker)
 DOCKER="${DOCKER:-${SUDO:-sudo} docker}"
 
-# 加载配置文件(如果存在): panwatch.env 或 deploy_panwatch.env
+# 加载配置文件(如果存在): sida.env 或 deploy_sida.env
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for ENV_FILE in "$SCRIPT_DIR/panwatch.env" "$SCRIPT_DIR/deploy_panwatch.env"; do
+for ENV_FILE in "$SCRIPT_DIR/sida.env" "$SCRIPT_DIR/deploy_sida.env"; do
   if [ -f "$ENV_FILE" ]; then
     echo "▶ 加载配置: $ENV_FILE"
     set -a
@@ -39,9 +39,9 @@ for ENV_FILE in "$SCRIPT_DIR/panwatch.env" "$SCRIPT_DIR/deploy_panwatch.env"; do
 done
 
 # 从配置(或环境变量)取值
-CONTAINER="${PANWATCH_CONTAINER:-$CONTAINER}"
-IMAGE="${PANWATCH_IMAGE:-$IMAGE}"
-REPO_DIR="${PANWATCH_REPO:-$REPO_DIR}"
+CONTAINER="${SIDA_CONTAINER:-$CONTAINER}"
+IMAGE="${SIDA_IMAGE:-$IMAGE}"
+REPO_DIR="${SIDA_REPO:-$REPO_DIR}"
 TOKEN="${WUDAO_MCP_TOKEN:-$TOKEN}"
 AUTH_USERNAME="${AUTH_USERNAME:-admin}"
 if [ -z "${AUTH_PASSWORD:-}" ]; then
@@ -66,7 +66,7 @@ FILES=(
   "prompts/premarket_outlook.txt"
   "prompts/daily_report.txt"
   "prompts/report_template.md"
-  "strategies/panwatch_strategies.yaml"
+  "strategies/sida_strategies.yaml"
   "src/web/api/forecast.py"
   "src/web/api/market.py"
   "src/web/api/reports.py"
@@ -142,8 +142,8 @@ print('✅ 容器内语法校验通过')
 
 # ── 0.1 (2026-09-08): 重建前先读现有容器的真实配置(env/挂载/端口/网络/重启/内存),
 # 防止"脚本硬编码拓扑 ≠ 生产现实"。2026-09-08 实测生产(WSL2 Docker, 无 compose):
-# 挂载是 panwatch-data / panwatch-tck(连字符)且在 panwatch-net 自定义网络(SIDA_DB_URL
-# 走 postgres 别名解析), 而本脚本原硬编码 panwatch_data(下划线)+无 --network —— 直接重建
+# 挂载是 sida-data / sida-tck(连字符)且在 sida-net 自定义网络(SIDA_DB_URL
+# 走 postgres 别名解析), 而本脚本原硬编码 sida_data(下划线)+无 --network —— 直接重建
 # 会用空卷起一个连不上 PG 的新容器。克隆式重建让拓扑以运行中容器为唯一事实源。
 CLONE_ENV=(); CLONE_VOL=(); CLONE_PORT=(); CLONE_NET=""; CLONE_RESTART=""; CLONE_MEM=""
 
@@ -181,7 +181,7 @@ default_config() {
   local _k
   CLONE_ENV=(-e "TZ=Asia/Shanghai" -e "WEB_HOST=0.0.0.0"
              -e "AUTH_USERNAME=$AUTH_USERNAME" -e "AUTH_PASSWORD=$AUTH_PASSWORD"
-             -e "DATA_DIR=/app/data" -e "PANWATCH_TCK_DIR=/app/data/tck")
+             -e "DATA_DIR=/app/data" -e "SIDA_TCK_DIR=/app/data/tck")
   [ -n "$TOKEN" ] && CLONE_ENV+=(-e "WUDAO_MCP_TOKEN=$TOKEN")
   [ -n "${TDX_API_KEY:-}" ] && CLONE_ENV+=(-e "TDX_API_KEY=$TDX_API_KEY")
   # P1-15 (2026-09-05): 真实 key 禁止进仓库, 空值 = 不注入(走设置页/环境)
@@ -237,7 +237,7 @@ compose_run_args() {
 }
 
 wait_http_ok() {  # $1=url $2=超时秒
-  [ -n "${PANWATCH_DEPLOY_STUB:-}" ] && return 0
+  [ -n "${SIDA_DEPLOY_STUB:-}" ] && return 0
   local _deadline=$(( $(date +%s) + $2 ))
   while [ "$(date +%s)" -lt "$_deadline" ]; do
     curl -fsS --max-time 5 "$1" >/dev/null 2>&1 && return 0
@@ -247,7 +247,7 @@ wait_http_ok() {  # $1=url $2=超时秒
 }
 
 dkq() {  # docker 静默执行; stub 模式回显参数(供 scripts/tests/test_deploy_script.sh 断言参数完整性), 退出码原样透传
-  if [ -n "${PANWATCH_DEPLOY_STUB:-}" ]; then "$@"; return; fi
+  if [ -n "${SIDA_DEPLOY_STUB:-}" ]; then "$@"; return; fi
   "$@" >/dev/null 2>&1
 }
 
@@ -280,7 +280,7 @@ rebuild_container() {
   echo "  ✅ 新容器(端口 8001)健康"
 
   # ②b 防御校验必须在换名之前(失败可无损回滚): WEB_HOST 丢了外部访问全 502
-  if [ -z "${PANWATCH_DEPLOY_STUB:-}" ]; then
+  if [ -z "${SIDA_DEPLOY_STUB:-}" ]; then
     if ! $DOCKER inspect "${CONTAINER}_new" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^WEB_HOST=0.0.0.0$'; then
       echo "  ❌ WEB_HOST=0.0.0.0 未注入(外部访问会全 502), 回滚(旧容器保持运行)" >&2
       $DOCKER rm -f "${CONTAINER}_new" >/dev/null 2>&1 || true
@@ -302,7 +302,7 @@ rebuild_container() {
   wait_http_ok "http://127.0.0.1:8000/api/health" 60 || echo "  ⚠️ 端口 8000 暂未响应(启动中), 以冒烟门禁为准"
 
   # ④ 防御校验(弱项仅告警, 以克隆到的配置为预期; stub 测试跳过)
-  if [ -z "${PANWATCH_DEPLOY_STUB:-}" ]; then
+  if [ -z "${SIDA_DEPLOY_STUB:-}" ]; then
     _mem=$($DOCKER inspect "$CONTAINER" --format '{{.HostConfig.Memory}}')
     if [ -n "$CLONE_MEM" ] && [ "$CLONE_MEM" != "0" ] && { [ -z "$_mem" ] || [ "$_mem" = "0" ]; }; then
       echo "  ⚠️ 内存限制未生效(HostConfig.Memory=$_mem)"
@@ -355,8 +355,8 @@ echo "▶ 预测引擎检查:"
 if curl -s -o /dev/null -w "%{http_code}" http://localhost:8010/health 2>/dev/null | grep -q 200; then
   echo "  ✅ 预测引擎运行中 (:8010)"
 else
-  echo "  ⚠️ 预测引擎未运行,启动: sudo systemctl start panwatch-forecast"
-  sudo systemctl start panwatch-forecast 2>/dev/null || true
+  echo "  ⚠️ 预测引擎未运行,启动: sudo systemctl start sida-forecast"
+  sudo systemctl start sida-forecast 2>/dev/null || true
 fi
 echo "▶ 同步 LLM 模型配置(设置页默认模型→引擎):"
 bash ~/.hermes/scripts/sync_forecast_llm.sh 2>/dev/null | tail -1
@@ -367,12 +367,12 @@ if [ -f "$REPO_DIR/forecast_server.py" ]; then
   mkdir -p /home/ubuntu/forecast_lib
   cp "$REPO_DIR"/forecast_lib/*.py /home/ubuntu/forecast_lib/ 2>/dev/null
   echo "  ✅ 引擎代码已同步,重启服务:"
-  sudo systemctl restart panwatch-forecast 2>/dev/null || echo "  ⚠️ systemd 服务不存在,用 nohup 手动启动"
+  sudo systemctl restart sida-forecast 2>/dev/null || echo "  ⚠️ systemd 服务不存在,用 nohup 手动启动"
   echo ""
 fi
 # 0.1 (2026-09-08): 发版后冒烟门禁 —— smoke_test.py 全端点过一遍, FAIL 即部署失败。
-# PANWATCH_SKIP_SMOKE=1 供 stub 测试跳过(无真实容器)。
-if [ "${PANWATCH_SKIP_SMOKE:-0}" != "1" ]; then
+# SIDA_SKIP_SMOKE=1 供 stub 测试跳过(无真实容器)。
+if [ "${SIDA_SKIP_SMOKE:-0}" != "1" ]; then
   echo "▶ 冒烟门禁(post_deploy_smoke):"
   SMOKE_SCRIPT="${SMOKE_SCRIPT:-$SCRIPT_DIR/../scripts/smoke_test.py}" \
     bash "$SCRIPT_DIR/../scripts/post_deploy_smoke.sh" \

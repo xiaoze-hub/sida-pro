@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Search, BookOpen, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Play, RotateCcw, XCircle } from 'lucide-react'
-import { strategiesApi, type StrategyItem, type ApplyResult } from '@panwatch/api'
+import { strategiesApi, type StrategyItem, type ApplyResult } from '@sida/api'
 import { activeOverrides, displayValue, parseParamInput } from '@/lib/strategy-params'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@sida/base-ui/components/ui/dialog'
 import { StockLabel } from '@/components/StockLabel'
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -142,7 +142,7 @@ export default function StrategyLibraryDialog({
 
         {/* 来源声明 */}
         <div className="card-subtle p-3 text-xs text-muted-foreground">
-          💡 策略数据源:<code className="text-[12px]">strategies/panwatch_strategies.yaml</code> ·
+          💡 策略数据源:<code className="text-[12px]">strategies/sida_strategies.yaml</code> ·
           实时字段(腾讯)可直接跑, 盘后字段(PE/PB/市值)需等东财恢复。
           <a className="text-primary hover:underline ml-2" href="https://github.com/ZhuLinsen/alphasift" target="_blank" rel="noreferrer">原始项目 ↗</a>
         </div>

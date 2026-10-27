@@ -9,7 +9,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import RangeStatsCard from '@/components/RangeStatsCard'
-import type { KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
+import type { KlineRangeStats } from '@sida/biz-ui/components/KlineChart'
 
 afterEach(cleanup)
 

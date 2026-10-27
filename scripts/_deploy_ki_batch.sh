@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
+CT=sida
 # backend hotfix
 cp /mnt/c/Users/tianxiang/sida-work/src/core/auth_tokens.py /tmp/auth_tokens.py
 docker cp /tmp/auth_tokens.py $CT:/app/src/core/auth_tokens.py

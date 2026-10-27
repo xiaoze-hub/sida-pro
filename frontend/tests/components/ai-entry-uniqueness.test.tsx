@@ -7,7 +7,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   chatApi: {
     listConversations: vi.fn().mockResolvedValue([]),
     getConversation: vi.fn().mockResolvedValue({ messages: [] }),
@@ -17,7 +17,7 @@ vi.mock('@panwatch/api', () => ({
   fetchAPI: vi.fn().mockResolvedValue({ items: [] }),
 }))
 
-vi.mock('@panwatch/base-ui/components/ui/toast', () => ({
+vi.mock('@sida/base-ui/components/ui/toast', () => ({
   useToast: () => ({ toast: vi.fn() }),
 }))
 

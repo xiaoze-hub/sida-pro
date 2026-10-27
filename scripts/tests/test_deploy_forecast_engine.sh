@@ -3,7 +3,7 @@
 #
 # 钉死的关键事实(改脚本时若破坏其一, 这里立刻红):
 #   ① 代码同步到 INSTALL_DIR(forecast_server.py + forecast_lib/);
-#   ② env 含 FORECAST_HOST=0.0.0.0 —— 容器侧 panwatch 经 docker 网关访问所必需,
+#   ② env 含 FORECAST_HOST=0.0.0.0 —— 容器侧 sida 经 docker 网关访问所必需,
 #      听 127.0.0.1 会让容器连接被拒(= 引擎"起来了但主服务够不着");
 #   ③ env 含 FORECAST_DB_PATH;
 #   ④ unit 指向 venv python + EnvironmentFile + Restart=always + MemoryMax;
@@ -40,10 +40,10 @@ echo "$OUT" | grep -q "FORECAST_DEPLOY_OK" && ok "成功标记 FORECAST_DEPLOY_O
 ENVF="$INSTALL/forecast.env"
 [ -f "$ENVF" ] && ok "env 文件已生成" || bad "env 文件未生成"
 grep -q "^FORECAST_HOST=0.0.0.0$" "$ENVF" && ok "env FORECAST_HOST=0.0.0.0(容器可达, 非回环)" || bad "env 缺 FORECAST_HOST=0.0.0.0"
-grep -q "^FORECAST_DB_PATH=.*panwatch_forecast.db" "$ENVF" && ok "env 含 FORECAST_DB_PATH 历史库" || bad "env 缺 FORECAST_DB_PATH"
+grep -q "^FORECAST_DB_PATH=.*sida_forecast.db" "$ENVF" && ok "env 含 FORECAST_DB_PATH 历史库" || bad "env 缺 FORECAST_DB_PATH"
 grep -q "^SIDA_MAIN_API_URL=http://127.0.0.1:8000" "$ENVF" && ok "env 主服务地址指向宿主机 8000" || bad "env 主服务地址不对"
 
-UNIT="$UNITS/panwatch-forecast.service"
+UNIT="$UNITS/sida-forecast.service"
 [ -f "$UNIT" ] && ok "unit 已生成" || bad "unit 未生成"
 grep -q "ExecStart=$INSTALL/venv/bin/python3 $INSTALL/forecast_server.py" "$UNIT" && ok "unit ExecStart 指向 venv python + forecast_server.py" || bad "unit ExecStart 不对"
 grep -q "EnvironmentFile=$ENVF" "$UNIT" && ok "unit 读 forecast.env" || bad "unit 未接 EnvironmentFile"
@@ -52,8 +52,8 @@ grep -q "^MemoryMax=4G" "$UNIT" && ok "unit MemoryMax=4G(纯推理内存上限)"
 grep -q "^WantedBy=multi-user.target" "$UNIT" && ok "unit 开机自启(WantedBy)" || bad "unit 缺 WantedBy"
 
 echo "$OUT" | grep -q "systemctl daemon-reload" && ok "调用 systemctl daemon-reload" || bad "未调用 daemon-reload"
-echo "$OUT" | grep -q "systemctl enable --now panwatch-forecast" && ok "调用 systemctl enable --now" || bad "未 enable --now"
-echo "$OUT" | grep -q "systemctl restart panwatch-forecast" && ok "调用 systemctl restart" || bad "未 restart"
+echo "$OUT" | grep -q "systemctl enable --now sida-forecast" && ok "调用 systemctl enable --now" || bad "未 enable --now"
+echo "$OUT" | grep -q "systemctl restart sida-forecast" && ok "调用 systemctl restart" || bad "未 restart"
 
 # 容器化形态被否决: 脚本不得再拉 *-forecast 镜像(docker pull)
 if grep -qE "docker (pull|run).*(forecast|-forecast)" "$DEPLOY"; then

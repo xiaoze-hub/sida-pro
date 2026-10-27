@@ -23,7 +23,7 @@ vi.mock('lottie-web', () => ({
   default: { loadAnimation: (...args: unknown[]) => loadAnimation(...args) },
 }))
 
-vi.mock('@panwatch/base-ui', () => ({ useTabActive: () => true }))
+vi.mock('@sida/base-ui', () => ({ useTabActive: () => true }))
 
 import { LotionScene } from '@/components/motion/LotionScene'
 import { parseColor } from '@/lib/lotion'

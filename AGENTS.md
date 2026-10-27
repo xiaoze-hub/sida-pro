@@ -17,10 +17,10 @@
 - Frontend (dev): `make dev-web`（自动 pnpm install+dev，served on `http://localhost:5183`）。
 - Frontend (build): `cd frontend && pnpm install --frozen-lockfile && pnpm build`.
 - Docker image: `./build.sh <version>` (copies `frontend/dist` to `./static` and builds image).
-- Run via Docker: `docker run -d -p 8000:8000 -v panwatch_data:/app/data xiaoze-hub/stock-intelligent-data-analytics:latest`.
+- Run via Docker: `docker run -d -p 8000:8000 -v sida_data:/app/data xiaoze-hub/stock-intelligent-data-analytics:latest`.
 - Tests (backend): add pytest tests under `tests/` then run `pytest`.
 - Development lifecycle: routine source changes should use hot reload or restart the affected service. Rebuild Docker images only for release builds or when changing content that is not mounted into the development container, such as packaged frontend assets, dependencies, Dockerfiles, or installed local packages.
-- Docker cleanup: after every image build, first confirm the replacement containers are healthy, then remove obsolete PanWatch images and temporary validation images that are not referenced by any container. Never remove running images or data volumes, and do not broadly prune shared build caches without explicit approval.
+- Docker cleanup: after every image build, first confirm the replacement containers are healthy, then remove obsolete SIDA images and temporary validation images that are not referenced by any container. Never remove running images or data volumes, and do not broadly prune shared build caches without explicit approval.
 
 ## Coding Style & Naming Conventions
 - Python: PEP 8, 4-space indent, type hints required for new code. Files `snake_case.py`, classes `PascalCase`, functions/vars `snake_case`.

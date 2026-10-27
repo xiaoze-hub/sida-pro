@@ -2,7 +2,7 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /**
  * Task 14 标签「消息」守六件事:
@@ -30,7 +30,7 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    本用例在**新标的响应悬挂不落地**的最坏窗口里换标的, 断言上一只票的文章标题**一条都不在屏上**
  *    (去掉 `key` 必失败)。
  *
- * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsightData`/
+ * 真数据纪律: mock 的是**网络层**(`@sida/api`), 组件与 `InsightProvider`/`useInsightData`/
  * 两个恢复组件全走真实代码。
  */
 
@@ -55,7 +55,7 @@ const mocks = vi.hoisted(() => ({
   fundamentalsDetail: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),
     moreInfo: (...a: unknown[]) => mocks.moreInfo(...a),

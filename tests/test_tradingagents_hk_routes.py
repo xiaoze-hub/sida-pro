@@ -13,8 +13,8 @@ from src.agents.tradingagents.toolkit_adapter import (
     hk_symbol_to_yfinance,
     is_a_share,
     is_hk_share,
-    is_panwatch_routable,
-    panwatch_data_context,
+    is_sida_routable,
+    sida_data_context,
 )
 
 
@@ -44,10 +44,10 @@ def test_is_hk_share_rejects_6_digits_and_letters():
     assert is_hk_share("0241.HK") is False
 
 
-def test_is_panwatch_routable_covers_a_and_hk():
-    assert is_panwatch_routable("601127") is True
-    assert is_panwatch_routable("00241") is True
-    assert is_panwatch_routable("AAPL") is False
+def test_is_sida_routable_covers_a_and_hk():
+    assert is_sida_routable("601127") is True
+    assert is_sida_routable("00241") is True
+    assert is_sida_routable("AAPL") is False
 
 
 # ============================================================

@@ -12,7 +12,7 @@ from src.core.cn_symbol import get_cn_prefix
 logger = logging.getLogger(__name__)
 
 # 截图保存目录
-SCREENSHOT_DIR = Path(tempfile.gettempdir()) / "panwatch_screenshots"
+SCREENSHOT_DIR = Path(tempfile.gettempdir()) / "sida_screenshots"
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 
 # 默认配置

@@ -14,18 +14,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  */
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
 
 // 数智决策卡本身由 Task 4 的单测守, 这里只守"它是本栏第一张卡、只出现一次"。
-vi.mock('@panwatch/biz-ui/components/workbench/DecisionCard', () => ({
+vi.mock('@sida/biz-ui/components/workbench/DecisionCard', () => ({
   default: (p: { symbol: string; market: string }) => (
     <div data-testid="decision">{`decision:${p.symbol}:${p.market}`}</div>
   ),
 }))
 
-import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
+import QuickRail from '@sida/biz-ui/components/workbench/QuickRail'
 
 const L2_POLL_MS = 30000
 

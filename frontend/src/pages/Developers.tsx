@@ -3,7 +3,7 @@ import { GithubMark } from '@/components/icons/GithubMark'
 import { usePublicSeo } from '@/hooks/use-public-seo'
 import { PublicSiteFrame } from '@/components/public/PublicSiteChrome'
 import { PROJECT_REPOSITORY, COMMUNITY_REPOSITORY, COMMUNITY_DEPLOYMENT, COMMUNITY_LICENSE } from '@/lib/product-links'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
 import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowUpRight,
@@ -21,22 +21,22 @@ import {
   Database,
   BookOpen,
 } from 'lucide-react'
-import { fetchAPI, getMyPermissions, getToken, isAuthenticated } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Label } from '@panwatch/base-ui/components/ui/label'
+import { fetchAPI, getMyPermissions, getToken, isAuthenticated } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Label } from '@sida/base-ui/components/ui/label'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@panwatch/base-ui/components/ui/select'
+} from '@sida/base-ui/components/ui/select'
 import { DevPageLayout, Section, InfoCard, CodeBlock, type SideMenuItem } from '@/components/dev/DevPageLayout'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { useI18n } from '@/hooks/useI18n'
-import CaliberBadge, { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
+import CaliberBadge, { caliberOf } from '@sida/biz-ui/components/CaliberBadge'
 
 /**
  * 开发者文档页 v2(2026-09-16)。

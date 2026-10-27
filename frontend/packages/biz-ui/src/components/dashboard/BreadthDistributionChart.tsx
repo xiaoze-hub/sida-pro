@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
-import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
-import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
-import { fetchAPI } from '@panwatch/api'
+import { usePausedInterval } from '@sida/base-ui'
+import { useECharts } from '@sida/biz-ui/hooks/useECharts'
+import { readStockColors } from '@sida/biz-ui/lib/stock-colors'
+import { fetchAPI } from '@sida/api'
 
 /**
  * 全市场涨跌分布双向柱状图(v0.4.7, Dashboard 大盘区)。

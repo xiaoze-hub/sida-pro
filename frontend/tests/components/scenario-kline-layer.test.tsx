@@ -30,7 +30,7 @@ const H = vi.hoisted(() => ({
   scenario: {} as Record<string, unknown>,
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   API_BASE: '/api',
   fetchAPI: vi.fn((url: string) => {
@@ -100,7 +100,7 @@ vi.mock('lightweight-charts', async () => {
   }
 })
 
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 
 /** 取"情景图层当前活在线"(title 是 阻力/支撑/走强目标/走弱目标)—— 反映图上现在有几条。 */
 const scenarioLines = () =>

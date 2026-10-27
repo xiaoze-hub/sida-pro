@@ -7,7 +7,7 @@
         → 各模型 accuracy_pct → 权重(命中率平方, 归一化) → predict() 下次生效
 
 数据流:
-- load_weights(): 从 ~/.panwatch_forecast.db 的 backtest_results 表读取各模型历史
+- load_weights(): 从 ~/.sida_forecast.db 的 backtest_results 表读取各模型历史
   命中率(model_hits_json), 按"命中率平方 → 归一化"计算权重; 无任何可用数据时
   回退固定默认 MODEL_WEIGHTS。
   * 聚合所有回测行(而非只看最新一条): backtest_results 是 per-symbol 的, 存在
@@ -21,7 +21,7 @@
     拉普拉斯平滑 (hits+1)/(samples+2) 向 50% 收缩, 不再直接中性化 —— 小样本
     不再被排除, 但也不会被当真。
 - update_weights_after_backtest(backtest_result): 每次回测算完 model_summary 后
-  调用, 把最新命中率写回轻量 JSON 文件(~/.panwatch_model_weights.json), 作为
+  调用, 把最新命中率写回轻量 JSON 文件(~/.sida_model_weights.json), 作为
   DB 之外的兜底与审计记录(DB 侧由 save_backtest_result 负责写回, 双写保证闭环)。
   * (2026-08-13 修复) 权重口径与 load_weights 对齐: 直接基于 pooled DB 统计
     (save_backtest_result 已先落库, 最新回测行已含在池子里)计算, 避免单次回测
@@ -60,7 +60,7 @@ MIN_SAMPLES = 3
 LEGACY_NAME_MAP = {"linear_reg": "linreg"}
 
 # 轻量权重落盘文件(update_weights_after_backtest 写, load_weights 兜底读)
-WEIGHTS_FILE = os.path.join(os.path.expanduser("~"), ".panwatch_model_weights.json")
+WEIGHTS_FILE = os.path.join(os.path.expanduser("~"), ".sida_model_weights.json")
 
 try:
     from forecast_paths import FORECAST_DB_PATH  # forecast_lib 在 sys.path(direct 运行)
@@ -68,7 +68,7 @@ except ImportError:  # pragma: no cover
     try:
         from forecast_lib.forecast_paths import FORECAST_DB_PATH  # /tmp/SIDA 在 sys.path
     except ImportError:  # pragma: no cover
-        FORECAST_DB_PATH = os.path.join(os.path.expanduser("~"), ".panwatch_forecast.db")
+        FORECAST_DB_PATH = os.path.join(os.path.expanduser("~"), ".sida_forecast.db")
 
 # load_weights() 最近一次判定来源: "default" | "history" | "file"(供日志)
 _last_source = "default"

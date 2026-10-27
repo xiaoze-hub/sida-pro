@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it } from 'vitest'
 import { ProductVideo } from '@/components/landing/ProductVideo'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@panwatch/base-ui/components/ui/tabs'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@sida/base-ui/components/ui/tabs'
 
 afterEach(cleanup)
 const props = { title: '行情工作台', src: '/media/product/market.mp4', poster: '/media/product/market-poster.webp', captions: '/media/product/market.zh.vtt', duration: '00:31' }

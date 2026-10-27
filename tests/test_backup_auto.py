@@ -32,7 +32,7 @@ def sqlite_env(tmp_path, monkeypatch):
     """建一个最小 SQLite 库, 指向 tmp DATA_DIR。"""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    db_path = data_dir / "panwatch.db"
+    db_path = data_dir / "sida.db"
     conn = sqlite3.connect(str(db_path))
     conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
     conn.execute("INSERT INTO t (v) VALUES ('hello')")

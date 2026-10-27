@@ -253,16 +253,16 @@ def _attach_outcome(r: dict) -> None:
 def _fetch_kline_pairs(symbol: str, end_date: str) -> list:
     """取截至 end_date 的日K (date, close) 列表(升序)。同源用于相对涨跌计算。
 
-    1) 优先经 8000 /api/klines(与 UI 同源; 预测进程配置了 PANWATCH/AUTH
+    1) 优先经 8000 /api/klines(与 UI 同源; 预测进程配置了 SIDA/AUTH
        凭据即自动使用, 否则落 2)
     2) 兜底 baostock(预测引擎自带依赖, 无需任何配置)
     """
     # 1) 8000 K线 API
     try:
         try:
-            from .panwatch_client import request_json
+            from .sida_client import request_json
         except ImportError:  # forecast_server.py 将 forecast_lib 直接加入 sys.path
-            from panwatch_client import request_json
+            from sida_client import request_json
         resp = request_json(f"/api/klines/{symbol}?market=CN&days=90&interval=1d", timeout=15)
         if resp is not None:
             data = resp.get("data", resp) if isinstance(resp, dict) else resp

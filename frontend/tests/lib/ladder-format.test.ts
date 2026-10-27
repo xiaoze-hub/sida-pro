@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boardTag, fmtISODate, fmtSignedAmount, prevBoardsLabel, scrollToLatest } from '@panwatch/biz-ui/lib/ladder-format'
+import { boardTag, fmtISODate, fmtSignedAmount, prevBoardsLabel, scrollToLatest } from '@sida/biz-ui/lib/ladder-format'
 
 /**
  * `fmtSignedAmount`(v0.6.0 遗留⑤ 从 `QuickRail` 局部实现收敛为共享):

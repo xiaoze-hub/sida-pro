@@ -1,7 +1,7 @@
 import { createContext, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { TabActiveProvider, useTabActive } from '@panwatch/base-ui'
+import { TabActiveProvider, useTabActive } from '@sida/base-ui'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import { AssistantActivityContext } from '@/lib/assistant-avatar'
@@ -52,8 +52,8 @@ export function AssistantWorkspaceProvider({ children, enabled = true }: { child
       setEntry({ id: ++entrySequence.current, symbol: detail.symbol, market: detail.market, pageContext: detail.pageContext })
       setOpen(true)
     }
-    window.addEventListener('panwatch-open-chat', handleEntry)
-    return () => window.removeEventListener('panwatch-open-chat', handleEntry)
+    window.addEventListener('sida-open-chat', handleEntry)
+    return () => window.removeEventListener('sida-open-chat', handleEntry)
   }, [enabled])
   const expand = useCallback(() => { setOpen(false); navigate('/ai-copilot') }, [navigate])
   const configure = useCallback(() => { setOpen(false); navigate('/settings?tab=settings&section=sec-appearance') }, [navigate])

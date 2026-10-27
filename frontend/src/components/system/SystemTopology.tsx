@@ -1,6 +1,6 @@
 import { Activity, Bell, Bot, Database, Layers, Loader2, Network, ServerCog, Timer, Waypoints } from 'lucide-react'
-import { useTabActive } from '@panwatch/base-ui'
-import type { ModuleStatus, SystemStatusNode, SystemStatusSnapshot } from '@panwatch/api'
+import { useTabActive } from '@sida/base-ui'
+import type { ModuleStatus, SystemStatusNode, SystemStatusSnapshot } from '@sida/api'
 import { MODULE_STATUS_LABELS } from '@/lib/system-status'
 
 const POSITIONS: Record<string, [number, number]> = {

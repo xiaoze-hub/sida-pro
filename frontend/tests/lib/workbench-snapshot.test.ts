@@ -5,7 +5,7 @@ import {
   mapSnapshot,
   visibleSnapshotCells,
   type SnapshotCell,
-} from '@panwatch/biz-ui/components/workbench/HeaderBand'
+} from '@sida/biz-ui/components/workbench/HeaderBand'
 
 /**
  * 带1 快照行纯函数单测(任务3 + 复审修复: 补 spec §1.2 缺的 流通市值/PE(动)/PE(TTM)/PB/股息率/连板;

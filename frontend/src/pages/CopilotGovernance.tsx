@@ -12,10 +12,10 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import PageHeader from '@/components/PageHeader'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@panwatch/base-ui/components/ui/tabs'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@sida/base-ui/components/ui/tabs'
 import { safeFixed } from '@/lib/format'
 import { Loader2, Plus, RefreshCw } from 'lucide-react'
-import { authApi } from '@panwatch/api'
+import { authApi } from '@sida/api'
 import {
   deleteMemory,
   deleteSchedule,

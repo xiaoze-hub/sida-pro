@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { healthApi } from '@panwatch/api'
+import { healthApi } from '@sida/api'
 
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear() })
 it('按事件增量派发，支持跨字节分块，收到完成事件立即结束而不等待连接关闭', async () => {

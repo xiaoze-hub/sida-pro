@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useTabActive } from '@panwatch/base-ui'
+import { useTabActive } from '@sida/base-ui'
 import { loadLotionScene, type AnimationItem, type LotionScene } from '@/lib/lotion'
 
 /**

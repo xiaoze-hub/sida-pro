@@ -1,4 +1,4 @@
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /**
  * 会话态 chip(2026-09-20 设计系统 P0)。

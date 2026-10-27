@@ -1,6 +1,6 @@
 """forecast 配置下发通道回归(2026-09-08 T7 审计修复)。
 
-背景: forecast 容器原直读主库 sqlite(PANWATCH_DB)拿 forecast_llm_* 与裁判
+背景: forecast 容器原直读主库 sqlite(SIDA_DB)拿 forecast_llm_* 与裁判
 场景绑定, 主库切 PG 后该文件不存在 → 三条配置通道全部静默失效, 引擎回落
 硬编码兜底模型, 用户设置页配置被无视。
 

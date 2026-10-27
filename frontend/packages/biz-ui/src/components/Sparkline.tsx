@@ -6,7 +6,7 @@
  *  - 涨跌色 + **flat 基线**: 基线取首值, 让"相对起点"一眼可读;
  *  - 纯 SVG, 无 canvas、无动画(列表里几十个实例, 不能各自跑动画)。
  */
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /** SVG 坐标取一位小数: 这是**几何**不是展示数字 —— 不走 safeFixed(那是给用户看的数), 也不用 toFixed。 */
 const round1 = (v: number) => Math.round(v * 10) / 10

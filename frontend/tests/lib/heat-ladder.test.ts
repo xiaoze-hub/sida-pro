@@ -21,7 +21,7 @@ import {
   parseColorToRgb,
   contrastRatio,
   type HeatPalette,
-} from '@panwatch/biz-ui/lib/board-heatmap'
+} from '@sida/biz-ui/lib/board-heatmap'
 
 const CSS = readFileSync(resolve(__dirname, '../../src/index.css'), 'utf-8')
 

@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { AlertTriangle, ChevronDown, Database, CheckCircle2 } from 'lucide-react'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
-import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/components/ui/popover'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
+import { Popover, PopoverContent, PopoverTrigger } from '@sida/base-ui/components/ui/popover'
 
 import { useSourceHealth, type SourceHealthItem } from '@/hooks/useSourceHealth'
 import { useVendorTrust } from '@/hooks/useVendorTrust'

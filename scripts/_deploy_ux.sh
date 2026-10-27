@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CT=panwatch
+CT=sida
 cp /mnt/c/Users/tianxiang/sida-work/src/web/api/quotes.py /tmp/quotes.py
 docker cp /tmp/quotes.py $CT:/app/src/web/api/quotes.py
 docker exec -u root $CT chown app:app /app/src/web/api/quotes.py

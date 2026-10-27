@@ -77,7 +77,7 @@ def test_unknown_role_denies_all():
 
 @pytest.fixture()
 def scene_db():
-    """独立内存 sqlite, 不污染真实 data/panwatch.db。"""
+    """独立内存 sqlite, 不污染真实 data/sida.db。"""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 

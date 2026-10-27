@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Layers, Crown } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
+import { fetchAPI } from '@sida/api'
+import SectionHeader from '@sida/biz-ui/components/SectionHeader'
 
 /**
  * 市场主线识别卡片 (2026-08-24, v0.3.0)

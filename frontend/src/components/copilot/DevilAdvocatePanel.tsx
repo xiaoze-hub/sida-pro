@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Swords } from 'lucide-react'
-import { chatApi } from '@panwatch/api'
+import { chatApi } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 
 /**

@@ -7,7 +7,7 @@ import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { useI18n } from '@/hooks/useI18n'
-import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
+import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@sida/api'
 // 2026-08-12 性能优化: 路由懒加载 — 17 个页面原本静态 import 打进单 bundle 1.2MB,
 // 点任意路由都要下载/解析整个应用。改为按需加载, 首屏只下载登录页+当前页。
 // 2026-10-10 加载韧性: 统一走 lazyWithRetry —— 发版后旧页面点开已被删掉的 chunk(404)
@@ -76,8 +76,8 @@ const FactorICPage = lazyWithRetry(() => import('@/pages/FactorIC'), 'factor-ic-
 const LandingPage = lazyWithRetry(() => import('@/pages/Landing'), 'landing-page')
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
 const AdminPage = lazyWithRetry(() => import('@/pages/Admin'), 'admin-page')
-import LogsModal from '@panwatch/biz-ui/components/logs-modal'
-import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
+import LogsModal from '@sida/biz-ui/components/logs-modal'
+import NotificationBell from '@sida/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
 import BrowserFullscreenButton from '@/components/BrowserFullscreenButton'
 import { AssistantWorkspaceProvider, AssistantPageHost } from '@/components/AssistantWorkspace'
@@ -85,8 +85,8 @@ import { AssistantAvatar } from '@/components/AssistantAvatar'
 import { SystemStatusProvider } from '@/components/system/SystemStatusProvider'
 import { SystemStatusIndicator } from '@/components/system/SystemStatusIndicator'
 import { BrandMark } from '@/components/BrandMark'
-import SessionPhaseChip, { sessionPhaseOf, type SessionInfo } from '@panwatch/biz-ui/components/SessionPhaseChip'
-import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
+import SessionPhaseChip, { sessionPhaseOf, type SessionInfo } from '@sida/biz-ui/components/SessionPhaseChip'
+import { pushAlert } from '@sida/biz-ui/lib/alert-bus'
 import { CapabilityPill } from '@/components/DataCapabilities'
 import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
 import { normalizeType } from '@/lib/workbench-tabs'
@@ -95,8 +95,8 @@ import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
 import CommandPalette from '@/components/CommandPalette'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@sida/base-ui/components/ui/dialog'
+import { Button } from '@sida/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
 // 页签式工作台(Tab Shell, 2026-10-15): 内容区顶部页签栏 —— 每个功能页一个页签,
 // 独立 ✕ 只关那一个功能页(首页常驻), localStorage 持久化。壳在页面**外层**, 页面内部零改动。
@@ -106,7 +106,7 @@ import DecisionLedgerPage from '@/pages/DecisionLedger'
 import { reportFrontendError } from '@/lib/error-report'
 import { closeOpenDialogs } from '@/lib/dialog-route-guard'
 import Disclaimer from '@/components/Disclaimer'
-import { onApiFailure } from '@panwatch/api'
+import { onApiFailure } from '@sida/api'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.home', perm: 'view_dashboard' },
@@ -428,7 +428,7 @@ function App() {
         const latest = String(res?.latest_version || '').trim()
         const shouldOpen = !!res?.update_available && !!latest
         if (!shouldOpen) return
-        const dismissed = localStorage.getItem('panwatch_upgrade_dismissed_version') || ''
+        const dismissed = localStorage.getItem('sida_upgrade_dismissed_version') || ''
         if (dismissed === latest) return
         setUpgradeInfo({ latest, url: String(res?.release_url || 'https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics/releases') })
         setUpgradeOpen(true)
@@ -875,7 +875,7 @@ function App() {
             <Button
               variant="secondary"
               onClick={() => {
-                if (upgradeInfo?.latest) localStorage.setItem('panwatch_upgrade_dismissed_version', upgradeInfo.latest)
+                if (upgradeInfo?.latest) localStorage.setItem('sida_upgrade_dismissed_version', upgradeInfo.latest)
                 setUpgradeOpen(false)
               }}
             >

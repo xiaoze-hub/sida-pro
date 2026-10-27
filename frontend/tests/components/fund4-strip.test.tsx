@@ -9,7 +9,7 @@
  */
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import Fund4Strip, { type Fund4Day } from '@panwatch/biz-ui/components/Fund4Strip'
+import Fund4Strip, { type Fund4Day } from '@sida/biz-ui/components/Fund4Strip'
 
 afterEach(cleanup)
 

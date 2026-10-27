@@ -1,15 +1,15 @@
 import PageHeader from '@/components/PageHeader'
 import { SectionWorkspace, SectionPanel, useSectionRoute } from '@/components/SectionWorkspace'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
-import { fetchAPI } from '@panwatch/api'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@sida/base-ui/components/ui/dialog'
+import { fetchAPI } from '@sida/api'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Target, Star, Briefcase, UserRound, Upload, X, KeyRound, AlertTriangle, Crown } from 'lucide-react'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Label } from '@panwatch/base-ui/components/ui/label'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Label } from '@sida/base-ui/components/ui/label'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { fileToAvatarDataUrl } from '@/hooks/use-avatar'
 import { formatDateTime } from '@/lib/utils'
 import { submitChangePassword } from '@/lib/change-password'
@@ -178,7 +178,7 @@ export function Profile() {
       setAvatarChanged(false)
       // 广播头像变更(2026-08-15 评审 A): 右上角 AccountMenu 头像本会话内同步刷新
       if (avatarChanged) {
-        window.dispatchEvent(new CustomEvent('panwatch:avatar-changed'))
+        window.dispatchEvent(new CustomEvent('sida:avatar-changed'))
       }
       toast('资料已保存', 'success')
       setEditOpen(false)

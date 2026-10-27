@@ -15,9 +15,9 @@
 - 生产小主机(WSL `Ubuntu-22.04`)从无 forecast 容器, 也从未接入发版链。
 
 **真实生产形态**: 主机 venv 里跑 `python3 forecast_server.py`(端口 8010),
-由 systemd 单元 `panwatch-forecast.service` 常驻 + 开机自启; 历史库 `~/.panwatch_forecast.db`。
+由 systemd 单元 `sida-forecast.service` 常驻 + 开机自启; 历史库 `~/.sida_forecast.db`。
 
-主服务(panwatch, 容器) 经 `src/web/api/forecast.py::_detect_engine_url()` **从容器默认网关**推出引擎地址
+主服务(sida, 容器) 经 `src/web/api/forecast.py::_detect_engine_url()` **从容器默认网关**推出引擎地址
 (容器内无 `FORECAST_ENGINE_URL` 时 → `http://<网关IP>:8010`, 生产实测 `http://172.19.0.1:8010`)。
 **推论(关键)**: 裸进程必须绑 `0.0.0.0` —— 只听 `127.0.0.1` 时, 容器连宿主机网关:8010 会被拒
 (引擎"起来了"但主服务够不着)。这与主服务 `-p 8000:8000`(0.0.0.0)暴露面一致
@@ -28,19 +28,19 @@
 | 文件 | 作用 |
 |---|---|
 | `deploy/deploy_forecast_engine.sh` | 幂等部署: 同步 `forecast_server.py` + `forecast_lib/` → 建/复用 venv → 装依赖 → 写 `forecast.env` → 写 systemd unit → 拉起 → 健康检查 |
-| `deploy/panwatch-forecast.service` | unit 参考副本(脚本实际生成同名 unit; 内容一致) |
+| `deploy/sida-forecast.service` | unit 参考副本(脚本实际生成同名 unit; 内容一致) |
 | `scripts/tests/test_deploy_forecast_engine.sh` | stub 契约测试(不触网/不建 venv/不真装) |
 
 安装布局(默认, 可经 `FORECAST_*` 环境变量覆盖):
 
 ```
-/opt/panwatch-forecast/
+/opt/sida-forecast/
 ├── forecast_server.py
 ├── forecast_lib/*.py
 ├── venv/                  # forecast_requirements.txt 全量依赖(torch cpu/xgboost/chronos/timesfm…)
 └── forecast.env           # SIDA_MAIN_API_URL / FORECAST_HOST=0.0.0.0 / FORECAST_DB_PATH / TZ
-/etc/systemd/system/panwatch-forecast.service
-~/.panwatch_forecast.db    # 历史库
+/etc/systemd/system/sida-forecast.service
+~/.sida_forecast.db    # 历史库
 ```
 
 依赖是**懒加载**的: torch/xgboost/chronos/timesfm 缺失时引擎降级(起得来、`/health` 与
@@ -84,22 +84,22 @@
 sudo bash /path/to/repo/deploy/deploy_forecast_engine.sh
 # 期望末尾:  FORECAST_DEPLOY_OK
 # 3) 复核:
-systemctl status panwatch-forecast --no-pager
+systemctl status sida-forecast --no-pager
 curl -s http://127.0.0.1:8010/health
 ```
 
 无 systemd 的兜底(WSL 未开 systemd 时):
 
 ```bash
-cd /opt/panwatch-forecast
-FORECAST_HOST=0.0.0.0 FORECAST_DB_PATH=$HOME/.panwatch_forecast.db \
-  nohup setsid venv/bin/python3 forecast_server.py >/var/log/panwatch-forecast.log 2>&1 &
+cd /opt/sida-forecast
+FORECAST_HOST=0.0.0.0 FORECAST_DB_PATH=$HOME/.sida_forecast.db \
+  nohup setsid venv/bin/python3 forecast_server.py >/var/log/sida-forecast.log 2>&1 &
 ```
 
 ## 4. 发版接线: 让引擎随主服务拉起
 
 主服务发版链是本机 `~/.hermes/scripts/sida_release.sh <tag>` → `~/.hermes/scripts/sida_prod_deploy.sh <tag>`
-(部署 panwatch 容器)。引擎随之拉起有两种接法:
+(部署 sida 容器)。引擎随之拉起有两种接法:
 
 1. **随发版自动拉起(推荐)**: 在 `sida_prod_deploy.sh` 成功路径**末尾**、
    `DEPLOY_OK` 之后追加一步(非致命, 引擎失败不影响主服务判定):

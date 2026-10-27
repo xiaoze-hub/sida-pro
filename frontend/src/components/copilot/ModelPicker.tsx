@@ -12,8 +12,8 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Check, ChevronDown, Loader2 } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/components/ui/popover'
+import { fetchAPI } from '@sida/api'
+import { Popover, PopoverContent, PopoverTrigger } from '@sida/base-ui/components/ui/popover'
 
 export interface ModelOption {
   id: number

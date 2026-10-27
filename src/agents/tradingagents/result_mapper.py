@@ -85,7 +85,7 @@ def map_state_to_result(
     }
 
     content = _render_markdown(state, suggestion, model_label, cost_usd)
-    # 详情页可点击链接(配了 panwatch_base_url 才出现)
+    # 详情页可点击链接(配了 sida_base_url 才出现)
     from datetime import date as _date
     from src.core.analysis_link import analysis_detail_markdown
     _link = analysis_detail_markdown(stock.symbol, _date.today().isoformat())

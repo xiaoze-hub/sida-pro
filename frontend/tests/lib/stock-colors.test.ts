@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { hslaVar } from '@panwatch/biz-ui/lib/stock-colors'
+import { hslaVar } from '@sida/biz-ui/lib/stock-colors'
 
 // 2026-09-10 回归 (P1-1 热力图走查定位): ECharts/zrender 的 canvas 画笔只认
 // legacy 逗号语法的 hsl()/hsla(); CSS Color 4 空格语法 `hsla(215 16% 65%, 0.18)`

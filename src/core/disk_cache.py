@@ -22,8 +22,8 @@ import time
 logger = logging.getLogger(__name__)
 
 # 容器数据卷 /app/data/cache; 本地开发回退到项目内 .cache/
-_CACHE_DIR = os.environ.get("PANWATCH_CACHE_DIR") or os.path.join(
-    os.environ.get("PANWATCH_DATA_DIR", "/app/data"), "cache"
+_CACHE_DIR = os.environ.get("SIDA_CACHE_DIR") or os.path.join(
+    os.environ.get("SIDA_DATA_DIR", "/app/data"), "cache"
 )
 try:
     os.makedirs(_CACHE_DIR, exist_ok=True)

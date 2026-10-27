@@ -56,8 +56,8 @@ const H = vi.hoisted(() => {
   }
 })
 
-// ── @panwatch/api: 全可控(ReportsHub 用 premarket, Dashboard 用快车道队列) ────
-vi.mock('@panwatch/api', () => ({
+// ── @sida/api: 全可控(ReportsHub 用 premarket, Dashboard 用快车道队列) ────
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   fetchAPI: () => Promise.resolve([]),
   reportsApi: { list: () => Promise.resolve({ items: [] }) },
@@ -97,37 +97,37 @@ vi.mock('@panwatch/api', () => ({
 }))
 
 // ── Dashboard 重区块打桩(jsdom 无 canvas, 只关心不崩 + 首屏不阻塞) ───────────
-vi.mock('@panwatch/biz-ui/components/dashboard/BreadthDistributionChart', () => ({
+vi.mock('@sida/biz-ui/components/dashboard/BreadthDistributionChart', () => ({
   default: () => <div data-testid="breadth-chart" />,
 }))
-vi.mock('@panwatch/biz-ui/components/dashboard/SentimentGauge', () => ({
+vi.mock('@sida/biz-ui/components/dashboard/SentimentGauge', () => ({
   default: () => <div data-testid="sentiment-gauge" />,
 }))
-vi.mock('@panwatch/biz-ui/components/dashboard/FlowHistoryChart', () => ({
+vi.mock('@sida/biz-ui/components/dashboard/FlowHistoryChart', () => ({
   default: () => <div data-testid="flow-chart" />,
 }))
-vi.mock('@panwatch/biz-ui/components/dashboard/ResonancePanel', () => ({
+vi.mock('@sida/biz-ui/components/dashboard/ResonancePanel', () => ({
   default: () => <div data-testid="resonance-panel" />,
 }))
-vi.mock('@panwatch/biz-ui/components/MarketPhaseCard', () => ({
+vi.mock('@sida/biz-ui/components/MarketPhaseCard', () => ({
   default: () => <div data-testid="market-phase-card" />,
 }))
-vi.mock('@panwatch/biz-ui/components/MarketMainlineCard', () => ({
+vi.mock('@sida/biz-ui/components/MarketMainlineCard', () => ({
   default: () => <div data-testid="market-mainline-card" />,
 }))
-vi.mock('@panwatch/biz-ui/components/KpiBand', () => {
+vi.mock('@sida/biz-ui/components/KpiBand', () => {
   const PHASE = { label: null, loading: true, error: null, unavailableNote: null, limitUp: null, sealRate: null, reload: () => {} }
   const MAINLINE = { top: null, loading: true, error: null }
   const Stub = () => <div data-testid="kpi-band" />
   return { default: Stub, usePhaseLabel: () => PHASE, useMainlineTop1: () => MAINLINE }
 })
-vi.mock('@panwatch/biz-ui/components/AnimatedNumber', () => ({
+vi.mock('@sida/biz-ui/components/AnimatedNumber', () => ({
   default: ({ value }: { value?: ReactNode }) => <span>{String(value)}</span>,
 }))
-vi.mock('@panwatch/biz-ui/components/FlashValue', () => ({
+vi.mock('@sida/biz-ui/components/FlashValue', () => ({
   default: ({ children }: { children?: ReactNode }) => <>{children}</>,
 }))
-vi.mock('@panwatch/biz-ui/components/SectionHeader', () => ({
+vi.mock('@sida/biz-ui/components/SectionHeader', () => ({
   default: ({ title, action }: { title?: ReactNode; action?: ReactNode }) => (
     <div>
       {title}
@@ -135,7 +135,7 @@ vi.mock('@panwatch/biz-ui/components/SectionHeader', () => ({
     </div>
   ),
 }))
-vi.mock('@panwatch/biz-ui/components/Stat', () => ({
+vi.mock('@sida/biz-ui/components/Stat', () => ({
   default: ({ label, value }: { label?: ReactNode; value?: ReactNode }) => (
     <div>
       {label}
@@ -143,12 +143,12 @@ vi.mock('@panwatch/biz-ui/components/Stat', () => ({
     </div>
   ),
 }))
-vi.mock('@panwatch/biz-ui/components/CaliberBadge', () => ({
+vi.mock('@sida/biz-ui/components/CaliberBadge', () => ({
   default: () => <span data-testid="caliber-badge" />,
   caliberOf: () => 'unknown',
 }))
-vi.mock('@panwatch/biz-ui/components/onboarding', () => ({ Onboarding: () => null }))
-vi.mock('@panwatch/base-ui/components/ui/button', () => ({
+vi.mock('@sida/biz-ui/components/onboarding', () => ({ Onboarding: () => null }))
+vi.mock('@sida/base-ui/components/ui/button', () => ({
   Button: ({ children, ...rest }: { children?: ReactNode } & Record<string, unknown>) => {
     const { onClick, title, disabled, 'aria-label': ariaLabel } = rest as {
       onClick?: () => void

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """sw.js 版本占位符注入回归 (2026-09-30)。
 
-背景: `frontend/public/sw.js` 曾把 CACHE_NAME 硬编码成 `panwatch-v0.5.69-bust`,
+背景: `frontend/public/sw.js` 曾把 CACHE_NAME 硬编码成 `sida-v0.5.69-bust`,
 而 `Dockerfile` 里仍用 `sed s/__SW_VERSION__/<VERSION>/` 去替换占位符 →
 **空操作**, 发版并不刷新 SW 缓存名, "发版→用户拿到新版" 靠手改硬编码。
 
@@ -30,8 +30,8 @@ def test_sw_js_defines_version_placeholder():
 
 def test_sw_js_has_no_hardcoded_release_version():
     text = SW.read_text(encoding="utf-8")
-    # 旧 bug: 硬编码 panwatch-v0.5.69-bust → sed 找不到占位符 → 发版不清缓存
-    assert not re.search(r"panwatch-v\d+\.\d+", text), (
+    # 旧 bug: 硬编码 sida-v0.5.69-bust → sed 找不到占位符 → 发版不清缓存
+    assert not re.search(r"sida-v\d+\.\d+", text), (
         "sw.js 不应硬编码版本号(应由构建时注入 __SW_VERSION__)"
     )
 
@@ -51,7 +51,7 @@ def test_simulated_injection_replaces_placeholder():
     text = SW.read_text(encoding="utf-8")
     out = text.replace("__SW_VERSION__", "v0.13.40")
     assert "__SW_VERSION__" not in out
-    assert "panwatch-v0.13.40-bust" in out
+    assert "sida-v0.13.40-bust" in out
 
 
 def test_index_html_registers_sw():

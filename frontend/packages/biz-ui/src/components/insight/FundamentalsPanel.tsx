@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { FundamentalsDetail } from '@panwatch/api'
+import type { FundamentalsDetail } from '@sida/api'
 import { formatCompactNumber } from './helpers'
 
 /** 龙虎榜默认渲染行数上限(2026-10-18 P0 审计 F13/R17: 生产 68 行把整页撑到 6 个屏) */

@@ -16,7 +16,7 @@
     {"verdict": "abstain", "direction": null, "reason": "裁判不可用: <原因>"}
   保证裁判故障不阻断预测主流程, 也绝不伪造"裁判确认过"的结论。
 
-认证/寻址: 复用 forecast_lib/panwatch_client.py 的 get_panwatch_url() +
+认证/寻址: 复用 forecast_lib/sida_client.py 的 get_sida_url() +
 auth_headers()(X-Service-Token 只读服务令牌, 0.0 起不再伪造 owner JWT)。
 对话助手侧(chat.py): 建会话/发消息两端口 0.0 起接受 X-Service-Token,
 服务令牌建的会话 user_id=NULL(系统会话, 与用户会话互不可见)。
@@ -32,9 +32,9 @@ import re
 from typing import Any, Optional
 
 try:
-    from .panwatch_client import get_panwatch_url, auth_headers
+    from .sida_client import get_sida_url, auth_headers
 except ImportError:  # forecast_server.py 将 forecast_lib 直接加入 sys.path
-    from panwatch_client import get_panwatch_url, auth_headers
+    from sida_client import get_sida_url, auth_headers
 
 try:
     from .forecast_traces import record_referee_eval
@@ -57,9 +57,9 @@ class RefereeConfigUnavailable(RuntimeError):
 
 
 try:
-    from forecast_lib import panwatch_client
+    from forecast_lib import sida_client
 except ImportError:  # forecast_server.py 将 forecast_lib 直接加入 sys.path
-    import panwatch_client
+    import sida_client
 
 
 def resolve_referee_model_cfg() -> dict:
@@ -80,7 +80,7 @@ def resolve_referee_model_cfg() -> dict:
         绝不回落硬编码 agnes。
     """
     try:
-        data = panwatch_client.request_json("/api/service/forecast-config", timeout=10)
+        data = sida_client.request_json("/api/service/forecast-config", timeout=10)
     except Exception as exc:
         raise RefereeConfigUnavailable(f"主服务 API 不可达(/api/service/forecast-config): {exc}") from exc
     if not isinstance(data, dict):
@@ -343,12 +343,12 @@ def evaluate_prediction(
     t0 = time.monotonic()
     conv_id: Optional[int] = None
     try:
-        base_url = get_panwatch_url()
+        base_url = get_sida_url()
         headers = {"Content-Type": "application/json", **auth_headers()}
         if "X-Service-Token" not in headers and "Authorization" not in headers:
             raise RuntimeError(
-                "无可用凭据(未配置 PANWATCH_SERVICE_TOKEN/SIDA_SERVICE_TOKEN/"
-                "PANWATCH_TOKEN/账号密码)"
+                "无可用凭据(未配置 SIDA_SERVICE_TOKEN/SIDA_SERVICE_TOKEN/"
+                "SIDA_TOKEN/账号密码)"
             )
 
         # 1) 建会话: 绑定股票, initial_context 放评估数据快照(会注入 system prompt)

@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 三指标共振清单卡片 (2026-09-11 决策先锋升级 B): 读 /resonance/scan, 切 共振/接近 两个口径。
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn(), navigate: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
 }))
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
 }))
 
-import ResonancePanel from '@panwatch/biz-ui/components/dashboard/ResonancePanel'
+import ResonancePanel from '@sida/biz-ui/components/dashboard/ResonancePanel'
 
 const RESP = {
   trade_date: '20260911',

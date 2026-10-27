@@ -6,8 +6,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchAPI } from '@panwatch/api'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { fetchAPI } from '@sida/api'
+import { usePausedInterval } from '@sida/base-ui'
 import { Layers } from 'lucide-react'
 import {
   STATUS_DOT,

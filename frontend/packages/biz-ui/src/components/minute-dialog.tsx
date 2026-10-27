@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
+import { fetchAPI } from '@sida/api'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@sida/base-ui/components/ui/dialog'
 import { readStockColors } from '../lib/stock-colors'
 
 interface MinutePoint {

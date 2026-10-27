@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Search, Trash2, RefreshCw, ScrollText, ChevronDown } from 'lucide-react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { fetchAPI } from '@panwatch/api'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@sida/base-ui/components/ui/dialog'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { fetchAPI } from '@sida/api'
 import { mapLoggerName, loggerOptions } from '@/lib/logger-map'
 import { useLocalStorage, parseServerTime } from '@/lib/utils'
 
@@ -92,8 +92,8 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
   const [timeRange, setTimeRange] = useState(0)
   const [selectedLoggers, setSelectedLoggers] = useState<string[]>([])
   const [selectedFlow, setSelectedFlow] = useState('')
-  const [domain, setDomain] = useLocalStorage<'business' | 'all' | 'infra'>('panwatch_logs_modal_domain', 'business')
-  const [autoRefresh, setAutoRefresh] = useLocalStorage('panwatch_logs_modal_autoRefresh', false)
+  const [domain, setDomain] = useLocalStorage<'business' | 'all' | 'infra'>('sida_logs_modal_domain', 'business')
+  const [autoRefresh, setAutoRefresh] = useLocalStorage('sida_logs_modal_autoRefresh', false)
   const [showAllLoggerFilters, setShowAllLoggerFilters] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [beforeId, setBeforeId] = useState<number>(0)

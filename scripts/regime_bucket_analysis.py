@@ -18,7 +18,7 @@ market_sentiment_daily)与**情绪周期 regime**分桶, 逐桶算 T+1/3/5 命�
   SIDA_DB_URL="postgresql+psycopg2://user:pw@host:5432/sida" \\
     python scripts/regime_bucket_analysis.py --days 400 --min-sample 30
   # 本地 sqlite
-  python scripts/regime_bucket_analysis.py --db sqlite:///data/panwatch.db
+  python scripts/regime_bucket_analysis.py --db sqlite:///data/sida.db
 
 只读: 全程 SELECT, 不写库。输出为 Markdown 表格, 便于贴进 docs/research/ 报告。
 """
@@ -41,7 +41,7 @@ def _dsn(args) -> str:
         v = os.environ.get(env)
         if v:
             return v
-    return "sqlite:///data/panwatch.db"
+    return "sqlite:///data/sida.db"
 
 
 def _rate(rows, idx) -> tuple[int, float | None]:

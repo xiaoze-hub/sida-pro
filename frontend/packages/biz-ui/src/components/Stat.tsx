@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /**
  * 统一指标格(2026-09-05 UI 全量改造 Wave1)。

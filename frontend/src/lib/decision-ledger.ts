@@ -7,7 +7,7 @@
  *  ③ **不自己算百分比**: 命中率只取后端给的 `hit_rate`, 前端不做任何推算。
  */
 import { safeFixed } from '@/lib/format'
-import type { DecisionLogItem } from '@panwatch/api'
+import type { DecisionLogItem } from '@sida/api'
 
 export interface HorizonLike {
   n: number

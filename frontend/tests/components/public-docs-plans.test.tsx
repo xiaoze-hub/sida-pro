@@ -7,7 +7,7 @@ import Developers from '@/pages/Developers'
 import { COMMUNITY_REPOSITORY, PROJECT_REPOSITORY } from '@/lib/product-links'
 
 const api = vi.hoisted(() => ({ fetchTiers: vi.fn(), fetchProApplyStatus: vi.fn(), applyPro: vi.fn(), isAuthenticated: vi.fn(), fetchAPI: vi.fn(), getMyPermissions: vi.fn(), getToken: vi.fn() }))
-vi.mock('@panwatch/api', () => api)
+vi.mock('@sida/api', () => api)
 vi.mock('@/hooks/useI18n', () => ({ useI18n: () => ({ t: (key: string) => key === 'developers.title' ? '开发者文档' : key }) }))
 const tiers = {
   tiers: [

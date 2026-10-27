@@ -13,8 +13,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
-import { factorICApi } from '@panwatch/api'
-import type { FactorIC, FactorICHistoryResp, FactorICResp } from '@panwatch/api'
+import { factorICApi } from '@sida/api'
+import type { FactorIC, FactorICHistoryResp, FactorICResp } from '@sida/api'
 // 全仓纪律: 数字格式化走 @/lib/format 的 safe* 系列(null → fallback, 不抛不编)
 import { safeFixed } from '@/lib/format'
 

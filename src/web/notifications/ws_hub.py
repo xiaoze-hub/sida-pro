@@ -462,8 +462,8 @@ async def _extract_ws_token(websocket: WebSocket) -> tuple[str, str]:
     if swp:
         parts = [p.strip() for p in swp.split(",") if p.strip()]
         for i, p in enumerate(parts):
-            if p == "panwatch.auth.bearer" and i + 1 < len(parts):
-                return parts[i + 1], ("panwatch.auth.bearer" if "panwatch.auth.bearer" in parts else parts[0])
+            if p == "sida.auth.bearer" and i + 1 < len(parts):
+                return parts[i + 1], ("sida.auth.bearer" if "sida.auth.bearer" in parts else parts[0])
         if parts:
             return parts[-1], parts[0]
     return websocket.query_params.get("token", ""), ""

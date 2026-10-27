@@ -20,7 +20,7 @@ describe('全站外观状态同步', () => {
     act(() => a.result.current.setMode('light'))
     expect(b.result.current.mode).toBe('light')
     expect(document.documentElement.classList.contains('light')).toBe(true)
-    expect(localStorage.getItem('panwatch-theme')).toBe('light')
+    expect(localStorage.getItem('sida-theme')).toBe('light')
     act(() => setAppearance({ density: 'comfortable' }))
     expect(a.result.current.density).toBe('comfortable')
     expect(b.result.current.density).toBe('comfortable')
@@ -38,8 +38,8 @@ describe('全站外观状态同步', () => {
   it('其他窗口修改主题后，同步更新当前界面', () => {
     const hook = renderHook(useTheme)
     act(() => {
-      localStorage.setItem('panwatch-theme', 'light')
-      window.dispatchEvent(new StorageEvent('storage', { key: 'panwatch-theme' }))
+      localStorage.setItem('sida-theme', 'light')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'sida-theme' }))
     })
     expect(hook.result.current.mode).toBe('light')
   })

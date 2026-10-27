@@ -8,7 +8,7 @@
  * prefers-reduced-motion 由 token 层把 --dur-* 归零 ⇒ 自动降级为瞬间替换。
  */
 import { useEffect, useRef } from 'react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 export default function RollingNumber({
   text,

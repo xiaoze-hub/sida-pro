@@ -7,9 +7,9 @@ const mocks = vi.hoisted(() => ({
   user: { demo: false, guest: false },
   toast: vi.fn(),
 }))
-vi.mock('@panwatch/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
+vi.mock('@sida/api', () => ({ fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a) }))
 vi.mock('@/lib/jwt', () => ({ isDemoUser: () => mocks.user.demo, isGuestUser: () => mocks.user.guest }))
-vi.mock('@panwatch/base-ui/components/ui/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
+vi.mock('@sida/base-ui/components/ui/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
 
 import ScanJobButton from '@/components/ScanJobButton'
 

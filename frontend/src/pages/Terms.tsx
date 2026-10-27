@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FileText, ShieldCheck, ArrowLeft } from 'lucide-react'
 import { BrandMark } from '@/components/BrandMark'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 
 /**
  * 用户协议 / 隐私政策页(合规落地, 2026-09-16)。

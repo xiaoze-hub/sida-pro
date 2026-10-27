@@ -1,13 +1,13 @@
 """SIDA HTTP client shared by forecast bridge modules.
 
 认证(2026-09-08 风险方案 0.0): forecast 容器只持只读服务凭据 ——
-``PANWATCH_SERVICE_TOKEN``(与主服务 ``SIDA_SERVICE_TOKEN`` 同值, 经 .env 注入),
+``SIDA_SERVICE_TOKEN``(与主服务 ``SIDA_SERVICE_TOKEN`` 同值, 经 .env 注入),
 请求头 ``X-Service-Token``。不再从共享数据库读 JWT 签名密钥自签令牌:
 那等价于伪造 owner 全权凭据(能调任何 owner 接口, 含改配置/删数据),
 且切 PG 后读到的是过期 secret, 表现为"莫名其妙全 401"。
 
-非 Compose 部署可显式提供 ``PANWATCH_TOKEN`` 或
-``PANWATCH_USERNAME``/``PANWATCH_PASSWORD``(真实用户登录, 走正常鉴权)。
+非 Compose 部署可显式提供 ``SIDA_TOKEN`` 或
+``SIDA_USERNAME``/``SIDA_PASSWORD``(真实用户登录, 走正常鉴权)。
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
 
 
-def get_panwatch_url() -> str:
+def get_sida_url() -> str:
     """Return the SIDA base URL configured for this process.
 
     D5(2026-09-09): 主服务地址环境变量统一为 ``SIDA_MAIN_API_URL``(旧名已废弃,
@@ -38,7 +38,7 @@ def get_panwatch_url() -> str:
 def get_service_token() -> str:
     """只读服务令牌(与主服务 SIDA_SERVICE_TOKEN 同值, compose 经 .env 注入)。"""
     return (
-        os.getenv("PANWATCH_SERVICE_TOKEN", "").strip()
+        os.getenv("SIDA_SERVICE_TOKEN", "").strip()
         or os.getenv("SIDA_SERVICE_TOKEN", "").strip()
     )
 
@@ -50,12 +50,12 @@ def invalidate_token() -> None:
 
 def _login_with_explicit_credentials() -> str:
     """Compatibility fallback for hosts without a service token."""
-    username = os.getenv("PANWATCH_USERNAME") or os.getenv("AUTH_USERNAME")
-    password = os.getenv("PANWATCH_PASSWORD") or os.getenv("AUTH_PASSWORD")
+    username = os.getenv("SIDA_USERNAME") or os.getenv("AUTH_USERNAME")
+    password = os.getenv("SIDA_PASSWORD") or os.getenv("AUTH_PASSWORD")
     if not username or not password:
         return ""
     request = urllib.request.Request(
-        f"{get_panwatch_url()}/api/auth/login",
+        f"{get_sida_url()}/api/auth/login",
         data=json.dumps({"username": username, "password": password}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -71,7 +71,7 @@ def get_token() -> str:
     0.0: 自签 JWT 通道已删 —— forecast 侧没有任何 JWT 签名密钥来源,
     服务身份一律走 X-Service-Token(见 auth_headers)。
     """
-    explicit = os.getenv("PANWATCH_TOKEN", "").strip()
+    explicit = os.getenv("SIDA_TOKEN", "").strip()
     if explicit:
         return explicit
 
@@ -115,11 +115,11 @@ def request_json(path: str, timeout: float = 30) -> Any:
     认证双轨: X-Service-Token(服务令牌, 首选) / Bearer(显式 token 或凭据登录)。
     无任何凭据时抛 RuntimeError —— 失败必须可见, 不允许静默回落。
     """
-    url = f"{get_panwatch_url()}/{path.lstrip('/')}"
+    url = f"{get_sida_url()}/{path.lstrip('/')}"
     if not has_credentials():
         raise RuntimeError(
-            "SIDA 无可用凭据: 请在 forecast 容器注入 PANWATCH_SERVICE_TOKEN"
-            "(与主服务 SIDA_SERVICE_TOKEN 同值)或 PANWATCH_TOKEN/账号密码"
+            "SIDA 无可用凭据: 请在 forecast 容器注入 SIDA_SERVICE_TOKEN"
+            "(与主服务 SIDA_SERVICE_TOKEN 同值)或 SIDA_TOKEN/账号密码"
         )
     for attempt in range(2):
         headers = auth_headers()
@@ -128,7 +128,7 @@ def request_json(path: str, timeout: float = 30) -> Any:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read())
         except urllib.error.HTTPError as exc:
-            if exc.code == 401 and attempt == 0 and not os.getenv("PANWATCH_TOKEN"):
+            if exc.code == 401 and attempt == 0 and not os.getenv("SIDA_TOKEN"):
                 invalidate_token()
                 continue
             raise

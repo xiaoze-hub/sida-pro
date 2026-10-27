@@ -4,9 +4,9 @@
  * 取消入口 + 近期任务结果(成功/失败/卡死, 含错误摘要)。数据来自 /api/jobs。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { ListChecks, X } from 'lucide-react'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 
 interface Job {
   id: string

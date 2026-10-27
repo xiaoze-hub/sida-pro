@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
-import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
-import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { fetchAPI } from '@sida/api'
+import { useECharts } from '@sida/biz-ui/hooks/useECharts'
+import { readStockColors } from '@sida/biz-ui/lib/stock-colors'
 
 /**
  * 机构活跃度副图(2026-09-11, 数智决策升级 C)。

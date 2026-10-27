@@ -14,15 +14,15 @@
  */
 
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import {
   normalizeKlineEvents,
   normalizePriceLines,
   type KlineEventPoint,
   type KlinePriceLine,
-} from '@panwatch/biz-ui/klineEvents'
-import type { ActivityPoint } from '@panwatch/biz-ui/components/KlineChart'
-import type { FundFlowBar } from '@panwatch/biz-ui/components/KlineChart'
+} from '@sida/biz-ui/klineEvents'
+import type { ActivityPoint } from '@sida/biz-ui/components/KlineChart'
+import type { FundFlowBar } from '@sida/biz-ui/components/KlineChart'
 /**
  * GS 买卖点(hook 的输出契约): **price 必填** —— 本 hook 负责"缺价格的点不喂图"(不补 0),
  * 所以这里比 `KlineChart` 的宽松版(price 可选)更严。原先借用 InteractiveKline 的类型,

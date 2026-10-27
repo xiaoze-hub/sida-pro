@@ -62,7 +62,7 @@ describe('KlineChart 决策先锋辅助指标图层契约', () => {
 
 describe('DecisionCard 数据面板追加节契约', () => {
   it('引入并渲染 PioneerIndicatorsSection(追加节, 透传 symbol/market)', () => {
-    expect(DC).toMatch(/import PioneerIndicatorsSection from '@panwatch\/biz-ui\/components\/PioneerIndicatorsSection'/)
+    expect(DC).toMatch(/import PioneerIndicatorsSection from '@sida\/biz-ui\/components\/PioneerIndicatorsSection'/)
     expect(DC).toMatch(/<PioneerIndicatorsSection symbol=\{symbol\} market=\{market\} \/>/)
   })
 })

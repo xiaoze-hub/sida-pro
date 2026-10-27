@@ -16,17 +16,17 @@ git pull --rebase origin main
 
 # 复制后端
 for f in src/web/middleware.py src/web/app.py src/web/api/auth.py; do
-  docker cp "/mnt/c/Users/tianxiang/sida-work/$f" "panwatch:/app/$f" 2>/dev/null
+  docker cp "/mnt/c/Users/tianxiang/sida-work/$f" "sida:/app/$f" 2>/dev/null
 done
 
 # 复制前端
 rm -rf static
 cp -r /mnt/c/Users/tianxiang/sida-work/frontend/dist static
-docker cp static/. panwatch:/app/static/
+docker cp static/. sida:/app/static/
 
-docker restart panwatch
+docker restart sida
 sleep 20
 curl -s http://localhost:8000/api/version
 echo
-docker inspect --format='{{.State.Health.Status}}' panwatch
+docker inspect --format='{{.State.Health.Status}}' sida
 echo "TIER2_DONE"

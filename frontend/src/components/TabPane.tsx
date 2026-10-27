@@ -8,7 +8,7 @@ import {
   type To,
 } from 'react-router-dom'
 
-import { TabActiveProvider } from '@panwatch/base-ui'
+import { TabActiveProvider } from '@sida/base-ui'
 
 import { tabKeyOf } from '@/lib/tab-shell'
 

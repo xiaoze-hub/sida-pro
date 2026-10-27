@@ -73,7 +73,7 @@ MAIN_NET_LIMIT = 500e4    # 主力(≥20万)净额阈值: ±500万元
 ABSORB_INTENSITY = 35.0   # 强吸筹: 主力参与度(占全市场成交) ≥ 35%
 ABSORB_BUY_RATIO = 48.0   # 强吸筹: 主力买占比(买占主力成交) ≥ 48%
 
-# 暗盘数据源(2026-08-11 预留): 环境变量 PANWATCH_DARK_SOURCE 可切换
+# 暗盘数据源(2026-08-11 预留): 环境变量 SIDA_DARK_SOURCE 可切换
 #   tencent_ticks = 腾讯逐笔(免费, 默认, 盘中实时, 方向自解析)
 #   tdx_tck       = 通达信 .tck 超盘回放落盘(盘后精确, 官方方向 2B/2S; 2026-08-31 接入,
 #                   找不到文件自动回退腾讯逐笔, 见 src/core/dark_l2.py + tdx_tick_parser.py)
@@ -81,14 +81,14 @@ ABSORB_BUY_RATIO = 48.0   # 强吸筹: 主力买占比(买占主力成交) ≥ 4
 #   l2_sina       = 新浪L2(预留, 需购买)
 #   l2_itick      = iTick L2(预留, 99 USDT/月)
 # 未来接入付费L2时, 在 _fetch_all_ticks 处按 source 分发即可。
-DARK_SOURCE = __import__("os").environ.get("PANWATCH_DARK_SOURCE", "tencent_ticks")
+DARK_SOURCE = __import__("os").environ.get("SIDA_DARK_SOURCE", "tencent_ticks")
 
 # 2026-09-04 #2: per-request 源覆盖(ContextVar, 线程/协程安全)。
 # API ?source=thsdk 单股灰度验证, 默认源不动, 验证ok再切。
 import contextvars as _ctxvars
 
 _DARK_SOURCE_CTX: _ctxvars.ContextVar[str | None] = _ctxvars.ContextVar(
-    "panwatch_dark_source", default=None)
+    "sida_dark_source", default=None)
 
 
 def _active_source() -> str:
@@ -473,7 +473,7 @@ def _fetch_ticks_locked(code: str, max_pages: int, force: bool, stats: dict) -> 
     2026-08-11 打磨: 加 30s 缓存(盘中每轮监控复用) + 单页重试(腾讯偶发限流)。
     2026-08-12 增量续拉(用户设计): 缓存记录 last_page+last_seq, 过期后只拉
       新增页合并; 并发拉页(全天 19 页串行 2.9s → 并发 ~0.9s); 空页判定 ['']。
-    数据源: 默认 tencent_ticks; 未来 L2 接入在此分发(PANWATCH_DARK_SOURCE)。
+    数据源: 默认 tencent_ticks; 未来 L2 接入在此分发(SIDA_DARK_SOURCE)。
     2026-10-14: stats 记录本轮翻页数/新拉笔数(元数据/降级判定用); 调用方已持 code 锁。
     """
     import time as _time
@@ -1599,7 +1599,7 @@ def _judge_signal(dark_net: float, main_net: float, big_net: float, mid_net: flo
 def compute_tck_active_ratio(symbol: str, tck_dir: str | None = None) -> float | None:
     """从 .tck 文件计算「主动率」(大单笔数占比)。
 
-    路径: PANWATCH_TCK_DIR/{sh|sz}{code}_{yyyymmdd}.tck(盘后超盘回放落盘)。
+    路径: SIDA_TCK_DIR/{sh|sz}{code}_{yyyymmdd}.tck(盘后超盘回放落盘)。
     算法: orders(主动委托, tag=00 申报)中 amt>=30万 的笔数 / orders 总笔数 × 100。
     注: 30 万 = 1 手 = 100 股 × 3000 元(对齐神剑股份 002361 主力 1 手单位)。
 
@@ -1617,7 +1617,7 @@ def compute_tck_active_ratio(symbol: str, tck_dir: str | None = None) -> float |
     except ImportError:
         return None
     if not tck_dir:
-        tck_dir = os.environ.get("PANWATCH_TCK_DIR", "/app/data/tck")
+        tck_dir = os.environ.get("SIDA_TCK_DIR", "/app/data/tck")
     # 文件名规则: {sh|sz}{code}_{yyyymmdd}.tck
     today = datetime.now(_CST).strftime("%Y%m%d")  # CST 日期, UTC 宿主不错位
     # 判断市场: 6 开头 sh, 其他 sz

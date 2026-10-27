@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 /**
  * 批量收盘价(2026-09-22) —— 给列表行的 sparkline 用。

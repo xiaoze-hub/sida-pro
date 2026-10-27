@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { StrategyParam } from '@panwatch/api'
+import type { StrategyParam } from '@sida/api'
 import { activeOverrides, displayValue, parseParamInput } from '@/lib/strategy-params'
 
 const p = (over: Partial<StrategyParam> = {}): StrategyParam => ({

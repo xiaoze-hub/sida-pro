@@ -18,12 +18,12 @@ const { fetchAPIMock, chartProps } = vi.hoisted(() => ({
   chartProps: [] as any[],
 }))
 
-vi.mock('@panwatch/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@panwatch/api')>()
+vi.mock('@sida/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@sida/api')>()
   return { ...actual, fetchAPI: fetchAPIMock }
 })
 
-vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
+vi.mock('@sida/biz-ui/components/KlineChart', () => ({
   default: (p: any) => {
     chartProps.push(p)
     return (

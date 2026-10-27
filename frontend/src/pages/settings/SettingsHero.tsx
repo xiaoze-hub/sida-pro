@@ -1,7 +1,7 @@
 import { Cpu, Download, Search, X } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Input } from '@panwatch/base-ui/components/ui/input'
-import { StatusChip } from '@panwatch/base-ui/components/ui/status-chip'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Input } from '@sida/base-ui/components/ui/input'
+import { StatusChip } from '@sida/base-ui/components/ui/status-chip'
 import { useSettings } from './context'
 import { useI18n } from '@/hooks/useI18n'
 

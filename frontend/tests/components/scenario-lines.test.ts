@@ -16,8 +16,8 @@ import {
   SCENARIO_LINE_TONE,
   SCENARIO_MAX_DEVIATION,
   type ScenarioLine,
-} from '@panwatch/biz-ui/lib/scenario-lines'
-import type { ScenarioMatrixResponse } from '@panwatch/api'
+} from '@sida/biz-ui/lib/scenario-lines'
+import type { ScenarioMatrixResponse } from '@sida/api'
 
 /** 后端正常响应(与 `/klines/{symbol}/scenario` 的结构一致)。 */
 const NORMAL: ScenarioMatrixResponse = {

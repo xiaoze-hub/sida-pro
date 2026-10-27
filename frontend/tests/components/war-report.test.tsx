@@ -3,13 +3,13 @@
 //   ① 有快照 → 渲染大单净流入 TOP/BOTTOM 行(万元口径带符号) + 净额变化;
 //   ② 缺源子块(行业 / 拆单对倒)显式「无数据」, 不塌成 0;
 //   ③ 无快照 → 显式提示 + 生成按钮, 不出空表。
-// 禁真实网络: mock @panwatch/api, 组件走真实代码。
+// 禁真实网络: mock @sida/api, 组件走真实代码。
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ daily: vi.fn(), refresh: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   warReportApi: {
     daily: (...a: unknown[]) => mocks.daily(...a),
     refresh: (...a: unknown[]) => mocks.refresh(...a),

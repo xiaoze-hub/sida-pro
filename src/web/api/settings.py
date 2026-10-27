@@ -61,7 +61,7 @@ SETTING_DESCRIPTIONS = {
     "notify_retry_backoff_seconds": "通知重试退避秒数（基数）",
     "notify_dedupe_ttl_overrides": "通知幂等窗口覆盖（JSON，空为默认）",
     "stock_link_platform": "股票链接平台（点击股票代码跳转的行情网站）",
-    "panwatch_base_url": "SIDA 公开访问地址（用于通知里的分析详情页链接，如 https://panwatch.example.com）",
+    "sida_base_url": "SIDA 公开访问地址（用于通知里的分析详情页链接，如 https://sida.example.com）",
     # ---- 接口 Key(数据源凭证,设置页维护,DB 优先于环境变量) ----
     "wudao_mcp_token": "悟道(wudao) MCP 接口 Token(竞价/题材数据源)",
     "zhitu_token": "智兔(zhitu) 数据接口 Token(分红/股东数据源,200次/天)",
@@ -124,7 +124,7 @@ def _get_env_defaults() -> dict[str, str]:
         "notify_retry_backoff_seconds": str(s.notify_retry_backoff_seconds),
         "notify_dedupe_ttl_overrides": s.notify_dedupe_ttl_overrides,
         "stock_link_platform": "xueqiu",
-        "panwatch_base_url": os.getenv("PANWATCH_BASE_URL", ""),
+        "sida_base_url": os.getenv("SIDA_BASE_URL", ""),
         # 接口 key:初始迁移自环境变量(容器 -e 注入的 wudao/zhitu/tdx token 等)
         "wudao_mcp_token": os.getenv("WUDAO_MCP_TOKEN", ""),
         "zhitu_token": os.getenv("ZHITU_TOKEN", ""),

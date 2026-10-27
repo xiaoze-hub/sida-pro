@@ -1,7 +1,7 @@
 # requirements-lock.txt — Python 依赖精确锁定 (W2.5/E6, 2026-09-09)
 #
-# 来源: 生产容器 panwatch(镜像 xzxwz:v0.5.14 基座 + 热修)内
-#   docker exec panwatch python -c "
+# 来源: 生产容器 sida(镜像 xzxwz:v0.5.14 基座 + 热修)内
+#   docker exec sida python -c "
 #     import importlib.metadata as m
 #     seen={ (d.metadata['Name'] or '').strip(): d.version for d in m.distributions() if d.metadata['Name'] }
 #     [print(f'{k}=={v}') for k,v in sorted(seen.items(), key=lambda x: x[0].lower())]"

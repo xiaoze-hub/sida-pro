@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ScrollText, RefreshCw } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { formatFullDateTime } from '@/lib/utils'
 import ErrorBanner from '@/components/ErrorBanner'
 import { useApiQuery } from '@/hooks/useApiQuery'

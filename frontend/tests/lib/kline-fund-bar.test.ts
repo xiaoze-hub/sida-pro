@@ -10,8 +10,8 @@
 //  ② `open_net` 仍被兜底(不打断既有调用方);
 //  ③ 明盘/暗盘/两者皆无 的分色规则。
 import { describe, expect, it } from 'vitest'
-import { capitalBarRows, fundBarPoint } from '@panwatch/biz-ui/components/KlineChart'
-import type { StockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { capitalBarRows, fundBarPoint } from '@sida/biz-ui/components/KlineChart'
+import type { StockColors } from '@sida/biz-ui/lib/stock-colors'
 
 const SC: StockColors = { up: '#ef4444', down: '#22c55e' }
 const NODATA = '#888888'

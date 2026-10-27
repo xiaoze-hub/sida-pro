@@ -4,10 +4,10 @@
  * 演示/访客是只读档, 不显示触发入口。
  */
 import { useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { RefreshCw } from 'lucide-react'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
+import { Button } from '@sida/base-ui/components/ui/button'
 import { isDemoUser, isGuestUser } from '@/lib/jwt'
 
 interface ScanResp {

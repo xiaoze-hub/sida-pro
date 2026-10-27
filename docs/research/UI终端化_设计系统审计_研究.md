@@ -492,7 +492,7 @@
 | 二维码 | `qrcode.react` | ^4.2 | ✅ Canvas/SVG |
 | 导出/截图 | `html-to-image` | ^1.11 | ✅ Canvas/DOM |
 | 日期选择器 | `react-day-picker` | ^9.13 | ✅ 纯 React |
-| 本地依赖（workspace）| `@panwatch/api|base-ui|biz-ui` | 0.1.0 | ✅ pnpm + tsconfig paths alias |
+| 本地依赖（workspace）| `@sida/api|base-ui|biz-ui` | 0.1.0 | ✅ pnpm + tsconfig paths alias |
 | **Node/Electron 原生绑定** | **无** | ✅ grep `fs`、`path`、`child_process`、`ipcRenderer`、`Electron` 全部 0 命中 | — |
 
 ### A.2 构建配置摘要
@@ -503,7 +503,7 @@
 |---|---|---|
 | `type` | `module` | ✅ Tauri 静态资源按 ESM 提供 |
 | `plugins` | 仅 `@vitejs/plugin-react` | ✅ 不需要 `vite-plugin-node-polyfills` |
-| `resolve.alias` | `@`、`@panwatch/*` → `packages/*/src` | ✅ Tauri 打包会先跑 `pnpm build`，alias 在构建阶段已解析 |
+| `resolve.alias` | `@`、`@sida/*` → `packages/*/src` | ✅ Tauri 打包会先跑 `pnpm build`，alias 在构建阶段已解析 |
 | `server.proxy` | `/api → http://127.0.0.1:8000` | ⚠️ 仅 dev 阶段有效；Tauri 不会执行 dev 模式 |
 | `base` | 未设（默认 `/`） | ✅ Tauri 推荐保留相对路径；现配置已兼容 |
 | `build.target` | 未设（vite 5 输出 ES2020）| ✅ Tauri WebView2（Chromium 110+）支持 ES2020 |

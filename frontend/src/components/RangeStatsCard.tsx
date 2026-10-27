@@ -10,7 +10,7 @@
  *  - 事件 0 次也照实显示 `0 次`(0 是事实, 不是缺数据)。
  */
 
-import type { KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
+import type { KlineRangeStats } from '@sida/biz-ui/components/KlineChart'
 import { safeFixed, toAmount } from '@/lib/format'
 
 /** 事件 kind → 中文短标(与 klineEvents 的 KIND_LABEL 同源口径, 这里只做展示收窄) */

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 /**
  * 标的画像徽标（2026-10-22）。

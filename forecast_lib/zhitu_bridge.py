@@ -36,7 +36,7 @@ def fetch_capital_flow(symbol: str, days: int = 5) -> list:
         _rpc(p, "initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "panwatch-bridge", "version": "1.0"},
+            "clientInfo": {"name": "sida-bridge", "version": "1.0"},
         }, idn=1)
         p.stdin.write((json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}) + "\n").encode())
         p.stdin.flush()

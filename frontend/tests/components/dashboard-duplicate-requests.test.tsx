@@ -11,7 +11,7 @@
 import { cleanup, render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearResponseCache } from '@panwatch/api'
+import { clearResponseCache } from '@sida/api'
 
 type Call = { url: string; method: string }
 let calls: Call[] = []
@@ -23,9 +23,9 @@ function okResponse(data: unknown): Response {
 const PHASE = { available: true, current: { phase: 'rally', label: '主升', first_board: 60, ge2_count: 20, seal_rate: 0.6, max_height: 5, promo_rate: 0.3 }, recent_30d: [], distribution: [], total_days: 0, note: '' }
 const MAINLINE = { total_groups: 0, ranked_groups: [] }
 
-import { usePhaseLabel, useMainlineTop1 } from '@panwatch/biz-ui/components/KpiBand'
-import MarketPhaseCard from '@panwatch/biz-ui/components/MarketPhaseCard'
-import MarketMainlineCard from '@panwatch/biz-ui/components/MarketMainlineCard'
+import { usePhaseLabel, useMainlineTop1 } from '@sida/biz-ui/components/KpiBand'
+import MarketPhaseCard from '@sida/biz-ui/components/MarketPhaseCard'
+import MarketMainlineCard from '@sida/biz-ui/components/MarketMainlineCard'
 
 /** 迷你挂载台: 把「同时打 /market/phase 的组件」放在同一棵树里(还原首页冷启动并发) */
 function Harness() {

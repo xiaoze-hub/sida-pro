@@ -3,7 +3,7 @@ set -euo pipefail
 # 从 Windows dist 同步到 WSL 仓库再 docker cp
 SRC=/mnt/c/Users/tianxiang/sida-work/frontend/dist
 DEST=/root/sida-pro/frontend/dist
-CT=panwatch
+CT=sida
 echo "sync $SRC -> $DEST"
 rm -rf "$DEST"
 mkdir -p "$DEST"

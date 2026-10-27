@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { Activity, RefreshCw } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 /**
  * OB 盘口失衡条(2026-08-20)

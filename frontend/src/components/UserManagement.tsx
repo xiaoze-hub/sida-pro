@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Users, Plus, Trash2, KeyRound, Ban, CheckCircle2, UserCog, Boxes, ShieldCheck, Loader2 } from 'lucide-react'
-import { authApi, fetchAPI, UserInfo } from '@panwatch/api'
+import { authApi, fetchAPI, UserInfo } from '@sida/api'
 import { formatDateTime } from '@/lib/utils'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
-} from '@panwatch/base-ui/components/ui/dialog'
+} from '@sida/base-ui/components/ui/dialog'
 
 interface Props {
   currentUser: UserInfo | null

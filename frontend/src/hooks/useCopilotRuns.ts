@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import type { CopilotRunDetail, CopilotRunRow } from '@/lib/copilot/api'
 
 /**

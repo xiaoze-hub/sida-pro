@@ -277,9 +277,9 @@ def test_unlock_levels_from_chips_empty():
 
 
 def test_find_tck_file_reexported(monkeypatch, tmp_path):
-    """l4_events 复用 dark_split 的定位逻辑(同一套 PANWATCH_TCK_DIR 约定)."""
+    """l4_events 复用 dark_split 的定位逻辑(同一套 SIDA_TCK_DIR 约定)."""
     (tmp_path / "sz000977_20260901.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
     assert le.find_tck_file("000977") is not None
-    monkeypatch.delenv("PANWATCH_TCK_DIR", raising=False)
+    monkeypatch.delenv("SIDA_TCK_DIR", raising=False)
     assert le.find_tck_file("000977") is None

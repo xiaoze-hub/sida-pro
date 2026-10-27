@@ -6,10 +6,10 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_git2_sidapro -o IdentitiesOnly=yes -o 
 
 cd /root/sida-pro
 git pull --rebase origin main
-docker cp /mnt/c/Users/tianxiang/sida-work/src/web/api/market_data.py panwatch:/app/src/web/api/market_data.py
-docker restart panwatch
+docker cp /mnt/c/Users/tianxiang/sida-work/src/web/api/market_data.py sida:/app/src/web/api/market_data.py
+docker restart sida
 sleep 20
 curl -s http://localhost:8000/api/version
 echo
-docker inspect --format='{{.State.Health.Status}}' panwatch
+docker inspect --format='{{.State.Health.Status}}' sida
 echo "DONE"

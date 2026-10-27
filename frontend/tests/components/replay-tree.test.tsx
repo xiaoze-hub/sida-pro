@@ -18,7 +18,7 @@ import ReplayPromotionTree from '@/components/ReplayPromotionTree'
 
 const { treeMock, seriesMock } = vi.hoisted(() => ({ treeMock: vi.fn(), seriesMock: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   marketReplayApi: { tree: treeMock, series: seriesMock },
 }))
 

@@ -17,7 +17,7 @@ const { getMock, updateMock } = vi.hoisted(() => ({
   updateMock: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   freeTierApi: { get: getMock, update: updateMock },
 }))
 

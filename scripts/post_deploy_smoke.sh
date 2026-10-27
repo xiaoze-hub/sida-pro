@@ -1,14 +1,14 @@
 #!/bin/bash
 # SIDA 发版后冒烟门禁 (2026-08-21; 2026-09-08 0.1 参数化+失败面收紧)
 # 用法: bash post_deploy_smoke.sh [web密码]
-#       可用环境变量覆盖: PW_CONTAINER(容器名, 默认 panwatch)
+#       可用环境变量覆盖: PW_CONTAINER(容器名, 默认 sida)
 #                         SMOKE_LOG(日志路径, 默认 /home/ubuntu/backups/smoke.log)
 #                         SMOKE_SCRIPT(smoke_test.py 路径, 默认 /home/ubuntu/scripts/smoke_test.py)
 # 流程: 等 $PW_CONTAINER healthy(最长120s) → 跑 smoke_test.py → 结果追加 smoke.log
 # 退出码: smoke_test.py 的退出码原样透传; 工具缺失也按 FAIL 处理(门禁不得静默假绿)
 set -uo pipefail
 PW="${1:-}"
-PW_CONTAINER="${PW_CONTAINER:-panwatch}"
+PW_CONTAINER="${PW_CONTAINER:-sida}"
 LOG="${SMOKE_LOG:-/home/ubuntu/backups/smoke.log}"
 SMOKE_SCRIPT="${SMOKE_SCRIPT:-/home/ubuntu/scripts/smoke_test.py}"
 BASE=http://127.0.0.1:8000

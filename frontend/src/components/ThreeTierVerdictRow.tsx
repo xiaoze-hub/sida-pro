@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 import { Activity, Flame, ShieldAlert, Sparkles } from 'lucide-react'
 import { PHASE_LABEL, type PhaseKey } from '@/lib/market-phase'
 import { safeFixed } from '@/lib/format'

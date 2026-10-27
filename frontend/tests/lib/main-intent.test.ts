@@ -13,8 +13,8 @@ import {
   intentRenderable,
   limitMoveMarkers,
   type IntentLabel,
-} from '@panwatch/biz-ui/lib/main-intent'
-import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
+} from '@sida/biz-ui/lib/main-intent'
+import type { MainIntentStructured } from '@sida/biz-ui/lib/main-intent-types'
 
 const UP = '#E53935'
 const DOWN = '#43A047'

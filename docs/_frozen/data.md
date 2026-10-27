@@ -46,4 +46,4 @@ marketdata.Quote 带 `status`(ok/partial/missing) + `missing_fields`。缺价 cu
 biz:quote:* TTL5s, biz:gs:* TTL60s, biz:ws:seq单调。业务禁裸连Redis, 一律src/web/cache/biz_cache.py。
 
 ## 生产铁律(不动)
-容器panwatch-postgres(密码见部署机 .env 的 POSTGRES_PASSWORD, --network-alias postgres, SIDA_DB_URL@postgres:5432)。宿主机旧库勿用。
+容器sida-postgres(密码见部署机 .env 的 POSTGRES_PASSWORD, --network-alias postgres, SIDA_DB_URL@postgres:5432)。宿主机旧库勿用。

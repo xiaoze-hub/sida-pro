@@ -24,7 +24,7 @@ import {
   signalTypeLabel,
   insufficientHint,
 } from '@/lib/decision-ledger'
-import type { DecisionLogItem } from '@panwatch/api'
+import type { DecisionLogItem } from '@sida/api'
 
 const root = resolve(__dirname, '../..')
 const read = (p: string) => readFileSync(resolve(root, p), 'utf-8')

@@ -129,7 +129,7 @@ def test_active_passive_ratio_empty():
 
 
 def test_review_no_tck_file(monkeypatch):
-    monkeypatch.delenv("PANWATCH_TCK_DIR", raising=False)
+    monkeypatch.delenv("SIDA_TCK_DIR", raising=False)
     r = pr.dark_review_from_tck("000977", "2026-09-01")
     assert r["available"] is False
     assert "无 .tck" in (r["note"] or "")
@@ -138,7 +138,7 @@ def test_review_no_tck_file(monkeypatch):
 def test_review_full(monkeypatch, tmp_path):
     """完整复盘: 明盘(单笔>30万) + 暗盘(拆单簇) + 主力净额 + 撤单率 + 主动买卖比。"""
     (tmp_path / "sz000977_20260901.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
 
     # 明盘: 1 笔 40万 买
     trades = [{"dir": "B", "amt": 400000.0, "vol": 40000, "price": 10.0}]
@@ -169,7 +169,7 @@ def test_review_full(monkeypatch, tmp_path):
 
 def test_review_empty_trades(monkeypatch, tmp_path):
     (tmp_path / "sz000977.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
     import src.core.tdx_tick_parser as ttp
     monkeypatch.setattr(ttp, "parse_tck", lambda p: ([], [], []))
     r = pr.dark_review_from_tck("000977")
@@ -179,7 +179,7 @@ def test_review_empty_trades(monkeypatch, tmp_path):
 
 def test_review_parse_error(monkeypatch, tmp_path):
     (tmp_path / "sz000977.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_TCK_DIR", str(tmp_path))
     import src.core.tdx_tick_parser as ttp
     monkeypatch.setattr(ttp, "parse_tck", lambda p: (_ for _ in ()).throw(ValueError("bad")))
     r = pr.dark_review_from_tck("000977")

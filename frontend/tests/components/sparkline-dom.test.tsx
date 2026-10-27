@@ -8,7 +8,7 @@
  */
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import Sparkline from '@panwatch/biz-ui/components/Sparkline'
+import Sparkline from '@sida/biz-ui/components/Sparkline'
 
 describe('Sparkline DOM 契约', () => {
   it('够点数 → 产出 svg[data-sparkline], 方向进属性', () => {

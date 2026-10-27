@@ -1,4 +1,4 @@
-# PanWatch Dockerfile (快速构建: 跳过前端构建, 用预构建 static/)
+# SIDA Dockerfile (快速构建: 跳过前端构建, 用预构建 static/)
 ARG PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.11-slim
 ARG THSDK_IMAGE=ghcr.io/xiaoze-hub/thsdk-vendor:v1.7.18
 

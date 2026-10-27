@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { formatLatency, trustSummary, trustTone, trustTooltip } from '../../src/lib/vendor-trust'
-import type { VendorTrustItem } from '@panwatch/api'
+import type { VendorTrustItem } from '@sida/api'
 
 const base: VendorTrustItem = {
   vendor: 'tencent',

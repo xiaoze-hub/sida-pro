@@ -11,7 +11,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({ fail: null as string | null, resp: null as unknown }))
-vi.mock('@panwatch/api', async (importOriginal) => {
+vi.mock('@sida/api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   return {
     ...actual,
@@ -20,16 +20,16 @@ vi.mock('@panwatch/api', async (importOriginal) => {
   }
 })
 // jsdom 无 canvas: 图表库只做桩(与 flow-history-chart.test.tsx 同法)
-vi.mock('@panwatch/biz-ui/lib/echarts-core', () => ({
+vi.mock('@sida/biz-ui/lib/echarts-core', () => ({
   default: { graphic: { LinearGradient: class {} } },
 }))
-vi.mock('@panwatch/biz-ui/hooks/useECharts', () => ({
+vi.mock('@sida/biz-ui/hooks/useECharts', () => ({
   useECharts: () => ({ ref: () => {}, chartRef: { current: { setOption: vi.fn(), resize: vi.fn() } } }),
 }))
 
-import KpiBand, { useMainlineTop1, usePhaseLabel, type PhaseKpi } from '@panwatch/biz-ui/components/KpiBand'
-import MarketMainlineCard from '@panwatch/biz-ui/components/MarketMainlineCard'
-import MarketPhaseCard from '@panwatch/biz-ui/components/MarketPhaseCard'
+import KpiBand, { useMainlineTop1, usePhaseLabel, type PhaseKpi } from '@sida/biz-ui/components/KpiBand'
+import MarketMainlineCard from '@sida/biz-ui/components/MarketMainlineCard'
+import MarketPhaseCard from '@sida/biz-ui/components/MarketPhaseCard'
 import { PhaseGaugeCard } from '@/pages/Dashboard'
 
 const NOTE = '尚未同步阶段数据, 请调用 POST /api/market/phase/sync'

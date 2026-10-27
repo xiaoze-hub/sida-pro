@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  *
  * 说明: 页面测试(`stock-workbench.test.tsx`)把本组件 mock 掉了, 故"真组件是否真的调了
  * `onRefresh`"/"是否真的没发 /quotes"必须由本文件守 —— 否则漏调/误发, 页面测试仍会全绿。
- * 真数据纪律: 本文件 mock 的是**网络层**(`@panwatch/api`), 组件取数/渲染走真实代码。
+ * 真数据纪律: 本文件 mock 的是**网络层**(`@sida/api`), 组件取数/渲染走真实代码。
  */
 
 const mocks = vi.hoisted(() => ({
@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   klineSummary: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
   insightApi: {
     quote: (...args: unknown[]) => mocks.quote(...args),
@@ -38,7 +38,7 @@ vi.mock('@panwatch/api', () => ({
   },
 }))
 
-import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import HeaderBand from '@sida/biz-ui/components/workbench/HeaderBand'
 
 /**
  * 个股(000001)真值: **平安银行** —— 与 `?type=index` 的 `000001`(上证指数)**不同标的**。

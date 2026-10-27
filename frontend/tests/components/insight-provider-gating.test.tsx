@@ -2,7 +2,7 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 
 /**
  * Task 10 门控(`enabledKeys`)守四件事:
@@ -26,7 +26,7 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *   **从不**调用 `setTab` ⇒ 这三例就是对"只传 keys 就够"的直接证明: 把 `tab` 的与条件加回去,
  *   `keys:['fundamentals']` / `keys:['deep']` 两例必定零调用而失败。
  *
- * 说明: mock 的是**网络层**(`@panwatch/api`), Provider/两个 hook 走真实代码;
+ * 说明: mock 的是**网络层**(`@sida/api`), Provider/两个 hook 走真实代码;
  * 上下文消费者用真组件 `Probe`(读 `useInsight()`), 无 Provider 时 `useInsight()` 会 throw。
  *
  * ④(`keys: []`)的「自动刷新不启动」判据用 `vi.spyOn(globalThis, 'setInterval')` 直接看 interval
@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => ({
   fundamentalsDetail: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),
     moreInfo: (...a: unknown[]) => mocks.moreInfo(...a),
@@ -85,7 +85,7 @@ vi.mock('@panwatch/api', () => ({
   },
 }))
 
-import { useInsight } from '@panwatch/biz-ui/components/insight/context'
+import { useInsight } from '@sida/biz-ui/components/insight/context'
 import { InsightProvider, type ResourceKey } from '@/pages/workbench/InsightProvider'
 
 /** 真消费者: 读 context 渲染标的代码 —— 无 Provider 时 `useInsight()` 直接 throw。 */

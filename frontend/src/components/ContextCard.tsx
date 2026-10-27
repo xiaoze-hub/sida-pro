@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BellRing, ListPlus, Loader2, Minus, Plus, Sparkles, Wallet } from 'lucide-react'
 
-import { fetchAPI, recommendationsApi, stocksApi } from '@panwatch/api'
+import { fetchAPI, recommendationsApi, stocksApi } from '@sida/api'
 
 /**
  * 设计稿 v2.1 §13: 持仓详情跳路由决策。

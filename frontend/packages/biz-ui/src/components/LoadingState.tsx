@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /**
  * 统一加载态组件 (2026-08-21)

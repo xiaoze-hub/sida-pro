@@ -1,3 +1,45 @@
+## release: v0.86.0（全系统清除 PanWatch：包作用域 / 环境变量 / 文件名 / 数据文件 / 基础设施标识）
+
+用户要求「全系统清除，并替换 panwatch 为 sida」。这是品牌遗留债的收尾：仓库里 628 个文件
+命中 panwatch，此前只清了注释层（192 处大写）。本次做完整替换，并把「改名但不能丢数据、
+不能停服」的三处风险单独处理。
+
+### 改了什么
+
+| 类别 | 改法 | 数量 |
+|---|---|---|
+| 前端包作用域 | `@panwatch/api · base-ui · biz-ui` → `@sida/*`，含 tsconfig paths / vite alias / 1092 处 import | 402 文件 |
+| 环境变量 | `PANWATCH_*` → `SIDA_*`（25 个变量名） | 47 文件 / 159 处 |
+| 文件/模块名 | `deploy_panwatch.sh`、`panwatch_bridge.py`、`panwatch_client.py`、`panwatch-forecast.service`、`panwatch_strategies.yaml` 等 | 6 个 `git mv` |
+| 基础设施标识 | 容器 `sida`、网络 `sida-net`、卷 `sida-data/sida-tck`、`sida-postgres` | compose + 部署脚本 |
+| 数据文件 | `panwatch.db` → `sida.db`、`~/.panwatch_forecast.db` → `~/.sida_forecast.db` | 带迁移 |
+| localStorage | `panwatch_*` → `sida_*` | 启动时自动搬迁 |
+
+合计 **221 文件 / 879 处** 字面替换，`CHANGELOG.md` 与 `docs/_archive/` 保留历史原文不动。
+
+### 三处「不能直接改名」的地方
+
+1. **环境变量**：生产容器的 env 由部署脚本写入，改名无法与镜像发布原子完成，中间必然有
+   「代码读 `SIDA_*`、容器里还是 `PANWATCH_*`」的窗口。新增 `src/core/env_alias.py`，
+   在 `src/__init__.py` 导入时做**双向别名（只补缺、不覆盖）**，窗口期不会读到空配置。
+   4 例测试钉死：旧名镜像到新名、新名优先、`env()` 读新前缀、重复调用幂等。
+2. **数据文件**：`src/db/dialect.py` 发现新库不存在而旧库在 → 复制而非移动（旧库留作备份）；
+   `forecast_lib/forecast_paths.py` 同样处理预测历史库。否则表现是「预测历史突然全空」。
+3. **localStorage**：只改字面量会让老用户的主题/自选/刷新间隔/引导状态全部读不到。
+   新增 `frontend/src/lib/storage-migrate.ts`，在 `main.tsx` 任何组件读键之前搬迁一次。
+
+### 验证
+
+- `tsc --noEmit` 0 错；`eslint . --max-warnings=0` 0；`check_ui_rules.mjs` OK
+- 前端 **262 files / 1960 tests 全绿**
+- 后端 `compileall` 全通过；`test_env_alias.py` 4 passed；系统状态/权限/PDF 相关 28 passed 1 skipped
+- 部署脚本门禁 `scripts/tests/test_deploy_script.sh`：**15 passed**
+
+### 保留项（有意为之）
+
+- `CHANGELOG.md` 与 `docs/_archive/**` 里的 panwatch 是历史记录，改了等于篡改历史。
+- `src/core/env_alias.py` 里的 `PANWATCH_` 前缀常量是兼容层本体，一个发版周期后连它一起删。
+
 ## release: v0.85.0（前端依赖组升级：React 19 / Router 7 / Radix 新版 / vite 8）
 
 合并 `dependabot/npm_and_yarn/frontend/npm-deps-46a42206cb`。**这不是补丁级升级**：

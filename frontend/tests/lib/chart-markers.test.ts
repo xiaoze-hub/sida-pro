@@ -2,7 +2,7 @@
 // `Value is null` → 整页进错误边界。2026-09-12(周六)在 /quote/600519 实测到:
 // 当天公告日期 2026-09-12, 而最后一根 K 线是 2026-09-11。
 import { describe, expect, it } from 'vitest'
-import { dayKey, filterMarkersInBarsRange } from '@panwatch/biz-ui/lib/chart-markers'
+import { dayKey, filterMarkersInBarsRange } from '@sida/biz-ui/lib/chart-markers'
 
 const bd = (y: number, m: number, d: number) => ({ year: y, month: m, day: d }) as never
 /** 'YYYY-MM-DD' → 该日 00:00Z 的秒数(与组件里的 toChartTime 同一算法) */

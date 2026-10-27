@@ -12,7 +12,7 @@ import {
   type PendingAction,
 } from '@/lib/copilot/api'
 import { ChevronRight, Loader2, PanelLeftClose, PanelLeftOpen, Paperclip, Send, Sparkles, X } from 'lucide-react'
-import { chatApi } from '@panwatch/api'
+import { chatApi } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import InlineSteps from '@/components/copilot/InlineSteps'

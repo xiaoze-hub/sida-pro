@@ -15,15 +15,15 @@ from src.web.api.tradingview_webhook import TVAlertPayload, _secret_ok
 
 class TestSecret:
     def test_ok(self):
-        with patch.dict(os.environ, {"PANWATCH_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
+        with patch.dict(os.environ, {"SIDA_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
             assert _secret_ok("test-secret-123") is True
 
     def test_wrong(self):
-        with patch.dict(os.environ, {"PANWATCH_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
+        with patch.dict(os.environ, {"SIDA_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
             assert _secret_ok("wrong") is False
 
     def test_missing(self):
-        with patch.dict(os.environ, {"PANWATCH_TV_WEBHOOK_SECRET": ""}, clear=False):
+        with patch.dict(os.environ, {"SIDA_TV_WEBHOOK_SECRET": ""}, clear=False):
             assert _secret_ok(None) is False
             assert _secret_ok("") is False
 
@@ -59,7 +59,7 @@ class TestEndpoint:
         from fastapi.testclient import TestClient
         from src.web.app import app
 
-        with patch.dict(os.environ, {"PANWATCH_TV_WEBHOOK_SECRET": ""}, clear=False):
+        with patch.dict(os.environ, {"SIDA_TV_WEBHOOK_SECRET": ""}, clear=False):
             client = TestClient(app)
             r = client.post("/api/webhooks/tradingview", json={"ticker": "600519"})
             assert r.status_code == 200
@@ -70,7 +70,7 @@ class TestEndpoint:
         from fastapi.testclient import TestClient
         from src.web.app import app
 
-        with patch.dict(os.environ, {"PANWATCH_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
+        with patch.dict(os.environ, {"SIDA_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
             client = TestClient(app)
             r = client.post(
                 "/api/webhooks/tradingview",
@@ -85,7 +85,7 @@ class TestEndpoint:
         from fastapi.testclient import TestClient
         from src.web.app import app
 
-        with patch.dict(os.environ, {"PANWATCH_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
+        with patch.dict(os.environ, {"SIDA_TV_WEBHOOK_SECRET": "test-secret-123"}, clear=False):
             client = TestClient(app)
             with patch("src.core.notify_center.push_notification") as mock_push:
                 r = client.post(

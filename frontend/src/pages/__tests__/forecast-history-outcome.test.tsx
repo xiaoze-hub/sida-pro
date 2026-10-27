@@ -16,13 +16,13 @@ const api = vi.hoisted(() => ({
   stocksApi: { list: vi.fn() },
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: api.fetchAPI,
   getToken: api.getToken,
   stocksApi: api.stocksApi,
 }))
 
-vi.mock('@panwatch/base-ui/components/ui/toast', () => ({
+vi.mock('@sida/base-ui/components/ui/toast', () => ({
   useToast: () => ({ toast: vi.fn() }),
 }))
 

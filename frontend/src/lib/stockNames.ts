@@ -16,7 +16,7 @@
  *
  * 纯 TS 模块(无 React), 供组件/hook 与纯逻辑测试共用。
  */
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 /** localStorage 键(带版本号: 结构变了直接换键, 不做迁移)。 */
 const STORAGE_KEY = 'pw.stockNames.v1'

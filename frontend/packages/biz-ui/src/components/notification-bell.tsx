@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 import { useNavigate } from 'react-router-dom'
 import { Bell, CheckCheck, Trash2, CheckCircle2, AlertCircle, Info, AlertTriangle, ListChecks } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 export interface NotificationItem {
   id: number

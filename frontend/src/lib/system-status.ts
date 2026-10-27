@@ -1,4 +1,4 @@
-import type { SelfCheckItem, SystemStatusNode, SystemStatusSnapshot } from '@panwatch/api'
+import type { SelfCheckItem, SystemStatusNode, SystemStatusSnapshot } from '@sida/api'
 
 /** 只把主动探测视为连通证据；通知配置校验、未知项和历史统计不能点亮线路。 */
 export function withProbeResults(snapshot: SystemStatusSnapshot, checks: SelfCheckItem[]): SystemStatusSnapshot {

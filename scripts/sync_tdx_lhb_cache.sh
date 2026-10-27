@@ -3,7 +3,7 @@
 #
 # 背景: 龙虎榜数据在通达信客户端属"云数据"(TQ 接口取不到, 需数据权限), 但客户端
 # 打开页面后会把数据落到 C:\new_tdx64\T0002\cloud_cache\... 本脚本在 WSL 里把
-# 这份缓存拷进 panwatch 容器的数据卷(/app/data/tdx_lhb), 应用侧只读解析。
+# 这份缓存拷进 sida 容器的数据卷(/app/data/tdx_lhb), 应用侧只读解析。
 #
 # 用法(生产=本机 WSL, 需 root 写 docker volume):
 #   wsl -u root -e bash /mnt/c/Users/tianxiang/sida-work/scripts/sync_tdx_lhb_cache.sh
@@ -11,7 +11,7 @@
 set -uo pipefail
 
 SRC="${TDX_CACHE_SRC:-/mnt/c/new_tdx64/T0002/cloud_cache}"
-DST="${TDX_CACHE_DST:-/var/lib/docker/volumes/panwatch-data/_data/tdx_lhb}"
+DST="${TDX_CACHE_DST:-/var/lib/docker/volumes/sida-data/_data/tdx_lhb}"
 LOG="${TDX_SYNC_LOG:-/tmp/tdx_lhb_sync.log}"
 
 mkdir -p "$DST/list" "$DST/lhbfx" 2>/dev/null || true

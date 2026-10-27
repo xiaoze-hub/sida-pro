@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { usePausedInterval } from '@sida/base-ui'
 
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI } from '@sida/api'
 
 import type { MinutePoint, MinuteResponse, MinuteSwings } from '../lib/minute-types'
 import MinuteLwcChart from './MinuteLwcChart'

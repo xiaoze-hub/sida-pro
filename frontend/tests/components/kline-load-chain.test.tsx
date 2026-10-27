@@ -44,7 +44,7 @@ const H = vi.hoisted(() => {
   }
 })
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   API_BASE: '/api',
   fetchAPI: vi.fn((url: string, options?: unknown) => {
@@ -59,7 +59,7 @@ vi.mock('@panwatch/api', () => ({
   }),
 }))
 
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 
 /** 生成 n 根可用的日 K(字段含有限 OHLC, 过组件内的 null/NaN 过滤)。 */
 function bars(n: number, base = 10) {

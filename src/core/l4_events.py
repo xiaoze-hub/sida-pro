@@ -41,7 +41,7 @@ from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
 
-# .tck 文件定位复用 dark_split(同一套 PANWATCH_TCK_DIR 约定, 不重复实现)
+# .tck 文件定位复用 dark_split(同一套 SIDA_TCK_DIR 约定, 不重复实现)
 from src.core.dark_split import find_tck_file  # noqa: E402
 
 # --- 拆单簇阈值 ---

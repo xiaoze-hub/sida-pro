@@ -1,4 +1,4 @@
-import { type StrategySignalItem } from '@panwatch/api'
+import { type StrategySignalItem } from '@sida/api'
 import ShareCardDialog from './ShareCardDialog'
 
 interface SignalScoreShareCardProps {

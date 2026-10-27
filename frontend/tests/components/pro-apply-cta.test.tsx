@@ -18,13 +18,13 @@ const api = vi.hoisted(() => ({
   isAuthenticated: vi.fn(() => true),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   applyPro: api.applyPro,
   fetchProApplyStatus: api.fetchProApplyStatus,
   isAuthenticated: api.isAuthenticated,
 }))
 
-import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { ToastProvider } from '@sida/base-ui/components/ui/toast'
 import { ProApplyCTA } from '@/components/ProApplyCTA'
 import { NoAccessPage } from '@/components/NoAccessPage'
 

@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   getToken: () => 'test-token',
   clearToken: () => {},
   fetchAPI: (...a: unknown[]) => api.fetchAPI(...a),

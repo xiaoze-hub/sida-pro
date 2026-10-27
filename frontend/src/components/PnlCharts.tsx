@@ -1,4 +1,4 @@
-import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
+import { readStockColors, withAlpha } from '@sida/biz-ui/lib/stock-colors'
 
 import { computeDrawdownSeries, type EquityPoint } from '@/lib/drawdown'
 import { computeRealizedPnlSeries, type TradeLike } from '@/lib/trades'

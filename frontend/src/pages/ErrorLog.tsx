@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, RefreshCw, ShieldAlert } from 'lucide-react'
 
-import { logsApi, type ErrorEvent } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
+import { logsApi, type ErrorEvent } from '@sida/api'
+import { Button } from '@sida/base-ui/components/ui/button'
 
 /**
  * 错误追踪面板(KI-018, 2026-09-09)。

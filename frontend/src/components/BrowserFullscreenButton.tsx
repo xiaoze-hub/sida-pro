@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { useI18n } from '@/hooks/useI18n'
 
 /** 浏览器原生全屏，全站入口同步；页面/助手内部的展开状态与此无关。 */

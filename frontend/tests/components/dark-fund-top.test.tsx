@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ darkFundTop: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   marketScanApi: {
     darkFundTop: (...a: unknown[]) => mocks.darkFundTop(...a),
     refreshDarkFundTop: vi.fn(),

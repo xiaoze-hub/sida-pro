@@ -2,8 +2,8 @@ import { setAppearance } from '@/hooks/use-theme'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, TrendingUp, Plus, Zap } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { fetchAPI } from '@sida/api'
+import { useToast } from '@sida/base-ui/components/ui/toast'
 import { navBackState } from '@/lib/nav-back'
 
 // 设计稿 v2.0 §4.4: 全局搜索(Ctrl+K)命令面板 —— 搜股票跳行情, 搜功能跳页面。

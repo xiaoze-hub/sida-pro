@@ -1,12 +1,12 @@
 import { useState, useRef } from 'react'
-import type { AIService } from '@panwatch/api'
+import type { AIService } from '@sida/api'
 import type { Account } from './shared'
 import type { AccountForm } from './shared'
 import type { AgentConfig } from './shared'
-import type { KlineSummary } from '@panwatch/biz-ui/components/suggestion-badge'
+import type { KlineSummary } from '@sida/biz-ui/components/suggestion-badge'
 import type { MarketStatus } from './shared'
 import type { NewsItem } from './shared'
-import type { NotifyChannel } from '@panwatch/api'
+import type { NotifyChannel } from '@sida/api'
 import type { PoolSuggestion } from './shared'
 import type { PortfolioSummary } from './shared'
 import type { PositionForm } from './shared'
@@ -46,15 +46,15 @@ const [quotesLoading, setQuotesLoading] = useState(false)
 const [klineSummaries, setKlineSummaries] = useState<Record<string, KlineSummary>>({})
 
 // Auto-refresh (持久化到 localStorage)
-const [autoRefresh, setAutoRefresh] = useLocalStorage('panwatch_stocks_autoRefresh', false)
-const [refreshInterval, setRefreshInterval] = useLocalStorage('panwatch_stocks_refreshInterval', 30)
+const [autoRefresh, setAutoRefresh] = useLocalStorage('sida_stocks_autoRefresh', false)
+const [refreshInterval, setRefreshInterval] = useLocalStorage('sida_stocks_refreshInterval', 30)
 const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null)
 
 // Alerts / Scanning
 const [scanning, setScanning] = useState(false)
 
 type ViewTab = 'positions' | 'watchlist'
-const [viewTab, setViewTab] = useLocalStorage<ViewTab>('panwatch_stocks_viewTab', 'positions')
+const [viewTab, setViewTab] = useLocalStorage<ViewTab>('sida_stocks_viewTab', 'positions')
 
 // 股票 AI 建议（来自盘中监控 API）
 const [suggestions] = useState<Record<string, StockSuggestionData>>({})
@@ -142,7 +142,7 @@ const [agentResultDialog, setAgentResultDialog] = useState<{ title: string; cont
 
 // Stock list filter
 const [stockListFilter, setStockListFilter] = useState('')  // '' = 全部, 'CN' = A股, 'HK' = 港股, 'US' = 美股
-const [watchlistOnlyAlerts, setWatchlistOnlyAlerts] = useLocalStorage<boolean>('panwatch_watchlist_only_alerts', false)
+const [watchlistOnlyAlerts, setWatchlistOnlyAlerts] = useLocalStorage<boolean>('sida_watchlist_only_alerts', false)
 
 // Remove watchlist modal
 const [removeWatchStock, setRemoveWatchStock] = useState<Stock | null>(null)

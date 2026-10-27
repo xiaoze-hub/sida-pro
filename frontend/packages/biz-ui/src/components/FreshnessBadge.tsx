@@ -1,4 +1,4 @@
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 
 /**
  * 新鲜度徽章(2026-09-20 设计系统 P0: 「新鲜度视觉语法」)。

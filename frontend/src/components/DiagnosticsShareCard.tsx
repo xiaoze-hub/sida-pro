@@ -1,4 +1,4 @@
-import { type PortfolioDiagnostics } from '@panwatch/api'
+import { type PortfolioDiagnostics } from '@sida/api'
 import ShareCardDialog from './ShareCardDialog'
 
 interface DiagnosticsShareCardProps {

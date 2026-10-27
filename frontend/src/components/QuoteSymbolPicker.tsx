@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Check, ChevronsUpDown, Search } from 'lucide-react'
-import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/components/ui/popover'
+import { Button } from '@sida/base-ui/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@sida/base-ui/components/ui/popover'
 import { loadQuoteUniverse, quoteChoiceKey, quotePath, rememberQuote, type QuoteUniverse } from '@/lib/quote-universe'
 
 export function QuoteSymbolPicker({ symbol, market, type, defaultIndex }: { symbol: string; market: string; type: string; defaultIndex: boolean }) {

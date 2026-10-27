@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 
 _ZHITU_BASE = "https://api.zhituapi.com/hs"
 _ZHITU_TOKEN_DEFAULT = "E0E16C43-9272-4DAB-800C-178694F2D4B1"
-# 数据库路径(容器内 /app/data/panwatch.db;本地开发用 env 覆盖)
-_DB_PATH = os.environ.get("PANWATCH_DB", "/app/data/panwatch.db")
+# 数据库路径(容器内 /app/data/sida.db;本地开发用 env 覆盖)
+_DB_PATH = os.environ.get("SIDA_DB", "/app/data/sida.db")
 _ZHITU_TOKEN: str | None = None  # 惰性加载,支持设置页改 key 后立即生效
 
 
@@ -108,7 +108,7 @@ def pick_zhitu_token() -> str:
     try:
         import sqlite3
 
-        db_path = os.getenv("PANWATCH_DB", "/app/data/panwatch.db")
+        db_path = os.getenv("SIDA_DB", "/app/data/sida.db")
         if os.path.exists(db_path):
             conn = sqlite3.connect(db_path, timeout=3)
             try:

@@ -2,9 +2,9 @@
 TOKEN=$(cat /mnt/c/Users/tianxiang/sida-work/data/admin_token.txt | tr -d '\r\n')
 # remint token
 cp /mnt/c/Users/tianxiang/sida-work/scripts/_mint_token.py /tmp/mint_token.py
-docker cp /tmp/mint_token.py panwatch:/tmp/mint_token.py
-docker exec -u app panwatch python /tmp/mint_token.py 2>/dev/null
-docker exec panwatch cat /tmp/.admin_tok > /mnt/c/Users/tianxiang/sida-work/data/admin_token.txt
+docker cp /tmp/mint_token.py sida:/tmp/mint_token.py
+docker exec -u app sida python /tmp/mint_token.py 2>/dev/null
+docker exec sida cat /tmp/.admin_tok > /mnt/c/Users/tianxiang/sida-work/data/admin_token.txt
 TOKEN=$(cat /mnt/c/Users/tianxiang/sida-work/data/admin_token.txt | tr -d '\r\n')
 echo "=== board ==="
 curl -sS -o /tmp/tm.json -H "Authorization: Bearer $TOKEN" -w "http=%{http_code}\n" \

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import LadderBoard from '@panwatch/biz-ui/components/thememood/LadderBoard'
+import LadderBoard from '@sida/biz-ui/components/thememood/LadderBoard'
 
 afterEach(() => {
   cleanup()

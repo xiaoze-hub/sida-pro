@@ -4,7 +4,7 @@
 // change-password logic, with inconsistent copy / validation / error handling.
 // Extract to a common helper; business callers manage their own UI state.
 
-import { authApi } from '@panwatch/api'
+import { authApi } from '@sida/api'
 
 export interface ChangePasswordParams {
   oldPwd: string

@@ -1,8 +1,8 @@
 #!/bin/bash
-# 备份容器 → 用 panwatch:v0.6.6 重建(保留 env/volumes/network)
+# 备份容器 → 用 sida:v0.6.6 重建(保留 env/volumes/network)
 set -euo pipefail
-CT=panwatch
-IMG=panwatch:v0.6.6
+CT=sida
+IMG=sida:v0.6.6
 echo "=== 1) inspect current ==="
 docker inspect $CT --format 'Image={{.Config.Image}}'
 docker inspect $CT --format 'Restart={{.HostConfig.RestartPolicy.Name}}'
@@ -38,7 +38,7 @@ ls -la /root/tq_private_backup | head
 
 echo "=== 3) recreate with new image ==="
 # dump env to file
-docker inspect $CT --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/panwatch_env.txt
+docker inspect $CT --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/sida_env.txt
 # network name
 NET=$(docker inspect $CT --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' | head -1)
 echo "NET=$NET"
@@ -51,14 +51,14 @@ ENVARGS=()
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   ENVARGS+=("-e" "$line")
-done < /tmp/panwatch_env.txt
+done < /tmp/sida_env.txt
 
 docker run -d --name $CT \
   --restart=unless-stopped \
   -p 8000:8000 \
   --network "$NET" \
-  -v panwatch_data:/app/data \
-  -v panwatch_tck:/app/data/tck \
+  -v sida_data:/app/data \
+  -v sida_tck:/app/data/tck \
   "${ENVARGS[@]}" \
   $IMG
 

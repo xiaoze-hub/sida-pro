@@ -161,26 +161,26 @@ def test_queue_empty_book_gives_none_pressure():
 
 
 def test_find_img_file_no_dir_configured(monkeypatch):
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
+    monkeypatch.delenv("SIDA_IMG_DIR", raising=False)
     assert obe.find_img_file("000977") is None
 
 
 def test_find_img_file_hit(monkeypatch, tmp_path):
     (tmp_path / "sz000977_1.img").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_IMG_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_IMG_DIR", str(tmp_path))
     found = obe.find_img_file("000977")
     assert found and found.endswith("sz000977_1.img")
 
 
 def test_find_img_file_miss(monkeypatch, tmp_path):
     (tmp_path / "sz600000_1.img").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_IMG_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_IMG_DIR", str(tmp_path))
     assert obe.find_img_file("000977") is None
 
 
 def test_find_img_file_ignores_non_img(monkeypatch, tmp_path):
     (tmp_path / "000977.dat").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_IMG_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_IMG_DIR", str(tmp_path))
     assert obe.find_img_file("000977") is None
 
 
@@ -209,7 +209,7 @@ def test_summary_orderbook_prefers_img(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=120: _bars(40))
     (tmp_path / "sz000977_a.img").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_IMG_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDA_IMG_DIR", str(tmp_path))
     import src.core.tdx_img_parser as tip
     monkeypatch.setattr(tip, "frames_from_img",
                         lambda p: [_frame(bid_vols=[90000] * 5, ask_vols=[10000] * 5)])
@@ -228,7 +228,7 @@ def test_summary_orderbook_falls_back_to_thsdk(monkeypatch):
 
     monkeypatch.setattr("src.core.quote_snapshots.in_trading_window", lambda *a, **k: True)
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=120: _bars(40))
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
+    monkeypatch.delenv("SIDA_IMG_DIR", raising=False)
     monkeypatch.setattr(obe, "fetch_snapshot", lambda code: obe.img_frame_to_snapshot(
         _frame(bid_vols=[10000] * 5, ask_vols=[90000] * 5), ts=0.0))
 
@@ -245,7 +245,7 @@ def test_summary_orderbook_none_when_all_fail(monkeypatch):
 
     monkeypatch.setattr("src.core.quote_snapshots.in_trading_window", lambda *a, **k: True)
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=120: _bars(40))
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
+    monkeypatch.delenv("SIDA_IMG_DIR", raising=False)
     monkeypatch.setattr(obe, "fetch_snapshot",
                         lambda code: (_ for _ in ()).throw(RuntimeError("thsdk 不通")))
 

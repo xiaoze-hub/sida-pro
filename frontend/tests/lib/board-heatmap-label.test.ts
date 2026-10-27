@@ -16,7 +16,7 @@ import {
   toTreemapCells,
   type BoardHeatItem,
   type HeatPalette,
-} from '@panwatch/biz-ui/lib/board-heatmap'
+} from '@sida/biz-ui/lib/board-heatmap'
 
 const PALETTE: HeatPalette = {
   up: '#E53935',

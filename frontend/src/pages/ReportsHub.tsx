@@ -4,7 +4,7 @@ import { Clock, FileText, Loader2, Play } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
-import { premarketApi, type PremarketRunResponse } from '@panwatch/api'
+import { premarketApi, type PremarketRunResponse } from '@sida/api'
 
 /**
  * 投研枢纽页(设计稿 v2.0 §4.3「历史并入报告」):「分析」+「底稿归档」两 Tab。

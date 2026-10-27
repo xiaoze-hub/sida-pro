@@ -12,7 +12,7 @@
  *
  * 视觉：hairline 分隔、无卡片、无阴影；买红卖绿（涨停=红）；数字 tabular-nums。
  */
-import type { ReplayTreeLevel } from '@panwatch/api'
+import type { ReplayTreeLevel } from '@sida/api'
 
 export default function PromotionFunnel({
   levels,

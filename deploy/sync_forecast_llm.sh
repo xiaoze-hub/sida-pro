@@ -3,22 +3,22 @@
 # 同步 SIDA 默认 AI 模型 → 预测引擎配置
 # 用途: 预测引擎的 LLM 情绪打分跟随 SIDA 设置页的默认模型
 # 用法: bash sync_forecast_llm.sh
-# 效果: 读 SIDA providers API(默认模型) → 写 ~/.panwatch_forecast.env
+# 效果: 读 SIDA providers API(默认模型) → 写 ~/.sida_forecast.env
 #       (LLM_BASE_URL / LLM_MODEL / LLM_API_KEY)
 # ============================================================
 set -e
 
-PANWATCH_URL="${PANWATCH_URL:-http://localhost:8000}"
+SIDA_URL="${SIDA_URL:-http://localhost:8000}"
 USERNAME="${AUTH_USERNAME:-admin}"
 PASSWORD="${AUTH_PASSWORD:-}"
 if [ -z "$PASSWORD" ]; then
   echo "错误: 请设置 AUTH_PASSWORD 后再同步预测引擎配置" >&2
   exit 1
 fi
-ENV_FILE="${ENV_FILE:-$HOME/.panwatch_forecast.env}"
+ENV_FILE="${ENV_FILE:-$HOME/.sida_forecast.env}"
 
 echo "▶ 登录 SIDA..."
-TOKEN=$(curl -s -X POST "$PANWATCH_URL/api/auth/login" \
+TOKEN=$(curl -s -X POST "$SIDA_URL/api/auth/login" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | \
   python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["token"])' 2>/dev/null)
@@ -29,7 +29,7 @@ if [ -z "$TOKEN" ]; then
 fi
 
 echo "▶ 拉取默认 AI 模型..."
-python3 - "$TOKEN" "$PANWATCH_URL" <<'PYEOF'
+python3 - "$TOKEN" "$SIDA_URL" <<'PYEOF'
 import sys, json, urllib.request, os
 
 token, base = sys.argv[1], sys.argv[2]
@@ -53,7 +53,7 @@ if not found:
     print("❌ 未找到默认模型")
     sys.exit(1)
 
-env_file = os.path.expanduser("~/.panwatch_forecast.env")
+env_file = os.path.expanduser("~/.sida_forecast.env")
 lines = []
 if os.path.exists(env_file):
     lines = [l for l in open(env_file) if not l.strip().startswith("LLM_")]

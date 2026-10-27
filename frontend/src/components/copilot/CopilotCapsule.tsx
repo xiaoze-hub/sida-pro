@@ -11,7 +11,7 @@ import {
   QUICK_QUESTIONS,
 } from '@/lib/copilot/copy'
 import { registerCapsulePresence } from '@/lib/copilot/capsule-presence'
-import { useTabActive } from '@panwatch/base-ui'
+import { useTabActive } from '@sida/base-ui'
 import { toneBar, toneMeta } from '@/lib/copilot/tone'
 import type { CopilotBrief } from '@/lib/copilot/types'
 
@@ -87,7 +87,7 @@ function snapToEdge(pos: CapsulePosition, el: HTMLElement | null): CapsulePositi
  *
  * 只做两件事，绝不新写一套聊天：
  *   ① 轻量展示「当前标的 tone + 一句话定性」；
- *   ② 点击时派发 `panwatch-open-chat`，由既有 `ChatWidget` 建带 `initial_context` 的新会话
+ *   ② 点击时派发 `sida-open-chat`，由既有 `ChatWidget` 建带 `initial_context` 的新会话
  *      （ChatWidget.tsx 已有监听，零新增通道 / 零 SSE 重复实现）。
  *
  * 入口唯一性：胶囊挂载即向 `capsule-presence` 登记，ChatWidget 据此**隐藏自己的圆形 FAB**
@@ -262,7 +262,7 @@ export function CopilotCapsule({
 
   const open = () => {
     window.dispatchEvent(
-      new CustomEvent('panwatch-open-chat', {
+      new CustomEvent('sida-open-chat', {
         detail: {
           symbol,
           market,

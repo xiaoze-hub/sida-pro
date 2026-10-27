@@ -1,9 +1,9 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { parseServerTime } from '@/lib/utils'
-import { SuggestionBadge, type KlineSummary, type SuggestionInfo } from '@panwatch/biz-ui/components/suggestion-badge'
-import { KlineIndicators } from '@panwatch/biz-ui/components/kline-indicators'
-import { TechnicalBadge } from '@panwatch/biz-ui/components/technical-badge'
+import { SuggestionBadge, type KlineSummary, type SuggestionInfo } from '@sida/biz-ui/components/suggestion-badge'
+import { KlineIndicators } from '@sida/biz-ui/components/kline-indicators'
+import { TechnicalBadge } from '@sida/biz-ui/components/technical-badge'
 
 export function formatNumber(value: number | null | undefined, digits = 2): string {
   if (value == null) return '--'

@@ -6,11 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...a: unknown[]) => mocks.fetchAPI(...a),
 }))
 
-import WencaiPanel from '@panwatch/biz-ui/components/WencaiPanel'
+import WencaiPanel from '@sida/biz-ui/components/WencaiPanel'
 
 afterEach(() => {
   cleanup()

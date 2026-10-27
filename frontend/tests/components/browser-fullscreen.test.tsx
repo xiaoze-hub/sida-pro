@@ -5,7 +5,7 @@ import BrowserFullscreenButton from '@/components/BrowserFullscreenButton'
 import { I18nProvider } from '@/hooks/useI18n'
 
 const { toast } = vi.hoisted(() => ({ toast: vi.fn() }))
-vi.mock('@panwatch/base-ui/components/ui/toast', () => ({ useToast: () => ({ toast }) }))
+vi.mock('@sida/base-ui/components/ui/toast', () => ({ useToast: () => ({ toast }) }))
 let fullscreen: Element | null = null
 const originals = [
   [document, 'fullscreenEnabled'], [document, 'fullscreenElement'], [document, 'exitFullscreen'],

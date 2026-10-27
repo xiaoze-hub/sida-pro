@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TabActiveProvider } from '@panwatch/base-ui'
+import { TabActiveProvider } from '@sida/base-ui'
 
 const mocks = vi.hoisted(() => ({ play: vi.fn(), resume: vi.fn(), pause: vi.fn(), speed: vi.fn(), stop: vi.fn(), destroy: vi.fn(), load: vi.fn() }))
 vi.mock('@/lib/assistant-avatar', async importOriginal => ({

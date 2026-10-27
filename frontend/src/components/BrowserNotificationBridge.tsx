@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchAPI } from '@panwatch/api'
-import { usePausedInterval } from '@panwatch/base-ui'
+import { fetchAPI } from '@sida/api'
+import { usePausedInterval } from '@sida/base-ui'
 import {
   BROWSER_NOTIFICATIONS_CHANGED_EVENT,
   browserNotificationsEnabled,

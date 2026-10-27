@@ -13,7 +13,7 @@
  *   - 阈值标「推断值」：TQ 不返回档位阈值，界面上不能说成精确分档
  */
 import { useMemo } from 'react'
-import { cn } from '@panwatch/base-ui'
+import { cn } from '@sida/base-ui'
 import CaliberBadge from './CaliberBadge'
 // R6：项目已有「不用 toFixed」的金额格式化（负值也能分档），直接复用，不在这里再写一套
 import { fmtSignedAmount } from '../lib/ladder-format'

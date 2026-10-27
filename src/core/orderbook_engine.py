@@ -298,12 +298,12 @@ def to_ths_code(symbol: str) -> str | None:
 
 
 def find_img_file(symbol: str, market: str = "CN") -> str | None:
-    """按代码在 PANWATCH_IMG_DIR 下找对应 .img 文件。
+    """按代码在 SIDA_IMG_DIR 下找对应 .img 文件。
 
     约定文件名包含 6 位代码(如 `sz000977*.img` / `000977*.img`)。
     目录未配置或文件不存在 → None(调用方显式标"无数据")。
     """
-    base = (os.environ.get("PANWATCH_IMG_DIR") or "").strip()
+    base = (os.environ.get("SIDA_IMG_DIR") or "").strip()
     if not base or not os.path.isdir(base):
         return None
     code = (symbol or "").strip()

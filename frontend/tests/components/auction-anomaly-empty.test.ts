@@ -1,7 +1,7 @@
 /**
  * L2-C 竞价池空态钉子（2026-10-24）
  *
- * 组件直接渲染要拖 `@panwatch/api` + toast provider，本次改动是**空态结构**约束，
+ * 组件直接渲染要拖 `@sida/api` + toast provider，本次改动是**空态结构**约束，
  * 用源码断言锁住（与 `nightly-batch-wiring.test.ts` 同手法）。
  *
  * 锁三件事：

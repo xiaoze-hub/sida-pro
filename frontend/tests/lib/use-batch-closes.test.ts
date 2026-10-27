@@ -8,7 +8,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const fetchAPIMock = vi.fn()
-vi.mock('@panwatch/api', () => ({ fetchAPI: (...a: unknown[]) => fetchAPIMock(...a) }))
+vi.mock('@sida/api', () => ({ fetchAPI: (...a: unknown[]) => fetchAPIMock(...a) }))
 
 import { useBatchCloses } from '@/hooks/useBatchCloses'
 

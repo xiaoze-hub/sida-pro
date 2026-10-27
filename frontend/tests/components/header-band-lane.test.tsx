@@ -9,7 +9,7 @@
 //  ② 摘要走**慢车道**: 错峰(首帧之后才发)+ 显式 45s 超时(默认 20s 会在冷启动窗口提前掐断);
 //  ③ 摘要失败 → 显式降级(不出建议条), 不编造。
 //
-// 真组件 + mock 网络层(`@panwatch/api`), 组件取数/渲染走真实代码。
+// 真组件 + mock 网络层(`@sida/api`), 组件取数/渲染走真实代码。
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   klineSummary: vi.fn(),
 }))
 
-vi.mock('@panwatch/api', () => ({
+vi.mock('@sida/api', () => ({
   fetchAPI: (...args: unknown[]) => mocks.fetchAPI(...args),
   insightApi: {
     quote: (...args: unknown[]) => mocks.quote(...args),
@@ -29,7 +29,7 @@ vi.mock('@panwatch/api', () => ({
   },
 }))
 
-import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import HeaderBand from '@sida/biz-ui/components/workbench/HeaderBand'
 
 type Deferred = { promise: Promise<unknown>; resolve: (v: unknown) => void; reject: (e: unknown) => void }
 function defer(): Deferred {
