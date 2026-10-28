@@ -35,6 +35,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_
 
 from src.web.api._scope import allow_cross_user
 from src.web.api.auth import get_current_user
@@ -111,16 +112,33 @@ def resolve_recipe_id(raw: str | None) -> str | None:
     return rec.id
 
 
-def _recorded_recipe(run_id: str | None) -> str | None:
-    """读 run 行上记录的 recipe（配方的唯一事实源）。行缺失/无值返回 None。"""
-    if not run_id:
+def _recorded_recipe(run_id: str | None, user_id: str | None) -> str | None:
+    """读 run 行上记录的 recipe（配方的唯一事实源）。行缺失/**归属不符**/无值返回 None。
+
+    **为什么必须 `run_id` + `user_id` 双重过滤**：行上的 recipe 不是备注，是**执行凭据**
+    —— 工具白名单、`max_tool_calls`、prompt_fragment 全由它决定。只按 run_id 取，
+    等于任何人拿到别人的 run_id 就能把自己这一轮套上别人的配方（自己的会话被别人的
+    约束锁住，治理页 `by_recipe` 还会把这轮记到别人的配方名下）。
+
+    归属不符与「这行没记录」同办（None，不抛错、不提示他人 run 的存在性）：
+    这是读口径那条边界在执行侧的对应物。无主（NULL / 空串 / 空白）行同样不回落配方
+    —— 审计读是**看历史**，借配方是**拿它去执行**，拿不准归属时宁可按裸 chat 跑。
+    """
+    if not run_id or not user_id:
         return None
     from src.db.models import CopilotRun
     from src.db.session import SessionLocal
 
     db = SessionLocal()
     try:
-        row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+        row = (
+            db.query(CopilotRun)
+            .filter(
+                CopilotRun.run_id == run_id,
+                CopilotRun.user_id == str(user_id),
+            )
+            .first()
+        )
         raw = getattr(row, "recipe", None) if row is not None else None
     finally:
         db.close()
@@ -200,6 +218,27 @@ def run_cancel_scope_ok(row: Any, user: Any) -> bool:
     return owner_id == str(getattr(user, "id", "") or "")
 
 
+def run_read_scope_filter(model: Any, user: Any) -> Any:
+    """`run_read_scope_ok` 的 SQL 表达（同一条边界，写进 where 而不是只在内存里判）。
+
+    **为什么还要在 SQL 写一遍**：只把整行取回内存再判归属，判据是对的，但越权行
+    已经进了进程 —— question / status / 工具步骤全被读出来，缺的只是一次 `if`。
+    任何把 `_load()` 的返回值当成"已经过关"的后来者（或异常的日志/序列化路径）
+    都会把它漏出去。边界写进 `where` 之后，他人的行根本不会被读出来。
+
+    **口径必须与判据一致**：`_run_owner_id` 把 NULL / 空串 / 空白都算无主，这里
+    `trim(user_id) == ''` 照抄；无主行只对平台 owner 开放（审计读）。
+
+    **两道都不能省**：SQL 防越权行落进内存，`run_read_scope_ok` 防将来这个 where
+    被谁改宽 —— 宽了立刻有断言红，而不是悄悄变成越权读。
+    """
+    uid = str(getattr(user, "id", "") or "")
+    cond = model.user_id == uid
+    if _is_platform_owner(user):
+        cond = or_(cond, model.user_id.is_(None), func.trim(model.user_id) == "")
+    return cond
+
+
 # ── 执行体（可被测试替换）────────────────────────────────────────────────
 async def run_copilot_question(
     *, user_id: str, conversation_id: int | None, question: str,
@@ -224,7 +263,7 @@ async def run_copilot_question(
     from src.db.session import SessionLocal
 
     # 归一 + 校验放在开库之前：未知配方不该建会话、不该烧配额
-    recipe_id = (recipe or "").strip() or _recorded_recipe(run_id) or None
+    recipe_id = (recipe or "").strip() or _recorded_recipe(run_id, user_id) or None
     if recipe_id is not None:
         from src.harness.recipes import get_recipe
 
@@ -519,7 +558,16 @@ async def run_events(run_id: str, user=Depends(get_current_user)):
     def _load():
         db = SessionLocal()
         try:
-            row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+            # 归属写进 where（`run_read_scope_filter`），越权行不落进内存；
+            # `run_read_scope_ok` 是同一判据的第二道（SQL 被改宽时立刻红）。
+            row = (
+                db.query(CopilotRun)
+                .filter(
+                    CopilotRun.run_id == run_id,
+                    run_read_scope_filter(CopilotRun, user),
+                )
+                .first()
+            )
             if row is None:
                 return None, []
             if not run_read_scope_ok(row, user):
@@ -596,7 +644,16 @@ async def cancel_run(run_id: str, user=Depends(get_current_user)):
 
     db = SessionLocal()
     try:
-        row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+        # 写口径在 SQL 里就是「只认本人」：他人的行 / 无主的行都取不到，
+        # default deny 不靠事后判断兜底（`run_cancel_scope_ok` 是第二道断言）。
+        row = (
+            db.query(CopilotRun)
+            .filter(
+                CopilotRun.run_id == run_id,
+                CopilotRun.user_id == str(getattr(user, "id", "") or ""),
+            )
+            .first()
+        )
         if row is None or not run_cancel_scope_ok(row, user):
             raise HTTPException(404, "run 不存在")
         if row.status in ("ok", "degraded", "succeeded"):

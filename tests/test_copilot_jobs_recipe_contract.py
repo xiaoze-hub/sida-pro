@@ -425,3 +425,61 @@ class _Body:
         self.mentions = mentions or []
         self.stock_symbol = stock_symbol
         self.stock_market = stock_market
+
+
+# ── H. 归属：别人的 run 行不能变成我的配方凭据（跨账号 recipe 错绑）──────────
+def test_不许借用他人run行上记录的配方(Session, monkeypatch):
+    """行上的 `recipe` 不只是一条备注，它是**执行凭据**：工具白名单、max_tool_calls、
+    prompt_fragment 全由它决定（见 `harness.context.inject_recipe`）。
+
+    只按 `run_id` 取这条记录，等于任何人拿到别人的 run_id 就能把自己的这一轮套上
+    别人的配方：自己的会话被别人的约束锁住，治理页 `by_recipe` 还会把这轮记在
+    别人的配方名下。归属不符必须与「这行没有记录」同办（None），不许借用。
+    """
+    from src.web.api import chat as chat_api
+
+    _seed_user(Session, "u1")
+    _seed_user(Session, "u2")
+    _mk_run(Session, "r-belongs-to-u2", recipe=RECIPE, user_id="u2")
+
+    seen: dict = {}
+
+    async def fake_send(*, conversation_id, body, user):
+        seen["body"] = body
+        return None
+
+    monkeypatch.setattr(chat_api, "send_message", fake_send)
+
+    asyncio.run(copilot_jobs.run_copilot_question(
+        user_id="u1", conversation_id=None, question="我只是拿到了一个 run_id",
+        run_id="r-belongs-to-u2",
+    ))
+
+    body = seen["body"]
+    agents = [m.value for m in (getattr(body, "mentions", None) or [])
+              if (getattr(m, "type", "") or "").lower() == "agent"]
+    assert agents == [], (
+        f"u1 借用了 u2 的 run 行配方 {agents}：跨账号配方错绑（recipe 是执行凭据，"
+        "不是展示字段）"
+    )
+    assert _row(Session, "r-belongs-to-u2").recipe == RECIPE, "读别人的行不许顺手改写它"
+
+
+def test_自己的run行配方照常回落(Session):
+    """防过度收紧：自己行的配方必须照旧回落到执行体（`skills_gateway` 入口靠它）。"""
+    _seed_user(Session, "u1")
+    _mk_run(Session, "r-mine", recipe=RECIPE, user_id="u1")
+    assert copilot_jobs._recorded_recipe("r-mine", "u1") == RECIPE
+
+
+def test_无主run行不回落配方(Session):
+    """NULL/空串归属的行没有可验证的归属人 —— 与读口径同一条边界：不借凭据。
+
+    与「NULL 可审计读」的区别：审计读是**看历史**，借配方是**拿它去执行**；
+    拿不准归属时执行侧 default deny，宁可按裸 chat 跑。
+    """
+    _seed_user(Session, "u1")
+    _mk_run(Session, "r-legacy", recipe=RECIPE, user_id=None)
+    _mk_run(Session, "r-empty", recipe=RECIPE, user_id="")
+    assert copilot_jobs._recorded_recipe("r-legacy", "u1") is None
+    assert copilot_jobs._recorded_recipe("r-empty", "u1") is None

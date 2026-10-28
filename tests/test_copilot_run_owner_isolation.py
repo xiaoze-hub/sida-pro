@@ -262,3 +262,13 @@ def test_owner也不能读他人有主run(env):
     assert client.get("/api/copilot/runs/r-other/governance").status_code == 404
     assert client.get("/api/copilot/parallel/r-other").status_code == 404
     assert client.get("/api/copilot/runs/r-other/events").status_code == 404
+
+
+# ── 收窄后仍不许误伤：owner 的「无主可审计读」在事件流上照旧 ─────────────
+def test_NULL归属run_owner可读事件流(env):
+    """SQL 层收窄（把归属写进 where）之后，owner 的无主审计读必须还在。"""
+    client, _ = env
+    client.act_as("owner-1", role="owner")
+    resp = client.get("/api/copilot/runs/r-legacy/events")
+    assert resp.status_code == 200
+    assert "event: status" in resp.text and "get_kline" in resp.text
