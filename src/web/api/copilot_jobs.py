@@ -78,42 +78,161 @@ class SubmitRunBody(BaseModel):
     recipe: str | None = Field(default=None, max_length=48)
 
 
+# ── 配方（recipe）：记录 ≡ 执行 ────────────────────────────────────────────
+# 背景（2026-10-28 复核）：`SubmitRunBody.recipe` 原先只写进 `copilot_runs.recipe`，
+# 执行链一次都不往下传 —— `_execute` 签名里没有 recipe，`run_copilot_question`
+# 只构造 `SendMessageBody(content=question)`，没有 agent mention，于是
+# `harness.context.apply_mentions` / `inject_recipe` 永远不触发：工具白名单、
+# prompt_fragment、max_tool_calls 全部落空，而治理页 `by_recipe` 照旧计数。
+# 也就是「记录说跑了配方、实际跑裸 chat」。两件事一起收口：
+#   1. 入参必须能解析成**真实存在**的配方 id（未知值提交即拒绝，不落库不执行）；
+#   2. 落库的值 == 实际生效的值（同一份归一后的 id 传给执行体），缺省仍然裸 chat。
+
+
+def resolve_recipe_id(raw: str | None) -> str | None:
+    """把入参 recipe 归一成真实存在的配方 id；未知值抛 400（提交即拒绝）。
+
+    归一规则：去空白；空/纯空白视作「不指定配方」（None，保持默认路径）。
+    返回的是 `Recipe.id` 而不是入参原文 —— 文件名与 YAML `id:` 可能不一致，
+    只有 `Recipe.id` 才是 `apply_mentions` 真正能 load 到的那个键。
+    """
+    if raw is None:
+        return None
+    rid = raw.strip()
+    if not rid:
+        return None
+    from src.harness.recipes import load_recipes
+
+    recipes = load_recipes()
+    rec = recipes.get(rid)
+    if rec is None:
+        known = "、".join(sorted(recipes)) or "（配方目录为空）"
+        raise HTTPException(400, f"未知配方 {rid!r}：不存在的配方不能记账执行。可用：{known}")
+    return rec.id
+
+
+def _recorded_recipe(run_id: str | None) -> str | None:
+    """读 run 行上记录的 recipe（配方的唯一事实源）。行缺失/无值返回 None。"""
+    if not run_id:
+        return None
+    from src.db.models import CopilotRun
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+        raw = getattr(row, "recipe", None) if row is not None else None
+    finally:
+        db.close()
+    return (str(raw).strip() or None) if raw is not None else None
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def run_user_scope_ok(row: Any, user: Any) -> bool:
-    """run 归属判定（读 + 取消共用）：只有归属人能碰；NULL/空串归属仅 owner 可读。
+def _run_owner_id(row: Any) -> str | None:
+    """取 run 的归属人 id；NULL / 空串 / 纯空白一律视作**无主**（返回 None）。
+
+    空串与 NULL 同办：falsy 不等于「无主可放行」，脏数据不能变成后门。
+    """
+    raw = getattr(row, "user_id", None)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def _is_platform_owner(user: Any) -> bool:
+    """平台 owner（审计角色）。严格精确匹配，不做大小写/前缀猜测 ——
+
+    判不准 owner 时宁可**少放行**：无主数据的读权限是可审计的额外授权，
+    不是默认权利，拼错的角色名（"Owner"/"owner "）不该把旧轨迹摊给一个普通账号。
+    """
+    return (getattr(user, "role", "") or "").strip() == "owner"
+
+
+def run_read_scope_ok(row: Any, user: Any) -> bool:
+    """**读**归属判定：有主 → 仅归属人；无主 → 仅平台 owner（审计只读）。
 
     **修的是什么**：这几处原写作 `row.user_id and row.user_id != user.id` ——
     `user_id` 为 NULL 时直接短路放行，等于任何登录账号拿到 run_id 就能读别人的
-    历史轨迹（question/status/工具步骤），`POST /runs/{id}/cancel` 还能改写它的状态。
+    历史轨迹（question/status/工具步骤）。
 
     **为什么会有 NULL**：`copilot_runs.user_id` 是 2026-10-20 才补的列
     （`src/web/migrations.py::_migrate_copilot_run_user_id`），之前落库的轨迹全是 NULL。
     这批合法旧数据**不回填归属**（不去猜是谁问的），只按 `role == "owner"`
-    放给平台 owner 做审计读 —— 与 `_scope.writable`（NULL 共享项仅 owner 可动）同口径。
+    放给平台 owner 做审计读。
 
-    空串与 NULL 同办：falsy 不等于"无主可放行"，脏数据不能变成后门。
+    ⚠️ 本函数**只许用于读**（详情/治理/并行/事件流）。写路径一律用
+    `run_cancel_scope_ok` —— 无主的读权限不等于无主的写权限（见该函数说明）。
     """
-    owner_id = getattr(row, "user_id", None)
-    if owner_id is None or str(owner_id).strip() == "":
-        return (getattr(user, "role", "") or "") == "owner"
-    return str(owner_id) == str(getattr(user, "id", "") or "")
+    owner_id = _run_owner_id(row)
+    if owner_id is None:
+        return _is_platform_owner(user)
+    return owner_id == str(getattr(user, "id", "") or "")
+
+
+def run_user_scope_ok(row: Any, user: Any) -> bool:
+    """历史名，等价于 `run_read_scope_ok`（`copilot_workbench` 两个只读端点仍在用）。
+
+    保留只为不回改其他文件；**新代码不要用这个名字** —— 它读不出「读还是写」，
+    正是这个歧义让 cancel 误用了读口径、owner 能把无主 run 取消掉。
+    """
+    return run_read_scope_ok(row, user)
+
+
+def run_cancel_scope_ok(row: Any, user: Any) -> bool:
+    """**写**归属判定（取消）：有主 → 仅归属人；**无主 → 一律拒绝（default deny）**。
+
+    **为什么不能复用读口径**：读口径给 owner 开了「无主可审计读」，一旦被写路径复用，
+    `POST /runs/{id}/cancel` 就等于让 owner 能改写无主 run 的状态 —— 那是**改历史**，
+    不是看历史。读与写是两种授权，共用一个判据迟早会漏。
+
+    **为什么不给 owner 也开无主写**：owner 角色权限本身无法在 run 行上被严格确认
+    （角色来自当前会话，与这条旧 run 没有任何可验证的关联）。既然确认不了「谁有权
+    动这条无主 run」，默认拒绝就是唯一诚实的答案；无主 run 若卡在 running，由
+    `copilot_runtime.reap_stale_runs()` 按心跳收尸，不靠人来取消。
+    """
+    owner_id = _run_owner_id(row)
+    if owner_id is None:
+        return False
+    return owner_id == str(getattr(user, "id", "") or "")
 
 
 # ── 执行体（可被测试替换）────────────────────────────────────────────────
 async def run_copilot_question(
-    *, user_id: str, conversation_id: int | None, question: str, run_id: str | None = None
+    *, user_id: str, conversation_id: int | None, question: str,
+    run_id: str | None = None, recipe: str | None = None,
 ) -> int:
     """真正干活：建/复用会话并发问。返回 conversation_id。
 
     **单独成函数是为了可测**：单测替换它就不需要真 LLM，也不会污染配额。
+
+    **配方怎么生效**：把 recipe 转成 `Mention(type="agent")` 塞进 `SendMessageBody`
+    —— 这是 chat.py 既有通路（`harness.context.apply_mentions` → `inject_recipe`
+    → `route_for_request(forced=...)`），不需要改 chat.py、也不复制一份管线。
+    显式入参优先；没传时回落到 run 行上记录的 recipe（`skills_gateway` 的任务入口
+    只写行不传参，事实源必须是同一处，否则两条入口又会各说各话）。
+
+    **未知配方不做静默降级**：行里记着一个已经不存在的配方时直接失败 ——
+    「记录说跑了配方、实际裸 chat」正是本次要消掉的偏差，宁可 failed 也不许悄悄退化。
     """
     from src.harness.trace import EXTERNAL_RUN_ID
     from src.web.api import chat as chat_api
     from src.db.models import ChatConversation, User
     from src.db.session import SessionLocal
+
+    # 归一 + 校验放在开库之前：未知配方不该建会话、不该烧配额
+    recipe_id = (recipe or "").strip() or _recorded_recipe(run_id) or None
+    if recipe_id is not None:
+        from src.harness.recipes import get_recipe
+
+        if get_recipe(recipe_id) is None:
+            raise RuntimeError(
+                f"配方 {recipe_id!r} 不存在（run {run_id or '-'} 记录了这个配方）；"
+                "不允许退化成不带约束的裸 chat，请修正或清空 run.recipe"
+            )
 
     # ⚠️ 2026-10-25 生产事故：一开始这里在调用前就 db.close()，把**脱离 session 的 User**
     # 传给了 send_message，它一碰懒加载属性就 DetachedInstanceError（run 直接 failed）。
@@ -132,7 +251,13 @@ async def run_copilot_question(
         else:
             cid = conversation_id
 
-        body = chat_api.SendMessageBody(content=question)
+        body_kwargs: dict[str, Any] = {"content": question}
+        if recipe_id is not None:
+            # 只带 agent mention：正文一字不改（用户原话是事实，配方是约束）
+            from src.harness.context import Mention
+
+            body_kwargs["mentions"] = [Mention(type="agent", value=recipe_id)]
+        body = chat_api.SendMessageBody(**body_kwargs)
         # ⚠️ 必须把已有 run_id 传进去复用：`_run_tool_loop` 自己会 start_copilot_run，
         # 不复用就会变成"一次执行两条轨迹"（一条空壳 + 一条真轨迹），
         # 指标全部重复计数（2026-10-25 生产实测）。
@@ -267,7 +392,10 @@ async def _budget_watch(run_id: str, user_id: str, target: asyncio.Task):
     return None
 
 
-async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, question: str) -> None:
+async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, question: str,
+                   recipe: str | None = None) -> None:
+    """执行体。`recipe` 透传给执行函数；None 时由 `run_copilot_question` 回落到
+    run 行上的记录（`skills_gateway` 的任务入口不传参，不能因此丢配方）。"""
     stop = asyncio.Event()
     hb = asyncio.create_task(_heartbeat_loop(run_id, stop))
     t0 = datetime.utcnow()
@@ -277,7 +405,7 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
             inner = asyncio.create_task(asyncio.wait_for(
                 run_copilot_question(
                     user_id=user_id, conversation_id=conversation_id,
-                    question=question, run_id=run_id,
+                    question=question, run_id=run_id, recipe=recipe,
                 ),
                 timeout=RUN_TIMEOUT_S,
             ))
@@ -340,10 +468,16 @@ async def submit_run(body: SubmitRunBody, user=Depends(get_current_user)):
 
     提交前先过**单用户并发上限**（P1-1.2）：超了 429 并写审计，不排队、不静默降级 ——
     排队会让用户以为在跑，实际等到超时更糟。
+
+    `recipe` 先归一成**真实存在**的配方 id 再落库（未知值 400，不写库不执行），
+    并把同一个 id 传给执行体 —— 同一条 run 的「记录」与「实际生效」必须是同一个值。
     """
     from src.core import copilot_quota as quota
     from src.db.models import CopilotRun
     from src.db.session import SessionLocal
+
+    # 未知配方在这里就拒（早于限流与落库）：400 且不留半条 run
+    recipe_id = resolve_recipe_id(body.recipe)
 
     run_id = str(uuid.uuid4())
     db = SessionLocal()
@@ -353,7 +487,7 @@ async def submit_run(body: SubmitRunBody, user=Depends(get_current_user)):
             run_id=run_id,
             conversation_id=body.conversation_id,
             user_id=user.id,
-            recipe=body.recipe,
+            recipe=recipe_id,
             question=body.question[:500],
             status="queued",
             tool_calls=0,
@@ -368,7 +502,8 @@ async def submit_run(body: SubmitRunBody, user=Depends(get_current_user)):
         db.close()
 
     task = asyncio.create_task(_execute(
-        run_id, user_id=user.id, conversation_id=body.conversation_id, question=body.question,
+        run_id, user_id=user.id, conversation_id=body.conversation_id,
+        question=body.question, recipe=recipe_id,
     ))
     _TASKS[run_id] = task
     return {"run_id": run_id, "status": "queued", "events": f"/api/copilot/runs/{run_id}/events"}
@@ -387,7 +522,7 @@ async def run_events(run_id: str, user=Depends(get_current_user)):
             row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
             if row is None:
                 return None, []
-            if not run_user_scope_ok(row, user):
+            if not run_read_scope_ok(row, user):
                 return "forbidden", []
             steps = (
                 db.query(CopilotStep)
@@ -450,13 +585,19 @@ async def run_events(run_id: str, user=Depends(get_current_user)):
 
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(run_id: str, user=Depends(get_current_user)):
+    """取消 = **写**：只认 run 的归属人，无主 run 一律拒绝（`run_cancel_scope_ok`）。
+
+    这里刻意**不用**读口径 `run_read_scope_ok` —— 读口径给 owner 开了无主审计读，
+    复用到写路径就等于 owner 能改写无主旧 run 的状态。判不准谁有权动无主 run 时
+    默认拒绝；卡住的无主 run 交给 `copilot_runtime.reap_stale_runs()` 按心跳收尸。
+    """
     from src.db.models import CopilotRun
     from src.db.session import SessionLocal
 
     db = SessionLocal()
     try:
         row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
-        if row is None or not run_user_scope_ok(row, user):
+        if row is None or not run_cancel_scope_ok(row, user):
             raise HTTPException(404, "run 不存在")
         if row.status in ("ok", "degraded", "succeeded"):
             raise HTTPException(409, "该 run 已完成，无法取消")

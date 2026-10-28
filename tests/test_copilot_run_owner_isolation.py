@@ -199,10 +199,60 @@ def test_读NULL归属run_不得顺带回填归属(env):
     client, Session = env
     client.get("/api/copilot/runs/r-legacy/governance")
     client.get("/api/copilot/parallel/r-legacy")
-    client.post("/api/copilot/runs/r-legacy/cancel")
     client.act_as("owner-1", role="owner")
     client.get("/api/copilot/runs/r-legacy/governance")
     assert _row(Session, "r-legacy").user_id is None
+
+
+# ── 读 ≠ 写：owner 的「无主可读」不得顺延成「无主可改」────────────────────
+def test_NULL归属run_owner也取消不了(env):
+    """**本次收紧的核心**：读口径给 owner 开了无主审计读，写口径必须拒绝。
+
+    NULL 归属无法严格确认「谁有权动这条 run」（角色来自当前会话，与旧 run 没有
+    任何可验证关联），所以写路径 default deny；卡在 running 的无主 run 交给
+    `copilot_runtime.reap_stale_runs()` 按心跳收尸，不靠人来取消。
+    """
+    client, Session = env
+    client.act_as("owner-1", role="owner")
+    resp = client.post("/api/copilot/runs/r-legacy/cancel")
+    assert resp.status_code == 404, "owner 只读权限被复用成了写权限"
+    assert _row(Session, "r-legacy").status == "ok", "无主 run 的状态被改写了"
+
+
+def test_空串归属run_owner也取消不了(env):
+    """空串与 NULL 同办：falsy 归属不是「谁都能动」。"""
+    client, Session = env
+    client.act_as("owner-1", role="owner")
+    assert client.post("/api/copilot/runs/r-empty/cancel").status_code == 404
+    assert _row(Session, "r-empty").status == "queued"
+
+
+def test_owner可以取消自己的run(env):
+    """防过度收紧：有主 run 的归属人（哪怕是 owner 角色）取消照常工作。"""
+    client, Session = env
+    db = Session()
+    try:
+        db.add(CopilotRun(run_id="r-owner-mine", user_id="owner-1", recipe=None,
+                          question="owner 自己的问题", status="queued",
+                          created_at=datetime.utcnow()))
+        db.commit()
+    finally:
+        db.close()
+
+    client.act_as("owner-1", role="owner")
+    resp = client.post("/api/copilot/runs/r-owner-mine/cancel")
+    assert resp.status_code == 200
+    assert _row(Session, "r-owner-mine").status == "cancelled"
+
+
+def test_角色名拼错不放宽无主读(env):
+    """判不准 owner 角色时宁可少放行："Owner" / " owner " 这类拼写不算 owner。"""
+    client, _ = env
+    for bad_role in ("Owner", "OWNER", "admin", ""):
+        client.act_as("owner-1", role=bad_role)
+        assert client.get("/api/copilot/runs/r-legacy/governance").status_code == 404, (
+            f"role={bad_role!r} 被当成 owner，无主轨迹被摊给了一个非 owner 账号"
+        )
 
 
 # ── owner 也不能读别人的 run（owner 不放宽"有主"资源）─────────────────
