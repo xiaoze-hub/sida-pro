@@ -652,6 +652,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         // 不许挂到别人正在看的会话上（回归用例 tests/components/copilot-stream-race.test.tsx）。
         if (!isCurrent()) return
         setError(e instanceof Error ? e.message : '对话失败')
+        // 2026-10-28 验收（P0）：fetch 中途 reject 时屏幕上的半截正文**必须**带"不完整"标记。
+        // 原来这里只 setError —— 用户看着几行正文正常亮着，会当成结论读（那几行甚至连终稿附言都没有）。
+        // `assistant` 为空时 settleStreamBubble 一次都不铺（空 ≠ 半成品）。
+        setMsgs((m) => settleStreamBubble(m, assistant, true))
       } finally {
         // 收尾同样要认主人：`streaming`/`stage`/齐套度/坏帧提示都是**当前**那一轮的显示态。
         // 早先这里无条件 setStreaming(false)+setStage('')，旧流一结束就把新流的 spinner 和
@@ -687,9 +691,27 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
   const [metrics, setMetrics] = useState<CopilotMetrics | null>(null)
   const [pending, setPending] = useState<PendingAction[]>([])
+  /**
+   * 2026-10-28 验收（P0）：待确认动作的**提交中**展示态 + 就地失败提示。
+   *
+   * 现场两个问题：连点「确认」发两次 POST（自选加两条）；确认失败只有 unhandled rejection，
+   * 界面上一个字都没有，用户只能反复点。所以：
+   *  - `acting` 只负责展示（禁用按钮/aria-busy），**重入守卫是 ref** ——
+   *    state 要等下一次渲染才可见，同一个事件循环里的第二次点击会直接穿透；
+   *  - 失败**不清行**（失败 = 没落库），把原因挂在动作旁边让人重试；
+   *  - 只有成功才 `loadPending()` 刷新。
+   */
+  const [acting, setActing] = useState<{ id: number; kind: 'apply' | 'reject' } | null>(null)
+  const [actError, setActError] = useState<{ id: number; message: string } | null>(null)
+  const actLock = useRef(false)
   const loadPending = useCallback(() => {
     void getPendingActions()
-      .then((rows) => setPending(Array.isArray(rows) ? rows : []))
+      .then((rows) => {
+        const list = Array.isArray(rows) ? rows : []
+        setPending(list)
+        // 行已经不在列表里 → 它的旧失败文案也没意义了（防止刷新回来后挂个过期错误）
+        setActError((cur) => (cur && list.some((r) => r.id === cur.id) ? cur : null))
+      })
       .catch(() => setPending([]))
   }, [])
   useEffect(() => {
@@ -718,14 +740,37 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
 
   const act = useCallback(
     async (id: number, kind: 'apply' | 'reject') => {
+      // 同步守卫（ref 立即生效）：连点两次「确认」只发一次 POST
+      if (actLock.current) return false
+      actLock.current = true
+      setActing({ id, kind })
+      setActError(null)
+      const target = pending.find((p) => p.id === id)
+      const symbol = String((target?.payload as Record<string, unknown> | undefined)?.symbol ?? '')
+      const verb = kind === 'apply' ? '确认' : '忽略'
       try {
         if (kind === 'apply') await applyPendingAction(id)
         else await rejectPendingAction(id)
+        if (!mounted.current) return true
+        loadPending() // 成功才刷新（后端不再返回这一条 → 行自然消失）
+        return true
+      } catch (e) {
+        if (!mounted.current) return false
+        // 失败 = 没落库：行原样留着，就地报错让人重试。
+        // 绝不只抛给控制台 —— `void act(...)` 的 rejection 没人接，界面上等于什么都没发生。
+        const reason = e instanceof Error && e.message ? `：${e.message}` : ''
+        setActError({
+          id,
+          message: `${verb}失败${reason}。${symbol ? `${symbol} 的这条动作` : '这条动作'}没有生效，请重试`,
+        })
+        return false
       } finally {
-        loadPending()
+        // 锁无条件释放（卸载后也必须放）；只有展示态受挂载状态约束
+        actLock.current = false
+        if (mounted.current) setActing(null)
       }
     },
-    [loadPending],
+    [loadPending, pending],
   )
 
   /**
@@ -845,14 +890,45 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         {pending.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2 border-b border-border bg-role-watch/5 px-3 py-2" data-testid="copilot-pending-actions">
             <span className="text-[12px] text-muted-foreground">待确认动作</span>
-            {pending.slice(0, 3).map((a) => (
-              <span key={a.id} className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[12px]">
-                <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : '盯盘提醒'}</span>
-                <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
-                <button type="button" className="text-role-watch hover:underline" onClick={() => void act(a.id, 'apply')}>确认</button>
-                <button type="button" className="text-muted-foreground hover:underline" onClick={() => void act(a.id, 'reject')}>忽略</button>
-              </span>
-            ))}
+            {pending.slice(0, 3).map((a) => {
+              const rowBusy = acting?.id === a.id
+              // 任何一条动作在途都禁掉全部按钮：守卫是全局的（一次只跑一条裁决）
+              const locked = acting !== null
+              return (
+                <span key={a.id} className="flex flex-wrap items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[12px]">
+                  <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : '盯盘提醒'}</span>
+                  <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
+                  <button
+                    type="button"
+                    data-testid="copilot-pending-apply"
+                    aria-busy={rowBusy && acting?.kind === 'apply' ? 'true' : undefined}
+                    disabled={locked}
+                    className="inline-flex items-center gap-1 text-role-watch hover:underline disabled:opacity-50 disabled:no-underline"
+                    onClick={() => void act(a.id, 'apply')}
+                  >
+                    {rowBusy && acting?.kind === 'apply' ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
+                    确认
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="copilot-pending-reject"
+                    aria-busy={rowBusy && acting?.kind === 'reject' ? 'true' : undefined}
+                    disabled={locked}
+                    className="inline-flex items-center gap-1 text-muted-foreground hover:underline disabled:opacity-50 disabled:no-underline"
+                    onClick={() => void act(a.id, 'reject')}
+                  >
+                    {rowBusy && acting?.kind === 'reject' ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
+                    忽略
+                  </button>
+                  {/* 失败就地提示：挂在这条动作旁边，原因 + 该做什么都在一句话里 */}
+                  {actError?.id === a.id ? (
+                    <span data-testid="copilot-pending-error" role="alert" className="basis-full text-[12px] text-role-risk">
+                      {actError.message}
+                    </span>
+                  ) : null}
+                </span>
+              )
+            })}
           </div>
         ) : null}
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5">
