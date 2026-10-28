@@ -30,6 +30,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -79,6 +80,26 @@ class SubmitRunBody(BaseModel):
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def run_user_scope_ok(row: Any, user: Any) -> bool:
+    """run 归属判定（读 + 取消共用）：只有归属人能碰；NULL/空串归属仅 owner 可读。
+
+    **修的是什么**：这几处原写作 `row.user_id and row.user_id != user.id` ——
+    `user_id` 为 NULL 时直接短路放行，等于任何登录账号拿到 run_id 就能读别人的
+    历史轨迹（question/status/工具步骤），`POST /runs/{id}/cancel` 还能改写它的状态。
+
+    **为什么会有 NULL**：`copilot_runs.user_id` 是 2026-10-20 才补的列
+    （`src/web/migrations.py::_migrate_copilot_run_user_id`），之前落库的轨迹全是 NULL。
+    这批合法旧数据**不回填归属**（不去猜是谁问的），只按 `role == "owner"`
+    放给平台 owner 做审计读 —— 与 `_scope.writable`（NULL 共享项仅 owner 可动）同口径。
+
+    空串与 NULL 同办：falsy 不等于"无主可放行"，脏数据不能变成后门。
+    """
+    owner_id = getattr(row, "user_id", None)
+    if owner_id is None or str(owner_id).strip() == "":
+        return (getattr(user, "role", "") or "") == "owner"
+    return str(owner_id) == str(getattr(user, "id", "") or "")
 
 
 # ── 执行体（可被测试替换）────────────────────────────────────────────────
@@ -366,7 +387,7 @@ async def run_events(run_id: str, user=Depends(get_current_user)):
             row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
             if row is None:
                 return None, []
-            if row.user_id and row.user_id != user.id:
+            if not run_user_scope_ok(row, user):
                 return "forbidden", []
             steps = (
                 db.query(CopilotStep)
@@ -435,7 +456,7 @@ async def cancel_run(run_id: str, user=Depends(get_current_user)):
     db = SessionLocal()
     try:
         row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
-        if row is None or (row.user_id and row.user_id != user.id):
+        if row is None or not run_user_scope_ok(row, user):
             raise HTTPException(404, "run 不存在")
         if row.status in ("ok", "degraded", "succeeded"):
             raise HTTPException(409, "该 run 已完成，无法取消")

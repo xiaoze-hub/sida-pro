@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from src.web.api._scope import allow_cross_user
 from src.web.api.auth import get_current_user
+from src.web.api.copilot_jobs import run_user_scope_ok
 from src.web.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -341,7 +342,7 @@ def get_parallel(
     from src.db.models import CopilotRun
 
     row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
-    if row is None or (row.user_id and str(row.user_id) != str(getattr(user, "id", ""))):
+    if row is None or not run_user_scope_ok(row, user):
         raise HTTPException(status_code=404, detail="任务不存在")
 
     agg = aggregate(db, run_id)
@@ -377,7 +378,7 @@ def get_run_governance(
     from src.harness.recipes import load_recipes
 
     row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
-    if row is None or (row.user_id and str(row.user_id) != str(getattr(user, "id", ""))):
+    if row is None or not run_user_scope_ok(row, user):
         raise HTTPException(status_code=404, detail="任务不存在")
 
     recipe = None
