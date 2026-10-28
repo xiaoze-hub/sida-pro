@@ -163,6 +163,10 @@ export default function PriceAlertsPage() {
 
     const openWithStock = async () => {
       let target = stocks.find(s => intent.stockId > 0 ? s.id === intent.stockId : (s.symbol === intent.symbol && s.market === intent.market))
+      if (!target && intent.direction === '<') {
+        toast(`未找到 ${intent.symbol}，请先添加该股票后再设置支撑破位提醒`, 'error')
+        return
+      }
       if (!target && intent.symbol) {
         try {
           target = await stocksApi.create({ symbol: intent.symbol, market: intent.market, name: intent.name || intent.symbol })
@@ -176,11 +180,14 @@ export default function PriceAlertsPage() {
         ...DEFAULT_FORM,
         stock_id: target?.id || stockOptions[0]?.id || 0,
         name: target ? `${target.name} 价格提醒` : (intent.name ? `${intent.name} 价格提醒` : ''),
+        ...(intent.direction === '<' && intent.price != null
+          ? { items: [{ type: 'price' as const, op: '<' as const, value: intent.price }] }
+          : {}),
       })
       setFormOpen(true)
     }
     openWithStock()
-  }, [loading, location.search, stockOptions, stocks])
+  }, [loading, location.search, stockOptions, stocks, toast])
 
   const openCreate = () => {
     setEditingId(null)

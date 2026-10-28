@@ -274,13 +274,13 @@ export function AnswerCard({
               }
             }
           }}
-          onSetAlert={(p) => {
-            if (typeof window !== 'undefined') {
+          onSetAlert={symbol ? (p) => {
+            if (typeof window !== 'undefined' && Number.isFinite(p) && p > 0) {
               window.location.href = `/notifications?tab=alerts&symbol=${encodeURIComponent(
-                symbol || '',
-              )}&price=${p}`
+                symbol,
+              )}&price=${encodeURIComponent(p)}&intent=support_break`
             }
-          }}
+          } : undefined}
           onCopy={() => void copy()}
         />
       ) : null}
