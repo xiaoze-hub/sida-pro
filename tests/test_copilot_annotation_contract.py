@@ -340,3 +340,130 @@ def test_migration_alters_a_legacy_table_that_lacks_the_column():
             "SELECT annotation_id FROM copilot_actions WHERE user_id='legacy'"
         )).scalar() is None
         _m231_copilot_action_annotation_link(conn)  # 幂等
+
+
+# ── 5. 读取路径：精确身份与目标（2026-10-28 P2 三次收口复审整改）───────────────
+#
+# 复审红线：旧读取响应只有 id/price/ts/label/note/color/source —— 前端拿不到属主、
+# 标的、周期，也无法把「图上这条线」对回「哪次确认」，只能靠本地会话信封 + 客户端
+# 标记自证（可伪造）。这一组钉住服务端把身份与目标**回显出来**，且可用严格参数
+# 精确读取（ids / market_strict / mine_only / action_linked）。
+
+
+#: 精确读取用例专用标的：避开同文件其它用例/遗留全局行（全局行没有属主，fixture 不清）。
+SYM_ISO = "600521"
+SYM_ISO2 = "600522"
+
+
+class _U:
+    def __init__(self, uid: str = UID):
+        self.id = uid
+
+
+def _read(db, **kw):
+    from src.web.api.copilot import get_copilot_annotations
+
+    params = {"symbol": SYMBOL, "market": "CN", "period": "1d", "db": db, "user": _U()}
+    params.update(kw)
+    return get_copilot_annotations(**params)
+
+
+def test_read_echoes_owner_target_and_action_link(db):
+    item = _propose(db, {"symbol": SYMBOL, "label": "可追溯", "price": 35.23})
+    out = A.apply_action(db, user_id=UID, action_id=item["id"])
+
+    rows = _read(db, ids=str(out["annotation_id"]))
+    assert len(rows) == 1, "按 id 精确读取必须只回这一条"
+    row = rows[0]
+    assert row["id"] == out["annotation_id"]
+    # 目标回显：前端据此逐字核对当前 K 线，而不是靠「请求—响应配对」猜
+    assert row["symbol"] == SYMBOL and row["market"] == "CN" and row["period"] == "1d"
+    # 属主回显：全局行 user_id 为 null，前端默认不上图
+    assert row["user_id"] == UID
+    # 动作回显：这一行是哪次确认画的
+    assert row["action_id"] == item["id"]
+
+
+def test_read_marks_unconfirmed_rows_without_action(db):
+    """历史/人工/他人留下的行没有确认动作 → action_id=null，前端据此拒画。"""
+    orphan = KlineAnnotation(user_id=UID, symbol=SYM_ISO, market="CN", period="1d",
+                             price=33.3, label="无动作行", source="ai")
+    global_row = KlineAnnotation(user_id=None, symbol=SYM_ISO, market="CN", period="1d",
+                                 price=44.4, label="全局行", source="ai")
+    db.add_all([orphan, global_row])
+    db.commit()
+
+    rows = _read(db, symbol=SYM_ISO)
+    by_label = {r["label"]: r for r in rows}
+    assert by_label["无动作行"]["action_id"] is None
+    assert by_label["无动作行"]["user_id"] == UID
+    assert by_label["全局行"]["user_id"] is None, "全局行的属主必须如实是 null"
+    assert by_label["全局行"]["action_id"] is None
+
+
+def test_read_action_linked_filters_out_rows_without_confirmation(db):
+    item = _propose(db, {"symbol": SYMBOL, "label": "已确认", "price": 35.23})
+    confirmed = A.apply_action(db, user_id=UID, action_id=item["id"])
+    db.add(KlineAnnotation(user_id=UID, symbol=SYMBOL, market="CN", period="1d",
+                           price=31.1, label="未确认", source="ai"))
+    db.commit()
+
+    rows = _read(db, action_linked=True)
+    assert [r["id"] for r in rows] == [confirmed["annotation_id"]]
+
+
+def test_read_mine_only_excludes_global_rows(db):
+    db.add(KlineAnnotation(user_id=UID, symbol=SYM_ISO2, market="CN", period="1d",
+                           price=31.1, label="我的", source="ai"))
+    db.add(KlineAnnotation(user_id=None, symbol=SYM_ISO2, market="CN", period="1d",
+                           price=32.2, label="全局", source="ai"))
+    db.commit()
+
+    assert sorted(r["label"] for r in _read(db, symbol=SYM_ISO2)) == ["全局", "我的"]
+    assert [r["label"] for r in _read(db, symbol=SYM_ISO2, mine_only=True)] == ["我的"]
+
+
+def test_read_ids_is_exact_and_cannot_see_other_users_rows(db):
+    mine = KlineAnnotation(user_id=UID, symbol=SYMBOL, market="CN", period="1d",
+                           price=31.1, label="我的", source="ai")
+    theirs = KlineAnnotation(user_id=OTHER_UID, symbol=SYMBOL, market="CN", period="1d",
+                             price=32.2, label="他人的", source="ai")
+    db.add_all([mine, theirs])
+    db.commit()
+
+    rows = _read(db, ids=f"{mine.id},{theirs.id}")
+    assert [r["id"] for r in rows] == [mine.id], "他人的行即使 id 精确指定也不可见"
+
+
+def test_read_rejects_malformed_ids(db):
+    from fastapi import HTTPException
+
+    for bad in ("abc", "1,x", "0", "-3"):
+        with pytest.raises(HTTPException) as ei:
+            _read(db, ids=bad)
+        assert ei.value.status_code == 400
+
+
+def test_read_market_strict_keeps_index_and_stock_apart(db):
+    """000001 同时是上证指数(SH)与平安银行(SZ)：族归并会把两条都吐出来。
+
+    这正是前端「后端无法保证标的类型则默认拒画」的依据 —— 服务端只能靠精确 market
+    区分，而 propose 写入的 market 可能是 CN（族语义），此时无法证明是哪一类。
+    """
+    db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SH", period="1d",
+                           price=3200.0, label="指数线", source="ai"))
+    db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SZ", period="1d",
+                           price=12.5, label="个股线", source="ai"))
+    db.add(KlineAnnotation(user_id=UID, symbol="000001", market="CN", period="1d",
+                           price=1.0, label="族语义线", source="ai"))
+    db.commit()
+
+    merged = _read(db, symbol="000001", market="CN")
+    assert {r["label"] for r in merged} == {"指数线", "个股线", "族语义线"}
+
+    strict_sz = _read(db, symbol="000001", market="SZ", market_strict=True)
+    assert [r["label"] for r in strict_sz] == ["个股线"]
+    strict_cn = _read(db, symbol="000001", market="CN", market_strict=True)
+    assert [r["label"] for r in strict_cn] == ["族语义线"], (
+        "严格模式下 CN 行不得被当成 SZ/SH —— 它无法证明标的类型"
+    )

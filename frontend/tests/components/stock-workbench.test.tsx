@@ -738,43 +738,14 @@ describe('StockWorkbench 三带骨架', () => {
     expect(mocks.portfolioSummary).not.toHaveBeenCalled()
   })
 
-  it('本地构造的 sida-kline-overlay 事件（detail 里直接写价位）也不会上 K 线', async () => {
-    renderAt('/stocks/002636')
-    await waitFor(() => expect(screen.getByTestId('kline')).toBeTruthy())
-
-    // detail 是本地对象：没有服务端响应解析标记 ⇒ 工作台不认（`readOverlayEventDetail` 返回 null）
-    window.dispatchEvent(
-      new CustomEvent('sida-kline-overlay', {
-        detail: {
-          symbol: '002636',
-          period: '1d',
-          lines: [
-            { price: 32.8, kind: 'support', label: '支撑 32.8' },
-            { price: 36.5, kind: 'pressure', label: '阻力 36.5' },
-          ],
-        },
-      }),
-    )
-
-    await new Promise((r) => setTimeout(r, 0))
-    const kline = screen.getByTestId('kline')
-    expect(kline.getAttribute('data-support-pressure') ?? '').toBe('')
-  })
-
-  it('本地价位写不进存储：旧 saveOverlay(含伪造凭证) 一律拒画, 工作台无画线', async () => {
-    const { ChartOverlayService } = await import('@/lib/copilot/chartOverlayService')
-    const result = ChartOverlayService.saveOverlay('002636', [
-      { price: 15.2, title: '支撑 15.2', kind: 'support' },
-      { price: 18.6, title: '阻力 18.6', kind: 'pressure' },
-    ], { source: 'server_annotation', actionId: 21, status: 'applied', symbol: '002636' })
-    expect(result).toMatchObject({ saved: false, reason: 'client_authored_levels' })
-
+  it('本地价位没有任何写入入口：账本只由服务端标注接线写入, 工作台一条不画', async () => {
+    // 2026-10-28 P2 四收口：ChartOverlayService / sessionStorage 信封 / WeakSet 全部删除。
+    // 页面能画出来的只有 annotationLedger 里"当前目标"的服务端行；这里不发任何标注行。
     renderAt('/stocks/002636')
     await waitFor(() => expect(screen.getByTestId('kline')).toBeTruthy())
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.getByTestId('kline').getAttribute('data-support-pressure') ?? '').toBe('')
-
-    ChartOverlayService.clearOverlay('002636')
+    expect(sessionStorage.length).toBe(0)
   })
 
   it('旧键的历史价位不会恢复: 无服务端来源的画线不能出现在工作台 K 线上', async () => {
@@ -795,22 +766,23 @@ describe('StockWorkbench 三带骨架', () => {
   })
 
   /**
-   * 端到端（页面侧）：本会话确认过的标注 id + 服务端 `GET /copilot/annotations` 的行
-   * → 页面把**服务端价位**交给主图。这条用例守的是"页面确实消费了服务端响应"，
-   * 而不是"页面自己记得一个价位"。
+   * 端到端（页面侧）：服务端精确读取的行 → 页面把**服务端价位**交给主图。
+   *
+   * 2026-10-28 P2 四收口后，页面不再需要"本会话确认过的 id 信封"：服务端按
+   * `mine_only=1&action_linked=1&market_strict=1` 只回"我确认过的、同一标的同一周期"的行，
+   * 行里带 `user_id/action_id/symbol/market/period`，页面逐字核对。
    */
-  it('已确认的服务端标注: 回读服务端行后按服务端价位画到 K 线', async () => {
-    sessionStorage.setItem(
-      'sida_kline_annotation_ids:v1:test-user:002636:1d',
-      JSON.stringify({ symbol: '002636', period: '1d', annotationIds: [91, 92] }),
-    )
+  it('已确认的服务端标注: 精确读取后按服务端价位画到 K 线, 并回显标注 id 与动作 id', async () => {
     mocks.fetchAPI.mockImplementation(async (path: string) => {
       if (typeof path === 'string' && path.startsWith('/copilot/annotations')) {
         return [
-          { id: 91, price: 15.2, ts: null, label: '支撑位', note: null, color: 'up', source: 'ai', created_at: '' },
-          { id: 92, price: 18.6, ts: null, label: '阻力位', note: null, color: 'down', source: 'ai', created_at: '' },
-          // 服务端还有一条"全局/别人的"标注：不在本会话确认过 → 不上图
-          { id: 99, price: 99.9, ts: null, label: '阻力位', note: null, color: 'down', source: 'ai', created_at: '' },
+          { id: 91, symbol: '002636', market: 'CN', period: '1d', user_id: 'test-user', action_id: 7,
+            price: 15.2, ts: null, label: '支撑位', note: null, color: 'up', source: 'ai', created_at: '' },
+          { id: 92, symbol: '002636', market: 'CN', period: '1d', user_id: 'test-user', action_id: 8,
+            price: 18.6, ts: null, label: '阻力位', note: null, color: 'down', source: 'ai', created_at: '' },
+          // 服务端还回了一条全局行（无属主）→ 不是"我确认的" ⇒ 不上图
+          { id: 99, symbol: '002636', market: 'CN', period: '1d', user_id: null, action_id: null,
+            price: 99.9, ts: null, label: '阻力位', note: null, color: 'down', source: 'ai', created_at: '' },
         ]
       }
       return []
@@ -824,22 +796,26 @@ describe('StockWorkbench 三带骨架', () => {
         'support:15.2:支撑位;pressure:18.6:阻力位',
       )
     })
-    expect(mocks.fetchAPI.mock.calls.some((call) => String(call[0]).includes('symbol=002636'))).toBe(true)
+    // 精确目标 + 严格模式参数必须真的发出去
+    const url = String(
+      mocks.fetchAPI.mock.calls.map((c) => String(c[0])).find((u) => u.startsWith('/copilot/annotations')) ?? '',
+    )
+    expect(url).toContain('symbol=002636')
+    expect(url).toContain('period=1d')
+    expect(url).toContain('market_strict=1')
+    expect(url).toContain('mine_only=1')
+    expect(url).toContain('action_linked=1')
 
-    // 状态带如实给出标注 id；刷新后没有 apply 响应 ⇒ 不编造 action id
+    // 状态带如实给出标注 id 与确认动作 id（服务端回显，不再"不可用"）
     const bar = screen.getByTestId('copilot-annotation-link')
     expect(bar.getAttribute('data-kind')).toBe('ready')
     expect(screen.getByTestId('copilot-annotation-ids').textContent).toContain('91、92')
-    expect(screen.getByTestId('copilot-annotation-no-action').textContent).toContain('不返回 action_id')
-    // 撤销不可用要写在图上
+    expect(screen.getByTestId('copilot-annotation-action-ids').textContent).toContain('7、8')
+    // 撤销仍不可用（契约事实要写在图上）
     expect(screen.getByTestId('copilot-annotation-undo-note').textContent).toContain('撤销不可用')
   })
 
   it('服务端标注读取失败: 一条不画, 并在状态带说明原因 + 可重试', async () => {
-    sessionStorage.setItem(
-      'sida_kline_annotation_ids:v1:test-user:002636:1d',
-      JSON.stringify({ symbol: '002636', period: '1d', annotationIds: [91] }),
-    )
     mocks.fetchAPI.mockImplementation(async (path: string) => {
       if (typeof path === 'string' && path.startsWith('/copilot/annotations')) {
         throw new Error('网络异常')
@@ -855,11 +831,12 @@ describe('StockWorkbench 三带骨架', () => {
     expect(screen.getByTestId('kline').getAttribute('data-support-pressure') ?? '').toBe('')
   })
 
-  it('服务端有标注但本会话没确认过: 不上图(不把别人的/历史的算成自己的)', async () => {
+  it('服务端有标注但属主不是我(全局行): 不上图, 并说明原因', async () => {
     mocks.fetchAPI.mockImplementation(async (path: string) => {
       if (typeof path === 'string' && path.startsWith('/copilot/annotations')) {
         return [
-          { id: 91, price: 15.2, ts: null, label: '支撑位', note: null, color: 'up', source: 'ai', created_at: '' },
+          { id: 91, symbol: '002636', market: 'CN', period: '1d', user_id: null, action_id: null,
+            price: 15.2, ts: null, label: '支撑位', note: null, color: 'up', source: 'ai', created_at: '' },
         ]
       }
       return []
@@ -868,6 +845,7 @@ describe('StockWorkbench 三带骨架', () => {
     renderAt('/stocks/002636')
 
     await waitFor(() => expect(screen.getByTestId('copilot-annotation-unattributed')).toBeTruthy())
+    expect(screen.getByTestId('copilot-annotation-unattributed').textContent).toContain('全局行')
     expect(screen.getByTestId('kline').getAttribute('data-support-pressure') ?? '').toBe('')
   })
 })

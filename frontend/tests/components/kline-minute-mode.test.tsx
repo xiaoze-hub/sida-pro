@@ -60,8 +60,8 @@ describe('KlineChart 主力意图接线(P2 补搬)', () => {
 
   it('数据不足时不给方向(图例只在 renderable 时出现, 文案逻辑在 lib 单测里钉死)', () => {
     expect(KC).toMatch(/intentRenderable\(intent\) && intentLegend/)
-    // 重绘依赖必须带 intent, 否则切股后箭头不刷新
-    expect(KC).toMatch(/props\.tradeMarkers, intent, aiNotes\]\)/)
+    // 重绘依赖必须带 intent 与标的/市场, 否则切股后箭头/价位线不刷新
+    expect(KC).toMatch(/props\.tradeMarkers, intent, props\.symbol, props\.market\]\)/)
   })
 })
 

@@ -485,39 +485,95 @@ def get_copilot_annotations(
     symbol: str = Query(...),
     market: str = Query(default="CN"),
     period: str = Query(default="1d"),
+    ids: str = Query(default="", description="只读这些标注 id（逗号分隔；精确身份读取）"),
+    market_strict: bool = Query(default=False, description="True = 严格市场等值（不做 A 股族归并）"),
+    mine_only: bool = Query(default=False, description="True = 只返回本人标注（不含全局行）"),
+    action_linked: bool = Query(default=False, description="True = 只返回能对回本人确认动作的行"),
     db: Session = Depends(get_db),
     user: Any = Depends(get_current_user),
 ) -> list[dict]:
-    """K 线图层标注（P1 收尾，2026-10-20）。
+    """K 线图层标注（P1 收尾，2026-10-20；2026-10-28 P2 补齐可核验身份）。
 
     只返回本人 + 全局(user_id IS NULL)的标注；AI 与用户画的都在这张表里，
     用 `source` 区分。前端按 symbol/period 取，直接画到图上。
-    """
-    from sqlalchemy import or_
 
-    from src.db.models import KlineAnnotation
+    2026-10-28 P2 三次收口的安全复审要求「标注读取必须精确身份与目标」：
+    旧响应只有 id/price/ts/label/note/color/source/created_at —— 前端拿不到属主、
+    标的、周期，也无从判断这一行是不是自己确认动作画的，只能靠本地会话信封+
+    客户端标记自证。现在响应逐行回显 `symbol/market/period/user_id/action_id`：
+
+    - `user_id`：行属主；`null` = 全局行（**不是**我确认的，前端默认不上图）
+    - `action_id`：`copilot_actions.annotation_id` 反查出来的确认动作（本人），
+      没有确认动作的行 = `null`（历史/人工/他人），前端据此拒绝上图
+    - `symbol/market/period`：目标回显，前端必须与当前 K 线逐字比对
+
+    `ids` / `market_strict` / `mine_only` / `action_linked` 是给「精确读取」用的严格模式；
+    默认值保持旧行为（A 股市场族归并 + 本人或全局），不改变既有调用方语义。
+    """
+    from sqlalchemy import and_, or_
+
+    from src.db.models import CopilotAction, KlineAnnotation
+
+    wanted: list[int] = []
+    # 直接调用(单测/内部)时未传的 Query 默认值不是 str/bool —— 按"没给"处理，
+    # 不让 FastAPI 的默认对象渗进业务判断。
+    raw_ids = ids if isinstance(ids, str) else ""
+    strict = market_strict is True
+    only_mine = mine_only is True
+    linked_only = action_linked is True
+    if raw_ids.strip():
+        try:
+            wanted = [int(x) for x in raw_ids.split(",") if x.strip()]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"ids 不是合法的标注 id 列表：{raw_ids}") from exc
+        if not wanted or any(i <= 0 for i in wanted):
+            raise HTTPException(status_code=400, detail=f"ids 不是合法的标注 id 列表：{raw_ids}")
+        if len(wanted) > 200:
+            raise HTTPException(status_code=400, detail="ids 一次最多 200 个")
 
     # 2026-10-20 线上实测: AI 提议里 market 默认写 "CN"，而 K 线页传 "SH"/"SZ"，
     # 严格等值匹配会导致"标注确认成功但图上查不到"。A 股市场代码统一按一组处理。
+    # 但市场族归并就抹掉了「同一代码的指数与个股」这一层（000001 上证指数 / 平安银行）：
+    # 需要严格区分的调用方传 market_strict=true，此时只做等值匹配。
     _A_SHARE = {"CN", "SH", "SZ", "BJ"}
-    markets = sorted(_A_SHARE) if (market or "").upper() in _A_SHARE else [market]
-    rows = (
-        db.query(KlineAnnotation)
-        .filter(
-            KlineAnnotation.symbol == symbol,
-            KlineAnnotation.market.in_(markets),
-            KlineAnnotation.period == period,
-            or_(KlineAnnotation.user_id == str(user.id), KlineAnnotation.user_id.is_(None)),
-        )
-        .order_by(KlineAnnotation.created_at.desc())
-        .limit(200)
-        .all()
+    mk = (market or "").upper()
+    if strict:
+        markets = [mk]
+    else:
+        markets = sorted(_A_SHARE) if mk in _A_SHARE else [market]
+
+    uid = str(user.id)
+    query = db.query(KlineAnnotation, CopilotAction.id.label("action_id")).outerjoin(
+        CopilotAction,
+        and_(CopilotAction.annotation_id == KlineAnnotation.id, CopilotAction.user_id == uid),
     )
+    query = query.filter(
+        KlineAnnotation.symbol == symbol,
+        KlineAnnotation.market.in_(markets),
+        KlineAnnotation.period == period,
+    )
+    if only_mine:
+        query = query.filter(KlineAnnotation.user_id == uid)
+    else:
+        query = query.filter(or_(KlineAnnotation.user_id == uid, KlineAnnotation.user_id.is_(None)))
+    if wanted:
+        query = query.filter(KlineAnnotation.id.in_(wanted))
+    if linked_only:
+        query = query.filter(CopilotAction.id.isnot(None))
+    rows = query.order_by(KlineAnnotation.created_at.desc()).limit(200).all()
     return [{
-        "id": r.id, "price": r.price, "ts": r.ts, "label": r.label,
+        "id": r.id,
+        # 目标与属主回显：前端必须逐字核对，不再靠「请求—响应配对」猜
+        "symbol": r.symbol,
+        "market": r.market,
+        "period": r.period,
+        "user_id": r.user_id,
+        # 本人确认动作（`copilot_actions.annotation_id` 反查）；null = 无确认动作
+        "action_id": int(action_id) if action_id is not None else None,
+        "price": r.price, "ts": r.ts, "label": r.label,
         "note": r.note, "color": r.color, "source": r.source,
         "created_at": str(r.created_at or ""),
-    } for r in rows]
+    } for r, action_id in rows]
 
 
 @router.get("/governance/cost")

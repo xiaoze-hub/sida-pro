@@ -99,11 +99,11 @@ describe('KlineChart 加载链(perf 回归)', () => {
     renderChart('002636')
 
     // 首帧: 只发出关键画布数据请求 —— 慢摘要尚未发出(错峰到首帧之后)
-    // 2026-10-20: 图表挂载时会额外拉一次 AI 标注(/copilot/annotations) —— 它属于旁路,
-    // 不计入"首帧画布关键请求", 这里把它过滤掉再比对次序。
-    expect(
-      H.calls.map((c) => c.url).filter((u) => !u.includes('/copilot/annotations')),
-    ).toEqual(['/klines/002636?market=CN&days=120&interval=1d'])
+    // 2026-10-28 P2 四收口: 图表不再自取 AI 标注(/copilot/annotations 那条旁路已删除),
+    // 所以这里可以**不过滤**地比对: 首帧就只有 K 线这一条请求。
+    expect(H.calls.map((c) => c.url)).toEqual([
+      '/klines/002636?market=CN&days=120&interval=1d',
+    ])
 
     // 主数据回来 ⇒ 主图出图(慢摘要仍挂起 ⇒ 主图不被它阻塞)
     await act(async () => {

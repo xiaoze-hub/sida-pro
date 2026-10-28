@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
-import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 
 beforeEach(() => localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'test-user' }))}.signature`))
 
@@ -70,7 +69,10 @@ describe('review-safety 价位口径安全测试 (防止止损/目标被误标�
 
     const parsed = parseAnswer(RAW)
     const onAnchoredPrice = vi.fn()
-    const saveSpy = vi.spyOn(ChartOverlayService, 'saveOverlay')
+    // 2026-10-28 P2 四收口：画线只剩"服务端标注"一条通道，正文价位没有入口。
+    // 这里以"不广播任何叠加事件 + 没有画线按钮"为观测点（ChartOverlayService 已删除）。
+    const overlaySpy = vi.fn()
+    window.addEventListener('sida-kline-overlay', overlaySpy)
 
     render(
       <AnswerCard
@@ -89,17 +91,16 @@ describe('review-safety 价位口径安全测试 (防止止损/目标被误标�
 
     // 2026-10-28 P2：正文价位没有服务端来源/确认 ⇒ 不允许一键画真 K 线
     expect(screen.queryByText('在 K 线叠加画线')).toBeNull()
-    expect(saveSpy).not.toHaveBeenCalled()
+    expect(overlaySpy).not.toHaveBeenCalled()
+    window.removeEventListener('sida-kline-overlay', overlaySpy)
     expect(screen.getByTestId('copilot-level-provenance-note').textContent).toContain(
       '未经服务端核验',
     )
 
-    // 点位 chip 仍是"看/传锚点"，点击只回调，不写画线
+    // 点位 chip 仍是"看/传锚点"，点击只回调，不画线
     fireEvent.click(screen.getAllByTestId('answer-price-anchor')[0])
     expect(onAnchoredPrice).toHaveBeenCalled()
-    expect(saveSpy).not.toHaveBeenCalled()
-
-    saveSpy.mockRestore()
+    expect(overlaySpy).not.toHaveBeenCalled()
   })
 
   it('同时存在支撑、阻力与止损、目标时，各项严格保持自身独立语义不相互串扰', () => {

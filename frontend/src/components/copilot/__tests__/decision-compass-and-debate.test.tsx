@@ -6,7 +6,6 @@ import { DecisionCompassCard } from '@/components/copilot/DecisionCompassCard'
 import { MultiDimensionEvidencePanel } from '@/components/copilot/MultiAgentDebatePanel'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
-import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 
 beforeEach(() => localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'test-user' }))}.signature`))
 
@@ -100,48 +99,6 @@ describe('MultiDimensionEvidencePanel 多维依据透视（如实反映事实，
   })
 })
 
-describe('ChartOverlayService 真实图表画线验证与跨页面持久化', () => {
-  it('图元级旁路也拒画：本地数组不是服务端标注，不会调用 series.createPriceLine', () => {
-    const mockSeries = {
-      createPriceLine: vi.fn((config) => config),
-      removePriceLine: vi.fn(),
-    }
-
-    const drawn = ChartOverlayService.injectDecisionLevels(mockSeries, [
-      { price: 32.8, title: '支撑 32.8', kind: 'support' },
-      { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
-    ])
-
-    // 2026-10-28 P2 三次收口：只有 `serverAnnotations` 从服务端响应构造的数组才能上图
-    expect(drawn).toBe(false)
-    expect(mockSeries.createPriceLine).not.toHaveBeenCalled()
-
-    // 清除画线仍是安全的幂等操作
-    ChartOverlayService.clearOverlays(mockSeries)
-    expect(mockSeries.removePriceLine).not.toHaveBeenCalled()
-  })
-
-  it('跨页面画线持久化：本地价位（含伪造凭证）既不写存储也无法还原', () => {
-    // 2026-10-28 P2 三次收口：saveOverlay 的价位是调用方写的 ⇒ 恒拒，不落任何存储
-    const forged = {
-      source: 'server_annotation' as const,
-      actionId: 11,
-      status: 'applied' as const,
-      symbol: '600111',
-    }
-    const result = ChartOverlayService.saveOverlay('600111', [
-      { price: 32.8, title: '支撑 32.8', kind: 'support' },
-      { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
-    ], forged)
-    expect(result).toMatchObject({ saved: false, reason: 'client_authored_levels' })
-
-    expect(ChartOverlayService.getRequestedAnnotationIds('600111', '1d')).toBeNull()
-
-    ChartOverlayService.clearOverlay('600111')
-    expect(ChartOverlayService.getRequestedAnnotationIds('600111', '1d')).toBeNull()
-  })
-})
-
 describe('AnswerCard 罗盘与多维依据联动', () => {
   it('当回答包含支撑与阻力位时接入罗盘展示，但不未经核验就持久化画线', () => {
     const RAW = `【结论】突破箱体震荡向上，置信度 8/10
@@ -179,7 +136,6 @@ describe('AnswerCard 罗盘与多维依据联动', () => {
     // 2026-10-28 P2：正文价位没有服务端来源/确认 ⇒ 没有画线入口、不广播、不落存储
     expect(screen.queryByText('在 K 线叠加画线')).toBeNull()
     expect(overlaySpy).not.toHaveBeenCalled()
-    expect(ChartOverlayService.getRequestedAnnotationIds('600111', '1d')).toBeNull()
 
     // 明确告知来源未确认（文本展示保留，图线不画）
     expect(screen.getByTestId('copilot-level-provenance-note').textContent).toContain('未画到 K 线')
