@@ -71,6 +71,17 @@ def list_pending(db: Session, user_id: Any, limit: int = 20) -> list[dict]:
 
 
 def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
+    """确认并执行一次动作，返回**可追溯**的结果（2026-10-28, P2）。
+
+    契约要点（标注类动作）：
+      - `annotation_id`：本次真正落库的 `kline_annotations.id`；历史行没有就是 None，
+        不猜、不回填；
+      - `annotation`：落库明细（id/symbol/market/period/price/ts/label/color/source），
+        前端拿它对账「图上那条线」；
+      - 归属只看身份 / 动作行的 user_id，payload 改不了；
+      - 一条动作只能被确认一次：状态推进用**条件 UPDATE 原子认领**（并发/连点都只有一个赢）。
+    """
+    from src.core.db_safe import safe_rollback
     from src.db.models import CopilotAction
 
     row = (
@@ -79,6 +90,7 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         .one_or_none()
     )
     if row is None:
+        # 越权与不存在给同一句：不泄露"这条动作存在但不属于你"
         raise ActionError("动作不存在")
     if row.status != "pending":
         raise ActionError(f"该动作已是 {row.status} 状态")
@@ -102,16 +114,57 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         logger.warning("apply 前拍快照失败(不阻断执行, 但该动作将无法回滚): %s", exc)
         row.before_snapshot = None
 
-    result = handler(db, user_id=user_id, payload=payload)
-    row.status = "applied"
-    row.result = result
-    row.applied_at = datetime.utcnow()
-    db.commit()
+    # 原子认领: 只有仍在 pending 的那一次能把状态推进到 applied。
+    # 连点/并发确认的第二个请求 rowcount=0 → 明确拒绝，而不是画出第二条线。
+    claimed = (
+        db.query(CopilotAction)
+        .filter(
+            CopilotAction.id == action_id,
+            CopilotAction.user_id == str(user_id),
+            CopilotAction.status == "pending",
+        )
+        .update({"status": "applied", "applied_at": datetime.utcnow()},
+                synchronize_session=False)
+    )
+    if not claimed:
+        safe_rollback(db)
+        raise ActionError("该动作已被处理，请刷新待确认列表")
     db.refresh(row)
-    return _to_dict(row)
+
+    extra: dict = {}
+    try:
+        result = handler(db, user_id=user_id, payload=payload)
+        if isinstance(result, tuple):  # 标注类动作回传 (文案, {annotation_id, annotation})
+            result, extra = result
+        row.status = "applied"
+        row.result = result
+        row.annotation_id = extra.get("annotation_id")
+        if row.applied_at is None:  # 认领时已写；老库/方言差异兜底
+            row.applied_at = datetime.utcnow()
+        db.commit()
+    except ActionError:
+        # 业务拒绝(参数/越权): 整个事务回滚 —— 动作必须仍是 pending, 不留半条标注
+        safe_rollback(db)
+        raise
+    except Exception:
+        # 未知异常回滚后原样抛出(5xx), 不伪装成 400
+        safe_rollback(db)
+        logger.exception("动作执行失败, 已回滚: action=%s kind=%s", action_id, row.kind)
+        raise
+
+    db.refresh(row)
+    out = _to_dict(row)
+    out["annotation"] = extra.get("annotation")
+    return out
 
 
 def reject_action(db: Session, *, user_id: Any, action_id: int) -> dict:
+    """拒绝一条**仍待确认**的动作。
+
+    2026-10-28: 收紧为只拒绝 pending。此前拒绝已 applied 的动作会把它改成 rejected，
+    而标注还在图上 —— 「动作被拒 + 图上有线」是自相矛盾的审计。
+    """
+    from src.core.db_safe import safe_rollback
     from src.db.models import CopilotAction
 
     row = (
@@ -121,8 +174,21 @@ def reject_action(db: Session, *, user_id: Any, action_id: int) -> dict:
     )
     if row is None:
         raise ActionError("动作不存在")
-    row.status = "rejected"
-    row.applied_at = datetime.utcnow()
+    if row.status != "pending":
+        raise ActionError(f"该动作已是 {row.status} 状态")
+    rejected = (
+        db.query(CopilotAction)
+        .filter(
+            CopilotAction.id == action_id,
+            CopilotAction.user_id == str(user_id),
+            CopilotAction.status == "pending",
+        )
+        .update({"status": "rejected", "applied_at": datetime.utcnow()},
+                synchronize_session=False)
+    )
+    if not rejected:
+        safe_rollback(db)
+        raise ActionError("该动作已被处理，请刷新待确认列表")
     db.commit()
     db.refresh(row)
     return _to_dict(row)
@@ -279,29 +345,81 @@ def _apply_watchlist(db: Session, *, user_id: Any, payload: dict) -> str:
     return f"已加入自选：{symbol}"
 
 
-def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> str:
+#: 图上真能画标注的周期（= 前端 KlineChart 的 KlineInterval）。
+#: 写进别的字面量 = 行落库了但按 period 等值查询永远查不到（历史上 market 就这么翻过车）。
+ANNOTATION_PERIODS: tuple[str, ...] = ("1m", "5m", "15m", "30m", "60m", "1d", "1w", "1mth")
+
+#: URL 风格的周期写法（frontend/src/lib/kline-period.ts 的 `?period=`）→ 图表周期
+_PERIOD_ALIASES: dict[str, str] = {
+    "m1": "1m", "m5": "5m", "m15": "15m", "m30": "30m", "m60": "60m",
+    "d1": "1d", "w1": "1w", "mn": "1mth", "1mon": "1mth", "1month": "1mth",
+    "day": "1d", "daily": "1d", "week": "1w", "weekly": "1w",
+}
+
+#: 归属与关联只能由服务端决定：payload 里出现这些键 = 试图伪造他人/历史关联，直接拒绝。
+_RESERVED_ANNOTATION_KEYS: tuple[str, ...] = ("annotation_id", "user_id", "action_id", "status")
+
+
+def _normalize_period(raw: Any) -> str:
+    """把周期收敛到图表字面量；不认识就拒绝，**不落一个查不到的值**。"""
+    if raw is None or str(raw).strip() == "":
+        return "1d"
+    p = str(raw).strip().lower()
+    p = _PERIOD_ALIASES.get(p, p)
+    if p not in ANNOTATION_PERIODS:
+        raise ActionError(
+            f"不支持的标注周期：{raw}（可用 {'/'.join(ANNOTATION_PERIODS)}）"
+        )
+    return p
+
+
+def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str, dict]:
+    """把待确认标注真正画到图上，并回传 (文案, {annotation_id, annotation})。
+
+    这里只 flush 不 commit：提交由 `apply_action` 统一做，标注与动作状态必须同一事务，
+    否则会出现「动作 applied 但标注没落库」或「标注落库但动作仍 pending」的半截状态。
+    """
     from src.db.models import KlineAnnotation
+
+    forged = [k for k in _RESERVED_ANNOTATION_KEYS if k in payload]
+    if forged:
+        raise ActionError(f"标注动作不接受外部提供的 {'/'.join(forged)}（归属与关联由服务端决定）")
 
     symbol = str(payload.get("symbol") or "").strip()
     label = str(payload.get("label") or "").strip()
     if not symbol or not label:
         raise ActionError("标注需要 symbol 和 label")
+    period = _normalize_period(payload.get("period"))
     price = payload.get("price")
+    if price is not None:
+        price = _as_price(price)
+        if price is None:
+            raise ActionError("标注价位不合法（必须是正的有限数）")
+    market = str(payload.get("market") or "CN")
+    ts = payload.get("ts")
     row = KlineAnnotation(
         user_id=str(user_id),
         symbol=symbol,
-        market=str(payload.get("market") or "CN"),
-        period=str(payload.get("period") or "1d"),
-        price=float(price) if price is not None else None,
-        ts=payload.get("ts"),
+        market=market,
+        period=period,
+        price=price,
+        ts=ts,
         label=label[:64],
         note=(payload.get("note") or "")[:500] or None,
         color=str(payload.get("color") or "up")[:16],
         source="ai",
     )
     db.add(row)
-    db.commit()
-    return f"已标注 {symbol} @ {price if price is not None else payload.get('ts')}：{label}"
+    db.flush()  # 拿到 id；真正提交在 apply_action
+    detail = {
+        "id": row.id, "symbol": row.symbol, "market": row.market, "period": row.period,
+        "price": row.price, "ts": row.ts, "label": row.label, "color": row.color,
+        "source": row.source,
+    }
+    return f"已标注 {symbol} @ {price if price is not None else ts}：{label}", {
+        "annotation_id": row.id,
+        "annotation": detail,
+    }
 
 
 def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
@@ -359,6 +477,7 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
 
 
 def _to_dict(row: Any) -> dict:
+    ann_id = getattr(row, "annotation_id", None)
     return {
         "id": row.id,
         "run_id": row.run_id,
@@ -366,6 +485,10 @@ def _to_dict(row: Any) -> dict:
         "payload": json.loads(row.payload or "{}"),
         "status": row.status,
         "result": row.result,
+        # P2(2026-10-28): 标注类动作确认后落到的 kline_annotations.id。
+        # 迁移前确认的动作没有这条关联 → None（不猜、不回填）；明细块由 apply 时填充。
+        "annotation_id": int(ann_id) if ann_id is not None else None,
+        "annotation": None,
         # P1-1.3: diff 给前端展示"会改什么"；snapshot 不给前端（内部回滚用）
         "diff": json.loads(row.diff_json) if getattr(row, "diff_json", None) else [],
         "can_rollback": bool(getattr(row, "before_snapshot", None)) and row.status == "applied",

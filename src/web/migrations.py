@@ -6246,6 +6246,39 @@ CREATE TABLE IF NOT EXISTS user_ai_prefs (
     ))
 
 
+def _m231_copilot_action_annotation_link(conn: Connection) -> None:
+    """copilot_actions 加 annotation_id（2026-10-28, P2 可追溯契约）。
+
+    为什么需要: 标注动作点确认后确实落了 kline_annotations, 但动作行不记录落到了哪一条,
+    确认响应也不回传 id —— 用户连点两次、刷新、回滚、事后审计时都无法回答"图上这条线是
+    哪次确认画的"。加一列弱引用(action → annotation)就能把这条链合上。
+
+    为什么是弱引用不加外键: kline_annotations 的行用户可删(也可能被清理任务带走),
+    硬外键会让删标注失败或级联掉审计痕迹; 与 copilot_runs.parent_run_id 同口径。
+
+    为什么不回填: 迁移前的 applied 动作没有可靠的对应关系(同 symbol/label 可能有多条),
+    猜一个 id 比留 NULL 更坏 —— NULL 就是"当时没有这条契约"。
+
+    唯一索引: 一条标注不能被两条动作同时认领(重复确认/并发确认的写库兜底)。
+    各数据库唯一索引都允许多个 NULL, 所以历史行不受影响。
+
+    幂等可重跑（列/索引已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn,
+        "copilot_actions",
+        "annotation_id",
+        "ALTER TABLE copilot_actions ADD COLUMN annotation_id INTEGER",
+    )
+    try:
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_copilot_actions_annotation"
+            " ON copilot_actions (annotation_id)"
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("m231 建唯一索引失败(不阻断): %s", exc)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6470,6 +6503,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(228, "recipe_versions", _m228_recipe_versions),
     Migration(229, "webhook_subscriptions", _m229_webhook_subscriptions),
     Migration(230, "user_ai_prefs", _m230_user_ai_prefs),
+    Migration(231, "copilot_action_annotation_link", _m231_copilot_action_annotation_link),
 )
 
 

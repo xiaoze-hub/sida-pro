@@ -2500,7 +2500,12 @@ class CopilotAction(Base):
     """
 
     __tablename__ = "copilot_actions"
-    __table_args__ = (Index("ix_copilot_actions_user", "user_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_copilot_actions_user", "user_id", "status", "created_at"),
+        # 2026-10-28 (P2 可追溯契约): 一条动作至多关联一条标注。
+        # 唯一索引是契约的兜底 —— 重复确认/并发确认想共用一条标注时, 写库直接失败。
+        Index("uq_copilot_actions_annotation", "annotation_id", unique=True),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String(36), nullable=True)
@@ -2509,6 +2514,10 @@ class CopilotAction(Base):
     payload = Column(Text, nullable=False, default="{}")   # JSON
     status = Column(String(16), nullable=False, default="pending")  # pending/applied/rejected/rolled_back
     result = Column(Text, nullable=True)
+    # 2026-10-28 (P2): annotation 类动作确认后落库的那条 kline_annotations.id。
+    # 弱引用(不建外键): 标注可被用户删掉, 硬外键会让删标注失败; 也便于历史行留 NULL。
+    # NULL 只表示「迁移前确认/非标注动作」, 不做回填猜测。
+    annotation_id = Column(Integer, nullable=True)
     # 2026-10-25 (P1-1.3): 字段级 diff（propose 时算）与 apply 前快照（回滚用）。
     # 存 JSON 而不是拆列：不同动作类型的字段不同，拆列会每加一类动作就要迁移。
     diff_json = Column(Text, nullable=True)
