@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { DecisionCompassCard } from '@/components/copilot/DecisionCompassCard'
@@ -8,7 +8,10 @@ import { AnswerCard } from '@/components/copilot/AnswerCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 
+beforeEach(() => localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'test-user' }))}.signature`))
+
 afterEach(() => {
+  localStorage.removeItem('token')
   cleanup()
   sessionStorage.clear()
 })

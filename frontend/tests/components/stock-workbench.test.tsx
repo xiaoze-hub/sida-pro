@@ -284,6 +284,8 @@ const WITH_POSITION = {
 }
 
 afterEach(() => {
+  localStorage.removeItem('token')
+  sessionStorage.clear()
   cleanup()
   vi.restoreAllMocks()
   // 逐例清零"取数"/"挂载"计数(hoisted mock 跨例复用); 断言一律用**例内前后次数差**。
@@ -307,6 +309,7 @@ const mountedTabs = () => {
  * 与 T19 之前的占位值同值但**语义不同**: 现在是"真查过, 不在册")。用例可在 render 前覆盖。
  */
 beforeEach(() => {
+  localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'test-user' }))}.signature`)
   mocks.portfolioSummary.mockResolvedValue(EMPTY_PORTFOLIO)
 })
 

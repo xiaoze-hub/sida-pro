@@ -2,6 +2,8 @@
  * 参谋结论与 TradingView / Lightweight Charts 图元同步画线服务
  */
 
+import { safeJwtPayload } from '@/lib/jwt'
+
 export interface PriceLevelOverlay {
   price: number
   title: string
@@ -16,7 +18,19 @@ export interface KlinePriceLinePayload {
   label: string
 }
 
-const STORAGE_PREFIX = 'sida_kline_overlay:'
+const STORAGE_PREFIX = 'sida_kline_overlay:v2:'
+
+function storageKey(symbol: string | undefined): string | null {
+  if (!symbol || typeof localStorage === 'undefined') return null
+  try {
+    const claims = safeJwtPayload(localStorage.getItem('token') || '')
+    const id = claims?.sub ?? claims?.user_id
+    if ((typeof id !== 'string' && typeof id !== 'number') || !String(id).trim()) return null
+    return `${STORAGE_PREFIX}${encodeURIComponent(String(id))}:${encodeURIComponent(symbol.toUpperCase())}`
+  } catch {
+    return null
+  }
+}
 
 export class ChartOverlayService {
   private static linesMap: Map<string, any> = new Map()
@@ -32,12 +46,12 @@ export class ChartOverlayService {
       label: lvl.title,
     }))
 
-    if (symbol && typeof sessionStorage !== 'undefined') {
-      try {
-        sessionStorage.setItem(`${STORAGE_PREFIX}${symbol.toUpperCase()}`, JSON.stringify(lines))
-      } catch {
-        // sessionStorage 不可用时静默
-      }
+    const key = storageKey(symbol)
+    if (!key || typeof sessionStorage === 'undefined') return false
+    try {
+      sessionStorage.setItem(key, JSON.stringify(lines))
+    } catch {
+      return false
     }
 
     if (typeof window !== 'undefined') {
@@ -50,15 +64,17 @@ export class ChartOverlayService {
         }),
       )
     }
+    return true
   }
 
   /**
    * 从会话存储读取某标的的持久化画线
    */
   public static getStoredOverlay(symbol: string): KlinePriceLinePayload[] | null {
-    if (!symbol || typeof sessionStorage === 'undefined') return null
+    const key = storageKey(symbol)
+    if (!key || typeof sessionStorage === 'undefined') return null
     try {
-      const raw = sessionStorage.getItem(`${STORAGE_PREFIX}${symbol.toUpperCase()}`)
+      const raw = sessionStorage.getItem(key)
       if (!raw) return null
       const parsed = JSON.parse(raw)
       return Array.isArray(parsed) ? parsed : null
@@ -71,9 +87,11 @@ export class ChartOverlayService {
    * 清除某标的的画线并广播清除事件
    */
   public static clearOverlay(symbol: string) {
+    const key = storageKey(symbol)
+    if (!key) return
     if (typeof sessionStorage !== 'undefined') {
       try {
-        sessionStorage.removeItem(`${STORAGE_PREFIX}${symbol.toUpperCase()}`)
+        sessionStorage.removeItem(key)
       } catch {
         // ignore
       }

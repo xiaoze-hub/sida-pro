@@ -256,10 +256,14 @@ export function AnswerCard({
           }
           onDrawOnChart={() => {
             if (keyLevels.supportPrice != null && keyLevels.resistancePrice != null) {
-              ChartOverlayService.saveOverlay(symbol, [
+              const saved = ChartOverlayService.saveOverlay(symbol, [
                 { price: keyLevels.supportPrice, title: `支撑 ${keyLevels.supportPrice}`, kind: 'support' },
                 { price: keyLevels.resistancePrice, title: `阻力 ${keyLevels.resistancePrice}`, kind: 'pressure' },
               ])
+              if (!saved) {
+                window.alert('画线未保存：请确认已登录、股票代码有效且浏览器允许会话存储。')
+                return
+              }
               onAnchoredPrice?.({
                 value: keyLevels.supportPrice,
                 kind: 'level',
