@@ -473,33 +473,120 @@ def test_read_rejects_malformed_ids(db):
         assert ei.value.status_code == 400
 
 
-def test_read_refuses_ambiguous_000xxx_in_every_market_mode(db):
-    """000001 同时是上证指数(SH)与平安银行(SZ)：标注行证明不了是哪一类。
+def test_read_non_strict_keeps_legacy_history_for_ambiguous_000xxx(db):
+    """非严格读取 = 既有行为，不许因为 000xxx 收口被打断（历史标注回看/报表/诊断调用方）。
 
-    族归并会把三条都吐出来；按 market 精确匹配也只能证明"当初写的是 SH/SZ"，
-    证明不了"这一行说的是指数还是个股"（页面参数是客户端声明，不是证据）。
-    所以 000xxx 整段在任何 market / 任何模式下一律不给行 —— 默认拒画。
+    000001 同时是上证指数(SH)与平安银行(SZ)：严格模式证明不了标的类型 ⇒ 画图链路不给行。
+    但 README 之外的既有调用方（不带 market_strict/mine_only/action_linked/ids）走的是
+    「A 股族归并 + 本人或全局」，历史上就是这么读的 —— 这次收口只能拦画图，不能把
+    通用读取一并变成空数组，否则库里已有的 000xxx 标注直接读不出来。
     """
     db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SH", period="1d",
                            price=3200.0, label="指数线", source="ai"))
     db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SZ", period="1d",
                            price=12.5, label="个股线", source="ai"))
+    # 历史行：没有确认动作（action_id 必须回显 null，但行本身要读得出来）
     db.add(KlineAnnotation(user_id=UID, symbol="000001", market="CN", period="1d",
                            price=1.0, label="族语义线", source="ai"))
+    # 全局行（user_id IS NULL）在非严格模式下同样可见 —— 与 000001 之前的语义一致。
+    # 用 1w 周期 + 集合断言：全局行 fixture 不清（没有属主），不许污染/依赖同库其它用例。
+    db.add(KlineAnnotation(user_id=None, symbol="000002", market="SZ", period="1w",
+                           price=9.9, label="全局行", source="manual"))
     db.commit()
 
-    for market in ("CN", "SH", "SZ", "BJ"):
-        assert _read(db, symbol="000001", market=market) == [], f"{market} 非严格模式也不许给行"
-        assert _read(db, symbol="000001", market=market, market_strict=True) == [], (
-            f"{market} 严格模式不许给行（标的类型不可证）"
-        )
+    def labels(**kw) -> list[str]:
+        return sorted(r["label"] for r in _read(db, **kw))
 
-    # 对照：可证代码不受影响（CN 与推导出的交易所互证，非严格模式仍走族归并）
+    assert labels(symbol="000001", market="CN") == ["个股线", "指数线", "族语义线"], (
+        "非严格 CN 读取必须保持族归并（既有调用方语义），不得因为 000xxx 变成空数组"
+    )
+    assert labels(symbol="000001", market="SH") == ["个股线", "指数线", "族语义线"]
+    assert labels(symbol="000001", market="SZ") == ["个股线", "指数线", "族语义线"]
+    assert labels(symbol="000001", market="BJ") == ["个股线", "指数线", "族语义线"]
+
+    # 回显字段照旧：属主 + 标的 + 无动作行 action_id 为 null（历史行不编造 action）
+    rows = {r["label"]: r for r in _read(db, symbol="000001", market="CN")}
+    assert rows["指数线"]["user_id"] == UID and rows["指数线"]["action_id"] is None
+    assert rows["指数线"]["symbol"] == "000001" and rows["指数线"]["period"] == "1d"
+
+    assert set(labels(symbol="000002", market="CN", period="1w")) == {"全局行"}, (
+        "非严格读取仍含全局行"
+    )
+    # 非 A 股市场不受族归并影响（HK 只认自己）
+    assert _read(db, symbol="000001", market="HK") == []
+
+
+def test_read_strict_and_chart_modes_refuse_ambiguous_000xxx(db):
+    """严格/画图读取：000xxx 一律不给行 —— 前端那三条参数就是画图链路。
+
+    `market_strict` / `mine_only` / `action_linked` 任一为真（前端画图固定三条全带），
+    或带 `ids` 精确读取，都属于「这条行证明得了标的类型我才画」的请求：标注行没有
+    instrument 列，000xxx 整段证明不了指数还是个股 ⇒ 空数组（不是给一条错的线）。
+    """
+    db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SH", period="1d",
+                           price=3200.0, label="指数线", source="ai"))
+    db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SZ", period="1d",
+                           price=12.5, label="个股线", source="ai"))
+    db.add(KlineAnnotation(user_id=UID, symbol="000002", market="SZ", period="1d",
+                           price=9.9, label="万科线", source="ai"))
+    db.commit()
+    ambiguous_id = db.query(KlineAnnotation).filter(
+        KlineAnnotation.label == "个股线", KlineAnnotation.user_id == UID
+    ).one().id
+
+    for sym in ("000001", "000002"):
+        for market in ("CN", "SH", "SZ", "BJ"):
+            for kw in (
+                {"market_strict": True},
+                {"mine_only": True},
+                {"action_linked": True},
+                {"market_strict": True, "mine_only": True, "action_linked": True},
+                {"ids": str(ambiguous_id)},
+            ):
+                assert _read(db, symbol=sym, market=market, **kw) == [], (
+                    f"{sym}/{market} 严格读取 {kw} 不许给行（标的类型不可证）"
+                )
+
+    # 对照：可证代码在同样严格参数下照旧读得到（安全边界不许外溢）
     db.add(KlineAnnotation(user_id=UID, symbol=SYMBOL, market="SH", period="1d",
                            price=35.2, label="沪市线", source="ai"))
     db.commit()
     assert [r["label"] for r in _read(db, symbol=SYMBOL, market="CN", market_strict=True)] == ["沪市线"]
     assert [r["label"] for r in _read(db, symbol=SYMBOL, market="SH")] == ["沪市线"]
+
+
+def test_read_ambiguous_000xxx_never_leaks_across_users(db):
+    """不同用户隔离：000xxx 收口不以放宽属主过滤为代价（严格与非严格都不许看到他人行）。
+
+    非严格读取是「本人 + 全局」，严格读取是「本人」；两条路径下他人的 000001 标注
+    都必须看不见 —— 否则「恢复非严格历史读取」就成了越权通道。
+    """
+    db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SZ", period="1d",
+                           price=12.5, label="我的", source="ai"))
+    db.add(KlineAnnotation(user_id=OTHER_UID, symbol="000001", market="SZ", period="1d",
+                           price=12.6, label="他人的", source="ai"))
+    db.add(KlineAnnotation(user_id=OTHER_UID, symbol="000002", market="SZ", period="1d",
+                           price=9.9, label="他人000002", source="ai"))
+    db.commit()
+
+    def labels(user_id: str, **kw) -> list[str]:
+        from src.web.api.copilot import get_copilot_annotations
+
+        params = {"symbol": "000001", "market": "CN", "period": "1d", "db": db,
+                  "user": _U(user_id)}
+        params.update(kw)
+        return sorted(r["label"] for r in get_copilot_annotations(**params))
+
+    assert labels(UID) == ["我的"], "非严格读取只给本人 + 全局，绝不给同标的的他人行"
+    assert labels(OTHER_UID) == ["他人的"]
+    assert labels(UID, mine_only=True) == [], "严格读取下 000xxx 一律不给行"
+    assert labels(OTHER_UID, mine_only=True) == []
+    # 精确 id 也不行：他人的行即使 id 点名也读不到
+    from src.web.api.copilot import get_copilot_annotations
+
+    theirs = db.query(KlineAnnotation).filter(KlineAnnotation.label == "他人的").one().id
+    assert get_copilot_annotations(symbol="000001", market="CN", period="1d",
+                                   ids=str(theirs), db=db, user=_U()) == []
 
 
 # ── 6. 迁移 v231：唯一索引建不起来必须失败（不许吞异常 / 不许记成功）───────────
@@ -941,10 +1028,11 @@ def test_pg_dangling_link_is_left_alone_and_does_not_block(pg_db):
 # 现在两侧共用一条**可证明**规则：由代码推导交易所 → 只与能证实的市场互证。
 
 
-def _http_for(session) -> "object":
+def _http_for(session, uid: str = UID):
     """真实 HTTP 行为：只挂 copilot 路由 + 覆盖鉴权/会话依赖（不经全局中间件）。
 
     测的是「路由 → 异常映射 → 状态码/JSON」这条真链路，而不是直接调函数。
+    `uid` 可换身份：越权/隔离用例必须真的换一个登录态，不能只换 payload。
     """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -961,7 +1049,7 @@ def _http_for(session) -> "object":
 
     async def _user():
         class _Who:
-            id = UID
+            id = uid
 
         return _Who()
 
@@ -1045,7 +1133,11 @@ def test_provable_markets_never_cross_index_and_stock_with_the_same_code(db):
 
 
 def test_same_code_index_row_is_not_read_back_on_the_stock_page(db):
-    """读端闸门：000001 的行（SH 指数 / SZ 个股）在任何页面查询下都不给。"""
+    """读端闸门（严格/画图读取）：000001 的行（SH 指数 / SZ 个股）在任何 market 下都不给。
+
+    非严格通用读取仍按既有语义返回（见 `test_read_non_strict_keeps_legacy_history_for_ambiguous_000xxx`）：
+    那条路径不画图，前端 `verifyRow` 也会拒画。
+    """
     db.add_all([
         KlineAnnotation(user_id=UID, symbol="000001", market="SH", period="1d",
                         price=3200.0, label="指数线", source="ai"),
@@ -1077,7 +1169,8 @@ def http_read(db, **kw):
 # 000001 之外，000002（A股指数 / 万科A）、000003（B股指数）等同样是指数与个股撞号。
 # 旧实现只列了"已知撞号"的 7 个代码，名单外的就被当成深市个股推导成 SZ
 # → 上证指数系列的线可以画到个股图上。服务端标注行没有 instrument 列，
-# 也没有任何字段能证明标的类型，所以整段 000xxx 默认不可证：不推导、不互证、不给行、不落库。
+# 也没有任何字段能证明标的类型，所以整段 000xxx 默认不可证：不推导、不互证、
+# 严格/画图读取不给行、不落库；**非严格通用读取保持既有行为**（历史标注不许读不出来）。
 
 _AMBIGUOUS_SAMPLES = (
     "000001",  # 上证指数 / 平安银行
@@ -1135,8 +1228,12 @@ def test_ambiguous_target_cannot_be_confirmed_and_never_lands(db):
         assert action.status == "pending", "拒绝后动作必须回滚回 pending（可以改目标再确认）"
 
 
-def test_http_default_denies_000002_and_000003_on_every_page(db, http):
-    """真实 HTTP：读端零行、确认端 400 —— 000002/000003 不再是一条"能画就画"的路径。"""
+def test_http_strict_read_denies_000002_and_000003_but_legacy_read_still_returns(db, http):
+    """真实 HTTP：严格参数（画图链路）零行、确认端 400；非严格通用读取照旧给行。
+
+    这两件事必须同时成立 —— 上一版把非严格读取也一起关掉，等于把库里已有的 000xxx
+    标注从所有既有调用方（历史回看/报表/诊断）面前删掉。
+    """
     db.add_all([
         KlineAnnotation(user_id=UID, symbol="000002", market="SZ", period="1d",
                         price=9.9, label="万科线", source="ai"),
@@ -1147,11 +1244,25 @@ def test_http_default_denies_000002_and_000003_on_every_page(db, http):
 
     for sym in ("000002", "000003"):
         for market in ("CN", "SH", "SZ"):
-            resp = http.get("/copilot/annotations", params={
-                "symbol": sym, "market": market, "period": "1d", **_STRICT,
+            # 严格（前端画图会用到的每一种严格参数）：一条都不给。
+            # 分别单独传：`action_linked` 本身就会滤掉无确认动作的行，只测三件套会掩盖
+            # 「歧义闸门失效」——market_strict/mine_only 单独一条也必须拦得住。
+            for strict_kw in ({"market_strict": "1"}, {"mine_only": "1"}, _STRICT):
+                resp = http.get("/copilot/annotations", params={
+                    "symbol": sym, "market": market, "period": "1d", **strict_kw,
+                })
+                assert resp.status_code == 200, resp.text
+                assert resp.json() == [], f"{sym} 在 {market} 页严格读取 {strict_kw} 不许给行"
+
+            # 非严格（既有通用调用方）：行照旧返回（不许因为收口变成空）
+            legacy = http.get("/copilot/annotations", params={
+                "symbol": sym, "market": market, "period": "1d",
             })
-            assert resp.status_code == 200, resp.text
-            assert resp.json() == [], f"{sym} 在 {market} 页不许给行"
+            assert legacy.status_code == 200, legacy.text
+            labels = [r["label"] for r in legacy.json()]
+            assert labels == (["万科线"] if sym == "000002" else ["B股指数线"]), (
+                f"{sym} 在 {market} 页非严格读取必须保持既有行为：{labels}"
+            )
 
     item = _propose(db, {"symbol": "000002", "label": "万科支撑", "price": 9.9, "market": "SZ"})
     applied = http.post(f"/copilot/actions/{item['id']}/apply")
@@ -1160,6 +1271,39 @@ def test_http_default_denies_000002_and_000003_on_every_page(db, http):
     assert db.query(KlineAnnotation).filter(
         KlineAnnotation.user_id == UID, KlineAnnotation.label == "万科支撑"
     ).count() == 0
+
+
+def test_http_ambiguous_read_is_mode_gated_and_user_scoped(db):
+    """真实 HTTP：000001 的严格读取零行，但非严格读取按属主隔离（他人的行不许出现）。"""
+    db.add_all([
+        KlineAnnotation(user_id=UID, symbol="000001", market="SZ", period="1d",
+                        price=12.5, label="我的", source="ai"),
+        KlineAnnotation(user_id=OTHER_UID, symbol="000001", market="SZ", period="1d",
+                        price=12.6, label="他人的", source="ai"),
+    ])
+    db.commit()
+
+    mine = _http_for(db)
+    theirs = _http_for(db, uid=OTHER_UID)
+
+    # 严格参数逐条单测（三件套里的 action_linked 自己就会滤掉无动作行，不能只靠它）
+    for market in ("CN", "SZ"):
+        for strict_kw in ({"market_strict": "1"}, {"mine_only": "1"}, _STRICT):
+            strict = mine.get("/copilot/annotations", params={
+                "symbol": "000001", "market": market, "period": "1d", **strict_kw,
+            })
+            assert strict.status_code == 200, strict.text
+            assert strict.json() == [], f"严格读取（{strict_kw} / {market}）一律零行"
+
+    legacy_mine = mine.get("/copilot/annotations", params={
+        "symbol": "000001", "market": "CN", "period": "1d",
+    })
+    assert [r["label"] for r in legacy_mine.json()] == ["我的"], "非严格读取只给本人行"
+
+    legacy_theirs = theirs.get("/copilot/annotations", params={
+        "symbol": "000001", "market": "CN", "period": "1d",
+    })
+    assert [r["label"] for r in legacy_theirs.json()] == ["他人的"], "换登录态读的是他自己的行"
 
 
 def test_market_contradicting_the_symbol_is_refused_at_write(db):

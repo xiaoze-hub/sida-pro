@@ -508,21 +508,22 @@ def get_copilot_annotations(
     - `symbol/market/period`：目标回显，前端必须与当前 K 线逐字比对
 
     `ids` / `market_strict` / `mine_only` / `action_linked` 是给「精确读取」用的严格模式；
-    默认值保持旧行为（A 股市场族归并 + 本人或全局），不改变既有调用方语义 ——
-    **但 000xxx 这类指数/个股同号段例外：任何模式都不给行**（见下段）。
+    默认值保持旧行为（A 股市场族归并 + 本人或全局），不改变既有调用方语义。
     `market_strict=true` 的语义是「**可证明**的同一标的」，不是字符串相等：A 股代码能推导出
-    交易所时（600xxx→SH、002/300xxx→SZ、43/83/87xxx→BJ），`CN` 与该交易所互证；
-    000xxx 整段与纯指数前缀（399/880/881/999）无法证明标的类型 ⇒ **默认拒画**：
-    即便调用方按 SZ/SH 精确查询也返回空（页面上的 market 是客户端声明，不是证据），
-    见 `actions.instrument_ambiguous`。前端 `targetRefusal` 同表同规则，两侧一致。
+    交易所时（600xxx→SH、002/300xxx→SZ、43/83/87xxx→BJ），`CN` 与该交易所互证。
+
+    **标的类型不可证（000xxx 整段 / 纯指数前缀 399/880/881/999）只拦画图链路，不拦通用读取**
+    （2026-10-28 四次复审整改）：
+      - 严格请求（`market_strict` / `mine_only` / `action_linked` 任一为真，或带 `ids` 精确读取
+        —— 前端画图固定带这三条参数）⇒ 直接返回 `[]`：标注行没有 instrument 列，页面上的
+        market 是客户端声明而不是证据，画不出来的行一条都不给。
+      - 通用请求（不带任何严格参数的历史标注回看 / 报表 / 诊断调用方）⇒ **保持既有行为**：
+        族归并 + 本人或全局行，照旧返回。安全收口不许以打断既有非本功能调用者为代价。
+    见 `actions.instrument_ambiguous`；前端 `targetRefusal` 同表同规则，两侧一致（前端本就拒画）。
     """
     from sqlalchemy import and_, or_
 
     from src.db.models import CopilotAction, KlineAnnotation
-
-    # 标的类型不可证 ⇒ 一条都不给（不靠"名单里没有就没问题"：000xxx 整段都可能是指数）。
-    if actions_mod.instrument_ambiguous(symbol):
-        return []
 
     wanted: list[int] = []
     # 直接调用(单测/内部)时未传的 Query 默认值不是 str/bool —— 按"没给"处理，
@@ -540,6 +541,15 @@ def get_copilot_annotations(
             raise HTTPException(status_code=400, detail=f"ids 不是合法的标注 id 列表：{raw_ids}")
         if len(wanted) > 200:
             raise HTTPException(status_code=400, detail="ids 一次最多 200 个")
+
+    # 标的类型不可证（000xxx / 纯指数前缀）**只拦画图链路**（2026-10-28 四次复审）：
+    # 严格参数三件套（前端画图固定都带）或 ids 精确读取 = 「这条行属于这只票、这个周期、
+    # 这个账号」的证明请求；证明不了标的类型就一条都不给（页面上的 market 是客户端声明，
+    # 不是证据）。通用读取（不带任何严格参数）保持既有行为 —— 历史标注回看 / 报表 /
+    # 诊断这类既有调用方不许被这次收口打断。
+    draw_read = strict or only_mine or linked_only or bool(wanted)
+    if draw_read and actions_mod.instrument_ambiguous(symbol):
+        return []
 
     # 2026-10-20 线上实测: AI 提议里 market 默认写 "CN"，而 K 线页传 "SH"/"SZ"，严格等值匹配
     # 会导致"标注确认成功但图上查不到"。
