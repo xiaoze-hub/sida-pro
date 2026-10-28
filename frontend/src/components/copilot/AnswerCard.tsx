@@ -8,7 +8,11 @@ import {
   splitByAnchors,
   type PriceAnchorKind,
 } from '@/lib/copilot/price-anchors'
-import { DecisionCompassCard } from '@/components/copilot/DecisionCompassCard'
+import {
+  DecisionCompassCard,
+  MODEL_SELF_RATING_LABEL,
+  normalizeSelfRating,
+} from '@/components/copilot/DecisionCompassCard'
 import {
   MultiDimensionEvidencePanel,
   type DimensionPerspective,
@@ -199,6 +203,11 @@ export function AnswerCard({
 
   const keyLevels = useMemo(() => extractKeyLevels(parsed), [parsed])
   const realPerspectives = useMemo(() => extractRealPerspectives(parsed.evidence), [parsed.evidence])
+  /**
+   * 回答正文里的「置信度 8/10」是模型的**自评分**，不是统计置信度。
+   * 这里只做取值校验（0~10），既不换算成百分制、也不兜底默认值。
+   */
+  const selfRating = useMemo(() => normalizeSelfRating(parsed.confidence), [parsed.confidence])
 
   const copy = async () => {
     try {
@@ -218,12 +227,13 @@ export function AnswerCard({
           <div className="flex flex-wrap items-center gap-1.5">
             <Sparkles className="h-3.5 w-3.5 shrink-0 text-role-watch" />
             <span className="text-[12px] font-medium text-role-watch">{ANSWER_VERDICT_LABEL}</span>
-            {parsed.confidence != null ? (
+            {selfRating != null ? (
               <span
                 data-testid="copilot-answer-confidence"
                 className="rounded border border-role-watch/40 px-1 text-[12px] text-role-watch"
+                title="模型自评：模型自己对结论把握的主观打分，非统计置信度或准确率"
               >
-                {ANSWER_CONFIDENCE_LABEL} {parsed.confidence}/10
+                {ANSWER_CONFIDENCE_LABEL}（{MODEL_SELF_RATING_LABEL}） {selfRating}/10
               </span>
             ) : null}
           </div>
@@ -244,7 +254,7 @@ export function AnswerCard({
           stopLossPrice={keyLevels.stopLossPrice ?? undefined}
           targetPrice={keyLevels.targetPrice ?? undefined}
           biasLabel={parsed.verdict ? parsed.verdict.slice(0, 8) : '多空裁决'}
-          confidence={parsed.confidence != null ? Math.round(parsed.confidence * 10) : undefined}
+          modelConfidence={selfRating ?? undefined}
           tactics={
             parsed.plan
               ? parsed.plan

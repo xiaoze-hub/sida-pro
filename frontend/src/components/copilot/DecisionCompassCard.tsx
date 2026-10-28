@@ -2,6 +2,30 @@ import React from 'react'
 import { Crosshair, ArrowUpRight, TrendingUp, TrendingDown, Bell } from 'lucide-react'
 import { safeFixed } from '@/lib/format'
 
+/** 罗盘顶部的自评徽标文案：模型自评 ≠ 统计置信度/准确率，单点定义供 AnswerCard 复用。 */
+export const MODEL_SELF_RATING_LABEL = '模型自评'
+
+/**
+ * 模型自评的合法区间（原始 x/10）。越界、非有限、非数字一律视为"没有"。
+ *
+ * 为什么必须在这里卡死：历史缺陷是调用方把 8/10 放大成 80 再传进来，
+ * 组件直接拼 `{value}%` 就变成了"置信度 80%"这种没有样本支撑的伪统计口径。
+ * 现在单位在入参名上写明是 x/10，越界值宁可隐藏也不做任何换算。
+ */
+const SELF_RATING_MIN = 0
+const SELF_RATING_MAX = 10
+
+export function normalizeSelfRating(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  if (value < SELF_RATING_MIN || value > SELF_RATING_MAX) return null
+  return value
+}
+
+/** 原样保留模型给的 x/10：8 → "8"、8.5 → "8.5"，不取整、不补零、不补成百分比。 */
+function formatSelfRating(value: number): string {
+  return String(value)
+}
+
 export interface DecisionCompassProps {
   ticker?: string
   tickerName?: string
@@ -12,7 +36,13 @@ export interface DecisionCompassProps {
   stopLossPrice?: number
   targetPrice?: number
   biasLabel?: string
-  confidence?: number
+  /**
+   * 模型自评分值，**原始 x/10**（与回答正文「置信度 8/10」同一个数）。
+   *
+   * 不是统计置信度、不是准确率：没有样本与回测支撑，所以只按 x/10 原样展示。
+   * 缺失 / 非有限 / 越界（不在 0~10）→ 徽标隐藏，不补默认值。
+   */
+  modelConfidence?: number
   tactics?: string[]
   onDrawOnChart?: () => void
   onSetAlert?: (price: number) => void
@@ -37,7 +67,7 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
   stopLossPrice,
   targetPrice,
   biasLabel = '多空裁决',
-  confidence,
+  modelConfidence,
   tactics = [],
   onDrawOnChart,
   onSetAlert,
@@ -68,6 +98,8 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
       ? safeFixed(((currentPrice - costPrice) / costPrice) * 100, 2)
       : null
   const isLoss = pnlPct !== null && Number(pnlPct) < 0
+  // 模型自评：只保留原始 x/10，非法值直接视为缺失（绝不兜底成百分比）
+  const selfRating = normalizeSelfRating(modelConfidence)
 
   return (
     <div data-testid="copilot-decision-compass" className="card-surface rounded-lg bg-s2 overflow-hidden my-2 text-[12px]">
@@ -78,9 +110,14 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
             <span className="h-1.5 w-1.5 rounded-full bg-role-watch" />
             {biasLabel}
           </span>
-          {confidence != null ? (
-            <span className="text-[12px] text-muted-foreground">
-              置信度 <strong className="text-foreground font-mono">{confidence}%</strong>
+          {selfRating != null ? (
+            <span
+              data-testid="copilot-compass-model-confidence"
+              className="text-[12px] text-muted-foreground"
+              title="模型自评：模型自己对结论把握的主观打分，非统计置信度或准确率"
+            >
+              {MODEL_SELF_RATING_LABEL}{' '}
+              <strong className="text-foreground font-mono">{formatSelfRating(selfRating)}/10</strong>
             </span>
           ) : null}
         </div>
