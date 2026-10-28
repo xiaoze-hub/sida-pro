@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Swords } from 'lucide-react'
-import { chatApi } from '@sida/api'
+import { chatApi, type ChatStreamResult } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 
 /**
@@ -24,6 +24,10 @@ import SafeMarkdown from '@/components/SafeMarkdown'
  *   - **不会发生任何交易委托**：本面板只渲染报告，配方提示词明令禁止买卖指令。
  *
  * 失败态如实陈述：展示后端 error 原文，不推断原因、不编造"已生成"。
+ * 2026-10-28（与 AiCopilot 同一份流契约）：结论以 `sendMessageStream` 的返回值为准 ——
+ *   只有 `authoritative`（服务端终稿到达）才算完成；没有终稿（客户端断流 / 坏帧无终稿 /
+ *   服务端只给 error）**明确判失败**，已流出的增量标「不完整」保留可见（让人看清断在哪），
+ *   不再"有增量就判 done"把半截正文当报告。
  * 排版铁律：hairline 分隔（无卡片底、无 shadow-float）；字号 10/11/12；表格数字 tabular-nums；
  * 结论是否可证伪由配方提示词约束，本组件不二次加工 AI 正文（SafeMarkdown 原样渲染）。
  */
@@ -37,6 +41,8 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
   const [phase, setPhase] = useState<Phase>('idle')
   const [stage, setStage] = useState('')
   const [result, setResult] = useState('')
+  /** 屏上的正文是中断前的片段（没有终稿）—— 必须标不完整，不许当成品。 */
+  const [incomplete, setIncomplete] = useState(false)
   const [errMsg, setErrMsg] = useState('')
   const abortRef = useRef<AbortController | null>(null)
   const aliveRef = useRef(true)
@@ -55,6 +61,7 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
     if (running) return
     setPhase('running')
     setResult('')
+    setIncomplete(false)
     setErrMsg('')
     setStage('正在发起压力测试…')
     void (async () => {
@@ -66,9 +73,12 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
           stock_symbol: symbol,
           stock_market: market,
         })
-        let streamSettled = false
         let acc = ''
-        await chatApi.sendMessageStream(
+        /** done.content = 落库全文（对账附言/拒答替换只在这里，与增量拼接不等价）。 */
+        let doneText = ''
+        /** error 帧原文（服务端主动报错的那条路）。 */
+        let frameError = ''
+        const streamResult = (await chatApi.sendMessageStream(
           conv.id,
           devilPrompt(symbol),
           {
@@ -82,31 +92,52 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
               setResult((prev) => prev + c)
             },
             onDone: (msg) => {
-              streamSettled = true
-              if (!aliveRef.current) return
-              setResult(String(msg.content || ''))
-              setPhase('done')
+              doneText = String(msg?.content || '')
+              // 空终稿不覆盖已流出的正文（那不是"生成完了"，交给下面的结论判定）
+              if (!aliveRef.current || !doneText) return
+              setResult(doneText)
+              setIncomplete(false)
             },
             onError: (m) => {
-              streamSettled = true
-              if (!aliveRef.current) return
-              setErrMsg(String(m || ''))
-              setPhase('failed')
+              frameError = String(m || '')
             },
           },
           ctrl.signal,
           undefined,
           { symbol, market },
-        )
-        // 流结束但既没 done 也没 error（如连接被提前掐断）→ 如实按失败处理，不装成功
-        if (!streamSettled && aliveRef.current) {
-          if (acc.trim()) {
-            setResult(acc)
-            setPhase('done')
-          } else {
-            setErrMsg('')
-            setPhase('failed')
+        )) as ChatStreamResult | undefined
+        if (!aliveRef.current) return
+        /**
+         * 2026-10-28: 结论一律以 stream result 为准（与 AiCopilot 同一份契约）。
+         * 旧实现「没有 done 但有增量 → 判 done」等于把断流的半截正文当成品：接口另一调用方
+         * 也得认同一条规矩 —— 没有权威终稿就是没完成，`failure` 原文照实展示。
+         * 优先级：`failure` > 权威终稿 > （契约外的兜底）done 文案。
+         */
+        const failure = streamResult?.failure
+        const finalText = streamResult ? (streamResult.authoritative ? streamResult.content : doneText) : doneText
+        if (failure) {
+          setErrMsg(failure)
+          setPhase('failed')
+          const partial = String((streamResult?.content ?? '') || doneText || acc || '')
+          if (partial.trim()) {
+            // 片段仍给人看（有信息量），但明确标不完整：留着不是认它，是让人知道断在哪。
+            setResult(partial)
+            setIncomplete(true)
           }
+          return
+        }
+        if (finalText) {
+          setResult(finalText)
+          setIncomplete(false)
+          setPhase('done')
+          return
+        }
+        // 没有终稿（也没有 result 对象可查）：如实失败，已有增量标不完整
+        setErrMsg(frameError)
+        setPhase('failed')
+        if (String(acc).trim()) {
+          setResult(acc)
+          setIncomplete(true)
         }
       } catch (e) {
         if (!aliveRef.current) return
@@ -151,6 +182,11 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
       {/* 结果：hairline 分隔，SafeMarkdown 原样渲染（GFM 表格/要点行），不做二次加工 */}
       {result ? (
         <div className="mt-2 border-t border-border pt-2" data-testid="devil-advocate-result">
+          {incomplete ? (
+            <div data-testid="devil-advocate-incomplete" className="mb-1 text-[12px] text-role-risk">
+              内容不完整：以下是流中断前已收到的片段，不是完整报告。
+            </div>
+          ) : null}
           <div className="text-[12px] leading-relaxed [&_table]:tabular-nums">
             <SafeMarkdown>{result}</SafeMarkdown>
           </div>
@@ -163,7 +199,7 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
       {/* 失败态：展示后端 error 原文，不推断原因、不谎称已生成 */}
       {phase === 'failed' ? (
         <div className="mt-2 text-[12px] text-muted-foreground" data-testid="devil-advocate-failed">
-          挑刺失败：本轮压力测试未完成 —— 可重试。
+          {incomplete ? '挑刺未完成：本轮压力测试中途断流，未拿到服务端终稿 —— 可重试。' : '挑刺失败：本轮压力测试未完成 —— 可重试。'}
           {errMsg ? <span> 流中断原因（原文）：{errMsg}</span> : ' 流在给出结论前结束，未生成报告。'}
           {' 本次未发生任何交易委托。'}
         </div>

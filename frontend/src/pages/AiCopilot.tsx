@@ -247,7 +247,12 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const [attach, setAttach] = useState<PendingAttachment | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
+  /**
+   * 在飞的所有流控制器（2026-10-28）。切会话**不中止**旧流（后端继续跑完落库，历史里还在），
+   * 但卸载要一起断 —— 没人看了就别继续计费。所以这里存集合而不是单个 ref：
+   * 两轮流并存时（切走旧流还没收、新会话又发了新流）只 abort 最后一个会漏掉前面的。
+   */
+  const liveStreams = useRef<Set<AbortController>>(new Set())
   const mounted = useRef(true)
   /**
    * 2026-10-28 流式归属令牌: 切会话/新会话时 +1。
@@ -258,19 +263,41 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const scroller = useRef<HTMLDivElement>(null)
   useEffect(() => {
     mounted.current = true
-    return () => { mounted.current = false; abortRef.current?.abort() }
+    const live = liveStreams.current
+    return () => {
+      mounted.current = false
+      // 卸载断掉所有在飞的流（含被切会话作废、但后端还在跑的那些）
+      for (const ac of live) ac.abort()
+      live.clear()
+    }
+  }, [])
+  /**
+   * 视图换主人（2026-10-28）：切会话 / 新会话 / 换入口上下文时调用。
+   *
+   * 令牌 +1 让旧流失去写入权；并把**它占着的本轮态**当场收走：
+   * `streaming`（loading）/ `stage` / 证据齐套度 / 坏帧提示都属于「正在看的那一轮」。
+   * 不能在旧流的 finally 里做这件事 —— 那时视图可能已经是别人的了，等于替别人清场
+   * （回归用例 tests/components/copilot-stream-race.test.tsx）。
+   */
+  const detachStream = useCallback(() => {
+    streamSeqRef.current += 1
+    readinessRef.current = emptyReadiness()
+    setReadiness(emptyReadiness())
+    setStreaming(false)
+    setStage('')
+    setStreamNotice(null)
   }, [])
   useEffect(() => { onBusyChange?.(streaming || uploading || backgroundPending) }, [streaming, uploading, backgroundPending, onBusyChange])
   useEffect(() => {
     if (!entry || entry.id === consumedEntry.current || streaming || backgroundPending) return
     consumedEntry.current = entry.id
     initialContext.current = entry
-    streamSeqRef.current += 1 // 2026-10-28: 换入口上下文 = 换会话视图, 旧流作废
+    detachStream() // 2026-10-28: 换入口上下文 = 换会话视图, 旧流连带本轮态一起作废
     setConvId(null)
     setMsgs([])
     setError(null)
     setAnchorSymbol(entry.symbol)
-  }, [entry, streaming, backgroundPending])
+  }, [entry, streaming, backgroundPending, detachStream])
 
   /**
    * 上下文带入（P0）：从个股工作台/外部链接进来时带 `?symbol=600111`，
@@ -393,7 +420,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   }, [loadHistory])
 
   const openConversation = useCallback(async (id: number) => {
-    streamSeqRef.current += 1 // 2026-10-28: 切会话即作废旧流的写入权(防串消息)
+    detachStream() // 2026-10-28: 切会话即作废旧流的写入权, 连它占着的 loading/stage/齐套度一起收
     try {
       const detail = await chatApi.getConversation(id)
       if (!mounted.current) return
@@ -409,15 +436,15 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     } catch (e) {
       setError(`打开历史对话失败：${e instanceof Error ? e.message : '未知错误'}`)
     }
-  }, [])
+  }, [detachStream])
 
   const startNewConversation = useCallback(() => {
-    streamSeqRef.current += 1 // 2026-10-28: 新会话 → 旧流不许再往这里写
+    detachStream() // 2026-10-28: 新会话 → 旧流不许再往这里写(本轮态一并收走)
     initialContext.current = null
     setConvId(null)
     setMsgs([])
     setError(null)
-  }, [])
+  }, [detachStream])
 
 
 
@@ -536,6 +563,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       // 2026-10-28: 本轮流的归属令牌。切会话/新会话来时 +1, 迟到的回调对不上就整条丢弃。
       const seq = ++streamSeqRef.current
       const isCurrent = () => mounted.current && streamSeqRef.current === seq
+      const ac = new AbortController()
+      liveStreams.current.add(ac)
       setStreamNotice(null)
       try {
         // 标的解析优先级：@ 指定 > 本条文字里的代码 > 页面锚点（正在看 XXX）
@@ -556,11 +585,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               : { initial_context: '用户从【数智参谋】一级页进入，尚未指定标的。' },
           )
           id = conv.id
-          if (!mounted.current) return
+          // 建会话是异步的：等回来时用户可能已经切走/发了新一轮 —— 那时这条流的
+          // 会话 id 不许把视图抢回去（否则"切到历史会话"会被一瞬间弹回旧会话）。
+          if (!isCurrent()) return
           setConvId(id)
         }
-        const ac = new AbortController()
-        abortRef.current = ac
         const result = await chatApi.sendMessageStream(
           id,
           content,
@@ -619,13 +648,19 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           setStreamNotice(`流式数据有 ${streamResult.corruptedFrames} 处损坏，已按服务端终稿校正`)
         }
       } catch (e) {
+        // 2026-10-28: 旧流（已切走/已被新流顶掉）的失败文案只属于它自己那一轮,
+        // 不许挂到别人正在看的会话上（回归用例 tests/components/copilot-stream-race.test.tsx）。
+        if (!isCurrent()) return
         setError(e instanceof Error ? e.message : '对话失败')
       } finally {
-        if (mounted.current) {
+        // 收尾同样要认主人：`streaming`/`stage`/齐套度/坏帧提示都是**当前**那一轮的显示态。
+        // 早先这里无条件 setStreaming(false)+setStage('')，旧流一结束就把新流的 spinner 和
+        // 取数阶段提示抹掉（用户看着还在跑的答案突然"消失"）；旧流该清的东西已在
+        // detachStream（切会话/新会话那一刻）清过，这里再清就是替别人清场。
+        liveStreams.current.delete(ac)
+        if (isCurrent()) {
           setStreaming(false)
           setStage('')
-        }
-        if (isCurrent()) {
           // 2026-10-25: 答完刷新 run 列表 —— 否则内联步骤条摘要用的是打开会话那一刻的快照
           // （实测新回答显示 "0 步 · -- · running"，因为 run 行在发问前就抓好了）
           runsState.reload()
@@ -643,10 +678,6 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               return [...prev.slice(0, -1), { ...last, readiness: settled }]
             })
           }
-        } else {
-          // 2026-10-28: 旧流的齐套度属于别的会话, 不留在当前视图
-          readinessRef.current = emptyReadiness()
-          if (mounted.current) setReadiness(emptyReadiness())
         }
       }
     },

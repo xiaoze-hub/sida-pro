@@ -11,7 +11,9 @@
  * ④ **流式结果真渲染**：onDelta 累积、onDone 用落库全文，正文交给 SafeMarkdown（GFM 表格），
  *    组件不二次加工 AI 输出；
  * ⑤ **失败如实陈述**：onError 展示后端 error 原文，按钮恢复可重试，不谎称已生成；
- * ⑥ **流静默结束（既无 done 也无 error）按失败处理**，有部分增量则保留正文不误报失败。
+ * ⑥ **没有终稿就是没完成**：流静默结束（既无 done 也无 error）/ result.failure 有值 →
+ *    明确判失败并标「不完整」（已流出的片段保留可见），不再「有增量就判 done」；
+ *    终稿（authoritative）到达才按落库全文显示。
  * ⑦ **集成锚点**：SuggestTab（工作台「建议」页）必须真的挂载本面板。
  *
  * 真数据纪律：mock 的是网络层（@sida/api 的 chatApi/insightApi 等）与 SafeMarkdown（探针），
@@ -36,7 +38,8 @@ const streamImpl = (fn: (h: StreamHandlers) => Promise<void>) =>
 
 const mocks = vi.hoisted(() => ({
   createConversation: vi.fn<(...a: unknown[]) => Promise<{ id: number; title: string }>>(),
-  sendMessageStream: vi.fn<(...a: unknown[]) => Promise<void>>(),
+  /** 返回 `ChatStreamResult`（结论真源）；本文件多数用例只关心 handlers，故按 unknown 宽进。 */
+  sendMessageStream: vi.fn<(...a: unknown[]) => Promise<unknown>>(),
   fetchAPI: vi.fn<(...a: unknown[]) => Promise<unknown>>(),
   insightQuote: vi.fn<(...a: unknown[]) => Promise<unknown>>(),
   insightMoreInfo: vi.fn<(...a: unknown[]) => Promise<unknown>>(),
@@ -231,24 +234,108 @@ describe('空头司令挑刺（DevilAdvocatePanel）', () => {
     expect(triggerButton().disabled).toBe(false)
   })
 
-  it('流静默结束（无 done 无 error）：有增量则保留正文；空流按失败处理，不装成功', async () => {
-    // 有增量、但没有 done → 已收到的正文保留为结果（不误报失败）
-    mocks.sendMessageStream.mockImplementation(
-      streamImpl(async (h) => { h.onDelta?.('【一句话结论】证据不足，暂无法给出三条死因。') }),
-    )
-    const view = renderPanel()
-    fireEvent.click(triggerButton())
-    await waitFor(() => expect(screen.getByTestId('devil-advocate-result')).toBeTruthy())
-    expect(screen.queryByTestId('devil-advocate-failed')).toBeNull()
-
-    // 空流（什么都没下发）→ 如实失败
-    view.unmount()
+  it('流静默结束且空流：如实失败、不装成功', async () => {
+    // 空流（什么帧都没下发，result 也没有终稿）→ 如实失败
     mocks.sendMessageStream.mockImplementation(async () => {})
     renderPanel()
     fireEvent.click(triggerButton())
     await waitFor(() => expect(screen.getByTestId('devil-advocate-failed')).toBeTruthy())
     expect(screen.getByTestId('devil-advocate-failed').textContent).toContain('未生成报告')
     expect(screen.queryByTestId('devil-advocate-result')).toBeNull()
+    expect(screen.queryByTestId('devil-advocate-incomplete')).toBeNull()
+  })
+})
+
+/**
+ * 2026-10-28 定向回归：本面板是 `sendMessageStream` 的另一个调用方。
+ * 旧实现「流静默结束但有增量 → 判 done」把断流的半截正文当成品亮着；
+ * 参谋页那边（AiCopilot）早已改成「没终稿就是失败」，这里必须同一条规矩。
+ */
+describe('流结论以 stream result 为准（与参谋页同一契约）', () => {
+  const PARTIAL = '【一句话结论】上方套牢峰压制（写到一半就断了'
+
+  it('无 done、有增量、result.failure → 明确判失败：失败态原文可见 + 片段保留但标不完整，按钮可重试', async () => {
+    mocks.sendMessageStream.mockImplementation(async (...args: unknown[]) => {
+      const h = (args[2] || {}) as StreamHandlers
+      h.onStage?.('正在取数 1/10：get_main_intent')
+      h.onDelta?.(PARTIAL)
+      return {
+        content: PARTIAL,
+        authoritative: false,
+        corruptedFrames: 1,
+        errors: [],
+        failure: '流式数据损坏（1 处），且未收到服务端终稿，回答可能不完整',
+      }
+    })
+
+    renderPanel()
+    fireEvent.click(triggerButton())
+
+    const failed = await screen.findByTestId('devil-advocate-failed')
+    // 不再谎称"完成"：文案是"未完成/中途断流"，并照抄 failure 原文
+    expect(failed.textContent).toContain('中途断流')
+    expect(failed.textContent).toContain('流式数据损坏（1 处）')
+    expect(failed.textContent).toContain('本次未发生任何交易委托')
+
+    // 片段留在屏上（有信息量），但必须带不完整标记
+    expect(screen.getByTestId('devil-advocate-incomplete').textContent).toContain('不完整')
+    expect(screen.getByTestId('md').textContent).toBe(PARTIAL)
+
+    // 可重试 + 不在 running 态
+    expect(triggerButton().disabled).toBe(false)
+    expect(screen.queryByTestId('devil-advocate-stage')).toBeNull()
+  })
+
+  it('无 done、有增量、但 result 契约缺省（老实现只 resolve 空值）→ 同样不许判 done', async () => {
+    mocks.sendMessageStream.mockImplementation(streamImpl(async (h) => { h.onDelta?.(PARTIAL) }))
+
+    renderPanel()
+    fireEvent.click(triggerButton())
+
+    await screen.findByTestId('devil-advocate-failed')
+    expect(screen.getByTestId('devil-advocate-incomplete')).toBeTruthy()
+    expect(screen.getByTestId('md').textContent).toBe(PARTIAL)
+    expect(triggerButton().disabled).toBe(false)
+  })
+
+  it('终稿到达（authoritative）：按落库全文显示，不标不完整、不误报失败（坏帧也不翻案）', async () => {
+    mocks.sendMessageStream.mockImplementation(async (...args: unknown[]) => {
+      const h = (args[2] || {}) as StreamHandlers
+      h.onDelta?.(PARTIAL)
+      h.onDone?.({ content: RECIPE_ANSWER })
+      return { content: RECIPE_ANSWER, authoritative: true, corruptedFrames: 2, errors: [] }
+    })
+
+    renderPanel()
+    fireEvent.click(triggerButton())
+
+    await waitFor(() => expect(screen.getByTestId('md').textContent).toBe(RECIPE_ANSWER))
+    expect(screen.queryByTestId('devil-advocate-failed')).toBeNull()
+    expect(screen.queryByTestId('devil-advocate-incomplete')).toBeNull()
+    expect(screen.getByTestId('devil-advocate-result').textContent).toContain('非买卖指令')
+    expect(triggerButton().disabled).toBe(false)
+  })
+
+  it('服务端 error 帧（result.failure 同源）→ 失败原文照实展示，不推断原因', async () => {
+    mocks.sendMessageStream.mockImplementation(async (...args: unknown[]) => {
+      const h = (args[2] || {}) as StreamHandlers
+      h.onError?.('AI 服务暂时不可用：quota exceeded')
+      return {
+        content: '',
+        authoritative: false,
+        corruptedFrames: 0,
+        errors: ['AI 服务暂时不可用：quota exceeded'],
+        failure: 'AI 服务暂时不可用：quota exceeded',
+      }
+    })
+
+    renderPanel()
+    fireEvent.click(triggerButton())
+
+    const failed = await screen.findByTestId('devil-advocate-failed')
+    expect(failed.textContent).toContain('AI 服务暂时不可用：quota exceeded')
+    expect(screen.queryByTestId('devil-advocate-result')).toBeNull()
+    expect(screen.queryByTestId('devil-advocate-incomplete')).toBeNull()
   })
 })
 
