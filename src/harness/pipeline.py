@@ -199,7 +199,8 @@ def session_context(messages, base_prompt: str = "") -> str:
             return text[:MAX_CONTEXT_CHARS]
     return ""
 
-def propose_levels(recipe, runs, db, user, market: str = "CN", trace=None) -> None:
+def propose_levels(recipe, runs, db, user, market: str = "CN", trace=None,
+                   view_state: dict | None = None) -> None:
     """把情景矩阵算出的关键位提议成**待确认**的 K 线标注(2026-10-22, G4 结论上图)。
 
     为什么放在这里：情景矩阵已经把支撑/阻力算得很准，但结论只活在聊天里 —— 用户看到
@@ -208,6 +209,13 @@ def propose_levels(recipe, runs, db, user, market: str = "CN", trace=None) -> No
 
     三条纪律：只提议（不落 KlineAnnotation，用户点确认才画）；无 db/user 静默跳过；
     任何异常只记日志 —— 提议是旁路，绝不能因为它把已经生成的回答搞挂。
+
+    标的类型（2026-10-28 P2 类型链）：`000001` 既是上证指数也是平安银行，提议必须带上
+    **当前视图的类型**，否则这条 pending 要么落成错的类型、要么根本没法确认。类型来源：
+      1. 页面视图（`view_state["instrument"]`）且它的 symbol 与本次提议的标的**同一个**
+         —— 这是"用户正在看哪张图"的唯一一手信息；
+      2. 视图没给/标的不同 → 交给 `propose_scenario_annotations` 用仅凭代码可证的推导
+         （600519 → stock）；000xxx 推导不出就不提议（不猜）。
     """
     if db is None or user is None:
         return
@@ -223,10 +231,26 @@ def propose_levels(recipe, runs, db, user, market: str = "CN", trace=None) -> No
         try:
             propose_scenario_annotations(
                 db, user_id=getattr(user, "id", None), symbol=pr.symbol,
-                market=market, run_id=run_id,
+                market=market, instrument=_view_instrument_for(pr.symbol, view_state),
+                run_id=run_id,
             )
         except Exception as exc:  # noqa: BLE001 - 提议失败不影响作答
             logger.info("关键位提议失败(忽略): %s", type(exc).__name__)
+
+
+def _view_instrument_for(symbol: str, view_state: dict | None) -> str | None:
+    """视图报上来的标的类型 —— **只在视图标的与本次提议标的是同一个时**才采信。
+
+    为什么不无条件采信：视图说的是"用户屏幕上的那张图"，而提议的标的来自问题解析
+    （可能被 @提及/会话绑定换过）。拿 A 标的的类型去标 B 标的 = 凭空造类型。
+    """
+    if not isinstance(view_state, dict):
+        return None
+    view_symbol = str(view_state.get("symbol") or "").strip().upper()
+    if not view_symbol or view_symbol != str(symbol or "").strip().upper():
+        return None
+    raw = str(view_state.get("instrument") or "").strip().lower()
+    return raw if raw in ("stock", "index") else None
 
 
 _CODE_RE = re.compile(r"(?<!\d)((?:00|30|60|68|83|87|43)\d{4})(?!\d)")
@@ -493,7 +517,7 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str,
 
 async def answer(ai_client, recipe, question: str, bound: str | None, executor,
                  market: str = "CN", trace=None, context: str = "",
-                 db=None, user=None) -> str | None:
+                 db=None, user=None, view_state: dict | None = None) -> str | None:
     """完整跑一条管线并写结论。返回 None = 管线没跑成，调用方回落到多轮 loop。"""
     syms = symbols_of(question, bound, allow_names=True)
     if not syms:
@@ -538,13 +562,13 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
         text = _ann(text, _audit(text, evidence, question))
     except Exception:  # noqa: BLE001
         pass
-    propose_levels(recipe, runs, db, user, market, trace)   # G4: 关键位 → 待确认标注
+    propose_levels(recipe, runs, db, user, market, trace, view_state)  # G4: 关键位 → 待确认标注
     return text
 
 
 async def answer_stream(ai_client, recipe, question: str, bound: str | None, executor,
                         market: str = "CN", trace=None, context: str = "",
-                        db=None, user=None):
+                        db=None, user=None, view_state: dict | None = None):
     """流式版：边生成边下发。取数 ~5s，生成 25~135s —— 不流式的话用户只能干等。
 
     产出 ("delta", 文本) 若干 → 最后 ("done", 全文)。管线没跑成时直接 return（调用方回落 loop）。
@@ -614,5 +638,5 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
             text = audited
     except Exception:  # noqa: BLE001
         pass
-    propose_levels(recipe, runs, db, user, market, trace)   # G4: 关键位 → 待确认标注
+    propose_levels(recipe, runs, db, user, market, trace, view_state)  # G4: 关键位 → 待确认标注
     yield "done", text

@@ -485,6 +485,10 @@ def get_copilot_annotations(
     symbol: str = Query(...),
     market: str = Query(default="CN"),
     period: str = Query(default="1d"),
+    instrument: str = Query(
+        default="",
+        description="标的类型 stock/index；画图/严格读取必传（000xxx 只能靠它区分指数与个股）",
+    ),
     ids: str = Query(default="", description="只读这些标注 id（逗号分隔；精确身份读取）"),
     market_strict: bool = Query(default=False, description="True = 严格市场等值（不做 A 股族归并）"),
     mine_only: bool = Query(default=False, description="True = 只返回本人标注（不含全局行）"),
@@ -512,14 +516,21 @@ def get_copilot_annotations(
     `market_strict=true` 的语义是「**可证明**的同一标的」，不是字符串相等：A 股代码能推导出
     交易所时（600xxx→SH、002/300xxx→SZ、43/83/87xxx→BJ），`CN` 与该交易所互证。
 
-    **标的类型不可证（000xxx 整段 / 纯指数前缀 399/880/881/999）只拦画图链路，不拦通用读取**
-    （2026-10-28 四次复审整改）：
-      - 严格请求（`market_strict` / `mine_only` / `action_linked` 任一为真，或带 `ids` 精确读取
-        —— 前端画图固定带这三条参数）⇒ 直接返回 `[]`：标注行没有 instrument 列，页面上的
-        market 是客户端声明而不是证据，画不出来的行一条都不给。
+    **标的类型（2026-10-28 P2 类型链）**：`instrument=stock|index` 是本接口的一等参数，
+    不再靠"000xxx 整段禁用"兜底（那会把 000858 这种正常深市个股也一起误杀）：
+
+      - 画图/严格请求（`market_strict` / `mine_only` / `action_linked` 任一为真，或带 `ids`
+        —— 前端画图固定都带）：必须有**可决定的类型**。
+          · 传了 `instrument` ⇒ 按它过滤（行 `instrument` 必须相等）；
+          · 没传 ⇒ 只在"仅凭代码可证"时推导（600519→stock、399001→index），推导不出
+            （000xxx）就返回 `[]` —— 不猜类型，也就不可能把上证指数的线画到平安银行图上；
+          · 声明本身不合法（600519 声明 index、000858 声明成 index 以外的怪值）⇒ 400。
+      - 历史行（`instrument IS NULL`）：类型**可证**才纳入（如 600519 只可能是个股），
+        不可证（000xxx）就不给 —— 不猜、不回填。
       - 通用请求（不带任何严格参数的历史标注回看 / 报表 / 诊断调用方）⇒ **保持既有行为**：
-        族归并 + 本人或全局行，照旧返回。安全收口不许以打断既有非本功能调用者为代价。
-    见 `actions.instrument_ambiguous`；前端 `targetRefusal` 同表同规则，两侧一致（前端本就拒画）。
+        族归并 + 本人或全局行，照旧返回（行的 `instrument` 原样回显，可为 null）。
+    见 `actions.resolve_instrument` / `actions.provable_instrument`；
+    前端 `provableInstrument` / `verifyRow` 同表同规则，两侧一致。
     """
     from sqlalchemy import and_, or_
 
@@ -542,14 +553,24 @@ def get_copilot_annotations(
         if len(wanted) > 200:
             raise HTTPException(status_code=400, detail="ids 一次最多 200 个")
 
-    # 标的类型不可证（000xxx / 纯指数前缀）**只拦画图链路**（2026-10-28 四次复审）：
-    # 严格参数三件套（前端画图固定都带）或 ids 精确读取 = 「这条行属于这只票、这个周期、
-    # 这个账号」的证明请求；证明不了标的类型就一条都不给（页面上的 market 是客户端声明，
-    # 不是证据）。通用读取（不带任何严格参数）保持既有行为 —— 历史标注回看 / 报表 /
-    # 诊断这类既有调用方不许被这次收口打断。
+    # 标的类型（2026-10-28 P2 类型链）：画图/严格读取必须有可决定的类型。
+    # 旧实现"000xxx 整段返回 []"是**无条件**的 —— 连 000858（五粮液，正常深市个股）都
+    # 读不到；现在改成"类型定得下来就给、定不下来才不给"，同号指数靠 instrument 隔离。
     draw_read = strict or only_mine or linked_only or bool(wanted)
-    if draw_read and actions_mod.instrument_ambiguous(symbol):
-        return []
+    raw_instrument = instrument if isinstance(instrument, str) else ""
+    typed = ""
+    if raw_instrument.strip():
+        try:
+            typed = actions_mod.resolve_instrument(symbol, market, raw_instrument) or ""
+        except actions_mod.ActionError as exc:
+            # 声明与代码矛盾（600519 声明成 index 之类）：调用方 bug，明确 400
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if draw_read and not typed:
+        # 没声明：只在"仅凭代码可证"时推导；000xxx 推导不出 ⇒ 一条都不给（不猜类型）
+        proof = actions_mod.provable_instrument(symbol, market)
+        if proof is None:
+            return []
+        typed = proof
 
     # 2026-10-20 线上实测: AI 提议里 market 默认写 "CN"，而 K 线页传 "SH"/"SZ"，严格等值匹配
     # 会导致"标注确认成功但图上查不到"。
@@ -559,7 +580,7 @@ def get_copilot_annotations(
     # 指数/个股同号代码不推导（见 actions.provable_markets）。
     mk = (market or "").strip().upper() or "CN"
     if strict:
-        markets = actions_mod.provable_markets(symbol, mk)
+        markets = actions_mod.provable_markets(symbol, mk, typed or actions_mod.INSTRUMENT_STOCK)
     else:
         # 非 A 股市场也只按**大写**字面量匹配：写入端已归一大写（HK/US），
         # 这里再拿原始大小写的 `market` 去比, 会自己造出"写进去却读不出"。
@@ -585,6 +606,14 @@ def get_copilot_annotations(
         query = query.filter(or_(KlineAnnotation.user_id == uid, KlineAnnotation.user_id.is_(None)))
     if wanted:
         query = query.filter(KlineAnnotation.id.in_(wanted))
+    if typed:
+        # 类型过滤：显式类型必须相等；历史行（NULL）**只在仅凭代码可证**时纳入
+        # （600519 只可能是个股）；000xxx 的历史行不可证 ⇒ 一条都不给（不猜）。
+        legacy_ok = actions_mod.provable_instrument(symbol, mk) == typed
+        cond = KlineAnnotation.instrument == typed
+        if legacy_ok:
+            cond = or_(cond, KlineAnnotation.instrument.is_(None))
+        query = query.filter(cond)
     if linked_only:
         query = query.filter(CopilotAction.id.isnot(None))
     rows = query.order_by(KlineAnnotation.created_at.desc()).limit(200).all()
@@ -593,6 +622,8 @@ def get_copilot_annotations(
         # 目标与属主回显：前端必须逐字核对，不再靠「请求—响应配对」猜
         "symbol": r.symbol,
         "market": r.market,
+        # 标的类型：stock/index；null = 迁移前的历史行（没有这条契约，不猜、不回填）
+        "instrument": r.instrument,
         "period": r.period,
         "user_id": r.user_id,
         # 本人确认动作（`copilot_actions.annotation_id` 反查）；null = 无确认动作

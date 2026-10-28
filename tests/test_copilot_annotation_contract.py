@@ -768,7 +768,8 @@ def test_market_is_trimmed_and_unknown_code_is_rejected(db):
     out = A.apply_action(db, user_id=UID, action_id=ok["id"])
     assert out["annotation"]["market"] == "SH"
 
-    bad = _propose(db, {"symbol": SYMBOL, "label": "银河系", "price": 35.2, "market": "银河系"})
+    bad = _propose(db, {"symbol": SYMBOL, "label": "银河系", "price": 35.2, "market": "银河系",
+                        "instrument": "stock"})
     with pytest.raises(A.ActionError) as ei:
         A.apply_action(db, user_id=UID, action_id=bad["id"])
     assert "市场" in str(ei.value)
@@ -1137,20 +1138,23 @@ def test_sz_and_bj_proposals_are_readable_from_the_cn_page(db, http):
 
 
 def test_provable_markets_never_cross_index_and_stock_with_the_same_code(db):
-    """000001 = 上证指数(SH) / 平安银行(SZ)：映射表不许把两者互证。"""
+    """000001 = 上证指数(CN) / 平安银行(SZ)：类型不同 ⇒ 市场集合不同，永不互证。"""
     assert A.exchange_of("600519") == "SH"
     assert A.exchange_of("002636") == "SZ"
     assert A.exchange_of("830799") == "BJ"
-    assert A.exchange_of("399001") is None, "指数代码不推导交易所"
-    assert A.exchange_of("000001") is None, "指数/个股同号代码不推导交易所"
+    assert A.exchange_of("399001", A.INSTRUMENT_STOCK) is None, "指数代码不推导交易所"
+    assert A.exchange_of("000001", A.INSTRUMENT_INDEX) is None, "指数不做交易所推导"
+    assert A.exchange_of("000001", A.INSTRUMENT_STOCK) == "SZ", "000001 个股段是深市（平安银行）"
     assert A.exchange_of("ABCDEF") is None
 
     assert A.provable_markets("600519", "CN") == ["CN", "SH"]
     assert A.provable_markets("600519", "SH") == ["SH", "CN"]
     assert A.provable_markets("600519", "SZ") == ["SZ"], "矛盾的市场不互证（写入端已拒绝）"
-    assert A.provable_markets("000001", "CN") == ["CN"], "同号代码无法证明标的类型 ⇒ 不互证"
-    assert A.provable_markets("000001", "SZ") == ["SZ"]
-    assert A.provable_markets("000001", "SH") == ["SH"]
+    # 同号代码：类型决定口径 —— 个股可证 SZ，指数只认 CN，两者交集**只有 CN 这一个视图口径**
+    # （视图市场不是身份：真正的隔离靠 instrument 列，见 §14）
+    assert A.provable_markets("000001", "CN", A.INSTRUMENT_STOCK) == ["CN", "SZ"]
+    assert A.provable_markets("000001", "CN", A.INSTRUMENT_INDEX) == ["CN"]
+    assert A.provable_markets("000001", "SZ", A.INSTRUMENT_STOCK) == ["SZ", "CN"]
     assert A.provable_markets("00700", "HK") == ["HK"], "非 A 股市场只认自己"
 
 
@@ -1205,17 +1209,29 @@ _AMBIGUOUS_SAMPLES = (
 
 
 def test_every_000_xxx_code_is_unprovable_not_just_a_curated_list():
+    """000xxx 整段**仅凭代码**不可证 —— 但类型是显式字段，不是"整段禁用"。
+
+    可证的只有一件：这一段同时是深市个股段（000858=五粮液、000001=平安银行），
+    声明 stock 合法；声明 index 则要求代码出现在服务端指数表里（000002/000003 不在表内 ⇒ 拒）。
+    """
+    from src.core.index_codes import INDEX_CODES
+
     for sym in _AMBIGUOUS_SAMPLES:
         assert A.instrument_ambiguous(sym) is True, sym
-        assert A.exchange_of(sym) is None, f"{sym} 不许推导交易所"
-        assert A.provable_markets(sym, "CN") == ["CN"], f"{sym} 不许跨市场互证"
-        assert A.provable_markets(sym, "SZ") == ["SZ"]
-        assert A.provable_markets(sym, "SH") == ["SH"]
-        assert A.provable_markets(sym, "HK") == ["HK"]
-        assert A.market_matches_symbol(sym, "SZ") is None, "不可证 ≠ 矛盾：写入端不谎称知道"
-    # 带后缀也不许：行里只存代码字符串，后缀证明不了当初指的是哪一类标的
+        assert A.provable_instrument(sym) is None, f"{sym} 不许仅凭代码推导类型"
+        assert A.exchange_of(sym, A.INSTRUMENT_INDEX) is None, f"{sym} 指数不推导交易所"
+        assert A.stock_exchange_of(sym) == "SZ", f"{sym} 的个股段是深市"
+        # 声明 stock：合法（深市个股段）
+        assert A.resolve_instrument(sym, "CN", A.INSTRUMENT_STOCK) == A.INSTRUMENT_STOCK
+        # 声明 index：只有指数表里那几个才合法（000001/000016/000300/000688/000852/000905/000985…）
+        if sym in INDEX_CODES:
+            assert A.resolve_instrument(sym, "CN", A.INSTRUMENT_INDEX) == A.INSTRUMENT_INDEX, sym
+        else:
+            with pytest.raises(A.ActionError):
+                A.resolve_instrument(sym, "CN", A.INSTRUMENT_INDEX)
+    # 带后缀不许：行里只存代码字符串，后缀证明不了当初指的是哪一类标的
     assert A.instrument_ambiguous("000002.SZ") is True
-    assert A.exchange_of("000002.SZ") is None
+    assert A.provable_instrument("000002.SZ") is None
 
 
 def test_ambiguity_rule_does_not_overreach_into_provable_stock_prefixes():
@@ -1250,19 +1266,28 @@ def _legacy_pending(db, payload: dict, user_id: str = UID) -> CopilotAction:
     return row
 
 
-def test_ambiguous_target_is_refused_at_propose_and_never_becomes_pending(db):
-    """复审阻断 ②：000xxx 的标注在**提议阶段**就拒绝 —— 不生成永远确认不了的 pending。
+def test_ambiguous_target_without_instrument_is_refused_at_propose(db):
+    """000xxx **不声明类型**时在提议阶段就拒绝 —— 不生成"点确认必然 400"的 pending。
 
-    确认端（`_apply_annotation`）早就拒绝，但旧实现让提议照旧落 pending：用户看到一条
-    「点确认必然 400」的待确认动作。两条都要钉住：提议不落行、历史 pending 确认时兜底。
+    与旧实现的区别：旧实现是"整段拒绝"（连 000858 都画不了）；现在拒绝的唯一理由是
+    "没给类型"，给了合法类型就正常提议、正常确认（见 §14）。
     """
-    for sym in ("000001", "000002", "000003", "399001", "999999"):
+    for sym in ("000001", "000002", "000003", "000858"):
         with pytest.raises(A.ActionError) as ei:
-            _propose(db, {"symbol": sym, "label": f"{sym} 同号线", "price": 12.3, "market": "SZ"})
-        assert sym in str(ei.value) and "指数" in str(ei.value)
+            _propose(db, {"symbol": sym, "label": f"{sym} 同号线", "price": 12.3, "market": "CN"})
+        msg = str(ei.value)
+        assert sym in msg and "instrument" in msg
         assert db.query(CopilotAction).filter(CopilotAction.user_id == UID).count() == 0, (
             "提议被拒绝后不许留下任何 pending（含 action 行）"
         )
+    # 纯指数段声明成个股也拒（那几段没有个股）
+    with pytest.raises(A.ActionError):
+        _propose(db, {"symbol": "399001", "label": "假个股", "price": 12.3,
+                      "market": "CN", "instrument": "stock"})
+    # 指数表里没有的 000xxx 声明成 index 也拒（不能把 000858 说成指数）
+    with pytest.raises(A.ActionError):
+        _propose(db, {"symbol": "000858", "label": "假指数", "price": 12.3,
+                      "market": "CN", "instrument": "index"})
         assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
 
     # 兜底：历史 pending（提议端拦截之前落下的）确认时仍然被拒，且动作回滚回 pending
@@ -1309,17 +1334,19 @@ def test_propose_tool_reports_the_refusal_instead_of_pending(db):
     assert db.query(CopilotAction).filter(CopilotAction.user_id == UID).count() == 0
 
 
-def test_propose_action_tool_description_states_the_ambiguous_code_rule():
-    """工具说明同步：模型在**调用前**就知道 000xxx / 纯指数前缀不能标注（防反复重试）。"""
+def test_propose_action_tool_description_states_the_instrument_rule():
+    """工具说明同步：模型在**调用前**就知道要给 instrument（不是"000xxx 一律不能用"）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
     spec = CHAT_TOOL_REGISTRY["propose_action"]
     schema = spec.schema
     assert isinstance(schema, dict), "propose_action 必须带 function schema"
     description = schema["function"]["description"]
-    assert "000xxx" in description and "提议阶段就会被拒绝" in description
-    for prefix in ("399", "880", "881", "999"):
-        assert prefix in description
+    assert "instrument" in description and "000xxx" in description
+    assert "stock" in description and "index" in description
+    # 参数表里必须有这个字段，且取值受约束 —— 否则模型只能靠正文猜
+    props = schema["function"]["parameters"]["properties"]
+    assert props["instrument"]["enum"] == ["stock", "index"]
 
 
 def test_http_strict_read_denies_000002_and_000003_but_legacy_read_still_returns(db, http):
@@ -1405,11 +1432,19 @@ def test_http_ambiguous_read_is_mode_gated_and_user_scoped(db):
 
 
 def test_market_contradicting_the_symbol_is_refused_at_write(db):
-    """600519 是沪市：提议里写 SZ 的线**不会**出现在任何页面（写入端直接拒绝，不落死数据）。"""
-    bad = _propose(db, {"symbol": "600519", "label": "错市场", "price": 35.2, "market": "SZ"})
+    """600519 是沪市：提议里写 SZ 的线**不会**出现在任何页面（写入端直接拒绝，不落死数据）。
+
+    2026-10-28 P2：市场一致性并入类型闸（`resolve_instrument`），提议阶段就拒 ——
+    不让用户看到一条注定确认失败的动作。确认端同一把闸兜底历史 pending。
+    """
     with pytest.raises(A.ActionError) as ei:
-        A.apply_action(db, user_id=UID, action_id=bad["id"])
+        _propose(db, {"symbol": "600519", "label": "错市场", "price": 35.2, "market": "SZ"})
     assert "市场" in str(ei.value) and "SH" in str(ei.value)
+    # 历史 pending 走确认端同样拒绝（不落行、不动状态）
+    legacy = _legacy_pending(db, {"symbol": "600519", "label": "错市场", "price": 35.2,
+                                  "market": "SZ"})
+    with pytest.raises(A.ActionError):
+        A.apply_action(db, user_id=UID, action_id=legacy.id)
     assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
 
     for market in ("CN", "SH"):
@@ -1451,18 +1486,18 @@ def test_frontend_ambiguity_tables_match_backend():
 # ── 12. ts-only：确认了也画不出来 ⇒ 明确拒绝（不制造死数据）────────────────────
 
 
-def test_ts_only_annotation_is_refused_over_http(db, http):
-    """复审驳回 ②：图表只有水平价位线这一种图层，只给 ts 的标注永远上不了图。
+def test_ts_only_with_clock_time_is_still_refused_over_http(db, http):
+    """带时分的 ts-only：无法证明落在哪一根 K 线（分钟柱时间戳依赖交易所时区）⇒ 仍拒。
 
-    选择「明确拒绝」而不是「静默接受」：确认成功但图上永远没有线，是最坏的一种不诚实。
+    2026-10-28 P2 恢复了 marker 图层（日粒度时间点可以上图，见 §14），但"带时分"这一半
+    没有可证的口径：映射错一根就是把标记画到错的 K 线上，比不画更糟。
     """
     item = _propose(db, {"symbol": SYMBOL, "label": "时间点标注", "ts": "2026-10-28 10:00"})
     resp = http.post(f"/copilot/actions/{item['id']}/apply")
 
     assert resp.status_code == 400, resp.text
     detail = resp.json()["detail"]
-    assert "ts" in detail and "price" in detail
-    assert "死数据" in detail or "画不出" in detail
+    assert "日粒度" in detail and "DOM" not in detail
     assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
     assert db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one().status == "pending"
 

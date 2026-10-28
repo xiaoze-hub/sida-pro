@@ -1715,14 +1715,16 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
             "description": (
                 "向用户提议一个可执行动作（不会立即生效，必须用户点确认）。"
                 "kind=annotation：在K线图上加一条**水平价位线**，必须给 symbol + label + price；"
-                "ts（如 2026-10-28 或 2026-10-28 10:00）只能作为附加说明，"
-                "**不要只给 ts**——图上没有时间图层，只给 ts 的标注会被拒绝；"
+                "ts 是时间点标注（图上会落一个日期标记，**只支持日粒度** YYYY-MM-DD；"
+                "带时分的 ts 会被拒绝，因为无法证明落在哪一根 K 线）；只给 ts 也可以上图；"
                 "可选 note(依据)；market 用 CN/SH/SZ/BJ/HK/US（默认 CN，须与代码所属交易所一致："
                 "60/68 开头是 SH，00/30 开头是 SZ，43/83/87 开头是 BJ）；"
                 "period 用 1m/5m/15m/30m/60m/1d/1w/1mth（月线写 1M 或 1mth，默认 1d）；"
-                "**标的类型必须可证**：000xxx 整段（000001 上证指数/平安银行…）与纯指数前缀 "
-                "399/880/881/999 无法区分指数与个股，**提议阶段就会被拒绝**（不会生成待确认动作），"
-                "请直接告诉用户换标的，不要重试；"
+                "**instrument 必给**：stock=个股、index=指数。000001 既是上证指数也是平安银行，"
+                "000858 是五粮液而 000002/000003 又是上证 A/B 股指数 —— 000xxx 段**不声明类型"
+                "就会被拒绝**（不会生成待确认动作）：当前页面是「个股」图就传 stock、是「指数」图"
+                "就传 index；声明与代码不符（如 399001 传 stock、000858 传 index）同样拒绝，"
+                "请直接告诉用户原因，不要重试；"
                 "kind=watchlist：把某只票加入自选，需要 symbol，可选 name/market；"
                 "kind=alert：建盯盘提醒（当前仅记录，暂不执行）。"
                 "只在用户明确要「标注/加自选/盯一下」时调用；不要用它代替分析结论。"
@@ -1735,6 +1737,11 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                     "label": {"type": "string", "description": "标注短标签（annotation 必填，≤20 字）"},
                     "price": {"type": "number", "description": "标注价位（水平线，annotation 必须有）"},
                     "ts": {"type": "string", "description": "标注时间点（仅作附加说明；单独给 ts 会被拒绝，图上没有时间图层）"},
+                    "instrument": {
+                        "type": "string",
+                        "enum": ["stock", "index"],
+                        "description": "标的类型：个股 stock / 指数 index（000xxx 同号段必给）",
+                    },
                     "note": {"type": "string", "description": "依据/口径说明"},
                     "name": {"type": "string", "description": "股票名称（watchlist 用）"},
                     "market": {"type": "string", "description": "市场，默认 CN"},

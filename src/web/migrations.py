@@ -6328,6 +6328,33 @@ def _m231_copilot_action_annotation_link(conn: Connection) -> None:
         )
 
 
+def _m232_annotation_instrument(conn: Connection) -> None:
+    """kline_annotations 加 instrument（2026-10-28, P2 标的类型链）。
+
+    为什么需要: 标注行原来只有 symbol + market。`000001` 既是上证指数也是平安银行、
+    `000858` 是五粮液而 `000002/000003` 又是上证 A/B 股指数 —— 没有类型列时**无法证明**
+    一行说的是指数还是个股，只能把 000xxx 整段禁用（连正常深市个股一起误杀）。
+    加一列类型后：写入端记录类型（声明必须合法，见 `actions.resolve_instrument`），
+    读取端按类型精确过滤，同号指数与个股是两条互不可见的通道。
+
+    为什么可空且**不回填**：迁移前的行没有类型，任何回填都是猜测（从代码反推标的类型
+    在 000xxx 段本身就是伪证）。NULL 就是"当时没有这条契约"；读取端对 NULL 行只在
+    **仅凭代码可证**时采纳（600519 → 个股、399001 → 指数），000xxx 一律不画。
+
+    为什么写成文本而不是布尔：将来可能有 etf/board 之类的第三类，布尔会把语义焊死；
+    取值校验在写入端（`ANNOTATION_INSTRUMENTS`），不在数据库约束里做（SQLite 的
+    CHECK 迁移需要重建表，PG 的 ALTER 加 CHECK 在存量 NULL 行上也没问题但没必要）。
+
+    幂等可重跑（列已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn,
+        "kline_annotations",
+        "instrument",
+        "ALTER TABLE kline_annotations ADD COLUMN instrument VARCHAR(8)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6553,6 +6580,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(229, "webhook_subscriptions", _m229_webhook_subscriptions),
     Migration(230, "user_ai_prefs", _m230_user_ai_prefs),
     Migration(231, "copilot_action_annotation_link", _m231_copilot_action_annotation_link),
+    # 见函数 docstring: 标注行补 instrument（000xxx 同号段只能用**类型**区分，不能靠代码猜）
+    Migration(232, "annotation_instrument", _m232_annotation_instrument),
 )
 
 

@@ -31,6 +31,10 @@ class ViewState(BaseModel):
     symbol: str | None = None
     market: str | None = None
     period: str | None = None               # 1d / 30m / 5m
+    #: 标的类型（2026-10-28 P2）：`stock` / `index`。`000001` 既是上证指数也是平安银行，
+    #: 标注提议/回读必须知道"用户看的是哪一类图"，否则只能整段禁用（旧做法）或猜（伪证）。
+    #: 前端只报它真实渲染的那一个；缺 = 前端没报（不是"猜不到"，是不许猜）。
+    instrument: str | None = None
     rng: dict[str, str] | None = Field(default=None, alias="range")
     selection: dict[str, Any] | None = None  # 圈选区间 {from,to} 或 {start,end}
     indicators: list[str] | None = None
@@ -76,7 +80,9 @@ def render_view_state_block(state: dict | None) -> str:
     sym = state.get("symbol")
     if sym:
         mk = state.get("market") or ""
-        parts.append(f"{mk + ':' if mk else ''}{sym}")
+        inst = state.get("instrument")
+        label = {"stock": "个股", "index": "指数"}.get(str(inst or ""), "")
+        parts.append(f"{label}{'/' if label else ''}{mk + ':' if mk else ''}{sym}")
     if state.get("period"):
         parts.append(f"{state['period']} 周期")
     rng = state.get("range") or {}
@@ -122,18 +128,27 @@ def extract_selection_range(state: dict | None) -> tuple[str, str] | None:
     return (a, b)
 
 
-def append_view_state_block(messages: list[dict], user_id: Any, conversation_id: int | None) -> None:
-    """把视图块拼到 system 消息末尾。任何异常静默降级(上下文是增强, 不是必需)。"""
-    if not messages:
-        return
+def append_view_state_block(
+    messages: list[dict], user_id: Any, conversation_id: int | None
+) -> dict | None:
+    """把视图块拼到 system 消息末尾，并**返回**视图状态（2026-10-28 P2）。
+
+    为什么要有返回值：标注提议需要"用户正在看哪张图"的 `instrument`（`000001` 是指数还是
+    平安银行只能由页面说了算）。返回值让调用方能把它一路带到管线里，而不是从渲染出来的
+    提示词文本里再解析一遍（那是散文当数据）。
+
+    任何异常静默降级(上下文是增强, 不是必需)；拼不出内容时也返回 state（视图仍然有效）。
+    """
     state: dict | None = None
+    if not messages:
+        return None
     try:
         state = load_view_state(user_id, conversation_id)
         block = render_view_state_block(state)
     except Exception:
-        return
+        return None
     if not block:
-        return
+        return state
     # 圈选区间实算注入: 用户圈了一段问"这段为什么跌", 涨跌/高低/回撤/量比必须自己算好,
     # 不能让模型反问"哪一段"或凭印象编。读库失败一律静默(增强项, 不能拖垮对话)。
     try:
@@ -152,3 +167,4 @@ def append_view_state_block(messages: list[dict], user_id: Any, conversation_id:
     first = messages[0]
     if first.get("role") == "system":
         first["content"] = (first.get("content") or "") + "\n\n" + block
+    return state

@@ -748,6 +748,7 @@ from src.harness.context import (  # noqa: E402
     Mention,
     REQ_BOUND as _REQ_BOUND,
     REQ_BUDGET as _REQ_BUDGET,
+    REQ_VIEW as _REQ_VIEW,
     REQ_RECIPE_LABEL as _REQ_RECIPE_LABEL,
     REQ_TEXT as _REQ_TEXT,
     REQ_TOOLS as _REQ_TOOLS,
@@ -1090,7 +1091,7 @@ async def _build_ai_messages(
             context_parts.append(stock_ctx)
 
     # 页面即上下文(P1): 只补空 —— 用户文字里的代码/@提及/会话绑定已在前面生效
-    append_view_state_block(messages_for_ai, getattr(user, "id", None), conv.id)
+    _REQ_VIEW.set(append_view_state_block(messages_for_ai, getattr(user, "id", None), conv.id))
 
     if context_parts:
         # 把上下文追加到 system message
@@ -1172,7 +1173,7 @@ async def _run_tool_loop_inner(
         if stream:
             _hit = False
             async for _k, _v in _pipeline_answer_stream(
-                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get()
             ):
                 _hit = True
                 yield _k, _v
@@ -1180,7 +1181,7 @@ async def _run_tool_loop_inner(
                 return
         else:
             _ptxt = await _pipeline_answer(
-                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get()
             )
             if _ptxt:
                 yield "text", _ptxt
@@ -1287,7 +1288,6 @@ async def _run_tool_loop_inner(
             yield "done", "抱歉，AI 服务暂时不可用，请稍后重试。"
         else:
             yield "text", "抱歉，AI 服务暂时不可用，请稍后重试。"
-
 
 
 async def _run_tool_loop(

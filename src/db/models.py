@@ -2540,6 +2540,20 @@ class KlineAnnotation(Base):
     user_id = Column(String(36), nullable=True)
     symbol = Column(String(12), nullable=False)
     market = Column(String(8), nullable=False, default="CN")
+    #: 标的类型：`stock` / `index`（2026-10-28, P2 类型链）。
+    #:
+    #: **为什么必须有这一列**：`000001` 既是上证指数也是平安银行、`000858` 是五粮液而
+    #: `000002/000003` 同时是上证 A/B 股指数。标注行原来只有 symbol+market，无法证明
+    #: "这一条说的是指数还是个股"，于是只能整段禁用 000xxx —— 把正常的深市个股也一起误杀。
+    #: 现在类型由**请求/提议**显式声明（见 `src/harness/actions.resolve_instrument`），
+    #: 落库后读取端按 `instrument` 精确过滤：同号指数与个股是两条互不可见的通道。
+    #:
+    #: **可空且不回填**：迁移前的历史行没有类型，NULL = "当时没有这条契约"。
+    #: 不猜（不从代码反推指数/个股）、不回填。读取端对 NULL 行的规则见
+    #: `actions.provable_instrument`：只有**仅凭代码就能证明**类型时才允许上图（如 600519
+    #: 只可能是个股、399001 只可能是指数），000xxx 一律不可证 ⇒ 不画。
+    instrument = Column(String(8), nullable=True)
+
     period = Column(String(8), nullable=False, default="1d")
     price = Column(Float, nullable=True)
     ts = Column(String(32), nullable=True)           # ISO 或 "2026-10-20"

@@ -46,10 +46,13 @@ def propose(db: Session, *, user_id: Any, kind: str, payload: dict, run_id: str 
     if not payload:
         raise ActionError("动作内容为空")
     if kind == "annotation":
-        # 复审阻断 ②（2026-10-28）：标的类型不可证（000xxx 整段 / 纯指数前缀）的标注
-        # 在确认端**必然**被拒绝（`_apply_annotation`）—— 在这里就拦住，不制造
-        # 「点了确认也画不上去」的 pending。参数不全仍不拦（既有契约：由 apply 校验）。
-        _guard_annotation_target(payload.get("symbol"))
+        # 2026-10-28 P2 类型链：标的类型是**显式字段**（`payload["instrument"]`）。
+        # 提议阶段就走与确认端同一把闸（`resolve_instrument`），不制造"点了确认必然 400"
+        # 的 pending；000xxx 只要声明 instrument='stock'/'index' 就合法（旧实现整段拒）。
+        # 参数不全仍不拦（既有契约：由 apply 校验）。
+        _guard_annotation_target(
+            payload.get("symbol"), payload.get("market") or "CN", payload.get("instrument")
+        )
     # P1-1.3: 提议时就把"会改什么"算出来给用户看。diff 算失败不能拦住提议
     # （有些动作类型没有 diff），但要在结果里如实为空，不能编。
     # ⚠️ 2026-10-25 CI 拦下：这里**不能**把 ActionError 抛出去。
@@ -279,6 +282,7 @@ def propose_scenario_annotations(
     user_id: Any,
     symbol: str,
     market: str = "CN",
+    instrument: str | None = None,
     matrix: dict | None = None,
     run_id: str | None = None,
 ) -> list[dict]:
@@ -293,20 +297,25 @@ def propose_scenario_annotations(
       3. **按 (user_id, symbol, label) 去重**：同一档位只留一条 pending，价格变了就
          原地更新 payload，而不是每问一次就在待确认列表里堆一条。
 
-    第四条（2026-10-28 复审阻断 ②）：**标的类型不可证就不提议**。000xxx 整段与纯指数
-    前缀的标注在确认端必然被拒（表里没有 instrument 列），提议出来就是一条点了确认
-    也画不上去的 pending。返回 `[]`（与"矩阵不可用"同语义）。
+    第四条（2026-10-28 P2 类型链）：**类型必须能定下来**，而且定下来就必须能确认。
+
+      - `instrument` 由调用方按**当前视图**给出（页面报上来的 `?type=stock|index`）；
+      - 没给时只在**仅凭代码可证**时推导（`provable_instrument`：600519 → stock、
+        399001 → index）；推导不出（000xxx）就不提议 —— 不猜类型、不生成点了确认
+        也画不上去的 pending；
+      - 类型不合法（比如把 399001 声明成 stock）同样不提议，返回 `[]`。
+
+    返回 `[]` 的语义是"这次没有可提议的关键位"，与"矩阵不可用"一致，调用方无需特殊处理。
 
     返回提议出的动作 dict（含 `dedup` 标记复用/新建）。
     """
     sym = str(symbol or "").strip()
     if not sym:
         return []
-    # 复审阻断 ②：000xxx 整段 / 纯指数前缀的标注**永远无法确认**（确认端必拒），
-    # 所以这里一条 pending 都不提议 —— 连情景矩阵都不必算。
-    # 返回 [] 的语义是"这次没有可提议的关键位"，与"矩阵不可用"一致，调用方无需特殊处理。
-    if instrument_ambiguous(sym):
-        logger.info("关键位不提议 %s：标的类型不可证（000xxx/指数前缀），确认端必拒", sym)
+    try:
+        inst = resolve_instrument(sym, market, instrument)
+    except ActionError as exc:
+        logger.info("关键位不提议 %s：%s", sym, exc)
         return []
     if matrix is None:
         try:
@@ -330,6 +339,8 @@ def propose_scenario_annotations(
         payload = {
             "symbol": sym,
             "market": str(market or "CN"),
+            # 类型来自视图/代码证明（上面已校验）——落库后读取端按它精确过滤
+            "instrument": inst,
             "label": label,
             "price": price,
             "color": color,
@@ -348,7 +359,10 @@ def propose_scenario_annotations(
         if not isinstance(old, dict):
             old = {}
         # 价格/文案/颜色任一漂移才写库——重复调用不产生写事务，方便在每次诊断里调用。
-        if {k: old.get(k) for k in ("price", "note", "color")} != {k: payload[k] for k in ("price", "note", "color")}:
+        changed = {k: old.get(k) for k in ("price", "note", "color", "instrument")} != {
+            k: payload[k] for k in ("price", "note", "color", "instrument")
+        }
+        if changed:
             hit.payload = json.dumps({**old, **payload}, ensure_ascii=False)
             db.commit()
             db.refresh(hit)
@@ -393,9 +407,13 @@ ANNOTATION_MARKETS: tuple[str, ...] = ("CN", "SH", "SZ", "BJ", "HK", "US")
 #: 族内**不是**随便等价：只有同一只股票才能互证，proof 见 `provable_markets`。
 A_SHARE_MARKETS: tuple[str, ...] = ("CN", "SH", "SZ", "BJ")
 
-#: A 股**个股**代码前缀 → 交易所。只收能唯一确定交易所的个股前缀；
-#: 指数前缀（399/880/881/999）与 000xxx（指数/个股同号段）一律不推导，
-#: 见 `instrument_ambiguous`。
+#: 标的类型（`kline_annotations.instrument` 与前端 `KlineChart` 的 `instrument` prop 同一口径）。
+INSTRUMENT_STOCK = "stock"
+INSTRUMENT_INDEX = "index"
+ANNOTATION_INSTRUMENTS: tuple[str, ...] = (INSTRUMENT_STOCK, INSTRUMENT_INDEX)
+
+#: A 股**个股**代码前缀 → 交易所。000xxx 也在内：深市主板股票确实占这一段
+#: （000858=五粮液、000001=平安银行），能不能当个股用要看**标的类型**，不是看前缀。
 EXCHANGE_BY_PREFIX: tuple[tuple[str, str], ...] = (
     ("60", "SH"), ("68", "SH"), ("90", "SH"),
     ("00", "SZ"), ("20", "SZ"), ("30", "SZ"),
@@ -408,48 +426,39 @@ INDEX_ONLY_PREFIXES: tuple[str, ...] = ("399", "880", "881", "999")
 #: 指数/个股**同号**代码段：上证/中证指数系列与深市主板股票都占 000xxx
 #: （000001=上证指数/平安银行、000002=A股指数/万科A、000003=B股指数…）。
 #:
-#: 为什么是"整段"而不是一张撞号名单：名单只能列出已知的那几个，000002/000003 这类
-#: 名单外的同号代码就漏过去了 —— 而 000xxx 这一段**本来都**可能是上证系列指数。
-#: 服务端标注行没有 instrument 列，也没有任何能证明"这一行说的是指数还是个股"的字段，
-#: 所以这里不做猜测（不从编码反推标的类型，那只是伪证）：整段默认不可证、默认拒画。
+#: 这一段**仅凭代码**分不清指数还是个股 —— 所以 `provable_instrument` 对整段返回 None。
+#: 但"代码分不清"不等于"不能用"：类型是请求/提议里的一个**显式字段**，落库后按它隔离。
+#: 旧实现把"代码分不清"当成"整段禁用"，把 000858 这种正常深市个股一起误杀了。
 AMBIGUOUS_SYMBOL_PREFIXES: tuple[str, ...] = ("000",)
 
-#: 命中即"代码段本身就分不清指数/个股"。允许带交易所后缀（000002.SZ 仍然不可证：
-#: 标注行只存代码字符串，没有列能证明它当初指的是哪一类标的）。
+#: 命中即"代码段本身就分不清指数/个股"。允许带交易所后缀（000002.SZ 仍然分不清：
+#: 标注行只存代码字符串）。
 _AMBIGUOUS_RE = re.compile(
     r"^(?:%s)\d{3}(?!\d)" % "|".join(AMBIGUOUS_SYMBOL_PREFIXES + INDEX_ONLY_PREFIXES)
 )
 
 
+def _symbol_key(symbol: Any) -> str:
+    return str(symbol or "").strip().upper()
+
+
 def instrument_ambiguous(symbol: str) -> bool:
-    """该代码**在标注行里**无法证明标的类型（指数还是个股）。
+    """该**代码段**是否无法证明标的类型（000xxx / 纯指数前缀）。
 
-    唯一能证明类型的是标的本身（页面的 instrument / 库里的 instrument 列），
-    标注行两者都没有 —— 于是 000xxx 整段和纯指数前缀一律按"不可证"处理：
-
-      - 不推导交易所（`exchange_of` 返回 None）；
-      - 不与任何市场互证（`provable_markets` 只认自己）；
-      - 画图/严格读取端（`market_strict`/`mine_only`/`action_linked`/`ids`）直接不给行；
-        **通用读取（不带严格参数的历史回看、报表、诊断）保持既有行为照旧返回**；
-      - 写入端直接拒绝、前端不发画图请求不上图（前后端同一张表）。
-
-    这是**保守拒绝**，不是"猜测类型"：没有证据时不画，而不是"大概是股票吧"。
+    语义（2026-10-28 P2 类型链）：这只说明"不能从代码反推类型"，**不是**"不许用"。
+    000858 是正常深市个股，只要请求/提议显式声明 `instrument='stock'` 就能落库、能上图；
+    000001 声明 `index` 与声明 `stock` 会落成两条互不可见的行（读取端按 instrument 过滤）。
     """
-    sym = str(symbol or "").strip().upper()
+    sym = _symbol_key(symbol)
     if not sym:
         return False
     return bool(_AMBIGUOUS_RE.match(sym))
 
 
-def exchange_of(symbol: str) -> str | None:
-    """从 A 股代码**证明**所属交易所；证明不了（指数/个股同号、未知前缀）返回 None。
-
-    这里刻意"能不推就不推"：猜错一个交易所就会把线画到另一只标的身上。
-    """
-    sym = str(symbol or "").strip().upper()
+def stock_exchange_of(symbol: str) -> str | None:
+    """按**个股**代码段推导交易所（000xxx 也算个股段，返回 SZ）；不在个股段 → None。"""
+    sym = _symbol_key(symbol)
     if len(sym) != 6 or not sym.isdigit():
-        return None
-    if instrument_ambiguous(sym):
         return None
     for prefix, exchange in EXCHANGE_BY_PREFIX:
         if sym.startswith(prefix):
@@ -457,7 +466,138 @@ def exchange_of(symbol: str) -> str | None:
     return None
 
 
-def provable_markets(symbol: str, market: str) -> list[str]:
+def _is_index_code(symbol: str) -> bool:
+    """是否在**服务端指数代码表**里（单一事实源 `src/core/index_codes.py`）。"""
+    from src.core.index_codes import INDEX_CODES
+
+    return _symbol_key(symbol) in INDEX_CODES
+
+
+def provable_instrument(symbol: str, market: str = "CN") -> str | None:
+    """**仅凭代码**能证明的标的类型；证明不了返回 None（不猜）。
+
+      - 000xxx 整段 → None：上证/中证指数与深市主板股票同号，代码本身没有信息量；
+      - 指数代码表（399001/000300/000001…）或纯指数前缀（399/880/881/999）→ `index`；
+      - 个股代码段（60/68/90/00/20/30/43/83/87）→ `stock`；
+      - 其它（港股/美股代码、未知段）→ None（本表只管 A 股）。
+
+    用途只有一个：**历史行**（`instrument IS NULL`，迁移前没有类型）能不能被采纳。
+    可证才采纳（600519 只可能是个股），不可证就不画（000001 可能是平安银行，也可能是
+    上证指数）—— 不猜、也不回填。新写入的行一律带显式类型，不走这条推导。
+    """
+    sym = _symbol_key(symbol)
+    if len(sym) != 6 or not sym.isdigit():
+        return None
+    if str(market or "CN").strip().upper() not in A_SHARE_MARKETS:
+        return None
+    if sym.startswith(AMBIGUOUS_SYMBOL_PREFIXES):
+        return None
+    if sym.startswith(INDEX_ONLY_PREFIXES) or _is_index_code(sym):
+        return INSTRUMENT_INDEX
+    if stock_exchange_of(sym) is not None:
+        return INSTRUMENT_STOCK
+    return None
+
+
+def exchange_of(symbol: str, instrument: str = INSTRUMENT_STOCK) -> str | None:
+    """从代码+类型**证明**所属交易所；证明不了返回 None。
+
+    个股：按个股代码段（000xxx → SZ）。指数：不做交易所推导 —— A 股指数的市场口径
+    是 `CN`（`MARKET_INDICES` 里 A 股指数全部是 CN），拿 SH/SZ 去要求它只会自相矛盾。
+    """
+    if str(instrument or "").strip().lower() == INSTRUMENT_INDEX:
+        return None
+    return stock_exchange_of(symbol)
+
+
+def normalize_instrument(raw: Any) -> str | None:
+    """类型字面量归一；空 → None（"没声明"）；其它取值直接拒绝（不落一个读不回来的值）。"""
+    token = str(raw or "").strip().lower()
+    if not token:
+        return None
+    if token not in ANNOTATION_INSTRUMENTS:
+        raise ActionError(
+            f"不支持的标的类型：{raw}（可用 {'/'.join(ANNOTATION_INSTRUMENTS)}）"
+        )
+    return token
+
+
+def _instrument_refusal(symbol: str, market: str = "CN") -> ActionError:
+    """唯一文案：代码段分不清指数/个股且这次没声明类型（提议端与确认端共用）。"""
+    return ActionError(
+        f"标注目标 {symbol} 属于 000xxx 指数/个股同号段，仅凭代码无法证明是个股还是指数。"
+        '请显式声明 instrument：个股传 instrument="stock"，指数传 instrument="index"'
+        f"（市场 {market or 'CN'}）；不声明就不落库，也不上图。"
+    )
+
+
+def resolve_instrument(symbol: str, market: str = "CN", claimed: Any = None) -> str:
+    """写入口径：决定这一行**可以落库**的标的类型；不合法/不可证 → `ActionError`。
+
+    规则（每条都能讲清依据，不做"大概是股票吧"的猜测）：
+
+      - 声明了 `index`：代码必须在服务端指数表或纯指数前缀里（399001/880xxx/999999/
+        指数表内的 000001…），否则拒绝 —— 不能把 000858 说成指数；A 股指数的市场口径
+        是 `CN`，传 SH/SZ 也拒绝（`MARKET_INDICES` 就是这么定的）。
+      - 声明了 `stock`：代码必须落在个股代码段（000xxx 可以 —— 000001 就是平安银行，
+        000858 是五粮液）；给了具体交易所时还必须与代码段一致（000001+SH 拒）；
+        399/880/881/999 段一律拒（那几段没有个股）。
+      - 没声明：只有**仅凭代码可证**时才推导（600519 → stock、399001 → index）；
+        000xxx 不可证 ⇒ 拒绝并要求声明（见 `_instrument_refusal`）。
+      - 非 A 股（HK/US）：服务端没有代码表可证，必须显式声明，按声明记录；读取端仍按
+        instrument 严格隔离。这不是"证明类型"，只是"记录调用方对当前视图的声明"。
+
+    **为什么允许 000001 声明成 stock**：平安银行确实存在，而它只在上证指数图上才有
+    另一重身份。承认这条声明不是伪证 —— 类型是调用方对"我正在看哪张图"的陈述，服务端
+    校验的是"这条陈述在这个代码段上是否合法"，并在落库后**按类型严格隔离**，而不是
+    假装能从代码证明类型。
+    """
+    sym = _symbol_key(symbol)
+    mk = str(market or "CN").strip().upper() or "CN"
+    inst = normalize_instrument(claimed)
+
+    if mk not in A_SHARE_MARKETS:
+        if inst is None:
+            raise ActionError(
+                f"{mk} 标的的标注需要显式声明 instrument（stock/index）——"
+                "服务端没有该市场的代码表，无法从代码推导类型"
+            )
+        return inst
+
+    if inst is None:
+        proof = provable_instrument(sym, mk)
+        if proof is None:
+            raise _instrument_refusal(sym, mk)
+        inst = proof
+
+    if inst == INSTRUMENT_INDEX:
+        if not (sym.startswith(INDEX_ONLY_PREFIXES) or _is_index_code(sym)):
+            raise ActionError(
+                f"{sym} 不在指数代码表里（{'/'.join(INDEX_ONLY_PREFIXES)} 段或服务端指数表），"
+                "无法证明它是指数，不能声明为 index"
+            )
+        if mk != "CN":
+            raise ActionError(
+                f"指数标注的市场口径是 CN（A 股指数不分交易所），收到 {mk}；"
+                "这条线在指数图上永远查不到，已拒绝"
+            )
+        return INSTRUMENT_INDEX
+
+    exchange = stock_exchange_of(sym)
+    if exchange is None:
+        raise ActionError(
+            f"{sym} 不在个股代码段（60/68/90/00/20/30/43/83/87），"
+            "399/880/881/999 段只属于指数，不能声明为 stock"
+        )
+    if mk in A_SHARE_MARKETS and mk != "CN" and mk != exchange:
+        raise ActionError(
+            f"标注市场与代码矛盾：{sym} 属于 {exchange}，收到 {mk}；"
+            "这条线会落到查不到的图上，已拒绝"
+        )
+    return INSTRUMENT_STOCK
+
+
+def provable_markets(symbol: str, market: str, instrument: str = INSTRUMENT_STOCK) -> list[str]:
     """读取端要查的市场集合：`market_strict` 也按**可证明的同一标的**展开，不是字符串相等。
 
     为什么不能要求字符串相等（2026-10-28 安全复审驳回 ①）：写在提议里的是交易所
@@ -468,14 +608,17 @@ def provable_markets(symbol: str, market: str) -> list[str]:
     所以规则是"能证才等"（与前端 `provableMarkets` 逐条一致）：
 
       - 非 A 股族（HK/US/…）：只认自己；
-      - `CN`：可与"代码推导出的那一个交易所"互证；
-      - `SH`/`SZ`/`BJ`：只与自身互证；代码推导出的交易所正好是它时，`CN` 行也算同一只；
-      - 推导不出交易所（000xxx 整段、纯指数前缀、非个股前缀）：**不做任何互证**。
+      - 指数（`instrument='index'`）：只认 `CN`（A 股指数的市场口径就是 CN）；
+      - 个股 `CN`：可与"代码推导出的那一个交易所"互证；
+      - 个股 `SH`/`SZ`/`BJ`：只与自身互证；代码推导出的交易所正好是它时，`CN` 行也算同一只；
+      - 推导不出交易所（非个股段）：**不做任何互证**。
     """
     mk = str(market or "").strip().upper() or "CN"
     if mk not in A_SHARE_MARKETS:
         return [mk]
-    exchange = exchange_of(symbol)
+    if str(instrument or "").strip().lower() == INSTRUMENT_INDEX:
+        return ["CN"]
+    exchange = exchange_of(symbol, INSTRUMENT_STOCK)
     if mk == "CN":
         return ["CN", exchange] if exchange and exchange != "CN" else ["CN"]
     if exchange == mk:
@@ -483,12 +626,18 @@ def provable_markets(symbol: str, market: str) -> list[str]:
     return [mk]
 
 
-def market_matches_symbol(symbol: str, market: str) -> bool | None:
+def market_matches_symbol(
+    symbol: str, market: str, instrument: str = INSTRUMENT_STOCK
+) -> bool | None:
     """写入端一致性：`True` 一致 / `False` 可证明矛盾 / `None` 无法证明（不拦）。"""
-    exchange = exchange_of(symbol)
+    mk = str(market or "").strip().upper() or "CN"
+    if str(instrument or "").strip().lower() == INSTRUMENT_INDEX:
+        if mk not in A_SHARE_MARKETS:
+            return None
+        return mk == "CN"
+    exchange = exchange_of(symbol, INSTRUMENT_STOCK)
     if exchange is None:
         return None
-    mk = str(market or "").strip().upper() or "CN"
     if mk == "CN":
         return True
     if mk not in A_SHARE_MARKETS:
@@ -496,30 +645,22 @@ def market_matches_symbol(symbol: str, market: str) -> bool | None:
     return mk == exchange
 
 
-def _ambiguous_annotation_message(symbol: str) -> str:
-    """标的类型不可证时的**唯一**文案（提议端与确认端共用，不许两边各写一套）。"""
-    return (
-        f"标注目标 {symbol} 无法证明是指数还是个股：000xxx 整段与上证/中证指数系列同号，"
-        "标注行不记录标的类型，前端默认不上图。本次未落库 —— "
-        "请改用不含指数同号段的代码（600xxx/002xxx/300xxx/830xxx 等）。"
-    )
+def _guard_annotation_target(
+    raw_symbol: Any, market: Any = "CN", claimed: Any = None
+) -> str | None:
+    """标注目标必须能定出一个**合法**的标的类型，定不出就在写库前拒绝（两端共用）。
 
-
-def _guard_annotation_target(raw_symbol: Any) -> None:
-    """标注目标必须**能证明标的类型**，证明不了就在写库前拒绝。
-
-    复审阻断 ②（2026-10-28）：确认端（`_apply_annotation`）早就拒绝 000xxx 整段，
-    但提议端照旧落 pending —— 用户在「待确认动作」里看到一条点了确认必然 400 的动作，
-    既是死数据也是误导。所以两端走同一把闸：
-
-      - `propose()` / `propose_scenario_annotations()`：提议阶段直接拒绝（不产生 pending）；
-      - `_apply_annotation()`：确认阶段兜底（防历史 pending / 绕过工具直接写库）。
+    2026-10-28 P2 类型链之前：000xxx 整段直接拒（连 000858 一起误杀）。
+    现在：类型是显式字段，`resolve_instrument` 校验"这条声明是否合法"，不合法才拒。
 
     空/缺失 symbol **不**在这里拦：提议阶段允许参数不全（既有契约，由 apply 校验）。
+
+    返回解析出的类型（None = 没给 symbol，没法判）。
     """
     symbol = str(raw_symbol or "").strip()
-    if symbol and instrument_ambiguous(symbol):
-        raise ActionError(_ambiguous_annotation_message(symbol))
+    if not symbol:
+        return None
+    return resolve_instrument(symbol, market, claimed)
 
 
 #: URL 风格的周期写法（frontend/src/lib/kline-period.ts 的 `?period=`）→ 图表周期
@@ -547,6 +688,11 @@ _MAX_TS_LEN = 32
 
 #: 时间点只接受日期/日期时间（前端按 bar 时间对它；别的写法画不上）。
 _TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?)?$")
+
+#: **日粒度**时间点（时间点标注上图只认它）：2026-10-28 P2 恢复 marker 图层时定下的口径。
+#: 带时分的时间点要映射到分钟柱时间戳，而那依赖交易所时区（docs/TIMEZONES.md）——
+#: 映射错一根就是把标记画到错的 K 线上，所以宁可不支持，也不猜。
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _normalize_period(raw: Any) -> str:
@@ -730,17 +876,17 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
         raise ActionError("标注需要 symbol 和 label")
     if len(symbol) > _MAX_SYMBOL_LEN:
         raise ActionError(f"标的代码过长（最多 {_MAX_SYMBOL_LEN} 个字符）：{symbol}")
-    # 2026-10-28 二轮复审：指数/个股同号（000xxx 整段）的标注行**无法证明标的类型**
-    # （表里没有 instrument 列），读取端与前端都默认拒画 ⇒ 这里也默认拒绝落库。
-    # 不这样做就是「确认成功、图上永远没有线」的死数据 —— 和 ts-only 同一条原则。
-    # 同一把闸也拦在提议端（`_guard_annotation_target`），历史 pending 在这里兜底。
-    _guard_annotation_target(symbol)
     period = _normalize_period(payload.get("period"))
     market = _normalize_market(payload.get("market"))
-    if market_matches_symbol(symbol, market) is False:
+    # 2026-10-28 P2 类型链：**标的类型必须落库**（`instrument` 列）。
+    # 类型来自提议（payload["instrument"]，按视图声明）或仅凭代码可证的推导；
+    # 000xxx 没声明类型就没法证明是个股还是指数 ⇒ 拒绝（不猜，也不整段误杀 000858）。
+    # 同一把闸也拦在提议端（`_guard_annotation_target`），历史 pending 在这里兜底。
+    instrument = _guard_annotation_target(symbol, market, payload.get("instrument"))
+    if market_matches_symbol(symbol, market, instrument or INSTRUMENT_STOCK) is False:
         raise ActionError(
-            f"标注市场与代码矛盾：{symbol} 属于 {exchange_of(symbol)}，收到 {market}；"
-            "这条线会落到查不到的图上，已拒绝"
+            f"标注市场与代码矛盾：{symbol} 属于 {exchange_of(symbol, instrument or INSTRUMENT_STOCK)}，"
+            f"收到 {market}；这条线会落到查不到的图上，已拒绝"
         )
     ts = _normalize_ts(payload.get("ts"))
     price = payload.get("price")
@@ -748,13 +894,16 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
         price = _as_price(price)
         if price is None:
             raise ActionError("标注价位不合法（必须是正的有限数）")
-    # 2026-10-28 复审驳回 ②：ts-only 确认后落库了，但图上**没有时间图层**可画 ——
-    # 唯一图层是水平价位线，读取端只能拒画。宁可确认时明确拒绝，也不制造
-    # "确认成功、图上永远没有"的死数据。
-    if price is None and ts is not None:
+    # 时间点标注（2026-10-28 P2 恢复）：图上确有 marker 图层（L4 事件/GS 信号同一个
+    # `createSeriesMarkers` 通道），所以"ts-only 一定画不出来"的旧结论不再成立。
+    # 但只能恢复**能证明落在哪根 K 线**的那一部分：
+    #   - 日粒度（`YYYY-MM-DD`）→ 落在当天的 BusinessDay 上，不涉及时区换算；
+    #   - 带时分 → 分钟/小时柱的时间戳依赖交易所时区口径（见 docs/TIMEZONES.md），
+    #     映射错一根就是把标记画到错的 K 线上 = 伪造定位。所以**暂不支持**，明确拒绝。
+    if price is None and ts is not None and not _DATE_ONLY_RE.match(ts):
         raise ActionError(
-            "时间点标注（ts）暂不支持上图：图表目前只有水平价位线这一种图层，"
-            "只给 ts 会落成画不出来的死数据。请改用价位（price）标注水平线。"
+            "时间点标注只支持日粒度（YYYY-MM-DD）：带时分的 ts 无法证明落在哪一根 K 线"
+            "（分钟柱时间戳依赖交易所时区口径），会画到错的 K 线上。请改写日期或改用价位标注。"
         )
     # 水平线要 price、时间点要 ts；两个都没有 = 这条线在图上没有位置。
     if price is None and ts is None:
@@ -769,6 +918,7 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
         user_id=str(user_id),
         symbol=symbol,
         market=market,
+        instrument=instrument,
         period=period,
         price=price,
         ts=ts,
@@ -780,7 +930,9 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
     db.add(row)
     db.flush()  # 拿到 id；真正提交在 apply_action
     detail = {
-        "id": row.id, "symbol": row.symbol, "market": row.market, "period": row.period,
+        "id": row.id, "symbol": row.symbol, "market": row.market,
+        # 类型回显：前端拿它和当前 K 线的 instrument 逐字比对（同号指数/个股靠它隔离）
+        "instrument": row.instrument, "period": row.period,
         "price": row.price, "ts": row.ts, "label": row.label, "color": row.color,
         "source": row.source,
     }

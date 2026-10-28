@@ -22,6 +22,11 @@ REQ_TOOLS: ContextVar[frozenset[str] | None] = ContextVar("chat_req_tools", defa
 REQ_BUDGET: ContextVar[dict | None] = ContextVar("chat_req_budget", default=None)
 # 本轮智能体展示名（写进拒绝文案，让用户知道是谁在限制）
 REQ_RECIPE_LABEL: ContextVar[str] = ContextVar("chat_req_recipe", default="")
+# 本轮页面视图状态（`/copilot/context` 上报的那份；2026-10-28 P2 类型链）。
+# 为什么放进请求上下文：标注提议要知道"用户在看的图是个股还是指数"（000001 两重身份），
+# 而这份信息只在 `_build_ai_messages` 里拿得到，管线在另一层调用 —— 用 contextvar 传，
+# 比把 dict 沿 4 层函数签名逐个加参数要稳（漏传一次就退回"猜类型"）。
+REQ_VIEW: ContextVar[dict | None] = ContextVar("chat_req_view", default=None)
 
 _CODE_RE = re.compile(r"(?<!\d)([036489]\d{5})(?!\d)")
 

@@ -53,7 +53,7 @@ def resolve_watchlist(db, user) -> list[str]:
 
 async def answer(ai_client, recipe, question: str, bound, executor, *,
                  market: str = "CN", trace=None, context: str = "",
-                 db=None, user=None):
+                 db=None, user=None, view_state: dict | None = None):
     """非流式入口，签名与 `pipeline.answer` 完全一致（调用方无需知道有两条管线）。"""
     if is_market_scope(recipe):
         return await _mkt.answer_market(
@@ -62,13 +62,13 @@ async def answer(ai_client, recipe, question: str, bound, executor, *,
         )
     return await _sym.answer(
         ai_client, recipe, question, bound, executor, market=market, trace=trace,
-        context=context, db=db, user=user,
+        context=context, db=db, user=user, view_state=view_state,
     )
 
 
 async def answer_stream(ai_client, recipe, question: str, bound, executor, *,
                         market: str = "CN", trace=None, context: str = "",
-                        db=None, user=None):
+                        db=None, user=None, view_state: dict | None = None):
     """流式入口：全市场管线没取到任何维度时它自己 return（调用方回落多轮 loop）。"""
     if is_market_scope(recipe):
         async for ev in _mkt.answer_market_stream(
@@ -79,6 +79,6 @@ async def answer_stream(ai_client, recipe, question: str, bound, executor, *,
         return
     async for ev in _sym.answer_stream(
         ai_client, recipe, question, bound, executor, market=market, trace=trace,
-        context=context, db=db, user=user,
+        context=context, db=db, user=user, view_state=view_state,
     ):
         yield ev
