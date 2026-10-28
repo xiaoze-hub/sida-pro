@@ -218,27 +218,6 @@ def run_cancel_scope_ok(row: Any, user: Any) -> bool:
     return owner_id == str(getattr(user, "id", "") or "")
 
 
-def run_read_scope_filter(model: Any, user: Any) -> Any:
-    """`run_read_scope_ok` 的 SQL 表达（同一条边界，写进 where 而不是只在内存里判）。
-
-    **为什么还要在 SQL 写一遍**：只把整行取回内存再判归属，判据是对的，但越权行
-    已经进了进程 —— question / status / 工具步骤全被读出来，缺的只是一次 `if`。
-    任何把 `_load()` 的返回值当成"已经过关"的后来者（或异常的日志/序列化路径）
-    都会把它漏出去。边界写进 `where` 之后，他人的行根本不会被读出来。
-
-    **口径必须与判据一致**：`_run_owner_id` 把 NULL / 空串 / 空白都算无主，这里
-    `trim(user_id) == ''` 照抄；无主行只对平台 owner 开放（审计读）。
-
-    **两道都不能省**：SQL 防越权行落进内存，`run_read_scope_ok` 防将来这个 where
-    被谁改宽 —— 宽了立刻有断言红，而不是悄悄变成越权读。
-    """
-    uid = str(getattr(user, "id", "") or "")
-    cond = model.user_id == uid
-    if _is_platform_owner(user):
-        cond = or_(cond, model.user_id.is_(None), func.trim(model.user_id) == "")
-    return cond
-
-
 # ── 执行体（可被测试替换）────────────────────────────────────────────────
 async def run_copilot_question(
     *, user_id: str, conversation_id: int | None, question: str,
@@ -558,18 +537,34 @@ async def run_events(run_id: str, user=Depends(get_current_user)):
     def _load():
         db = SessionLocal()
         try:
-            # 归属写进 where（`run_read_scope_filter`），越权行不落进内存；
-            # `run_read_scope_ok` 是同一判据的第二道（SQL 被改宽时立刻红）。
+            # 归属**直接写进 where**，与 `run_read_scope_ok` 同一条边界：
+            #   本人；或（仅平台 owner）无主行（NULL / 空白，审计只读）。
+            # 为什么必须落在 SQL 上：只把整行取回内存再判归属时，越权行的
+            # question / status / 工具步骤已经进了进程，缺的只是一次 `if` ——
+            # 任何把 `_load()` 返回值当成"已经过关"的后来者都会把它漏出去。
+            # 口径与 `_run_owner_id` 对齐（NULL / 空串 / 空白都算无主）。
+            # 归属条件就写在这条 filter 里（不是先算好再传变量）：拿掉它 = 查询
+            # 里再也没有 user_id，`check_scoped_queries.py` 会立刻变红。
+            uid = str(getattr(user, "id", "") or "")
             row = (
                 db.query(CopilotRun)
                 .filter(
                     CopilotRun.run_id == run_id,
-                    run_read_scope_filter(CopilotRun, user),
+                    (
+                        or_(
+                            CopilotRun.user_id == uid,
+                            CopilotRun.user_id.is_(None),
+                            func.trim(CopilotRun.user_id) == "",
+                        )
+                        if _is_platform_owner(user)
+                        else CopilotRun.user_id == uid
+                    ),
                 )
                 .first()
             )
             if row is None:
                 return None, []
+            # 第二道：SQL 被谁改宽 / 判据漂移时在这里立刻拦住，不靠"取到了就信"。
             if not run_read_scope_ok(row, user):
                 return "forbidden", []
             steps = (

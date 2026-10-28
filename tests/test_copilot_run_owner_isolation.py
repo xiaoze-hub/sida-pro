@@ -71,6 +71,12 @@ def env(monkeypatch):
     # 空串归属（迁移/脏数据可能留这种值）：与 NULL 同口径，不能因为 falsy 就放行
     db.add(CopilotRun(run_id="r-empty", user_id="", recipe=None, question="空归属",
                       status="queued", created_at=datetime.utcnow()))
+    # 纯空白归属：`_run_owner_id` 把它 strip 成无主，SQL 侧 `trim(user_id)==''` 必须同办。
+    # 两条：queued 的用于写路径（取消不得改状态），ok 的用于读路径（事件流是终态才关）
+    db.add(CopilotRun(run_id="r-blank", user_id="   ", recipe=None, question="空白归属",
+                      status="queued", created_at=datetime.utcnow()))
+    db.add(CopilotRun(run_id="r-blank-done", user_id="   ", recipe=None, question="空白归属旧轨迹",
+                      status="ok", created_at=datetime.utcnow()))
     db.add(CopilotStep(run_id="r-legacy", seq=1, tool="get_kline", ok=True, elapsed_ms=12))
     db.commit()
     db.close()
@@ -272,3 +278,69 @@ def test_NULL归属run_owner可读事件流(env):
     resp = client.get("/api/copilot/runs/r-legacy/events")
     assert resp.status_code == 200
     assert "event: status" in resp.text and "get_kline" in resp.text
+
+
+# ── 空白归属（纯空白 user_id）：与 NULL 同办 ────────────────────────────────
+def test_空白归属run_普通账号不可读也不可取消(env):
+    """`_run_owner_id` 把 "   " strip 成无主；三个出口都不许因为「非空字符串」放行。"""
+    client, Session = env
+    assert client.get("/api/copilot/runs/r-blank/events").status_code == 404
+    assert client.get("/api/copilot/runs/r-blank/governance").status_code == 404
+    assert client.get("/api/copilot/parallel/r-blank").status_code == 404
+    assert client.post("/api/copilot/runs/r-blank/cancel").status_code == 404
+    assert _row(Session, "r-blank").status == "queued", "未授权的取消不得改状态"
+
+
+def test_空白归属run_owner可审计读但读不出写权限(env):
+    client, Session = env
+    client.act_as("owner-1", role="owner")
+    assert client.get("/api/copilot/runs/r-blank-done/events").status_code == 200
+    assert client.get("/api/copilot/runs/r-blank/governance").status_code == 200
+    assert client.post("/api/copilot/runs/r-blank/cancel").status_code == 404
+    assert _row(Session, "r-blank").status == "queued"
+
+
+# ── SQL 层自证：边界写在 where 里，不靠内存判据兜底 ─────────────────────────
+# 下面三条把「内存判据」故意打坏（恒 True / 恒 False），再看端点行为：
+# 恒 True 时仍 404 → 说明是 SQL 在拦（越权行压根没进内存）；恒 False 时连自己的
+# run 也 404 → 说明第二道断言确实还接在链路上。判据全坏 + 行为仍对，才叫真收口。
+def test_事件流_SQL_只回本人或owner无主_判据恒真也读不到他人(env, monkeypatch):
+    client, _ = env
+    monkeypatch.setattr(copilot_jobs, "run_read_scope_ok", lambda row, user: True)
+    for rid in ("r-other", "r-legacy", "r-empty", "r-blank"):
+        resp = client.get(f"/api/copilot/runs/{rid}/events")
+        assert resp.status_code == 404, f"{rid}: 内存判据失效后 SQL 没把行挡住"
+        assert "旧轨迹" not in resp.text and "别人的问题" not in resp.text
+
+
+def test_事件流_SQL_给owner留无主审计读_但不放宽有主run(env, monkeypatch):
+    client, _ = env
+    monkeypatch.setattr(copilot_jobs, "run_read_scope_ok", lambda row, user: True)
+    client.act_as("owner-1", role="owner")
+    for rid in ("r-legacy", "r-blank-done"):
+        assert client.get(f"/api/copilot/runs/{rid}/events").status_code == 200, (
+            f"owner 的无主审计读被 SQL 收窄误伤: {rid}"
+        )
+    assert client.get("/api/copilot/runs/r-other/events").status_code == 404, (
+        "owner 角色不得放宽「有主」资源"
+    )
+
+
+def test_取消_SQL_只认本人_判据恒真也取消不了他人与无主(env, monkeypatch):
+    """写路径 default deny 必须落在 SQL 上：只认 `user_id == 本人`，无主行改不到。"""
+    client, Session = env
+    monkeypatch.setattr(copilot_jobs, "run_cancel_scope_ok", lambda row, user: True)
+    client.act_as("owner-1", role="owner")
+    for rid in ("r-other", "r-legacy", "r-empty", "r-blank"):
+        assert client.post(f"/api/copilot/runs/{rid}/cancel").status_code == 404, rid
+    assert _row(Session, "r-other").status == "ok"
+    assert _row(Session, "r-legacy").status == "ok"
+    assert _row(Session, "r-empty").status == "queued"
+    assert _row(Session, "r-blank").status == "queued"
+
+
+def test_事件流_内存二次验证仍接在链路上(env, monkeypatch):
+    """判据恒 False 时连本人的 run 也挡住 —— 证明第二道断言没被 SQL 过滤取代掉。"""
+    client, _ = env
+    monkeypatch.setattr(copilot_jobs, "run_read_scope_ok", lambda row, user: False)
+    assert client.get("/api/copilot/runs/r-mine/events").status_code == 404
