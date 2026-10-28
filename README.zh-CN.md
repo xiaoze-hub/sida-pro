@@ -5,7 +5,7 @@
 **把市场全景、个股图表、关注列表与 AI 技术分析，连接成有据可查的个人研究工作流。**
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.88.0-blue) <!-- Keep aligned with VERSION. -->
+![Version](https://img.shields.io/badge/version-v0.89.0-blue) <!-- Keep aligned with VERSION. -->
 
 [English](README.md) · [操作演示](#操作演示) · [开始使用](#开始使用) · [项目知识库](docs/knowledge-base/README.md)
 
