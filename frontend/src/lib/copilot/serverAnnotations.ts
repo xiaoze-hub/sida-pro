@@ -25,7 +25,8 @@
  *
  *  1. 行拿在我自己名下（`user_id === 我的账号`）；全局行（null）一律不画；
  *  2. 行有确认动作（`action_id != null`）；没有确认动作的行不是"我确认的"；
- *  3. 行的 symbol/market/period 与当前 K 线**逐字相等**（严格模式请求，不做市场族归并）；
+ *  3. 行的 symbol/period 与当前 K 线逐字相等；market 按**可证明的同一标的**比对
+ *     （`provableMarkets`：CN 页 ↔ SH/SZ/BJ 行可证，指数/个股同号不互证）；
  *  4. 标的类型可判定：指数图不画；`000001` 这类指数/个股同号代码，后端没有 instrument 列
  *     ⇒ **默认拒画**（见 {@link targetRefusal}）；
  *  5. 价位是正的有限数、label 非空、方向（支撑/压力）由服务端字段确定性映射。
@@ -50,7 +51,7 @@ export const SERVER_ANNOTATION_CONTRACT = {
   ownerScopeInRow: true,
   /** 响应行是否回显 symbol/market/period —— 是 */
   echoesRequestKeys: true,
-  /** 严格模式：`market_strict=1` 不做 A 股族归并 */
+  /** 严格模式：`market_strict=1` = 只返回能**证明**属于同一标的的市场（见 {@link provableMarkets}） */
   strictMarketParam: 'market_strict',
   /** 严格模式：`mine_only=1` 只返回本人行（不含 user_id IS NULL） */
   mineOnlyParam: 'mine_only',
@@ -210,6 +211,9 @@ const INDEX_CODE_PREFIXES = ['399', '880', '881', '999']
  * 与深市个股同号的指数代码（000xxx）。**这份名单就是"后端无法保证"的那部分**：
  * 上证/中证系列指数与深市主板股票都用 000xxx，命中的代码无法从标注行证明属于哪一类。
  * 新增指数页时往这里加，不要放宽成"000xxx 全部拒画"（那会误伤万科等正常个股）。
+ *
+ * 与后端 `src/harness/actions.py::INDEX_STOCK_COLLISIONS` 同源；
+ * `tests/test_copilot_annotation_contract.py` 有一条防漂移用例逐字比对两份名单。
  */
 export const INDEX_CODE_COLLISIONS: readonly string[] = [
   '000001', // 上证指数 / 平安银行(SZ000001)
@@ -222,7 +226,35 @@ export const INDEX_CODE_COLLISIONS: readonly string[] = [
   '000985', // 中证全指
 ]
 
-/** 该代码是否属于"指数/个股无法从标注行区分"的一类。 */
+/**
+ * A 股**个股**代码前缀 → 交易所（与后端 `EXCHANGE_BY_PREFIX` 同源）。
+ * 只收能唯一确定交易所的个股前缀：指数前缀、同号代码、未知前缀一律不推导。
+ */
+const EXCHANGE_BY_PREFIX: readonly (readonly [string, string])[] = [
+  ['60', 'SH'],
+  ['68', 'SH'],
+  ['90', 'SH'],
+  ['00', 'SZ'],
+  ['20', 'SZ'],
+  ['30', 'SZ'],
+  ['43', 'BJ'],
+  ['83', 'BJ'],
+  ['87', 'BJ'],
+]
+
+/** 从代码**证明**所属交易所；证明不了返回 null（不猜：猜错就画到另一只标的上）。 */
+export function exchangeOf(symbol: string): string | null {
+  const sym = normSymbol(symbol)
+  if (!/^\d{6}$/.test(sym)) return null
+  if (INDEX_CODE_COLLISIONS.includes(sym)) return null
+  for (const [prefix, exchange] of EXCHANGE_BY_PREFIX) {
+    if (sym.startsWith(prefix)) return exchange
+  }
+  return null
+}
+
+/**
+ * 该代码是否属于"指数/个股无法从标注行区分"的一类。 */
 export function isInstrumentAmbiguous(symbol: string): boolean {
   const sym = normSymbol(symbol)
   if (!sym) return false
@@ -249,14 +281,37 @@ export function targetRefusal(target: AnnotationTarget | null): string | null {
   return null
 }
 
-/** 市场是否匹配（严格模式：等值；非严格：A 股族等价）。 */
-export function marketMatches(targetMarket: string, rowMarket: string, strict: boolean): boolean {
-  const want = (targetMarket || '').toUpperCase()
-  const got = (rowMarket || '').toUpperCase()
-  if (strict) return want === got
-  if (want === got) return true
+/**
+ * 读取端要查的市场集合：**严格模式也按"可证明的同一标的"展开**，不是字符串相等。
+ *
+ * 与后端 `src/harness/actions.py::provable_markets` 逐条一致（同一张表、同一条规则）：
+ *  - 非 A 股族（HK/US/…）：只认自己；
+ *  - `CN`（A 股、未指明交易所）：可与代码推导出的那一个交易所互证；
+ *  - `SH`/`SZ`/`BJ`：只与自身互证；推导出的交易所正好是它时，`CN` 行也算同一只；
+ *  - 推导不出交易所（指数/个股同号、非个股前缀）：**不做任何互证**。
+ *
+ * 为什么必须这样（2026-10-28 安全复审驳回 ①）：提议里写的是交易所（SH/SZ/BJ），
+ * 页面只有 `?market=CN`，字符串相等 ⇒ 落库的线在图上永远看不到；而简单做 A 股族归并
+ * ⇒ 000001 的上证指数线会画到 000001（平安银行）的个股图上。只有"能证才等"两头都不错。
+ */
+export function provableMarkets(symbol: string, market: string): string[] {
+  const mk = (market || 'CN').trim().toUpperCase()
   const family = SERVER_ANNOTATION_CONTRACT.aShareMarkets as readonly string[]
-  return family.includes(want) && family.includes(got)
+  if (!family.includes(mk)) return [mk]
+  const exchange = exchangeOf(symbol)
+  if (mk === 'CN') return exchange && exchange !== 'CN' ? ['CN', exchange] : ['CN']
+  if (exchange === mk) return [mk, 'CN']
+  return [mk]
+}
+
+/** 市场是否可证明为同一只标的（不做字符串相等的天真比较，也不做族归并）。 */
+export function marketMatches(
+  targetMarket: string,
+  rowMarket: string,
+  symbol: string,
+): boolean {
+  const got = (rowMarket || '').trim().toUpperCase()
+  return provableMarkets(symbol, targetMarket).includes(got)
 }
 
 // ---------------------------------------------------------------------------
@@ -384,15 +439,38 @@ export function verifyRow(row: ServerAnnotationRow, target: AnnotationTarget): R
       message: `标注 #${row.id} 没有对应的确认动作（不是用户确认画上去的），不画。`,
     }
   }
-  if (row.symbol !== sym || !marketMatches(target.market, row.market, true) || row.period !== period) {
+  if (row.symbol !== sym) {
     return {
       ok: false,
       reason: 'target',
-      message: `标注 #${row.id} 的标的/市场/周期（${row.symbol}/${row.market}/${row.period}）与当前 K 线（${sym}/${target.market}/${period}）不一致，不画。`,
+      message: `标注 #${row.id} 属于 ${row.symbol}，当前 K 线是 ${sym}，不画。`,
+    }
+  }
+  // 市场按"可证明的同一标的"比对（CN 页 ↔ SH/SZ/BJ 行可证；指数/个股同号不互证），
+  // 文案必须说清是**市场**不一致 —— 旧实现把它并进"标的/市场/周期不一致"，
+  // 与周期不符混在一起，用户无法判断是该换市场还是该换周期。
+  if (!marketMatches(target.market, row.market, sym)) {
+    return {
+      ok: false,
+      reason: 'target',
+      message:
+        `标注 #${row.id} 的市场（${row.market}）与当前 K 线市场（${target.market}）` +
+        '无法证明是同一只标的，不画。',
+    }
+  }
+  if (row.period !== period) {
+    return {
+      ok: false,
+      reason: 'target',
+      message: `标注 #${row.id} 落库在 ${row.period} 周期，当前 K 线是 ${period}，不画。`,
     }
   }
   if (row.price === null) {
-    return { ok: false, reason: 'price', message: `标注 #${row.id} 没有价位（时间点标注），不上图。` }
+    return {
+      ok: false,
+      reason: 'price',
+      message: `标注 #${row.id} 没有价位（历史时间点标注），图上没有对应图层，不上图。`,
+    }
   }
   const kind = kindOfRow(row)
   if (!kind) {

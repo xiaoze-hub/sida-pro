@@ -509,6 +509,9 @@ def get_copilot_annotations(
 
     `ids` / `market_strict` / `mine_only` / `action_linked` 是给「精确读取」用的严格模式；
     默认值保持旧行为（A 股市场族归并 + 本人或全局），不改变既有调用方语义。
+    `market_strict=true` 的语义是「**可证明**的同一标的」，不是字符串相等：A 股代码能推导出
+    交易所时（600xxx→SH、000/300xxx→SZ、43/83/87xxx→BJ），`CN` 与该交易所互证；
+    指数/个股同号代码（000001…）不推导，两侧都不做互证 —— 见 `actions.provable_markets`。
     """
     from sqlalchemy import and_, or_
 
@@ -531,18 +534,23 @@ def get_copilot_annotations(
         if len(wanted) > 200:
             raise HTTPException(status_code=400, detail="ids 一次最多 200 个")
 
-    # 2026-10-20 线上实测: AI 提议里 market 默认写 "CN"，而 K 线页传 "SH"/"SZ"，
-    # 严格等值匹配会导致"标注确认成功但图上查不到"。A 股市场代码统一按一组处理。
-    # 但市场族归并就抹掉了「同一代码的指数与个股」这一层（000001 上证指数 / 平安银行）：
-    # 需要严格区分的调用方传 market_strict=true，此时只做等值匹配。
-    _A_SHARE = {"CN", "SH", "SZ", "BJ"}
+    # 2026-10-20 线上实测: AI 提议里 market 默认写 "CN"，而 K 线页传 "SH"/"SZ"，严格等值匹配
+    # 会导致"标注确认成功但图上查不到"。
+    # 2026-10-28 复审驳回 ①：族归并（任何 A 股代码互相匹配）会把 000001 的指数线画到
+    # 000001 个股图上；字符串相等又会让 SH 行在 CN 页永远读不到。
+    # 现在严格模式改为"**可证明**的同一标的"：由代码推导交易所后只与能证实的市场互证，
+    # 指数/个股同号代码不推导（见 actions.provable_markets）。
     mk = (market or "").strip().upper() or "CN"
     if strict:
-        markets = [mk]
+        markets = actions_mod.provable_markets(symbol, mk)
     else:
         # 非 A 股市场也只按**大写**字面量匹配：写入端已归一大写（HK/US），
         # 这里再拿原始大小写的 `market` 去比, 会自己造出"写进去却读不出"。
-        markets = sorted(_A_SHARE) if mk in _A_SHARE else [mk]
+        markets = (
+            sorted(actions_mod.A_SHARE_MARKETS)
+            if mk in actions_mod.A_SHARE_MARKETS
+            else [mk]
+        )
 
     uid = str(user.id)
     query = db.query(KlineAnnotation, CopilotAction.id.label("action_id")).outerjoin(

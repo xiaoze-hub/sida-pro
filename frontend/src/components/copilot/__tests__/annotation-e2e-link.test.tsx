@@ -246,6 +246,34 @@ describe('d. 跨标的/跨周期：不画，并说清落在哪', () => {
     // 5m 自己的快照不因这次确认而变
     expect(AnnotationLedger.snapshot(target({ period: '5m' })).lines).toHaveLength(0)
   })
+
+  it('确认落库在 SH、页面只有 CN → 同一只股票，必须上图（复审驳回 ①）', async () => {
+    setCurrentAnnotationTarget(target()) // owner user-A / 600111 / CN / 1d
+    mocks.fetchAPI.mockImplementation(async (path: string) => {
+      if (String(path).includes('/apply')) return appliedBody({ annotation: { ...appliedBody().annotation, market: 'SH' } })
+      if (String(path).startsWith('/copilot/annotations')) return [row({ market: 'SH' })]
+      return []
+    })
+    const snap = await linkConfirmedAnnotation(appliedBody({ annotation: { ...appliedBody().annotation, market: 'SH' } }))
+    expect(snap?.lines.map((l) => [l.annotationId, l.market])).toEqual([[91, 'SH']])
+    expect(snap?.notice).toContain('已确认并上图')
+    // 精确回读按落库目标（SH）读，仍带严格参数
+    const exact = String(annotationCalls()[annotationCalls().length - 1]?.[0] ?? '')
+    expect(exact).toContain('market=SH')
+    expect(exact).toContain('market_strict=1')
+    expect(exact).toContain('ids=91')
+  })
+
+  it('市场确实不同 → 播报说**市场**，不许冒充成周期不符（复审驳回 ①）', async () => {
+    // 文案分层的单测：未来/历史行可能出现页面市场与落库市场无法互证的情形，
+    // 这时必须指名"市场"，而不是"落库在 1d 周期，当前 K 线是 1d"这种自相矛盾的话。
+    setCurrentAnnotationTarget(target({ market: 'HK' }))
+    mocks.fetchAPI.mockImplementation(async () => [row()])
+    const snap = await linkConfirmedAnnotation(appliedBody())
+    expect(snap?.lines).toHaveLength(0)
+    expect(snap?.notice).toContain('市场')
+    expect(snap?.notice).not.toMatch(/落库在\s*\S+\s*周期/)
+  })
 })
 
 describe('e. 跨账号确认：服务端 400 ⇒ 确认本身失败，图上一条不加', () => {

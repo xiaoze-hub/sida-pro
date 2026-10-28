@@ -24,6 +24,17 @@
   - 弱引用悬空（标注被删后 SQLite rowid 复用同一个 id）不许让确认**永远**失败；
   - annotation 不可回滚就如实说，不许先给 `can_rollback=true` 再报"没有快照"。
 
+2026-10-28 安全复审驳回（第二轮整改，§11-§13）：
+  - 市场从"字符串相等"改为**可证明的同一标的**（`provable_markets`）：SH/SZ/BJ 提议必须能从
+    `?market=CN` 的页面读到，但指数/个股同号（000001）不得互证、矛盾市场写入即拒；
+    整链用例走 真实 propose 工具 → HTTP 确认 → HTTP 读取；
+    市场不符的播报不许冒充成"周期不符"；
+  - ts-only：确认了也画不出来（图上没有时间图层）⇒ 明确 400 拒绝，不落死数据；
+  - 唯一索引冲突的诊断分支 SQLite/PG 都认（SQLite 原文不含索引名，旧判断必然 500），
+    并用原始 HTTP 断言 400 与可执行文案；
+  - 悬空链接不再全局跨用户 UPDATE 清理：PG 序列不复用 ⇒ 不读不写（真冲突默认拒绝并报告）；
+    只有会复用主键的方言上、只在真撞号时、只清**本人**可证明悬空的行。
+
 真实 PG 验证（CI 暂无 PG service，**默认 skip**，本地/隔离库手动跑）::
 
     SIDA_TEST_PG_URL="postgresql+psycopg2://user:pw@127.0.0.1:5432/<隔离库>" \\
@@ -727,6 +738,8 @@ def test_deleting_an_annotation_does_not_brick_the_next_confirmation(db):
 
     旧实现下旧动作还挂着这个 id（弱引用悬空），唯一索引让这次确认 —— 以及**之后
     每一次** —— 都撞 `UNIQUE constraint failed: copilot_actions.annotation_id`。
+
+    2026-10-28 复审驳回 ④ 之后：只清**本人**可证明悬空的链接（不跨用户改写历史）。
     """
     first_item = _propose(db, {"symbol": SYMBOL, "label": "第一条", "price": 11.0})
     first = A.apply_action(db, user_id=UID, action_id=first_item["id"])
@@ -745,8 +758,12 @@ def test_deleting_an_annotation_does_not_brick_the_next_confirmation(db):
     assert stale.status == "applied", "清理链接不能改写历史状态"
 
 
-def test_dangling_link_of_another_user_does_not_block(db):
-    """悬空链接若是别人留下的，也会撞同一个全局唯一索引 —— 一样必须清掉。"""
+def test_dangling_link_of_another_user_is_reported_not_rewritten(db):
+    """别人的悬空链接占住下一条标注号：**默认拒绝 + 报告**，一行历史都不许改。
+
+    复审驳回 ④：旧实现为了让自己能写进去，把全库所有悬空链接（含他人的）UPDATE 成 NULL
+    —— 那是替别人改写审计记录，也是全表写放大。现在：只读定位，明确拒绝并说清是谁占的。
+    """
     other_item = _propose(db, {"symbol": SYMBOL, "label": "他人线", "price": 21.0},
                           user_id=OTHER_UID)
     other = A.apply_action(db, user_id=OTHER_UID, action_id=other_item["id"])
@@ -754,12 +771,18 @@ def test_dangling_link_of_another_user_does_not_block(db):
     db.commit()
 
     mine_item = _propose(db, {"symbol": SYMBOL, "label": "我的线", "price": 22.0})
-    mine = A.apply_action(db, user_id=UID, action_id=mine_item["id"])
-    assert mine["annotation_id"] == other["annotation_id"]
+    with pytest.raises(A.ActionError) as ei:
+        A.apply_action(db, user_id=UID, action_id=mine_item["id"])
+    msg = str(ei.value)
+    assert f"#{other_item['id']}" in msg, "报告必须点名占住编号的那条动作"
+    assert "不跨账号" in msg, "要说清为什么不修：不跨账号改写历史关联"
 
+    # 他人的历史关联原样保留（悬空也不替别人改）
     theirs = db.query(CopilotAction).filter(CopilotAction.id == other_item["id"]).one()
-    assert theirs.annotation_id is None
-    assert theirs.status == "applied"
+    assert theirs.annotation_id == other["annotation_id"] and theirs.status == "applied"
+    # 我这次没落库，动作仍可重试
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+    assert db.query(CopilotAction).filter(CopilotAction.id == mine_item["id"]).one().status == "pending"
 
 
 # ── 9. 不可回滚要如实说（can_rollback 与文案）───────────────────────────────
@@ -882,8 +905,13 @@ def test_pg_annotation_cannot_rollback(pg_db):
     assert "不支持回滚" in str(ei.value)
 
 
-def test_pg_dangling_link_is_pruned_before_the_next_confirmation(pg_db):
-    """PG 不复用序列，但悬空链接本身就是错数据：下一次确认前必须清成 NULL。"""
+def test_pg_dangling_link_is_left_alone_and_does_not_block(pg_db):
+    """PG 语义（生产）：序列不复用 ⇒ 悬空链接不可能撞新 id，因此**一行历史都不改**。
+
+    复审驳回 ④：旧实现在每次确认前做一次全库 UPDATE 清理，跨用户改写审计关联。
+    现在 PG 上既不读也不写（`_guard_annotation_id` 直接返回），新确认照常成功，
+    别人的悬空链接原样留给他自己/运维。
+    """
     first_item = A.propose(pg_db, user_id=UID, kind="annotation",
                            payload={"symbol": SYMBOL, "label": "先删掉的线", "price": 41.0})
     first = A.apply_action(pg_db, user_id=UID, action_id=first_item["id"])
@@ -897,4 +925,323 @@ def test_pg_dangling_link_is_pruned_before_the_next_confirmation(pg_db):
 
     assert second["annotation_id"] != first["annotation_id"], "PG 序列不复用 id"
     stale = pg_db.query(CopilotAction).filter(CopilotAction.id == first_item["id"]).one()
-    assert stale.annotation_id is None and stale.status == "applied"
+    assert stale.annotation_id == first["annotation_id"], "PG 上不清理历史关联（不跨用户/不猜测修复）"
+    assert stale.status == "applied"
+
+
+# ── 11. 市场映射：SH/SZ/BJ 提议必须能从 CN 页读到，但指数/个股同号不得误画 ────────
+#
+# 复审驳回 ①：`propose_action(market="SH")` 落库 SH，而 K 线页只有 `?market=CN`，
+# 严格等值读取永远为空 —— "确认成功、图上没有线"。反过来简单做 A 股族归并，
+# 000001 的上证指数线就会画到 000001（平安银行）的个股图上。
+# 现在两侧共用一条**可证明**规则：由代码推导交易所 → 只与能证实的市场互证。
+
+
+def _http_for(session) -> "object":
+    """真实 HTTP 行为：只挂 copilot 路由 + 覆盖鉴权/会话依赖（不经全局中间件）。
+
+    测的是「路由 → 异常映射 → 状态码/JSON」这条真链路，而不是直接调函数。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.web.api import copilot as copilot_api
+    from src.web.api.auth import get_current_user
+    from src.web.database import get_db
+
+    app = FastAPI()
+    app.include_router(copilot_api.router)
+
+    def _db():
+        yield session
+
+    async def _user():
+        class _Who:
+            id = UID
+
+        return _Who()
+
+    app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[get_current_user] = _user
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture()
+def http(db):
+    return _http_for(db)
+
+
+_STRICT = {"market_strict": "1", "mine_only": "1", "action_linked": "1"}
+
+
+def test_full_chain_market_proposal_sh_reads_back_on_cn_page(db, http):
+    """整链：chat 工具 propose_action(market=SH) → HTTP 确认 → HTTP 读取（页面参数 CN）。"""
+    import asyncio
+
+    from src.agents.chat.registry import _tool_propose_action
+
+    class _Who:
+        id = UID
+
+    msg = asyncio.run(_tool_propose_action(
+        db,
+        {"kind": "annotation", "symbol": SYMBOL, "label": "支撑位", "price": 35.5, "market": "SH"},
+        _Who(),
+    ))
+    assert "提议" in msg, f"propose_action 必须真的落 pending：{msg}"
+
+    pending = [a for a in A.list_pending(db, UID) if a["payload"].get("label") == "支撑位"]
+    assert len(pending) == 1
+    action_id = pending[0]["id"]
+
+    applied = http.post(f"/copilot/actions/{action_id}/apply")
+    assert applied.status_code == 200, applied.text
+    body = applied.json()
+    assert body["annotation"]["market"] == "SH", "落库市场就是提议里的交易所，不被偷偷改写"
+
+    resp = http.get("/copilot/annotations", params={
+        "symbol": SYMBOL, "market": "CN", "period": "1d", **_STRICT,
+    })
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert [r["id"] for r in rows] == [body["annotation_id"]], "CN 页必须读到 SH 行（可证明同一标的）"
+    assert rows[0]["market"] == "SH" and rows[0]["action_id"] == action_id
+    assert rows[0]["user_id"] == UID
+
+
+def test_sz_and_bj_proposals_are_readable_from_the_cn_page(db, http):
+    """深市 / 北交所代码同样必须能从 CN 页读到（三个交易所都是同一套页面参数）。"""
+    for symbol, market in (("002636", "SZ"), ("830799", "BJ")):
+        item = _propose(db, {"symbol": symbol, "label": f"{market} 标注", "price": 12.3,
+                             "market": market})
+        applied = http.post(f"/copilot/actions/{item['id']}/apply")
+        assert applied.status_code == 200, applied.text
+        rows = http.get("/copilot/annotations", params={
+            "symbol": symbol, "market": "CN", "period": "1d", **_STRICT,
+        }).json()
+        assert [r["id"] for r in rows] == [applied.json()["annotation_id"]], f"{market} 行读不到"
+
+
+def test_provable_markets_never_cross_index_and_stock_with_the_same_code(db):
+    """000001 = 上证指数(SH) / 平安银行(SZ)：映射表不许把两者互证。"""
+    assert A.exchange_of("600519") == "SH"
+    assert A.exchange_of("002636") == "SZ"
+    assert A.exchange_of("830799") == "BJ"
+    assert A.exchange_of("399001") is None, "指数代码不推导交易所"
+    assert A.exchange_of("000001") is None, "指数/个股同号代码不推导交易所"
+    assert A.exchange_of("ABCDEF") is None
+
+    assert A.provable_markets("600519", "CN") == ["CN", "SH"]
+    assert A.provable_markets("600519", "SH") == ["SH", "CN"]
+    assert A.provable_markets("600519", "SZ") == ["SZ"], "矛盾的市场不互证（写入端已拒绝）"
+    assert A.provable_markets("000001", "CN") == ["CN"], "同号代码无法证明标的类型 ⇒ 不互证"
+    assert A.provable_markets("000001", "SZ") == ["SZ"]
+    assert A.provable_markets("000001", "SH") == ["SH"]
+    assert A.provable_markets("00700", "HK") == ["HK"], "非 A 股市场只认自己"
+
+
+def test_same_code_index_row_is_not_read_back_on_the_stock_page(db):
+    """读端闸门：000001 的指数行（SH）不得出现在把它当个股看的查询里。"""
+    db.add_all([
+        KlineAnnotation(user_id=UID, symbol="000001", market="SH", period="1d",
+                        price=3200.0, label="指数线", source="ai"),
+        KlineAnnotation(user_id=UID, symbol="000001", market="SZ", period="1d",
+                        price=12.5, label="个股线", source="ai"),
+    ])
+    db.commit()
+
+    def labels(**kw):
+        rows = http_read(db, symbol="000001", market_strict=True, **kw)
+        return [r["label"] for r in rows]
+
+    assert labels(market="SZ") == ["个股线"]
+    assert labels(market="SH") == ["指数线"]
+    assert labels(market="CN") == [], "CN 页无法证明是股票还是指数 ⇒ 一条都不给（默认拒画）"
+
+
+def http_read(db, **kw):
+    """直接调读端（与 HTTP 查询参数同语义，省一层序列化）。"""
+    from src.web.api.copilot import get_copilot_annotations
+
+    params = {"symbol": SYMBOL, "market": "CN", "period": "1d", "db": db, "user": _U()}
+    params.update(kw)
+    return get_copilot_annotations(**params)
+
+
+def test_market_contradicting_the_symbol_is_refused_at_write(db):
+    """600519 是沪市：提议里写 SZ 的线**不会**出现在任何页面（写入端直接拒绝，不落死数据）。"""
+    bad = _propose(db, {"symbol": "600519", "label": "错市场", "price": 35.2, "market": "SZ"})
+    with pytest.raises(A.ActionError) as ei:
+        A.apply_action(db, user_id=UID, action_id=bad["id"])
+    assert "市场" in str(ei.value) and "SH" in str(ei.value)
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+
+    for market in ("CN", "SH"):
+        ok = _propose(db, {"symbol": "600519", "label": f"{market} 行", "price": 35.2,
+                           "market": market})
+        assert A.apply_action(db, user_id=UID, action_id=ok["id"])["annotation"]["market"] == market
+
+
+def test_frontend_market_tables_match_backend():
+    """防漂移：前端的同号代码名单必须与后端逐字一致（两侧各写一份是会漂的地方）。"""
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "frontend/src/lib/copilot/serverAnnotations.ts"
+    text = src.read_text(encoding="utf-8")
+    block = text.split("export const INDEX_CODE_COLLISIONS", 1)
+    assert len(block) == 2, "前端必须保留 INDEX_CODE_COLLISIONS 常量"
+    array_literal = block[1].split("= [", 1)
+    assert len(array_literal) == 2, "前端同号代码名单必须是数组字面量"
+    listed = re.findall(r"'(\d{6})'", array_literal[1].split("]", 1)[0])
+    assert set(listed) == set(A.INDEX_STOCK_COLLISIONS), (
+        f"前后端同号代码名单漂移：前端 {sorted(set(listed))} / 后端 {sorted(A.INDEX_STOCK_COLLISIONS)}"
+    )
+
+
+# ── 12. ts-only：确认了也画不出来 ⇒ 明确拒绝（不制造死数据）────────────────────
+
+
+def test_ts_only_annotation_is_refused_over_http(db, http):
+    """复审驳回 ②：图表只有水平价位线这一种图层，只给 ts 的标注永远上不了图。
+
+    选择「明确拒绝」而不是「静默接受」：确认成功但图上永远没有线，是最坏的一种不诚实。
+    """
+    item = _propose(db, {"symbol": SYMBOL, "label": "时间点标注", "ts": "2026-10-28 10:00"})
+    resp = http.post(f"/copilot/actions/{item['id']}/apply")
+
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert "ts" in detail and "price" in detail
+    assert "死数据" in detail or "画不出" in detail
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+    assert db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one().status == "pending"
+
+
+def test_price_and_ts_together_is_still_allowed(db):
+    """ts 只是附加信息时不影响水平线（有 price 就能画）。"""
+    item = _propose(db, {"symbol": SYMBOL, "label": "带时间", "price": 30.0,
+                         "ts": "2026-10-28 10:00"})
+    out = A.apply_action(db, user_id=UID, action_id=item["id"])
+    assert out["annotation"]["price"] == 30.0 and out["annotation"]["ts"] == "2026-10-28 10:00"
+
+
+# ── 13. 唯一索引冲突：SQLite / PG 都要给 400 + 可执行诊断（原始 HTTP 行为）───────
+
+
+def test_http_conflict_with_foreign_dangling_link_is_400_with_diagnosis(db, http):
+    """别人的悬空链接占号 ⇒ 400 + 点名动作，不 500、不改任何历史、不落标注。"""
+    other_item = _propose(db, {"symbol": SYMBOL, "label": "他人线", "price": 21.0},
+                          user_id=OTHER_UID)
+    other = A.apply_action(db, user_id=OTHER_UID, action_id=other_item["id"])
+    db.execute(text("DELETE FROM kline_annotations WHERE id = :i"), {"i": other["annotation_id"]})
+    db.commit()
+
+    mine = _propose(db, {"symbol": SYMBOL, "label": "我的线", "price": 22.0})
+    resp = http.post(f"/copilot/actions/{mine['id']}/apply")
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert f"#{other_item['id']}" in detail
+    assert "UNIQUE constraint" not in detail and "duplicate key" not in detail, "不把数据库原文当文案"
+
+    theirs = db.query(CopilotAction).filter(CopilotAction.id == other_item["id"]).one()
+    assert theirs.annotation_id == other["annotation_id"], "不跨账号改写历史关联"
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+
+
+def test_http_conflict_that_escaped_the_guard_is_still_400_not_500(db, http, monkeypatch):
+    """竞态：守卫没拦住（另一个连接抢先占了 id）→ 唯一索引兜底也必须是 400 而非 500。
+
+    SQLite 的报错原文只有 `UNIQUE constraint failed: copilot_actions.annotation_id`，
+    **不含索引名** —— 旧判断只查索引名，必然漏判成 500。
+    """
+    monkeypatch.setattr(A, "_guard_annotation_id", lambda db, *, user_id: None)
+
+    other_item = _propose(db, {"symbol": SYMBOL, "label": "他人线", "price": 21.0},
+                          user_id=OTHER_UID)
+    other = A.apply_action(db, user_id=OTHER_UID, action_id=other_item["id"])
+    db.execute(text("DELETE FROM kline_annotations WHERE id = :i"), {"i": other["annotation_id"]})
+    db.commit()
+
+    mine = _propose(db, {"symbol": SYMBOL, "label": "我的线", "price": 22.0})
+    resp = http.post(f"/copilot/actions/{mine['id']}/apply")
+    assert resp.status_code == 400, f"唯一索引冲突必须是 400，实际 {resp.status_code}: {resp.text}"
+    detail = resp.json()["detail"]
+    assert "冲突" in detail or "占用" in detail
+    assert "uq_copilot_actions_annotation" in detail or "历史动作关联" in detail
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+    assert db.query(CopilotAction).filter(CopilotAction.id == mine["id"]).one().status == "pending"
+
+
+def test_is_annotation_link_violation_recognizes_both_dialects():
+    """诊断分支的判据本身：PG 带索引名 / SQLite 只带列名 / 别的约束不误判。"""
+    from sqlalchemy.exc import IntegrityError as SAIntegrityError
+
+    pg = SAIntegrityError(
+        "INSERT ...",
+        {},
+        Exception('duplicate key value violates unique constraint "uq_copilot_actions_annotation"'),
+    )
+    sq = SAIntegrityError(
+        "INSERT ...", {},
+        Exception("UNIQUE constraint failed: copilot_actions.annotation_id"),
+    )
+    other = SAIntegrityError("INSERT ...", {}, Exception("UNIQUE constraint failed: stocks.symbol"))
+
+    assert A._is_annotation_link_violation(pg) is True
+    assert A._is_annotation_link_violation(sq) is True, "SQLite 原文不含索引名，也必须认出来"
+    assert A._is_annotation_link_violation(other) is False
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgresql"])
+def test_http_apply_success_and_ts_only_refusal_on_both_dialects(dialect, pg_db):
+    """同一组 HTTP 行为在 SQLite 与真实 PG 上一致（SQLite 仅辅助，PG 才是生产）。"""
+    if dialect == "postgresql":
+        session = pg_db
+    else:
+        db = SessionLocal()
+        _cleanup(db)
+        _ensure_users(db)
+        session = db
+    try:
+        http = _http_for(session)
+        ok = _propose(session, {"symbol": SYMBOL, "label": "正常行", "price": 33.0, "market": "SH"})
+        resp = http.post(f"/copilot/actions/{ok['id']}/apply")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["annotation"]["market"] == "SH"
+
+        bad = _propose(session, {"symbol": SYMBOL, "label": "只有时间", "ts": "2026-10-28"})
+        bad_resp = http.post(f"/copilot/actions/{bad['id']}/apply")
+        assert bad_resp.status_code == 400, bad_resp.text
+        assert "ts" in bad_resp.json()["detail"]
+    finally:
+        if dialect == "sqlite":
+            _cleanup(session)
+            session.close()
+
+
+def test_pg_http_unique_conflict_is_400_and_preserves_history(pg_db):
+    """PG 生产语义：撞唯一索引 ⇒ 400 + 报告，**不改任何历史行**（默认拒绝，不猜测修复）。
+
+    构造：把序列推到 42，再让另一个账号的历史动作占住 42（PG 正常不会发生，只有手工改库/
+    序列重置才会）⇒ 下一次确认的 id=42 必然撞 uq_copilot_actions_annotation。
+    """
+    http = _http_for(pg_db)
+    ghost = CopilotAction(user_id=OTHER_UID, kind="annotation", payload="{}",
+                          status="applied", annotation_id=42)
+    pg_db.add(ghost)
+    pg_db.commit()
+    pg_db.execute(text("SELECT setval(pg_get_serial_sequence('kline_annotations','id'), 41)"))
+    pg_db.commit()
+
+    mine = _propose(pg_db, {"symbol": SYMBOL, "label": "撞号", "price": 30.0})
+    resp = http.post(f"/copilot/actions/{mine['id']}/apply")
+
+    assert resp.status_code == 400, f"PG 唯一索引冲突必须 400，实际 {resp.status_code}: {resp.text}"
+    detail = resp.json()["detail"]
+    assert "uq_copilot_actions_annotation" in detail or "冲突" in detail
+    assert "不跨账号" in detail or "未改动任何历史记录" in detail
+    assert pg_db.query(KlineAnnotation).count() == 0
+    assert pg_db.query(CopilotAction).filter(CopilotAction.id == mine["id"]).one().status == "pending"
+    kept = pg_db.query(CopilotAction).filter(CopilotAction.id == ghost.id).one()
+    assert kept.annotation_id == 42, "他人的历史关联原样保留"

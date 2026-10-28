@@ -96,7 +96,8 @@ describe('画线账号/标的/周期隔离（服务端身份 + 目标分键）',
     const other = await requestAnnotations(target({ symbol: '002636' }))
     expect(other.lines).toHaveLength(0)
     expect(other.phase).toBe('refused') // 行 symbol 不符 → 明确拒，不是静默空
-    expect(other.message).toContain('不一致')
+    expect(other.message).toContain('属于 600111')
+    expect(other.message).toContain('002636')
   })
 
   it('换周期：1d 的线不会出现在 5m 快照里', async () => {

@@ -159,11 +159,12 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         safe_rollback(db)
         raise
     except IntegrityError as exc:
-        # 弱引用唯一索引兜底: 并发确认/写入方绕过 _prune 时, 给一句能懂的 400,
-        # 而不是把 psycopg2/sqlite 的约束原文当 500 抛给前端。
+        # 弱引用唯一索引兜底：并发确认 / 写入方绕过守卫 / 手工改过的库，
+        # 都要给一句能懂的 400，而不是把 psycopg2/sqlite 的约束原文当 500 抛给前端。
+        # 2026-10-28 复审驳回 ③：旧判断只查索引名 —— SQLite 的报错里没有索引名，必然漏判。
         safe_rollback(db)
-        if "uq_copilot_actions_annotation" in str(exc):
-            raise ActionError("这条标注刚被另一个确认占用（并发确认），请重试") from exc
+        if _is_annotation_link_violation(exc):
+            raise ActionError(_link_conflict_message(db)) from exc
         logger.exception("动作执行撞数据库约束, 已回滚: action=%s kind=%s", action_id, row.kind)
         raise
     except Exception:
@@ -373,6 +374,89 @@ ANNOTATION_PERIODS: tuple[str, ...] = ("1m", "5m", "15m", "30m", "60m", "1d", "1
 #: market 列是 VARCHAR(8) 且 PG 比较大小写敏感: 落 "cn" 就等于这条线在图上不存在。
 ANNOTATION_MARKETS: tuple[str, ...] = ("CN", "SH", "SZ", "BJ", "HK", "US")
 
+#: A 股族：`CN` = "A 股、未指明交易所"，`SH`/`SZ`/`BJ` = 具体交易所。
+#: 族内**不是**随便等价：只有同一只股票才能互证，proof 见 `provable_markets`。
+A_SHARE_MARKETS: tuple[str, ...] = ("CN", "SH", "SZ", "BJ")
+
+#: A 股**个股**代码前缀 → 交易所。只收能唯一确定交易所的个股前缀；
+#: 指数前缀（399/880/881/999）与指数/个股同号代码一律不推导（见 INDEX_STOCK_COLLISIONS）。
+EXCHANGE_BY_PREFIX: tuple[tuple[str, str], ...] = (
+    ("60", "SH"), ("68", "SH"), ("90", "SH"),
+    ("00", "SZ"), ("20", "SZ"), ("30", "SZ"),
+    ("43", "BJ"), ("83", "BJ"), ("87", "BJ"),
+)
+
+#: 与个股同号的指数代码：000xxx 既是上证/中证系列指数，也是深市主板股票。
+#: 命中这些代码时无法从代码证明标的类型 ⇒ 不推导交易所 ⇒ 不与 `CN` 行互证
+#: （这正是「000001 的指数线不得画到 000001 个股图上」的那道闸）。
+#: 与前端 `frontend/src/lib/copilot/serverAnnotations.ts` 的 INDEX_STOCK_COLLISIONS 同源，
+#: tests/test_copilot_annotation_contract.py 有一条防漂移用例逐字比对。
+INDEX_STOCK_COLLISIONS: frozenset[str] = frozenset({
+    "000001",  # 上证指数 / 平安银行(SZ000001)
+    "000010",  # 上证180 / 美丽生态(SZ000010)
+    "000016",  # 上证50 / 深康佳A(SZ000016)
+    "000300",  # 沪深300
+    "000688",  # 科创50
+    "000852",  # 中证1000
+    "000905",  # 中证500
+    "000985",  # 中证全指
+})
+
+
+def exchange_of(symbol: str) -> str | None:
+    """从 A 股代码**证明**所属交易所；证明不了（指数/个股同号、未知前缀）返回 None。
+
+    这里刻意"能不推就不推"：猜错一个交易所就会把线画到另一只标的身上。
+    """
+    sym = str(symbol or "").strip().upper()
+    if len(sym) != 6 or not sym.isdigit():
+        return None
+    if sym in INDEX_STOCK_COLLISIONS:
+        return None
+    for prefix, exchange in EXCHANGE_BY_PREFIX:
+        if sym.startswith(prefix):
+            return exchange
+    return None
+
+
+def provable_markets(symbol: str, market: str) -> list[str]:
+    """读取端要查的市场集合：`market_strict` 也按**可证明的同一标的**展开，不是字符串相等。
+
+    为什么不能要求字符串相等（2026-10-28 安全复审驳回 ①）：写在提议里的是交易所
+    （`SH`/`SZ`/`BJ`），而页面只有 `?market=CN`（A 股整体）。落库 `SH` 后前端按 `CN`
+    严格读取永远为空 —— 「确认成功但图上没有线」。反过来直接做族归并（任何 A 股代码
+    互相匹配）又会把 000001 的指数线画到 000001 个股图上。
+
+    所以规则是"能证才等"（与前端 `provableMarkets` 逐条一致）：
+
+      - 非 A 股族（HK/US/…）：只认自己；
+      - `CN`：可与"代码推导出的那一个交易所"互证；
+      - `SH`/`SZ`/`BJ`：只与自身互证；代码推导出的交易所正好是它时，`CN` 行也算同一只；
+      - 推导不出交易所（指数/个股同号、非个股前缀）：**不做任何互证**。
+    """
+    mk = str(market or "").strip().upper() or "CN"
+    if mk not in A_SHARE_MARKETS:
+        return [mk]
+    exchange = exchange_of(symbol)
+    if mk == "CN":
+        return ["CN", exchange] if exchange and exchange != "CN" else ["CN"]
+    if exchange == mk:
+        return [mk, "CN"]
+    return [mk]
+
+
+def market_matches_symbol(symbol: str, market: str) -> bool | None:
+    """写入端一致性：`True` 一致 / `False` 可证明矛盾 / `None` 无法证明（不拦）。"""
+    exchange = exchange_of(symbol)
+    if exchange is None:
+        return None
+    mk = str(market or "").strip().upper() or "CN"
+    if mk == "CN":
+        return True
+    if mk not in A_SHARE_MARKETS:
+        return None  # HK/US 行不参与 A 股交易所推导
+    return mk == exchange
+
 #: URL 风格的周期写法（frontend/src/lib/kline-period.ts 的 `?period=`）→ 图表周期
 _PERIOD_ALIASES: dict[str, str] = {
     "m1": "1m", "1min": "1m", "1minute": "1m",
@@ -447,28 +531,120 @@ def _normalize_ts(raw: Any) -> str | None:
     return ts
 
 
-def _prune_dangling_annotation_links(db: Session) -> int:
-    """把指向**已不存在**标注的弱引用链接清成 NULL，返回清理条数。
+#: 「一动作一标注」唯一索引名（v231）。冲突诊断按名字 + 方言原文双判。
+ANNOTATION_LINK_INDEX = "uq_copilot_actions_annotation"
 
-    为什么必须清: annotation_id 是弱引用(无外键)，标注行被用户删掉/被清理任务带走后
-    链接就悬空了。SQLite 的 rowid 会复用 —— 下一条新标注可能拿到同一个 id，于是那条
-    悬空链接撞上 uq_copilot_actions_annotation，这次确认(以及此后每一次)都写不进去
-    （实测: 删掉最大 id 的标注后，每次确认都 UNIQUE constraint failed）。
+#: 唯一索引冲突的两种来源：并发确认（同一个 id 被两次写入）与历史悬空链接（id 复用）。
+_CONFLICT_RETRY_HINT = "并发确认，请重试"
 
-    清的只是"指向不存在的行"的链接，不猜、不改真实关联；跨用户也要清，因为唯一索引
-    是全局的（别人留下的悬空链接一样会撞）。
+
+def _is_annotation_link_violation(exc: IntegrityError) -> bool:
+    """这次 IntegrityError 是不是「一动作一标注」唯一索引撞的。
+
+    两种方言的报错形状完全不同，旧实现只 `in str(exc)` 查索引名 ——
+      - PostgreSQL：`duplicate key value violates unique constraint "uq_copilot_actions_annotation"`
+        含索引名，旧判断侥幸命中；
+      - SQLite：`UNIQUE constraint failed: copilot_actions.annotation_id` **不含索引名**，
+        旧判断必然漏判 → 落进 `raise` 变成 500，前端拿到数据库原文。
+    """
+    parts = [str(exc)]
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        parts.append(str(orig))
+        # psycopg2 把约束名放在 diag 里；SQLite 没有 diag。
+        diag = getattr(orig, "diag", None)
+        if getattr(diag, "constraint_name", None) == ANNOTATION_LINK_INDEX:
+            return True
+        if getattr(diag, "column_name", None) == "annotation_id":
+            return True
+    text = " ".join(parts).lower()
+    if ANNOTATION_LINK_INDEX in text:
+        return True
+    folded = text.replace(" ", "").replace("\n", "")
+    return "uniqueconstraintfailed:copilot_actions.annotation_id" in folded
+
+
+def _dangling_annotation_links(db: Session, *, limit: int = 5) -> tuple[int, list[int]]:
+    """**只读**：全库有多少条动作关联指向已不存在的标注（可证明悬空），以及前几条。
+
+    唯一索引是全局的，所以判断"撞的是谁"必须看全库；但这里只看不写 —— 别人的历史
+    关联是他人的审计记录，服务端不跨用户改写（2026-10-28 安全复审驳回 ④）。
     """
     from src.db.models import CopilotAction, KlineAnnotation
 
-    live = db.query(KlineAnnotation.id).filter(
-        KlineAnnotation.id == CopilotAction.annotation_id
-    ).exists()
-    return int(
+    alive = db.query(KlineAnnotation.id).filter(KlineAnnotation.id == CopilotAction.annotation_id).exists()
+    query = db.query(CopilotAction.id).filter(CopilotAction.annotation_id.isnot(None), ~alive)
+    total = int(query.count() or 0)
+    ids = [int(i) for (i,) in query.order_by(CopilotAction.id.asc()).limit(limit).all()]
+    return total, ids
+
+
+def _link_conflict_message(db: Session) -> str:
+    """唯一索引冲突时给用户/运维的**可执行**说明（不是数据库原文，也不是"重试"了事）。"""
+    total, ids = _dangling_annotation_links(db)
+    if total:
+        sample = "、".join(f"#{i}" for i in ids)
+        return (
+            f"这条标注的编号与历史动作关联冲突（{ANNOTATION_LINK_INDEX}）：库里有 {total} 条动作"
+            f"的标注关联指向已删除的标注（如动作 {sample}），本次未落库、也未改动任何历史记录。"
+            "服务端不跨账号改写过关联，请由对应账号/运维清理后再试。"
+        )
+    return f"这条标注刚被另一个确认占用（{_CONFLICT_RETRY_HINT}），本次未落库。"
+
+
+def _guard_annotation_id(db: Session, *, user_id: Any) -> str | None:
+    """插入标注前处理「悬空链接占住下一条主键」的情形；返回拒绝原因（None = 可以插入）。
+
+    背景：`annotation_id` 是无外键的弱引用，标注行被删/被清理任务带走后链接就悬空了。
+    SQLite 的 rowid 会复用（新行拿 max(id)+1，正是刚被删掉的那个号）⇒ 悬空链接撞
+    uq_copilot_actions_annotation，**这一次以及此后每一次**确认都写不进去。
+
+    安全边界（2026-10-28 复审驳回 ④：旧实现是全局跨用户 UPDATE，不可接受）：
+      - **PostgreSQL（生产）**：序列不复用，新 id 不可能撞上历史链接 ⇒ 这里既不读也不写，
+        交给唯一索引兜底；真撞了说明数据被手工改过，默认**拒绝并报告**，不猜测性修复；
+      - 只在会复用主键的方言上做预检，且清理范围**仅本人**、仅可证明悬空的行；
+      - 占号的是别人 ⇒ 一行都不改，返回报告文案（默认拒绝）。
+    """
+    from src.db.models import CopilotAction, KlineAnnotation
+
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        return None  # 生产语义：不可证明有歧义 ⇒ 不动任何历史
+
+    from sqlalchemy import func
+
+    next_id = int(db.query(func.max(KlineAnnotation.id)).scalar() or 0) + 1
+    if db.query(KlineAnnotation.id).filter(KlineAnnotation.id == next_id).first() is not None:
+        return None  # 号还活着：下一条自动 id 会顺延，撞不上
+    holders = (
         db.query(CopilotAction)
-        .filter(CopilotAction.annotation_id.isnot(None), ~live)
+        .filter(CopilotAction.annotation_id == next_id)
+        .order_by(CopilotAction.id.asc())
+        .all()
+    )
+    if not holders:
+        return None
+    foreign = [h for h in holders if str(h.user_id) != str(user_id)]
+    if foreign:
+        sample = "、".join(f"#{h.id}" for h in foreign[:5])
+        return (
+            f"标注编号 #{next_id} 已被历史动作的关联占住（动作 {sample}，不属于本账号，"
+            "其标注已被删除）。服务端不跨账号改写历史关联，本次未落库。"
+        )
+    # 全是本人可证明悬空的链接：只清自己这几行的关联列（状态/结果一律不动）
+    cleared = (
+        db.query(CopilotAction)
+        .filter(
+            CopilotAction.user_id == str(user_id),
+            CopilotAction.id.in_([h.id for h in holders]),
+            CopilotAction.annotation_id == next_id,
+        )
         .update({"annotation_id": None}, synchronize_session=False)
         or 0
     )
+    if cleared:
+        logger.info("清理本人悬空标注关联 %s 条（编号 #%s，仅本账号）", cleared, next_id)
+    return None
 
 
 def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str, dict]:
@@ -491,19 +667,33 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
         raise ActionError(f"标的代码过长（最多 {_MAX_SYMBOL_LEN} 个字符）：{symbol}")
     period = _normalize_period(payload.get("period"))
     market = _normalize_market(payload.get("market"))
+    if market_matches_symbol(symbol, market) is False:
+        raise ActionError(
+            f"标注市场与代码矛盾：{symbol} 属于 {exchange_of(symbol)}，收到 {market}；"
+            "这条线会落到查不到的图上，已拒绝"
+        )
     ts = _normalize_ts(payload.get("ts"))
     price = payload.get("price")
     if price is not None:
         price = _as_price(price)
         if price is None:
             raise ActionError("标注价位不合法（必须是正的有限数）")
-    # 水平线要 price、时间点要 ts；两个都没有 = 这条线在图上没有位置,
-    # 落库只会制造"确认成功但什么也看不到"+ 读取端拒画的死数据。
+    # 2026-10-28 复审驳回 ②：ts-only 确认后落库了，但图上**没有时间图层**可画 ——
+    # 唯一图层是水平价位线，读取端只能拒画。宁可确认时明确拒绝，也不制造
+    # "确认成功、图上永远没有"的死数据。
+    if price is None and ts is not None:
+        raise ActionError(
+            "时间点标注（ts）暂不支持上图：图表目前只有水平价位线这一种图层，"
+            "只给 ts 会落成画不出来的死数据。请改用价位（price）标注水平线。"
+        )
+    # 水平线要 price、时间点要 ts；两个都没有 = 这条线在图上没有位置。
     if price is None and ts is None:
         raise ActionError("标注需要价位（price）或时间点（ts）—— 两者都缺，图上没有位置可放")
 
-    # 弱引用兜底: 先把悬空链接(指向已删标注)清掉, 否则 rowid 复用时本次写入必撞唯一索引。
-    _prune_dangling_annotation_links(db)
+    # 弱引用兜底：先看"下一条主键是否被悬空链接占着"（只在复用主键的方言上，且仅本人）。
+    blocked = _guard_annotation_id(db, user_id=user_id)
+    if blocked:
+        raise ActionError(blocked)
 
     row = KlineAnnotation(
         user_id=str(user_id),

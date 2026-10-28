@@ -1714,9 +1714,11 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
             "name": "propose_action",
             "description": (
                 "向用户提议一个可执行动作（不会立即生效，必须用户点确认）。"
-                "kind=annotation：在K线图上加一条标注，需要 symbol + label + price 或 ts 至少一个"
-                "（水平线用 price，时间点用 ts：2026-10-28 或 2026-10-28 10:00）；"
-                "可选 note(依据)；market 用 CN/SH/SZ/BJ/HK/US（默认 CN），"
+                "kind=annotation：在K线图上加一条**水平价位线**，必须给 symbol + label + price；"
+                "ts（如 2026-10-28 或 2026-10-28 10:00）只能作为附加说明，"
+                "**不要只给 ts**——图上没有时间图层，只给 ts 的标注会被拒绝；"
+                "可选 note(依据)；market 用 CN/SH/SZ/BJ/HK/US（默认 CN，须与代码所属交易所一致："
+                "60/68 开头是 SH，00/30 开头是 SZ，43/83/87 开头是 BJ）；"
                 "period 用 1m/5m/15m/30m/60m/1d/1w/1mth（月线写 1M 或 1mth，默认 1d）；"
                 "kind=watchlist：把某只票加入自选，需要 symbol，可选 name/market；"
                 "kind=alert：建盯盘提醒（当前仅记录，暂不执行）。"
@@ -1728,8 +1730,8 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                     "kind": {"type": "string", "enum": ["annotation", "watchlist", "alert"]},
                     "symbol": {"type": "string", "description": "6 位 A 股代码"},
                     "label": {"type": "string", "description": "标注短标签（annotation 必填，≤20 字）"},
-                    "price": {"type": "number", "description": "标注价位（水平线）"},
-                    "ts": {"type": "string", "description": "标注时间点，如 2026-10-20 或完整 ISO"},
+                    "price": {"type": "number", "description": "标注价位（水平线，annotation 必须有）"},
+                    "ts": {"type": "string", "description": "标注时间点（仅作附加说明；单独给 ts 会被拒绝，图上没有时间图层）"},
                     "note": {"type": "string", "description": "依据/口径说明"},
                     "name": {"type": "string", "description": "股票名称（watchlist 用）"},
                     "market": {"type": "string", "description": "市场，默认 CN"},

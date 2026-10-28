@@ -21,6 +21,8 @@ import { AnnotationLedger, currentAccountId, type AnnotationSnapshot } from './a
 import {
   annotationsUrl,
   linesForTarget,
+  marketMatches,
+  normSymbol,
   parseAnnotationsResponse,
   parseApplyResponse,
   targetKey,
@@ -183,13 +185,24 @@ export async function linkConfirmedAnnotation(
     }
 
     if (!current) return null // 没打开个股 K 线：确认成功即可，不凭空造目标
-    if (targetKey(current) !== targetKey(target)) {
+    // 目标是否"同一张图"必须按**可证明的同一标的**判定，不能拿字符串 key 比：
+    // 落库市场是交易所（SH），页面只有 CN —— 键不同但确实是同一只股票。
+    // 旧实现用 targetKey 比对，SH 行在 CN 页会走进"不一致"分支，然后被当成
+    // **周期**不符播报（"落库在 1d 周期，当前 K 线是 1d"）—— 复审驳回 ①。
+    const sameSymbol = normSymbol(current.symbol) === normSymbol(target.symbol)
+    const sameMarket = marketMatches(current.market, target.market, target.symbol)
+    const samePeriod = (current.period || '1d').trim() === (target.period || '1d').trim()
+    if (current.instrument !== target.instrument || !sameSymbol || !sameMarket || !samePeriod) {
+      // 逐项说清到底哪一项不同：标的 → 市场 → 周期，互不冒充。
       const reason =
         current.instrument !== target.instrument
           ? `已确认的是个股标注，当前是${current.instrument === 'index' ? '指数' : '个股'}图`
-          : current.symbol !== target.symbol
+          : !sameSymbol
             ? `已确认的标注属于 ${target.symbol}，当前 K 线是 ${current.symbol}`
-            : `已确认的标注落库在 ${target.period} 周期，当前 K 线是 ${current.period}`
+            : !sameMarket
+              ? `已确认的标注市场是 ${target.market}，当前 K 线市场是 ${current.market}`
+                + '（同一代码在不同交易所能指不同标的，无法证明是这一只）'
+              : `已确认的标注落库在 ${target.period} 周期，当前 K 线是 ${current.period}`
       AnnotationLedger.notice(
         current,
         `${reason}，本次未上图（确认本身已成功，切到对应标的/周期即可看到这条线）。`,

@@ -25,9 +25,11 @@ import { AnswerCard } from '@/components/copilot/AnswerCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import {
   annotationsUrl,
+  exchangeOf,
   linesForTarget,
   parseAnnotationsResponse,
   parseApplyResponse,
+  provableMarkets,
   targetRefusal,
   verifyAppliedRow,
   type AnnotationTarget,
@@ -127,10 +129,53 @@ describe('2. 逐行核对（身份 → 目标 → 内容）', () => {
     expect(verdictFor({ source: 'user' }).rejected[0]).toContain('不是 AI 标注')
   })
 
-  it('标的 / 市场 / 周期任一不符 → 拒绝（严格等值，不做 A 股族归并）', () => {
-    expect(verdictFor({ symbol: '002636' }).rejected[0]).toContain('不一致')
-    expect(verdictFor({ market: 'SH' }).rejected[0]).toContain('不一致')
-    expect(verdictFor({ period: '5m' }).rejected[0]).toContain('不一致')
+  it('标的 / 市场 / 周期任一不符 → 拒绝，且文案分别指名是哪一项', () => {
+    // 换标的：600111(沪) → 002636(深)
+    expect(verdictFor({ symbol: '002636' }).rejected[0]).toContain('002636')
+    // 换周期
+    expect(verdictFor({ period: '5m' }).rejected[0]).toContain('5m')
+    // 市场：同代码不同交易所无法证明是同一只（600111 属于 SH，行写 SZ 就是矛盾）
+    const wrongMarket = verdictFor({ market: 'SZ' }).rejected[0]
+    expect(wrongMarket).toContain('市场')
+    expect(wrongMarket).not.toContain('周期'), '市场不符不许说成周期不符（复审驳回 ①）'
+  })
+
+  it('市场按可证明的同一标的比对：CN 页能画 SH/SZ/BJ 行（复审驳回 ①）', () => {
+    // 落库市场是交易所（propose_action 写 SH），页面只有 CN —— 必须能互通
+    expect(verdictFor({ market: 'SH' }).lines).toHaveLength(1)
+    expect(verdictFor({ market: 'CN' }).lines).toHaveLength(1)
+    const sz = linesForTarget(
+      parseRows([row({ symbol: '002636', market: 'SZ' })]).rows,
+      { ...TARGET, symbol: '002636', market: 'CN' },
+    )
+    expect(sz.lines).toHaveLength(1)
+    const bj = linesForTarget(
+      parseRows([row({ symbol: '830799', market: 'BJ' })]).rows,
+      { ...TARGET, symbol: '830799', market: 'CN' },
+    )
+    expect(bj.lines).toHaveLength(1)
+  })
+
+  it('指数/个股同号代码不互证：000001 的指数行不得画到个股视图', () => {
+    // 000001 = 上证指数(SH) / 平安银行(SZ)
+    const rows = parseRows([
+      row({ id: 101, symbol: '000001', market: 'SH', price: 3200 }),
+      row({ id: 102, symbol: '000001', market: 'SZ', price: 12.5 }),
+    ]).rows
+    const asStock = linesForTarget(rows, { ...TARGET, symbol: '000001', market: 'SZ' })
+    expect(asStock.lines.map((l) => l.annotationId)).toEqual([102])
+    const asIndex = linesForTarget(rows, { ...TARGET, symbol: '000001', market: 'SH' })
+    expect(asIndex.lines.map((l) => l.annotationId)).toEqual([101])
+    // CN（无法证明标的类型）两条都不互证
+    expect(linesForTarget(rows, { ...TARGET, symbol: '000001', market: 'CN' }).lines).toHaveLength(0)
+    // 映射表本身
+    expect(provableMarkets('600111', 'CN')).toEqual(['CN', 'SH'])
+    expect(provableMarkets('600111', 'SH')).toEqual(['SH', 'CN'])
+    expect(provableMarkets('000001', 'CN')).toEqual(['CN'])
+    expect(provableMarkets('399001', 'CN')).toEqual(['CN'])
+    expect(exchangeOf('002636')).toBe('SZ')
+    expect(exchangeOf('830799')).toBe('BJ')
+    expect(exchangeOf('000001')).toBeNull()
   })
 
   it('时间点标注（没有价位）不上图；方向不可判也不画', () => {
