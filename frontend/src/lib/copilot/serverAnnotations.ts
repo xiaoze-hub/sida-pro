@@ -27,8 +27,8 @@
  *  2. 行有确认动作（`action_id != null`）；没有确认动作的行不是"我确认的"；
  *  3. 行的 symbol/period 与当前 K 线逐字相等；market 按**可证明的同一标的**比对
  *     （`provableMarkets`：CN 页 ↔ SH/SZ/BJ 行可证，指数/个股同号不互证）；
- *  4. 标的类型可判定：指数图不画；`000001` 这类指数/个股同号代码，后端没有 instrument 列
- *     ⇒ **默认拒画**（见 {@link targetRefusal}）；
+ *  4. 标的类型可判定：指数图不画；`000xxx` 整段（上证系列指数与深市主板股票同号）与
+ *     纯指数前缀，后端没有 instrument 列 ⇒ **默认拒画**（见 {@link targetRefusal}）；
  *  5. 价位是正的有限数、label 非空、方向（支撑/压力）由服务端字段确定性映射。
  *
  * 客户端不提供任何"我说的算"的凭证：没有 WeakSet、没有本地价位信封。价位、标签、
@@ -208,23 +208,23 @@ function positiveInt(value: unknown): number | null {
 const INDEX_CODE_PREFIXES = ['399', '880', '881', '999']
 
 /**
- * 与深市个股同号的指数代码（000xxx）。**这份名单就是"后端无法保证"的那部分**：
- * 上证/中证系列指数与深市主板股票都用 000xxx，命中的代码无法从标注行证明属于哪一类。
- * 新增指数页时往这里加，不要放宽成"000xxx 全部拒画"（那会误伤万科等正常个股）。
+ * 指数/个股**同号**代码段（000xxx）：上证/中证指数系列与深市主板股票都占这一段
+ * （000001=上证指数/平安银行、000002=A股指数/万科A、000003=B股指数…）。
  *
- * 与后端 `src/harness/actions.py::INDEX_STOCK_COLLISIONS` 同源；
- * `tests/test_copilot_annotation_contract.py` 有一条防漂移用例逐字比对两份名单。
+ * 这里是**整段**而不是一张"已知撞号"名单：名单只能列已知的那几个，000002/000003
+ * 这类名单外的同号代码就漏了 —— 而 000xxx 每一段都可能是上证系列指数。标注行
+ * 不记录标的类型（{@link SERVER_ANNOTATION_CONTRACT.instrumentInRow} = false），
+ * 也没有别的字段能证明，所以默认**整段拒画**，不做"大概是股票吧"的编码猜测。
+ *
+ * 与后端 `src/harness/actions.py::AMBIGUOUS_SYMBOL_PREFIXES` 同源；
+ * `tests/test_copilot_annotation_contract.py` 有一条防漂移用例逐字比对两份前缀表。
  */
-export const INDEX_CODE_COLLISIONS: readonly string[] = [
-  '000001', // 上证指数 / 平安银行(SZ000001)
-  '000010', // 上证180 / 美丽生态(SZ000010)
-  '000016', // 上证50 / 深康佳A(SZ000016)
-  '000300', // 沪深300（无法从行证明是"指数"）
-  '000688', // 科创50
-  '000852', // 中证1000
-  '000905', // 中证500
-  '000985', // 中证全指
-]
+const AMBIGUOUS_SYMBOL_PREFIXES = ['000']
+
+/** 代码段本身分不清指数/个股（允许 `.SZ` 这类后缀：行里仍然证明不了标的类型）。 */
+const AMBIGUOUS_SYMBOL_RE = new RegExp(
+  `^(?:${[...AMBIGUOUS_SYMBOL_PREFIXES, ...INDEX_CODE_PREFIXES].join('|')})\\d{3}(?!\\d)`,
+)
 
 /**
  * A 股**个股**代码前缀 → 交易所（与后端 `EXCHANGE_BY_PREFIX` 同源）。
@@ -246,7 +246,7 @@ const EXCHANGE_BY_PREFIX: readonly (readonly [string, string])[] = [
 export function exchangeOf(symbol: string): string | null {
   const sym = normSymbol(symbol)
   if (!/^\d{6}$/.test(sym)) return null
-  if (INDEX_CODE_COLLISIONS.includes(sym)) return null
+  if (isInstrumentAmbiguous(sym)) return null
   for (const [prefix, exchange] of EXCHANGE_BY_PREFIX) {
     if (sym.startsWith(prefix)) return exchange
   }
@@ -254,12 +254,15 @@ export function exchangeOf(symbol: string): string | null {
 }
 
 /**
- * 该代码是否属于"指数/个股无法从标注行区分"的一类。 */
+ * 该代码是否属于"指数/个股无法从标注行区分"的一类。
+ *
+ * 000xxx **整段**都算（不是只算已知撞号的那几个）：上证系列指数与深市主板股票共用
+ * 这一段，标注行没有类型字段，任何 000xxx 都无法证明自己是哪一类。
+ */
 export function isInstrumentAmbiguous(symbol: string): boolean {
   const sym = normSymbol(symbol)
   if (!sym) return false
-  if (INDEX_CODE_PREFIXES.some((p) => sym.startsWith(p))) return true
-  return INDEX_CODE_COLLISIONS.includes(sym)
+  return AMBIGUOUS_SYMBOL_RE.test(sym)
 }
 
 /**
@@ -267,7 +270,7 @@ export function isInstrumentAmbiguous(symbol: string): boolean {
  *
  *  - 未登录：不发请求（后端 401 会触发全局登出，匿名看 K 线不该被踢）；
  *  - 指数图：AI 标注只来自个股情景矩阵，指数图上没有可证明的归属；
- *  - 同号代码（000001 等）：后端没有 instrument 列，**默认拒画**，不做"大概是股票吧"。
+ *  - 同号代码（000xxx 整段）：后端没有 instrument 列，**默认拒画**，不做"大概是股票吧"。
  */
 export function targetRefusal(target: AnnotationTarget | null): string | null {
   if (!target) return '未画线：当前视图没有可核对的 K 线标的。'
@@ -276,7 +279,7 @@ export function targetRefusal(target: AnnotationTarget | null): string | null {
     return '未画线：指数图不显示个股情景标注（后端标注行不记录标的类型，无法证明归属）。'
   }
   if (isInstrumentAmbiguous(target.symbol)) {
-    return `未画线：${normSymbol(target.symbol)} 既可能是指数也可能是个股，后端标注行没有标的类型字段，无法区分，默认不画。`
+    return `未画线：${normSymbol(target.symbol)} 属于 000xxx/指数代码段，与上证/中证指数系列同号，标注行没有标的类型字段，无法证明是个股还是指数，默认不画。`
   }
   return null
 }
@@ -288,7 +291,7 @@ export function targetRefusal(target: AnnotationTarget | null): string | null {
  *  - 非 A 股族（HK/US/…）：只认自己；
  *  - `CN`（A 股、未指明交易所）：可与代码推导出的那一个交易所互证；
  *  - `SH`/`SZ`/`BJ`：只与自身互证；推导出的交易所正好是它时，`CN` 行也算同一只；
- *  - 推导不出交易所（指数/个股同号、非个股前缀）：**不做任何互证**。
+ *  - 推导不出交易所（000xxx 整段、纯指数前缀、非个股前缀）：**不做任何互证**。
  *
  * 为什么必须这样（2026-10-28 安全复审驳回 ①）：提议里写的是交易所（SH/SZ/BJ），
  * 页面只有 `?market=CN`，字符串相等 ⇒ 落库的线在图上永远看不到；而简单做 A 股族归并
@@ -444,6 +447,18 @@ export function verifyRow(row: ServerAnnotationRow, target: AnnotationTarget): R
       ok: false,
       reason: 'target',
       message: `标注 #${row.id} 属于 ${row.symbol}，当前 K 线是 ${sym}，不画。`,
+    }
+  }
+  // 标的类型不可证（000xxx 整段 / 纯指数前缀）⇒ 这一行**任何入口**都不画。
+  // 入口层 {@link targetRefusal} 已经拦过一次（连请求都不发），这里再拦一次：
+  // 图上的每一行都必须自己经得起这条校验，不能依赖"上游一定先问过"。
+  if (isInstrumentAmbiguous(sym)) {
+    return {
+      ok: false,
+      reason: 'target',
+      message:
+        `标注 #${row.id} 的目标 ${sym} 属于 000xxx/指数代码段，与上证/中证指数系列同号，` +
+        '标注行没有标的类型字段，无法证明是个股还是指数，不画。',
     }
   }
   // 市场按"可证明的同一标的"比对（CN 页 ↔ SH/SZ/BJ 行可证；指数/个股同号不互证），

@@ -498,6 +498,21 @@ describe('④ 精确身份与目标（不用 label+price 猜）', () => {
     expect(noteLines()).toHaveLength(0)
   })
 
+  // 000002/000003 也同时是上证系列指数（A股指数/B股指数）与深市个股（万科A…）：
+  // 旧实现只拒"名单里已知撞号"的代码，这两个会当成普通深市个股放过去 —— 现在整段拒。
+  it('000002 / 000003 个股页同样默认拒画（000xxx 整段同号，不是名单制）', async () => {
+    for (const symbol of ['000002', '000003']) {
+      H.annotations = () => Promise.resolve([row({ symbol, price: 9.9 })])
+      const view = render(<Harness symbol={symbol} />)
+
+      await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('refused'))
+      expect(screen.getByTestId('message').textContent).toContain('标的类型')
+      expect(annotationCalls()).toHaveLength(0)
+      expect(noteLines()).toHaveLength(0)
+      view.unmount()
+    }
+  })
+
   it('指数图不画个股标注，也不发标注请求', async () => {
     H.annotations = () => Promise.resolve([row({ symbol: '000001' })])
     render(<Harness symbol="000001" instrument="index" />)

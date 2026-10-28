@@ -508,14 +508,21 @@ def get_copilot_annotations(
     - `symbol/market/period`：目标回显，前端必须与当前 K 线逐字比对
 
     `ids` / `market_strict` / `mine_only` / `action_linked` 是给「精确读取」用的严格模式；
-    默认值保持旧行为（A 股市场族归并 + 本人或全局），不改变既有调用方语义。
+    默认值保持旧行为（A 股市场族归并 + 本人或全局），不改变既有调用方语义 ——
+    **但 000xxx 这类指数/个股同号段例外：任何模式都不给行**（见下段）。
     `market_strict=true` 的语义是「**可证明**的同一标的」，不是字符串相等：A 股代码能推导出
-    交易所时（600xxx→SH、000/300xxx→SZ、43/83/87xxx→BJ），`CN` 与该交易所互证；
-    指数/个股同号代码（000001…）不推导，两侧都不做互证 —— 见 `actions.provable_markets`。
+    交易所时（600xxx→SH、002/300xxx→SZ、43/83/87xxx→BJ），`CN` 与该交易所互证；
+    000xxx 整段与纯指数前缀（399/880/881/999）无法证明标的类型 ⇒ **默认拒画**：
+    即便调用方按 SZ/SH 精确查询也返回空（页面上的 market 是客户端声明，不是证据），
+    见 `actions.instrument_ambiguous`。前端 `targetRefusal` 同表同规则，两侧一致。
     """
     from sqlalchemy import and_, or_
 
     from src.db.models import CopilotAction, KlineAnnotation
+
+    # 标的类型不可证 ⇒ 一条都不给（不靠"名单里没有就没问题"：000xxx 整段都可能是指数）。
+    if actions_mod.instrument_ambiguous(symbol):
+        return []
 
     wanted: list[int] = []
     # 直接调用(单测/内部)时未传的 Query 默认值不是 str/bool —— 按"没给"处理，

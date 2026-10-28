@@ -473,11 +473,12 @@ def test_read_rejects_malformed_ids(db):
         assert ei.value.status_code == 400
 
 
-def test_read_market_strict_keeps_index_and_stock_apart(db):
-    """000001 同时是上证指数(SH)与平安银行(SZ)：族归并会把两条都吐出来。
+def test_read_refuses_ambiguous_000xxx_in_every_market_mode(db):
+    """000001 同时是上证指数(SH)与平安银行(SZ)：标注行证明不了是哪一类。
 
-    这正是前端「后端无法保证标的类型则默认拒画」的依据 —— 服务端只能靠精确 market
-    区分，而 propose 写入的 market 可能是 CN（族语义），此时无法证明是哪一类。
+    族归并会把三条都吐出来；按 market 精确匹配也只能证明"当初写的是 SH/SZ"，
+    证明不了"这一行说的是指数还是个股"（页面参数是客户端声明，不是证据）。
+    所以 000xxx 整段在任何 market / 任何模式下一律不给行 —— 默认拒画。
     """
     db.add(KlineAnnotation(user_id=UID, symbol="000001", market="SH", period="1d",
                            price=3200.0, label="指数线", source="ai"))
@@ -487,15 +488,18 @@ def test_read_market_strict_keeps_index_and_stock_apart(db):
                            price=1.0, label="族语义线", source="ai"))
     db.commit()
 
-    merged = _read(db, symbol="000001", market="CN")
-    assert {r["label"] for r in merged} == {"指数线", "个股线", "族语义线"}
+    for market in ("CN", "SH", "SZ", "BJ"):
+        assert _read(db, symbol="000001", market=market) == [], f"{market} 非严格模式也不许给行"
+        assert _read(db, symbol="000001", market=market, market_strict=True) == [], (
+            f"{market} 严格模式不许给行（标的类型不可证）"
+        )
 
-    strict_sz = _read(db, symbol="000001", market="SZ", market_strict=True)
-    assert [r["label"] for r in strict_sz] == ["个股线"]
-    strict_cn = _read(db, symbol="000001", market="CN", market_strict=True)
-    assert [r["label"] for r in strict_cn] == ["族语义线"], (
-        "严格模式下 CN 行不得被当成 SZ/SH —— 它无法证明标的类型"
-    )
+    # 对照：可证代码不受影响（CN 与推导出的交易所互证，非严格模式仍走族归并）
+    db.add(KlineAnnotation(user_id=UID, symbol=SYMBOL, market="SH", period="1d",
+                           price=35.2, label="沪市线", source="ai"))
+    db.commit()
+    assert [r["label"] for r in _read(db, symbol=SYMBOL, market="CN", market_strict=True)] == ["沪市线"]
+    assert [r["label"] for r in _read(db, symbol=SYMBOL, market="SH")] == ["沪市线"]
 
 
 # ── 6. 迁移 v231：唯一索引建不起来必须失败（不许吞异常 / 不许记成功）───────────
@@ -1041,7 +1045,7 @@ def test_provable_markets_never_cross_index_and_stock_with_the_same_code(db):
 
 
 def test_same_code_index_row_is_not_read_back_on_the_stock_page(db):
-    """读端闸门：000001 的指数行（SH）不得出现在把它当个股看的查询里。"""
+    """读端闸门：000001 的行（SH 指数 / SZ 个股）在任何页面查询下都不给。"""
     db.add_all([
         KlineAnnotation(user_id=UID, symbol="000001", market="SH", period="1d",
                         price=3200.0, label="指数线", source="ai"),
@@ -1054,8 +1058,8 @@ def test_same_code_index_row_is_not_read_back_on_the_stock_page(db):
         rows = http_read(db, symbol="000001", market_strict=True, **kw)
         return [r["label"] for r in rows]
 
-    assert labels(market="SZ") == ["个股线"]
-    assert labels(market="SH") == ["指数线"]
+    assert labels(market="SZ") == [], "即便指名 SZ，000001 也无法证明是个股（默认拒画）"
+    assert labels(market="SH") == [], "即便指名 SH，000001 也无法证明是指数（默认拒画）"
     assert labels(market="CN") == [], "CN 页无法证明是股票还是指数 ⇒ 一条都不给（默认拒画）"
 
 
@@ -1066,6 +1070,96 @@ def http_read(db, **kw):
     params = {"symbol": SYMBOL, "market": "CN", "period": "1d", "db": db, "user": _U()}
     params.update(kw)
     return get_copilot_annotations(**params)
+
+
+# ── 11b. 000002/000003 …：整段不可证，不是"名单里没有就放行" ────────────────────
+#
+# 000001 之外，000002（A股指数 / 万科A）、000003（B股指数）等同样是指数与个股撞号。
+# 旧实现只列了"已知撞号"的 7 个代码，名单外的就被当成深市个股推导成 SZ
+# → 上证指数系列的线可以画到个股图上。服务端标注行没有 instrument 列，
+# 也没有任何字段能证明标的类型，所以整段 000xxx 默认不可证：不推导、不互证、不给行、不落库。
+
+_AMBIGUOUS_SAMPLES = (
+    "000001",  # 上证指数 / 平安银行
+    "000002",  # A股指数 / 万科A
+    "000003",  # B股指数
+    "000004", "000005", "000009", "000010", "000016",
+    "000300", "000688", "000852", "000905", "000985",
+    "000999", "000777",
+)
+
+
+def test_every_000_xxx_code_is_unprovable_not_just_a_curated_list():
+    for sym in _AMBIGUOUS_SAMPLES:
+        assert A.instrument_ambiguous(sym) is True, sym
+        assert A.exchange_of(sym) is None, f"{sym} 不许推导交易所"
+        assert A.provable_markets(sym, "CN") == ["CN"], f"{sym} 不许跨市场互证"
+        assert A.provable_markets(sym, "SZ") == ["SZ"]
+        assert A.provable_markets(sym, "SH") == ["SH"]
+        assert A.provable_markets(sym, "HK") == ["HK"]
+        assert A.market_matches_symbol(sym, "SZ") is None, "不可证 ≠ 矛盾：写入端不谎称知道"
+    # 带后缀也不许：行里只存代码字符串，后缀证明不了当初指的是哪一类标的
+    assert A.instrument_ambiguous("000002.SZ") is True
+    assert A.exchange_of("000002.SZ") is None
+
+
+def test_ambiguity_rule_does_not_overreach_into_provable_stock_prefixes():
+    """边界：只有 000xxx 与纯指数前缀不可证，其余可证个股前缀一个都不能误伤。"""
+    cases = {
+        "600519": "SH", "601318": "SH", "688981": "SH", "900901": "SH",
+        "002636": "SZ", "001979": "SZ", "300750": "SZ", "301269": "SZ",
+        "830799": "BJ", "430047": "BJ", "871981": "BJ",
+    }
+    for sym, exchange in cases.items():
+        assert A.instrument_ambiguous(sym) is False, sym
+        assert A.exchange_of(sym) == exchange, sym
+        assert set(A.provable_markets(sym, "CN")) == {"CN", exchange}
+    for sym in ("399001", "399006", "880301", "881101", "999999"):
+        assert A.instrument_ambiguous(sym) is True, sym
+        assert A.exchange_of(sym) is None, sym
+    # 形状不合法的不算"歧义"（只是不可证），不许把空串/短码误判成指数段
+    for sym in ("", "0002", "0000022", "ABC", "sh600519", "39900"):
+        assert A.instrument_ambiguous(sym) is False, sym
+        assert A.exchange_of(sym) is None, sym
+
+
+def test_ambiguous_target_cannot_be_confirmed_and_never_lands(db):
+    """写入端与前端一致：000xxx 的标注不落库（不制造「确认成功、图上永远没有」）。"""
+    for sym in ("000001", "000002", "000003"):
+        item = _propose(db, {"symbol": sym, "label": f"{sym} 同号线", "price": 12.3, "market": "SZ"})
+        with pytest.raises(A.ActionError) as ei:
+            A.apply_action(db, user_id=UID, action_id=item["id"])
+        assert sym in str(ei.value) and "指数" in str(ei.value)
+        assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+        action = db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one()
+        assert action.status == "pending", "拒绝后动作必须回滚回 pending（可以改目标再确认）"
+
+
+def test_http_default_denies_000002_and_000003_on_every_page(db, http):
+    """真实 HTTP：读端零行、确认端 400 —— 000002/000003 不再是一条"能画就画"的路径。"""
+    db.add_all([
+        KlineAnnotation(user_id=UID, symbol="000002", market="SZ", period="1d",
+                        price=9.9, label="万科线", source="ai"),
+        KlineAnnotation(user_id=UID, symbol="000003", market="SH", period="1d",
+                        price=2800.0, label="B股指数线", source="ai"),
+    ])
+    db.commit()
+
+    for sym in ("000002", "000003"):
+        for market in ("CN", "SH", "SZ"):
+            resp = http.get("/copilot/annotations", params={
+                "symbol": sym, "market": market, "period": "1d", **_STRICT,
+            })
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == [], f"{sym} 在 {market} 页不许给行"
+
+    item = _propose(db, {"symbol": "000002", "label": "万科支撑", "price": 9.9, "market": "SZ"})
+    applied = http.post(f"/copilot/actions/{item['id']}/apply")
+    assert applied.status_code == 400, applied.text
+    assert "指数" in applied.json()["detail"]
+    assert db.query(KlineAnnotation).filter(
+        KlineAnnotation.user_id == UID, KlineAnnotation.label == "万科支撑"
+    ).count() == 0
 
 
 def test_market_contradicting_the_symbol_is_refused_at_write(db):
@@ -1082,21 +1176,34 @@ def test_market_contradicting_the_symbol_is_refused_at_write(db):
         assert A.apply_action(db, user_id=UID, action_id=ok["id"])["annotation"]["market"] == market
 
 
-def test_frontend_market_tables_match_backend():
-    """防漂移：前端的同号代码名单必须与后端逐字一致（两侧各写一份是会漂的地方）。"""
+def test_frontend_ambiguity_tables_match_backend():
+    """防漂移：前后端"代码段不可证"的两张前缀表必须逐字一致。
+
+    安全边界就是这两条规则（000xxx 整段 + 纯指数前缀），两侧各写一份是最容易漂的地方。
+    名单式实现（只列已知撞号）已删除：它覆盖不到 000002/000003，且"名单里没有就放行"
+    本身就是把不确定性当成安全。
+    """
     import re
     from pathlib import Path
 
     src = Path(__file__).resolve().parent.parent / "frontend/src/lib/copilot/serverAnnotations.ts"
     text = src.read_text(encoding="utf-8")
-    block = text.split("export const INDEX_CODE_COLLISIONS", 1)
-    assert len(block) == 2, "前端必须保留 INDEX_CODE_COLLISIONS 常量"
-    array_literal = block[1].split("= [", 1)
-    assert len(array_literal) == 2, "前端同号代码名单必须是数组字面量"
-    listed = re.findall(r"'(\d{6})'", array_literal[1].split("]", 1)[0])
-    assert set(listed) == set(A.INDEX_STOCK_COLLISIONS), (
-        f"前后端同号代码名单漂移：前端 {sorted(set(listed))} / 后端 {sorted(A.INDEX_STOCK_COLLISIONS)}"
+
+    def literal(name: str) -> list[str]:
+        block = text.split(f"const {name}", 1)
+        assert len(block) == 2, f"前端必须保留 {name} 常量"
+        body = block[1].split("=", 1)[1].split("]", 1)[0]
+        return re.findall(r"'(\d+)'", body)
+
+    assert literal("AMBIGUOUS_SYMBOL_PREFIXES") == list(A.AMBIGUOUS_SYMBOL_PREFIXES), (
+        f"前后端同号代码段漂移：前端 {literal('AMBIGUOUS_SYMBOL_PREFIXES')} / "
+        f"后端 {list(A.AMBIGUOUS_SYMBOL_PREFIXES)}"
     )
+    assert literal("INDEX_CODE_PREFIXES") == list(A.INDEX_ONLY_PREFIXES), (
+        f"前后端指数前缀漂移：前端 {literal('INDEX_CODE_PREFIXES')} / "
+        f"后端 {list(A.INDEX_ONLY_PREFIXES)}"
+    )
+    assert "INDEX_CODE_COLLISIONS" not in text, "名单式实现不得回流（只覆盖已知撞号）"
 
 
 # ── 12. ts-only：确认了也画不出来 ⇒ 明确拒绝（不制造死数据）────────────────────

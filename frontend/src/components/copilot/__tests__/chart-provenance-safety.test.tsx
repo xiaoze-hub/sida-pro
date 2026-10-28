@@ -157,16 +157,17 @@ describe('2. 逐行核对（身份 → 目标 → 内容）', () => {
   })
 
   it('指数/个股同号代码不互证：000001 的指数行不得画到个股视图', () => {
-    // 000001 = 上证指数(SH) / 平安银行(SZ)
+    // 000001 = 上证指数(SH) / 平安银行(SZ)：行里没有标的类型 ⇒ 任何方向都不画
     const rows = parseRows([
       row({ id: 101, symbol: '000001', market: 'SH', price: 3200 }),
       row({ id: 102, symbol: '000001', market: 'SZ', price: 12.5 }),
     ]).rows
     const asStock = linesForTarget(rows, { ...TARGET, symbol: '000001', market: 'SZ' })
-    expect(asStock.lines.map((l) => l.annotationId)).toEqual([102])
+    expect(asStock.lines).toHaveLength(0)
+    expect(asStock.rejected[0]).toContain('标的类型')
     const asIndex = linesForTarget(rows, { ...TARGET, symbol: '000001', market: 'SH' })
-    expect(asIndex.lines.map((l) => l.annotationId)).toEqual([101])
-    // CN（无法证明标的类型）两条都不互证
+    expect(asIndex.lines).toHaveLength(0)
+    // CN（无法证明标的类型）同样一条都不画
     expect(linesForTarget(rows, { ...TARGET, symbol: '000001', market: 'CN' }).lines).toHaveLength(0)
     // 映射表本身
     expect(provableMarkets('600111', 'CN')).toEqual(['CN', 'SH'])
@@ -176,6 +177,40 @@ describe('2. 逐行核对（身份 → 目标 → 内容）', () => {
     expect(exchangeOf('002636')).toBe('SZ')
     expect(exchangeOf('830799')).toBe('BJ')
     expect(exchangeOf('000001')).toBeNull()
+  })
+
+  it('000xxx 整段都是同号段：000002/000003 也不互证、不上图（不是名单制）', () => {
+    // 000002 = 上证A股指数 / 万科A(SZ)；000003 = 上证B股指数 / 深市个股
+    const rows = parseRows([
+      row({ id: 201, symbol: '000002', market: 'SH', price: 3400 }),
+      row({ id: 202, symbol: '000002', market: 'SZ', price: 9.9 }),
+      row({ id: 203, symbol: '000003', market: 'CN', price: 2800 }),
+    ]).rows
+
+    for (const symbol of ['000002', '000003']) {
+      for (const market of ['CN', 'SH', 'SZ']) {
+        expect(linesForTarget(rows, { ...TARGET, symbol, market }).lines).toHaveLength(0)
+      }
+      expect(targetRefusal({ ...TARGET, symbol }) ?? '').toContain('标的类型')
+      expect(exchangeOf(symbol)).toBeNull()
+      expect(provableMarkets(symbol, 'CN')).toEqual(['CN'])
+      expect(provableMarkets(symbol, 'SZ')).toEqual(['SZ'])
+    }
+    // 边界：可证前缀一个都不能被误伤（001979/002636 是深市个股，600519/688981 沪市）
+    expect(exchangeOf('001979')).toBe('SZ')
+    expect(exchangeOf('002636')).toBe('SZ')
+    expect(exchangeOf('600519')).toBe('SH')
+    expect(exchangeOf('688981')).toBe('SH')
+    expect(provableMarkets('001979', 'CN')).toEqual(['CN', 'SZ'])
+    expect(targetRefusal({ ...TARGET, symbol: '001979' })).toBeNull()
+    expect(linesForTarget(
+      parseRows([row({ id: 301, symbol: '001979', market: 'SZ' })]).rows,
+      { ...TARGET, symbol: '001979', market: 'CN' },
+    ).lines).toHaveLength(1)
+    // 纯指数前缀同样拒
+    for (const symbol of ['399001', '880301', '999999']) {
+      expect(targetRefusal({ ...TARGET, symbol }) ?? '').toContain('标的类型')
+    }
   })
 
   it('时间点标注（没有价位）不上图；方向不可判也不画', () => {

@@ -379,28 +379,49 @@ ANNOTATION_MARKETS: tuple[str, ...] = ("CN", "SH", "SZ", "BJ", "HK", "US")
 A_SHARE_MARKETS: tuple[str, ...] = ("CN", "SH", "SZ", "BJ")
 
 #: A 股**个股**代码前缀 → 交易所。只收能唯一确定交易所的个股前缀；
-#: 指数前缀（399/880/881/999）与指数/个股同号代码一律不推导（见 INDEX_STOCK_COLLISIONS）。
+#: 指数前缀（399/880/881/999）与 000xxx（指数/个股同号段）一律不推导，
+#: 见 `instrument_ambiguous`。
 EXCHANGE_BY_PREFIX: tuple[tuple[str, str], ...] = (
     ("60", "SH"), ("68", "SH"), ("90", "SH"),
     ("00", "SZ"), ("20", "SZ"), ("30", "SZ"),
     ("43", "BJ"), ("83", "BJ"), ("87", "BJ"),
 )
 
-#: 与个股同号的指数代码：000xxx 既是上证/中证系列指数，也是深市主板股票。
-#: 命中这些代码时无法从代码证明标的类型 ⇒ 不推导交易所 ⇒ 不与 `CN` 行互证
-#: （这正是「000001 的指数线不得画到 000001 个股图上」的那道闸）。
-#: 与前端 `frontend/src/lib/copilot/serverAnnotations.ts` 的 INDEX_STOCK_COLLISIONS 同源，
-#: tests/test_copilot_annotation_contract.py 有一条防漂移用例逐字比对。
-INDEX_STOCK_COLLISIONS: frozenset[str] = frozenset({
-    "000001",  # 上证指数 / 平安银行(SZ000001)
-    "000010",  # 上证180 / 美丽生态(SZ000010)
-    "000016",  # 上证50 / 深康佳A(SZ000016)
-    "000300",  # 沪深300
-    "000688",  # 科创50
-    "000852",  # 中证1000
-    "000905",  # 中证500
-    "000985",  # 中证全指
-})
+#: **纯**指数代码前缀：深证系列(399)、通达信板块(880/881)、上证综指(999999)。
+INDEX_ONLY_PREFIXES: tuple[str, ...] = ("399", "880", "881", "999")
+
+#: 指数/个股**同号**代码段：上证/中证指数系列与深市主板股票都占 000xxx
+#: （000001=上证指数/平安银行、000002=A股指数/万科A、000003=B股指数…）。
+#:
+#: 为什么是"整段"而不是一张撞号名单：名单只能列出已知的那几个，000002/000003 这类
+#: 名单外的同号代码就漏过去了 —— 而 000xxx 这一段**本来都**可能是上证系列指数。
+#: 服务端标注行没有 instrument 列，也没有任何能证明"这一行说的是指数还是个股"的字段，
+#: 所以这里不做猜测（不从编码反推标的类型，那只是伪证）：整段默认不可证、默认拒画。
+AMBIGUOUS_SYMBOL_PREFIXES: tuple[str, ...] = ("000",)
+
+#: 命中即"代码段本身就分不清指数/个股"。允许带交易所后缀（000002.SZ 仍然不可证：
+#: 标注行只存代码字符串，没有列能证明它当初指的是哪一类标的）。
+_AMBIGUOUS_RE = re.compile(
+    r"^(?:%s)\d{3}(?!\d)" % "|".join(AMBIGUOUS_SYMBOL_PREFIXES + INDEX_ONLY_PREFIXES)
+)
+
+
+def instrument_ambiguous(symbol: str) -> bool:
+    """该代码**在标注行里**无法证明标的类型（指数还是个股）。
+
+    唯一能证明类型的是标的本身（页面的 instrument / 库里的 instrument 列），
+    标注行两者都没有 —— 于是 000xxx 整段和纯指数前缀一律按"不可证"处理：
+
+      - 不推导交易所（`exchange_of` 返回 None）；
+      - 不与任何市场互证（`provable_markets` 只认自己）；
+      - 读取端直接不给行、写入端直接拒绝、前端不发请求不上图（前后端同一张表）。
+
+    这是**保守拒绝**，不是"猜测类型"：没有证据时不画，而不是"大概是股票吧"。
+    """
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return False
+    return bool(_AMBIGUOUS_RE.match(sym))
 
 
 def exchange_of(symbol: str) -> str | None:
@@ -411,7 +432,7 @@ def exchange_of(symbol: str) -> str | None:
     sym = str(symbol or "").strip().upper()
     if len(sym) != 6 or not sym.isdigit():
         return None
-    if sym in INDEX_STOCK_COLLISIONS:
+    if instrument_ambiguous(sym):
         return None
     for prefix, exchange in EXCHANGE_BY_PREFIX:
         if sym.startswith(prefix):
@@ -432,7 +453,7 @@ def provable_markets(symbol: str, market: str) -> list[str]:
       - 非 A 股族（HK/US/…）：只认自己；
       - `CN`：可与"代码推导出的那一个交易所"互证；
       - `SH`/`SZ`/`BJ`：只与自身互证；代码推导出的交易所正好是它时，`CN` 行也算同一只；
-      - 推导不出交易所（指数/个股同号、非个股前缀）：**不做任何互证**。
+      - 推导不出交易所（000xxx 整段、纯指数前缀、非个股前缀）：**不做任何互证**。
     """
     mk = str(market or "").strip().upper() or "CN"
     if mk not in A_SHARE_MARKETS:
@@ -665,6 +686,15 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
         raise ActionError("标注需要 symbol 和 label")
     if len(symbol) > _MAX_SYMBOL_LEN:
         raise ActionError(f"标的代码过长（最多 {_MAX_SYMBOL_LEN} 个字符）：{symbol}")
+    # 2026-10-28 二轮复审：指数/个股同号（000xxx 整段）的标注行**无法证明标的类型**
+    # （表里没有 instrument 列），读取端与前端都默认拒画 ⇒ 这里也默认拒绝落库。
+    # 不这样做就是「确认成功、图上永远没有线」的死数据 —— 和 ts-only 同一条原则。
+    if instrument_ambiguous(symbol):
+        raise ActionError(
+            f"标注目标 {symbol} 无法证明是指数还是个股：000xxx 整段与上证/中证指数系列同号，"
+            "标注行不记录标的类型，前端默认不上图。本次未落库 —— "
+            "请改用不含指数同号段的代码（600xxx/002xxx/300xxx/830xxx 等）。"
+        )
     period = _normalize_period(payload.get("period"))
     market = _normalize_market(payload.get("market"))
     if market_matches_symbol(symbol, market) is False:
