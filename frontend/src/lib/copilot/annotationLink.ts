@@ -202,7 +202,7 @@ export async function linkConfirmedAnnotation(
     // 旧实现用 targetKey 比对，SH 行在 CN 页会走进"不一致"分支，然后被当成
     // **周期**不符播报（"落库在 1d 周期，当前 K 线是 1d"）—— 复审驳回 ①。
     const sameSymbol = normSymbol(view.symbol) === normSymbol(target.symbol)
-    const sameMarket = marketMatches(view.market, target.market, target.symbol)
+    const sameMarket = marketMatches(view.market, target.market, target.symbol, target.instrument)
     const samePeriod = (view.period || '1d').trim() === (target.period || '1d').trim()
     if (view.instrument !== target.instrument || !sameSymbol || !sameMarket || !samePeriod) {
       // 逐项说清到底哪一项不同：标的 → 市场 → 周期，互不冒充。

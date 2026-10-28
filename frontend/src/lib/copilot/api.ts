@@ -52,6 +52,7 @@ export interface ViewStatePayload {
   page?: string
   symbol?: string
   market?: string
+  instrument?: 'stock' | 'index'
   period?: string
   range?: { from?: string; to?: string }
   selection?: { from?: string; to?: string } | null

@@ -578,7 +578,7 @@ def resolve_instrument(symbol: str, market: str = "CN", claimed: Any = None) -> 
             )
         if mk != "CN":
             raise ActionError(
-                f"指数标注的市场口径是 CN（A 股指数不分交易所），收到 {mk}；"
+                f"{sym} 是指数（A 股指数不分交易所），标注市场口径必须是 CN，收到 {mk}；"
                 "这条线在指数图上永远查不到，已拒绝"
             )
         return INSTRUMENT_INDEX

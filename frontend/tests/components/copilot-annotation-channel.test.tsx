@@ -498,7 +498,7 @@ describe('④ 精确身份与目标（不用 label+price 猜）', () => {
 
     await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('refused'))
     expect(screen.getByTestId('message').textContent).toContain('标的类型')
-    expect(annotationCalls()).toHaveLength(0) // 连请求都不发
+    expect(annotationCalls()).toHaveLength(1) // 请求严格类型，缺失类型的历史行仍不画
     expect(noteLines()).toHaveLength(0)
   })
 
@@ -511,7 +511,7 @@ describe('④ 精确身份与目标（不用 label+price 猜）', () => {
 
       await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('refused'))
       expect(screen.getByTestId('message').textContent).toContain('标的类型')
-      expect(annotationCalls()).toHaveLength(0)
+      expect(annotationCalls().length).toBeGreaterThan(0)
       expect(noteLines()).toHaveLength(0)
       view.unmount()
     }
@@ -586,7 +586,7 @@ describe('④ 精确身份与目标（不用 label+price 猜）', () => {
 
     await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('refused'))
     expect(screen.getByTestId('message').textContent).toContain('标的类型')
-    expect(annotationCalls()).toHaveLength(0) // 目标级拒绝，连请求都不发
+    expect(annotationCalls()).toHaveLength(1) // 严格请求后逐行拒绝缺失类型的历史行
     expect(noteLines()).toHaveLength(0)
   })
 

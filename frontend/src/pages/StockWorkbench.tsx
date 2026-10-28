@@ -427,6 +427,7 @@ export default function StockWorkbench() {
         page: 'kline',
         symbol,
         market: type === 'stock' ? 'CN' : type,
+        instrument: type === 'stock' ? 'stock' : type === 'index' ? 'index' : undefined,
         period: periodFromUrl ?? undefined,
       },
       `wb:${symbol}:${periodFromUrl ?? '-'}:${type}`,

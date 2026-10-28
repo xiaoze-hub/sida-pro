@@ -1594,10 +1594,18 @@ def test_http_apply_success_and_ts_only_refusal_on_both_dialects(dialect, pg_db)
         assert resp.status_code == 200, resp.text
         assert resp.json()["annotation"]["market"] == "SH"
 
-        bad = _propose(session, {"symbol": SYMBOL, "label": "只有时间", "ts": "2026-10-28"})
+        # 日粒度时间点（2026-10-28 P2 恢复）：能确认、能上图（marker 图层）
+        daily = _propose(session, {"symbol": SYMBOL, "label": "财报日", "ts": "2026-10-28"})
+        daily_resp = http.post(f"/copilot/actions/{daily['id']}/apply")
+        assert daily_resp.status_code == 200, daily_resp.text
+        assert daily_resp.json()["annotation"]["ts"] == "2026-10-28"
+        assert daily_resp.json()["annotation"]["price"] is None
+
+        # 带时分的时间点仍然拒（无法证明落在哪一根 K 线）
+        bad = _propose(session, {"symbol": SYMBOL, "label": "只有时间", "ts": "2026-10-28 10:00"})
         bad_resp = http.post(f"/copilot/actions/{bad['id']}/apply")
         assert bad_resp.status_code == 400, bad_resp.text
-        assert "ts" in bad_resp.json()["detail"]
+        assert "日粒度" in bad_resp.json()["detail"]
     finally:
         if dialect == "sqlite":
             _cleanup(session)
@@ -1629,3 +1637,258 @@ def test_pg_http_unique_conflict_is_400_and_preserves_history(pg_db):
     assert pg_db.query(CopilotAction).filter(CopilotAction.id == mine["id"]).one().status == "pending"
     kept = pg_db.query(CopilotAction).filter(CopilotAction.id == ghost.id).one()
     assert kept.annotation_id == 42, "他人的历史关联原样保留"
+
+
+# ── 14. 标的类型链（2026-10-28 P2）：000858/000001 个股可上图，同号指数绝不混 ──────
+#
+# 旧实现把 000xxx **整段**否决（"代码分不清指数/个股 ⇒ 一律不画"），代价是 000858
+# 这种正常深市个股也确认不上图。现在类型是一等字段：
+#   提议(带 instrument) → 确认(校验+落库) → 读取(按 instrument 精确过滤) → 前端按类型核对；
+# 历史上没有类型的行（instrument IS NULL）不猜：只有**仅凭代码可证**时才采纳。
+
+
+def _apply_ok(db, payload: dict) -> dict:
+    item = _propose(db, payload)
+    return A.apply_action(db, user_id=UID, action_id=item["id"])
+
+
+def _typed_read(db, **kw):
+    """画图口径读数（前端就是这三条严格参数 + instrument）。"""
+    kw.setdefault("market_strict", True)
+    kw.setdefault("mine_only", True)
+    kw.setdefault("action_linked", True)
+    return http_read(db, **kw)
+
+
+def test_000858_stock_confirms_and_reads_back_with_instrument(db, http):
+    """000858（五粮液，深市个股）：确认能落库、读取带类型回显、`action_id` 对得上。"""
+    item = _propose(db, {"symbol": "000858", "label": "五粮液支撑", "price": 128.5,
+                         "instrument": "stock"})
+    resp = http.post(f"/copilot/actions/{item['id']}/apply")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["annotation"]["instrument"] == "stock"
+    assert body["annotation"]["market"] == "CN"
+    assert body["annotation_id"] > 0
+
+    rows = _typed_read(db, symbol="000858", instrument="stock")
+    assert [r["id"] for r in rows] == [body["annotation_id"]]
+    assert rows[0]["instrument"] == "stock"
+    assert rows[0]["action_id"] == item["id"]
+    assert rows[0]["user_id"] == UID
+    # 行确实带类型落库（不是"读的时候猜的"）
+    assert db.query(KlineAnnotation).filter(
+        KlineAnnotation.id == body["annotation_id"]
+    ).one().instrument == "stock"
+
+
+def test_000001_index_and_stock_rows_are_isolation_channels(db, http):
+    """000001 的两重身份：指数行与个股行各自只在自己类型下可见，绝不互相串。"""
+    stock = _apply_ok(db, {"symbol": "000001", "label": "个股支撑", "price": 12.5,
+                           "instrument": "stock"})
+    idx = _apply_ok(db, {"symbol": "000001", "label": "指数阻力", "price": 3300.0,
+                         "instrument": "index", "color": "down"})
+    assert stock["annotation"]["instrument"] == "stock"
+    assert idx["annotation"]["instrument"] == "index"
+
+    as_stock = _typed_read(db, symbol="000001", instrument="stock")
+    assert [r["label"] for r in as_stock] == ["个股支撑"]
+    assert {r["instrument"] for r in as_stock} == {"stock"}
+    assert as_stock[0]["id"] == stock["annotation_id"]
+
+    as_index = _typed_read(db, symbol="000001", instrument="index")
+    assert [r["label"] for r in as_index] == ["指数阻力"]
+    assert {r["instrument"] for r in as_index} == {"index"}
+    assert as_index[0]["id"] == idx["annotation_id"]
+
+    # 不声明类型 = 画图请求里无法证明身份 ⇒ 一条都不给（不猜）
+    assert _typed_read(db, symbol="000001") == []
+
+    # 非严格历史读取仍按既有语义（本人 + 全局），两条都在，类型原样回显
+    legacy_path = http_read(db, symbol="000001")
+    assert sorted(r["label"] for r in legacy_path) == ["个股支撑", "指数阻力"]
+
+
+def test_typed_read_accepts_legacy_rows_only_when_code_proves_the_type(db):
+    """历史行（instrument NULL）：600519 只可能是个股 ⇒ 可画；000001 不可证 ⇒ 不画。"""
+    provable = KlineAnnotation(user_id=UID, symbol="600519", market="CN", period="1d",
+                               price=1680.0, label="历史支撑", source="ai")
+    ambiguous = KlineAnnotation(user_id=UID, symbol="000001", market="CN", period="1d",
+                                price=12.5, label="历史个股线", source="ai")
+    db.add_all([provable, ambiguous])
+    db.commit()
+    for row in (provable, ambiguous):
+        db.refresh(row)
+        db.add(CopilotAction(user_id=UID, kind="annotation", payload="{}",
+                             status="applied", annotation_id=row.id))
+    db.commit()
+
+    rows = _typed_read(db, symbol="600519", instrument="stock")
+    assert [r["id"] for r in rows] == [provable.id]
+    assert rows[0]["instrument"] is None, "历史行不回填、不伪装成有类型"
+
+    assert _typed_read(db, symbol="000001", instrument="stock") == [], (
+        "000001 的历史行没有类型，可能是上证指数 ⇒ 不猜、不画"
+    )
+    # 非严格通用读取照旧能读到（历史回看/报表/诊断不许被打断）
+    legacy = http_read(db, symbol="000001")
+    assert [r["id"] for r in legacy] == [ambiguous.id]
+    assert legacy[0]["instrument"] is None
+
+
+def test_typed_read_rejects_illegal_instrument_claim(db, http):
+    """声明与代码矛盾（600519 说成指数）⇒ 400，而不是"悄悄按个股处理"。"""
+    resp = http.get("/copilot/annotations", params={
+        "symbol": "600519", "market": "CN", "period": "1d", "instrument": "index", **_STRICT,
+    })
+    assert resp.status_code == 400, resp.text
+    assert "600519" in resp.json()["detail"]
+
+    resp2 = http.get("/copilot/annotations", params={
+        "symbol": "000858", "market": "CN", "period": "1d", "instrument": "index", **_STRICT,
+    })
+    assert resp2.status_code == 400, resp2.text
+
+
+def test_index_stock_claim_requires_index_catalogue(db):
+    """指数声明必须有据：指数表内的 000001 可以，000858 不行；399001 不能声明成个股。"""
+    assert A.resolve_instrument("000001", "CN", "index") == A.INSTRUMENT_INDEX
+    assert A.resolve_instrument("000001", "CN", "stock") == A.INSTRUMENT_STOCK
+    assert A.resolve_instrument("000858", "CN", "stock") == A.INSTRUMENT_STOCK
+    with pytest.raises(A.ActionError):
+        A.resolve_instrument("000858", "CN", "index")
+    with pytest.raises(A.ActionError):
+        A.resolve_instrument("399001", "CN", "stock")
+    with pytest.raises(A.ActionError):
+        A.resolve_instrument("600519", "CN", "index")
+    # 指数市场口径只能是 CN（A 股指数不分交易所）
+    with pytest.raises(A.ActionError):
+        A.resolve_instrument("000001", "SH", "index")
+    # 个股 + 具体交易所必须与代码段一致
+    assert A.resolve_instrument("000001", "SZ", "stock") == A.INSTRUMENT_STOCK
+    with pytest.raises(A.ActionError):
+        A.resolve_instrument("000001", "SH", "stock")
+    # 非法字面量
+    with pytest.raises(A.ActionError):
+        A.normalize_instrument("etf")
+
+
+def test_scenario_proposal_carries_the_view_instrument(db):
+    """情景关键位提议：视图说是个股 ⇒ pending 带 stock；000xxx 没有视图类型就不提议。"""
+    levels = {"available": True, "levels": {"support": 12.3, "resist": 13.4}}
+    proposed = A.propose_scenario_annotations(
+        db, user_id=UID, symbol="000858", market="CN", matrix=levels, instrument="stock",
+    )
+    assert proposed and all(p["payload"]["instrument"] == "stock" for p in proposed)
+
+    # 视图说是指数 ⇒ 000858 不是指数代码，声明非法 ⇒ 不提议（不猜）
+    assert A.propose_scenario_annotations(
+        db, user_id=UID, symbol="000858", market="CN", matrix=levels, instrument="index",
+    ) == []
+
+    # 没有视图类型 / 代码不可证 ⇒ 不提议（000xxx 连矩阵都不用算）
+    assert A.propose_scenario_annotations(
+        db, user_id=UID, symbol="000002", market="CN", matrix=levels,
+    ) == []
+
+
+def test_view_instrument_is_used_only_for_the_same_symbol(db):
+    """管线的视图类型只在**视图标的 == 提议标的**时才采信（防拿 A 的类型标 B）。"""
+    from src.harness.pipeline import _view_instrument_for
+
+    view = {"symbol": "000858", "instrument": "stock"}
+    assert _view_instrument_for("000858", view) == "stock"
+    assert _view_instrument_for("600519", view) is None, "标的不同 ⇒ 不许借用"
+    assert _view_instrument_for("000858", None) is None
+    assert _view_instrument_for("000858", {"symbol": "000858", "instrument": "etf"}) is None
+
+
+def test_ts_only_daily_annotation_is_restored_and_attributed(db):
+    """日粒度时间点标注恢复：能落库、带类型、price 为空（前沿端 marker 图层）。"""
+    out = _apply_ok(db, {"symbol": "600519", "label": "财报日", "ts": "2026-10-28"})
+    detail = out["annotation"]
+    assert detail["ts"] == "2026-10-28" and detail["price"] is None
+    assert detail["instrument"] == "stock"
+    rows = _typed_read(db, symbol="600519", instrument="stock")
+    assert [(r["id"], r["ts"], r["price"]) for r in rows] == [(out["annotation_id"], "2026-10-28", None)]
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgresql"])
+def test_m232_adds_instrument_column_without_backfilling(dialect, mig_engine):
+    """迁移 v232：存量 kline_annotations 补 instrument 列，历史行**保持 NULL**（不回填）。"""
+    from src.web.migrations import MIGRATIONS, _m232_annotation_instrument
+
+    assert 232 in [m.version for m in MIGRATIONS], "v232 必须在 MIGRATIONS 元组里注册"
+
+    engine = mig_engine(dialect)
+    drop = " CASCADE" if engine.dialect.name == "postgresql" else ""
+    id_col = "SERIAL PRIMARY KEY" if engine.dialect.name == "postgresql" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS kline_annotations{drop}"))
+        conn.execute(text(
+            f"CREATE TABLE kline_annotations (id {id_col}, user_id VARCHAR(36),"
+            " symbol VARCHAR(12) NOT NULL, market VARCHAR(8) NOT NULL, period VARCHAR(8) NOT NULL,"
+            " price DOUBLE PRECISION, ts VARCHAR(32), label VARCHAR(64) NOT NULL, note TEXT,"
+            " color VARCHAR(16) NOT NULL, source VARCHAR(16) NOT NULL, created_at TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO kline_annotations (user_id, symbol, market, period, price, label, color, source)"
+            " VALUES ('legacy', '600519', 'CN', '1d', 1680.0, '历史线', 'up', 'ai')"
+        ))
+        assert "instrument" not in _columns(conn, "kline_annotations")
+
+        _m232_annotation_instrument(conn)
+        assert "instrument" in _columns(conn, "kline_annotations")
+        assert conn.execute(text(
+            "SELECT instrument FROM kline_annotations WHERE user_id='legacy'"
+        )).scalar() is None, "历史行不许被回填成任何类型"
+        _m232_annotation_instrument(conn)  # 幂等
+        assert "instrument" in _columns(conn, "kline_annotations")
+
+
+def test_pg_instrument_chain_isolates_same_code_index_and_stock(pg_db):
+    """真实 PG：同号代码的两类标注各自只在对应类型下读得到（varchar + 大小写语义）。"""
+    stock = A.propose(pg_db, user_id=UID, kind="annotation",
+                      payload={"symbol": "000001", "label": "个股支撑", "price": 12.5,
+                               "instrument": "stock"})
+    out_s = A.apply_action(pg_db, user_id=UID, action_id=stock["id"])
+    idx = A.propose(pg_db, user_id=UID, kind="annotation",
+                    payload={"symbol": "000001", "label": "指数阻力", "price": 3300.0,
+                             "instrument": "index"})
+    out_i = A.apply_action(pg_db, user_id=UID, action_id=idx["id"])
+
+    assert out_s["annotation"]["instrument"] == "stock"
+    assert out_i["annotation"]["instrument"] == "index"
+
+    class _P:
+        id = UID
+
+    from src.web.api.copilot import get_copilot_annotations
+
+    as_stock = get_copilot_annotations(symbol="000001", market="CN", period="1d",
+                                       instrument="stock", market_strict=True, mine_only=True,
+                                       action_linked=True, db=pg_db, user=_P())
+    assert [(r["label"], r["instrument"]) for r in as_stock] == [("个股支撑", "stock")]
+
+    as_index = get_copilot_annotations(symbol="000001", market="CN", period="1d",
+                                       instrument="index", market_strict=True, mine_only=True,
+                                       action_linked=True, db=pg_db, user=_P())
+    assert [(r["label"], r["instrument"]) for r in as_index] == [("指数阻力", "index")]
+
+    assert get_copilot_annotations(symbol="000001", market="CN", period="1d",
+                                   market_strict=True, mine_only=True, action_linked=True,
+                                   db=pg_db, user=_P()) == []
+
+
+def test_pg_000858_stock_round_trip(pg_db):
+    """真实 PG：000858 个股标注能确认、能按类型读回（不再是"整段禁用"）。"""
+    item = A.propose(pg_db, user_id=UID, kind="annotation",
+                     payload={"symbol": "000858", "label": "五粮液支撑", "price": 128.5,
+                              "instrument": "stock"})
+    out = A.apply_action(pg_db, user_id=UID, action_id=item["id"])
+    row = pg_db.query(KlineAnnotation).filter(KlineAnnotation.id == out["annotation_id"]).one()
+    assert row.instrument == "stock" and row.symbol == "000858"
+    # 没有类型的同号行照样写不进来（不能被当成个股默认值）
+    with pytest.raises(A.ActionError):
+        A.propose(pg_db, user_id=UID, kind="annotation",
+                  payload={"symbol": "000002", "label": "无类型", "price": 9.9})

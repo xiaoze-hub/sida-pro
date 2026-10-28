@@ -191,7 +191,7 @@ describe('2. 逐行核对（身份 → 目标 → 内容）', () => {
       for (const market of ['CN', 'SH', 'SZ']) {
         expect(linesForTarget(rows, { ...TARGET, symbol, market }).lines).toHaveLength(0)
       }
-      expect(targetRefusal({ ...TARGET, symbol }) ?? '').toContain('标的类型')
+      expect(targetRefusal({ ...TARGET, symbol })).toBeNull()
       expect(exchangeOf(symbol)).toBeNull()
       expect(provableMarkets(symbol, 'CN')).toEqual(['CN'])
       expect(provableMarkets(symbol, 'SZ')).toEqual(['SZ'])
@@ -333,7 +333,7 @@ describe('6. 目标级拒画与读取 URL', () => {
   it('未登录 / 指数 / 000001 同号代码 → 目标级拒绝，不发请求', () => {
     expect(targetRefusal({ ...TARGET, owner: '' }) ?? '').toContain('请先登录')
     expect(targetRefusal({ ...TARGET, instrument: 'index' }) ?? '').toContain('指数')
-    expect(targetRefusal({ ...TARGET, symbol: '000001' }) ?? '').toContain('标的类型')
+    expect(targetRefusal({ ...TARGET, symbol: '000001' })).toBeNull()
     expect(targetRefusal({ ...TARGET, symbol: '399001' }) ?? '').toContain('标的类型')
     // 普通个股不拦
     expect(targetRefusal(TARGET)).toBeNull()

@@ -64,7 +64,7 @@ export const SERVER_ANNOTATION_CONTRACT = {
   /** 未确认的 pending 提议会不会出现在读取接口里 —— **false**（只查 KlineAnnotation） */
   pendingListed: false,
   /** 表里是否有"标的类型（个股/指数）"列 —— **false** ⇒ 同号代码只能默认拒画 */
-  instrumentInRow: false,
+  instrumentInRow: true,
   /** 标的族：后端把 A 股市场代码按一组处理（严格模式关闭时的行为） */
   aShareMarkets: ['CN', 'SH', 'SZ', 'BJ'] as const,
 } as const
@@ -106,6 +106,7 @@ export interface ServerAnnotationRow {
   symbol: string
   market: string
   period: string
+  instrument?: AnnotationInstrument | null
   /** 行属主；null = 全局行（不是"我确认的"） */
   ownerId: string | null
   /** 本人确认动作 id；null = 没有确认动作（历史/人工/他人） */
@@ -243,10 +244,10 @@ const EXCHANGE_BY_PREFIX: readonly (readonly [string, string])[] = [
 ]
 
 /** 从代码**证明**所属交易所；证明不了返回 null（不猜：猜错就画到另一只标的上）。 */
-export function exchangeOf(symbol: string): string | null {
+export function exchangeOf(symbol: string, instrument?: AnnotationInstrument): string | null {
   const sym = normSymbol(symbol)
   if (!/^\d{6}$/.test(sym)) return null
-  if (isInstrumentAmbiguous(sym)) return null
+  if (isInstrumentAmbiguous(sym) && !(instrument === 'stock' && sym.startsWith('000'))) return null
   for (const [prefix, exchange] of EXCHANGE_BY_PREFIX) {
     if (sym.startsWith(prefix)) return exchange
   }
@@ -278,8 +279,8 @@ export function targetRefusal(target: AnnotationTarget | null): string | null {
   if (target.instrument !== 'stock') {
     return '未画线：指数图不显示个股情景标注（后端标注行不记录标的类型，无法证明归属）。'
   }
-  if (isInstrumentAmbiguous(target.symbol)) {
-    return `未画线：${normSymbol(target.symbol)} 属于 000xxx/指数代码段，与上证/中证指数系列同号，标注行没有标的类型字段，无法证明是个股还是指数，默认不画。`
+  if (INDEX_CODE_PREFIXES.some((prefix) => normSymbol(target.symbol).startsWith(prefix))) {
+    return '未画线：指数代码不能作为个股标的类型展示。'
   }
   return null
 }
@@ -297,11 +298,11 @@ export function targetRefusal(target: AnnotationTarget | null): string | null {
  * 页面只有 `?market=CN`，字符串相等 ⇒ 落库的线在图上永远看不到；而简单做 A 股族归并
  * ⇒ 000001 的上证指数线会画到 000001（平安银行）的个股图上。只有"能证才等"两头都不错。
  */
-export function provableMarkets(symbol: string, market: string): string[] {
+export function provableMarkets(symbol: string, market: string, instrument?: AnnotationInstrument): string[] {
   const mk = (market || 'CN').trim().toUpperCase()
   const family = SERVER_ANNOTATION_CONTRACT.aShareMarkets as readonly string[]
   if (!family.includes(mk)) return [mk]
-  const exchange = exchangeOf(symbol)
+  const exchange = exchangeOf(symbol, instrument)
   if (mk === 'CN') return exchange && exchange !== 'CN' ? ['CN', exchange] : ['CN']
   if (exchange === mk) return [mk, 'CN']
   return [mk]
@@ -312,9 +313,10 @@ export function marketMatches(
   targetMarket: string,
   rowMarket: string,
   symbol: string,
+  instrument?: AnnotationInstrument,
 ): boolean {
   const got = (rowMarket || '').trim().toUpperCase()
-  return provableMarkets(symbol, targetMarket).includes(got)
+  return provableMarkets(symbol, targetMarket, instrument).includes(got)
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +389,7 @@ function parseAnnotationRow(item: unknown): ServerAnnotationRow | null {
     symbol,
     market,
     period,
+    instrument: raw.instrument === 'stock' || raw.instrument === 'index' ? raw.instrument : null,
     ownerId,
     actionId,
     price,
@@ -452,19 +455,19 @@ export function verifyRow(row: ServerAnnotationRow, target: AnnotationTarget): R
   // 标的类型不可证（000xxx 整段 / 纯指数前缀）⇒ 这一行**任何入口**都不画。
   // 入口层 {@link targetRefusal} 已经拦过一次（连请求都不发），这里再拦一次：
   // 图上的每一行都必须自己经得起这条校验，不能依赖"上游一定先问过"。
-  if (isInstrumentAmbiguous(sym)) {
+  if ((row.instrument && row.instrument !== target.instrument) || (isInstrumentAmbiguous(sym) && row.instrument !== target.instrument)) {
     return {
       ok: false,
       reason: 'target',
       message:
         `标注 #${row.id} 的目标 ${sym} 属于 000xxx/指数代码段，与上证/中证指数系列同号，` +
-        '标注行没有标的类型字段，无法证明是个股还是指数，不画。',
+        '标注行的标的类型缺失或不一致，无法证明是个股还是指数，不画。',
     }
   }
   // 市场按"可证明的同一标的"比对（CN 页 ↔ SH/SZ/BJ 行可证；指数/个股同号不互证），
   // 文案必须说清是**市场**不一致 —— 旧实现把它并进"标的/市场/周期不一致"，
   // 与周期不符混在一起，用户无法判断是该换市场还是该换周期。
-  if (!marketMatches(target.market, row.market, sym)) {
+  if (!marketMatches(target.market, row.market, sym, row.instrument ?? undefined)) {
     return {
       ok: false,
       reason: 'target',
@@ -692,7 +695,7 @@ export function annotationsUrl(target: AnnotationTarget, options: ReadOptions = 
   const symbol = normSymbol(target.symbol)
   const market = (target.market || 'CN').toUpperCase()
   const period = (target.period || '1d').trim()
-  const params = new URLSearchParams({ symbol, market, period })
+  const params = new URLSearchParams({ symbol, market, period, instrument: target.instrument })
   if (options.marketStrict !== false) params.set(SERVER_ANNOTATION_CONTRACT.strictMarketParam, '1')
   if (options.mineOnly !== false) params.set(SERVER_ANNOTATION_CONTRACT.mineOnlyParam, '1')
   if (options.actionLinked !== false) params.set(SERVER_ANNOTATION_CONTRACT.actionLinkedParam, '1')
