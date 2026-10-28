@@ -41,11 +41,13 @@ export interface AnchoredPrice {
 }
 
 /**
- * 从参谋结构化回答提取真实支撑与阻力位（不编造任何假数据，缺项保持 null）
+ * 从参谋结构化回答提取真实支撑与阻力位（严格语义匹配，不把止损或目标混淆为支撑阻力，缺项保持 null）
  */
 function extractKeyLevels(parsed: ParsedAnswer): {
   supportPrice: number | null
   resistancePrice: number | null
+  stopLossPrice: number | null
+  targetPrice: number | null
   currentPrice: number | null
   costPrice: number | null
 } {
@@ -54,29 +56,21 @@ function extractKeyLevels(parsed: ParsedAnswer): {
 
   let supportPrice: number | null = null
   let resistancePrice: number | null = null
+  let stopLossPrice: number | null = null
+  let targetPrice: number | null = null
   let currentPrice: number | null = null
   let costPrice: number | null = null
 
   for (const a of anchors) {
     const label = anchorKindLabel(a.kind, a.context)
-    if (
-      (label === '支撑' ||
-        a.context.includes('防守') ||
-        a.context.includes('止损') ||
-        a.context.includes('低点') ||
-        a.context.includes('下沿')) &&
-      supportPrice == null
-    ) {
+    if (label === '支撑' && supportPrice == null) {
       supportPrice = a.value
-    } else if (
-      (label === '阻力' ||
-        a.context.includes('压力') ||
-        a.context.includes('目标') ||
-        a.context.includes('高点') ||
-        a.context.includes('上沿')) &&
-      resistancePrice == null
-    ) {
+    } else if (label === '阻力' && resistancePrice == null) {
       resistancePrice = a.value
+    } else if (label === '止损' && stopLossPrice == null) {
+      stopLossPrice = a.value
+    } else if (label === '目标' && targetPrice == null) {
+      targetPrice = a.value
     } else if (
       (a.context.includes('现价') || a.context.includes('最新') || a.context.includes('当前')) &&
       currentPrice == null
@@ -87,7 +81,7 @@ function extractKeyLevels(parsed: ParsedAnswer): {
     }
   }
 
-  return { supportPrice, resistancePrice, currentPrice, costPrice }
+  return { supportPrice, resistancePrice, stopLossPrice, targetPrice, currentPrice, costPrice }
 }
 
 /**
@@ -247,6 +241,8 @@ export function AnswerCard({
           costPrice={keyLevels.costPrice ?? undefined}
           supportPrice={keyLevels.supportPrice}
           resistancePrice={keyLevels.resistancePrice}
+          stopLossPrice={keyLevels.stopLossPrice ?? undefined}
+          targetPrice={keyLevels.targetPrice ?? undefined}
           biasLabel={parsed.verdict ? parsed.verdict.slice(0, 8) : '多空裁决'}
           confidence={parsed.confidence != null ? Math.round(parsed.confidence * 10) : undefined}
           tactics={
@@ -267,7 +263,7 @@ export function AnswerCard({
               onAnchoredPrice?.({
                 value: keyLevels.supportPrice,
                 kind: 'level',
-                context: '支撑位',
+                context: '支撑',
               })
               // 若当前不在该个股工作台且提供了 symbol，自动引导切入工作台
               if (symbol && typeof window !== 'undefined') {

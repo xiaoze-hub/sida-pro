@@ -30,7 +30,7 @@ describe('DecisionCompassCard 决策罗盘', () => {
     expect(screen.getByText('看多偏强')).toBeTruthy()
     expect(screen.getByText('多维依据综合裁决')).toBeTruthy()
     expect(screen.queryByText(/多智能体/)).toBeNull()
-    expect(screen.getByText(/防守 32.80/)).toBeTruthy()
+    expect(screen.getByText(/支撑 32.80/)).toBeTruthy()
     expect(screen.getByText(/阻力 36.50/)).toBeTruthy()
     // 杜绝虚构成本价与持仓盈亏
     expect(screen.queryByText(/持仓盈亏/)).toBeNull()
@@ -173,7 +173,7 @@ describe('AnswerCard 罗盘与多维依据联动', () => {
 
     // 验证罗盘组件已正常接入
     expect(screen.getByTestId('copilot-decision-compass')).toBeTruthy()
-    expect(screen.getByText(/防守 32.80/)).toBeTruthy()
+    expect(screen.getByText(/支撑 32.80/)).toBeTruthy()
     expect(screen.getByText(/阻力 36.50/)).toBeTruthy()
 
     // 验证多维依据透视面板正常接入且文案诚实

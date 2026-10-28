@@ -9,6 +9,8 @@ export interface DecisionCompassProps {
   costPrice?: number
   supportPrice: number
   resistancePrice: number
+  stopLossPrice?: number
+  targetPrice?: number
   biasLabel?: string
   confidence?: number
   tactics?: string[]
@@ -21,8 +23,9 @@ export interface DecisionCompassProps {
  * 数智裁决指标罗盘组件 (SIDA Pro 顶级金融终端版)
  *
  * 将散落的文本支撑、阻力与盈亏信息结构化为直观的水平价位罗盘轴，
- * 支持一键在 K 线图叠加画线与设置破位告警。
+ * 支持一键在 K 线图叠加画线与设置支撑破位告警。
  * 纯真实数据驱动：无默认伪造价格或虚构置信度。
+ * 严守口径：只把明确标注的支撑与阻力作为对应坐标与画线，不将止损或目标混淆为支撑阻力。
  */
 export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
   ticker,
@@ -31,6 +34,8 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
   costPrice,
   supportPrice,
   resistancePrice,
+  stopLossPrice,
+  targetPrice,
   biasLabel = '多空裁决',
   confidence,
   tactics = [],
@@ -38,10 +43,12 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
   onSetAlert,
   onCopy,
 }) => {
-  // 计算现价与成本在区间内的百分比位置
+  // 计算各关键点位在区间内的百分比位置
   const validPrices: number[] = [supportPrice, resistancePrice]
   if (currentPrice != null && Number.isFinite(currentPrice)) validPrices.push(currentPrice)
   if (costPrice != null && Number.isFinite(costPrice)) validPrices.push(costPrice)
+  if (stopLossPrice != null && Number.isFinite(stopLossPrice)) validPrices.push(stopLossPrice)
+  if (targetPrice != null && Number.isFinite(targetPrice)) validPrices.push(targetPrice)
 
   const minVal = Math.min(...validPrices) * 0.98
   const maxVal = Math.max(...validPrices) * 1.02
@@ -53,6 +60,8 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
   const resistancePct = toPct(resistancePrice)
   const currentPct = currentPrice != null && Number.isFinite(currentPrice) ? toPct(currentPrice) : null
   const costPct = costPrice != null && Number.isFinite(costPrice) ? toPct(costPrice) : null
+  const stopLossPct = stopLossPrice != null && Number.isFinite(stopLossPrice) ? toPct(stopLossPrice) : null
+  const targetPct = targetPrice != null && Number.isFinite(targetPrice) ? toPct(targetPrice) : null
 
   const pnlPct =
     costPrice != null && currentPrice != null && costPrice > 0
@@ -102,11 +111,19 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
         {/* 水平区间轴 */}
         <div className="py-2.5">
           <div className="relative h-2 w-full rounded-full bg-s3 flex items-center">
+            {/* 止损位标记（若有） */}
+            {stopLossPct != null && (
+              <div
+                className="absolute h-2.5 w-2.5 -ml-1 rounded-full bg-rose-500"
+                style={{ left: `${stopLossPct}%` }}
+                title={`止损位: ${safeFixed(stopLossPrice, 2)}`}
+              />
+            )}
             {/* 支撑位标记 */}
             <div
               className="absolute h-2.5 w-2.5 -ml-1 rounded-full text-stock-down bg-current"
               style={{ left: `${supportPct}%` }}
-              title={`防守支撑位: ${safeFixed(supportPrice, 2)}`}
+              title={`支撑位: ${safeFixed(supportPrice, 2)}`}
             />
             {/* 现价点位 (若有) */}
             {currentPct != null && (
@@ -128,14 +145,28 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
             <div
               className="absolute h-2.5 w-2.5 -ml-1 rounded-full text-stock-up bg-current"
               style={{ left: `${resistancePct}%` }}
-              title={`阻力目标位: ${safeFixed(resistancePrice, 2)}`}
+              title={`阻力位: ${safeFixed(resistancePrice, 2)}`}
             />
+            {/* 目标位标记（若有） */}
+            {targetPct != null && (
+              <div
+                className="absolute h-2.5 w-2.5 -ml-1 rounded-full bg-emerald-500"
+                style={{ left: `${targetPct}%` }}
+                title={`目标位: ${safeFixed(targetPrice, 2)}`}
+              />
+            )}
           </div>
 
           {/* 标尺数值对照 */}
           <div className="flex justify-between text-[12px] font-mono pt-2 text-muted-foreground">
+            {stopLossPrice != null ? (
+              <div className="text-rose-400">
+                <div>止损 {safeFixed(stopLossPrice, 2)}</div>
+                <div className="text-[12px] text-muted-foreground">止损点</div>
+              </div>
+            ) : null}
             <div className="text-stock-down">
-              <div>防守 {safeFixed(supportPrice, 2)}</div>
+              <div>支撑 {safeFixed(supportPrice, 2)}</div>
               {currentPrice != null && currentPrice > 0 ? (
                 <div className="text-[12px] text-muted-foreground">
                   {safeFixed(((supportPrice - currentPrice) / currentPrice) * 100, 1)}%
@@ -162,6 +193,12 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
                 </div>
               ) : null}
             </div>
+            {targetPrice != null ? (
+              <div className="text-emerald-400 text-right">
+                <div>目标 {safeFixed(targetPrice, 2)}</div>
+                <div className="text-[12px] text-muted-foreground">目标位</div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -201,7 +238,7 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
               className="flex items-center gap-1 rounded bg-s1 hover:bg-s2 px-2.5 py-1 text-[12px] text-foreground border border-border transition"
             >
               <Bell className="w-3.5 h-3.5 text-muted-foreground" />
-              设 {safeFixed(supportPrice, 2)} 破位告警
+              设 {safeFixed(supportPrice, 2)} 支撑破位告警
             </button>
           )}
         </div>
