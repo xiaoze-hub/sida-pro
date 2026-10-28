@@ -140,6 +140,7 @@ export interface ServerAnnotationLine {
 export interface AppliedAnnotation {
   actionId: number
   annotationId: number
+  instrument?: AnnotationInstrument | null
   symbol: string
   market: string
   period: string
@@ -599,6 +600,10 @@ export function parseApplyResponse(raw: unknown): ParseResult<AppliedAnnotation>
   const period = nonEmptyString(d.period)
   const label = nonEmptyString(d.label)
   const price = positivePrice(d.price)
+  const instrument = d.instrument === 'stock' || d.instrument === 'index' ? d.instrument : null
+  if (symbol && isInstrumentAmbiguous(symbol) && instrument === null) {
+    return { ok: false, reason: 'field', message: '确认响应缺少标的类型，无法区分股票与指数' }
+  }
   if (!symbol || !market || !period || !label || price === null) {
     return {
       ok: false,
@@ -607,14 +612,14 @@ export function parseApplyResponse(raw: unknown): ParseResult<AppliedAnnotation>
     }
   }
   const ts = nonEmptyString(d.ts)
-  return { ok: true, value: { actionId, annotationId, symbol, market, period, label, price, ts } }
+  return { ok: true, value: { actionId, annotationId, instrument, symbol, market, period, label, price, ts } }
 }
 
 /** apply 响应 → 精确目标（标的/市场/周期取自服务端落库明细，属主取自身份）。 */
 export function targetOfApplied(applied: AppliedAnnotation, owner: string): AnnotationTarget {
   return {
     owner,
-    instrument: 'stock',
+    instrument: applied.instrument ?? 'stock',
     symbol: applied.symbol,
     market: applied.market,
     period: applied.period,
@@ -644,6 +649,9 @@ export function verifyAppliedRow(
     return { ok: false, reason: 'mismatch', message: '精确读取返回了重复 id，本次未画线。' }
   }
   const row = hits[0]
+  if (applied.instrument && row.instrument !== applied.instrument) {
+    return { ok: false, reason: 'mismatch', message: '确认响应与读回记录的标的类型不一致，未画线。' }
+  }
   const verdict = verifyRow(row, target)
   if (!verdict.ok) return { ok: false, reason: 'mismatch', message: verdict.message }
   if (verdict.line.actionId !== applied.actionId) {
