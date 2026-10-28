@@ -1,13 +1,24 @@
 // @vitest-environment jsdom
 /**
- * 参谋页 · 证据齐套度条 + 价格锚定接线回归（2026-10-23）。
+ * 参谋页 · 证据齐套度条 + 价格锚定接线回归（2026-10-23，2026-10-28 按事件契约重写）。
  *
  * 前面两个纯函数/组件用例证明「零件对」，这里证明**真的接上了**：
  *  ① SSE 的 stage 事件（`正在取数 n/N：get_xxx`）一进来，齐套度条就出现，
- *     并且是本轮的真状态（前两条 ✓、最后一条 ⏳），不是一条静态假进度；
- *  ② 回答定稿后条子**不消失**，固化在回答顶部（可回看「这份结论取到了哪几路证据」）；
- *  ③ 回答里的价位 chip 点下去，页面出「K线锚点」回执并带工作台链接
+ *     并且是本轮的真状态 —— 开跑帧只证明「开始取了」，不是「取到了」，
+ *     所以流中三条全是 pending（⏳）、已取 0/3，前两条不许先变 ✓；
+ *  ② 回答定稿后条子**不消失**，固化在回答顶部；流结束只把 pending 落成
+ *     unknown（未确认），**不是** ok —— 已取仍是 0/3，没有一条伪成功；
+ *  ③ 有失败证据的帧落 failed（未取到），有显式完成证据的帧才落 ✓；
+ *  ④ 回答里的价位 chip 点下去，页面出「K线锚点」回执并带工作台链接
  *     （K 线画线由别的模块拥有，本页只出可见回执，不假装图已经动了）。
+ *
+ * 事件契约（2026-10-28 只读核对后端，基线 a6eb3c98）：
+ *  - `src/harness/pipeline.py:425` / `pipeline_market.py:355` 只在工具**开跑**时
+ *    yield 一条 stage，没有完成帧；
+ *  - `src/web/api/chat.py:2260` 把它包成 `{"message": str}`，前端 onStage 只拿到字符串，
+ *    没有 ok/status 字段（`packages/api/src/chat.ts:25`）；
+ *  - 每个工具的真实成败只在收尾 `("runs", (results, errors))` 里，未下发前端。
+ * 因此「下一条开跑 ⇒ 上一条完成」和「流结束 ⇒ 全部完成」都是无证据推断，本文件禁止回归。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -48,6 +59,8 @@ vi.mock('../../src/components/copilot/CopilotBriefCard', () => ({
 }))
 
 import AiCopilotPage from '../../src/pages/AiCopilot'
+import { EvidenceReadinessStrip } from '../../src/components/copilot/EvidenceReadinessStrip'
+import { foldStageEvents, settleReadiness } from '../../src/lib/copilot/evidence-readiness'
 
 const PRESETS = [
   { id: 'full_dossier', icon: '🧬', label: '全景数智深度诊断', prompt: '全面分析', group: 'dossier', requires_perm: null },
@@ -81,8 +94,14 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+function typeAndSend(text: string) {
+  const box = screen.getByPlaceholderText(/问点什么|补充说明/)
+  fireEvent.change(box, { target: { value: text } })
+  fireEvent.click(screen.getByLabelText('发送'))
+}
+
 describe('证据齐套度条接线', () => {
-  it('流中按 stage 出 pill（✓/⏳），定稿后仍然留在回答顶部', async () => {
+  it('流中三条全 pending（开跑 ≠ 取到）：已取 0/3，没有一条伪 ✓', async () => {
     apiMock.sendMessageStream.mockImplementation(async (_id: number, _c: string, handlers: any) => {
       for (const s of STAGES) handlers.onStage(s)
       await new Promise<void>((resolve) => {
@@ -93,11 +112,8 @@ describe('证据齐套度条接线', () => {
 
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
+    typeAndSend('600111 怎么样')
 
-    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '600111 怎么样' } })
-    fireEvent.click(screen.getByLabelText('发送'))
-
-    // 流中：三个 pill，前两条已到手，最后一条在跑
     await waitFor(() => expect(screen.getByTestId('evidence-readiness')).toBeTruthy())
     const pills = screen.getAllByTestId('evidence-readiness-item')
     expect(pills.map((p) => p.getAttribute('data-key'))).toEqual([
@@ -105,21 +121,84 @@ describe('证据齐套度条接线', () => {
       'get_chip_accumulation',
       'get_delta_series',
     ])
-    expect(pills.map((p) => p.getAttribute('data-status'))).toEqual(['ok', 'ok', 'pending'])
-    expect(pills[2].textContent).toContain('⏳')
-    expect(screen.getByTestId('evidence-readiness').textContent).toContain('已取 2/3')
+    // 关键回归：后端只发开跑帧 → 谁也不能算「已取」
+    expect(pills.map((p) => p.getAttribute('data-status'))).toEqual(['pending', 'pending', 'pending'])
+    for (const p of pills) expect(p.textContent).toContain('⏳')
+    const strip = screen.getByTestId('evidence-readiness')
+    expect(strip.textContent).toContain('已取 0/3')
+    expect(strip.textContent).not.toContain('✓')
+    expect(screen.queryByTestId('evidence-readiness-failed-count')).toBeNull()
     // stage 原文里能认出工具时，不再并排一条单调的「正在取数」文案
     expect(screen.queryByText(/正在取数 3\/3/)).toBeNull()
 
-    // 放行正文 → 回答落屏，条子固化（pending 结算成 ok），不是消失
+    // 放行正文 → 回答落屏，条子固化：pending 落「未确认」，不是 ✓，已取仍是 0
     await act(async () => {
       releaseStream?.()
     })
     await waitFor(() => expect(screen.getByTestId('copilot-answer-card')).toBeTruthy())
-    await waitFor(() =>
-      expect(screen.getByTestId('evidence-readiness').textContent).toContain('已取 3/3'),
+    const settled = screen.getAllByTestId('evidence-readiness-item')
+    expect(settled).toHaveLength(3)
+    expect(settled.map((p) => p.getAttribute('data-status'))).toEqual(['unknown', 'unknown', 'unknown'])
+    for (const p of settled) expect(p.textContent).toContain('未确认')
+    const settledStrip = screen.getByTestId('evidence-readiness')
+    expect(settledStrip.textContent).toContain('已取 0/3')
+    expect(settledStrip.textContent).not.toContain('✓')
+    expect(settledStrip.textContent).not.toContain('已取 3/3')
+  })
+
+  it('失败文案帧落 failed（未取到），不会被后续开跑或流结束洗白', async () => {
+    apiMock.sendMessageStream.mockImplementation(async (_id: number, _c: string, handlers: any) => {
+      handlers.onStage('正在取数 1/2：get_stock_quote')
+      // 防御路径：今天的后端不在 stage 里带失败文案（见文件头契约），
+      // 但字符串帧一旦带「失败/超时」就必须落 failed，而不是等流结束变成功。
+      handlers.onStage('正在取数 2/2：get_delta_series 取数失败')
+      await new Promise<void>((resolve) => {
+        releaseStream = resolve
+      })
+      handlers.onDelta(STRUCTURED)
+    })
+
+    render(<AiCopilotPage />)
+    await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
+    typeAndSend('600111 怎么样')
+
+    await waitFor(() => expect(screen.getByTestId('evidence-readiness')).toBeTruthy())
+    await act(async () => {
+      releaseStream?.()
+    })
+    await waitFor(() => expect(screen.getByTestId('copilot-answer-card')).toBeTruthy())
+
+    const pills = screen.getAllByTestId('evidence-readiness-item')
+    const byKey = Object.fromEntries(pills.map((p) => [p.getAttribute('data-key'), p]))
+    expect(byKey.get_delta_series.getAttribute('data-status')).toBe('failed')
+    expect(byKey.get_delta_series.textContent).toContain('未取到')
+    // 没拿到结果证据的那条：未确认，不是 ✓
+    expect(byKey.get_stock_quote.getAttribute('data-status')).toBe('unknown')
+    expect(screen.getByTestId('evidence-readiness-failed-count').textContent).toContain('未取到 1')
+    expect(screen.getByTestId('evidence-readiness').textContent).toContain('已取 0/2')
+  })
+
+  it('只有显式完成证据才算已取：混合证据下 ✓ 只给有证据的那条', () => {
+    // 显式完成证据（`ok:true` / `status:'ok'`）是对象帧，今天的 SSE 不发（chat.py:2260 包成字符串）；
+    // 这里用真实 reducer + 真实组件验证「万一有了证据」时 UI 不会把其余条也算成功。
+    const state = settleReadiness(
+      foldStageEvents([
+        '正在取数 1/3：get_stock_quote',
+        '正在取数 2/3：get_chip_accumulation',
+        '正在取数 3/3：get_delta_series',
+        { tool: 'get_chip_accumulation', status: 'ok' },
+      ]),
     )
-    expect(screen.getAllByTestId('evidence-readiness-item')).toHaveLength(3)
+    expect(state.done).toBe(1)
+    expect(state.unknown).toBe(2)
+
+    render(<EvidenceReadinessStrip items={state.items} done={state.done} total={state.total} failed={state.failed} />)
+    const pills = screen.getAllByTestId('evidence-readiness-item')
+    expect(pills.map((p) => p.getAttribute('data-status'))).toEqual(['unknown', 'ok', 'unknown'])
+    expect(pills[1].textContent).toContain('✓')
+    expect(pills[0].textContent).toContain('未确认')
+    expect(pills[2].textContent).toContain('未确认')
+    expect(screen.getByTestId('evidence-readiness').textContent).toContain('已取 1/3')
   })
 
   it('认不出的 stage（散文提示）仍走 spinner，不污染齐套度', async () => {
@@ -129,8 +208,7 @@ describe('证据齐套度条接线', () => {
 
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
-    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '看看' } })
-    fireEvent.click(screen.getByLabelText('发送'))
+    typeAndSend('看看')
 
     await waitFor(() => expect(screen.getByText('正在准备上下文…')).toBeTruthy())
     expect(screen.queryByTestId('evidence-readiness')).toBeNull()
@@ -146,8 +224,7 @@ describe('回答内价格锚定接线', () => {
 
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
-    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '600111 怎么样' } })
-    fireEvent.click(screen.getByLabelText('发送'))
+    typeAndSend('600111 怎么样')
 
     await waitFor(() => expect(screen.getByTestId('copilot-answer-card')).toBeTruthy())
     const chips = screen.getAllByTestId('answer-price-anchor')
