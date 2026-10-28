@@ -12,7 +12,7 @@ import {
   type PendingAction,
 } from '@/lib/copilot/api'
 import { ChevronRight, Loader2, PanelLeftClose, PanelLeftOpen, Paperclip, Send, Sparkles, X } from 'lucide-react'
-import { chatApi } from '@sida/api'
+import { chatApi, type ChatStreamResult } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import InlineSteps from '@/components/copilot/InlineSteps'
@@ -107,6 +107,38 @@ type Msg = {
   attachment?: { name: string; isImage: boolean }
   /** 助手消息定稿时固化的证据齐套度（流中长在页面上，答完留在回答顶部可回看）。 */
   readiness?: ReadinessState
+  /**
+   * 2026-10-28: 这一轮流式没拿到服务端终稿（断流/坏帧/服务端初步失败）。
+   * 正文可能只是半截，气泡上必须带可见标记 —— 不许把半截当成品。
+   */
+  incomplete?: boolean
+}
+
+/**
+ * 流式增量: 只动**最后一条**助手气泡（没有就新建），历史消息不动。
+ * 抽成导出纯函数是为了让单测验证"终稿/增量落到哪条消息", 不必渲染整页。
+ */
+export function upsertStreamDraft(msgs: Msg[], content: string): Msg[] {
+  const last = msgs[msgs.length - 1]
+  if (last?.role === 'assistant') return [...msgs.slice(0, -1), { ...last, content }]
+  return [...msgs, { role: 'assistant', content }]
+}
+
+/**
+ * 终稿落地: 用服务端 `done.content`（落库全文，含对账附言/拒答）覆盖草稿。
+ * - 已有助手气泡 → 原地替换，丢掉流式草稿；
+ * - 只有终稿（拒答那条路一个 delta 都没发）→ 补一条气泡；
+ * - 终稿和草稿都空 → 一条都不铺（空 ≠ 0/0，别造假空气泡）。
+ */
+export function settleStreamBubble(msgs: Msg[], content: string, incomplete = false): Msg[] {
+  const last = msgs[msgs.length - 1]
+  const text = content || (last?.role === 'assistant' ? last.content : '')
+  if (!text) return msgs
+  const flag = incomplete ? true : undefined
+  if (last?.role === 'assistant') {
+    return [...msgs.slice(0, -1), { ...last, content: text, incomplete: flag }]
+  }
+  return [...msgs, { role: 'assistant', content: text, incomplete: flag }]
 }
 
 /** 6 位 A 股代码（含北交所 4/8 开头）才允许查参谋卡，避免把日期/金额当代码。 */
@@ -194,6 +226,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const runsState = useCopilotRuns({ conversationId: convId, enabled: visible })
   const [convs, setConvs] = useState<{ id: number; title: string; created_at: string }[]>([])
   const [error, setError] = useState<string | null>(null)
+  /** 2026-10-28: 坏帧的可见提示（非致命：终稿到达就按终稿显示，别当没发生）。 */
+  const [streamNotice, setStreamNotice] = useState<string | null>(null)
   /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
   const [anchorSymbol, setAnchorSymbol] = useState('')
   /** 参谋卡只在用户主动点「看卡」时请求（brief 接口较重，常 10s+） */
@@ -215,6 +249,12 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const fileRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const mounted = useRef(true)
+  /**
+   * 2026-10-28 流式归属令牌: 切会话/新会话时 +1。
+   * 旧流的 onDelta/onDone 回来时对不上令牌就整条丢弃 —— 否则上一轮的正文
+   * 会写进用户刚切过去的那个会话（回归用例 tests/components/copilot-stream-final.test.tsx）。
+   */
+  const streamSeqRef = useRef(0)
   const scroller = useRef<HTMLDivElement>(null)
   useEffect(() => {
     mounted.current = true
@@ -225,6 +265,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     if (!entry || entry.id === consumedEntry.current || streaming || backgroundPending) return
     consumedEntry.current = entry.id
     initialContext.current = entry
+    streamSeqRef.current += 1 // 2026-10-28: 换入口上下文 = 换会话视图, 旧流作废
     setConvId(null)
     setMsgs([])
     setError(null)
@@ -352,6 +393,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   }, [loadHistory])
 
   const openConversation = useCallback(async (id: number) => {
+    streamSeqRef.current += 1 // 2026-10-28: 切会话即作废旧流的写入权(防串消息)
     try {
       const detail = await chatApi.getConversation(id)
       if (!mounted.current) return
@@ -370,6 +412,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   }, [])
 
   const startNewConversation = useCallback(() => {
+    streamSeqRef.current += 1 // 2026-10-28: 新会话 → 旧流不许再往这里写
     initialContext.current = null
     setConvId(null)
     setMsgs([])
@@ -490,6 +533,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       setReadiness(readinessRef.current)
       setPriceAnchor(null)
       let assistant = ''
+      // 2026-10-28: 本轮流的归属令牌。切会话/新会话来时 +1, 迟到的回调对不上就整条丢弃。
+      const seq = ++streamSeqRef.current
+      const isCurrent = () => mounted.current && streamSeqRef.current === seq
+      setStreamNotice(null)
       try {
         // 标的解析优先级：@ 指定 > 本条文字里的代码 > 页面锚点（正在看 XXX）
         const mentionedStock = mentions.find((m) => m.type === 'stock') as MentionStock | undefined
@@ -514,11 +561,12 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         }
         const ac = new AbortController()
         abortRef.current = ac
-        await chatApi.sendMessageStream(
+        const result = await chatApi.sendMessageStream(
           id,
           content,
           {
             onStage: (s) => {
+              if (!isCurrent()) return
               setStage(s)
               // stage 里能认出工具（`正在取数 3/10：get_xxx`）才进齐套度；
               // 散文提示（「正在准备上下文…」）仍走下面那条单行 spinner，语义不混。
@@ -529,17 +577,28 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               }
             },
             onDelta: (d) => {
+              if (!isCurrent()) return
               assistant += d
               setStage('')
-              setMsgs((m) => {
-                const last = m[m.length - 1]
-                if (last?.role === 'assistant') {
-                  return [...m.slice(0, -1), { role: 'assistant', content: assistant }]
-                }
-                return [...m, { role: 'assistant', content: assistant }]
-              })
+              setMsgs((m) => upsertStreamDraft(m, assistant))
             },
-            onError: (e) => setError(e),
+            onDone: (msg) => {
+              if (!isCurrent()) return
+              // 2026-10-28: 终稿是落库全文 —— 对账附言、零工具拒答都只在这里,
+              // 流式草稿必须被它替换(而不是像以前那样直接丢掉 onDone)。
+              const text = typeof msg?.content === 'string' && msg.content ? msg.content : assistant
+              assistant = text
+              setStage('')
+              setMsgs((m) => settleStreamBubble(m, text, false))
+            },
+            onError: (e) => {
+              if (!isCurrent()) return
+              setError(e)
+            },
+            onMalformed: () => {
+              // 坏帧的具体数量在返回值里（result.corruptedFrames），收尾统一提示；
+              // 这里只保证"不静默"这条链是通的, 不打断用户已看到的正文。
+            },
           },
           ac.signal,
           imageData,
@@ -550,17 +609,28 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             label: m.type === 'stock' ? m.name || m.symbol : m.label,
           })),
         )
+        if (!isCurrent()) return
+        // 2026-10-28: 没拿到终稿 = 失败, 不许把半截正文当成品亮着
+        const streamResult = result as ChatStreamResult | undefined
+        if (streamResult?.failure) {
+          setError(streamResult.failure)
+          setMsgs((m) => settleStreamBubble(m, streamResult.content || assistant, true))
+        } else if (streamResult?.corruptedFrames) {
+          setStreamNotice(`流式数据有 ${streamResult.corruptedFrames} 处损坏，已按服务端终稿校正`)
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : '对话失败')
       } finally {
         if (mounted.current) {
           setStreaming(false)
+          setStage('')
+        }
+        if (isCurrent()) {
           // 2026-10-25: 答完刷新 run 列表 —— 否则内联步骤条摘要用的是打开会话那一刻的快照
           // （实测新回答显示 "0 步 · -- · running"，因为 run 行在发问前就抓好了）
           runsState.reload()
           // 后端 run 行的最终状态可能比 SSE 收尾晚一拍，再补一次
           window.setTimeout(() => { if (mounted.current) runsState.reload() }, 1600)
-          setStage('')
           // 定稿：pending → ok（流结束了，取数阶段已经过去），然后把这条痕固化到助手消息上。
           // 没有助手消息（首字都没出来就失败）时不铺空条 —— 空 ≠ 0/0。
           const settled = settleReadiness(readinessRef.current)
@@ -573,6 +643,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               return [...prev.slice(0, -1), { ...last, readiness: settled }]
             })
           }
+        } else {
+          // 2026-10-28: 旧流的齐套度属于别的会话, 不留在当前视图
+          readinessRef.current = emptyReadiness()
+          if (mounted.current) setReadiness(emptyReadiness())
         }
       }
     },
@@ -1012,6 +1086,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                         ) : (
                           <SafeMarkdown>{displayContent}</SafeMarkdown>
                         )}
+                        {m.incomplete ? (
+                          <p data-testid="copilot-stream-incomplete" className="mt-1 text-[12px] text-role-risk">
+                            未拿到服务端终稿，以上内容可能不完整
+                          </p>
+                        ) : null}
                         {(() => {
                           const r = runForMessage(i)
                           if (!r) return null
@@ -1088,6 +1167,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           {error ? (
             <div className="card-surface bg-card rounded px-2 py-1.5 text-[12px] text-role-risk">
               {error}
+            </div>
+          ) : null}
+          {streamNotice ? (
+            <div data-testid="copilot-stream-notice" className="card-surface bg-card rounded px-2 py-1.5 text-[12px] text-muted-foreground">
+              {streamNotice}
             </div>
           ) : null}
         </div>
