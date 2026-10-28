@@ -492,7 +492,19 @@ describe('④ 精确身份与目标（不用 label+price 猜）', () => {
     expect(AnnotationLedger.snapshot(target()).annotationIds).toEqual([91])
   })
 
-  it('000001 个股页默认拒画（后端没有标的类型字段，指数/个股无法区分）', async () => {
+  it('000858 个股读取服务端 stock 行并画线，不能画同号指数行', async () => {
+    H.annotations = () => Promise.resolve([
+      row({ id: 101, symbol: '000858', market: 'SZ', instrument: 'stock', price: 12.5 }),
+      row({ id: 102, symbol: '000858', market: 'CN', instrument: 'index', price: 3000 }),
+    ])
+    render(<Harness symbol="000858" />)
+    await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('ready'))
+    await waitFor(() => expect(noteLines()).toHaveLength(1))
+    expect(noteLines()[0].price).toBe(12.5)
+    expect(annotationCalls()[0]).toContain('instrument=stock')
+  })
+
+  it('000001 缺少类型的历史行拒画', async () => {
     H.annotations = () => Promise.resolve([row({ symbol: '000001', price: 12.5 })])
     render(<Harness symbol="000001" />)
 
