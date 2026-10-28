@@ -12,14 +12,26 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 ALLOWED_KINDS = ("annotation", "watchlist", "alert", "schedule")
+
+#: 真能撤回的动作类型（有 before_snapshot 语义）。
+#: annotation 确认后线已经上图，服务端没有撤销入口 —— 不许假装能回滚
+#: （2026-10-28 复审: 旧 `can_rollback = bool(before_snapshot)` 把 "{}" 也当快照,
+#: 前端看到 true, 点下去却得到"没有快照，无法回滚（早于 v0.73）"这种错文案）。
+ROLLBACKABLE_KINDS: tuple[str, ...] = ("watchlist", "alert", "schedule")
+
+_KIND_NAMES: dict[str, str] = {
+    "annotation": "标注", "watchlist": "加自选", "alert": "盯盘提醒", "schedule": "定时任务",
+}
 
 
 class ActionError(Exception):
@@ -145,6 +157,14 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
     except ActionError:
         # 业务拒绝(参数/越权): 整个事务回滚 —— 动作必须仍是 pending, 不留半条标注
         safe_rollback(db)
+        raise
+    except IntegrityError as exc:
+        # 弱引用唯一索引兜底: 并发确认/写入方绕过 _prune 时, 给一句能懂的 400,
+        # 而不是把 psycopg2/sqlite 的约束原文当 500 抛给前端。
+        safe_rollback(db)
+        if "uq_copilot_actions_annotation" in str(exc):
+            raise ActionError("这条标注刚被另一个确认占用（并发确认），请重试") from exc
+        logger.exception("动作执行撞数据库约束, 已回滚: action=%s kind=%s", action_id, row.kind)
         raise
     except Exception:
         # 未知异常回滚后原样抛出(5xx), 不伪装成 400
@@ -349,28 +369,106 @@ def _apply_watchlist(db: Session, *, user_id: Any, payload: dict) -> str:
 #: 写进别的字面量 = 行落库了但按 period 等值查询永远查不到（历史上 market 就这么翻过车）。
 ANNOTATION_PERIODS: tuple[str, ...] = ("1m", "5m", "15m", "30m", "60m", "1d", "1w", "1mth")
 
+#: 图上真能画标注的市场代码 = 前端 `?market=` 与读取端等值匹配用的字面量（全大写）。
+#: market 列是 VARCHAR(8) 且 PG 比较大小写敏感: 落 "cn" 就等于这条线在图上不存在。
+ANNOTATION_MARKETS: tuple[str, ...] = ("CN", "SH", "SZ", "BJ", "HK", "US")
+
 #: URL 风格的周期写法（frontend/src/lib/kline-period.ts 的 `?period=`）→ 图表周期
 _PERIOD_ALIASES: dict[str, str] = {
-    "m1": "1m", "m5": "5m", "m15": "15m", "m30": "30m", "m60": "60m",
-    "d1": "1d", "w1": "1w", "mn": "1mth", "1mon": "1mth", "1month": "1mth",
-    "day": "1d", "daily": "1d", "week": "1w", "weekly": "1w",
+    "m1": "1m", "1min": "1m", "1minute": "1m",
+    "m5": "5m", "m15": "15m", "m30": "30m", "m60": "60m",
+    "d1": "1d", "day": "1d", "daily": "1d",
+    "w1": "1w", "week": "1w", "weekly": "1w",
+    "mn": "1mth", "mth": "1mth", "mon": "1mth", "month": "1mth", "monthly": "1mth",
+    "1mon": "1mth", "1month": "1mth",
 }
+
+#: 大写 M 才是"月线"：国内口径 `1M` = 月线，而 `1m` = 1 分钟。
+#: 旧实现先 lower() 再查表 → `1M` 落成 `1m`(1分钟)，图上按 1mth 查永远查不到。
+#: 只列"大写 M 与 1 分钟同形、但语义是月"的那几个写法。
+_UPPERCASE_MONTH_TOKENS: frozenset[str] = frozenset({"1M", "M", "M1"})
 
 #: 归属与关联只能由服务端决定：payload 里出现这些键 = 试图伪造他人/历史关联，直接拒绝。
 _RESERVED_ANNOTATION_KEYS: tuple[str, ...] = ("annotation_id", "user_id", "action_id", "status")
+
+#: kline_annotations 的列宽（models: symbol VARCHAR(12) / ts VARCHAR(32)）。
+#: 超长在 SQLite 悄悄收下、在 PG 抛 StringDataRightTruncation(500) —— 必须先变成 400。
+_MAX_SYMBOL_LEN = 12
+_MAX_TS_LEN = 32
+
+#: 时间点只接受日期/日期时间（前端按 bar 时间对它；别的写法画不上）。
+_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?)?$")
 
 
 def _normalize_period(raw: Any) -> str:
     """把周期收敛到图表字面量；不认识就拒绝，**不落一个查不到的值**。"""
     if raw is None or str(raw).strip() == "":
         return "1d"
-    p = str(raw).strip().lower()
+    token = str(raw).strip()
+    if token in _UPPERCASE_MONTH_TOKENS:
+        return "1mth"
+    p = token.lower()
     p = _PERIOD_ALIASES.get(p, p)
     if p not in ANNOTATION_PERIODS:
         raise ActionError(
-            f"不支持的标注周期：{raw}（可用 {'/'.join(ANNOTATION_PERIODS)}）"
+            f"不支持的标注周期：{raw}（可用 {'/'.join(ANNOTATION_PERIODS)}；"
+            "月线是 1M/1mth，1m 是 1 分钟）"
         )
     return p
+
+
+def _normalize_market(raw: Any) -> str:
+    """market 归一成大写字面量；不认识的直接拒绝（不落一个读取端匹配不上的值）。"""
+    mk = str(raw or "").strip().upper()
+    if not mk:
+        return "CN"
+    if mk not in ANNOTATION_MARKETS:
+        raise ActionError(
+            f"不支持的标注市场：{raw}（可用 {'/'.join(ANNOTATION_MARKETS)}）"
+        )
+    return mk
+
+
+def _normalize_ts(raw: Any) -> str | None:
+    """时间点：空 → None；超长/非日期时间 → 明确拒绝（不留给数据库抛 500）。"""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, str):
+        raise ActionError('标注时间必须是字符串，如 "2026-10-28" 或 "2026-10-28 10:00"')
+    ts = raw.strip()
+    if not ts:
+        return None
+    if len(ts) > _MAX_TS_LEN:
+        raise ActionError(
+            f"标注时间过长（最多 {_MAX_TS_LEN} 个字符，收到 {len(ts)}）：{ts[:16]}…"
+        )
+    if not _TS_RE.match(ts):
+        raise ActionError(f'标注时间格式不合法：{ts}（用 "2026-10-28" 或 "2026-10-28 10:00"）')
+    return ts
+
+
+def _prune_dangling_annotation_links(db: Session) -> int:
+    """把指向**已不存在**标注的弱引用链接清成 NULL，返回清理条数。
+
+    为什么必须清: annotation_id 是弱引用(无外键)，标注行被用户删掉/被清理任务带走后
+    链接就悬空了。SQLite 的 rowid 会复用 —— 下一条新标注可能拿到同一个 id，于是那条
+    悬空链接撞上 uq_copilot_actions_annotation，这次确认(以及此后每一次)都写不进去
+    （实测: 删掉最大 id 的标注后，每次确认都 UNIQUE constraint failed）。
+
+    清的只是"指向不存在的行"的链接，不猜、不改真实关联；跨用户也要清，因为唯一索引
+    是全局的（别人留下的悬空链接一样会撞）。
+    """
+    from src.db.models import CopilotAction, KlineAnnotation
+
+    live = db.query(KlineAnnotation.id).filter(
+        KlineAnnotation.id == CopilotAction.annotation_id
+    ).exists()
+    return int(
+        db.query(CopilotAction)
+        .filter(CopilotAction.annotation_id.isnot(None), ~live)
+        .update({"annotation_id": None}, synchronize_session=False)
+        or 0
+    )
 
 
 def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str, dict]:
@@ -389,14 +487,24 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
     label = str(payload.get("label") or "").strip()
     if not symbol or not label:
         raise ActionError("标注需要 symbol 和 label")
+    if len(symbol) > _MAX_SYMBOL_LEN:
+        raise ActionError(f"标的代码过长（最多 {_MAX_SYMBOL_LEN} 个字符）：{symbol}")
     period = _normalize_period(payload.get("period"))
+    market = _normalize_market(payload.get("market"))
+    ts = _normalize_ts(payload.get("ts"))
     price = payload.get("price")
     if price is not None:
         price = _as_price(price)
         if price is None:
             raise ActionError("标注价位不合法（必须是正的有限数）")
-    market = str(payload.get("market") or "CN")
-    ts = payload.get("ts")
+    # 水平线要 price、时间点要 ts；两个都没有 = 这条线在图上没有位置,
+    # 落库只会制造"确认成功但什么也看不到"+ 读取端拒画的死数据。
+    if price is None and ts is None:
+        raise ActionError("标注需要价位（price）或时间点（ts）—— 两者都缺，图上没有位置可放")
+
+    # 弱引用兜底: 先把悬空链接(指向已删标注)清掉, 否则 rowid 复用时本次写入必撞唯一索引。
+    _prune_dangling_annotation_links(db)
+
     row = KlineAnnotation(
         user_id=str(user_id),
         symbol=symbol,
@@ -476,6 +584,18 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
     return f"已建盯盘提醒：{symbol} {'上破' if direction == 'above' else '下破'} {price}"
 
 
+def _has_rollback_snapshot(row: Any) -> bool:
+    """快照里真有可回滚的内容 —— "{}" 不算（annotation 的 _snapshot 就返回空 dict）。"""
+    raw = getattr(row, "before_snapshot", None)
+    if not raw:
+        return False
+    try:
+        snap = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(snap, dict) and bool(snap)
+
+
 def _to_dict(row: Any) -> dict:
     ann_id = getattr(row, "annotation_id", None)
     return {
@@ -491,7 +611,13 @@ def _to_dict(row: Any) -> dict:
         "annotation": None,
         # P1-1.3: diff 给前端展示"会改什么"；snapshot 不给前端（内部回滚用）
         "diff": json.loads(row.diff_json) if getattr(row, "diff_json", None) else [],
-        "can_rollback": bool(getattr(row, "before_snapshot", None)) and row.status == "applied",
+        # 只有"这类动作真的能撤回 + 已执行 + 快照里有内容"才算 true。
+        # 2026-10-28 复审: 旧写法 bool("{}") 为真 → annotation 动作骗前端说能撤回。
+        "can_rollback": (
+            row.kind in ROLLBACKABLE_KINDS
+            and row.status == "applied"
+            and _has_rollback_snapshot(row)
+        ),
         "created_at": str(row.created_at or ""),
         "applied_at": str(row.applied_at or ""),
     }
@@ -664,6 +790,13 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
         raise ActionError("动作不存在")
     if row.status != "applied":
         raise ActionError(f"只有 applied 的动作能回滚，当前是 {row.status}")
+    if row.kind not in ROLLBACKABLE_KINDS:
+        # 说清楚"这一类动作本来就不能撤回"，而不是拿"没有快照/早于 v0.73"糊弄用户
+        # （标注确认后线已经在图上，服务端还没有撤销入口）。
+        raise ActionError(
+            f"{_KIND_NAMES.get(row.kind, row.kind)}动作不支持回滚"
+            "（标注确认后已上图，如需撤下请在图上删除那条标注）"
+        )
     snapshot = json.loads(row.before_snapshot or "{}")
     if not snapshot:
         raise ActionError("这条动作没有快照，无法回滚（早于 v0.73 的记录）")
@@ -706,11 +839,17 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
             else:
                 undone.append("定时任务早于本次动作，未改动")
         else:
-            raise ActionError(f"{row.kind} 动作不支持回滚")
+            # 防御: ROLLBACKABLE_KINDS 扩了但这里没接对应实现时, 明确说"不支持"。
+            raise ActionError(f"{_KIND_NAMES.get(row.kind, row.kind)}动作不支持回滚")
 
         row.status = "rolled_back"
         row.result = "；".join(undone) or "无变化"
         db.commit()
+    except ActionError:
+        # 业务拒绝原样抛出（不要被下面的兜底包成"回滚失败：ActionError: ..."）
+        from src.core.db_safe import safe_rollback
+        safe_rollback(db)
+        raise
     except Exception as exc:  # noqa: BLE001
         from src.core.db_safe import safe_rollback
         safe_rollback(db)

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
@@ -6246,6 +6247,33 @@ CREATE TABLE IF NOT EXISTS user_ai_prefs (
     ))
 
 
+def _m231_duplicate_links(conn: Connection) -> list[int]:
+    """已有重复的 annotation_id（历史脏数据/手工改过库）。
+
+    必须在**建索引之前**单独查: PG 里 `CREATE UNIQUE INDEX` 失败后事务进入 aborted,
+    同一事务内连 SELECT 都不许再发 —— 那时想解释原因已经晚了。
+    """
+    rows = conn.execute(text(
+        "SELECT annotation_id FROM copilot_actions"
+        " WHERE annotation_id IS NOT NULL"
+        " GROUP BY annotation_id HAVING COUNT(*) > 1"
+        " ORDER BY annotation_id LIMIT 10"
+    )).fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def _m231_link_index_is_unique(conn: Connection) -> bool:
+    """同名索引真的存在且真的是唯一索引。
+
+    `CREATE UNIQUE INDEX IF NOT EXISTS` 只按**名字**判存在: 名字被一个非唯一索引占着
+    时它会静默跳过, 库里就没有唯一约束了。所以建完必须自己验一遍。
+    """
+    for idx in sa_inspect(conn).get_indexes("copilot_actions"):
+        if idx.get("name") == "uq_copilot_actions_annotation":
+            return bool(idx.get("unique")) and list(idx.get("column_names") or []) == ["annotation_id"]
+    return False
+
+
 def _m231_copilot_action_annotation_link(conn: Connection) -> None:
     """copilot_actions 加 annotation_id（2026-10-28, P2 可追溯契约）。
 
@@ -6262,6 +6290,16 @@ def _m231_copilot_action_annotation_link(conn: Connection) -> None:
     唯一索引: 一条标注不能被两条动作同时认领(重复确认/并发确认的写库兜底)。
     各数据库唯一索引都允许多个 NULL, 所以历史行不受影响。
 
+    **失败必须让迁移失败**（2026-10-28 复审整改）。旧实现 `except: logger.warning(不阻断)`:
+      - SQLite: 异常被吞 → schema_migrations 记 success=1, 但库里没有唯一约束,
+        契约静默失效, 事后完全看不出来;
+      - PG: 语句失败后事务已 aborted, 再写 success=1 必报
+        "current transaction is aborted", 真正原因(annotation_id 重复)被掩盖,
+        运维拿着一条看不懂的错去排查。
+    现在: 先查重复(能读懂地报错), 建索引后自证唯一性, 任何失败都原样抛给
+    run_versioned_migrations —— 后者回滚整个迁移事务(列也不留下)、用新连接写
+    success=0+真实 error, 事务不会留在 aborted 状态。
+
     幂等可重跑（列/索引已存在则跳过）。
     """
     _add_column_if_missing(
@@ -6270,13 +6308,24 @@ def _m231_copilot_action_annotation_link(conn: Connection) -> None:
         "annotation_id",
         "ALTER TABLE copilot_actions ADD COLUMN annotation_id INTEGER",
     )
-    try:
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_copilot_actions_annotation"
-            " ON copilot_actions (annotation_id)"
-        ))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("m231 建唯一索引失败(不阻断): %s", exc)
+
+    dup = _m231_duplicate_links(conn)
+    if dup:
+        raise RuntimeError(
+            "m231 无法建 uq_copilot_actions_annotation: copilot_actions.annotation_id"
+            f" 已有重复值 {dup}（一条标注被多条动作认领）。"
+            "请先把重复行的 annotation_id 置 NULL 再重跑迁移；本迁移已整体回滚。"
+        )
+
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_copilot_actions_annotation"
+        " ON copilot_actions (annotation_id)"
+    ))
+    if not _m231_link_index_is_unique(conn):
+        raise RuntimeError(
+            "m231 唯一索引 uq_copilot_actions_annotation 未生效：同名索引已存在但不是"
+            " annotation_id 上的唯一索引。请先 DROP 掉这个同名索引再重跑迁移。"
+        )
 
 
 MIGRATIONS: tuple[Migration, ...] = (

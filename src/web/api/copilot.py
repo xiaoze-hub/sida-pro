@@ -536,11 +536,13 @@ def get_copilot_annotations(
     # 但市场族归并就抹掉了「同一代码的指数与个股」这一层（000001 上证指数 / 平安银行）：
     # 需要严格区分的调用方传 market_strict=true，此时只做等值匹配。
     _A_SHARE = {"CN", "SH", "SZ", "BJ"}
-    mk = (market or "").upper()
+    mk = (market or "").strip().upper() or "CN"
     if strict:
         markets = [mk]
     else:
-        markets = sorted(_A_SHARE) if mk in _A_SHARE else [market]
+        # 非 A 股市场也只按**大写**字面量匹配：写入端已归一大写（HK/US），
+        # 这里再拿原始大小写的 `market` 去比, 会自己造出"写进去却读不出"。
+        markets = sorted(_A_SHARE) if mk in _A_SHARE else [mk]
 
     uid = str(user.id)
     query = db.query(KlineAnnotation, CopilotAction.id.label("action_id")).outerjoin(
