@@ -46,6 +46,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -891,6 +892,9 @@ def test_annotation_action_reports_itself_as_not_rollbackable(db):
     msg = str(ei.value)
     assert "不支持回滚" in msg
     assert "快照" not in msg and "v0.73" not in msg
+    # 复审阻断 ④：不许指一条不存在的路（图上没有删除入口，服务端也没有删除接口）
+    assert "在图上删除" not in msg and "图上删除" not in msg
+    assert "删除入口" in msg and "无法撤下" in msg
 
     # 回滚没生效：线还在图上，动作仍是 applied
     assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 1
@@ -993,7 +997,25 @@ def test_pg_annotation_cannot_rollback(pg_db):
     assert out["can_rollback"] is False
     with pytest.raises(A.ActionError) as ei:
         A.rollback_action(pg_db, user_id=UID, action_id=item["id"])
-    assert "不支持回滚" in str(ei.value)
+    msg = str(ei.value)
+    assert "不支持回滚" in msg
+    # 复审阻断 ④：文案不许再指"图上删除"这条不存在的路
+    assert "在图上删除" not in msg
+    assert "删除入口" in msg and "无法撤下" in msg
+
+
+def test_pg_ambiguous_target_is_refused_before_any_pending_row(pg_db):
+    """真实 PG：000xxx 在提议阶段就拒绝，库里连 pending 行都不出现（复审阻断 ②）。"""
+    for sym in ("000001", "000002", "399001"):
+        with pytest.raises(A.ActionError) as ei:
+            A.propose(pg_db, user_id=UID, kind="annotation",
+                      payload={"symbol": sym, "label": f"{sym} 同号", "price": 12.3, "market": "SZ"})
+        assert sym in str(ei.value) and "指数" in str(ei.value)
+    assert pg_db.query(CopilotAction).count() == 0, "提议被拒绝 ⇒ 一条 pending 都不许落库"
+
+    ok = A.propose(pg_db, user_id=UID, kind="annotation",
+                   payload={"symbol": SYMBOL, "label": "可证个股", "price": 35.2, "market": "SH"})
+    assert ok["status"] == "pending", "可证个股照旧能提议（闸门不误伤）"
 
 
 def test_pg_dangling_link_is_left_alone_and_does_not_block(pg_db):
@@ -1216,16 +1238,88 @@ def test_ambiguity_rule_does_not_overreach_into_provable_stock_prefixes():
         assert A.exchange_of(sym) is None, sym
 
 
-def test_ambiguous_target_cannot_be_confirmed_and_never_lands(db):
-    """写入端与前端一致：000xxx 的标注不落库（不制造「确认成功、图上永远没有」）。"""
-    for sym in ("000001", "000002", "000003"):
-        item = _propose(db, {"symbol": sym, "label": f"{sym} 同号线", "price": 12.3, "market": "SZ"})
+def _legacy_pending(db, payload: dict, user_id: str = UID) -> CopilotAction:
+    """**历史 pending**：迁移前/别的写入方落下的待确认动作（提议端现在已拦，直接造行）。"""
+    row = CopilotAction(
+        user_id=user_id, kind="annotation",
+        payload=json.dumps(payload, ensure_ascii=False), status="pending",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def test_ambiguous_target_is_refused_at_propose_and_never_becomes_pending(db):
+    """复审阻断 ②：000xxx 的标注在**提议阶段**就拒绝 —— 不生成永远确认不了的 pending。
+
+    确认端（`_apply_annotation`）早就拒绝，但旧实现让提议照旧落 pending：用户看到一条
+    「点确认必然 400」的待确认动作。两条都要钉住：提议不落行、历史 pending 确认时兜底。
+    """
+    for sym in ("000001", "000002", "000003", "399001", "999999"):
         with pytest.raises(A.ActionError) as ei:
-            A.apply_action(db, user_id=UID, action_id=item["id"])
+            _propose(db, {"symbol": sym, "label": f"{sym} 同号线", "price": 12.3, "market": "SZ"})
         assert sym in str(ei.value) and "指数" in str(ei.value)
+        assert db.query(CopilotAction).filter(CopilotAction.user_id == UID).count() == 0, (
+            "提议被拒绝后不许留下任何 pending（含 action 行）"
+        )
         assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
-        action = db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one()
-        assert action.status == "pending", "拒绝后动作必须回滚回 pending（可以改目标再确认）"
+
+    # 兜底：历史 pending（提议端拦截之前落下的）确认时仍然被拒，且动作回滚回 pending
+    legacy = _legacy_pending(db, {"symbol": "000002", "label": "历史同号线", "price": 9.9, "market": "SZ"})
+    with pytest.raises(A.ActionError) as ei:
+        A.apply_action(db, user_id=UID, action_id=legacy.id)
+    assert "000002" in str(ei.value) and "指数" in str(ei.value)
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+    db.refresh(legacy)
+    assert legacy.status == "pending"
+
+
+def test_scenario_proposals_never_create_pending_for_ambiguous_symbols(db):
+    """情景关键位提议同样不落 000xxx 的 pending（同一条闸，不是只拦工具入口）。"""
+    matrix = {"available": True, "levels": {"support": 3200.0, "resist": 3400.0}}
+    for sym in ("000001", "399001"):
+        assert A.propose_scenario_annotations(
+            db, user_id=UID, symbol=sym, market="SH", matrix=matrix,
+        ) == []
+    assert db.query(CopilotAction).filter(CopilotAction.user_id == UID).count() == 0, (
+        "情景矩阵对 000xxx 一条 pending 都不许提议"
+    )
+    # 对照：可证个股照旧提议（别把整条链路一起关掉）
+    ok = A.propose_scenario_annotations(
+        db, user_id=UID, symbol=SYMBOL, market="SH", matrix=matrix,
+    )
+    assert {p["payload"]["label"] for p in ok} == {"支撑位", "阻力位"}
+
+
+def test_propose_tool_reports_the_refusal_instead_of_pending(db):
+    """工具层：`propose_action` 直接回绝并说明原因（模型据此换标的，而不是以为已提议）。"""
+    from src.agents.chat.registry import _tool_propose_action
+
+    class _U:
+        id = UID
+
+    import asyncio
+
+    out = asyncio.run(_tool_propose_action(
+        db, {"kind": "annotation", "symbol": "000002", "label": "万科支撑", "price": 9.9}, _U(),
+    ))
+    assert "动作提议失败" in out and "000002" in out and "指数" in out
+    assert "待确认动作" not in out, "被拒绝时不许说已经在待确认列表里生成"
+    assert db.query(CopilotAction).filter(CopilotAction.user_id == UID).count() == 0
+
+
+def test_propose_action_tool_description_states_the_ambiguous_code_rule():
+    """工具说明同步：模型在**调用前**就知道 000xxx / 纯指数前缀不能标注（防反复重试）。"""
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+
+    spec = CHAT_TOOL_REGISTRY["propose_action"]
+    schema = spec.schema
+    assert isinstance(schema, dict), "propose_action 必须带 function schema"
+    description = schema["function"]["description"]
+    assert "000xxx" in description and "提议阶段就会被拒绝" in description
+    for prefix in ("399", "880", "881", "999"):
+        assert prefix in description
 
 
 def test_http_strict_read_denies_000002_and_000003_but_legacy_read_still_returns(db, http):
@@ -1264,8 +1358,12 @@ def test_http_strict_read_denies_000002_and_000003_but_legacy_read_still_returns
                 f"{sym} 在 {market} 页非严格读取必须保持既有行为：{labels}"
             )
 
-    item = _propose(db, {"symbol": "000002", "label": "万科支撑", "price": 9.9, "market": "SZ"})
-    applied = http.post(f"/copilot/actions/{item['id']}/apply")
+    # 提议端现在就拒绝（复审阻断 ②）；HTTP 确认端对**历史 pending** 仍然是 400
+    with pytest.raises(A.ActionError) as pei:
+        _propose(db, {"symbol": "000002", "label": "万科支撑", "price": 9.9, "market": "SZ"})
+    assert "指数" in str(pei.value)
+    legacy = _legacy_pending(db, {"symbol": "000002", "label": "万科支撑", "price": 9.9, "market": "SZ"})
+    applied = http.post(f"/copilot/actions/{legacy.id}/apply")
     assert applied.status_code == 400, applied.text
     assert "指数" in applied.json()["detail"]
     assert db.query(KlineAnnotation).filter(

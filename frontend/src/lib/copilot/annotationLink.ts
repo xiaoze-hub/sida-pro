@@ -10,6 +10,12 @@
  *  2. {@link linkConfirmedAnnotation} —— 用户点确认后的 apply 响应进来：用响应的
  *     `annotation_id` **精确回读那一条**，核对属主/标的/市场/周期/动作/内容，全部一致才画。
  *
+ * ⚠️ 两套"市场"不能混用（2026-10-28 复审阻断 ①）：
+ *    - **服务端落库市场**（`SH`/`SZ`/`BJ`，来自 apply 明细）只用于精确回读与逐字核对；
+ *    - **页面视图市场**（`?market=CN`）才是账本键 —— 图表/状态条只读当前视图键。
+ *    `targetKey` 含 market，所以拿服务端键写账本 = 界面永远读不到的线（也不会有任何提示）。
+ *    确认写账本一律走 {@link sameViewTarget} 校验过的**视图目标**。
+ *
  * 两条入口都不接受任何本地数字，也不读 sessionStorage：
  * 上一版的"本会话确认过的标注 id 信封"已删除 —— 它是客户端自证，刷新/换标签页就会
  * 出现"有 id 但服务端已经没有"或"服务端有但本地没记"的两头不实。
@@ -174,69 +180,108 @@ export async function linkConfirmedAnnotation(
 
     const applied = parsedApply.value
     const owner = currentAccountId() ?? ''
+    // 两个目标要分清（复审阻断 ①）：
+    //  - `target`：**服务端落库目标**（market 是交易所 SH/SZ/BJ）—— 只用于按 id 精确回读与逐字核对；
+    //  - `view`：**页面当前视图目标**（`?market=CN`）—— 账本键/图表/状态条读的都是它。
+    // 旧实现拿 `target` 当账本键写：SH 落库的行被写进 SH 键，而页面订阅 CN 键 ⇒
+    // 「确认成功」既不上图也没有任何提示，服务端键里还多一条界面永远读不到的线。
     const target = targetOfApplied(applied, owner)
-    const current = AnnotationLedger.currentTarget()
+    const view = AnnotationLedger.currentTarget()
 
     const refusal = targetRefusal(target)
     if (refusal) {
       // 落在不可画的目标上（未登录/指数/同号代码）：挂在当前视图上说清楚
-      if (current) AnnotationLedger.notice(current, `已确认标注 #${applied.annotationId}，但${refusal}`, 'warn')
-      return current ? AnnotationLedger.snapshot(current) : null
+      if (view) AnnotationLedger.notice(view, `已确认标注 #${applied.annotationId}，但${refusal}`, 'warn')
+      return view ? AnnotationLedger.snapshot(view) : null
     }
 
-    if (!current) return null // 没打开个股 K 线：确认成功即可，不凭空造目标
+    if (!view) return null // 没打开个股 K 线：确认成功即可，不凭空造目标
+    const viewKey = targetKey(view)
     // 目标是否"同一张图"必须按**可证明的同一标的**判定，不能拿字符串 key 比：
     // 落库市场是交易所（SH），页面只有 CN —— 键不同但确实是同一只股票。
     // 旧实现用 targetKey 比对，SH 行在 CN 页会走进"不一致"分支，然后被当成
     // **周期**不符播报（"落库在 1d 周期，当前 K 线是 1d"）—— 复审驳回 ①。
-    const sameSymbol = normSymbol(current.symbol) === normSymbol(target.symbol)
-    const sameMarket = marketMatches(current.market, target.market, target.symbol)
-    const samePeriod = (current.period || '1d').trim() === (target.period || '1d').trim()
-    if (current.instrument !== target.instrument || !sameSymbol || !sameMarket || !samePeriod) {
+    const sameSymbol = normSymbol(view.symbol) === normSymbol(target.symbol)
+    const sameMarket = marketMatches(view.market, target.market, target.symbol)
+    const samePeriod = (view.period || '1d').trim() === (target.period || '1d').trim()
+    if (view.instrument !== target.instrument || !sameSymbol || !sameMarket || !samePeriod) {
       // 逐项说清到底哪一项不同：标的 → 市场 → 周期，互不冒充。
       const reason =
-        current.instrument !== target.instrument
-          ? `已确认的是个股标注，当前是${current.instrument === 'index' ? '指数' : '个股'}图`
+        view.instrument !== target.instrument
+          ? `已确认的是个股标注，当前是${view.instrument === 'index' ? '指数' : '个股'}图`
           : !sameSymbol
-            ? `已确认的标注属于 ${target.symbol}，当前 K 线是 ${current.symbol}`
+            ? `已确认的标注属于 ${target.symbol}，当前 K 线是 ${view.symbol}`
             : !sameMarket
-              ? `已确认的标注市场是 ${target.market}，当前 K 线市场是 ${current.market}`
+              ? `已确认的标注市场是 ${target.market}，当前 K 线市场是 ${view.market}`
                 + '（同一代码在不同交易所能指不同标的，无法证明是这一只）'
-              : `已确认的标注落库在 ${target.period} 周期，当前 K 线是 ${current.period}`
+              : `已确认的标注落库在 ${target.period} 周期，当前 K 线是 ${view.period}`
       AnnotationLedger.notice(
-        current,
+        view,
         `${reason}，本次未上图（确认本身已成功，切到对应标的/周期即可看到这条线）。`,
         'warn',
       )
-      return AnnotationLedger.snapshot(current)
+      return AnnotationLedger.snapshot(view)
     }
 
     const res = await fetchRows(target, { ids: [applied.annotationId] })
+    // 等网络期间页面可能已经切走（换标的/周期/账号）：账本键是**视图**键，
+    // 旧键写进去就是"界面读不到的线"，因此只在视图仍是同一张图时写账本。
+    const stillView = sameViewTarget(viewKey)
+    if (!stillView) {
+      const now = AnnotationLedger.currentTarget()
+      if (!now) return null
+      AnnotationLedger.notice(
+        now,
+        `已确认标注 #${applied.annotationId}（${target.symbol} ${target.period}），` +
+          `但期间切换了图表视图（当前 ${normSymbol(now.symbol)}），本次未在当前图上显示。`,
+        'warn',
+      )
+      return AnnotationLedger.snapshot(now)
+    }
     if (!res.ok) {
-      AnnotationLedger.notice(target, `已确认，但读取服务端标注失败：${res.message}。本次未画线。`, 'error')
-      return AnnotationLedger.snapshot(target)
+      AnnotationLedger.notice(stillView, `已确认，但读取服务端标注失败：${res.message}。本次未画线。`, 'error')
+      return AnnotationLedger.snapshot(stillView)
     }
     const verified = verifyAppliedRow(applied, res.rows, target)
     if (!verified.ok) {
-      AnnotationLedger.notice(target, verified.message, 'warn')
-      return AnnotationLedger.snapshot(target)
+      AnnotationLedger.notice(stillView, verified.message, 'warn')
+      return AnnotationLedger.snapshot(stillView)
     }
 
-    const merged = mergeSnapshotLines(AnnotationLedger.snapshot(target).lines, [verified.value])
+    // 合并的基线也必须是**视图键**的快照：服务端键里没有页面已经在画的那几条线，
+    // 拿它当基线会把同标的既有标注整批丢掉（复审阻断 ①）。
+    const merged = mergeSnapshotLines(AnnotationLedger.snapshot(stillView).lines, [verified.value])
+    // 市场写法不同（视图 CN / 落库 SH）时说明一句，避免用户以为"画错市场了"。
+    const marketNote =
+      (stillView.market || '').toUpperCase() !== (target.market || '').toUpperCase()
+        ? `（服务端落库市场 ${target.market}，当前视图 ${stillView.market}，可证明是同一只标的）`
+        : ''
     AnnotationLedger.replaceLines(
-      target,
+      stillView,
       merged,
       `已确认并上图：${merged.map((l) => `${l.label} ${l.price}`).join('、')}（标注 #${merged
         .map((l) => l.annotationId)
-        .join('、')}，动作 #${merged.map((l) => l.actionId).join('、')}）`,
+        .join('、')}，动作 #${merged.map((l) => l.actionId).join('、')}）${marketNote}`,
     )
-    return AnnotationLedger.snapshot(target)
+    return AnnotationLedger.snapshot(stillView)
   } catch (err) {
     // 兜底：接线层自己的 bug 不能污染"确认成功"的结论。
     const current = AnnotationLedger.currentTarget()
     if (current) AnnotationLedger.notice(current, `图表标注接线异常：${errorText(err)}`, 'warn')
     return current ? AnnotationLedger.snapshot(current) : null
   }
+}
+
+/**
+ * 视图是否仍是同一张图（账本键相同）。
+ *
+ * 确认链路是「先 await 回读、再写账本」：期间用户可能换了标的/周期/账号。
+ * 账本键是**视图**键，往旧键里写就是"界面永远读不到的线"，所以只认当前键。
+ */
+function sameViewTarget(key: string): AnnotationTarget | null {
+  const now = AnnotationLedger.currentTarget()
+  if (!now) return null
+  return targetKey(now) === key ? now : null
 }
 
 /** 同向同价去重（与 `linesForTarget` 同口径）：「确认一条」要叠加到已有的线上。 */

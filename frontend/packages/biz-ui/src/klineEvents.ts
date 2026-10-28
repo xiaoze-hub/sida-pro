@@ -206,6 +206,65 @@ export function normalizeKlineEvents(raw: ReadonlyArray<RawKlineEvent> | null | 
   return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
 }
 
+/** 合并后的稳定空数组（`getSnapshot`/deps 身份稳定用）。 */
+const EMPTY_MERGED_LINES: KlinePriceLine[] = []
+
+/**
+ * 合并两组价位线（**已确认标注** + 后端图层 `unlock_levels`），同向同价只留一条。
+ *
+ * 为什么要合并（2026-10-28 复审阻断 ③）：`KlineChart` 的 `supportPressure` 是"父接管"
+ * 语义 —— 一旦页面传了它（哪怕空数组），图表就把自己从 `/klines/{symbol}/summary`
+ * 取到的 `unlock_levels`（筹码套牢/支撑压力）整批丢掉：参谋标注一上图，图层价线全消失；
+ * 而两边都有同一价位时又会画两条重合虚线。
+ *
+ * 规则（与 `annotationLedger.mergeLines` / `linesForTarget` 同一口径）：
+ *   1. `primary`（页面接线的服务端标注）优先 —— 标签/来源以它为准；
+ *   2. `secondary`（图表自取图层）只补 primary 没有的 (方向, 2 位小数价位)；
+ *   3. 非法价（非有限正数/缺方向）丢弃（不猜），按价格升序返回；
+ *   4. 一侧为空（或清理后为空）时**原样返回另一侧**（同引用）—— 不制造无意义的状态变更，
+ *      也不让"没传标注"的页面行为发生变化。
+ */
+export function mergePriceLines(
+  primary: ReadonlyArray<KlinePriceLine> | null | undefined,
+  secondary: ReadonlyArray<KlinePriceLine> | null | undefined,
+): KlinePriceLine[] {
+  const a = validLines(primary)
+  const b = validLines(secondary)
+  if (a.length === 0) return b.length === 0 ? EMPTY_MERGED_LINES : b
+  if (b.length === 0) return a
+  const byLevel = new Map<string, KlinePriceLine>()
+  for (const line of [...a, ...b]) {
+    const key = `${line.kind}:${Math.round(line.price * 100)}`
+    if (byLevel.has(key)) continue // 先到先得：primary 已占住这个价位
+    byLevel.set(key, line)
+  }
+  return [...byLevel.values()].sort((x, y) => x.price - y.price)
+}
+
+/**
+ * 丢掉画不出来的行（非有限正数价位 / 未知方向）。
+ * 全合法时**原样返回同一引用** —— 不制造无意义的新数组（父组件的 memo/effect 依赖它）。
+ */
+function validLines(source: ReadonlyArray<KlinePriceLine> | null | undefined): KlinePriceLine[] {
+  if (!Array.isArray(source) || source.length === 0) return EMPTY_MERGED_LINES
+  let dropped = false
+  const out: KlinePriceLine[] = []
+  for (const line of source) {
+    if (
+      !line ||
+      typeof line.price !== 'number' ||
+      !Number.isFinite(line.price) ||
+      line.price <= 0 ||
+      (line.kind !== 'support' && line.kind !== 'pressure')
+    ) {
+      dropped = true
+      continue
+    }
+    out.push(line)
+  }
+  return dropped ? out : (source as KlinePriceLine[])
+}
+
 /**
  * 后端解套价位线数组 → 标准化价位线数组。
  *

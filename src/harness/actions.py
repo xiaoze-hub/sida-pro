@@ -45,6 +45,11 @@ def propose(db: Session, *, user_id: Any, kind: str, payload: dict, run_id: str 
         raise ActionError(f"不支持的动作类型：{kind}")
     if not payload:
         raise ActionError("动作内容为空")
+    if kind == "annotation":
+        # 复审阻断 ②（2026-10-28）：标的类型不可证（000xxx 整段 / 纯指数前缀）的标注
+        # 在确认端**必然**被拒绝（`_apply_annotation`）—— 在这里就拦住，不制造
+        # 「点了确认也画不上去」的 pending。参数不全仍不拦（既有契约：由 apply 校验）。
+        _guard_annotation_target(payload.get("symbol"))
     # P1-1.3: 提议时就把"会改什么"算出来给用户看。diff 算失败不能拦住提议
     # （有些动作类型没有 diff），但要在结果里如实为空，不能编。
     # ⚠️ 2026-10-25 CI 拦下：这里**不能**把 ActionError 抛出去。
@@ -288,10 +293,20 @@ def propose_scenario_annotations(
       3. **按 (user_id, symbol, label) 去重**：同一档位只留一条 pending，价格变了就
          原地更新 payload，而不是每问一次就在待确认列表里堆一条。
 
+    第四条（2026-10-28 复审阻断 ②）：**标的类型不可证就不提议**。000xxx 整段与纯指数
+    前缀的标注在确认端必然被拒（表里没有 instrument 列），提议出来就是一条点了确认
+    也画不上去的 pending。返回 `[]`（与"矩阵不可用"同语义）。
+
     返回提议出的动作 dict（含 `dedup` 标记复用/新建）。
     """
     sym = str(symbol or "").strip()
     if not sym:
+        return []
+    # 复审阻断 ②：000xxx 整段 / 纯指数前缀的标注**永远无法确认**（确认端必拒），
+    # 所以这里一条 pending 都不提议 —— 连情景矩阵都不必算。
+    # 返回 [] 的语义是"这次没有可提议的关键位"，与"矩阵不可用"一致，调用方无需特殊处理。
+    if instrument_ambiguous(sym):
+        logger.info("关键位不提议 %s：标的类型不可证（000xxx/指数前缀），确认端必拒", sym)
         return []
     if matrix is None:
         try:
@@ -479,6 +494,33 @@ def market_matches_symbol(symbol: str, market: str) -> bool | None:
     if mk not in A_SHARE_MARKETS:
         return None  # HK/US 行不参与 A 股交易所推导
     return mk == exchange
+
+
+def _ambiguous_annotation_message(symbol: str) -> str:
+    """标的类型不可证时的**唯一**文案（提议端与确认端共用，不许两边各写一套）。"""
+    return (
+        f"标注目标 {symbol} 无法证明是指数还是个股：000xxx 整段与上证/中证指数系列同号，"
+        "标注行不记录标的类型，前端默认不上图。本次未落库 —— "
+        "请改用不含指数同号段的代码（600xxx/002xxx/300xxx/830xxx 等）。"
+    )
+
+
+def _guard_annotation_target(raw_symbol: Any) -> None:
+    """标注目标必须**能证明标的类型**，证明不了就在写库前拒绝。
+
+    复审阻断 ②（2026-10-28）：确认端（`_apply_annotation`）早就拒绝 000xxx 整段，
+    但提议端照旧落 pending —— 用户在「待确认动作」里看到一条点了确认必然 400 的动作，
+    既是死数据也是误导。所以两端走同一把闸：
+
+      - `propose()` / `propose_scenario_annotations()`：提议阶段直接拒绝（不产生 pending）；
+      - `_apply_annotation()`：确认阶段兜底（防历史 pending / 绕过工具直接写库）。
+
+    空/缺失 symbol **不**在这里拦：提议阶段允许参数不全（既有契约，由 apply 校验）。
+    """
+    symbol = str(raw_symbol or "").strip()
+    if symbol and instrument_ambiguous(symbol):
+        raise ActionError(_ambiguous_annotation_message(symbol))
+
 
 #: URL 风格的周期写法（frontend/src/lib/kline-period.ts 的 `?period=`）→ 图表周期
 _PERIOD_ALIASES: dict[str, str] = {
@@ -691,12 +733,8 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
     # 2026-10-28 二轮复审：指数/个股同号（000xxx 整段）的标注行**无法证明标的类型**
     # （表里没有 instrument 列），读取端与前端都默认拒画 ⇒ 这里也默认拒绝落库。
     # 不这样做就是「确认成功、图上永远没有线」的死数据 —— 和 ts-only 同一条原则。
-    if instrument_ambiguous(symbol):
-        raise ActionError(
-            f"标注目标 {symbol} 无法证明是指数还是个股：000xxx 整段与上证/中证指数系列同号，"
-            "标注行不记录标的类型，前端默认不上图。本次未落库 —— "
-            "请改用不含指数同号段的代码（600xxx/002xxx/300xxx/830xxx 等）。"
-        )
+    # 同一把闸也拦在提议端（`_guard_annotation_target`），历史 pending 在这里兜底。
+    _guard_annotation_target(symbol)
     period = _normalize_period(payload.get("period"))
     market = _normalize_market(payload.get("market"))
     if market_matches_symbol(symbol, market) is False:
@@ -1013,11 +1051,14 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
     if row.status != "applied":
         raise ActionError(f"只有 applied 的动作能回滚，当前是 {row.status}")
     if row.kind not in ROLLBACKABLE_KINDS:
-        # 说清楚"这一类动作本来就不能撤回"，而不是拿"没有快照/早于 v0.73"糊弄用户
-        # （标注确认后线已经在图上，服务端还没有撤销入口）。
+        # 说清楚"这一类动作本来就不能撤回"，而不是拿"没有快照/早于 v0.73"糊弄用户。
+        # 2026-10-28 复审阻断 ④：旧文案让用户"在图上删除那条标注" —— 图上**没有**删除入口，
+        # 服务端也没有撤销/删除图注的接口（`undoSupported=false`）。指一条不存在的路
+        # 比直接说"撤不回去"更糟，所以这里只陈述事实，不给不存在的操作指引。
         raise ActionError(
             f"{_KIND_NAMES.get(row.kind, row.kind)}动作不支持回滚"
-            "（标注确认后已上图，如需撤下请在图上删除那条标注）"
+            "（标注确认后线已经在图上；服务端没有撤销/删除图注的接口，前端也没有删除入口，"
+            "这条线目前无法撤下）"
         )
     snapshot = json.loads(row.before_snapshot or "{}")
     if not snapshot:

@@ -54,6 +54,7 @@ import { DARK_POOL_CONFIDENCE, darkPoolBarPoint, darkPoolCombo, type DarkPoolPoi
 import {
   KIND_ICON,
   KIND_LABEL,
+  mergePriceLines,
   normalizeKlineEvents,
   normalizePriceLines,
   type KlineEventKind,
@@ -249,7 +250,6 @@ const SUBCHART_OPTS = [
 const EMPTY_GS: GsSignalPoint[] = []
 const EMPTY_FUND: FundFlowBar[] = []
 const EMPTY_EVENTS: KlineEventPoint[] = []
-const EMPTY_LINES: KlinePriceLine[] = []
 const EMPTY_ACTIVITY: ActivityPoint[] = []
 const EMPTY_PATTERNS: PatternMark[] = []
 const EMPTY_NOTES: ChartNote[] = []
@@ -1312,7 +1312,19 @@ export default function KlineChart(props: {
   const effGsSignals = props.gsSignals ?? layer?.gsSignals ?? EMPTY_GS
   const effFundFlow = props.fundFlow ?? layer?.fundFlow ?? EMPTY_FUND
   const effEvents = props.events ?? layer?.events ?? EMPTY_EVENTS
-  const effPriceLines = props.supportPressure ?? layer?.priceLines ?? EMPTY_LINES
+  /**
+   * 价位线是**合并**而不是"父接管"(2026-10-28 复审阻断 ③):
+   * `supportPressure` 传的是页面接线的服务端标注(`lib/copilot/annotationLink`), 而图表自己
+   * 还会从 `/klines/{symbol}/summary` 取 `unlock_levels`(筹码套牢/支撑压力)。旧写法
+   * `props.supportPressure ?? layer?.priceLines` 一旦父传了(哪怕空数组)就把图层线整批丢掉
+   * —— 参谋标注一上图, 筹码支撑压力全消失; 同价位还会画两条重合虚线。
+   * 现在: 父传(已确认标注)优先, 图层只补它没有的 (方向, 2 位小数价位), 见 `mergePriceLines`。
+   * 父未传时原样返回图层数组(同引用), 不改变未接入标注的页面行为。
+   */
+  const effPriceLines = useMemo(
+    () => mergePriceLines(props.supportPressure, layer?.priceLines),
+    [props.supportPressure, layer?.priceLines],
+  )
   const effActivitySeries = props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY
   const effPatterns = props.patterns ?? patternMarks ?? EMPTY_PATTERNS
   // 威科夫量价结构(本土三层滤网 P1): 父传优先 → 自取 → 稳定空数组(与 patterns 同策略)

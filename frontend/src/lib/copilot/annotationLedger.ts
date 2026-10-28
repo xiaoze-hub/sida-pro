@@ -237,6 +237,10 @@ class AnnotationLedgerImpl {
   /** 确认成功且目标就是当前视图：用合并后的线替换快照。 */
   replaceLines(target: AnnotationTarget, lines: ServerAnnotationLine[], message: string) {
     const key = targetKey(target)
+    // 已确认的行一定比「此前发出的任何一次读取」都新：把序号推进一格，
+    // 让那些还在路上的旧读取回来时被 {@link commit} 丢弃 —— 否则一个早于 apply
+    // 发出的读取会把刚确认的线整批覆盖掉（图上闪一下又消失）。
+    this.seq.set(key, (this.seq.get(key) ?? 0) + 1)
     this.write(key, { ...readySnapshot(key, lines, message), notice: message })
   }
 

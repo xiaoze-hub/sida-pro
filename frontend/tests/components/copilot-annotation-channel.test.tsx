@@ -36,6 +36,8 @@ const H = vi.hoisted(() => ({
   removed: [] as unknown[],
   /** `/copilot/annotations` 的响应：函数可返回 Promise（做竞态用） */
   annotations: (() => Promise.resolve([])) as (url: string) => Promise<unknown>,
+  /** `/klines/{symbol}/summary` 的响应（图表自取的图层数据，如 unlock_levels） */
+  summary: (() => ({})) as () => Record<string, unknown>,
 }))
 
 vi.mock('@sida/api', () => ({
@@ -46,7 +48,7 @@ vi.mock('@sida/api', () => ({
     H.calls.push(u)
     if (u.startsWith('/copilot/annotations')) return H.annotations(u)
     if (u.includes('/klines/')) {
-      if (u.includes('/summary')) return Promise.resolve({})
+      if (u.includes('/summary')) return Promise.resolve(H.summary())
       return Promise.resolve({
         klines: [
           { date: '2026-03-05', open: 32, high: 33, low: 31, close: 32.93, volume: 1000 },
@@ -108,6 +110,7 @@ vi.mock('lightweight-charts', async () => {
 })
 
 import KlineChart from '@sida/biz-ui/components/KlineChart'
+import { AnnotationLinkBar } from '@/components/copilot/AnnotationLinkBar'
 import {
   AnnotationLedger,
   currentAccountId,
@@ -237,6 +240,7 @@ beforeEach(() => {
   H.live.clear()
   H.removed.length = 0
   H.annotations = () => Promise.resolve([])
+  H.summary = () => ({})
 })
 
 afterEach(() => {
@@ -629,6 +633,214 @@ describe('读取 URL 与账本', () => {
     render(<Harness />)
     await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('error'))
     expect(screen.getByTestId('message').textContent).toContain('读取服务端标注失败')
+    expect(noteLines()).toHaveLength(0)
+  })
+})
+
+// ── ⑤ 确认写进「当前视图键」（页面 CN / 服务端 SH），notice 同源 ────────────────
+//
+// 复审阻断：`linkConfirmedAnnotation` 用**服务端落库市场**（SH）建目标，然后拿它当账本键
+// 写入 —— 页面订阅的是 `?market=CN` 的键，于是「确认成功」既不上图也没有任何提示，
+// 服务端键里却多了一条界面永远读不到的线。账本键必须是**页面当前视图**。
+describe('⑤ 确认写入视图键（CN 页面 / SH 落库）', () => {
+  /** apply 响应：落库明细是交易所市场（SH）—— 提议里写的就是交易所。 */
+  function appliedSh(overrides: Record<string, unknown> = {}) {
+    return applied({
+      annotation: {
+        id: 91,
+        symbol: '600519',
+        market: 'SH',
+        period: '1d',
+        price: 1680.5,
+        ts: null,
+        label: '支撑位',
+        color: 'up',
+        source: 'ai',
+      },
+      payload: { symbol: '600519', market: 'SH', label: '支撑位', price: 1680.5 },
+      ...overrides,
+    })
+  }
+
+  it('SH 落库 + CN 页面：线画进 CN 视图键并上图，notice 也能被页面读到', async () => {
+    H.annotations = () =>
+      Promise.resolve([row({ symbol: '600519', market: 'SH', price: 1680.5 })])
+    render(<Harness symbol="600519" market="CN" />)
+    await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('ready'))
+    H.calls.length = 0
+
+    const snap = await linkConfirmedAnnotation(appliedSh())
+
+    // 精确回读仍按服务端市场（SH）发起 —— 视图键只用于落账本，不改请求语义
+    expect(annotationCalls().at(-1) ?? '').toContain('market=SH')
+    // 账本：当前视图键（CN）拿到这条线；服务端键（SH）不该被写成"可画"
+    expect(AnnotationLedger.snapshot(target({ symbol: '600519', market: 'CN' })).annotationIds).toEqual([91])
+    expect(AnnotationLedger.snapshot(target({ symbol: '600519', market: 'SH' })).annotationIds).toEqual([])
+    // notice 与线同源：都挂在视图键上，页面状态条读得到
+    expect(snap?.notice ?? '').toContain('已确认并上图')
+    expect(snap?.key).toBe(target({ symbol: '600519', market: 'CN' }).owner + '|stock|600519|CN|1d')
+    expect(screen.getByTestId('notice').textContent).toContain('已确认并上图')
+    await waitFor(() => expect(noteLines()).toHaveLength(1))
+    expect(labels()).toEqual(['支撑位@1680.5'])
+    // 页面自己那条 CN 行还在（没有被"服务端键的快照"覆盖丢掉）
+    expect(AnnotationLedger.snapshot(target({ symbol: '600519', market: 'CN' })).lines).toHaveLength(1)
+  })
+
+  it('视图里已有一条同标的的线时，确认新的一条是**合并**而不是替换', async () => {
+    H.annotations = (url) =>
+      Promise.resolve(
+        url.includes('ids=')
+          ? [row({ id: 91, symbol: '600519', market: 'SH', price: 1680.5 })]
+          : [row({ id: 90, symbol: '600519', market: 'CN', price: 1600, label: '阻力位', color: 'down' })],
+      )
+    render(<Harness symbol="600519" market="CN" />)
+    await waitFor(() => expect(noteLines()).toHaveLength(1))
+    expect(labels()).toEqual(['阻力位@1600'])
+
+    await linkConfirmedAnnotation(appliedSh())
+
+    await waitFor(() => expect(noteLines()).toHaveLength(2))
+    expect(labels()).toEqual(['阻力位@1600', '支撑位@1680.5'])
+    expect(
+      AnnotationLedger.snapshot(target({ symbol: '600519', market: 'CN' })).annotationIds,
+    ).toEqual([90, 91])
+  })
+
+  it('确认过程中切到别的标的：不把线写进旧视图键，当前视图明说"未上图"', async () => {
+    H.annotations = (url) => {
+      if (url.includes('ids=')) {
+        return new Promise((resolve) => setTimeout(() => resolve([row({
+          id: 91, symbol: '600519', market: 'SH', price: 1680.5,
+        })]), 30))
+      }
+      return Promise.resolve([])
+    }
+    const view = render(<Harness symbol="600519" market="CN" />)
+    await waitFor(() => expect(screen.getByTestId('phase').textContent).not.toBe('loading'))
+
+    const pending = linkConfirmedAnnotation(appliedSh())
+    view.rerender(<Harness symbol="002636" />)
+    await pending
+
+    expect(noteLines()).toHaveLength(0)
+    expect(
+      AnnotationLedger.snapshot(target({ symbol: '600519', market: 'CN' })).lines,
+    ).toHaveLength(0)
+    expect(
+      AnnotationLedger.snapshot(target({ symbol: '002636', market: 'CN' })).lines,
+    ).toHaveLength(0)
+    expect(screen.getByTestId('notice').textContent).toContain('未在当前图上显示')
+    expect(screen.getByTestId('notice').textContent).toContain('600519')
+  })
+
+  it('确认后切账号：视图键带账号，另一个账号读不到这条线', async () => {
+    H.annotations = () => Promise.resolve([row({ symbol: '600519', market: 'SH', price: 1680.5 })])
+    const view = render(<Harness symbol="600519" market="CN" />)
+    await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('ready'))
+    await linkConfirmedAnnotation(appliedSh())
+    await waitFor(() => expect(noteLines()).toHaveLength(1))
+
+    localStorage.setItem('token', token('user-B'))
+    view.rerender(<Harness symbol="600519" market="CN" />)
+    await waitFor(() => expect(noteLines()).toHaveLength(0))
+  })
+
+  it('确认后才回来的旧读取不会把刚确认的线覆盖掉', async () => {
+    let resolveRead: (v: unknown) => void = () => {}
+    let firstRead = true
+    H.annotations = (url) => {
+      if (url.includes('ids=')) {
+        return Promise.resolve([row({ symbol: '600519', market: 'SH', price: 1680.5 })])
+      }
+      // 首次"页面读取"挂起：它早于 apply 发出，看不清刚确认的那一行
+      if (firstRead) {
+        firstRead = false
+        return new Promise((resolve) => {
+          resolveRead = resolve
+        })
+      }
+      return Promise.resolve([])
+    }
+
+    render(<Harness symbol="600519" market="CN" />)
+    await linkConfirmedAnnotation(appliedSh())
+    await waitFor(() => expect(noteLines()).toHaveLength(1))
+
+    resolveRead([]) // 旧读取迟到（不含新确认的行）
+    await new Promise((r) => setTimeout(r, 40))
+    expect(noteLines()).toHaveLength(1)
+    expect(
+      AnnotationLedger.snapshot(target({ symbol: '600519', market: 'CN' })).annotationIds,
+    ).toEqual([91])
+  })
+
+  it('真实状态条：确认后旧价线被替换、金额/标题不被误读，且明确写出"撤销不可用"', async () => {
+    H.annotations = () => Promise.resolve([row({ symbol: '600519', market: 'SH', price: 1680.5 })])
+    render(<Harness symbol="600519" market="CN" />)
+    await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('ready'))
+
+    const snap = await linkConfirmedAnnotation(appliedSh())
+    expect(snap).not.toBeNull()
+
+    cleanup()
+    render(<AnnotationLinkBar snapshot={snap!} />)
+    // 状态条读的就是**当前视图键**的快照：条数与服务端标注 id 一致
+    expect(screen.getByTestId('copilot-annotation-ids').textContent).toContain('#91')
+    expect(screen.getByTestId('copilot-annotation-action-ids').textContent).toContain('#7')
+    expect(screen.getAllByTestId('copilot-annotation-line')).toHaveLength(1)
+    // notice（"已确认并上图" + 市场写法说明）+ 撤销不可用都如实写在这里
+    const notice = screen.getByTestId('copilot-annotation-notice').textContent ?? ''
+    expect(notice).toContain('已确认并上图')
+    expect(notice).toContain('落库市场 SH')
+    expect(screen.getByTestId('copilot-annotation-undo-note').textContent).toContain('撤销不可用')
+  })
+})
+
+// ── ⑥ 图表把「已确认标注」与自带图层（unlock_levels）合并，不互相覆盖 ─────────
+//
+// 复审阻断：`supportPressure` 一传（哪怕传空数组），图表就把自己从
+// `/klines/{symbol}/summary` 取到的 `unlock_levels`（筹码套牢/支撑压力）丢掉 ——
+// 页面上挂了参谋标注，图层的支撑压力线就整批消失；同一个价位还会画两条重合虚线。
+describe('⑥ 图表价位线合并（confirmed annotations + unlock_levels）', () => {
+  const chipLines = () => [...H.live.values()].filter((l) => String(l.title).startsWith('筹码'))
+
+  it('参谋标注与图层价线同时上图；同价位同向只画一条（标注文案优先）', async () => {
+    H.summary = () => ({
+      unlock_levels: [
+        { price: 32.8, kind: 'support', label: '筹码支撑 32.8' },
+        { price: 36.5, kind: 'pressure', label: '筹码压力 36.5' },
+        { price: 40.0, kind: 'pressure', label: '筹码压力 40.0' },
+      ],
+    })
+    H.annotations = () =>
+      Promise.resolve([
+        row({ id: 91, label: '支撑位', price: 32.8 }),
+        row({ id: 92, label: '阻力位', price: 36.5, color: 'down' }),
+      ])
+
+    render(<Harness />)
+    // 图表自取 summary 的图层线 + 页面接线画的标注线都在
+    await waitFor(() => expect(noteLines()).toHaveLength(2), { timeout: 3000 })
+    await waitFor(() => expect(chipLines()).toHaveLength(1), { timeout: 3000 })
+
+    expect(labels()).toEqual(['支撑位@32.8', '阻力位@36.5'])
+    // 32.8/36.5 被标注占用（同价同向去重，标注文案优先），40 只来自图层
+    expect(chipLines().map((l) => `${String(l.title)}@${String(l.price)}`)).toEqual([
+      '筹码压力 40.0@40',
+    ])
+  })
+
+  it('没有参谋标注时，图层价线照旧全画（空数组不等于"接管"）', async () => {
+    H.summary = () => ({
+      unlock_levels: [
+        { price: 32.8, kind: 'support', label: '筹码支撑 32.8' },
+        { price: 36.5, kind: 'pressure', label: '筹码压力 36.5' },
+      ],
+    })
+    H.annotations = () => Promise.resolve([])
+
+    render(<Harness />)
+    await waitFor(() => expect(chipLines()).toHaveLength(2), { timeout: 3000 })
     expect(noteLines()).toHaveLength(0)
   })
 })
