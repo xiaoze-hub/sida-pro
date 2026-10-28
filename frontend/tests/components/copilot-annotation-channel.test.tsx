@@ -508,11 +508,66 @@ describe('④ 精确身份与目标（不用 label+price 猜）', () => {
     expect(noteLines()).toHaveLength(0)
   })
 
-  it('市场不符（行是 SH，当前 CN 严格模式）→ 不画', async () => {
-    H.annotations = () => Promise.resolve([row({ market: 'SH' })])
-    render(<Harness market="CN" />)
+  // 2026-10-28 复审驳回 ①（更新旧断言：字符串相等 → **可证明的同一标的**）：
+  // 旧用例断言「行是 SH、页面 CN ⇒ 一律不画」，那正是"确认成功但图上没有线"的根因。
+  // 现在 600519 由代码可证明属于 SH，CN 页与 SH 行是同一只股票 ⇒ 必须画；
+  // 而可证明矛盾（600519 + SZ）仍然拒画。两边都要钉住，安全不能靠"放宽"换来。
+  it('市场按可证映射：600519 的 SH 行在 CN 页正常上图（放宽的是能证明的交易所，不是严格模式）', async () => {
+    H.annotations = () =>
+      Promise.resolve([row({ symbol: '600519', market: 'SH', price: 1680.5 })])
+
+    render(<Harness symbol="600519" market="CN" />)
+
+    await waitFor(() => expect(noteLines()).toHaveLength(1), { timeout: 3000 })
+    expect(screen.getByTestId('phase').textContent).toBe('ready')
+    expect(labels()).toEqual(['支撑位@1680.5'])
+    // 读取仍是严格模式：market_strict=1 照发（服务端按可证市场集合过滤）
+    expect(annotationCalls()[0]).toContain('market=CN')
+    expect(annotationCalls()[0]).toContain('market_strict=1')
+  })
+
+  it('反方向同样可证：SH 页读 CN 行也上图（同一只股票，不是"CN 特权"）', async () => {
+    H.annotations = () =>
+      Promise.resolve([row({ symbol: '600519', market: 'CN', price: 1680.5 })])
+
+    render(<Harness symbol="600519" market="SH" />)
+
+    await waitFor(() => expect(noteLines()).toHaveLength(1), { timeout: 3000 })
+    expect(labels()).toEqual(['支撑位@1680.5'])
+    expect(annotationCalls()[0]).toContain('market=SH')
+  })
+
+  it('可证明矛盾的市场（600519 属 SH，行写 SZ）→ 拒画并说明"无法证明是同一只标的"', async () => {
+    H.annotations = () =>
+      Promise.resolve([row({ symbol: '600519', market: 'SZ', price: 1680.5 })])
+
+    render(<Harness symbol="600519" market="CN" />)
+
     await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('refused'))
-    expect(screen.getByTestId('message').textContent).toContain('不一致')
+    expect(screen.getByTestId('message').textContent).toContain('无法证明是同一只标的')
+    expect(noteLines()).toHaveLength(0)
+  })
+
+  it('SH 页遇到 600519 的 SZ 行同样拒画（矛盾在任一方向都不画）', async () => {
+    H.annotations = () =>
+      Promise.resolve([row({ symbol: '600519', market: 'SZ', price: 1680.5 })])
+
+    render(<Harness symbol="600519" market="SH" />)
+
+    await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('refused'))
+    expect(screen.getByTestId('message').textContent).toContain('无法证明是同一只标的')
+    expect(noteLines()).toHaveLength(0)
+  })
+
+  it('000001 同号代码的歧义不会被市场映射救活：行是 SH 也拒画，且不发请求', async () => {
+    H.annotations = () =>
+      Promise.resolve([row({ symbol: '000001', market: 'SH', price: 3200 })])
+
+    render(<Harness symbol="000001" market="CN" />)
+
+    await waitFor(() => expect(screen.getByTestId('phase').textContent).toBe('refused'))
+    expect(screen.getByTestId('message').textContent).toContain('标的类型')
+    expect(annotationCalls()).toHaveLength(0) // 目标级拒绝，连请求都不发
     expect(noteLines()).toHaveLength(0)
   })
 
