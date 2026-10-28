@@ -49,8 +49,8 @@ export interface AnchoredPrice {
  *
  * ⚠️ 2026-10-28 P2：这是**文本识别**，不是核验过的图表标注 —— 价格是模型写的字，没有
  * 服务端标的/时间/来源关联，也没有用户确认。因此结果只用于「看得见的文字展示」，
- * **不得**再喂给画线服务（`ChartOverlayService.saveOverlay` 现在要求服务端凭证，
- * 没有凭证会拒绝；见下方罗盘后的来源提示）。
+ * **不得**再喂给画线服务：`ChartOverlayService` 在服务端标注读取接通前恒拒画
+ * （本地对象/sessionStorage 都可伪造，不能当凭证），见下方来源提示。
  */
 function extractTextLevels(parsed: ParsedAnswer): {
   supportPrice: number | null
@@ -299,7 +299,7 @@ export function AnswerCard({
           data-testid="copilot-level-provenance-note"
           className="card-surface rounded-lg bg-s1 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground"
         >
-          以上支撑/阻力来自回答正文的文本识别，未经服务端核验，未画到 K 线上。如需图上标注，请在「待确认动作」确认服务端提议后再标注。
+          以上支撑/阻力来自回答正文的文本识别，未经服务端核验，未画到 K 线上。服务端标注通道尚未接通：现在确认服务端提议后，价位暂也不会自动上图。
         </div>
       ) : null}
 

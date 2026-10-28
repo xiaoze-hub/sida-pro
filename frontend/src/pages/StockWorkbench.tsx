@@ -18,7 +18,10 @@ import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
 import type { KlinePriceLine } from '@sida/biz-ui/klineEvents'
-import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
+import {
+  ChartOverlayService,
+  SERVER_ANNOTATION_LINK_READY,
+} from '@/lib/copilot/chartOverlayService'
 import { reportViewOnce } from '@/lib/copilot/viewstate'
 import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
@@ -373,13 +376,23 @@ export default function StockWorkbench() {
    * 参谋结论/决策罗盘价位线叠加(2026-10-28 数智参谋联动):
    * 首次挂载从 sessionStorage 读取持久化画线，同时监听 live 事件，
    * 确保跨页面跳转（从 /ai-copilot 进入工作台）或抽屉联动时均能把支撑/阻力画线叠加到 K 线主图。
+   *
+   * 2026-10-28 P2 二次收口：`SERVER_ANNOTATION_LINK_READY === false` 期间不读取、不响应
+   * 任何本地画线数据 —— sessionStorage 与 `sida-kline-overlay` 事件的 detail 都可被任意构造，
+   * 没有服务端标注接口可对照时上图等于把伪造数字当"已核验标注"。通道接通后改由
+   * `/copilot/annotations` 响应驱动。
    */
   const [copilotPriceLines, setCopilotPriceLines] = useState<KlinePriceLine[] | undefined>(() => {
+    if (!SERVER_ANNOTATION_LINK_READY) return undefined
     if (typeof window === 'undefined' || !symbol) return undefined
     return (ChartOverlayService.getStoredOverlay(symbol) as KlinePriceLine[]) ?? undefined
   })
 
   useEffect(() => {
+    if (!SERVER_ANNOTATION_LINK_READY) {
+      setCopilotPriceLines(undefined)
+      return
+    }
     if (symbol) {
       const stored = ChartOverlayService.getStoredOverlay(symbol)
       setCopilotPriceLines((stored as KlinePriceLine[]) ?? undefined)

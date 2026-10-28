@@ -107,6 +107,8 @@ vi.mock('@sida/biz-ui/components/KlineChart', () => ({
     /** §12: 数据源健康裁决(页面必须把 useSourceHealth 的 isReady/reasonOf 接进来) */
     sourceReady?: (icon: string) => boolean
     sourceReason?: (icon: string) => string
+    /** 参谋/罗盘价位线(服务端标注通道接通后才会有值; 观测点逐条回显) */
+    supportPressure?: Array<{ kind: string; price: number; label: string }>
   }) => (
     <div
       data-testid="kline"
@@ -730,10 +732,11 @@ describe('StockWorkbench 三带骨架', () => {
     expect(mocks.portfolioSummary).not.toHaveBeenCalled()
   })
 
-  it('参谋画线叠加: 接收到 sida-kline-overlay 事件后在 K 线主图真实透传两条支撑阻力线', async () => {
+  it('参谋画线叠加: 通道未接通时, 合成的 sida-kline-overlay 事件也不会上 K 线', async () => {
     renderAt('/stocks/002636')
     await waitFor(() => expect(screen.getByTestId('kline')).toBeTruthy())
 
+    // 事件 detail 是本地对象, 与 sessionStorage 一样可伪造; 服务端标注未接通前不得上图
     window.dispatchEvent(
       new CustomEvent('sida-kline-overlay', {
         detail: {
@@ -746,29 +749,23 @@ describe('StockWorkbench 三带骨架', () => {
       }),
     )
 
-    await waitFor(() => {
-      const kline = screen.getByTestId('kline')
-      expect(kline.getAttribute('data-support-pressure')).toBe(
-        'support:32.8:支撑 32.8;pressure:36.5:阻力 36.5',
-      )
-    })
+    await new Promise((r) => setTimeout(r, 0))
+    const kline = screen.getByTestId('kline')
+    expect(kline.getAttribute('data-support-pressure') ?? '').toBe('')
   })
 
-  it('跨页面画线持久化: 带服务端确认凭证存储的画线在切入工作台时真实恢复', async () => {
+  it('跨页面画线持久化: 伪造"已确认"凭证也写不进存储, 工作台无画线', async () => {
     const { ChartOverlayService } = await import('@/lib/copilot/chartOverlayService')
-    // 2026-10-28 P2：画线只认 apply 成功的服务端动作凭证（散文价位不再能写进去）
-    ChartOverlayService.saveOverlay('002636', [
+    const result = ChartOverlayService.saveOverlay('002636', [
       { price: 15.2, title: '支撑 15.2', kind: 'support' },
       { price: 18.6, title: '阻力 18.6', kind: 'pressure' },
     ], { source: 'server_annotation', actionId: 21, status: 'applied', symbol: '002636' })
+    expect(result).toMatchObject({ saved: false, reason: 'server_link_unavailable' })
 
     renderAt('/stocks/002636')
-    await waitFor(() => {
-      const kline = screen.getByTestId('kline')
-      expect(kline.getAttribute('data-support-pressure')).toBe(
-        'support:15.2:支撑 15.2;pressure:18.6:阻力 18.6',
-      )
-    })
+    await waitFor(() => expect(screen.getByTestId('kline')).toBeTruthy())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.getByTestId('kline').getAttribute('data-support-pressure') ?? '').toBe('')
 
     ChartOverlayService.clearOverlay('002636')
   })

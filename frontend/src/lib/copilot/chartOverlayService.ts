@@ -1,22 +1,24 @@
 /**
  * 参谋结论与 TradingView / Lightweight Charts 图元同步画线服务
  *
- * ## 2026-10-28 P2：画线必须带「服务端来源凭证」
+ * ## 2026-10-28 P2（二次收口）：服务端标注链路未接通前，本地凭证一律不可信
  *
- * 之前这里只认 `symbol + 价位数组`，于是 `AnswerCard` 用正则从回答**散文**里提价，
- * 直接落 sessionStorage，个股工作台再读出来画成真 K 线 —— 等于把模型随手写的数字
- * 冒充「已核验图表标注」，而用户从没确认过任何东西。
+ * 上一版止血要求调用方传 `{source:'server_annotation', actionId, status:'applied', symbol}`
+ * 才允许画线，但那只是一个**普通 JS 对象**：客户端代码、控制台、扩展脚本都能原地构造，
+ * 它不携带任何服务端签名、不绑定价格、也不对应 `CopilotAction` 表里的真实记录。
+ * 后端虽然已有 `GET /copilot/annotations`（本人+全局），但**前端从未调用它**，
+ * 也没有任何服务端校验会核对这份客户端声明 —— 所以把它当"可信凭证"本身就是假的核验。
  *
- * 服务端的真实链路是：
+ * 本次收口：引入唯一开关 {@link SERVER_ANNOTATION_LINK_READY}，在真实服务端标注读取
+ * （JWT 作用域内 `GET /copilot/annotations`）接通之前恒为 `false`：
  *
- *     pipeline.propose_levels → propose_scenario_annotations()   （只写 pending 提议）
- *       → GET  /copilot/actions            （本人 pending 列表）
- *       → POST /copilot/actions/{id}/apply （用户点确认 → 写 KlineAnnotation）
- *       → GET  /copilot/annotations        （本人 + 全局标注，图表按 symbol/period 取）
+ *   - `saveOverlay` 无论收到什么 provenance（含完全伪造的"合法"对象）都拒画，
+ *     不写 sessionStorage、不广播事件；
+ *   - `getStoredOverlay` 不再读取会话存储 —— 伪造的 source/actionId 行无法"恢复"上图；
+ *   - `injectDecisionLevels` 同样拒绝，本地调用方拿不到图元级旁路。
  *
- * 所以前端画线只认最后一步的产物：**apply 成功后带上 actionId / status=applied / 标的**
- * 的凭证。没有凭证一律拒画（`unverified_source`），既不写存储也不广播事件 ——
- * 宁可图上少两条线，也不能让用户以为那是核验过的关键位。
+ * 接通那条链路时唯一合法的数据来源是**服务端响应**（按本人+全局、symbol/period 过滤），
+ * 不得再把调用方声明当凭证。
  */
 
 import { safeJwtPayload } from '@/lib/jwt'
@@ -33,34 +35,43 @@ export interface KlinePriceLinePayload {
   price: number
   kind: 'support' | 'pressure'
   label: string
-  /** 来源标记：只有服务端确认过的标注才会出现在存储里 */
+  /** 仅供未来服务端读回的数据打标；当前不会由本地写入产生 */
   source?: 'server_annotation'
-  /** 服务端 CopilotAction id（用户点过确认的那一条） */
+  /** 服务端 CopilotAction id（未来由服务端响应提供，本地值不可信） */
   actionId?: number
 }
 
-/** 唯一可信来源：服务端提议 + 用户确认（apply）成功。 */
+/**
+ * 服务端标注通道是否已接通（唯一事实来源）。
+ *
+ * `false` 时：本地对象与 sessionStorage **都不是**可信来源，任何声称"已确认"的
+ * payload 都会被拒。只有 `GET /copilot/annotations` 的真实读取接线完成、
+ * 并由服务端响应驱动画线后，才允许改为 `true`（届时 `saveOverlay` 的入参需换成
+ * 服务端记录，而不是调用方声明的对象）。
+ */
+export const SERVER_ANNOTATION_LINK_READY: boolean = false
+
+/** 历史常量：仅作标记名保留；当前没有任何本地数据能凭它获得信任。 */
 export const OVERLAY_PROVENANCE_SOURCE = 'server_annotation' as const
 
 /**
- * 画线凭证：证明这条线来自服务端动作，并且用户已经确认过。
+ * 调用方声明的来源描述 —— **不是凭证**。
  *
- * 由调用方（读 `/copilot/actions` → apply 返回体，或 `/copilot/annotations` 的已确认标注）
- * 构造；缺失、`status !== 'applied'`、`actionId` 非正整数、标的与画线标的不一致 → 拒画。
+ * 保留该类型只为兼容既有调用签名与日志；内容完全由客户端构造，不参与任何信任判断。
+ * 真实核验必须发生在服务端：客户端只能消费 `/copilot/annotations` 的响应。
  */
 export interface OverlayProvenance {
   source: typeof OVERLAY_PROVENANCE_SOURCE
   actionId: number
   status: 'applied'
-  /** 服务端记录的标的，必须与本次画线标的一致（跨股票隔离） */
+  /** 调用方声称的标的，同样不可信 */
   symbol: string
 }
 
 export type OverlayRejectReason =
   | 'no_symbol'
   | 'no_identity'
-  | 'unverified_source'
-  | 'symbol_mismatch'
+  | 'server_link_unavailable'
   | 'invalid_levels'
   | 'storage_unavailable'
 
@@ -78,10 +89,8 @@ export function overlayRejectMessage(reason: OverlayRejectReason): string {
       return '未画线：缺少股票代码。'
     case 'no_identity':
       return '未画线：请先登录（画线按账号隔离保存）。'
-    case 'unverified_source':
-      return '未画线：该价位来自回答正文的文本识别，未经服务端核验与确认，不能作为图表标注。'
-    case 'symbol_mismatch':
-      return '未画线：标注所属标的与当前图表不一致。'
+    case 'server_link_unavailable':
+      return '未画线：服务端标注通道尚未接通，本地凭证无法核验；确认服务端提议后，价位暂也不会自动画到 K 线上。'
     case 'invalid_levels':
       return '未画线：价位数据非法（需要正的有限价格与支撑/压力类型）。'
     case 'storage_unavailable':
@@ -109,17 +118,6 @@ function normSymbol(symbol: string | undefined | null): string {
   return typeof symbol === 'string' ? symbol.trim().toUpperCase() : ''
 }
 
-/** 凭证是否真的存在且已确认（任意一项不满足 → 不足以画线）。 */
-function provenanceIsVerified(
-  provenance: OverlayProvenance | null | undefined,
-): provenance is OverlayProvenance {
-  if (!provenance || typeof provenance !== 'object') return false
-  if (provenance.source !== OVERLAY_PROVENANCE_SOURCE) return false
-  if (provenance.status !== 'applied') return false
-  const id = provenance.actionId
-  return typeof id === 'number' && Number.isInteger(id) && id > 0
-}
-
 /**
  * 价位归一化：非正/非有限价格、未知 kind、空标题一律判非法（整批拒绝，不写半截）。
  */
@@ -143,19 +141,29 @@ function normalizeLevels(levels: PriceLevelOverlay[]): KlinePriceLinePayload[] |
   return out.length > 0 ? out : null
 }
 
+/** 通道未接通时的统一拒画结果（保存 / 绘制共用一处文案）。 */
+function linkUnavailable(): SaveOverlayResult {
+  return {
+    saved: false,
+    reason: 'server_link_unavailable',
+    message: overlayRejectMessage('server_link_unavailable'),
+  }
+}
+
 export class ChartOverlayService {
   private static linesMap: Map<string, any> = new Map()
 
   /**
-   * 把**服务端已确认**的价位线持久化到会话存储并广播全局事件。
+   * 把价位线持久化到会话存储并广播全局事件。
    *
-   * 没有 `provenance`（或凭证不完整 / 标的对不上）时**拒绝**：不写存储、不发事件，
-   * 只返回可展示的原因。这样散文提价永远到不了真 K 线。
+   * **当前恒拒**：服务端标注读取未接通，`provenance` 只是客户端声明，不构成凭证。
+   * 因此无论传入何种对象（含完全伪造的"已确认"payload）都不写存储、不发事件，
+   * 只返回可展示的原因，避免把本地数据冒充已核验图表标注。
    */
   public static saveOverlay(
     symbol: string | undefined,
     levels: PriceLevelOverlay[],
-    provenance?: OverlayProvenance | null,
+    _provenance?: OverlayProvenance | null,
   ): SaveOverlayResult {
     const sym = normSymbol(symbol)
     if (!sym) {
@@ -164,20 +172,13 @@ export class ChartOverlayService {
     if (!storageKey(sym)) {
       return { saved: false, reason: 'no_identity', message: overlayRejectMessage('no_identity') }
     }
-    if (!provenanceIsVerified(provenance)) {
-      return {
-        saved: false,
-        reason: 'unverified_source',
-        message: overlayRejectMessage('unverified_source'),
-      }
+    if (!SERVER_ANNOTATION_LINK_READY) {
+      // 显式忽略 _provenance：它不是凭证，任何"看起来合法"的字段都不改变结论。
+      return linkUnavailable()
     }
-    if (normSymbol(provenance.symbol) !== sym) {
-      return {
-        saved: false,
-        reason: 'symbol_mismatch',
-        message: overlayRejectMessage('symbol_mismatch'),
-      }
-    }
+
+    // 通道接通后才走这里：入参必须是服务端 `/copilot/annotations` 返回的记录，
+    // 不得由调用方声明。价位仍照常做合法性校验。
     const lines = normalizeLevels(levels)
     if (!lines) {
       return {
@@ -195,13 +196,8 @@ export class ChartOverlayService {
     }
 
     const key = storageKey(sym) as string
-    const tagged: KlinePriceLinePayload[] = lines.map((line) => ({
-      ...line,
-      source: OVERLAY_PROVENANCE_SOURCE,
-      actionId: provenance.actionId,
-    }))
     try {
-      sessionStorage.setItem(key, JSON.stringify(tagged))
+      sessionStorage.setItem(key, JSON.stringify(lines))
     } catch {
       return {
         saved: false,
@@ -213,14 +209,7 @@ export class ChartOverlayService {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('sida-kline-overlay', {
-          detail: {
-            symbol: sym,
-            lines: tagged,
-            provenance: {
-              source: provenance.source,
-              actionId: provenance.actionId,
-            },
-          },
+          detail: { symbol: sym, lines },
         }),
       )
     }
@@ -230,10 +219,11 @@ export class ChartOverlayService {
   /**
    * 从会话存储读取某标的的持久化画线。
    *
-   * 只还原**带来源标记**的线：历史上由散文正则写进去的无凭证数据（没有
-   * `source`/`actionId`）一律丢弃，避免旧的不安全数据继续上真图。
+   * 通道未接通时**恒返回 `null`**：会话存储里的内容（包括带 `source`/`actionId`
+   * 的伪造行）没有任何服务端校验可对照，一律不还原上图。
    */
   public static getStoredOverlay(symbol: string): KlinePriceLinePayload[] | null {
+    if (!SERVER_ANNOTATION_LINK_READY) return null
     const key = storageKey(symbol)
     if (!key || typeof sessionStorage === 'undefined') return null
     try {
@@ -241,24 +231,23 @@ export class ChartOverlayService {
       if (!raw) return null
       const parsed = JSON.parse(raw)
       if (!Array.isArray(parsed)) return null
-      const verifiedLines = parsed.filter((line): line is KlinePriceLinePayload => {
+      const lines = parsed.filter((line): line is KlinePriceLinePayload => {
         if (!line || typeof line !== 'object') return false
-        if (line.source !== OVERLAY_PROVENANCE_SOURCE) return false
-        const id = line.actionId
-        if (typeof id !== 'number' || !Number.isInteger(id) || id <= 0) return false
         if (typeof line.price !== 'number' || !Number.isFinite(line.price) || line.price <= 0) {
           return false
         }
         return line.kind === 'support' || line.kind === 'pressure'
       })
-      return verifiedLines.length > 0 ? verifiedLines : null
+      return lines.length > 0 ? lines : null
     } catch {
       return null
     }
   }
 
   /**
-   * 清除某标的的画线并广播清除事件
+   * 清除某标的的画线并广播清除事件。
+   *
+   * 存储键按账号隔离：登出（无 token）时不触碰任何账号的数据。
    */
   public static clearOverlay(symbol: string) {
     const key = storageKey(symbol)
@@ -294,35 +283,44 @@ export class ChartOverlayService {
   }
 
   /**
-   * 将**已确认**的价位线画到图表系列上。
+   * 将价位线画到图表系列上（图元级原语）。
    *
-   * 注意：这是图元级原语，不做来源校验 —— 调用方必须已经拿到
-   * `saveOverlay` 所需的同一份 `OverlayProvenance`。当前仓库里没有任何
-   * 路径会用散文价位调用它（见 AnswerCard 的"未核验"提示）。
+   * 通道未接通时**拒画**并清空既有线：这个方法过去没有任何来源校验，是绕过
+   * `saveOverlay` 直接把本地数字画上真 K 线的旁路。返回是否真的画了。
    */
-  public static injectDecisionLevels(series: any, levels: PriceLevelOverlay[]) {
+  public static injectDecisionLevels(
+    series: any,
+    levels: PriceLevelOverlay[],
+    _provenance?: OverlayProvenance | null,
+  ): boolean {
     if (!series || typeof series.createPriceLine !== 'function') {
-      return
+      return false
     }
 
     // 先清除已有的旧画线
     this.clearOverlays(series)
 
-    levels.forEach((lvl) => {
+    if (!SERVER_ANNOTATION_LINK_READY) return false
+
+    const lines = normalizeLevels(levels)
+    if (!lines) return false
+
+    lines.forEach((lvl) => {
       try {
         const priceLine = series.createPriceLine({
           price: lvl.price,
-          color: lvl.color ?? (lvl.kind === 'support' ? '#22c55e' : '#ef4444'),
+          color: lvl.kind === 'support' ? '#22c55e' : '#ef4444',
           lineWidth: 2,
-          lineStyle: lvl.lineStyle ?? 2,
+          lineStyle: 2,
           axisLabelVisible: true,
-          title: lvl.title,
+          title: lvl.label,
         })
-        this.linesMap.set(`${lvl.title}_${lvl.price}`, priceLine)
+        this.linesMap.set(`${lvl.label}_${lvl.price}`, priceLine)
       } catch {
         // 捕获可能已销毁的 series 引用
       }
     })
+    return true
   }
 
   public static clearOverlays(series: any) {

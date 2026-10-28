@@ -101,55 +101,46 @@ describe('MultiDimensionEvidencePanel 多维依据透视（如实反映事实，
 })
 
 describe('ChartOverlayService 真实图表画线验证与跨页面持久化', () => {
-  it('真实调用 series.createPriceLine 在图表系列上绘制支撑与阻力两条线', () => {
-    const createdLines: any[] = []
+  it('图元级旁路也拒画：通道未接通时不会调用 series.createPriceLine', () => {
     const mockSeries = {
-      createPriceLine: vi.fn((config) => {
-        createdLines.push(config)
-        return config
-      }),
+      createPriceLine: vi.fn((config) => config),
       removePriceLine: vi.fn(),
     }
 
-    ChartOverlayService.injectDecisionLevels(mockSeries, [
+    const drawn = ChartOverlayService.injectDecisionLevels(mockSeries, [
       { price: 32.8, title: '支撑 32.8', kind: 'support' },
       { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
-    ])
-
-    // 严密断言：K 线上确实调用了两次 createPriceLine，支撑与阻力两条线真实存在
-    expect(mockSeries.createPriceLine).toHaveBeenCalledTimes(2)
-    expect(createdLines[0]).toMatchObject({
-      price: 32.8,
-      title: '支撑 32.8',
-    })
-    expect(createdLines[1]).toMatchObject({
-      price: 36.5,
-      title: '阻力 36.5',
+    ], {
+      source: 'server_annotation',
+      actionId: 11,
+      status: 'applied',
+      symbol: '600111',
     })
 
-    // 测试清除画线
+    // 2026-10-28 P2 二次收口：本地对象不是凭证，图元级入口同样拒绝
+    expect(drawn).toBe(false)
+    expect(mockSeries.createPriceLine).not.toHaveBeenCalled()
+
+    // 清除画线仍是安全的幂等操作
     ChartOverlayService.clearOverlays(mockSeries)
-    expect(mockSeries.removePriceLine).toHaveBeenCalledTimes(2)
+    expect(mockSeries.removePriceLine).not.toHaveBeenCalled()
   })
 
-  it('跨页面画线持久化：带服务端确认凭证的 saveOverlay 写入会话存储且可跨生命周期还原', () => {
-    // 2026-10-28 P2：没有 apply 成功的动作凭证一律拒画（散文价位不得上真图）
-    const provenance = {
+  it('跨页面画线持久化：伪造凭证的 saveOverlay 不写会话存储、也无法还原', () => {
+    // 2026-10-28 P2 二次收口：服务端标注通道未接通 ⇒ 任何本地"已确认"对象都拒画
+    const forged = {
       source: 'server_annotation' as const,
       actionId: 11,
       status: 'applied' as const,
       symbol: '600111',
     }
-    expect(ChartOverlayService.saveOverlay('600111', [
+    const result = ChartOverlayService.saveOverlay('600111', [
       { price: 32.8, title: '支撑 32.8', kind: 'support' },
       { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
-    ], provenance).saved).toBe(true)
+    ], forged)
+    expect(result).toMatchObject({ saved: false, reason: 'server_link_unavailable' })
 
-    const stored = ChartOverlayService.getStoredOverlay('600111')
-    expect(stored).toEqual([
-      { price: 32.8, kind: 'support', label: '支撑 32.8', source: 'server_annotation', actionId: 11 },
-      { price: 36.5, kind: 'pressure', label: '阻力 36.5', source: 'server_annotation', actionId: 11 },
-    ])
+    expect(ChartOverlayService.getStoredOverlay('600111')).toBeNull()
 
     ChartOverlayService.clearOverlay('600111')
     expect(ChartOverlayService.getStoredOverlay('600111')).toBeNull()
