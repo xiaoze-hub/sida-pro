@@ -77,7 +77,7 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
         </div>
         <span className="text-[12px] font-mono text-role-watch flex items-center gap-1">
           <Crosshair className="w-3.5 h-3.5" />
-          多智能体加权裁决
+          多维依据综合裁决
         </span>
       </div>
 

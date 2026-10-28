@@ -18,6 +18,7 @@ import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
 import type { KlinePriceLine } from '@sida/biz-ui/klineEvents'
+import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 import { reportViewOnce } from '@/lib/copilot/viewstate'
 import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
@@ -370,16 +371,25 @@ export default function StockWorkbench() {
 
   /**
    * 参谋结论/决策罗盘价位线叠加(2026-10-28 数智参谋联动):
-   * 接收来自数智参谋罗盘与锚点点击派发的画线事件，将关键支撑/阻力画线叠加到 K 线主图。
+   * 首次挂载从 sessionStorage 读取持久化画线，同时监听 live 事件，
+   * 确保跨页面跳转（从 /ai-copilot 进入工作台）或抽屉联动时均能把支撑/阻力画线叠加到 K 线主图。
    */
-  const [copilotPriceLines, setCopilotPriceLines] = useState<KlinePriceLine[] | undefined>(undefined)
+  const [copilotPriceLines, setCopilotPriceLines] = useState<KlinePriceLine[] | undefined>(() => {
+    if (typeof window === 'undefined' || !symbol) return undefined
+    return (ChartOverlayService.getStoredOverlay(symbol) as KlinePriceLine[]) ?? undefined
+  })
 
   useEffect(() => {
+    if (symbol) {
+      const stored = ChartOverlayService.getStoredOverlay(symbol)
+      setCopilotPriceLines((stored as KlinePriceLine[]) ?? undefined)
+    }
+
     const handleOverlay = (e: Event) => {
       const detail = (e as CustomEvent<{ symbol?: string; lines: KlinePriceLine[] }>).detail
-      if (!detail?.lines) return
-      if (!detail.symbol || detail.symbol === symbol) {
-        setCopilotPriceLines(detail.lines)
+      if (!detail) return
+      if (!detail.symbol || detail.symbol.toUpperCase() === symbol.toUpperCase()) {
+        setCopilotPriceLines(detail.lines && detail.lines.length > 0 ? detail.lines : undefined)
       }
     }
     window.addEventListener('sida-kline-overlay', handleOverlay)

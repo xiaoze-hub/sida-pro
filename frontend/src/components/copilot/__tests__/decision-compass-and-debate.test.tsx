@@ -3,14 +3,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { DecisionCompassCard } from '@/components/copilot/DecisionCompassCard'
-import { MultiAgentDebatePanel } from '@/components/copilot/MultiAgentDebatePanel'
+import { MultiDimensionEvidencePanel } from '@/components/copilot/MultiAgentDebatePanel'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
+import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  sessionStorage.clear()
+})
 
 describe('DecisionCompassCard 决策罗盘', () => {
-  it('纯真实数据驱动：支持支撑位与阻力位渲染，无持仓成本时不显示假成本与盈亏', () => {
+  it('纯真实数据驱动：支持支撑位与阻力位渲染，标注多维依据综合裁决，无持仓时不显示假成本与盈亏', () => {
     const onDraw = vi.fn()
     render(
       <DecisionCompassCard
@@ -24,6 +28,8 @@ describe('DecisionCompassCard 决策罗盘', () => {
 
     expect(screen.getByTestId('copilot-decision-compass')).toBeTruthy()
     expect(screen.getByText('看多偏强')).toBeTruthy()
+    expect(screen.getByText('多维依据综合裁决')).toBeTruthy()
+    expect(screen.queryByText(/多智能体/)).toBeNull()
     expect(screen.getByText(/防守 32.80/)).toBeTruthy()
     expect(screen.getByText(/阻力 36.50/)).toBeTruthy()
     // 杜绝虚构成本价与持仓盈亏
@@ -52,18 +58,18 @@ describe('DecisionCompassCard 决策罗盘', () => {
   })
 })
 
-describe('MultiAgentDebatePanel 多智能体会诊', () => {
+describe('MultiDimensionEvidencePanel 多维依据透视（如实反映事实，杜绝虚构智能体）', () => {
   it('无真实视角数据时安全返回 null，绝不展示虚构默认值', () => {
-    const { container: c1 } = render(<MultiAgentDebatePanel />)
+    const { container: c1 } = render(<MultiDimensionEvidencePanel />)
     expect(c1.firstChild).toBeNull()
 
-    const { container: c2 } = render(<MultiAgentDebatePanel perspectives={[]} />)
+    const { container: c2 } = render(<MultiDimensionEvidencePanel perspectives={[]} />)
     expect(c2.firstChild).toBeNull()
   })
 
-  it('传入真实视角时结构化渲染并正确标注重数', () => {
+  it('传入真实多维依据时结构化拆解呈现，诚实标注为多维依据透视而非伪造集群', () => {
     render(
-      <MultiAgentDebatePanel
+      <MultiDimensionEvidencePanel
         perspectives={[
           {
             role: 'technical',
@@ -81,15 +87,67 @@ describe('MultiAgentDebatePanel 多智能体会诊', () => {
       />,
     )
 
-    expect(screen.getByTestId('copilot-multi-agent-debate')).toBeTruthy()
-    expect(screen.getByText('多智能体会诊证据链 (2 维度)')).toBeTruthy()
+    expect(screen.getByTestId('copilot-multi-dimension-evidence')).toBeTruthy()
+    expect(screen.getByText('多维依据透视 (2 维度)')).toBeTruthy()
+    expect(screen.getByText('维度研判分解')).toBeTruthy()
+    expect(screen.queryByText(/TradingAgents 集群/)).toBeNull()
+    expect(screen.queryByText(/多智能体会诊/)).toBeNull()
     expect(screen.getByText('技术面分析')).toBeTruthy()
     expect(screen.getByText('资金与筹码')).toBeTruthy()
   })
 })
 
-describe('AnswerCard 罗盘与多智能体真实联动', () => {
-  it('当回答包含真实支撑与阻力位时自动接入罗盘，并支持图表联动', () => {
+describe('ChartOverlayService 真实图表画线验证与跨页面持久化', () => {
+  it('真实调用 series.createPriceLine 在图表系列上绘制支撑与阻力两条线', () => {
+    const createdLines: any[] = []
+    const mockSeries = {
+      createPriceLine: vi.fn((config) => {
+        createdLines.push(config)
+        return config
+      }),
+      removePriceLine: vi.fn(),
+    }
+
+    ChartOverlayService.injectDecisionLevels(mockSeries, [
+      { price: 32.8, title: '支撑 32.8', kind: 'support' },
+      { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
+    ])
+
+    // 严密断言：K 线上确实调用了两次 createPriceLine，支撑与阻力两条线真实存在
+    expect(mockSeries.createPriceLine).toHaveBeenCalledTimes(2)
+    expect(createdLines[0]).toMatchObject({
+      price: 32.8,
+      title: '支撑 32.8',
+    })
+    expect(createdLines[1]).toMatchObject({
+      price: 36.5,
+      title: '阻力 36.5',
+    })
+
+    // 测试清除画线
+    ChartOverlayService.clearOverlays(mockSeries)
+    expect(mockSeries.removePriceLine).toHaveBeenCalledTimes(2)
+  })
+
+  it('跨页面画线持久化：saveOverlay 写入会话存储且可通过 getStoredOverlay 跨生命周期还原', () => {
+    ChartOverlayService.saveOverlay('600111', [
+      { price: 32.8, title: '支撑 32.8', kind: 'support' },
+      { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
+    ])
+
+    const stored = ChartOverlayService.getStoredOverlay('600111')
+    expect(stored).toEqual([
+      { price: 32.8, kind: 'support', label: '支撑 32.8' },
+      { price: 36.5, kind: 'pressure', label: '阻力 36.5' },
+    ])
+
+    ChartOverlayService.clearOverlay('600111')
+    expect(ChartOverlayService.getStoredOverlay('600111')).toBeNull()
+  })
+})
+
+describe('AnswerCard 罗盘与多维依据联动', () => {
+  it('当回答包含真实支撑与阻力位时自动接入罗盘，并调用持久化画线与锚点', () => {
     const RAW = `【结论】突破箱体震荡向上，置信度 8/10
 【依据】
 - 关键支撑位 32.80 元有大买单防守
@@ -118,6 +176,10 @@ describe('AnswerCard 罗盘与多智能体真实联动', () => {
     expect(screen.getByText(/防守 32.80/)).toBeTruthy()
     expect(screen.getByText(/阻力 36.50/)).toBeTruthy()
 
+    // 验证多维依据透视面板正常接入且文案诚实
+    expect(screen.getByTestId('copilot-multi-dimension-evidence')).toBeTruthy()
+    expect(screen.queryByText(/TradingAgents/)).toBeNull()
+
     // 点击在 K 线叠加画线
     const drawBtn = screen.getByText('在 K 线叠加画线')
     fireEvent.click(drawBtn)
@@ -129,6 +191,12 @@ describe('AnswerCard 罗盘与多智能体真实联动', () => {
       }),
     )
     expect(overlaySpy).toHaveBeenCalledTimes(1)
+
+    // 验证会话中已成功保存持久化画线，保证后续工作台还原
+    const stored = ChartOverlayService.getStoredOverlay('600111')
+    expect(stored).toHaveLength(2)
+    expect(stored![0].price).toBe(32.8)
+    expect(stored![1].price).toBe(36.5)
 
     window.removeEventListener('sida-kline-overlay', overlaySpy)
   })

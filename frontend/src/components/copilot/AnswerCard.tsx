@@ -9,7 +9,10 @@ import {
   type PriceAnchorKind,
 } from '@/lib/copilot/price-anchors'
 import { DecisionCompassCard } from '@/components/copilot/DecisionCompassCard'
-import { MultiAgentDebatePanel, type AgentPerspective } from '@/components/copilot/MultiAgentDebatePanel'
+import {
+  MultiDimensionEvidencePanel,
+  type DimensionPerspective,
+} from '@/components/copilot/MultiAgentDebatePanel'
 import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 import {
   ANSWER_ACTION_COPIED,
@@ -88,10 +91,10 @@ function extractKeyLevels(parsed: ParsedAnswer): {
 }
 
 /**
- * 从参谋依据中提取真实的多智能体/多维度视角（只从真实依据解析，无匹配则返回空数组）
+ * 从参谋依据中提取真实的多维度依据透视（从真实依据拆解，无匹配则返回空数组，杜绝虚构）
  */
-function extractRealPerspectives(evidence: string[]): AgentPerspective[] {
-  const perspectives: AgentPerspective[] = []
+function extractRealPerspectives(evidence: string[]): DimensionPerspective[] {
+  const perspectives: DimensionPerspective[] = []
   for (const item of evidence) {
     if (/技术|均线|形态|MACD|K线|突破|回踩/i.test(item) && !perspectives.some((p) => p.role === 'technical')) {
       perspectives.push({
@@ -257,7 +260,7 @@ export function AnswerCard({
           }
           onDrawOnChart={() => {
             if (keyLevels.supportPrice != null && keyLevels.resistancePrice != null) {
-              ChartOverlayService.emitOverlay(symbol, [
+              ChartOverlayService.saveOverlay(symbol, [
                 { price: keyLevels.supportPrice, title: `支撑 ${keyLevels.supportPrice}`, kind: 'support' },
                 { price: keyLevels.resistancePrice, title: `阻力 ${keyLevels.resistancePrice}`, kind: 'pressure' },
               ])
@@ -266,6 +269,13 @@ export function AnswerCard({
                 kind: 'level',
                 context: '支撑位',
               })
+              // 若当前不在该个股工作台且提供了 symbol，自动引导切入工作台
+              if (symbol && typeof window !== 'undefined') {
+                const target = `/stocks/${encodeURIComponent(symbol)}`
+                if (!window.location.pathname.startsWith(target)) {
+                  window.location.href = target
+                }
+              }
             }
           }}
           onSetAlert={(p) => {
@@ -279,9 +289,9 @@ export function AnswerCard({
         />
       ) : null}
 
-      {/* 3. 多智能体会诊雷达（仅在依据具备多维度特征时展现真实视角链） */}
+      {/* 3. 多维依据透视（仅在依据具备多维度特征时展现真实多维视角链） */}
       {realPerspectives.length > 0 ? (
-        <MultiAgentDebatePanel perspectives={realPerspectives} />
+        <MultiDimensionEvidencePanel perspectives={realPerspectives} />
       ) : null}
 
       {/* 4. 依据 */}
