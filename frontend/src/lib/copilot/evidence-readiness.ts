@@ -10,18 +10,34 @@
  * 不新增后端字段、不改契约：
  *   `正在取数 3/10：get_technical_analysis`
  *
- * 三条口径铁律：
+ * 四条口径铁律：
  *  1. **分母不许编**：只有标签里真的带 `/N` 才能有 total；没有就是 null，UI 显示「已取 N 项」。
  *  2. **未知工具不许猜中文名**：查不到映射就原样显示工具名（`get_foo`），分组落「其他」。
  *     猜成「主力」比显示 `get_foo` 更糟 —— 用户会以为这个维度真的取到了。
  *  3. **失败要留痕**：事件带 error / ok:false 时状态是 failed，不被后续的「看起来还行」洗白。
+ *  4. **不知道就说不知道**：`ok`（✓ / 算进「已取」）只认**完成证据**；没有完成证据的条目，
+ *     流结束后落 `unknown`（未确认），不是 ok。
  *
- * 已知的推断（写清楚，别当事实）：pipeline 只在**工具开跑时**投一条 stage，
- * 不投「跑完」。所以下一条 stage 到达时，把上一条的 pending 置 ok —— 依据是同一轮内工具按序推进。
- * 若某工具随后报错，error 事件会把它改回 failed（failed 是粘性的，除非显式 ok:true）。
+ * 事件契约（2026-10-28 核对后端源码，基线 a6eb3c98）：
+ *  - `src/harness/pipeline.py:425` / `pipeline_market.py:355` 只在工具**开跑**时
+ *    `yield ("stage", "正在取数 i/N：tool")`；没有「跑完」帧，也没有 per-tool 成功帧。
+ *  - 流式端点把它包成 `{"message": payload}`（`src/web/api/chat.py:2260`），前端拿到的是字符串，
+ *    不含 `ok` / `status` 字段。
+ *  - 每个工具的真实成功/失败只体现在收尾的 `("runs", (results, errors))`，errors 形如
+ *    `"{label}:{err}"`（`pipeline_market.py:311`），目前**未下发前端**。
+ *
+ * 因此旧实现里那两处「推断」是错的，已删除：
+ *  - 「下一条开跑 ⇒ 上一条已完成」：没有任何完成证据，工具可能仍在跑或已静默失败。
+ *  - 「流结束 ⇒ pending 全成功」：更糟 —— 整条管线失败回落 tool loop 时也照样会结束。
+ * 真失败只能靠显式失败事件或 `foldFailureNotices`（后端 errors 形状）落到 failed；
+ * 两者都没有的条目，诚实的答案是 unknown。
  */
 
-export type ReadinessStatus = 'pending' | 'ok' | 'failed'
+/**
+ * pending = 开跑了，结果还不知道；ok = 有完成证据；failed = 有失败证据；
+ * unknown = 本轮结束仍未确认（流结束/中断）—— 既不等于成功，也不栽赃成失败。
+ */
+export type ReadinessStatus = 'pending' | 'ok' | 'failed' | 'unknown'
 
 /** 六个证据维度 + 「其他」（未知工具的唯一诚实去处，不硬塞进六个维度之一）。 */
 export type ReadinessGroup = '走势' | '筹码' | '主力' | '盘面' | '消息' | '情景' | '其他'
@@ -50,6 +66,8 @@ export interface ReadinessState {
   /** 后端报的总数；null 表示未知（UI 只显示已完成条数）。 */
   total: number | null
   failed: number
+  /** 本轮结束仍未确认的条数（既没成功证据也没失败证据）。不许并进 done。 */
+  unknown: number
 }
 
 // ── 工具名 → 人话 + 维度 ────────────────────────────────────────────────────
@@ -178,6 +196,8 @@ export interface NormalizedStageEvent {
   label: string
   group: ReadinessGroup
   failed: boolean
+  /** 显式完成证据（`ok:true` / `status:'ok'|'done'`）。字符串帧永远是 false —— 它没有这个字段。 */
+  ok: boolean
   index: number | null
   total: number | null
 }
@@ -196,6 +216,18 @@ function failedOfObject(evt: StageEventObject): boolean {
   return false
 }
 
+const OK_STATUSES = new Set(['ok', 'done', 'success', 'succeeded', 'complete', 'completed'])
+
+/**
+ * 显式完成证据。**只有** `ok:true` 或 `status` 是完成态才算 —— 没有字段、字段是别的值一律不算。
+ * 失败优先于完成（同一帧里两个信号冲突时，宁可说未取到，也不说拿到了）。
+ */
+function okOfObject(evt: StageEventObject): boolean {
+  if (failedOfObject(evt)) return false
+  if (evt.ok === true) return true
+  return OK_STATUSES.has((evt.status || '').toLowerCase())
+}
+
 /** 把 stage/trace 事件归一成一条「某工具开跑/失败」。认不出工具 → null（不污染齐套度）。 */
 export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | null {
   if (event == null) return null
@@ -209,6 +241,8 @@ export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | n
       label: meta.label,
       group: meta.group,
       failed: FAIL_TEXT_RE.test(event),
+      // 字符串帧（后端 SSE 的实际形状）不带完成字段：认得出失败文案就 failed，否则只是「开跑了」
+      ok: false,
       index: parsed.index,
       total: parsed.total,
     }
@@ -225,6 +259,7 @@ export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | n
     label: meta.label,
     group: meta.group,
     failed,
+    ok: okOfObject(event),
     index: parsed?.index ?? null,
     total: parsed?.total ?? null,
   }
@@ -233,26 +268,29 @@ export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | n
 // ── reducer ────────────────────────────────────────────────────────────────
 
 export function emptyReadiness(): ReadinessState {
-  return { items: [], done: 0, total: null, failed: 0 }
+  return { items: [], done: 0, total: null, failed: 0, unknown: 0 }
 }
 
 function recount(items: ReadinessItem[], total: number | null): ReadinessState {
   let done = 0
   let failed = 0
+  let unknown = 0
   for (const it of items) {
     if (it.status === 'ok') done += 1
     else if (it.status === 'failed') failed += 1
+    else if (it.status === 'unknown') unknown += 1
   }
-  return { items, done, total, failed }
+  return { items, done, total, failed, unknown }
 }
 
 /**
  * 折一条事件进去（纯函数，返回新 state）。
  *
- * 状态机：
- *  - 新工具 → 追加一条 pending（事件带 error / ok:false → failed）；
- *  - 已有工具 → 重置为 pending（重试开跑）；原来 failed 的保持 failed（粘性，除非显式 ok:true）；
- *  - 上一条还在 pending 的，在下一条开跑时置 ok（pipeline 只报开跑，不报完成 —— 见文件头）。
+ * 状态机（只用**显式证据**改状态，绝不靠时间推移）：
+ *  - 新工具 → 追加一条：有失败证据 → failed，没有 → pending（开跑，结果未知）；
+ *  - 已有工具 → 有失败证据 → failed；有完成证据 → ok；两者都没有 → 保持原状
+ *    （failed 粘性，已确认的 ok 也不因为一条重试开跑帧就退回未知）；
+ *  - **其它条目一条都不动**：下一条开跑不能证明上一条已返回（见文件头的事件契约）。
  */
 export function foldStageEvent(state: ReadinessState, event: StageEvent): ReadinessState {
   const ev = normalizeStageEvent(event)
@@ -260,13 +298,12 @@ export function foldStageEvent(state: ReadinessState, event: StageEvent): Readin
 
   const total = ev.total ?? state.total
   const items = state.items.map((it) => {
-    if (it.key === ev.tool) {
-      if (it.status === 'failed' && !ev.failed) return it
-      return { ...it, status: ev.failed ? ('failed' as ReadinessStatus) : ('pending' as ReadinessStatus) }
-    }
-    // 上一轮在跑的 → 下一条开跑即视为已返回（不是新工具的条目不动）
-    if (it.status === 'pending') return { ...it, status: 'ok' as ReadinessStatus }
-    return it
+    if (it.key !== ev.tool) return it
+    if (ev.failed) return { ...it, status: 'failed' as ReadinessStatus }
+    if (ev.ok) return { ...it, status: 'ok' as ReadinessStatus }
+    // 没有任何结果证据：开跑帧只证明「又跑了一次」，状态不可推进
+    if (it.status === 'ok' || it.status === 'failed') return it
+    return { ...it, status: 'pending' as ReadinessStatus }
   })
 
   if (!items.some((it) => it.key === ev.tool)) {
@@ -274,7 +311,7 @@ export function foldStageEvent(state: ReadinessState, event: StageEvent): Readin
       key: ev.tool,
       label: ev.label,
       group: ev.group,
-      status: ev.failed ? 'failed' : 'pending',
+      status: ev.failed ? 'failed' : ev.ok ? 'ok' : 'pending',
     })
   }
 
@@ -287,11 +324,16 @@ export function foldStageEvents(events: StageEvent[]): ReadinessState {
   return state
 }
 
-/** 流结束：还在 pending 的置 ok（回答已经写完，说明取数阶段结束了）。failed 不受影响。 */
+/**
+ * 流结束：还在 pending 的落 **unknown（未确认）**，不是 ok。
+ *
+ * 「回答写完了」只证明这一轮结束了，不证明某个维度的数据到手了 —— 整条管线失败回落 tool loop
+ * 时同样会正常结束。已确认的 ok / 已留痕的 failed 原样保留。
+ */
 export function settleReadiness(state: ReadinessState): ReadinessState {
   if (!state.items.length) return state
   const items = state.items.map((it) =>
-    it.status === 'pending' ? { ...it, status: 'ok' as ReadinessStatus } : it,
+    it.status === 'pending' ? { ...it, status: 'unknown' as ReadinessStatus } : it,
   )
   return recount(items, state.total)
 }
@@ -302,6 +344,44 @@ export function readinessFromLabels(labels: string[]): ReadinessState {
 }
 
 /**
+ * 折入后端 `errors` 列表（`"{label}:{err}"`，见 `pipeline_market.py:311`）—— 真实失败证据。
+ *
+ * 归属规则：label 能唯一命中一个条目（按中文 label 或工具名）才算 failed；
+ * 认不出、或同时命中多条（歧义）就**不动**。宁可显示「未确认」，也不把失败栽给错的维度，
+ * 更不会因为「有一条错误通知」就把别的条目变成功。
+ */
+export function foldFailureNotices(
+  state: ReadinessState,
+  notices: Array<string | null | undefined>,
+): ReadinessState {
+  if (!state.items.length || !notices.length) return state
+
+  const hits = new Set<string>()
+  const ambiguous = new Set<string>()
+  for (const raw of notices) {
+    const notice = (raw || '').trim()
+    if (!notice) continue
+    const m = /^([^:：]{1,40})[:：]\s*(.+)$/.exec(notice)
+    if (!m) continue // 不是 `label:err` 形状 → 不猜
+    const label = m[1].trim()
+    if (!label) continue
+    const matched = state.items.filter((it) => it.label === label || it.key === label)
+    if (matched.length === 1) hits.add(matched[0].key)
+    else if (matched.length > 1) matched.forEach((it) => ambiguous.add(it.key))
+  }
+  if (!hits.size && !ambiguous.size) return state
+
+  let changed = false
+  const items = state.items.map((it) => {
+    if (ambiguous.has(it.key) || !hits.has(it.key)) return it
+    if (it.status === 'failed') return it
+    changed = true
+    return { ...it, status: 'failed' as ReadinessStatus }
+  })
+  return changed ? recount(items, state.total) : state
+}
+
+/**
  * 计数文案。分母未知时只说「已取 N 项」，**不写 N/-- 也不写 N/1**。
  */
 export function readinessProgressLabel(state: Pick<ReadinessState, 'done' | 'total'>): string {
@@ -309,9 +389,10 @@ export function readinessProgressLabel(state: Pick<ReadinessState, 'done' | 'tot
   return `已取 ${state.done}/${state.total}`
 }
 
-/** 单条状态的可见文案（✓ / ⏳ / 未取到）。failed 读「未取到」而不是「失败」—— 说人话，且不夸大。 */
+/** 单条状态的可见文案（✓ / ⏳ / 未取到 / 未确认）。failed 读「未取到」而不是「失败」—— 说人话，且不夸大。 */
 export function statusText(status: ReadinessStatus): string {
   if (status === 'ok') return '✓'
   if (status === 'failed') return '未取到'
+  if (status === 'unknown') return '未确认'
   return '⏳'
 }
