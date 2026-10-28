@@ -274,8 +274,9 @@ export function AnswerCard({
            *
            * 之前的「在 K 线叠加画线」用回答正文的正则提价直接画真 K 线 —— 价位没有
            * 服务端标的/时间/来源关联，用户没确认过任何提议，等于伪造「已核验标注」。
-           * 现在这条不可信动作直接取消；真实链路是 `/copilot/actions` 提议 → 用户确认
-           * (apply) → `/copilot/annotations` 读回，前端那条链路尚未接线（见下方来源提示）。
+           * 这条不可信动作保持取消；真实链路是 `/copilot/actions` 提议 → 用户确认(apply) →
+           * `/copilot/annotations` 读回（接线见 `lib/copilot/annotationLink`），
+           * 由工作台按服务端标注行画线，本卡片一个价位都不送进图表。
            */
           onSetAlert={symbol ? (p) => {
             if (typeof window !== 'undefined' && Number.isFinite(p) && p > 0) {
@@ -289,17 +290,18 @@ export function AnswerCard({
       ) : null}
 
       {/*
-        来源提示（2026-10-28 P2）：罗盘上的价位来自回答正文的文本识别。
-        它们没有服务端标的/价格来源/时间关联，也没有用户确认 —— 所以只展示、不上图。
-        等前端把「/copilot/actions 确认 → /copilot/annotations 读回」接好之后，
-        这里才可能换成"已确认标注"文案（届时必须带 actionId 溯源）。
+        来源提示（2026-10-28 P2 三次收口）：罗盘上的价位来自回答正文的文本识别，
+        没有服务端标的/价格来源/时间关联，也没有用户确认 —— 所以只展示、不上图。
+        真正上图的路径是「待确认动作」里确认服务端情景标注 → apply → `/copilot/annotations`
+        读回（`lib/copilot/annotationLink`）。那句话必须留在卡片上，否则用户会以为
+        "罗盘上的数字已经过服务端核验"。
       */}
       {keyLevels.supportPrice != null && keyLevels.resistancePrice != null ? (
         <div
           data-testid="copilot-level-provenance-note"
           className="card-surface rounded-lg bg-s1 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground"
         >
-          以上支撑/阻力来自回答正文的文本识别，未经服务端核验，未画到 K 线上。服务端标注通道尚未接通：现在确认服务端提议后，价位暂也不会自动上图。
+          以上支撑/阻力来自回答正文的文本识别，未经服务端核验，未画到 K 线上。要上图请在「待确认动作」里确认服务端的情景标注提议：确认成功后按服务端标注记录画线，刷新后服务端仍在才会继续显示。
         </div>
       ) : null}
 

@@ -1,6 +1,7 @@
 /** 参谋接口（走 fetchAPI，自带 /api 前缀，这里**不要**再写 /api/copilot）。 */
 import { fetchAPI } from '@sida/api'
 import type { CopilotBrief, CopilotPreset } from './types'
+import { linkConfirmedAnnotation } from './annotationLink'
 
 export const getCopilotBrief = (
   symbol: string,
@@ -68,21 +69,57 @@ export const reportViewState = (payload: ViewStatePayload) =>
 /** 动作回写（P1）：AI 只能提议，用户点确认才落库。 */
 export interface PendingAction {
   id: number
-  kind: 'annotation' | 'watchlist' | 'alert'
+  kind: 'annotation' | 'watchlist' | 'alert' | 'schedule'
   payload: Record<string, unknown>
   status: string
   result?: string | null
   created_at: string
+  /** 服务端给的"会改什么"预演（`actions.preview_diff`；算不出来就是空数组） */
+  diff?: Array<{ field: string; before: unknown; after: unknown; change: string }>
+  /** 服务端判定这条动作此刻能否回滚（`before_snapshot` 存在且 status=applied） */
+  can_rollback?: boolean
+  applied_at?: string
 }
 
 export const getPendingActions = (signal?: AbortSignal) =>
   fetchAPI<PendingAction[]>('/copilot/actions', { signal })
 
-export const applyPendingAction = (id: number) =>
-  fetchAPI<PendingAction>(`/copilot/actions/${id}/apply`, { method: 'POST' })
+/**
+ * 确认待办动作（用户点「确认」）。
+ *
+ * 2026-10-28 P2 三次收口：确认成功后**立刻**走服务端标注接线
+ * （`annotationLink.linkConfirmedAnnotation`）：apply 响应证明动作/状态/价位，
+ * 再回读 `GET /copilot/annotations` 核对，两边对上才画到 K 线上。
+ *
+ * 三点纪律：
+ *  - 接线用 `void` 发起、不阻塞确认返回 —— 用户点是"确认这件事"，不是"画线"；
+ *  - 接线内部自兜底（`linkConfirmedAnnotation` 不抛），图表问题不会把确认报成失败；
+ *  - 画线取值全部来自服务端响应，apply 响应里的价位不直接上图（见 `serverAnnotations`）。
+ */
+export const applyPendingAction = async (id: number): Promise<PendingAction> => {
+  const applied = await fetchAPI<PendingAction>(`/copilot/actions/${id}/apply`, {
+    method: 'POST',
+  })
+  void linkConfirmedAnnotation(applied)
+  return applied
+}
 
 export const rejectPendingAction = (id: number) =>
   fetchAPI<PendingAction>(`/copilot/actions/${id}/reject`, { method: 'POST' })
+
+/**
+ * 撤销一次已应用的动作（P1-1.3）。
+ *
+ * **图表标注目前撤销不了**：后端 `rollback_action` 只处理 watchlist/alert/schedule，
+ * `kind="annotation"` 直接 400「annotation 动作不支持回滚」，也没有 DELETE 图注接口
+ * （见 `serverAnnotations.SERVER_ANNOTATION_CONTRACT.undoSupported`）。
+ * 这里保留接线是为了**如实转述服务端的拒绝**，而不是在界面上假装能撤。
+ */
+export const rollbackPendingAction = (id: number, reason = '') =>
+  fetchAPI<PendingAction>(
+    `/copilot/actions/${id}/rollback${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`,
+    { method: 'POST' },
+  )
 
 /** 轨迹只读（P3）：回放与成本看板。 */
 export interface CopilotRunRow {

@@ -101,7 +101,7 @@ describe('MultiDimensionEvidencePanel 多维依据透视（如实反映事实，
 })
 
 describe('ChartOverlayService 真实图表画线验证与跨页面持久化', () => {
-  it('图元级旁路也拒画：通道未接通时不会调用 series.createPriceLine', () => {
+  it('图元级旁路也拒画：本地数组不是服务端标注，不会调用 series.createPriceLine', () => {
     const mockSeries = {
       createPriceLine: vi.fn((config) => config),
       removePriceLine: vi.fn(),
@@ -110,14 +110,9 @@ describe('ChartOverlayService 真实图表画线验证与跨页面持久化', ()
     const drawn = ChartOverlayService.injectDecisionLevels(mockSeries, [
       { price: 32.8, title: '支撑 32.8', kind: 'support' },
       { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
-    ], {
-      source: 'server_annotation',
-      actionId: 11,
-      status: 'applied',
-      symbol: '600111',
-    })
+    ])
 
-    // 2026-10-28 P2 二次收口：本地对象不是凭证，图元级入口同样拒绝
+    // 2026-10-28 P2 三次收口：只有 `serverAnnotations` 从服务端响应构造的数组才能上图
     expect(drawn).toBe(false)
     expect(mockSeries.createPriceLine).not.toHaveBeenCalled()
 
@@ -126,8 +121,8 @@ describe('ChartOverlayService 真实图表画线验证与跨页面持久化', ()
     expect(mockSeries.removePriceLine).not.toHaveBeenCalled()
   })
 
-  it('跨页面画线持久化：伪造凭证的 saveOverlay 不写会话存储、也无法还原', () => {
-    // 2026-10-28 P2 二次收口：服务端标注通道未接通 ⇒ 任何本地"已确认"对象都拒画
+  it('跨页面画线持久化：本地价位（含伪造凭证）既不写存储也无法还原', () => {
+    // 2026-10-28 P2 三次收口：saveOverlay 的价位是调用方写的 ⇒ 恒拒，不落任何存储
     const forged = {
       source: 'server_annotation' as const,
       actionId: 11,
@@ -138,12 +133,12 @@ describe('ChartOverlayService 真实图表画线验证与跨页面持久化', ()
       { price: 32.8, title: '支撑 32.8', kind: 'support' },
       { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
     ], forged)
-    expect(result).toMatchObject({ saved: false, reason: 'server_link_unavailable' })
+    expect(result).toMatchObject({ saved: false, reason: 'client_authored_levels' })
 
-    expect(ChartOverlayService.getStoredOverlay('600111')).toBeNull()
+    expect(ChartOverlayService.getRequestedAnnotationIds('600111', '1d')).toBeNull()
 
     ChartOverlayService.clearOverlay('600111')
-    expect(ChartOverlayService.getStoredOverlay('600111')).toBeNull()
+    expect(ChartOverlayService.getRequestedAnnotationIds('600111', '1d')).toBeNull()
   })
 })
 
@@ -184,7 +179,7 @@ describe('AnswerCard 罗盘与多维依据联动', () => {
     // 2026-10-28 P2：正文价位没有服务端来源/确认 ⇒ 没有画线入口、不广播、不落存储
     expect(screen.queryByText('在 K 线叠加画线')).toBeNull()
     expect(overlaySpy).not.toHaveBeenCalled()
-    expect(ChartOverlayService.getStoredOverlay('600111')).toBeNull()
+    expect(ChartOverlayService.getRequestedAnnotationIds('600111', '1d')).toBeNull()
 
     // 明确告知来源未确认（文本展示保留，图线不画）
     expect(screen.getByTestId('copilot-level-provenance-note').textContent).toContain('未画到 K 线')

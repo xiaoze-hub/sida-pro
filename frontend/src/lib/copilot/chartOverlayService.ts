@@ -1,77 +1,58 @@
 /**
- * 参谋结论与 TradingView / Lightweight Charts 图元同步画线服务
+ * 参谋结论 → K 线价位线：**唯一的服务端口径入口**。
  *
- * ## 2026-10-28 P2（二次收口）：服务端标注链路未接通前，本地凭证一律不可信
+ * ## 语义（2026-10-28 P2 三次收口，前两轮都是"疑似核验"）
  *
- * 上一版止血要求调用方传 `{source:'server_annotation', actionId, status:'applied', symbol}`
- * 才允许画线，但那只是一个**普通 JS 对象**：客户端代码、控制台、扩展脚本都能原地构造，
- * 它不携带任何服务端签名、不绑定价格、也不对应 `CopilotAction` 表里的真实记录。
- * 后端虽然已有 `GET /copilot/annotations`（本人+全局），但**前端从未调用它**，
- * 也没有任何服务端校验会核对这份客户端声明 —— 所以把它当"可信凭证"本身就是假的核验。
+ * 第一轮：调用方自己传 `{source,actionId,status,symbol}` 就画 —— 那是**自证清白**。
+ * 第二轮：全关掉（`LINK_READY=false`），不再伪造，但确认后也确实上不了图。
+ * 本轮：只认 `GET /copilot/annotations` 的**服务端行**（解析见 `./serverAnnotations`）。
+ * 本地数字（回答正文正则提价、罗盘跳转带过来的价位、sessionStorage 里的历史行）
+ * **一律不画**，也不再把它们当"凭证"。
  *
- * 本次收口：引入唯一开关 {@link SERVER_ANNOTATION_LINK_READY}，在真实服务端标注读取
- * （JWT 作用域内 `GET /copilot/annotations`）接通之前恒为 `false`：
+ * 具体三件事：
  *
- *   - `saveOverlay` 无论收到什么 provenance（含完全伪造的"合法"对象）都拒画，
- *     不写 sessionStorage、不广播事件；
- *   - `getStoredOverlay` 不再读取会话存储 —— 伪造的 source/actionId 行无法"恢复"上图；
- *   - `injectDecisionLevels` 同样拒绝，本地调用方拿不到图元级旁路。
- *
- * 接通那条链路时唯一合法的数据来源是**服务端响应**（按本人+全局、symbol/period 过滤），
- * 不得再把调用方声明当凭证。
+ *  1. {@link ChartOverlayService.saveOverlay} 保留旧签名但**恒拒**（`client_authored_levels`）：
+ *     入参价位由调用方书写，不是服务端给的。老调用点得到的是明确失败，不会静默"升级"成能画线。
+ *  2. {@link ChartOverlayService.acceptServerLines} 是唯一写入口：要求数组由
+ *     `serverAnnotations` 从服务端响应构造、每行标的/周期与当前 K 线一致、价位合法。
+ *  3. 会话存储只存**服务端标注 id**（不存价位、不存 actionId）：刷新后拿 id 回服务端重读，
+ *     读不到就一条不画。伪造 id 最多只能"指定看哪条服务端行"，改变不了画出来的价位
+ *     （价位逐字来自服务端行），也改变不了服务端的作用域过滤。
  */
 
 import { safeJwtPayload } from '@/lib/jwt'
+import {
+  isServerVerifiedLines,
+  normSymbol,
+  type ServerAnnotationLine,
+} from './serverAnnotations'
 
+/** 旧接口的入参形状（罗盘/正文价位）；**不是**可画线的凭证。 */
 export interface PriceLevelOverlay {
   price: number
   title: string
   color?: string
   kind?: 'support' | 'pressure'
-  lineStyle?: number // 0: solid, 1: dotted, 2: dashed
+  lineStyle?: number
 }
 
-export interface KlinePriceLinePayload {
-  price: number
-  kind: 'support' | 'pressure'
-  label: string
-  /** 仅供未来服务端读回的数据打标；当前不会由本地写入产生 */
-  source?: 'server_annotation'
-  /** 服务端 CopilotAction id（未来由服务端响应提供，本地值不可信） */
-  actionId?: number
-}
-
-/**
- * 服务端标注通道是否已接通（唯一事实来源）。
- *
- * `false` 时：本地对象与 sessionStorage **都不是**可信来源，任何声称"已确认"的
- * payload 都会被拒。只有 `GET /copilot/annotations` 的真实读取接线完成、
- * 并由服务端响应驱动画线后，才允许改为 `true`（届时 `saveOverlay` 的入参需换成
- * 服务端记录，而不是调用方声明的对象）。
- */
-export const SERVER_ANNOTATION_LINK_READY: boolean = false
-
-/** 历史常量：仅作标记名保留；当前没有任何本地数据能凭它获得信任。 */
-export const OVERLAY_PROVENANCE_SOURCE = 'server_annotation' as const
-
-/**
- * 调用方声明的来源描述 —— **不是凭证**。
- *
- * 保留该类型只为兼容既有调用签名与日志；内容完全由客户端构造，不参与任何信任判断。
- * 真实核验必须发生在服务端：客户端只能消费 `/copilot/annotations` 的响应。
- */
+/** 兼容形状：调用方声明"这是服务端标注"，声明本身不参与任何判断。 */
 export interface OverlayProvenance {
-  source: typeof OVERLAY_PROVENANCE_SOURCE
+  source: 'server_annotation'
   actionId: number
   status: 'applied'
-  /** 调用方声称的标的，同样不可信 */
   symbol: string
 }
 
 export type OverlayRejectReason =
   | 'no_symbol'
   | 'no_identity'
-  | 'server_link_unavailable'
+  /** 入参价位由客户端书写（旧 saveOverlay 路径） */
+  | 'client_authored_levels'
+  /** 数组不是从服务端响应解析出来的 */
+  | 'unverified_lines'
+  /** 标注标的/周期与当前 K 线不一致 */
+  | 'symbol_mismatch'
   | 'invalid_levels'
   | 'storage_unavailable'
 
@@ -89,8 +70,12 @@ export function overlayRejectMessage(reason: OverlayRejectReason): string {
       return '未画线：缺少股票代码。'
     case 'no_identity':
       return '未画线：请先登录（画线按账号隔离保存）。'
-    case 'server_link_unavailable':
-      return '未画线：服务端标注通道尚未接通，本地凭证无法核验；确认服务端提议后，价位暂也不会自动画到 K 线上。'
+    case 'client_authored_levels':
+      return '未画线：价位必须来自服务端标注记录，回答正文或本地构造的数字不作数。'
+    case 'unverified_lines':
+      return '未画线：这组价位不是从服务端标注响应解析出来的（本地声明不构成凭证）。'
+    case 'symbol_mismatch':
+      return '未画线：标注的标的或周期与当前 K 线不一致。'
     case 'invalid_levels':
       return '未画线：价位数据非法（需要正的有限价格与支撑/压力类型）。'
     case 'storage_unavailable':
@@ -100,53 +85,64 @@ export function overlayRejectMessage(reason: OverlayRejectReason): string {
   }
 }
 
-const STORAGE_PREFIX = 'sida_kline_overlay:v2:'
+/** 本会话"我确认过"的服务端标注 id 信封（只有 id，没有价位/动作号）。 */
+export interface ConfirmedAnnotationEnvelope {
+  symbol: string
+  period: string
+  annotationIds: number[]
+}
 
-function storageKey(symbol: string | undefined): string | null {
-  if (!symbol || typeof localStorage === 'undefined') return null
+/** 全局叠加事件（画线/清除）。detail.lines 必须通过 `isServerVerifiedLines`。 */
+export const OVERLAY_EVENT = 'sida-kline-overlay'
+/** 标注链路状态播报（确认成功/失败/撤销不可用），detail.message 可直接展示。 */
+export const ANNOTATION_STATUS_EVENT = 'sida-kline-annotation-status'
+
+/** 新口径存储键：只放服务端标注 id（旧的 `sida_kline_overlay:v2:*` 不再读取）。 */
+const STORAGE_PREFIX = 'sida_kline_annotation_ids:v1:'
+
+/** 从 JWT 取账号（`sub`/`user_id`）。取不到 = 未登录，一律不写不读。 */
+function currentAccountId(): string | null {
   try {
+    if (typeof localStorage === 'undefined') return null
     const claims = safeJwtPayload(localStorage.getItem('token') || '')
     const id = claims?.sub ?? claims?.user_id
     if ((typeof id !== 'string' && typeof id !== 'number') || !String(id).trim()) return null
-    return `${STORAGE_PREFIX}${encodeURIComponent(String(id))}:${encodeURIComponent(symbol.toUpperCase())}`
+    return String(id)
   } catch {
     return null
   }
 }
 
-function normSymbol(symbol: string | undefined | null): string {
-  return typeof symbol === 'string' ? symbol.trim().toUpperCase() : ''
-}
-
 /**
- * 价位归一化：非正/非有限价格、未知 kind、空标题一律判非法（整批拒绝，不写半截）。
+ * 本地是否有身份（未登录时**不要**发服务端标注读取：后端 401 会触发全局登出，
+ * 匿名访客看一眼 K 线不该被踢出去）。只是"有没有 token"，不是授权判断。
  */
-function normalizeLevels(levels: PriceLevelOverlay[]): KlinePriceLinePayload[] | null {
-  if (!Array.isArray(levels) || levels.length === 0) return null
-  const out: KlinePriceLinePayload[] = []
-  const seen = new Set<string>()
-  for (const lvl of levels) {
-    if (!lvl || typeof lvl !== 'object') return null
-    const price = lvl.price
-    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) return null
-    const kind = lvl.kind
-    if (kind !== 'support' && kind !== 'pressure') return null
-    const label = typeof lvl.title === 'string' ? lvl.title.trim() : ''
-    if (!label) return null
-    const dedupeKey = `${kind}:${price}`
-    if (seen.has(dedupeKey)) continue
-    seen.add(dedupeKey)
-    out.push({ price, kind, label })
-  }
-  return out.length > 0 ? out : null
+export function hasLocalIdentity(): boolean {
+  return currentAccountId() !== null
 }
 
-/** 通道未接通时的统一拒画结果（保存 / 绘制共用一处文案）。 */
-function linkUnavailable(): SaveOverlayResult {
-  return {
-    saved: false,
-    reason: 'server_link_unavailable',
-    message: overlayRejectMessage('server_link_unavailable'),
+function storageKey(symbol: string, period: string): string | null {
+  if (typeof sessionStorage === 'undefined') return null
+  const account = currentAccountId()
+  const sym = normSymbol(symbol)
+  if (!account || !sym) return null
+  return `${STORAGE_PREFIX}${encodeURIComponent(account)}:${encodeURIComponent(sym)}:${encodeURIComponent(
+    (period || '1d').trim(),
+  )}`
+}
+
+/** 服务端行信封校验：只认标注 id 列表，其余一律丢弃。 */
+function parseEnvelope(raw: string): number[] | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const ids = (parsed as { annotationIds?: unknown }).annotationIds
+    if (!Array.isArray(ids)) return null
+    return ids.filter(
+      (id): id is number => typeof id === 'number' && Number.isInteger(id) && id > 0,
+    )
+  } catch {
+    return null
   }
 }
 
@@ -154,50 +150,103 @@ export class ChartOverlayService {
   private static linesMap: Map<string, any> = new Map()
 
   /**
-   * 把价位线持久化到会话存储并广播全局事件。
+   * **旧路径：恒拒。**
    *
-   * **当前恒拒**：服务端标注读取未接通，`provenance` 只是客户端声明，不构成凭证。
-   * 因此无论传入何种对象（含完全伪造的"已确认"payload）都不写存储、不发事件，
-   * 只返回可展示的原因，避免把本地数据冒充已核验图表标注。
+   * 入参 `levels` 是调用方书写的数字（正文正则提价、罗盘跳转传来的价位），
+   * 不对应任何服务端标注行。保留这个方法只为让老调用点得到**明确失败**，
+   * 而不是悄悄降级成"能画线"。真正的入口是 {@link acceptServerLines}。
    */
   public static saveOverlay(
     symbol: string | undefined,
-    levels: PriceLevelOverlay[],
+    _levels: PriceLevelOverlay[],
     _provenance?: OverlayProvenance | null,
   ): SaveOverlayResult {
+    if (!normSymbol(symbol)) {
+      return { saved: false, reason: 'no_symbol', message: overlayRejectMessage('no_symbol') }
+    }
+    if (!currentAccountId()) {
+      return { saved: false, reason: 'no_identity', message: overlayRejectMessage('no_identity') }
+    }
+    // 显式忽略 _levels/_provenance：都是客户端对象，任何"看起来合法"的字段都不改变结论。
+    return {
+      saved: false,
+      reason: 'client_authored_levels',
+      message: overlayRejectMessage('client_authored_levels'),
+    }
+  }
+
+  /**
+   * 接受**服务端响应解析出的**价位线（唯一写入口）。
+   *
+   * 校验四件事，任一不过整批拒（不写半截）：
+   *  ① 数组必须由 `serverAnnotations` 从服务端响应构造；
+   *  ② 每行标的是当前 K 线；③ 每行周期与当前 K 线一致；
+   *  ④ 价位为正的有限数、label 非空、annotationId 合法。
+   */
+  public static acceptServerLines(
+    symbol: string,
+    period: string,
+    lines: unknown,
+  ): SaveOverlayResult {
     const sym = normSymbol(symbol)
+    const per = (period || '1d').trim()
     if (!sym) {
       return { saved: false, reason: 'no_symbol', message: overlayRejectMessage('no_symbol') }
     }
-    if (!storageKey(sym)) {
+    if (!currentAccountId()) {
       return { saved: false, reason: 'no_identity', message: overlayRejectMessage('no_identity') }
     }
-    if (!SERVER_ANNOTATION_LINK_READY) {
-      // 显式忽略 _provenance：它不是凭证，任何"看起来合法"的字段都不改变结论。
-      return linkUnavailable()
-    }
-
-    // 通道接通后才走这里：入参必须是服务端 `/copilot/annotations` 返回的记录，
-    // 不得由调用方声明。价位仍照常做合法性校验。
-    const lines = normalizeLevels(levels)
-    if (!lines) {
+    if (!isServerVerifiedLines(lines)) {
       return {
         saved: false,
-        reason: 'invalid_levels',
-        message: overlayRejectMessage('invalid_levels'),
+        reason: 'unverified_lines',
+        message: overlayRejectMessage('unverified_lines'),
       }
     }
-    if (typeof sessionStorage === 'undefined') {
+    const valid =
+      lines.length > 0 &&
+      lines.every(
+        (line) =>
+          normSymbol(line.symbol) === sym &&
+          (line.period || '1d').trim() === per &&
+          typeof line.price === 'number' &&
+          Number.isFinite(line.price) &&
+          line.price > 0 &&
+          (line.kind === 'support' || line.kind === 'pressure') &&
+          typeof line.label === 'string' &&
+          line.label.trim().length > 0 &&
+          Number.isInteger(line.annotationId) &&
+          line.annotationId > 0,
+      )
+    if (!valid) {
+      const reason: OverlayRejectReason =
+        lines.length === 0 ? 'invalid_levels' : 'symbol_mismatch'
+      return { saved: false, reason, message: overlayRejectMessage(reason) }
+    }
+
+    const key = storageKey(sym, per)
+    if (!key) {
       return {
         saved: false,
         reason: 'storage_unavailable',
         message: overlayRejectMessage('storage_unavailable'),
       }
     }
-
-    const key = storageKey(sym) as string
+    /**
+     * 与既有信封**合并**而不是覆盖：用户可能先后确认支撑、阻力两条（两次 apply 各回读一条），
+     * 覆盖会把先确认的那条从"我确认过"里抹掉，刷新时凭空少一条线。
+     * 合并的仍然只有服务端标注 id，脏 id 会被服务端读取结果过滤掉（`pickConfirmedRows`）。
+     */
+    const previous = ChartOverlayService.getRequestedAnnotationIds(sym, per) ?? []
+    const envelope: ConfirmedAnnotationEnvelope = {
+      symbol: sym,
+      period: per,
+      annotationIds: Array.from(
+        new Set([...previous, ...lines.map((line) => line.annotationId)]),
+      ).sort((a, b) => a - b),
+    }
     try {
-      sessionStorage.setItem(key, JSON.stringify(lines))
+      sessionStorage.setItem(key, JSON.stringify(envelope))
     } catch {
       return {
         saved: false,
@@ -206,51 +255,63 @@ export class ChartOverlayService {
       }
     }
 
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('sida-kline-overlay', {
-          detail: { symbol: sym, lines },
-        }),
-      )
-    }
-    return { saved: true, message: '画线已保存。' }
+    ChartOverlayService.broadcast(sym, per, lines)
+    return { saved: true, message: `已按服务端标注画线 ${lines.length} 条。` }
   }
 
   /**
-   * 从会话存储读取某标的的持久化画线。
+   * 本会话里"我确认过"的服务端标注 id（按账号+标的+周期分键）。
    *
-   * 通道未接通时**恒返回 `null`**：会话存储里的内容（包括带 `source`/`actionId`
-   * 的伪造行）没有任何服务端校验可对照，一律不还原上图。
+   * 只返回 id —— 价位永远回服务端重读。换账号/换标的读不到彼此的信封，
+   * 服务端还会再按 user_id 过滤一层。
    */
-  public static getStoredOverlay(symbol: string): KlinePriceLinePayload[] | null {
-    if (!SERVER_ANNOTATION_LINK_READY) return null
-    const key = storageKey(symbol)
+  public static getRequestedAnnotationIds(symbol: string, period: string): number[] | null {
+    const key = storageKey(symbol, period)
     if (!key || typeof sessionStorage === 'undefined') return null
+    let raw: string | null = null
     try {
-      const raw = sessionStorage.getItem(key)
-      if (!raw) return null
-      const parsed = JSON.parse(raw)
-      if (!Array.isArray(parsed)) return null
-      const lines = parsed.filter((line): line is KlinePriceLinePayload => {
-        if (!line || typeof line !== 'object') return false
-        if (typeof line.price !== 'number' || !Number.isFinite(line.price) || line.price <= 0) {
-          return false
-        }
-        return line.kind === 'support' || line.kind === 'pressure'
-      })
-      return lines.length > 0 ? lines : null
+      raw = sessionStorage.getItem(key)
     } catch {
       return null
     }
+    if (!raw) return null
+    const ids = parseEnvelope(raw)
+    return ids && ids.length > 0 ? ids : null
+  }
+
+  /** 服务端已不给这些 id 了（撤销/过期）→ 把信封收敛到还活着的那些。 */
+  public static pruneRequestedAnnotationIds(
+    symbol: string,
+    period: string,
+    alive: readonly number[],
+  ) {
+    const key = storageKey(symbol, period)
+    if (!key || typeof sessionStorage === 'undefined') return
+    const keep = Array.from(new Set(alive.filter((id) => Number.isInteger(id) && id > 0)))
+    try {
+      if (keep.length === 0) sessionStorage.removeItem(key)
+      else
+        sessionStorage.setItem(
+          key,
+          JSON.stringify({
+            symbol: normSymbol(symbol),
+            period: (period || '1d').trim(),
+            annotationIds: keep,
+          }),
+        )
+    } catch {
+      // 存不进去不影响本次显示：这次仍按服务端行画，只是刷新后不再自动恢复。
+    }
   }
 
   /**
-   * 清除某标的的画线并广播清除事件。
-   *
+   * 清除某标的的画线并广播清除事件（登出/换标的时调用）。
    * 存储键按账号隔离：登出（无 token）时不触碰任何账号的数据。
    */
-  public static clearOverlay(symbol: string) {
-    const key = storageKey(symbol)
+  public static clearOverlay(symbol: string, period?: string) {
+    const sym = normSymbol(symbol)
+    const per = (period || '1d').trim()
+    const key = storageKey(sym, per)
     if (!key) return
     if (typeof sessionStorage !== 'undefined') {
       try {
@@ -259,21 +320,54 @@ export class ChartOverlayService {
         // ignore
       }
     }
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('sida-kline-overlay', {
-          detail: {
-            symbol,
-            lines: [],
-          },
-        }),
-      )
-    }
+    ChartOverlayService.broadcast(sym, per, [])
+  }
+
+  /** 读取并校验 `sida-kline-overlay` 事件 detail（外部 detail 同样要过服务端标记）。 */
+  public static readOverlayEventDetail(
+    detail: unknown,
+  ): { symbol: string; period: string; lines: ServerAnnotationLine[] } | null {
+    if (!detail || typeof detail !== 'object') return null
+    const d = detail as { symbol?: unknown; period?: unknown; lines?: unknown }
+    const symbol = normSymbol(typeof d.symbol === 'string' ? d.symbol : '')
+    if (!symbol) return null
+    const period = typeof d.period === 'string' && d.period.trim() ? d.period.trim() : '1d'
+    if (!isServerVerifiedLines(d.lines)) return null
+    const lines = d.lines.filter(
+      (line) =>
+        normSymbol(line.symbol) === symbol && (line.period || '1d').trim() === period,
+    )
+    return { symbol, period, lines }
   }
 
   /**
-   * 派发全局 K 线画线叠加事件（兼容方法）
+   * 派发叠加事件（内部用）。外部构造不出"合法 detail" —— lines 必须已过服务端标记，
+   * 而标记只在 `serverAnnotations` 的解析路径里产生。
    */
+  private static broadcast(symbol: string, period: string, lines: ServerAnnotationLine[]) {
+    if (typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent(OVERLAY_EVENT, { detail: { symbol, period, lines } }))
+  }
+
+  /** 派发标注链路状态（确认失败/撤销不可用等），detail.message 可直接展示给用户。 */
+  public static reportAnnotationStatus(payload: {
+    symbol?: string
+    level: 'info' | 'warn' | 'error'
+    message: string
+  }) {
+    if (typeof window === 'undefined') return
+    window.dispatchEvent(
+      new CustomEvent(ANNOTATION_STATUS_EVENT, {
+        detail: {
+          symbol: normSymbol(payload.symbol),
+          level: payload.level,
+          message: payload.message,
+        },
+      }),
+    )
+  }
+
+  /** 兼容方法：旧调用点走它 → 与 {@link saveOverlay} 同样恒拒。 */
   public static emitOverlay(
     symbol: string | undefined,
     levels: PriceLevelOverlay[],
@@ -283,16 +377,11 @@ export class ChartOverlayService {
   }
 
   /**
-   * 将价位线画到图表系列上（图元级原语）。
+   * 图元级原语：把**服务端标注**价位线画到 series 上。
    *
-   * 通道未接通时**拒画**并清空既有线：这个方法过去没有任何来源校验，是绕过
-   * `saveOverlay` 直接把本地数字画上真 K 线的旁路。返回是否真的画了。
+   * 非服务端构造的数组 → 拒画（并清掉既有线）。返回是否真的画了。
    */
-  public static injectDecisionLevels(
-    series: any,
-    levels: PriceLevelOverlay[],
-    _provenance?: OverlayProvenance | null,
-  ): boolean {
+  public static injectDecisionLevels(series: any, lines: unknown): boolean {
     if (!series || typeof series.createPriceLine !== 'function') {
       return false
     }
@@ -300,27 +389,27 @@ export class ChartOverlayService {
     // 先清除已有的旧画线
     this.clearOverlays(series)
 
-    if (!SERVER_ANNOTATION_LINK_READY) return false
+    if (!isServerVerifiedLines(lines) || lines.length === 0) return false
 
-    const lines = normalizeLevels(levels)
-    if (!lines) return false
-
-    lines.forEach((lvl) => {
+    let drawn = 0
+    lines.forEach((line) => {
+      if (typeof line.price !== 'number' || !Number.isFinite(line.price) || line.price <= 0) return
       try {
         const priceLine = series.createPriceLine({
-          price: lvl.price,
-          color: lvl.kind === 'support' ? '#22c55e' : '#ef4444',
+          price: line.price,
+          color: line.kind === 'support' ? '#22c55e' : '#ef4444',
           lineWidth: 2,
           lineStyle: 2,
           axisLabelVisible: true,
-          title: lvl.label,
+          title: line.label,
         })
-        this.linesMap.set(`${lvl.label}_${lvl.price}`, priceLine)
+        this.linesMap.set(String(line.annotationId), priceLine)
+        drawn += 1
       } catch {
         // 捕获可能已销毁的 series 引用
       }
     })
-    return true
+    return drawn > 0
   }
 
   public static clearOverlays(series: any) {

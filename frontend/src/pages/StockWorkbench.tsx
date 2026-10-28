@@ -19,9 +19,19 @@ import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
 import type { KlinePriceLine } from '@sida/biz-ui/klineEvents'
 import {
+  ANNOTATION_STATUS_EVENT,
   ChartOverlayService,
-  SERVER_ANNOTATION_LINK_READY,
+  OVERLAY_EVENT,
 } from '@/lib/copilot/chartOverlayService'
+import {
+  annotationReadyState,
+  restoreServerAnnotations,
+  type AnnotationLinkState,
+} from '@/lib/copilot/annotationLink'
+import {
+  AnnotationLinkBar,
+  type AnnotationNotice,
+} from '@/components/copilot/AnnotationLinkBar'
 import { reportViewOnce } from '@/lib/copilot/viewstate'
 import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
@@ -372,43 +382,6 @@ export default function StockWorkbench() {
     [position.cost],
   )
 
-  /**
-   * 参谋结论/决策罗盘价位线叠加(2026-10-28 数智参谋联动):
-   * 首次挂载从 sessionStorage 读取持久化画线，同时监听 live 事件，
-   * 确保跨页面跳转（从 /ai-copilot 进入工作台）或抽屉联动时均能把支撑/阻力画线叠加到 K 线主图。
-   *
-   * 2026-10-28 P2 二次收口：`SERVER_ANNOTATION_LINK_READY === false` 期间不读取、不响应
-   * 任何本地画线数据 —— sessionStorage 与 `sida-kline-overlay` 事件的 detail 都可被任意构造，
-   * 没有服务端标注接口可对照时上图等于把伪造数字当"已核验标注"。通道接通后改由
-   * `/copilot/annotations` 响应驱动。
-   */
-  const [copilotPriceLines, setCopilotPriceLines] = useState<KlinePriceLine[] | undefined>(() => {
-    if (!SERVER_ANNOTATION_LINK_READY) return undefined
-    if (typeof window === 'undefined' || !symbol) return undefined
-    return (ChartOverlayService.getStoredOverlay(symbol) as KlinePriceLine[]) ?? undefined
-  })
-
-  useEffect(() => {
-    if (!SERVER_ANNOTATION_LINK_READY) {
-      setCopilotPriceLines(undefined)
-      return
-    }
-    if (symbol) {
-      const stored = ChartOverlayService.getStoredOverlay(symbol)
-      setCopilotPriceLines((stored as KlinePriceLine[]) ?? undefined)
-    }
-
-    const handleOverlay = (e: Event) => {
-      const detail = (e as CustomEvent<{ symbol?: string; lines: KlinePriceLine[] }>).detail
-      if (!detail) return
-      if (!detail.symbol || detail.symbol.toUpperCase() === symbol.toUpperCase()) {
-        setCopilotPriceLines(detail.lines && detail.lines.length > 0 ? detail.lines : undefined)
-      }
-    }
-    window.addEventListener('sida-kline-overlay', handleOverlay)
-    return () => window.removeEventListener('sida-kline-overlay', handleOverlay)
-  }, [symbol])
-
   /** 返回入口(2026-09-20 用户报"从持仓进行情页没有返回按钮"): 必须在任何 early return **之前**
    *  调用(hooks 顺序固定) —— 所以放在这里, 不放渲染前。 */
   const back = useBackTarget()
@@ -418,6 +391,83 @@ export default function StockWorkbench() {
    * 解析不出(缺失/非法/`intra` 分时) → `undefined` → 图表用自身默认周期(不假装支持)。
    */
   const periodFromUrl = periodToInterval(sp.get('period'))
+
+  /**
+   * 参谋结论/决策罗盘价位线叠加（2026-10-28 P2 三次收口）。
+   *
+   * **数据源只有一个：`GET /copilot/annotations` 的服务端行**（见 `lib/copilot/annotationLink`）。
+   * 本页不再读 sessionStorage 里的价位、也不信 `sida-kline-overlay` 事件里"随便写的 detail"：
+   *
+   *  - 进页面/换标的/换周期 → `restoreServerAnnotations`：拿本会话确认过的**标注 id**
+   *    回服务端重读，服务端还在才画；服务端不给（撤销/过期/换账号）就一条不画；
+   *  - 同一标签页里用户刚点确认 → 接线层广播的 detail 必须是**服务端响应解析出的数组**
+   *    （`readOverlayEventDetail` 过标记校验），否则一律忽略；
+   *  - 失败/无法归属 → 一条不画，并在 K 线上方那条说明带里讲清楚原因。
+   *
+   * 状态与价位线同源：`annotationLink.lines` 就是传给 `KlineChart.supportPressure` 的数组，
+   * 不存在"画的和说的不一致"。
+   */
+  const annotationPeriod = periodFromUrl ?? '1d'
+  const [annotationLink, setAnnotationLink] = useState<AnnotationLinkState>({ kind: 'idle' })
+  const [annotationNotice, setAnnotationNotice] = useState<AnnotationNotice | null>(null)
+  const [annotationRetry, setAnnotationRetry] = useState(0)
+
+  useEffect(() => {
+    if (!symbol || type !== 'stock') {
+      setAnnotationLink({ kind: 'idle' })
+      return
+    }
+    let cancelled = false
+    void restoreServerAnnotations({ symbol, market: MARKET, period: annotationPeriod }).then(
+      (next) => {
+        if (!cancelled) setAnnotationLink(next)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [symbol, MARKET, annotationPeriod, type, annotationRetry])
+
+  useEffect(() => {
+    if (!symbol) return
+    const wantSymbol = symbol.toUpperCase()
+
+    // 画线/清除事件：detail 必须来自服务端响应解析（本地构造的 detail 过不了标记校验）。
+    const handleOverlay = (e: Event) => {
+      const detail = ChartOverlayService.readOverlayEventDetail(
+        (e as CustomEvent<unknown>).detail,
+      )
+      if (!detail || detail.symbol !== wantSymbol || detail.period !== annotationPeriod) return
+      if (detail.lines.length === 0) {
+        setAnnotationLink({ kind: 'idle' })
+        return
+      }
+      setAnnotationLink(annotationReadyState(detail.lines))
+      setAnnotationNotice(null)
+    }
+    // 接线层播报（确认成功但回读对不上 / 撤销不可用等）：文案原样展示，不再自己改写。
+    const handleStatus = (e: Event) => {
+      const detail = (e as CustomEvent<{ symbol?: string; level?: string; message?: string }>)
+        .detail
+      if (!detail || typeof detail.message !== 'string') return
+      if (detail.symbol && detail.symbol !== wantSymbol) return
+      setAnnotationNotice({
+        level: detail.level === 'error' ? 'error' : detail.level === 'info' ? 'info' : 'warn',
+        message: detail.message,
+      })
+    }
+    window.addEventListener(OVERLAY_EVENT, handleOverlay)
+    window.addEventListener(ANNOTATION_STATUS_EVENT, handleStatus)
+    return () => {
+      window.removeEventListener(OVERLAY_EVENT, handleOverlay)
+      window.removeEventListener(ANNOTATION_STATUS_EVENT, handleStatus)
+    }
+  }, [symbol, annotationPeriod])
+
+  /** 交给主图的价位线：只有服务端标注画出来的那些；其余情况**一条不传**（图表自会不画）。 */
+  const copilotPriceLines: KlinePriceLine[] | undefined =
+    annotationLink.kind === 'ready' ? annotationLink.lines : undefined
+
 
   /**
    * 页面即上下文（P1, 2026-10-20）：把「正在看哪只票、什么周期、哪个页面」推给参谋。
@@ -541,6 +591,13 @@ export default function StockWorkbench() {
               内层保留 `min-w-0 flex-1`(承重: 没有 `min-w-0`, 图表 canvas 会撑破与右栏并排的 flex 行),
               但去掉边框/底色/内边距 ⇒ 图表直接占满列宽。右栏挤压逻辑(`w-[320px]`/`w-12` + `gap-3`)不变。 */}
           <section className="mt-3 border-t border-border pt-2">
+            {/* 服务端标注状态带(2026-10-28): 图上每条价位线都要能说清"哪来的、能不能撤"。
+                空态/无事时不占位(组件内部 return null)。 */}
+            <AnnotationLinkBar
+              state={annotationLink}
+              notice={annotationNotice}
+              onRetry={() => setAnnotationRetry((n) => n + 1)}
+            />
             <div className="flex flex-col items-stretch gap-4 xl:flex-row">
               <div className="min-w-0 flex-1">
                 <MemoKlineChart

@@ -44,6 +44,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
  * "同时只有一个在挂载"等价于"同一时刻只有一组端点被启用"。
  */
 const mocks = vi.hoisted(() => ({
+  /** 页面级 `fetchAPI` 替身：默认返回空数组（`/market-data/*`、`/copilot/context` 都不需要真网络）。 */
+  fetchAPI: vi.fn(),
   bodyFetch: vi.fn(),
   /** 遗留⑦: 正文**挂载**次数(挂载副作用只跑一次)—— 刷新后仍为 1 即证明没有重挂载。 */
   bodyMount: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock('@sida/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@sida/api')>()
   return {
     ...actual,
+    fetchAPI: mocks.fetchAPI,
     dashboardApi: {
       ...actual.dashboardApi,
       portfolioSummary: mocks.portfolioSummary,
@@ -313,6 +316,9 @@ const mountedTabs = () => {
 beforeEach(() => {
   localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'test-user' }))}.signature`)
   mocks.portfolioSummary.mockResolvedValue(EMPTY_PORTFOLIO)
+  // 默认：一切 GET 空返回（`/market-data/fund-structure`、`/copilot/context`、`/copilot/annotations`）。
+  mocks.fetchAPI.mockReset()
+  mocks.fetchAPI.mockImplementation(async () => [])
 })
 
 /** Task 19: 等页面持仓判定落定后, 再读标签回显的 `hasPosition`(判定在 fetch 后 setState)。 */
@@ -732,15 +738,16 @@ describe('StockWorkbench 三带骨架', () => {
     expect(mocks.portfolioSummary).not.toHaveBeenCalled()
   })
 
-  it('参谋画线叠加: 通道未接通时, 合成的 sida-kline-overlay 事件也不会上 K 线', async () => {
+  it('本地构造的 sida-kline-overlay 事件（detail 里直接写价位）也不会上 K 线', async () => {
     renderAt('/stocks/002636')
     await waitFor(() => expect(screen.getByTestId('kline')).toBeTruthy())
 
-    // 事件 detail 是本地对象, 与 sessionStorage 一样可伪造; 服务端标注未接通前不得上图
+    // detail 是本地对象：没有服务端响应解析标记 ⇒ 工作台不认（`readOverlayEventDetail` 返回 null）
     window.dispatchEvent(
       new CustomEvent('sida-kline-overlay', {
         detail: {
           symbol: '002636',
+          period: '1d',
           lines: [
             { price: 32.8, kind: 'support', label: '支撑 32.8' },
             { price: 36.5, kind: 'pressure', label: '阻力 36.5' },
@@ -754,13 +761,13 @@ describe('StockWorkbench 三带骨架', () => {
     expect(kline.getAttribute('data-support-pressure') ?? '').toBe('')
   })
 
-  it('跨页面画线持久化: 伪造"已确认"凭证也写不进存储, 工作台无画线', async () => {
+  it('本地价位写不进存储：旧 saveOverlay(含伪造凭证) 一律拒画, 工作台无画线', async () => {
     const { ChartOverlayService } = await import('@/lib/copilot/chartOverlayService')
     const result = ChartOverlayService.saveOverlay('002636', [
       { price: 15.2, title: '支撑 15.2', kind: 'support' },
       { price: 18.6, title: '阻力 18.6', kind: 'pressure' },
     ], { source: 'server_annotation', actionId: 21, status: 'applied', symbol: '002636' })
-    expect(result).toMatchObject({ saved: false, reason: 'server_link_unavailable' })
+    expect(result).toMatchObject({ saved: false, reason: 'client_authored_levels' })
 
     renderAt('/stocks/002636')
     await waitFor(() => expect(screen.getByTestId('kline')).toBeTruthy())
@@ -770,8 +777,8 @@ describe('StockWorkbench 三带骨架', () => {
     ChartOverlayService.clearOverlay('002636')
   })
 
-  it('未核验价位不会恢复: 无凭证的历史画线不能出现在工作台 K 线上', async () => {
-    // 历史遗留格式（散文正则写入，无 source/actionId）——必须被忽略
+  it('旧键的历史价位不会恢复: 无服务端来源的画线不能出现在工作台 K 线上', async () => {
+    // 历史遗留格式（散文正则写入，无 source/actionId，键也是旧的 v2 前缀）——必须被忽略
     sessionStorage.setItem(
       'sida_kline_overlay:v2:test-user:002636',
       JSON.stringify([
@@ -785,5 +792,82 @@ describe('StockWorkbench 三带骨架', () => {
       const kline = screen.getByTestId('kline')
       expect(kline.getAttribute('data-support-pressure') ?? '').toBe('')
     })
+  })
+
+  /**
+   * 端到端（页面侧）：本会话确认过的标注 id + 服务端 `GET /copilot/annotations` 的行
+   * → 页面把**服务端价位**交给主图。这条用例守的是"页面确实消费了服务端响应"，
+   * 而不是"页面自己记得一个价位"。
+   */
+  it('已确认的服务端标注: 回读服务端行后按服务端价位画到 K 线', async () => {
+    sessionStorage.setItem(
+      'sida_kline_annotation_ids:v1:test-user:002636:1d',
+      JSON.stringify({ symbol: '002636', period: '1d', annotationIds: [91, 92] }),
+    )
+    mocks.fetchAPI.mockImplementation(async (path: string) => {
+      if (typeof path === 'string' && path.startsWith('/copilot/annotations')) {
+        return [
+          { id: 91, price: 15.2, ts: null, label: '支撑位', note: null, color: 'up', source: 'ai', created_at: '' },
+          { id: 92, price: 18.6, ts: null, label: '阻力位', note: null, color: 'down', source: 'ai', created_at: '' },
+          // 服务端还有一条"全局/别人的"标注：不在本会话确认过 → 不上图
+          { id: 99, price: 99.9, ts: null, label: '阻力位', note: null, color: 'down', source: 'ai', created_at: '' },
+        ]
+      }
+      return []
+    })
+
+    renderAt('/stocks/002636')
+
+    await waitFor(() => {
+      const kline = screen.getByTestId('kline')
+      expect(kline.getAttribute('data-support-pressure')).toBe(
+        'support:15.2:支撑位;pressure:18.6:阻力位',
+      )
+    })
+    expect(mocks.fetchAPI.mock.calls.some((call) => String(call[0]).includes('symbol=002636'))).toBe(true)
+
+    // 状态带如实给出标注 id；刷新后没有 apply 响应 ⇒ 不编造 action id
+    const bar = screen.getByTestId('copilot-annotation-link')
+    expect(bar.getAttribute('data-kind')).toBe('ready')
+    expect(screen.getByTestId('copilot-annotation-ids').textContent).toContain('91、92')
+    expect(screen.getByTestId('copilot-annotation-no-action').textContent).toContain('不返回 action_id')
+    // 撤销不可用要写在图上
+    expect(screen.getByTestId('copilot-annotation-undo-note').textContent).toContain('撤销不可用')
+  })
+
+  it('服务端标注读取失败: 一条不画, 并在状态带说明原因 + 可重试', async () => {
+    sessionStorage.setItem(
+      'sida_kline_annotation_ids:v1:test-user:002636:1d',
+      JSON.stringify({ symbol: '002636', period: '1d', annotationIds: [91] }),
+    )
+    mocks.fetchAPI.mockImplementation(async (path: string) => {
+      if (typeof path === 'string' && path.startsWith('/copilot/annotations')) {
+        throw new Error('网络异常')
+      }
+      return []
+    })
+
+    renderAt('/stocks/002636')
+
+    await waitFor(() => expect(screen.getByTestId('copilot-annotation-error')).toBeTruthy())
+    expect(screen.getByTestId('copilot-annotation-error').textContent).toContain('读取服务端标注失败')
+    expect(screen.getByTestId('copilot-annotation-retry')).toBeTruthy()
+    expect(screen.getByTestId('kline').getAttribute('data-support-pressure') ?? '').toBe('')
+  })
+
+  it('服务端有标注但本会话没确认过: 不上图(不把别人的/历史的算成自己的)', async () => {
+    mocks.fetchAPI.mockImplementation(async (path: string) => {
+      if (typeof path === 'string' && path.startsWith('/copilot/annotations')) {
+        return [
+          { id: 91, price: 15.2, ts: null, label: '支撑位', note: null, color: 'up', source: 'ai', created_at: '' },
+        ]
+      }
+      return []
+    })
+
+    renderAt('/stocks/002636')
+
+    await waitFor(() => expect(screen.getByTestId('copilot-annotation-unattributed')).toBeTruthy())
+    expect(screen.getByTestId('kline').getAttribute('data-support-pressure') ?? '').toBe('')
   })
 })
