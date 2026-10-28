@@ -59,7 +59,7 @@ describe('review-safety 价位口径安全测试 (防止止损/目标被误标�
     expect(anchors[1].textContent).toContain('目标')
   })
 
-  it('回答包含明确标注的支撑位与阻力位时，如实展示支撑与阻力，并支持正确画线', () => {
+  it('回答包含明确标注的支撑位与阻力位时，如实展示支撑与阻力（但不未经核验就画到真 K 线）', () => {
     const RAW = `【结论】回踩不破偏多，置信度 8/10
 【依据】
 - 支撑位 32.80 元具备强承接
@@ -87,23 +87,17 @@ describe('review-safety 价位口径安全测试 (防止止损/目标被误标�
     expect(screen.getByText(/阻力 36\.50/)).toBeTruthy()
     expect(screen.queryByText(/防守 32\.80/)).toBeNull()
 
-    const drawBtn = screen.getByText('在 K 线叠加画线')
-    fireEvent.click(drawBtn)
+    // 2026-10-28 P2：正文价位没有服务端来源/确认 ⇒ 不允许一键画真 K 线
+    expect(screen.queryByText('在 K 线叠加画线')).toBeNull()
+    expect(saveSpy).not.toHaveBeenCalled()
+    expect(screen.getByTestId('copilot-level-provenance-note').textContent).toContain(
+      '未经服务端核验',
+    )
 
-    expect(saveSpy).toHaveBeenCalledWith(
-      '600111',
-      expect.arrayContaining([
-        expect.objectContaining({ price: 32.8, kind: 'support', title: '支撑 32.8' }),
-        expect.objectContaining({ price: 36.5, kind: 'pressure', title: '阻力 36.5' }),
-      ]),
-    )
-    expect(onAnchoredPrice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        value: 32.8,
-        kind: 'level',
-        context: '支撑',
-      }),
-    )
+    // 点位 chip 仍是"看/传锚点"，点击只回调，不写画线
+    fireEvent.click(screen.getAllByTestId('answer-price-anchor')[0])
+    expect(onAnchoredPrice).toHaveBeenCalled()
+    expect(saveSpy).not.toHaveBeenCalled()
 
     saveSpy.mockRestore()
   })

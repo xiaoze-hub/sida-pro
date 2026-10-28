@@ -754,12 +754,13 @@ describe('StockWorkbench 三带骨架', () => {
     })
   })
 
-  it('跨页面画线持久化: 挂载前通过 ChartOverlayService.saveOverlay 存储的画线在切入工作台时真实恢复', async () => {
+  it('跨页面画线持久化: 带服务端确认凭证存储的画线在切入工作台时真实恢复', async () => {
     const { ChartOverlayService } = await import('@/lib/copilot/chartOverlayService')
+    // 2026-10-28 P2：画线只认 apply 成功的服务端动作凭证（散文价位不再能写进去）
     ChartOverlayService.saveOverlay('002636', [
       { price: 15.2, title: '支撑 15.2', kind: 'support' },
       { price: 18.6, title: '阻力 18.6', kind: 'pressure' },
-    ])
+    ], { source: 'server_annotation', actionId: 21, status: 'applied', symbol: '002636' })
 
     renderAt('/stocks/002636')
     await waitFor(() => {
@@ -770,5 +771,22 @@ describe('StockWorkbench 三带骨架', () => {
     })
 
     ChartOverlayService.clearOverlay('002636')
+  })
+
+  it('未核验价位不会恢复: 无凭证的历史画线不能出现在工作台 K 线上', async () => {
+    // 历史遗留格式（散文正则写入，无 source/actionId）——必须被忽略
+    sessionStorage.setItem(
+      'sida_kline_overlay:v2:test-user:002636',
+      JSON.stringify([
+        { price: 15.2, kind: 'support', label: '支撑 15.2' },
+        { price: 18.6, kind: 'pressure', label: '阻力 18.6' },
+      ]),
+    )
+
+    renderAt('/stocks/002636')
+    await waitFor(() => {
+      const kline = screen.getByTestId('kline')
+      expect(kline.getAttribute('data-support-pressure') ?? '').toBe('')
+    })
   })
 })

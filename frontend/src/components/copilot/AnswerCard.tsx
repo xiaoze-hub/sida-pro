@@ -17,7 +17,6 @@ import {
   MultiDimensionEvidencePanel,
   type DimensionPerspective,
 } from '@/components/copilot/MultiAgentDebatePanel'
-import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 import {
   ANSWER_ACTION_COPIED,
   ANSWER_ACTION_COPY,
@@ -45,9 +44,15 @@ export interface AnchoredPrice {
 }
 
 /**
- * 从参谋结构化回答提取真实支撑与阻力位（严格语义匹配，不把止损或目标混淆为支撑阻力，缺项保持 null）
+ * 从参谋回答**正文文本**里认出的支撑/阻力位（严格语义匹配，不把止损或目标混淆为支撑阻力，
+ * 缺项保持 null）。
+ *
+ * ⚠️ 2026-10-28 P2：这是**文本识别**，不是核验过的图表标注 —— 价格是模型写的字，没有
+ * 服务端标的/时间/来源关联，也没有用户确认。因此结果只用于「看得见的文字展示」，
+ * **不得**再喂给画线服务（`ChartOverlayService.saveOverlay` 现在要求服务端凭证，
+ * 没有凭证会拒绝；见下方罗盘后的来源提示）。
  */
-function extractKeyLevels(parsed: ParsedAnswer): {
+function extractTextLevels(parsed: ParsedAnswer): {
   supportPrice: number | null
   resistancePrice: number | null
   stopLossPrice: number | null
@@ -201,7 +206,7 @@ export function AnswerCard({
     [expanded, parsed.evidence],
   )
 
-  const keyLevels = useMemo(() => extractKeyLevels(parsed), [parsed])
+  const keyLevels = useMemo(() => extractTextLevels(parsed), [parsed])
   const realPerspectives = useMemo(() => extractRealPerspectives(parsed.evidence), [parsed.evidence])
   /**
    * 回答正文里的「置信度 8/10」是模型的**自评分**，不是统计置信度。
@@ -264,30 +269,14 @@ export function AnswerCard({
                   .slice(0, 3)
               : []
           }
-          onDrawOnChart={() => {
-            if (keyLevels.supportPrice != null && keyLevels.resistancePrice != null) {
-              const saved = ChartOverlayService.saveOverlay(symbol, [
-                { price: keyLevels.supportPrice, title: `支撑 ${keyLevels.supportPrice}`, kind: 'support' },
-                { price: keyLevels.resistancePrice, title: `阻力 ${keyLevels.resistancePrice}`, kind: 'pressure' },
-              ])
-              if (!saved) {
-                window.alert('画线未保存：请确认已登录、股票代码有效且浏览器允许会话存储。')
-                return
-              }
-              onAnchoredPrice?.({
-                value: keyLevels.supportPrice,
-                kind: 'level',
-                context: '支撑',
-              })
-              // 若当前不在该个股工作台且提供了 symbol，自动引导切入工作台
-              if (symbol && typeof window !== 'undefined') {
-                const target = `/stocks/${encodeURIComponent(symbol)}`
-                if (!window.location.pathname.startsWith(target)) {
-                  window.location.href = target
-                }
-              }
-            }
-          }}
+          /**
+           * 2026-10-28 P2 止血：**不传** `onDrawOnChart`。
+           *
+           * 之前的「在 K 线叠加画线」用回答正文的正则提价直接画真 K 线 —— 价位没有
+           * 服务端标的/时间/来源关联，用户没确认过任何提议，等于伪造「已核验标注」。
+           * 现在这条不可信动作直接取消；真实链路是 `/copilot/actions` 提议 → 用户确认
+           * (apply) → `/copilot/annotations` 读回，前端那条链路尚未接线（见下方来源提示）。
+           */
           onSetAlert={symbol ? (p) => {
             if (typeof window !== 'undefined' && Number.isFinite(p) && p > 0) {
               window.location.href = `/notifications?tab=alerts&symbol=${encodeURIComponent(
@@ -297,6 +286,21 @@ export function AnswerCard({
           } : undefined}
           onCopy={() => void copy()}
         />
+      ) : null}
+
+      {/*
+        来源提示（2026-10-28 P2）：罗盘上的价位来自回答正文的文本识别。
+        它们没有服务端标的/价格来源/时间关联，也没有用户确认 —— 所以只展示、不上图。
+        等前端把「/copilot/actions 确认 → /copilot/annotations 读回」接好之后，
+        这里才可能换成"已确认标注"文案（届时必须带 actionId 溯源）。
+      */}
+      {keyLevels.supportPrice != null && keyLevels.resistancePrice != null ? (
+        <div
+          data-testid="copilot-level-provenance-note"
+          className="card-surface rounded-lg bg-s1 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground"
+        >
+          以上支撑/阻力来自回答正文的文本识别，未经服务端核验，未画到 K 线上。如需图上标注，请在「待确认动作」确认服务端提议后再标注。
+        </div>
       ) : null}
 
       {/* 3. 多维依据透视（仅在依据具备多维度特征时展现真实多维视角链） */}

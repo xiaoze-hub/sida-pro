@@ -132,16 +132,23 @@ describe('ChartOverlayService 真实图表画线验证与跨页面持久化', ()
     expect(mockSeries.removePriceLine).toHaveBeenCalledTimes(2)
   })
 
-  it('跨页面画线持久化：saveOverlay 写入会话存储且可通过 getStoredOverlay 跨生命周期还原', () => {
-    ChartOverlayService.saveOverlay('600111', [
+  it('跨页面画线持久化：带服务端确认凭证的 saveOverlay 写入会话存储且可跨生命周期还原', () => {
+    // 2026-10-28 P2：没有 apply 成功的动作凭证一律拒画（散文价位不得上真图）
+    const provenance = {
+      source: 'server_annotation' as const,
+      actionId: 11,
+      status: 'applied' as const,
+      symbol: '600111',
+    }
+    expect(ChartOverlayService.saveOverlay('600111', [
       { price: 32.8, title: '支撑 32.8', kind: 'support' },
       { price: 36.5, title: '阻力 36.5', kind: 'pressure' },
-    ])
+    ], provenance).saved).toBe(true)
 
     const stored = ChartOverlayService.getStoredOverlay('600111')
     expect(stored).toEqual([
-      { price: 32.8, kind: 'support', label: '支撑 32.8' },
-      { price: 36.5, kind: 'pressure', label: '阻力 36.5' },
+      { price: 32.8, kind: 'support', label: '支撑 32.8', source: 'server_annotation', actionId: 11 },
+      { price: 36.5, kind: 'pressure', label: '阻力 36.5', source: 'server_annotation', actionId: 11 },
     ])
 
     ChartOverlayService.clearOverlay('600111')
@@ -150,7 +157,7 @@ describe('ChartOverlayService 真实图表画线验证与跨页面持久化', ()
 })
 
 describe('AnswerCard 罗盘与多维依据联动', () => {
-  it('当回答包含真实支撑与阻力位时自动接入罗盘，并调用持久化画线与锚点', () => {
+  it('当回答包含支撑与阻力位时接入罗盘展示，但不未经核验就持久化画线', () => {
     const RAW = `【结论】突破箱体震荡向上，置信度 8/10
 【依据】
 - 关键支撑位 32.80 元有大买单防守
@@ -176,30 +183,25 @@ describe('AnswerCard 罗盘与多维依据联动', () => {
 
     // 验证罗盘组件已正常接入
     expect(screen.getByTestId('copilot-decision-compass')).toBeTruthy()
-    expect(screen.getByText(/支撑 32.80/)).toBeTruthy()
-    expect(screen.getByText(/阻力 36.50/)).toBeTruthy()
+    expect(screen.getByText(/支撑 32\.80/)).toBeTruthy()
+    expect(screen.getByText(/阻力 36\.50/)).toBeTruthy()
 
     // 验证多维依据透视面板正常接入且文案诚实
     expect(screen.getByTestId('copilot-multi-dimension-evidence')).toBeTruthy()
     expect(screen.queryByText(/TradingAgents/)).toBeNull()
 
-    // 点击在 K 线叠加画线
-    const drawBtn = screen.getByText('在 K 线叠加画线')
-    fireEvent.click(drawBtn)
+    // 2026-10-28 P2：正文价位没有服务端来源/确认 ⇒ 没有画线入口、不广播、不落存储
+    expect(screen.queryByText('在 K 线叠加画线')).toBeNull()
+    expect(overlaySpy).not.toHaveBeenCalled()
+    expect(ChartOverlayService.getStoredOverlay('600111')).toBeNull()
 
-    expect(onAnchoredPrice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        value: 32.8,
-        kind: 'level',
-      }),
-    )
-    expect(overlaySpy).toHaveBeenCalledTimes(1)
+    // 明确告知来源未确认（文本展示保留，图线不画）
+    expect(screen.getByTestId('copilot-level-provenance-note').textContent).toContain('未画到 K 线')
 
-    // 验证会话中已成功保存持久化画线，保证后续工作台还原
-    const stored = ChartOverlayService.getStoredOverlay('600111')
-    expect(stored).toHaveLength(2)
-    expect(stored![0].price).toBe(32.8)
-    expect(stored![1].price).toBe(36.5)
+    // 价位 chip 点击仍只传锚点
+    fireEvent.click(screen.getAllByTestId('answer-price-anchor')[0])
+    expect(onAnchoredPrice).toHaveBeenCalled()
+    expect(overlaySpy).not.toHaveBeenCalled()
 
     window.removeEventListener('sida-kline-overlay', overlaySpy)
   })
