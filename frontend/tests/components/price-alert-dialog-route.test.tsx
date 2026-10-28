@@ -50,6 +50,18 @@ describe('parseAlertPrefill：只有个股意图才预填', () => {
     })
   })
 
+  it('支撑破位意图保留正价和明确跌破方向', () => {
+    expect(parseAlertPrefill('?tab=alerts&symbol=600111&price=32.8&intent=support_break')).toMatchObject({
+      symbol: '600111', price: 32.8, direction: '<',
+    })
+  })
+
+  it('非法支撑破位价格不得作为有效预填', () => {
+    for (const price of ['0', '-2', 'Infinity', 'abc', '']) {
+      expect(parseAlertPrefill(`?symbol=600111&intent=support_break&price=${price}`)).toBeNull()
+    }
+  })
+
   it('非法 stock_id 不会当作意图', () => {
     expect(parseAlertPrefill('?stock_id=abc&tab=alerts')).toBeNull()
     expect(parseAlertPrefill('?stock_id=-3')).toBeNull()

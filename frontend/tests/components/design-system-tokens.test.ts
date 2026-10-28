@@ -125,7 +125,7 @@ describe('终端字阶收敛到 4 档(公开面允许更大标题)', () => {
       const src = readFileSync(f, 'utf-8')
       for (const m of src.matchAll(/text-\[(\d+(?:\.\d+)?)px\]/g)) {
         const n = Number(m[1])
-        if (/\/(Tiers|Landing)\.tsx$/.test(f) && (n === 28 || n === 36 || n === 48)) publicOnly.add(n)
+        if (/[\\/](Tiers|Landing)\.tsx$/.test(f) && (n === 28 || n === 36 || n === 48)) publicOnly.add(n)
         else sizes.add(n)
       }
     }

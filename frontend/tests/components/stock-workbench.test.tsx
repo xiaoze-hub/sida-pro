@@ -115,6 +115,8 @@ vi.mock('@sida/biz-ui/components/KlineChart', () => ({
       data-gate={`tck=${String(p.sourceReady?.('拆'))};wencai=${String(p.sourceReady?.('涨'))};reason=${p.sourceReason?.('拆') ?? ''}`}
       /* P1-2 观测点: `price|title` 逐条回显(空 = 一条成本线都不画)。 */
       data-cost={(p.costLines ?? []).map((l) => `${l.price}|${l.title}`).join(',')}
+      /* 参谋罗盘与关键点位画线叠加观测点 */
+      data-support-pressure={(p.supportPressure ?? []).map((l) => `${l.kind}:${l.price}:${l.label}`).join(';')}
     >{`kline:${p.symbol}:${p.market}:${p.height}:${p.initialInterval}:${p.initialDays}`}</div>
   ),
 }))
@@ -282,6 +284,8 @@ const WITH_POSITION = {
 }
 
 afterEach(() => {
+  localStorage.removeItem('token')
+  sessionStorage.clear()
   cleanup()
   vi.restoreAllMocks()
   // 逐例清零"取数"/"挂载"计数(hoisted mock 跨例复用); 断言一律用**例内前后次数差**。
@@ -305,6 +309,7 @@ const mountedTabs = () => {
  * 与 T19 之前的占位值同值但**语义不同**: 现在是"真查过, 不在册")。用例可在 render 前覆盖。
  */
 beforeEach(() => {
+  localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'test-user' }))}.signature`)
   mocks.portfolioSummary.mockResolvedValue(EMPTY_PORTFOLIO)
 })
 
@@ -723,5 +728,47 @@ describe('StockWorkbench 三带骨架', () => {
     expect(screen.queryByTestId('kline')).toBeNull()
     await new Promise((r) => setTimeout(r, 0))
     expect(mocks.portfolioSummary).not.toHaveBeenCalled()
+  })
+
+  it('参谋画线叠加: 接收到 sida-kline-overlay 事件后在 K 线主图真实透传两条支撑阻力线', async () => {
+    renderAt('/stocks/002636')
+    await waitFor(() => expect(screen.getByTestId('kline')).toBeTruthy())
+
+    window.dispatchEvent(
+      new CustomEvent('sida-kline-overlay', {
+        detail: {
+          symbol: '002636',
+          lines: [
+            { price: 32.8, kind: 'support', label: '支撑 32.8' },
+            { price: 36.5, kind: 'pressure', label: '阻力 36.5' },
+          ],
+        },
+      }),
+    )
+
+    await waitFor(() => {
+      const kline = screen.getByTestId('kline')
+      expect(kline.getAttribute('data-support-pressure')).toBe(
+        'support:32.8:支撑 32.8;pressure:36.5:阻力 36.5',
+      )
+    })
+  })
+
+  it('跨页面画线持久化: 挂载前通过 ChartOverlayService.saveOverlay 存储的画线在切入工作台时真实恢复', async () => {
+    const { ChartOverlayService } = await import('@/lib/copilot/chartOverlayService')
+    ChartOverlayService.saveOverlay('002636', [
+      { price: 15.2, title: '支撑 15.2', kind: 'support' },
+      { price: 18.6, title: '阻力 18.6', kind: 'pressure' },
+    ])
+
+    renderAt('/stocks/002636')
+    await waitFor(() => {
+      const kline = screen.getByTestId('kline')
+      expect(kline.getAttribute('data-support-pressure')).toBe(
+        'support:15.2:支撑 15.2;pressure:18.6:阻力 18.6',
+      )
+    })
+
+    ChartOverlayService.clearOverlay('002636')
   })
 })

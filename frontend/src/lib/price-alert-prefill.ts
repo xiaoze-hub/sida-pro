@@ -16,6 +16,9 @@ export interface AlertPrefill {
   market: string
   /** 展示名，可能为空 */
   name: string
+  /** 明确的支撑破位条件；普通提醒入口不带此字段。 */
+  price?: number
+  direction?: '<'
 }
 
 /**
@@ -28,10 +31,14 @@ export function parseAlertPrefill(search: string | null | undefined): AlertPrefi
   const stockId = Number.isFinite(rawStockId) && rawStockId > 0 ? rawStockId : 0
   const symbol = String(params.get('symbol') || '').trim().toUpperCase()
   if (stockId === 0 && !symbol) return null
+  const isSupportBreak = params.get('intent') === 'support_break'
+  const price = Number(params.get('price'))
+  if (isSupportBreak && (!symbol || !Number.isFinite(price) || price <= 0)) return null
   return {
     stockId,
     symbol,
     market: String(params.get('market') || '').trim().toUpperCase() || 'CN',
     name: String(params.get('name') || '').trim(),
+    ...(isSupportBreak ? { price, direction: '<' as const } : {}),
   }
 }
