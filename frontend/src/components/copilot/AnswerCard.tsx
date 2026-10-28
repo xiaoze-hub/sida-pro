@@ -1,7 +1,16 @@
 import { useMemo, useState } from 'react'
 import { Check, ChevronDown, Copy, Sparkles } from 'lucide-react'
 import type { ParsedAnswer } from '@/lib/copilot/answer-blocks'
-import { anchorKindLabel, splitByAnchors, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
+import {
+  anchorKindLabel,
+  extractPriceAnchors,
+  isAnchorClickable,
+  splitByAnchors,
+  type PriceAnchorKind,
+} from '@/lib/copilot/price-anchors'
+import { DecisionCompassCard } from '@/components/copilot/DecisionCompassCard'
+import { MultiAgentDebatePanel, type AgentPerspective } from '@/components/copilot/MultiAgentDebatePanel'
+import { ChartOverlayService } from '@/lib/copilot/chartOverlayService'
 import {
   ANSWER_ACTION_COPIED,
   ANSWER_ACTION_COPY,
@@ -26,6 +35,95 @@ export interface AnchoredPrice {
   value: number
   kind: PriceAnchorKind
   context: string
+}
+
+/**
+ * 从参谋结构化回答提取真实支撑与阻力位（不编造任何假数据，缺项保持 null）
+ */
+function extractKeyLevels(parsed: ParsedAnswer): {
+  supportPrice: number | null
+  resistancePrice: number | null
+  currentPrice: number | null
+  costPrice: number | null
+} {
+  const allText = [parsed.verdict, ...parsed.evidence, parsed.plan].filter(Boolean).join('\n')
+  const anchors = extractPriceAnchors(allText).filter(isAnchorClickable)
+
+  let supportPrice: number | null = null
+  let resistancePrice: number | null = null
+  let currentPrice: number | null = null
+  let costPrice: number | null = null
+
+  for (const a of anchors) {
+    const label = anchorKindLabel(a.kind, a.context)
+    if (
+      (label === '支撑' ||
+        a.context.includes('防守') ||
+        a.context.includes('止损') ||
+        a.context.includes('低点') ||
+        a.context.includes('下沿')) &&
+      supportPrice == null
+    ) {
+      supportPrice = a.value
+    } else if (
+      (label === '阻力' ||
+        a.context.includes('压力') ||
+        a.context.includes('目标') ||
+        a.context.includes('高点') ||
+        a.context.includes('上沿')) &&
+      resistancePrice == null
+    ) {
+      resistancePrice = a.value
+    } else if (
+      (a.context.includes('现价') || a.context.includes('最新') || a.context.includes('当前')) &&
+      currentPrice == null
+    ) {
+      currentPrice = a.value
+    } else if (a.context.includes('成本') && costPrice == null) {
+      costPrice = a.value
+    }
+  }
+
+  return { supportPrice, resistancePrice, currentPrice, costPrice }
+}
+
+/**
+ * 从参谋依据中提取真实的多智能体/多维度视角（只从真实依据解析，无匹配则返回空数组）
+ */
+function extractRealPerspectives(evidence: string[]): AgentPerspective[] {
+  const perspectives: AgentPerspective[] = []
+  for (const item of evidence) {
+    if (/技术|均线|形态|MACD|K线|突破|回踩/i.test(item) && !perspectives.some((p) => p.role === 'technical')) {
+      perspectives.push({
+        role: 'technical',
+        agentName: '技术面分析',
+        status: item.slice(0, 10),
+        conclusion: item,
+      })
+    } else if (/资金|主力|暗盘|龙虎榜|流入|流出|净额/i.test(item) && !perspectives.some((p) => p.role === 'funds')) {
+      perspectives.push({
+        role: 'funds',
+        agentName: '资金与筹码',
+        status: item.slice(0, 10),
+        conclusion: item,
+      })
+    } else if (/题材|板块|舆情|热度|消息|概念|行业/i.test(item) && !perspectives.some((p) => p.role === 'theme')) {
+      perspectives.push({
+        role: 'theme',
+        agentName: '板块与题材',
+        status: item.slice(0, 10),
+        conclusion: item,
+      })
+    } else if (/基本面|业绩|估值|财报|营收|利润|PE|PB/i.test(item) && !perspectives.some((p) => p.role === 'fundamentals')) {
+      perspectives.push({
+        role: 'fundamentals',
+        agentName: '基本面研判',
+        status: item.slice(0, 10),
+        conclusion: item,
+      })
+    }
+  }
+  return perspectives
 }
 
 /**
@@ -72,18 +170,15 @@ function AnchoredText({
 }
 
 /**
- * 参谋回答卡片（2026-10-19, P1 排版）。
+ * 参谋回答卡片（2026-10-19, P1 排版；2026-10-28 顶级金融终端罗盘与多智能体实测升级）。
  *
- * 分层顺序固定为「裁决 → 依据 → 预案 → 口径」：
+ * 分层顺序固定为「裁决 → 罗盘 → 会诊证据链 → 依据 → 预案 → 口径」：
  *   1. 裁决条：一句定性 + 置信度徽标（置信度来自原文 x/10，拿不到就不显示，不编）；
- *   2. 依据：默认 3 条，可展开全部；
- *   3. 预案：原文保留（持仓者/空仓者的分叉在模型输出里）；
- *   4. 口径 + 免责：固定尾部，回答里到底用的是哪套口径必须可见。
- *
- * 不做的事：不解析数字做 tile（模型散文里的数字位置不稳定，硬解析会张冠李戴），
- * 数字仍以依据原文为准。
- * 例外（2026-10-23）：**价位**可以做成行内 chip —— 只在调用方传了 `onAnchoredPrice`
- * 时生效，且 chip 上显示的就是原文片段（不改写、不重排），点击只回传数值。
+ *   2. 决策罗盘：当且仅当原文存在真实支撑与阻力时呈现，提供水平价位罗盘与一键画线；
+ *   3. 会诊面板：当依据具备多维度特征时结构化展现真实证据链；
+ *   4. 依据：默认 3 条，可展开全部；
+ *   5. 预案：原文保留（持仓者/空仓者的分叉在模型输出里）；
+ *   6. 口径 + 免责：固定尾部，回答里到底用的是哪套口径必须可见。
  */
 export function AnswerCard({
   parsed,
@@ -105,6 +200,9 @@ export function AnswerCard({
     [expanded, parsed.evidence],
   )
 
+  const keyLevels = useMemo(() => extractKeyLevels(parsed), [parsed])
+  const realPerspectives = useMemo(() => extractRealPerspectives(parsed.evidence), [parsed.evidence])
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(parsed.raw)
@@ -121,7 +219,7 @@ export function AnswerCard({
       {parsed.verdict ? (
         <div className="card-surface rounded-lg bg-role-watch/8 px-2.5 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            <Sparkles className="h-3 w-3 shrink-0 text-role-watch" />
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-role-watch" />
             <span className="text-[12px] font-medium text-role-watch">{ANSWER_VERDICT_LABEL}</span>
             {parsed.confidence != null ? (
               <span
@@ -138,7 +236,55 @@ export function AnswerCard({
         </div>
       ) : null}
 
-      {/* 2. 依据 */}
+      {/* 2. 数智决策罗盘（仅在解析出真实支撑与阻力位时展现） */}
+      {keyLevels.supportPrice != null && keyLevels.resistancePrice != null ? (
+        <DecisionCompassCard
+          ticker={symbol}
+          currentPrice={keyLevels.currentPrice ?? undefined}
+          costPrice={keyLevels.costPrice ?? undefined}
+          supportPrice={keyLevels.supportPrice}
+          resistancePrice={keyLevels.resistancePrice}
+          biasLabel={parsed.verdict ? parsed.verdict.slice(0, 8) : '多空裁决'}
+          confidence={parsed.confidence != null ? Math.round(parsed.confidence * 10) : undefined}
+          tactics={
+            parsed.plan
+              ? parsed.plan
+                  .split('\n')
+                  .map((l) => l.trim())
+                  .filter((l) => l.length > 0 && !l.startsWith('【'))
+                  .slice(0, 3)
+              : []
+          }
+          onDrawOnChart={() => {
+            if (keyLevels.supportPrice != null && keyLevels.resistancePrice != null) {
+              ChartOverlayService.emitOverlay(symbol, [
+                { price: keyLevels.supportPrice, title: `支撑 ${keyLevels.supportPrice}`, kind: 'support' },
+                { price: keyLevels.resistancePrice, title: `阻力 ${keyLevels.resistancePrice}`, kind: 'pressure' },
+              ])
+              onAnchoredPrice?.({
+                value: keyLevels.supportPrice,
+                kind: 'level',
+                context: '支撑位',
+              })
+            }
+          }}
+          onSetAlert={(p) => {
+            if (typeof window !== 'undefined') {
+              window.location.href = `/notifications?tab=alerts&symbol=${encodeURIComponent(
+                symbol || '',
+              )}&price=${p}`
+            }
+          }}
+          onCopy={() => void copy()}
+        />
+      ) : null}
+
+      {/* 3. 多智能体会诊雷达（仅在依据具备多维度特征时展现真实视角链） */}
+      {realPerspectives.length > 0 ? (
+        <MultiAgentDebatePanel perspectives={realPerspectives} />
+      ) : null}
+
+      {/* 4. 依据 */}
       {parsed.evidence.length ? (
         <div className="card-surface rounded-lg bg-s1 px-2.5 py-2">
           <div className="flex items-center justify-between">
@@ -162,7 +308,7 @@ export function AnswerCard({
               data-testid="copilot-answer-expand"
               className="mt-1.5 flex items-center gap-1 text-[12px] text-role-watch hover:underline"
             >
-              <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
               {expanded
                 ? ANSWER_EVIDENCE_COLLAPSE
                 : `${ANSWER_EVIDENCE_EXPAND_PREFIX} ${hiddenCount} ${ANSWER_EVIDENCE_EXPAND_SUFFIX}`}
@@ -171,7 +317,7 @@ export function AnswerCard({
         </div>
       ) : null}
 
-      {/* 3. 预案 */}
+      {/* 5. 预案 */}
       {parsed.plan ? (
         <div className="card-surface rounded-lg bg-s1 px-2.5 py-2">
           <div className="text-[12px] font-medium text-muted-foreground">{ANSWER_PLAN_LABEL}</div>
@@ -181,7 +327,7 @@ export function AnswerCard({
         </div>
       ) : null}
 
-      {/* 4. 口径 + 动作 */}
+      {/* 6. 口径 + 动作 */}
       <div className="flex flex-wrap items-center gap-1.5">
         {parsed.caliber ? (
           <span className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground">
@@ -201,12 +347,12 @@ export function AnswerCard({
           onClick={() => void copy()}
           className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground hover:text-foreground"
         >
-          {copied ? <Check className="h-2.5 w-2.5" /> : <Copy className="h-2.5 w-2.5" />}
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? ANSWER_ACTION_COPIED : ANSWER_ACTION_COPY}
         </button>
       </div>
 
-      {/* 5. 追问：答完不知道问什么是最常见的断点 */}
+      {/* 7. 追问：答完不知道问什么是最常见的断点 */}
       {onFollowUp ? (
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
           <span className="text-[12px] text-muted-foreground">{ANSWER_FOLLOWUP_LABEL}</span>

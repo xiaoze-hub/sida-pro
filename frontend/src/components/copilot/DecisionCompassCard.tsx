@@ -1,16 +1,17 @@
 import React from 'react'
-import { AlertTriangle, Crosshair, ArrowUpRight, TrendingUp, TrendingDown, Bell } from 'lucide-react'
+import { Crosshair, ArrowUpRight, TrendingUp, TrendingDown, Bell } from 'lucide-react'
+import { safeFixed } from '@/lib/format'
 
 export interface DecisionCompassProps {
   ticker?: string
   tickerName?: string
-  currentPrice: number
+  currentPrice?: number
   costPrice?: number
   supportPrice: number
   resistancePrice: number
-  biasLabel: string
+  biasLabel?: string
   confidence?: number
-  tactics: string[]
+  tactics?: string[]
   onDrawOnChart?: () => void
   onSetAlert?: (price: number) => void
   onCopy?: () => void
@@ -21,119 +22,145 @@ export interface DecisionCompassProps {
  *
  * 将散落的文本支撑、阻力与盈亏信息结构化为直观的水平价位罗盘轴，
  * 支持一键在 K 线图叠加画线与设置破位告警。
+ * 纯真实数据驱动：无默认伪造价格或虚构置信度。
  */
 export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
-  ticker = '600111',
-  tickerName = '北方稀土',
+  ticker,
+  tickerName,
   currentPrice,
-  costPrice = 36.52,
+  costPrice,
   supportPrice,
   resistancePrice,
-  biasLabel,
-  confidence = 86,
-  tactics,
+  biasLabel = '多空裁决',
+  confidence,
+  tactics = [],
   onDrawOnChart,
   onSetAlert,
   onCopy,
 }) => {
   // 计算现价与成本在区间内的百分比位置
-  const minVal = Math.min(supportPrice * 0.98, currentPrice, costPrice)
-  const maxVal = Math.max(resistancePrice * 1.02, currentPrice, costPrice)
+  const validPrices: number[] = [supportPrice, resistancePrice]
+  if (currentPrice != null && Number.isFinite(currentPrice)) validPrices.push(currentPrice)
+  if (costPrice != null && Number.isFinite(costPrice)) validPrices.push(costPrice)
+
+  const minVal = Math.min(...validPrices) * 0.98
+  const maxVal = Math.max(...validPrices) * 1.02
   const range = maxVal - minVal || 1
 
-  const currentPct = Math.min(Math.max(((currentPrice - minVal) / range) * 100, 5), 95)
-  const costPct = Math.min(Math.max(((costPrice - minVal) / range) * 100, 5), 95)
-  const supportPct = Math.min(Math.max(((supportPrice - minVal) / range) * 100, 5), 95)
-  const resistancePct = Math.min(Math.max(((resistancePrice - minVal) / range) * 100, 5), 95)
+  const toPct = (val: number) => Math.min(Math.max(((val - minVal) / range) * 100, 4), 96)
 
-  const pnlPct = (((currentPrice - costPrice) / costPrice) * 100).toFixed(2)
-  const isLoss = Number(pnlPct) < 0
+  const supportPct = toPct(supportPrice)
+  const resistancePct = toPct(resistancePrice)
+  const currentPct = currentPrice != null && Number.isFinite(currentPrice) ? toPct(currentPrice) : null
+  const costPct = costPrice != null && Number.isFinite(costPrice) ? toPct(costPrice) : null
+
+  const pnlPct =
+    costPrice != null && currentPrice != null && costPrice > 0
+      ? safeFixed(((currentPrice - costPrice) / costPrice) * 100, 2)
+      : null
+  const isLoss = pnlPct !== null && Number(pnlPct) < 0
 
   return (
-    <div className="rounded-xl border border-cyan-500/30 bg-[#111724] overflow-hidden shadow-lg transition-all hover:border-cyan-500/50 my-2 text-xs">
+    <div data-testid="copilot-decision-compass" className="card-surface rounded-lg bg-s2 overflow-hidden my-2 text-[12px]">
       {/* 头部：综合裁决徽章与置信度 */}
-      <div className="flex items-center justify-between border-b border-white/[0.08] bg-gradient-to-r from-blue-950/70 via-[#131D2D] to-transparent p-3">
+      <div className="flex items-center justify-between border-b border-border bg-s3 px-3 py-2">
         <div className="flex items-center gap-2">
-          <span className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/20 px-2.5 py-1 font-bold text-amber-300 shadow-sm text-xs">
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+          <span className="flex items-center gap-1.5 rounded-md bg-role-watch/20 px-2 py-0.5 font-medium text-role-watch text-[12px]">
+            <span className="h-1.5 w-1.5 rounded-full bg-role-watch" />
             {biasLabel}
           </span>
-          <span className="text-[11px] text-slate-400">
-            置信度 <strong className="text-slate-200 font-mono">{confidence}%</strong>
-          </span>
+          {confidence != null ? (
+            <span className="text-[12px] text-muted-foreground">
+              置信度 <strong className="text-foreground font-mono">{confidence}%</strong>
+            </span>
+          ) : null}
         </div>
-        <span className="text-[11px] font-mono text-cyan-400 flex items-center gap-1">
-          <Crosshair className="w-3 h-3" />
+        <span className="text-[12px] font-mono text-role-watch flex items-center gap-1">
+          <Crosshair className="w-3.5 h-3.5" />
           多智能体加权裁决
         </span>
       </div>
 
       {/* 中部：关键价位区间可视化罗盘 */}
-      <div className="border-b border-white/[0.08] bg-[#0D131E] p-3 space-y-2">
-        <div className="flex items-center justify-between text-[11px]">
-          <span className="text-slate-400 font-medium">
-            {tickerName} ({ticker}) 价位罗盘与风险敞口
+      <div className="border-b border-border bg-s1 p-3 space-y-2">
+        <div className="flex items-center justify-between text-[12px]">
+          <span className="text-muted-foreground font-medium">
+            {tickerName ? `${tickerName}${ticker ? ` (${ticker})` : ''}` : ticker || '关键点位'} 价位罗盘与多空分界
           </span>
-          <span
-            className={`font-mono font-semibold flex items-center gap-1 ${
-              isLoss ? 'text-rose-400' : 'text-emerald-400'
-            }`}
-          >
-            {isLoss ? <TrendingDown className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
-            持仓盈亏: {pnlPct}%
-          </span>
+          {pnlPct != null ? (
+            <span
+              className={`font-mono font-semibold flex items-center gap-1 ${
+                isLoss ? 'text-stock-down' : 'text-stock-up'
+              }`}
+            >
+              {isLoss ? <TrendingDown className="w-3.5 h-3.5" /> : <TrendingUp className="w-3.5 h-3.5" />}
+              持仓盈亏: {pnlPct}%
+            </span>
+          ) : null}
         </div>
 
         {/* 水平区间轴 */}
         <div className="py-2.5">
-          <div className="relative h-2 w-full rounded-full bg-slate-800 flex items-center">
+          <div className="relative h-2 w-full rounded-full bg-s3 flex items-center">
             {/* 支撑位标记 */}
             <div
-              className="absolute h-2.5 w-2.5 -ml-1 rounded-full bg-emerald-400 ring-2 ring-emerald-950"
+              className="absolute h-2.5 w-2.5 -ml-1 rounded-full text-stock-down bg-current"
               style={{ left: `${supportPct}%` }}
-              title={`防守位: ${supportPrice}`}
+              title={`防守支撑位: ${safeFixed(supportPrice, 2)}`}
             />
-            {/* 现价点位 (带微光) */}
-            <div
-              className="absolute h-3.5 w-3.5 -ml-1.5 rounded-full bg-cyan-400 ring-4 ring-cyan-950 shadow-[0_0_12px_rgba(6,182,212,0.8)] z-10"
-              style={{ left: `${currentPct}%` }}
-              title={`现价: ${currentPrice}`}
-            />
-            {/* 成本位标记 */}
-            <div
-              className="absolute h-2.5 w-2.5 -ml-1 rounded-full bg-amber-400 ring-2 ring-amber-950"
-              style={{ left: `${costPct}%` }}
-              title={`成本价: ${costPrice}`}
-            />
+            {/* 现价点位 (若有) */}
+            {currentPct != null && (
+              <div
+                className="absolute h-3.5 w-3.5 -ml-1.5 rounded-full bg-role-watch z-10"
+                style={{ left: `${currentPct}%` }}
+                title={`现价: ${safeFixed(currentPrice, 2)}`}
+              />
+            )}
+            {/* 成本位标记 (若有) */}
+            {costPct != null && (
+              <div
+                className="absolute h-2.5 w-2.5 -ml-1 rounded-full bg-amber-500"
+                style={{ left: `${costPct}%` }}
+                title={`持仓成本价: ${safeFixed(costPrice, 2)}`}
+              />
+            )}
             {/* 阻力位标记 */}
             <div
-              className="absolute h-2.5 w-2.5 -ml-1 rounded-full bg-rose-400 ring-2 ring-rose-950"
+              className="absolute h-2.5 w-2.5 -ml-1 rounded-full text-stock-up bg-current"
               style={{ left: `${resistancePct}%` }}
-              title={`阻力位: ${resistancePrice}`}
+              title={`阻力目标位: ${safeFixed(resistancePrice, 2)}`}
             />
           </div>
 
           {/* 标尺数值对照 */}
-          <div className="flex justify-between text-[10px] font-mono pt-2 text-slate-400">
-            <div className="text-emerald-400">
-              <div>防守 {supportPrice.toFixed(2)}</div>
-              <div className="text-[9px] text-slate-500">
-                {(((supportPrice - currentPrice) / currentPrice) * 100).toFixed(1)}%
+          <div className="flex justify-between text-[12px] font-mono pt-2 text-muted-foreground">
+            <div className="text-stock-down">
+              <div>防守 {safeFixed(supportPrice, 2)}</div>
+              {currentPrice != null && currentPrice > 0 ? (
+                <div className="text-[12px] text-muted-foreground">
+                  {safeFixed(((supportPrice - currentPrice) / currentPrice) * 100, 1)}%
+                </div>
+              ) : null}
+            </div>
+            {currentPrice != null ? (
+              <div className="text-role-watch font-bold text-center">
+                <div>现价 {safeFixed(currentPrice, 2)}</div>
+                <div className="text-[12px] text-muted-foreground">基准价</div>
               </div>
-            </div>
-            <div className="text-cyan-300 font-bold text-center">
-              <div>现价 {currentPrice.toFixed(2)}</div>
-              <div className="text-[9px] text-slate-500">中位蓄势</div>
-            </div>
-            <div className="text-amber-300 text-center">
-              <div>成本 {costPrice.toFixed(2)}</div>
-              <div className="text-[9px] text-slate-500">保本位</div>
-            </div>
-            <div className="text-rose-400 text-right">
-              <div>阻力 {resistancePrice.toFixed(2)}</div>
-              <div className="text-[9px] text-slate-500">
-                +{(((resistancePrice - currentPrice) / currentPrice) * 100).toFixed(1)}%
+            ) : null}
+            {costPrice != null ? (
+              <div className="text-amber-500 text-center">
+                <div>成本 {safeFixed(costPrice, 2)}</div>
+                <div className="text-[12px] text-muted-foreground">保本位</div>
               </div>
+            ) : null}
+            <div className="text-stock-up text-right">
+              <div>阻力 {safeFixed(resistancePrice, 2)}</div>
+              {currentPrice != null && currentPrice > 0 ? (
+                <div className="text-[12px] text-muted-foreground">
+                  +{safeFixed(((resistancePrice - currentPrice) / currentPrice) * 100, 1)}%
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -141,12 +168,12 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
 
       {/* 战术操盘预案 */}
       {tactics && tactics.length > 0 && (
-        <div className="p-3 bg-[#101622] space-y-1.5 text-xs text-slate-300 border-b border-white/[0.08]">
-          <div className="font-semibold text-slate-200">操盘战术预案：</div>
-          <ul className="space-y-1 text-[11px] leading-relaxed">
+        <div className="p-3 bg-s2 space-y-1.5 text-[12px] text-foreground border-b border-border">
+          <div className="font-semibold text-foreground">操盘战术预案：</div>
+          <ul className="space-y-1 text-[12px] leading-relaxed">
             {tactics.map((tactic, idx) => (
               <li key={idx} className="flex items-start gap-1.5">
-                <span className="font-bold text-cyan-400">{idx + 1}.</span>
+                <span className="font-bold text-role-watch">{idx + 1}.</span>
                 <span>{tactic}</span>
               </li>
             ))}
@@ -155,15 +182,15 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
       )}
 
       {/* 底部快捷操作 */}
-      <div className="flex items-center justify-between bg-[#0A0E17] p-2.5">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between bg-s3 p-2.5 gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {onDrawOnChart && (
             <button
               type="button"
               onClick={onDrawOnChart}
-              className="flex items-center gap-1 rounded bg-blue-600/30 hover:bg-blue-600/50 px-2.5 py-1 text-[11px] font-medium text-cyan-300 border border-cyan-500/40 transition"
+              className="flex items-center gap-1 rounded bg-role-watch/20 hover:bg-role-watch/30 px-2.5 py-1 text-[12px] font-medium text-role-watch transition"
             >
-              <ArrowUpRight className="w-3 h-3" />
+              <ArrowUpRight className="w-3.5 h-3.5" />
               在 K 线叠加画线
             </button>
           )}
@@ -171,10 +198,10 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
             <button
               type="button"
               onClick={() => onSetAlert(supportPrice)}
-              className="flex items-center gap-1 rounded bg-[#141C2A] hover:bg-[#1A2536] px-2.5 py-1 text-[11px] text-slate-300 border border-white/[0.08] transition"
+              className="flex items-center gap-1 rounded bg-s1 hover:bg-s2 px-2.5 py-1 text-[12px] text-foreground border border-border transition"
             >
-              <Bell className="w-3 h-3" />
-              设 {supportPrice.toFixed(2)} 破位告警
+              <Bell className="w-3.5 h-3.5 text-muted-foreground" />
+              设 {safeFixed(supportPrice, 2)} 破位告警
             </button>
           )}
         </div>
@@ -182,7 +209,7 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
           <button
             type="button"
             onClick={onCopy}
-            className="text-[11px] text-slate-400 hover:text-white transition"
+            className="text-[12px] text-muted-foreground hover:text-foreground transition"
           >
             复制战报
           </button>

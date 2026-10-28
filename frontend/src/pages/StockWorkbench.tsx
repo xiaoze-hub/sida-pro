@@ -17,6 +17,7 @@ import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
+import type { KlinePriceLine } from '@sida/biz-ui/klineEvents'
 import { reportViewOnce } from '@/lib/copilot/viewstate'
 import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
@@ -367,6 +368,24 @@ export default function StockWorkbench() {
     [position.cost],
   )
 
+  /**
+   * 参谋结论/决策罗盘价位线叠加(2026-10-28 数智参谋联动):
+   * 接收来自数智参谋罗盘与锚点点击派发的画线事件，将关键支撑/阻力画线叠加到 K 线主图。
+   */
+  const [copilotPriceLines, setCopilotPriceLines] = useState<KlinePriceLine[] | undefined>(undefined)
+
+  useEffect(() => {
+    const handleOverlay = (e: Event) => {
+      const detail = (e as CustomEvent<{ symbol?: string; lines: KlinePriceLine[] }>).detail
+      if (!detail?.lines) return
+      if (!detail.symbol || detail.symbol === symbol) {
+        setCopilotPriceLines(detail.lines)
+      }
+    }
+    window.addEventListener('sida-kline-overlay', handleOverlay)
+    return () => window.removeEventListener('sida-kline-overlay', handleOverlay)
+  }, [symbol])
+
   /** 返回入口(2026-09-20 用户报"从持仓进行情页没有返回按钮"): 必须在任何 early return **之前**
    *  调用(hooks 顺序固定) —— 所以放在这里, 不放渲染前。 */
   const back = useBackTarget()
@@ -512,6 +531,8 @@ export default function StockWorkbench() {
                   /* P1-2: 持仓成本线 —— 该股在真实持仓里且有正成本价时才传(画水平线 + 成本轴标签);
                      无持仓/取不到成本价时 undefined ⇒ 一条不画, 不报错(禁猜/禁默认值)。 */
                   costLines={costLines}
+                  /* 参谋罗盘与关键点位画线叠加 */
+                  supportPressure={copilotPriceLines}
                   /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
                   onIntervalChange={handleIntervalChange}
                   /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
