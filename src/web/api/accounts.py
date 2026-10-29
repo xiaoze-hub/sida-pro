@@ -1,5 +1,6 @@
 """账户和持仓管理 API"""
 import logging
+import math
 import threading
 import time
 import httpx
@@ -445,6 +446,84 @@ def reorder_positions(data: PositionReorderRequest, db: Session = Depends(get_db
     return {"updated": updated}
 
 
+# ========== 行情可用性(2026-10-29 缺行情伪造收益缺陷) ==========
+# 原则: 没有可用的现价就没有市值 —— 绝不用成本顶替、绝不记 0、绝不出 -100%。
+# 股票行情里 0 / 负数 / NaN 不是有效成交价(停牌、坏数据、字段缺失), 一律视为无效报价;
+# 原始值保留在 raw_current_price 供排查, 但绝不参与市值/盈亏计算。
+
+QUOTE_OK = "ok"                  # 有可用现价, 参与计价
+QUOTE_MISSING = "missing"        # 行情源没有这只票的现价
+QUOTE_INVALID = "invalid_price"  # 有现价字段但不可用(<=0 / 非数值 / NaN)
+QUOTE_NOT_REQUESTED = "not_requested"  # 调用方显式不要行情(include_quotes=false)
+
+
+def _valid_price(value) -> float | None:
+    """把行情里的价格字段转成可用现价; 不可用返回 None(0 不是合法股票现价)。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        px = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(px) or px <= 0:
+        return None
+    return px
+
+
+def _resolve_quote_price(quote: dict | None, requested: bool = True) -> tuple[float | None, str, float | None]:
+    """解析一条行情 → (可用现价, 状态, 原始现价)。状态见 QUOTE_* 常量。"""
+    if not requested:
+        return None, QUOTE_NOT_REQUESTED, None
+    if not quote:
+        return None, QUOTE_MISSING, None
+    raw = quote.get("current_price")
+    px = _valid_price(raw)
+    if px is None:
+        if raw is None:
+            return None, QUOTE_MISSING, None
+        try:
+            raw_f = float(raw)
+        except (TypeError, ValueError):
+            raw_f = None
+        return None, QUOTE_INVALID, raw_f
+    return px, QUOTE_OK, px
+
+
+def _round_or_none(value: float | None, digits: int = 2) -> float | None:
+    """四舍五入; None 保持 None(不要用 falsy 判断, 真实的 0 是有效数值)。"""
+    return round(value, digits) if value is not None else None
+
+
+def _quotes_coverage(
+    *,
+    requested: bool,
+    positions_total: int,
+    positions_priced: int,
+    priced_cost: float,
+    total_cost: float,
+) -> dict:
+    """覆盖度声明: 让消费方一眼看出市值/盈亏算的是「全部持仓」还是「已定价子集」。"""
+    missing = max(0, positions_total - positions_priced)
+    if not requested:
+        basis = "not_requested"
+        cost_pct = None
+    elif positions_priced and missing == 0:
+        basis = "all_positions"
+        cost_pct = round(priced_cost / total_cost * 100, 2) if total_cost > 0 else None
+    else:
+        basis = "priced_positions_only"
+        cost_pct = round(priced_cost / total_cost * 100, 2) if total_cost > 0 else None
+    return {
+        "requested": requested,
+        "positions_total": positions_total,
+        "positions_priced": positions_priced,
+        "positions_missing": missing,
+        "cost_coverage_pct": cost_pct,
+        "pricing_basis": basis,
+        "complete": bool(requested and positions_total > 0 and missing == 0),
+    }
+
+
 # ========== Portfolio Summary ==========
 
 @router.get("/portfolio/summary")
@@ -463,6 +542,19 @@ def get_portfolio_summary(
     Returns:
         accounts: 账户列表及各账户持仓明细
         total: 所有账户汇总
+
+    字段契约(2026-10-29 缺行情修复, 消费方必须按此解释):
+      - 现价不可用(缺行情 / 0 / 负数 / NaN)时: current_price、market_value、market_value_cny、
+        pnl、pnl_pct 全为 None; quote_status 说明原因(missing / invalid_price /
+        not_requested), raw_current_price 保留行情源原值。
+      - total_market_value / total_pnl / total_pnl_pct / total_assets 只在**已定价子集**上计算:
+        None = 一只都没价(未知), 不是 0, 更不是 -100%。
+      - total_cost 是全持仓成本(已知事实); priced_cost / unpriced_cost 把已定价与未定价拆开,
+        与 total_market_value 同一篮子。
+      - quotes_coverage 给出持仓总数 / 已定价数 / 缺失数 / 成本覆盖率 / pricing_basis,
+        消费方展示金额时必须一并展示覆盖度或"部分持仓缺行情"提示。
+      - includes_quotes=false 是显式"不计价"模式(前端用本地行情重算), 保持旧数值 0 语义,
+        以 quotes_coverage.requested=false 区分, 不要当成"缺行情"。
     """
     # 获取账户(仅当前用户的)
     if account_id:
@@ -490,6 +582,16 @@ def get_portfolio_summary(
                 "daily_pnl_date": None,
                 "available_funds": 0,
                 "total_assets": 0,
+                "priced_cost": 0,
+                "unpriced_cost": 0,
+                # 无持仓 ≠ 行情缺失; 空仓时覆盖度是"完整"的, 但明确 0 只持仓。
+                "quotes_coverage": _quotes_coverage(
+                    requested=include_quotes,
+                    positions_total=0,
+                    positions_priced=0,
+                    priced_cost=0.0,
+                    total_cost=0.0,
+                ),
             }
         }
 
@@ -513,6 +615,10 @@ def get_portfolio_summary(
     account_summaries = []
     grand_total_market_value = 0
     grand_total_cost = 0
+    grand_priced_cost = 0
+    grand_unpriced_cost = 0
+    grand_positions_count = 0
+    grand_priced_count = 0
     grand_available_funds = 0
     grand_daily_pnl = 0
     grand_daily_pnl_periods: list[tuple[str, str | None]] = []
@@ -521,6 +627,10 @@ def get_portfolio_summary(
         positions_data = []
         acc_market_value = 0
         acc_cost = 0
+        acc_priced_cost = 0
+        acc_unpriced_cost = 0
+        acc_priced_count = 0
+        acc_positions_count = 0
         acc_daily_pnl = 0
         acc_daily_pnl_periods: list[tuple[str, str | None]] = []
 
@@ -533,9 +643,12 @@ def get_portfolio_summary(
             if not stock:
                 continue
 
+            acc_positions_count += 1
             quote = quotes.get(stock.symbol)
-            current_price = quote["current_price"] if quote else None
-            change_pct = quote["change_pct"] if quote else None
+            # 没有可用现价就没有市值(不填 0、不用成本顶替), 见文件顶部"行情可用性"说明。
+            current_price, quote_status, raw_price = _resolve_quote_price(quote, requested=include_quotes)
+            priced = current_price is not None
+            change_pct = quote["change_pct"] if (quote and priced) else None
             prev_close = quote.get("prev_close") if quote else None
             quote_time = quote.get("quote_time") if quote else None
             quote_date = quote.get("quote_date") if quote else None
@@ -557,7 +670,7 @@ def get_portfolio_summary(
             daily_pnl = None
             daily_pnl_pct = None
 
-            if current_price is not None and prev_close and prev_close > 0:
+            if priced and prev_close and prev_close > 0:
                 daily_pnl = (current_price - prev_close) * pos.quantity * rate
                 daily_pnl_pct = (current_price - prev_close) / prev_close * 100
                 acc_daily_pnl += daily_pnl
@@ -569,13 +682,17 @@ def get_portfolio_summary(
             cost_cny = cost * rate  # 假设成本价也是原币种
             acc_cost += cost_cny
 
-            if current_price is not None:
+            if priced:
                 market_value = current_price * pos.quantity  # 原币种市值
                 market_value_cny = market_value * rate  # 人民币市值
                 pnl = market_value_cny - cost_cny
-                pnl_pct = (pnl / cost_cny * 100) if cost_cny > 0 else 0
+                pnl_pct = (pnl / cost_cny * 100) if cost_cny > 0 else None
 
                 acc_market_value += market_value_cny
+                acc_priced_cost += cost_cny
+                acc_priced_count += 1
+            else:
+                acc_unpriced_cost += cost_cny
 
             positions_data.append({
                 "id": pos.id,
@@ -591,55 +708,103 @@ def get_portfolio_summary(
                 # 用户自设防守线(绝对价, 原币种): 前端据此判定"有没有纪律位", None 即未设置。
                 "defense_price": getattr(pos, "defense_price", None),
                 "current_price": current_price,
-                "current_price_cny": round(current_price * rate, 2) if current_price else None,
+                # 行情源给的原始现价(含 0/坏值), 便于前端与排障区分"缺"与"坏"。
+                "raw_current_price": raw_price,
+                "quote_status": quote_status,
+                "priced": priced,
+                "current_price_cny": round(current_price * rate, 2) if priced else None,
                 "change_pct": change_pct,
-                "market_value": round(market_value, 2) if market_value else None,
-                "market_value_cny": round(market_value_cny, 2) if market_value_cny else None,
-                "pnl": round(pnl, 2) if pnl else None,
-                "pnl_pct": round(pnl_pct, 2) if pnl_pct else None,
-                "daily_pnl": round(daily_pnl, 2) if daily_pnl is not None else None,
-                "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
+                "market_value": _round_or_none(market_value),
+                "market_value_cny": _round_or_none(market_value_cny),
+                "pnl": _round_or_none(pnl),
+                "pnl_pct": _round_or_none(pnl_pct),
+                "daily_pnl": _round_or_none(daily_pnl),
+                "daily_pnl_pct": _round_or_none(daily_pnl_pct),
                 "daily_pnl_period": daily_pnl_period,
                 "quote_time": quote_time,
                 "quote_date": quote_date,
                 "exchange_rate": rate if is_foreign else None,
             })
 
+        # 账户口径: 市值/盈亏只在已定价子集上算(分子分母同篮子); 缺价仓位只进未定价成本,
+        # 不进市值也不进盈亏 → 不会出现"成本在分母、市值缺席"的假亏损。
         if include_quotes:
-            acc_pnl = acc_market_value - acc_cost
-            acc_pnl_pct = (acc_pnl / acc_cost * 100) if acc_cost > 0 else 0
-            acc_total_assets = acc_market_value + acc.available_funds
+            if acc_priced_count:
+                acc_pnl = acc_market_value - acc_priced_cost
+                acc_pnl_pct = (acc_pnl / acc_priced_cost * 100) if acc_priced_cost > 0 else None
+                acc_market_value_out: float | None = acc_market_value
+                acc_total_assets: float | None = acc_market_value + acc.available_funds
+            elif acc_positions_count:
+                # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
+                acc_pnl = None
+                acc_pnl_pct = None
+                acc_market_value_out = None
+                acc_total_assets = None
+            else:
+                # 空账户: 没有持仓就是真的 0 盈亏, 不是"未知"。
+                acc_pnl = 0
+                acc_pnl_pct = 0
+                acc_market_value_out = 0
+                acc_total_assets = acc.available_funds
         else:
             acc_pnl = 0
             acc_pnl_pct = 0
+            acc_market_value_out = acc_market_value  # 不计价模式: 保持旧数值 0
             acc_total_assets = acc.available_funds
 
         account_summaries.append({
             "id": acc.id,
             "name": acc.name,
             "available_funds": acc.available_funds,
-            "total_market_value": round(acc_market_value, 2),
+            "total_market_value": _round_or_none(acc_market_value_out),
             "total_cost": round(acc_cost, 2),
-            "total_pnl": round(acc_pnl, 2),
-            "total_pnl_pct": round(acc_pnl_pct, 2),
+            "priced_cost": round(acc_priced_cost, 2),
+            "unpriced_cost": round(acc_unpriced_cost, 2),
+            "total_pnl": _round_or_none(acc_pnl),
+            "total_pnl_pct": _round_or_none(acc_pnl_pct),
             "total_daily_pnl": round(acc_daily_pnl, 2),
-            "total_assets": round(acc_total_assets, 2),
+            "total_assets": _round_or_none(acc_total_assets),
+            "quotes_coverage": _quotes_coverage(
+                requested=include_quotes,
+                positions_total=acc_positions_count,
+                positions_priced=acc_priced_count,
+                priced_cost=acc_priced_cost,
+                total_cost=acc_cost,
+            ),
             "positions": positions_data,
             **summarize_daily_pnl_period(acc_daily_pnl_periods),
         })
 
         grand_total_market_value += acc_market_value
         grand_total_cost += acc_cost
+        grand_priced_cost += acc_priced_cost
+        grand_unpriced_cost += acc_unpriced_cost
+        grand_positions_count += acc_positions_count
+        grand_priced_count += acc_priced_count
         grand_available_funds += acc.available_funds
         grand_daily_pnl += acc_daily_pnl
 
     if include_quotes:
-        grand_pnl = grand_total_market_value - grand_total_cost
-        grand_pnl_pct = (grand_pnl / grand_total_cost * 100) if grand_total_cost > 0 else 0
-        grand_total_assets = grand_total_market_value + grand_available_funds
+        if grand_priced_count:
+            grand_pnl = grand_total_market_value - grand_priced_cost
+            grand_pnl_pct = (grand_pnl / grand_priced_cost * 100) if grand_priced_cost > 0 else None
+            grand_market_value_out: float | None = grand_total_market_value
+            grand_total_assets: float | None = grand_total_market_value + grand_available_funds
+        elif grand_positions_count:
+            # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
+            grand_pnl = None
+            grand_pnl_pct = None
+            grand_market_value_out = None
+            grand_total_assets = None
+        else:
+            grand_pnl = 0
+            grand_pnl_pct = 0
+            grand_market_value_out = 0
+            grand_total_assets = grand_available_funds
     else:
         grand_pnl = 0
         grand_pnl_pct = 0
+        grand_market_value_out = grand_total_market_value
         grand_total_assets = grand_available_funds
 
     # 构建 quotes 字典（用于前端股票列表显示）
@@ -657,13 +822,22 @@ def get_portfolio_summary(
     return {
         "accounts": account_summaries,
         "total": {
-            "total_market_value": round(grand_total_market_value, 2),
+            "total_market_value": _round_or_none(grand_market_value_out),
             "total_cost": round(grand_total_cost, 2),
-            "total_pnl": round(grand_pnl, 2),
-            "total_pnl_pct": round(grand_pnl_pct, 2),
+            "priced_cost": round(grand_priced_cost, 2),
+            "unpriced_cost": round(grand_unpriced_cost, 2),
+            "total_pnl": _round_or_none(grand_pnl),
+            "total_pnl_pct": _round_or_none(grand_pnl_pct),
             "total_daily_pnl": round(grand_daily_pnl, 2),
             "available_funds": round(grand_available_funds, 2),
-            "total_assets": round(grand_total_assets, 2),
+            "total_assets": _round_or_none(grand_total_assets),
+            "quotes_coverage": _quotes_coverage(
+                requested=include_quotes,
+                positions_total=grand_positions_count,
+                positions_priced=grand_priced_count,
+                priced_cost=grand_priced_cost,
+                total_cost=grand_total_cost,
+            ),
             **total_daily_pnl_meta,
         },
         "exchange_rates": {
@@ -742,16 +916,23 @@ def _gather_holdings(db: Session, user: User | None = None) -> list[dict]:
                 continue
             rate = hkd if stock.market == "HK" else usd if stock.market == "US" else 1.0
             quote = quotes.get(stock.symbol)
-            price = quote.get("current_price") if quote else None
+            # 缺/坏现价 → 市值与浮盈未知(None)。修复前这里用成本回填市值、浮盈记 0,
+            # 让组合诊断把"没行情"当成"没涨没跌", 集中度与市值分布全部失真。
+            price, quote_status, _raw = _resolve_quote_price(quote)
             cost_cny = pos.cost_price * pos.quantity * rate
-            mv_cny = (price * pos.quantity * rate) if price else cost_cny
-            pnl_cny = (mv_cny - cost_cny) if price else 0.0
+            mv_cny = (price * pos.quantity * rate) if price is not None else None
+            pnl_cny = (mv_cny - cost_cny) if mv_cny is not None else None
             key = (stock.market, stock.symbol)
             if key in seen:  # 多账户同一标的合并
                 h = seen[key]
                 h["quantity"] += pos.quantity
-                h["market_value"] += mv_cny
-                h["unrealized_pnl"] += pnl_cny
+                h["cost_cny"] += cost_cny
+                if mv_cny is not None:
+                    h["market_value"] = (h["market_value"] or 0.0) + mv_cny
+                    h["unrealized_pnl"] = (h["unrealized_pnl"] or 0.0) + (mv_cny - cost_cny)
+                    h["priced_position_count"] += 1
+                else:
+                    h["missing_quote_count"] += 1
             else:
                 h = {
                     "symbol": stock.symbol,
@@ -759,8 +940,13 @@ def _gather_holdings(db: Session, user: User | None = None) -> list[dict]:
                     "name": stock.name,
                     "quantity": pos.quantity,
                     "fx": rate,
+                    # None 表示"现价不可用", 消费方不得按 0 或成本理解。
                     "market_value": mv_cny,
                     "unrealized_pnl": pnl_cny,
+                    "cost_cny": cost_cny,
+                    "quote_status": quote_status,
+                    "priced_position_count": 1 if mv_cny is not None else 0,
+                    "missing_quote_count": 0 if mv_cny is not None else 1,
                     "strategy_code": pos.trading_style or "",
                 }
                 seen[key] = h
@@ -906,10 +1092,20 @@ async def portfolio_ai_review(model_id: int | None = None, db: Session = Depends
     top = attr[:3]
     worst = list(reversed(attr[-3:])) if len(attr) > 3 else []
 
+    def _amt(v) -> str:
+        # 缺行情时市值/浮盈是 None: 明确写"未知", 不要格式化出 0 让 AI 当成真实数字。
+        return "未知(缺行情)" if v is None else f"{v:.0f}"
+
     lines = [
-        f"持仓 {diag['position_count']} 只,总市值 {diag['total_market_value']:.0f},浮盈 {diag['total_unrealized_pnl']:.0f}",
+        f"持仓 {diag['position_count']} 只,总市值 {_amt(diag['total_market_value'])},"
+        f"浮盈 {_amt(diag['total_unrealized_pnl'])}",
         f"集中度 HHI {diag['hhi']},最大单仓 {diag['max_weight'] * 100:.0f}%",
     ]
+    if diag.get("missing_quote_count"):
+        lines.append(
+            f"行情覆盖: {diag['priced_position_count']}/{diag['position_count']} 只有效现价,"
+            f"{diag['missing_quote_count']} 只缺行情(市值与浮盈只统计已定价部分)"
+        )
     if bench.get("excess_return") is not None:
         lines.append(
             f"近60日 vs {bench.get('benchmark_label', '基准')}:超额 {bench['excess_return']}%"
