@@ -190,7 +190,13 @@ class _FnFacts(ast.NodeVisitor):
         else:
             name = None
         if name is not None and (
-            name in self.SCOPE_HELPERS or "user_scope" in name
+            name in self.SCOPE_HELPERS
+            or "user_scope" in name
+            # 2026-10-29: 收口后的名称不再含 "user_scope"(如
+            # analysis_history_scope_clause / owned_*_clause)。它们同属
+            # "返回带归属过滤的 SQL 条件" 助手, 必须与 scoped() 同等识别,
+            # 否则正确加了作用域的查询反而被门禁判红(HEAD 上 10 处误报)。
+            or name.endswith("scope_clause")
         ):
             self.scoped_call = True
         self.generic_visit(node)

@@ -24,6 +24,8 @@ interface AlertRule {
   stock_symbol: string
   stock_name: string
   market: string
+  /** 规则挂在共享(历史)自选上: 可显式迁到自己的私有自选, 共享自选才可被其 owner 删除。 */
+  stock_shared?: boolean
   name: string
   enabled: boolean
   condition_group: {
@@ -272,6 +274,17 @@ export default function PriceAlertsPage() {
     }
   }
 
+  const adoptRule = async (r: AlertRule) => {
+    if (!window.confirm(`把提醒「${r.name || r.stock_name}」迁移到你自己的私有自选？\n\n只迁移该规则及其触发历史，不会复制别人的 Agent 绑定，也不会触发任何分析或通知。`)) return
+    try {
+      await fetchAPI(`/price-alerts/${r.id}/adopt`, { method: 'POST' })
+      await load()
+      toast('已迁移到你的私有自选', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '迁移失败', 'error')
+    }
+  }
+
   const runScan = async () => {
     setScanRunning(true)
     try {
@@ -356,6 +369,9 @@ export default function PriceAlertsPage() {
                 </div>
                 {/* Desktop: buttons on the right */}
                 <div className="hidden md:flex items-center gap-1.5 shrink-0">
+                  {r.stock_shared && (
+                    <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={() => adoptRule(r)}>迁到我的自选</Button>
+                  )}
                   <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={() => testRule(r)}>测试</Button>
                   <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={() => openHits(r)}><BarChart3 className="w-3.5 h-3.5" /></Button>
                   <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={() => openEdit(r)}>编辑</Button>
@@ -365,6 +381,9 @@ export default function PriceAlertsPage() {
               </div>
               {/* Mobile: buttons at bottom */}
               <div className="flex md:hidden items-center gap-1.5 mt-3 pt-3 border-t border-border">
+                {r.stock_shared && (
+                  <Button variant="secondary" size="sm" className="h-7 px-2 text-[12px]" onClick={() => adoptRule(r)}>迁到我的自选</Button>
+                )}
                 <Button variant="secondary" size="sm" className="h-7 px-2 text-[12px]" onClick={() => testRule(r)}>测试</Button>
                 <Button variant="secondary" size="sm" className="h-7 px-2 text-[12px]" onClick={() => openHits(r)}><BarChart3 className="w-3 h-3" /></Button>
                 <Button variant="secondary" size="sm" className="h-7 px-2 text-[12px]" onClick={() => openEdit(r)}>编辑</Button>

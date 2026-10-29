@@ -152,12 +152,20 @@ router = APIRouter()
 
 
 @router.get("/health")
-@allow_cross_user  # C3(2026-09-09): 调度健康是全局运维视图(所有 agent 最近运行), 有意跨用户
+@allow_cross_user  # C3(2026-09-09): 调度健康是全局运维视图; 2026-10-29 六审: 仅 owner 可跨用户
 def agents_health(
     include_internal: bool = Query(default=False),
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """调度健康概览（用于排查调度/时区/触发问题）"""
+    """调度健康概览（用于排查调度/时区/触发问题）。
+
+    `last_run` 归属(2026-10-29 六审): AgentRun.error/result 可能含他人自选与报错正文。
+    owner = 运维视角, 可看全局最近一次; member 只看**本人**的最近一次运行,
+    NULL 归属(历史任务)对 member 一律不可见。summary.recent_failed_count 同口径,
+    不把别人的失败数/错误文案带给 member。
+    """
+    is_owner = str(getattr(user, "role", "") or "").lower() == "owner"
     tz = Settings().app_timezone or "UTC"
     try:
         tzinfo = ZoneInfo(tz)
@@ -190,12 +198,11 @@ def agents_health(
             except Exception:
                 next_runs = []
 
-        last = (
-            db.query(AgentRun)
-            .filter(AgentRun.agent_name == a.name)
-            .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
-            .first()
-        )
+        last_q = db.query(AgentRun).filter(AgentRun.agent_name == a.name)
+        if not is_owner:
+            # member 只看本人的运行; user_id IS NULL 的历史运行不猜归属。
+            last_q = last_q.filter(AgentRun.user_id == user.id)
+        last = last_q.order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).first()
         last_run = None
         if last:
             last_run = {

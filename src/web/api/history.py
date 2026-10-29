@@ -274,7 +274,8 @@ def retry_history(
       · 已经是 success → 409（不需要重试，避免白烧一次 LLM）
       · agent 不存在 / 工作流 agent 被禁用 → 404 / 400（先让用户去开启，别静默失败）
     """
-    record = db.query(AnalysisHistory).filter(AnalysisHistory.id == history_id).first()
+    # 按主键取后立刻走对象级 analysis_history_visible() 判定(403), 与读口径同源。
+    record = db.query(AnalysisHistory).filter(AnalysisHistory.id == history_id).first()  # scoped-check: allow
     if not record:
         raise HTTPException(404, "报告记录不存在")
 

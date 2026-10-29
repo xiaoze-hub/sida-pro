@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 from pydantic import BaseModel
 
 from src.web.database import get_db
@@ -494,126 +495,107 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
             "该自选仍被其它数据引用，暂无法删除，请联系管理员",
         )
 
-    # SQLite 默认可能不启用 FK 级联，手动清理提醒数据避免孤儿记录。
+    # ── 提醒规则 / 命中历史: 只允许本人销毁本人的, 其余一律整单拒绝 ──
     #
-    # 2026-10-29 四审: 旧实现按 `stock_id` **无条件删除所有人的** PriceAlertRule /
-    # PriceAlertHit —— owner 删一条共享自选, 会把 member 建在该票上的价格提醒规则
-    # 一起删掉(跨租户数据丢失, 且不可恢复)。现在:
-    #   - 只删**本人**的规则/命中记录; 共享(NULL)规则只有 owner 能删;
-    #   - 存在**他人的**规则 → 409 通用文案, 整单拒绝(不做半截删除);
-    #   - StockAgent 无 user_id 列, 但写入路径已按股票归属校验(私有=本人/共享=owner),
-    #     所以走到这里的 StockAgent 都属于本次可删范围。
-    uid = getattr(user, "id", None)
-    own_rule_filter = PriceAlertRule.user_id == uid
-    if str(getattr(user, "role", "") or "").lower() == "owner":
-        # 共享桶的旧规则(NULL)归 owner 处置; member 不能借删共享自选清掉它们。
-        own_rule_filter = or_(PriceAlertRule.user_id == uid, PriceAlertRule.user_id.is_(None))
-    foreign_rule = (
+    # 2026-10-29 五审的「安全拆离」有跨账号副作用, 六审回退为**保守拒绝**:
+    #   1) 给他人复制 Stock(symbol) + StockAgent 绑定 = 替别人建自选/订阅, 调度器
+    #      随后会真的跑他的 Agent(LLM 调用 + 按绑定渠道外发), 未经其同意;
+    #   2) 只改 rule.stock_id 不改 PriceAlertHit.stock_id → 删原行时
+    #      `price_alert_hits.stock_id ON DELETE CASCADE` 仍会把他人的命中历史删掉;
+    #   3) NULL 归属规则被 `~own_filter`(SQL 三值逻辑)滤掉 → 既不算他人的,
+    #      也不在本人删除集合里, 最后被数据库级联删掉, 历史同样丢失。
+    #
+    # 现在的口径(不猜、不代劳、不丢历史):
+    #   - 本人规则(user_id == 我) → 允许随自选一起删(用户自己的显式操作);
+    #   - 任何非本人规则(含 user_id IS NULL 的历史规则) → 通用 409, 整单不删;
+    #   - 任何本人不可销毁规则上的命中, 或 stock_id 指向本行的孤儿命中 → 同样 409;
+    #   - 共享票/规则/绑定/命中全部原样保留, 文案不报归属人、不报数量。
+    # 用户可操作的替代路径: `POST /api/price-alerts/{rule_id}/adopt` 由规则本人在
+    # 「价格提醒」页显式迁到自己的私有自选(带同意、不复制 Agent、不触发 LLM/外发),
+    # 迁空后本端点即可正常删除共享行。
+    own_rule_ids = [
+        row[0]
+        for row in db.query(PriceAlertRule.id)
+        .filter(PriceAlertRule.stock_id == stock_id, PriceAlertRule.user_id == uid)
+        .all()
+    ]
+    has_unowned_rule = (
         db.query(PriceAlertRule.id)
         .filter(
             PriceAlertRule.stock_id == stock_id,
-            ~own_rule_filter,
+            or_(
+                PriceAlertRule.user_id.is_(None),
+                PriceAlertRule.user_id != uid,
+            ),
         )
         .first()
     )
-    # 2026-10-29 五审 P1: owner 删共享自选时, 其他用户在该票上的价格提醒不能一删了之
-    # (那是跨租户数据丢失), 也不能只回一句"联系管理员"让人卡死。做法 = **安全拆离**:
-    # 给每个引用方建一条同一 symbol 的私有自选, 把他们的规则/Agent 绑定迁过去,
-    # 再删共享行。所有人数据保留、可继续使用, 且不会把共享行留给别人"复活"。
-    detached_users: list[str] = []
-    if foreign_rule:
-        try:
-            foreign_rows = (
-                db.query(PriceAlertRule)
-                .filter(
-                    PriceAlertRule.stock_id == stock_id,
-                    ~own_rule_filter,
-                )
-                .all()
-            )
-            clone_by_user: dict[str, Stock] = {}
-            for rule in foreign_rows:
-                owner_uid = getattr(rule, "user_id", None)
-                if not owner_uid:
-                    # 走到这里说明归属不可判定 → 宁可不删, 也不猜给谁。
-                    raise HTTPException(409, "该自选仍被来源不明的提醒引用，暂无法安全删除")
-                clone = clone_by_user.get(owner_uid)
-                if clone is None:
-                    clone = (
-                        db.query(Stock)
-                        .filter(
-                            Stock.user_id == owner_uid,
-                            Stock.symbol == db_stock.symbol,
-                            Stock.market == db_stock.market,
-                        )
-                        .first()
-                    )
-                    if clone is None:
-                        clone = Stock(
-                            user_id=owner_uid,
-                            symbol=db_stock.symbol,
-                            name=db_stock.name,
-                            market=db_stock.market,
-                            sort_order=db_stock.sort_order,
-                        )
-                        db.add(clone)
-                        db.flush()
-                    clone_by_user[owner_uid] = clone
-                rule.stock_id = clone.id
-                if owner_uid not in detached_users:
-                    detached_users.append(owner_uid)
-            # 原票上的 Agent 绑定也复制到各私有克隆上(每票每 agent 唯一)。
-            source_agents = (
-                db.query(StockAgent).filter(StockAgent.stock_id == stock_id).all()
-            )
-            for owner_uid, clone in clone_by_user.items():
-                existing = {
-                    a.agent_name
-                    for a in db.query(StockAgent)
-                    .filter(StockAgent.stock_id == clone.id)
-                    .all()
-                }
-                for sa in source_agents:
-                    if sa.agent_name in existing:
-                        continue
-                    db.add(
-                        StockAgent(
-                            stock_id=clone.id,
-                            agent_name=sa.agent_name,
-                            schedule=sa.schedule,
-                            ai_model_id=sa.ai_model_id,
-                            notify_channel_ids=sa.notify_channel_ids,
-                        )
-                    )
-            db.flush()
-        except HTTPException:
-            db.rollback()
-            raise
-        except Exception as e:  # noqa: BLE001
-            db.rollback()
-            logger.warning("拆离他人价格提醒失败(整单回滚, 未删除): stock=%s err=%s", stock_id, e)
-            raise HTTPException(409, "该自选仍被其它数据引用，暂无法安全删除，请稍后重试")
-    rule_ids = [
-        row[0]
-        for row in db.query(PriceAlertRule.id)
-        .filter(PriceAlertRule.stock_id == stock_id, own_rule_filter)
-        .all()
-    ]
-    if rule_ids:
-        db.query(PriceAlertHit).filter(PriceAlertHit.rule_id.in_(rule_ids)).delete(
+    # 命中记录没有 user_id, 只能经 rule_id 判定: 规则缺失/非本人 → 不能证明可删。
+    foreign_hit = (
+        db.query(PriceAlertHit.id)
+        .outerjoin(PriceAlertRule, PriceAlertRule.id == PriceAlertHit.rule_id)
+        .filter(
+            PriceAlertHit.stock_id == stock_id,
+            or_(
+                PriceAlertRule.id.is_(None),
+                PriceAlertRule.user_id.is_(None),
+                PriceAlertRule.user_id != uid,
+            ),
+        )
+        .first()
+    )
+    if has_unowned_rule or foreign_hit:
+        logger.warning(
+            "拒绝删除自选: stock_id=%s 仍被非本人规则/命中引用(不泄露归属) user=%s",
+            stock_id,
+            uid,
+        )
+        raise HTTPException(
+            409,
+            "该自选仍被其它数据引用，暂无法删除（删除会丢失历史记录）。"
+            "如提醒规则属于你本人，请在「价格提醒」页将其迁移到自己的私有自选后再试；"
+            "仍未解决请联系管理员。",
+        )
+
+    try:
+        # 先删本人规则命中, 再删规则, 最后删 Agent 绑定/自选行 —— 显式清理不依赖
+        # 数据库 FK 级联(SQLite 默认可能未启用), 任何一步失败整单回滚。
+        if own_rule_ids:
+            db.query(PriceAlertHit).filter(
+                PriceAlertHit.rule_id.in_(own_rule_ids)
+            ).delete(synchronize_session=False)
+            db.query(PriceAlertRule).filter(
+                PriceAlertRule.id.in_(own_rule_ids)
+            ).delete(synchronize_session=False)
+        db.query(StockAgent).filter(StockAgent.stock_id == stock_id).delete(
             synchronize_session=False
         )
-    # 不再按 stock_id 全量删命中: 他人的命中记录随其规则保留(上面已拒绝本单)。
-    db.query(PriceAlertRule).filter(
-        PriceAlertRule.stock_id == stock_id, own_rule_filter
-    ).delete(synchronize_session=False)
-    db.query(StockAgent).filter(StockAgent.stock_id == stock_id).delete(
-        synchronize_session=False
-    )
+        # 用 bulk DELETE 的 rowcount 判定"这次是否真的删到了":
+        # 并发双删时另一个事务已删, 这里 0 行 → 幂等 404, 不报 200 也不 500。
+        deleted = (
+            db.query(Stock)
+            .filter(Stock.id == stock_id)
+            .delete(synchronize_session=False)
+        )
+        if not deleted:
+            db.rollback()
+            raise HTTPException(404, "股票不存在")
+        db.commit()
+    except StaleDataError:
+        # 并发双删: 另一请求已删掉本行 → 幂等 404, 不冒 500。
+        db.rollback()
+        if db.query(Stock.id).filter(Stock.id == stock_id).first() is None:
+            raise HTTPException(404, "股票不存在")
+        raise HTTPException(409, "该自选正在被其他操作修改，请刷新后重试")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("删除自选失败(整单回滚, 未删除): stock=%s err=%s", stock_id, e)
+        raise HTTPException(409, "该自选暂无法删除，请稍后重试")
 
-    db.delete(db_stock)
-    db.commit()
-    return {"ok": True, "detached_users": len(detached_users)}
+    return {"ok": True}
 
 
 @router.put("/{stock_id}/agents", response_model=StockResponse)

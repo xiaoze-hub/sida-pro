@@ -96,6 +96,8 @@ def _to_response(rule: PriceAlertRule) -> dict:
         "stock_symbol": stock.symbol if stock else "",
         "stock_name": stock.name if stock else "",
         "market": stock.market if stock else "",
+        # 该规则挂在共享(NULL)自选上时, UI 提供「迁到我的自选」入口(六审)。
+        "stock_shared": bool(stock is not None and stock.user_id is None),
         "name": rule.name,
         "enabled": rule.enabled,
         "condition_group": rule.condition_group or {},
@@ -255,6 +257,93 @@ def delete_alert_rule(
     db.delete(row)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/{rule_id}/adopt")
+def adopt_alert_rule_to_private(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """由提醒规则的**本人**显式把它迁到自己的私有自选(同一 symbol/market)。
+
+    背景(2026-10-29 六审): 删除共享自选时, 系统**不再**替其他用户自动复制自选/
+    Agent 绑定(那会在未经同意的情况下触发其 LLM 调度与外发), 也不再级联删历史。
+    需要腾出共享自选的用户, 用这个入口自己迁:
+
+    - 只操作 `user_id == 本人` 的规则及其命中历史(按 rule_id, 不跨租户);
+    - 目标=本人已有同标的私有自选, 没有则建一条(受自选配额约束);
+    - **不复制 StockAgent 绑定** → 不替用户订阅、不触发任何 Agent/LLM/通知;
+    - 命中记录 `stock_id` 同步指向新自选, 原有触发历史完整保留。
+    """
+    row = (
+        db.query(PriceAlertRule)
+        .filter(PriceAlertRule.id == rule_id, PriceAlertRule.user_id == user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "规则不存在")
+
+    src_stock = db.query(Stock).filter(Stock.id == row.stock_id).first()
+    if not src_stock:
+        raise HTTPException(409, "该规则关联的自选已不存在")
+    if src_stock.user_id == user.id:
+        raise HTTPException(400, "该提醒已在你的私有自选上")
+    if src_stock.user_id is not None:
+        # 规则指向他人私有自选(历史错位): 不借迁移复制其标的元数据。
+        raise HTTPException(409, "该规则关联的自选不可用")
+
+    target = (
+        db.query(Stock)
+        .filter(
+            Stock.user_id == user.id,
+            Stock.symbol == src_stock.symbol,
+            Stock.market == src_stock.market,
+        )
+        .first()
+    )
+    created_target = False
+    if target is None:
+        # 与 POST /api/stocks 同口径的配额/演示账号上限, 不借迁移动绕过限制。
+        from src.core.permissions import check_watchlist_quota
+
+        if str(getattr(user, "username", "")) == "demo" or str(
+            getattr(user, "role", "")
+        ) == "guest":
+            try:
+                from src.core import free_tier
+
+                watch_limit = int(free_tier.guest_strategy(db).get("watchlist_limit", 1))
+            except Exception:  # noqa: BLE001
+                watch_limit = 1
+            own_count = db.query(Stock).filter(Stock.user_id == user.id).count()
+            if watch_limit > 0 and own_count >= watch_limit:
+                raise HTTPException(
+                    403, f"演示账号仅可添加 {watch_limit} 只自选股，无法迁移提醒。"
+                )
+        check_watchlist_quota(db, user)
+        from sqlalchemy import func as _func
+
+        max_order = db.query(_func.max(Stock.sort_order)).scalar() or 0
+        target = Stock(
+            user_id=user.id,
+            symbol=src_stock.symbol,
+            name=src_stock.name,
+            market=src_stock.market,
+            sort_order=int(max_order) + 1,
+        )
+        db.add(target)
+        db.flush()
+        created_target = True
+
+    row.stock_id = target.id
+    # 命中没有 user_id, 但其 rule_id 已证明属于本人 → 同步标的, 历史条目不丢。
+    db.query(PriceAlertHit).filter(PriceAlertHit.rule_id == row.id).update(
+        {PriceAlertHit.stock_id: target.id}, synchronize_session=False
+    )
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "stock_id": target.id, "created_stock": created_target}
 
 
 @router.get("/hits/today")

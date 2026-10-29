@@ -583,7 +583,7 @@ def _collect_portfolio_block(
         return _make_block(
             [],
             "missing",
-            reason="共享口径不含持仓(个人持仓见个人报告)",
+            reason="共享口径不含个人持仓(请到「持仓」页查看本人数据)",
             source="positions",
             as_of=as_of,
         )

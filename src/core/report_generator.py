@@ -472,6 +472,18 @@ async def _collect_data(report_type: str, db, user_id: str | None = None) -> dic
         data["sources"]["跌停"] = "wudao/东财" if data["limit_down"] else "数据获取失败(或无跌停)"
         data["sources"]["信号/持仓"] = "本地库"
 
+    # 2026-10-29 六审: 严格归属(private)会漏掉"账户/持仓一侧 NULL"的历史行。
+    # 不猜归属, 但必须让本人**显式知道**少算了多少, 且该数字只含可关联到本人的行。
+    if user_id:
+        try:
+            from src.core.portfolio_scope import count_unattributed_positions
+
+            unattributed = count_unattributed_positions(db, user_id)
+        except Exception:  # noqa: BLE001
+            unattributed = 0
+        if unattributed:
+            data["unattributed_positions"] = unattributed
+
     return data
 
 
@@ -544,6 +556,19 @@ def _build_user_content(report_type: str, data: dict) -> str:
     ):
         if key in data and key not in skip_keys:
             payload[key] = data[key]
+    # 2026-10-29 六审: 严格归属下"一侧 NULL"的历史持仓未计入, 必须在正文明确提示,
+    # 但只给本人这一条条数, 不提供任何他人记录/账户信息。
+    try:
+        unattributed = int(data.get("unattributed_positions") or 0)
+    except (TypeError, ValueError):
+        unattributed = 0
+    if unattributed > 0:
+        payload["unattributed_positions"] = unattributed
+        payload["unattributed_instruction"] = (
+            f"另有 {unattributed} 条历史归属不完整的持仓未计入本报告(账户或持仓归属方为空, "
+            "无法确认属于当前用户)。必须在「持仓」小节明确写出这句话, 不得猜测这些持仓的内容, "
+            "也不得把它们算进任何统计。"
+        )
     return json.dumps(payload, ensure_ascii=False, indent=1, default=str)
 
 
@@ -605,6 +630,20 @@ def _position_cost_text(p: dict) -> str:
 def _position_account_text(p: dict) -> str:
     name = str(p.get("account_name") or "").strip()
     return f"[{name}] " if name else ""
+
+
+def _unattributed_note(data: dict) -> str:
+    """严格归属漏算提示(仅本人报告; 不含任何他人记录/姓名)。"""
+    try:
+        n = int(data.get("unattributed_positions") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return ""
+    return (
+        f"- ⚠️ 另有 {n} 条历史归属不完整的持仓未计入本报告"
+        "(账户或持仓的归属方为空, 无法确认属于你); 如确认是你的持仓, 请联系管理员校准归属。"
+    )
 
 
 def _fmt_pct(v) -> str:
@@ -704,7 +743,7 @@ def _build_template_report(report_type: str, data: dict) -> str:
         pos = data.get("positions") or []
         if shared_market_only:
             # 共享报告不评价「我有没有持仓」—— 它对每个读者都不一样, 只说明口径。
-            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓见按用户生成的报告。")
+            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓请在「持仓」页查看。")
         elif not pos:
             lines.append("- 暂无持仓数据")
         else:
@@ -720,6 +759,9 @@ def _build_template_report(report_type: str, data: dict) -> str:
                     f"- {_position_account_text(p)}{p.get('name', '')}({p.get('symbol', '')}) "
                     f"{p.get('quantity', 0)}股 {_position_cost_text(p)} {cur}"
                 )
+        note = _unattributed_note(data)
+        if note:
+            lines.append(note)
         lines.append("")
 
         lines.append("## 五、风险提示")
@@ -780,7 +822,7 @@ def _build_template_report(report_type: str, data: dict) -> str:
         lines.append("## 四、持仓今日表现")
         pos = data.get("positions") or []
         if shared_market_only:
-            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓见按用户生成的报告。")
+            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓请在「持仓」页查看。")
         elif not pos:
             lines.append("- 暂无持仓数据")
         else:
@@ -795,6 +837,9 @@ def _build_template_report(report_type: str, data: dict) -> str:
                     f"- {_position_account_text(p)}{p.get('name', '')}({p.get('symbol', '')}) "
                     f"{p.get('quantity', 0)}股 {_position_cost_text(p)} {cur}"
                 )
+        note = _unattributed_note(data)
+        if note:
+            lines.append(note)
         lines.append("")
 
         lines.append("## 五、策略信号回顾")
@@ -945,7 +990,7 @@ async def generate_market_report(report_type: str, db=None, user_id: str | None 
         else:
             scope_note = (
                 "**归属:** 共享市场报告(纯市场口径, 不含任何用户/共享桶的持仓与自选; "
-                "个人持仓请看按用户生成的报告)\n"
+                "个人持仓请在「持仓」页查看)\n"
             )
         # 带 title 元信息行(Hermes cron 报告同款格式: 首行标题 + 元信息块)
         header = (

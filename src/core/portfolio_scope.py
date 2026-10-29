@@ -32,7 +32,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import false, or_
+from sqlalchemy import and_, false, or_
 from sqlalchemy.orm import Query, Session
 
 from src.db.models import Account, Position, Stock
@@ -44,6 +44,7 @@ __all__ = [
     "owned_account_clause",
     "owned_position_clause",
     "owned_stock_clause",
+    "count_unattributed_positions",
     "user_scope_accounts",
     "user_scope_positions",
     "user_scope_stocks",
@@ -143,6 +144,38 @@ def user_scope_positions(
 def user_scope_stocks(db: Session, user_id: str | None) -> Query:
     """当前租户可见的标的(自选)查询。"""
     return db.query(Stock).filter(stock_user_scope_clause(user_id))
+
+
+def count_unattributed_positions(db: Session, user_id: str | None) -> int:
+    """统计**归属链不完整但可关联到本人**的持仓条数(仅用于向本人提示"未计入")。
+
+    私有报告采集已改为严格双层归属(`Account.user_id == uid AND Position.user_id == uid`)。
+    历史数据里一侧为 NULL 的行因此不会进报告 —— 但用户可能真的"漏了仓"。本函数只统计:
+
+      - 持仓是本人的, 账户是历史 NULL; 或
+      - 账户是本人的, 持仓是历史 NULL。
+
+    两侧都 NULL 的行无法归属到任何人 → **不计数、不猜**, 也不向任何用户展示。
+    返回值只会出现在该用户本人的报告提示里, 不含他人姓名/账户/条数。
+    """
+    uid = str(user_id) if user_id else ""
+    if not uid:
+        return 0
+    try:
+        return int(
+            db.query(Position.id)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Position.quantity > 0,
+                or_(
+                    and_(Position.user_id == uid, Account.user_id.is_(None)),
+                    and_(Account.user_id == uid, Position.user_id.is_(None)),
+                ),
+            )
+            .count()
+        )
+    except Exception:  # noqa: BLE001 —— 提示性统计失败不该拖垮报告
+        return 0
 
 
 # ---------------------------------------------------------------- 对象级判定

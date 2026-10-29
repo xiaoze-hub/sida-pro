@@ -580,6 +580,18 @@ class TestScopeCheckerC3:
         )
         assert check_source(src, {"Stock"}) == []
 
+    def test_scope_clause_helper_passes(self):
+        """2026-10-29: *_scope_clause 助手与 scoped() 同义(返回归属过滤条件)。"""
+        check_source = self._checker()
+        src = (
+            "from src.core.analysis_history import analysis_history_scope_clause\n"
+            "def good(db, user):\n"
+            "    return db.query(Stock).filter(\n"
+            "        analysis_history_scope_clause(user.id, user.role)\n"
+            "    ).all()\n"
+        )
+        assert check_source(src, {"Stock"}) == []
+
     def test_owned_or_404_pattern_passes(self):
         check_source = self._checker()
         src = (

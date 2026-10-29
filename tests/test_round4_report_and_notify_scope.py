@@ -40,9 +40,11 @@ from src.db.models import (
     Notification,
     NotifyChannel,
     Position,
+    PriceAlertHit,
     PriceAlertRule,
     ReportSubscription,
     Stock,
+    StockAgent,
     User,
 )
 from src.web.database import SessionLocal, init_db
@@ -118,6 +120,12 @@ def db():
         s.query(PriceAlertRule).filter(PriceAlertRule.stock_id.in_(created["stocks"])).delete(
             synchronize_session=False
         )
+        s.query(PriceAlertHit).filter(
+            PriceAlertHit.stock_id.in_(created["stocks"])
+        ).delete(synchronize_session=False)
+        s.query(StockAgent).filter(
+            StockAgent.stock_id.in_(created["stocks"])
+        ).delete(synchronize_session=False)
         s.query(Position).filter(Position.id.in_(created["positions"])).delete(
             synchronize_session=False
         )
@@ -430,43 +438,54 @@ def test_progress_endpoint_fails_closed_for_null_user_run(db):
 # ─────────────────────── R5 删自选不删他人资源 ───────────────────────
 
 
-def test_delete_shared_stock_detaches_members_alert_rule_safely(db):
-    """owner 删共享自选: 不删他人规则, 也不 dead-loop 拒绝。
+def test_delete_shared_stock_with_member_rule_is_refused_generically(db):
+    """owner 删共享自选: 他人规则在 → 通用 409, 不自动迁移/不删任何东西。
 
-    2026-10-29 五审 P1 契约: 共享行上的他人提醒必须先**安全拆离**(复制同 symbol 的
-    私有自选并迁移规则), 再删除共享行。断言三件事:
-      1) 删除成功(可恢复, 不再只回 409 文案);
-      2) member 的规则仍在(数据不丢), 且已指向他自己的私有克隆;
-      3) 原共享行已删除, 且克隆不是共享(NULL)桶 —— 没有把他人数据留给所有人。
+    2026-10-29 六审契约: 五审的「安全拆离」会给 member 静默建私有自选并复制
+    StockAgent 绑定(触发其 LLM/外发), 且 PriceAlertHit.stock_id 级联仍会删掉
+    member 的命中历史。现在改为**保守拒绝**:
+      1) 409, 文案不带 member id/用户名/数量, 也不含 detached_users;
+      2) 共享票、member 规则、StockAgent 绑定、命中历史全部原样保留;
+      3) 不为 member 创建任何新自选(不替别人订阅)。
     """
     owner = db.user("owner", "del")
     member = db.user("member", "del")
     st = db.stock(None, symbol=f"SH{uuid.uuid4().hex[:5].upper()}")
-    orig_id, orig_symbol, orig_market = st.id, st.symbol, st.market
     rule = PriceAlertRule(user_id=member.id, stock_id=st.id, name="member rule",
                           condition_group={"conditions": []}, enabled=True)
     db.s.add(rule)
     db.s.commit()
     db.created["rules"].append(rule.id)
+    hit = PriceAlertHit(rule_id=rule.id, stock_id=st.id, trigger_bucket="202610291000")
+    db.s.add(hit)
+    agent = StockAgent(stock_id=st.id, agent_name=f"wf_{uuid.uuid4().hex[:6]}")
+    db.s.add(agent)
+    db.s.commit()
+    created_hit, created_agent = hit.id, agent.id
 
     from src.web.app import app
 
     client = TestClient(app)
-    r = client.delete(f"/api/stocks/{orig_id}", headers=_token(owner))
-    assert r.status_code == 200, r.text
-    assert (r.json().get("data") or {}).get("detached_users") == 1
+    r = client.delete(f"/api/stocks/{st.id}", headers=_token(owner))
+    assert r.status_code == 409, r.text
+    detail = str(r.json().get("message") or r.json().get("detail") or "")
+    assert "引用" in detail
+    assert member.id not in detail and member.username not in detail
+    assert "detached_users" not in r.text
 
-    # 端点在独立 session 里迁移了 rule.stock_id; 本 fixture session 的 identity map
-    # 里还是旧值, 先过期再从库里重读(否则会误判未迁移)。
     db.s.expire_all()
+    assert db.s.query(Stock).filter(Stock.id == st.id).first() is not None
     kept = db.s.query(PriceAlertRule).filter(PriceAlertRule.id == rule.id).first()
-    assert kept is not None, "删共享自选不得删除 member 的价格提醒"
-    assert kept.stock_id != orig_id, "规则应迁移到 member 的私有克隆, 而非留在已删共享行"
-    clone = db.s.query(Stock).filter(Stock.id == kept.stock_id).first()
-    assert clone is not None and clone.user_id == member.id
-    assert clone.symbol == orig_symbol and clone.market == orig_market
-    db.created["stocks"].append(clone.id)
-    assert db.s.query(Stock).filter(Stock.id == orig_id).first() is None
+    assert kept is not None and kept.stock_id == st.id
+    assert db.s.query(PriceAlertHit).filter(PriceAlertHit.id == created_hit).first() is not None
+    assert db.s.query(StockAgent).filter(StockAgent.id == created_agent).first() is not None
+    # 没有替 member 复制同 symbol 的私有自选。
+    assert (
+        db.s.query(Stock)
+        .filter(Stock.user_id == member.id, Stock.symbol == st.symbol, Stock.market == st.market)
+        .count()
+        == 0
+    )
 
 
 def test_delete_own_private_stock_still_removes_own_rule(db):
