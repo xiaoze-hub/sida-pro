@@ -22,7 +22,8 @@
   - 写入端把 market 归一成大写、`1M` 认成月线（不是 1 分钟）、price/ts 至少一个、
     ts 超长或格式非法直接 400 并整笔回滚；
   - 弱引用悬空（标注被删后 SQLite rowid 复用同一个 id）不许让确认**永远**失败；
-  - annotation 不可回滚就如实说，不许先给 `can_rollback=true` 再报"没有快照"。
+  - `can_rollback` 不许撒谎：不能撤销时如实 false；2026-10-29 起 annotation 真能撤销
+    （本人 + 已确认 + 有确认动作），`can_rollback` 必须如实 true（§9）。
 
 2026-10-28 安全复审驳回（第二轮整改，§11-§13）：
   - 市场从"字符串相等"改为**可证明的同一标的**（`provable_markets`）：SH/SZ/BJ 提议必须能从
@@ -878,29 +879,46 @@ def test_dangling_link_of_another_user_is_reported_not_rewritten(db):
     assert db.query(CopilotAction).filter(CopilotAction.id == mine_item["id"]).one().status == "pending"
 
 
-# ── 9. 不可回滚要如实说（can_rollback 与文案）───────────────────────────────
+# ── 9. 已确认标注可撤销（2026-10-29 撤销闭合）──────────────────────────────
 
 
-def test_annotation_action_reports_itself_as_not_rollbackable(db):
-    """标注确认后没有快照可退：`can_rollback` 必须是 false，回滚文案不能拿"早于 v0.73"糊弄。"""
-    item = _propose(db, {"symbol": SYMBOL, "label": "不可回滚", "price": 35.0})
+def test_annotation_action_is_revocable_and_reports_itself_as_such(db):
+    """标注确认后是真能撤销的（`rollback_action` / `revoke_annotation`）。
+
+    2026-10-28 时这里钉的是"不可回滚、如实说"；2026-10-29 补上撤销入口后，
+    契约反转：`can_rollback` 必须如实为 true，撤销必须真的把线撤下、动作转 rolled_back，
+    重复撤销必须明确报状态（而不是静默"成功"）。
+    """
+    item = _propose(db, {"symbol": SYMBOL, "label": "可撤销", "price": 35.0})
     out = A.apply_action(db, user_id=UID, action_id=item["id"])
+    assert out["can_rollback"] is True
 
-    assert out["can_rollback"] is False, "annotation 不在可回滚集合里（_snapshot 对它返回空）"
+    res = A.rollback_action(db, user_id=UID, action_id=item["id"], reason="点位选错")
+    assert res["status"] == "rolled_back"
+    assert res["can_rollback"] is False
+    assert res["revoked_annotation"]["annotation_id"] == out["annotation_id"]
 
+    # 线真的撤下：读取端一条都查不到
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+    from src.web.api.copilot import get_copilot_annotations
+
+    class _U:
+        id = UID
+
+    assert get_copilot_annotations(symbol=SYMBOL, market="CN", period="1d",
+                                   db=db, user=_U()) == []
+
+    action = db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one()
+    assert action.status == "rolled_back"
+    # 撤销后不留悬空弱引用（行已删；撤销对象在审计与 result 里）
+    assert action.annotation_id is None
+    assert f"#{out['annotation_id']}" in (action.result or "")
+
+    # 再撤一次：明确的状态，不静默成功
     with pytest.raises(A.ActionError) as ei:
         A.rollback_action(db, user_id=UID, action_id=item["id"])
-    msg = str(ei.value)
-    assert "不支持回滚" in msg
-    assert "快照" not in msg and "v0.73" not in msg
-    # 复审阻断 ④：不许指一条不存在的路（图上没有删除入口，服务端也没有删除接口）
-    assert "在图上删除" not in msg and "图上删除" not in msg
-    assert "删除入口" in msg and "无法撤下" in msg
-
-    # 回滚没生效：线还在图上，动作仍是 applied
-    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 1
-    action = db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one()
-    assert action.status == "applied" and action.annotation_id == out["annotation_id"]
+    assert ei.value.status_code == 409
+    assert "rolled_back" in str(ei.value)
 
 
 # ── 10. 真实 PG：同一批契约必须在 varchar(36)/varchar(32) 下成立 ──────────────
@@ -991,18 +1009,23 @@ def test_pg_month_period_and_no_position_rules(pg_db):
     assert pg_db.query(KlineAnnotation).count() == 1
 
 
-def test_pg_annotation_cannot_rollback(pg_db):
+def test_pg_annotation_revoke_is_atomic(pg_db):
     item = A.propose(pg_db, user_id=UID, kind="annotation",
-                     payload={"symbol": SYMBOL, "label": "PG 不可回滚", "price": 30.0})
+                     payload={"symbol": SYMBOL, "label": "PG 撤销", "price": 30.0})
     out = A.apply_action(pg_db, user_id=UID, action_id=item["id"])
-    assert out["can_rollback"] is False
+    assert out["can_rollback"] is True
+
+    res = A.revoke_annotation(pg_db, user_id=UID, annotation_id=out["annotation_id"],
+                              reason="PG 点位选错")
+    assert res["status"] == "revoked" and res["action_status"] == "rolled_back"
+    assert pg_db.query(KlineAnnotation).filter(
+        KlineAnnotation.id == out["annotation_id"]).count() == 0
+    assert pg_db.query(CopilotAction).filter(
+        CopilotAction.id == item["id"]).one().status == "rolled_back"
+
     with pytest.raises(A.ActionError) as ei:
-        A.rollback_action(pg_db, user_id=UID, action_id=item["id"])
-    msg = str(ei.value)
-    assert "不支持回滚" in msg
-    # 复审阻断 ④：文案不许再指"图上删除"这条不存在的路
-    assert "在图上删除" not in msg
-    assert "删除入口" in msg and "无法撤下" in msg
+        A.revoke_annotation(pg_db, user_id=UID, annotation_id=out["annotation_id"])
+    assert ei.value.status_code == 404
 
 
 def test_pg_ambiguous_target_is_refused_before_any_pending_row(pg_db):

@@ -297,7 +297,7 @@ def apply_copilot_action(
     try:
         return actions_mod.apply_action(db, user_id=user.id, action_id=action_id)
     except actions_mod.ActionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _action_http_error(exc) from exc
 
 
 @router.post("/actions/{action_id}/reject")
@@ -309,7 +309,16 @@ def reject_copilot_action(
     try:
         return actions_mod.reject_action(db, user_id=user.id, action_id=action_id)
     except actions_mod.ActionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _action_http_error(exc) from exc
+
+
+def _action_http_error(exc: "actions_mod.ActionError") -> HTTPException:
+    """`ActionError.status_code` → HTTP 状态（默认 400）。
+
+    撤销类操作要区分 404（不存在/越权，不泄露他人数据）与 409（状态冲突/无主/并发），
+    其余动作继续按参数错误 400 处理 —— 既有调用方语义不变。
+    """
+    return HTTPException(status_code=getattr(exc, "status_code", 400), detail=str(exc))
 
 
 @router.post("/actions/{action_id}/rollback")
@@ -319,11 +328,38 @@ def rollback_copilot_action(
     db: Session = Depends(get_db),
     user: Any = Depends(get_current_user),
 ) -> dict:
-    """把一次已 apply 的动作退回（P1-1.3）。回滚本身也写审计。"""
+    """把一次已 apply 的动作退回（P1-1.3）。回滚本身也写审计。
+
+    2026-10-29：`kind="annotation"` 也走通 —— 删掉那条 K 线标注、动作转 `rolled_back`，
+    响应额外带 `revoked_annotation`（见 `actions.revoke_annotation`）。
+    """
     try:
         return actions_mod.rollback_action(db, user_id=user.id, action_id=action_id, reason=reason)
     except actions_mod.ActionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _action_http_error(exc) from exc
+
+
+@router.delete("/annotations/{annotation_id}")
+def delete_copilot_annotation(
+    annotation_id: int,
+    reason: str = Query(default="", description="撤销原因（写审计，可为空）"),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """撤销一条**本人确认**画到图上的标注（2026-10-29, P2 撤销闭合）。
+
+    - 只撤本人标注：他人的一律 404（与"不存在"同一句，不泄露他人数据）；
+    - 无主（`user_id IS NULL` 全局行）409：不属于任何账号，服务端不替谁删；
+    - 没有确认动作的标注 409：本条契约只管"已确认"（人工/AI 直插行不在内）；
+    - 并发/重复撤销：原子认领 + 条件删除，第二个请求明确 404/409，不会删两次；
+    - 成功响应 `status="revoked"`，确认动作的终态是 `rolled_back`。
+    """
+    try:
+        return actions_mod.revoke_annotation(
+            db, user_id=user.id, annotation_id=annotation_id, reason=reason
+        )
+    except actions_mod.ActionError as exc:
+        raise _action_http_error(exc) from exc
 
 
 @router.get("/runs")

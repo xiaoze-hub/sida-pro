@@ -23,11 +23,17 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_KINDS = ("annotation", "watchlist", "alert", "schedule")
 
-#: 真能撤回的动作类型（有 before_snapshot 语义）。
-#: annotation 确认后线已经上图，服务端没有撤销入口 —— 不许假装能回滚
-#: （2026-10-28 复审: 旧 `can_rollback = bool(before_snapshot)` 把 "{}" 也当快照,
-#: 前端看到 true, 点下去却得到"没有快照，无法回滚（早于 v0.73）"这种错文案）。
-ROLLBACKABLE_KINDS: tuple[str, ...] = ("watchlist", "alert", "schedule")
+#: 真能撤销的动作类型。
+#:  - `annotation`：走**标注撤销**（删掉那条 `kline_annotations` 行 + 动作转 rolled_back），
+#:    不靠 before_snapshot（`_snapshot` 对它返回空 dict）；
+#:  - `watchlist` / `alert` / `schedule`：有 before_snapshot 语义，靠快照回退。
+#: 2026-10-29 P2 撤销闭合：annotation 从"不可回滚"改为"可由本人撤销"。
+#: 旧实现（2026-10-28 复审）曾把 annotation 挡在外面，因为服务端确实没有删除入口；
+#: 现在那个入口就是 `revoke_annotation`，所以 `can_rollback` 必须如实为 true。
+ROLLBACKABLE_KINDS: tuple[str, ...] = ("annotation", "watchlist", "alert", "schedule")
+
+#: 靠 apply 前快照回退的动作类型（annotation 例外，见上）。
+SNAPSHOT_ROLLBACK_KINDS: tuple[str, ...] = ("watchlist", "alert", "schedule")
 
 _KIND_NAMES: dict[str, str] = {
     "annotation": "标注", "watchlist": "加自选", "alert": "盯盘提醒", "schedule": "定时任务",
@@ -35,7 +41,16 @@ _KIND_NAMES: dict[str, str] = {
 
 
 class ActionError(Exception):
-    """动作不可执行(参数缺失/越权/未知类型)。文案直接给用户看。"""
+    """动作不可执行(参数缺失/越权/未知类型)。文案直接给用户看。
+
+    `status_code` 是给 API 层的显式状态（默认 400）：撤销类操作需要区分
+    404（不存在/不属于本账号，不泄露他人数据）与 409（状态冲突/无主/并发失败），
+    这样前端能按状态给出可执行提示，而不是把一切都当"参数错误"。
+    """
+
+    def __init__(self, message: str = "", *, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.status_code = int(status_code or 400)
 
 
 def propose(db: Session, *, user_id: Any, kind: str, payload: dict, run_id: str | None = None) -> dict:
@@ -74,7 +89,7 @@ def propose(db: Session, *, user_id: Any, kind: str, payload: dict, run_id: str 
     db.add(row)
     db.commit()
     db.refresh(row)
-    return _to_dict(row)
+    return _to_dict(row, db=db)
 
 
 def list_pending(db: Session, user_id: Any, limit: int = 20) -> list[dict]:
@@ -87,7 +102,7 @@ def list_pending(db: Session, user_id: Any, limit: int = 20) -> list[dict]:
         .limit(limit)
         .all()
     )
-    return [_to_dict(r) for r in rows]
+    return [_to_dict(r, db=db) for r in rows]
 
 
 def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
@@ -182,7 +197,7 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         raise
 
     db.refresh(row)
-    out = _to_dict(row)
+    out = _to_dict(row, db=db)
     out["annotation"] = extra.get("annotation")
     return out
 
@@ -220,7 +235,7 @@ def reject_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         raise ActionError("该动作已被处理，请刷新待确认列表")
     db.commit()
     db.refresh(row)
-    return _to_dict(row)
+    return _to_dict(row, db=db)
 
 
 # -- 情景矩阵 → 图上标注(2026-10-22, P1 原生融合) ------------------------------
@@ -1008,7 +1023,7 @@ def _has_rollback_snapshot(row: Any) -> bool:
     return isinstance(snap, dict) and bool(snap)
 
 
-def _to_dict(row: Any) -> dict:
+def _to_dict(row: Any, *, db: Session | None = None) -> dict:
     ann_id = getattr(row, "annotation_id", None)
     return {
         "id": row.id,
@@ -1023,16 +1038,46 @@ def _to_dict(row: Any) -> dict:
         "annotation": None,
         # P1-1.3: diff 给前端展示"会改什么"；snapshot 不给前端（内部回滚用）
         "diff": json.loads(row.diff_json) if getattr(row, "diff_json", None) else [],
-        # 只有"这类动作真的能撤回 + 已执行 + 快照里有内容"才算 true。
+        # 只有"这类动作真的能撤销 + 已执行 + 真的还有东西可撤"才算 true。
         # 2026-10-28 复审: 旧写法 bool("{}") 为真 → annotation 动作骗前端说能撤回。
-        "can_rollback": (
-            row.kind in ROLLBACKABLE_KINDS
-            and row.status == "applied"
-            and _has_rollback_snapshot(row)
-        ),
+        # 2026-10-29: annotation 现在真能撤销，但前提是关联的标注行**仍存在且属主是我**
+        # （`db` 传进来时实测；不传时只认关联契约，避免为了列表多查库）。
+        "can_rollback": _can_rollback(row, db=db),
         "created_at": str(row.created_at or ""),
         "applied_at": str(row.applied_at or ""),
     }
+
+
+def _annotation_link_alive(db: Session, row: Any) -> bool:
+    """标注类动作的关联是否仍然可撤销：行在、属主是我。"""
+    from src.db.models import KlineAnnotation
+
+    ann_id = getattr(row, "annotation_id", None)
+    if ann_id is None:
+        return False
+    return (
+        db.query(KlineAnnotation.id)
+        .filter(
+            KlineAnnotation.id == int(ann_id),
+            KlineAnnotation.user_id == str(getattr(row, "user_id", "")),
+        )
+        .first()
+        is not None
+    )
+
+
+def _can_rollback(row: Any, *, db: Session | None = None) -> bool:
+    """`can_rollback` 的唯一判定口径（2026-10-29）。"""
+    if getattr(row, "status", None) != "applied":
+        return False
+    if getattr(row, "kind", None) == "annotation":
+        if getattr(row, "annotation_id", None) is None:
+            return False
+        return True if db is None else _annotation_link_alive(db, row)
+    return (
+        getattr(row, "kind", None) in SNAPSHOT_ROLLBACK_KINDS
+        and _has_rollback_snapshot(row)
+    )
 
 
 def _apply_schedule(db: Session, *, user_id: Any, payload: dict) -> str:
@@ -1185,10 +1230,268 @@ def _snapshot(db: Session, *, user_id: Any, kind: str, payload: dict) -> dict:
     return {}
 
 
+# ── 标注撤销（2026-10-29, P2 撤销闭合）───────────────────────────────────
+# 为什么要有它：确认动作把线画到图上之后，此前服务端**没有任何撤销入口**
+# （`rollback_action` 对 annotation 直接 400，图上也没有删除按钮）。用户点错价位/标的
+# 只能永久留着那条线 —— 「可以撤销的低风险动作」这条红线就名不副实了。
+#
+# 四条纪律：
+#   1. **只撤本人的**：`annotation.user_id` 必须等于当前账号；他人标注按 404 处理
+#      （与"不存在"同一句，不泄露他人数据是否存在）；
+#   2. **无主不撤**：`user_id IS NULL` 是全局行，它不属于任何账号，服务端不替谁删；
+#   3. **只撤已确认的**：必须有 `copilot_actions.annotation_id` 反查到的确认动作，
+#      且动作属主一致；人工直插/AI 直插且没有确认动作的行不在本条契约里；
+#   4. **状态明确**：撤销成功 = 标注行删除 + 动作 `rolled_back` + 审计留痕（含被删行快照）；
+#      重复撤销/并发撤销给 404 或 409，绝不静默"成功"。
+
+#: 撤销原因写进审计的自由文本上限。
+_MAX_REVOKE_REASON = 200
+
+
+def _coerce_annotation_id(raw: Any) -> int:
+    """路径/调用方给的标注 id 必须是正整数；bool 不算（True 会被 int() 收下）。"""
+    if isinstance(raw, bool):
+        raise ActionError(f"标注 id 必须是正整数：{raw}", status_code=400)
+    try:
+        aid = int(raw)
+    except (TypeError, ValueError):
+        raise ActionError(f"标注 id 必须是正整数：{raw}", status_code=400) from None
+    if aid <= 0:
+        raise ActionError(f"标注 id 必须是正整数：{raw}", status_code=400)
+    return aid
+
+
+def _load_owned_annotation(db: Session, *, user_id: Any, annotation_id: Any) -> Any:
+    """取一条**属于当前账号**的标注；不存在/他人的按 404，无主的按 409。"""
+    from src.db.models import KlineAnnotation
+
+    aid = _coerce_annotation_id(annotation_id)
+    row = db.query(KlineAnnotation).filter(KlineAnnotation.id == aid).one_or_none()
+    if row is None:
+        raise ActionError(f"标注 #{aid} 不存在或已被撤销", status_code=404)
+    owner = row.user_id
+    if owner is None:
+        raise ActionError(
+            f"标注 #{aid} 是无主标注（全局行，user_id 为空）：它不属于任何账号，"
+            "服务端不能代替某个账号撤销它",
+            status_code=409,
+        )
+    if str(owner) != str(user_id):
+        # 越权与不存在给同一句：不泄露"这条标注存在、但不是你的"
+        raise ActionError(f"标注 #{aid} 不存在或不属于当前账号", status_code=404)
+    return row
+
+
+def _confirming_action_for(db: Session, *, user_id: Any, annotation_id: int) -> Any:
+    """反查这条标注的确认动作（`copilot_actions.annotation_id`，唯一索引）。"""
+    from sqlalchemy.exc import MultipleResultsFound
+
+    from src.db.models import CopilotAction
+
+    try:
+        action = (
+            db.query(CopilotAction)
+            .filter(CopilotAction.annotation_id == int(annotation_id))
+            .one_or_none()
+        )
+    except MultipleResultsFound:
+        # 唯一索引失效的库（手工改过/迁移没跑）：一条线被多条动作认领，拒绝猜测归属
+        raise ActionError(
+            f"标注 #{annotation_id} 被多条动作关联（唯一索引失效），归属无法确定，拒绝撤销",
+            status_code=409,
+        ) from None
+    if action is None:
+        raise ActionError(
+            f"标注 #{annotation_id} 没有关联的确认动作（不是参谋确认画上去的），不在撤销范围",
+            status_code=409,
+        )
+    if str(action.user_id) != str(user_id):
+        raise ActionError(
+            f"标注 #{annotation_id} 与确认动作的归属不一致（数据异常），拒绝撤销",
+            status_code=409,
+        )
+    return action
+
+
+def _target_from_payload(payload: dict) -> dict:
+    """动作 payload 归一成与标注行可比的形状（与 `_apply_annotation` 同一把尺）。"""
+    return {
+        "symbol": str(payload.get("symbol") or "").strip(),
+        "label": str(payload.get("label") or "").strip()[:64],
+        "period": _normalize_period(payload.get("period")),
+        "market": _normalize_market(payload.get("market")),
+        "price": _as_price(payload.get("price")) if payload.get("price") is not None else None,
+        "ts": _normalize_ts(payload.get("ts")),
+    }
+
+
+def _same_price(a: Any, b: Any) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _annotation_matches_action(annotation: Any, action: Any) -> bool:
+    """这条标注是不是**这次动作**画出来的那条（防 SQLite 主键复用后删错行）。
+
+    `annotation_id` 是无外键弱引用：标注被删后 SQLite 会用同一个 id 建新行，
+    旧链接就直接指向了别人的另一条线。撤销前必须核对目标字段 —— 不核就是拿一个
+    过期的整数删数据。
+    """
+    try:
+        payload = json.loads(action.payload or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    try:
+        want = _target_from_payload(payload)
+    except ActionError:
+        return False
+    return (
+        annotation.symbol == want["symbol"]
+        and annotation.label == want["label"]
+        and annotation.period == want["period"]
+        and annotation.market == want["market"]
+        and annotation.ts == want["ts"]
+        and _same_price(annotation.price, want["price"])
+    )
+
+
+def _revoke_annotation_row(
+    db: Session, *, user_id: Any, annotation: Any, action: Any, reason: str = ""
+) -> dict:
+    """在一个事务里：条件认领动作 → 条件删除标注 → 提交 → 写审计。
+
+    `apply_action` 是「条件 UPDATE 认领 pending → 落标注 → 同一事务提交」；
+    撤销是它的镜像：条件 UPDATE 认领 applied → 删标注 → 同一事务提交。
+    任何一步没拿到行都整笔回滚，绝不留下「动作 rolled_back 但线还在图上」。
+
+    认领时一并把 `copilot_actions.annotation_id` 置空：弱引用指向的行已被删除，
+    留着就是悬空链接（会挡住主键复用方言上下一次确认）。撤销对象由 `result`
+    与 `AuditLog.detail.annotation` 追溯。
+    """
+    from src.core.db_safe import safe_rollback
+    from src.db.models import CopilotAction, KlineAnnotation
+
+    aid = int(annotation.id)
+    reason_text = str(reason or "")[:_MAX_REVOKE_REASON]
+
+    if action.kind != "annotation":
+        raise ActionError(
+            f"动作 #{action.id} 不是标注动作（kind={action.kind}），不能走标注撤销",
+            status_code=409,
+        )
+    if str(action.user_id) != str(user_id):
+        raise ActionError(
+            f"标注 #{aid} 与确认动作的归属不一致（数据异常），拒绝撤销",
+            status_code=409,
+        )
+    if action.status == "rolled_back":
+        raise ActionError(
+            f"标注 #{aid} 对应的动作已是 rolled_back 状态（已撤销）", status_code=409
+        )
+    if action.status != "applied":
+        raise ActionError(
+            f"确认动作当前状态是 {action.status}，只有 applied 的标注能撤销",
+            status_code=409,
+        )
+    if not _annotation_matches_action(annotation, action):
+        raise ActionError(
+            f"标注 #{aid} 与确认动作 #{action.id} 记录的目标不一致（编号可能已被复用），"
+            "拒绝删除这条标注",
+            status_code=409,
+        )
+
+    snapshot = {
+        "id": aid, "symbol": annotation.symbol, "market": annotation.market,
+        "instrument": annotation.instrument, "period": annotation.period,
+        "price": annotation.price, "ts": annotation.ts, "label": annotation.label,
+        "note": annotation.note, "color": annotation.color, "source": annotation.source,
+        "user_id": str(annotation.user_id),
+    }
+
+    try:
+        # 原子认领：只有仍是 applied 的那一次能把状态推进到 rolled_back。
+        # 并发/连点撤销的第二个请求 rowcount=0 → 明确 409，而不是删两次。
+        # 同时把弱引用 annotation_id 置空：行已经删了，留着一个指向不存在行的整数
+        # 正是 `_guard_annotation_id` 要处理的悬空链接（SQLite 复用主键时还会挡住
+        # 别的账号下一次确认）。撤销对象记录在 result 与审计里，不在行上留指针。
+        claimed = (
+            db.query(CopilotAction)
+            .filter(
+                CopilotAction.id == action.id,
+                CopilotAction.user_id == str(user_id),
+                CopilotAction.status == "applied",
+            )
+            .update({"status": "rolled_back", "annotation_id": None},
+                    synchronize_session=False)
+        )
+        if not claimed:
+            safe_rollback(db)
+            raise ActionError("该标注刚被另一个请求撤销，请刷新", status_code=409)
+
+        # 只删本人那条：user_id 等值条件同时把"无主行"排除在外（NULL 不等于任何值）。
+        deleted = (
+            db.query(KlineAnnotation)
+            .filter(KlineAnnotation.id == aid, KlineAnnotation.user_id == str(user_id))
+            .delete(synchronize_session=False)
+        )
+        if not deleted:
+            safe_rollback(db)
+            raise ActionError("标注已不存在或归属已变更，本次撤销未生效", status_code=409)
+
+        action.result = f"已撤销标注 #{aid}：{snapshot['label']}（{snapshot['symbol']}）"
+        db.commit()
+    except ActionError:
+        safe_rollback(db)
+        raise
+    except Exception:
+        # 未知异常回滚后原样抛出（5xx），不伪装成 400；也不留半截状态
+        safe_rollback(db)
+        logger.exception("标注撤销失败, 已回滚: annotation=%s action=%s", aid, action.id)
+        raise
+
+    db.refresh(action)
+    _audit_rollback(
+        db, user_id=user_id, action_id=int(action.id), kind="annotation",
+        undone=[f"已撤销标注 #{aid}：{snapshot['label']}"],
+        reason=reason_text,
+        extra={"annotation_id": aid, "annotation": snapshot, "action_status": "rolled_back"},
+    )
+    return {
+        "ok": True,
+        "status": "revoked",
+        "annotation_id": aid,
+        "action_id": int(action.id),
+        "action_status": "rolled_back",
+        "symbol": snapshot["symbol"],
+        "label": snapshot["label"],
+        "reason": reason_text,
+        "revoked_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def revoke_annotation(db: Session, *, user_id: Any, annotation_id: Any, reason: str = "") -> dict:
+    """撤销一条**本人确认产生**的已上图标注（2026-10-29, P2）。
+
+    入口按标注 id 寻址：`DELETE /api/copilot/annotations/{annotation_id}`。
+    越权/无主/无确认动作/编号复用/并发冲突全部显式拒绝，且一行不改（见模块注释）。
+    """
+    annotation = _load_owned_annotation(db, user_id=user_id, annotation_id=annotation_id)
+    action = _confirming_action_for(db, user_id=user_id, annotation_id=int(annotation.id))
+    return _revoke_annotation_row(
+        db, user_id=user_id, annotation=annotation, action=action, reason=reason
+    )
+
+
 def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = "") -> dict:
     """把一次已 apply 的动作退回到 apply 之前的状态，并写审计。
 
-    只支持**能安全撤销**的三类：加自选 / 建提醒 / 建定时任务。
+    支持四类：标注（删掉那条线 + 动作转 rolled_back）/ 加自选 / 建提醒 / 建定时任务。
     撤销只删"这次动作新建的东西"或写回快照值，**不碰用户其它数据**。
     """
     from src.db.models import CopilotAction, PriceAlertRule, Stock
@@ -1199,19 +1502,27 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
         .one_or_none()
     )
     if row is None:
-        raise ActionError("动作不存在")
+        raise ActionError("动作不存在", status_code=404)
     if row.status != "applied":
-        raise ActionError(f"只有 applied 的动作能回滚，当前是 {row.status}")
+        raise ActionError(f"只有 applied 的动作能撤销，当前是 {row.status}", status_code=409)
     if row.kind not in ROLLBACKABLE_KINDS:
-        # 说清楚"这一类动作本来就不能撤回"，而不是拿"没有快照/早于 v0.73"糊弄用户。
-        # 2026-10-28 复审阻断 ④：旧文案让用户"在图上删除那条标注" —— 图上**没有**删除入口，
-        # 服务端也没有撤销/删除图注的接口（`undoSupported=false`）。指一条不存在的路
-        # 比直接说"撤不回去"更糟，所以这里只陈述事实，不给不存在的操作指引。
-        raise ActionError(
-            f"{_KIND_NAMES.get(row.kind, row.kind)}动作不支持回滚"
-            "（标注确认后线已经在图上；服务端没有撤销/删除图注的接口，前端也没有删除入口，"
-            "这条线目前无法撤下）"
+        raise ActionError(f"{_KIND_NAMES.get(row.kind, row.kind)}动作不支持回滚")
+    if row.kind == "annotation":
+        # 2026-10-29：标注走**删行**而不是快照回退（`_snapshot` 对它返回空 dict）。
+        if row.annotation_id is None:
+            raise ActionError(
+                "这条标注动作早于 v231 的标注关联契约，没有可撤销的标注记录；"
+                "无法确定要删哪条线，因此不撤",
+                status_code=409,
+            )
+        annotation = _load_owned_annotation(db, user_id=user_id,
+                                            annotation_id=row.annotation_id)
+        revoked = _revoke_annotation_row(
+            db, user_id=user_id, annotation=annotation, action=row, reason=reason
         )
+        out = _to_dict(row, db=db)
+        out["revoked_annotation"] = revoked
+        return out
     snapshot = json.loads(row.before_snapshot or "{}")
     if not snapshot:
         raise ActionError("这条动作没有快照，无法回滚（早于 v0.73 的记录）")
@@ -1254,7 +1565,7 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
             else:
                 undone.append("定时任务早于本次动作，未改动")
         else:
-            # 防御: ROLLBACKABLE_KINDS 扩了但这里没接对应实现时, 明确说"不支持"。
+            # 防御: SNAPSHOT_ROLLBACK_KINDS 扩了但这里没接对应实现时, 明确说"不支持"。
             raise ActionError(f"{_KIND_NAMES.get(row.kind, row.kind)}动作不支持回滚")
 
         row.status = "rolled_back"
@@ -1273,22 +1584,28 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
     _audit_rollback(db, user_id=user_id, action_id=action_id, kind=row.kind,
                     undone=undone, reason=reason)
     db.refresh(row)
-    return _to_dict(row)
+    return _to_dict(row, db=db)
 
 
 def _audit_rollback(db: Session, *, user_id: Any, action_id: int, kind: str,
-                    undone: list[str], reason: str) -> None:
-    """回滚本身也要留痕 —— 否则审计里只看到 apply，看不到撤销。"""
+                    undone: list[str], reason: str, extra: dict | None = None) -> None:
+    """回滚/撤销本身也要留痕 —— 否则审计里只看到 apply，看不到撤销。
+
+    `extra` 用于补充被删对象的快照（标注撤销时行已经删了，审计是唯一追溯源）。
+    """
     try:
         from src.db.models import AuditLog
 
+        detail: dict[str, Any] = {
+            "action_id": action_id, "kind": kind,
+            "undone": undone, "reason": (reason or "")[:200],
+        }
+        if extra:
+            detail.update(extra)
         db.add(AuditLog(
             user_id=str(user_id),
             action="copilot_action_rollback",
-            detail=json.dumps({
-                "action_id": action_id, "kind": kind,
-                "undone": undone, "reason": (reason or "")[:200],
-            }, ensure_ascii=False),
+            detail=json.dumps(detail, ensure_ascii=False),
         ))
         db.commit()
     except Exception as exc:  # noqa: BLE001
