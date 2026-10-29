@@ -2,7 +2,7 @@
 
 不依赖海外 Hermes cron: 直接调用 SIDA 自身的数据能力采集数据,
 经 LLM(场景 reports)生成结构化 Markdown 报告, 写入报告中心目录
-(CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS.md), 报告中心 API
+(CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS-<随机>.md), 报告中心 API
 (src/web/api/reports.py) 无需改动即可读取。
 
 数据源(全部带降级, 拉不到显式标注"数据获取失败", 不编造):
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -283,36 +285,35 @@ async def _collect_entry_candidates(db, limit: int = 8) -> list[dict]:
 
 
 async def _collect_positions(db, with_quotes: bool = True, user_id: str | None = None) -> list[dict]:
-    """用户持仓(positions 表 join stocks) + 实时/前日行情。失败标注。
+    """用户持仓(positions 表 join stocks/accounts) + 实时/前日行情。失败标注。
 
-    `user_id` 作用域(2026-10-29 三审, fail-closed): 传 uid → 该用户可见的持仓
-    (账户可见 AND 持仓可见); 传 None → **共享市场报告, 一条持仓都不采**。
+    `user_id` 作用域(2026-10-29 五审, **严格双层归属**): 传 uid → 只采
+    `Account.user_id == uid AND Position.user_id == uid`。**不**再并入 NULL 共享桶:
+    共享桶里是"多用户改造前某个具体人的历史成本", 模糊归属不得猜给当前用户。
+    传 None → 共享市场报告, 一条持仓都不采(纯市场口径)。
 
-    为什么 None 不再采「共享桶」(2026-10-29 四审): 共享桶(`positions.user_id IS NULL`)
-    里仍是**具体某人的历史成本**(多用户改造前的数据), 把它写进 `scope=shared` 的
-    文件、再标 `contains_private_holdings=false`, 等于给全员看`别人的成本`。
-    共享报告的产品定位是「纯市场口径, 所有登录用户都能看」, 所以这里直接返回空:
-    私有持仓只在**按用户生成**(`generate_market_report(user_id=...)`)时出现。
+    逐账户出行(2026-10-29 五审 P1): 旧实现用 `(market, symbol)` 做 key, 同一标的
+    在多个账户持有时**只剩最后一行**(丢行/数量错)。现在 key 含 account_id, 每账户
+    单独一行并带 account 信息; 非有限成本按"缺失"处理(不装 0、不算浮盈)。
     """
     if not user_id:
         logger.info("[报告] 共享口径: 不采集任何用户/共享桶持仓(纯市场报告)")
         return []
-    from src.core.portfolio_scope import (
-        account_user_scope_clause,
-        position_user_scope_clause,
-    )
+    from src.core.numutil import finite_float
+    from src.core.portfolio_scope import owned_account_clause, owned_position_clause
     from src.db.models import Account, Position, Stock
 
     try:
         rows = (
-            db.query(Position, Stock)
+            db.query(Position, Stock, Account)
             .join(Stock, Position.stock_id == Stock.id)
             .join(Account, Account.id == Position.account_id)
             .filter(
                 Position.quantity > 0,
-                account_user_scope_clause(user_id),
-                position_user_scope_clause(user_id),
+                owned_account_clause(user_id),
+                owned_position_clause(user_id),
             )
+            .order_by(Account.id.asc(), Position.id.asc())
             .all()
         )
     except Exception as e:
@@ -322,12 +323,14 @@ async def _collect_positions(db, with_quotes: bool = True, user_id: str | None =
     if not rows:
         return []
 
-    # 按市场分组批量拉行情
+    # 按市场分组批量拉行情(同一标的在多个账户只取一次)
     sym_by_market: dict[str, list[str]] = {}
-    meta = {}
-    for pos, st in rows:
+    meta: dict[tuple[str, str, int], tuple] = {}
+    for pos, st, acct in rows:
         sym_by_market.setdefault(st.market, []).append(st.symbol)
-        meta[(st.market, st.symbol)] = (pos, st)
+        meta[(st.market, st.symbol, int(acct.id))] = (pos, st, acct)
+    for market, syms in sym_by_market.items():
+        sym_by_market[market] = list(dict.fromkeys(syms))
 
     quote_map = {}
     if with_quotes:
@@ -336,33 +339,42 @@ async def _collect_positions(db, with_quotes: bool = True, user_id: str | None =
 
             for market, syms in sym_by_market.items():
                 qs = await asyncio.to_thread(md_quote_rows, syms, market)
-                for q in qs:
+                for q in qs or []:
                     quote_map[(q.get("market", market), q.get("symbol"))] = q
         except Exception as e:
             logger.warning(f"[报告] 持仓行情获取失败: {e}")
 
     out = []
-    for (market, sym), (pos, st) in meta.items():
+    for (market, sym, _acct_id), (pos, st, acct) in meta.items():
         q = quote_map.get((market, sym))
+        cost = finite_float(pos.cost_price)
         row = {
             "symbol": sym,
             "name": st.name,
             "market": market,
-            "cost_price": pos.cost_price,
-            "quantity": pos.quantity,
+            "account_id": int(acct.id),
+            "account_name": acct.name or "",
+            "quantity": int(pos.quantity),
             "trading_style": pos.trading_style or "swing",
         }
+        if cost is None:
+            # 非有限/缺失成本: 明确标未知, 不写 0(0 会被读成"白送"), 也不算浮盈。
+            row["cost_price"] = None
+            row["cost_unknown"] = True
+        else:
+            row["cost_price"] = cost
         if q:
-            row["current_price"] = q.get("current_price")
-            row["change_pct"] = q.get("change_pct")
-            row["prev_close"] = q.get("prev_close")
+            cur = finite_float(q.get("current_price"))
+            if cur is None:
+                row["quote_error"] = "行情缺失"
+            else:
+                row["current_price"] = cur
+                row["change_pct"] = finite_float(q.get("change_pct"))
+                row["prev_close"] = finite_float(q.get("prev_close"))
+                if cost:
+                    row["pnl_pct"] = (cur - cost) / cost * 100
         else:
             row["quote_error"] = "数据获取失败"
-        # 浮盈(基于成本价)
-        if q and pos.cost_price:
-            cur = q.get("current_price")
-            if cur:
-                row["pnl_pct"] = (cur - pos.cost_price) / pos.cost_price * 100
         out.append(row)
     return out
 
@@ -583,6 +595,22 @@ def _fmt_flow(v) -> str:
     return f"{v:+.1f}亿" if isinstance(v, (int, float)) else str(v)
 
 
+def _position_cost_text(p: dict) -> str:
+    """成本展示: 未知/非有限一律"未知", 绝不写 0(缺价不装 0)。"""
+    if p.get("cost_unknown") or p.get("cost_price") is None:
+        return "成本 未知"
+    return f"成本 {p.get('cost_price')}"
+
+
+def _position_account_text(p: dict) -> str:
+    name = str(p.get("account_name") or "").strip()
+    return f"[{name}] " if name else ""
+
+
+def _fmt_pct(v) -> str:
+    return f"{v:+.2f}%" if isinstance(v, (int, float)) else "涨跌未知"
+
+
 def _get_block_quality(data: dict, block_name: str) -> str:
     """从 data.evidence / data.qualities 或内联数据审计获取块质量状态。"""
     ev = data.get("evidence")
@@ -686,11 +714,11 @@ def _build_template_report(report_type: str, data: dict) -> str:
                 else:
                     cur = (
                         f"现价 {p.get('current_price', '-')} "
-                        f"({p.get('change_pct', 0):+.2f}%) 前收 {p.get('prev_close', '-')}"
+                        f"({_fmt_pct(p.get('change_pct'))}) 前收 {p.get('prev_close', '-')}"
                     )
                 lines.append(
-                    f"- {p.get('name', '')}({p.get('symbol', '')}) "
-                    f"{p.get('quantity', 0)}股 成本 {p.get('cost_price', '-')} {cur}"
+                    f"- {_position_account_text(p)}{p.get('name', '')}({p.get('symbol', '')}) "
+                    f"{p.get('quantity', 0)}股 {_position_cost_text(p)} {cur}"
                 )
         lines.append("")
 
@@ -761,11 +789,11 @@ def _build_template_report(report_type: str, data: dict) -> str:
                     cur = f"行情: {p['quote_error']}"
                 else:
                     pnl = p.get("pnl_pct")
-                    pnl_s = f" 浮盈 {pnl:+.2f}%" if pnl is not None else ""
-                    cur = f"现价 {p.get('current_price', '-')} ({p.get('change_pct', 0):+.2f}%){pnl_s}"
+                    pnl_s = f" 浮盈 {pnl:+.2f}%" if isinstance(pnl, (int, float)) else ""
+                    cur = f"现价 {p.get('current_price', '-')} ({_fmt_pct(p.get('change_pct'))}){pnl_s}"
                 lines.append(
-                    f"- {p.get('name', '')}({p.get('symbol', '')}) "
-                    f"{p.get('quantity', 0)}股 成本 {p.get('cost_price', '-')} {cur}"
+                    f"- {_position_account_text(p)}{p.get('name', '')}({p.get('symbol', '')}) "
+                    f"{p.get('quantity', 0)}股 {_position_cost_text(p)} {cur}"
                 )
         lines.append("")
 
@@ -804,21 +832,53 @@ def _write_report(
     owner_user_id: str | None = None,
     contains_private_holdings: bool = False,
 ) -> dict:
-    """写入 CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS.md + 同目录 meta, 返回 {path, title, size}。
+    """写入 CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS-<随机>.md + 同目录 meta。
 
-    meta(`<name>.md.meta.json`)是报告中心的**唯一**可见性依据(见
-    `src/core/report_scope.py`): 没有 meta 的存量报告只对 owner 可见。
-    写盘顺序 = 先正文后 meta: 中途崩溃留下"无 meta 报告" → fail-closed(仅 owner),
-    绝不会反过来出现"meta 说 shared 但正文没写完"。
+    ## 为什么文件名带随机尾(2026-10-29 五审)
+
+    旧文件名精确到秒(`YYYY-MM-DD_HH-MM-SS.md`): 两个账号在同一秒生成私有报告会
+    **写到同一个路径**, 后写者覆盖前者的正文, 再各自写 meta —— 结果是"A 的正文 +
+    B 的 meta"这种跨账号错配(B 能读到 A 的成本)。秒级时间戳不是唯一键。
+
+    现在: 保留原有时间戳前缀(便于人读/兼容既有排序与链接), 追加 8 位随机 hex;
+    用 `O_CREAT|O_EXCL` 创建, 已存在就换随机名重试(最多 8 次) —— **绝不覆盖任何
+    已存在的报告**, 包括他人的。
+
+    ## 落盘顺序(fail-closed)
+
+    先正文(fsync)后 meta。中途崩溃只留下"无 meta 报告" → 读侧按来源不明处理,
+    仅 owner 可见(`report_scope.read_report_meta` 返回 None)。绝不会出现
+    "meta 说 shared 但正文没写完"。
     """
     from src.core import report_scope
 
     job_dir = _report_root() / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    fname = run_time.strftime("%Y-%m-%d_%H-%M-%S") + ".md"
-    path = job_dir / fname
     body = content.strip() + "\n"
-    path.write_text(body, encoding="utf-8")
+    stamp = run_time.strftime("%Y-%m-%d_%H-%M-%S")
+    path: Path | None = None
+    for _ in range(8):
+        candidate = job_dir / f"{stamp}-{secrets.token_hex(4)}.md"
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(body)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except BaseException:
+            # 写失败: 删除刚创建的空/半文件, 不把残片当报告留下。
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
+            raise
+        path = candidate
+        break
+    if path is None:
+        raise RuntimeError(f"报告文件名连续冲突, 无法安全落盘: job={job_id}")
     size = path.stat().st_size
     try:
         report_scope.write_report_meta(

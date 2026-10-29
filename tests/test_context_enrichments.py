@@ -54,7 +54,7 @@ def test_ta_verdict_recent_row_injected(monkeypatch):
     monkeypatch.setattr(
         analysis_history,
         "get_latest_ta_verdict_row",
-        lambda symbol, within_days=14, today=None: row,
+        lambda symbol, within_days=14, today=None, **_kw: row,
     )
 
     verdict = analysis_history.get_latest_ta_verdict("600519", within_days=14)
@@ -73,7 +73,7 @@ def test_ta_verdict_includes_today(monkeypatch):
     today = date.today()
     captured = {}
 
-    def fake_query(agent_name, stock_symbol, before_date=None):
+    def fake_query(agent_name, stock_symbol, before_date=None, **_kw):
         captured["before_date"] = before_date
         return _make_history_row(
             analysis_date=today.strftime("%Y-%m-%d"),
@@ -99,7 +99,7 @@ def test_ta_verdict_too_old_returns_none(monkeypatch):
     monkeypatch.setattr(
         analysis_history,
         "get_latest_ta_verdict_row",
-        lambda symbol, within_days=14, today=None: row,
+        lambda symbol, within_days=14, today=None, **_kw: row,
     )
     verdict = analysis_history.get_latest_ta_verdict("600519", within_days=14)
     assert verdict is None
@@ -110,7 +110,7 @@ def test_ta_verdict_no_row_returns_none(monkeypatch):
     monkeypatch.setattr(
         analysis_history,
         "get_latest_ta_verdict_row",
-        lambda symbol, within_days=14, today=None: None,
+        lambda symbol, within_days=14, today=None, **_kw: None,
     )
     assert analysis_history.get_latest_ta_verdict("600519") is None
 
@@ -125,7 +125,7 @@ def test_ta_verdict_parse_error_failsoft(monkeypatch):
     monkeypatch.setattr(
         analysis_history,
         "get_latest_ta_verdict_row",
-        lambda symbol, within_days=14, today=None: bad,
+        lambda symbol, within_days=14, today=None, **_kw: bad,
     )
     assert analysis_history.get_latest_ta_verdict("600519") is None
 
@@ -398,7 +398,7 @@ def test_build_symbol_contexts_injects_new_keys(monkeypatch):
     monkeypatch.setattr(
         context_builder,
         "get_latest_ta_verdict",
-        lambda symbol, within_days=14: {
+        lambda symbol, within_days=14, **_kw: {
             "rating": "buy",
             "action_label": "买入",
             "one_liner": "基本面强劲,维持买入",
@@ -457,7 +457,7 @@ def test_build_symbol_contexts_failsoft_when_index_missing(monkeypatch):
     monkeypatch.setattr(
         ContextBuilder, "_fetch_index_context", lambda self, symbol, market: {"available": False}
     )
-    monkeypatch.setattr(context_builder, "get_latest_ta_verdict", lambda symbol, within_days=14: None)
+    monkeypatch.setattr(context_builder, "get_latest_ta_verdict", lambda symbol, within_days=14, **_kw: None)
     # P1: _load_history_news 已拆为 _load_history_rows + _filter_history_news
     monkeypatch.setattr(ContextBuilder, "_load_history_rows", staticmethod(lambda *a, **k: []))
 

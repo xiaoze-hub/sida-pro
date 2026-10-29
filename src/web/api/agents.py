@@ -24,6 +24,7 @@ from src.core.agent_catalog import (
     AGENT_KIND_WORKFLOW,
     infer_agent_kind,
 )
+from src.core.analysis_history import analysis_history_scope_clause
 
 logger = logging.getLogger(__name__)
 
@@ -598,9 +599,8 @@ def get_tradingagents_latest(
         .filter(
             AnalysisHistory.agent_name == "tradingagents",
             AnalysisHistory.stock_symbol == stock_symbol,
-            or_(
-                AnalysisHistory.user_id == user.id,
-                AnalysisHistory.user_id.is_(None),
+            analysis_history_scope_clause(
+                user.id, getattr(user, "role", None)
             ),
         )
         .order_by(
@@ -645,9 +645,8 @@ def get_tradingagents_analysis(
             AnalysisHistory.agent_name == "tradingagents",
             AnalysisHistory.stock_symbol == stock_symbol,
             AnalysisHistory.analysis_date == analysis_date,
-            or_(
-                AnalysisHistory.user_id == user.id,
-                AnalysisHistory.user_id.is_(None),
+            analysis_history_scope_clause(
+                user.id, getattr(user, "role", None)
             ),
         )
         .order_by(AnalysisHistory.updated_at.desc(), AnalysisHistory.id.desc())
@@ -695,9 +694,8 @@ def export_tradingagents_analysis_pdf(
             AnalysisHistory.agent_name == "tradingagents",
             AnalysisHistory.stock_symbol == stock_symbol,
             AnalysisHistory.analysis_date == analysis_date,
-            or_(
-                AnalysisHistory.user_id == user.id,
-                AnalysisHistory.user_id.is_(None),
+            analysis_history_scope_clause(
+                user.id, getattr(user, "role", None)
             ),
         )
         .order_by(AnalysisHistory.updated_at.desc(), AnalysisHistory.id.desc())
@@ -723,15 +721,23 @@ def get_tradingagents_history_comparison(
     stock_symbol: str = Query(..., description="股票代码,如 300418"),
     market: str = Query("CN", description="市场:CN/US/HK"),
     days: int = Query(90, ge=7, le=365, description="回溯天数"),
+    user: User = Depends(get_current_user),
 ):
     """某只股票的 TradingAgents 历史决策 vs 实际涨跌对比。
 
     返回 items(每条决策 + 1d/5d/20d 后涨跌)+ stats(命中率/平均收益)。
     "命中" 定义:buy→后续上涨 / sell→后续下跌 / hold→|涨跌| < 2%(横盘)。
+    2026-10-29 五审: 需登录, 且只统计调用者自己能读的行(NULL 历史只给 owner)。
     """
     from src.agents.tradingagents.history_comparison import build_history_comparison
 
-    return build_history_comparison(stock_symbol=stock_symbol, market=market, days=days)
+    return build_history_comparison(
+        stock_symbol=stock_symbol,
+        market=market,
+        days=days,
+        user_id=user.id,
+        role=getattr(user, "role", None),
+    )
 
 
 @router.get("/tradingagents/budget")
@@ -929,13 +935,24 @@ def get_agent_history(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """S5(2026-08-26): 仅返回当前用户触发/系统调度(NULL)的运行记录。"""
+    """S5(2026-08-26): 仅返回当前用户触发/系统调度(NULL)的运行记录。
+
+    2026-10-29 五审: `user_id IS NULL` 不再对 member 放行 —— 调度器/历史运行正文
+    可能是某个人的报告(含成本/持仓), trace_id 又可枚举。现在 member 只看自己;
+    owner 额外可读 NULL 历史(数据责任人复核), 与 `/runs/{trace}/progress` 同口径。
+    """
     tz = Settings().app_timezone or "UTC"
+    is_owner = str(getattr(user, "role", "") or "").lower() == "owner"
+    scope_clause = (
+        or_(AgentRun.user_id == user.id, AgentRun.user_id.is_(None))
+        if is_owner
+        else (AgentRun.user_id == user.id)
+    )
     runs = (
         db.query(AgentRun)
         .filter(
             AgentRun.agent_name == agent_name,
-            or_(AgentRun.user_id == user.id, AgentRun.user_id.is_(None)),
+            scope_clause,
         )
         .order_by(AgentRun.created_at.desc())
         .limit(limit)
@@ -1072,10 +1089,14 @@ async def scan_intraday(
             daily_analysis = get_latest_analysis(
                 agent_name="daily_report",
                 stock_symbol="*",
+                user_id=user.id,
+                role=getattr(user, "role", None),
             )
             premarket_analysis = get_analysis(
                 agent_name="premarket_outlook",
                 stock_symbol="*",
+                user_id=user.id,
+                role=getattr(user, "role", None),
             )
         except Exception:
             daily_analysis = None

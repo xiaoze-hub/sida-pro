@@ -122,6 +122,9 @@ def _load_latest_insights(db: Session, user: User | None = None) -> list[dict]:
     S5(2026-08-26): 传入 user 时仅取本人报告 + user_id=NULL 共享行。
     """
     out = []
+    if user is None:
+        # 无会话 = 不能证明任何一行属于谁 → 不读(fail-closed)。
+        return out
     agents = (
         ("premarket_outlook", "盘前分析"),
         ("daily_report", "收盘复盘"),
@@ -132,11 +135,11 @@ def _load_latest_insights(db: Session, user: User | None = None) -> list[dict]:
             AnalysisHistory.agent_name == agent_name
         )
         if user is not None:
+            # 2026-10-29 五审: NULL 历史行只给 owner; member 只看本人(不再"NULL 即共享")。
+            from src.core.analysis_history import analysis_history_scope_clause
+
             query = query.filter(
-                or_(
-                    AnalysisHistory.user_id == user.id,
-                    AnalysisHistory.user_id.is_(None),
-                )
+                analysis_history_scope_clause(user.id, getattr(user, "role", None))
             )
         row = (
             query.order_by(
@@ -524,14 +527,14 @@ def get_brief(
     """
     agent = "premarket_outlook" if type == "premarket" else "daily_report"
     label = "盘前分析" if type == "premarket" else "收盘复盘"
+    from src.core.analysis_history import analysis_history_scope_clause
+
     row = (
         db.query(AnalysisHistory)
         .filter(
             AnalysisHistory.agent_name == agent,
-            or_(
-                AnalysisHistory.user_id == user.id,
-                AnalysisHistory.user_id.is_(None),
-            ),
+            # 2026-10-29 五审: NULL 历史行只给 owner(正文可能是别人的持仓/成本)。
+            analysis_history_scope_clause(user.id, getattr(user, "role", None)),
         )
         .order_by(
             AnalysisHistory.analysis_date.desc(),

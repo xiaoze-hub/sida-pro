@@ -596,24 +596,22 @@ def _collect_portfolio_block(
             as_of=as_of,
         )
     try:
-        from src.core.portfolio_scope import (
-            account_user_scope_clause,
-            position_user_scope_clause,
-        )
+        from src.core.numutil import finite_float
+        from src.core.portfolio_scope import owned_account_clause, owned_position_clause
         from src.db.models import Account, Position, Stock
 
         q = (
-            db.query(Position, Stock)
+            db.query(Position, Stock, Account)
             .join(Stock, Position.stock_id == Stock.id)
             .join(Account, Account.id == Position.account_id)
             .filter(
                 Position.quantity > 0,
-                # 2026-10-29 三审: 旧写法 `if user_id: filter(...)` 在 user_id=None 时
-                # **一条过滤都不加** → 报告/证据层读到全库所有租户的持仓(成本/仓位)。
-                # 现在统一走作用域条件: None = 历史共享桶(两侧 IS NULL), 绝不放开全表。
-                account_user_scope_clause(user_id),
-                position_user_scope_clause(user_id),
+                # 2026-10-29 五审: 私有证据块只认**严格本人双层归属**。
+                # 共享桶(NULL)是历史某人成本, 不得猜给当前用户; None 口径更不放开全表。
+                owned_account_clause(user_id),
+                owned_position_clause(user_id),
             )
+            .order_by(Account.id.asc(), Position.id.asc())
         )
         rows = q.all()
     except Exception as e:
@@ -636,10 +634,12 @@ def _collect_portfolio_block(
         )
 
     sym_by_market: dict[str, list[str]] = {}
-    meta: dict[tuple[str, str], tuple[Any, Any]] = {}
-    for pos, st in rows:
+    meta: dict[tuple[str, str, int], tuple[Any, Any, Any]] = {}
+    for pos, st, acct in rows:
         sym_by_market.setdefault(st.market, []).append(st.symbol)
-        meta[(st.market, st.symbol)] = (pos, st)
+        meta[(st.market, st.symbol, int(acct.id))] = (pos, st, acct)
+    for market, syms in sym_by_market.items():
+        sym_by_market[market] = list(dict.fromkeys(syms))
 
     quote_map: dict[tuple[str, str], dict[str, Any]] = {}
     quote_err_msg = ""
@@ -658,24 +658,34 @@ def _collect_portfolio_block(
 
     items: list[dict[str, Any]] = []
     missing_quotes = 0
-    for (market, sym), (pos, st) in meta.items():
+    for (market, sym, _acct_id), (pos, st, acct) in meta.items():
         q_row = quote_map.get((market, sym))
+        cost = finite_float(pos.cost_price)
         row: dict[str, Any] = {
             "symbol": sym,
             "name": st.name,
             "market": market,
-            "cost_price": pos.cost_price,
-            "quantity": pos.quantity,
+            "account_id": int(acct.id),
+            "account_name": acct.name or "",
+            "quantity": int(pos.quantity),
             "trading_style": pos.trading_style or "swing",
         }
+        if cost is None:
+            row["cost_price"] = None
+            row["cost_unknown"] = True
+        else:
+            row["cost_price"] = cost
         if q_row:
-            row["current_price"] = q_row.get("current_price")
-            row["change_pct"] = q_row.get("change_pct")
-            row["prev_close"] = q_row.get("prev_close")
-            if pos.cost_price and q_row.get("current_price"):
-                row["pnl_pct"] = (
-                    (q_row["current_price"] - pos.cost_price) / pos.cost_price * 100
-                )
+            cur = finite_float(q_row.get("current_price"))
+            if cur is None:
+                row["quote_error"] = "行情缺失"
+                missing_quotes += 1
+            else:
+                row["current_price"] = cur
+                row["change_pct"] = finite_float(q_row.get("change_pct"))
+                row["prev_close"] = finite_float(q_row.get("prev_close"))
+                if cost:
+                    row["pnl_pct"] = (cur - cost) / cost * 100
         else:
             row["quote_error"] = "数据获取失败"
             missing_quotes += 1
@@ -734,12 +744,11 @@ def _collect_fund_structure_block(
     # 两段各自 try：自选表结构变了不该连带持仓也取不到。
     symbols: list[str] = []
     try:
-        from src.core.portfolio_scope import stock_user_scope_clause
+        from src.core.portfolio_scope import owned_stock_clause
         from src.db.models import Stock
 
-        # 2026-10-29 三审: 旧 `if user_id: filter(Stock.user_id==uid)` 在 user_id=None
-        # 时不加过滤 → 全库自选(他人私有)进了证据块。共享桶口径 = stocks.user_id IS NULL。
-        q = db.query(Stock.symbol).filter(stock_user_scope_clause(user_id))
+        # 2026-10-29 五审: 私有证据块的自选只认严格本人(共享 NULL 不猜归属)。
+        q = db.query(Stock.symbol).filter(owned_stock_clause(user_id))
         for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():
             if sym:
                 symbols.append(str(sym).strip())
@@ -747,8 +756,8 @@ def _collect_fund_structure_block(
         logger.debug("[证据层] 四档结构取自选失败: %s", e)
     try:
         from src.core.portfolio_scope import (
-            account_user_scope_clause,
-            position_user_scope_clause,
+            owned_account_clause,
+            owned_position_clause,
         )
         from src.db.models import Account, Position, Stock
 
@@ -758,8 +767,8 @@ def _collect_fund_structure_block(
             .join(Account, Account.id == Position.account_id)
             .filter(
                 Position.quantity > 0,
-                account_user_scope_clause(user_id),
-                position_user_scope_clause(user_id),
+                owned_account_clause(user_id),
+                owned_position_clause(user_id),
             )
         )
         for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():

@@ -1516,12 +1516,16 @@ def _build_stock_context(db: Session, symbol: str, market: str, user: User | Non
         AnalysisHistory.stock_symbol == symbol
     )
     if user is not None:
+        # 2026-10-29 五审: NULL 历史行只给 owner; 无 user 时一条不读(不在下面放开)。
+        from src.core.analysis_history import analysis_history_scope_clause
+
         hist_query = hist_query.filter(
-            or_(
-                AnalysisHistory.user_id == user.id,
-                AnalysisHistory.user_id.is_(None),
-            )
+            analysis_history_scope_clause(user.id, getattr(user, "role", None))
         )
+    else:
+        from sqlalchemy import false as _false
+
+        hist_query = hist_query.filter(_false())
     histories = (
         hist_query.order_by(AnalysisHistory.created_at.desc())
         .limit(1)

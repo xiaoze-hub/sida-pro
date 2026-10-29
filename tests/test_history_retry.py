@@ -155,6 +155,14 @@ def test_owner_can_retry_system_row(env):
     assert len(env["spawned"]) == 1
 
 
+def test_owner_cannot_retry_members_private_record(env):
+    """owner 只能额外重试 NULL 系统行, 不能替 member 执行其私有报告。"""
+    env["current"]["user_id"] = env["owner_id"]
+    r = env["client"].post(f"/api/history/{env['ids']['member_failed']}/retry")
+    assert r.status_code == 403
+    assert env["spawned"] == []
+
+
 def test_member_cannot_retry_system_row(env):
     """(b) 普通成员不能碰系统行。"""
     r = env["client"].post(f"/api/history/{env['ids']['system_failed']}/retry")

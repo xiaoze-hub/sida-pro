@@ -150,18 +150,25 @@ def _record_quality(record: AnalysisHistory) -> str:
     return "ok" if (record.content or "").strip() else "suspect"
 
 
-def latest_record(db: Session, user_id: str | None, date: str | None = None) -> AnalysisHistory | None:
-    """该用户(含全局共享 NULL 记录)最新一条 premarket_outlook success 记录。
+def latest_record(
+    db: Session,
+    user_id: str | None,
+    date: str | None = None,
+    *,
+    role: str | None = None,
+) -> AnalysisHistory | None:
+    """该用户最新一条 premarket_outlook success 记录。
 
-    跨用户隔离: 他人**私有**记录(user_id=他人)一律不可见; 全局共享(NULL)记录人人可见。
+    2026-10-29 五审: `user_id IS NULL` **不再"人人可见"**(旧行可能是别人的持仓正文)。
+    member 只读本人; owner 额外可读 NULL 历史; 无 user_id → 不读(fail-closed)。
     """
+    from src.core.analysis_history import analysis_history_scope_clause
+
     q = db.query(AnalysisHistory).filter(
         AnalysisHistory.agent_name == AGENT_NAME,
         AnalysisHistory.status == "success",
+        analysis_history_scope_clause(user_id, role),
     )
-    uid = str(user_id) if user_id else ""
-    if uid:
-        q = q.filter(or_(AnalysisHistory.user_id == uid, AnalysisHistory.user_id.is_(None)))
     if date:
         q = q.filter(AnalysisHistory.analysis_date == date)
     return (
@@ -172,7 +179,7 @@ def latest_record(db: Session, user_id: str | None, date: str | None = None) -> 
 
 def render_brief(db: Session, user: User, date: str | None = None) -> str:
     """把最新(或指定日期)盘前底稿渲染成聊天工具文本 —— 当日版 vs 显式标注「非今日」的历史版。"""
-    rec = latest_record(db, user.id, date)
+    rec = latest_record(db, user.id, date, role=getattr(user, "role", None))
     if rec is None:
         if date:
             return f"{date} 没有盘前分析底稿。"
@@ -217,7 +224,7 @@ def get_today(
 ) -> dict:
     """该用户最新盘前底稿; 无记录返回 empty=true, 历史记录 is_stale=true(绝不冒充今日)。"""
     today = _today_str()
-    rec = latest_record(db, user.id)
+    rec = latest_record(db, user.id, role=getattr(user, "role", None))
     if rec is None:
         return {"date": today, "empty": True, "last": None}
     structured = extract_structured(rec)

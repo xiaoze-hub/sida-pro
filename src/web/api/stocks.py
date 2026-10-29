@@ -516,16 +516,83 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
         )
         .first()
     )
+    # 2026-10-29 五审 P1: owner 删共享自选时, 其他用户在该票上的价格提醒不能一删了之
+    # (那是跨租户数据丢失), 也不能只回一句"联系管理员"让人卡死。做法 = **安全拆离**:
+    # 给每个引用方建一条同一 symbol 的私有自选, 把他们的规则/Agent 绑定迁过去,
+    # 再删共享行。所有人数据保留、可继续使用, 且不会把共享行留给别人"复活"。
+    detached_users: list[str] = []
     if foreign_rule:
-        logger.warning(
-            "拒绝删除自选: stock_id=%s 仍被他人价格提醒引用(不泄露归属) user=%s",
-            stock_id,
-            uid,
-        )
-        raise HTTPException(
-            409,
-            "该自选仍被其它数据引用，暂无法删除，请联系管理员",
-        )
+        try:
+            foreign_rows = (
+                db.query(PriceAlertRule)
+                .filter(
+                    PriceAlertRule.stock_id == stock_id,
+                    ~own_rule_filter,
+                )
+                .all()
+            )
+            clone_by_user: dict[str, Stock] = {}
+            for rule in foreign_rows:
+                owner_uid = getattr(rule, "user_id", None)
+                if not owner_uid:
+                    # 走到这里说明归属不可判定 → 宁可不删, 也不猜给谁。
+                    raise HTTPException(409, "该自选仍被来源不明的提醒引用，暂无法安全删除")
+                clone = clone_by_user.get(owner_uid)
+                if clone is None:
+                    clone = (
+                        db.query(Stock)
+                        .filter(
+                            Stock.user_id == owner_uid,
+                            Stock.symbol == db_stock.symbol,
+                            Stock.market == db_stock.market,
+                        )
+                        .first()
+                    )
+                    if clone is None:
+                        clone = Stock(
+                            user_id=owner_uid,
+                            symbol=db_stock.symbol,
+                            name=db_stock.name,
+                            market=db_stock.market,
+                            sort_order=db_stock.sort_order,
+                        )
+                        db.add(clone)
+                        db.flush()
+                    clone_by_user[owner_uid] = clone
+                rule.stock_id = clone.id
+                if owner_uid not in detached_users:
+                    detached_users.append(owner_uid)
+            # 原票上的 Agent 绑定也复制到各私有克隆上(每票每 agent 唯一)。
+            source_agents = (
+                db.query(StockAgent).filter(StockAgent.stock_id == stock_id).all()
+            )
+            for owner_uid, clone in clone_by_user.items():
+                existing = {
+                    a.agent_name
+                    for a in db.query(StockAgent)
+                    .filter(StockAgent.stock_id == clone.id)
+                    .all()
+                }
+                for sa in source_agents:
+                    if sa.agent_name in existing:
+                        continue
+                    db.add(
+                        StockAgent(
+                            stock_id=clone.id,
+                            agent_name=sa.agent_name,
+                            schedule=sa.schedule,
+                            ai_model_id=sa.ai_model_id,
+                            notify_channel_ids=sa.notify_channel_ids,
+                        )
+                    )
+            db.flush()
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            logger.warning("拆离他人价格提醒失败(整单回滚, 未删除): stock=%s err=%s", stock_id, e)
+            raise HTTPException(409, "该自选仍被其它数据引用，暂无法安全删除，请稍后重试")
     rule_ids = [
         row[0]
         for row in db.query(PriceAlertRule.id)
@@ -546,7 +613,7 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
 
     db.delete(db_stock)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "detached_users": len(detached_users)}
 
 
 @router.put("/{stock_id}/agents", response_model=StockResponse)

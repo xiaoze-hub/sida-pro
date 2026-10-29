@@ -24,29 +24,45 @@ def _context_user_id(context: AgentContext | None) -> str | None:
 
 
 def _sole_bucket_user(contexts: list[AgentContext]) -> str | None:
-    """本轮的**唯一**可信归属; 多用户桶混跑/无用户 → None(未知, 不记内容)。"""
-    uids = {_context_user_id(c) for c in contexts}
-    uids.discard(None)
-    return uids.pop() if len(uids) == 1 else None
+    """本轮的**唯一**可信归属; 多用户桶混跑/**含无归属桶** → None(未知, 不记内容)。
+
+    2026-10-29 五审: 旧实现先 `discard(None)` 再判断"只剩一个 uid", 于是
+    `[alice, None]` 会被判成 alice —— 但正文取的是最后一桶(可能是 NULL 共享桶),
+    结果把"共享桶正文"归到 alice 名下。现在要求**所有桶**都有同一个有效用户,
+    任一无归属/多用户 → None(fail-closed)。
+    """
+    if not contexts:
+        return None
+    uids = [_context_user_id(c) for c in contexts]
+    if any(not u for u in uids):
+        return None
+    return uids[0] if len(set(uids)) == 1 else None
 
 
 def _agent_run_result_text(results: list[tuple[AgentContext, Any]]) -> str:
     """写进 agent_runs.result 的文本。
 
-    只有"本轮只有一个用户"时才能把正文落库(它能被该用户按 trace_id 读回); 多用户桶
-    混跑时正文属于**某一个人**, 落进一条无归属记录会被其他登录用户读到(golden rule:
-    fail closed)。这种情况只记计数, 不落正文。
+    只有"本轮所有桶都属于同一个有效用户"时才能把正文落库(它能被该用户按 trace_id
+    读回); 多用户桶 / 任何 NULL 桶混跑时正文属于**某一个人或来源不明**, 落进一条
+    无归属记录会被其他登录用户读到(golden rule: fail closed)。这种情况只记计数。
+
+    同时不再无条件取 `results[-1]`: 即使判定为单一用户, 也只取**该用户桶**的正文。
     """
     if not results:
         return ""
-    uids = {_context_user_id(c) for c, _r in results}
-    uids.discard(None)
-    if len(uids) == 1:
-        try:
-            return (getattr(results[-1][1], "content", "") or "")[:2000]
-        except Exception:  # noqa: BLE001
-            return ""
-    return f"多用户桶批量执行 buckets={len(results)}; 正文按用户隔离投递, 不落共享运行记录"
+    sole = _sole_bucket_user([c for c, _r in results])
+    if not sole:
+        return (
+            f"多用户/未归属桶批量执行 buckets={len(results)}; "
+            "正文按用户隔离投递, 不落共享运行记录"
+        )
+    for ctx, res in results:
+        if _context_user_id(ctx) == sole:
+            try:
+                return (getattr(res, "content", "") or "")[:2000]
+            except Exception:  # noqa: BLE001
+                return ""
+    return ""
 
 
 class AgentScheduler:

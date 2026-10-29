@@ -13,6 +13,10 @@ from src.web.database import get_db
 from src.web.models import AgentConfig, AnalysisHistory, User
 from src.web.api.auth import get_current_user
 from src.config import Settings
+from src.core.analysis_history import (
+    analysis_history_scope_clause,
+    analysis_history_visible,
+)
 from src.core.agent_catalog import (
     AGENT_KIND_CAPABILITY,
     AGENT_KIND_WORKFLOW,
@@ -94,7 +98,9 @@ def list_history(
     content/prompt/raw_data/news/quality 全省, 单接口从 ~100KB 降到 ~1KB,
     Dashboard 首页打开不再被 history 阻塞。详情走 GET /history/{id}。
     """
-    query = db.query(AnalysisHistory).filter(AnalysisHistory.user_id == user.id)
+    query = db.query(AnalysisHistory).filter(
+        analysis_history_scope_clause(user.id, getattr(user, "role", None))
+    )
 
     if agent_name:
         query = query.filter(AnalysisHistory.agent_name == agent_name)
@@ -174,7 +180,10 @@ def get_history_detail(
     """获取单条分析详情(S1: 仅返回当前用户的记录, 否则 404 防账号探测)"""
     record = (
         db.query(AnalysisHistory)
-        .filter(AnalysisHistory.id == history_id, AnalysisHistory.user_id == user.id)
+        .filter(
+            AnalysisHistory.id == history_id,
+            analysis_history_scope_clause(user.id, getattr(user, "role", None)),
+        )
         .first()
     )
     if not record:
@@ -226,7 +235,10 @@ def delete_history(
     """删除单条历史记录(S1: 仅当前用户可删, 否则 404 防账号探测)"""
     record = (
         db.query(AnalysisHistory)
-        .filter(AnalysisHistory.id == history_id, AnalysisHistory.user_id == user.id)
+        .filter(
+            AnalysisHistory.id == history_id,
+            analysis_history_scope_clause(user.id, getattr(user, "role", None)),
+        )
         .first()
     )
     if not record:
@@ -258,7 +270,7 @@ def retry_history(
     失败的记录被同键覆盖成新结果（`save_analysis` 是 upsert）。
 
     守卫：
-      · 不属于当前用户的行 → 403（系统行 `user_id is None` 只有 owner 能重试）
+      · 不属于当前用户的记录 → 403（不派发, 不泄露正文; 系统行 `user_id is None` 只有 owner 能重试）
       · 已经是 success → 409（不需要重试，避免白烧一次 LLM）
       · agent 不存在 / 工作流 agent 被禁用 → 404 / 400（先让用户去开启，别静默失败）
     """
@@ -266,8 +278,12 @@ def retry_history(
     if not record:
         raise HTTPException(404, "报告记录不存在")
 
-    is_owner = (getattr(user, "role", None) or "") == "owner"
-    if record.user_id != user.id and not is_owner:
+    # 执行权限与读权限同口径(2026-10-29 五审): 自己可见才能重试; owner 只能额外重试
+    # NULL 历史行, 不能替 member 重跑其私有报告(那是在执行他人数据)。保持既有 403
+    # 契约(不返回正文, 不放宽执行权), 只收紧"owner 可替任何人重试"的旧行为。
+    if not analysis_history_visible(
+        record, user.id, getattr(user, "role", None)
+    ):
         raise HTTPException(403, "无权重试该报告")
 
     if (record.status or "success") == "success":

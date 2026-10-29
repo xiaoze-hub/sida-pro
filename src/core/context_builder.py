@@ -79,13 +79,23 @@ class ContextBuilder:
         self._index_cache: dict[str, dict | None] = {}
 
     @staticmethod
-    def _load_history_rows(days: int = 7) -> list:
+    def _load_history_rows(
+        days: int = 7, *, user_id: str | None = None, role: str | None = None
+    ) -> list:
         """P1 性能修复: 一次性批量拉取历史分析行(供多 symbol 复用), 避免 N+1。
 
         原实现逐股开 SessionLocal + 查同一张表(SQL 本身不按 symbol 过滤),
         N 只股票 = N 次 DB 往返。现在 build_symbol_contexts 循环前调用一次,
         内存中按 symbol/name 过滤。
+
+        2026-10-29 五审: 旧实现**一条用户过滤都没有** —— 任何用户触发的 agent 上下文
+        都会读到全库所有人的分析行(raw_data 里有持仓/新闻)。现在必须显式给触发用户:
+        无用户 → 不读(fail-closed); member 只读本人; owner 额外可读 NULL 历史。
         """
+        from src.core.analysis_history import analysis_history_scope_clause
+
+        if not user_id:
+            return []
         cutoff = (date.today() - timedelta(days=max(1, days))).strftime("%Y-%m-%d")
         db = SessionLocal()
         try:
@@ -96,6 +106,7 @@ class ContextBuilder:
                         ("news_digest", "premarket_outlook", "daily_report")
                     ),
                     AnalysisHistory.analysis_date >= cutoff,
+                    analysis_history_scope_clause(user_id, role),
                 )
                 .order_by(AnalysisHistory.analysis_date.desc())
                 .limit(30)
@@ -452,7 +463,13 @@ class ContextBuilder:
         snapshot_date = _iso_today()
 
         # P1 性能修复: 历史新闻一次批量查出(原先逐股开 Session = N+1)
-        hist_rows = self._load_history_rows(days=history_days)
+        # 2026-10-29 五审: 从 context.user 取触发归属, 不再全库读取。
+        _ctx_user = getattr(context, "user", None)
+        hist_rows = self._load_history_rows(
+            days=history_days,
+            user_id=getattr(_ctx_user, "id", None) if _ctx_user is not None else None,
+            role=getattr(_ctx_user, "role", None) if _ctx_user is not None else None,
+        )
 
         for stock in context.watchlist:
             symbol = stock.symbol
@@ -518,7 +535,12 @@ class ContextBuilder:
 
             # ④ 最近一次 TradingAgents 深度结论(高权重先验,仅紧凑版本)
             try:
-                ta_verdict = get_latest_ta_verdict(symbol, within_days=14)
+                ta_verdict = get_latest_ta_verdict(
+                    symbol,
+                    within_days=14,
+                    user_id=getattr(_ctx_user, "id", None) if _ctx_user is not None else None,
+                    role=getattr(_ctx_user, "role", None) if _ctx_user is not None else None,
+                )
             except Exception as e:
                 logger.debug(f"注入 TA 深度结论失败 {symbol}: {e}")
                 ta_verdict = None

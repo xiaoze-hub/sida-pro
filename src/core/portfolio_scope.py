@@ -32,7 +32,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import or_
+from sqlalchemy import false, or_
 from sqlalchemy.orm import Query, Session
 
 from src.db.models import Account, Position, Stock
@@ -41,6 +41,9 @@ __all__ = [
     "account_user_scope_clause",
     "position_user_scope_clause",
     "stock_user_scope_clause",
+    "owned_account_clause",
+    "owned_position_clause",
+    "owned_stock_clause",
     "user_scope_accounts",
     "user_scope_positions",
     "user_scope_stocks",
@@ -78,6 +81,27 @@ def stock_user_scope_clause(user_id: str | None):
     绝不放开成全表 —— 与持仓两侧口径一致。
     """
     return _visibility_clause(Stock.user_id, user_id)
+
+
+def owned_account_clause(user_id: str | None):
+    """**严格本人**归属: 只匹配 `Account.user_id == uid`, 不含 NULL 共享桶。
+
+    用于私有报告/LLM 输入等"对外输出的私有快照"。`user_id=None` → 空集(fail-closed)。
+    """
+    uid = str(user_id) if user_id else ""
+    return Account.user_id == uid if uid else false()
+
+
+def owned_position_clause(user_id: str | None):
+    """**严格本人**归属: 只匹配 `Position.user_id == uid`(必须与账户条件同时用)。"""
+    uid = str(user_id) if user_id else ""
+    return Position.user_id == uid if uid else false()
+
+
+def owned_stock_clause(user_id: str | None):
+    """**严格本人**归属: 只匹配 `Stock.user_id == uid`。"""
+    uid = str(user_id) if user_id else ""
+    return Stock.user_id == uid if uid else false()
 
 
 def user_scope_accounts(

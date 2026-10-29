@@ -1063,11 +1063,15 @@ class IntradayMonitorAgent(BaseAgent):
             agent_name="daily_report",
             stock_symbol="*",
             before_date=date.today(),
+            user_id=_ctx_user.id if _ctx_user is not None else None,
+            role=getattr(_ctx_user, "role", None) if _ctx_user is not None else None,
         )
         premarket_analysis = get_analysis(
             agent_name="premarket_outlook",
             stock_symbol="*",
             analysis_date=date.today(),
+            user_id=_ctx_user.id if _ctx_user is not None else None,
+            role=getattr(_ctx_user, "role", None) if _ctx_user is not None else None,
         )
 
         # 市场情绪 + 板块面 + 实时大盘指数(盘中情绪判断)
@@ -1103,6 +1107,18 @@ class IntradayMonitorAgent(BaseAgent):
             logger.warning(f"市场情绪采集失败: {e}")
             market_sentiment = {}
 
+        # 2026-10-29 五审 P1: 防守线外发必须用**真实用户代理配置的渠道选择集**,
+        # 不能再让 notify_center 自己扩到该用户全部渠道。解析失败/无渠道 → 空元组,
+        # 最终外发 fail-closed(站内仍有记录)。
+        _notify_channel_ids: tuple[int, ...] = ()
+        try:
+            from src.bootstrap.runtime import resolve_notify_channels_ex
+
+            _res = resolve_notify_channels_ex(self.name, user_id=_trigger_uid)
+            _notify_channel_ids = tuple(int(c.id) for c in (_res.channels or []))
+        except Exception as _ch_err:  # noqa: BLE001
+            logger.warning("防守线通知渠道解析失败(按无渠道处理): %s", _ch_err)
+
         return {
             "stocks": [stock_data] if stock_data else [],
             "stock_data": stock_data,
@@ -1118,6 +1134,8 @@ class IntradayMonitorAgent(BaseAgent):
             "timestamp": datetime.now().isoformat(),
             # 触发用户(标量 id): 防守线查询 / 风险告警外发都只认这一个归属。
             "user_id": _trigger_uid,
+            # 该用户在 intraday_monitor 上配置的渠道选择集(与 context.notifier 同源)。
+            "notify_channel_ids": list(_notify_channel_ids),
         }
 
     def build_prompt(self, data: dict, context: AgentContext) -> tuple[str, str]:
@@ -2014,8 +2032,12 @@ class IntradayMonitorAgent(BaseAgent):
                 loss_txt = (
                     f"浮亏 {verdict['loss_pct']:.2f}%，" if verdict.get("loss_pct") is not None else ""
                 )
+                from src.core.numutil import finite_float as _finite
+
+                _cost = _finite(line.get("cost_price"))
+                cost_txt = f"成本 {_cost:.2f}，" if _cost is not None else "成本未知，"
                 alert_line = (
-                    f"🚨【触发防守线警报】：成本 {float(line.get('cost_price') or 0):.2f}，"
+                    f"🚨【触发防守线警报】：{cost_txt}"
                     f"现价 {verdict['current_price']:.2f}，{loss_txt}"
                     f"已跌破用户设定防守线 {verdict['defense_price']:.2f}，"
                     f"请执行你自己定下的纪律，别临场改口！"
@@ -2024,6 +2046,12 @@ class IntradayMonitorAgent(BaseAgent):
                 # 2026-10-16: 击穿直接触发微信/钉钉等外部高优先级通道外发
                 try:
                     from src.core.notify_center import push_notification
+
+                    # 2026-10-29 五审 P1: 必须带**该用户代理配置的渠道选择集**;
+                    # 缺失/为空 → notify_center 一条都不外发(fail-closed), 站内仍留痕。
+                    _ch_ids = tuple(
+                        int(x) for x in (data.get("notify_channel_ids") or [])
+                    )
                     push_notification(
                         title=f"🚨【防守线击穿】{stock.name}（{stock.symbol}）",
                         body=alert_line,
@@ -2032,6 +2060,7 @@ class IntradayMonitorAgent(BaseAgent):
                         source="intraday_monitor",
                         also_push=True,
                         user_id=_uid,
+                        channel_ids=_ch_ids,
                     )
                 except Exception as n_err:
                     logger.warning(f"防守线微信外发异常: {n_err}")

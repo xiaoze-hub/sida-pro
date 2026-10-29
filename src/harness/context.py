@@ -327,15 +327,17 @@ def inject_premarket_brief(messages: list[dict], db, user, recipe=None) -> bool:
 
         from src.core.timezone import beijing_now
         from src.db.models import AnalysisHistory
+        from src.core.analysis_history import analysis_history_scope_clause
 
         today = beijing_now().strftime("%Y-%m-%d")
         uid = str(getattr(user, "id", "") or "")
         q = db.query(AnalysisHistory).filter(
             AnalysisHistory.agent_name == "premarket_outlook",
             AnalysisHistory.status == "success",
+            # 2026-10-29 五审: NULL 历史底稿只给 owner —— 正文可能是别人的持仓,
+            # 旧写法把它当"共享"注入任何用户的 system prompt。
+            analysis_history_scope_clause(uid, getattr(user, "role", None)),
         )
-        if uid:
-            q = q.filter(or_(AnalysisHistory.user_id == uid, AnalysisHistory.user_id.is_(None)))
         rec = (
             q.order_by(
                 AnalysisHistory.analysis_date.desc(),

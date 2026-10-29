@@ -430,10 +430,19 @@ def test_progress_endpoint_fails_closed_for_null_user_run(db):
 # ─────────────────────── R5 删自选不删他人资源 ───────────────────────
 
 
-def test_delete_shared_stock_never_deletes_members_alert_rule(db):
+def test_delete_shared_stock_detaches_members_alert_rule_safely(db):
+    """owner 删共享自选: 不删他人规则, 也不 dead-loop 拒绝。
+
+    2026-10-29 五审 P1 契约: 共享行上的他人提醒必须先**安全拆离**(复制同 symbol 的
+    私有自选并迁移规则), 再删除共享行。断言三件事:
+      1) 删除成功(可恢复, 不再只回 409 文案);
+      2) member 的规则仍在(数据不丢), 且已指向他自己的私有克隆;
+      3) 原共享行已删除, 且克隆不是共享(NULL)桶 —— 没有把他人数据留给所有人。
+    """
     owner = db.user("owner", "del")
     member = db.user("member", "del")
     st = db.stock(None, symbol=f"SH{uuid.uuid4().hex[:5].upper()}")
+    orig_id, orig_symbol, orig_market = st.id, st.symbol, st.market
     rule = PriceAlertRule(user_id=member.id, stock_id=st.id, name="member rule",
                           condition_group={"conditions": []}, enabled=True)
     db.s.add(rule)
@@ -443,10 +452,21 @@ def test_delete_shared_stock_never_deletes_members_alert_rule(db):
     from src.web.app import app
 
     client = TestClient(app)
-    r = client.delete(f"/api/stocks/{st.id}", headers=_token(owner))
-    assert r.status_code == 409, r.text
-    assert db.s.query(PriceAlertRule).filter(PriceAlertRule.id == rule.id).first() is not None
-    assert db.s.query(Stock).filter(Stock.id == st.id).first() is not None
+    r = client.delete(f"/api/stocks/{orig_id}", headers=_token(owner))
+    assert r.status_code == 200, r.text
+    assert (r.json().get("data") or {}).get("detached_users") == 1
+
+    # 端点在独立 session 里迁移了 rule.stock_id; 本 fixture session 的 identity map
+    # 里还是旧值, 先过期再从库里重读(否则会误判未迁移)。
+    db.s.expire_all()
+    kept = db.s.query(PriceAlertRule).filter(PriceAlertRule.id == rule.id).first()
+    assert kept is not None, "删共享自选不得删除 member 的价格提醒"
+    assert kept.stock_id != orig_id, "规则应迁移到 member 的私有克隆, 而非留在已删共享行"
+    clone = db.s.query(Stock).filter(Stock.id == kept.stock_id).first()
+    assert clone is not None and clone.user_id == member.id
+    assert clone.symbol == orig_symbol and clone.market == orig_market
+    db.created["stocks"].append(clone.id)
+    assert db.s.query(Stock).filter(Stock.id == orig_id).first() is None
 
 
 def test_delete_own_private_stock_still_removes_own_rule(db):

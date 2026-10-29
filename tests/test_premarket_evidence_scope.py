@@ -5,11 +5,14 @@
 于是"无会话/系统报告"路径把**全库所有租户**的持仓与私有自选读进证据块。共享桶被当成
 "全库", 这是 fail-open 的教科书例子。
 
-修复口径(与 `portfolio_scope` 同源):
+修复口径(与 `portfolio_scope` 同源, 2026-10-29 五审进一步收紧):
 
-- 传 uid → 只采该用户可见(账户可见 AND 持仓可见; 自选 = 自己的 + 历史共享);
-- 传 None → **显式共享桶**: `Account.user_id IS NULL AND Position.user_id IS NULL`,
-  自选 `Stock.user_id IS NULL`; 绝不是全库。
+- 传 uid → **严格本人双层归属**: `Account.user_id == uid AND Position.user_id == uid`;
+  自选 `Stock.user_id == uid`。历史 NULL 共享桶**不并入**——那是某个人的旧成本,
+  模糊归属不得猜给当前用户(否则私有报告/LLM 输入会吐别人的持仓);
+- 传 None → **显式共享市场口径**: 一条持仓/自选都不采(纯市场报告), 绝不是全库。
+
+共享市场报告仍然开放(scope=shared 且不含私有持仓), 但它不再读任何人的持仓。
 """
 
 from __future__ import annotations
@@ -113,7 +116,9 @@ def test_portfolio_block_scoped_to_user(tenancy):
     syms = _portfolio_symbols(block)
     assert tenancy["syms"]["a_pos"] in syms
     assert tenancy["syms"]["b_pos"] not in syms, "证据层不得含他人的成本/仓位"
-    assert tenancy["syms"]["shared_pos"] in syms, "历史共享持仓对所有人可见(既有口径)"
+    assert tenancy["syms"]["shared_pos"] not in syms, (
+        "NULL 共享桶是历史某人成本, 不得猜给当前用户(五审: 严格本人双层归属)"
+    )
 
 
 def test_portfolio_block_without_user_is_empty_for_shared_market_report(tenancy):
@@ -143,6 +148,8 @@ def test_fund_structure_symbols_scoped(tenancy, monkeypatch):
     pe._collect_fund_structure_block(tenancy["db"], tenancy["users"]["a"].id, "2026-10-29")
     assert tenancy["syms"]["b_pos"] not in seen
     assert tenancy["syms"]["b_watch"] not in seen
+    assert tenancy["syms"]["shared_pos"] not in seen
+    assert tenancy["syms"]["shared_watch"] not in seen
     assert tenancy["syms"]["a_pos"] in seen
 
 
