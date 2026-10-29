@@ -38,6 +38,27 @@ const STATUS_CLS: Record<string, string> = {
   running: 'text-muted-foreground',
 }
 
+/**
+ * 状态人话（2026-10-29）：摘要里原来直接甩 `degraded` / `error` 这类英文枚举，
+ * 用户读到的是一串日志字段。这里给中文口径，但**原始状态码一个字都不删** ——
+ * 它是排障时唯一能对上后端 `runs.status` 的锚点。未知状态照原样显示，不猜。
+ */
+const STATUS_HINT: Record<string, string> = {
+  degraded: '部分降级',
+  error: '出错',
+  failed: '失败',
+  cancelled: '已取消',
+  canceled: '已取消',
+  running: '进行中',
+  timeout: '超时',
+  ok: '完成',
+}
+
+function statusHint(status: string | null | undefined): string | null {
+  const key = (status || '').toLowerCase()
+  return STATUS_HINT[key] ?? null
+}
+
 function clip(s: string | null | undefined, n = 46): string {
   if (!s) return ''
   const t = s.replace(/\s+/g, ' ').trim()
@@ -49,6 +70,9 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
 
   const toolCalls = typeof run.tool_calls === 'number' ? run.tool_calls : null
   const statusCls = STATUS_CLS[run.status] || 'text-muted-foreground'
+  const hint = statusHint(run.status)
+  /** 失败步数：只有详情到手才数得出（未加载时是 null，不显示 0）。 */
+  const failedSteps = steps ? steps.filter((s) => !s.ok).length : null
 
   const toggle = () => {
     const next = !open
@@ -70,7 +94,12 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
         <span className="tabular-nums">
           · {toolCalls === null ? '-- 步' : `${toolCalls} 步`} · {formatElapsed(run.elapsed_ms)}
         </span>
-        {run.status !== 'ok' && <span className={statusCls}>· {run.status}</span>}
+        {run.status !== 'ok' && (
+          <span className={statusCls}>
+            · {run.status}
+            {hint ? <span className="text-muted-foreground">（{hint}）</span> : null}
+          </span>
+        )}
       </button>
 
       {open && (
@@ -81,6 +110,24 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
           {failed && !steps && !loading && (
             <div className="py-1 text-[12px] text-muted-foreground">这一轮的步骤没取到</div>
           )}
+          {/*
+            展开后先给一行「共 N 步 / 失败 M 步」：失败步骤虽然逐条标红，但要先让人知道
+            这一轮到底有没有失败，否则得自己数完 7 行才发现第 3 步是 ✗。
+            M 为 0 时不写「失败 0 步」—— 那是噪音，不是信息。
+          */}
+          {steps && steps.length > 0 ? (
+            <div
+              data-testid="inline-steps-summary"
+              className="flex items-baseline gap-1.5 py-1 text-[12px] tabular-nums text-muted-foreground"
+            >
+              <span>共 {steps.length} 步</span>
+              {failedSteps ? (
+                <span className="text-stock-down">失败 {failedSteps} 步</span>
+              ) : (
+                <span>全部成功</span>
+              )}
+            </div>
+          ) : null}
           {(steps ?? []).map((s) => (
             <div
               key={`${s.seq}-${s.tool}`}

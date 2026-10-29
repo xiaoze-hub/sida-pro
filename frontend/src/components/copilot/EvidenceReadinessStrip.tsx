@@ -10,11 +10,15 @@ import { readinessProgressLabel, statusText } from '@/lib/copilot/evidence-readi
  * 版式（行情终端口径，不是卡片仪表盘）：
  *  - 没有新卡片：上下各一条 hairline（border-border）+ 行距分隔；
  *  - 没有阴影（popover 之外禁 elevation）、没有彩色背景；
- *  - 字号只有 10px；数字 tabular-nums 防跳动；
+ *  - 字号 12px（辅助文字下限，见设计稿勘误 7.1：10px 已禁用），数字 tabular-nums 防跳动；
  *  - 颜色只带语义：失败用 role-risk，其余一律 muted —— 成功不是「喜庆绿」。
  *
  * 空态：`items` 为空直接不渲染（没取数就不该出现一条空条，更不该显示 0/0）。
  * 分母未知（stage 标签没有 `/N`）时只显示「已取 N 项」，绝不编一个总数。
+ *
+ * 2026-10-29：`unknown`（未确认）单独计数。此前只有 `未取到 N` —— 流结束时既没成功证据
+ * 也没失败证据的条目只挂一个「未确认」pill，条数不进任何计数，用户会把它当成「还没跑完」
+ * 甚至默认它成功了。unknown 既不是 ok 也不是 failed，必须自己说出来。
  */
 export function EvidenceReadinessStrip({
   items,
@@ -31,6 +35,8 @@ export function EvidenceReadinessStrip({
   if (!items.length) return null
 
   const failedCount = failed || items.filter((it) => it.status === 'failed').length
+  /** 未确认 = 本轮结束仍没有成功/失败证据的条目。既不算已取，也不算未取到。 */
+  const unknownCount = items.filter((it) => it.status === 'unknown').length
   const progress = readinessProgressLabel({ done, total })
 
   return (
@@ -46,6 +52,15 @@ export function EvidenceReadinessStrip({
           className="shrink-0 text-[12px] tabular-nums text-role-risk"
         >
           未取到 {failedCount}
+        </span>
+      ) : null}
+      {unknownCount > 0 ? (
+        <span
+          data-testid="evidence-readiness-unknown-count"
+          title="流结束时仍没有成功或失败证据：既不等于取到，也不等于取不到"
+          className="shrink-0 text-[12px] tabular-nums text-amber-500"
+        >
+          未确认 {unknownCount}
         </span>
       ) : null}
       <span aria-hidden className="shrink-0 text-[12px] text-muted-foreground">

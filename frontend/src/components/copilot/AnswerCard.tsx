@@ -18,6 +18,14 @@ import {
   type DimensionPerspective,
 } from '@/components/copilot/MultiAgentDebatePanel'
 import {
+  extractRiskLines,
+  partitionEvidence,
+  splitCaliber,
+  splitEvidenceSource,
+  stripDisclaimer,
+  stripRiskTail,
+} from '@/components/copilot/answer-sections'
+import {
   ANSWER_ACTION_COPIED,
   ANSWER_ACTION_COPY,
   ANSWER_ACTION_WORKBENCH,
@@ -32,6 +40,17 @@ import {
   ANSWER_VERDICT_LABEL,
   FOLLOW_UP_QUESTIONS,
 } from '@/lib/copilot/copy'
+
+/**
+ * 风险 / 数据缺口两层的文案。
+ *
+ * 固化在组件旁边而不是 `lib/copilot/copy.ts`：这一轮只动「回答 / 证据」组件
+ * （`components/copilot/`），而 copy.ts 同时被卡片、胶囊、简报共用，改它会把这次打磨
+ * 扩散成全站文案改动。两句都是**中性描述**：不含买卖指令、不承诺收益。
+ */
+const ANSWER_RISK_LABEL = '风险与失效条件'
+const ANSWER_GAP_LABEL = '数据缺口'
+const ANSWER_GAP_NOTE = '以下为回答中声明未取到的数据，未参与上述结论'
 
 /** 首屏只露 3 条依据：结论 + 关键证据一屏读完，其余折叠（信息量不变，首屏变短）。 */
 const EVIDENCE_PREVIEW = 3
@@ -175,16 +194,34 @@ function AnchoredText({
   )
 }
 
+/** 节标题：左侧名称 + 右侧计数（计数走 tabular，条数变化时不抖）。 */
+function SectionHead({ label, count }: { label: string; count?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-[12px] font-medium text-foreground">{label}</span>
+      {count ? (
+        <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{count}</span>
+      ) : null}
+    </div>
+  )
+}
+
 /**
- * 参谋回答卡片（2026-10-19, P1 排版；2026-10-28 顶级金融终端罗盘与多智能体实测升级）。
+ * 参谋回答卡片（2026-10-19, P1 排版；2026-10-28 顶级金融终端罗盘与多智能体实测升级；
+ * 2026-10-29 回答可读性打磨）。
  *
- * 分层顺序固定为「裁决 → 罗盘 → 会诊证据链 → 依据 → 预案 → 口径」：
- *   1. 裁决条：一句定性 + 置信度徽标（置信度来自原文 x/10，拿不到就不显示，不编）；
- *   2. 决策罗盘：当且仅当原文存在真实支撑与阻力时呈现，提供水平价位罗盘与一键画线；
- *   3. 会诊面板：当依据具备多维度特征时结构化展现真实证据链；
- *   4. 依据：默认 3 条，可展开全部；
- *   5. 预案：原文保留（持仓者/空仓者的分叉在模型输出里）；
- *   6. 口径 + 免责：固定尾部，回答里到底用的是哪套口径必须可见。
+ * 分层顺序固定为「裁决 → 罗盘 → 风险 → 会诊证据链 → 依据 → 数据缺口 → 预案 → 口径」：
+ *   1. 裁决条：一句定性 + 自评徽标（自评来自原文 x/10，拿不到就不显示，不编）；
+ *   2. 决策罗盘：当且仅当原文存在真实支撑与阻力时呈现（价位只展示，不上图）；
+ *   3. 风险与失效条件：**只**在模型写了【风险】段时出现 —— 绝不从依据里反推风险；
+ *   4. 会诊面板：当依据具备多维度特征时结构化展现真实证据链；
+ *   5. 依据：默认 3 条、可展开全部；尾部「（…口径）」拆成来源标记，正文只留读数；
+ *   6. 数据缺口：回答自己声明「暂无 / 未取到」的条目，单独一层，一条不丢；
+ *   7. 预案：原文保留（持仓者/空仓者的分叉在模型输出里）；
+ *   8. 口径：拆成条目 + 固定标签，回答里到底用的是哪套口径必须一眼可读。
+ *
+ * 版式纪律：外层会话气泡已经是 `card-surface`，这里**不再叠卡片** —— 节与节之间只用
+ * hairline（`border-t border-border`）分节，圆角底色只留给裁决条，层级靠字号与留白表达。
  */
 export function AnswerCard({
   parsed,
@@ -200,14 +237,30 @@ export function AnswerCard({
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  const hiddenCount = Math.max(0, parsed.evidence.length - EVIDENCE_PREVIEW)
-  const shownEvidence = useMemo(
-    () => (expanded ? parsed.evidence : parsed.evidence.slice(0, EVIDENCE_PREVIEW)),
-    [expanded, parsed.evidence],
+  /** 先截掉黏在结论/预案/口径尾巴上的风险段：同一句风险不能出现两次。 */
+  const verdict = useMemo(() => stripRiskTail(parsed.verdict), [parsed.verdict])
+  const plan = useMemo(() => stripRiskTail(parsed.plan), [parsed.plan])
+  const riskLines = useMemo(() => extractRiskLines(parsed.raw), [parsed.raw])
+  const { data: evidenceRows, gaps } = useMemo(
+    () => partitionEvidence(parsed.evidence, riskLines),
+    [parsed.evidence, riskLines],
+  )
+  const caliberParts = useMemo(
+    () => splitCaliber(stripDisclaimer(stripRiskTail(parsed.caliber), parsed.disclaimer)),
+    [parsed.caliber, parsed.disclaimer],
   )
 
-  const keyLevels = useMemo(() => extractTextLevels(parsed), [parsed])
-  const realPerspectives = useMemo(() => extractRealPerspectives(parsed.evidence), [parsed.evidence])
+  const hiddenCount = Math.max(0, evidenceRows.length - EVIDENCE_PREVIEW)
+  const shownEvidence = useMemo(
+    () => (expanded ? evidenceRows : evidenceRows.slice(0, EVIDENCE_PREVIEW)),
+    [expanded, evidenceRows],
+  )
+
+  const keyLevels = useMemo(
+    () => extractTextLevels({ ...parsed, verdict, plan }),
+    [parsed, verdict, plan],
+  )
+  const realPerspectives = useMemo(() => extractRealPerspectives(evidenceRows), [evidenceRows])
   /**
    * 回答正文里的「置信度 8/10」是模型的**自评分**，不是统计置信度。
    * 这里只做取值校验（0~10），既不换算成百分制、也不兜底默认值。
@@ -224,11 +277,20 @@ export function AnswerCard({
     }
   }
 
+  /**
+   * 罗盘入参：`hasLevels` 是 const 布尔，TS 的 aliased-condition 收窄只在直接引用
+   * 同名局部变量时生效 —— 所以先取成局部量，避免在 JSX 里对 `keyLevels.supportPrice`
+   * 反复断言（非空断言会掩盖真正的缺项）。
+   */
+  const supportPrice = keyLevels.supportPrice
+  const resistancePrice = keyLevels.resistancePrice
+  const hasLevels = supportPrice != null && resistancePrice != null
+
   return (
-    <div data-testid="copilot-answer-card" className="space-y-2">
-      {/* 1. 裁决条 */}
-      {parsed.verdict ? (
-        <div className="card-surface rounded-lg bg-role-watch/8 px-2.5 py-2">
+    <div data-testid="copilot-answer-card" className="space-y-2.5">
+      {/* 1. 裁决条（全卡唯一的圆角底色块：一眼先看到结论） */}
+      {verdict ? (
+        <div className="rounded-lg bg-role-watch/8 px-2.5 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <Sparkles className="h-3.5 w-3.5 shrink-0 text-role-watch" />
             <span className="text-[12px] font-medium text-role-watch">{ANSWER_VERDICT_LABEL}</span>
@@ -243,26 +305,26 @@ export function AnswerCard({
             ) : null}
           </div>
           <div className="mt-1 text-[14px] leading-relaxed text-foreground">
-            <AnchoredText text={parsed.verdict} onAnchor={onAnchoredPrice} />
+            <AnchoredText text={verdict} onAnchor={onAnchoredPrice} />
           </div>
         </div>
       ) : null}
 
       {/* 2. 数智决策罗盘（仅在解析出真实支撑与阻力位时展现） */}
-      {keyLevels.supportPrice != null && keyLevels.resistancePrice != null ? (
+      {hasLevels ? (
         <DecisionCompassCard
           ticker={symbol}
           currentPrice={keyLevels.currentPrice ?? undefined}
           costPrice={keyLevels.costPrice ?? undefined}
-          supportPrice={keyLevels.supportPrice}
-          resistancePrice={keyLevels.resistancePrice}
+          supportPrice={supportPrice}
+          resistancePrice={resistancePrice}
           stopLossPrice={keyLevels.stopLossPrice ?? undefined}
           targetPrice={keyLevels.targetPrice ?? undefined}
-          biasLabel={parsed.verdict ? parsed.verdict.slice(0, 8) : '多空裁决'}
+          biasLabel={verdict ? verdict.slice(0, 8) : '多空裁决'}
           modelConfidence={selfRating ?? undefined}
           tactics={
-            parsed.plan
-              ? parsed.plan
+            plan
+              ? plan
                   .split('\n')
                   .map((l) => l.trim())
                   .filter((l) => l.length > 0 && !l.startsWith('【'))
@@ -296,36 +358,69 @@ export function AnswerCard({
         读回（`lib/copilot/annotationLink`）。那句话必须留在卡片上，否则用户会以为
         "罗盘上的数字已经过服务端核验"。
       */}
-      {keyLevels.supportPrice != null && keyLevels.resistancePrice != null ? (
+      {hasLevels ? (
         <div
           data-testid="copilot-level-provenance-note"
-          className="card-surface rounded-lg bg-s1 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground"
+          className="border-l-2 border-border pl-2 text-[12px] leading-relaxed text-muted-foreground"
         >
           以上支撑/阻力来自回答正文的文本识别，未经服务端核验，未画到 K 线上。要上图请在「待确认动作」里确认服务端的情景标注提议：确认成功后按服务端标注记录画线，刷新后服务端仍在才会继续显示。
         </div>
       ) : null}
 
-      {/* 3. 多维依据透视（仅在依据具备多维度特征时展现真实多维视角链） */}
+      {/* 3. 风险与失效条件（模型没写就没有这一层，绝不从依据反推） */}
+      {riskLines.length ? (
+        <section
+          data-testid="copilot-answer-risk"
+          data-answer-section="true"
+          className="border-t border-border pt-2"
+        >
+          <SectionHead label={ANSWER_RISK_LABEL} count={`${riskLines.length} 条`} />
+          <ul className="mt-1 space-y-1">
+            {riskLines.map((line, i) => (
+              <li key={`${i}-${line.slice(0, 12)}`} className="flex gap-1.5 text-[12px] leading-relaxed">
+                <span className="mt-[2px] h-1 w-1 shrink-0 rounded-full bg-amber-500" />
+                {/* 风险条目不做价位锚点：它是失效条件复述，重复的价位交互会让人误读成可交易点位 */}
+                <span className="min-w-0 text-foreground">{line}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* 4. 多维依据透视（仅在依据具备多维度特征时展现真实多维视角链） */}
       {realPerspectives.length > 0 ? (
         <MultiDimensionEvidencePanel perspectives={realPerspectives} />
       ) : null}
 
-      {/* 4. 依据 */}
-      {parsed.evidence.length ? (
-        <div className="card-surface rounded-lg bg-s1 px-2.5 py-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[12px] font-medium text-muted-foreground">{ANSWER_EVIDENCE_LABEL}</span>
-            <span className="text-[12px] text-muted-foreground">{parsed.evidence.length} 条</span>
-          </div>
+      {/* 5. 依据（读数与来源分离；缺失条目另起一层，不在这里混排） */}
+      {evidenceRows.length ? (
+        <section
+          data-testid="copilot-answer-evidence"
+          data-answer-section="true"
+          className="border-t border-border pt-2"
+        >
+          <SectionHead label={ANSWER_EVIDENCE_LABEL} count={`${evidenceRows.length} 条`} />
           <ul className="mt-1 space-y-1">
-            {shownEvidence.map((e, i) => (
-              <li key={`${i}-${e.slice(0, 12)}`} className="flex gap-1.5 text-[12px] leading-relaxed">
-                <span className="mt-[2px] h-1 w-1 shrink-0 rounded-full bg-role-watch/70" />
-                <span className="min-w-0 text-foreground">
-                  <AnchoredText text={e} onAnchor={onAnchoredPrice} />
-                </span>
-              </li>
-            ))}
+            {shownEvidence.map((e, i) => {
+              const { body, source } = splitEvidenceSource(e)
+              return (
+                <li key={`${i}-${body.slice(0, 12)}`} className="flex gap-1.5 text-[12px] leading-relaxed">
+                  <span className="mt-[2px] h-1 w-1 shrink-0 rounded-full bg-role-watch/70" />
+                  <span className="min-w-0 text-foreground">
+                    <AnchoredText text={body} onAnchor={onAnchoredPrice} />
+                    {source ? (
+                      <span
+                        data-testid="copilot-evidence-source"
+                        title={`该条读数的来源口径：${source}`}
+                        className="ml-1 whitespace-nowrap rounded border border-border px-1 text-[12px] text-muted-foreground"
+                      >
+                        {source}
+                      </span>
+                    ) : null}
+                  </span>
+                </li>
+              )
+            })}
           </ul>
           {hiddenCount > 0 ? (
             <button
@@ -340,26 +435,63 @@ export function AnswerCard({
                 : `${ANSWER_EVIDENCE_EXPAND_PREFIX} ${hiddenCount} ${ANSWER_EVIDENCE_EXPAND_SUFFIX}`}
             </button>
           ) : null}
-        </div>
+        </section>
       ) : null}
 
-      {/* 5. 预案 */}
-      {parsed.plan ? (
-        <div className="card-surface rounded-lg bg-s1 px-2.5 py-2">
-          <div className="text-[12px] font-medium text-muted-foreground">{ANSWER_PLAN_LABEL}</div>
-          <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-foreground">
-            {parsed.plan}
-          </div>
-        </div>
+      {/* 6. 数据缺口（回答自己说没拿到的：单独一层，一条不丢，也不冒充读数） */}
+      {gaps.length ? (
+        <section
+          data-testid="copilot-answer-gaps"
+          data-answer-section="true"
+          className="border-t border-border pt-2"
+        >
+          <SectionHead label={ANSWER_GAP_LABEL} count={`${gaps.length} 条`} />
+          <div className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">{ANSWER_GAP_NOTE}</div>
+          <ul className="mt-1 space-y-1">
+            {gaps.map((g, i) => (
+              <li key={`${i}-${g.slice(0, 12)}`} className="flex gap-1.5 text-[12px] leading-relaxed">
+                <span className="mt-[2px] h-1 w-1 shrink-0 rounded-full bg-amber-500" />
+                <span className="min-w-0 text-muted-foreground">{g}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
-      {/* 6. 口径 + 动作 */}
+      {/* 7. 预案 */}
+      {plan ? (
+        <section
+          data-testid="copilot-answer-plan"
+          data-answer-section="true"
+          className="border-t border-border pt-2"
+        >
+          <SectionHead label={ANSWER_PLAN_LABEL} />
+          <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-foreground">{plan}</div>
+        </section>
+      ) : null}
+
+      {/* 8. 口径：拆成条目，回答到底用的哪套口径必须一眼可读 */}
+      {caliberParts.length ? (
+        <section
+          data-testid="copilot-answer-caliber"
+          data-answer-section="true"
+          className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2"
+        >
+          <span className="text-[12px] text-muted-foreground">{ANSWER_CALIBER_LABEL}</span>
+          {caliberParts.map((p) => (
+            <span
+              key={p}
+              data-testid="copilot-caliber-part"
+              className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground"
+            >
+              {p}
+            </span>
+          ))}
+        </section>
+      ) : null}
+
+      {/* 9. 动作 */}
       <div className="flex flex-wrap items-center gap-1.5">
-        {parsed.caliber ? (
-          <span className="rounded border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground">
-            {ANSWER_CALIBER_LABEL}: {parsed.caliber}
-          </span>
-        ) : null}
         {symbol ? (
           <a
             href={`/stocks/${symbol}`}
@@ -378,7 +510,7 @@ export function AnswerCard({
         </button>
       </div>
 
-      {/* 7. 追问：答完不知道问什么是最常见的断点 */}
+      {/* 10. 追问：答完不知道问什么是最常见的断点 */}
       {onFollowUp ? (
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
           <span className="text-[12px] text-muted-foreground">{ANSWER_FOLLOWUP_LABEL}</span>
