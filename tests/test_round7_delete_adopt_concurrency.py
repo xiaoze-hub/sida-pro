@@ -509,3 +509,32 @@ def test_delete_refusal_logs_action_without_owner_leak(db, caplog):
     assert "拒绝删除自选" in joined, texts
     # 日志给运维定位用, 不回显归属人 id/用户名
     assert member.id not in joined and member.username not in joined
+
+
+def test_delete_lock_wait_is_bounded_and_retryable(db):
+    import time
+    from fastapi import HTTPException
+    from src.db.dialect import is_postgres
+    from src.web.api.stocks import delete_stock
+
+    if not is_postgres():
+        pytest.skip("requires PostgreSQL row locks")
+    owner = db.user(role="owner")
+    stock = db.stock(uid=owner.id)
+    locker = SessionLocal()
+    request = SessionLocal()
+    try:
+        locker.query(Stock).filter(Stock.id == stock.id).with_for_update().first()
+        start = time.monotonic()
+        with pytest.raises(HTTPException) as err:
+            delete_stock(stock.id, db=request, user=owner)
+        assert err.value.status_code == 409
+        assert time.monotonic() - start < 5
+        locker.rollback()
+        assert db.s.query(Stock).filter(Stock.id == stock.id).first() is not None
+        delete_stock(stock.id, db=request, user=owner)
+    finally:
+        locker.rollback()
+        request.rollback()
+        locker.close()
+        request.close()

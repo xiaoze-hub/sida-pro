@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from src.config import Settings
 from src.core.price_alert_engine import ENGINE
 from src.web.api._db_errors import (
+    bound_lock_wait,
     is_fk_violation,
     is_lock_conflict,
     is_unique_violation,
@@ -324,6 +325,7 @@ def adopt_alert_rule_to_private(
     # 要么本规则已迁走; 迁移先拿到锁 ⇒ 删除的预检读到的是迁移后的状态。
     # 同时它把"同一共享行的并发 adopt"串行化, 避免同 symbol 私有自选被建两条。
     try:
+        bound_lock_wait(db)
         src_stock = (
             db.query(Stock)
             .filter(Stock.id == row.stock_id)
@@ -452,8 +454,7 @@ def list_today_hits(
         .all()
     }
     stock_ids = {h.stock_id for h in hits}
-    # scoped-check: allow — hits 已按本人规则过滤(上面 rule_ids 只保留 user_id == 本人的规则), stock_ids 仅取自这些命中
-    stock_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()}
+    stock_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()}  # scoped-check: allow — stock_ids 来自按本人规则过滤的命中
     out = []
     for h in hits:
         stock = stock_map.get(h.stock_id)

@@ -907,8 +907,7 @@ def get_portfolio_summary(
         positions_by_account.setdefault(pos.account_id, []).append(pos)
 
     all_stock_ids = {pos.stock_id for pos in positions}
-    # scoped-check: allow — all_stock_ids 只取自上一行已按归属过滤的持仓(_portfolio_positions(db, user)); 本查询仅补名称/行情, 不新增可见行
-    stocks = db.query(Stock).filter(Stock.id.in_(all_stock_ids)).all() if all_stock_ids else []
+    stocks = db.query(Stock).filter(Stock.id.in_(all_stock_ids)).all() if all_stock_ids else []  # scoped-check: allow — all_stock_ids 全部来自上方 _portfolio_positions(db, user) 的已归属持仓, 只补名称/行情
     stock_map = {s.id: s for s in stocks}
 
     # 获取实时行情（可选）
@@ -1315,8 +1314,7 @@ def _gather_holdings(db: Session, user: User | None = None) -> list[dict]:
         positions_by_account.setdefault(pos.account_id, []).append(pos)
 
     stock_ids = {p.stock_id for p in positions}
-    # scoped-check: allow — stock_ids 只取自上一段已按归属过滤的持仓; 本查询仅补名称/行情, 不新增可见行
-    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []
+    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []  # scoped-check: allow — stock_ids 全部来自上方已按归属过滤的 _portfolio_positions, 本查询仅补名称/行情, 不新增可见行
     stock_map = {s.id: s for s in stocks}
     quotes = _fetch_quotes_for_stocks(stocks) if stocks else {}
     hkd, usd = get_hkd_cny_rate(), get_usd_cny_rate()
@@ -1430,8 +1428,7 @@ def portfolio_todos(db: Session = Depends(get_db), user: User = Depends(get_curr
             .all()
         }
         for sid in held_ids - ruled:
-            # scoped-check: allow — sid 来自 held_ids(本人可见持仓), 这里只读标的元数据用于提示
-            stock = db.query(Stock).filter(Stock.id == sid).first()
+            stock = db.query(Stock).filter(Stock.id == sid).first()  # scoped-check: allow — sid 只来自 held_ids(上方 user_scope 持仓查询的已归属结果), 这里只读标的元数据用于提示
             if stock:
                 todos.append(
                     {
@@ -1456,8 +1453,7 @@ def portfolio_todos(db: Session = Depends(get_db), user: User = Depends(get_curr
         .all()
     )
     for r in expiring:
-        # scoped-check: allow — r 来自上面按 rule_scope(本人/NULL)过滤过的规则, 这里只读标的元数据
-        stock = db.query(Stock).filter(Stock.id == r.stock_id).first()
+        stock = db.query(Stock).filter(Stock.id == r.stock_id).first()  # scoped-check: allow — r 来自上面按 rule_scope(本人/NULL)过滤过的规则, 这里只读标的元数据
         todos.append(
             {
                 "type": "alert_expiring",

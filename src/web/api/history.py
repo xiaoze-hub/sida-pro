@@ -275,7 +275,7 @@ def retry_history(
       · agent 不存在 / 工作流 agent 被禁用 → 404 / 400（先让用户去开启，别静默失败）
     """
     # 按主键取后立刻走对象级 analysis_history_visible() 判定(403), 与读口径同源。
-    record = db.query(AnalysisHistory).filter(AnalysisHistory.id == history_id).first()  # scoped-check: allow
+    record = db.query(AnalysisHistory).filter(AnalysisHistory.id == history_id).first()  # scoped-check: allow — 主键读取后由 analysis_history_visible 验证本人或 owner
     if not record:
         raise HTTPException(404, "报告记录不存在")
 

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from src.web.database import get_db
 from src.web.api._scope import scoped
-from src.web.api._db_errors import is_lock_conflict
+from src.web.api._db_errors import bound_lock_wait, is_lock_conflict
 from src.web.api.auth import get_current_user
 from src.web.models import (
     Stock,
@@ -407,8 +407,8 @@ def reorder_stocks(body: StockReorderRequest, db: Session = Depends(get_db), use
     if not body.items:
         return {"updated": 0}
     ids = [int(x.id) for x in body.items]
-    # scoped-check: allow — 取回后逐行做归属判定(下面 row.user_id / owner 检查), 非本人/非 owner 一律跳过
-    rows = db.query(Stock).filter(Stock.id.in_(ids)).all()
+    allowed = or_(Stock.user_id == user.id, Stock.user_id.is_(None)) if user.role == "owner" else Stock.user_id == user.id
+    rows = db.query(Stock).filter(Stock.id.in_(ids), allowed).all()
     row_map = {r.id: r for r in rows}
     updated = 0
     for item in body.items:
@@ -458,6 +458,7 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
     # SQLite 下该子句被方言忽略(FOR UPDATE 无意义), 但 SQLite 是库级写锁,
     # 不存在该窗口。
     try:
+        bound_lock_wait(db)
         db_stock = (
             db.query(Stock)
             .filter(Stock.id == stock_id)

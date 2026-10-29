@@ -2117,8 +2117,7 @@ def get_usage(
 
     if x_api_key and x_api_key.startswith("sk_"):
         row = _validate_api_key_row(x_api_key, db)
-        # scoped-check: allow — api_key_id 取自 _validate_api_key_row(X-API-Key) 校验过的本 key
-        today = db.query(SkillUsage).filter(
+        today = db.query(SkillUsage).filter(  # scoped-check: allow — api_key_id 来源于已验证的 API key
             SkillUsage.api_key_id == row.id,
             SkillUsage.created_at >= day_start,
         ).count()

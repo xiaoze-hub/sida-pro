@@ -9,7 +9,14 @@ PG 上看 SQLSTATE, SQLite 上退回原文匹配(SQLite 没有 SQLSTATE, 是库�
 """
 from __future__ import annotations
 
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
+
+
+def bound_lock_wait(db) -> None:
+    """Bound row-lock waits per transaction; never change pooled session defaults."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SET LOCAL lock_timeout = '2s'"))
 
 _UNIQUE_TEXT = ("unique constraint failed", "duplicate key value", "unique violation")
 _FK_TEXT = ("foreign key constraint",)

@@ -101,8 +101,7 @@ def export_portfolio(
         return _csv_response("portfolio.csv", headers, [])
 
     stock_ids = {p.stock_id for p in positions if p.stock_id}
-    # scoped-check: allow — stock_ids 只取自上面已按归属过滤的持仓; 仅补名称/行情, 不新增可见行
-    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []
+    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []  # scoped-check: allow — stock_ids 全部来自上面已按归属过滤的持仓, 本查询仅补名称/行情, 不新增可见行
     stock_map = {s.id: s for s in stocks}
     quotes = _fetch_quotes_for_stocks(stocks) if stocks else {}
     hkd_rate = get_hkd_cny_rate()

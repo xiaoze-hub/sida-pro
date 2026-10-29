@@ -16,7 +16,12 @@
 
 豁免(与查询无关, 但显式且可审计):
   E. 所在函数(含嵌套祖先)被 @allow_cross_user 标注(须附安全性理由注释);
-  F. 查询行尾注释 `# scoped-check: allow`(单行豁免, 同样须附理由)。
+  F. **查询所在行**的行尾注释 `# scoped-check: allow — <非空理由>`。
+
+  单行豁免只认查询语句起始行上的注释, 不接受"上一行写注释、下一行查询"的旁行
+  写法(2026-10-29 八审回归): 那等于给整条语句块发通行证, 一行注释可以顺带放行
+  紧随其后的无关全表查询。注释必须是真正的 COMMENT token(字符串里的同名字样
+  不算), 理由去掉分隔符后必须非空。
 
 2026-10-29 独立实审阻断(B1): 上一版把任意 `*scope_clause` 名称当证据, 且证据
 只按"函数体内出现过"判定 —— 调用后丢弃、写在 `if False:` 死分支、缺参调用、
@@ -42,8 +47,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import os
+import re
 import sys
+import tokenize
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +72,39 @@ SCOPE_CLAUSE_HELPERS = {
 
 # 链上承载"归属条件"的方法
 CHAIN_FILTER_METHODS = {"filter", "filter_by", "where"}
+
+# 单行豁免标记; 后面必须跟非空理由(去掉分隔符/括号后至少 4 个字符)
+_ALLOW_RE = re.compile(r"scoped-check:\s*allow\b(.*)$")
+_ALLOW_REASON_STRIP = " \t—–-:：()（）[]【】「」<>《》"
+_ALLOW_REASON_MIN = 4
+
+
+def allow_reasons(src: str) -> dict[int, str]:
+    """收集**真正的注释**里的单行豁免: {查询起始行号: 理由文本}。
+
+    用 tokenize 而不是字符串包含判断 —— `"# scoped-check: allow ..."` 这种写在
+    字符串字面量里的假注释不能当豁免(实审反例)。注释只在它所在的物理行生效,
+    旁行(上一行)注释不覆盖下一行查询。
+    """
+    out: dict[int, str] = {}
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(src).readline)
+        for tok in tokens:
+            if tok.type != tokenize.COMMENT:
+                continue
+            match = _ALLOW_RE.search(tok.string)
+            if match:
+                out[tok.start[0]] = match.group(1)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        # ast.parse 已在调用方先行解析; tokenize 失败时保守当作"没有豁免"
+        return {}
+    return out
+
+
+def allow_reason_is_valid(reason: str) -> bool:
+    """理由去掉分隔符后必须非空且不是占位符(实审反例: `allow` 裸标记也放行)。"""
+    cleaned = reason.strip().strip(_ALLOW_REASON_STRIP).strip()
+    return len(cleaned) >= _ALLOW_REASON_MIN
 
 
 def user_scoped_models() -> set[str]:
@@ -344,7 +385,13 @@ class _SourceIndex:
         """表达式里是否含归属证据(直接写 user_id / 调归属助手 / 引用局部条件变量)。"""
         if depth > 4 or self.in_dead_branch(expr):
             return False
-        if isinstance(expr, ast.Attribute) and expr.attr == "user_id":
+        if (
+            isinstance(expr, ast.Attribute)
+            and expr.attr == "user_id"
+            and isinstance(expr.ctx, ast.Load)
+        ):
+            # 只认读取(比较/判断); `X.user_id = uid` 这种写入不是过滤证据
+            # (2026-10-29 八审: 旧口径把赋值左侧也当成"归属处理")。
             return True
         if isinstance(expr, ast.Call) and _is_scope_helper_call(expr):
             return True
@@ -393,6 +440,7 @@ class _SourceIndex:
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr == "user_id"
+                and isinstance(node.ctx, ast.Load)
                 and isinstance(node.value, ast.Name)
                 and node.value.id == name
             ):
@@ -452,6 +500,7 @@ def check_source(src: str, scoped_models: set[str]) -> list[dict]:
     """返回违规清单: [{file, line, model, func}]。file 由调用方回填。"""
     tree = ast.parse(src)
     idx = _SourceIndex(tree, src)
+    allows = allow_reasons(src)
 
     violations: list[dict] = []
     for node in ast.walk(tree):
@@ -465,10 +514,9 @@ def check_source(src: str, scoped_models: set[str]) -> list[dict]:
         scope_name = fns[0].name if fns else "<module>"
         fn = fns[0] if fns else None
 
-        # 1) 查询行注释豁免(允许写在查询首行, 或紧邻的上一行 —— 理由通常较长)
-        here = idx.lines[node.lineno - 1] if node.lineno <= len(idx.lines) else ""
-        above = idx.lines[node.lineno - 2] if 2 <= node.lineno <= len(idx.lines) else ""
-        if "scoped-check: allow" in here or "scoped-check: allow" in above:
+        # 1) 查询**本行**注释豁免(2026-10-29 八审: 撤销旁行识别; 理由必须非空)
+        reason = allows.get(node.lineno)
+        if reason is not None and allow_reason_is_valid(reason):
             continue
         # 2) 任意祖先函数被 @allow_cross_user 豁免
         if any(
