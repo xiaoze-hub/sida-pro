@@ -22,13 +22,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # 汇率缓存
-_hkd_rate_cache: dict = {"rate": 0.92, "ts": 0}  # 港币默认汇率 0.92
-_usd_rate_cache: dict = {"rate": 7.25, "ts": 0}  # 美元默认汇率 7.25
+# 2026-10-29 复审: 内置默认值(0.92/7.25)只是「从未成功拉取」时的兜底, 不是事实。
+# 缓存里额外记录来源(last_ok_ts/source/as_of), 对外用 exchange_rate_meta 标明
+# source=live|remote_cache|default 与 stale, 消费方不得把默认值当当日汇率。
+_hkd_rate_cache: dict = {
+    "rate": 0.92, "ts": 0, "last_ok_ts": 0.0, "source": "default", "as_of": None,
+}
+_usd_rate_cache: dict = {
+    "rate": 7.25, "ts": 0, "last_ok_ts": 0.0, "source": "default", "as_of": None,
+}
 EXCHANGE_RATE_TTL = 3600  # 成功缓存 1 小时
 # 2026-08-12: 海外节点新浪超时(每次冷启动白等 3s×2)。失败缓存短 TTL(5分钟)防反复撞墙;
 # 成功后回到 1 小时长缓存。另用线程锁保证 HKD/USD 并发拉取不重复等待。
 EXCHANGE_RATE_FAIL_TTL = 300
 _fx_lock = threading.Lock()
+
+
+def _parse_fx_ts(value) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _fx_meta(cache: dict, name: str, rate: float | None = None) -> dict:
+    """汇率来源声明: 无法证明新鲜(默认值/无时间戳)时 stale=True, 不冒充实时汇率。"""
+    now = time.time()
+    try:
+        last_ok = float(cache.get("last_ok_ts") or 0.0)
+    except (TypeError, ValueError):
+        last_ok = 0.0
+    if not math.isfinite(last_ok):
+        last_ok = 0.0
+    as_of = cache.get("as_of")
+    age = int(now - last_ok) if last_ok > 0 else None
+    stale = True if last_ok <= 0 else (now - last_ok > EXCHANGE_RATE_TTL)
+    return {
+        "name": name,
+        "rate": rate if rate is not None else cache.get("rate"),
+        "source": cache.get("source") or "default",
+        "as_of": as_of,
+        "age_seconds": age,
+        "stale": stale,
+    }
 
 
 def _fetch_fx_rate(
@@ -46,9 +84,21 @@ def _fetch_fx_rate(
     cached = biz_cache.get_json(redis_key)
     if cached is not None:
         try:
-            cache["rate"], cache["ts"] = float(cached), time.time()
+            if isinstance(cached, dict):
+                rate = float(cached["rate"])
+                as_of = cached.get("as_of")
+                ok_ts = _parse_fx_ts(as_of) or 0.0
+            else:  # 旧格式只有裸 float: 来源可证, 时间不可证 → 交给 stale=True
+                rate = float(cached)
+                as_of, ok_ts = None, 0.0
+            if not math.isfinite(rate) or rate <= 0:
+                raise ValueError(f"异常汇率: {rate}")
+            cache.update(
+                rate=rate, ts=time.time(), last_ok_ts=ok_ts,
+                source="remote_cache", as_of=as_of,
+            )
             return cache["rate"]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, KeyError):
             pass
     try:
         # 2026-08-12: 数据源从新浪(hq.sinajs.cn)换成腾讯 qt.gtimg.cn——
@@ -63,8 +113,16 @@ def _fetch_fx_rate(
             parts = val.split("~")
             if len(parts) > 3:
                 rate = float(parts[3])  # 第4字段 = 现价
-                cache["rate"], cache["ts"] = rate, time.time()  # 成功: 长 TTL
-                biz_cache.set_json(redis_key, rate, ttl=EXCHANGE_RATE_TTL)
+                if not math.isfinite(rate) or rate <= 0:
+                    raise ValueError(f"异常汇率: {rate}")
+                as_of = datetime.now(timezone.utc).isoformat()
+                cache.update(
+                    rate=rate, ts=time.time(), last_ok_ts=time.time(),
+                    source="live", as_of=as_of,
+                )  # 成功: 长 TTL
+                biz_cache.set_json(
+                    redis_key, {"rate": rate, "as_of": as_of}, ttl=EXCHANGE_RATE_TTL
+                )
                 logger.info(f"更新{name}汇率: {rate}")
                 return rate
     except Exception as e:
@@ -455,23 +513,38 @@ QUOTE_OK = "ok"                  # 有可用现价, 参与计价
 QUOTE_MISSING = "missing"        # 行情源没有这只票的现价
 QUOTE_INVALID = "invalid_price"  # 有现价字段但不可用(<=0 / 非数值 / NaN)
 QUOTE_NOT_REQUESTED = "not_requested"  # 调用方显式不要行情(include_quotes=false)
+QUOTE_PARTIAL = "partial"        # 多账户同标的中部分仓位有价(仅合并层出现)
+
+
+def _finite_float(value) -> float | None:
+    """数值化; None/非数值/NaN/Inf 一律视为「不可用」。0 是有效数值, 不动它。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _valid_price(value) -> float | None:
     """把行情里的价格字段转成可用现价; 不可用返回 None(0 不是合法股票现价)。"""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        px = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(px) or px <= 0:
-        return None
-    return px
+    px = _finite_float(value)
+    return px if px is not None and px > 0 else None
+
+
+def _safe_amount(value) -> float:
+    """金额/数量兜底: NULL / NaN / Inf / 非数值 → 0.0(可用于加法, 不污染 JSON)。"""
+    f = _finite_float(value)
+    return f if f is not None else 0.0
 
 
 def _resolve_quote_price(quote: dict | None, requested: bool = True) -> tuple[float | None, str, float | None]:
-    """解析一条行情 → (可用现价, 状态, 原始现价)。状态见 QUOTE_* 常量。"""
+    """解析一条行情 → (可用现价, 状态, 原始现价)。
+
+    原始现价只在**有限数值**时回传: NaN/Inf 会被标准 json 输出成非法 token,
+    直接破坏整份响应, 故坏值一律 raw=None(原因已由 invalid_price 表达)。
+    """
     if not requested:
         return None, QUOTE_NOT_REQUESTED, None
     if not quote:
@@ -481,17 +554,14 @@ def _resolve_quote_price(quote: dict | None, requested: bool = True) -> tuple[fl
     if px is None:
         if raw is None:
             return None, QUOTE_MISSING, None
-        try:
-            raw_f = float(raw)
-        except (TypeError, ValueError):
-            raw_f = None
-        return None, QUOTE_INVALID, raw_f
+        return None, QUOTE_INVALID, _finite_float(raw)
     return px, QUOTE_OK, px
 
 
 def _round_or_none(value: float | None, digits: int = 2) -> float | None:
-    """四舍五入; None 保持 None(不要用 falsy 判断, 真实的 0 是有效数值)。"""
-    return round(value, digits) if value is not None else None
+    """四舍五入; None/NaN/Inf 保持 None(真实的 0 是有效数值)。"""
+    f = _finite_float(value)
+    return round(f, digits) if f is not None else None
 
 
 def _quotes_coverage(
@@ -502,29 +572,166 @@ def _quotes_coverage(
     priced_cost: float,
     total_cost: float,
 ) -> dict:
-    """覆盖度声明: 让消费方一眼看出市值/盈亏算的是「全部持仓」还是「已定价子集」。"""
-    missing = max(0, positions_total - positions_priced)
+    """覆盖度声明: 让消费方一眼看出市值/盈亏算的是「全部持仓」还是「已定价子集」。
+
+    三种「完整」互斥且自洽:
+      - no_positions: 本来就没有持仓, 0/0 是完整事实(不是缺行情);
+      - all_positions: 有持仓且全部有价;
+      - priced_positions_only: 部分缺价, 市值/盈亏只覆盖已定价子集。
+    not_requested 时缺失数是「不适用」(None), 不能拿持仓总数冒充缺失数。
+    """
+    total = max(0, int(positions_total or 0))
     if not requested:
-        basis = "not_requested"
-        cost_pct = None
-    elif positions_priced and missing == 0:
-        basis = "all_positions"
-        cost_pct = round(priced_cost / total_cost * 100, 2) if total_cost > 0 else None
+        return {
+            "requested": False,
+            "positions_total": total,
+            "positions_priced": None,
+            "positions_missing": None,
+            "cost_coverage_pct": None,
+            "pricing_basis": "not_requested",
+            "complete": False,
+        }
+    priced = max(0, min(int(positions_priced or 0), total))
+    missing = total - priced
+    if total == 0:
+        basis, complete = "no_positions", True
+    elif missing == 0:
+        basis, complete = "all_positions", True
     else:
-        basis = "priced_positions_only"
-        cost_pct = round(priced_cost / total_cost * 100, 2) if total_cost > 0 else None
+        basis, complete = "priced_positions_only", False
+    cost_pct = round(priced_cost / total_cost * 100, 2) if total_cost > 0 else None
     return {
-        "requested": requested,
-        "positions_total": positions_total,
-        "positions_priced": positions_priced,
+        "requested": True,
+        "positions_total": total,
+        "positions_priced": priced,
         "positions_missing": missing,
         "cost_coverage_pct": cost_pct,
         "pricing_basis": basis,
-        "complete": bool(requested and positions_total > 0 and missing == 0),
+        "complete": complete,
     }
 
 
+def _daily_pnl_coverage(
+    *, requested: bool, positions_total: int, positions_observed: int
+) -> dict:
+    """当日盈亏覆盖度: 缺现价或缺昨日收盘的仓位都不该被当成「0 涨跌」。"""
+    total = max(0, int(positions_total or 0))
+    if not requested:
+        return {
+            "requested": False,
+            "positions_total": total,
+            "positions_observed": None,
+            "complete": False,
+        }
+    observed = max(0, min(int(positions_observed or 0), total))
+    return {
+        "requested": True,
+        "positions_total": total,
+        "positions_observed": observed,
+        "complete": observed == total,
+    }
+
+
+def _accumulate_holding(
+    seen: dict,
+    statuses: dict[tuple[str, str], set[str]],
+    key: tuple[str, str],
+    *,
+    symbol: str,
+    market: str,
+    name: str,
+    quantity: int | float,
+    fx: float,
+    cost_cny: float,
+    price: float | None,
+    quote_status: str,
+    strategy_code: str,
+    fx_source: str = "default",
+    fx_stale: bool = True,
+) -> dict:
+    """把一笔持仓并入按 (market, symbol) 聚合的持仓篮子, 并返回该篮子。
+
+    数量与已定价市值必须同篮子: `quantity` 是全量, 只有 `priced_quantity` 乘现价进市值;
+    合并状态由各腿的状态聚合得出(与遍历顺序无关), 部分腿缺价时是 partial, 不是 ok。
+    """
+    qty = _safe_amount(quantity)
+    h = seen.get(key)
+    if h is None:
+        h = {
+            "symbol": symbol,
+            "market": market,
+            "name": name,
+            "quantity": 0.0,
+            "priced_quantity": 0.0,
+            "unpriced_quantity": 0.0,
+            "fx": fx,
+            # None 表示「现价不可用」, 消费方不得按 0 或成本理解。
+            "market_value": None,
+            "unrealized_pnl": None,
+            "cost_cny": 0.0,
+            "priced_cost_cny": 0.0,
+            "quote_status": quote_status,
+            "priced_position_count": 0,
+            "missing_quote_count": 0,
+            "position_count": 0,
+            "fx_source": fx_source,
+            "fx_stale": fx_stale,
+            "strategy_code": strategy_code,
+        }
+        seen[key] = h
+    h["quantity"] += qty
+    h["cost_cny"] += cost_cny
+    h["position_count"] += 1
+    statuses.setdefault(key, set()).add(quote_status)
+    if price is not None:
+        mv_cny = price * qty * fx
+        h["market_value"] = (h["market_value"] or 0.0) + mv_cny
+        h["unrealized_pnl"] = (h["unrealized_pnl"] or 0.0) + (mv_cny - cost_cny)
+        h["priced_quantity"] += qty
+        h["priced_cost_cny"] += cost_cny
+        h["priced_position_count"] += 1
+    else:
+        h["unpriced_quantity"] += qty
+        h["missing_quote_count"] += 1
+    h["fx_stale"] = bool(h["fx_stale"] or fx_stale)
+    # 状态聚合: 全有价 ok / 全缺价取最具体原因 / 混合 partial。
+    if h["priced_position_count"] == 0:
+        h["quote_status"] = (
+            QUOTE_INVALID if QUOTE_INVALID in statuses[key] else QUOTE_MISSING
+        )
+    elif h["priced_position_count"] == h["position_count"]:
+        h["quote_status"] = QUOTE_OK
+    else:
+        h["quote_status"] = QUOTE_PARTIAL
+    return h
+
+
 # ========== Portfolio Summary ==========
+
+def _portfolio_positions(
+    db: Session, user: User | None, *, account_id: int | None = None
+) -> list[Position]:
+    """SQL 层归属隔离: 账户可见(自己的或历史 NULL) **且** 持仓可见(自己的或历史 NULL)。
+
+    为什么不能直接遍历 `acc.positions`: 共享/遗留账户(account.user_id IS NULL)下可能
+    混入其他用户建的 Position(Position.user_id 有值), 关系遍历会把别人的持仓算进
+    当前用户的成本/市值/诊断。这里把与 list_positions 同款的门禁下沉到 SQL,
+    绝不放宽成"账户可见即全部持仓可见"。
+    """
+    q = (
+        db.query(Position)
+        .join(Account, Account.id == Position.account_id)
+        .filter(Account.enabled == True)  # noqa: E712
+    )
+    if user is not None:
+        q = q.filter(
+            or_(Account.user_id == user.id, Account.user_id.is_(None)),
+            or_(Position.user_id == user.id, Position.user_id.is_(None)),
+        )
+    if account_id:
+        q = q.filter(Account.id == account_id)
+    return q.all()
+
 
 @router.get("/portfolio/summary")
 def get_portfolio_summary(
@@ -543,18 +750,28 @@ def get_portfolio_summary(
         accounts: 账户列表及各账户持仓明细
         total: 所有账户汇总
 
-    字段契约(2026-10-29 缺行情修复, 消费方必须按此解释):
-      - 现价不可用(缺行情 / 0 / 负数 / NaN)时: current_price、market_value、market_value_cny、
-        pnl、pnl_pct 全为 None; quote_status 说明原因(missing / invalid_price /
-        not_requested), raw_current_price 保留行情源原值。
-      - total_market_value / total_pnl / total_pnl_pct / total_assets 只在**已定价子集**上计算:
+    字段契约(2026-10-29 缺行情修复 + 复审收紧, 消费方必须按此解释):
+      - 现价不可用(缺行情 / 0 / 负数 / NaN / Inf)时: current_price、market_value、
+        market_value_cny、pnl、pnl_pct 全为 None; quote_status 说明原因(missing /
+        invalid_price / not_requested / partial); raw_current_price 只回传有限数值
+        (NaN/Inf 传 None, 否则整份响应不是合法 JSON)。
+      - total_market_value / total_pnl / total_pnl_pct 只在**已定价子集**上计算:
         None = 一只都没价(未知), 不是 0, 更不是 -100%。
       - total_cost 是全持仓成本(已知事实); priced_cost / unpriced_cost 把已定价与未定价拆开,
         与 total_market_value 同一篮子。
-      - quotes_coverage 给出持仓总数 / 已定价数 / 缺失数 / 成本覆盖率 / pricing_basis,
-        消费方展示金额时必须一并展示覆盖度或"部分持仓缺行情"提示。
-      - includes_quotes=false 是显式"不计价"模式(前端用本地行情重算), 保持旧数值 0 语义,
-        以 quotes_coverage.requested=false 区分, 不要当成"缺行情"。
+      - total_assets 是"总资产"语义: 只有全部持仓有价(或本来没持仓)才给数字且
+        total_assets_complete=True; 部分/全部缺价时为 None, basis 写明口径,
+        子集口径另给 total_assets_priced_subset, 不得把子集当总资产展示。
+      - total_daily_pnl 只在"有现价且有昨日收盘"的仓位上累加; 一只都没观测到时为 None。
+        daily_pnl_coverage 给出 positions_total / positions_observed / complete,
+        部分覆盖时数字只是已观测部分。
+      - quotes_coverage 给出持仓总数 / 已定价数 / 缺失数 / 成本覆盖率 / pricing_basis:
+        no_positions(0/0 完整) / all_positions / priced_positions_only / not_requested。
+      - include_quotes=false 是显式"不计价"模式(前端用本地行情重算), 保持旧数值 0 语义,
+        以 quotes_coverage.requested=false 区分; 该模式下 positions_priced / positions_missing
+        为 None(不适用), 不要当成"缺了 N 只行情"。
+      - exchange_rate_meta 标明 HKD_CNY / USD_CNY 的来源(live / remote_cache / default)、
+        as_of、age_seconds、stale; source=default 或 stale=True 时港美市值换算不可当实时事实。
     """
     # 获取账户(仅当前用户的)
     if account_id:
@@ -576,15 +793,17 @@ def get_portfolio_summary(
                 "total_cost": 0,
                 "total_pnl": 0,
                 "total_pnl_pct": 0,
-                "total_daily_pnl": 0,
+                "total_daily_pnl": 0,  # 没有账户/持仓: 0 是真实事实
                 "daily_pnl_period": "unknown",
                 "daily_pnl_label": "当日盈亏",
                 "daily_pnl_date": None,
                 "available_funds": 0,
                 "total_assets": 0,
+                "total_assets_complete": True,
+                "total_assets_basis": "no_positions",
+                "total_assets_priced_subset": 0,
                 "priced_cost": 0,
                 "unpriced_cost": 0,
-                # 无持仓 ≠ 行情缺失; 空仓时覆盖度是"完整"的, 但明确 0 只持仓。
                 "quotes_coverage": _quotes_coverage(
                     requested=include_quotes,
                     positions_total=0,
@@ -592,24 +811,30 @@ def get_portfolio_summary(
                     priced_cost=0.0,
                     total_cost=0.0,
                 ),
-            }
+                "daily_pnl_coverage": _daily_pnl_coverage(
+                    requested=include_quotes, positions_total=0, positions_observed=0
+                ),
+            },
         }
 
-    # 获取所有相关股票
-    all_stock_ids = set()
-    for acc in accounts:
-        for pos in acc.positions:
-            all_stock_ids.add(pos.stock_id)
+    # 持仓在 SQL 层按归属过滤(共享账户里别人的 Position 不得混入), 再按账户分组。
+    positions = _portfolio_positions(db, user, account_id=account_id)
+    positions_by_account: dict[int, list[Position]] = {}
+    for pos in positions:
+        positions_by_account.setdefault(pos.account_id, []).append(pos)
 
+    all_stock_ids = {pos.stock_id for pos in positions}
     stocks = db.query(Stock).filter(Stock.id.in_(all_stock_ids)).all() if all_stock_ids else []
     stock_map = {s.id: s for s in stocks}
 
     # 获取实时行情（可选）
     quotes = _fetch_quotes_for_stocks(stocks) if include_quotes else {}
 
-    # 获取汇率
+    # 获取汇率 + 来源声明(默认值/过期值必须显式标出, 不得冒充当日汇率)
     hkd_rate = get_hkd_cny_rate()
     usd_rate = get_usd_cny_rate()
+    hkd_meta = _fx_meta(_hkd_rate_cache, "HKD_CNY", hkd_rate)
+    usd_meta = _fx_meta(_usd_rate_cache, "USD_CNY", usd_rate)
 
     # 计算各账户持仓
     account_summaries = []
@@ -621,6 +846,7 @@ def get_portfolio_summary(
     grand_priced_count = 0
     grand_available_funds = 0
     grand_daily_pnl = 0
+    grand_daily_pnl_observed = 0
     grand_daily_pnl_periods: list[tuple[str, str | None]] = []
 
     for acc in accounts:
@@ -632,10 +858,12 @@ def get_portfolio_summary(
         acc_priced_count = 0
         acc_positions_count = 0
         acc_daily_pnl = 0
+        acc_daily_pnl_observed = 0
         acc_daily_pnl_periods: list[tuple[str, str | None]] = []
+        funds = _safe_amount(acc.available_funds)  # available_funds 可为 NULL(老数据)
 
         positions_sorted = sorted(
-            list(acc.positions or []),
+            positions_by_account.get(acc.id, []),
             key=lambda p: (int(getattr(p, "sort_order", 0) or 0), int(p.id)),
         )
         for pos in positions_sorted:
@@ -643,23 +871,26 @@ def get_portfolio_summary(
             if not stock:
                 continue
 
+            qty = _safe_amount(pos.quantity)
             acc_positions_count += 1
             quote = quotes.get(stock.symbol)
             # 没有可用现价就没有市值(不填 0、不用成本顶替), 见文件顶部"行情可用性"说明。
             current_price, quote_status, raw_price = _resolve_quote_price(quote, requested=include_quotes)
             priced = current_price is not None
-            change_pct = quote["change_pct"] if (quote and priced) else None
-            prev_close = quote.get("prev_close") if quote else None
+            # 昨日收盘同属行情字段: 坏值(NaN/Inf/<=0)等于没有, 不得参与当日盈亏。
+            prev_close = _valid_price(quote.get("prev_close")) if quote else None
+            change_pct = _finite_float(quote.get("change_pct")) if (quote and priced) else None
             quote_time = quote.get("quote_time") if quote else None
             quote_date = quote.get("quote_date") if quote else None
             daily_pnl_period = classify_quote_period(quote_date, stock.market)
 
             # 根据市场确定汇率
             is_foreign = stock.market in ("HK", "US")
+            fx_meta = None
             if stock.market == "HK":
-                rate = hkd_rate
+                rate, fx_meta = hkd_rate, hkd_meta
             elif stock.market == "US":
-                rate = usd_rate
+                rate, fx_meta = usd_rate, usd_meta
             else:
                 rate = 1.0
 
@@ -670,20 +901,22 @@ def get_portfolio_summary(
             daily_pnl = None
             daily_pnl_pct = None
 
-            if priced and prev_close and prev_close > 0:
-                daily_pnl = (current_price - prev_close) * pos.quantity * rate
+            if priced and prev_close is not None:
+                daily_pnl = (current_price - prev_close) * qty * rate
                 daily_pnl_pct = (current_price - prev_close) / prev_close * 100
                 acc_daily_pnl += daily_pnl
+                acc_daily_pnl_observed += 1
+                grand_daily_pnl_observed += 1
                 observation = (daily_pnl_period, quote_date)
                 acc_daily_pnl_periods.append(observation)
                 grand_daily_pnl_periods.append(observation)
 
-            cost = pos.cost_price * pos.quantity
+            cost = _safe_amount(pos.cost_price) * qty
             cost_cny = cost * rate  # 假设成本价也是原币种
             acc_cost += cost_cny
 
             if priced:
-                market_value = current_price * pos.quantity  # 原币种市值
+                market_value = current_price * qty  # 原币种市值
                 market_value_cny = market_value * rate  # 人民币市值
                 pnl = market_value_cny - cost_cny
                 pnl_pct = (pnl / cost_cny * 100) if cost_cny > 0 else None
@@ -700,19 +933,19 @@ def get_portfolio_summary(
                 "symbol": stock.symbol,
                 "name": stock.name,
                 "market": stock.market,
-                "cost_price": pos.cost_price,
+                "cost_price": _finite_float(pos.cost_price),
                 "quantity": pos.quantity,
-                "invested_amount": pos.invested_amount,
+                "invested_amount": _finite_float(pos.invested_amount),
                 "sort_order": pos.sort_order or 0,
                 "trading_style": pos.trading_style,
                 # 用户自设防守线(绝对价, 原币种): 前端据此判定"有没有纪律位", None 即未设置。
                 "defense_price": getattr(pos, "defense_price", None),
                 "current_price": current_price,
-                # 行情源给的原始现价(含 0/坏值), 便于前端与排障区分"缺"与"坏"。
+                # 行情源给的原始现价(仅有限数值; 0 保留用于区分"坏值"与"缺字段")。
                 "raw_current_price": raw_price,
                 "quote_status": quote_status,
                 "priced": priced,
-                "current_price_cny": round(current_price * rate, 2) if priced else None,
+                "current_price_cny": _round_or_none(current_price * rate) if priced else None,
                 "change_pct": change_pct,
                 "market_value": _round_or_none(market_value),
                 "market_value_cny": _round_or_none(market_value_cny),
@@ -723,53 +956,79 @@ def get_portfolio_summary(
                 "daily_pnl_period": daily_pnl_period,
                 "quote_time": quote_time,
                 "quote_date": quote_date,
-                "exchange_rate": rate if is_foreign else None,
+                "exchange_rate": _round_or_none(rate, 6) if is_foreign else None,
+                # 港美换算用的汇率是否可信: default/stale 时市值不是当日事实。
+                "exchange_rate_source": fx_meta["source"] if fx_meta else None,
+                "exchange_rate_stale": fx_meta["stale"] if fx_meta else None,
             })
 
         # 账户口径: 市值/盈亏只在已定价子集上算(分子分母同篮子); 缺价仓位只进未定价成本,
         # 不进市值也不进盈亏 → 不会出现"成本在分母、市值缺席"的假亏损。
-        if include_quotes:
-            if acc_priced_count:
-                acc_pnl = acc_market_value - acc_priced_cost
-                acc_pnl_pct = (acc_pnl / acc_priced_cost * 100) if acc_priced_cost > 0 else None
-                acc_market_value_out: float | None = acc_market_value
-                acc_total_assets: float | None = acc_market_value + acc.available_funds
-            elif acc_positions_count:
-                # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
-                acc_pnl = None
-                acc_pnl_pct = None
-                acc_market_value_out = None
-                acc_total_assets = None
-            else:
-                # 空账户: 没有持仓就是真的 0 盈亏, 不是"未知"。
-                acc_pnl = 0
-                acc_pnl_pct = 0
-                acc_market_value_out = 0
-                acc_total_assets = acc.available_funds
-        else:
+        if not include_quotes:
             acc_pnl = 0
             acc_pnl_pct = 0
-            acc_market_value_out = acc_market_value  # 不计价模式: 保持旧数值 0
-            acc_total_assets = acc.available_funds
+            acc_market_value_out: float | None = acc_market_value  # 不计价模式: 保持旧数值 0
+            acc_total_assets: float | None = funds
+            acc_assets_complete = False
+            acc_assets_basis = "not_requested"
+            acc_assets_subset: float | None = None
+            acc_daily_pnl_out: float | None = 0
+        else:
+            acc_assets_subset = (acc_market_value + funds) if acc_priced_count else None
+            if acc_positions_count == 0:
+                # 空账户: 没有持仓就是真的 0 盈亏/0 市值, 总资产=可用资金。
+                acc_pnl, acc_pnl_pct = 0, 0
+                acc_market_value_out = 0
+                acc_total_assets = funds
+                acc_assets_complete, acc_assets_basis = True, "no_positions"
+                acc_daily_pnl_out = 0
+            elif acc_priced_count == 0:
+                # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
+                acc_pnl = acc_pnl_pct = None
+                acc_market_value_out = None
+                acc_total_assets = None
+                acc_assets_complete, acc_assets_basis = False, "no_priced_positions"
+                acc_daily_pnl_out = None
+            else:
+                acc_pnl = acc_market_value - acc_priced_cost
+                acc_pnl_pct = (acc_pnl / acc_priced_cost * 100) if acc_priced_cost > 0 else None
+                acc_market_value_out = acc_market_value
+                complete = acc_priced_count == acc_positions_count
+                if complete:
+                    acc_total_assets = acc_market_value + funds
+                    acc_assets_complete, acc_assets_basis = True, "all_positions"
+                else:
+                    # 子集市值 + 全部资金 ≠ 总资产, 只给子集口径, 不冒充总额。
+                    acc_total_assets = None
+                    acc_assets_complete, acc_assets_basis = False, "priced_positions_only"
+                acc_daily_pnl_out = round(acc_daily_pnl, 2) if acc_daily_pnl_observed else None
 
         account_summaries.append({
             "id": acc.id,
             "name": acc.name,
-            "available_funds": acc.available_funds,
+            "available_funds": round(funds, 2),
             "total_market_value": _round_or_none(acc_market_value_out),
             "total_cost": round(acc_cost, 2),
             "priced_cost": round(acc_priced_cost, 2),
             "unpriced_cost": round(acc_unpriced_cost, 2),
             "total_pnl": _round_or_none(acc_pnl),
             "total_pnl_pct": _round_or_none(acc_pnl_pct),
-            "total_daily_pnl": round(acc_daily_pnl, 2),
+            "total_daily_pnl": _round_or_none(acc_daily_pnl_out),
             "total_assets": _round_or_none(acc_total_assets),
+            "total_assets_complete": acc_assets_complete,
+            "total_assets_basis": acc_assets_basis,
+            "total_assets_priced_subset": _round_or_none(acc_assets_subset),
             "quotes_coverage": _quotes_coverage(
                 requested=include_quotes,
                 positions_total=acc_positions_count,
                 positions_priced=acc_priced_count,
                 priced_cost=acc_priced_cost,
                 total_cost=acc_cost,
+            ),
+            "daily_pnl_coverage": _daily_pnl_coverage(
+                requested=include_quotes,
+                positions_total=acc_positions_count,
+                positions_observed=acc_daily_pnl_observed,
             ),
             "positions": positions_data,
             **summarize_daily_pnl_period(acc_daily_pnl_periods),
@@ -781,39 +1040,51 @@ def get_portfolio_summary(
         grand_unpriced_cost += acc_unpriced_cost
         grand_positions_count += acc_positions_count
         grand_priced_count += acc_priced_count
-        grand_available_funds += acc.available_funds
+        grand_available_funds += funds
         grand_daily_pnl += acc_daily_pnl
 
-    if include_quotes:
-        if grand_priced_count:
-            grand_pnl = grand_total_market_value - grand_priced_cost
-            grand_pnl_pct = (grand_pnl / grand_priced_cost * 100) if grand_priced_cost > 0 else None
-            grand_market_value_out: float | None = grand_total_market_value
-            grand_total_assets: float | None = grand_total_market_value + grand_available_funds
-        elif grand_positions_count:
-            # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
-            grand_pnl = None
-            grand_pnl_pct = None
-            grand_market_value_out = None
-            grand_total_assets = None
-        else:
-            grand_pnl = 0
-            grand_pnl_pct = 0
-            grand_market_value_out = 0
-            grand_total_assets = grand_available_funds
-    else:
+    grand_assets_subset = (
+        (grand_total_market_value + grand_available_funds) if grand_priced_count else None
+    )
+    if not include_quotes:
         grand_pnl = 0
         grand_pnl_pct = 0
-        grand_market_value_out = grand_total_market_value
+        grand_market_value_out: float | None = grand_total_market_value
+        grand_total_assets: float | None = grand_available_funds
+        grand_assets_complete, grand_assets_basis = False, "not_requested"
+        grand_daily_pnl_out: float | None = 0
+    elif grand_positions_count == 0:
+        grand_pnl, grand_pnl_pct = 0, 0
+        grand_market_value_out = 0
         grand_total_assets = grand_available_funds
+        grand_assets_complete, grand_assets_basis = True, "no_positions"
+        grand_daily_pnl_out = 0
+    elif grand_priced_count == 0:
+        # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
+        grand_pnl = grand_pnl_pct = None
+        grand_market_value_out = None
+        grand_total_assets = None
+        grand_assets_complete, grand_assets_basis = False, "no_priced_positions"
+        grand_daily_pnl_out = None
+    else:
+        grand_pnl = grand_total_market_value - grand_priced_cost
+        grand_pnl_pct = (grand_pnl / grand_priced_cost * 100) if grand_priced_cost > 0 else None
+        grand_market_value_out = grand_total_market_value
+        if grand_priced_count == grand_positions_count:
+            grand_total_assets = grand_total_market_value + grand_available_funds
+            grand_assets_complete, grand_assets_basis = True, "all_positions"
+        else:
+            grand_total_assets = None
+            grand_assets_complete, grand_assets_basis = False, "priced_positions_only"
+        grand_daily_pnl_out = round(grand_daily_pnl, 2) if grand_daily_pnl_observed else None
 
-    # 构建 quotes 字典（用于前端股票列表显示）
+    # 构建 quotes 字典（用于前端股票列表显示; 坏值不得原样透传）
     quotes_dict = {}
     if include_quotes:
         for symbol, quote in quotes.items():
             quotes_dict[symbol] = {
-                "current_price": quote.get("current_price"),
-                "change_pct": quote.get("change_pct"),
+                "current_price": _valid_price(quote.get("current_price")),
+                "change_pct": _finite_float(quote.get("change_pct")),
                 "quote_time": quote.get("quote_time"),
                 "quote_date": quote.get("quote_date"),
             }
@@ -828,9 +1099,12 @@ def get_portfolio_summary(
             "unpriced_cost": round(grand_unpriced_cost, 2),
             "total_pnl": _round_or_none(grand_pnl),
             "total_pnl_pct": _round_or_none(grand_pnl_pct),
-            "total_daily_pnl": round(grand_daily_pnl, 2),
+            "total_daily_pnl": _round_or_none(grand_daily_pnl_out),
             "available_funds": round(grand_available_funds, 2),
             "total_assets": _round_or_none(grand_total_assets),
+            "total_assets_complete": grand_assets_complete,
+            "total_assets_basis": grand_assets_basis,
+            "total_assets_priced_subset": _round_or_none(grand_assets_subset),
             "quotes_coverage": _quotes_coverage(
                 requested=include_quotes,
                 positions_total=grand_positions_count,
@@ -838,11 +1112,20 @@ def get_portfolio_summary(
                 priced_cost=grand_priced_cost,
                 total_cost=grand_total_cost,
             ),
+            "daily_pnl_coverage": _daily_pnl_coverage(
+                requested=include_quotes,
+                positions_total=grand_positions_count,
+                positions_observed=grand_daily_pnl_observed,
+            ),
             **total_daily_pnl_meta,
         },
         "exchange_rates": {
-            "HKD_CNY": hkd_rate,
-            "USD_CNY": usd_rate,
+            "HKD_CNY": _finite_float(hkd_rate),
+            "USD_CNY": _finite_float(usd_rate),
+        },
+        "exchange_rate_meta": {
+            "HKD_CNY": hkd_meta,
+            "USD_CNY": usd_meta,
         },
         "quotes": quotes_dict,  # 可选：返回行情数据
     }
@@ -882,75 +1165,94 @@ def _fetch_quotes_for_stocks(stocks: list[Stock]) -> dict:
 
 
 def _holdings_signature(db: Session, user: User | None = None) -> str:
-    """启用账户持仓的稳定指纹(stock_id + 合并后数量);仅查 DB,不拉行情/K 线。"""
+    """启用账户持仓的稳定指纹(stock_id + 合并后数量);仅查 DB,不拉行情/K 线。
+
+    归属门禁与 list_positions / _portfolio_positions 同款: 账户可见**且**持仓可见,
+    否则别人的持仓会改变缓存指纹(进而复用错误的基准/归因结果)。
+    """
     q = db.query(Position.stock_id, Position.quantity).join(
         Account, Account.id == Position.account_id
     ).filter(Account.enabled == True)  # noqa: E712
     if user is not None:
-        q = q.filter(or_(Account.user_id == user.id, Account.user_id.is_(None)))
+        q = q.filter(
+            or_(Account.user_id == user.id, Account.user_id.is_(None)),
+            or_(Position.user_id == user.id, Position.user_id.is_(None)),
+        )
     rows = q.all()
     agg: dict[int, float] = {}
     for sid, qty in rows:
-        agg[sid] = agg.get(sid, 0.0) + (qty or 0)
+        agg[sid] = agg.get(sid, 0.0) + _safe_amount(qty)
     return ";".join(f"{sid}:{agg[sid]:g}" for sid in sorted(agg))
 
 
 def _gather_holdings(db: Session, user: User | None = None) -> list[dict]:
-    """汇总所有启用账户的真实持仓为统一列表(CNY 市值/浮盈 + fx),多账户同股合并。"""
+    """汇总所有启用账户的真实持仓为统一列表(CNY 市值/浮盈 + fx),多账户同股合并。
+
+    合并口径(2026-10-29 复审): 数量是全部腿之和, 但市值/浮盈只乘「已定价腿」的数量
+    (`priced_quantity`), 不会出现「总数量 × 现价」与已定价市值混篮子; 合并状态由各腿
+    状态聚合(全有价 ok / 全缺价 missing|invalid_price / 混合 partial), 与遍历顺序无关。
+    持仓归属在 SQL 层隔离(共享账户里别人的 Position 不得混入)。
+    """
     q = db.query(Account).filter(Account.enabled == True)  # noqa: E712
     if user is not None:
         q = q.filter(or_(Account.user_id == user.id, Account.user_id.is_(None)))
     accounts = q.all()
-    stock_ids = {p.stock_id for acc in accounts for p in acc.positions}
+    positions = _portfolio_positions(db, user) if accounts else []
+    positions_by_account: dict[int, list[Position]] = {}
+    for pos in positions:
+        positions_by_account.setdefault(pos.account_id, []).append(pos)
+
+    stock_ids = {p.stock_id for p in positions}
     stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []
     stock_map = {s.id: s for s in stocks}
     quotes = _fetch_quotes_for_stocks(stocks) if stocks else {}
     hkd, usd = get_hkd_cny_rate(), get_usd_cny_rate()
+    hkd_meta = _fx_meta(_hkd_rate_cache, "HKD_CNY", hkd)
+    usd_meta = _fx_meta(_usd_rate_cache, "USD_CNY", usd)
 
     out: list[dict] = []
     seen: dict[tuple[str, str], dict] = {}
+    statuses: dict[tuple[str, str], set[str]] = {}
     for acc in accounts:
-        for pos in acc.positions:
+        ordered = sorted(
+            positions_by_account.get(acc.id, []),
+            key=lambda p: (int(getattr(p, "sort_order", 0) or 0), int(p.id)),
+        )
+        for pos in ordered:
             stock = stock_map.get(pos.stock_id)
             if not stock:
                 continue
-            rate = hkd if stock.market == "HK" else usd if stock.market == "US" else 1.0
-            quote = quotes.get(stock.symbol)
-            # 缺/坏现价 → 市值与浮盈未知(None)。修复前这里用成本回填市值、浮盈记 0,
-            # 让组合诊断把"没行情"当成"没涨没跌", 集中度与市值分布全部失真。
-            price, quote_status, _raw = _resolve_quote_price(quote)
-            cost_cny = pos.cost_price * pos.quantity * rate
-            mv_cny = (price * pos.quantity * rate) if price is not None else None
-            pnl_cny = (mv_cny - cost_cny) if mv_cny is not None else None
-            key = (stock.market, stock.symbol)
-            if key in seen:  # 多账户同一标的合并
-                h = seen[key]
-                h["quantity"] += pos.quantity
-                h["cost_cny"] += cost_cny
-                if mv_cny is not None:
-                    h["market_value"] = (h["market_value"] or 0.0) + mv_cny
-                    h["unrealized_pnl"] = (h["unrealized_pnl"] or 0.0) + (mv_cny - cost_cny)
-                    h["priced_position_count"] += 1
-                else:
-                    h["missing_quote_count"] += 1
+            if stock.market == "HK":
+                rate, fx_meta = hkd, hkd_meta
+            elif stock.market == "US":
+                rate, fx_meta = usd, usd_meta
             else:
-                h = {
-                    "symbol": stock.symbol,
-                    "market": stock.market,
-                    "name": stock.name,
-                    "quantity": pos.quantity,
-                    "fx": rate,
-                    # None 表示"现价不可用", 消费方不得按 0 或成本理解。
-                    "market_value": mv_cny,
-                    "unrealized_pnl": pnl_cny,
-                    "cost_cny": cost_cny,
-                    "quote_status": quote_status,
-                    "priced_position_count": 1 if mv_cny is not None else 0,
-                    "missing_quote_count": 0 if mv_cny is not None else 1,
-                    "strategy_code": pos.trading_style or "",
-                }
-                seen[key] = h
-                out.append(h)
+                rate, fx_meta = 1.0, None
+            quote = quotes.get(stock.symbol)
+            # 缺/坏现价 → 市值与浮盈未知(None)。绝不用成本回填。
+            price, quote_status, _raw = _resolve_quote_price(quote)
+            qty = _safe_amount(pos.quantity)
+            cost_cny = _safe_amount(pos.cost_price) * qty * rate
+            key = (stock.market, stock.symbol)
+            is_new = key not in seen
+            _accumulate_holding(
+                seen,
+                statuses,
+                key,
+                symbol=stock.symbol,
+                market=stock.market,
+                name=stock.name,
+                quantity=qty,
+                fx=rate,
+                cost_cny=cost_cny,
+                price=price,
+                quote_status=quote_status,
+                strategy_code=pos.trading_style or "",
+                fx_source=fx_meta["source"] if fx_meta else "not_applicable",
+                fx_stale=fx_meta["stale"] if fx_meta else False,
+            )
+            if is_new:
+                out.append(seen[key])
     return out
 
 
@@ -999,16 +1301,19 @@ def portfolio_benchmark(
 def portfolio_todos(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """首页空态待办:持仓但未设提醒 / 提醒即将到期(可行动,盘后也不空)。"""
     todos: list[dict] = []
-    accounts = db.query(Account).filter(
-        Account.enabled == True,  # noqa: E712
-        or_(Account.user_id == user.id, Account.user_id.is_(None)),
-    ).all()
-    held_ids = {p.stock_id for acc in accounts for p in acc.positions}
+    # 归属门禁下沉到 SQL: 共享账户里别人的 Position 不得出现在当前用户的待办里。
+    held_ids = {p.stock_id for p in _portfolio_positions(db, user)}
+    # 提醒规则同样按归属隔离(自己的或历史 NULL), 不能把别人的规则算成"已设提醒"。
+    rule_scope = or_(PriceAlertRule.user_id == user.id, PriceAlertRule.user_id.is_(None))
     if held_ids:
         ruled = {
             r.stock_id
             for r in db.query(PriceAlertRule)
-            .filter(PriceAlertRule.enabled == True, PriceAlertRule.stock_id.in_(held_ids))  # noqa: E712
+            .filter(
+                PriceAlertRule.enabled == True,  # noqa: E712
+                PriceAlertRule.stock_id.in_(held_ids),
+                rule_scope,
+            )
             .all()
         }
         for sid in held_ids - ruled:
@@ -1032,6 +1337,7 @@ def portfolio_todos(db: Session = Depends(get_db), user: User = Depends(get_curr
             PriceAlertRule.expire_at.isnot(None),
             PriceAlertRule.expire_at >= now,
             PriceAlertRule.expire_at <= soon,
+            rule_scope,
         )
         .all()
     )

@@ -162,6 +162,7 @@ def load_portfolio_for_agent(agent_name: str, user_id: str | None = _UNSET) -> P
     (不传=不过滤 / None=遗留共享账户 / uuid=该用户账户)。
     """
     from src.web.models import Account, Position
+    from sqlalchemy import or_
 
     db = SessionLocal()
     try:
@@ -184,14 +185,20 @@ def load_portfolio_for_agent(agent_name: str, user_id: str | None = _UNSET) -> P
         account_infos = []
         for acc in accounts:
             # 获取该账户中属于关联股票的持仓
-            positions = (
-                db.query(Position)
-                .filter(
-                    Position.account_id == acc.id,
-                    Position.stock_id.in_(stock_ids),
-                )
-                .all()
+            pos_q = db.query(Position).filter(
+                Position.account_id == acc.id,
+                Position.stock_id.in_(stock_ids),
             )
+            # 2026-10-29: user_id=NULL 的共享账户可能混入其他用户建的 Position,
+            # 这里与 API 同口径在 SQL 层按持仓归属过滤, 不放宽成"账户可见即持仓可见"。
+            if user_id is not _UNSET:
+                if user_id is None:
+                    pos_q = pos_q.filter(Position.user_id.is_(None))
+                else:
+                    pos_q = pos_q.filter(
+                        or_(Position.user_id == user_id, Position.user_id.is_(None))
+                    )
+            positions = pos_q.all()
 
             position_infos = []
             for pos in positions:

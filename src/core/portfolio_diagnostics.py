@@ -43,20 +43,36 @@ def _finite(value) -> float | None:
     return f if math.isfinite(f) else None
 
 
+def _count(value, default: int = 1) -> int:
+    """非负整数计数; 缺字段时用调用方给的默认值(不是 0, 避免把持仓数吃掉)。"""
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def diagnose_positions(positions: list[dict]) -> dict:
     """纯函数诊断。
 
-    positions: [{symbol, market, strategy_code, market_value, unrealized_pnl}]
+    positions: [{symbol, market, strategy_code, market_value, unrealized_pnl,
+                position_count?, priced_position_count?, fx_stale?}]
     market_value / unrealized_pnl 为 None = 现价不可用(未知), 会被排除在统计之外,
     并在 missing_quote_count / quotes_coverage_pct 里显式声明。
+
+    多账户同标的会被上游合并成一条 holding: 此时 `position_count` 是实际持仓腿数,
+    `holding_count` 是标的数; 覆盖度按**持仓腿**算, 否则一条混合腿会被误判成 100% 覆盖。
     """
     if not positions:
         return {
             "position_count": 0,
+            "holding_count": 0,
             "priced_position_count": 0,
             "missing_quote_count": 0,
             "quotes_coverage_pct": 100.0,
             "has_complete_quotes": True,
+            "fx_stale_position_count": 0,
             "total_market_value": 0.0,
             "hhi": 0.0,
             "max_weight": 0.0,
@@ -67,7 +83,13 @@ def diagnose_positions(positions: list[dict]) -> dict:
         }
 
     priced = [p for p in positions if _finite(p.get("market_value")) is not None]
-    missing = len(positions) - len(priced)
+    total_positions = sum(_count(p.get("position_count"), 1) for p in positions)
+    priced_positions = sum(
+        _count(p.get("priced_position_count"), 1 if _finite(p.get("market_value")) is not None else 0)
+        for p in positions
+    )
+    priced_positions = min(priced_positions, total_positions)
+    missing = total_positions - priced_positions
 
     values = [max(0.0, _finite(p.get("market_value"))) for p in priced]  # type: ignore[arg-type]
     total = sum(values)
@@ -86,13 +108,24 @@ def diagnose_positions(positions: list[dict]) -> dict:
     upnl_values = [u for u in (_finite(p.get("unrealized_pnl")) for p in priced) if u is not None]
     upnl = round(sum(upnl_values), 2) if upnl_values else None
 
-    coverage_pct = round(len(priced) / len(positions) * 100, 2)
+    coverage_pct = round(priced_positions / total_positions * 100, 2)
+
+    # 港美折算用了默认/过期汇率时, 已定价市值也只是"按不可靠汇率折算"的数字。
+    fx_stale_positions = sum(
+        _count(p.get("priced_position_count"), 1)
+        for p in priced
+        if p.get("fx_stale")
+    )
 
     alerts: list[str] = []
     if missing:
         alerts.append(
-            f"{missing} 只持仓缺行情(无有效现价), 市值/浮盈仅统计已定价的 {len(priced)} 只"
+            f"{missing} 只持仓缺行情(无有效现价), 市值/浮盈仅统计已定价的 {priced_positions} 只"
             f"(覆盖 {coverage_pct:.0f}%)"
+        )
+    if fx_stale_positions:
+        alerts.append(
+            f"{fx_stale_positions} 只港美持仓使用默认/过期汇率折算, 人民币市值不可当实时事实"
         )
     if max_w >= MAX_SINGLE_WEIGHT:
         alerts.append(f"单仓集中度过高:最大持仓占 {max_w * 100:.0f}%")
@@ -106,11 +139,14 @@ def diagnose_positions(positions: list[dict]) -> dict:
                 alerts.append(f"{m} 市场占比过高({v / total * 100:.0f}%)")
 
     return {
-        "position_count": len(positions),
-        "priced_position_count": len(priced),
+        # position_count = 实际持仓腿数; holding_count = 合并后的标的数。
+        "position_count": total_positions,
+        "holding_count": len(positions),
+        "priced_position_count": priced_positions,
         "missing_quote_count": missing,
         "quotes_coverage_pct": coverage_pct,
         "has_complete_quotes": missing == 0,
+        "fx_stale_position_count": fx_stale_positions,
         # 无任何已定价持仓时不冒充 0 市值 —— 直接声明未知。
         "total_market_value": round(total, 2) if priced else None,
         "hhi": round(hhi, 4),
