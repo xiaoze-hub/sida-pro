@@ -4,6 +4,7 @@ import { useToast } from '@sida/base-ui/components/ui/toast'
 
 import type { useStocksState } from './useStocksState'
 import type { useStocksData } from './useStocksData'
+import { computePositionRatio } from './shared'
 
 export function useStocksDerived(
   state: ReturnType<typeof useStocksState>,
@@ -21,10 +22,9 @@ export function useStocksDerived(
   const { toast } = useToast()
 const positionRatio = useMemo(() => {
   if (!portfolio) return null
-  const mv = portfolio.total.total_market_value || 0
-  const assets = portfolio.total.total_assets || 0
-  const pct = assets > 0 ? (mv / assets * 100) : 0
-  return { mv, assets, pct }
+  // 2026-10-29 缺行情修复: 总市值/总资产为 null(未知)时比例也必须未知。
+  // 旧写法 `|| 0` 会把"没有行情"渲染成 `0.0%`, 读起来像空仓。
+  return computePositionRatio(portfolio.total)
 }, [portfolio])
 
 const portfolioMarketStatusLabel = useMemo(() => {

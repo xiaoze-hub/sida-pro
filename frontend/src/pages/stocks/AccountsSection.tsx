@@ -25,6 +25,19 @@ import Sparkline from '@sida/biz-ui/components/Sparkline'
 import { useMemo } from 'react'
 import { useRowNav } from '@sida/biz-ui/hooks/useRowNav'
 
+/**
+ * 涨跌色（2026-10-29 缺行情）：`null` = 未知，给中性色 —— 旧写法 `total_pnl >= 0` 在 null 上
+ * 会被 JS 判成 true，把"不知道盈亏"染成上涨色。
+ */
+const pnlToneClass = (v: number | null | undefined): string => {
+  const n = safeNum(v)
+  if (n === null) return 'text-muted-foreground'
+  return n > 0 ? 'text-stock-up' : n < 0 ? 'text-stock-down' : 'text-muted-foreground'
+}
+
+/** 百分比符号：0 也带 +（沿用持仓页既有口径），负值由 safeFixed 自带负号。 */
+const signOf = (v: number | null | undefined): string => ((safeNum(v) ?? 0) >= 0 ? '+' : '')
+
 export function AccountsSection() {
   const {
     stocks,
@@ -134,9 +147,10 @@ export function AccountsSection() {
               </div>
               <div className="text-left md:text-right">
                 <div className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground">总盈亏</div>
-                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                {/* 2026-10-29 缺行情: 账户总盈亏可能是 null(未知) —— 不给涨跌色, 渲染 `--`。 */}
+                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${pnlToneClass(account.total_pnl)}`}>
                   {formatMoney(account.total_pnl)}
-                  <span className="text-[12px] md:text-[12px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
+                  <span className="text-[12px] md:text-[12px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${signOf(account.total_pnl_pct)}${safeFixed(account.total_pnl_pct)}%`})</span>
                 </div>
               </div>
               <div className="text-left md:text-right">

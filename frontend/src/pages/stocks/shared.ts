@@ -1,4 +1,5 @@
 import type { SuggestionInfo, KlineSummary } from '@sida/biz-ui/components/suggestion-badge'
+import { safeNum } from '@/lib/format'
 /** W5.3: Stocks 页的类型/常量/纯函数(从 Stocks.tsx 逐字抽出)。 */
 
 export interface AgentResult {
@@ -34,6 +35,32 @@ export interface Account {
   enabled: boolean
 }
 
+/**
+ * 行情可用性（与后端 `src/web/api/accounts.py` 的 QUOTE_* 常量同义，2026-10-29）。
+ *
+ * `missing`=行情源没这只票 / `invalid_price`=有字段但不可用(<=0、非数值) /
+ * `not_requested`=调用方显式不要行情。前端只在自己定价（include_quotes=false + 本地行情）时
+ * 覆盖成 `ok`/`missing`/`invalid_price`。
+ */
+export type QuoteStatus = 'ok' | 'missing' | 'invalid_price' | 'not_requested'
+
+/**
+ * 行情覆盖度（与后端 `_quotes_coverage` **同结构同语义**）。
+ *
+ * 合计金额只在**已定价子集**上算，故消费方展示合计时必须一并说明覆盖度：
+ * `complete=false` 就代表"这个合计不是全部持仓的合计"。
+ */
+export interface QuotesCoverage {
+  requested: boolean
+  positions_total: number
+  positions_priced: number
+  positions_missing: number
+  /** 已定价持仓的成本占全部成本的比例；总成本为 0 时为 null（未知，不是 0%）。 */
+  cost_coverage_pct: number | null
+  pricing_basis: 'all_positions' | 'priced_positions_only' | 'not_requested'
+  complete: boolean
+}
+
 export interface Position {
   id: number
   stock_id: number
@@ -53,6 +80,12 @@ export interface Position {
   defense_price?: number | null
   current_price: number | null
   current_price_cny: number | null  // 人民币价格（港股换算后）
+  /** 行情源原值（可能是 0/坏值），仅用于区分"缺"与"坏"、排障用（后端 a2454306 起下发）。 */
+  raw_current_price?: number | null
+  /** `missing` / `invalid_price` / `not_requested` 表示现价不可用 —— 不是 0 元。 */
+  quote_status?: QuoteStatus
+  /** 现价可用（参与市值/盈亏）。false 时市值/盈亏一律 null。 */
+  priced?: boolean
   change_pct: number | null
   market_value: number | null
   market_value_cny: number | null  // 人民币市值
@@ -63,7 +96,7 @@ export interface Position {
   daily_pnl_period: DailyPnlPeriod
   quote_time: string | null
   quote_date: string | null
-  exchange_rate: number | null  // 汇率（仅港股）
+  exchange_rate: number | null  // 汇率（仅港股/美股）
 }
 
 export type DailyPnlPeriod = 'today' | 'previous_trading_day' | 'mixed' | 'unknown'
@@ -82,36 +115,53 @@ export interface QuoteSnapshot {
   daily_pnl_period: DailyPnlPeriod
 }
 
+/**
+ * 账户/组合汇总（2026-10-29 缺行情契约）。
+ *
+ * 市值 / 盈亏 / 总资产可能是 **null = 未知**（有持仓但一只都没有可用现价），
+ * 绝不当成 0、更不是 -100%。消费方一律走 `safeNum` / `safeMoney*`（它们把 null 渲染成 `--`），
+ * 不许 `?? 0` 之后再算比例。
+ */
 export interface AccountSummary {
   id: number
   name: string
   available_funds: number
-  total_market_value: number
+  total_market_value: number | null
   total_cost: number
-  total_pnl: number
-  total_pnl_pct: number
+  /** 已定价持仓的成本（与 total_market_value 同一篮子）。 */
+  priced_cost?: number
+  /** 未定价持仓的成本（只有成本是已知事实，不进盈亏分母）。 */
+  unpriced_cost?: number
+  total_pnl: number | null
+  total_pnl_pct: number | null
   total_daily_pnl: number
   daily_pnl_period: DailyPnlPeriod
   daily_pnl_label: string
   daily_pnl_date: string | null
-  total_assets: number
+  total_assets: number | null
+  quotes_coverage?: QuotesCoverage
   positions: Position[]
+}
+
+export interface PortfolioTotal {
+  total_market_value: number | null
+  total_cost: number
+  priced_cost?: number
+  unpriced_cost?: number
+  total_pnl: number | null
+  total_pnl_pct: number | null
+  total_daily_pnl: number
+  daily_pnl_period: DailyPnlPeriod
+  daily_pnl_label: string
+  daily_pnl_date: string | null
+  available_funds: number
+  total_assets: number | null
+  quotes_coverage?: QuotesCoverage
 }
 
 export interface PortfolioSummary {
   accounts: AccountSummary[]
-  total: {
-    total_market_value: number
-    total_cost: number
-    total_pnl: number
-    total_pnl_pct: number
-    total_daily_pnl: number
-    daily_pnl_period: DailyPnlPeriod
-    daily_pnl_label: string
-    daily_pnl_date: string | null
-    available_funds: number
-    total_assets: number
-  }
+  total: PortfolioTotal
   exchange_rates?: {
     HKD_CNY: number
     USD_CNY?: number
@@ -283,6 +333,60 @@ export const dailyPnlDisplayLabel = (meta: DailyPnlMeta, compact = false): strin
     : meta.daily_pnl_label
 }
 
+/** 可用现价：>0 且有限。0 / 负数 / NaN 不是成交价（停牌、坏字段），按"没有现价"处理。 */
+const usablePrice = (value: unknown): number | null => {
+  const n = safeNum(value)
+  return n !== null && Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** 汇总取值：null 保持 null（真实 0 是有效数值，不许用 falsy 判断）。 */
+const roundOrNull = (value: number | null): number | null =>
+  value === null ? null : round2(value)
+
+/**
+ * 覆盖度声明 —— 与后端 `_quotes_coverage` 逐字段同义。
+ *
+ * 注意 `requested`：持仓页永远自己定价（`include_quotes=false` + 本地 WS/轮询行情），
+ * 所以后端那份 `requested=false` 描述的是"后端没计价"，而本函数算的是"客户端计过价"，
+ * 故这里恒为 true；覆盖度只描述**本次合并**实际定价了多少。
+ */
+const buildCoverage = (
+  positionsTotal: number,
+  positionsPriced: number,
+  pricedCost: number,
+  totalCost: number,
+): QuotesCoverage => {
+  const missing = Math.max(0, positionsTotal - positionsPriced)
+  const pct = totalCost > 0 ? round2((pricedCost / totalCost) * 100) : null
+  return {
+    requested: true,
+    positions_total: positionsTotal,
+    positions_priced: positionsPriced,
+    positions_missing: missing,
+    cost_coverage_pct: pct,
+    pricing_basis:
+      positionsPriced > 0 && missing === 0 ? 'all_positions' : 'priced_positions_only',
+    complete: positionsTotal > 0 && missing === 0,
+  }
+}
+
+/**
+ * 把本地行情合并进 `/portfolio/summary`。
+ *
+ * ## 缺行情口径（2026-10-29，与后端 a2454306 对齐）
+ * 后端已改成"没有现价就没有市值"，但持仓页走 `include_quotes=false` + 本地行情**自己定价**，
+ * 这里曾是真正的 -100% 出口：成本无条件全额累加进分母、市值只在有价时累加，于是
+ * 「一只都没行情」= `total_pnl = 0 - 全部成本`、`total_pnl_pct = -100%`，
+ * 用户看到的是一场并不存在的巨亏（局部覆盖时同理会低估）。
+ *
+ * 现在的口径：
+ *  - **分子分母同篮子**：市值/盈亏只在已定价持仓上算，未定价持仓只贡献
+ *    `unpriced_cost`（成本是已知事实），不进盈亏分母、也不记 0 涨跌；
+ *  - **全缺 → 未知**：有持仓但一只都没价时，市值/盈亏/总资产给 `null`（UI 渲染 `--`），
+ *    空账户才是真 `0`；
+ *  - **部分覆盖显式化**：每层都带 `quotes_coverage`（与后端同结构），
+ *    UI 据此说"缺行情的持仓未计入合计"，不让合计冒充全部持仓。
+ */
 export const mergePortfolioQuotes = (
   portfolio: PortfolioSummary | null,
   quotes: Record<string, QuoteSnapshot>
@@ -294,6 +398,10 @@ export const mergePortfolioQuotes = (
 
   let grandMarketValue = 0
   let grandCost = 0
+  let grandPricedCost = 0
+  let grandUnpricedCost = 0
+  let grandPositions = 0
+  let grandPriced = 0
   let grandAvailable = 0
   let grandDailyPnl = 0
   const grandDailyPnlObservations: Array<{ period: DailyPnlPeriod; date: string | null }> = []
@@ -301,20 +409,38 @@ export const mergePortfolioQuotes = (
   const accounts = portfolio.accounts.map(account => {
     let accMarketValue = 0
     let accCost = 0
+    let accPricedCost = 0
+    let accUnpricedCost = 0
+    let accPriced = 0
     let accDailyPnl = 0
     const accDailyPnlObservations: Array<{ period: DailyPnlPeriod; date: string | null }> = []
 
     const positions = account.positions.map(pos => {
       const quote = quotes[`${pos.market}:${pos.symbol}`]
-      const current_price = quote?.current_price ?? pos.current_price ?? null
-      const change_pct = quote?.change_pct ?? pos.change_pct ?? null
-      const quote_time = quote?.quote_time ?? pos.quote_time ?? null
-      const quote_date = quote?.quote_date ?? pos.quote_date ?? null
+      const quoteTime = quote?.quote_time ?? pos.quote_time ?? null
+      const quoteDate = quote?.quote_date ?? pos.quote_date ?? null
       const daily_pnl_period = quote?.daily_pnl_period ?? pos.daily_pnl_period ?? 'unknown'
       const rate = pos.market === 'HK' ? hkdRate : pos.market === 'US' ? usdRate : 1
 
-      const cost = pos.cost_price * pos.quantity * rate
+      // 现价：本地行情优先，其次后端已下发的持仓价（include_quotes=true 时才会有）。
+      // 两者都不可用 ⇒ 没有现价；`raw` 保留原值以便区分"缺"与"坏"。
+      const quotePrice = quote?.current_price ?? null
+      const heldPrice = pos.current_price ?? null
+      const rawPrice = quotePrice ?? heldPrice
+      const current_price = usablePrice(quotePrice) ?? usablePrice(heldPrice)
+      const priced = current_price !== null
+      const quote_status: QuoteStatus = priced
+        ? 'ok'
+        : rawPrice === null || rawPrice === undefined
+          ? 'missing'
+          : 'invalid_price'
+      const change_pct = priced ? (quote?.change_pct ?? pos.change_pct ?? null) : null
+
+      const costPrice = safeNum(pos.cost_price) ?? 0
+      const quantity = safeNum(pos.quantity) ?? 0
+      const cost = costPrice * quantity * rate
       accCost += cost
+      if (!priced) accUnpricedCost += cost
 
       let market_value: number | null = null
       let market_value_cny: number | null = null
@@ -323,21 +449,24 @@ export const mergePortfolioQuotes = (
       let daily_pnl: number | null = null
       let daily_pnl_pct: number | null = null
 
-      if (current_price != null) {
-        market_value = current_price * pos.quantity
+      if (priced) {
+        market_value = current_price * quantity
         market_value_cny = market_value * rate
         accMarketValue += market_value_cny
+        accPricedCost += cost
+        accPriced += 1
+        // 成本 <= 0 时百分比是未知，不是 0%（后端同样给 None）
         pnl = market_value_cny - cost
-        pnl_pct = cost > 0 ? (pnl / cost * 100) : 0
+        pnl_pct = cost > 0 ? (pnl / cost) * 100 : null
       }
 
-      if (current_price != null && change_pct != null && change_pct !== -100) {
+      if (priced && change_pct != null && change_pct !== -100) {
         const prev = current_price / (1 + change_pct / 100)
         if (isFinite(prev) && prev > 0) {
-          daily_pnl = round2((current_price - prev) * pos.quantity * rate)
+          daily_pnl = round2((current_price - prev) * quantity * rate)
           daily_pnl_pct = round2(change_pct)
           accDailyPnl += daily_pnl
-          const observation = { period: daily_pnl_period, date: quote_date }
+          const observation = { period: daily_pnl_period, date: quoteDate }
           accDailyPnlObservations.push(observation)
           grandDailyPnlObservations.push(observation)
         }
@@ -346,59 +475,126 @@ export const mergePortfolioQuotes = (
       return {
         ...pos,
         current_price,
-        current_price_cny: current_price != null ? current_price * rate : null,
+        raw_current_price: rawPrice,
+        quote_status,
+        priced,
+        current_price_cny: priced ? round2(current_price * rate) : null,
         change_pct,
-        market_value,
-        market_value_cny,
-        pnl,
-        pnl_pct,
+        market_value: roundOrNull(market_value),
+        market_value_cny: roundOrNull(market_value_cny),
+        pnl: roundOrNull(pnl),
+        pnl_pct: roundOrNull(pnl_pct),
         daily_pnl,
         daily_pnl_pct,
         daily_pnl_period,
-        quote_time,
-        quote_date,
+        quote_time: quoteTime,
+        quote_date: quoteDate,
         exchange_rate: pos.market === 'HK' || pos.market === 'US' ? rate : null,
       }
     })
 
-    const accPnl = accMarketValue - accCost
-    const accPnlPct = accCost > 0 ? (accPnl / accCost * 100) : 0
-    const accTotalAssets = accMarketValue + account.available_funds
+    const positionsCount = account.positions.length
+    let accMarketValueOut: number | null
+    let accPnl: number | null
+    let accPnlPct: number | null
+    let accTotalAssets: number | null
+    if (accPriced > 0) {
+      accMarketValueOut = accMarketValue
+      accPnl = accMarketValue - accPricedCost
+      accPnlPct = accPricedCost > 0 ? (accPnl / accPricedCost) * 100 : null
+      accTotalAssets = accMarketValue + account.available_funds
+    } else if (positionsCount > 0) {
+      // 有持仓但一只都没有可用现价：市值/盈亏/总资产都是未知。
+      accMarketValueOut = null
+      accPnl = null
+      accPnlPct = null
+      accTotalAssets = null
+    } else {
+      // 空账户：0 只持仓就是真 0 盈亏。
+      accMarketValueOut = 0
+      accPnl = 0
+      accPnlPct = 0
+      accTotalAssets = account.available_funds
+    }
 
     grandMarketValue += accMarketValue
     grandCost += accCost
+    grandPricedCost += accPricedCost
+    grandUnpricedCost += accUnpricedCost
+    grandPositions += positionsCount
+    grandPriced += accPriced
     grandAvailable += account.available_funds
     grandDailyPnl += accDailyPnl
 
     return {
       ...account,
-      total_market_value: round2(accMarketValue),
+      total_market_value: roundOrNull(accMarketValueOut),
       total_cost: round2(accCost),
-      total_pnl: round2(accPnl),
-      total_pnl_pct: round2(accPnlPct),
+      priced_cost: round2(accPricedCost),
+      unpriced_cost: round2(accUnpricedCost),
+      total_pnl: roundOrNull(accPnl),
+      total_pnl_pct: roundOrNull(accPnlPct),
       total_daily_pnl: round2(accDailyPnl),
-      total_assets: round2(accTotalAssets),
+      total_assets: roundOrNull(accTotalAssets),
+      quotes_coverage: buildCoverage(positionsCount, accPriced, accPricedCost, accCost),
       ...summarizeDailyPnlPeriod(accDailyPnlObservations),
       positions,
     }
   })
 
-  const grandPnl = grandMarketValue - grandCost
-  const grandPnlPct = grandCost > 0 ? (grandPnl / grandCost * 100) : 0
-  const grandTotalAssets = grandMarketValue + grandAvailable
+  let grandMarketValueOut: number | null
+  let grandPnl: number | null
+  let grandPnlPct: number | null
+  let grandTotalAssets: number | null
+  if (grandPriced > 0) {
+    grandMarketValueOut = grandMarketValue
+    grandPnl = grandMarketValue - grandPricedCost
+    grandPnlPct = grandPricedCost > 0 ? (grandPnl / grandPricedCost) * 100 : null
+    grandTotalAssets = grandMarketValue + grandAvailable
+  } else if (grandPositions > 0) {
+    grandMarketValueOut = null
+    grandPnl = null
+    grandPnlPct = null
+    grandTotalAssets = null
+  } else {
+    grandMarketValueOut = 0
+    grandPnl = 0
+    grandPnlPct = 0
+    grandTotalAssets = grandAvailable
+  }
 
   return {
     ...portfolio,
     accounts,
     total: {
-      total_market_value: round2(grandMarketValue),
+      total_market_value: roundOrNull(grandMarketValueOut),
       total_cost: round2(grandCost),
-      total_pnl: round2(grandPnl),
-      total_pnl_pct: round2(grandPnlPct),
+      priced_cost: round2(grandPricedCost),
+      unpriced_cost: round2(grandUnpricedCost),
+      total_pnl: roundOrNull(grandPnl),
+      total_pnl_pct: roundOrNull(grandPnlPct),
       total_daily_pnl: round2(grandDailyPnl),
       available_funds: round2(grandAvailable),
-      total_assets: round2(grandTotalAssets),
+      total_assets: roundOrNull(grandTotalAssets),
+      quotes_coverage: buildCoverage(grandPositions, grandPriced, grandPricedCost, grandCost),
       ...summarizeDailyPnlPeriod(grandDailyPnlObservations),
     },
   }
+}
+
+/**
+ * 仓位比例（持仓市值 / 总资产）。
+ *
+ * 总市值或总资产为 **null（未知，缺行情）** 时比例也是未知 —— 不许 `|| 0` 之后再算，
+ * 那会把"不知道"渲染成 `0.0%`，读起来像"空仓"。
+ */
+export const computePositionRatio = (total: {
+  total_market_value?: number | null
+  total_assets?: number | null
+  available_funds?: number | null
+}): { mv: number | null; assets: number | null; pct: number | null } => {
+  const mv = safeNum(total.total_market_value)
+  const assets = safeNum(total.total_assets)
+  const pct = mv !== null && assets !== null && assets > 0 ? (mv / assets) * 100 : null
+  return { mv, assets, pct }
 }
