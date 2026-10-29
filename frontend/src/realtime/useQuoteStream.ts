@@ -23,6 +23,15 @@ export interface QuoteTick {
   change_pct?: number | null
   prev_close?: number | null
   name?: string
+  /**
+   * 行情源报时（可选）。**当前后端帧里没有这三个字段**（`_fetch_batch_quotes` 只下发
+   * price/change_pct/prev_close/name）。留着它们是为了"哪天上游把时刻带下来"时能直接用：
+   * 只有带了可靠 `quote_time`，下游（`quote-ticks.applyQuoteTicks`）才允许用这帧去更新
+   * 行情**时效**；没带就只更价、时刻判未知。绝不由前端补一个时刻。
+   */
+  quote_time?: string | null
+  quote_date?: string | null
+  daily_pnl_period?: string | null
 }
 export type QuoteTickMap = Record<string, QuoteTick>
 /** connecting=首连/重连中; live=已连通; offline=未启用/无 token/鉴权失败 */

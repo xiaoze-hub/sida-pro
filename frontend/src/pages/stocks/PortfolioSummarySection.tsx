@@ -165,15 +165,20 @@ export function PortfolioSummarySection() {
     {(() => {
       // 当日盈亏可能是 null(一只都没观测到) —— 那时"上日市值"也无从反推, 一律 --。
       const dayPnl = safeNum(portfolio.total.total_daily_pnl)
-      const totalMv = safeNum(portfolio.total.total_market_value)
-      const prevMv = totalMv !== null && dayPnl !== null ? totalMv - dayPnl : null
+      // 2026-10-29 独立复审 F4: 反推上日市值必须用**与当日盈亏同一个篮子**的市值
+      // (`daily_pnl_basket_value` = 参与当日盈亏的那几条持仓的市值), 不能用总市值:
+      // 部分持仓缺昨收时, 总市值里那部分根本没有对应的当日盈亏, 减出来的分母是错的
+      // (例: 全仓 16000 里只有 11000 参与当日 +1000, 旧算法给 6.67%, 正确是 10%)。
+      // 拿不到篮子(老响应/后端没给) ⇒ 百分比未知, 绝不退回总市值硬算。
+      const basket = safeNum(portfolio.total.daily_pnl_basket_value)
+      const prevMv = basket !== null && dayPnl !== null ? basket - dayPnl : null
       const pct = prevMv !== null && prevMv > 0 && dayPnl !== null ? (dayPnl / prevMv) * 100 : null
       const dayCoverage = portfolio.total.daily_pnl_coverage
       const daySub =
         dayPnl === null
           ? '当日盈亏未知（缺现价或昨收）'
           : dayCoverage && !dayCoverage.complete
-            ? `仅 ${dayCoverage.positions_observed ?? 0}/${dayCoverage.positions_total} 条持仓有当日盈亏`
+            ? `仅 ${dayCoverage.positions_observed ?? 0}/${dayCoverage.positions_total} 条持仓有当日盈亏，涨跌幅按这 ${dayCoverage.positions_observed ?? 0} 条的市值算`
             : portfolioMarketStatusLabel || undefined
       return (
         <Card variant="plain" className=" p-3">

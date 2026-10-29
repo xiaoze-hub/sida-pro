@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAPI } from '@sida/api'
+import { usePausedInterval } from '@sida/base-ui'
 import {
   currencySymbolForMarket,
   formatPriceWithCurrency,
@@ -97,6 +98,14 @@ interface QuoteState {
   period: string
   quoteDate: string | null
   quoteTime: string | null
+  /**
+   * 这份读数是否**仍然被成功续期**（2026-10-29 独立复审 F2）。
+   *
+   * 告警条长期挂在页面上（持仓页整天开着）。旧实现只在挂载时取一次价，
+   * 之后价与市场墙钟**一起停在 09:31** ⇒ "报价距今多久"恒为 0 ⇒ 旧价被判成实时破位。
+   * 续期成功 ⇒ `true`；续期失败但手里还有旧价 ⇒ `false`（价照显示，但不许拿它判破位）。
+   */
+  verified: boolean
 }
 
 interface MarketStatusRow {
@@ -116,7 +125,16 @@ const EMPTY_QUOTE: QuoteState = {
   period: 'unknown',
   quoteDate: null,
   quoteTime: null,
+  verified: true,
 }
+
+/**
+ * 告警条自己的续期节奏（毫秒）—— **与页面「自动刷新」开关无关**。
+ *
+ * 防线告警是"到点必须说话"的东西：用户关掉自动刷新，不等于允许它拿上午 09:31 的价
+ * 在 14:00 继续报「已击穿」。20s 与页面时效心跳同量级（远小于时效窗口的推断值）。
+ */
+export const DEFENSE_QUOTE_REFRESH_MS = 20_000
 
 /** 未设置时的参考预设: 仅把**该账户**的成本价折算成绝对价给用户点选, 不落库、不告警。 */
 const PRESETS = [
@@ -173,6 +191,12 @@ function freshnessNote(args: {
     return [`滞后${age ? ` ${age}` : ''}`, at ? `报价 ${at}` : ''].filter(Boolean).join(' · ')
   }
   if (args.reason === 'no_time') return '时点未知（报价无时间）'
+  if (args.reason === 'period_unknown') {
+    return [`时点未知（无法确认报价属于当日）${at ? ` · 报价 ${at}` : ''}`, age]
+      .filter(Boolean)
+      .join(' · ')
+  }
+  if (args.reason === 'refresh_failed') return '时效未核实（刷新失败：显示的是最后一次成功取到的报价，不作时效证明）'
   if (args.reason === 'clock_skew') return '时点存疑（报价晚于市场时钟）'
   return '时点未证实（缺服务器市场时钟）'
 }
@@ -232,27 +256,36 @@ export function DefenseLineBanner({
     }
   }, [symbol, active])
 
-  // 服务器市场墙钟/状态：时效判定的「时刻层」只能用服务器给的事实，不读本机时钟。
+  // 卸载后置 false：异步回调据此丢弃结果（避免卸载后 setState / 续期继续跑）。
+  const aliveRef = useRef(true)
   useEffect(() => {
-    if (!active) return
-    let cancelled = false
-    fetchAPI<MarketStatusRow[]>('/stocks/markets/status')
-      .then((rows) => {
-        if (cancelled) return
-        const next: Record<string, MarketSessionInfo> = {}
-        for (const row of Array.isArray(rows) ? rows : []) {
-          const code = normalizeMarket(row?.code)
-          if (!row?.code) continue
-          next[code] = { localTime: row.local_time ?? null, status: row.status ?? null }
-        }
-        setSessions(next)
-      })
-      .catch(() => {
-        // 拿不到服务器市场时钟 ⇒ 时效一律「未证实」（保守），不让告警条自己猜。
-        if (!cancelled) setSessions({})
-      })
+    aliveRef.current = true
     return () => {
-      cancelled = true
+      aliveRef.current = false
+    }
+  }, [])
+
+  // 服务器市场墙钟/状态：时效判定的「时刻层」只能用服务器给的事实，不读本机时钟。
+  // 2026-10-29 独立复审 F2：这份墙钟必须能**续期**，且续期失败时不许沿用旧值 ——
+  // 一个停在 09:31 的墙钟配上 09:31 的报价，就是"永远新鲜"的假象（判破位的直接原因）。
+  const loadSessions = useCallback(async () => {
+    if (!active) return
+    try {
+      const rows = await fetchAPI<MarketStatusRow[]>('/stocks/markets/status')
+      if (!aliveRef.current) return
+      const next: Record<string, MarketSessionInfo> = {}
+      for (const row of Array.isArray(rows) ? rows : []) {
+        if (!row?.code) continue
+        next[normalizeMarket(row.code)] = {
+          localTime: row.local_time ?? null,
+          status: row.status ?? null,
+        }
+      }
+      setSessions(next)
+    } catch {
+      // 拿不到（最新的）服务器市场时钟 ⇒ 时效一律「未证实」：不用旧墙钟替它作证。
+      if (!aliveRef.current) return
+      setSessions(null)
     }
   }, [active])
 
@@ -264,8 +297,62 @@ export function DefenseLineBanner({
   }, [position.lines])
   const marketsKey = markets.join(',')
 
+  // 续期闸门：上一轮还没回来就不再叠一轮（心跳 + 标的变化可能同时触发）。
+  const quotesInFlightRef = useRef(false)
+  const loadQuotes = useCallback(
+    async (targets: readonly string[]) => {
+      if (!active || targets.length === 0) return
+      if (quotesInFlightRef.current) return
+      quotesInFlightRef.current = true
+      try {
+        await Promise.all(
+          targets.map(async (market) => {
+            try {
+              const res = await fetchAPI<QuoteData>(
+                `/quotes/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`,
+              )
+              if (!aliveRef.current) return
+              const p = positivePrice(res?.current_price ?? res?.price)
+              setQuotesByMarket((prev) => ({
+                ...prev,
+                [market]: {
+                  status: p === null ? 'error' : 'ok',
+                  price: p,
+                  period: String(res?.daily_pnl_period ?? 'unknown'),
+                  quoteDate: res?.quote_date ?? null,
+                  quoteTime: res?.quote_time ?? null,
+                  verified: true,
+                },
+              }))
+            } catch {
+              if (!aliveRef.current) return
+              // 续期失败：旧价留着给人看（别把读数藏起来），但**标记未核实** ——
+              // 手里这份快照已无从证明是当下的，不许拿它出破位结论。
+              setQuotesByMarket((prev) => {
+                const old = prev[market]
+                return {
+                  ...prev,
+                  [market]:
+                    old && old.price !== null
+                      ? { ...old, status: 'error', verified: false }
+                      : { ...EMPTY_QUOTE, status: 'error' },
+                }
+              })
+            }
+          }),
+        )
+      } finally {
+        quotesInFlightRef.current = false
+      }
+    },
+    [active, symbol],
+  )
+
   useEffect(() => {
-    let cancelled = false
+    void loadSessions()
+  }, [loadSessions])
+
+  useEffect(() => {
     if (!active || markets.length === 0) {
       setQuotesByMarket({})
       return
@@ -273,33 +360,23 @@ export function DefenseLineBanner({
     setQuotesByMarket(
       Object.fromEntries(markets.map((m) => [m, { ...EMPTY_QUOTE }])) as Record<string, QuoteState>,
     )
-    for (const market of markets) {
-      fetchAPI<QuoteData>(`/quotes/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`)
-        .then((res) => {
-          if (cancelled) return
-          const p = positivePrice(res?.current_price ?? res?.price)
-          setQuotesByMarket((prev) => ({
-            ...prev,
-            [market]: {
-              status: p === null ? 'error' : 'ok',
-              price: p,
-              period: String(res?.daily_pnl_period ?? 'unknown'),
-              quoteDate: res?.quote_date ?? null,
-              quoteTime: res?.quote_time ?? null,
-            },
-          }))
-        })
-        .catch(() => {
-          if (cancelled) return
-          setQuotesByMarket((prev) => ({ ...prev, [market]: { ...EMPTY_QUOTE, status: 'error' } }))
-        })
-    }
-    return () => {
-      cancelled = true
-    }
+    void loadQuotes(markets)
     // marketsKey 已经把 markets 的内容编码进来了（数组身份每次渲染都变）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, active, marketsKey])
+
+  // 续期：价 + 市场墙钟一起刷（只刷一个同样会让"距今多久"失真）。
+  // 页签隐藏由 `usePausedInterval` 停表，回前台立即补一次，卸载自动清定时器。
+  const marketsRef = useRef(markets)
+  marketsRef.current = markets
+  const refreshTick = useCallback(() => {
+    void loadSessions()
+    void loadQuotes(marketsRef.current)
+  }, [loadQuotes, loadSessions])
+  usePausedInterval(refreshTick, DEFENSE_QUOTE_REFRESH_MS, {
+    deps: [active, symbol, marketsKey],
+    immediate: false,
+  })
 
   const saveDefense = useCallback(
     async (positionId: number | null, value: number | null) => {
@@ -542,6 +619,8 @@ export function DefenseLineBanner({
       period: quote.period,
       quoteTime: quote.quoteTime,
       market: session,
+      // 续期失败 ⇒ 这份快照不再能证明"是当下的"，一律判时效未核实（不给破位结论）。
+      verified: quote.verified,
     })
     const state: DefenseState = verdict.state
     const breached = state === 'breached'

@@ -178,7 +178,8 @@ const openAccountDialog = (account?: Account) => {
   if (account) {
     // 2026-10-29 安全修复 8db9088b: available_funds 可为 NULL(现金未知, 不是 0)。
     // 旧写法 `account.available_funds.toString()` 直接 TypeError —— 点「编辑账户」就崩。
-    // 未知就留空（输入框里空 = 未知，用户不填就不覆盖），绝不填 "0"。
+    // 未知就留空，绝不填 "0"。⚠️ 输入框里的「空」在编辑语义下是**保持原值不变**
+    // （后端 PUT 的 None = 不改，无法显式清空，见 handleAccountSubmit 注释），不是"改成未知"。
     const funds = account.available_funds
     setAccountForm({
       name: account.name,
@@ -195,13 +196,26 @@ const openAccountDialog = (account?: Account) => {
 const handleAccountSubmit = async () => {
   try {
     const raw = String(accountForm.available_funds ?? '').trim()
-    // 空 = 未知：编辑时不带该字段（PUT 语义 None=不改），不编一个 0 元现金；
+    // 空 = **保持原值不变**（不是"未知"！2026-10-29 独立复审 F5）。
+    //
+    // 后端 `AccountUpdate.available_funds: float | None = None` + `if data.available_funds is not None`
+    // （src/web/api/accounts.py）—— 明确传 null 与不传该字段**等价**，都表示"不改动"。
+    // 也就是说这个接口**没有**"把已登记金额清空成未知"的能力，前端不许对用户声称有：
+    // 旧文案「留空表示未知」让用户以为清空后系统就"不知道"了，实际库里仍是原金额，
+    // 总资产/仓位比例继续按旧值算 —— 用户被自己的数据误导。
+    // 所以：编辑留空 ⇒ 不带该字段（原值保住），提示明说"未改动"；
+    // 新建留空 ⇒ 后端 schema `available_funds: float = 0` 不可空，只能按 0 元登记，也要明说。
     // 非数字直接拦下（旧 `parseFloat(...) || 0` 会把 "abc" 静默写成 0 元）。
     let funds: number | null = null
     if (raw !== '') {
       const parsed = Number(raw)
       if (!Number.isFinite(parsed)) {
-        toast('可用资金请填数字，留空表示未知', 'error')
+        toast(
+          editAccountId
+            ? '可用资金请填数字；留空表示保持原值不变（不清空、也不改成未知）'
+            : '可用资金请填数字；留空将按 0 元登记（后端新建账户不接受空值）',
+          'error',
+        )
         return
       }
       funds = parsed
@@ -221,7 +235,16 @@ const handleAccountSubmit = async () => {
     setAccountDialogOpen(false)
     load()
     loadPortfolio()
-    toast(editAccountId ? '账户已更新' : '账户已创建', 'success')
+    toast(
+      editAccountId
+        ? funds === null
+          ? '账户已更新（可用资金未改动）'
+          : '账户已更新'
+        : funds === null
+          ? '账户已创建（可用资金按 0 元登记）'
+          : '账户已创建',
+      'success',
+    )
   } catch (e) {
     toast(e instanceof Error ? e.message : '保存账户失败', 'error')
   }

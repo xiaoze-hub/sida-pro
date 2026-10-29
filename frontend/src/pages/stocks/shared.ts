@@ -182,6 +182,12 @@ export interface AccountSummary {
   total_pnl_pct: number | null
   /** 当日盈亏合计；一只都没观测到（缺价或缺昨收）时为 null。 */
   total_daily_pnl: number | null
+  /**
+   * **参与当日盈亏的持仓市值**（人民币，与 `total_daily_pnl` 同一个篮子）。
+   * 当日盈亏百分比只能拿它反推上日市值：用全价市值去减会混两个篮子（见 merge 注释）。
+   * 一只都没观测到 ⇒ null（未知）；空账户 ⇒ 0；老响应没有该字段 ⇒ undefined（未知）。
+   */
+  daily_pnl_basket_value?: number | null
   daily_pnl_period: DailyPnlPeriod
   daily_pnl_label: string
   daily_pnl_date: string | null
@@ -204,6 +210,8 @@ export interface PortfolioTotal {
   total_pnl: number | null
   total_pnl_pct: number | null
   total_daily_pnl: number | null
+  /** 与 `total_daily_pnl` 同篮子的持仓市值（见 `AccountSummary.daily_pnl_basket_value`）。 */
+  daily_pnl_basket_value?: number | null
   daily_pnl_period: DailyPnlPeriod
   daily_pnl_label: string
   daily_pnl_date: string | null
@@ -571,6 +579,8 @@ export const mergePortfolioQuotes = (
   // 任一账户现金为 NULL ⇒ 汇总现金是「未知」，不是「已知账户之和」。
   let grandFundsKnown = true
   let grandDailyPnl = 0
+  // 与 grandDailyPnl **同一个篮子**：只有贡献了当日盈亏的持仓市值才进来（2026-10-29 复审 F4）。
+  let grandDailyBasket = 0
   const grandDailyPnlObservations: Array<{ period: DailyPnlPeriod; date: string | null }> = []
 
   const accounts = portfolio.accounts.map(account => {
@@ -581,13 +591,11 @@ export const mergePortfolioQuotes = (
     let accPriced = 0
     let accDailyObserved = 0
     let accDailyPnl = 0
+    let accDailyBasket = 0
     const accDailyPnlObservations: Array<{ period: DailyPnlPeriod; date: string | null }> = []
 
     const positions = account.positions.map(pos => {
       const quote = quotes[`${pos.market}:${pos.symbol}`]
-      const quoteTime = quote?.quote_time ?? pos.quote_time ?? null
-      const quoteDate = quote?.quote_date ?? pos.quote_date ?? null
-      const daily_pnl_period = quote?.daily_pnl_period ?? pos.daily_pnl_period ?? 'unknown'
       const rate = pos.market === 'HK' ? hkdRate : pos.market === 'US' ? usdRate : 1
 
       // 现价：本地行情优先，其次后端已下发的持仓价（include_quotes=true 时才会有）。
@@ -595,14 +603,28 @@ export const mergePortfolioQuotes = (
       const quotePrice = quote?.current_price ?? null
       const heldPrice = pos.current_price ?? null
       const rawPrice = quotePrice ?? heldPrice
-      const current_price = usablePrice(quotePrice) ?? usablePrice(heldPrice)
+      const localPrice = usablePrice(quotePrice)
+      const current_price = localPrice ?? usablePrice(heldPrice)
+      // ⚠️ 2026-10-29 独立复审 F3：**先定价格来源，时刻只能跟同一个来源走**。
+      // 旧写法逐字段回退（价取本地行情、时刻回退到后端持仓行），会拼出"14:00 的 WS 新价
+      // + 09:31 的旧时刻"这种不存在的组合：下游按 09:31 判时效，要么误报"滞后 4.5 小时"，
+      // 要么在时钟也冻住时把它当"刚发生的"；`daily_pnl_period` 同样串源，当日盈亏算到
+      // 上一交易日口径上。本地行情给了价（含 WS 推价）⇒ 时刻/日期/期间一律取本地行情那份，
+      // 本地没有就是 null / unknown（未知），不许拿后端那份顶替。
+      const priceFromLocal = localPrice !== null
+      const quoteTime = priceFromLocal ? quote?.quote_time ?? null : pos.quote_time ?? null
+      const quoteDate = priceFromLocal ? quote?.quote_date ?? null : pos.quote_date ?? null
+      const daily_pnl_period = priceFromLocal
+        ? quote?.daily_pnl_period ?? 'unknown'
+        : pos.daily_pnl_period ?? 'unknown'
       const priced = current_price !== null
       const quote_status: QuoteStatus = priced
         ? 'ok'
         : rawPrice === null || rawPrice === undefined
           ? 'missing'
           : 'invalid_price'
-      const change_pct = priced ? (quote?.change_pct ?? pos.change_pct ?? null) : null
+      // 涨跌幅同样跟着价格来源走：WS 价配后端涨跌幅 = 两个不同时刻的变化率。
+      const change_pct = priced ? (priceFromLocal ? quote?.change_pct ?? null : pos.change_pct ?? null) : null
 
       const costPrice = safeNum(pos.cost_price) ?? 0
       const quantity = safeNum(pos.quantity) ?? 0
@@ -634,6 +656,7 @@ export const mergePortfolioQuotes = (
           daily_pnl = round2((current_price - prev) * quantity * rate)
           daily_pnl_pct = round2(change_pct)
           accDailyPnl += daily_pnl
+          accDailyBasket += market_value_cny ?? 0
           // 只有"有现价 + 有可用的涨跌幅/昨收"的持仓才被观测到；缺一个就不是 0 涨跌。
           accDailyObserved += 1
           const observation = { period: daily_pnl_period, date: quoteDate }
@@ -670,24 +693,28 @@ export const mergePortfolioQuotes = (
     let accPnl: number | null
     let accPnlPct: number | null
     let accDailyPnlOut: number | null
+    let accDailyBasketOut: number | null
     if (accPriced > 0) {
       accMarketValueOut = accMarketValue
       accPnl = accMarketValue - accPricedCost
       accPnlPct = accPricedCost > 0 ? (accPnl / accPricedCost) * 100 : null
       // 一只都没观测到（缺涨跌幅/昨收）⇒ 未知，不许拿 0 冒充"今天没赚没亏"。
       accDailyPnlOut = accDailyObserved > 0 ? round2(accDailyPnl) : null
+      accDailyBasketOut = accDailyObserved > 0 ? round2(accDailyBasket) : null
     } else if (positionsCount > 0) {
       // 有持仓但一只都没有可用现价：市值/盈亏/总资产/当日盈亏都是未知。
       accMarketValueOut = null
       accPnl = null
       accPnlPct = null
       accDailyPnlOut = null
+      accDailyBasketOut = null
     } else {
       // 空账户：0 只持仓就是真 0 盈亏。
       accMarketValueOut = 0
       accPnl = 0
       accPnlPct = 0
       accDailyPnlOut = 0
+      accDailyBasketOut = 0
     }
     const accAssets = resolveTotalAssets(
       positionsCount,
@@ -706,6 +733,7 @@ export const mergePortfolioQuotes = (
     if (accFunds === null) grandFundsKnown = false
     else grandAvailable += accFunds
     grandDailyPnl += accDailyPnl
+    grandDailyBasket += accDailyBasket
 
     return {
       ...account,
@@ -716,6 +744,7 @@ export const mergePortfolioQuotes = (
       total_pnl: roundOrNull(accPnl),
       total_pnl_pct: roundOrNull(accPnlPct),
       total_daily_pnl: roundOrNull(accDailyPnlOut),
+      daily_pnl_basket_value: roundOrNull(accDailyBasketOut),
       total_assets: roundOrNull(accAssets.total_assets),
       total_assets_complete: accAssets.total_assets_complete,
       total_assets_basis: accAssets.total_assets_basis,
@@ -733,21 +762,25 @@ export const mergePortfolioQuotes = (
   let grandPnl: number | null
   let grandPnlPct: number | null
   let grandDailyPnlOut: number | null
+  let grandDailyBasketOut: number | null
   if (grandPriced > 0) {
     grandMarketValueOut = grandMarketValue
     grandPnl = grandMarketValue - grandPricedCost
     grandPnlPct = grandPricedCost > 0 ? (grandPnl / grandPricedCost) * 100 : null
     grandDailyPnlOut = grandDailyObserved > 0 ? round2(grandDailyPnl) : null
+    grandDailyBasketOut = grandDailyObserved > 0 ? round2(grandDailyBasket) : null
   } else if (grandPositions > 0) {
     grandMarketValueOut = null
     grandPnl = null
     grandPnlPct = null
     grandDailyPnlOut = null
+    grandDailyBasketOut = null
   } else {
     grandMarketValueOut = 0
     grandPnl = 0
     grandPnlPct = 0
     grandDailyPnlOut = 0
+    grandDailyBasketOut = 0
   }
   const grandAssets = resolveTotalAssets(
     grandPositions,
@@ -767,6 +800,7 @@ export const mergePortfolioQuotes = (
       total_pnl: roundOrNull(grandPnl),
       total_pnl_pct: roundOrNull(grandPnlPct),
       total_daily_pnl: roundOrNull(grandDailyPnlOut),
+      daily_pnl_basket_value: roundOrNull(grandDailyBasketOut),
       // 现金未知时汇总现金是 null（不是已知账户的部分和）。
       available_funds: grandFundsKnown ? round2(grandAvailable) : null,
       available_funds_known: grandFundsKnown,

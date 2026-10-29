@@ -93,10 +93,12 @@ export type QuoteFreshness = 'current' | 'session_frozen' | 'stale' | 'unknown' 
 export type FreshnessReason =
   | 'ok'
   | 'period'
+  | 'period_unknown'
   | 'intraday_age'
   | 'no_time'
   | 'no_clock'
   | 'clock_skew'
+  | 'refresh_failed'
   | 'missing'
 
 export type PricePeriod = 'today' | 'previous_trading_day' | 'mixed' | 'unknown'
@@ -330,6 +332,15 @@ export function freshnessFor(args: {
   period?: string | null
   quoteTime?: string | null
   market?: MarketSessionInfo | null
+  /**
+   * 这份读数本身是否"仍然被成功刷新过"（默认 `true`）。
+   *
+   * 2026-10-29 独立复审 F2：告警条原来只在挂载时取一次行情，之后长期不刷新 ——
+   * 价与市场墙钟**一起停在同一时刻**，年龄恒为 0，旧价被判成实时。
+   * 调用方在"续期失败"时必须传 `false`：手里这份快照已经无从证明是当下的，
+   * 哪怕它的 `quote_time` 看起来还很新。
+   */
+  verified?: boolean
 }): FreshnessVerdict {
   const quoteLocalMinutes = wallClockMinutes(args.quoteTime)
   const marketLocalMinutes = wallClockMinutes(args.market?.localTime)
@@ -349,12 +360,26 @@ export function freshnessFor(args: {
 
   if (positive(args.price) === null) return verdict('missing', 'missing')
 
-  // ① 日期层：后端按市场时区判好的「是不是今天」。非今日 ⇒ 一律滞后（隔日/隔周都算）。
-  if (String(args.period ?? '') !== 'today') return verdict('stale', 'period')
+  // ① 续期闸门：这份读数已经不再被成功刷新 ⇒ 时点无从证明（不许拿旧快照判破位）。
+  if (args.verified === false) return verdict('unknown', 'refresh_failed')
 
-  // ② 时刻层：没有报价时刻 ⇒ 证明不了「刚发生」，不许当实时。
+  const period = String(args.period ?? '')
+  // ② 日期层：后端按市场时区判好的「是不是今天」。已知非今日 ⇒ 一律滞后（隔日/隔周都算）。
+  if (period === 'previous_trading_day' || period === 'mixed') {
+    return verdict('stale', 'period')
+  }
+  // 日期层本身证明不了（WS 换价后期间未知 / 缺字段）⇒ 时点未知，不能当"历史报价"来说
+  // （那会写成"历史报价（日期未知）"，等于把"不知道"讲成"旧"）。
+  // 具体原因按缺哪一层给：连报价时刻都没有 ⇒ no_time；有时刻但确认不了属于当日 ⇒ period_unknown。
+  if (period !== 'today') {
+    return quoteLocalMinutes === null
+      ? verdict('unknown', 'no_time')
+      : verdict('unknown', 'period_unknown')
+  }
+
+  // ③ 时刻层：没有报价时刻 ⇒ 证明不了「刚发生」，不许当实时。
   if (quoteLocalMinutes === null) return verdict('unknown', 'no_time')
-  // ③ 没有服务器市场墙钟 ⇒ 无从比较，不猜本机时间。
+  // ④ 没有服务器市场墙钟 ⇒ 无从比较，不猜本机时间。
   if (marketLocalMinutes === null) return verdict('unknown', 'no_clock')
 
   const age = marketLocalMinutes - quoteLocalMinutes
@@ -369,7 +394,7 @@ export function freshnessFor(args: {
       : verdict('stale', 'intraday_age', age)
   }
 
-  // ④ 服务器说当日非交易时段（午休/盘后/休市/盘前）：当日最后一笔报价是「定格价」。
+  // ⑤ 服务器说当日非交易时段（午休/盘后/休市/盘前）：当日最后一笔报价是「定格价」。
   //    这种情况下全市场看到的是同一价位，可以判，但必须标成非实时。
   if (FROZEN_STATUSES.has(marketStatusRaw)) {
     return age <= QUOTE_FRESH_WINDOW_MINUTES
@@ -414,6 +439,8 @@ export function resolveDefenseState(args: {
   period?: string | null
   quoteTime?: string | null
   market?: MarketSessionInfo | null
+  /** 读数是否仍在被成功刷新（见 `freshnessFor` 的同名参数）。 */
+  verified?: boolean
 }): {
   state: DefenseState
   distancePct: number | null
@@ -426,6 +453,7 @@ export function resolveDefenseState(args: {
     period: args.period,
     quoteTime: args.quoteTime,
     market: args.market,
+    verified: args.verified,
   })
   const base = {
     freshness: verdict.freshness,

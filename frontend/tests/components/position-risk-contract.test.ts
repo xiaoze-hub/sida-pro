@@ -44,6 +44,7 @@ const summarySection = read('src/pages/stocks/PortfolioSummarySection.tsx')
 const accountsSection = read('src/pages/stocks/AccountsSection.tsx')
 const stocksData = read('src/pages/stocks/useStocksData.ts')
 const actions = read('src/pages/stocks/useStocksActions.ts')
+const accountDialog = read('src/pages/stocks/WatchlistDialogs.tsx')
 
 describe('防线判定单源', () => {
   it('DefenseLineBanner 使用共享判定，不再自写阈值', () => {
@@ -120,14 +121,51 @@ describe('多账户 / 多市场', () => {
     expect(stripComments(lib)).not.toMatch(/prev\.defense\s*=\s*defense/)
   })
 
-  it('WS 行情推送不许抹掉报价时刻（拿不到新时刻 ≠ 时刻不存在），也不许自造时刻', () => {
+  /**
+   * 2026-10-29 独立复审 F3（本条在上一版被写成了**相反**的约束，正是复审阻断）。
+   *
+   * 上一版要求"保留上一轮 quote_time"，理由是"拿不到新时刻 ≠ 时刻不存在"。但 WS 帧
+   * 只有裸价、没有行情源报时 ⇒ 保留旧时刻等于**用 09:31 为一笔 14:00 的价作证**：
+   * 时刻不是这个价的时刻，`daily_pnl_period` 也随之串到错的交易日。
+   * 现在的约束：价格与时刻必须同源 —— 帧里有可靠时刻才一起换，没有就把时刻判未知；
+   * 任何情况下都不许用本机时钟造时刻。
+   */
+  it('WS 换价不许沿用旧报价时刻（价格与时刻必须同源），也不许自造时刻', () => {
     const code = stripComments(stocksData)
-    // 旧形态：quote_time: null / quote_date: null 直接写死
-    expect(code).not.toMatch(/quote_time:\s*null/)
-    expect(code).not.toMatch(/quote_date:\s*null/)
-    expect(code).toMatch(/quote_time:\s*prevQuote\?\.quote_time/)
+    // 旧形态（复审阻断）：把上一轮的时刻贴到新价格上
+    expect(code).not.toMatch(/quote_time:\s*prevQuote\?\.quote_time/)
+    expect(code).not.toMatch(/quote_date:\s*prevQuote\?\.quote_date/)
+    expect(code).not.toMatch(/daily_pnl_period:\s*prevQuote\?\.daily_pnl_period/)
+    // 合并规则必须收敛到带测试的纯函数里（同源/未知二选一）
+    expect(code).toContain('applyQuoteTicks(')
     // 不许拿本机时钟冒充报价时刻
     expect(code).not.toMatch(/quote_time:\s*new Date/)
+    // lib 也不许读系统时钟（时效判定不猜"现在"）
+    expect(lib).not.toMatch(/Date\.now\(\)/)
+  })
+
+  it('行情时效心跳不读 autoRefresh（关掉自动刷新 ≠ 允许行情与市场墙钟冻结）', () => {
+    const code = stripComments(stocksData)
+    // 心跳必须存在，且延迟是常量（不是 `autoRefresh ? ... : 0`）
+    expect(code).toMatch(/FRESHNESS_HEARTBEAT_MS/)
+    expect(code).toMatch(/usePausedInterval\(freshnessHeartbeat,\s*FRESHNESS_HEARTBEAT_MS/)
+    // 心跳里必须同时刷市场墙钟与报价（只刷一个会让"距今多久"失真）
+    const heartbeat = /const freshnessHeartbeat = useCallback\(\(\) => \{([\s\S]*?)\}, \[/.exec(code)?.[1] ?? ''
+    expect(heartbeat).toContain('refreshMarketStatus')
+    expect(heartbeat).toContain('refreshQuotes')
+    // 心跳必须在 autoRefreshTick 之外的**独立**调用点（不是包在开关里）
+    expect(code).toMatch(/usePausedInterval\(autoRefreshTick,\s*autoRefresh\s*\?/)
+    expect(code.indexOf('const freshnessHeartbeat')).toBeGreaterThan(code.indexOf('usePausedInterval(autoRefreshTick'))
+  })
+
+  it('告警条自己续期行情与市场墙钟，且续期失败时标记未核实（不许拿旧快照判破位）', () => {
+    const code = stripComments(banner)
+    expect(code).toMatch(/usePausedInterval\(/)
+    expect(code).toMatch(/DEFENSE_QUOTE_REFRESH_MS/)
+    expect(code).toContain('verified')
+    // 续期 + 首次加载走同一个 loader（不许"只在挂载取一次"）
+    expect(code).toMatch(/loadQuotes\(/)
+    expect(code).toMatch(/loadSessions\(/)
   })
 })
 
@@ -195,6 +233,28 @@ describe('缺行情 / 覆盖度口径（三次评审）', () => {
     for (const src of [section, banner, summarySection, accountsSection]) {
       expect(jsxText(src)).not.toContain('**')
     }
+  })
+
+  /**
+   * 独立复审 F4：当日盈亏百分比只能与它的金额**同篮子**。
+   * 旧写法 `total_market_value - total_daily_pnl` 混了全价市值（含缺昨收的持仓）。
+   */
+  it('当日盈亏百分比用同日盈亏篮子，不许拿总市值反推', () => {
+    expect(shared).toContain('daily_pnl_basket_value')
+    const summaryCode = stripComments(summarySection)
+    expect(summaryCode).toContain('daily_pnl_basket_value')
+    expect(summaryCode).not.toMatch(/total_market_value[\s\S]{0,80}- ?dayPnl/)
+  })
+
+  /**
+   * 独立复审 F5：前端不许声称"留空 = 未知"——后端 PUT 的 None 等于不改，
+   * 没有"清空成未知"的语义（见 src/web/api/accounts.py::update_account）。
+   */
+  it('账户表单不把「留空」说成「未知」', () => {
+    for (const src of [stripComments(actions), stripComments(accountDialog)]) {
+      expect(src).not.toMatch(/留空[^，。；]{0,6}(表示|即|就是|按)?\s*未知/)
+    }
+    expect(stripComments(accountDialog)).toMatch(/保持原值/)
   })
 })
 

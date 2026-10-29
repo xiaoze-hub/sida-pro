@@ -200,3 +200,54 @@ describe('handleAccountSubmit · 未知现金不许被伪造成 0', () => {
     expect(toastMock.toast).toHaveBeenCalled()
   })
 })
+
+/**
+ * 2026-10-29 独立复审 F5：文案不许把「留空」说成「未知」。
+ *
+ * 后端 `AccountUpdate.available_funds: float | None = None` + `if ... is not None`
+ * （src/web/api/accounts.py）—— 明确传 null 与不传该字段**等价**，都是"不改动"。
+ * 也就是说**前端根本没有"清空成未知"的能力**。旧文案「留空表示未知」于是成了谎：
+ * 用户编辑账户、把金额清空、看到"已更新"，以为现金已被标成未知，实际库里还是原值 ——
+ * 后续总资产/仓位比例仍按那个旧金额算，用户却以为系统已经"不知道"了。
+ */
+describe('handleAccountSubmit · 文案不许把「留空」说成「未知」', () => {
+  const toastText = () =>
+    toastMock.toast.mock.calls.map((c) => String(c[0])).join(' | ')
+
+  it('编辑账户留空 → 成功提示必须说明「可用资金未改动」，不许暗示已变成未知', async () => {
+    api.fetchAPI.mockResolvedValue({})
+    const h = harness({ editAccountId: 7, accountForm: { name: '老账户', available_funds: '' } })
+    await act(async () => {
+      await h.result.current.handleAccountSubmit()
+    })
+    const text = toastText()
+    expect(text).toMatch(/未改动|保持原值|不变/)
+    // 不许出现「留空 = 未知」这种假承诺（说明"不会改成未知"是允许且正确的）
+    expect(text).not.toMatch(/留空[^，。；]{0,6}(表示|即|就是|按)?\s*未知/)
+    expect(text).toContain('账户已更新')
+  })
+
+  it('编辑账户填了非数字 → 错误提示说「留空 = 保持原值」，不许说「留空表示未知」', async () => {
+    const h = harness({ editAccountId: 7, accountForm: { name: '老账户', available_funds: 'abc' } })
+    await act(async () => {
+      await h.result.current.handleAccountSubmit()
+    })
+    const text = toastText()
+    expect(text).not.toMatch(/留空[^，。；]{0,6}(表示|即|就是|按)?\s*未知/)
+    expect(text).toMatch(/保持原值|不变/)
+  })
+
+  it('新建账户留空 → 明说按 0 元登记（后端 schema 不可空），不许说成未知', async () => {
+    api.fetchAPI.mockResolvedValue({})
+    const h = harness({ editAccountId: null, accountForm: { name: '新账户', available_funds: '' } })
+    await act(async () => {
+      await h.result.current.handleAccountSubmit()
+    })
+    const [, init] = api.fetchAPI.mock.calls[0] as [string, { body: string }]
+    expect(JSON.parse(init.body)).toEqual({ name: '新账户', available_funds: 0 })
+    const text = toastText()
+    expect(text).not.toMatch(/留空[^，。；]{0,6}(表示|即|就是|按)?\s*未知/)
+    // 新建账户留空 = 明说按 0 元登记（0 是"真没有现金"，不是"未知"）
+    expect(text).toContain('0')
+  })
+})

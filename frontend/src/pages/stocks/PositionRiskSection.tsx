@@ -107,6 +107,12 @@ function freshnessLabel(row: PositionRiskRow): string {
     return `滞后${age ? ` ${age}` : ''} · 报价${at || '（时刻未知）'}`
   }
   if (row.staleReason === 'no_time') return '时点未知（报价无时间）'
+  if (row.staleReason === 'period_unknown') {
+    // 2026-10-29 独立复审 F3：WS 只换价不带时刻/期间时，不能写成「非当日报价」
+    // （那是把"不知道"讲成"旧"），要说清是"确认不了属于当日"。
+    return `时点未知（无法确认报价属于当日）${at}`
+  }
+  if (row.staleReason === 'refresh_failed') return '时效未核实（刷新失败，不作时效证明）'
   if (row.staleReason === 'clock_skew') return '时点存疑（报价晚于市场时钟）'
   return '时点未证实（缺服务器市场时钟）'
 }

@@ -20,6 +20,7 @@ import type { StockContextTarget } from '@/components/StockContextMenu'
 import { fetchAPI, normalizeNewsEnvelope } from '@sida/api'
 import { useQuoteStream, type QuoteTickMap } from '@/realtime/useQuoteStream'
 import { mergePortfolioQuotes } from './shared'
+import { applyQuoteTicks } from './quote-ticks'
 import { parseServerTime } from '@/lib/utils'
 import { stocksApi } from '@sida/api'
 import { useNavigate } from 'react-router-dom'
@@ -28,6 +29,21 @@ import { usePausedInterval } from '@sida/base-ui'
 import type { useStocksState } from './useStocksState'
 import { logger } from '@/lib/logger'
 import { navBackState } from '@/lib/nav-back'
+
+/**
+ * 行情时效心跳（毫秒）—— **与用户的「自动刷新」开关无关**（2026-10-29 独立复审 F1）。
+ *
+ * 旧实现把 `/quotes/batch` 与 `/stocks/markets/status` 的周期刷新只挂在
+ * `usePausedInterval(autoRefreshTick, autoRefresh ? refreshInterval*1000 : 0)` 上，
+ * 而 `autoRefresh` 默认 **false**（`sida_stocks_autoRefresh`）⇒ 默认配置下两边一次都不再刷新：
+ * 09:31 拉到的报价和 09:31 的服务器市场墙钟**一起冻结**，"报价距市场时钟多久"永远算出
+ * 0 分钟 ⇒ 14:00 仍把上午的价判成 `current`。关掉自动刷新只该意味着"别替我扫盘/别刷 K 线"，
+ * 不该意味着"允许行情与时点证明冻结"。
+ *
+ * 取值 20s：时效窗口 `QUOTE_FRESH_WINDOW_MINUTES = 15` 分钟是**推断值**（不是交易所口径），
+ * 20s 远小于它，够快；又不至于像 WS 那样每 5s 打一次批量接口（隐藏页签还会停表）。
+ */
+export const FRESHNESS_HEARTBEAT_MS = 20_000
 
 export function useStocksData(state: ReturnType<typeof useStocksState>) {
   const {
@@ -267,13 +283,30 @@ const loadPortfolio = useCallback(async () => {
  * 这两个值必须跟着轮询一起刷新：页面开了一上午而时钟停在 09:00 时，
  * 「报价 09:31 距今多久」就无从判断 —— 只能退化成「时点未知」，
  * 于是用户在整段时间里都看不到真实结论。端点本身是纯本地计算（无外部行情请求）。
+ *
+ * 2026-10-29 独立复审 F1：失败时**把墙钟清空**，不保留上一次的时钟。
+ * 一个变老的时钟比没有时钟更糟 —— 沿用旧墙钟会让"报价距今多久"恒为 0（冒充实时），
+ * 或与已刷新过的新报价算成负年龄。清空后下游判成 `no_clock`（时点未证实），是保守的解。
+ * 并发用 in-flight 闸门挡住：上一轮没回就不叠第二轮（心跳与 autoRefresh 可能同时到点）。
  */
+const marketStatusInFlightRef = useRef<Promise<void> | null>(null)
 const refreshMarketStatus = useCallback(async () => {
+  if (marketStatusInFlightRef.current) return marketStatusInFlightRef.current
+  const run = (async () => {
+    try {
+      const rows = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
+      setMarketStatus(rows)
+    } catch (e) {
+      logger.warn('刷新市场状态失败:', e)
+      // 没有可信的服务器墙钟 ⇒ 时效判定必须退化成"时点未证实"（见上）。
+      setMarketStatus([])
+    }
+  })()
+  marketStatusInFlightRef.current = run
   try {
-    const rows = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
-    setMarketStatus(rows)
-  } catch (e) {
-    logger.warn('刷新市场状态失败:', e)
+    await run
+  } finally {
+    marketStatusInFlightRef.current = null
   }
 }, [setMarketStatus])
 
@@ -304,32 +337,68 @@ const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
 const buildQuoteItemsRef = useRef(buildQuoteItems)
 buildQuoteItemsRef.current = buildQuoteItems
 
+const quotesInFlightRef = useRef<Promise<void> | null>(null)
+/** 在飞那一轮请求覆盖的标的集合；用来判断"数据变了没有"（变了才需要补一轮）。 */
+const quotesInFlightSigRef = useRef<string>('')
+/** 在飞期间标的集合变过 ⇒ 结束当前轮后立刻按新集合再跑一轮（不并发、也不丢更新）。 */
+const quotesPendingRef = useRef(false)
+const quoteItemsSig = (items: readonly QuoteRequestItem[]) =>
+  items.map(it => `${it.market}:${it.symbol}`).sort().join(',')
+
 const refreshQuotes = useCallback(async () => {
   const items = buildQuoteItems()
   if (items.length === 0) return
 
-  setQuotesLoading(true)
-  try {
-    const data = await fetchAPI<QuoteResponse[]>('/quotes/batch', {
-      method: 'POST',
-      body: JSON.stringify({ items }),
-    })
-    const map: Record<string, QuoteSnapshot> = {}
-    for (const item of data) {
-      map[`${item.market}:${item.symbol}`] = {
-        current_price: item.current_price ?? null,
-        change_pct: item.change_pct ?? null,
-        quote_time: item.quote_time ?? null,
-        quote_date: item.quote_date ?? null,
-        daily_pnl_period: item.daily_pnl_period ?? 'unknown',
+  // 并发闸门（2026-10-29 独立复审 F1）：时效心跳、autoRefresh、数据变更 effect
+  // 现在都可能在同一时刻要求刷新（3 条路径）。上一轮没回就**复用**它，不再叠一轮批量行情
+  // —— 叠起来只会把行情源打成 429，反而让时效更差。
+  // 例外：若这期间**标的集合变了**（新增持仓/自选），记一笔 pending，等当前轮结束立刻补一轮
+  // （否则新标的要等到下个心跳才有价，等于让"加自选"慢半分钟生效）。
+  if (quotesInFlightRef.current) {
+    if (quoteItemsSig(items) !== quotesInFlightSigRef.current) quotesPendingRef.current = true
+    return quotesInFlightRef.current
+  }
+  quotesInFlightSigRef.current = quoteItemsSig(items)
+  const run = (async () => {
+    let first = true
+    do {
+      quotesPendingRef.current = false
+      // 补跑必须读**最新**的标的集合（ref 每次渲染更新）；闭包里的 buildQuoteItems
+      // 还是发起那一轮的快照，拿它补跑等于又打一遍旧集合。
+      const batch = first ? items : buildQuoteItemsRef.current()
+      first = false
+      if (batch.length === 0) return
+      quotesInFlightSigRef.current = quoteItemsSig(batch)
+      setQuotesLoading(true)
+      try {
+        const data = await fetchAPI<QuoteResponse[]>('/quotes/batch', {
+          method: 'POST',
+          body: JSON.stringify({ items: batch }),
+        })
+        const map: Record<string, QuoteSnapshot> = {}
+        for (const item of data) {
+          map[`${item.market}:${item.symbol}`] = {
+            current_price: item.current_price ?? null,
+            change_pct: item.change_pct ?? null,
+            quote_time: item.quote_time ?? null,
+            quote_date: item.quote_date ?? null,
+            daily_pnl_period: item.daily_pnl_period ?? 'unknown',
+          }
+        }
+        setQuotes(map)
+        setLastRefreshTime(new Date())
+      } catch (e) {
+        logger.warn('刷新行情失败:', e)
+      } finally {
+        setQuotesLoading(false)
       }
-    }
-    setQuotes(map)
-    setLastRefreshTime(new Date())
-  } catch (e) {
-    logger.warn('刷新行情失败:', e)
+    } while (quotesPendingRef.current)
+  })()
+  quotesInFlightRef.current = run
+  try {
+    await run
   } finally {
-    setQuotesLoading(false)
+    quotesInFlightRef.current = null
   }
 }, [buildQuoteItems, setLastRefreshTime, setQuotes, setQuotesLoading])
 
@@ -344,31 +413,11 @@ useEffect(() => {
 // StreamingResponse+while True 生成器挂起, 改 WebSocket 稳定。
 // 注意: WS 只推"持仓"标的; 自选(未持仓)仍靠 refreshQuotes 轮询兜底, 故轮询不撤。
 const onQuoteTicks = useCallback((data: QuoteTickMap) => {
-  setQuotes(prev => {
-    const next = { ...prev }
-    // ⚠️ ref 存的是函数, 必须调用拿数组(2026-08-12 白屏根因: 迭代了函数本身)
-    const items = buildQuoteItemsRef.current()
-    for (const item of items) {
-      const q = data[item.symbol]
-      if (!q || typeof q.price !== 'number') continue
-      const key = `${item.market}:${item.symbol}`
-      const prevQuote = prev[key]
-      next[key] = {
-        current_price: q.price,
-        change_pct: q.change_pct ?? null,
-        // 2026-10-29 三次复审: WS 帧只带裸价({price, change_pct, prev_close})，**没有**报价时刻。
-        // 旧实现写死 quote_time/quote_date = null，等于把上一轮轮询拿到的「09:31」抹掉，
-        // 于是下游只能按「period=today」冒充实时 —— 而 09:31 的价在 14:00 早就不是现价了。
-        // 这里改为**保留**已知时刻：拿不到新时刻不等于时刻不存在；保留的值只会让判定更保守
-        // （价格若在 T 之后变过，真实时点比 T 更新，按 T 判最多被判成滞后，不会反过来冒充实时）。
-        // 同时**绝不**用本机 now 造一个时刻（那是假新鲜）。
-        quote_time: prevQuote?.quote_time ?? null,
-        quote_date: prevQuote?.quote_date ?? null,
-        daily_pnl_period: prevQuote?.daily_pnl_period ?? 'unknown',
-      }
-    }
-    return next
-  })
+  // ⚠️ ref 存的是函数, 必须调用拿数组(2026-08-12 白屏根因: 迭代了函数本身)
+  // 合并规则在 `./quote-ticks`（纯函数，有测试）：帧里带可靠 quote_time 才更新时效，
+  // 否则只更价、时刻明确判未知 —— 绝不沿用上一轮旧时刻给新价格背书，也不用本机时钟造时刻。
+  // 2026-10-29 独立复审 F3（上一版"保留旧时刻"的写法正是复审阻断：14:00 的价配 09:31 的时刻）。
+  setQuotes(prev => applyQuoteTicks(prev, buildQuoteItemsRef.current(), data))
 }, [setQuotes])
 
 useQuoteStream(onQuoteTicks)
@@ -695,6 +744,26 @@ const autoRefreshTick = useCallback(() => {
 }, [refreshQuotes, refreshKlines, loadPoolSuggestions, refreshMarketStatus])
 usePausedInterval(autoRefreshTick, autoRefresh ? refreshInterval * 1000 : 0, {
   deps: [autoRefresh, refreshInterval],
+})
+
+/**
+ * 行情时效心跳（2026-10-29 独立复审 F1）—— **不读 autoRefresh**。
+ *
+ * 只做两件事：刷新服务器市场墙钟 + 刷新本地行情。它们是"这条报价是不是当下的"这个
+ * 判断的**唯一外部依据**（`freshnessFor` 的两个输入），一旦随用户开关一起冻住，
+ * 持仓风险与防线告警就会拿上午的价说"现在破位"。
+ *
+ * 刻意不在这里刷 K 线/建议池/账户汇总：那些是"用户主动要的更重的东西"，
+ * 关掉自动刷新时不该被偷偷拉起（性能与配额都受不起）。
+ * 页签隐藏 ⇒ `usePausedInterval` 停表；回前台 ⇒ 立即补一次；卸载 ⇒ 清定时器。
+ * 并发由 `refreshQuotes` / `refreshMarketStatus` 各自的 in-flight 闸门兜住。
+ */
+const freshnessHeartbeat = useCallback(() => {
+  void refreshMarketStatus()
+  void refreshQuotes()
+}, [refreshMarketStatus, refreshQuotes])
+usePausedInterval(freshnessHeartbeat, FRESHNESS_HEARTBEAT_MS, {
+  deps: [freshnessHeartbeat],
 })
 
 

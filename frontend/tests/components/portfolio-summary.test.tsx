@@ -323,3 +323,86 @@ describe('PortfolioSummarySection 未知(缺行情)不当 0', () => {
     expect(text).toContain('当日盈亏只统计 1/2 条持仓')
   })
 })
+
+/**
+ * 2026-10-29 独立复审 F4：当日盈亏的**百分比**必须与它的**金额**同一个篮子。
+ *
+ * 旧实现 `prevMv = total_market_value - total_daily_pnl` 里，`total_market_value` 是**全部**
+ * 已定价持仓的市值，而 `total_daily_pnl` 只累加有昨收的那几条 ⇒ 分母混了两种篮子：
+ *   A：市值 16000 里只有 11000 参与当日盈亏（+1000 / +10%），B（5000）算不出当日盈亏。
+ *   旧：1000 / (16000-1000) = 6.67%（既不是 A 的 +10%，也不是组合涨跌）。
+ *   新：合并给出 `daily_pnl_basket_value`，按同一篮子算 → 10.00%。
+ * 拿不到篮子（老响应/后端没给）时百分比一律 `--`，绝不退回全价市值硬算。
+ */
+describe('PortfolioSummarySection 当日盈亏百分比与金额同篮子', () => {
+  afterEach(() => cleanup())
+  beforeEach(() => {
+    mocks.ctx = {}
+  })
+
+  const base = {
+    total_market_value: 16000,
+    total_pnl: 2000,
+    total_pnl_pct: 12.5,
+    total_daily_pnl: 1000,
+    available_funds: 0,
+    total_assets: 16000,
+    total_cost: 14000,
+    priced_cost: 14000,
+    unpriced_cost: 0,
+    total_assets_complete: true,
+    total_assets_basis: 'all_positions',
+    quotes_coverage: {
+      requested: true,
+      positions_total: 2,
+      positions_priced: 2,
+      positions_missing: 0,
+      cost_coverage_pct: 100,
+      pricing_basis: 'all_positions',
+      complete: true,
+    },
+    daily_pnl_coverage: {
+      requested: true,
+      positions_total: 2,
+      positions_observed: 1,
+      complete: false,
+    },
+  }
+
+  it('按观测篮子算百分比（10.00%），不是全价市值反推的 6.67%', () => {
+    mocks.ctx = ctxWith({ ...base, daily_pnl_basket_value: 11000 })
+    render(<PortfolioSummarySection />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('+1000')
+    expect(text).toContain('(+10.00%)')
+    expect(text).not.toContain('6.67')
+  })
+
+  it('篮子缺失 → 百分比未知（--），不退回全价市值硬算', () => {
+    mocks.ctx = ctxWith({ ...base, daily_pnl_basket_value: null })
+    render(<PortfolioSummarySection />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('+1000')
+    expect(text).not.toContain('6.67')
+    expect(text).toContain('(--)')
+  })
+
+  it('全覆盖时口径不变：篮子 = 全价市值（百分比与旧行为一致）', () => {
+    mocks.ctx = ctxWith({
+      ...base,
+      daily_pnl_basket_value: 16000,
+      daily_pnl_coverage: { requested: true, positions_total: 2, positions_observed: 2, complete: true },
+    })
+    render(<PortfolioSummarySection />)
+    // 1000 / (16000 - 1000) = 6.67%
+    expect(document.body.textContent ?? '').toContain('(+6.67%)')
+  })
+
+  it('部分覆盖时说明「涨跌幅按这几条的市值算」，不让读者以为那是全仓涨跌', () => {
+    mocks.ctx = ctxWith({ ...base, daily_pnl_basket_value: 11000 })
+    render(<PortfolioSummarySection />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('1/2')
+    expect(text).toMatch(/按这\s*1\s*条|按这几条/)
+  })
+})
