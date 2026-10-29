@@ -120,6 +120,31 @@ export interface KlinePriceLine {
   ratio?: number | null
 }
 
+/**
+ * 标准化**纯时间点标注** —— 图表无关(2026-10-29)。
+ *
+ * 与 `KlinePriceLine` 并列:价位线画成水平虚线,**时间点标注画成 K 线 marker**。
+ * 两条通道互不替代:没有价位的标注不该被丢掉,也不该被塞到某个"大概的价位"上。
+ *
+ * 诚实口径(全部由 {@link normalizeAnnotationMarkers} 守住):
+ *  - `date` 必须是**日粒度**(带时分的 `2026-10-28 10:00` 无法证明落在哪一根 K 线 → 丢弃);
+ *  - `annotationId`/`actionId` 必须来自服务端(正整数),没有 id 的标记无法溯源 → 丢弃;
+ *  - `label` 空 → 丢弃(图上只剩一个说不出是什么的方块);
+ *  - `tone` 只认 `up/down/neutral`(未知 → 中性,不猜涨跌方向)。
+ */
+export interface KlineAnnotationMarker {
+  /** 服务端 `kline_annotations.id` —— 图上每个记号都能对回一行 */
+  annotationId: number
+  /** 服务端确认动作 id(`copilot_actions.id`) */
+  actionId: number
+  /** 日粒度时间点 'YYYY-MM-DD' */
+  date: string
+  label: string
+  tone: EventTone
+  /** 服务端备注(有就随标记带出来,不影响定位) */
+  note?: string | null
+}
+
 // ---------------------------------------------------------------------------
 // 输入形状(后端 summary 的宽松子集, 只声明实际消费的字段)
 // ---------------------------------------------------------------------------
@@ -292,3 +317,84 @@ export function normalizePriceLines(raw: ReadonlyArray<RawPriceLine> | null | un
   }
   return out.sort((a, b) => a.price - b.price)
 }
+
+/** 标记文本上限: marker 上的字挤在 K 线之间, 太长就只剩一坨色块。 */
+export const MARKER_LABEL_MAX = 12
+
+/** 日粒度串 → 'YYYY-MM-DD'; 带时分 / 非法日期返回 null(不截断、不猜)。 */
+export function dayOnlyDate(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const s = raw.trim()
+  if (!s) return null
+  // `20261029` / `2026-10-29` 两种日粒度写法; **带 T/时分的一律拒**
+  // (时间点落在哪一根 K 线无法证明 —— 后端 ts-only 也只接受日粒度)。
+  const m = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(s)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  if (!Number.isInteger(y) || y < 1990 || y > 2100) return null
+  if (!Number.isInteger(mo) || mo < 1 || mo > 12) return null
+  if (!Number.isInteger(d) || d < 1 || d > 31) return null
+  // 日历真实性: 2026-02-30 这类串不能变成一根不存在的 K 线
+  const probe = new Date(Date.UTC(y, mo - 1, d))
+  if (
+    probe.getUTCFullYear() !== y ||
+    probe.getUTCMonth() !== mo - 1 ||
+    probe.getUTCDate() !== d
+  ) {
+    return null
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`
+}
+
+/**
+ * 纯时间点标注 → 图表 marker(图表无关)。
+ *
+ * 过滤规则(任一命中即丢弃, **不补正**):
+ *  - `annotationId` / `actionId` 不是正整数 → 无法溯源到服务端行;
+ *  - `date` 不是日粒度(带时分/非法日期) → 无法证明落在哪一根 K 线;
+ *  - `label` 空 → 图上说不出这是什么;
+ *  - 同一 `annotationId` 重复 → 只留第一条(同一次确认不该画两个记号)。
+ *
+ * 去重口径与价位线一致:同 (date, label, tone) 视为"同一件事的重复确认",
+ * 保留 **annotationId 较大** 的那一条(较新的确认),便于溯源而不是画两层。
+ * 返回按日期升序(图表 markers 的单调约束由 `filterMarkersInBarsRange` 再兜一次)。
+ */
+export function normalizeAnnotationMarkers(
+  raw: ReadonlyArray<KlineAnnotationMarker> | null | undefined,
+): KlineAnnotationMarker[] {
+  if (!Array.isArray(raw) || raw.length === 0) return EMPTY_ANNOTATION_MARKERS
+  const byId = new Map<number, KlineAnnotationMarker>()
+  for (const m of raw) {
+    if (!m || typeof m !== 'object') continue
+    const id = Number(m.annotationId)
+    if (!Number.isInteger(id) || id <= 0) continue
+    const actionId = Number(m.actionId)
+    if (!Number.isInteger(actionId) || actionId <= 0) continue
+    const date = dayOnlyDate(m.date)
+    if (!date) continue
+    const label = typeof m.label === 'string' ? m.label.trim() : ''
+    if (!label) continue
+    const tone: EventTone = m.tone === 'up' || m.tone === 'down' ? m.tone : 'neutral'
+    const marker: KlineAnnotationMarker = {
+      annotationId: id,
+      actionId,
+      date,
+      label: label.slice(0, MARKER_LABEL_MAX),
+      tone,
+      note: typeof m.note === 'string' && m.note.trim() ? m.note : null,
+    }
+    const prev = byId.get(id)
+    if (!prev) byId.set(id, marker)
+  }
+  // 同 (date|label|tone) 只留最新确认(id 大)的那一条
+  const bySlot = new Map<string, KlineAnnotationMarker>()
+  for (const marker of [...byId.values()].sort((a, b) => a.annotationId - b.annotationId)) {
+    bySlot.set(`${marker.date}|${marker.label}|${marker.tone}`, marker)
+  }
+  return [...bySlot.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.annotationId - b.annotationId))
+}
+
+/** 稳定空数组(父组件 memo / effect 依赖身份稳定)。 */
+const EMPTY_ANNOTATION_MARKERS: KlineAnnotationMarker[] = []

@@ -45,6 +45,8 @@ export function AnnotationLinkBar({
   const {
     phase,
     lines,
+    markers,
+    markerRender,
     annotationIds,
     actionIds,
     message,
@@ -56,13 +58,49 @@ export function AnnotationLinkBar({
   /** 正在等用户二次确认的那条标注（null = 没有展开确认） */
   const [confirmingId, setConfirmingId] = useState<number | null>(null)
 
+  /**
+   * 时间点标注的落图状态（2026-10-29）：`drawn` = 图表真的画在该日 K 线上；
+   * `skipped` = 该日没有 K 线（周末/节假日/超出区间），图表没画；`unknown` = 图表还没回报。
+   *
+   * 不按"服务端有行"就写"已上图" —— 这正是这一栏存在的意义。
+   */
+  const markerState = (annotationId: number): 'drawn' | 'skipped' | 'unknown' => {
+    if (!markerRender) return 'unknown'
+    if (markerRender.drawn.includes(annotationId)) return 'drawn'
+    if (markerRender.skipped.some((s) => s.annotationId === annotationId)) return 'skipped'
+    return 'unknown'
+  }
+
+  /** 两条通道统一成可渲染的行（价位线 / 时间点标注），确认块与撤销按钮共用一个 id。 */
+  const rows = [
+    ...lines.map((line) => ({
+      shape: 'line' as const,
+      annotationId: line.annotationId,
+      label: line.label,
+      kind: line.kind,
+      price: line.price,
+      date: '',
+      render: 'drawn' as const,
+    })),
+    ...markers.map((marker) => ({
+      shape: 'marker' as const,
+      annotationId: marker.annotationId,
+      label: marker.label,
+      kind: null,
+      price: null,
+      date: marker.date,
+      render: markerState(marker.annotationId),
+    })),
+  ]
+
   // 线消失（撤销成功 / 切标的）后确认块必须收起：否则会留下一个指向
   // 不存在标注的确认条，点下去只会得到"不在当前图上"。
   useEffect(() => {
-    if (confirmingId !== null && !lines.some((l) => l.annotationId === confirmingId)) {
+    if (confirmingId !== null && !rows.some((r) => r.annotationId === confirmingId)) {
       setConfirmingId(null)
     }
-  }, [confirmingId, lines])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmingId, lines, markers])
 
   // 空态不占位：没有已确认标注、也没出事、也没有可重试的原因时，不在 K 线上挂一条常驻说明。
   // 「一条不剩 + 读回失败/无法核对」会落成 idle + notice + retryable —— 那时必须给入口，
@@ -83,7 +121,7 @@ export function AnnotationLinkBar({
     ) : null
 
   const confirmingLine =
-    confirmingId === null ? null : lines.find((l) => l.annotationId === confirmingId) ?? null
+    confirmingId === null ? null : rows.find((l) => l.annotationId === confirmingId) ?? null
 
   return (
     <div
@@ -110,8 +148,13 @@ export function AnnotationLinkBar({
             <span className="flex items-center gap-1 font-medium text-foreground">
               <PenLine className="h-3 w-3" aria-hidden="true" />
               已确认标注
-              <span className="tabular-nums">{lines.length}</span> 条
+              <span className="tabular-nums">{rows.length}</span> 条
             </span>
+            {markers.length > 0 ? (
+              <span className="tabular-nums" data-testid="copilot-annotation-marker-count">
+                （含时间点标记 <span className="tabular-nums">{markers.length}</span> 个）
+              </span>
+            ) : null}
             <span className="tabular-nums" data-testid="copilot-annotation-ids">
               服务端标注 #{annotationIds.join('、')}
             </span>
@@ -122,19 +165,51 @@ export function AnnotationLinkBar({
             {retryButton}
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1">
-            {lines.map((line) => {
+            {rows.map((line) => {
               const inFlight = revoking.includes(line.annotationId)
+              // 时间点标注：说清"画上去了 / 该日没有 K 线没画 / 图表还没回报"——
+              // 三种状态不能混成一句"已确认"（用户会以为图上一定有记号）。
+              const timeNote =
+                line.shape !== 'marker'
+                  ? null
+                  : line.render === 'skipped'
+                    ? '该日没有 K 线，未上图'
+                    : line.render === 'unknown'
+                      ? '等待图表回报落图结果'
+                      : '已上图'
               return (
                 <span
                   key={line.annotationId}
                   className="flex items-baseline gap-1 font-mono tabular-nums"
                   data-testid="copilot-annotation-line"
+                  data-shape={line.shape}
+                  data-marker-state={line.shape === 'marker' ? line.render : undefined}
                 >
-                  <span className={line.kind === 'support' ? 'text-role-opp' : 'text-role-risk'}>
-                    {line.kind === 'support' ? '支撑' : '阻力'}
-                  </span>{' '}
-                  <span className="text-foreground">{safeFixed(line.price, 2)}</span>
+                  {line.shape === 'marker' ? (
+                    <>
+                      <span className="text-role-watch">时间点</span>{' '}
+                      <span className="text-foreground">{line.date}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className={line.kind === 'support' ? 'text-role-opp' : 'text-role-risk'}>
+                        {line.kind === 'support' ? '支撑' : '阻力'}
+                      </span>{' '}
+                      <span className="text-foreground">{safeFixed(line.price ?? 0, 2)}</span>
+                    </>
+                  )}
                   <span className="ml-1 font-sans text-muted-foreground">{line.label}</span>
+                  {timeNote ? (
+                    <span
+                      className={
+                        line.render === 'skipped'
+                          ? 'ml-1 font-sans text-role-risk'
+                          : 'ml-1 font-sans text-muted-foreground'
+                      }
+                    >
+                      {timeNote}
+                    </span>
+                  ) : null}
                   {onRevoke ? (
                     inFlight ? (
                       <span
@@ -170,13 +245,22 @@ export function AnnotationLinkBar({
             >
               <span className="text-foreground">
                 撤销标注 #{confirmingLine.annotationId}（
-                {confirmingLine.kind === 'support' ? '支撑' : '阻力'}{' '}
-                {safeFixed(confirmingLine.price, 2)} {confirmingLine.label}）？
+                {confirmingLine.shape === 'marker' ? (
+                  <>
+                    时间点 {confirmingLine.date} {confirmingLine.label}
+                  </>
+                ) : (
+                  <>
+                    {confirmingLine.kind === 'support' ? '支撑' : '阻力'}{' '}
+                    {safeFixed(confirmingLine.price ?? 0, 2)} {confirmingLine.label}
+                  </>
+                )}
+                ）？
               </span>
               {/* 事实：DELETE 成功**且**服务端读回不再返回这条之后，图上才移除；
-                  请求在途时线一直在（服务端还没删）。别承诺"立即移除"。 */}
+                  请求在途时标注一直在（服务端还没删）。别承诺"立即移除"。 */}
               <span className="text-role-risk">
-                撤销不可恢复：确认后等服务端删除成功并读回，图上才移除这条线。
+                撤销不可恢复：确认后等服务端删除成功并读回，图上才移除这条标注。
               </span>
               <button
                 type="button"

@@ -567,6 +567,11 @@ export default function StockWorkbench() {
                   costLines={costLines}
                   /* 参谋罗盘与关键点位画线叠加 */
                   supportPressure={copilotPriceLines}
+                  /* 纯时间点标注（2026-10-29）: 只有日期没有价位的已确认标注 → 该日 K 线 marker。
+                     能不能画上去取决于"该日有没有 K 线"，所以把图表的真实结果回报进账本
+                     （onAnnotationMarkersDrawn），状态带据此说"已上图"还是"该日无 K 线未上图"。 */
+                  annotationMarkers={annotationLink.annotationMarkers}
+                  onAnnotationMarkersDrawn={annotationLink.reportMarkerRender}
                   /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
                   onIntervalChange={handleIntervalChange}
                   /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */

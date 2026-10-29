@@ -55,12 +55,28 @@ import {
   KIND_ICON,
   KIND_LABEL,
   mergePriceLines,
+  normalizeAnnotationMarkers,
   normalizeKlineEvents,
   normalizePriceLines,
+  type KlineAnnotationMarker,
   type KlineEventKind,
   type KlineEventPoint,
   type KlinePriceLine,
 } from '../klineEvents'
+
+/**
+ * 时间点标注的**真实落图结果**（2026-10-29）。
+ *
+ * 为什么要回报而不是由父组件假定：`markers` 只有落在**真有 K 线**的日期上才画得出来
+ * （周末/节假日/超出当前区间的日期画不了）。父组件若按"服务端有行 = 已上图"播报，
+ * 就是假称已上图。这里如实分成两份：`drawn`（真画上了）/ `skipped`（该日没有 K 线）。
+ */
+export interface AnnotationMarkerDrawStatus {
+  /** 真的画到 K 线上的服务端标注 id（升序） */
+  drawn: number[]
+  /** 该日期在这张图上没有 K 线（或超出范围）⇒ 没画，不贴邻柱 */
+  skipped: Array<{ annotationId: number; date: string }>
+}
 // v2.1 §10.2④: 区间统计纯函数(可视区间 → 首末价/涨跌幅/振幅/累计明暗盘/事件数)
 import { computeRangeStats, type KlineRangeStats, type RangeBar } from '../lib/range-stats'
 // K线形态标注(2026-10-10 图层): 纯逻辑(白名单清洗 + 记号映射), 数据来自 /klines/{symbol}/patterns
@@ -405,6 +421,20 @@ export default function KlineChart(props: {
   onIntervalChange?: (i: KlineInterval) => void
   /** 支撑/压力位 (阶段二: 解套盘位等价位线) */
   supportPressure?: KlinePriceLine[]
+  /**
+   * **纯时间点标注**（2026-10-29）：只有日期、没有价位的服务端已确认标注 → 画成该日 K 线上的
+   * marker（不画水平线 —— 没有价位就不该编一个价位）。
+   *
+   * 定位铁律（与 `tradeMarkers` 同一口径）：**该日期必须真有 K 线**才画；周末/节假日/超出区间的
+   * 日期一律不画，也不贴到相邻柱子上。真正画了什么由 `onAnnotationMarkersDrawn` 回报，
+   * 让状态条说真话（不谎称"已上图"）。
+   *
+   * 数据必须来自服务端核对过的行（`lib/copilot/serverAnnotations`）；图表只做最后一道
+   * 清洗 `normalizeAnnotationMarkers`（日粒度 / id 溯源 / 空标签），不猜、不补。
+   */
+  annotationMarkers?: KlineAnnotationMarker[]
+  /** 时间点标注的真实落图结果：画上了哪些、哪些因为该日没有 K 线没画。 */
+  onAnnotationMarkersDrawn?: (status: AnnotationMarkerDrawStatus) => void
   /** 持仓成本线 (Phase 0: portfolio 持仓成本画进 K 线, 替代 ContextCard 占位; 无持仓不传) */
   costLines?: Array<{ price: number; title: string }>
   /** 资金柱 (阶段三: 红涨绿跌 + 主净分色) */
@@ -424,7 +454,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean; /** 纯时间点标注(2026-10-29) —— 默认开; 独立于 L4 事件层(两者数据源/口径不同) */ annotation?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -476,6 +506,11 @@ export default function KlineChart(props: {
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markerPluginRef = useRef<ReturnType<typeof createSeriesMarkers<Time>> | null>(null)
+  /**
+   * 上次上报给父组件的「时间点标注落图结果」签名（2026-10-29）。
+   * 只用于**去重**：相同结果不重复回调，避免父组件 setState → effect 再跑 → 再回调的循环。
+   */
+  const annotationStatusRef = useRef<string>('')
   const priceLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   // 持仓成本线 (Phase 0: 与支撑压力线独立管理, 同一切换开关重建逻辑)
   const costLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
@@ -1534,6 +1569,45 @@ export default function KlineChart(props: {
         ) as never[]),
       )
     }
+    // 纯时间点标注（2026-10-29）: 服务端已确认的 ts-only 标注 → 落在**该日 K 线**上的 marker。
+    // 定位铁律与 tradeMarkers 一致: 该日期必须真有 K 线才画(周末/节假日/超出区间不贴邻柱,
+    // 也不画到别的日期上)。画没画上通过 onAnnotationMarkersDrawn 如实回报 —— 父组件
+    // (状态条)据此区分"已上图"与"该日无 K 线未上图", 不假称已上图。
+    const annotationDrawn: number[] = []
+    const annotationSkipped: Array<{ annotationId: number; date: string }> = []
+    if (props.layersVisible?.annotation !== false) {
+      const annMarkers = normalizeAnnotationMarkers(props.annotationMarkers)
+      if (annMarkers.length > 0) {
+        const barKeys = new Set<number>()
+        for (const b of rawKlinesRef.current) {
+          const k = dayKey(b.time)
+          if (k !== null) barKeys.add(k)
+        }
+        const neutral = readChartTheme().neutral
+        for (const m of annMarkers) {
+          const time = toChartTime(m.date, interval)
+          const k = dayKey(time)
+          if (k === null || !barKeys.has(k)) {
+            annotationSkipped.push({ annotationId: m.annotationId, date: m.date })
+            continue
+          }
+          annotationDrawn.push(m.annotationId)
+          // `annotationId`/`actionId` 一并挂上: LWC 只读它认识的字段, 多出来的键不会进画布,
+          // 但让 DOM/测试与巡检能**按 id 精确对账"图上这个记号是哪一条标注"**(可溯源)。
+          markers.push({
+            time,
+            position: 'aboveBar' as const,
+            color: m.tone === 'down' ? sc.down : m.tone === 'up' ? sc.up : neutral,
+            shape: 'square' as const,
+            size: 1,
+            text: `#${m.annotationId} ${m.label}`,
+            annotationId: m.annotationId,
+            actionId: m.actionId,
+          } as unknown as SeriesMarker<Time>)
+        }
+      }
+    }
+
     // LWC v5: 时间落在首/末根 K 线之外的 marker 会让 setMarkers 抛 "Value is null"
     // → 整页进错误边界(周末/节假日"当天有公告、当天没 K 线"必踩)。裁掉, 不假装定位。
     const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
@@ -1549,6 +1623,20 @@ export default function KlineChart(props: {
         markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
       } catch (err) {
         console.error('[KlineChart] recreate marker failed:', err)
+      }
+    }
+
+    // 落图结果只在**K 线已到位**时上报(空数据时全部"跳过"是假象, 不是事实);
+    // 且只在结果变化时上报一次, 免得父组件 setState ↔ effect 互相打转。
+    if (rawKlinesRef.current.length > 0) {
+      const status: AnnotationMarkerDrawStatus = {
+        drawn: annotationDrawn.sort((a, b) => a - b),
+        skipped: annotationSkipped.sort((a, b) => a.annotationId - b.annotationId),
+      }
+      const sig = JSON.stringify(status)
+      if (sig !== annotationStatusRef.current) {
+        annotationStatusRef.current = sig
+        props.onAnnotationMarkersDrawn?.(status)
       }
     }
 
@@ -1744,7 +1832,7 @@ export default function KlineChart(props: {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, effScenarioLines, showScenarioLayer, interval, props.sourceReady, props.tradeMarkers, intent, props.symbol, props.market])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, effScenarioLines, showScenarioLayer, interval, props.sourceReady, props.tradeMarkers, props.annotationMarkers, dataLen, intent, props.symbol, props.market])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。

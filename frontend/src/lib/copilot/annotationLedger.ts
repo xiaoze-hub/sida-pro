@@ -30,6 +30,7 @@ import {
   targetKey,
   type AnnotationTarget,
   type ServerAnnotationLine,
+  type ServerAnnotationMarker,
 } from './serverAnnotations'
 
 /** 账本状态：idle=没有可画的（干净空态）/ loading / ready / refused / error。 */
@@ -41,6 +42,20 @@ export interface AnnotationSnapshot {
   phase: AnnotationPhase
   /** 可画线（只含当前 key 的目标） */
   lines: ServerAnnotationLine[]
+  /**
+   * 可画的**纯时间点标注**（2026-10-29）：画成该日 K 线的 marker，与 `lines` 并列。
+   *
+   * 两条通道同一把尺子（属主/确认动作/标的/市场/周期），只是落图方式不同：
+   * 有价位的画水平虚线，没有价位但有日粒度日期的画 marker。
+   */
+  markers: ServerAnnotationMarker[]
+  /**
+   * 图表**实际**画上了哪些时间点标注（由 `KlineChart.onAnnotationMarkersDrawn` 回报）。
+   *
+   * `null` = 还没有图表回报（未上图/未加载完）。界面据此区分"已上图"与
+   * "该日没有 K 线、没上图" —— 不允许按"服务端有行"就自称已上图。
+   */
+  markerRender: { drawn: number[]; skipped: Array<{ annotationId: number; date: string }> } | null
   annotationIds: number[]
   actionIds: number[]
   /** 状态说明（refused/error 时是"为什么没上图"） */
@@ -63,6 +78,8 @@ const EMPTY: AnnotationSnapshot = {
   key: '',
   phase: 'idle',
   lines: [],
+  markers: [],
+  markerRender: null,
   annotationIds: [],
   actionIds: [],
   message: '',
@@ -115,13 +132,22 @@ export function hasIdentity(): boolean {
   return currentAccountId() !== null
 }
 
-function readySnapshot(key: string, lines: ServerAnnotationLine[], message: string): AnnotationSnapshot {
+function readySnapshot(
+  key: string,
+  lines: ServerAnnotationLine[],
+  markers: ServerAnnotationMarker[],
+  message: string,
+): AnnotationSnapshot {
+  const ids = [...lines.map((l) => l.annotationId), ...markers.map((m) => m.annotationId)]
+  const actions = [...lines.map((l) => l.actionId), ...markers.map((m) => m.actionId)]
   return {
     key,
-    phase: lines.length > 0 ? 'ready' : 'idle',
+    phase: ids.length > 0 ? 'ready' : 'idle',
     lines,
-    annotationIds: Array.from(new Set(lines.map((l) => l.annotationId))).sort((a, b) => a - b),
-    actionIds: Array.from(new Set(lines.map((l) => l.actionId))).sort((a, b) => a - b),
+    markers,
+    markerRender: null,
+    annotationIds: Array.from(new Set(ids)).sort((a, b) => a - b),
+    actionIds: Array.from(new Set(actions)).sort((a, b) => a - b),
     message,
     notice: '',
     noticeLevel: 'info',
@@ -142,6 +168,23 @@ export function mergeLines(
     if (!prev || line.annotationId > prev.annotationId) byLevel.set(key, line)
   }
   return [...byLevel.values()].sort((x, y) => x.price - y.price)
+}
+
+/**
+ * 时间点标注去重（与 `linesForTarget` / `marksForTarget` 同口径）：
+ * 同 (date, label, tone) 只留一条（id 大的 = 较新的确认）。
+ */
+export function mergeMarkers(
+  a: readonly ServerAnnotationMarker[],
+  b: readonly ServerAnnotationMarker[],
+): ServerAnnotationMarker[] {
+  const bySlot = new Map<string, ServerAnnotationMarker>()
+  for (const m of [...a, ...b]) {
+    const key = `${m.date}|${m.label}|${m.tone}`
+    const prev = bySlot.get(key)
+    if (!prev || m.annotationId > prev.annotationId) bySlot.set(key, m)
+  }
+  return [...bySlot.values()].sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.annotationId - y.annotationId))
 }
 
 /**
@@ -171,6 +214,12 @@ class AnnotationLedgerImpl {
    */
   private lastLines = new Map<string, ServerAnnotationLine[]>()
   /**
+   * key → **上一次已知的时间点标注**（2026-10-29）。与 {@link lastLines} 同理：
+   * `beginRequest` 会把 `markers` 清空（loading 相位），撤销/确认若落在那个窗口里，
+   * 拿空数组当基线会把其余 marker 整批抹掉。
+   */
+  private lastMarkers = new Map<string, ServerAnnotationMarker[]>()
+  /**
    * key → 待应用增量（2026-10-29 复审补丁）。
    *
    * 撤销读回落在 loading 窗口时，**不能**递增序号把在途的那次重读丢掉（那是用户点的
@@ -178,7 +227,10 @@ class AnnotationLedgerImpl {
    * 折中：此刻先把结果写上界面，同时把"要减掉的 id / 要加进来的线"记在这里，
    * 让那次重读落地时（{@link commit}）套上增量 —— 快照是新的，撤销结论也还成立。
    */
-  private pending = new Map<string, { drop: number[]; add: ServerAnnotationLine[] }>()
+  private pending = new Map<
+    string,
+    { drop: number[]; add: ServerAnnotationLine[]; dropMarkers: number[]; addMarkers: ServerAnnotationMarker[] }
+  >()
   /** 页面当前视图目标（确认接线据此判断"是不是同一张图"） */
   private current: AnnotationTarget | null = null
   private listeners = new Set<() => void>()
@@ -209,6 +261,14 @@ class AnnotationLedgerImpl {
     return base.lines
   }
 
+  /** "此刻这个目标上有哪些时间点标注"（与 {@link baselineLines} 同一套 loading 回落口径）。 */
+  baselineMarkers(target: AnnotationTarget): ServerAnnotationMarker[] {
+    const key = targetKey(target)
+    const base = this.snapshots.get(key) ?? emptyForKey(key)
+    if (base.phase === 'loading') return this.lastMarkers.get(key) ?? base.markers
+    return base.markers
+  }
+
   /**
    * 开一次请求：记录"当前目标"、递增该 key 的序号、**同步**把快照置成 loading（清空旧线）。
    * 返回的序号必须原样交给 {@link commit}。
@@ -227,6 +287,10 @@ class AnnotationLedgerImpl {
       key,
       phase: 'loading',
       lines: [],
+      markers: [],
+      // 重读期间图上并不会"没画"（图表不读 loading 相位），所以落图记录跟着上一次已知值，
+      // 不能清成 null —— 那会让状态条把"已上图"说回"未知"。
+      markerRender: base.markerRender,
       annotationIds: [],
       actionIds: [],
       message: '正在核对服务端标注…',
@@ -257,6 +321,7 @@ class AnnotationLedgerImpl {
     const next = this.applyPending(key, { ...snapshot, key, revoking: base.revoking })
     this.write(key, next)
     this.lastLines.set(key, next.lines)
+    this.lastMarkers.set(key, next.markers)
     return true
   }
 
@@ -278,13 +343,29 @@ class AnnotationLedgerImpl {
       else lines.push(line)
     }
     lines.sort((x, y) => x.price - y.price)
+    const dropMarkers = new Set(delta.dropMarkers)
+    const markers = snapshot.markers.filter((m) => !dropMarkers.has(m.annotationId))
+    for (const marker of delta.addMarkers) {
+      if (markers.some((m) => m.annotationId === marker.annotationId)) continue
+      const slot = (m: ServerAnnotationMarker) => `${m.date}|${m.label}|${m.tone}`
+      const at = markers.findIndex((m) => slot(m) === slot(marker))
+      if (at >= 0) markers[at] = marker
+      else markers.push(marker)
+    }
+    markers.sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.annotationId - y.annotationId))
+    const total = lines.length + markers.length
     return {
       ...snapshot,
-      phase: lines.length > 0 ? 'ready' : 'idle',
+      phase: total > 0 ? 'ready' : 'idle',
       lines,
-      annotationIds: Array.from(new Set(lines.map((l) => l.annotationId))).sort((a, b) => a - b),
-      actionIds: Array.from(new Set(lines.map((l) => l.actionId))).sort((a, b) => a - b),
-      message: lines.length > 0 ? snapshot.message : '',
+      markers,
+      annotationIds: Array.from(
+        new Set([...lines.map((l) => l.annotationId), ...markers.map((m) => m.annotationId)]),
+      ).sort((a, b) => a - b),
+      actionIds: Array.from(
+        new Set([...lines.map((l) => l.actionId), ...markers.map((m) => m.actionId)]),
+      ).sort((a, b) => a - b),
+      message: total > 0 ? snapshot.message : '',
       // 那次读回本来会"清空一次性提示"，但它是在撤销/确认落地**之前**发起的；
       // 撤销结论不能因为一次并发的后台重读就从界面上消失。
       notice: snapshot.notice || this.snapshots.get(key)?.notice || '',
@@ -372,10 +453,19 @@ class AnnotationLedgerImpl {
     target: AnnotationTarget,
     lines: ServerAnnotationLine[],
     message: string,
-    opts: { retryable?: boolean; level?: AnnotationSnapshot['noticeLevel'] } = {},
+    opts: {
+      retryable?: boolean
+      level?: AnnotationSnapshot['noticeLevel']
+      /**
+       * 同一次落地的**时间点标注**（2026-10-29）。不传 = 沿用此刻账本里的 marker
+       * （只改价位线的场景），传空数组 = 明确"这一批时间点标注也没了"（撤销/重读）。
+       */
+      markers?: ServerAnnotationMarker[]
+    } = {},
   ) {
     const key = targetKey(target)
     const base = this.snapshots.get(key) ?? emptyForKey(key)
+    const markers = opts.markers ?? this.baselineMarkers(target)
     if (base.phase === 'loading') {
       /*
        * 此刻有一次读取在途（`beginRequest` 已经把 lines 清空，写着"正在核对…"）。
@@ -387,9 +477,14 @@ class AnnotationLedgerImpl {
        * （见 {@link commit} / {@link applyPending}）。读回是新的，撤销结论也还成立。
        */
       const visible = this.lastLines.get(key) ?? []
-      const nextIds = new Set(lines.map((l) => l.annotationId))
+      const visibleMarkers = this.lastMarkers.get(key) ?? []
+      const nextIds = new Set([
+        ...lines.map((l) => l.annotationId),
+        ...markers.map((m) => m.annotationId),
+      ])
       const prevIds = new Set(visible.map((l) => l.annotationId))
-      const prev = this.pending.get(key) ?? { drop: [], add: [] }
+      const prevMarkerIds = new Set(visibleMarkers.map((m) => m.annotationId))
+      const prev = this.pending.get(key) ?? { drop: [], add: [], dropMarkers: [], addMarkers: [] }
       // 待减掉的 id = 上次已知但这次没了的 + 之前已经记下要减、这次也没加回来的
       const drop = new Set<number>()
       for (const id of prevIds) if (!nextIds.has(id)) drop.add(id)
@@ -399,7 +494,16 @@ class AnnotationLedgerImpl {
         ...prev.add.filter((l) => lines.some((n) => n.annotationId === l.annotationId)),
         ...lines.filter((l) => !prevIds.has(l.annotationId)),
       ]
-      this.pending.set(key, { drop: [...drop], add })
+      const dropMarkers = new Set<number>()
+      for (const id of prevMarkerIds) if (!nextIds.has(id)) dropMarkers.add(id)
+      for (const id of prev.dropMarkers) if (!nextIds.has(id)) dropMarkers.add(id)
+      const addMarkers = [
+        ...(prev.addMarkers ?? []).filter((m) =>
+          markers.some((n) => n.annotationId === m.annotationId),
+        ),
+        ...markers.filter((m) => !prevMarkerIds.has(m.annotationId)),
+      ]
+      this.pending.set(key, { drop: [...drop], add, dropMarkers: [...dropMarkers], addMarkers })
     } else {
       // 已确认/已撤销的行一定比「此前发出的任何一次读取」都新：把序号推进一格，
       // 让那些还在路上的旧读取回来时被 {@link commit} 丢弃 —— 否则一个早于 apply
@@ -409,13 +513,33 @@ class AnnotationLedgerImpl {
     // `revoking` 同样不能清空：撤销 A 落地时，撤销 B 可能还在路上（见 beginRequest 的注释）。
     // 清掉只会让 B 的按钮提前解禁；B 自己的 finally 会把它摘掉。
     this.lastLines.set(key, lines)
+    this.lastMarkers.set(key, markers)
     this.write(key, {
-      ...readySnapshot(key, lines, message),
+      ...readySnapshot(key, lines, markers, message),
+      // 落图结果由图表回报（`setMarkerRender`）；这里只继承上一次已知值，
+      // 不能因为一次重读就把"已经画在图上"变成 `null`（图上并没有变）。
+      markerRender: base.markerRender,
       notice: message,
       noticeLevel: opts.level ?? 'info',
       retryable: opts.retryable ?? false,
       revoking: base.revoking,
     })
+  }
+
+  /**
+   * 图表回报的**真实落图结果**（2026-10-29）：只动 `markerRender`，不碰线/marker/序号 ——
+   * 它描述的是"图上此刻有什么"，不是服务端事实。
+   */
+  setMarkerRender(
+    target: AnnotationTarget,
+    render: AnnotationSnapshot['markerRender'],
+  ) {
+    const key = targetKey(target)
+    const base = this.snapshots.get(key) ?? emptyForKey(key)
+    const prevSig = JSON.stringify(base.markerRender)
+    const nextSig = JSON.stringify(render)
+    if (prevSig === nextSig) return
+    this.write(key, { ...base, markerRender: render })
   }
 
   /** 清空全部（登出/测试隔离）。 */
@@ -425,6 +549,7 @@ class AnnotationLedgerImpl {
     this.seq.clear()
     this.revokeInflight.clear()
     this.lastLines.clear()
+    this.lastMarkers.clear()
     this.pending.clear()
     this.current = null
     this.emit()

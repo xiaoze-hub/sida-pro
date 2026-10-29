@@ -32,6 +32,7 @@ import {
   provableMarkets,
   targetRefusal,
   verifyAppliedRow,
+  verifyRowMarker,
   type AnnotationTarget,
 } from '@/lib/copilot/serverAnnotations'
 
@@ -213,8 +214,17 @@ describe('2. 逐行核对（身份 → 目标 → 内容）', () => {
     }
   })
 
-  it('时间点标注（没有价位）不上图；方向不可判也不画', () => {
-    expect(verdictFor({ price: null, ts: '2026-10-28 10:00' }).rejected[0]).toContain('没有价位')
+  it('纯时间点标注不进价位线图层；带时分的时间点不画（无法定位到某一根 K 线）', () => {
+    // 2026-10-29: 没有价位的行不再被当成"图上没有图层的废行" —— 它走 marker 通道
+    // （`verifyRowMarker`），价位线图层如实说明"不在这一层"，不编价位、也不静默丢弃。
+    expect(verdictFor({ price: null, ts: '2026-10-28 10:00' }).rejected[0]).toContain('marker')
+    // 带时分的时间点即使走 marker 通道也被拒：日粒度才能确定落在哪根 K 线
+    const timed = verifyRowMarker(parseRows([row({ price: null, ts: '2026-10-28 10:00' })]).rows[0], TARGET)
+    expect(timed.ok).toBe(false)
+    // 日粒度 → 走 marker 通道（可画），且仍然不进入价位线图层
+    const dayOnly = verifyRowMarker(parseRows([row({ price: null, ts: '2026-10-28' })]).rows[0], TARGET)
+    expect(dayOnly.ok).toBe(true)
+    expect(verdictFor({ price: null, ts: '2026-10-28' }).lines).toHaveLength(0)
     const ambiguous = linesForTarget(
       parseRows([row({ label: '关注', color: 'other', note: null })]).rows,
       TARGET,
