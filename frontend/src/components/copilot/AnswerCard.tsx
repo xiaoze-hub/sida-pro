@@ -456,15 +456,18 @@ export function AnswerCard({
                     {source ? (
                       /*
                        * 角标里的内容是**模型在正文里自己写的口径**（从括号尾巴拆出来的字），
-                       * 不是服务端核验过的来源。2026-10-29 起 title 明说「模型自述、未核验」，
-                       * 否则用户会把它当成已核对过的数据出处。
+                       * 不是服务端核验过的来源。
+                       * 2026-10-29：上一版只把「未核验」写进 title —— 移动端/触屏根本看不到
+                       * title，角标读起来仍像「这是数据出处」。现在把它**写在角标正文里**：
+                       * `腾讯行情 · 模型自述·未核验`。宁可长一点，也不让一句模型自述冒充来源。
                        */
                       <span
                         data-testid="copilot-evidence-source"
                         title={`模型自述的口径（未核验）：${source}`}
                         className="ml-1 whitespace-nowrap rounded border border-border px-1 text-[12px] text-muted-foreground"
                       >
-                        {source}
+                        <span className="text-foreground">{source}</span>
+                        <span className="ml-1">· 模型自述·未核验</span>
                       </span>
                     ) : null}
                   </span>

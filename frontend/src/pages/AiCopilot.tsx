@@ -8,6 +8,8 @@ import {
   getCopilotMetrics,
   getPendingActions,
   rejectPendingAction,
+  type CopilotRunDetail,
+  type CopilotRunRow,
   type CopilotMetrics,
   type PendingAction,
 } from '@/lib/copilot/api'
@@ -16,8 +18,8 @@ import { chatApi, type ChatStreamResult } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import InlineSteps from '@/components/copilot/InlineSteps'
-import { matchRunForMessage } from '@/lib/copilot/match-run'
 import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
+import { buildAnswerTrace, type AnswerTrace } from '@/lib/copilot/evidence-provenance'
 import {
   emptyReadiness,
   foldStageEvent,
@@ -100,7 +102,7 @@ interface PendingAttachment {
 
 /** 指令池接口失败时的本地兜底（只影响"有没有快捷按钮"，不影响能不能提问）。 */
 
-type Msg = {
+export type Msg = {
   role: 'user' | 'assistant'
   content: string
   /** 用户消息附带的文件名（气泡里显示小 chip，正文不重复文件名太长）。 */
@@ -139,6 +141,109 @@ export function settleStreamBubble(msgs: Msg[], content: string, incomplete = fa
     return [...msgs.slice(0, -1), { ...last, content: text, incomplete: flag }]
   }
   return [...msgs, { role: 'assistant', content: text, incomplete: flag }]
+}
+
+/** 提问归一化：与 `lib/copilot/match-run.ts` 同口径（空白折叠、去掉发送时带的 @ 前缀）。 */
+function normalizeQuestion(text: string): string {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^(@\S+\s+)+/, '')
+    .trim()
+}
+
+/** 这条回答对应的问题是它前面最近的一条用户消息（页面内存的就是这一轮原文）。 */
+function questionOfMessage(msgs: Msg[], index: number): string {
+  if (msgs[index]?.role !== 'assistant') return ''
+  for (let k = index - 1; k >= 0; k -= 1) {
+    if (msgs[k].role === 'user') return normalizeQuestion(msgs[k].content)
+  }
+  return ''
+}
+
+/**
+ * 同一个问题是否同一句：先比归一化全文，再退 24 字头（防一端被截断/多了标点）。
+ * 与 `match-run.ts` 同一口径 —— 这里只是把它变成「按第几次出现」的可定位版本。
+ */
+function sameQuestion(a: string, b: string): boolean {
+  if (!a || !b) return false
+  if (a === b) return true
+  const head = a.slice(0, 24)
+  if (head.length < 8) return false
+  return b.startsWith(head) || a.startsWith(b.slice(0, 24))
+}
+
+/**
+ * 把一条回答对到它的那一轮 run（2026-10-29 P1 接线）。
+ *
+ * 与 `lib/copilot/match-run.ts` 的区别，也是页面能用的前提：
+ *  - **同一会话里同一问题被问过多次**时，`runs.find` 永远命中最新那一轮（后端按 id desc 返回），
+ *    旧回答会被挂上新 run —— 这是错轮。这里按「同问的第几次出现」对齐：最新一条回答对
+ *    runs[0]，往前依次 runs[1]、runs[2]…；候选不够就返回 null，绝不复用别人的 run。
+ *  - **切会话**时 `useCopilotRuns` 在新请求回来前还留着旧会话的列表，而提问文本又可能相同。
+ *    因此候选 run 的 `conversation_id` 必须**明确等于**当前会话；为 null 或他会话一律不挂。
+ *
+ * 关联方式仍然只是「提问文本匹配」：消息表没有 run_id（`chat_messages` 只有
+ * id/conversation_id/role/content/created_at），所以调用方只能拿它作推断，
+ * UI 必须标未验证。回答正文里出现 run_id 字符串不算凭证 —— 那是模型写的字。
+ */
+export function resolveRunForMessage(
+  msgs: Msg[],
+  runs: CopilotRunRow[],
+  index: number,
+  conversationId: number | null,
+): CopilotRunRow | null {
+  // 没有会话就没有可归属的 run（新会话未落库时也不挂）
+  if (conversationId == null) return null
+  if (!Array.isArray(runs) || runs.length === 0) return null
+  const question = questionOfMessage(msgs, index)
+  if (!question) return null
+
+  const candidates = runs.filter(
+    (r) => r.conversation_id === conversationId && sameQuestion(question, normalizeQuestion(r.question || '')),
+  )
+  if (!candidates.length) return null
+
+  // 本条之后还有多少次同问：0 = 最新一条回答 → 对 runs[0]（后端按 id desc）
+  let rank = 0
+  for (let k = index + 1; k < msgs.length; k += 1) {
+    if (msgs[k]?.role !== 'assistant') continue
+    if (sameQuestion(questionOfMessage(msgs, k), question)) rank += 1
+  }
+  // 候选不够（某一轮没落库/被清理）→ null，绝不复用别人的 run
+  return candidates[rank] ?? null
+}
+
+/**
+ * 一条回答的溯源（页面唯一入口）。
+ *
+ * 纪律：
+ *  - 草稿（`live`）不挂：终稿没到，回答与证据都还没定稿；
+ *  - 关联只可能是 `question-text` / `none`，**永不**传 `run-id`（页面拿不到服务端关联）；
+ *  - steps 只取「候选 run 自己的」详情（`details[run_id]`），没加载就是 null，
+ *    不拿 `run.tool_calls` 冒充；
+ *  - readiness 只收**这条消息定稿时固化的**齐套度：页面上正在跑的 stage 流属于当前草稿，
+ *    挂到历史回答上就是把这一轮的取数结果说成上一轮的。
+ */
+export function buildMessageAnswerTrace(input: {
+  msgs: Msg[]
+  runs: CopilotRunRow[]
+  details: Record<string, CopilotRunDetail>
+  index: number
+  conversationId: number | null
+  live: boolean
+  /** 消息自己的固化齐套度；传当前实时态就是错 */
+  readiness?: ReadinessState | null
+}): AnswerTrace | null {
+  if (input.live) return null
+  const run = resolveRunForMessage(input.msgs, input.runs, input.index, input.conversationId)
+  const steps = run ? input.details[run.run_id]?.steps ?? null : null
+  return buildAnswerTrace({
+    run,
+    steps,
+    // 唯一来源是提问文本匹配；没有 run 时 buildAnswerTrace 会归 none
+    association: 'question-text',
+    readiness: input.readiness ?? null,
+  })
 }
 
 /** 6 位 A 股代码（含北交所 4/8 开头）才允许查参谋卡，避免把日期/金额当代码。 */
@@ -824,7 +929,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   /** 空态"最近一次"回链用：最近一次运行（真实数据；没有就是 null，整块不渲染，不留死入口） */
   const lastRun = runsState.runs.length > 0 ? runsState.runs[0] : null
 
-  const runForMessage = (i: number) => matchRunForMessage(msgs, runsState.runs, i)
+  /**
+   * 回答 ↔ run：**只按提问文本匹配**，永不自称 run_id 关联（服务端没给这个关联）。
+   * 同问多轮按出现次序对齐、切会话时拒收他会话的 run，见 `resolveRunForMessage`。
+   */
+  const runForMessage = (i: number) => resolveRunForMessage(msgs, runsState.runs, i, convId)
 
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
   const awaitingAssistant = streaming && !streamingAssistant
@@ -1173,9 +1282,31 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                     const displayContent = publicAssistantContent(m.content)
                     const parsed = parseAnswer(displayContent)
                     const symbolInMsg = extractSymbolChips(m.content)[0] || anchorSymbol
+                    /** 最后一条助手气泡还在写（草稿）：它的身份与证据都还没定稿。 */
+                    const liveDraft = streamingAssistant && i === msgs.length - 1
                     // 定稿消息带自己的痕；流式中的最后一条用实时态（定稿瞬间原地换成固化值）
-                    const strip =
-                      m.readiness ?? (streamingAssistant && i === msgs.length - 1 ? readiness : null)
+                    const strip = m.readiness ?? (liveDraft ? readiness : null)
+                    /**
+                     * 溯源条（2026-10-29 P1 接线）：只有 structured 回答才有「依据」可言。
+                     *  - 草稿不挂（`live`）：终稿没到，回答与证据都没定稿；
+                     *  - readiness 只给这条消息**自己的**固化值，绝不把当前流的实时态
+                     *    挂到历史消息上（那就是拿这一轮的取数去证明上一轮的结论）；
+                     *  - 未拿到终稿（incomplete）也不挂缺口数字：这一轮没有「完成记录」。
+                     *  - run 列表还在拉（且手上一条都没）时先不挂：此刻说「未关联」只是
+                     *    「还没查到」，等结果回来再按真实情况写。
+                     */
+                    const runsUnknown = runsState.loading && runsState.runs.length === 0
+                    const trace = parsed.structured && !runsUnknown
+                      ? buildMessageAnswerTrace({
+                          msgs,
+                          runs: runsState.runs,
+                          details: runsState.details,
+                          index: i,
+                          conversationId: convId,
+                          live: liveDraft,
+                          readiness: m.incomplete ? null : m.readiness ?? null,
+                        })
+                      : null
                     return (
                       <>
                         {strip && strip.items.length ? (
@@ -1192,6 +1323,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                           <AnswerCard
                             parsed={parsed}
                             symbol={symbolInMsg}
+                            trace={trace ?? undefined}
                             onFollowUp={(q) => void send(q)}
                             onAnchoredPrice={(a) =>
                               setPriceAnchor({ ...a, symbol: symbolInMsg || undefined })
