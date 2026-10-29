@@ -11,9 +11,9 @@ import io
 import logging
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from src.core.portfolio_scope import user_scope_positions
 from src.web.database import get_db
 from src.web.api.auth import get_current_user
 from src.web.models import (
@@ -91,8 +91,7 @@ def export_portfolio(
     except Exception:
         pass
     positions = (
-        db.query(Position)
-        .filter(or_(Position.user_id == user.id, Position.user_id.is_(None)))
+        user_scope_positions(db, getattr(user, "id", None))
         .order_by(Position.account_id.asc(), Position.sort_order.asc(), Position.id.asc())
         .all()
     )

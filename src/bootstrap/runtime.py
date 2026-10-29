@@ -239,9 +239,18 @@ def load_portfolio_for_agent(agent_name: str, user_id: str | None = _UNSET) -> P
         db.close()
 
 
-def load_portfolio_for_stock(stock_id: int) -> PortfolioInfo:
-    """从数据库加载单只股票的持仓信息"""
-    from src.web.models import Account, Position
+def load_portfolio_for_stock(stock_id: int, user_id: str | None = _UNSET) -> PortfolioInfo:  # type: ignore[assignment]
+    """从数据库加载单只股票的持仓信息(按租户隔离)。
+
+    2026-10-29 越权修复: 此前完全不看用户, 任何一次手动触发都把**全部账户**的持仓塞进
+    AI 上下文(他人的成本/数量/风格)。现在三次收敛, 口径与 `/api/positions` 一致
+    (账户可见 AND 持仓可见, 见 src.core.portfolio_scope):
+      - 传 user_id → 只看该用户可见的账户与持仓;
+      - 不传(系统调度) → 按标的归属 `stocks.user_id` 取租户 —— 没会话不等于全量;
+      - 标的也无归属(历史共享) → 只取历史共享桶(user_id IS NULL), 仍不是全表。
+    """
+    from src.core.portfolio_scope import user_scope_accounts, user_scope_positions
+    from src.web.models import Position
 
     db = SessionLocal()
     try:
@@ -254,36 +263,29 @@ def load_portfolio_for_stock(stock_id: int) -> PortfolioInfo:
         except ValueError:
             market = MarketCode.CN
 
-        accounts = db.query(Account).filter(Account.enabled == True).all()
+        tenant = getattr(stock, "user_id", None) if user_id is _UNSET else user_id
+        accounts = user_scope_accounts(db, tenant, enabled_only=True).all()
+        positions_by_account: dict[int, list[Position]] = {}
+        for pos in user_scope_positions(db, tenant, stock_id=stock_id).all():
+            positions_by_account.setdefault(pos.account_id, []).append(pos)
 
         account_infos = []
         for acc in accounts:
-            pos = (
-                db.query(Position)
-                .filter(
-                    Position.account_id == acc.id,
-                    Position.stock_id == stock_id,
+            position_infos = [
+                PositionInfo(
+                    account_id=acc.id,
+                    account_name=acc.name,
+                    stock_id=stock.id,
+                    symbol=stock.symbol,
+                    name=stock.name,
+                    market=market,
+                    cost_price=pos.cost_price,
+                    quantity=pos.quantity,
+                    invested_amount=pos.invested_amount,
+                    trading_style=pos.trading_style or "swing",
                 )
-                .first()
-            )
-
-            position_infos = []
-            if pos:
-                position_infos.append(
-                    PositionInfo(
-                        account_id=acc.id,
-                        account_name=acc.name,
-                        stock_id=stock.id,
-                        symbol=stock.symbol,
-                        name=stock.name,
-                        market=market,
-                        cost_price=pos.cost_price,
-                        quantity=pos.quantity,
-                        invested_amount=pos.invested_amount,
-                        trading_style=pos.trading_style or "swing",
-                    )
-                )
-
+                for pos in positions_by_account.get(acc.id, [])
+            ]
             account_infos.append(
                 AccountInfo(
                     id=acc.id,
@@ -981,8 +983,8 @@ async def trigger_agent_for_stock(
         market=market,
     )
 
-    # 加载该股票的持仓信息
-    portfolio = load_portfolio_for_stock(stock.id)
+    # 加载该股票的持仓信息(按触发用户隔离; 系统调度无会话 → 按标的归属收敛, 绝不取全表)
+    portfolio = load_portfolio_for_stock(stock.id, user_id if user_id else _UNSET)
 
     model, service = resolve_ai_model(agent_name, stock_agent_id)
     channels = [] if suppress_notify else resolve_notify_channels(agent_name, stock_agent_id)

@@ -632,18 +632,45 @@ def test_holdings_signature_respects_position_ownership(db, monkeypatch):
     assert holdings[0]["position_count"] == 1
 
 
-def test_summary_null_available_funds_does_not_crash(db, monkeypatch):
-    """available_funds 可为 NULL(老数据): 不得 TypeError, 按 0 资金处理。"""
+def test_summary_null_available_funds_is_unknown_not_zero(db, monkeypatch):
+    """available_funds 为 NULL(老数据): 现金是"未知", 不得当 0 展示, 也不得当 0 加进总资产。"""
     _stub_quotes(monkeypatch, {"600519": _quote(12.0)})
     acc = _account(db, funds=None)
+    # 列默认 default=0 只在 INSERT 缺值时生效; 真正的历史 NULL 要显式 UPDATE 成 NULL。
+    acc.available_funds = None
+    db.commit()
     _position(db, acc, "600519", cost=10.0, qty=100)
 
     r = accounts_api.get_portfolio_summary(db=db, user=USER_A)
     a = r["accounts"][0]
-    assert a["available_funds"] == 0
-    assert a["total_assets"] == pytest.approx(1200.0)
+    assert a["available_funds"] is None, "NULL 现金不得被写成 0(修复前输出 0)"
+    assert a["available_funds_known"] is False
+    assert a["total_market_value"] == pytest.approx(1200.0), "持仓市值是已知事实, 仍应给出"
+    assert a["total_assets"] is None, "现金未知时总资产不可知, 不得按 0 现金凑 1200"
+    assert a["total_assets_complete"] is False
+    assert a["total_assets_basis"] == "available_funds_unknown"
+    assert a["total_assets_priced_subset"] is None
+
+    t = r["total"]
+    assert t["available_funds"] is None
+    assert t["available_funds_known"] is False
+    assert t["total_assets"] is None
+    assert t["total_assets_basis"] == "available_funds_unknown"
+
+
+def test_summary_known_cash_still_folds_into_total_assets(db, monkeypatch):
+    """已知现金的账户口径不变: 全持仓有价 → 总资产 = 市值 + 资金, complete=True。"""
+    _stub_quotes(monkeypatch, {"600519": _quote(12.0)})
+    acc = _account(db, funds=800.0)
+    _position(db, acc, "600519", cost=10.0, qty=100)
+
+    r = accounts_api.get_portfolio_summary(db=db, user=USER_A)
+    a = r["accounts"][0]
+    assert a["available_funds"] == pytest.approx(800.0)
+    assert a["available_funds_known"] is True
+    assert a["total_assets"] == pytest.approx(1200.0 + 800.0)
     assert a["total_assets_complete"] is True
-    assert r["total"]["total_assets"] == pytest.approx(1200.0)
+    assert r["total"]["total_assets"] == pytest.approx(1200.0 + 800.0)
 
 
 def test_default_exchange_rate_is_marked_stale(db, monkeypatch):

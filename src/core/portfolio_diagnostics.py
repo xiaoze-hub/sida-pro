@@ -63,10 +63,13 @@ def diagnose_positions(positions: list[dict]) -> dict:
 
     多账户同标的会被上游合并成一条 holding: 此时 `position_count` 是实际持仓腿数,
     `holding_count` 是标的数; 覆盖度按**持仓腿**算, 否则一条混合腿会被误判成 100% 覆盖。
+    两个计数口径不同且都保留(position_count 沿用既有"腿数"语义, 消费方按需取),
+    输出里用 `position_count_basis="position_legs"` 显式标注, 避免被当成标的口径读。
     """
     if not positions:
         return {
             "position_count": 0,
+            "position_count_basis": "position_legs",
             "holding_count": 0,
             "priced_position_count": 0,
             "missing_quote_count": 0,
@@ -141,6 +144,8 @@ def diagnose_positions(positions: list[dict]) -> dict:
     return {
         # position_count = 实际持仓腿数; holding_count = 合并后的标的数。
         "position_count": total_positions,
+        # 口径声明: 上面的计数是"持仓腿"而不是"标的", 消费方不必再猜。
+        "position_count_basis": "position_legs",
         "holding_count": len(positions),
         "priced_position_count": priced_positions,
         "missing_quote_count": missing,

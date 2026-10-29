@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from datetime import datetime, timedelta, timezone
 
@@ -15,6 +15,15 @@ from src.web.database import get_db
 from src.web.api.auth import get_current_user
 from src.web.models import Account, PriceAlertRule, Position, Stock, User
 from src.core.marketdata_client import md_quote_rows
+from src.core.portfolio_scope import (
+    account_user_scope_clause,
+    account_user_scope_writable,
+    position_user_scope_visible,
+    position_user_scope_clause,
+    position_user_scope_writable,
+    user_scope_accounts,
+    user_scope_positions,
+)
 from src.core.quote_period import classify_quote_period, summarize_daily_pnl_period
 from src.models.market import MarketCode
 
@@ -155,19 +164,21 @@ def get_usd_cny_rate() -> float:
 
 class AccountCreate(BaseModel):
     name: str
-    available_funds: float = 0
+    # 非有限数(NaN/Inf)不是金额: 从入参就拦掉, 不许写进库。
+    available_funds: float = Field(default=0, allow_inf_nan=False)
 
 
 class AccountUpdate(BaseModel):
     name: str | None = None
-    available_funds: float | None = None
+    available_funds: float | None = Field(default=None, allow_inf_nan=False)
     enabled: bool | None = None
 
 
 class AccountResponse(BaseModel):
     id: int
     name: str
-    available_funds: float
+    # NULL = 该账户从未记过可用资金(老数据) —— 是"未知", 不是 0。
+    available_funds: float | None = None
     enabled: bool
 
     class Config:
@@ -177,18 +188,19 @@ class AccountResponse(BaseModel):
 class PositionCreate(BaseModel):
     account_id: int
     stock_id: int
-    cost_price: float
+    cost_price: float = Field(allow_inf_nan=False)
     quantity: int
-    invested_amount: float | None = None
+    invested_amount: float | None = Field(default=None, allow_inf_nan=False)
     trading_style: str | None = None  # short: 短线, swing: 波段, long: 长线
     # 防守线(绝对价): 建仓时若用户已经想好纪律位可一并带上, 省略即"未设置"。
-    defense_price: float | None = None
+    # 非有限数(NaN/Inf)一律拒收 —— 存进去既不是价格, 又会让判定式静默失效。
+    defense_price: float | None = Field(default=None, allow_inf_nan=False)
 
 
 class PositionUpdate(BaseModel):
-    cost_price: float | None = None
+    cost_price: float | None = Field(default=None, allow_inf_nan=False)
     quantity: int | None = None
-    invested_amount: float | None = None
+    invested_amount: float | None = Field(default=None, allow_inf_nan=False)
     trading_style: str | None = None
 
 
@@ -197,9 +209,11 @@ class DefenseLineUpdate(BaseModel):
 
     `null` 即**清除** —— 本端点只做"设置/清除"一件事, 故不区分"字段未传"与"传 null"。
     比例式(-8%)由前端按成本价折算成绝对价再提交, 后端只存用户拍下的那个价。
+    `allow_inf_nan=False`: NaN/Inf 不是价格, 在 422 就挡掉, 不落到 DB
+    (`value <= 0` 对 NaN 恒为 False, 旧校验会把它当合法价存进去)。
     """
 
-    defense_price: float | None = None
+    defense_price: float | None = Field(default=None, allow_inf_nan=False)
 
 
 class PositionResponse(BaseModel):
@@ -231,26 +245,51 @@ class PositionReorderRequest(BaseModel):
     items: list[PositionReorderItem]
 
 
+# ========== 归属门禁(2026-10-29 跨租户越权修复) ==========
+# 读: 账户可见 **且** 持仓可见(src.core.portfolio_scope 唯一口径)。
+# 写: 在可读之上再区分 本人 / 共享(NULL, 仅 owner); 他人私有项一律 404(不泄露存在性)。
+
+
+def _visible_account_or_404(db: Session, account_id: int, user: User) -> Account:
+    account = user_scope_accounts(db, user.id).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(404, "账户不存在")
+    return account
+
+
+def _writable_account_or_error(db: Session, account_id: int, user: User) -> Account:
+    account = _visible_account_or_404(db, account_id, user)
+    if not account_user_scope_writable(account, getattr(user, "id", None), getattr(user, "role", None)):
+        # 全局共享账户(account.user_id=NULL)删/改会波及所有人的持仓 → 仅 owner。
+        raise HTTPException(403, "共享账户仅 owner 可修改")
+    return account
+
+
+def _writable_position_or_404(db: Session, position_id: int, user: User) -> Position:
+    position = db.query(Position).filter(Position.id == position_id).first()
+    account = position.account if position is not None else None
+    uid, role = getattr(user, "id", None), getattr(user, "role", None)
+    if not position_user_scope_visible(position, account, uid):
+        # 父账户不可见 / 持仓归他人 / 账户与持仓归属错位: 统一 404。
+        raise HTTPException(404, "持仓不存在")
+    if not position_user_scope_writable(position, account, uid, role):
+        raise HTTPException(403, "共享持仓仅 owner 可修改")
+    assert position is not None  # 可读即非空, 仅为类型收窄
+    return position
+
+
 # ========== Account Endpoints ==========
 
 @router.get("/accounts", response_model=list[AccountResponse])
 def list_accounts(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取当前用户的账户(含全局共享)"""
-    return db.query(Account).filter(
-        or_(Account.user_id == user.id, Account.user_id.is_(None))
-    ).order_by(Account.id).all()
+    return user_scope_accounts(db, user.id).order_by(Account.id).all()
 
 
 @router.get("/accounts/{account_id}", response_model=AccountResponse)
 def get_account(account_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """获取单个账户"""
-    account = db.query(Account).filter(
-        Account.id == account_id,
-        or_(Account.user_id == user.id, Account.user_id.is_(None)),
-    ).first()
-    if not account:
-        raise HTTPException(404, "账户不存在")
-    return account
+    return _visible_account_or_404(db, account_id, user)
 
 
 @router.post("/accounts", response_model=AccountResponse)
@@ -266,13 +305,8 @@ def create_account(data: AccountCreate, db: Session = Depends(get_db), user: Use
 
 @router.put("/accounts/{account_id}", response_model=AccountResponse)
 def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """更新账户"""
-    account = db.query(Account).filter(
-        Account.id == account_id,
-        or_(Account.user_id == user.id, Account.user_id.is_(None)),
-    ).first()
-    if not account:
-        raise HTTPException(404, "账户不存在")
+    """更新账户(共享账户仅 owner)"""
+    account = _writable_account_or_error(db, account_id, user)
 
     if data.name is not None:
         account.name = data.name
@@ -293,23 +327,29 @@ def delete_account(
 ):
     """删除账户（会同时删除该账户的所有持仓）
 
-    S5(2026-08-26): 归属校验 — 与 list/get/update 同款 or_ 过滤,
-    只能删除自己的(或 NULL 全局)账户; 他人账户返回 404 防账号探测。
+    S5(2026-08-26): 归属校验 —— 他人账户返回 404 防账号探测。
+    2026-10-29: 共享账户(account.user_id=NULL)跨用户, 删除会带走他人持仓 → 仅 owner 可删(403)。
     """
-    account = db.query(Account).filter(
-        Account.id == account_id,
-        or_(Account.user_id == user.id, Account.user_id.is_(None)),
-    ).first()
-    if not account:
-        raise HTTPException(404, "账户不存在")
+    account = _writable_account_or_error(db, account_id, user)
+    account_name = account.name
 
     db.delete(account)
     db.commit()
-    logger.info(f"删除账户: {account.name}")
+    logger.info(f"删除账户: {account_name}")
     return {"success": True}
 
 
 # ========== Position Endpoints ==========
+
+def _defense_line_out(value) -> float | None:
+    """防守线对外口径: 只有正数且有限才是"用户设过的价"。
+
+    历史脏数据(NaN/Inf/0/负数)一律按未设置返回 None —— 否则整份响应不是合法 JSON,
+    前端还会拿着永远不成立的防线继续告警。
+    """
+    px = _finite_float(value)
+    return px if px is not None and px > 0 else None
+
 
 def _position_payload(pos: Position) -> dict:
     """持仓响应体(四处端点共用一份口径)。
@@ -326,7 +366,7 @@ def _position_payload(pos: Position) -> dict:
         "invested_amount": pos.invested_amount,
         "sort_order": pos.sort_order or 0,
         "trading_style": pos.trading_style,
-        "defense_price": getattr(pos, "defense_price", None),
+        "defense_price": _defense_line_out(getattr(pos, "defense_price", None)),
         "account_name": pos.account.name if pos.account else None,
         "stock_symbol": pos.stock.symbol if pos.stock else None,
         "stock_name": pos.stock.name if pos.stock else None,
@@ -341,13 +381,7 @@ def list_positions(
     user: User = Depends(get_current_user),
 ):
     """获取持仓列表，可按账户或股票筛选(仅当前用户的)"""
-    query = db.query(Position).filter(
-        or_(Position.user_id == user.id, Position.user_id.is_(None))
-    )
-    if account_id:
-        query = query.filter(Position.account_id == account_id)
-    if stock_id:
-        query = query.filter(Position.stock_id == stock_id)
+    query = user_scope_positions(db, user.id, account_id=account_id, stock_id=stock_id)
 
     positions = query.order_by(Position.account_id.asc(), Position.sort_order.asc(), Position.id.asc()).all()
     return [_position_payload(pos) for pos in positions]
@@ -357,10 +391,7 @@ def list_positions(
 def create_position(data: PositionCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """创建持仓"""
     # 检查账户和股票是否存在(仅自己的)
-    account = db.query(Account).filter(
-        Account.id == data.account_id,
-        or_(Account.user_id == user.id, Account.user_id.is_(None)),
-    ).first()
+    account = user_scope_accounts(db, user.id).filter(Account.id == data.account_id).first()
     if not account:
         raise HTTPException(400, "账户不存在")
 
@@ -389,7 +420,7 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db), user: U
         sort_order=int(max_order) + 1,
         trading_style=data.trading_style,
         user_id=user.id,
-        defense_price=data.defense_price if (data.defense_price or 0) > 0 else None,
+        defense_price=_defense_line_out(data.defense_price),
     )
     db.add(position)
     db.commit()
@@ -402,12 +433,7 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db), user: U
 @router.put("/positions/{position_id}", response_model=PositionResponse)
 def update_position(position_id: int, data: PositionUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """更新持仓"""
-    position = db.query(Position).filter(
-        Position.id == position_id,
-        or_(Position.user_id == user.id, Position.user_id.is_(None)),
-    ).first()
-    if not position:
-        raise HTTPException(404, "持仓不存在")
+    position = _writable_position_or_404(db, position_id, user)
 
     if data.cost_price is not None:
         position.cost_price = data.cost_price
@@ -437,21 +463,17 @@ def set_position_defense_line(
 
     `defense_price=null` 即清除。清除后该持仓**不再有**告警基准 —— 系统不会退回
     默认 -8%, 因为默认 -8% 已按产品裁决降级为"仅作参考展示"。
-    user_id 隔离与其它持仓端点同口径: 只能改自己的(或历史遗留 NULL 全局)持仓。
+    归属口径: 自己的持仓可写; 历史共享(NULL)持仓仅 owner; 他人私有持仓 404。
     """
-    position = db.query(Position).filter(
-        Position.id == position_id,
-        or_(Position.user_id == user.id, Position.user_id.is_(None)),
-    ).first()
-    if not position:
-        raise HTTPException(404, "持仓不存在")
+    position = _writable_position_or_404(db, position_id, user)
 
     value = data.defense_price
     if value is not None:
-        # 0/负数不是价格, 也不是"清除"的写法 —— 直接拒, 免得存下一个永远触发的防线。
-        if not isinstance(value, (int, float)) or value <= 0:
+        # 0/负数/非有限数都不是价格, 也不是"清除"的写法 —— 直接拒, 免得存下永远触发的防线。
+        px = _finite_float(value)
+        if px is None or px <= 0:
             raise HTTPException(400, "防守线必须是正数价格")
-        position.defense_price = float(value)
+        position.defense_price = px
     else:
         position.defense_price = None
 
@@ -469,34 +491,31 @@ def set_position_defense_line(
 @router.delete("/positions/{position_id}")
 def delete_position(position_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """删除持仓"""
-    position = db.query(Position).filter(
-        Position.id == position_id,
-        or_(Position.user_id == user.id, Position.user_id.is_(None)),
-    ).first()
-    if not position:
-        raise HTTPException(404, "持仓不存在")
+    position = _writable_position_or_404(db, position_id, user)
+    label = (
+        position.account.name if position.account else position.account_id,
+        position.stock.name if position.stock else position.stock_id,
+    )
 
     db.delete(position)
     db.commit()
-    logger.info(f"删除持仓: {position.account.name} - {position.stock.name}")
+    logger.info("删除持仓: %s - %s", *label)
     return {"success": True}
 
 
 @router.put("/positions/reorder/batch")
 def reorder_positions(data: PositionReorderRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """批量更新持仓排序"""
+    """批量更新持仓排序(只改自己可写的; 他人私有/共享 NULL 持仓一律跳过)"""
     if not data.items:
         return {"updated": 0}
     ids = [int(x.id) for x in data.items]
-    rows = db.query(Position).filter(
-        Position.id.in_(ids),
-        or_(Position.user_id == user.id, Position.user_id.is_(None)),
-    ).all()
+    uid, role = getattr(user, "id", None), getattr(user, "role", None)
+    rows = user_scope_positions(db, uid).filter(Position.id.in_(ids)).all()
     row_map = {r.id: r for r in rows}
     updated = 0
     for item in data.items:
         row = row_map.get(int(item.id))
-        if not row:
+        if not row or not position_user_scope_writable(row, row.account, uid, role):
             continue
         row.sort_order = int(item.sort_order)
         updated += 1
@@ -717,20 +736,17 @@ def _portfolio_positions(
     混入其他用户建的 Position(Position.user_id 有值), 关系遍历会把别人的持仓算进
     当前用户的成本/市值/诊断。这里把与 list_positions 同款的门禁下沉到 SQL,
     绝不放宽成"账户可见即全部持仓可见"。
+    无用户会话(user=None)只对应历史共享桶(NULL/NULL), 不会退化成全表。
     """
-    q = (
-        db.query(Position)
-        .join(Account, Account.id == Position.account_id)
-        .filter(Account.enabled == True)  # noqa: E712
-    )
-    if user is not None:
-        q = q.filter(
-            or_(Account.user_id == user.id, Account.user_id.is_(None)),
-            or_(Position.user_id == user.id, Position.user_id.is_(None)),
+    return (
+        user_scope_positions(
+            db,
+            getattr(user, "id", None),
+            account_id=account_id,
+            enabled_accounts_only=True,
         )
-    if account_id:
-        q = q.filter(Account.id == account_id)
-    return q.all()
+        .all()
+    )
 
 
 @router.get("/portfolio/summary")
@@ -774,16 +790,9 @@ def get_portfolio_summary(
         as_of、age_seconds、stale; source=default 或 stale=True 时港美市值换算不可当实时事实。
     """
     # 获取账户(仅当前用户的)
-    if account_id:
-        accounts = db.query(Account).filter(
-            Account.id == account_id, Account.enabled == True,
-            or_(Account.user_id == user.id, Account.user_id.is_(None)),
-        ).all()
-    else:
-        accounts = db.query(Account).filter(
-            Account.enabled == True,
-            or_(Account.user_id == user.id, Account.user_id.is_(None)),
-        ).all()
+    accounts = user_scope_accounts(db, user.id, enabled_only=True).filter(
+        *([Account.id == account_id] if account_id else [])
+    ).all()
 
     if not accounts:
         return {
@@ -798,6 +807,8 @@ def get_portfolio_summary(
                 "daily_pnl_label": "当日盈亏",
                 "daily_pnl_date": None,
                 "available_funds": 0,
+                # 没有任何账户: 现金合计是空集之和(真实的 0), 不涉及 NULL 未知。
+                "available_funds_known": True,
                 "total_assets": 0,
                 "total_assets_complete": True,
                 "total_assets_basis": "no_positions",
@@ -845,6 +856,7 @@ def get_portfolio_summary(
     grand_positions_count = 0
     grand_priced_count = 0
     grand_available_funds = 0
+    grand_funds_known = True  # 任一账户 available_funds 为 NULL → 汇总现金是"未知", 不是 0
     grand_daily_pnl = 0
     grand_daily_pnl_observed = 0
     grand_daily_pnl_periods: list[tuple[str, str | None]] = []
@@ -860,7 +872,11 @@ def get_portfolio_summary(
         acc_daily_pnl = 0
         acc_daily_pnl_observed = 0
         acc_daily_pnl_periods: list[tuple[str, str | None]] = []
-        funds = _safe_amount(acc.available_funds)  # available_funds 可为 NULL(老数据)
+        # available_funds 可为 NULL(老数据): NULL 是"没记过现金", 不是 0 —— 输出 None,
+        # 并且下游 total_assets 不得把它当 0 加进总资产(见 acc_assets_* 分支)。
+        funds = _finite_float(acc.available_funds)
+        funds_known = funds is not None
+        funds_value = funds if funds_known else 0.0
 
         positions_sorted = sorted(
             positions_by_account.get(acc.id, []),
@@ -939,7 +955,7 @@ def get_portfolio_summary(
                 "sort_order": pos.sort_order or 0,
                 "trading_style": pos.trading_style,
                 # 用户自设防守线(绝对价, 原币种): 前端据此判定"有没有纪律位", None 即未设置。
-                "defense_price": getattr(pos, "defense_price", None),
+                "defense_price": _defense_line_out(getattr(pos, "defense_price", None)),
                 "current_price": current_price,
                 # 行情源给的原始现价(仅有限数值; 0 保留用于区分"坏值"与"缺字段")。
                 "raw_current_price": raw_price,
@@ -964,23 +980,27 @@ def get_portfolio_summary(
 
         # 账户口径: 市值/盈亏只在已定价子集上算(分子分母同篮子); 缺价仓位只进未定价成本,
         # 不进市值也不进盈亏 → 不会出现"成本在分母、市值缺席"的假亏损。
+        # 现金 NULL 时现金是"未知": 不能当 0 加进总资产, basis 标 available_funds_unknown。
         if not include_quotes:
             acc_pnl = 0
             acc_pnl_pct = 0
             acc_market_value_out: float | None = acc_market_value  # 不计价模式: 保持旧数值 0
-            acc_total_assets: float | None = funds
+            acc_total_assets = funds if funds_known else None
             acc_assets_complete = False
-            acc_assets_basis = "not_requested"
+            acc_assets_basis = "not_requested" if funds_known else "available_funds_unknown"
             acc_assets_subset: float | None = None
             acc_daily_pnl_out: float | None = 0
         else:
-            acc_assets_subset = (acc_market_value + funds) if acc_priced_count else None
+            acc_assets_subset = (acc_market_value + funds_value) if (acc_priced_count and funds_known) else None
             if acc_positions_count == 0:
-                # 空账户: 没有持仓就是真的 0 盈亏/0 市值, 总资产=可用资金。
+                # 空账户: 没有持仓就是真的 0 盈亏/0 市值; 总资产=可用资金(NULL 则未知)。
                 acc_pnl, acc_pnl_pct = 0, 0
                 acc_market_value_out = 0
-                acc_total_assets = funds
-                acc_assets_complete, acc_assets_basis = True, "no_positions"
+                acc_total_assets = funds if funds_known else None
+                if funds_known:
+                    acc_assets_complete, acc_assets_basis = True, "no_positions"
+                else:
+                    acc_assets_complete, acc_assets_basis = False, "available_funds_unknown"
                 acc_daily_pnl_out = 0
             elif acc_priced_count == 0:
                 # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
@@ -994,9 +1014,13 @@ def get_portfolio_summary(
                 acc_pnl_pct = (acc_pnl / acc_priced_cost * 100) if acc_priced_cost > 0 else None
                 acc_market_value_out = acc_market_value
                 complete = acc_priced_count == acc_positions_count
-                if complete:
-                    acc_total_assets = acc_market_value + funds
+                if complete and funds_known:
+                    acc_total_assets = acc_market_value + funds_value
                     acc_assets_complete, acc_assets_basis = True, "all_positions"
+                elif complete:
+                    # 全部持仓有价, 但现金未知 → 总资产仍不可知(不得把 NULL 当 0)。
+                    acc_total_assets = None
+                    acc_assets_complete, acc_assets_basis = False, "available_funds_unknown"
                 else:
                     # 子集市值 + 全部资金 ≠ 总资产, 只给子集口径, 不冒充总额。
                     acc_total_assets = None
@@ -1006,7 +1030,9 @@ def get_portfolio_summary(
         account_summaries.append({
             "id": acc.id,
             "name": acc.name,
-            "available_funds": round(funds, 2),
+            # NULL = 从未记录可用资金(未知), 不得按 0 展示。
+            "available_funds": _round_or_none(funds),
+            "available_funds_known": funds_known,
             "total_market_value": _round_or_none(acc_market_value_out),
             "total_cost": round(acc_cost, 2),
             "priced_cost": round(acc_priced_cost, 2),
@@ -1040,24 +1066,31 @@ def get_portfolio_summary(
         grand_unpriced_cost += acc_unpriced_cost
         grand_positions_count += acc_positions_count
         grand_priced_count += acc_priced_count
-        grand_available_funds += funds
+        grand_available_funds += funds_value
+        grand_funds_known = grand_funds_known and funds_known
         grand_daily_pnl += acc_daily_pnl
 
     grand_assets_subset = (
-        (grand_total_market_value + grand_available_funds) if grand_priced_count else None
+        (grand_total_market_value + grand_available_funds)
+        if (grand_priced_count and grand_funds_known)
+        else None
     )
     if not include_quotes:
         grand_pnl = 0
         grand_pnl_pct = 0
         grand_market_value_out: float | None = grand_total_market_value
-        grand_total_assets: float | None = grand_available_funds
-        grand_assets_complete, grand_assets_basis = False, "not_requested"
+        grand_total_assets = grand_available_funds if grand_funds_known else None
+        grand_assets_complete = False
+        grand_assets_basis = "not_requested" if grand_funds_known else "available_funds_unknown"
         grand_daily_pnl_out: float | None = 0
     elif grand_positions_count == 0:
         grand_pnl, grand_pnl_pct = 0, 0
         grand_market_value_out = 0
-        grand_total_assets = grand_available_funds
-        grand_assets_complete, grand_assets_basis = True, "no_positions"
+        grand_total_assets = grand_available_funds if grand_funds_known else None
+        if grand_funds_known:
+            grand_assets_complete, grand_assets_basis = True, "no_positions"
+        else:
+            grand_assets_complete, grand_assets_basis = False, "available_funds_unknown"
         grand_daily_pnl_out = 0
     elif grand_priced_count == 0:
         # 有持仓但一只都没价: 市值/盈亏/总资产都是未知, 不给数字。
@@ -1070,9 +1103,13 @@ def get_portfolio_summary(
         grand_pnl = grand_total_market_value - grand_priced_cost
         grand_pnl_pct = (grand_pnl / grand_priced_cost * 100) if grand_priced_cost > 0 else None
         grand_market_value_out = grand_total_market_value
-        if grand_priced_count == grand_positions_count:
+        if grand_priced_count == grand_positions_count and grand_funds_known:
             grand_total_assets = grand_total_market_value + grand_available_funds
             grand_assets_complete, grand_assets_basis = True, "all_positions"
+        elif grand_priced_count == grand_positions_count:
+            # 持仓全有价但现金未知: 总资产仍是"未知", 不得把 NULL 当 0。
+            grand_total_assets = None
+            grand_assets_complete, grand_assets_basis = False, "available_funds_unknown"
         else:
             grand_total_assets = None
             grand_assets_complete, grand_assets_basis = False, "priced_positions_only"
@@ -1100,7 +1137,8 @@ def get_portfolio_summary(
             "total_pnl": _round_or_none(grand_pnl),
             "total_pnl_pct": _round_or_none(grand_pnl_pct),
             "total_daily_pnl": _round_or_none(grand_daily_pnl_out),
-            "available_funds": round(grand_available_funds, 2),
+            "available_funds": _round_or_none(grand_available_funds) if grand_funds_known else None,
+            "available_funds_known": grand_funds_known,
             "total_assets": _round_or_none(grand_total_assets),
             "total_assets_complete": grand_assets_complete,
             "total_assets_basis": grand_assets_basis,
@@ -1169,15 +1207,18 @@ def _holdings_signature(db: Session, user: User | None = None) -> str:
 
     归属门禁与 list_positions / _portfolio_positions 同款: 账户可见**且**持仓可见,
     否则别人的持仓会改变缓存指纹(进而复用错误的基准/归因结果)。
+    user=None 只对应历史共享桶(NULL/NULL), 不会退化成全表。
     """
-    q = db.query(Position.stock_id, Position.quantity).join(
-        Account, Account.id == Position.account_id
-    ).filter(Account.enabled == True)  # noqa: E712
-    if user is not None:
-        q = q.filter(
-            or_(Account.user_id == user.id, Account.user_id.is_(None)),
-            or_(Position.user_id == user.id, Position.user_id.is_(None)),
+    uid = getattr(user, "id", None)
+    q = (
+        db.query(Position.stock_id, Position.quantity)
+        .join(Account, Account.id == Position.account_id)
+        .filter(
+            Account.enabled.is_(True),
+            account_user_scope_clause(uid),
+            position_user_scope_clause(uid),
         )
+    )
     rows = q.all()
     agg: dict[int, float] = {}
     for sid, qty in rows:
@@ -1193,9 +1234,7 @@ def _gather_holdings(db: Session, user: User | None = None) -> list[dict]:
     状态聚合(全有价 ok / 全缺价 missing|invalid_price / 混合 partial), 与遍历顺序无关。
     持仓归属在 SQL 层隔离(共享账户里别人的 Position 不得混入)。
     """
-    q = db.query(Account).filter(Account.enabled == True)  # noqa: E712
-    if user is not None:
-        q = q.filter(or_(Account.user_id == user.id, Account.user_id.is_(None)))
+    q = user_scope_accounts(db, getattr(user, "id", None), enabled_only=True)
     accounts = q.all()
     positions = _portfolio_positions(db, user) if accounts else []
     positions_by_account: dict[int, list[Position]] = {}
