@@ -35,11 +35,12 @@ from __future__ import annotations
 from sqlalchemy import and_, false, or_
 from sqlalchemy.orm import Query, Session
 
-from src.db.models import Account, Position, Stock
+from src.db.models import Account, PaperTradingPosition, Position, Stock
 
 __all__ = [
     "account_user_scope_clause",
     "position_user_scope_clause",
+    "paper_position_user_scope_clause",
     "stock_user_scope_clause",
     "owned_account_clause",
     "owned_position_clause",
@@ -72,6 +73,29 @@ def account_user_scope_clause(user_id: str | None):
 def position_user_scope_clause(user_id: str | None):
     """`Position.user_id` 的可见条件, 必须与 `account_user_scope_clause` 同时使用。"""
     return _visibility_clause(Position.user_id, user_id)
+
+
+def paper_position_user_scope_clause(
+    user_id: str | None, *, include_legacy_null: bool = False
+):
+    """`PaperTradingPosition.user_id` 的可见条件。
+
+    模拟盘**没有父账户**, 默认只认**严格本人**(与 `portfolio_diagnostics` /
+    `user_data` / `paper_trading` 三条读路径同口径)。
+
+    2026-10-30: `user_id IS NULL` 是冷启动遗留、归属不明 —— 不是"共享"。
+    只有 owner(数据责任人)通过 `include_legacy_null=True` 才看得到,
+    member 不允许把它当成自己的持仓注入 AI 提示; 无会话一律空集(fail-closed)。
+    """
+    uid = str(user_id) if user_id else ""
+    if not uid:
+        return false()
+    if include_legacy_null:
+        return or_(
+            PaperTradingPosition.user_id == uid,
+            PaperTradingPosition.user_id.is_(None),
+        )
+    return PaperTradingPosition.user_id == uid
 
 
 def stock_user_scope_clause(user_id: str | None):

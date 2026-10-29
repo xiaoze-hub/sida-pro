@@ -22,7 +22,7 @@ from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_
 from src.core import gap_collector
 from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
 from src.core.copilot_memory import memory_block
-from src.core.portfolio_scope import user_scope_positions
+from src.core.portfolio_scope import paper_position_user_scope_clause, user_scope_positions
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
 from src.config import Settings
@@ -1567,12 +1567,12 @@ def _build_portfolio_context(db: Session, user: User | None = None) -> str:
     # 模拟盘持仓: 只认 user_id==uid。NULL 归属是冷启动遗留、owner 未知,
     # 只允许 owner(数据责任人)看到 —— 与 portfolio_diagnostics / user_data /
     # paper_trading 三条读路径同口径, 不再把别人/NULL 的模拟盘注进 member 的提示。
-    _paper_uids = [PaperTradingPosition.user_id == uid]
-    if str(getattr(user, "role", "") or "").lower() == "owner":
-        _paper_uids.append(PaperTradingPosition.user_id.is_(None))
+    _paper_scope = paper_position_user_scope_clause(
+        uid, include_legacy_null=str(getattr(user, "role", "") or "").lower() == "owner"
+    )
     paper_positions = (
         db.query(PaperTradingPosition)
-        .filter(PaperTradingPosition.status == "open", or_(*_paper_uids))
+        .filter(PaperTradingPosition.status == "open", _paper_scope)
         .all()
     )
     if paper_positions:
