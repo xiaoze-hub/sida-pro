@@ -821,7 +821,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     return () => window.removeEventListener('keydown', onKey)
   }, [input, send, streaming, startNewConversation, setPanelTab, visible, presentation, viewportPanel])
 
-  /** 空态第四格用：最近一次运行（真实数据；没有就是 null，界面显示"还没有运行记录"） */
+  /** 空态"最近一次"回链用：最近一次运行（真实数据；没有就是 null，整块不渲染，不留死入口） */
   const lastRun = runsState.runs.length > 0 ? runsState.runs[0] : null
 
   const runForMessage = (i: number) => matchRunForMessage(msgs, runsState.runs, i)
@@ -1104,48 +1104,55 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           ) : null}
 
           {!msgs.length ? (
-            <div className="flex min-h-[300px] flex-1 flex-col items-center justify-center gap-3 text-center">
-              <AssistantAvatar size={presentation === 'mini' ? 80 : 112} label="数智参谋" />
-              <div className="text-[12px] text-muted-foreground">{PAGE_EMPTY_HINT}</div>
-              {/* w-full + items-stretch: 之前是 items-start, 按钮 w-full 在居中容器里宽度塌成 0,
-                  结果只剩右侧 › 可见(视觉复核发现的"空描边横条") */}
-              {/* 2026-10-26: 三条竖条撑不住 67% 宽的主区(视觉复核: "空房间")。
-                  改成 2 列卡片网格；第四格给**真实的**最近一次运行(没有就是"暂无记录"，
-                  不编示例冒充)。 */}
-              <div className="grid w-full max-w-[560px] grid-cols-1 gap-2 sm:grid-cols-2">
-                {PAGE_EMPTY_EXAMPLES.map((x) => (
-                  <button
-                    key={x}
-                    type="button"
-                    onClick={() => void send(x)}
-                    disabled={streaming}
-                    data-testid="copilot-empty-example"
-                    className="card-surface group flex min-h-[64px] items-start gap-2 rounded-xl bg-s2 p-3 text-left text-[14px] leading-relaxed text-foreground transition-colors hover:bg-s3 disabled:opacity-60"
-                  >
-                    <span className="min-w-0 flex-1">{x}</span>
-                    <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground group-hover:text-role-watch" />
-                  </button>
-                ))}
-                <a
-                  href={lastRun ? `/copilot/runs/${lastRun.run_id}` : undefined}
-                  data-testid="copilot-empty-last-run"
-                  className={`card-surface flex min-h-[64px] flex-col justify-between rounded-xl p-3 text-left text-[14px] ${
-                    lastRun ? 'bg-card text-foreground hover:bg-muted' : 'bg-card text-muted-foreground'
-                  }`}
-                >
-                  <span className="text-[12px] text-muted-foreground">最近一次</span>
-                  {lastRun ? (
-                    <span className="mt-1 min-w-0">
-                      <span className="block truncate">{lastRun.question || '未命名问题'}</span>
-                      <span className="mt-0.5 block text-[12px] text-muted-foreground">
-                        {lastRun.status} · {lastRun.tool_calls ?? '--'} 次工具
-                      </span>
-                    </span>
-                  ) : (
-                    <span className="mt-1">还没有运行记录</span>
-                  )}
-                </a>
+            <div data-testid="copilot-empty-hero" className="flex min-h-full flex-col items-center justify-center gap-4 text-center">
+              {/* 形象只有这一个：静态柔光只做层次，不做脉冲 —— 空态没有"正在发生的事"，动效不伪造状态。
+                  只用一个光晕 + 一个形象，避免与下方示例抢焦点。 */}
+              <div className="relative flex items-center justify-center">
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-1/2 top-1/2 h-[176px] w-[176px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                  style={{ background: 'radial-gradient(circle, hsl(var(--role-watch) / 0.12) 0%, transparent 68%)' }}
+                />
+                <AssistantAvatar size={presentation === 'mini' ? 88 : 112} label="数智参谋" />
               </div>
+              <p className="max-w-[440px] px-2 text-pretty text-[12px] leading-relaxed text-muted-foreground">{PAGE_EMPTY_HINT}</p>
+              {/* 2026-10-29 重排：原来 2x2 网格的第 4 格是"最近一次"，没记录时是一张写着
+                  "还没有运行记录"的**死入口**，而且它与工具条「过程」面板是同一份数据的两个入口。
+                  现在三条示例并排（窄屏竖排），最近一次降级为一行真实回链，没有记录就整块不渲染。 */}
+              <ol data-testid="copilot-empty-examples" className="grid w-full max-w-[660px] list-none grid-cols-1 gap-2 sm:grid-cols-3">
+                {PAGE_EMPTY_EXAMPLES.map((x, i) => (
+                  <li key={x} className="flex min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => void send(x)}
+                      disabled={streaming}
+                      data-testid="copilot-empty-example"
+                      className="card-surface group flex min-h-[84px] w-full flex-col items-start gap-1.5 rounded-xl bg-s2 p-3 text-left transition-colors hover:bg-s3 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <span className="flex w-full items-center gap-1.5 text-[12px] text-muted-foreground">
+                        <span className="font-mono tabular-nums">{String(i + 1).padStart(2, '0')}</span>
+                        <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-muted-foreground group-hover:text-role-watch" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 text-pretty text-[14px] leading-relaxed text-foreground">{x}</span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+              {lastRun ? (
+                <a
+                  href={`/copilot/runs/${lastRun.run_id}`}
+                  data-testid="copilot-empty-last-run"
+                  className="flex w-full max-w-[660px] items-center gap-1.5 px-1 text-[12px] text-muted-foreground hover:text-foreground"
+                >
+                  <span className="shrink-0">最近一次</span>
+                  <span className="shrink-0" aria-hidden="true">·</span>
+                  <span className="min-w-0 truncate text-left">{lastRun.question || '未命名问题'}</span>
+                  <span className="shrink-0 tabular-nums">
+                    · {lastRun.status} · {lastRun.tool_calls ?? '--'} 次工具
+                  </span>
+                  <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+                </a>
+              ) : null}
             </div>
           ) : null}
 
