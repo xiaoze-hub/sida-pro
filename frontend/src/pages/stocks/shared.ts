@@ -357,14 +357,26 @@ export const emptyAccountForm: AccountForm = { name: '', available_funds: '0' }
 
 export const round2 = (value: number) => Math.round(value * 100) / 100
 
+/**
+ * 当日盈亏的期间口径是否可证（2026-10-29 复审 B2）。
+ *
+ * `unknown` = 这条涨跌幅的日期层证明不了（典型：WS 只换价/换涨跌幅、不带行情源报时）。
+ * 它**不属于**「今日」篮子，也不该被当成「最近交易日」：那是把"不知道"讲成"旧的"。
+ * 唯一可用的两个口径是后端按市场时区判好的 `today` / `previous_trading_day`。
+ */
+const TRUSTED_DAILY_PERIODS: ReadonlySet<DailyPnlPeriod> = new Set(['today', 'previous_trading_day'])
+
 export const summarizeDailyPnlPeriod = (
   observations: Array<{ period: DailyPnlPeriod; date: string | null }>,
 ): DailyPnlMeta => {
-  if (observations.length === 0) {
+  // 期间未知的观测**不进摘要**：混进来会让 periods={today,unknown} ⇒ 'mixed' ⇒
+  // 「最近交易日盈亏」，等于把一条"不知道是不是今天"的涨跌幅说成上个交易日的数据。
+  const usable = observations.filter(item => TRUSTED_DAILY_PERIODS.has(item.period))
+  if (usable.length === 0) {
     return { daily_pnl_period: 'unknown', daily_pnl_label: '当日盈亏', daily_pnl_date: null }
   }
-  const periods = new Set(observations.map(item => item.period))
-  const dates = new Set(observations.map(item => item.date).filter((value): value is string => !!value))
+  const periods = new Set(usable.map(item => item.period))
+  const dates = new Set(usable.map(item => item.date).filter((value): value is string => !!value))
   if (periods.size === 1 && periods.has('today')) {
     return {
       daily_pnl_period: 'today',
@@ -393,6 +405,8 @@ export const dailyPnlDisplayLabel = (meta: DailyPnlMeta, compact = false): strin
     // 紧凑档给 KPI 副标签用: 「上一交易日 10-23」在 6 栏网格里会换行/被截断, 缩成「上日 10-23」
     if (meta.daily_pnl_period === 'previous_trading_day') return date ? `上日 ${date}` : '上日盈亏'
     if (meta.daily_pnl_period === 'mixed') return '最近交易日'
+    // 期间未知（WS 换价后日期层证明不了 / 缺字段）不许写「当日」：那是拿"不知道"冒充"今天"。
+    if (meta.daily_pnl_period === 'unknown') return '期间未知'
     return '当日'
   }
   return date && meta.daily_pnl_period === 'previous_trading_day'
@@ -623,8 +637,17 @@ export const mergePortfolioQuotes = (
         : rawPrice === null || rawPrice === undefined
           ? 'missing'
           : 'invalid_price'
+      // 2026-10-29 复审 B2：涨跌幅能不能用，先看**期间可不可证**。
+      // `daily_pnl_period='unknown'`（WS 只换价、无行情源报时）时，这个 change_pct 可能属于
+      // 上一交易日；把它算进「今日盈亏」等于替它编了一个交易日。此时 change_pct / daily_pnl
+      // 一律 null（陈列 `--`），并计入当日盈亏覆盖缺口，而不是混进今天的分母。
+      const periodTrusted = TRUSTED_DAILY_PERIODS.has(daily_pnl_period)
       // 涨跌幅同样跟着价格来源走：WS 价配后端涨跌幅 = 两个不同时刻的变化率。
-      const change_pct = priced ? (priceFromLocal ? quote?.change_pct ?? null : pos.change_pct ?? null) : null
+      const change_pct = priced && periodTrusted
+        ? priceFromLocal
+          ? quote?.change_pct ?? null
+          : pos.change_pct ?? null
+        : null
 
       const costPrice = safeNum(pos.cost_price) ?? 0
       const quantity = safeNum(pos.quantity) ?? 0

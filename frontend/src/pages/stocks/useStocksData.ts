@@ -20,7 +20,7 @@ import type { StockContextTarget } from '@/components/StockContextMenu'
 import { fetchAPI, normalizeNewsEnvelope } from '@sida/api'
 import { useQuoteStream, type QuoteTickMap } from '@/realtime/useQuoteStream'
 import { mergePortfolioQuotes } from './shared'
-import { applyQuoteTicks } from './quote-ticks'
+import { applyQuoteTicks, expireQuoteSnapshots } from './quote-ticks'
 import { parseServerTime } from '@/lib/utils'
 import { stocksApi } from '@sida/api'
 import { useNavigate } from 'react-router-dom'
@@ -44,6 +44,72 @@ import { navBackState } from '@/lib/nav-back'
  * 20s 远小于它，够快；又不至于像 WS 那样每 5s 打一次批量接口（隐藏页签还会停表）。
  */
 export const FRESHNESS_HEARTBEAT_MS = 20_000
+
+/**
+ * 服务器市场墙钟的**本地有效期**（毫秒）—— 2026-10-29 复审 B1。
+ *
+ * 心跳每 `FRESHNESS_HEARTBEAT_MS` 拉一次 `/stocks/markets/status`。可是"请求发出去了"
+ * 不等于"时钟被刷新了"：网关先回响应头、响应体挂住时（旧版 `fetchAPI` 的超时只覆盖到
+ * 响应头），这个 promise 永不 settle，`setMarketStatus` 也永不执行 ——
+ * 页面就带着 09:31 的墙钟一直跑到 14:00，把 09:31 的报价判成 `current`。
+ *
+ * 所以墙钟另有一条**不看请求状态**的本地有效期：最后一次成功取到之后超过这么久，
+ * 就直接清空时钟（下游判 `no_clock` = 时点未证实）。60s = 3 个心跳，容忍偶发丢包，
+ * 但绝不允许"几个小时前的钟"继续给报价背书。
+ */
+export const MARKET_CLOCK_TTL_MS = 60_000
+
+/**
+ * 行情快照的本地有效期（毫秒）—— 2026-10-29 复审 B1 / B3。
+ *
+ * `quote_time` / `quote_date` / `daily_pnl_period` 只由批量轮询刷新；WS tick 只更价。
+ * 轮询长时间失败时，快照会"看起来刚被写过"（价格一直在跳动），日期却可能是昨天的。
+ * 超过这个窗口没成功轮询过 ⇒ 清掉时刻/日期/期间与涨跌幅，只留价格陈列：
+ * 下游判 `unknown`，当日盈亏也不把它算进篮子。
+ *
+ * 180s 的理由：休市时批量行情按 `IDLE_QUOTE_REFRESH_MS`（120s）降频，180s 留一次容错；
+ * 交易中 20s 一轮，三分钟没成功基本就是链路坏了。
+ */
+export const QUOTE_SNAPSHOT_TTL_MS = 180_000
+
+/**
+ * 休市时批量行情的刷新间隔（毫秒）—— 2026-10-29 复审「20s 全自选流量」。
+ *
+ * 交易中需要 20s 级时效；收盘后价格不再变化，再按 20s 把**每个在线用户的全自选**
+ * 打一遍批量接口只是纯流量（行情源上游按分钟级限流，多用户并发下最容易打 429）。
+ * 休市降到 120s；市场墙钟仍按 20s 刷（那是后端纯本地计算，不触上游）。
+ *
+ * 诚实声明：本仓库没有压测环境，**没有验证过**这个降频 + 在途合并 + `fetchAPI` 同键
+ * 去重在多用户下的实际 QPS；这里只能保证"每用户每秒的请求数量级降下来了"。
+ */
+export const IDLE_QUOTE_REFRESH_MS = 120_000
+
+/** 从 `/stocks/markets/status` 折出 {市场: 当地时分}（`HH:MM`）；解析不出的市场不出现。 */
+function clockMinutesOfRows(rows: readonly MarketStatus[] | null | undefined): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const code = String(row?.code ?? '').trim().toUpperCase()
+    if (!code) continue
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(row?.local_time ?? '').trim())
+    if (!m) continue
+    const h = Number(m[1])
+    const min = Number(m[2])
+    if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) continue
+    out[code] = h * 60 + min
+  }
+  return out
+}
+
+/** 上一个成功采样的市场墙钟 → 这次采样，是否有市场**回绕**（跨日）。 */
+function hasMarketDayRollover(prev: Record<string, number>, next: Record<string, number>): boolean {
+  for (const [market, minutes] of Object.entries(next)) {
+    const before = prev[market]
+    // 只认"明显倒退"（>5 分钟）：15:03 → 09:31 是第二天开盘；
+    // 几秒级抖动/时钟微调不算跨日，也不该清报价。
+    if (before !== undefined && minutes < before - 5) return true
+  }
+  return false
+}
 
 export function useStocksData(state: ReturnType<typeof useStocksState>) {
   const {
@@ -90,6 +156,7 @@ export function useStocksData(state: ReturnType<typeof useStocksState>) {
     setMinuteDialogName,
     setStockCtxMenu,
     setMarketStatus,
+    marketStatus,
     klineRefreshInFlight,
     agentDialogStock,
     setDeepAnalysisTarget,
@@ -106,6 +173,19 @@ const openDeepAnalysis = useCallback((stockId: number, symbol: string, name: str
 
 
 const { toast } = useToast()
+
+/**
+ * 行情时效的两条**本地**心跳记账（2026-10-29 复审 B1）。
+ *
+ * 它们不表示"请求发出去了"，只表示"**成功拿到过**"，所以即使请求挂死/被同键合并成
+ * 一条永不 settle 的 promise，本地也能按有效期把旧墙钟/旧报价降级成 unknown。
+ *  - `marketClockSampledAtRef`：最近一次成功取到服务器市场墙钟的时刻；
+ *  - `lastMarketClockRef`：上一次采样的各市场当地分钟数（用来识别跨日回绕）；
+ *  - `quotePolledAtRef`：最近一次批量行情成功的时刻（快照日期层的有效期起点）。
+ */
+const marketClockSampledAtRef = useRef(0)
+const lastMarketClockRef = useRef<Record<string, number>>({})
+const quotePolledAtRef = useRef(0)
 
 const moveById = <T extends { id: number }>(list: T[], fromId: number, toId: number): T[] => {
   const fromIdx = list.findIndex(x => x.id === fromId)
@@ -236,6 +316,9 @@ const load = useCallback(async () => {
   try {
     const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
     setMarketStatus(marketStatusData)
+    // 成功拿到才算一次有效采样（本地有效期起点，见 marketClockSampledAtRef）
+    lastMarketClockRef.current = clockMinutesOfRows(marketStatusData)
+    marketClockSampledAtRef.current = Date.now()
   } catch (e) {
     logger.warn('获取市场状态失败:', e)
   }
@@ -257,6 +340,8 @@ const loadPortfolio = useCallback(async () => {
     try {
       const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
       setMarketStatus(marketStatusData)
+      lastMarketClockRef.current = clockMinutesOfRows(marketStatusData)
+      marketClockSampledAtRef.current = Date.now()
     } catch (e) {
       logger.warn('获取市场状态失败:', e)
     }
@@ -294,11 +379,24 @@ const refreshMarketStatus = useCallback(async () => {
   if (marketStatusInFlightRef.current) return marketStatusInFlightRef.current
   const run = (async () => {
     try {
-      const rows = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
+      const rows = await fetchAPI<MarketStatus[]>('/stocks/markets/status', { cacheMode: 'reload' })
+      const nextClock = clockMinutesOfRows(rows)
+      // 2026-10-29 复审 B3：服务器市场墙钟**回绕**（15:03 → 09:31）就是"跨日"的可核对信号。
+      // 这时上一轮快照的 `quote_date` / `daily_pnl_period` 属于昨天，必须立刻作废 ——
+      // 否则第二天同一分钟（09:31 对 09:31）会被算成"距今 0 分钟"。
+      // 只认明显倒退（>5 分钟），不把时钟微调当跨日。
+      if (hasMarketDayRollover(lastMarketClockRef.current, nextClock)) {
+        quotePolledAtRef.current = 0
+        setQuotes(prev => expireQuoteSnapshots(prev))
+      }
+      lastMarketClockRef.current = nextClock
+      marketClockSampledAtRef.current = Date.now()
       setMarketStatus(rows)
     } catch (e) {
       logger.warn('刷新市场状态失败:', e)
       // 没有可信的服务器墙钟 ⇒ 时效判定必须退化成"时点未证实"（见上）。
+      marketClockSampledAtRef.current = 0
+      lastMarketClockRef.current = {}
       setMarketStatus([])
     }
   })()
@@ -308,7 +406,7 @@ const refreshMarketStatus = useCallback(async () => {
   } finally {
     marketStatusInFlightRef.current = null
   }
-}, [setMarketStatus])
+}, [setMarketStatus, setQuotes])
 
 const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
   const items: QuoteRequestItem[] = []
@@ -386,6 +484,8 @@ const refreshQuotes = useCallback(async () => {
           }
         }
         setQuotes(map)
+        // 快照日期层的有效期起点：只有**成功轮询**才刷新它（WS tick 不算）。
+        quotePolledAtRef.current = Date.now()
         setLastRefreshTime(new Date())
       } catch (e) {
         logger.warn('刷新行情失败:', e)
@@ -747,11 +847,65 @@ usePausedInterval(autoRefreshTick, autoRefresh ? refreshInterval * 1000 : 0, {
 })
 
 /**
+ * 本地有效期检查（2026-10-29 复审 B1）—— **不看请求状态**，只看"最后一次成功取到"。
+ *
+ * 为什么必要：`fetchAPI` 的超时以前只覆盖到响应头（已修，见 `packages/api`），但即使
+ * 修好超时，链路也可能连续几轮都失败。此时请求状态是不可信的，唯一可靠的是本地记账：
+ *  - 墙钟超期 ⇒ 清空市场状态（下游判 `no_clock`，报价一律"时点未证实"）；
+ *  - 报价快照超期 ⇒ 清掉时刻/日期/期间与涨跌幅，只留价格陈列（下游判 `unknown`，
+ *    当日盈亏也不把它算进"今日"篮子）。
+ * 两者都独立于 autoRefresh 开关与 WS 是否活着。
+ */
+const expireStaleSnapshots = useCallback(() => {
+  const now = Date.now()
+  if (marketClockSampledAtRef.current > 0 && now - marketClockSampledAtRef.current > MARKET_CLOCK_TTL_MS) {
+    marketClockSampledAtRef.current = 0
+    lastMarketClockRef.current = {}
+    setMarketStatus([])
+  }
+  if (quotePolledAtRef.current > 0 && now - quotePolledAtRef.current > QUOTE_SNAPSHOT_TTL_MS) {
+    quotePolledAtRef.current = 0
+    const hasEvidence = Object.values(quotesRef.current).some(
+      q => q.quote_time !== null || q.quote_date !== null || q.daily_pnl_period !== 'unknown' || q.change_pct !== null,
+    )
+    if (hasEvidence) setQuotes(prev => expireQuoteSnapshots(prev))
+  }
+}, [setMarketStatus, setQuotes])
+
+/**
+ * 现在该不该轮询批量行情（2026-10-29 复审「20s 全自选流量」）。
+ *
+ * - 有市场在交易（或状态未知）⇒ 按心跳节奏（20s）；
+ * - **已知**所有相关市场都休市 ⇒ 降到 `IDLE_QUOTE_REFRESH_MS`（120s）；
+ *   收盘后价格不动，20s 一轮只是把每个在线用户的全自选白白打一遍。
+ * 市场墙钟不受此限制（后端纯本地计算，按 20s 刷）。
+ *
+ * ⚠️ 必须读 **ref** 而不是闭包里的 `marketStatus`：`usePausedInterval` 在回调身份变化时
+ * 会重新挂表并且 `immediate:true` 立刻再跑一次。若把 `marketStatus` 放进 `useCallback`
+ * 依赖，每次写回市场状态（新数组）都会改变回调身份 ⇒ 立刻再请求 ⇒ 再写回 ⇒ 自激请求环。
+ * 这里固定身份（`[]` 依赖），状态走 `marketStatusRef`（每次渲染同步）。
+ */
+const marketStatusRef = useRef<MarketStatus[]>([])
+marketStatusRef.current = Array.isArray(marketStatus) ? marketStatus : []
+const shouldPollQuotesNow = useCallback((now: number): boolean => {
+  const rows = marketStatusRef.current
+  const tracked = new Set(
+    buildQuoteItemsRef.current().map(it => String(it.market ?? 'CN').trim().toUpperCase()),
+  )
+  const relevant = rows.filter(r => tracked.has(String(r?.code ?? '').trim().toUpperCase()))
+  const scope = relevant.length > 0 ? relevant : rows
+  const anyTrading =
+    scope.length === 0 || scope.some(r => String(r?.status ?? '').trim().toLowerCase() === 'trading')
+  const gap = anyTrading ? FRESHNESS_HEARTBEAT_MS : IDLE_QUOTE_REFRESH_MS
+  return now - quotePolledAtRef.current >= gap
+}, [])
+
+/**
  * 行情时效心跳（2026-10-29 独立复审 F1）—— **不读 autoRefresh**。
  *
- * 只做两件事：刷新服务器市场墙钟 + 刷新本地行情。它们是"这条报价是不是当下的"这个
- * 判断的**唯一外部依据**（`freshnessFor` 的两个输入），一旦随用户开关一起冻住，
- * 持仓风险与防线告警就会拿上午的价说"现在破位"。
+ * 只做三件事：清掉过期快照（本地有效期，B1）+ 刷新服务器市场墙钟 + 按需刷新本地行情。
+ * 三者是"这条报价是不是当下的"这个判断的**唯一外部依据**（`freshnessFor` 的输入），
+ * 一旦随用户开关一起冻住，持仓风险与防线告警就会拿上午的价说"现在破位"。
  *
  * 刻意不在这里刷 K 线/建议池/账户汇总：那些是"用户主动要的更重的东西"，
  * 关掉自动刷新时不该被偷偷拉起（性能与配额都受不起）。
@@ -759,9 +913,10 @@ usePausedInterval(autoRefreshTick, autoRefresh ? refreshInterval * 1000 : 0, {
  * 并发由 `refreshQuotes` / `refreshMarketStatus` 各自的 in-flight 闸门兜住。
  */
 const freshnessHeartbeat = useCallback(() => {
+  expireStaleSnapshots()
   void refreshMarketStatus()
-  void refreshQuotes()
-}, [refreshMarketStatus, refreshQuotes])
+  if (shouldPollQuotesNow(Date.now())) void refreshQuotes()
+}, [expireStaleSnapshots, refreshMarketStatus, refreshQuotes, shouldPollQuotesNow])
 usePausedInterval(freshnessHeartbeat, FRESHNESS_HEARTBEAT_MS, {
   deps: [freshnessHeartbeat],
 })

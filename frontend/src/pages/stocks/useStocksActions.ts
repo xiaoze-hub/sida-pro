@@ -14,6 +14,7 @@ import { safeMoney } from '@/lib/format'
 import { safePrice } from '@/lib/format'
 import { stocksApi } from '@sida/api'
 import { useToast } from '@sida/base-ui/components/ui/toast'
+import { notifyDefenseLinesChanged } from '@/lib/defense-lines'
 
 import type { useStocksState } from './useStocksState'
 import type { useStocksData } from './useStocksData'
@@ -385,6 +386,9 @@ const handlePositionSubmit = async () => {
     } else {
       await fetchAPI('/positions', { method: 'POST', body: JSON.stringify(payload) })
     }
+    // 2026-10-29 复审 B5: 持仓行变了（新增/改成本/换账户）⇒ 别的页面挂着的防线告警条
+    // 必须立刻重取，否则它还在按旧持仓行（旧防线/旧账户）报警。
+    notifyDefenseLinesChanged()
     setPositionDialogOpen(false)
     loadPortfolio()
     toast(editPositionId ? '持仓已更新' : '持仓已添加', 'success')
@@ -397,6 +401,8 @@ const handleDeletePosition = async (id: number) => {
   if (!confirm('确定删除该持仓？')) return
   try {
     await fetchAPI(`/positions/${id}`, { method: 'DELETE' })
+    // 删除即"这条防线不存在了"：不广播的话，工作台那条告警条会继续报"已击穿"。
+    notifyDefenseLinesChanged()
     loadPortfolio()
     toast('持仓已删除', 'success')
   } catch (e) {

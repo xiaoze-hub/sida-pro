@@ -21,6 +21,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@sida/base-ui/components/ui/dialog'
+import {
+  notifyDefenseLinesChanged,
+  onDefenseLinesChanged,
+  onWindowDefenseLinesChanged,
+} from '@/lib/defense-lines'
 
 /**
  * 持仓防线击穿与止损预警条 (DefenseLineBanner)
@@ -117,6 +122,14 @@ interface MarketStatusRow {
 interface PositionState {
   status: 'loading' | 'ok' | 'error'
   lines: HeldLine[]
+  /**
+   * 持仓行这份读数是否"仍然被成功续期"（2026-10-29 复审 B5）。
+   *
+   * 旧实现只在挂载时取一次持仓：别处改了/删了防线，告警条不知道。现在按
+   * `DEFENSE_QUOTE_REFRESH_MS` 续期 + 订阅防线变更广播；**续期失败时必须置 false**：
+   * 手里这份防线已无从证明是当前的，不许拿它出破位结论（保守降级，而不是继续报警）。
+   */
+  verified: boolean
 }
 
 const EMPTY_QUOTE: QuoteState = {
@@ -212,7 +225,11 @@ export function DefenseLineBanner({
 }) {
   const [quotesByMarket, setQuotesByMarket] = useState<Record<string, QuoteState>>({})
   const [sessions, setSessions] = useState<Record<string, MarketSessionInfo> | null>(null)
-  const [position, setPosition] = useState<PositionState>({ status: 'loading', lines: [] })
+  const [position, setPosition] = useState<PositionState>({
+    status: 'loading',
+    lines: [],
+    verified: true,
+  })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<HeldLine | null>(null)
   const [draft, setDraft] = useState('')
@@ -221,42 +238,9 @@ export function DefenseLineBanner({
 
   const active = !!hasPosition
 
-  // 防线/成本来自持仓行本身(而非父组件 props): 只有持仓行知道"用户到底设没设过"、
-  // 以及"这个账户的成本是多少"。同标的多账户全都要取回来 —— 取第一条就是旧 bug。
-  useEffect(() => {
-    let cancelled = false
-    if (!active) {
-      setPosition({ status: 'ok', lines: [] })
-      setQuotesByMarket({})
-      return
-    }
-    setPosition({ status: 'loading', lines: [] })
-    fetchAPI<PortfolioSummaryLike>('/portfolio/summary?include_quotes=false')
-      .then((res) => {
-        if (cancelled) return
-        const lines: HeldLine[] = (res?.accounts || []).flatMap((acc) =>
-          (acc.positions || [])
-            .filter((p) => p.symbol === symbol)
-            .map((p) => ({
-              positionId: p.id ?? null,
-              accountId: String(acc.id),
-              accountName: String(acc.name ?? '账户'),
-              market: normalizeMarket(p.market),
-              costPrice: positivePrice(p.cost_price),
-              defensePrice: positivePrice(p.defense_price),
-            })),
-        )
-        setPosition({ status: lines.length > 0 ? 'ok' : 'error', lines })
-      })
-      .catch(() => {
-        if (!cancelled) setPosition({ status: 'error', lines: [] })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [symbol, active])
-
   // 卸载后置 false：异步回调据此丢弃结果（避免卸载后 setState / 续期继续跑）。
+  // 注意顺序：`loadPositions` / `loadSessions` / `loadQuotes` 的异步体都会读它，
+  // 所以它必须声明在使用者之前（effect 执行时一定已初始化，这里只是避免 use-before-define）。
   const aliveRef = useRef(true)
   useEffect(() => {
     aliveRef.current = true
@@ -265,19 +249,101 @@ export function DefenseLineBanner({
     }
   }, [])
 
+  // 续期闸门：上一轮持仓行请求还没回来就不再叠一轮（广播 + 心跳可能同时到点）。
+  const positionInFlightRef = useRef(false)
+  /**
+   * 取该标的在**所有账户**的持仓行（防线/成本来自持仓行本身，而不是父组件 props）。
+   *
+   * 2026-10-29 复审 B5：旧实现只在挂载时取一次 —— 别处改了防线（改/删/换账户）后，
+   * 告警条仍按挂载时那份防线报警。现在首拉与续期走同一个 loader：
+   *  - 防线变更广播（`notifyDefenseLinesChanged`，见 `@/lib/defense-lines`）立即触发；
+   *  - `DEFENSE_QUOTE_REFRESH_MS` 心跳兜底（覆盖助手/脚本直接改库式改动）；
+   *  - 失败时**保留旧读数但标记未核实**（`verified=false`），由判定层降级成"时效未核实"，
+   *    不再拿过期防线出破位结论。
+   */
+  const loadPositions = useCallback(async () => {
+    if (!active) {
+      setPosition({ status: 'ok', lines: [], verified: true })
+      return
+    }
+    if (positionInFlightRef.current) return
+    positionInFlightRef.current = true
+    try {
+      // `cacheMode:'reload'` 是必须的（2026-10-29 复审 B5）：`fetchAPI` 对 GET 有 30s 内存缓存，
+      // 续期/广播触发的重取若命中缓存，等于**又拿回同一份旧防线**，"续期"变成空动作。
+      const res = await fetchAPI<PortfolioSummaryLike>('/portfolio/summary?include_quotes=false', {
+        cacheMode: 'reload',
+      })
+      if (!aliveRef.current) return
+      const lines: HeldLine[] = (res?.accounts || []).flatMap((acc) =>
+        (acc.positions || [])
+          .filter((p) => p.symbol === symbol)
+          .map((p) => ({
+            positionId: p.id ?? null,
+            accountId: String(acc.id),
+            accountName: String(acc.name ?? '账户'),
+            market: normalizeMarket(p.market),
+            costPrice: positivePrice(p.cost_price),
+            defensePrice: positivePrice(p.defense_price),
+          })),
+      )
+      // `ok` 但 lines 为空 = 这条持仓已经不在（被删/换账户）：渲染层明说"不在持仓中"，
+      // 不继续用旧防线报警。`error` 只留给"取不到"。
+      setPosition({ status: 'ok', lines, verified: true })
+    } catch {
+      if (!aliveRef.current) return
+      setPosition((prev) =>
+        // 有过读数 ⇒ 旧读数还在（价/防线都能陈列），但已无从核实：verified=false。
+        // 从没读到过 ⇒ "未知"（不是"未核实"）：没有旧读数可核实，也没法判破位。
+        prev.lines.length > 0
+          ? { ...prev, verified: false }
+          : { status: 'error', lines: [], verified: true },
+      )
+    } finally {
+      positionInFlightRef.current = false
+    }
+  }, [active, symbol])
+
+  // 挂载 / 切标的 / 持仓可见性变化 ⇒ 首拉。
+  useEffect(() => {
+    if (!active) {
+      setPosition({ status: 'ok', lines: [], verified: true })
+      setQuotesByMarket({})
+      return
+    }
+    setPosition({ status: 'loading', lines: [], verified: true })
+    void loadPositions()
+  }, [loadPositions, active])
+
+  // 防线变更广播（同页模块级订阅 + 跨标签页 window 事件）：别处保存/删除后立刻重取。
+  useEffect(() => {
+    const reload = () => {
+      void loadPositions()
+    }
+    const offModule = onDefenseLinesChanged(reload)
+    const offWindow = onWindowDefenseLinesChanged(reload)
+    return () => {
+      offModule()
+      offWindow()
+    }
+  }, [loadPositions])
+
   // 服务器市场墙钟/状态：时效判定的「时刻层」只能用服务器给的事实，不读本机时钟。
   // 2026-10-29 独立复审 F2：这份墙钟必须能**续期**，且续期失败时不许沿用旧值 ——
   // 一个停在 09:31 的墙钟配上 09:31 的报价，就是"永远新鲜"的假象（判破位的直接原因）。
   const loadSessions = useCallback(async () => {
     if (!active) return
     try {
-      const rows = await fetchAPI<MarketStatusRow[]>('/stocks/markets/status')
+      // 同上：30s 内存缓存会让"墙钟续期"变成空动作（时钟停在缓存那一刻）。
+      const rows = await fetchAPI<MarketStatusRow[]>('/stocks/markets/status', { cacheMode: 'reload' })
       if (!aliveRef.current) return
       const next: Record<string, MarketSessionInfo> = {}
       for (const row of Array.isArray(rows) ? rows : []) {
         if (!row?.code) continue
         next[normalizeMarket(row.code)] = {
           localTime: row.local_time ?? null,
+          // 后端哪天把市场当地日期一起下发（`local_date`），跨日判定就直接用它（B3）。
+          localDate: (row as { local_date?: string | null }).local_date ?? null,
           status: row.status ?? null,
         }
       }
@@ -308,8 +374,10 @@ export function DefenseLineBanner({
         await Promise.all(
           targets.map(async (market) => {
             try {
+              // 30s 内存缓存会让 20s 续期变成空动作 —— 价必须真取（B1/F2 的续期才有意义）。
               const res = await fetchAPI<QuoteData>(
                 `/quotes/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`,
+                { cacheMode: 'reload' },
               )
               if (!aliveRef.current) return
               const p = positivePrice(res?.current_price ?? res?.price)
@@ -365,14 +433,16 @@ export function DefenseLineBanner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, active, marketsKey])
 
-  // 续期：价 + 市场墙钟一起刷（只刷一个同样会让"距今多久"失真）。
+  // 续期：价 + 市场墙钟 + 持仓行（防线）一起刷 —— 只刷其中一个都会让结论失真：
+  // 缺价没结论、缺钟没法判时刻、缺持仓行则可能拿着一条已经被改掉/删掉的防线继续报警。
   // 页签隐藏由 `usePausedInterval` 停表，回前台立即补一次，卸载自动清定时器。
   const marketsRef = useRef(markets)
   marketsRef.current = markets
   const refreshTick = useCallback(() => {
     void loadSessions()
     void loadQuotes(marketsRef.current)
-  }, [loadQuotes, loadSessions])
+    void loadPositions()
+  }, [loadPositions, loadQuotes, loadSessions])
   usePausedInterval(refreshTick, DEFENSE_QUOTE_REFRESH_MS, {
     deps: [active, symbol, marketsKey],
     immediate: false,
@@ -395,10 +465,14 @@ export function DefenseLineBanner({
         setPosition((prev) => ({
           ...prev,
           status: 'ok',
+          verified: true,
           lines: prev.lines.map((line) =>
             line.positionId === positionId ? { ...line, defensePrice: saved } : line,
           ),
         }))
+        // 广播给其他页面/标签页（B5）：这里保存成功，那边挂着的告警条要立刻重取，
+        // 否则它会继续按旧防线报警。传值没有意义（别人不知道我们改成了什么），只传"变了"。
+        notifyDefenseLinesChanged()
         setDialogOpen(false)
       } catch {
         setSaveError('保存失败，请重试')
@@ -529,13 +603,28 @@ export function DefenseLineBanner({
   if (anyQuoteLoading) return null
 
   // ① 持仓读取失败: 说"未知", 不冒充"未设置"。
-  if (position.status === 'error' || position.lines.length === 0) {
+  if (position.status === 'error') {
     return (
       <div
         className={`${shell} border-border bg-s1 text-muted-foreground`}
         data-testid="defense-line-unknown"
       >
-        <span>防守线状态未知（持仓读取失败）</span>
+        <span>
+          {position.verified
+            ? '防守线状态未知（持仓读取失败）'
+            : '防守线状态未核实（持仓读取失败，不按旧读数判破位）'}
+        </span>
+      </div>
+    )
+  }
+  // ①b 持仓行不在了（被删除 / 换到别的账户）：明说，不继续拿旧防线报警。
+  if (position.lines.length === 0) {
+    return (
+      <div
+        className={`${shell} border-border bg-s1 text-muted-foreground`}
+        data-testid="defense-line-unknown"
+      >
+        <span>该持仓已不在持仓中（防守线不适用）；页面数据更新后本条会消失</span>
       </div>
     )
   }
@@ -618,9 +707,10 @@ export function DefenseLineBanner({
       defense: line.defensePrice,
       period: quote.period,
       quoteTime: quote.quoteTime,
+      quoteDate: quote.quoteDate,
       market: session,
-      // 续期失败 ⇒ 这份快照不再能证明"是当下的"，一律判时效未核实（不给破位结论）。
-      verified: quote.verified,
+      // 续期失败（价或持仓行任一条）⇒ 这份快照不再能证明"是当下的"，一律判时效未核实。
+      verified: quote.verified && position.verified,
     })
     const state: DefenseState = verdict.state
     const breached = state === 'breached'

@@ -113,8 +113,13 @@ export type Currency = 'CNY' | 'HKD' | 'USD' | 'UNKNOWN'
  * 这两个字段是「时效判定」唯一允许的外部事实（前端不自己算时段/日历）。
  */
 export interface MarketSessionInfo {
-  /** "HH:MM"（服务器市场当地墙钟）。 */
+  /** "HH:MM"（服务器市场当地墙钟）。也可能带日期（"YYYY-MM-DD HH:MM"），带上就直接比对日期。 */
   localTime?: string | null
+  /**
+   * 服务器市场当地**日期**（`YYYY-MM-DD`）。后端目前只下发 `HH:MM`，这里留字段：
+   * 哪天把日期补上，跨日判定就直接用可核对的服务器事实，而不用退化成"证明不了"。
+   */
+  localDate?: string | null
   /** trading / break / after_hours / pre_market / closed / unknown。 */
   status?: string | null
 }
@@ -321,6 +326,24 @@ export function formatWallClockMinutes(minutes: number | null): string | null {
 }
 
 /**
+ * 从字符串里取**日历日**（`YYYY-MM-DD`）。取不到给 null。
+ *
+ * 只做"有没有日期"这件事，不做时区换算/日期加减（那是服务器按市场时区算好的活）。
+ * 报价日期（`quote_date`）与服务器市场墙钟（`local_time`/`localDate`）都带日期时，
+ * 两者必须相等才谈得上"同一交易日"（2026-10-29 复审 B3）。
+ */
+export function wallClockDate(value: unknown): string | null {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  const m = /(\d{4})-(\d{2})-(\d{2})/.exec(text)
+  if (!m) return null
+  const month = Number(m[2])
+  const day = Number(m[3])
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  return `${m[1]}-${m[2]}-${m[3]}`
+}
+
+/**
  * 行情时效判定 —— **唯一实现**（持仓清单与告警条共用）。
  *
  * 只看两件服务器给的事实：`daily_pnl_period`（市场时区判好的日期层）与
@@ -331,6 +354,15 @@ export function freshnessFor(args: {
   price: unknown
   period?: string | null
   quoteTime?: string | null
+  /**
+   * 报价自身的**日历日**（`quote_date`）。缺省时退回 `quoteTime` 里的日期段。
+   *
+   * 2026-10-29 复审 B3：`period='today'` 只说明"取数那一刻后端判它是当日"，
+   * 而 `HH:mm` 这种没有日期的钟**不能**自证跨日 —— 昨天 09:31 的价配今天 09:31 的钟，
+   * 旧的算法算出差 0 分钟就判 `current`。现在带日期的服务器市场墙钟
+   * （`market.localDate` / `localTime` 内含日期）与报价日期都已知时必须相等。
+   */
+  quoteDate?: string | null
   market?: MarketSessionInfo | null
   /**
    * 这份读数本身是否"仍然被成功刷新过"（默认 `true`）。
@@ -339,12 +371,20 @@ export function freshnessFor(args: {
    * 价与市场墙钟**一起停在同一时刻**，年龄恒为 0，旧价被判成实时。
    * 调用方在"续期失败"时必须传 `false`：手里这份快照已经无从证明是当下的，
    * 哪怕它的 `quote_time` 看起来还很新。
+   *
+   * 2026-10-29 复审 B3 补充：服务器市场墙钟目前只有 `HH:MM`（无日期）时，
+   * "这份快照是否还在本地有效期内"**只能由调用方保证**（`useStocksData` 的
+   * `QUOTE_SNAPSHOT_TTL_MS` + 市场墙钟回绕检测）。过期 ⇒ 这里必须收到 `false`，
+   * 绝不允许"钟一样 ⇒ 就是同一分钟"的自证。
    */
   verified?: boolean
 }): FreshnessVerdict {
   const quoteLocalMinutes = wallClockMinutes(args.quoteTime)
   const marketLocalMinutes = wallClockMinutes(args.market?.localTime)
   const marketStatusRaw = String(args.market?.status ?? '').trim().toLowerCase()
+  const quoteDate = wallClockDate(args.quoteDate) ?? wallClockDate(args.quoteTime)
+  const quoteTimeDate = wallClockDate(args.quoteTime)
+  const marketDate = wallClockDate(args.market?.localDate) ?? wallClockDate(args.market?.localTime)
   const verdict = (
     freshness: QuoteFreshness,
     reason: FreshnessReason,
@@ -379,6 +419,16 @@ export function freshnessFor(args: {
 
   // ③ 时刻层：没有报价时刻 ⇒ 证明不了「刚发生」，不许当实时。
   if (quoteLocalMinutes === null) return verdict('unknown', 'no_time')
+  // ③b 日期层自洽（2026-10-29 复审 B3）：报价日期与报价时刻里的日期不一致 ⇒ 内部矛盾，
+  //     不猜哪一个是真的（跨日残留 / 字段串源），一律时点存疑。
+  if (quoteDate !== null && quoteTimeDate !== null && quoteDate !== quoteTimeDate) {
+    return verdict('unknown', 'clock_skew')
+  }
+  // ③c 日期层比对：服务器市场墙钟带日期时，报价日期必须与它同一天。
+  //     昨天 09:31 的报价 + 今天 09:31 的钟，HH:mm 差 0 也**不是**同一分钟（旧算法的错判）。
+  if (quoteDate !== null && marketDate !== null && quoteDate !== marketDate) {
+    return verdict('stale', 'period')
+  }
   // ④ 没有服务器市场墙钟 ⇒ 无从比较，不猜本机时间。
   if (marketLocalMinutes === null) return verdict('unknown', 'no_clock')
 
@@ -438,6 +488,8 @@ export function resolveDefenseState(args: {
   defense: unknown
   period?: string | null
   quoteTime?: string | null
+  /** 报价自身的日历日（见 `freshnessFor` 的同名参数；B3 跨日判定用）。 */
+  quoteDate?: string | null
   market?: MarketSessionInfo | null
   /** 读数是否仍在被成功刷新（见 `freshnessFor` 的同名参数）。 */
   verified?: boolean
@@ -452,6 +504,7 @@ export function resolveDefenseState(args: {
     price: args.price,
     period: args.period,
     quoteTime: args.quoteTime,
+    quoteDate: args.quoteDate,
     market: args.market,
     verified: args.verified,
   })
@@ -529,6 +582,7 @@ export function rowFromPosition(
     defense,
     period: pricePeriod,
     quoteTime: p.quote_time,
+    quoteDate: p.quote_date,
     market: marketSession,
   })
 

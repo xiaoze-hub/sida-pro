@@ -61,21 +61,27 @@ export function applyQuoteTicks(
     const key = `${target.market}:${target.symbol}`
     const carried = next[key]
     const frameTime = nonEmpty(tick.quote_time)
+    const nextChangePct = tick.change_pct ?? null
     // ① 帧自带可靠时刻 ⇒ 价格与时刻一起换（唯一"更新时效"的路径）。
-    // ② 帧没带时刻，但价格与上一轮**已验证的那一对**逐位相同 ⇒ 那一对仍然成立：
-    //    "110 出现在 14:00" 这件事不会被一笔"现在还是 110"的推送推翻，报价时刻依然有效。
+    // ② 帧没带时刻，但价格与上一轮**已验证的那一对**逐位相同、**涨跌幅也没有新信息** ⇒
+    //    那一对仍然成立："110 出现在 14:00" 这件事不会被一笔"现在还是 110"的推送推翻。
     //    （这也是实际最常见的情形 —— 价格几十秒不变，没必要每 5s 把时效打回未知。）
-    // ③ 价格变了却没有时刻 ⇒ 旧时刻属于旧价，**必须**判未知，绝不沿用。
+    // ③ **价格没变但涨跌幅变了** ⇒ 帧带来的是"另一段时间"的信息（典型：隔日开盘同价、
+    //    新的当日涨跌幅）。旧日期/期间属于旧的那一天，绝不能给新的涨跌幅作证 —— 否则
+    //    「昨天 15:00 + 昨天判的 today + 今天的 change_pct」会一路被下游当今日盈亏（B3）。
+    // ④ 价格变了却没有时刻 ⇒ 旧时刻属于旧价，**必须**判未知，绝不沿用。
+    const sameChangePct = (carried?.change_pct ?? null) === nextChangePct
     const pairStillValid =
       frameTime === null &&
       carried !== undefined &&
       carried.current_price === tick.price &&
-      nonEmpty(carried.quote_time) !== null
+      nonEmpty(carried.quote_time) !== null &&
+      sameChangePct
     const quoteTime = frameTime ?? (pairStillValid ? carried.quote_time : null)
     next[key] = {
       current_price: tick.price,
-      change_pct: tick.change_pct ?? null,
-      // 有可靠时刻（或价格未变、原配对仍成立）⇒ 价格与时刻成对；否则时刻未知。
+      change_pct: nextChangePct,
+      // 有可靠时刻（或价格/涨跌幅都没变、原配对仍成立）⇒ 价格与时刻成对；否则时刻未知。
       quote_time: quoteTime,
       quote_date: frameTime !== null ? nonEmpty(tick.quote_date) : pairStillValid ? carried.quote_date : null,
       daily_pnl_period:
@@ -84,6 +90,33 @@ export function applyQuoteTicks(
           : pairStillValid
             ? carried.daily_pnl_period
             : 'unknown',
+    }
+  }
+  return next
+}
+
+/**
+ * 本地有效期到期后的降级（2026-10-29 复审 B1）：**价格留着陈列，时效证据全部作废**。
+ *
+ * 为什么需要：行情快照的"日期层"（`daily_pnl_period` / `quote_date`）只由轮询刷新。
+ * 如果轮询挂死/长时间失败，`quotes` 里那条快照会一直躺着，而 WS tick 只更价 ——
+ * 于是它看起来"刚刚被写过"，实际日期与时刻是几小时甚至隔日的。这里把证据清掉：
+ *   - `quote_time` / `quote_date` → `null`、`daily_pnl_period` → `unknown`
+ *     ⇒ 下游 `freshnessFor` 判 `unknown`（时点未证实），绝不当实时；
+ *   - `change_pct` → `null`（它可能是上一交易日的涨跌幅，不配陈列在这个价旁边）；
+ *   - `current_price` 保留（读数仍可核对，只是"什么时候的价"要标未知）。
+ */
+export function expireQuoteSnapshots(
+  prev: Record<string, QuoteSnapshot>,
+): Record<string, QuoteSnapshot> {
+  const next: Record<string, QuoteSnapshot> = {}
+  for (const [key, snapshot] of Object.entries(prev)) {
+    next[key] = {
+      current_price: snapshot.current_price,
+      change_pct: null,
+      quote_time: null,
+      quote_date: null,
+      daily_pnl_period: 'unknown',
     }
   }
   return next

@@ -231,14 +231,17 @@ function Metric({
 /** 把页面已加载的市场状态折成时效判定要用的「服务器市场时钟 + 状态」。 */
 function buildMarketSessions(marketStatus: unknown): MarketSessionMap {
   const list = Array.isArray(marketStatus) ? marketStatus : []
-  const map: Record<string, { localTime: string | null; status: string | null }> = {}
+  const map: Record<string, { localTime: string | null; localDate: string | null; status: string | null }> = {}
   for (const raw of list) {
     if (!raw || typeof raw !== 'object') continue
-    const item = raw as { code?: string; local_time?: string; status?: string }
+    const item = raw as { code?: string; local_time?: string; local_date?: string; status?: string }
     const code = String(item.code ?? '').trim().toUpperCase()
     if (!code) continue
     map[code] = {
       localTime: item.local_time ?? null,
+      // 后端哪天把市场当地日期一起下发，跨日判定就直接用它（B3）；
+      // 现在只有 HH:MM，日期层由 `daily_pnl_period` + 后端判好的 quote_date 承担。
+      localDate: item.local_date ?? null,
       status: item.status ?? null,
     }
   }

@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { applyQuoteTicks } from '@/pages/stocks/quote-ticks'
+import { applyQuoteTicks, expireQuoteSnapshots } from '@/pages/stocks/quote-ticks'
 import type { QuoteSnapshot } from '@/pages/stocks/shared'
 import { freshnessFor } from '@/lib/position-risk'
 
@@ -119,6 +119,64 @@ describe('applyQuoteTicks · 不带报价时刻的 WS 帧', () => {
       '600111': { price: Number.NaN } as unknown as { price: number },
     })
     expect(next[KEY]).toEqual(prev[KEY])
+  })
+})
+
+describe('applyQuoteTicks · 跨日同价（B3）', () => {
+  /** 昨天收盘留下的已验证配对：价格 33、时刻 15:00、日期昨天、期间「昨天判的 today」。 */
+  const yesterday = polled({
+    current_price: 33,
+    change_pct: 0,
+    quote_time: '2026-10-28 15:00:00',
+    quote_date: '2026-10-28',
+  })
+
+  it('价格没变但涨跌幅变了 → 不沿用旧日期/期间（昨天 today + 今天新涨跌幅 = 串日）', () => {
+    const next = applyQuoteTicks({ [KEY]: yesterday }, ITEMS, {
+      '600111': { price: 33, change_pct: 1.2 },
+    })
+    const q = next[KEY]
+    expect(q.current_price).toBe(33)
+    expect(q.change_pct).toBe(1.2)
+    // 价格没变 ≠ 这一对没被推翻：涨跌幅是新的一天的，旧日期/期间不能再给它作证
+    expect(q.quote_time).toBeNull()
+    expect(q.quote_date).toBeNull()
+    expect(q.daily_pnl_period).toBe('unknown')
+  })
+
+  it('同价同涨跌幅（没有任何新信息）仍保留已验证的一对', () => {
+    const next = applyQuoteTicks({ [KEY]: yesterday }, ITEMS, {
+      '600111': { price: 33, change_pct: 0 },
+    })
+    expect(next[KEY].quote_time).toBe('2026-10-28 15:00:00')
+    expect(next[KEY].quote_date).toBe('2026-10-28')
+    expect(next[KEY].daily_pnl_period).toBe('today')
+  })
+})
+
+describe('expireQuoteSnapshots · 本地有效期到期后的降级', () => {
+  it('清掉时刻/日期/期间与涨跌幅，但保留价格（读数可陈列、时效不冒充）', () => {
+    const expired = expireQuoteSnapshots({
+      [KEY]: polled(),
+      'HK:00700': polled({ current_price: 380, change_pct: 2.5 }),
+    })
+    expect(expired[KEY].current_price).toBe(33)
+    expect(expired[KEY].quote_time).toBeNull()
+    expect(expired[KEY].quote_date).toBeNull()
+    expect(expired[KEY].daily_pnl_period).toBe('unknown')
+    expect(expired[KEY].change_pct).toBeNull()
+    expect(expired['HK:00700'].current_price).toBe(380)
+    const verdict = freshnessFor({
+      price: expired[KEY].current_price,
+      period: expired[KEY].daily_pnl_period,
+      quoteTime: expired[KEY].quote_time,
+      market: marketTrading,
+    })
+    expect(verdict.freshness).toBe('unknown')
+  })
+
+  it('没有可清的内容时返回等价表（不制造新引用也无害）', () => {
+    expect(expireQuoteSnapshots({})).toEqual({})
   })
 })
 
