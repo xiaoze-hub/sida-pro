@@ -74,7 +74,8 @@ function workbenchContext(overrides: Record<string, unknown> = {}): ChartContext
       { price: 12.34, kind: 'support', label: '底仓成本' },
       { price: 15.2, kind: 'pressure', label: '压力' },
     ],
-    now: 1_700_000_000_000,
+    // 读侧有 5 分钟 TTL：fixture 必须是"刚刚抓的"，否则会被判过期
+    now: Date.now(),
     ...overrides,
   }) as ChartContext
 }

@@ -29,6 +29,8 @@ import {
 } from '../../src/lib/copilot/chart-context'
 
 const OWNER = 'test-user'
+/** 固定时钟：同一测试文件内所有 fixture 共用，读侧 TTL 才不会把测试数据当过期。 */
+const NOW = Date.now()
 
 /** 一份字段齐全的合法输入（用例只覆盖自己要破坏的那一项）。 */
 function input(overrides: Record<string, unknown> = {}) {
@@ -43,7 +45,7 @@ function input(overrides: Record<string, unknown> = {}) {
       { price: 12.34, kind: 'support', label: '底仓成本' },
       { price: 15.2, kind: 'pressure', label: '压力' },
     ],
-    now: 1_700_000_000_000,
+    now: NOW,
     ...overrides,
   }
 }
@@ -58,7 +60,7 @@ describe('buildChartContext · 身份不可证明就不带', () => {
       instrument: 'stock',
       market: 'CN',
       period: 'd1',
-      capturedAt: 1_700_000_000_000,
+      capturedAt: NOW,
     })
     expect(ctx?.range).toEqual({
       from: '2026-06-01',
@@ -249,11 +251,12 @@ describe('工作台上下文仓库 · 用户/标的/类型隔离', () => {
     expect(chartContextStoreSize()).toBe(0)
   })
 
-  it('同一 key 覆盖写（周期切换不堆积）', () => {
+  it('周期属于 key：日线/周线各占一条，同号多条读取不猜（旧区间不会挂到新周期上）', () => {
     publishChartContext(buildChartContext(input({ period: 'd1' })) as ChartContext)
-    const ctx = buildChartContext(input({ period: 'w1' })) as ChartContext
+    const ctx = buildChartContext(input({ period: 'w1', range: null })) as ChartContext
     publishChartContext(ctx)
-    expect(chartContextStoreSize()).toBe(1)
-    expect(readChartContext('600111', 'CN', OWNER)?.period).toBe('w1')
+    expect(chartContextStoreSize()).toBe(2)
+    // 两条并存 → 读不到（ambiguous），不会把日线区间当成周线
+    expect(readChartContext('600111', 'CN', OWNER)).toBeNull()
   })
 })
