@@ -68,10 +68,19 @@ def _push_report_notification(report_type: str, result: dict) -> bool:
 
 
 def _generate_once_in_worker(report_type: str) -> dict:
-    """在线程内运行完整报告生成(asyncio.run), 内部自开 DB session。"""
+    """在线程内运行完整报告生成(asyncio.run), 内部自开 DB session。
+
+    归属(2026-10-29 三审): 系统定时报告 = **owner 的报告**。此前不传归属, 生成器
+    把全库所有人的持仓成本写进同一份共享文件, 任何登录用户都能读到别人的成本。
+    现在显式解析 owner 并只采其可见范围; 解析不到(无 owner 行/DB 异常)就按共享桶
+    生成(只含历史共享项), 绝不回退成"全库"。
+    """
+    from src.core import report_scope
     from src.core.report_generator import generate_market_report
 
-    return asyncio.run(generate_market_report(report_type))
+    owner_uid = report_scope.owner_user_id()
+    logger.info("[报告] %s 归属解析: owner=%s", report_type, owner_uid or "共享桶")
+    return asyncio.run(generate_market_report(report_type, user_id=owner_uid))
 
 
 class ReportScheduler:

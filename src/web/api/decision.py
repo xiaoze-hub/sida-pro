@@ -14,6 +14,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from src.core.numutil import finite_float
 from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
@@ -88,18 +89,24 @@ def _build_user_context(db: Session, user: User, symbol: str, market: str) -> di
     holds = False
     cost_price = None
     quantity = None
+    unpriced = False
     for p in positions:
         s = by_id.get(p.stock_id)
         if s and s.symbol == code and (s.market or "").upper() == mkt:
             holds = True
-            cost_price = p.cost_price
-            quantity = p.quantity
+            # 2026-10-29 三审(R2): 历史脏成本(NaN/Inf)不得原样进 JSON —— Python 的
+            # json 会把它们写成 `NaN` 字面量(非法 JSON), 前端解析直接崩。
+            # 取不到有限数就报 null(诚实: 成本未知), 绝不用 0 冒充。
+            cost_price = finite_float(p.cost_price)
+            quantity = finite_float(p.quantity)
+            unpriced = cost_price is None
             break
     return {
         "risk_profile": _infer_risk_profile([p.trading_style for p in positions]),
         "holds": holds,
         "cost_price": cost_price,
         "quantity": quantity,
+        "cost_unknown": unpriced,
         "in_watchlist": in_watchlist,
     }
 

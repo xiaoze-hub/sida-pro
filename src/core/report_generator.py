@@ -282,15 +282,30 @@ async def _collect_entry_candidates(db, limit: int = 8) -> list[dict]:
         return []
 
 
-async def _collect_positions(db, with_quotes: bool = True) -> list[dict]:
-    """用户持仓(positions 表 join stocks) + 实时/前日行情。失败标注。"""
-    from src.db.models import Position, Stock
+async def _collect_positions(db, with_quotes: bool = True, user_id: str | None = None) -> list[dict]:
+    """用户持仓(positions 表 join stocks) + 实时/前日行情。失败标注。
+
+    `user_id` 作用域(2026-10-29 三审, fail-closed): 传 uid → 该用户可见的持仓
+    (账户可见 AND 持仓可见); 传 None → 只取历史共享桶(两侧 `user_id IS NULL`)。
+    旧实现 `filter(Position.quantity > 0)` 一条用户条件都没有, 于是**全库所有人的
+    成本价/持仓量**被写进同一份共享报告, 登录用户都能从报告中心读到。
+    """
+    from src.core.portfolio_scope import (
+        account_user_scope_clause,
+        position_user_scope_clause,
+    )
+    from src.db.models import Account, Position, Stock
 
     try:
         rows = (
             db.query(Position, Stock)
             .join(Stock, Position.stock_id == Stock.id)
-            .filter(Position.quantity > 0)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Position.quantity > 0,
+                account_user_scope_clause(user_id),
+                position_user_scope_clause(user_id),
+            )
             .all()
         )
     except Exception as e:
@@ -382,21 +397,26 @@ async def _collect_strategy_signals(db, limit: int = 10) -> list[dict]:
         return []
 
 
-async def _collect_data(report_type: str, db) -> dict:
-    """按报告类型采集全部数据(每段独立降级, 不互相拖累)。"""
+async def _collect_data(report_type: str, db, user_id: str | None = None) -> dict:
+    """按报告类型采集全部数据(每段独立降级, 不互相拖累)。
+
+    `user_id` 三审(2026-10-29): 全量传入持仓/自选采集, 报告只含该归属能看的数据。
+    None = 历史共享桶(fail-closed), 不是"全库"。
+    """
     now = beijing_now()
     today = now.strftime("%Y%m%d")
     market_date = now.strftime("%Y-%m-%d")
     data: dict = {
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "market_date": market_date,
+        "user_id": user_id,
         "sources": {},
     }
 
     if report_type == "premarket":
         from src.core import premarket_evidence
 
-        ev = premarket_evidence.collect(date=market_date, db=db)
+        ev = premarket_evidence.collect(date=market_date, db=db, user_id=user_id)
         data["evidence"] = ev
         data["qualities"] = {
             k: ev[k]["quality"]
@@ -424,7 +444,7 @@ async def _collect_data(report_type: str, db) -> dict:
         summary = await _collect_limit_up_summary()
         data["limit_up"] = summary if summary.get("limit_up_count") is not None else {"error": "数据获取失败"}
         data["limit_down"] = await _collect_limit_down(today)
-        data["positions"] = await _collect_positions(db, with_quotes=True)
+        data["positions"] = await _collect_positions(db, with_quotes=True, user_id=user_id)
         data["strategy_signals"] = await _collect_strategy_signals(db)
         data["sources"]["指数"] = "腾讯" if data["indices"] else "数据获取失败"
         data["sources"]["资金流"] = data["market_flow"].get("source", "数据获取失败") if not data["market_flow"].get("error") else "数据获取失败"
@@ -724,8 +744,25 @@ def _build_template_report(report_type: str, data: dict) -> str:
 # ──────────────────────────── 写盘 ────────────────────────────
 
 
-def _write_report(job_id: str, title: str, content: str, run_time: datetime) -> dict:
-    """写入 CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS.md, 返回 {path, title, size}。"""
+def _write_report(
+    job_id: str,
+    title: str,
+    content: str,
+    run_time: datetime,
+    *,
+    scope: str = "shared",
+    owner_user_id: str | None = None,
+    contains_private_holdings: bool = False,
+) -> dict:
+    """写入 CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS.md + 同目录 meta, 返回 {path, title, size}。
+
+    meta(`<name>.md.meta.json`)是报告中心的**唯一**可见性依据(见
+    `src/core/report_scope.py`): 没有 meta 的存量报告只对 owner 可见。
+    写盘顺序 = 先正文后 meta: 中途崩溃留下"无 meta 报告" → fail-closed(仅 owner),
+    绝不会反过来出现"meta 说 shared 但正文没写完"。
+    """
+    from src.core import report_scope
+
     job_dir = _report_root() / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     fname = run_time.strftime("%Y-%m-%d_%H-%M-%S") + ".md"
@@ -733,22 +770,39 @@ def _write_report(job_id: str, title: str, content: str, run_time: datetime) -> 
     body = content.strip() + "\n"
     path.write_text(body, encoding="utf-8")
     size = path.stat().st_size
-    logger.info("[报告] 已写入 %s (%d bytes)", path, size)
+    try:
+        report_scope.write_report_meta(
+            path,
+            scope=scope,
+            owner_user_id=owner_user_id,
+            generated_by="sida-report-generator",
+            contains_private_holdings=contains_private_holdings,
+            extra={"job_id": job_id},
+        )
+    except Exception as e:  # noqa: BLE001
+        # meta 写不出来 → 这份报告按"来源不明"处理(仅 owner 可读), 不阻断生成,
+        # 但必须留痕: 否则 member 侧报告中心会莫名少条目。
+        logger.error("[报告] meta 写入失败(该报告将仅 owner 可见) %s: %s", path, e)
+    logger.info("[报告] 已写入 %s (%d bytes, scope=%s)", path, size, scope)
     return {"path": str(path), "title": title, "size": size}
 
 
 # ──────────────────────────── 入口 ────────────────────────────
 
 
-async def generate_market_report(report_type: str, db=None) -> dict:
+async def generate_market_report(report_type: str, db=None, user_id: str | None = None) -> dict:
     """生成盘前(premarket)/盘后(postmarket)报告并写入报告中心。
 
     Args:
         report_type: "premarket" 或 "postmarket"
         db: 可选 SQLAlchemy session; 不传则内部自开自关。
+        user_id: 报告归属(2026-10-29 三审)。传 uid → 报告含该用户可见的持仓/自选,
+            落 meta `scope=private, owner_user_id=uid`; 传 None → **共享桶**
+            (只含历史共享项), 落 meta `scope=shared` 且 `contains_private_holdings=false`。
+            绝不"猜归属", 也不默认全库。
 
     Returns:
-        {"path": str, "title": str, "size": int}
+        {"path": str, "title": str, "size": int, "scope": str, "owner_user_id": str|None}
     """
     if report_type not in JOB_IDS:
         raise ValueError(f"未知报告类型: {report_type} (支持 premarket/postmarket)")
@@ -757,7 +811,7 @@ async def generate_market_report(report_type: str, db=None) -> dict:
     if own_db:
         db = _db_session()
     try:
-        data = await _collect_data(report_type, db)
+        data = await _collect_data(report_type, db, user_id=user_id)
         content = await _llm_generate(db, report_type, data)
         if content is None:
             content = _build_template_report(report_type, data)
@@ -765,12 +819,18 @@ async def generate_market_report(report_type: str, db=None) -> dict:
         run_time = beijing_now()
         job_id = JOB_IDS[report_type]
         title = f"# {REPORT_TITLES[report_type]} {run_time.strftime('%Y-%m-%d')}"
+        scope = "private" if user_id else "shared"
+        if user_id:
+            scope_note = f"**归属:** 用户 {user_id}\n"
+        else:
+            scope_note = "**归属:** 共享桶(仅历史共享持仓, 不含任何用户的私有持仓)\n"
         # 带 title 元信息行(Hermes cron 报告同款格式: 首行标题 + 元信息块)
         header = (
             f"{title}\n\n"
             f"**Job ID:** {job_id}\n"
             f"**Run Time:** {run_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"**Generated By:** SIDA 内置报告生成器\n"
+            f"{scope_note}"
             f"**数据源:** {', '.join(f'{k}={v}' for k, v in (data.get('sources') or {}).items()) or '未知'}\n\n"
         )
         if content.startswith("# "):
@@ -781,7 +841,18 @@ async def generate_market_report(report_type: str, db=None) -> dict:
         else:
             content = header + content
 
-        return _write_report(job_id, title, content, run_time)
+        out = _write_report(
+            job_id,
+            title,
+            content,
+            run_time,
+            scope=scope,
+            owner_user_id=user_id,
+            contains_private_holdings=bool(user_id),
+        )
+        out["scope"] = scope
+        out["owner_user_id"] = user_id
+        return out
     finally:
         if own_db:
             try:

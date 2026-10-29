@@ -14,24 +14,55 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
+from src.core.numutil import finite_float
 
-def owner_cost(db: Any, user: Any, symbol: str, market: str = "CN") -> tuple[float | None, float | None]:
-    """取本人的 (成本价, 纪律止损价)。没有持仓/没设止损就返回 None —— 不编默认止损。
 
-    实盘读 `positions.cost_price`（经 stocks 表按 symbol 关联）；模拟盘读
-    `PaperTradingPosition.entry_price` / `stop_loss`（它自带止损列，正好是「纪律位」）。
-    实盘优先：同一只票两边都有时，用户心理账户锚在实盘成本上。
+@dataclass(frozen=True)
+class CostAnchor:
+    """成本锚定的**证据**: 不只给一个数, 还给"这个数是怎么来的"。
+
+    2026-10-29 三审(R6): 旧 `owner_cost` 用 `db.query(...).first()` 在多账户场景下
+    **随便挑一行**当成本, 且 `if cost:` 判定放过 NaN(`bool(nan) is True`) —— 于是
+    "14.28 的成本"可能来自任意一个账户, 甚至是个 NaN。现在:
+
+    - 只采纳**有限且 > 0** 的成本; 脏值单独计数(`unpriced`), 不参与计算也不当 0;
+    - 多个账户成本相同(容差内) → method=`single`(就是这一个成本, 无歧义);
+    - 多个账户成本不同 → method=`weighted`, 按**持仓量加权**, 并保留 `accounts`
+      逐账户明细供文案"逐账户"展示 —— 用户能看见差异, 系统不替他挑一个;
+    - 完全没有可用成本但有持仓行 → method=`unknown`, 不做成本锚定(不编)。
+    """
+
+    cost: float | None = None
+    stop: float | None = None
+    method: str = "none"  # single | weighted | paper | unknown | none
+    accounts: list[dict[str, Any]] = field(default_factory=list)
+    unpriced: int = 0
+
+    @property
+    def has_cost(self) -> bool:
+        return self.cost is not None
+
+
+def owner_cost_detail(
+    db: Any, user: Any, symbol: str, market: str = "CN"
+) -> CostAnchor:
+    """取本人的 (成本价, 纪律止损价) 及来源证据。没有持仓 → CostAnchor()(不编默认止损)。
+
+    实盘读 `positions.cost_price`（经 stocks 表按 symbol 关联); 模拟盘读
+    `PaperTradingPosition.entry_price` / `stop_loss`。实盘优先: 同一只票两边都有时,
+    用户心理账户锚在实盘成本上。
+
+    作用域: **账户可见 AND 持仓可见**(与其它持仓口径同源), 不看别人的成本。
     """
     sym = str(symbol or "").strip().upper()
     if db is None or not sym:
-        return None, None
+        return CostAnchor()
     uid = getattr(user, "id", None)
 
     try:
-        # 2026-10-29 复审: 成本锚定同样是"账户可见 AND 持仓可见"——只按 Position.user_id
-        # 过滤时, 他人私有账户里 user_id=NULL 的持仓会被当成"我的成本"喂给 AI/用户。
         from src.core.portfolio_scope import (
             account_user_scope_clause,
             position_user_scope_clause,
@@ -41,7 +72,8 @@ def owner_cost(db: Any, user: Any, symbol: str, market: str = "CN") -> tuple[flo
         # 只取 Position 实体: `db.query(Position, Stock).first()` 返回的是 Row,
         # SQLAlchemy 2.0 的 Row 不是 tuple, 旧的 `isinstance(row, tuple)` 判定会落到
         # "整行当持仓"分支, 于是真实库上成本锚定一直是 None(2026-10-29 实测)。
-        row = (
+        # 注: 不加 .order_by() —— 顺序在 Python 侧定, 也便于最小 DB 替身复用。
+        rows = (
             db.query(Position)
             .join(Stock, Position.stock_id == Stock.id)
             .join(Account, Account.id == Position.account_id)
@@ -50,12 +82,59 @@ def owner_cost(db: Any, user: Any, symbol: str, market: str = "CN") -> tuple[flo
                 account_user_scope_clause(uid),
                 position_user_scope_clause(uid),
             )
-            .first()
+            .all()
         )
-        if row is not None:
-            cost = getattr(row, "cost_price", None)
-            if cost:
-                return float(cost), None      # 实盘没有纪律止损列 → 不猜
+        priced: list[dict[str, Any]] = []
+        unpriced = 0
+        for row in rows or []:
+            raw_cost = getattr(row, "cost_price", None)
+            cost = finite_float(raw_cost)
+            if cost is None or cost <= 0:
+                # NaN/Inf/0/负数: 脏数据, 当"成本未知", 不参与也不当 0
+                unpriced += 1
+                continue
+            qty = finite_float(getattr(row, "quantity", None))
+            priced.append(
+                {
+                    "position_id": getattr(row, "id", None),
+                    "account_id": getattr(row, "account_id", None),
+                    "cost": round(cost, 6),
+                    # 缺数量(旧数据/最小替身)按权重 1 处理, 不做二次猜测
+                    "quantity": qty if (qty is not None and qty > 0) else 1.0,
+                }
+            )
+        if priced:
+            distinct = {round(p["cost"], 6) for p in priced}
+            if len(distinct) == 1:
+                return CostAnchor(
+                    cost=priced[0]["cost"],
+                    stop=None,  # 实盘没有纪律止损列 → 不猜
+                    method="single",
+                    accounts=priced,
+                    unpriced=unpriced,
+                )
+            total_qty = sum(p["quantity"] for p in priced) or 0.0
+            if total_qty <= 0:
+                # 数量全缺 → 不能加权, 报 unknown(不随手挑一个)
+                return CostAnchor(
+                    cost=None, stop=None, method="unknown", accounts=priced, unpriced=unpriced
+                )
+            weighted = sum(p["cost"] * p["quantity"] for p in priced) / total_qty
+            w = finite_float(weighted)
+            if w is None:
+                return CostAnchor(
+                    cost=None, stop=None, method="unknown", accounts=priced, unpriced=unpriced
+                )
+            return CostAnchor(
+                cost=round(w, 6),
+                stop=None,
+                method="weighted",
+                accounts=priced,
+                unpriced=unpriced,
+            )
+        if unpriced:
+            # 有该股持仓行, 但成本全是脏值 → 明确"未知", 不回落到模拟盘(那是两码事)
+            return CostAnchor(cost=None, stop=None, method="unknown", unpriced=unpriced)
     except Exception:  # noqa: BLE001 - 持仓读不到就当没有，不影响矩阵
         pass
 
@@ -77,12 +156,40 @@ def owner_cost(db: Any, user: Any, symbol: str, market: str = "CN") -> tuple[flo
             )
         pp = q.first()
         if pp is not None:
-            cost = getattr(pp, "entry_price", None)
-            stop = getattr(pp, "stop_loss", None)
-            return (float(cost) if cost else None, float(stop) if stop else None)
+            cost = finite_float(getattr(pp, "entry_price", None))
+            stop = finite_float(getattr(pp, "stop_loss", None))
+            if cost is not None and cost > 0:
+                return CostAnchor(
+                    cost=cost,
+                    stop=stop if (stop is not None and stop > 0) else None,
+                    method="paper",
+                    unpriced=0,
+                )
     except Exception:  # noqa: BLE001
         pass
-    return None, None
+    return CostAnchor()
+
+
+def owner_cost(db: Any, user: Any, symbol: str, market: str = "CN") -> tuple[float | None, float | None]:
+    """兼容视图: (成本价, 纪律止损价)。证据(逐账户/加权/未知)见 `owner_cost_detail`。"""
+    a = owner_cost_detail(db, user, symbol, market)
+    return a.cost, a.stop
+
+
+
+def _cost_evidence_note(a: CostAnchor) -> str:
+    """多账户/加权时的口径说明(单账户/模拟盘返回空串, 不制造噪音)。"""
+    if a.method != "weighted":
+        return ""
+    per = "、".join(
+        f"账户#{p.get('account_id')} {p.get('cost'):.2f}"
+        for p in a.accounts
+        if p.get("cost") is not None
+    )
+    return (
+        f"> 成本口径：你在这只票上有 {len(a.accounts)} 个账户、成本不一致，"
+        f"下方锚点按**持仓量加权**得到 {a.cost:.2f}（逐账户：{per}）—— 不是某一个账户的原始成本。\n"
+    )
 
 
 def build_for_tool(db: Any, symbol: str, market: str = "CN", *, user: Any = None) -> str:
@@ -97,7 +204,8 @@ def build_for_tool(db: Any, symbol: str, market: str = "CN", *, user: Any = None
     text = scenario_engine.render(matrix)
 
     if matrix and matrix.get("available"):
-        cost, stop = owner_cost(db, user, sym, market)
+        anchor_ev = owner_cost_detail(db, user, sym, market)
+        cost, stop = anchor_ev.cost, anchor_ev.stop
         if cost:
             try:
                 enriched = scenario_cost_anchor.enrich_with_cost(
@@ -107,9 +215,18 @@ def build_for_tool(db: Any, symbol: str, market: str = "CN", *, user: Any = None
                 anchor = (enriched or {}).get("cost_anchor") or {}
                 extra = scenario_cost_anchor.render_cost_anchor(anchor)
                 if extra:
-                    text = f"{text}\n\n{extra}"
+                    # 多账户成本不一致时必须说清"这个锚是怎么算的", 否则用户会以为
+                    # 系统读的是某个账户的真实成本(2026-10-29 三审 R6)。
+                    note = _cost_evidence_note(anchor_ev)
+                    text = f"{text}\n\n{note}{extra}" if note else f"{text}\n\n{extra}"
             except Exception:  # noqa: BLE001 - 附加段失败不影响矩阵本身
                 pass
+        elif anchor_ev.method == "unknown":
+            # 有持仓但成本无效 → 不锚定, 但要如实说一句(否则用户以为系统漏了)。
+            text = (
+                f"{text}\n\n> 该股有持仓记录, 但成本价无效或缺失"
+                f"（{anchor_ev.unpriced} 条），本轮不做成本锚定。"
+            )
 
     try:
         analog = analog_finder.build(sym, market)

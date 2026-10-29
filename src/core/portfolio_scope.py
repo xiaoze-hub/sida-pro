@@ -17,6 +17,10 @@
 - 只按 `Account.user_id` 过滤(旧 `load_portfolio_for_stock`): 共享账户里别人建的持仓
   会被所有人当成自己的, 单只分析的 AI 上下文因此读到他人持仓。
 
+标的(自选, `Stock.user_id`)用**同一套三分类**: 自己的 / 历史共享(NULL) / 他人私有。
+2026-10-29 三审补: 建仓时传别人的 `stock_id` 能把持仓挂到他人自选行上(对方删除自选
+会级联删掉我的持仓), 所以 `stock_user_scope_*` 与持仓口径必须同源。
+
 ## 没有"默认全量"
 
 `user_id=None` 只对应历史共享桶(两侧都必须 `IS NULL`), 绝不放开成全表。
@@ -31,17 +35,21 @@ from __future__ import annotations
 from sqlalchemy import or_
 from sqlalchemy.orm import Query, Session
 
-from src.db.models import Account, Position
+from src.db.models import Account, Position, Stock
 
 __all__ = [
     "account_user_scope_clause",
     "position_user_scope_clause",
+    "stock_user_scope_clause",
     "user_scope_accounts",
     "user_scope_positions",
+    "user_scope_stocks",
     "account_user_scope_visible",
     "account_user_scope_writable",
     "position_user_scope_visible",
     "position_user_scope_writable",
+    "stock_user_scope_visible",
+    "stock_user_scope_writable",
 ]
 
 
@@ -60,6 +68,16 @@ def account_user_scope_clause(user_id: str | None):
 def position_user_scope_clause(user_id: str | None):
     """`Position.user_id` 的可见条件, 必须与 `account_user_scope_clause` 同时使用。"""
     return _visibility_clause(Position.user_id, user_id)
+
+
+def stock_user_scope_clause(user_id: str | None):
+    """`Stock.user_id` 的可见条件(自选/标的归属)。
+
+    自选是**用户私有数据**: `Stock.user_id=NULL` 是历史共享/全局默认项(所有人可见,
+    仅 owner 可改), 他人私有的 Stock 行不可见。`user_id=None` 时只留共享桶,
+    绝不放开成全表 —— 与持仓两侧口径一致。
+    """
+    return _visibility_clause(Stock.user_id, user_id)
 
 
 def user_scope_accounts(
@@ -96,6 +114,11 @@ def user_scope_positions(
     if stock_ids is not None:
         q = q.filter(Position.stock_id.in_(stock_ids))
     return q
+
+
+def user_scope_stocks(db: Session, user_id: str | None) -> Query:
+    """当前租户可见的标的(自选)查询。"""
+    return db.query(Stock).filter(stock_user_scope_clause(user_id))
 
 
 # ---------------------------------------------------------------- 对象级判定
@@ -143,3 +166,24 @@ def position_user_scope_writable(
     if position.user_id is None:
         return role == "owner"
     return True
+
+
+def stock_user_scope_visible(stock: Stock | None, user_id: str | None) -> bool:
+    """标的(自选)可读: 自己建的, 或历史共享(NULL)项。"""
+    if stock is None:
+        return False
+    if stock.user_id is None:
+        return True
+    return user_id is not None and str(stock.user_id) == str(user_id)
+
+
+def stock_user_scope_writable(
+    stock: Stock | None, user_id: str | None, role: str | None
+) -> bool:
+    """标的(自选)可写: 自己的; 共享默认项仅 owner(删共享行会波及所有人的绑定/提醒)。"""
+    if stock is None:
+        return False
+    if stock.user_id is None:
+        return role == "owner"
+    return user_id is not None and str(stock.user_id) == str(user_id)
+

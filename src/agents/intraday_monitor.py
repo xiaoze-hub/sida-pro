@@ -989,10 +989,26 @@ class IntradayMonitorAgent(BaseAgent):
         )
 
     async def collect(self, context: AgentContext) -> dict:
-        """采集实时行情 + K线 + 历史分析"""
+        """采集实时行情 + K线 + 历史分析。
+
+        2026-10-29 三审(R7): 触发用户必须**显式**沿链条往下传。
+
+        证据(先证明再改): `StockData` 是行情 dataclass, **没有 id/user 字段**;
+        `collect()` 的返回 dict 也从来没有 `user_id`。于是 `build_prompt` 里
+        `_uid = data.get("user_id") or pos_info.get("user_id")` 恒为 None, 后面的
+        `load_defense_lines(symbol, user_id=None)` 只查共享桶 —— 用户自己设的防守线
+        永远不报警, 而 `push_notification(user_id=None)` 又把风险告警推成"无人归属"。
+        这里不靠 symbol 反查归属(同 symbol 多个租户都有行), 直接取 context.user 的
+        **标量 id** 放进 data, 让下游每一段都用同一个人。
+        """
+        _ctx_user = getattr(context, "user", None)
+        _trigger_uid = None
+        if _ctx_user is not None:
+            _trigger_uid = str(getattr(_ctx_user, "id", "") or "") or None
+
         if not context.watchlist:
             logger.warning("自选股列表为空，跳过盘中监测")
-            return {"stocks": [], "stock_data": None}
+            return {"stocks": [], "stock_data": None, "user_id": _trigger_uid}
 
         # SignalPack: 统一结构化输入（quote/technical/position）
         stock_config = context.watchlist[0] if context.watchlist else None
@@ -1008,6 +1024,7 @@ class IntradayMonitorAgent(BaseAgent):
                 "stocks": [],
                 "stock_data": None,
                 "skip_reason": msg,
+                "user_id": _trigger_uid,
             }
 
         builder = SignalPackBuilder()
@@ -1099,6 +1116,8 @@ class IntradayMonitorAgent(BaseAgent):
             "symbol_context": symbol_context,
             "quality_overview": quality_overview,
             "timestamp": datetime.now().isoformat(),
+            # 触发用户(标量 id): 防守线查询 / 风险告警外发都只认这一个归属。
+            "user_id": _trigger_uid,
         }
 
     def build_prompt(self, data: dict, context: AgentContext) -> tuple[str, str]:
@@ -1975,9 +1994,14 @@ class IntradayMonitorAgent(BaseAgent):
         # 用户自设防守线击穿预警(方案 B 2026-10-23)
         # 口径: 只认 positions.defense_price(用户自己设的绝对价)。未设置 → 跳过,
         # 不再默认 -8% —— 系统臆造的纪律位不该替用户报警。
-        pos_info = data.get("position") or {}
         try:
-            _uid = data.get("user_id") or pos_info.get("user_id")
+            # 2026-10-29 三审(R7): 只认 collect() 显式带下来的触发用户。
+            # 旧写法 `data.get("user_id") or pos_info.get("user_id")` 两个键都不存在,
+            # 恒 None → 只查共享桶(用户自己设的防守线永不触发), 且告警无归属。
+            # 这里**不**按 symbol 反查 Stock/Position 归属: 同一 symbol 多个租户都有行,
+            # 反查就是"猜归属", 会把 A 的成本/防线算到 B 头上。
+            _uid = data.get("user_id") or None
+
             cur_price = getattr(stock, "current_price", None)
             for line in load_defense_lines(stock.symbol, user_id=_uid):
                 verdict = evaluate_defense_breach(

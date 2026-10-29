@@ -585,15 +585,25 @@ def _collect_portfolio_block(
             as_of=as_of,
         )
     try:
-        from src.db.models import Position, Stock
+        from src.core.portfolio_scope import (
+            account_user_scope_clause,
+            position_user_scope_clause,
+        )
+        from src.db.models import Account, Position, Stock
 
         q = (
             db.query(Position, Stock)
             .join(Stock, Position.stock_id == Stock.id)
-            .filter(Position.quantity > 0)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Position.quantity > 0,
+                # 2026-10-29 三审: 旧写法 `if user_id: filter(...)` 在 user_id=None 时
+                # **一条过滤都不加** → 报告/证据层读到全库所有租户的持仓(成本/仓位)。
+                # 现在统一走作用域条件: None = 历史共享桶(两侧 IS NULL), 绝不放开全表。
+                account_user_scope_clause(user_id),
+                position_user_scope_clause(user_id),
+            )
         )
-        if user_id:
-            q = q.filter(Position.user_id == user_id)
         rows = q.all()
     except Exception as e:
         logger.warning("[证据层] 持仓读取失败: %s", e)
@@ -704,24 +714,34 @@ def _collect_fund_structure_block(
     # 两段各自 try：自选表结构变了不该连带持仓也取不到。
     symbols: list[str] = []
     try:
+        from src.core.portfolio_scope import stock_user_scope_clause
         from src.db.models import Stock
 
-        q = db.query(Stock.symbol)
-        if user_id:
-            q = q.filter(Stock.user_id == str(user_id))
+        # 2026-10-29 三审: 旧 `if user_id: filter(Stock.user_id==uid)` 在 user_id=None
+        # 时不加过滤 → 全库自选(他人私有)进了证据块。共享桶口径 = stocks.user_id IS NULL。
+        q = db.query(Stock.symbol).filter(stock_user_scope_clause(user_id))
         for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():
             if sym:
                 symbols.append(str(sym).strip())
     except Exception as e:  # noqa: BLE001
         logger.debug("[证据层] 四档结构取自选失败: %s", e)
     try:
-        from src.db.models import Position, Stock
-
-        q = db.query(Stock.symbol).join(Position, Position.stock_id == Stock.id).filter(
-            Position.quantity > 0
+        from src.core.portfolio_scope import (
+            account_user_scope_clause,
+            position_user_scope_clause,
         )
-        if user_id:
-            q = q.filter(Position.user_id == user_id)
+        from src.db.models import Account, Position, Stock
+
+        q = (
+            db.query(Stock.symbol)
+            .join(Position, Position.stock_id == Stock.id)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Position.quantity > 0,
+                account_user_scope_clause(user_id),
+                position_user_scope_clause(user_id),
+            )
+        )
         for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():
             if sym:
                 symbols.append(str(sym).strip())
@@ -795,6 +815,12 @@ def collect(
     """采集盘前全部结构化证据。
 
     永不抛异常：任何子块失败均在块内标记 `quality="missing"` 并附带 `reason`。
+
+    `user_id` 作用域(2026-10-29 三审, fail-closed):
+      传 uid → 只采该用户可见的持仓/自选(账户可见 AND 持仓可见);
+      传 None(**显式共享桶**) → 只采 `Account.user_id IS NULL AND Position.user_id IS NULL`
+      与 `Stock.user_id IS NULL` 的历史共享项, **绝不**等于"全库所有用户"。
+    任何缺会话路径因此自然收敛, 报告不会再把别人的成本/仓位写进共享文件。
     """
     date_iso, _ = _normalize_date(date)
     as_of = _now_iso()

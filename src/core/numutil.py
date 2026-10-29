@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -27,3 +28,20 @@ def safe_float(value: Any, default: float | None = None) -> float | None:
 def clamp(value: float, lo: float, hi: float) -> float:
     """将 value 限制在闭区间 [lo, hi]。"""
     return max(lo, min(hi, value))
+
+
+def finite_float(value: Any, default: float | None = None) -> float | None:
+    """转 float 且**只接受有限数**; None/非法/NaN/±Inf 一律返回 default。
+
+    为什么单独一个函数(2026-10-29 三审, R2): `float(nan)`/`float(inf)` 能通过
+    所有 `if value:` 判定, 一路流到 `round()` 和 JSON 序列化 —— Python 的 json 会把
+    NaN/Infinity 原样写成 `NaN`/`Infinity` (**不是合法 JSON**), 前端 `JSON.parse` 直接抛,
+    整个看板白屏。历史库里的脏成本价就是这条路径的来源。
+    """
+    try:
+        if value is None or isinstance(value, bool):
+            return default
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    return f if math.isfinite(f) else default

@@ -337,9 +337,20 @@ def notify_task_done(
 
     user_id: 多用户改造后渠道全归属 user_id(无全局渠道), 后台任务无用户上下文时
     兜底推给 owner(role=owner), 否则站内通知永远 skipped("未配置通知渠道")。
+
+    2026-10-29 三审(R4): 兜底只在**确实没有会话**时发生, 且必须留 warning 日志 ——
+    此前 `stocks.py` 手动触发线程漏传 user_id, member 的任务结果被静默推给了 owner。
+    调用方只要有触发用户就必须显式传(标量 id, 在起线程前取好), 不许依赖兜底。
     """
     if user_id is None:
         user_id = _resolve_owner_user_id()
+        logger.warning(
+            "[通知中心] notify_task_done 未带 user_id, 兜底归属 owner=%s (task=%s, source=%s); "
+            "调用方若有触发用户必须显式传, 否则会把他人任务推到 owner",
+            user_id or "无",
+            task_label,
+            source or category,
+        )
     dur = f"（耗时 {duration_ms / 1000:.1f}s）" if duration_ms else ""
     if status == "skipped":
         title = f"⏭️ {task_label} 已跳过{dur}"

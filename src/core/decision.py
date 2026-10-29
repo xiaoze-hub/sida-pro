@@ -25,6 +25,7 @@ verdict 映射: 向好→动手, 拐点/分歧→看看, 走坏→别碰;
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,9 @@ def _personalize(out: dict, user_context: dict | None) -> dict:
         pnl_pct = None
         if isinstance(cost, (int, float)) and cost > 0 and isinstance(last, (int, float)):
             pnl_pct = round((last - cost) / cost * 100, 2)
+            if not math.isfinite(pnl_pct):
+                # 脏成本/脏收盘 → 不展示浮盈(比展示 NaN 更诚实)
+                pnl_pct = None
         position = {
             "cost_price": cost if isinstance(cost, (int, float)) else None,
             "quantity": qty if isinstance(qty, int) else None,
@@ -378,11 +382,18 @@ def _two_dim_reason(verdict, trend, activity, activity_prev) -> str:
 
 
 def _last_bar_close(bars: list[dict]) -> Optional[float]:
-    """末根收盘价(None 安全, 不编造)。供预落库基底携带 last_close 做读取时浮盈。"""
+    """末根收盘价(None 安全, 不编造)。供预落库基底携带 last_close 做读取时浮盈。
+
+    2026-10-29 三审(R2): 只接受有限数 —— 脏 K 线里的 NaN/Inf 会顺着 last_close →
+    pnl_pct → JSON 一路写成非法 `NaN`。
+    """
     try:
         last = bars[-1]
         close = last.get("close") if isinstance(last, dict) else getattr(last, "close", None)
-        return float(close) if close is not None else None
+        if close is None:
+            return None
+        val = float(close)
+        return val if math.isfinite(val) else None
     except Exception:  # noqa: BLE001
         return None
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 
 from src.agents.base import AgentContext, AccountInfo, PortfolioInfo, PositionInfo
 from src.bootstrap.agents import AGENT_REGISTRY
@@ -392,10 +393,56 @@ def resolve_ai_model(
         db.close()
 
 
-def resolve_notify_channels(
+def _configured_channel_ids(db, agent_name: str, stock_agent_id: int | None) -> list[int] | None:
+    """配置里的渠道选择集合: stock_agent 覆盖 → agent 默认; 都没有返回 None。
+
+    这是一份**选择集合**(用户/管理员在 UI 上勾的那几个渠道), 不是"可用渠道全集"。
+    """
+    if stock_agent_id:
+        sa = db.query(StockAgent).filter(StockAgent.id == stock_agent_id).first()
+        if sa and sa.notify_channel_ids:
+            return [int(x) for x in sa.notify_channel_ids if x is not None]
+    agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
+    if agent and agent.notify_channel_ids:
+        return [int(x) for x in agent.notify_channel_ids if x is not None]
+    return None
+
+
+@dataclass(frozen=True)
+class ChannelResolution:
+    """一次渠道解析的结果 + **为什么**是这些(诚实告警, 不静默)。
+
+    reason 取值:
+      - `ok`               : 有渠道, 且(若配置适用)已按配置收窄;
+      - `no-config`        : 无配置选择集合, 用该归属可见的启用渠道;
+      - `config-not-applicable`: 配置里的渠道**全都不属于该归属**(那是别人的选集合)
+                            → 改用该归属自己的渠道, 并 warning 说明(不是静默超发);
+      - `config-not-permitted`: 配置不相交且该归属无渠道 → **不发**(不越权借用);
+      - `shared-bucket-empty`/`no-channels`: 该归属下一条启用渠道都没有 → **不发**, 如实告警。
+    """
+
+    channels: list[NotifyChannel]
+    scope: str  # "user" | "shared" | "legacy-agent"
+    reason: str
+    configured_ids: tuple[int, ...] = ()
+    dropped_ids: tuple[int, ...] = ()
+
+    def summary(self) -> str:
+        ids = [int(c.id) for c in self.channels]
+        return (
+            f"scope={self.scope} reason={self.reason} send_to={ids} "
+            f"configured={list(self.configured_ids)} dropped={list(self.dropped_ids)}"
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.channels
+
+
+def resolve_notify_channels_ex(
     agent_name: str, stock_agent_id: int | None = None, user_id: str | None = _UNSET  # type: ignore[assignment]
-) -> list[NotifyChannel]:
-    """解析通知渠道: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)。
+) -> ChannelResolution:
+    """渠道解析(带原因), `resolve_notify_channels` 是它的 channels 视图。
 
     M7(2026-09-10 多用户隔离): 传入具体 user_id 时, 只取**该用户自己的渠道 +
     全局共享(user_id IS NULL)渠道** —— 不再借用 agent 级全局渠道(那是 owner 的),
@@ -403,15 +450,23 @@ def resolve_notify_channels(
 
     2026-10-29 复审: **显式传 None 也走同一收敛口径**(只取共享渠道), 不再落回
     "agent 级 / 系统默认"那套全租户配置 —— 没有用户会话时收件范围只能缩, 不能放。
-    只有完全没传参数(_UNSET)才保留旧的 agent 级行为, 供明确需要"全局模板"的老路径使用。
+
+    2026-10-29 三审(R5): 上一版把"按用户收窄"做成了**无视配置选择集合** —— 用户在
+    agent/stock_agent 上只勾了 1 个渠道, 结果所有启用渠道都收到(静默超发); 反过来
+    配置里选的是别人的私有渠道时, 交集为空却被当成"没渠道"悄悄跳过。现在:
+      - 配置集合存在且与该归属有交集 → **只发交集**(只缩不扩);
+      - 配置与该归属完全不相交(选的是他人渠道/已禁用) → 配置对本次运行不适用,
+        改用**该归属自己的**启用渠道并 warning 留痕(不静默、不越权);
+      - 该归属本就没有启用渠道 → 一条不发, reason=…-empty, 同样 warning;
+      - 任何情况下都**不回退到 owner 的渠道**(没有用户会话 != 可以发给 owner)。
     """
     db = SessionLocal()
     try:
-        # 0) 指定用户(含显式 None = 无会话共享桶): 与 notify_center._build_notifier 同口径
-        if user_id is not _UNSET:
-            from sqlalchemy import or_ as _or_
+        from sqlalchemy import or_ as _or_
 
-            channels = (
+        if user_id is not _UNSET:
+            scope = "shared" if user_id is None else "user"
+            visible = (
                 db.query(NotifyChannel)
                 .filter(
                     NotifyChannel.enabled == True,  # noqa: E712
@@ -420,27 +475,79 @@ def resolve_notify_channels(
                         NotifyChannel.user_id.is_(None),
                     ),
                 )
+                .order_by(NotifyChannel.id.asc())
                 .all()
             )
+            configured = _configured_channel_ids(db, agent_name, stock_agent_id)
+            dropped: tuple[int, ...] = ()
+            if configured:
+                allowed_ids = {int(c.id) for c in visible}
+                wanted = set(configured)
+                picked = [c for c in visible if int(c.id) in wanted]
+                dropped = tuple(i for i in configured if i not in allowed_ids)
+                if picked:
+                    reason = "ok"
+                    if dropped:
+                        logger.warning(
+                            "[通知渠道] agent=%s 归属 %s 只允许 %s, 配置里另有 %s 被排除(不跨租户发送)",
+                            agent_name,
+                            user_id or "共享桶",
+                            sorted(allowed_ids & wanted),
+                            list(dropped),
+                        )
+                    channels = picked
+                elif visible:
+                    # 配置集合与本归属**完全不相交**: 那是别人的/已禁用的选择集合, 对本次
+                    # 运行不构成约束(否则 member 永远收不到自己的通知)。退回到**本归属
+                    # 可见**的渠道并**明确告警** —— 不是静默超发, 也绝不借用他人渠道。
+                    channels = list(visible)
+                    reason = "config-not-applicable"
+                    logger.warning(
+                        "[通知渠道] agent=%s 配置的渠道 %s 全不属于归属 %s, 改用该归属自己的启用渠道 %s"
+                        "(不会发给配置里的他人渠道)",
+                        agent_name,
+                        list(configured),
+                        user_id or "共享桶",
+                        sorted(allowed_ids),
+                    )
+                else:
+                    # 配置不相交, 且本归属一条可用渠道都没有 → 不发, 如实告警。
+                    channels = []
+                    reason = "config-not-permitted"
+                    logger.warning(
+                        "[通知渠道] agent=%s 配置的渠道 %s 均不属于归属 %s, 且该归属无可用渠道, "
+                        "本轮不发; 不会改用 owner/他人的渠道",
+                        agent_name,
+                        list(configured),
+                        user_id or "共享桶",
+                    )
+                configured_ids = tuple(configured)
+            else:
+                channels = list(visible)
+                configured_ids = ()
+                reason = "no-config" if channels else (
+                    "shared-bucket-empty" if scope == "shared" else "no-channels"
+                )
+            if not channels:
+                logger.warning(
+                    "[通知渠道] agent=%s 归属 %s 无可用启用渠道(reason=%s) —— 本轮不外发, "
+                    "站内仍可见; 不会兜底推给 owner",
+                    agent_name,
+                    user_id or "共享桶",
+                    reason,
+                )
             for ch in channels:
                 db.expunge(ch)
-            return channels
+            return ChannelResolution(
+                channels=channels,
+                scope=scope,
+                reason=reason,
+                configured_ids=configured_ids,
+                dropped_ids=dropped,
+            )
 
-        channel_ids = None
-
-        # 1. stock_agent 级别覆盖
-        if stock_agent_id:
-            sa = db.query(StockAgent).filter(StockAgent.id == stock_agent_id).first()
-            if sa and sa.notify_channel_ids:
-                channel_ids = sa.notify_channel_ids
-
-        # 2. agent 级别默认
-        if channel_ids is None:
-            agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
-            if agent and agent.notify_channel_ids:
-                channel_ids = agent.notify_channel_ids
-
-        # 3. 按 id 列表查询或取系统默认
+        # ---- 旧路径(完全没传 user_id, _UNSET): 保留 agent 级全局模板行为
+        channel_ids = _configured_channel_ids(db, agent_name, stock_agent_id)
         if channel_ids:
             channels = (
                 db.query(NotifyChannel)
@@ -459,12 +566,33 @@ def resolve_notify_channels(
                 )
                 .all()
             )
-
+        reason = "ok" if channels else "legacy-empty"
+        if not channels:
+            logger.warning(
+                "[通知渠道] agent=%s 旧路径(_UNSET)无默认渠道 -> 本轮不外发", agent_name
+            )
         for ch in channels:
             db.expunge(ch)
-        return channels
+        return ChannelResolution(
+            channels=channels,
+            scope="legacy-agent",
+            reason=reason,
+            configured_ids=tuple(channel_ids or ()),
+        )
     finally:
         db.close()
+
+
+def resolve_notify_channels(
+    agent_name: str, stock_agent_id: int | None = None, user_id: str | None = _UNSET  # type: ignore[assignment]
+) -> list[NotifyChannel]:
+    """解析通知渠道: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)。
+
+    口径与原因见 `resolve_notify_channels_ex`(本函数只返回 channels, 保持老调用方不变)。
+    """
+    return resolve_notify_channels_ex(
+        agent_name, stock_agent_id, user_id=user_id
+    ).channels
 
 
 def _build_notifier(channels: list[NotifyChannel]) -> NotifierManager:

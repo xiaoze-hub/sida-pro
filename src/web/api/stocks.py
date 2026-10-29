@@ -455,9 +455,44 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
         raise HTTPException(403, "无权删除共享默认自选")
 
     # 删除股票前，要求先清理持仓，避免误删资产数据。
-    has_position = db.query(Position.id).filter(Position.stock_id == stock_id).first()
+    # 2026-10-29 三审: 旧实现一条 `filter(Position.stock_id == stock_id)` 查**全库**
+    # 持仓 —— ① 别人在我这一行上的历史错位持仓也算数; ② 有人拿我的 stock_id 建过仓
+    # (旧 create_position 不校验标的归属), 我删自选会把**他的**持仓级联删掉。
+    # 现在分两档, 都不泄露归属:
+    #   - 自己可见的持仓还在 → 400, 提示先清理(信息对他本人真实且必要);
+    #   - 只有他人持仓引用 → 409 通用文案(不报数量/账户名/归属人), 拒绝删除,
+    #     因为拒绝是唯一不破坏他人数据的选择; 残留的"存在引用"信号无法完全消除,
+    #     这是任何安全删除设计的固有代价(详见 docs 三审记录)。
+    from src.core.portfolio_scope import (
+        account_user_scope_clause,
+        position_user_scope_clause,
+    )
+    from src.web.models import Account
+
+    uid = getattr(user, "id", None)
+    has_position = (
+        db.query(Position.id)
+        .join(Account, Account.id == Position.account_id)
+        .filter(
+            Position.stock_id == stock_id,
+            account_user_scope_clause(uid),
+            position_user_scope_clause(uid),
+        )
+        .first()
+    )
     if has_position:
         raise HTTPException(400, "该股票存在持仓，请先删除持仓后再删除股票")
+    foreign_ref = db.query(Position.id).filter(Position.stock_id == stock_id).first()
+    if foreign_ref:
+        logger.warning(
+            "拒绝删除自选: stock_id=%s 仍被不可见持仓引用(不泄露归属) user=%s",
+            stock_id,
+            getattr(user, "id", None),
+        )
+        raise HTTPException(
+            409,
+            "该自选仍被其它数据引用，暂无法删除，请联系管理员",
+        )
 
     # SQLite 默认可能不启用 FK 级联，手动清理提醒数据避免孤儿记录。
     rule_ids = [
@@ -649,6 +684,11 @@ async def trigger_stock_agent(
         _sym = trigger_stock.symbol
         _nm = getattr(trigger_stock, "name", "") or _sym
         _mkt = getattr(trigger_stock, "market", "CN")
+        # 2026-10-29 三审(R4): 线程里不能碰请求级 ORM 对象(会话已关/跨线程懒加载),
+        # 且通知必须归**触发它的那个人**。旧 `_notify` 不传 user_id → notify_task_done
+        # 兜底推给 owner, member 手动触发的分析结果进了 owner 的站内信/渠道。这里在起
+        # 线程**之前**把标量 user_id 抓出来, 线程内只用这个字符串。
+        _uid = str(user.id) if getattr(user, "id", None) else None
 
         def _notify(ok: bool, detail: str, started: float, status: str = "") -> None:
             try:
@@ -664,6 +704,7 @@ async def trigger_stock_agent(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     link=f"/portfolio?symbol={_sym}&market={_mkt}",
                     status=status,
+                    user_id=_uid,
                 )
             except Exception:
                 logger.exception("写入站内通知失败: %s %s", agent_name, _sym)
@@ -680,7 +721,7 @@ async def trigger_stock_agent(
                     suppress_notify=suppress_notify,
                     trace_id=trace_id,
                     force_refresh=force_refresh,
-                    user_id=user.id,
+                    user_id=_uid,
                 ))
                 if outcome.get("skipped"):
                     detail = str(outcome.get("content") or outcome.get("message") or "本次任务已跳过")

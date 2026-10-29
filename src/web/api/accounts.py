@@ -409,6 +409,8 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db), user: U
 
     - 账户**可写**才建仓: 共享账户(user_id=NULL)仅 owner, 他人私有账户 404;
       此前只校验"可读", member 能把持仓写进共享账户, 违背"共享仅 owner 写";
+    - 标的同样要**可见**: 他人私有自选行(user_id=别人)一律按"股票不存在"拒,
+      不能把持仓挂到别人的 Stock 行上(对方删自选会级联删掉我的持仓);
     - 去重与 sort_order 只看**本租户可见**的持仓: 他人(共享账户里别人建的 /
       数据错位的行)同票持仓既不参与判断, 也不把"账户 X 已有 Y"这种带名字的
       文案回显出去 —— 那等于告诉 A "B 也持有这只票";
@@ -417,8 +419,18 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db), user: U
     """
     account = _writable_account_or_error(db, data.account_id, user)
 
-    stock = db.query(Stock).filter(Stock.id == data.stock_id).first()
+    # 标的也必须在本租户可见范围(2026-10-29 三审): 旧写法只按主键取 Stock,
+    # 于是 A 可以传 B 的私有自选 stock_id 建仓 —— 持仓挂到 B 的自选行上, B 删自选
+    # 时级联把 A 的持仓带走; 同时 "股票不存在" 与 404 的差异也成了存在性探针。
+    from src.core.portfolio_scope import stock_user_scope_clause
+
+    stock = (
+        db.query(Stock)
+        .filter(Stock.id == data.stock_id, stock_user_scope_clause(user.id))
+        .first()
+    )
     if not stock:
+        # 他人私有标的与不存在统一 404/400 同文案, 不给存在性信号。
         raise HTTPException(400, "股票不存在")
 
     # 预检收敛到本租户可见范围: 自己的持仓才提示"编辑现有持仓"。

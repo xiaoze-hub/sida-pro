@@ -143,3 +143,70 @@ def test_matrix_unavailable_still_returns_reason(patched):
 
 def test_empty_symbol_rejected():
     assert "请提供股票代码" in sc.build_for_tool(_DB({}), "", "CN")
+
+
+# ── 3. 脏成本与多账户(2026-10-29 三审 R6) ─────────────────────────────────
+
+
+def test_owner_cost_ignores_non_finite_cost():
+    """历史脏成本(NaN/Inf)不能当成本锚 —— `bool(nan)` 为 True 会把它一路带进文案。"""
+    db = _DB({"Position": [SimpleNamespace(cost_price=float("nan")),
+                           SimpleNamespace(cost_price=float("inf"))],
+              "Stock": [SimpleNamespace(symbol="600111")]})
+    detail = sc.owner_cost_detail(db, SimpleNamespace(id=1), "600111")
+    assert detail.cost is None, "NaN/Inf 成本必须当未知"
+    assert detail.method == "unknown"
+    assert detail.unpriced == 2
+    assert sc.owner_cost(db, SimpleNamespace(id=1), "600111") == (None, None)
+
+
+def test_owner_cost_multi_account_weights_instead_of_first():
+    """多账户成本不一致 → 按持仓量加权, 不再"随便取 first"。"""
+    db = _DB({"Position": [
+        SimpleNamespace(cost_price=10.0, quantity=100, account_id=1),
+        SimpleNamespace(cost_price=20.0, quantity=300, account_id=2),
+    ], "Stock": [SimpleNamespace(symbol="600111")]})
+    detail = sc.owner_cost_detail(db, SimpleNamespace(id=1), "600111")
+    assert detail.method == "weighted"
+    assert detail.cost == pytest.approx((10.0 * 100 + 20.0 * 300) / 400)
+    assert [a["account_id"] for a in detail.accounts] == [1, 2]
+    assert sc.owner_cost(db, SimpleNamespace(id=1), "600111")[0] == pytest.approx(17.5)
+
+
+def test_owner_cost_multi_account_same_cost_is_unambiguous():
+    db = _DB({"Position": [
+        SimpleNamespace(cost_price=12.5, quantity=100, account_id=1),
+        SimpleNamespace(cost_price=12.5, quantity=200, account_id=2),
+    ], "Stock": [SimpleNamespace(symbol="600111")]})
+    detail = sc.owner_cost_detail(db, SimpleNamespace(id=1), "600111")
+    assert detail.method == "single" and detail.cost == 12.5
+
+
+def test_owner_cost_mixed_good_and_dirty_counts_unpriced():
+    db = _DB({"Position": [
+        SimpleNamespace(cost_price=15.0, quantity=100, account_id=1),
+        SimpleNamespace(cost_price=float("nan"), quantity=100, account_id=2),
+    ], "Stock": [SimpleNamespace(symbol="600111")]})
+    detail = sc.owner_cost_detail(db, SimpleNamespace(id=1), "600111")
+    assert detail.cost == 15.0
+    assert detail.unpriced == 1, "脏行必须被计数(可解释), 而不是静默参与/静默丢弃"
+
+
+def test_build_for_tool_explains_weighted_cost(patched):
+    """多账户锚定必须在正文里说清"按持仓量加权 + 逐账户", 不能假装是某个账户的成本。"""
+    db = _DB({"Position": [
+        SimpleNamespace(cost_price=10.0, quantity=100, account_id=1),
+        SimpleNamespace(cost_price=20.0, quantity=300, account_id=2),
+    ], "Stock": [SimpleNamespace(symbol="600111")]})
+    out = sc.build_for_tool(db, "600111", "CN", user=SimpleNamespace(id=1))
+    assert "持仓量加权" in out
+    assert "账户#1" in out and "账户#2" in out
+    assert "不是某一个账户的原始成本" in out
+
+
+def test_build_for_tool_reports_unknown_cost_instead_of_silence(patched):
+    db = _DB({"Position": [SimpleNamespace(cost_price=float("nan"), quantity=100)],
+              "Stock": [SimpleNamespace(symbol="600111")]})
+    out = sc.build_for_tool(db, "600111", "CN", user=SimpleNamespace(id=1))
+    assert "成本价无效或缺失" in out
+    assert "持仓成本锚定" not in out, "成本未知时不许编一个锚点"
