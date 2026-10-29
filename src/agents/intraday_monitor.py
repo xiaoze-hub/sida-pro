@@ -881,24 +881,29 @@ def load_defense_lines(symbol: str, user_id: str | None = None) -> list[dict]:
     用户的纪律位(那是风控口径而非持仓口径字段), 且这里必须能区分"没设"与"设了但
     等于某个默认值" —— 只有原始列能表达。
 
-    user_id 隔离与其它持仓口径一致: 传了 user_id 就取"自己的 + 历史遗留全局(NULL)"。
+    user_id 隔离与其它持仓口径一致(2026-10-29 复审): **账户可见 AND 持仓可见**。
+    旧实现只过滤 `Position.user_id`, 他人私有账户里 user_id=NULL 的持仓照样被读出来
+    —— 用户的成本价与纪律位直接进了另一个人的预警文案。
     """
-    from sqlalchemy import or_
-
-    from src.db.models import Position, Stock
+    from src.core.portfolio_scope import account_user_scope_clause, position_user_scope_clause
+    from src.db.models import Account, Position, Stock
     from src.db.session import SessionLocal
+
+    uid = user_id or None  # 空串/None = 无会话 → 只留共享桶(None 两侧都 IS NULL)
 
     db = SessionLocal()
     try:
         q = (
             db.query(Position)
             .join(Stock, Stock.id == Position.stock_id)
-            .filter(Stock.symbol == symbol, Position.defense_price.isnot(None))
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Stock.symbol == symbol,
+                Position.defense_price.isnot(None),
+                account_user_scope_clause(uid),
+                position_user_scope_clause(uid),
+            )
         )
-        if user_id:
-            q = q.filter(or_(Position.user_id == user_id, Position.user_id.is_(None)))
-        else:
-            q = q.filter(Position.user_id.is_(None))
         return [
             {
                 "position_id": p.id,
@@ -1707,8 +1712,15 @@ class IntradayMonitorAgent(BaseAgent):
                 lines.append(f"- 浮动盈亏：{pnl_pct:+.1f}%{pnl_note}")
                 lines.append(f"- 账户可用：{acc_funds:.0f} 元")
         else:
-            lines.append("\n## 未持仓（仅关注）")
-            lines.append("- 可用资金充足，可考虑建仓")
+            scope_note = getattr(context.portfolio, "scope_note", None)
+            if scope_note:
+                # 2026-10-29: 上下文未知 ≠ 没有持仓, 不许据"看不到"下"未持仓"的结论。
+                lines.append("\n## 持仓情况：未知")
+                lines.append(f"- 原因：{scope_note}")
+                lines.append("- 无法确认是否持仓，不得断言\"未持有\"或据此给出建仓口径")
+            else:
+                lines.append("\n## 未持仓（仅关注）")
+                lines.append("- 可用资金充足，可考虑建仓")
 
         # 历史分析上下文（帮助 AI 做出更好的判断）
         daily_analysis = data.get("daily_analysis")

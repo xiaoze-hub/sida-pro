@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
-from src.web.models import Position, Stock, User
+from src.web.models import Stock, User
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,12 @@ def _build_user_context(db: Session, user: User, symbol: str, market: str) -> di
     code = (symbol or "").strip()
     mkt = (market or "CN").upper()
     try:
+        from src.core.portfolio_scope import user_scope_positions
+
         stocks = scoped(db.query(Stock), user).all()
-        positions = scoped(db.query(Position), user).all()
+        # 2026-10-29 复审: 持仓必须"账户可见 AND 持仓可见"。旧写法只按 Position.user_id
+        # 过滤, 他人私有账户里 user_id=NULL 的持仓会让 A 的决策应答出现 B 的成本/持仓量。
+        positions = user_scope_positions(db, user.id).all()
     except Exception as e:  # noqa: BLE001
         logger.debug("decision user-context 读取失败: %r", e)
         return None

@@ -6,6 +6,7 @@ import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
@@ -387,29 +388,51 @@ def list_positions(
     return [_position_payload(pos) for pos in positions]
 
 
+def _is_unique_conflict(exc: IntegrityError) -> bool:
+    """区分"唯一约束冲突"(可解释为 409) 与其它完整性错误(外键等, 不该吞)。
+
+    PG 用 SQLSTATE 23505; SQLite 的原文是 "UNIQUE constraint failed: ..."。
+    不能一律 409: 账户在预检与写入之间被删掉会抛外键错误, 那是真故障。
+    """
+    orig = getattr(exc, "orig", None) or exc
+    if getattr(orig, "pgcode", None) == "23505":
+        return True
+    text = str(orig).lower()
+    return "unique constraint failed" in text or "duplicate key value" in text
+
+
 @router.post("/positions", response_model=PositionResponse)
 def create_position(data: PositionCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """创建持仓"""
-    # 检查账户和股票是否存在(仅自己的)
-    account = user_scope_accounts(db, user.id).filter(Account.id == data.account_id).first()
-    if not account:
-        raise HTTPException(400, "账户不存在")
+    """创建持仓。
+
+    归属口径与 position/defense/delete 统一(2026-10-29 复审):
+
+    - 账户**可写**才建仓: 共享账户(user_id=NULL)仅 owner, 他人私有账户 404;
+      此前只校验"可读", member 能把持仓写进共享账户, 违背"共享仅 owner 写";
+    - 去重与 sort_order 只看**本租户可见**的持仓: 他人(共享账户里别人建的 /
+      数据错位的行)同票持仓既不参与判断, 也不把"账户 X 已有 Y"这种带名字的
+      文案回显出去 —— 那等于告诉 A "B 也持有这只票";
+    - 真正的唯一约束冲突(并发, 或唯一行对当前租户不可见)返回**通用 409**,
+      回滚后不留下半条记录, 文案不带账户名/票名/归属人。
+    """
+    account = _writable_account_or_error(db, data.account_id, user)
 
     stock = db.query(Stock).filter(Stock.id == data.stock_id).first()
     if not stock:
         raise HTTPException(400, "股票不存在")
 
-    # 检查是否已存在该账户的该股票持仓
-    existing = db.query(Position).filter(
-        Position.account_id == data.account_id,
-        Position.stock_id == data.stock_id,
+    # 预检收敛到本租户可见范围: 自己的持仓才提示"编辑现有持仓"。
+    existing = user_scope_positions(
+        db, user.id, account_id=account.id, stock_id=stock.id
     ).first()
     if existing:
         raise HTTPException(400, f"账户 {account.name} 已有 {stock.name} 的持仓，请编辑现有持仓")
 
-    max_order = db.query(func.max(Position.sort_order)).filter(
-        Position.account_id == data.account_id
-    ).scalar() or 0
+    max_order = (
+        user_scope_positions(db, user.id, account_id=account.id)
+        .with_entities(func.max(Position.sort_order))
+        .scalar()
+    ) or 0
 
     position = Position(
         account_id=data.account_id,
@@ -423,7 +446,24 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db), user: U
         defense_price=_defense_line_out(data.defense_price),
     )
     db.add(position)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if not _is_unique_conflict(exc):
+            raise
+        # uq_account_stock: 并发建同一 (account, stock), 或该唯一行对我不可见。
+        # 一律通用文案 —— 说明"存在"已经足够, 再带名字就是越权泄漏。
+        logger.info(
+            "建仓唯一约束冲突(不泄露归属): account_id=%s stock_id=%s user=%s",
+            data.account_id,
+            data.stock_id,
+            user.id,
+        )
+        raise HTTPException(
+            409,
+            "该账户下该标的的持仓已存在或正在创建，请刷新后重试",
+        ) from None
     db.refresh(position)
 
     logger.info(f"创建持仓: {account.name} - {stock.name}")

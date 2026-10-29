@@ -113,7 +113,10 @@ def build_portfolio_context(
         total_cost = 0.0
         all_positions = []
 
-    if not positions and total_available <= 0 and total_cost <= 0:
+    # 2026-10-29 复审: 归属口径不完整时不许把"读不到"渲染成"没有"。
+    scope_note = getattr(portfolio, "scope_note", None)
+
+    if not positions and total_available <= 0 and total_cost <= 0 and not scope_note:
         return ""
 
     lines: list[str] = []
@@ -152,8 +155,19 @@ def build_portfolio_context(
             )
     else:
         lines.append(f"\n## Holding for {stock_symbol}")
-        lines.append("- The user does NOT currently hold this stock.")
-        lines.append("- Treat this as a potential new entry, not a hold/add decision.")
+        if scope_note:
+            # 上下文未知(无会话 + 标的无归属): 明确说"不知道", 并给出原因。
+            lines.append(
+                "- 持仓上下文未知（不完整）：无法确认用户是否持有该标的。"
+            )
+            lines.append(f"- 原因：{scope_note}")
+            lines.append(
+                "- **不要**断言\"用户不持有/未持仓\", 也不要据此给出\"新开仓\"口径; "
+                "如需结论请先要求用户指定账户或登录后再分析。"
+            )
+        else:
+            lines.append("- The user does NOT currently hold this stock.")
+            lines.append("- Treat this as a potential new entry, not a hold/add decision.")
 
     # 账户总览
     if total_available > 0 or total_cost > 0:

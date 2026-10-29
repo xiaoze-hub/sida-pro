@@ -30,19 +30,30 @@ def owner_cost(db: Any, user: Any, symbol: str, market: str = "CN") -> tuple[flo
     uid = getattr(user, "id", None)
 
     try:
-        from sqlalchemy import or_
-
-        from src.db.models import Position, Stock
-
-        rows = db.query(Position, Stock).join(Stock, Position.stock_id == Stock.id).filter(
-            Stock.symbol == sym
+        # 2026-10-29 复审: 成本锚定同样是"账户可见 AND 持仓可见"——只按 Position.user_id
+        # 过滤时, 他人私有账户里 user_id=NULL 的持仓会被当成"我的成本"喂给 AI/用户。
+        from src.core.portfolio_scope import (
+            account_user_scope_clause,
+            position_user_scope_clause,
         )
-        if uid is not None:
-            rows = rows.filter(or_(Position.user_id == uid, Position.user_id.is_(None)))
-        row = rows.first()
+        from src.db.models import Account, Position, Stock
+
+        # 只取 Position 实体: `db.query(Position, Stock).first()` 返回的是 Row,
+        # SQLAlchemy 2.0 的 Row 不是 tuple, 旧的 `isinstance(row, tuple)` 判定会落到
+        # "整行当持仓"分支, 于是真实库上成本锚定一直是 None(2026-10-29 实测)。
+        row = (
+            db.query(Position)
+            .join(Stock, Position.stock_id == Stock.id)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Stock.symbol == sym,
+                account_user_scope_clause(uid),
+                position_user_scope_clause(uid),
+            )
+            .first()
+        )
         if row is not None:
-            pos = row[0] if isinstance(row, tuple) else row
-            cost = getattr(pos, "cost_price", None)
+            cost = getattr(row, "cost_price", None)
             if cost:
                 return float(cost), None      # 实盘没有纪律止损列 → 不猜
     except Exception:  # noqa: BLE001 - 持仓读不到就当没有，不影响矩阵

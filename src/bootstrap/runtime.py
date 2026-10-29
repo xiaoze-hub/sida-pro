@@ -248,6 +248,11 @@ def load_portfolio_for_stock(stock_id: int, user_id: str | None = _UNSET) -> Por
       - 传 user_id → 只看该用户可见的账户与持仓;
       - 不传(系统调度) → 按标的归属 `stocks.user_id` 取租户 —— 没会话不等于全量;
       - 标的也无归属(历史共享) → 只取历史共享桶(user_id IS NULL), 仍不是全表。
+
+    2026-10-29 复审补充: 最后那种"无会话 + 标的无归属"的情形**持仓上下文未知**
+    (个人私有账户里的持仓不可能被安全归因), 绝不猜 owner 去补全; 用
+    `PortfolioInfo.scope_note` 把这个事实和原因带到渲染层, 免得 AI 把"看不到"
+    说成"用户没有持仓"。
     """
     from src.core.portfolio_scope import user_scope_accounts, user_scope_positions
     from src.web.models import Position
@@ -263,7 +268,13 @@ def load_portfolio_for_stock(stock_id: int, user_id: str | None = _UNSET) -> Por
         except ValueError:
             market = MarketCode.CN
 
+        scope_note = None
         tenant = getattr(stock, "user_id", None) if user_id is _UNSET else user_id
+        if user_id is _UNSET and tenant is None:
+            scope_note = (
+                "本次触发没有用户会话, 且该标的没有归属用户, 无法确定持仓归属; "
+                "只能读取全局共享(user_id IS NULL)的账户与持仓, 个人私有账户的持仓未纳入"
+            )
         accounts = user_scope_accounts(db, tenant, enabled_only=True).all()
         positions_by_account: dict[int, list[Position]] = {}
         for pos in user_scope_positions(db, tenant, stock_id=stock_id).all():
@@ -295,9 +306,20 @@ def load_portfolio_for_stock(stock_id: int, user_id: str | None = _UNSET) -> Por
                 )
             )
 
-        return PortfolioInfo(accounts=account_infos)
+        return PortfolioInfo(accounts=account_infos, scope_note=scope_note)
     finally:
         db.close()
+
+
+def _stock_owner_id(stock) -> str | None:
+    """标的的显式归属用户 id; 取不到(非 ORM 对象/字段缺失/懒加载失败)一律 None。
+
+    None 在 `resolve_notify_channels` 里表示"共享桶"(fail-closed), 不扩大收件范围。
+    """
+    try:
+        return getattr(stock, "user_id", None)
+    except Exception:  # noqa: BLE001 —— 分离实例懒加载失败时按"无归属"处理
+        return None
 
 
 def _get_proxy() -> str:
@@ -377,12 +399,16 @@ def resolve_notify_channels(
 
     M7(2026-09-10 多用户隔离): 传入具体 user_id 时, 只取**该用户自己的渠道 +
     全局共享(user_id IS NULL)渠道** —— 不再借用 agent 级全局渠道(那是 owner 的),
-    避免 A 的报告发到 B 的渠道。user_id 不传/为 None 时保持旧行为。
+    避免 A 的报告发到 B 的渠道。
+
+    2026-10-29 复审: **显式传 None 也走同一收敛口径**(只取共享渠道), 不再落回
+    "agent 级 / 系统默认"那套全租户配置 —— 没有用户会话时收件范围只能缩, 不能放。
+    只有完全没传参数(_UNSET)才保留旧的 agent 级行为, 供明确需要"全局模板"的老路径使用。
     """
     db = SessionLocal()
     try:
-        # 0) 指定用户: 用户渠道 ∪ 全局共享渠道(与 notify_center._build_notifier 同口径)
-        if user_id is not _UNSET and user_id is not None:
+        # 0) 指定用户(含显式 None = 无会话共享桶): 与 notify_center._build_notifier 同口径
+        if user_id is not _UNSET:
             from sqlalchemy import or_ as _or_
 
             channels = (
@@ -987,7 +1013,16 @@ async def trigger_agent_for_stock(
     portfolio = load_portfolio_for_stock(stock.id, user_id if user_id else _UNSET)
 
     model, service = resolve_ai_model(agent_name, stock_agent_id)
-    channels = [] if suppress_notify else resolve_notify_channels(agent_name, stock_agent_id)
+    if suppress_notify:
+        channels = []
+    else:
+        # 通知渠道与组合上下文同一作用域(2026-10-29 复审):
+        # 触发用户 → 标的显式归属 → 显式共享桶(None, fail-closed)。
+        # 旧代码不传 user_id, 于是落回 agent/stock_agent 级配置 —— 那是 owner 的私有
+        # 渠道, member 手动触发会把分析发进 owner 的群。缺会话时也绝不扩大到全租户。
+        channels = resolve_notify_channels(
+            agent_name, stock_agent_id, user_id=_stock_owner_id(stock) if not user_id else user_id
+        )
     _log_trigger_info(agent_name, [stock], model, service, channels)
 
     ai_client = _build_ai_client(model, service, proxy)
