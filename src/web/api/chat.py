@@ -1555,7 +1555,6 @@ def _build_portfolio_context(db: Session, user: User | None = None) -> str:
     if not uid:
         return ""
     lines: list[str] = []
-
     # 实盘持仓
     real_lines = [
         f"- {st.name}({st.market}:{st.symbol}) "

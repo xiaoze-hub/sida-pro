@@ -273,7 +273,7 @@ const openPositionDialog = (accountId: number, position?: Position) => {
     setPositionForm({
       account_id: accountId,
       stock_id: position.stock_id,
-      cost_price: position.cost_price.toString(),
+      cost_price: position.cost_price?.toString() ?? '',
       quantity: position.quantity.toString(),
       invested_amount: position.invested_amount?.toString() || '',
       trading_style: position.trading_style || '',

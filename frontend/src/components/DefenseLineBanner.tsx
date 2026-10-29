@@ -502,7 +502,6 @@ export function DefenseLineBanner({
   const refreshMs = idle ? DEFENSE_IDLE_REFRESH_MS : DEFENSE_QUOTE_REFRESH_MS
   usePausedInterval(refreshTick, refreshMs, {
     // marketsKey 而非 markets：数组身份每渲染都变；refreshMs 进依赖 ⇒ 只在节奏切换时重挂。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     deps: [active, symbol, marketsKey, refreshMs],
     immediate: false,
   })
