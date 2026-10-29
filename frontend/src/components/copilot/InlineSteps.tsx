@@ -73,6 +73,12 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
   const hint = statusHint(run.status)
   /** 失败步数：只有详情到手才数得出（未加载时是 null，不显示 0）。 */
   const failedSteps = steps ? steps.filter((s) => !s.ok).length : null
+  /**
+   * run 级状态是否正常。**零失败步骤 ≠ 这一轮全部成功**：harness 可能整轮 `error`
+   * （模型调用失败、后面的步骤根本没机会跑），明细里看得见的几步都 ok 说明不了什么。
+   * 只有 run 自己 ok 才敢说「全部成功」，否则只陈述事实「各步未见失败」。
+   */
+  const runOk = !run.status || run.status === 'ok'
 
   const toggle = () => {
     const next = !open
@@ -113,7 +119,8 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
           {/*
             展开后先给一行「共 N 步 / 失败 M 步」：失败步骤虽然逐条标红，但要先让人知道
             这一轮到底有没有失败，否则得自己数完 7 行才发现第 3 步是 ✗。
-            M 为 0 时不写「失败 0 步」—— 那是噪音，不是信息。
+            M 为 0 时不写「失败 0 步」—— 那是噪音，不是信息；但 run 级非 ok 时也不能把
+            「明细里 0 步失败」说成「全部成功」。
           */}
           {steps && steps.length > 0 ? (
             <div
@@ -123,8 +130,10 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
               <span>共 {steps.length} 步</span>
               {failedSteps ? (
                 <span className="text-stock-down">失败 {failedSteps} 步</span>
-              ) : (
+              ) : runOk ? (
                 <span>全部成功</span>
+              ) : (
+                <span className="text-amber-500">各步未见失败 · 本轮 {run.status}</span>
               )}
             </div>
           ) : null}

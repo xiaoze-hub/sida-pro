@@ -18,10 +18,12 @@ import {
   type DimensionPerspective,
 } from '@/components/copilot/MultiAgentDebatePanel'
 import {
-  extractRiskLines,
+  extractGapLines,
   partitionEvidence,
+  scanRisk,
   splitCaliber,
   splitEvidenceSource,
+  splitLines,
   stripDisclaimer,
   stripRiskTail,
 } from '@/components/copilot/answer-sections'
@@ -47,10 +49,16 @@ import {
  * 固化在组件旁边而不是 `lib/copilot/copy.ts`：这一轮只动「回答 / 证据」组件
  * （`components/copilot/`），而 copy.ts 同时被卡片、胶囊、简报共用，改它会把这次打磨
  * 扩散成全站文案改动。两句都是**中性描述**：不含买卖指令、不承诺收益。
+ *
+ * 2026-10-29 审查修复：两句话都曾**说过头**——
+ *  - `风险与失效条件`：模型只写「量能萎缩则结论不成立」时，原文根本没有失效条件，
+ *    标题却替它承诺了一个分类。现在只说「风险」，条目是什么就显示什么。
+ *  - `…未参与上述结论`：回答里没有任何机制能证明这几条缺失数据没影响结论，这句话是
+ *    替模型下的结论。现在只陈述事实：这些是回答里声明没取到的数据。
  */
-const ANSWER_RISK_LABEL = '风险与失效条件'
+const ANSWER_RISK_LABEL = '风险'
 const ANSWER_GAP_LABEL = '数据缺口'
-const ANSWER_GAP_NOTE = '以下为回答中声明未取到的数据，未参与上述结论'
+const ANSWER_GAP_NOTE = '以下为回答中声明未取到的数据'
 
 /** 首屏只露 3 条依据：结论 + 关键证据一屏读完，其余折叠（信息量不变，首屏变短）。 */
 const EVIDENCE_PREVIEW = 3
@@ -213,10 +221,12 @@ function SectionHead({ label, count }: { label: string; count?: string }) {
  * 分层顺序固定为「裁决 → 罗盘 → 风险 → 会诊证据链 → 依据 → 数据缺口 → 预案 → 口径」：
  *   1. 裁决条：一句定性 + 自评徽标（自评来自原文 x/10，拿不到就不显示，不编）；
  *   2. 决策罗盘：当且仅当原文存在真实支撑与阻力时呈现（价位只展示，不上图）；
- *   3. 风险与失效条件：**只**在模型写了【风险】段时出现 —— 绝不从依据里反推风险；
+ *   3. 风险：**只**在模型写了【风险】段时出现 —— 绝不从依据里反推风险，也不替模型
+ *      承诺「失效条件」这个分类（条目是什么就说什么）；多段风险逐段收齐；
  *   4. 会诊面板：当依据具备多维度特征时结构化展现真实证据链；
  *   5. 依据：默认 3 条、可展开全部；尾部「（…口径）」拆成来源标记，正文只留读数；
- *   6. 数据缺口：回答自己声明「暂无 / 未取到」的条目，单独一层，一条不丢；
+ *   6. 数据缺口：回答自己声明「暂无 / 未取到」的条目，单独一层，一条不丢（含写进风险段
+ *      的缺失条目）；只陈述「声明未取到」，不断言它有没有影响结论；
  *   7. 预案：原文保留（持仓者/空仓者的分叉在模型输出里）；
  *   8. 口径：拆成条目 + 固定标签，回答里到底用的是哪套口径必须一眼可读。
  *
@@ -240,15 +250,40 @@ export function AnswerCard({
   /** 先截掉黏在结论/预案/口径尾巴上的风险段：同一句风险不能出现两次。 */
   const verdict = useMemo(() => stripRiskTail(parsed.verdict), [parsed.verdict])
   const plan = useMemo(() => stripRiskTail(parsed.plan), [parsed.plan])
-  const riskLines = useMemo(() => extractRiskLines(parsed.raw), [parsed.raw])
-  const { data: evidenceRows, gaps } = useMemo(
-    () => partitionEvidence(parsed.evidence, riskLines),
-    [parsed.evidence, riskLines],
-  )
+  /**
+   * 风险段可能有多段：一次扫出全部条目，顺带把混进风险段的「未取到」归到缺口
+   * （缺失数据不是失效条件，不能顶着风险的名义展示）。
+   */
+  const riskScan = useMemo(() => scanRisk(parsed.raw), [parsed.raw])
+  const riskLines = riskScan.risks
+  const rawGaps = useMemo(() => extractGapLines(parsed.raw), [parsed.raw])
   const caliberParts = useMemo(
     () => splitCaliber(stripDisclaimer(stripRiskTail(parsed.caliber), parsed.disclaimer)),
     [parsed.caliber, parsed.disclaimer],
   )
+  /**
+   * 依据里只留「真的只有依据才有的字」：缺口段 / 风险段 / 预案 / 口径已经各自成节，
+   * 这些行再在依据里列一遍就是重复，还会把依据条数算多。
+   */
+  const shownElsewhere = useMemo(
+    () => [...rawGaps, ...riskScan.gaps, ...splitLines(plan), ...caliberParts],
+    [rawGaps, riskScan, plan, caliberParts],
+  )
+  const { data: evidenceRows, gaps: evidenceGaps } = useMemo(
+    () => partitionEvidence(parsed.evidence, riskLines, shownElsewhere),
+    [parsed.evidence, riskLines, shownElsewhere],
+  )
+  /** 缺口来源三处（原文缺口段 / 风险段里的缺失 / 依据里声明的缺失），按原文顺序去重合并。 */
+  const gaps = useMemo(() => {
+    const seen = new Set<string>()
+    const merged: string[] = []
+    for (const g of [...rawGaps, ...riskScan.gaps, ...evidenceGaps]) {
+      if (seen.has(g)) continue
+      seen.add(g)
+      merged.push(g)
+    }
+    return merged
+  }, [rawGaps, riskScan, evidenceGaps])
 
   const hiddenCount = Math.max(0, evidenceRows.length - EVIDENCE_PREVIEW)
   const shownEvidence = useMemo(
@@ -367,7 +402,7 @@ export function AnswerCard({
         </div>
       ) : null}
 
-      {/* 3. 风险与失效条件（模型没写就没有这一层，绝不从依据反推） */}
+      {/* 3. 风险（模型没写就没有这一层，绝不从依据反推；标题不替模型承诺「失效条件」） */}
       {riskLines.length ? (
         <section
           data-testid="copilot-answer-risk"
