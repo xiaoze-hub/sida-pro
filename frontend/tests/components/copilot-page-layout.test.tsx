@@ -32,14 +32,20 @@ vi.mock('../../src/lib/copilot/api', () => ({
   ...presetsMock,
   getCopilotMentions: vi.fn(async () => ({ stocks: [], agents: [] })),
 }))
-vi.mock('../../src/lib/copilot/symbolChips', () => ({
-  extractSymbolChips: (text: string) => {
-    const m = text.match(/\b([034689]\d{5})\b/)
-    return m ? [m[1]] : []
-  },
-  marketOf: (code: string) =>
-    code.startsWith('6') ? 'SH' : /^[489]/.test(code) ? 'BJ' : 'SZ',
-}))
+// 只替换抽取/市场两处（保持用例原有口径），其余导出沿用真实实现 ——
+// 模块新增纯函数（如 `resolveTurnSymbol`）时不会因为桩缺项在页面里变成 undefined。
+vi.mock('../../src/lib/copilot/symbolChips', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/lib/copilot/symbolChips')>()
+  return {
+    ...actual,
+    extractSymbolChips: (text: string) => {
+      const m = text.match(/\b([034689]\d{5})\b/)
+      return m ? [m[1]] : []
+    },
+    marketOf: (code: string) =>
+      code.startsWith('6') ? 'SH' : /^[489]/.test(code) ? 'BJ' : 'SZ',
+  }
+})
 vi.mock('../../src/components/SafeMarkdown', () => ({
   default: ({ children }: { children: string }) => <div data-testid="md-fallback">{children}</div>,
 }))

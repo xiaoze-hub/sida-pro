@@ -30,3 +30,34 @@ export function marketOf(code: string): 'SH' | 'SZ' | 'BJ' {
   if (/^[489]/.test(c)) return 'BJ'
   return 'SZ'
 }
+
+/** 本轮提问指向的标的 + 这个指向是不是用户**自己写明的**（可证）。 */
+export interface TurnSymbol {
+  symbol: string
+  /**
+   * `true` = 用户在正文里写了代码，或 `@` 选了具体票（可证）；
+   * `false` = 只是沿用页面锚点/会话绑定（**推定**，不是这一轮写明的）。
+   */
+  explicit: boolean
+}
+
+/**
+ * 本轮标的解析（2026-10-29 三审）。
+ *
+ * 早先后台轮只从正文抽 6 位代码（`extractSymbolChips`），于是「@ 选了宁德时代」「只说名字不说代码」
+ * 都判不出换票，旧会话（创建时带着另一只票的图表快照）被继续复用。
+ * 这里把三种来源排成一条可信度链：@ 指定 > 正文代码 > 页面锚点，并保留 `explicit` 标记 ——
+ * 后台轮只在 `explicit && symbol === 会话绑定标的` 时才敢复用旧会话（见 AiCopilot 的 runInBackground）。
+ */
+export function resolveTurnSymbol(input: {
+  mentioned?: string | null
+  text?: string | null
+  anchor?: string | null
+}): TurnSymbol {
+  const mentioned = (input.mentioned || '').trim()
+  if (mentioned) return { symbol: mentioned, explicit: true }
+  const inText = extractSymbolChips(input.text || '')[0]
+  if (inText) return { symbol: inText, explicit: true }
+  const anchor = (input.anchor || '').trim()
+  return anchor ? { symbol: anchor, explicit: false } : { symbol: '', explicit: false }
+}

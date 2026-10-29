@@ -30,9 +30,11 @@ vi.mock('../../src/lib/copilot/api', () => ({
   getCopilotBrief: vi.fn().mockResolvedValue(null),
 }))
 
-vi.mock('../../src/lib/copilot/symbolChips', () => ({
-  extractSymbolChips: () => [],
-}))
+// 只替换抽取一处（本文件自己断言"正文不带代码"），其余导出沿用真实实现
+vi.mock('../../src/lib/copilot/symbolChips', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/lib/copilot/symbolChips')>()
+  return { ...actual, extractSymbolChips: () => [] }
+})
 
 vi.mock('../../src/components/SafeMarkdown', () => ({
   default: ({ children }: { children: string }) => <div>{children}</div>,

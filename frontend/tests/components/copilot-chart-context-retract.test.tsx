@@ -295,11 +295,19 @@ describe('隔离与凭据边界', () => {
     expect(notice.textContent).toContain('无法核验')
     await ask('接着问')
     await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
-    // 追问期间提示仍在（模型这一轮照样会收到那段不可核验的旧快照）
-    expect(screen.getByTestId('copilot-chart-context-history-notice')).toBeTruthy()
-    // 历史会话不会被新建，也不会被塞入新快照
-    expect(apiMock.createConversation).not.toHaveBeenCalled()
-    expect(apiMock.sendMessageStream.mock.calls[0][0]).toBe(9)
+    /**
+     * 2026-10-29 三审收紧：这个历史会话**没有绑定标的**（`stock_symbol: null`），
+     * 而"接着问"本身判不出问的是哪只票 —— 按"无法确认就不复用"处理，这一轮进**不带快照的新会话**。
+     * 视图已经是新会话了，所以那条"不可核验"提示跟着旧会话一起退场（不是被藏起来），
+     * 取而代之的是"为什么换会话"的真实说明。
+     */
+    expect(apiMock.createConversation).toHaveBeenCalledTimes(1)
+    const payload = apiMock.createConversation.mock.calls[0][0] as { initial_context?: string }
+    expect(payload.initial_context || '').not.toContain('图表上下文')
+    expect(apiMock.sendMessageStream.mock.calls[0][0]).not.toBe(9)
+    expect(apiMock.deleteConversation).not.toHaveBeenCalled()
+    const stale = await screen.findByTestId('copilot-chart-context-notice')
+    expect(stale.textContent || '').toContain('新开')
   })
 })
 

@@ -122,6 +122,34 @@ export const PERIOD_LABELS: Readonly<Record<string, string>> = {
   mn: '月线',
 }
 
+/**
+ * 自有键判定（等价 `Object.hasOwn`，**不吃原型链**）。
+ *
+ * 本工程 `lib` 只到 ES2021，没有 `Object.hasOwn` 的类型声明；语义完全等价的自有键判断是
+ * `Object.prototype.hasOwnProperty.call`。关键是**不能**用 `key in obj` —— 那会把
+ * `constructor`/`__proto__` 这类原型链上的键当成合法取值。
+ */
+function hasOwnKey(obj: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+/**
+ * 合法周期判定（`Object.hasOwn`，**不吃原型链**）。
+ *
+ * 2026-10-29 三审：早先用 `rawPeriod in PERIOD_LABELS` —— 对 `'constructor'`、`'__proto__'`
+ * 这类键会命中 `Object.prototype`，`?period=constructor` 于是"合法"，
+ * `PERIOD_LABELS[period]` 取到的是函数，拼进 prompt 变成 `function Object() {...}`，
+ * 渲染进 React 直接抛错。白名单只认自有键。
+ */
+export function isChartPeriod(value: unknown): value is string {
+  return typeof value === 'string' && hasOwnKey(PERIOD_LABELS, value)
+}
+
+/** 周期 → 人话；非法/未知取值原样返回（调用方只在 `isChartPeriod` 之后才用它）。 */
+export function chartPeriodLabel(period: string): string {
+  return isChartPeriod(period) ? PERIOD_LABELS[period] : String(period)
+}
+
 const INSTRUMENT_LABELS: Readonly<Record<ChartInstrument, string>> = {
   stock: '个股',
   index: '指数',
@@ -216,7 +244,7 @@ export function buildChartContext(input: ChartContextInput): ChartContext | null
     capturedAt: typeof input.now === 'number' && Number.isFinite(input.now) ? input.now : Date.now(),
   }
   // 周期只认 URL 上的合法取值：非法/缺失 = 用户没选（或链接被降级），不写。
-  if (rawPeriod in PERIOD_LABELS) ctx.period = rawPeriod
+  if (isChartPeriod(rawPeriod)) ctx.period = rawPeriod
   const range = buildRange(input.range)
   if (range) ctx.range = range
   const levels = buildLevels(input.levels)
@@ -280,7 +308,8 @@ export function chartContextCapturedAt(ctx: ChartContext): string {
  */
 export function chartContextParts(ctx: ChartContext): string[] {
   const parts = [`${ctx.symbol}（${INSTRUMENT_LABELS[ctx.instrument]} · ${ctx.market}）`]
-  if (ctx.period) parts.push(PERIOD_LABELS[ctx.period] ?? ctx.period)
+  // 周期一律经 `chartPeriodLabel` 取值：任何非白名单取值都不可能让函数/对象流进渲染树
+  if (isChartPeriod(ctx.period)) parts.push(chartPeriodLabel(ctx.period))
   if (ctx.range) {
     const { from, to, bars, changePct, amplitudePct } = ctx.range
     parts.push(`区间 ${from}→${to}（${bars} 根，${safePercent(changePct, 2)}，振幅 ${safePercent(amplitudePct, 2, false)}）`)
@@ -313,7 +342,7 @@ export function chartContextPrompt(ctx: ChartContext): string {
       `${chartContextCapturedAt(ctx)}（客户端本地时间）。未经服务端核验，且是进入时快照，不是实时值。`,
     `标的：${ctx.symbol}（${INSTRUMENT_LABELS[ctx.instrument]} · ${ctx.market}）—— 代码/市场来自页面路由与选择，未与行情接口核对`,
   ]
-  if (ctx.period) lines.push(`周期：${PERIOD_LABELS[ctx.period] ?? ctx.period}（页面 URL ?period=${ctx.period}）`)
+  if (isChartPeriod(ctx.period)) lines.push(`周期：${chartPeriodLabel(ctx.period)}（页面 URL ?period=${ctx.period}）`)
   if (ctx.range) {
     const { from, to, bars, changePct, amplitudePct } = ctx.range
     lines.push(

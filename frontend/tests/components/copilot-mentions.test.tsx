@@ -42,10 +42,15 @@ const copilotMock = vi.hoisted(() => ({
 
 vi.mock('@sida/api', () => ({ chatApi: apiMock }))
 vi.mock('../../src/lib/copilot/api', () => copilotMock)
-vi.mock('../../src/lib/copilot/symbolChips', () => ({
-  extractSymbolChips: () => [],
-  marketOf: (c: string) => (c.startsWith('6') ? 'SH' : 'SZ'),
-}))
+// 只替换抽取/市场（本文件只关心 @ 选中后的请求体），其余导出沿用真实实现
+vi.mock('../../src/lib/copilot/symbolChips', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/lib/copilot/symbolChips')>()
+  return {
+    ...actual,
+    extractSymbolChips: () => [],
+    marketOf: (c: string) => (c.startsWith('6') ? 'SH' : 'SZ'),
+  }
+})
 vi.mock('../../src/components/SafeMarkdown', () => ({
   default: ({ children }: { children: string }) => <div data-testid="md">{children}</div>,
 }))
