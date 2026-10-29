@@ -167,8 +167,9 @@ def _quote_date_stat_suffix() -> str:
         return ""
     order = (
         "proved_today", "proved_last_traded_day", "no_today_bar", "price_mismatch",
-        "window_empty", "no_bars", "daily_rpc_failed", "daily_missing_symbol",
-        "daily_short_window", "quote_now_zero",
+        "window_empty", "no_bars", "price_invalid", "volume_conflict",
+        "daily_rpc_failed", "daily_missing_symbol", "daily_short_window",
+        "snapshot_volume_unreliable", "daily_circuit_open", "quote_now_zero",
     )
     shown = [f"{k}={stats[k]}" for k in order if stats.get(k)]
     shown += [f"{k}={v}" for k, v in stats.items() if k not in order and v]
@@ -176,8 +177,10 @@ def _quote_date_stat_suffix() -> str:
         return ""
     degraded = any(
         stats.get(k) for k in (
-            "no_today_bar", "price_mismatch", "window_empty", "no_bars",
-            "daily_rpc_failed", "daily_missing_symbol", "daily_short_window", "quote_now_zero",
+            "no_today_bar", "price_mismatch", "window_empty", "no_bars", "price_invalid",
+            "volume_conflict", "daily_rpc_failed", "daily_missing_symbol",
+            "daily_short_window", "snapshot_volume_unreliable", "daily_circuit_open",
+            "quote_now_zero",
         )
     )
     tag = "报价日期证据降级" if degraded else "报价日期证据"

@@ -674,9 +674,11 @@ describe('resolveDefenseState · 源只到日（TQ 日线口径，date_only）',
  *    ⇒ **不许**沿用 CN 那句断言，只能写"是否成交时刻未核实"。
  */
 describe('quoteStampNote · 源报时语义（CN 已证实 / 港美未核实）', () => {
-  it('CN snapshot_refresh → 源快照时间 + 非成交时刻', () => {
-    expect(quoteStampNote('snapshot_refresh', '16:14')).toBe('源快照时间 16:14（非成交时刻）')
-    expect(quoteStampNote('snapshot_refresh')).toBe('源快照时间（非成交时刻）')
+  it('CN snapshot_refresh → 源快照时间 + 不证明成交时刻', () => {
+    // 措辞比旧版「非成交时刻」更准确：16:14:57 那刻**可能**真有一笔成交，我们只是
+    // 不能用这个字段证明它 —— 断言"非成交"是过度推断，"不证明成交"才是证据强度。
+    expect(quoteStampNote('snapshot_refresh', '16:14')).toBe('源快照时间 16:14（不证明成交时刻）')
+    expect(quoteStampNote('snapshot_refresh')).toBe('源快照时间（不证明成交时刻）')
   })
 
   it('港美 vendor_stamp → 只写"源报时/未核实"，绝不断言非成交', () => {

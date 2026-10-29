@@ -68,7 +68,9 @@ class Quote:
     #                        实测落在收盘竞价窗口，可能就是最后一笔成交，不能断言非成交）；
     #   ""                 = 没有报时 / 语义未知。
     quote_time_kind: str = ""
-    # quote_date 的证据来源：'daily_bar_close'=同标的日线收盘价与现价配对一致（TQ），
+    # quote_date 的证据来源：'daily_bar_close'=同标的日线收盘价与现价配对一致（TQ；
+    # 并与同标的快照成交量做**零/正**交叉校验，两边对"今天有没有成交"说法不一致就
+    # 不给日期 —— 快照 volume=手、日线 volume=股，只比零/正，绝不比数值），
     # '' = 无（日期未知）。
     quote_date_basis: str = ""
     timestamp: datetime = field(default_factory=datetime.now)

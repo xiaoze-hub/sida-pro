@@ -165,7 +165,7 @@ export interface PositionRiskInput {
   defense_price?: number | string | null
   quote_date?: string | null
   quote_time?: string | null
-  /** 报价时刻的语义：`snapshot_refresh`=CN 源快照刷新（非成交时刻）/`vendor_stamp`=港美供应商报时（未核实）。 */
+  /** 报价时刻的语义：`snapshot_refresh`=CN 源快照刷新（**不证明**成交时刻）/`vendor_stamp`=港美供应商报时（未核实）。 */
   quote_time_kind?: string | null
   /** 报价日期的证据来源：`daily_bar_close`=同标的日线收盘价与现价配对（TQ，只证到日）。 */
   quote_date_basis?: string | null
@@ -314,9 +314,9 @@ export function sessionIsIdle(status: unknown): boolean {
 /**
  * 源报时语义（后端 `Quote.quote_time_kind`，2026-10-29 复审按市场分开）：
  * - `snapshot_refresh`：**CN 已证实**是源端刷新时点（收盘后仍刷到 16:14，停牌股同样刷新）
- *   ⇒ 不证明发生过成交；
+ *   ⇒ 只能说「不证明成交时刻」（它**不排除**那一刻恰好有成交，只是不能据此断言）；
  * - `vendor_stamp`：**港/美**只到"供应商报时"这一层（实测落在收盘竞价窗口，可能就是最后
- *   一笔成交）⇒ 不能说"非成交时刻"，只能说"是否成交时刻未核实"。
+ *   一笔成交）⇒ 连"不证明成交时刻"都过强，只能说"是否成交时刻未核实"。
  * 两者共同的结论只有一个：**不能拿它证明"刚刚成交"**。
  */
 export const QUOTE_TIME_KIND_SNAPSHOT_REFRESH = 'snapshot_refresh'
@@ -336,7 +336,7 @@ export function quoteStampNote(kind: string | null | undefined, at?: string | nu
   const k = String(kind ?? '').trim()
   const hhmm = String(at ?? '').trim()
   if (k === QUOTE_TIME_KIND_SNAPSHOT_REFRESH) {
-    return `源快照时间${hhmm ? ` ${hhmm}` : ''}（非成交时刻）`
+    return `源快照时间${hhmm ? ` ${hhmm}` : ''}（不证明成交时刻）`
   }
   if (k === QUOTE_TIME_KIND_VENDOR_STAMP) {
     return `源报时${hhmm ? ` ${hhmm}` : ''}（是否成交时刻未核实）`

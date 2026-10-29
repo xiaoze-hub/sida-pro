@@ -480,10 +480,25 @@ def test_tq_moreinfo_detail_carries_quote_date_evidence_counts(monkeypatch):
     monkeypatch.setattr(tqmod, "_resolve_tq_url",
                         lambda: "http://172.27.16.1:17709/", raising=False)
     monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=2.0: True, raising=False)
+    tqmod._reset_daily_circuit()
     tqmod._reset_quote_date_stats()
     tqmod.prove_quote_date([{"Date": "20261028", "Close": "10.00", "Volume": "100"}],
-                           10.0, "20261029")  # 最新 bar 不是今天 ⇒ no_today_bar
+                           10.0, "20261029", snapshot_volume="0")  # 最新 bar 不是今天 ⇒ no_today_bar
     detail = sh.check_source("tq_moreinfo", use_cache=False)["detail"]
     assert "报价日期证据降级" in detail
     assert "no_today_bar=1" in detail
+    # 成交量交叉校验的冲突/不可用也必须上屏（2026-10-29 复审第二处漏洞）：
+    # 否则"因为证据冲突所以没日期"在运维侧和"日线没取到"长得一样。
+    tqmod._reset_quote_date_stats()
+    tqmod.prove_quote_date(
+        [{"Date": "20261029", "Close": "10.00", "Volume": "100"}],
+        10.0, "20261029", snapshot_volume="0",  # bar 有量、快照无量 ⇒ 冲突
+    )
+    detail = sh.check_source("tq_moreinfo", use_cache=False)["detail"]
+    assert "volume_conflict=1" in detail
+    tqmod._reset_quote_date_stats()
+    tqmod.prove_quote_date([{"Date": "20261029", "Close": "10.00", "Volume": "100"}],
+                           10.0, "20261029", snapshot_volume=None)  # 快照成交量不可读
+    detail = sh.check_source("tq_moreinfo", use_cache=False)["detail"]
+    assert "snapshot_volume_unreliable=1" in detail
     tqmod._reset_quote_date_stats()  # 不留计数给后面的用例
