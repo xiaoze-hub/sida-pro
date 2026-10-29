@@ -111,10 +111,12 @@ export const rejectPendingAction = (id: number) =>
 /**
  * 撤销一次已应用的动作（P1-1.3）。
  *
- * **图表标注目前撤销不了**：后端 `rollback_action` 只处理 watchlist/alert/schedule，
- * `kind="annotation"` 直接 400「annotation 动作不支持回滚」，也没有 DELETE 图注接口
- * （见 `serverAnnotations.SERVER_ANNOTATION_CONTRACT.undoSupported`）。
- * 这里保留接线是为了**如实转述服务端的拒绝**，而不是在界面上假装能撤。
+ * 图表标注走**专属撤销入口**：`annotationLink.revokeAnnotation` →
+ * `DELETE /copilot/annotations/{id}`（2026-10-29 起服务端支持），按标注 id 寻址，
+ * 不需要先知道确认动作 id；那条链要"发请求 → 严格解析 → 服务端读回 → 才动图"，
+ * 与读取同处，避免两个模块各发一次。
+ * 这个 rollback 接口保留给加自选/盯盘提醒/定时任务，以及 `kind="annotation"` 的
+ * 兼容调用（服务端会转成标注撤销，响应带 `revoked_annotation`）。
  */
 export const rollbackPendingAction = (id: number, reason = '') =>
   fetchAPI<PendingAction>(

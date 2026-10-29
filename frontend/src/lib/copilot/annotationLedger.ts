@@ -13,6 +13,11 @@
  *  2. **发布序号**。同一 key 的每次请求取一个递增序号；响应回来时序号不是最新 → 直接丢弃。
  *     这样 A→B→A 快速切换、"慢响应后到"都不会覆盖新状态。
  *
+ * 2026-10-29 撤销闭合再加两样（都不改变上面两条）：
+ *  - `revoking`：当前正在撤销的标注 id —— 界面据此禁用按钮，且**线在请求在途时不动**
+ *    （服务端还没删，本地先删就是撒谎）；
+ *  - `revokeInflight`：按 `key#标注id` 登记在途撤销，连点复用同一个 promise。
+ *
  * 账本里**不存价位**：只存 `ServerAnnotationLine`（每个字段都能对回服务端行，由
  * `serverAnnotations` 的核对路径产生）。它也不是"安全边界" —— 边界在服务端：JWT 过滤 +
  * 精确读回。客户端能做的最多是把一个自造对象塞进账本，而界面上画的是账本里那些行的
@@ -46,6 +51,12 @@ export interface AnnotationSnapshot {
   noticeLevel: 'info' | 'warn' | 'error'
   /** 当前状态是否值得给一个"重新读取"按钮 */
   retryable: boolean
+  /**
+   * 正在撤销中的标注 id（2026-10-29 撤销闭合）。
+   * 界面据此把这条线的撤销按钮置成"撤销中…"并禁用 —— 连点不会发出第二个 DELETE；
+   * 请求结束（成功/失败）都必须清掉，否则按钮会永久卡在撤销中。
+   */
+  revoking: number[]
 }
 
 const EMPTY: AnnotationSnapshot = {
@@ -58,6 +69,7 @@ const EMPTY: AnnotationSnapshot = {
   notice: '',
   noticeLevel: 'info',
   retryable: false,
+  revoking: [],
 }
 
 /** 稳定的空快照（`useSyncExternalStore` 要求 getSnapshot 在无变化时返回同一对象）。 */
@@ -114,6 +126,7 @@ function readySnapshot(key: string, lines: ServerAnnotationLine[], message: stri
     notice: '',
     noticeLevel: 'info',
     retryable: false,
+    revoking: [],
   }
 }
 
@@ -140,6 +153,14 @@ class AnnotationLedgerImpl {
   private snapshots = new Map<string, AnnotationSnapshot>()
   /** key → 最新请求序号 */
   private seq = new Map<string, number>()
+  /**
+   * 撤销在途登记：`视图key#标注id` → promise（2026-10-29 撤销闭合）。
+   *
+   * 放在账本里而不是接线层的模块变量里，是为了让它跟着 {@link clearAll} 一起被清掉：
+   * 账号切换/登出/测试隔离之后，一个残留的旧 promise 会让"同一条标注"的撤销
+   * 永远命中旧在途项 —— 界面点了没反应、也没有任何请求，最难查的那类 bug。
+   */
+  private revokeInflight = new Map<string, Promise<AnnotationSnapshot | null>>()
   /** 页面当前视图目标（确认接线据此判断"是不是同一张图"） */
   private current: AnnotationTarget | null = null
   private listeners = new Set<() => void>()
@@ -175,6 +196,7 @@ class AnnotationLedgerImpl {
       notice: '',
       noticeLevel: 'info',
       retryable: false,
+      revoking: [],
     })
     return next
   }
@@ -234,14 +256,45 @@ class AnnotationLedgerImpl {
     this.write(key, { ...base, notice: message, noticeLevel: level })
   }
 
-  /** 确认成功且目标就是当前视图：用合并后的线替换快照。 */
-  replaceLines(target: AnnotationTarget, lines: ServerAnnotationLine[], message: string) {
+  /**
+   * 标记/解除某条标注的"撤销中"（2026-10-29 撤销闭合）。
+   *
+   * 只动 `revoking`，不碰线、不碰序号：撤销还在路上时图上那条线必须继续显示
+   * （服务端还没删；本地先删就是撒谎）。请求结束的 finally 里必须解除，
+   * 否则按钮永久"撤销中…"。
+   */
+  setRevoking(target: AnnotationTarget, annotationId: number, on: boolean) {
+    const key = targetKey(target)
+    const base = this.snapshots.get(key) ?? emptyForKey(key)
+    const next = base.revoking.filter((id) => id !== annotationId)
+    if (on) next.push(annotationId)
+    this.write(key, { ...base, revoking: next.sort((a, b) => a - b) })
+  }
+
+  /**
+   * 确认成功 / 撤销完成且目标就是当前视图：用新的线集合替换快照。
+   *
+   * `opts.retryable` 用于"撤销成功但读回失败/读回仍含该行" —— 用户需要一个
+   * 重新读取的入口；`opts.level` 决定 notice 的级别（成功=info，不同步=warn/error）。
+   */
+  replaceLines(
+    target: AnnotationTarget,
+    lines: ServerAnnotationLine[],
+    message: string,
+    opts: { retryable?: boolean; level?: AnnotationSnapshot['noticeLevel'] } = {},
+  ) {
     const key = targetKey(target)
     // 已确认的行一定比「此前发出的任何一次读取」都新：把序号推进一格，
     // 让那些还在路上的旧读取回来时被 {@link commit} 丢弃 —— 否则一个早于 apply
     // 发出的读取会把刚确认的线整批覆盖掉（图上闪一下又消失）。
     this.seq.set(key, (this.seq.get(key) ?? 0) + 1)
-    this.write(key, { ...readySnapshot(key, lines, message), notice: message })
+    this.write(key, {
+      ...readySnapshot(key, lines, message),
+      notice: message,
+      noticeLevel: opts.level ?? 'info',
+      retryable: opts.retryable ?? false,
+      revoking: [],
+    })
   }
 
   /** 清空全部（登出/测试隔离）。 */
@@ -249,8 +302,24 @@ class AnnotationLedgerImpl {
     this.snapshots.clear()
     EMPTY_BY_KEY.clear()
     this.seq.clear()
+    this.revokeInflight.clear()
     this.current = null
     this.emit()
+  }
+
+  /** 读某条撤销的在途 promise（`undefined` = 目前没有在途撤销）。 */
+  revokeInflightFor(key: string): Promise<AnnotationSnapshot | null> | undefined {
+    return this.revokeInflight.get(key)
+  }
+
+  /** 登记一条在途撤销（连点的唯一闸门，见 {@link revokeInflight}）。 */
+  trackRevoke(key: string, promise: Promise<AnnotationSnapshot | null>) {
+    this.revokeInflight.set(key, promise)
+  }
+
+  /** 撤销结束：只删自己那一条（别把后来者覆盖掉）。 */
+  untrackRevoke(key: string, promise: Promise<AnnotationSnapshot | null>) {
+    if (this.revokeInflight.get(key) === promise) this.revokeInflight.delete(key)
   }
 
   subscribe = (listener: () => void): (() => void) => {
