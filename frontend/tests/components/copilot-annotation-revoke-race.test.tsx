@@ -40,6 +40,8 @@ const H = vi.hoisted(() => ({
   /** 服务端此刻的标注行（读回按**请求发出那一刻**快照返回，才是真实的 GET 语义） */
   rows: [] as Record<string, unknown>[],
   gates: [] as Gate[],
+  /** 接下来 N 次读回直接失败（模拟网络/服务端错误） */
+  readFails: 0,
   revoke: (() =>
     Promise.resolve({
       ok: true,
@@ -65,6 +67,10 @@ vi.mock('@sida/api', () => ({
       return H.revoke(u)
     }
     if (u.startsWith('/copilot/annotations')) {
+      if (H.readFails > 0) {
+        H.readFails -= 1
+        return Promise.reject(new Error('假读回失败'))
+      }
       const q = new URL(u, 'http://local').searchParams
       const ids = (q.get('ids') ?? '')
         .split(',')
@@ -264,6 +270,17 @@ function clickRevoke(index: number) {
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 30))
+/** 读回 GET 次数（不含 DELETE） */
+const getCount = () => H.calls.filter((u) => u.startsWith('/copilot/annotations?')).length
+
+/** 可手动放行的 promise（用来把某个请求精确地"挂住"） */
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
 
 beforeEach(() => {
   localStorage.setItem('token', token('user-A'))
@@ -271,6 +288,7 @@ beforeEach(() => {
   H.calls.length = 0
   H.deletes.length = 0
   H.gates.length = 0
+  H.readFails = 0
   H.live.clear()
   H.rows = [ROW_SUPPORT, ROW_PRESSURE]
   H.revoke = () =>
@@ -595,5 +613,207 @@ describe('⑦ 确认条文案与事实一致', () => {
     expect(bar.textContent).toContain('不可恢复')
     expect(bar.textContent).not.toContain('立即移除')
     expect(bar.textContent).toContain('读回')
+  })
+})
+
+/**
+ * ⑧ 2026-10-29 复审补丁（独立复审在 997e99f4 上确认"真实可达"的五条）：
+ *
+ *  - 撤销读回落在**同 key** `beginRequest` 清空 lines 的 loading 窗口：旧实现拿
+ *    "此刻账本的线"当减法基线，此刻正是空 → 一次落地把**其余线整批抹掉**，而且
+ *    `replaceLines` 递增 seq 把用户/后台在途的那次重读静默丢弃；
+ *  - "同价位还有另一条"的 `sameLevel` 直接取自那次 GET 的**快照**：别的标签页若在
+ *    快照之后撤销了它，这里会把它**重新画回图上**（复活一条已经不存在的线）；
+ *  - `readySnapshot` 在"一条不剩"时落成 idle，提示里让用户"点重新读取"，但 idle
+ *    分支根本没有按钮；
+ *  - `setError` / `setRefused` 用 `...EMPTY` 重建快照 → 把 `revoking` 清空，在途撤销
+ *    的"撤销中…"消失、按钮重新可点（第二个 DELETE，只剩 409）；
+ *  - 401 之后仍发一次读回 GET：`fetchAPI` 已经 logout 并抛"登录已过期"，这次 GET
+ *    只会再 401 一次。
+ */
+describe('⑧ 复审补丁：loading 窗口 / 陈旧同价位 / idle 重试 / revoking 继承 / 401', () => {
+  it('撤销读回落在同 key 重读的 loading 窗口：其余线不许静默消失，在途重读也不许被丢', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(noteLines()).toHaveLength(2), { timeout: 3000 })
+
+    // #91 的 DELETE 先挂住：这样"读回还没发出"是稳定状态，闸门一定排在它前面
+    const del = deferred<void>()
+    H.revoke = () =>
+      del.promise.then(() => {
+        serverDeletes(91)
+        return revokedBody()
+      })
+    clickRevoke(0)
+    await waitFor(() => expect(H.deletes).toHaveLength(1))
+
+    const releaseRevokeRead = queueGate() // 撤销后的读回被闸住
+    await act(async () => {
+      del.resolve()
+      await tick()
+    })
+    expect(getCount()).toBe(2) // 首读 + 撤销读回（已挂住）
+
+    // 期间另一个入口对**同一个 key** 发起重读（「重新读取」/后台刷新）：
+    // beginRequest 先把 lines 清成 loading —— 撤销读回恰好落在这个窗口里。
+    // 服务端此刻还多了一条 #95（重读要能把它带上来，才证明这次重读没被丢弃）。
+    H.rows = [...H.rows, row({ id: 95, label: '支撑 34', price: 34, action_id: 11 })]
+    const releaseReRead = queueGate()
+    await act(async () => {
+      void requestAnnotations(target())
+      await tick()
+    })
+    expect(screen.getByTestId('copilot-annotation-loading')).toBeTruthy()
+
+    // 撤销读回此刻才落地（它的快照里 #92 还在）
+    await act(async () => {
+      releaseRevokeRead()
+      await tick()
+    })
+    expect(labels()).toEqual(['阻力位@36.5'])
+    expect(notice()).toContain('已撤销标注 #91')
+
+    // 在途的那次重读落地：不许把 #91 复活，也不许把 #95 丢掉（重读没被静默丢弃）
+    await act(async () => {
+      releaseReRead()
+      await tick()
+    })
+    expect(labels()).toEqual(['支撑 34@34', '阻力位@36.5'])
+    expect(AnnotationLedger.snapshot(target()).lines.map((l) => l.annotationId)).toEqual([95, 92])
+    // 撤销结论也不能被这次并发读回"清空提示"抹掉
+    expect(notice()).toContain('已撤销标注 #91')
+  })
+
+  it('"同价位另一条"是陈旧快照：别的标签页已撤销它，不许复活', async () => {
+    H.rows = [row({ id: 90, label: '支撑位', price: 32.8, action_id: 6 }), ROW_SUPPORT, ROW_PRESSURE]
+    render(<Harness />)
+    await waitFor(() => expect(noteLines()).toHaveLength(2), { timeout: 3000 })
+
+    const del = deferred<void>()
+    H.revoke = () =>
+      del.promise.then(() => {
+        serverDeletes(91)
+        return revokedBody()
+      })
+    clickRevoke(0)
+    await waitFor(() => expect(H.deletes).toHaveLength(1))
+
+    const releaseRevokeRead = queueGate()
+    await act(async () => {
+      del.resolve()
+      await tick()
+    })
+    expect(getCount()).toBe(2) // 读回快照已取（里面还有 #90）
+
+    // 另一个标签页在快照之后撤销了 #90
+    serverDeletes(90)
+
+    await act(async () => {
+      releaseRevokeRead()
+      await tick()
+    })
+    await waitFor(() => expect(labels()).toEqual(['阻力位@36.5']), { timeout: 3000 })
+    // 不许把 #90 画上去；但要如实说明"同价位可能还有一条，二次核对时已经没有了"
+    expect(notice()).toContain('同价位')
+    expect(notice()).toContain('#90')
+    expect(notice()).not.toContain('图上这个价位的线仍然保留')
+    expect(screen.getByTestId('copilot-annotation-ids').textContent).not.toContain('#90')
+  })
+
+  it('撤销后一条不剩 + 读回失败：idle 态给「重新读取」按钮，而不是只提示', async () => {
+    H.rows = [ROW_SUPPORT]
+    render(<Harness />)
+    await waitFor(() => expect(noteLines()).toHaveLength(1), { timeout: 3000 })
+
+    const del = deferred<void>()
+    H.revoke = () =>
+      del.promise.then(() => {
+        serverDeletes(91)
+        return revokedBody()
+      })
+    clickRevoke(0)
+    await waitFor(() => expect(H.deletes).toHaveLength(1))
+
+    H.readFails = 1 // 撤销后的那次读回失败
+    await act(async () => {
+      del.resolve()
+      await tick()
+    })
+    await waitFor(() => expect(notice()).toContain('重新读取失败'), { timeout: 3000 })
+    expect(labels()).toEqual([])
+    // 提示让用户"重新读取"，就必须真的给按钮（idle 分支以前直接没有）
+    const retry = screen.getByTestId('copilot-annotation-retry')
+    expect(retry.textContent).toContain('重新读取')
+    await act(async () => {
+      fireEvent.click(retry)
+      await tick()
+    })
+    // 重新读取把服务端事实带回来（#91 已删）
+    await waitFor(() => expect(labels()).toEqual([]), { timeout: 3000 })
+    expect(screen.queryByTestId('copilot-annotation-error')).toBeNull()
+  })
+
+  it('读取出错后重读成功：在途撤销的「撤销中…」不许被清掉（否则会再发一个 DELETE）', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(noteLines()).toHaveLength(2), { timeout: 3000 })
+
+    const del = deferred<void>()
+    H.revoke = () =>
+      del.promise.then(() => {
+        serverDeletes(91)
+        return revokedBody()
+      })
+    clickRevoke(0)
+    await waitFor(() => expect(H.deletes).toHaveLength(1))
+    await waitFor(() => expect(spinners()).toHaveLength(1))
+
+    // 同 key 的后台重读失败 → setError：不许把 revoking 清空
+    H.readFails = 1
+    await act(async () => {
+      await requestAnnotations(target())
+      await tick()
+    })
+    expect(screen.getByTestId('copilot-annotation-error')).toBeTruthy()
+    expect(AnnotationLedger.snapshot(target()).revoking).toEqual([91])
+
+    // 再读一次成功、线重新上图：撤销仍在途 → #91 必须还是"撤销中…"，不许出现可点按钮
+    await act(async () => {
+      await requestAnnotations(target())
+      await tick()
+    })
+    expect(labels()).toEqual(['支撑位@32.8', '阻力位@36.5'])
+    expect(spinners()).toHaveLength(1)
+    expect(revokeButtons()).toHaveLength(1)
+    expect(revokeButtons()[0].getAttribute('aria-label')).toBe('撤销标注 #92')
+
+    await act(async () => {
+      del.resolve()
+      await tick()
+    })
+    await waitFor(() => expect(labels()).toEqual(['阻力位@36.5']), { timeout: 3000 })
+    expect(spinners()).toHaveLength(0)
+  })
+
+  it('拒画（setRefused）也不清 revoking', () => {
+    const t = target()
+    AnnotationLedger.setRevoking(t, 91, true)
+    const snap = AnnotationLedger.setRefused(t, '测试拒画')
+    expect(snap.phase).toBe('refused')
+    expect(snap.revoking).toEqual([91])
+  })
+
+  it('401（会话失效）→ 不再发无谓的读回 GET，线保留，文案说登录', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(noteLines()).toHaveLength(2), { timeout: 3000 })
+    const before = getCount()
+
+    // fetchAPI 的 401 分支：logout() + throw new Error('登录已过期')，没有 status
+    H.revoke = () => Promise.reject(new Error('登录已过期'))
+
+    clickRevoke(0)
+    await waitFor(() => expect(H.deletes).toHaveLength(1))
+    await waitFor(() => expect(notice()).toContain('登录'), { timeout: 3000 })
+    expect(getCount()).toBe(before) // 401 之后再 GET 只会再 401
+    expect(notice()).not.toContain('网络异常')
+    expect(noteLines()).toHaveLength(2)
   })
 })

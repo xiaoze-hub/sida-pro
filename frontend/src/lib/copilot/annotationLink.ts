@@ -106,7 +106,8 @@ export async function requestAnnotations(
   const seq = AnnotationLedger.beginRequest(target)
   const res = await fetchRows(target, options)
   if (!res.ok) {
-    AnnotationLedger.setError(target, `读取服务端标注失败：${res.message}（未画线）`)
+    // 带上序号：这次失败若已被更新的一次读取取代（重读/切回来），不许把它的 loading 顶掉
+    AnnotationLedger.setError(target, `读取服务端标注失败：${res.message}（未画线）`, seq)
     return AnnotationLedger.snapshot(target)
   }
 
@@ -336,7 +337,7 @@ export const DEFAULT_REVOKE_REASON = '用户在 K 线标注状态条点击撤销
  * 反过来，**没有证据就不要说是网络**：既没有 status 也没有 NETWORK/TIMEOUT 标记时，
  * 只能说"没有收到服务端确认"，不能说"网络异常"（可能是响应形状坏了）。
  */
-function revokeFailureText(err: unknown): string {
+function revokeFailure(err: unknown): { text: string; unauthorized: boolean } {
   const box = err as { status?: unknown; kind?: unknown } | null
   const status =
     typeof box?.status === 'number' && Number.isFinite(box.status) ? box.status : null
@@ -346,7 +347,10 @@ function revokeFailureText(err: unknown): string {
   const serverMessage = rawMessage && !/^HTTP \d+$/.test(rawMessage) ? rawMessage : ''
 
   if (status === 401 || /登录已过期|登录已失效|未登录|unauthoriz/i.test(rawMessage)) {
-    return '登录已失效，请重新登录后再撤销（本次未删除任何标注）'
+    return {
+      text: '登录已失效，请重新登录后再撤销（本次未删除任何标注，图上这条线保留）',
+      unauthorized: true,
+    }
   }
   if (status !== null) {
     const hint =
@@ -357,21 +361,24 @@ function revokeFailureText(err: unknown): string {
           : status >= 500
             ? '服务端异常，本次未删除任何标注'
             : ''
-    return [`HTTP ${status}`, hint, serverMessage].filter(Boolean).join('：')
+    return { text: [`HTTP ${status}`, hint, serverMessage].filter(Boolean).join('：'), unauthorized: false }
   }
   if (kind === 'TIMEOUT') {
     const extra = serverMessage && !/超时/.test(serverMessage) ? `：${serverMessage}` : ''
-    return `请求超时，服务端未确认删除（不当作已撤销）${extra}`
+    return { text: `请求超时，服务端未确认删除（不当作已撤销）${extra}`, unauthorized: false }
   }
   if (kind === 'NETWORK') {
     const extra = serverMessage && !/网络|Failed to fetch|Load failed/i.test(serverMessage)
       ? `：${serverMessage}`
       : ''
-    return `网络异常，请求可能没有到达服务端（不当作已撤销）${extra}`
+    return { text: `网络异常，请求可能没有到达服务端（不当作已撤销）${extra}`, unauthorized: false }
   }
-  return `撤销请求失败，没有收到服务端的确认（不当作已撤销）${
-    serverMessage ? `：${serverMessage}` : ''
-  }`
+  return {
+    text: `撤销请求失败，没有收到服务端的确认（不当作已撤销）${
+      serverMessage ? `：${serverMessage}` : ''
+    }`,
+    unauthorized: false,
+  }
 }
 
 /** 这条线是否仍然属于当前这张图（撤销前最后一道目标核对）。 */
@@ -474,7 +481,21 @@ async function runRevoke(
       // 必须 await：`return <promise>` 会让下面的 finally 立刻执行（按钮提前解禁、
       // 还能再点出第二个 DELETE），而且读回阶段抛出的异常会绕过本函数的 catch，
       // 变成调用方没人处理的未处理拒绝 —— 撤销结论既没播报也把页面弄响。
-      return await resyncAfterRevokeFailure(viewKey, line, revokeFailureText(err))
+      const failure = revokeFailure(err)
+      if (failure.unauthorized) {
+        /*
+         * 401 已经被 `fetchAPI` 处理过（logout + 抛"登录已过期"）：再发一次读回 GET
+         * 只会再 401 一次，还会再触发一次 logout/跳转 —— 对用户毫无信息增量。
+         * 这里不发请求，直接按"会话失效、本次未删除"播报，线保持原样（服务端没删）。
+         */
+        const still = sameViewTarget(viewKey)
+        if (still) {
+          AnnotationLedger.notice(still, failure.text, 'error')
+          return AnnotationLedger.snapshot(still)
+        }
+        return null
+      }
+      return await resyncAfterRevokeFailure(viewKey, line, failure.text)
     }
 
     const parsed = parseRevokeResponse(raw, annotationId)
@@ -530,7 +551,7 @@ async function resyncAfterRevokeFailure(
     if (now) AnnotationLedger.notice(now, `${why}（期间切换了图表视图，当前图未改动）`, 'error')
     return now ? AnnotationLedger.snapshot(now) : null
   }
-  const current = AnnotationLedger.snapshot(after).lines
+  const current = AnnotationLedger.baselineLines(after)
   const held = current.some((l) => l.annotationId === line.annotationId)
   if (!res.ok) {
     // 读回失败 ⇒ 没有证据说它已经不在了：线保留，不猜
@@ -575,7 +596,8 @@ async function resyncAfterRevokeFailure(
  *   - 把期间**刚确认**的线（不在旧快照里）**抹掉**；
  *   - 把本次读回里那些先前不在视图上的行（limit/排序之外、或别处新增）**带上来**。
  * 所以：落地永远是基于"此刻"账本的**减法**，读回只回答两件事 —— 这一条还在不在、
- * 同一价位上是否还有另一条（那条本来就应该顶上来）。别的行一律不碰。
+ * 同一价位上是否还有另一条（那条本来就应该顶上来，但快照可能已经过时，落地前按 id
+ * 再核对一次；核对不过就不画，宁可说"未能同步"也不复活一条不存在的线）。别的行一律不碰。
  */
 async function applyRevoked(
   viewKey: string,
@@ -620,8 +642,9 @@ async function applyRevoked(
     return null
   }
 
-  // 落地的基线必须是**此刻**的账本，不是读回发起时的快照
-  const current = AnnotationLedger.snapshot(after).lines
+  // 落地的基线必须是**此刻**的账本，不是读回发起时的快照；且 reading 窗口里
+  // `lines` 已被清空 —— 用 baselineLines 回落到"上次已知的线"，否则其余线整批消失。
+  const current = AnnotationLedger.baselineLines(after)
   const held = current.some((l) => l.annotationId === line.annotationId)
 
   if (!res.ok) {
@@ -656,15 +679,53 @@ async function applyRevoked(
     (l) => l.annotationId !== line.annotationId && levelKey(l) === levelKey(line),
   )
   if (sameLevel && !rest.some((l) => levelKey(l) === levelKey(line))) {
+    /*
+     * ⚠️ `sameLevel` 来自那次 GET 的**快照**（2026-10-29 复审补丁）：别的标签页完全
+     * 可能在快照之后撤销了它 —— 直接把快照里的行画上去，就是**复活一条已经不存在的线**
+     * （用户会以为"撤了又回来"，且这个价位从此多出一条假线）。
+     *
+     * 所以落地前按 id 再精确核对一次（罕见路径：只在同价位有重复确认时走）：读回里
+     * 还有它才画；没有/核对失败就**不画**，并如实说明"同价位可能还有一条，但无法确认
+     * 它还在"—— 宁可注明未能同步，也不画一条无法证实的线。
+     */
+    const confirm = await fetchRows(after, { ids: [sameLevel.annotationId] })
+    const now2 = sameViewTarget(viewKey)
+    if (!now2) {
+      const current2 = AnnotationLedger.currentTarget()
+      if (current2) {
+        AnnotationLedger.notice(
+          current2,
+          `${head}；期间切换了图表视图（当前 ${normSymbol(current2.symbol)}），当前图未改动。`,
+          'warn',
+        )
+        return AnnotationLedger.snapshot(current2)
+      }
+      return null
+    }
+    const live =
+      confirm.ok &&
+      linesForTarget(confirm.rows, now2).lines.some((l) => l.annotationId === sameLevel.annotationId)
+    if (!live) {
+      AnnotationLedger.replaceLines(
+        now2,
+        rest,
+        `${head}；读回里同价位还有另一条标注 #${sameLevel.annotationId}（${sameLevel.label} ${sameLevel.price}），` +
+          (confirm.ok
+            ? '但落地前再次核对时服务端已经没有它（可能已在别处撤销），本次未把它画到图上。'
+            : `但落地前再次核对失败（${confirm.message}），无法确认它还在，本次未把它画到图上。`),
+        { retryable: !confirm.ok, level: 'warn' },
+      )
+      return AnnotationLedger.snapshot(now2)
+    }
     // 只把这个价位换成本来就在服务端的那一条，其余行一行不动（不引入新价位）
     AnnotationLedger.replaceLines(
-      after,
+      now2,
       mergeSnapshotLines(rest, [sameLevel]),
       `${head}；同价位还有另一条标注 #${sameLevel.annotationId}（${sameLevel.label} ${sameLevel.price}），` +
         '图上这个价位的线仍然保留 —— 要连它一起去掉，请再撤销那一条。',
       { level: 'warn' },
     )
-    return AnnotationLedger.snapshot(after)
+    return AnnotationLedger.snapshot(now2)
   }
 
   AnnotationLedger.replaceLines(after, rest, `${head}，图上已移除这条线。`)

@@ -64,8 +64,10 @@ export function AnnotationLinkBar({
     }
   }, [confirmingId, lines])
 
-  // 空态不占位：没有已确认标注、也没出事时，不在 K 线上挂一条常驻说明。
-  if (phase === 'idle' && !notice) return null
+  // 空态不占位：没有已确认标注、也没出事、也没有可重试的原因时，不在 K 线上挂一条常驻说明。
+  // 「一条不剩 + 读回失败/无法核对」会落成 idle + notice + retryable —— 那时必须给入口，
+  // 否则提示里让用户"点重新读取"却无按钮可点（2026-10-29 复审补丁）。
+  if (phase === 'idle' && !notice && !retryable) return null
 
   const retryButton =
     onRetry && retryable ? (
@@ -91,6 +93,15 @@ export function AnnotationLinkBar({
     >
       {phase === 'loading' ? (
         <span data-testid="copilot-annotation-loading">正在核对服务端标注…</span>
+      ) : null}
+
+      {phase === 'idle' ? (
+        <div className="flex flex-wrap items-baseline gap-2">
+          {!notice ? (
+            <span data-testid="copilot-annotation-empty">暂无已确认标注</span>
+          ) : null}
+          {retryButton}
+        </div>
       ) : null}
 
       {phase === 'ready' ? (
