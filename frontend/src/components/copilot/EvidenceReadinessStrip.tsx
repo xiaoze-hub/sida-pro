@@ -42,10 +42,23 @@ export function EvidenceReadinessStrip({
   return (
     <div
       data-testid="evidence-readiness"
+      /*
+       * 来源（2026-10-29 P1）：这些 pill 全部折自**本条回答自己的流式 `stage` 事件**
+       * （`evidence-readiness.ts` 文件头的事件契约），所以这一层是已核验的 ——
+       * 但它说明的是「本轮取了哪几路」，不是「哪一句依据来自哪一路」。
+       * 两层不许混，逐句出处见 `EvidenceTraceNote`。
+       */
+      data-provenance="stream-stage"
       aria-label={`证据齐套度 ${progress}`}
       className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-y border-border py-1"
     >
-      <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">{progress}</span>
+      <span
+        data-testid="evidence-readiness-progress"
+        title="统计自本条回答的取数流（已核验）；它说明本轮取了哪几路，不含任何逐句依据的出处"
+        className="shrink-0 text-[12px] tabular-nums text-muted-foreground"
+      >
+        {progress}
+      </span>
       {failedCount > 0 ? (
         <span
           data-testid="evidence-readiness-failed-count"

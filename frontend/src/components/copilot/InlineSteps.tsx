@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import type { CopilotRunRow } from '@/lib/copilot/api'
+import type { RunAssociation } from '@/lib/copilot/evidence-provenance'
 import { formatElapsed } from '@/components/copilot/ToolTimeline'
 import type { ToolTimelineStep } from '@/components/copilot/ToolTimeline'
 
@@ -29,6 +30,14 @@ export interface InlineStepsProps {
   onLoad?: () => void
   /** 详情拿不到时的静默提示（不改成长篇报错：轨迹是旁路证据） */
   failed?: boolean
+  /**
+   * 这个 run 是怎么对到这条回答的（2026-10-29 P1）。
+   *
+   * 默认 `question-text`：现有唯一调用点（`AiCopilot.tsx` 的 `matchRunForMessage`）
+   * 就是按提问文本匹配的 —— 消息表没有 run_id，可能对错轮。默认值取「最保守」：
+   * 没说清就不许自称已核验。只有真的从服务端拿到 run_id 关联时才传 `run-id`。
+   */
+  association?: RunAssociation
 }
 
 const STATUS_CLS: Record<string, string> = {
@@ -65,7 +74,14 @@ function clip(s: string | null | undefined, n = 46): string {
   return t.length > n ? `${t.slice(0, n)}…` : t
 }
 
-export default function InlineSteps({ run, steps, loading, onLoad, failed }: InlineStepsProps) {
+export default function InlineSteps({
+  run,
+  steps,
+  loading,
+  onLoad,
+  failed,
+  association = 'question-text',
+}: InlineStepsProps) {
   const [open, setOpen] = useState(false)
 
   const toolCalls = typeof run.tool_calls === 'number' ? run.tool_calls : null
@@ -106,6 +122,23 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
             {hint ? <span className="text-muted-foreground">（{hint}）</span> : null}
           </span>
         )}
+        {/*
+          关联可信度（2026-10-29 P1）：这些步骤是「按提问文本匹配」挂上来的，
+          用户读到的却是「这条结论这一轮调了这些工具」。不标出处就等于默认它可核验。
+          run-id 关联是服务端给的，此时不必喊「未验证」。
+        */}
+        <span
+          data-testid="inline-steps-association"
+          data-association={association}
+          title={
+            association === 'run-id'
+              ? '这一轮的 run 由服务端 run_id 关联'
+              : '这一轮的 run 是按提问文本匹配到的：消息表不存 run_id，可能对错轮'
+          }
+          className={association === 'run-id' ? 'text-muted-foreground' : 'text-amber-500'}
+        >
+          {association === 'run-id' ? '· 已核验关联' : '· 未验证关联'}
+        </span>
       </button>
 
       {open && (
