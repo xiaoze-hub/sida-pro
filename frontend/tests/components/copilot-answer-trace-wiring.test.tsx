@@ -387,6 +387,11 @@ describe('⑤ 流式取数不串线：历史回答不挂当前流的 stage 状�
       { role: 'assistant', content: answer('历史回答') },
     ]
     runList = [run('run-a1', 9, '看看 600111')]
+    // 同票追问才应复用历史会话；未知绑定会按安全契约新建会话。
+    apiMock.getConversation.mockImplementationOnce(async (id: number) => ({
+      conversation: { id, title: `会话${id}`, stock_symbol: '600111', created_at: '' },
+      messages: convMessages[id],
+    }))
 
     render(<AiCopilotPage />)
     await openConversation(9)
