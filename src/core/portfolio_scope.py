@@ -243,4 +243,3 @@ def stock_user_scope_writable(
     if stock.user_id is None:
         return role == "owner"
     return user_id is not None and str(stock.user_id) == str(user_id)
-
