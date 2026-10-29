@@ -5,15 +5,17 @@ import { chartContextParts, chartContextSummary, type ChartContext } from '@/lib
 /**
  * 会话顶部的「图表上下文」条（P2, 2026-10-29）。
  *
- * 用户从个股工作台进参谋时，把屏幕上那张图的可证读数摊开写成一行：类型/市场、周期、
+ * 用户从个股工作台进参谋时，把屏幕上那张图的可证读数摊开写成一行：标的代码、类型/市场、周期、
  * 可视区间、图上已确认价位。**只显示拿得到的**（`chartContextParts` 已按可证性过滤）。
  *
- * 状态必须如实（2026-10-29 修正）：这段文本一旦随 `initial_context` 建了会话，就落库在
- * `chat_conversations.initial_context` 上、后端每轮都会重新拼进系统提示，**没有接口能撤回**。
- * 所以：
+ * 状态必须如实（2026-10-29 修正 + 复审）：
  *  - 还没发问：明写「尚未送出」，清除就是本地丢弃；
  *  - 已送进本会话：明写「已送入本会话 · 不可撤回」，清除按钮变成「清除并新开会话」
  *    （只有换一个不带快照的会话，后端才会真的不再用旧读数），正在回答时禁用避免打断。
+ *
+ * **committed 优先于 expired**：TTL 只是读侧的"要不要再带一份新快照"，会话里的那份
+ * `initial_context` 后端**每轮都重放**，没有接口能撤回。已送入后再写「已过期 · 不会发送」
+ * 是假话 —— 用户会以为服务端这里已经不用了，于是放心继续追问旧区间。
  *
  * 末尾固定标「进入时快照 · 非实时」—— 防止用户把它当实时值，也防止模型把它当实时值。
  */
@@ -27,17 +29,17 @@ export function ChartContextChip({
   ctx: ChartContext
   /** 这段快照是否已经随本会话送达后端（会话级 initial_context，撤不回来） */
   committed?: boolean
-  /** 超过 TTL：只作为"曾经看到过什么"展示，不会发送 */
+  /** 超过 TTL：作为「曾经看到过什么」展示；只在**未送入**时代表"不会发送" */
   expired?: boolean
-  /** 正在流式回答：清除会打断本轮，按钮先禁用 */
+  /** 正在流式回答 / 后台任务进行中：清除会打断本轮，按钮先禁用 */
   busy?: boolean
   onClear: () => void
 }) {
   const parts = chartContextParts(ctx)
-  const state = expired
-    ? '已过期（超过 5 分钟）· 不会发送'
-    : committed
-      ? '已送入本会话 · 不可撤回'
+  const state = committed
+    ? '已送入本会话 · 服务端每轮仍会注入 · 不可撤回'
+    : expired
+      ? '已过期（超过 5 分钟）· 不会发送'
       : '尚未送出'
   return (
     <div
@@ -48,9 +50,16 @@ export function ChartContextChip({
       className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-s2 px-3 py-1.5"
     >
       <span className="text-[12px] text-muted-foreground">图表上下文</span>
-      <span className="font-mono text-[12px] text-role-watch">{ctx.symbol}</span>
-      {parts.map((part) => (
-        <span key={part} className="text-[12px] text-foreground">
+      {/* 第一段就是「代码（类型 · 市场）」—— 代码必须在可见分段里，不能只在提示词里 */}
+      {parts.map((part, index) => (
+        <span
+          key={part}
+          className={
+            index === 0
+              ? 'font-mono text-[12px] text-role-watch'
+              : 'text-[12px] text-foreground'
+          }
+        >
           {part}
         </span>
       ))}

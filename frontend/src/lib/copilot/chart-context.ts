@@ -23,6 +23,9 @@
  * 发布端按 `账号|类型|市场|代码|周期` 存（同一 key 覆盖写）；读取端默认按当前账号过滤，
  * **同号多条（不同类型/市场/周期）返回 null 不猜**。用户清除后该标的进入"已清除"名单，
  * 工作台后续再发布同一张图也不会让它复活（`dismissChartContext`）。
+ *
+ * 读侧过滤只保证"读的那一刻是谁"；**发送前必须再用 `chartContextOwnerMatches` 比一次**
+ * ——同一标签页换号后，上一个账号的快照还在内存里，不能让新账号的提问带着它进请求。
  */
 
 import { safeFixed, safePercent } from '@/lib/format'
@@ -245,6 +248,21 @@ export function isChartContextFresh(ctx: ChartContext, now: number = Date.now())
   return age >= 0 && age <= CHART_CONTEXT_TTL_MS
 }
 
+/**
+ * 发送前复核 owner（2026-10-29 复审）。
+ *
+ * 读侧按 `currentAccountId()` 过滤只保证"读的那一刻是谁"，不保证"发的那一刻还是谁"：
+ * 同一标签页换号（A 登出、B 登录）后，A 的快照仍在内存里。发送前必须再比一次，
+ * 对不上就不能带 —— 否则 B 的提问会带着 A 看到的区间/价位进请求，甚至进 A 的会话。
+ */
+export function chartContextOwnerMatches(
+  ctx: Pick<ChartContext, 'owner'>,
+  owner: string | null | undefined = currentAccountId(),
+): boolean {
+  const who = clean(owner)
+  return Boolean(who) && ctx.owner === who
+}
+
 /** 抓取时刻（客户端本地时间，`YYYY-MM-DD HH:mm`）—— 必须和 prompt 里的一致。 */
 export function chartContextCapturedAt(ctx: ChartContext): string {
   const d = new Date(ctx.capturedAt)
@@ -255,11 +273,13 @@ export function chartContextCapturedAt(ctx: ChartContext): string {
 /**
  * 用户可见的上下文分段（会话顶部那条）。
  *
- * **必须覆盖 prompt 里送出去的每一项**：类型/市场、周期、区间（起止/根数/涨跌/振幅）、
- * 价位（价格+方向+标签）、抓取时刻。界面上看不到的数据不许送。
+ * **必须覆盖 prompt 里送出去的每一项**：标的代码、类型/市场、周期、区间（起止/根数/涨跌/振幅）、
+ * 价位（价格+方向+标签）、抓取时刻。界面上看不到的数据不许送 ——
+ * 代码同样要写在分段里（早先只在 chip 旁边单独渲染，`chartContextSummary`/测试都拿不到它，
+ * 复盘时无法确认"用户在问哪只票的这张图"）。
  */
 export function chartContextParts(ctx: ChartContext): string[] {
-  const parts = [`${INSTRUMENT_LABELS[ctx.instrument]} · ${ctx.market}`]
+  const parts = [`${ctx.symbol}（${INSTRUMENT_LABELS[ctx.instrument]} · ${ctx.market}）`]
   if (ctx.period) parts.push(PERIOD_LABELS[ctx.period] ?? ctx.period)
   if (ctx.range) {
     const { from, to, bars, changePct, amplitudePct } = ctx.range
