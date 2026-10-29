@@ -6,6 +6,7 @@ import {
   formatPriceWithCurrency,
   humanizeAgeMinutes,
   resolveDefenseState,
+  sessionIsIdle,
   type DefenseState,
   type FreshnessReason,
   type MarketSessionInfo,
@@ -117,6 +118,8 @@ interface MarketStatusRow {
   code?: string
   status?: string | null
   local_time?: string | null
+  /** 市场当地日期（`YYYY-MM-DD`，2026-10-29 起后端独立下发）。 */
+  local_date?: string | null
 }
 
 interface PositionState {
@@ -148,6 +151,18 @@ const EMPTY_QUOTE: QuoteState = {
  * 在 14:00 继续报「已击穿」。20s 与页面时效心跳同量级（远小于时效窗口的推断值）。
  */
 export const DEFENSE_QUOTE_REFRESH_MS = 20_000
+
+/**
+ * 休市（收盘后/周末）时的报价续期间隔（毫秒）—— 2026-10-29 降频。
+ *
+ * 收盘后价格不再变化，每个开着的持仓页仍各自 20s 打一次 `/quotes/{symbol}` 只是纯流量
+ * （行情源按分钟级限流，多用户并发最容易打 429）。只有服务器判定相关市场**全部**
+ * `after_hours` / `closed` 时才降到 120s；`pre_market` / `break` 不降（马上要开盘）。
+ *
+ * 诚实声明：本仓库没有压测环境，**没有验证过**多用户下的实际 QPS；这里只保证
+ * "休市时每个页面的取价次数降一个量级"。
+ */
+export const DEFENSE_IDLE_REFRESH_MS = 120_000
 
 /** 未设置时的参考预设: 仅把**该账户**的成本价折算成绝对价给用户点选, 不落库、不告警。 */
 const PRESETS = [
@@ -342,8 +357,8 @@ export function DefenseLineBanner({
         if (!row?.code) continue
         next[normalizeMarket(row.code)] = {
           localTime: row.local_time ?? null,
-          // 后端哪天把市场当地日期一起下发（`local_date`），跨日判定就直接用它（B3）。
-          localDate: (row as { local_date?: string | null }).local_date ?? null,
+          // 市场当地日期：日级一致性比对用（缺则判定层降级 period_unknown，绝不拿 HH:mm 自证）。
+          localDate: row.local_date ?? null,
           status: row.status ?? null,
         }
       }
@@ -443,8 +458,26 @@ export function DefenseLineBanner({
     void loadQuotes(marketsRef.current)
     void loadPositions()
   }, [loadPositions, loadQuotes, loadSessions])
-  usePausedInterval(refreshTick, DEFENSE_QUOTE_REFRESH_MS, {
-    deps: [active, symbol, marketsKey],
+
+  /**
+   * 是否降频到「休市节奏」（2026-10-29）：只有当**所有**持仓市场都被服务器判成
+   * `after_hours` / `closed` 时才降。会话表缺一个市场、或状态未知/盘前/午休
+   * ⇒ 一律按盘中 20s 取（漏判比多取一轮更贵）。
+   *
+   * 依赖 `sessions` 的身份：每次 `loadSessions` 成功都会换新对象，但 `idle` 只在
+   * 布尔值翻转时改变 ⇒ 下面的 `refreshMs` 稳定，不会每 20s 重挂一次定时器。
+   */
+  const idle = useMemo(() => {
+    if (!sessions || markets.length === 0) return false
+    const infos = markets.map((market) => sessions[market])
+    if (infos.some((info) => !info)) return false
+    return infos.every((info) => sessionIsIdle(info?.status))
+  }, [sessions, markets])
+  const refreshMs = idle ? DEFENSE_IDLE_REFRESH_MS : DEFENSE_QUOTE_REFRESH_MS
+  usePausedInterval(refreshTick, refreshMs, {
+    // marketsKey 而非 markets：数组身份每渲染都变；refreshMs 进依赖 ⇒ 只在节奏切换时重挂。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    deps: [active, symbol, marketsKey, refreshMs],
     immediate: false,
   })
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import type { AIService } from '@sida/api'
 import type { Account } from './shared'
 import type { AgentConfig } from './shared'
@@ -187,6 +187,17 @@ const marketClockSampledAtRef = useRef(0)
 const lastMarketClockRef = useRef<Record<string, number>>({})
 const quotePolledAtRef = useRef(0)
 
+/**
+ * 「手里这份报价凭证是否仍被成功续期」（2026-10-29 F2/B1 的渲染侧开关）。
+ *
+ * 上面三个 ref 只会计账，不会触发重渲染；而持仓风险清单必须**看到**降级结果才会把
+ * 结论从「破位」改成「时效未核实」。所以另存一个 state：
+ *   - 批量行情成功一次 ⇒ true；
+ *   - 批量行情失败 / 快照超过 `QUOTE_SNAPSHOT_TTL_MS` 被清 ⇒ false。
+ * 初值 true：还没发过请求时由持仓数据本身的字段决定，不该无端把所有行标成未核实。
+ */
+const [quoteEvidenceVerified, setQuoteEvidenceVerified] = useState(true)
+
 const moveById = <T extends { id: number }>(list: T[], fromId: number, toId: number): T[] => {
   const fromIdx = list.findIndex(x => x.id === fromId)
   const toIdx = list.findIndex(x => x.id === toId)
@@ -314,7 +325,9 @@ const load = useCallback(async () => {
 
   // 市场状态（非核心，失败不影响页面）
   try {
-    const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
+    // 2026-10-29: 必须 `reload` —— `fetchAPI` 对 GET 有 30s 内存缓存，命中缓存会让
+    // "市场日期/墙钟"停在缓存那一刻（跨日时旧日期继续给新报价背书）。
+    const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status', { cacheMode: 'reload' })
     setMarketStatus(marketStatusData)
     // 成功拿到才算一次有效采样（本地有效期起点，见 marketClockSampledAtRef）
     lastMarketClockRef.current = clockMinutesOfRows(marketStatusData)
@@ -338,7 +351,7 @@ const loadPortfolio = useCallback(async () => {
 
     // 市场状态（非核心，失败不影响页面）
     try {
-      const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
+      const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status', { cacheMode: 'reload' })
       setMarketStatus(marketStatusData)
       lastMarketClockRef.current = clockMinutesOfRows(marketStatusData)
       marketClockSampledAtRef.current = Date.now()
@@ -486,9 +499,12 @@ const refreshQuotes = useCallback(async () => {
         setQuotes(map)
         // 快照日期层的有效期起点：只有**成功轮询**才刷新它（WS tick 不算）。
         quotePolledAtRef.current = Date.now()
+        setQuoteEvidenceVerified(true)
         setLastRefreshTime(new Date())
       } catch (e) {
         logger.warn('刷新行情失败:', e)
+        // 2026-10-29 F2: 续期失败 ⇒ 手里这份凭证已无从证明是当下的，清单要能看见。
+        setQuoteEvidenceVerified(false)
       } finally {
         setQuotesLoading(false)
       }
@@ -500,7 +516,7 @@ const refreshQuotes = useCallback(async () => {
   } finally {
     quotesInFlightRef.current = null
   }
-}, [buildQuoteItems, setLastRefreshTime, setQuotes, setQuotesLoading])
+}, [buildQuoteItems, setLastRefreshTime, setQuotes, setQuotesLoading, setQuoteEvidenceVerified])
 
 useEffect(() => {
   if (!portfolioRaw) return
@@ -865,12 +881,13 @@ const expireStaleSnapshots = useCallback(() => {
   }
   if (quotePolledAtRef.current > 0 && now - quotePolledAtRef.current > QUOTE_SNAPSHOT_TTL_MS) {
     quotePolledAtRef.current = 0
+    setQuoteEvidenceVerified(false)
     const hasEvidence = Object.values(quotesRef.current).some(
       q => q.quote_time !== null || q.quote_date !== null || q.daily_pnl_period !== 'unknown' || q.change_pct !== null,
     )
     if (hasEvidence) setQuotes(prev => expireQuoteSnapshots(prev))
   }
-}, [setMarketStatus, setQuotes])
+}, [setMarketStatus, setQuotes, setQuoteEvidenceVerified])
 
 /**
  * 现在该不该轮询批量行情（2026-10-29 复审「20s 全自选流量」）。
@@ -948,5 +965,7 @@ usePausedInterval(freshnessHeartbeat, FRESHNESS_HEARTBEAT_MS, {
     effectiveSchedule,
     handleRefresh,
     scanAndReload,
+    /** 报价凭证是否仍被成功续期（`PositionRiskSection` 据此降级「时效未核实」）。 */
+    quoteEvidenceVerified,
   }
 }

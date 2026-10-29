@@ -29,7 +29,7 @@ import {
   notifyDefenseLinesChanged,
 } from '@/lib/defense-lines'
 
-const MARKETS = [{ code: 'CN', name: 'A股', status: 'trading', local_time: '09:31' }]
+const MARKETS = [{ code: 'CN', name: 'A股', status: 'trading', local_time: '09:31', local_date: '2026-10-29' }]
 const QUOTE = { current_price: 33, quote_time: '2026-10-29 09:31:00', daily_pnl_period: 'today' }
 
 const withDefense = (defense: number | null) => ({

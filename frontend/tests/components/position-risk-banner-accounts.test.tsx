@@ -52,9 +52,9 @@ function quote(over: Record<string, unknown> = {}) {
 }
 
 const MARKETS = [
-  { code: 'CN', name: 'A股', status: 'trading', local_time: '15:03' },
-  { code: 'HK', name: '港股', status: 'trading', local_time: '15:03' },
-  { code: 'US', name: '美股', status: 'trading', local_time: '15:03' },
+  { code: 'CN', name: 'A股', status: 'trading', local_time: '15:03', local_date: '2026-10-29' },
+  { code: 'HK', name: '港股', status: 'trading', local_time: '15:03', local_date: '2026-10-29' },
+  { code: 'US', name: '美股', status: 'trading', local_time: '15:03', local_date: '2026-10-29' },
 ]
 
 type QuoteHandler = (url: string) => Record<string, unknown> | null
@@ -277,7 +277,7 @@ describe('DefenseLineBanner · 陈旧行情', () => {
     mockApi(
       [{ id: 1, name: '主账户', positions: [{ id: 11, symbol: '600111', cost_price: 36.52, defense_price: 34 }] }],
       quote({ current_price: 33, quote_time: '2026-10-29 09:31:00', quote_date: '2026-10-29' }),
-      [{ code: 'CN', status: 'trading', local_time: '14:03' }],
+      [{ code: 'CN', status: 'trading', local_time: '14:03', local_date: '2026-10-29' }],
     )
     renderBanner()
     const stale = await screen.findByTestId('defense-line-stale')
@@ -303,7 +303,7 @@ describe('DefenseLineBanner · 陈旧行情', () => {
     mockApi(
       [{ id: 1, name: '主账户', positions: [{ id: 11, symbol: '600111', cost_price: 36.52, defense_price: 34 }] }],
       quote({ current_price: 33 }),
-      [{ code: 'CN', status: 'after_hours', local_time: '19:40' }],
+      [{ code: 'CN', status: 'after_hours', local_time: '19:40', local_date: '2026-10-29' }],
     )
     renderBanner()
     const banner = await screen.findByTestId('defense-line-banner')

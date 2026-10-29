@@ -50,10 +50,10 @@ import type { MarketSessionMap, PositionRiskInput } from '@/lib/position-risk'
 
 /** 服务器事实夹具：CN 交易日 15:03（`/stocks/markets/status` 的 local_time + status）。 */
 const TRADING: MarketSessionMap = {
-  CN: { localTime: '15:03', status: 'trading' },
-  HK: { localTime: '15:03', status: 'trading' },
-  US: { localTime: '15:03', status: 'trading' },
-  SG: { localTime: '15:03', status: 'trading' },
+  CN: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
+  HK: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
+  US: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
+  SG: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
 }
 
 const report = (rows: PositionRiskInput[], sessions: MarketSessionMap = TRADING) =>
@@ -135,7 +135,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
         defense: 34,
         period: 'today',
         quoteTime: '2026-10-29 15:00:00',
-        market: { localTime: '15:03', status: 'trading' },
+        market: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
       }),
     ).toMatchObject({ state: 'breached', freshness: 'current', reason: 'ok', ageMinutes: 3 })
   })
@@ -146,7 +146,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
       defense: 34,
       period: 'previous_trading_day',
       quoteTime: '2026-10-28 15:00:00',
-      market: { localTime: '15:03', status: 'trading' },
+      market: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
     })
     expect(r.state).toBe('stale')
     expect(r.freshness).toBe('stale')
@@ -156,7 +156,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
   })
 
   it("period='unknown' / 'mixed' 无法证明新鲜 → stale，不猜「今天」", () => {
-    const base = { price: 33, defense: 34, market: { localTime: '15:03', status: 'trading' } }
+    const base = { price: 33, defense: 34, market: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' } }
     expect(resolveDefenseState({ ...base, period: 'unknown' }).state).toBe('stale')
     expect(resolveDefenseState({ ...base, period: 'mixed' }).state).toBe('stale')
     expect(resolveDefenseState({ ...base, period: null }).state).toBe('stale')
@@ -169,7 +169,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
         defense: 34,
         period: 'today',
         quoteTime: '2026-10-29 15:00:00',
-        market: { localTime: '15:03', status: 'trading' },
+        market: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
       }),
     ).toMatchObject({ state: 'unknown', distancePct: null, freshness: 'missing' })
   })
@@ -180,7 +180,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
       defense: 34,
       period: 'today',
       quoteTime: '2026-10-29 09:31:00',
-      market: { localTime: '14:03', status: 'trading' },
+      market: { localTime: '14:03', localDate: '2026-10-29', status: 'trading' },
     })
     expect(r.state).toBe('stale')
     expect(r.freshness).toBe('stale')
@@ -196,7 +196,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
       defense: 34,
       period: 'today',
       quoteTime: null,
-      market: { localTime: '14:03', status: 'trading' },
+      market: { localTime: '14:03', localDate: '2026-10-29', status: 'trading' },
     })
     expect(r.state).toBe('stale')
     expect(r.freshness).toBe('unknown')
@@ -221,7 +221,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
       price: 33,
       period: 'today',
       quoteTime: '2026-10-29 20:00:00',
-      market: { localTime: '10:00', status: 'trading' },
+      market: { localTime: '10:00', localDate: '2026-10-29', status: 'trading' },
     })
     expect(r.freshness).toBe('unknown')
     expect(r.reason).toBe('clock_skew')
@@ -233,7 +233,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
       defense: 34,
       period: 'today',
       quoteTime: '2026-10-29 15:00:00',
-      market: { localTime: '19:40', status: 'after_hours' },
+      market: { localTime: '19:40', localDate: '2026-10-29', status: 'after_hours' },
     })
     expect(r.state).toBe('breached')
     expect(r.freshness).toBe('session_frozen')
@@ -245,7 +245,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
       price: 33,
       period: 'today',
       quoteTime: '2026-10-29 15:00:00',
-      market: { localTime: '15:03', status: 'unknown' },
+      market: { localTime: '15:03', localDate: '2026-10-29', status: 'unknown' },
     })
     expect(r.freshness).toBe('unknown')
   })
@@ -257,7 +257,7 @@ describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）',
         price: 33,
         period: 'today',
         quoteTime: `2026-10-29 ${quote}:00`,
-        market: { localTime: '15:03', status: 'trading' },
+        market: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
       }).freshness
     expect(at('14:48')).toBe('current') // 恰好 15 分钟
     expect(at('14:47')).toBe('stale') // 16 分钟
@@ -454,7 +454,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   it('【三次评审】同日 09:31 报价在 14:03 不进 breached，且能说清「多久之前」', () => {
     const r = report([
       pos({ symbol: '600111', defense_price: 34, current_price: 33, quote_time: '2026-10-29 09:31:00' }),
-    ], { CN: { localTime: '14:03', status: 'trading' } })
+    ], { CN: { localTime: '14:03', localDate: '2026-10-29', status: 'trading' } })
     expect(r.breached).toBe(0)
     expect(r.stale).toBe(1)
     expect(r.staleKnown).toBe(1)
@@ -476,7 +476,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
         pos({ id: 1, symbol: '600111', quote_time: null }),
         pos({ id: 2, symbol: '601318', quote_time: '2026-10-29 09:31:00' }),
       ],
-      { CN: { localTime: '14:03', status: 'trading' } },
+      { CN: { localTime: '14:03', localDate: '2026-10-29', status: 'trading' } },
     )
     expect(r.stale).toBe(2)
     expect(r.staleUnverified).toBe(1)

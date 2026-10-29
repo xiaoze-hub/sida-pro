@@ -396,7 +396,9 @@ def _parse_more_info(symbol: str, raw: dict) -> MoreInfo:
         zjl=_to_float(raw.get("Zjl")),
         zjl_hb=_to_float(raw.get("Zjl_HB")),
         raw=dict(raw),
-        quote_time=datetime.now(ZoneInfo("Asia/Shanghai")),
+        # 2026-10-29 F3 溯源: get_more_info 不提供报时字段。旧实现填 datetime.now()
+        # = 把"服务端收到的时间"当"行情发生的时间"，下游会据此判"刚发生"。没有就是 None。
+        quote_time=None,
     )
 
 
@@ -484,7 +486,11 @@ class TqQuoteVendor(QuoteVendor):
                     pb_ratio=pb_ratio,
                     circulating_market_value=circ_mv,
                     total_market_value=total_mv,
-                    quote_time=datetime.now(ZoneInfo("Asia/Shanghai")),
+                    # 2026-10-29 F3 溯源: get_market_snapshot 只有价格/量/额，没有报时字段。
+                    # 旧实现填 datetime.now(Asia/Shanghai) —— 那是"我们请求的时间"，不是
+                    # "行情发生的时间"；透传到 WS/防线层会被当成本次报价的时刻（假实时）。
+                    # 契约见 types.py::Quote.quote_time: 无法确认时为 None。
+                    quote_time=None,
                 )
             )
         return out

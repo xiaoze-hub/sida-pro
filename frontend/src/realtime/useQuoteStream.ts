@@ -24,10 +24,12 @@ export interface QuoteTick {
   prev_close?: number | null
   name?: string
   /**
-   * 行情源报时（可选）。**当前后端帧里没有这三个字段**（`_fetch_batch_quotes` 只下发
-   * price/change_pct/prev_close/name）。留着它们是为了"哪天上游把时刻带下来"时能直接用：
-   * 只有带了可靠 `quote_time`，下游（`quote-ticks.applyQuoteTicks`）才允许用这帧去更新
-   * 行情**时效**；没带就只更价、时刻判未知。绝不由前端补一个时刻。
+   * 行情源报时（可选，2026-10-29 起后端真的会下发）。
+   *
+   * `src/web/api/quote_stream.py::_proven_quote_stamp` 只透传**行情源报文自带**的时刻
+   * （腾讯 parts[30]）；源不报时（TQ 快照/降级源）就是 `null` + `daily_pnl_period=unknown`。
+   * 下游（`quote-ticks.applyQuoteTicks`）只有拿到非空 `quote_time` 才用它更新行情**时效**；
+   * 没有就只更价、时刻判未知。**绝不由前端补一个时刻**（假新鲜比没时刻更糟）。
    */
   quote_time?: string | null
   quote_date?: string | null

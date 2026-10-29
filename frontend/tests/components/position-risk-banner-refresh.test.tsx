@@ -24,7 +24,7 @@ vi.mock('@sida/api', () => ({ fetchAPI: api.fetchAPI }))
 
 import { DEFENSE_QUOTE_REFRESH_MS, DefenseLineBanner } from '@/components/DefenseLineBanner'
 
-const MARKETS = [{ code: 'CN', name: 'A股', status: 'trading', local_time: '09:31' }]
+const MARKETS = [{ code: 'CN', name: 'A股', status: 'trading', local_time: '09:31', local_date: '2026-10-29' }]
 
 const SUMMARY = {
   accounts: [
@@ -82,7 +82,7 @@ describe('DefenseLineBanner · 行情续期', () => {
     let price = 33 // 先击穿防线 34
     mockApi({
       quote: () => ({ current_price: price, quote_time: '2026-10-29 09:31:00', daily_pnl_period: 'today' }),
-      markets: () => [{ code: 'CN', status: 'trading', local_time: '09:31' }],
+      markets: () => [{ code: 'CN', status: 'trading', local_time: '09:31', local_date: '2026-10-29' }],
     })
 
     render(<DefenseLineBanner symbol="600111" cost={36.52} hasPosition />)
@@ -112,7 +112,7 @@ describe('DefenseLineBanner · 行情续期', () => {
     mockApi({
       // 价格一直是 33（击穿），但报价时刻停在 09:31 —— 市场墙钟推进后它就该过期
       quote: () => ({ current_price: 33, quote_time: '2026-10-29 09:31:00', daily_pnl_period: 'today' }),
-      markets: () => [{ code: 'CN', status: 'trading', local_time: clock }],
+      markets: () => [{ code: 'CN', status: 'trading', local_time: clock, local_date: '2026-10-29' }],
     })
 
     render(<DefenseLineBanner symbol="600111" cost={36.52} hasPosition />)
@@ -136,7 +136,7 @@ describe('DefenseLineBanner · 行情续期', () => {
     mockApi({
       quote: () => (fail ? null : { current_price: 33, quote_time: '2026-10-29 09:31:00', daily_pnl_period: 'today' }),
       markets: () =>
-        fail ? new Error('status down') : [{ code: 'CN', status: 'trading', local_time: '09:31' }],
+        fail ? new Error('status down') : [{ code: 'CN', status: 'trading', local_time: '09:31', local_date: '2026-10-29' }],
     })
 
     render(<DefenseLineBanner symbol="600111" cost={36.52} hasPosition />)

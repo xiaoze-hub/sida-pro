@@ -228,8 +228,8 @@ function Metric({
   )
 }
 
-/** 把页面已加载的市场状态折成时效判定要用的「服务器市场时钟 + 状态」。 */
-function buildMarketSessions(marketStatus: unknown): MarketSessionMap {
+/** 把页面已加载的市场状态折成时效判定要用的「服务器市场时钟 + 日期 + 状态」。 */
+export function buildMarketSessions(marketStatus: unknown): MarketSessionMap {
   const list = Array.isArray(marketStatus) ? marketStatus : []
   const map: Record<string, { localTime: string | null; localDate: string | null; status: string | null }> = {}
   for (const raw of list) {
@@ -250,7 +250,7 @@ function buildMarketSessions(marketStatus: unknown): MarketSessionMap {
 
 /** 持仓页容器：读页面已加载的持仓汇总与市场状态，不额外发请求。 */
 export function PositionRiskSection() {
-  const { portfolio, viewTab, marketStatus } = useStocks()
+  const { portfolio, viewTab, marketStatus, quoteEvidenceVerified } = useStocks()
   // 每账户一行：账户归属必须带进判定，否则同一 symbol 的多条防线无法区分。
   const positions = useMemo(
     () =>
@@ -263,11 +263,15 @@ export function PositionRiskSection() {
       ),
     [portfolio],
   )
-  // 时效判定只吃服务器给的「市场墙钟 + 状态」（`/stocks/markets/status`），不读本机时钟。
+  // 时效判定只吃服务器给的「市场墙钟 + 日期 + 状态」（`/stocks/markets/status`），不读本机时钟。
   const marketSessions = useMemo(() => buildMarketSessions(marketStatus), [marketStatus])
+  // 2026-10-29 F2/B1: 续期失败（报价心跳 catch / 本地有效期到期）时 `quoteEvidenceVerified=false`
+  // —— 手里这份快照已无从证明是当下的，清单必须降级「时效未核实」，不判破位。
+  // 旧实现只把凭证放在 `quotes` 表里清字段，持仓汇总仍可能带旧时刻，缺了这道闸门。
+  const verified = quoteEvidenceVerified !== false
   const report = useMemo(
-    () => buildPositionRiskReport(positions, { marketSessions }),
-    [positions, marketSessions],
+    () => buildPositionRiskReport(positions, { marketSessions, verified }),
+    [positions, marketSessions, verified],
   )
 
   if (viewTab !== 'positions' || report.total === 0) return null

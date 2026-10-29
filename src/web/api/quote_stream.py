@@ -215,8 +215,46 @@ def _collect_watchlist_symbols() -> dict[str, list[str]]:
         return {}
 
 
+def _proven_quote_stamp(item: dict, market: str) -> dict:
+    """行情源**自带的**报价时刻 → WS 透传字段（2026-10-29 F3 溯源）。
+
+    背景: 帧里原只有 `{price, change_pct, prev_close, name}`，前端 `applyQuoteTicks`
+    只能把"价格变了"的 tick 判成时刻未知 —— 5s 一帧的 WS 全程拿不到时效，20s 轮询之间
+    的真破位大部分时段看不见。
+
+    **只有行情源报文里确实带报时**（`Quote.quote_time`，如腾讯 parts[30]
+    `_parse_quote_time`）才透传；`md_quote_rows` 的 `quote_time` 为空（TQ 快照/降级源）
+    就是 `None` + `unknown`。绝不用服务端接收/发送时间（`time.time()`、`datetime.now()`）
+    冒充行情源时刻 —— 那会把"我们收到的时间"讲成"行情发生的时间"，是假实时。
+
+    自洽校验: `quote_date` 必须就是 `quote_time` 的日期段；不一致说明上游串源，
+    两个都不用（宁可 unknown，也不替上游挑一个"看起来对"的）。
+    """
+    from src.core.quote_period import classify_quote_period
+
+    raw_time = item.get("quote_time")
+    quote_time = str(raw_time).strip() if raw_time else ""
+    quote_date = quote_time[:10] if quote_time else ""
+
+    declared_date = item.get("quote_date")
+    if quote_date and declared_date:
+        declared = str(declared_date).strip()[:10]
+        if declared != quote_date:
+            quote_time, quote_date = "", ""
+
+    if not quote_time:
+        return {"quote_time": None, "quote_date": None, "daily_pnl_period": "unknown"}
+
+    # 日期层按**市场时区**的后端判定（与 /quotes/batch 同一实现），前端不复刻交易日历。
+    return {
+        "quote_time": quote_time,
+        "quote_date": quote_date,
+        "daily_pnl_period": classify_quote_period(quote_date, market),
+    }
+
+
 async def _fetch_batch_quotes(groups: dict[str, list[str]]) -> dict:
-    """按市场分组批量拉行情, 返回 {symbol: {price, change_pct, prev_close, name}}。"""
+    """按市场分组批量拉行情, 返回 {symbol: {price, change_pct, prev_close, name, ...报价时刻}}。"""
     from src.core.marketdata_client import md_quote_rows
 
     out: dict = {}
@@ -232,6 +270,7 @@ async def _fetch_batch_quotes(groups: dict[str, list[str]]) -> dict:
                     "change_pct": item.get("change_pct"),
                     "prev_close": item.get("prev_close"),
                     "name": item.get("name"),
+                    **_proven_quote_stamp(item, market),
                 }
         except Exception as e:
             logger.debug(f"批量行情 {market} 失败: {e}")

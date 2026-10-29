@@ -156,6 +156,10 @@ def get_market_status():
                 "is_trading": is_trading,
                 "sessions": sessions_desc,
                 "local_time": now.strftime("%H:%M"),
+                # 2026-10-29 B3: 市场当地**日期**独立下发。只有 HH:MM 时，防线判定无法证明
+                # "报价与市场墙钟是同一天"——昨天 09:31 的报价配今天 09:31 的钟会算出 0 分钟。
+                # local_time 语义不变（仍是 HH:mm），日期单独给，让前端做日级一致性比对。
+                "local_date": now.date().isoformat(),
                 "timezone": market_def.timezone,
             })
         except Exception as e:
@@ -169,6 +173,8 @@ def get_market_status():
                 "is_trading": False,
                 "sessions": [],
                 "local_time": "--:--",
+                # 拿不到市场时区/时段时不给日期（不许用本机日期冒充市场当地日期）。
+                "local_date": None,
                 "timezone": market_def.timezone,
                 "error": str(e),
             })

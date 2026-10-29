@@ -445,3 +445,91 @@ describe('useStocksData · 本地有效期（不依赖请求能不能回来）',
     expect(callsOf('/quotes/batch')).toBeGreaterThan(quotesBefore)
   })
 })
+
+describe('useStocksData · 市场日期不吃缓存 + 报价凭证续期状态（2026-10-29）', () => {
+  /**
+   * `fetchAPI` 对 GET 有 30s 内存缓存。市场状态里现在带 `local_date`，
+   * 若首拉/持仓刷新命中缓存，跨日后就会拿着**昨天的 local_date** 给今天的报价作证。
+   * 所以这两条路径都必须显式 `cacheMode: 'reload'`。
+   */
+  it('所有 /stocks/markets/status 请求都绕过 30s GET 缓存', async () => {
+    vi.useFakeTimers()
+    api.fetchAPI.mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes('/stocks/markets/status')) {
+        return Promise.resolve([
+          { code: 'CN', name: 'A股', status: 'trading', local_time: '09:31', local_date: '2026-10-29' },
+        ])
+      }
+      if (u.includes('/quotes/batch')) return Promise.resolve([])
+      if (u.includes('/portfolio/summary')) return Promise.resolve(portfolioRaw([]))
+      return Promise.resolve([])
+    })
+
+    renderShell(makeState({}))
+    await flush()
+
+    const statusCalls = api.fetchAPI.mock.calls.filter((c) =>
+      String(c[0]).includes('/stocks/markets/status'),
+    )
+    expect(statusCalls.length).toBeGreaterThan(0)
+    for (const call of statusCalls) {
+      expect((call[1] as { cacheMode?: string } | undefined)?.cacheMode).toBe('reload')
+    }
+  })
+
+  /**
+   * 续期失败的**渲染侧**信号：只清 `quotes` 里的字段不够 —— 持仓汇总行仍可能带着旧时刻，
+   * `PositionRiskSection` 必须看到 `quoteEvidenceVerified=false` 才会降级「时效未核实」。
+   */
+  it('批量行情失败 ⇒ quoteEvidenceVerified=false；恢复成功 ⇒ true', async () => {
+    vi.useFakeTimers()
+    let failQuotes = true
+    api.fetchAPI.mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes('/stocks/markets/status')) {
+        return Promise.resolve([
+          { code: 'CN', name: 'A股', status: 'trading', local_time: '09:31', local_date: '2026-10-29' },
+        ])
+      }
+      if (u.includes('/quotes/batch')) {
+        return failQuotes
+          ? Promise.reject(new Error('429'))
+          : Promise.resolve([
+              {
+                symbol: '600111',
+                market: 'CN',
+                current_price: 33,
+                change_pct: 0,
+                quote_time: '2026-10-29 09:31:00',
+                quote_date: '2026-10-29',
+                daily_pnl_period: 'today',
+              },
+            ])
+      }
+      if (u.includes('/portfolio/summary')) return Promise.resolve(portfolioRaw([]))
+      return Promise.resolve([])
+    })
+
+    let verified: boolean | undefined
+    function EvidenceShell({ state }: { state: Record<string, unknown> }) {
+      const data = useStocksData(state as unknown as Parameters<typeof useStocksData>[0])
+      verified = data.quoteEvidenceVerified
+      return null
+    }
+
+    render(
+      <MemoryRouter>
+        <TabActiveProvider active>
+          <EvidenceShell state={makeState({})} />
+        </TabActiveProvider>
+      </MemoryRouter>,
+    )
+    await flush()
+    expect(verified).toBe(false)
+
+    failQuotes = false
+    await advance(FRESHNESS_HEARTBEAT_MS)
+    expect(verified).toBe(true)
+  })
+})

@@ -39,12 +39,12 @@
  *     等于用五个半小时前的价位说「你现在跌破了纪律位」。所以时效判定要**两层**：
  *       - 日期层：后端按**市场时区**判好的 `daily_pnl_period`（前端不复刻交易日历）；
  *       - 时刻层：报价自身的 `quote_time`（行情源的报时，服务器下行）与**服务器给出的
- *         市场墙钟**（`/stocks/markets/status` 的 `local_time`，后端 `datetime.now(tz)`
- *         算出来的）之差。两者同一时区、同一天，才谈得上「刚发生的」。
+ *         市场墙钟**（`/stocks/markets/status` 的 `local_time` + `local_date`）之差。
+ *         两者同一时区、**同一天**，才谈得上「刚发生的」。
  * 12. **拿不到可核对的时间就不许冒充实时**：没有 `quote_time`、没有服务器市场时钟、
- *     报价晚于市场时钟（跨日/时钟异常）⇒ `unknown`，**不下**破位结论——宁可不判，
- *     也不编一个「行情正常」的结论。库内不读系统时钟（不调用 Date 的无参构造 / now()）、
- *     不自推交易日历。
+ *     报价晚于市场时钟（跨日/时钟异常）、**报价日期或市场日期缺一个**（`HH:mm` 无从证明
+ *     跨日）⇒ `unknown`，**不下**破位结论——宁可不判，也不编一个「行情正常」的结论。
+ *     库内不读系统时钟（不调用 Date 的无参构造 / now()）、不自推交易日历。
  * 13. **阈值是推断值**：`QUOTE_FRESH_WINDOW_MINUTES` 不是交易所/后端契约，只是「超过这么多
  *     分钟就不再当实时」的经验线，UI 必须显式标注它，不许当成官方口径。
  * 14. **服务器说市场没在交易时，当日报价是「定格价」而不是「实时价」**：`/stocks/markets/status`
@@ -116,8 +116,12 @@ export interface MarketSessionInfo {
   /** "HH:MM"（服务器市场当地墙钟）。也可能带日期（"YYYY-MM-DD HH:MM"），带上就直接比对日期。 */
   localTime?: string | null
   /**
-   * 服务器市场当地**日期**（`YYYY-MM-DD`）。后端目前只下发 `HH:MM`，这里留字段：
-   * 哪天把日期补上，跨日判定就直接用可核对的服务器事实，而不用退化成"证明不了"。
+   * 服务器市场当地**日期**（`YYYY-MM-DD`）。`/stocks/markets/status` 自 2026-10-29
+   * 起独立下发 `local_date`（该市场时区的当天）。
+   *
+   * 这是**日级一致性**的唯一依据：只有 `HH:mm` 时，昨天 09:31 的报价配今天 09:31 的钟
+   * 会算出 0 分钟（旧算法的错判）。缺这个字段 ⇒ 时点未证实（`period_unknown`），
+   * 不允许用 `HH:mm` 自证。
    */
   localDate?: string | null
   /** trading / break / after_hours / pre_market / closed / unknown。 */
@@ -260,12 +264,33 @@ const STATE_RANK: Record<DefenseState, number> = {
 }
 
 /** 服务器状态里哪些算「当日非交易时段」（仍可判，但只能叫定格价）。 */
-const FROZEN_STATUSES: ReadonlySet<string> = new Set([
+export const FROZEN_SESSION_STATUSES: ReadonlySet<string> = new Set([
   'break',
   'after_hours',
   'pre_market',
   'closed',
 ])
+
+/**
+ * 这个服务器市场状态是否属于「当日非交易时段」（定格价语义）。
+ * 导出给告警条的**休市降频**复用 —— 时段白名单只此一份，避免两处各写一套而漂移。
+ */
+export function sessionIsFrozen(status: unknown): boolean {
+  return FROZEN_SESSION_STATUSES.has(String(status ?? '').trim().toLowerCase())
+}
+
+/**
+ * 「不会马上开盘」的休市态（2026-10-29 降频用）。
+ *
+ * 只用 `after_hours` / `closed`：午休（break）与盘前（pre_market）几分钟内就会恢复交易，
+ * 把它们也算作空闲会让开盘后的第一次取价晚最多两分钟 —— 漏判比多取一轮更贵。
+ */
+export const IDLE_SESSION_STATUSES: ReadonlySet<string> = new Set(['after_hours', 'closed'])
+
+/** 服务器市场状态是否属于「不会马上开盘」的休市态（告警条可据此降频）。 */
+export function sessionIsIdle(status: unknown): boolean {
+  return IDLE_SESSION_STATUSES.has(String(status ?? '').trim().toLowerCase())
+}
 
 /** 正数才有效（价格/成本/防线为 0 或负数都是"没有这个数"，不是 0）。 */
 function positive(v: unknown): number | null {
@@ -424,13 +449,14 @@ export function freshnessFor(args: {
   if (quoteDate !== null && quoteTimeDate !== null && quoteDate !== quoteTimeDate) {
     return verdict('unknown', 'clock_skew')
   }
-  // ③c 日期层比对：服务器市场墙钟带日期时，报价日期必须与它同一天。
-  //     昨天 09:31 的报价 + 今天 09:31 的钟，HH:mm 差 0 也**不是**同一分钟（旧算法的错判）。
-  if (quoteDate !== null && marketDate !== null && quoteDate !== marketDate) {
-    return verdict('stale', 'period')
-  }
   // ④ 没有服务器市场墙钟 ⇒ 无从比较，不猜本机时间。
   if (marketLocalMinutes === null) return verdict('unknown', 'no_clock')
+  // ③c 日级证据两边都必须有（2026-10-29 复审 B3 收紧）：`HH:mm` **不能自证**是同一分钟。
+  //     昨天 09:31 的报价配今天 09:31 的钟，算出来 age=0 —— 这正是隔日旧价冒充实时的形态。
+  //     报价日期或服务器市场日期缺一个 ⇒ 时点未证实（`period_unknown`），不判当前。
+  if (quoteDate === null || marketDate === null) return verdict('unknown', 'period_unknown')
+  // ③d 两边都有日期 ⇒ 必须同一天；不同天就是已知陈旧（`stale/period`），不是"未知"。
+  if (quoteDate !== marketDate) return verdict('stale', 'period')
 
   const age = marketLocalMinutes - quoteLocalMinutes
   if (age < 0) {
@@ -446,7 +472,7 @@ export function freshnessFor(args: {
 
   // ⑤ 服务器说当日非交易时段（午休/盘后/休市/盘前）：当日最后一笔报价是「定格价」。
   //    这种情况下全市场看到的是同一价位，可以判，但必须标成非实时。
-  if (FROZEN_STATUSES.has(marketStatusRaw)) {
+  if (sessionIsFrozen(marketStatusRaw)) {
     return age <= QUOTE_FRESH_WINDOW_MINUTES
       ? verdict('current', 'ok', age)
       : verdict('session_frozen', 'ok', age)
@@ -564,6 +590,11 @@ export function humanizeAgeMinutes(minutes: number | null): string | null {
 export function rowFromPosition(
   p: PositionRiskInput,
   marketSessions?: MarketSessionMap,
+  /**
+   * 这份读数是否仍在被成功续期（2026-10-29 F2/B1）。`false` ⇒ 时效一律「未核实」，
+   * 有价有防线也不判破位（手里这份快照已无从证明是当下的）。
+   */
+  verified?: boolean,
 ): PositionRiskRow {
   const symbol = String(p.symbol ?? '').trim()
   const market = normalizeMarket(p.market)
@@ -584,6 +615,7 @@ export function rowFromPosition(
     quoteTime: p.quote_time,
     quoteDate: p.quote_date,
     market: marketSession,
+    verified,
   })
 
   const gaps: RiskGap[] = []
@@ -640,12 +672,17 @@ export function rowFromPosition(
  */
 export function buildPositionRiskReport(
   positions: PositionRiskInput[] | null | undefined,
-  options?: { marketSessions?: MarketSessionMap },
+  options?: {
+    marketSessions?: MarketSessionMap
+    /** 这份读数是否仍在被成功续期（见 `rowFromPosition` 同名参数）；缺省视为 true。 */
+    verified?: boolean
+  },
 ): PositionRiskReport {
   const marketSessions = options?.marketSessions
+  const verified = options?.verified
   const rows = (Array.isArray(positions) ? positions : [])
     .filter((p) => String(p.symbol ?? '').trim() !== '')
-    .map((p) => rowFromPosition(p, marketSessions))
+    .map((p) => rowFromPosition(p, marketSessions, verified))
 
   // 同一标的多账户防线不一致：只**标注**，不合并、不挑一条 —— 防线是账户级的。
   const defensesBySymbol = new Map<string, Set<string>>()

@@ -10,12 +10,13 @@ import type { QuoteTickMap } from '@/realtime/useQuoteStream'
  * 由 `useStocksData` 调用、由 `tests/lib/quote-ticks.test.ts` 钉死。
  *
  * ## 规则：价格与时刻必须**同源**
- * 后端 WS 下行帧的 payload 只有 `{price, change_pct, prev_close, name}`
- * （`src/web/api/quote_stream.py::_fetch_batch_quotes`）—— **没有行情源报时**。
+ * 后端 WS 下行帧的 payload 自 2026-10-29 起带 `quote_time` / `quote_date` /
+ * `daily_pnl_period`（`src/web/api/quote_stream.py::_proven_quote_stamp`），值只来自
+ * **行情源报文自带的报时**（腾讯 parts[30]）；源不报时就是 `null` + `unknown`。
  * 于是有两种情况：
- *  1. 帧里带了可靠的 `quote_time`（服务端补上时刻后的新协议/后端直连行情源）：
- *     价格、时刻、日期、`daily_pnl_period` 一起换 —— 这才是可判时效的一对；
- *  2. 帧里没带时刻（当前线上就是这种）：**价格照更，时刻明确清成未知**。
+ *  1. 帧里带了可靠的 `quote_time`（后端从**行情源报文**透传的报时）：价格、时刻、日期、
+ *     `daily_pnl_period` 一起换 —— 这才是可判时效的一对；
+ *  2. 帧里没带时刻（源本身不报时 / 降级源）：**价格照更，时刻明确清成未知**。
  *     旧实现把上一轮轮询的 `quote_time`/`quote_date`/`daily_pnl_period` 原样保留，
  *     等于"14:00 的新价配 09:31 的旧时刻"：既会让旧时刻替新价格背书（冒充实时），
  *     也会把当日盈亏算到上一轮（甚至上一交易日）的口径上。

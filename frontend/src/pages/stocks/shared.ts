@@ -333,6 +333,13 @@ export interface MarketStatus {
   is_trading: boolean
   sessions: string[]
   local_time: string
+  /**
+   * 市场当地**日期**（`YYYY-MM-DD`，2026-10-29 起后端独立下发）。
+   * 只有 `HH:mm` 时无法证明跨日（昨天 09:31 配今天 09:31 = 0 分钟），
+   * 防线判定必须靠它做日级一致性比对。老网关/取状态失败时可能缺失。
+   */
+  local_date?: string | null
+  timezone?: string
 }
 
 export interface NewsItem {

@@ -40,15 +40,15 @@ afterEach(() => {
 
 /** 服务器市场状态夹具：`/stocks/markets/status` 里 CN 当天 15:03、交易中。 */
 const MARKET_STATUS = [
-  { code: 'CN', name: 'A股', status: 'trading', status_text: '交易中', local_time: '15:03' },
-  { code: 'HK', name: '港股', status: 'trading', status_text: '交易中', local_time: '15:03' },
-  { code: 'US', name: '美股', status: 'trading', status_text: '交易中', local_time: '15:03' },
+  { code: 'CN', name: 'A股', status: 'trading', status_text: '交易中', local_time: '15:03', local_date: '2026-10-29' },
+  { code: 'HK', name: '港股', status: 'trading', status_text: '交易中', local_time: '15:03', local_date: '2026-10-29' },
+  { code: 'US', name: '美股', status: 'trading', status_text: '交易中', local_time: '15:03', local_date: '2026-10-29' },
 ]
 
 const SESSIONS: MarketSessionMap = {
-  CN: { localTime: '15:03', status: 'trading' },
-  HK: { localTime: '15:03', status: 'trading' },
-  US: { localTime: '15:03', status: 'trading' },
+  CN: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
+  HK: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
+  US: { localTime: '15:03', localDate: '2026-10-29', status: 'trading' },
 }
 
 const pos = (over: Record<string, unknown> = {}) => ({
@@ -201,7 +201,7 @@ describe('PositionRiskTable', () => {
           quote_time: '2026-10-29 09:31:00',
         }),
       ],
-      { CN: { localTime: '14:03', status: 'trading' } },
+      { CN: { localTime: '14:03', localDate: '2026-10-29', status: 'trading' } },
     )
     render(<PositionRiskTable report={report} />)
     const row = screen.getByTestId('position-risk-row-600111')

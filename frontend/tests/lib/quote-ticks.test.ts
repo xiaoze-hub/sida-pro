@@ -35,7 +35,7 @@ const polled = (over: Partial<QuoteSnapshot> = {}): QuoteSnapshot => ({
   ...over,
 })
 
-const marketTrading = { localTime: '14:00', status: 'trading' }
+const marketTrading = { localTime: '14:00', localDate: '2026-10-29', status: 'trading' }
 
 describe('applyQuoteTicks · 不带报价时刻的 WS 帧', () => {
   it('价格更新，但时刻/日期/期间不再沿用旧值（14:00 的价不许配 09:31 的时刻）', () => {
