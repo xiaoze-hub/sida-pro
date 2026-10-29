@@ -130,6 +130,7 @@ def push_notification(
     also_push: bool | None = None,
     user_id: str | None = None,
     channel_ids=None,
+    broadcast_all: bool = False,
 ) -> int | None:
     """写一条站内通知, 并按级别决定是否外发。返回 notification id。
 
@@ -140,6 +141,10 @@ def push_notification(
     `resolve_notify_channels_ex(...).channels` 的 id), 必须传下来 —— 最终外发会在
     **用户归属 ∩ 选择集**上再校验一次; 选择集为空/全都不可证明 → 一条都不发,
     push_status 如实写原因, 绝不扩到该用户全部渠道或别人的渠道。
+
+    `broadcast_all`(2026-10-30 复审): user_id=None 只代表"归属未知", **不是**"发给所有人"。
+    默认不广播 WS; 只有真正的系统公告才显式传 True(等价旧的全员广播)。
+    旧行为把无归属任务的 title/body 推给所有在线用户, 属于跨租户内容泄露。
     """
     nid = None
     db = SessionLocal()
@@ -173,7 +178,10 @@ def push_notification(
     do_push = also_push if also_push is not None else (level in _PUSH_LEVELS)
     if not do_push:
         _set_push_status(nid, "skipped", "级别不外发")
-        _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
+        _after_push_hook(
+            user_id, category, level, title, body, link, source, trace_id, nid,
+            broadcast_all=broadcast_all,
+        )
         return nid
 
     mgr, channel_records, channel_audit = _build_notifier_checked(
@@ -201,7 +209,10 @@ def push_notification(
         else:
             # 显式状态, 不静默 —— 前端能看到"站内已记录, 未配置外发渠道"
             _set_push_status(nid, "skipped", "未配置通知渠道", channels=[])
-        _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
+        _after_push_hook(
+            user_id, category, level, title, body, link, source, trace_id, nid,
+            broadcast_all=broadcast_all,
+        )
         return nid
 
     try:
@@ -222,7 +233,10 @@ def push_notification(
     except Exception as e:
         logger.warning("[通知中心] 外发失败: %s", e)
         _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))
-    _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
+    _after_push_hook(
+        user_id, category, level, title, body, link, source, trace_id, nid,
+        broadcast_all=broadcast_all,
+    )
     return nid
 
 
@@ -236,6 +250,8 @@ def _after_push_hook(
     source: str,
     trace_id: str,
     nid: int | None,
+    *,
+    broadcast_all: bool = False,
 ) -> None:
     """v0.4.36: 落库后通过 WS Hub 实时推送 + 累加未读.
 
@@ -260,8 +276,11 @@ def _after_push_hook(
             "trace_id": trace_id,
             "ts": int(_time_module.time()),
         }
-        # 广播给该用户的 WS 连接 (按 category 订阅过滤)
-        broadcast_notification(user_id, payload, category=category)
+        # 广播给该用户的 WS 连接 (按 category 订阅过滤)。
+        # user_id=None 表示归属未知, **不得**当成"全员广播" —— 那会把无主任务的
+        # 标题/正文推给所有在线用户。只有显式 broadcast_all=True 才走全员。
+        if user_id or broadcast_all:
+            broadcast_notification(user_id, payload, category=category)
         # 累加未读 (站内公告不入未读)
         if user_id:
             incr_unread(user_id, 1)

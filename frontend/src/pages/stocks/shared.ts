@@ -189,6 +189,8 @@ export interface AccountSummary {
   priced_cost?: number
   /** 未定价持仓的成本（只有成本是已知事实，不进盈亏分母）。 */
   unpriced_cost?: number
+  /** 成本未知（NaN/缺失/<=0）的持仓数：这些仓不进成本分母，盈亏只按已知篮算。 */
+  cost_unknown_positions?: number
   total_pnl: number | null
   total_pnl_pct: number | null
   /** 当日盈亏合计；一只都没观测到（缺价或缺昨收）时为 null。 */
@@ -218,6 +220,8 @@ export interface PortfolioTotal {
   total_cost: number
   priced_cost?: number
   unpriced_cost?: number
+  /** 成本未知的持仓数（见 `AccountSummary.cost_unknown_positions`）。 */
+  cost_unknown_positions?: number
   total_pnl: number | null
   total_pnl_pct: number | null
   total_daily_pnl: number | null
@@ -618,6 +622,7 @@ export const mergePortfolioQuotes = (
   let grandCost = 0
   let grandPricedCost = 0
   let grandUnpricedCost = 0
+  let grandCostUnknown = 0
   let grandPositions = 0
   let grandPriced = 0
   let grandDailyObserved = 0
@@ -634,6 +639,10 @@ export const mergePortfolioQuotes = (
     let accCost = 0
     let accPricedCost = 0
     let accUnpricedCost = 0
+    // 成本未知的持仓数：成本是 null 时不能进任何成本分母，盈亏只能按已知篮算。
+    let accCostUnknown = 0
+    let accPnlValue = 0
+    let accPnlCost = 0
     let accPriced = 0
     let accDailyObserved = 0
     let accDailyPnl = 0
@@ -690,11 +699,18 @@ export const mergePortfolioQuotes = (
           : pos.change_pct ?? null
         : null
 
-      const costPrice = safeNum(pos.cost_price) ?? 0
+      // 成本 NaN/缺失/<=0 是「未知」，不是 0 —— `?? 0` 会让 pnl = 市值 - 0，
+      // 把整笔市值报成浮盈，且覆盖率仍自称 100%（OCR error, 2026-10-30）。
+      const costPrice = safeNum(pos.cost_price)
       const quantity = safeNum(pos.quantity) ?? 0
-      const cost = costPrice * quantity * rate
-      accCost += cost
-      if (!priced) accUnpricedCost += cost
+      const costKnown = costPrice !== null && costPrice > 0
+      const cost = costKnown ? costPrice * quantity * rate : null
+      if (cost === null) {
+        accCostUnknown += 1
+      } else {
+        accCost += cost
+        if (!priced) accUnpricedCost += cost
+      }
 
       let market_value: number | null = null
       let market_value_cny: number | null = null
@@ -707,11 +723,15 @@ export const mergePortfolioQuotes = (
         market_value = current_price * quantity
         market_value_cny = market_value * rate
         accMarketValue += market_value_cny
-        accPricedCost += cost
         accPriced += 1
-        // 成本 <= 0 时百分比是未知，不是 0%（后端同样给 None）
-        pnl = market_value_cny - cost
-        pnl_pct = cost > 0 ? (pnl / cost) * 100 : null
+        // 成本未知 → 市值照算（行情事实），盈亏留空（不知道赚多少）。
+        if (cost !== null) {
+          accPricedCost += cost
+          accPnlValue += market_value_cny
+          accPnlCost += cost
+          pnl = market_value_cny - cost
+          pnl_pct = cost > 0 ? (pnl / cost) * 100 : null
+        }
       }
 
       if (priced && change_pct != null && change_pct !== -100) {
@@ -764,8 +784,9 @@ export const mergePortfolioQuotes = (
     let accDailyBasketOut: number | null
     if (accPriced > 0) {
       accMarketValueOut = accMarketValue
-      accPnl = accMarketValue - accPricedCost
-      accPnlPct = accPricedCost > 0 ? (accPnl / accPricedCost) * 100 : null
+      // 盈亏只在「有价 + 成本已知」子集上算（分子分母同篮子）。
+      accPnl = accPnlCost > 0 ? accPnlValue - accPnlCost : null
+      accPnlPct = accPnl !== null && accPnlCost > 0 ? (accPnl / accPnlCost) * 100 : null
       // 一只都没观测到（缺涨跌幅/昨收）⇒ 未知，不许拿 0 冒充"今天没赚没亏"。
       accDailyPnlOut = accDailyObserved > 0 ? round2(accDailyPnl) : null
       accDailyBasketOut = accDailyObserved > 0 ? round2(accDailyBasket) : null
@@ -795,6 +816,7 @@ export const mergePortfolioQuotes = (
     grandCost += accCost
     grandPricedCost += accPricedCost
     grandUnpricedCost += accUnpricedCost
+    grandCostUnknown += accCostUnknown
     grandPositions += positionsCount
     grandPriced += accPriced
     grandDailyObserved += accDailyObserved
@@ -809,6 +831,7 @@ export const mergePortfolioQuotes = (
       total_cost: round2(accCost),
       priced_cost: round2(accPricedCost),
       unpriced_cost: round2(accUnpricedCost),
+      cost_unknown_positions: accCostUnknown,
       total_pnl: roundOrNull(accPnl),
       total_pnl_pct: roundOrNull(accPnlPct),
       total_daily_pnl: roundOrNull(accDailyPnlOut),
@@ -833,8 +856,9 @@ export const mergePortfolioQuotes = (
   let grandDailyBasketOut: number | null
   if (grandPriced > 0) {
     grandMarketValueOut = grandMarketValue
-    grandPnl = grandMarketValue - grandPricedCost
-    grandPnlPct = grandPricedCost > 0 ? (grandPnl / grandPricedCost) * 100 : null
+    // 与单账户同款：成本未知的持仓不进盈亏篮子。
+    grandPnl = grandPricedCost > 0 ? grandMarketValue - grandPricedCost : null
+    grandPnlPct = grandPnl !== null && grandPricedCost > 0 ? (grandPnl / grandPricedCost) * 100 : null
     grandDailyPnlOut = grandDailyObserved > 0 ? round2(grandDailyPnl) : null
     grandDailyBasketOut = grandDailyObserved > 0 ? round2(grandDailyBasket) : null
   } else if (grandPositions > 0) {
@@ -865,6 +889,7 @@ export const mergePortfolioQuotes = (
       total_cost: round2(grandCost),
       priced_cost: round2(grandPricedCost),
       unpriced_cost: round2(grandUnpricedCost),
+      cost_unknown_positions: grandCostUnknown,
       total_pnl: roundOrNull(grandPnl),
       total_pnl_pct: roundOrNull(grandPnlPct),
       total_daily_pnl: roundOrNull(grandDailyPnlOut),

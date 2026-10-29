@@ -67,6 +67,16 @@ def _is_owner(viewer: tuple[str | None, str | None]) -> bool:
     return str(viewer[1] or "").lower() == "owner"
 
 
+def _read_head(report_path, limit: int) -> str:
+    """只读文件头 `limit` 字节(解码为 utf-8, 坏字节忽略)。
+
+    报告正文可能几 MB, 但标题/私有持仓绊线都只看开头: `read_text()` 会整篇载入,
+    在 /list 的循环里等于每文件一次全量分配(OCR performance, 2026-10-30)。
+    """
+    with open(report_path, "rb") as fh:
+        return fh.read(limit).decode("utf-8", errors="ignore")
+
+
 def _report_visible(report_path, viewer: tuple[str | None, str | None]) -> bool:
     """owner 直接可见(**不读 meta**) —— 既符合"数据责任人可见全部"的口径, 又保住
     /list 的"只读命中 limit 项标题"性能护栏(旧实现 30-45s 就是被逐文件 IO 拖的)。
@@ -83,9 +93,8 @@ def _report_visible(report_path, viewer: tuple[str | None, str | None]) -> bool:
     if str((meta or {}).get("scope") or "").strip().lower() != report_scope.SCOPE_SHARED:
         return True
     try:
-        head = Path(report_path).read_text(encoding="utf-8", errors="ignore")[
-            : report_scope.SUSPICIOUS_CONTENT_SCAN_BYTES
-        ]
+        # 只读前缀: 旧写法 read_text() 整篇载入再切片, 多 MB 报告会整篇读进内存。
+        head = _read_head(report_path, report_scope.SUSPICIOUS_CONTENT_SCAN_BYTES)
     except OSError as e:
         # 读不了就无法证明它是纯市场 → 不展示给 member。
         logger.warning("[报告] 共享报告内容校验失败(按不可见处理) %s: %s", report_path, e)
@@ -269,25 +278,32 @@ def _list_reports_for(
         for f in job_dir.iterdir():
             if not f.is_file() or not f.name.endswith(".md"):
                 continue
-            # 可见性判定在截断之前: limit 只数"我能看的"。
-            if not _report_visible(f, viewer):
-                continue
             try:
                 stat = f.stat()
             except OSError:
                 continue
             found.append((stat.st_mtime, stat.st_size, f, jid))
 
-    # 先排序取前 limit, 再只读命中项标题(limit 直接决定读取量)
+    # 2026-10-30 复审(OCR error): 先按 mtime 排序, 再逐条判可见性, 凑够 limit 立即停。
+    # 旧顺序是"对**每个** .md 先判可见性"——member 侧每条都要读 meta(共享报告还读正文头),
+    # 等于把模块注释里说要避免的 O(N) 文件 IO 重新引回 async 端点(457 个文件时 30-45s)。
+    # 语义不变: limit 仍然只数"我能看的", 只是从最旧的文件开始不再读。
     found.sort(key=lambda x: x[0], reverse=True)
-    found = found[:limit]
+    visible: list[tuple] = []
+    for item in found:
+        if not _report_visible(item[2], viewer):
+            continue
+        visible.append(item)
+        if len(visible) >= limit:
+            break
+    found = visible
 
     items = []
     for mtime, size, f, jid in found:
         title_preview = ""
         try:
-            raw = f.read_text(encoding="utf-8", errors="ignore")
-            title_preview = _extract_title(raw)
+            # 标题只在头部: 有界读取, 不为一行标题读整篇报告。
+            title_preview = _extract_title(_read_head(f, 8192))
         except Exception:
             pass
         items.append({
@@ -308,7 +324,13 @@ def _list_reports_for(
             for j in sorted(jobs_seen)
         ],
     }
-    _CACHE[key] = (time.monotonic() + _CACHE_TTL_SECONDS, sig, payload)
+    # 2026-10-30 复审: 写缓存前先清过期项 —— 旧实现只在"同一个 key 再来读"时判定过期,
+    # 已过期条目会一直驻留; 而 key 里有未校验的 job_id, 任意登录用户可用不同字符串
+    # 把 entries 无限撑大(memory 随用户数线性增长)。
+    now = time.monotonic()
+    for stale_key in [k for k, v in _CACHE.items() if v[0] <= now]:
+        _CACHE.pop(stale_key, None)
+    _CACHE[key] = (now + _CACHE_TTL_SECONDS, sig, payload)
     return payload
 
 

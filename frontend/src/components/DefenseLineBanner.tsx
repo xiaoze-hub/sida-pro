@@ -289,7 +289,15 @@ export function DefenseLineBanner({
   }, [])
 
   // 续期闸门：上一轮持仓行请求还没回来就不再叠一轮（广播 + 心跳可能同时到点）。
-  const positionInFlightRef = useRef(false)
+  // **按标的分键**（OCR error, 2026-10-30）：裸 boolean 会被上一个标的的请求卡住，
+  // 新标的直接 return 不发请求，而旧请求回来时 aliveRef 仍为 true → 把**别人**的
+  // 防线/破位结论落进当前标的，最长持续到下一次心跳。
+  const positionInFlightRef = useRef<string | null>(null)
+  // 请求身份：切标的时 +1；异步回调只有 epoch 仍是最新才允许落盘。
+  const requestEpochRef = useRef(0)
+  useEffect(() => {
+    requestEpochRef.current += 1
+  }, [symbol])
   /**
    * 取该标的在**所有账户**的持仓行（防线/成本来自持仓行本身，而不是父组件 props）。
    *
@@ -305,15 +313,16 @@ export function DefenseLineBanner({
       setPosition({ status: 'ok', lines: [], verified: true })
       return
     }
-    if (positionInFlightRef.current) return
-    positionInFlightRef.current = true
+    if (positionInFlightRef.current === symbol) return
+    positionInFlightRef.current = symbol
+    const epoch = requestEpochRef.current
     try {
       // `cacheMode:'reload'` 是必须的（2026-10-29 复审 B5）：`fetchAPI` 对 GET 有 30s 内存缓存，
       // 续期/广播触发的重取若命中缓存，等于**又拿回同一份旧防线**，"续期"变成空动作。
       const res = await fetchAPI<PortfolioSummaryLike>('/portfolio/summary?include_quotes=false', {
         cacheMode: 'reload',
       })
-      if (!aliveRef.current) return
+      if (!aliveRef.current || epoch !== requestEpochRef.current) return
       const lines: HeldLine[] = (res?.accounts || []).flatMap((acc) =>
         (acc.positions || [])
           .filter((p) => p.symbol === symbol)
@@ -330,7 +339,7 @@ export function DefenseLineBanner({
       // 不继续用旧防线报警。`error` 只留给"取不到"。
       setPosition({ status: 'ok', lines, verified: true })
     } catch {
-      if (!aliveRef.current) return
+      if (!aliveRef.current || epoch !== requestEpochRef.current) return
       setPosition((prev) =>
         // 有过读数 ⇒ 旧读数还在（价/防线都能陈列），但已无从核实：verified=false。
         // 从没读到过 ⇒ "未知"（不是"未核实"）：没有旧读数可核实，也没法判破位。
@@ -339,7 +348,8 @@ export function DefenseLineBanner({
           : { status: 'error', lines: [], verified: true },
       )
     } finally {
-      positionInFlightRef.current = false
+      // 只有当闸门还属于本次请求时才释放，避免把新标的的闸门清掉。
+      if (positionInFlightRef.current === symbol) positionInFlightRef.current = null
     }
   }, [active, symbol])
 
@@ -403,12 +413,14 @@ export function DefenseLineBanner({
   const marketsKey = markets.join(',')
 
   // 续期闸门：上一轮还没回来就不再叠一轮（心跳 + 标的变化可能同时触发）。
-  const quotesInFlightRef = useRef(false)
+  // 同样按标的分键：切标的时必须真发新请求，旧标的的响应一律丢弃。
+  const quotesInFlightRef = useRef<string | null>(null)
   const loadQuotes = useCallback(
     async (targets: readonly string[]) => {
       if (!active || targets.length === 0) return
-      if (quotesInFlightRef.current) return
-      quotesInFlightRef.current = true
+      if (quotesInFlightRef.current === symbol) return
+      quotesInFlightRef.current = symbol
+      const epoch = requestEpochRef.current
       try {
         await Promise.all(
           targets.map(async (market) => {
@@ -418,7 +430,7 @@ export function DefenseLineBanner({
                 `/quotes/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`,
                 { cacheMode: 'reload' },
               )
-              if (!aliveRef.current) return
+              if (!aliveRef.current || epoch !== requestEpochRef.current) return
               const p = positivePrice(res?.current_price ?? res?.price)
               setQuotesByMarket((prev) => ({
                 ...prev,
@@ -434,7 +446,7 @@ export function DefenseLineBanner({
                 },
               }))
             } catch {
-              if (!aliveRef.current) return
+              if (!aliveRef.current || epoch !== requestEpochRef.current) return
               // 续期失败：旧价留着给人看（别把读数藏起来），但**标记未核实** ——
               // 手里这份快照已无从证明是当下的，不许拿它出破位结论。
               setQuotesByMarket((prev) => {
@@ -451,7 +463,7 @@ export function DefenseLineBanner({
           }),
         )
       } finally {
-        quotesInFlightRef.current = false
+        if (quotesInFlightRef.current === symbol) quotesInFlightRef.current = null
       }
     },
     [active, symbol],
@@ -478,7 +490,10 @@ export function DefenseLineBanner({
   // 缺价没结论、缺钟没法判时刻、缺持仓行则可能拿着一条已经被改掉/删掉的防线继续报警。
   // 页签隐藏由 `usePausedInterval` 停表，回前台立即补一次，卸载自动清定时器。
   const marketsRef = useRef(markets)
-  marketsRef.current = markets
+  // 渲染阶段写 ref 是副作用（并发渲染下被丢弃的那次渲染也会改它）→ 移到 effect。
+  useEffect(() => {
+    marketsRef.current = markets
+  }, [markets])
   const refreshTick = useCallback(() => {
     void loadSessions()
     void loadQuotes(marketsRef.current)
@@ -905,11 +920,15 @@ export function DefenseLineBanner({
     )
   }
 
+  // 近线也必须给告警色：单账户分支(old shellTone)漏了 near，只有图标变琥珀，
+  // 最常见的单账户场景反而最弱（OCR warning, 2026-10-30）。
   const shellTone = anyBreached
     ? toneOf('breached')
     : anyStale
       ? toneOf('stale')
-      : 'border-border bg-s1 text-muted-foreground'
+      : rendered.some((r) => r.near)
+        ? toneOf('near')
+        : 'border-border bg-s1 text-muted-foreground'
   const multiTone = rendered.some((r) => r.breached)
     ? toneOf('breached')
     : rendered.some((r) => r.stale)

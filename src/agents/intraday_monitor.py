@@ -1136,6 +1136,9 @@ class IntradayMonitorAgent(BaseAgent):
             "user_id": _trigger_uid,
             # 该用户在 intraday_monitor 上配置的渠道选择集(与 context.notifier 同源)。
             "notify_channel_ids": list(_notify_channel_ids),
+            # 2026-10-30 复审: 静默触发(suppress_notify)必须一路传到外发点 ——
+            # 一次性的"只生成建议"触发不能真发微信/钉钉告警。
+            "suppress_notify": bool(getattr(context, "suppress_notify", False)),
         }
 
     def build_prompt(self, data: dict, context: AgentContext) -> tuple[str, str]:
@@ -2049,6 +2052,9 @@ class IntradayMonitorAgent(BaseAgent):
 
                     # 2026-10-29 五审 P1: 必须带**该用户代理配置的渠道选择集**;
                     # 缺失/为空 → notify_center 一条都不外发(fail-closed), 站内仍留痕。
+                    # 2026-10-30 复审: suppress_notify 时只落站内、不外部推送 ——
+                    # 一次性"仅生成建议"的触发不能真发微信/钉钉告警。
+                    _suppressed = bool(data.get("suppress_notify"))
                     _ch_ids = tuple(
                         int(x) for x in (data.get("notify_channel_ids") or [])
                     )
@@ -2058,9 +2064,9 @@ class IntradayMonitorAgent(BaseAgent):
                         category="risk_warning",
                         level="critical",
                         source="intraday_monitor",
-                        also_push=True,
+                        also_push=not _suppressed,
                         user_id=_uid,
-                        channel_ids=_ch_ids,
+                        channel_ids=() if _suppressed else _ch_ids,
                     )
                 except Exception as n_err:
                     logger.warning(f"防守线微信外发异常: {n_err}")

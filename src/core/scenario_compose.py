@@ -152,31 +152,57 @@ def owner_cost_detail(
 
         from src.db.models import PaperTradingPosition
 
-        q = db.query(PaperTradingPosition).filter(
-            PaperTradingPosition.stock_symbol == sym,
-            # 同 symbol 不同市场的模拟盘是不同标的, 不能互相锚定。
-            PaperTradingPosition.stock_market == mkt,
-            PaperTradingPosition.status == "open",
-            PaperTradingPosition.quantity > 0,
-        )
-        if uid is not None:
-            q = q.filter(
+        # 2026-10-30 复审(OCR security): 没有会话(user=None)就不读任何人的模拟盘 ——
+        # 旧写法不筛归属, `q.first()` 会挑到任意用户的开仓, 把别人的成本当成"该股成本"。
+        # 有会话时只认本人持仓(NULL 归属 = 归属未知, 不自动授予可见)。
+        if uid is None:
+            return CostAnchor()
+        rows = (
+            db.query(PaperTradingPosition)
+            .filter(
+                PaperTradingPosition.stock_symbol == sym,
+                # 同 symbol 不同市场的模拟盘是不同标的, 不能互相锚定。
+                PaperTradingPosition.stock_market == mkt,
+                PaperTradingPosition.status == "open",
+                PaperTradingPosition.quantity > 0,
                 or_(
                     PaperTradingPosition.user_id == uid,
                     PaperTradingPosition.user_id.is_(None),
-                )
+                ),
             )
-        pp = q.first()
-        if pp is not None:
-            cost = finite_float(getattr(pp, "entry_price", None))
-            stop = finite_float(getattr(pp, "stop_loss", None))
-            if cost is not None and cost > 0:
+            .all()
+        )
+        # 同标的多笔开仓是常态(无唯一约束): 数量可证时按数量加权,
+        # 不能再"随便挑一行"导致与组合平均成本不一致。
+        lots: list[tuple[float, float | None]] = []
+        for r in rows:
+            c = finite_float(getattr(r, "entry_price", None))
+            if c is None or c <= 0:
+                continue
+            lots.append((c, finite_float(getattr(r, "quantity", None))))
+        if lots:
+            weighted: float | None = None
+            if all(q is not None and q > 0 for _, q in lots):
+                total_qty = sum(q for _, q in lots if q is not None)
+                if total_qty > 0:
+                    weighted = finite_float(
+                        sum(c * q for c, q in lots if q is not None) / total_qty
+                    )
+            elif len(lots) == 1:
+                weighted = lots[0][0]  # 数量缺失的老数据: 只有一条时成本仍可证
+            if weighted is not None:
+                stop = (
+                    finite_float(getattr(rows[0], "stop_loss", None)) if len(rows) == 1 else None
+                )
                 return CostAnchor(
-                    cost=cost,
+                    cost=round(weighted, 6),
                     stop=stop if (stop is not None and stop > 0) else None,
                     method="paper",
                     unpriced=0,
                 )
+        # 有开仓但入场价全是脏值 → 明确"未知", 与实盘分支同口径, 不静默当没持仓。
+        if rows:
+            return CostAnchor(cost=None, stop=None, method="unknown", unpriced=len(rows))
     except Exception:  # noqa: BLE001
         pass
     return CostAnchor()

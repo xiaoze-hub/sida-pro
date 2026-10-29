@@ -1564,16 +1564,15 @@ def _build_portfolio_context(db: Session, user: User | None = None) -> str:
     ]
     if real_lines:
         lines.append("实盘持仓：\n" + "\n".join(real_lines))
-    # 模拟盘持仓(2026-09-08 T6: user_id 列已落地, 按归属过滤; NULL 行为冷启动遗留, owner 可见)
+    # 模拟盘持仓: 只认 user_id==uid。NULL 归属是冷启动遗留、owner 未知,
+    # 只允许 owner(数据责任人)看到 —— 与 portfolio_diagnostics / user_data /
+    # paper_trading 三条读路径同口径, 不再把别人/NULL 的模拟盘注进 member 的提示。
+    _paper_uids = [PaperTradingPosition.user_id == uid]
+    if str(getattr(user, "role", "") or "").lower() == "owner":
+        _paper_uids.append(PaperTradingPosition.user_id.is_(None))
     paper_positions = (
         db.query(PaperTradingPosition)
-        .filter(
-            PaperTradingPosition.status == "open",
-            or_(
-                PaperTradingPosition.user_id == uid,
-                PaperTradingPosition.user_id.is_(None),
-            ),
-        )
+        .filter(PaperTradingPosition.status == "open", or_(*_paper_uids))
         .all()
     )
     if paper_positions:

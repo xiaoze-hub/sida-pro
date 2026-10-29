@@ -880,8 +880,10 @@ def get_portfolio_summary(
         as_of、age_seconds、stale; source=default 或 stale=True 时港美市值换算不可当实时事实。
     """
     # 获取账户(仅当前用户的)
+    # `account_id=0` 也必须当作"按 0 过滤"而不是"不过滤" —— 否则调用方算错 id 时
+    # 会静默拿到全部账户。显式 `is not None` 与 user_scope_positions 的口径一致。
     accounts = user_scope_accounts(db, user.id, enabled_only=True).filter(
-        *([Account.id == account_id] if account_id else [])
+        *([Account.id == account_id] if account_id is not None else [])
     ).all()
 
     if not accounts:
@@ -905,6 +907,7 @@ def get_portfolio_summary(
                 "total_assets_priced_subset": 0,
                 "priced_cost": 0,
                 "unpriced_cost": 0,
+                "cost_unknown_positions": 0,
                 "quotes_coverage": _quotes_coverage(
                     requested=include_quotes,
                     positions_total=0,
@@ -950,6 +953,11 @@ def get_portfolio_summary(
     grand_daily_pnl = 0
     grand_daily_pnl_proven = 0
     grand_daily_pnl_excluded = 0
+    # 成本脏值/缺失的持仓数: 成本未知不能当 0, 盈亏只能按"成本已知"子集算。
+    grand_cost_unknown = 0
+    # 汇总盈亏篮子(有价 + 成本已知), 与单账户同口径。
+    grand_pnl_value = 0.0
+    grand_pnl_cost = 0.0
     grand_daily_pnl_periods: list[tuple[str, str | None]] = []
 
     for acc in accounts:
@@ -963,6 +971,10 @@ def get_portfolio_summary(
         acc_daily_pnl = 0
         acc_daily_pnl_proven = 0
         acc_daily_pnl_excluded = 0
+        acc_cost_unknown = 0
+        # 盈亏篮子: 只收"有价 + 成本已知"的持仓, 分子分母同篮子。
+        acc_pnl_value = 0.0
+        acc_pnl_cost = 0.0
         acc_daily_pnl_periods: list[tuple[str, str | None]] = []
         # available_funds 可为 NULL(老数据): NULL 是"没记过现金", 不是 0 —— 输出 None,
         # 并且下游 total_assets 不得把它当 0 加进总资产(见 acc_assets_* 分支)。
@@ -1026,20 +1038,32 @@ def get_portfolio_summary(
                     acc_daily_pnl_excluded += 1
                     grand_daily_pnl_excluded += 1
 
-            cost = _safe_amount(pos.cost_price) * qty
-            cost_cny = cost * rate  # 假设成本价也是原币种
-            acc_cost += cost_cny
+            # 2026-10-30 复审(OCR error): 成本 NaN/NULL/<=0 是"未知", 不能 `_safe_amount`
+            # 成 0 —— 否则 pnl = 市值 - 0 把整笔市值报成浮盈, 且覆盖率仍自称 100%。
+            # 未知成本单独计数, 不进任何成本分母; 该仓的 pnl/pnl_pct 一律 None。
+            cost_price = _finite_float(pos.cost_price)
+            cost_cny: float | None = None
+            if cost_price is not None and cost_price > 0:
+                cost_cny = cost_price * qty * rate  # 假设成本价也是原币种
+            if cost_cny is None:
+                acc_cost_unknown += 1
+            else:
+                acc_cost += cost_cny
 
             if priced:
                 market_value = current_price * qty  # 原币种市值
                 market_value_cny = market_value * rate  # 人民币市值
-                pnl = market_value_cny - cost_cny
-                pnl_pct = (pnl / cost_cny * 100) if cost_cny > 0 else None
+                if cost_cny is not None:
+                    pnl = market_value_cny - cost_cny
+                    pnl_pct = (pnl / cost_cny * 100) if cost_cny > 0 else None
+                    acc_pnl_value += market_value_cny
+                    acc_pnl_cost += cost_cny
+                    acc_priced_cost += cost_cny
+                # 成本未知: 市值仍算(它是行情事实), 盈亏留空(不知道赚多少)。
 
                 acc_market_value += market_value_cny
-                acc_priced_cost += cost_cny
                 acc_priced_count += 1
-            else:
+            elif cost_cny is not None:
                 acc_unpriced_cost += cost_cny
 
             positions_data.append({
@@ -1048,7 +1072,9 @@ def get_portfolio_summary(
                 "symbol": stock.symbol,
                 "name": stock.name,
                 "market": stock.market,
-                "cost_price": _finite_float(pos.cost_price),
+                # 成本 <=0 / NaN / NULL 统一成 None(未知) —— 不能给前端一个 0 让它
+                # 用 `?? 0` 再算一遍假浮盈。
+                "cost_price": cost_price if (cost_price is not None and cost_price > 0) else None,
                 "quantity": pos.quantity,
                 "invested_amount": _finite_float(pos.invested_amount),
                 "sort_order": pos.sort_order or 0,
@@ -1113,8 +1139,9 @@ def get_portfolio_summary(
                 acc_assets_complete, acc_assets_basis = False, "no_priced_positions"
                 acc_daily_pnl_out = None
             else:
-                acc_pnl = acc_market_value - acc_priced_cost
-                acc_pnl_pct = (acc_pnl / acc_priced_cost * 100) if acc_priced_cost > 0 else None
+                # 盈亏只在"有价 + 成本已知"子集上算(分子分母同篮子)。
+                acc_pnl = (acc_pnl_value - acc_pnl_cost) if acc_pnl_cost > 0 else None
+                acc_pnl_pct = (acc_pnl / acc_pnl_cost * 100) if (acc_pnl is not None and acc_pnl_cost > 0) else None
                 acc_market_value_out = acc_market_value
                 complete = acc_priced_count == acc_positions_count
                 if complete and funds_known:
@@ -1140,6 +1167,7 @@ def get_portfolio_summary(
             "total_cost": round(acc_cost, 2),
             "priced_cost": round(acc_priced_cost, 2),
             "unpriced_cost": round(acc_unpriced_cost, 2),
+            "cost_unknown_positions": acc_cost_unknown,
             "total_pnl": _round_or_none(acc_pnl),
             "total_pnl_pct": _round_or_none(acc_pnl_pct),
             "total_daily_pnl": _round_or_none(acc_daily_pnl_out),
@@ -1168,6 +1196,9 @@ def get_portfolio_summary(
         grand_total_cost += acc_cost
         grand_priced_cost += acc_priced_cost
         grand_unpriced_cost += acc_unpriced_cost
+        grand_cost_unknown += acc_cost_unknown
+        grand_pnl_value += acc_pnl_value
+        grand_pnl_cost += acc_pnl_cost
         grand_positions_count += acc_positions_count
         grand_priced_count += acc_priced_count
         grand_available_funds += funds_value
@@ -1204,8 +1235,13 @@ def get_portfolio_summary(
         grand_assets_complete, grand_assets_basis = False, "no_priced_positions"
         grand_daily_pnl_out = None
     else:
-        grand_pnl = grand_total_market_value - grand_priced_cost
-        grand_pnl_pct = (grand_pnl / grand_priced_cost * 100) if grand_priced_cost > 0 else None
+        # 与单账户同款: 盈亏只在"有价 + 成本已知"子集上算, 成本未知不冒充 0。
+        grand_pnl = (grand_pnl_value - grand_pnl_cost) if grand_pnl_cost > 0 else None
+        grand_pnl_pct = (
+            (grand_pnl / grand_pnl_cost * 100)
+            if (grand_pnl is not None and grand_pnl_cost > 0)
+            else None
+        )
         grand_market_value_out = grand_total_market_value
         if grand_priced_count == grand_positions_count and grand_funds_known:
             grand_total_assets = grand_total_market_value + grand_available_funds
@@ -1238,6 +1274,7 @@ def get_portfolio_summary(
             "total_cost": round(grand_total_cost, 2),
             "priced_cost": round(grand_priced_cost, 2),
             "unpriced_cost": round(grand_unpriced_cost, 2),
+            "cost_unknown_positions": grand_cost_unknown,
             "total_pnl": _round_or_none(grand_pnl),
             "total_pnl_pct": _round_or_none(grand_pnl_pct),
             "total_daily_pnl": _round_or_none(grand_daily_pnl_out),

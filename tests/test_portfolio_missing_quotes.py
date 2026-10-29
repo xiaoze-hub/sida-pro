@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -61,8 +62,10 @@ def _quote(price, prev_close=None, change_pct=None):
         "current_price": price,
         "prev_close": prev_close,
         "change_pct": change_pct,
-        "quote_time": "2026-10-29 10:00:00",
-        "quote_date": "2026-10-29",
+        # 日期必须跟随"今天"(发版时间炸弹): 硬编码 2026-10-29 会在次日变成
+        # previous_trading_day, 让"当日盈亏=今日"的断言永久红。
+        "quote_time": datetime.now().strftime("%Y-%m-%d 10:00:00"),
+        "quote_date": datetime.now().strftime("%Y-%m-%d"),
     }
 
 

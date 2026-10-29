@@ -896,8 +896,13 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       setError(null)
       const placeholder = `⏳ ${progressText(null)}`
       setMsgs((m) => [...m, { role: 'assistant', content: placeholder }])
+      // 归属感知（OCR error, 2026-10-30）：轮询每 2s 就 patch 一次，而 `msgs` 是**共享**
+      // 的最后一条助手气泡。用户在 10 分钟轮询期间点开别的会话后，旧写法会把那个会话的
+      // 最后一条回答覆盖成「⏳ 正在分析…」/「❌ 提交失败…」—— 纯前端内容错乱。
+      // 令牌对不上（视图已切走/又发了新问题）就整条丢弃，服务端结果不受影响。
       const patch = (content: string) =>
         setMsgs((m) => {
+          if (streamSeqRef.current !== seqAtSubmit) return m
           const last = m[m.length - 1]
           if (!last || last.role !== 'assistant') return m
           return [...m.slice(0, -1), { ...last, content }]

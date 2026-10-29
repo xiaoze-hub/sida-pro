@@ -92,15 +92,15 @@ def test_limit_returns_newest_and_only_reads_hits(tmp_path, monkeypatch):
     for i in range(6):  # mtime 递增
         _write_report(jd / f"r{i}.md", "jobA", f"报告{i}", 1000 + i)
 
-    # 统计标题读取次数: 只有命中前 limit 项应被 read_text
-    real_read_text = Path.read_text
+    # 统计标题读取次数: 只有命中前 limit 项应被读头(有界读取, 不整篇 read_text)
+    real_read_head = reports._read_head
     reads: list[str] = []
 
-    def _counting_read_text(self, *a, **k):
-        reads.append(str(self))
-        return real_read_text(self, *a, **k)
+    def _counting_read_head(path, limit):
+        reads.append(str(path))
+        return real_read_head(path, limit)
 
-    monkeypatch.setattr(Path, "read_text", _counting_read_text)
+    monkeypatch.setattr(reports, "_read_head", _counting_read_head)
 
     import asyncio
 

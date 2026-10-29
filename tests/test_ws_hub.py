@@ -266,8 +266,11 @@ async def test_l5_03_too_many_connections_close_4402():
 
 # ── L6 与 push_notification 集成 ────────────────────────────────
 
-def test_l6_01_push_notification_calls_ws_hub():
-    """push_notification 落库后调 broadcast."""
+def test_l6_01_push_notification_without_owner_does_not_broadcast():
+    """无归属(user_id=None)≠ 全员广播: 不得把 title/body 推给所有在线用户。
+
+    2026-10-30 复审: 旧行为把无主任务的正文广播给全部 WS 连接(跨租户泄露)。
+    """
     from src.core import notify_center
 
     with patch.object(ws_hub, "broadcast_notification") as bc:
@@ -277,6 +280,22 @@ def test_l6_01_push_notification_calls_ws_hub():
             category="agent_run",
             level="info",
             user_id=None,
+        )
+    assert not bc.called, "user_id=None 不得广播给所有用户"
+
+
+def test_l6_01b_explicit_broadcast_all_still_broadcasts():
+    """真正的系统公告显式 broadcast_all=True 时维持全员广播。"""
+    from src.core import notify_center
+
+    with patch.object(ws_hub, "broadcast_notification") as bc:
+        notify_center.push_notification(
+            title="系统公告",
+            body="body",
+            category="system",
+            level="info",
+            user_id=None,
+            broadcast_all=True,
         )
     assert bc.called
 

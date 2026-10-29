@@ -16,9 +16,21 @@ on:
 permissions:
   contents: read
 
+# 同一 PR 的新推送取消旧的审查(否则每次 push 都排一次付费审查)
+concurrency:
+  group: ai-code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review:
     runs-on: ubuntu-latest
+    # 审查一次 170 文件 diff 约 36 分钟; 不设上限时网关卡住会占满 runner 默认 6 小时。
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      # upload-sarif 必需: 存在 permissions 块时未声明的 scope 全为 none,
+      # 旧配置只有 contents:read → "Resource not accessible by integration"。
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,13 +69,27 @@ jobs:
 
       - name: AI review (SARIF)
         id: review
+        env:
+          # 表达式只经 env 传入, 绝不内联进 run: —— git ref 合法字符含 $ ( ) ` ; ,
+          # 直接拼接分支名等于把 ref 当 shell 代码执行, 而前面的步骤已把 provider
+          # API key 写进工作区的 ocr 配置。
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          ocr review --from origin/main --to origin/${{ github.head_ref }} \
+          base="origin/${BASE_REF:-main}"
+          git rev-parse --verify --quiet "$base" >/dev/null || base="$BASE_REF"
+          head="origin/${HEAD_REF}"
+          if ! git rev-parse --verify --quiet "$head" >/dev/null; then
+            head="$HEAD_SHA"   # fork PR: 只 fetch 了 base 仓库的 ref
+          fi
+          ocr review --from "$base" --to "$head" \
             --format sarif --output ocr.sarif
           test -s ocr.sarif
 
       - name: Upload SARIF
-        if: success()
+        # 审查步骤失败(阈值/网关抖动)时也要留住报告, 否则最需要排查时产物消失。
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ocr-sarif
@@ -72,7 +98,7 @@ jobs:
 
       # 接 GitHub Code Scanning(需要 security-events: write)
       - name: Upload to Code Scanning
-        if: success()
+        if: always() && hashFiles('ocr.sarif') != ''
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3
         with:
