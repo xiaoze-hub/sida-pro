@@ -162,7 +162,11 @@ export function AnnotationLinkBar({
                 {confirmingLine.kind === 'support' ? '支撑' : '阻力'}{' '}
                 {safeFixed(confirmingLine.price, 2)} {confirmingLine.label}）？
               </span>
-              <span className="text-role-risk">撤销后图上这条线立即移除，且不可恢复。</span>
+              {/* 事实：DELETE 成功**且**服务端读回不再返回这条之后，图上才移除；
+                  请求在途时线一直在（服务端还没删）。别承诺"立即移除"。 */}
+              <span className="text-role-risk">
+                撤销不可恢复：确认后等服务端删除成功并读回，图上才移除这条线。
+              </span>
               <button
                 type="button"
                 onClick={() => {

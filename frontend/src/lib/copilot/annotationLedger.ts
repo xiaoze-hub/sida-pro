@@ -180,12 +180,17 @@ class AnnotationLedgerImpl {
   /**
    * 开一次请求：记录"当前目标"、递增该 key 的序号、**同步**把快照置成 loading（清空旧线）。
    * 返回的序号必须原样交给 {@link commit}。
+   *
+   * `revoking` 必须**继承**而不是清空（2026-10-29 撤销竞态补丁）：这次请求不代表别处那条
+   * 撤销已经结束 —— 清掉它会让"撤销中…"提前消失、按钮重新可点，用户一点就再发一个
+   * DELETE（只剩 409）。正式解除只在撤销自己的 finally 里做。
    */
   beginRequest(target: AnnotationTarget): number {
     this.current = target
     const key = targetKey(target)
     const next = (this.seq.get(key) ?? 0) + 1
     this.seq.set(key, next)
+    const base = this.snapshots.get(key) ?? emptyForKey(key)
     this.write(key, {
       key,
       phase: 'loading',
@@ -196,7 +201,7 @@ class AnnotationLedgerImpl {
       notice: '',
       noticeLevel: 'info',
       retryable: false,
-      revoking: [],
+      revoking: base.revoking,
     })
     return next
   }
@@ -215,7 +220,9 @@ class AnnotationLedgerImpl {
     const key = targetKey(target)
     if (this.seq.get(key) !== seq) return false
     if (!this.current || targetKey(this.current) !== key) return false
-    this.write(key, { ...snapshot, key })
+    // 一次读取不改变"谁正在撤销中"：并行的另一次撤销必须继续显示"撤销中…"
+    const base = this.snapshots.get(key) ?? emptyForKey(key)
+    this.write(key, { ...snapshot, key, revoking: base.revoking })
     return true
   }
 
@@ -288,12 +295,15 @@ class AnnotationLedgerImpl {
     // 让那些还在路上的旧读取回来时被 {@link commit} 丢弃 —— 否则一个早于 apply
     // 发出的读取会把刚确认的线整批覆盖掉（图上闪一下又消失）。
     this.seq.set(key, (this.seq.get(key) ?? 0) + 1)
+    // `revoking` 同样不能清空：撤销 A 落地时，撤销 B 可能还在路上（见 beginRequest 的注释）。
+    // 清掉只会让 B 的按钮提前解禁；B 自己的 finally 会把它摘掉。
+    const base = this.snapshots.get(key) ?? emptyForKey(key)
     this.write(key, {
       ...readySnapshot(key, lines, message),
       notice: message,
       noticeLevel: opts.level ?? 'info',
       retryable: opts.retryable ?? false,
-      revoking: [],
+      revoking: base.revoking,
     })
   }
 
