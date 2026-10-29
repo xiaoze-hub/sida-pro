@@ -457,4 +457,27 @@ describe('日线口径（date_only）的措辞与红线', () => {
     expect(row.textContent).toContain('时点未知')
     expect(row.textContent).not.toContain('最近成交价')
   })
+
+  it('日线旁证失败（date/time 都为空）：保留告警缺口，明说时点未知、不判破位', () => {
+    // 2026-10-29 第三处复审：TQ 快照可用但日线取日期失败/熔断时，后端只给
+    // quote_date=null + quote_time=null，不伪造日期。UI 必须把这个缺口说出来：
+    // 既不能写「已破位」，也不能写「最近成交价」—— 那份价的日期没被证明。
+    mockCtx([])
+    const report = reportOf([
+      dateOnlyPos({
+        quote_date: null,
+        quote_time: null,
+        quote_date_basis: null,
+        daily_pnl_period: 'today',
+      }),
+    ])
+    render(<PositionRiskTable report={report} />)
+    const row = screen.getByTestId('position-risk-row-600111')
+    expect(row.dataset.state).toBe('stale')
+    expect(row.textContent).toContain('时点未知')
+    expect(row.textContent).toContain('报价无时间')
+    expect(row.textContent).not.toContain('已破位')
+    expect(row.textContent).not.toContain('最近成交价')
+    expect(row.textContent).not.toContain('日线口径')
+  })
 })

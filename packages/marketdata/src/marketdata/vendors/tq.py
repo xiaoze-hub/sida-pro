@@ -14,7 +14,9 @@ import json
 import logging
 import math
 import os
+import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -289,12 +291,17 @@ def _note_rpc_conn_failure() -> None:
         _TQ_URL_CACHE_TS = 0.0  # 强制下次 _resolve 重探
 
 
-def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool = False):
+def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool = False,
+         tolerate_error_id: bool = False):
     """发 JSON-RPC; 返回 result.Value 或抛异常(Engine 捕获后转下一源)。
 
     full=True → 返回整个 result。给 get_divid_factors 这类**多数组并列**的响应
     用: 它的 Date/Type/Value 是三个平行数组靠下标对齐, 只取 Value 会把除权日期
     整段丢掉(实测网关**有**回 Date, 是这里被丢的)。
+
+    tolerate_error_id=True → 响应级 `ErrorId != 0` 也不抛, 原样交给调用方解析。
+    只给「批量日线取报价日期」这一路用: 批量里某个标的报错时, 网关可能仍带部分
+    `Value`; 直接抛会把**整批**（乃至全局熔断）拖下去。调用方必须自己逐标的判断。
     """
     body = json.dumps({"id": 1, "method": method, "params": params}, ensure_ascii=False).encode("utf-8")
     url = _resolve_tq_url()
@@ -319,7 +326,7 @@ def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool =
     result = data.get("result") or {}
     # 快照类直接平铺在 result 里(ErrorId 字段共存); 列表/K线在 result.Value
     err = str(result.get("ErrorId", "0"))
-    if err not in ("0", "") and "Value" in result or (err not in ("0", "") and "Value" not in result):
+    if err not in ("0", "") and not tolerate_error_id:
         raise RuntimeError(f"TQ {method} ErrorId={err}: {result.get('Error', '')}")
     return result if full else result.get("Value", result)
 
@@ -410,13 +417,14 @@ DATE_BASIS_DAILY_BAR = "daily_bar_close"
 # 交易日，停牌一周的票在窗口里连"最后一个有成交日"都看不到；5 根≈一周，仍是同一次 RPC。
 QUOTE_DATE_WINDOW = 5
 
-# 日线这一路只是「报价日期」的**旁证**，不许把取数延迟翻倍（2026-10-29 复审）。
-# 旧实现沿用 _TIMEOUT_S(4s)：TQ 隧道断开时 fetch 里先等日线 4s、再等快照 4s，
-# **串行两次超时**之后引擎才看得见失败并切源 ⇒ 故障期报价延迟翻倍、切换时机被推迟。
-# 现在：日线单独用一个小超时；失败后开 30s 熔断，熔断期内直接跳过日线（快照照打、
-# 报价照出），跳过次数计入 `daily_circuit_open`（可观测，不静默）。
+# 日线这一路只是「报价日期」的**旁证**，不许把取数延迟翻倍，也**不许**因为它失败就
+# 把同一源的快照（主数据）一起丢掉（2026-10-29 复审第三处）。顺序上快照先取，日线后取；
+# 日线超时/报错只让日期变成明确的 unknown。
+# 熔断只限「日线取日期」这一路：失败后先熔断 30s，连续失败按 30→60→120→240→300s
+# **有界退避**（避免恢复期每 30s 白等一次，也不会无限放大成永久停用）。
 QUOTE_DATE_RPC_TIMEOUT_S = 1.2
 QUOTE_DATE_CIRCUIT_OPEN_S = 30.0
+QUOTE_DATE_CIRCUIT_MAX_S = 300.0
 
 # 判定结果（计数 + 日志；运维据此回答"日期为什么没了"）
 DATE_REASON_TODAY = "proved_today"
@@ -433,44 +441,130 @@ DATE_REASON_VOLUME_CONFLICT = "volume_conflict"
 DEGRADE_RPC_FAILED = "daily_rpc_failed"
 DEGRADE_MISSING_SYMBOL = "daily_missing_symbol"
 DEGRADE_SHORT_WINDOW = "daily_short_window"
+# 单个标的在**批量日线响应里**报了 ErrorId：只丢这只票的日期，不许升级成全局熔断
+# （一个坏标的/坏代码不该让所有用户、所有标的都失去日期证据）。
+DEGRADE_SYMBOL_ERROR = "daily_symbol_error"
+# 响应级 ErrorId 但**带回部分 Value**：能证几只算几只（已经拿到证据，不算整轮失败）。
+DEGRADE_PARTIAL_ERROR = "daily_partial_error"
 # 快照成交量缺失/NaN/负数 ⇒ 没有可靠有效的成交量可交叉校验，不推断日期。
 DEGRADE_VOLUME_UNRELIABLE = "snapshot_volume_unreliable"
 # 日线熔断期内主动跳过（见 QUOTE_DATE_CIRCUIT_OPEN_S）
 DEGRADE_CIRCUIT_OPEN = "daily_circuit_open"
 # 快照 Now<=0（停牌股实测 002827/002717）：不是价格，跳过并计数（见 fetch）。
 DEGRADE_NOW_ZERO = "quote_now_zero"
+# 单只标的快照 RPC 报错（应用层 ErrorId）：只跳过这只票，不许让整批报价/其它用户失败。
+DEGRADE_SNAPSHOT_SYMBOL_ERROR = "quote_symbol_error"
 
-# 日线熔断（进程内；失败后 QUOTE_DATE_CIRCUIT_OPEN_S 秒内不再打日线）
+# 日线熔断（进程内；失败后有界退避，窗口内不再打日线）。跨线程/多用户共享，
+# 所以状态只在**传输层**失败上变更（单标的错误/应用层 ErrorId 只计数，不改全局态）。
+_STATE_LOCK = threading.Lock()
 _DAILY_CIRCUIT_UNTIL: float = 0.0
+_DAILY_CIRCUIT_STREAK = 0
+
+
+def _daily_circuit_window_s() -> float:
+    """本轮熔断窗口：30→60→120→240→300s 封顶（streak 从 1 开始）。"""
+    if _DAILY_CIRCUIT_STREAK <= 0:
+        return QUOTE_DATE_CIRCUIT_OPEN_S
+    factor = 2 ** min(_DAILY_CIRCUIT_STREAK - 1, 8)
+    return min(QUOTE_DATE_CIRCUIT_OPEN_S * factor, QUOTE_DATE_CIRCUIT_MAX_S)
 
 
 def _daily_circuit_open(now: float | None = None) -> bool:
     """日线熔断是否仍在生效（monotonic 基准；测试可传 now）。"""
-    return (time.monotonic() if now is None else now) < _DAILY_CIRCUIT_UNTIL
+    with _STATE_LOCK:
+        return (time.monotonic() if now is None else now) < _DAILY_CIRCUIT_UNTIL
 
 
-def _trip_daily_circuit(now: float | None = None) -> None:
-    """日线失败 → 熔断 QUOTE_DATE_CIRCUIT_OPEN_S 秒（避免每次取数都白等一次超时）。"""
-    global _DAILY_CIRCUIT_UNTIL
-    _DAILY_CIRCUIT_UNTIL = (time.monotonic() if now is None else now) + QUOTE_DATE_CIRCUIT_OPEN_S
+def _trip_daily_circuit(now: float | None = None) -> float:
+    """日线**传输层**失败 → 有界退避熔断；返回本轮窗口秒数。
+
+    只该由 `httpx.TransportError`（超时/连接断）调用：那是唯一"每次都要白等"的失败。
+    单标的 ErrorId、响应级 ErrorId、协议错误都**不跳闸**（只计数），否则一个坏代码
+    会把所有用户、所有标的的日期证据一起停掉。
+    """
+    global _DAILY_CIRCUIT_UNTIL, _DAILY_CIRCUIT_STREAK
+    ts = time.monotonic() if now is None else now
+    with _STATE_LOCK:
+        if ts < _DAILY_CIRCUIT_UNTIL:
+            # 并发请求可能在同一个窗口里先后失败：已开着就不重复升级/重复打日志。
+            return max(0.0, _DAILY_CIRCUIT_UNTIL - ts)
+        _DAILY_CIRCUIT_STREAK += 1
+        window = _daily_circuit_window_s()
+        _DAILY_CIRCUIT_UNTIL = ts + window
+        streak = _DAILY_CIRCUIT_STREAK
+    # 只在**跳闸那一刻**打一条（退避窗口 ≥30s，天然有界）；熔断期内的跳过只计数。
+    logger.warning(
+        "[tq] 报价日期用日线连续失败 %d 次, 熔断 %.0fs(本轮只丢日期, 快照照取)", streak, window,
+    )
+    return window
+
+
+def _note_daily_success() -> None:
+    """日线这一路本轮成功 → 退避归零并关闭熔断（网关恢复后立刻恢复取证）。
+
+    并发场景：A 线程刚跳闸，B 线程（跳闸前已在途）随后成功 ⇒ 这条成功就是"网关可用"
+    的更强证据，窗口不该继续拦着日线。
+    """
+    global _DAILY_CIRCUIT_UNTIL, _DAILY_CIRCUIT_STREAK
+    with _STATE_LOCK:
+        _DAILY_CIRCUIT_STREAK = 0
+        _DAILY_CIRCUIT_UNTIL = 0.0
+
+
+def _daily_circuit_state(now: float | None = None) -> dict:
+    """**当前**熔断状态（与累计计数分开：状态会变，历史计数不清零）。"""
+    ts = time.monotonic() if now is None else now
+    with _STATE_LOCK:
+        remaining = max(0.0, _DAILY_CIRCUIT_UNTIL - ts)
+        streak = _DAILY_CIRCUIT_STREAK
+        window = _daily_circuit_window_s()
+    return {
+        "open": remaining > 0,
+        "remaining_s": round(remaining, 1),
+        "consecutive_failures": streak,
+        "next_window_s": round(window, 1),
+    }
 
 
 def _reset_daily_circuit() -> None:
     """清空熔断（测试用；生产不需要）。"""
-    global _DAILY_CIRCUIT_UNTIL
-    _DAILY_CIRCUIT_UNTIL = 0.0
+    global _DAILY_CIRCUIT_UNTIL, _DAILY_CIRCUIT_STREAK
+    with _STATE_LOCK:
+        _DAILY_CIRCUIT_UNTIL = 0.0
+        _DAILY_CIRCUIT_STREAK = 0
 
 
 _QUOTE_DATE_STATS: dict[str, int] = {}
 
 
 def _bump(reason: str) -> None:
-    _QUOTE_DATE_STATS[reason] = _QUOTE_DATE_STATS.get(reason, 0) + 1
+    with _STATE_LOCK:
+        _QUOTE_DATE_STATS[reason] = _QUOTE_DATE_STATS.get(reason, 0) + 1
 
 
 def quote_date_stats() -> dict[str, int]:
-    """报价日期证据的计数快照（进程内累计；只读副本，供诊断/测试）。"""
-    return dict(_QUOTE_DATE_STATS)
+    """报价日期证据的**累计**计数快照（进程内累计；只读副本，供诊断/测试）。"""
+    with _STATE_LOCK:
+        return dict(_QUOTE_DATE_STATS)
+
+
+def quote_date_diagnostics() -> dict:
+    """诊断快照：`counters`=累计历史事件，`circuit`=当前熔断状态（两者不可混用）。"""
+    with _STATE_LOCK:
+        counters = dict(_QUOTE_DATE_STATS)
+    return {"counters": counters, "circuit": _daily_circuit_state()}
+
+
+@dataclass(frozen=True)
+class _DailyEvidence:
+    """日线旁证的一轮结果 —— 明确区分「有 bar」「这只票本路失败」「整轮无证据」。"""
+
+    bars: dict[str, list[dict]] = field(default_factory=dict)
+    #: 本路对该标的**明确失败**（错误响应/未返回）：日期 unknown，但原因不是「没有 bar」。
+    failed_codes: frozenset[str] = frozenset()
+    #: 整轮没有证据（熔断/传输层/无部分数据的请求级错误）：本轮所有标的日期 unknown。
+    request_failed: bool = False
 
 
 def _reset_quote_date_stats() -> None:
@@ -683,44 +777,41 @@ class TqQuoteVendor(QuoteVendor):
     MAX_SYMBOLS_FOR_TQ = 5
 
     @staticmethod
-    def _daily_bars(codes: list[str]) -> dict[str, list[dict]] | None:
-        """一次批量取日线（period="1d"）→ {TQ代码: [{Date, Close, Volume}, ...]}。
+    def _daily_bars(codes: list[str]) -> _DailyEvidence:
+        """一次批量取日线（period="1d"）→ 报价日期**旁证**（见 `prove_quote_date`）。
 
-        只用于证明"现价属于哪个交易日"（见 `prove_quote_date`）。任何异常都降级成空
-        dict（=没有日期证据），**绝不让报价本身因为这一路失败而消失**。
+        只用于证明"现价属于哪个交易日"。它**不是主数据**：任何失败都只让日期变成明确的
+        unknown，绝不让同一源的快照/报价消失（`fetch` 已先取快照，本函数在其后调用）。
 
-        例外：**传输层失败**（网关不可达/超时）返回 None —— 同一 host:port 的快照这轮
-        必然也连不上，调用方据此跳过快照、立刻交给引擎换源，而不是再串行等第二次超时。
+        返回 `_DailyEvidence`，把三种"没有日期"分开，避免观测上混为一谈：
+          - `request_failed=True`：熔断期内 / 传输层失败 / 无部分数据的请求级 ErrorId
+            —— 本轮**整条**日线路没有证据（原因已计数：daily_circuit_open / daily_rpc_failed）；
+          - `failed_codes` 含 code：该标的在批量响应里报错/未返回 —— 只丢它的日期
+            （`daily_symbol_error` / `daily_missing_symbol`），Open 熔断的边界到此为止；
+          - 其余没有条目的标的：响应正常但这只票没 bar ⇒ 调用方按 `no_bars` 如实降级。
 
         参数口径（2026-10-29 复审按客户端契约修正，`docs/research/tdx_local_contract/
         contract.json` + `tqcenter.get_market_data`）：
         - `dividend_type="none"`：**不复权**。现价是原始成交价，历史收盘价也必须原始；
-          前复权('front')/后复权('back')会把历史价按除权因子改写，除权日附近可能与现价
-          数值相等 ⇒ 把另一个价位的历史价配给今天的现价。客户端默认 None→'none' 已经是
-          不复权，但这里**显式写死**（默认值可能变，而 K 线 vendor 用的是 front，别串）。
-        - `fill_data=False`：**不许填充**。客户端签名里 `fill_data` 默认 True
-          （`contract.json` defaults），按"补齐缺失交易日"的语义，同批别的票有今天时，
-          停牌票就可能多出一根"今天有量"的假 bar，骗过"今日有量且收盘价==现价"这条判定。
-          ⚠️ 仓库契约文档只登记了默认值、**没写填充实现**，本机也没有可达网关可实测 ⇒
-          这里显式关掉，但**不靠它兜底**：即使网关静默忽略这个参数，下面的快照成交量
-          交叉校验也会把"bar 有量而快照无量"判成证据冲突。
-        - `count=QUOTE_DATE_WINDOW`：最近 N 根。冷缓存下客户端只回最新 1 根，此时窗口
-          不足 → 如实降级（None + `daily_short_window` 计数），不猜。
-        - `timeout=QUOTE_DATE_RPC_TIMEOUT_S`：日线是**旁证**，不许把取数延迟翻倍 ——
-          旧实现沿用 4s，隧道断开时 fetch 里"日线 4s + 快照 4s"串行两次超时，引擎才
-          看得见失败去切源；失败后还会再开 `QUOTE_DATE_CIRCUIT_OPEN_S` 熔断，熔断期内
-          **不再打日线**（计数 `daily_circuit_open`，快照照打、报价照出）。
-        实测：period 只认 `"1d"`（传 `"daily"/"1min"` 一律 `ErrorId=5 period error`）；
-        count=3 时直连网关一次批量 4 只 ≈31ms（本处取 5 根，仍是同一次 RPC，未单独计时）。
-        失败/超时一律当"没有日期证据"（并计入 `quote_date_stats()`，见 source_health 面板）。
+          前复权/后复权会按除权因子改写历史价，除权日附近可能与现价数值相等
+          ⇒ 把另一个价位的历史价配给今天的现价。客户端默认已是 none，但这里显式写死
+          （K 线 vendor 用的是 front，别串）。
+        - `fill_data=False`：**不许填充**（客户端默认 True）。停牌票被补齐出"今天有量"的
+          假 bar 会骗过"今日有量且收盘价==现价"；契约只登记了默认值、没写填充实现、本机
+          也没有可达网关可实测 ⇒ 显式关掉，且**不靠它兜底**（还有快照成交量交叉校验）。
+        - `count=QUOTE_DATE_WINDOW`：最近 N 根（冷缓存只回 1 根时如实降级，不猜）。
+        - `timeout=QUOTE_DATE_RPC_TIMEOUT_S`：日线是旁证，不许把取数延迟翻倍。
+        实测：period 只认 `"1d"`（`"daily"/"1min"` ⇒ `ErrorId=5 period error`）；
+        count=3 时直连网关一次批量 4 只 ≈31ms（此处 5 根仍是同一次 RPC）。
         """
         if not codes:
-            return {}
+            return _DailyEvidence()
         if _daily_circuit_open():
+            # 熔断是**当前状态**，不是"这只票没有 bar"：只记 daily_circuit_open。
             _bump(DEGRADE_CIRCUIT_OPEN)
-            return {}
+            return _DailyEvidence(request_failed=True)
         try:
-            v = _rpc(
+            payload = _rpc(
                 "get_market_data",
                 {
                     "stock_list": codes,
@@ -731,23 +822,48 @@ class TqQuoteVendor(QuoteVendor):
                     "fill_data": False,
                 },
                 timeout=QUOTE_DATE_RPC_TIMEOUT_S,
+                # 批量里某只票报错时网关可能仍带部分 Value；不让它把整批/全局熔断拖下去。
+                full=True,
+                tolerate_error_id=True,
             )
         except Exception as e:  # noqa: BLE001
             _bump(DEGRADE_RPC_FAILED)
-            _trip_daily_circuit()
+            # 只有**传输层**失败（超时/连接断）才跳闸：它会让我们每次都白等一个超时，
+            # 所以值得停 30s。应用层错误（如 ErrorId/协议报错）耗时只有一次廉价 RPC，
+            # 且可能只是批量里某个标的的问题 —— 绝不许拿它开**全局**熔断，把别的标的、
+            # 别的用户一起停掉日期证据（2026-10-29 第三处复审）。
+            if isinstance(e, httpx.TransportError):
+                _trip_daily_circuit()
             logger.debug("TQ 日线取数失败(报价日期不证自明即可): %s", e)
-            # 传输层失败 = 网关这一轮根本不通：同 host:port 的快照必然同样失败，
-            # 返回 None 让调用方**跳过**那次 4s 超时，直接交给引擎切源。
-            return None if isinstance(e, httpx.TransportError) else {}
-        if not isinstance(v, dict) or not v:
+            return _DailyEvidence(request_failed=True)
+        if not isinstance(payload, dict) or not payload:
+            # 拿到了响应但没有可用内容：计数可观测，但**不跳闸**（不是慢/不可达，
+            # 也没有证据说"全链失败"；让下一次继续尝试，代价只有一次廉价 RPC）。
             _bump(DEGRADE_RPC_FAILED)
-            return {}
-        out: dict[str, list[dict]] = {}
+            return _DailyEvidence(request_failed=True)
+
+        request_err = str(payload.get("ErrorId", "0")).strip()
+        container = payload.get("Value")
+        if not isinstance(container, dict):
+            # 兼容平铺响应（无 Value 时字段直接在 result 上）；有 Value 但不是 dict ⇒ 空。
+            container = {} if "Value" in payload else payload
+
+        bars_out: dict[str, list[dict]] = {}
+        failed: set[str] = set()
         # 只认**自己请求的**代码：响应里混进别的标的时宁可丢日期，也不许跨标的错配。
         for code in codes:
-            bars = v.get(code)
+            bars = container.get(code)
             if not isinstance(bars, dict):
                 _bump(DEGRADE_MISSING_SYMBOL)
+                failed.add(code)
+                continue
+            per_symbol_err = str(bars.get("ErrorId", "0")).strip()
+            if per_symbol_err not in ("0", ""):
+                # 单标的错误：只丢这只票的日期，绝不开全局熔断（跨用户/跨标的隔离）。
+                _bump(DEGRADE_SYMBOL_ERROR)
+                logger.debug("[tq] 日线单标的错误 %s ErrorId=%s: %s",
+                             code, per_symbol_err, bars.get("Error", ""))
+                failed.add(code)
                 continue
             dates = bars.get("Date") or []
             closes = bars.get("Close") or []
@@ -757,13 +873,29 @@ class TqQuoteVendor(QuoteVendor):
                 for d, c, w in zip(dates, closes, vols)
             ]
             if not rows:
+                # 响应正常、但这只票确实没有 bar：这是"没有 bar"，交给 prove 计数。
                 _bump(DEGRADE_MISSING_SYMBOL)
                 continue
             if len(rows) < QUOTE_DATE_WINDOW:
-                # 冷缓存只回 1 根 / 该票历史本来就短：窗口不完整，历史那半边不许当证据。
                 _bump(DEGRADE_SHORT_WINDOW)
-            out[code] = rows
-        return out
+            bars_out[code] = rows
+
+        if request_err not in ("0", ""):
+            if not bars_out:
+                # 响应级错误且没有任何可用的部分数据 ⇒ 这一路整轮无证据。**不跳闸**：
+                # ErrorId 可能只是批量里某个标的的问题（网关把整批判错），拿它做全局
+                # 熔断会把别的标的/别的用户的日期证据一起停掉；下一次继续尝试，代价只是
+                # 一次廉价 RPC，而且 daily_rpc_failed 计数保证它可见。
+                _bump(DEGRADE_RPC_FAILED)
+                logger.debug("[tq] 日线请求级错误 ErrorId=%s: %s",
+                             request_err, payload.get("Error", ""))
+                return _DailyEvidence(request_failed=True)
+            # 有部分证据：能证几只算几只，不算整轮失败、不跳闸。
+            _bump(DEGRADE_PARTIAL_ERROR)
+        else:
+            # 请求成功（哪怕个别标的报错）⇒ 退避归零，恢复期不再残留惩罚。
+            _note_daily_success()
+        return _DailyEvidence(bars=bars_out, failed_codes=frozenset(failed))
 
     def fetch(self, symbols: list[Symbol], config: dict) -> list[Quote]:
         out: list[Quote] = []
@@ -772,19 +904,32 @@ class TqQuoteVendor(QuoteVendor):
         pairs = [(sym, tqc) for sym in symbols if (tqc := to_tq_code(sym))]
         if not pairs:
             return out
-        # 一次批量日线 RPC（直连网关实测中位 30.9ms / 4 只，1d×(QUOTE_DATE_WINDOW) 根）
-        # 只为**证明报价日期**：TQ 快照没有报时字段，把现价与同标的日线收盘价逐分相等
-        # 才能说到"哪一天"（不复权、不填充，见 _daily_bars）。失败/超时一律当
-        # "没有日期证据"（None），绝不阻塞报价本身。
-        daily = self._daily_bars([tqc for _, tqc in pairs])
-        if daily is None:
-            # 日线传输层失败 ⇒ 网关这轮不通：不再串行等快照的 4s 超时（否则引擎要等
-            # 两次超时才切源）。返回空 = 这一源本次没有行情，由引擎立刻降级下一源。
-            return out
-        # 本机日期只用来定位"今天的 bar"，**不进入任何输出**（没有证据就输出 None）。
-        today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+        # ── ① 快照是**主数据**：先逐票取，日线只做日期旁证（2026-10-29 复审第三处）──
+        # 旧顺序是"日线失败 ⇒ return []"：一次 1.2s 的日线 ReadTimeout 就把同源仍可用的
+        # 快照一起丢掉 ⇒ 引擎切腾讯、TQ 被记 empty 失败；30s 熔断到期后 TQ 又回来（只是
+        # 没有日期）⇒ 源反复抖动。现在主数据不依赖旁证，旁证失败只让日期 unknown。
+        pending: list[tuple[Symbol, str, float, dict]] = []
         for sym, tqc in pairs:
-            v = _rpc("get_market_snapshot", {"stock_code": tqc})
+            try:
+                v = _rpc("get_market_snapshot", {"stock_code": tqc})
+            except (httpx.TransportError, TqUnavailable) as e:
+                # 网关确证不可达：已经拿到的报价先留下（部分批次契约），一张都没有才抛给
+                # 引擎换源（此时才是真正的"全链失败"）。
+                if pending:
+                    from marketdata.log_throttle import log_failure
+
+                    log_failure(
+                        logger, "tq:quote-partial",
+                        f"[tq] 快照中途不可达({type(e).__name__}), 本批保留已取到的 "
+                        f"{len(pending)}/{len(pairs)} 只，其余交由下游按无行情处理",
+                    )
+                    break
+                raise
+            except Exception as e:  # noqa: BLE001
+                # 单标的应用层错误（如 ErrorId）：只跳过这只票，不许让整批/其它用户失败。
+                _bump(DEGRADE_SNAPSHOT_SYMBOL_ERROR)
+                logger.debug("[tq] 快照单标的失败 %s: %s", tqc, e)
+                continue
             if not isinstance(v, dict) or not v:
                 continue
             now = _to_float(v.get("Now"))
@@ -797,12 +942,30 @@ class TqQuoteVendor(QuoteVendor):
             if now is None or now <= 0:
                 _bump(DEGRADE_NOW_ZERO)
                 continue
-            # 成交量交叉校验：快照 `Volume`=**手**、日线 `Volume`=**股**，单位不同 ⇒ 只比
-            # 零/正（`_vol_kind`），绝不比数值。两边对"今天有没有成交"说法不一致就判
-            # 证据冲突（不推断日期），见 prove_quote_date。
-            _proved_date, _proved_basis = prove_quote_date(
-                daily.get(tqc) or [], now, today, snapshot_volume=v.get("Volume"),
-            )
+            pending.append((sym, tqc, now, v))
+        if not pending:
+            # 一只价格都没有 ⇒ 这一源本轮无行情，交给引擎下一源（不是日线的锅）。
+            return out
+
+        # ── ② 日线只为**证明报价日期**（旁证；失败/熔断只丢日期）──
+        # 一次批量 RPC（直连网关实测中位 30.9ms / 4 只，1d×(QUOTE_DATE_WINDOW) 根）。
+        evidence = self._daily_bars([tqc for _, tqc, _, _ in pending])
+        # 本机日期只用来定位"今天的 bar"，**不进入任何输出**（没有证据就输出 None）。
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+
+        for sym, tqc, now, v in pending:
+            if evidence.request_failed or tqc in evidence.failed_codes:
+                # 整轮无证据 / 该标的这一路失败：日期明确 unknown（原因已在 _daily_bars
+                # 计数）。**不**调用 prove_quote_date —— 那会把"取数失败/熔断"记成
+                # "这只票没有 bar"，把两种完全不同的运维事实混成一个数。
+                _proved_date, _proved_basis = None, ""
+            else:
+                # 成交量交叉校验：快照 `Volume`=**手**、日线 `Volume`=**股**，单位不同 ⇒
+                # 只比零/正（`_vol_kind`），绝不比数值。两边对"今天有没有成交"说法不一致
+                # 就判证据冲突（不推断日期），见 prove_quote_date。
+                _proved_date, _proved_basis = prove_quote_date(
+                    evidence.bars.get(tqc) or [], now, today, snapshot_volume=v.get("Volume"),
+                )
             last_close = _to_float(v.get("LastClose")) or 0.0
             change_amount = round(now - last_close, 4) if last_close else None
             change_pct = round((now - last_close) / last_close * 100, 4) if last_close else None

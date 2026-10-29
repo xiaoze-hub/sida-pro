@@ -485,11 +485,13 @@ def test_daily_volume_from_another_symbol_is_not_used(monkeypatch):
     assert tqmod.quote_date_stats().get(tqmod.DEGRADE_MISSING_SYMBOL) == 1
 
 
-def test_daily_transport_failure_skips_snapshot_so_engine_fails_over_fast(monkeypatch):
-    """日线传输层失败 = 网关这轮不通 ⇒ **不再串行等快照超时**，立刻交引擎切源。
+def test_daily_transport_failure_never_skips_snapshot(monkeypatch):
+    """日线传输层失败 ≠ 网关这轮不通：快照是**主数据**，必须先取、且不许被日线失败带走。
 
-    旧实现里日线(4s) 与快照(4s) 串行：引擎要等 8s 才看得见"这一源没数"，切换被推迟、
-    故障期报价延迟翻倍。现在日线用小超时；传输层失败直接返回空，快照一次都不打。
+    旧实现先打日线、日线 `httpx.TransportError` 就 `return []`，把「一次日线超时」当成
+    「网关全链不可用」⇒ 引擎切腾讯，并把 TQ 记成 empty 失败。实测 1.2s 的日线小超时在
+    隧道抖动/客户端冷缓存下会单次触发，而同一 host:port 的快照仍然可用。
+    现在顺序反过来：快照先取（主数据），日线只为**旁证日期**；日线失败只丢日期。
     """
     import httpx
 
@@ -499,23 +501,29 @@ def test_daily_transport_failure_skips_snapshot_so_engine_fails_over_fast(monkey
         seen.append({"method": method, "timeout": timeout})
         if method == "get_market_data":
             raise httpx.ConnectTimeout("tunnel down")
-        return dict(_SNAP)
+        if method == "get_market_snapshot":
+            return dict(_SNAP)
+        return {}
 
     monkeypatch.setattr(tqmod, "_rpc", _rpc)
-    assert tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {}) == []
+    quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})
+    assert len(quotes) == 1, "日线失败不许把同一源的主行情一起丢掉"
+    assert quotes[0].current_price == 1354.00
+    assert quotes[0].quote_date is None and quotes[0].quote_date_basis == ""
+    assert "get_market_snapshot" in [c["method"] for c in seen]
     daily = [c for c in seen if c["method"] == "get_market_data"]
     assert daily and daily[0]["timeout"] == tqmod.QUOTE_DATE_RPC_TIMEOUT_S
     assert tqmod.QUOTE_DATE_RPC_TIMEOUT_S < tqmod._TIMEOUT_S
-    assert "get_market_snapshot" not in [c["method"] for c in seen], "网关不通就别再等第二次超时"
     assert tqmod.quote_date_stats().get(tqmod.DEGRADE_RPC_FAILED) == 1
     assert tqmod._daily_circuit_open() is True
 
 
-def test_daily_app_error_keeps_quote_and_circuit_skips_daily_next_time(monkeypatch):
-    """日线**应用层**报错（如 ErrorId）时快照可能仍然可用 ⇒ 报价照出，只是没有日期。
+def test_daily_app_error_keeps_quote_and_never_trips_global_circuit(monkeypatch):
+    """日线**应用层**报错（如 ErrorId/协议错误）不许开全局熔断：代价只有一次廉价 RPC。
 
-    失败后开熔断：窗口内不再打日线（省掉一次串行超时），跳过次数计入
-    `daily_circuit_open` —— 可观测，不静默。
+    全局熔断的唯一理由是"每次都要白等一个超时"（传输层失败）。ErrorId 可能只是批量里
+    某个标的的问题，甚至下一轮就消失；拿它停掉 30s 的日期证据会扩大到所有标的/所有用户
+    （用户报告的「任何某标的 ErrorId 都触发全局熔断，然后 TQ 回来又没日期」的抖动）。
     """
     seen: list[dict] = []
 
@@ -527,21 +535,22 @@ def test_daily_app_error_keeps_quote_and_circuit_skips_daily_next_time(monkeypat
             return dict(_SNAP)
         return {}
 
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
     monkeypatch.setattr(tqmod, "_rpc", _rpc)
     quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})
     assert len(quotes) == 1 and quotes[0].quote_date is None
     assert quotes[0].quote_date_basis == ""
     assert "get_market_snapshot" in [c["method"] for c in seen]
     assert tqmod.quote_date_stats().get(tqmod.DEGRADE_RPC_FAILED) == 1
-    assert tqmod._daily_circuit_open() is True
+    assert tqmod._daily_circuit_open() is False, "应用层报错不许开全局熔断"
+    assert tqmod.quote_date_stats().get(tqmod.DATE_REASON_NO_BARS) is None
 
-    # 熔断期内：日线不再被调用，快照照打、报价照出。
+    # 下一轮仍会重新尝试日线（没有 30s 空白窗）：报价照出，日期照旧 unknown。
     seen.clear()
     quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})
     assert len(quotes) == 1 and quotes[0].current_price == 1354.00
-    assert seen[0]["method"] == "get_market_snapshot"
-    assert "get_market_data" not in [c["method"] for c in seen], "熔断期内不许再打日线"
-    assert tqmod.quote_date_stats().get(tqmod.DEGRADE_CIRCUIT_OPEN) == 1
+    assert "get_market_data" in [c["method"] for c in seen]
 
 
 def test_daily_circuit_window_expires():
@@ -552,3 +561,321 @@ def test_daily_circuit_window_expires():
     assert tqmod._daily_circuit_open(now=100.0 + tqmod.QUOTE_DATE_CIRCUIT_OPEN_S) is False
     tqmod._reset_daily_circuit()
     assert tqmod._daily_circuit_open(now=100.0) is False
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 独立复审（第三处）：日线只是**旁证**，不许让它把主行情带走
+#
+# 复现（用户报告）：单次日线 ReadTimeout(1.2s) ⇒ `_daily_bars` 返回 None ⇒ fetch
+# 直接返回空 ⇒ 引擎切腾讯，并把 TQ 记成 empty 失败；30s 模块级熔断到期后 TQ 又
+# 回来了（只是 date unknown）⇒ 源在腾讯/TQ 之间反复抖动。
+#
+# 新口径：
+#   ① 快照是主数据，**先取**；日线只为日期旁证，失败/超时/熔断只丢日期（明确 unknown）；
+#   ② 只有快照这一路**整批**都拿不到（传输层失败 / 全部应用错误）才交引擎切源；
+#   ③ 单标的 ErrorId 只丢该标的日期，不许开全局熔断，也不许扩大成"全部行情不可用"；
+#   ④ 熔断只由**请求级**失败（传输层 / 无部分数据的 ErrorId）触发，有界退避；
+#   ⑤ 观测区分「当前熔断状态」与「累计计数」，熔断跳过不许记成 no_bars。
+# ---------------------------------------------------------------------------
+
+def test_daily_read_timeout_keeps_snapshot_and_numeric_fields(monkeypatch):
+    """单次日线 ReadTimeout：报价照出、数值字段不受影响、日期明确 unknown。"""
+    import httpx
+
+    seen: list[dict] = []
+
+    def _rpc(method, params, timeout=None, **kw):
+        seen.append({"method": method, "timeout": timeout})
+        if method == "get_market_data":
+            raise httpx.ReadTimeout("daily cold cache slow")
+        if method == "get_market_snapshot":
+            return dict(_SNAP)
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})
+    assert len(quotes) == 1
+    q = quotes[0]
+    assert q.current_price == 1354.00
+    assert q.prev_close == 1330.75
+    assert q.change_pct == pytest.approx(round((1354.00 - 1330.75) / 1330.75 * 100, 4))
+    assert q.volume == 42992, "快照成交量是手，不许被日期这条路的失败改写"
+    assert q.quote_date is None and q.quote_date_basis == ""
+    assert "get_market_snapshot" in [c["method"] for c in seen]
+    stats = tqmod.quote_date_stats()
+    assert stats.get(tqmod.DEGRADE_RPC_FAILED) == 1
+    assert stats.get(tqmod.DATE_REASON_NO_BARS) is None, "取数失败不是「这只票没有 bar」"
+
+
+def test_circuit_open_skips_daily_but_keeps_quote_and_never_counts_no_bars(monkeypatch):
+    """熔断期内：日线一次都不打，快照照打、报价照出；跳过只记 `daily_circuit_open`。"""
+    seen: list[str] = []
+
+    def _rpc(method, params, timeout=None, **kw):
+        seen.append(method)
+        if method == "get_market_snapshot":
+            return dict(_SNAP)
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    tqmod._trip_daily_circuit()          # 真实 monotonic 基准，fetch 内也是 None
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})
+    assert len(quotes) == 1 and quotes[0].current_price == 1354.00
+    assert quotes[0].quote_date is None
+    assert "get_market_data" not in seen, "熔断期内不许再打日线"
+    stats = tqmod.quote_date_stats()
+    assert stats.get(tqmod.DEGRADE_CIRCUIT_OPEN) == 1
+    assert stats.get(tqmod.DATE_REASON_NO_BARS) is None, "熔断跳过 ≠ 没有 bar"
+
+
+def test_one_symbol_daily_error_does_not_trip_global_circuit(monkeypatch):
+    """某标的日线 ErrorId 只丢它自己的日期：别的标的照证、熔断不打开、下个用户不受影响。"""
+    today = _today()
+    good = {"Date": ["20261028", today], "Close": ["1330.75", "1354.00"],
+            "Volume": ["3880493", "4299231"]}
+
+    def _rpc(method, params, timeout=None, **kw):
+        if method == "get_market_snapshot":
+            return dict(_SNAP)
+        if method == "get_market_data":
+            assert params["stock_list"] == ["600519.SH", "000001.SZ"]
+            return {
+                "600519.SH": good,
+                "000001.SZ": {"ErrorId": "5", "Error": "bad code"},
+            }
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    quotes = tqmod.TqQuoteVendor().fetch(
+        [Symbol.parse("600519", "CN"), Symbol.parse("000001", "CN")], {}
+    )
+    by_symbol = {q.symbol: q for q in quotes}
+    assert by_symbol["600519"].quote_date == _iso(today)
+    assert by_symbol["000001"].quote_date is None
+    assert tqmod._daily_circuit_open() is False, "单标的错误不许开全局熔断"
+    stats = tqmod.quote_date_stats()
+    assert stats.get(tqmod.DEGRADE_SYMBOL_ERROR) == 1
+    assert stats.get(tqmod.DATE_REASON_NO_BARS) is None, "该标的日线报错不是「没有 bar」"
+    assert stats.get(tqmod.DATE_REASON_TODAY) == 1
+
+    # 另一个用户（下一批）仍能正常取证 —— 上一批的坏标的没有污染共享状态。
+    monkeypatch.setattr(tqmod, "_rpc", lambda method, params, timeout=None, **kw: (
+        dict(_SNAP) if method == "get_market_snapshot"
+        else {"600519.SH": good} if method == "get_market_data" else {}
+    ))
+    q2 = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})[0]
+    assert q2.quote_date == _iso(today)
+
+
+def test_request_error_with_partial_value_keeps_good_symbols_and_no_circuit(monkeypatch):
+    """响应级 ErrorId 但带部分 Value：能用几只算几只，不开熔断（有证据就不算整轮失败）。"""
+    today = _today()
+    good = {"Date": [today], "Close": ["1354.00"], "Volume": ["4299231"]}
+
+    def _rpc(method, params, timeout=None, **kw):
+        if method == "get_market_snapshot":
+            return dict(_SNAP)
+        if method == "get_market_data":
+            return {"ErrorId": "5", "Error": "one symbol failed", "Value": {"600519.SH": good}}
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    q = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})[0]
+    assert q.quote_date == _iso(today)
+    assert tqmod._daily_circuit_open() is False
+    stats = tqmod.quote_date_stats()
+    assert stats.get(tqmod.DEGRADE_PARTIAL_ERROR) == 1
+    assert stats.get(tqmod.DEGRADE_RPC_FAILED) is None
+
+
+def test_request_error_without_value_keeps_quote_and_does_not_trip_circuit(monkeypatch):
+    """响应级 ErrorId 且没有可用 Value ⇒ 本轮日期 unknown；报价照出、**不跳闸**。
+
+    网关可能因为批量里一个坏标的把整批标成 ErrorId：这不能证明"日线这一路不可用"，
+    更不该让下一个用户的日期证据也停 30s。可见性靠 `daily_rpc_failed` 累计计数。
+    """
+    def _rpc(method, params, timeout=None, **kw):
+        if method == "get_market_snapshot":
+            return dict(_SNAP)
+        if method == "get_market_data":
+            return {"ErrorId": "5", "Error": "period error"}
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("600519", "CN")], {})
+    assert len(quotes) == 1 and quotes[0].quote_date is None
+    assert tqmod._daily_circuit_open() is False
+    stats = tqmod.quote_date_stats()
+    assert stats.get(tqmod.DEGRADE_RPC_FAILED) == 1
+    assert stats.get(tqmod.DATE_REASON_NO_BARS) is None
+
+
+def test_daily_circuit_backoff_doubles_and_is_bounded():
+    """连续失败退避有界（30→60→120→240→300 封顶）：既不每次都白等，也不无限放大。"""
+    tqmod._reset_daily_circuit()
+    windows: list[int] = []
+    now = 100.0
+    for _ in range(8):
+        tqmod._trip_daily_circuit(now=now)
+        state = tqmod._daily_circuit_state(now=now)
+        windows.append(int(state["remaining_s"]))
+        now += state["remaining_s"]
+    assert windows[:4] == [30, 60, 120, 240]
+    assert max(windows) == int(tqmod.QUOTE_DATE_CIRCUIT_MAX_S) == 300
+    assert tqmod._daily_circuit_state(now=now)["open"] is False
+
+
+def test_trip_while_already_open_does_not_escalate():
+    """熔断已开时并发失败不重复升级窗口（多用户同时打，也不会把退避瞬间推到上限）。"""
+    tqmod._reset_daily_circuit()
+    tqmod._trip_daily_circuit(now=100.0)
+    assert tqmod._daily_circuit_state(now=100.0)["consecutive_failures"] == 1
+    remaining = tqmod._trip_daily_circuit(now=110.0)
+    assert remaining == pytest.approx(20.0)
+    state = tqmod._daily_circuit_state(now=110.0)
+    assert state["consecutive_failures"] == 1
+    assert state["remaining_s"] == pytest.approx(20.0)
+
+
+def test_daily_success_closes_circuit_and_resets_backoff():
+    """日线恢复成功 ⇒ 当前熔断立即关闭、退避归零（不残留 30s 空白窗）。"""
+    tqmod._reset_daily_circuit()
+    tqmod._trip_daily_circuit()
+    assert tqmod._daily_circuit_state()["open"] is True
+    tqmod._note_daily_success()
+    state = tqmod._daily_circuit_state()
+    assert state["open"] is False and state["consecutive_failures"] == 0
+
+
+def test_diagnostics_separate_current_circuit_from_cumulative_counters():
+    """当前熔断是**状态**（会关），计数是**历史**（不清零）—— 面板不许把两者混成一个数。"""
+    today = _today()
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+    tqmod.prove_quote_date([_bar("20261028", "10.00", "100")], 10.0, today, snapshot_volume="0")
+    tqmod._trip_daily_circuit()
+    diag = tqmod.quote_date_diagnostics()
+    assert diag["counters"].get(tqmod.DATE_REASON_NO_TODAY_BAR) == 1
+    assert diag["circuit"]["open"] is True
+    assert diag["circuit"]["remaining_s"] > 0
+    assert diag["circuit"]["consecutive_failures"] == 1
+    tqmod._reset_daily_circuit()
+    diag2 = tqmod.quote_date_diagnostics()
+    assert diag2["circuit"]["open"] is False
+    assert diag2["circuit"]["remaining_s"] == 0
+    assert diag2["counters"].get(tqmod.DATE_REASON_NO_TODAY_BAR) == 1, "历史计数不因熔断结束而消失"
+
+
+def test_tq_never_quotes_non_cn_symbol_with_same_code(monkeypatch):
+    """市场同号：CN 000001 与 US 000001 只允许 CN 那只走 TQ，代码相同也不许串。"""
+    seen_codes: list[str] = []
+
+    def _rpc(method, params, timeout=None, **kw):
+        if method == "get_market_snapshot":
+            seen_codes.append(params["stock_code"])
+            return dict(_SNAP)
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    quotes = tqmod.TqQuoteVendor().fetch(
+        [Symbol.parse("000001", "CN"), Symbol.parse("000001", "US")], {}
+    )
+    assert [q.symbol for q in quotes] == ["000001"]
+    assert {q.market for q in quotes} == {"CN"}
+    assert seen_codes == ["000001.SZ"], "非 CN 同号标的连快照都不许打"
+
+    seen_codes.clear()
+    assert tqmod.TqQuoteVendor().fetch([Symbol.parse("000001", "US")], {}) == []
+    assert seen_codes == []
+
+
+# ---------------------------------------------------------------------------
+# 源优先级 / 超时 / 熔断（引擎级）：TQ 先说，只有网关**确证**不可用才轮到腾讯
+# ---------------------------------------------------------------------------
+
+class _FakeVendor:
+    name = "tencent"
+    supports_markets = {"CN"}
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch(self, symbols, config):
+        self.calls += 1
+        return [{"symbol": s.code, "vendor": self.name} for s in symbols]
+
+
+def _engine_for_priority(monkeypatch, rpc):
+    from marketdata.cache import TTLCache
+    from marketdata.defaults import InMemoryMetricsSink, StaticConfigProvider
+    from marketdata.engine import Engine
+    from marketdata.ports import SourceConfig
+
+    monkeypatch.setattr(tqmod, "_rpc", rpc)
+    tencent = _FakeVendor()
+    metrics = InMemoryMetricsSink()
+    engine = Engine(
+        datatype="quote",
+        vendors={"tq": tqmod.TqQuoteVendor(), "tencent": tencent},
+        config=StaticConfigProvider({"quote": [
+            SourceConfig(vendor="tencent", priority=2),   # 故意乱序，验证按 priority 排
+            SourceConfig(vendor="tq", priority=1),
+        ]}),
+        metrics=metrics,
+        cache=TTLCache(5.0),
+        default_ttl=5.0,
+    )
+    return engine, tencent, metrics
+
+
+def test_engine_keeps_tq_priority_when_only_daily_times_out(monkeypatch):
+    """日线超时但快照可用 ⇒ 引擎必须仍用 TQ（有价、无日期），不许切腾讯、不许记失败。"""
+    import httpx
+    from marketdata.types import Request
+
+    def _rpc(method, params, timeout=None, **kw):
+        if method == "get_market_data":
+            raise httpx.ReadTimeout("daily slow")
+        if method == "get_market_snapshot":
+            return dict(_SNAP)
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+    engine, tencent, metrics = _engine_for_priority(monkeypatch, _rpc)
+    r = engine.fetch(Request(symbols=("600519",), market="CN"))
+    assert r.ok and r.vendor == "tq", "TQ 有快照就必须优先用 TQ"
+    assert len(r.data) == 1
+    assert tencent.calls == 0, "单次日线慢不能当成 TQ 不可用"
+    snap = metrics.snapshot()
+    assert snap["tq"]["success_rate"] == 1.0, "TQ 这一路取数成功，不许记成失败（污染指标）"
+    assert tencent.name not in snap
+
+
+def test_engine_fails_over_only_when_snapshot_chain_is_down(monkeypatch):
+    """快照传输层失败 = 网关确证不可用 ⇒ 才切腾讯，并如实记 TQ 一次失败。"""
+    import httpx
+    from marketdata.types import Request
+
+    def _rpc(method, params, timeout=None, **kw):
+        if method == "get_market_snapshot":
+            raise httpx.ConnectTimeout("tunnel down")
+        return {}
+
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+    engine, tencent, metrics = _engine_for_priority(monkeypatch, _rpc)
+    r = engine.fetch(Request(symbols=("600519",), market="CN"))
+    assert r.ok and r.vendor == "tencent"
+    assert tencent.calls == 1
+    assert metrics.snapshot()["tq"]["success_rate"] == 0.0

@@ -647,6 +647,37 @@ describe('resolveDefenseState · 源只到日（TQ 日线口径，date_only）',
     expect(r.reason).toBe('no_time')
   })
 
+  it('日线旁证失败（超时/熔断，date/time 都为空）→ 交易中仍是 unknown，不判破位', () => {
+    // 2026-10-29 第三处复审：TQ 快照可用、但日线取日期失败时，后端给的是
+    // quote_date=null + quote_time=null（明确 unknown，不伪造日期）。
+    // 前端必须保留这个"告警缺口"：不许因为 period 还是 today 就判破位，也不许
+    // 退回"最近成交价"的口径 —— 那份价的日期根本没证成。
+    const trading = { localTime: '14:03', localDate: '2026-10-29', status: 'trading' }
+    const r = resolveDefenseState({
+      price: 33,
+      defense: 34,
+      period: 'today',
+      quoteDate: null,
+      quoteTime: null,
+      market: trading,
+    })
+    expect(r.state).toBe('stale')
+    expect(r.freshness).toBe('unknown')
+    expect(r.reason).toBe('no_time')
+
+    // 收盘后也一样：没有日期证据就不能声称"这是今天的最近成交价"。
+    const closed = resolveDefenseState({
+      price: 33,
+      defense: 34,
+      period: 'today',
+      quoteDate: null,
+      quoteTime: null,
+      market: { localTime: '19:40', localDate: '2026-10-29', status: 'closed' },
+    })
+    expect(closed.state).toBe('stale')
+    expect(closed.reason).toBe('no_time')
+  })
+
   it('腾讯 parts[30] 是"源快照刷新时间"：语义原样带到行上，不改时效判定', () => {
     const row = report(
       [pos({ quote_time: '2026-10-29 16:14:57', quote_time_kind: 'snapshot_refresh' })],

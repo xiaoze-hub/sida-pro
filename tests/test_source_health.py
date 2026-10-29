@@ -502,3 +502,39 @@ def test_tq_moreinfo_detail_carries_quote_date_evidence_counts(monkeypatch):
     detail = sh.check_source("tq_moreinfo", use_cache=False)["detail"]
     assert "snapshot_volume_unreliable=1" in detail
     tqmod._reset_quote_date_stats()  # 不留计数给后面的用例
+
+
+def test_tq_moreinfo_detail_separates_current_circuit_from_cumulative_counts(monkeypatch):
+    """当前熔断（状态）与累计计数（历史）必须分开上屏（2026-10-29 第三处复审）。
+
+    旧面板只把 `daily_circuit_open=N` 当累计数：运维看不出**此刻**是否仍在熔断，也看不出
+    熔断是否已恢复；反过来，熔断期内跳过一次日线又会被记成"没有日期证据"，与真正的
+    `no_bars`（这只票确实没有 bar）混为一谈。
+    """
+    monkeypatch.delenv("TDX_QUANT_URL", raising=False)
+    import marketdata.vendors.tq as tqmod
+    monkeypatch.setattr(tqmod, "_resolve_tq_url",
+                        lambda: "http://172.27.16.1:17709/", raising=False)
+    monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=2.0: True, raising=False)
+    tqmod._reset_quote_date_stats()
+    tqmod._reset_daily_circuit()
+
+    # 历史上失败过一次，随后恢复：计数保留，当前状态是"关闭"。
+    tqmod._bump(tqmod.DEGRADE_RPC_FAILED)  # 跳闸前先记累计事件（真实路径就是这样）
+    tqmod._trip_daily_circuit()
+    tqmod._reset_daily_circuit()
+    tqmod.prove_quote_date([{"Date": "20261028", "Close": "10.00", "Volume": "100"}],
+                           10.0, "20261029", snapshot_volume="0")
+    detail = sh.check_source("tq_moreinfo", use_cache=False)["detail"]
+    assert "累计" in detail and "no_today_bar=1" in detail
+    assert "当前日线熔断: 关闭" in detail
+    assert "当前日线熔断: 开启" not in detail
+
+    # 正在熔断：状态明确"开启 + 剩余秒数 + 连续失败次数"，历史计数不被改写。
+    tqmod._trip_daily_circuit()
+    detail = sh.check_source("tq_moreinfo", use_cache=False)["detail"]
+    assert "当前日线熔断: 开启" in detail
+    assert "剩余" in detail and "连续失败1次" in detail
+    assert "no_today_bar=1" in detail
+    tqmod._reset_daily_circuit()
+    tqmod._reset_quote_date_stats()

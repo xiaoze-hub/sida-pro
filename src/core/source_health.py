@@ -153,38 +153,69 @@ def _quote_date_stat_suffix() -> str:
     """TQ「报价日期证据」计数 → 面板 detail 后缀（2026-10-29 复审：日线这一路必须可观测）。
 
     日线配对失败/降级**不会**让报价消失（报价照出、日期为 None），所以它绝不会体现在
-    任何错误率上；不把它数出来，运维就永远看不到"日期证明一直没成"。只在这里汇总：
-    证明成功的两种 + 各种降级原因，全为 0 时不加后缀（避免面板噪音）。
+    任何错误率上；不把它数出来，运维就永远看不到"日期证明一直没成"。
+
+    两件事必须**分开**说（2026-10-29 第三处复审）：
+      - `circuit` 是**当前状态**（开/关 + 剩余秒数 + 连续失败次数），会随时间变化；
+      - 其余计数是**累计历史事件**（进程启动以来），不因熔断结束而清零。
+    混成一个数会让"现在是否还在熔断"和"历史上失败过几次"不可区分。
     """
     try:
         from marketdata.vendors import tq as _tqmod  # type: ignore
 
-        stats_fn = getattr(_tqmod, "quote_date_stats", None)
-        stats = stats_fn() if callable(stats_fn) else {}
+        diag_fn = getattr(_tqmod, "quote_date_diagnostics", None)
+        if callable(diag_fn):
+            diag: Any = diag_fn()
+            counters = diag.get("counters") or {}
+            circuit = diag.get("circuit") or {}
+        else:  # 兼容旧模块（只有累计计数）
+            stats_fn = getattr(_tqmod, "quote_date_stats", None)
+            counters = stats_fn() if callable(stats_fn) else {}
+            circuit = {}
     except Exception:  # noqa: BLE001
         return ""
-    if not isinstance(stats, dict) or not stats:
-        return ""
+    if not isinstance(counters, dict):
+        counters = {}
+    if not isinstance(circuit, dict):
+        circuit = {}
     order = (
         "proved_today", "proved_last_traded_day", "no_today_bar", "price_mismatch",
         "window_empty", "no_bars", "price_invalid", "volume_conflict",
-        "daily_rpc_failed", "daily_missing_symbol", "daily_short_window",
-        "snapshot_volume_unreliable", "daily_circuit_open", "quote_now_zero",
+        "daily_rpc_failed", "daily_missing_symbol", "daily_symbol_error", "daily_partial_error",
+        "daily_short_window", "snapshot_volume_unreliable", "daily_circuit_open",
+        "quote_now_zero", "quote_symbol_error",
     )
-    shown = [f"{k}={stats[k]}" for k in order if stats.get(k)]
-    shown += [f"{k}={v}" for k, v in stats.items() if k not in order and v]
-    if not shown:
+    shown = [f"{k}={counters[k]}" for k in order if counters.get(k)]
+    shown += [f"{k}={v}" for k, v in counters.items() if k not in order and v]
+
+    circuit_note = ""
+    if circuit.get("open"):
+        try:
+            remaining = float(circuit.get("remaining_s") or 0.0)
+        except (TypeError, ValueError):
+            remaining = 0.0
+        streak = int(circuit.get("consecutive_failures") or 0)
+        circuit_note = f"当前日线熔断: 开启(剩余{remaining:.0f}s, 连续失败{streak}次)"
+    elif counters.get("daily_rpc_failed") or counters.get("daily_circuit_open"):
+        # 历史上失败过、现在已恢复：明说"当前关闭"，避免把累计数误读成仍在熔断。
+        circuit_note = "当前日线熔断: 关闭"
+
+    if not shown and not circuit_note:
         return ""
-    degraded = any(
-        stats.get(k) for k in (
+    degraded = bool(circuit.get("open")) or any(
+        counters.get(k) for k in (
             "no_today_bar", "price_mismatch", "window_empty", "no_bars", "price_invalid",
             "volume_conflict", "daily_rpc_failed", "daily_missing_symbol",
             "daily_short_window", "snapshot_volume_unreliable", "daily_circuit_open",
-            "quote_now_zero",
+            "quote_now_zero", "daily_symbol_error", "daily_partial_error",
+            "quote_symbol_error",
         )
     )
     tag = "报价日期证据降级" if degraded else "报价日期证据"
-    return f" · {tag}: " + ", ".join(shown)
+    parts = [f"{tag}(累计): " + (", ".join(shown) if shown else "—")]
+    if circuit_note:
+        parts.append(circuit_note)
+    return " · " + " · ".join(parts)
 
 
 def check_tq_moreinfo() -> dict[str, Any]:
