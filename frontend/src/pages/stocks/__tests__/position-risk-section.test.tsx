@@ -412,3 +412,49 @@ describe('PositionRiskSection', () => {
     expect(text).not.toContain('**')
   })
 })
+
+/**
+ * TQ「日线口径」（源只证到日，无成交时刻）的时间口径（2026-10-29 复审）：
+ *  - 非交易时段（收盘后/午休/盘前）才允许拿这份**过去的成交价**核对防线，
+ *    且必须写明「非实时」——它不是当下价，不许写成实时，也不许只写"最近报价"含糊过去；
+ *  - 交易中仍然「时点未知」，不判破位。
+ */
+describe('日线口径（date_only）的措辞与红线', () => {
+  const dateOnlyPos = (over: Record<string, unknown> = {}) =>
+    pos({
+      id: 1,
+      defense_price: 34,
+      current_price: 33,
+      quote_date: '2026-10-29',
+      quote_time: null,
+      quote_time_kind: null,
+      quote_date_basis: 'daily_bar_close',
+      daily_pnl_period: 'today',
+      ...over,
+    })
+
+  it('收盘后：说「最近成交价 + 日线口径 + 非实时」，不写实时', () => {
+    mockCtx([], 'positions', [
+      { code: 'CN', name: 'A股', status: 'after_hours', status_text: '已收盘', local_time: '19:40', local_date: '2026-10-29' },
+    ])
+    const report = reportOf([dateOnlyPos()], {
+      CN: { localTime: '19:40', localDate: '2026-10-29', status: 'after_hours' },
+    })
+    render(<PositionRiskTable report={report} />)
+    const row = screen.getByTestId('position-risk-row-600111')
+    expect(row.textContent).toContain('最近成交价')
+    expect(row.textContent).toContain('日线口径')
+    expect(row.textContent).toContain('非实时')
+    expect(row.textContent).toContain('无成交时刻')
+  })
+
+  it('交易中：同一份只有日期的证据仍是「时点未知」，不判破位', () => {
+    mockCtx([])
+    const report = reportOf([dateOnlyPos()])
+    render(<PositionRiskTable report={report} />)
+    const row = screen.getByTestId('position-risk-row-600111')
+    expect(row.dataset.state).not.toBe('breached')
+    expect(row.textContent).toContain('时点未知')
+    expect(row.textContent).not.toContain('最近成交价')
+  })
+})

@@ -115,6 +115,27 @@ def _parse_quote_time(value: str | None, market: str) -> datetime | None:
     return parsed.replace(tzinfo=ZoneInfo(timezone)) if timezone else parsed
 
 
+#: parts[30] 的时刻语义（按市场分，2026-10-29 复审）：
+#:   CN  = "snapshot_refresh"：**已证实是源端刷新时点**，不是成交时刻。
+#:         证据(2026-10-29 19:20/19:49 收盘后, qt.gtimg.cn)：正常股 parts[30]=16:14:57、
+#:         停牌股(601326/002827)同样刷成 16:14:xx，而 A 股 15:00 已收盘 ⇒ 只证明"报文被
+#:         刷新过"，不证明"这时成交过"。
+#:   港美 = "vendor_stamp"：**只到"供应商报时间"这一层，语义未核实**。
+#:         2026-10-29 19:49 实盘：HK 8 只 16:08:24~16:08:29（落在收盘竞价随机收市窗口内）、
+#:         US 15 只 2026-10-28 16:00:01（收盘竞价打印时点）、BRK.A 16:04:49（更晚）。
+#:         这些时刻**可能就是最后一笔成交**，没有证据能否定 ⇒ 不许沿用 CN 那句更强的断言
+#:         （"快照刷新/非成交"），只许说"源报时，不能证明成交"。
+QUOTE_TIME_KIND_SNAPSHOT_REFRESH = "snapshot_refresh"
+QUOTE_TIME_KIND_VENDOR_STAMP = "vendor_stamp"
+
+
+def _quote_time_kind(market: str, quote_time: datetime | None) -> str:
+    """报价时刻的语义标签；没有时刻就是空串（绝不半条证据）。"""
+    if quote_time is None:
+        return ""
+    return QUOTE_TIME_KIND_SNAPSHOT_REFRESH if market == "CN" else QUOTE_TIME_KIND_VENDOR_STAMP
+
+
 def _parse_line(line: str, market: str) -> Quote | None:
     if '=""' in line or not line.strip():
         return None
@@ -183,13 +204,7 @@ def _parse_line(line: str, market: str) -> Quote | None:
             circulating_market_value=circulating,
             total_market_value=total,
             quote_time=quote_time,
-            # 2026-10-29 F4 语义标定(实盘复测): parts[30] 是**源端快照刷新时间**, 不是
-            # 成交时间。证据(2026-10-29 19:20 收盘后, qt.gtimg.cn 同一批报文):
-            #   sh600519 正常交易 vol=42992 手  parts[30]=20261029161457
-            #   sh601326 今日停牌 vol=0        parts[30]=20261029161445
-            #   sz002827 今日停牌 vol=0        parts[30]=20261029161430
-            # 停牌股没有成交却同样被刷新到当日 16:14 ⇒ 该字段只证明"报文被刷新过"。
-            quote_time_kind="snapshot_refresh" if quote_time else "",
+            quote_time_kind=_quote_time_kind(market, quote_time),
             status=status,
             missing_fields=missing,
         )

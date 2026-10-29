@@ -149,7 +149,51 @@ def check_shadow() -> dict[str, Any]:
     return {"status": STATUS_CONNECTED, "detail": "交割单表可查询"}
 
 
+def _quote_date_stat_suffix() -> str:
+    """TQ「报价日期证据」计数 → 面板 detail 后缀（2026-10-29 复审：日线这一路必须可观测）。
+
+    日线配对失败/降级**不会**让报价消失（报价照出、日期为 None），所以它绝不会体现在
+    任何错误率上；不把它数出来，运维就永远看不到"日期证明一直没成"。只在这里汇总：
+    证明成功的两种 + 各种降级原因，全为 0 时不加后缀（避免面板噪音）。
+    """
+    try:
+        from marketdata.vendors import tq as _tqmod  # type: ignore
+
+        stats_fn = getattr(_tqmod, "quote_date_stats", None)
+        stats = stats_fn() if callable(stats_fn) else {}
+    except Exception:  # noqa: BLE001
+        return ""
+    if not isinstance(stats, dict) or not stats:
+        return ""
+    order = (
+        "proved_today", "proved_last_traded_day", "no_today_bar", "price_mismatch",
+        "window_empty", "no_bars", "daily_rpc_failed", "daily_missing_symbol",
+        "daily_short_window", "quote_now_zero",
+    )
+    shown = [f"{k}={stats[k]}" for k in order if stats.get(k)]
+    shown += [f"{k}={v}" for k, v in stats.items() if k not in order and v]
+    if not shown:
+        return ""
+    degraded = any(
+        stats.get(k) for k in (
+            "no_today_bar", "price_mismatch", "window_empty", "no_bars",
+            "daily_rpc_failed", "daily_missing_symbol", "daily_short_window", "quote_now_zero",
+        )
+    )
+    tag = "报价日期证据降级" if degraded else "报价日期证据"
+    return f" · {tag}: " + ", ".join(shown)
+
+
 def check_tq_moreinfo() -> dict[str, Any]:
+    """TQ 扩展指标网关探活 + 「报价日期证据」计数（见 `_quote_date_stat_suffix`）。"""
+    result = _probe_tq_moreinfo()
+    suffix = _quote_date_stat_suffix()
+    if suffix:
+        result = {**result, "detail": f"{result.get('detail', '')}{suffix}"}
+    return result
+
+
+def _probe_tq_moreinfo() -> dict[str, Any]:
     """TQ 扩展指标网关(more_info/明盘资金/数智决策共用链路)。
 
     判定基于**真实解析器状态**, 不再只读被动的 `_TQ_URL_CACHE` —— 生产实测: 链路

@@ -7,6 +7,7 @@ import {
   humanizeAgeMinutes,
   resolveDefenseState,
   sessionIsIdle,
+  quoteStampNote,
   type DefenseState,
   type FreshnessReason,
   type MarketSessionInfo,
@@ -66,7 +67,7 @@ interface QuoteData {
   price?: number | null
   quote_date?: string | null
   quote_time?: string | null
-  /** 时刻语义：`snapshot_refresh`=源快照刷新时间（腾讯 parts[30]），**不是**成交时刻。 */
+  /** 时刻语义：`snapshot_refresh`=CN 源快照刷新（非成交）/`vendor_stamp`=港美供应商报时（未核实）。 */
   quote_time_kind?: string | null
   /** 日期证据来源：`daily_bar_close`=同标的日线收盘价配对（TQ，只证到日）。 */
   quote_date_basis?: string | null
@@ -215,19 +216,19 @@ function freshnessNote(args: {
 }): string {
   const at = args.quoteTime ? args.quoteTime.slice(11, 16) : ''
   const age = humanizeAgeMinutes(args.ageMinutes)
-  // 源只报"快照刷新时刻"（腾讯 parts[30]）：停牌股也会被刷新，所以措辞里不能出现"成交"。
-  const atLabel = args.quoteTimeKind === 'snapshot_refresh'
-    ? `源快照更新${at ? ` ${at}` : ''}（非成交时刻）`
-    : ''
+  // 源报时的语义按市场分（2026-10-29 复审）：CN=已证实的快照刷新；港美=只到"供应商报时"。
+  // 两者都不能写"成交时刻"，也都不许当着实时证据用。
+  const atLabel = quoteStampNote(args.quoteTimeKind, at)
   if (args.freshness === 'current') {
     const head = args.marketStatus === 'trading' ? '交易中' : '非交易时段 · 最近报价'
     return [at ? `${head} ${at}` : head, age, atLabel].filter(Boolean).join(' · ')
   }
   if (args.reason === 'date_only') {
-    // TQ 日线口径：日期证明得了、时刻证明不了。非交易时段才敢说"最近报价"，且标日期。
+    // TQ 日线口径：日期证明得了、时刻证明不了。非交易时段才敢说"最近成交价"，且标日期，
+    // 并显式写"非实时"——这份价是**过去的成交价**，不是当下的实时价（2026-10-29 复审）。
     const stamp = args.quoteDate ? `日线口径 ${args.quoteDate}` : '日线口径'
     if (args.freshness === 'session_frozen') {
-      return `非交易时段 · 最近报价（${stamp}，无成交时刻）`
+      return `非交易时段 · 最近成交价（${stamp}，无成交时刻，非实时）`
     }
     return `时点未知（源只提供日期 ${args.quoteDate ?? '——'}，未提供成交时刻）`
   }

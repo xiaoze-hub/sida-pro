@@ -140,7 +140,7 @@ export interface Position {
   daily_pnl_period: DailyPnlPeriod
   quote_time: string | null
   quote_date: string | null
-  /** 报价时刻的语义（`snapshot_refresh`=源快照刷新，非成交时刻）；null=未知。 */
+  /** 报价时刻的语义（`snapshot_refresh`=CN 源快照刷新，非成交；`vendor_stamp`=港美报时未核实）；null=未知。 */
   quote_time_kind: string | null
   /** 报价日期的证据来源（`daily_bar_close`=TQ 日线口径，只证到日）。 */
   quote_date_basis: string | null
@@ -276,7 +276,7 @@ export interface QuoteResponse {
   change_pct: number | null
   quote_time: string | null
   quote_date: string | null
-  /** 时刻语义（`snapshot_refresh`=源快照刷新，非成交时刻）；缺省视为未知。 */
+  /** 时刻语义（`snapshot_refresh`=CN 源快照刷新/`vendor_stamp`=港美报时未核实）；缺省视为未知。 */
   quote_time_kind?: string | null
   /** 日期证据来源（`daily_bar_close`=TQ 日线口径，只证到日）。 */
   quote_date_basis?: string | null

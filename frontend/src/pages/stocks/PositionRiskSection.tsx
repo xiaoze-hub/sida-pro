@@ -8,6 +8,7 @@ import {
   humanizeAgeMinutes,
   NEAR_LINE_PCT,
   QUOTE_FRESH_WINDOW_MINUTES,
+  quoteStampNote,
   type MarketSessionMap,
   type PositionRiskReport,
   type PositionRiskRow,
@@ -91,8 +92,8 @@ function freshnessLabel(row: PositionRiskRow): string {
   if (row.currentPrice === null) return '无行情'
   const at = row.quoteLocalTime ? ` ${row.quoteLocalTime}` : ''
   const age = humanizeAgeMinutes(row.quoteAgeMinutes)
-  // 源只报「快照刷新时刻」（腾讯 parts[30]）：停牌股同样会被刷新 ⇒ 不许写成成交时间。
-  const kindNote = row.quoteTimeKind === 'snapshot_refresh' ? ' · 源快照时间（非成交时刻）' : ''
+  // 源报时语义按市场分（CN=已证实的快照刷新；港美=只到"供应商报时"），都由后端下发。
+  const kindNote = quoteStampNote(row.quoteTimeKind) ? ` · ${quoteStampNote(row.quoteTimeKind)}` : ''
   if (row.freshness === 'current') {
     // 同样是「窗口内」，服务器说交易中才是真·实时；非交易时段里只是刚定格的最新价。
     const head = row.marketStatus === 'trading' ? '交易中' : '非交易时段 · 最近报价'
@@ -100,9 +101,10 @@ function freshnessLabel(row: PositionRiskRow): string {
   }
   if (row.staleReason === 'date_only') {
     // TQ 日线口径：源只给到日期（现价与同日线收盘价配对证明），没有成交时刻。
-    // 非交易时段才敢说「最近报价」；交易中一律「时点未知」。
+    // 非交易时段才敢说「最近成交价」，且必须写明"非实时"（过去成交价 ≠ 当下价）；
+    // 交易中一律「时点未知」。
     if (row.freshness === 'session_frozen') {
-      return `非交易时段 · 最近报价（日线口径 ${row.quoteDate ?? '——'}，无成交时刻）`
+      return `非交易时段 · 最近成交价（日线口径 ${row.quoteDate ?? '——'}，无成交时刻，非实时）`
     }
     return `时点未知（源只提供日期 ${row.quoteDate ?? '——'}，未提供成交时刻）`
   }
@@ -334,7 +336,8 @@ export function PositionRiskSection() {
           行情时点分两层判：日期层看后端给出的「当日 / 非当日」判定（后端已按市场时区算好，
           前端不复刻交易日历）；时刻层看「服务器市场时钟 − 报价时刻」，超过{' '}
           {QUOTE_FRESH_WINDOW_MINUTES} 分钟即不作实时（该阈值是推断值，不是交易所口径）。
-          服务器说当日已收盘/午休/盘前时，最后一笔报价称「最近报价」，可核对但不叫实时。
+          服务器说当日已收盘/午休/盘前时，最后一笔报价称「最近成交价」，可核对但不叫实时
+          （源只给日期时另标「日线口径 · 无成交时刻」）。
         </p>
         {report.stale > 0 && (
           <p data-testid="position-risk-stale-note">

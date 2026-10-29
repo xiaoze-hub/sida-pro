@@ -165,7 +165,7 @@ export interface PositionRiskInput {
   defense_price?: number | string | null
   quote_date?: string | null
   quote_time?: string | null
-  /** 报价时刻的语义：`snapshot_refresh`=源快照刷新时间（腾讯 parts[30]，**非**成交时刻）。 */
+  /** 报价时刻的语义：`snapshot_refresh`=CN 源快照刷新（非成交时刻）/`vendor_stamp`=港美供应商报时（未核实）。 */
   quote_time_kind?: string | null
   /** 报价日期的证据来源：`daily_bar_close`=同标的日线收盘价与现价配对（TQ，只证到日）。 */
   quote_date_basis?: string | null
@@ -193,8 +193,9 @@ export interface PositionRiskRow {
   quoteTime: string | null
   /**
    * 报价时刻的语义（原样透传后端 `quote_time_kind`）：
-   * `snapshot_refresh`=源快照刷新时间（腾讯 parts[30]，**不是**成交时刻）；null=未知。
-   * UI 据此把「行情时间」改成「源快照时间」—— 停牌股也会被刷新，不能拿它证明成交。
+   * `snapshot_refresh`=CN 源快照刷新（腾讯 parts[30]：收盘后仍刷新、停牌股同样刷新，
+   * **不是**成交时刻）；`vendor_stamp`=港美供应商报时（语义未核实，可能就是最后一笔成交）。
+   * null=未知。UI 一律经 `quoteStampNote()` 输出，不许自己拼「成交时间」。
    */
   quoteTimeKind: string | null
   /** 报价日期的证据来源（`daily_bar_close`=TQ 同标的日线收盘价配对，只证到日）。 */
@@ -308,6 +309,39 @@ export const IDLE_SESSION_STATUSES: ReadonlySet<string> = new Set(['after_hours'
 /** 服务器市场状态是否属于「不会马上开盘」的休市态（告警条可据此降频）。 */
 export function sessionIsIdle(status: unknown): boolean {
   return IDLE_SESSION_STATUSES.has(String(status ?? '').trim().toLowerCase())
+}
+
+/**
+ * 源报时语义（后端 `Quote.quote_time_kind`，2026-10-29 复审按市场分开）：
+ * - `snapshot_refresh`：**CN 已证实**是源端刷新时点（收盘后仍刷到 16:14，停牌股同样刷新）
+ *   ⇒ 不证明发生过成交；
+ * - `vendor_stamp`：**港/美**只到"供应商报时"这一层（实测落在收盘竞价窗口，可能就是最后
+ *   一笔成交）⇒ 不能说"非成交时刻"，只能说"是否成交时刻未核实"。
+ * 两者共同的结论只有一个：**不能拿它证明"刚刚成交"**。
+ */
+export const QUOTE_TIME_KIND_SNAPSHOT_REFRESH = 'snapshot_refresh'
+export const QUOTE_TIME_KIND_VENDOR_STAMP = 'vendor_stamp'
+
+/** 这个 `quote_time_kind` 是不是"源报时（不能证明成交）"这一类（含未知语义之外的两种）。 */
+export function isVendorStamp(kind: string | null | undefined): boolean {
+  const k = String(kind ?? '').trim()
+  return k === QUOTE_TIME_KIND_SNAPSHOT_REFRESH || k === QUOTE_TIME_KIND_VENDOR_STAMP
+}
+
+/**
+ * 「行情时间」的如实改写（UI 一律用它，别自己拼"成交时间"）：
+ * 空串 = 这个源没给语义 ⇒ 原样显示时间即可，不加任何断言。
+ */
+export function quoteStampNote(kind: string | null | undefined, at?: string | null): string {
+  const k = String(kind ?? '').trim()
+  const hhmm = String(at ?? '').trim()
+  if (k === QUOTE_TIME_KIND_SNAPSHOT_REFRESH) {
+    return `源快照时间${hhmm ? ` ${hhmm}` : ''}（非成交时刻）`
+  }
+  if (k === QUOTE_TIME_KIND_VENDOR_STAMP) {
+    return `源报时${hhmm ? ` ${hhmm}` : ''}（是否成交时刻未核实）`
+  }
+  return ''
 }
 
 /** 正数才有效（价格/成本/防线为 0 或负数都是"没有这个数"，不是 0）。 */

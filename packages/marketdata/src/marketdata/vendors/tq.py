@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -404,14 +405,71 @@ def _parse_more_info(symbol: str, raw: dict) -> MoreInfo:
 
 DATE_BASIS_DAILY_BAR = "daily_bar_close"
 
+# 「报价日期」证据用的日线窗口（含今日）。2026-10-29 复审：原来 count=3 只覆盖两个
+# 交易日，停牌一周的票在窗口里连"最后一个有成交日"都看不到；5 根≈一周，仍是同一次 RPC。
+QUOTE_DATE_WINDOW = 5
 
-def _price_matches(a: float, b: float) -> bool:
-    """现价与日线收盘价是否同一价位（A股最小变动 0.01，另放 1e-4 相对容差防浮点/分位）。"""
-    return abs(a - b) <= max(0.011, abs(b) * 1e-4)
+# 判定结果（计数 + 日志；运维据此回答"日期为什么没了"）
+DATE_REASON_TODAY = "proved_today"
+DATE_REASON_LAST_TRADED = "proved_last_traded_day"
+DATE_REASON_NO_BARS = "no_bars"
+DATE_REASON_NO_TODAY_BAR = "no_today_bar"
+DATE_REASON_PRICE_MISMATCH = "price_mismatch"
+DATE_REASON_WINDOW_EMPTY = "window_empty"
+# 日线这一路自身的降级
+DEGRADE_RPC_FAILED = "daily_rpc_failed"
+DEGRADE_MISSING_SYMBOL = "daily_missing_symbol"
+DEGRADE_SHORT_WINDOW = "daily_short_window"
+# 快照 Now<=0（停牌股实测 002827/002717）：不是价格，跳过并计数（见 fetch）。
+DEGRADE_NOW_ZERO = "quote_now_zero"
+
+_QUOTE_DATE_STATS: dict[str, int] = {}
+
+
+def _bump(reason: str) -> None:
+    _QUOTE_DATE_STATS[reason] = _QUOTE_DATE_STATS.get(reason, 0) + 1
+
+
+def quote_date_stats() -> dict[str, int]:
+    """报价日期证据的计数快照（进程内累计；只读副本，供诊断/测试）。"""
+    return dict(_QUOTE_DATE_STATS)
+
+
+def _reset_quote_date_stats() -> None:
+    """清空计数（测试用；生产不需要）。"""
+    _QUOTE_DATE_STATS.clear()
+
+
+def _finite_num(v: object) -> float | None:
+    """严格数值解析：空/非数/NaN/Inf 一律 None（源端填充值可能是 NaN）。"""
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+#: 同一价位的容差 —— 只吸收浮点与字符串尾零差，**不吸收一分钱**。
+_PRICE_EQ_TOL = 1e-6
+
+
+def _price_matches(a: object, b: object) -> bool:
+    """两个价格是否**同一个价**（同源同日两个字段应逐分相等）。
+
+    2026-10-29 复审修正：旧实现容差 `max(0.011, ...)`，把 1354.00 与 1354.01 也算匹配 ——
+    A 股一档就是 0.01，差这一档就是另一个价格，靠四舍五入"拉近"等于凭空造出日期证据。
+    现在只容忍 1e-6（浮点误差/尾零），任何真实价差都判不匹配（判不匹配的代价只是
+    少一个日期，判错的代价是把历史价说成今天的价）。
+    """
+    x, y = _finite_num(a), _finite_num(b)
+    if x is None or y is None:
+        return False
+    return abs(x - y) <= _PRICE_EQ_TOL
 
 
 def prove_quote_date(
-    bars: list[dict], now_price: float | None, market_today: str
+    bars: list[dict], now_price: float | None, market_today: str,
+    *, window: int = QUOTE_DATE_WINDOW,
 ) -> tuple[str | None, str]:
     """由**同一标的**的日线证明"这份现价属于哪个交易日"（纯函数，可单测）。
 
@@ -420,55 +478,82 @@ def prove_quote_date(
     NowVol/Average/TickDiff/Zangsu/Before5MinNow/InOutFlag/XsFlag/ItemNum/Jjjz/DownHome/
     UpHome/ZAFPre3/ErrorId），`get_more_info.HqDate` 也不可用（见下），分钟线在本客户端
     **停在 20260918**（1m/5m/15m/30m 实测全是半个月前），所以 TQ 拿不到"成交时刻"。
-    但日线（`get_market_data period="1d"`）是当日的，且带 Date/Volume ⇒ 可以证明到**日**：
-    把"现价"与同标的同日线收盘价配对一致，就是同源、同一次抓取、一对一的两个字段。
+    但日线（`get_market_data period="1d"`，**不复权**）是当日的，且带 Date/Volume ⇒
+    可以证明到**日**：现价与同标的日线收盘价**逐分相等**，就是同源、同一次抓取的一对字段。
 
     规则（宁可 None，不猜）：
-    - 最新 bar **不是**今天 ⇒ None（无法区分"今日 bar 还没落"与"今天没开盘"，
+    - 没有 bar / 最新 bar **不是**今天 ⇒ None（无法区分"今日 bar 还没落"与"今天没开盘"，
       声称今天或昨天都可能是假话）；
-    - 最新 bar 是今天，Volume>0 且收盘价==现价 ⇒ 现价来自今日成交 ⇒ 今天；
-    - 最新 bar 是今天但 Volume==0（停牌/盘前）⇒ 今天没有成交，现价来自**更早的、同价的
-      有成交日** ⇒ 返回那天（停牌股的"报价日期"是最后成交日，不是刷新日）；
-    - 收盘价对不上现价 ⇒ None。
+    - 最新 bar 是今天、Volume>0 且收盘价==现价 ⇒ 现价来自今日成交 ⇒ 今天；
+    - 最新 bar 是今天但无量（停牌/盘前）⇒ 现价只能来自**最后一个有成交的 bar**；
+      它的收盘价必须与现价逐分相等，否则 None（更早的同价日只是巧合 —— 2026-10-29
+      复审：旧实现会在历史里捞任意同价日，把四天前的收盘价说成现价的日期）；
+    - 窗口里没有任何有成交的 bar（冷缓存只回 1 根 / 停牌超过窗口）⇒ None + 计数。
 
     实测证据（2026-10-29 收盘后，同一网关）：
       600519  今日 bar 20261029 vol=4,299,231 股 close=1354.00 == 快照 Now 1354.00；
       601326（停牌）今日 bar 20261029 vol=0 close=3.57 == 快照 Now 3.57，
         最后有成交的一天是 20261020（close=3.57）⇒ 报价日期应是 20261020 而非今天。
 
+    ⚠️ 除权：历史收盘价必须取**不复权**（`dividend_type="none"`，客户端默认值但在
+    `_daily_bars` 里显式写死）。前复权历史价被除权因子改写后，可能在除权日附近与现价
+    数值相等 ⇒ 把"另一个价位的历史价"配给今天的现价，日期就是假的。
+
     ⚠️ **不能**拿 `get_more_info.HqDate` 当报价日期：601326/002827/002717 三只停牌股
     的 HqDate 实测都是当天 20261029（今日成交量 0）—— 它是**源端刷新日**，不是成交日。
 
-    返回 (ISO 日期 'YYYY-MM-DD' 或 None, 证据标签)。
+    返回 (ISO 日期 'YYYY-MM-DD' 或 None, 证据标签)。判定结果同时计入 `quote_date_stats()`。
     """
     if now_price is None or not bars:
+        _bump(DATE_REASON_NO_BARS)
         return None, ""
-    rows: list[tuple[str, float, float]] = []
+    rows: list[tuple[str, object, object]] = []
     for b in bars:
         try:
             day = _norm_day(b.get("Date"))
-            close = float(str(b.get("Close")).strip())
-            vol = float(str(b.get("Volume")).strip())
-        except (TypeError, ValueError):
+        except (AttributeError, TypeError):
             continue
-        if not day or not day.isdigit():
+        if not day or not day.isdigit() or len(day) != 8:
             continue
-        rows.append((day, close, vol))
+        rows.append((day, b.get("Close"), b.get("Volume")))
     if not rows:
+        _bump(DATE_REASON_NO_BARS)
         return None, ""
     rows.sort(key=lambda r: r[0])
+    if window and len(rows) > window:
+        # 防御：只认最近的窗口（RPC 只该回 count 根，多回的不看）。
+        rows = rows[-window:]
     today = _norm_day(market_today)
     newest_day, newest_close, newest_vol = rows[-1]
     if newest_day != today:
+        # 最新 bar 不是今天：冷缓存只回 1 根时也会走到这里（如实降级，不猜）。
+        _bump(DATE_REASON_NO_TODAY_BAR)
+        logger.debug("[tq] 报价日期无法证明: 最新 bar=%s 不是今天(%s)", newest_day, today)
         return None, ""
-    if newest_vol > 0 and _price_matches(now_price, newest_close):
+    vol = _finite_num(newest_vol)
+    if vol is not None and vol > 0 and _price_matches(now_price, newest_close):
+        _bump(DATE_REASON_TODAY)
         return _fmt_day(today), DATE_BASIS_DAILY_BAR
-    if newest_vol == 0:
-        # 今日无成交（停牌/盘前）：现价必须来自更早有成交且同价的那一天。
-        traded = [r for r in rows[:-1] if r[2] > 0 and _price_matches(now_price, r[1])]
-        if traded:
-            return _fmt_day(traded[-1][0]), DATE_BASIS_DAILY_BAR
-    return None, ""
+    # 今日 bar 无量/无值：现价只能来自**最后一个真正有成交的 bar**（不是任意历史同价日）。
+    traded: list[tuple[str, float]] = []
+    for day, close, raw_vol in rows:
+        v, c = _finite_num(raw_vol), _finite_num(close)
+        if v is not None and v > 0 and c is not None:
+            traded.append((day, c))
+    if not traded:
+        _bump(DATE_REASON_WINDOW_EMPTY)
+        logger.debug("[tq] 报价日期无法证明: %d 根窗口内没有有成交的 bar", len(rows))
+        return None, ""
+    last_day, last_close = traded[-1]
+    if last_day == today or not _price_matches(now_price, last_close):
+        _bump(DATE_REASON_PRICE_MISMATCH)
+        logger.debug(
+            "[tq] 报价日期无法证明: 现价 %s != 最后成交日(%s) 收盘 %s",
+            now_price, last_day, last_close,
+        )
+        return None, ""
+    _bump(DATE_REASON_LAST_TRADED)
+    return _fmt_day(last_day), DATE_BASIS_DAILY_BAR
 
 
 class TqQuoteVendor(QuoteVendor):
@@ -487,24 +572,49 @@ class TqQuoteVendor(QuoteVendor):
 
         只用于证明"现价属于哪个交易日"（见 `prove_quote_date`）。任何异常都降级成空
         dict（=没有日期证据），**绝不让报价本身因为这一路失败而消失**。
-        ⚠️ period 只认 `"1d"` —— 传 `"daily"/"1min"/"min1"` 实测一律 `ErrorId=5
-        period error`（2026-10-29 实测）。
+
+        参数口径（2026-10-29 复审按客户端契约修正，`docs/research/tdx_local_contract/
+        contract.json` + `tqcenter.get_market_data`）：
+        - `dividend_type="none"`：**不复权**。现价是原始成交价，历史收盘价也必须原始；
+          前复权('front')/后复权('back')会把历史价按除权因子改写，除权日附近可能与现价
+          数值相等 ⇒ 把另一个价位的历史价配给今天的现价。客户端默认 None→'none' 已经是
+          不复权，但这里**显式写死**（默认值可能变，而 K 线 vendor 用的是 front，别串）。
+        - `fill_data=False`：**不许填充**。fill_data=True（默认）会把该股票缺数据的交易日
+          前向填成上一交易日的 Close/Volume —— 同批别的票有今天时，停牌票就会多出一根
+          "今天有量"的假 bar，刚好骗过"今日有量且收盘价==现价"这条判定。
+        - `count=QUOTE_DATE_WINDOW`：最近 N 根。冷缓存下客户端只回最新 1 根，此时窗口
+          不足 → 如实降级（None + `daily_short_window` 计数），不猜。
+        实测：period 只认 `"1d"`（传 `"daily"/"1min"` 一律 `ErrorId=5 period error`）；
+        count=3 时直连网关一次批量 4 只 ≈31ms（本处取 5 根，仍是同一次 RPC，未单独计时）。
+        失败/超时一律当"没有日期证据"（并计入 `quote_date_stats()`，见 source_health 面板）。
         """
         if not codes:
             return {}
         try:
             v = _rpc(
                 "get_market_data",
-                {"stock_list": codes, "data_type": "kline", "period": "1d", "count": 3},
+                {
+                    "stock_list": codes,
+                    "data_type": "kline",
+                    "period": "1d",
+                    "count": QUOTE_DATE_WINDOW,
+                    "dividend_type": "none",
+                    "fill_data": False,
+                },
             )
         except Exception as e:  # noqa: BLE001
+            _bump(DEGRADE_RPC_FAILED)
             logger.debug("TQ 日线取数失败(报价日期不证自明即可): %s", e)
             return {}
-        if not isinstance(v, dict):
+        if not isinstance(v, dict) or not v:
+            _bump(DEGRADE_RPC_FAILED)
             return {}
         out: dict[str, list[dict]] = {}
-        for code, bars in v.items():
+        # 只认**自己请求的**代码：响应里混进别的标的时宁可丢日期，也不许跨标的错配。
+        for code in codes:
+            bars = v.get(code)
             if not isinstance(bars, dict):
+                _bump(DEGRADE_MISSING_SYMBOL)
                 continue
             dates = bars.get("Date") or []
             closes = bars.get("Close") or []
@@ -513,8 +623,13 @@ class TqQuoteVendor(QuoteVendor):
                 {"Date": d, "Close": c, "Volume": w}
                 for d, c, w in zip(dates, closes, vols)
             ]
-            if rows:
-                out[code] = rows
+            if not rows:
+                _bump(DEGRADE_MISSING_SYMBOL)
+                continue
+            if len(rows) < QUOTE_DATE_WINDOW:
+                # 冷缓存只回 1 根 / 该票历史本来就短：窗口不完整，历史那半边不许当证据。
+                _bump(DEGRADE_SHORT_WINDOW)
+            out[code] = rows
         return out
 
     def fetch(self, symbols: list[Symbol], config: dict) -> list[Quote]:
@@ -524,9 +639,10 @@ class TqQuoteVendor(QuoteVendor):
         pairs = [(sym, tqc) for sym in symbols if (tqc := to_tq_code(sym))]
         if not pairs:
             return out
-        # 一次批量日线 RPC（直连网关实测中位 30.9ms / 4 只，1d×3 根）只为**证明报价日期**：
-        # TQ 快照没有报时字段，把现价与同标的日线收盘价配对一致才能说到"哪一天"。
-        # 失败/超时一律当"没有日期证据"（None），绝不阻塞报价本身。
+        # 一次批量日线 RPC（直连网关实测中位 30.9ms / 4 只，1d×(QUOTE_DATE_WINDOW) 根）
+        # 只为**证明报价日期**：TQ 快照没有报时字段，把现价与同标的日线收盘价逐分相等
+        # 才能说到"哪一天"（不复权、不填充，见 _daily_bars）。失败/超时一律当
+        # "没有日期证据"（None），绝不阻塞报价本身。
         daily = self._daily_bars([tqc for _, tqc in pairs])
         # 本机日期只用来定位"今天的 bar"，**不进入任何输出**（没有证据就输出 None）。
         today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
@@ -535,10 +651,14 @@ class TqQuoteVendor(QuoteVendor):
             if not isinstance(v, dict) or not v:
                 continue
             now = _to_float(v.get("Now"))
-            # 0 / 负值不是价格（types.py 红线：缺字段一律 None，禁止用 0 冒充 —— 0 价会让
-            # 下游算出 -100% 假暴跌）。实测 2026-10-29：002827（停牌）TQ 快照 Now="0.00"，
-            # 腾讯同标的给 51.80；这里跳过该票，让引擎按优先级降级到下一源补齐（不污染报价）。
+            # 0 不是价格（types.py 红线：缺字段一律 None，禁止用 0 冒充 —— 0 价会让下游
+            # 算出 -100% 假暴跌）。实测 2026-10-29：002827（停牌）TQ 快照 Now="0.00"，
+            # 腾讯同标的给 51.80 ⇒ 这里跳过该票。
+            # ⚠️ 跳过**没有**逐票回补：引擎按整批取数、按数量比较候选源，默认 min_count=1
+            #    时这份"少一只"的结果就算成功返回 ⇒ 该票本次取数里**没有行情**，由下游
+            #    显式降级（不编价、不拿别的票顶）。别在这里许诺"引擎会补回来"。
             if now is None or now <= 0:
+                _bump(DEGRADE_NOW_ZERO)
                 continue
             _proved_date, _proved_basis = prove_quote_date(daily.get(tqc) or [], now, today)
             last_close = _to_float(v.get("LastClose")) or 0.0

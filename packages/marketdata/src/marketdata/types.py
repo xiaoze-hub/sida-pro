@@ -62,8 +62,10 @@ class Quote:
     quote_date: str | None = None
     # quote_time 到底是什么时间（2026-10-29 实盘标定）：
     #   "trade"            = 源报的就是**成交**时刻（当前没有任何源能这样标注）；
-    #   "snapshot_refresh" = 源报的是**快照刷新**时刻（腾讯 parts[30]：CN 收盘后仍是
-    #                        16:14:xx，且**停牌股同样刷新** ⇒ 不证明发生过成交）；
+    #   "snapshot_refresh" = 源报的是**快照刷新**时刻（腾讯 parts[30]，**仅 CN 已证实**：
+    #                        收盘后仍是 16:14:xx，且**停牌股同样刷新** ⇒ 不证明发生过成交）；
+    #   "vendor_stamp"     = 源报的是**供应商报时**，语义未核实（腾讯 parts[30] 港/美：
+    #                        实测落在收盘竞价窗口，可能就是最后一笔成交，不能断言非成交）；
     #   ""                 = 没有报时 / 语义未知。
     quote_time_kind: str = ""
     # quote_date 的证据来源：'daily_bar_close'=同标的日线收盘价与现价配对一致（TQ），

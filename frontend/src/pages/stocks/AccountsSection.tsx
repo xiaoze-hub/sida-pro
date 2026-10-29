@@ -14,6 +14,7 @@ import { Plus } from 'lucide-react'
 import { SuggestionBadge } from '@sida/biz-ui/components/suggestion-badge'
 import { Trash2 } from 'lucide-react'
 import { dailyPnlDisplayLabel } from './shared'
+import { isVendorStamp, quoteStampNote } from '@/lib/position-risk'
 import { safeFixed } from '@/lib/format'
 import { safeMoneyUnsigned } from '@/lib/format'
 import { safeNum } from '@/lib/format'
@@ -361,8 +362,8 @@ export function AccountsSection() {
                               className={`px-4 py-2.5 text-right font-mono tabular-nums text-[12px] ${pos.daily_pnl != null ? (pos.daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}
                               title={
                                 pos.quote_time
-                                  ? pos.quote_time_kind === 'snapshot_refresh'
-                                    ? `源快照时间：${pos.quote_time}（源端刷新时刻，非成交时间）`
+                                  ? isVendorStamp(pos.quote_time_kind)
+                                    ? `${quoteStampNote(pos.quote_time_kind)}：${pos.quote_time}`
                                     : `行情时间：${pos.quote_time}`
                                   : pos.quote_date
                                     ? `报价日期：${pos.quote_date}（源只提供日期，未提供成交时刻）`

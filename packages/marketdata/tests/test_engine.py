@@ -135,3 +135,39 @@ def test_engine_passes_request_extra_to_vendor_config():
     e.fetch(Request(symbols=("x",), market="CN", limit=99, extra=(("since_days", 30),)))
     assert seen["since_days"] == 30
     assert seen["days"] == 99  # extra 透传不应破坏原有 days 注入
+
+
+class _BatchVendor:
+    """按 symbols 顺序返回前 n 只（模拟"这一路只补到部分标的"）。"""
+
+    def __init__(self, name, n):
+        self.name, self._n, self.supports_markets = name, n, set()
+        self.calls = 0
+
+    def fetch(self, symbols, config):
+        self.calls += 1
+        return [{"symbol": s.code, "v": self.name} for s in symbols[: self._n]]
+
+
+def test_partial_batch_is_not_backfilled_per_symbol():
+    """引擎是**整批**取数，绝不逐票回补（2026-10-29 复审钉死这条口径）。
+
+    TQ 里某只票 Now=0 被跳过时，它返回的是"少一只"的整批结果：
+      - 默认 min_count=1 ⇒ 这份部分结果直接算成功返回，**缺失票本次就没有行情**，
+        不会去下一个源单独补它；
+      - 只有把 min_count 提到整批数量（len(symbols)）才会继续问下一个源，
+        而那时拿到的是**另一整批**（不是"补一只"）。
+    这条测试同时守住"别在文案/注释里许诺逐票回补"这个坑。
+    """
+    a, b = _BatchVendor("a", 1), _BatchVendor("b", 2)
+    srcs = [SourceConfig(vendor="a", priority=1), SourceConfig(vendor="b", priority=2)]
+    req = Request(symbols=("600519", "002827"), market="CN")
+
+    r = _engine({"a": a, "b": b}, srcs).fetch(req)  # 默认 min_count=1
+    assert r.ok and r.vendor == "a"
+    assert [d["symbol"] for d in r.data] == ["600519"]
+    assert b.calls == 0, "部分结果已是'成功'，引擎不会再问下一源 —— 缺失票没有行情"
+
+    r2 = _engine({"a": a, "b": b}, srcs).fetch(req, min_count=2)
+    assert r2.ok and r2.vendor == "b"
+    assert len(r2.data) == 2

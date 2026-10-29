@@ -466,3 +466,24 @@ def test_tq_moreinfo_probe_exception_is_unknown(monkeypatch):
     assert r["status"] == "unknown"
     assert "probe blew up" in (r["detail"] or "")
 
+
+
+def test_tq_moreinfo_detail_carries_quote_date_evidence_counts(monkeypatch):
+    """日线配对降级必须能在面板上看出来（2026-10-29 复审）。
+
+    报价日期是"锦上添花"的证据：日线这一路挂了，报价照出、只是日期为 None，
+    任何错误率/告警都不会响。所以计数必须汇总到 tq_moreinfo 的 detail 上，否则
+    "日期证明长期失效"在运维侧完全不可见。
+    """
+    monkeypatch.delenv("TDX_QUANT_URL", raising=False)
+    import marketdata.vendors.tq as tqmod
+    monkeypatch.setattr(tqmod, "_resolve_tq_url",
+                        lambda: "http://172.27.16.1:17709/", raising=False)
+    monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=2.0: True, raising=False)
+    tqmod._reset_quote_date_stats()
+    tqmod.prove_quote_date([{"Date": "20261028", "Close": "10.00", "Volume": "100"}],
+                           10.0, "20261029")  # 最新 bar 不是今天 ⇒ no_today_bar
+    detail = sh.check_source("tq_moreinfo", use_cache=False)["detail"]
+    assert "报价日期证据降级" in detail
+    assert "no_today_bar=1" in detail
+    tqmod._reset_quote_date_stats()  # 不留计数给后面的用例

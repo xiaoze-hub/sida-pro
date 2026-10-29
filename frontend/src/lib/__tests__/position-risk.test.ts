@@ -43,6 +43,8 @@ import {
   formatPriceWithCurrency,
   freshnessFor,
   quoteAgeLabel,
+  quoteStampNote,
+  isVendorStamp,
   resolveDefenseState,
   wallClockMinutes,
 } from '@/lib/position-risk'
@@ -662,5 +664,44 @@ describe('resolveDefenseState · 源只到日（TQ 日线口径，date_only）',
     expect(row.quoteDateBasis).toBe('daily_bar_close')
     expect(row.quoteTime).toBeNull()
     expect(row.quoteDate).toBe('2026-10-29')
+  })
+})
+
+/**
+ * 源报时语义按市场分（2026-10-29 复审）：
+ *  - CN 实测是**快照刷新时点**（收盘后仍刷到 16:14、停牌股同样刷新）⇒ 可以断言"非成交"；
+ *  - 港/美实测落在收盘竞价窗口（HK 16:08:2x / US 16:00:01），可能就是最后一笔成交
+ *    ⇒ **不许**沿用 CN 那句断言，只能写"是否成交时刻未核实"。
+ */
+describe('quoteStampNote · 源报时语义（CN 已证实 / 港美未核实）', () => {
+  it('CN snapshot_refresh → 源快照时间 + 非成交时刻', () => {
+    expect(quoteStampNote('snapshot_refresh', '16:14')).toBe('源快照时间 16:14（非成交时刻）')
+    expect(quoteStampNote('snapshot_refresh')).toBe('源快照时间（非成交时刻）')
+  })
+
+  it('港美 vendor_stamp → 只写"源报时/未核实"，绝不断言非成交', () => {
+    const note = quoteStampNote('vendor_stamp', '16:08')
+    expect(note).toContain('源报时 16:08')
+    expect(note).toContain('未核实')
+    expect(note).not.toContain('非成交')
+    expect(isVendorStamp('vendor_stamp')).toBe(true)
+    expect(isVendorStamp('snapshot_refresh')).toBe(true)
+    expect(isVendorStamp('')).toBe(false)
+    expect(isVendorStamp(null)).toBe(false)
+  })
+
+  it('没有语义就不加任何断言（不许自造"成交时间"）', () => {
+    expect(quoteStampNote('', '16:00')).toBe('')
+    expect(quoteStampNote(null, null)).toBe('')
+  })
+
+  it('vendor_stamp 不改变时效判定：交易中过期照样 stale，不许当实时', () => {
+    const row = report(
+      [pos({ quote_time: '2026-10-29 09:31:00', quote_time_kind: 'vendor_stamp' })],
+      { CN: { localTime: '14:03', localDate: '2026-10-29', status: 'trading' } },
+    ).rows[0]
+    expect(row.quoteTimeKind).toBe('vendor_stamp')
+    expect(row.freshness).toBe('stale')
+    expect(row.staleReason).toBe('intraday_age')
   })
 })

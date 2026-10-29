@@ -135,8 +135,8 @@ def _quote_to_row(q: Quote) -> dict:
             getattr(q, "quote_date", None)
             or (q.quote_time.date().isoformat() if q.quote_time else None)
         ),
-        # 时刻的**语义**（snapshot_refresh=源快照刷新，不是成交时刻）与日期的证据来源，
-        # 供 UI 如实标注；空串=未知。
+        # 时刻的**语义**（CN: snapshot_refresh=源快照刷新，不是成交时刻；港/美: vendor_stamp
+        # =只到供应商报时、是否成交未核实）与日期的证据来源，供 UI 如实标注；空串=未知。
         "quote_time_kind": getattr(q, "quote_time_kind", "") or "",
         "quote_date_basis": getattr(q, "quote_date_basis", "") or "",
         # 2026-09-08 来源透传: 实际命中的 vendor(空=未知, 前端按"未知源"标, 不编造)

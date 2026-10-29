@@ -224,7 +224,8 @@ def _proven_quote_stamp(item: dict, market: str) -> dict:
 
     **只透传源报文里确实带的证据**，两条互不顶替：
       1. `Quote.quote_time`（时刻层，如腾讯 parts[30]）+ 其语义 `quote_time_kind`
-         （`snapshot_refresh` = 源快照刷新时间，**不是**成交时间）；
+         （CN：`snapshot_refresh` = 源快照刷新时间，**不是**成交时间；港/美：`vendor_stamp`
+         = 只到"供应商报时"，是否成交未核实）；
       2. `Quote.quote_date`（日期层，TQ 由同标的日线收盘价配对证明，`quote_date_basis
          =daily_bar_close`）—— 没有时刻时仍能证明"这份价属于哪一天"，足以判当日盈亏，
          但**不足以**证明"刚刚发生"。

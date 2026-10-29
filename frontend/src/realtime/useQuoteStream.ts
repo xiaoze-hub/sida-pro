@@ -33,7 +33,7 @@ export interface QuoteTick {
    */
   quote_time?: string | null
   quote_date?: string | null
-  /** 时刻语义：`snapshot_refresh`=源快照刷新时间（腾讯 parts[30]），**不是**成交时刻。 */
+  /** 时刻语义：`snapshot_refresh`=CN 源快照刷新（非成交）/`vendor_stamp`=港美报时未核实。 */
   quote_time_kind?: string | null
   /** 日期证据来源：`daily_bar_close`=TQ 同标的日线收盘价配对（只证到日）。 */
   quote_date_basis?: string | null
