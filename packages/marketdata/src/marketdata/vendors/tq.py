@@ -402,6 +402,75 @@ def _parse_more_info(symbol: str, raw: dict) -> MoreInfo:
     )
 
 
+DATE_BASIS_DAILY_BAR = "daily_bar_close"
+
+
+def _price_matches(a: float, b: float) -> bool:
+    """现价与日线收盘价是否同一价位（A股最小变动 0.01，另放 1e-4 相对容差防浮点/分位）。"""
+    return abs(a - b) <= max(0.011, abs(b) * 1e-4)
+
+
+def prove_quote_date(
+    bars: list[dict], now_price: float | None, market_today: str
+) -> tuple[str | None, str]:
+    """由**同一标的**的日线证明"这份现价属于哪个交易日"（纯函数，可单测）。
+
+    背景（2026-10-29 只读实测）：`get_market_snapshot` 的 26 个键里**没有任何** time/date
+    字段（Now/LastClose/Open/Max/Min/Volume/Amount/Inside/Outside/Buyp/Buyv/Sellp/Sellv/
+    NowVol/Average/TickDiff/Zangsu/Before5MinNow/InOutFlag/XsFlag/ItemNum/Jjjz/DownHome/
+    UpHome/ZAFPre3/ErrorId），`get_more_info.HqDate` 也不可用（见下），分钟线在本客户端
+    **停在 20260918**（1m/5m/15m/30m 实测全是半个月前），所以 TQ 拿不到"成交时刻"。
+    但日线（`get_market_data period="1d"`）是当日的，且带 Date/Volume ⇒ 可以证明到**日**：
+    把"现价"与同标的同日线收盘价配对一致，就是同源、同一次抓取、一对一的两个字段。
+
+    规则（宁可 None，不猜）：
+    - 最新 bar **不是**今天 ⇒ None（无法区分"今日 bar 还没落"与"今天没开盘"，
+      声称今天或昨天都可能是假话）；
+    - 最新 bar 是今天，Volume>0 且收盘价==现价 ⇒ 现价来自今日成交 ⇒ 今天；
+    - 最新 bar 是今天但 Volume==0（停牌/盘前）⇒ 今天没有成交，现价来自**更早的、同价的
+      有成交日** ⇒ 返回那天（停牌股的"报价日期"是最后成交日，不是刷新日）；
+    - 收盘价对不上现价 ⇒ None。
+
+    实测证据（2026-10-29 收盘后，同一网关）：
+      600519  今日 bar 20261029 vol=4,299,231 股 close=1354.00 == 快照 Now 1354.00；
+      601326（停牌）今日 bar 20261029 vol=0 close=3.57 == 快照 Now 3.57，
+        最后有成交的一天是 20261020（close=3.57）⇒ 报价日期应是 20261020 而非今天。
+
+    ⚠️ **不能**拿 `get_more_info.HqDate` 当报价日期：601326/002827/002717 三只停牌股
+    的 HqDate 实测都是当天 20261029（今日成交量 0）—— 它是**源端刷新日**，不是成交日。
+
+    返回 (ISO 日期 'YYYY-MM-DD' 或 None, 证据标签)。
+    """
+    if now_price is None or not bars:
+        return None, ""
+    rows: list[tuple[str, float, float]] = []
+    for b in bars:
+        try:
+            day = _norm_day(b.get("Date"))
+            close = float(str(b.get("Close")).strip())
+            vol = float(str(b.get("Volume")).strip())
+        except (TypeError, ValueError):
+            continue
+        if not day or not day.isdigit():
+            continue
+        rows.append((day, close, vol))
+    if not rows:
+        return None, ""
+    rows.sort(key=lambda r: r[0])
+    today = _norm_day(market_today)
+    newest_day, newest_close, newest_vol = rows[-1]
+    if newest_day != today:
+        return None, ""
+    if newest_vol > 0 and _price_matches(now_price, newest_close):
+        return _fmt_day(today), DATE_BASIS_DAILY_BAR
+    if newest_vol == 0:
+        # 今日无成交（停牌/盘前）：现价必须来自更早有成交且同价的那一天。
+        traded = [r for r in rows[:-1] if r[2] > 0 and _price_matches(now_price, r[1])]
+        if traded:
+            return _fmt_day(traded[-1][0]), DATE_BASIS_DAILY_BAR
+    return None, ""
+
+
 class TqQuoteVendor(QuoteVendor):
     name = "tq"
     supports_markets = {"CN"}
@@ -412,20 +481,66 @@ class TqQuoteVendor(QuoteVendor):
     #    单票/小列表（详情页、K线页、5 只以内的对照）仍走 TQ 拿全字段。
     MAX_SYMBOLS_FOR_TQ = 5
 
+    @staticmethod
+    def _daily_bars(codes: list[str]) -> dict[str, list[dict]]:
+        """一次批量取日线（period="1d"）→ {TQ代码: [{Date, Close, Volume}, ...]}。
+
+        只用于证明"现价属于哪个交易日"（见 `prove_quote_date`）。任何异常都降级成空
+        dict（=没有日期证据），**绝不让报价本身因为这一路失败而消失**。
+        ⚠️ period 只认 `"1d"` —— 传 `"daily"/"1min"/"min1"` 实测一律 `ErrorId=5
+        period error`（2026-10-29 实测）。
+        """
+        if not codes:
+            return {}
+        try:
+            v = _rpc(
+                "get_market_data",
+                {"stock_list": codes, "data_type": "kline", "period": "1d", "count": 3},
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("TQ 日线取数失败(报价日期不证自明即可): %s", e)
+            return {}
+        if not isinstance(v, dict):
+            return {}
+        out: dict[str, list[dict]] = {}
+        for code, bars in v.items():
+            if not isinstance(bars, dict):
+                continue
+            dates = bars.get("Date") or []
+            closes = bars.get("Close") or []
+            vols = bars.get("Volume") or []
+            rows = [
+                {"Date": d, "Close": c, "Volume": w}
+                for d, c, w in zip(dates, closes, vols)
+            ]
+            if rows:
+                out[code] = rows
+        return out
+
     def fetch(self, symbols: list[Symbol], config: dict) -> list[Quote]:
         out: list[Quote] = []
         if len(symbols) > self.MAX_SYMBOLS_FOR_TQ:
             return out
-        for sym in symbols:
-            tqc = to_tq_code(sym)
-            if not tqc:
-                continue
+        pairs = [(sym, tqc) for sym in symbols if (tqc := to_tq_code(sym))]
+        if not pairs:
+            return out
+        # 一次批量日线 RPC（直连网关实测中位 30.9ms / 4 只，1d×3 根）只为**证明报价日期**：
+        # TQ 快照没有报时字段，把现价与同标的日线收盘价配对一致才能说到"哪一天"。
+        # 失败/超时一律当"没有日期证据"（None），绝不阻塞报价本身。
+        daily = self._daily_bars([tqc for _, tqc in pairs])
+        # 本机日期只用来定位"今天的 bar"，**不进入任何输出**（没有证据就输出 None）。
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+        for sym, tqc in pairs:
             v = _rpc("get_market_snapshot", {"stock_code": tqc})
             if not isinstance(v, dict) or not v:
                 continue
             now = _to_float(v.get("Now"))
-            if now is None:
+            # 0 / 负值不是价格（types.py 红线：缺字段一律 None，禁止用 0 冒充 —— 0 价会让
+            # 下游算出 -100% 假暴跌）。实测 2026-10-29：002827（停牌）TQ 快照 Now="0.00"，
+            # 腾讯同标的给 51.80；这里跳过该票，让引擎按优先级降级到下一源补齐（不污染报价）。
+            if now is None or now <= 0:
                 continue
+            _proved_date, _proved_basis = prove_quote_date(daily.get(tqc) or [], now, today)
             last_close = _to_float(v.get("LastClose")) or 0.0
             change_amount = round(now - last_close, 4) if last_close else None
             change_pct = round((now - last_close) / last_close * 100, 4) if last_close else None
@@ -491,6 +606,11 @@ class TqQuoteVendor(QuoteVendor):
                     # "行情发生的时间"；透传到 WS/防线层会被当成本次报价的时刻（假实时）。
                     # 契约见 types.py::Quote.quote_time: 无法确认时为 None。
                     quote_time=None,
+                    # 2026-10-29 F4: 时刻拿不到，但**日期**可以由同标的日线证明（见
+                    # prove_quote_date）。只证到日：下游据 quote_date_basis 标注
+                    # "源仅提供日期（日线口径）"，不许升级成"实时成交"。
+                    quote_date=_proved_date,
+                    quote_date_basis=_proved_basis,
                 )
             )
         return out

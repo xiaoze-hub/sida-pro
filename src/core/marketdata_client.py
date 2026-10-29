@@ -129,7 +129,16 @@ def _quote_to_row(q: Quote) -> dict:
         "circulating_market_value": q.circulating_market_value,
         "total_market_value": q.total_market_value,
         "quote_time": q.quote_time.isoformat() if q.quote_time else None,
-        "quote_date": q.quote_time.date().isoformat() if q.quote_time else None,
+        # 2026-10-29 F4: 日期证据可**独立于**时刻存在（TQ 只能证到日）。优先用 vendor
+        # 证明的 quote_date；没有时退回时刻里的日期段。绝不用服务端 now() 补。
+        "quote_date": (
+            getattr(q, "quote_date", None)
+            or (q.quote_time.date().isoformat() if q.quote_time else None)
+        ),
+        # 时刻的**语义**（snapshot_refresh=源快照刷新，不是成交时刻）与日期的证据来源，
+        # 供 UI 如实标注；空串=未知。
+        "quote_time_kind": getattr(q, "quote_time_kind", "") or "",
+        "quote_date_basis": getattr(q, "quote_date_basis", "") or "",
         # 2026-09-08 来源透传: 实际命中的 vendor(空=未知, 前端按"未知源"标, 不编造)
         "source": getattr(q, "source", "") or "",
         "source_latency_ms": getattr(q, "latency_ms", 0) or 0,

@@ -140,6 +140,10 @@ export interface Position {
   daily_pnl_period: DailyPnlPeriod
   quote_time: string | null
   quote_date: string | null
+  /** 报价时刻的语义（`snapshot_refresh`=源快照刷新，非成交时刻）；null=未知。 */
+  quote_time_kind: string | null
+  /** 报价日期的证据来源（`daily_bar_close`=TQ 日线口径，只证到日）。 */
+  quote_date_basis: string | null
   exchange_rate: number | null  // 汇率（仅港股/美股）
 }
 
@@ -156,6 +160,8 @@ export interface QuoteSnapshot {
   change_pct: number | null
   quote_time: string | null
   quote_date: string | null
+  quote_time_kind?: string | null
+  quote_date_basis?: string | null
   daily_pnl_period: DailyPnlPeriod
 }
 
@@ -270,6 +276,10 @@ export interface QuoteResponse {
   change_pct: number | null
   quote_time: string | null
   quote_date: string | null
+  /** 时刻语义（`snapshot_refresh`=源快照刷新，非成交时刻）；缺省视为未知。 */
+  quote_time_kind?: string | null
+  /** 日期证据来源（`daily_bar_close`=TQ 日线口径，只证到日）。 */
+  quote_date_basis?: string | null
   daily_pnl_period: DailyPnlPeriod
 }
 
@@ -636,6 +646,15 @@ export const mergePortfolioQuotes = (
       const priceFromLocal = localPrice !== null
       const quoteTime = priceFromLocal ? quote?.quote_time ?? null : pos.quote_time ?? null
       const quoteDate = priceFromLocal ? quote?.quote_date ?? null : pos.quote_date ?? null
+      // 时刻的语义与日期的证据来源同样**只能跟同一个价格来源走**（2026-10-29 F4）：
+      // 本地行情（含 WS 推价）没带 kind 就是 null，不许拿后端那份顶替 —— 否则会把
+      // 「TQ 日线口径」标成「腾讯快照刷新」，UI 文案跟着撒谎。
+      const quoteTimeKind = priceFromLocal
+        ? quote?.quote_time_kind ?? null
+        : pos.quote_time_kind ?? null
+      const quoteDateBasis = priceFromLocal
+        ? quote?.quote_date_basis ?? null
+        : pos.quote_date_basis ?? null
       const daily_pnl_period = priceFromLocal
         ? quote?.daily_pnl_period ?? 'unknown'
         : pos.daily_pnl_period ?? 'unknown'
@@ -713,6 +732,8 @@ export const mergePortfolioQuotes = (
         daily_pnl_period,
         quote_time: quoteTime,
         quote_date: quoteDate,
+        quote_time_kind: quoteTimeKind,
+        quote_date_basis: quoteDateBasis,
         exchange_rate: pos.market === 'HK' || pos.market === 'US' ? rate : null,
       }
     })

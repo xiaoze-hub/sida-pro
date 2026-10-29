@@ -1044,6 +1044,10 @@ def get_portfolio_summary(
                 "daily_pnl_period": daily_pnl_period,
                 "quote_time": quote_time,
                 "quote_date": quote_date,
+                # 2026-10-29 F4: 时刻语义(源快照刷新/成交)与日期证据来源, 供前端如实标注
+                # "源快照时间" / "仅日期(日线口径)"，不许写成成交时间。
+                "quote_time_kind": (quote.get("quote_time_kind") if quote else None) or "",
+                "quote_date_basis": (quote.get("quote_date_basis") if quote else None) or "",
                 "exchange_rate": _round_or_none(rate, 6) if is_foreign else None,
                 # 港美换算用的汇率是否可信: default/stale 时市值不是当日事实。
                 "exchange_rate_source": fx_meta["source"] if fx_meta else None,

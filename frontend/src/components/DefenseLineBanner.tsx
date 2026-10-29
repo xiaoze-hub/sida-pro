@@ -66,6 +66,10 @@ interface QuoteData {
   price?: number | null
   quote_date?: string | null
   quote_time?: string | null
+  /** 时刻语义：`snapshot_refresh`=源快照刷新时间（腾讯 parts[30]），**不是**成交时刻。 */
+  quote_time_kind?: string | null
+  /** 日期证据来源：`daily_bar_close`=同标的日线收盘价配对（TQ，只证到日）。 */
+  quote_date_basis?: string | null
   daily_pnl_period?: string | null
 }
 
@@ -104,6 +108,10 @@ interface QuoteState {
   period: string
   quoteDate: string | null
   quoteTime: string | null
+  /** 时刻语义（源快照刷新 vs 成交）：UI 据此把"行情时间"改写成"源快照时间"。 */
+  quoteTimeKind: string | null
+  /** 日期证据来源：`daily_bar_close`=TQ 日线口径（只证到日）。 */
+  quoteDateBasis: string | null
   /**
    * 这份读数是否**仍然被成功续期**（2026-10-29 独立复审 F2）。
    *
@@ -141,6 +149,8 @@ const EMPTY_QUOTE: QuoteState = {
   period: 'unknown',
   quoteDate: null,
   quoteTime: null,
+  quoteTimeKind: null,
+  quoteDateBasis: null,
   verified: true,
 }
 
@@ -199,17 +209,30 @@ function freshnessNote(args: {
   reason: FreshnessReason
   quoteTime: string | null
   quoteDate: string | null
+  quoteTimeKind: string | null
   ageMinutes: number | null
   marketStatus: string | null
 }): string {
   const at = args.quoteTime ? args.quoteTime.slice(11, 16) : ''
   const age = humanizeAgeMinutes(args.ageMinutes)
+  // 源只报"快照刷新时刻"（腾讯 parts[30]）：停牌股也会被刷新，所以措辞里不能出现"成交"。
+  const atLabel = args.quoteTimeKind === 'snapshot_refresh'
+    ? `源快照更新${at ? ` ${at}` : ''}（非成交时刻）`
+    : ''
   if (args.freshness === 'current') {
     const head = args.marketStatus === 'trading' ? '交易中' : '非交易时段 · 最近报价'
-    return [at ? `${head} ${at}` : head, age].filter(Boolean).join(' · ')
+    return [at ? `${head} ${at}` : head, age, atLabel].filter(Boolean).join(' · ')
+  }
+  if (args.reason === 'date_only') {
+    // TQ 日线口径：日期证明得了、时刻证明不了。非交易时段才敢说"最近报价"，且标日期。
+    const stamp = args.quoteDate ? `日线口径 ${args.quoteDate}` : '日线口径'
+    if (args.freshness === 'session_frozen') {
+      return `非交易时段 · 最近报价（${stamp}，无成交时刻）`
+    }
+    return `时点未知（源只提供日期 ${args.quoteDate ?? '——'}，未提供成交时刻）`
   }
   if (args.freshness === 'session_frozen') {
-    return [`非交易时段 · 最近报价${at ? ` ${at}` : ''}`, age].filter(Boolean).join(' · ')
+    return [`非交易时段 · 最近报价${at ? ` ${at}` : ''}`, age, atLabel].filter(Boolean).join(' · ')
   }
   if (args.reason === 'period') {
     const stamp = args.quoteDate ?? (args.quoteTime ? args.quoteTime.slice(0, 10) : '')
@@ -404,6 +427,8 @@ export function DefenseLineBanner({
                   period: String(res?.daily_pnl_period ?? 'unknown'),
                   quoteDate: res?.quote_date ?? null,
                   quoteTime: res?.quote_time ?? null,
+                  quoteTimeKind: res?.quote_time_kind ?? null,
+                  quoteDateBasis: res?.quote_date_basis ?? null,
                   verified: true,
                 },
               }))
@@ -758,6 +783,7 @@ export function DefenseLineBanner({
           reason: verdict.reason,
           quoteTime: quote.quoteTime,
           quoteDate: quote.quoteDate,
+          quoteTimeKind: quote.quoteTimeKind,
           ageMinutes: verdict.ageMinutes,
           marketStatus: String(session?.status ?? '').trim().toLowerCase() || null,
         })

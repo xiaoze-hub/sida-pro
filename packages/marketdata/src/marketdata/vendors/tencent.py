@@ -12,6 +12,16 @@ turnover 单位实测(2026-09-08, qt.gtimg.cn 真实报文, 收盘后):
   (偏差 <0.7% 即 VWAP≠收盘价的正常范围) → parts[35] 第三段成交额单位 = 元。
   交叉印证: parts[37] = amt/10000 (230282 vs 2302823753, 比值 10000.02) = 万元口径。
   恒等式约定见 docs/_frozen/data.md。
+
+parts[30] 语义实测(2026-10-29 19:20, 收盘后同一批报文, 这批证据决定 UI 文案):
+  sh600519 正常交易 vol=42992 手   parts[30]='20261029161457'
+  sh601326 今日停牌 vol=0          parts[30]='20261029161445'
+  sz002827 今日停牌 vol=0          parts[30]='20261029161430'
+  ⇒ ① CN 收盘 15:00 之后仍报 16:14:xx(那是源端整理/刷新时点, 不是最后一笔成交);
+    ② 停牌股今日没有成交, parts[30] 照样刷成当日 16:14。
+  ⇒ **它只能证明"报文在这个时刻被刷新过"**, 不能证明"这个时刻发生过成交",
+    更不能用来否定停牌。`Quote.quote_time_kind` 因此标 'snapshot_refresh',
+    UI 必须写"源快照时间", 不许写"成交时间"。
 """
 
 from __future__ import annotations
@@ -80,6 +90,12 @@ def _parse_quote_time(value: str | None, market: str) -> datetime | None:
     2026-10-29 F3: 旧实现只认 14 位紧凑格式 —— 港美报时是带分隔符的格式，于是
     `quote_time` 恒为 None，WS/防线对港美永远只能判"时刻未知"（明明源给了时刻）。
     这里按顺序试三种实测格式；都不匹配就返回 None（绝不猜、绝不用抓取时间顶替）。
+
+    ⚠️ **语义不是"成交时刻"**（2026-10-29 实盘复测，见模块 docstring）：
+    CN 收盘后 parts[30] 仍是 16:14:xx（15:00 收盘之后），且**停牌股**（今日成交量 0）
+    的 parts[30] 同样刷新成 16:14:xx。⇒ 它是**源端快照刷新时间**，只证明"这条报文
+    在这时被刷新过"，不证明"这时发生过成交"。调用方必须把它标成
+    `Quote.quote_time_kind="snapshot_refresh"`，UI 也不许写成"成交时间"。
     """
     text = str(value or "").strip()
     if not text:
@@ -143,6 +159,7 @@ def _parse_line(line: str, market: str) -> Quote | None:
             status = "partial"
         else:
             status = "ok"
+        quote_time = _parse_quote_time(parts[30], market)
 
         return Quote(
             symbol=symbol,
@@ -165,7 +182,14 @@ def _parse_line(line: str, market: str) -> Quote | None:
             pb_ratio=pb_ratio,
             circulating_market_value=circulating,
             total_market_value=total,
-            quote_time=_parse_quote_time(parts[30], market),
+            quote_time=quote_time,
+            # 2026-10-29 F4 语义标定(实盘复测): parts[30] 是**源端快照刷新时间**, 不是
+            # 成交时间。证据(2026-10-29 19:20 收盘后, qt.gtimg.cn 同一批报文):
+            #   sh600519 正常交易 vol=42992 手  parts[30]=20261029161457
+            #   sh601326 今日停牌 vol=0        parts[30]=20261029161445
+            #   sz002827 今日停牌 vol=0        parts[30]=20261029161430
+            # 停牌股没有成交却同样被刷新到当日 16:14 ⇒ 该字段只证明"报文被刷新过"。
+            quote_time_kind="snapshot_refresh" if quote_time else "",
             status=status,
             missing_fields=missing,
         )

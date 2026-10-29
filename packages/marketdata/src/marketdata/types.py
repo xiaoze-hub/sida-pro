@@ -54,8 +54,21 @@ class Quote:
     pb_ratio: float | None = None
     circulating_market_value: float | None = None
     total_market_value: float | None = None
-    # 行情源提供的实际报价时间；无法确认时保持 None，不能用抓取时间冒充。
+    # 行情源提供的**实际报价时间**；无法确认时保持 None，不能用抓取时间冒充。
     quote_time: datetime | None = None
+    # 行情源可证明的**报价日期**（市场当地 'YYYY-MM-DD'）。它可以独立于 quote_time 存在：
+    # TQ 快照没有任何报时字段，但把"现价"与**同标的同日线收盘价**配对一致（同一源、同一次
+    # 抓取），就能证明这份价属于哪一天 —— 证明得了日，证明不了时刻（2026-10-29 F4）。
+    quote_date: str | None = None
+    # quote_time 到底是什么时间（2026-10-29 实盘标定）：
+    #   "trade"            = 源报的就是**成交**时刻（当前没有任何源能这样标注）；
+    #   "snapshot_refresh" = 源报的是**快照刷新**时刻（腾讯 parts[30]：CN 收盘后仍是
+    #                        16:14:xx，且**停牌股同样刷新** ⇒ 不证明发生过成交）；
+    #   ""                 = 没有报时 / 语义未知。
+    quote_time_kind: str = ""
+    # quote_date 的证据来源：'daily_bar_close'=同标的日线收盘价与现价配对一致（TQ），
+    # '' = 无（日期未知）。
+    quote_date_basis: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
     # 2026-09-08 来源透传: 实际命中的 vendor + 该次延迟(Engine Response 落到每条 Quote)。
     source: str = ""

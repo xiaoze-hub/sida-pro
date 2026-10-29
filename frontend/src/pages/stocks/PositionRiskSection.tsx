@@ -91,13 +91,23 @@ function freshnessLabel(row: PositionRiskRow): string {
   if (row.currentPrice === null) return '无行情'
   const at = row.quoteLocalTime ? ` ${row.quoteLocalTime}` : ''
   const age = humanizeAgeMinutes(row.quoteAgeMinutes)
+  // 源只报「快照刷新时刻」（腾讯 parts[30]）：停牌股同样会被刷新 ⇒ 不许写成成交时间。
+  const kindNote = row.quoteTimeKind === 'snapshot_refresh' ? ' · 源快照时间（非成交时刻）' : ''
   if (row.freshness === 'current') {
     // 同样是「窗口内」，服务器说交易中才是真·实时；非交易时段里只是刚定格的最新价。
     const head = row.marketStatus === 'trading' ? '交易中' : '非交易时段 · 最近报价'
-    return `${head}${at}${age ? ` · ${age}` : ''}`
+    return `${head}${at}${age ? ` · ${age}` : ''}${kindNote}`
+  }
+  if (row.staleReason === 'date_only') {
+    // TQ 日线口径：源只给到日期（现价与同日线收盘价配对证明），没有成交时刻。
+    // 非交易时段才敢说「最近报价」；交易中一律「时点未知」。
+    if (row.freshness === 'session_frozen') {
+      return `非交易时段 · 最近报价（日线口径 ${row.quoteDate ?? '——'}，无成交时刻）`
+    }
+    return `时点未知（源只提供日期 ${row.quoteDate ?? '——'}，未提供成交时刻）`
   }
   if (row.freshness === 'session_frozen') {
-    return `非交易时段 · 最近报价${at || '（时刻未知）'}${age ? ` · ${age}` : ''}`
+    return `非交易时段 · 最近报价${at || '（时刻未知）'}${age ? ` · ${age}` : ''}${kindNote}`
   }
   if (row.staleReason === 'period') {
     const stamp = row.quoteDate ?? (row.quoteTime ? row.quoteTime.slice(0, 10) : '')

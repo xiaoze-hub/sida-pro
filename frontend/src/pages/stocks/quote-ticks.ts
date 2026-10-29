@@ -62,6 +62,11 @@ export function applyQuoteTicks(
     const key = `${target.market}:${target.symbol}`
     const carried = next[key]
     const frameTime = nonEmpty(tick.quote_time)
+    const frameDate = nonEmpty(tick.quote_date)
+    // 2026-10-29 F4: 帧里的**日期**与时刻同等算「同一次抓取的证据」——
+    // TQ 没有报时字段，但后端用同标的日线收盘价配对证明了日期；只认时刻会把
+    // TQ 的当日盈亏在 WS 路径上又打回 unknown（20s 轮询那条路是有日期的，两条不一致）。
+    const frameProven = frameTime !== null || frameDate !== null
     const nextChangePct = tick.change_pct ?? null
     // ① 帧自带可靠时刻 ⇒ 价格与时刻一起换（唯一"更新时效"的路径）。
     // ② 帧没带时刻，但价格与上一轮**已验证的那一对**逐位相同、**涨跌幅也没有新信息** ⇒
@@ -72,25 +77,42 @@ export function applyQuoteTicks(
     //    「昨天 15:00 + 昨天判的 today + 今天的 change_pct」会一路被下游当今日盈亏（B3）。
     // ④ 价格变了却没有时刻 ⇒ 旧时刻属于旧价，**必须**判未知，绝不沿用。
     const sameChangePct = (carried?.change_pct ?? null) === nextChangePct
+    const carriedProven =
+      nonEmpty(carried?.quote_time) !== null || nonEmpty(carried?.quote_date) !== null
     const pairStillValid =
-      frameTime === null &&
+      !frameProven &&
       carried !== undefined &&
       carried.current_price === tick.price &&
-      nonEmpty(carried.quote_time) !== null &&
+      carriedProven &&
       sameChangePct
-    const quoteTime = frameTime ?? (pairStillValid ? carried.quote_time : null)
+    const quoteTime = frameProven ? frameTime : pairStillValid ? carried.quote_time : null
     next[key] = {
       current_price: tick.price,
       change_pct: nextChangePct,
       // 有可靠时刻（或价格/涨跌幅都没变、原配对仍成立）⇒ 价格与时刻成对；否则时刻未知。
       quote_time: quoteTime,
-      quote_date: frameTime !== null ? nonEmpty(tick.quote_date) : pairStillValid ? carried.quote_date : null,
-      daily_pnl_period:
-        frameTime !== null
-          ? asPeriod(tick.daily_pnl_period)
-          : pairStillValid
-            ? carried.daily_pnl_period
-            : 'unknown',
+      quote_date: frameProven
+        ? frameDate
+        : pairStillValid
+          ? carried.quote_date
+          : null,
+      // 时刻语义/日期证据来源跟着**同一份**证据走：帧没给就清空，掉落回旧值会让
+      // "TQ 日线口径"被标成"腾讯快照刷新"。
+      quote_time_kind: frameProven
+        ? nonEmpty(tick.quote_time_kind)
+        : pairStillValid
+          ? carried.quote_time_kind ?? null
+          : null,
+      quote_date_basis: frameProven
+        ? nonEmpty(tick.quote_date_basis)
+        : pairStillValid
+          ? carried.quote_date_basis ?? null
+          : null,
+      daily_pnl_period: frameProven
+        ? asPeriod(tick.daily_pnl_period)
+        : pairStillValid
+          ? carried.daily_pnl_period
+          : 'unknown',
     }
   }
   return next
@@ -117,6 +139,8 @@ export function expireQuoteSnapshots(
       change_pct: null,
       quote_time: null,
       quote_date: null,
+      quote_time_kind: null,
+      quote_date_basis: null,
       daily_pnl_period: 'unknown',
     }
   }

@@ -569,11 +569,98 @@ describe('buildPositionRiskReport · 逐账户', () => {
       'pricePeriod',
       'quoteAgeMinutes',
       'quoteDate',
+      'quoteDateBasis',
       'quoteLocalTime',
       'quoteTime',
+      'quoteTimeKind',
       'sharedSymbolConflict',
       'staleReason',
       'symbol',
     ])
+  })
+})
+
+/**
+ * 2026-10-29 F4：TQ 只给得到「日」。
+ *
+ * TQ 快照没有任何报时字段（26 个键实测无 time/date），只能靠**同标的日线收盘价与现价
+ * 配对**证明"这份价属于今天"。于是时效判定多出一条路径：
+ *  - 日期层成立（period='today'）+ 服务器说非交易时段 ⇒ 当日最近报价（收盘口径），可判，
+ *    但必须落 `date_only`，UI 写"日线口径/无成交时刻"；
+ *  - 交易中 ⇒ 仍是 unknown（缺时刻 = 不知道是不是几分钟前的价）；
+ *  - 日期对不上服务器市场日期 ⇒ stale/period（不是 unknown）。
+ */
+describe('resolveDefenseState · 源只到日（TQ 日线口径，date_only）', () => {
+  const base = { price: 33, defense: 34, quoteTime: null, quoteDate: '2026-10-29' }
+
+  it('非交易时段 + 日期已证当日 → 可判（session_frozen），但原因必须是 date_only', () => {
+    const r = resolveDefenseState({
+      ...base,
+      period: 'today',
+      market: { localTime: '19:40', localDate: '2026-10-29', status: 'closed' },
+    })
+    expect(r.state).toBe('breached')
+    expect(r.freshness).toBe('session_frozen')
+    expect(r.reason).toBe('date_only')
+    // 没有时刻 ⇒ 不给"距今多久"（不许编）
+    expect(r.ageMinutes).toBeNull()
+  })
+
+  it('交易中 + 只有日期 → unknown，绝不当实时（防线落 stale）', () => {
+    const r = resolveDefenseState({
+      ...base,
+      period: 'today',
+      market: { localTime: '14:03', localDate: '2026-10-29', status: 'trading' },
+    })
+    expect(r.state).toBe('stale')
+    expect(r.freshness).toBe('unknown')
+    expect(r.reason).toBe('date_only')
+  })
+
+  it('报价日期与服务器市场日期不一致 → stale/period（已知不是当下）', () => {
+    const r = resolveDefenseState({
+      ...base,
+      quoteDate: '2026-10-28',
+      period: 'today',
+      market: { localTime: '19:40', localDate: '2026-10-29', status: 'closed' },
+    })
+    expect(r.freshness).toBe('stale')
+    expect(r.reason).toBe('period')
+  })
+
+  it('没有服务器市场时钟 → unknown/date_only（不知道是不是非交易时段）', () => {
+    const r = freshnessFor({ ...base, period: 'today', market: null })
+    expect(r.freshness).toBe('unknown')
+    expect(r.reason).toBe('date_only')
+  })
+
+  it('日期层也没证成（period 非 today）→ 仍是 no_time，不许退化成"日期版实时"', () => {
+    const r = freshnessFor({
+      ...base,
+      quoteDate: null,
+      period: 'unknown',
+      market: { localTime: '19:40', localDate: '2026-10-29', status: 'closed' },
+    })
+    expect(r.freshness).toBe('unknown')
+    expect(r.reason).toBe('no_time')
+  })
+
+  it('腾讯 parts[30] 是"源快照刷新时间"：语义原样带到行上，不改时效判定', () => {
+    const row = report(
+      [pos({ quote_time: '2026-10-29 16:14:57', quote_time_kind: 'snapshot_refresh' })],
+      { CN: { localTime: '19:40', localDate: '2026-10-29', status: 'after_hours' } },
+    ).rows[0]
+    expect(row.quoteTimeKind).toBe('snapshot_refresh')
+    expect(row.freshness).toBe('session_frozen')
+    expect(row.staleReason).toBe('ok')
+  })
+
+  it('TQ 行：日期证据来源带到行上（daily_bar_close），quoteTime 为空', () => {
+    const row = report([
+      pos({ quote_time: null, quote_date_basis: 'daily_bar_close', daily_pnl_period: 'today' }),
+    ]).rows[0]
+    expect(row.quoteDateBasis).toBe('daily_bar_close')
+    expect(row.quoteTime).toBeNull()
+    expect(row.quoteDate).toBe('2026-10-29')
   })
 })

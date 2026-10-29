@@ -493,6 +493,9 @@ const refreshQuotes = useCallback(async () => {
             change_pct: item.change_pct ?? null,
             quote_time: item.quote_time ?? null,
             quote_date: item.quote_date ?? null,
+            // 语义/证据来源跟着**同一份**响应走（后端没给就是 null，不猜）。
+            quote_time_kind: item.quote_time_kind ?? null,
+            quote_date_basis: item.quote_date_basis ?? null,
             daily_pnl_period: item.daily_pnl_period ?? 'unknown',
           }
         }

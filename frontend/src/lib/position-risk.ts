@@ -96,6 +96,12 @@ export type FreshnessReason =
   | 'period_unknown'
   | 'intraday_age'
   | 'no_time'
+  /**
+   * 源只提供到**日**（日期层已证当日，时刻层没有）：TQ 快照无任何报时字段，
+   * 只能靠同标的日线收盘价配对证明"这份价属于今天"（2026-10-29 F4）。
+   * 交易中 ⇒ 仍不判（时刻证明不了）；非交易时段 ⇒ 当日最近报价（收盘口径），可判但要标。
+   */
+  | 'date_only'
   | 'no_clock'
   | 'clock_skew'
   | 'refresh_failed'
@@ -159,6 +165,10 @@ export interface PositionRiskInput {
   defense_price?: number | string | null
   quote_date?: string | null
   quote_time?: string | null
+  /** 报价时刻的语义：`snapshot_refresh`=源快照刷新时间（腾讯 parts[30]，**非**成交时刻）。 */
+  quote_time_kind?: string | null
+  /** 报价日期的证据来源：`daily_bar_close`=同标的日线收盘价与现价配对（TQ，只证到日）。 */
+  quote_date_basis?: string | null
   daily_pnl_period?: string | null
 }
 
@@ -181,6 +191,14 @@ export interface PositionRiskRow {
   distanceToDefensePct: number | null
   quoteDate: string | null
   quoteTime: string | null
+  /**
+   * 报价时刻的语义（原样透传后端 `quote_time_kind`）：
+   * `snapshot_refresh`=源快照刷新时间（腾讯 parts[30]，**不是**成交时刻）；null=未知。
+   * UI 据此把「行情时间」改成「源快照时间」—— 停牌股也会被刷新，不能拿它证明成交。
+   */
+  quoteTimeKind: string | null
+  /** 报价日期的证据来源（`daily_bar_close`=TQ 同标的日线收盘价配对，只证到日）。 */
+  quoteDateBasis: string | null
   /** 报价的市场当地墙钟 "HH:MM"（解析不出为 null）。 */
   quoteLocalTime: string | null
   /** 服务器市场墙钟 "HH:MM"（拿不到为 null）。 */
@@ -443,7 +461,16 @@ export function freshnessFor(args: {
   }
 
   // ③ 时刻层：没有报价时刻 ⇒ 证明不了「刚发生」，不许当实时。
-  if (quoteLocalMinutes === null) return verdict('unknown', 'no_time')
+  //    2026-10-29 F4 例外（唯一一处）：日期层已证「今日」，且服务器说**当日非交易时段**
+  //    ⇒ 当天不会再有新的成交，这份价就是当日最近价（收盘口径）。这时可以出结论，
+  //    但必须落到 `date_only` 原因上，UI 写「日线口径 · 时刻未证实」，不许写「实时」。
+  //    交易中仍然不判 —— 缺时刻就等于不知道它是不是几分钟前的价。
+  if (quoteLocalMinutes === null) {
+    if (period !== 'today' || quoteDate === null) return verdict('unknown', 'no_time')
+    if (marketDate !== null && marketDate !== quoteDate) return verdict('stale', 'period')
+    if (sessionIsFrozen(marketStatusRaw)) return verdict('session_frozen', 'date_only')
+    return verdict('unknown', 'date_only')
+  }
   // ③b 日期层自洽（2026-10-29 复审 B3）：报价日期与报价时刻里的日期不一致 ⇒ 内部矛盾，
   //     不猜哪一个是真的（跨日残留 / 字段串源），一律时点存疑。
   if (quoteDate !== null && quoteTimeDate !== null && quoteDate !== quoteTimeDate) {
@@ -651,6 +678,8 @@ export function rowFromPosition(
     distanceToDefensePct: distancePct,
     quoteDate: p.quote_date ?? null,
     quoteTime: p.quote_time ?? null,
+    quoteTimeKind: String(p.quote_time_kind ?? '').trim() || null,
+    quoteDateBasis: String(p.quote_date_basis ?? '').trim() || null,
     quoteLocalTime: formatWallClockMinutes(wallClockMinutes(p.quote_time)),
     marketLocalTime: formatWallClockMinutes(wallClockMinutes(marketSession?.localTime)),
     marketStatus: String(marketSession?.status ?? '').trim().toLowerCase() || null,

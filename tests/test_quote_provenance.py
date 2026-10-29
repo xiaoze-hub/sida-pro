@@ -86,7 +86,8 @@ def test_market_status_error_row_has_no_fabricated_date(monkeypatch):
 # WS 帧 · 只透传行情源自带的报时
 # ---------------------------------------------------------------------------
 
-def _quote_row(symbol: str, *, quote_time=None, quote_date=None, price=10.0) -> dict:
+def _quote_row(symbol: str, *, quote_time=None, quote_date=None, price=10.0,
+               quote_time_kind="", quote_date_basis="", source="tencent") -> dict:
     return {
         "symbol": symbol,
         "name": symbol,
@@ -96,7 +97,9 @@ def _quote_row(symbol: str, *, quote_time=None, quote_date=None, price=10.0) -> 
         "prev_close": 9.9,
         "quote_time": quote_time,
         "quote_date": quote_date,
-        "source": "tencent",
+        "quote_time_kind": quote_time_kind,
+        "quote_date_basis": quote_date_basis,
+        "source": source,
     }
 
 
@@ -231,3 +234,98 @@ def test_tencent_quote_time_formats_are_market_aware():
     # 空/垃圾值仍然是 None（不猜时刻）
     assert _parse_quote_time("", "CN") is None
     assert _parse_quote_time("N/A", "US") is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 F4: 源只给到「日」的证据（TQ 日线口径）也必须透传 —— 当日盈亏靠它
+# ---------------------------------------------------------------------------
+
+def test_ws_payload_carries_date_only_evidence(monkeypatch):
+    """TQ: 无报时、但日线配对证明了报价日期 ⇒ 帧里 date/period 有值，time 仍必须是 None。
+
+    这是「日盈亏 unknown」的修复点：日期层成立，`daily_pnl_period` 就能判 today /
+    previous_trading_day；但**时刻**依然为空，防线不许当实时（前端 reason=date_only）。
+    """
+    _patch_rows(monkeypatch, [_quote_row(
+        "600519", quote_time=None, quote_date=_cn_today(),
+        quote_date_basis="daily_bar_close", source="tq",
+    )])
+
+    item = asyncio.run(qs._fetch_batch_quotes({"CN": ["600519"]}))["600519"]
+    assert item["quote_time"] is None
+    assert item["quote_date"] == _cn_today()
+    assert item["quote_time_kind"] == ""
+    assert item["quote_date_basis"] == "daily_bar_close"
+    assert item["daily_pnl_period"] == "today"
+
+
+def test_ws_payload_date_only_previous_day(monkeypatch):
+    """停牌/隔日：日期层给出的是**最后成交日** ⇒ previous_trading_day，不许标 today。"""
+    yesterday = _cn_today(-1)
+    _patch_rows(monkeypatch, [_quote_row(
+        "601326", quote_time=None, quote_date=yesterday,
+        quote_date_basis="daily_bar_close", source="tq",
+    )])
+
+    item = asyncio.run(qs._fetch_batch_quotes({"CN": ["601326"]}))["601326"]
+    assert item["quote_date"] == yesterday
+    assert item["daily_pnl_period"] == "previous_trading_day"
+
+
+def test_ws_payload_carries_snapshot_refresh_kind(monkeypatch):
+    """腾讯 parts[30] 的语义必须一起下发：UI 才能写「源快照时间」而不是「成交时间」。"""
+    stamp = f"{_cn_today()}T16:14:57+08:00"
+    _patch_rows(monkeypatch, [_quote_row(
+        "600519", quote_time=stamp, quote_date=_cn_today(),
+        quote_time_kind="snapshot_refresh",
+    )])
+
+    item = asyncio.run(qs._fetch_batch_quotes({"CN": ["600519"]}))["600519"]
+    assert item["quote_time"] == stamp
+    assert item["quote_time_kind"] == "snapshot_refresh"
+
+
+def test_ws_payload_drops_kind_when_stamp_dropped(monkeypatch):
+    """时刻与日期打架 ⇒ 证据全部作废（连语义标签一起清），不许留半条。"""
+    stamp = f"{_cn_today()}T10:15:00+08:00"
+    _patch_rows(monkeypatch, [_quote_row(
+        "600519", quote_time=stamp, quote_date=_cn_today(-1),
+        quote_time_kind="snapshot_refresh", quote_date_basis="daily_bar_close",
+    )])
+
+    item = asyncio.run(qs._fetch_batch_quotes({"CN": ["600519"]}))["600519"]
+    assert item["quote_time"] is None and item["quote_date"] is None
+    assert item["quote_time_kind"] == "" and item["quote_date_basis"] == ""
+    assert item["daily_pnl_period"] == "unknown"
+
+
+def test_md_quote_rows_keeps_date_without_time():
+    """`_quote_to_row` 必须让 quote_date 独立于 quote_time 存活（TQ 路径的唯一日期来源）。"""
+    pytest.importorskip("marketdata")
+    from marketdata.types import Quote
+
+    from src.core.marketdata_client import _quote_to_row
+
+    row = _quote_to_row(Quote(symbol="600519", market="CN", current_price=1354.0,
+                              quote_date="2026-10-29", quote_date_basis="daily_bar_close"))
+    assert row["quote_time"] is None
+    assert row["quote_date"] == "2026-10-29"
+    assert row["quote_date_basis"] == "daily_bar_close"
+    assert row["quote_time_kind"] == ""
+
+
+def test_md_quote_rows_marks_tencent_snapshot_refresh():
+    """腾讯报时带 `snapshot_refresh` 语义 —— 这是「不是成交时间」的机器可读标记。"""
+    pytest.importorskip("marketdata")
+    from datetime import datetime
+
+    from marketdata.types import Quote
+
+    from src.core.marketdata_client import _quote_to_row
+
+    stamp = datetime.fromisoformat("2026-10-29T16:14:57+08:00")
+    row = _quote_to_row(Quote(symbol="600519", market="CN", current_price=1354.0,
+                              quote_time=stamp, quote_time_kind="snapshot_refresh"))
+    assert row["quote_time"] == stamp.isoformat()
+    assert row["quote_date"] == "2026-10-29"  # 无独立日期时退回时刻的日期段
+    assert row["quote_time_kind"] == "snapshot_refresh"

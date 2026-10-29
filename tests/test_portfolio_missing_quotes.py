@@ -826,3 +826,67 @@ def test_agent_portfolio_context_isolates_shared_account_positions(db, monkeypat
 
     a_ctx = rt.load_portfolio_for_agent("scope_probe", USER_A.id)
     assert a_ctx.accounts == [], "A 不拥有共享账户, agent 上下文不得借它读取他人持仓"
+
+
+# ---------------- 2026-10-29 F4: 源只给「日」(TQ 日线口径) 也必须算得出当日盈亏 ----------------
+#
+# 缺陷: TQ 优先(≤5 只) 且 TQ 快照没有任何报时字段 ⇒ `quote_time`/`quote_date` 全空
+# ⇒ `daily_pnl_period='unknown'` ⇒ 持仓页「当日盈亏」永远 unknown，哪怕 TQ 明明给出了
+# 与今日日线收盘价一致的现价。修复: TQ vendor 用同标的日线收盘价配对证明**日期**
+# （`quote_date` + `quote_date_basis='daily_bar_close'`），时刻仍为 None。
+#
+# 本用例钉住 API 层口径：日期证据够判 today/previous_trading_day，且 quote_time 保持 None
+# （不许因为有了日期就补一个假时刻）。
+
+
+def _tq_quote(price, prev_close, quote_date):
+    return {
+        "current_price": price,
+        "prev_close": prev_close,
+        "change_pct": (price - prev_close) / prev_close * 100 if prev_close else None,
+        "quote_time": None,
+        "quote_date": quote_date,
+        "quote_time_kind": "",
+        "quote_date_basis": "daily_bar_close",
+    }
+
+
+def test_tq_date_only_quote_yields_today_daily_pnl(db, monkeypatch):
+    """TQ 只证到日: 当日盈亏按「today」算得出来, 但 quote_time 仍是 None（不许编时刻）。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    _stub_quotes(monkeypatch, {"600519": _tq_quote(12.0, 11.0, today)})
+    acc = _account(db)
+    _position(db, acc, "600519", cost=10.0, qty=100)
+
+    r = accounts_api.get_portfolio_summary(db=db, user=USER_A)
+    pos = r["accounts"][0]["positions"][0]
+
+    assert pos["quote_time"] is None, "源没有时刻证据，任何人都不许补一个"
+    assert pos["quote_date"] == today
+    assert pos["quote_date_basis"] == "daily_bar_close"
+    assert pos["daily_pnl_period"] == "today"
+    assert pos["daily_pnl"] == pytest.approx(100.0)
+    assert r["total"]["daily_pnl_period"] == "today"
+    assert r["total"]["daily_pnl_label"] == "今日盈亏"
+
+
+def test_tq_date_only_halted_quote_is_previous_trading_day(db, monkeypatch):
+    """停牌/隔日: 日期证据给的是**最后成交日** ⇒ 上一交易日口径, 不许标今日。"""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    last_traded = (datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=1)).isoformat()
+    _stub_quotes(monkeypatch, {"601326": _tq_quote(3.57, 3.62, last_traded)})
+    acc = _account(db)
+    _position(db, acc, "601326", cost=3.5, qty=1000)
+
+    r = accounts_api.get_portfolio_summary(db=db, user=USER_A)
+    pos = r["accounts"][0]["positions"][0]
+
+    assert pos["daily_pnl_period"] == "previous_trading_day"
+    assert pos["quote_date"] == last_traded
+    assert r["total"]["daily_pnl_period"] == "previous_trading_day"
+    assert r["total"]["daily_pnl_label"] == "上一交易日盈亏"
