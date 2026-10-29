@@ -45,6 +45,12 @@ export interface Position {
   quantity: number
   invested_amount: number | null
   trading_style: string  // short: 短线, swing: 波段, long: 长线
+  /**
+   * 用户自设防守线（绝对价, 原币种; Migration 223）。`null` = 用户没设 —— 后端
+   * `_position_payload` / `/portfolio/summary` 都会原样下发该键，前端只许按"未设"处理，
+   * 不许退回成本 ×(1-8%)（2026-10-23 产品裁决 B）。
+   */
+  defense_price?: number | null
   current_price: number | null
   current_price_cny: number | null  // 人民币价格（港股换算后）
   change_pct: number | null

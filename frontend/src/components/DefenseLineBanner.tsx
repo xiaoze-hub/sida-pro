@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchAPI } from '@sida/api'
+import { evaluateDefenseLine } from '@/lib/position-risk'
 import { AlertOctagon, Loader2, ShieldAlert, ShieldPlus } from 'lucide-react'
 import { safeFixed } from '@/lib/format'
 import { Button } from '@sida/base-ui/components/ui/button'
@@ -61,8 +62,6 @@ interface QuoteState {
   price: number | null
 }
 
-/** 距防线价多近才提示(相对**防线价**, 不是成本价)。 */
-const NEAR_LINE_PCT = 3
 /** 未设置时的参考预设: 仅把成本价折算成绝对价给用户点选, 不落库、不告警。 */
 const PRESETS = [
   { pct: -5, label: '-5%' },
@@ -189,12 +188,11 @@ export function DefenseLineBanner({
   const defense = position.defensePrice
   const price = quote.price
   const lossPct = price != null ? ((price - costVal) / costVal) * 100 : null
-  // 距离按防线价算: 用户改的是这条线, 告警的"还剩多少"就该跟着它走。
-  const distancePct = price != null && defense != null ? ((price - defense) / defense) * 100 : null
-  const isBreached = defense != null && price != null && price <= defense
-  const isNear =
-    defense != null && price != null && !isBreached &&
-    distancePct != null && distancePct <= NEAR_LINE_PCT
+  // 判定与阈值收敛在 `@/lib/position-risk`：持仓页的体检清单用的是同一个函数，
+  // 两处各写一份时任何一边调阈值都会出现「告警条没响、清单说破位」。
+  const { state: defenseState, distancePct } = evaluateDefenseLine(price, defense)
+  const isBreached = defenseState === 'breached'
+  const isNear = defenseState === 'near'
 
   const openDialog = (seed: number | null) => {
     setDraft(seed != null ? safeFixed(seed, 2, '') : '')
