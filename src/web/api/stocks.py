@@ -6,12 +6,14 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 from pydantic import BaseModel
 
 from src.web.database import get_db
 from src.web.api._scope import scoped
+from src.web.api._db_errors import is_lock_conflict
 from src.web.api.auth import get_current_user
 from src.web.models import (
     Stock,
@@ -405,6 +407,7 @@ def reorder_stocks(body: StockReorderRequest, db: Session = Depends(get_db), use
     if not body.items:
         return {"updated": 0}
     ids = [int(x.id) for x in body.items]
+    # scoped-check: allow — 取回后逐行做归属判定(下面 row.user_id / owner 检查), 非本人/非 owner 一律跳过
     rows = db.query(Stock).filter(Stock.id.in_(ids)).all()
     row_map = {r.id: r for r in rows}
     updated = 0
@@ -445,15 +448,47 @@ def update_stock(stock_id: int, stock: StockUpdate, db: Session = Depends(get_db
 
 @router.delete("/{stock_id}")
 def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    db_stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    # 2026-10-29 七审(B2 并发级联): 预检 → 删除之间若另一个事务给本行插入了
+    # 他人的 positions / price_alert_rules / price_alert_hits / stock_agents,
+    # 旧实现照样 200 删成功, 并靠 `ON DELETE CASCADE` 把那些行一起删掉 —— 预检
+    # 结论在提交时已经过期。现在第一件事就是对本行取 FOR UPDATE:
+    # PostgreSQL 中任何引用 stocks.id 的 INSERT/UPDATE 都必须先对被测行取
+    # FOR KEY SHARE 锁, 与 FOR UPDATE 冲突 → 并发写入会被挡到本事务提交之后;
+    # 那时行已不存在, 它拿 FK 冲突(23503) 失败, 而不是"先写成功再被静默级联删"。
+    # SQLite 下该子句被方言忽略(FOR UPDATE 无意义), 但 SQLite 是库级写锁,
+    # 不存在该窗口。
+    try:
+        db_stock = (
+            db.query(Stock)
+            .filter(Stock.id == stock_id)
+            .with_for_update()
+            .first()
+        )
+    except OperationalError as exc:
+        db.rollback()
+        if not is_lock_conflict(exc):
+            raise
+        # 另一个请求/迁移正持有该行(或语句级 lock_timeout 到点): 让调用方重试。
+        raise HTTPException(409, "该自选正在被其他操作修改，请刷新后重试") from None
     if not db_stock:
         raise HTTPException(404, "股票不存在")
 
     # 归属校验(2026-08-15 安全加固): 只能删自己的自选; 共享默认项(user_id NULL)仅 owner 可删
     if db_stock.user_id is not None and db_stock.user_id != user.id:
+        db.rollback()  # 早退也立刻放掉 FOR UPDATE, 别让锁挂到响应结束
         raise HTTPException(403, "无权删除该自选(非本人创建)")
     if db_stock.user_id is None and user.role != "owner":
+        db.rollback()
         raise HTTPException(403, "无权删除共享默认自选")
+
+    # 无 user_id 就 fail-closed: 下面所有"本人规则/本人命中"都靠 uid 判定,
+    # 拿不到身份时 `user_id == None` / `!= None` 的三值逻辑会把归属判成未知,
+    # 任何"就当作没有归属限制"的实现都会变成越权删除。宁可不删。
+    uid = getattr(user, "id", None)
+    if not uid:
+        logger.warning("拒绝删除自选: 当前账号缺少 user_id(stock_id=%s)", stock_id)
+        db.rollback()
+        raise HTTPException(403, "无法确认当前账号身份，已拒绝删除")
 
     # 删除股票前，要求先清理持仓，避免误删资产数据。
     # 2026-10-29 三审: 旧实现一条 `filter(Position.stock_id == stock_id)` 查**全库**
@@ -470,7 +505,6 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
     )
     from src.web.models import Account
 
-    uid = getattr(user, "id", None)
     has_position = (
         db.query(Position.id)
         .join(Account, Account.id == Position.account_id)
@@ -482,6 +516,7 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
         .first()
     )
     if has_position:
+        db.rollback()
         raise HTTPException(400, "该股票存在持仓，请先删除持仓后再删除股票")
     foreign_ref = db.query(Position.id).filter(Position.stock_id == stock_id).first()
     if foreign_ref:
@@ -490,6 +525,7 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
             stock_id,
             getattr(user, "id", None),
         )
+        db.rollback()
         raise HTTPException(
             409,
             "该自选仍被其它数据引用，暂无法删除，请联系管理员",
@@ -509,6 +545,8 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
     #   - 本人规则(user_id == 我) → 允许随自选一起删(用户自己的显式操作);
     #   - 任何非本人规则(含 user_id IS NULL 的历史规则) → 通用 409, 整单不删;
     #   - 任何本人不可销毁规则上的命中, 或 stock_id 指向本行的孤儿命中 → 同样 409;
+    #   - 本人规则但已迁到别的自选(historical 错位), 其命中仍指向本行 → 409:
+    #     命中历史先于自选存活, 不能因为"规则是我的"就随手级联删掉;
     #   - 共享票/规则/绑定/命中全部原样保留, 文案不报归属人、不报数量。
     # 用户可操作的替代路径: `POST /api/price-alerts/{rule_id}/adopt` 由规则本人在
     # 「价格提醒」页显式迁到自己的私有自选(带同意、不复制 Agent、不触发 LLM/外发),
@@ -530,7 +568,7 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
         )
         .first()
     )
-    # 命中记录没有 user_id, 只能经 rule_id 判定: 规则缺失/非本人 → 不能证明可删。
+    # 命中记录没有 user_id, 只能经 rule_id 判定: 规则缺失/非本人/已迁走 → 不能证明可删。
     foreign_hit = (
         db.query(PriceAlertHit.id)
         .outerjoin(PriceAlertRule, PriceAlertRule.id == PriceAlertHit.rule_id)
@@ -540,6 +578,8 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
                 PriceAlertRule.id.is_(None),
                 PriceAlertRule.user_id.is_(None),
                 PriceAlertRule.user_id != uid,
+                # 规则仍是本人但已迁到别的自选: 命中历史不能被本行的级联删掉。
+                PriceAlertRule.stock_id != stock_id,
             ),
         )
         .first()
@@ -550,6 +590,7 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
             stock_id,
             uid,
         )
+        db.rollback()
         raise HTTPException(
             409,
             "该自选仍被其它数据引用，暂无法删除（删除会丢失历史记录）。"
@@ -560,21 +601,28 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
     try:
         # 先删本人规则命中, 再删规则, 最后删 Agent 绑定/自选行 —— 显式清理不依赖
         # 数据库 FK 级联(SQLite 默认可能未启用), 任何一步失败整单回滚。
+        # 每个 DELETE 都重复带上归属条件(而不是只信前面预检): 行锁已挡住并发插入,
+        # 这里再挡一层"预检后本行归属被改"的 TOCTOU, 少一条就少删一条。
         if own_rule_ids:
             db.query(PriceAlertHit).filter(
                 PriceAlertHit.rule_id.in_(own_rule_ids)
             ).delete(synchronize_session=False)
             db.query(PriceAlertRule).filter(
-                PriceAlertRule.id.in_(own_rule_ids)
+                PriceAlertRule.id.in_(own_rule_ids),
+                PriceAlertRule.user_id == uid,
             ).delete(synchronize_session=False)
         db.query(StockAgent).filter(StockAgent.stock_id == stock_id).delete(
             synchronize_session=False
         )
         # 用 bulk DELETE 的 rowcount 判定"这次是否真的删到了":
         # 并发双删时另一个事务已删, 这里 0 行 → 幂等 404, 不报 200 也不 500。
+        # 归属条件同时是防线: 只有仍是本人私有 / 仍是共享(NULL)的行走得掉。
+        own_scope = (
+            Stock.user_id.is_(None) if db_stock.user_id is None else Stock.user_id == uid
+        )
         deleted = (
             db.query(Stock)
-            .filter(Stock.id == stock_id)
+            .filter(Stock.id == stock_id, own_scope)
             .delete(synchronize_session=False)
         )
         if not deleted:

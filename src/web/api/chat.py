@@ -1561,6 +1561,7 @@ def _build_portfolio_context(db: Session, user: User | None = None) -> str:
         f"- {st.name}({st.market}:{st.symbol}) "
         f"{p.quantity}股 成本{p.cost_price} 风格{p.trading_style or '波段'}"
         for p in user_scope_positions(db, uid).all()
+        # scoped-check: allow — p 来自 user_scope_positions(db, uid), 这里只读标的元数据拼提示
         if (st := db.query(Stock).filter(Stock.id == p.stock_id).first())
     ]
     if real_lines:

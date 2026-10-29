@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime, timedelta, timezone
 
 from src.web.database import get_db
+from src.web.api._db_errors import is_fk_violation, is_unique_violation
 from src.web.api.auth import get_current_user
 from src.web.models import Account, PriceAlertRule, Position, Stock, User
 from src.core.marketdata_client import md_quote_rows
@@ -395,13 +396,19 @@ def _is_unique_conflict(exc: IntegrityError) -> bool:
     """区分"唯一约束冲突"(可解释为 409) 与其它完整性错误(外键等, 不该吞)。
 
     PG 用 SQLSTATE 23505; SQLite 的原文是 "UNIQUE constraint failed: ..."。
-    不能一律 409: 账户在预检与写入之间被删掉会抛外键错误, 那是真故障。
+    不能一律 409: 其它完整性错误(非唯一)仍是真故障, 交给上层。
     """
-    orig = getattr(exc, "orig", None) or exc
-    if getattr(orig, "pgcode", None) == "23505":
-        return True
-    text = str(orig).lower()
-    return "unique constraint failed" in text or "duplicate key value" in text
+    return is_unique_violation(exc)
+
+
+def _is_fk_conflict(exc: IntegrityError) -> bool:
+    """外键冲突(SQLSTATE 23503): 预检之后被引用的行刚被删掉。
+
+    DELETE /api/stocks/{id} 会对 stock 行取 FOR UPDATE, 本路径的 INSERT 必须
+    先拿该行的 FOR KEY SHARE 锁 —— 删除先提交时我们拿到 FK 冲突而不是"写进去
+    再被级联删"。这是并发冲突(409), 不是 500。
+    """
+    return is_fk_violation(exc)
 
 
 @router.post("/positions", response_model=PositionResponse)
@@ -465,6 +472,16 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db), user: U
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        if _is_fk_conflict(exc):
+            logger.info(
+                "建仓外键冲突(账户/标的刚被删): account_id=%s stock_id=%s user=%s",
+                data.account_id,
+                data.stock_id,
+                user.id,
+            )
+            raise HTTPException(
+                409, "该账户或标的刚发生变化，请刷新后重试"
+            ) from None
         if not _is_unique_conflict(exc):
             raise
         # uq_account_stock: 并发建同一 (account, stock), 或该唯一行对我不可见。
@@ -890,6 +907,7 @@ def get_portfolio_summary(
         positions_by_account.setdefault(pos.account_id, []).append(pos)
 
     all_stock_ids = {pos.stock_id for pos in positions}
+    # scoped-check: allow — all_stock_ids 只取自上一行已按归属过滤的持仓(_portfolio_positions(db, user)); 本查询仅补名称/行情, 不新增可见行
     stocks = db.query(Stock).filter(Stock.id.in_(all_stock_ids)).all() if all_stock_ids else []
     stock_map = {s.id: s for s in stocks}
 
@@ -1297,6 +1315,7 @@ def _gather_holdings(db: Session, user: User | None = None) -> list[dict]:
         positions_by_account.setdefault(pos.account_id, []).append(pos)
 
     stock_ids = {p.stock_id for p in positions}
+    # scoped-check: allow — stock_ids 只取自上一段已按归属过滤的持仓; 本查询仅补名称/行情, 不新增可见行
     stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []
     stock_map = {s.id: s for s in stocks}
     quotes = _fetch_quotes_for_stocks(stocks) if stocks else {}
@@ -1411,6 +1430,7 @@ def portfolio_todos(db: Session = Depends(get_db), user: User = Depends(get_curr
             .all()
         }
         for sid in held_ids - ruled:
+            # scoped-check: allow — sid 来自 held_ids(本人可见持仓), 这里只读标的元数据用于提示
             stock = db.query(Stock).filter(Stock.id == sid).first()
             if stock:
                 todos.append(
@@ -1436,6 +1456,7 @@ def portfolio_todos(db: Session = Depends(get_db), user: User = Depends(get_curr
         .all()
     )
     for r in expiring:
+        # scoped-check: allow — r 来自上面按 rule_scope(本人/NULL)过滤过的规则, 这里只读标的元数据
         stock = db.query(Stock).filter(Stock.id == r.stock_id).first()
         todos.append(
             {

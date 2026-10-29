@@ -577,6 +577,7 @@ def dedupe_conversations(
         db.query(ChatMessage).filter(ChatMessage.conversation_id.in_(doomed)).delete(
             synchronize_session=False
         )
+        # scoped-check: allow — doomed 只来自本函数上方 rows(按 ChatConversation.user_id == uid 过滤)
         db.query(ChatConversation).filter(ChatConversation.id.in_(doomed)).delete(
             synchronize_session=False
         )

@@ -3,11 +3,17 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
 from src.config import Settings
 from src.core.price_alert_engine import ENGINE
+from src.web.api._db_errors import (
+    is_fk_violation,
+    is_lock_conflict,
+    is_unique_violation,
+)
 from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
@@ -15,6 +21,19 @@ from src.web.models import PriceAlertHit, PriceAlertRule, Stock, User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _my_stock(db: Session, uid: str, symbol: str, market: str) -> Stock | None:
+    """本人在某标的上的私有自选(可能不存在)。"""
+    return (
+        db.query(Stock)
+        .filter(
+            Stock.user_id == uid,
+            Stock.symbol == symbol,
+            Stock.market == market,
+        )
+        .first()
+    )
 
 
 def _format_datetime(dt) -> str:
@@ -167,8 +186,17 @@ def create_alert_rule(
         expire_at=expire_at,
         notify_channel_ids=body.notify_channel_ids or [],
     )
-    db.add(row)
-    db.commit()
+    try:
+        db.add(row)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        # 并发下自选刚被删除 → 本次 INSERT 拿到外键冲突; 另有规则自身的唯一约束。
+        # 两者都是"重来一次可能成功"的冲突 → 409; 其它完整性错误是真故障, 原样抛。
+        if not (is_fk_violation(exc) or is_unique_violation(exc)):
+            raise
+        logger.warning("创建提醒规则冲突(未写入) user=%s", user.id)
+        raise HTTPException(409, "该自选已不可用，请刷新后重试") from None
     db.refresh(row)
     return _to_response(row)
 
@@ -276,15 +304,39 @@ def adopt_alert_rule_to_private(
     - **不复制 StockAgent 绑定** → 不替用户订阅、不触发任何 Agent/LLM/通知;
     - 命中记录 `stock_id` 同步指向新自选, 原有触发历史完整保留。
     """
+    # fail-closed: 没有 user_id 时 `user_id == None` 在 SQL 里是 `IS NULL`,
+    # 会把 NULL 归属的历史规则当成"本人的"认领过来。宁可不认。
+    uid = getattr(user, "id", None)
+    if not uid:
+        logger.warning("adopt 拒绝: 当前账号缺少 user_id(rule_id=%s)", rule_id)
+        raise HTTPException(403, "无法确认当前账号身份，已拒绝迁移")
+
     row = (
         db.query(PriceAlertRule)
-        .filter(PriceAlertRule.id == rule_id, PriceAlertRule.user_id == user.id)
+        .filter(PriceAlertRule.id == rule_id, PriceAlertRule.user_id == uid)
         .first()
     )
     if not row:
         raise HTTPException(404, "规则不存在")
 
-    src_stock = db.query(Stock).filter(Stock.id == row.stock_id).first()
+    # 2026-10-29 七审(B2 并发): 对本行取 FOR UPDATE —— 与 DELETE /api/stocks/{id}
+    # 的写锁互斥。两个方向都安全: 删除先拿到锁 ⇒ 它要么看到本规则而 409 拒绝,
+    # 要么本规则已迁走; 迁移先拿到锁 ⇒ 删除的预检读到的是迁移后的状态。
+    # 同时它把"同一共享行的并发 adopt"串行化, 避免同 symbol 私有自选被建两条。
+    try:
+        src_stock = (
+            db.query(Stock)
+            .filter(Stock.id == row.stock_id)
+            .with_for_update()
+            .first()
+        )
+    except OperationalError as exc:
+        db.rollback()
+        if not is_lock_conflict(exc):
+            raise
+        raise HTTPException(
+            409, "该自选正在被其他操作修改，请刷新后重试"
+        ) from None
     if not src_stock:
         raise HTTPException(409, "该规则关联的自选已不存在")
     if src_stock.user_id == user.id:
@@ -293,15 +345,7 @@ def adopt_alert_rule_to_private(
         # 规则指向他人私有自选(历史错位): 不借迁移复制其标的元数据。
         raise HTTPException(409, "该规则关联的自选不可用")
 
-    target = (
-        db.query(Stock)
-        .filter(
-            Stock.user_id == user.id,
-            Stock.symbol == src_stock.symbol,
-            Stock.market == src_stock.market,
-        )
-        .first()
-    )
+    target = _my_stock(db, uid, src_stock.symbol, src_stock.market)
     created_target = False
     if target is None:
         # 与 POST /api/stocks 同口径的配额/演示账号上限, 不借迁移动绕过限制。
@@ -316,7 +360,7 @@ def adopt_alert_rule_to_private(
                 watch_limit = int(free_tier.guest_strategy(db).get("watchlist_limit", 1))
             except Exception:  # noqa: BLE001
                 watch_limit = 1
-            own_count = db.query(Stock).filter(Stock.user_id == user.id).count()
+            own_count = db.query(Stock).filter(Stock.user_id == uid).count()
             if watch_limit > 0 and own_count >= watch_limit:
                 raise HTTPException(
                     403, f"演示账号仅可添加 {watch_limit} 只自选股，无法迁移提醒。"
@@ -326,22 +370,43 @@ def adopt_alert_rule_to_private(
 
         max_order = db.query(_func.max(Stock.sort_order)).scalar() or 0
         target = Stock(
-            user_id=user.id,
+            user_id=uid,
             symbol=src_stock.symbol,
             name=src_stock.name,
             market=src_stock.market,
             sort_order=int(max_order) + 1,
         )
-        db.add(target)
-        db.flush()
-        created_target = True
+        # 并发迁移同一 symbol 时, 若目标表上存在 (user_id, symbol, market) 唯一约束,
+        # 后提交的一方会拿到 IntegrityError —— 不能冒 500, 也不能留半截事务。
+        # 用 SAVEPOINT 只回滚这次 INSERT, 然后**重查**对手刚建好的行, 幂等复用。
+        try:
+            with db.begin_nested():
+                db.add(target)
+                db.flush()
+            created_target = True
+        except IntegrityError:
+            target = _my_stock(db, uid, src_stock.symbol, src_stock.market)
+            if target is None:
+                # 不是"同 symbol 唯一冲突"而是别的完整性错误: 原样抛出, 由上层 500。
+                logger.exception("adopt 建私有自选失败(非唯一冲突)")
+                raise
+            created_target = False
 
     row.stock_id = target.id
     # 命中没有 user_id, 但其 rule_id 已证明属于本人 → 同步标的, 历史条目不丢。
     db.query(PriceAlertHit).filter(PriceAlertHit.rule_id == row.id).update(
         {PriceAlertHit.stock_id: target.id}, synchronize_session=False
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if not (is_fk_violation(exc) or is_unique_violation(exc)):
+            raise
+        # 目标行在提交瞬间被删掉(FK 失败)等罕见竞态: 整单回滚, 不冒 500,
+        # 规则与命中仍留在原自选上(数据不丢), 前端按 409 重试即可。
+        logger.warning("adopt 提交冲突(整单回滚) rule=%s user=%s", rule_id, uid)
+        raise HTTPException(409, "迁移失败：自选刚发生变化，请刷新后重试") from None
     db.refresh(row)
     return {"ok": True, "stock_id": target.id, "created_stock": created_target}
 
@@ -387,6 +452,7 @@ def list_today_hits(
         .all()
     }
     stock_ids = {h.stock_id for h in hits}
+    # scoped-check: allow — hits 已按本人规则过滤(上面 rule_ids 只保留 user_id == 本人的规则), stock_ids 仅取自这些命中
     stock_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()}
     out = []
     for h in hits:

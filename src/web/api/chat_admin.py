@@ -256,13 +256,12 @@ def list_conversation_runs(
     if not conv:
         raise HTTPException(404, "对话不存在")
 
-    rows = (
-        db.query(CopilotRun)
-        .filter(CopilotRun.conversation_id == conversation_id)
-        .order_by(CopilotRun.created_at.desc(), CopilotRun.id.desc())
-        .limit(limit)
-        .all()
-    )
+    # scoped-check: allow — conversation_id 由上面已校验归属的 ChatConversation 得到(他人会话已 404)
+    rows = db.query(CopilotRun).filter(
+        CopilotRun.conversation_id == conversation_id
+    ).order_by(
+        CopilotRun.created_at.desc(), CopilotRun.id.desc()
+    ).limit(limit).all()
     return [
         {
             "run_id": r.run_id,

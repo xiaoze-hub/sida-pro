@@ -2117,6 +2117,7 @@ def get_usage(
 
     if x_api_key and x_api_key.startswith("sk_"):
         row = _validate_api_key_row(x_api_key, db)
+        # scoped-check: allow — api_key_id 取自 _validate_api_key_row(X-API-Key) 校验过的本 key
         today = db.query(SkillUsage).filter(
             SkillUsage.api_key_id == row.id,
             SkillUsage.created_at >= day_start,
@@ -2372,6 +2373,7 @@ async def _require_owner_admin(user: _User = _Dep(_get_current_user)) -> _User:
 
 
 @router.get("/admin/skills/keys")
+@allow_cross_user  # C3(2026-09-18): 仅 owner/admin(_require_owner_admin) 的全局 Key 清单, 有意跨用户
 def admin_list_keys(
     limit: int = Query(default=200, ge=1, le=1000, description="每页条数"),
     offset: int = Query(default=0, ge=0),
