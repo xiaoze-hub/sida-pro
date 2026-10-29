@@ -1677,6 +1677,10 @@ def _stage_rollback_audit(db: Session, *, user_id: Any, action_id: int, kind: st
 
     调用方（标注撤销）必须在同一个 `commit()` 里带上审计：审计失败要整笔回滚，
     否则"行删了但审计没落库"就是永久丢快照。
+
+    ⚠️ `AuditLog.detail` 必须保持**不限长**（模型是 Text，存量库迁移 v233 放宽）：
+    这里的 detail 是整份标注快照 JSON，超过 255 时 PG 会 StringDataRightTruncation，
+    而它和删除在同一事务 ⇒ 整笔回滚 ⇒ 这条线永远撤不掉。**不许**为了迁就列宽截断。
     """
     from src.db.models import AuditLog
 

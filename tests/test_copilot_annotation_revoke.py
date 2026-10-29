@@ -164,6 +164,27 @@ def test_owner_revokes_confirmed_annotation(db):
     assert detail["annotation"]["price"] == 35.23
 
 
+def test_revoke_audit_snapshot_is_never_truncated(db):
+    """撤销审计存**完整**快照：不许为了迎合列宽/展示而截断任何字段。
+
+    行删掉之后审计是唯一证据源 —— 截断 note 就等于永久说不清"删的是哪条线"。
+    方言无关的钉子（列宽问题在真实 PG 上用 §10 契约用例证明）。
+    """
+    note = "上影线反复试探压力位，量能没跟上，" * 20
+    assert len(note) > 255
+
+    out = _confirm(db, {"symbol": "600519", "label": "长备注线", "price": 20.0, "note": note})
+    A.revoke_annotation(db, user_id=UID, annotation_id=out["annotation_id"], reason="长备注撤销")
+
+    audits = _revoke_audits(db)
+    assert len(audits) == 1
+    raw = audits[0].detail
+    assert len(raw) > 255, "快照本来就超过 255，用例才有意义"
+    detail = json.loads(raw)  # 截断过就解析不出来
+    assert detail["annotation"]["note"] == note
+    assert detail["annotation"]["label"] == "长备注线"
+
+
 def test_action_rollback_endpoint_path_also_revokes_annotation(db):
     out = _confirm(db, {"symbol": "600519", "label": "动作回滚路径", "price": 30.0})
 
