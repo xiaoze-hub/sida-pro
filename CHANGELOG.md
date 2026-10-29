@@ -1,7 +1,7 @@
 ## 未发布
 
 ### fix-修复 AI 代码审查工作流引用
-- 替换 `setup-node` 和 `codeql-action` 的无效提交 SHA，保留固定版本；审查服务自身的可用性另由真实运行验证。
+- 替换 `setup-node` 和 `codeql-action` 的无效提交 SHA；缺少 AI 网关配置或未产出审查结果时明确失败，不再显示假绿。
 
 ## release: v0.90.0（数智参谋体验与标注安全撤销）
 
