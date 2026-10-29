@@ -433,6 +433,7 @@ class TestPortfolioContext(unittest.TestCase):
 
     def _mock_portfolio(self, with_position=True, with_cash=True):
         portfolio = MagicMock()
+        portfolio.scope_note = ''
         if with_position:
             p = MagicMock()
             p.symbol = "600519"

@@ -1564,7 +1564,6 @@ def _build_portfolio_context(db: Session, user: User | None = None) -> str:
     ]
     if real_lines:
         lines.append("实盘持仓：\n" + "\n".join(real_lines))
-
     # 模拟盘持仓(2026-09-08 T6: user_id 列已落地, 按归属过滤; NULL 行为冷启动遗留, owner 可见)
     paper_positions = (
         db.query(PaperTradingPosition)

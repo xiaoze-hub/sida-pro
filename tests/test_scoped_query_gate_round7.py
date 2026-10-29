@@ -186,8 +186,7 @@ def test_object_level_check_passes():
 def test_inline_allow_comment_requires_marker():
     src = (
         "def ok(db, user):\n"
-        "    # scoped-check: allow — 该表由上游按 user 过滤后取 id\n"
-        "    return db.query(Stock).filter(Stock.id.in_([1])).all()\n"
+        "    return db.query(Stock).filter(Stock.id.in_([1])).all()  # scoped-check: allow — id 已由上游按用户过滤\n"
     )
     assert _violations(src) == []
 
