@@ -13,8 +13,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine
@@ -54,8 +56,9 @@ def _quote(price: float):
         "current_price": price,
         "prev_close": price,
         "change_pct": 0.0,
-        "quote_time": "2026-10-30 10:00:00",
-        "quote_date": "2026-10-30",
+        # 跟随市场时区的今天(跨 UTC/上海零点的 CI 不会把今日判成上一交易日)
+        "quote_time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d 10:00:00"),
+        "quote_date": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d"),
     }
 
 
