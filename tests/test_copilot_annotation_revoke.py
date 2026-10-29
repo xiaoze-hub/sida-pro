@@ -630,4 +630,3 @@ def test_dedup_branch_hands_the_session_to_can_rollback(db, monkeypatch):
     )
     assert any(p["dedup"] is True for p in again), "第二次提议应命中去重分支"
     assert seen and all(seen), "去重分支没传 db → can_rollback 只能靠猜"
-
