@@ -81,6 +81,8 @@ class PremarketOutlookAgent(BaseAgent):
             agent_name="daily_report",
             stock_symbol="*",
             before_date=date.today(),
+            user_id=getattr(getattr(context, "user", None), "id", None),
+            role=getattr(getattr(context, "user", None), "role", None),
         )
         logger.info(
             "[%s] 昨日盘后回顾: exists=%s content_chars=%s",

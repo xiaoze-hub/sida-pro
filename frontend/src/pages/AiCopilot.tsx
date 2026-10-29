@@ -8,6 +8,8 @@ import {
   getCopilotMetrics,
   getPendingActions,
   rejectPendingAction,
+  type CopilotRunDetail,
+  type CopilotRunRow,
   type CopilotMetrics,
   type PendingAction,
 } from '@/lib/copilot/api'
@@ -16,8 +18,8 @@ import { chatApi, type ChatStreamResult } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import InlineSteps from '@/components/copilot/InlineSteps'
-import { matchRunForMessage } from '@/lib/copilot/match-run'
 import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
+import { buildAnswerTrace, type AnswerTrace } from '@/lib/copilot/evidence-provenance'
 import {
   emptyReadiness,
   foldStageEvent,
@@ -28,11 +30,23 @@ import {
 import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
-import { extractSymbolChips, marketOf } from '@/lib/copilot/symbolChips'
+import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
 import { publicAssistantContent } from '@/lib/copilot/public-content'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
 import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
 import { MentionPicker, type MentionTab } from '@/components/copilot/MentionPicker'
+import { ChartContextChip } from '@/components/copilot/ChartContextChip'
+import {
+  chartContextOwnerMatches,
+  chartContextKey,
+  chartContextPrompt,
+  dismissChartContext,
+  isChartContextFresh,
+  readChartContextDetailed,
+  unpublishChartContext,
+  type ChartContext,
+} from '@/lib/copilot/chart-context'
+import { currentAccountId } from '@/lib/copilot/annotationLedger'
 import { ConversationSidebar } from '@/components/copilot/ConversationSidebar'
 import { MessageActions } from '@/components/copilot/MessageActions'
 import { ToolTimeline } from '@/components/copilot/ToolTimeline'
@@ -100,7 +114,7 @@ interface PendingAttachment {
 
 /** 指令池接口失败时的本地兜底（只影响"有没有快捷按钮"，不影响能不能提问）。 */
 
-type Msg = {
+export type Msg = {
   role: 'user' | 'assistant'
   content: string
   /** 用户消息附带的文件名（气泡里显示小 chip，正文不重复文件名太长）。 */
@@ -141,8 +155,134 @@ export function settleStreamBubble(msgs: Msg[], content: string, incomplete = fa
   return [...msgs, { role: 'assistant', content: text, incomplete: flag }]
 }
 
+/** 提问归一化：与 `lib/copilot/match-run.ts` 同口径（空白折叠、去掉发送时带的 @ 前缀）。 */
+function normalizeQuestion(text: string): string {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^(@\S+\s+)+/, '')
+    .trim()
+}
+
+/** 这条回答对应的问题是它前面最近的一条用户消息（页面内存的就是这一轮原文）。 */
+function questionOfMessage(msgs: Msg[], index: number): string {
+  if (msgs[index]?.role !== 'assistant') return ''
+  for (let k = index - 1; k >= 0; k -= 1) {
+    if (msgs[k].role === 'user') return normalizeQuestion(msgs[k].content)
+  }
+  return ''
+}
+
+/**
+ * 同一个问题是否同一句：先比归一化全文，再退 24 字头（防一端被截断/多了标点）。
+ * 与 `match-run.ts` 同一口径 —— 这里只是把它变成「按第几次出现」的可定位版本。
+ */
+function sameQuestion(a: string, b: string): boolean {
+  if (!a || !b) return false
+  if (a === b) return true
+  const head = a.slice(0, 24)
+  if (head.length < 8) return false
+  return b.startsWith(head) || a.startsWith(b.slice(0, 24))
+}
+
+/**
+ * 把一条回答对到它的那一轮 run（2026-10-29 P1 接线）。
+ *
+ * 与 `lib/copilot/match-run.ts` 的区别，也是页面能用的前提：
+ *  - **同一会话里同一问题被问过多次**时，`runs.find` 永远命中最新那一轮（后端按 id desc 返回），
+ *    旧回答会被挂上新 run —— 这是错轮。这里按「同问的第几次出现」对齐：最新一条回答对
+ *    runs[0]，往前依次 runs[1]、runs[2]…；候选不够就返回 null，绝不复用别人的 run。
+ *  - **切会话**时 `useCopilotRuns` 在新请求回来前还留着旧会话的列表，而提问文本又可能相同。
+ *    因此候选 run 的 `conversation_id` 必须**明确等于**当前会话；为 null 或他会话一律不挂。
+ *
+ * 关联方式仍然只是「提问文本匹配」：消息表没有 run_id（`chat_messages` 只有
+ * id/conversation_id/role/content/created_at），所以调用方只能拿它作推断，
+ * UI 必须标未验证。回答正文里出现 run_id 字符串不算凭证 —— 那是模型写的字。
+ */
+export function resolveRunForMessage(
+  msgs: Msg[],
+  runs: CopilotRunRow[],
+  index: number,
+  conversationId: number | null,
+): CopilotRunRow | null {
+  // 没有会话就没有可归属的 run（新会话未落库时也不挂）
+  if (conversationId == null) return null
+  if (!Array.isArray(runs) || runs.length === 0) return null
+  const question = questionOfMessage(msgs, index)
+  if (!question) return null
+
+  const candidates = runs.filter(
+    (r) => r.conversation_id === conversationId && sameQuestion(question, normalizeQuestion(r.question || '')),
+  )
+  if (!candidates.length) return null
+
+  // 本条之后还有多少次同问：0 = 最新一条回答 → 对 runs[0]（后端按 id desc）
+  let rank = 0
+  for (let k = index + 1; k < msgs.length; k += 1) {
+    if (msgs[k]?.role !== 'assistant') continue
+    if (sameQuestion(questionOfMessage(msgs, k), question)) rank += 1
+  }
+  // 候选不够（某一轮没落库/被清理）→ null，绝不复用别人的 run
+  return candidates[rank] ?? null
+}
+
+/**
+ * 一条回答的溯源（页面唯一入口）。
+ *
+ * 纪律：
+ *  - 草稿（`live`）不挂：终稿没到，回答与证据都还没定稿；
+ *  - 关联只可能是 `question-text` / `none`，**永不**传 `run-id`（页面拿不到服务端关联）；
+ *  - steps 只取「候选 run 自己的」详情（`details[run_id]`），没加载就是 null，
+ *    不拿 `run.tool_calls` 冒充；
+ *  - readiness 只收**这条消息定稿时固化的**齐套度：页面上正在跑的 stage 流属于当前草稿，
+ *    挂到历史回答上就是把这一轮的取数结果说成上一轮的。
+ */
+export function buildMessageAnswerTrace(input: {
+  msgs: Msg[]
+  runs: CopilotRunRow[]
+  details: Record<string, CopilotRunDetail>
+  index: number
+  conversationId: number | null
+  live: boolean
+  /** 消息自己的固化齐套度；传当前实时态就是错 */
+  readiness?: ReadinessState | null
+}): AnswerTrace | null {
+  if (input.live) return null
+  const run = resolveRunForMessage(input.msgs, input.runs, input.index, input.conversationId)
+  const steps = run ? input.details[run.run_id]?.steps ?? null : null
+  return buildAnswerTrace({
+    run,
+    steps,
+    // 唯一来源是提问文本匹配；没有 run 时 buildAnswerTrace 会归 none
+    association: 'question-text',
+    readiness: input.readiness ?? null,
+  })
+}
+
 /** 6 位 A 股代码（含北交所 4/8 开头）才允许查参谋卡，避免把日期/金额当代码。 */
 const SYMBOL_RE = /^[03468]\d{5}$/
+
+/**
+ * 一个会话的图表记账（2026-10-29 三审）。
+ *
+ * `chart` 三态不能合并：`unknown`（历史会话）**既不同于** `chart`（确知带着快照），
+ * **也不同于** `clean`（确知没带）。把它当 `clean` 就会重复"旧图每轮注入而界面装作没有"；
+ * 把它当 `chart` 又会在重开历史会话时谎称"本页知道那段快照是什么"。
+ */
+type ConvChartState = 'chart' | 'clean' | 'unknown'
+interface ConvRecord {
+  /** 会话绑定标的（服务端 `stock_symbol`；不知道就是空串） */
+  symbol: string
+  chart: ConvChartState
+  /** 本页亲手送进过的那段快照（只有 `chart` 态才有） */
+  ctx?: ChartContext
+  /**
+   * 这个会话是在哪个账号下打开/创建的（2026-10-29 三审）。
+   *
+   * 同一标签页换号后，`chartCtx` 会被清掉 —— 但"这个会话属于上一个账号"这件事不能跟着丢：
+   * 新账号若接着在同一只票上提问，光看 `chartCtx` 已经查不出串号，需要这份账号归属来兜底。
+   */
+  owner: string
+}
 
 /**
  * `/ai-copilot` 一级工作台（设计稿 §8.8，2026-10-18）。
@@ -230,6 +370,56 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const [streamNotice, setStreamNotice] = useState<string | null>(null)
   /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
   const [anchorSymbol, setAnchorSymbol] = useState('')
+  /**
+   * 图表上下文（P2, 2026-10-29）：从个股工作台带过来的**那一张图**的读数
+   * （类型/市场/周期/可视区间/已确认价位）。
+   *
+   * 只在「从工作台进参谋」时读取一次（`readChartContext` 按 账号+代码+市场 精确匹配，
+   * 同号多类型直接返回 null 不猜），之后不轮询、不自动取数 —— 用户屏幕上那张图是什么，
+   * 带过来的就是什么；图变了要重新从工作台进入。
+   *
+   * 失效点（任一发生即清空，绝不跟着串）：用户清除、锚点换标的、切历史会话。
+   */
+  const [chartCtx, setChartCtx] = useState<ChartContext | null>(null)
+  /**
+   * 已经被服务端会话收下的图表快照（P2 修正, 2026-10-29）。
+   *
+   * 后端事实：`initial_context` 只在 `POST /chat/conversations` 时落库，
+   * `_build_ai_messages()` 每一轮都把它拼进 system prompt，且没有接口能改/清它。
+   * 所以「哪段快照进了哪个会话」必须在前端记牢：会话 21 收过 600111 的图，
+   * 之后的追问要么继续承认这一点（界面显示 + 明说不撤回），要么换一个不带它的新会话，
+   * 绝不能假装点一下清除就没了。
+   */
+  const [sentChart, setSentChart] = useState<{ conversationId: number; symbol: string } | null>(null)
+  /** 图表上下文的可见提示（清除/换标的后的真实后果，不静默、不含糊）。 */
+  const [chartNotice, setChartNotice] = useState<string | null>(null)
+  /**
+   * 当前打开会话的**绑定标的**（服务端 `stock_symbol`；本页新建时就是请求里那个）。
+   * 空串 = 这个会话没有绑定标的（历史会话常见），此时任何"同一只票"的判断都不成立。
+   */
+  const [convBoundSymbol, setConvBoundSymbol] = useState('')
+  /**
+   * 正在拉某个历史会话的详情（`GET /chat/conversations/{id}` 在飞）。
+   *
+   * 在飞期间必须挡住发送：此刻 `convId` 还是**上一个**会话，而用户点开的那个会话
+   * 到底带没带图表快照、绑定的是哪只票都还不知道 —— 发出去就是猜（2026-10-29 三审）。
+   */
+  const [convLoading, setConvLoading] = useState(false)
+  /**
+   * 当前打开的是"不是本页创建"的历史会话：它的 `initial_context` 服务端不回传，
+   * 无法核验有没有带过图表快照，而后端仍会每轮重放。这条提示必须一直在（不随发问消失）。
+   */
+  const [historyCtxUnknown, setHistoryCtxUnknown] = useState(false)
+  /**
+   * 过期是"时间到了"的事，不是交互触发的事：只有图表上下文在场时每 30s 走一次时钟，
+   * 条上才能及时把"进入时快照"标成"已过期、不发送"。
+   */
+  const [chartClock, setChartClock] = useState(() => Date.now())
+  useEffect(() => {
+    if (!chartCtx) return
+    const timer = window.setInterval(() => setChartClock(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [chartCtx])
   /** 参谋卡只在用户主动点「看卡」时请求（brief 接口较重，常 10s+） */
   const [briefSymbol, setBriefSymbol] = useState('')
   // ── @ 提及（股票 / 内置智能体）──
@@ -253,6 +443,26 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
    * 两轮流并存时（切走旧流还没收、新会话又发了新流）只 abort 最后一个会漏掉前面的。
    */
   const liveStreams = useRef<Set<AbortController>>(new Set())
+  /**
+   * 会话 id → 这个会话的图表记账（`{ symbol, chart }`，2026-10-29 三审）。
+   *
+   * 只记 `sentChart`（当前会话）不够：用户点「新对话」再把自己刚才那个会话点回来时，
+   * `openConversation` 会清空当前会话态，而服务端仍每轮重放那份 `initial_context`。
+   * 更糟的是刷新页面后本页什么都不记得，换票检查完全失效（旧图快照被继续注入）。
+   *
+   * 所以按会话 id 记账，并且**区分三种状态**：
+   *  - `chart`   本页亲手送进过图表快照（每轮重放，撤不回）；
+   *  - `clean`   本页确知它没带快照（例如后台新建的那一轮）；
+   *  - `unknown` 不是本页创建的会话，服务端不回传 `initial_context`，无法核验。
+   * `unknown` 按"可能有"处理 —— 保守，但不许装成"没有"。
+   */
+  const convRecords = useRef<Map<number, ConvRecord>>(new Map())
+  /** `openConversation` 的请求序号：只允许**最后一次**打开写入视图（避免慢 GET 覆盖用户刚点的会话）。 */
+  const openSeqRef = useRef(0)
+  /** `convId` 的最新值（异步回调里读，state 闭包会过期）。 */
+  const convIdRef = useRef<number | null>(null)
+  /** `chartCtx` 的最新值（窗口 focus/跨标签 storage 事件里读）。 */
+  const chartCtxRef = useRef<ChartContext | null>(null)
   const mounted = useRef(true)
   /**
    * 2026-10-28 流式归属令牌: 切会话/新会话时 +1。
@@ -288,16 +498,70 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setStreamNotice(null)
   }, [])
   useEffect(() => { onBusyChange?.(streaming || uploading || backgroundPending) }, [streaming, uploading, backgroundPending, onBusyChange])
+  useEffect(() => { convIdRef.current = convId }, [convId])
+  useEffect(() => { chartCtxRef.current = chartCtx }, [chartCtx])
   useEffect(() => {
     if (!entry || entry.id === consumedEntry.current || streaming || backgroundPending) return
     consumedEntry.current = entry.id
     initialContext.current = entry
     detachStream() // 2026-10-28: 换入口上下文 = 换会话视图, 旧流连带本轮态一起作废
+    openSeqRef.current += 1 // 在飞的历史会话 GET 一并作废（别把视图拉回刚离开的会话）
+    setConvLoading(false)
     setConvId(null)
+    setConvBoundSymbol(entry.symbol)
     setMsgs([])
     setError(null)
     setAnchorSymbol(entry.symbol)
+    // 换入口 = 新会话视图：上一段「已送给某个会话」的记账跟着作废
+    setSentChart(null)
+    setChartNotice(null)
+    setHistoryCtxUnknown(false)
+    /**
+     * P2(2026-10-29): 从个股工作台进来时，把「用户刚才盯的那张图」一起带上。
+     * 读的是工作台**真的发布过**的视图快照（`lib/copilot/chart-context`），
+     * 拿不到/同号歧义/别人的账号 → null；这里不猜、不请求。
+     *
+     * 读侧还必须说清"为什么没有"：过期 / 同号歧义 / 已被用户清除都不能静默 ——
+     * 静默会让用户以为"带上了"，或者以为"工作台没这个功能"。
+     */
+    const read = readChartContextDetailed(entry.symbol, entry.market ?? null)
+    setChartCtx(read.ctx)
+    if (read.expired) {
+      setChartNotice('工作台的图表快照已超过 5 分钟，本次未带入（刷新页面后从工作台重新进入可重新抓取）。')
+    } else if (read.ambiguous) {
+      setChartNotice('同号有多张图（类型/市场/周期不唯一），为避免猜错，本次未带入图表上下文。')
+    } else if (read.dismissed) {
+      setChartNotice('你之前清除了这只票的图表上下文，本次未带入；刷新页面后从工作台重新进入可再次带上。')
+    }
   }, [entry, streaming, backgroundPending, detachStream])
+
+  /**
+   * 锚点换标的 → 工作台那张图的上下文立刻失效（P2 隔离）。
+   *
+   * 用**派生值**而不是 effect 清 state：用户改问 000776 时，600111 的区间/价位一个都不许跟着走。
+   * （effect 里比较 `anchorSymbol` 会读到上一轮的闭包值 —— 首帧锚点还是空串，刚带进来的上下文
+   *   会被自己当场清掉；派生值没有这个时序坑，渲染/发送两处也共用同一个判断。）
+   */
+  /**
+   * 发送前的 owner 复核也走进这个派生值（2026-10-29 复审）：同一标签页换号后，
+   * A 的快照还在内存里，但此刻的提问属于 B —— 不能显示、更不能送。
+   */
+  const chartOwnerOk = chartCtx === null || chartContextOwnerMatches(chartCtx)
+  const activeChartCtx = chartCtx && chartOwnerOk && chartCtx.symbol === anchorSymbol ? chartCtx : null
+  /**
+   * 这段快照是否已经随**当前这个会话**送达后端（会话级 `initial_context`，撤不回来）。
+   * 只要为真，后端每轮追问都会继续读到它 —— 界面必须一直显示并如实标注。
+   */
+  const chartCommittedHere = sentChart !== null && convId !== null && sentChart.conversationId === convId
+  /**
+   * 顶部那条到底显示哪段上下文：
+   *  - 还没送出：只在锚点还匹配时显示（用户改问别的票，它就不再指代当前问题）；
+   *  - 已送进本会话：只要这个会话还在就显示（哪怕锚点被清/改）——
+   *    否则用户看到"条没了"，模型却还在收旧区间，就是撒谎。
+   */
+  const chipCtx = chartCommittedHere && chartCtx && chartOwnerOk ? chartCtx : activeChartCtx
+  /** 过期读数：可以显示"曾经是什么"，但绝不能送进模型，也不能再说它是当前视图。 */
+  const chartCtxExpired = chartCtx !== null && !isChartContextFresh(chartCtx, chartClock)
 
   /**
    * 上下文带入（P0）：从个股工作台/外部链接进来时带 `?symbol=600111`，
@@ -420,31 +684,189 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   }, [loadHistory])
 
   const openConversation = useCallback(async (id: number) => {
-    detachStream() // 2026-10-28: 切会话即作废旧流的写入权, 连它占着的 loading/stage/齐套度一起收
+    /**
+     * 2026-10-29 三审：GET 返回之前**一个字段都不许改**。
+     *
+     * 早先这里先 `setChartCtx(null)` + `setSentChart(null)` 再 `await`：
+     *  - GET 失败 → 证据已经没了，而 `convId` 还是旧的，用户接着换票提问就被送进
+     *    那个「创建时带着旧图快照」的会话（旧区间照旧每轮注入）；
+     *  - GET 还在飞 → 同一个窗口，`sentChart` 已被同步清空，换票守卫同样失效。
+     * 现在只在拿到**完整**详情后一次性替换视图；失败保持原样并明说没有切换。
+     */
+    const seq = ++openSeqRef.current
+    setConvLoading(true)
+    let detail: Awaited<ReturnType<typeof chatApi.getConversation>> | null = null
     try {
-      const detail = await chatApi.getConversation(id)
-      if (!mounted.current) return
-      setConvId(id)
-      setMsgs(
-        (detail.messages || [])
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      )
-      const sym = detail.conversation?.stock_symbol || ''
-      if (sym) setAnchorSymbol(sym)
-      setError(null)
+      detail = await chatApi.getConversation(id)
     } catch (e) {
-      setError(`打开历史对话失败：${e instanceof Error ? e.message : '未知错误'}`)
+      if (openSeqRef.current !== seq || !mounted.current) return
+      setConvLoading(false)
+      setError(
+        `打开历史对话失败：${e instanceof Error ? e.message : '未知错误'}` +
+          '（当前会话与图表上下文保持原样，没有切换）',
+      )
+      return
     }
+    // 被更晚的一次打开取代：整条丢弃，绝不写半份（慢请求不许覆盖用户刚点的会话）
+    if (openSeqRef.current !== seq || !mounted.current) return
+    const rows = Array.isArray(detail?.messages) ? detail.messages : null
+    if (!rows) {
+      setConvLoading(false)
+      setError('打开历史对话失败：服务端返回的会话内容不完整（缺少消息列表），已保持当前会话不变。')
+      return
+    }
+    const meta = detail?.conversation && typeof detail.conversation === 'object' ? detail.conversation : null
+    const sym = typeof meta?.stock_symbol === 'string' ? meta.stock_symbol.trim() : ''
+    const known = convRecords.current.get(id) ?? null
+    const chartState: ConvChartState = known?.chart ?? 'unknown'
+    const ownCtx = chartState === 'chart' ? known?.ctx ?? null : null
+    // 先记账再换视图：同一次批处理里，后续渲染读到的就是这份绑定
+    convRecords.current.set(id, {
+      symbol: sym || known?.symbol || '',
+      chart: chartState,
+      ctx: ownCtx ?? undefined,
+      owner: currentAccountId() ?? '',
+    })
+
+    detachStream() // 2026-10-28: 切会话即作废旧流的写入权, 连它占着的 loading/stage/齐套度一起收
+    setConvLoading(false)
+    setConvId(id)
+    setConvBoundSymbol(sym)
+    // 绑定标的为空就如实清掉锚点：留着上一个会话的代码，等于替这个会话编了个标的
+    setAnchorSymbol(sym)
+    setMsgs(
+      rows
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    )
+    setError(null)
+    setChartCtx(ownCtx)
+    setSentChart(ownCtx ? { conversationId: id, symbol: ownCtx.symbol } : null)
+    setChartNotice(
+      ownCtx
+        ? `这个会话创建时就带入了 ${ownCtx.symbol} 的图表快照（区间/价位），服务端每轮追问仍会注入、无法撤回。` +
+            '换标的追问会新开一个不带它的会话；要彻底不带请点上方「清除并新开会话」。'
+        : null,
+    )
+    /**
+     * 历史会话的图表快照：`GET /chat/conversations/{id}` **不回传** `initial_context`，
+     * 不是本页创建的会话无法核验它带没带过图。后端仍每轮重放那段文本，所以这里既不显示、
+     * 也不声称"它没有/已清除"——用常驻提示如实说明不可核验，并写清后续行为（见渲染处）。
+     */
+    setHistoryCtxUnknown(chartState === 'unknown')
   }, [detachStream])
 
   const startNewConversation = useCallback(() => {
     detachStream() // 2026-10-28: 新会话 → 旧流不许再往这里写(本轮态一并收走)
+    // 在飞的历史会话 GET 一并作废：不然它回来会把视图拉回用户刚离开的会话
+    openSeqRef.current += 1
+    setConvLoading(false)
     initialContext.current = null
     setConvId(null)
+    setConvBoundSymbol('')
     setMsgs([])
     setError(null)
+    // 新会话还没收到任何快照；上一会话的记账到此为止
+    setSentChart(null)
+    setChartNotice(null)
+    setHistoryCtxUnknown(false)
   }, [detachStream])
+
+  /**
+   * 清除图表上下文（P2 修正, 2026-10-29）。
+   *
+   * 后端只在建会话那一刻收 `initial_context`，之后每轮无条件重放 —— 也就是说：
+   *  - 还没发问：本地丢掉就真的没有了，服务端从来没收到；
+   *  - 已经发问：那个会话里的快照**撤不回来**。要让后端真的不再用它，只能把后续追问
+   *    引到一个不带它的新会话（旧会话留在列表里，不删、不打断正在跑的回答）。
+   * 所以这里不会出现"点一下 = 已清除"的假象：每一种情况都给出对应后果。
+   */
+  const clearChartContext = useCallback(() => {
+    const ctx = chipCtx
+    if (!ctx) return
+    if (streaming || backgroundPending) {
+      // 「不确认就打断」是禁止项：本轮还在生成，先让它答完
+      setChartNotice('本轮还在回答：等它结束后再清除（现在动手会打断这一轮）。')
+      return
+    }
+    // 记成"该标的已清除"：工作台之后因缩放/重绘再次发布同一只票的快照也不会复活
+    dismissChartContext(ctx)
+    if (chartCommittedHere) {
+      startNewConversation()
+      setChartCtx(null)
+      setChartNotice(
+        '已新开一个不带图表上下文的会话（后续追问不会再带这张图）。上一会话未被删除，仍可在对话列表中找到 —— ' +
+          '它创建时就已带入该快照，服务端无法撤回。',
+      )
+      return
+    }
+    setChartCtx(null)
+    setChartNotice('图表上下文已从本地清除（尚未随提问送出，服务端没有收到过这段快照）。')
+  }, [chipCtx, chartCommittedHere, streaming, backgroundPending, startNewConversation])
+
+  /**
+   * 删掉一个会话（2026-10-29 三审）。
+   *
+   * 删的就是当前打开的会话时，界面必须跟着清干净：否则 `convId` 指着一个已经不存在的会话，
+   * 界面上还挂着"本会话已带入图表快照"，下一次提问要么发到 404，要么被后端重建出另一个
+   * 带旧快照的会话。删除成功才清显示；失败照实说，不动视图。
+   */
+  const removeConversation = useCallback(
+    async (id: number) => {
+      const res = await convMgr.remove(id)
+      if (!res?.ok) {
+        setError(`删除对话失败：${res?.error || '未知原因'}`)
+        return
+      }
+      const hadChart = convRecords.current.get(id)?.chart === 'chart'
+      convRecords.current.delete(id)
+      if (convIdRef.current !== id) return
+      detachStream()
+      openSeqRef.current += 1
+      setConvLoading(false)
+      initialContext.current = null
+      setConvId(null)
+      setConvBoundSymbol('')
+      setMsgs([])
+      setSentChart(null)
+      setHistoryCtxUnknown(false)
+      if (hadChart) setChartCtx(null)
+      setChartNotice(`会话 #${id} 已删除，本页不再显示或引用它的图表快照。`)
+    },
+    [convMgr, detachStream],
+  )
+
+  /**
+   * 切账号时把别人的图表快照从显示上撤掉（2026-10-29 三审）。
+   *
+   * 同一标签页 A 登出、B 登录后，A 的快照还留在内存里：之前只在发送前复核，
+   * 于是 B 的界面上一直挂着 A 看的区间/价位，看着像自己的图。回到本页/跨标签存储变化时核一次，
+   * 对不上就从显示上撤掉，并说清它不会被发送 —— 不宣称服务端数据被删除（客户端删不了）。
+   */
+  useEffect(() => {
+    const checkAccount = () => {
+      const ctx = chartCtxRef.current
+      if (!ctx) return
+      if (chartContextOwnerMatches(ctx, currentAccountId())) return
+      setChartCtx(null)
+      setSentChart(null)
+      setChartNotice(
+        '当前登录账号已切换：这张图的快照属于上一个账号，已从界面移除，也不会随本轮提问发送；' +
+          '后续提问也不会沿用上一个账号的会话。',
+      )
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') checkAccount()
+    }
+    window.addEventListener('focus', checkAccount)
+    window.addEventListener('storage', checkAccount)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', checkAccount)
+      window.removeEventListener('storage', checkAccount)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
 
 
 
@@ -458,8 +880,14 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
    * 轮询有上限（10 分钟），超时不再假装还在跑。
    */
   const runInBackground = useCallback(
-    async (question: string, attachment?: { name: string; isImage: boolean }) => {
+    async (question: string, attachment?: { name: string; isImage: boolean }, freshConversation = false, turnSymbol = '') => {
       setBackgroundPending(true)
+      /**
+       * 视图归属快照（2026-10-29 三审）：后台轮可能跑几分钟，期间用户完全可以去点开别的会话。
+       * 早先完成时无条件 `openConversation(cid)`，等于把用户从正在看的会话里拽走 ——
+       * 那不是"展示结果"，是抢视图。整轮开始时记下令牌，回来对不上就不动视图。
+       */
+      const seqAtSubmit = streamSeqRef.current
       setMsgs((m) => [...m, { role: 'user', content: question, attachment }])
       setInput('')
       setAttach(null)
@@ -468,15 +896,20 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       setError(null)
       const placeholder = `⏳ ${progressText(null)}`
       setMsgs((m) => [...m, { role: 'assistant', content: placeholder }])
+      // 归属感知（OCR error, 2026-10-30）：轮询每 2s 就 patch 一次，而 `msgs` 是**共享**
+      // 的最后一条助手气泡。用户在 10 分钟轮询期间点开别的会话后，旧写法会把那个会话的
+      // 最后一条回答覆盖成「⏳ 正在分析…」/「❌ 提交失败…」—— 纯前端内容错乱。
+      // 令牌对不上（视图已切走/又发了新问题）就整条丢弃，服务端结果不受影响。
       const patch = (content: string) =>
         setMsgs((m) => {
+          if (streamSeqRef.current !== seqAtSubmit) return m
           const last = m[m.length - 1]
           if (!last || last.role !== 'assistant') return m
           return [...m.slice(0, -1), { ...last, content }]
         })
 
       try {
-        const submitted = await submitCopilotRun(question, convId)
+        const submitted = await submitCopilotRun(question, freshConversation ? null : convId)
         if (!mounted.current) return
         setLiveRunId(submitted.run_id)
         const deadline = Date.now() + 10 * 60 * 1000
@@ -504,16 +937,42 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           return
         }
         if (last.status === 'ok' || last.status === 'degraded' || last.status === 'succeeded') {
-          const cid = last.conversation_id ?? convId
+          /**
+           * 只在**同一会话**的后台轮才允许回落 `convId`（2026-10-29 复审）。
+           * 换票/换号的后台轮是 `freshConversation`：服务端新建了会话，旧 `convId` 里
+           * 还带着创建时的图表快照 —— 回落过去等于把用户拉回"旧区间照旧注入"的那个会话。
+           * 拿不到新会话 id 就如实说拿不到，不动视图。
+           */
+          const cid = last.conversation_id ?? (freshConversation ? null : convId)
           if (cid) {
-            // 正文已由服务端落库，重新拉一次会话即可（不在前端拼答案）
-            if (cid !== convId) setConvId(cid)
-            await openConversation(cid)
-            if (last.status === 'degraded') {
-              setError('本轮部分工具失败，结论可能不完整（展开「过程」可看是哪一步）')
+            /**
+             * 换票/换号的后台轮 = 服务端新建了会话，而这条路径**不带** `initial_context`：
+             * 本页确知它没有图表快照，先记账再打开，免得 `openConversation` 把
+             * "历史会话不可核验"扣到一个本页刚建的干净会话头上（2026-10-29 三审）。
+             */
+            if (freshConversation) {
+              convRecords.current.set(cid, {
+                symbol: turnSymbol,
+                chart: 'clean',
+                owner: currentAccountId() ?? '',
+              })
+            }
+            if (streamSeqRef.current === seqAtSubmit) {
+              // 正文已由服务端落库，重新拉一次会话即可（不在前端拼答案）
+              if (cid !== convId) setConvId(cid)
+              await openConversation(cid)
+              if (last.status === 'degraded') {
+                setError('本轮部分工具失败，结论可能不完整（展开「过程」可看是哪一步）')
+              }
+            } else if (mounted.current) {
+              /**
+               * 用户已经切走：只记账，不把视图抢回来，也不往别人正在看的会话里写提示。
+               * 结果在会话列表里，点开就能看（那里会用真实记账显示有没有快照）。
+               */
+              setChartNotice(`后台任务已完成，结果在会话 #${cid}（你没有停在这一轮，本页没有自动切过去，也未删除任何会话）。`)
             }
           } else {
-            patch('✅ 已完成，但没拿到会话 id（可在「参谋任务」页查看）')
+            patch('✅ 已完成，但没拿到会话 id（新会话已建，可在对话列表中找到；本页没有把视图切回旧会话）')
           }
         } else {
           patch(`❌ ${progressText(last)}`)
@@ -531,7 +990,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     async (text: string) => {
       const words = text.trim()
       // 只有附件没打字也允许发（截图直接问"这是什么"），所以附件在场时不要求文字
-      if ((!words && !attach) || streaming || uploading) return
+      // 2026-10-29 复审：后台任务在飞时同样不许再发 —— 那时 `convId` 仍指向旧会话，
+      // 再发一条就会把新一轮塞进一个"创建时带着旧图快照"的会话里（用户看不到任何提示）。
+      // 2026-10-29 三审：正在拉某个历史会话的详情时也不许发 —— `convId` 还是上一个会话，
+      // 而用户刚点的那个会话带没带快照、绑定哪只票都还不知道，发出去就是猜。
+      if ((!words && !attach) || streaming || uploading || backgroundPending || convLoading) return
       const attachPart = attach
         ? attach.text
           ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]\n${attach.text}`
@@ -542,12 +1005,68 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       const content = [words, attachPart].filter(Boolean).join('\n\n')
       const sentAttachment = attach ? { name: attach.name, isImage: attach.isImage } : undefined
       const imageData = attach?.imageData
+      /**
+       * 发送前再核一次账号（2026-10-29 复审 + 三审）：读 `chartCtx` 是进页面那一刻的事，换号后
+       * A 的快照可能还在内存里。两道检查都要：
+       *  - 快照 owner 对不上 → 不带快照；
+       *  - **会话归属对不上**（这个会话是上一个账号打开的）→ 不复用那个会话。
+       * 只清快照不够：同号追问会把 B 的问题送进 A 的会话里。
+       */
+      const ownerNow = currentAccountId() ?? ''
+      const viewRec = convId !== null ? convRecords.current.get(convId) ?? null : null
+      const ownerChanged =
+        (chartCtx !== null && !chartContextOwnerMatches(chartCtx, ownerNow || null)) ||
+        (viewRec !== null && viewRec.owner !== '' && ownerNow !== '' && viewRec.owner !== ownerNow)
+      if (ownerChanged) {
+        setChartCtx(null)
+        setChartNotice('当前登录账号已切换：这张图的快照属于上一个账号，本轮不带入，也不复用上一个账号的会话。')
+      }
+      /**
+       * 本轮提问指定了哪只票（2026-10-29 三审）：`@` 选的票 > 正文代码 > 页面锚点。
+       * `explicit` 说明这个指向是不是用户自己写明的 —— 后台轮据此判断能不能复用旧会话。
+       */
+      const mentionedStock = mentions.find((m) => m.type === 'stock') as MentionStock | undefined
+      const turnTarget = resolveTurnSymbol({ mentioned: mentionedStock?.symbol, text: words, anchor: anchorSymbol })
       // 后台模式：附件暂不支持（附件要先过视觉转写，走原流式路径）
       if (bgMode && !attach) {
-        await runInBackground(content, sentAttachment)
+        /**
+         * 后台任务同样会把会话交给后端（`conversation_id`），旧会话的快照照样会被重放。
+         *
+         * 早先这里只从正文抠 6 位代码：`@` 选中另一只票、只说名字不说代码、以及会话绑定标的
+         * 本身不确定（历史会话）这三种情况都判不出换票，旧图快照被继续注入。
+         * 现在只有「这一轮自己写明了标的」且与会话绑定标的一致才复用；其余一律开新会话
+         * （新会话不带 `initial_context`，旧会话保留、不删除、不打断）。
+         */
+        const rec = convId !== null ? convRecords.current.get(convId) ?? null : null
+        const chartRisk = ownerChanged || (rec !== null ? rec.chart !== 'clean' : sentChart !== null)
+        const trustedSame =
+          turnTarget.explicit && Boolean(turnTarget.symbol) && rec !== null && turnTarget.symbol === rec.symbol
+        const bgStale = chartRisk && !trustedSame
+        if (bgStale) {
+          /**
+           * 旧会话**当场作废**（2026-10-29 复审）：只清 `sentChart` 不够 ——
+           * 后台轮结束若拿不到新会话 id 会回落到 `convId`，界面上还会"回到"那个带快照的会话；
+           * 期间用户再提问也会顺着 `convId` 送进旧会话。
+           */
+          setConvId(null)
+          setConvBoundSymbol('')
+          setSentChart(null)
+          setChartCtx(null)
+          if (chartCtx) unpublishChartContext(chartContextKey(chartCtx))
+          setChartNotice(
+            ownerChanged
+              ? '账号已切换：这一轮在新会话里后台执行，不沿用上一个账号的快照与会话。'
+              : !turnTarget.explicit || !turnTarget.symbol
+                ? `后台这一轮没有写明标的（正文没写代码，也没 @ 选票），无法确认问的是不是 ${rec?.symbol || '上一张图的票'}；` +
+                  '为避免沿用旧图的快照，已在没有图表快照的新会话里执行，上一会话保留在列表里。'
+                : `标的已换（${rec?.symbol || '上一标的'} → ${turnTarget.symbol}）：这一轮在新会话里后台执行，不再沿用旧图的快照。`,
+          )
+        }
+        await runInBackground(content, sentAttachment, bgStale, turnTarget.symbol)
         return
       }
       setError(null)
+      setChartNotice(null)
       setMsgs((m) => [...m, { role: 'user', content, attachment: sentAttachment }])
       setInput('')
       setAttach(null)
@@ -568,27 +1087,122 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       setStreamNotice(null)
       try {
         // 标的解析优先级：@ 指定 > 本条文字里的代码 > 页面锚点（正在看 XXX）
-        const mentionedStock = mentions.find((m) => m.type === 'stock') as MentionStock | undefined
-        const symInText = extractSymbolChips(words)[0]
-        const sym = mentionedStock?.symbol || symInText || anchorSymbol
+        const sym = turnTarget.symbol
         if (sym && sym !== anchorSymbol) setAnchorSymbol(sym)
 
-        let id = convId
+        /**
+         * 换标的 / 会话快照不可核验 + 当前会话（2026-10-29 三审合并判断）：
+         *
+         * 后端 `_build_ai_messages()` 每轮都会把该会话的 `initial_context` 拼进系统提示，
+         * 而 `_bind_conv_symbol()` 换票时只改 `stock_symbol`、不动那段快照 —— 继续在旧会话里问
+         * 000776，模型手里仍有一份 600111 的区间/价位。刷新不改写服务端，唯一诚实的做法是
+         * 把这一轮放进**不带快照的新会话**（旧会话保留，不删除、不打断任何流）。
+         *
+         * 会话记账三态（见 `ConvRecord`）：
+         *  - `chart`：本页送过快照 → 只有本轮标的与会话绑定标的一致才留着；
+         *  - `unknown`：历史会话，服务端不回传它带没带过图 → 按"可能有"处理，
+         *    标的对不上、或压根判不出本轮标的，都新开会话；
+         *  - `clean`：确知没带 → 换票照旧留在原会话（后端换绑是正常行为，没有快照可串）。
+         * 换号（`ownerChanged`）一律新会话。
+         */
+        const convRec = convId !== null ? convRecords.current.get(convId) ?? null : null
+        const chartRisk = convRec !== null ? convRec.chart !== 'clean' : sentChart !== null
+        const staleChartConv = ownerChanged || (chartRisk && (!sym || sym !== (convRec?.symbol ?? sentChart?.symbol ?? '')))
+        if (staleChartConv) {
+          // 新会话从这一条问话开始：屏幕上不再混着上一个会话的历史，避免"看着是同一个对话"
+          setMsgs([{ role: 'user', content, attachment: sentAttachment }])
+          setConvId(null)
+          setConvBoundSymbol('')
+          setSentChart(null)
+          if (chartCtx) unpublishChartContext(chartContextKey(chartCtx))
+          setChartCtx(null)
+          setChartNotice(
+            ownerChanged
+              ? '账号已切换：为避免把上一个账号的图表快照与会话带给当前账号，这一轮已新开会话；上一会话未被删除。'
+              : convRec?.chart === 'unknown'
+                ? `这个会话不是本页创建的，服务端不回传它创建时是否带过图表快照；这一轮问的是 ${sym || '（无法判定）'}，` +
+                  `与它的绑定标的（${convRec.symbol || '未绑定'}）对不上或无法确认 —— 已新开一个不带快照的会话；上一会话未被删除。`
+                : !sym
+                  ? '这一轮判断不出问的是哪只票，而本会话带着创建时的图表快照；已新开一个不带快照的会话，避免把旧区间当成新问题。'
+                  : `标的已换（${convRec?.symbol || sentChart?.symbol} → ${sym}）：为避免沿用上一会话创建时的图表快照，` +
+                    '这一轮已新开一个会话；上一会话未被删除，仍在对话列表里（它的快照不会跟着搬过来）。',
+          )
+        }
+        let id = staleChartConv ? null : convId
         if (!id) {
+          /**
+           * P2(2026-10-29): 图表上下文只在这一轮标的与它一致时才算数 —— 隔离的最后一刀。
+           * 不一致（用户改问别的票）就当没带过，绝不把 A 的区间/价位塞进 B 的会话。
+           */
+          const chartForTurn =
+            activeChartCtx && sym && activeChartCtx.symbol === sym && isChartContextFresh(activeChartCtx)
+              ? activeChartCtx
+              : null
+          if (activeChartCtx && activeChartCtx.symbol === sym && !chartForTurn) {
+            // 过期读数：宁可这轮不带，也不把十分钟前的区间说成"你现在看的图"
+            setChartNotice('图表快照已超过 5 分钟，本轮未带入（需要时请重新从工作台进入）。')
+          }
+          const pageSnapshot =
+            initialContext.current?.symbol === sym && initialContext.current.pageContext
+              ? initialContext.current.pageContext
+              : `用户从【数智参谋】进入，当前标的 ${sym}。`
           const conv = await chatApi.createConversation(
             sym
               ? {
                   stock_symbol: sym,
                   stock_market: initialContext.current?.symbol === sym ? initialContext.current.market || marketOf(sym) : marketOf(sym),
-                  initial_context: initialContext.current?.symbol === sym && initialContext.current.pageContext ? initialContext.current.pageContext : `用户从【数智参谋】进入，当前标的 ${sym}。`,
+                  /**
+                   * 图表上下文与页面快照同路（会话级 `initial_context`，后端每轮都会附加到系统提示）。
+                   * 语境里明写"进入时快照 / 用户提问才引用 / 不得自动下单与画线"，
+                   * 由 `chartContextPrompt` 统一产出，避免两处措辞漂移。
+                   */
+                  initial_context: chartForTurn
+                    ? `${pageSnapshot}\n\n${chartContextPrompt(chartForTurn)}`
+                    : pageSnapshot,
                 }
               : { initial_context: '用户从【数智参谋】一级页进入，尚未指定标的。' },
           )
           id = conv.id
+          /**
+           * 落库即记账（2026-10-29 三审）：会话一旦建好，`initial_context` 就永久留在服务端，
+           * **与这一轮有没有发出去无关**。用户可能在建会话在飞时切走/点「新对话」，
+           * 那一轮随之丢弃 —— 但会话（和它的图表快照）已经存在。不记这笔账，之后重开它
+           * 只会看到一句泛化的「历史会话不可核验」，换票检查也一并失效。
+           */
+          convRecords.current.set(id, {
+            symbol: sym || '',
+            chart: chartForTurn ? 'chart' : 'clean',
+            ctx: chartForTurn ?? undefined,
+            owner: currentAccountId() ?? '',
+          })
           // 建会话是异步的：等回来时用户可能已经切走/发了新一轮 —— 那时这条流的
           // 会话 id 不许把视图抢回去（否则"切到历史会话"会被一瞬间弹回旧会话）。
-          if (!isCurrent()) return
+          if (!isCurrent()) {
+            if (mounted.current) {
+              // 用户此刻开着的正好是这个会话：承认它带着快照（虽然这一轮问题没发出）
+              if (convIdRef.current === id) {
+                setConvBoundSymbol(sym)
+                setChartCtx(chartForTurn)
+                setSentChart(chartForTurn ? { conversationId: id, symbol: chartForTurn.symbol } : null)
+                setHistoryCtxUnknown(false)
+              }
+              setChartNotice(
+                chartForTurn
+                  ? `已为 ${sym} 建好会话 #${id} 并带入了图表快照，但这一轮问题没有发出（视图已切换）。` +
+                      '该会话留在对话列表里，服务端会保留这段快照，本页不会自动复用它。'
+                  : `已为 ${sym || '（未指定标的）'} 建好会话 #${id}，但这一轮问题没有发出（视图已切换）。该会话留在对话列表里。`,
+              )
+            }
+            return
+          }
           setConvId(id)
+          setConvBoundSymbol(sym)
+          setHistoryCtxUnknown(false)
+          /**
+           * 记账：这个会话从此刻起永久带着这段快照（后端每轮都会重放）。
+           * 没带快照建会话时写 clean —— 免得旧会话的记账串到新会话上。
+           */
+          setSentChart(chartForTurn ? { conversationId: id, symbol: chartForTurn.symbol } : null)
         }
         const result = await chatApi.sendMessageStream(
           id,
@@ -685,7 +1299,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         }
       }
     },
-    [attach, convId, anchorSymbol, mentions, streaming, uploading, runsState, bgMode, runInBackground],
+    [attach, convId, anchorSymbol, mentions, streaming, uploading, backgroundPending, runsState, bgMode, runInBackground, activeChartCtx, chartCtx, sentChart, convLoading],
   )
 
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
@@ -824,7 +1438,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   /** 空态"最近一次"回链用：最近一次运行（真实数据；没有就是 null，整块不渲染，不留死入口） */
   const lastRun = runsState.runs.length > 0 ? runsState.runs[0] : null
 
-  const runForMessage = (i: number) => matchRunForMessage(msgs, runsState.runs, i)
+  /**
+   * 回答 ↔ run：**只按提问文本匹配**，永不自称 run_id 关联（服务端没给这个关联）。
+   * 同问多轮按出现次序对齐、切会话时拒收他会话的 run，见 `resolveRunForMessage`。
+   */
+  const runForMessage = (i: number) => resolveRunForMessage(msgs, runsState.runs, i, convId)
 
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
   const awaitingAssistant = streaming && !streamingAssistant
@@ -843,7 +1461,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               onCreate={() => { startNewConversation(); setMobileConversationsOpen(false) }}
               onRename={(id, title) => void convMgr.rename(id, title)}
               onPin={(id, pinned) => void convMgr.pin(id, pinned)}
-              onDelete={(id) => void convMgr.remove(id)}
+              onDelete={(id) => void removeConversation(id)}
             />
   )
 
@@ -1041,11 +1659,62 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               onClick={() => {
                 setBriefSymbol('')
                 setAnchorSymbol('')
+                /**
+                 * 换标的时的图表上下文（P2 修正, 2026-10-29）：
+                 * 还没送出去 → 直接丢掉（工作台那条发布也撤掉，下次进来不复活）；
+                 * 已送进本会话 → 藏起来就是撒谎（后端还在每轮注入），所以保留可见条并说明，
+                 * 用户要彻底不带就点条上的「清除并新开会话」。
+                 */
+                if (chartCommittedHere) {
+                  setChartNotice('本会话创建时已带入图表快照，服务端会继续随本会话注入；要彻底不带请点上方「清除并新开会话」。')
+                  return
+                }
+                if (chartCtx) unpublishChartContext(chartContextKey(chartCtx))
+                setChartCtx(null)
               }}
               className="ml-auto text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
               {CONTEXT_ANCHOR_CLEAR}
             </button>
+          </div>
+        ) : null}
+
+        {chipCtx ? (
+          <ChartContextChip
+            ctx={chipCtx}
+            committed={chartCommittedHere}
+            /**
+             * 已送入的会话不受 TTL 影响（2026-10-29 复审）：TTL 只决定"要不要再带一份新的"，
+             * 那份已经落进 `initial_context` 的快照后端每轮仍在注入 —— 所以此时不能标"不会发送"。
+             */
+            expired={chartCtxExpired && !chartCommittedHere}
+            busy={streaming || uploading || backgroundPending}
+            onClear={clearChartContext}
+          />
+        ) : null}
+
+        {chartNotice ? (
+          <div
+            data-testid="copilot-chart-context-notice"
+            className="border-b border-border bg-s2 px-3 py-1 text-[12px] text-muted-foreground"
+          >
+            {chartNotice}
+          </div>
+        ) : null}
+
+        {historyCtxUnknown ? (
+          <div
+            data-testid="copilot-chart-context-history-notice"
+            className="border-b border-border bg-s2 px-3 py-1 text-[12px] text-muted-foreground"
+          >
+            {/*
+              2026-10-29 三审：这句话必须写清**后果**，不只是"无法核验"。
+              早先只说"可能带着快照" —— 用户看到后面照样换票追问，旧区间就被继续注入。
+              现在的实际行为：只在这个会话的绑定标的上继续；换标的/判不出标的都新开会话（旧会话保留）。
+            */}
+            这个历史会话不是本页创建的：服务端不回传它创建时带入的页面快照/图表快照，本页无法核验它是否带着某只票的区间与价位。
+            因此只在这个会话的绑定标的{convBoundSymbol ? `（${convBoundSymbol}）` : '（未绑定标的）'}上继续追问；
+            一旦换到别的标的，或无法确认这次问的是不是同一只票，本轮就会新开一个不带快照的会话，当前会话保留在列表里。
           </div>
         ) : null}
 
@@ -1173,9 +1842,31 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                     const displayContent = publicAssistantContent(m.content)
                     const parsed = parseAnswer(displayContent)
                     const symbolInMsg = extractSymbolChips(m.content)[0] || anchorSymbol
+                    /** 最后一条助手气泡还在写（草稿）：它的身份与证据都还没定稿。 */
+                    const liveDraft = streamingAssistant && i === msgs.length - 1
                     // 定稿消息带自己的痕；流式中的最后一条用实时态（定稿瞬间原地换成固化值）
-                    const strip =
-                      m.readiness ?? (streamingAssistant && i === msgs.length - 1 ? readiness : null)
+                    const strip = m.readiness ?? (liveDraft ? readiness : null)
+                    /**
+                     * 溯源条（2026-10-29 P1 接线）：只有 structured 回答才有「依据」可言。
+                     *  - 草稿不挂（`live`）：终稿没到，回答与证据都没定稿；
+                     *  - readiness 只给这条消息**自己的**固化值，绝不把当前流的实时态
+                     *    挂到历史消息上（那就是拿这一轮的取数去证明上一轮的结论）；
+                     *  - 未拿到终稿（incomplete）也不挂缺口数字：这一轮没有「完成记录」。
+                     *  - run 列表还在拉（且手上一条都没）时先不挂：此刻说「未关联」只是
+                     *    「还没查到」，等结果回来再按真实情况写。
+                     */
+                    const runsUnknown = runsState.loading && runsState.runs.length === 0
+                    const trace = parsed.structured && !runsUnknown
+                      ? buildMessageAnswerTrace({
+                          msgs,
+                          runs: runsState.runs,
+                          details: runsState.details,
+                          index: i,
+                          conversationId: convId,
+                          live: liveDraft,
+                          readiness: m.incomplete ? null : m.readiness ?? null,
+                        })
+                      : null
                     return (
                       <>
                         {strip && strip.items.length ? (
@@ -1192,6 +1883,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                           <AnswerCard
                             parsed={parsed}
                             symbol={symbolInMsg}
+                            trace={trace ?? undefined}
                             onFollowUp={(q) => void send(q)}
                             onAnchoredPrice={(a) =>
                               setPriceAnchor({ ...a, symbol: symbolInMsg || undefined })
@@ -1468,7 +2160,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               <button
                 type="button"
                 onClick={() => fileRef.current?.click()}
-                disabled={streaming || uploading}
+                disabled={streaming || uploading || backgroundPending}
                 aria-label={ATTACH_HINT}
                 title={ATTACH_HINT}
                 data-testid="copilot-attach"
@@ -1494,11 +2186,22 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               <button
                 type="button"
                 onClick={() => void send(input)}
-                disabled={streaming || uploading || (!input.trim() && !attach)}
+                /**
+                 * 后台任务在飞时也禁用（2026-10-29 复审）：那一轮还没结束、`convId` 可能
+                 * 已经被判作废，再发一条极易落进旧会话（带旧图快照）。等它结束再问。
+                 */
+                disabled={streaming || uploading || backgroundPending || convLoading || (!input.trim() && !attach)}
+                title={
+                  backgroundPending
+                    ? '后台任务进行中：等它结束后再提问（避免落进旧会话）'
+                    : convLoading
+                      ? '正在打开那个会话：等它回来再问（现在发出去会落进上一个会话）'
+                      : undefined
+                }
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-role-watch/15 text-role-watch hover:bg-role-watch/25 disabled:opacity-40 md:h-9 md:w-9"
                 aria-label={SEND}
               >
-                {streaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {streaming || backgroundPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               </button>
             </div>
           </div>

@@ -14,6 +14,7 @@ import { safeMoney } from '@/lib/format'
 import { safePrice } from '@/lib/format'
 import { stocksApi } from '@sida/api'
 import { useToast } from '@sida/base-ui/components/ui/toast'
+import { notifyDefenseLinesChanged } from '@/lib/defense-lines'
 
 import type { useStocksState } from './useStocksState'
 import type { useStocksData } from './useStocksData'
@@ -176,7 +177,15 @@ const removeFromWatchlist = async (stock: Stock) => {
 // ========== Account handlers ==========
 const openAccountDialog = (account?: Account) => {
   if (account) {
-    setAccountForm({ name: account.name, available_funds: account.available_funds.toString() })
+    // 2026-10-29 安全修复 8db9088b: available_funds 可为 NULL(现金未知, 不是 0)。
+    // 旧写法 `account.available_funds.toString()` 直接 TypeError —— 点「编辑账户」就崩。
+    // 未知就留空，绝不填 "0"。⚠️ 输入框里的「空」在编辑语义下是**保持原值不变**
+    // （后端 PUT 的 None = 不改，无法显式清空，见 handleAccountSubmit 注释），不是"改成未知"。
+    const funds = account.available_funds
+    setAccountForm({
+      name: account.name,
+      available_funds: funds === null || funds === undefined ? '' : String(funds),
+    })
     setEditAccountId(account.id)
   } else {
     setAccountForm(emptyAccountForm)
@@ -187,9 +196,37 @@ const openAccountDialog = (account?: Account) => {
 
 const handleAccountSubmit = async () => {
   try {
-    const payload = {
-      name: accountForm.name,
-      available_funds: parseFloat(accountForm.available_funds) || 0,
+    const raw = String(accountForm.available_funds ?? '').trim()
+    // 空 = **保持原值不变**（不是"未知"！2026-10-29 独立复审 F5）。
+    //
+    // 后端 `AccountUpdate.available_funds: float | None = None` + `if data.available_funds is not None`
+    // （src/web/api/accounts.py）—— 明确传 null 与不传该字段**等价**，都表示"不改动"。
+    // 也就是说这个接口**没有**"把已登记金额清空成未知"的能力，前端不许对用户声称有：
+    // 旧文案「留空表示未知」让用户以为清空后系统就"不知道"了，实际库里仍是原金额，
+    // 总资产/仓位比例继续按旧值算 —— 用户被自己的数据误导。
+    // 所以：编辑留空 ⇒ 不带该字段（原值保住），提示明说"未改动"；
+    // 新建留空 ⇒ 后端 schema `available_funds: float = 0` 不可空，只能按 0 元登记，也要明说。
+    // 非数字直接拦下（旧 `parseFloat(...) || 0` 会把 "abc" 静默写成 0 元）。
+    let funds: number | null = null
+    if (raw !== '') {
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed)) {
+        toast(
+          editAccountId
+            ? '可用资金请填数字；留空表示保持原值不变（不清空、也不改成未知）'
+            : '可用资金请填数字；留空将按 0 元登记（后端新建账户不接受空值）',
+          'error',
+        )
+        return
+      }
+      funds = parsed
+    }
+    const payload: Record<string, unknown> = { name: accountForm.name }
+    if (funds !== null) {
+      payload.available_funds = funds
+    } else if (!editAccountId) {
+      // 新建账户的后端 schema 是 `available_funds: float = 0`（不可空），留空只能取默认 0。
+      payload.available_funds = 0
     }
     if (editAccountId) {
       await fetchAPI(`/accounts/${editAccountId}`, { method: 'PUT', body: JSON.stringify(payload) })
@@ -199,7 +236,16 @@ const handleAccountSubmit = async () => {
     setAccountDialogOpen(false)
     load()
     loadPortfolio()
-    toast(editAccountId ? '账户已更新' : '账户已创建', 'success')
+    toast(
+      editAccountId
+        ? funds === null
+          ? '账户已更新（可用资金未改动）'
+          : '账户已更新'
+        : funds === null
+          ? '账户已创建（可用资金按 0 元登记）'
+          : '账户已创建',
+      'success',
+    )
   } catch (e) {
     toast(e instanceof Error ? e.message : '保存账户失败', 'error')
   }
@@ -227,7 +273,7 @@ const openPositionDialog = (accountId: number, position?: Position) => {
     setPositionForm({
       account_id: accountId,
       stock_id: position.stock_id,
-      cost_price: position.cost_price.toString(),
+      cost_price: position.cost_price?.toString() ?? '',
       quantity: position.quantity.toString(),
       invested_amount: position.invested_amount?.toString() || '',
       trading_style: position.trading_style || '',
@@ -340,6 +386,9 @@ const handlePositionSubmit = async () => {
     } else {
       await fetchAPI('/positions', { method: 'POST', body: JSON.stringify(payload) })
     }
+    // 2026-10-29 复审 B5: 持仓行变了（新增/改成本/换账户）⇒ 别的页面挂着的防线告警条
+    // 必须立刻重取，否则它还在按旧持仓行（旧防线/旧账户）报警。
+    notifyDefenseLinesChanged()
     setPositionDialogOpen(false)
     loadPortfolio()
     toast(editPositionId ? '持仓已更新' : '持仓已添加', 'success')
@@ -352,6 +401,8 @@ const handleDeletePosition = async (id: number) => {
   if (!confirm('确定删除该持仓？')) return
   try {
     await fetchAPI(`/positions/${id}`, { method: 'DELETE' })
+    // 删除即"这条防线不存在了"：不广播的话，工作台那条告警条会继续报"已击穿"。
+    notifyDefenseLinesChanged()
     loadPortfolio()
     toast('持仓已删除', 'success')
   } catch (e) {

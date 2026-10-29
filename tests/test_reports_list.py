@@ -18,6 +18,10 @@ import pytest
 
 import src.web.api.reports as reports
 
+# 本文件只验证 list 的性能/排序/缓存语义, 用 owner 视角(可见全部)保持语义不变;
+# 跨租户可见性在 tests/test_reports_scope.py 单独验证。
+_OWNER = ("test-owner-uid", "owner")
+
 
 NOISY_TEMPLATE = """# Cron Job: {job}
 **Job ID:** {job}
@@ -60,7 +64,7 @@ def test_title_preview_is_real_title_not_cron_job_noise(tmp_path, monkeypatch):
 
     import asyncio
 
-    out = asyncio.run(reports.list_reports(job_id=None, limit=10))
+    out = reports._list_reports_for(job_id=None, limit=10, viewer=_OWNER)
     assert out["total"] == 1
     assert out["items"][0]["title_preview"] == "📈 A股盘前报告 2026-10-10"
     assert "Cron Job" not in out["items"][0]["title_preview"]
@@ -77,7 +81,7 @@ def test_no_response_anchor_still_skips_cron_job_header(tmp_path, monkeypatch):
 
     import asyncio
 
-    out = asyncio.run(reports.list_reports(job_id=None, limit=10))
+    out = reports._list_reports_for(job_id=None, limit=10, viewer=_OWNER)
     assert out["items"][0]["title_preview"] == "周报标题"
 
 
@@ -88,19 +92,19 @@ def test_limit_returns_newest_and_only_reads_hits(tmp_path, monkeypatch):
     for i in range(6):  # mtime 递增
         _write_report(jd / f"r{i}.md", "jobA", f"报告{i}", 1000 + i)
 
-    # 统计标题读取次数: 只有命中前 limit 项应被 read_text
-    real_read_text = Path.read_text
+    # 统计标题读取次数: 只有命中前 limit 项应被读头(有界读取, 不整篇 read_text)
+    real_read_head = reports._read_head
     reads: list[str] = []
 
-    def _counting_read_text(self, *a, **k):
-        reads.append(str(self))
-        return real_read_text(self, *a, **k)
+    def _counting_read_head(path, limit):
+        reads.append(str(path))
+        return real_read_head(path, limit)
 
-    monkeypatch.setattr(Path, "read_text", _counting_read_text)
+    monkeypatch.setattr(reports, "_read_head", _counting_read_head)
 
     import asyncio
 
-    out = asyncio.run(reports.list_reports(job_id=None, limit=2))
+    out = reports._list_reports_for(job_id=None, limit=2, viewer=_OWNER)
     assert out["total"] == 2
     # mtime 倒序: 最新 r5,r4
     assert [it["file"] for it in out["items"]] == ["r5.md", "r4.md"]
@@ -117,7 +121,7 @@ def test_cache_hit_skips_all_reads(tmp_path, monkeypatch):
 
     import asyncio
 
-    first = asyncio.run(reports.list_reports(job_id=None, limit=5))
+    first = reports._list_reports_for(job_id=None, limit=5, viewer=_OWNER)
 
     reads: list[str] = []
     real_read_text = Path.read_text
@@ -125,7 +129,7 @@ def test_cache_hit_skips_all_reads(tmp_path, monkeypatch):
         Path, "read_text",
         lambda self, *a, **k: (reads.append(str(self)), real_read_text(self, *a, **k))[1],
     )
-    second = asyncio.run(reports.list_reports(job_id=None, limit=5))
+    second = reports._list_reports_for(job_id=None, limit=5, viewer=_OWNER)
     assert second == first
     assert reads == [], "TTL 内且 mtime 未变应命中缓存, 零文件读取"
 
@@ -138,7 +142,7 @@ def test_new_file_invalidates_cache_via_dir_mtime(tmp_path, monkeypatch):
 
     import asyncio
 
-    out1 = asyncio.run(reports.list_reports(job_id=None, limit=5))
+    out1 = reports._list_reports_for(job_id=None, limit=5, viewer=_OWNER)
     assert out1["total"] == 1
 
     # 新报告落盘(改 job 目录 mtime) → 缓存立即失效, 不必等 TTL。
@@ -149,7 +153,7 @@ def test_new_file_invalidates_cache_via_dir_mtime(tmp_path, monkeypatch):
     _write_report(jd / "new.md", "jobC", "新报告", time.time())
     bumped = jd.stat().st_mtime + 10
     os.utime(jd, (bumped, bumped))
-    out2 = asyncio.run(reports.list_reports(job_id=None, limit=5))
+    out2 = reports._list_reports_for(job_id=None, limit=5, viewer=_OWNER)
     assert out2["total"] == 2
     assert out2["items"][0]["title_preview"] == "新报告"
 
@@ -164,11 +168,11 @@ def test_non_md_and_job_filter(tmp_path, monkeypatch):
 
     import asyncio
 
-    out = asyncio.run(reports.list_reports(job_id=None, limit=10))
+    out = reports._list_reports_for(job_id=None, limit=10, viewer=_OWNER)
     assert out["total"] == 2
     assert {it["job_id"] for it in out["items"]} == {"j1", "j2"}
 
     reports._clear_cache()
-    only = asyncio.run(reports.list_reports(job_id="j1", limit=10))
+    only = reports._list_reports_for(job_id="j1", limit=10, viewer=_OWNER)
     assert only["total"] == 1
     assert only["items"][0]["job_id"] == "j1"

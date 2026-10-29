@@ -1,6 +1,9 @@
+import math
 import os
 
 from fastapi import FastAPI, Depends, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -101,6 +104,37 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+# ========== 非有限数入参的统一 422 出口(2026-10-29 复审) ==========
+# Pydantic v2 的 `allow_inf_nan=False` 只保证"拒收", 但默认 422 处理器会把原始
+# 入参值原样回显(`{"input": nan}`); Starlette 的 JSONResponse 用
+# `json.dumps(allow_nan=False)` ⇒ 序列化当场 ValueError ⇒ 客户端拿到的是 **500**,
+# 看起来像服务端故障, 实际是干净的参数错误。这里把回显里的非有限浮点压成字符串
+# 常量("NaN"/"Infinity"/"-Infinity"), 其余结构保持与 FastAPI 默认完全一致。
+
+
+def _json_safe(value):
+    """递归把非有限浮点换成可序列化字符串; 其余值原样返回。"""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "Infinity" if value > 0 else "-Infinity"
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _safe_request_validation_error_handler(request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _json_safe(jsonable_encoder(exc.errors()))},
+    )
 
 # GZip 压缩(2026-08-10): 静态 JS 2.3MB 未压缩, 跨境弱网加载慢 → 压缩后 ~600KB
 # ⚠️ 顺序关键: Starlette add_middleware 后加的在更外层(先执行)。

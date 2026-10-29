@@ -45,6 +45,23 @@ class NotificationDetailOut(NotificationOut):
     task: AgentRunDetail | None = None
 
 
+def _agent_run_user_scope(user: User):
+    """AgentRun 的可见范围(2026-10-29 四审)。
+
+    名字带 `user_scope` 是静态门禁的约定(scripts/check_scoped_queries.py 按名
+    识别"返回归属条件"的助手); 它确实只返回 user_id 归属条件, 不是改名绕过。
+
+    通知列表/详情会按 trace_id 关联运行记录并回传 `run.result`。运行记录以前**从不**
+    写 user_id, 而通知曾因归属 bug 落到别人名下 —— 只要 trace_id 相同, 通知的主人就
+    能读到别人的正文。现在与 `/runs/{trace}/progress` 同口径: 只看自己的运行;
+    无归属(NULL)的历史/系统记录只有 owner 可读(fail-closed)。
+    """
+    base = AgentRun.user_id == user.id
+    if str(getattr(user, "role", "") or "").lower() == "owner":
+        return or_(base, AgentRun.user_id.is_(None))
+    return base
+
+
 def _normalize_link(link: str | None) -> str:
     """兼容旧版个股通知链接。
 
@@ -143,7 +160,7 @@ def list_notifications(
     if trace_ids:
         runs = (
             db.query(AgentRun)
-            .filter(AgentRun.trace_id.in_(trace_ids))
+            .filter(AgentRun.trace_id.in_(trace_ids), _agent_run_user_scope(user))
             .order_by(AgentRun.id.desc())
             .all()
         )
@@ -183,7 +200,7 @@ def get_notification_detail(
     if notification.trace_id:
         run = (
             db.query(AgentRun)
-            .filter(AgentRun.trace_id == notification.trace_id)
+            .filter(AgentRun.trace_id == notification.trace_id, _agent_run_user_scope(user))
             .order_by(AgentRun.id.desc())
             .first()
         )

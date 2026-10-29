@@ -22,6 +22,12 @@ import { requestAnnotations, revokeAnnotation } from '@/lib/copilot/annotationLi
 import type { AnnotationTarget as AnnotationTargetType } from '@/lib/copilot/serverAnnotations'
 import { useWorkbenchAnnotations } from '@/hooks/useWorkbenchAnnotations'
 import { AnnotationLinkBar } from '@/components/copilot/AnnotationLinkBar'
+import {
+  buildChartContext,
+  publishChartContext,
+  unpublishChartContext,
+  type ChartContext,
+} from '@/lib/copilot/chart-context'
 import { reportViewOnce } from '@/lib/copilot/viewstate'
 import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
@@ -439,6 +445,44 @@ export default function StockWorkbench() {
    * 统计由 `KlineChart` 算好回调上来(它同时持有 K线/资金柱/事件), 本页只决定渲染位置与收起。
    */
   const [rangeStats, setRangeStats] = useState<KlineRangeStats | null>(null)
+  /**
+   * 图表上下文（P2, 2026-10-29）：换标的/换周期/换类型时先**丢掉上一张图的区间读数**。
+   * `KlineChart` 的 `onRangeStats` 只在新视窗算完才回调；不清空的话，切到新周期的那一瞬间
+   * 旧读数还挂在那里 —— 用户屏幕上已经是周线，参谋却被告知「日线 58 根」。
+   */
+  useEffect(() => {
+    setRangeStats(null)
+  }, [symbol, type, MARKET, periodFromUrl])
+  /**
+   * 发布「当前这张图」给参谋（`lib/copilot/chart-context` 仓库）。
+   *
+   * 全部字段都来自页面**真的显示着**的东西：
+   *  - 代码/类型/市场：路由与 `?type=`/`?market=`；
+   *  - 周期：只认 `?period=`（URL 没写 = 用户没选，`buildChartContext` 就不会写）；
+   *  - 可视区间：`KlineChart.onRangeStats` 的真实读数（`rangeStats`）；
+   *  - 价位：服务端已确认的标注行（`annotationSnapshot.lines`，与图上画线同源）。
+   * 身份不可证（未登录/类型不是个股）→ `buildChartContext` 返回 null，一条都不发布。
+   *
+   * 只在**个股视图 + 当前页签可见**时发布；依赖变化（含卸载）先撤掉旧 key，
+   * 所以换标的/离开页面后旧上下文立刻失效，不会残留给下一次入口。
+   */
+  const chartContext = useMemo<ChartContext | null>(() => {
+    if (type !== 'stock') return null
+    return buildChartContext({
+      owner: annotationOwner,
+      symbol,
+      instrument: 'stock',
+      market: MARKET,
+      period: sp.get('period'),
+      range: rangeStats,
+      levels: annotationSnapshot.lines,
+    })
+  }, [type, symbol, MARKET, annotationOwner, sp, rangeStats, annotationSnapshot.lines])
+  useEffect(() => {
+    if (!chartContext || !active) return
+    const key = publishChartContext(chartContext)
+    return () => unpublishChartContext(key)
+  }, [chartContext, active])
   // §12: 数据源健康(60s 轮询; 失败/未知一律按不可用 → 灰显, 不假装有数据)
   const { isReady: sourceReady, reasonOf: sourceReason } = useSourceHealth()
   const [statsDismissed, setStatsDismissed] = useState(false)
@@ -567,6 +611,11 @@ export default function StockWorkbench() {
                   costLines={costLines}
                   /* 参谋罗盘与关键点位画线叠加 */
                   supportPressure={copilotPriceLines}
+                  /* 纯时间点标注（2026-10-29）: 只有日期没有价位的已确认标注 → 该日 K 线 marker。
+                     能不能画上去取决于"该日有没有 K 线"，所以把图表的真实结果回报进账本
+                     （onAnnotationMarkersDrawn），状态带据此说"已上图"还是"该日无 K 线未上图"。 */
+                  annotationMarkers={annotationLink.annotationMarkers}
+                  onAnnotationMarkersDrawn={annotationLink.reportMarkerRender}
                   /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
                   onIntervalChange={handleIntervalChange}
                   /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */

@@ -12,6 +12,16 @@ turnover 单位实测(2026-09-08, qt.gtimg.cn 真实报文, 收盘后):
   (偏差 <0.7% 即 VWAP≠收盘价的正常范围) → parts[35] 第三段成交额单位 = 元。
   交叉印证: parts[37] = amt/10000 (230282 vs 2302823753, 比值 10000.02) = 万元口径。
   恒等式约定见 docs/_frozen/data.md。
+
+parts[30] 语义实测(2026-10-29 19:20, 收盘后同一批报文, 这批证据决定 UI 文案):
+  sh600519 正常交易 vol=42992 手   parts[30]='20261029161457'
+  sh601326 今日停牌 vol=0          parts[30]='20261029161445'
+  sz002827 今日停牌 vol=0          parts[30]='20261029161430'
+  ⇒ ① CN 收盘 15:00 之后仍报 16:14:xx(那是源端整理/刷新时点, 不是最后一笔成交);
+    ② 停牌股今日没有成交, parts[30] 照样刷成当日 16:14。
+  ⇒ **它只能证明"报文在这个时刻被刷新过"**, 不能证明"这个时刻发生过成交",
+    更不能用来否定停牌。`Quote.quote_time_kind` 因此标 'snapshot_refresh',
+    UI 必须写"源快照时间", 不许写"成交时间"。
 """
 
 from __future__ import annotations
@@ -63,16 +73,67 @@ def _to_float(value: str | None) -> float | None:
         return None
 
 
+#: 腾讯 parts[30] 实测格式（2026-10-29 实盘报文，按市场不同）：
+#:   CN sh600519 = '20261029161457'（14 位紧凑）
+#:   HK hk00700  = '2026/10/29 16:08:29'（斜杠）
+#:   US usAAPL   = '2026-10-28 16:00:01'（横杠；**市场当地**时间，可能是上一交易日）
+_QUOTE_TIME_FORMATS = (
+    ("%Y%m%d%H%M%S", 14),
+    ("%Y-%m-%d %H:%M:%S", 19),
+    ("%Y/%m/%d %H:%M:%S", 19),
+)
+
+
 def _parse_quote_time(value: str | None, market: str) -> datetime | None:
+    """解析行情源自带的报时（parts[30]），按**市场时区**贴 tzinfo；解析不出给 None。
+
+    2026-10-29 F3: 旧实现只认 14 位紧凑格式 —— 港美报时是带分隔符的格式，于是
+    `quote_time` 恒为 None，WS/防线对港美永远只能判"时刻未知"（明明源给了时刻）。
+    这里按顺序试三种实测格式；都不匹配就返回 None（绝不猜、绝不用抓取时间顶替）。
+
+    ⚠️ **语义不是"成交时刻"**（2026-10-29 实盘复测，见模块 docstring）：
+    CN 收盘后 parts[30] 仍是 16:14:xx（15:00 收盘之后），且**停牌股**（今日成交量 0）
+    的 parts[30] 同样刷新成 16:14:xx。⇒ 它是**源端快照刷新时间**，只证明"这条报文
+    在这时被刷新过"，不证明"这时发生过成交"。调用方必须把它标成
+    `Quote.quote_time_kind="snapshot_refresh"`，UI 也不许写成"成交时间"。
+    """
     text = str(value or "").strip()
-    if len(text) < 14:
+    if not text:
         return None
-    try:
-        parsed = datetime.strptime(text[:14], "%Y%m%d%H%M%S")
-        timezone = _MARKET_TIMEZONES.get(market)
-        return parsed.replace(tzinfo=ZoneInfo(timezone)) if timezone else parsed
-    except (TypeError, ValueError):
+    parsed: datetime | None = None
+    for fmt, width in _QUOTE_TIME_FORMATS:
+        if len(text) < width:
+            continue
+        try:
+            parsed = datetime.strptime(text[:width], fmt)
+            break
+        except (TypeError, ValueError):
+            continue
+    if parsed is None:
         return None
+    timezone = _MARKET_TIMEZONES.get(market)
+    return parsed.replace(tzinfo=ZoneInfo(timezone)) if timezone else parsed
+
+
+#: parts[30] 的时刻语义（按市场分，2026-10-29 复审）：
+#:   CN  = "snapshot_refresh"：**已证实是源端刷新时点**，不是成交时刻。
+#:         证据(2026-10-29 19:20/19:49 收盘后, qt.gtimg.cn)：正常股 parts[30]=16:14:57、
+#:         停牌股(601326/002827)同样刷成 16:14:xx，而 A 股 15:00 已收盘 ⇒ 只证明"报文被
+#:         刷新过"，不证明"这时成交过"。
+#:   港美 = "vendor_stamp"：**只到"供应商报时间"这一层，语义未核实**。
+#:         2026-10-29 19:49 实盘：HK 8 只 16:08:24~16:08:29（落在收盘竞价随机收市窗口内）、
+#:         US 15 只 2026-10-28 16:00:01（收盘竞价打印时点）、BRK.A 16:04:49（更晚）。
+#:         这些时刻**可能就是最后一笔成交**，没有证据能否定 ⇒ 不许沿用 CN 那句更强的断言
+#:         （"快照刷新/非成交"），只许说"源报时，不能证明成交"。
+QUOTE_TIME_KIND_SNAPSHOT_REFRESH = "snapshot_refresh"
+QUOTE_TIME_KIND_VENDOR_STAMP = "vendor_stamp"
+
+
+def _quote_time_kind(market: str, quote_time: datetime | None) -> str:
+    """报价时刻的语义标签；没有时刻就是空串（绝不半条证据）。"""
+    if quote_time is None:
+        return ""
+    return QUOTE_TIME_KIND_SNAPSHOT_REFRESH if market == "CN" else QUOTE_TIME_KIND_VENDOR_STAMP
 
 
 def _parse_line(line: str, market: str) -> Quote | None:
@@ -119,6 +180,7 @@ def _parse_line(line: str, market: str) -> Quote | None:
             status = "partial"
         else:
             status = "ok"
+        quote_time = _parse_quote_time(parts[30], market)
 
         return Quote(
             symbol=symbol,
@@ -141,7 +203,8 @@ def _parse_line(line: str, market: str) -> Quote | None:
             pb_ratio=pb_ratio,
             circulating_market_value=circulating,
             total_market_value=total,
-            quote_time=_parse_quote_time(parts[30], market),
+            quote_time=quote_time,
+            quote_time_kind=_quote_time_kind(market, quote_time),
             status=status,
             missing_fields=missing,
         )

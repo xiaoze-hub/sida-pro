@@ -477,6 +477,7 @@ def admin_set_register_mode(
 
 
 @router.get("/pro/admin/expired")
+@allow_cross_user  # C3(2026-09-18): owner-only(Depends(require_owner)) 的全局降级日志报表, 有意跨用户
 def admin_expired_keys(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=200, ge=1, le=1000),

@@ -12,6 +12,7 @@ import logging
 import os
 import threading
 import time
+from typing import Any
 
 from marketdata.cache import TTLCache
 from marketdata.http import record_error
@@ -23,6 +24,29 @@ from marketdata.types import Request, Response
 from marketdata.vendors.base import Vendor, emit_vendor_failure
 
 logger = logging.getLogger(__name__)
+
+
+def _item_code(item: Any) -> str:
+    """从一条数据里取标的代码（dict["symbol"] / 对象 .symbol）。取不到返回 ""。"""
+    if isinstance(item, dict):
+        code = item.get("symbol") or item.get("code")
+    else:
+        code = getattr(item, "symbol", None) or getattr(item, "code", None)
+    return str(code) if code else ""
+
+
+def _coverage(data: Any, wanted: set[str]) -> set[str] | None:
+    """这批数据覆盖了 wanted 里的哪些代码。
+
+    返回 None = **无法判断覆盖**（数据不带标的，如指数/市场级/新闻聚合），调用方按
+    "整批成功"处理，绝不因拿不到 symbol 就判 partial。
+    """
+    if not wanted or not isinstance(data, (list, tuple)) or not data:
+        return None
+    got = {_item_code(item) for item in data}
+    if not all(got):
+        return None
+    return got & wanted
 
 
 class Engine:
@@ -68,6 +92,7 @@ class Engine:
 
         market = req.market
         syms = [Symbol(Market(market), c) for c in req.symbols]
+        wanted = {str(s.code) for s in syms}
         sources = sorted(self.config.sources_for(self.datatype, market), key=lambda s: s.priority)
 
         last_err = ""
@@ -144,13 +169,28 @@ class Engine:
                     if kp and api_key:
                         kp.mark_success(api_key)
                     if data:
-                        self.metrics.record(vendor=src.vendor, datatype=self.datatype, market=market,
-                                            ok=True, count=len(data), latency_ms=latency)
-                        resp = Response(ok=True, data=data, vendor=src.vendor, latency_ms=latency)
-                        if len(data) >= min_count:
+                        covered = _coverage(data, wanted) if self.datatype == "quote" else None
+                        missing = tuple(sorted(wanted - covered)) if covered is not None else ()
+                        complete = len(data) >= min_count and not missing
+                        if complete:
+                            self.metrics.record(vendor=src.vendor, datatype=self.datatype, market=market,
+                                                ok=True, count=len(data), latency_ms=latency)
+                        else:
+                            # 2026-10-29 复审：覆盖不全**不是**完整成功。记成 ok=False 并带
+                            # 明确的 partial 文案 —— 否则健康面板会把"5 只里只回来 3 只"
+                            # 的批次算成 100% 成功（总汇总冒充完整）。
+                            self.metrics.record(
+                                vendor=src.vendor, datatype=self.datatype, market=market,
+                                ok=False, count=len(data), latency_ms=latency,
+                                error=f"partial_batch {len(covered or ())}/{len(wanted)}",
+                            )
+                        resp = Response(ok=True, data=data, vendor=src.vendor, latency_ms=latency,
+                                        partial=not complete, missing=missing, requested=len(wanted))
+                        if complete:
                             ttl = cache_ttl_sec if cache_ttl_sec is not None else self.default_ttl
                             self.cache.set(key, resp, ttl_sec=ttl)
                             return resp
+                        # 部分批只当候选：继续问下一个源（**整批**，绝不逐票拼接/混源）。
                         if best is None or len(data) > len(best.data):
                             best = resp
                     else:
@@ -163,7 +203,10 @@ class Engine:
                 continue
 
         if best is not None:
-            ttl = cache_ttl_sec if cache_ttl_sec is not None else self.default_ttl
-            self.cache.set(key, best, ttl_sec=ttl)
+            # 2026-10-29 复审：部分批**不进缓存**。缓存它 = 让缺失标的在整个 TTL 内都没有
+            # 行情，而且下一次调用连"去别的源补一整批"的机会都没有。
+            if not best.partial:
+                ttl = cache_ttl_sec if cache_ttl_sec is not None else self.default_ttl
+                self.cache.set(key, best, ttl_sec=ttl)
             return best
         return Response(ok=False, data=None, error=last_err or "no enabled provider")

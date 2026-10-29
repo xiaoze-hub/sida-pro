@@ -25,10 +25,15 @@
 
 import { fetchAPI } from '@sida/api'
 
-import { AnnotationLedger, currentAccountId, type AnnotationSnapshot } from './annotationLedger'
+import {
+  AnnotationLedger,
+  currentAccountId,
+  mergeMarkers,
+  type AnnotationSnapshot,
+} from './annotationLedger'
 import {
   annotationsUrl,
-  linesForTarget,
+  marksForTarget,
   marketMatches,
   normSymbol,
   parseAnnotationsResponse,
@@ -43,6 +48,7 @@ import {
   type ReadOptions,
   type RevokedAnnotation,
   type ServerAnnotationLine,
+  type ServerAnnotationMarker,
   type ServerAnnotationRow,
 } from './serverAnnotations'
 
@@ -111,20 +117,49 @@ export async function requestAnnotations(
     return AnnotationLedger.snapshot(target)
   }
 
-  const verdict = linesForTarget(res.rows, target)
+  // 两条通道同一套核对（属主/确认动作/标的/市场/周期）：有价位的 → 价位线，
+  // 没价位但有日粒度日期的 → 该日 K 线 marker。任何一条都不凭空补位。
+  const verdict = marksForTarget(res.rows, target)
   const notes: string[] = []
   if (res.dropped > 0) notes.push(`${res.dropped} 行缺目标/属主字段被丢弃`)
-  if (verdict.merged > 0) notes.push(`合并了 ${verdict.merged} 条同价重复行`)
+  // 文案保留各自通道的原话：同价重复（价位线）/ 同日期同标签重复（时间点），
+  // 别把两种"重复"混成一个数字让用户以为看错了图层。
+  if (verdict.mergedLines > 0) notes.push(`合并了 ${verdict.mergedLines} 条同价重复行`)
+  if (verdict.mergedMarkers > 0) notes.push(`合并了 ${verdict.mergedMarkers} 条同日期重复标注`)
+  const total = verdict.lines.length + verdict.markers.length
+  const markerRender = AnnotationLedger.snapshot(target).markerRender
 
   let snap: AnnotationSnapshot
-  if (verdict.lines.length > 0) {
+  if (total > 0) {
+    // 说法把两条通道分开：几条线、几个时间点标记 —— 不让用户以为"都是线"。
+    // ⚠️ 时间点标记**不能**跟着说"已上图"（2026-10-29 复审阻断 ④）：价位线由图表直接画，
+    // marker 还要看"该日有没有日 K、当前是不是日 K 周期"。真实结果由图表回报
+    // （`onAnnotationMarkersDrawn`），这里只说"已接线、落图见图表回报"。
+    const parts: string[] = []
+    if (verdict.lines.length > 0) parts.push(`${verdict.lines.length} 条价位线`)
+    if (verdict.markers.length > 0) {
+      parts.push(`${verdict.markers.length} 个时间点标记（是否真的落图由图表回报）`)
+    }
     snap = {
       key: targetKey(target),
       phase: 'ready',
       lines: verdict.lines,
-      annotationIds: Array.from(new Set(verdict.lines.map((l) => l.annotationId))).sort((a, b) => a - b),
-      actionIds: Array.from(new Set(verdict.lines.map((l) => l.actionId))).sort((a, b) => a - b),
-      message: notes.length > 0 ? `已按服务端标注画线 ${verdict.lines.length} 条（${notes.join('；')}）` : '',
+      markers: verdict.markers,
+      markerRender,
+      annotationIds: Array.from(
+        new Set([
+          ...verdict.lines.map((l) => l.annotationId),
+          ...verdict.markers.map((m) => m.annotationId),
+        ]),
+      ).sort((a, b) => a - b),
+      actionIds: Array.from(
+        new Set([
+          ...verdict.lines.map((l) => l.actionId),
+          ...verdict.markers.map((m) => m.actionId),
+        ]),
+      ).sort((a, b) => a - b),
+      message:
+        notes.length > 0 ? `已按服务端标注上图：${parts.join('、')}（${notes.join('；')}）` : '',
       notice: '',
       noticeLevel: 'info',
       retryable: false,
@@ -136,6 +171,8 @@ export async function requestAnnotations(
       key: targetKey(target),
       phase: 'refused',
       lines: [],
+      markers: [],
+      markerRender: null,
       annotationIds: [],
       actionIds: [],
       message: `服务端有 ${res.rows.length} 条标注，但没有一条能核对到当前 K 线：${verdict.rejected[0]}`,
@@ -149,6 +186,8 @@ export async function requestAnnotations(
       key: targetKey(target),
       phase: 'idle',
       lines: [],
+      markers: [],
+      markerRender: null,
       annotationIds: [],
       actionIds: [],
       message: '',
@@ -257,20 +296,46 @@ export async function linkConfirmedAnnotation(
       return AnnotationLedger.snapshot(stillView)
     }
 
-    // 合并的基线也必须是**视图键**的快照：服务端键里没有页面已经在画的那几条线，
-    // 拿它当基线会把同标的既有标注整批丢掉（复审阻断 ①）。
-    const merged = mergeSnapshotLines(AnnotationLedger.snapshot(stillView).lines, [verified.value])
+    // 合并基线必须取 `baselineLines` / `baselineMarkers`，**不能**取 `snapshot()` 的
+    // `lines`/`markers`（2026-10-29 复审阻断 ③）：这次确认前面刚 `await` 过一次精确回读，
+    // 期间用户可能点了「重新读取」/后台刷新 —— `beginRequest` 会把快照置成 loading 并把
+    // lines/markers 清空。拿空快照当基线 `replaceLines` 就会把**图上其余标注整批抹掉**
+    // （既没有提示、也无法撤销回来）。baseline* 在 loading 窗口里回落到"上次已知的"那一份。
+    const currentLines = AnnotationLedger.baselineLines(stillView)
+    const currentMarkers = AnnotationLedger.baselineMarkers(stillView)
     // 市场写法不同（视图 CN / 落库 SH）时说明一句，避免用户以为"画错市场了"。
     const marketNote =
       (stillView.market || '').toUpperCase() !== (target.market || '').toUpperCase()
         ? `（服务端落库市场 ${target.market}，当前视图 ${stillView.market}，可证明是同一只标的）`
         : ''
+
+    /*
+     * 纯时间点标注（2026-10-29）：只说"已交给图表画在该日"，**不说"已上图"** ——
+     * 日期有没有对应 K 线由图表回报（`onAnnotationMarkersDrawn`）决定，状态条据此
+     * 区分"已上图"和"该日没有 K 线、没上图"。这里把话说满就是假称已上图。
+     */
+    if (verified.value.shape === 'marker') {
+      const marker = verified.value.marker
+      AnnotationLedger.replaceLines(
+        stillView,
+        currentLines,
+        `已确认时间点标注 #${marker.annotationId}（${marker.date} ${marker.label}，` +
+          `动作 #${marker.actionId}）：已交给图表画在该日 K 线上（仅日K周期；当前不是日K` +
+          `或该日没有 K 线时不会上图，状态条会注明原因）` +
+          marketNote,
+        { markers: mergeMarkers(currentMarkers, [marker]) },
+      )
+      return AnnotationLedger.snapshot(stillView)
+    }
+
+    const merged = mergeSnapshotLines(currentLines, [verified.value.line])
     AnnotationLedger.replaceLines(
       stillView,
       merged,
       `已确认并上图：${merged.map((l) => `${l.label} ${l.price}`).join('、')}（标注 #${merged
         .map((l) => l.annotationId)
         .join('、')}，动作 #${merged.map((l) => l.actionId).join('、')}）${marketNote}`,
+      { markers: currentMarkers },
     )
     return AnnotationLedger.snapshot(stillView)
   } catch (err) {
@@ -381,8 +446,11 @@ function revokeFailure(err: unknown): { text: string; unauthorized: boolean } {
   }
 }
 
-/** 这条线是否仍然属于当前这张图（撤销前最后一道目标核对）。 */
-function lineTargetMismatch(line: ServerAnnotationLine, target: AnnotationTarget): string | null {
+/** 这条标注是否仍然属于当前这张图（撤销前最后一道目标核对；价位线与时间点共用）。 */
+function lineTargetMismatch(
+  line: { annotationId: number; symbol: string; market: string; period: string },
+  target: AnnotationTarget,
+): string | null {
   if (normSymbol(line.symbol) !== normSymbol(target.symbol)) {
     return `标注 #${line.annotationId} 属于 ${line.symbol}，与当前 K 线标的 ${normSymbol(target.symbol)} 不一致`
   }
@@ -399,21 +467,65 @@ function lineTargetMismatch(line: ServerAnnotationLine, target: AnnotationTarget
 }
 
 /**
+ * 撤销对账用的**最小描述**（2026-10-29）：价位线与时间点标注共用一套撤销口径。
+ *
+ * 为什么抽出来：撤销的动作语义对两条通道完全一样（本人确认过 → DELETE → 严格解析 →
+ * 读回对账 → 只减这一条），差别只在"图上是什么形状"。若给 marker 另写一条撤销链路，
+ * 迟早会出现"线核对了属主、marker 忘了"的漏洞 —— 这正是本文件一直在防的那类问题。
+ */
+interface RevokableMark {
+  annotationId: number
+  /** 人读描述：「支撑位 32.8」/「2026-10-20 提示」 */
+  describe: string
+  /** 同槽位键：价位线 = `kind:price*100`；时间点 = `date|label|tone` */
+  slotKey: string
+  /** 同槽位的人话（价位线="同价位"；时间点="同一日期"） */
+  slotWord: string
+  symbol: string
+  market: string
+  period: string
+  ownerId: string
+}
+
+function lineAsMark(line: ServerAnnotationLine): RevokableMark {
+  return {
+    annotationId: line.annotationId,
+    describe: `${line.label} ${line.price}`,
+    slotKey: `${line.kind}:${Math.round(line.price * 100)}`,
+    slotWord: '同价位',
+    symbol: line.symbol,
+    market: line.market,
+    period: line.period,
+    ownerId: line.ownerId,
+  }
+}
+
+function markerAsMark(marker: ServerAnnotationMarker): RevokableMark {
+  return {
+    annotationId: marker.annotationId,
+    describe: `${marker.date} ${marker.label}`,
+    slotKey: `${marker.date}|${marker.label}|${marker.tone}`,
+    slotWord: '同一日期',
+    symbol: marker.symbol,
+    market: marker.market,
+    period: marker.period,
+    ownerId: marker.ownerId,
+  }
+}
+
+/**
  * 撤销一条**本人已确认**的标注，并在服务端读回之后才动图（2026-10-29, P2）。
  *
  * 顺序（每一步失败都**不动图**，只播报）：
- *  1. 本地前置核对：这条线在不在当前图上、属主是不是我、标的/市场/周期还是不是这张图 ——
- *     任何一条不满足都**不发请求**（绝不删除不属于本人的标注，也不拿别的标的的图去删）；
+ *  1. 本地前置核对：这条标注在不在当前图上（价位线或时间点通道）、属主是不是我、
+ *     标的/市场/周期还是不是这张图 —— 任何一条不满足都**不发请求**
+ *     （绝不删除不属于本人的标注，也不拿别的标的的图去删）；
  *  2. `DELETE /copilot/annotations/{id}`（连点复用同一个 promise）；
  *  3. 严格解析响应（`parseRevokeResponse`：必须 `status=revoked`、`action_status=rolled_back`、
  *     回来的 `annotation_id` 就是请求的那一条）；
- *  4. 只有 3 通过才按**服务端读回**对账当前目标的线（`linesForTarget` 同一套属主/标的/
- *     市场/周期核对）：只对账"被撤销的这一条 / 同一价位上的另一条"，别的行一行不动 ——
- *     读回是快照，整批重建会复活已撤销的线、抹掉刚确认的线（2026-10-29 竞态补丁）；
+ *  4. 只有 3 通过才按**服务端读回**对账当前目标的标注（`marksForTarget` 同一套属主/标的/
+ *     市场/周期核对）：只对账"被撤销的这一条 / 同一槽位上的另一条"，别的行一行不动；
  *  5. 读回与撤销结论不一致（读回仍返回该行 / 读回失败）时如实说明，不假装已撤回。
- *
- * 失败时**自动重新读取**：撤销被拒往往是"别处已经撤掉了/动作状态已经变了"，
- * 界面必须回到服务端事实，而不是停在旧账本上让用户再点一次。
  */
 export function revokeAnnotation(
   annotationId: number,
@@ -440,9 +552,12 @@ async function runRevoke(
   annotationId: number,
   reason: string,
 ): Promise<AnnotationSnapshot | null> {
-  const line = AnnotationLedger.snapshot(view).lines.find((l) => l.annotationId === annotationId)
-  if (!line) {
-    // 已经不在图上（撤销成功过 / 已切换标的）：不发请求，也不假装发生了一次撤销。
+  const snap = AnnotationLedger.snapshot(view)
+  // 两条通道都找：只在自己看得到的那条上撤。找不到 = 已经不在图上（撤销成功过/切换标的）。
+  const lineHit = snap.lines.find((l) => l.annotationId === annotationId)
+  const markerHit = lineHit ? undefined : snap.markers.find((m) => m.annotationId === annotationId)
+  const mark = lineHit ? lineAsMark(lineHit) : markerHit ? markerAsMark(markerHit) : null
+  if (!mark) {
     AnnotationLedger.notice(
       view,
       `标注 #${annotationId} 不在当前图上（可能已撤销，或已切换标的/周期），未发送撤销请求。`,
@@ -455,15 +570,15 @@ async function runRevoke(
     AnnotationLedger.notice(view, `撤销标注 #${annotationId} 需要登录（标注按账号隔离）。`, 'error')
     return AnnotationLedger.snapshot(view)
   }
-  if (line.ownerId !== owner) {
+  if (mark.ownerId !== owner) {
     AnnotationLedger.notice(
       view,
-      `标注 #${annotationId} 属于其他账号（${line.ownerId}），不能撤销（服务端也只允许撤销本人标注）。`,
+      `标注 #${annotationId} 属于其他账号（${mark.ownerId}），不能撤销（服务端也只允许撤销本人标注）。`,
       'error',
     )
     return AnnotationLedger.snapshot(view)
   }
-  const mismatch = lineTargetMismatch(line, view)
+  const mismatch = lineTargetMismatch(mark, view)
   if (mismatch) {
     AnnotationLedger.notice(view, `${mismatch}，不发撤销请求。`, 'error')
     return AnnotationLedger.snapshot(view)
@@ -495,18 +610,18 @@ async function runRevoke(
         }
         return null
       }
-      return await resyncAfterRevokeFailure(viewKey, line, failure.text)
+      return await resyncAfterRevokeFailure(viewKey, mark, failure.text)
     }
 
     const parsed = parseRevokeResponse(raw, annotationId)
     if (!parsed.ok) {
       return await resyncAfterRevokeFailure(
         viewKey,
-        line,
+        mark,
         `撤销请求已发出，但响应无法核对：${parsed.message}`,
       )
     }
-    return await applyRevoked(viewKey, line, parsed.value)
+    return await applyRevoked(viewKey, mark, parsed.value)
   } catch (err) {
     // 接线层自己的 bug 不能吞掉：如实播报，图不动
     const current = sameViewTarget(viewKey)
@@ -525,16 +640,16 @@ async function runRevoke(
  * 撤销失败（或被拒）→ 回到服务端事实。
  *
  * 失败后必须重新读取：常见原因是"这条已经被别处撤销了/动作状态已变"，
- * 界面若继续显示旧账本，用户会以为按钮坏了。读回之后再看这条线还在不在，
+ * 界面若继续显示旧账本，用户会以为按钮坏了。读回之后再看这条标注还在不在，
  * 文案跟着事实走（"仍保留" vs "已被撤销，图上已同步移除"）。
  *
- * ⚠️ 读回**只做减法**（2026-10-29 竞态补丁）：这次读的唯一目的是"这条线还在不在"。
+ * ⚠️ 读回**只做减法**（2026-10-29 竞态补丁）：这次读的唯一目的是"这条还在不在"。
  * 旧实现用 `requestAnnotations` 整批重建 —— 它先把图清成 loading，再拿这份读回替换全部
  * 线：期间并行的确认标注会被抹掉，且会把账本的"当前视图"回写成这个（可能已经过期的）目标。
  */
 async function resyncAfterRevokeFailure(
   viewKey: string,
-  line: ServerAnnotationLine,
+  mark: RevokableMark,
   why: string,
 ): Promise<AnnotationSnapshot | null> {
   const still = sameViewTarget(viewKey)
@@ -552,61 +667,67 @@ async function resyncAfterRevokeFailure(
     return now ? AnnotationLedger.snapshot(now) : null
   }
   const current = AnnotationLedger.baselineLines(after)
-  const held = current.some((l) => l.annotationId === line.annotationId)
+  const currentMarkers = AnnotationLedger.baselineMarkers(after)
+  const held =
+    current.some((l) => l.annotationId === mark.annotationId) ||
+    currentMarkers.some((m) => m.annotationId === mark.annotationId)
   if (!res.ok) {
     // 读回失败 ⇒ 没有证据说它已经不在了：线保留，不猜
     AnnotationLedger.notice(
       after,
       `${why}。重新读取服务端标注失败：${res.message}，无法核对${
-        held ? '，图上这条线保留' : ''
-      }（图上的线未改动）。`,
+        held ? '，图上这条标注保留' : ''
+      }（图上的标注未改动）。`,
       'error',
     )
     return AnnotationLedger.snapshot(after)
   }
-  const kept = linesForTarget(res.rows, after).lines.some((l) => l.annotationId === line.annotationId)
+  const verdict = marksForTarget(res.rows, after)
+  const kept =
+    verdict.lines.some((l) => l.annotationId === mark.annotationId) ||
+    verdict.markers.some((m) => m.annotationId === mark.annotationId)
   if (!kept) {
     AnnotationLedger.replaceLines(
       after,
-      current.filter((l) => l.annotationId !== line.annotationId),
-      `${why}。服务端读回已没有这条线，图上已同步移除；已重新读取服务端标注核对。`,
-      { level: 'error' },
+      current.filter((l) => l.annotationId !== mark.annotationId),
+      `${why}。服务端读回已没有这条标注，图上已同步移除；已重新读取服务端标注核对。`,
+      {
+        level: 'error',
+        markers: currentMarkers.filter((m) => m.annotationId !== mark.annotationId),
+      },
     )
     return AnnotationLedger.snapshot(after)
   }
   AnnotationLedger.notice(
     after,
-    `${why}。图上这条线仍保留；已重新读取服务端标注核对。`,
+    `${why}。图上这条标注仍保留；已重新读取服务端标注核对。`,
     'error',
   )
   return AnnotationLedger.snapshot(after)
 }
 
 /**
- * 撤销成功 → 服务端读回 → 只按读回结果**对账被撤销的那一条**。
+ * 撤销成功 → 服务端读回 → 只按读回结果**对账被撤销的那一条**（两条通道同一套口径）。
  *
- * 三个诚实点（复审关心的正是这类"看起来成功了"）：
- *  - 读回**仍返回**这条标注 ⇒ 不删线，明说"服务端仍返回、图上保留"（可能是读缓存/别处重写）；
+ * 三个诚实点：
+ *  - 读回**仍返回**这条标注 ⇒ 不删，明说"服务端仍返回、图上保留"；
  *  - 读回**失败** ⇒ 只移除"服务端已确认删除的这一条"（删除本身有响应为证），其余不动；
  *  - 期间**切了视图** ⇒ 不碰新图，只播报"已在服务端撤销，当前图未改动"。
  *
- * ⚠️ 不做整批重建（2026-10-29 竞态补丁）：读回拿到的是一份**快照**，而写账本的时刻可能已经
- * 晚于用户的下一步操作。旧实现 `replaceLines(verdict.lines)` 会：
- *   - 把快照里还有、但已经被**另一次撤销**删掉的线**复活**；
- *   - 把期间**刚确认**的线（不在旧快照里）**抹掉**；
- *   - 把本次读回里那些先前不在视图上的行（limit/排序之外、或别处新增）**带上来**。
- * 所以：落地永远是基于"此刻"账本的**减法**，读回只回答两件事 —— 这一条还在不在、
- * 同一价位上是否还有另一条（那条本来就应该顶上来，但快照可能已经过时，落地前按 id
- * 再核对一次；核对不过就不画，宁可说"未能同步"也不复活一条不存在的线）。别的行一律不碰。
+ * ⚠️ 不做整批重建：读回是**快照**，落地永远基于"此刻"账本的**减法** —— 别的行一行不动，
+ * 同槽位的另一条要先按 id 再核对一次（核对不过就不画，宁可说"未能同步"也不复活一条
+ * 不存在的标注）。
  */
 async function applyRevoked(
   viewKey: string,
-  line: ServerAnnotationLine,
+  mark: RevokableMark,
   revoked: RevokedAnnotation,
 ): Promise<AnnotationSnapshot | null> {
-  const what = `${line.label} ${line.price}`
+  const what = mark.describe
+  /** 两条通道的"同槽位"人话不同：价位线是同一个价位，时间点标注是同一天同一标签。 */
+  const slotWord = mark.slotWord
   const head =
-    `已撤销标注 #${line.annotationId}（${what}）：服务端已删除该行` +
+    `已撤销标注 #${mark.annotationId}（${what}）：服务端已删除该行` +
     `（确认动作 #${revoked.actionId} 已 rolled_back）`
   const now = sameViewTarget(viewKey)
   if (!now) {
@@ -614,7 +735,7 @@ async function applyRevoked(
     if (current) {
       AnnotationLedger.notice(
         current,
-        `标注 #${line.annotationId}（${what}）已在服务端撤销（确认动作 #${revoked.actionId} 已 rolled_back），` +
+        `标注 #${mark.annotationId}（${what}）已在服务端撤销（确认动作 #${revoked.actionId} 已 rolled_back），` +
           `但期间切换了图表视图（当前 ${normSymbol(current.symbol)}），当前图未改动。`,
         'warn',
       )
@@ -623,8 +744,8 @@ async function applyRevoked(
     return null
   }
 
-  // 读回**整个目标**（不只是这一个 id）：撤销后同一价位可能还有另一条标注该顶上来，
-  // 只看这一个 id 会把那个价位从图上"凭空抹掉"。但结果**不整批落地**（见函数注释）。
+  // 读回**整个目标**（不只是这一个 id）：撤销后同一槽位可能还有另一条标注该顶上来，
+  // 只看这一个 id 会把那个价位/那个日期从图上"凭空抹掉"。但结果**不整批落地**。
   const res = await fetchRows(now)
   // 读回很慢，这期间用户可能换了标的/周期/账号：只认"仍是同一张图"的账本键
   const after = sameViewTarget(viewKey)
@@ -633,7 +754,7 @@ async function applyRevoked(
     if (current) {
       AnnotationLedger.notice(
         current,
-        `标注 #${line.annotationId}（${what}）已在服务端撤销（确认动作 #${revoked.actionId} 已 rolled_back），` +
+        `标注 #${mark.annotationId}（${what}）已在服务端撤销（确认动作 #${revoked.actionId} 已 rolled_back），` +
           `但期间切换了图表视图（当前 ${normSymbol(current.symbol)}），当前图未改动。`,
         'warn',
       )
@@ -642,53 +763,64 @@ async function applyRevoked(
     return null
   }
 
-  // 落地的基线必须是**此刻**的账本，不是读回发起时的快照；且 reading 窗口里
-  // `lines` 已被清空 —— 用 baselineLines 回落到"上次已知的线"，否则其余线整批消失。
-  const current = AnnotationLedger.baselineLines(after)
-  const held = current.some((l) => l.annotationId === line.annotationId)
+  // 落地的基线必须是**此刻**的账本，不是读回发起时的快照；且 loading 窗口里
+  // 集合已被清空 —— 用 baseline* 回落到"上次已知的"，否则其余标注整批消失。
+  const currentLines = AnnotationLedger.baselineLines(after)
+  const currentMarkers = AnnotationLedger.baselineMarkers(after)
+  const restLines = currentLines.filter((l) => l.annotationId !== mark.annotationId)
+  const restMarkers = currentMarkers.filter((m) => m.annotationId !== mark.annotationId)
+  const held =
+    currentLines.some((l) => l.annotationId === mark.annotationId) ||
+    currentMarkers.some((m) => m.annotationId === mark.annotationId)
 
   if (!res.ok) {
     AnnotationLedger.replaceLines(
       after,
-      current.filter((l) => l.annotationId !== line.annotationId),
+      restLines,
       `${head}。但重新读取失败：${res.message}。本次只从图上移除了这一条（其余标注未动，可点「重新读取」核对）。`,
-      { retryable: true, level: 'warn' },
+      { retryable: true, level: 'warn', markers: restMarkers },
     )
     return AnnotationLedger.snapshot(after)
   }
 
-  const verdict = linesForTarget(res.rows, after)
-  if (verdict.lines.some((l) => l.annotationId === line.annotationId)) {
-    // 服务端仍返回该行：不删线；也不把它"再加回来"（只做减法）
+  const verdict = marksForTarget(res.rows, after)
+  const stillListed =
+    verdict.lines.some((l) => l.annotationId === mark.annotationId) ||
+    verdict.markers.some((m) => m.annotationId === mark.annotationId)
+  if (stillListed) {
+    // 服务端仍返回该行：不删；也不把它"再加回来"（只做减法）
     AnnotationLedger.replaceLines(
       after,
-      current,
-      `撤销请求已成功（服务端返回 revoked），但重新读取仍返回标注 #${line.annotationId}（${what}）。` +
-        (held ? '图上保留这条线，未假装已撤回' : '图上此前已不在这条线，本次未重新加回') +
+      currentLines,
+      `撤销请求已成功（服务端返回 revoked），但重新读取仍返回标注 #${mark.annotationId}（${what}）。` +
+        (held ? '图上保留这条标注，未假装已撤回' : '图上此前已不在这条标注，本次未重新加回') +
         '；可能是读到了旧数据或另一处重新写入，请稍后点「重新读取」核对。',
-      { retryable: true, level: 'error' },
+      { retryable: true, level: 'error', markers: currentMarkers },
     )
     return AnnotationLedger.snapshot(after)
   }
 
-  const levelKey = (l: ServerAnnotationLine) => `${l.kind}:${Math.round(l.price * 100)}`
-  const rest = current.filter((l) => l.annotationId !== line.annotationId)
-  // 同向同价的另一条标注（重复确认留下的）会让人误以为"没删掉"：图上这个价位确实还有线，
-  // 但已经不是被撤销的那一条 —— 说明白，别把同价位的另一条说成撤销失败。
-  const sameLevel = verdict.lines.find(
-    (l) => l.annotationId !== line.annotationId && levelKey(l) === levelKey(line),
+  // 同槽位的另一条（重复确认留下的）会让人误以为"没删掉"：图上那个位置确实还有标注，
+  // 但已经不是被撤销的那一条 —— 说明白，别把同槽位的另一条说成撤销失败。
+  const sameSlotLine = verdict.lines.find(
+    (l) => l.annotationId !== mark.annotationId && `${l.kind}:${Math.round(l.price * 100)}` === mark.slotKey,
   )
-  if (sameLevel && !rest.some((l) => levelKey(l) === levelKey(line))) {
+  const sameSlotMarker = verdict.markers.find(
+    (m) =>
+      m.annotationId !== mark.annotationId &&
+      `${m.date}|${m.label}|${m.tone}` === mark.slotKey,
+  )
+  const sameSlotId = sameSlotLine?.annotationId ?? sameSlotMarker?.annotationId
+  const slotOccupiedNow =
+    restLines.some((l) => `${l.kind}:${Math.round(l.price * 100)}` === mark.slotKey) ||
+    restMarkers.some((m) => `${m.date}|${m.label}|${m.tone}` === mark.slotKey)
+  if (sameSlotId !== undefined && !slotOccupiedNow) {
     /*
-     * ⚠️ `sameLevel` 来自那次 GET 的**快照**（2026-10-29 复审补丁）：别的标签页完全
-     * 可能在快照之后撤销了它 —— 直接把快照里的行画上去，就是**复活一条已经不存在的线**
-     * （用户会以为"撤了又回来"，且这个价位从此多出一条假线）。
-     *
-     * 所以落地前按 id 再精确核对一次（罕见路径：只在同价位有重复确认时走）：读回里
-     * 还有它才画；没有/核对失败就**不画**，并如实说明"同价位可能还有一条，但无法确认
-     * 它还在"—— 宁可注明未能同步，也不画一条无法证实的线。
+     * ⚠️ 那条同槽位的行来自那次 GET 的**快照**：别的标签页完全可能在快照之后撤销了它 ——
+     * 直接把快照里的行画上去，就是**复活一条已经不存在的标注**（用户会以为"撤了又回来"）。
+     * 所以落地前按 id 再精确核对一次；还有它才画，没有/核对失败就不画并如实说明。
      */
-    const confirm = await fetchRows(after, { ids: [sameLevel.annotationId] })
+    const confirm = await fetchRows(after, { ids: [sameSlotId] })
     const now2 = sameViewTarget(viewKey)
     if (!now2) {
       const current2 = AnnotationLedger.currentTarget()
@@ -702,32 +834,44 @@ async function applyRevoked(
       }
       return null
     }
-    const live =
-      confirm.ok &&
-      linesForTarget(confirm.rows, now2).lines.some((l) => l.annotationId === sameLevel.annotationId)
-    if (!live) {
+    const confirmed = confirm.ok ? marksForTarget(confirm.rows, now2) : null
+    const liveLine = confirmed?.lines.find((l) => l.annotationId === sameSlotId)
+    const liveMarker = confirmed?.markers.find((m) => m.annotationId === sameSlotId)
+    const what2 = liveLine
+      ? `${liveLine.label} ${liveLine.price}`
+      : liveMarker
+        ? `${liveMarker.date} ${liveMarker.label}`
+        : sameSlotLine
+          ? `${sameSlotLine.label} ${sameSlotLine.price}`
+          : `${sameSlotMarker?.date ?? ''} ${sameSlotMarker?.label ?? ''}`.trim()
+    if (!liveLine && !liveMarker) {
       AnnotationLedger.replaceLines(
         now2,
-        rest,
-        `${head}；读回里同价位还有另一条标注 #${sameLevel.annotationId}（${sameLevel.label} ${sameLevel.price}），` +
-          (confirm.ok
+        restLines,
+        `${head}；读回里${slotWord}还有另一条标注 #${sameSlotId}（${what2}），` +
+          (confirmed
             ? '但落地前再次核对时服务端已经没有它（可能已在别处撤销），本次未把它画到图上。'
-            : `但落地前再次核对失败（${confirm.message}），无法确认它还在，本次未把它画到图上。`),
-        { retryable: !confirm.ok, level: 'warn' },
+            : `但落地前再次核对失败（${confirm.ok ? '' : confirm.message}），无法确认它还在，本次未把它画到图上。`),
+        { retryable: !confirmed, level: 'warn', markers: restMarkers },
       )
       return AnnotationLedger.snapshot(now2)
     }
-    // 只把这个价位换成本来就在服务端的那一条，其余行一行不动（不引入新价位）
+    // 只把这个槽位换成本来就在服务端的那一条，其余行一行不动（不引入新槽位）
     AnnotationLedger.replaceLines(
       now2,
-      mergeSnapshotLines(rest, [sameLevel]),
-      `${head}；同价位还有另一条标注 #${sameLevel.annotationId}（${sameLevel.label} ${sameLevel.price}），` +
-        '图上这个价位的线仍然保留 —— 要连它一起去掉，请再撤销那一条。',
-      { level: 'warn' },
+      liveLine ? mergeSnapshotLines(restLines, [liveLine]) : restLines,
+      `${head}；${slotWord}还有另一条标注 #${sameSlotId}（${what2}），` +
+        '图上这个位置的标注仍然保留 —— 要连它一起去掉，请再撤销那一条。',
+      {
+        level: 'warn',
+        markers: liveMarker ? mergeMarkers(restMarkers, [liveMarker]) : restMarkers,
+      },
     )
     return AnnotationLedger.snapshot(now2)
   }
 
-  AnnotationLedger.replaceLines(after, rest, `${head}，图上已移除这条线。`)
+  AnnotationLedger.replaceLines(after, restLines, `${head}，图上已移除这条标注。`, {
+    markers: restMarkers,
+  })
   return AnnotationLedger.snapshot(after)
 }

@@ -25,6 +25,23 @@ import type { AnnotationSnapshot } from '@/lib/copilot/annotationLedger'
 import { SERVER_ANNOTATION_CONTRACT } from '@/lib/copilot/serverAnnotations'
 import { safeFixed } from '@/lib/format'
 
+import type { AnnotationMarkerSkipReason } from '@sida/biz-ui/klineEvents'
+
+/**
+ * 时间点标注"没画上"的逐种人话（2026-10-29 复审阻断 ④）。
+ *
+ * 一条都不能糊成"未上图"：用户需要据此知道下一步该做什么 ——
+ * 切回日 K、翻页到那一天、打开图层、还是等 K 线/重试。
+ */
+export const MARKER_SKIP_TEXT: Record<AnnotationMarkerSkipReason, string> = {
+  'not-daily': '当前不是日K周期，日期标注只在日K上绘制，未上图',
+  'no-bar': '该日没有 K 线（非交易日/停牌），未上图',
+  'out-of-range': '超出已加载的日K范围，未上图',
+  'no-data': 'K 线未加载成功，无法确认是否上图',
+  'layer-hidden': '时间点标注图层已关闭，未上图',
+  'render-failed': '图表未能绘制该标记，未上图',
+}
+
 /** 撤销不可用的原因（单一事实来源：后端契约里 undoSupported）。 */
 export const UNDO_UNAVAILABLE_NOTE = SERVER_ANNOTATION_CONTRACT.undoSupported
   ? ''
@@ -45,6 +62,8 @@ export function AnnotationLinkBar({
   const {
     phase,
     lines,
+    markers,
+    markerRender,
     annotationIds,
     actionIds,
     message,
@@ -56,13 +75,59 @@ export function AnnotationLinkBar({
   /** 正在等用户二次确认的那条标注（null = 没有展开确认） */
   const [confirmingId, setConfirmingId] = useState<number | null>(null)
 
+  /**
+   * 时间点标注的落图状态（2026-10-29）：`drawn` = 图表真的画在该日 K 线上；
+   * `skipped` = 图表没画，`reason` 说明为什么（不是日 K / 该日没有 K 线 / 超出已加载范围 /
+   * 图层关闭 / K 线没加载成功无法确认 / 图表拒绝绘制）；`unknown` = 图表还没回报。
+   *
+   * 不按"服务端有行"就写"已上图" —— 这正是这一栏存在的意义；也不把不同原因糊成
+   * 一句"未上图"（用户没法据此判断该切周期、该翻页、还是数据没加载出来）。
+   */
+  const markerState = (
+    annotationId: number,
+  ): { state: 'drawn' | 'skipped' | 'unknown'; reason: AnnotationMarkerSkipReason | null } => {
+    if (!markerRender) return { state: 'unknown', reason: null }
+    if (markerRender.drawn.includes(annotationId)) return { state: 'drawn', reason: null }
+    const hit = markerRender.skipped.find((s) => s.annotationId === annotationId)
+    if (hit) return { state: 'skipped', reason: hit.reason }
+    return { state: 'unknown', reason: null }
+  }
+
+  /** 两条通道统一成可渲染的行（价位线 / 时间点标注），确认块与撤销按钮共用一个 id。 */
+  const rows = [
+    ...lines.map((line) => ({
+      shape: 'line' as const,
+      annotationId: line.annotationId,
+      label: line.label,
+      kind: line.kind,
+      price: line.price,
+      date: '',
+      render: 'drawn' as const,
+      reason: null as AnnotationMarkerSkipReason | null,
+    })),
+    ...markers.map((marker) => {
+      const { state, reason } = markerState(marker.annotationId)
+      return {
+        shape: 'marker' as const,
+        annotationId: marker.annotationId,
+        label: marker.label,
+        kind: null,
+        price: null,
+        date: marker.date,
+        render: state,
+        reason,
+      }
+    }),
+  ]
+
   // 线消失（撤销成功 / 切标的）后确认块必须收起：否则会留下一个指向
   // 不存在标注的确认条，点下去只会得到"不在当前图上"。
   useEffect(() => {
-    if (confirmingId !== null && !lines.some((l) => l.annotationId === confirmingId)) {
+    if (confirmingId !== null && !rows.some((r) => r.annotationId === confirmingId)) {
       setConfirmingId(null)
     }
-  }, [confirmingId, lines])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmingId, lines, markers])
 
   // 空态不占位：没有已确认标注、也没出事、也没有可重试的原因时，不在 K 线上挂一条常驻说明。
   // 「一条不剩 + 读回失败/无法核对」会落成 idle + notice + retryable —— 那时必须给入口，
@@ -83,7 +148,7 @@ export function AnnotationLinkBar({
     ) : null
 
   const confirmingLine =
-    confirmingId === null ? null : lines.find((l) => l.annotationId === confirmingId) ?? null
+    confirmingId === null ? null : rows.find((l) => l.annotationId === confirmingId) ?? null
 
   return (
     <div
@@ -110,8 +175,13 @@ export function AnnotationLinkBar({
             <span className="flex items-center gap-1 font-medium text-foreground">
               <PenLine className="h-3 w-3" aria-hidden="true" />
               已确认标注
-              <span className="tabular-nums">{lines.length}</span> 条
+              <span className="tabular-nums">{rows.length}</span> 条
             </span>
+            {markers.length > 0 ? (
+              <span className="tabular-nums" data-testid="copilot-annotation-marker-count">
+                （含时间点标记 <span className="tabular-nums">{markers.length}</span> 个）
+              </span>
+            ) : null}
             <span className="tabular-nums" data-testid="copilot-annotation-ids">
               服务端标注 #{annotationIds.join('、')}
             </span>
@@ -122,19 +192,54 @@ export function AnnotationLinkBar({
             {retryButton}
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1">
-            {lines.map((line) => {
+            {rows.map((line) => {
               const inFlight = revoking.includes(line.annotationId)
+              // 时间点标注：说清"画上去了 / 为什么没画 / 图表还没回报"——
+              // 几种状态不能混成一句"已确认"（用户会以为图上一定有记号）。
+              const timeNote =
+                line.shape !== 'marker'
+                  ? null
+                  : line.render === 'skipped'
+                    ? MARKER_SKIP_TEXT[line.reason ?? 'no-data']
+                    : line.render === 'unknown'
+                      ? '等待图表回报落图结果'
+                      : '已上图'
               return (
                 <span
                   key={line.annotationId}
                   className="flex items-baseline gap-1 font-mono tabular-nums"
                   data-testid="copilot-annotation-line"
+                  data-shape={line.shape}
+                  data-marker-state={line.shape === 'marker' ? line.render : undefined}
+                  data-marker-reason={
+                    line.shape === 'marker' && line.reason ? line.reason : undefined
+                  }
                 >
-                  <span className={line.kind === 'support' ? 'text-role-opp' : 'text-role-risk'}>
-                    {line.kind === 'support' ? '支撑' : '阻力'}
-                  </span>{' '}
-                  <span className="text-foreground">{safeFixed(line.price, 2)}</span>
+                  {line.shape === 'marker' ? (
+                    <>
+                      <span className="text-role-watch">时间点</span>{' '}
+                      <span className="text-foreground">{line.date}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className={line.kind === 'support' ? 'text-role-opp' : 'text-role-risk'}>
+                        {line.kind === 'support' ? '支撑' : '阻力'}
+                      </span>{' '}
+                      <span className="text-foreground">{safeFixed(line.price ?? 0, 2)}</span>
+                    </>
+                  )}
                   <span className="ml-1 font-sans text-muted-foreground">{line.label}</span>
+                  {timeNote ? (
+                    <span
+                      className={
+                        line.render === 'skipped'
+                          ? 'ml-1 font-sans text-role-risk'
+                          : 'ml-1 font-sans text-muted-foreground'
+                      }
+                    >
+                      {timeNote}
+                    </span>
+                  ) : null}
                   {onRevoke ? (
                     inFlight ? (
                       <span
@@ -170,13 +275,22 @@ export function AnnotationLinkBar({
             >
               <span className="text-foreground">
                 撤销标注 #{confirmingLine.annotationId}（
-                {confirmingLine.kind === 'support' ? '支撑' : '阻力'}{' '}
-                {safeFixed(confirmingLine.price, 2)} {confirmingLine.label}）？
+                {confirmingLine.shape === 'marker' ? (
+                  <>
+                    时间点 {confirmingLine.date} {confirmingLine.label}
+                  </>
+                ) : (
+                  <>
+                    {confirmingLine.kind === 'support' ? '支撑' : '阻力'}{' '}
+                    {safeFixed(confirmingLine.price ?? 0, 2)} {confirmingLine.label}
+                  </>
+                )}
+                ）？
               </span>
               {/* 事实：DELETE 成功**且**服务端读回不再返回这条之后，图上才移除；
-                  请求在途时线一直在（服务端还没删）。别承诺"立即移除"。 */}
+                  请求在途时标注一直在（服务端还没删）。别承诺"立即移除"。 */}
               <span className="text-role-risk">
-                撤销不可恢复：确认后等服务端删除成功并读回，图上才移除这条线。
+                撤销不可恢复：确认后等服务端删除成功并读回，图上才移除这条标注。
               </span>
               <button
                 type="button"

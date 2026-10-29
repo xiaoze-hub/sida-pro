@@ -13,6 +13,12 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.config import Settings
+from src.core.numutil import finite_float
+from src.core.portfolio_scope import (
+    account_user_scope_clause,
+    user_scope_positions,
+    user_scope_stocks,
+)
 from src.core.strategy_engine import get_strategy_stats, list_strategy_signals
 from src.web.api.chat import _get_ai_client
 from src.web.api.auth import get_current_user
@@ -23,7 +29,6 @@ from src.web.models import (
     LogEntry,
     MarketScanSnapshot,
     NewsTopicSnapshot,
-    Position,
     Stock,
     User,
 )
@@ -117,6 +122,9 @@ def _load_latest_insights(db: Session, user: User | None = None) -> list[dict]:
     S5(2026-08-26): 传入 user 时仅取本人报告 + user_id=NULL 共享行。
     """
     out = []
+    if user is None:
+        # 无会话 = 不能证明任何一行属于谁 → 不读(fail-closed)。
+        return out
     agents = (
         ("premarket_outlook", "盘前分析"),
         ("daily_report", "收盘复盘"),
@@ -127,11 +135,11 @@ def _load_latest_insights(db: Session, user: User | None = None) -> list[dict]:
             AnalysisHistory.agent_name == agent_name
         )
         if user is not None:
+            # 2026-10-29 五审: NULL 历史行只给 owner; member 只看本人(不再"NULL 即共享")。
+            from src.core.analysis_history import analysis_history_scope_clause
+
             query = query.filter(
-                or_(
-                    AnalysisHistory.user_id == user.id,
-                    AnalysisHistory.user_id.is_(None),
-                )
+                analysis_history_scope_clause(user.id, getattr(user, "role", None))
             )
         row = (
             query.order_by(
@@ -242,24 +250,39 @@ def get_dashboard_overview(
 
     # Portfolio quick stats (DB-only, no实时行情请求).
     # C3(2026-09-09): 持仓/自选计数按归属过滤(本人 + 全局), 此前聚合全库所有用户.
-    positions = (
-        db.query(Position, Stock)
-        .join(Stock, Position.stock_id == Stock.id)
-        .filter(
-            or_(Position.user_id == user.id, Position.user_id.is_(None)),
-        )
-        .all()
-    )
+    # 2026-10-29 三审(R2):
+    #   ① 作用域必须是 **账户可见 AND 持仓可见**(旧写法只过滤 Position.user_id,
+    #      共享/他人私有账户里的行会被算进我的"持仓数/投入成本");
+    #   ② 历史脏成本价可能是 NaN/Inf —— `float(nan)` 能过 `or 0.0`, 一路污染
+    #      invested_cost 并被 json 写成 `NaN` 字面量(非法 JSON, 前端 JSON.parse 崩),
+    #      所以逐个成本做有限性校验, 脏值算"未定价"而不算 0(0 会低报投入)。
+    positions = user_scope_positions(db, user.id).all()
+    positions_by_id = {p.stock_id: p for p in positions}
+    stocks_by_id = {
+        s.id: s
+        for s in user_scope_stocks(db, user.id).filter(Stock.id.in_(positions_by_id))
+    }
     by_market: dict[str, dict] = {}
     invested_cost = 0.0
-    for pos, stock in positions:
-        market_code = (stock.market or "CN").strip().upper() or "CN"
+    unpriced_positions = 0
+    for pos in positions:
+        stock = stocks_by_id.get(pos.stock_id)
+        market_code = (
+            (getattr(stock, "market", None) or "CN").strip().upper() or "CN"
+        )
         fx = 1.0
         if market_code == "HK":
             fx = 0.92
         elif market_code == "US":
             fx = 7.25
-        cost = float(pos.cost_price or 0.0) * float(pos.quantity or 0) * fx
+        cost_price = finite_float(pos.cost_price)
+        qty = finite_float(pos.quantity)
+        if cost_price is None or qty is None:
+            # 脏成本: 计入持仓数, 但不计入投入成本(不拿 0 冒充), 单独计数供前端提示。
+            unpriced_positions += 1
+            cost = 0.0
+        else:
+            cost = cost_price * qty * fx
         invested_cost += cost
         bucket = by_market.setdefault(
             market_code,
@@ -267,22 +290,23 @@ def get_dashboard_overview(
         )
         bucket["positions"] += 1
         bucket["invested_cost"] += cost
+    for bucket in by_market.values():
+        bucket["invested_cost"] = round(finite_float(bucket["invested_cost"], 0.0) or 0.0, 2)
+    invested_cost = finite_float(invested_cost, 0.0) or 0.0
     watchlist_count = int(
-        (
-            db.query(func.count(Stock.id))
-            .filter(or_(Stock.user_id == user.id, Stock.user_id.is_(None)))
-            .scalar()
-            or 0
-        )
+        user_scope_stocks(db, user.id).count() or 0
     )
     from src.web.models import Account  # local import to avoid circular import at module import time
 
+    # 可用资金同样按账户归属(旧写法只 filter enabled → 把别人私有账户的钱也算进我的
+    # 总资产, 属于跨租户读数)。
     total_available = float(
         db.query(func.coalesce(func.sum(Account.available_funds), 0.0))
-        .filter(Account.enabled.is_(True))
+        .filter(Account.enabled.is_(True), account_user_scope_clause(user.id))
         .scalar()
         or 0.0
     )
+    total_available = finite_float(total_available, 0.0) or 0.0
 
     # Market pulse from latest market scan snapshot (stable even without外网).
     pulse_query = db.query(MarketScanSnapshot)
@@ -311,9 +335,10 @@ def get_dashboard_overview(
                 "symbol": row.stock_symbol,
                 "market": row.stock_market,
                 "name": row.stock_name or row.stock_symbol,
-                "score_seed": round(float(row.score_seed or 0.0), 2),
-                "change_pct": quote.get("change_pct"),
-                "turnover": quote.get("turnover"),
+                # 快照里的分数/涨跌幅同样可能是脏数(NaN/Inf): 不能让它们进 JSON。
+                "score_seed": round(finite_float(row.score_seed, 0.0) or 0.0, 2),
+                "change_pct": finite_float(quote.get("change_pct")),
+                "turnover": finite_float(quote.get("turnover")),
                 "source": row.source or "market_scan",
             }
         )
@@ -383,6 +408,9 @@ def get_dashboard_overview(
             "positions_count": len(positions),
             "available_funds": round(total_available, 2),
             "invested_cost": round(float(invested_cost), 2),
+            # 历史脏成本(NaN/Inf/非法)的持仓条数: 它们计入持仓数但**不计入**投入成本,
+            # 前端据此提示"成本待补全"而不是显示一个假的 0(诚实口径)。
+            "unpriced_positions": unpriced_positions,
             "total_assets_estimate": round(float(total_available + invested_cost), 2),
             "executable_opportunities": len(action_items),
             "risk_positions": len(risk_items),
@@ -395,6 +423,7 @@ def get_dashboard_overview(
             "watchlist_count": watchlist_count,
             "available_funds": round(total_available, 2),
             "invested_cost": round(float(invested_cost), 2),
+            "unpriced_positions": unpriced_positions,
             "by_market": sorted(list(by_market.values()), key=lambda x: x["market"]),
         },
         "action_center": {
@@ -498,14 +527,14 @@ def get_brief(
     """
     agent = "premarket_outlook" if type == "premarket" else "daily_report"
     label = "盘前分析" if type == "premarket" else "收盘复盘"
+    from src.core.analysis_history import analysis_history_scope_clause
+
     row = (
         db.query(AnalysisHistory)
         .filter(
             AnalysisHistory.agent_name == agent,
-            or_(
-                AnalysisHistory.user_id == user.id,
-                AnalysisHistory.user_id.is_(None),
-            ),
+            # 2026-10-29 五审: NULL 历史行只给 owner(正文可能是别人的持仓/成本)。
+            analysis_history_scope_clause(user.id, getattr(user, "role", None)),
         )
         .order_by(
             AnalysisHistory.analysis_date.desc(),

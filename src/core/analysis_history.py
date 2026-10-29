@@ -1,7 +1,25 @@
-"""分析历史记录管理"""
+"""分析历史记录管理
+
+## 读取归属(2026-10-29 五审: NULL 归属收口)
+
+`AnalysisHistory.user_id IS NULL` 是**多用户改造前的历史行**: 里面可能是某个具体
+用户的持仓成本/自选/AI 正文。旧读路径统一写成 `or_(user_id == uid, user_id IS NULL)`,
+等于把这段历史当成"公共数据"发给所有登录用户 —— member 能直接读到别人的成本。
+
+现在唯一口径见 `analysis_history_scope_clause`:
+
+- member: 只读 `user_id == 本人`;
+- owner : 本人 + NULL(数据责任人排查历史存量);
+- 无会话: 一条都不读(fail-closed)。
+
+**没有"NULL 即公开"**。要公开某份分析, 必须是显式 `scope=shared` 报告文件那条链路
+(见 `src/core/report_scope.py`), 不能靠 AnalysisHistory 的 NULL 语义猜。
+"""
 import logging
 import re
 from datetime import date, datetime, timedelta
+
+from sqlalchemy import false, or_
 
 from src.core.agent_catalog import infer_agent_kind
 from src.db.session import SessionLocal
@@ -12,6 +30,33 @@ logger = logging.getLogger(__name__)
 
 # TradingAgents 深度分析在 AnalysisHistory 里的 agent_name(见 agent.py: name = "tradingagents")
 TA_AGENT_NAME = "tradingagents"
+
+
+def analysis_history_scope_clause(user_id: str | None, role: str | None = None):
+    """AnalysisHistory 读作用的唯一实现(member=本人, owner=本人+NULL, 无会话=空)。
+
+    `user_id=None` **不再**表示"共享桶可读": 历史 NULL 行来源不明, 只给 owner。
+    返回 SQLAlchemy 条件, 调用方直接 `.filter(...)`。
+    """
+    uid = str(user_id) if user_id else ""
+    if not uid:
+        return false()
+    if str(role or "").strip().lower() == "owner":
+        return or_(AnalysisHistory.user_id == uid, AnalysisHistory.user_id.is_(None))
+    return AnalysisHistory.user_id == uid
+
+
+def analysis_history_visible(record: AnalysisHistory | None, user_id: str | None, role: str | None = None) -> bool:
+    """对象级同口径判定(已取到行时用, 避免再发一次 SQL)。"""
+    if record is None:
+        return False
+    uid = str(user_id) if user_id else ""
+    if not uid:
+        return False
+    rid = getattr(record, "user_id", None)
+    if rid is None:
+        return str(role or "").strip().lower() == "owner"
+    return str(rid) == uid
 
 
 def save_analysis(
@@ -110,6 +155,9 @@ def get_analysis(
     agent_name: str,
     stock_symbol: str,
     analysis_date: date | None = None,
+    *,
+    user_id: str | None = None,
+    role: str | None = None,
 ) -> AnalysisHistory | None:
     """
     获取分析结果
@@ -118,6 +166,8 @@ def get_analysis(
         agent_name: Agent 名称
         stock_symbol: 股票代码
         analysis_date: 分析日期，默认今天
+        user_id: 触发用户(缺会话/None → 按 fail-closed 返回 None, 不读 NULL 历史桶)
+        role: 用户角色(owner 额外可读 NULL 历史行)
 
     Returns:
         分析记录，或 None
@@ -133,6 +183,7 @@ def get_analysis(
             AnalysisHistory.agent_name == agent_name,
             AnalysisHistory.stock_symbol == stock_symbol,
             AnalysisHistory.analysis_date == date_str,
+            analysis_history_scope_clause(user_id, role),
         ).first()
     finally:
         db.close()
@@ -142,6 +193,9 @@ def get_latest_analysis(
     agent_name: str,
     stock_symbol: str,
     before_date: date | None = None,
+    *,
+    user_id: str | None = None,
+    role: str | None = None,
 ) -> AnalysisHistory | None:
     """
     获取最近的分析结果（用于获取昨日/历史分析）
@@ -150,6 +204,8 @@ def get_latest_analysis(
         agent_name: Agent 名称
         stock_symbol: 股票代码
         before_date: 在此日期之前的最近记录，默认今天
+        user_id: 触发用户; None = 不可读(历史 NULL 行只给 owner)
+        role: 用户角色(owner 额外可读 NULL 历史行)
 
     Returns:
         分析记录，或 None
@@ -165,6 +221,7 @@ def get_latest_analysis(
             AnalysisHistory.agent_name == agent_name,
             AnalysisHistory.stock_symbol == stock_symbol,
             AnalysisHistory.analysis_date < date_str,
+            analysis_history_scope_clause(user_id, role),
         ).order_by(AnalysisHistory.analysis_date.desc()).first()
     finally:
         db.close()
@@ -174,6 +231,9 @@ def get_analysis_history(
     agent_name: str,
     stock_symbol: str | None = None,
     limit: int = 30,
+    *,
+    user_id: str | None = None,
+    role: str | None = None,
 ) -> list[AnalysisHistory]:
     """
     获取分析历史列表
@@ -182,6 +242,7 @@ def get_analysis_history(
         agent_name: Agent 名称
         stock_symbol: 股票代码，None 表示所有
         limit: 返回数量限制
+        user_id: 触发用户; None = 不可读(历史 NULL 行只给 owner)
 
     Returns:
         分析记录列表，按日期倒序
@@ -190,6 +251,7 @@ def get_analysis_history(
     try:
         query = db.query(AnalysisHistory).filter(
             AnalysisHistory.agent_name == agent_name,
+            analysis_history_scope_clause(user_id, role),
         )
 
         if stock_symbol:
@@ -204,6 +266,9 @@ def get_latest_ta_verdict_row(
     symbol: str,
     within_days: int = 14,
     today: date | None = None,
+    *,
+    user_id: str | None = None,
+    role: str | None = None,
 ) -> AnalysisHistory | None:
     """获取某标的最近一次 TradingAgents 深度分析记录(含当日)。
 
@@ -222,7 +287,11 @@ def get_latest_ta_verdict_row(
         today = date.today()
     # +1 天以包含今天(get_latest_analysis 是严格小于)
     return get_latest_analysis(
-        TA_AGENT_NAME, symbol, before_date=today + timedelta(days=1)
+        TA_AGENT_NAME,
+        symbol,
+        before_date=today + timedelta(days=1),
+        user_id=user_id,
+        role=role,
     )
 
 
@@ -254,21 +323,27 @@ def get_latest_ta_verdict(
     symbol: str,
     within_days: int = 14,
     today: date | None = None,
+    *,
+    user_id: str | None = None,
+    role: str | None = None,
 ) -> dict | None:
     """抽取某标的最近一次 TA 深度结论的紧凑版本(供盘前/盘后做高权重先验)。
 
     只返回 ``{rating, action_label, one_liner, date, age_days}`` —— 绝不返回全文,
     控制 token 预算。任何缺数据 / 解析异常 → None(fail-soft,不抛)。
 
-    Args:
-        symbol: 股票代码
-        within_days: 仅采纳此天数内(含当天)的记录,过期返回 None
-        today: 测试注入用,默认今天
+    2026-10-29 五审: 必须带触发用户; 无用户 → None(不读 NULL 历史桶)。
     """
     if today is None:
         today = date.today()
     try:
-        row = get_latest_ta_verdict_row(symbol, within_days=within_days, today=today)
+        row = get_latest_ta_verdict_row(
+            symbol,
+            within_days=within_days,
+            today=today,
+            user_id=user_id,
+            role=role,
+        )
         if row is None:
             return None
 

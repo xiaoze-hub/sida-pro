@@ -14,6 +14,7 @@ import { Plus } from 'lucide-react'
 import { SuggestionBadge } from '@sida/biz-ui/components/suggestion-badge'
 import { Trash2 } from 'lucide-react'
 import { dailyPnlDisplayLabel } from './shared'
+import { isVendorStamp, quoteStampNote } from '@/lib/position-risk'
 import { safeFixed } from '@/lib/format'
 import { safeMoneyUnsigned } from '@/lib/format'
 import { safeNum } from '@/lib/format'
@@ -24,6 +25,19 @@ import { useBatchCloses } from '@/hooks/useBatchCloses'
 import Sparkline from '@sida/biz-ui/components/Sparkline'
 import { useMemo } from 'react'
 import { useRowNav } from '@sida/biz-ui/hooks/useRowNav'
+
+/**
+ * 涨跌色（2026-10-29 缺行情）：`null` = 未知，给中性色 —— 旧写法 `total_pnl >= 0` 在 null 上
+ * 会被 JS 判成 true，把"不知道盈亏"染成上涨色。
+ */
+const pnlToneClass = (v: number | null | undefined): string => {
+  const n = safeNum(v)
+  if (n === null) return 'text-muted-foreground'
+  return n > 0 ? 'text-stock-up' : n < 0 ? 'text-stock-down' : 'text-muted-foreground'
+}
+
+/** 百分比符号：0 也带 +（沿用持仓页既有口径），负值由 safeFixed 自带负号。 */
+const signOf = (v: number | null | undefined): string => ((safeNum(v) ?? 0) >= 0 ? '+' : '')
 
 export function AccountsSection() {
   const {
@@ -122,9 +136,19 @@ export function AccountsSection() {
             )}
             <Building2 className="w-4 h-4 text-primary" />
             <span className="text-[14px] md:text-[16px] font-semibold text-foreground">{account.name}</span>
+            {/* 单位是「条持仓」：同一只票在两个账户各算一条，账户行不能冒称「N 只」标的。 */}
             <span className="text-[12px] md:text-[12px] text-muted-foreground">
-              {account.positions.length} 只
+              {account.positions.length} 条持仓
             </span>
+            {account.quotes_coverage && !account.quotes_coverage.complete && account.quotes_coverage.positions_total > 0 && (
+              <span
+                className="text-[12px] text-role-watch"
+                data-testid={`account-coverage-${account.id}`}
+                title="该账户合计只覆盖已定价持仓；缺行情的那部分市值没有进来"
+              >
+                行情 {account.quotes_coverage.positions_priced ?? 0}/{account.quotes_coverage.positions_total} 条
+              </span>
+            )}
           </div>
           <div className="flex items-center justify-between md:justify-end gap-2 md:gap-6 pl-6 md:pl-0">
             <div className="flex items-center gap-2.5 md:gap-6 min-w-0">
@@ -134,9 +158,10 @@ export function AccountsSection() {
               </div>
               <div className="text-left md:text-right">
                 <div className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground">总盈亏</div>
-                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                {/* 2026-10-29 缺行情: 账户总盈亏可能是 null(未知) —— 不给涨跌色, 渲染 `--`。 */}
+                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${pnlToneClass(account.total_pnl)}`}>
                   {formatMoney(account.total_pnl)}
-                  <span className="text-[12px] md:text-[12px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
+                  <span className="text-[12px] md:text-[12px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${signOf(account.total_pnl_pct)}${safeFixed(account.total_pnl_pct)}%`})</span>
                 </div>
               </div>
               <div className="text-left md:text-right">
@@ -146,13 +171,28 @@ export function AccountsSection() {
                 >
                   {dailyPnlDisplayLabel(account, true)}
                 </div>
-                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                {/* 2026-10-29 三次复审: 当日盈亏可能是 null(缺现价或昨收) —— `null >= 0` 为 true,
+                    旧写法会把「不知道」染成上涨色; 覆盖不足时也要标出来, 不许静默少算。 */}
+                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl == null ? 'text-muted-foreground' : account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                   {formatMoney(account.total_daily_pnl)}
+                  {account.daily_pnl_coverage && !account.daily_pnl_coverage.complete && account.daily_pnl_coverage.positions_total > 0 && (
+                    <span className="ml-1 text-[12px] text-muted-foreground">
+                      ({account.daily_pnl_coverage.positions_observed ?? 0}/{account.daily_pnl_coverage.positions_total} 条)
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="text-left md:text-right hidden sm:block">
                 <div className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground">可用</div>
-                <div className="text-[12px] md:text-[14px] font-mono whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.available_funds)}</div>
+                {/* 2026-10-29 安全修复 8db9088b: 现金 NULL = 未知(未登记), 不是 0 —— 显式写「未知」,
+                    不渲染 `0`, 也不让下游拿它算总资产。 */}
+                <div
+                  className={`text-[12px] md:text-[14px] font-mono whitespace-nowrap tabular-nums ${account.available_funds == null ? 'text-role-watch' : ''}`}
+                  title={account.available_funds == null ? '该账户可用资金未登记（未知），总额里不按 0 计' : undefined}
+                  data-testid={`account-available-funds-${account.id}`}
+                >
+                  {account.available_funds == null ? '未知' : safeMoneyUnsigned(account.available_funds)}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-0 md:gap-1 shrink-0" onClick={e => e.stopPropagation()}>
@@ -320,7 +360,15 @@ export function AccountsSection() {
                             </td>
                             <td
                               className={`px-4 py-2.5 text-right font-mono tabular-nums text-[12px] ${pos.daily_pnl != null ? (pos.daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}
-                              title={pos.quote_time ? `行情时间：${pos.quote_time}` : undefined}
+                              title={
+                                pos.quote_time
+                                  ? isVendorStamp(pos.quote_time_kind)
+                                    ? `${quoteStampNote(pos.quote_time_kind)}：${pos.quote_time}`
+                                    : `行情时间：${pos.quote_time}`
+                                  : pos.quote_date
+                                    ? `报价日期：${pos.quote_date}（源只提供日期，未提供成交时刻）`
+                                    : undefined
+                              }
                             >
                               {pos.daily_pnl != null ? (
                                 <div className="flex flex-col items-end">

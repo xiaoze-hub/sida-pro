@@ -2,7 +2,7 @@
 
 不依赖海外 Hermes cron: 直接调用 SIDA 自身的数据能力采集数据,
 经 LLM(场景 reports)生成结构化 Markdown 报告, 写入报告中心目录
-(CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS.md), 报告中心 API
+(CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS-<随机>.md), 报告中心 API
 (src/web/api/reports.py) 无需改动即可读取。
 
 数据源(全部带降级, 拉不到显式标注"数据获取失败", 不编造):
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -282,15 +284,36 @@ async def _collect_entry_candidates(db, limit: int = 8) -> list[dict]:
         return []
 
 
-async def _collect_positions(db, with_quotes: bool = True) -> list[dict]:
-    """用户持仓(positions 表 join stocks) + 实时/前日行情。失败标注。"""
-    from src.db.models import Position, Stock
+async def _collect_positions(db, with_quotes: bool = True, user_id: str | None = None) -> list[dict]:
+    """用户持仓(positions 表 join stocks/accounts) + 实时/前日行情。失败标注。
+
+    `user_id` 作用域(2026-10-29 五审, **严格双层归属**): 传 uid → 只采
+    `Account.user_id == uid AND Position.user_id == uid`。**不**再并入 NULL 共享桶:
+    共享桶里是"多用户改造前某个具体人的历史成本", 模糊归属不得猜给当前用户。
+    传 None → 共享市场报告, 一条持仓都不采(纯市场口径)。
+
+    逐账户出行(2026-10-29 五审 P1): 旧实现用 `(market, symbol)` 做 key, 同一标的
+    在多个账户持有时**只剩最后一行**(丢行/数量错)。现在 key 含 account_id, 每账户
+    单独一行并带 account 信息; 非有限成本按"缺失"处理(不装 0、不算浮盈)。
+    """
+    if not user_id:
+        logger.info("[报告] 共享口径: 不采集任何用户/共享桶持仓(纯市场报告)")
+        return []
+    from src.core.numutil import finite_float
+    from src.core.portfolio_scope import owned_account_clause, owned_position_clause
+    from src.db.models import Account, Position, Stock
 
     try:
         rows = (
-            db.query(Position, Stock)
+            db.query(Position, Stock, Account)
             .join(Stock, Position.stock_id == Stock.id)
-            .filter(Position.quantity > 0)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Position.quantity > 0,
+                owned_account_clause(user_id),
+                owned_position_clause(user_id),
+            )
+            .order_by(Account.id.asc(), Position.id.asc())
             .all()
         )
     except Exception as e:
@@ -300,12 +323,14 @@ async def _collect_positions(db, with_quotes: bool = True) -> list[dict]:
     if not rows:
         return []
 
-    # 按市场分组批量拉行情
+    # 按市场分组批量拉行情(同一标的在多个账户只取一次)
     sym_by_market: dict[str, list[str]] = {}
-    meta = {}
-    for pos, st in rows:
+    meta: dict[tuple[str, str, int], tuple] = {}
+    for pos, st, acct in rows:
         sym_by_market.setdefault(st.market, []).append(st.symbol)
-        meta[(st.market, st.symbol)] = (pos, st)
+        meta[(st.market, st.symbol, int(acct.id))] = (pos, st, acct)
+    for market, syms in sym_by_market.items():
+        sym_by_market[market] = list(dict.fromkeys(syms))
 
     quote_map = {}
     if with_quotes:
@@ -314,33 +339,42 @@ async def _collect_positions(db, with_quotes: bool = True) -> list[dict]:
 
             for market, syms in sym_by_market.items():
                 qs = await asyncio.to_thread(md_quote_rows, syms, market)
-                for q in qs:
+                for q in qs or []:
                     quote_map[(q.get("market", market), q.get("symbol"))] = q
         except Exception as e:
             logger.warning(f"[报告] 持仓行情获取失败: {e}")
 
     out = []
-    for (market, sym), (pos, st) in meta.items():
+    for (market, sym, _acct_id), (pos, st, acct) in meta.items():
         q = quote_map.get((market, sym))
+        cost = finite_float(pos.cost_price)
         row = {
             "symbol": sym,
             "name": st.name,
             "market": market,
-            "cost_price": pos.cost_price,
-            "quantity": pos.quantity,
+            "account_id": int(acct.id),
+            "account_name": acct.name or "",
+            "quantity": int(pos.quantity),
             "trading_style": pos.trading_style or "swing",
         }
+        if cost is None:
+            # 非有限/缺失成本: 明确标未知, 不写 0(0 会被读成"白送"), 也不算浮盈。
+            row["cost_price"] = None
+            row["cost_unknown"] = True
+        else:
+            row["cost_price"] = cost
         if q:
-            row["current_price"] = q.get("current_price")
-            row["change_pct"] = q.get("change_pct")
-            row["prev_close"] = q.get("prev_close")
+            cur = finite_float(q.get("current_price"))
+            if cur is None:
+                row["quote_error"] = "行情缺失"
+            else:
+                row["current_price"] = cur
+                row["change_pct"] = finite_float(q.get("change_pct"))
+                row["prev_close"] = finite_float(q.get("prev_close"))
+                if cost:
+                    row["pnl_pct"] = (cur - cost) / cost * 100
         else:
             row["quote_error"] = "数据获取失败"
-        # 浮盈(基于成本价)
-        if q and pos.cost_price:
-            cur = q.get("current_price")
-            if cur:
-                row["pnl_pct"] = (cur - pos.cost_price) / pos.cost_price * 100
         out.append(row)
     return out
 
@@ -382,21 +416,27 @@ async def _collect_strategy_signals(db, limit: int = 10) -> list[dict]:
         return []
 
 
-async def _collect_data(report_type: str, db) -> dict:
-    """按报告类型采集全部数据(每段独立降级, 不互相拖累)。"""
+async def _collect_data(report_type: str, db, user_id: str | None = None) -> dict:
+    """按报告类型采集全部数据(每段独立降级, 不互相拖累)。
+
+    `user_id` 三审(2026-10-29): 全量传入持仓/自选采集, 报告只含该归属能看的数据。
+    None = **共享市场报告**(2026-10-29 四审): 不采任何用户/共享桶持仓与自选,
+    只保留纯市场数据(指数/资金流/涨停/快讯/全市场候选/策略信号)。
+    """
     now = beijing_now()
     today = now.strftime("%Y%m%d")
     market_date = now.strftime("%Y-%m-%d")
     data: dict = {
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "market_date": market_date,
+        "user_id": user_id,
         "sources": {},
     }
 
     if report_type == "premarket":
         from src.core import premarket_evidence
 
-        ev = premarket_evidence.collect(date=market_date, db=db)
+        ev = premarket_evidence.collect(date=market_date, db=db, user_id=user_id)
         data["evidence"] = ev
         data["qualities"] = {
             k: ev[k]["quality"]
@@ -424,7 +464,7 @@ async def _collect_data(report_type: str, db) -> dict:
         summary = await _collect_limit_up_summary()
         data["limit_up"] = summary if summary.get("limit_up_count") is not None else {"error": "数据获取失败"}
         data["limit_down"] = await _collect_limit_down(today)
-        data["positions"] = await _collect_positions(db, with_quotes=True)
+        data["positions"] = await _collect_positions(db, with_quotes=True, user_id=user_id)
         data["strategy_signals"] = await _collect_strategy_signals(db)
         data["sources"]["指数"] = "腾讯" if data["indices"] else "数据获取失败"
         data["sources"]["资金流"] = data["market_flow"].get("source", "数据获取失败") if not data["market_flow"].get("error") else "数据获取失败"
@@ -432,7 +472,45 @@ async def _collect_data(report_type: str, db) -> dict:
         data["sources"]["跌停"] = "wudao/东财" if data["limit_down"] else "数据获取失败(或无跌停)"
         data["sources"]["信号/持仓"] = "本地库"
 
+    # 2026-10-29 六审: 严格归属(private)会漏掉"账户/持仓一侧 NULL"的历史行。
+    # 不猜归属, 但必须让本人**显式知道**少算了多少, 且该数字只含可关联到本人的行。
+    if user_id:
+        try:
+            from src.core.portfolio_scope import count_unattributed_positions
+
+            unattributed = count_unattributed_positions(db, user_id)
+        except Exception:  # noqa: BLE001
+            unattributed = 0
+        if unattributed:
+            data["unattributed_positions"] = unattributed
+
     return data
+
+
+def _detect_private_holdings(data: dict) -> bool:
+    """这份报告正文里**实际**有没有某个具体人的持仓/自选。
+
+    2026-10-29 四审: meta 的 `contains_private_holdings` 不能再由 `bool(user_id)` 猜 ——
+    旧写法对 `user_id=None` 一律写 False, 而当时共享桶里采到的正是某个人的历史成本。
+    现在按**采集结果**判定; 任何字段缺失/异常 → True(fail closed, 宁可不给 member 看)。
+    """
+    try:
+        if data.get("user_id"):
+            return True
+        if list(data.get("positions") or []):
+            return True
+        # 持仓/四档结构块必然是某人的账户数据; 关注候选(entry_candidates)是全市场快照,
+        # 不算私有, 所以只看这两块。
+        ev = data.get("evidence")
+        if isinstance(ev, dict):
+            for key in ("portfolio", "fund_structure"):
+                blk = ev.get(key)
+                if isinstance(blk, dict) and list(blk.get("items") or []):
+                    return True
+        return False
+    except Exception:  # noqa: BLE001 —— 判不了就当含私有数据
+        logger.warning("[报告] 私有内容判定异常, 按含私有持仓处理(fail-closed)")
+        return True
 
 
 # ──────────────────────────── LLM 生成 ────────────────────────────
@@ -460,14 +538,37 @@ def _build_user_content(report_type: str, data: dict) -> str:
         "generated_at": data.get("generated_at"),
         "market_date": data.get("market_date"),
     }
+    # 2026-10-29 四审: 共享报告 = 纯市场。既不把(可能为空的)持仓字段送给 LLM 让它
+    # 有「补全」的空间, 也明确告诉它不要写持仓段。
+    shared_market_only = not data.get("user_id") and not data.get("positions")
+    if shared_market_only:
+        payload["report_scope"] = "shared_market_only"
+        payload["scope_instruction"] = (
+            "这是给所有登录用户看的共享市场报告: 不含任何个人持仓/自选。"
+            "不得编造持仓、成本、仓位数字, 也不要输出「持仓」小节。"
+        )
     # 只送可序列化字段
+    skip_keys = {"positions", "candidates"} if shared_market_only else set()
     for key in (
         "indices", "market_flow", "yesterday_limit_up", "limit_up",
         "limit_down", "news", "candidates", "positions", "strategy_signals",
         "sources",
     ):
-        if key in data:
+        if key in data and key not in skip_keys:
             payload[key] = data[key]
+    # 2026-10-29 六审: 严格归属下"一侧 NULL"的历史持仓未计入, 必须在正文明确提示,
+    # 但只给本人这一条条数, 不提供任何他人记录/账户信息。
+    try:
+        unattributed = int(data.get("unattributed_positions") or 0)
+    except (TypeError, ValueError):
+        unattributed = 0
+    if unattributed > 0:
+        payload["unattributed_positions"] = unattributed
+        payload["unattributed_instruction"] = (
+            f"另有 {unattributed} 条历史归属不完整的持仓未计入本报告(账户或持仓归属方为空, "
+            "无法确认属于当前用户)。必须在「持仓」小节明确写出这句话, 不得猜测这些持仓的内容, "
+            "也不得把它们算进任何统计。"
+        )
     return json.dumps(payload, ensure_ascii=False, indent=1, default=str)
 
 
@@ -519,6 +620,36 @@ def _fmt_flow(v) -> str:
     return f"{v:+.1f}亿" if isinstance(v, (int, float)) else str(v)
 
 
+def _position_cost_text(p: dict) -> str:
+    """成本展示: 未知/非有限一律"未知", 绝不写 0(缺价不装 0)。"""
+    if p.get("cost_unknown") or p.get("cost_price") is None:
+        return "成本 未知"
+    return f"成本 {p.get('cost_price')}"
+
+
+def _position_account_text(p: dict) -> str:
+    name = str(p.get("account_name") or "").strip()
+    return f"[{name}] " if name else ""
+
+
+def _unattributed_note(data: dict) -> str:
+    """严格归属漏算提示(仅本人报告; 不含任何他人记录/姓名)。"""
+    try:
+        n = int(data.get("unattributed_positions") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return ""
+    return (
+        f"- ⚠️ 另有 {n} 条历史归属不完整的持仓未计入本报告"
+        "(账户或持仓的归属方为空, 无法确认属于你); 如确认是你的持仓, 请联系管理员校准归属。"
+    )
+
+
+def _fmt_pct(v) -> str:
+    return f"{v:+.2f}%" if isinstance(v, (int, float)) else "涨跌未知"
+
+
 def _get_block_quality(data: dict, block_name: str) -> str:
     """从 data.evidence / data.qualities 或内联数据审计获取块质量状态。"""
     ev = data.get("evidence")
@@ -550,6 +681,7 @@ def _get_block_quality(data: dict, block_name: str) -> str:
 
 def _build_template_report(report_type: str, data: dict) -> str:
     """LLM 不可用时的纯数据报告: 只罗列真实采集到的数据。"""
+    shared_market_only = not data.get("user_id") and not data.get("positions")
     lines = [f"# {REPORT_TITLES[report_type]} {data.get('market_date', '')}", ""]
     lines.append(f"**生成时间:** {data.get('generated_at', '')}")
     lines.append("**生成方式:** 数据模板(LLM 不可用, 纯数据不解读)")
@@ -609,7 +741,10 @@ def _build_template_report(report_type: str, data: dict) -> str:
         port_badge = " ⚠️ 数据待核" if port_q != "ok" else ""
         lines.append(f"## 四、当前持仓(参考前收盘){port_badge}")
         pos = data.get("positions") or []
-        if not pos:
+        if shared_market_only:
+            # 共享报告不评价「我有没有持仓」—— 它对每个读者都不一样, 只说明口径。
+            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓请在「持仓」页查看。")
+        elif not pos:
             lines.append("- 暂无持仓数据")
         else:
             for p in pos:
@@ -618,12 +753,15 @@ def _build_template_report(report_type: str, data: dict) -> str:
                 else:
                     cur = (
                         f"现价 {p.get('current_price', '-')} "
-                        f"({p.get('change_pct', 0):+.2f}%) 前收 {p.get('prev_close', '-')}"
+                        f"({_fmt_pct(p.get('change_pct'))}) 前收 {p.get('prev_close', '-')}"
                     )
                 lines.append(
-                    f"- {p.get('name', '')}({p.get('symbol', '')}) "
-                    f"{p.get('quantity', 0)}股 成本 {p.get('cost_price', '-')} {cur}"
+                    f"- {_position_account_text(p)}{p.get('name', '')}({p.get('symbol', '')}) "
+                    f"{p.get('quantity', 0)}股 {_position_cost_text(p)} {cur}"
                 )
+        note = _unattributed_note(data)
+        if note:
+            lines.append(note)
         lines.append("")
 
         lines.append("## 五、风险提示")
@@ -683,7 +821,9 @@ def _build_template_report(report_type: str, data: dict) -> str:
 
         lines.append("## 四、持仓今日表现")
         pos = data.get("positions") or []
-        if not pos:
+        if shared_market_only:
+            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓请在「持仓」页查看。")
+        elif not pos:
             lines.append("- 暂无持仓数据")
         else:
             for p in pos:
@@ -691,12 +831,15 @@ def _build_template_report(report_type: str, data: dict) -> str:
                     cur = f"行情: {p['quote_error']}"
                 else:
                     pnl = p.get("pnl_pct")
-                    pnl_s = f" 浮盈 {pnl:+.2f}%" if pnl is not None else ""
-                    cur = f"现价 {p.get('current_price', '-')} ({p.get('change_pct', 0):+.2f}%){pnl_s}"
+                    pnl_s = f" 浮盈 {pnl:+.2f}%" if isinstance(pnl, (int, float)) else ""
+                    cur = f"现价 {p.get('current_price', '-')} ({_fmt_pct(p.get('change_pct'))}){pnl_s}"
                 lines.append(
-                    f"- {p.get('name', '')}({p.get('symbol', '')}) "
-                    f"{p.get('quantity', 0)}股 成本 {p.get('cost_price', '-')} {cur}"
+                    f"- {_position_account_text(p)}{p.get('name', '')}({p.get('symbol', '')}) "
+                    f"{p.get('quantity', 0)}股 {_position_cost_text(p)} {cur}"
                 )
+        note = _unattributed_note(data)
+        if note:
+            lines.append(note)
         lines.append("")
 
         lines.append("## 五、策略信号回顾")
@@ -724,31 +867,98 @@ def _build_template_report(report_type: str, data: dict) -> str:
 # ──────────────────────────── 写盘 ────────────────────────────
 
 
-def _write_report(job_id: str, title: str, content: str, run_time: datetime) -> dict:
-    """写入 CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS.md, 返回 {path, title, size}。"""
+def _write_report(
+    job_id: str,
+    title: str,
+    content: str,
+    run_time: datetime,
+    *,
+    scope: str = "shared",
+    owner_user_id: str | None = None,
+    contains_private_holdings: bool = False,
+) -> dict:
+    """写入 CRON_OUTPUT_DIR/<job_id>/YYYY-MM-DD_HH-MM-SS-<随机>.md + 同目录 meta。
+
+    ## 为什么文件名带随机尾(2026-10-29 五审)
+
+    旧文件名精确到秒(`YYYY-MM-DD_HH-MM-SS.md`): 两个账号在同一秒生成私有报告会
+    **写到同一个路径**, 后写者覆盖前者的正文, 再各自写 meta —— 结果是"A 的正文 +
+    B 的 meta"这种跨账号错配(B 能读到 A 的成本)。秒级时间戳不是唯一键。
+
+    现在: 保留原有时间戳前缀(便于人读/兼容既有排序与链接), 追加 8 位随机 hex;
+    用 `O_CREAT|O_EXCL` 创建, 已存在就换随机名重试(最多 8 次) —— **绝不覆盖任何
+    已存在的报告**, 包括他人的。
+
+    ## 落盘顺序(fail-closed)
+
+    先正文(fsync)后 meta。中途崩溃只留下"无 meta 报告" → 读侧按来源不明处理,
+    仅 owner 可见(`report_scope.read_report_meta` 返回 None)。绝不会出现
+    "meta 说 shared 但正文没写完"。
+    """
+    from src.core import report_scope
+
     job_dir = _report_root() / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    fname = run_time.strftime("%Y-%m-%d_%H-%M-%S") + ".md"
-    path = job_dir / fname
     body = content.strip() + "\n"
-    path.write_text(body, encoding="utf-8")
+    stamp = run_time.strftime("%Y-%m-%d_%H-%M-%S")
+    path: Path | None = None
+    for _ in range(8):
+        candidate = job_dir / f"{stamp}-{secrets.token_hex(4)}.md"
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(body)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except BaseException:
+            # 写失败: 删除刚创建的空/半文件, 不把残片当报告留下。
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
+            raise
+        path = candidate
+        break
+    if path is None:
+        raise RuntimeError(f"报告文件名连续冲突, 无法安全落盘: job={job_id}")
     size = path.stat().st_size
-    logger.info("[报告] 已写入 %s (%d bytes)", path, size)
+    try:
+        report_scope.write_report_meta(
+            path,
+            scope=scope,
+            owner_user_id=owner_user_id,
+            generated_by="sida-report-generator",
+            contains_private_holdings=contains_private_holdings,
+            extra={"job_id": job_id},
+        )
+    except Exception as e:  # noqa: BLE001
+        # meta 写不出来 → 这份报告按"来源不明"处理(仅 owner 可读), 不阻断生成,
+        # 但必须留痕: 否则 member 侧报告中心会莫名少条目。
+        logger.error("[报告] meta 写入失败(该报告将仅 owner 可见) %s: %s", path, e)
+    logger.info("[报告] 已写入 %s (%d bytes, scope=%s)", path, size, scope)
     return {"path": str(path), "title": title, "size": size}
 
 
 # ──────────────────────────── 入口 ────────────────────────────
 
 
-async def generate_market_report(report_type: str, db=None) -> dict:
+async def generate_market_report(report_type: str, db=None, user_id: str | None = None) -> dict:
     """生成盘前(premarket)/盘后(postmarket)报告并写入报告中心。
 
     Args:
         report_type: "premarket" 或 "postmarket"
         db: 可选 SQLAlchemy session; 不传则内部自开自关。
+        user_id: 报告归属(2026-10-29 三审)。传 uid → 报告含该用户可见的持仓/自选,
+            落 meta `scope=private, owner_user_id=uid`; 传 None → **共享市场报告**
+            (2026-10-29 四审: 不采任何用户/共享桶的持仓与自选), 落 meta
+            `scope=shared`; `contains_private_holdings` 由**实际采集内容**判定
+            (判不出来按 True, fail-closed)。绝不"猜归属", 也不默认全库。
 
     Returns:
-        {"path": str, "title": str, "size": int}
+        {"path", "title", "size", "scope", "owner_user_id", "contains_private_holdings"}
     """
     if report_type not in JOB_IDS:
         raise ValueError(f"未知报告类型: {report_type} (支持 premarket/postmarket)")
@@ -757,7 +967,7 @@ async def generate_market_report(report_type: str, db=None) -> dict:
     if own_db:
         db = _db_session()
     try:
-        data = await _collect_data(report_type, db)
+        data = await _collect_data(report_type, db, user_id=user_id)
         content = await _llm_generate(db, report_type, data)
         if content is None:
             content = _build_template_report(report_type, data)
@@ -765,12 +975,30 @@ async def generate_market_report(report_type: str, db=None) -> dict:
         run_time = beijing_now()
         job_id = JOB_IDS[report_type]
         title = f"# {REPORT_TITLES[report_type]} {run_time.strftime('%Y-%m-%d')}"
+        scope = "private" if user_id else "shared"
+        # 2026-10-29 四审: 按**实际采到的内容**判定, 不再用 bool(user_id) 猜。
+        contains_private = _detect_private_holdings(data)
+        if not user_id and contains_private:
+            # 共享口径却采到了私有内容(采集层回归/未来新增用户块) → 宁可让 member
+            # 看不到这份, 也不能把别人的成本贴成公共报告。
+            logger.error(
+                "[报告] 共享口径仍含私有持仓, 按含私有内容落 meta(仅 owner 可读) job=%s",
+                job_id,
+            )
+        if user_id:
+            scope_note = f"**归属:** 用户 {user_id}\n"
+        else:
+            scope_note = (
+                "**归属:** 共享市场报告(纯市场口径, 不含任何用户/共享桶的持仓与自选; "
+                "个人持仓请在「持仓」页查看)\n"
+            )
         # 带 title 元信息行(Hermes cron 报告同款格式: 首行标题 + 元信息块)
         header = (
             f"{title}\n\n"
             f"**Job ID:** {job_id}\n"
             f"**Run Time:** {run_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"**Generated By:** SIDA 内置报告生成器\n"
+            f"{scope_note}"
             f"**数据源:** {', '.join(f'{k}={v}' for k, v in (data.get('sources') or {}).items()) or '未知'}\n\n"
         )
         if content.startswith("# "):
@@ -781,7 +1009,19 @@ async def generate_market_report(report_type: str, db=None) -> dict:
         else:
             content = header + content
 
-        return _write_report(job_id, title, content, run_time)
+        out = _write_report(
+            job_id,
+            title,
+            content,
+            run_time,
+            scope=scope,
+            owner_user_id=user_id,
+            contains_private_holdings=contains_private,
+        )
+        out["scope"] = scope
+        out["owner_user_id"] = user_id
+        out["contains_private_holdings"] = contains_private
+        return out
     finally:
         if own_db:
             try:

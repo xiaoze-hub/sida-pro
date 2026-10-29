@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from src.web.database import get_db, SessionLocal
 from src.web.models import AuditLog
 from src.web.api.auth import require_owner
+from src.web.api._scope import allow_cross_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ def log_audit(db: Session, user, action: str, detail: str = "", ip: str = "") ->
 
 
 @router.get("")
+@allow_cross_user  # 仅 owner(Depends(require_owner)); 全局审计日志视图本身即跨用户语义
 def list_audit(
     limit: int = Query(200, ge=1, le=1000),
     user: str = Query("", description="按用户名筛选, 空=全部用户"),

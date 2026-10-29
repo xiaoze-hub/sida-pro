@@ -28,25 +28,69 @@ _BACKGROUND_TASKS: set = set()
 _PUSH_LEVELS = {"info", "success", "warning", "error"}
 
 
-def _build_notifier(user_id: str | None = None):
+def _build_notifier(user_id: str | None = None, channel_ids=None):
     """从 DB 启用渠道构建 NotifierManager，并返回不含密钥的渠道快照。
 
     多用户(2026-08-10): user_id 指定 → 该用户渠道 + 全局共享(NULL);
     不指定 → 只推全局渠道(NULL)。
+
+    2026-10-29 四审: 真正的**最终外发**必须同时满足「归属可见」与「配置选择集」
+    (渠道解析层返回的集合)。旧实现只看 user_id → 用户只勾了 1 个渠道, 实际所有渠道
+    都收到(静默超发)。带选择集校验的版本见 `_build_notifier_checked`。
+    """
+    mgr, records, _audit = _build_notifier_checked(
+        user_id=user_id, channel_ids=channel_ids
+    )
+    return mgr, records
+
+
+def _build_notifier_checked(*, user_id: str | None = None, channel_ids=None):
+    """构建 notifier, 并在**外发前**交叉校验「用户归属 ∩ 选择集」。
+
+    Args:
+        user_id: 收件归属(None = 共享桶, 只允许全局渠道)。
+        channel_ids: 解析层给出的选择集(`None` = 无配置约束, 用该归属全部启用渠道;
+            **空列表 = 明确没有可用渠道 → 一条都不发**, 不能退化成"全部渠道")。
+
+    Returns:
+        (mgr | None, records, audit)。audit 记录 requested/granted/denied 供观测;
+        denied 非空说明请求里有他人的/已禁用的渠道 —— 一律剔除, 不扩到全渠道。
     """
     from src.core.notifier import NotifierManager
     from sqlalchemy import or_ as _or_
 
     db = SessionLocal()
     try:
+        wanted = None if channel_ids is None else {int(i) for i in channel_ids}
         q = db.query(NotifyChannel).filter(NotifyChannel.enabled.is_(True))
         if user_id is not None:
             q = q.filter(_or_(NotifyChannel.user_id == user_id, NotifyChannel.user_id.is_(None)))
         else:
             q = q.filter(NotifyChannel.user_id.is_(None))
+        if wanted is not None:
+            if not wanted:
+                logger.warning(
+                    "[通知中心] 渠道选择集为空(user=%s): 不外发(不退回全渠道)",
+                    user_id or "共享桶",
+                )
+                return None, [], {"requested": [], "granted": [], "denied": []}
+            q = q.filter(NotifyChannel.id.in_(sorted(wanted)))
         channels = q.all()
+        granted = [int(ch.id) for ch in channels]
+        audit = {
+            "requested": sorted(wanted) if wanted is not None else None,
+            "granted": granted,
+            "denied": sorted(wanted - set(granted)) if wanted is not None else [],
+        }
+        if audit["denied"]:
+            logger.warning(
+                "[通知中心] user=%s 选择集里的渠道 %s 不属于该归属/未启用, 已剔除"
+                "(不会扩到其他渠道)",
+                user_id or "共享桶",
+                audit["denied"],
+            )
         if not channels:
-            return None, []
+            return None, [], audit
         mgr = NotifierManager()
         ok = 0
         records: list[dict] = []
@@ -66,10 +110,10 @@ def _build_notifier(user_id: str | None = None):
                 record["error"] = str(e)[:400]
                 logger.warning("[通知中心] 渠道 %s 初始化失败: %s", ch.type, e)
             records.append(record)
-        return (mgr if ok else None), records
+        return (mgr if ok else None), records, audit
     except Exception as e:
         logger.warning("[通知中心] 读取渠道失败: %s", e)
-        return None, []
+        return None, [], {"requested": None, "granted": [], "denied": [], "error": str(e)}
     finally:
         db.close()
 
@@ -85,11 +129,22 @@ def push_notification(
     trace_id: str = "",
     also_push: bool | None = None,
     user_id: str | None = None,
+    channel_ids=None,
+    broadcast_all: bool = False,
 ) -> int | None:
     """写一条站内通知, 并按级别决定是否外发。返回 notification id。
 
     多用户(2026-08-10): user_id 指定 → 推该用户渠道+全局; None → 只推全局渠道。
     绝不抛异常 —— 通知失败不能拖垮业务主流程。
+
+    `channel_ids`(2026-10-29 四审): 调用方若已有「该用户的渠道选择集」(如
+    `resolve_notify_channels_ex(...).channels` 的 id), 必须传下来 —— 最终外发会在
+    **用户归属 ∩ 选择集**上再校验一次; 选择集为空/全都不可证明 → 一条都不发,
+    push_status 如实写原因, 绝不扩到该用户全部渠道或别人的渠道。
+
+    `broadcast_all`(2026-10-30 复审): user_id=None 只代表"归属未知", **不是**"发给所有人"。
+    默认不广播 WS; 只有真正的系统公告才显式传 True(等价旧的全员广播)。
+    旧行为把无归属任务的 title/body 推给所有在线用户, 属于跨租户内容泄露。
     """
     nid = None
     db = SessionLocal()
@@ -123,10 +178,15 @@ def push_notification(
     do_push = also_push if also_push is not None else (level in _PUSH_LEVELS)
     if not do_push:
         _set_push_status(nid, "skipped", "级别不外发")
-        _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
+        _after_push_hook(
+            user_id, category, level, title, body, link, source, trace_id, nid,
+            broadcast_all=broadcast_all,
+        )
         return nid
 
-    mgr, channel_records = _build_notifier(user_id=user_id)
+    mgr, channel_records, channel_audit = _build_notifier_checked(
+        user_id=user_id, channel_ids=channel_ids
+    )
     if mgr is None:
         init_errors = [str(item.get("error") or "") for item in channel_records if item.get("status") == "failed"]
         if channel_records:
@@ -136,10 +196,23 @@ def push_notification(
                 "; ".join(err for err in init_errors if err)[:400] or "通知渠道初始化失败",
                 channels=channel_records,
             )
+        elif channel_ids is not None:
+            # 有明确选择集但一条都不可用(空/全被剔除) → 如实记录, 不外发。
+            reason = "渠道选择集为空或不属于该归属, 未外发(不扩到其他渠道)"
+            if channel_audit.get("denied"):
+                reason = (
+                    f"渠道选择集 {channel_audit.get('denied')} 不属于该归属/未启用, "
+                    "未外发(不扩到其他渠道)"
+                )
+            logger.warning("[通知中心] id=%s %s", nid, reason)
+            _set_push_status(nid, "skipped", reason, channels=[])
         else:
             # 显式状态, 不静默 —— 前端能看到"站内已记录, 未配置外发渠道"
             _set_push_status(nid, "skipped", "未配置通知渠道", channels=[])
-        _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
+        _after_push_hook(
+            user_id, category, level, title, body, link, source, trace_id, nid,
+            broadcast_all=broadcast_all,
+        )
         return nid
 
     try:
@@ -160,7 +233,10 @@ def push_notification(
     except Exception as e:
         logger.warning("[通知中心] 外发失败: %s", e)
         _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))
-    _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
+    _after_push_hook(
+        user_id, category, level, title, body, link, source, trace_id, nid,
+        broadcast_all=broadcast_all,
+    )
     return nid
 
 
@@ -174,6 +250,8 @@ def _after_push_hook(
     source: str,
     trace_id: str,
     nid: int | None,
+    *,
+    broadcast_all: bool = False,
 ) -> None:
     """v0.4.36: 落库后通过 WS Hub 实时推送 + 累加未读.
 
@@ -198,8 +276,11 @@ def _after_push_hook(
             "trace_id": trace_id,
             "ts": int(_time_module.time()),
         }
-        # 广播给该用户的 WS 连接 (按 category 订阅过滤)
-        broadcast_notification(user_id, payload, category=category)
+        # 广播给该用户的 WS 连接 (按 category 订阅过滤)。
+        # user_id=None 表示归属未知, **不得**当成"全员广播" —— 那会把无主任务的
+        # 标题/正文推给所有在线用户。只有显式 broadcast_all=True 才走全员。
+        if user_id or broadcast_all:
+            broadcast_notification(user_id, payload, category=category)
         # 累加未读 (站内公告不入未读)
         if user_id:
             incr_unread(user_id, 1)
@@ -332,14 +413,36 @@ def notify_task_done(
     link: str = "",
     status: str = "",
     user_id: str | None = None,
+    allow_owner_fallback: bool = False,
+    channel_ids=None,
 ) -> int | None:
     """后台任务收尾统一入口: 成功/失败都写站内, 失败额外外发。
 
-    user_id: 多用户改造后渠道全归属 user_id(无全局渠道), 后台任务无用户上下文时
-    兜底推给 owner(role=owner), 否则站内通知永远 skipped("未配置通知渠道")。
+    2026-10-29 三审(R4): 兜底只在**确实没有会话**时发生, 且必须留 warning 日志 ——
+    此前 `stocks.py` 手动触发线程漏传 user_id, member 的任务结果被静默推给了 owner。
+    调用方只要有触发用户就必须显式传(标量 id, 在起线程前取好), 不许依赖兜底。
+
+    2026-10-29 四审: 兜底改成**显式 opt-in**(`allow_owner_fallback=True`), 只给
+    "系统自身运维告警"(无触发用户, owner 就是责任人)用。普通任务漏传 user_id 时
+    不再自动推 owner —— 那等于把不认识的人的内容塞进 owner 的渠道; 现在按共享桶
+    (None) 落库/外发并 warning 留痕, 也就是"未知 → 不发他人"。
     """
-    if user_id is None:
+    if user_id is None and allow_owner_fallback:
         user_id = _resolve_owner_user_id()
+        logger.warning(
+            "[通知中心] notify_task_done 未带 user_id, 兜底归属 owner=%s (task=%s, source=%s); "
+            "调用方若有触发用户必须显式传, 否则会把他人任务推到 owner",
+            user_id or "无",
+            task_label,
+            source or category,
+        )
+    elif user_id is None:
+        logger.warning(
+            "[通知中心] notify_task_done 无可信归属(task=%s, source=%s): 按共享桶落库, "
+            "不推给 owner/任何具体用户(调用方应传触发用户)",
+            task_label,
+            source or category,
+        )
     dur = f"（耗时 {duration_ms / 1000:.1f}s）" if duration_ms else ""
     if status == "skipped":
         title = f"⏭️ {task_label} 已跳过{dur}"
@@ -359,4 +462,7 @@ def notify_task_done(
         source=source or task_label,
         trace_id=trace_id,
         user_id=user_id,
+        # 四审: 若调用方有该 agent/stock_agent 的渠道选择集, 必须在最终外发前带上
+        # (用户归属 ∩ 选择集 再校验一次), 否则勾选的渠道约束在通知中心被绕过。
+        channel_ids=channel_ids,
     )

@@ -22,6 +22,7 @@ from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_
 from src.core import gap_collector
 from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
 from src.core.copilot_memory import memory_block
+from src.core.portfolio_scope import paper_position_user_scope_clause, user_scope_positions
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
 from src.config import Settings
@@ -1515,12 +1516,16 @@ def _build_stock_context(db: Session, symbol: str, market: str, user: User | Non
         AnalysisHistory.stock_symbol == symbol
     )
     if user is not None:
+        # 2026-10-29 五审: NULL 历史行只给 owner; 无 user 时一条不读(不在下面放开)。
+        from src.core.analysis_history import analysis_history_scope_clause
+
         hist_query = hist_query.filter(
-            or_(
-                AnalysisHistory.user_id == user.id,
-                AnalysisHistory.user_id.is_(None),
-            )
+            analysis_history_scope_clause(user.id, getattr(user, "role", None))
         )
+    else:
+        from sqlalchemy import false as _false
+
+        hist_query = hist_query.filter(_false())
     histories = (
         hist_query.order_by(AnalysisHistory.created_at.desc())
         .limit(1)
@@ -1539,43 +1544,37 @@ def _build_stock_context(db: Session, symbol: str, market: str, user: User | Non
 def _build_portfolio_context(db: Session, user: User | None = None) -> str:
     """构建用户全部持仓摘要。
 
-    S5(2026-08-26): 传入 user 时只返回本人持仓 + user_id=NULL 全局持仓,
-    实盘(Position)与模拟盘(PaperTradingPosition)同样处理。
+    S5(2026-08-26): 传入 user 时只返回本人持仓 + user_id=NULL 全局持仓。
+    2026-10-29 跨租户修复: 实盘持仓必须满足"父账户可见 AND 持仓可见"
+    (src.core.portfolio_scope 唯一口径) —— 只看 Position.user_id 会把他人私有账户里
+    user_id=NULL 的持仓当成本人的。没有用户会话(服务令牌/后台线程)一律返回空,
+    绝不"没传用户就返回全部账户"。
+    模拟盘(PaperTradingPosition)无父账户, 仍按自身 user_id 过滤。
     """
+    uid = getattr(user, "id", None)
+    if not uid:
+        return ""
     lines: list[str] = []
-
     # 实盘持仓
-    pos_query = db.query(Position)
-    if user is not None:
-        pos_query = pos_query.filter(
-            or_(Position.user_id == user.id, Position.user_id.is_(None))
-        )
-    positions = pos_query.all()
-    if positions:
-        real_lines = []
-        for p in positions:
-            stock = db.query(Stock).filter(Stock.id == p.stock_id).first()
-            if not stock:
-                continue
-            real_lines.append(
-                f"- {stock.name}({stock.market}:{stock.symbol}) "
-                f"{p.quantity}股 成本{p.cost_price} 风格{p.trading_style or '波段'}"
-            )
-        if real_lines:
-            lines.append("实盘持仓：\n" + "\n".join(real_lines))
-
-    # 模拟盘持仓(2026-09-08 T6: user_id 列已落地, 按归属过滤; NULL 行为冷启动遗留, owner 可见)
-    paper_query = db.query(PaperTradingPosition).filter(
-        PaperTradingPosition.status == "open"
+    real_lines = [
+        f"- {st.name}({st.market}:{st.symbol}) "
+        f"{p.quantity}股 成本{p.cost_price} 风格{p.trading_style or '波段'}"
+        for p in user_scope_positions(db, uid).all()
+        if (st := db.query(Stock).filter(Stock.id == p.stock_id).first())  # scoped-check: allow — p 只来自上面的 user_scope_positions(db, uid), 这里只读标的元数据拼提示
+    ]
+    if real_lines:
+        lines.append("实盘持仓：\n" + "\n".join(real_lines))
+    # 模拟盘持仓: 只认 user_id==uid。NULL 归属是冷启动遗留、owner 未知,
+    # 只允许 owner(数据责任人)看到 —— 与 portfolio_diagnostics / user_data /
+    # paper_trading 三条读路径同口径, 不再把别人/NULL 的模拟盘注进 member 的提示。
+    _paper_scope = paper_position_user_scope_clause(
+        uid, include_legacy_null=str(getattr(user, "role", "") or "").lower() == "owner"
     )
-    if user is not None:
-        paper_query = paper_query.filter(
-            or_(
-                PaperTradingPosition.user_id == user.id,
-                PaperTradingPosition.user_id.is_(None),
-            )
-        )
-    paper_positions = paper_query.all()
+    paper_positions = (
+        db.query(PaperTradingPosition)
+        .filter(PaperTradingPosition.status == "open", _paper_scope)
+        .all()
+    )
     if paper_positions:
         paper_lines = []
         for pp in paper_positions:
@@ -1905,9 +1904,9 @@ def suggested_questions(
         elif action == "alert":
             questions.append("最近的异动提醒是什么情况？需要关注吗？")
 
-    # 兜底: 查持仓（Position 通过 stock_id 关联 Stock 表）
+    # 兜底: 查持仓(Position 通过 stock_id 关联 Stock; 只看当前用户可见的持仓)
     has_position = (
-        db.query(Position)
+        user_scope_positions(db, user.id)
         .join(Stock, Position.stock_id == Stock.id)
         .filter(Stock.symbol == symbol, Stock.market == market)
         .first()

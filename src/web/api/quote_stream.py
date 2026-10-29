@@ -215,8 +215,61 @@ def _collect_watchlist_symbols() -> dict[str, list[str]]:
         return {}
 
 
+def _proven_quote_stamp(item: dict, market: str) -> dict:
+    """行情源**自带的**报价时间证据 → WS 透传字段（2026-10-29 F3/F4 溯源）。
+
+    背景: 帧里原只有 `{price, change_pct, prev_close, name}`，前端 `applyQuoteTicks`
+    只能把"价格变了"的 tick 判成时刻未知 —— 5s 一帧的 WS 全程拿不到时效，20s 轮询之间
+    的真破位大部分时段看不见。
+
+    **只透传源报文里确实带的证据**，两条互不顶替：
+      1. `Quote.quote_time`（时刻层，如腾讯 parts[30]）+ 其语义 `quote_time_kind`
+         （CN：`snapshot_refresh` = 源快照刷新时间，**不是**成交时间；港/美：`vendor_stamp`
+         = 只到"供应商报时"，是否成交未核实）；
+      2. `Quote.quote_date`（日期层，TQ 由同标的日线收盘价配对证明，`quote_date_basis
+         =daily_bar_close`）—— 没有时刻时仍能证明"这份价属于哪一天"，足以判当日盈亏，
+         但**不足以**证明"刚刚发生"。
+    绝不用服务端接收/发送时间（`time.time()`、`datetime.now()`）冒充行情源时刻 ——
+    那会把"我们收到的时间"讲成"行情发生的时间"，是假实时。
+
+    自洽校验: 时刻与日期都在时，`quote_date` 必须就是 `quote_time` 的日期段；不一致
+    说明上游串源，两个都不用（宁可 unknown，也不替上游挑一个"看起来对"的）。
+    """
+    from src.core.quote_period import classify_quote_period
+
+    raw_time = item.get("quote_time")
+    quote_time = str(raw_time).strip() if raw_time else ""
+    declared_date = str(item.get("quote_date") or "").strip()[:10]
+    time_date = quote_time[:10] if quote_time else ""
+    kind = str(item.get("quote_time_kind") or "").strip()
+    basis = str(item.get("quote_date_basis") or "").strip()
+
+    if time_date and declared_date and declared_date != time_date:
+        quote_time, time_date, declared_date = "", "", ""
+        kind, basis = "", ""
+    quote_date = time_date or declared_date
+    if not quote_date:
+        # 没有任何日期证据 ⇒ 时刻语义/证据来源也无从成立（不许留半条）。
+        return {
+            "quote_time": None,
+            "quote_date": None,
+            "quote_time_kind": "",
+            "quote_date_basis": "",
+            "daily_pnl_period": "unknown",
+        }
+
+    # 日期层按**市场时区**的后端判定（与 /quotes/batch 同一实现），前端不复刻交易日历。
+    return {
+        "quote_time": quote_time or None,
+        "quote_date": quote_date,
+        "quote_time_kind": kind,
+        "quote_date_basis": basis,
+        "daily_pnl_period": classify_quote_period(quote_date, market),
+    }
+
+
 async def _fetch_batch_quotes(groups: dict[str, list[str]]) -> dict:
-    """按市场分组批量拉行情, 返回 {symbol: {price, change_pct, prev_close, name}}。"""
+    """按市场分组批量拉行情, 返回 {symbol: {price, change_pct, prev_close, name, ...报价时刻}}。"""
     from src.core.marketdata_client import md_quote_rows
 
     out: dict = {}
@@ -232,6 +285,7 @@ async def _fetch_batch_quotes(groups: dict[str, list[str]]) -> dict:
                     "change_pct": item.get("change_pct"),
                     "prev_close": item.get("prev_close"),
                     "name": item.get("name"),
+                    **_proven_quote_stamp(item, market),
                 }
         except Exception as e:
             logger.debug(f"批量行情 {market} 失败: {e}")

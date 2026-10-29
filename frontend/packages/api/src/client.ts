@@ -220,27 +220,47 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
 }
 
 /**
- * 单次 fetch 尝试(带本次尝试自己的超时计时器), 失败抛**类型化**错误。
+ * 单次 fetch 尝试的句柄（2026-10-29 复审 B1：超时窗口必须**覆盖响应体**）。
  *
- *  - 超时(本函数注入的 AbortController 触发) → `ApiTimeoutError`(kind='TIMEOUT');
- *  - 调用方自带 `signal` 且已 abort → 原样抛该错误(取消权归调用方, 不误报超时/不重试);
- *  - 其它网络层失败 → **保留原错误对象**(带原始 message), 打上 `kind='NETWORK'` 标记后再抛。
+ * 旧实现把 `AbortController` 计时器放在一次 `fetch()` 的 try/finally 里 ——
+ * `fetch()` 一 resolve（= 只收到响应头）就 `clearTimeout`，随后 `res.json()` 在**没有
+ * 任何超时**的情况下读体。真实故障形态（网关先回 200 头、chunked 体卡住）下：
+ * `_parseResponse` 无限 pending ⇒ 本次 `fetchAPI` 永不 settle ⇒ `_INFLIGHT` 里的共享
+ * promise 永不释放 ⇒ 上游 hook 的 in-flight 闸门也永不释放，行情与市场墙钟一起冻结。
+ *
+ * 因此把"计时器生命周期"交给调用方：**读完响应体才 dispose**；计时器在体读到一半触发时
+ * 同样 abort 掉这次读取，并记下 `timedOut()` 供上层归类成 TIMEOUT（而不是"解析失败"）。
  */
+interface FetchAttempt {
+  res: Response
+  /** 本次尝试的计时器是否已经触发（体读到一半被我们 abort）。 */
+  timedOut: () => boolean
+  /** 释放计时器（体已读完 / 放弃这次响应）。 */
+  dispose: () => void
+}
+
 async function _attemptFetch(
   path: string,
   options: ApiRequestOptions | undefined,
   headers: Record<string, string>,
   timeoutMs: number,
-): Promise<Response> {
+): Promise<FetchAttempt> {
   const callerSignal = options?.signal ?? null
   const timeoutController = callerSignal ? null : new AbortController()
+  let timerFired = false
   const timeoutId = timeoutController
-    ? window.setTimeout(() => timeoutController.abort(), timeoutMs)
+    ? window.setTimeout(() => {
+        timerFired = true
+        timeoutController.abort()
+      }, timeoutMs)
     : null
+  const dispose = () => {
+    if (timeoutId !== null) window.clearTimeout(timeoutId)
+  }
 
   try {
     const { timeoutMs: _timeoutMs, cacheMode: _cacheMode, ...requestOptions } = options || {}
-    return await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${API_BASE}${path}`, {
       // P0(2026-09-18): 始终携带 Cookie(httpOnly sida_token + csrf_token)
       credentials: 'include',
       ...requestOptions,
@@ -250,7 +270,10 @@ async function _attemptFetch(
       },
       signal: requestOptions.signal || timeoutController?.signal,
     })
+    // 头到了**不算完成**：计时器保留到体读完（见 FetchAttempt 注释）。
+    return { res, timedOut: () => timerFired, dispose }
   } catch (error: any) {
+    dispose()
     if (error?.name === 'AbortError') {
       if (callerSignal?.aborted) throw error // 调用方取消: 原样抛
       throw new ApiTimeoutError(timeoutMs)   // 我们的超时计时器触发
@@ -258,10 +281,6 @@ async function _attemptFetch(
     const netErr: Error = error instanceof Error ? error : new Error(String(error))
     ;(netErr as ApiError).kind = 'NETWORK'
     throw netErr
-  } finally {
-    if (timeoutId !== null) {
-      window.clearTimeout(timeoutId)
-    }
   }
 }
 
@@ -339,9 +358,9 @@ async function _fetchNow<T>(
   let lastError: unknown = null
   for (let attempt = 0; attempt <= MAX_GET_RETRIES; attempt++) {
     const canRetryThisRound = canRetry && attempt < MAX_GET_RETRIES
-    let res: Response
+    let handle: FetchAttempt
     try {
-      res = await _attemptFetch(path, options, headers, timeoutMs)
+      handle = await _attemptFetch(path, options, headers, timeoutMs)
     } catch (error) {
       const kind = error instanceof ApiTimeoutError ? 'TIMEOUT' : (error as ApiError | undefined)?.kind
       const retryable = kind === 'TIMEOUT' || kind === 'NETWORK'
@@ -361,12 +380,29 @@ async function _fetchNow<T>(
       throw error
     }
 
-    // 5xx 视为可重试(服务端瞬时故障); 4xx 是确定性错误, 重试无意义。
-    if (res.status >= 500 && canRetryThisRound) {
-      lastError = Object.assign(new Error(`HTTP ${res.status}`), { status: res.status, kind: 'HTTP_5xx' })
-      continue
+    try {
+      // 5xx 视为可重试(服务端瞬时故障); 4xx 是确定性错误, 重试无意义。
+      if (handle.res.status >= 500 && canRetryThisRound) {
+        lastError = Object.assign(new Error(`HTTP ${handle.res.status}`), { status: handle.res.status, kind: 'HTTP_5xx' })
+        continue
+      }
+      // 体在这里读完；计时器在读完之前一直有效（B1：头到了不算完成）。
+      return await _parseResponse<T>(handle.res, path, method, options, ckey)
+    } catch (error) {
+      // 体读到一半被超时计时器 abort：仍归类为 TIMEOUT（不是"响应解析失败"）。
+      if (handle.timedOut()) {
+        const timeoutError = new ApiTimeoutError(timeoutMs)
+        if (canRetryThisRound) {
+          lastError = timeoutError
+          continue
+        }
+        reportFailure({ path, method, status: 0, message: '请求超时' })
+        throw timeoutError
+      }
+      throw error
+    } finally {
+      handle.dispose()
     }
-    return await _parseResponse<T>(res, path, method, options, ckey)
   }
 
   // 理论不可达(循环内必定 return 或 throw); 兜底抛最后一次错误。

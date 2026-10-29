@@ -54,12 +54,33 @@ class Quote:
     pb_ratio: float | None = None
     circulating_market_value: float | None = None
     total_market_value: float | None = None
-    # 行情源提供的实际报价时间；无法确认时保持 None，不能用抓取时间冒充。
+    # 行情源提供的**实际报价时间**；无法确认时保持 None，不能用抓取时间冒充。
     quote_time: datetime | None = None
+    # 行情源可证明的**报价日期**（市场当地 'YYYY-MM-DD'）。它可以独立于 quote_time 存在：
+    # TQ 快照没有任何报时字段，但把"现价"与**同标的同日线收盘价**配对一致（同一源、同一次
+    # 抓取），就能证明这份价属于哪一天 —— 证明得了日，证明不了时刻（2026-10-29 F4）。
+    quote_date: str | None = None
+    # quote_time 到底是什么时间（2026-10-29 实盘标定）：
+    #   "trade"            = 源报的就是**成交**时刻（当前没有任何源能这样标注）；
+    #   "snapshot_refresh" = 源报的是**快照刷新**时刻（腾讯 parts[30]，**仅 CN 已证实**：
+    #                        收盘后仍是 16:14:xx，且**停牌股同样刷新** ⇒ 不证明发生过成交）；
+    #   "vendor_stamp"     = 源报的是**供应商报时**，语义未核实（腾讯 parts[30] 港/美：
+    #                        实测落在收盘竞价窗口，可能就是最后一笔成交，不能断言非成交）；
+    #   ""                 = 没有报时 / 语义未知。
+    quote_time_kind: str = ""
+    # quote_date 的证据来源：'daily_bar_close'=同标的日线收盘价与现价配对一致（TQ；
+    # 并与同标的快照成交量做**零/正**交叉校验，两边对"今天有没有成交"说法不一致就
+    # 不给日期 —— 快照 volume=手、日线 volume=股，只比零/正，绝不比数值），
+    # '' = 无（日期未知）。
+    quote_date_basis: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
     # 2026-09-08 来源透传: 实际命中的 vendor + 该次延迟(Engine Response 落到每条 Quote)。
     source: str = ""
     latency_ms: int = 0
+    # 2026-10-29 复审：这一条来自**部分批次**（同一批里有标的没取到，代码在 source_missing）。
+    # 只标在取到的那几条上，绝不代表"整批完整"；下游/前端看到它就不得按全覆盖展示。
+    source_partial: bool = False
+    source_missing: list[str] = field(default_factory=list)
     # 2026-09-08 (风险方案1.1) 完整性标记: ok=字段齐 / partial=部分缺失 / missing=无有效价格。
     status: str = "ok"
     missing_fields: list[str] = field(default_factory=list)
@@ -423,6 +444,12 @@ class Response:
     error: str = ""
     vendor: str = ""
     latency_ms: int = 0
+    # 2026-10-29 复审：一批请求里**实际覆盖**了哪些标的。partial=True 表示 data 不覆盖
+    # 全部请求标的（缺的代码在 missing 里）；requested=本次请求的标的数（市场级数据=0）。
+    # 下游必须据此标「部分缺失」，不得把 count 当全部成功；引擎也不会把 partial 缓存成完整。
+    partial: bool = False
+    missing: tuple[str, ...] = ()
+    requested: int = 0
 
     @property
     def is_empty(self) -> bool:

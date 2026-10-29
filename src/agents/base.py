@@ -177,9 +177,15 @@ class AccountInfo:
 
 @dataclass
 class PortfolioInfo:
-    """持仓组合信息"""
+    """持仓组合信息。
+
+    `scope_note`: None = 已按用户/标的归属收敛完毕; 非 None = **上下文不完整**
+    (2026-10-29 复审: 无会话且标的无归属时只能读共享桶)。渲染层见到它就不许把
+    "看不到"写成"用户未持有", 必须把原因原样带给模型/用户。
+    """
 
     accounts: list[AccountInfo] = field(default_factory=list)
+    scope_note: str | None = None
 
     @property
     def total_available_funds(self) -> float:

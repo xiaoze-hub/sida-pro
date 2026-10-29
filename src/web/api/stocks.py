@@ -6,11 +6,14 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 from pydantic import BaseModel
 
 from src.web.database import get_db
 from src.web.api._scope import scoped
+from src.web.api._db_errors import bound_lock_wait, is_lock_conflict
 from src.web.api.auth import get_current_user
 from src.web.models import (
     Stock,
@@ -153,6 +156,10 @@ def get_market_status():
                 "is_trading": is_trading,
                 "sessions": sessions_desc,
                 "local_time": now.strftime("%H:%M"),
+                # 2026-10-29 B3: 市场当地**日期**独立下发。只有 HH:MM 时，防线判定无法证明
+                # "报价与市场墙钟是同一天"——昨天 09:31 的报价配今天 09:31 的钟会算出 0 分钟。
+                # local_time 语义不变（仍是 HH:mm），日期单独给，让前端做日级一致性比对。
+                "local_date": now.date().isoformat(),
                 "timezone": market_def.timezone,
             })
         except Exception as e:
@@ -166,6 +173,8 @@ def get_market_status():
                 "is_trading": False,
                 "sessions": [],
                 "local_time": "--:--",
+                # 拿不到市场时区/时段时不给日期（不许用本机日期冒充市场当地日期）。
+                "local_date": None,
                 "timezone": market_def.timezone,
                 "error": str(e),
             })
@@ -404,7 +413,8 @@ def reorder_stocks(body: StockReorderRequest, db: Session = Depends(get_db), use
     if not body.items:
         return {"updated": 0}
     ids = [int(x.id) for x in body.items]
-    rows = db.query(Stock).filter(Stock.id.in_(ids)).all()
+    allowed = or_(Stock.user_id == user.id, Stock.user_id.is_(None)) if user.role == "owner" else Stock.user_id == user.id
+    rows = db.query(Stock).filter(Stock.id.in_(ids), allowed).all()
     row_map = {r.id: r for r in rows}
     updated = 0
     for item in body.items:
@@ -444,44 +454,202 @@ def update_stock(stock_id: int, stock: StockUpdate, db: Session = Depends(get_db
 
 @router.delete("/{stock_id}")
 def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    db_stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    # 2026-10-29 七审(B2 并发级联): 预检 → 删除之间若另一个事务给本行插入了
+    # 他人的 positions / price_alert_rules / price_alert_hits / stock_agents,
+    # 旧实现照样 200 删成功, 并靠 `ON DELETE CASCADE` 把那些行一起删掉 —— 预检
+    # 结论在提交时已经过期。现在第一件事就是对本行取 FOR UPDATE:
+    # PostgreSQL 中任何引用 stocks.id 的 INSERT/UPDATE 都必须先对被测行取
+    # FOR KEY SHARE 锁, 与 FOR UPDATE 冲突 → 并发写入会被挡到本事务提交之后;
+    # 那时行已不存在, 它拿 FK 冲突(23503) 失败, 而不是"先写成功再被静默级联删"。
+    # SQLite 下该子句被方言忽略(FOR UPDATE 无意义), 但 SQLite 是库级写锁,
+    # 不存在该窗口。
+    try:
+        bound_lock_wait(db)
+        db_stock = (
+            db.query(Stock)
+            .filter(Stock.id == stock_id)
+            .with_for_update()
+            .first()
+        )
+    except OperationalError as exc:
+        db.rollback()
+        if not is_lock_conflict(exc):
+            raise
+        # 另一个请求/迁移正持有该行(或语句级 lock_timeout 到点): 让调用方重试。
+        raise HTTPException(409, "该自选正在被其他操作修改，请刷新后重试") from None
     if not db_stock:
         raise HTTPException(404, "股票不存在")
 
     # 归属校验(2026-08-15 安全加固): 只能删自己的自选; 共享默认项(user_id NULL)仅 owner 可删
     if db_stock.user_id is not None and db_stock.user_id != user.id:
+        db.rollback()  # 早退也立刻放掉 FOR UPDATE, 别让锁挂到响应结束
         raise HTTPException(403, "无权删除该自选(非本人创建)")
     if db_stock.user_id is None and user.role != "owner":
+        db.rollback()
         raise HTTPException(403, "无权删除共享默认自选")
 
-    # 删除股票前，要求先清理持仓，避免误删资产数据。
-    has_position = db.query(Position.id).filter(Position.stock_id == stock_id).first()
-    if has_position:
-        raise HTTPException(400, "该股票存在持仓，请先删除持仓后再删除股票")
+    # 无 user_id 就 fail-closed: 下面所有"本人规则/本人命中"都靠 uid 判定,
+    # 拿不到身份时 `user_id == None` / `!= None` 的三值逻辑会把归属判成未知,
+    # 任何"就当作没有归属限制"的实现都会变成越权删除。宁可不删。
+    uid = getattr(user, "id", None)
+    if not uid:
+        logger.warning("拒绝删除自选: 当前账号缺少 user_id(stock_id=%s)", stock_id)
+        db.rollback()
+        raise HTTPException(403, "无法确认当前账号身份，已拒绝删除")
 
-    # SQLite 默认可能不启用 FK 级联，手动清理提醒数据避免孤儿记录。
-    rule_ids = [
+    # 删除股票前，要求先清理持仓，避免误删资产数据。
+    # 2026-10-29 三审: 旧实现一条 `filter(Position.stock_id == stock_id)` 查**全库**
+    # 持仓 —— ① 别人在我这一行上的历史错位持仓也算数; ② 有人拿我的 stock_id 建过仓
+    # (旧 create_position 不校验标的归属), 我删自选会把**他的**持仓级联删掉。
+    # 现在分两档, 都不泄露归属:
+    #   - 自己可见的持仓还在 → 400, 提示先清理(信息对他本人真实且必要);
+    #   - 只有他人持仓引用 → 409 通用文案(不报数量/账户名/归属人), 拒绝删除,
+    #     因为拒绝是唯一不破坏他人数据的选择; 残留的"存在引用"信号无法完全消除,
+    #     这是任何安全删除设计的固有代价(详见 docs 三审记录)。
+    from src.core.portfolio_scope import (
+        account_user_scope_clause,
+        position_user_scope_clause,
+    )
+    from src.web.models import Account
+
+    has_position = (
+        db.query(Position.id)
+        .join(Account, Account.id == Position.account_id)
+        .filter(
+            Position.stock_id == stock_id,
+            account_user_scope_clause(uid),
+            position_user_scope_clause(uid),
+        )
+        .first()
+    )
+    if has_position:
+        db.rollback()
+        raise HTTPException(400, "该股票存在持仓，请先删除持仓后再删除股票")
+    foreign_ref = db.query(Position.id).filter(Position.stock_id == stock_id).first()
+    if foreign_ref:
+        logger.warning(
+            "拒绝删除自选: stock_id=%s 仍被不可见持仓引用(不泄露归属) user=%s",
+            stock_id,
+            getattr(user, "id", None),
+        )
+        db.rollback()
+        raise HTTPException(
+            409,
+            "该自选仍被其它数据引用，暂无法删除，请联系管理员",
+        )
+
+    # ── 提醒规则 / 命中历史: 只允许本人销毁本人的, 其余一律整单拒绝 ──
+    #
+    # 2026-10-29 五审的「安全拆离」有跨账号副作用, 六审回退为**保守拒绝**:
+    #   1) 给他人复制 Stock(symbol) + StockAgent 绑定 = 替别人建自选/订阅, 调度器
+    #      随后会真的跑他的 Agent(LLM 调用 + 按绑定渠道外发), 未经其同意;
+    #   2) 只改 rule.stock_id 不改 PriceAlertHit.stock_id → 删原行时
+    #      `price_alert_hits.stock_id ON DELETE CASCADE` 仍会把他人的命中历史删掉;
+    #   3) NULL 归属规则被 `~own_filter`(SQL 三值逻辑)滤掉 → 既不算他人的,
+    #      也不在本人删除集合里, 最后被数据库级联删掉, 历史同样丢失。
+    #
+    # 现在的口径(不猜、不代劳、不丢历史):
+    #   - 本人规则(user_id == 我) → 允许随自选一起删(用户自己的显式操作);
+    #   - 任何非本人规则(含 user_id IS NULL 的历史规则) → 通用 409, 整单不删;
+    #   - 任何本人不可销毁规则上的命中, 或 stock_id 指向本行的孤儿命中 → 同样 409;
+    #   - 本人规则但已迁到别的自选(historical 错位), 其命中仍指向本行 → 409:
+    #     命中历史先于自选存活, 不能因为"规则是我的"就随手级联删掉;
+    #   - 共享票/规则/绑定/命中全部原样保留, 文案不报归属人、不报数量。
+    # 用户可操作的替代路径: `POST /api/price-alerts/{rule_id}/adopt` 由规则本人在
+    # 「价格提醒」页显式迁到自己的私有自选(带同意、不复制 Agent、不触发 LLM/外发),
+    # 迁空后本端点即可正常删除共享行。
+    own_rule_ids = [
         row[0]
-        for row in db.query(PriceAlertRule.id).filter(
-            PriceAlertRule.stock_id == stock_id
-        ).all()
+        for row in db.query(PriceAlertRule.id)
+        .filter(PriceAlertRule.stock_id == stock_id, PriceAlertRule.user_id == uid)
+        .all()
     ]
-    if rule_ids:
-        db.query(PriceAlertHit).filter(PriceAlertHit.rule_id.in_(rule_ids)).delete(
+    has_unowned_rule = (
+        db.query(PriceAlertRule.id)
+        .filter(
+            PriceAlertRule.stock_id == stock_id,
+            or_(
+                PriceAlertRule.user_id.is_(None),
+                PriceAlertRule.user_id != uid,
+            ),
+        )
+        .first()
+    )
+    # 命中记录没有 user_id, 只能经 rule_id 判定: 规则缺失/非本人/已迁走 → 不能证明可删。
+    foreign_hit = (
+        db.query(PriceAlertHit.id)
+        .outerjoin(PriceAlertRule, PriceAlertRule.id == PriceAlertHit.rule_id)
+        .filter(
+            PriceAlertHit.stock_id == stock_id,
+            or_(
+                PriceAlertRule.id.is_(None),
+                PriceAlertRule.user_id.is_(None),
+                PriceAlertRule.user_id != uid,
+                # 规则仍是本人但已迁到别的自选: 命中历史不能被本行的级联删掉。
+                PriceAlertRule.stock_id != stock_id,
+            ),
+        )
+        .first()
+    )
+    if has_unowned_rule or foreign_hit:
+        logger.warning(
+            "拒绝删除自选: stock_id=%s 仍被非本人规则/命中引用(不泄露归属) user=%s",
+            stock_id,
+            uid,
+        )
+        db.rollback()
+        raise HTTPException(
+            409,
+            "该自选仍被其它数据引用，暂无法删除（删除会丢失历史记录）。"
+            "如提醒规则属于你本人，请在「价格提醒」页将其迁移到自己的私有自选后再试；"
+            "仍未解决请联系管理员。",
+        )
+
+    try:
+        # 先删本人规则命中, 再删规则, 最后删 Agent 绑定/自选行 —— 显式清理不依赖
+        # 数据库 FK 级联(SQLite 默认可能未启用), 任何一步失败整单回滚。
+        # 每个 DELETE 都重复带上归属条件(而不是只信前面预检): 行锁已挡住并发插入,
+        # 这里再挡一层"预检后本行归属被改"的 TOCTOU, 少一条就少删一条。
+        if own_rule_ids:
+            db.query(PriceAlertHit).filter(
+                PriceAlertHit.rule_id.in_(own_rule_ids)
+            ).delete(synchronize_session=False)
+            db.query(PriceAlertRule).filter(
+                PriceAlertRule.id.in_(own_rule_ids),
+                PriceAlertRule.user_id == uid,
+            ).delete(synchronize_session=False)
+        db.query(StockAgent).filter(StockAgent.stock_id == stock_id).delete(
             synchronize_session=False
         )
-    db.query(PriceAlertHit).filter(PriceAlertHit.stock_id == stock_id).delete(
-        synchronize_session=False
-    )
-    db.query(PriceAlertRule).filter(PriceAlertRule.stock_id == stock_id).delete(
-        synchronize_session=False
-    )
-    db.query(StockAgent).filter(StockAgent.stock_id == stock_id).delete(
-        synchronize_session=False
-    )
+        # 用 bulk DELETE 的 rowcount 判定"这次是否真的删到了":
+        # 并发双删时另一个事务已删, 这里 0 行 → 幂等 404, 不报 200 也不 500。
+        # 归属条件同时是防线: 只有仍是本人私有 / 仍是共享(NULL)的行走得掉。
+        own_scope = (
+            Stock.user_id.is_(None) if db_stock.user_id is None else Stock.user_id == uid
+        )
+        deleted = (
+            db.query(Stock)
+            .filter(Stock.id == stock_id, own_scope)
+            .delete(synchronize_session=False)
+        )
+        if not deleted:
+            db.rollback()
+            raise HTTPException(404, "股票不存在")
+        db.commit()
+    except StaleDataError:
+        # 并发双删: 另一请求已删掉本行 → 幂等 404, 不冒 500。
+        db.rollback()
+        if db.query(Stock.id).filter(Stock.id == stock_id).first() is None:
+            raise HTTPException(404, "股票不存在")
+        raise HTTPException(409, "该自选正在被其他操作修改，请刷新后重试")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("删除自选失败(整单回滚, 未删除): stock=%s err=%s", stock_id, e)
+        raise HTTPException(409, "该自选暂无法删除，请稍后重试")
 
-    db.delete(db_stock)
-    db.commit()
     return {"ok": True}
 
 
@@ -649,6 +817,24 @@ async def trigger_stock_agent(
         _sym = trigger_stock.symbol
         _nm = getattr(trigger_stock, "name", "") or _sym
         _mkt = getattr(trigger_stock, "market", "CN")
+        # 2026-10-29 三审(R4): 线程里不能碰请求级 ORM 对象(会话已关/跨线程懒加载),
+        # 且通知必须归**触发它的那个人**。旧 `_notify` 不传 user_id → notify_task_done
+        # 兜底推给 owner, member 手动触发的分析结果进了 owner 的站内信/渠道。这里在起
+        # 线程**之前**把标量 user_id 抓出来, 线程内只用这个字符串。
+        _uid = str(user.id) if getattr(user, "id", None) else None
+        # 四审: 完成通知的渠道集合同样按 agent/stock_agent 配置 + 归属解析一次, 最终
+        # 外发在通知中心按"归属 ∩ 选择集"再校验 —— 勾了 1 个渠道就只发 1 个。
+        _notify_channel_ids: list[int] | None
+        try:
+            from src.bootstrap.runtime import resolve_notify_channels_ex
+
+            _res = resolve_notify_channels_ex(
+                agent_name, sa.id if sa is not None else None, user_id=_uid
+            )
+            _notify_channel_ids = [int(c.id) for c in _res.channels]
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("解析通知渠道选择集失败(本轮不外发): %s", _e)
+            _notify_channel_ids = []
 
         def _notify(ok: bool, detail: str, started: float, status: str = "") -> None:
             try:
@@ -664,6 +850,8 @@ async def trigger_stock_agent(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     link=f"/portfolio?symbol={_sym}&market={_mkt}",
                     status=status,
+                    user_id=_uid,
+                    channel_ids=_notify_channel_ids,
                 )
             except Exception:
                 logger.exception("写入站内通知失败: %s %s", agent_name, _sym)
@@ -680,7 +868,7 @@ async def trigger_stock_agent(
                     suppress_notify=suppress_notify,
                     trace_id=trace_id,
                     force_refresh=force_refresh,
-                    user_id=user.id,
+                    user_id=_uid,
                 ))
                 if outcome.get("skipped"):
                     detail = str(outcome.get("content") or outcome.get("message") or "本次任务已跳过")

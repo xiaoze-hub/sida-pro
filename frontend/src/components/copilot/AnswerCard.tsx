@@ -27,6 +27,8 @@ import {
   stripDisclaimer,
   stripRiskTail,
 } from '@/components/copilot/answer-sections'
+import { EvidenceTraceNote } from '@/components/copilot/EvidenceTraceNote'
+import type { AnswerTrace } from '@/lib/copilot/evidence-provenance'
 import {
   ANSWER_ACTION_COPIED,
   ANSWER_ACTION_COPY,
@@ -238,11 +240,19 @@ export function AnswerCard({
   symbol,
   onFollowUp,
   onAnchoredPrice,
+  trace,
 }: {
   parsed: ParsedAnswer
   symbol?: string
   onFollowUp?: (question: string) => void
   onAnchoredPrice?: (a: AnchoredPrice) => void
+  /**
+   * 证据溯源（2026-10-29 P1，可选）。**由上层显式计算后传入** —— 卡片自己不去猜
+   * 「这条消息对应哪一轮 run」（消息表没有 run_id，唯一的文本匹配是推断）。
+   * 不传就不显示溯源条：老调用点版面零变化，也不会凭空冒出一条「来源」。
+   * 数据形状见 `lib/copilot/evidence-provenance.ts`。
+   */
+  trace?: AnswerTrace
 }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -444,12 +454,20 @@ export function AnswerCard({
                   <span className="min-w-0 text-foreground">
                     <AnchoredText text={body} onAnchor={onAnchoredPrice} />
                     {source ? (
+                      /*
+                       * 角标里的内容是**模型在正文里自己写的口径**（从括号尾巴拆出来的字），
+                       * 不是服务端核验过的来源。
+                       * 2026-10-29：上一版只把「未核验」写进 title —— 移动端/触屏根本看不到
+                       * title，角标读起来仍像「这是数据出处」。现在把它**写在角标正文里**：
+                       * `腾讯行情 · 模型自述·未核验`。宁可长一点，也不让一句模型自述冒充来源。
+                       */
                       <span
                         data-testid="copilot-evidence-source"
-                        title={`该条读数的来源口径：${source}`}
+                        title={`模型自述的口径（未核验）：${source}`}
                         className="ml-1 whitespace-nowrap rounded border border-border px-1 text-[12px] text-muted-foreground"
                       >
-                        {source}
+                        <span className="text-foreground">{source}</span>
+                        <span className="ml-1">· 模型自述·未核验</span>
                       </span>
                     ) : null}
                   </span>
@@ -471,6 +489,17 @@ export function AnswerCard({
             </button>
           ) : null}
         </section>
+      ) : null}
+
+      {/*
+        证据溯源（2026-10-29 P1，可选）：只有上层算好 trace 才出现。
+        它说的三件事都必须是真的 —— 逐句来源没有、run 是哪种关联、缺口几条。
+        不在这里现算：卡片拿不到「这条消息的 run_id」（消息表不存它）。
+      */}
+      {trace ? (
+        <div className="border-t border-border pt-1.5">
+          <EvidenceTraceNote trace={trace} rowCount={evidenceRows.length} />
+        </div>
       ) : null}
 
       {/* 6. 数据缺口（回答自己说没拿到的：单独一层，一条不丢，也不冒充读数） */}

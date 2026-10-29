@@ -881,24 +881,29 @@ def load_defense_lines(symbol: str, user_id: str | None = None) -> list[dict]:
     用户的纪律位(那是风控口径而非持仓口径字段), 且这里必须能区分"没设"与"设了但
     等于某个默认值" —— 只有原始列能表达。
 
-    user_id 隔离与其它持仓口径一致: 传了 user_id 就取"自己的 + 历史遗留全局(NULL)"。
+    user_id 隔离与其它持仓口径一致(2026-10-29 复审): **账户可见 AND 持仓可见**。
+    旧实现只过滤 `Position.user_id`, 他人私有账户里 user_id=NULL 的持仓照样被读出来
+    —— 用户的成本价与纪律位直接进了另一个人的预警文案。
     """
-    from sqlalchemy import or_
-
-    from src.db.models import Position, Stock
+    from src.core.portfolio_scope import account_user_scope_clause, position_user_scope_clause
+    from src.db.models import Account, Position, Stock
     from src.db.session import SessionLocal
+
+    uid = user_id or None  # 空串/None = 无会话 → 只留共享桶(None 两侧都 IS NULL)
 
     db = SessionLocal()
     try:
         q = (
             db.query(Position)
             .join(Stock, Stock.id == Position.stock_id)
-            .filter(Stock.symbol == symbol, Position.defense_price.isnot(None))
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Stock.symbol == symbol,
+                Position.defense_price.isnot(None),
+                account_user_scope_clause(uid),
+                position_user_scope_clause(uid),
+            )
         )
-        if user_id:
-            q = q.filter(or_(Position.user_id == user_id, Position.user_id.is_(None)))
-        else:
-            q = q.filter(Position.user_id.is_(None))
         return [
             {
                 "position_id": p.id,
@@ -984,10 +989,26 @@ class IntradayMonitorAgent(BaseAgent):
         )
 
     async def collect(self, context: AgentContext) -> dict:
-        """采集实时行情 + K线 + 历史分析"""
+        """采集实时行情 + K线 + 历史分析。
+
+        2026-10-29 三审(R7): 触发用户必须**显式**沿链条往下传。
+
+        证据(先证明再改): `StockData` 是行情 dataclass, **没有 id/user 字段**;
+        `collect()` 的返回 dict 也从来没有 `user_id`。于是 `build_prompt` 里
+        `_uid = data.get("user_id") or pos_info.get("user_id")` 恒为 None, 后面的
+        `load_defense_lines(symbol, user_id=None)` 只查共享桶 —— 用户自己设的防守线
+        永远不报警, 而 `push_notification(user_id=None)` 又把风险告警推成"无人归属"。
+        这里不靠 symbol 反查归属(同 symbol 多个租户都有行), 直接取 context.user 的
+        **标量 id** 放进 data, 让下游每一段都用同一个人。
+        """
+        _ctx_user = getattr(context, "user", None)
+        _trigger_uid = None
+        if _ctx_user is not None:
+            _trigger_uid = str(getattr(_ctx_user, "id", "") or "") or None
+
         if not context.watchlist:
             logger.warning("自选股列表为空，跳过盘中监测")
-            return {"stocks": [], "stock_data": None}
+            return {"stocks": [], "stock_data": None, "user_id": _trigger_uid}
 
         # SignalPack: 统一结构化输入（quote/technical/position）
         stock_config = context.watchlist[0] if context.watchlist else None
@@ -1003,6 +1024,7 @@ class IntradayMonitorAgent(BaseAgent):
                 "stocks": [],
                 "stock_data": None,
                 "skip_reason": msg,
+                "user_id": _trigger_uid,
             }
 
         builder = SignalPackBuilder()
@@ -1041,11 +1063,15 @@ class IntradayMonitorAgent(BaseAgent):
             agent_name="daily_report",
             stock_symbol="*",
             before_date=date.today(),
+            user_id=_ctx_user.id if _ctx_user is not None else None,
+            role=getattr(_ctx_user, "role", None) if _ctx_user is not None else None,
         )
         premarket_analysis = get_analysis(
             agent_name="premarket_outlook",
             stock_symbol="*",
             analysis_date=date.today(),
+            user_id=_ctx_user.id if _ctx_user is not None else None,
+            role=getattr(_ctx_user, "role", None) if _ctx_user is not None else None,
         )
 
         # 市场情绪 + 板块面 + 实时大盘指数(盘中情绪判断)
@@ -1081,6 +1107,18 @@ class IntradayMonitorAgent(BaseAgent):
             logger.warning(f"市场情绪采集失败: {e}")
             market_sentiment = {}
 
+        # 2026-10-29 五审 P1: 防守线外发必须用**真实用户代理配置的渠道选择集**,
+        # 不能再让 notify_center 自己扩到该用户全部渠道。解析失败/无渠道 → 空元组,
+        # 最终外发 fail-closed(站内仍有记录)。
+        _notify_channel_ids: tuple[int, ...] = ()
+        try:
+            from src.bootstrap.runtime import resolve_notify_channels_ex
+
+            _res = resolve_notify_channels_ex(self.name, user_id=_trigger_uid)
+            _notify_channel_ids = tuple(int(c.id) for c in (_res.channels or []))
+        except Exception as _ch_err:  # noqa: BLE001
+            logger.warning("防守线通知渠道解析失败(按无渠道处理): %s", _ch_err)
+
         return {
             "stocks": [stock_data] if stock_data else [],
             "stock_data": stock_data,
@@ -1094,6 +1132,13 @@ class IntradayMonitorAgent(BaseAgent):
             "symbol_context": symbol_context,
             "quality_overview": quality_overview,
             "timestamp": datetime.now().isoformat(),
+            # 触发用户(标量 id): 防守线查询 / 风险告警外发都只认这一个归属。
+            "user_id": _trigger_uid,
+            # 该用户在 intraday_monitor 上配置的渠道选择集(与 context.notifier 同源)。
+            "notify_channel_ids": list(_notify_channel_ids),
+            # 2026-10-30 复审: 静默触发(suppress_notify)必须一路传到外发点 ——
+            # 一次性的"只生成建议"触发不能真发微信/钉钉告警。
+            "suppress_notify": bool(getattr(context, "suppress_notify", False)),
         }
 
     def build_prompt(self, data: dict, context: AgentContext) -> tuple[str, str]:
@@ -1707,8 +1752,15 @@ class IntradayMonitorAgent(BaseAgent):
                 lines.append(f"- 浮动盈亏：{pnl_pct:+.1f}%{pnl_note}")
                 lines.append(f"- 账户可用：{acc_funds:.0f} 元")
         else:
-            lines.append("\n## 未持仓（仅关注）")
-            lines.append("- 可用资金充足，可考虑建仓")
+            scope_note = getattr(context.portfolio, "scope_note", None)
+            if scope_note:
+                # 2026-10-29: 上下文未知 ≠ 没有持仓, 不许据"看不到"下"未持仓"的结论。
+                lines.append("\n## 持仓情况：未知")
+                lines.append(f"- 原因：{scope_note}")
+                lines.append("- 无法确认是否持仓，不得断言\"未持有\"或据此给出建仓口径")
+            else:
+                lines.append("\n## 未持仓（仅关注）")
+                lines.append("- 可用资金充足，可考虑建仓")
 
         # 历史分析上下文（帮助 AI 做出更好的判断）
         daily_analysis = data.get("daily_analysis")
@@ -1963,9 +2015,14 @@ class IntradayMonitorAgent(BaseAgent):
         # 用户自设防守线击穿预警(方案 B 2026-10-23)
         # 口径: 只认 positions.defense_price(用户自己设的绝对价)。未设置 → 跳过,
         # 不再默认 -8% —— 系统臆造的纪律位不该替用户报警。
-        pos_info = data.get("position") or {}
         try:
-            _uid = data.get("user_id") or pos_info.get("user_id")
+            # 2026-10-29 三审(R7): 只认 collect() 显式带下来的触发用户。
+            # 旧写法 `data.get("user_id") or pos_info.get("user_id")` 两个键都不存在,
+            # 恒 None → 只查共享桶(用户自己设的防守线永不触发), 且告警无归属。
+            # 这里**不**按 symbol 反查 Stock/Position 归属: 同一 symbol 多个租户都有行,
+            # 反查就是"猜归属", 会把 A 的成本/防线算到 B 头上。
+            _uid = data.get("user_id") or None
+
             cur_price = getattr(stock, "current_price", None)
             for line in load_defense_lines(stock.symbol, user_id=_uid):
                 verdict = evaluate_defense_breach(
@@ -1978,8 +2035,12 @@ class IntradayMonitorAgent(BaseAgent):
                 loss_txt = (
                     f"浮亏 {verdict['loss_pct']:.2f}%，" if verdict.get("loss_pct") is not None else ""
                 )
+                from src.core.numutil import finite_float as _finite
+
+                _cost = _finite(line.get("cost_price"))
+                cost_txt = f"成本 {_cost:.2f}，" if _cost is not None else "成本未知，"
                 alert_line = (
-                    f"🚨【触发防守线警报】：成本 {float(line.get('cost_price') or 0):.2f}，"
+                    f"🚨【触发防守线警报】：{cost_txt}"
                     f"现价 {verdict['current_price']:.2f}，{loss_txt}"
                     f"已跌破用户设定防守线 {verdict['defense_price']:.2f}，"
                     f"请执行你自己定下的纪律，别临场改口！"
@@ -1988,14 +2049,24 @@ class IntradayMonitorAgent(BaseAgent):
                 # 2026-10-16: 击穿直接触发微信/钉钉等外部高优先级通道外发
                 try:
                     from src.core.notify_center import push_notification
+
+                    # 2026-10-29 五审 P1: 必须带**该用户代理配置的渠道选择集**;
+                    # 缺失/为空 → notify_center 一条都不外发(fail-closed), 站内仍留痕。
+                    # 2026-10-30 复审: suppress_notify 时只落站内、不外部推送 ——
+                    # 一次性"仅生成建议"的触发不能真发微信/钉钉告警。
+                    _suppressed = bool(data.get("suppress_notify"))
+                    _ch_ids = tuple(
+                        int(x) for x in (data.get("notify_channel_ids") or [])
+                    )
                     push_notification(
                         title=f"🚨【防守线击穿】{stock.name}（{stock.symbol}）",
                         body=alert_line,
                         category="risk_warning",
                         level="critical",
                         source="intraday_monitor",
-                        also_push=True,
+                        also_push=not _suppressed,
                         user_id=_uid,
+                        channel_ids=() if _suppressed else _ch_ids,
                     )
                 except Exception as n_err:
                     logger.warning(f"防守线微信外发异常: {n_err}")

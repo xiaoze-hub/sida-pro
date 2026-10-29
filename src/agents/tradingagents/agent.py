@@ -363,7 +363,12 @@ class TradingAgentsAgent(BaseAgent):
 
         # 0) 同日缓存命中(force_refresh=True 时跳过)
         if not force_refresh:
-            cached = self._try_cache_hit(stock)
+            _ctx_user = getattr(context, "user", None)
+            cached = self._try_cache_hit(
+                stock,
+                user_id=getattr(_ctx_user, "id", None) if _ctx_user is not None else None,
+                role=getattr(_ctx_user, "role", None) if _ctx_user is not None else None,
+            )
             if cached is not None:
                 logger.info(
                     f"[TA] 命中同日缓存 (agent=tradingagents symbol={stock.symbol})"
@@ -590,8 +595,10 @@ class TradingAgentsAgent(BaseAgent):
     def _make_trace_id(self, symbol: str) -> str:
         return f"ta-{symbol}-{int(datetime.now().timestamp())}"
 
-    def _try_cache_hit(self, stock) -> AnalysisResult | None:
-        """同标的同日是否已分析过 → 返回缓存的 AnalysisResult。"""
+    def _try_cache_hit(
+        self, stock, *, user_id: str | None = None, role: str | None = None
+    ) -> AnalysisResult | None:
+        """同标的同日是否已分析过 → 返回缓存的 AnalysisResult(仅限触发用户自己的行)。"""
         if self.cache_ttl_hours <= 0:
             return None
         try:
@@ -599,6 +606,8 @@ class TradingAgentsAgent(BaseAgent):
                 agent_name=self.name,
                 stock_symbol=stock.symbol,
                 analysis_date=date.today(),
+                user_id=user_id,
+                role=role,
             )
         except Exception:
             return None

@@ -7,6 +7,7 @@ import { useStocksDerived } from './stocks/useStocksDerived'
 import { useStocksActions } from './stocks/useStocksActions'
 import { StocksHeader } from './stocks/StocksHeader'
 import { PortfolioSummarySection } from './stocks/PortfolioSummarySection'
+import { PositionRiskSection } from './stocks/PositionRiskSection'
 import { StocksTabsBar } from './stocks/StocksTabsBar'
 import { AddStockDialog } from './stocks/AddStockDialog'
 import { AccountsSection } from './stocks/AccountsSection'
@@ -40,6 +41,7 @@ export default function StocksPage() {
       <div className="sida-page-enter">
         <StocksHeader />
         <PortfolioSummarySection />
+        <PositionRiskSection />
         <StocksTabsBar />
         <AddStockDialog />
         <AccountsSection />

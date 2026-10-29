@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 
 from src.agents.base import AgentContext, AccountInfo, PortfolioInfo, PositionInfo
 from src.bootstrap.agents import AGENT_REGISTRY
@@ -162,6 +163,7 @@ def load_portfolio_for_agent(agent_name: str, user_id: str | None = _UNSET) -> P
     (不传=不过滤 / None=遗留共享账户 / uuid=该用户账户)。
     """
     from src.web.models import Account, Position
+    from sqlalchemy import or_
 
     db = SessionLocal()
     try:
@@ -184,14 +186,20 @@ def load_portfolio_for_agent(agent_name: str, user_id: str | None = _UNSET) -> P
         account_infos = []
         for acc in accounts:
             # 获取该账户中属于关联股票的持仓
-            positions = (
-                db.query(Position)
-                .filter(
-                    Position.account_id == acc.id,
-                    Position.stock_id.in_(stock_ids),
-                )
-                .all()
+            pos_q = db.query(Position).filter(
+                Position.account_id == acc.id,
+                Position.stock_id.in_(stock_ids),
             )
+            # 2026-10-29: user_id=NULL 的共享账户可能混入其他用户建的 Position,
+            # 这里与 API 同口径在 SQL 层按持仓归属过滤, 不放宽成"账户可见即持仓可见"。
+            if user_id is not _UNSET:
+                if user_id is None:
+                    pos_q = pos_q.filter(Position.user_id.is_(None))
+                else:
+                    pos_q = pos_q.filter(
+                        or_(Position.user_id == user_id, Position.user_id.is_(None))
+                    )
+            positions = pos_q.all()
 
             position_infos = []
             for pos in positions:
@@ -232,9 +240,23 @@ def load_portfolio_for_agent(agent_name: str, user_id: str | None = _UNSET) -> P
         db.close()
 
 
-def load_portfolio_for_stock(stock_id: int) -> PortfolioInfo:
-    """从数据库加载单只股票的持仓信息"""
-    from src.web.models import Account, Position
+def load_portfolio_for_stock(stock_id: int, user_id: str | None = _UNSET) -> PortfolioInfo:  # type: ignore[assignment]
+    """从数据库加载单只股票的持仓信息(按租户隔离)。
+
+    2026-10-29 越权修复: 此前完全不看用户, 任何一次手动触发都把**全部账户**的持仓塞进
+    AI 上下文(他人的成本/数量/风格)。现在三次收敛, 口径与 `/api/positions` 一致
+    (账户可见 AND 持仓可见, 见 src.core.portfolio_scope):
+      - 传 user_id → 只看该用户可见的账户与持仓;
+      - 不传(系统调度) → 按标的归属 `stocks.user_id` 取租户 —— 没会话不等于全量;
+      - 标的也无归属(历史共享) → 只取历史共享桶(user_id IS NULL), 仍不是全表。
+
+    2026-10-29 复审补充: 最后那种"无会话 + 标的无归属"的情形**持仓上下文未知**
+    (个人私有账户里的持仓不可能被安全归因), 绝不猜 owner 去补全; 用
+    `PortfolioInfo.scope_note` 把这个事实和原因带到渲染层, 免得 AI 把"看不到"
+    说成"用户没有持仓"。
+    """
+    from src.core.portfolio_scope import user_scope_accounts, user_scope_positions
+    from src.web.models import Position
 
     db = SessionLocal()
     try:
@@ -247,36 +269,35 @@ def load_portfolio_for_stock(stock_id: int) -> PortfolioInfo:
         except ValueError:
             market = MarketCode.CN
 
-        accounts = db.query(Account).filter(Account.enabled == True).all()
+        scope_note = None
+        tenant = getattr(stock, "user_id", None) if user_id is _UNSET else user_id
+        if user_id is _UNSET and tenant is None:
+            scope_note = (
+                "本次触发没有用户会话, 且该标的没有归属用户, 无法确定持仓归属; "
+                "只能读取全局共享(user_id IS NULL)的账户与持仓, 个人私有账户的持仓未纳入"
+            )
+        accounts = user_scope_accounts(db, tenant, enabled_only=True).all()
+        positions_by_account: dict[int, list[Position]] = {}
+        for pos in user_scope_positions(db, tenant, stock_id=stock_id).all():
+            positions_by_account.setdefault(pos.account_id, []).append(pos)
 
         account_infos = []
         for acc in accounts:
-            pos = (
-                db.query(Position)
-                .filter(
-                    Position.account_id == acc.id,
-                    Position.stock_id == stock_id,
+            position_infos = [
+                PositionInfo(
+                    account_id=acc.id,
+                    account_name=acc.name,
+                    stock_id=stock.id,
+                    symbol=stock.symbol,
+                    name=stock.name,
+                    market=market,
+                    cost_price=pos.cost_price,
+                    quantity=pos.quantity,
+                    invested_amount=pos.invested_amount,
+                    trading_style=pos.trading_style or "swing",
                 )
-                .first()
-            )
-
-            position_infos = []
-            if pos:
-                position_infos.append(
-                    PositionInfo(
-                        account_id=acc.id,
-                        account_name=acc.name,
-                        stock_id=stock.id,
-                        symbol=stock.symbol,
-                        name=stock.name,
-                        market=market,
-                        cost_price=pos.cost_price,
-                        quantity=pos.quantity,
-                        invested_amount=pos.invested_amount,
-                        trading_style=pos.trading_style or "swing",
-                    )
-                )
-
+                for pos in positions_by_account.get(acc.id, [])
+            ]
             account_infos.append(
                 AccountInfo(
                     id=acc.id,
@@ -286,9 +307,20 @@ def load_portfolio_for_stock(stock_id: int) -> PortfolioInfo:
                 )
             )
 
-        return PortfolioInfo(accounts=account_infos)
+        return PortfolioInfo(accounts=account_infos, scope_note=scope_note)
     finally:
         db.close()
+
+
+def _stock_owner_id(stock) -> str | None:
+    """标的的显式归属用户 id; 取不到(非 ORM 对象/字段缺失/懒加载失败)一律 None。
+
+    None 在 `resolve_notify_channels` 里表示"共享桶"(fail-closed), 不扩大收件范围。
+    """
+    try:
+        return getattr(stock, "user_id", None)
+    except Exception:  # noqa: BLE001 —— 分离实例懒加载失败时按"无归属"处理
+        return None
 
 
 def _get_proxy() -> str:
@@ -361,22 +393,80 @@ def resolve_ai_model(
         db.close()
 
 
-def resolve_notify_channels(
+def _configured_channel_ids(db, agent_name: str, stock_agent_id: int | None) -> list[int] | None:
+    """配置里的渠道选择集合: stock_agent 覆盖 → agent 默认; 都没有返回 None。
+
+    这是一份**选择集合**(用户/管理员在 UI 上勾的那几个渠道), 不是"可用渠道全集"。
+    """
+    if stock_agent_id:
+        sa = db.query(StockAgent).filter(StockAgent.id == stock_agent_id).first()
+        if sa and sa.notify_channel_ids:
+            return [int(x) for x in sa.notify_channel_ids if x is not None]
+    agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
+    if agent and agent.notify_channel_ids:
+        return [int(x) for x in agent.notify_channel_ids if x is not None]
+    return None
+
+
+@dataclass(frozen=True)
+class ChannelResolution:
+    """一次渠道解析的结果 + **为什么**是这些(诚实告警, 不静默)。
+
+    reason 取值:
+      - `ok`               : 有渠道, 且(若配置适用)已按配置收窄;
+      - `no-config`        : 无配置选择集合, 用该归属可见的启用渠道;
+      - `config-not-applicable`: 配置里的渠道**全都不属于该归属**(那是别人的选集合)
+                            → 改用该归属自己的渠道, 并 warning 说明(不是静默超发);
+      - `config-not-permitted`: 配置不相交且该归属无渠道 → **不发**(不越权借用);
+      - `shared-bucket-empty`/`no-channels`: 该归属下一条启用渠道都没有 → **不发**, 如实告警。
+    """
+
+    channels: list[NotifyChannel]
+    scope: str  # "user" | "shared" | "legacy-agent"
+    reason: str
+    configured_ids: tuple[int, ...] = ()
+    dropped_ids: tuple[int, ...] = ()
+
+    def summary(self) -> str:
+        ids = [int(c.id) for c in self.channels]
+        return (
+            f"scope={self.scope} reason={self.reason} send_to={ids} "
+            f"configured={list(self.configured_ids)} dropped={list(self.dropped_ids)}"
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.channels
+
+
+def resolve_notify_channels_ex(
     agent_name: str, stock_agent_id: int | None = None, user_id: str | None = _UNSET  # type: ignore[assignment]
-) -> list[NotifyChannel]:
-    """解析通知渠道: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)。
+) -> ChannelResolution:
+    """渠道解析(带原因), `resolve_notify_channels` 是它的 channels 视图。
 
     M7(2026-09-10 多用户隔离): 传入具体 user_id 时, 只取**该用户自己的渠道 +
     全局共享(user_id IS NULL)渠道** —— 不再借用 agent 级全局渠道(那是 owner 的),
-    避免 A 的报告发到 B 的渠道。user_id 不传/为 None 时保持旧行为。
+    避免 A 的报告发到 B 的渠道。
+
+    2026-10-29 复审: **显式传 None 也走同一收敛口径**(只取共享渠道), 不再落回
+    "agent 级 / 系统默认"那套全租户配置 —— 没有用户会话时收件范围只能缩, 不能放。
+
+    2026-10-29 三审(R5): 上一版把"按用户收窄"做成了**无视配置选择集合** —— 用户在
+    agent/stock_agent 上只勾了 1 个渠道, 结果所有启用渠道都收到(静默超发); 反过来
+    配置里选的是别人的私有渠道时, 交集为空却被当成"没渠道"悄悄跳过。现在:
+      - 配置集合存在且与该归属有交集 → **只发交集**(只缩不扩);
+      - 配置与该归属完全不相交(选的是他人渠道/已禁用) → 配置对本次运行不适用,
+        改用**该归属自己的**启用渠道并 warning 留痕(不静默、不越权);
+      - 该归属本就没有启用渠道 → 一条不发, reason=…-empty, 同样 warning;
+      - 任何情况下都**不回退到 owner 的渠道**(没有用户会话 != 可以发给 owner)。
     """
     db = SessionLocal()
     try:
-        # 0) 指定用户: 用户渠道 ∪ 全局共享渠道(与 notify_center._build_notifier 同口径)
-        if user_id is not _UNSET and user_id is not None:
-            from sqlalchemy import or_ as _or_
+        from sqlalchemy import or_ as _or_
 
-            channels = (
+        if user_id is not _UNSET:
+            scope = "shared" if user_id is None else "user"
+            visible = (
                 db.query(NotifyChannel)
                 .filter(
                     NotifyChannel.enabled == True,  # noqa: E712
@@ -385,27 +475,79 @@ def resolve_notify_channels(
                         NotifyChannel.user_id.is_(None),
                     ),
                 )
+                .order_by(NotifyChannel.id.asc())
                 .all()
             )
+            configured = _configured_channel_ids(db, agent_name, stock_agent_id)
+            dropped: tuple[int, ...] = ()
+            if configured:
+                allowed_ids = {int(c.id) for c in visible}
+                wanted = set(configured)
+                picked = [c for c in visible if int(c.id) in wanted]
+                dropped = tuple(i for i in configured if i not in allowed_ids)
+                if picked:
+                    reason = "ok"
+                    if dropped:
+                        logger.warning(
+                            "[通知渠道] agent=%s 归属 %s 只允许 %s, 配置里另有 %s 被排除(不跨租户发送)",
+                            agent_name,
+                            user_id or "共享桶",
+                            sorted(allowed_ids & wanted),
+                            list(dropped),
+                        )
+                    channels = picked
+                elif visible:
+                    # 配置集合与本归属**完全不相交**: 那是别人的/已禁用的选择集合, 对本次
+                    # 运行不构成约束(否则 member 永远收不到自己的通知)。退回到**本归属
+                    # 可见**的渠道并**明确告警** —— 不是静默超发, 也绝不借用他人渠道。
+                    channels = list(visible)
+                    reason = "config-not-applicable"
+                    logger.warning(
+                        "[通知渠道] agent=%s 配置的渠道 %s 全不属于归属 %s, 改用该归属自己的启用渠道 %s"
+                        "(不会发给配置里的他人渠道)",
+                        agent_name,
+                        list(configured),
+                        user_id or "共享桶",
+                        sorted(allowed_ids),
+                    )
+                else:
+                    # 配置不相交, 且本归属一条可用渠道都没有 → 不发, 如实告警。
+                    channels = []
+                    reason = "config-not-permitted"
+                    logger.warning(
+                        "[通知渠道] agent=%s 配置的渠道 %s 均不属于归属 %s, 且该归属无可用渠道, "
+                        "本轮不发; 不会改用 owner/他人的渠道",
+                        agent_name,
+                        list(configured),
+                        user_id or "共享桶",
+                    )
+                configured_ids = tuple(configured)
+            else:
+                channels = list(visible)
+                configured_ids = ()
+                reason = "no-config" if channels else (
+                    "shared-bucket-empty" if scope == "shared" else "no-channels"
+                )
+            if not channels:
+                logger.warning(
+                    "[通知渠道] agent=%s 归属 %s 无可用启用渠道(reason=%s) —— 本轮不外发, "
+                    "站内仍可见; 不会兜底推给 owner",
+                    agent_name,
+                    user_id or "共享桶",
+                    reason,
+                )
             for ch in channels:
                 db.expunge(ch)
-            return channels
+            return ChannelResolution(
+                channels=channels,
+                scope=scope,
+                reason=reason,
+                configured_ids=configured_ids,
+                dropped_ids=dropped,
+            )
 
-        channel_ids = None
-
-        # 1. stock_agent 级别覆盖
-        if stock_agent_id:
-            sa = db.query(StockAgent).filter(StockAgent.id == stock_agent_id).first()
-            if sa and sa.notify_channel_ids:
-                channel_ids = sa.notify_channel_ids
-
-        # 2. agent 级别默认
-        if channel_ids is None:
-            agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
-            if agent and agent.notify_channel_ids:
-                channel_ids = agent.notify_channel_ids
-
-        # 3. 按 id 列表查询或取系统默认
+        # ---- 旧路径(完全没传 user_id, _UNSET): 保留 agent 级全局模板行为
+        channel_ids = _configured_channel_ids(db, agent_name, stock_agent_id)
         if channel_ids:
             channels = (
                 db.query(NotifyChannel)
@@ -424,12 +566,33 @@ def resolve_notify_channels(
                 )
                 .all()
             )
-
+        reason = "ok" if channels else "legacy-empty"
+        if not channels:
+            logger.warning(
+                "[通知渠道] agent=%s 旧路径(_UNSET)无默认渠道 -> 本轮不外发", agent_name
+            )
         for ch in channels:
             db.expunge(ch)
-        return channels
+        return ChannelResolution(
+            channels=channels,
+            scope="legacy-agent",
+            reason=reason,
+            configured_ids=tuple(channel_ids or ()),
+        )
     finally:
         db.close()
+
+
+def resolve_notify_channels(
+    agent_name: str, stock_agent_id: int | None = None, user_id: str | None = _UNSET  # type: ignore[assignment]
+) -> list[NotifyChannel]:
+    """解析通知渠道: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)。
+
+    口径与原因见 `resolve_notify_channels_ex`(本函数只返回 channels, 保持老调用方不变)。
+    """
+    return resolve_notify_channels_ex(
+        agent_name, stock_agent_id, user_id=user_id
+    ).channels
 
 
 def _build_notifier(channels: list[NotifyChannel]) -> NotifierManager:
@@ -869,6 +1032,7 @@ async def _trigger_agent_once(
                 trace_id=trace_id,
                 trigger_source="manual",
                 model_label=context.model_label,
+                user_id=user_id,
             )
             return msg
         else:
@@ -889,6 +1053,7 @@ async def _trigger_agent_once(
                 ),
                 notify_sent=bool(raw.get("notified", False)),
                 model_label=context.model_label,
+                user_id=user_id,
             )
             return result.content
     except Exception as e:
@@ -900,6 +1065,7 @@ async def _trigger_agent_once(
             trace_id=trace_id,
             trigger_source="manual",
             model_label=context.model_label,
+            user_id=user_id,
         )
         raise
 
@@ -974,11 +1140,20 @@ async def trigger_agent_for_stock(
         market=market,
     )
 
-    # 加载该股票的持仓信息
-    portfolio = load_portfolio_for_stock(stock.id)
+    # 加载该股票的持仓信息(按触发用户隔离; 系统调度无会话 → 按标的归属收敛, 绝不取全表)
+    portfolio = load_portfolio_for_stock(stock.id, user_id if user_id else _UNSET)
 
     model, service = resolve_ai_model(agent_name, stock_agent_id)
-    channels = [] if suppress_notify else resolve_notify_channels(agent_name, stock_agent_id)
+    if suppress_notify:
+        channels = []
+    else:
+        # 通知渠道与组合上下文同一作用域(2026-10-29 复审):
+        # 触发用户 → 标的显式归属 → 显式共享桶(None, fail-closed)。
+        # 旧代码不传 user_id, 于是落回 agent/stock_agent 级配置 —— 那是 owner 的私有
+        # 渠道, member 手动触发会把分析发进 owner 的群。缺会话时也绝不扩大到全租户。
+        channels = resolve_notify_channels(
+            agent_name, stock_agent_id, user_id=_stock_owner_id(stock) if not user_id else user_id
+        )
     _log_trigger_info(agent_name, [stock], model, service, channels)
 
     ai_client = _build_ai_client(model, service, proxy)
@@ -1058,7 +1233,9 @@ async def trigger_agent_for_stock(
             record_agent_run(
                 agent_name=agent_name,
                 status="success",
-                result=result.content,
+                # 无归属(系统调度代跑某只股票)时不把私有正文写进可被枚举的运行记录:
+                # trace_id 由 symbol+毫秒拼成, 任何登录用户都能猜。
+                result=result.content if user_id else "已完成(无归属运行, 正文不落共享记录)",
                 duration_ms=int((time.monotonic() - start) * 1000),
                 trace_id=trace_id,
                 trigger_source="manual",
@@ -1069,6 +1246,7 @@ async def trigger_agent_for_stock(
                 ),
                 notify_sent=bool(raw.get("notified", False)),
                 model_label=model_label,
+                user_id=user_id,
             )
         except Exception as e:
             record_agent_run(
@@ -1079,6 +1257,7 @@ async def trigger_agent_for_stock(
                 trace_id=trace_id,
                 trigger_source="manual",
                 model_label=model_label,
+                user_id=user_id,
             )
             raise
 

@@ -164,7 +164,12 @@ describe('③ 来源可读：尾部口径括号拆成来源标记，原文不丢
     render(<AnswerCard parsed={parsed} />)
 
     const sources = screen.getAllByTestId('copilot-evidence-source')
-    expect(sources.map((s) => s.textContent)).toEqual(['腾讯逐笔口径', '自算CYQ口径'])
+    // 2026-10-29：来源角标后面**可见地**跟一句「模型自述·未核验」
+    // （移动端没有 title），来源原文仍在最前面、一字不改。
+    expect(sources.map((s) => s.textContent)).toEqual([
+      '腾讯逐笔口径· 模型自述·未核验',
+      '自算CYQ口径· 模型自述·未核验',
+    ])
     const evidence = screen.getByTestId('copilot-answer-evidence')
     expect(evidence.textContent).toContain('逐笔主力净流出 552 万')
     expect(evidence.textContent).toContain('腾讯逐笔口径')

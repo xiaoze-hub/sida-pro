@@ -19,7 +19,10 @@ describe('持仓账户百分比: null 与 0 必须可分', () => {
 
   it('null → "--"(不是 0.00%), 0 → 带符号的 +0.00%(不是 --)', () => {
     expect(src).toMatch(/safeNum\(account\.total_pnl_pct\) === null \? '--'/)
-    expect(src).toMatch(/account\.total_pnl_pct >= 0 \? '\+' : ''/)
+    // 0 仍带 '+'（口径不变）: 符号由 signOf 统一给，0 → '+'、负 → safeFixed 自带 '-'
+    expect(src).toMatch(/signOf\(account\.total_pnl_pct\)/)
+    expect(src).not.toMatch(/account\.total_pnl >= 0 \? 'text-stock-up'/)
+    expect(src).toMatch(/pnlToneClass\(account\.total_pnl\)/)
   })
 })
 

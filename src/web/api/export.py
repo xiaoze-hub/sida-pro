@@ -11,9 +11,9 @@ import io
 import logging
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from src.core.portfolio_scope import user_scope_positions
 from src.web.database import get_db
 from src.web.api.auth import get_current_user
 from src.web.models import (
@@ -91,8 +91,7 @@ def export_portfolio(
     except Exception:
         pass
     positions = (
-        db.query(Position)
-        .filter(or_(Position.user_id == user.id, Position.user_id.is_(None)))
+        user_scope_positions(db, getattr(user, "id", None))
         .order_by(Position.account_id.asc(), Position.sort_order.asc(), Position.id.asc())
         .all()
     )
@@ -102,9 +101,7 @@ def export_portfolio(
         return _csv_response("portfolio.csv", headers, [])
 
     stock_ids = {p.stock_id for p in positions if p.stock_id}
-    stocks = (
-        db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []
-    )
+    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all() if stock_ids else []  # scoped-check: allow — stock_ids 全部来自上面已按归属过滤的持仓, 本查询仅补名称/行情, 不新增可见行
     stock_map = {s.id: s for s in stocks}
     quotes = _fetch_quotes_for_stocks(stocks) if stocks else {}
     hkd_rate = get_hkd_cny_rate()

@@ -244,6 +244,10 @@ def test_portfolio_quote_failure_marks_suspect(monkeypatch):
         name = "平安银行"
         market = "CN"
 
+    class FakeAccount:
+        id = 1
+        name = "测试账户"
+
     class FakeQuery:
         def join(self, *a, **k):
             return self
@@ -251,8 +255,11 @@ def test_portfolio_quote_failure_marks_suspect(monkeypatch):
         def filter(self, *a, **k):
             return self
 
+        def order_by(self, *a, **k):
+            return self
+
         def all(self):
-            return [(FakePos(), FakeStock())]
+            return [(FakePos(), FakeStock(), FakeAccount())]
 
     class FakeDB:
         def query(self, *a, **k):

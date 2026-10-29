@@ -62,9 +62,13 @@ def _quote_to_response(symbol: str, market: MarketCode, quote: dict | None) -> d
             "circulating_market_value": None,
             "quote_time": None,
             "quote_date": None,
+            "quote_time_kind": "",
+            "quote_date_basis": "",
             "daily_pnl_period": "unknown",
             "source": "",
             "source_latency_ms": 0,
+            "source_partial": False,
+            "source_missing": [],
         }
 
     quote_date = quote.get("quote_date")
@@ -89,10 +93,17 @@ def _quote_to_response(symbol: str, market: MarketCode, quote: dict | None) -> d
         "circulating_market_value": quote.get("circulating_market_value"),
         "quote_time": quote.get("quote_time"),
         "quote_date": quote_date,
+        # 时刻语义(源快照刷新 vs 成交)与日期证据来源：UI 据此标注，不猜。
+        "quote_time_kind": quote.get("quote_time_kind") or "",
+        "quote_date_basis": quote.get("quote_date_basis") or "",
         "daily_pnl_period": classify_quote_period(quote_date, market.value),
         # 2026-09-08 来源透传: 空字符串=未知源(前端显式标, 不编造)
         "source": quote.get("source") or "",
         "source_latency_ms": quote.get("source_latency_ms") or 0,
+        # 2026-10-29 复审: 这一条来自部分批次（同批还有标的没取到，代码见 source_missing）。
+        # 前端据此标「部分行情」，不得把本页的行数当整批覆盖。
+        "source_partial": bool(quote.get("source_partial") or False),
+        "source_missing": list(quote.get("source_missing") or []),
     }
 
 

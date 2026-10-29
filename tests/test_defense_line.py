@@ -174,6 +174,66 @@ def test_endpoint_is_user_isolated(db):
     assert position.defense_price is None  # 未被越权改写
 
 
+# ---------- ⑤ 非有限数: 入参拦截 + 历史脏值输出安全(2026-10-29) ----------
+# 缺陷: Pydantic 的 float 默认接受 NaN/Inf, 而端点校验 `value <= 0` 对 NaN 恒为 False
+# → NaN 被当"合法正数"写进 positions.defense_price; Inf 同理(inf > 0 为真)。
+# 后果: 防线判定静默失效(与任何价比较都是 False), 响应里还会出现非法 JSON token。
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_payload_model_rejects_non_finite_defense_price(bad):
+    """NaN/Inf 在 Pydantic 层就被拒(FastAPI 对请求体映射为 422), 不落 DB。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DefenseLineUpdate(defense_price=bad)
+
+
+@pytest.mark.parametrize("bad", [float("inf")])
+def test_create_payload_rejects_non_finite_values(bad):
+    """建仓同样不许把 Inf 当成本价/金额/防线(旧逻辑 inf > 0 → 直接入库)。"""
+    from pydantic import ValidationError
+
+    from src.web.api.accounts import PositionCreate
+
+    with pytest.raises(ValidationError):
+        PositionCreate(
+            account_id=1, stock_id=1, cost_price=bad, quantity=1, defense_price=bad
+        )
+
+
+class _ForceNonFinite:
+    """绕过 Pydantic 校验的最小载荷替身(模拟历史脏数据/内部调用)。"""
+
+    def __init__(self, value: float) -> None:
+        self.defense_price = value
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), float("-inf")])
+def test_non_finite_defense_price_never_reaches_db(db, bad):
+    """端点层也有一道有限性闸门: 即使绕过模型构造, 也不许写入 NaN/Inf。"""
+    user, position = _seed(db)
+    with pytest.raises(HTTPException) as exc:
+        set_position_defense_line(position.id, _ForceNonFinite(bad), db=db, user=user)
+    assert exc.value.status_code == 400
+    db.refresh(position)
+    assert position.defense_price is None
+
+
+@pytest.mark.parametrize("dirty", [float("nan"), float("inf"), 0.0, -1.0])
+def test_historical_non_finite_defense_price_is_emitted_as_unset(db, dirty):
+    """历史脏值输出必须安全: 按"未设置"返回 None, 且整份响应仍是合法 JSON。"""
+    import json
+
+    from src.web.api.accounts import _position_payload
+
+    _, position = _seed(db)
+    position.defense_price = dirty  # 库里的历史异常值(不回填、不改数据)
+    payload = _position_payload(position)
+    assert payload["defense_price"] is None
+    json.dumps(payload, allow_nan=False)  # 不得抛 ValueError(非法 JSON token)
+
+
 # ---------- ④ 取价失败: 显式降级, 不猜 ----------
 
 def test_missing_quote_returns_none_instead_of_guessing():

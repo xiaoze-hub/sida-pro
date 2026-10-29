@@ -23,6 +23,21 @@ export interface QuoteTick {
   change_pct?: number | null
   prev_close?: number | null
   name?: string
+  /**
+   * 行情源报时（可选，2026-10-29 起后端真的会下发）。
+   *
+   * `src/web/api/quote_stream.py::_proven_quote_stamp` 只透传**行情源报文自带**的时刻
+   * （腾讯 parts[30]）；源不报时（TQ 快照/降级源）就是 `null` + `daily_pnl_period=unknown`。
+   * 下游（`quote-ticks.applyQuoteTicks`）只有拿到非空 `quote_time` 才用它更新行情**时效**；
+   * 没有就只更价、时刻判未知。**绝不由前端补一个时刻**（假新鲜比没时刻更糟）。
+   */
+  quote_time?: string | null
+  quote_date?: string | null
+  /** 时刻语义：`snapshot_refresh`=CN 源快照刷新（非成交）/`vendor_stamp`=港美报时未核实。 */
+  quote_time_kind?: string | null
+  /** 日期证据来源：`daily_bar_close`=TQ 同标的日线收盘价配对（只证到日）。 */
+  quote_date_basis?: string | null
+  daily_pnl_period?: string | null
 }
 export type QuoteTickMap = Record<string, QuoteTick>
 /** connecting=首连/重连中; live=已连通; offline=未启用/无 token/鉴权失败 */

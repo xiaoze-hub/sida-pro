@@ -78,13 +78,21 @@ export function WatchlistDialogs() {
       </div>
       <div>
         <Label>可用资金（元）</Label>
+        {/* 编辑态 placeholder 不许写「0」：那会让人以为「空 = 0 元现金」。
+            空在编辑语义下是「保持原值不变」（后端 PUT 没有「清空成未知」的语义）。 */}
         <Input
           value={accountForm.available_funds}
           onChange={e => setAccountForm({ ...accountForm, available_funds: e.target.value })}
-          placeholder="0"
+          placeholder={editAccountId ? '留空 = 保持原值' : '0'}
           className="font-mono"
           inputMode="decimal"
+          data-testid="account-funds-input"
         />
+        <p className="mt-1 text-[12px] text-muted-foreground" data-testid="account-funds-hint">
+          {editAccountId
+            ? '留空表示保持已登记金额不变（后端不支持把已登记金额清空为「未知」）。'
+            : '留空将按 0 元登记：0 表示「账上确实没有现金」，不是「未知」。'}
+        </p>
       </div>
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="ghost" onClick={() => setAccountDialogOpen(false)}>取消</Button>

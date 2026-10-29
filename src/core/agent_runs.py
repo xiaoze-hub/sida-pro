@@ -19,6 +19,7 @@ def record_agent_run(
     notify_sent: bool = False,
     context_chars: int = 0,
     model_label: str = "",
+    user_id: str | None = None,
 ) -> None:
     """记录一次 Agent 运行结果到数据库。
 
@@ -34,10 +35,19 @@ def record_agent_run(
         notify_sent: 通知是否发送成功
         context_chars: prompt/context 字符数
         model_label: 本次运行使用的模型标识
+        user_id: 这次运行的**可信归属**（2026-10-29 四审）。
+
+    归属为什么要写进表里: `/api/agents/runs/{trace_id}/progress` 曾把
+    `user_id IS NULL` 当"系统公共任务"放行给任何登录用户, 而调度器写的偏偏是
+    `results[-1]` 的正文 + 可猜的 `sch-<agent>-<millis>` trace_id —— 于是任何
+    member 都能枚举出别人的报告。现在**没有可信归属就不写正文**(调用方保证),
+    并且读侧对 NULL 归属 fail-closed。
     """
+    uid = str(user_id) if user_id else None
     db = SessionLocal()
     try:
         db.add(AgentRun(
+            user_id=uid,
             agent_name=agent_name,
             status=status,
             trace_id=(trace_id or "")[:64],

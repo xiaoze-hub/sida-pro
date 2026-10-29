@@ -32,7 +32,7 @@ interface PositionRow {
   id: number
   symbol: string
   market?: string
-  cost_price: number
+  cost_price: number | null
   quantity: number
   current_price?: number | null
   pnl?: number | null

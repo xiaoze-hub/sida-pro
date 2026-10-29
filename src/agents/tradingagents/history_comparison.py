@@ -79,8 +79,14 @@ def build_history_comparison(
     stock_symbol: str,
     market: str = "CN",
     days: int = 90,
+    *,
+    user_id: str | None = None,
+    role: str | None = None,
 ) -> dict:
     """构建某只股票 TradingAgents 历史决策对比数据。
+
+    2026-10-29 五审: 只统计**调用者自己能读**的行(member=本人, owner=本人+NULL)。
+    旧实现查全库 → 任一登录用户能看到别人的 TA 决策/收益, 且该路由当时没有鉴权。
 
     Args:
         stock_symbol: 股票代码
@@ -97,6 +103,8 @@ def build_history_comparison(
     if not symbol:
         return {"items": [], "stats": _empty_stats()}
 
+    from src.core.analysis_history import analysis_history_scope_clause
+
     cutoff_date = (date.today() - timedelta(days=days)).isoformat()
 
     db = SessionLocal()
@@ -107,6 +115,7 @@ def build_history_comparison(
                 AnalysisHistory.agent_name == "tradingagents",
                 AnalysisHistory.stock_symbol == symbol,
                 AnalysisHistory.analysis_date >= cutoff_date,
+                analysis_history_scope_clause(user_id, role),
             )
             .order_by(AnalysisHistory.analysis_date.desc())
             .all()

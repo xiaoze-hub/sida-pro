@@ -36,6 +36,8 @@
  * 而服务端按 JWT 过滤、按 id 精确返回（他人的行精确指定 id 也看不到）。
  */
 
+import { dayOnlyDate, type KlineAnnotationMarker } from '@sida/biz-ui/klineEvents'
+
 // ---------------------------------------------------------------------------
 // 后端契约（可执行事实表：UI 文案与测试都读它，别在别处再抄一遍）
 // ---------------------------------------------------------------------------
@@ -150,6 +152,24 @@ export interface ServerAnnotationLine {
   ownerId: string
 }
 
+/**
+ * 能画到 K 线上的**纯时间点标注**（2026-10-29）。
+ *
+ * 与 {@link ServerAnnotationLine} 是**两条并列通道**（不是"没有价位的线"）：
+ *  - 价位线 = `price` 有值 → 画水平虚线；
+ *  - 时间点 = `price` 为 null、`ts` 是**日粒度** → 画该日 K 线上的 marker。
+ *
+ * 每个字段都能对回服务端行：`annotationId`（`kline_annotations.id`）、
+ * `actionId`（本人确认动作）、`date`（服务端 `ts`）、`label`/`tone`（服务端字段确定性映射）。
+ * 前端**不新增**任何服务端没有的事实：没有价位就不编价位，日期不是日粒度就不画。
+ */
+export interface ServerAnnotationMarker extends KlineAnnotationMarker {
+  symbol: string
+  market: string
+  period: string
+  ownerId: string
+}
+
 /** apply 响应里被证实"已确认"的标注动作（新契约：带 annotation_id + 落库明细）。 */
 export interface AppliedAnnotation {
   actionId: number
@@ -159,8 +179,14 @@ export interface AppliedAnnotation {
   market: string
   period: string
   label: string
-  price: number
+  /** 价位线标注的价位；纯时间点标注为 null（服务端 `price IS NULL`） */
+  price: number | null
   ts: string | null
+  /**
+   * 纯时间点标注的**日粒度**日期（`ts` 归一化后）；价位线为 null。
+   * 与 `ts` 的区别：`ts` 是服务端原文（用于逐字核对），`date` 是能落到 K 线上的那个日期。
+   */
+  date?: string | null
 }
 
 export type ParseRejectReason =
@@ -438,11 +464,17 @@ export type RowVerdict =
   | { ok: true; line: ServerAnnotationLine }
   | { ok: false; reason: 'owner' | 'action' | 'target' | 'price' | 'garbage'; message: string }
 
-/**
- * 单行核对：属主、确认动作、目标、价位、方向，全部逐字比对。
- * 这一层是"能不能上图"的唯一判断点 —— 顺序也影响文案：先身份，后目标。
+/** 身份/目标门禁（价位线与时间点两条通道共用）。
+ *
+ * 抽出来的唯一目的：**两条通道不许各写一套身份判断** —— 那正是"价位线核对了属主、
+ * 时间点标注忘了核对"这类漏洞的来源。顺序也固定：先身份（来源→属主→确认动作），后目标
+ * （代码→标的类型→市场→周期）。
  */
-export function verifyRow(row: ServerAnnotationRow, target: AnnotationTarget): RowVerdict {
+type RowGuard =
+  | { ok: true; ownerId: string; actionId: number; sym: string; period: string }
+  | { ok: false; reason: 'owner' | 'action' | 'target' | 'garbage'; message: string }
+
+function guardRow(row: ServerAnnotationRow, target: AnnotationTarget): RowGuard {
   const sym = normSymbol(target.symbol)
   const period = (target.period || '1d').trim()
   if (row.source !== 'ai') {
@@ -499,11 +531,23 @@ export function verifyRow(row: ServerAnnotationRow, target: AnnotationTarget): R
       message: `标注 #${row.id} 落库在 ${row.period} 周期，当前 K 线是 ${period}，不画。`,
     }
   }
+  return { ok: true, ownerId: row.ownerId, actionId: row.actionId, sym, period }
+}
+
+/**
+ * 单行核对：属主、确认动作、目标、价位、方向，全部逐字比对。
+ * 这一层是"能不能上图"的唯一判断点 —— 顺序也影响文案：先身份，后目标。
+ */
+export function verifyRow(row: ServerAnnotationRow, target: AnnotationTarget): RowVerdict {
+  const guard = guardRow(row, target)
+  if (!guard.ok) return { ok: false, reason: guard.reason, message: guard.message }
   if (row.price === null) {
+    // 纯时间点标注**不属于价位线图层**（它走 {@link verifyRowMarker} 的 marker 通道）。
+    // 这里如实说"走别的通道"，而不是说"图上没有对应图层"——后者已经不符合事实。
     return {
       ok: false,
       reason: 'price',
-      message: `标注 #${row.id} 没有价位（历史时间点标注），图上没有对应图层，不上图。`,
+      message: `标注 #${row.id} 是纯时间点标注（没有价位），不在价位线图层（按该日 marker 展示）。`,
     }
   }
   const kind = kindOfRow(row)
@@ -514,14 +558,71 @@ export function verifyRow(row: ServerAnnotationRow, target: AnnotationTarget): R
     ok: true,
     line: {
       annotationId: row.id,
-      actionId: row.actionId,
+      actionId: guard.actionId,
       price: row.price,
       kind,
       label: row.label,
       symbol: row.symbol,
       market: row.market,
       period: row.period,
-      ownerId: row.ownerId,
+      ownerId: guard.ownerId,
+    },
+  }
+}
+
+/** 时间点标注的单行核对结果。 */
+export type MarkerVerdict =
+  | { ok: true; marker: ServerAnnotationMarker }
+  | { ok: false; reason: 'owner' | 'action' | 'target' | 'price' | 'garbage'; message: string }
+
+/**
+ * 单行核对（时间点通道）：身份/目标与价位线**同一套门禁**（{@link guardRow}），
+ * 再要求"没有价位 + 有日粒度日期"。
+ *
+ * 为什么必须拒"带时分的 ts"：图上能定位的只有**某一根** K 线。`2026-10-28 10:00`
+ * 落在哪一根（5m/15m/1d）无法证明，贴到最近一根就是假定位 —— 服务端 ts-only 也只接受
+ * 日粒度（`actions._normalize_ts`），前端再守一次，防脏行/旧数据。
+ */
+export function verifyRowMarker(row: ServerAnnotationRow, target: AnnotationTarget): MarkerVerdict {
+  const guard = guardRow(row, target)
+  if (!guard.ok) return { ok: false, reason: guard.reason, message: guard.message }
+  if (row.price !== null) {
+    return {
+      ok: false,
+      reason: 'price',
+      message: `标注 #${row.id} 有价位，属于价位线通道，不在时间点图层。`,
+    }
+  }
+  if (!row.ts) {
+    return {
+      ok: false,
+      reason: 'price',
+      message: `标注 #${row.id} 既没有价位也没有时间点，图上没有位置可放。`,
+    }
+  }
+  const date = dayOnlyDate(row.ts)
+  if (!date) {
+    return {
+      ok: false,
+      reason: 'garbage',
+      message:
+        `标注 #${row.id} 的时间点（${row.ts}）不是日粒度，无法证明落在哪一根 K 线，` +
+        '不画（不给假定位）。',
+    }
+  }
+  return {
+    ok: true,
+    marker: {
+      annotationId: row.id,
+      actionId: guard.actionId,
+      date,
+      label: row.label,
+      tone: row.color === 'up' ? 'up' : row.color === 'down' ? 'down' : 'neutral',
+      note: row.note,
+      symbol: row.symbol,
+      market: row.market,
+      period: row.period,
+      ownerId: guard.ownerId,
     },
   }
 }
@@ -560,6 +661,75 @@ export function linesForTarget(rows: ServerAnnotationRow[], target: AnnotationTa
   }
   const lines = [...byLevel.values()].sort((a, b) => a.price - b.price)
   return { lines, rejected, merged }
+}
+
+/** 两条通道的核对汇总（价位线 + 时间点 marker）。 */
+export interface MarksVerdict {
+  /** 价位线（画水平虚线） */
+  lines: ServerAnnotationLine[]
+  /** 纯时间点标注（画该日 K 线 marker） */
+  markers: ServerAnnotationMarker[]
+  /** 逐条拒绝原因（如实上报，界面用来解释"为什么有的行没上图"） */
+  rejected: string[]
+  mergedLines: number
+  mergedMarkers: number
+}
+
+/**
+ * 行集合 → 两条通道的可画集合（2026-10-29）。
+ *
+ * 每条行**只走一条通道**：有价位走价位线，没价位但有日粒度时间点走 marker，
+ * 两者都没有/都非法一律拒绝。身份与目标核对两条通道共用 {@link guardRow} ——
+ * 也就是说"服务端确认动作/属主/标的类型/市场/周期"对 marker 与线是同一把尺子。
+ *
+ * 去重口径与 {@link linesForTarget} 一致（同一件事的重复确认只画一次，留较新的 id）。
+ */
+export function marksForTarget(rows: ServerAnnotationRow[], target: AnnotationTarget): MarksVerdict {
+  const rejected: string[] = []
+  const byLevel = new Map<string, ServerAnnotationLine>()
+  const bySlot = new Map<string, ServerAnnotationMarker>()
+  let mergedLines = 0
+  let mergedMarkers = 0
+  for (const row of [...rows].sort((a, b) => a.id - b.id)) {
+    if (row.price !== null) {
+      const verdict = verifyRow(row, target)
+      if (!verdict.ok) {
+        rejected.push(verdict.message)
+        continue
+      }
+      const key = `${verdict.line.kind}:${Math.round(verdict.line.price * 100)}`
+      const prev = byLevel.get(key)
+      if (prev) {
+        mergedLines += 1
+        if (verdict.line.annotationId > prev.annotationId) byLevel.set(key, verdict.line)
+        continue
+      }
+      byLevel.set(key, verdict.line)
+      continue
+    }
+    const verdict = verifyRowMarker(row, target)
+    if (!verdict.ok) {
+      rejected.push(verdict.message)
+      continue
+    }
+    const key = `${verdict.marker.date}|${verdict.marker.label}|${verdict.marker.tone}`
+    const prev = bySlot.get(key)
+    if (prev) {
+      mergedMarkers += 1
+      if (verdict.marker.annotationId > prev.annotationId) bySlot.set(key, verdict.marker)
+      continue
+    }
+    bySlot.set(key, verdict.marker)
+  }
+  return {
+    lines: [...byLevel.values()].sort((a, b) => a.price - b.price),
+    markers: [...bySlot.values()].sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : a.annotationId - b.annotationId,
+    ),
+    rejected,
+    mergedLines,
+    mergedMarkers,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -615,19 +785,49 @@ export function parseApplyResponse(raw: unknown): ParseResult<AppliedAnnotation>
   const period = nonEmptyString(d.period)
   const label = nonEmptyString(d.label)
   const price = positivePrice(d.price)
+  const ts = nonEmptyString(d.ts)
   const instrument = d.instrument === 'stock' || d.instrument === 'index' ? d.instrument : null
   if (symbol && isInstrumentAmbiguous(symbol) && instrument === null) {
     return { ok: false, reason: 'field', message: '确认响应缺少标的类型，无法区分股票与指数' }
   }
-  if (!symbol || !market || !period || !label || price === null) {
+  if (!symbol || !market || !period || !label) {
     return {
       ok: false,
       reason: 'field',
-      message: '确认响应的标注明细缺 symbol/market/period/label/price',
+      message: '确认响应的标注明细缺 symbol/market/period/label',
     }
   }
-  const ts = nonEmptyString(d.ts)
-  return { ok: true, value: { actionId, annotationId, instrument, symbol, market, period, label, price, ts } }
+  // 价位写了但非法（0/负数/非数字）→ 数据脏，不做"当成时间点标注"的降级
+  if (price === null && d.price !== null && d.price !== undefined) {
+    return { ok: false, reason: 'field', message: '确认响应的标注价位不是正数（数据非法）' }
+  }
+  /*
+   * 纯时间点标注（2026-10-29）：`price` 为 null 时必须有**日粒度**时间点。
+   * 带时分的 ts 无法证明落在哪一根 K 线（5m/15m/1d 都可能），服务端 ts-only 也只收日粒度
+   * （`actions._normalize_ts`）；这里再守一次，脏响应直接拒绝，不猜日期。
+   */
+  let date: string | null = null
+  if (price === null) {
+    if (!ts) {
+      return {
+        ok: false,
+        reason: 'field',
+        message: '确认响应的标注明细既没有价位也没有时间点，图上没有位置可放',
+      }
+    }
+    date = dayOnlyDate(ts)
+    if (!date) {
+      return {
+        ok: false,
+        reason: 'field',
+        message: `确认响应的时间点（${ts}）不是日粒度，无法证明落在哪一根 K 线`,
+      }
+    }
+  }
+  return {
+    ok: true,
+    value: { actionId, annotationId, instrument, symbol, market, period, label, price, ts, date },
+  }
 }
 
 /** apply 响应 → 精确目标（标的/市场/周期取自服务端落库明细，属主取自身份）。 */
@@ -647,11 +847,21 @@ export function targetOfApplied(applied: AppliedAnnotation, owner: string): Anno
  * 关联唯一依据 = `annotation_id`（服务端在同一事务里插入并回传）。label/price/ts 只做
  * **一致性核对**：读回的行与确认响应说的内容不一致 → 契约被破坏，拒画并说清哪一项不同。
  */
+/**
+ * 已对上号、可上图的标注：**价位线**或**时间点 marker**（两条通道并列）。
+ *
+ * 调用方必须按 `shape` 分支处理 —— 拿线去画 marker（或反过来）就是把一条没有价位的
+ * 标注编出一个价位。类型上强制分支，运行期就不会有人图省事。
+ */
+export type VerifiedAnnotation =
+  | { shape: 'line'; line: ServerAnnotationLine }
+  | { shape: 'marker'; marker: ServerAnnotationMarker }
+
 export function verifyAppliedRow(
   applied: AppliedAnnotation,
   rows: ServerAnnotationRow[],
   target: AnnotationTarget,
-): ParseResult<ServerAnnotationLine> {
+): ParseResult<VerifiedAnnotation> {
   const hits = rows.filter((row) => row.id === applied.annotationId)
   if (hits.length === 0) {
     return {
@@ -667,6 +877,40 @@ export function verifyAppliedRow(
   if (applied.instrument && row.instrument !== applied.instrument) {
     return { ok: false, reason: 'mismatch', message: '确认响应与读回记录的标的类型不一致，未画线。' }
   }
+
+  /*
+   * 纯时间点标注（2026-10-29）：确认响应没有价位 ⇒ 走 marker 通道。
+   * 核对口径与价位线一致（同一套 `guardRow`：属主/确认动作/标的/市场/周期），
+   * 只额外核对"读回来的是不是同一个日期"—— 日期不一样就是两条不同的事，
+   * 画上去等于把别的时间点冒充成刚确认的那一条。
+   */
+  if (applied.price === null) {
+    const verdictM = verifyRowMarker(row, target)
+    if (!verdictM.ok) return { ok: false, reason: 'mismatch', message: verdictM.message }
+    if (verdictM.marker.actionId !== applied.actionId) {
+      return {
+        ok: false,
+        reason: 'mismatch',
+        message: `标注 #${row.id} 关联的是动作 #${verdictM.marker.actionId}，不是刚才确认的动作 #${applied.actionId}，未上图。`,
+      }
+    }
+    if (row.label.trim() !== applied.label) {
+      return {
+        ok: false,
+        reason: 'mismatch',
+        message: `标注 #${row.id} 的读回标签（${row.label}）与确认响应（${applied.label}）不一致，未上图。`,
+      }
+    }
+    if (applied.date && verdictM.marker.date !== applied.date) {
+      return {
+        ok: false,
+        reason: 'mismatch',
+        message: `标注 #${row.id} 的时间点（${verdictM.marker.date}）与确认响应（${applied.date}）不一致，未上图。`,
+      }
+    }
+    return { ok: true, value: { shape: 'marker', marker: verdictM.marker } }
+  }
+
   const verdict = verifyRow(row, target)
   if (!verdict.ok) return { ok: false, reason: 'mismatch', message: verdict.message }
   if (verdict.line.actionId !== applied.actionId) {
@@ -690,7 +934,7 @@ export function verifyAppliedRow(
       message: `标注 #${row.id} 的时间点与确认响应不一致，未画线。`,
     }
   }
-  return { ok: true, value: verdict.line }
+  return { ok: true, value: { shape: 'line', line: verdict.line } }
 }
 
 // ---------------------------------------------------------------------------

@@ -177,12 +177,31 @@ def test_cross_user_isolation_private(db):
     assert _client_for(db, USER_A).get("/api/premarket/today").json()["empty"] is False
 
 
-def test_shared_record_visible_to_all(db):
-    """user_id=NULL 的全局共享记录, 任何登录用户都可见。"""
+def test_shared_record_is_owner_only(db):
+    """user_id=NULL 的历史底稿来源不明(可能是某人的持仓正文) → 只给 owner。
+
+    2026-10-29 五审: 旧契约"NULL 即全局共享"把别人的成本当公共数据; 现在 member
+    不可见, owner(数据责任人)可读。
+    """
+    from src.web.api.auth import get_current_user
+    from src.web.database import get_db
+    from src.web.api import premarket
+    from fastapi import FastAPI
+
     _add_record(db, None, TODAY, content="全局共享底稿")
     body = _client_for(db, USER_B).get("/api/premarket/today").json()
-    assert body["empty"] is False
-    assert "全局共享底稿" in body["content"]
+    assert body["empty"] is True
+
+    # owner 角色可读 NULL 历史(用独立 app 覆盖角色)。
+    app = FastAPI()
+    app.include_router(premarket.router, prefix="/api/premarket", tags=["premarket"])
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id="owner-x", role="owner"
+    )
+    owner_body = TestClient(app).get("/api/premarket/today").json()
+    assert owner_body["empty"] is False
+    assert "全局共享底稿" in owner_body["content"]
 
 
 def test_today_ignores_failed_status(db):

@@ -44,6 +44,11 @@ def backfill_tradingagents_suggestions(days: int = 7) -> dict:
         )
 
         for r in records:
+            # 2026-10-29 五审: NULL 归属的历史行来源不明(可能是某人的私有正文)。
+            # 回填到建议池会把这段内容变成"共享建议", 等于猜归属 → 跳过并计数。
+            if getattr(r, "user_id", None) is None:
+                skipped += 1
+                continue
             checked += 1
             raw = r.raw_data or {}
             sug = raw.get("suggestion") or {}
@@ -106,6 +111,7 @@ def backfill_tradingagents_suggestions(days: int = 7) -> dict:
                 reason=(sug.get("reason") or "")[:1000],
                 expires_hours=24,
                 ai_response=(r.content or "")[:2000],
+                user_id=str(r.user_id),
                 meta={
                     "cost_usd": raw.get("cost_usd", 0),
                     "decision": raw.get("decision", "HOLD"),

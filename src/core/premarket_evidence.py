@@ -576,6 +576,17 @@ def _collect_portfolio_block(
     db: Any, user_id: str | None, as_of: str, with_quotes: bool = True
 ) -> EvidenceBlock:
     """采集持仓及行情 (`positions` join `stocks` + `md_quote_rows`)。"""
+    # 2026-10-29 四审: 共享口径(user_id=None)不采任何持仓 —— 共享桶里仍是个人的历史
+    # 成本, 写进 scope=shared 的报告等于把它贴成「公共数据」。私有持仓只在按用户生成
+    # 的报告里出现。
+    if not user_id:
+        return _make_block(
+            [],
+            "missing",
+            reason="共享口径不含个人持仓(请到「持仓」页查看本人数据)",
+            source="positions",
+            as_of=as_of,
+        )
     if db is None:
         return _make_block(
             [],
@@ -585,15 +596,23 @@ def _collect_portfolio_block(
             as_of=as_of,
         )
     try:
-        from src.db.models import Position, Stock
+        from src.core.numutil import finite_float
+        from src.core.portfolio_scope import owned_account_clause, owned_position_clause
+        from src.db.models import Account, Position, Stock
 
         q = (
-            db.query(Position, Stock)
+            db.query(Position, Stock, Account)
             .join(Stock, Position.stock_id == Stock.id)
-            .filter(Position.quantity > 0)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Position.quantity > 0,
+                # 2026-10-29 五审: 私有证据块只认**严格本人双层归属**。
+                # 共享桶(NULL)是历史某人成本, 不得猜给当前用户; None 口径更不放开全表。
+                owned_account_clause(user_id),
+                owned_position_clause(user_id),
+            )
+            .order_by(Account.id.asc(), Position.id.asc())
         )
-        if user_id:
-            q = q.filter(Position.user_id == user_id)
         rows = q.all()
     except Exception as e:
         logger.warning("[证据层] 持仓读取失败: %s", e)
@@ -615,10 +634,12 @@ def _collect_portfolio_block(
         )
 
     sym_by_market: dict[str, list[str]] = {}
-    meta: dict[tuple[str, str], tuple[Any, Any]] = {}
-    for pos, st in rows:
+    meta: dict[tuple[str, str, int], tuple[Any, Any, Any]] = {}
+    for pos, st, acct in rows:
         sym_by_market.setdefault(st.market, []).append(st.symbol)
-        meta[(st.market, st.symbol)] = (pos, st)
+        meta[(st.market, st.symbol, int(acct.id))] = (pos, st, acct)
+    for market, syms in sym_by_market.items():
+        sym_by_market[market] = list(dict.fromkeys(syms))
 
     quote_map: dict[tuple[str, str], dict[str, Any]] = {}
     quote_err_msg = ""
@@ -637,24 +658,34 @@ def _collect_portfolio_block(
 
     items: list[dict[str, Any]] = []
     missing_quotes = 0
-    for (market, sym), (pos, st) in meta.items():
+    for (market, sym, _acct_id), (pos, st, acct) in meta.items():
         q_row = quote_map.get((market, sym))
+        cost = finite_float(pos.cost_price)
         row: dict[str, Any] = {
             "symbol": sym,
             "name": st.name,
             "market": market,
-            "cost_price": pos.cost_price,
-            "quantity": pos.quantity,
+            "account_id": int(acct.id),
+            "account_name": acct.name or "",
+            "quantity": int(pos.quantity),
             "trading_style": pos.trading_style or "swing",
         }
+        if cost is None:
+            row["cost_price"] = None
+            row["cost_unknown"] = True
+        else:
+            row["cost_price"] = cost
         if q_row:
-            row["current_price"] = q_row.get("current_price")
-            row["change_pct"] = q_row.get("change_pct")
-            row["prev_close"] = q_row.get("prev_close")
-            if pos.cost_price and q_row.get("current_price"):
-                row["pnl_pct"] = (
-                    (q_row["current_price"] - pos.cost_price) / pos.cost_price * 100
-                )
+            cur = finite_float(q_row.get("current_price"))
+            if cur is None:
+                row["quote_error"] = "行情缺失"
+                missing_quotes += 1
+            else:
+                row["current_price"] = cur
+                row["change_pct"] = finite_float(q_row.get("change_pct"))
+                row["prev_close"] = finite_float(q_row.get("prev_close"))
+                if cost:
+                    row["pnl_pct"] = (cur - cost) / cost * 100
         else:
             row["quote_error"] = "数据获取失败"
             missing_quotes += 1
@@ -696,6 +727,15 @@ def _collect_fund_structure_block(
     取数纪律：单票失败 → 跳过并计数，不伪造；全部失败 → `missing`；
     任一条 quality != ok → 整块标 `suspect`（数字仍透传，但带原因）。
     """
+    # 共享口径不读任何人的自选/持仓(同 _collect_portfolio_block 的理由)。
+    if not user_id:
+        return _make_block(
+            [],
+            "missing",
+            reason="共享口径不含自选/持仓, 四档结构无标的可算",
+            source="exday_daily/get_exday_data",
+            as_of=as_of,
+        )
     if db is None:
         return _make_block([], "missing", reason="数据库会话未提供",
                            source="exday_daily/get_exday_data", as_of=as_of)
@@ -704,24 +744,33 @@ def _collect_fund_structure_block(
     # 两段各自 try：自选表结构变了不该连带持仓也取不到。
     symbols: list[str] = []
     try:
+        from src.core.portfolio_scope import owned_stock_clause
         from src.db.models import Stock
 
-        q = db.query(Stock.symbol)
-        if user_id:
-            q = q.filter(Stock.user_id == str(user_id))
+        # 2026-10-29 五审: 私有证据块的自选只认严格本人(共享 NULL 不猜归属)。
+        q = db.query(Stock.symbol).filter(owned_stock_clause(user_id))
         for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():
             if sym:
                 symbols.append(str(sym).strip())
     except Exception as e:  # noqa: BLE001
         logger.debug("[证据层] 四档结构取自选失败: %s", e)
     try:
-        from src.db.models import Position, Stock
-
-        q = db.query(Stock.symbol).join(Position, Position.stock_id == Stock.id).filter(
-            Position.quantity > 0
+        from src.core.portfolio_scope import (
+            owned_account_clause,
+            owned_position_clause,
         )
-        if user_id:
-            q = q.filter(Position.user_id == user_id)
+        from src.db.models import Account, Position, Stock
+
+        q = (
+            db.query(Stock.symbol)
+            .join(Position, Position.stock_id == Stock.id)
+            .join(Account, Account.id == Position.account_id)
+            .filter(
+                Position.quantity > 0,
+                owned_account_clause(user_id),
+                owned_position_clause(user_id),
+            )
+        )
         for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():
             if sym:
                 symbols.append(str(sym).strip())
@@ -795,6 +844,12 @@ def collect(
     """采集盘前全部结构化证据。
 
     永不抛异常：任何子块失败均在块内标记 `quality="missing"` 并附带 `reason`。
+
+    `user_id` 作用域(2026-10-29 三审, fail-closed):
+      传 uid → 只采该用户可见的持仓/自选(账户可见 AND 持仓可见);
+      传 None(**显式共享桶**) → 只采 `Account.user_id IS NULL AND Position.user_id IS NULL`
+      与 `Stock.user_id IS NULL` 的历史共享项, **绝不**等于"全库所有用户"。
+    任何缺会话路径因此自然收敛, 报告不会再把别人的成本/仓位写进共享文件。
     """
     date_iso, _ = _normalize_date(date)
     as_of = _now_iso()

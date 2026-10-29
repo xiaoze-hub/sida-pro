@@ -112,7 +112,9 @@ def env(monkeypatch):
     monkeypatch.setattr(
         agents_mod,
         "_spawn_async_run",
-        lambda fn, *args, name=None, notify_label=None: spawned.append((args, name, notify_label)),
+        lambda fn, *args, name=None, notify_label=None, **kw: spawned.append(
+            (args, name, notify_label, kw.get("notify_user_id"))
+        ),
     )
 
     return {
@@ -134,10 +136,12 @@ def test_member_retries_own_failed_record(env):
     assert body["queued"] is True
     assert body["agent_name"] == "daily_report"
     assert len(env["spawned"]) == 1
-    args, name, notify = env["spawned"][0]
+    args, name, notify, owner = env["spawned"][0]
     assert args[0] == "daily_report"
     assert name == f"retry_history:{env['ids']['member_failed']}"
     assert notify == "盘后报告"
+    # 2026-10-30: 重试的完成通知必须回到触发者(否则落 NULL 共享桶, 本人看不到)
+    assert owner, "必须带触发者归属"
 
 
 def test_cannot_retry_someone_elses_record(env):
@@ -153,6 +157,14 @@ def test_owner_can_retry_system_row(env):
     r = env["client"].post(f"/api/history/{env['ids']['system_failed']}/retry")
     assert r.status_code == 200, r.text
     assert len(env["spawned"]) == 1
+
+
+def test_owner_cannot_retry_members_private_record(env):
+    """owner 只能额外重试 NULL 系统行, 不能替 member 执行其私有报告。"""
+    env["current"]["user_id"] = env["owner_id"]
+    r = env["client"].post(f"/api/history/{env['ids']['member_failed']}/retry")
+    assert r.status_code == 403
+    assert env["spawned"] == []
 
 
 def test_member_cannot_retry_system_row(env):
