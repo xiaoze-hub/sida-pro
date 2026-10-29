@@ -200,6 +200,41 @@ describe('多市场 / 多时区', () => {
     expect(currencyForMarket('HK')).toBe('HKD')
     expect(currencyForMarket('US')).toBe('USD')
   })
+
+  /**
+   * 实盘报文（2026-10-29 探测 qt.gtimg.cn）：
+   *   usAAPL parts[30] = '2026-10-28 16:00:01'（美东上一交易日收盘）
+   *   /stocks/markets/status US = { local_time: '06:56', local_date: '2026-10-29', status: 'pre_market' }
+   * 昨天的收盘价在今天的盘前**不许**当实时破位 —— 日期层不同天就已经是已知陈旧。
+   */
+  it('美股上一交易日收盘 + 今天盘前 ⇒ stale/period（实盘时间戳形态）', () => {
+    const verdict = resolveDefenseState({
+      price: 343.83,
+      defense: 350,
+      period: 'previous_trading_day',
+      quoteDate: '2026-10-28',
+      quoteTime: '2026-10-28T16:00:01-04:00',
+      market: { localTime: '06:56', localDate: '2026-10-29', status: 'pre_market' },
+    })
+    expect(verdict.freshness).toBe('stale')
+    expect(verdict.reason).toBe('period')
+    expect(verdict.state).toBe('stale')
+  })
+
+  it('港股的斜杠报时（2026/10/29 16:08:29）也能进日级比对', () => {
+    const verdict = resolveDefenseState({
+      price: 377.6,
+      defense: 390,
+      period: 'today',
+      quoteDate: '2026-10-29',
+      quoteTime: '2026-10-29T16:08:29+08:00',
+      market: { localTime: '18:56', localDate: '2026-10-29', status: 'after_hours' },
+    })
+    // 收盘后的当日最后一笔：可判，但只能叫「定格价」，绝不写实时。
+    expect(verdict.freshness).toBe('session_frozen')
+    expect(verdict.state).toBe('breached')
+    expect(verdict.ageMinutes).toBe(168)
+  })
 })
 
 describe('前端真消费后端 local_date（buildMarketSessions → 风险报告）', () => {

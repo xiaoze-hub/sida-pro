@@ -201,3 +201,33 @@ def test_tq_snapshot_does_not_fake_quote_time(monkeypatch):
     quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("002361", "CN")], {})
     assert len(quotes) == 1
     assert quotes[0].quote_time is None, "TQ 不提供报时，服务端时间不能冒充"
+
+
+# ---------------------------------------------------------------------------
+# 腾讯各市场的报时格式（实盘报文实测）
+# ---------------------------------------------------------------------------
+
+def test_tencent_quote_time_formats_are_market_aware():
+    """CN/HK/US 三个市场的 parts[30] 格式不同，都必须解析成**该市场时区**的时刻。
+
+    实盘报文（2026-10-29 探测 qt.gtimg.cn）：
+      - CN  sh600519: parts[30] = '20261029161457'        （14 位紧凑）
+      - HK  hk00700:  parts[30] = '2026/10/29 16:08:29'   （斜杠 + 空格）
+      - US  usAAPL:   parts[30] = '2026-10-28 16:00:01'   （横杠 + 空格，且是**上一交易日**）
+    旧实现只认 14 位紧凑格式 ⇒ 港美永远解析不出 quote_time ⇒ WS/防线永远判"时刻未知"。
+    """
+    from marketdata.vendors.tencent import _parse_quote_time
+
+    cn = _parse_quote_time("20261029161457", "CN")
+    assert cn is not None and cn.isoformat() == "2026-10-29T16:14:57+08:00"
+
+    hk = _parse_quote_time("2026/10/29 16:08:29", "HK")
+    assert hk is not None and hk.isoformat() == "2026-10-29T16:08:29+08:00"
+
+    us = _parse_quote_time("2026-10-28 16:00:01", "US")
+    assert us is not None and us.date().isoformat() == "2026-10-28"
+    assert str(us.tzinfo) == "America/New_York"
+
+    # 空/垃圾值仍然是 None（不猜时刻）
+    assert _parse_quote_time("", "CN") is None
+    assert _parse_quote_time("N/A", "US") is None

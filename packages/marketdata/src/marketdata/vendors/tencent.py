@@ -63,16 +63,40 @@ def _to_float(value: str | None) -> float | None:
         return None
 
 
+#: 腾讯 parts[30] 实测格式（2026-10-29 实盘报文，按市场不同）：
+#:   CN sh600519 = '20261029161457'（14 位紧凑）
+#:   HK hk00700  = '2026/10/29 16:08:29'（斜杠）
+#:   US usAAPL   = '2026-10-28 16:00:01'（横杠；**市场当地**时间，可能是上一交易日）
+_QUOTE_TIME_FORMATS = (
+    ("%Y%m%d%H%M%S", 14),
+    ("%Y-%m-%d %H:%M:%S", 19),
+    ("%Y/%m/%d %H:%M:%S", 19),
+)
+
+
 def _parse_quote_time(value: str | None, market: str) -> datetime | None:
+    """解析行情源自带的报时（parts[30]），按**市场时区**贴 tzinfo；解析不出给 None。
+
+    2026-10-29 F3: 旧实现只认 14 位紧凑格式 —— 港美报时是带分隔符的格式，于是
+    `quote_time` 恒为 None，WS/防线对港美永远只能判"时刻未知"（明明源给了时刻）。
+    这里按顺序试三种实测格式；都不匹配就返回 None（绝不猜、绝不用抓取时间顶替）。
+    """
     text = str(value or "").strip()
-    if len(text) < 14:
+    if not text:
         return None
-    try:
-        parsed = datetime.strptime(text[:14], "%Y%m%d%H%M%S")
-        timezone = _MARKET_TIMEZONES.get(market)
-        return parsed.replace(tzinfo=ZoneInfo(timezone)) if timezone else parsed
-    except (TypeError, ValueError):
+    parsed: datetime | None = None
+    for fmt, width in _QUOTE_TIME_FORMATS:
+        if len(text) < width:
+            continue
+        try:
+            parsed = datetime.strptime(text[:width], fmt)
+            break
+        except (TypeError, ValueError):
+            continue
+    if parsed is None:
         return None
+    timezone = _MARKET_TIMEZONES.get(market)
+    return parsed.replace(tzinfo=ZoneInfo(timezone)) if timezone else parsed
 
 
 def _parse_line(line: str, market: str) -> Quote | None:
