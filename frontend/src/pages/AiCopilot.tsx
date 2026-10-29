@@ -35,6 +35,14 @@ import { publicAssistantContent } from '@/lib/copilot/public-content'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
 import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
 import { MentionPicker, type MentionTab } from '@/components/copilot/MentionPicker'
+import { ChartContextChip } from '@/components/copilot/ChartContextChip'
+import {
+  chartContextKey,
+  chartContextPrompt,
+  readChartContext,
+  unpublishChartContext,
+  type ChartContext,
+} from '@/lib/copilot/chart-context'
 import { ConversationSidebar } from '@/components/copilot/ConversationSidebar'
 import { MessageActions } from '@/components/copilot/MessageActions'
 import { ToolTimeline } from '@/components/copilot/ToolTimeline'
@@ -335,6 +343,17 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const [streamNotice, setStreamNotice] = useState<string | null>(null)
   /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
   const [anchorSymbol, setAnchorSymbol] = useState('')
+  /**
+   * 图表上下文（P2, 2026-10-29）：从个股工作台带过来的**那一张图**的读数
+   * （类型/市场/周期/可视区间/已确认价位）。
+   *
+   * 只在「从工作台进参谋」时读取一次（`readChartContext` 按 账号+代码+市场 精确匹配，
+   * 同号多类型直接返回 null 不猜），之后不轮询、不自动取数 —— 用户屏幕上那张图是什么，
+   * 带过来的就是什么；图变了要重新从工作台进入。
+   *
+   * 失效点（任一发生即清空，绝不跟着串）：用户清除、锚点换标的、切历史会话。
+   */
+  const [chartCtx, setChartCtx] = useState<ChartContext | null>(null)
   /** 参谋卡只在用户主动点「看卡」时请求（brief 接口较重，常 10s+） */
   const [briefSymbol, setBriefSymbol] = useState('')
   // ── @ 提及（股票 / 内置智能体）──
@@ -402,7 +421,22 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setMsgs([])
     setError(null)
     setAnchorSymbol(entry.symbol)
+    /**
+     * P2(2026-10-29): 从个股工作台进来时，把「用户刚才盯的那张图」一起带上。
+     * 读的是工作台**真的发布过**的视图快照（`lib/copilot/chart-context`），
+     * 拿不到/同号歧义/别人的账号 → null；这里不猜、不请求。
+     */
+    setChartCtx(readChartContext(entry.symbol, entry.market ?? null))
   }, [entry, streaming, backgroundPending, detachStream])
+
+  /**
+   * 锚点换标的 → 工作台那张图的上下文立刻失效（P2 隔离）。
+   *
+   * 用**派生值**而不是 effect 清 state：用户改问 000776 时，600111 的区间/价位一个都不许跟着走。
+   * （effect 里比较 `anchorSymbol` 会读到上一轮的闭包值 —— 首帧锚点还是空串，刚带进来的上下文
+   *   会被自己当场清掉；派生值没有这个时序坑，渲染/发送两处也共用同一个判断。）
+   */
+  const activeChartCtx = chartCtx && chartCtx.symbol === anchorSymbol ? chartCtx : null
 
   /**
    * 上下文带入（P0）：从个股工作台/外部链接进来时带 `?symbol=600111`，
@@ -526,6 +560,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
 
   const openConversation = useCallback(async (id: number) => {
     detachStream() // 2026-10-28: 切会话即作废旧流的写入权, 连它占着的 loading/stage/齐套度一起收
+    // P2(2026-10-29): 切到历史会话 = 换了主人，工作台那张图的上下文不跟过去
+    // （那个会话的 initial_context 是它自己创建时的快照，塞别人的图只会误导）。
+    setChartCtx(null)
     try {
       const detail = await chatApi.getConversation(id)
       if (!mounted.current) return
@@ -680,12 +717,28 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
 
         let id = convId
         if (!id) {
+          /**
+           * P2(2026-10-29): 图表上下文只在这一轮标的与它一致时才算数 —— 隔离的最后一刀。
+           * 不一致（用户改问别的票）就当没带过，绝不把 A 的区间/价位塞进 B 的会话。
+           */
+          const chartForTurn = activeChartCtx && sym && activeChartCtx.symbol === sym ? activeChartCtx : null
+          const pageSnapshot =
+            initialContext.current?.symbol === sym && initialContext.current.pageContext
+              ? initialContext.current.pageContext
+              : `用户从【数智参谋】进入，当前标的 ${sym}。`
           const conv = await chatApi.createConversation(
             sym
               ? {
                   stock_symbol: sym,
                   stock_market: initialContext.current?.symbol === sym ? initialContext.current.market || marketOf(sym) : marketOf(sym),
-                  initial_context: initialContext.current?.symbol === sym && initialContext.current.pageContext ? initialContext.current.pageContext : `用户从【数智参谋】进入，当前标的 ${sym}。`,
+                  /**
+                   * 图表上下文与页面快照同路（会话级 `initial_context`，后端每轮都会附加到系统提示）。
+                   * 语境里明写"进入时快照 / 用户提问才引用 / 不得自动下单与画线"，
+                   * 由 `chartContextPrompt` 统一产出，避免两处措辞漂移。
+                   */
+                  initial_context: chartForTurn
+                    ? `${pageSnapshot}\n\n${chartContextPrompt(chartForTurn)}`
+                    : pageSnapshot,
                 }
               : { initial_context: '用户从【数智参谋】一级页进入，尚未指定标的。' },
           )
@@ -790,7 +843,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         }
       }
     },
-    [attach, convId, anchorSymbol, mentions, streaming, uploading, runsState, bgMode, runInBackground],
+    [attach, convId, anchorSymbol, mentions, streaming, uploading, runsState, bgMode, runInBackground, activeChartCtx],
   )
 
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
@@ -1150,12 +1203,26 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               onClick={() => {
                 setBriefSymbol('')
                 setAnchorSymbol('')
+                // 换标的 = 换图：图表上下文跟着作废，并连工作台那条发布一起撤掉
+                if (chartCtx) unpublishChartContext(chartContextKey(chartCtx))
+                setChartCtx(null)
               }}
               className="ml-auto text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
               {CONTEXT_ANCHOR_CLEAR}
             </button>
           </div>
+        ) : null}
+
+        {activeChartCtx ? (
+          <ChartContextChip
+            ctx={activeChartCtx}
+            onClear={() => {
+              // 用户明确清除：本地立刻消失，且撤掉工作台的发布 —— 下次进来不会自己复活。
+              unpublishChartContext(chartContextKey(activeChartCtx))
+              setChartCtx(null)
+            }}
+          />
         ) : null}
 
         {priceAnchor ? (
