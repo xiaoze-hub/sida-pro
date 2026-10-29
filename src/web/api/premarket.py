@@ -59,6 +59,8 @@ def _trigger_run(agent_name: str, user_id: str) -> None:
         user_id,
         name=f"trigger_agent:{agent_name}",
         notify_label="盘前分析",
+        # 2026-10-30 复审: 少了归属, 通知会落 NULL 共享桶(成员看不到也收不到外发)。
+        notify_user_id=user_id,
     )
 
 

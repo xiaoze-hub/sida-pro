@@ -308,6 +308,8 @@ def retry_history(
         user.id,
         name=f"retry_history:{history_id}",
         notify_label=(agent.display_name or record.agent_name),
+        # 2026-10-30 复审: 重试的完成通知必须回到触发者, 不能落 NULL 桶。
+        notify_user_id=str(getattr(user, "id", "") or "") or None,
     )
     logger.info(f"重试报告: id={history_id} agent={record.agent_name} user={user.id}")
     return RetryResponse(
