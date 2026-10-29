@@ -145,6 +145,41 @@ export interface KlineAnnotationMarker {
   note?: string | null
 }
 
+/**
+ * 时间点标注**没画上**的确切原因（2026-10-29 复审阻断 ④/⑤）。
+ *
+ * 只给一个 `skipped` 布尔会把三种完全不同的处境说成一句"没上图"：
+ *  - `not-daily`：当前不是日 K（分时/周/月）。日期只有"哪一天"，拿它去构造分钟时间戳
+ *    就是给用户编一个 00:00 的开盘时间 —— 一律不画，并说明只在日 K 上绘制；
+ *  - `out-of-range`：该日期早于/晚于已加载的日 K 区间（翻页前的历史、还没到的那天）；
+ *  - `no-bar`：日期在区间内但那一天没有 K 线（周末/节假日/停牌）；
+ *  - `no-data`：K 线没加载成功（还在加载或接口失败）—— 这是"无法确认"，不是"没有对应日 K"；
+ *  - `layer-hidden`：用户把时间点标注图层关了；
+ *  - `render-failed`：图表拒绝了这批 marker（LWC 抛错）—— 图层上并没有画出来。
+ */
+export type AnnotationMarkerSkipReason =
+  | 'not-daily'
+  | 'out-of-range'
+  | 'no-bar'
+  | 'no-data'
+  | 'layer-hidden'
+  | 'render-failed'
+
+/**
+ * 时间点标注的**真实落图结果**（由 `KlineChart` 回报，不是父组件假定）。
+ *
+ * 为什么要回报而不是按"服务端有行 = 已上图"播报：`markers` 只有落在**真有 K 线**的日期上
+ * 才画得出来。`drawn` 里的 id 必须真的进了图层（`setMarkers` 没抛错），
+ * 其它一律进 `skipped` 并带原因；界面据此说"已上图 / 该日没有 K 线 / 超出已加载范围 /
+ * 当前不是日 K / 图层已关闭 / 无法确认"，不假称已上图。
+ */
+export interface AnnotationMarkerDrawStatus {
+  /** 真的画到 K 线上的服务端标注 id（升序） */
+  drawn: number[]
+  /** 没画上的：原因 + 日期（按 annotationId 升序） */
+  skipped: Array<{ annotationId: number; date: string; reason: AnnotationMarkerSkipReason }>
+}
+
 // ---------------------------------------------------------------------------
 // 输入形状(后端 summary 的宽松子集, 只声明实际消费的字段)
 // ---------------------------------------------------------------------------

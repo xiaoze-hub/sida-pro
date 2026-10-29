@@ -25,6 +25,23 @@ import type { AnnotationSnapshot } from '@/lib/copilot/annotationLedger'
 import { SERVER_ANNOTATION_CONTRACT } from '@/lib/copilot/serverAnnotations'
 import { safeFixed } from '@/lib/format'
 
+import type { AnnotationMarkerSkipReason } from '@sida/biz-ui/klineEvents'
+
+/**
+ * 时间点标注"没画上"的逐种人话（2026-10-29 复审阻断 ④）。
+ *
+ * 一条都不能糊成"未上图"：用户需要据此知道下一步该做什么 ——
+ * 切回日 K、翻页到那一天、打开图层、还是等 K 线/重试。
+ */
+export const MARKER_SKIP_TEXT: Record<AnnotationMarkerSkipReason, string> = {
+  'not-daily': '当前不是日K周期，日期标注只在日K上绘制，未上图',
+  'no-bar': '该日没有 K 线（非交易日/停牌），未上图',
+  'out-of-range': '超出已加载的日K范围，未上图',
+  'no-data': 'K 线未加载成功，无法确认是否上图',
+  'layer-hidden': '时间点标注图层已关闭，未上图',
+  'render-failed': '图表未能绘制该标记，未上图',
+}
+
 /** 撤销不可用的原因（单一事实来源：后端契约里 undoSupported）。 */
 export const UNDO_UNAVAILABLE_NOTE = SERVER_ANNOTATION_CONTRACT.undoSupported
   ? ''
@@ -60,15 +77,20 @@ export function AnnotationLinkBar({
 
   /**
    * 时间点标注的落图状态（2026-10-29）：`drawn` = 图表真的画在该日 K 线上；
-   * `skipped` = 该日没有 K 线（周末/节假日/超出区间），图表没画；`unknown` = 图表还没回报。
+   * `skipped` = 图表没画，`reason` 说明为什么（不是日 K / 该日没有 K 线 / 超出已加载范围 /
+   * 图层关闭 / K 线没加载成功无法确认 / 图表拒绝绘制）；`unknown` = 图表还没回报。
    *
-   * 不按"服务端有行"就写"已上图" —— 这正是这一栏存在的意义。
+   * 不按"服务端有行"就写"已上图" —— 这正是这一栏存在的意义；也不把不同原因糊成
+   * 一句"未上图"（用户没法据此判断该切周期、该翻页、还是数据没加载出来）。
    */
-  const markerState = (annotationId: number): 'drawn' | 'skipped' | 'unknown' => {
-    if (!markerRender) return 'unknown'
-    if (markerRender.drawn.includes(annotationId)) return 'drawn'
-    if (markerRender.skipped.some((s) => s.annotationId === annotationId)) return 'skipped'
-    return 'unknown'
+  const markerState = (
+    annotationId: number,
+  ): { state: 'drawn' | 'skipped' | 'unknown'; reason: AnnotationMarkerSkipReason | null } => {
+    if (!markerRender) return { state: 'unknown', reason: null }
+    if (markerRender.drawn.includes(annotationId)) return { state: 'drawn', reason: null }
+    const hit = markerRender.skipped.find((s) => s.annotationId === annotationId)
+    if (hit) return { state: 'skipped', reason: hit.reason }
+    return { state: 'unknown', reason: null }
   }
 
   /** 两条通道统一成可渲染的行（价位线 / 时间点标注），确认块与撤销按钮共用一个 id。 */
@@ -81,16 +103,21 @@ export function AnnotationLinkBar({
       price: line.price,
       date: '',
       render: 'drawn' as const,
+      reason: null as AnnotationMarkerSkipReason | null,
     })),
-    ...markers.map((marker) => ({
-      shape: 'marker' as const,
-      annotationId: marker.annotationId,
-      label: marker.label,
-      kind: null,
-      price: null,
-      date: marker.date,
-      render: markerState(marker.annotationId),
-    })),
+    ...markers.map((marker) => {
+      const { state, reason } = markerState(marker.annotationId)
+      return {
+        shape: 'marker' as const,
+        annotationId: marker.annotationId,
+        label: marker.label,
+        kind: null,
+        price: null,
+        date: marker.date,
+        render: state,
+        reason,
+      }
+    }),
   ]
 
   // 线消失（撤销成功 / 切标的）后确认块必须收起：否则会留下一个指向
@@ -167,13 +194,13 @@ export function AnnotationLinkBar({
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             {rows.map((line) => {
               const inFlight = revoking.includes(line.annotationId)
-              // 时间点标注：说清"画上去了 / 该日没有 K 线没画 / 图表还没回报"——
-              // 三种状态不能混成一句"已确认"（用户会以为图上一定有记号）。
+              // 时间点标注：说清"画上去了 / 为什么没画 / 图表还没回报"——
+              // 几种状态不能混成一句"已确认"（用户会以为图上一定有记号）。
               const timeNote =
                 line.shape !== 'marker'
                   ? null
                   : line.render === 'skipped'
-                    ? '该日没有 K 线，未上图'
+                    ? MARKER_SKIP_TEXT[line.reason ?? 'no-data']
                     : line.render === 'unknown'
                       ? '等待图表回报落图结果'
                       : '已上图'
@@ -184,6 +211,9 @@ export function AnnotationLinkBar({
                   data-testid="copilot-annotation-line"
                   data-shape={line.shape}
                   data-marker-state={line.shape === 'marker' ? line.render : undefined}
+                  data-marker-reason={
+                    line.shape === 'marker' && line.reason ? line.reason : undefined
+                  }
                 >
                   {line.shape === 'marker' ? (
                     <>

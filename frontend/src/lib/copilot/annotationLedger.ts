@@ -26,6 +26,8 @@
 
 import { safeJwtPayload } from '@/lib/jwt'
 
+import type { AnnotationMarkerSkipReason } from '@sida/biz-ui/klineEvents'
+
 import {
   targetKey,
   type AnnotationTarget,
@@ -53,9 +55,13 @@ export interface AnnotationSnapshot {
    * 图表**实际**画上了哪些时间点标注（由 `KlineChart.onAnnotationMarkersDrawn` 回报）。
    *
    * `null` = 还没有图表回报（未上图/未加载完）。界面据此区分"已上图"与
-   * "该日没有 K 线、没上图" —— 不允许按"服务端有行"就自称已上图。
+   * "该日没有 K 线、超出已加载范围、当前不是日 K、图层关闭、无法确认" —— 不允许按
+   * "服务端有行"就自称已上图。`skipped[].reason` 是图表给的确切原因，状态条逐条念出来。
    */
-  markerRender: { drawn: number[]; skipped: Array<{ annotationId: number; date: string }> } | null
+  markerRender: {
+    drawn: number[]
+    skipped: Array<{ annotationId: number; date: string; reason: AnnotationMarkerSkipReason }>
+  } | null
   annotationIds: number[]
   actionIds: number[]
   /** 状态说明（refused/error 时是"为什么没上图"） */

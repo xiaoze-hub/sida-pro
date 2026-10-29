@@ -132,9 +132,14 @@ export async function requestAnnotations(
   let snap: AnnotationSnapshot
   if (total > 0) {
     // 说法把两条通道分开：几条线、几个时间点标记 —— 不让用户以为"都是线"。
+    // ⚠️ 时间点标记**不能**跟着说"已上图"（2026-10-29 复审阻断 ④）：价位线由图表直接画，
+    // marker 还要看"该日有没有日 K、当前是不是日 K 周期"。真实结果由图表回报
+    // （`onAnnotationMarkersDrawn`），这里只说"已接线、落图见图表回报"。
     const parts: string[] = []
     if (verdict.lines.length > 0) parts.push(`${verdict.lines.length} 条价位线`)
-    if (verdict.markers.length > 0) parts.push(`${verdict.markers.length} 个时间点标记`)
+    if (verdict.markers.length > 0) {
+      parts.push(`${verdict.markers.length} 个时间点标记（是否真的落图由图表回报）`)
+    }
     snap = {
       key: targetKey(target),
       phase: 'ready',
@@ -291,9 +296,13 @@ export async function linkConfirmedAnnotation(
       return AnnotationLedger.snapshot(stillView)
     }
 
-    // 合并的基线也必须是**视图键**的快照：服务端键里没有页面已经在画的那几条线，
-    // 拿它当基线会把同标的既有标注整批丢掉（复审阻断 ①）。
-    const current = AnnotationLedger.snapshot(stillView)
+    // 合并基线必须取 `baselineLines` / `baselineMarkers`，**不能**取 `snapshot()` 的
+    // `lines`/`markers`（2026-10-29 复审阻断 ③）：这次确认前面刚 `await` 过一次精确回读，
+    // 期间用户可能点了「重新读取」/后台刷新 —— `beginRequest` 会把快照置成 loading 并把
+    // lines/markers 清空。拿空快照当基线 `replaceLines` 就会把**图上其余标注整批抹掉**
+    // （既没有提示、也无法撤销回来）。baseline* 在 loading 窗口里回落到"上次已知的"那一份。
+    const currentLines = AnnotationLedger.baselineLines(stillView)
+    const currentMarkers = AnnotationLedger.baselineMarkers(stillView)
     // 市场写法不同（视图 CN / 落库 SH）时说明一句，避免用户以为"画错市场了"。
     const marketNote =
       (stillView.market || '').toUpperCase() !== (target.market || '').toUpperCase()
@@ -309,23 +318,24 @@ export async function linkConfirmedAnnotation(
       const marker = verified.value.marker
       AnnotationLedger.replaceLines(
         stillView,
-        current.lines,
+        currentLines,
         `已确认时间点标注 #${marker.annotationId}（${marker.date} ${marker.label}，` +
-          `动作 #${marker.actionId}）：已交给图表画在该日 K 线上；该日没有 K 线时不会上图（状态条会注明）` +
+          `动作 #${marker.actionId}）：已交给图表画在该日 K 线上（仅日K周期；当前不是日K` +
+          `或该日没有 K 线时不会上图，状态条会注明原因）` +
           marketNote,
-        { markers: mergeMarkers(current.markers, [marker]) },
+        { markers: mergeMarkers(currentMarkers, [marker]) },
       )
       return AnnotationLedger.snapshot(stillView)
     }
 
-    const merged = mergeSnapshotLines(current.lines, [verified.value.line])
+    const merged = mergeSnapshotLines(currentLines, [verified.value.line])
     AnnotationLedger.replaceLines(
       stillView,
       merged,
       `已确认并上图：${merged.map((l) => `${l.label} ${l.price}`).join('、')}（标注 #${merged
         .map((l) => l.annotationId)
         .join('、')}，动作 #${merged.map((l) => l.actionId).join('、')}）${marketNote}`,
-      { markers: current.markers },
+      { markers: currentMarkers },
     )
     return AnnotationLedger.snapshot(stillView)
   } catch (err) {

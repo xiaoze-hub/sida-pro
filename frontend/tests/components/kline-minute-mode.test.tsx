@@ -13,6 +13,19 @@ const KC = readFileSync(
   'utf-8',
 )
 
+/**
+ * 取出"marker / 价位线重绘 effect"的依赖标识符集合（只在该 effect 的依赖数组上认
+ * `props.tradeMarkers` 这一个特征项）。断言按**集合**而不是书写顺序，避免与行为无关的
+ * 顺序调整造成假红。
+ */
+function markerEffectDeps(source: string): string[] {
+  const found = [...source.matchAll(/\},\s*\[([^\]\n]*)\]\)/g)]
+    .map((m) => m[1].split(',').map((s) => s.trim()).filter(Boolean))
+    .find((deps) => deps.includes('props.tradeMarkers'))
+  if (!found) throw new Error('未找到 marker/价位线重绘 effect 的依赖数组')
+  return found
+}
+
 describe('KlineChart 分时接线(P1)', () => {
   it('新增 enableMinute 可选 prop, 且文档写明默认关(不影响旗舰页)', () => {
     expect(KC).toMatch(/enableMinute\?: boolean/)
@@ -60,8 +73,26 @@ describe('KlineChart 主力意图接线(P2 补搬)', () => {
 
   it('数据不足时不给方向(图例只在 renderable 时出现, 文案逻辑在 lib 单测里钉死)', () => {
     expect(KC).toMatch(/intentRenderable\(intent\) && intentLegend/)
-    // 重绘依赖必须带 intent 与标的/市场, 否则切股后箭头/价位线不刷新
-    expect(KC).toMatch(/props\.tradeMarkers, intent, props\.symbol, props\.market\]\)/)
+  })
+
+  it('重绘依赖必须带 intent、标的/市场与新增图层入参, 否则切股后箭头/价位线/时间点标注不刷新', () => {
+    // 2026-10-29 复审阻断 ①: 这里原先断言的是依赖数组的**字面量片段**
+    // (`props.tradeMarkers, intent, props.symbol, props.market])`) —— 只要在中间插入一个
+    // 新依赖(本次加了 `props.annotationMarkers, dataLen`)就假红, 而真正要钉的是
+    // "这些标识符在依赖集合里"，与书写顺序无关。改成解析依赖数组后按集合断言。
+    const deps = markerEffectDeps(KC)
+    expect(deps).toEqual(
+      expect.arrayContaining([
+        'intent',
+        'props.symbol',
+        'props.market',
+        'interval',
+        'props.tradeMarkers',
+        'props.annotationMarkers',
+        'props.layersVisible',
+        'props.priceLinesVisible',
+      ]),
+    )
   })
 })
 

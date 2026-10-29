@@ -41,6 +41,16 @@ const H = vi.hoisted(() => ({
   annotations: (() => Promise.resolve([])) as (url: string) => Promise<unknown>,
   /** DELETE /copilot/annotations/{id} 的响应 */
   revoke: (() => Promise.resolve({ ok: false })) as (url: string) => Promise<unknown>,
+  /** `/klines/{symbol}` 的响应（默认两只票的日线，可替换成失败/空数组） */
+  klines: ((_: string) =>
+    Promise.resolve({
+      klines: [
+        { date: '2026-03-05', open: 32, high: 33, low: 31, close: 32.93, volume: 1000 },
+        { date: '2026-03-06', open: 32.93, high: 34.2, low: 32.5, close: 33.5, volume: 1100 },
+      ],
+    })) as (url: string) => Promise<unknown>,
+  /** 让图层拒绝这批 marker（LWC 抛错）：验证"只有真画出来才算已上图" */
+  setMarkersThrows: false,
 }))
 
 vi.mock('@sida/api', () => ({
@@ -57,18 +67,18 @@ vi.mock('@sida/api', () => ({
     if (u.includes('/klines/')) {
       if (u.includes('/summary')) return Promise.resolve({})
       if (u.includes('/patterns') || u.includes('/wyckoff')) return Promise.resolve({ markers: [] })
-      return Promise.resolve({
-        klines: [
-          { date: '2026-03-05', open: 32, high: 33, low: 31, close: 32.93, volume: 1000 },
-          { date: '2026-03-06', open: 32.93, high: 34.2, low: 32.5, close: 33.5, volume: 1100 },
-        ],
-      })
+      return H.klines(u)
     }
     return Promise.resolve([])
   }),
 }))
 
-/** fetchAPI 的 DELETE 版本：生产代码走 `{ method: 'DELETE' }`，替身按 method 分流。 */
+/**
+ * fetchAPI 的 DELETE 版本：生产代码走 `{ method: 'DELETE' }`，替身按 method 分流。
+ *
+ * 另：`setMarkers` 在 `H.setMarkersThrows` 时对**含时间点标注的批次**抛错 —— 这是 LWC
+ * 真实会做的事（`Value is null` 之类），用来验证"图表拒绝了就不能说已上图"。
+ */
 vi.mock('lightweight-charts', async () => {
   const stub = await import('../../tests/stubs/lightweight-charts')
   const base = stub as unknown as {
@@ -109,13 +119,24 @@ vi.mock('lightweight-charts', async () => {
     }
     return chart
   }
+  /**
+   * 含时间点标注的批次是否应该被"图层"拒绝（模拟 LWC 抛 `Value is null` 之类）。
+   * 必须在工厂内部定义：`vi.mock` 的工厂会被提升，引用外部变量会在初始化前访问。
+   */
+  const rejects = (arr: unknown) =>
+    H.setMarkersThrows &&
+    Array.isArray(arr) &&
+    arr.some((m) => typeof (m as { annotationId?: unknown }).annotationId === 'number')
+
   return {
     ...base,
     createChart: wrappedCreateChart,
     createSeriesMarkers: (_series: unknown, initial?: unknown) => {
+      if (rejects(initial)) throw new Error('Value is null')
       if (Array.isArray(initial)) H.markers = initial as Array<Record<string, unknown>>
       return {
         setMarkers: (next: unknown) => {
+          if (rejects(next)) throw new Error('Value is null')
           H.markers = Array.isArray(next) ? (next as Array<Record<string, unknown>>) : []
         },
         detach: () => {},
@@ -212,9 +233,13 @@ function target(overrides: Partial<AnnotationTarget> = {}): AnnotationTarget {
 function Harness({
   symbol = '600111',
   instrument = 'stock' as 'stock' | 'index',
+  interval = '1d' as '1d' | '5m' | '1w' | '1mth',
+  annotationLayerVisible = true,
 }: {
   symbol?: string
   instrument?: 'stock' | 'index'
+  interval?: '1d' | '5m' | '1w' | '1mth'
+  annotationLayerVisible?: boolean
 }) {
   const t = target({ symbol, instrument })
   const { snapshot, priceLines, annotationMarkers: marks, reportMarkerRender } =
@@ -226,11 +251,12 @@ function Harness({
         symbol={symbol}
         market="CN"
         instrument={instrument}
-        initialInterval={'1d' as never}
+        initialInterval={interval as never}
         initialDays={120}
         height={360}
         supportPressure={priceLines}
         annotationMarkers={marks}
+        layersVisible={{ annotation: annotationLayerVisible }}
         onAnnotationMarkersDrawn={reportMarkerRender}
       />
     </div>
@@ -245,6 +271,14 @@ beforeEach(() => {
   H.markers = []
   H.live.clear()
   H.annotations = () => Promise.resolve([])
+  H.setMarkersThrows = false
+  H.klines = () =>
+    Promise.resolve({
+      klines: [
+        { date: '2026-03-05', open: 32, high: 33, low: 31, close: 32.93, volume: 1000 },
+        { date: '2026-03-06', open: 32.93, high: 34.2, low: 32.5, close: 33.5, volume: 1100 },
+      ],
+    })
 })
 
 afterEach(() => {
@@ -303,37 +337,56 @@ describe('② 刷新重读：不重复、不丢', () => {
 })
 
 describe('③ 该日没有 K 线（周末）→ 不画，且不说"已上图"', () => {
-  it('2026-03-07 是周六：marker 不出现，状态条写"该日没有 K 线，未上图"', async () => {
+  it('2026-03-07 是周六（区间内非交易日）：marker 不出现，状态条写"该日没有 K 线，未上图"', async () => {
+    // 区间要**跨过**周末：03-05 四、03-06 五、03-09 一 —— 03-07 落在区间内但那天没有 K 线，
+    // 这才是"该日没有 K 线"；区间外的日期另有 out-of-range 的说法（见 ③b）。
+    H.klines = () =>
+      Promise.resolve({
+        klines: [
+          { date: '2026-03-05', open: 32, high: 33, low: 31, close: 32.93, volume: 1000 },
+          { date: '2026-03-06', open: 32.93, high: 34.2, low: 32.5, close: 33.5, volume: 1100 },
+          { date: '2026-03-09', open: 33.5, high: 34.4, low: 33.1, close: 34, volume: 900 },
+        ],
+      })
     H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-03-07' })])
     render(<Harness />)
-    await waitFor(() =>
-      expect(screen.getByTestId('copilot-annotation-line').getAttribute('data-marker-state')).toBe(
-        'skipped',
-      ),
-    )
+    const line = await screen.findByTestId('copilot-annotation-line')
+    await waitFor(() => expect(line.getAttribute('data-marker-state')).toBe('skipped'))
+    expect(line.getAttribute('data-marker-reason')).toBe('no-bar')
     expect(annotationMarkers()).toHaveLength(0)
-    expect(screen.getByTestId('copilot-annotation-line').textContent).toContain('该日没有 K 线')
+    expect(line.textContent).toContain('该日没有 K 线')
+  })
+
+  it('③b 早于已加载区间的日期：说"超出已加载的日K范围"，不冒充"该日没有 K 线"', async () => {
+    H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-02-02' })])
+    render(<Harness />)
+    const line = await screen.findByTestId('copilot-annotation-line')
+    await waitFor(() => expect(line.getAttribute('data-marker-reason')).toBe('out-of-range'))
+    expect(annotationMarkers()).toHaveLength(0)
+    expect(line.textContent).toContain('超出已加载的日K范围')
   })
 })
 
 describe('④ 换标的立刻清掉旧 marker；迟到响应不污染新图', () => {
   it('迟到响应（旧标的）不会画到新标的图上', async () => {
-    let resolveOld: ((v: unknown) => void) | null = null
+    // 用对象属性承接 reject/resolve：`let x: fn | null = null` 在闭包里赋值会被 tsc 判成
+    // `null`（CFA 看不到回调里的赋值）→ `x?.()` 报 TS2349，`typecheck:tests` 直接红。
+    const pending: { resolve: ((v: unknown) => void) | null } = { resolve: null }
     H.annotations = (url) =>
       url.includes('symbol=600111') && !url.includes('ids=')
         ? new Promise((res) => {
-            resolveOld = res
+            pending.resolve = res
           })
         : Promise.resolve([])
     const view = render(<Harness symbol="600111" />)
-    await waitFor(() => expect(resolveOld).not.toBeNull())
+    await waitFor(() => expect(pending.resolve).not.toBeNull())
 
     // 还没回来就切到另一只票
     view.rerender(<Harness symbol="600519" />)
     await waitFor(() => expect(AnnotationLedger.currentTarget()?.symbol).toBe('600519'))
 
     // 旧请求这才回来（带一条 600111 的 marker）
-    resolveOld?.([row({ id: 91, symbol: '600111' })])
+    pending.resolve?.([row({ id: 91, symbol: '600111' })])
     await new Promise((r) => setTimeout(r, 50))
     expect(annotationMarkers()).toHaveLength(0)
     const snap = AnnotationLedger.snapshot(target({ symbol: '600519' }))
@@ -400,5 +453,214 @@ describe('⑦ 价位线通道不受影响', () => {
     const snap = AnnotationLedger.snapshot(target())
     expect(snap.lines.map((l) => [l.annotationId, l.price])).toEqual([[92, 33.5]])
     expect(snap.markers.map((m) => m.annotationId)).toEqual([91])
+  })
+})
+
+/**
+ * ⑧ K 线没到位（加载失败/空数组）时**不许拿上一只票的 K 线日期**说"已上图"。
+ *
+ * 复审阻断 ②：`rawKlinesRef` 是 marker 定位的唯一真源。旧实现换标的/失败时不清它，
+ * 于是"新标的加载失败"这件事被**前一只票的 K 线**盖住 —— 日期刚好对得上，一条根本没画的
+ * 标注被报成已上图。这里要的是：不画、且状态条说"K 线未加载成功，无法确认"。
+ */
+describe('⑧ K 线未就绪：不按旧 K 线判已上图', () => {
+  it('切到新标的且 K 线加载失败 → 不画 marker，状态条说"无法确认"', async () => {
+    H.annotations = () => Promise.resolve([row({ id: 91, symbol: '600111', ts: '2026-03-06' })])
+    const view = render(<Harness symbol="600111" />)
+    await waitFor(() =>
+      expect(screen.getByTestId('copilot-annotation-line').getAttribute('data-marker-state')).toBe(
+        'drawn',
+      ),
+    )
+
+    // 新标的：同一天也有时间点标注，但 K 线接口失败
+    H.klines = (u) =>
+      u.includes('600519') ? Promise.reject(new Error('K线服务不可用')) : Promise.resolve({ klines: [] })
+    H.annotations = () =>
+      Promise.resolve([
+        row({ id: 92, symbol: '600519', ts: '2026-03-06', label: '新标的点', action_id: 8 }),
+      ])
+    view.rerender(<Harness symbol="600519" />)
+
+    await waitFor(() => expect(AnnotationLedger.currentTarget()?.symbol).toBe('600519'))
+    await waitFor(() => expect(annotationMarkers()).toHaveLength(0))
+    const line = await screen.findByTestId('copilot-annotation-line')
+    expect(line.getAttribute('data-marker-state')).toBe('skipped')
+    expect(line.getAttribute('data-marker-reason')).toBe('no-data')
+    expect(line.textContent).toContain('无法确认')
+    // 账本里也不能留下"已上图"的结论
+    const snap = AnnotationLedger.snapshot(target({ symbol: '600519' }))
+    expect(snap.markerRender?.drawn).toEqual([])
+    expect(snap.markerRender?.skipped.map((s) => s.reason)).toEqual(['no-data'])
+  })
+
+  it('K 线返回空数组 → 同样不画、不说已上图', async () => {
+    H.klines = () => Promise.resolve({ klines: [] })
+    H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-03-06' })])
+    render(<Harness />)
+    const line = await screen.findByTestId('copilot-annotation-line')
+    await waitFor(() => expect(line.getAttribute('data-marker-state')).toBe('skipped'))
+    expect(line.getAttribute('data-marker-reason')).toBe('no-data')
+    expect(annotationMarkers()).toHaveLength(0)
+  })
+})
+
+/**
+ * ⑨ 日期只有"哪一天"：**只有日 K 能定位**。
+ *
+ * 复审阻断 ④：`fundBarTime('2026-03-06','5m')` 按本地零点解析 → 00:00 的分钟时间戳 ——
+ * 那不是任何一根分钟 K 线，是给用户编出来的开盘时间。周/月同理（一根周 K 不等于那一天）。
+ * 一律不画，并如实说"日期标注只在日 K 上绘制"。
+ */
+describe('⑨ 分时/周/月不定位日期标注（绝不编 00:00 假时间）', () => {
+  it('5分周期：一个时间点 marker 都不画，说明只在日K绘制', async () => {
+    H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-03-06' })])
+    render(<Harness interval="5m" />)
+    const line = await screen.findByTestId('copilot-annotation-line')
+    await waitFor(() => expect(line.getAttribute('data-marker-state')).toBe('skipped'))
+    expect(line.getAttribute('data-marker-reason')).toBe('not-daily')
+    expect(line.textContent).toContain('只在日K上绘制')
+    expect(annotationMarkers()).toHaveLength(0)
+    // 关键：没有 00:00 的假时间戳被送到图层
+    expect(H.markers.filter((m) => typeof m.annotationId === 'number')).toHaveLength(0)
+    expect(AnnotationLedger.snapshot(target()).markerRender?.drawn).toEqual([])
+  })
+
+  it('周K同理：不把日期贴到那根周 K 上', async () => {
+    H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-03-06' })])
+    render(<Harness interval="1w" />)
+    const line = await screen.findByTestId('copilot-annotation-line')
+    await waitFor(() => expect(line.getAttribute('data-marker-reason')).toBe('not-daily'))
+    expect(annotationMarkers()).toHaveLength(0)
+  })
+})
+
+/**
+ * ⑩ 图层关闭 / 图表拒绝：两种"没画上"的原因必须分开说。
+ *
+ * 复审阻断 ⑤：图层隐藏是用户自己关的；`render-failed` 是图表把批次拒了。
+ * 都不许说成"已上图"，也不许和"该日没有 K 线"混成一个说法。
+ */
+describe('⑩ 图层关闭与绘制失败：状态诚实', () => {
+  it('时间点标注图层关闭 → 不画，说明图层已关闭', async () => {
+    H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-03-06' })])
+    render(<Harness annotationLayerVisible={false} />)
+    const line = await screen.findByTestId('copilot-annotation-line')
+    await waitFor(() => expect(line.getAttribute('data-marker-state')).toBe('skipped'))
+    expect(line.getAttribute('data-marker-reason')).toBe('layer-hidden')
+    expect(line.textContent).toContain('图层已关闭')
+    expect(annotationMarkers()).toHaveLength(0)
+  })
+
+  it('图层拒绝这批 marker（LWC 抛错）→ 不能说已上图，报"图表未能绘制"', async () => {
+    H.setMarkersThrows = true
+    H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-03-06' })])
+    render(<Harness />)
+    const line = await screen.findByTestId('copilot-annotation-line')
+    await waitFor(() => expect(line.getAttribute('data-marker-state')).toBe('skipped'))
+    expect(line.getAttribute('data-marker-reason')).toBe('render-failed')
+    expect(line.textContent).toContain('图表未能绘制')
+    expect(AnnotationLedger.snapshot(target()).markerRender?.drawn).toEqual([])
+  })
+})
+
+/**
+ * ⑪ 确认落在"正在重新读取"窗口：不许把图上既有标注整批抹掉。
+ *
+ * 复审阻断 ③：`beginRequest` 会把快照置成 loading 并清空 lines/markers。旧实现
+ * `linkConfirmedAnnotation` 拿这份空快照当合并基线 → 图上其余标注整批消失（无提示、
+ * 也无法撤销回来）。基线必须用 baseline*（loading 窗口回落到"上次已知的"），
+ * 而且那次在途读回落地时也要保留刚确认的这条（增量）。
+ */
+describe('⑪ 确认撞上在途重读：既有标注不被抹掉', () => {
+  it('慢重读在途时确认一条 → 既有价位线/marker 仍在，迟到读回也不抹掉新确认', async () => {
+    H.annotations = () =>
+      Promise.resolve([
+        row({ id: 91, ts: '2026-03-06', label: '复盘点' }),
+        row({ id: 92, price: 33.5, ts: null, label: '支撑位', action_id: 8 }),
+      ])
+    render(<Harness />)
+    await waitFor(() => expect(annotationMarkers()).toHaveLength(1))
+    expect(priceLineTitles()).toEqual(['支撑位'])
+
+    // 用户点了「重新读取」：全量 GET 挂起（账本进入 loading 窗口）
+    let releaseRead: (() => void) | null = null
+    H.annotations = (u) =>
+      u.includes('ids=')
+        ? Promise.resolve([
+            row({ id: 93, ts: '2026-03-05', label: '新确认', action_id: 9 }),
+          ])
+        : new Promise((res) => {
+            releaseRead = () =>
+              res([
+                row({ id: 91, ts: '2026-03-06', label: '复盘点' }),
+                row({ id: 92, price: 33.5, ts: null, label: '支撑位', action_id: 8 }),
+              ])
+          })
+    const slowRead = requestAnnotations(target())
+    await waitFor(() => expect(releaseRead).not.toBeNull())
+    expect(AnnotationLedger.snapshot(target()).phase).toBe('loading')
+
+    // 窗口里确认一条新的时间点标注
+    const snap = await linkConfirmedAnnotation(
+      applied({
+        id: 9,
+        annotation_id: 93,
+        annotation: {
+          id: 93,
+          symbol: '600111',
+          market: 'CN',
+          period: '1d',
+          price: null,
+          ts: '2026-03-05',
+          label: '新确认',
+          color: 'up',
+          source: 'ai',
+        },
+        result: '已标注 600111 @ 2026-03-05：新确认',
+      }),
+    )
+    // 既有 91(marker)/92(线) 必须还在，93 也进来了（markers 按日期升序：03-05 在前）
+    expect(snap?.lines.map((l) => l.annotationId)).toEqual([92])
+    expect(snap?.markers.map((m) => m.annotationId)).toEqual([93, 91])
+    expect(priceLineTitles()).toEqual(['支撑位'])
+    await waitFor(() => expect(annotationMarkers().map((m) => m.annotationId)).toEqual([93, 91]))
+
+    // 慢读回这才落地（它是在确认之前发出的，读不到 93）：不能把 93 抹掉，也不能复活别的
+    releaseRead!()
+    await slowRead
+    const after = AnnotationLedger.snapshot(target())
+    expect(after.markers.map((m) => m.annotationId)).toEqual([93, 91])
+    expect(after.lines.map((l) => l.annotationId)).toEqual([92])
+    await waitFor(() => expect(annotationMarkers().map((m) => m.annotationId)).toEqual([93, 91]))
+  })
+})
+
+/**
+ * ⑫ 目标变化后状态诚实：换标的不沿用上一张图的落图结论。
+ */
+describe('⑫ 换标的后重新回报落图结果', () => {
+  it('两只票同一天都有标注：新标的也要自己回报"已上图"，不沿用旧结论', async () => {
+    H.annotations = () => Promise.resolve([row({ id: 91, symbol: '600111', ts: '2026-03-06' })])
+    const view = render(<Harness symbol="600111" />)
+    await waitFor(() =>
+      expect(screen.getByTestId('copilot-annotation-line').getAttribute('data-marker-state')).toBe(
+        'drawn',
+      ),
+    )
+
+    H.annotations = () =>
+      Promise.resolve([
+        row({ id: 92, symbol: '600519', ts: '2026-03-06', label: '复盘点', action_id: 8 }),
+      ])
+    view.rerender(<Harness symbol="600519" />)
+    await waitFor(() => expect(annotationMarkers().map((m) => m.annotationId)).toEqual([92]))
+    await waitFor(() =>
+      expect(screen.getByTestId('copilot-annotation-line').getAttribute('data-marker-state')).toBe(
+        'drawn',
+      ),
+    )
+    const snap = AnnotationLedger.snapshot(target({ symbol: '600519' }))
+    expect(snap.markerRender?.drawn).toEqual([92])
   })
 })

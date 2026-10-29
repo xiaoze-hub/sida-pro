@@ -58,6 +58,8 @@ import {
   normalizeAnnotationMarkers,
   normalizeKlineEvents,
   normalizePriceLines,
+  type AnnotationMarkerDrawStatus,
+  type AnnotationMarkerSkipReason,
   type KlineAnnotationMarker,
   type KlineEventKind,
   type KlineEventPoint,
@@ -65,18 +67,14 @@ import {
 } from '../klineEvents'
 
 /**
- * 时间点标注的**真实落图结果**（2026-10-29）。
+ * 时间点标注的**真实落图结果**（2026-10-29）：类型定义在 `klineEvents`（图表无关，
+ * 账本/状态条也要用），这里只转发给既有调用方。
  *
- * 为什么要回报而不是由父组件假定：`markers` 只有落在**真有 K 线**的日期上才画得出来
- * （周末/节假日/超出当前区间的日期画不了）。父组件若按"服务端有行 = 已上图"播报，
- * 就是假称已上图。这里如实分成两份：`drawn`（真画上了）/ `skipped`（该日没有 K 线）。
+ * 为什么必须回报而不是由父组件假定：`markers` 只有落在**真有 K 线**的日期上才画得出来
+ * （周末/节假日/超出当前区间/非日线周期都画不了）。父组件若按"服务端有行 = 已上图"播报，
+ * 就是假称已上图。这里如实分成两份：`drawn`（图层真的接受了）/ `skipped`（带原因）。
  */
-export interface AnnotationMarkerDrawStatus {
-  /** 真的画到 K 线上的服务端标注 id（升序） */
-  drawn: number[]
-  /** 该日期在这张图上没有 K 线（或超出范围）⇒ 没画，不贴邻柱 */
-  skipped: Array<{ annotationId: number; date: string }>
-}
+export type { AnnotationMarkerDrawStatus }
 // v2.1 §10.2④: 区间统计纯函数(可视区间 → 首末价/涨跌幅/振幅/累计明暗盘/事件数)
 import { computeRangeStats, type KlineRangeStats, type RangeBar } from '../lib/range-stats'
 // K线形态标注(2026-10-10 图层): 纯逻辑(白名单清洗 + 记号映射), 数据来自 /klines/{symbol}/patterns
@@ -509,8 +507,23 @@ export default function KlineChart(props: {
   /**
    * 上次上报给父组件的「时间点标注落图结果」签名（2026-10-29）。
    * 只用于**去重**：相同结果不重复回调，避免父组件 setState → effect 再跑 → 再回调的循环。
+   * 签名里带标的/市场/周期 —— 否则换了一张图、结论恰好一样时就不上报，
+   * 新目标的状态条会永远停在"等待图表回报"（复审阻断 ⑤）。
    */
   const annotationStatusRef = useRef<string>('')
+
+  /**
+   * 上报时间点标注的**真实落图结果**（2026-10-29）。
+   *
+   * 只有 `status.drawn` 里的 id 是真的进了图层；其余带原因进 `skipped`。
+   * 相同（标的|市场|周期|结论）不重复回调，避免父组件 setState ↔ effect 打转。
+   */
+  function reportAnnotationDraw(status: AnnotationMarkerDrawStatus) {
+    const sig = `${props.symbol}|${props.market}|${interval}|${JSON.stringify(status)}`
+    if (sig === annotationStatusRef.current) return
+    annotationStatusRef.current = sig
+    props.onAnnotationMarkersDrawn?.(status)
+  }
   const priceLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   // 持仓成本线 (Phase 0: 与支撑压力线独立管理, 同一切换开关重建逻辑)
   const costLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
@@ -995,6 +1008,16 @@ export default function KlineChart(props: {
     const load = async () => {
       setLoading(true)
       setError('')
+      /*
+       * 换标的/换周期/重读开始时**先清掉上一张图的 K 线**（2026-10-29 复审阻断 ②）：
+       * `rawKlinesRef` 是 marker 定位的唯一真源（`dayKey` 只认它）。留着它就会出现
+       * "新标的/加载失败"时用**前一只票的日期**判断该日有没有 K 线 —— 于是一条根本没上图的
+       * 时间点标注被报成"已上图"。清空之后这段时间的落图结论是"K 线未就绪、无法确认"，
+       * 直到 `setData` 真正拿到新标的的 K 线才重新判断。
+       */
+      rawKlinesRef.current = []
+      rangeBarsRef.current = []
+      setDataLen(0)
       try {
         const days = props.initialDays ?? 120
         const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(interval)}${props.instrument ? `&instrument=${props.instrument}` : ''}`
@@ -1054,6 +1077,10 @@ export default function KlineChart(props: {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : '加载K线失败')
           setDataLen(0)
+          // 加载失败 ⇒ 这张图上没有任何可定位的 K 线：ref 一并清掉，避免后续 effect
+          // 拿半截/旧的 K 线给标注定位（复审阻断 ②）。
+          rawKlinesRef.current = []
+          rangeBarsRef.current = []
           seriesRef.current?.setData([])
         }
       } finally {
@@ -1420,7 +1447,20 @@ export default function KlineChart(props: {
   useEffect(() => {
     const chart = chartRef.current
     const series = seriesRef.current
-    if (!chart || !series) return
+    if (!chart || !series) {
+      // 图表还没建好 ⇒ 一个 marker 都没画。有时间点标注时如实说"无法确认"，不能沉默
+      // 让状态条停在上一次目标的"已上图"上（复审阻断 ②/⑤）。
+      const pending = normalizeAnnotationMarkers(props.annotationMarkers)
+      if (pending.length > 0) {
+        reportAnnotationDraw({
+          drawn: [],
+          skipped: pending
+            .map((m) => ({ annotationId: m.annotationId, date: m.date, reason: 'no-data' as const }))
+            .sort((a, b) => a.annotationId - b.annotationId),
+        })
+      }
+      return
+    }
     const sc = readStockColors()
 
     // 设计稿 v2.0 §5: 4 开关(图层总控) — 整层关掉 → 该层所有标注全部隐藏。
@@ -1569,75 +1609,134 @@ export default function KlineChart(props: {
         ) as never[]),
       )
     }
-    // 纯时间点标注（2026-10-29）: 服务端已确认的 ts-only 标注 → 落在**该日 K 线**上的 marker。
-    // 定位铁律与 tradeMarkers 一致: 该日期必须真有 K 线才画(周末/节假日/超出区间不贴邻柱,
-    // 也不画到别的日期上)。画没画上通过 onAnnotationMarkersDrawn 如实回报 —— 父组件
-    // (状态条)据此区分"已上图"与"该日无 K 线未上图", 不假称已上图。
-    const annotationDrawn: number[] = []
-    const annotationSkipped: Array<{ annotationId: number; date: string }> = []
-    if (props.layersVisible?.annotation !== false) {
-      const annMarkers = normalizeAnnotationMarkers(props.annotationMarkers)
-      if (annMarkers.length > 0) {
-        const barKeys = new Set<number>()
-        for (const b of rawKlinesRef.current) {
-          const k = dayKey(b.time)
-          if (k !== null) barKeys.add(k)
-        }
-        const neutral = readChartTheme().neutral
-        for (const m of annMarkers) {
-          const time = toChartTime(m.date, interval)
-          const k = dayKey(time)
-          if (k === null || !barKeys.has(k)) {
-            annotationSkipped.push({ annotationId: m.annotationId, date: m.date })
-            continue
-          }
-          annotationDrawn.push(m.annotationId)
-          // `annotationId`/`actionId` 一并挂上: LWC 只读它认识的字段, 多出来的键不会进画布,
-          // 但让 DOM/测试与巡检能**按 id 精确对账"图上这个记号是哪一条标注"**(可溯源)。
-          markers.push({
-            time,
-            position: 'aboveBar' as const,
-            color: m.tone === 'down' ? sc.down : m.tone === 'up' ? sc.up : neutral,
-            shape: 'square' as const,
-            size: 1,
-            text: `#${m.annotationId} ${m.label}`,
-            annotationId: m.annotationId,
-            actionId: m.actionId,
-          } as unknown as SeriesMarker<Time>)
-        }
+    /*
+     * 纯时间点标注（2026-10-29）: 服务端已确认的 ts-only 标注 → 落在**该日 K 线**上的 marker。
+     *
+     * 定位铁律（复审阻断 ④，逐条都不可省）：
+     *  1. **只在日 K 上画**。日期只有"哪一天"，没有时分 —— 分时/周/月的横轴不是"某一天的一根
+     *     K 线"：`fundBarTime('2026-03-06','5m')` 会按本地零点解析成 00:00 的时间戳，
+     *     那等于给用户编一个开盘时间（而且不是任何一根分钟 K 线），所以非日线一律不画，
+     *     并如实报 `not-daily`（文案说明"日期标注只在日 K 上绘制"），绝不贴到别的柱子上。
+     *  2. 该日期必须真有 K 线；区间内没有（周末/停牌）报 `no-bar`，落在已加载区间外报
+     *     `out-of-range`，K 线还没到位/加载失败报 `no-data`（"无法确认"，不是"没有日 K"）。
+     *  3. `drawn` 只在 `setMarkers` 真的成功之后才记 —— 图表抛错（`render-failed`）时图层上
+     *     什么都没有，不能说已上图。
+     */
+    const annMarkers = normalizeAnnotationMarkers(props.annotationMarkers)
+    /** 已通过全部定位检查、等着 `setMarkers` 最后确认的记号 */
+    const annotationCandidates: Array<{ marker: KlineAnnotationMarker; time: Time }> = []
+    const annotationSkipped: Array<{
+      annotationId: number
+      date: string
+      reason: AnnotationMarkerSkipReason
+    }> = []
+    if (annMarkers.length > 0) {
+      const layerHidden = props.layersVisible?.annotation === false
+      const bars = rawKlinesRef.current
+      const barKeys = new Set<number>()
+      let firstKey: number | null = null
+      let lastKey: number | null = null
+      for (const b of bars) {
+        const k = dayKey(b.time)
+        if (k === null) continue
+        barKeys.add(k)
+        if (firstKey === null || k < firstKey) firstKey = k
+        if (lastKey === null || k > lastKey) lastKey = k
       }
+      for (const m of annMarkers) {
+        if (interval !== '1d') {
+          annotationSkipped.push({ annotationId: m.annotationId, date: m.date, reason: 'not-daily' })
+          continue
+        }
+        if (layerHidden) {
+          annotationSkipped.push({ annotationId: m.annotationId, date: m.date, reason: 'layer-hidden' })
+          continue
+        }
+        if (bars.length === 0 || firstKey === null || lastKey === null) {
+          annotationSkipped.push({ annotationId: m.annotationId, date: m.date, reason: 'no-data' })
+          continue
+        }
+        // 只有日线走到这里，`toChartTime` 才是"该日 00:00Z"这一根日 K 的键。
+        const time = toChartTime(m.date, '1d')
+        const k = dayKey(time)
+        if (k === null) {
+          annotationSkipped.push({ annotationId: m.annotationId, date: m.date, reason: 'no-bar' })
+          continue
+        }
+        if (!barKeys.has(k)) {
+          annotationSkipped.push({
+            annotationId: m.annotationId,
+            date: m.date,
+            reason: k < firstKey || k > lastKey ? 'out-of-range' : 'no-bar',
+          })
+          continue
+        }
+        annotationCandidates.push({ marker: m, time })
+      }
+    }
+    for (const { marker: m, time } of annotationCandidates) {
+      const neutral = readChartTheme().neutral
+      // `annotationId`/`actionId` 一并挂上: LWC 只读它认识的字段, 多出来的键不会进画布,
+      // 但让 DOM/测试与巡检能**按 id 精确对账"图上这个记号是哪一条标注"**(可溯源)。
+      markers.push({
+        time,
+        position: 'aboveBar' as const,
+        color: m.tone === 'down' ? sc.down : m.tone === 'up' ? sc.up : neutral,
+        shape: 'square' as const,
+        size: 1,
+        text: `#${m.annotationId} ${m.label}`,
+        annotationId: m.annotationId,
+        actionId: m.actionId,
+      } as unknown as SeriesMarker<Time>)
     }
 
     // LWC v5: 时间落在首/末根 K 线之外的 marker 会让 setMarkers 抛 "Value is null"
     // → 整页进错误边界(周末/节假日"当天有公告、当天没 K 线"必踩)。裁掉, 不假装定位。
     const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
+    /** 图层是否真的接受了这批 marker（`setMarkers` 成功才为 true） */
+    let markersApplied = false
     try {
       if (!markerPluginRef.current) {
         markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
       } else {
         markerPluginRef.current.setMarkers(safeMarkers)
       }
+      markersApplied = true
     } catch (e) {
       console.warn('[KlineChart] createSeriesMarkers failed, fallback to recreate:', e)
       try {
         markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
+        markersApplied = true
       } catch (err) {
         console.error('[KlineChart] recreate marker failed:', err)
+        markersApplied = false
       }
     }
 
-    // 落图结果只在**K 线已到位**时上报(空数据时全部"跳过"是假象, 不是事实);
-    // 且只在结果变化时上报一次, 免得父组件 setState ↔ effect 互相打转。
-    if (rawKlinesRef.current.length > 0) {
-      const status: AnnotationMarkerDrawStatus = {
-        drawn: annotationDrawn.sort((a, b) => a - b),
-        skipped: annotationSkipped.sort((a, b) => a.annotationId - b.annotationId),
+    // 落图结论上报（2026-10-29）：`drawn` 只收**真进了图层**的；其余带原因报"没画上"。
+    // 没有任何时间点标注时也要报一次空结论，好把上一张图的状态清掉（账本按键隔离，
+    // 但同一张图上"撤销到一条不剩"必须能说出来）。
+    if (annMarkers.length > 0) {
+      const drawn = markersApplied
+        ? annotationCandidates.map((c) => c.marker.annotationId)
+        : []
+      const skipped = annotationSkipped
+      if (!markersApplied) {
+        for (const c of annotationCandidates) {
+          skipped.push({
+            annotationId: c.marker.annotationId,
+            date: c.marker.date,
+            reason: 'render-failed',
+          })
+        }
       }
-      const sig = JSON.stringify(status)
-      if (sig !== annotationStatusRef.current) {
-        annotationStatusRef.current = sig
-        props.onAnnotationMarkersDrawn?.(status)
-      }
+      reportAnnotationDraw({
+        drawn: drawn.sort((a, b) => a - b),
+        skipped: skipped.sort((a, b) => a.annotationId - b.annotationId),
+      })
+    } else if (annotationStatusRef.current !== '') {
+      annotationStatusRef.current = ''
+      props.onAnnotationMarkersDrawn?.({ drawn: [], skipped: [] })
     }
 
     // 2a) GS 区间色带(规格 §1, 2026-10-11): 由**已确认** G/S 信号逐根推区间 → 主图顶部短柱带
