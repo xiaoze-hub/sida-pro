@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0   # 需要 base 分支做 merge-base 比对
 
       - name: Setup Node
-        uses: actions/setup-node@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
 
@@ -68,7 +68,7 @@ jobs:
       - name: Upload to Code Scanning
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@b611e93910a8f0b3ceb315d10c1249f18bca82e4e # v3
+        uses: github/codeql-action/upload-sarif@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3
         with:
           sarif_file: ocr.sarif
           category: ai-code-review
