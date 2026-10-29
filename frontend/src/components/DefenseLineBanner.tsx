@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchAPI } from '@sida/api'
-import { resolveDefenseState, type DefenseState } from '@/lib/position-risk'
+import {
+  currencySymbolForMarket,
+  formatPriceWithCurrency,
+  humanizeAgeMinutes,
+  resolveDefenseState,
+  type DefenseState,
+  type FreshnessReason,
+  type MarketSessionInfo,
+  type QuoteFreshness,
+} from '@/lib/position-risk'
 import { AlertOctagon, ClockAlert, Loader2, ShieldAlert, ShieldPlus } from 'lucide-react'
 import { safeFixed } from '@/lib/format'
 import { Button } from '@sida/base-ui/components/ui/button'
@@ -22,19 +31,24 @@ import {
  *
  * 方案 B 裁决(2026-10-23): 系统不再拿"成本价 × (1-8%)"冒充用户的纪律位。
  *
- * ## 2026-10-29 评审修的两个错判
+ * ## 2026-10-29 评审修的三类错判
  * ① 旧实现 `rows.find(p => p.symbol === symbol)` 只取**第一个**账户的 defense_price。
  *    同一只票主账户设 34、备用账户设 25、现价 33 时，告警条按 rows 顺序在「已击穿」和
  *    「防守线(安全)」之间来回翻，与持仓页清单互相打架。现在收集该标的在**所有账户**的持仓，
  *    逐条显示：账户名 + 该账户自己的防线 + 该账户自己的状态。不猜、不合并、不取一条。
  * ② `/quotes/{symbol}` 给的可能是上一交易日甚至更早的报价（字段是 `current_price`，
  *    旧代码读的 `price` 根本不存在，等于永远走"缺现价"降级 → 告警条从未真正工作）。
- *    现在读 `current_price` + `daily_pnl_period`：报价不是当日时只有「行情滞后」，
- *    **不**下击穿结论，并给出真实行情日期与时间 —— 旧报价当实时价判破位，等于拿隔日
- *    (或隔周)的价位说"你现在已经跌破纪律位"。
+ *    现在读 `current_price` + `quote_time` + `daily_pnl_period`，并用**服务器市场墙钟**
+ *    （`/stocks/markets/status` 的 `local_time`/`status`）判时刻层：报价不是当日、
+ *    或当日但已过去太久、或时点根本无法证明时，只有「时效未证实」，**不**下击穿结论。
+ * ③ **取价必须带市场**：旧实现只打 `/quotes/{symbol}`（后端默认 CN），港美股持仓永远
+ *    拿不到价 → 永远是「缺现价」。现在按持仓行自己声明的 `market` 分组，逐市场取价；
+ *    同一代码在不同市场（如 00700 / 0700.HK 与某个 A 股代码）互不串价。
+ *    成本与「-5%/-8%/-10%」预设也一律按**账户那一行**的成本算，不再共用父组件传来的
+ *    第一份成本（多账户成本不同时，预设会算成另一账户的价位）。
  *
  * 取价口径:
- * - 所有价格经 safeFixed 格式化(禁直接 toFixed, 遵守 R6 门禁);
+ * - 所有价格经 safeFixed / formatPriceWithCurrency 格式化(禁直接 toFixed, 遵守 R6 门禁);
  * - 缺现价时**显式降级**成一行说明, 绝不 return null 静默消失 ——
  *   "看不见的告警条"会被用户读成"我的防线没被击穿"。
  */
@@ -52,7 +66,8 @@ interface QuoteData {
 interface PositionRow {
   id: number
   symbol: string
-  cost_price: number
+  market?: string | null
+  cost_price: number | null
   defense_price?: number | null
 }
 
@@ -66,17 +81,14 @@ interface PortfolioSummaryLike {
   accounts?: AccountLike[]
 }
 
-/** 一个账户在该标的上的持仓 + 它自己的防线。 */
+/** 一个账户在该标的上的持仓 + 它自己的防线 + 它自己的成本。 */
 interface HeldLine {
   positionId: number | null
   accountId: string
   accountName: string
+  market: string
+  costPrice: number | null
   defensePrice: number | null
-}
-
-interface PositionState {
-  status: 'loading' | 'ok' | 'error'
-  lines: HeldLine[]
 }
 
 interface QuoteState {
@@ -87,7 +99,26 @@ interface QuoteState {
   quoteTime: string | null
 }
 
-/** 未设置时的参考预设: 仅把成本价折算成绝对价给用户点选, 不落库、不告警。 */
+interface MarketStatusRow {
+  code?: string
+  status?: string | null
+  local_time?: string | null
+}
+
+interface PositionState {
+  status: 'loading' | 'ok' | 'error'
+  lines: HeldLine[]
+}
+
+const EMPTY_QUOTE: QuoteState = {
+  status: 'loading',
+  price: null,
+  period: 'unknown',
+  quoteDate: null,
+  quoteTime: null,
+}
+
+/** 未设置时的参考预设: 仅把**该账户**的成本价折算成绝对价给用户点选, 不落库、不告警。 */
 const PRESETS = [
   { pct: -5, label: '-5%' },
   { pct: -8, label: '-8%' },
@@ -103,6 +134,9 @@ function positivePrice(raw: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
+const normalizeMarket = (market: unknown): string =>
+  String(market ?? 'CN').trim().toUpperCase() || 'CN'
+
 const shell = 'mt-2 flex items-center justify-between gap-3 rounded border px-3 py-2 text-[12px]'
 const lineShell = 'flex flex-wrap items-center gap-2'
 
@@ -111,6 +145,36 @@ function AccountTag({ name }: { name: string }) {
   return (
     <span className="rounded bg-s1 px-1.5 py-0.5 text-[12px] text-muted-foreground">{name}</span>
   )
+}
+
+/** 时效说明：只说证明得了的（报价时刻 + 距今多久），不写「实时」除非真能证明。 */
+function freshnessNote(args: {
+  freshness: QuoteFreshness
+  reason: FreshnessReason
+  quoteTime: string | null
+  quoteDate: string | null
+  ageMinutes: number | null
+  marketStatus: string | null
+}): string {
+  const at = args.quoteTime ? args.quoteTime.slice(11, 16) : ''
+  const age = humanizeAgeMinutes(args.ageMinutes)
+  if (args.freshness === 'current') {
+    const head = args.marketStatus === 'trading' ? '交易中' : '非交易时段 · 最近报价'
+    return [at ? `${head} ${at}` : head, age].filter(Boolean).join(' · ')
+  }
+  if (args.freshness === 'session_frozen') {
+    return [`非交易时段 · 最近报价${at ? ` ${at}` : ''}`, age].filter(Boolean).join(' · ')
+  }
+  if (args.reason === 'period') {
+    const stamp = args.quoteDate ?? (args.quoteTime ? args.quoteTime.slice(0, 10) : '')
+    return `历史报价 ${stamp || '（日期未知）'}${at ? ` ${at}` : ''}`
+  }
+  if (args.reason === 'intraday_age') {
+    return [`滞后${age ? ` ${age}` : ''}`, at ? `报价 ${at}` : ''].filter(Boolean).join(' · ')
+  }
+  if (args.reason === 'no_time') return '时点未知（报价无时间）'
+  if (args.reason === 'clock_skew') return '时点存疑（报价晚于市场时钟）'
+  return '时点未证实（缺服务器市场时钟）'
 }
 
 export function DefenseLineBanner({
@@ -122,13 +186,8 @@ export function DefenseLineBanner({
   cost: number | null
   hasPosition?: boolean
 }) {
-  const [quote, setQuote] = useState<QuoteState>({
-    status: 'loading',
-    price: null,
-    period: 'unknown',
-    quoteDate: null,
-    quoteTime: null,
-  })
+  const [quotesByMarket, setQuotesByMarket] = useState<Record<string, QuoteState>>({})
+  const [sessions, setSessions] = useState<Record<string, MarketSessionInfo> | null>(null)
   const [position, setPosition] = useState<PositionState>({ status: 'loading', lines: [] })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<HeldLine | null>(null)
@@ -136,15 +195,15 @@ export function DefenseLineBanner({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  const active = !!hasPosition && !!cost && cost > 0
-  const costVal = cost as number
+  const active = !!hasPosition
 
-  // 防线来自持仓本身(而非父组件 props): 只有持仓行知道"用户到底设没设过"。
-  // 同标的多账户全都要取回来 —— 取第一条就是旧 bug。
+  // 防线/成本来自持仓行本身(而非父组件 props): 只有持仓行知道"用户到底设没设过"、
+  // 以及"这个账户的成本是多少"。同标的多账户全都要取回来 —— 取第一条就是旧 bug。
   useEffect(() => {
     let cancelled = false
     if (!active) {
       setPosition({ status: 'ok', lines: [] })
+      setQuotesByMarket({})
       return
     }
     setPosition({ status: 'loading', lines: [] })
@@ -158,6 +217,8 @@ export function DefenseLineBanner({
               positionId: p.id ?? null,
               accountId: String(acc.id),
               accountName: String(acc.name ?? '账户'),
+              market: normalizeMarket(p.market),
+              costPrice: positivePrice(p.cost_price),
               defensePrice: positivePrice(p.defense_price),
             })),
         )
@@ -171,64 +232,74 @@ export function DefenseLineBanner({
     }
   }, [symbol, active])
 
+  // 服务器市场墙钟/状态：时效判定的「时刻层」只能用服务器给的事实，不读本机时钟。
   useEffect(() => {
+    if (!active) return
     let cancelled = false
-    if (!active) {
-      setQuote({
-        status: 'loading',
-        price: null,
-        period: 'unknown',
-        quoteDate: null,
-        quoteTime: null,
-      })
-      return
-    }
-    setQuote({
-      status: 'loading',
-      price: null,
-      period: 'unknown',
-      quoteDate: null,
-      quoteTime: null,
-    })
-    fetchAPI<QuoteData>(`/quotes/${encodeURIComponent(symbol)}`)
-      .then((res) => {
+    fetchAPI<MarketStatusRow[]>('/stocks/markets/status')
+      .then((rows) => {
         if (cancelled) return
-        // `/quotes/{symbol}` 现价字段是 `current_price`（旧代码读 `price` 恒 undefined）。
-        const p = positivePrice(res?.current_price ?? res?.price)
-        if (p === null) {
-          // 响应 200 但没有可用价: 与请求失败同义(都算"缺现价")。
-          setQuote({
-            status: 'error',
-            price: null,
-            period: 'unknown',
-            quoteDate: res?.quote_date ?? null,
-            quoteTime: res?.quote_time ?? null,
-          })
-          return
+        const next: Record<string, MarketSessionInfo> = {}
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const code = normalizeMarket(row?.code)
+          if (!row?.code) continue
+          next[code] = { localTime: row.local_time ?? null, status: row.status ?? null }
         }
-        setQuote({
-          status: 'ok',
-          price: p,
-          period: String(res?.daily_pnl_period ?? 'unknown'),
-          quoteDate: res?.quote_date ?? null,
-          quoteTime: res?.quote_time ?? null,
-        })
+        setSessions(next)
       })
       .catch(() => {
-        if (!cancelled) {
-          setQuote({
-            status: 'error',
-            price: null,
-            period: 'unknown',
-            quoteDate: null,
-            quoteTime: null,
-          })
-        }
+        // 拿不到服务器市场时钟 ⇒ 时效一律「未证实」（保守），不让告警条自己猜。
+        if (!cancelled) setSessions({})
       })
     return () => {
       cancelled = true
     }
-  }, [symbol, active])
+  }, [active])
+
+  // 逐**市场**取价：`/quotes/{symbol}` 的 market 参数决定后端按哪个市场解析代码，
+  // 不传就是 CN —— 港股/美股持仓会永远拿不到价（旧实现的港美"缺现价"根因）。
+  const markets = useMemo(() => {
+    const set = new Set(position.lines.map((line) => line.market))
+    return [...set].sort()
+  }, [position.lines])
+  const marketsKey = markets.join(',')
+
+  useEffect(() => {
+    let cancelled = false
+    if (!active || markets.length === 0) {
+      setQuotesByMarket({})
+      return
+    }
+    setQuotesByMarket(
+      Object.fromEntries(markets.map((m) => [m, { ...EMPTY_QUOTE }])) as Record<string, QuoteState>,
+    )
+    for (const market of markets) {
+      fetchAPI<QuoteData>(`/quotes/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`)
+        .then((res) => {
+          if (cancelled) return
+          const p = positivePrice(res?.current_price ?? res?.price)
+          setQuotesByMarket((prev) => ({
+            ...prev,
+            [market]: {
+              status: p === null ? 'error' : 'ok',
+              price: p,
+              period: String(res?.daily_pnl_period ?? 'unknown'),
+              quoteDate: res?.quote_date ?? null,
+              quoteTime: res?.quote_time ?? null,
+            },
+          }))
+        })
+        .catch(() => {
+          if (cancelled) return
+          setQuotesByMarket((prev) => ({ ...prev, [market]: { ...EMPTY_QUOTE, status: 'error' } }))
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+    // marketsKey 已经把 markets 的内容编码进来了（数组身份每次渲染都变）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, active, marketsKey])
 
   const saveDefense = useCallback(
     async (positionId: number | null, value: number | null) => {
@@ -277,10 +348,11 @@ export function DefenseLineBanner({
     void saveDefense(editing?.positionId ?? null, Math.round(v * 100) / 100)
   }
 
-  const staleLabel = useMemo(() => {
-    const stamp = quote.quoteDate ?? (quote.quoteTime ? quote.quoteTime.slice(0, 10) : '')
-    return stamp ? `历史报价 ${stamp}` : '历史报价（日期未知）'
-  }, [quote.quoteDate, quote.quoteTime])
+  /** 编辑中的账户成本（缺成本时退回父组件的成本，并在文案里说明是回退值）。 */
+  const editingCost =
+    positivePrice(editing?.costPrice) ?? positivePrice(cost) ?? null
+  const editingCostIsFallback = positivePrice(editing?.costPrice) === null && editingCost !== null
+  const editingUnit = currencySymbolForMarket(editing?.market)
 
   const dialog = (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -293,8 +365,13 @@ export function DefenseLineBanner({
         </DialogHeader>
         <div className="space-y-3 text-[12px]">
           <div className="text-muted-foreground">
-            成本价 <span className="tabular-nums">{safeFixed(costVal, 2)}</span> 元。
-            防守线是**你**定的绝对价，跌到即提示执行纪律；不设则不告警。
+            成本价{' '}
+            <span className="tabular-nums">
+              {editingCost === null ? '未知' : safeFixed(editingCost, 2)}
+            </span>{' '}
+            {editingUnit || '（币种未知）'}
+            {editingCostIsFallback ? '（该账户成本缺失，此处为页面显示值）' : ''}。
+            防守线是你定的绝对价，跌到即提示执行纪律；不设则不告警。
           </div>
           <div className="flex items-center gap-2">
             <Input
@@ -303,26 +380,28 @@ export function DefenseLineBanner({
               inputMode="decimal"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder={`如 ${safeFixed(presetPrice(costVal, -8), 2)}`}
+              placeholder={editingCost === null ? '' : `如 ${safeFixed(presetPrice(editingCost, -8), 2)}`}
               className="tabular-nums"
               data-testid="defense-line-input"
             />
-            <span className="shrink-0 text-muted-foreground">元</span>
+            <span className="shrink-0 text-muted-foreground">{editingUnit || '价格'}</span>
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {PRESETS.map((p) => (
-              <Button
-                key={p.pct}
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 text-[12px] tabular-nums"
-                onClick={() => setDraft(safeFixed(presetPrice(costVal, p.pct), 2, ''))}
-              >
-                {p.label} · {safeFixed(presetPrice(costVal, p.pct), 2)}
-              </Button>
-            ))}
-          </div>
+          {editingCost !== null && (
+            <div className="flex flex-wrap gap-1.5">
+              {PRESETS.map((p) => (
+                <Button
+                  key={p.pct}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[12px] tabular-nums"
+                  onClick={() => setDraft(safeFixed(presetPrice(editingCost, p.pct), 2, ''))}
+                >
+                  {p.label} · {safeFixed(presetPrice(editingCost, p.pct), 2)}
+                </Button>
+              ))}
+            </div>
+          )}
           {saveError && <div className="text-rose-400">{saveError}</div>}
           <div className="flex items-center justify-between gap-2 pt-1">
             <div>
@@ -367,7 +446,10 @@ export function DefenseLineBanner({
   )
 
   if (!active) return null
-  if (position.status === 'loading' || quote.status === 'loading') return null
+  const anyQuoteLoading =
+    position.status === 'loading' ||
+    markets.some((m) => (quotesByMarket[m]?.status ?? 'loading') === 'loading')
+  if (anyQuoteLoading) return null
 
   // ① 持仓读取失败: 说"未知", 不冒充"未设置"。
   if (position.status === 'error' || position.lines.length === 0) {
@@ -385,6 +467,16 @@ export function DefenseLineBanner({
   const multi = lines.length > 1
   const allUnset = lines.every((l) => l.defensePrice === null)
 
+  /** 该账户那一行的成本（缺成本时不拿别的账户顶替，如实说未知）。 */
+  const costOf = (line: HeldLine) => line.costPrice ?? positivePrice(cost)
+  const costNote = (line: HeldLine): string => {
+    const c = costOf(line)
+    if (c === null) return '成本未知'
+    const fallback = line.costPrice === null
+    return `成本 ${safeFixed(c, 2)}${fallback ? '（页面显示值）' : ''}`
+  }
+  const unitOf = (line: HeldLine) => currencySymbolForMarket(line.market) || '价格'
+
   // ② 都没设防线: 静态提示行(不是警告条) + 设置入口(每账户各自一条)。
   if (allUnset) {
     return (
@@ -398,110 +490,101 @@ export function DefenseLineBanner({
               {lines.length} 个账户持有 {symbol}，都未设置防守线
             </div>
           )}
-          {lines.map((line) => (
-            <div
-              key={line.accountId || line.positionId}
-              className={lineShell}
-              data-testid={`defense-line-account-${line.accountId}`}
-            >
-              {multi && <AccountTag name={line.accountName} />}
-              <ShieldPlus className="h-4 w-4 shrink-0 text-role-system" />
-              <span className="font-medium text-foreground">未设置防守线</span>
-              <span>
-                成本 <span className="tabular-nums">{safeFixed(costVal, 2)}</span>，
-                参考 -8% = <span className="tabular-nums">{safeFixed(presetPrice(costVal, -8), 2)}</span>
-                <span className="ml-1 text-[12px] opacity-70">(系统参考值，非你的纪律位)</span>
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="ml-auto h-7 shrink-0 px-2 text-[12px]"
-                onClick={() => openDialog(line, presetPrice(costVal, -8))}
-                data-testid={`defense-line-set-${line.accountId}`}
+          {lines.map((line) => {
+            const c = costOf(line)
+            return (
+              <div
+                key={line.accountId || line.positionId}
+                className={lineShell}
+                data-testid={`defense-line-account-${line.accountId}`}
               >
-                设置
-              </Button>
-            </div>
-          ))}
-        </div>
-        {dialog}
-      </>
-    )
-  }
-
-  // ③ 设了防线但取不到现价: 显式降级, 不静默消失。
-  if (quote.status === 'error' || quote.price == null) {
-    return (
-      <>
-        <div
-          className={`${shell} border-border bg-s1 text-role-watch ${multi ? 'flex-col items-stretch' : ''}`}
-          data-testid="defense-line-degraded"
-        >
-          {lines.map((line) => (
-            <div
-              key={line.accountId || line.positionId}
-              className={lineShell}
-              data-testid={`defense-line-account-${line.accountId}`}
-            >
-              {multi && <AccountTag name={line.accountName} />}
-              <ShieldAlert className="h-4 w-4 shrink-0" />
-              <span>防守线无法计算（缺现价）</span>
-              <span className="text-muted-foreground">
-                防线{' '}
-                <span className="tabular-nums">
-                  {line.defensePrice === null ? '未设' : safeFixed(line.defensePrice, 2)}
+                {multi && <AccountTag name={line.accountName} />}
+                <ShieldPlus className="h-4 w-4 shrink-0 text-role-system" />
+                <span className="font-medium text-foreground">未设置防守线</span>
+                <span>
+                  {c === null ? (
+                    '成本未知，仅可手动填绝对价'
+                  ) : (
+                    <>
+                      {costNote(line)}，参考 -8% ={' '}
+                      <span className="tabular-nums">{safeFixed(presetPrice(c, -8), 2)}</span>{' '}
+                      {unitOf(line)}
+                    </>
+                  )}
+                  <span className="ml-1 text-[12px] opacity-70">(系统参考值，非你的纪律线)</span>
                 </span>
-                ，成本 <span className="tabular-nums">{safeFixed(costVal, 2)}</span>
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="ml-auto h-7 shrink-0 px-2 text-[12px] text-muted-foreground"
-                onClick={() => openDialog(line, line.defensePrice)}
-              >
-                修改
-              </Button>
-            </div>
-          ))}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-7 shrink-0 px-2 text-[12px]"
+                  onClick={() => openDialog(line, c === null ? null : presetPrice(c, -8))}
+                  data-testid={`defense-line-set-${line.accountId}`}
+                >
+                  设置
+                </Button>
+              </div>
+            )
+          })}
         </div>
         {dialog}
       </>
     )
   }
 
-  const price = quote.price
-  const lossPct = ((price - costVal) / costVal) * 100
-
-  /** 单条防线：用共享判定（含行情新鲜度闸门）。 */
+  /** 单条防线：用共享判定（含行情时效闸门：日期层 + 服务器市场墙钟时刻层）。 */
   const renderLine = (line: HeldLine) => {
-    const { state, distancePct } = resolveDefenseState({
-      price,
+    const quote = quotesByMarket[line.market] ?? EMPTY_QUOTE
+    const session = sessions?.[line.market] ?? null
+    const verdict = resolveDefenseState({
+      price: quote.price,
       defense: line.defensePrice,
       period: quote.period,
+      quoteTime: quote.quoteTime,
+      market: session,
     })
+    const state: DefenseState = verdict.state
     const breached = state === 'breached'
     const near = state === 'near'
     const stale = state === 'stale'
     const unset = state === 'unset'
+    const missingPrice = quote.price === null
+    const note = missingPrice
+      ? `该市场（${line.market}）无可用现价`
+      : freshnessNote({
+          freshness: verdict.freshness,
+          reason: verdict.reason,
+          quoteTime: quote.quoteTime,
+          quoteDate: quote.quoteDate,
+          ageMinutes: verdict.ageMinutes,
+          marketStatus: String(session?.status ?? '').trim().toLowerCase() || null,
+        })
+    const c = costOf(line)
+    const lossPct =
+      !missingPrice && quote.price !== null && c !== null && c > 0
+        ? ((quote.price - c) / c) * 100
+        : null
     return {
       state,
       breached,
       near,
       stale,
       unset,
-      distancePct,
+      missingPrice,
       content: (
         <div
           key={line.accountId || line.positionId}
           className={lineShell}
           data-testid={`defense-line-account-${line.accountId}`}
           data-state={state}
+          data-freshness={verdict.freshness}
+          data-market={line.market}
         >
           {multi && <AccountTag name={line.accountName} />}
           {unset ? (
             <ShieldPlus className="h-4 w-4 shrink-0 text-role-system" />
+          ) : missingPrice ? (
+            <ShieldAlert className="h-4 w-4 shrink-0" />
           ) : breached ? (
             <AlertOctagon className="h-4 w-4 shrink-0 text-rose-400" />
           ) : stale ? (
@@ -514,24 +597,29 @@ export function DefenseLineBanner({
           <span className="font-semibold">
             {unset
               ? '未设置防守线'
-              : breached
-                ? '已击穿你的防守线'
-                : stale
-                  ? '行情滞后 · 未判破位'
-                  : near
-                    ? `接近你的防守线（${safeFixed(distancePct, 2)}%）`
-                    : '防守线'}
+              : missingPrice
+                ? '防守线无法计算（缺现价）'
+                : breached
+                  ? '已击穿你的防守线'
+                  : stale
+                    ? '时效未证实 · 未判破位'
+                    : near
+                      ? `接近你的防守线（${safeFixed(verdict.distancePct, 2)}%）`
+                      : '防守线'}
           </span>
           <span className="tabular-nums">
-            {line.defensePrice === null ? '未设' : `防线 ${safeFixed(line.defensePrice, 2)}`} · 现价{' '}
-            {safeFixed(price, 2)}
-            {lossPct != null ? ` · 浮亏 ${safeFixed(lossPct, 2)}%` : ''}
-            {!breached && distancePct != null && !stale ? ` · 距防线 ${safeFixed(distancePct, 2)}%` : ''}
-            {stale ? ` · ${staleLabel}${quote.quoteTime ? ` ${quote.quoteTime.slice(11, 16)}` : ''}` : ''}
+            {line.defensePrice === null
+              ? '未设'
+              : `防线 ${formatPriceWithCurrency(line.defensePrice, line.market)}`}
+            {quote.price !== null && ` · 现价 ${formatPriceWithCurrency(quote.price, line.market)}`}
+            {lossPct != null && ` · 浮动 ${safeFixed(lossPct, 2)}%`}
+            {!breached &&
+              !stale &&
+              verdict.distancePct != null &&
+              ` · 距防线 ${safeFixed(verdict.distancePct, 2)}%`}
           </span>
-          <span className="text-[12px] opacity-70">
-            成本 <span className="tabular-nums">{safeFixed(costVal, 2)}</span>
-          </span>
+          <span className="text-[12px] opacity-70">{costNote(line)}</span>
+          <span className="text-[12px] opacity-70">{note}</span>
           <Button
             type="button"
             size="sm"
@@ -549,6 +637,7 @@ export function DefenseLineBanner({
   const rendered = lines.map(renderLine)
   const anyBreached = rendered.some((r) => r.breached)
   const anyStale = rendered.some((r) => r.stale)
+  const allMissingPrice = rendered.every((r) => r.missingPrice)
   const toneOf = (state: DefenseState): string =>
     state === 'breached'
       ? 'border-rose-500/60 bg-rose-950/25 text-rose-100'
@@ -558,7 +647,22 @@ export function DefenseLineBanner({
           ? 'border-border bg-s1 text-role-watch'
           : 'border-border bg-s1 text-muted-foreground'
 
-  // ④ 单账户且报价不是当日: 单独一档, 明说"未判破位"。
+  // ③ 每条线都取不到现价: 显式降级, 不静默消失。
+  if (allMissingPrice) {
+    return (
+      <>
+        <div
+          className={`${shell} border-border bg-s1 text-role-watch ${multi ? 'flex-col items-stretch' : ''}`}
+          data-testid="defense-line-degraded"
+        >
+          {rendered.map((r) => r.content)}
+        </div>
+        {dialog}
+      </>
+    )
+  }
+
+  // ④ 单账户且时效未证实: 单独一档, 明说"未判破位"。
   if (!multi && anyStale) {
     return (
       <>
@@ -588,6 +692,8 @@ export function DefenseLineBanner({
 
   // ⑤ 多账户: 一个账户一条, 不做任何合并。
   if (multi) {
+    const distinctDefenses = new Set(lines.map((l) => l.defensePrice)).size
+    const distinctCosts = new Set(lines.map((l) => l.costPrice)).size
     return (
       <>
         <div
@@ -596,9 +702,8 @@ export function DefenseLineBanner({
         >
           <div className="text-[12px] opacity-80">
             {lines.length} 个账户持有 {symbol}
-            {new Set(lines.map((l) => l.defensePrice)).size > 1
-              ? '，各自的防线不同（分行显示，不合并）'
-              : '，防线一致'}
+            {distinctDefenses > 1 ? '，各自的防线不同（分行显示，不合并）' : '，防线一致'}
+            {distinctCosts > 1 ? '；成本也按账户分别计算' : ''}
           </div>
           {rendered.map((r) => r.content)}
         </div>

@@ -161,6 +161,69 @@ describe('mergePortfolioQuotes · 未定价持仓不进分子分母', () => {
     expect(acc.quotes_coverage!.positions_missing).toBe(1)
   })
 
+  it('【复审】部分覆盖时**不给总资产**：子集口径单独给数，不冒充总额', () => {
+    const merged = mergePortfolioQuotes(
+      portfolio([
+        {
+          id: 1,
+          name: '主账户',
+          positions: [
+            pos({ id: 1, symbol: '600111', cost_price: 40, quantity: 100 }), // 有价
+            pos({ id: 2, symbol: '600519', cost_price: 60, quantity: 100 }), // 缺价
+          ],
+        },
+      ]),
+      { 'CN:600111': quote({ current_price: 50, change_pct: 0 }) },
+    )!
+    const total = merged.total
+    // 「已定价 5000 + 可用 1000」不是总资产（缺价那只的市值没进来）：总资产必须未知。
+    expect(total.total_assets).toBeNull()
+    expect(total.total_assets_complete).toBe(false)
+    expect(total.total_assets_basis).toBe('priced_positions_only')
+    expect(total.total_assets_priced_subset).toBe(6000)
+    // 仓位比例跟着未知（旧实现会拿子集市值 / 子集总资产算出 83.3%，把缺价当空仓）
+    expect(computePositionRatio(total).pct).toBeNull()
+
+    const acc = merged.accounts[0]
+    expect(acc.total_assets).toBeNull()
+    expect(acc.total_assets_complete).toBe(false)
+    expect(acc.total_assets_basis).toBe('priced_positions_only')
+    expect(acc.total_assets_priced_subset).toBe(6000)
+  })
+
+  it('【复审】全部有价才给总资产，并标 all_positions / complete', () => {
+    const merged = mergePortfolioQuotes(
+      portfolio([
+        {
+          id: 1,
+          name: '主账户',
+          positions: [
+            pos({ id: 1, symbol: '600111', cost_price: 40, quantity: 100 }),
+            pos({ id: 2, symbol: '600519', cost_price: 60, quantity: 100 }),
+          ],
+        },
+      ]),
+      {
+        'CN:600111': quote({ current_price: 50 }),
+        'CN:600519': quote({ current_price: 50 }),
+      },
+    )!
+    expect(merged.total.total_assets).toBe(11000)
+    expect(merged.total.total_assets_complete).toBe(true)
+    expect(merged.total.total_assets_basis).toBe('all_positions')
+    expect(computePositionRatio(merged.total).pct).toBeCloseTo(90.909, 2)
+  })
+
+  it('【复审】有持仓但一只都没价：总资产口径标 no_priced_positions，也不给子集数', () => {
+    const merged = mergePortfolioQuotes(
+      portfolio([{ id: 1, name: '主账户', positions: [pos()] }]),
+      {},
+    )!
+    expect(merged.total.total_assets).toBeNull()
+    expect(merged.total.total_assets_basis).toBe('no_priced_positions')
+    expect(merged.total.total_assets_priced_subset).toBeNull()
+  })
+
   it('全覆盖：与修复前逐字段一致，覆盖度标 complete', () => {
     const merged = mergePortfolioQuotes(
       portfolio([
@@ -256,6 +319,97 @@ describe('mergePortfolioQuotes · 未定价持仓不进分子分母', () => {
 
   it('不计价的空响应不炸：portfolio 为 null 时原样返回 null', () => {
     expect(mergePortfolioQuotes(null, {})).toBeNull()
+  })
+})
+
+describe('daily_pnl_coverage · 缺涨跌幅/昨收不许静默少算', () => {
+  it('部分持仓没有涨跌幅：合计只覆盖已观测部分，覆盖度显式给出', () => {
+    const merged = mergePortfolioQuotes(
+      portfolio([
+        {
+          id: 1,
+          name: '主账户',
+          positions: [
+            pos({ id: 1, symbol: '600111', cost_price: 100, quantity: 100 }),
+            pos({ id: 2, symbol: '600519', cost_price: 100, quantity: 100 }),
+          ],
+        },
+      ]),
+      {
+        // 有价但没有涨跌幅（行情源没给昨收）⇒ 当日盈亏算不出，不许记 0
+        'CN:600111': quote({ current_price: 110, change_pct: null }),
+        'CN:600519': quote({ current_price: 105, change_pct: 5 }),
+      },
+    )!
+    const total = merged.total
+    expect(total.total_daily_pnl).not.toBeNull()
+    expect(total.daily_pnl_coverage).toEqual({
+      requested: true,
+      positions_total: 2,
+      positions_observed: 1,
+      complete: false,
+    })
+    // 未被观测到的那只：daily_pnl 是 null（不是 0）
+    const noChange = merged.accounts[0].positions.find((p) => p.symbol === '600111')!
+    expect(noChange.daily_pnl).toBeNull()
+    expect(noChange.daily_pnl_pct).toBeNull()
+  })
+
+  it('一只都观测不到：当日盈亏为 null（未知），不是 0', () => {
+    const merged = mergePortfolioQuotes(
+      portfolio([{ id: 1, name: '主账户', positions: [pos({ symbol: '600111' })] }]),
+      { 'CN:600111': quote({ current_price: 110, change_pct: null }) },
+    )!
+    expect(merged.total.total_daily_pnl).toBeNull()
+    expect(merged.total.daily_pnl_coverage).toMatchObject({
+      positions_total: 1,
+      positions_observed: 0,
+      complete: false,
+    })
+    expect(merged.accounts[0].total_daily_pnl).toBeNull()
+  })
+
+  it('全覆盖：complete=true，合计与逐只相加一致', () => {
+    const merged = mergePortfolioQuotes(
+      portfolio([
+        {
+          id: 1,
+          name: '主账户',
+          positions: [
+            pos({ id: 1, symbol: '600111', cost_price: 100, quantity: 100 }),
+            pos({ id: 2, symbol: '600519', cost_price: 100, quantity: 100 }),
+          ],
+        },
+      ]),
+      {
+        'CN:600111': quote({ current_price: 110, change_pct: 10 }),
+        'CN:600519': quote({ current_price: 100, change_pct: 0 }),
+      },
+    )!
+    expect(merged.total.daily_pnl_coverage).toEqual({
+      requested: true,
+      positions_total: 2,
+      positions_observed: 2,
+      complete: true,
+    })
+    const sum = merged.accounts[0].positions.reduce((acc, p) => acc + (p.daily_pnl ?? 0), 0)
+    expect(merged.total.total_daily_pnl).toBeCloseTo(sum, 2)
+  })
+
+  it('空账户：0 只持仓 ⇒ 0 当日盈亏 + no_positions（不是"缺行情"）', () => {
+    const merged = mergePortfolioQuotes(portfolio([{ id: 1, name: '空账户', positions: [] }]), {})!
+    expect(merged.total.total_daily_pnl).toBe(0)
+    expect(merged.total.daily_pnl_coverage).toEqual({
+      requested: true,
+      positions_total: 0,
+      positions_observed: 0,
+      complete: true,
+    })
+    expect(merged.total.quotes_coverage).toMatchObject({
+      positions_total: 0,
+      pricing_basis: 'no_positions',
+      complete: true,
+    })
   })
 })
 

@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * 持仓风险检查 · 纯函数回归（2026-10-29, P2 持仓风险切片；2026-10-29 二次评审修订）。
+ * 持仓风险检查 · 纯函数回归（2026-10-29, P2 持仓风险切片；2026-10-29 二/三次评审修订）。
  *
  * 这份文件钉的是**判定口径**，不是文案：
  *  1. 破位只用**用户自己设的** `defense_price`（方案 B 裁决）：没设 → `unset`，不许拿
@@ -21,18 +21,43 @@
  *  9. **缺口各自独立计数**：无现价 + 未设防线要同时进 `noPrice` 和 `noDefense`。
  * 10. **币种按市场标识**：HK→HKD、US→USD、CN→CNY；不许把三种币的价格混成一列裸数字。
  * 11. **缺成本不稀释**：同标的两账户，一个缺成本时不许拿它去加权摊薄另一账户的成本。
+ *
+ * 三次评审（日内陈旧报价）：
+ * 12. **`today` ≠ 实时**：09:31 的报价在 14:03 仍被后端判 `today`，但它不是「现在的价」。
+ *     必须按**服务器市场墙钟**与报价时刻之差判时刻层，超窗即 `stale`，不进 `breached`。
+ * 13. **证明不了就 `unknown`**：无 `quote_time`（WS tick 只剩裸价）、无服务器市场时钟、
+ *     报价晚于市场时钟 —— 一律不下破位结论，不许退回「period==='today' 就算实时」。
+ * 14. **服务器说非交易时段 ⇒ 定格价**：当日最后一笔报价照判，但 freshness 是
+ *     `session_frozen`（UI 必须写「非交易时段」），不许写成实时。
+ * 15. **计数与表格一致**：`stale = staleKnown + staleUnverified`，
+ *     `breached+near+safe+stale+unset+unknown === total`，`noDefense` 与「防线=未设」同数。
  */
 import { describe, expect, it } from 'vitest'
 
 import {
   NEAR_LINE_PCT,
+  QUOTE_FRESH_WINDOW_MINUTES,
   buildPositionRiskReport,
   currencyForMarket,
   evaluateDefenseLine,
   formatPriceWithCurrency,
+  freshnessFor,
   quoteAgeLabel,
   resolveDefenseState,
+  wallClockMinutes,
 } from '@/lib/position-risk'
+import type { MarketSessionMap, PositionRiskInput } from '@/lib/position-risk'
+
+/** 服务器事实夹具：CN 交易日 15:03（`/stocks/markets/status` 的 local_time + status）。 */
+const TRADING: MarketSessionMap = {
+  CN: { localTime: '15:03', status: 'trading' },
+  HK: { localTime: '15:03', status: 'trading' },
+  US: { localTime: '15:03', status: 'trading' },
+  SG: { localTime: '15:03', status: 'trading' },
+}
+
+const report = (rows: PositionRiskInput[], sessions: MarketSessionMap = TRADING) =>
+  buildPositionRiskReport(rows, { marketSessions: sessions })
 
 const pos = (over: Record<string, unknown> = {}) => ({
   id: 1,
@@ -87,34 +112,155 @@ describe('evaluateDefenseLine', () => {
   })
 })
 
-describe('resolveDefenseState · 行情新鲜度闸门', () => {
-  it("period='today' 才允许出破位/逼近/安全", () => {
-    expect(resolveDefenseState({ price: 33, defense: 34, period: 'today' })).toMatchObject({
-      state: 'breached',
-      freshness: 'current',
-    })
+describe('wallClockMinutes · 只读字符串里的市场当地时分', () => {
+  it('兼容 "YYYY-MM-DD HH:MM:SS" 与 ISO 带时区', () => {
+    expect(wallClockMinutes('2026-10-29 15:00:00')).toBe(15 * 60)
+    expect(wallClockMinutes('2026-10-29T09:31:12+08:00')).toBe(9 * 60 + 31)
+    expect(wallClockMinutes('09:31')).toBe(9 * 60 + 31)
+  })
+
+  it('解析不出 / 非法值 → null（不猜成 0 点）', () => {
+    expect(wallClockMinutes(null)).toBeNull()
+    expect(wallClockMinutes('')).toBeNull()
+    expect(wallClockMinutes('not-a-time')).toBeNull()
+    expect(wallClockMinutes('2026-10-29 25:00:00')).toBeNull()
+  })
+})
+
+describe('resolveDefenseState · 行情时效闸门（日期层 + 时刻层）', () => {
+  it('交易日 + 交易中 + 报价在窗口内 → current，照常判破位', () => {
+    expect(
+      resolveDefenseState({
+        price: 33,
+        defense: 34,
+        period: 'today',
+        quoteTime: '2026-10-29 15:00:00',
+        market: { localTime: '15:03', status: 'trading' },
+      }),
+    ).toMatchObject({ state: 'breached', freshness: 'current', reason: 'ok', ageMinutes: 3 })
   })
 
   it("period='previous_trading_day' 的旧报价 → stale，不当成当前风险信号", () => {
-    const r = resolveDefenseState({ price: 33, defense: 34, period: 'previous_trading_day' })
+    const r = resolveDefenseState({
+      price: 33,
+      defense: 34,
+      period: 'previous_trading_day',
+      quoteTime: '2026-10-28 15:00:00',
+      market: { localTime: '15:03', status: 'trading' },
+    })
     expect(r.state).toBe('stale')
     expect(r.freshness).toBe('stale')
+    expect(r.reason).toBe('period')
     // 原始距离仍保留（可核对），但状态不是 breached
     expect(r.distancePct).toBeCloseTo(-2.94, 2)
   })
 
   it("period='unknown' / 'mixed' 无法证明新鲜 → stale，不猜「今天」", () => {
-    expect(resolveDefenseState({ price: 33, defense: 34, period: 'unknown' }).state).toBe('stale')
-    expect(resolveDefenseState({ price: 33, defense: 34, period: 'mixed' }).state).toBe('stale')
-    expect(resolveDefenseState({ price: 33, defense: 34, period: null }).state).toBe('stale')
+    const base = { price: 33, defense: 34, market: { localTime: '15:03', status: 'trading' } }
+    expect(resolveDefenseState({ ...base, period: 'unknown' }).state).toBe('stale')
+    expect(resolveDefenseState({ ...base, period: 'mixed' }).state).toBe('stale')
+    expect(resolveDefenseState({ ...base, period: null }).state).toBe('stale')
   })
 
   it('没有现价 → unknown（freshness=missing），与防线无关', () => {
-    expect(resolveDefenseState({ price: null, defense: 34, period: 'today' })).toEqual({
-      state: 'unknown',
-      distancePct: null,
-      freshness: 'missing',
+    expect(
+      resolveDefenseState({
+        price: null,
+        defense: 34,
+        period: 'today',
+        quoteTime: '2026-10-29 15:00:00',
+        market: { localTime: '15:03', status: 'trading' },
+      }),
+    ).toMatchObject({ state: 'unknown', distancePct: null, freshness: 'missing' })
+  })
+
+  it('【三次评审】09:31 的报价在 14:03 不许判破位（同一交易日也算陈旧）', () => {
+    const r = resolveDefenseState({
+      price: 33,
+      defense: 34,
+      period: 'today',
+      quoteTime: '2026-10-29 09:31:00',
+      market: { localTime: '14:03', status: 'trading' },
     })
+    expect(r.state).toBe('stale')
+    expect(r.freshness).toBe('stale')
+    expect(r.reason).toBe('intraday_age')
+    expect(r.ageMinutes).toBe(272)
+    // 距离仍陈列（可核对），但不许进 breached
+    expect(r.distancePct).toBeCloseTo(-2.94, 2)
+  })
+
+  it('【三次评审】没有报价时刻（WS tick 只剩裸价）→ unknown，不冒充实时', () => {
+    const r = resolveDefenseState({
+      price: 33,
+      defense: 34,
+      period: 'today',
+      quoteTime: null,
+      market: { localTime: '14:03', status: 'trading' },
+    })
+    expect(r.state).toBe('stale')
+    expect(r.freshness).toBe('unknown')
+    expect(r.reason).toBe('no_time')
+  })
+
+  it('【三次评审】没有服务器市场时钟 → unknown（不读本机时钟当参考）', () => {
+    const r = resolveDefenseState({
+      price: 33,
+      defense: 34,
+      period: 'today',
+      quoteTime: '2026-10-29 15:00:00',
+      market: null,
+    })
+    expect(r.state).toBe('stale')
+    expect(r.freshness).toBe('unknown')
+    expect(r.reason).toBe('no_clock')
+  })
+
+  it('【三次评审】报价晚于服务器市场时钟（跨日残留/时钟异常）→ unknown', () => {
+    const r = freshnessFor({
+      price: 33,
+      period: 'today',
+      quoteTime: '2026-10-29 20:00:00',
+      market: { localTime: '10:00', status: 'trading' },
+    })
+    expect(r.freshness).toBe('unknown')
+    expect(r.reason).toBe('clock_skew')
+  })
+
+  it('【三次评审】服务器说已收盘 → 当日报价是定格价：可判，但标 session_frozen', () => {
+    const r = resolveDefenseState({
+      price: 33,
+      defense: 34,
+      period: 'today',
+      quoteTime: '2026-10-29 15:00:00',
+      market: { localTime: '19:40', status: 'after_hours' },
+    })
+    expect(r.state).toBe('breached')
+    expect(r.freshness).toBe('session_frozen')
+    expect(r.ageMinutes).toBe(280)
+  })
+
+  it('【三次评审】市场状态未知 → 不下结论（不把 unknown 当交易中）', () => {
+    const r = freshnessFor({
+      price: 33,
+      period: 'today',
+      quoteTime: '2026-10-29 15:00:00',
+      market: { localTime: '15:03', status: 'unknown' },
+    })
+    expect(r.freshness).toBe('unknown')
+  })
+
+  it('阈值是推断值：默认 15 分钟，且只在「交易中」这一层收紧', () => {
+    expect(QUOTE_FRESH_WINDOW_MINUTES).toBe(15)
+    const at = (quote: string) =>
+      freshnessFor({
+        price: 33,
+        period: 'today',
+        quoteTime: `2026-10-29 ${quote}:00`,
+        market: { localTime: '15:03', status: 'trading' },
+      }).freshness
+    expect(at('14:48')).toBe('current') // 恰好 15 分钟
+    expect(at('14:47')).toBe('stale') // 16 分钟
   })
 })
 
@@ -153,7 +299,7 @@ describe('币种', () => {
 
 describe('buildPositionRiskReport · 逐账户', () => {
   it('空持仓：全 0 且 rows 为空，worst 为 null', () => {
-    const r = buildPositionRiskReport([])
+    const r = report([])
     expect(r).toMatchObject({
       total: 0,
       symbols: 0,
@@ -163,6 +309,8 @@ describe('buildPositionRiskReport · 逐账户', () => {
       near: 0,
       safe: 0,
       stale: 0,
+      staleKnown: 0,
+      staleUnverified: 0,
       noDefense: 0,
       noPrice: 0,
       noCost: 0,
@@ -175,7 +323,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('缺现价：state=unknown，缺口可数，且不被算进破位/安全', () => {
-    const r = buildPositionRiskReport([pos({ current_price: null, pnl_pct: null })])
+    const r = report([pos({ current_price: null, pnl_pct: null })])
     expect(r.rows[0].defenseState).toBe('unknown')
     expect(r.rows[0].pnlPct).toBeNull()
     expect(r.rows[0].gaps).toContain('no_price')
@@ -186,7 +334,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('未设防线：state=unset + no_defense 缺口，不是 safe', () => {
-    const r = buildPositionRiskReport([pos({ defense_price: null })])
+    const r = report([pos({ defense_price: null })])
     expect(r.rows[0].defenseState).toBe('unset')
     expect(r.rows[0].defensePrice).toBeNull()
     expect(r.rows[0].gaps).toContain('no_defense')
@@ -195,9 +343,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('缺口独立计数：既无现价又未设防线，两个计数都要 +1', () => {
-    const r = buildPositionRiskReport([
-      pos({ current_price: null, defense_price: null, pnl_pct: null }),
-    ])
+    const r = report([pos({ current_price: null, defense_price: null, pnl_pct: null })])
     expect(r.rows[0].gaps).toEqual(expect.arrayContaining(['no_price', 'no_defense']))
     expect(r.noPrice).toBe(1)
     expect(r.noDefense).toBe(1)
@@ -207,7 +353,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('成本缺失/为 0：不回退成 0 盈亏，pnl 给 null 并记缺口', () => {
-    const r = buildPositionRiskReport([pos({ cost_price: 0, pnl_pct: null })])
+    const r = report([pos({ cost_price: 0, pnl_pct: null })])
     expect(r.rows[0].pnlPct).toBeNull()
     expect(r.rows[0].gaps).toContain('no_cost')
     expect(r.noCost).toBe(1)
@@ -216,12 +362,12 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('后端给了 pnl_pct 就用后端口径，不自己重算', () => {
-    const r = buildPositionRiskReport([pos({ cost_price: 100, current_price: 110, pnl_pct: 9.99 })])
+    const r = report([pos({ cost_price: 100, current_price: 110, pnl_pct: 9.99 })])
     expect(r.rows[0].pnlPct).toBe(9.99)
   })
 
-  it('排序：破位（越深越前）→ 逼近 → 行情滞后 → 缺现价 → 未设防线 → 安全', () => {
-    const r = buildPositionRiskReport([
+  it('排序：破位（越深越前）→ 逼近 → 时效未证实 → 缺现价 → 未设防线 → 安全', () => {
+    const r = report([
       pos({ id: 1, symbol: '000001', name: '平安银行', defense_price: 30, current_price: 40 }), // safe
       pos({ id: 2, symbol: '600000', name: '浦发银行', defense_price: null }), // unset
       pos({ id: 3, symbol: '600111', name: '北方稀土', defense_price: 33.96, current_price: 33.9 }), // breached -0.18
@@ -235,6 +381,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
         defense_price: 40,
         current_price: 38,
         daily_pnl_period: 'previous_trading_day',
+        quote_time: '2026-10-28 15:00:00',
       }), // stale（旧价看似破位，不许混进 breached）
     ])
     expect(r.rows.map((x) => x.symbol)).toEqual([
@@ -253,8 +400,8 @@ describe('buildPositionRiskReport · 逐账户', () => {
   it('同标的多账户各自一条防线：结论按账户归属，交换输入顺序结果不变（旧实现会来回翻）', () => {
     const a = pos({ id: 11, account_id: 1, account_name: '主账户', defense_price: 34, current_price: 33 })
     const b = pos({ id: 12, account_id: 2, account_name: '备用账户', defense_price: 25, current_price: 33 })
-    const forward = buildPositionRiskReport([a, b])
-    const backward = buildPositionRiskReport([b, a])
+    const forward = report([a, b])
+    const backward = report([b, a])
 
     // 不合并：两个账户两行，各自归属
     expect(forward.total).toBe(2)
@@ -279,7 +426,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('同标的多账户防线相同 → 仍分行，但不记为冲突', () => {
-    const r = buildPositionRiskReport([
+    const r = report([
       pos({ id: 11, account_id: 1, account_name: '主账户', defense_price: 34 }),
       pos({ id: 12, account_id: 2, account_name: '备用账户', defense_price: 34 }),
     ])
@@ -288,8 +435,14 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('旧报价不许冒充实时破位：period 非 today 时不进 breached，其余仍是观测值', () => {
-    const r = buildPositionRiskReport([
-      pos({ symbol: '600111', defense_price: 34, current_price: 33, daily_pnl_period: 'previous_trading_day' }),
+    const r = report([
+      pos({
+        symbol: '600111',
+        defense_price: 34,
+        current_price: 33,
+        daily_pnl_period: 'previous_trading_day',
+        quote_time: '2026-10-28 15:00:00',
+      }),
     ])
     expect(r.breached).toBe(0)
     expect(r.stale).toBe(1)
@@ -298,8 +451,49 @@ describe('buildPositionRiskReport · 逐账户', () => {
     expect(r.rows[0].quoteDate).toBe('2026-10-29')
   })
 
+  it('【三次评审】同日 09:31 报价在 14:03 不进 breached，且能说清「多久之前」', () => {
+    const r = report([
+      pos({ symbol: '600111', defense_price: 34, current_price: 33, quote_time: '2026-10-29 09:31:00' }),
+    ], { CN: { localTime: '14:03', status: 'trading' } })
+    expect(r.breached).toBe(0)
+    expect(r.stale).toBe(1)
+    expect(r.staleKnown).toBe(1)
+    expect(r.staleUnverified).toBe(0)
+    const row = r.rows[0]
+    expect(row.defenseState).toBe('stale')
+    expect(row.freshness).toBe('stale')
+    expect(row.staleReason).toBe('intraday_age')
+    expect(row.marketStatus).toBe('trading')
+    expect(row.quoteLocalTime).toBe('09:31')
+    expect(row.marketLocalTime).toBe('14:03')
+    expect(row.quoteAgeMinutes).toBe(272)
+    expect(r.breached + r.near + r.safe + r.stale + r.unset + r.unknown).toBe(r.total)
+  })
+
+  it('【三次评审】无报价时刻 / 无市场时钟 → staleUnverified 单独计数，不混进「已知陈旧」', () => {
+    const r = report(
+      [
+        pos({ id: 1, symbol: '600111', quote_time: null }),
+        pos({ id: 2, symbol: '601318', quote_time: '2026-10-29 09:31:00' }),
+      ],
+      { CN: { localTime: '14:03', status: 'trading' } },
+    )
+    expect(r.stale).toBe(2)
+    expect(r.staleUnverified).toBe(1)
+    expect(r.staleKnown).toBe(1)
+    expect(r.breached).toBe(0)
+  })
+
+  it('【三次评审】缺服务器市场时钟时全部不下结论（宁可未知，不猜实时）', () => {
+    const r = report([pos()], null)
+    expect(r.rows[0].defenseState).toBe('stale')
+    expect(r.rows[0].freshness).toBe('unknown')
+    expect(r.rows[0].staleReason).toBe('no_clock')
+    expect(r.breached).toBe(0)
+  })
+
   it('全盈利时 worstByPnl 是最弱的一只（正值），allProfitable 为 true', () => {
-    const r = buildPositionRiskReport([
+    const r = report([
       pos({ id: 1, symbol: '600111', pnl_pct: 2.4 }),
       pos({ id: 2, symbol: '601318', pnl_pct: 8.1 }),
       pos({ id: 3, symbol: '600519', pnl_pct: 0.3 }),
@@ -311,7 +505,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('有浮亏时 allProfitable 为 false，worstByPnl 是浮亏最重的一只', () => {
-    const r = buildPositionRiskReport([
+    const r = report([
       pos({ id: 1, symbol: '600111', pnl_pct: 3.2 }),
       pos({ id: 2, symbol: '601318', pnl_pct: -12.5 }),
       pos({ id: 3, symbol: '600519', pnl_pct: null, current_price: null }),
@@ -323,7 +517,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('缺成本的账户不稀释另一账户的成本（不许加权成 50）', () => {
-    const r = buildPositionRiskReport([
+    const r = report([
       pos({ id: 11, account_id: 1, account_name: '主账户', cost_price: 100, quantity: 100, pnl_pct: null }),
       pos({ id: 12, account_id: 2, account_name: '备用账户', cost_price: null, quantity: 100, pnl_pct: null }),
     ])
@@ -337,7 +531,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('港/美/A 各自带币种，价格不被当成同币种裸数字', () => {
-    const r = buildPositionRiskReport([
+    const r = report([
       pos({ id: 1, symbol: '600111', market: 'CN', current_price: 35.29, defense_price: 33.96 }),
       pos({ id: 2, symbol: '00700', name: '腾讯控股', market: 'HK', current_price: 380, defense_price: 360 }),
       pos({ id: 3, symbol: 'AAPL', name: '苹果', market: 'US', current_price: 180, defense_price: 170 }),
@@ -354,7 +548,7 @@ describe('buildPositionRiskReport · 逐账户', () => {
   })
 
   it('只输出观测值：行里没有方向/买卖/建议字段', () => {
-    const row = buildPositionRiskReport([pos()]).rows[0]
+    const row = report([pos()]).rows[0]
     expect(Object.keys(row).sort()).toEqual([
       'accountId',
       'accountName',
@@ -368,12 +562,17 @@ describe('buildPositionRiskReport · 逐账户', () => {
       'gaps',
       'key',
       'market',
+      'marketLocalTime',
+      'marketStatus',
       'name',
       'pnlPct',
       'pricePeriod',
+      'quoteAgeMinutes',
       'quoteDate',
+      'quoteLocalTime',
       'quoteTime',
       'sharedSymbolConflict',
+      'staleReason',
       'symbol',
     ])
   })

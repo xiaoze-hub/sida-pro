@@ -5,8 +5,10 @@ import { safePercent } from '@/lib/format'
 import {
   buildPositionRiskReport,
   formatPriceWithCurrency,
+  humanizeAgeMinutes,
   NEAR_LINE_PCT,
-  quoteAgeLabel,
+  QUOTE_FRESH_WINDOW_MINUTES,
+  type MarketSessionMap,
   type PositionRiskReport,
   type PositionRiskRow,
 } from '@/lib/position-risk'
@@ -26,59 +28,91 @@ import { useStocks } from './context'
  * 所以本组件**只补防线这一维**：不重复列成本/浮亏（那两列在下方持仓表里，重复摆两遍
  * 只会让两张表互相打架）。表头写清分工，用户知道去哪看价格、去哪看纪律位。
  *
- * 本组件不新建数据源：只消费持仓页**已经加载**的 `GET /portfolio/summary`（`useStocks().portfolio`），
+ * 本组件不新建数据源：只消费持仓页**已经加载**的 `GET /portfolio/summary`（`useStocks().portfolio`）
+ * 与 `GET /stocks/markets/status`（`useStocks().marketStatus`，服务器市场墙钟/状态），
  * 判定收敛在 `@/lib/position-risk`（`DefenseLineBanner` 也已改为共用同一判定）。
  *
- * ## 五条不许越的线
+ * ## 六条不许越的线
  * 1. **不告警未设防线**：没设就是「未设防线」，不拿成本折算成纪律位（方案 B）。
  * 2. **缺现价说缺**：`无现价` 单独成态，不混进「安全」，也不从分母里消失。
- * 3. **旧报价不判破位**：行情不是当日 → `行情滞后`，只陈列历史价位，不进破位/逼近计数。
+ * 3. **旧报价/陈旧报价不判破位**：日期层（后端 `daily_pnl_period`）或时刻层
+ *    （服务器市场墙钟 - 报价时刻 > 推断阈值）任一不过 ⇒ `时效未证实`，不进破位/逼近计数。
+ *    证明不了时点（无报价时刻 / 无市场时钟）同样不判 —— 不冒充实时。
  * 4. **不产出结论**：只列状态 / 距离 / 缺口，不写买卖、目标价、加减仓。
  * 5. **每账户一行**：同一标的多账户各自一条防线，不做任何合并或「取第一条」。
+ * 6. **计数与表格同源**：指标里的「破位 / 逼近 / 时效未证实 / 未设防线 / 无现价」
+ *    与表格每个状态桶严格同数（同一个 `defenseState` / `gaps`），不另起一套口径。
+ *    单位一律写「行」（一个账户的一条持仓），不冒称「只」标的。
  */
 
 const STATE_META: Record<
   PositionRiskRow['defenseState'],
-  { label: string; tone: string; icon: typeof ShieldAlert }
+  { label: string; tone: string; icon: typeof ShieldAlert; hint: string }
 > = {
-  breached: { label: '已破位', tone: 'text-rose-400', icon: AlertOctagon },
-  near: { label: `逼近（${NEAR_LINE_PCT}%内）`, tone: 'text-amber-400', icon: ShieldAlert },
-  safe: { label: '防线之上', tone: 'text-muted-foreground', icon: ShieldAlert },
-  unset: { label: '未设防线', tone: 'text-muted-foreground', icon: ShieldPlus },
-  unknown: { label: '无现价', tone: 'text-role-watch', icon: CircleSlash },
-  stale: { label: '行情滞后', tone: 'text-role-watch', icon: ClockAlert },
+  breached: {
+    label: '已破位',
+    tone: 'text-rose-400',
+    icon: AlertOctagon,
+    hint: '现价在你的防线之下（时效已证实）',
+  },
+  near: {
+    label: `逼近（${NEAR_LINE_PCT}%内）`,
+    tone: 'text-amber-400',
+    icon: ShieldAlert,
+    hint: '现价距防线不超过该阈值（时效已证实）',
+  },
+  safe: {
+    label: '防线之上',
+    tone: 'text-muted-foreground',
+    icon: ShieldAlert,
+    hint: '现价在防线之上，且时效已证实',
+  },
+  unset: { label: '未设防线', tone: 'text-muted-foreground', icon: ShieldPlus, hint: '你没设防线，不告警' },
+  unknown: { label: '无现价', tone: 'text-role-watch', icon: CircleSlash, hint: '没有可用现价，不判防线' },
+  stale: {
+    label: '时效未证实',
+    tone: 'text-role-watch',
+    icon: ClockAlert,
+    hint: '报价时点无法证明是当下的，因此不判破位/逼近',
+  },
 }
 
 /**
  * 行情时点：只说你**证明得了**的事。
- * - 没有现价 → 没有报价时点可说（后端可能残留旧的 `daily_pnl_period='today'`，照抄会把
- *   「没有行情」标成「当日」，故先看价）；
- * - 只有当日后端分类才是 `current`；`previous_trading_day` / `mixed` / `unknown`
- *   一律不写成「上一交易日」——后端只按「早于今天」归类，隔日与隔周共用同一个标签，
- *   写「上一交易日」就是把陈旧数据说成新鲜的。改为给真实日期 + 距今时长。
+ *
+ * 三层事实，缺一层就往下退，绝不拿「今天是交易日」冒充「这条报价是现在的」：
+ *  1. 没有现价 → 没有报价时点可说（后端可能残留旧的 `daily_pnl_period='today'`，先看价）；
+ *  2. 日期层：`daily_pnl_period != 'today'` → 非当日（后端只按「早于今天」归类，
+ *     隔日与隔周共用同一个标签，所以写真实日期，不写「上一交易日」）；
+ *  3. 时刻层：服务器市场墙钟 - 报价时刻 > 推断阈值 → 滞后；
+ *     没有报价时刻 / 没有市场时钟 / 报价晚于市场时钟 → 时点未知。
  */
-function freshnessLabel(row: PositionRiskRow, now: Date): string {
+function freshnessLabel(row: PositionRiskRow): string {
   if (row.currentPrice === null) return '无行情'
-  const time = row.quoteTime ? row.quoteTime.slice(11, 16) : ''
-  const age = quoteAgeLabel(row.quoteTime, now)
+  const at = row.quoteLocalTime ? ` ${row.quoteLocalTime}` : ''
+  const age = humanizeAgeMinutes(row.quoteAgeMinutes)
   if (row.freshness === 'current') {
-    return `${time ? `当日 ${time}` : '当日'}${age ? ` · ${age}` : ''}`
+    // 同样是「窗口内」，服务器说交易中才是真·实时；非交易时段里只是刚定格的最新价。
+    const head = row.marketStatus === 'trading' ? '交易中' : '非交易时段 · 最近报价'
+    return `${head}${at}${age ? ` · ${age}` : ''}`
   }
-  const stamp = row.quoteDate ?? (row.quoteTime ? row.quoteTime.slice(0, 10) : '')
-  const when = stamp ? `历史报价 ${stamp}` : '历史报价（日期未知）'
-  if (row.freshness === 'stale') return age ? `${when} · ${age}` : when
-  return `${stamp ? `时点未知 ${stamp}` : '时点未知'}${age ? ` · ${age}` : ''}`
+  if (row.freshness === 'session_frozen') {
+    return `非交易时段 · 最近报价${at || '（时刻未知）'}${age ? ` · ${age}` : ''}`
+  }
+  if (row.staleReason === 'period') {
+    const stamp = row.quoteDate ?? (row.quoteTime ? row.quoteTime.slice(0, 10) : '')
+    return `非当日报价 ${stamp || '（日期未知）'}${at}`
+  }
+  if (row.staleReason === 'intraday_age') {
+    return `滞后${age ? ` ${age}` : ''} · 报价${at || '（时刻未知）'}`
+  }
+  if (row.staleReason === 'no_time') return '时点未知（报价无时间）'
+  if (row.staleReason === 'clock_skew') return '时点存疑（报价晚于市场时钟）'
+  return '时点未证实（缺服务器市场时钟）'
 }
 
 /** 只读展示层：给报告即可渲染，方便单测直接把边界值喂进来。 */
-export function PositionRiskTable({
-  report,
-  now,
-}: {
-  report: PositionRiskReport
-  now?: Date
-}) {
-  const clock = now ?? new Date()
+export function PositionRiskTable({ report }: { report: PositionRiskReport }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[620px] text-[12px]" data-testid="position-risk-table">
@@ -89,7 +123,7 @@ export function PositionRiskTable({
             <th className="py-2 pr-3 text-right font-normal">现价</th>
             <th className="py-2 pr-3 text-right font-normal">距防线</th>
             <th className="py-2 pr-3 text-left font-normal">状态</th>
-            <th className="py-2 text-left font-normal">行情</th>
+            <th className="py-2 text-left font-normal">行情时点</th>
           </tr>
         </thead>
         <tbody>
@@ -104,6 +138,7 @@ export function PositionRiskTable({
                 data-testid={`position-risk-row-${row.symbol}`}
                 data-account={row.accountId ?? ''}
                 data-state={row.defenseState}
+                data-freshness={row.freshness}
               >
                 <td className="py-2 pr-3">
                   {row.accountName && (
@@ -145,12 +180,14 @@ export function PositionRiskTable({
                   )}
                 </td>
                 <td className="py-2 pr-3">
-                  <span className={`inline-flex items-center gap-1 ${meta.tone}`}>
+                  <span className={`inline-flex items-center gap-1 ${meta.tone}`} title={meta.hint}>
                     <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     {meta.label}
                   </span>
                 </td>
-                <td className="py-2 text-muted-foreground">{freshnessLabel(row, clock)}</td>
+                <td className="py-2 text-muted-foreground" data-testid={`position-risk-quote-${row.symbol}`}>
+                  {freshnessLabel(row)}
+                </td>
               </tr>
             )
           })}
@@ -165,14 +202,16 @@ function Metric({
   value,
   testId,
   muted,
+  hint,
 }: {
   label: string
   value: number
   testId: string
   muted?: boolean
+  hint?: string
 }) {
   return (
-    <div className="flex items-baseline gap-2" data-testid={testId}>
+    <div className="flex items-baseline gap-2" data-testid={testId} title={hint}>
       <span className="text-[12px] text-muted-foreground">{label}</span>
       <span
         className={`text-[16px] tabular-nums ${muted ? 'text-muted-foreground' : 'text-foreground'}`}
@@ -183,9 +222,26 @@ function Metric({
   )
 }
 
-/** 持仓页容器：读页面已加载的持仓汇总，不额外发请求。 */
+/** 把页面已加载的市场状态折成时效判定要用的「服务器市场时钟 + 状态」。 */
+function buildMarketSessions(marketStatus: unknown): MarketSessionMap {
+  const list = Array.isArray(marketStatus) ? marketStatus : []
+  const map: Record<string, { localTime: string | null; status: string | null }> = {}
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as { code?: string; local_time?: string; status?: string }
+    const code = String(item.code ?? '').trim().toUpperCase()
+    if (!code) continue
+    map[code] = {
+      localTime: item.local_time ?? null,
+      status: item.status ?? null,
+    }
+  }
+  return map
+}
+
+/** 持仓页容器：读页面已加载的持仓汇总与市场状态，不额外发请求。 */
 export function PositionRiskSection() {
-  const { portfolio, viewTab } = useStocks()
+  const { portfolio, viewTab, marketStatus } = useStocks()
   // 每账户一行：账户归属必须带进判定，否则同一 symbol 的多条防线无法区分。
   const positions = useMemo(
     () =>
@@ -198,7 +254,12 @@ export function PositionRiskSection() {
       ),
     [portfolio],
   )
-  const report = useMemo(() => buildPositionRiskReport(positions), [positions])
+  // 时效判定只吃服务器给的「市场墙钟 + 状态」（`/stocks/markets/status`），不读本机时钟。
+  const marketSessions = useMemo(() => buildMarketSessions(marketStatus), [marketStatus])
+  const report = useMemo(
+    () => buildPositionRiskReport(positions, { marketSessions }),
+    [positions, marketSessions],
+  )
 
   if (viewTab !== 'positions' || report.total === 0) return null
 
@@ -222,7 +283,7 @@ export function PositionRiskSection() {
           </span>
         </div>
         <span className="text-[12px] tabular-nums text-muted-foreground">
-          有现价 {report.priced}/{report.total} 只
+          已定价 {report.priced}/{report.total} 行（{report.symbols} 只标的 · {report.accounts} 个账户）
         </span>
       </div>
 
@@ -230,34 +291,47 @@ export function PositionRiskSection() {
         className="mb-2 flex flex-wrap items-baseline gap-x-5 gap-y-1"
         data-testid="position-risk-metrics"
       >
-        <Metric label="已破位" value={report.breached} testId="metric-breached" />
-        <Metric label="逼近" value={report.near} testId="metric-near" />
-        <Metric label="行情滞后" value={report.stale} testId="metric-stale" muted />
-        <Metric label="未设防线" value={report.noDefense} testId="metric-no-defense" muted />
-        <Metric label="无现价" value={report.noPrice} testId="metric-no-price" muted />
+        <Metric label="已破位" value={report.breached} testId="metric-breached" hint="行数（一个账户的一条持仓）" />
+        <Metric label="逼近" value={report.near} testId="metric-near" hint="行数" />
+        <Metric
+          label="时效未证实"
+          value={report.stale}
+          testId="metric-stale"
+          muted
+          hint="行数：已知陈旧 + 证明不了时点，都不判破位"
+        />
+        <Metric label="未设防线" value={report.noDefense} testId="metric-no-defense" muted hint="行数" />
+        <Metric label="无现价" value={report.noPrice} testId="metric-no-price" muted hint="行数" />
       </div>
 
       <PositionRiskTable report={report} />
 
       <div className="mt-2 space-y-1 text-[12px] text-muted-foreground">
-        {report.noPrice > 0 && (
-          <p>
-            {report.noPrice} 只没有可用现价：这些持仓**不参与**破位/浮亏判定，也不会被算作安全。
+        <p data-testid="position-risk-freshness-rule">
+          行情时点分两层判：日期层看后端给出的「当日 / 非当日」判定（后端已按市场时区算好，
+          前端不复刻交易日历）；时刻层看「服务器市场时钟 − 报价时刻」，超过{' '}
+          {QUOTE_FRESH_WINDOW_MINUTES} 分钟即不作实时（该阈值是推断值，不是交易所口径）。
+          服务器说当日已收盘/午休/盘前时，最后一笔报价称「最近报价」，可核对但不叫实时。
+        </p>
+        {report.stale > 0 && (
+          <p data-testid="position-risk-stale-note">
+            {report.stale} 行时效未证实（其中已知陈旧 {report.staleKnown} 行、时点无法证明{' '}
+            {report.staleUnverified} 行）：只陈列价位与距离，未计入破位/逼近。
           </p>
         )}
-        {report.stale > 0 && (
+        {report.noPrice > 0 && (
           <p>
-            {report.stale} 只的报价不是当日行情（行情滞后）：只陈列历史价位，**未计入破位**/逼近判定。
+            {report.noPrice} 行没有可用现价：不参与破位/浮亏判定，也不会被算作安全。
           </p>
         )}
         {report.noDefense > 0 && (
           <p>
-            {report.noDefense} 只未设防线：只有你在持仓里填了防线价才会判定破位，系统默认值仅作参考。
+            {report.noDefense} 行未设防线：只有你在持仓里填了防线价才会判定破位，系统默认值仅作参考。
           </p>
         )}
         {report.conflictingSymbols.length > 0 && (
           <p>
-            同一标的多账户防线不同（{report.conflictingSymbols.length} 只）：已**按账户**分行显示，
+            同一标的多账户防线不同（{report.conflictingSymbols.length} 只标的）：已按账户分行显示，
             不做合并、也不替你取其中一条。
           </p>
         )}

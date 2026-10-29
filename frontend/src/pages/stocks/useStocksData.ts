@@ -259,6 +259,24 @@ const loadPortfolio = useCallback(async () => {
   }
 }, [portfolioRaw, setLoadError, setMarketStatus, setPortfolio, setPortfolioLoading, setPortfolioRaw])
 
+/**
+ * 刷新服务器市场状态（2026-10-29 三次复审）。
+ *
+ * 持仓风险检查/防线告警的「行情时刻层」用 `/stocks/markets/status` 的
+ * `local_time`（后端按市场时区算的服务器墙钟）+ `status`（后端按交易日历判的时段）。
+ * 这两个值必须跟着轮询一起刷新：页面开了一上午而时钟停在 09:00 时，
+ * 「报价 09:31 距今多久」就无从判断 —— 只能退化成「时点未知」，
+ * 于是用户在整段时间里都看不到真实结论。端点本身是纯本地计算（无外部行情请求）。
+ */
+const refreshMarketStatus = useCallback(async () => {
+  try {
+    const rows = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
+    setMarketStatus(rows)
+  } catch (e) {
+    logger.warn('刷新市场状态失败:', e)
+  }
+}, [setMarketStatus])
+
 const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
   const items: QuoteRequestItem[] = []
   const seen = new Set<string>()
@@ -333,12 +351,20 @@ const onQuoteTicks = useCallback((data: QuoteTickMap) => {
     for (const item of items) {
       const q = data[item.symbol]
       if (!q || typeof q.price !== 'number') continue
-      next[`${item.market}:${item.symbol}`] = {
+      const key = `${item.market}:${item.symbol}`
+      const prevQuote = prev[key]
+      next[key] = {
         current_price: q.price,
         change_pct: q.change_pct ?? null,
-        quote_time: null,
-        quote_date: null,
-        daily_pnl_period: prev[`${item.market}:${item.symbol}`]?.daily_pnl_period ?? 'unknown',
+        // 2026-10-29 三次复审: WS 帧只带裸价({price, change_pct, prev_close})，**没有**报价时刻。
+        // 旧实现写死 quote_time/quote_date = null，等于把上一轮轮询拿到的「09:31」抹掉，
+        // 于是下游只能按「period=today」冒充实时 —— 而 09:31 的价在 14:00 早就不是现价了。
+        // 这里改为**保留**已知时刻：拿不到新时刻不等于时刻不存在；保留的值只会让判定更保守
+        // （价格若在 T 之后变过，真实时点比 T 更新，按 T 判最多被判成滞后，不会反过来冒充实时）。
+        // 同时**绝不**用本机 now 造一个时刻（那是假新鲜）。
+        quote_time: prevQuote?.quote_time ?? null,
+        quote_date: prevQuote?.quote_date ?? null,
+        daily_pnl_period: prevQuote?.daily_pnl_period ?? 'unknown',
       }
     }
     return next
@@ -664,7 +690,9 @@ const autoRefreshTick = useCallback(() => {
   refreshQuotes()
   refreshKlines()
   loadPoolSuggestions()
-}, [refreshQuotes, refreshKlines, loadPoolSuggestions])
+  // 服务器市场墙钟必须与行情同频，否则「报价距今多久」会随页面变老而失真。
+  void refreshMarketStatus()
+}, [refreshQuotes, refreshKlines, loadPoolSuggestions, refreshMarketStatus])
 usePausedInterval(autoRefreshTick, autoRefresh ? refreshInterval * 1000 : 0, {
   deps: [autoRefresh, refreshInterval],
 })

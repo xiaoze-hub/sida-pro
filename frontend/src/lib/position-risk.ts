@@ -1,5 +1,5 @@
 /**
- * 持仓风险检查（P2 持仓风险切片, 2026-10-29）—— 纯函数，无 React、无请求。
+ * 持仓风险检查（P2 持仓风险切片, 2026-10-29）—— 纯函数，无 React、无请求、无时钟。
  *
  * ## 为什么要有这一层
  * 持仓页只有**组合合计**（总市值/总盈亏），逐只的「有没有纪律位、离纪律位多远、哪只
@@ -24,18 +24,33 @@
  *    且 `prev.defense = defense` 按**遍历顺序**覆盖 —— 主账户 34 / 备用账户 25 / 现价 33 时，
  *    清单和告警条会随账户顺序在「破位」和「安全」之间翻。防线是**用户对某个账户的**纪律位，
  *    不是标的属性：这里改为一行 = 一个账户的持仓，账户归属显式带出，冲突只**标注**不消除。
- * 7. **旧报价不许冒充实时破位**：`daily_pnl_period` 不是 `today` 时（后端 `classify_quote_period`
- *    对任何早于今天的日期都只给 `previous_trading_day`，可能是隔日也可能是隔周），
- *    一律 `stale`，不进 `breached`/`near` 计数，UI 显示真实报价日期与时间。
- *    前端**不自推交易日历**：只认后端判好的 `daily_pnl_period`。
- * 8. **全盈利不许叫「浮亏最重」**：`worstByPnl` 只是「按盈亏最弱的一只」（可能是正收益），
+ * 7. **全盈利不许叫「浮亏最重」**：`worstByPnl` 只是「按盈亏最弱的一只」（可能是正收益），
  *    `allProfitable` 交给 UI 换措辞。
- * 9. **缺口独立计数**：既无现价又未设防线时，`noPrice` 与 `noDefense` 各算一次 ——
+ * 8. **缺口独立计数**：既无现价又未设防线时，`noPrice` 与 `noDefense` 各算一次 ——
  *    旧实现用状态桶计数，后一个缺口被前一个吃掉。
- * 10. **币种按市场**：HK→HKD、US→USD、CN→CNY；一张表里混排三种币却不标币种，
- *     读起来就是「腾讯 380 比茅台 1500 便宜」。
- * 11. **缺成本不稀释**：旧合并把「无成本账户的数量」也算进加权分母，摊薄了另一账户的成本。
+ * 9. **币种按市场**：HK→HKD、US→USD、CN→CNY；一张表里混排三种币却不标币种，
+ *    读起来就是「腾讯 380 比茅台 1500 便宜」。
+ * 10. **缺成本不稀释**：旧合并把「无成本账户的数量」也算进加权分母，摊薄了另一账户的成本。
  *     现在每行独立，缺失直接 `no_cost` + `pnlPct=null`。
+ *
+ * ## 2026-10-29 三次评审：行情时效（本条最容易被写错）
+ * 11. **「backend says today」不等于「这条报价是刚发生的」**：`daily_pnl_period` 只回答
+ *     「报价日期是不是市场当地的今天」。09:31 的报价在 14:00 依然是 `today`，拿它判破位
+ *     等于用五个半小时前的价位说「你现在跌破了纪律位」。所以时效判定要**两层**：
+ *       - 日期层：后端按**市场时区**判好的 `daily_pnl_period`（前端不复刻交易日历）；
+ *       - 时刻层：报价自身的 `quote_time`（行情源的报时，服务器下行）与**服务器给出的
+ *         市场墙钟**（`/stocks/markets/status` 的 `local_time`，后端 `datetime.now(tz)`
+ *         算出来的）之差。两者同一时区、同一天，才谈得上「刚发生的」。
+ * 12. **拿不到可核对的时间就不许冒充实时**：没有 `quote_time`、没有服务器市场时钟、
+ *     报价晚于市场时钟（跨日/时钟异常）⇒ `unknown`，**不下**破位结论——宁可不判，
+ *     也不编一个「行情正常」的结论。库内不读系统时钟（不调用 Date 的无参构造 / now()）、
+ *     不自推交易日历。
+ * 13. **阈值是推断值**：`QUOTE_FRESH_WINDOW_MINUTES` 不是交易所/后端契约，只是「超过这么多
+ *     分钟就不再当实时」的经验线，UI 必须显式标注它，不许当成官方口径。
+ * 14. **服务器说市场没在交易时，当日报价是「定格价」而不是「实时价」**：`/stocks/markets/status`
+ *     的 `status`（trading / break / after_hours / pre_market / closed / unknown）本身就是
+ *     服务器判的，不是前端猜的交易日历。非交易时段里当日最后一笔报价可以判（那是全市场
+ *     看到的同一价位），但必须标成 `非交易时段 · 最近报价`，不许写「实时」。
  */
 
 import { safeFixed, safeNum, safePrice } from './format'
@@ -44,19 +59,78 @@ import { safeFixed, safeNum, safePrice } from './format'
 export const NEAR_LINE_PCT = 3
 
 /**
- * 防线结论。`stale` = 有价也有防线，但报价无法证明是当日的 —— 此时**不下**破位/安全结论。
+ * 行情时效窗口（分钟）—— **推断值，不是交易所/后端契约**。
+ *
+ * 取 15 分钟的理由（写清楚，避免下一个人当它是官方口径）：
+ *  - 持仓页行情由 `/quotes/batch` 轮询 + WS 推送刷新，轮询间隔远小于 15 分钟，
+ *    所以真·实时的报价不会落到窗口外；
+ *  - 它只用于**否决**「实时」这个说法，不用于放行：超窗 ⇒ 标记滞后并停判破位；
+ *  - 不做「交易时段内/外」的推断（那是交易日历的活，属于服务器），只做时刻差。
+ */
+export const QUOTE_FRESH_WINDOW_MINUTES = 15
+
+/**
+ * 防线结论。`stale` = 有价也有防线，但报价的**时点**无法证明是当下的 ——
+ * 此时**不下**破位/安全结论（行情滞后 / 时点未证实都落在这里）。
  */
 export type DefenseState = 'breached' | 'near' | 'safe' | 'unset' | 'unknown' | 'stale'
 
 /** 数据缺口（**不是**风险结论）：缺现价 / 缺用户防线 / 缺成本。 */
 export type RiskGap = 'no_price' | 'no_defense' | 'no_cost'
 
-/** 行情新鲜度：`current` 仅当后端 `daily_pnl_period === 'today'`。 */
-export type QuoteFreshness = 'current' | 'stale' | 'unknown' | 'missing'
+/**
+ * 行情时效：
+ *  - `current`：服务器判定「交易日 + 交易中」，且报价时刻在窗口内；
+ *  - `session_frozen`：服务器判定当日非交易时段（休市/盘后/午休/盘前），当日最后一笔报价；
+ *    可判（全市场同一价位），但必须标「非实时」；
+ *  - `stale`：已知不是当日，或当日但超出窗口；
+ *  - `unknown`：**证明不了**（无报价时刻 / 无服务器市场时钟 / 时刻异常）；
+ *  - `missing`：没有现价。
+ */
+export type QuoteFreshness = 'current' | 'session_frozen' | 'stale' | 'unknown' | 'missing'
+
+/** 时效结论的原因，UI 据此说清「为什么不算实时」，不含糊其辞。 */
+export type FreshnessReason =
+  | 'ok'
+  | 'period'
+  | 'intraday_age'
+  | 'no_time'
+  | 'no_clock'
+  | 'clock_skew'
+  | 'missing'
 
 export type PricePeriod = 'today' | 'previous_trading_day' | 'mixed' | 'unknown'
 
 export type Currency = 'CNY' | 'HKD' | 'USD' | 'UNKNOWN'
+
+/**
+ * 服务器给出的市场状态（`GET /stocks/markets/status` 的子集）。
+ *
+ * `localTime` 是后端用 `datetime.now(market_tz)` 算出来的**服务器市场墙钟**，
+ * 与行情源的 `quote_time` 同时区；`status` 是后端按交易日历给出的状态。
+ * 这两个字段是「时效判定」唯一允许的外部事实（前端不自己算时段/日历）。
+ */
+export interface MarketSessionInfo {
+  /** "HH:MM"（服务器市场当地墙钟）。 */
+  localTime?: string | null
+  /** trading / break / after_hours / pre_market / closed / unknown。 */
+  status?: string | null
+}
+
+export type MarketSessionMap = Record<string, MarketSessionInfo | undefined> | null | undefined
+
+export interface FreshnessVerdict {
+  freshness: QuoteFreshness
+  reason: FreshnessReason
+  /** 报价时刻距服务器市场墙钟的分钟数；算不出（跨日/缺时刻）为 null。 */
+  ageMinutes: number | null
+  /** 报价的市场当地墙钟 "HH:MM"。 */
+  quoteLocalTime: string | null
+  /** 服务器市场墙钟 "HH:MM"。 */
+  marketLocalTime: string | null
+  /** 服务器给出的市场状态（原样透传，供 UI 说明「非交易时段」）。 */
+  marketStatus: string | null
+}
 
 /** `/portfolio/summary` 持仓行的最小子集；数值允许是字符串（PG DECIMAL）。 */
 export interface PositionRiskInput {
@@ -96,8 +170,18 @@ export interface PositionRiskRow {
   distanceToDefensePct: number | null
   quoteDate: string | null
   quoteTime: string | null
+  /** 报价的市场当地墙钟 "HH:MM"（解析不出为 null）。 */
+  quoteLocalTime: string | null
+  /** 服务器市场墙钟 "HH:MM"（拿不到为 null）。 */
+  marketLocalTime: string | null
+  /** 服务器给出的市场状态（trading / break / after_hours / …），用于区分「交易中」与「非交易时段」。 */
+  marketStatus: string | null
   pricePeriod: PricePeriod
   freshness: QuoteFreshness
+  /** 这是「不算实时」的具体原因，UI 必须把它说出来。 */
+  staleReason: FreshnessReason
+  /** 报价距服务器市场墙钟的分钟数（算不出为 null）。 */
+  quoteAgeMinutes: number | null
   /** 同标的多账户防线不一致（本行仍按自己的防线判定，不做任何合并）。 */
   sharedSymbolConflict: boolean
   gaps: RiskGap[]
@@ -115,12 +199,20 @@ export interface PositionRiskReport {
   breached: number
   near: number
   safe: number
-  /** 有价有防线，但报价不是当日行情 —— 未计入破位/逼近。 */
+  /**
+   * 有价有防线但**时效未证实**（滞后 / 时点未知）的行数 —— 未计入破位/逼近。
+   * 与表格「时效未证实」状态严格同数（同一 `defenseState`）。
+   */
   stale: number
+  /** 其中「已知不是当下」的行数（日期层或时刻层超窗）。 */
+  staleKnown: number
+  /** 其中「证明不了时点」的行数（缺报价时刻 / 缺服务器市场时钟 / 时刻异常）。 */
+  staleUnverified: number
   /** 没有可用现价（连防线都不判）—— 与 `noPrice` 缺口同源但这里是状态桶。 */
   unknown: number
   /** 有现价但用户没设防线（不告警，当然也不判破位）。 */
   unset: number
+  /** 未设防线的**行**数（与表格「你的防线=未设」严格同数）。 */
   noDefense: number
   noPrice: number
   noCost: number
@@ -132,7 +224,7 @@ export interface PositionRiskReport {
   allProfitable: boolean
   /** 同一标的多账户防线不同（已按账户分行，不合并、不取首个）。 */
   conflictingSymbols: string[]
-  /** 已按处置优先级排序：破位（越深越前）→ 逼近 → 行情滞后 → 缺现价 → 未设防线 → 安全。 */
+  /** 已按处置优先级排序：破位（越深越前）→ 逼近 → 时效未证实 → 缺现价 → 未设防线 → 安全。 */
   rows: PositionRiskRow[]
 }
 
@@ -160,6 +252,14 @@ const STATE_RANK: Record<DefenseState, number> = {
   safe: 5,
 }
 
+/** 服务器状态里哪些算「当日非交易时段」（仍可判，但只能叫定格价）。 */
+const FROZEN_STATUSES: ReadonlySet<string> = new Set([
+  'break',
+  'after_hours',
+  'pre_market',
+  'closed',
+])
+
 /** 正数才有效（价格/成本/防线为 0 或负数都是"没有这个数"，不是 0）。 */
 function positive(v: unknown): number | null {
   const n = safeNum(v)
@@ -174,6 +274,11 @@ export function currencyForMarket(market: unknown): Currency {
   return CURRENCY_BY_MARKET[normalizeMarket(market)] ?? 'UNKNOWN'
 }
 
+/** 币种符号（UI 拼价格前缀用；未知市场为空串，不冒充人民币）。 */
+export function currencySymbolForMarket(market: unknown): string {
+  return CURRENCY_SYMBOL[currencyForMarket(market)]
+}
+
 /**
  * 价格带币种前缀。港股/美股必须标出来 —— 否则同一张表里的 380（HKD）和 1500（CNY）
  * 会被当成同一把尺子比较。
@@ -182,7 +287,98 @@ export function formatPriceWithCurrency(price: unknown, market: unknown): string
   const n = safeNum(price)
   if (n === null) return '--'
   // 价格精度走 safePrice（R6 门禁：禁裸 toFixed）
-  return `${CURRENCY_SYMBOL[currencyForMarket(market)]}${safePrice(n, 4)}`
+  return `${currencySymbolForMarket(market)}${safePrice(n, 4)}`
+}
+
+/**
+ * 从 "YYYY-MM-DD HH:MM[:SS]" / "YYYY-MM-DDTHH:MM[:SS]±HH:MM" 里取**当地墙钟分钟数**。
+ *
+ * 只读字符串里的时分：行情源的 `quote_time` 是**市场当地**时间（后端按市场时区定位，
+ * 见 `packages/marketdata .../tencent.py::_parse_quote_time`），
+ * 服务器市场时钟 `local_time` 也是市场当地，两者同一天才可比。
+ * 因此这里**不**把字符串转成绝对时刻（那要猜时区/夏令时），也不读本机时钟。
+ */
+export function wallClockMinutes(value: unknown): number | null {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  const m = /(?:^|[ T])(\d{1,2}):(\d{2})(?::\d{2})?/.exec(text)
+  if (!m) return null
+  const h = Number(m[1])
+  const min = Number(m[2])
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null
+  return h * 60 + min
+}
+
+/** "HH:MM"（分钟数 → 展示用；算不出给 null）。 */
+export function formatWallClockMinutes(minutes: number | null): string | null {
+  if (minutes === null || !Number.isFinite(minutes)) return null
+  const h = Math.floor(minutes / 60)
+  const m = Math.round(minutes % 60)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+/**
+ * 行情时效判定 —— **唯一实现**（持仓清单与告警条共用）。
+ *
+ * 只看两件服务器给的事实：`daily_pnl_period`（市场时区判好的日期层）与
+ * `/stocks/markets/status` 的市场墙钟 + 状态（时刻层 / 时段层）。
+ * 任何一层缺失 ⇒ `unknown`（证明不了，不冒充实时），绝不 fallback 成「today 就算实时」。
+ */
+export function freshnessFor(args: {
+  price: unknown
+  period?: string | null
+  quoteTime?: string | null
+  market?: MarketSessionInfo | null
+}): FreshnessVerdict {
+  const quoteLocalMinutes = wallClockMinutes(args.quoteTime)
+  const marketLocalMinutes = wallClockMinutes(args.market?.localTime)
+  const marketStatusRaw = String(args.market?.status ?? '').trim().toLowerCase()
+  const verdict = (
+    freshness: QuoteFreshness,
+    reason: FreshnessReason,
+    ageMinutes: number | null = null,
+  ): FreshnessVerdict => ({
+    freshness,
+    reason,
+    ageMinutes,
+    quoteLocalTime: formatWallClockMinutes(quoteLocalMinutes),
+    marketLocalTime: formatWallClockMinutes(marketLocalMinutes),
+    marketStatus: marketStatusRaw || null,
+  })
+
+  if (positive(args.price) === null) return verdict('missing', 'missing')
+
+  // ① 日期层：后端按市场时区判好的「是不是今天」。非今日 ⇒ 一律滞后（隔日/隔周都算）。
+  if (String(args.period ?? '') !== 'today') return verdict('stale', 'period')
+
+  // ② 时刻层：没有报价时刻 ⇒ 证明不了「刚发生」，不许当实时。
+  if (quoteLocalMinutes === null) return verdict('unknown', 'no_time')
+  // ③ 没有服务器市场墙钟 ⇒ 无从比较，不猜本机时间。
+  if (marketLocalMinutes === null) return verdict('unknown', 'no_clock')
+
+  const age = marketLocalMinutes - quoteLocalMinutes
+  if (age < 0) {
+    // 报价晚于服务器市场时钟：跨日残留、盘中跨零点、或时钟异常。
+    return verdict('unknown', 'clock_skew', age)
+  }
+
+  if (marketStatusRaw === 'trading') {
+    return age <= QUOTE_FRESH_WINDOW_MINUTES
+      ? verdict('current', 'ok', age)
+      : verdict('stale', 'intraday_age', age)
+  }
+
+  // ④ 服务器说当日非交易时段（午休/盘后/休市/盘前）：当日最后一笔报价是「定格价」。
+  //    这种情况下全市场看到的是同一价位，可以判，但必须标成非实时。
+  if (FROZEN_STATUSES.has(marketStatusRaw)) {
+    return age <= QUOTE_FRESH_WINDOW_MINUTES
+      ? verdict('current', 'ok', age)
+      : verdict('session_frozen', 'ok', age)
+  }
+
+  // trading/break/... 之外的 'unknown' / 缺字段 ⇒ 时段未知，同样不判。
+  return verdict('unknown', 'no_clock', age)
 }
 
 /**
@@ -205,44 +401,55 @@ export function evaluateDefenseLine(
   return { state: 'safe', distancePct }
 }
 
-/** 新鲜度只由后端 `daily_pnl_period` 决定（前端不自推交易日历、不读系统时钟）。 */
-export function freshnessFor(price: unknown, period: unknown): QuoteFreshness {
-  if (positive(price) === null) return 'missing'
-  const p = String(period ?? '')
-  if (p === 'today') return 'current'
-  if (p === 'previous_trading_day') return 'stale'
-  return 'unknown'
-}
-
 /**
- * 防线结论 + 新鲜度闸门 —— **全站唯一实现**（`DefenseLineBanner` 与持仓清单共用）。
+ * 防线结论 + 时效闸门 —— **全站唯一实现**（`DefenseLineBanner` 与持仓清单共用）。
  *
- * 报价无法证明是当日（`stale` / `unknown`）时不给破位/逼近/安全结论：
- * 旧报价当实时价判破位，等于拿隔日甚至隔周的价位说"你现在已经跌破纪律位"。
- * 距离仍返回（可核对），但状态是 `stale`。
+ * 报价的**时点**证明不了是当下的（`stale` / `unknown`）时不给破位/逼近/安全结论：
+ * 旧报价当实时价判破位，等于拿隔日甚至隔周（或同一交易日几小时前）的价位说
+ * "你现在已经跌破纪律位"。距离仍返回（可核对），但状态是 `stale`。
  */
 export function resolveDefenseState(args: {
   price: unknown
   defense: unknown
   period?: string | null
-}): { state: DefenseState; distancePct: number | null; freshness: QuoteFreshness } {
-  const freshness = freshnessFor(args.price, args.period)
-  if (freshness === 'missing') {
-    return { state: 'unknown', distancePct: null, freshness }
+  quoteTime?: string | null
+  market?: MarketSessionInfo | null
+}): {
+  state: DefenseState
+  distancePct: number | null
+  freshness: QuoteFreshness
+  reason: FreshnessReason
+  ageMinutes: number | null
+} {
+  const verdict = freshnessFor({
+    price: args.price,
+    period: args.period,
+    quoteTime: args.quoteTime,
+    market: args.market,
+  })
+  const base = {
+    freshness: verdict.freshness,
+    reason: verdict.reason,
+    ageMinutes: verdict.ageMinutes,
+  }
+  if (verdict.freshness === 'missing') {
+    return { ...base, state: 'unknown', distancePct: null }
   }
   const geo = evaluateDefenseLine(args.price, args.defense)
-  if (geo.state === 'unset') return { ...geo, freshness }
-  if (freshness !== 'current') {
-    return { state: 'stale', distancePct: geo.distancePct, freshness }
+  if (geo.state === 'unset') return { ...base, ...geo }
+  if (verdict.freshness !== 'current' && verdict.freshness !== 'session_frozen') {
+    return { state: 'stale', distancePct: geo.distancePct, ...base }
   }
-  return { ...geo, freshness }
+  return { ...base, ...geo }
 }
 
 /**
- * 报价距今多久（**可验证新鲜度**）。
+ * 报价距今多久（分钟口径，**只用注入的时点**）。
  *
  * `now` 必须由调用方注入：库内读系统时钟会让测试不可重复，也会掩盖"没拿到时间"。
  * 无法解析 / 未来时间（跨市场时区没对齐时会出现）一律 null —— 宁可不显示，也不编一个时点。
+ * 注意：持仓清单优先用服务器市场墙钟的分钟差（`row.quoteAgeMinutes`），本函数只服务
+ * 「手上有绝对时点且明确知道它代表什么」的调用方。
  */
 export function quoteAgeLabel(quoteTime: unknown, now?: Date | null): string | null {
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) return null
@@ -260,7 +467,12 @@ export function quoteAgeLabel(quoteTime: unknown, now?: Date | null): string | n
   )
   const diffMs = now.getTime() - then.getTime()
   if (!Number.isFinite(diffMs) || diffMs < 0) return null
-  const minutes = diffMs / 60000
+  return humanizeAgeMinutes(diffMs / 60000)
+}
+
+/** 分钟数 → 「N 分钟前 / N.N 小时前 / N.N 天前」。 */
+export function humanizeAgeMinutes(minutes: number | null): string | null {
+  if (minutes === null || !Number.isFinite(minutes)) return null
   if (minutes < 60) return `${Math.round(minutes)} 分钟前`
   const hours = minutes / 60
   if (hours < 36) return `${safeFixed(hours, 1)} 小时前`
@@ -268,7 +480,10 @@ export function quoteAgeLabel(quoteTime: unknown, now?: Date | null): string | n
 }
 
 /** 把一行持仓读数折成风险行（每账户一行，绝不跨账户合并防线/成本）。 */
-export function rowFromPosition(p: PositionRiskInput): PositionRiskRow {
+export function rowFromPosition(
+  p: PositionRiskInput,
+  marketSessions?: MarketSessionMap,
+): PositionRiskRow {
   const symbol = String(p.symbol ?? '').trim()
   const market = normalizeMarket(p.market)
   const accountId =
@@ -280,10 +495,13 @@ export function rowFromPosition(p: PositionRiskInput): PositionRiskRow {
   const cost = positive(p.cost_price)
   const rawPeriod = String(p.daily_pnl_period ?? '')
   const pricePeriod: PricePeriod = (PERIODS.has(rawPeriod) ? rawPeriod : 'unknown') as PricePeriod
-  const { state, distancePct, freshness } = resolveDefenseState({
+  const marketSession = marketSessions?.[market] ?? null
+  const { state, distancePct, freshness, reason, ageMinutes } = resolveDefenseState({
     price,
     defense,
     period: pricePeriod,
+    quoteTime: p.quote_time,
+    market: marketSession,
   })
 
   const gaps: RiskGap[] = []
@@ -319,8 +537,13 @@ export function rowFromPosition(p: PositionRiskInput): PositionRiskRow {
     distanceToDefensePct: distancePct,
     quoteDate: p.quote_date ?? null,
     quoteTime: p.quote_time ?? null,
+    quoteLocalTime: formatWallClockMinutes(wallClockMinutes(p.quote_time)),
+    marketLocalTime: formatWallClockMinutes(wallClockMinutes(marketSession?.localTime)),
+    marketStatus: String(marketSession?.status ?? '').trim().toLowerCase() || null,
     pricePeriod,
     freshness,
+    staleReason: reason,
+    quoteAgeMinutes: ageMinutes,
     sharedSymbolConflict: false,
     gaps,
   }
@@ -329,15 +552,18 @@ export function rowFromPosition(p: PositionRiskInput): PositionRiskRow {
 /**
  * 把 `/portfolio/summary` 的持仓行折成风险检查报告。
  *
- * 纯函数：不请求、不读时间（时点用后端已判好的 `daily_pnl_period` + `quote_date`，
- * 前端自己判「今天」会在非交易时段把上一交易日的读数标成当日）。
+ * 纯函数：不请求、不读时钟。行情时效用两件**服务器事实**：
+ * 后端判好的 `daily_pnl_period`（日期层）+ `/stocks/markets/status` 的市场墙钟/状态
+ * （时刻层）。前端自己不判「今天」也不推交易日历 —— 那两件事服务器已经做了。
  */
 export function buildPositionRiskReport(
   positions: PositionRiskInput[] | null | undefined,
+  options?: { marketSessions?: MarketSessionMap },
 ): PositionRiskReport {
+  const marketSessions = options?.marketSessions
   const rows = (Array.isArray(positions) ? positions : [])
     .filter((p) => String(p.symbol ?? '').trim() !== '')
-    .map(rowFromPosition)
+    .map((p) => rowFromPosition(p, marketSessions))
 
   // 同一标的多账户防线不一致：只**标注**，不合并、不挑一条 —— 防线是账户级的。
   const defensesBySymbol = new Map<string, Set<string>>()
@@ -385,6 +611,7 @@ export function buildPositionRiskReport(
 
   const symbols = new Set(rows.map((r) => `${r.market}:${r.symbol}`))
   const accounts = new Set(rows.map((r) => r.accountId ?? '∅'))
+  const staleRows = rows.filter((r) => r.defenseState === 'stale')
 
   return {
     total: rows.length,
@@ -394,7 +621,9 @@ export function buildPositionRiskReport(
     breached: rows.filter((r) => r.defenseState === 'breached').length,
     near: rows.filter((r) => r.defenseState === 'near').length,
     safe: rows.filter((r) => r.defenseState === 'safe').length,
-    stale: rows.filter((r) => r.defenseState === 'stale').length,
+    stale: staleRows.length,
+    staleKnown: staleRows.filter((r) => r.freshness === 'stale').length,
+    staleUnverified: staleRows.filter((r) => r.freshness === 'unknown').length,
     unknown: rows.filter((r) => r.defenseState === 'unknown').length,
     unset: rows.filter((r) => r.defenseState === 'unset').length,
     noDefense: rows.filter((r) => r.gaps.includes('no_defense')).length,

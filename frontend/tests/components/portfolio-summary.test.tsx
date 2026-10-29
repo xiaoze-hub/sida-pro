@@ -196,4 +196,85 @@ describe('PortfolioSummarySection 未知(缺行情)不当 0', () => {
     render(<PortfolioSummarySection />)
     expect(document.body.textContent ?? '').not.toContain('缺行情')
   })
+
+  /**
+   * 三次复审：部分覆盖时的**总资产**不是「已定价市值 + 资金」。
+   * 后端契约（380bdabd）给 total_assets=null + total_assets_priced_subset；
+   * 前端必须照做：总资产 `--`、子集单独且明确标注，仓位比例也不给数字。
+   */
+  it('部分覆盖 → 总资产 --，只显示明确标注的「已定价子集」，表头也不出现假总额', () => {
+    mocks.ctx = ctxWith({
+      total_market_value: 5000,
+      total_pnl: 1000,
+      total_pnl_pct: 25,
+      total_daily_pnl: null,
+      available_funds: 45000,
+      total_cost: 10000,
+      priced_cost: 4000,
+      unpriced_cost: 6000,
+      total_assets: null,
+      total_assets_complete: false,
+      total_assets_basis: 'priced_positions_only',
+      total_assets_priced_subset: 50000,
+      quotes_coverage: {
+        requested: true,
+        positions_total: 2,
+        positions_priced: 1,
+        positions_missing: 1,
+        cost_coverage_pct: 40,
+        pricing_basis: 'priced_positions_only',
+        complete: false,
+      },
+      daily_pnl_coverage: {
+        requested: true,
+        positions_total: 2,
+        positions_observed: 0,
+        complete: false,
+      },
+    })
+    render(<PortfolioSummarySection />)
+    const text = document.body.textContent ?? ''
+    // 总资产必须是"未知"，并且子集口径写明「已定价子集」
+    expect(text).toContain('已定价子集')
+    expect(text).not.toMatch(/总资产\s*50,?000/)
+    // 当日盈亏未知：不许当 0，也不许显示 +0.00%
+    expect(text).toContain('当日盈亏未知')
+    expect(text).not.toContain('+0.00%')
+    // 仓位比例：总资产未知 ⇒ 不给数字
+    expect(text).toContain('比例不给数字')
+  })
+
+  it('当日盈亏部分覆盖 → 明确写「只统计 x/y 条持仓」', () => {
+    mocks.ctx = ctxWith({
+      total_market_value: 5000,
+      total_pnl: 1000,
+      total_pnl_pct: 25,
+      total_daily_pnl: 120,
+      available_funds: 45000,
+      total_assets: 50000,
+      total_assets_complete: true,
+      total_assets_basis: 'all_positions',
+      total_cost: 4000,
+      priced_cost: 4000,
+      unpriced_cost: 0,
+      quotes_coverage: {
+        requested: true,
+        positions_total: 2,
+        positions_priced: 2,
+        positions_missing: 0,
+        cost_coverage_pct: 100,
+        pricing_basis: 'all_positions',
+        complete: true,
+      },
+      daily_pnl_coverage: {
+        requested: true,
+        positions_total: 2,
+        positions_observed: 1,
+        complete: false,
+      },
+    })
+    render(<PortfolioSummarySection />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('当日盈亏只统计 1/2 条持仓')
+  })
 })

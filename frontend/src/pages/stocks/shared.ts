@@ -53,13 +53,48 @@ export type QuoteStatus = 'ok' | 'missing' | 'invalid_price' | 'not_requested'
 export interface QuotesCoverage {
   requested: boolean
   positions_total: number
-  positions_priced: number
-  positions_missing: number
+  positions_priced: number | null
+  positions_missing: number | null
   /** 已定价持仓的成本占全部成本的比例；总成本为 0 时为 null（未知，不是 0%）。 */
   cost_coverage_pct: number | null
-  pricing_basis: 'all_positions' | 'priced_positions_only' | 'not_requested'
+  pricing_basis: QuotesPricingBasis
+  /** `no_positions` 也算完整（0/0 是完整事实，不是"缺行情"）。 */
   complete: boolean
 }
+
+/**
+ * 覆盖口径（后端 2026-10-29 复审收紧后的四种，互斥）：
+ * `no_positions` 本来没持仓 / `all_positions` 全部有价 /
+ * `priced_positions_only` 部分缺价（合计只覆盖已定价子集）/ `not_requested` 没计价。
+ */
+export type QuotesPricingBasis =
+  | 'no_positions'
+  | 'all_positions'
+  | 'priced_positions_only'
+  | 'not_requested'
+
+/**
+ * 当日盈亏覆盖度（与后端 `_daily_pnl_coverage` 同结构）。
+ *
+ * `change_pct` / 昨收缺失的持仓**算不出**当日盈亏 —— 旧实现直接跳过，于是合计
+ * 悄悄少算一部分却仍显示成"今日盈亏"，读起来像"今天只赚了这么点"。
+ * 现在把 `positions_observed` 显式给出来；一只都没观测到时合计为 null（未知）。
+ */
+export interface DailyPnlCoverage {
+  requested: boolean
+  positions_total: number
+  positions_observed: number | null
+  complete: boolean
+}
+
+/** 总资产口径（后端 `total_assets_basis`）：子集口径单独给数，不许冒充总额。 */
+export type TotalAssetsBasis =
+  | 'no_positions'
+  | 'all_positions'
+  | 'priced_positions_only'
+  | 'no_priced_positions'
+  | 'not_requested'
+
 
 export interface Position {
   id: number
@@ -134,12 +169,19 @@ export interface AccountSummary {
   unpriced_cost?: number
   total_pnl: number | null
   total_pnl_pct: number | null
-  total_daily_pnl: number
+  /** 当日盈亏合计；一只都没观测到（缺价或缺昨收）时为 null。 */
+  total_daily_pnl: number | null
   daily_pnl_period: DailyPnlPeriod
   daily_pnl_label: string
   daily_pnl_date: string | null
   total_assets: number | null
+  /** 总资产是否覆盖**全部**持仓（部分缺价 ⇒ false，此时 total_assets 为 null）。 */
+  total_assets_complete?: boolean
+  total_assets_basis?: TotalAssetsBasis
+  /** 子集口径：已定价市值 + 全部可用资金。**不是**总资产，展示必须标注。 */
+  total_assets_priced_subset?: number | null
   quotes_coverage?: QuotesCoverage
+  daily_pnl_coverage?: DailyPnlCoverage
   positions: Position[]
 }
 
@@ -150,13 +192,17 @@ export interface PortfolioTotal {
   unpriced_cost?: number
   total_pnl: number | null
   total_pnl_pct: number | null
-  total_daily_pnl: number
+  total_daily_pnl: number | null
   daily_pnl_period: DailyPnlPeriod
   daily_pnl_label: string
   daily_pnl_date: string | null
   available_funds: number
   total_assets: number | null
+  total_assets_complete?: boolean
+  total_assets_basis?: TotalAssetsBasis
+  total_assets_priced_subset?: number | null
   quotes_coverage?: QuotesCoverage
+  daily_pnl_coverage?: DailyPnlCoverage
 }
 
 export interface PortfolioSummary {
@@ -344,11 +390,15 @@ const roundOrNull = (value: number | null): number | null =>
   value === null ? null : round2(value)
 
 /**
- * 覆盖度声明 —— 与后端 `_quotes_coverage` 逐字段同义。
+ * 覆盖度声明 —— 与后端 `_quotes_coverage` 逐字段同义（2026-10-29 复审收紧版）。
  *
  * 注意 `requested`：持仓页永远自己定价（`include_quotes=false` + 本地 WS/轮询行情），
  * 所以后端那份 `requested=false` 描述的是"后端没计价"，而本函数算的是"客户端计过价"，
  * 故这里恒为 true；覆盖度只描述**本次合并**实际定价了多少。
+ *
+ * `no_positions`（0 只持仓）是**完整**事实：没有持仓时"合计覆盖了全部持仓"成立，
+ * 旧实现把 0 只算成 `priced_positions_only` 且 `complete=false`，UI 于是对空账户
+ * 喊"有持仓缺行情"。
  */
 const buildCoverage = (
   positionsTotal: number,
@@ -358,15 +408,79 @@ const buildCoverage = (
 ): QuotesCoverage => {
   const missing = Math.max(0, positionsTotal - positionsPriced)
   const pct = totalCost > 0 ? round2((pricedCost / totalCost) * 100) : null
+  const basis: QuotesPricingBasis =
+    positionsTotal === 0 ? 'no_positions' : missing === 0 ? 'all_positions' : 'priced_positions_only'
   return {
     requested: true,
     positions_total: positionsTotal,
     positions_priced: positionsPriced,
     positions_missing: missing,
     cost_coverage_pct: pct,
-    pricing_basis:
-      positionsPriced > 0 && missing === 0 ? 'all_positions' : 'priced_positions_only',
-    complete: positionsTotal > 0 && missing === 0,
+    pricing_basis: basis,
+    complete: positionsTotal === 0 || missing === 0,
+  }
+}
+
+/** 当日盈亏覆盖度（与后端 `_daily_pnl_coverage` 同结构）。 */
+const buildDailyPnlCoverage = (
+  positionsTotal: number,
+  positionsObserved: number,
+): DailyPnlCoverage => ({
+  requested: true,
+  positions_total: positionsTotal,
+  positions_observed: Math.min(positionsObserved, positionsTotal),
+  complete: positionsObserved >= positionsTotal,
+})
+
+/**
+ * 总资产口径（2026-10-29 复审）—— **部分覆盖时不给总资产**。
+ *
+ * 「已定价市值 + 全部可用资金」在部分缺价时**不是总资产**：缺价那部分市值根本没进来，
+ * 拿它当总额会把账户说得比实际小；反过来用成本顶替又会把总额说大。
+ * 所以：只有全部持仓有价（或本来没持仓）才给 `total_assets`；
+ * 部分覆盖时给 `null` + `total_assets_priced_subset`，展示方必须显式写「已定价子集」。
+ */
+const resolveTotalAssets = (
+  positionsTotal: number,
+  positionsPriced: number,
+  pricedMarketValue: number,
+  availableFunds: number,
+): {
+  total_assets: number | null
+  total_assets_complete: boolean
+  total_assets_basis: TotalAssetsBasis
+  total_assets_priced_subset: number | null
+} => {
+  const subset = positionsPriced > 0 ? pricedMarketValue + availableFunds : null
+  if (positionsTotal === 0) {
+    return {
+      total_assets: availableFunds,
+      total_assets_complete: true,
+      total_assets_basis: 'no_positions',
+      total_assets_priced_subset: availableFunds,
+    }
+  }
+  if (positionsPriced === 0) {
+    return {
+      total_assets: null,
+      total_assets_complete: false,
+      total_assets_basis: 'no_priced_positions',
+      total_assets_priced_subset: null,
+    }
+  }
+  if (positionsPriced === positionsTotal) {
+    return {
+      total_assets: pricedMarketValue + availableFunds,
+      total_assets_complete: true,
+      total_assets_basis: 'all_positions',
+      total_assets_priced_subset: subset,
+    }
+  }
+  return {
+    total_assets: null,
+    total_assets_complete: false,
+    total_assets_basis: 'priced_positions_only',
+    total_assets_priced_subset: subset,
   }
 }
 
@@ -402,6 +516,7 @@ export const mergePortfolioQuotes = (
   let grandUnpricedCost = 0
   let grandPositions = 0
   let grandPriced = 0
+  let grandDailyObserved = 0
   let grandAvailable = 0
   let grandDailyPnl = 0
   const grandDailyPnlObservations: Array<{ period: DailyPnlPeriod; date: string | null }> = []
@@ -412,6 +527,7 @@ export const mergePortfolioQuotes = (
     let accPricedCost = 0
     let accUnpricedCost = 0
     let accPriced = 0
+    let accDailyObserved = 0
     let accDailyPnl = 0
     const accDailyPnlObservations: Array<{ period: DailyPnlPeriod; date: string | null }> = []
 
@@ -466,6 +582,8 @@ export const mergePortfolioQuotes = (
           daily_pnl = round2((current_price - prev) * quantity * rate)
           daily_pnl_pct = round2(change_pct)
           accDailyPnl += daily_pnl
+          // 只有"有现价 + 有可用的涨跌幅/昨收"的持仓才被观测到；缺一个就不是 0 涨跌。
+          accDailyObserved += 1
           const observation = { period: daily_pnl_period, date: quoteDate }
           accDailyPnlObservations.push(observation)
           grandDailyPnlObservations.push(observation)
@@ -497,25 +615,32 @@ export const mergePortfolioQuotes = (
     let accMarketValueOut: number | null
     let accPnl: number | null
     let accPnlPct: number | null
-    let accTotalAssets: number | null
+    let accDailyPnlOut: number | null
     if (accPriced > 0) {
       accMarketValueOut = accMarketValue
       accPnl = accMarketValue - accPricedCost
       accPnlPct = accPricedCost > 0 ? (accPnl / accPricedCost) * 100 : null
-      accTotalAssets = accMarketValue + account.available_funds
+      // 一只都没观测到（缺涨跌幅/昨收）⇒ 未知，不许拿 0 冒充"今天没赚没亏"。
+      accDailyPnlOut = accDailyObserved > 0 ? round2(accDailyPnl) : null
     } else if (positionsCount > 0) {
-      // 有持仓但一只都没有可用现价：市值/盈亏/总资产都是未知。
+      // 有持仓但一只都没有可用现价：市值/盈亏/总资产/当日盈亏都是未知。
       accMarketValueOut = null
       accPnl = null
       accPnlPct = null
-      accTotalAssets = null
+      accDailyPnlOut = null
     } else {
       // 空账户：0 只持仓就是真 0 盈亏。
       accMarketValueOut = 0
       accPnl = 0
       accPnlPct = 0
-      accTotalAssets = account.available_funds
+      accDailyPnlOut = 0
     }
+    const accAssets = resolveTotalAssets(
+      positionsCount,
+      accPriced,
+      accMarketValue,
+      account.available_funds,
+    )
 
     grandMarketValue += accMarketValue
     grandCost += accCost
@@ -523,6 +648,7 @@ export const mergePortfolioQuotes = (
     grandUnpricedCost += accUnpricedCost
     grandPositions += positionsCount
     grandPriced += accPriced
+    grandDailyObserved += accDailyObserved
     grandAvailable += account.available_funds
     grandDailyPnl += accDailyPnl
 
@@ -534,9 +660,13 @@ export const mergePortfolioQuotes = (
       unpriced_cost: round2(accUnpricedCost),
       total_pnl: roundOrNull(accPnl),
       total_pnl_pct: roundOrNull(accPnlPct),
-      total_daily_pnl: round2(accDailyPnl),
-      total_assets: roundOrNull(accTotalAssets),
+      total_daily_pnl: roundOrNull(accDailyPnlOut),
+      total_assets: roundOrNull(accAssets.total_assets),
+      total_assets_complete: accAssets.total_assets_complete,
+      total_assets_basis: accAssets.total_assets_basis,
+      total_assets_priced_subset: roundOrNull(accAssets.total_assets_priced_subset),
       quotes_coverage: buildCoverage(positionsCount, accPriced, accPricedCost, accCost),
+      daily_pnl_coverage: buildDailyPnlCoverage(positionsCount, accDailyObserved),
       ...summarizeDailyPnlPeriod(accDailyPnlObservations),
       positions,
     }
@@ -545,23 +675,29 @@ export const mergePortfolioQuotes = (
   let grandMarketValueOut: number | null
   let grandPnl: number | null
   let grandPnlPct: number | null
-  let grandTotalAssets: number | null
+  let grandDailyPnlOut: number | null
   if (grandPriced > 0) {
     grandMarketValueOut = grandMarketValue
     grandPnl = grandMarketValue - grandPricedCost
     grandPnlPct = grandPricedCost > 0 ? (grandPnl / grandPricedCost) * 100 : null
-    grandTotalAssets = grandMarketValue + grandAvailable
+    grandDailyPnlOut = grandDailyObserved > 0 ? round2(grandDailyPnl) : null
   } else if (grandPositions > 0) {
     grandMarketValueOut = null
     grandPnl = null
     grandPnlPct = null
-    grandTotalAssets = null
+    grandDailyPnlOut = null
   } else {
     grandMarketValueOut = 0
     grandPnl = 0
     grandPnlPct = 0
-    grandTotalAssets = grandAvailable
+    grandDailyPnlOut = 0
   }
+  const grandAssets = resolveTotalAssets(
+    grandPositions,
+    grandPriced,
+    grandMarketValue,
+    grandAvailable,
+  )
 
   return {
     ...portfolio,
@@ -573,10 +709,14 @@ export const mergePortfolioQuotes = (
       unpriced_cost: round2(grandUnpricedCost),
       total_pnl: roundOrNull(grandPnl),
       total_pnl_pct: roundOrNull(grandPnlPct),
-      total_daily_pnl: round2(grandDailyPnl),
+      total_daily_pnl: roundOrNull(grandDailyPnlOut),
       available_funds: round2(grandAvailable),
-      total_assets: roundOrNull(grandTotalAssets),
+      total_assets: roundOrNull(grandAssets.total_assets),
+      total_assets_complete: grandAssets.total_assets_complete,
+      total_assets_basis: grandAssets.total_assets_basis,
+      total_assets_priced_subset: roundOrNull(grandAssets.total_assets_priced_subset),
       quotes_coverage: buildCoverage(grandPositions, grandPriced, grandPricedCost, grandCost),
+      daily_pnl_coverage: buildDailyPnlCoverage(grandPositions, grandDailyObserved),
       ...summarizeDailyPnlPeriod(grandDailyPnlObservations),
     },
   }

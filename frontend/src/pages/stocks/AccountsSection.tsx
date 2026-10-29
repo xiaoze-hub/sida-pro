@@ -135,9 +135,19 @@ export function AccountsSection() {
             )}
             <Building2 className="w-4 h-4 text-primary" />
             <span className="text-[14px] md:text-[16px] font-semibold text-foreground">{account.name}</span>
+            {/* 单位是「条持仓」：同一只票在两个账户各算一条，账户行不能冒称「N 只」标的。 */}
             <span className="text-[12px] md:text-[12px] text-muted-foreground">
-              {account.positions.length} 只
+              {account.positions.length} 条持仓
             </span>
+            {account.quotes_coverage && !account.quotes_coverage.complete && account.quotes_coverage.positions_total > 0 && (
+              <span
+                className="text-[12px] text-role-watch"
+                data-testid={`account-coverage-${account.id}`}
+                title="该账户合计只覆盖已定价持仓；缺行情的那部分市值没有进来"
+              >
+                行情 {account.quotes_coverage.positions_priced ?? 0}/{account.quotes_coverage.positions_total} 条
+              </span>
+            )}
           </div>
           <div className="flex items-center justify-between md:justify-end gap-2 md:gap-6 pl-6 md:pl-0">
             <div className="flex items-center gap-2.5 md:gap-6 min-w-0">
@@ -160,8 +170,15 @@ export function AccountsSection() {
                 >
                   {dailyPnlDisplayLabel(account, true)}
                 </div>
-                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                {/* 2026-10-29 三次复审: 当日盈亏可能是 null(缺现价或昨收) —— `null >= 0` 为 true,
+                    旧写法会把「不知道」染成上涨色; 覆盖不足时也要标出来, 不许静默少算。 */}
+                <div className={`text-[12px] md:text-[14px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl == null ? 'text-muted-foreground' : account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                   {formatMoney(account.total_daily_pnl)}
+                  {account.daily_pnl_coverage && !account.daily_pnl_coverage.complete && account.daily_pnl_coverage.positions_total > 0 && (
+                    <span className="ml-1 text-[12px] text-muted-foreground">
+                      ({account.daily_pnl_coverage.positions_observed ?? 0}/{account.daily_pnl_coverage.positions_total} 条)
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="text-left md:text-right hidden sm:block">
