@@ -90,6 +90,8 @@ export interface DailyPnlCoverage {
   requested: boolean
   positions_total: number
   positions_observed: number | null
+  /** 有现价+昨收、但**期间证不出来**（quote_date 未知）的篮子数：被排除在合计之外。 */
+  positions_period_unknown?: number | null
   complete: boolean
 }
 
@@ -153,6 +155,8 @@ export interface DailyPnlMeta {
   daily_pnl_period: DailyPnlPeriod
   daily_pnl_label: string
   daily_pnl_date: string | null
+  /** 期间证不出来、被排除在摘要之外的篮子数（它们也不进合计金额）。 */
+  daily_pnl_excluded?: number
 }
 
 export interface QuoteSnapshot {
@@ -390,8 +394,15 @@ export const summarizeDailyPnlPeriod = (
   // 期间未知的观测**不进摘要**：混进来会让 periods={today,unknown} ⇒ 'mixed' ⇒
   // 「最近交易日盈亏」，等于把一条"不知道是不是今天"的涨跌幅说成上个交易日的数据。
   const usable = observations.filter(item => TRUSTED_DAILY_PERIODS.has(item.period))
+  const excluded = observations.length - usable.length
   if (usable.length === 0) {
-    return { daily_pnl_period: 'unknown', daily_pnl_label: '当日盈亏', daily_pnl_date: null }
+    // 一条都证不出来 ⇒ 期间未知；绝不写「当日盈亏」（那是拿"不知道"冒充"今天"）。
+    return {
+      daily_pnl_period: 'unknown',
+      daily_pnl_label: '期间未知',
+      daily_pnl_date: null,
+      daily_pnl_excluded: excluded,
+    }
   }
   const periods = new Set(usable.map(item => item.period))
   const dates = new Set(usable.map(item => item.date).filter((value): value is string => !!value))
@@ -400,6 +411,7 @@ export const summarizeDailyPnlPeriod = (
       daily_pnl_period: 'today',
       daily_pnl_label: '今日盈亏',
       daily_pnl_date: dates.size === 1 ? [...dates][0] : null,
+      daily_pnl_excluded: excluded,
     }
   }
   if (periods.size === 1 && periods.has('previous_trading_day') && dates.size === 1) {
@@ -407,12 +419,14 @@ export const summarizeDailyPnlPeriod = (
       daily_pnl_period: 'previous_trading_day',
       daily_pnl_label: '上一交易日盈亏',
       daily_pnl_date: [...dates][0],
+      daily_pnl_excluded: excluded,
     }
   }
   return {
     daily_pnl_period: periods.size > 1 || dates.size > 1 ? 'mixed' : 'unknown',
-    daily_pnl_label: dates.size > 0 ? '最近交易日盈亏' : '当日盈亏',
+    daily_pnl_label: dates.size > 0 ? '最近交易日盈亏' : '期间未知',
     daily_pnl_date: null,
+    daily_pnl_excluded: excluded,
   }
 }
 
@@ -705,13 +719,15 @@ export const mergePortfolioQuotes = (
         if (isFinite(prev) && prev > 0) {
           daily_pnl = round2((current_price - prev) * quantity * rate)
           daily_pnl_pct = round2(change_pct)
-          accDailyPnl += daily_pnl
-          accDailyBasket += market_value_cny ?? 0
-          // 只有"有现价 + 有可用的涨跌幅/昨收"的持仓才被观测到；缺一个就不是 0 涨跌。
-          accDailyObserved += 1
           const observation = { period: daily_pnl_period, date: quoteDate }
           accDailyPnlObservations.push(observation)
           grandDailyPnlObservations.push(observation)
+          // 只有"有现价 + 有涨跌幅/昨收 + **期间证得出来**"的持仓才进合计。
+          // 2026-10-29 复审：日期证不出来的那条（WS 换价后旧证据作废）只给单票数字，
+          // 不进账户/组合合计 —— 否则「今日盈亏」里混进一笔不知道哪天的涨跌。
+          accDailyPnl += daily_pnl
+          accDailyBasket += market_value_cny ?? 0
+          accDailyObserved += 1
         }
       }
 

@@ -879,3 +879,94 @@ def test_engine_fails_over_only_when_snapshot_chain_is_down(monkeypatch):
     assert r.ok and r.vendor == "tencent"
     assert tencent.calls == 1
     assert metrics.snapshot()["tq"]["success_rate"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-29 复审：日线熔断的**半开**语义（并发/取消的副作用）
+# ---------------------------------------------------------------------------
+
+def test_circuit_open_blocks_probe_attempts():
+    """熔断窗口内：任何线程都不许去探（连半开名额都不发）。"""
+    tqmod._trip_daily_circuit()
+    assert tqmod._acquire_daily_probe() == "blocked"
+    assert tqmod._DAILY_PROBE_INFLIGHT is False
+
+
+def test_half_open_allows_exactly_one_prober():
+    """窗口到期后只放**一个**探测线程进去（旧实现是所有线程一起冲，白等 N 个 1.2s）。"""
+    import time as _t
+
+    tqmod._trip_daily_circuit(now=_t.monotonic() - 61)  # 窗口已过, streak 仍 >0
+    try:
+        assert tqmod._acquire_daily_probe() == "half_open"
+        assert tqmod._acquire_daily_probe() == "blocked", "第二个并发线程不许同时探"
+        tqmod._release_daily_probe()
+        assert tqmod._acquire_daily_probe() == "half_open", "前一个探测结束后名额要还回来"
+    finally:
+        tqmod._release_daily_probe()
+
+
+def test_half_open_probe_success_closes_circuit_and_restores_concurrency(monkeypatch):
+    """探测成功 ⇒ 关闭熔断并归零；之后恢复正常并发（不再单飞）。"""
+    import time as _t
+
+    calls: list[str] = []
+    today = _today()
+    payload = {"600519.SH": {
+        "Date": [today], "Close": ["1354.00"], "Volume": ["4299231"],
+    }}
+    monkeypatch.setattr(tqmod, "_rpc", _fake_rpc_factory(payload, calls=calls))
+    tqmod._trip_daily_circuit(now=_t.monotonic() - 61)
+
+    ev = tqmod.TqQuoteVendor()._daily_bars(["600519.SH"])
+    assert ev.request_failed is False
+    assert tqmod._daily_circuit_state()["open"] is False
+    assert tqmod._DAILY_PROBE_INFLIGHT is False
+    assert tqmod._acquire_daily_probe() == "closed"
+
+
+def test_half_open_probe_transport_failure_trips_again_and_releases(monkeypatch):
+    """探测本身超时/断链 ⇒ 重新跳闸，且必须把半开名额还回来（否则永久锁死）。"""
+    import time as _t
+    import httpx
+
+    def _rpc(method, params, timeout=None, **kw):
+        raise httpx.ConnectError("tunnel down")
+
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    tqmod._trip_daily_circuit(now=_t.monotonic() - 61)
+
+    ev = tqmod.TqQuoteVendor()._daily_bars(["600519.SH"])
+    assert ev.request_failed is True
+    assert tqmod._daily_circuit_state()["open"] is True
+    assert tqmod._DAILY_PROBE_INFLIGHT is False
+    assert tqmod._acquire_daily_probe() == "blocked"
+
+
+def test_concurrent_caller_during_half_open_probe_does_not_block(monkeypatch):
+    """探测在途时另一个用户来取：立即返回"无证据"，不去排队等同一个网关。"""
+    import threading
+    import time as _t
+
+    started, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+
+    def _rpc(method, params, timeout=None, **kw):
+        calls.append(method)
+        started.set()
+        release.wait(1.0)
+        return {}
+
+    monkeypatch.setattr(tqmod, "_rpc", _rpc)
+    tqmod._trip_daily_circuit(now=_t.monotonic() - 61)
+
+    t = threading.Thread(target=lambda: tqmod.TqQuoteVendor()._daily_bars(["600519.SH"]))
+    t.start()
+    try:
+        assert started.wait(1.0)
+        ev = tqmod.TqQuoteVendor()._daily_bars(["000001.SZ"])
+        assert ev.request_failed is True
+        assert calls == ["get_market_data"], "并发第二个调用必须直接跳过，不许再打网关"
+    finally:
+        release.set()
+        t.join(2.0)

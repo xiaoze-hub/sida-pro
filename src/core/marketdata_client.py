@@ -142,6 +142,10 @@ def _quote_to_row(q: Quote) -> dict:
         # 2026-09-08 来源透传: 实际命中的 vendor(空=未知, 前端按"未知源"标, 不编造)
         "source": getattr(q, "source", "") or "",
         "source_latency_ms": getattr(q, "latency_ms", 0) or 0,
+        # 2026-10-29 复审: 部分批次标记 —— 同一批里还有标的没取到代码在 source_missing。
+        # 拿到 True 的调用方不得把这份结果当"整批完整"。
+        "source_partial": bool(getattr(q, "source_partial", False)),
+        "source_missing": list(getattr(q, "source_missing", []) or []),
         # 2026-09-08 (风险方案1.1) 完整性透传: ok/partial/missing + 缺失字段清单。
         # 前端对 partial/missing 与 null 字段显式标「无数据」, 不允许拿 0 画图。
         "status": getattr(q, "status", "ok") or "ok",

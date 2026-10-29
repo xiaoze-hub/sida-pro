@@ -77,6 +77,10 @@ class Quote:
     # 2026-09-08 来源透传: 实际命中的 vendor + 该次延迟(Engine Response 落到每条 Quote)。
     source: str = ""
     latency_ms: int = 0
+    # 2026-10-29 复审：这一条来自**部分批次**（同一批里有标的没取到，代码在 source_missing）。
+    # 只标在取到的那几条上，绝不代表"整批完整"；下游/前端看到它就不得按全覆盖展示。
+    source_partial: bool = False
+    source_missing: list[str] = field(default_factory=list)
     # 2026-09-08 (风险方案1.1) 完整性标记: ok=字段齐 / partial=部分缺失 / missing=无有效价格。
     status: str = "ok"
     missing_fields: list[str] = field(default_factory=list)
@@ -440,6 +444,12 @@ class Response:
     error: str = ""
     vendor: str = ""
     latency_ms: int = 0
+    # 2026-10-29 复审：一批请求里**实际覆盖**了哪些标的。partial=True 表示 data 不覆盖
+    # 全部请求标的（缺的代码在 missing 里）；requested=本次请求的标的数（市场级数据=0）。
+    # 下游必须据此标「部分缺失」，不得把 count 当全部成功；引擎也不会把 partial 缓存成完整。
+    partial: bool = False
+    missing: tuple[str, ...] = ()
+    requested: int = 0
 
     @property
     def is_empty(self) -> bool:

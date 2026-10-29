@@ -221,11 +221,15 @@ class MarketData:
             req = Request(symbols=tuple(s.code for s in syms), market=mkt)
             resp = self._quote_engine.fetch(req)
             if resp.ok and resp.data:
-                # 2026-09-08 来源透传: 胜出 vendor 打到每条 Quote, 下游可展示/记分
+                # 2026-09-08 来源透传: 胜出 vendor 打到每条 Quote, 下游可展示/记分。
+                # 2026-10-29 复审: 部分批次(某些标的本批没取到)必须在**数据源字段**上
+                # 显式标出来 —— 否则拿到 3 条的人会以为这就是全部 5 只的行情。
                 for q in resp.data:
                     try:
                         q.source = resp.vendor
                         q.latency_ms = resp.latency_ms
+                        q.source_partial = bool(resp.partial)
+                        q.source_missing = list(resp.missing) if resp.partial else []
                     except Exception:
                         pass
                 out.extend(resp.data)

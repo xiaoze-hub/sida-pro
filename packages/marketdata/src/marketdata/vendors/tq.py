@@ -426,6 +426,22 @@ QUOTE_DATE_RPC_TIMEOUT_S = 1.2
 QUOTE_DATE_CIRCUIT_OPEN_S = 30.0
 QUOTE_DATE_CIRCUIT_MAX_S = 300.0
 
+# ---------------------------------------------------------------------------
+# 批量快照的总预算（2026-10-29 复审，用户报告：5 标的 502/超时可逐票累计 16s）
+#
+# 缺陷：`fetch` 逐票 `get_market_snapshot`，每票 `_TIMEOUT_S=4.0s`；5 只票遇到静默网关
+# 就是 5×4s=20s，远超 Engine 的 `MARKETDATA_VENDOR_TIMEOUT`(默认 8s)。Engine 8s 就放弃
+# 了，被抛弃的线程还在继续打网关（Python 线程杀不掉）⇒ 池子被占、熔断被判错。
+#
+# 两个阈值都是**工程限额**，不是实测 P99（生产 P99 需真实网关采样，本机无不可达网关）：
+#   - 依据：正常 5 只 ≈ 0.15s（快照 ~30ms/票 + 日线一次批量 ~31ms），Engine 8s；
+#   - 快照阶段 2.5s：留出日线(1.2s)+more_info 的空间，且远小于 8s；
+#   - 整轮 4.0s：任何单票/单次 more_info 都只能吃剩余预算，不许把整轮拖过 8s。
+# 预算是**总时长**，不是"每票超时"：一旦用完，剩下的票直接判缺失，不再发起 RPC。
+# ---------------------------------------------------------------------------
+QUOTE_SNAPSHOT_BUDGET_S = 2.5
+QUOTE_FETCH_BUDGET_S = 4.0
+
 # 判定结果（计数 + 日志；运维据此回答"日期为什么没了"）
 DATE_REASON_TODAY = "proved_today"
 DATE_REASON_LAST_TRADED = "proved_last_traded_day"
@@ -454,6 +470,14 @@ DEGRADE_CIRCUIT_OPEN = "daily_circuit_open"
 DEGRADE_NOW_ZERO = "quote_now_zero"
 # 单只标的快照 RPC 报错（应用层 ErrorId）：只跳过这只票，不许让整批报价/其它用户失败。
 DEGRADE_SNAPSHOT_SYMBOL_ERROR = "quote_symbol_error"
+# 快照 RPC 正常但返空/非 dict（该票这次真没数据）：按缺失计数，不编价。
+DEGRADE_SNAPSHOT_EMPTY = "quote_snapshot_empty"
+# 批量快照被传输层失败打断（网关确证不可达：502/超时/断链）：保留已取到的，其余标缺。
+DEGRADE_SNAPSHOT_INTERRUPTED = "quote_snapshot_interrupted"
+# 快照总预算（QUOTE_SNAPSHOT_BUDGET_S）耗尽：剩下的票直接判缺失，不再发起 RPC。
+DEGRADE_SNAPSHOT_BUDGET = "quote_snapshot_budget"
+# 本批返回的标的数 < 请求数（任何原因）：**部分批次**，引擎/下游必须标缺、不得当完整。
+DEGRADE_BATCH_PARTIAL = "quote_batch_partial"
 
 # 日线熔断（进程内；失败后有界退避，窗口内不再打日线）。跨线程/多用户共享，
 # 所以状态只在**传输层**失败上变更（单标的错误/应用层 ErrorId 只计数，不改全局态）。
@@ -474,6 +498,41 @@ def _daily_circuit_open(now: float | None = None) -> bool:
     """日线熔断是否仍在生效（monotonic 基准；测试可传 now）。"""
     with _STATE_LOCK:
         return (time.monotonic() if now is None else now) < _DAILY_CIRCUIT_UNTIL
+
+
+# 2026-10-29 复审：半开 = "窗口到期后只放一个探测线程进去"。
+#
+# 旧实现只有"开/关"两态：窗口一到，**所有**并发请求同时冲去打日线（各自白等 1.2s），
+# 网关刚恢复时会被自己的重试再打一顿。现在：
+#   - 熔断窗口内：blocked（直接按"本轮无日期证据"返回，一次 RPC 都不打）；
+#   - 窗口刚过(连续失败>0)：half_open，**只发一个**名额，其余线程 blocked；
+#   - 探测结束（成功/失败/异常）必须 `_release_daily_probe()` 还名额 —— 名额丢失会
+#     永久锁死日线；用 finally 保证，且探测时长本身受 QUOTE_DATE_RPC_TIMEOUT_S 约束
+#     （没有引入任何新的"凭感觉"的等待时间）。
+#   - 正常态(streak==0)：closed，不做单飞（正常并发必须允许）。
+_DAILY_PROBE_INFLIGHT = False
+
+
+def _acquire_daily_probe(now: float | None = None) -> str:
+    """返回 'closed'（正常）/ 'half_open'（拿到唯一探测名额）/ 'blocked'（跳过本轮）。"""
+    global _DAILY_PROBE_INFLIGHT
+    ts = time.monotonic() if now is None else now
+    with _STATE_LOCK:
+        if ts < _DAILY_CIRCUIT_UNTIL:
+            return "blocked"
+        if _DAILY_CIRCUIT_STREAK <= 0:
+            return "closed"
+        if _DAILY_PROBE_INFLIGHT:
+            return "blocked"
+        _DAILY_PROBE_INFLIGHT = True
+        return "half_open"
+
+
+def _release_daily_probe() -> None:
+    """归还半开探测名额（幂等；finally 里调用）。"""
+    global _DAILY_PROBE_INFLIGHT
+    with _STATE_LOCK:
+        _DAILY_PROBE_INFLIGHT = False
 
 
 def _trip_daily_circuit(now: float | None = None) -> float:
@@ -521,6 +580,7 @@ def _daily_circuit_state(now: float | None = None) -> dict:
         window = _daily_circuit_window_s()
     return {
         "open": remaining > 0,
+        "half_open": remaining <= 0 and streak > 0,
         "remaining_s": round(remaining, 1),
         "consecutive_failures": streak,
         "next_window_s": round(window, 1),
@@ -529,10 +589,11 @@ def _daily_circuit_state(now: float | None = None) -> dict:
 
 def _reset_daily_circuit() -> None:
     """清空熔断（测试用；生产不需要）。"""
-    global _DAILY_CIRCUIT_UNTIL, _DAILY_CIRCUIT_STREAK
+    global _DAILY_CIRCUIT_UNTIL, _DAILY_CIRCUIT_STREAK, _DAILY_PROBE_INFLIGHT
     with _STATE_LOCK:
         _DAILY_CIRCUIT_UNTIL = 0.0
         _DAILY_CIRCUIT_STREAK = 0
+        _DAILY_PROBE_INFLIGHT = False
 
 
 _QUOTE_DATE_STATS: dict[str, int] = {}
@@ -806,7 +867,8 @@ class TqQuoteVendor(QuoteVendor):
         """
         if not codes:
             return _DailyEvidence()
-        if _daily_circuit_open():
+        mode = _acquire_daily_probe()
+        if mode == "blocked":
             # 熔断是**当前状态**，不是"这只票没有 bar"：只记 daily_circuit_open。
             _bump(DEGRADE_CIRCUIT_OPEN)
             return _DailyEvidence(request_failed=True)
@@ -836,6 +898,10 @@ class TqQuoteVendor(QuoteVendor):
                 _trip_daily_circuit()
             logger.debug("TQ 日线取数失败(报价日期不证自明即可): %s", e)
             return _DailyEvidence(request_failed=True)
+        finally:
+            # 半开探测的名额必须还（成功/失败/异常都一样），否则日线永久锁死。
+            if mode == "half_open":
+                _release_daily_probe()
         if not isinstance(payload, dict) or not payload:
             # 拿到了响应但没有可用内容：计数可观测，但**不跳闸**（不是慢/不可达，
             # 也没有证据说"全链失败"；让下一次继续尝试，代价只有一次廉价 RPC）。
@@ -909,36 +975,57 @@ class TqQuoteVendor(QuoteVendor):
         # 快照一起丢掉 ⇒ 引擎切腾讯、TQ 被记 empty 失败；30s 熔断到期后 TQ 又回来（只是
         # 没有日期）⇒ 源反复抖动。现在主数据不依赖旁证，旁证失败只让日期 unknown。
         pending: list[tuple[Symbol, str, float, dict]] = []
+        # 有界总预算（见 QUOTE_SNAPSHOT_BUDGET_S / QUOTE_FETCH_BUDGET_S 注释）。
+        started = time.monotonic()
+        snap_deadline = started + QUOTE_SNAPSHOT_BUDGET_S
+        fetch_deadline = started + QUOTE_FETCH_BUDGET_S
+        interrupted = ""
         for sym, tqc in pairs:
+            remaining = snap_deadline - time.monotonic()
+            if remaining <= 0:
+                # 预算用完：剩下的票直接判缺失，**不再发起** RPC（不是每票 4s 累加）。
+                interrupted = f"snapshot budget {QUOTE_SNAPSHOT_BUDGET_S}s exhausted"
+                _bump(DEGRADE_SNAPSHOT_BUDGET)
+                from marketdata.log_throttle import log_failure
+
+                log_failure(
+                    logger, "tq:quote-budget",
+                    f"[tq] 快照预算用尽, 本批只取到 {len(pending)}/{len(pairs)} 只, 其余标缺",
+                )
+                break
             try:
-                v = _rpc("get_market_snapshot", {"stock_code": tqc})
+                v = _rpc("get_market_snapshot", {"stock_code": tqc},
+                         timeout=min(_TIMEOUT_S, remaining))
             except (httpx.TransportError, TqUnavailable) as e:
-                # 网关确证不可达：已经拿到的报价先留下（部分批次契约），一张都没有才抛给
-                # 引擎换源（此时才是真正的"全链失败"）。
+                # 网关确证不可达：已经拿到的报价先留下（**部分**批次，不是完整），一张都没有
+                # 才抛给引擎换源（此时才是真正的"全链失败"）。
+                interrupted = f"{type(e).__name__}: {e}"
                 if pending:
                     from marketdata.log_throttle import log_failure
 
+                    _bump(DEGRADE_SNAPSHOT_INTERRUPTED)
                     log_failure(
                         logger, "tq:quote-partial",
                         f"[tq] 快照中途不可达({type(e).__name__}), 本批保留已取到的 "
-                        f"{len(pending)}/{len(pairs)} 只，其余交由下游按无行情处理",
+                        f"{len(pending)}/{len(pairs)} 只, 其余标缺(不得当完整批次)",
                     )
                     break
                 raise
             except Exception as e:  # noqa: BLE001
-                # 单标的应用层错误（如 ErrorId）：只跳过这只票，不许让整批/其它用户失败。
+                # 单标的**应用层**错误（如 ErrorId）：只跳过这只票，不许让整批/其它用户失败。
                 _bump(DEGRADE_SNAPSHOT_SYMBOL_ERROR)
                 logger.debug("[tq] 快照单标的失败 %s: %s", tqc, e)
                 continue
             if not isinstance(v, dict) or not v:
+                # 响应正常但没内容：这只票这次**没有行情**（不编价、不拿别的票顶）。
+                _bump(DEGRADE_SNAPSHOT_EMPTY)
                 continue
             now = _to_float(v.get("Now"))
             # 0 不是价格（types.py 红线：缺字段一律 None，禁止用 0 冒充 —— 0 价会让下游
             # 算出 -100% 假暴跌）。实测 2026-10-29：002827（停牌）TQ 快照 Now="0.00"，
             # 腾讯同标的给 51.80 ⇒ 这里跳过该票。
-            # ⚠️ 跳过**没有**逐票回补：引擎按整批取数、按数量比较候选源，默认 min_count=1
-            #    时这份"少一只"的结果就算成功返回 ⇒ 该票本次取数里**没有行情**，由下游
-            #    显式降级（不编价、不拿别的票顶）。别在这里许诺"引擎会补回来"。
+            # ⚠️ 跳过**没有**逐票回补：引擎按整批取数，缺失票只能整批换源或标缺；
+            #    "少一只"的结果会被引擎判 partial（见 Response.partial），绝不冒充完整。
             if now is None or now <= 0:
                 _bump(DEGRADE_NOW_ZERO)
                 continue
@@ -947,14 +1034,25 @@ class TqQuoteVendor(QuoteVendor):
             # 一只价格都没有 ⇒ 这一源本轮无行情，交给引擎下一源（不是日线的锅）。
             return out
 
+        # 快照阶段是否**被传输层/预算打断**（与"某只票应用层报错/无价"区分开）：
+        #   - 打断 ⇒ 剩下的桶再打任何 RPC 都只是把延迟翻倍 ⇒ 日线/more_info 都不跑；
+        #   - 只是少票 ⇒ 日线仍**一次批量**取（1.2s 上限，代价固定），more_info 不跑
+        #     （那是逐票 RPC，N×4s 的放大器）。
+        interrupted = bool(interrupted)
+        snapshot_complete = not interrupted and len(pending) == len(pairs)
+        if not snapshot_complete:
+            _bump(DEGRADE_BATCH_PARTIAL)
+
         # ── ② 日线只为**证明报价日期**（旁证；失败/熔断只丢日期）──
         # 一次批量 RPC（直连网关实测中位 30.9ms / 4 只，1d×(QUOTE_DATE_WINDOW) 根）。
-        evidence = self._daily_bars([tqc for _, tqc, _, _ in pending])
+        evidence = (
+            self._daily_bars([tqc for _, tqc, _, _ in pending]) if not interrupted else None
+        )
         # 本机日期只用来定位"今天的 bar"，**不进入任何输出**（没有证据就输出 None）。
         today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
 
         for sym, tqc, now, v in pending:
-            if evidence.request_failed or tqc in evidence.failed_codes:
+            if evidence is None or evidence.request_failed or tqc in evidence.failed_codes:
                 # 整轮无证据 / 该标的这一路失败：日期明确 unknown（原因已在 _daily_bars
                 # 计数）。**不**调用 prove_quote_date —— 那会把"取数失败/熔断"记成
                 # "这只票没有 bar"，把两种完全不同的运维事实混成一个数。
@@ -971,25 +1069,30 @@ class TqQuoteVendor(QuoteVendor):
             change_pct = round((now - last_close) / last_close * 100, 4) if last_close else None
             inside = _to_float(v.get("Inside"))
             outside = _to_float(v.get("Outside"))
-            # 尝试合并 more_info 丰富 quote（失败不阻塞，单 RPC 降级）
+            # 尝试合并 more_info 丰富 quote（失败不阻塞，单 RPC 降级）。
+            # 只在**完整批次**上跑：它是逐票 RPC，预算花光后还接着打就是 N×4s 的放大器
+            # （2026-10-29 复审实测缺陷）。每次调用只能吃整轮剩余预算。
             turnover_rate = None
             volume_ratio = None
             pe_ratio = None
             pb_ratio = None
             circ_mv = None
             total_mv = None
-            try:
-                mi = _rpc("get_more_info", {"stock_code": tqc})
-                if isinstance(mi, dict) and mi.get("ErrorId") in ("0", None, ""):
-                    turnover_rate = _to_float(mi.get("fHSL"))
-                    volume_ratio = _to_float(mi.get("fLianB"))
-                    # 优先 DynaPE，否则 MorePE/StaticPE_TTM
-                    pe_ratio = _to_float(mi.get("DynaPE")) or _to_float(mi.get("MorePE")) or _to_float(mi.get("StaticPE_TTM"))
-                    pb_ratio = _to_float(mi.get("PB_MRQ"))
-                    circ_mv = _to_float(mi.get("Ltsz"))
-                    total_mv = _to_float(mi.get("Zsz"))
-            except Exception:  # noqa: BLE001
-                pass
+            remaining = fetch_deadline - time.monotonic()
+            if snapshot_complete and remaining > 0:
+                try:
+                    mi = _rpc("get_more_info", {"stock_code": tqc},
+                              timeout=min(_TIMEOUT_S, remaining))
+                    if isinstance(mi, dict) and mi.get("ErrorId") in ("0", None, ""):
+                        turnover_rate = _to_float(mi.get("fHSL"))
+                        volume_ratio = _to_float(mi.get("fLianB"))
+                        # 优先 DynaPE，否则 MorePE/StaticPE_TTM
+                        pe_ratio = _to_float(mi.get("DynaPE")) or _to_float(mi.get("MorePE")) or _to_float(mi.get("StaticPE_TTM"))
+                        pb_ratio = _to_float(mi.get("PB_MRQ"))
+                        circ_mv = _to_float(mi.get("Ltsz"))
+                        total_mv = _to_float(mi.get("Zsz"))
+                except Exception:  # noqa: BLE001
+                    pass
             # P1-8 单位标定(2026-10-08 实盘对照, 002361.SZ): 快照 Amount 源为**万元**。
             # 证据: TQ Amount=182560.53; 腾讯同日 parts[37]=182560.5387(万元) 且
             # parts[35] 元额=1,825,605,387 ≈ Amount×1e4; 恒等式 Amount×1e4 /(Volume 手×100)

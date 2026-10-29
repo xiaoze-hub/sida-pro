@@ -890,3 +890,49 @@ def test_tq_date_only_halted_quote_is_previous_trading_day(db, monkeypatch):
     assert pos["quote_date"] == last_traded
     assert r["total"]["daily_pnl_period"] == "previous_trading_day"
     assert r["total"]["daily_pnl_label"] == "上一交易日盈亏"
+
+
+# ---------------- 2026-10-29 复审 F5: 日期证不出来的篮子不许算进「当日盈亏」 ----------------
+#
+# 缺陷: 端口层把"有现价 + 有昨收但 quote_date 未知"的篮子也加进 total_daily_pnl，
+# 而摘要层 all-unknown 时又把标签写成「当日盈亏」⇒ 用一笔不知道是哪天的涨跌冒充今日盈亏。
+
+def test_unknown_period_basket_is_excluded_from_daily_pnl_total(db, monkeypatch):
+    """一只证得出今天、一只证不出日期: 汇总只算证得出来的那只，并显式标被排除的条数。"""
+    unknown = dict(_quote(4.0, prev_close=3.8), quote_date=None)
+    _stub_quotes(monkeypatch, {"600519": _quote(12.0, prev_close=11.0), "000001": unknown})
+    acc = _account(db)
+    _position(db, acc, "600519", cost=10.0, qty=100)
+    _position(db, acc, "000001", cost=3.5, qty=1000)
+
+    r = accounts_api.get_portfolio_summary(db=db, user=USER_A)
+    a = r["accounts"][0]
+
+    assert a["total_daily_pnl"] == pytest.approx(100.0), "只算日期证据成立的那只"
+    assert a["daily_pnl_coverage"]["positions_observed"] == 1
+    assert a["daily_pnl_coverage"]["positions_period_unknown"] == 1
+    assert a["daily_pnl_excluded"] == 1
+    assert a["daily_pnl_period"] == "today" and a["daily_pnl_label"] == "今日盈亏"
+    assert r["total"]["total_daily_pnl"] == pytest.approx(100.0)
+    assert r["total"]["daily_pnl_excluded"] == 1
+
+
+def test_all_unknown_period_baskets_yield_unknown_not_today(db, monkeypatch):
+    """全部篮子都证不出日期: 汇总必须是 None/「期间未知」，不许给 0 也不许写「当日盈亏」。"""
+    a_quote = dict(_quote(12.0, prev_close=11.0), quote_date=None)
+    b_quote = dict(_quote(4.0, prev_close=3.8), quote_date=None)
+    _stub_quotes(monkeypatch, {"600519": a_quote, "000001": b_quote})
+    acc = _account(db)
+    _position(db, acc, "600519", cost=10.0, qty=100)
+    _position(db, acc, "000001", cost=3.5, qty=1000)
+
+    r = accounts_api.get_portfolio_summary(db=db, user=USER_A)
+    a = r["accounts"][0]
+
+    assert a["positions"][0]["daily_pnl"] == pytest.approx(100.0), "单票价差照给（标签说清是哪天不确定）"
+    assert a["positions"][0]["daily_pnl_period"] == "unknown"
+    assert a["total_daily_pnl"] is None, "证不出日期就没有「当日盈亏」这个数"
+    assert a["daily_pnl_label"] == "期间未知"
+    assert a["daily_pnl_excluded"] == 2
+    assert r["total"]["total_daily_pnl"] is None
+    assert r["total"]["daily_pnl_label"] == "期间未知"

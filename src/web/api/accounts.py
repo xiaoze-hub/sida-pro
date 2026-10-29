@@ -26,7 +26,11 @@ from src.core.portfolio_scope import (
     user_scope_accounts,
     user_scope_positions,
 )
-from src.core.quote_period import classify_quote_period, summarize_daily_pnl_period
+from src.core.quote_period import (
+    TRUSTED_DAILY_PERIODS,
+    classify_quote_period,
+    summarize_daily_pnl_period,
+)
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -703,22 +707,34 @@ def _quotes_coverage(
 
 
 def _daily_pnl_coverage(
-    *, requested: bool, positions_total: int, positions_observed: int
+    *,
+    requested: bool,
+    positions_total: int,
+    positions_observed: int,
+    positions_period_unknown: int = 0,
 ) -> dict:
-    """当日盈亏覆盖度: 缺现价或缺昨日收盘的仓位都不该被当成「0 涨跌」。"""
+    """当日盈亏覆盖度: 缺现价/缺昨收/日期证不出来的仓位都不该被当成「0 涨跌」。
+
+    `positions_observed` 只数**期间证得出来**的篮子（它们才是 total_daily_pnl 的分子）；
+    `positions_period_unknown` 是有现价+昨收、但无法证明是哪一天的篮子数 —— 它们被
+    排除在汇总之外（2026-10-29 复审：不许让"不知道哪天"的涨跌混进「当日盈亏」）。
+    """
     total = max(0, int(positions_total or 0))
     if not requested:
         return {
             "requested": False,
             "positions_total": total,
             "positions_observed": None,
+            "positions_period_unknown": None,
             "complete": False,
         }
     observed = max(0, min(int(positions_observed or 0), total))
+    unknown = max(0, min(int(positions_period_unknown or 0), total - observed))
     return {
         "requested": True,
         "positions_total": total,
         "positions_observed": observed,
+        "positions_period_unknown": unknown,
         "complete": observed == total,
     }
 
@@ -850,7 +866,9 @@ def get_portfolio_summary(
       - total_assets 是"总资产"语义: 只有全部持仓有价(或本来没持仓)才给数字且
         total_assets_complete=True; 部分/全部缺价时为 None, basis 写明口径,
         子集口径另给 total_assets_priced_subset, 不得把子集当总资产展示。
-      - total_daily_pnl 只在"有现价且有昨日收盘"的仓位上累加; 一只都没观测到时为 None。
+      - total_daily_pnl 只在"有现价 + 有昨日收盘 + 期间证得出来(today/上一交易日)"的仓位上
+        累加; 一只都没证出来时为 None。日期证不出来的篮子只给单票 daily_pnl(period=unknown),
+        不进汇总, 条数见 daily_pnl_coverage.positions_period_unknown 与 daily_pnl_excluded。
         daily_pnl_coverage 给出 positions_total / positions_observed / complete,
         部分覆盖时数字只是已观测部分。
       - quotes_coverage 给出持仓总数 / 已定价数 / 缺失数 / 成本覆盖率 / pricing_basis:
@@ -930,7 +948,8 @@ def get_portfolio_summary(
     grand_available_funds = 0
     grand_funds_known = True  # 任一账户 available_funds 为 NULL → 汇总现金是"未知", 不是 0
     grand_daily_pnl = 0
-    grand_daily_pnl_observed = 0
+    grand_daily_pnl_proven = 0
+    grand_daily_pnl_excluded = 0
     grand_daily_pnl_periods: list[tuple[str, str | None]] = []
 
     for acc in accounts:
@@ -942,7 +961,8 @@ def get_portfolio_summary(
         acc_priced_count = 0
         acc_positions_count = 0
         acc_daily_pnl = 0
-        acc_daily_pnl_observed = 0
+        acc_daily_pnl_proven = 0
+        acc_daily_pnl_excluded = 0
         acc_daily_pnl_periods: list[tuple[str, str | None]] = []
         # available_funds 可为 NULL(老数据): NULL 是"没记过现金", 不是 0 —— 输出 None,
         # 并且下游 total_assets 不得把它当 0 加进总资产(见 acc_assets_* 分支)。
@@ -992,12 +1012,19 @@ def get_portfolio_summary(
             if priced and prev_close is not None:
                 daily_pnl = (current_price - prev_close) * qty * rate
                 daily_pnl_pct = (current_price - prev_close) / prev_close * 100
-                acc_daily_pnl += daily_pnl
-                acc_daily_pnl_observed += 1
-                grand_daily_pnl_observed += 1
                 observation = (daily_pnl_period, quote_date)
                 acc_daily_pnl_periods.append(observation)
                 grand_daily_pnl_periods.append(observation)
+                # 2026-10-29 复审：只有期间（今天/上一交易日）**证得出来**的篮子才进汇总。
+                # 日期证不出来的照样给单票 daily_pnl（数字本身是价差），但标 period=unknown、
+                # 不进 total_daily_pnl —— 否则「当日盈亏」里会混进一笔不知道哪天的涨跌。
+                if daily_pnl_period in TRUSTED_DAILY_PERIODS:
+                    acc_daily_pnl += daily_pnl
+                    acc_daily_pnl_proven += 1
+                    grand_daily_pnl_proven += 1
+                else:
+                    acc_daily_pnl_excluded += 1
+                    grand_daily_pnl_excluded += 1
 
             cost = _safe_amount(pos.cost_price) * qty
             cost_cny = cost * rate  # 假设成本价也是原币种
@@ -1101,7 +1128,7 @@ def get_portfolio_summary(
                     # 子集市值 + 全部资金 ≠ 总资产, 只给子集口径, 不冒充总额。
                     acc_total_assets = None
                     acc_assets_complete, acc_assets_basis = False, "priced_positions_only"
-                acc_daily_pnl_out = round(acc_daily_pnl, 2) if acc_daily_pnl_observed else None
+                acc_daily_pnl_out = round(acc_daily_pnl, 2) if acc_daily_pnl_proven else None
 
         account_summaries.append({
             "id": acc.id,
@@ -1130,7 +1157,8 @@ def get_portfolio_summary(
             "daily_pnl_coverage": _daily_pnl_coverage(
                 requested=include_quotes,
                 positions_total=acc_positions_count,
-                positions_observed=acc_daily_pnl_observed,
+                positions_observed=acc_daily_pnl_proven,
+                positions_period_unknown=acc_daily_pnl_excluded,
             ),
             "positions": positions_data,
             **summarize_daily_pnl_period(acc_daily_pnl_periods),
@@ -1189,7 +1217,7 @@ def get_portfolio_summary(
         else:
             grand_total_assets = None
             grand_assets_complete, grand_assets_basis = False, "priced_positions_only"
-        grand_daily_pnl_out = round(grand_daily_pnl, 2) if grand_daily_pnl_observed else None
+        grand_daily_pnl_out = round(grand_daily_pnl, 2) if grand_daily_pnl_proven else None
 
     # 构建 quotes 字典（用于前端股票列表显示; 坏值不得原样透传）
     quotes_dict = {}
@@ -1229,7 +1257,8 @@ def get_portfolio_summary(
             "daily_pnl_coverage": _daily_pnl_coverage(
                 requested=include_quotes,
                 positions_total=grand_positions_count,
-                positions_observed=grand_daily_pnl_observed,
+                positions_observed=grand_daily_pnl_proven,
+                positions_period_unknown=grand_daily_pnl_excluded,
             ),
             **total_daily_pnl_meta,
         },

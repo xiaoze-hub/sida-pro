@@ -42,3 +42,37 @@ def test_db_config_provider_maps_rows(monkeypatch):
         ("tencent", 1, True, {"k": "v"}),
         ("yfinance", 2, True, {}),
     ]
+
+
+def test_quote_to_row_carries_partial_batch_marker():
+    """部分批次必须在**数据源字段**上显式标出（2026-10-29 复审）。"""
+    q = Quote(symbol="600519", market="CN", current_price=1700.0,
+              source="tq", source_partial=True, source_missing=["002827"])
+    row = mc._quote_to_row(q)
+    assert row["source"] == "tq"
+    assert row["source_partial"] is True
+    assert row["source_missing"] == ["002827"]
+
+    full = mc._quote_to_row(Quote(symbol="600519", market="CN", current_price=1.0, source="tq"))
+    assert full["source_partial"] is False and full["source_missing"] == []
+
+
+def test_marketdata_quotes_marks_partial_batch_on_every_row(monkeypatch):
+    """`MarketData.quotes()` 把 Response.partial/missing 落到每条 Quote 上（不静默）。"""
+    from marketdata.client import MarketData
+    from marketdata.types import Response
+
+    md = MarketData(config=object())  # type: ignore[arg-type]
+
+    class _Engine:
+        def fetch(self, req, **_kw):
+            return Response(ok=True, vendor="tq", latency_ms=7,
+                            data=[Quote(symbol="600519", market="CN", current_price=9.9)],
+                            partial=True, missing=("002827",), requested=2)
+
+    md._quote_engine = _Engine()
+    out = md.quotes(["600519", "002827"], market="CN")
+    assert [q.symbol for q in out] == ["600519"]
+    assert out[0].source == "tq" and out[0].latency_ms == 7
+    assert out[0].source_partial is True
+    assert out[0].source_missing == ["002827"]
