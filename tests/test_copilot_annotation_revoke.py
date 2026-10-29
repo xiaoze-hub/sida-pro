@@ -12,7 +12,13 @@
   - **并发与事务一致**：动作状态用**条件 UPDATE 原子认领**，标注用条件 DELETE；
     任一失败整笔回滚 —— 不允许出现「动作已 rolled_back 但线还在图上」的半截状态；
   - **编号复用防御**：SQLite 会复用已删行的主键；若当前 `annotation_id` 指向的行
-    与动作 payload 的目标（symbol/period/price/ts/label）对不上，一律拒绝删除。
+    与动作 payload 的目标（symbol/label/period/market/**instrument**/price/ts）对不上，
+    一律拒绝删除 —— 同号同价的指数线与个股线是两条互不可见的通道，漏比类型就会删错。
+  - **一次性、同尺子（2026-10-29 二次复审）**：
+    ① 越权与「不存在」共用同一句 404 文案（否则回显就是标注存在性探针）；
+    ② 条件 DELETE 复述**比对过的那一整份目标**，读→删之间被改写就 0 行 + 整笔回滚；
+    ③ 审计与删除**同一事务**提交：审计写不进去就不许删（删了就没第二份快照）；
+    ④ `can_rollback` 必须实测（有 session 才敢说 true，没 session 按 false）。
 
 接口（后端契约，前端由其它任务接线）：
 
@@ -180,7 +186,8 @@ def test_second_revoke_is_rejected_with_explicit_status(db):
     with pytest.raises(A.ActionError) as ei:
         A.revoke_annotation(db, user_id=UID, annotation_id=out["annotation_id"])
     assert ei.value.status_code == 404
-    assert "标注不存在" in str(ei.value) or "已被撤销" in str(ei.value)
+    # 与"不存在"、"不是你的"同句（不许出现只有这里才有的措辞）
+    assert str(ei.value) == A._annotation_lookup_denied(out["annotation_id"])
 
     with pytest.raises(A.ActionError) as ei2:
         A.rollback_action(db, user_id=UID, action_id=out["id"])
@@ -472,3 +479,134 @@ def test_http_rollback_endpoint_revokes_annotation_kind(make_client):
         assert sess.query(KlineAnnotation).count() == 0
     finally:
         sess.close()
+
+
+# ── 6. 独立复审阻断项（2026-10-29 第二次复审）──────────────────────────────
+# 这一节钉的是实现细节里**能真删错数据 / 真丢快照**的缺口，不是文案润色：
+#   ① 越权与不存在的 404 必须是同一句，否则按文案就能探出"这条线存在但不是你的"；
+#   ② 编号复用比对漏了 `instrument`：000001 的指数线与个股线同号同价，漏比就删错通道；
+#   ③ 读→比对→删之间是 TOCTOU：DELETE 只按 id+user_id，中间被改写也照删；
+#   ④ 先提交删除、再 best-effort 写审计 ⇒ 审计失败时快照永久丢失（行已删，无源可查）；
+#   ⑤ `_to_dict` 不传 db 时 annotation 的 `can_rollback` 只能靠猜 ⇒ 会谎报可撤销。
+
+
+def test_cross_user_and_missing_annotation_are_indistinguishable(db):
+    """越权与他人数据不存在必须**同句同码**：否则 404 文案就是存在性探针。"""
+    theirs = _confirm(db, {"symbol": "600519", "label": "他人的线", "price": 20.0},
+                      uid=OTHER_UID)
+    other_id = theirs["annotation_id"]
+    missing_id = other_id + 900000
+
+    with pytest.raises(A.ActionError) as ei_other:
+        A.revoke_annotation(db, user_id=UID, annotation_id=other_id)
+    with pytest.raises(A.ActionError) as ei_missing:
+        A.revoke_annotation(db, user_id=UID, annotation_id=missing_id)
+
+    assert ei_other.value.status_code == 404
+    assert ei_missing.value.status_code == 404
+    assert str(ei_other.value).replace(f"#{other_id}", "#N") == str(ei_missing.value).replace(
+        f"#{missing_id}", "#N"
+    ), "越权与不存在的文案必须一致（只允许 id 数字不同）"
+
+
+def test_id_reuse_with_other_instrument_is_not_deleted(db):
+    """同号同价、只差 `instrument` 的行是**另一个通道**的线，绝不能被删。"""
+    out = _confirm(db, {"symbol": "000001", "label": "同号通道", "price": 12.0,
+                        "instrument": "index"})
+    aid = out["annotation_id"]
+    db.execute(text("DELETE FROM kline_annotations WHERE id = :i"), {"i": aid})
+    db.commit()
+    # SQLite 复用了同一个主键：symbol/label/price/period/market 全同，只有类型不同
+    reused = _add_annotation(db, annotation_id=aid, uid=UID, symbol="000001",
+                             label="同号通道", price=12.0, instrument="stock")
+
+    with pytest.raises(A.ActionError) as ei:
+        A.revoke_annotation(db, user_id=UID, annotation_id=aid)
+    assert ei.value.status_code == 409
+    survivor = db.query(KlineAnnotation).filter(KlineAnnotation.id == reused.id).one()
+    assert survivor.instrument == "stock", "个股通道的行被指数动作删掉了"
+    assert db.query(CopilotAction).filter(CopilotAction.id == out["id"]).one().status == "applied"
+
+
+def test_row_rewritten_between_match_and_delete_is_not_deleted(db, monkeypatch):
+    """读→比对→删之间的窗口里行被改写：条件 DELETE 必须 0 行、整笔回滚。"""
+    out = _confirm(db, {"symbol": "600519", "label": "并发改写", "price": 21.0})
+    aid = out["annotation_id"]
+
+    orig_match = A._matched_target
+
+    def racing_match(annotation, action):
+        want = orig_match(annotation, action)
+        # 模拟另一个写者在"已经比对过、还没删"的窗口里改掉这条线
+        db.execute(text("UPDATE kline_annotations SET price = :p WHERE id = :i"),
+                   {"p": 99.0, "i": aid})
+        return want
+
+    monkeypatch.setattr(A, "_matched_target", racing_match)
+
+    with pytest.raises(A.ActionError) as ei:
+        A.revoke_annotation(db, user_id=UID, annotation_id=aid)
+    assert ei.value.status_code == 409
+    assert "变更" in str(ei.value) or "改写" in str(ei.value) or "不一致" in str(ei.value)
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.id == aid).count() == 1, \
+        "行在窗口里被改写，仍按旧值删掉 = 删错数据"
+    assert db.query(CopilotAction).filter(CopilotAction.id == out["id"]).one().status == "applied"
+    assert _revoke_audits(db) == []
+
+
+def test_audit_write_failure_rolls_back_the_delete(db):
+    """审计和删除必须同一事务：审计写不进去就不许删（否则快照永久丢失）。"""
+    out = _confirm(db, {"symbol": "600519", "label": "审计失败", "price": 22.0})
+    aid, act_id = out["annotation_id"], out["id"]
+
+    orig_add = db.add
+
+    def add_boom(obj):
+        if isinstance(obj, AuditLog):
+            raise RuntimeError("模拟审计落库失败")
+        return orig_add(obj)
+
+    db.add = add_boom  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError):
+            A.revoke_annotation(db, user_id=UID, annotation_id=aid)
+    finally:
+        db.add = orig_add  # type: ignore[method-assign]
+
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.id == aid).count() == 1, \
+        "审计没落库却把行删了：快照再也查不回来"
+    assert db.query(CopilotAction).filter(CopilotAction.id == act_id).one().status == "applied"
+    assert _revoke_audits(db) == []
+
+
+def test_can_rollback_without_a_session_is_conservative(db):
+    """没有 db 就证明不了"行还在"：不许凭 `annotation_id` 非空就报 true。"""
+    out = _confirm(db, {"symbol": "600519", "label": "不许猜", "price": 23.0})
+    row = db.query(CopilotAction).filter(CopilotAction.id == out["id"]).one()
+
+    assert A._to_dict(row)["can_rollback"] is False
+    assert A._to_dict(row, db=db)["can_rollback"] is True
+
+
+def test_dedup_branch_hands_the_session_to_can_rollback(db, monkeypatch):
+    """情景矩阵的去重分支也必须把 session 传下去（复审点名的 `_to_dict(hit)`）。"""
+    seen: list[bool] = []
+    orig = A._to_dict
+
+    def spy(row, *, db=None):
+        seen.append(db is not None)
+        return orig(row, db=db)
+
+    monkeypatch.setattr(A, "_to_dict", spy)
+    matrix = {"available": True, "levels": {"support": 95.5}}
+    first = A.propose_scenario_annotations(
+        db, user_id=UID, symbol="600519", market="CN", matrix=matrix,
+    )
+    assert first, "矩阵可用时应至少提议一个关键位"
+    # 第二次必然走"命中同 label 的 pending"那条去重分支
+    again = A.propose_scenario_annotations(
+        db, user_id=UID, symbol="600519", market="CN", matrix=matrix,
+    )
+    assert any(p["dedup"] is True for p in again), "第二次提议应命中去重分支"
+    assert seen and all(seen), "去重分支没传 db → can_rollback 只能靠猜"
+

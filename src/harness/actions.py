@@ -16,6 +16,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -381,7 +382,7 @@ def propose_scenario_annotations(
             hit.payload = json.dumps({**old, **payload}, ensure_ascii=False)
             db.commit()
             db.refresh(hit)
-        proposed.append({**_to_dict(hit), "dedup": True})
+        proposed.append({**_to_dict(hit, db=db), "dedup": True})
     return proposed
 
 
@@ -1040,8 +1041,10 @@ def _to_dict(row: Any, *, db: Session | None = None) -> dict:
         "diff": json.loads(row.diff_json) if getattr(row, "diff_json", None) else [],
         # 只有"这类动作真的能撤销 + 已执行 + 真的还有东西可撤"才算 true。
         # 2026-10-28 复审: 旧写法 bool("{}") 为真 → annotation 动作骗前端说能撤回。
-        # 2026-10-29: annotation 现在真能撤销，但前提是关联的标注行**仍存在且属主是我**
-        # （`db` 传进来时实测；不传时只认关联契约，避免为了列表多查库）。
+        # 2026-10-29: annotation 现在真能撤销，但前提是关联的标注行**仍存在且属主是我**。
+        # 2026-10-29 二次复审: 这个前提**必须实测**才敢说 true —— 不传 `db` 时无从证明
+        # 行还在（行可能已被删、主键可能已被别人复用），所以按 false 处理（宁可少报，
+        # 不许拿一个过期整数骗前端"可撤销"）。所有调用点都必须把 session 传进来。
         "can_rollback": _can_rollback(row, db=db),
         "created_at": str(row.created_at or ""),
         "applied_at": str(row.applied_at or ""),
@@ -1073,7 +1076,8 @@ def _can_rollback(row: Any, *, db: Session | None = None) -> bool:
     if getattr(row, "kind", None) == "annotation":
         if getattr(row, "annotation_id", None) is None:
             return False
-        return True if db is None else _annotation_link_alive(db, row)
+        # 没有 session 就证明不了"这条线还在、还是我的" ⇒ 不许说 true（见 `_to_dict`）。
+        return False if db is None else _annotation_link_alive(db, row)
     return (
         getattr(row, "kind", None) in SNAPSHOT_ROLLBACK_KINDS
         and _has_rollback_snapshot(row)
@@ -1261,6 +1265,16 @@ def _coerce_annotation_id(raw: Any) -> int:
     return aid
 
 
+def _annotation_lookup_denied(annotation_id: Any) -> str:
+    """「不存在」与「不是你的」共用**同一句**（2026-10-29 二次复审）。
+
+    两种情况的文案只要有差别，404 的 `detail` 就变成存在性探针：攻击者逐号试，
+    靠回显就能枚举出"这条线存在、只是不属于我"。所以这里只有一个模板，
+    调用方不许自己拼。
+    """
+    return f"标注 #{annotation_id} 不存在或不属于当前账号"
+
+
 def _load_owned_annotation(db: Session, *, user_id: Any, annotation_id: Any) -> Any:
     """取一条**属于当前账号**的标注；不存在/他人的按 404，无主的按 409。"""
     from src.db.models import KlineAnnotation
@@ -1268,17 +1282,19 @@ def _load_owned_annotation(db: Session, *, user_id: Any, annotation_id: Any) -> 
     aid = _coerce_annotation_id(annotation_id)
     row = db.query(KlineAnnotation).filter(KlineAnnotation.id == aid).one_or_none()
     if row is None:
-        raise ActionError(f"标注 #{aid} 不存在或已被撤销", status_code=404)
+        raise ActionError(_annotation_lookup_denied(aid), status_code=404)
     owner = row.user_id
     if owner is None:
+        # 无主行是"存在且不属于任何人"，与"不是你的"不是一类事实：它无法被任何账号
+        # 撤销，只能由运维处理。它不是越权探针的答案（任何账号得到同一句）。
         raise ActionError(
             f"标注 #{aid} 是无主标注（全局行，user_id 为空）：它不属于任何账号，"
             "服务端不能代替某个账号撤销它",
             status_code=409,
         )
     if str(owner) != str(user_id):
-        # 越权与不存在给同一句：不泄露"这条标注存在、但不是你的"
-        raise ActionError(f"标注 #{aid} 不存在或不属于当前账号", status_code=404)
+        # 与不存在同句：不泄露"这条标注存在、但不是你的"
+        raise ActionError(_annotation_lookup_denied(aid), status_code=404)
     return row
 
 
@@ -1314,28 +1330,44 @@ def _confirming_action_for(db: Session, *, user_id: Any, annotation_id: int) -> 
 
 
 def _target_from_payload(payload: dict) -> dict:
-    """动作 payload 归一成与标注行可比的形状（与 `_apply_annotation` 同一把尺）。"""
+    """动作 payload 归一成与标注行可比的形状（与 `_apply_annotation` 同一把尺）。
+
+    `instrument` 必须一起比（2026-10-29 二次复审）：`000001` 的指数线与个股线是同
+    symbol/同 market、价格也能相同，但它们是**两条互不可见的通道**（读取端按
+    instrument 过滤）。漏比类型 = 主键复用后把另一个通道的线当自己的删掉。
+    """
+    symbol = str(payload.get("symbol") or "").strip()
+    market = _normalize_market(payload.get("market"))
     return {
-        "symbol": str(payload.get("symbol") or "").strip(),
+        "symbol": symbol,
         "label": str(payload.get("label") or "").strip()[:64],
         "period": _normalize_period(payload.get("period")),
-        "market": _normalize_market(payload.get("market")),
+        "market": market,
+        # 与 apply 端同一个入口：解析不出/不合法就在写入口被拒过，这里同样抛 ActionError
+        "instrument": _guard_annotation_target(symbol, market, payload.get("instrument")),
         "price": _as_price(payload.get("price")) if payload.get("price") is not None else None,
         "ts": _normalize_ts(payload.get("ts")),
     }
+
+
+#: 价位比较容差（比对与条件 DELETE 共用，避免两边尺子不同）。
+_PRICE_EPS = 1e-9
 
 
 def _same_price(a: Any, b: Any) -> bool:
     if a is None or b is None:
         return a is None and b is None
     try:
-        return abs(float(a) - float(b)) < 1e-9
+        return abs(float(a) - float(b)) < _PRICE_EPS
     except (TypeError, ValueError):
         return False
 
 
-def _annotation_matches_action(annotation: Any, action: Any) -> bool:
-    """这条标注是不是**这次动作**画出来的那条（防 SQLite 主键复用后删错行）。
+def _matched_target(annotation: Any, action: Any) -> dict | None:
+    """这条标注是不是**这次动作**画出来的那条；是则返回归一后的目标字段。
+
+    返回 dict 而不是 bool：调用方要拿**同一份**归一字段去做条件 DELETE，
+    否则"比对用的值"和"删除用的值"各写一遍，迟早漂移成新的 TOCTOU。
 
     `annotation_id` 是无外键弱引用：标注被删后 SQLite 会用同一个 id 建新行，
     旧链接就直接指向了别人的另一条线。撤销前必须核对目标字段 —— 不核就是拿一个
@@ -1344,21 +1376,29 @@ def _annotation_matches_action(annotation: Any, action: Any) -> bool:
     try:
         payload = json.loads(action.payload or "{}")
     except (TypeError, ValueError):
-        return False
+        return None
     if not isinstance(payload, dict):
-        return False
+        return None
     try:
         want = _target_from_payload(payload)
     except ActionError:
-        return False
-    return (
+        return None
+    if (
         annotation.symbol == want["symbol"]
         and annotation.label == want["label"]
         and annotation.period == want["period"]
         and annotation.market == want["market"]
+        and annotation.instrument == want["instrument"]
         and annotation.ts == want["ts"]
         and _same_price(annotation.price, want["price"])
-    )
+    ):
+        return want
+    return None
+
+
+def _annotation_matches_action(annotation: Any, action: Any) -> bool:
+    """`_matched_target` 的布尔形态（保留既有调用面）。"""
+    return _matched_target(annotation, action) is not None
 
 
 def _revoke_annotation_row(
@@ -1399,7 +1439,8 @@ def _revoke_annotation_row(
             f"确认动作当前状态是 {action.status}，只有 applied 的标注能撤销",
             status_code=409,
         )
-    if not _annotation_matches_action(annotation, action):
+    want = _matched_target(annotation, action)
+    if want is None:
         raise ActionError(
             f"标注 #{aid} 与确认动作 #{action.id} 记录的目标不一致（编号可能已被复用），"
             "拒绝删除这条标注",
@@ -1434,17 +1475,54 @@ def _revoke_annotation_row(
             safe_rollback(db)
             raise ActionError("该标注刚被另一个请求撤销，请刷新", status_code=409)
 
-        # 只删本人那条：user_id 等值条件同时把"无主行"排除在外（NULL 不等于任何值）。
+        # 条件 DELETE 必须复述**比对过的那一整份目标**，不能只按 id+user_id
+        # （2026-10-29 二次复审 TOCTOU）：读→比对→删之间行可能被改写/复用，只比 id
+        # 就会拿一个过期的身份删掉现在的另一条线。rowcount=0 ⇒ 窗口里变了，整笔回滚。
+        delete_cond = [
+            KlineAnnotation.id == aid,
+            KlineAnnotation.user_id == str(user_id),   # NULL 行永不相等 ⇒ 无主行不会被删
+            KlineAnnotation.symbol == want["symbol"],
+            KlineAnnotation.label == want["label"],
+            KlineAnnotation.period == want["period"],
+            KlineAnnotation.market == want["market"],
+            KlineAnnotation.instrument == want["instrument"],
+        ]
+        if want["price"] is None:
+            delete_cond.append(KlineAnnotation.price.is_(None))
+        else:
+            # 与 `_same_price` 用同一容差：比对通过了，删除条件也必须按同一把尺判定，
+            # 否则"1e-9 内相等"的行会比对通过、却在 DELETE 处拿 0 行 → 假冲突。
+            delete_cond.append(
+                func.abs(KlineAnnotation.price - float(want["price"])) < _PRICE_EPS
+            )
+        delete_cond.append(
+            KlineAnnotation.ts.is_(None) if want["ts"] is None
+            else KlineAnnotation.ts == want["ts"]
+        )
         deleted = (
             db.query(KlineAnnotation)
-            .filter(KlineAnnotation.id == aid, KlineAnnotation.user_id == str(user_id))
+            .filter(*delete_cond)
             .delete(synchronize_session=False)
         )
         if not deleted:
             safe_rollback(db)
-            raise ActionError("标注已不存在或归属已变更，本次撤销未生效", status_code=409)
+            raise ActionError(
+                "标注在本次撤销的读取与删除之间被改动（内容或归属已变更），"
+                "本次撤销未生效，请刷新后重试",
+                status_code=409,
+            )
 
         action.result = f"已撤销标注 #{aid}：{snapshot['label']}（{snapshot['symbol']}）"
+        # 审计与删除**同一事务**（2026-10-29 二次复审）：行删掉之后审计是唯一快照源，
+        # 先提交删除再 best-effort 写审计 = 审计一失败快照就永久丢失（谁删了哪条线
+        # 再也查不回来）。所以审计只 add、不单独提交，任何异常都整笔回滚。
+        _stage_rollback_audit(
+            db, user_id=user_id, action_id=int(action.id), kind="annotation",
+            undone=[f"已撤销标注 #{aid}：{snapshot['label']}"],
+            reason=reason_text,
+            extra={"annotation_id": aid, "annotation": snapshot,
+                   "action_status": "rolled_back"},
+        )
         db.commit()
     except ActionError:
         safe_rollback(db)
@@ -1456,12 +1534,6 @@ def _revoke_annotation_row(
         raise
 
     db.refresh(action)
-    _audit_rollback(
-        db, user_id=user_id, action_id=int(action.id), kind="annotation",
-        undone=[f"已撤销标注 #{aid}：{snapshot['label']}"],
-        reason=reason_text,
-        extra={"annotation_id": aid, "annotation": snapshot, "action_status": "rolled_back"},
-    )
     return {
         "ok": True,
         "status": "revoked",
@@ -1587,26 +1659,49 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
     return _to_dict(row, db=db)
 
 
+def _rollback_audit_detail(*, action_id: int, kind: str, undone: list[str],
+                           reason: str, extra: dict | None = None) -> dict[str, Any]:
+    """撤销审计的 detail 结构（严格/宽松两条路径共用，避免两边漂移）。"""
+    detail: dict[str, Any] = {
+        "action_id": action_id, "kind": kind,
+        "undone": undone, "reason": (reason or "")[:200],
+    }
+    if extra:
+        detail.update(extra)
+    return detail
+
+
+def _stage_rollback_audit(db: Session, *, user_id: Any, action_id: int, kind: str,
+                          undone: list[str], reason: str, extra: dict | None = None) -> None:
+    """把撤销审计挂到**当前事务**上：只 `add`，不提交、不吞异常。
+
+    调用方（标注撤销）必须在同一个 `commit()` 里带上审计：审计失败要整笔回滚，
+    否则"行删了但审计没落库"就是永久丢快照。
+    """
+    from src.db.models import AuditLog
+
+    db.add(AuditLog(
+        user_id=str(user_id),
+        action="copilot_action_rollback",
+        detail=json.dumps(
+            _rollback_audit_detail(action_id=action_id, kind=kind, undone=undone,
+                                   reason=reason, extra=extra),
+            ensure_ascii=False,
+        ),
+    ))
+
+
 def _audit_rollback(db: Session, *, user_id: Any, action_id: int, kind: str,
                     undone: list[str], reason: str, extra: dict | None = None) -> None:
     """回滚/撤销本身也要留痕 —— 否则审计里只看到 apply，看不到撤销。
 
-    `extra` 用于补充被删对象的快照（标注撤销时行已经删了，审计是唯一追溯源）。
+    口径保持 2026-10-29 之前的样子：**best-effort**（动作已提交，审计失败只告警）。
+    只有标注撤销改成"审计与删除同一事务"（见 `_stage_rollback_audit`），
+    其余三类动作的既有行为不受影响。
     """
     try:
-        from src.db.models import AuditLog
-
-        detail: dict[str, Any] = {
-            "action_id": action_id, "kind": kind,
-            "undone": undone, "reason": (reason or "")[:200],
-        }
-        if extra:
-            detail.update(extra)
-        db.add(AuditLog(
-            user_id=str(user_id),
-            action="copilot_action_rollback",
-            detail=json.dumps(detail, ensure_ascii=False),
-        ))
+        _stage_rollback_audit(db, user_id=user_id, action_id=action_id, kind=kind,
+                              undone=undone, reason=reason, extra=extra)
         db.commit()
     except Exception as exc:  # noqa: BLE001
         from src.core.db_safe import safe_rollback
