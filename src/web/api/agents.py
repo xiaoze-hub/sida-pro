@@ -81,11 +81,22 @@ def _format_datetime(dt, tz: str | None = None) -> str:
     return dt.astimezone(tzinfo).isoformat()
 
 
-def _spawn_async_run(fn, *args, name: str, notify_label: str | None = None) -> None:
+def _spawn_async_run(
+    fn,
+    *args,
+    name: str,
+    notify_label: str | None = None,
+    notify_user_id: str | None = None,
+    notify_channel_ids: list[int] | None = None,
+) -> None:
     """Run an async function in a dedicated thread.
 
     notify_label 非空时, 任务结束(成功/失败)都会写一条站内通知 —— 后台任务
     fire-and-forget 之后必须有落点, 否则用户关掉页面就彻底失联。
+
+    notify_user_id(2026-10-29 四审): 任务结果的**可信归属**。旧实现不传, 通知中心
+    只能兜底推 owner —— member 手动触发的任务完成通知跑到 owner 的通知里(内容还
+    可能是 member 的自选分析)。这里在起线程前取标量 user_id 原样带下去。
     """
 
     def _runner():
@@ -93,17 +104,31 @@ def _spawn_async_run(fn, *args, name: str, notify_label: str | None = None) -> N
         try:
             asyncio.run(fn(*args))
             if notify_label:
-                _safe_notify(notify_label, True, "", started, name)
+                _safe_notify(
+                    notify_label, True, "", started, name, notify_user_id,
+                    notify_channel_ids,
+                )
         except Exception as exc:
             logger.exception(f"后台任务失败: {name}")
             if notify_label:
-                _safe_notify(notify_label, False, str(exc)[:500], started, name)
+                _safe_notify(
+                    notify_label, False, str(exc)[:500], started, name, notify_user_id,
+                    notify_channel_ids,
+                )
 
     t = threading.Thread(target=_runner, name=name, daemon=True)
     t.start()
 
 
-def _safe_notify(label: str, ok: bool, detail: str, started: float, source: str) -> None:
+def _safe_notify(
+    label: str,
+    ok: bool,
+    detail: str,
+    started: float,
+    source: str,
+    user_id: str | None = None,
+    channel_ids: list[int] | None = None,
+) -> None:
     """通知失败绝不能影响业务线程。"""
     try:
         from src.core.notify_center import notify_task_done
@@ -115,6 +140,8 @@ def _safe_notify(label: str, ok: bool, detail: str, started: float, source: str)
             category="agent_run",
             source=source,
             duration_ms=int((time.monotonic() - started) * 1000),
+            user_id=user_id,
+            channel_ids=channel_ids,
         )
     except Exception:
         logger.exception("写入站内通知失败: %s", label)
@@ -408,12 +435,26 @@ async def trigger_agent_endpoint(
             and agent_name in {"daily_report", "premarket_outlook"}
             and not wait
         ):
+            # 请求线程里解析一次"该用户的渠道选择集": 完成通知的最终外发会按
+            # 用户归属 ∩ 选择集再校验, 不再悄悄扩到该用户全部渠道(四审)。
+            notify_channel_ids: list[int] | None = None
+            try:
+                from src.bootstrap.runtime import resolve_notify_channels_ex
+
+                _res = resolve_notify_channels_ex(agent_name, user_id=user.id)
+                notify_channel_ids = [int(c.id) for c in _res.channels]
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("解析通知渠道选择集失败(本轮不外发): %s", _e)
+                notify_channel_ids = []
             _spawn_async_run(
                 trigger_agent,
                 agent_name,
                 user.id,
                 name=f"trigger_agent:{agent_name}",
                 notify_label=(agent.display_name or agent_name),
+                # 在请求线程里取标量 id: 工作线程里就不要再读 ORM 的 user 对象了。
+                notify_user_id=getattr(user, "id", None),
+                notify_channel_ids=notify_channel_ids,
             )
             return {"ok": True, "queued": True, "message": "已提交后台执行"}
 
@@ -748,6 +789,14 @@ def get_run_progress(
     S5(2026-08-26): trace_id 归属校验 — AgentRun.user_id 必须等于当前用户
     或为 NULL(系统定时任务共享);否则按 not_found 处理,防止枚举他人运行详情。
 
+    四审(2026-10-29): `user_id IS NULL` **不再对所有人放行**。调度器的 trace_id 是
+    `sch-<agent>-<毫秒>`, 可枚举; 而历史记录全为 NULL(record_agent_run 以前不写
+    user_id)且 result 里可能就是最后一个用户桶的报告正文。现在:
+      - 有归属 → 只认本人;
+      - 无归属(NULL) → 只有 owner 能读(数据责任人排查用), 其他角色按 not_found;
+      - 公共任务的其他客户端不受影响: `/tradingagents/running`、`/ta_status` 等
+        只看状态/进度, 不读 result, 仍按原逻辑工作。
+
     返回:
     {
         "trace_id": ...,
@@ -767,13 +816,18 @@ def get_run_progress(
     if not trace_id or len(trace_id) > 64:
         raise HTTPException(400, "无效的 trace_id")
 
-    # S5(2026-08-26) 归属校验: 运行记录必须属于当前用户或为系统(NULL);
-    # 他人 trace 一律按 not_found 处理(不泄露存在性), 日志/结果也不再下发。
+    # S5(2026-08-26) 归属校验 + 四审(2026-10-29) NULL fail-closed:
+    # 运行记录必须属于当前用户; NULL 归属只有 owner 可读。其余一律 not_found
+    # (不泄露存在性), 日志/结果也不再下发。
+    is_owner = str(getattr(user, "role", "") or "").lower() == "owner"
+    scope_clause = or_(AgentRun.user_id == user.id, AgentRun.user_id.is_(None)) if is_owner else (
+        AgentRun.user_id == user.id
+    )
     owner_run = (
         db.query(AgentRun)
         .filter(
             AgentRun.trace_id == trace_id,
-            or_(AgentRun.user_id == user.id, AgentRun.user_id.is_(None)),
+            scope_clause,
         )
         .order_by(AgentRun.id.desc())
         .first()
@@ -831,7 +885,7 @@ def get_run_progress(
 
     run = (
         db.query(AgentRun)
-        .filter(AgentRun.trace_id == trace_id)
+        .filter(AgentRun.trace_id == trace_id, scope_clause)
         .order_by(AgentRun.id.desc())
         .first()
     )

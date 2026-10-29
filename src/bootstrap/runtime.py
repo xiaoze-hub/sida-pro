@@ -1032,6 +1032,7 @@ async def _trigger_agent_once(
                 trace_id=trace_id,
                 trigger_source="manual",
                 model_label=context.model_label,
+                user_id=user_id,
             )
             return msg
         else:
@@ -1052,6 +1053,7 @@ async def _trigger_agent_once(
                 ),
                 notify_sent=bool(raw.get("notified", False)),
                 model_label=context.model_label,
+                user_id=user_id,
             )
             return result.content
     except Exception as e:
@@ -1063,6 +1065,7 @@ async def _trigger_agent_once(
             trace_id=trace_id,
             trigger_source="manual",
             model_label=context.model_label,
+            user_id=user_id,
         )
         raise
 
@@ -1230,7 +1233,9 @@ async def trigger_agent_for_stock(
             record_agent_run(
                 agent_name=agent_name,
                 status="success",
-                result=result.content,
+                # 无归属(系统调度代跑某只股票)时不把私有正文写进可被枚举的运行记录:
+                # trace_id 由 symbol+毫秒拼成, 任何登录用户都能猜。
+                result=result.content if user_id else "已完成(无归属运行, 正文不落共享记录)",
                 duration_ms=int((time.monotonic() - start) * 1000),
                 trace_id=trace_id,
                 trigger_source="manual",
@@ -1241,6 +1246,7 @@ async def trigger_agent_for_stock(
                 ),
                 notify_sent=bool(raw.get("notified", False)),
                 model_label=model_label,
+                user_id=user_id,
             )
         except Exception as e:
             record_agent_run(
@@ -1251,6 +1257,7 @@ async def trigger_agent_for_stock(
                 trace_id=trace_id,
                 trigger_source="manual",
                 model_label=model_label,
+                user_id=user_id,
             )
             raise
 

@@ -63,7 +63,8 @@ def _matrix():
 
 
 def test_owner_cost_from_real_position():
-    pos = SimpleNamespace(cost_price=34.2)
+    # 四审: 只有有效正持仓才锚定 → 数量是必要条件。
+    pos = SimpleNamespace(cost_price=34.2, quantity=100)
     db = _DB({"Position": [pos], "Stock": [SimpleNamespace(symbol="600111")]})
     assert sc.owner_cost(db, SimpleNamespace(id=1), "600111") == (34.2, None)
 
@@ -108,7 +109,7 @@ def test_no_cost_block_when_user_does_not_hold(patched):
 
 
 def test_cost_block_appears_when_held(patched):
-    db = _DB({"Position": [SimpleNamespace(cost_price=34.2)],
+    db = _DB({"Position": [SimpleNamespace(cost_price=34.2, quantity=100)],
               "Stock": [SimpleNamespace(symbol="600111")]})
     out = sc.build_for_tool(db, "600111", "CN", user=SimpleNamespace(id=1))
     assert "[持仓成本锚定]" in out and "34.20" in out
@@ -118,7 +119,7 @@ def test_cost_block_appears_when_held(patched):
 def test_extra_block_failure_is_isolated(patched):
     patched.setattr("src.core.scenario_cost_anchor.enrich_with_cost",
                     lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    db = _DB({"Position": [SimpleNamespace(cost_price=34.2)],
+    db = _DB({"Position": [SimpleNamespace(cost_price=34.2, quantity=100)],
               "Stock": [SimpleNamespace(symbol="600111")]})
     out = sc.build_for_tool(db, "600111", "CN", user=SimpleNamespace(id=1))
     assert "关键位：阻力 36.5" in out, "附加段炸了不许把矩阵正文吞掉"
@@ -150,8 +151,8 @@ def test_empty_symbol_rejected():
 
 def test_owner_cost_ignores_non_finite_cost():
     """历史脏成本(NaN/Inf)不能当成本锚 —— `bool(nan)` 为 True 会把它一路带进文案。"""
-    db = _DB({"Position": [SimpleNamespace(cost_price=float("nan")),
-                           SimpleNamespace(cost_price=float("inf"))],
+    db = _DB({"Position": [SimpleNamespace(cost_price=float("nan"), quantity=100),
+                           SimpleNamespace(cost_price=float("inf"), quantity=100)],
               "Stock": [SimpleNamespace(symbol="600111")]})
     detail = sc.owner_cost_detail(db, SimpleNamespace(id=1), "600111")
     assert detail.cost is None, "NaN/Inf 成本必须当未知"

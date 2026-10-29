@@ -191,15 +191,26 @@ def test_collect_positions_scoped_per_user(tenancy):
 
 
 def test_collect_positions_shared_bucket_is_not_full_table(tenancy):
-    """user_id=None 是**共享桶**(两侧 IS NULL), 不是"全库"。"""
+    """user_id=None = 共享市场报告: 一条持仓都不采(四审)。
+
+    三审只收敛到"共享桶"; 但共享桶里仍是某个人的历史成本, 标成 shared=false 反而
+    把它贴成了公共数据。四审: 共享报告纯市场, 私有持仓只按用户生成。
+    """
     db = SessionLocal()
     try:
         rows = asyncio.run(rg._collect_positions(db, with_quotes=False, user_id=None))
-        syms = _symbols(rows)
-        assert tenancy["sym_a"] not in syms
-        assert tenancy["sym_b"] not in syms
+        assert rows == [], f"共享报告不得采集任何持仓(实际 {rows})"
     finally:
         db.close()
+
+
+def test_shared_report_meta_flag_is_content_driven():
+    """contains_private_holdings 按**实际采集内容**判定, 不是 bool(user_id) 猜的。"""
+    assert rg._detect_private_holdings({"user_id": None, "positions": []}) is False
+    assert rg._detect_private_holdings({"user_id": None, "positions": [{"symbol": "X"}]}) is True
+    assert rg._detect_private_holdings({"user_id": "u1", "positions": []}) is True
+    ev = {"portfolio": {"items": [{"symbol": "X"}]}}
+    assert rg._detect_private_holdings({"user_id": None, "positions": [], "evidence": ev}) is True
 
 
 def test_write_report_records_scope_meta(tmp_path, monkeypatch):
@@ -347,6 +358,40 @@ def test_shared_market_report_visible_to_all(client, root, tokens):
             headers=_hdr(tokens, who),
         )
         assert r.status_code == 200, who
+
+
+def test_shared_report_whose_body_contains_holdings_is_hidden_from_member(client, root, tokens):
+    """meta 自称 shared+不含私有, 正文却有「500股 成本 12.34」→ member 仍不可读(内容绊线)。
+
+    这是历史生成器/外部 cron 写错 meta 的情形: 读侧不能把 meta 当事实, 必须按内容
+    二次校验, 判不了就不给 member(fail-closed)。
+    """
+    _write(root, "lying_meta.md", {"scope": "shared", "contains_private_holdings": False},
+           "# 盘前\n\n- 历史共享票(LEGACY1) 500股 成本 12.34\n")
+    r_member = client.get(
+        "/api/reports/content",
+        params={"job_id": "premarket-daily", "file": "lying_meta.md"},
+        headers=_hdr(tokens, "a"),
+    )
+    assert r_member.status_code == 404
+    assert "12.34" not in r_member.text
+    lst = client.get("/api/reports/list", headers=_hdr(tokens, "a")).json()["data"]
+    assert "lying_meta.md" not in {i["file"] for i in lst["items"]}
+
+    r_owner = client.get(
+        "/api/reports/content",
+        params={"job_id": "premarket-daily", "file": "lying_meta.md"},
+        headers=_hdr(tokens, "o"),
+    )
+    assert r_owner.status_code == 200, "owner 是数据责任人, 仍可复核这份报告"
+
+
+def test_content_holdings_tripwire_only_flags_holdings_lines():
+    assert report_scope.content_looks_private_holdings("- 平安银行(000001) 1000股 成本 11.2") is True
+    assert report_scope.content_looks_private_holdings("- 持仓成本: 1680.5") is True
+    # 市场解读里的"成本下降 5%"不是持仓行, 不能误伤共享市场报告。
+    assert report_scope.content_looks_private_holdings("> 行业成本下降 5%, 毛利改善") is False
+    assert report_scope.content_looks_private_holdings("## 四、持仓\n- 共享市场报告不含个人持仓/成本") is False
 
 
 def test_shared_report_marked_private_holdings_hidden_from_member(client, root, tokens):

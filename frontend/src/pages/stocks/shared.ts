@@ -111,7 +111,8 @@ export interface Position {
   symbol: string
   name: string
   market: string
-  cost_price: number
+  /** 成本价; `null` = 库里的成本是脏值/未知(后端已有限化, 不用 0 冒充)。 */
+  cost_price: number | null
   quantity: number
   invested_amount: number | null
   trading_style: string  // short: 短线, swing: 波段, long: 长线

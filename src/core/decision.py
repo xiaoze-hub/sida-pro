@@ -30,6 +30,13 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _finite_num(value: Any) -> bool:
+    """是不是**有限**数值(bool 不算)。NaN/Inf/None/字符串一律 False。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
+
 _VERDICT_BY_PHASE = {
     "向好": "动手",
     "拐点": "看看",
@@ -301,6 +308,17 @@ def _personalize(out: dict, user_context: dict | None) -> dict:
         cost = ctx.get("cost_price")
         last = ctx.get("last_close")
         qty = ctx.get("quantity")
+        # 四审: 上游若把数量算成 float(100.0), 仍按整数原样展示; 非整值/布尔/NaN
+        # 一律当未知(None) —— 旧判定 `isinstance(qty, int)` 会把 100.0 整条丢掉。
+        if isinstance(qty, bool):
+            qty = None
+        elif isinstance(qty, float):
+            qty = int(qty) if (math.isfinite(qty) and qty.is_integer()) else None
+        elif not isinstance(qty, int):
+            qty = None
+        # 脏成本/脏收盘(含 NaN): 不进响应(非法 JSON), 也不拿 0 冒充。
+        cost = cost if _finite_num(cost) else None
+        last = last if _finite_num(last) else None
         pnl_pct = None
         if isinstance(cost, (int, float)) and cost > 0 and isinstance(last, (int, float)):
             pnl_pct = round((last - cost) / cost * 100, 2)

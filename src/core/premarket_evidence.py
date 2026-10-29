@@ -576,6 +576,17 @@ def _collect_portfolio_block(
     db: Any, user_id: str | None, as_of: str, with_quotes: bool = True
 ) -> EvidenceBlock:
     """采集持仓及行情 (`positions` join `stocks` + `md_quote_rows`)。"""
+    # 2026-10-29 四审: 共享口径(user_id=None)不采任何持仓 —— 共享桶里仍是个人的历史
+    # 成本, 写进 scope=shared 的报告等于把它贴成「公共数据」。私有持仓只在按用户生成
+    # 的报告里出现。
+    if not user_id:
+        return _make_block(
+            [],
+            "missing",
+            reason="共享口径不含持仓(个人持仓见个人报告)",
+            source="positions",
+            as_of=as_of,
+        )
     if db is None:
         return _make_block(
             [],
@@ -706,6 +717,15 @@ def _collect_fund_structure_block(
     取数纪律：单票失败 → 跳过并计数，不伪造；全部失败 → `missing`；
     任一条 quality != ok → 整块标 `suspect`（数字仍透传，但带原因）。
     """
+    # 共享口径不读任何人的自选/持仓(同 _collect_portfolio_block 的理由)。
+    if not user_id:
+        return _make_block(
+            [],
+            "missing",
+            reason="共享口径不含自选/持仓, 四档结构无标的可算",
+            source="exday_daily/get_exday_data",
+            as_of=as_of,
+        )
     if db is None:
         return _make_block([], "missing", reason="数据库会话未提供",
                            source="exday_daily/get_exday_data", as_of=as_of)

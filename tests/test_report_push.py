@@ -82,14 +82,16 @@ def test_generate_job_pushes_after_success(monkeypatch):
         lambda rt: {"path": "/p/premarket.md", "title": "# A股盘前报告 2026-10-10", "size": 10},
     )
 
-    def spy(rt, res):
-        pushed.append((rt, res))
+    def spy(rt, res, user_id=None):
+        # 四审: 通知必须带**显式**归属(共享市场报告 = None), 不再靠漏传兜底。
+        pushed.append((rt, res, user_id))
         return True
 
     monkeypatch.setattr(rs, "_push_report_notification", spy)
+    monkeypatch.setattr("src.core.report_scope.owner_user_id", lambda db=None: None)
     asyncio.run(rs.ReportScheduler._generate_job(_fake_scheduler(), "premarket"))
     assert pushed == [
-        ("premarket", {"path": "/p/premarket.md", "title": "# A股盘前报告 2026-10-10", "size": 10})
+        ("premarket", {"path": "/p/premarket.md", "title": "# A股盘前报告 2026-10-10", "size": 10}, None)
     ]
 
 
@@ -100,7 +102,7 @@ def test_generate_job_no_push_when_generation_fails(monkeypatch):
         raise RuntimeError("collect failed")
 
     monkeypatch.setattr(rs, "_generate_once_in_worker", boom)
-    monkeypatch.setattr(rs, "_push_report_notification", lambda rt, res: pushed.append((rt, res)))
+    monkeypatch.setattr(rs, "_push_report_notification", lambda rt, res, user_id=None: pushed.append((rt, res)))
     # 生成异常被 _generate_job 吞掉(只记日志), 不得推送
     asyncio.run(rs.ReportScheduler._generate_job(_fake_scheduler(), "premarket"))
     assert pushed == []

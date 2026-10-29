@@ -286,10 +286,17 @@ async def _collect_positions(db, with_quotes: bool = True, user_id: str | None =
     """用户持仓(positions 表 join stocks) + 实时/前日行情。失败标注。
 
     `user_id` 作用域(2026-10-29 三审, fail-closed): 传 uid → 该用户可见的持仓
-    (账户可见 AND 持仓可见); 传 None → 只取历史共享桶(两侧 `user_id IS NULL`)。
-    旧实现 `filter(Position.quantity > 0)` 一条用户条件都没有, 于是**全库所有人的
-    成本价/持仓量**被写进同一份共享报告, 登录用户都能从报告中心读到。
+    (账户可见 AND 持仓可见); 传 None → **共享市场报告, 一条持仓都不采**。
+
+    为什么 None 不再采「共享桶」(2026-10-29 四审): 共享桶(`positions.user_id IS NULL`)
+    里仍是**具体某人的历史成本**(多用户改造前的数据), 把它写进 `scope=shared` 的
+    文件、再标 `contains_private_holdings=false`, 等于给全员看`别人的成本`。
+    共享报告的产品定位是「纯市场口径, 所有登录用户都能看」, 所以这里直接返回空:
+    私有持仓只在**按用户生成**(`generate_market_report(user_id=...)`)时出现。
     """
+    if not user_id:
+        logger.info("[报告] 共享口径: 不采集任何用户/共享桶持仓(纯市场报告)")
+        return []
     from src.core.portfolio_scope import (
         account_user_scope_clause,
         position_user_scope_clause,
@@ -401,7 +408,8 @@ async def _collect_data(report_type: str, db, user_id: str | None = None) -> dic
     """按报告类型采集全部数据(每段独立降级, 不互相拖累)。
 
     `user_id` 三审(2026-10-29): 全量传入持仓/自选采集, 报告只含该归属能看的数据。
-    None = 历史共享桶(fail-closed), 不是"全库"。
+    None = **共享市场报告**(2026-10-29 四审): 不采任何用户/共享桶持仓与自选,
+    只保留纯市场数据(指数/资金流/涨停/快讯/全市场候选/策略信号)。
     """
     now = beijing_now()
     today = now.strftime("%Y%m%d")
@@ -455,6 +463,32 @@ async def _collect_data(report_type: str, db, user_id: str | None = None) -> dic
     return data
 
 
+def _detect_private_holdings(data: dict) -> bool:
+    """这份报告正文里**实际**有没有某个具体人的持仓/自选。
+
+    2026-10-29 四审: meta 的 `contains_private_holdings` 不能再由 `bool(user_id)` 猜 ——
+    旧写法对 `user_id=None` 一律写 False, 而当时共享桶里采到的正是某个人的历史成本。
+    现在按**采集结果**判定; 任何字段缺失/异常 → True(fail closed, 宁可不给 member 看)。
+    """
+    try:
+        if data.get("user_id"):
+            return True
+        if list(data.get("positions") or []):
+            return True
+        # 持仓/四档结构块必然是某人的账户数据; 关注候选(entry_candidates)是全市场快照,
+        # 不算私有, 所以只看这两块。
+        ev = data.get("evidence")
+        if isinstance(ev, dict):
+            for key in ("portfolio", "fund_structure"):
+                blk = ev.get(key)
+                if isinstance(blk, dict) and list(blk.get("items") or []):
+                    return True
+        return False
+    except Exception:  # noqa: BLE001 —— 判不了就当含私有数据
+        logger.warning("[报告] 私有内容判定异常, 按含私有持仓处理(fail-closed)")
+        return True
+
+
 # ──────────────────────────── LLM 生成 ────────────────────────────
 
 _SYSTEM_PROMPT = """你是一名专业的 A 股市场分析师, 为量化交易系统 SIDA 撰写{report_cn}报告。
@@ -480,13 +514,23 @@ def _build_user_content(report_type: str, data: dict) -> str:
         "generated_at": data.get("generated_at"),
         "market_date": data.get("market_date"),
     }
+    # 2026-10-29 四审: 共享报告 = 纯市场。既不把(可能为空的)持仓字段送给 LLM 让它
+    # 有「补全」的空间, 也明确告诉它不要写持仓段。
+    shared_market_only = not data.get("user_id") and not data.get("positions")
+    if shared_market_only:
+        payload["report_scope"] = "shared_market_only"
+        payload["scope_instruction"] = (
+            "这是给所有登录用户看的共享市场报告: 不含任何个人持仓/自选。"
+            "不得编造持仓、成本、仓位数字, 也不要输出「持仓」小节。"
+        )
     # 只送可序列化字段
+    skip_keys = {"positions", "candidates"} if shared_market_only else set()
     for key in (
         "indices", "market_flow", "yesterday_limit_up", "limit_up",
         "limit_down", "news", "candidates", "positions", "strategy_signals",
         "sources",
     ):
-        if key in data:
+        if key in data and key not in skip_keys:
             payload[key] = data[key]
     return json.dumps(payload, ensure_ascii=False, indent=1, default=str)
 
@@ -570,6 +614,7 @@ def _get_block_quality(data: dict, block_name: str) -> str:
 
 def _build_template_report(report_type: str, data: dict) -> str:
     """LLM 不可用时的纯数据报告: 只罗列真实采集到的数据。"""
+    shared_market_only = not data.get("user_id") and not data.get("positions")
     lines = [f"# {REPORT_TITLES[report_type]} {data.get('market_date', '')}", ""]
     lines.append(f"**生成时间:** {data.get('generated_at', '')}")
     lines.append("**生成方式:** 数据模板(LLM 不可用, 纯数据不解读)")
@@ -629,7 +674,10 @@ def _build_template_report(report_type: str, data: dict) -> str:
         port_badge = " ⚠️ 数据待核" if port_q != "ok" else ""
         lines.append(f"## 四、当前持仓(参考前收盘){port_badge}")
         pos = data.get("positions") or []
-        if not pos:
+        if shared_market_only:
+            # 共享报告不评价「我有没有持仓」—— 它对每个读者都不一样, 只说明口径。
+            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓见按用户生成的报告。")
+        elif not pos:
             lines.append("- 暂无持仓数据")
         else:
             for p in pos:
@@ -703,7 +751,9 @@ def _build_template_report(report_type: str, data: dict) -> str:
 
         lines.append("## 四、持仓今日表现")
         pos = data.get("positions") or []
-        if not pos:
+        if shared_market_only:
+            lines.append("- 共享市场报告不含个人持仓/成本; 个人持仓见按用户生成的报告。")
+        elif not pos:
             lines.append("- 暂无持仓数据")
         else:
             for p in pos:
@@ -797,12 +847,13 @@ async def generate_market_report(report_type: str, db=None, user_id: str | None 
         report_type: "premarket" 或 "postmarket"
         db: 可选 SQLAlchemy session; 不传则内部自开自关。
         user_id: 报告归属(2026-10-29 三审)。传 uid → 报告含该用户可见的持仓/自选,
-            落 meta `scope=private, owner_user_id=uid`; 传 None → **共享桶**
-            (只含历史共享项), 落 meta `scope=shared` 且 `contains_private_holdings=false`。
-            绝不"猜归属", 也不默认全库。
+            落 meta `scope=private, owner_user_id=uid`; 传 None → **共享市场报告**
+            (2026-10-29 四审: 不采任何用户/共享桶的持仓与自选), 落 meta
+            `scope=shared`; `contains_private_holdings` 由**实际采集内容**判定
+            (判不出来按 True, fail-closed)。绝不"猜归属", 也不默认全库。
 
     Returns:
-        {"path": str, "title": str, "size": int, "scope": str, "owner_user_id": str|None}
+        {"path", "title", "size", "scope", "owner_user_id", "contains_private_holdings"}
     """
     if report_type not in JOB_IDS:
         raise ValueError(f"未知报告类型: {report_type} (支持 premarket/postmarket)")
@@ -820,10 +871,22 @@ async def generate_market_report(report_type: str, db=None, user_id: str | None 
         job_id = JOB_IDS[report_type]
         title = f"# {REPORT_TITLES[report_type]} {run_time.strftime('%Y-%m-%d')}"
         scope = "private" if user_id else "shared"
+        # 2026-10-29 四审: 按**实际采到的内容**判定, 不再用 bool(user_id) 猜。
+        contains_private = _detect_private_holdings(data)
+        if not user_id and contains_private:
+            # 共享口径却采到了私有内容(采集层回归/未来新增用户块) → 宁可让 member
+            # 看不到这份, 也不能把别人的成本贴成公共报告。
+            logger.error(
+                "[报告] 共享口径仍含私有持仓, 按含私有内容落 meta(仅 owner 可读) job=%s",
+                job_id,
+            )
         if user_id:
             scope_note = f"**归属:** 用户 {user_id}\n"
         else:
-            scope_note = "**归属:** 共享桶(仅历史共享持仓, 不含任何用户的私有持仓)\n"
+            scope_note = (
+                "**归属:** 共享市场报告(纯市场口径, 不含任何用户/共享桶的持仓与自选; "
+                "个人持仓请看按用户生成的报告)\n"
+            )
         # 带 title 元信息行(Hermes cron 报告同款格式: 首行标题 + 元信息块)
         header = (
             f"{title}\n\n"
@@ -848,10 +911,11 @@ async def generate_market_report(report_type: str, db=None, user_id: str | None 
             run_time,
             scope=scope,
             owner_user_id=user_id,
-            contains_private_holdings=bool(user_id),
+            contains_private_holdings=contains_private,
         )
         out["scope"] = scope
         out["owner_user_id"] = user_id
+        out["contains_private_holdings"] = contains_private
         return out
     finally:
         if own_db:

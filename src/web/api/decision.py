@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from src.core.numutil import finite_float
+from src.core.numutil import finite_float, json_safe
 from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
@@ -23,6 +23,11 @@ from src.web.models import Stock, User
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _json_safe(payload: dict) -> dict:
+    """响应边界净化: 非有限浮点 → None(否则 FastAPI 会写出非法 JSON 的 NaN 字面量)。"""
+    return json_safe(payload)
 
 # 交易风格 → 风险偏好档位(现有用户数据源: 持仓 trading_style; 无持仓 → None, 不硬套)
 _STYLE_TO_RISK = {"short": "aggressive", "swing": "balanced", "long": "conservative"}
@@ -98,7 +103,11 @@ def _build_user_context(db: Session, user: User, symbol: str, market: str) -> di
             # json 会把它们写成 `NaN` 字面量(非法 JSON), 前端解析直接崩。
             # 取不到有限数就报 null(诚实: 成本未知), 绝不用 0 冒充。
             cost_price = finite_float(p.cost_price)
-            quantity = finite_float(p.quantity)
+            # 四审: 数量保持**原类型** —— 旧写法 `finite_float()` 把 100 变成 100.0,
+            # 而决策响应只认 int(`isinstance(qty, int)`), 于是持仓数量在响应里恒为
+            # None(用户看到"已持仓但没有数量")。整数(含 100.0 这类整值)一律还原成 int。
+            q = finite_float(p.quantity)
+            quantity = int(q) if (q is not None and float(q).is_integer()) else q
             unpriced = cost_price is None
             break
     return {
@@ -140,7 +149,7 @@ async def get_decision(
         out["cached"] = True
         out["computed_at"] = rec["computed_at"]
         out["cache_source"] = rec["source"]
-        return _attach_evidence(out)
+        return _json_safe(_attach_evidence(out))
 
     # ② miss: 算**全局基底**(无用户上下文) → 落库(短 TTL) → 读取时叠加个性化。
     try:
@@ -156,7 +165,7 @@ async def get_decision(
     out["cached"] = False
     out["computed_at"] = written or decision_cache.iso_utc(decision_cache.now_utc_naive())
     out["cache_source"] = decision_cache.SOURCE_TTL
-    return _attach_evidence(out)
+    return _json_safe(_attach_evidence(out))
 
 
 @router.post("/precompute")

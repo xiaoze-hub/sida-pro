@@ -23,7 +23,9 @@ POSTMARKET_CRON = {"hour": 15, "minute": 30}
 _REPORT_LABELS = {"premarket": "盘前", "postmarket": "盘后"}
 
 
-def _push_report_notification(report_type: str, result: dict) -> bool:
+def _push_report_notification(
+    report_type: str, result: dict, user_id: str | None = None
+) -> bool:
     """生成成功后把内置报告推到通知中心(站内落库 + 外发渠道), 失败/无渠道显式不假装。
 
     复用 `notify_center.push_notification`(与 agent 推送同一条链: 先站内落库再外发,
@@ -33,6 +35,10 @@ def _push_report_notification(report_type: str, result: dict) -> bool:
       - False: 站内落库失败(未外发) 或调用异常 —— 调用方须如实记 error, 绝不报成功。
 
     只落盘不推送是本轮审计的 P1: 报告文件生成后无人知晓, 这里补上"生成即通知"。
+
+    2026-10-29 四审: `user_id` 必须**显式**给出(共享市场报告 = None)。旧实现不传,
+    通知按 NULL 归属落库/外发 —— 外发会打到全局渠道, 站内却没有任何用户能看到,
+    既不可观测也算不上"发给对的人"。现在由调用方捕获可信归属并原样传下来。
     """
     title = str(result.get("title") or "").lstrip("# ").strip() or "SIDA 报告"
     path = str(result.get("path") or "")
@@ -49,6 +55,7 @@ def _push_report_notification(report_type: str, result: dict) -> bool:
             level="info",
             link="/reports",
             source="report_scheduler",
+            user_id=user_id,
         )
     except Exception as e:  # noqa: BLE001
         logger.error("[报告] %s 推送通知异常(未假装成功): %s", report_type, e)
@@ -60,9 +67,10 @@ def _push_report_notification(report_type: str, result: dict) -> bool:
         )
         return False
     logger.info(
-        "[报告] %s 已推送通知中心 id=%s (无渠道时站内存留 push_status=skipped)",
+        "[报告] %s 已推送通知中心 id=%s user=%s (无渠道时站内存留 push_status=skipped)",
         report_type,
         nid,
+        user_id or "共享桶",
     )
     return True
 
@@ -70,17 +78,19 @@ def _push_report_notification(report_type: str, result: dict) -> bool:
 def _generate_once_in_worker(report_type: str) -> dict:
     """在线程内运行完整报告生成(asyncio.run), 内部自开 DB session。
 
-    归属(2026-10-29 三审): 系统定时报告 = **owner 的报告**。此前不传归属, 生成器
-    把全库所有人的持仓成本写进同一份共享文件, 任何登录用户都能读到别人的成本。
-    现在显式解析 owner 并只采其可见范围; 解析不到(无 owner 行/DB 异常)就按共享桶
-    生成(只含历史共享项), 绝不回退成"全库"。
+    归属(2026-10-29 四审, 产品裁决): 定时报告 = **共享市场报告**, 落 `scope=shared`、
+    `contains_private_holdings=false`, 所有登录用户都能在报告中心看到(成员的报告中心
+    不会因为"只有 owner 的私有报告"而永远为空)。
+
+    为什么不再生成 owner 私有版: 私有持仓必须**按用户隔离生成**
+    (`generate_market_report(report_type, user_id=uid)`), 不能由系统替某一个用户
+    生成后放进共享目录 —— 上一版把 owner 的持仓写成 scope=private, 成员看不到任何
+    报告; 而更早的版本又把共享桶(历史某人)成本贴成 shared。两种都错。
     """
-    from src.core import report_scope
     from src.core.report_generator import generate_market_report
 
-    owner_uid = report_scope.owner_user_id()
-    logger.info("[报告] %s 归属解析: owner=%s", report_type, owner_uid or "共享桶")
-    return asyncio.run(generate_market_report(report_type, user_id=owner_uid))
+    logger.info("[报告] %s 归属: 共享市场报告(不含任何用户持仓)", report_type)
+    return asyncio.run(generate_market_report(report_type, user_id=None))
 
 
 class ReportScheduler:
@@ -159,7 +169,22 @@ class ReportScheduler:
             )
             # AI 链路 P1(2026-10-10): 生成成功后推送通知中心(站内 + 外发), 此前只落盘无人知。
             # 失败/无渠道由 _push_report_notification 显式记 error, 不假装推送成功。
-            _push_report_notification(report_type, result)
+            # 四审: 共享市场报告本身发给所有登录用户(报告中心), 运营通知的可信归属
+            # 取 owner(数据责任人); 解析不到就只落全局渠道并在日志留痕, 绝不发给
+            # 某个具体 member 的私有渠道。
+            notify_uid = None
+            try:
+                from src.core import report_scope
+
+                notify_uid = report_scope.owner_user_id()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[报告] owner 归属解析失败(通知仅走全局渠道): %s", e)
+            if not notify_uid:
+                logger.warning(
+                    "[报告] %s 无 owner 可归属, 外发通知只走全局渠道(不推任何成员的私有渠道)",
+                    report_type,
+                )
+            _push_report_notification(report_type, result, user_id=notify_uid)
         except Exception as e:
             logger.exception("[报告] %s 生成异常: %s", report_type, e)
         finally:

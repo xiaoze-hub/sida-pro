@@ -221,7 +221,8 @@ class PositionResponse(BaseModel):
     id: int
     account_id: int
     stock_id: int
-    cost_price: float
+    # 历史脏成本(NaN/Inf)在出参处已有限化: 未知即 null, 不用 0 冒充。
+    cost_price: float | None
     quantity: int
     invested_amount: float | None
     sort_order: int
@@ -362,9 +363,11 @@ def _position_payload(pos: Position) -> dict:
         "id": pos.id,
         "account_id": pos.account_id,
         "stock_id": pos.stock_id,
-        "cost_price": pos.cost_price,
+        # 四审(2026-10-29): 历史脏成本 `NaN`/`Inf` 直接出参 → 响应不是合法 JSON
+        # (/api/positions 500)。这里统一有限化, 取不到就给 None(成本未知, 不用 0 冒充)。
+        "cost_price": _finite_float(pos.cost_price),
         "quantity": pos.quantity,
-        "invested_amount": pos.invested_amount,
+        "invested_amount": _finite_float(pos.invested_amount),
         "sort_order": pos.sort_order or 0,
         "trading_style": pos.trading_style,
         "defense_price": _defense_line_out(getattr(pos, "defense_price", None)),

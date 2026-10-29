@@ -138,6 +138,9 @@ def _notify_refresh_done(ok: bool, detail: str) -> None:
             detail=detail,
             category="strategy",
             source="strategy_signals_refresh",
+            # 全市场策略刷新是系统任务(端点无触发用户), owner 是唯一责任人;
+            # 显式 opt-in 兜底, 不靠"漏传 user_id 自动推 owner"。
+            allow_owner_fallback=True,
         )
     except Exception:
         logger.exception("写入站内通知失败: 策略信号刷新")

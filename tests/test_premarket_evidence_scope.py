@@ -116,13 +116,19 @@ def test_portfolio_block_scoped_to_user(tenancy):
     assert tenancy["syms"]["shared_pos"] in syms, "历史共享持仓对所有人可见(既有口径)"
 
 
-def test_portfolio_block_without_user_is_shared_bucket_only(tenancy):
-    """user_id=None 必须收敛到共享桶, 不能是全库(修前就是全库)。"""
+def test_portfolio_block_without_user_is_empty_for_shared_market_report(tenancy):
+    """user_id=None = 共享市场报告: 不采任何用户/共享桶持仓(四审收紧)。
+
+    三审只收敛到「共享桶」(两侧 IS NULL); 但共享桶里仍是某个人的历史成本, 写进
+    `scope=shared` 的报告会被所有 member 读到 —— 四审直接不采。
+    """
     block = pe._collect_portfolio_block(tenancy["db"], None, "2026-10-29", with_quotes=False)
     syms = _portfolio_symbols(block)
-    assert tenancy["syms"]["shared_pos"] in syms
-    assert tenancy["syms"]["a_pos"] not in syms
-    assert tenancy["syms"]["b_pos"] not in syms
+    assert not syms, f"共享报告不得含任何持仓(实际 {syms})"
+    assert block["quality"] == "missing" and "共享" in block["reason"]
+
+    fund = pe._collect_fund_structure_block(tenancy["db"], None, "2026-10-29")
+    assert not (fund.get("items") or []), "共享口径的四档结构也不得取任何人的自选/持仓"
 
 
 def test_fund_structure_symbols_scoped(tenancy, monkeypatch):

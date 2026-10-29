@@ -45,3 +45,21 @@ def finite_float(value: Any, default: float | None = None) -> float | None:
     except (TypeError, ValueError):
         return default
     return f if math.isfinite(f) else default
+
+
+def json_safe(value: Any) -> Any:
+    """递归把结构里的非有限浮点(NaN/±Inf)换成 None, 保证 `json.dumps(allow_nan=False)`
+    一定能成功。
+
+    用在**缓存载荷**这种"写进去还要原样吐给 HTTP"的地方(2026-10-29 四审):
+    `decision_cache` 的 payload 曾被 `json.dumps` 默认写出 `NaN` 字面量, 读回来仍是
+    `float('nan')`, FastAPI 序列化时再写一次 NaN —— 前端 `JSON.parse` 直接失败。
+    dict/list/tuple 递归; 其它类型(含 Decimal/datetime)原样返回, 由调用方的 default 处理。
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    return value

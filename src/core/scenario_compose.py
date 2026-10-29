@@ -58,6 +58,7 @@ def owner_cost_detail(
     作用域: **账户可见 AND 持仓可见**(与其它持仓口径同源), 不看别人的成本。
     """
     sym = str(symbol or "").strip().upper()
+    mkt = str(market or "CN").strip().upper() or "CN"
     if db is None or not sym:
         return CostAnchor()
     uid = getattr(user, "id", None)
@@ -79,6 +80,9 @@ def owner_cost_detail(
             .join(Account, Account.id == Position.account_id)
             .filter(
                 Stock.symbol == sym,
+                # 2026-10-29 四审: 必须同一市场 —— 同 symbol 的 CN/HK/US 行是不同币种,
+                # 混在一起加权等于把不同货币的成本平均(数学上无意义, 业务上误导)。
+                Stock.market == mkt,
                 account_user_scope_clause(uid),
                 position_user_scope_clause(uid),
             )
@@ -87,20 +91,25 @@ def owner_cost_detail(
         priced: list[dict[str, Any]] = []
         unpriced = 0
         for row in rows or []:
+            # 只采纳**有效正持仓**: quantity 必须有限且 > 0。已清仓(qty=0)/脏数量
+            # 的行不是当前持仓, 不能拿它的成本去锚定(旧实现 `qty<=0 → 权重 1`
+            # 会把已清仓账户的成本混进加权, 直接算错)。
+            qty = finite_float(getattr(row, "quantity", None))
+            if qty is None or qty <= 0:
+                continue
             raw_cost = getattr(row, "cost_price", None)
             cost = finite_float(raw_cost)
             if cost is None or cost <= 0:
                 # NaN/Inf/0/负数: 脏数据, 当"成本未知", 不参与也不当 0
                 unpriced += 1
                 continue
-            qty = finite_float(getattr(row, "quantity", None))
             priced.append(
                 {
                     "position_id": getattr(row, "id", None),
                     "account_id": getattr(row, "account_id", None),
                     "cost": round(cost, 6),
-                    # 缺数量(旧数据/最小替身)按权重 1 处理, 不做二次猜测
-                    "quantity": qty if (qty is not None and qty > 0) else 1.0,
+                    # 到这里 qty 一定是有限正数(上面已筛掉), 直接当权重。
+                    "quantity": qty,
                 }
             )
         if priced:
@@ -113,9 +122,9 @@ def owner_cost_detail(
                     accounts=priced,
                     unpriced=unpriced,
                 )
-            total_qty = sum(p["quantity"] for p in priced) or 0.0
+            total_qty = sum(p["quantity"] for p in priced)
             if total_qty <= 0:
-                # 数量全缺 → 不能加权, 报 unknown(不随手挑一个)
+                # 数量异常(理论上不会到这里) → 不能加权, 报 unknown(不随手挑一个)
                 return CostAnchor(
                     cost=None, stop=None, method="unknown", accounts=priced, unpriced=unpriced
                 )
@@ -133,7 +142,7 @@ def owner_cost_detail(
                 unpriced=unpriced,
             )
         if unpriced:
-            # 有该股持仓行, 但成本全是脏值 → 明确"未知", 不回落到模拟盘(那是两码事)
+            # 有该股**有效持仓**(qty>0)但成本全是脏值 → 明确"未知", 不回落模拟盘
             return CostAnchor(cost=None, stop=None, method="unknown", unpriced=unpriced)
     except Exception:  # noqa: BLE001 - 持仓读不到就当没有，不影响矩阵
         pass
@@ -145,7 +154,10 @@ def owner_cost_detail(
 
         q = db.query(PaperTradingPosition).filter(
             PaperTradingPosition.stock_symbol == sym,
+            # 同 symbol 不同市场的模拟盘是不同标的, 不能互相锚定。
+            PaperTradingPosition.stock_market == mkt,
             PaperTradingPosition.status == "open",
+            PaperTradingPosition.quantity > 0,
         )
         if uid is not None:
             q = q.filter(

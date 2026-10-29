@@ -17,6 +17,38 @@ from src.core.schedule_parser import parse_schedule
 logger = logging.getLogger(__name__)
 
 
+def _context_user_id(context: AgentContext | None) -> str | None:
+    """上下文里的用户 id(标量), 取不到 → None(= 共享/无归属), 绝不猜。"""
+    uid = getattr(getattr(context, "user", None), "id", None)
+    return str(uid) if uid else None
+
+
+def _sole_bucket_user(contexts: list[AgentContext]) -> str | None:
+    """本轮的**唯一**可信归属; 多用户桶混跑/无用户 → None(未知, 不记内容)。"""
+    uids = {_context_user_id(c) for c in contexts}
+    uids.discard(None)
+    return uids.pop() if len(uids) == 1 else None
+
+
+def _agent_run_result_text(results: list[tuple[AgentContext, Any]]) -> str:
+    """写进 agent_runs.result 的文本。
+
+    只有"本轮只有一个用户"时才能把正文落库(它能被该用户按 trace_id 读回); 多用户桶
+    混跑时正文属于**某一个人**, 落进一条无归属记录会被其他登录用户读到(golden rule:
+    fail closed)。这种情况只记计数, 不落正文。
+    """
+    if not results:
+        return ""
+    uids = {_context_user_id(c) for c, _r in results}
+    uids.discard(None)
+    if len(uids) == 1:
+        try:
+            return (getattr(results[-1][1], "content", "") or "")[:2000]
+        except Exception:  # noqa: BLE001
+            return ""
+    return f"多用户桶批量执行 buckets={len(results)}; 正文按用户隔离投递, 不落共享运行记录"
+
+
 class AgentScheduler:
     """Agent 调度器"""
 
@@ -196,6 +228,10 @@ class AgentScheduler:
                         f"[调度] Agent 单只模式执行完成: {agent.display_name}（用户桶{len(contexts)} 执行{processed}，跳过{skipped}，共{total_stocks}）"
                     )
                     duration_ms = int((time.monotonic() - start) * 1000)
+                    # 四审: agent_runs.user_id 决定「谁能按 trace_id 读这条结果」。多用户桶
+                    # 混跑时归属是「未知」, 不能写成 NULL 让任何登录用户都能读(旧 progress
+                    # 接口把 NULL 当公共任务), 也不能随便挑一个用户。
+                    single_uid = _sole_bucket_user(contexts)
                     # P2-9: 同步 DB 写放线程池, 不卡调度 loop
                     await asyncio.to_thread(
                         partial(
@@ -209,6 +245,7 @@ class AgentScheduler:
                         trigger_source="schedule",
                         context_chars=context_chars,
                         model_label=context.model_label,
+                        user_id=single_uid,
                     ))
                 else:
                     # M7(2026-09-10): 逐用户桶执行。每个用户的报告只发到其本人渠道,
@@ -242,7 +279,7 @@ class AgentScheduler:
                         record_agent_run,
                         agent_name=agent_name,
                         status="failed" if notify_errors else "success",
-                        result=(last_result.content or "")[:2000],
+                        result=_agent_run_result_text(results),
                         error=("; ".join(notify_errors))[:2000],
                         duration_ms=duration_ms,
                         trace_id=trace_id,
@@ -255,6 +292,7 @@ class AgentScheduler:
                         ),
                         notify_sent=bool(raw.get("notified", False)),
                         model_label=last_context.model_label,
+                        user_id=_sole_bucket_user(contexts),
                     ))
                     # 多用户定时报告推送(2026-08-10 阶段4):
                     # agent 已按用户桶投递本人渠道, 这里只补推"未按用户投递"的订阅者,
@@ -263,7 +301,7 @@ class AgentScheduler:
                         await asyncio.to_thread(
                             self._push_to_subscribers,
                             agent_name,
-                            last_result,
+                            results,
                             delivered_users,
                         )
                     except Exception as e:
@@ -295,7 +333,7 @@ class AgentScheduler:
         await self._run_agent(agent_name)
 
     def _push_to_subscribers(
-        self, agent_name: str, result, skip_user_ids: set[str] | None = None
+        self, agent_name: str, results, skip_user_ids: set[str] | None = None
     ) -> None:
         """按订阅用户推送定时报告(2026-08-10 阶段4)。
 
@@ -305,6 +343,12 @@ class AgentScheduler:
 
         M7(2026-09-10): `skip_user_ids` = 本轮已按用户桶投递过的人(报告已发到其本人
         渠道), 跳过以免同一份报告重复外发。
+
+        四审(2026-10-29): 旧实现把 `results[-1]`(**最后一个用户桶**的正文)推给所有
+        未投递的订阅者 —— 那是真实的跨租户推送。现在**按接收用户匹配其本人桶**:
+          - 有匹配 → 只发他自己的内容;
+          - 无匹配 → **不发**(没有可信的本轮内容可给他), 逐条 warning 可观测;
+          - 渠道集合同样按接收用户解析(配置 ∩ 该用户可见), 传给通知中心做最终交叉校验。
         """
         report_type = {
             "premarket_outlook": "premarket",
@@ -314,14 +358,19 @@ class AgentScheduler:
         }.get(agent_name)
         if not report_type:
             return
-        content = getattr(result, "notify_content", None) or getattr(result, "content", "") or ""
-        title = getattr(result, "title", "") or agent_name
-        if not content:
+        if not results:
             return
+        # 按用户建立可信映射: 只认 context.user.id, 不按下标/顺序猜。
+        by_user: dict[str, Any] = {}
+        for ctx, res in results:
+            uid = _context_user_id(ctx)
+            if uid:
+                by_user[uid] = res
         try:
             from src.db.session import SessionLocal
             from src.db.models import ReportSubscription, User
             from src.core.notify_center import push_notification
+            from src.bootstrap.runtime import resolve_notify_channels_ex
 
             db = SessionLocal()
             try:
@@ -333,6 +382,8 @@ class AgentScheduler:
             finally:
                 db.close()
             skip = skip_user_ids or set()
+            sent = 0
+            unmatched = 0
             for sub in subs:
                 if sub.user_id not in users:
                     continue
@@ -341,16 +392,67 @@ class AgentScheduler:
                         f"[调度] 订阅推送 {report_type} → 用户 {sub.user_id[:8]} 已在用户桶投递, 跳过"
                     )
                     continue
+                result = by_user.get(str(sub.user_id))
+                if result is None:
+                    # 本轮没有该用户的可信内容 —— 绝不拿别人的正文顶替。
+                    unmatched += 1
+                    logger.warning(
+                        "[调度] 订阅推送 %s → 用户 %s 本轮无匹配内容(该用户没有执行桶), "
+                        "不发送(避免跨租户推送)",
+                        report_type,
+                        sub.user_id[:8],
+                    )
+                    continue
+                content = (
+                    getattr(result, "notify_content", None)
+                    or getattr(result, "content", "")
+                    or ""
+                )
+                title = getattr(result, "title", "") or agent_name
+                if not content:
+                    logger.warning(
+                        "[调度] 订阅推送 %s → 用户 %s 内容为空, 不发送",
+                        report_type,
+                        sub.user_id[:8],
+                    )
+                    continue
+                # 渠道选择集合与可见集合取交集(只缩不扩); 解析不到就由通知中心
+                # fail-closed 不再外发, 绝不回退到别人的渠道。
+                channel_ids: list[int] | None = None
+                try:
+                    resolution = resolve_notify_channels_ex(agent_name, user_id=sub.user_id)
+                    channel_ids = [int(c.id) for c in resolution.channels]
+                    if not channel_ids:
+                        logger.warning(
+                            "[调度] 订阅推送 %s → 用户 %s 无可用渠道(%s), 站内仍可见",
+                            report_type,
+                            sub.user_id[:8],
+                            resolution.reason,
+                        )
+                except Exception as e:  # noqa: BLE001
+                    channel_ids = []
+                    logger.warning(
+                        "[调度] 订阅推送 %s 渠道解析失败, 本轮不外发: %s", report_type, e
+                    )
                 try:
                     push_notification(
                         title, content,
                         category="report",
                         level="info",
                         user_id=sub.user_id,
+                        channel_ids=channel_ids,
                     )
+                    sent += 1
                     logger.info(f"[调度] 订阅推送 {report_type} → 用户 {sub.user_id[:8]}")
                 except Exception as e:
                     logger.warning(f"[调度] 订阅推送用户 {sub.user_id[:8]} 失败: {e}")
+            logger.info(
+                "[调度] 订阅推送 %s 完成: 已发 %d, 无匹配内容跳过 %d (订阅 %d)",
+                report_type,
+                sent,
+                unmatched,
+                len(subs),
+            )
         except Exception as e:
             logger.warning(f"[调度] 订阅查询失败: {e}")
 

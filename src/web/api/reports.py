@@ -69,10 +69,35 @@ def _is_owner(viewer: tuple[str | None, str | None]) -> bool:
 
 def _report_visible(report_path, viewer: tuple[str | None, str | None]) -> bool:
     """owner 直接可见(**不读 meta**) —— 既符合"数据责任人可见全部"的口径, 又保住
-    /list 的"只读命中 limit 项标题"性能护栏(旧实现 30-45s 就是被逐文件 IO 拖的)。"""
+    /list 的"只读命中 limit 项标题"性能护栏(旧实现 30-45s 就是被逐文件 IO 拖的)。
+
+    四审(2026-10-29): member 侧在 meta 判定通过后再做一次**内容绊线** —— meta 可能
+    是旧生成器/外部 cron 写错的(自称 shared+不含私有, 正文却是「500股 成本 12.34」)。
+    只扫共享报告的头 64KB, 命中即按含私有数据拒绝(member 侧 fail-closed)。
+    """
     if _is_owner(viewer):
         return True
-    return _visible(report_scope.read_report_meta(report_path), viewer)
+    meta = report_scope.read_report_meta(report_path)
+    if not _visible(meta, viewer):
+        return False
+    if str((meta or {}).get("scope") or "").strip().lower() != report_scope.SCOPE_SHARED:
+        return True
+    try:
+        head = Path(report_path).read_text(encoding="utf-8", errors="ignore")[
+            : report_scope.SUSPICIOUS_CONTENT_SCAN_BYTES
+        ]
+    except OSError as e:
+        # 读不了就无法证明它是纯市场 → 不展示给 member。
+        logger.warning("[报告] 共享报告内容校验失败(按不可见处理) %s: %s", report_path, e)
+        return False
+    if report_scope.content_looks_private_holdings(head):
+        logger.warning(
+            "[报告] 共享报告正文含持仓成本, 拒绝 member 读取(meta 与实际内容不符): %s %s",
+            getattr(report_path, "name", report_path),
+            viewer[0],
+        )
+        return False
+    return True
 
 
 def _strip_meta(content: str) -> str:

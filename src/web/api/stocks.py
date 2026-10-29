@@ -495,22 +495,51 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
         )
 
     # SQLite 默认可能不启用 FK 级联，手动清理提醒数据避免孤儿记录。
+    #
+    # 2026-10-29 四审: 旧实现按 `stock_id` **无条件删除所有人的** PriceAlertRule /
+    # PriceAlertHit —— owner 删一条共享自选, 会把 member 建在该票上的价格提醒规则
+    # 一起删掉(跨租户数据丢失, 且不可恢复)。现在:
+    #   - 只删**本人**的规则/命中记录; 共享(NULL)规则只有 owner 能删;
+    #   - 存在**他人的**规则 → 409 通用文案, 整单拒绝(不做半截删除);
+    #   - StockAgent 无 user_id 列, 但写入路径已按股票归属校验(私有=本人/共享=owner),
+    #     所以走到这里的 StockAgent 都属于本次可删范围。
+    uid = getattr(user, "id", None)
+    own_rule_filter = PriceAlertRule.user_id == uid
+    if str(getattr(user, "role", "") or "").lower() == "owner":
+        # 共享桶的旧规则(NULL)归 owner 处置; member 不能借删共享自选清掉它们。
+        own_rule_filter = or_(PriceAlertRule.user_id == uid, PriceAlertRule.user_id.is_(None))
+    foreign_rule = (
+        db.query(PriceAlertRule.id)
+        .filter(
+            PriceAlertRule.stock_id == stock_id,
+            ~own_rule_filter,
+        )
+        .first()
+    )
+    if foreign_rule:
+        logger.warning(
+            "拒绝删除自选: stock_id=%s 仍被他人价格提醒引用(不泄露归属) user=%s",
+            stock_id,
+            uid,
+        )
+        raise HTTPException(
+            409,
+            "该自选仍被其它数据引用，暂无法删除，请联系管理员",
+        )
     rule_ids = [
         row[0]
-        for row in db.query(PriceAlertRule.id).filter(
-            PriceAlertRule.stock_id == stock_id
-        ).all()
+        for row in db.query(PriceAlertRule.id)
+        .filter(PriceAlertRule.stock_id == stock_id, own_rule_filter)
+        .all()
     ]
     if rule_ids:
         db.query(PriceAlertHit).filter(PriceAlertHit.rule_id.in_(rule_ids)).delete(
             synchronize_session=False
         )
-    db.query(PriceAlertHit).filter(PriceAlertHit.stock_id == stock_id).delete(
-        synchronize_session=False
-    )
-    db.query(PriceAlertRule).filter(PriceAlertRule.stock_id == stock_id).delete(
-        synchronize_session=False
-    )
+    # 不再按 stock_id 全量删命中: 他人的命中记录随其规则保留(上面已拒绝本单)。
+    db.query(PriceAlertRule).filter(
+        PriceAlertRule.stock_id == stock_id, own_rule_filter
+    ).delete(synchronize_session=False)
     db.query(StockAgent).filter(StockAgent.stock_id == stock_id).delete(
         synchronize_session=False
     )
@@ -689,6 +718,19 @@ async def trigger_stock_agent(
         # 兜底推给 owner, member 手动触发的分析结果进了 owner 的站内信/渠道。这里在起
         # 线程**之前**把标量 user_id 抓出来, 线程内只用这个字符串。
         _uid = str(user.id) if getattr(user, "id", None) else None
+        # 四审: 完成通知的渠道集合同样按 agent/stock_agent 配置 + 归属解析一次, 最终
+        # 外发在通知中心按"归属 ∩ 选择集"再校验 —— 勾了 1 个渠道就只发 1 个。
+        _notify_channel_ids: list[int] | None
+        try:
+            from src.bootstrap.runtime import resolve_notify_channels_ex
+
+            _res = resolve_notify_channels_ex(
+                agent_name, sa.id if sa is not None else None, user_id=_uid
+            )
+            _notify_channel_ids = [int(c.id) for c in _res.channels]
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("解析通知渠道选择集失败(本轮不外发): %s", _e)
+            _notify_channel_ids = []
 
         def _notify(ok: bool, detail: str, started: float, status: str = "") -> None:
             try:
@@ -705,6 +747,7 @@ async def trigger_stock_agent(
                     link=f"/portfolio?symbol={_sym}&market={_mkt}",
                     status=status,
                     user_id=_uid,
+                    channel_ids=_notify_channel_ids,
                 )
             except Exception:
                 logger.exception("写入站内通知失败: %s %s", agent_name, _sym)

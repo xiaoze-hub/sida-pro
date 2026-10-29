@@ -32,6 +32,13 @@
 - 这条也让 owner 路径**不读 meta**(全量可见), 保住 /list "只读命中 limit 项的
   标题" 的性能护栏(2026-10-11 修过的 30-45s 渲染问题)。
 
+## 读侧第二道闸: 内容绊线(2026-10-29 四审)
+
+meta 是**写报告的人**给的, 可能写错(旧生成器把共享桶成本标成 shared+不含私有; 外部 cron
+直写; 手工补文件)。所以 member 在 meta 判定通过后还会过 `content_looks_private_holdings()`
+—— 正文列表行里出现 `N股 成本 X` / `成本: X` 就按含私有数据拒绝(fail-closed)。这只是
+窄特征绊线(不是解析器), 目的是不把"meta 说公共"当事实; 误伤代价是 owner 复核。
+
 对 **member** 的隔离是硬的: 看不到别人的成本/仓位, 也看不到"存在但你不能看"的
 报告(统一 404 / list 不出现)。代价要写明: 历史存量报告一律不出现在 member 的
 报告中心(它们由旧写法生成, 内容含任意人的私有持仓), 消除残留只能靠重新生成。
@@ -44,6 +51,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -59,12 +67,40 @@ __all__ = [
     "write_report_meta",
     "report_visible",
     "report_visibility_reason",
+    "content_looks_private_holdings",
+    "SUSPICIOUS_CONTENT_SCAN_BYTES",
 ]
 
 META_SUFFIX = ".meta.json"
 SCOPE_SHARED = "shared"
 SCOPE_PRIVATE = "private"
 _KNOWN_SCOPES = (SCOPE_SHARED, SCOPE_PRIVATE)
+
+#: 共享报告二次内容校验的读取上限(只扫头部, 不把性能护栏打回 30-45s)。
+SUSPICIOUS_CONTENT_SCAN_BYTES = 64 * 1024
+
+#: 持仓行的窄特征(锚在列表行首): `- 贵州茅台(600519) 500股 成本 1680.5` /
+#: `- 成本: 12.34`。刻意不用裸 "成本 12" —— 市场解读里的「成本下降 5%」不是持仓。
+#: 这是**绊线**(tripwire)而不是解析器: 宁可让 owner 复核, 不可漏放。
+_PRIVATE_HOLDING_PATTERNS = (
+    re.compile(r"(?m)^\s*[-*]\s*[^\n]{0,80}\d+\s*股\s*成本"),
+    re.compile(r"(?m)^\s*[-*]\s*[^\n]{0,80}成本\s*[:：]?\s*-?\d+(?:\.\d+)?"),
+    re.compile(r"(?m)^\s*[-*]\s*[^\n]{0,80}持仓成本\s*[:：]?\s*\d"),
+)
+
+
+def content_looks_private_holdings(text: str) -> bool:
+    """正文里是否出现了**具体的持仓成本/股数**。
+
+    读侧的第二道闸: meta 自称 `shared` + `contains_private_holdings=false`, 但正文
+    却有「500股 成本 12.34」这类行 —— 说明写 meta 的人判错了/在撒谎(历史生成器、
+    外部 cron、手工写盘)。此时不能把「meta 说是公共的」当事实, 按含私有数据拒绝
+    member(`fail closed`)。
+    """
+    if not text:
+        return False
+    head = text[:SUSPICIOUS_CONTENT_SCAN_BYTES]
+    return any(p.search(head) for p in _PRIVATE_HOLDING_PATTERNS)
 
 
 def owner_user_id(db: Any = None) -> str | None:

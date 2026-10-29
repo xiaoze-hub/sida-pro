@@ -1224,7 +1224,12 @@ def _detect_spike_and_freeze(db: Session, row: SkillApiKey) -> None:
 
             notify_task_done(
                 "skill_gateway_freeze",
-                f"Skill Key {row.key_prefix} 因调用突增自动冻结: {row.frozen_reason}",
+                ok=True,
+                detail=f"Skill Key {row.key_prefix} 因调用突增自动冻结: {row.frozen_reason}",
+                category="system",
+                source="skill_gateway",
+                # 系统运维告警: 触发者不是某个登录用户, owner 就是责任人。
+                allow_owner_fallback=True,
             )
         except Exception as e:  # noqa: BLE001
             logger.debug("冻结告警发送失败: %r", e)

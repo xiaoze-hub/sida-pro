@@ -170,6 +170,11 @@ def get_cached_decision(symbol: str, market: str = "CN") -> dict | None:
             if age < 0 or age > ttl:
                 return None
             payload = json.loads(row["payload"])
+            # 四审: 历史行可能存了 `NaN` 字面量(Python json 默认允许), 读回来必须
+            # 先净化 —— 否则原样进响应就是非法 JSON(前端解析失败)。
+            from src.core.numutil import json_safe
+
+            payload = json_safe(payload)
             return {
                 "payload": payload,
                 "computed_at": iso_utc(computed),
@@ -201,7 +206,10 @@ def put_cached_decision(
     if not code or not isinstance(payload, dict):
         return None
     try:
-        body = json.dumps(payload, ensure_ascii=False, default=str)
+        from src.core.numutil import json_safe
+
+        # allow_nan=False: 宁可不落库(NaN 属于脏值), 也不写非法 JSON 进缓存。
+        body = json.dumps(json_safe(payload), ensure_ascii=False, default=str, allow_nan=False)
         if len(body) > PAYLOAD_MAX:
             logger.warning(
                 "put_cached_decision %s.%s payload %dB 超上限 %dB, 跳过落库",
