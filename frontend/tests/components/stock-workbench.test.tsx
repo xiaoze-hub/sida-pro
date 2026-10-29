@@ -811,8 +811,9 @@ describe('StockWorkbench 三带骨架', () => {
     expect(bar.getAttribute('data-kind')).toBe('ready')
     expect(screen.getByTestId('copilot-annotation-ids').textContent).toContain('91、92')
     expect(screen.getByTestId('copilot-annotation-action-ids').textContent).toContain('7、8')
-    // 撤销仍不可用（契约事实要写在图上）
-    expect(screen.getByTestId('copilot-annotation-undo-note').textContent).toContain('撤销不可用')
+    // 2026-10-29 服务端有撤销入口：不再挂"撤销不可用"，改为每条线一个「撤销」
+    expect(screen.queryByTestId('copilot-annotation-undo-note')).toBeNull()
+    expect(screen.getAllByTestId('copilot-annotation-revoke').length).toBeGreaterThan(0)
   })
 
   it('服务端标注读取失败: 一条不画, 并在状态带说明原因 + 可重试', async () => {

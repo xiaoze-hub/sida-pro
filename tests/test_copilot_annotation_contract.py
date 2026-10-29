@@ -22,7 +22,8 @@
   - 写入端把 market 归一成大写、`1M` 认成月线（不是 1 分钟）、price/ts 至少一个、
     ts 超长或格式非法直接 400 并整笔回滚；
   - 弱引用悬空（标注被删后 SQLite rowid 复用同一个 id）不许让确认**永远**失败；
-  - annotation 不可回滚就如实说，不许先给 `can_rollback=true` 再报"没有快照"。
+  - `can_rollback` 不许撒谎：不能撤销时如实 false；2026-10-29 起 annotation 真能撤销
+    （本人 + 已确认 + 有确认动作），`can_rollback` 必须如实 true（§9）。
 
 2026-10-28 安全复审驳回（第二轮整改，§11-§13）：
   - 市场从"字符串相等"改为**可证明的同一标的**（`provable_markets`）：SH/SZ/BJ 提议必须能从
@@ -40,8 +41,8 @@
     SIDA_TEST_PG_URL="postgresql+psycopg2://user:pw@127.0.0.1:5432/<隔离库>" \\
       python -m pytest tests/test_copilot_annotation_contract.py -q
 
-  该库会被本文件 drop/create `copilot_actions` / `kline_annotations` /
-  `schema_migrations` 三张表 —— 必须指向**隔离库**，绝不能指生产库。
+  该库会被本文件 drop/create `copilot_actions` / `kline_annotations` / `audit_logs` /
+  `schema_migrations` 四张表 —— 必须指向**隔离库**，绝不能指生产库。
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from src.db.models import CopilotAction, KlineAnnotation, Stock, User
+from src.db.models import AuditLog, CopilotAction, KlineAnnotation, Stock, User
 from src.db.session import SessionLocal
 from src.harness import actions as A
 
@@ -878,29 +879,46 @@ def test_dangling_link_of_another_user_is_reported_not_rewritten(db):
     assert db.query(CopilotAction).filter(CopilotAction.id == mine_item["id"]).one().status == "pending"
 
 
-# ── 9. 不可回滚要如实说（can_rollback 与文案）───────────────────────────────
+# ── 9. 已确认标注可撤销（2026-10-29 撤销闭合）──────────────────────────────
 
 
-def test_annotation_action_reports_itself_as_not_rollbackable(db):
-    """标注确认后没有快照可退：`can_rollback` 必须是 false，回滚文案不能拿"早于 v0.73"糊弄。"""
-    item = _propose(db, {"symbol": SYMBOL, "label": "不可回滚", "price": 35.0})
+def test_annotation_action_is_revocable_and_reports_itself_as_such(db):
+    """标注确认后是真能撤销的（`rollback_action` / `revoke_annotation`）。
+
+    2026-10-28 时这里钉的是"不可回滚、如实说"；2026-10-29 补上撤销入口后，
+    契约反转：`can_rollback` 必须如实为 true，撤销必须真的把线撤下、动作转 rolled_back，
+    重复撤销必须明确报状态（而不是静默"成功"）。
+    """
+    item = _propose(db, {"symbol": SYMBOL, "label": "可撤销", "price": 35.0})
     out = A.apply_action(db, user_id=UID, action_id=item["id"])
+    assert out["can_rollback"] is True
 
-    assert out["can_rollback"] is False, "annotation 不在可回滚集合里（_snapshot 对它返回空）"
+    res = A.rollback_action(db, user_id=UID, action_id=item["id"], reason="点位选错")
+    assert res["status"] == "rolled_back"
+    assert res["can_rollback"] is False
+    assert res["revoked_annotation"]["annotation_id"] == out["annotation_id"]
 
+    # 线真的撤下：读取端一条都查不到
+    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 0
+    from src.web.api.copilot import get_copilot_annotations
+
+    class _U:
+        id = UID
+
+    assert get_copilot_annotations(symbol=SYMBOL, market="CN", period="1d",
+                                   db=db, user=_U()) == []
+
+    action = db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one()
+    assert action.status == "rolled_back"
+    # 撤销后不留悬空弱引用（行已删；撤销对象在审计与 result 里）
+    assert action.annotation_id is None
+    assert f"#{out['annotation_id']}" in (action.result or "")
+
+    # 再撤一次：明确的状态，不静默成功
     with pytest.raises(A.ActionError) as ei:
         A.rollback_action(db, user_id=UID, action_id=item["id"])
-    msg = str(ei.value)
-    assert "不支持回滚" in msg
-    assert "快照" not in msg and "v0.73" not in msg
-    # 复审阻断 ④：不许指一条不存在的路（图上没有删除入口，服务端也没有删除接口）
-    assert "在图上删除" not in msg and "图上删除" not in msg
-    assert "删除入口" in msg and "无法撤下" in msg
-
-    # 回滚没生效：线还在图上，动作仍是 applied
-    assert db.query(KlineAnnotation).filter(KlineAnnotation.user_id == UID).count() == 1
-    action = db.query(CopilotAction).filter(CopilotAction.id == item["id"]).one()
-    assert action.status == "applied" and action.annotation_id == out["annotation_id"]
+    assert ei.value.status_code == 409
+    assert "rolled_back" in str(ei.value)
 
 
 # ── 10. 真实 PG：同一批契约必须在 varchar(36)/varchar(32) 下成立 ──────────────
@@ -908,17 +926,23 @@ def test_annotation_action_reports_itself_as_not_rollbackable(db):
 
 @pytest.fixture()
 def pg_db():
-    """隔离 PG 库上的会话（须由 SIDA_TEST_PG_URL 指向专用库，本 fixture 会 drop 表）。"""
+    """隔离 PG 库上的会话（须由 SIDA_TEST_PG_URL 指向专用库，本 fixture 会 drop 表）。
+
+    `audit_logs` 必须一起建：标注撤销把审计写在**同一事务**里（见
+    `actions._stage_rollback_audit`），缺表时撤销会在 commit 处 500 —— 而这正是旧
+    fixture 掩盖掉的真实阻断（生产上表现为 varchar(255) 截断，见 §10 审计快照用例）。
+    """
     url = _pg_url()
     if not url:
         pytest.skip("SIDA_TEST_PG_URL 未设置（须指向隔离库）：跳过真实 PG 契约验证")
     engine = create_engine(url)
     drop = " CASCADE" if engine.dialect.name == "postgresql" else ""
     with engine.begin() as conn:
-        for t in ("copilot_actions", "kline_annotations", "schema_migrations"):
+        for t in ("copilot_actions", "kline_annotations", "audit_logs", "schema_migrations"):
             conn.execute(text(f"DROP TABLE IF EXISTS {t}{drop}"))
     CopilotAction.__table__.create(engine, checkfirst=True)
     KlineAnnotation.__table__.create(engine, checkfirst=True)
+    AuditLog.__table__.create(engine, checkfirst=True)
     session = sessionmaker(bind=engine)()
     try:
         yield session
@@ -991,18 +1015,70 @@ def test_pg_month_period_and_no_position_rules(pg_db):
     assert pg_db.query(KlineAnnotation).count() == 1
 
 
-def test_pg_annotation_cannot_rollback(pg_db):
+def test_pg_annotation_revoke_is_atomic(pg_db):
     item = A.propose(pg_db, user_id=UID, kind="annotation",
-                     payload={"symbol": SYMBOL, "label": "PG 不可回滚", "price": 30.0})
+                     payload={"symbol": SYMBOL, "label": "PG 撤销", "price": 30.0})
     out = A.apply_action(pg_db, user_id=UID, action_id=item["id"])
-    assert out["can_rollback"] is False
+    assert out["can_rollback"] is True
+
+    res = A.revoke_annotation(pg_db, user_id=UID, annotation_id=out["annotation_id"],
+                              reason="PG 点位选错")
+    assert res["status"] == "revoked" and res["action_status"] == "rolled_back"
+    assert pg_db.query(KlineAnnotation).filter(
+        KlineAnnotation.id == out["annotation_id"]).count() == 0
+    assert pg_db.query(CopilotAction).filter(
+        CopilotAction.id == item["id"]).one().status == "rolled_back"
+
     with pytest.raises(A.ActionError) as ei:
-        A.rollback_action(pg_db, user_id=UID, action_id=item["id"])
-    msg = str(ei.value)
-    assert "不支持回滚" in msg
-    # 复审阻断 ④：文案不许再指"图上删除"这条不存在的路
-    assert "在图上删除" not in msg
-    assert "删除入口" in msg and "无法撤下" in msg
+        A.revoke_annotation(pg_db, user_id=UID, annotation_id=out["annotation_id"])
+    assert ei.value.status_code == 404
+
+
+def test_pg_revoke_audit_keeps_whole_snapshot_beyond_varchar255(pg_db):
+    """真实 PG 回归（2026-10-29 阻断）：审计 detail 不能停在 varchar(255)。
+
+    撤销把审计写在**同一事务**里（`actions._stage_rollback_audit`），整份标注快照
+    JSON 一起落库。列宽只有 255 时 PG 抛 StringDataRightTruncation → 整笔回滚 →
+    标注撤不掉、动作永远 applied，前端每次点撤销都是 500。SQLite 不校验长度，
+    CI 上测不出来；只有真实 PG 能证明这条契约。
+
+    本用例刻意用一条把快照撑过 255 的备注，断言：撤销成功 + 审计 JSON **完整可解析**
+    （截断的 JSON 在这里就炸）+ 备注逐字未丢 + 列确实是不限长的 text。
+    """
+    note = "放量滞涨、上影线反复试探压力位，" * 22
+    assert 255 < len(note) <= 500, "备注要超过旧列宽（同时不越过写入端 500 字上限），用例才有意义"
+
+    item = A.propose(pg_db, user_id=UID, kind="annotation",
+                     payload={"symbol": SYMBOL, "label": "长备注撤销", "price": 33.3,
+                              "note": note})
+    out = A.apply_action(pg_db, user_id=UID, action_id=item["id"])
+    assert out["can_rollback"] is True
+
+    res = A.revoke_annotation(pg_db, user_id=UID, annotation_id=out["annotation_id"],
+                              reason="长备注点位选错")
+    assert res["status"] == "revoked"
+
+    audits = (
+        pg_db.query(AuditLog)
+        .filter(AuditLog.user_id == UID, AuditLog.action == "copilot_action_rollback")
+        .all()
+    )
+    assert len(audits) == 1, "撤销必须在同一事务里留下且只留下一条审计"
+    raw = audits[0].detail
+    assert len(raw) > 255, "快照必须真的超过旧上限，否则证不了列已放宽"
+
+    parsed = json.loads(raw)  # 被截断的 JSON 在这一行就解析失败
+    assert parsed["annotation_id"] == out["annotation_id"]
+    assert parsed["annotation"]["label"] == "长备注撤销"
+    assert parsed["annotation"]["note"] == note, "备注必须逐字保留（禁止截断审计快照）"
+    assert parsed["action_status"] == "rolled_back"
+
+    with pg_db.bind.connect() as conn:
+        limit = conn.execute(text(
+            "SELECT character_maximum_length FROM information_schema.columns"
+            " WHERE table_name='audit_logs' AND column_name='detail'"
+        )).scalar()
+    assert limit is None, "audit_logs.detail 必须是 text（不限长），不能停在 varchar(255)"
 
 
 def test_pg_ambiguous_target_is_refused_before_any_pending_row(pg_db):
@@ -1844,6 +1920,122 @@ def test_m232_adds_instrument_column_without_backfilling(dialect, mig_engine):
         )).scalar() is None, "历史行不许被回填成任何类型"
         _m232_annotation_instrument(conn)  # 幂等
         assert "instrument" in _columns(conn, "kline_annotations")
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgresql"])
+def test_m233_audit_detail_widened_so_revoke_snapshot_is_not_truncated(dialect, mig_engine):
+    """迁移 v233：存量 `audit_logs.detail VARCHAR(255)` 放宽到 text。
+
+    为什么必须有这条迁移：撤销审计与删除在**同一事务**里，快照撑爆 255 时 PG 抛
+    StringDataRightTruncation，用户永远撤不掉那条线（真实 PG 才复现，SQLite 不校验
+    长度）。这里先证明"旧列宽确实写不进长快照"，再证明迁移后**逐字**写得进、可重跑。
+    """
+    from src.web.migrations import MIGRATIONS, _m233_audit_detail_text
+
+    assert 233 in [m.version for m in MIGRATIONS], "v233 必须在 MIGRATIONS 元组里注册"
+
+    engine = mig_engine(dialect)
+    pg = engine.dialect.name == "postgresql"
+    drop = " CASCADE" if pg else ""
+    id_col = "SERIAL PRIMARY KEY" if pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    legacy_ddl = (
+        f"CREATE TABLE audit_logs (id {id_col}, user_id VARCHAR(36), username VARCHAR(64),"
+        " action VARCHAR(64) NOT NULL, detail VARCHAR(255), ip VARCHAR(64),"
+        " created_at TIMESTAMP)"
+    )
+    long_detail = json.dumps({"annotation": {"note": "长依据" * 120}}, ensure_ascii=False)
+    assert len(long_detail) > 255
+
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS audit_logs{drop}"))
+        conn.execute(text(legacy_ddl))
+
+    if pg:
+        # 旧列宽下这就是线上那条报错（StringDataRightTruncation → 整笔回滚）
+        with pytest.raises(Exception) as ei:  # noqa: B017 - 方言异常类型不同，只要"写不进"
+            with engine.begin() as conn:
+                conn.execute(
+                    text("INSERT INTO audit_logs (user_id, action, detail) VALUES ('u', 'x', :d)"),
+                    {"d": long_detail},
+                )
+        assert "too long" in str(ei.value) or "truncat" in str(ei.value).lower()
+
+    with engine.begin() as conn:
+        _m233_audit_detail_text(conn)
+        conn.execute(
+            text("INSERT INTO audit_logs (user_id, action, detail)"
+                 " VALUES ('u', 'copilot_action_rollback', :d)"),
+            {"d": long_detail},
+        )
+        got = conn.execute(
+            text("SELECT detail FROM audit_logs WHERE user_id='u'")
+        ).scalar()
+        assert got == long_detail, "快照必须逐字落库（截断就等于审计丢证据）"
+        assert json.loads(got)["annotation"]["note"] == "长依据" * 120
+
+        _m233_audit_detail_text(conn)  # 幂等：已放宽的表上重跑不报错、不改数据
+        assert conn.execute(
+            text("SELECT count(*) FROM audit_logs WHERE user_id='u'")
+        ).scalar() == 1
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgresql"])
+def test_m233_is_wired_into_versioned_runner(dialect, mig_engine, monkeypatch):
+    """v233 必须能走**真实迁移框架**跑通并记 success=1（不是只有函数能直接调用）。
+
+    门禁只检查版本号连续；实际跑起来才会暴露 runner 里的方言分支/事务写法问题。
+    """
+    import src.web.migrations as mig
+
+    engine = mig_engine(dialect)
+    pg = engine.dialect.name == "postgresql"
+    drop = " CASCADE" if pg else ""
+    id_col = "SERIAL PRIMARY KEY" if pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    long_detail = json.dumps({"annotation": {"note": "长依据" * 120}}, ensure_ascii=False)
+
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS audit_logs{drop}"))
+        conn.execute(text(f"DROP TABLE IF EXISTS schema_migrations{drop}"))
+        conn.execute(text(
+            f"CREATE TABLE audit_logs (id {id_col}, user_id VARCHAR(36), username VARCHAR(64),"
+            " action VARCHAR(64) NOT NULL, detail VARCHAR(255), ip VARCHAR(64),"
+            " created_at TIMESTAMP)"
+        ))
+
+    monkeypatch.setattr(
+        mig,
+        "MIGRATIONS",
+        (mig.Migration(233, "audit_detail_text", mig._m233_audit_detail_text),),
+    )
+    mig.run_versioned_migrations(engine)
+
+    rec = _migration_record(engine, 233)
+    assert rec is not None and int(rec[0]) == 1, f"v233 必须记成功，实际 {rec!r}"
+
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO audit_logs (user_id, action, detail)"
+                 " VALUES ('u', 'copilot_action_rollback', :d)"),
+            {"d": long_detail},
+        )
+        assert conn.execute(
+            text("SELECT detail FROM audit_logs WHERE user_id='u'")
+        ).scalar() == long_detail
+
+
+def test_audit_log_detail_column_is_unbounded_text():
+    """模型层钉子：`create_all` 建新库时 detail 就必须是不限长的 text。
+
+    只放宽迁移不够 —— 新装实例走 `Base.metadata.create_all`，模型若仍是
+    `String(255)`，新库照样装不下快照，问题会以"只有新环境复现"的形式回来。
+    """
+    from sqlalchemy import Text
+
+    from src.db.models import AuditLog as Model
+
+    col = Model.__table__.c.detail
+    assert isinstance(col.type, Text), f"audit_logs.detail 必须是 Text，当前是 {col.type!r}"
+    assert getattr(col.type, "length", None) is None, "Text 不许再带长度上限"
 
 
 def test_pg_instrument_chain_isolates_same_code_index_and_stock(pg_db):

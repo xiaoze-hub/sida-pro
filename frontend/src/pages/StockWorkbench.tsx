@@ -18,7 +18,7 @@ import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
 import { currentAccountId } from '@/lib/copilot/annotationLedger'
-import { requestAnnotations } from '@/lib/copilot/annotationLink'
+import { requestAnnotations, revokeAnnotation } from '@/lib/copilot/annotationLink'
 import type { AnnotationTarget as AnnotationTargetType } from '@/lib/copilot/serverAnnotations'
 import { useWorkbenchAnnotations } from '@/hooks/useWorkbenchAnnotations'
 import { AnnotationLinkBar } from '@/components/copilot/AnnotationLinkBar'
@@ -539,12 +539,17 @@ export default function StockWorkbench() {
               内层保留 `min-w-0 flex-1`(承重: 没有 `min-w-0`, 图表 canvas 会撑破与右栏并排的 flex 行),
               但去掉边框/底色/内边距 ⇒ 图表直接占满列宽。右栏挤压逻辑(`w-[320px]`/`w-12` + `gap-3`)不变。 */}
           <section className="mt-3 border-t border-border pt-2">
-            {/* 服务端标注状态带(2026-10-28): 图上每条价位线都要能说清"哪来的、能不能撤"。
+            {/* 服务端标注状态带(2026-10-28; 2026-10-29 加撤销): 图上每条价位线都要能说清
+                "哪来的、能不能撤"。撤销必须用户二次确认（组件内展开确认条），
+                真正的删行与读回由 `revokeAnnotation` 负责 —— 这里只交标注 id。
                 空态/无事时不占位(组件内部 return null)。 */}
             <AnnotationLinkBar
               snapshot={annotationSnapshot}
               onRetry={() => {
                 if (annotationTarget) void requestAnnotations(annotationTarget)
+              }}
+              onRevoke={(annotationId) => {
+                void revokeAnnotation(annotationId)
               }}
             />
             <div className="flex flex-col items-stretch gap-4 xl:flex-row">

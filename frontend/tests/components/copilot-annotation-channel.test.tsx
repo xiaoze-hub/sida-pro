@@ -800,11 +800,14 @@ describe('⑤ 确认写入视图键（CN 页面 / SH 落库）', () => {
     expect(screen.getByTestId('copilot-annotation-ids').textContent).toContain('#91')
     expect(screen.getByTestId('copilot-annotation-action-ids').textContent).toContain('#7')
     expect(screen.getAllByTestId('copilot-annotation-line')).toHaveLength(1)
-    // notice（"已确认并上图" + 市场写法说明）+ 撤销不可用都如实写在这里
+    // notice（"已确认并上图" + 市场写法说明）如实写在这里
     const notice = screen.getByTestId('copilot-annotation-notice').textContent ?? ''
     expect(notice).toContain('已确认并上图')
     expect(notice).toContain('落库市场 SH')
-    expect(screen.getByTestId('copilot-annotation-undo-note').textContent).toContain('撤销不可用')
+    // 2026-10-29 起服务端有撤销入口：状态条不再挂"撤销不可用"的常驻说明
+    expect(screen.queryByTestId('copilot-annotation-undo-note')).toBeNull()
+    // 这个渲染没接 onRevoke（只读展示），所以也不渲染撤销按钮
+    expect(screen.queryByTestId('copilot-annotation-revoke')).toBeNull()
   })
 })
 

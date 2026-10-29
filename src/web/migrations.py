@@ -6355,6 +6355,48 @@ def _m232_annotation_instrument(conn: Connection) -> None:
     )
 
 
+def _m233_audit_detail_text(conn: Connection) -> None:
+    """audit_logs.detail 由 varchar(255) 放宽为 text（2026-10-29, 标注撤销阻断）。
+
+    为什么必须放宽: 标注撤销把「被删标注的完整快照」以 JSON 写进这一列，并且与删除
+    **同一事务**提交（见 `actions._stage_rollback_audit`）。快照里有 `note`（模型里
+    本身就是 Text，写入端上限 500 字），正常一条线就能超过 255 ⇒ PG 抛
+    StringDataRightTruncation ⇒ 整笔回滚 ⇒ 标注撤不掉、动作永远 applied，用户每次点
+    撤销都是 500。SQLite 不校验 VARCHAR 长度，所以这条只在真实 PG 上炸。
+
+    为什么是放宽而不是截断: 行删掉之后审计是**唯一**的证据源（`action.result` 只有
+    一句人话摘要）。截断快照 = 永久丢"删的是哪条线"，比多占几 KB 严重得多。
+
+    为什么不另开一列/另开表: `detail` 本来就是各写入口的 JSON/人话明细列，撤销类审计
+    一直往这里写结构化 JSON；再分一列会让"读审计"出现两套并存的取数口径。
+
+    SQLite: 动态类型，VARCHAR(255) 从不限制长度 ⇒ 无需变更（模型已改 Text，新库
+    由 `create_all` 直接建成 text）。
+
+    幂等可重跑（已是 text 则跳过）。
+    """
+    if not _has_table(conn, "audit_logs"):
+        return
+    if not _has_column(conn, "audit_logs", "detail"):
+        return
+    if not _dialect_is_pg(conn):
+        return
+    row = conn.execute(
+        text(
+            """
+SELECT data_type
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'audit_logs' AND column_name = 'detail'
+LIMIT 1
+"""
+        )
+    ).first()
+    if row and str(row[0]).lower() == "text":
+        return
+    # varchar → text 在 PG 上是元数据级变更(不重写堆表), 存量行逐字保留
+    conn.execute(text("ALTER TABLE audit_logs ALTER COLUMN detail TYPE TEXT"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6582,6 +6624,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(231, "copilot_action_annotation_link", _m231_copilot_action_annotation_link),
     # 见函数 docstring: 标注行补 instrument（000xxx 同号段只能用**类型**区分，不能靠代码猜）
     Migration(232, "annotation_instrument", _m232_annotation_instrument),
+    Migration(233, "audit_detail_text", _m233_audit_detail_text),
 )
 
 

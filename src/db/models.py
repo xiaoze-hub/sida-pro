@@ -69,7 +69,12 @@ class AuditLog(Base):
     user_id = Column(String(36), nullable=True)  # 操作者(系统任务为 NULL)
     username = Column(String(64), default="")
     action = Column(String(64), nullable=False)  # login / logout / update_profile / update_password / manage_user / update_settings / update_datasource / export / register
-    detail = Column(String(255), default="")
+    #: 明细。**必须不限长**（2026-10-29, 标注撤销阻断）：撤销审计把整份被删标注的快照
+    #: （含 `note`，其本身是 Text）以 JSON 写进这一列，且与删除**同一事务**提交 ——
+    #: 列宽卡在 varchar(255) 时 PG 直接 StringDataRightTruncation，整笔回滚，用户点了
+    #: 撤销永远撤不掉那条线（SQLite 不校验长度，所以 CI 测不出来）。改成 Text 而不是
+    #: 截断快照：审计是行删掉之后**唯一**的证据源，截断=丢证据。存量库由迁移 v233 放宽。
+    detail = Column(Text, default="")
     ip = Column(String(64), default="")
     created_at = Column(DateTime, server_default=func.now())
 

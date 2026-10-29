@@ -59,8 +59,22 @@ export const SERVER_ANNOTATION_CONTRACT = {
   actionLinkedParam: 'action_linked',
   /** 精确身份读取：`ids=1,2` */
   idsParam: 'ids',
-  /** 是否有撤销/删除图注的服务端接口 —— **false**（rollback 对 annotation 返回 400） */
-  undoSupported: false,
+  /**
+   * 撤销接口：`DELETE /copilot/annotations/{id}?reason=`（2026-10-29 后端新增）。
+   * 只撤**本人已确认**的标注：他人 404（与不存在同句，不泄露他人数据）、
+   * 无主（`user_id IS NULL`）409、无确认动作 409、编号复用/并发冲突 409。
+   */
+  revokePath: 'DELETE /copilot/annotations/{id}',
+  /** 撤销成功的状态字面量（前端只认这个值，不按 `ok` 猜） */
+  revokedStatus: 'revoked',
+  /** 撤销成功后确认动作的终态（动作没转终态 ⇒ 撤销没走完） */
+  revokedActionStatus: 'rolled_back',
+  /**
+   * 是否有撤销/删除图注的服务端接口 —— **true**（`DELETE /copilot/annotations/{id}`）。
+   * 2026-10-29 之前是 false（rollback 对 annotation 直接 400、没有删除接口），
+   * 服务端补上撤销入口后此事实必须跟着翻；界面上的"撤销不可用"文案由它派生。
+   */
+  undoSupported: true,
   /** 未确认的 pending 提议会不会出现在读取接口里 —— **false**（只查 KlineAnnotation） */
   pendingListed: false,
   /** 表里是否有"标的类型（个股/指数）"列 —— **false** ⇒ 同号代码只能默认拒画 */
@@ -156,6 +170,7 @@ export type ParseRejectReason =
   | 'not_applied'
   | 'no_annotation_id'
   | 'mismatch'
+  | 'not_revoked'
 
 export type ParseResult<T> =
   | { ok: true; value: T }
@@ -676,6 +691,100 @@ export function verifyAppliedRow(
     }
   }
   return { ok: true, value: verdict.line }
+}
+
+// ---------------------------------------------------------------------------
+// 解析：DELETE /copilot/annotations/{id}
+// ---------------------------------------------------------------------------
+
+/** 撤销成功时服务端回传的可核对事实（都是被删那一行的快照）。 */
+export interface RevokedAnnotation {
+  annotationId: number
+  actionId: number
+  symbol: string
+  label: string
+  reason: string
+  revokedAt: string
+}
+
+/**
+ * 严格解析撤销响应。**fail-closed**：只认"这一条确实被删掉了"的证据。
+ *
+ *  - `ok === true` 且 `status === 'revoked'`（不接受 `ok:true` 配别的状态）；
+ *  - `action_status === 'rolled_back'`（动作没转终态 = 事务没走完）；
+ *  - `annotation_id` 与 `action_id` 都是正整数，且 `annotation_id` 必须等于**本次请求的 id**
+ *    （`expectAnnotationId`）：对不上就不是"这一条被删了"，不能拿它去移除图上的线。
+ *
+ * 为什么要这么严：撤销的界面动作是"把图上这条线删掉"。响应里 id 对不上时若还照删，
+ * 结果是"图上少一条、服务端留着另一条"，用户再刷新线又回来 —— 比报错更糟。
+ */
+export function parseRevokeResponse(
+  raw: unknown,
+  expectAnnotationId?: number,
+): ParseResult<RevokedAnnotation> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, reason: 'shape', message: '撤销响应不是对象' }
+  }
+  const obj = raw as Record<string, unknown>
+  if (obj.ok !== true) {
+    return { ok: false, reason: 'not_revoked', message: '撤销响应 ok 不为 true' }
+  }
+  if (obj.status !== SERVER_ANNOTATION_CONTRACT.revokedStatus) {
+    return {
+      ok: false,
+      reason: 'not_revoked',
+      message: `撤销响应状态是 ${String(obj.status)}，不是 ${SERVER_ANNOTATION_CONTRACT.revokedStatus}`,
+    }
+  }
+  const annotationId = positiveInt(obj.annotation_id)
+  if (annotationId === null) {
+    return { ok: false, reason: 'field', message: '撤销响应缺少合法的 annotation_id' }
+  }
+  const actionId = positiveInt(obj.action_id)
+  if (actionId === null) {
+    return { ok: false, reason: 'field', message: '撤销响应缺少合法的 action_id' }
+  }
+  if (obj.action_status !== SERVER_ANNOTATION_CONTRACT.revokedActionStatus) {
+    return {
+      ok: false,
+      reason: 'not_revoked',
+      message:
+        `撤销响应里确认动作的终态是 ${String(obj.action_status)}，` +
+        `不是 ${SERVER_ANNOTATION_CONTRACT.revokedActionStatus}（撤销没有走完）`,
+    }
+  }
+  if (expectAnnotationId !== undefined && annotationId !== expectAnnotationId) {
+    return {
+      ok: false,
+      reason: 'mismatch',
+      message: `撤销响应说的是标注 #${annotationId}，与本次请求的 #${expectAnnotationId} 不一致`,
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      annotationId,
+      actionId,
+      symbol: normSymbol(nonEmptyString(obj.symbol)),
+      label: nonEmptyString(obj.label) ?? '',
+      reason: typeof obj.reason === 'string' ? obj.reason : '',
+      revokedAt: typeof obj.revoked_at === 'string' ? obj.revoked_at : '',
+    },
+  }
+}
+
+/**
+ * 撤销请求 URL（与 {@link annotationsUrl} 同属"唯一构造点"，页面不要再拼字符串）。
+ * 非法 id 直接抛错：拼出 `/annotations/NaN` 的请求没有任何服务端能处理。
+ */
+export function revokeUrl(annotationId: number, reason = ''): string {
+  const aid = positiveInt(annotationId)
+  if (aid === null) {
+    throw new Error(`标注 id 必须是正整数：${String(annotationId)}`)
+  }
+  const text = reason.trim()
+  const query = text ? `?${new URLSearchParams({ reason: text }).toString()}` : ''
+  return `/copilot/annotations/${aid}${query}`
 }
 
 // ---------------------------------------------------------------------------

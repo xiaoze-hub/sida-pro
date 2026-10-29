@@ -19,7 +19,8 @@
  *  c. 读取失败 / 没回读到这一条 ⇒ 不画 + 如实播报；
  *  d. 跨标的 / 换周期 ⇒ 不画，并说清"落在哪个标的/周期"（不谎称已上图）；
  *  e. 跨账号确认（服务端 400）⇒ 确认本身失败，图上一条不加；
- *  f. 撤销不可用：rollback 的 400 原样透传，不假装能撤。
+ *  f. 撤销（2026-10-29 契约反转）：服务端有 DELETE 标注入口，撤销链路见
+ *     `tests/components/copilot-annotation-revoke.test.tsx`。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -298,13 +299,15 @@ describe('e. 跨账号确认：服务端 400 ⇒ 确认本身失败，图上一�
   })
 })
 
-describe('f. 撤销不可用（契约事实，不假装能撤）', () => {
-  it('rollback annotation 的 400 原样透传；契约里 undoSupported=false', async () => {
+describe('f. 撤销可用（2026-10-29 契约反转）', () => {
+  it('契约里 undoSupported=true（服务端有 DELETE 标注入口）；动作级 rollback 仍原样透传服务端文案', async () => {
     mocks.fetchAPI.mockImplementation(async (path: string) => {
-      if (String(path).includes('/rollback')) throw new Error('annotation 动作不支持回滚')
+      if (String(path).includes('/rollback')) throw new Error('动作已是 rolled_back 状态（已撤销）')
       return []
     })
-    await expect(rollbackPendingAction(7)).rejects.toThrow('annotation 动作不支持回滚')
-    expect(SERVER_ANNOTATION_CONTRACT.undoSupported).toBe(false)
+    // 标注撤销走专属入口 `revokeAnnotation`；这条 rollback 只是兼容路径，错误文案不吞
+    await expect(rollbackPendingAction(7)).rejects.toThrow('已撤销')
+    expect(SERVER_ANNOTATION_CONTRACT.undoSupported).toBe(true)
+    expect(SERVER_ANNOTATION_CONTRACT.revokePath).toBe('DELETE /copilot/annotations/{id}')
   })
 })
