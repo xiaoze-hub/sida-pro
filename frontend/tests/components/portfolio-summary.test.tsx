@@ -244,6 +244,51 @@ describe('PortfolioSummarySection 未知(缺行情)不当 0', () => {
     expect(text).toContain('比例不给数字')
   })
 
+  /**
+   * 安全修复 8db9088b：available_funds = null（现金未登记 = 未知）。
+   * 未知现金不许渲染成 0、不许算进总资产、仓位比例也不能当完整。
+   */
+  it('现金未知 → 可用资金写「未登记（未知）」，总资产不给数字且说明原因', () => {
+    mocks.ctx = ctxWith({
+      total_market_value: 5000,
+      total_pnl: 1000,
+      total_pnl_pct: 25,
+      total_daily_pnl: 120,
+      available_funds: null,
+      available_funds_known: false,
+      total_cost: 4000,
+      priced_cost: 4000,
+      unpriced_cost: 0,
+      total_assets: null,
+      total_assets_complete: false,
+      total_assets_basis: 'available_funds_unknown',
+      total_assets_priced_subset: null,
+      quotes_coverage: {
+        requested: true,
+        positions_total: 1,
+        positions_priced: 1,
+        positions_missing: 0,
+        cost_coverage_pct: 100,
+        pricing_basis: 'all_positions',
+        complete: true,
+      },
+      daily_pnl_coverage: {
+        requested: true,
+        positions_total: 1,
+        positions_observed: 1,
+        complete: true,
+      },
+    })
+    render(<PortfolioSummarySection />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('未登记（未知）')
+    expect(text).toContain('可用资金未登记')
+    // 未知现金不许显示成 0 / 0.00
+    expect(screen.queryByText('0')).toBeNull()
+    // 比例也不给数字
+    expect(text).toContain('比例也不给')
+  })
+
   it('当日盈亏部分覆盖 → 明确写「只统计 x/y 条持仓」', () => {
     mocks.ctx = ctxWith({
       total_market_value: 5000,

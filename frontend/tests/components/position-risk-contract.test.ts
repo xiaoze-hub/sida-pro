@@ -43,6 +43,7 @@ const shared = read('src/pages/stocks/shared.ts')
 const summarySection = read('src/pages/stocks/PortfolioSummarySection.tsx')
 const accountsSection = read('src/pages/stocks/AccountsSection.tsx')
 const stocksData = read('src/pages/stocks/useStocksData.ts')
+const actions = read('src/pages/stocks/useStocksActions.ts')
 
 describe('防线判定单源', () => {
   it('DefenseLineBanner 使用共享判定，不再自写阈值', () => {
@@ -165,6 +166,28 @@ describe('缺行情 / 覆盖度口径（三次评审）', () => {
   it('账户行不冒称「只」：持仓条数按「条」表述', () => {
     expect(accountsSection).toContain('条持仓')
     expect(accountsSection).not.toMatch(/\{account\.positions\.length\} 只/)
+  })
+
+  /**
+   * 安全修复 8db9088b：available_funds 可为 NULL（现金未登记 = 未知，不是 0）。
+   * 三个出口都钉死：编辑弹窗不崩、提交不伪造 0、展示与合计不按 0 算。
+   */
+  it('现金未知（null）不当 0：编辑不崩、提交不伪造、总额不给数字', () => {
+    // ① 编辑账户：null 不再 `.toString()`（那会 TypeError）
+    expect(stripComments(actions)).not.toMatch(/available_funds\.toString\(\)/)
+    expect(stripComments(actions)).toMatch(/available_funds: funds === null \|\| funds === undefined \? ''/)
+    // ② 提交：不再 `parseFloat(...) || 0`（把空/坏值写成 0 元现金）
+    expect(stripComments(actions)).not.toMatch(/parseFloat\(accountForm\.available_funds\)/)
+    // ③ 合并/总资产：现金 NULL 单独成口径，不 ??0
+    expect(shared).toContain("'available_funds_unknown'")
+    expect(shared).toContain('available_funds_known')
+    expect(stripComments(shared)).not.toMatch(/account\.available_funds\s*\?\?\s*0/)
+    expect(stripComments(shared)).not.toMatch(/account\.available_funds\s*\|\|\s*0/)
+    // ④ 账户行显式写「未知」，不渲染 0
+    expect(accountsSection).toContain("== null ? '未知'")
+    // ⑤ 汇总卡说明未知现金，且比例不给数字
+    expect(summarySection).toContain('未登记（未知）')
+    expect(summarySection).toContain('available_funds_unknown')
   })
 
   it('JSX 文案里不出现 markdown 星号', () => {

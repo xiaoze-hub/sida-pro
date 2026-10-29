@@ -41,6 +41,9 @@ function totalAssetsHint(
   pricedSubset: number | null | undefined,
   missing: number | null | undefined,
 ): string {
+  if (basis === 'available_funds_unknown') {
+    return '可用资金未登记（未知），总资产不给数字；不按 0 元现金凑总额'
+  }
   if (basis === 'priced_positions_only') {
     const subset = fmtAmount(pricedSubset)
     const miss = missing != null && missing > 0 ? `${missing} 条未定价持仓` : '未定价持仓'
@@ -192,7 +195,16 @@ export function PortfolioSummarySection() {
     })()}
 
     <Card variant="plain" className=" p-3">
-      <Stat label={t('stocks.availableCash')} value={fmtAmount(portfolio.total.available_funds)} className="[&>div:nth-child(2)]:text-[20px]" />
+      <Stat
+        label={t('stocks.availableCash')}
+        value={fmtAmount(portfolio.total.available_funds)}
+        sub={
+          portfolio.total.available_funds == null
+            ? '未登记（未知），不按 0 计'
+            : undefined
+        }
+        className="[&>div:nth-child(2)]:text-[20px]"
+      />
     </Card>
     <Card variant="plain" className=" p-3">
       <Stat
@@ -218,9 +230,11 @@ export function PortfolioSummarySection() {
         sub={
           positionRatio && safeNum(positionRatio.pct) !== null
             ? `${t('stocks.portfolio')} ${fmtAmount(positionRatio.mv)} / ${t('stocks.totalAssets')} ${fmtAmount(positionRatio.assets)}`
-            : portfolio.total.total_assets_complete === false
-              ? '总资产未知（缺行情），比例不给数字'
-              : '总资产或市值未知，比例不给数字'
+            : portfolio.total.total_assets_basis === 'available_funds_unknown'
+              ? '可用资金未知，总资产不给数字，比例也不给'
+              : portfolio.total.total_assets_complete === false
+                ? '总资产未知（缺行情），比例不给数字'
+                : '总资产或市值未知，比例不给数字'
         }
         className="[&>div:nth-child(2)]:text-[20px]"
       />

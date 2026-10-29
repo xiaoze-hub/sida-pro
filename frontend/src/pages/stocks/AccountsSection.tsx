@@ -183,7 +183,15 @@ export function AccountsSection() {
               </div>
               <div className="text-left md:text-right hidden sm:block">
                 <div className="whitespace-nowrap text-[12px] md:text-[12px] text-muted-foreground">可用</div>
-                <div className="text-[12px] md:text-[14px] font-mono whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.available_funds)}</div>
+                {/* 2026-10-29 安全修复 8db9088b: 现金 NULL = 未知(未登记), 不是 0 —— 显式写「未知」,
+                    不渲染 `0`, 也不让下游拿它算总资产。 */}
+                <div
+                  className={`text-[12px] md:text-[14px] font-mono whitespace-nowrap tabular-nums ${account.available_funds == null ? 'text-role-watch' : ''}`}
+                  title={account.available_funds == null ? '该账户可用资金未登记（未知），总额里不按 0 计' : undefined}
+                  data-testid={`account-available-funds-${account.id}`}
+                >
+                  {account.available_funds == null ? '未知' : safeMoneyUnsigned(account.available_funds)}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-0 md:gap-1 shrink-0" onClick={e => e.stopPropagation()}>

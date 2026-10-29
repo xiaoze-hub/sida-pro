@@ -31,7 +31,13 @@ export interface Stock {
 export interface Account {
   id: number
   name: string
-  available_funds: number
+  /**
+   * 可用资金。**null = 未知**（从未登记过现金，2026-10-29 安全修复 8db9088b 起下标量
+   * 可为 NULL），不是 0。展示与合计都必须按「未知」处理，禁止 `?? 0`。
+   */
+  available_funds: number | null
+  /** 现金是否已知（后端 `available_funds_known`）；缺省时用 `available_funds != null` 推断。 */
+  available_funds_known?: boolean
   enabled: boolean
 }
 
@@ -94,6 +100,8 @@ export type TotalAssetsBasis =
   | 'priced_positions_only'
   | 'no_priced_positions'
   | 'not_requested'
+  /** 现金 NULL（未知）—— 即使持仓全部有价，总资产也不可知（不得把 NULL 当 0）。 */
+  | 'available_funds_unknown'
 
 
 export interface Position {
@@ -160,7 +168,10 @@ export interface QuoteSnapshot {
 export interface AccountSummary {
   id: number
   name: string
-  available_funds: number
+  /** null = 现金未知（不是 0）。 */
+  available_funds: number | null
+  /** 现金是否已知；false 时总资产 basis 为 `available_funds_unknown`。 */
+  available_funds_known?: boolean
   total_market_value: number | null
   total_cost: number
   /** 已定价持仓的成本（与 total_market_value 同一篮子）。 */
@@ -196,7 +207,9 @@ export interface PortfolioTotal {
   daily_pnl_period: DailyPnlPeriod
   daily_pnl_label: string
   daily_pnl_date: string | null
-  available_funds: number
+  /** null = 现金未知（任一账户现金 NULL ⇒ 汇总现金未知，不是 0）。 */
+  available_funds: number | null
+  available_funds_known?: boolean
   total_assets: number | null
   total_assets_complete?: boolean
   total_assets_basis?: TotalAssetsBasis
@@ -385,6 +398,19 @@ const usablePrice = (value: unknown): number | null => {
   return n !== null && Number.isFinite(n) && n > 0 ? n : null
 }
 
+/**
+ * 账户现金：`null` = 未知（未登记），`0` = 真的是 0 元。
+ *
+ * 后端 8db9088b 起 `available_funds` 可为 NULL 并带 `available_funds_known`；
+ * 兼容老响应（没有该字段）时按「有数即已知、无数即未知」推断 —— 绝不 `?? 0`。
+ */
+const availableFundsOf = (account: { available_funds?: number | null; available_funds_known?: boolean }): number | null => {
+  const known = account.available_funds_known
+  const parsed = safeNum(account.available_funds)
+  if (known === false) return null
+  return parsed
+}
+
 /** 汇总取值：null 保持 null（真实 0 是有效数值，不许用 falsy 判断）。 */
 const roundOrNull = (value: number | null): number | null =>
   value === null ? null : round2(value)
@@ -439,28 +465,43 @@ const buildDailyPnlCoverage = (
  * 拿它当总额会把账户说得比实际小；反过来用成本顶替又会把总额说大。
  * 所以：只有全部持仓有价（或本来没持仓）才给 `total_assets`；
  * 部分覆盖时给 `null` + `total_assets_priced_subset`，展示方必须显式写「已定价子集」。
+ *
+ * 2026-10-29 安全修复 8db9088b 追加第二条「不可知」：`available_funds` 可为 NULL（现金未知）。
+ * 「全部市值 + 0 元现金」同样不是总资产 —— NULL 不能当 0，basis 标 `available_funds_unknown`。
  */
 const resolveTotalAssets = (
   positionsTotal: number,
   positionsPriced: number,
   pricedMarketValue: number,
-  availableFunds: number,
+  availableFunds: number | null,
 ): {
   total_assets: number | null
   total_assets_complete: boolean
   total_assets_basis: TotalAssetsBasis
   total_assets_priced_subset: number | null
 } => {
-  const subset = positionsPriced > 0 ? pricedMarketValue + availableFunds : null
+  const fundsKnown = availableFunds !== null
+  const fundsValue = fundsKnown ? (availableFunds as number) : 0
+  // 现金未知时「子集市值 + 未知现金」也不是可展示的口径。
+  const subset = positionsPriced > 0 && fundsKnown ? pricedMarketValue + fundsValue : null
   if (positionsTotal === 0) {
-    return {
-      total_assets: availableFunds,
-      total_assets_complete: true,
-      total_assets_basis: 'no_positions',
-      total_assets_priced_subset: availableFunds,
-    }
+    // 空账户：0 只持仓是真 0 市值，但总资产 = 现金；现金未知则总资产未知（不是 0 元）。
+    return fundsKnown
+      ? {
+          total_assets: fundsValue,
+          total_assets_complete: true,
+          total_assets_basis: 'no_positions',
+          total_assets_priced_subset: fundsValue,
+        }
+      : {
+          total_assets: null,
+          total_assets_complete: false,
+          total_assets_basis: 'available_funds_unknown',
+          total_assets_priced_subset: null,
+        }
   }
   if (positionsPriced === 0) {
+    // 一只都没价：无论现金是否已知，总资产都不可知（缺价口径优先说明）。
     return {
       total_assets: null,
       total_assets_complete: false,
@@ -468,12 +509,21 @@ const resolveTotalAssets = (
       total_assets_priced_subset: null,
     }
   }
-  if (positionsPriced === positionsTotal) {
+  if (positionsPriced === positionsTotal && fundsKnown) {
     return {
-      total_assets: pricedMarketValue + availableFunds,
+      total_assets: pricedMarketValue + fundsValue,
       total_assets_complete: true,
       total_assets_basis: 'all_positions',
       total_assets_priced_subset: subset,
+    }
+  }
+  if (positionsPriced === positionsTotal) {
+    // 全部持仓有价，但现金未知 → 总资产仍不可知（不得把 NULL 当 0 加进来）。
+    return {
+      total_assets: null,
+      total_assets_complete: false,
+      total_assets_basis: 'available_funds_unknown',
+      total_assets_priced_subset: null,
     }
   }
   return {
@@ -518,6 +568,8 @@ export const mergePortfolioQuotes = (
   let grandPriced = 0
   let grandDailyObserved = 0
   let grandAvailable = 0
+  // 任一账户现金为 NULL ⇒ 汇总现金是「未知」，不是「已知账户之和」。
+  let grandFundsKnown = true
   let grandDailyPnl = 0
   const grandDailyPnlObservations: Array<{ period: DailyPnlPeriod; date: string | null }> = []
 
@@ -612,6 +664,8 @@ export const mergePortfolioQuotes = (
     })
 
     const positionsCount = account.positions.length
+    // 现金：null = 未知（未登记），不是 0（8db9088b 契约）。
+    const accFunds = availableFundsOf(account)
     let accMarketValueOut: number | null
     let accPnl: number | null
     let accPnlPct: number | null
@@ -639,7 +693,7 @@ export const mergePortfolioQuotes = (
       positionsCount,
       accPriced,
       accMarketValue,
-      account.available_funds,
+      accFunds,
     )
 
     grandMarketValue += accMarketValue
@@ -649,7 +703,8 @@ export const mergePortfolioQuotes = (
     grandPositions += positionsCount
     grandPriced += accPriced
     grandDailyObserved += accDailyObserved
-    grandAvailable += account.available_funds
+    if (accFunds === null) grandFundsKnown = false
+    else grandAvailable += accFunds
     grandDailyPnl += accDailyPnl
 
     return {
@@ -665,6 +720,8 @@ export const mergePortfolioQuotes = (
       total_assets_complete: accAssets.total_assets_complete,
       total_assets_basis: accAssets.total_assets_basis,
       total_assets_priced_subset: roundOrNull(accAssets.total_assets_priced_subset),
+      available_funds: roundOrNull(accFunds),
+      available_funds_known: accFunds !== null,
       quotes_coverage: buildCoverage(positionsCount, accPriced, accPricedCost, accCost),
       daily_pnl_coverage: buildDailyPnlCoverage(positionsCount, accDailyObserved),
       ...summarizeDailyPnlPeriod(accDailyPnlObservations),
@@ -696,7 +753,7 @@ export const mergePortfolioQuotes = (
     grandPositions,
     grandPriced,
     grandMarketValue,
-    grandAvailable,
+    grandFundsKnown ? grandAvailable : null,
   )
 
   return {
@@ -710,7 +767,9 @@ export const mergePortfolioQuotes = (
       total_pnl: roundOrNull(grandPnl),
       total_pnl_pct: roundOrNull(grandPnlPct),
       total_daily_pnl: roundOrNull(grandDailyPnlOut),
-      available_funds: round2(grandAvailable),
+      // 现金未知时汇总现金是 null（不是已知账户的部分和）。
+      available_funds: grandFundsKnown ? round2(grandAvailable) : null,
+      available_funds_known: grandFundsKnown,
       total_assets: roundOrNull(grandAssets.total_assets),
       total_assets_complete: grandAssets.total_assets_complete,
       total_assets_basis: grandAssets.total_assets_basis,

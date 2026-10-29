@@ -413,6 +413,92 @@ describe('daily_pnl_coverage · 缺涨跌幅/昨收不许静默少算', () => {
   })
 })
 
+/**
+ * 安全修复 8db9088b 契约：`available_funds` 可能是 **null = 现金未知**（从未登记），
+ * 不是 0。后端给 `available_funds_known=false` + `total_assets_basis=available_funds_unknown`
+ * + `total_assets=None`。前端 merge 若把 null 当 0，会把「不知道有多少现金」算成
+ * 「一分钱没有」，总资产/仓位比例全都虚低且看起来完全正常 —— 这比报错更危险。
+ */
+describe('available_funds 未知（null）不被当成 0', () => {
+  const withFunds = (
+    funds: number | null,
+    positions: unknown[],
+  ): PortfolioSummary => {
+    const p = portfolio([{ id: 1, name: '主账户', positions }])
+    return {
+      ...p,
+      accounts: p.accounts.map((a) => ({ ...a, available_funds: funds })) as PortfolioSummary['accounts'],
+      total: { ...p.total, available_funds: funds },
+    }
+  }
+
+  it('全部有价但现金未知 → 总资产仍为 null，basis=available_funds_unknown，子集也不给', () => {
+    const merged = mergePortfolioQuotes(
+      withFunds(null, [pos({ id: 1, symbol: '600111', cost_price: 40, quantity: 100 })]),
+      { 'CN:600111': quote({ current_price: 50 }) },
+    )!
+    const total = merged.total
+    expect(total.available_funds).toBeNull()
+    expect(total.available_funds_known).toBe(false)
+    expect(total.total_assets).toBeNull()
+    expect(total.total_assets_complete).toBe(false)
+    expect(total.total_assets_basis).toBe('available_funds_unknown')
+    // 现金未知时，"已定价市值 + 未知现金" 也不是可展示的子集口径
+    expect(total.total_assets_priced_subset).toBeNull()
+    // 仓位比例跟着未知（不许拿 0 现金算出 100%）
+    expect(computePositionRatio(total).pct).toBeNull()
+
+    const acc = merged.accounts[0]
+    expect(acc.available_funds).toBeNull()
+    expect(acc.available_funds_known).toBe(false)
+    expect(acc.total_assets).toBeNull()
+    expect(acc.total_assets_basis).toBe('available_funds_unknown')
+  })
+
+  it('现金未知 + 空账户 → 总资产未知（不是 0 元）', () => {
+    const merged = mergePortfolioQuotes(withFunds(null, []), {})!
+    expect(merged.total.total_assets).toBeNull()
+    expect(merged.total.total_assets_basis).toBe('available_funds_unknown')
+    expect(merged.total.total_assets_complete).toBe(false)
+  })
+
+  it('一个账户现金未知 → 汇总现金与总资产都未知（不把已知账户的现金冒充合计）', () => {
+    const base = portfolio([
+      { id: 1, name: '主账户', positions: [pos({ id: 1, symbol: '600111', cost_price: 40, quantity: 100 })] },
+      { id: 2, name: '老账户', positions: [pos({ id: 2, symbol: '600519', cost_price: 60, quantity: 100 })] },
+    ])
+    const mixed: PortfolioSummary = {
+      ...base,
+      accounts: base.accounts.map((a, i) => ({
+        ...a,
+        available_funds: i === 0 ? 1000 : null,
+      })) as PortfolioSummary['accounts'],
+      total: { ...base.total, available_funds: null },
+    }
+    const merged = mergePortfolioQuotes(mixed, {
+      'CN:600111': quote({ current_price: 50 }),
+      'CN:600519': quote({ current_price: 50 }),
+    })!
+    expect(merged.total.available_funds).toBeNull()
+    expect(merged.total.available_funds_known).toBe(false)
+    expect(merged.total.total_assets).toBeNull()
+    expect(merged.accounts[0].available_funds).toBe(1000)
+    expect(merged.accounts[1].available_funds).toBeNull()
+  })
+
+  it('现金已知（含 0）→ 口径不变：总资产 = 全部市值 + 现金，complete=true', () => {
+    const merged = mergePortfolioQuotes(
+      withFunds(0, [pos({ id: 1, symbol: '600111', cost_price: 40, quantity: 100 })]),
+      { 'CN:600111': quote({ current_price: 50 }) },
+    )!
+    expect(merged.total.available_funds).toBe(0)
+    expect(merged.total.available_funds_known).toBe(true)
+    expect(merged.total.total_assets).toBe(5000)
+    expect(merged.total.total_assets_basis).toBe('all_positions')
+    expect(merged.total.total_assets_complete).toBe(true)
+  })
+})
+
 describe('computePositionRatio · 未知不当 0%', () => {
   it('总市值未知（null）→ 仓位比例未知，不是 0.0%', () => {
     const ratio = computePositionRatio({

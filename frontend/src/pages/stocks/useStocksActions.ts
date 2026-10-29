@@ -176,7 +176,14 @@ const removeFromWatchlist = async (stock: Stock) => {
 // ========== Account handlers ==========
 const openAccountDialog = (account?: Account) => {
   if (account) {
-    setAccountForm({ name: account.name, available_funds: account.available_funds.toString() })
+    // 2026-10-29 安全修复 8db9088b: available_funds 可为 NULL(现金未知, 不是 0)。
+    // 旧写法 `account.available_funds.toString()` 直接 TypeError —— 点「编辑账户」就崩。
+    // 未知就留空（输入框里空 = 未知，用户不填就不覆盖），绝不填 "0"。
+    const funds = account.available_funds
+    setAccountForm({
+      name: account.name,
+      available_funds: funds === null || funds === undefined ? '' : String(funds),
+    })
     setEditAccountId(account.id)
   } else {
     setAccountForm(emptyAccountForm)
@@ -187,9 +194,24 @@ const openAccountDialog = (account?: Account) => {
 
 const handleAccountSubmit = async () => {
   try {
-    const payload = {
-      name: accountForm.name,
-      available_funds: parseFloat(accountForm.available_funds) || 0,
+    const raw = String(accountForm.available_funds ?? '').trim()
+    // 空 = 未知：编辑时不带该字段（PUT 语义 None=不改），不编一个 0 元现金；
+    // 非数字直接拦下（旧 `parseFloat(...) || 0` 会把 "abc" 静默写成 0 元）。
+    let funds: number | null = null
+    if (raw !== '') {
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed)) {
+        toast('可用资金请填数字，留空表示未知', 'error')
+        return
+      }
+      funds = parsed
+    }
+    const payload: Record<string, unknown> = { name: accountForm.name }
+    if (funds !== null) {
+      payload.available_funds = funds
+    } else if (!editAccountId) {
+      // 新建账户的后端 schema 是 `available_funds: float = 0`（不可空），留空只能取默认 0。
+      payload.available_funds = 0
     }
     if (editAccountId) {
       await fetchAPI(`/accounts/${editAccountId}`, { method: 'PUT', body: JSON.stringify(payload) })
