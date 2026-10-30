@@ -107,13 +107,16 @@ def test_unreadable_cumulative_volume_cannot_be_judged(volume):
     assert gate.tracked == 0
 
 
-def test_capacity_exhaustion_fails_closed():
+def test_capacity_evicts_least_recently_seen():
+    """全市场扫描会超上限：必须淘汰最久未见的，而不是让门禁对新标的静默失效。"""
     gate = TqLivenessGate(max_symbols=1, stale_seconds=60)
-    gate.observe("600519.SH", "100", "50", now=100, market_open=True)
+    assert gate.observe("600519.SH", "100", "50", now=100, market_open=True) is Liveness.UNPROVEN
+    assert gate.observe("600519.SH", "200", "90", now=110, market_open=True) is Liveness.FRESH
+    # 新标的进来：淘汰最久未见的 600519，新标的照常开始观测（不是被拒之门外）
+    assert gate.observe("000001.SZ", "100", "50", now=120, market_open=True) is Liveness.UNPROVEN
     assert gate.tracked == 1
-    # 表满：新标的既不记录、也不声称新鲜（不因为"没见过"就放行）
-    assert gate.observe("000001.SZ", "1", "1", now=101, market_open=True) is Liveness.UNPROVEN
-    assert gate.tracked == 1
+    # 被淘汰的标的历史已丢 ⇒ 重新观测只能从头攒证据，不沿用旧推进/旧起点
+    assert gate.observe("600519.SH", "200", "90", now=200, market_open=True) is Liveness.UNPROVEN
 
 
 def test_invalid_bounds_rejected():

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, time as dtime
 from enum import Enum
@@ -71,17 +72,23 @@ class _Observation:
     items: float | None
     advanced_at: float | None  # 最近一次累计量推进的**单调**时刻
     seen_at: float  # 首次观测的单调时刻（作为"该有推进"的起点）
+    last_seen: float  # 最近一次观测（满了按它淘汰最久未见的标的）
 
 
 class TqLivenessGate:
-    """进程内、有界的跨轮观测器；容量满时对未知标的**不声称新鲜**（fail-closed）。"""
+    """进程内、有界的跨轮观测器。
+
+    容量满时**淘汰最久未见的标的**，而不是拒绝新标的：全市场扫描（数千标的）会
+    轻易超过上限，若拒绝新标的，门禁对绝大多数票静默失效。被淘汰标的重新出现时
+    回到 UNPROVEN（本就不声称新鲜），代价只是重新计时。
+    """
 
     def __init__(self, *, max_symbols: int, stale_seconds: float):
         if max_symbols < 1 or not math.isfinite(stale_seconds) or stale_seconds <= 0:
             raise ValueError("invalid liveness bounds")
         self._limit = max_symbols
         self._stale_seconds = float(stale_seconds)
-        self._rows: dict[str, _Observation] = {}
+        self._rows: OrderedDict[str, _Observation] = OrderedDict()
         self._lock = threading.Lock()
 
     @property
@@ -110,18 +117,20 @@ class TqLivenessGate:
         with self._lock:
             prev = self._rows.get(symbol)
             if prev is None:
-                if len(self._rows) >= self._limit:
-                    return Liveness.UNPROVEN
-                self._rows[symbol] = _Observation(vol, ticks, None, now)
+                while len(self._rows) >= self._limit:
+                    self._rows.popitem(last=False)  # 淘汰最久未见的
+                self._rows[symbol] = _Observation(vol, ticks, None, now, now)
                 return Liveness.UNPROVEN
             if now < prev.seen_at or vol < prev.volume or (
                 ticks is not None and prev.items is not None and ticks < prev.items
             ):
                 # 时钟回拨或计数器重置（客户端重启）：旧证据作废，重新计时。
-                self._rows[symbol] = _Observation(vol, ticks, None, now)
+                self._rows[symbol] = _Observation(vol, ticks, None, now, now)
+                self._rows.move_to_end(symbol)
                 return Liveness.UNPROVEN
             advanced_at = now if vol > prev.volume else prev.advanced_at
-            self._rows[symbol] = _Observation(vol, ticks, advanced_at, prev.seen_at)
+            self._rows[symbol] = _Observation(vol, ticks, advanced_at, prev.seen_at, now)
+            self._rows.move_to_end(symbol)
         if advanced_at is not None and now - advanced_at <= self._stale_seconds:
             return Liveness.FRESH
         if not market_open:
