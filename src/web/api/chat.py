@@ -1244,7 +1244,7 @@ async def _run_tool_loop_inner(
                                  if m.get("role") in ("tool", "system"))
                 if text and _ev:
                     _au = _audit_numbers(text, _ev, _utext)
-                    text = _audit_annotate(_row_audit_record(text, _au), _au)
+                    text = _row_audit_record(_audit_annotate(text, _au), _au)
                 if _round == 0 and _stock_q:
                     # 2026-10-21 幻觉事故：问两只票却零工具作答、还编出别的股票 → 一律不给结论
                     logger.warning("零工具作答已拦截(问的是具体标的): %s", _utext[:40])
@@ -1287,7 +1287,7 @@ async def _run_tool_loop_inner(
                              if m.get("role") in ("tool", "system"))
             if _sum and _ev:
                 _au = _audit_numbers(_sum, _ev, _utext)
-                _sum = _audit_annotate(_row_audit_record(_sum, _au), _au)
+                _sum = _row_audit_record(_audit_annotate(_sum, _au), _au)
             yield ("done" if stream else "text"), (_sum or budget_exhausted_hint())
     except Exception as e:
         logger.error(f"AI {'流式' if stream else ''}对话失败: {e}")

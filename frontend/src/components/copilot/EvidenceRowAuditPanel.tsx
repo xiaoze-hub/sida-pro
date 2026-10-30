@@ -22,13 +22,15 @@ export default function EvidenceRowAuditPanel({ audit }: { audit: EvidenceRowAud
       <ul className="mt-1 space-y-1">
         {rows.map((r) => (
           <li key={r.index} className="text-muted-foreground">
-            <span className="text-foreground">{r.text.length > 60 ? `${r.text.slice(0, 60)}…` : r.text}</span>
+            <span className="text-foreground" title={r.text}>
+              {r.text.length > 60 ? `${r.text.slice(0, 60)}…` : r.text}
+            </span>
             <span className="ml-1 text-role-risk">→ {r.unverified.join('、')}</span>
           </li>
         ))}
       </ul>
       {audit.truncated ? (
-        <p className="mt-1 text-role-watch">依据行过多，仅核对了前 24 行。</p>
+        <p className="mt-1 text-role-watch">依据行过多，仅核对了前 {audit.rows.length} 行。</p>
       ) : null}
       <p className="mt-1 text-muted-foreground">
         只核对数字是否出现在本轮工具返回与注入上下文里；不判断来源归属，也不断言编造。请以工具原始读数为准。

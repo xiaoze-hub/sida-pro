@@ -43,10 +43,19 @@ describe('EvidenceRowAuditPanel', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('超长依据行截断展示，不撑破气泡', () => {
+  it('超长依据行截断展示，但 title 里保留全量原文', () => {
     const long = '维度'.repeat(60)
     render(<EvidenceRowAuditPanel audit={audit([{ index: 0, text: long, claims: ['1.0%'], unverified: ['1.0%'] }])} />)
-    expect(screen.getByText(new RegExp(`${'维度'.repeat(30)}`))).toBeTruthy()
+    const cell = screen.getByText(new RegExp(`${'维度'.repeat(30)}`))
+    expect(cell.getAttribute('title')).toBe(long)
+  })
+
+  it('截断提示的数字来自实际行数，不硬编码后端上限', () => {
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      index: i, text: `读数 ${i}.5 元`, claims: [`${i}.5元`], unverified: [`${i}.5元`],
+    }))
+    render(<EvidenceRowAuditPanel audit={{ ...audit(rows, 5), truncated: true }} />)
+    expect(screen.getByText(/仅核对了前 5 行/)).toBeTruthy()
   })
 })
 

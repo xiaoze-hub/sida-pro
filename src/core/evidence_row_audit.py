@@ -22,17 +22,24 @@ from __future__ import annotations
 
 import re
 
+from src.core.number_audit import _norm as _norm_token
 from src.core.number_audit import audit as _audit_numbers
 from src.core.number_audit import extract_claims
 
 # 段落标记：与前端 `answer-sections.ts` 的边界词对齐 —— 依据段后面常跟【数据缺口】【免责】
 # 这类段而不带【预案】/【口径】，边界认窄了会把它们折进依据、当"依据行"报给用户。
 _BOUNDARY_WORDS = (
-    "结论", "依据", "预案", "口径", "风险", "操作",
-    "数据缺口", "缺口", "缺失数据", "免责", "置信度", "来源",
-    "统计", "说明", "备注", "局限", "下一步",
+    "结论", "依据", "证据", "预案", "口径", "风险", "操作",
+    "数据缺口", "缺口", "数据缺失", "缺失数据", "免责", "置信度", "来源",
+    "统计", "说明", "备注", "局限", "下一步", "追问",
 )
-_MARKER_RE = re.compile(r"【\s*(" + "|".join(_BOUNDARY_WORDS) + r")[^】]*】")
+_WORDS_ALT = "|".join(_BOUNDARY_WORDS)
+# 两种真实写法都要认：`【依据】`（中文方括号段）与 `### 数据缺口`（markdown 标题分节）。
+_MARKER_RE = re.compile(
+    r"(?:【\s*(?P<bracket>" + _WORDS_ALT + r")[^】]*】)"
+    r"|(?:^#{1,6}\s*(?P<heading>" + _WORDS_ALT + r")[^\n]*(?:\n|$))",
+    re.M,
+)
 # annotate 追加的对账脚注：正文之外的附言，不能当成依据行再核一遍（否则把脚注自己报回来）。
 _FOOTER_RE = re.compile(r"^(?:-{3,}|⚠️|数字对账)")
 _TABLE_SEP_RE = re.compile(r"^\|?[\s:|-]+\|[\s:|-]*$")
@@ -42,18 +49,22 @@ _HEADER_CELLS = {"维度", "关键读数", "口径", "项", "读数", "来源", 
 MAX_ROWS = 24
 
 
+def _norm(token: str) -> float | None:
+    return _norm_token(token)
+
+
 def _strip(text: str) -> str:
     out = text.replace("**", "").replace("__", "").replace("`", "")
     return _DECORATION_RE.sub("", out).strip()
 
 
 def evidence_section(answer: str) -> str | None:
-    """取出【依据】段落原文；没有该段返回 None（不拿全文凑）。"""
+    """取出依据段落原文（`【依据】` 或 `### 依据`）；没有该段返回 None（不拿全文凑）。"""
     if not answer:
         return None
     marks = list(_MARKER_RE.finditer(answer))
     for i, m in enumerate(marks):
-        if m.group(1) == "依据":
+        if (m.group("bracket") or m.group("heading")) == "依据":
             end = marks[i + 1].start() if i + 1 < len(marks) else len(answer)
             return answer[m.end():end]
     return None
@@ -83,7 +94,9 @@ def rows_from_audit(audit_result: dict, section: str) -> tuple[list[dict], bool]
     容差判定完全由 `number_audit.audit` 完成，这里只做归属（同一 token 出现在两行就两行都标）。
     返回 `(rows, truncated)`。
     """
-    bad = {str(t) for t in (audit_result.get("unverified") or [])}
+    raw_bad = [str(t) for t in (audit_result.get("unverified") or [])]
+    bad_tokens = set(raw_bad)
+    bad_values = {v for v in (_norm(t) for t in raw_bad) if v is not None}
     rows: list[dict] = []
     truncated = False
     for index, text in enumerate(split_rows(section)):
@@ -97,37 +110,6 @@ def rows_from_audit(audit_result: dict, section: str) -> tuple[list[dict], bool]
             "index": index,
             "text": text,
             "claims": claims,
-            "unverified": [c for c in claims if c in bad],
+            "unverified": [c for c in claims if c in bad_tokens or _norm(c) in bad_values],
         })
     return rows, truncated
-
-
-def audit_rows(answer: str, evidence: str, question: str = "") -> dict:
-    """逐条依据行核对数字出处（便利入口：内部**只调一次** `number_audit.audit`）。
-
-    返回:
-      {
-        "basis": "number_containment",   # 只做"数字出现在本轮取数里"的核对
-        "rows": [{"index", "text", "claims", "unverified"}],   # 仅含有硬数字的行
-        "checked": 参与核对的数字个数,
-        "unverified_total": 查不到出处的数字个数,
-        "reason": 没有依据段/没有数字时的原因（内部诊断用，正常为空串）,
-        "truncated": 依据行超过 MAX_ROWS 时为 True,
-      }
-    """
-    section = evidence_section(answer or "")
-    if section is None:
-        return {
-            "basis": "number_containment", "rows": [], "checked": 0,
-            "unverified_total": 0, "reason": "no_evidence_section", "truncated": False,
-        }
-    result = _audit_numbers(section, evidence or "", question or "") if section.strip() else {}
-    rows, truncated = rows_from_audit(result, section)
-    return {
-        "basis": "number_containment",
-        "rows": rows,
-        "checked": len({c for r in rows for c in r["claims"]}),
-        "unverified_total": sum(len(r["unverified"]) for r in rows),
-        "reason": "" if rows else "no_numeric_rows",
-        "truncated": truncated,
-    }

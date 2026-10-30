@@ -79,7 +79,7 @@ def take(content: str | None = None) -> str | None:
     """
     value = _PENDING.get()
     _PENDING.set(None)
-    if not value or not value.get("rows"):
+    if not value or not any(r.get("unverified") for r in (value.get("rows") or [])):
         return None
     if content is not None and value.get("source_sha256") != _fingerprint(content):
         logger.debug("对账对应的正文与落库正文不一致，丢弃对账结果")

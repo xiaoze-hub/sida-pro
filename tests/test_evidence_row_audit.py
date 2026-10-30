@@ -1,5 +1,21 @@
 """依据行数字对账：只陈述"这个读数在本轮取数里找不到"，不归属来源、不判编造。"""
-from src.core.evidence_row_audit import audit_rows, evidence_section, split_rows
+from src.core.evidence_row_audit import evidence_section, rows_from_audit, split_rows
+from src.core.number_audit import audit as audit_numbers
+
+
+def audit_rows(answer, evidence, question=""):
+    """测试用薄封装：口径与生产一致（整段回答算一次 audit，再按依据段切行）。"""
+    section = evidence_section(answer)
+    if section is None:
+        return {"rows": [], "truncated": False, "unverified_total": 0, "reason": "no_evidence_section"}
+    rows, truncated = rows_from_audit(audit_numbers(answer, evidence, question), section)
+    return {
+        "rows": rows,
+        "truncated": truncated,
+        "checked": len({c for r in rows for c in r["claims"]}),
+        "unverified_total": sum(len(r["unverified"]) for r in rows),
+        "reason": "" if rows else "no_numeric_rows",
+    }
 
 ANSWER = """## 【结论】
 神剑股份现价 9.65 元，跌 -0.52%。
@@ -42,7 +58,6 @@ def test_table_header_and_separator_are_not_rows():
 
 def test_row_with_unsupported_number_is_flagged_alone():
     out = audit_rows(ANSWER, EVIDENCE)
-    assert out["basis"] == "number_containment"
     flagged = [r for r in out["rows"] if r["unverified"]]
     assert len(flagged) == 1
     assert flagged[0]["unverified"] == ["1.23亿"]
@@ -117,22 +132,19 @@ def test_sections_after_evidence_are_boundaries_too():
     assert rows == ["现价 9.65 元"]
 
 
-def test_only_one_audit_call_for_many_rows(monkeypatch):
-    """派生集合是 O(池²)：逐行各调一次会让一次回答付 N 倍代价（实测 12 行 = 3.8s）。"""
+def test_row_split_never_reaudits(monkeypatch):
+    """派生集合是 O(池²)：切行时只做 token 归属，绝不再调 audit（实测 12 行 = 3.8s）。"""
     import src.core.evidence_row_audit as mod
 
-    calls = []
-    real = mod._audit_numbers
+    def boom(*a, **k):
+        raise AssertionError("切行阶段不该再调 audit")
 
-    def counting(*a, **k):
-        calls.append(1)
-        return real(*a, **k)
-
-    monkeypatch.setattr(mod, "_audit_numbers", counting)
+    monkeypatch.setattr(mod, "_audit_numbers", boom)
     rows = "\n".join(f"| 维度{i} | 读数 {i}.5 元 | 腾讯 |" for i in range(12))
     answer = "## 【依据】\n| 维度 | 关键读数 | 口径 |\n| --- | --- | --- |\n" + rows
-    audit_rows(answer, "读数 1.5 元 2.5 元 3.5 元")
-    assert len(calls) == 1
+    section = evidence_section(answer)
+    out, truncated = rows_from_audit({"unverified": ["1.5元", "2.5元"]}, section)
+    assert len(out) == 12 and truncated is False
 
 
 def test_rows_are_capped_and_reported_as_truncated(monkeypatch):
@@ -142,3 +154,29 @@ def test_rows_are_capped_and_reported_as_truncated(monkeypatch):
     rows = "\n".join(f"- 读数 {i}.5 元" for i in range(10))
     out = audit_rows("## 【依据】\n" + rows, "读数 1.5 元")
     assert len(out["rows"]) == 3 and out["truncated"] is True
+
+
+def test_emphasis_markers_do_not_hide_a_flagged_number():
+    """整段 audit 看到的是 `**9.65** 元`(token 9.65)，行内去掉装饰后是 `9.65元` —— 按数值对齐。"""
+    answer = "## 【依据】\n- 现价 **9.65** 元"
+    out = audit_rows(answer, "昨收 9.70 元")
+    assert out["unverified_total"] == 1
+
+
+def test_heading_style_sections_are_recognised():
+    """真实输出也常用 `### 依据` / `### 数据缺口` 分节。"""
+    answer = "### 依据\n- 现价 9.65 元\n\n### 数据缺口\n- 北向资金缺失 3.33 亿"
+    section = evidence_section(answer)
+    assert section is not None and "3.33" not in section
+    assert split_rows(section) == ["现价 9.65 元"]
+
+
+def test_annotated_footer_does_not_create_rows(monkeypatch):
+    """生产是在 annotate 之后才切行：脚注必须被剔除，否则会把脚注数字再报一次。"""
+    annotated = (
+        "## 【依据】\n- 现价 9.65 元\n\n---\n"
+        "⚠️ 数字对账：1 个数字（8.88亿）未在工具返回中找到出处"
+    )
+    section = evidence_section(annotated)
+    rows = split_rows(section or "")
+    assert rows == ["现价 9.65 元"]

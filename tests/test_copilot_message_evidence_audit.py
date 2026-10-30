@@ -146,3 +146,30 @@ def test_to_payload_shape_is_shared_by_history_and_done():
     finally:
         db.close()
         engine.dispose()
+
+
+def test_production_order_annotate_then_stage_survives_footnote():
+    """生产顺序必须是 annotate → staging：落库正文就是 annotate 之后的文本。
+
+    反过来（先 staging 再 annotate）指纹永远对不上，行级对账会被 100% 丢弃 ——
+    最该暴露的那行反而什么都不报，这是审查抓到的真 bug。
+    """
+    from src.core.number_audit import annotate, audit
+
+    au = audit(ANSWER, EVIDENCE)
+    final = annotate(ANSWER, au)          # 追加"⚠️ 数字对账…"脚注，正文被改写
+    assert final != ANSWER
+
+    record_with_audit(final, au)           # 正确顺序
+    raw = take(final)
+    assert raw and json.loads(raw)["unverified_total"] == 1
+
+    record_with_audit(ANSWER, au)          # 旧顺序：staging 拿的是改写前正文
+    assert take(final) is None, "正文对不上就必须丢弃（宁可没有，也不贴错）"
+
+
+def test_all_supported_rows_are_not_persisted():
+    """全部数字都对得上 ⇒ 不落库（NULL 表示未计算；落一份全 0 的存根就是假装饰）。"""
+    answer = "## 【依据】\n- 现价 9.65 元"
+    record(answer, "现价 9.65")
+    assert take(answer) is None
