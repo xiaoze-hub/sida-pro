@@ -23,6 +23,11 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from marketdata.symbol import Market, Symbol
+from marketdata.vendors.tq_liveness import (
+    Liveness,
+    TqLivenessGate,
+    cn_session_state,
+)
 from marketdata.types import (
     Bar,
     BoardCapitalFlow,
@@ -478,6 +483,54 @@ DEGRADE_SNAPSHOT_INTERRUPTED = "quote_snapshot_interrupted"
 DEGRADE_SNAPSHOT_BUDGET = "quote_snapshot_budget"
 # 本批返回的标的数 < 请求数（任何原因）：**部分批次**，引擎/下游必须标缺、不得当完整。
 DEGRADE_BATCH_PARTIAL = "quote_batch_partial"
+# 交易时段内快照累计量/笔数超过窗口不推进 ⇒ 判陈旧并从本批剔除（见 vendors/tq_liveness.py）。
+DEGRADE_SNAPSHOT_STALE = "quote_snapshot_stale"
+
+# 活性观测窗口：交易时段内累计成交量/笔数超过这么久不推进 ⇒ 判陈旧。
+# 90s 量级 = 活跃票数个 tick 间隔，又不至于把冷门票的正常停顿判成旧价；
+# 误判的代价只是整批多问一次腾讯（正确数据），漏判的代价是拿旧价当现价。
+QUOTE_LIVENESS_STALE_S = 90.0
+# 观测表上限：满了淘汰最久未见的标的（全市场扫描远超此数，拒绝新标的会让门禁静默失效）。
+QUOTE_LIVENESS_MAX_SYMBOLS = 512
+
+# 进程级观测器：跨请求累积"这只票的累计量有没有在涨"（单次快照证不了）。
+_LIVENESS = TqLivenessGate(
+    max_symbols=QUOTE_LIVENESS_MAX_SYMBOLS, stale_seconds=QUOTE_LIVENESS_STALE_S
+)
+
+
+def _reset_liveness() -> None:
+    """测试用：清空进程级观测（跨用例残留会伪判陈旧）。"""
+    _LIVENESS.reset()
+
+
+def _snapshot_stale(
+    code: str,
+    snapshot: dict,
+    *,
+    now: float | None = None,
+    session: str | None = None,
+    market_open: bool | None = None,
+) -> bool:
+    """交易时段内累计量/笔数超窗不推进 ⇒ 陈旧；非交易时段一律不判。
+
+    只比"有没有推进"，绝不比价格：价格变化可以只来自挂单撤改。
+    `now`/`session`/`market_open` 只在测试里注入，生产由单调时钟与墙钟派生。
+    """
+    if session is None or market_open is None:
+        wall_session, wall_open = cn_session_state(datetime.now(ZoneInfo("Asia/Shanghai")))
+        session = wall_session if session is None else session
+        market_open = wall_open if market_open is None else market_open
+    state = _LIVENESS.observe(
+        code,
+        snapshot.get("Volume"),
+        snapshot.get("ItemNum"),
+        now=time.monotonic() if now is None else now,
+        session=session,
+        market_open=market_open,
+    )
+    return state is Liveness.STALE
+
 
 # 日线熔断（进程内；失败后有界退避，窗口内不再打日线）。跨线程/多用户共享，
 # 所以状态只在**传输层**失败上变更（单标的错误/应用层 ErrorId 只计数，不改全局态）。
@@ -1028,6 +1081,19 @@ class TqQuoteVendor(QuoteVendor):
             #    "少一只"的结果会被引擎判 partial（见 Response.partial），绝不冒充完整。
             if now is None or now <= 0:
                 _bump(DEGRADE_NOW_ZERO)
+                continue
+            if _snapshot_stale(sym.code, v):
+                # 交易时段内累计量/笔数长时间不推进 ⇒ 这份快照是"最后已知值"，
+                # 不是这一刻的价（网关切不到订阅，见 tq_liveness 模块头）。
+                # 剔除该票 ⇒ 本批变 partial ⇒ 引擎整批换下一个源，绝不逐票拼源。
+                _bump(DEGRADE_SNAPSHOT_STALE)
+                from marketdata.log_throttle import log_failure
+
+                log_failure(
+                    logger, "tq:quote-stale",
+                    f"[tq] 快照在交易时段内无推进, 判陈旧并降级: {tqc} "
+                    f"(Volume={v.get('Volume')}, ItemNum={v.get('ItemNum')})",
+                )
                 continue
             pending.append((sym, tqc, now, v))
         if not pending:
