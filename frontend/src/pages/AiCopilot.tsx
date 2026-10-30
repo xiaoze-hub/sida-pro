@@ -18,6 +18,8 @@ import { chatApi, type ChatStreamResult } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import InlineSteps from '@/components/copilot/InlineSteps'
+import { AmbientGrid } from '@/components/motion/AmbientGrid'
+import { StreamingBeam } from '@/components/motion/StreamingBeam'
 import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
 import { buildAnswerTrace, type AnswerTrace } from '@/lib/copilot/evidence-provenance'
 import {
@@ -1773,10 +1775,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           ) : null}
 
           {!msgs.length ? (
-            <div data-testid="copilot-empty-hero" className="flex min-h-full flex-col items-center justify-center gap-4 text-center">
+            <div data-testid="copilot-empty-hero" className="relative flex min-h-full flex-col items-center justify-center gap-4 text-center overflow-hidden py-8">
+              <AmbientGrid />
               {/* 形象只有这一个：静态柔光只做层次，不做脉冲 —— 空态没有"正在发生的事"，动效不伪造状态。
                   只用一个光晕 + 一个形象，避免与下方示例抢焦点。 */}
-              <div className="relative flex items-center justify-center">
+              <div className="relative flex items-center justify-center z-10">
                 <span
                   aria-hidden="true"
                   className="pointer-events-none absolute left-1/2 top-1/2 h-[176px] w-[176px] -translate-x-1/2 -translate-y-1/2 rounded-full"
@@ -1784,11 +1787,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                 />
                 <AssistantAvatar size={presentation === 'mini' ? 88 : 112} label="数智参谋" />
               </div>
-              <p className="max-w-[440px] px-2 text-pretty text-[12px] leading-relaxed text-muted-foreground">{PAGE_EMPTY_HINT}</p>
+              <p className="max-w-[440px] px-2 text-pretty text-[12px] leading-relaxed text-muted-foreground z-10">{PAGE_EMPTY_HINT}</p>
               {/* 2026-10-29 重排：原来 2x2 网格的第 4 格是"最近一次"，没记录时是一张写着
                   "还没有运行记录"的**死入口**，而且它与工具条「过程」面板是同一份数据的两个入口。
                   现在三条示例并排（窄屏竖排），最近一次降级为一行真实回链，没有记录就整块不渲染。 */}
-              <ol data-testid="copilot-empty-examples" className="grid w-full max-w-[660px] list-none grid-cols-1 gap-2 sm:grid-cols-3">
+              <ol data-testid="copilot-empty-examples" className="grid w-full max-w-[660px] list-none grid-cols-1 gap-2 sm:grid-cols-3 z-10">
                 {PAGE_EMPTY_EXAMPLES.map((x, i) => (
                   <li key={x} className="flex min-w-0">
                     <button
@@ -1811,7 +1814,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                 <a
                   href={`/copilot/runs/${lastRun.run_id}`}
                   data-testid="copilot-empty-last-run"
-                  className="flex w-full max-w-[660px] items-center gap-1.5 px-1 text-[12px] text-muted-foreground hover:text-foreground"
+                  className="flex w-full max-w-[660px] items-center gap-1.5 px-1 text-[12px] text-muted-foreground hover:text-foreground z-10"
                 >
                   <span className="shrink-0">最近一次</span>
                   <span className="shrink-0" aria-hidden="true">·</span>
@@ -1825,9 +1828,13 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             </div>
           ) : null}
 
-          {msgs.map((m, i) => (
-            <div key={`${m.role}-${i}`} className={m.role === 'user' ? 'flex justify-end text-right' : 'flex items-start gap-3'} data-assistant-bubble={m.role === 'assistant' ? i === lastAssistantIndex && !awaitingAssistant ? 'latest' : 'history' : undefined}>
-              {m.role === 'assistant' && (i === lastAssistantIndex && !awaitingAssistant ? <AssistantAvatar size={40} busy={streamingAssistant || backgroundPending} /> : <span className="w-10 shrink-0" aria-hidden="true" />)}
+          {msgs.map((m, i) => {
+            const isLatestAssistant = m.role === 'assistant' && i === lastAssistantIndex && !awaitingAssistant
+            const liveDraft = m.role === 'assistant' && streamingAssistant && i === msgs.length - 1
+            return (
+            <div key={`${m.role}-${i}`} className={m.role === 'user' ? 'flex justify-end text-right' : 'flex items-start gap-3'} data-assistant-bubble={m.role === 'assistant' ? isLatestAssistant ? 'latest' : 'history' : undefined}>
+              {m.role === 'assistant' && (isLatestAssistant ? <AssistantAvatar size={40} busy={streamingAssistant || backgroundPending} /> : <span className="w-10 shrink-0" aria-hidden="true" />)}
+              <StreamingBeam active={liveDraft} className={m.role === 'assistant' ? 'min-w-0 flex-1' : ''}>
               <div
                 className={'card-surface ' + (
  m.role === 'user'
@@ -1943,8 +1950,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                   }}
                 />
               </div>
+              </StreamingBeam>
             </div>
-          ))}
+            )
+          })}
 
           {/* 首字未到、但已经在取数：齐套度条先挂在流尾（气泡一出现就挪进气泡顶部）。
               能认出工具的 stage 不进这条 spinner —— 它已经被上面的 pill 取代。 */}
