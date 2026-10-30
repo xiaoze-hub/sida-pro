@@ -622,6 +622,9 @@ export const mergePortfolioQuotes = (
   let grandCost = 0
   let grandPricedCost = 0
   let grandUnpricedCost = 0
+  // 盈亏只使用有行情且成本已知的同一篮子；总市值包含成本未知持仓，不能用于该计算。
+  let grandPnlValue = 0
+  let grandPnlCost = 0
   let grandCostUnknown = 0
   let grandPositions = 0
   let grandPriced = 0
@@ -816,6 +819,8 @@ export const mergePortfolioQuotes = (
     grandCost += accCost
     grandPricedCost += accPricedCost
     grandUnpricedCost += accUnpricedCost
+    grandPnlValue += accPnlValue
+    grandPnlCost += accPnlCost
     grandCostUnknown += accCostUnknown
     grandPositions += positionsCount
     grandPriced += accPriced
@@ -857,8 +862,8 @@ export const mergePortfolioQuotes = (
   if (grandPriced > 0) {
     grandMarketValueOut = grandMarketValue
     // 与单账户同款：成本未知的持仓不进盈亏篮子。
-    grandPnl = grandPricedCost > 0 ? grandMarketValue - grandPricedCost : null
-    grandPnlPct = grandPnl !== null && grandPricedCost > 0 ? (grandPnl / grandPricedCost) * 100 : null
+    grandPnl = grandPnlCost > 0 ? grandPnlValue - grandPnlCost : null
+    grandPnlPct = grandPnl !== null && grandPnlCost > 0 ? (grandPnl / grandPnlCost) * 100 : null
     grandDailyPnlOut = grandDailyObserved > 0 ? round2(grandDailyPnl) : null
     grandDailyBasketOut = grandDailyObserved > 0 ? round2(grandDailyBasket) : null
   } else if (grandPositions > 0) {

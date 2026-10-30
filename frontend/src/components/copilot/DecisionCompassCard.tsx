@@ -165,7 +165,7 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
             {/* 现价点位 (若有) */}
             {currentPct != null && (
               <div
-                className="absolute h-3.5 w-3.5 -ml-1.5 rounded-full bg-role-watch z-10"
+                className="absolute h-3.5 w-3.5 -ml-1.5 rounded-full bg-role-watch z-10 shadow-[0_0_8px_hsl(var(--role-watch))]"
                 style={{ left: `${currentPct}%` }}
                 title={`现价: ${safeFixed(currentPrice, 2)}`}
               />

@@ -464,7 +464,7 @@ export function AnswerCard({
                       <span
                         data-testid="copilot-evidence-source"
                         title={`模型自述的口径（未核验）：${source}`}
-                        className="ml-1 whitespace-nowrap rounded border border-border px-1 text-[12px] text-muted-foreground"
+                        className="ml-1 whitespace-nowrap rounded border border-border px-1 text-[12px] text-muted-foreground transition-colors hover:border-role-watch/50"
                       >
                         <span className="text-foreground">{source}</span>
                         <span className="ml-1">· 模型自述·未核验</span>
@@ -480,9 +480,9 @@ export function AnswerCard({
               type="button"
               onClick={() => setExpanded((v) => !v)}
               data-testid="copilot-answer-expand"
-              className="mt-1.5 flex items-center gap-1 text-[12px] text-role-watch hover:underline"
+              className="mt-1.5 flex items-center gap-1 text-[12px] text-role-watch hover:underline cursor-pointer group"
             >
-              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
               {expanded
                 ? ANSWER_EVIDENCE_COLLAPSE
                 : `${ANSWER_EVIDENCE_EXPAND_PREFIX} ${hiddenCount} ${ANSWER_EVIDENCE_EXPAND_SUFFIX}`}
