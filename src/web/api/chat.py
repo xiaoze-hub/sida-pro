@@ -218,7 +218,6 @@ async def _exec_thsdk_tool(name: str, args: dict) -> str:
     return await tool.handler(None, args, None)
 
 
-
 def _build_watchlist_context(db: Session, user: User | None = None) -> str:
     """构建用户自选股列表。
 
