@@ -5,5 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "1.5.0",
+    "@radix-ui/react-tooltip": "^1.4.1"
   }
 }

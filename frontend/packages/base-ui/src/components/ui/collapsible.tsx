@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { Slot } from '@radix-ui/react-slot'
 import { cn } from '../../cn'
 
 interface CollapsibleContextValue {
@@ -55,21 +56,19 @@ export const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, Collapsibl
 
     const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
       onClick?.(e)
-      if (!ctx.disabled) {
+      if (!ctx.disabled && !e.defaultPrevented) {
         ctx.setOpen((prev) => !prev)
       }
     }
 
     if (asChild && React.isValidElement(children)) {
-      return React.cloneElement(children as React.ReactElement<any>, {
-        ref,
-        onClick: (e: any) => {
-          (children as any).props?.onClick?.(e)
-          handleClick(e)
-        },
-        'data-state': ctx.open ? 'open' : 'closed',
-        'aria-expanded': ctx.open,
-      })
+      return (
+        <Slot ref={ref} {...props} className={className} onClick={handleClick}
+          data-state={ctx.open ? 'open' : 'closed'} aria-expanded={ctx.open}
+          aria-disabled={ctx.disabled || undefined}>
+          {children}
+        </Slot>
+      )
     }
 
     return (
@@ -107,9 +106,9 @@ export const CollapsibleContent = React.forwardRef<HTMLDivElement, CollapsibleCo
       <div
         ref={ref}
         data-state={ctx.open ? 'open' : 'closed'}
+        hidden={!ctx.open}
         className={cn(
-          'grid transition-[grid-template-rows] duration-200 ease-out animate-in fade-in-0',
-          ctx.open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+          ctx.open ? 'grid transition-[grid-template-rows] duration-200 ease-out animate-in fade-in-0 grid-rows-[1fr]' : 'hidden',
           className
         )}
         {...props}
