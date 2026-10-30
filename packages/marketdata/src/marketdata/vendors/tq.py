@@ -26,7 +26,7 @@ from marketdata.symbol import Market, Symbol
 from marketdata.vendors.tq_liveness import (
     Liveness,
     TqLivenessGate,
-    cn_continuous_session_open,
+    cn_session_state,
 )
 from marketdata.types import (
     Bar,
@@ -505,23 +505,32 @@ def _reset_liveness() -> None:
 
 
 def _snapshot_stale(
-    code: str, snapshot: dict, *, now: float | None = None, market_open: bool | None = None
+    code: str,
+    snapshot: dict,
+    *,
+    now: float | None = None,
+    session: str | None = None,
+    market_open: bool | None = None,
 ) -> bool:
     """交易时段内累计量/笔数超窗不推进 ⇒ 陈旧；非交易时段一律不判。
 
     只比"有没有推进"，绝不比价格：价格变化可以只来自挂单撤改。
-    `now`/`market_open` 只在测试里注入，生产走真实单调时钟与墙钟。
+    `now`/`session`/`market_open` 只在测试里注入，生产由单调时钟与墙钟派生。
     """
-    if market_open is None:
-        market_open = cn_continuous_session_open(datetime.now(ZoneInfo("Asia/Shanghai")))
+    if session is None or market_open is None:
+        wall_session, wall_open = cn_session_state(datetime.now(ZoneInfo("Asia/Shanghai")))
+        session = wall_session if session is None else session
+        market_open = wall_open if market_open is None else market_open
     state = _LIVENESS.observe(
         code,
         snapshot.get("Volume"),
         snapshot.get("ItemNum"),
         now=time.monotonic() if now is None else now,
+        session=session,
         market_open=market_open,
     )
     return state is Liveness.STALE
+
 
 # 日线熔断（进程内；失败后有界退避，窗口内不再打日线）。跨线程/多用户共享，
 # 所以状态只在**传输层**失败上变更（单标的错误/应用层 ErrorId 只计数，不改全局态）。
