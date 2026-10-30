@@ -27,6 +27,9 @@ export default function EvidenceRowAuditPanel({ audit }: { audit: EvidenceRowAud
           </li>
         ))}
       </ul>
+      {audit.truncated ? (
+        <p className="mt-1 text-role-watch">依据行过多，仅核对了前 24 行。</p>
+      ) : null}
       <p className="mt-1 text-muted-foreground">
         只核对数字是否出现在本轮工具返回与注入上下文里；不判断来源归属，也不断言编造。请以工具原始读数为准。
       </p>

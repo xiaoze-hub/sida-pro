@@ -87,3 +87,58 @@ def test_derived_product_is_not_flagged():
     evidence = "成本 10.402 现价 9.65 持仓 4600 股 价差 0.752"
     out = audit_rows(answer, evidence)
     assert out["unverified_total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 审查意见回归（2026-10-30 第二轮）
+# ---------------------------------------------------------------------------
+
+def test_footer_from_annotate_is_not_counted_as_an_evidence_row():
+    """annotate 会在结尾追加"⚠️ 数字对账：…（9.65、1.23亿）"。它若落进依据段，
+    就会被当成一条依据行再核一遍，把脚注自己报回来。"""
+    answer = (
+        "## 【依据】\n- 现价 9.65 元\n\n---\n"
+        "⚠️ 数字对账：2 个数字（1.23亿、4.56亿）未在工具返回中找到出处"
+    )
+    rows = split_rows(evidence_section(answer) or "")
+    assert rows == ["现价 9.65 元"]
+    out = audit_rows(answer, "现价 9.65")
+    assert out["unverified_total"] == 0, "脚注里的数字不许被重新计入"
+
+
+def test_sections_after_evidence_are_boundaries_too():
+    """真实回答常用【数据缺口】【免责】收尾，不带【预案】/【口径】；它们不是依据行。"""
+    answer = (
+        "## 【依据】\n- 现价 9.65 元\n\n"
+        "## 【数据缺口】\n- 北向资金缺失 3.33 亿\n\n"
+        "## 【免责】\n- 以上不构成投资建议，回撤 8.88% 风险自负\n"
+    )
+    rows = split_rows(evidence_section(answer) or "")
+    assert rows == ["现价 9.65 元"]
+
+
+def test_only_one_audit_call_for_many_rows(monkeypatch):
+    """派生集合是 O(池²)：逐行各调一次会让一次回答付 N 倍代价（实测 12 行 = 3.8s）。"""
+    import src.core.evidence_row_audit as mod
+
+    calls = []
+    real = mod._audit_numbers
+
+    def counting(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(mod, "_audit_numbers", counting)
+    rows = "\n".join(f"| 维度{i} | 读数 {i}.5 元 | 腾讯 |" for i in range(12))
+    answer = "## 【依据】\n| 维度 | 关键读数 | 口径 |\n| --- | --- | --- |\n" + rows
+    audit_rows(answer, "读数 1.5 元 2.5 元 3.5 元")
+    assert len(calls) == 1
+
+
+def test_rows_are_capped_and_reported_as_truncated(monkeypatch):
+    import src.core.evidence_row_audit as mod
+
+    monkeypatch.setattr(mod, "MAX_ROWS", 3)
+    rows = "\n".join(f"- 读数 {i}.5 元" for i in range(10))
+    out = audit_rows("## 【依据】\n" + rows, "读数 1.5 元")
+    assert len(out["rows"]) == 3 and out["truncated"] is True

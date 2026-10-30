@@ -1936,9 +1936,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                             />
                           )
                         })()}
-                        {m.role === 'assistant' && m.evidenceAudit ? (
-                          <EvidenceRowAuditPanel audit={m.evidenceAudit} />
-                        ) : null}
+                        {m.evidenceAudit ? <EvidenceRowAuditPanel audit={m.evidenceAudit} /> : null}
                       </>
                     )
                   })()

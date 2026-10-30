@@ -9,7 +9,7 @@ const audit = (rows: EvidenceRowAudit['rows'], total = 1): EvidenceRowAudit => (
   rows,
   checked: 3,
   unverified_total: total,
-  reason: '',
+  truncated: false,
 })
 
 describe('EvidenceRowAuditPanel', () => {

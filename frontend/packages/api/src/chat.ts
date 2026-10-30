@@ -14,8 +14,8 @@ export interface EvidenceRowAudit {
   rows: Array<{ index: number; text: string; claims: string[]; unverified: string[] }>
   checked: number
   unverified_total: number
-  /** 没有依据段/没有数字时的原因；正常为空串。 */
-  reason: string
+  /** 依据行超过后端上限（24 行）时只核了前 N 行。 */
+  truncated?: boolean
 }
 
 export interface ChatMessage {
