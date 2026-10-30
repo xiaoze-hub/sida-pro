@@ -107,7 +107,10 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
       <div className="flex items-center justify-between border-b border-border bg-s3 px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1.5 rounded-md bg-role-watch/20 px-2 py-0.5 font-medium text-role-watch text-[12px]">
-            <span className="h-1.5 w-1.5 rounded-full bg-role-watch" />
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-role-watch opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-role-watch" />
+            </span>
             {biasLabel}
           </span>
           {selfRating != null ? (
@@ -165,7 +168,7 @@ export const DecisionCompassCard: React.FC<DecisionCompassProps> = ({
             {/* 现价点位 (若有) */}
             {currentPct != null && (
               <div
-                className="absolute h-3.5 w-3.5 -ml-1.5 rounded-full bg-role-watch z-10"
+                className="absolute h-3.5 w-3.5 -ml-1.5 rounded-full bg-role-watch z-10 shadow-[0_0_8px_hsl(var(--role-watch))]"
                 style={{ left: `${currentPct}%` }}
                 title={`现价: ${safeFixed(currentPrice, 2)}`}
               />
