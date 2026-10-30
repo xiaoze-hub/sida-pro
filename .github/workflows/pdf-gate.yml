@@ -49,9 +49,16 @@ jobs:
           set -euo pipefail
           PKGS="libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk"
           CACHE="${{ runner.temp }}/apt-debs"
-          # 已经具备就立刻退出：runner 偶尔预装，别白装一遍
-          if dpkg -s libpango-1.0-0 >/dev/null 2>&1; then
-            echo "pango 已就绪，跳过安装"
+          # 仅检查 pango 会误把缺少 CJK 字体的 runner 判为就绪。
+          all_installed=1
+          for pkg in $PKGS; do
+            if [ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null || true)" != "install ok installed" ]; then
+              echo "缺少依赖: $pkg"
+              all_installed=0
+            fi
+          done
+          if [ "$all_installed" = 1 ]; then
+            echo "PDF 系统库和中文字体均已就绪"
             exit 0
           fi
           if [ "${{ steps.aptcache.outputs.cache-hit }}" = "true" ] && ls "$CACHE"/*.deb >/dev/null 2>&1; then
