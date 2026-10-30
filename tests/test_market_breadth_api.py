@@ -31,9 +31,9 @@ def _row(d, up, down, flat, syms, temp):
 
 def _call(monkeypatch, rows=None, boom=False):
     import src.db.session as dbs
+    from src.web.api.market_data import market_breadth_history
 
     monkeypatch.setattr(dbs, "SessionLocal", lambda: _FakeSession(rows, boom))
-    from src.web.api.market_data import market_breadth_history
 
     return asyncio.run(market_breadth_history(days=60))
 

@@ -106,35 +106,38 @@ class DBLogHandler(logging.Handler):
         self._timer.start()
 
     def _timed_flush(self):
-        with self._lock:
-            self._flush_unlocked()
+        self._flush()
         self._start_flush_timer()
 
     def _threaded_flush(self):
         """后台线程刷库(调用方不等待)。"""
-        with self._lock:
-            self._flush_unlocked()
+        self._flush()
 
-    def _flush_unlocked(self):
-        if not self._buffer:
-            return
-        entries = self._buffer[:]
-        self._buffer.clear()
+    def _flush(self):
+        # 数据库操作可能产生日志；不能持 buffer 锁调用，否则与 Handler.lock 反序死锁。
+        with self._lock:
+            if not self._buffer:
+                return
+            entries = self._buffer[:]
+            self._buffer.clear()
 
         try:
             db = SessionLocal()
             try:
                 db.bulk_insert_mappings(LogEntry, entries)
                 db.commit()
-                self._last_flush_at = datetime.now(timezone.utc)
-                self._flush_count += 1
-                if self._flush_count % CLEANUP_EVERY_FLUSHES == 0:
+                with self._lock:
+                    self._last_flush_at = datetime.now(timezone.utc)
+                    self._flush_count += 1
+                    cleanup = self._flush_count % CLEANUP_EVERY_FLUSHES == 0
+                if cleanup:
                     self._cleanup(db)
             finally:
                 db.close()
         except Exception as e:
-            self._flush_errors += 1
-            self._last_flush_error = str(e)[:500]
+            with self._lock:
+                self._flush_errors += 1
+                self._last_flush_error = str(e)[:500]
 
     def _cleanup(self, db):
         """Retention policy: prioritize preserving business logs."""
@@ -176,6 +179,5 @@ class DBLogHandler(logging.Handler):
     def close(self):
         if self._timer:
             self._timer.cancel()
-        with self._lock:
-            self._flush_unlocked()
+        self._flush()
         super().close()
