@@ -113,7 +113,7 @@ def test_pdf_endpoint_returns_full_detail_content():
     db = _mem_db()
     try:
         db.add(AnalysisHistory(
-            agent_name="tradingagents", stock_symbol="601238",
+            agent_name="tradingagents", stock_symbol="601238", user_id="1",
             analysis_date="2026-06-20", title="【深度】广汽集团(601238):持有",
             content="# 摘要\n\n**持有**",  # content 是精简版,不含下面这些
             raw_data={
@@ -125,9 +125,15 @@ def test_pdf_endpoint_returns_full_detail_content():
             },
         ))
         db.commit()
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as denied:
+            agents.export_tradingagents_analysis_pdf(
+                stock_symbol="601238", analysis_date="2026-06-20", db=db,
+                user=MagicMock(id=2, role="member"))
+        assert denied.value.status_code == 404
         resp = agents.export_tradingagents_analysis_pdf(
             stock_symbol="601238", analysis_date="2026-06-20", db=db,
-            user=MagicMock(id=1))
+            user=MagicMock(id=1, role="member"))
         assert resp.media_type == "application/pdf"
         assert bytes(resp.body[:4]) == b"%PDF"
         assert "attachment" in resp.headers["content-disposition"]
@@ -158,7 +164,7 @@ def test_pdf_endpoint_404_when_missing():
         with pytest.raises(HTTPException) as ei:
             agents.export_tradingagents_analysis_pdf(
                 stock_symbol="000000", analysis_date="2026-06-20", db=db,
-                user=MagicMock(id=1))
+                user=MagicMock(id=1, role="member"))
         assert ei.value.status_code == 404
     finally:
         db.close()

@@ -24,6 +24,8 @@ on:
 jobs:
   gates:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 75
     steps:
       - name: Checkout
@@ -59,7 +61,7 @@ jobs:
   build:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     needs: gates
     permissions:
       contents: read
