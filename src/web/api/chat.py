@@ -25,6 +25,8 @@ from src.core.copilot_memory import memory_block
 from src.core.portfolio_scope import paper_position_user_scope_clause, user_scope_positions
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
+from src.core.llm_context import bind_chat
+from src.web.api.copilot_message_link import verified_current_run_id
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
 from src.core.copilot_quota import enforce as enforce_copilot_quota, error_message as quota_error_message
@@ -1332,11 +1334,9 @@ async def _run_tool_loop(
             conversation_id=conversation_id, symbol=_REQ_BOUND.get(), recipe=recipe,
         )
 
-
 def _sse_event(event: str, data: dict) -> str:
     """格式化一条 SSE 事件(event + data 两行, 空行结尾)。"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
 
 
 def _iter_text_chunks(text: str, size: int = 6):
@@ -2022,7 +2022,7 @@ def get_conversation(
             {
                 "id": m.id,
                 "role": m.role,
-                "content": m.content,
+                "content": m.content, "run_id": m.run_id if m.role == "assistant" else None,
                 "created_at": str(m.created_at or ""),
             }
             for m in messages
@@ -2131,6 +2131,7 @@ async def send_message(
         ai_client = _get_ai_client(db, conv.ai_model_id, user=user)
         ai_response = ""
         _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
+        bind_chat(user_id=getattr(user, 'id', None))
         try:
             async for _kind, payload in _run_tool_loop(
                 ai_client, messages_for_ai, db, user=user,
@@ -2145,7 +2146,7 @@ async def send_message(
         assistant_msg = ChatMessage(
             conversation_id=conversation_id,
             role="assistant",
-            content=ai_response,
+            content=ai_response, run_id=verified_current_run_id(db, user, conversation_id),
         )
         db.add(assistant_msg)
 
@@ -2158,7 +2159,7 @@ async def send_message(
             "id": assistant_msg.id,
             "role": "assistant",
             "content": assistant_msg.content,
-            "created_at": str(assistant_msg.created_at or ""),
+            "created_at": str(assistant_msg.created_at or ""), "run_id": assistant_msg.run_id,
         }
     finally:
         db.close()
@@ -2247,6 +2248,7 @@ async def send_message_stream(
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
             _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
+            bind_chat(user_id=getattr(user, 'id', None))
             try:
                 async for kind, payload in _run_tool_loop(
                     ai_client, messages_for_ai, db, user=user, stream=True,
@@ -2271,7 +2273,7 @@ async def send_message_stream(
             assistant_msg = ChatMessage(
                 conversation_id=conversation_id,
                 role="assistant",
-                content=ai_response,
+                content=ai_response, run_id=verified_current_run_id(db, user, conversation_id),
             )
             db.add(assistant_msg)
 
@@ -2284,7 +2286,7 @@ async def send_message_stream(
                 "id": assistant_msg.id,
                 "role": "assistant",
                 "content": assistant_msg.content,
-                "created_at": str(assistant_msg.created_at or ""),
+                "created_at": str(assistant_msg.created_at or ""), "run_id": assistant_msg.run_id,
             })
         except Exception as e:
             logger.error(f"流式对话失败: {e}")

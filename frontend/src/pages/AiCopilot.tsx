@@ -119,6 +119,8 @@ interface PendingAttachment {
 export type Msg = {
   role: 'user' | 'assistant'
   content: string
+  /** 服务端持久化的本轮 run；历史消息或未成功记录时为空。 */
+  runId?: string | null
   /** 用户消息附带的文件名（气泡里显示小 chip，正文不重复文件名太长）。 */
   attachment?: { name: string; isImage: boolean }
   /** 助手消息定稿时固化的证据齐套度（流中长在页面上，答完留在回答顶部可回看）。 */
@@ -146,15 +148,16 @@ export function upsertStreamDraft(msgs: Msg[], content: string): Msg[] {
  * - 只有终稿（拒答那条路一个 delta 都没发）→ 补一条气泡；
  * - 终稿和草稿都空 → 一条都不铺（空 ≠ 0/0，别造假空气泡）。
  */
-export function settleStreamBubble(msgs: Msg[], content: string, incomplete = false): Msg[] {
+export function settleStreamBubble(msgs: Msg[], content: string, incomplete = false, runId?: string | null): Msg[] {
   const last = msgs[msgs.length - 1]
   const text = content || (last?.role === 'assistant' ? last.content : '')
   if (!text) return msgs
   const flag = incomplete ? true : undefined
+  const link = runId !== undefined ? { runId } : {}
   if (last?.role === 'assistant') {
-    return [...msgs.slice(0, -1), { ...last, content: text, incomplete: flag }]
+    return [...msgs.slice(0, -1), { ...last, content: text, incomplete: flag, ...link }]
   }
-  return [...msgs, { role: 'assistant', content: text, incomplete: flag }]
+  return [...msgs, { role: 'assistant', content: text, incomplete: flag, ...link }]
 }
 
 /** 提问归一化：与 `lib/copilot/match-run.ts` 同口径（空白折叠、去掉发送时带的 @ 前缀）。 */
@@ -196,9 +199,8 @@ function sameQuestion(a: string, b: string): boolean {
  *  - **切会话**时 `useCopilotRuns` 在新请求回来前还留着旧会话的列表，而提问文本又可能相同。
  *    因此候选 run 的 `conversation_id` 必须**明确等于**当前会话；为 null 或他会话一律不挂。
  *
- * 关联方式仍然只是「提问文本匹配」：消息表没有 run_id（`chat_messages` 只有
- * id/conversation_id/role/content/created_at），所以调用方只能拿它作推断，
- * UI 必须标未验证。回答正文里出现 run_id 字符串不算凭证 —— 那是模型写的字。
+ * 新消息以服务端持久化的 run_id 精确关联；旧消息没有该字段时仍为文本推断，
+ * 推断必须标未验证。run 不在本会话时绝不回退匹配。
  */
 export function resolveRunForMessage(
   msgs: Msg[],
@@ -209,6 +211,8 @@ export function resolveRunForMessage(
   // 没有会话就没有可归属的 run（新会话未落库时也不挂）
   if (conversationId == null) return null
   if (!Array.isArray(runs) || runs.length === 0) return null
+  const storedRunId = msgs[index]?.role === 'assistant' ? msgs[index].runId : null
+  if (storedRunId) return runs.find((r) => r.run_id === storedRunId && r.conversation_id === conversationId) ?? null
   const question = questionOfMessage(msgs, index)
   if (!question) return null
 
@@ -232,7 +236,7 @@ export function resolveRunForMessage(
  *
  * 纪律：
  *  - 草稿（`live`）不挂：终稿没到，回答与证据都还没定稿；
- *  - 关联只可能是 `question-text` / `none`，**永不**传 `run-id`（页面拿不到服务端关联）；
+ *  - 关联优先服务端保存的 run_id；历史消息只能文本推断，未验证；
  *  - steps 只取「候选 run 自己的」详情（`details[run_id]`），没加载就是 null，
  *    不拿 `run.tool_calls` 冒充；
  *  - readiness 只收**这条消息定稿时固化的**齐套度：页面上正在跑的 stage 流属于当前草稿，
@@ -254,8 +258,8 @@ export function buildMessageAnswerTrace(input: {
   return buildAnswerTrace({
     run,
     steps,
-    // 唯一来源是提问文本匹配；没有 run 时 buildAnswerTrace 会归 none
-    association: 'question-text',
+    // 仅服务端持久化的 run_id 可标为已验证；历史文本匹配仍为推断。
+    association: run && input.msgs[input.index]?.runId === run.run_id ? 'run-id' : 'question-text',
     readiness: input.readiness ?? null,
   })
 }
@@ -739,7 +743,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setMsgs(
       rows
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content, runId: m.role === 'assistant' ? m.run_id : null })),
     )
     setError(null)
     setChartCtx(ownCtx)
@@ -1234,7 +1238,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               const text = typeof msg?.content === 'string' && msg.content ? msg.content : assistant
               assistant = text
               setStage('')
-              setMsgs((m) => settleStreamBubble(m, text, false))
+              setMsgs((m) => settleStreamBubble(m, text, false, typeof msg?.run_id === 'string' ? msg.run_id : null))
             },
             onError: (e) => {
               if (!isCurrent()) return
@@ -1911,6 +1915,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                           return (
                             <InlineSteps
                               run={r}
+                              association={m.runId === r.run_id ? 'run-id' : 'question-text'}
                               steps={det?.steps as never}
                               loading={runsState.detailLoading}
                               failed={Boolean(runsState.error) && !det}

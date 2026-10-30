@@ -84,7 +84,7 @@ const stepsFor = (tools: string[]): CopilotRunStep[] =>
   tools.map((tool, i) => ({ seq: i + 1, tool, ok: true, elapsed_ms: 100, args: null, result_digest: null }))
 
 /** 每次用例自定：会话 → messages；以及 /copilot/runs 的返回。 */
-let convMessages: Record<number, { role: 'user' | 'assistant'; content: string }[]>
+let convMessages: Record<number, { role: 'user' | 'assistant'; content: string; run_id?: string | null }[]>
 let runList: CopilotRunRow[]
 /** 某些会话的 runs 请求一直不回来（模拟切会话瞬间旧列表还在）。 */
 let hangingRunsFor: number[]
@@ -165,6 +165,19 @@ async function ask(question: string) {
 const traces = () => screen.queryAllByTestId('copilot-evidence-trace')
 
 describe('⓪ 关联解析：没有明确归属就返回 null', () => {
+  it('服务端 run_id 精确匹配，即使提问相同也不按文本或顺序猜', () => {
+    const msgs = [{ role: 'user', content: '看看 600111' }, { role: 'assistant', content: answer('一'), runId: 'run-a' }] as Msg[]
+    const runs = [run('run-b', 9, '看看 600111'), run('run-a', 9, '看看 600111')]
+    expect(resolveRunForMessage(msgs, runs, 1, 9)?.run_id).toBe('run-a')
+    const trace = buildMessageAnswerTrace({ msgs, runs, details: {}, index: 1, conversationId: 9, live: false })
+    expect(trace?.association).toBe('run-id')
+    expect(trace?.verified).toBe(true)
+  })
+  it('服务端 run_id 不存在或属于别的会话时不可回退文本匹配', () => {
+    const msgs = [{ role: 'user', content: '看看 600111' }, { role: 'assistant', content: answer('一'), runId: 'missing' }] as Msg[]
+    expect(resolveRunForMessage(msgs, [run('other', 9, '看看 600111')], 1, 9)).toBeNull()
+    expect(resolveRunForMessage(msgs, [run('missing', 10, '看看 600111')], 1, 9)).toBeNull()
+  })
   const msgs: Msg[] = [
     { role: 'user', content: '看看 600111' },
     { role: 'assistant', content: answer('第一轮') },
@@ -213,6 +226,19 @@ describe('⓪ 关联解析：没有明确归属就返回 null', () => {
 })
 
 describe('① run 关联：页面只按提问文本匹配，永不自证 run-id', () => {
+  it('历史消息按服务端 run_id 精确恢复，不按同问的排序猜', async () => {
+    convMessages[9] = [
+      { role: 'user', content: '看看 600111' },
+      { role: 'assistant', content: answer('精确关联'), run_id: 'run-old' },
+    ]
+    runList = [run('run-new', 9, '看看 600111'), run('run-old', 9, '看看 600111')]
+    render(<AiCopilotPage />)
+    await openConversation(9)
+    await waitFor(() => expect(traces().length).toBe(1))
+    expect(traces()[0].getAttribute('data-association')).toBe('run-id')
+    expect(traces()[0].textContent).toContain('run-old')
+    expect(traces()[0].textContent).toContain('无逐句来源')
+  })
   it('文本匹配成功 → 标「未验证」，并写明逐句来源不可查', async () => {
     convMessages[9] = [
       { role: 'user', content: '看看 600111' },

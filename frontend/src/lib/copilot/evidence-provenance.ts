@@ -7,12 +7,9 @@ import type { ReadinessState } from '@/lib/copilot/evidence-readiness'
  * 为什么这个模块这么「吝啬」：这一层的价值全在「说得出凭据」，一旦编一条就等于
  * 给用户一个假的核验结论。硬事实（基线 1537a081 核对源码）：
  *
- *  1. `chat_messages`（`src/db/models.py:1384`）只有 id / conversation_id / role /
- *     content / created_at —— **没有 run_id**。SSE `done` 帧（`src/web/api/chat.py:2284`）
- *     同样只回 `{id, role, content, created_at}`。
- *     ⇒ 「这条回答 ↔ 哪一轮 run」目前**只能按提问文本匹配**（`lib/copilot/match-run.ts`），
- *       那是推断。`association` 因此分成 `run-id`（服务端给的）与 `question-text`（推断）。
- *       推断来的关联永远 `verified: false`，UI 必须把「未验证」写在脸上。
+ *  1. 新的 `chat_messages.run_id` 由服务端校验用户与会话后持久化，SSE done 和历史详情回传。
+ *     旧数据仍无可靠关联：文本推断只能标记 `question-text`，永远不能声称已验证。
+ *     `run-id` 仅表示回答与整次 run 的关联可核验，不表示逐句来源可核验。
  *
  *  2. 依据（逐句）与工具结果之间**没有任何 ID / 序号关联**：`CopilotRunStep`
  *     只有 seq / tool / ok / elapsed_ms / args / result_digest，回答正文从不引用 step。

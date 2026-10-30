@@ -148,6 +148,26 @@ def _parse_sse_events(lines):
     return events
 
 
+def test_same_question_twice_has_distinct_persisted_run_ids(client):
+    token = _login(client)
+    conv_id = _create_conversation(client, token)
+    headers = {"Authorization": f"Bearer {token}"}
+    run_ids = []
+    for _ in range(2):
+        with client.stream("POST", f"/api/chat/conversations/{conv_id}/messages/stream", headers=headers, json={"content": "流式测试 相同问题"}) as response:
+            assert response.status_code == 200
+            events = _parse_sse_events(list(response.iter_lines()))
+        done = [payload for event, payload in events if event == 'done']
+        assert len(done) == 1
+        assert done[0]['run_id']
+        run_ids.append(done[0]['run_id'])
+    assert len(set(run_ids)) == 2
+    detail = client.get(f"/api/chat/conversations/{conv_id}", headers=headers)
+    assert detail.status_code == 200
+    messages = detail.json()['data']['messages']
+    assert [m['run_id'] for m in messages if m['role'] == 'assistant'] == run_ids
+
+
 def test_stream_events_arrive_incrementally(client):
     """SSE 事件逐条到达: stage(工具提示) → delta(打字机) → done(落库)。"""
     token = _login(client)
