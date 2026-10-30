@@ -14,10 +14,11 @@ import {
   type PendingAction,
 } from '@/lib/copilot/api'
 import { ChevronRight, Loader2, PanelLeftClose, PanelLeftOpen, Paperclip, Send, Sparkles, X } from 'lucide-react'
-import { chatApi, type ChatStreamResult } from '@sida/api'
+import { chatApi, type ChatStreamResult, type EvidenceRowAudit } from '@sida/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import InlineSteps from '@/components/copilot/InlineSteps'
+import EvidenceRowAuditPanel from '@/components/copilot/EvidenceRowAuditPanel'
 import { AmbientGrid } from '@/components/motion/AmbientGrid'
 import { StreamingBeam } from '@/components/motion/StreamingBeam'
 import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
@@ -121,6 +122,8 @@ export type Msg = {
   content: string
   /** 服务端持久化的本轮 run；历史消息或未成功记录时为空。 */
   runId?: string | null
+  /** 服务端落库的依据行数字核对（旧消息为 null，不补）。 */
+  evidenceAudit?: EvidenceRowAudit | null
   /** 用户消息附带的文件名（气泡里显示小 chip，正文不重复文件名太长）。 */
   attachment?: { name: string; isImage: boolean }
   /** 助手消息定稿时固化的证据齐套度（流中长在页面上，答完留在回答顶部可回看）。 */
@@ -148,12 +151,15 @@ export function upsertStreamDraft(msgs: Msg[], content: string): Msg[] {
  * - 只有终稿（拒答那条路一个 delta 都没发）→ 补一条气泡；
  * - 终稿和草稿都空 → 一条都不铺（空 ≠ 0/0，别造假空气泡）。
  */
-export function settleStreamBubble(msgs: Msg[], content: string, incomplete = false, runId?: string | null): Msg[] {
+export function settleStreamBubble(
+  msgs: Msg[], content: string, incomplete = false, runId?: string | null,
+  evidenceAudit?: EvidenceRowAudit | null,
+): Msg[] {
   const last = msgs[msgs.length - 1]
   const text = content || (last?.role === 'assistant' ? last.content : '')
   if (!text) return msgs
   const flag = incomplete ? true : undefined
-  const link = runId !== undefined ? { runId } : {}
+  const link = runId !== undefined ? { runId, evidenceAudit: evidenceAudit ?? null } : {}
   if (last?.role === 'assistant') {
     return [...msgs.slice(0, -1), { ...last, content: text, incomplete: flag, ...link }]
   }
@@ -743,7 +749,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setMsgs(
       rows
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content, runId: m.role === 'assistant' ? m.run_id : null })),
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant', content: m.content,
+          runId: m.role === 'assistant' ? m.run_id : null,
+          evidenceAudit: m.role === 'assistant' ? m.evidence_audit ?? null : null,
+        })),
     )
     setError(null)
     setChartCtx(ownCtx)
@@ -1238,7 +1248,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               const text = typeof msg?.content === 'string' && msg.content ? msg.content : assistant
               assistant = text
               setStage('')
-              setMsgs((m) => settleStreamBubble(m, text, false, typeof msg?.run_id === 'string' ? msg.run_id : null))
+              setMsgs((m) => settleStreamBubble(
+                m, text, false, typeof msg?.run_id === 'string' ? msg.run_id : null,
+                msg?.evidence_audit ?? null,
+              ))
             },
             onError: (e) => {
               if (!isCurrent()) return
@@ -1923,6 +1936,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                             />
                           )
                         })()}
+                        {m.role === 'assistant' && m.evidenceAudit ? (
+                          <EvidenceRowAuditPanel audit={m.evidenceAudit} />
+                        ) : null}
                       </>
                     )
                   })()

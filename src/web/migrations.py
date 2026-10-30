@@ -6402,6 +6402,14 @@ def _m234_chat_message_run_id(conn: Connection) -> None:
     _add_column_if_missing(conn, "chat_messages", "run_id", "ALTER TABLE chat_messages ADD COLUMN run_id VARCHAR(36)")
 
 
+def _m235_chat_message_evidence_audit(conn: Connection) -> None:
+    """依据行数字对账结果（JSON 文本）。旧消息不回填：没有取数原文就无法重算，留 NULL。"""
+    _add_column_if_missing(
+        conn, "chat_messages", "evidence_audit",
+        "ALTER TABLE chat_messages ADD COLUMN evidence_audit TEXT",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6631,6 +6639,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(232, "annotation_instrument", _m232_annotation_instrument),
     Migration(233, "audit_detail_text", _m233_audit_detail_text),
     Migration(234, "chat_message_run_id", _m234_chat_message_run_id),
+    Migration(235, "chat_message_evidence_audit", _m235_chat_message_evidence_audit),
 )
 
 

@@ -201,6 +201,14 @@ react-day-picker 9→10、Radix 全家桶主版本、vite 5→8（rolldown 内�
 
 ## 2026-10-30
 
+### feat-依据行数字对账(逐条依据标注本轮取数里没有的读数)
+
+- 现有数字对账只给整段回答加一句脚注，用户还得自己回正文找是哪一行。新增 `src/core/evidence_row_audit.py`：切出【依据】段、按行（表格行/列表项/段落行）逐条复用既有 `number_audit` 容差核对，返回每行的 `claims` 与查不到出处的 `unverified`。
+- 结果只在本轮生成时算得出（需要工具返回原文），因此新增迁移 v235 `chat_messages.evidence_audit`（TEXT，可空）：旧消息不回填、留 NULL 表示"未计算"，不是"零问题"。落库与 run_id 一起收进 `src/web/api/copilot_message_save.py`（chat.py 有 2310 行硬护栏，逻辑不再外扩），按请求上下文（ContextVar）传递、取一次即清空。
+- 前端新增 `EvidenceRowAuditPanel`：只在真有查不到的数字时出现，逐行列"依据行 → 本轮取数里未出现的数字"，文案明确只核对"数字是否出现在本轮工具返回与注入上下文”，不判断来源归属、不断言编造；全部对上则不渲染（不摆"0 问题"装饰）。
+- 边界（不夸大）：这**不是**逐句来源溯源 —— 链路仍没有「依据行 → step」的关联，`evidence-provenance.ts` 的 `rowLevel` 保持 false；也未改 SYSTEM_PROMPT/回答模板。
+- 验证：后端定向 85 项通过（含 chat 流、run 关联、数字对账、chat.py 行数护栏）；隔离 PostgreSQL + TimescaleDB 上 v235 幂等、旧行留 NULL、JSON 读写 7 项通过；前端 `tsc --noEmit`、ESLint、UI 规则通过，新增组件用例 6 项通过。
+
 ### fix-TQ快照活性门禁
 
 - 盘中"部分快照不刷新"定成因（网关只读实测）：`get_market_snapshot` 无任何 time/date 字段，且订阅类方法在网关上**不存在**（`get_subscribe_hq_stock_list`/`get_subscribe_stock_list` 等返回 `-32601 MCP不支持该tqcenter方法名`，而 `get_stock_list`/`get_market_data` 只回参数错误 ⇒ 方法名有效）。我们查不到也建不了订阅，未订阅标的会返回"最后已知值 + ErrorId=0"，看起来完全正常。
