@@ -163,6 +163,11 @@ export function AccountsSection() {
                   {formatMoney(account.total_pnl)}
                   <span className="text-[12px] md:text-[12px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${signOf(account.total_pnl_pct)}${safeFixed(account.total_pnl_pct)}%`})</span>
                 </div>
+                {(account.cost_unknown_positions ?? 0) > 0 && (
+                  <div className="text-[12px] text-muted-foreground">
+                    仅成本已知持仓；{account.cost_unknown_positions} 条成本未知
+                  </div>
+                )}
               </div>
               <div className="text-left md:text-right">
                 <div
