@@ -47,6 +47,41 @@ def test_first_observation_is_unproven_not_fresh():
     assert gate.observe("600519.SH", "100", "50", now=100, market_open=True) is Liveness.UNPROVEN
 
 
+def test_tick_count_advance_also_proves_fresh():
+    """成交量不变但逐笔笔数推进 ⇒ 有新的逐笔事件，报价已不是上一份（撤单/挂单）。"""
+    gate = TqLivenessGate(max_symbols=4, stale_seconds=60)
+    gate.observe("600519.SH", "100", "50", now=100, market_open=True)
+    assert gate.observe("600519.SH", "100", "51", now=110, market_open=True) is Liveness.FRESH
+    # 两者都不动、且超窗 ⇒ 仍旧判陈旧
+    assert gate.observe("600519.SH", "100", "51", now=180, market_open=True) is Liveness.STALE
+
+
+def test_new_session_restarts_the_clock_instead_of_judging_stale():
+    """午休/隔夜的空档不得算进"多久没推进"：开盘第一轮必须重新计时。
+
+    真实时序（生产 90s 窗口）：11:29:50 推进 → 午休两小时（不判）→ 13:00:00 同一份
+    成交量。若按墙钟 elapsed 直接算，13:00 开盘第一轮就 5410s > 90 ⇒ 整批判陈旧。
+    """
+    gate = TqLivenessGate(max_symbols=4, stale_seconds=90)
+    assert gate.observe("600519.SH", "100", "50", now=100, market_open=True) is Liveness.UNPROVEN
+    assert gate.observe("600519.SH", "200", "90", now=150, market_open=True) is Liveness.FRESH
+    # 11:30–13:00 休市：一律不判
+    assert gate.observe("600519.SH", "200", "90", now=200, market_open=False) is Liveness.NOT_APPLICABLE
+    assert gate.observe("600519.SH", "200", "90", now=5000, market_open=False) is Liveness.NOT_APPLICABLE
+    # 13:00 开盘第一轮：从此刻重新计时（不是拿 5000-150 去判）
+    assert gate.observe("600519.SH", "200", "90", now=5001, market_open=True) is Liveness.UNPROVEN
+    assert gate.observe("600519.SH", "200", "90", now=5090, market_open=True) is Liveness.UNPROVEN
+    # 开盘后确实一直没推进、超过窗口 ⇒ 这才判陈旧
+    assert gate.observe("600519.SH", "200", "90", now=5092, market_open=True) is Liveness.STALE
+
+
+def test_auction_then_open_also_restarts():
+    """集合竞价（非连续竞价）观测到开盘：同样重新计时，不许拿竞价时段当基线。"""
+    gate = TqLivenessGate(max_symbols=4, stale_seconds=90)
+    assert gate.observe("600519.SH", "0", "0", now=100, market_open=False) is Liveness.NOT_APPLICABLE
+    assert gate.observe("600519.SH", "0", "0", now=1600, market_open=True) is Liveness.UNPROVEN
+
+
 def test_volume_advance_proves_fresh():
     gate = TqLivenessGate(max_symbols=4, stale_seconds=60)
     gate.observe("600519.SH", "100", "50", now=100, market_open=True)

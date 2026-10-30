@@ -17,6 +17,11 @@
 1. **首次观测 = UNPROVEN**：不声称新鲜，也不冤枉成陈旧；
 2. **只认累计量/笔数的推进**：价格变化不能证明有新成交（挂单撤改同样改价）；
 3. **计数器回退/重置**（客户端盘中重启）⇒ 证据作废回 UNPROVEN，不得当成"有推进"。
+
+另外两条与时段相关的硬规则：
+4. **休市时间不计入"多久没推进"**：新交易时段（午休后/次日开盘）第一次观测一律重新计时，
+   否则开盘第一轮会把所有标的判陈旧；
+5. 非交易时段一律不判陈旧（收盘后不推进是正常的）。
 """
 from __future__ import annotations
 
@@ -70,9 +75,10 @@ def cn_continuous_session_open(moment: datetime) -> bool:
 class _Observation:
     volume: float
     items: float | None
-    advanced_at: float | None  # 最近一次累计量推进的**单调**时刻
-    seen_at: float  # 首次观测的单调时刻（作为"该有推进"的起点）
+    advanced_at: float | None  # 最近一次累计量/笔数推进的**单调**时刻
+    seen_at: float  # 本交易时段内首次观测的单调时刻（作为"该有推进"的起点）
     last_seen: float  # 最近一次观测（满了按它淘汰最久未见的标的）
+    was_open: bool  # 上次观测时是否处于连续竞价时段（用它识别"新时段开始"）
 
 
 class TqLivenessGate:
@@ -116,24 +122,45 @@ class TqLivenessGate:
             return Liveness.UNPROVEN
         with self._lock:
             prev = self._rows.get(symbol)
+            fresh_state = False
+            advanced_at: float | None = None
             if prev is None:
                 while len(self._rows) >= self._limit:
                     self._rows.popitem(last=False)  # 淘汰最久未见的
-                self._rows[symbol] = _Observation(vol, ticks, None, now, now)
-                return Liveness.UNPROVEN
-            if now < prev.seen_at or vol < prev.volume or (
+                self._rows[symbol] = _Observation(vol, ticks, None, now, now, market_open)
+                proven = False
+            elif now < prev.seen_at or vol < prev.volume or (
                 ticks is not None and prev.items is not None and ticks < prev.items
             ):
                 # 时钟回拨或计数器重置（客户端重启）：旧证据作废，重新计时。
-                self._rows[symbol] = _Observation(vol, ticks, None, now, now)
+                self._rows[symbol] = _Observation(vol, ticks, None, now, now, market_open)
                 self._rows.move_to_end(symbol)
-                return Liveness.UNPROVEN
-            advanced_at = now if vol > prev.volume else prev.advanced_at
-            self._rows[symbol] = _Observation(vol, ticks, advanced_at, prev.seen_at, now)
-            self._rows.move_to_end(symbol)
-        if advanced_at is not None and now - advanced_at <= self._stale_seconds:
-            return Liveness.FRESH
+                proven = False
+            elif market_open and not prev.was_open:
+                # 新交易时段开始（午休后/次日开盘）：**从此刻重新计时**。
+                # 否则休市那段时间会被算进"多久没推进"，开盘第一轮就把所有标的判死。
+                self._rows[symbol] = _Observation(vol, ticks, None, now, now, True)
+                self._rows.move_to_end(symbol)
+                proven = False
+            else:
+                # 累计成交量（手）或累计笔数任一推进都算证据：笔数推进说明有新的逐笔事件，
+                # 报价已经不是上一次那份（成交量不变只可能是撤单/挂单类事件）。
+                advanced = vol > prev.volume or (
+                    ticks is not None and prev.items is not None and ticks > prev.items
+                )
+                advanced_at = now if advanced else prev.advanced_at
+                self._rows[symbol] = _Observation(
+                    vol, ticks, advanced_at, prev.seen_at, now, market_open
+                )
+                self._rows.move_to_end(symbol)
+                fresh_state = advanced_at is not None and now - advanced_at <= self._stale_seconds
+                proven = True
         if not market_open:
+            # 非交易时段不下结论（不推进是正常的）；观测仍记录，供开盘后继续判定。
             return Liveness.NOT_APPLICABLE
-        baseline = advanced_at if advanced_at is not None else prev.seen_at
+        if not proven:
+            return Liveness.UNPROVEN
+        if fresh_state:
+            return Liveness.FRESH
+        baseline = advanced_at if advanced_at is not None else (prev.seen_at if prev else now)
         return Liveness.STALE if now - baseline > self._stale_seconds else Liveness.UNPROVEN
