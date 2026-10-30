@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@sida/base-ui'
 
 import type { CopilotRunRow } from '@/lib/copilot/api'
 import type { RunAssociation } from '@/lib/copilot/evidence-provenance'
@@ -96,22 +97,24 @@ export default function InlineSteps({
    */
   const runOk = !run.status || run.status === 'ok'
 
-  const toggle = () => {
-    const next = !open
-    setOpen(next)
-    if (next && !steps && !loading) onLoad?.()
-  }
-
   return (
-    <div className="mt-1.5" data-testid="inline-steps">
-      <button
-        type="button"
-        onClick={toggle}
+    <Collapsible
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next && !steps && !loading) onLoad?.()
+      }}
+      className="mt-1.5"
+      data-testid="inline-steps"
+    >
+      <CollapsibleTrigger
         className="flex items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
         data-testid="inline-steps-toggle"
-        aria-expanded={open}
       >
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <ChevronRight
+          size={12}
+          className={`transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+        />
         <span>过程</span>
         <span className="tabular-nums">
           · {toolCalls === null ? '-- 步' : `${toolCalls} 步`} · {formatElapsed(run.elapsed_ms)}
@@ -139,9 +142,9 @@ export default function InlineSteps({
         >
           {association === 'run-id' ? '· 已核验关联' : '· 未验证关联'}
         </span>
-      </button>
+      </CollapsibleTrigger>
 
-      {open && (
+      <CollapsibleContent>
         <div className="mt-1 border-l border-border pl-2" data-testid="inline-steps-list">
           {loading && !steps && (
             <div className="py-1 text-[12px] text-muted-foreground">步骤加载中…</div>
@@ -200,7 +203,7 @@ export default function InlineSteps({
             <div className="py-1 text-[12px] text-muted-foreground">本轮没有工具调用</div>
           )}
         </div>
-      )}
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
