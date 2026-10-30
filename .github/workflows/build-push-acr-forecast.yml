@@ -51,7 +51,8 @@ jobs:
           # 另补两条 --ignore 与跑绿的 test job 对齐(这两个文件在 CI 缺依赖/数据必挂)。
           # 300 秒仅防单个测试无限挂起；thread 模式输出线程栈后让进程非零退出，
           # 不允许忽略超时继续构建。75 分钟 job 上限用于兜住 fixture 或原生代码挂死。
-          python3 -m pytest tests/ -q -m "not network" --timeout=300 --timeout-method=thread \
+          # 显示当前用例并在首个错误停止，避免重复 fixture 失败拖满作业且无法定位。
+          python3 -m pytest tests/ -v -x -m "not network" --timeout=300 --timeout-method=thread \
             --ignore=tests/test_dark_l2_engine.py \
             --ignore=tests/test_thsdk_extended.py
 
