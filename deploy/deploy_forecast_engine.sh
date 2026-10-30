@@ -107,7 +107,12 @@ fi
 if [ "$SKIP_KRONOS" = "1" ]; then
   log "FORECAST_SKIP_KRONOS=1, 跳过 Kronos 安装"
 elif [ ! -d "$KRONOS_SRC_DIR/model" ]; then
-  log "⚠️ 未找到 Kronos 源码 $KRONOS_SRC_DIR/model, 跳过(引擎将 kronos_ready=false 并如实报 kronos_error)"
+  # 源码目录缺失有两种事实，必须分开说：目标已就绪(沿用现有) ≠ 模型会缺席。
+  if [ -d "$KRONOS_HOME/model" ]; then
+    log "ℹ️ 无可安装的 Kronos 源码 $KRONOS_SRC_DIR/model, 但目标 $KRONOS_HOME/model 已存在, 跳过安装(沿用现有源码)"
+  else
+    log "⚠️ Kronos 源码缺失($KRONOS_SRC_DIR/model 与 $KRONOS_HOME/model 都不存在): 引擎将以 kronos_ready=false 运行(5 票模型缺主模型), 需先放置源码再重跑"
+  fi
 else
   if [ "$STUB" = "1" ]; then
     log "[stub] 安装 Kronos 源码 $KRONOS_SRC_DIR/model → $KRONOS_HOME/model"
