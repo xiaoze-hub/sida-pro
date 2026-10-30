@@ -157,6 +157,11 @@ export function PortfolioSummarySection() {
             </span>
           </>
         }
+        sub={
+          (portfolio.total.cost_unknown_positions ?? 0) > 0
+            ? `仅计算成本已知持仓；${portfolio.total.cost_unknown_positions} 条成本未知`
+            : undefined
+        }
         tone={pnlTone(portfolio.total.total_pnl)}
         className="[&>div:nth-child(2)]:text-[20px]"
       />

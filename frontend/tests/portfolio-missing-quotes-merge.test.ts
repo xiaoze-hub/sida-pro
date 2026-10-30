@@ -92,6 +92,24 @@ function portfolio(accounts: { id: number; name: string; positions: unknown[] }[
 }
 
 describe('mergePortfolioQuotes · 未定价持仓不进分子分母', () => {
+  it('跨账户混合成本：未知成本仓位的市值不得被当作浮盈', () => {
+    const merged = mergePortfolioQuotes(
+      portfolio([
+        { id: 1, name: '已知成本', positions: [pos({ id: 1, symbol: '600111', cost_price: 10, quantity: 100 })] },
+        { id: 2, name: '未知成本', positions: [pos({ id: 2, symbol: '600519', cost_price: null, quantity: 100 })] },
+      ]),
+      {
+        'CN:600111': quote({ current_price: 12 }),
+        'CN:600519': quote({ current_price: 20 }),
+      },
+    )!
+    expect(merged.total.total_market_value).toBe(3200)
+    expect(merged.accounts[0].total_pnl).toBe(200)
+    expect(merged.accounts[1].total_pnl).toBeNull()
+    expect(merged.total.total_pnl).toBe(200)
+    expect(merged.total.total_pnl_pct).toBe(20)
+    expect(merged.total.cost_unknown_positions).toBe(1)
+  })
   it('一只都没有行情：汇总为「未知」(null)，不是 0，也不是 -100%', () => {
     const merged = mergePortfolioQuotes(
       portfolio([{ id: 1, name: '主账户', positions: [pos()] }]),
