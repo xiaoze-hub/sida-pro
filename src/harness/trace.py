@@ -302,12 +302,11 @@ def bind_llm_context(user, trace) -> None:
     吞掉所有异常：归因失败绝不能影响问答。不 unbind —— 请求任务结束上下文即销毁。
     """
     try:
-        from src.core.llm_context import bind
+        from src.core.llm_context import bind_chat
 
-        bind(
+        bind_chat(
             user_id=getattr(user, "id", None),
             run_id=(getattr(trace, "run_id", None) if trace is not None else None),
-            scene="chat",
         )
     except Exception:  # noqa: BLE001
         logger.debug("LLM 归因绑定失败(忽略)", exc_info=True)
