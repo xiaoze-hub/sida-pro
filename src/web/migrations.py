@@ -6397,6 +6397,11 @@ LIMIT 1
     conn.execute(text("ALTER TABLE audit_logs ALTER COLUMN detail TYPE TEXT"))
 
 
+def _m234_chat_message_run_id(conn: Connection) -> None:
+    """旧消息不回填；无法证明的关联保持 NULL。"""
+    _add_column_if_missing(conn, "chat_messages", "run_id", "ALTER TABLE chat_messages ADD COLUMN run_id VARCHAR(36)")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6625,6 +6630,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 见函数 docstring: 标注行补 instrument（000xxx 同号段只能用**类型**区分，不能靠代码猜）
     Migration(232, "annotation_instrument", _m232_annotation_instrument),
     Migration(233, "audit_detail_text", _m233_audit_detail_text),
+    Migration(234, "chat_message_run_id", _m234_chat_message_run_id),
 )
 
 

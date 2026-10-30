@@ -1393,6 +1393,7 @@ class ChatMessage(Base):
     conversation_id = Column(Integer, nullable=False)
     role = Column(String, nullable=False, default="user")  # user/assistant/system
     content = Column(Text, nullable=False, default="")
+    run_id = Column(String(36), nullable=True)  # 服务端验证的助手消息关联；历史未知留空
     created_at = Column(DateTime, server_default=func.now())
 
 

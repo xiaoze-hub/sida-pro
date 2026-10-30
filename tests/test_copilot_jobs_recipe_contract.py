@@ -428,6 +428,23 @@ class _Body:
 
 
 # ── H. 归属：别人的 run 行不能变成我的配方凭据（跨账号 recipe 错绑）──────────
+def test_后台新会话先绑定本人run再执行(Session, monkeypatch):
+    from src.web.api import chat as chat_api
+    _seed_user(Session, "u1")
+    _mk_run(Session, "r-async", user_id="u1")
+    seen = {}
+
+    async def fake_send(*, conversation_id, body, user):
+        seen['id'] = conversation_id
+        assert _row(Session, 'r-async').conversation_id == conversation_id
+
+    monkeypatch.setattr(chat_api, 'send_message', fake_send)
+    cid = asyncio.run(copilot_jobs.run_copilot_question(
+        user_id='u1', conversation_id=None, question='q', run_id='r-async',
+    ))
+    assert seen['id'] == cid
+
+
 def test_不许借用他人run行上记录的配方(Session, monkeypatch):
     """行上的 `recipe` 不只是一条备注，它是**执行凭据**：工具白名单、max_tool_calls、
     prompt_fragment 全由它决定（见 `harness.context.inject_recipe`）。
@@ -450,19 +467,13 @@ def test_不许借用他人run行上记录的配方(Session, monkeypatch):
 
     monkeypatch.setattr(chat_api, "send_message", fake_send)
 
-    asyncio.run(copilot_jobs.run_copilot_question(
-        user_id="u1", conversation_id=None, question="我只是拿到了一个 run_id",
-        run_id="r-belongs-to-u2",
-    ))
-
-    body = seen["body"]
-    agents = [m.value for m in (getattr(body, "mentions", None) or [])
-              if (getattr(m, "type", "") or "").lower() == "agent"]
-    assert agents == [], (
-        f"u1 借用了 u2 的 run 行配方 {agents}：跨账号配方错绑（recipe 是执行凭据，"
-        "不是展示字段）"
-    )
-    assert _row(Session, "r-belongs-to-u2").recipe == RECIPE, "读别人的行不许顺手改写它"
+    with pytest.raises(RuntimeError, match="归属无法核验"):
+        asyncio.run(copilot_jobs.run_copilot_question(
+            user_id="u1", conversation_id=None, question="我只是拿到了一个 run_id",
+            run_id="r-belongs-to-u2",
+        ))
+    assert seen == {}, "归属不符不能执行或复用他人的 run"
+    assert _row(Session, "r-belongs-to-u2").recipe == RECIPE, "不许改写他人记录"
 
 
 def test_自己的run行配方照常回落(Session):

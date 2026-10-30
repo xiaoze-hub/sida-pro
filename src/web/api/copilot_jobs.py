@@ -269,6 +269,11 @@ async def run_copilot_question(
         else:
             cid = conversation_id
 
+        if run_id:
+            from src.web.api.copilot_message_link import bind_run_conversation
+            if not bind_run_conversation(db, run_id, user.id, cid):
+                raise RuntimeError("运行记录与会话归属无法核验")
+
         body_kwargs: dict[str, Any] = {"content": question}
         if recipe_id is not None:
             # 只带 agent mention：正文一字不改（用户原话是事实，配方是约束）
