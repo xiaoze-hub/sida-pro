@@ -21,12 +21,15 @@ from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_o
 from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
 from src.core import gap_collector
 from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
+from src.web.api.copilot_message_save import (
+    record_with_audit as _row_audit_record, save_assistant_message as _save_assistant,
+    to_payload as _msg_payload,
+)
 from src.core.copilot_memory import memory_block
 from src.core.portfolio_scope import paper_position_user_scope_clause, user_scope_positions
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
 from src.core.llm_context import bind_chat
-from src.web.api.copilot_message_link import verified_current_run_id
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
 from src.core.copilot_quota import enforce as enforce_copilot_quota, error_message as quota_error_message
@@ -1240,7 +1243,8 @@ async def _run_tool_loop_inner(
                 _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
                                  if m.get("role") in ("tool", "system"))
                 if text and _ev:
-                    text = _audit_annotate(text, _audit_numbers(text, _ev, _utext))
+                    _au = _audit_numbers(text, _ev, _utext)
+                    text = _row_audit_record(_audit_annotate(text, _au), _au)
                 if _round == 0 and _stock_q:
                     # 2026-10-21 幻觉事故：问两只票却零工具作答、还编出别的股票 → 一律不给结论
                     logger.warning("零工具作答已拦截(问的是具体标的): %s", _utext[:40])
@@ -1282,7 +1286,8 @@ async def _run_tool_loop_inner(
             _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
                              if m.get("role") in ("tool", "system"))
             if _sum and _ev:
-                _sum = _audit_annotate(_sum, _audit_numbers(_sum, _ev, _utext))
+                _au = _audit_numbers(_sum, _ev, _utext)
+                _sum = _row_audit_record(_audit_annotate(_sum, _au), _au)
             yield ("done" if stream else "text"), (_sum or budget_exhausted_hint())
     except Exception as e:
         logger.error(f"AI {'流式' if stream else ''}对话失败: {e}")
@@ -2018,13 +2023,7 @@ def get_conversation(
             "created_at": str(conv.created_at or ""),
         },
         "messages": [
-            {
-                "id": m.id,
-                "role": m.role,
-                "content": m.content, "run_id": m.run_id if m.role == "assistant" else None,
-                "created_at": str(m.created_at or ""),
-            }
-            for m in messages
+            _msg_payload(m) for m in messages
         ],
     }
 
@@ -2142,24 +2141,14 @@ async def send_message(
             _exit_request_ctx(_toks)
 
         # 保存 AI 回复
-        assistant_msg = ChatMessage(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=ai_response, run_id=verified_current_run_id(db, user, conversation_id),
-        )
-        db.add(assistant_msg)
+        assistant_msg = _save_assistant(db, conversation_id, user, ai_response)
 
         # 更新对话时间
         conv.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(assistant_msg)
 
-        return {
-            "id": assistant_msg.id,
-            "role": "assistant",
-            "content": assistant_msg.content,
-            "created_at": str(assistant_msg.created_at or ""), "run_id": assistant_msg.run_id,
-        }
+        return _msg_payload(assistant_msg)
     finally:
         db.close()
 
@@ -2269,24 +2258,14 @@ async def send_message_stream(
                 _exit_request_ctx(_toks)
 
             # 保存 AI 回复(全文落库, 与 send_message 一致)
-            assistant_msg = ChatMessage(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=ai_response, run_id=verified_current_run_id(db, user, conversation_id),
-            )
-            db.add(assistant_msg)
+            assistant_msg = _save_assistant(db, conversation_id, user, ai_response)
 
             # 更新对话时间
             conv.updated_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(assistant_msg)
 
-            yield _sse_event("done", {
-                "id": assistant_msg.id,
-                "role": "assistant",
-                "content": assistant_msg.content,
-                "created_at": str(assistant_msg.created_at or ""), "run_id": assistant_msg.run_id,
-            })
+            yield _sse_event("done", _msg_payload(assistant_msg))
         except Exception as e:
             logger.error(f"流式对话失败: {e}")
             try:

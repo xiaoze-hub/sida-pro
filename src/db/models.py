@@ -1394,6 +1394,8 @@ class ChatMessage(Base):
     role = Column(String, nullable=False, default="user")  # user/assistant/system
     content = Column(Text, nullable=False, default="")
     run_id = Column(String(36), nullable=True)  # 服务端验证的助手消息关联；历史未知留空
+    # 依据行数字对账（JSON 文本；见 src/core/evidence_row_audit.py）。NULL = 未计算（旧消息）。
+    evidence_audit = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
 

@@ -8,11 +8,23 @@ export interface ChatConversation {
   created_at: string
 }
 
+/** 依据行数字对账（服务端 `src/core/evidence_row_audit.py` 产出；只报"数字在不在本轮取数里"）。 */
+export interface EvidenceRowAudit {
+  basis: 'number_containment'
+  rows: Array<{ index: number; text: string; claims: string[]; unverified: string[] }>
+  checked: number
+  unverified_total: number
+  /** 依据行超过后端上限（24 行）时只核了前 N 行。 */
+  truncated?: boolean
+}
+
 export interface ChatMessage {
   id: number
   role: 'user' | 'assistant' | 'system'
   content: string
   run_id?: string | null
+  /** 旧消息为 null（当时没有取数原文，无法重算，不补）。 */
+  evidence_audit?: EvidenceRowAudit | null
   created_at: string
 }
 
