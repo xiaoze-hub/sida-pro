@@ -190,6 +190,15 @@ react-day-picker 9→10、Radix 全家桶主版本、vite 5→8（rolldown 内�
 - 后端 `tests/test_admin_prefix_permissions.py` **11 passed**
 - 权限/鉴权相关回归 **116 passed**（`-k permission or auth or rbac or middleware`）
 
+## 2026-10-30
+
+### fix-TQ快照活性门禁
+
+- 盘中"部分快照不刷新"定成因（网关只读实测）：`get_market_snapshot` 无任何 time/date 字段，且订阅类方法在网关上**不存在**（`get_subscribe_hq_stock_list`/`get_subscribe_stock_list` 等返回 `-32601 MCP不支持该tqcenter方法名`，而 `get_stock_list`/`get_market_data` 只回参数错误 ⇒ 方法名有效）。我们查不到也建不了订阅，未订阅标的会返回"最后已知值 + ErrorId=0"，看起来完全正常。
+- 新增 `packages/marketdata/src/marketdata/vendors/tq_liveness.py`：跨轮观测累计成交量（手）与 `ItemNum`，交易时段内 90s 不推进即判陈旧；首次观测只能是 unproven（证据不足不等于旧价），计数器重置与时钟回拨一律作废重计，容量满时对未知标的不声称新鲜。
+- 快照被判陈旧的标的从本批剔除并计 `quote_snapshot_stale`，引擎据此整批换下一个源，仍不逐票拼源；非交易时段一律不判（收盘后不推进是正常）。交易时段只按周末与时间窗判断，不猜节假日（猜错方向偏向多降级一次，不漏陈旧）。
+- 验证：`packages/marketdata/tests` 301 项通过（新增 29 项：观测器三态、时段边界、容量 fail-closed、重置/回拨、陈旧剔除与不剔除两条接线）。未做：真实盘中时效复验需下一交易日；生产行情源优先级未在本提交内调整。
+
 ## 2026-10-27
 
 ### chore-合并公开文档与官网SEO调整
