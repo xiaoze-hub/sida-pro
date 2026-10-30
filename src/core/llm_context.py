@@ -32,6 +32,15 @@ def bind(*, user_id=None, run_id=None, scene=None):
     return tokens
 
 
+def bind_chat(*, user_id=None, run_id=None):
+    """整轮替换归因；None 明确清除旧值，禁止沿用上一轮身份或轨迹。"""
+    return [
+        (_user_id, _user_id.set(str(user_id) if user_id is not None else None)),
+        (_run_id, _run_id.set(str(run_id) if run_id is not None else None)),
+        (_scene, _scene.set("chat")),
+    ]
+
+
 def unbind(tokens) -> None:
     for var, tok in reversed(tokens or []):
         try:
