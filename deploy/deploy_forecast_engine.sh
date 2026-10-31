@@ -150,6 +150,18 @@ PYEOF
 fi
 
 # ── ④ env 文件(幂等覆盖; 单一来源) ──────────────────────────
+# 服务令牌(2026-10-31): 登录接口默认要求验证码, 引擎**没有屏幕** ⇒ 必须走 X-Service-Token。
+# 从主服务容器里读同一个值(与 auth.get_service_token 同源), 读不到就大声告警, 不静默留空。
+SERVICE_TOKEN="${SIDA_SERVICE_TOKEN:-}"
+if [ -z "$SERVICE_TOKEN" ] && [ "$STUB" != "1" ]; then
+  SERVICE_TOKEN="$(docker exec sida python -c 'from src.web.api.auth import get_service_token; print(get_service_token())' 2>/dev/null | tr -d '\r\n')"
+fi
+if [ -n "$SERVICE_TOKEN" ]; then
+  log "服务令牌已注入 env(长度 ${#SERVICE_TOKEN})"
+else
+  log "⚠️ 未能取得服务令牌: 登录接口要求验证码时, 引擎的主服务调用会失败(需手工设 SIDA_SERVICE_TOKEN)"
+fi
+
 mkdir -p "$(dirname "$ENV_FILE")"
 cat > "$ENV_FILE" <<ENVEOF
 # 由 deploy/deploy_forecast_engine.sh 生成 —— 重跑脚本会覆盖, 勿手改。
@@ -159,6 +171,7 @@ FORECAST_HOST=$BIND_HOST
 FORECAST_DB_PATH=$DB_PATH
 TZ=Asia/Shanghai
 PYTHONUNBUFFERED=1
+SIDA_SERVICE_TOKEN=$SERVICE_TOKEN
 ENVEOF
 chmod 600 "$ENV_FILE"
 log "env 已写: $ENV_FILE (HOST=$BIND_HOST DB=$DB_PATH)"

@@ -389,6 +389,9 @@ async def demo_isolation_middleware(request: Request, call_next):
 
 # 认证路由（无需登录）
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+# 登录验证码(2026-10-31): 一次性图片，免登录、不缓存
+from src.web.api import captcha as captcha_router
+app.include_router(captcha_router.router, prefix="/api/auth", tags=["auth"])
 # 邮箱验证码(2026-09-16): send-code / login-by-email, 免登录
 from src.web.api import email_verify as email_verify_router
 

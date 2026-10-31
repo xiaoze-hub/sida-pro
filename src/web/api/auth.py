@@ -69,6 +69,10 @@ _jwt_secret: str | None = None
 class LoginRequest(BaseModel):
     username: str  # 兼容旧字段名: 同时接受 username 或 email
     password: str
+    # 验证码（2026-10-31）：仅当本次登录被判定需要验证码时才必填；
+    # 机器凭据（预测引擎/脚本）密码正确时不会触发，见 src/core/captcha.py 模块头。
+    captcha_id: Optional[str] = None
+    captcha_code: Optional[str] = None
 
 
 def _find_user_by_login_id(db: Session, login_id: str) -> User | None:
@@ -689,6 +693,25 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
     locked = check(ip, data.username.strip())
     if locked:
         raise HTTPException(429, locked)
+
+    # 验证码（自适应）：连续失败达阈值后，必须交出人眼识别的图片答案。
+    # 放在口令校验**之前**：让机器人先花一次识别成本，且失败不计入账号锁定
+    # （否则攻击者拿别人的用户名刷码就能把号锁死）。
+    from src.core import captcha as _captcha
+    from src.core.login_ratelimit import failures as _failures
+
+    _ident = data.username.strip()
+    if not _captcha.service_request_exempt(request.headers) and _captcha.required_for(
+        ip, _ident, failures=_failures(ip, _ident)
+    ):
+        _ok, _reason = _captcha.verify(data.captcha_id, data.captcha_code)
+        if not _ok:
+            logger.info("[auth] 验证码未通过 ip=%s user=%s reason=%s", ip, _ident[:32], _reason)
+            raise HTTPException(428, {
+                "code": "captcha_required",
+                "message": "请先输入图片验证码" if _reason in ("missing", "malformed", "expired", "reused")
+                else "验证码不正确，已刷新，请重新输入",
+            })
 
     get_or_create_owner(db)  # 确保 owner 存在(兼容首次部署)
     user = _find_user_by_login_id(db, data.username)

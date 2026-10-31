@@ -46,6 +46,18 @@ def success(ip: str, username: str) -> None:
         _state.pop(_key(ip, username), None)
 
 
+def failures(ip: str, username: str) -> int:
+    """当前窗口内的连续失败次数（验证码自适应阈值用；只读，不改状态）。"""
+    with _lock:
+        st = _state.get(_key(ip, username))
+        if not st:
+            return 0
+        if st.get("locked_until", 0) > time.time():
+            # 已锁定：视作已达阈值，锁定解除前一律要求验证码
+            return max(int(st.get("fails", 0)), MAX_FAILS)
+        return int(st.get("fails", 0))
+
+
 def reset() -> None:
     """清空全部失败计数与锁定(仅测试隔离调用; 生产不暴露入口)。
 

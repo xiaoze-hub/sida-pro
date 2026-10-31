@@ -27,6 +27,17 @@ export interface AuthTokenPayload {
 export interface LoginPayload {
   username: string
   password: string
+  /** 验证码（服务端要求时才必填；机器身份走 X-Service-Token 豁免） */
+  captcha_id?: string | null
+  captcha_code?: string | null
+}
+
+export interface CaptchaChallenge {
+  enabled: boolean
+  captcha_id: string | null
+  image: string | null
+  expires_in: number
+  mode?: 'always' | 'adaptive' | 'off'
 }
 
 export interface SubscriptionItem {
@@ -37,6 +48,9 @@ export interface SubscriptionItem {
 
 export const authApi = {
   status: () => fetchAPI<AuthStatus>('/auth/status'),
+  captcha: () =>
+    // 一次性图片，绝不能命中前端 30s GET 缓存
+    fetchAPI<CaptchaChallenge>('/auth/captcha', { cacheMode: false }),
   login: (payload: LoginPayload) =>
     fetchAPI<AuthTokenPayload>('/auth/login', {
       method: 'POST',

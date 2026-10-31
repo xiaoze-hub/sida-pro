@@ -209,6 +209,17 @@ react-day-picker 9→10、Radix 全家桶主版本、vite 5→8（rolldown 内�
 - 后端 `tests/test_admin_prefix_permissions.py` **11 passed**
 - 权限/鉴权相关回归 **116 passed**（`-k permission or auth or rbac or middleware`）
 
+## 2026-10-31
+
+### feat-登录验证码（图片识别 + 服务令牌豁免）
+
+- 新增 `src/core/captcha.py` + `GET /api/auth/captcha`：服务端 Pillow 逐字旋转 + 干扰线/噪点生成 5 位图片码，HMAC 签名的一次性 token（180 秒、不落库、答错即作废），`Cache-Control: no-store`，答案不出现在 token 里。
+- 登录接口在口令校验**之前**验码（否则 `401/428` 会变成"口令对不对"的判据）；缺失/错误/过期/重放一律 `428`，且**不计入**账号失败次数（否则拿别人用户名刷码即可锁号）。口令错仍照旧累计并在 5 次后锁定（先过验证码再累计，锁定语义不变）。
+- 默认 `AUTH_CAPTCHA_MODE=always`；带有效 `X-Service-Token` 的请求豁免（仓库既有的机器身份）。预测引擎改为"有服务令牌就不再口令登录"，部署脚本把主服务的服务令牌注入 `forecast.env`，取不到时大声告警。
+- 前端新增 `CaptchaField`（取图/换一张/输入，服务端 `off` 时自动隐藏，取图失败明确显示不可用）；登录失败 `428` 触发换图；`LoginPayload` 增加 `captcha_id/captcha_code`。
+- 边界：图片验证码是**人机区分**，不是加密；OCR 仍有成功率，真正的护栏仍是限速 + 失败锁定 + scrypt 口令哈希。`AUTH_CAPTCHA_MODE=adaptive|off` 可按环境降级（默认不降级）。
+- 验证：后端 `-k "auth or login or service_token or captcha"` 114 项通过；新增验证码单测/接口测试 41 项；前端新增 `CaptchaField` 用例 5 项、`tsc --noEmit`、ESLint、UI 规则通过。
+
 ## 2026-10-30
 
 ### feat-依据行数字对账(逐条依据标注本轮取数里没有的读数)
