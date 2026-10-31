@@ -113,3 +113,10 @@ def test_bare_price_is_not_treated_as_yuan():
 def test_explicit_yuan_still_detected_against_wan():
     r = audit("成交额 61.93 元。", "成交额 61.93万元。")
     assert r["magnitude"] and int(r["magnitude"][0]["factor"]) == 10000
+
+
+def test_bare_evidence_price_does_not_collide_with_money_claim():
+    """池里的裸数 `现价 61.93` 不是钱：不能和答里的 `61.93万元` 比出 10000 倍。"""
+    r = audit("成交额 61.93 万元。", "现价 61.93；主力净流出 -6193万。")
+    assert r["magnitude"] == []
+    assert r["severe"] is False

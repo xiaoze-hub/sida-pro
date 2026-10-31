@@ -129,11 +129,15 @@ _MONEY_UNITS = ("万", "万元", "亿", "亿元", "元")
 
 
 def _scale_of_token(token: str) -> float | None:
-    """token 的量纲系数；非货币单位返回 None（调用方必须跳过，不能当 1.0 用）。"""
+    """token 的量纲系数，**只认显式货币单位**（万/万元/亿/亿元/元）。
+
+    裸小数（现价 61.93）与手/倍/% 一律返回 None —— 调用方必须跳过。
+    早先这里给裸数兜底 1.0，结果「成交额 61.93万元」会拿池子里的价格 `61.93` 比出 10000 倍。
+    """
     unit = next((u for u in _UNITS if (token or "").endswith(u)), "")
-    if unit in _NON_CURRENCY_UNITS:
+    if unit not in _MONEY_UNITS:
         return None
-    return _SCALE.get(unit, 1.0)
+    return _SCALE.get(unit, 1.0)  # 「元」不在 _SCALE 里 → 1.0
 
 
 def scale_ratio(a: float, b: float) -> float:
