@@ -1,3 +1,10 @@
+## release: v0.91.8（chunk 404 自愈）
+
+- 现场证据：生产 access.log 里真实用户打开 `/ai-copilot` 时 `GET /assets/*.js` 404（useSourceHealth/toast/tiers/stock-colors/vendor-react 各 1~4 次），页面停在「正在打开数智参谋…」，刷新后同批 chunk 全 200。
+- 根因：发版后 `index.html` 被启发式缓存，旧壳引用已删除的 hash chunk；原有自愈只 `location.reload()`，重载仍是旧 HTML → 自愈无效。
+- 改法：`buildBustUrl()` 加一次性 `?_cr=<ts>` 强制回源 + 先清 Service Worker 缓存；仍受原 sessionStorage 标记保护，不会无限刷新。
+- 测试：`lazy-with-retry` 13 项 + 会话加载器 15 项；tsc/ESLint/UI 规则通过。
+
 ## [未发布] chunk 404 自愈改为强制回源（修"刷新一次才进得去"）
 
 - 现场证据（生产 nginx access.log）：真实用户打开 `/ai-copilot` 时 `GET /assets/*.js` 返回 **404**（`useSourceHealth`/`toast`/`tiers`/`stock-colors`/`vendor-react`… 各 1~4 次），页面停在「正在打开数智参谋…」，手动刷新后正常。
