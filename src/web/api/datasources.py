@@ -384,9 +384,7 @@ def get_data_capabilities(db: Session = Depends(get_db)):
     """
     from datetime import datetime
 
-    from sqlalchemy import text
-
-    from src.core.data_capabilities import FRESHNESS_PROBES, build_capabilities
+    from src.core.data_capabilities import build_capabilities, freshness_probe
 
     rows = [{"type": r.type, "provider": r.provider, "name": r.name,
              "enabled": bool(r.enabled), "priority": r.priority,
@@ -400,15 +398,8 @@ def get_data_capabilities(db: Session = Depends(get_db)):
         logger.warning("能力矩阵取 vendor 健康失败: %s", e)
         health = {}
 
-    freshness: dict[str, str] = {}
-    for table, col in FRESHNESS_PROBES.values():
-        try:
-            v = db.execute(text(f"SELECT max({col}) FROM {table}")).scalar()  # noqa: S608 表/列来自本模块常量
-        except Exception:  # noqa: BLE001 表可能尚未创建(新库/未迁移)
-            db.rollback()
-            continue
-        if v is not None:
-            freshness[table] = str(v)
+    # 5 分钟 TTL：klines 的 max(ts) 冷态 4.6s，而数据一天只变一次（见 freshness_probe 注释）
+    freshness: dict[str, str] = {k: str(v) for k, v in freshness_probe(db).items()}
     today = datetime.now().date().isoformat()
     return build_capabilities(rows, health, freshness, today=today)
 

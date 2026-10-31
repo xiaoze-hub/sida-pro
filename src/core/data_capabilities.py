@@ -128,6 +128,62 @@ def _age_days(latest: str | None, today: str | None) -> int | None:
     return (d2 - d1).days if d1 and d2 else None
 
 
+# ---------------------------------------------------------------------------
+# 新鲜度探测缓存（2026-10-31）
+# ---------------------------------------------------------------------------
+# 背景：`GET /api/datasources/capabilities` 在**每个页面加载**都会被前端调用，它对每张表跑
+# `SELECT max(ts)`。klines 是 1.5GB / 1697 个 chunk 的 hypertable，冷态 max() 实测 **4.6s**
+# （热态 0.6s）—— 这就是"点进页面转圈几秒才出内容"的主要来源之一。
+# 这些数据一天只变一次，没有任何理由每次页面都重算：这里给 5 分钟 TTL。
+# 失败**不缓存**（库刚重启/表还没建时下次仍要重试，而不是把"无数据"钉 5 分钟）。
+_FRESHNESS_TTL_S = 300.0
+_FRESHNESS_CACHE: dict[tuple[str, str], tuple[float, object]] = {}
+
+
+def clear_freshness_cache() -> None:
+    """清空缓存（测试用；生产不需要手动调用）。"""
+    _FRESHNESS_CACHE.clear()
+
+
+def _db_key(db) -> str:
+    """按连接串分桶：多库/测试环境不能互相读到对方的新鲜度。"""
+    try:
+        url = db.get_bind().url
+        return f"{url.drivername}://{url.host or ''}/{url.database or ''}"
+    except Exception:  # noqa: BLE001 - 取不到就给单桶，别再抛错
+        return "unknown"
+
+
+def freshness_probe(db, *, ttl: float = _FRESHNESS_TTL_S) -> dict[str, object]:
+    """各数据集最新日期（表名→值）；TTL 内复用，过期重算，查不到的表不进结果。"""
+    import time as _time
+
+    from sqlalchemy import text
+
+    key_prefix = _db_key(db)
+    now = _time.monotonic()
+    out: dict[str, object] = {}
+    for name, (table, col) in FRESHNESS_PROBES.items():
+        cache_key = (key_prefix, table)
+        hit = _FRESHNESS_CACHE.get(cache_key)
+        if hit and (now - hit[0]) < ttl:
+            if hit[1] is not None:
+                out[table] = hit[1]
+            continue
+        try:
+            v = db.execute(text(f"SELECT max({col}) FROM {table}")).scalar()  # noqa: S608 表/列来自本模块常量
+        except Exception:  # noqa: BLE001 表可能尚未创建(新库/未迁移)
+            db.rollback()
+            continue
+        if v is not None:
+            out[table] = v
+            _FRESHNESS_CACHE[cache_key] = (now, v)
+        else:
+            # 空表也缓存 None：否则每次都要为"没数据"这张表付一次 max() 的代价
+            _FRESHNESS_CACHE[cache_key] = (now, None)
+    return out
+
+
 def build_capabilities(rows: list[dict], health: dict, freshness: dict | None = None,
                        today: str | None = None) -> dict:
     """rows: DataSource 记录(dict, 含 success_count/error_count); health: vendor→EWMA;
