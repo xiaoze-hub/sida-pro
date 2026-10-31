@@ -1,3 +1,10 @@
+## [未发布] 能力矩阵新鲜度缓存（页面加载提速）
+
+- `/api/datasources/capabilities` 每次页面加载都会对每张表跑 `SELECT max(...)`；其中 klines 是 1.5GB / 1697 chunks 的 hypertable，**冷态单次 4.6s、热态 0.6s**，直接拖慢首屏（实测该接口服务端 1.3s / 4.6s / 4.1s）。
+- 新增 `src/core/data_capabilities.py::freshness_probe()`：5 分钟 TTL 缓存，按数据库连接串分桶；**空表也缓存**（否则每次为"没数据"付一次 max()）；**失败不缓存**（库刚起/表未建时下次仍重试）。
+- 未改任何口径与判定逻辑：`build_capabilities()` 收到的新鲜度字典形状不变。
+- 测试：新增 5 项（命中不查库、ttl=0 必重算、空表缓存、失败不缓存、按库分桶），`-k "capabilit or datasource"` 44 项通过。
+
 ## release: v0.91.6（登录验证码）
 
 - 登录新增图片验证码：服务端 Pillow 渲染 5 位码（逐字旋转 + 干扰线/噪点），`GET /api/auth/captcha` 免登录签发，`Cache-Control: no-store`。
