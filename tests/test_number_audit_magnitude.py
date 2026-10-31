@@ -64,3 +64,24 @@ def test_annotation_says_which_side_is_right():
 def test_thousands_separator_and_spaces_do_not_break_detection():
     r = audit("主力净流出 -61.93 万元。", "-6,193 万元")
     assert r["magnitude"] and int(r["magnitude"][0]["factor"]) == 100
+
+
+# ── 审查回归（2026-10-31）：非货币单位不许折成"元"，否则正确回答会被判量级错 ──
+
+def test_shou_and_percent_are_not_folded_as_yuan():
+    """6193手 × ¥100 ≈ 6193万元：两者同数字不同单位，不能判成单位写错。"""
+    ev = "成交额 6193万元；成交量 6193手。"
+    r = audit("成交额 6193 万元。", ev)
+    assert r["magnitude"] == [], "同量纲出处存在时必须算已验证"
+    assert r["severe"] is False
+
+
+def test_lots_at_100_yuan_do_not_fake_a_10000x_error():
+    ev = "成交量 12562手；成交额 1.2562亿元。"
+    r = audit("成交额 1.2562 亿元。", ev)
+    assert r["magnitude"] == []
+
+
+def test_percent_token_never_triggers_magnitude():
+    r = audit("买撤单率 0.88%。", "买撤单率 88.0%；主力净流出 -6193万。")
+    assert r["magnitude"] == []

@@ -118,10 +118,23 @@ _MAGNITUDE_FACTORS = (100.0, 10000.0)
 _MAGNITUDE_TOL = 0.015
 
 
-def _to_yuan(token: str, value: float) -> float:
-    """证据 token 折成元：带万/亿的按单位放大，裸数（含「元」）按元算。"""
+# 非货币单位：`12562 手`、`3 倍`、`88.0%` 折成"元"会造出假的 100/10000 倍关系
+# （例：6193 手 × ¥100 ≈ 6193 万元 → 与成交额同量级，被误判成单位写错）。
+_NON_CURRENCY_UNITS = ("%", "手", "倍")
+
+
+def _scale_of_token(token: str) -> float | None:
+    """token 的量纲系数；非货币单位返回 None（调用方必须跳过，不能当 1.0 用）。"""
     unit = next((u for u in _UNITS if (token or "").endswith(u)), "")
-    return value * _SCALE.get(unit, 1.0)
+    if unit in _NON_CURRENCY_UNITS:
+        return None
+    return _SCALE.get(unit, 1.0)
+
+
+def _to_yuan(token: str, value: float) -> float | None:
+    """证据 token 折成元：带万/亿的按单位放大，裸数（含「元」）按元算；非货币单位返回 None。"""
+    scale = _scale_of_token(token)
+    return None if scale is None else value * scale
 
 
 def _magnitude_mismatch(claim_value: float, claim_scale: float,
@@ -137,7 +150,9 @@ def _magnitude_mismatch(claim_value: float, claim_scale: float,
     yen = claim_value * claim_scale
     for token, x in pool:
         x_yen = _to_yuan(token, x)
-        if not x_yen or abs(x_yen) < 1e4:  # 太小的读数多是价格/比例，不参与金额量级比对
+        if x_yen is None:
+            continue  # 手/倍/% 不是金额，不参与量级比对
+        if not x_yen or abs(x_yen) < 1e4:  # 太小的读数多是价格/比例
             continue
         ratio = abs(yen / x_yen)
         if ratio == 0:
@@ -189,7 +204,10 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
             for _tok, _x in pool_pairs:
                 if abs(abs(_x) - abs(v)) > abs(v) * 0.005 or _x == 0:
                     continue
-                _s2 = _SCALE.get(next((u for u in _UNITS if _tok.endswith(u)), ""), 0.0) or 1.0
+                _s2 = _scale_of_token(_tok)
+                if _s2 is None:
+                    # 同数字但单位不是钱（`6193 手` vs 回答 `6193 万元`）：不能据此判错，跳过
+                    continue
                 _r = _scale0 / _s2
                 if _r < 1:
                     _r = 1 / _r
@@ -197,8 +215,9 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
                     if abs(_r / _target - 1.0) <= _MAGNITUDE_TOL:
                         _unit_mismatch = (_tok, _target)
                         break
-                if _unit_mismatch:
-                    break
+                # 已经找到同数字的**货币**出处：无论是否命中都停 —— 存在同量纲出处就是有据，
+                # 继续往后扫只会被别的同数字 token（另一个单位）带偏。
+                break
             if _unit_mismatch:
                 magnitude.append({"claim": token, "evidence": _unit_mismatch[0],
                                   "factor": _unit_mismatch[1]})
