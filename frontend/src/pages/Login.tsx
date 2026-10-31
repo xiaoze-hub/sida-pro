@@ -323,6 +323,8 @@ export default function LoginPage() {
   const switchMode = (next: AuthMode) => {
     setMode(next)
     setCode('')
+    // 切模式必须丢掉旧验证码：服务端已消费/可能过期的 id 不许带进下一次登录
+    setCaptcha({ id: null, code: '' })
     if (timerRef.current) {
       clearInterval(timerRef.current)
       timerRef.current = null

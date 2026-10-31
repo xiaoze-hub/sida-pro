@@ -1411,7 +1411,9 @@ class CaptchaChallenge(Base):
 
     nonce = Column(String(64), primary_key=True)
     answer_digest = Column(String(64), nullable=False)
-    expires_at = Column(DateTime, nullable=False)
+    # index 名与迁移 v236 对齐：`Base.metadata.create_all` 路径（测试/本地）也要有索引，
+    # 否则清理语句 WHERE expires_at < cutoff 会退化成全表扫描。
+    expires_at = Column(DateTime, nullable=False, index=True)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -1881,7 +1883,9 @@ class UserSession(Base):
     user_id = Column(String(36), nullable=False, index=True)
     created_at = Column(DateTime, server_default=func.now())
     last_seen = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    expires_at = Column(DateTime, nullable=False)
+    # index 名与迁移 v236 对齐：`Base.metadata.create_all` 路径（测试/本地）也要有索引，
+    # 否则清理语句 WHERE expires_at < cutoff 会退化成全表扫描。
+    expires_at = Column(DateTime, nullable=False, index=True)
     ip = Column(String(64), nullable=True)
     user_agent = Column(String(256), nullable=True)
 

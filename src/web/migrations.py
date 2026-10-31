@@ -6415,7 +6415,7 @@ CREATE TABLE IF NOT EXISTS captcha_challenges (
 """
     ))
     conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_captcha_challenges_expires "
+        "CREATE INDEX IF NOT EXISTS ix_captcha_challenges_expires_at "
         "ON captcha_challenges (expires_at)"
     ))
 

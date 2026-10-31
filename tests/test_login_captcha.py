@@ -115,3 +115,45 @@ def test_missing_fonts_raise_instead_of_bitmap_fallback(monkeypatch):
     monkeypatch.setattr(mod, "_FONT_CANDIDATES", ("/nonexistent/font.ttf",))
     with pytest.raises(cap.CaptchaUnavailable):
         cap.render_png("ABCDE")
+
+
+# ---------------------------------------------------------------------------
+# 审查回归（2026-10-31 第二轮）
+# ---------------------------------------------------------------------------
+
+def test_non_ascii_signature_is_rejected_not_crashing():
+    """captcha_id 来自请求体：`x.9999999999.验证码` 不许把登录打成 500。"""
+    item = cap.new_captcha()
+    nonce, exp, _ = item.captcha_id.split(".")
+    assert cap.parse_token(f"{nonce}.{exp}.验证码") == (None, "mismatch")
+    assert cap.parse_token(f"{nonce}.{exp}.😀😀") == (None, "mismatch")
+
+
+def test_secret_is_not_cached_when_db_unavailable(monkeypatch):
+    """库里拿不到密钥时不许缓存随机值：一次 DB 抖动就会让该 worker 永久与别人不同源。"""
+    import src.core.auth_tokens as tokens
+    import src.core.captcha as mod
+
+    monkeypatch.delenv("AUTH_CAPTCHA_SECRET", raising=False)
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    calls = {"n": 0}
+    secrets_seen: list[str] = []
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db down")
+        return "stable-secret-from-db-0123456789"
+
+    monkeypatch.setattr(tokens, "get_jwt_secret", flaky)
+    first = mod._secret()
+    second = mod._secret()
+    secrets_seen.extend([first, second])
+    assert first != second, "第一次是临时密钥，不能被缓存"
+    assert second == "stable-secret-from-db-0123456789"
+
+
+def test_captcha_endpoint_is_rate_limited_as_sensitive_path():
+    from src.web import middleware
+
+    assert any("/api/auth/captcha" == p for p in middleware._SENSITIVE_PATHS)

@@ -42,6 +42,15 @@ ENVF="$INSTALL/forecast.env"
 grep -q "^FORECAST_HOST=0.0.0.0$" "$ENVF" && ok "env FORECAST_HOST=0.0.0.0(容器可达, 非回环)" || bad "env 缺 FORECAST_HOST=0.0.0.0"
 grep -q "^FORECAST_DB_PATH=.*sida_forecast.db" "$ENVF" && ok "env 含 FORECAST_DB_PATH 历史库" || bad "env 缺 FORECAST_DB_PATH"
 grep -q "^SIDA_MAIN_API_URL=http://127.0.0.1:8000" "$ENVF" && ok "env 主服务地址指向宿主机 8000" || bad "env 主服务地址不对"
+# 2026-10-31: 登录验证码上线后，引擎没有屏幕 ⇒ 必须靠服务令牌；env 里要有这一行
+grep -q "^SIDA_SERVICE_TOKEN=$" "$ENVF" && ok "env 含 SIDA_SERVICE_TOKEN(本次未取到, 留空而非缺失)" || bad "env 缺 SIDA_SERVICE_TOKEN 行"
+
+OUT_TOK=$(FORECAST_DEPLOY_STUB=1 FORECAST_SKIP_DEPS=1 SIDA_SERVICE_TOKEN=stub-tok \
+      FORECAST_SOURCE_DIR="$SRC" FORECAST_INSTALL_DIR="$TMP/i3" \
+      FORECAST_SYSTEMD_DIR="$TMP/u3" SYSTEMCTL="echo systemctl" \
+      bash "$DEPLOY" 2>&1; echo "RC=$?")
+grep -q "^SIDA_SERVICE_TOKEN=stub-tok$" "$TMP/i3/forecast.env" && ok "stub 透传 SIDA_SERVICE_TOKEN 到 env" || bad "stub 未透传服务令牌"
+echo "$OUT_TOK" | grep -q "RC=0" && ok "带令牌的 stub 退出码 0" || bad "带令牌的 stub 未成功"
 
 UNIT="$UNITS/sida-forecast.service"
 [ -f "$UNIT" ] && ok "unit 已生成" || bad "unit 未生成"

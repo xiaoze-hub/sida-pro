@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { authApi } from '@sida/api'
 import { Input } from '@sida/base-ui/components/ui/input'
+import { Label } from '@sida/base-ui/components/ui/label'
 
 export interface CaptchaValue {
   id: string | null
@@ -63,7 +64,9 @@ export default function CaptchaField({ value, onChange, refreshSignal = 0, disab
 
   return (
     <div data-testid="captcha-field">
-      <label className="mb-1 block text-[14px] text-muted-foreground">验证码</label>
+      <Label htmlFor="login-captcha" className="mb-1 block text-[14px] text-muted-foreground">
+        验证码
+      </Label>
       <div className="flex items-center gap-2">
         {image ? (
           // 图片是后端生成的 data URI，不是装饰图；alt 说明用途，便于读屏
@@ -87,6 +90,7 @@ export default function CaptchaField({ value, onChange, refreshSignal = 0, disab
           <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
         </button>
         <Input
+          id="login-captcha"
           value={value.code}
           onChange={(e) => onChange({ id: value.id, code: e.target.value })}
           placeholder="看图输入"

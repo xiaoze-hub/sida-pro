@@ -44,20 +44,34 @@ def consume_challenge(db, nonce: str, answer: str | None, *, now: datetime | Non
     row = db.query(CaptchaChallenge).filter(CaptchaChallenge.nonce == nonce).first()
     if row is None:
         return False, "unknown"
+    digest, expires_at = row.answer_digest, row.expires_at
+    claimed, reason = _claim_nonce(db, nonce)
+    if not claimed:
+        return False, reason
+    if expires_at and expires_at <= moment:
+        return False, "expired"
+    if not answer:
+        return False, "missing"
+    # 用户输入可能含非 ASCII：compare_digest 比 bytes
+    if not hmac.compare_digest(digest.encode("utf-8"), captcha_core.answer_digest(answer).encode("utf-8")):
+        return False, "mismatch"
+    return True, "ok"
+
+
+def _claim_nonce(db, nonce: str) -> tuple[bool, str]:
+    """原子消费：`DELETE ... WHERE nonce = ?` 的 rowcount 决定"谁消费到了"。
+
+    生产是 2 个 worker：先 SELECT 再 ORM delete 会让同一张码被并发重放（落败的 delete
+    只发 SAWarning，不会被 except 捕获）。这里以 DELETE 的 rowcount 为准。
+    """
     try:
-        db.delete(row)
+        result = db.execute(delete(CaptchaChallenge).where(CaptchaChallenge.nonce == nonce))
         db.commit()
     except SQLAlchemyError:
         db.rollback()
         logger.warning("[captcha] 消费挑战失败(按未通过处理)", exc_info=True)
         return False, "store_error"
-    if row.expires_at and row.expires_at <= moment:
-        return False, "expired"
-    if not answer:
-        return False, "missing"
-    if not hmac.compare_digest(row.answer_digest, captcha_core.answer_digest(answer)):
-        return False, "mismatch"
-    return True, "ok"
+    return ((result.rowcount or 0) == 1), "reused"
 
 
 def _prune(db, now: datetime) -> None:

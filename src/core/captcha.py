@@ -71,28 +71,23 @@ def required(*, failures: int) -> bool:
 # 签名（只提交 nonce|exp，不提交答案）
 # ---------------------------------------------------------------------------
 
-_SECRET_CACHE: str | None = None
-
-
 def _secret() -> str:
     """签名密钥：`AUTH_CAPTCHA_SECRET` / `JWT_SECRET` 优先，否则复用库内 JWT secret。
 
-    库不可用（单测、启动早期）时退到**进程内随机**：验证码只活 180 秒且一次性，
-    代价只是重启后未用的验证码作废（点一下刷新即可），绝不因为拿不到密钥就放行。
+    **不在这里缓存**：`get_jwt_secret()` 自己带缓存、且 `secret_rotation` 轮换时会清它；
+    我们再存一份副本，轮换后老 worker 会一直用旧密钥（`always` 模式下 428 到重启为止）。
+    库不可用时返回**一次性的临时密钥**（不落缓存）：该次验证码大概率验不过，用户刷新即可，
+    绝不因为拿不到密钥就放行。
     """
-    global _SECRET_CACHE
     env = (os.getenv("AUTH_CAPTCHA_SECRET") or os.getenv("JWT_SECRET") or "").strip()
     if len(env.encode("utf-8")) >= 16:
         return env
-    if _SECRET_CACHE:
-        return _SECRET_CACHE
     try:
         from src.core.auth_tokens import get_jwt_secret
 
-        _SECRET_CACHE = get_jwt_secret()
+        return get_jwt_secret()
     except Exception:  # noqa: BLE001 - 库不可用不该让登录接口 500
-        _SECRET_CACHE = secrets.token_hex(32)
-    return _SECRET_CACHE
+        return secrets.token_hex(32)
 
 
 def _sign(nonce: str, exp: int) -> str:
@@ -144,7 +139,9 @@ def parse_token(captcha_id: str | None, *, now: float | None = None) -> tuple[st
         return None, "malformed"
     if exp <= (time.time() if now is None else now):
         return None, "expired"
-    if not hmac.compare_digest(sig, _sign(nonce, exp)):
+    # compare_digest 对 str 只接受 ASCII；captcha_id 是用户可控输入，
+    # 直接比 str 会被 `x.9999999999.验证码` 打成 500。统一转 bytes 比较。
+    if not hmac.compare_digest(sig.encode("utf-8"), _sign(nonce, exp).encode("utf-8")):
         return None, "mismatch"
     return nonce, "ok"
 

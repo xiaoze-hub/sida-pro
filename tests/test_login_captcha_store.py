@@ -81,3 +81,18 @@ def test_prune_drops_only_long_expired_rows(db):
     remaining = {r[0] for r in db.execute(text("select nonce from captcha_challenges")).fetchall()}
     assert old.nonce not in remaining
     assert fresh.nonce in remaining
+
+
+def test_concurrent_consumption_loser_is_rejected(db, monkeypatch):
+    """两个 worker 同时消费同一张码：只有 DELETE rowcount==1 的那个算数。"""
+
+    class _Zero:
+        rowcount = 0
+
+    monkeypatch.setattr(db, "execute", lambda *a, **k: _Zero())
+    assert captcha_store._claim_nonce(db, "any-nonce") == (False, "reused")
+
+
+def test_model_declares_expiry_index_for_metadata_created_dbs():
+    names = {c.name for c in CaptchaChallenge.__table__.indexes}
+    assert "ix_captcha_challenges_expires_at" in names
