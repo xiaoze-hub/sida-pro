@@ -1,4 +1,4 @@
-"""验证码接入登录接口：只在需要时出现，出现时不给答案就 428，给了对的才放行。"""
+"""验证码接入登录接口：出现时机、错误语义、机器豁免、锁定仍生效。"""
 from __future__ import annotations
 
 import pytest
@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from src.core import captcha as cap
 from src.core import login_ratelimit
+from src.web.api import captcha_store
 
 ADMIN_USER = "admin"
 ADMIN_PW = "cap-pw-2026-1031"
@@ -17,7 +18,6 @@ def client(monkeypatch):
     monkeypatch.setenv("AUTH_CAPTCHA_SECRET", "unit-test-secret-0123456789")
     monkeypatch.setenv("AUTH_USERNAME", ADMIN_USER)
     monkeypatch.setenv("AUTH_PASSWORD", ADMIN_PW)
-    cap.reset_state()
     login_ratelimit.reset()
     db = __import__("src.web.database", fromlist=["SessionLocal"]).SessionLocal()
     try:
@@ -30,7 +30,6 @@ def client(monkeypatch):
     from src.web.app import app
 
     yield TestClient(app)
-    cap.reset_state()
     login_ratelimit.reset()
 
 
@@ -48,42 +47,34 @@ def _issue(client, monkeypatch) -> tuple[str, str]:
     monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")  # conftest 默认 off，这里显式打开
     r = client.get("/api/auth/captcha")
     assert r.status_code == 200, r.text
+    assert r.headers.get("cache-control") == "no-store"
     body = r.json()["data"]  # 统一响应包装 {code,success,data,message}
     assert body["enabled"] is True and body["captcha_id"] and seen.get("answer")
     assert body["image"].startswith("data:image/png;base64,")
-    assert r.headers.get("cache-control") == "no-store"
     return body["captcha_id"], seen["answer"]
 
 
-def test_captcha_endpoint_is_not_cached_and_not_leaking_answer(client, monkeypatch):
+def test_answer_never_appears_in_the_issued_token(client, monkeypatch):
     captcha_id, answer = _issue(client, monkeypatch)
     assert answer.lower() not in captcha_id.lower()
 
 
-def test_mode_off_reports_disabled_instead_of_fake_image(client, monkeypatch):
+def test_mode_off_reports_disabled_with_no_store(client, monkeypatch):
     monkeypatch.setenv("AUTH_CAPTCHA_MODE", "off")
-    body = client.get("/api/auth/captcha").json()["data"]
+    r = client.get("/api/auth/captcha")
+    body = r.json()["data"]
     assert body["enabled"] is False and body["image"] is None
-
-
-def test_adaptive_mode_keeps_credential_login_working(client, monkeypatch):
-    """自适应模式下零失败的正确凭据不会被拦（给没有服务令牌的老部署留退路）。"""
-    monkeypatch.setenv("AUTH_CAPTCHA_MODE", "adaptive")
-    r = client.post("/api/auth/login", json={"username": ADMIN_USER, "password": ADMIN_PW})
-    assert r.status_code == 200, r.text
-    assert r.json()["data"]["token"]
+    assert r.headers.get("cache-control") == "no-store", "off 分支也必须不缓存"
 
 
 def test_always_mode_requires_captcha_before_password(client, monkeypatch):
     monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")
     r = client.post("/api/auth/login", json={"username": ADMIN_USER, "password": ADMIN_PW})
     assert r.status_code == 428, r.text
-    # 428 是机器可判的信号（与 401 口令错、429 锁定区分开），文案只用于展示
     assert "验证码" in r.json()["message"]
 
 
-def test_wrong_captcha_is_rejected_and_does_not_lock_the_account(client, monkeypatch):
-    monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")
+def test_wrong_captcha_does_not_lock_the_account(client, monkeypatch):
     captcha_id, answer = _issue(client, monkeypatch)
     wrong = "ZZZZZ" if answer != "ZZZZZ" else "YYYYY"
     r = client.post("/api/auth/login", json={
@@ -91,12 +82,10 @@ def test_wrong_captcha_is_rejected_and_does_not_lock_the_account(client, monkeyp
         "captcha_id": captcha_id, "captcha_code": wrong,
     })
     assert r.status_code == 428
-    # 验证码错不该累计账号失败次数（否则拿别人用户名刷码就能锁号）
     assert login_ratelimit.failures("testclient", ADMIN_USER) == 0
 
 
 def test_correct_captcha_lets_login_through(client, monkeypatch):
-    monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")
     captcha_id, answer = _issue(client, monkeypatch)
     r = client.post("/api/auth/login", json={
         "username": ADMIN_USER, "password": ADMIN_PW,
@@ -107,7 +96,6 @@ def test_correct_captcha_lets_login_through(client, monkeypatch):
 
 
 def test_captcha_is_single_use_across_requests(client, monkeypatch):
-    monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")
     captcha_id, answer = _issue(client, monkeypatch)
     payload = {"username": ADMIN_USER, "password": ADMIN_PW,
                "captcha_id": captcha_id, "captcha_code": answer}
@@ -129,13 +117,23 @@ def test_service_token_header_skips_captcha(client, monkeypatch):
     assert r.status_code == 200, r.text
 
 
+def test_wrong_service_token_still_needs_captcha(client, monkeypatch):
+    import src.web.api.auth as auth_mod
+
+    monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")
+    monkeypatch.setattr(auth_mod, "_service_token", "svc-token-xyz", raising=False)
+    r = client.post(
+        "/api/auth/login",
+        json={"username": ADMIN_USER, "password": ADMIN_PW},
+        headers={"X-Service-Token": "not-it"},
+    )
+    assert r.status_code == 428, r.text
+
+
 def test_lockout_still_fires_when_captcha_is_solved(client, monkeypatch):
     """验证码不是替代锁定：口令错 5 次照样锁（每次都得先过验证码）。"""
     monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")
-    codes = []
-    for _ in range(login_ratelimit.MAX_FAILS):
-        captcha_id, answer = _issue(client, monkeypatch)
-        codes.append((captcha_id, answer))
+    codes = [_issue(client, monkeypatch) for _ in range(login_ratelimit.MAX_FAILS)]
     for captcha_id, answer in codes:
         r = client.post("/api/auth/login", json={
             "username": ADMIN_USER, "password": "definitely-wrong",
@@ -146,3 +144,21 @@ def test_lockout_still_fires_when_captcha_is_solved(client, monkeypatch):
         "username": ADMIN_USER, "password": ADMIN_PW,
     })
     assert locked.status_code == 429, locked.text
+
+
+def test_adaptive_mode_allows_credential_login_without_captcha(client, monkeypatch):
+    """自适应模式下零失败的正确凭据不会被拦（给没有服务令牌的老部署留退路）。"""
+    monkeypatch.setenv("AUTH_CAPTCHA_MODE", "adaptive")
+    r = client.post("/api/auth/login", json={"username": ADMIN_USER, "password": ADMIN_PW})
+    assert r.status_code == 200, r.text
+
+
+def test_expired_token_is_rejected_even_if_row_survives(client, monkeypatch):
+    """token 过期即拒（不必等存储层）。"""
+    monkeypatch.setenv("AUTH_CAPTCHA_MODE", "always")
+    item = cap.new_captcha(now=1000)
+    r = client.post("/api/auth/login", json={
+        "username": ADMIN_USER, "password": ADMIN_PW,
+        "captcha_id": item.captcha_id, "captcha_code": item.answer,
+    })
+    assert r.status_code == 428

@@ -1399,6 +1399,22 @@ class ChatMessage(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class CaptchaChallenge(Base):
+    """登录验证码挑战（2026-10-31）。
+
+    为什么落库而不是签进 token：答案签进 token 等于把验证码变成**离线预言机** ——
+    拿到 token 就能本地枚举答案（5 位 30 字符 ≈ 2400 万次 HMAC ≈ 几秒）。放库里，
+    猜必须走服务器，受限速与一次性消费约束。落库而非进程内存：生产 uvicorn 多 worker。
+    """
+
+    __tablename__ = "captcha_challenges"
+
+    nonce = Column(String(64), primary_key=True)
+    answer_digest = Column(String(64), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class Notification(Base):
     """站内消息中心。
 

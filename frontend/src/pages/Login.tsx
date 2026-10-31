@@ -296,10 +296,9 @@ export default function LoginPage() {
       toast(isSetup ? '密码设置成功' : '登录成功', 'success')
       navigate('/')
     } catch (e) {
-      // 428 = 服务端要求验证码：提示 + 换一张（旧码一次性，答错即作废）
-      if ((e as { status?: number } | null)?.status === 428) {
-        setCaptchaSignal((n) => n + 1)
-      }
+      // 只要这次带了验证码，失败就换图：服务端在**校验口令之前**就一次性消费掉了
+      // （口令错的 401 也会把这张图烧掉），不换图会让用户拿着一张废图反复重试。
+      if (captcha.id) setCaptchaSignal((n) => n + 1)
       toast(e instanceof Error ? e.message : '操作失败', 'error')
     } finally {
       setLoading(false)
