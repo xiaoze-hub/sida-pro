@@ -1,3 +1,11 @@
+## [未发布] chunk 404 自愈改为强制回源（修"刷新一次才进得去"）
+
+- 现场证据（生产 nginx access.log）：真实用户打开 `/ai-copilot` 时 `GET /assets/*.js` 返回 **404**（`useSourceHealth`/`toast`/`tiers`/`stock-colors`/`vendor-react`… 各 1~4 次），页面停在「正在打开数智参谋…」，手动刷新后正常。
+- 成因：发版后 `index.html` 被浏览器启发式缓存，旧壳仍引用已删除的 hash chunk；而原来的自愈只做 `location.reload()`，重载读到的**还是那份旧 HTML**，于是自愈无效。
+- 改法：`buildBustUrl()` 给当前 URL 加一次性 `?_cr=<ts>` 再 `location.replace()` —— 换缓存键强制回源拿新 HTML；同时清 Service Worker 缓存（避免"取不到的 chunk"被按 URL 缓存住）。仍受原有 sessionStorage 标记保护，不会无限刷新。
+- 配合入口 nginx 的 `Cache-Control: no-cache`（HTML/SW）与 `/assets` immutable + 边缘缓存，让这类失败从"需要人工刷新"变成"自动恢复且不再复发"。
+- 测试：`lazy-with-retry` 13 项（新增 3 项 buildBustUrl）+ 会话加载器 15 项通过；`tsc`/ESLint/UI 规则通过。
+
 ## release: v0.91.7（首屏提速）
 
 - 能力矩阵新鲜度加 5 分钟 TTL 缓存：`/api/datasources/capabilities` 每次页面加载都对 klines（1.5GB / 1697 chunks）跑 `SELECT max(ts)`，冷态 **4.6s**、热态 0.6s，服务端实测该接口 1.3s / 4.6s / 4.1s。缓存后同一 worker 5 分钟内不再查询。
