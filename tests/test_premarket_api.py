@@ -28,6 +28,23 @@ from src.db.models import AnalysisHistory
 TODAY = beijing_now().strftime("%Y-%m-%d")
 YESTERDAY = (beijing_now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
+
+@pytest.fixture(autouse=True)
+def _refresh_today(monkeypatch):
+    """每个用例重算"今天"。
+
+    2026-10-31 实测：分片在 23:5x（北京）开跑、跨过零点后，"今天"从 10-31 变 11-01，
+    模块级 TODAY 仍是导入时的 10-31，`今日底稿` 全被当成"历史底稿" → 5 个用例假红。
+    日期只在导入时算一次本身就是坑，这里按用例刷新（跨零点正好落在单个用例中途的概率可忽略）。
+    """
+    import sys as _sys
+
+    now = beijing_now()
+    monkeypatch.setattr(_sys.modules[__name__], "TODAY", now.strftime("%Y-%m-%d"))
+    monkeypatch.setattr(
+        _sys.modules[__name__], "YESTERDAY", (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    )
+
 USER_A = "user-a"
 USER_B = "user-b"
 
