@@ -6402,6 +6402,24 @@ def _m234_chat_message_run_id(conn: Connection) -> None:
     _add_column_if_missing(conn, "chat_messages", "run_id", "ALTER TABLE chat_messages ADD COLUMN run_id VARCHAR(36)")
 
 
+def _m236_captcha_challenges(conn: Connection) -> None:
+    """登录验证码挑战表（答案只存摘要，一次性消费；过期行由发码时清理）。"""
+    conn.execute(text(
+        """
+CREATE TABLE IF NOT EXISTS captcha_challenges (
+  nonce VARCHAR(64) PRIMARY KEY,
+  answer_digest VARCHAR(64) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_captcha_challenges_expires_at "
+        "ON captcha_challenges (expires_at)"
+    ))
+
+
 def _m235_chat_message_evidence_audit(conn: Connection) -> None:
     """依据行数字对账结果（JSON 文本）。旧消息不回填：没有取数原文就无法重算，留 NULL。"""
     _add_column_if_missing(
@@ -6640,6 +6658,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(233, "audit_detail_text", _m233_audit_detail_text),
     Migration(234, "chat_message_run_id", _m234_chat_message_run_id),
     Migration(235, "chat_message_evidence_audit", _m235_chat_message_evidence_audit),
+    Migration(236, "captcha_challenges", _m236_captcha_challenges),
 )
 
 

@@ -51,6 +51,7 @@ RATE_LIMIT_SENSITIVE = _env_int("RATE_LIMIT_SENSITIVE", 20)  # 20 req / min
 # P2(audit-20260915): webhook 免登录仅靠共享 secret, 单独更严限流(10/min)
 RATE_LIMIT_WEBHOOK = _env_int("RATE_LIMIT_WEBHOOK", 10)  # 10 req / min
 _SENSITIVE_PATHS = (
+    "/api/auth/captcha",  # 匿名可取图: 渲染是 CPU + 两次 commit, 按敏感档(20/min/IP)限速
     "/api/auth/login",
     "/api/auth/change-password",
     "/api/auth/reset-password",

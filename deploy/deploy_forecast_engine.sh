@@ -150,6 +150,25 @@ PYEOF
 fi
 
 # ── ④ env 文件(幂等覆盖; 单一来源) ──────────────────────────
+# 服务令牌(2026-10-31): 登录接口默认要求验证码, 引擎**没有屏幕** ⇒ 必须走 X-Service-Token。
+# 从主服务容器里读同一个值(与 auth.get_service_token 同源), 读不到就大声告警, 不静默留空。
+SERVICE_TOKEN="${SIDA_SERVICE_TOKEN:-}"
+if [ -z "$SERVICE_TOKEN" ] && [ "$STUB" != "1" ]; then
+  SERVICE_TOKEN="$(docker exec sida python -c 'from src.web.api.auth import get_service_token; print(get_service_token())' 2>/dev/null | tr -d '\r\n')"
+fi
+# 瞬态失败（主服务正在重建/容器名不同/DB 未就绪）不许把已有令牌写成空：下面的 cat > 是无条件覆盖，
+# 一写成空就等于把本来能用的部署打成不可用。沿用上一版 env 里的值。
+if [ -z "$SERVICE_TOKEN" ] && [ -f "$ENV_FILE" ]; then
+  SERVICE_TOKEN="$(sed -n 's/^SIDA_SERVICE_TOKEN=//p' "$ENV_FILE" | head -1)"
+  [ -n "$SERVICE_TOKEN" ] && log "本次未取到服务令牌, 沿用 env 里已有值(长度 ${#SERVICE_TOKEN})"
+fi
+if [ -n "$SERVICE_TOKEN" ]; then
+  log "服务令牌已注入 env(长度 ${#SERVICE_TOKEN})"
+else
+  log "⚠️ 未能取得服务令牌: 登录接口要求验证码时, 引擎的主服务调用会失败(需手工设 SIDA_SERVICE_TOKEN)"
+  log "   注意边界: 服务令牌只对 get_user_or_service 挂载的端点有效; 仍走 get_current_user 的端点(如 /api/shadow/profile)需要用户凭据"
+fi
+
 mkdir -p "$(dirname "$ENV_FILE")"
 cat > "$ENV_FILE" <<ENVEOF
 # 由 deploy/deploy_forecast_engine.sh 生成 —— 重跑脚本会覆盖, 勿手改。
@@ -159,6 +178,7 @@ FORECAST_HOST=$BIND_HOST
 FORECAST_DB_PATH=$DB_PATH
 TZ=Asia/Shanghai
 PYTHONUNBUFFERED=1
+SIDA_SERVICE_TOKEN=$SERVICE_TOKEN
 ENVEOF
 chmod 600 "$ENV_FILE"
 log "env 已写: $ENV_FILE (HOST=$BIND_HOST DB=$DB_PATH)"

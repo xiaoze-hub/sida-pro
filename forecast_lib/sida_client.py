@@ -77,6 +77,11 @@ def get_token() -> str:
     if cached and now < float(_TOKEN_CACHE.get("expires_at", 0)) - 30:
         return cached
 
+    if get_service_token():
+        # 有服务令牌就不再口令登录：登录接口对无验证码的请求会 428，
+        # 而服务令牌本身已是既有的机器身份（auth_headers 会带上）。
+        return ""
+
     try:
         token = _login_with_explicit_credentials()
     except Exception as exc:

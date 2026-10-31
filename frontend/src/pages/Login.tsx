@@ -8,6 +8,7 @@ import { Button } from '@sida/base-ui/components/ui/button'
 import { Input } from '@sida/base-ui/components/ui/input'
 import { Label } from '@sida/base-ui/components/ui/label'
 import { useToast } from '@sida/base-ui/components/ui/toast'
+import CaptchaField, { type CaptchaValue } from '@/components/auth/CaptchaField'
 
 // 邮箱注册(2026-09-16): 前端格式校验(与后端 EMAIL_RE 同口径)
 const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/
@@ -26,6 +27,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [code, setCode] = useState('')
+  // 登录验证码(2026-10-31): 服务端默认要求；refreshSignal 递增 = 强制换图
+  const [captcha, setCaptcha] = useState<CaptchaValue>({ id: null, code: '' })
+  const [captchaSignal, setCaptchaSignal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [countdown, setCountdown] = useState(0)
@@ -93,7 +97,12 @@ export default function LoginPage() {
   }
 
   const doLogin = async (uname: string, pwd: string) => {
-    const data = await authApi.login({ username: uname, password: pwd })
+    const data = await authApi.login({
+      username: uname,
+      password: pwd,
+      captcha_id: captcha.id,
+      captcha_code: captcha.code.trim() || null,
+    })
     saveToken(data)
   }
 
@@ -287,6 +296,9 @@ export default function LoginPage() {
       toast(isSetup ? '密码设置成功' : '登录成功', 'success')
       navigate('/')
     } catch (e) {
+      // 只要这次带了验证码，失败就换图：服务端在**校验口令之前**就一次性消费掉了
+      // （口令错的 401 也会把这张图烧掉），不换图会让用户拿着一张废图反复重试。
+      if (captcha.id) setCaptchaSignal((n) => n + 1)
       toast(e instanceof Error ? e.message : '操作失败', 'error')
     } finally {
       setLoading(false)
@@ -311,6 +323,8 @@ export default function LoginPage() {
   const switchMode = (next: AuthMode) => {
     setMode(next)
     setCode('')
+    // 切模式必须丢掉旧验证码：服务端已消费/可能过期的 id 不许带进下一次登录
+    setCaptcha({ id: null, code: '' })
     if (timerRef.current) {
       clearInterval(timerRef.current)
       timerRef.current = null
@@ -523,6 +537,16 @@ export default function LoginPage() {
                   </Button>
                 </div>
               </div>
+            )}
+
+            {/* 登录验证码(2026-10-31): 仅密码登录需要；服务端 mode=off 时组件自己隐藏 */}
+            {!isRegister && !isEmailCode && !isReset && (
+              <CaptchaField
+                value={captcha}
+                onChange={setCaptcha}
+                refreshSignal={captchaSignal}
+                disabled={loading}
+              />
             )}
 
             {/* 忘记密码入口(2026-10-23): 密码登录表单下方一行文字链接 */}

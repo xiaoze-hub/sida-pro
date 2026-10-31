@@ -209,6 +209,18 @@ react-day-picker 9→10、Radix 全家桶主版本、vite 5→8（rolldown 内�
 - 后端 `tests/test_admin_prefix_permissions.py` **11 passed**
 - 权限/鉴权相关回归 **116 passed**（`-k permission or auth or rbac or middleware`）
 
+## 2026-10-31
+
+### feat-登录验证码（图片识别 + 服务令牌豁免）
+
+- 新增 `src/core/captcha.py` + `src/web/api/captcha_store.py` + `GET /api/auth/captcha`：Pillow 逐字旋转 + 干扰线/噪点生成 5 位图片码；`captcha_id` **只签 nonce|exp、不签答案**（签答案等于把验证码变成离线预言机：2400 万次 HMAC ≈ 几秒），答案摘要存迁移 v236 的 `captcha_challenges`（多 worker 共享、一次性消费、答错也烧、过期清理）；`Cache-Control: no-store` 每个分支都设；渲染放同步 `def` 走线程池，不占事件循环。
+- 登录接口在口令校验**之前**验码（否则 `401/428` 会变成"口令对不对"的判据）；缺失/错误/过期/重放一律 `428`，且**不计入**账号失败次数（否则拿别人用户名刷码即可锁号）。口令错仍照旧累计并在 5 次后锁定（先过验证码再累计，锁定语义不变）。
+- 默认 `AUTH_CAPTCHA_MODE=always`；带有效 `X-Service-Token` 的请求豁免（仓库既有的机器身份）。预测引擎改为"有服务令牌就不再口令登录"，部署脚本把主服务的服务令牌注入 `forecast.env`，取不到时大声告警。
+- 第二轮审查又抓出 9 条，逐条修：①`captcha_id` 里的签名是**用户可控字符串**，`hmac.compare_digest` 对非 ASCII 直接抛 `TypeError` → 匿名一条 `x.9999999999.验证码` 就能把 `/api/auth/login` 打成 500（改为比 bytes）；②一次性消费改成 `DELETE ... WHERE nonce=?` 并**以 rowcount 判定归属**（生产 2 worker，先 SELECT 再 ORM delete 会让同一张码被并发重放）；③密钥副本不再缓存（`secret_rotation` 轮换后老 worker 会永久用旧密钥），库抖动时的临时密钥也不落地；④`/api/auth/captcha` 纳入敏感限速档（匿名刷图 = CPU + 两次 commit）；⑤模型补 `expires_at` 索引并与迁移 v236 同名对齐；⑥部署脚本取不到令牌时沿用旧 env（无条件覆盖会把可用部署写坏），并注明服务令牌只覆盖 `get_user_or_service` 端点；⑦stub 契约测试补令牌透传断言；⑧切登录模式清空旧验证码状态；⑨`Label htmlFor` 关联输入框。
+- 前端新增 `CaptchaField`（取图/换一张/输入，服务端 `off` 时自动隐藏，取图失败明确显示不可用）；登录失败 `428` 触发换图；`LoginPayload` 增加 `captcha_id/captcha_code`。
+- 边界：图片验证码是**人机区分**，不是加密；OCR 仍有成功率，真正的护栏仍是限速 + 失败锁定 + scrypt 口令哈希。`AUTH_CAPTCHA_MODE=adaptive|off` 可按环境降级（默认不降级）。
+- 验证：后端验证码核心/存储/接口 + 迁移护栏 + core→web 依赖门禁 58 项通过；`-k "auth or login or service_token or captcha"` 全量在跑；前端 `CaptchaField` 5 项、`tsc --noEmit`、ESLint、UI 规则通过，全量 2670 项在跑。
+
 ## 2026-10-30
 
 ### feat-依据行数字对账(逐条依据标注本轮取数里没有的读数)

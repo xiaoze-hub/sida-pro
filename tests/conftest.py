@@ -7,6 +7,8 @@ from pathlib import Path
 # 0.4② (2026-09-08) 方言门禁: 测试即本地开发, 显式声明 SQLite, 免得任何测试
 # 在启动门禁生效后因缺 SIDA_DB_URL 被拒。个别测试用 monkeypatch.delenv 覆盖。
 os.environ.setdefault("SIDA_ALLOW_SQLITE", "1")
+# 登录验证码：生产默认 always；单测里关掉，验证码自身行为由 test_login_captcha* 显式打开。
+os.environ.setdefault("AUTH_CAPTCHA_MODE", "off")
 
 # 2026-09-20: skill key 的盐必须**固定** —— 与生产同一前提。
 # 生产事故: SKILL_KEY_SALT 未设 ⇒ 每进程随机盐 ⇒ 同一把 key 时而 200 时而 401。

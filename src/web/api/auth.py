@@ -69,6 +69,10 @@ _jwt_secret: str | None = None
 class LoginRequest(BaseModel):
     username: str  # 兼容旧字段名: 同时接受 username 或 email
     password: str
+    # 验证码（2026-10-31）：仅当本次登录被判定需要验证码时才必填；
+    # 机器凭据（预测引擎/脚本）密码正确时不会触发，见 src/core/captcha.py 模块头。
+    captcha_id: Optional[str] = None
+    captcha_code: Optional[str] = None
 
 
 def _find_user_by_login_id(db: Session, login_id: str) -> User | None:
@@ -689,6 +693,26 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
     locked = check(ip, data.username.strip())
     if locked:
         raise HTTPException(429, locked)
+
+    # 验证码：默认每次登录都要（`AUTH_CAPTCHA_MODE=always`），机器身份用 X-Service-Token 豁免。
+    # 放在口令校验**之前**：否则 401/428 本身就泄露"口令对不对"，等于白送口令预言机。
+    # 失败不计入账号锁定（否则拿别人用户名刷码就能锁号）；口令错照旧累计、5 次锁定。
+    from src.core import captcha as _captcha
+    from src.core.login_ratelimit import failures as _failures
+    from src.web.api import captcha_store as _cap_store
+
+    _ident = data.username.strip()
+    if not _cap_store.service_request_exempt(request.headers) and _captcha.required(
+        failures=_failures(ip, _ident)
+    ):
+        _nonce, _reason = _captcha.parse_token(data.captcha_id)
+        if _nonce is not None:
+            _ok, _reason = _cap_store.consume_challenge(db, _nonce, data.captcha_code)
+        else:
+            _ok = False
+        if not _ok:
+            logger.info("[auth] 验证码未通过 ip=%s user=%s reason=%s", ip, _ident[:32], _reason)
+            raise HTTPException(428, "验证码不正确或已失效，已刷新，请重新输入")
 
     get_or_create_owner(db)  # 确保 owner 存在(兼容首次部署)
     user = _find_user_by_login_id(db, data.username)
