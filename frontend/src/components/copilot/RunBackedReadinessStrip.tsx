@@ -24,7 +24,9 @@ export function RunBackedReadinessStrip({
   runId?: string | null
   loadDetail?: (runId: string) => Promise<{ ok: boolean; data?: { steps?: CopilotRunStep[] } }>
 }) {
-  const [steps, setSteps] = useState<CopilotRunStep[] | null>(null)
+  // steps 必须跟 runId 绑定：气泡按 index 做 key，换会话/重答会复用同一个组件实例，
+  // 不清空就会拿上一条回答的工具结果去把这条的 unknown 升成 ok（假的确定性）。
+  const [loaded, setLoaded] = useState<{ runId: string; steps: CopilotRunStep[] } | null>(null)
   const loadRef = useRef(loadDetail)
   loadRef.current = loadDetail
   const needsEvidence = state.items.some((it) => it.status === 'unknown')
@@ -34,14 +36,19 @@ export function RunBackedReadinessStrip({
     const load = loadRef.current
     if (!load) return
     let alive = true
-    void load(runId).then((res) => {
-      if (alive && res.ok && res.data?.steps) setSteps(res.data.steps)
-    })
+    void load(runId)
+      .then((res) => {
+        if (alive && res.ok && res.data?.steps) setLoaded({ runId, steps: res.data.steps })
+      })
+      .catch(() => {
+        /* 轨迹是旁路证据：拿不到就保持 unknown，不许把对话页炸掉 */
+      })
     return () => {
       alive = false
     }
   }, [runId, needsEvidence])
 
+  const steps = loaded && loaded.runId === runId ? loaded.steps : null
   const merged = useMemo(() => (steps ? applyRunSteps(state, steps) : state), [steps, state])
   if (!merged.items.length) return null
   return (

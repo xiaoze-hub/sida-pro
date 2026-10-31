@@ -120,3 +120,14 @@ def test_bare_evidence_price_does_not_collide_with_money_claim():
     r = audit("成交额 61.93 万元。", "现价 61.93；主力净流出 -6193万。")
     assert r["magnitude"] == []
     assert r["severe"] is False
+
+
+def test_yi_gu_is_volume_not_money():
+    """`437.69亿股` 是股数：既不能被当金额，也不能和 `437.69万`（金额）比出 10000 倍。"""
+    assert audit("产量 437.69 亿股。", "产量 437.69万股；成交额 8.42亿。")["magnitude"] == []
+    assert audit("产量 437.69 亿股。", "成交额 437.69万。")["magnitude"] == []
+
+
+def test_wanyiyuan_billion_is_money():
+    r = audit("成交额 3.2 万亿元。", "成交额 32000亿元。")
+    assert r["magnitude"] == []
