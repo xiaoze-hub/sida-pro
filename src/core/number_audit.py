@@ -14,10 +14,12 @@ import re
 # 只抓"硬数字"：带小数点的（价格/百分比）或带量纲的（万/亿/倍/手/元）。
 # 纯整数无单位（3 板 / 5 日 / 17 次）不查，否则满屏误报。
 _NUM_RE = re.compile(
-    r"(?<![\d.])(-?\d+(?:,\d{3})*(?:\.\d{1,4})?)(?:\s*(万元|亿元|%|万|亿|倍|手|元))?"
+    # 复合量词放前面：`23.94 万手` 若只匹配到 `23.94万`，成交量就会被当成金额（审查 2026-10-31）
+    r"(?<![\d.])(-?\d+(?:,\d{3})*(?:\.\d{1,4})?)(?:\s*(万元|亿元|万手|亿手|万股|%|万|亿|倍|手|元))?"
 )
-_UNITS = ("万元", "亿元", "%", "万", "亿", "倍", "手", "元")
-_SCALE = {"万": 1e4, "万元": 1e4, "亿": 1e8, "亿元": 1e8}
+_UNITS = ("万元", "亿元", "万手", "亿手", "万股", "%", "万", "亿", "倍", "手", "元")
+_SCALE = {"万": 1e4, "万元": 1e4, "万手": 1e4, "万股": 1e4,
+          "亿": 1e8, "亿元": 1e8, "亿手": 1e8}
 
 # 只抹掉"带市场标记"的代码（002050.SZ / CN:002050 / sh600519）。
 # 裸 6 位数不能当代码抹掉 —— 125628 手 也是 6 位数，抹了会让证据池缺数、把真数判成编造。
@@ -120,7 +122,7 @@ _MAGNITUDE_TOL = 0.015
 
 # 非货币单位：`12562 手`、`3 倍`、`88.0%` 折成"元"会造出假的 100/10000 倍关系
 # （例：6193 手 × ¥100 ≈ 6193 万元 → 与成交额同量级，被误判成单位写错）。
-_NON_CURRENCY_UNITS = ("%", "手", "倍")
+_NON_CURRENCY_UNITS = ("%", "手", "倍", "万手", "亿手", "万股")
 
 
 def _scale_of_token(token: str) -> float | None:
@@ -129,6 +131,14 @@ def _scale_of_token(token: str) -> float | None:
     if unit in _NON_CURRENCY_UNITS:
         return None
     return _SCALE.get(unit, 1.0)
+
+
+def scale_ratio(a: float, b: float) -> float:
+    """两个量纲系数之比，恒 ≥ 1（判断"差几倍"时不关心方向）。"""
+    if not a or not b:
+        return 0.0
+    r = a / b
+    return r if r >= 1 else 1 / r
 
 
 def _to_yuan(token: str, value: float) -> float | None:
@@ -197,10 +207,10 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
         checked += 1
         # 先查「数字一模一样、单位差 100/10000 倍」：证据池把单位剥掉了，`6193元` 与 `6193万`
         # 会撞成同一个数 → 被当成命中放行。这里按**各自单位**再折一次才认命中。
-        _unit0 = next((u for u in _UNITS if token.endswith(u)), "")
-        _scale0 = _SCALE.get(_unit0) or (1.0 if _unit0 == "元" else 0.0)
+        _scale0 = _scale_of_token(token) or 0.0
         if _scale0 and v in known:
             _unit_mismatch = None
+            _same_scale_hit = False
             for _tok, _x in pool_pairs:
                 if abs(abs(_x) - abs(v)) > abs(v) * 0.005 or _x == 0:
                     continue
@@ -208,16 +218,17 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
                 if _s2 is None:
                     # 同数字但单位不是钱（`6193 手` vs 回答 `6193 万元`）：不能据此判错，跳过
                     continue
-                _r = _scale0 / _s2
-                if _r < 1:
-                    _r = 1 / _r
-                for _target in _MAGNITUDE_FACTORS:
-                    if abs(_r / _target - 1.0) <= _MAGNITUDE_TOL:
-                        _unit_mismatch = (_tok, _target)
-                        break
-                # 已经找到同数字的**货币**出处：无论是否命中都停 —— 存在同量纲出处就是有据，
-                # 继续往后扫只会被别的同数字 token（另一个单位）带偏。
-                break
+                if abs(scale_ratio(_scale0, _s2) - 1.0) <= _MAGNITUDE_TOL:
+                    # 存在同量纲出处 ⇒ 这就是有据，不是单位错（证据池里可能还有个同数字的其它单位）
+                    _same_scale_hit = True
+                    break
+                if _unit_mismatch is None:
+                    for _target in _MAGNITUDE_FACTORS:
+                        if abs(scale_ratio(_scale0, _s2) / _target - 1.0) <= _MAGNITUDE_TOL:
+                            _unit_mismatch = (_tok, _target)
+                            break
+            if _same_scale_hit:
+                _unit_mismatch = None
             if _unit_mismatch:
                 magnitude.append({"claim": token, "evidence": _unit_mismatch[0],
                                   "factor": _unit_mismatch[1]})
@@ -257,8 +268,9 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
             continue
         # 单位量级（差 100/10000 倍）比"查不到出处"更严重：这是把万当成了百万元。
         unit_for_mag = next((u for u in _UNITS if token.endswith(u)), "")
-        # 「元」也在比对范围内（把 6193万 写成 6193元 = 差 10000 倍）；手/倍/% 不是金额，排除
-        scale_for_mag = _SCALE.get(unit_for_mag) or (1.0 if unit_for_mag == "元" else 0.0)
+        # 量级比对只认货币单位：`万手/亿手/万股`、`手`、`倍`、`%` 一律返回 None（不当 1.0/1e4 用）。
+        # 「元」也算货币（把 6193万 写成 6193元 = 差 10000 倍）。
+        scale_for_mag = _scale_of_token(token) or 0.0
         if scale_for_mag:
             hit = _magnitude_mismatch(v, scale_for_mag, pool_pairs)
             if hit is not None:

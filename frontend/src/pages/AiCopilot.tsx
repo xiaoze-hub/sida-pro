@@ -25,6 +25,7 @@ import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessSt
 import { RunBackedReadinessStrip } from '@/components/copilot/RunBackedReadinessStrip'
 import { buildAnswerTrace, type AnswerTrace } from '@/lib/copilot/evidence-provenance'
 import {
+  applyRunSteps,
   emptyReadiness,
   foldStageEvent,
   parseStageLabel,
@@ -1872,6 +1873,17 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                     // 定稿消息带自己的痕；流式中的最后一条用实时态（定稿瞬间原地换成固化值）
                     const strip = m.readiness ?? (liveDraft ? readiness : null)
                     /**
+                     * 2026-10-31：齐套度与溯源条必须读**同一份**证据状态。
+                     * 原来只有条本身用轨迹补全，溯源条仍拿原始 readiness → 同一个气泡里
+                     * 条上写「已取 13/13」、痕上写「未确认 13」，正是用户误读的根源。
+                     * 这里在渲染处合并一次，两处共用。
+                     */
+                    const mergedStrip = (() => {
+                      if (!strip) return strip
+                      const det = m.runId ? runsState.details[m.runId] : null
+                      return det?.steps?.length ? applyRunSteps(strip, det.steps) : strip
+                    })()
+                    /**
                      * 溯源条（2026-10-29 P1 接线）：只有 structured 回答才有「依据」可言。
                      *  - 草稿不挂（`live`）：终稿没到，回答与证据都没定稿；
                      *  - readiness 只给这条消息**自己的**固化值，绝不把当前流的实时态
@@ -1889,7 +1901,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                           index: i,
                           conversationId: convId,
                           live: liveDraft,
-                          readiness: m.incomplete ? null : m.readiness ?? null,
+                          readiness: m.incomplete ? null : mergedStrip,
                         })
                       : null
                     return (
@@ -1897,7 +1909,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                         {strip && strip.items.length ? (
                           <div className="mb-1.5">
                             <RunBackedReadinessStrip
-                              state={strip}
+                              state={mergedStrip ?? strip}
                               runId={m.runId}
                               loadDetail={runsState.loadDetail}
                             />

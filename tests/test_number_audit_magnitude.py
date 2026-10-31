@@ -85,3 +85,18 @@ def test_lots_at_100_yuan_do_not_fake_a_10000x_error():
 def test_percent_token_never_triggers_magnitude():
     r = audit("买撤单率 0.88%。", "买撤单率 88.0%；主力净流出 -6193万。")
     assert r["magnitude"] == []
+
+
+def test_wan_shou_is_not_money():
+    """`量 23.94 万手 / 额 8.42 亿`：答案写 23.94亿元不能被"23.94万手"判成量级错。"""
+    ev = "量 23.94 万手；额 8.42 亿；成交额 23.94亿元。"
+    r = audit("成交额 23.94 亿元。", ev)
+    assert r["magnitude"] == []
+    assert r["severe"] is False
+
+
+def test_same_number_other_unit_does_not_shadow_correct_source():
+    """证据池里先出现 61.93元、后出现 61.93万元：存在同量纲出处就不能判错。"""
+    ev = "现价 61.93 元；成交额 61.93 万元。"
+    r = audit("成交额 61.93 万元。", ev)
+    assert r["magnitude"] == []
