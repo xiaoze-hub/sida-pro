@@ -1,3 +1,10 @@
+## release: v0.91.7（首屏提速）
+
+- 能力矩阵新鲜度加 5 分钟 TTL 缓存：`/api/datasources/capabilities` 每次页面加载都对 klines（1.5GB / 1697 chunks）跑 `SELECT max(ts)`，冷态 **4.6s**、热态 0.6s，服务端实测该接口 1.3s / 4.6s / 4.1s。缓存后同一 worker 5 分钟内不再查询。
+- 缓存按数据库连接串分桶；空表结果也缓存；**查询失败不缓存**（库刚起/表未建时下次重试，不把"无数据"钉 5 分钟）。
+- 口径与判定逻辑未改。
+- 测试：新增 5 项缓存不变量；`-k "capabilit or datasource"` 44 项通过。
+
 ## [未发布] 能力矩阵新鲜度缓存（页面加载提速）
 
 - `/api/datasources/capabilities` 每次页面加载都会对每张表跑 `SELECT max(...)`；其中 klines 是 1.5GB / 1697 chunks 的 hypertable，**冷态单次 4.6s、热态 0.6s**，直接拖慢首屏（实测该接口服务端 1.3s / 4.6s / 4.1s）。
