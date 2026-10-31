@@ -59,7 +59,8 @@ def test_unit_misstatement_still_caught():
     """109,167 写成 11.6 万（实际 10.9 万）—— 这不是四舍五入，是编。"""
     ev = "外盘 109167 手"
     r = audit("外盘 11.6 万手", ev)
-    assert "11.6万" in r["unverified"]
+    # 2026-10-31：复合量词现在整体进 token（`11.6万手`），比裸 `11.6万` 更能说清"这是手数"
+    assert "11.6万手" in r["unverified"]
 
 
 def test_six_digit_quantity_is_not_treated_as_code():

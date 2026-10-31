@@ -338,6 +338,46 @@ export function settleReadiness(state: ReadinessState): ReadinessState {
   return recount(items, state.total)
 }
 
+/**
+ * 用运行轨迹（`GET /copilot/runs/{run_id}` 的 steps）把 `unknown` 补成 ok / failed。
+ *
+ * 背景（2026-10-31 线上）：SSE 的 `stage` 只在工具**开跑**时发一条，没有完成帧，
+ * 于是每条回答都挂着「已取 0/13 · 未确认 13」——正文却写满了数据，用户读成"13 项都没取到、
+ * 这篇是编的"。而服务端其实**逐工具记录了 ok/error**（`CopilotStep.ok`），
+ * 只是没走这条路回到界面。
+ *
+ * 规则（与 foldFailureNotices 同一条克制原则）：
+ *  - 只认**工具名精确命中**的 step；一个工具多条 step（重试/多标的）以「有任一成功即 ok」为准，
+ *    全部失败才 failed —— 多标的扫描里单只失败不等于整维度没数据；
+ *  - steps 里没有的条目保持原状（unknown 不会被猜成 ok）；
+ *  - 已有 ok/failed 的条目不被覆盖（流里已知的事实优先，轨迹只补缺口）。
+ */
+export function applyRunSteps(
+  state: ReadinessState,
+  steps: Array<{ tool?: string | null; ok?: boolean | null }> | null | undefined,
+): ReadinessState {
+  if (!state.items.length || !steps || !steps.length) return state
+  const byTool = new Map<string, boolean[]>()
+  for (const st of steps) {
+    const tool = (st?.tool || '').trim()
+    if (!tool) continue
+    const list = byTool.get(tool) ?? []
+    list.push(st.ok !== false)  // ok 缺失按成功算？不：只把显式 false 当失败，其余视为未断言
+    byTool.set(tool, list)
+  }
+  if (!byTool.size) return state
+  let changed = false
+  const items = state.items.map((it) => {
+    if (it.status === 'ok' || it.status === 'failed') return it
+    const flags = byTool.get(it.key)
+    if (!flags || !flags.length) return it
+    changed = true
+    const allFailed = flags.every((f) => f === false)
+    return { ...it, status: (allFailed ? 'failed' : 'ok') as ReadinessStatus }
+  })
+  return changed ? recount(items, state.total) : state
+}
+
 /** 便捷入口：一串 stage 文案 → 终态（流结束后用）。 */
 export function readinessFromLabels(labels: string[]): ReadinessState {
   return settleReadiness(foldStageEvents(labels))
