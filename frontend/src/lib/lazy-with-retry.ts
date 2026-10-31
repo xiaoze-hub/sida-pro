@@ -49,9 +49,48 @@ function resolveStorage(deps?: ChunkRetryDeps): StorageLike | null {
   return null
 }
 
+/**
+ * 给 URL 加一次性 cache-bust 参数。
+ *
+ * 为什么不能只 `location.reload()`：发版后用户手里的 `index.html` 可能是**启发式缓存**的旧壳，
+ * reload 会再读同一份旧 HTML，仍然去要已删除的 chunk —— 于是"刷新也没用"，页面永远停在加载中。
+ * 换一个 query 就是换一个缓存键，等于强制回源拿新 HTML（新 HTML 引用的 chunk 一定存在）。
+ */
+export function buildBustUrl(href: string, now: number = Date.now()): string {
+  try {
+    const u = new URL(href)
+    u.searchParams.set('_cr', String(now))
+    return u.toString()
+  } catch {
+    return href
+  }
+}
+
 function defaultReload(): void {
   try {
-    window.location.reload()
+    const loc = window.location
+    const target = buildBustUrl(loc.href)
+    const go = () => {
+      try {
+        loc.replace(target)
+      } catch {
+        try {
+          loc.reload()
+        } catch {
+          /* 无法刷新时保持现状(由调用方决定后续) */
+        }
+      }
+    }
+    // Service Worker 可能把"取不到的 chunk"也按 URL 缓存住 → 先清干净再走
+    const cacheStorage = (window as unknown as { caches?: CacheStorage }).caches
+    if (cacheStorage && typeof cacheStorage.keys === 'function') {
+      cacheStorage
+        .keys()
+        .then((keys) => Promise.all(keys.map((k) => cacheStorage.delete(k))))
+        .then(go, go)
+      return
+    }
+    go()
   } catch {
     /* 无法刷新时保持现状(由调用方决定后续) */
   }

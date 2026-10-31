@@ -10,6 +10,7 @@
 //   4. 加载成功 → 清标记(重新武装), 下次发版再失败仍能自愈一次。
 import { describe, expect, it, vi } from 'vitest'
 import {
+  buildBustUrl,
   clearChunkReloadFlag,
   handleChunkLoadError,
   isChunkLoadError,
@@ -144,5 +145,27 @@ describe('lazyWithRetry 导出契约', () => {
     store.setItem(`sida:chunk-reload:${KEY}`, '1')
     clearChunkReloadFlag(KEY, { storage: store })
     expect(store.has(`sida:chunk-reload:${KEY}`)).toBe(false)
+  })
+})
+
+// --- 2026-10-31: chunk 404 自愈必须绕开"旧 HTML 还在缓存里" ---
+describe('buildBustUrl', () => {
+  it('加一次性 _cr 参数，换缓存键', () => {
+    const out = buildBustUrl('https://x.test/ai-copilot', 1700000000000)
+    const u = new URL(out)
+    expect(u.pathname).toBe('/ai-copilot')
+    expect(u.searchParams.get('_cr')).toBe('1700000000000')
+  })
+
+  it('保留原有 query 与 hash', () => {
+    const out = buildBustUrl('https://x.test/ai-copilot?c=abc#bottom', 42)
+    const u = new URL(out)
+    expect(u.searchParams.get('c')).toBe('abc')
+    expect(u.searchParams.get('_cr')).toBe('42')
+    expect(u.hash).toBe('#bottom')
+  })
+
+  it('非法 URL 原样返回（不抛）', () => {
+    expect(buildBustUrl('not a url', 1)).toBe('not a url')
   })
 })
