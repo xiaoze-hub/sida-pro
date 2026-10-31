@@ -123,6 +123,9 @@ _MAGNITUDE_TOL = 0.015
 # 非货币单位：`12562 手`、`3 倍`、`88.0%` 折成"元"会造出假的 100/10000 倍关系
 # （例：6193 手 × ¥100 ≈ 6193 万元 → 与成交额同量级，被误判成单位写错）。
 _NON_CURRENCY_UNITS = ("%", "手", "倍", "万手", "亿手", "万股")
+# 显式货币单位：只有它们才参与「量级不一致」判定。裸小数（现价 61.93 / 量比 1.42）
+# 不能折成 1.0 元去和「成交额 61.93万元」比 —— 那会把正确的价格判成差 10000 倍。
+_MONEY_UNITS = ("万", "万元", "亿", "亿元", "元")
 
 
 def _scale_of_token(token: str) -> float | None:
@@ -207,7 +210,8 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
         checked += 1
         # 先查「数字一模一样、单位差 100/10000 倍」：证据池把单位剥掉了，`6193元` 与 `6193万`
         # 会撞成同一个数 → 被当成命中放行。这里按**各自单位**再折一次才认命中。
-        _scale0 = _scale_of_token(token) or 0.0
+        _unit0 = next((u for u in _UNITS if token.endswith(u)), "")
+        _scale0 = (_scale_of_token(token) or 0.0) if _unit0 in _MONEY_UNITS else 0.0
         if _scale0 and v in known:
             _unit_mismatch = None
             _same_scale_hit = False
@@ -270,7 +274,7 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
         unit_for_mag = next((u for u in _UNITS if token.endswith(u)), "")
         # 量级比对只认货币单位：`万手/亿手/万股`、`手`、`倍`、`%` 一律返回 None（不当 1.0/1e4 用）。
         # 「元」也算货币（把 6193万 写成 6193元 = 差 10000 倍）。
-        scale_for_mag = _scale_of_token(token) or 0.0
+        scale_for_mag = (_scale_of_token(token) or 0.0) if unit_for_mag in _MONEY_UNITS else 0.0
         if scale_for_mag:
             hit = _magnitude_mismatch(v, scale_for_mag, pool_pairs)
             if hit is not None:

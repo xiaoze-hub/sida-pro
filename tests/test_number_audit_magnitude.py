@@ -100,3 +100,16 @@ def test_same_number_other_unit_does_not_shadow_correct_source():
     ev = "现价 61.93 元；成交额 61.93 万元。"
     r = audit("成交额 61.93 万元。", ev)
     assert r["magnitude"] == []
+
+
+def test_bare_price_is_not_treated_as_yuan():
+    """`现价 61.93`（无单位）不能和 `成交额 61.93万元` 比出 10000 倍。"""
+    ev = "成交额 61.93万元；主力净流出 -6193万。"
+    r = audit("现价 61.93。", ev)
+    assert r["magnitude"] == []
+    assert r["severe"] is False
+
+
+def test_explicit_yuan_still_detected_against_wan():
+    r = audit("成交额 61.93 元。", "成交额 61.93万元。")
+    assert r["magnitude"] and int(r["magnitude"][0]["factor"]) == 10000
