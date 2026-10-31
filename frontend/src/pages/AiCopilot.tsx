@@ -22,6 +22,7 @@ import EvidenceRowAuditPanel from '@/components/copilot/EvidenceRowAuditPanel'
 import { AmbientGrid } from '@/components/motion/AmbientGrid'
 import { StreamingBeam } from '@/components/motion/StreamingBeam'
 import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
+import { RunBackedReadinessStrip } from '@/components/copilot/RunBackedReadinessStrip'
 import { buildAnswerTrace, type AnswerTrace } from '@/lib/copilot/evidence-provenance'
 import {
   emptyReadiness,
@@ -1895,11 +1896,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                       <>
                         {strip && strip.items.length ? (
                           <div className="mb-1.5">
-                            <EvidenceReadinessStrip
-                              items={strip.items}
-                              done={strip.done}
-                              total={strip.total}
-                              failed={strip.failed}
+                            <RunBackedReadinessStrip
+                              state={strip}
+                              runId={m.runId}
+                              loadDetail={runsState.loadDetail}
                             />
                           </div>
                         ) : null}

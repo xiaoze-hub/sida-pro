@@ -55,14 +55,20 @@ def extract_claims(text: str) -> list[str]:
     return seen
 
 
-def _evidence_pool(evidence: str) -> tuple[set[float], list[float]]:
+def _evidence_pool(evidence: str) -> tuple[set[float], list[float], list[tuple[str, float]]]:
+    """返回 (数值集合, 数值列表, [(原文 token, 数值)])。
+
+    第三项给「量级不一致」用：只报「差 100 倍」而不给出原文，用户没法自己判断谁对。
+    """
     vals: list[float] = []
+    pairs: list[tuple[str, float]] = []
     for token in extract_claims(evidence):
         v = _norm(token)
         if v is not None:
             vals.append(v)
+            pairs.append((token, v))
     # 证据池上限 150 → 400: system 上下文里还有持仓成本/画像, 池子太小会把真数挤出窗口
-    return set(vals), vals[:400]
+    return set(vals), vals[:400], pairs[:400]
 
 
 def _diff_set(pool: list[float]) -> set[float]:
@@ -103,6 +109,46 @@ def _derived(pool: list[float]) -> set[float]:
     return out
 
 
+# ── 量级不一致（2026-10-31）────────────────────────────────────────────────
+# 线上实例：同一标的同一天，主力净流出被写成 -61.93 万（取数原文 -6193 万）——
+# 差 100 倍。原有的「查得到出处吗」比对抓不住这种错：两个数都不在池子里，
+# 它只会被归成「可能是推算值」，语气太软，用户看不出这是单位换算错了。
+# 这里单独识别「恰好差 100 / 10000 倍」：万↔百万元级、亿↔万元级，几乎只可能是换算错。
+_MAGNITUDE_FACTORS = (100.0, 10000.0)
+_MAGNITUDE_TOL = 0.015
+
+
+def _to_yuan(token: str, value: float) -> float:
+    """证据 token 折成元：带万/亿的按单位放大，裸数（含「元」）按元算。"""
+    unit = next((u for u in _UNITS if (token or "").endswith(u)), "")
+    return value * _SCALE.get(unit, 1.0)
+
+
+def _magnitude_mismatch(claim_value: float, claim_scale: float,
+                        pool: list[tuple[str, float]]) -> tuple[str, float] | None:
+    """回答里的金额与取数原文是否恰好差 100 / 10000 倍（单位换算错）。
+
+    两边都先折成元再比：证据 `-6193万` = -6.193e7 元，回答 `-61.93万` = -6.193e5 元，
+    比值 100 —— 这就是线上那条「同一天同一标的差 100 倍」。
+    只认 100 / 10000：2 倍、3 倍这种普通算错仍走「未找到出处」，不冒充量级错误。
+    """
+    if not claim_scale or claim_value == 0:
+        return None
+    yen = claim_value * claim_scale
+    for token, x in pool:
+        x_yen = _to_yuan(token, x)
+        if not x_yen or abs(x_yen) < 1e4:  # 太小的读数多是价格/比例，不参与金额量级比对
+            continue
+        ratio = abs(yen / x_yen)
+        if ratio == 0:
+            continue
+        factor = ratio if ratio >= 1 else 1 / ratio
+        for target in _MAGNITUDE_FACTORS:
+            if abs(factor / target - 1.0) <= _MAGNITUDE_TOL:
+                return token, target
+    return None
+
+
 def _close(v: float, x: float, dp: int = 2) -> bool:
     """读数与回答里的数是否"同一个数"。
 
@@ -122,17 +168,42 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
     claims = extract_claims(answer or "")
     if not claims:
         return {"checked": 0, "unverified": [], "ratio": 0.0, "severe": False}
-    known, pool = _evidence_pool(evidence or "")
+    known, pool, pool_pairs = _evidence_pool(evidence or "")
     pool_all = pool
     q_vals = {v for v in (_norm(t) for t in extract_claims(question or "")) if v is not None}
     derived = _derived(pool)
     unverified: list[str] = []
+    magnitude: list[dict] = []
     checked = 0
     for token in claims:
         v = _norm(token)
         if v is None:
             continue
         checked += 1
+        # 先查「数字一模一样、单位差 100/10000 倍」：证据池把单位剥掉了，`6193元` 与 `6193万`
+        # 会撞成同一个数 → 被当成命中放行。这里按**各自单位**再折一次才认命中。
+        _unit0 = next((u for u in _UNITS if token.endswith(u)), "")
+        _scale0 = _SCALE.get(_unit0) or (1.0 if _unit0 == "元" else 0.0)
+        if _scale0 and v in known:
+            _unit_mismatch = None
+            for _tok, _x in pool_pairs:
+                if abs(abs(_x) - abs(v)) > abs(v) * 0.005 or _x == 0:
+                    continue
+                _s2 = _SCALE.get(next((u for u in _UNITS if _tok.endswith(u)), ""), 0.0) or 1.0
+                _r = _scale0 / _s2
+                if _r < 1:
+                    _r = 1 / _r
+                for _target in _MAGNITUDE_FACTORS:
+                    if abs(_r / _target - 1.0) <= _MAGNITUDE_TOL:
+                        _unit_mismatch = (_tok, _target)
+                        break
+                if _unit_mismatch:
+                    break
+            if _unit_mismatch:
+                magnitude.append({"claim": token, "evidence": _unit_mismatch[0],
+                                  "factor": _unit_mismatch[1]})
+                unverified.append(token)
+                continue
         if v in known or v in q_vals:
             continue
         if abs(v) in {abs(x) for x in known}:  # 方向符号写法差异
@@ -165,22 +236,63 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
         scale = _SCALE.get(unit)
         if scale and any(abs(v * scale - x) <= abs(x) * 0.015 for x in pool_all if x):
             continue
+        # 单位量级（差 100/10000 倍）比"查不到出处"更严重：这是把万当成了百万元。
+        unit_for_mag = next((u for u in _UNITS if token.endswith(u)), "")
+        # 「元」也在比对范围内（把 6193万 写成 6193元 = 差 10000 倍）；手/倍/% 不是金额，排除
+        scale_for_mag = _SCALE.get(unit_for_mag) or (1.0 if unit_for_mag == "元" else 0.0)
+        if scale_for_mag:
+            hit = _magnitude_mismatch(v, scale_for_mag, pool_pairs)
+            if hit is not None:
+                evidence_token, factor = hit
+                magnitude.append({
+                    "claim": token,
+                    "evidence": evidence_token,
+                    "factor": round(abs(factor), 4),
+                })
+                unverified.append(token)
+                continue
         unverified.append(token)
     ratio = len(unverified) / checked if checked else 0.0
     return {
         "checked": checked,
         "unverified": unverified,
+        "magnitude": magnitude,
         "ratio": round(ratio, 3),
         # 小样本别急着下"未通过"结论：2 个数里错 1 个只是可疑，5 个数里错 3 个才是严重
-        "severe": len(unverified) >= 3 or (checked >= 6 and ratio >= 0.34),
+        # 量级错误一条就够严重 —— 它几乎不可能是"推算值"，只可能是换算/串位。
+        "severe": bool(magnitude) or len(unverified) >= 3 or (checked >= 6 and ratio >= 0.34),
     }
+
+
+def _magnitude_line(result: dict) -> str:
+    """把量级错误写成一句人话：谁的数、取数原文是多少、差多少倍。"""
+    items = result.get("magnitude") or []
+    if not items:
+        return ""
+    shown = "；".join(
+        f"回答写 {it['claim']}，取数原文 {it['evidence']}（差 {int(it['factor'])} 倍）"
+        for it in items[:3]
+    )
+    more = "" if len(items) <= 3 else f"，另有 {len(items) - 3} 处"
+    return (
+        f"⚠️ **单位量级不一致**：{shown}{more}。"
+        "这类差异一般是万/亿换算错误（把万元当成百万元），**请以取数原文为准**。"
+    )
 
 
 def annotate(answer: str, result: dict) -> str:
     """把对账结论附在回答末尾（不改正文）。"""
     bad = result.get("unverified") or []
+    mag_line = _magnitude_line(result)
     if not bad:
         return answer
+    if mag_line:
+        shown = "、".join(bad[:6]) + ("…" if len(bad) > 6 else "")
+        return (
+            (answer or "").rstrip()
+            + f"\n\n---\n{mag_line}"
+            + f"\n\n其余 {len(bad)}/{result['checked']} 个数字（{shown}）未在工具返回中找到出处，请以原始读数为准。"
+        )
     shown = "、".join(bad[:6]) + ("…" if len(bad) > 6 else "")
     if result.get("severe"):
         tail = (
