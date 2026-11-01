@@ -13,6 +13,9 @@
 它们排在链路前段（同花顺 prio=3，在 Sina/东财之前），每次取数都要先失败一次再降级。
 改为种子默认 `enabled=False`（设置页仍可手动开启，不删源、不丢配置）；优先级保持原值，
 因为禁用已经让它退出链路，改序会破坏既有的源排序回归 `test_tq_fallback_dragon_flow`。
+
+⚠️ **种子默认值只对全新库生效**：`seed_data_sources()` 对已存在的行不改 `enabled`（刻意不覆盖运维取舍）。
+已投产的库要用一次性治理脚本关掉：`scripts/disable_known_dead_sources.py`（幂等，默认干跑）。
 新增回归 `tests/test_w32_bootstrap.py::test_known_dead_sources_are_disabled_by_default`，
 防止有人顺手又打开。
 
