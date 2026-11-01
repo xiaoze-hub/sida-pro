@@ -5,7 +5,7 @@
 **An AI workspace for stock technical research — market context, charts, watchlists and traceable analysis in one place.**
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.91.10-blue) <!-- Keep aligned with VERSION. -->
+![Version](https://img.shields.io/badge/version-v0.91.11-blue) <!-- Keep aligned with VERSION. -->
 
 [中文](README.zh-CN.md) · [Operation demos](#operation-demos) · [Setup guide](#getting-started) · [Knowledge base](docs/knowledge-base/README.md)
 

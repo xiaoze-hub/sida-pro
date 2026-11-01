@@ -1,3 +1,13 @@
+## release: v0.91.11（死源关闭 + TQ 成交额单位）
+
+- **死源默认关闭**：同花顺实时行情（0 成功/13,300 失败）、智兔分红（4/10,597）、FTShare龙虎榜（0/569）
+  种子默认 `enabled=False`；已投产的库用 `scripts/disable_known_dead_sources.py` 一次性治理（幂等）。
+  优先级不改 —— 禁用即退出链路，改序会破坏既有排序回归。
+- **TQ 快照成交额万元→元**：2026-09-21~09-30 那批（约 9 万行）`turnover` 存的是万元。
+  `scripts/normalize_tq_turnover_wan_to_yuan.py` 分两档判据（volume 手/股都覆盖），幂等。
+- 清掉 `tq.py` 里"Quote.volume 保持手"的过期注释。
+- 验证：`test_w32_bootstrap` 8 项、`test_tq_fallback_dragon_flow`/`test_datasource_test_path` 合跑 33 项通过。
+
 ## [未发布] 死源默认关闭 + TQ 历史成交额万元→元
 
 ### fix-死源默认关闭（取数不再先撞一遍必失败的源）
