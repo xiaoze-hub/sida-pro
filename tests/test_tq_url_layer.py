@@ -244,10 +244,10 @@ def test_quote_turnover_is_yuan_calibrated(monkeypatch):
     assert len(quotes) == 1
     q = quotes[0]
     assert q.turnover == pytest.approx(182560.53 * 1e4, rel=1e-9)
-    # P2 Volume 单位标定: 快照 Volume 原样落 手(与腾讯 parts[6] 同口径), **不 ×100**。
-    assert q.volume == pytest.approx(1784413)
-    # 恒等式 turnover(元) / (volume(手)×100) ≈ VWAP
-    assert q.turnover / (q.volume * 100) == pytest.approx(10.23, abs=0.02)
+    # 2026-11-01: 厂商层统一口径 —— 源 1,784,413 手 → Quote.volume = 178,441,300 股
+    assert q.volume == pytest.approx(1784413 * 100)
+    # 恒等式 turnover(元) / volume(股) ≈ VWAP（不再需要 ×100）
+    assert q.turnover / q.volume == pytest.approx(10.23, abs=0.02)
     # 与腾讯同日元额一致(±1%)
     assert q.turnover == pytest.approx(1_825_605_387, rel=0.01)
 

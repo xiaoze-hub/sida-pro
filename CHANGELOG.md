@@ -15,6 +15,9 @@
   `src/core/indicator_calibration.py` 三处 `q.volume * 100` 全部去掉（tencent/eastmoney/tq），
   calib 恒等式恢复 `vol×price≈amount`；`types.py` 字段注释、`docs/_frozen/data.md` 口径说明同步改为"股"；
   `tests/test_vendor_missing_fields.py`、`packages/marketdata/tests/test_tq_quote_date.py` 两处旧"手"断言改为股。
+- **契约回归同步**：`tests/test_tq_volume_unit.py` 原先把「Quote.volume=手」锁死（2026-10-08 标定的两套契约），
+  现按新口径重写为「源=手 → Quote=股」，恒等式回到 `turnover ≈ price × volume`，
+  同票同日 `Quote.volume == Bar.volume`；`tests/test_tq_url_layer.py` 的 VWAP 反解同步去掉 ×100。
 - `scripts/normalize_quote_volume_lots_to_shares.py`：把 `quote_snapshots` 历史行（45 万行，手）迁成股。
   **只改能自证是手的行**（`volume×100×last` 与 `turnover` 相差 ≤5%），换算后条件不成立 ⇒ 幂等，重复跑不会二次放大。
 
