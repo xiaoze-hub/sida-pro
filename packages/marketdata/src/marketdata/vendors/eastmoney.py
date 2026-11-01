@@ -84,7 +84,9 @@ def _parse_one(data: dict | None, market: str, fallback_code: str) -> Quote | No
         low_price=_scaled(data.get("f45"), dec),
         change_amount=_scaled(data.get("f169"), dec),
         change_pct=_pct(data.get("f170")),
-        volume=_to_float(data.get("f47")),
+        # f47 是**手**（A 股 1 手=100 股），本包 quote 口径统一为股（与 kline/tencent 一致，
+        # 见 AGENTS.md「vol × price == amt」）。2026-11-01 统一：不再让单位随源漂移。
+        volume=(v * 100 if (v := _to_float(data.get("f47"))) is not None else None),
         turnover=_to_float(data.get("f48")),
         turnover_rate=turnover_rate,
         volume_ratio=_pct(data.get("f50")),

@@ -44,12 +44,12 @@ class Quote:
     low_price: float | None = None
     change_amount: float | None = None
     change_pct: float | None = None
-    volume: float | None = None
+    volume: float | None = None          # 成交量(股)。厂商层已把手折成股，勿再 ×100
     turnover: float | None = None            # 成交额(元); 单位实测证据见 vendors/tencent.py docstring
     turnover_rate: float | None = None
     volume_ratio: float | None = None
-    volume_outer: float | None = None   # 外盘(主动买成交量, 手)
-    volume_inner: float | None = None   # 内盘(主动卖成交量, 手)
+    volume_outer: float | None = None   # 外盘(主动买成交量, 股; 2026-11-01 起统一口径)
+    volume_inner: float | None = None   # 内盘(主动卖成交量, 股; 2026-11-01 起统一口径)
     pe_ratio: float | None = None
     pb_ratio: float | None = None
     circulating_market_value: float | None = None
@@ -70,7 +70,7 @@ class Quote:
     quote_time_kind: str = ""
     # quote_date 的证据来源：'daily_bar_close'=同标的日线收盘价与现价配对一致（TQ；
     # 并与同标的快照成交量做**零/正**交叉校验，两边对"今天有没有成交"说法不一致就
-    # 不给日期 —— 快照 volume=手、日线 volume=股，只比零/正，绝不比数值），
+    # 不给日期 —— 快照与日线 volume 都已统一为股，但仍只比零/正，绝不比数值），
     # '' = 无（日期未知）。
     quote_date_basis: str = ""
     timestamp: datetime = field(default_factory=datetime.now)

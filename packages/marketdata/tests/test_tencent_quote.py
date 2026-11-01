@@ -84,3 +84,48 @@ def test_cn_parts30_is_snapshot_refresh_but_hk_us_is_not_proven():
     assert us.quote_time_kind == "vendor_stamp"
     # 没有报时就没有语义（不许留半条）
     assert tv._parse_line(_fake_line_for("hk00700", ""), "HK").quote_time_kind == ""
+
+
+# ---------------------------------------------------------------------------
+# 成交量单位：腾讯给手，本项目口径是股（2026-11-01）
+# ---------------------------------------------------------------------------
+
+def _line_with(market_prefix: str, code: str, vol: str, outer: str, inner: str,
+               px: str, turnover: str) -> str:
+    parts = ["0"] * 50
+    parts[1] = "测试标的"
+    parts[2] = code
+    parts[3] = px
+    parts[4] = px
+    parts[5] = px
+    parts[6] = vol
+    parts[7] = outer
+    parts[8] = inner
+    parts[30] = "20261031150000"
+    parts[31] = "0.0"
+    parts[32] = "0.00"
+    parts[33] = px
+    parts[34] = px
+    parts[35] = f"{px}/{vol}/{turnover}"
+    return f'v_{market_prefix}{code}="' + "~".join(parts) + '";'
+
+
+def test_cn_volume_is_converted_from_lots_to_shares(monkeypatch):
+    """线上实测 600111：接口 volume=301798(手)、成交额 10.43 亿、价 34.21 —— 换成股才自洽。"""
+    line = _line_with("sh", "600111", "301798", "150000", "151798", "34.21", "1042754781.0")
+    monkeypatch.setattr(tv, "market_get", lambda *a, **k: line.encode("gbk"))
+    q = tv.TencentQuoteVendor().fetch([Symbol.parse("600111")], {})[0]
+
+    assert q.volume == 301798 * 100, "CN 成交量必须折算成股"
+    # 本项目硬约束：vol × price == turnover（±2% 容差容忍均价与最新价差异）
+    assert abs(q.volume * q.current_price - q.turnover) / q.turnover < 0.02
+    # 外盘+内盘与总量同口径，换算后恒等式仍成立
+    assert q.volume_outer + q.volume_inner == q.volume
+
+
+def test_hk_volume_is_not_multiplied(monkeypatch):
+    """港股成交量本身就是股，乘 100 会放大 100 倍。"""
+    line = _line_with("hk", "00700", "1234567", "600000", "634567", "380.0", "469135460.0")
+    monkeypatch.setattr(tv, "market_get", lambda *a, **k: line.encode("gbk"))
+    q = tv.TencentQuoteVendor().fetch([Symbol.parse("00700")], {})[0]
+    assert q.volume == 1234567

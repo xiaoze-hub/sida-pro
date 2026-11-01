@@ -600,7 +600,9 @@ def test_daily_read_timeout_keeps_snapshot_and_numeric_fields(monkeypatch):
     assert q.current_price == 1354.00
     assert q.prev_close == 1330.75
     assert q.change_pct == pytest.approx(round((1354.00 - 1330.75) / 1330.75 * 100, 4))
-    assert q.volume == 42992, "快照成交量是手，不许被日期这条路的失败改写"
+    # 2026-11-01：Quote.volume 统一折成股（源快照 42992 手 → 4,299,200 股），
+    # 本断言的本意是"日期这条路失败不许改写数值"，所以只校验换算后的值没被动过
+    assert q.volume == 42992 * 100, "快照成交量(股)不许被日期这条路的失败改写"
     assert q.quote_date is None and q.quote_date_basis == ""
     assert "get_market_snapshot" in [c["method"] for c in seen]
     stats = tqmod.quote_date_stats()

@@ -52,7 +52,7 @@ def test_eastmoney_parses_quote_with_decimal_restore(monkeypatch):
     assert q.change_pct == 1.19
     assert q.turnover_rate == 0.5
     assert q.volume_ratio == 1.2
-    assert q.volume == 12345.0
+    assert q.volume == 12345.0 * 100  # f47 是手，统一折成股
     assert q.turnover == 6789000000.0
     assert q.total_market_value == 21000.5
     assert q.circulating_market_value == 21000.5

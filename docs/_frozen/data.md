@@ -9,7 +9,9 @@ PG hypertable优先(get_klines), 三源幂等(tencent/eastmoney/sina, ON CONFLIC
 
 ## 单位约定(实测校准, 风险方案1.1)
 - **腾讯实时行情 `turnover`(Quote.turnover) = 元**。2026-09-08 收盘后实测 qt.gtimg.cn: sh600519 parts[35]="1309.30/17534/2302823753", 恒等式 amt/(price×vol(手)×100)=1.0031≈1; sh601318=1.0069≈1(偏差即VWAP≠收盘)。交叉印证: parts[37]=amt/10000(万元口径)。证据全文见 packages/marketdata vendors/tencent.py 模块 docstring。
-- 腾讯 volume/volume_outer/volume_inner = 手。东财 turnover(f48) = 元。
+- 腾讯/东财/TQ 报价的 volume 原始为**手**，**厂商层统一 ×100 折成股**后进入 `Quote`（2026-11-01）。
+  上游实测：sh600519 parts[35]="1309.30/17534/2302823753"，恒等式 amt/(price×vol(手)×100)≈1.003。
+  东财 turnover(f48) = 元。下游一律按「股」使用，禁止再 ×100（`indicator_calibration` 已同步移除）。
 
 ## K线日K 各源单位(2026-09-09, B5/3.5 补测冻结)
 

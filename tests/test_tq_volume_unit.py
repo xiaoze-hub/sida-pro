@@ -13,11 +13,15 @@
           ≈ Amount(万元)182560.53 × 1e4 = 1,825,605,300 元 (偏差 0.008%, VWAP 舍入)
   - 日线: Volume(股)178441360 × 10.23 ≈ 182560.53 × 1e4(同上)
 
-契约分工(冻结 docs/_frozen/data.md):**两套契约, 单位不同, 都不是 bug**:
-  - ``Quote.volume = 手`` —— 腾讯/东财/TQ 实时行情同口径; 恒等式
-    ``turnover / (price × volume × 100)``(见 tests/test_vendor_missing_fields.py:90)。
-  - ``Bar.volume = 股`` —— 腾讯/东财 fqkline 源为手需 ×100(vendors/kline.py);
-    **TQ get_market_data 原生已是股, 不再 ×100**。
+**2026-11-01 口径变更**: 原先这里锁的是「Quote.volume=手 / Bar.volume=股」两套契约。
+线上实测（600111）暴露了后果：快答把成交量少报 100 倍（`30.18 万股`，真实约 3018 万股），
+因为同一列在不同消费方被当作不同单位。用户决定**厂商层统一折成股**：
+
+  - ``Quote.volume = 股`` —— 腾讯/东财/TQ 三个实时源在解析时把手 ×100（内盘/外盘同源一起换）；
+    恒等式回到最朴素的 ``turnover ≈ price × volume``。
+  - ``Bar.volume = 股`` —— 不变（腾讯/东财 fqkline 源为手需 ×100；TQ get_market_data 原生即股）。
+
+下表仍是**实测原始单位**（用于证明换算系数是 100，不是 10 或 1000）。
 
 本文件把上述标定**锁死为回归**:任何"顺手再 ×100 / 漏 ×100"都会让这里变红。
 全部 mock, 禁真网络(在线探针一次性结果已固化进常量)。
@@ -62,26 +66,28 @@ def _patch_rpc(monkeypatch, handler):
 
 
 # ---------------------------------------------------------------------------
-# 快照: Volume = 手(Quote.volume 契约), 不做 ×100
+# 快照: 源 Volume = 手 → Quote.volume 统一折成股
 # ---------------------------------------------------------------------------
 
 
-def test_snapshot_volume_is_lots_not_shares(monkeypatch):
-    """TQ 快照 Volume 必须原样落 手; 若被 ×100 成股(1.78e8)此断言立即红。"""
+def test_snapshot_volume_is_normalized_to_shares(monkeypatch):
+    """源 1,784,413 手 → Quote.volume 必须是 178,441,300 股（2026-11-01 统一口径）。"""
     _patch_rpc(monkeypatch, lambda m, p: dict(_SNAP) if m == "get_market_snapshot" else {})
 
     quotes = tqmod.TqQuoteVendor().fetch([Symbol.parse("002361", "CN")], {})
     assert len(quotes) == 1
     q = quotes[0]
-    assert q.volume == pytest.approx(_SNAP_VOLUME_LOTS)      # 手, 非 ×100
-    assert q.volume != pytest.approx(_SNAP_VOLUME_LOTS * 100, rel=1e-3)
+    assert q.volume == pytest.approx(_SNAP_VOLUME_LOTS * 100)
+    # 内盘/外盘同源同单位：换算后「外+内=总量」仍成立（否则主力意图的分母会漂）
+    # 源侧 外盘+内盘 与总量本身有 1 手舍入差（1,784,414 vs 1,784,413），沿用相对容差
+    assert q.volume_inner + q.volume_outer == pytest.approx(q.volume, rel=1e-5)
 
 
-def test_snapshot_volume_matches_tencent_lots(monkeypatch):
-    """跨源交叉: TQ 快照 Volume 与腾讯 parts[6](手)同日一致(±2 手舍入)。"""
+def test_snapshot_volume_matches_tencent_shares(monkeypatch):
+    """跨源交叉: TQ 快照与腾讯 parts[6] 同日一致（两边都折成股，±2 手舍入）。"""
     _patch_rpc(monkeypatch, lambda m, p: dict(_SNAP) if m == "get_market_snapshot" else {})
     q = tqmod.TqQuoteVendor().fetch([Symbol.parse("002361", "CN")], {})[0]
-    assert q.volume == pytest.approx(_TX_VOLUME_LOTS, abs=2.0)
+    assert q.volume == pytest.approx(_TX_VOLUME_LOTS * 100, abs=200.0)
 
 
 def test_snapshot_identity_vol_price_eq_amount(monkeypatch):
@@ -89,13 +95,13 @@ def test_snapshot_identity_vol_price_eq_amount(monkeypatch):
     _patch_rpc(monkeypatch, lambda m, p: dict(_SNAP) if m == "get_market_snapshot" else {})
     q = tqmod.TqQuoteVendor().fetch([Symbol.parse("002361", "CN")], {})[0]
 
-    lhs = q.volume * 100 * _SNAP_AVG                 # 手→股 × 元
+    lhs = q.volume * _SNAP_AVG                       # 股 × 元（不再需要 ×100）
     rhs = _SNAP_AMOUNT_WAN * 1e4                     # 万元→元
     assert lhs == pytest.approx(rhs, rel=1e-3)
     # Quote.turnover 已是元(万元×1e4), 与腾讯同日元额一致
     assert q.turnover == pytest.approx(_TX_AMOUNT_YUAN, rel=0.01)
     # 恒等式反解 VWAP 必须落回快照 Average
-    assert q.turnover / (q.volume * 100) == pytest.approx(_SNAP_AVG, abs=0.02)
+    assert q.turnover / q.volume == pytest.approx(_SNAP_AVG, abs=0.02)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +142,7 @@ def test_daily_bar_volume_identity(monkeypatch):
 
 
 def test_quote_and_bar_volume_consistent_same_day(monkeypatch):
-    """把两套契约归一后必须相等: Quote.volume(手)×100 == Bar.volume(股)。"""
+    """同一个量不能有两套单位: 同日 Quote.volume == Bar.volume（都已是股）。"""
     def handler(method, params):
         if method == "get_market_snapshot":
             return dict(_SNAP)
@@ -152,4 +158,4 @@ def test_quote_and_bar_volume_consistent_same_day(monkeypatch):
     q = tqmod.TqQuoteVendor().fetch([Symbol.parse("002361", "CN")], {})[0]
     bar = tqmod.TqKlineVendor().fetch([Symbol.parse("002361", "CN")], {"days": 1})[0]
 
-    assert q.volume * 100 == pytest.approx(bar.volume, rel=1e-5)
+    assert q.volume == pytest.approx(bar.volume, rel=1e-5)

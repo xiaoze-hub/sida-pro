@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 _URL = "http://qt.gtimg.cn/q="
 _HOST = "qt.gtimg.cn"
 _MIN_INTERVAL_S = 0.15
+
+# 腾讯行情接口的成交量字段是**手**（A 股 1 手 = 100 股），而本项目的 volume 口径统一为**股**
+# （`vol × price == turnover`，见 AGENTS.md 业务硬约束）。2026-11-01 实测 600111：
+# 接口 volume=301798，成交额 10.43 亿，股价 34.21 → 301798×100×34.21≈10.32 亿（股口径才对得上）。
+# 港股/美股成交量本身就是股，不做换算。
+_CN_SHARES_PER_LOT = 100
 _MARKET_TIMEZONES = {
     "CN": "Asia/Shanghai",
     "HK": "Asia/Hong_Kong",
@@ -59,6 +65,15 @@ _CORE_FIELDS = (
     (33, "high_price"),
     (34, "low_price"),
 )
+
+
+def _to_shares(value: float | None, market: str) -> float | None:
+    """腾讯给的成交量(手) → 本项目口径(股)。港股/美股本来就是股，原样返回。"""
+    if value is None:
+        return None
+    if market == "CN":
+        return value * _CN_SHARES_PER_LOT
+    return value
 
 
 def _to_float(value: str | None) -> float | None:
@@ -189,9 +204,9 @@ def _parse_line(line: str, market: str) -> Quote | None:
             current_price=values["current_price"],
             prev_close=values["prev_close"],
             open_price=values["open_price"],
-            volume=values["volume"],
-            volume_outer=values["volume_outer"],   # 外盘(主动买)
-            volume_inner=values["volume_inner"],   # 内盘(主动卖)
+            volume=_to_shares(values["volume"], market),
+            volume_outer=_to_shares(values["volume_outer"], market),   # 外盘(主动买)
+            volume_inner=_to_shares(values["volume_inner"], market),   # 内盘(主动卖)
             change_amount=values["change_amount"],
             change_pct=values["change_pct"],
             high_price=values["high_price"],

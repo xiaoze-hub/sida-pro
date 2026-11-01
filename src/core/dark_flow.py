@@ -1050,7 +1050,9 @@ def _judge_mnemonic(
     # 位置: 优先 compute_dark_flow 的 inner_outer.position(20日分位), 缺失回退今日振幅
     position = ((dark.get("inner_outer") or {}).get("position")) or _position_from_range(quote)
 
-    # 成交量口径: 主动盘(外+内)占总成交量比例(腾讯 volume 总手)
+    # 成交量口径: 主动盘(外+内)占总成交量比例。
+    # 2026-11-01 起 quote 的 volume/outer/inner 都由厂商层统一折成**股**，三者同量纲，
+    # 所以这个比值不受单位影响（比值正确即可，不要再按"手"解读）。
     quote_vol = _num(quote.get("volume"))
     active_ratio = total / quote_vol * 100 if (quote_vol and quote_vol > 0) else 100.0
 
