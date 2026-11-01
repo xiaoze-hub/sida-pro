@@ -147,3 +147,30 @@ def test_spa_and_ssl_paths_resolve_to_repo_root():
 
     assert _static_dir() == str(REPO_ROOT / "static")
     assert _ca_bundle_path() == str(REPO_ROOT / "data" / "ca-bundle.pem")
+
+
+# ---------------------------------------------------------------------------
+# 死源默认关闭（2026-11-01）
+#
+# 生产实测：同花顺实时行情 0 成功/13,300 失败、智兔分红 4/10,597、FTShare龙虎榜 0/569。
+# 它们开着只会让每次取数先撞一遍失败再降级（白加延迟 + 刷错误计数）。
+# 这里钉住种子默认值，避免有人"顺手打开"又把死源放回链路。
+# ---------------------------------------------------------------------------
+# 死源默认关闭（2026-11-01）
+#
+# 生产实测：同花顺实时行情 0 成功/13,300 失败、智兔分红 4/10,597、FTShare龙虎榜 0/569。
+# 开着只会让每次取数先撞一遍失败再降级（白加延迟 + 刷错误计数）。
+# 钉住种子默认值，避免有人"顺手打开"又把死源放回链路。
+# ---------------------------------------------------------------------------
+
+_KNOWN_DEAD = ("同花顺实时行情", "智兔分红", "FTShare龙虎榜")
+
+
+def test_known_dead_sources_are_disabled_by_default():
+    from src.bootstrap.datasources import DATA_SOURCE_SEEDS
+
+    by_name = {s["name"]: s for s in DATA_SOURCE_SEEDS}
+    for name in _KNOWN_DEAD:
+        assert name in by_name, f"种子清单里找不到 {name}，改名了就要同步这条回归"
+        assert by_name[name]["enabled"] is False, f"{name} 是实测必失败的源，默认必须关闭"
+        assert by_name[name]["priority"] >= 20, f"{name} 即便手动开启也不许抢在可用源前面"

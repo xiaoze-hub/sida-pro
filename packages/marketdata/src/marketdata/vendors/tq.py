@@ -1175,9 +1175,8 @@ class TqQuoteVendor(QuoteVendor):
             # P2 Volume 单位标定(2026-10-08 在线标定, 7 只 A股交叉腾讯): 快照 Volume 源为**手**,
             # 与腾讯 qt.gtimg.cn parts[6] 同口径(比值 1.0000, 7/7); 恒等式 Volume(手)×100×Average
             # = 1,825,454,499 元 ≈ Amount×1e4。(指数快照 Volume 亦同 parts[6] 口径。)
-            # Quote.volume 契约=手(冻结 docs/_frozen/data.md:12「腾讯 volume/outer/inner=手」;
-            # 恒等式 turnover/(price×volume×100) 见 test_vendor_missing_fields) ⇒ 此处**保持手,
-            # 不做 ×100** —— 与 Bar.volume(股)是两套契约, 别把两者混为一谈。
+            # 2026-11-01 口径变更：Quote.volume 统一为**股**（源为手，见下方 _cn_lots_to_shares），
+            # 与 Bar.volume 同口径；恒等式回到 turnover ≈ price × volume。
             _amt_wan = _to_float(v.get("Amount"))
             turnover_yuan = (_amt_wan * 1e4) if _amt_wan is not None else None
             out.append(

@@ -309,10 +309,10 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "type": "dragon_tiger",
             "provider": "ftshare",
             "config": {
-                "description": "FTShare MCP 龙虎榜备源(免 key,云服务器可直连)。东财断供时自动降级。",
+                "description": "FTShare MCP 龙虎榜备源(免 key)。2026-11-01: 生产 0 成功/569 失败, 默认关闭。",
             },
-            "enabled": True,
-            "priority": 5,
+            "enabled": False,  # 2026-11-01: 0 成功/569 失败
+            "priority": 30,
             "supports_batch": False,
             "test_symbols": [],
         },
@@ -417,10 +417,10 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "provider": "zhitu",
             "config": {
                 "api_keys": [],
-                "description": "智兔数服分红送配备源(设置页 zhitu_token 或容器 env ZHITU_TOKEN 维护, 不进仓库)。",
+                "description": "智兔数服分红送配备源(需 zhitu_token; 未配置时 4 成功/10,597 失败 —— 2026-11-01 起默认关闭)。",
             },
-            "enabled": True,
-            "priority": 5,
+            "enabled": False,  # 2026-11-01: 无 token 时几乎全失败, 默认关闭避免刷错误计数
+            "priority": 30,
             "supports_batch": False,
             "test_symbols": ["600519", "000001"],
         },
@@ -537,10 +537,10 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "type": "quote",
             "provider": "ths",
             "config": {
-                "description": "fuyao 统一行情聚合接口(免登录,实时快照)。生产IP常被403,降级档。",
+                "description": "fuyao 统一行情聚合接口(免登录,实时快照)。生产IP常年403 —— 2026-11-01 起默认关闭(0 成功/13,300 失败)。",
             },
-            "enabled": True,
-            "priority": 2,  # tq(0)/tencent(1) 之后: 生产实测 fuyao 常年403
+            "enabled": False,  # 2026-11-01: 生产实测 0 成功/13,300 失败, 开着只会让每次取数先撞一遍失败
+            "priority": 30,    # 放到队尾：即便手动开启，也不抢在能用的源前面
             "supports_batch": False,
             "test_symbols": ["600519", "000001"],
         },
