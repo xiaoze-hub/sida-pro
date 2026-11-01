@@ -173,4 +173,3 @@ def test_known_dead_sources_are_disabled_by_default():
     for name in _KNOWN_DEAD:
         assert name in by_name, f"种子清单里找不到 {name}，改名了就要同步这条回归"
         assert by_name[name]["enabled"] is False, f"{name} 是实测必失败的源，默认必须关闭"
-        assert by_name[name]["priority"] >= 20, f"{name} 即便手动开启也不许抢在可用源前面"

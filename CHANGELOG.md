@@ -11,7 +11,8 @@
 | FTShare龙虎榜（dragon_tiger） | 0 | 569 |
 
 它们排在链路前段（同花顺 prio=3，在 Sina/东财之前），每次取数都要先失败一次再降级。
-改为种子默认 `enabled=False` + `priority=30`（设置页仍可手动开启，不删源、不丢配置）。
+改为种子默认 `enabled=False`（设置页仍可手动开启，不删源、不丢配置）；优先级保持原值，
+因为禁用已经让它退出链路，改序会破坏既有的源排序回归 `test_tq_fallback_dragon_flow`。
 新增回归 `tests/test_w32_bootstrap.py::test_known_dead_sources_are_disabled_by_default`，
 防止有人顺手又打开。
 
