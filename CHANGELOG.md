@@ -10,6 +10,11 @@
 - `tencent.py`：CN 的 `volume` / `volume_outer` / `volume_inner` 在解析时统一 ×100 折成股
   （三者同源，必须一起换算，否则「外盘+内盘=总量」恒等式会破）；港股/美股本就是股，不乘。
 - `eastmoney.py`：报价 `f47`（手）同样折成股，避免单位随数据源漂移。
+- `tq.py`：TQ 快照 `Volume`（手）同样折成股，内盘/外盘一起换 —— 否则三源标定会同票不同量。
+- 下游同步（审查指出"只改厂商层会双重放大"）：
+  `src/core/indicator_calibration.py` 三处 `q.volume * 100` 全部去掉（tencent/eastmoney/tq），
+  calib 恒等式恢复 `vol×price≈amount`；`types.py` 字段注释、`docs/_frozen/data.md` 口径说明同步改为"股"；
+  `tests/test_vendor_missing_fields.py`、`packages/marketdata/tests/test_tq_quote_date.py` 两处旧"手"断言改为股。
 - `scripts/normalize_quote_volume_lots_to_shares.py`：把 `quote_snapshots` 历史行（45 万行，手）迁成股。
   **只改能自证是手的行**（`volume×100×last` 与 `turnover` 相差 ≤5%），换算后条件不成立 ⇒ 幂等，重复跑不会二次放大。
 

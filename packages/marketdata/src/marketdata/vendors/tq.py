@@ -345,6 +345,13 @@ def tq_rpc(method: str, params: dict, timeout: float = _TIMEOUT_S):
     return _rpc(method, params, timeout=timeout)
 
 
+def _cn_lots_to_shares(value: float | None) -> float | None:
+    """A 股成交量：手 → 股（Quote 口径统一为股，2026-11-01）。"""
+    if value is None:
+        return None
+    return value * 100
+
+
 def _to_float(v) -> float | None:
     try:
         f = float(str(v).strip())
@@ -742,7 +749,7 @@ def prove_quote_date(
     可以证明到**日**：现价与同标的日线收盘价**逐分相等**，就是同源、同一次抓取的一对字段。
 
     第二处证据（2026-10-29 独立复审）：只比收盘价挡不住两类失真，必须用**快照成交量**
-    交叉校验（`snapshot_volume`，单位手；日线 Volume 单位股 ⇒ **只比零/正**）：
+    交叉校验（`snapshot_volume` 已统一为股；日线 Volume 也是股 ⇒ **只比零/正**）：
       ① `fill_data=False` 只是**请求参数**（网关是否真按它执行没有实测，无法排除被
          静默忽略）：停牌票一旦被补齐出一根"今天有量"的 bar（Close/Volume 抄上一交易日），
          而停牌股快照本就保持最后成交价，
@@ -1185,12 +1192,15 @@ class TqQuoteVendor(QuoteVendor):
                     low_price=_to_float(v.get("Min")),
                     change_amount=change_amount,
                     change_pct=change_pct,
-                    volume=_to_float(v.get("Volume")),  # 手(源原生); 见上 P2 标定, 不做 ×100
+                    # 2026-11-01 统一口径：源给的是**手**，Quote.volume 一律折成**股**
+                    # （与 tencent/eastmoney/kline 一致，见 AGENTS.md「vol × price == amt」）。
+                    # 内盘/外盘同源同单位，必须一起换算，否则「外+内=总量」恒等式会破。
+                    volume=_cn_lots_to_shares(_to_float(v.get("Volume"))),
                     turnover=turnover_yuan,
                     turnover_rate=turnover_rate,
                     volume_ratio=volume_ratio,
-                    volume_inner=(inside if inside is not None else None),
-                    volume_outer=(outside if outside is not None else None),
+                    volume_inner=_cn_lots_to_shares(inside if inside is not None else None),
+                    volume_outer=_cn_lots_to_shares(outside if outside is not None else None),
                     pe_ratio=pe_ratio,
                     pb_ratio=pb_ratio,
                     circulating_market_value=circ_mv,

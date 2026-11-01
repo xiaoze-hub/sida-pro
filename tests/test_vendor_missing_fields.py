@@ -86,8 +86,9 @@ class TestTencentMissingFields:
         """
         q = _parse_line(_tencent_line(), "CN")
         assert q is not None
-        # fixture 数据对齐实抓报文: 2302823753 / (1309.30×17534×100) ≈ 1.003
-        ratio = q.turnover / (q.current_price * q.volume * 100)
+        # fixture 数据对齐实抓报文: 2302823753 / (1309.30 × 17534 手 × 100) ≈ 1.003
+        # 2026-11-01：Quote.volume 已由厂商层折成股，这里不再乘 100
+        ratio = q.turnover / (q.current_price * q.volume)
         assert 0.99 < ratio < 1.01
         assert q.turnover > 1e8  # 亿元级大额, 若单位是万元该值会 <1e4
 

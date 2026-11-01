@@ -183,7 +183,8 @@ def _obs_tencent(symbol: str) -> Observation | None:
     q = q[0]
     if q.current_price is None:
         return None
-    vol_shares = q.volume * 100 if isinstance(q.volume, (int, float)) else None
+    # 2026-11-01：Quote.volume 已统一为股（厂商层折好），这里不再 ×100
+    vol_shares = q.volume if isinstance(q.volume, (int, float)) else None
     return Observation("tencent", price=q.current_price, volume_shares=vol_shares, amount=q.turnover)
 
 
@@ -197,7 +198,7 @@ def _obs_eastmoney(symbol: str) -> Observation | None:
     q = q[0]
     if q.current_price is None:
         return None
-    vol_shares = q.volume * 100 if isinstance(q.volume, (int, float)) else None
+    vol_shares = q.volume if isinstance(q.volume, (int, float)) else None  # 已是股
     return Observation("eastmoney", price=q.current_price, volume_shares=vol_shares, amount=q.turnover)
 
 
@@ -211,7 +212,7 @@ def _obs_tq(symbol: str) -> Observation | None:
     q = q[0]
     if q.current_price is None:
         return None
-    vol_shares = q.volume * 100 if isinstance(q.volume, (int, float)) else None
+    vol_shares = q.volume if isinstance(q.volume, (int, float)) else None  # 已是股
     return Observation("tq", price=q.current_price, volume_shares=vol_shares, amount=q.turnover)
 
 
