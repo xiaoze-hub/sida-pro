@@ -1,3 +1,12 @@
+## release: v0.91.10（成交量单位统一为股 + 空终稿兜底 + 日历修复）
+
+- **成交量单位**：腾讯/东财/TQ 三个实时源的成交量源生是**手**，厂商层统一 ×100 折成**股**（内盘/外盘一起换，保持「外+内=总量」）；`indicator_calibration` 去掉三处 `×100`；`900111` 类快答不再少报 100 倍。
+- **历史数据迁移**：`scripts/normalize_quote_volume_lots_to_shares.py`（只改能自证是手的行，幂等）。
+- **空终稿**：模型返回空内容时不再落库 0 字并标 ok，改为可行动文案 + 轨迹 degraded。
+- **日历调用**：`tq_market_flow` / `lhb_tq_backfill` 的 `is_trading_day()` 补日期，TQ 全市场成交额采集不再每 5 分钟抛 TypeError。
+- 契约回归重写：`tests/test_tq_volume_unit.py` 从「Quote=手」改为「源手→Quote 股」，同日 `Quote.volume == Bar.volume`。
+- 验证：marketdata 305 项 + 后端相关 347 项通过；`ruff` 通过。
+
 ## [未发布] 成交量单位统一为股 + 空终稿兜底 + 日历调用修复
 
 三处都来自 2026-11-01 凌晨的生产实测。
