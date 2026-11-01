@@ -19,8 +19,8 @@
 ### fix-TQ 快照成交额万元→元（历史数据）
 
 `vendors/tq.py` 已把 `Amount`(万元) `×1e4` 转成元；但 2026-09-21~09-30 那批早期落库是原始值直接入库，
-同表因此存在两种单位（约 **90,105 行**）。判据：`volume×last/turnover` 落在 5,000~20,000（差 1 万倍），
-换算后回到 ≈1 ⇒ 幂等。脚本：`scripts/normalize_tq_turnover_wan_to_yuan.py`（默认干跑）。
+同表因此存在两种单位（约 **90,105 行**）。判据分两档（取决于 volume 迁移是否已跑）：`volume` 仍是手时比值 ≈100（两手都要换），
+已是股时 ≈10000（只换成交额）；换算后回到 ≈1 ⇒ 幂等，换库重跑不会静默 0 行。脚本：`scripts/normalize_tq_turnover_wan_to_yuan.py`（默认干跑）。
 
 ### chore
 
