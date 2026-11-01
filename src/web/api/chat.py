@@ -21,6 +21,7 @@ from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_o
 from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
 from src.core import gap_collector
 from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
+from src.core.answer_fallbacks import empty_final_notice
 from src.web.api.copilot_message_save import (
     record_with_audit as _row_audit_record, save_assistant_message as _save_assistant,
     to_payload as _msg_payload,
@@ -1194,6 +1195,7 @@ async def _run_tool_loop_inner(
     _note = correction_note(_utext)
     if _note:
         messages_for_ai.insert(0, {"role": "system", "content": _note})
+    _tool_done = 0   # 本轮真正执行过的工具数（空终稿兜底文案要说清"跑了多少"）
     try:
         for _round in range(MAX_TOOL_ROUNDS):
             response_msg = None
@@ -1249,6 +1251,12 @@ async def _run_tool_loop_inner(
                     # 2026-10-21 幻觉事故：问两只票却零工具作答、还编出别的股票 → 一律不给结论
                     logger.warning("零工具作答已拦截(问的是具体标的): %s", _utext[:40])
                     text = zero_tool_refusal()
+                if not (text or "").strip():
+                    # 2026-11-01 线上：模型返回空内容 → 存了一条 0 字的助手消息，前端只写
+                    # "服务端终稿为空"。空回答不是成品：给一句能行动的话，并把本轮标 degraded。
+                    logger.warning("模型返回空终稿(已跑 %s 轮工具)，改给兜底说明", _round)
+                    text = empty_final_notice(_tool_done)
+                    yield "degraded", "empty_final"
                 yield ("done" if stream else "text"), text
                 return
 
@@ -1268,6 +1276,7 @@ async def _run_tool_loop_inner(
             for tc in response_msg.tool_calls:
                 tool_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
                 logger.info(f"Tool call: {tc.function.name}({tool_args})")
+                _tool_done += 1
                 yield "stage", _TOOL_STAGE_LABELS.get(tc.function.name, f"正在调用 {tc.function.name}...")
                 if runtime is not None:
                     result = await runtime.call(
@@ -1324,6 +1333,10 @@ async def _run_tool_loop(
         async for kind, payload in _run_tool_loop_inner(
             ai_client, messages_for_ai, db, user, stream=stream, runtime=runtime,
         ):
+            if kind == "degraded":
+                # 内部质量事件：只用于把轨迹标成 degraded，不往上层（SSE/响应）透
+                status, error = "degraded", str(payload or "empty_final")
+                continue
             if kind in ("text", "done"):
                 answer += str(payload or "")
             yield kind, payload

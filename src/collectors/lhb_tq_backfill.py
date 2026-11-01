@@ -143,7 +143,9 @@ def run_scheduled() -> dict:
     try:
         from src.core.trading_calendar import is_trading_day
 
-        if not is_trading_day():
+        from src.core.timezone import beijing_now
+
+        if not is_trading_day(beijing_now().date()):
             return {"skipped": "非交易日"}
     except Exception:  # noqa: BLE001
         pass

@@ -149,9 +149,12 @@ def run_scheduled() -> dict | None:
     退回东财口径(或 --)。补跑一次即自愈。
     """
     try:
+        from src.core.timezone import beijing_now
         from src.core.trading_calendar import is_trading_day, is_trading_session
 
-        if not is_trading_day():
+        # 2026-11-01 修：is_trading_day 需要显式日期，原先零参调用每 5 分钟抛
+        # TypeError（missing 1 required positional argument: 'd'）→ TQ 全市场成交额采集静默停摆。
+        if not is_trading_day(beijing_now().date()):
             return None
         if is_trading_session():
             return collect_once()

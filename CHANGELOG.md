@@ -1,3 +1,38 @@
+## [未发布] 成交量单位统一为股 + 空终稿兜底 + 日历调用修复
+
+三处都来自 2026-11-01 凌晨的生产实测。
+
+### fix-成交量统一为股（厂商层）
+
+- 实测证据（600111，2026-10-30）：`klines.volume=30,179,844`（股）而 `quote_snapshots.volume=301,798`（手），
+  接口 `volume=301798 × 34.21 × 100 ≈ 10.32 亿` 才对得上成交额 10.43 亿 —— **行情接口给的是手**，
+  但项目口径是股。结果「快答」把成交量少报了 100 倍（`30.18 万股`，真实约 3018 万股）。
+- `tencent.py`：CN 的 `volume` / `volume_outer` / `volume_inner` 在解析时统一 ×100 折成股
+  （三者同源，必须一起换算，否则「外盘+内盘=总量」恒等式会破）；港股/美股本就是股，不乘。
+- `eastmoney.py`：报价 `f47`（手）同样折成股，避免单位随数据源漂移。
+- `scripts/normalize_quote_volume_lots_to_shares.py`：把 `quote_snapshots` 历史行（45 万行，手）迁成股。
+  **只改能自证是手的行**（`volume×100×last` 与 `turnover` 相差 ≤5%），换算后条件不成立 ⇒ 幂等，重复跑不会二次放大。
+
+### fix-空终稿不再当成功落库
+
+- 现象：模型返回空内容，5 个工具全部成功、轨迹 `status=ok`，`chat_messages.content` 落库 0 字，前端只提示
+  「服务端终稿为空」。
+- 现在：空终稿换成 `empty_final_notice()`（说清跑了多少工具、下一步重发或换模型），并发出内部
+  `degraded` 事件把轨迹标成 degraded；事件不透给 SSE/响应。文案放 `src/core/answer_fallbacks.py`
+  （`chat.py` 有 2310 行硬护栏，当前 2301 行）。
+
+### fix-交易日历调用
+
+- `tq_market_flow.run_scheduled` / `lhb_tq_backfill.run_scheduled` 零参调用 `is_trading_day()`，
+  每 5 分钟抛 `TypeError: missing 1 required positional argument: 'd'` → TQ 全市场成交额采集静默停摆。
+  改为传 `beijing_now().date()`。
+
+### 测试
+
+- 新增 `packages/marketdata/tests/test_tencent_quote.py` 2 项（股换算 + 港股不乘）、`test_eastmoney_quote` 断言改股；
+  `tests/test_empty_final_answer.py` 3 项、`tests/test_trading_day_callers.py` 2 项。
+- `packages/marketdata` 全量 305 项、后端相关 38 项通过；`ruff` 通过。
+
 ## release: v0.91.9（数字量级护栏 + 齐套度修复）
 
 - **量级护栏**：识别「恰好差 100 / 10000 倍」的金额（万↔百万元、亿↔万元、漏写万），回答里直接写明「回答写 X，取数原文 Y，差 N 倍，请以取数原文为准」。量级错误一条即判 severe。不删改正文。
