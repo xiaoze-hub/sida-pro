@@ -39,7 +39,7 @@ from sqlalchemy import func, or_
 
 from src.web.api._scope import allow_cross_user
 from src.web.api.auth import get_current_user
-from src.core.timezone import beijing_now_naive
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +315,7 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
             # 少了它，证据卡拿不到"这条 run 属于哪次对话"（2026-10-25 实测 conv=None）。
             changed = False
             if row.finished_at is None:
-                row.finished_at = beijing_now_naive()
+                row.finished_at = db_now_naive()
                 changed = True
             if conversation_id is not None and row.conversation_id is None:
                 row.conversation_id = conversation_id
@@ -333,7 +333,7 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
         if conversation_id is not None:
             row.conversation_id = conversation_id
         if rt.is_terminal(status):
-            row.finished_at = beijing_now_naive()
+            row.finished_at = db_now_naive()
         db.commit()
     finally:
         db.close()
@@ -417,7 +417,7 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
     run 行上的记录（`skills_gateway` 的任务入口不传参，不能因此丢配方）。"""
     stop = asyncio.Event()
     hb = asyncio.create_task(_heartbeat_loop(run_id, stop))
-    t0 = beijing_now_naive()
+    t0 = db_now_naive()
     _mark(run_id, status="running")
     try:
         async with _slots():  # 限流：同时最多 MAX_CONCURRENT 轮在跑
@@ -435,7 +435,7 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
                 for t in (inner, watch):
                     if not t.done():
                         t.cancel()
-        elapsed = int((beijing_now_naive() - t0).total_seconds() * 1000)
+        elapsed = int((db_now_naive() - t0).total_seconds() * 1000)
         if isinstance(watch_res, tuple):
             # 预算中止：审计已写，run 必须落 failed —— 不能因为"有半截答案"就写 ok
             reason, used, _limit = watch_res
@@ -458,7 +458,7 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
         _mark(run_id, status="cancelled", error="用户取消")
         raise
     except Exception as e:  # noqa: BLE001 —— 任何执行失败都要落到 run 上，不能只写日志
-        elapsed = int((beijing_now_naive() - t0).total_seconds() * 1000)
+        elapsed = int((db_now_naive() - t0).total_seconds() * 1000)
         logger.warning("[copilot_jobs] run %s 失败: %s", run_id, e, exc_info=True)
         _mark(run_id, status="failed", elapsed_ms=elapsed, error=f"{type(e).__name__}: {e}")
     finally:

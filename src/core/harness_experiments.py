@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
-from src.core.timezone import beijing_now_naive
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def record(
         reasons=list(reasons or []),
         evidence_path=evidence_path,
         note=note,
-        created_at=beijing_now_naive(),
+        created_at=db_now_naive(),
     )
     db.add(row)
     try:

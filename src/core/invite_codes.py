@@ -22,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.core.db_safe import safe_rollback
-from src.core.timezone import beijing_now_naive
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def _now() -> datetime:
     列存的是北京 naive, 此前这里写的是 UTC naive → 邀请码过期判断与
     `created_at` 显示都早 8 小时。历史数据由迁移 v234 一次性平移。
     """
-    return beijing_now_naive()
+    return db_now_naive()
 
 
 def _parse_dt(value) -> datetime | None:

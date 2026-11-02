@@ -26,7 +26,7 @@ from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
-from src.core.timezone import beijing_now_naive
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -486,7 +486,7 @@ def load_bars_from_pg(db: Session, *, limit_symbols: int = 400, lookback_days: i
 
     out: dict[str, list[dict]] = defaultdict(list)
     cal_days = max(180, int(lookback_days * 1.55))
-    min_ts = beijing_now_naive() - timedelta(days=cal_days)
+    min_ts = db_now_naive() - timedelta(days=cal_days)
     try:
         conn = db.get_bind()
         is_pg = getattr(getattr(conn, "dialect", None), "name", "") == "postgresql"

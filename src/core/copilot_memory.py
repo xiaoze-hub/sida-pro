@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from src.core.timezone import beijing_now_naive
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ def recall(db, user_id, *, query: str | None = None, limit: int = MAX_INJECT) ->
         out = [_row_dict(r) for r in picked]
         for r in picked:
             r.hits = int(r.hits or 0) + 1
-            r.last_used_at = beijing_now_naive()
+            r.last_used_at = db_now_naive()
         try:
             db.commit()
         except Exception:  # noqa: BLE001

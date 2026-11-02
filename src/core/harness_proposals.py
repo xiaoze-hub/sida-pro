@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from src.core.timezone import beijing_now_naive
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +231,7 @@ def propose(
     # casefold() 可能把字符变长(如 ß → ss) → 定宽列会被 PG 拒绝 → 兜底截断
     norm = _trunc(norm, MAX_DIMENSION_LEN)
 
-    now = beijing_now_naive()
+    now = db_now_naive()
     existing = (
         db.query(HarnessProposal)
         .filter(
@@ -357,7 +357,7 @@ def decide(db, user_id, proposal_id: int, *, action: str) -> dict | None:
         db.flush()
 
     row.status = act
-    row.decided_at = beijing_now_naive()
+    row.decided_at = db_now_naive()
     db.commit()
     db.refresh(row)
     return _row_dict(row)

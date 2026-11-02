@@ -6438,6 +6438,9 @@ def _m234_utc_naive_to_app_tz(conn: Connection) -> None:
     为什么不是只改默认值: 只改默认值会让**同一列**里老行是 UTC、新行是北京,
     比现状更糟(排序/窗口过滤都会跨两种时钟)。所以数据必须一起平移。
 
+    写入侧对应改动: 这些列与其写入点的"现在"统一走 `timezone.db_now_naive()`
+    (PG=北京 / SQLite=UTC, 与 server_default 同口径)。
+
     为什么 PG-only: SQLite 的 ``CURRENT_TIMESTAMP`` 本身就是 UTC naive,
     ``src/core/timezone.py::_db_naive_tz`` 已按方言区分解读; 在 SQLite 上平移
     反而会把本来正确的行推错。本地/dev 库保持原样。

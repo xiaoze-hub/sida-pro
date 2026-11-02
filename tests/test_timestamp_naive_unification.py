@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 
-from src.core.timezone import beijing_now_naive
+from src.core.timezone import beijing_now_naive, db_now_naive
 from src.db.models import Base
 from src.web.migrations import _ensure_schema_table, _m234_utc_naive_to_app_tz
 
@@ -82,9 +82,25 @@ def test_模型时间列默认值统一走北京naive():
             src = _py_default_source(column)
             if not src:
                 continue  # server_default 型（func.now）没有 Python default
-            if "beijing_now_naive" not in src:
+            if "db_now_naive" not in src:
                 utc_defaults.append(f"{table_name}.{column_name} -> {src}")
     assert utc_defaults == [], f"仍有非北京口径的默认值: {utc_defaults}"
+
+
+def test_db_now_naive跟随方言口径(monkeypatch):
+    """写库用的"现在"必须与 server_default 同口径: PG=北京, SQLite=UTC。
+
+    只看 PG 会漏掉本地开发库 —— SQLite 的 CURRENT_TIMESTAMP 是 UTC,
+    若 Python 一律写北京, dev 库里就会一半 UTC 一半北京。
+    """
+    monkeypatch.delenv("SIDA_DB_URL", raising=False)
+    utc_part = db_now_naive()
+    monkeypatch.setenv("SIDA_DB_URL", "postgresql+psycopg2://u:p@h/db")
+    pg_part = db_now_naive()
+    delta_h = round((pg_part - utc_part).total_seconds() / 3600, 1)
+    assert delta_h == 8.0, f"PG 口���应比 SQLite 口径快 8 小时，实得 {delta_h}"
+    # 展示用的 helper 不受方言影响
+    assert beijing_now_naive().hour == pg_part.hour
 
 
 def test_源码里不再有运行时utcnow():

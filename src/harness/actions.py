@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from src.core.timezone import beijing_now_naive, to_iso_utc, utc_now
+from src.core.timezone import db_now_naive, to_iso_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
             CopilotAction.user_id == str(user_id),
             CopilotAction.status == "pending",
         )
-        .update({"status": "applied", "applied_at": beijing_now_naive()},
+        .update({"status": "applied", "applied_at": db_now_naive()},
                 synchronize_session=False)
     )
     if not claimed:
@@ -177,7 +177,7 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         row.result = result
         row.annotation_id = extra.get("annotation_id")
         if row.applied_at is None:  # 认领时已写；老库/方言差异兜底
-            row.applied_at = beijing_now_naive()
+            row.applied_at = db_now_naive()
         db.commit()
     except ActionError:
         # 业务拒绝(参数/越权): 整个事务回滚 —— 动作必须仍是 pending, 不留半条标注
@@ -229,7 +229,7 @@ def reject_action(db: Session, *, user_id: Any, action_id: int) -> dict:
             CopilotAction.user_id == str(user_id),
             CopilotAction.status == "pending",
         )
-        .update({"status": "rejected", "applied_at": beijing_now_naive()},
+        .update({"status": "rejected", "applied_at": db_now_naive()},
                 synchronize_session=False)
     )
     if not rejected:
