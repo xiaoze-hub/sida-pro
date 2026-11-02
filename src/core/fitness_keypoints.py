@@ -26,6 +26,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from src.core.timezone import db_now_naive
 from src.db.klines_repo import load_qfq_bars_cached
 
 logger = logging.getLogger(__name__)
@@ -229,7 +230,8 @@ def aggregate(db, *, days: int = 30, min_samples: int = 20) -> dict:
     """
     from src.db.models import CopilotRun
 
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=max(0, int(days)))
+    # CopilotRun.created_at 自 v234 起是北京 naive（timezone.db_now_naive 口径）
+    cutoff = db_now_naive() - timedelta(days=max(0, int(days)))
     rows = (
         db.query(CopilotRun)
         .filter(CopilotRun.created_at >= cutoff)
