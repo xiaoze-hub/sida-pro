@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 import logging
 
 from src.db.session import SessionLocal
+from src.core.timezone import beijing_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ class CopilotTrace:
                     recipe=self.recipe,
                     question=self.question,
                     status="running",
-                    created_at=datetime.utcnow(),
+                    created_at=beijing_now_naive(),
                 ))
                 db.commit()
             finally:
@@ -136,7 +137,7 @@ class CopilotTrace:
                     error=_clip(error, 500),
                     result_digest=_clip(result, MAX_DIGEST_CHARS),
                     elapsed_ms=elapsed_ms,
-                    created_at=datetime.utcnow(),
+                    created_at=beijing_now_naive(),
                 ))
                 db.commit()
             finally:
@@ -222,8 +223,8 @@ class CopilotTrace:
                         error=_clip(error, 500),
                         tool_calls=self.tool_calls,
                         elapsed_ms=elapsed_ms,
-                        created_at=datetime.utcnow(),
-                        finished_at=datetime.utcnow(),
+                        created_at=beijing_now_naive(),
+                        finished_at=beijing_now_naive(),
                     ))
                 else:
                     row.status = status
@@ -232,7 +233,7 @@ class CopilotTrace:
                     row.tool_calls = self.tool_calls
                     row.elapsed_ms = elapsed_ms
                     # 与 INSERT 分支保持一致：列是 naive，写 aware 会被 PG 按会话时区换算
-                    row.finished_at = datetime.utcnow()
+                    row.finished_at = beijing_now_naive()
                 db.commit()
             finally:
                 db.close()

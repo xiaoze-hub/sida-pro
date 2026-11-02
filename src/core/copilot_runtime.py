@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from typing import Iterable
+from src.core.timezone import beijing_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ def can_transition(src: str | None, dst: str) -> bool:
 
 
 def stale_cutoff(now: datetime | None = None, *, stale_after_s: int = STALE_AFTER_S) -> datetime:
-    return (now or datetime.utcnow()) - timedelta(seconds=stale_after_s)
+    return (now or beijing_now_naive()) - timedelta(seconds=stale_after_s)
 
 
 def takeover_error(now: datetime | None = None) -> str:
@@ -124,7 +125,7 @@ def reap_stale_runs(
             continue
         row.status = "failed"
         row.error = takeover_error(now)
-        row.finished_at = now or datetime.utcnow()
+        row.finished_at = now or beijing_now_naive()
 
     if reaped and not dry_run:
         try:
@@ -145,6 +146,6 @@ def heartbeat(db, run_id: str, *, now: datetime | None = None) -> bool:
     row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
     if row is None or is_terminal(row.status):
         return False
-    row.heartbeat_at = now or datetime.utcnow()
+    row.heartbeat_at = now or beijing_now_naive()
     db.commit()
     return True

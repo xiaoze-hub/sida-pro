@@ -17,6 +17,7 @@ import logging
 from datetime import datetime
 
 from sqlalchemy.orm import Session
+from src.core.timezone import beijing_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def set_pref(db: Session, user_id, scene: str, model_id: int) -> None:
         db.add(row)
     else:
         row.model_id = int(model_id)
-        row.updated_at = datetime.utcnow()
+        row.updated_at = beijing_now_naive()
     db.commit()
 
 

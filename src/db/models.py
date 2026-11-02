@@ -14,13 +14,12 @@ from sqlalchemy import (
     text,
     false,
 )
-from datetime import datetime
-
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from src.db.session import Base
 from src.db.mixins import AuditMixin, CreatedAtMixin, UpdatedAtMixin
+from src.core.timezone import beijing_now_naive
 
 
 class User(AuditMixin, Base):
@@ -148,7 +147,7 @@ class UserAiPref(Base):
     user_id = Column(String(36), nullable=False, index=True)
     scene = Column(String(32), nullable=False)
     model_id = Column(Integer, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=beijing_now_naive, onupdate=beijing_now_naive)
 
 
 class AIModel(CreatedAtMixin, Base):
@@ -1415,7 +1414,7 @@ class CopilotMemory(Base):
     run_id = Column(String(36), nullable=True)
     hits = Column(Integer, nullable=False, default=0)
     enabled = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
     last_used_at = Column(DateTime, nullable=True)
 
 
@@ -1439,7 +1438,7 @@ class CopilotSchedule(Base):
     payload = Column(JSON, default=dict)              # {symbols:[...], limit:10}
     enabled = Column(Boolean, nullable=False, default=True)
     last_run_date = Column(String(8), nullable=True)  # YYYYMMDD, 防同一天重复
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
 
 
 class CopilotQuota(Base):
@@ -1459,7 +1458,7 @@ class CopilotQuota(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     note = Column(String(120), nullable=True)
     updated_by = Column(String(36), nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=beijing_now_naive, onupdate=beijing_now_naive)
 
 
 class HarnessProposal(Base):
@@ -1500,8 +1499,8 @@ class HarnessProposal(Base):
     recipe = Column(String(64), nullable=True)             # 当时的配方 id（可空）
     status = Column(String(16), nullable=False, default="pending")  # pending/accept/reject/snooze
     seen_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
-    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    first_seen_at = Column(DateTime, nullable=False, default=beijing_now_naive)
+    last_seen_at = Column(DateTime, nullable=False, default=beijing_now_naive)
     decided_at = Column(DateTime, nullable=True)
 
 
@@ -2306,7 +2305,7 @@ class CopilotRun(Base):
     # 2026-10-25 (P1-1.1): 委派子 run。父 run 只汇总证据与缺口，子 run 有**独立预算**，
     # `tool_calls` 各算各的 —— 否则一个 delegate 就能把父的预算吃穿。
     parent_run_id = Column(String(36), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
     finished_at = Column(DateTime, nullable=True)
 
 
@@ -2335,7 +2334,7 @@ class HarnessExperiment(Base):
     reasons = Column(JSON, default=list)                 # rollback 的原因（逐条）
     evidence_path = Column(String(256), nullable=True)   # compare-*.json 落盘位置
     note = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
 
 
 class WebhookSubscription(Base):
@@ -2356,7 +2355,7 @@ class WebhookSubscription(Base):
     status_snapshot = Column(String(16), nullable=True)   # 触发时的 run 状态
     attempts = Column(Integer, nullable=False, default=0)
     last_error = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
 
 
 class RecipeVersion(Base):
@@ -2373,7 +2372,7 @@ class RecipeVersion(Base):
     recipe_id = Column(String(64), nullable=False)
     fingerprint = Column(String(16), nullable=False)      # YAML 内容 sha256 前 8 位
     snapshot = Column(Text, nullable=True)                # 当次 Recipe.public() 的 JSON
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
 
 
 class CopilotStep(Base):
@@ -2395,7 +2394,7 @@ class CopilotStep(Base):
     error = Column(Text, nullable=True)
     result_digest = Column(Text, nullable=True)                # 前 500 字
     elapsed_ms = Column(Integer, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
 
 
 class CopilotFeedback(Base):
@@ -2411,7 +2410,7 @@ class CopilotFeedback(Base):
     user_id = Column(String(36), nullable=True)                # users.id 是 UUID 字符串
     useful = Column(Boolean, nullable=False, default=True)
     reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
 
 
 class CopilotAction(Base):
@@ -2444,7 +2443,7 @@ class CopilotAction(Base):
     # 存 JSON 而不是拆列：不同动作类型的字段不同，拆列会每加一类动作就要迁移。
     diff_json = Column(Text, nullable=True)
     before_snapshot = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
     applied_at = Column(DateTime, nullable=True)
 
 
@@ -2483,7 +2482,7 @@ class KlineAnnotation(Base):
     note = Column(Text, nullable=True)               # 依据/口径
     color = Column(String(16), nullable=False, default="up")
     source = Column(String(16), nullable=False, default="ai")   # ai / user
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=beijing_now_naive)
 
 
 class CancelRateSnapshot(Base):
@@ -2541,7 +2540,7 @@ class StockFactorDaily(Base):
     rank_vol_20 = Column(Float, nullable=True)
     rank_volume_z20 = Column(Float, nullable=True)
     rank_position_120 = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=beijing_now_naive)
 
 
 class ExdayDaily(Base):
@@ -2612,7 +2611,7 @@ class ExdayDaily(Base):
     quality = Column(String(16), nullable=True)        # ok / suspect
     reason = Column(String(255), nullable=True)
     source = Column(String(32), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=beijing_now_naive)
 
 
 class FactorWinrateDaily(Base):
@@ -2658,7 +2657,7 @@ class FactorWinrateDaily(Base):
     universe_size = Column(Integer, nullable=True)
     lookback_bars = Column(Integer, nullable=True)
     source = Column(String(32), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=beijing_now_naive)
 
 
 class MarketReplayDaily(Base):
@@ -2699,4 +2698,4 @@ class MarketReplayDaily(Base):
     missing_dims = Column(JSON, default=list)
     source = Column(String(32), nullable=True)
     payload = Column(JSON, default=dict)                     # 完整复盘证据
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=beijing_now_naive)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Any, Callable, Iterable
+from src.core.timezone import beijing_now_naive
 
 # 子 run 默认预算（工具调用次数）。比父 run 小：子任务范围窄，给太多等于鼓励它乱翻。
 DEFAULT_CHILD_BUDGET = 6
@@ -50,7 +51,7 @@ def create_child_run(
         status="queued",
         tool_calls=0,
         parent_run_id=parent_run_id,
-        created_at=datetime.utcnow(),
+        created_at=beijing_now_naive(),
     )
     db.add(run)
     db.commit()
@@ -114,7 +115,7 @@ def _mark_running(db, run_id: str) -> None:
     if row is None:
         return
     row.status = "running"
-    row.heartbeat_at = datetime.utcnow()
+    row.heartbeat_at = beijing_now_naive()
     db.commit()
 
 
@@ -129,7 +130,7 @@ def _finish(db, run_id: str, *, status: str, error: str | None = None,
     row.error = error
     row.tool_calls = tool_calls
     row.elapsed_ms = elapsed_ms or None
-    row.finished_at = datetime.utcnow()
+    row.finished_at = beijing_now_naive()
     db.commit()
 
 
