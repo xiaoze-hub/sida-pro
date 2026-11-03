@@ -30,11 +30,20 @@ def _db_naive_tz():
     SQLite 的 CURRENT_TIMESTAMP = UTC naive；
     PG(Asia/Shanghai) 的 now() 写入 timestamp without time zone = app 时区(北京) naive。
     据此判断 DB 读出的 naive 时间应按哪个时区解读。
+
+    为什么不直接调 `dialect.declared_backend()`: 那个模块在 import 时缓存 IS_PG,
+    单测/热重载里改环境变量后不会跟着变（会静默给出反向口径）。这里按同一套
+    环境变量**即时**解析，优先级与 `src/db/dialect.py` 保持一致：
+    `DATABASE_URL_WRITE` 优先, 其次 `SIDA_DB_URL`, 都没有 = SQLite。
+    （只嗅 SIDA_DB_URL 是不够的: 只配 DATABASE_URL_WRITE 的部署会被误判成 SQLite,
+    写库时刻整体偏 8 小时且没有任何报错。）
     """
-    url = os.environ.get("SIDA_DB_URL", "")
-    if url.startswith("postgresql"):
-        return _get_app_tz()
-    return timezone.utc
+    url = (
+        os.environ.get("DATABASE_URL_WRITE")
+        or os.environ.get("SIDA_DB_URL")
+        or ""
+    ).strip()
+    return _get_app_tz() if url.startswith("postgresql") else timezone.utc
 
 
 def utc_now() -> datetime:
@@ -55,6 +64,20 @@ def beijing_now_naive() -> datetime:
     都应走本函数, 避免 datetime.utcnow() 混入 UTC naive 造成 8 小时口径割裂。
     """
     return datetime.now(_get_app_tz()).replace(tzinfo=None)
+
+
+def db_now_naive() -> datetime:
+    """与 DB 的 ``func.now()`` **同口径**的"当前时间"（naive）。
+
+    - PG(TZ=Asia/Shanghai): ``now()`` 写 timestamp 列 → 北京 naive
+    - SQLite: ``CURRENT_TIMESTAMP`` → UTC naive
+
+    凡是"写进库"或"与库里的列比较"的现在, 都用它而不是 ``datetime.utcnow()`` /
+    ``beijing_now_naive()``: 这样 Python 写入的值和 ``server_default`` 写入的值在
+    两种方言下都落在同一个时钟上（SQLite 本地开发库也不会因为 +8 而和存量行割裂）。
+    只用于展示/跨系统传输的绝对时刻请用 ``utc_now()`` / ``to_iso_utc()``。
+    """
+    return datetime.now(_db_naive_tz()).replace(tzinfo=None)
 
 
 def to_utc(dt: datetime) -> datetime:

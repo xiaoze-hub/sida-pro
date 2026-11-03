@@ -22,6 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.core.db_safe import safe_rollback
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,14 @@ _ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 CODE_LEN = 8
 
 
-def _utcnow() -> datetime:
-    """naive UTC（与库里列的类型一致）。`datetime.utcnow()` 在 3.12 已废弃。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def _now() -> datetime:
+    """当前时间, naive。口径 = app 时区(北京)。
+
+    2026-11-02 起与库里其他时间列统一: PG(Asia/Shanghai) 的 now() 写 timestamp
+    列存的是北京 naive, 此前这里写的是 UTC naive → 邀请码过期判断与
+    `created_at` 显示都早 8 小时。历史数据由迁移 v234 一次性平移。
+    """
+    return db_now_naive()
 
 
 def _parse_dt(value) -> datetime | None:
@@ -56,7 +62,7 @@ def _parse_dt(value) -> datetime | None:
 
 def _is_expired(value) -> bool:
     dt = _parse_dt(value)
-    return bool(dt is not None and dt < _utcnow())
+    return bool(dt is not None and dt < _now())
 
 
 class InviteCodeError(Exception):
@@ -95,7 +101,7 @@ def create_invite_code(
     max_uses = max(1, min(int(max_uses or 1), 1000))
     expires_at = None
     if expires_in_days:
-        expires_at = _utcnow() + timedelta(days=int(expires_in_days))
+        expires_at = _now() + timedelta(days=int(expires_in_days))
 
     for _ in range(8):
         c = normalize_code(code) if code else generate_code()
@@ -121,7 +127,7 @@ def create_invite_code(
                 "e": expires_at,
                 "d": False,
                 "b": created_by or "",
-                "t": _utcnow(),
+                "t": _now(),
             },
         )
         db.commit()
@@ -185,7 +191,7 @@ def _record_use(db: Session, code: str, user_id: int | None, username: str, clie
             VALUES (:c, :u, :n, :i, :t)
             """
         ),
-        {"c": code, "u": user_id, "n": username or "", "i": client_ip or "", "t": _utcnow()},
+        {"c": code, "u": user_id, "n": username or "", "i": client_ip or "", "t": _now()},
     )
 
 

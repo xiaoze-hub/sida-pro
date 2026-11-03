@@ -27,6 +27,7 @@ from src.web.api._scope import allow_cross_user
 from src.web.api.auth import get_current_user
 from src.web.api.copilot_jobs import run_user_scope_ok
 from src.web.database import get_db
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -321,7 +322,7 @@ def _mark_parent(run_id: str, *, status: str, error: str | None = None) -> None:
         row.status = status
         row.error = error
         if status in ("ok", "failed"):
-            row.finished_at = datetime.utcnow()
+            row.finished_at = db_now_naive()
         db.commit()
     except Exception:  # noqa: BLE001
         from src.core.db_safe import safe_rollback

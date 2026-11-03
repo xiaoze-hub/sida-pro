@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 
 from src.db.models import AuditLog, CopilotQuota, CopilotRun, CopilotStep, LLMUsage
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ MAX_TOOL_CALLS_PER_RUN = _env_int("COPILOT_MAX_TOOL_CALLS_PER_RUN", 60)
 
 
 def _day_start() -> datetime:
-    now = datetime.utcnow()
+    now = db_now_naive()
     return datetime(now.year, now.month, now.day)
 
 
@@ -298,7 +299,7 @@ def cost_summary(db, *, days: int = 7, price_per_mtoken: dict | None = None,
     `price_per_mtoken` 是 {模型前缀: 每百万 token 混合单价(元)}；未配置价格的模型
     返回 cost=None 并在 `unpriced_models` 里列出来 —— 不编造单价。
     """
-    since = datetime.utcnow() - timedelta(days=max(1, int(days)))
+    since = db_now_naive() - timedelta(days=max(1, int(days)))
     q = db.query(LLMUsage).filter(LLMUsage.created_at >= since)
     # 非管理员只看自己：by_day/by_model 也必须过滤，否则总量仍会把别人的用量摊出来
     if user_id:
@@ -318,7 +319,7 @@ def cost_summary(db, *, days: int = 7, price_per_mtoken: dict | None = None,
     by_user: dict[str, dict] = {}
     unpriced: set[str] = set()
     for r in rows:
-        d = (r.created_at or datetime.utcnow()).strftime("%Y-%m-%d")
+        d = (r.created_at or db_now_naive()).strftime("%Y-%m-%d")
         toks = (r.prompt_tokens or 0) + (r.completion_tokens or 0)
         pt = _price(r.model_name)
         cost = round(toks / 1_000_000 * pt, 4) if pt is not None else None

@@ -16,6 +16,7 @@ import json
 from datetime import datetime
 
 from src.harness import recipes as R
+from src.core.timezone import db_now_naive
 
 
 def sync_versions(db) -> list[dict]:
@@ -41,7 +42,7 @@ def sync_versions(db) -> list[dict]:
             recipe_id=rec.id,
             fingerprint=fp,
             snapshot=json.dumps(rec.public(), ensure_ascii=False),
-            created_at=datetime.utcnow(),
+            created_at=db_now_naive(),
         ))
         changed.append({"recipe_id": rec.id, "fingerprint": fp})
     if changed:

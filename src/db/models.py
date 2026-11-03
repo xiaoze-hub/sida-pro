@@ -14,15 +14,15 @@ from sqlalchemy import (
     text,
     false,
 )
-from datetime import datetime
-
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from src.db.session import Base
+from src.db.mixins import AuditMixin, CreatedAtMixin, UpdatedAtMixin
+from src.core.timezone import db_now_naive
 
 
-class User(Base):
+class User(AuditMixin, Base):
     """多用户账号(2026-08-10 阶段1)。
 
     - UUID 主键(后续独立账号系统/多服务合并无痛)
@@ -52,11 +52,9 @@ class User(Base):
     # server_default: 兼容不带该列的 raw SQL INSERT(测试种子/历史脚本)
     is_deleted = Column(Boolean, default=False, nullable=False, server_default=false())
     deleted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class AuditLog(Base):
+class AuditLog(CreatedAtMixin, Base):
     """操作审计日志(2026-08-15): 记录关键写操作(登录/配置修改/用户管理/导出等)。
 
     owner 视角审计: 谁在什么时候改了什么。不记录读操作(避免噪音)。
@@ -76,10 +74,9 @@ class AuditLog(Base):
     #: 截断快照：审计是行删掉之后**唯一**的证据源，截断=丢证据。存量库由迁移 v233 放宽。
     detail = Column(Text, default="")
     ip = Column(String(64), default="")
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class ReportSubscription(Base):
+class ReportSubscription(AuditMixin, Base):
     """定时报告订阅(2026-08-10 阶段4): 每个用户可配置收哪些定时报告。
 
     report_type: premarket(盘前) / intraday(盘中) / review(盘后复盘) / prediction(预测)
@@ -90,15 +87,13 @@ class ReportSubscription(Base):
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     report_type = Column(String(32), nullable=False)  # premarket | intraday | review | prediction
     enabled = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint("user_id", "report_type", name="uq_user_report_type"),
     )
 
 
-class AIService(Base):
+class AIService(CreatedAtMixin, Base):
     """AI 服务商（base_url + api_key）"""
 
     __tablename__ = "ai_services"
@@ -107,14 +102,13 @@ class AIService(Base):
     name = Column(String, nullable=False)  # "OpenAI", "智谱", "DeepSeek"
     base_url = Column(String, nullable=False)
     api_key = Column(String, default="")
-    created_at = Column(DateTime, server_default=func.now())
 
     models = relationship(
         "AIModel", back_populates="service", cascade="all, delete-orphan"
     )
 
 
-class UserAIService(Base):
+class UserAIService(CreatedAtMixin, Base):
     """用户 BYOK AI 服务(2026-08-15 SIDA 账号权限控制): 用户自配模型服务。
 
     用户级 LLM 解析(get_model_for_scene ①)查此表: models_json 为 JSON 数组
@@ -131,7 +125,6 @@ class UserAIService(Base):
     api_key = Column(String, default="")
     # 模型列表 JSON 字符串: [{"name","model","is_default","scene","capabilities"}]
     models_json = Column(Text, nullable=False, default="[]")
-    created_at = Column(DateTime, server_default=func.now())
 
 
 class UserAiPref(Base):
@@ -154,10 +147,10 @@ class UserAiPref(Base):
     user_id = Column(String(36), nullable=False, index=True)
     scene = Column(String(32), nullable=False)
     model_id = Column(Integer, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=db_now_naive, onupdate=db_now_naive)
 
 
-class AIModel(Base):
+class AIModel(CreatedAtMixin, Base):
     """AI 模型（属于某个服务商）"""
 
     __tablename__ = "ai_models"
@@ -171,12 +164,11 @@ class AIModel(Base):
     is_default = Column(Boolean, default=False)
     # 功能选型(2026-08-15): 逗号分隔能力标签 chat,vision,image,video,tools; 空串=默认 chat(兼容存量模型)
     capabilities = Column(Text, nullable=False, default="")
-    created_at = Column(DateTime, server_default=func.now())
 
     service = relationship("AIService", back_populates="models")
 
 
-class AISceneBinding(Base):
+class AISceneBinding(UpdatedAtMixin, Base):
     """AI 使用场景绑定(2026-08-12 统一 LLM 配置中心)。
 
     每个使用场景可绑定模型池(ai_models)中的任意模型,模型源(服务商)统一在
@@ -199,10 +191,9 @@ class AISceneBinding(Base):
     model_id = Column(
         Integer, ForeignKey("ai_models.id", ondelete="SET NULL"), nullable=True
     )
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class NotifyChannel(Base):
+class NotifyChannel(CreatedAtMixin, Base):
     __tablename__ = "notify_channels"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -212,10 +203,9 @@ class NotifyChannel(Base):
     config = Column(JSON, default={})  # {"bot_token": "...", "chat_id": "..."}
     enabled = Column(Boolean, default=True)
     is_default = Column(Boolean, default=False)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class Account(Base):
+class Account(AuditMixin, Base):
     """交易账户"""
 
     __tablename__ = "accounts"
@@ -225,15 +215,13 @@ class Account(Base):
     name = Column(String, nullable=False)  # 账户名称，如 "招商证券"、"华泰证券"
     available_funds = Column(Float, default=0)  # 可用资金
     enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     positions = relationship(
         "Position", back_populates="account", cascade="all, delete-orphan"
     )
 
 
-class Stock(Base):
+class Stock(AuditMixin, Base):
     __tablename__ = "stocks"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -246,8 +234,6 @@ class Stock(Base):
     quantity = Column(Integer, nullable=True)
     invested_amount = Column(Float, nullable=True)
     sort_order = Column(Integer, default=0)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     agents = relationship(
         "StockAgent", back_populates="stock", cascade="all, delete-orphan"
@@ -257,7 +243,7 @@ class Stock(Base):
     )
 
 
-class Position(Base):
+class Position(AuditMixin, Base):
     """持仓记录（多账户多股票）"""
 
     __tablename__ = "positions"
@@ -283,14 +269,12 @@ class Position(Base):
     trading_style = Column(
         String, default="swing"
     )  # short: 短线, swing: 波段, long: 长线
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     account = relationship("Account", back_populates="positions")
     stock = relationship("Stock", back_populates="positions")
 
 
-class StockAgent(Base):
+class StockAgent(CreatedAtMixin, Base):
     """多对多: 每只股票可被多个 Agent 监控"""
 
     __tablename__ = "stock_agents"
@@ -308,12 +292,11 @@ class StockAgent(Base):
         Integer, ForeignKey("ai_models.id", ondelete="SET NULL"), nullable=True
     )
     notify_channel_ids = Column(JSON, default=[])
-    created_at = Column(DateTime, server_default=func.now())
 
     stock = relationship("Stock", back_populates="agents")
 
 
-class AgentConfig(Base):
+class AgentConfig(AuditMixin, Base):
     __tablename__ = "agent_configs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -334,11 +317,9 @@ class AgentConfig(Base):
     )
     notify_channel_ids = Column(JSON, default=[])
     config = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class AgentRun(Base):
+class AgentRun(CreatedAtMixin, Base):
     __tablename__ = "agent_runs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -354,10 +335,9 @@ class AgentRun(Base):
     result = Column(String, default="")
     error = Column(String, default="")
     duration_ms = Column(Integer, default=0)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class LogEntry(Base):
+class LogEntry(CreatedAtMixin, Base):
     __tablename__ = "log_entries"
     __table_args__ = (
         Index("ix_log_entries_time_id", "timestamp", "id"),
@@ -377,7 +357,6 @@ class LogEntry(Base):
     tags = Column(JSON, default={})
     notify_status = Column(String, default="")
     notify_reason = Column(String, default="")
-    created_at = Column(DateTime, server_default=func.now())
 
 
 class AppSettings(Base):
@@ -389,7 +368,7 @@ class AppSettings(Base):
     description = Column(String, default="")
 
 
-class DataSource(Base):
+class DataSource(CreatedAtMixin, Base):
     """数据源配置（新闻、K线图、行情）"""
 
     __tablename__ = "data_sources"
@@ -405,7 +384,6 @@ class DataSource(Base):
     priority = Column(Integer, default=0)  # 越小优先级越高
     supports_batch = Column(Boolean, default=False)  # 是否支持批量查询
     test_symbols = Column(JSON, default=[])  # 测试用股票代码列表
-    created_at = Column(DateTime, server_default=func.now())
     # v0.4.36 P0 派活 2 (整合 xiaoze6096): data_sources 健康累计列
     # P2-C: 计数列加 server_default=text("0"), 新鲜 create_all 建库即带 DB 级默认值,
     # 不再依赖 ORM python-default(与 _m126 的 INTEGER DEFAULT 0 同口径)。
@@ -416,7 +394,7 @@ class DataSource(Base):
     last_status = Column(String, nullable=True)       # 最近一次结果: 'ok' / 'error'
 
 
-class NewsCache(Base):
+class NewsCache(CreatedAtMixin, Base):
     """新闻缓存（用于去重）"""
 
     __tablename__ = "news_cache"
@@ -432,7 +410,6 @@ class NewsCache(Base):
     publish_time = Column(DateTime, nullable=False)
     symbols = Column(JSON, default=[])  # 关联股票代码列表
     importance = Column(Integer, default=0)  # 0-3 重要性
-    created_at = Column(DateTime, server_default=func.now())
 
 
 class NotifyThrottle(Base):
@@ -450,7 +427,7 @@ class NotifyThrottle(Base):
     notify_count = Column(Integer, default=1)  # 当日通知次数
 
 
-class AnalysisHistory(Base):
+class AnalysisHistory(AuditMixin, Base):
     """分析历史记录（盘后分析、盘前分析等）
 
     UNIQUE 约束加 user_id 维度(S1/M3, 2026-08-23): 多账号下同一 (agent, stock, date)
@@ -481,11 +458,9 @@ class AnalysisHistory(Base):
     # 0.3(2026-09-08): 降级记录显式落库, 前端据此显示「未生成」而非伪装成分析
     status = Column(String, default="success")  # success / degraded / failed
     error = Column(String, nullable=True)  # 降级/失败原因
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class StockContextSnapshot(Base):
+class StockContextSnapshot(CreatedAtMixin, Base):
     """按股票/日期保存结构化上下文快照（用于跨天记忆）"""
 
     __tablename__ = "stock_context_snapshots"
@@ -512,10 +487,9 @@ class StockContextSnapshot(Base):
     context_type = Column(String, nullable=False)  # premarket_outlook/daily_report/...
     payload = Column(JSON, default={})
     quality = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class NewsTopicSnapshot(Base):
+class NewsTopicSnapshot(CreatedAtMixin, Base):
     """新闻主题快照（按日期和窗口聚合）"""
 
     __tablename__ = "news_topic_snapshots"
@@ -536,10 +510,9 @@ class NewsTopicSnapshot(Base):
     topics = Column(JSON, default=[])
     sentiment = Column(String, default="neutral")
     coverage = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class AgentContextRun(Base):
+class AgentContextRun(CreatedAtMixin, Base):
     """每次 Agent 执行时使用的上下文摘要"""
 
     __tablename__ = "agent_context_runs"
@@ -554,10 +527,9 @@ class AgentContextRun(Base):
     analysis_date = Column(String, nullable=False)  # YYYY-MM-DD
     context_payload = Column(JSON, default={})
     quality = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class AgentPredictionOutcome(Base):
+class AgentPredictionOutcome(CreatedAtMixin, Base):
     """建议后验评估记录（用于回放与效果统计）"""
 
     __tablename__ = "agent_prediction_outcomes"
@@ -586,10 +558,9 @@ class AgentPredictionOutcome(Base):
     outcome_status = Column(String, nullable=False, default="pending")
     meta = Column(JSON, default={})
     evaluated_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class StockSuggestion(Base):
+class StockSuggestion(CreatedAtMixin, Base):
     """股票建议池 - 汇总各 Agent 建议
 
     user_id(M2): 建议归属用户, NULL=旧数据; dedupe key 加 user_id 维度, 不同账号可同时存同标的建议。
@@ -627,7 +598,6 @@ class StockSuggestion(Base):
     meta = Column(JSON, default={})
 
     # 时间信息
-    created_at = Column(DateTime, server_default=func.now())
     expires_at = Column(DateTime, nullable=True)  # 建议过期时间
 
     # 索引：按市场+股票+时间快速查询
@@ -642,7 +612,7 @@ class StockSuggestion(Base):
     )
 
 
-class EntryCandidate(Base):
+class EntryCandidate(AuditMixin, Base):
     """入场候选榜快照（按天去重，可追溯来源建议与证据）。"""
 
     __tablename__ = "entry_candidates"
@@ -684,11 +654,9 @@ class EntryCandidate(Base):
     evidence = Column(JSON, default=[])
     plan = Column(JSON, default={})
     meta = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class MarketScanSnapshot(Base):
+class MarketScanSnapshot(AuditMixin, Base):
     """市场池候选快照（用于多源回退与覆盖诊断）。"""
 
     __tablename__ = "market_scan_snapshots"
@@ -712,8 +680,6 @@ class MarketScanSnapshot(Base):
     score_seed = Column(Float, nullable=False, default=0.0)
     quote = Column(JSON, default={})
     meta = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class EntryCandidateFeedback(Base):
@@ -737,7 +703,7 @@ class EntryCandidateFeedback(Base):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
-class ManualQueryCandidate(Base):
+class ManualQueryCandidate(CreatedAtMixin, Base):
     """用户主动查询结果入池记录(2026-08-21 机会页整合 P1)。
 
     - 问小达(tdx)/问财(wencai) 每次自然语言查询返回的标的落一行,
@@ -759,10 +725,9 @@ class ManualQueryCandidate(Base):
     stock_market = Column(String(8), nullable=False, default="CN")
     stock_name = Column(String(64), default="")
     rank_in_result = Column(Integer, nullable=True)  # 在查询结果中的名次
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class EntryCandidateOutcome(Base):
+class EntryCandidateOutcome(CreatedAtMixin, Base):
     """入场候选后验结果（自动评估）。"""
 
     __tablename__ = "entry_candidate_outcomes"
@@ -793,10 +758,9 @@ class EntryCandidateOutcome(Base):
     outcome_status = Column(String, nullable=False, default="pending")
     meta = Column(JSON, default={})
     evaluated_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class StrategyCatalog(Base):
+class StrategyCatalog(AuditMixin, Base):
     """策略目录（可版本化、可启停、可调权重）。"""
 
     __tablename__ = "strategy_catalog"
@@ -815,11 +779,9 @@ class StrategyCatalog(Base):
     risk_level = Column(String, default="medium")  # low/medium/high
     params = Column(JSON, default={})
     default_weight = Column(Float, nullable=False, default=1.0)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class StrategySignalRun(Base):
+class StrategySignalRun(AuditMixin, Base):
     """策略信号执行快照（按日/股票/策略去重）。"""
 
     __tablename__ = "strategy_signal_runs"
@@ -874,11 +836,9 @@ class StrategySignalRun(Base):
     is_holding_snapshot = Column(Boolean, default=False)
     context_quality_score = Column(Float, nullable=True)
     payload = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class StrategyOutcome(Base):
+class StrategyOutcome(CreatedAtMixin, Base):
     """策略后验结果。"""
 
     __tablename__ = "strategy_outcomes"
@@ -912,10 +872,9 @@ class StrategyOutcome(Base):
     outcome_status = Column(String, nullable=False, default="pending")
     meta = Column(JSON, default={})
     evaluated_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class StrategyWeight(Base):
+class StrategyWeight(AuditMixin, Base):
     """策略权重（当前生效值）。"""
 
     __tablename__ = "strategy_weights"
@@ -937,11 +896,9 @@ class StrategyWeight(Base):
     reason = Column(String, default="")
     meta = Column(JSON, default={})
     effective_from = Column(DateTime, server_default=func.now())
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class StrategyWeightHistory(Base):
+class StrategyWeightHistory(CreatedAtMixin, Base):
     """策略调权历史。"""
 
     __tablename__ = "strategy_weight_history"
@@ -960,10 +917,9 @@ class StrategyWeightHistory(Base):
     window_days = Column(Integer, default=45)
     sample_size = Column(Integer, default=0)
     meta = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class FactorWeight(Base):
+class FactorWeight(AuditMixin, Base):
     """因子权重（当前生效值）——每因子 × 市场,由 IC/IR 自动标定 + 可手动覆盖。
 
     镜像 StrategyWeight,但作用于因子级(alpha/catalyst/quality/risk/crowd),
@@ -985,11 +941,9 @@ class FactorWeight(Base):
     reason = Column(String, default="")
     meta = Column(JSON, default={})
     effective_from = Column(DateTime, server_default=func.now())
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class FactorWeightHistory(Base):
+class FactorWeightHistory(CreatedAtMixin, Base):
     """因子调权历史(审计)。"""
 
     __tablename__ = "factor_weight_history"
@@ -1008,10 +962,9 @@ class FactorWeightHistory(Base):
     sample_size = Column(Integer, default=0)
     reason = Column(String, default="")  # auto/manual/pinned_skip/auto_off/insufficient_samples
     meta = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class MarketRegimeSnapshot(Base):
+class MarketRegimeSnapshot(AuditMixin, Base):
     """市场状态快照（用于按市场动态调权与解释）。"""
 
     __tablename__ = "market_regime_snapshots"
@@ -1037,11 +990,9 @@ class MarketRegimeSnapshot(Base):
     active_ratio = Column(Float, nullable=True)
     sample_size = Column(Integer, default=0)
     meta = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class StrategyFactorSnapshot(Base):
+class StrategyFactorSnapshot(AuditMixin, Base):
     """每条策略信号的因子分解快照。"""
 
     __tablename__ = "strategy_factor_snapshots"
@@ -1068,11 +1019,9 @@ class StrategyFactorSnapshot(Base):
     regime_multiplier = Column(Float, default=1.0)
     final_score = Column(Float, nullable=False, default=0.0)
     factor_payload = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class StockUniverseSnapshot(Base):
+class StockUniverseSnapshot(CreatedAtMixin, Base):
     """PIT 股票池日快照(B0.6/KI-036): 回测按 as_of_date 取池, 消除幸存者偏差。
 
     每个 (as_of_date, symbol, market) 一行, 记录当日是否在池 / 是否 ST / 是否已退市。
@@ -1094,10 +1043,9 @@ class StockUniverseSnapshot(Base):
     list_date = Column(String, default="")     # YYYY-MM-DD, 缺失为空
     delist_date = Column(String, default="")   # YYYY-MM-DD, 未退市为空
     source = Column(String, default="backfill")  # entry_candidates/stock/backfill
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class TradingHalt(Base):
+class TradingHalt(CreatedAtMixin, Base):
     """停牌区间(B1.5/KI-040): 回测/研究按日冻结, 避免把停牌当"无波动持有"。
 
     每个停牌区间一行; end_date 为空表示"至查询日仍未复牌"。
@@ -1116,10 +1064,9 @@ class TradingHalt(Base):
     end_date = Column(String, default="")          # 空 = 仍未复牌
     reason = Column(String, default="")
     source = Column(String, default="manual")      # manual/announcement/vendor
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class AdjFactor(Base):
+class AdjFactor(CreatedAtMixin, Base):
     """除权除息因子(B1.4/KI-040): 按 (symbol, ex_date) 存复权比例。
 
     ratio = 除权日理论价 / 除权前收盘价(前复权用它把历史价折算到最新基准)。
@@ -1137,10 +1084,9 @@ class AdjFactor(Base):
     ex_date = Column(String, nullable=False)   # 除权除息日 YYYY-MM-DD
     ratio = Column(Float, nullable=False, default=1.0)
     source = Column(String, default="manual")
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class DatasourceFailure(Base):
+class DatasourceFailure(CreatedAtMixin, Base):
     """数据源失败明细(B1.6/KI-040): Prometheus 计数之外的"可查明细"。"""
 
     __tablename__ = "datasource_failures"
@@ -1155,10 +1101,9 @@ class DatasourceFailure(Base):
     symbol = Column(String, default="")
     detail = Column(String, default="")
     latency_ms = Column(Integer, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class PortfolioRiskSnapshot(Base):
+class PortfolioRiskSnapshot(AuditMixin, Base):
     """按快照/市场聚合的组合风险画像。"""
 
     __tablename__ = "portfolio_risk_snapshots"
@@ -1183,8 +1128,6 @@ class PortfolioRiskSnapshot(Base):
     avg_rank_score = Column(Float, nullable=True)
     risk_level = Column(String, default="medium")  # low/medium/high
     meta = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class SuggestionFeedback(Base):
@@ -1203,7 +1146,7 @@ class SuggestionFeedback(Base):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
-class PriceAlertRule(Base):
+class PriceAlertRule(AuditMixin, Base):
     """价格提醒规则
 
     user_id(S3): 规则归属用户, NULL=旧数据; 端点按 user 过滤, 缺失则返回 404。
@@ -1234,13 +1177,11 @@ class PriceAlertRule(Base):
     last_trigger_price = Column(Float, nullable=True)
     trigger_count_today = Column(Integer, default=0)
     trigger_date = Column(String, default="")  # YYYY-MM-DD
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     stock = relationship("Stock")
 
 
-class PriceAlertHit(Base):
+class PriceAlertHit(CreatedAtMixin, Base):
     """价格提醒命中记录"""
 
     __tablename__ = "price_alert_hits"
@@ -1265,13 +1206,12 @@ class PriceAlertHit(Base):
     trigger_snapshot = Column(JSON, default={})
     notify_success = Column(Boolean, default=False)
     notify_error = Column(String, default="")
-    created_at = Column(DateTime, server_default=func.now())
 
     rule = relationship("PriceAlertRule")
     stock = relationship("Stock")
 
 
-class PaperTradingAccount(Base):
+class PaperTradingAccount(AuditMixin, Base):
     """模拟盘账户(2026-09-08 T6: 每用户一行, user_id 归属; 迁移 _m135 存量行归 owner)"""
 
     __tablename__ = "paper_trading_account"
@@ -1289,11 +1229,9 @@ class PaperTradingAccount(Base):
     excluded_markets = Column(JSON, default=[])  # 排除的市场，如 ["US"]（兼容旧字段，由 market_allocations 派生）
     # 各市场投资比例 {"CN":0.5,"HK":0.3,"US":0.2}，比例 0~1、合计 ≤ 1；比例 0 表示不投入该市场
     market_allocations = Column(JSON, default={})
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class PaperTradingPosition(Base):
+class PaperTradingPosition(UpdatedAtMixin, Base):
     """模拟盘持仓"""
 
     __tablename__ = "paper_trading_positions"
@@ -1321,7 +1259,6 @@ class PaperTradingPosition(Base):
     strategy_code = Column(String, default="")
     opened_at = Column(DateTime, server_default=func.now())
     closed_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class PaperTradingTrade(Base):
@@ -1353,7 +1290,7 @@ class PaperTradingTrade(Base):
     meta = Column(JSON, default={})
 
 
-class ChatConversation(Base):
+class ChatConversation(AuditMixin, Base):
     """AI 对话会话
 
     user_id(S2): 会话归属用户, NULL=旧数据/系统; 多账号下各自只看到自己的会话。
@@ -1377,11 +1314,9 @@ class ChatConversation(Base):
     # 置顶(2026-10-22): 会话管理面板; 列表/搜索排序 pinned desc 优先。
     # server_default: 新鲜 create_all 建库即带 DB 级默认值(与 v217 迁移一致)。
     pinned = Column(Boolean, nullable=False, default=False, server_default=false())
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class ChatMessage(Base):
+class ChatMessage(CreatedAtMixin, Base):
     """AI 对话消息"""
 
     __tablename__ = "chat_messages"
@@ -1396,7 +1331,7 @@ class ChatMessage(Base):
     run_id = Column(String(36), nullable=True)  # 服务端验证的助手消息关联；历史未知留空
     # 依据行数字对账（JSON 文本；见 src/core/evidence_row_audit.py）。NULL = 未计算（旧消息）。
     evidence_audit = Column(Text, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+    # created_at 由 CreatedAtMixin 提供（server_default=func.now()，与 v216 建表一致）
 
 
 class CaptchaChallenge(Base):
@@ -1417,7 +1352,7 @@ class CaptchaChallenge(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
-class Notification(Base):
+class Notification(CreatedAtMixin, Base):
     """站内消息中心。
 
     后台任务(报告/Agent/策略刷新)完成或失败时写一条, 前端铃铛轮询未读数。
@@ -1452,10 +1387,9 @@ class Notification(Base):
     # 当次实际尝试的渠道回执（仅 ID/名称/类型/状态/错误，不保存密钥）
     push_channels = Column(JSON, default=list)
     read_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class LLMUsage(Base):
+class LLMUsage(CreatedAtMixin, Base):
     """LLM 调用日志(2026-08-15): 每次 AI 调用的 token 用量/耗时/场景, 用于成本统计。
 
     轻量设计: 不存 prompt/回复原文, 只存计数。一个月几千行, 无性能压力。
@@ -1476,7 +1410,6 @@ class LLMUsage(Base):
     # 原先只有 scene/model —— 无法回答"谁在烧 token", 也就没法做多用户配额。
     user_id = Column(String(36), nullable=True, index=True)
     run_id = Column(String(36), nullable=True, index=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
 class CopilotMemory(Base):
@@ -1503,7 +1436,7 @@ class CopilotMemory(Base):
     run_id = Column(String(36), nullable=True)
     hits = Column(Integer, nullable=False, default=0)
     enabled = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
     last_used_at = Column(DateTime, nullable=True)
 
 
@@ -1527,7 +1460,7 @@ class CopilotSchedule(Base):
     payload = Column(JSON, default=dict)              # {symbols:[...], limit:10}
     enabled = Column(Boolean, nullable=False, default=True)
     last_run_date = Column(String(8), nullable=True)  # YYYYMMDD, 防同一天重复
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
 
 
 class CopilotQuota(Base):
@@ -1547,7 +1480,7 @@ class CopilotQuota(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     note = Column(String(120), nullable=True)
     updated_by = Column(String(36), nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=db_now_naive, onupdate=db_now_naive)
 
 
 class HarnessProposal(Base):
@@ -1588,8 +1521,8 @@ class HarnessProposal(Base):
     recipe = Column(String(64), nullable=True)             # 当时的配方 id（可空）
     status = Column(String(16), nullable=False, default="pending")  # pending/accept/reject/snooze
     seen_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
-    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    first_seen_at = Column(DateTime, nullable=False, default=db_now_naive)
+    last_seen_at = Column(DateTime, nullable=False, default=db_now_naive)
     decided_at = Column(DateTime, nullable=True)
 
 
@@ -1658,7 +1591,7 @@ class AuctionAnomalyRecord(Base):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
-class MarketPhaseDaily(Base):
+class MarketPhaseDaily(UpdatedAtMixin, Base):
     """市场情绪周期每日指标 + 阶段标签(2026-08-24, 6 阶段体系)。
 
     - 原始指标由 src/core/market_phase.compute_daily_metrics 从
@@ -1683,10 +1616,9 @@ class MarketPhaseDaily(Base):
     phase_raw = Column(String(32), nullable=True)    # 2日确认前原始标签(v164), 供审计
     sh_index_pct = Column(Float, nullable=True)      # 上证当日涨跌幅 %
     phase = Column(String(32), default="", nullable=False)  # ice/ignite/rally/climax/ebb/repair/accumulating
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class MarketScanRank(Base):
+class MarketScanRank(AuditMixin, Base):
     """全市场三榜扫描快照 (2026-09-01, §6.1)。
 
     存三榜 JSON (new_g_points / dark_top / activity_top / zljc)。
@@ -1698,8 +1630,6 @@ class MarketScanRank(Base):
     snapshot_date = Column(Date, nullable=False)  # YYYY-MM-DD
     stock_market = Column(String(8), nullable=False, default="CN")
     payload = Column(JSON, nullable=False)  # 三榜完整 JSON
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint("snapshot_date", "stock_market", name="uq_market_scan_rank_date_market"),
@@ -1707,7 +1637,7 @@ class MarketScanRank(Base):
     )
 
 
-class SignalSummaryDaily(Base):
+class SignalSummaryDaily(AuditMixin, Base):
     """今日系统信号摘要快照(设计稿 §7.3, 2026-09-01)。
 
     盘后 cron 预生成, 对话热路径只读 text 纯文本注入 system message(毫秒级)。
@@ -1729,11 +1659,9 @@ class SignalSummaryDaily(Base):
     stock_market = Column(String, nullable=False, default="CN")
     blocks = Column(JSON, default={})  # 5 块结构化数据(含 data_status)
     text = Column(Text, default="")    # 渲染后纯文本摘要(≤800 字)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class DarkFundTopSnapshot(Base):
+class DarkFundTopSnapshot(CreatedAtMixin, Base):
     """全市场暗盘资金 TOP 扫描快照(设计稿 §6.1, A6, 2026-09-01)。
 
     存 `dark_fund_scan.scan_dark_fund_top()` 的榜单结果(JSON), 盘后 cron 落库, 前端读快照。
@@ -1753,10 +1681,9 @@ class DarkFundTopSnapshot(Base):
     snapshot_date = Column(String, nullable=False)  # YYYY-MM-DD
     stock_market = Column(String, nullable=False, default="CN")
     payload = Column(JSON, default={})  # scan_dark_fund_top() 的完整返回
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class DdeMinuteFlow(Base):
+class DdeMinuteFlow(CreatedAtMixin, Base):
     """盘中逐 N 分钟 DDE 大单净流入采样表(P3 补差 A, 2026-10-10)。
 
     现有链(thsdk get_dde_flow / get_main_flow_official + TQ get_more_info)只给**当日快照**,
@@ -1791,10 +1718,9 @@ class DdeMinuteFlow(Base):
     main_net_vol = Column(Float, nullable=True)     # 主力净量原始值(量纲未定)
     total_amount_wan = Column(Float, nullable=True)
     source = Column(String, default="thsdk_dde")
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class WarReportDaily(Base):
+class WarReportDaily(CreatedAtMixin, Base):
     """主力资金战报日快照表(规格 §4.4『主力资金战报』, 2026-10-10)。
 
     汇总当日主力动向(全市场大单净流入 TOP/BOTTOM、行业分布、个股主力净额变化、
@@ -1814,10 +1740,9 @@ class WarReportDaily(Base):
     snapshot_date = Column(String, nullable=False)  # YYYY-MM-DD
     stock_market = Column(String, nullable=False, default="CN")
     payload = Column(JSON, default={})  # build_daily_war_report() 的完整返回
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class SkillApiKey(Base):
+class SkillApiKey(CreatedAtMixin, Base):
     """Skill Gateway 对外开放 AppKey(2026-09-15; 统一身份 2026-09-16)。
 
     - key_hash: sha256(salt+raw_key), 明文只在创建时返回一次
@@ -1838,13 +1763,12 @@ class SkillApiKey(Base):
     tier = Column(String, nullable=False, default="free")  # free/trial/pro
     status = Column(String, nullable=False, default="active")  # active/frozen/disabled
     daily_limit = Column(Integer, nullable=False, default=100)
-    created_at = Column(DateTime, server_default=func.now())
     expires_at = Column(DateTime, nullable=True)  # trial 到期
     last_used_at = Column(DateTime, nullable=True)
     frozen_reason = Column(String, default="")
 
 
-class SkillUsage(Base):
+class SkillUsage(UpdatedAtMixin, Base):
     """Skill Gateway 调用计量(2026-09-15; 统一身份 2026-09-16)。
 
     - channel: 调用来源, 默认 'api'(api/web/guest)
@@ -1868,10 +1792,9 @@ class SkillUsage(Base):
         Index("ix_skill_usage_key_created", "api_key_id", "created_at"),
         Index("ix_skill_usage_user", "user_id", "created_at"),
     )
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
-class UserSession(Base):
+class UserSession(CreatedAtMixin, Base):
     """用户会话(设备限制, 2026-09-15): 同账号同时在线 ≤2, 超了踢最早。
 
     登录时写入/更新, JWT 过期时自然失效(不主动清理, 定时任务可清过期行)。
@@ -1881,7 +1804,6 @@ class UserSession(Base):
 
     session_id = Column(String(64), primary_key=True)  # JWT jti 或随机 UUID
     user_id = Column(String(36), nullable=False, index=True)
-    created_at = Column(DateTime, server_default=func.now())
     last_seen = Column(DateTime, server_default=func.now(), onupdate=func.now())
     # index 名与迁移 v236 对齐：`Base.metadata.create_all` 路径（测试/本地）也要有索引，
     # 否则清理语句 WHERE expires_at < cutoff 会退化成全表扫描。
@@ -1915,7 +1837,7 @@ class HighValueApiLog(Base):
     )
 
 
-class ProApplication(Base):
+class ProApplication(CreatedAtMixin, Base):
     """Pro 付费申请(2026-09-16 任务3.1): 用户提交, owner 人工审核。
 
     - status: pending(待审) / approved(通过) / rejected(拒绝)
@@ -1929,7 +1851,6 @@ class ProApplication(Base):
     username = Column(String(64), default="")
     reason = Column(Text, default="")
     status = Column(String(16), default="pending", nullable=False, index=True)
-    created_at = Column(DateTime, server_default=func.now())
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String(64), default="")  # 审核人 username
     review_note = Column(String(255), default="")
@@ -1939,7 +1860,7 @@ class ProApplication(Base):
     )
 
 
-class TierConfig(Base):
+class TierConfig(AuditMixin, Base):
     """档位配置(2026-09-16 任务3.2): free/trial/pro 的日限/突发可热更新。
 
     - skill_scope: JSON, 预留该档位可用 skill 范围; 亦可放 refill_per_min 等扩展
@@ -1955,8 +1876,6 @@ class TierConfig(Base):
     burst_limit = Column(Integer, nullable=False, default=30)
     skill_scope = Column(JSON, default=dict)  # {"refill_per_min": N} 或 skill 列表
     is_default = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class TierDowngradeLog(Base):
@@ -1979,7 +1898,7 @@ class TierDowngradeLog(Base):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
-class PriceDistributionSnapshot(Base):
+class PriceDistributionSnapshot(CreatedAtMixin, Base):
     """I-8 分价博弈矩阵盘中快照(2026-10-18): 读库优先, 免每次首屏跨网打腾讯。
 
     为什么必须落库(用户硬约束)
@@ -2030,10 +1949,9 @@ class PriceDistributionSnapshot(Base):
     payload = Column(JSON, nullable=True)               # 完整分析结果(读侧直出)
     source = Column(String(32), default="tencent_price")
     quality_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
-class PriceDistributionDaily(Base):
+class PriceDistributionDaily(CreatedAtMixin, Base):
     """I-8 分价博弈矩阵**日终归档**(2026-10-18): 历史回测/主力轨迹复盘的唯一事实源。
 
     与 `PriceDistributionSnapshot` 的分工:
@@ -2078,7 +1996,6 @@ class PriceDistributionDaily(Base):
     payload = Column(JSON, nullable=True)
     source = Column(String(32), default="tencent_price")
     quality_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2412,7 +2329,7 @@ class CopilotRun(Base):
     # 2026-10-25 (P1-1.1): 委派子 run。父 run 只汇总证据与缺口，子 run 有**独立预算**，
     # `tool_calls` 各算各的 —— 否则一个 delegate 就能把父的预算吃穿。
     parent_run_id = Column(String(36), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
     finished_at = Column(DateTime, nullable=True)
 
 
@@ -2441,7 +2358,7 @@ class HarnessExperiment(Base):
     reasons = Column(JSON, default=list)                 # rollback 的原因（逐条）
     evidence_path = Column(String(256), nullable=True)   # compare-*.json 落盘位置
     note = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
 
 
 class WebhookSubscription(Base):
@@ -2462,7 +2379,7 @@ class WebhookSubscription(Base):
     status_snapshot = Column(String(16), nullable=True)   # 触发时的 run 状态
     attempts = Column(Integer, nullable=False, default=0)
     last_error = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
 
 
 class RecipeVersion(Base):
@@ -2479,7 +2396,7 @@ class RecipeVersion(Base):
     recipe_id = Column(String(64), nullable=False)
     fingerprint = Column(String(16), nullable=False)      # YAML 内容 sha256 前 8 位
     snapshot = Column(Text, nullable=True)                # 当次 Recipe.public() 的 JSON
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
 
 
 class CopilotStep(Base):
@@ -2501,7 +2418,7 @@ class CopilotStep(Base):
     error = Column(Text, nullable=True)
     result_digest = Column(Text, nullable=True)                # 前 500 字
     elapsed_ms = Column(Integer, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
 
 
 class CopilotFeedback(Base):
@@ -2517,7 +2434,7 @@ class CopilotFeedback(Base):
     user_id = Column(String(36), nullable=True)                # users.id 是 UUID 字符串
     useful = Column(Boolean, nullable=False, default=True)
     reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
 
 
 class CopilotAction(Base):
@@ -2550,7 +2467,7 @@ class CopilotAction(Base):
     # 存 JSON 而不是拆列：不同动作类型的字段不同，拆列会每加一类动作就要迁移。
     diff_json = Column(Text, nullable=True)
     before_snapshot = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
     applied_at = Column(DateTime, nullable=True)
 
 
@@ -2589,7 +2506,7 @@ class KlineAnnotation(Base):
     note = Column(Text, nullable=True)               # 依据/口径
     color = Column(String(16), nullable=False, default="up")
     source = Column(String(16), nullable=False, default="ai")   # ai / user
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
 
 
 class CancelRateSnapshot(Base):
@@ -2647,7 +2564,7 @@ class StockFactorDaily(Base):
     rank_vol_20 = Column(Float, nullable=True)
     rank_volume_z20 = Column(Float, nullable=True)
     rank_position_120 = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=db_now_naive)
 
 
 class ExdayDaily(Base):
@@ -2718,7 +2635,7 @@ class ExdayDaily(Base):
     quality = Column(String(16), nullable=True)        # ok / suspect
     reason = Column(String(255), nullable=True)
     source = Column(String(32), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=db_now_naive)
 
 
 class FactorWinrateDaily(Base):
@@ -2764,7 +2681,7 @@ class FactorWinrateDaily(Base):
     universe_size = Column(Integer, nullable=True)
     lookback_bars = Column(Integer, nullable=True)
     source = Column(String(32), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=db_now_naive)
 
 
 class MarketReplayDaily(Base):
@@ -2805,4 +2722,4 @@ class MarketReplayDaily(Base):
     missing_dims = Column(JSON, default=list)
     source = Column(String(32), nullable=True)
     payload = Column(JSON, default=dict)                     # 完整复盘证据
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=db_now_naive)

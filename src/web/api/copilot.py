@@ -19,6 +19,7 @@ from src.core.copilot_brief import build_copilot_brief
 from src.core.trade_phase import phase_meta
 from src.web.api.auth import get_current_user
 from src.web.database import get_db as _get_db
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -454,7 +455,7 @@ def get_copilot_metrics(
 
     from src.db.models import CopilotRun
 
-    since = __import__("datetime").datetime.utcnow() - timedelta(days=days)
+    since = db_now_naive() - timedelta(days=days)
     rows = (
         db.query(CopilotRun)
         .filter(CopilotRun.user_id == str(user.id), CopilotRun.created_at >= since)

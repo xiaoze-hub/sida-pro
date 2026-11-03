@@ -26,6 +26,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from src.core.timezone import db_now_naive
+
 logger = logging.getLogger(__name__)
 
 # 冻结环：任何 proposal 都不许指向它们（render 里会原样打印，让审核者一眼看到边界）
@@ -54,8 +56,12 @@ MISS_MARKERS = ("未取到", "取不到", "empty", "暂无", "数据缺失")
 
 
 def _now_naive() -> datetime:
-    """与 `CopilotRun.created_at`（naive utcnow）同尺度比较。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """与 `CopilotRun.created_at` 同尺度比较。
+
+    v234 起这一列是**北京 naive**（写入走 `timezone.db_now_naive()`）；此前是 UTC naive，
+    用 UTC 切窗口会让「最近 N 天」整体错 8 小时。
+    """
+    return db_now_naive()
 
 
 def _pct(sorted_vals: list[float], q: float) -> float | None:

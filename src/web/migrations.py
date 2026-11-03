@@ -6428,6 +6428,98 @@ def _m235_chat_message_evidence_audit(conn: Connection) -> None:
     )
 
 
+# v237 一次性平移: UTC naive → 北京 naive。表清单 = (表, [列...])
+_UTC_NAIVE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("user_ai_prefs", ("updated_at",)),
+    ("copilot_memories", ("created_at", "last_used_at")),
+    ("copilot_schedules", ("created_at",)),
+    ("copilot_quotas", ("updated_at",)),
+    ("harness_proposals", ("first_seen_at", "last_seen_at", "decided_at")),
+    ("copilot_runs", ("created_at", "finished_at", "heartbeat_at")),
+    ("harness_experiments", ("created_at",)),
+    ("webhook_subscriptions", ("created_at",)),
+    ("recipe_versions", ("created_at",)),
+    ("copilot_steps", ("created_at",)),
+    ("copilot_feedback", ("created_at",)),
+    ("copilot_actions", ("created_at", "applied_at")),
+    ("kline_annotations", ("created_at",)),
+    ("stock_factor_daily", ("created_at",)),
+    ("exday_daily", ("created_at",)),
+    ("factor_winrate_daily", ("created_at",)),
+    ("market_replay_daily", ("created_at",)),
+    ("invite_codes", ("created_at", "expires_at")),
+    ("invite_code_uses", ("used_at",)),
+)
+
+# 哨兵: 这条迁移是**加算**操作(+8h), 重跑一次就变 +16h。
+# 框架的跳过判据是 `checksum == 当前源码哈希`, 任何后续编辑(哪怕只改注释)都会让
+# checksum 变化 → 迁移被当成"已被篡改"重新执行。所以幂等不能指望版本表, 必须自带哨兵。
+_TZ_SHIFT_SENTINEL_VERSION = 237000
+
+
+def _m237_utc_naive_to_app_tz(conn: Connection) -> None:
+    """把仍以 UTC naive 落库的时间列一次性平移 +8h, 统一为北京 naive(2026-11-02)。
+
+    为什么要统一: 同一列类型里并存两套时钟。PG(容器 TZ=Asia/Shanghai) 的
+    ``func.now()`` 写入 ``timestamp without time zone`` 存的是**北京 naive**;
+    而 Python ``datetime.utcnow()`` / ``now(timezone.utc).replace(tzinfo=None)``
+    存的是**UTC naive** —— 同一个事件在两张表里差 8 小时。生产实测(run_id 关联
+    llm_usage 与 copilot_runs 的 426 行): 中位差 +8.01h, 最小 8.00, 最大 8.08。
+
+    为什么不是只改默认值: 只改默认值会让**同一列**里老行是 UTC、新行是北京,
+    比现状更糟(排序/窗口过滤都会跨两种时钟)。所以数据必须一起平移。
+
+    写入侧对应改动: 这些列与其写入点的"现在"统一走 `timezone.db_now_naive()`
+    (PG=北京 / SQLite=UTC, 与 server_default 同口径)。
+
+    为什么 PG-only: SQLite 的 ``CURRENT_TIMESTAMP`` 本身就是 UTC naive,
+    ``src/core/timezone.py::_db_naive_tz`` 已按方言区分解读; 在 SQLite 上平移
+    反而会把本来正确的行推错。本地/dev 库保持原样。
+
+    为什么 +INTERVAL '8 hours' 而不是重算: 存量行里只有时刻是对的(只是标错时区),
+    平移保持相对顺序与秒级精度; 不依赖 ``now()``, 所以迁移在哪个时区执行都得到同一结果。
+
+    幂等: 见 ``_TZ_SHIFT_SENTINEL_VERSION`` 哨兵行, 已存在则整条跳过。
+    """
+    if not _dialect_is_pg(conn):
+        return
+    sentinel = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = :v LIMIT 1"),
+        {"v": _TZ_SHIFT_SENTINEL_VERSION},
+    ).first()
+    if sentinel:
+        return
+
+    shifted: dict[str, int] = {}
+    for table, columns in _UTC_NAIVE_COLUMNS:
+        if not _has_table(conn, table):
+            continue
+        for column in columns:
+            if not _has_column(conn, table, column):
+                continue
+            res = conn.execute(
+                text(
+                    f'UPDATE "{table}" SET "{column}" = "{column}" + INTERVAL \'8 hours\' '
+                    f'WHERE "{column}" IS NOT NULL'
+                )
+            )
+            if res.rowcount:
+                shifted[f"{table}.{column}"] = int(res.rowcount)
+    logger.info("[v237] 时间列平移 +8h: %s 列, %s 行", len(shifted), sum(shifted.values()))
+
+    # 哨兵与平移同事务提交: 迁移框架在 runner 返回后把 success 置 1, 两者一起成功。
+    conn.execute(
+        text(
+            """
+INSERT INTO schema_migrations(version, name, checksum, success, error)
+VALUES(:v, 'utc_naive_to_app_tz_applied', '', 1, '')
+ON CONFLICT(version) DO NOTHING
+"""
+        ),
+        {"v": _TZ_SHIFT_SENTINEL_VERSION},
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6659,6 +6751,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(234, "chat_message_run_id", _m234_chat_message_run_id),
     Migration(235, "chat_message_evidence_audit", _m235_chat_message_evidence_audit),
     Migration(236, "captcha_challenges", _m236_captcha_challenges),
+    Migration(237, "utc_naive_to_app_tz", _m237_utc_naive_to_app_tz),
 )
 
 

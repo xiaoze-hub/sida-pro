@@ -15,6 +15,7 @@ from sqlalchemy import delete
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.core import captcha as captcha_core
+from src.core.timezone import db_now_naive
 from src.db.models import CaptchaChallenge
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ PRUNE_AFTER_SECONDS = 3600
 
 def store_challenge(db, item: captcha_core.Captcha, *, now: datetime | None = None) -> None:
     """登记一张挑战（答案只存摘要）。写失败必须抛出：没记下来的码永远验不过。"""
-    moment = now or datetime.utcnow()
+    moment = now or db_now_naive()
     db.add(CaptchaChallenge(
         nonce=item.nonce,
         answer_digest=captcha_core.answer_digest(item.answer),
@@ -40,7 +41,7 @@ def consume_challenge(db, nonce: str, answer: str | None, *, now: datetime | Non
 
     返回 `(是否通过, 原因码)`。
     """
-    moment = now or datetime.utcnow()
+    moment = now or db_now_naive()
     row = db.query(CaptchaChallenge).filter(CaptchaChallenge.nonce == nonce).first()
     if row is None:
         return False, "unknown"
