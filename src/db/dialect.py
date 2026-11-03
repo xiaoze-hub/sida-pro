@@ -80,7 +80,21 @@ DATABASE_URL_READ = (os.environ.get("DATABASE_URL_READ") or "").strip() or None
 # 兼容: DB_URL 始终指向写库(主库), 任何旧 import 不受影响。
 DB_URL = DATABASE_URL_WRITE
 
+# ── 迁移专用连接(2026-11-03 Phase 2: DB 角色拆分) ─────────────────────
+# 运行时用低权限角色(无 DDL), 迁移/建表用高权限角色。未配置时回落写库,
+# 单角色部署行为不变(向后兼容)。
+MIGRATE_URL = (os.environ.get("DATABASE_URL_MIGRATE") or "").strip() or DATABASE_URL_WRITE
+
 IS_PG = DB_URL.startswith("postgresql")
+
+
+def migrate_engine():
+    """DDL 专用引擎: 建表/迁移用它, 业务读写不用。
+
+    为什么单独一个: 生产运行时角色(``sida_app``)不给 DDL 权限 —— 任何代码路径被
+    注入/逻辑漏洞都改不了 schema、删不掉表。迁移由 ``sida_migrator`` 完成。
+    """
+    return build_engine(MIGRATE_URL)
 
 
 def is_postgres() -> bool:

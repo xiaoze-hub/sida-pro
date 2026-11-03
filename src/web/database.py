@@ -55,9 +55,13 @@ def init_db():
     # legacy 迁移 143-148)。新增表/列一律写 B 层新版本。
     from src.web import models as _models  # noqa: F401
 
-    # 建表/迁移永远走写库(主库)
-    Base.metadata.create_all(bind=engine)
-    if has_pending_migrations(engine):
+    # 建表/迁移走**迁移角色**(2026-11-03 Phase 2): 运行时角色无 DDL 权限,
+    # 未配置 DATABASE_URL_MIGRATE 时与写库同引擎, 行为不变。
+    from src.db.dialect import migrate_engine
+
+    mig = migrate_engine()
+    Base.metadata.create_all(bind=mig)
+    if has_pending_migrations(mig):
         backup_db_before_migration()
         backup_pg_schema_before_migration()
-    run_versioned_migrations(engine)
+    run_versioned_migrations(mig)

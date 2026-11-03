@@ -1,3 +1,13 @@
+## release: v0.95.0（管理面/用户面身份分离：独立密钥 + admin 受众 token）
+
+- **独立密钥**：管理面 token 用 `get_admin_jwt_secret()` 签（env `ADMIN_JWT_SECRET` ≥32 字节，否则派生 `sha256(JWT_SECRET|admin-token-v1)`），载荷带 `aud=admin`，默认 **4 小时**过期（`ADMIN_JWT_EXPIRE_HOURS`）。用户面 token 带 `aud=user`。两套密钥 ⇒ 用户 token 在管理面**验签即失败**，不依赖"角色字段写对没有"。
+- **86 处调用点自动收紧**：`require_owner` 语义升级为 `require_admin`（只认 admin token 且 `role=owner`），12 个模块的既有写法不用改，天生收紧。owner 登录额外下发 `sida_admin_token`（HttpOnly + SameSite=strict，与用户 cookie 分名）+ 头 `X-Admin-Token`；新增 `POST /api/auth/admin/session` 供显式换取管理端会话。
+- **过渡期开关** `STRICT_ADMIN_TOKEN`（默认 1 = 严格）：设 0 时允许"owner 的用户 token"临时顶管理员并打 WARNING，只用于存量会话平滑与历史测试。**上线后管理员需重新登录一次** —— 部署前登录的老会话没有 admin cookie。
+- **抓到一个会全站登出的回归并修掉**：用户 token 加 `aud=user` 后，PyJWT 默认 `verify_aud=True`，`jwt.decode` 不带 audience 会直接抛 `InvalidAudienceError` ⇒ 所有新签发 token 一律"登录已过期"。`decode_token` 改为 `options={"verify_aud": False}`；受众隔离靠**密钥分离**，不靠 aud 校验（老 token 无 aud 也不会被误杀）。5 个用例当场复现、修后 28 项转绿。
+- **新增 `tests/test_admin_surface_isolation.py`**（4 项，强制严格模式）：member 打 14 个管理区前缀不得 200；owner 的**用户面** token 打真实管理端点必须 401；`require_admin` 三态（无凭证 401 / 用户 token 401 / admin token 放行）。
+- **Phase 2 代码就位（尚未激活）**：`dialect.migrate_engine()`（读 `DATABASE_URL_MIGRATE`）、`init_db()` 的建表/迁移改走迁移角色、`scripts/provision_db_roles.py`（`sida_app` 只读写无 DDL、`sida_migrator` 继承 owner 权限）。两个 env 都不配时行为与今天**完全一致**，激活只是加环境变量。
+- 未做（Phase 3）：管理面独立域名/IP 白名单、拆容器、`sida_admin` 角色。
+
 ## release: v0.94.0（skill 结果缓存 3 分钟 + 领 key 按 IP 30 分钟 1 把）
 
 - **结果缓存**：`POST /api/skills/{name}/run` 同一 skill + 同一参数 + 同一格式的响应缓存 **3 分钟**，走 `biz_cache`（L1 内存 + L2 Redis，多 worker 共享）。可用 `SKILL_RUN_CACHE_TTL_S` 覆盖不必发版。命中仍记 usage（配额照算、不能靠重复请求绕过），但不再打上游、不触发突增冻结。

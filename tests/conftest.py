@@ -35,6 +35,11 @@ os.environ.setdefault("SIDA_DB", str(_TEST_DATA_DIR / "sida.db"))
 os.environ.setdefault(
     "SIDA_DB_URL", f"sqlite:///{(_TEST_DATA_DIR / 'sida_test.db')}"
 )
+# 管理面隔离(2026-11-03): 严格模式要求 admin 受众 token。历史测试大量用
+# "owner 的用户 token" 直接打管理接口, 这里保留过渡期兼容(STRICT=0),
+# 严格路径由 tests/test_admin_surface_isolation.py 显式开启并断言。
+# 生产**不设**该变量 ⇒ 默认严格。
+os.environ.setdefault("STRICT_ADMIN_TOKEN", "0")
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent

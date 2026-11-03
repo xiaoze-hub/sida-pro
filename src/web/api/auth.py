@@ -25,11 +25,14 @@ from src.core.db_safe import safe_rollback
 from src.web.database import get_db, SessionLocal
 from src.web.models import AppSettings, User
 from src.core.auth_tokens import (  # noqa: F401  (KI-039 第二阶段: 原语下沉 core)
+    ADMIN_JWT_EXPIRE_HOURS,
     AUTH_TOKEN_VERSION_KEY,
     JWT_ALGORITHM,
     JWT_EXPIRE_HOURS,
     JWT_SECRET_KEY,
+    create_admin_token,
     create_token,
+    decode_admin_token,
     decode_token,
     get_jwt_secret,
     principal_from_payload,
@@ -46,6 +49,10 @@ security = HTTPBearer(auto_error=False)
 # P0(2026-09-18): JWT httpOnly Cookie — 浏览器自动携带, JS 读不到(XSS 防护)
 # 与 Authorization Bearer 双轨: Cookie 优先, Bearer fallback(旧客户端零破坏)
 AUTH_COOKIE_NAME = "sida_token"
+# 管理端独立 Cookie(2026-11-03 管理面隔离): 名字与签名密钥都独立。
+# 同一浏览器可以同时持有用户 token 与 admin token, 但 admin 接口只认后者。
+ADMIN_COOKIE_NAME = "sida_admin_token"
+ADMIN_TOKEN_HEADER = "x-admin-token"
 
 # 环境变量配置（Docker 部署用）— 惰性读取: 允许测试/调用方在 import 后注入 env
 ENV_AUTH_USERNAME_KEY = "AUTH_USERNAME"
@@ -376,6 +383,41 @@ def set_auth_cookie(response: Response, request: Request, token: str) -> None:
     )
 
 
+def set_admin_cookie(response: Response, request: Request, token: str) -> None:
+    """下发管理端 JWT(httpOnly)。有效期跟随 ADMIN_JWT_EXPIRE_HOURS。"""
+    response.set_cookie(
+        key=ADMIN_COOKIE_NAME,
+        value=token,
+        max_age=ADMIN_JWT_EXPIRE_HOURS * 3600,
+        path="/",
+        httponly=True,
+        samesite="strict",
+        secure=_is_https_request(request),
+    )
+
+
+def clear_admin_cookie(response: Response, request: Request) -> None:
+    response.delete_cookie(
+        key=ADMIN_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite="strict",
+        secure=_is_https_request(request),
+    )
+
+
+def admin_token_from_request(request: Request) -> Optional[str]:
+    """管理端 token 来源: 显式 header 优先, 否则 admin cookie。**不看用户 cookie。**
+
+    刻意不 fallback 到 `sida_token`: 用户面 token 在 admin 面验签必然失败, 但显式
+    不回退能让失败原因可读, 也避免"看起来能通"的侥幸。
+    """
+    header = (request.headers.get(ADMIN_TOKEN_HEADER) or "").strip()
+    if header:
+        return header
+    return request.cookies.get(ADMIN_COOKIE_NAME) or None
+
+
 def clear_auth_cookie(response: Response, request: Request) -> None:
     """登出时清除 JWT Cookie(与 localStorage 清理并行)。"""
     response.delete_cookie(
@@ -506,8 +548,89 @@ async def get_current_user(
     return user
 
 
-async def require_owner(user: User = Depends(get_current_user)) -> User:
-    """仅 owner 可用(用户管理/系统设置)。"""
+def _admin_strict_mode() -> bool:
+    """管理面是否强制 admin 受众 token。默认 True; 过渡期可用 env 关掉。
+
+    生产: 保持 True(默认), 管理员登录时已自动下发 admin cookie。
+    过渡/测试: `STRICT_ADMIN_TOKEN=0` → 允许 owner 的用户 token 顶管理员, 并打 WARNING。
+    这个开关只为"存量管理员会话平滑过渡 + 老测试不假红"存在, 功能上线稳定后应删掉。
+    """
+    return (os.getenv("STRICT_ADMIN_TOKEN", "1").strip().lower() not in ("0", "false", "no", "off"))
+
+
+async def require_admin(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> User:
+    """管理面鉴权: 必须持有 **admin 受众** 的 token(aud=admin, 独立密钥)。
+
+    2026-11-03 管理面隔离。与 `get_current_user` 的区别:
+    - 不读用户 Cookie / `Authorization: Bearer`, 只读 admin cookie 或 `X-Admin-Token`;
+    - 用 `get_admin_jwt_secret()` 验签 ⇒ 普通用户 token 在这里**必然失败**;
+    - 额外校验 role == owner + token_version + 会话存活(与用户面同口径)。
+
+    为什么这样才算隔离: 此前全站一个 secret, 用户 token 与 owner token 只差 DB 里
+    一个字段, 86 处手写 `require_owner` 漏一处就提权。现在即使某处漏写, 攻击者手里
+    的用户 token 也到不了这里。
+    """
+    raw = admin_token_from_request(request)
+    if not raw:
+        if not _admin_strict_mode():
+            # 过渡期开关(默认**关闭**兼容, 生产由 STRICT_ADMIN_TOKEN=1 打开):
+            # 允许"owner 的用户 token"临时顶管理员身份, 但必须 role==owner 且留审计。
+            # 存在的唯一理由: 存量会话(部署前登录的管理员)没有 admin cookie,
+            # 直接硬切会把所有管理员挡在后台外, 且既有测试大量用 owner 用户 token 打管理接口。
+            user = await get_current_user(request=request, db=db)
+            if (user.role or "").strip().lower() == "owner":
+                logger.warning(
+                    "[auth] 管理接口回落到用户 token(过渡期): user=%s path=%s",
+                    user.username, request.url.path,
+                )
+                return user
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可操作")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "需要管理员身份(请用管理端登录)",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    payload = decode_admin_token(raw)
+    if not payload:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "管理员会话已过期或令牌类型不符",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user = get_user_by_id(db, payload.get("sub", ""))
+    if not user or not user.is_active or getattr(user, "is_deleted", False):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "账号不可用")
+    if user.role != "owner":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可操作")
+    if user.token_version != int(payload.get("ver", 0)):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "登录已失效, 请重新登录")
+    try:
+        sid = session_id_from_payload(payload)
+        if sid:
+            from src.core.permissions import session_is_active
+
+            if not session_is_active(db, sid, user.id):
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED,
+                    "该设备已下线, 请重新登录",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - 与用户面一致: 会话表故障 fail-open
+        logger.warning("[auth] admin 会话存活校验异常, 放行(fail-open): %r", e)
+    return user
+
+
+async def require_owner(user: User = Depends(require_admin)) -> User:
+    """仅 owner 可用(用户管理/系统设置)。
+
+    保留函数名是为了不动 86 处既有调用点; 语义已升级为**必须 admin 受众 token**。
+    新增管理接口请直接用 `require_admin`。
+    """
     if user.role != "owner":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可操作")
     return user
@@ -778,6 +901,10 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
 
     # P0(2026-09-18): JWT 同时下发 httpOnly Cookie(响应体 token 保留, 旧前端零破坏)
     set_auth_cookie(response, request, token)
+    # 管理面隔离(2026-11-03): owner 登录额外下发**独立签名**的 admin token,
+    # 管理接口只认它。前端无需改动(同源 Cookie 自动携带), 但权限边界从此分开。
+    if (user.role or "").strip().lower() == "owner":
+        set_admin_cookie(response, request, create_admin_token(user).token)
 
     return TokenResponse(
         token=token,
@@ -786,6 +913,30 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
         api_key_prefix=api_key_prefix,
         csrf_token=csrf_token,
     )
+
+
+@router.post("/admin/session")
+async def create_admin_session(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """用普通登录态换取**管理端会话**(仅 owner)。
+
+    用途: 管理后台(现在同源, 将来独立域名)先以用户身份登录, 再调本端点拿 admin cookie。
+    为什么单独一步而不是登录时直接给: 独立域时两个 origin 不共享 Cookie, 管理端必须
+    能在自己这一侧重新签发; 同源部署下登录已顺带下发, 本端点仍可用作"提权确认"。
+    """
+    if (user.role or "").strip().lower() != "owner":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可操作")
+    result = create_admin_token(user)
+    set_admin_cookie(response, request, result.token)
+    return {
+        "aud": "admin",
+        "expires_at": result.expires_at.isoformat(),
+        "expires_hours": ADMIN_JWT_EXPIRE_HOURS,
+    }
 
 
 @router.post("/register")

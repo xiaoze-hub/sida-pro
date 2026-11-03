@@ -11,6 +11,7 @@ P0(2026-09-18)密钥轮换: decode 支持多 secret 验证(当前 + grace period
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -25,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
+# 管理端 token 的有效期比用户短: 后台是高危面, 会话窗口越小越好。
+ADMIN_JWT_EXPIRE_HOURS = int(os.getenv("ADMIN_JWT_EXPIRE_HOURS", "4"))
+# JWT 受众(2026-11-03 管理面隔离): 用户面与 admin 面各签各的, 互不认对方的 token。
+AUD_USER = "user"
+AUD_ADMIN = "admin"
 JWT_SECRET_KEY = "jwt_secret"
 AUTH_TOKEN_VERSION_KEY = "auth_token_version"
 
@@ -77,6 +83,24 @@ def get_jwt_secret() -> str:
         return _jwt_secret
     finally:
         db.close()
+
+
+def get_admin_jwt_secret() -> str:
+    """管理端 JWT 的独立签名密钥。
+
+    为什么必须独立: 原来全站一个 secret, 普通用户的 token 与 owner 的只差 DB 里
+    `role` 一个字段 —— 任何一处漏写 `require_owner`(实测 86 处手写点)就是提权口。
+    拆开后用户面 token 在 admin 面**验签直接失败**, 与前端/路由怎么藏无关。
+
+    解析顺序: env `ADMIN_JWT_SECRET`(>=32 字节) → 由用户 secret 派生
+    `sha256(JWT_SECRET + "|admin-token-v1")`。派生兜底是为了让没配新 env 的部署
+    也不至于把管理端锁死; 但**生产建议显式配置**, 这样轮换用户 secret 不会连带
+    踢掉管理员会话。
+    """
+    env_secret = (os.getenv("ADMIN_JWT_SECRET") or "").strip()
+    if len(env_secret.encode("utf-8")) >= 32:
+        return env_secret
+    return hashlib.sha256(f"{get_jwt_secret()}|admin-token-v1".encode("utf-8")).hexdigest()
 
 
 def get_verification_secrets() -> list[str]:
@@ -140,9 +164,56 @@ def create_token(user: User, expires_hours: int = JWT_EXPIRE_HOURS) -> TokenResu
         "role": user.role,
         "jti": jti,
         "ver": user.token_version,
+        "aud": AUD_USER,
     }
     token = jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
     return TokenResult(token, expires_at, jti, payload)
+
+
+def create_admin_token(user: User, expires_hours: int = ADMIN_JWT_EXPIRE_HOURS) -> TokenResult:
+    """签发**管理端** token(aud=admin, 独立 secret)。
+
+    只能在确认 `user.role == "owner"` 之后调用。与用户 token 的差别:
+    - 用 `get_admin_jwt_secret()` 签名 → 用户面 secret 验不过;
+    - payload 带 `aud=admin`, `decode_admin_token` 会强制校验;
+    - 有效期更短(默认 4h)。
+    """
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=expires_hours)
+    jti = secrets.token_hex(16)
+    payload = {
+        "exp": expires_at,
+        "iat": now,
+        "sub": user.id,
+        "username": user.username,
+        "role": user.role,
+        "jti": jti,
+        "ver": user.token_version,
+        "aud": AUD_ADMIN,
+    }
+    token = jwt.encode(payload, get_admin_jwt_secret(), algorithm=JWT_ALGORITHM)
+    return TokenResult(token, expires_at, jti, payload)
+
+
+def decode_admin_token(token: str) -> dict | None:
+    """只解**管理端** token: 独立 secret + 强制 `aud=admin`。
+
+    用户 token 在这里必然失败(密钥不同), 因此"用户越权打管理接口"在网络层就被挡掉,
+    与前端是否隐藏入口无关。
+    """
+    if not token:
+        return None
+    try:
+        return jwt.decode(
+            token,
+            get_admin_jwt_secret(),
+            algorithms=[JWT_ALGORITHM],
+            audience=AUD_ADMIN,
+        )
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
 
 
 def session_id_from_payload(payload: dict | None) -> str | None:
@@ -168,7 +239,14 @@ def decode_token(token: str) -> dict | None:
         return None
     for secret in get_verification_secrets():
         try:
-            return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+            # verify_aud=False 是**必须**的: PyJWT 在 token 带 aud 而 decode 没给
+            # audience 时会直接抛 InvalidAudienceError。用户面 token 自 2026-11-03 起
+            # 带 `aud=user`(为与 admin 面区分), 不关掉这项校验会让所有新签发的用户
+            # token 一律"登录已过期"(实测: 打开后 5 个用例立刻报 401)。
+            # 受众隔离由密钥分离保证(admin 面用独立 secret), 不靠这一项。
+            return jwt.decode(
+                token, secret, algorithms=[JWT_ALGORITHM], options={"verify_aud": False}
+            )
         except jwt.ExpiredSignatureError:
             return None
         except jwt.InvalidTokenError:
