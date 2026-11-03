@@ -471,7 +471,8 @@ async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
 
 
 def compose_prompt(recipe, runs: list[PipelineRun], question: str,
-                   context: str = "", post_tools=()) -> tuple[str, str]:
+                   context: str = "", post_tools=(),
+                   fact_pack: dict | None = None) -> tuple[str, str]:
     """把管线结果拼成 (system, user)。system 说明格式，user 放证据。
 
     `context` 是 chat 层构建的会话上下文（长期记忆/持仓/交易画像/页面视图）。
@@ -480,6 +481,8 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str,
 
     `post_tools` 非空表示本轮允许模型在写结论时调用**记录类工具**（只写库、不取数），
     提示词里要给它这个许可，否则模型只能干看着缺口不说。
+
+    `fact_pack` 为共享事实包字典（含 as_of, source, text 等），非空时在提示词最前面注入。
     """
     sections = " / ".join(recipe.output_sections) if recipe.output_sections else ""
     if post_tools:
@@ -496,7 +499,16 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str,
             "请只依据这些数据写结论：每个数字必须能在下面的证据里找到原文，缺失的维度写「暂无」，"
             "不要补充任何未列出的数据，也不要推测。"
         )
-    system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "") + '\n\n【通用排版铁律 —— 禁止教科书式长段落】\n1) 第一段必须先给一句话结论（≤45 字，带方向/状态 + 两个关键数字）。\n2) 每个段落下的内容一律写「- 」要点列表或 GFM 表格；每条要点独立成行、≤50 字、以数字或标的开头。\n3) 任何地方禁止出现超过 3 行的连续散文段落；禁止使用「从盘面看/整体而言/值得注意的是/综上所述」等套话。\n4) 段落标题单独成行（用【段落名】包起来），不许用 markdown `#` 标题。'
+    system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "") + '\n\n【通用排版铁律 —— 禁止教科书式长段落】\n1) 第一段必须先给一句话结论（≤45 字，带方向/状态 + 两个关键数字）。\n2) 每个段落下的内容一律写「- 」要点列表或 GFM 表格；每条要点独立成行、≤50 字、以数字或标的开头。\n3) 任何地方禁止出现超过 3 行的连续散文段落；禁止使用「从盘面看/整体而言/值得注意的是/综上所述」等套话。\n4) 段落标题单独成行（用【段落名】包起来），不许用 markdown `#` 标题.'
+    if fact_pack and isinstance(fact_pack, dict):
+        fp_as_of = fact_pack.get("as_of", "")
+        fp_source = fact_pack.get("source", "")
+        fp_text = fact_pack.get("text", "")
+        system = (
+            f"--- 本轮事实包（冻结于 {fp_as_of}，来源 {fp_source}）---\n"
+            f"{fp_text}\n任何结论不得引用晚于该时点的数据；缺项写「暂无」\n\n"
+            + system
+        )
     if context:
         system += "\n\n--- 会话上下文（用户本人 / 当前页面 / 持仓与偏好）---\n" + context
     blocks = [f"【用户问题】{question}"]
@@ -515,9 +527,34 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str,
     return system, "\n".join(blocks)
 
 
+def _emit_evidence(runs, trace, fact_pack, sink: list | None) -> None:
+    """把本轮管线证据写入调用方给的 sink（结构化出站载荷）。
+
+    **只在管线真的产出了结论时调用** —— 管线失败会回落多轮 tool loop，
+    那时这些证据并没有被用来写答案，提前发出会让人以为它们被引用了。
+
+    任何异常都吞掉并记 warning：证据是旁路，不许因为它在 done 上炸掉整轮回答。
+    """
+    if sink is None:
+        return
+    try:
+        from src.core.evidence_pack import build_refs, to_payload
+
+        run_id = (getattr(trace, "run_id", None) or "adhoc") if trace is not None else "adhoc"
+        as_of = ""
+        if isinstance(fact_pack, dict):
+            as_of = str(fact_pack.get("as_of") or "")
+        # sink 直接放**可序列化 dict**：它会原样进 SSE done 载荷，dataclass 会在 json.dumps 炸掉
+        sink.extend(to_payload(build_refs(runs, run_id, as_of=as_of or None)))
+    except Exception as exc:  # noqa: BLE001 - 证据是旁路，不许影响回答
+        logger.warning("证据对象构建失败（不影响回答）：%s", type(exc).__name__)
+
+
 async def answer(ai_client, recipe, question: str, bound: str | None, executor,
                  market: str = "CN", trace=None, context: str = "",
-                 db=None, user=None, view_state: dict | None = None) -> str | None:
+                 db=None, user=None, view_state: dict | None = None,
+                 fact_pack: dict | None = None,
+                 evidence_sink: list | None = None) -> str | None:
     """完整跑一条管线并写结论。返回 None = 管线没跑成，调用方回落到多轮 loop。"""
     syms = symbols_of(question, bound, allow_names=True)
     if not syms:
@@ -530,7 +567,8 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
     post_tools = _split_pipeline_tools(recipe.tools)[1]
     post_schemas = _post_schemas(post_tools)
     system, user_block = compose_prompt(
-        recipe, runs, question, context, post_tools if post_schemas else ()
+        recipe, runs, question, context, post_tools if post_schemas else (),
+        fact_pack=fact_pack
     )
     try:
         if post_schemas and hasattr(ai_client, "chat_with_tools"):
@@ -563,12 +601,15 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
     except Exception:  # noqa: BLE001
         pass
     propose_levels(recipe, runs, db, user, market, trace, view_state)  # G4: 关键位 → 待确认标注
+    _emit_evidence(runs, trace, fact_pack, evidence_sink)
     return text
 
 
 async def answer_stream(ai_client, recipe, question: str, bound: str | None, executor,
                         market: str = "CN", trace=None, context: str = "",
-                        db=None, user=None, view_state: dict | None = None):
+                        db=None, user=None, view_state: dict | None = None,
+                        fact_pack: dict | None = None,
+                        evidence_sink: list | None = None):
     """流式版：边生成边下发。取数 ~5s，生成 25~135s —— 不流式的话用户只能干等。
 
     产出 ("delta", 文本) 若干 → 最后 ("done", 全文)。管线没跑成时直接 return（调用方回落 loop）。
@@ -589,7 +630,8 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
     post_tools = _split_pipeline_tools(recipe.tools)[1]
     post_schemas = _post_schemas(post_tools)
     system, user_block = compose_prompt(
-        recipe, runs, question, context, post_tools if post_schemas else ()
+        recipe, runs, question, context, post_tools if post_schemas else (),
+        fact_pack=fact_pack
     )
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user_block}]
     acc: list[str] = []
@@ -639,4 +681,5 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
     except Exception:  # noqa: BLE001
         pass
     propose_levels(recipe, runs, db, user, market, trace, view_state)  # G4: 关键位 → 待确认标注
+    _emit_evidence(runs, trace, fact_pack, evidence_sink)
     yield "done", text
