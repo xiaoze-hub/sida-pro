@@ -1,3 +1,12 @@
+## release: v0.94.0（skill 结果缓存 3 分钟 + 领 key 按 IP 30 分钟 1 把）
+
+- **结果缓存**：`POST /api/skills/{name}/run` 同一 skill + 同一参数 + 同一格式的响应缓存 **3 分钟**，走 `biz_cache`（L1 内存 + L2 Redis，多 worker 共享）。可用 `SKILL_RUN_CACHE_TTL_S` 覆盖不必发版。命中仍记 usage（配额照算、不能靠重复请求绕过），但不再打上游、不触发突增冻结。
+- **顺带修掉缓存 key 的硬伤**：原 key 用 `hash(frozenset(args))`，Python 字符串 hash 每进程随机化（PYTHONHASHSEED）⇒ 跨 worker / 重启后**永不命中**，还可能因碰撞串用结果。改为规范化 JSON 的 sha1，跨进程稳定。
+- **领 key 按 IP 限制**：`/api/guest-key` 与 `/api/keys` 同 IP **30 分钟只能领 1 把**（原来 5 次/小时且是进程内计数，实测被"冻结后换 IP 换 key"绕过）。计数放 `biz_cache`，多 worker 共享；429 带 `Retry-After`。
+- **真实客户端 IP**：领 key 与游客限流此前直接读 `request.client.host`，在 nginx 后面恒为 `127.0.0.1` —— 等于全站共用一个桶。改走限流中间件的 XFF 感知判定（仅可信反代才认 XFF，防伪造）。
+- **登录用户自助建 key**（`/keys/my`、`/keys/my/{id}/reset`）改为按 user_id 5 次/小时：这类请求有 JWT 可追溯且有"泄露后轮换"的正常需求，不能用 1/30min。
+- 验证：新增 `tests/test_skill_gateway_cache_and_ip_limit.py`（10 项，含跨 PYTHONHASHSEED 的 key 稳定性、TTL=180、端到端第二次命中缓存且上游只执行一次）；网关相关 197 项通过。
+
 ## release: v0.93.0（第二批时间列口径：竞价快照 / GDPR 时间 / 两处日界）
 
 - **迁移 v238**：`auction_snapshots.updated_at`（生产 736 行）与 `users.deleted_at`（生产 0 行）一次性 +8h。前者的证据是同表 `created_at`（func.now 北京）与它相差 **median 8.00h**；后者由 `user_data` 写 naive UTC。

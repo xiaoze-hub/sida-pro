@@ -43,23 +43,45 @@ def test_daily_limit_still_enforced():
         assert "配额" in str(ei.value) or "429" in str(ei.value)
 
 
-def test_hot_cache_roundtrip():
-    gw._HOT_CACHE.clear()
-    key = "skill_cache:test:{'symbol': '600519'}"
-    assert gw._hot_cache_get(key) is None
-    resp = MagicMock()
-    gw._hot_cache_set(key, resp)
-    assert gw._hot_cache_get(key) is resp
+class _FakeBizCache:
+    def __init__(self):
+        self.data, self.ttls = {}, {}
+
+    def get_json(self, key):
+        return self.data.get(key)
+
+    def set_json(self, key, value, ttl=None):
+        self.data[key] = value
+        self.ttls[key] = ttl
+        return True
 
 
-def test_hot_cache_expiry():
-    gw._HOT_CACHE.clear()
-    key = "skill_cache:test2:{'symbol': '000001'}"
-    gw._hot_cache_set(key, "val")
-    # 手动改过期
-    with gw._HOT_LOCK:
-        gw._HOT_CACHE[key] = (time.time() - 10, "val")
+def test_hot_cache_roundtrip(monkeypatch):
+    """2026-11-03: 热点缓存委托给 biz_cache(L1+L2), 不再自带进程内 dict。
+
+    原实现只有进程内 dict + 4s TTL, 且 key 用 `hash(frozenset(args))`(每进程随机化),
+    跨 worker 永不命中 —— 见 tests/test_skill_gateway_cache_and_ip_limit.py。
+    """
+    fake = _FakeBizCache()
+    monkeypatch.setattr(gw, "biz_cache", fake)
+    key = gw._run_cache_key("get_stock_quote", "json", {"symbol": "600519"})
     assert gw._hot_cache_get(key) is None
+    gw._hot_cache_set(key, {"skill": "get_stock_quote"})
+    assert gw._hot_cache_get(key) == {"skill": "get_stock_quote"}
+    assert fake.ttls[key] == 180, "TTL 必须是 3 分钟"
+
+
+def test_hot_cache_层异常不抛(monkeypatch):
+    class _Boom:
+        def get_json(self, key):
+            raise RuntimeError("redis down")
+
+        def set_json(self, key, value, ttl=None):
+            raise RuntimeError("redis down")
+
+    monkeypatch.setattr(gw, "biz_cache", _Boom())
+    assert gw._hot_cache_get("x") is None
+    gw._hot_cache_set("x", {"a": 1})  # 不抛
 
 
 def test_retry_after_header_in_429():

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -35,6 +36,7 @@ from sqlalchemy.orm import Session
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 from src.core.db_safe import safe_rollback
 from src.web.api._scope import allow_cross_user  # C3(2026-09-18): 见各豁免点理由
+from src.web.cache.biz_cache import biz_cache
 from src.web.database import get_db
 from src.web.models import SkillApiKey, SkillUsage
 from src.core.timezone import db_now_naive
@@ -58,25 +60,43 @@ if _SALT_IS_EPHEMERAL:
         "症状: 同一把 key 时而 200 时而 401, 重启后永久 401。"
     )
 
-# ── 注册防刷(P1, audit-20260915): IP 级限流, 每小时最多 5 次 ─────────
-_KEY_REG_MAX_PER_HOUR = 5
-_KEY_REG_WINDOW_SEC = 3600
-# {ip: [ts, ...]} 进程内滑动窗口; 单实例部署足够, 多实例需换 Redis
-_key_reg_hits: dict[str, list[float]] = {}
-_key_reg_lock = threading.Lock()
+# ── 注册防刷(P1, audit-20260915) ─────────────────────────────────────
+# 2026-11-03: 原来的"每小时 5 次 + 进程内内存计数"被实测绕过 —— 攻击者把同一把
+# guest key 分发到 8 台云主机轮询, key 被冻后立刻换个 IP 再领、或换把新 key 继续。
+# 现改为**同 IP 30 分钟只能领 1 把**(见 _check_key_issue_ip), 计数放 biz_cache
+# (L1+L2), 多 worker 共享。内存版在重启/多进程下等于没有, 已删除。
 
 
-def _check_key_register_rate(ip: str) -> None:
-    """超过每小时 5 次则 429。内存滑动窗口, 重启清零可接受。"""
+# 登录用户自助建 key / 轮换盐的限流: 5 次/小时, 按 user_id。
+# 与匿名签发口分开: 这里有 JWT 可追溯, 且有"泄露后轮换"的正常需求, 不能用 1/30min。
+_AUTHED_KEY_MAX_PER_HOUR = 5
+_AUTHED_KEY_WINDOW_S = 3600
+_authed_key_hits: dict[str, list[float]] = {}
+_authed_key_lock = threading.Lock()
+
+
+def _check_authed_key_rate(user_id: str) -> None:
     now = time.monotonic()
-    with _key_reg_lock:
-        hits = [t for t in _key_reg_hits.get(ip, []) if now - t < _KEY_REG_WINDOW_SEC]
-        if len(hits) >= _KEY_REG_MAX_PER_HOUR:
-            _key_reg_hits[ip] = hits
-            retry_in = int(_KEY_REG_WINDOW_SEC - (now - hits[0])) + 1
-            raise HTTPException(429, f"注册过于频繁, 请 {retry_in} 秒后重试")
+    with _authed_key_lock:
+        hits = [t for t in _authed_key_hits.get(user_id, []) if now - t < _AUTHED_KEY_WINDOW_S]
+        if len(hits) >= _AUTHED_KEY_MAX_PER_HOUR:
+            _authed_key_hits[user_id] = hits
+            retry_in = int(_AUTHED_KEY_WINDOW_S - (now - hits[0])) + 1
+            raise HTTPException(429, f"操作过于频繁, 请 {retry_in} 秒后重试", headers={"Retry-After": str(retry_in)})
         hits.append(now)
-        _key_reg_hits[ip] = hits
+        _authed_key_hits[user_id] = hits
+
+
+def _client_ip(request: Request) -> str:
+    """真实客户端 IP。
+
+    必须走限流中间件那套判定: 只有直连 peer 是 loopback/私网(可信反代)时才认
+    X-Forwarded-For, 否则用 peer 本身 —— 直接读 `request.client.host` 在 nginx 后面
+    拿到的是 127.0.0.1, 按 IP 限流会变成"全局一个桶"(实测 2026-11-03)。
+    """
+    from src.web.middleware import _get_client_ip
+
+    return _get_client_ip(request)
 
 
 # ── 游客试用(统一身份 2026-09-16): IP 级限流, 每天最多 10 次 ──────────
@@ -89,7 +109,7 @@ _GUEST_WINDOW_SEC = 86400  # 24h 滑动窗口
 def _check_guest_rate(ip: str) -> None:
     """游客 IP 24h 滑动窗口, 每 IP 最多 GUEST_DAILY_LIMIT 次。超限 429。
 
-    复用 _check_key_register_rate 的内存滑动窗口模式; 线程安全; 重启清零可接受。
+    进程内滑动窗口(线程安全), 重启清零; 按真实 IP(XFF 感知)计数。
     """
     now = time.monotonic()
     with _guest_lock:
@@ -1366,37 +1386,85 @@ def _check_rate_limit(
 
 _TB_LOCK = __import__("threading").Lock()
 
-# ── 热点缓存(并发优化任务2, 2026-09-15) ──────────────────────────────
-# quote 类读多写少, 3-5s 短 TTL; 同 symbol 并发只打一次上游。
-# 多 worker 时每进程各一份 L1, 只影响命中率不影响正确性(可接受)。
+# ── skill 结果缓存(2026-11-03: 4s 热点缓存 → 3 分钟共享缓存) ──────────
+# 为什么换成 biz_cache(L1 内存 + L2 Redis):
+#   1. 原来只有进程内 dict + 4s TTL, 多 worker 时命中率被 worker 数除;
+#   2. 原来 cache key 用 `hash(frozenset(args))` —— Python 字符串 hash 每个进程随机化
+#      (PYTHONHASHSEED), 同一请求在不同 worker / 重启后落到不同 key, 跨进程**永远不命中**,
+#      还会因 hash 碰撞把不同参数的结果串用。现改为 sha1(规范化 JSON), 稳定且无碰撞。
+# 缓存的是**同一 skill + 同一参数 + 同一输出格式**的成品响应; 未命中才算上游成本。
+# 命中仍记 usage(配额照算), 但不再触发突增冻结 —— 命中不打上游, 没有需要保护的资源。
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, "") or default))
+    except (TypeError, ValueError):
+        return default
 
-_HOT_CACHE_TTL_S = 4.0
-_HOT_CACHE: dict[str, tuple[float, Any]] = {}
-_HOT_LOCK = __import__("threading").Lock()
+
+# 3 分钟(需求方定)。可用 SKILL_RUN_CACHE_TTL_S 覆盖, 不必发版就能调 —— 盘中行情
+# 类 skill 的时效敏感度不同, 留一个旋钮比再改代码安全。
+_SKILL_RUN_CACHE_TTL_S = _env_positive_int("SKILL_RUN_CACHE_TTL_S", 180)
+_CANON_CACHE_PREFIX = "skill_run"
+
+
+def _run_cache_key(name: str, fmt: str, args: dict | None) -> str:
+    """稳定的缓存 key: 参数按 key 排序后取 sha1, 跨进程/跨重启一致。"""
+    canon = json.dumps(args or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha1(canon.encode("utf-8")).hexdigest()[:32]
+    return f"{_CANON_CACHE_PREFIX}:{name}:{fmt or 'html'}:{digest}"
 
 
 def _hot_cache_get(key: str) -> Any | None:
-    with _HOT_LOCK:
-        ent = _HOT_CACHE.get(key)
-        if not ent:
-            return None
-        ts, val = ent
-        if time.time() - ts > _HOT_CACHE_TTL_S:
-            _HOT_CACHE.pop(key, None)
-            return None
-        return val
+    """读缓存。返回 dict(响应体) 或 None; 存储层不可用时降级为未命中。"""
+    try:
+        return biz_cache.get_json(key)
+    except Exception:  # noqa: BLE001 —— 缓存永远不能把请求打挂
+        return None
 
 
 def _hot_cache_set(key: str, val: Any) -> None:
-    with _HOT_LOCK:
-        # 简单淘汰: 超 2000 条清最旧
-        if len(_HOT_CACHE) > 2000:
-            now = time.time()
-            for k in list(_HOT_CACHE.keys())[:200]:
-                ent = _HOT_CACHE.get(k)
-                if ent and now - ent[0] > _HOT_CACHE_TTL_S:
-                    _HOT_CACHE.pop(k, None)
-        _HOT_CACHE[key] = (time.time(), val)
+    try:
+        biz_cache.set_json(key, val, ttl=_SKILL_RUN_CACHE_TTL_S)
+    except Exception:  # noqa: BLE001
+        logger.warning("[skill-gateway] 写缓存失败: %s", key, exc_info=True)
+
+
+# ── 领 key 的 IP 限制(2026-11-03) ────────────────────────────────────
+# 背景: 公开的 /api/guest-key 被脚本刷 —— 一把 guest key 冻掉后 3 分钟内换 IP 领新 key
+# 继续打(生产实测 46 次/2m40s 来自 8 台云主机, 轮换同一把 key)。按 key 冻结拦不住
+# 换 key, 所以在**签发口**按 IP 卡: 同一 IP 30 分钟只能领 1 把。
+# 存储用 biz_cache(L1+L2): 多 worker 共享, Redis 不可用时退化为进程内(仍比没有强)。
+_KEY_ISSUE_IP_WINDOW_S = 1800  # 30 分钟
+_KEY_ISSUE_IP_KEY = "key_issue_ip"
+
+
+def _check_key_issue_ip(ip: str) -> None:
+    """同一 IP 30 分钟内重复领 key → 429。成功申领时由调用方 _mark_key_issue_ip 记账。"""
+    key = f"{_KEY_ISSUE_IP_KEY}:{ip}"
+    try:
+        first_ts = biz_cache.get_json(key)
+    except Exception:  # noqa: BLE001
+        first_ts = None
+    if not first_ts:
+        return
+    try:
+        elapsed = time.time() - float(first_ts)
+    except (TypeError, ValueError):
+        elapsed = 0.0
+    retry_in = max(1, int(_KEY_ISSUE_IP_WINDOW_S - elapsed))
+    if retry_in > 0:
+        raise HTTPException(
+            429,
+            f"同一 IP {_KEY_ISSUE_IP_WINDOW_S // 60} 分钟内只能申请 1 把 key, 请 {retry_in} 秒后重试",
+            headers={"Retry-After": str(retry_in)},
+        )
+
+
+def _mark_key_issue_ip(ip: str) -> None:
+    try:
+        biz_cache.set_json(f"{_KEY_ISSUE_IP_KEY}:{ip}", time.time(), ttl=_KEY_ISSUE_IP_WINDOW_S)
+    except Exception:  # noqa: BLE001
+        logger.warning("[skill-gateway] 记录 IP 领 key 失败: %s", ip, exc_info=True)
 
 
 # ── 到期降级(任务3.3) ───────────────────────────────────────────────
@@ -1712,7 +1780,9 @@ def _resolve_call_identity(
     if user is not None:
         return _web_call_identity(user, db)
     # 3) 游客: IP 限流 + 仅 free skill
-    ip = request.client.host if request.client else "unknown"
+    # 真实 IP(XFF 感知) —— 直接读 client.host 在 nginx 后面全是 127.0.0.1,
+    # 游客的"每 IP 10 次/天"会退化成"全站共用一个桶"(2026-11-03 修)。
+    ip = _client_ip(request)
     _check_guest_rate(ip)
     return _CallIdentity(
         channel="guest",
@@ -1906,9 +1976,13 @@ async def run_skill(
 
     # 热点缓存(并发优化任务2): quote/技术类短 TTL, 同 symbol 并发只打一次上游
     # key 含 format, 避免 html/json 互相命中缓存返回错误格式
-    cache_key = f"skill_cache:{name}:{body.format or 'html'}:{hash(frozenset((body.args or {}).items()))}"
+    _fmt = (body.format or "html").lower().strip()
+    if _fmt not in ("html", "json"):
+        _fmt = "html"
+    cache_key = _run_cache_key(name, _fmt, body.args)
     cached = _hot_cache_get(cache_key)
     if cached is not None:
+        # 命中: 仍然记账(配额照算), 但不打上游、不触发突增冻结
         _log_usage(
             db, ident.api_key_id, name, 200, 0,
             channel=ident.channel, user_id=ident.user_id,
@@ -1916,7 +1990,7 @@ async def run_skill(
         if ident.key_row is not None:
             ident.key_row.last_used_at = db_now_naive()
             db.commit()
-        return cached
+        return SkillRunResponse(**cached)
 
     t0 = time.monotonic()
     status_code = 200
@@ -1971,8 +2045,8 @@ async def run_skill(
         duration_ms=duration_ms,
         format=fmt,
     )
-    # 热点缓存: 3-5s TTL, key 含 skill+args+format(不同格式不可互相命中)
-    _hot_cache_set(cache_key, resp)
+    # 缓存 3 分钟: key 含 skill+args+format(不同格式不可互相命中)
+    _hot_cache_set(cache_key, resp.model_dump())
     return resp
 
 
@@ -2057,15 +2131,17 @@ def register_key(
     P1(audit-20260915): 此前完全免鉴权易被刷号, 加 IP 级限流(每小时 5 次)。
     统一身份(2026-09-16): 若带 JWT, 绑定 user_id, 便于 web/API 共享配额。
     """
-    ip = request.client.host if request.client else "unknown"
-    _check_key_register_rate(ip)
+    ip = _client_ip(request)
+    _check_key_issue_ip(ip)          # 同 IP 30 分钟只能领 1 把(2026-11-03)
     refresh_tier_configs(db)
     linked_user_id = None
     jwt_user = _optional_jwt_user(_header_str(request, "Authorization"), db)
     if jwt_user is not None:
         linked_user_id = str(jwt_user.id)
     tier = "trial" if body.trial else "free"
-    return _issue_key(ip, body.owner_label, tier, linked_user_id, db)
+    out = _issue_key(ip, body.owner_label, tier, linked_user_id, db)
+    _mark_key_issue_ip(ip)
+    return out
 
 
 @router.post("/guest-key")
@@ -2078,12 +2154,15 @@ def register_guest_key(
     与 /keys 的区别: 无需 body, 强制 free 档(非 trial)、owner_label 记 guest、
     不绑定 user_id。用于"游客自动发 key"模型 —— 匿名用户先调此端点拿到 key,
     后续凭 key 调 /api/skills/{name}/run, 走 free 档限流(100 次/天)。
-    防刷复用 IP 限流(_check_key_register_rate, 每小时 5 次)。
+    防刷: 同 IP 30 分钟只能领 1 把(_check_key_issue_ip, biz_cache 计数,
+    多 worker 共享); 真实 IP 走 XFF 感知判定。
     """
-    ip = request.client.host if request.client else "unknown"
-    _check_key_register_rate(ip)
+    ip = _client_ip(request)
+    _check_key_issue_ip(ip)          # 同 IP 30 分钟只能领 1 把(2026-11-03)
     refresh_tier_configs(db)
-    return _issue_key(ip, "guest", "free", None, db)
+    out = _issue_key(ip, "guest", "free", None, db)
+    _mark_key_issue_ip(ip)
+    return out
 
 
 def _usage_by_channel(db: Session, base_filters: list, day_start: datetime) -> dict[str, int]:
@@ -2223,8 +2302,7 @@ def create_my_key(
 ) -> dict:
     """为当前登录用户创建新 Key。明文只在本次响应返回一次。"""
     user = _require_jwt_user(request, db)
-    ip = request.client.host if request.client else "unknown"
-    _check_key_register_rate(ip)
+    _check_authed_key_rate(str(user.id))
     refresh_tier_configs(db)
     _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
@@ -2283,8 +2361,7 @@ def reset_my_key(
     旧明文立即失效。新明文只在本次响应返回一次。
     """
     user = _require_jwt_user(request, db)
-    ip = request.client.host if request.client else "unknown"
-    _check_key_register_rate(ip)
+    _check_authed_key_rate(str(user.id))
     row = _get_owned_key(db, user, key_id)
     _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
