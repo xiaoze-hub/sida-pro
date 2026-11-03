@@ -19,6 +19,7 @@ from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
 from src.web.models import PriceAlertHit, PriceAlertRule, Stock, User
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -430,8 +431,10 @@ def list_today_hits(
         tzinfo = ZoneInfo(tz_name)
     except Exception:
         tzinfo = timezone.utc
-    local_midnight = datetime.now(tzinfo).replace(hour=0, minute=0, second=0, microsecond=0)
-    start_utc = local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
+    # trigger_time 是库里 naive 北京口径(price_alert_engine 写 aware UTC, PG 按会话时区
+    # 落成北京墙上时间; 模型 server_default 也是 now())。所以"今天起点"直接用本地零点,
+    # 再转 UTC 会把窗口提前 8 小时(实测 2026-11-03 修正)。
+    start_utc = datetime.now(tzinfo).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
 
     hits = (
         db.query(PriceAlertHit)

@@ -16,6 +16,8 @@ from typing import Any
 
 from sqlalchemy import text
 
+from src.core.timezone import db_now_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,8 +33,13 @@ def _iso(d: Any) -> str:
     return str(d)[:10]
 
 
-def _now_naive_utc() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def _now_db_naive() -> datetime:
+    """写库用"现在": 与 server_default 同口径(PG=北京 / SQLite=UTC)。
+
+    原实现写 naive UTC, 而 auction_snapshots.created_at 是 func.now()(北京) ——
+    同一行两列差 8 小时(生产实测 median(created_at-updated_at)=8.00h, n=736)。
+    """
+    return db_now_naive()
 
 
 # ── 竞价快照 ──────────────────────────────────────────────────────────────
@@ -66,7 +73,7 @@ def persist_auction_snapshots(
     from src.db.dialect import upsert_sql
 
     d = _iso(trade_date)
-    now = _now_naive_utc()
+    now = _now_db_naive()
     rows: list[dict] = []
     for sym, s in snaps.items():
         if not sym or not isinstance(s, dict):
@@ -159,7 +166,7 @@ def persist_chip_daily(
         "peak_price": chips.get("peak_price"),
         "cost_band_low": (band or {}).get("low"),
         "cost_band_high": (band or {}).get("high"),
-        "updated_at": _now_naive_utc(),
+        "updated_at": _now_db_naive(),
     }
     if row["cost_50"] is None and row["peak_price"] is None:
         return False  # 空壳不落库
