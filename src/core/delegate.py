@@ -34,6 +34,8 @@ def create_child_run(
     recipe_id: str,
     question: str,
     budget: int | None = None,
+    fact_pack_id: str | None = None,
+    dispatch_reason: str | None = None,
 ) -> dict:
     """建一条 queued 的子 run 行（带 parent_run_id）。
 
@@ -51,6 +53,8 @@ def create_child_run(
         status="queued",
         tool_calls=0,
         parent_run_id=parent_run_id,
+        fact_pack_id=fact_pack_id,
+        dispatch_reason=dispatch_reason,
         created_at=db_now_naive(),
     )
     db.add(run)
@@ -67,6 +71,8 @@ def delegate(
     question: str,
     executor: Callable[..., Any] | None = None,
     budget: int | None = None,
+    fact_pack: dict | None = None,
+    dispatch_reason: str | None = None,
 ) -> dict:
     """建子 run → 执行 → 回填结论。返回子 run 的事实（不返回"感觉不错"这种话）。
 
@@ -75,9 +81,12 @@ def delegate(
     """
     from src.db.models import CopilotRun
 
+    fact_pack_id = fact_pack.get("pack_id") if isinstance(fact_pack, dict) else None
+
     child = create_child_run(
         db, parent_run_id=parent_run_id, user_id=user_id,
         recipe_id=recipe_id, question=question, budget=budget,
+        fact_pack_id=fact_pack_id, dispatch_reason=dispatch_reason,
     )
     run_id = child["run_id"]
 
@@ -88,9 +97,16 @@ def delegate(
 
     _mark_running(db, run_id)
     try:
-        result = executor(
-            run_id=run_id, recipe_id=recipe_id, question=question, budget=child["budget"],
-        )
+        import inspect
+        sig = inspect.signature(executor)
+        if "fact_pack" in sig.parameters:
+            result = executor(
+                run_id=run_id, recipe_id=recipe_id, question=question, budget=child["budget"], fact_pack=fact_pack,
+            )
+        else:
+            result = executor(
+                run_id=run_id, recipe_id=recipe_id, question=question, budget=child["budget"],
+            )
     except Exception as e:  # noqa: BLE001
         # 失败不重跑：如实落 failed，父 run 汇总时会看到这块证据缺失
         msg = f"{type(e).__name__}: {e}"
@@ -153,6 +169,8 @@ def children_of(db, parent_run_id: str) -> list[dict]:
             "elapsed_ms": r.elapsed_ms,
             "error": r.error,
             "question": (r.question or "")[:120],
+            "fact_pack_id": r.fact_pack_id,
+            "dispatch_reason": r.dispatch_reason,
         }
         for r in rows
     ]
@@ -166,7 +184,7 @@ def aggregate(db, parent_run_id: str) -> dict:
     kids = children_of(db, parent_run_id)
     if not kids:
         return {"available": False, "reason": "这轮没有委派子任务", "children": [], "count": 0,
-                "ok": 0, "failed": 0, "tool_calls": 0, "gaps": []}
+                "ok": 0, "failed": 0, "tool_calls": 0, "gaps": [], "fact_pack_id": None, "all_same_as_of": True}
 
     ok = [k for k in kids if k["status"] == "ok"]
     failed = [k for k in kids if k["status"] == "failed"]
@@ -174,6 +192,11 @@ def aggregate(db, parent_run_id: str) -> dict:
     gaps = [
         f"{k['recipe_id']} 未完成：{k['error'] or k['status']}" for k in (failed + pending)
     ]
+    
+    pack_ids = {k.get("fact_pack_id") for k in kids if k.get("fact_pack_id")}
+    common_pack_id = list(pack_ids)[0] if len(pack_ids) == 1 else (list(pack_ids)[0] if len(pack_ids) > 0 else None)
+    all_same_as_of = len(pack_ids) <= 1
+
     return {
         "available": True,
         "reason": "",
@@ -185,6 +208,8 @@ def aggregate(db, parent_run_id: str) -> dict:
         "failed": len(failed),
         "pending": len(pending),
         "gaps": gaps,
+        "fact_pack_id": common_pack_id,
+        "all_same_as_of": all_same_as_of,
     }
 
 
@@ -196,6 +221,7 @@ def delegate_many(
     tasks: Iterable[tuple[str, str]],
     executor: Callable[..., Any] | None = None,
     budget: int | None = None,
+    fact_pack: dict | None = None,
 ) -> dict:
     """按 (recipe_id, question) 清单依次委派，返回全部子 run + 汇总。
 
@@ -204,8 +230,18 @@ def delegate_many(
     """
     out = []
     for recipe_id, question in tasks:
+        dispatch_reason = f"recipe:{recipe_id}" if recipe_id else None
+        try:
+            from src.harness.routing import route_for_request
+            route_res = route_for_request(question)
+            if route_res and getattr(route_res, "reason", None):
+                dispatch_reason = route_res.reason
+        except Exception:
+            pass
+
         out.append(delegate(
             db, parent_run_id=parent_run_id, user_id=user_id,
             recipe_id=recipe_id, question=question, executor=executor, budget=budget,
+            fact_pack=fact_pack, dispatch_reason=dispatch_reason,
         ))
     return {"children": out, "summary": aggregate(db, parent_run_id)}

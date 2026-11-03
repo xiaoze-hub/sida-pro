@@ -284,10 +284,37 @@ async def submit_parallel(
     def _work() -> None:
         """后台线程：建 N 个子 run → 串行执行 → 汇总。"""
         from src.db.session import SessionLocal as SL
+        from src.core.fact_pack import build_pack
+        from src.harness.pipeline import symbols_of
 
         wdb = SL()
         try:
             _mark_parent(parent_id, status="running")
+            
+            # 把 items 里的标的解析出来（复用 src/harness/pipeline.py::symbols_of），建一个 pack 传给所有子任务
+            all_symbols = []
+            for q in items:
+                syms = symbols_of(q, allow_names=True)
+                if syms:
+                    all_symbols.extend(syms)
+            
+            fact_pack = None
+            if all_symbols:
+                try:
+                    fact_pack = build_pack(all_symbols, market="CN")
+                except Exception as e:
+                    logger.warning("并行诊断构建事实包异常: %s", e)
+            
+            # 若生成了 fact_pack，把 pack_id 记到父 run 上
+            if fact_pack and fact_pack.get("pack_id"):
+                try:
+                    p_row = wdb.query(CopilotRun).filter(CopilotRun.run_id == parent_id).first()
+                    if p_row:
+                        p_row.fact_pack_id = fact_pack["pack_id"]
+                        wdb.commit()
+                except Exception:
+                    pass
+
             delegate_many(
                 wdb,
                 parent_run_id=parent_id,
@@ -295,6 +322,7 @@ async def submit_parallel(
                 tasks=[("", q) for q in items],  # 配方留空 = 由路由决定（不假装能指定）
                 executor=_child_executor(str(uid)),
                 budget=body.budget,
+                fact_pack=fact_pack,
             )
             _mark_parent(parent_id, status="ok")
         except Exception as exc:  # noqa: BLE001
