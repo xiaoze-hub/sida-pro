@@ -410,6 +410,11 @@ from src.web.api.ws_notifications import router as ws_notif_router
 app.include_router(ws_notif_router, prefix="/api", tags=["notif-ws"])
 # 市场指数（公共数据，无需登录）
 app.include_router(market.router, prefix="/api/market", tags=["market"])
+
+# 盘面指数总览（2026-11-03）：八宽基指数的涨跌幅/成交额/四档资金/涨跌家数
+from src.web.api import indexes as indexes_api  # noqa: E402
+
+app.include_router(indexes_api.router, prefix="/api/indexes", tags=["indexes"])
 # TradingView Alert Webhook(2026-08-12): 免登录, secret 鉴权
 from src.web.api import tradingview_webhook
 

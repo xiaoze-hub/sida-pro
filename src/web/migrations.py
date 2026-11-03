@@ -6590,6 +6590,50 @@ ON CONFLICT(version) DO NOTHING
     )
 
 
+def _m239_index_flow_daily(conn: Connection) -> None:
+    """指数盘面资金日表（2026-11-03）。
+
+    `get_exday_data` 对指数返回**成分股聚合的四档资金**，但只给当日 1 行 →
+    历史分位只能靠每日落库。金额=元、量=手，口径 `tdx_index_agg`。
+    """
+    if _has_table(conn, "index_flow_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS index_flow_daily (
+    id {id_col},
+    trade_date VARCHAR(8) NOT NULL,
+    symbol VARCHAR(16) NOT NULL,
+    name VARCHAR(32),
+    close FLOAT, pct_chg FLOAT, amount FLOAT, volume_lots FLOAT,
+    open FLOAT, high FLOAT, low FLOAT,
+    up_home INTEGER, down_home INTEGER, outside FLOAT, inside FLOAT,
+    xl_net FLOAT, lg_net FLOAT, md_net FLOAT, sm_net FLOAT,
+    main_net FLOAT, net_all FLOAT, active_buy FLOAT, active_sell FLOAT,
+    caliber VARCHAR(24), quality VARCHAR(16), reason VARCHAR(255),
+    source VARCHAR(32), created_at TIMESTAMP, updated_at TIMESTAMP
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_index_flow_daily "
+                "ON index_flow_daily (trade_date, symbol)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_index_flow_sym_day ON index_flow_daily (symbol, trade_date)")
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_index_flow_day ON index_flow_daily (trade_date)"))
+    except Exception as exc:  # noqa: BLE001 - 索引失败不阻断建表
+        logger.warning("index_flow_daily 索引创建失败(表已建): %s", exc)
+
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6823,6 +6867,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(236, "captcha_challenges", _m236_captcha_challenges),
     Migration(237, "utc_naive_to_app_tz", _m237_utc_naive_to_app_tz),
     Migration(238, "utc_naive_to_app_tz_b2", _m238_utc_naive_to_app_tz_b2),
+    Migration(239, "index_flow_daily", _m239_index_flow_daily),
 )
 
 

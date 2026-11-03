@@ -68,6 +68,7 @@ export interface RouteTabSpec {
 export const ROUTE_LABEL_KEYS: Record<string, string> = {
   '/': 'nav.home',
   '/heatmap': 'nav.heatmap',
+  '/indexes': 'nav.indexes',
   '/theme-mood': 'nav.themeMood',
   '/opportunities': 'nav.opportunities',
   '/auction': 'nav.auction',

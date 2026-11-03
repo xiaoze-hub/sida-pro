@@ -1,3 +1,16 @@
+## 2026-11-03
+
+### feat-盘面指数总览（涨跌幅 + 四档资金 + 宽度，盘中实时）
+
+- **数据基础**：`get_exday_data` 对**指数**返回的是成分股聚合的 4×4 四档资金（行=特大/大/中/小，列=[买入,卖出,主动买,主动卖]），实测 8 个宽基指数全部可用，三条恒等式都成立（买卖两侧相等、主动买+主动卖=成交额、Σ(主动买−主动卖)=全单净额）。口径记为 `tdx_index_agg`，与东财 `eastmoney4`、腾讯 `tick` **不可换算**，只能同向比较。
+- **新增 `src/core/index_flow.py`**：`quotes()` 走 `get_pricevol` 批量拿涨跌幅；`snapshot()` 拿涨跌家数/成交额/内外盘（**注意 `Amount` 是万元**，×1e4 才是元）；`tiers()` 取四档；`fetch_one()` 汇总并按三条恒等式校验，不一致标 `quality='suspect'` 且**数据照存不丢**。
+- **修一个会静默取空的坑**：`exday_structure._tq_code()` 按代码首位判交易所，`000300`/`000852`/`000016` 会被判成 `.SZ`（TQ 返回空）。新增 `src/core/index_codes.py::INDEX_EXCHANGE` + `tq_index_code()`，指数后缀只从这张表取。
+- **迁移 v239 `index_flow_daily`**（`trade_date,symbol` 唯一）：close/pct_chg/amount/volume/涨跌家数/内外盘/四档主动净额/main_net/net_all/quality。`get_exday_data` 只返当日 1 行 ⇒ 历史分位靠日表累积。
+- **采集器 `src/collectors/index_flow_daily.py`**：盘中每 2 分钟（9:30–11:35、12:55–15:05，非交易日/非交易时段直接 skip）+ 15:42 收盘定稿，幂等 upsert。
+- **接口 `GET /api/indexes/overview`**（15s `biz_cache`，实时失败回落库内并标 `stale`）、**`GET /api/indexes/{symbol}/history?days=N`**。
+- **前端新页 `/indexes` 盘面指数**：八指数横带（红涨绿跌、成交额、主力净额）+ 选中标的的四档资金条 / 近 60 日主力净额 SVG 柱 / 涨跌家数与内外盘，页面显式标注口径与时点。无数据统一 `--`，不用 0 顶替。
+- 验证：后端 `tests/test_index_flow.py` **22 passed**（含交易所后缀回归、恒等式、不补 0）、迁移门禁与版本连续性通过、`ruff check` 全绿；前端 `tsc --noEmit`、ESLint、`check_ui_rules.mjs`（R6/R10/R12 全过）、页面测试 **5 passed**。
+
 ## release: v0.95.0（管理面/用户面身份分离：独立密钥 + admin 受众 token）
 
 - **独立密钥**：管理面 token 用 `get_admin_jwt_secret()` 签（env `ADMIN_JWT_SECRET` ≥32 字节，否则派生 `sha256(JWT_SECRET|admin-token-v1)`），载荷带 `aud=admin`，默认 **4 小时**过期（`ADMIN_JWT_EXPIRE_HOURS`）。用户面 token 带 `aud=user`。两套密钥 ⇒ 用户 token 在管理面**验签即失败**，不依赖"角色字段写对没有"。
