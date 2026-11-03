@@ -2723,3 +2723,57 @@ class MarketReplayDaily(Base):
     source = Column(String(32), nullable=True)
     payload = Column(JSON, default=dict)                     # 完整复盘证据
     created_at = Column(DateTime, default=db_now_naive)
+
+
+class IndexFlowDaily(Base):
+    """指数盘面资金日表（2026-11-03）。
+
+    为什么要这张表：`get_exday_data` 对指数返回的是**成分股聚合的四档资金**，但
+    **只给当日 1 行**（count/start_time 参数实测无效）→ 历史分位、资金流与涨跌幅的
+    相关性只能靠自己每天落库累积。
+
+    口径 `caliber = tdx_index_agg`：行=特大/大/中/小，列=[买入额,卖出额,主动买,主动卖]；
+    金额=元、量=手。`main_net` = (特大+大) 主动净额，是"主力净流入"的可比量，但与
+    东财(eastmoney4)/腾讯逐笔(tick) **不可换算**，只能同向比较。
+    """
+
+    __tablename__ = "index_flow_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "symbol", name="uq_index_flow_daily"),
+        Index("ix_index_flow_sym_day", "symbol", "trade_date"),
+        Index("ix_index_flow_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(8), nullable=False)
+    symbol = Column(String(16), nullable=False)
+    name = Column(String(32), nullable=True)
+    # 行情
+    close = Column(Float, nullable=True)
+    pct_chg = Column(Float, nullable=True)          # 涨跌幅 %
+    amount = Column(Float, nullable=True)           # 成交额(元)
+    volume_lots = Column(Float, nullable=True)      # 成交量(手)
+    open = Column(Float, nullable=True)
+    high = Column(Float, nullable=True)
+    low = Column(Float, nullable=True)
+    # 宽度 / 内外盘
+    up_home = Column(Integer, nullable=True)
+    down_home = Column(Integer, nullable=True)
+    outside = Column(Float, nullable=True)
+    inside = Column(Float, nullable=True)
+    # 四档主动净额(元)
+    xl_net = Column(Float, nullable=True)
+    lg_net = Column(Float, nullable=True)
+    md_net = Column(Float, nullable=True)
+    sm_net = Column(Float, nullable=True)
+    main_net = Column(Float, nullable=True)         # 特大+大
+    net_all = Column(Float, nullable=True)          # 四档合计
+    active_buy = Column(Float, nullable=True)
+    active_sell = Column(Float, nullable=True)
+    # 元数据
+    caliber = Column(String(24), nullable=True)
+    quality = Column(String(16), nullable=True)     # ok|suspect
+    reason = Column(String(255), nullable=True)
+    source = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=db_now_naive)
+    updated_at = Column(DateTime, default=db_now_naive, onupdate=db_now_naive)

@@ -31,3 +31,42 @@ def is_index_code(symbol: str, market: str = "CN") -> bool:
 
 def index_name(symbol: str) -> str:
     return INDEX_CODES.get(str(symbol or "").strip(), "")
+
+
+# 指数所属交易所。**不能按代码首位推断**：`000300`(沪深300)/`000852`(中证1000) 在**上交所**，
+# 而个股的 `000xxx` 在深交所。`exday_structure._tq_code()` 按首位判市，对指数会把
+# 000300 判成 `.SZ`（TQ 返回空）—— 指数必须走这张表拿后缀（2026-11-03 实测踩到）。
+INDEX_EXCHANGE: dict[str, str] = {
+    "000001": "SH",
+    "000016": "SH",
+    "000300": "SH",
+    "000688": "SH",
+    "000852": "SH",
+    "000905": "SH",
+    "399001": "SZ",
+    "399006": "SZ",
+}
+
+# 盘面总览展示顺序：大盘 → 权重 → 中小盘 → 成长
+BOARD_ORDER: list[str] = [
+    "000001",
+    "399001",
+    "399006",
+    "000300",
+    "000016",
+    "000905",
+    "000852",
+    "000688",
+]
+
+
+def tq_index_code(symbol: str) -> str | None:
+    """裸指数码 → TQ 带后缀代码（`000300` → `000300.SH`）；非指数返回 None。"""
+    s = str(symbol or "").strip().upper()
+    if "." in s:
+        head, _, tail = s.partition(".")
+        if head in INDEX_CODES and tail in ("SH", "SZ"):
+            return s
+        return None
+    ex = INDEX_EXCHANGE.get(s)
+    return f"{s}.{ex}" if ex else None

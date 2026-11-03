@@ -2,7 +2,7 @@ import { NoAccessPage } from '@/components/NoAccessPage'
 import { GithubMark } from '@/components/icons/GithubMark'
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, BarChart3, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -46,6 +46,8 @@ const LoginPage = lazyWithRetry(() => import('@/pages/Login'), 'login-page')
 // IndexBody(src/pages/workbench) / BoardBody(biz-ui .../workbench) 供工作台复用, 原页已删。
 // P1-1 (2026-09-10, 借鉴 OpenTerminal): 板块热力图 treemap 页
 const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page')
+// 盘面指数(2026-11-03): 八宽基指数涨跌幅 + 四档资金结构 + 宽度
+const IndexesPage = lazyWithRetry(() => import('@/pages/Indexes'), 'indexes-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
 const QuoteEntryPage = lazyWithRetry(() => import('@/pages/QuoteEntry'), 'quote-entry-page')
@@ -115,6 +117,8 @@ const navItems = [
   { to: '/quotes', icon: LineChart, labelKey: 'nav.stocks', perm: 'view_quotes' },
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
   { to: '/heatmap', icon: LayoutGrid, labelKey: 'nav.heatmap', perm: 'view_heatmap' },
+  // 盘面指数(2026-11-03): 宽基指数涨跌幅/成交额/四档资金/涨跌家数
+  { to: '/indexes', icon: BarChart3, labelKey: 'nav.indexes', perm: 'view_quotes' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
   { to: '/theme-mood', icon: Activity, labelKey: 'nav.themeMood', perm: 'view_quotes' },
   { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
@@ -163,7 +167,7 @@ const navItems = [
 // ② 新增「决策」组 —— 之前 `/decision-ledger` 与 `/caliber-compare` **只存在于 navItems,
 //    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
 const desktopNavGroups = [
-  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/quotes', '/heatmap', '/theme-mood'].includes(n.to)) },
+  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/quotes', '/indexes', '/heatmap', '/theme-mood'].includes(n.to)) },
   { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/auction', '/dark-fund-top', '/war-report', '/replay-tree'].includes(n.to)) },
   // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
   // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
@@ -802,6 +806,7 @@ function App() {
               <Route path="/l2" element={<LegacyL2Redirect />} />
               {/* P1-1: 板块热力图(view_heatmap 权限) */}
               <Route path="/heatmap" element={<PermGuard perm="view_heatmap" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
+              <Route path="/indexes" element={<PermGuard perm="view_quotes" myPerms={myPerms}><IndexesPage /></PermGuard>} />
               {/* 口径对照(2026-09-18): 三套主力资金口径并排, 消歧不合并(pro 档) */}
               <Route path="/caliber-compare" element={<PermGuard perm="view_forecast" myPerms={myPerms}><CaliberComparePage /></PermGuard>} />
               {/* 决策账本(2026-09-18): 登录即可看 —— 后端 /api/decisions/* 也只要求登录 */}

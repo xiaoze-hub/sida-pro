@@ -522,6 +522,41 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"四档资金结构采集注册失败: {e}")
 
+        # 盘面指数资金（2026-11-03 用户要求：宽基指数涨跌幅+资金流，可做盘面分析）：
+        # `get_exday_data` 对指数返回成分股聚合的四档资金，但只给当日 1 行 ⇒ 按 2 分钟
+        # 刷新当日累计值 + 15:42 收盘定稿，历史分位靠日表累积。
+        try:
+            from src.collectors.index_flow_daily import run_eod as _idx_eod
+            from src.collectors.index_flow_daily import run_intraday as _idx_intraday
+
+            rt.scheduler.scheduler.add_job(
+                _idx_intraday,
+                "cron",
+                day_of_week="mon-fri",
+                hour="9-15",
+                minute="*/2",
+                id="index-flow-intraday",
+                name="盘面指数四档资金(盘中2分钟)",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            rt.scheduler.scheduler.add_job(
+                _idx_eod,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=42,
+                id="index-flow-eod",
+                name="盘面指数四档资金收盘定稿",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("盘面指数资金采集已注册(盘中 2 分钟 + 15:42 定稿)")
+        except Exception as e:
+            logger.error(f"盘面指数资金采集注册失败: {e}")
+
         # 量化因子多维胜率与超额收益回测日快照(2026-10-23 用户要求「所有数据都要落库 + 统计胜率」):
         # 每日 16:15 重算 GS 区间/信号(原始 vs 次日确认)、AI 机构活跃度、GS×活跃度共振、
         # 威科夫四标、涨停封板质量的 T+1/T+3/T+5 实测胜率与相对同池基准的超额收益，落 factor_winrate_daily。
