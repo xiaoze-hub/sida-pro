@@ -93,7 +93,8 @@ def overview(
     # 不会出现"读的键从来没写过"的死分支。
     cache_key = "indexes:overview"
     cached = biz_cache.get_json(cache_key)
-    if not live and cached is not None:
+    # 先吃缓存：前端 15s 轮询若每次都穿透，就是每 15 秒 17 次同步 TQ RPC
+    if cached is not None:
         return cached
 
     payload: dict[str, Any] = {
@@ -139,8 +140,6 @@ def overview(
     # 否则 live=false 会把 {"ok":..., "items":[...]} 当响应体吐出去。
     if live and payload["items"]:
         biz_cache.set_json(cache_key, payload, ttl=CACHE_TTL_S)
-    elif not live and cached is not None:
-        return cached
     return payload
 
 

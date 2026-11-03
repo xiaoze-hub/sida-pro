@@ -6618,19 +6618,20 @@ CREATE TABLE IF NOT EXISTS index_flow_daily (
 """
         )
     )
-    try:
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_index_flow_daily "
-                "ON index_flow_daily (trade_date, symbol)"
-            )
+    # 唯一索引是幂等 upsert 的前提：失败必须让迁移失败（否则表建好了但会写重复行）
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_index_flow_daily "
+            "ON index_flow_daily (trade_date, symbol)"
         )
+    )
+    try:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_index_flow_sym_day ON index_flow_daily (symbol, trade_date)")
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_index_flow_day ON index_flow_daily (trade_date)"))
-    except Exception as exc:  # noqa: BLE001 - 索引失败不阻断建表
-        logger.warning("index_flow_daily 索引创建失败(表已建): %s", exc)
+    except Exception as exc:  # noqa: BLE001 - 普通索引不影响正确性
+        logger.warning("index_flow_daily 普通索引创建失败(表与唯一索引已就位): %s", exc)
 
 
 

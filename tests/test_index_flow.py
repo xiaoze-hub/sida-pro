@@ -222,3 +222,31 @@ class TestRpcShapes:
         snap = index_flow.snapshot("000688.SH")
         assert snap["up_home"] == 0
         assert snap["down_home"] == 50
+
+    def test_zero_now_is_missing_not_close(self, monkeypatch):
+        """无实时数据时 TQ 返回 Now=0/Volume=0，那是哨兵不是价格。"""
+        monkeypatch.setattr(
+            index_flow, "_rpc",
+            lambda m, p, timeout=6.0: {"ErrorId": "0", "Now": "0", "LastClose": "0",
+                                       "Amount": "0", "Volume": "0", "UpHome": "0"},
+        )
+        monkeypatch.setattr(index_flow, "quotes", lambda syms: {})
+        snap = index_flow.snapshot("000300.SH")
+        assert snap["close"] is None
+        assert snap["amount"] is None
+        assert snap["volume_lots"] is None
+        assert snap["up_home"] == 0   # 宽度 0 是真实值（全员下跌），保留
+
+    def test_fetch_many_respects_budget(self, monkeypatch):
+        """超预算的标的标"未取到"，不把请求线程钉死。"""
+        monkeypatch.setattr(index_flow, "quotes", lambda syms: {})
+
+        def slow(sym, quote=None):
+            import time as _t
+            _t.sleep(0.05)
+            return {"symbol": str(sym)[:6], "available": True, "trade_date": "20261103"}
+
+        monkeypatch.setattr(index_flow, "fetch_one", slow)
+        got = index_flow.fetch_many(["000001", "000300", "000852"], budget_s=0.01)
+        assert len(got) == 3
+        assert any(not g["available"] and "超预算" in (g["reason"] or "") for g in got)

@@ -28,6 +28,13 @@ TIER_KEYS = ("xl", "lg", "md", "sm")
 _TOL = 0.005
 
 
+def _num_nonzero(v: Any) -> float | None:
+    """价/量专用：通达信客户端无实时数据时返回 `Now=0` / `Volume=0`，
+    0 在这里是**哨兵**而不是有效值（同 `src/core/tdx_boards.py` 的既有处理）。"""
+    n = _num(v)
+    return n if n else None
+
+
 def _int_or_none(v: Any) -> int | None:
     """整数化但保留真实的 0（小指数"全员下跌"时 UpHome=0 是有效值，不是缺失）。"""
     n = _num(v)
@@ -147,10 +154,10 @@ def quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
         if not isinstance(d, dict):
             continue
         out[str(code).split(".")[0]] = {
-            "close": _num(d.get("Now")),
-            "prev_close": _num(d.get("LastClose")),
+            "close": _num_nonzero(d.get("Now")),
+            "prev_close": _num_nonzero(d.get("LastClose")),
             "pct_chg": _num(d.get("Zaf")),
-            "volume_lots": _num(d.get("Volume")),
+            "volume_lots": _num_nonzero(d.get("Volume")),
         }
     return out
 
@@ -164,12 +171,13 @@ def snapshot(code: str) -> dict[str, Any]:
     d = _unwrap(resp)
     if not isinstance(d, dict) or str(d.get("ErrorId", "0")) != "0":
         return {}
-    amount_wan = _num(d.get("Amount"))
+    amount_wan = _num_nonzero(d.get("Amount"))
     return {
-        # `Now` = 最新价；`Average` 是**当日均价(VWAP)**，绝不可当收盘价用
-        "close": _num(d.get("Now")),
+        # `Now` = 最新价；`Average` 是**当日均价(VWAP)**，绝不可当收盘价用。
+        # 0 一律视为"无实时数据"，否则会把 0.0 写进 close 列。
+        "close": _num_nonzero(d.get("Now")),
         "amount": amount_wan * 1e4 if amount_wan is not None else None,
-        "volume_lots": _num(d.get("Volume")),
+        "volume_lots": _num_nonzero(d.get("Volume")),
         "open": _num(d.get("Open")),
         "high": _num(d.get("Max")),
         "low": _num(d.get("Min")),
@@ -275,7 +283,24 @@ def fetch_one(symbol: str, quote: dict[str, Any] | None = None) -> dict[str, Any
     return base
 
 
-def fetch_many(symbols: list[str]) -> list[dict[str, Any]]:
-    """批量取（涨跌幅一次拉全，其余逐只）。"""
+def fetch_many(symbols: list[str], budget_s: float = 20.0) -> list[dict[str, Any]]:
+    """批量取（涨跌幅一次拉全，其余逐只）。
+
+    总预算 `budget_s`：TQ 网关静默失败时每只 2 次 RPC × 6s 会把整条链路拖到分钟级，
+    超预算的标的直接标"未取到"交给下一轮，不阻塞请求线程。
+    """
+    import time as _time
+
     qs = quotes(symbols)
-    return [fetch_one(s, qs.get(str(s)[:6])) for s in symbols]
+    t0 = _time.monotonic()
+    out: list[dict[str, Any]] = []
+    for s in symbols:
+        sym = str(s)[:6]
+        if _time.monotonic() - t0 > budget_s:
+            out.append({
+                "symbol": sym, "name": "", "caliber": CALIBER, "source": "tq",
+                "available": False, "reason": f"取数超预算（>{budget_s:.0f}s）",
+            })
+            continue
+        out.append(fetch_one(s, qs.get(sym)))
+    return out
