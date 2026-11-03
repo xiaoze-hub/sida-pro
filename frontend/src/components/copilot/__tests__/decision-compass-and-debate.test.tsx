@@ -90,7 +90,7 @@ describe('MultiDimensionEvidencePanel 多维依据透视（如实反映事实，
     )
 
     expect(screen.getByTestId('copilot-multi-dimension-evidence')).toBeTruthy()
-    expect(screen.getByText('多维依据透视 (2 维度)')).toBeTruthy()
+    expect(screen.getByText('证据分组（单模型文本归类） (2 组)')).toBeTruthy()
     expect(screen.getByText('维度研判分解')).toBeTruthy()
     expect(screen.queryByText(/TradingAgents 集群/)).toBeNull()
     expect(screen.queryByText(/多智能体会诊/)).toBeNull()
