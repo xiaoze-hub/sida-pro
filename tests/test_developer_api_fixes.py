@@ -53,10 +53,12 @@ def client(monkeypatch):
     finally:
         db.close()
 
-    # 建 Key 是 IP 级 5 次/小时滑动窗口（进程内），跨用例累计会误 429
+    # 建 Key 2026-11-03 起是"同 IP 30 分钟 1 把"(计数在 biz_cache), 跨用例累计会误 429
     from src.web.api import skills_gateway as gw
+    from src.web.cache.biz_cache import biz_cache
 
-    gw._key_reg_hits.clear()
+    biz_cache.clear()          # 清领 key 的 IP 记账(以及别的 biz 键, 测试环境无副作用)
+    gw._authed_key_hits.clear()
 
     from src.web.app import app
 

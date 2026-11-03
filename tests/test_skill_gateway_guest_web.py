@@ -9,6 +9,17 @@ from fastapi import HTTPException
 from src.web.api import skills_gateway as gw
 
 
+
+def _req_from(ip: str):
+    """请求桩: 反代形态(peer=127.0.0.1) + x-forwarded-for=真实 IP。
+
+    2026-11-03 起游客识别按 XFF 感知的真实 IP 计数, 只设 client.host 会落到 127.0.0.1。
+    """
+    req = MagicMock()
+    req.client.host = "127.0.0.1"
+    req.headers.get = lambda k, d=None: ip if str(k).lower() == "x-forwarded-for" else d
+    return req
+
 def test_guest_rate_limit_allows_then_429():
     ip = "198.51.100.7"
     gw._guest_ip_counts.pop(ip, None)
@@ -111,8 +122,7 @@ def test_resolve_identity_api_key_wins():
     row.key_hash = "hash-42"
     row.tier = "trial"
     row.daily_limit = 500
-    req = MagicMock()
-    req.client.host = "10.0.0.1"
+    req = _req_from("10.0.0.1")
     with patch.object(gw, "_validate_api_key_row", return_value=row):
         ident = gw._resolve_call_identity("sk_abc", "Bearer whatever", req, db)
     assert ident.channel == "api"
@@ -133,8 +143,7 @@ def test_resolve_identity_jwt_web_shares_quota():
     key.daily_limit = 500
     key.status = "active"
     key.expires_at = None
-    req = MagicMock()
-    req.client.host = "10.0.0.2"
+    req = _req_from("10.0.0.2")
     with patch.object(gw, "_optional_jwt_user", return_value=user):
         with patch.object(gw, "_best_active_key_for_user", return_value=key):
             ident = gw._resolve_call_identity("", "Bearer tok", req, db)
@@ -149,8 +158,7 @@ def test_resolve_identity_jwt_without_key_free_tier():
     db = MagicMock()
     user = MagicMock()
     user.id = "user-uuid-2"
-    req = MagicMock()
-    req.client.host = "10.0.0.3"
+    req = _req_from("10.0.0.3")
     with patch.object(gw, "_optional_jwt_user", return_value=user):
         with patch.object(gw, "_best_active_key_for_user", return_value=None):
             ident = gw._resolve_call_identity("", "Bearer tok", req, db)
@@ -163,8 +171,7 @@ def test_resolve_identity_jwt_without_key_free_tier():
 
 def test_resolve_identity_guest():
     db = MagicMock()
-    req = MagicMock()
-    req.client.host = "10.0.0.4"
+    req = _req_from("10.0.0.4")
     gw._guest_ip_counts.pop("10.0.0.4", None)
     with patch.object(gw, "_optional_jwt_user", return_value=None):
         ident = gw._resolve_call_identity("", "", req, db)
