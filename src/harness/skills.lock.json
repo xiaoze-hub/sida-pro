@@ -1,0 +1,26 @@
+{
+  "auction": {
+    "chars": 379,
+    "sha1": "cdc9f82812784a788853f1e1455a7b575548a6a7"
+  },
+  "chip": {
+    "chars": 228,
+    "sha1": "bbce2643c9f7060f2f0abfbfa3e3eb7c327a08d8"
+  },
+  "demon": {
+    "chars": 929,
+    "sha1": "26fa864d2b720ba2567a042ee812c9b30b743654"
+  },
+  "intraday": {
+    "chars": 811,
+    "sha1": "11a58499cd2e467d9fce3dfdbe12d0f069c188d7"
+  },
+  "left": {
+    "chars": 853,
+    "sha1": "83aab1c4c1600deb969dc0f2dbeea78f29c93e8f"
+  },
+  "premarket": {
+    "chars": 259,
+    "sha1": "26e33894154157ff8d791f16f51700ef583f1c90"
+  }
+}
