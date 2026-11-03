@@ -1,3 +1,12 @@
+## release: v0.92.0（时间列口径统一：UTC naive → 北京 naive）
+
+- 统一写库时间口径：新增 `timezone.db_now_naive()`（PG=北京、SQLite=UTC，与 `server_default=func.now()` 同口径），18 个模型默认值与 20 处写库调用由 `datetime.utcnow` 改口径；`day_start()` 此前用 UTC 零点切日导致 AI 配额日界在北京时间 08:00 才换日，已修。
+- 迁移 v237 一次性把 19 表 26 列历史 UTC naive 数据平移 +8h（生产实测 161,626 行；`stock_factor_daily` 123,460、`exday_daily` 36,082）。PG-only（SQLite 的 `CURRENT_TIMESTAMP` 本来就是 UTC）。幂等靠 `schema_migrations` 哨兵行 237000——框架的跳过判据是源码 checksum，函数被编辑一次就会重跑成 +16h，不能只靠版本表。
+- 62 个模型的时间戳列收敛到 `CreatedAtMixin/UpdatedAtMixin/AuditMixin`，消除复制粘贴漂移的来源；抽取前后 metadata 97 表 1180 列零差异。
+- 口径证据（生产只读实测）：`llm_usage.run_id = copilot_runs.run_id` 关联 426 行，`llm_usage.created_at − copilot_runs.created_at` 中位 +8.01h（min 8.00 / max 8.08）。
+- 验证：真 PG16 上 +8h 平移、二次执行不叠加、ORM 新行落北京时间且与 `server_default` 列对齐；定向 743 + 275 项通过；与 origin/main 合并后 metadata 98 表 1186 列逐列比对仅剩 18 个默认值差异。
+- 未做：`auction_snapshots.updated_at`(实测 8.00h)、`chip_daily.updated_at`(3.46h)、`skill_api_keys.last_used_at`、`users.deleted_at`(GDPR 宽限期) 等 UTC 族的第二批未纳入本次迁移；全量 `pytest tests/` 在 62% 处挂死（main 复现一致，属既有问题，定向批次已覆盖改动面）。
+
 ## release: v0.91.11（死源关闭 + TQ 成交额单位）
 
 - **死源默认关闭**：同花顺实时行情（0 成功/13,300 失败）、智兔分红（4/10,597）、FTShare龙虎榜（0/569）
