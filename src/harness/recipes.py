@@ -106,14 +106,30 @@ def load_recipes() -> dict[str, Recipe]:
     out: dict[str, Recipe] = {}
     if not RECIPE_DIR.exists():
         return out
+    
+    # 技能锁校验：加载时校验 recipe.skills ⊂ lock，缺失即 raise（异常信息带配方 id 与缺失技能名）
+    from src.harness.skills import verify_lock
+    import json
+    lock_data = {}
+    try:
+        from src.harness.skills import _LOCK_PATH
+        if _LOCK_PATH.exists():
+            lock_data = json.loads(_LOCK_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
     for p in sorted(RECIPE_DIR.glob("*.yaml")):
         try:
             r = _parse(p)
         except Exception as exc:
-            # ⚠️ 静默 continue 会把"YAML 写错"变成"配方凭空消失",
-            #    排障时完全看不出哪份文件坏了。留一行日志。
             logger.warning("配方解析失败, 已跳过: %s (%s)", p.name, exc)
             continue
+            
+        # 校验 skills 是否在 lock 中存在
+        for sk in r.skills:
+            if lock_data and sk not in lock_data:
+                raise ValueError(f"配方 '{r.id}' 引用了不存在或未锁定的技能 '{sk}' (skills.lock.json 中缺失)")
+                
         out[r.id] = r
     return out
 

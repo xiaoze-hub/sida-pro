@@ -6420,6 +6420,82 @@ CREATE TABLE IF NOT EXISTS captcha_challenges (
     ))
 
 
+def _m240_copilot_run_ledger(conn: Connection) -> None:
+    """波次记账三列（2026-11-03，借 qovest 的 wave ledger 契约）。
+
+    为什么要有这三列：委派链路现在能回答「谁跑了、成没成」（parent_run_id + status），
+    但回答不了「**为什么派它**」和「**它产出了什么**」。用户问「这条结论谁说的」时
+    只能靠 recipe 猜 —— 而 dispatching 的理由本来就在 `harness/routing.py` 的
+    `Route.reason` 里算出来了（`persona:xxx` / `recipe:xxx` / `mention`），只是没落库。
+
+    `fact_pack_id` 指向本轮冻结的共享事实包（见 `src/core/fact_pack.py`）：
+    同一父 run 下的子 run 必须引用同一个 pack，否则两个子结论可能落在不同分钟、
+    甚至不同口径上，而父 run 汇总时没有任何机制能发现这件事。
+
+    旧行留 NULL 不回填：历史运行没有可还原的派发理由，按「未知」处理才是诚实的。
+    """
+    _add_column_if_missing(
+        conn, "copilot_runs", "dispatch_reason",
+        "ALTER TABLE copilot_runs ADD COLUMN dispatch_reason VARCHAR(32)",
+    )
+    _add_column_if_missing(
+        conn, "copilot_runs", "artifact_ref",
+        "ALTER TABLE copilot_runs ADD COLUMN artifact_ref VARCHAR(96)",
+    )
+    _add_column_if_missing(
+        conn, "copilot_runs", "fact_pack_id",
+        "ALTER TABLE copilot_runs ADD COLUMN fact_pack_id VARCHAR(64)",
+    )
+
+
+def _m241_copilot_schedule_windows(conn: Connection) -> None:
+    """定时任务四档语义 + 运行记录（2026-11-03，借 qovest 的 WatchTask 契约）。
+
+    qovest 把调度拆成 premarket / intraday / postmarket / custom 四档，并强制按
+    交易所交易时段执行。SIDA 原来只有「到 HH:MM 跑一次」，用户想要「盘中每 20 分钟
+    盯一次」得建 12 条任务 —— 而每条都带 `last_run_date` 单日去重，实际只会跑一条。
+
+    两个新列：
+    - `window_kind`：四档语义；旧行按 `custom`（= 原有行为，不改变任何存量任务）
+    - `interval_min`：仅在 intraday 窗口内生效的循环间隔；NULL = 只跑一次
+
+    新表 `copilot_schedule_runs`：每次执行 = 一行，带失败原因。
+    没有它，用户只能看到 `last_run_date`，分不清「跑过」与「跑成了」。
+    """
+    _add_column_if_missing(
+        conn, "copilot_schedules", "window_kind",
+        "ALTER TABLE copilot_schedules ADD COLUMN window_kind VARCHAR(16) DEFAULT 'custom'",
+    )
+    _add_column_if_missing(
+        conn, "copilot_schedules", "interval_min",
+        "ALTER TABLE copilot_schedules ADD COLUMN interval_min INTEGER",
+    )
+    if not _has_table(conn, "copilot_schedule_runs"):
+        id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS copilot_schedule_runs (
+    id {id_col},
+    schedule_id INTEGER NOT NULL,
+    user_id VARCHAR(36),
+    run_id VARCHAR(64),
+    status VARCHAR(16) NOT NULL,
+    error VARCHAR(255),
+    trigger_at VARCHAR(5),
+    created_at TIMESTAMP,
+    finished_at TIMESTAMP
+)
+"""
+            )
+        )
+        _create_index_if_missing(
+            conn, "ix_copilot_schedule_runs_sched",
+            "CREATE INDEX IF NOT EXISTS ix_copilot_schedule_runs_sched "
+            "ON copilot_schedule_runs (schedule_id, created_at)",
+        )
+
+
 def _m235_chat_message_evidence_audit(conn: Connection) -> None:
     """依据行数字对账结果（JSON 文本）。旧消息不回填：没有取数原文就无法重算，留 NULL。"""
     _add_column_if_missing(
@@ -6869,6 +6945,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(237, "utc_naive_to_app_tz", _m237_utc_naive_to_app_tz),
     Migration(238, "utc_naive_to_app_tz_b2", _m238_utc_naive_to_app_tz_b2),
     Migration(239, "index_flow_daily", _m239_index_flow_daily),
+    Migration(240, "copilot_run_ledger", _m240_copilot_run_ledger),
+    Migration(241, "copilot_schedule_windows", _m241_copilot_schedule_windows),
 )
 
 

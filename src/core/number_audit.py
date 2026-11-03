@@ -198,11 +198,72 @@ def _close(v: float, x: float, dp: int = 2) -> bool:
     return abs(round(b, dp) - a) <= (10 ** -dp) / 2 + 1e-9
 
 
+# ── 结构化未对账项（2026-11-03）──────────────────────────────────────────────
+# `unverified` 只是 token 字符串（evidence_row_audit 按字符串消费，不能换类型），
+# 前端要"逐数字标记"就需要值/类型/上下文三元组，因此另开 `unverified_items`。
+# 只读审核：这里不删改正文，只把"哪个数、什么量纲、原句在哪"交出去。
+_CONTEXT_WIDTH = 40      # 上下文总长上限（含省略号）
+_CONTEXT_PAD = 16        # 前后各取多少字
+_AMOUNT_UNITS = ("元", "万元", "亿元", "万亿元", "亿", "万")
+_VOLUME_UNITS = ("手", "股", "倍")
+
+
+def _kind_of(token: str) -> str:
+    """数字口径分类：price / percent / amount / other。
+
+    顺序要紧：`万元` 也 endswith `元`，`万手` 不能落进金额桶（折成元会造出假的 100 倍关系）。
+    """
+    t = token or ""
+    if t.endswith("%"):
+        return "percent"
+    if t.endswith(_VOLUME_UNITS):  # 万手/亿股/倍 先于金额判定
+        return "other"
+    if t.endswith(_AMOUNT_UNITS):
+        return "amount"
+    # 裸小数无单位：价格是最常见口径（32.80 / 61.93）。只做展示归类，不当量纲断言。
+    return "price" if "." in t else "other"
+
+
+def _snippet(text: str, start: int, end: int) -> str:
+    """取数字附近的一小段原句，总长 ≤ _CONTEXT_WIDTH，两头截断处补省略号。"""
+    left = max(0, start - _CONTEXT_PAD)
+    right = min(len(text), end + _CONTEXT_PAD)
+    body = re.sub(r"\s+", " ", text[left:right]).strip()
+    marks = (1 if left > 0 else 0) + (1 if right < len(text) else 0)
+    body = body[: _CONTEXT_WIDTH - marks]
+    return ("…" if left > 0 else "") + body + ("…" if right < len(text) else "")
+
+
+def _claim_contexts(answer: str) -> dict[str, str]:
+    """token → 原句上下文。在**未清洗**的正文上扫，位置才不会漂。
+
+    清洗（抹代码/日期）会改变偏移量，所以这里不复用 extract_claims 的结果，
+    直接按 token 相等对齐——token 本身就是从同样规则抽出来的。
+    """
+    out: dict[str, str] = {}
+    if not answer:
+        return out
+    for m in _NUM_RE.finditer(answer):
+        num, unit = m.group(1), m.group(2) or ""
+        if "." not in num and not unit:  # 与 extract_claims 同口径
+            continue
+        token = num + unit
+        if token not in out:
+            out[token] = _snippet(answer, m.start(), m.end())
+    return out
+
+
 def audit(answer: str, evidence: str, question: str = "") -> dict:
-    """返回 {checked, unverified, ratio, severe}。"""
+    """返回 {checked, unverified, unverified_items, magnitude, ratio, severe}。
+
+    `unverified`    : list[str]，未对上出处的 token（**老契约，消费方按字符串用**）
+    `unverified_items`: list[{value, kind, context}]，与 `unverified` 一一对应且同序，
+                        供前端逐数字标记（kind: price/percent/amount/other）
+    """
     claims = extract_claims(answer or "")
     if not claims:
-        return {"checked": 0, "unverified": [], "ratio": 0.0, "severe": False}
+        return {"checked": 0, "unverified": [], "unverified_items": [],
+                "magnitude": [], "ratio": 0.0, "severe": False}
     known, pool, pool_pairs = _evidence_pool(evidence or "")
     pool_all = pool
     q_vals = {v for v in (_norm(t) for t in extract_claims(question or "")) if v is not None}
@@ -295,9 +356,16 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
                 continue
         unverified.append(token)
     ratio = len(unverified) / checked if checked else 0.0
+    # 结构化明细与 unverified 同序：一条 token 一条 item，已对上的数字不在其中。
+    contexts = _claim_contexts(answer or "")
+    unverified_items = [
+        {"value": token, "kind": _kind_of(token), "context": contexts.get(token, "")}
+        for token in unverified
+    ]
     return {
         "checked": checked,
         "unverified": unverified,
+        "unverified_items": unverified_items,
         "magnitude": magnitude,
         "ratio": round(ratio, 3),
         # 小样本别急着下"未通过"结论：2 个数里错 1 个只是可疑，5 个数里错 3 个才是严重

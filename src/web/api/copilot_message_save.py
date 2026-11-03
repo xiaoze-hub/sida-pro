@@ -30,17 +30,27 @@ def _fingerprint(text: str) -> str:
 
 def _stage(text: str, audit_result: dict) -> None:
     try:
+        # 两条证据线互不依赖：
+        # ① 行级：回答里有【依据】段才谈得上「哪一句的依据对不上」；
+        # ② 整段级：`number_audit.unverified_items` 与段落结构无关 —— 管线配方的
+        #    输出是【结论】【前期走势】…，根本没有【依据】段，若在这里早退，
+        #    最常见的「编了个数字」反而永远到不了前端（2026-11-03 复核）。
         section = evidence_section(text or "")
         if section is None:
-            _PENDING.set(None)
-            return
-        rows, truncated = rows_from_audit(audit_result or {}, section)
-        if not rows:
+            rows, truncated = [], False
+        else:
+            rows, truncated = rows_from_audit(audit_result or {}, section)
+        unverified = [
+            dict(x) for x in ((audit_result or {}).get("unverified_items") or [])
+            if isinstance(x, dict)
+        ]
+        if not rows and not unverified:
             _PENDING.set(None)
             return
         _PENDING.set({
             "basis": "number_containment",
             "rows": rows,
+            "unverified": unverified,
             "checked": len({c for r in rows for c in r["claims"]}),
             "unverified_total": sum(len(r["unverified"]) for r in rows),
             "truncated": truncated,
@@ -79,7 +89,13 @@ def take(content: str | None = None) -> str | None:
     """
     value = _PENDING.get()
     _PENDING.set(None)
-    if not value or not any(r.get("unverified") for r in (value.get("rows") or [])):
+    if not value:
+        return None
+    # 两路都要留：行级依据对不上（rows[].unverified）或整段级数字对不上（unverified）。
+    # 只判前者会让「数字编造但没有依据行」这种最常见的幻觉被整包丢掉。
+    has_row_issue = any(r.get("unverified") for r in (value.get("rows") or []))
+    has_number_issue = bool(value.get("unverified"))
+    if not (has_row_issue or has_number_issue):
         return None
     if content is not None and value.get("source_sha256") != _fingerprint(content):
         logger.debug("对账对应的正文与落库正文不一致，丢弃对账结果")

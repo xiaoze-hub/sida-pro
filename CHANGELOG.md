@@ -1,3 +1,5 @@
+## release: v0.97.0（数智参谋借 qovest 五项：证据对象/事实包/审核阻断/技能锁/调度四档）
+
 ## release: v0.96.0（盘面指数总览：宽基涨跌幅 + 四档资金 + 涨跌家数）
 
 - **新增数据底座**：`src/core/index_flow.py` 用 TQ 指数四档资金（`get_exday_data` 对指数返回成分股聚合的 4×4 矩阵）+ `get_pricevol` 涨跌幅 + 指数快照（涨跌家数/内外盘/成交额），三条恒等式校验后落库；口径 `tdx_index_agg`。
@@ -8,6 +10,28 @@
 - 验证：后端 `tests/test_index_flow.py` **30 passed**；前端 `tsc/ESLint/check_ui_rules` 通过，页面测试 **5 passed**；PR #48 全部门禁（含 OpenCodeReview）绿。
 
 ## 2026-11-03
+
+### feat-数智参谋借 qovest 四项（证据对象 / 共享事实包 / 技能锁 / 调度四档）
+
+- **结构化证据（F2）**：新增 `src/core/evidence_pack.py`，从管线 runs 产出 `{evidence_id, tool, source, as_of, caliber, status, digest, run_id}`；`done` 载荷在有证据时带 `evidence[]`。`evidence_id = {run_id}:{seq}` 与工具调用顺序同源。只在管线真出结论时发（管线失败会回落 tool loop，那时这些证据没被引用）。
+- **共享事实包（F1）**：新增 `src/core/fact_pack.py`（`pack_id` = 规范化 JSON 的 sha1 前 16 位，同一 `now` 幂等）；`/copilot/parallel` 只建**一份**，父与全部子 run 共用同一 `fact_pack_id`；`aggregate()` 返回 `all_same_as_of`。
+- **⚠️ 修掉一条自己造出来的空转**：`delegate` 用 `if "fact_pack" in inspect.signature(...).parameters` 防御式透传，而 `run_copilot_question` 当时并不接收这个参数 —— 包造出来了、`fact_pack_id` 也落库了，**提示词里一个字都没有**。已补 `run_copilot_question(fact_pack=)` + `fact_pack.CURRENT_PACK` contextvar（同 `EXTERNAL_RUN_ID` 范式），并在 `chat.py` 管线分支读取注入。钉子：`tests/test_fact_pack.py::test_run_copilot_question_accepts_fact_pack`。
+- **技能锁（F4b）**：`src/harness/skills.lock.json` 记 6 篇 skill 的 sha1/字数（现算，不手写）；`recipes.py` 加载时校验 `recipe.skills ⊂ lock`，缺失即 raise（此前写错技能名 = 静默不注入）；`scripts/check_skills_lock.py`（`--check` / `--write`）做门禁。
+- **调度四档（F5）**：`premarket` / `intraday`（盘中按 `interval_min` 循环，默认 20、最小 5）/ `postmarket` / `custom`；`custom` 保持存量行为一字不改；午休 11:30–13:00 与非交易日不触发、跳窗**不补跑**；每次执行落 `copilot_schedule_runs`（失败也留行，带 error）。
+- **审核阻断（F3）**：`number_audit.audit()` 新增 `unverified_items[]`（`{value, kind, context}`），供前端逐数字弱化标记；`unverified` / `annotate()` 一字不改（有测试用改前真实输出逐字符比对钉住）。**没有**引入第二个 LLM 审核员。
+- **前端（D2）**：回答卡底部新增「证据」区（`tool · as_of · status`，`missing` 降级显示「未取到」，空数组整区不渲染）；未对账数字弱化且不可复制；「多维依据透视」正名为「证据分组（单模型文本归类）」，testid 不变。
+- **⚠️ 又修掉两处会空转的早退**（同一形态第二次出现，都实测过）：
+  ① `take()` 原来只认「行级 rows[].unverified」，整段级数字问题会被整包丢掉；
+  ② `_stage()` 原来在没有【依据】段时直接 return —— 而管线配方输出的是【结论】【前期走势】…，根本没有【依据】段。
+  合起来的后果：最常见的「模型编了个数字」永远到不了前端，UI 永远安静。已改双路并行判定，钉在 `tests/test_evidence_audit_unverified_bridge.py`（5 项）。
+- 验证：合并后后端跨支组合冒烟 **143 passed**（15 文件）；前端 `tsc --noEmit` 0 错、`ui:check` 通过、`vitest src/components/copilot` **237 passed / 21 files**；`check_migrations` / `check_scoped_queries` / `check_is_pg_scope` / `check_skills_lock` / `ruff` 全绿。
+
+### feat-波次记账与调度四档（schema 底座，迁移 v240/v241）
+
+- **v240 `copilot_runs` 三列**：`dispatch_reason` / `artifact_ref` / `fact_pack_id`。委派链路原本只能回答「谁跑了、成没成」，回答不了「为什么派它、产出了什么」——而派发理由 `harness/routing.py::Route.reason` 早就算出来了，只是没落库。旧行留 NULL：历史运行没有可还原的派发理由，回填就是编。
+- **v241 调度四档**：`copilot_schedules` 加 `window_kind`（premarket/intraday/postmarket/custom）与 `interval_min`；新增 `copilot_schedule_runs` 表记每次执行（含失败原因）。`window_kind` 带 `server_default='custom'`，**存量任务语义一字不改**（`custom` = 原来的「到点跑一次」）。
+- 为什么加 `server_default`：只有 Python 侧 default 时，裸 SQL 插入会撞 NOT NULL（探针实际撞到过），DEFAULT 让两条路径同口径。
+- 验证：`tests/test_migration_copilot_ledger.py` **3 passed**（列/表落地、幂等复跑、旧写法默认 `custom`）；隔离 PG 库上另跑一次，ORM 与原生 SQL 两条路径默认值均为 `custom`，迁移第二次执行幂等；`scripts/check_migrations.py` 141 个迁移 v101–v241 连续通过。
 
 ### feat-盘面指数总览（涨跌幅 + 四档资金 + 宽度，盘中实时）
 

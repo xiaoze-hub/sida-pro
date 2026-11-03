@@ -223,6 +223,7 @@ def run_cancel_scope_ok(row: Any, user: Any) -> bool:
 async def run_copilot_question(
     *, user_id: str, conversation_id: int | None, question: str,
     run_id: str | None = None, recipe: str | None = None,
+    fact_pack: dict | None = None,
 ) -> int:
     """真正干活：建/复用会话并发问。返回 conversation_id。
 
@@ -286,9 +287,20 @@ async def run_copilot_question(
         # 不复用就会变成"一次执行两条轨迹"（一条空壳 + 一条真轨迹），
         # 指标全部重复计数（2026-10-25 生产实测）。
         token = EXTERNAL_RUN_ID.set(run_id) if run_id else None
+        # 委派场景：父 run 冻结的那份快照要真的进到提示词里，否则包造出来等于没造
+        # （2026-11-03 复核：delegate 里 `if "fact_pack" in sig.parameters` 曾因这里不接收而静默丢弃）
+        _pack_token = None
+        if fact_pack:
+            from src.core.fact_pack import CURRENT_PACK
+
+            _pack_token = CURRENT_PACK.set(fact_pack)
         try:
             await chat_api.send_message(conversation_id=cid, body=body, user=user)
         finally:
+            if _pack_token is not None:
+                from src.core.fact_pack import CURRENT_PACK
+
+                CURRENT_PACK.reset(_pack_token)
             if token is not None:
                 EXTERNAL_RUN_ID.reset(token)
         return cid

@@ -35,6 +35,7 @@ import {
 import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
+import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
 import { publicAssistantContent } from '@/lib/copilot/public-content'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
@@ -135,6 +136,64 @@ export type Msg = {
    * 正文可能只是半截，气泡上必须带可见标记 —— 不许把半截当成品。
    */
   incomplete?: boolean
+  /**
+   * 结构化证据（2026-11-03）：后端 `done.evidence` / 历史消息 `evidence` 原样，
+   * 只有管线跑成时才有。取不到 = `undefined`（**不是**空数组占位，也不补「全部取到」）。
+   */
+  evidence?: EvidenceItem[]
+  /** 数字对账里没过的那几个（后端 `evidence_audit.unverified`）；取不到 = `undefined`。 */
+  unverified?: UnverifiedNumber[]
+}
+
+/**
+ * 结构化证据解析（2026-11-03）：只认后端契约（`src/core/evidence_pack.py`）的字段名。
+ * 认不出的条目**丢掉**，不补占位、不把未知状态猜成 ok —— `status` 只可能是 ok|missing。
+ * 一条都不剩 → `undefined`（调用方据此不渲染证据区，而不是渲染「0 条」）。
+ */
+export function pickEvidence(raw: unknown): EvidenceItem[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: EvidenceItem[] = []
+  for (const it of raw) {
+    if (!it || typeof it !== 'object') continue
+    const r = it as Record<string, unknown>
+    const tool = typeof r.tool === 'string' ? r.tool.trim() : ''
+    const status = r.status === 'missing' ? 'missing' : r.status === 'ok' ? 'ok' : null
+    if (!tool || !status) continue
+    out.push({
+      evidence_id: typeof r.evidence_id === 'string' ? r.evidence_id : '',
+      tool,
+      source: typeof r.source === 'string' ? r.source : '',
+      as_of: typeof r.as_of === 'string' && r.as_of ? r.as_of : null,
+      caliber: typeof r.caliber === 'string' ? r.caliber : '',
+      status,
+      digest: typeof r.digest === 'string' ? r.digest : '',
+      run_id: typeof r.run_id === 'string' ? r.run_id : '',
+    })
+  }
+  return out.length ? out : undefined
+}
+
+/**
+ * `evidence_audit.unverified` 只取**结构化**条目（`{value,kind,context}`）。
+ * 老的「依据行对账」形状是字符串数组（`EvidenceRowAudit.rows[].unverified`），
+ * 归 `EvidenceRowAuditPanel` 管，这里一条都不收 —— 两套口径不能混着标。
+ */
+export function pickUnverified(raw: unknown): UnverifiedNumber[] | undefined {
+  const list = (raw as { unverified?: unknown } | null | undefined)?.unverified
+  if (!Array.isArray(list)) return undefined
+  const out: UnverifiedNumber[] = []
+  for (const it of list) {
+    if (!it || typeof it !== 'object') continue
+    const r = it as Record<string, unknown>
+    const value = typeof r.value === 'string' ? r.value.trim() : ''
+    if (!value) continue
+    out.push({
+      value,
+      kind: typeof r.kind === 'string' ? r.kind : '',
+      context: typeof r.context === 'string' ? r.context : '',
+    })
+  }
+  return out.length ? out : undefined
 }
 
 /**
@@ -156,16 +215,23 @@ export function upsertStreamDraft(msgs: Msg[], content: string): Msg[] {
 export function settleStreamBubble(
   msgs: Msg[], content: string, incomplete = false, runId?: string | null,
   evidenceAudit?: EvidenceRowAudit | null,
+  evidence?: EvidenceItem[] | null,
+  unverified?: UnverifiedNumber[] | null,
 ): Msg[] {
   const last = msgs[msgs.length - 1]
   const text = content || (last?.role === 'assistant' ? last.content : '')
   if (!text) return msgs
   const flag = incomplete ? true : undefined
   const link = runId !== undefined ? { runId, evidenceAudit: evidenceAudit ?? null } : {}
+  /**
+   * 证据字段「显式覆盖」而不是「有才写」：这一轮没给（undefined/空数组）就清成 undefined，
+   * 免得上一轮的气泡证据留在新正文下面冒充本轮取数。
+   */
+  const proof = { evidence: evidence ?? undefined, unverified: unverified ?? undefined }
   if (last?.role === 'assistant') {
-    return [...msgs.slice(0, -1), { ...last, content: text, incomplete: flag, ...link }]
+    return [...msgs.slice(0, -1), { ...last, content: text, incomplete: flag, ...link, ...proof }]
   }
-  return [...msgs, { role: 'assistant', content: text, incomplete: flag, ...link }]
+  return [...msgs, { role: 'assistant', content: text, incomplete: flag, ...link, ...proof }]
 }
 
 /** 提问归一化：与 `lib/copilot/match-run.ts` 同口径（空白折叠、去掉发送时带的 @ 前缀）。 */
@@ -755,6 +821,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           role: m.role as 'user' | 'assistant', content: m.content,
           runId: m.role === 'assistant' ? m.run_id : null,
           evidenceAudit: m.role === 'assistant' ? m.evidence_audit ?? null : null,
+          // 历史消息同名可选字段（老消息没有 → undefined，不补空数组当「已取到」）
+          evidence: m.role === 'assistant'
+            ? pickEvidence((m as { evidence?: unknown }).evidence)
+            : undefined,
+          unverified: m.role === 'assistant' ? pickUnverified(m.evidence_audit) : undefined,
         })),
     )
     setError(null)
@@ -1253,6 +1324,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               setMsgs((m) => settleStreamBubble(
                 m, text, false, typeof msg?.run_id === 'string' ? msg.run_id : null,
                 msg?.evidence_audit ?? null,
+                // 结构化证据只在管线跑成时随 done 下发；没有就 undefined（卡片整区不渲染）
+                pickEvidence((msg as { evidence?: unknown } | undefined)?.evidence) ?? null,
+                pickUnverified(msg?.evidence_audit) ?? null,
               ))
             },
             onError: (e) => {
@@ -1920,6 +1994,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                             parsed={parsed}
                             symbol={symbolInMsg}
                             trace={trace ?? undefined}
+                            evidence={m.evidence}
+                            unverified={m.unverified}
                             onFollowUp={(q) => void send(q)}
                             onAnchoredPrice={(a) =>
                               setPriceAnchor({ ...a, symbol: symbolInMsg || undefined })

@@ -1460,7 +1460,35 @@ class CopilotSchedule(Base):
     payload = Column(JSON, default=dict)              # {symbols:[...], limit:10}
     enabled = Column(Boolean, nullable=False, default=True)
     last_run_date = Column(String(8), nullable=True)  # YYYYMMDD, 防同一天重复
+    # 2026-11-03 (借 qovest WatchTask): 四档时段语义。
+    # premarket=盘前一次 / intraday=盘中按 interval_min 循环 / postmarket=盘后一次 / custom=原行为。
+    # `custom` 是旧行的语义（旧任务行为一字不改），不是新增能力。
+    window_kind = Column(String(16), nullable=False, default="custom", server_default="custom")
+    interval_min = Column(Integer, nullable=True)     # 仅 intraday 生效；NULL=只跑一次
     created_at = Column(DateTime, nullable=False, default=db_now_naive)
+
+
+class CopilotScheduleRun(Base):
+    """定时任务的一次执行记录（2026-11-03）。
+
+    为什么单独的运行表：`last_run_date` 只能回答「今天跑过没有」，回答不了
+    「跑成了没有 / 为什么没成」。qovest 的 `/api/watch-tasks/runs` 就是这个位置。
+
+    失败也要留行（status=failed + error），否则用户看到的永远是「跑过」。
+    """
+
+    __tablename__ = "copilot_schedule_runs"
+    __table_args__ = (Index("ix_copilot_schedule_runs_sched", "schedule_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    schedule_id = Column(Integer, nullable=False)
+    user_id = Column(String(36), nullable=True)
+    run_id = Column(String(64), nullable=True)        # 关联 copilot_runs.run_id（有则填）
+    status = Column(String(16), nullable=False)       # ok / failed / skipped
+    error = Column(String(255), nullable=True)
+    trigger_at = Column(String(5), nullable=True)     # 实际触发的 HH:MM
+    created_at = Column(DateTime, nullable=False, default=db_now_naive)
+    finished_at = Column(DateTime, nullable=True)
 
 
 class CopilotQuota(Base):
@@ -2329,6 +2357,16 @@ class CopilotRun(Base):
     # 2026-10-25 (P1-1.1): 委派子 run。父 run 只汇总证据与缺口，子 run 有**独立预算**，
     # `tool_calls` 各算各的 —— 否则一个 delegate 就能把父的预算吃穿。
     parent_run_id = Column(String(36), nullable=True)
+    # 2026-11-03 (借 qovest wave ledger): 波次记账三列。
+    # `dispatch_reason` 直接取 `harness/routing.py::Route.reason`（persona:/recipe:/mention），
+    # 让「为什么派这个配方」可回放，而不是只能从 recipe 字段反猜。
+    # `artifact_ref` = 本 run 产出的可引用物（首个 annotation id / 产物键），空=无产物。
+    # `fact_pack_id` = 本轮冻结的共享事实包 id（src/core/fact_pack.py）；同一父 run 的
+    # 子 run 必须同值，否则口径可能分裂（这正是父 run 汇总时看不见的风险）。
+    # 旧行留 NULL，不回填 —— 历史运行没有可还原的派发理由。
+    dispatch_reason = Column(String(32), nullable=True)
+    artifact_ref = Column(String(96), nullable=True)
+    fact_pack_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False, default=db_now_naive)
     finished_at = Column(DateTime, nullable=True)
 
