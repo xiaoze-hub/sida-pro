@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -84,3 +85,19 @@ def to_payload(refs: list[EvidenceRef]) -> list[dict[str, Any]]:
         }
         for ref in refs
     ]
+
+
+# 本轮回答的证据落点（2026-11-03）。
+#
+# 为什么用 ContextVar 而不是逐层加形参：chat.py 有 2310 行硬护栏（`chat.py 超护栏`
+# 测试会红），而证据要从 pipeline 传回端点，中间那几层对本参数毫无语义。
+# 同 `harness/trace.py::EXTERNAL_RUN_ID` 的既有做法。
+CURRENT_SINK: ContextVar[list | None] = ContextVar("copilot_evidence_sink", default=None)
+
+
+def emit(runs: list[Any], run_id: str, *, as_of: str | None = None) -> None:
+    """把证据写进当前请求的 sink（未设置则是 no-op）。"""
+    sink = CURRENT_SINK.get()
+    if sink is None:
+        return
+    sink.extend(to_payload(build_refs(runs, run_id, as_of=as_of)))

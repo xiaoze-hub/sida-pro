@@ -24,7 +24,8 @@
   ① `take()` 原来只认「行级 rows[].unverified」，整段级数字问题会被整包丢掉；
   ② `_stage()` 原来在没有【依据】段时直接 return —— 而管线配方输出的是【结论】【前期走势】…，根本没有【依据】段。
   合起来的后果：最常见的「模型编了个数字」永远到不了前端，UI 永远安静。已改双路并行判定，钉在 `tests/test_evidence_audit_unverified_bridge.py`（5 项）。
-- 验证：合并后后端跨支组合冒烟 **143 passed**（15 文件）；前端 `tsc --noEmit` 0 错、`ui:check` 通过、`vitest src/components/copilot` **237 passed / 21 files**；`check_migrations` / `check_scoped_queries` / `check_is_pg_scope` / `check_skills_lock` / `ruff` 全绿。
+- **CI 门禁修复**：`chat.py` 触到 2310 行硬护栏（2326 行）→ 证据 sink 改走 ContextVar、事实包读取收成 `current_pack()`、对外形状交给 `attach_evidence()`，落到 **2308 行**；子代理写死的 worktree 路径（`/home/ubuntu/wt/...`）改为按 `__file__` 推仓库根；迁移 pin 239→241。
+- 验证：合并后后端跨支组合冒烟 **238 passed**（19 文件）；前端 `tsc --noEmit` 0 错、`ui:check` 通过、`vitest src/components/copilot` **237 passed / 21 files**；`check_migrations` / `check_scoped_queries` / `check_is_pg_scope` / `check_skills_lock` / `ruff` 全绿。
 
 ### feat-波次记账与调度四档（schema 底座，迁移 v240/v241）
 

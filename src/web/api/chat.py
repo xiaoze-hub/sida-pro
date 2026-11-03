@@ -25,11 +25,14 @@ from src.core.answer_fallbacks import empty_final_notice
 from src.web.api.copilot_message_save import (
     record_with_audit as _row_audit_record, save_assistant_message as _save_assistant,
     to_payload as _msg_payload,
+    attach_evidence as _attach_evidence,
 )
 from src.core.copilot_memory import memory_block
 from src.core.portfolio_scope import paper_position_user_scope_clause, user_scope_positions
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
+from src.core.evidence_pack import CURRENT_SINK as _EV_SINK
+from src.core.fact_pack import current_pack as _current_pack
 from src.core.llm_context import bind_chat
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
@@ -1132,7 +1135,6 @@ async def _run_tool_loop_inner(
     ai_client: AIClient, messages_for_ai: list[dict], db: Session,
     user: User | None = None, *, stream: bool = False,
     runtime: AgentRuntime | None = None,
-    evidence_sink: list | None = None,
 ):
     """带 tool use 的多轮对话(异步生成器, 流式/非流式统一, W3.3 合并)。
 
@@ -1177,18 +1179,11 @@ async def _run_tool_loop_inner(
 
         _trace = runtime.trace if runtime else None
         _pctx = _pipeline_ctx(messages_for_ai, SYSTEM_PROMPT)  # 记忆/持仓/画像/视图，管线不许丢
-        # 委派场景下父 run 冻结的共享事实包（普通对话为 None → 不注入，行为不变）
-        try:
-            from src.core.fact_pack import CURRENT_PACK as _CURRENT_PACK
-
-            _fpack = _CURRENT_PACK.get()
-        except Exception:  # noqa: BLE001 - 事实包是增强，取不到就按旧行为跑
-            _fpack = None
+        _fpack = _current_pack()   # 委派场景下父 run 冻结的共享事实包；普通对话 None
         if stream:
             _hit = False
             async for _k, _v in _pipeline_answer_stream(
                 ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get(),
-                evidence_sink=evidence_sink,
                 fact_pack=_fpack,
             ):
                 _hit = True
@@ -1198,7 +1193,6 @@ async def _run_tool_loop_inner(
         else:
             _ptxt = await _pipeline_answer(
                 ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get(),
-                evidence_sink=evidence_sink,
                 fact_pack=_fpack,
             )
             if _ptxt:
@@ -1323,7 +1317,6 @@ async def _run_tool_loop(
     user: User | None = None, *, stream: bool = False,
     conversation_id: int | None = None, recipe: str | None = None,
     question: str | None = None,
-    evidence_sink: list | None = None,
 ):
     """参谋一轮问答的外壳(Agent 内核 P0, 2026-10-20)。
 
@@ -1340,12 +1333,12 @@ async def _run_tool_loop(
     bind_llm_context(user, trace)   # P3: 把本轮归因写进 contextvar(成本/配额用)
 
     runtime = AgentRuntime(trace=trace)
+    _EV_SINK.set([])   # 证据旁路落点（管线出结论时填；同 context 由端点读回）
     status, error = "ok", None
     answer = ""
     try:
         async for kind, payload in _run_tool_loop_inner(
             ai_client, messages_for_ai, db, user, stream=stream, runtime=runtime,
-            evidence_sink=evidence_sink,
         ):
             if kind == "degraded":
                 # 内部质量事件：只用于把轨迹标成 degraded，不往上层（SSE/响应）透
@@ -2155,15 +2148,12 @@ async def send_message(
         messages_for_ai = await _build_ai_messages(db, conv, user, image_data=body.image_data)
         ai_client = _get_ai_client(db, conv.ai_model_id, user=user)
         ai_response = ""
-        # 结构化证据旁路：管线跑成时由 harness 填进来（generic loop 路径没有，就不发这个键）
-        _evid: list = []
         _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
         bind_chat(user_id=getattr(user, 'id', None))
         try:
             async for _kind, payload in _run_tool_loop(
                 ai_client, messages_for_ai, db, user=user,
                 conversation_id=conv.id, question=body.content,
-                evidence_sink=_evid,
             ):
                 if _kind == "text":
                     ai_response = payload
@@ -2178,10 +2168,7 @@ async def send_message(
         db.commit()
         db.refresh(assistant_msg)
 
-        _payload = _msg_payload(assistant_msg)
-        if _evid:
-            _payload["evidence"] = _evid
-        return _payload
+        return _attach_evidence(_msg_payload(assistant_msg), _EV_SINK.get())
     finally:
         db.close()
 
@@ -2268,14 +2255,12 @@ async def send_message_stream(
             # 多轮 tool use + 真流式(2026-08-23 U1): 边流式出字边执行工具
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
-            _evid: list = []   # 结构化证据旁路（管线跑成时才有值）
             _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
             bind_chat(user_id=getattr(user, 'id', None))
             try:
                 async for kind, payload in _run_tool_loop(
                     ai_client, messages_for_ai, db, user=user, stream=True,
                     conversation_id=conv.id, question=body.content,
-                    evidence_sink=_evid,
                 ):
                     if await request.is_disconnected():
                         logger.info("客户端断开, 中止 LLM 工具循环(停止计费)")
@@ -2300,10 +2285,7 @@ async def send_message_stream(
             db.commit()
             db.refresh(assistant_msg)
 
-            _done_payload = _msg_payload(assistant_msg)
-            if _evid:
-                _done_payload["evidence"] = _evid
-            yield _sse_event("done", _done_payload)
+            yield _sse_event("done", _attach_evidence(_msg_payload(assistant_msg), _EV_SINK.get()))
         except Exception as e:
             logger.error(f"流式对话失败: {e}")
             try:

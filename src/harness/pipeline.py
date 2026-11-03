@@ -527,25 +527,27 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str,
     return system, "\n".join(blocks)
 
 
-def _emit_evidence(runs, trace, fact_pack, sink: list | None) -> None:
-    """把本轮管线证据写入调用方给的 sink（结构化出站载荷）。
+def _emit_evidence(runs, trace, fact_pack, sink: list | None = None) -> None:
+    """把本轮管线证据写到调用方 sink（未给则写当前请求的 ContextVar sink）。
 
     **只在管线真的产出了结论时调用** —— 管线失败会回落多轮 tool loop，
     那时这些证据并没有被用来写答案，提前发出会让人以为它们被引用了。
 
     任何异常都吞掉并记 warning：证据是旁路，不许因为它在 done 上炸掉整轮回答。
     """
-    if sink is None:
-        return
     try:
-        from src.core.evidence_pack import build_refs, to_payload
+        from src.core import evidence_pack
 
         run_id = (getattr(trace, "run_id", None) or "adhoc") if trace is not None else "adhoc"
         as_of = ""
         if isinstance(fact_pack, dict):
             as_of = str(fact_pack.get("as_of") or "")
         # sink 直接放**可序列化 dict**：它会原样进 SSE done 载荷，dataclass 会在 json.dumps 炸掉
-        sink.extend(to_payload(build_refs(runs, run_id, as_of=as_of or None)))
+        if sink is not None:
+            sink.extend(evidence_pack.to_payload(
+                evidence_pack.build_refs(runs, run_id, as_of=as_of or None)))
+        else:
+            evidence_pack.emit(runs, run_id, as_of=as_of or None)
     except Exception as exc:  # noqa: BLE001 - 证据是旁路，不许影响回答
         logger.warning("证据对象构建失败（不影响回答）：%s", type(exc).__name__)
 

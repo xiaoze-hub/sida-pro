@@ -72,3 +72,47 @@ def test_take_clears_pending():
     record_with_audit(PIPELINE_ANSWER, _audit_with_unverified())
     assert take(PIPELINE_ANSWER) is not None
     assert take(PIPELINE_ANSWER) is None
+
+
+def test_emit_uses_context_sink_when_no_explicit_sink():
+    """没显式传 sink 时必须落到当前请求的 ContextVar sink（chat.py 就靠这条路）。"""
+    from src.core.evidence_pack import CURRENT_SINK, emit
+    from src.harness.pipeline import PipelineRun
+
+    r = PipelineRun(symbol="000001", outputs=[("tool_a", "data")], ok=1)
+    sink: list = []
+    token = CURRENT_SINK.set(sink)
+    try:
+        emit([r], "run-ctx", as_of="2026-11-03 15:00")
+    finally:
+        CURRENT_SINK.reset(token)
+    assert len(sink) == 1 and sink[0]["evidence_id"] == "run-ctx:1"
+
+
+def test_emit_is_noop_without_sink():
+    """普通对话（没设置 sink）不许炸，也不许往外冒东西。"""
+    from src.core.evidence_pack import CURRENT_SINK, emit
+    from src.harness.pipeline import PipelineRun
+
+    assert CURRENT_SINK.get() is None
+    emit([PipelineRun(symbol="000001", outputs=[("t", "x")], ok=1)], "run-x")  # 不抛 = 通过
+
+
+def test_async_generator_contextvar_is_visible_to_caller():
+    """硬钉一个底层假设：chat.py 在 `_run_tool_loop`(async generator) 里 set 的 sink，
+    端点（调用方）迭代完之后必须能读到。这条一旦不成立，证据永远是空的 —— 
+    而界面看起来完全正常（只是没有证据区），属于最难发现的那种空转。"""
+    import asyncio
+
+    from src.core.evidence_pack import CURRENT_SINK
+
+    async def gen():
+        CURRENT_SINK.set(["filled-by-generator"])
+        yield "x"
+
+    async def caller():
+        async for _ in gen():
+            pass
+        return CURRENT_SINK.get()
+
+    assert asyncio.run(caller()) == ["filled-by-generator"]

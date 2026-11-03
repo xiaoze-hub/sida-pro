@@ -150,3 +150,8 @@ def to_prompt_block(pack: dict[str, Any] | None) -> str:
         lines.append(f"• {', '.join(missing)} (未获取到有效行情或指标，拒绝补0/编造)")
         
     return "\n".join(lines)
+
+
+def current_pack() -> dict | None:
+    """当前请求该注入的事实包；没有（普通对话）返回 None。"""
+    return CURRENT_PACK.get()

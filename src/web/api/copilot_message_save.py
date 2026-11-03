@@ -28,6 +28,16 @@ def _fingerprint(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
 
 
+def attach_evidence(payload: dict, refs: list | None) -> dict:
+    """把结构化证据挂到对外消息载荷上（没有就不加这个键，不补空数组）。
+
+    收在这里的理由与整个模块相同：chat.py 有行数硬护栏，对外形状只在一个地方拼。
+    """
+    if refs:
+        payload["evidence"] = refs
+    return payload
+
+
 def _stage(text: str, audit_result: dict) -> None:
     try:
         # 两条证据线互不依赖：
