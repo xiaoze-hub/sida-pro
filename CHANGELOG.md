@@ -16,8 +16,13 @@
 - **⚠️ 修掉一条自己造出来的空转**：`delegate` 用 `if "fact_pack" in inspect.signature(...).parameters` 防御式透传，而 `run_copilot_question` 当时并不接收这个参数 —— 包造出来了、`fact_pack_id` 也落库了，**提示词里一个字都没有**。已补 `run_copilot_question(fact_pack=)` + `fact_pack.CURRENT_PACK` contextvar（同 `EXTERNAL_RUN_ID` 范式），并在 `chat.py` 管线分支读取注入。钉子：`tests/test_fact_pack.py::test_run_copilot_question_accepts_fact_pack`。
 - **技能锁（F4b）**：`src/harness/skills.lock.json` 记 6 篇 skill 的 sha1/字数（现算，不手写）；`recipes.py` 加载时校验 `recipe.skills ⊂ lock`，缺失即 raise（此前写错技能名 = 静默不注入）；`scripts/check_skills_lock.py`（`--check` / `--write`）做门禁。
 - **调度四档（F5）**：`premarket` / `intraday`（盘中按 `interval_min` 循环，默认 20、最小 5）/ `postmarket` / `custom`；`custom` 保持存量行为一字不改；午休 11:30–13:00 与非交易日不触发、跳窗**不补跑**；每次执行落 `copilot_schedule_runs`（失败也留行，带 error）。
-- 验证：合并后跨支组合冒烟 **109 passed**（12 个文件，含新 5 个 + 既有 7 个回归）；`check_migrations` / `check_scoped_queries` / `check_is_pg_scope` / `check_skills_lock` / `ruff` 全绿。
-- 未做（下一波）：F3 审核阻断（前端标未对账数字）+ 前端证据接线。
+- **审核阻断（F3）**：`number_audit.audit()` 新增 `unverified_items[]`（`{value, kind, context}`），供前端逐数字弱化标记；`unverified` / `annotate()` 一字不改（有测试用改前真实输出逐字符比对钉住）。**没有**引入第二个 LLM 审核员。
+- **前端（D2）**：回答卡底部新增「证据」区（`tool · as_of · status`，`missing` 降级显示「未取到」，空数组整区不渲染）；未对账数字弱化且不可复制；「多维依据透视」正名为「证据分组（单模型文本归类）」，testid 不变。
+- **⚠️ 又修掉两处会空转的早退**（同一形态第二次出现，都实测过）：
+  ① `take()` 原来只认「行级 rows[].unverified」，整段级数字问题会被整包丢掉；
+  ② `_stage()` 原来在没有【依据】段时直接 return —— 而管线配方输出的是【结论】【前期走势】…，根本没有【依据】段。
+  合起来的后果：最常见的「模型编了个数字」永远到不了前端，UI 永远安静。已改双路并行判定，钉在 `tests/test_evidence_audit_unverified_bridge.py`（5 项）。
+- 验证：合并后后端跨支组合冒烟 **143 passed**（15 文件）；前端 `tsc --noEmit` 0 错、`ui:check` 通过、`vitest src/components/copilot` **237 passed / 21 files**；`check_migrations` / `check_scoped_queries` / `check_is_pg_scope` / `check_skills_lock` / `ruff` 全绿。
 
 ### feat-波次记账与调度四档（schema 底座，迁移 v240/v241）
 
