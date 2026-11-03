@@ -12,6 +12,11 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import IndexesPage from '@/pages/Indexes'
 
+// 页面走共享客户端 @sida/api::fetchAPI（自动带 token/401/去重），测试里替身它，
+// 不要去 mock 全局 fetch —— 那样测的是"fetch 能返回什么"，不是页面的取数路径。
+const apiMock = vi.fn()
+vi.mock('@sida/api', () => ({ fetchAPI: (path: string) => apiMock(path) }))
+
 const OVERVIEW = {
   caliber: 'tdx_index_agg',
   stale: false,
@@ -44,13 +49,16 @@ const HISTORY = {
   ],
 }
 
-function mockFetch(payload: unknown) {
-  return vi.fn(async () => ({ ok: true, json: async () => payload })) as unknown as typeof fetch
+function usePayload(payload: unknown) {
+  apiMock.mockReset()
+  apiMock.mockImplementation(async (path: string) =>
+    String(path).includes('history') ? { items: [] } : payload,
+  )
 }
 
 describe('IndexesPage', () => {
   beforeEach(() => {
-    global.fetch = mockFetch(OVERVIEW) as unknown as typeof fetch
+    usePayload(OVERVIEW)
   })
   afterEach(() => cleanup())
 
@@ -62,10 +70,10 @@ describe('IndexesPage', () => {
   })
 
   it('有历史时按日渲染主力净额柱', async () => {
-    global.fetch = vi.fn(async (url: string) => ({
-      ok: true,
-      json: async () => (String(url).includes('history') ? HISTORY : OVERVIEW),
-    })) as unknown as typeof fetch
+    apiMock.mockReset()
+    apiMock.mockImplementation(async (path: string) =>
+      String(path).includes('history') ? HISTORY : OVERVIEW,
+    )
     render(<IndexesPage />)
     await waitFor(() => expect(screen.getByLabelText(/主力净额/)).toBeTruthy())
   })
@@ -78,7 +86,7 @@ describe('IndexesPage', () => {
   })
 
   it('取不到数据时显示 -- 而不是 0', async () => {
-    global.fetch = mockFetch({
+    usePayload({
       caliber: 'tdx_index_agg', stale: true, as_of: null,
       items: [{
         symbol: '000001', name: '上证指数', trade_date: null, close: null, pct_chg: null,
@@ -86,7 +94,7 @@ describe('IndexesPage', () => {
         xl_net: null, lg_net: null, md_net: null, sm_net: null, main_net: null,
         net_all: null, active_buy: null, active_sell: null, quality: null, caliber: null,
       }],
-    }) as unknown as typeof fetch
+    })
     render(<IndexesPage />)
     await waitFor(() => expect(screen.getByText('上证指数')).toBeTruthy())
     expect(screen.getByText(/实时取数失败/)).toBeTruthy()
@@ -94,10 +102,10 @@ describe('IndexesPage', () => {
   })
 
   it('历史为空时给出「从本次上线开始累积」而不是空白图', async () => {
-    global.fetch = vi.fn(async (url: string) => ({
-      ok: true,
-      json: async () => (String(url).includes('history') ? { items: [] } : OVERVIEW),
-    })) as unknown as typeof fetch
+    apiMock.mockReset()
+    apiMock.mockImplementation(async (path: string) =>
+      String(path).includes('history') ? { items: [] } : OVERVIEW,
+    )
     render(<IndexesPage />)
     await waitFor(() => expect(screen.getByText(/开始累积/)).toBeTruthy())
     expect(screen.getAllByText(/20261103/).length).toBeGreaterThan(0)

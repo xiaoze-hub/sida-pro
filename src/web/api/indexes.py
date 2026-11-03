@@ -92,17 +92,16 @@ def overview(
     # 一个缓存键：实时结果与库内兜底都落同一个键，`live=false` 时也能命中实时缓存，
     # 不会出现"读的键从来没写过"的死分支。
     cache_key = "indexes:overview"
-    if not live:
-        cached = biz_cache.get_json(cache_key)
-        if cached is not None:
-            return cached
+    cached = biz_cache.get_json(cache_key)
+    if not live and cached is not None:
+        return cached
 
     payload: dict[str, Any] = {
         "items": [], "missing": [], "complete": False,
         "stale": True, "as_of": None, "caliber": "tdx_index_agg",
     }
     if live:
-        res = biz_cache.get_or_fetch(cache_key, CACHE_TTL_S, _live)
+        res = _live()
         if isinstance(res, dict) and res.get("ok"):
             items = [_normalize({**it, "trade_date": it.get("trade_date")}) for it in res["items"]
                      if it.get("available")]
@@ -136,6 +135,12 @@ def overview(
 
     for it in payload["items"]:
         it["name"] = it.get("name") or index_name(it["symbol"])
+    # 缓存的是构造好的 payload（含 missing/complete），不是 _live 的原始结构 ——
+    # 否则 live=false 会把 {"ok":..., "items":[...]} 当响应体吐出去。
+    if live and payload["items"]:
+        biz_cache.set_json(cache_key, payload, ttl=CACHE_TTL_S)
+    elif not live and cached is not None:
+        return cached
     return payload
 
 

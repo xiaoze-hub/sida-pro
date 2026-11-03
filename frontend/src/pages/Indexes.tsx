@@ -10,7 +10,8 @@
  * 2. `get_exday_data` 只返当日 1 行 → 历史柱子来自日表累积，首日为空是正常的；
  * 3. 取数失败不能展示 0，一律显示 `--` 并标「数据未取到」。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { fetchAPI } from '@sida/api'
 import { usePausedInterval } from '@sida/base-ui'
 import PageHeader from '@/components/PageHeader'
 import { safeFixed, safePercent, toAmount } from '@/lib/format'
@@ -62,11 +63,6 @@ type HistoryPoint = {
 const REFRESH_MS = 15_000
 const HISTORY_DAYS = 60
 
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
 function toneOf(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return 'text-muted-foreground'
   if (v > 0) return 'text-stock-up'
@@ -75,9 +71,8 @@ function toneOf(v: number | null | undefined): string {
 }
 
 function signed(v: number | null | undefined): string {
-  if (v === null || v === undefined) return '--'
-  const s = toAmount(Math.abs(v))
-  return `${v > 0 ? '+' : v < 0 ? '-' : ''}${s}`
+  // toAmount 自己带符号（正数 +、负数 -），外面再拼就是 "++1.2亿"
+  return toAmount(v)
 }
 
 /** 四档资金：横向堆叠条（左为正流入，右为负流出），宽度按最大绝对档位归一。 */
@@ -181,12 +176,16 @@ export default function IndexesPage() {
   const loadOverview = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/indexes/overview', { headers: authHeaders(), credentials: 'include' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as Overview
+      const json = await fetchAPI<Overview>('/indexes/overview', { cacheMode: 'reload' })
       setData(json)
       setError(null)
-      if (json.items.length > 0 && !json.items.some((i) => i.symbol === selected)) {
+      // 只在该标的**彻底不在列表里**（既不在 items 也不在 missing）时才改选中，
+      // 否则单个指数临时取数失败会把用户视野抢走。
+      const known = new Set([
+        ...json.items.map((i) => i.symbol),
+        ...(json.missing ?? []).map((m) => m.symbol),
+      ])
+      if (json.items.length > 0 && !known.has(selected)) {
         setSelected(json.items[0].symbol)
       }
     } catch (e) {
@@ -196,17 +195,18 @@ export default function IndexesPage() {
     }
   }, [selected])
 
+  const historySeq = useRef(0)
   const loadHistory = useCallback(async (symbol: string) => {
+    const seq = ++historySeq.current
     try {
-      const res = await fetch(`/api/indexes/${symbol}/history?days=${HISTORY_DAYS}`, {
-        headers: authHeaders(),
-        credentials: 'include',
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as { items: HistoryPoint[] }
+      const json = await fetchAPI<{ items: HistoryPoint[] }>(
+        `/indexes/${symbol}/history?days=${HISTORY_DAYS}`,
+        { cacheMode: 'reload' },
+      )
+      if (seq !== historySeq.current) return   // 已切到别的标的，丢弃慢响应
       setHistory(json.items ?? [])
     } catch {
-      setHistory([])
+      if (seq === historySeq.current) setHistory([])
     }
   }, [])
 

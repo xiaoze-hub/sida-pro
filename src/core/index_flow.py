@@ -226,6 +226,14 @@ def fetch_one(symbol: str, quote: dict[str, Any] | None = None) -> dict[str, Any
     row = summarize(amo)
     q = quote if quote is not None else quotes([sym]).get(sym, {})
 
+    # 四档恒等式通过 ≠ 整行完整：快照/涨跌幅缺失时 up_home/内外盘/涨跌幅都是 None，
+    # 标 partial 让前端与下游知道"这行只有资金，没有宽度"。
+    issues: list[str] = []
+    if not snap:
+        issues.append("快照缺失(宽度/内外盘未知)")
+    if quote is None and not q:
+        issues.append("涨跌幅缺失")
+
     # 收盘价只认现价：快照 `Average` 是 VWAP（当日均价），
     # 拿它当 close 会把"均价相对昨收"算成涨跌幅 —— 静默错数。
     close = q.get("close")
@@ -260,8 +268,8 @@ def fetch_one(symbol: str, quote: dict[str, Any] | None = None) -> dict[str, Any
             "sm_net": row["sm_net"],
             "main_net": row["main_net"],
             "net_all": row["net_all"],
-            "quality": "ok" if ok else "suspect",
-            "reason": why,
+            "quality": ("ok" if ok else "suspect") if not issues else ("partial" if ok else "suspect"),
+            "reason": "；".join([w for w in [why, *issues] if w]),
         }
     )
     return base
