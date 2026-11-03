@@ -34,6 +34,7 @@ from src.web.api.auth import (
     require_owner,
 )
 from src.web.models import AIModel, AIService, AppSettings, User
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -627,14 +628,15 @@ def admin_registration_stats(
 ):
     """注册统计(仅 owner): 总量/活跃/新增/按角色/最近注册。
 
-    时区: users.created_at 存 naive UTC(server_default=func.now()), 故比较基准必须
-    是 UTC —— 原实现用 `datetime.now()`(本地 CST)导致每天 00:00–08:00 的统计偏 8h。
+    时区: 库里 naive 时间列在 PG 上是**北京 naive**(func.now() 落在会话时区), 所以
+    "今天"的界线必须按北京零点切 —— 原实现按 UTC 零点, 于是每天 00:00–08:00 的
+    新增/活跃统计被算到前一天(2026-11-03 修正; 同类 bug 见 copilot 配额日界)。
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
     from sqlalchemy import func
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = db_now_naive()
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     d7 = now - timedelta(days=7)
     d30 = now - timedelta(days=30)

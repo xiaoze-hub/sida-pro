@@ -32,6 +32,7 @@ from src.core.quote_period import (
     summarize_daily_pnl_period,
 )
 from src.models.market import MarketCode
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1509,7 +1510,7 @@ def portfolio_todos(db: Session = Depends(get_db), user: User = Depends(get_curr
                     }
                 )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = db_now_naive()  # expire_at 是用户选的日期(库里 naive 北京口径)
     soon = now + timedelta(days=3)
     expiring = (
         db.query(PriceAlertRule)

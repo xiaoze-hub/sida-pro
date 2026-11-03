@@ -1,3 +1,12 @@
+## release: v0.93.0（第二批时间列口径：竞价快照 / GDPR 时间 / 两处日界）
+
+- **迁移 v238**：`auction_snapshots.updated_at`（生产 736 行）与 `users.deleted_at`（生产 0 行）一次性 +8h。前者的证据是同表 `created_at`（func.now 北京）与它相差 **median 8.00h**；后者由 `user_data` 写 naive UTC。
+- **写入侧**：`market_archive` 的 `_now_naive_utc` → `_now_db_naive`（同时修掉 `chip_daily.updated_at` 的新写入）；`skills_gateway` 的 `last_used_at` 由 aware UTC 改为显式库口径（原先靠 PG 按会话时区转成北京，属偶然正确）。
+- **两处日界偏 8 小时**：① 用户统计「今日新增/活跃」按 UTC 零点切，导致北京时间 00:00–08:00 的数据被算进前一天；② 价格提醒「今日触发」把本地零点转成 UTC 再比，窗口提前 8 小时。均已改为北京 naive 口径。
+- **纠正上一轮的判断**：`skill_api_keys.last_used_at` 我先前说「用户可见早 8 小时」，生产实测 `median(last_used_at − created_at) = +0.07h`、294 行无一行早于 created_at —— 它其实**已经**是北京口径（aware UTC 被 PG 按会话时区落成北京墙上时间）。本轮只把写入显式化，未改数据。
+- **有意不平移**：`chip_daily.updated_at` 历史值实测混钟（差值分布在 ~0h / 3–5h / 7–9h 三簇），无法整齐平移；该列无跨表比较、仅 `SELECT *` 读出展示，故只改写入侧。`notify_throttle.last_notify_at`、`decision_cache.computed_at`、`summary_cache.computed_at` 属自洽的内部 TTL 缓存（读写两侧同一 helper、不对外展示），不动。
+- 验证：真 PG16 上 v237/v238 平移与哨兵幂等复验通过；定向 381 项 + 46 项通过。
+
 ## release: v0.92.0（时间列口径统一：UTC naive → 北京 naive）
 
 - 统一写库时间口径：新增 `timezone.db_now_naive()`（PG=北京、SQLite=UTC，与 `server_default=func.now()` 同口径），18 个模型默认值与 20 处写库调用由 `datetime.utcnow` 改口径；`day_start()` 此前用 UTC 零点切日导致 AI 配额日界在北京时间 08:00 才换日，已修。

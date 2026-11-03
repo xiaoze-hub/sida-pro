@@ -37,6 +37,7 @@ from src.core.db_safe import safe_rollback
 from src.web.api._scope import allow_cross_user  # C3(2026-09-18): 见各豁免点理由
 from src.web.database import get_db
 from src.web.models import SkillApiKey, SkillUsage
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["skill-gateway"])
@@ -1913,7 +1914,7 @@ async def run_skill(
             channel=ident.channel, user_id=ident.user_id,
         )
         if ident.key_row is not None:
-            ident.key_row.last_used_at = datetime.now(timezone.utc)
+            ident.key_row.last_used_at = db_now_naive()
             db.commit()
         return cached
 
@@ -1941,7 +1942,7 @@ async def run_skill(
         channel=ident.channel, user_id=ident.user_id,
     )
     if ident.key_row is not None:
-        ident.key_row.last_used_at = datetime.now(timezone.utc)
+        ident.key_row.last_used_at = db_now_naive()
         db.commit()
         # Phase 2.3: 突增检测(仅 API Key 路径)
         _detect_spike_and_freeze(db, ident.key_row)

@@ -48,6 +48,7 @@ from src.db.models import (
 )
 from src.web.api.auth import get_current_user, verify_password
 from src.web.database import get_db
+from src.core.timezone import db_now_naive
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["user-data"])
@@ -309,7 +310,7 @@ def request_data_delete(
     if getattr(user, "is_deleted", False):
         raise HTTPException(409, "账号已处于删除申请状态")
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = db_now_naive()  # users.deleted_at 与其它时间列同口径(北京 naive)
     user.is_deleted = True
     user.deleted_at = now
     user.is_active = False
@@ -352,8 +353,7 @@ def data_delete_status(
     purge_after = None
     days_left = None
     if deleted_at is not None:
-        # deleted_at 存 naive UTC; 与当前 UTC 比较
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = db_now_naive()
         purge_dt = deleted_at + timedelta(days=DELETE_GRACE_DAYS)
         purge_after = purge_dt.isoformat()
         days_left = max(0, (purge_dt - now).days)
@@ -382,9 +382,7 @@ def purge_expired_deletions(db: Session | None = None) -> dict:
     session = db or _SL()
     purged = 0
     try:
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-            days=DELETE_GRACE_DAYS
-        )
+        cutoff = db_now_naive() - timedelta(days=DELETE_GRACE_DAYS)
         expired = (
             session.query(User)
             .filter(User.is_deleted.is_(True), User.deleted_at.isnot(None), User.deleted_at <= cutoff)

@@ -6520,6 +6520,76 @@ ON CONFLICT(version) DO NOTHING
     )
 
 
+# v238 第二批平移: 仍是 UTC naive 的时间列(已逐个用生产数据验明)
+_UTC_NAIVE_COLUMNS_B2: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # auction_snapshots.created_at 是 func.now()(北京), updated_at 由 market_archive 写
+    # naive UTC → 同一行两列差 8 小时(生产实测 median(created_at-updated_at)=8.00h, n=736)
+    ("auction_snapshots", ("updated_at",)),
+    # users.deleted_at 由 user_data 写 naive UTC(GDPR 宽限期比较也是 UTC); 生产当前
+    # 0 行(没有软删除账号), 这里平移是为其它部署补正确
+    ("users", ("deleted_at",)),
+)
+
+_TZ_SHIFT2_SENTINEL_VERSION = 238000
+
+
+def _m238_utc_naive_to_app_tz_b2(conn: Connection) -> None:
+    """第二批: 剩下确证为 UTC naive 的列一次性平移 +8h(2026-11-03)。
+
+    与 v237 同一套理由与幂等手法(哨兵行而不是 checksum), 区别是范围小得多 ——
+    这一批只收「代码写 UTC + 生产数据证明确实 UTC」的列:
+
+    - ``auction_snapshots.updated_at``: 同表 created_at 是北京, 实测差 8.00h。
+      注意 ``chip_daily.updated_at`` 由同一个 helper 写, 但它的历史值实测**混钟**
+      (差值分布在 ~0h/3-5h/7-9h 三簇), 无法整齐平移, 只改写入侧(见 market_archive),
+      历史值保留原样 —— 该列没有跨表比较, 只被 ``SELECT *`` 读出来展示, 不影响判定。
+
+    - ``users.deleted_at``: user_data 写 naive UTC, 宽限期比较也用 UTC; 生产当前 0 行。
+
+    明确**不**平移的(自洽的内部 TTL 缓存, 两侧用同一 helper, 也不对外展示):
+    ``notify_throttle.last_notify_at`` / ``decision_cache.computed_at`` /
+    ``summary_cache.computed_at``。改它们只会制造一次无收益的数据变更。
+
+    幂等: ``_TZ_SHIFT2_SENTINEL_VERSION`` 哨兵行, 已存在整条跳过。
+    """
+    if not _dialect_is_pg(conn):
+        return
+    sentinel = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = :v LIMIT 1"),
+        {"v": _TZ_SHIFT2_SENTINEL_VERSION},
+    ).first()
+    if sentinel:
+        return
+
+    shifted: dict[str, int] = {}
+    for table, columns in _UTC_NAIVE_COLUMNS_B2:
+        if not _has_table(conn, table):
+            continue
+        for column in columns:
+            if not _has_column(conn, table, column):
+                continue
+            res = conn.execute(
+                text(
+                    f'UPDATE "{table}" SET "{column}" = "{column}" + INTERVAL \'8 hours\' '
+                    f'WHERE "{column}" IS NOT NULL'
+                )
+            )
+            if res.rowcount:
+                shifted[f"{table}.{column}"] = int(res.rowcount)
+    logger.info("[v238] 时间列平移 +8h: %s 列, %s 行", len(shifted), sum(shifted.values()))
+
+    conn.execute(
+        text(
+            """
+INSERT INTO schema_migrations(version, name, checksum, success, error)
+VALUES(:v, 'utc_naive_to_app_tz_b2_applied', '', 1, '')
+ON CONFLICT(version) DO NOTHING
+"""
+        ),
+        {"v": _TZ_SHIFT2_SENTINEL_VERSION},
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6752,6 +6822,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(235, "chat_message_evidence_audit", _m235_chat_message_evidence_audit),
     Migration(236, "captcha_challenges", _m236_captcha_challenges),
     Migration(237, "utc_naive_to_app_tz", _m237_utc_naive_to_app_tz),
+    Migration(238, "utc_naive_to_app_tz_b2", _m238_utc_naive_to_app_tz_b2),
 )
 
 

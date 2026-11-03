@@ -28,7 +28,11 @@ from sqlalchemy import create_engine, text
 
 from src.core.timezone import beijing_now_naive, db_now_naive
 from src.db.models import Base
-from src.web.migrations import _ensure_schema_table, _m237_utc_naive_to_app_tz
+from src.web.migrations import (
+    _ensure_schema_table,
+    _m237_utc_naive_to_app_tz,
+    _m238_utc_naive_to_app_tz_b2,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -187,3 +191,66 @@ def test_v237在PG上平移8小时且只平移一次():
         assert str(again[0]) == "2026-11-02 10:00:00", f"重跑不该再平移，实得 {again[0]}"
 
     engine.dispose()
+
+
+# ── 第二批(v238): 只收「代码写 UTC + 生产数据证明 UTC」的列 ──────────────
+
+
+@pytest.mark.skipif(
+    not os.environ.get("SIDA_TEST_PG_URL"),
+    reason="需要真 PG（SIDA_TEST_PG_URL）才能验证 +8h 平移与哨兵",
+)
+def test_v238第二批平移8小时且只平移一次():
+    url = os.environ["SIDA_TEST_PG_URL"]
+    engine = create_engine(url)
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        _ensure_schema_table(conn)
+        # auction_snapshots 是迁移建的表（不在 ORM 里），测试补最小结构
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS auction_snapshots ("
+                "trade_date DATE, symbol VARCHAR(16), market VARCHAR(8), "
+                "created_at TIMESTAMP, updated_at TIMESTAMP)"
+            )
+        )
+        conn.execute(text("DELETE FROM schema_migrations WHERE version = 238000"))
+        conn.execute(text("DELETE FROM auction_snapshots"))
+        conn.execute(text("DELETE FROM users"))
+        # 同一行: created_at 北京 09:26 / updated_at 被写成 UTC 01:26
+        conn.execute(
+            text(
+                "INSERT INTO auction_snapshots VALUES (CURRENT_DATE, '600000', 'CN', "
+                "TIMESTAMP '2026-11-02 09:26:49', TIMESTAMP '2026-11-02 01:26:49')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO users (id, username, password_hash, role, is_active, token_version, "
+                "is_deleted, deleted_at) VALUES ('u-del', 'u-del', 'x', 'member', false, 1, true, "
+                "TIMESTAMP '2026-11-02 01:00:00')"
+            )
+        )
+
+        _m238_utc_naive_to_app_tz_b2(conn)
+        row = conn.execute(
+            text("SELECT created_at, updated_at FROM auction_snapshots")
+        ).first()
+        assert str(row[0]) == "2026-11-02 09:26:49"
+        assert str(row[1]) == "2026-11-02 09:26:49", f"updated_at 应 +8h 与 created_at 对齐，实得 {row[1]}"
+        dl = conn.execute(text("SELECT deleted_at FROM users WHERE id='u-del'")).scalar()
+        assert str(dl) == "2026-11-02 09:00:00", f"deleted_at 应 +8h，实得 {dl}"
+
+        # 再跑一次：哨兵拦住，不能 +16h
+        _m238_utc_naive_to_app_tz_b2(conn)
+        again = conn.execute(text("SELECT updated_at FROM auction_snapshots")).scalar()
+        assert str(again) == "2026-11-02 09:26:49", f"重跑不该再平移，实得 {again}"
+    engine.dispose()
+
+
+def test_v238在sqlite上是noop():
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE t_dummy (id INTEGER)"))
+        _m238_utc_naive_to_app_tz_b2(conn)
+    assert True
