@@ -9,6 +9,13 @@
 
 ## 2026-11-03
 
+### feat-波次记账与调度四档（schema 底座，迁移 v240/v241）
+
+- **v240 `copilot_runs` 三列**：`dispatch_reason` / `artifact_ref` / `fact_pack_id`。委派链路原本只能回答「谁跑了、成没成」，回答不了「为什么派它、产出了什么」——而派发理由 `harness/routing.py::Route.reason` 早就算出来了，只是没落库。旧行留 NULL：历史运行没有可还原的派发理由，回填就是编。
+- **v241 调度四档**：`copilot_schedules` 加 `window_kind`（premarket/intraday/postmarket/custom）与 `interval_min`；新增 `copilot_schedule_runs` 表记每次执行（含失败原因）。`window_kind` 带 `server_default='custom'`，**存量任务语义一字不改**（`custom` = 原来的「到点跑一次」）。
+- 为什么加 `server_default`：只有 Python 侧 default 时，裸 SQL 插入会撞 NOT NULL（探针实际撞到过），DEFAULT 让两条路径同口径。
+- 验证：`tests/test_migration_copilot_ledger.py` **3 passed**（列/表落地、幂等复跑、旧写法默认 `custom`）；隔离 PG 库上另跑一次，ORM 与原生 SQL 两条路径默认值均为 `custom`，迁移第二次执行幂等；`scripts/check_migrations.py` 141 个迁移 v101–v241 连续通过。
+
 ### feat-盘面指数总览（涨跌幅 + 四档资金 + 宽度，盘中实时）
 
 - **数据基础**：`get_exday_data` 对**指数**返回的是成分股聚合的 4×4 四档资金（行=特大/大/中/小，列=[买入,卖出,主动买,主动卖]），实测 8 个宽基指数全部可用，三条恒等式都成立（买卖两侧相等、主动买+主动卖=成交额、Σ(主动买−主动卖)=全单净额）。口径记为 `tdx_index_agg`，与东财 `eastmoney4`、腾讯 `tick` **不可换算**，只能同向比较。
