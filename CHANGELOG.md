@@ -1,3 +1,12 @@
+## release: v0.96.0（盘面指数总览：宽基涨跌幅 + 四档资金 + 涨跌家数）
+
+- **新增数据底座**：`src/core/index_flow.py` 用 TQ 指数四档资金（`get_exday_data` 对指数返回成分股聚合的 4×4 矩阵）+ `get_pricevol` 涨跌幅 + 指数快照（涨跌家数/内外盘/成交额），三条恒等式校验后落库；口径 `tdx_index_agg`。
+- **迁移 v239 `index_flow_daily`** + 采集器：盘中每 2 分钟、15:42 收盘定稿，幂等 upsert（唯一索引 `(trade_date, symbol)`）。
+- **接口**：`GET /api/indexes/overview`（缓存优先、实时失败回落库内并标 `stale`、部分缺失返回 `missing[]`/`complete=false`）、`GET /api/indexes/{symbol}/history`。
+- **前端 `/indexes` 盘面指数**：八指数横带（红涨绿跌）+ 四档资金条 + 近 60 日主力净额 + 涨跌家数/内外盘；`usePausedInterval` 保证隐藏页签停表；`fetchAPI` 统一鉴权与去重。
+- **修掉的静默错误**（四轮 review 全部落到代码里）：①`tq_rpc` 已解包 `Value`，再取一次会让三处恒为空、整链路写 0 行；②`Average` 是 VWAP 不能当收盘价；③TQ 无实时数据返回 `Now=0/Volume=0` 是哨兵，不能当价格；④`000300/000852/000016` 被按首位判成 `.SZ` 会静默取空 —— 改走 `INDEX_EXCHANGE`；⑤部分缺失不能报成"全部最新"；⑥`UpHome=0`（小指数全员下跌）不能被吞成 None。
+- 验证：后端 `tests/test_index_flow.py` **30 passed**；前端 `tsc/ESLint/check_ui_rules` 通过，页面测试 **5 passed**；PR #48 全部门禁（含 OpenCodeReview）绿。
+
 ## 2026-11-03
 
 ### feat-盘面指数总览（涨跌幅 + 四档资金 + 宽度，盘中实时）
