@@ -29,6 +29,7 @@ import {
 } from '@/components/copilot/answer-sections'
 import { EvidenceTraceNote } from '@/components/copilot/EvidenceTraceNote'
 import type { AnswerTrace } from '@/lib/copilot/evidence-provenance'
+import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import {
   ANSWER_ACTION_COPIED,
   ANSWER_ACTION_COPY,
@@ -64,6 +65,18 @@ const ANSWER_GAP_NOTE = '以下为回答中声明未取到的数据'
 
 /** 首屏只露 3 条依据：结论 + 关键证据一屏读完，其余折叠（信息量不变，首屏变短）。 */
 const EVIDENCE_PREVIEW = 3
+
+/**
+ * 结构化证据区文案（2026-11-03）。与「依据」区是两件事：
+ *   - 依据 = 模型写进正文的依据行（文本，出处是模型自述）；
+ *   - 证据 = 后端这一轮真的调了哪些工具、什么时点、取没取到（`done.evidence`）。
+ * 标题只说「证据」，不写「核验通过」——`status=ok` 只代表工具有返回，不代表结论对。
+ */
+const ANSWER_PROVENANCE_LABEL = '证据'
+const ANSWER_PROVENANCE_MISSING = '未取到'
+const ANSWER_UNVERIFIED_LABEL = (n: number) => `${n} 个数字未通过对账`
+const ANSWER_UNVERIFIED_NOTE =
+  '标记只说明这些数字没在本轮取数原文里找到，不等于数值算错；回答正文不做删改。'
 
 /** 价格锚点：点 chip 时回传给上层（K 线画线由另一个模块拥有，这里只出事件）。 */
 export interface AnchoredPrice {
@@ -241,6 +254,8 @@ export function AnswerCard({
   onFollowUp,
   onAnchoredPrice,
   trace,
+  evidence,
+  unverified,
 }: {
   parsed: ParsedAnswer
   symbol?: string
@@ -253,6 +268,13 @@ export function AnswerCard({
    * 数据形状见 `lib/copilot/evidence-provenance.ts`。
    */
   trace?: AnswerTrace
+  /**
+   * 结构化证据（2026-11-03，可选）：后端 `done.evidence` 原样传下来，
+   * **不由卡片自己推算**。空数组 / 未传 → 整区不渲染（不写「0 条」，也不补占位）。
+   */
+  evidence?: EvidenceItem[]
+  /** 后端 `done.evidence_audit.unverified` 原样；空 → 不做标记、不提示。 */
+  unverified?: UnverifiedNumber[]
 }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -330,6 +352,10 @@ export function AnswerCard({
   const supportPrice = keyLevels.supportPrice
   const resistancePrice = keyLevels.resistancePrice
   const hasLevels = supportPrice != null && resistancePrice != null
+
+  /** 结构化证据：只按后端给的顺序展示，不排序、不补条数、不去重。 */
+  const evidenceList = evidence ?? []
+  const unverifiedList = unverified ?? []
 
   return (
     <div data-testid="copilot-answer-card" className="space-y-2.5">
@@ -551,6 +577,87 @@ export function AnswerCard({
               {p}
             </span>
           ))}
+        </section>
+      ) : null}
+
+      {/*
+        8.5 证据（2026-11-03）：后端 `done.evidence` 的结构化取数清单 —— 工具 · 时点 · 状态。
+        与上面「依据」是两件事：依据是模型写进正文的字，这里是服务端记录的真实工具调用。
+        空数组整区不渲染（不写「0 条」，也不补一条「全部取到」）。
+      */}
+      {evidenceList.length ? (
+        <section
+          data-testid="copilot-answer-provenance"
+          data-answer-section="true"
+          className="border-t border-border pt-2"
+        >
+          <SectionHead label={ANSWER_PROVENANCE_LABEL} count={`${evidenceList.length} 条`} />
+          <ul data-testid="copilot-evidence-list" className="mt-1 space-y-0.5">
+            {evidenceList.map((ev, i) => {
+              const missing = ev.status === 'missing'
+              return (
+                <li
+                  key={ev.evidence_id || `ev-${i}`}
+                  data-testid="copilot-evidence-item"
+                  data-status={missing ? 'missing' : 'ok'}
+                  title={`${ev.tool} · 来源 ${ev.source || '未标注'} · 口径 ${ev.caliber || '未标注'}${
+                    ev.digest ? `\n${ev.digest}` : ''
+                  }`}
+                  className="flex items-baseline gap-1.5 text-[12px] leading-relaxed"
+                >
+                  <span
+                    className={`mt-[2px] h-1 w-1 shrink-0 rounded-full ${
+                      missing ? 'bg-amber-500' : 'bg-role-watch/70'
+                    }`}
+                  />
+                  <span className="min-w-0">
+                    <span className={missing ? 'text-muted-foreground line-through' : 'text-foreground'}>
+                      {ev.tool}
+                    </span>
+                    <span className="mx-1 text-muted-foreground">·</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {ev.as_of ? ev.as_of : '--'}
+                    </span>
+                    <span className="mx-1 text-muted-foreground">·</span>
+                    <span className={missing ? 'text-amber-500' : 'text-muted-foreground'}>
+                      {missing ? ANSWER_PROVENANCE_MISSING : ev.status}
+                    </span>
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+          {/*
+            未对账数字（弱化标记，不隐藏答案）：`value` 用 `select-none` + 虚线删除线降级，
+            复制正文也带不走它；同时把 kind/context 原样摆在旁边，指明「凭什么是这条」。
+          */}
+          {unverifiedList.length ? (
+            <div
+              data-testid="copilot-evidence-unverified"
+              className="mt-1.5 border-t border-border pt-1.5"
+            >
+              <div className="text-[12px] text-amber-500">
+                {ANSWER_UNVERIFIED_LABEL(unverifiedList.length)}
+              </div>
+              <ul className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5">
+                {unverifiedList.map((u, i) => (
+                  <li key={`${u.value}-${i}`} className="text-[12px] leading-relaxed">
+                    <span
+                      data-testid="copilot-unverified-number"
+                      title={u.context || u.kind || '后端未给上下文'}
+                      className="select-none cursor-default font-mono tabular-nums text-muted-foreground line-through decoration-dotted"
+                    >
+                      {u.value}
+                    </span>
+                    {u.kind ? <span className="ml-1 text-muted-foreground">{u.kind}</span> : null}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">
+                {ANSWER_UNVERIFIED_NOTE}
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
 

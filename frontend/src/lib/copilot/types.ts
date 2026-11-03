@@ -234,3 +234,52 @@ export const EVIDENCE_KEYS = [
 ] as const
 
 export type EvidenceKey = (typeof EVIDENCE_KEYS)[number]
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 结构化证据（2026-11-03）
+ *
+ * 契约源：`src/core/evidence_pack.py::EvidenceRef` / `to_payload`（字段名逐字一致，
+ * 后端产出可序列化 dict），出站位置是 SSE `done.evidence` —— 只有管线跑成时才带这个键，
+ * generic tool loop 没有。这里**不是** `EvidenceBundle`（简报里的 chips/resonance… 读数块）：
+ * 那套是「指标说了什么」，这套是「这一轮用了哪个工具、什么时点、取没取到」。
+ *
+ * 老规矩：拿不到就是 `undefined`/空数组，不补占位、不把缺失写成 ok。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 取数状态：`ok` = 有正文；`missing` = 该工具这一轮没取到（后端显式标注）。 */
+export type EvidenceStatus = 'ok' | 'missing'
+
+/** 一条结构化证据（一次工具调用一条，顺序 = 调用顺序）。 */
+export interface EvidenceItem {
+  /** `{run_id}:{seq}`，后端按工具调用顺序递增 */
+  evidence_id: string
+  tool: string
+  /** 数据源标记；后端当前给默认兜底值，**不是**人工核验过的出处 */
+  source: string
+  /** 时点；后端取不到时是空串 —— 显示 `--`，不补今日 */
+  as_of: string | null
+  /** 口径串，原样显示 */
+  caliber: string
+  status: EvidenceStatus
+  /** 取数正文前 200 字（后端截断），只供人眼核对，前端不据此断言 */
+  digest: string
+  run_id: string
+}
+
+/**
+ * 对账没通过的一个数字（后端 `evidence_audit.unverified` 的结构化条目）。
+ * `kind` / `context` 原样展示：前端不改写，也不自己判定这个数字算错了。
+ */
+export interface UnverifiedNumber {
+  value: string
+  kind: string
+  context: string
+}
+
+/**
+ * 数字对账结果。目前只有 `unverified` 一支；
+ * 缺字段 = 后端还没给/还没实现，前端按「没有可展示项」处理，不当成「全部通过」。
+ */
+export interface EvidenceAudit {
+  unverified?: UnverifiedNumber[]
+}

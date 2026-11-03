@@ -38,7 +38,7 @@ export const MultiDimensionEvidencePanel: React.FC<MultiDimensionEvidenceProps> 
       <div className="flex items-center justify-between">
         <span className="text-[12px] font-semibold text-foreground flex items-center gap-1.5">
           <Layers className="w-3.5 h-3.5 text-role-watch" />
-          多维依据透视 ({perspectives.length} 维度)
+          证据分组（单模型文本归类） ({perspectives.length} 组)
         </span>
         <span className="text-[12px] text-muted-foreground font-mono">维度研判分解</span>
       </div>
