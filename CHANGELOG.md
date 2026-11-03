@@ -5,7 +5,7 @@
 - **过渡期开关** `STRICT_ADMIN_TOKEN`（默认 1 = 严格）：设 0 时允许"owner 的用户 token"临时顶管理员并打 WARNING，只用于存量会话平滑与历史测试。**上线后管理员需重新登录一次** —— 部署前登录的老会话没有 admin cookie。
 - **抓到一个会全站登出的回归并修掉**：用户 token 加 `aud=user` 后，PyJWT 默认 `verify_aud=True`，`jwt.decode` 不带 audience 会直接抛 `InvalidAudienceError` ⇒ 所有新签发 token 一律"登录已过期"。`decode_token` 改为 `options={"verify_aud": False}`；受众隔离靠**密钥分离**，不靠 aud 校验（老 token 无 aud 也不会被误杀）。5 个用例当场复现、修后 28 项转绿。
 - **新增 `tests/test_admin_surface_isolation.py`**（4 项，强制严格模式）：member 打 14 个管理区前缀不得 200；owner 的**用户面** token 打真实管理端点必须 401；`require_admin` 三态（无凭证 401 / 用户 token 401 / admin token 放行）。
-- **Phase 2 代码就位（尚未激活）**：`dialect.migrate_engine()`（读 `DATABASE_URL_MIGRATE`）、`init_db()` 的建表/迁移改走迁移角色、`scripts/provision_db_roles.py`（`sida_app` 只读写无 DDL、`sida_migrator` 继承 owner 权限）。两个 env 都不配时行为与今天**完全一致**，激活只是加环境变量。
+- **Phase 2 已上线（DB 角色拆分）**：生产库拆成两个角色 —— 运行时 `sida_app`（只读写，**无 DDL**，实测 `CREATE TABLE` 报 `permission denied for schema public`）、迁移 `sida_migrator`（继承 owner，负责建表/迁移）。`dialect.migrate_engine()` 读 `DATABASE_URL_MIGRATE`，`init_db()` 的 `create_all`/迁移/墓碑建表全部走迁移角色；`init_db` 每次启动为运行时角色补授新表权限（新表属主是迁移角色，`ALTER DEFAULT PRIVILEGES` 管不到）。连接串只存在本机 `~/.hush/sida_db_roles.env`（600），由部署脚本 base64 烘入并**把容器里的 `SIDA_DB_URL` 改写成运行时角色**（启动门禁要求该变量存在，原 owner 凭据不再留在容器 env）。未配这两个 env 的部署行为不变。
 - 未做（Phase 3）：管理面独立域名/IP 白名单、拆容器、`sida_admin` 角色。
 
 ## release: v0.94.0（skill 结果缓存 3 分钟 + 领 key 按 IP 30 分钟 1 把）
