@@ -72,3 +72,26 @@ def test_recipe_missing_skill_raises():
         finally:
             lock_path.write_text(original_content, encoding="utf-8")
             recipes_mod.load_recipes.cache_clear()
+
+
+def test_run_copilot_question_accepts_fact_pack():
+    """钉子：委派链的每一环都必须认得 fact_pack。
+
+    2026-11-03 实测踩过：`delegate` 里写的是
+    `if "fact_pack" in inspect.signature(...).parameters` 的防御式判断，
+    而 `run_copilot_question` 当时并不接收这个参数 —— 于是包被静默丢弃，
+    包造出来了、也落了 fact_pack_id，但提示词里一个字都没有（空转）。
+    这条测试会在这个形参被删掉时立刻变红。
+    """
+    import inspect
+
+    from src.web.api.copilot_jobs import run_copilot_question
+
+    assert "fact_pack" in inspect.signature(run_copilot_question).parameters
+
+
+def test_current_pack_defaults_to_none():
+    """普通对话（无委派）必须没有事实包 —— 否则每轮都会凭空多出一段注入。"""
+    from src.core.fact_pack import CURRENT_PACK
+
+    assert CURRENT_PACK.get() is None

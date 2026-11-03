@@ -1177,11 +1177,19 @@ async def _run_tool_loop_inner(
 
         _trace = runtime.trace if runtime else None
         _pctx = _pipeline_ctx(messages_for_ai, SYSTEM_PROMPT)  # 记忆/持仓/画像/视图，管线不许丢
+        # 委派场景下父 run 冻结的共享事实包（普通对话为 None → 不注入，行为不变）
+        try:
+            from src.core.fact_pack import CURRENT_PACK as _CURRENT_PACK
+
+            _fpack = _CURRENT_PACK.get()
+        except Exception:  # noqa: BLE001 - 事实包是增强，取不到就按旧行为跑
+            _fpack = None
         if stream:
             _hit = False
             async for _k, _v in _pipeline_answer_stream(
                 ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get(),
                 evidence_sink=evidence_sink,
+                fact_pack=_fpack,
             ):
                 _hit = True
                 yield _k, _v
@@ -1191,6 +1199,7 @@ async def _run_tool_loop_inner(
             _ptxt = await _pipeline_answer(
                 ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get(),
                 evidence_sink=evidence_sink,
+                fact_pack=_fpack,
             )
             if _ptxt:
                 yield "text", _ptxt

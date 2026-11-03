@@ -9,6 +9,16 @@
 
 ## 2026-11-03
 
+### feat-数智参谋借 qovest 四项（证据对象 / 共享事实包 / 技能锁 / 调度四档）
+
+- **结构化证据（F2）**：新增 `src/core/evidence_pack.py`，从管线 runs 产出 `{evidence_id, tool, source, as_of, caliber, status, digest, run_id}`；`done` 载荷在有证据时带 `evidence[]`。`evidence_id = {run_id}:{seq}` 与工具调用顺序同源。只在管线真出结论时发（管线失败会回落 tool loop，那时这些证据没被引用）。
+- **共享事实包（F1）**：新增 `src/core/fact_pack.py`（`pack_id` = 规范化 JSON 的 sha1 前 16 位，同一 `now` 幂等）；`/copilot/parallel` 只建**一份**，父与全部子 run 共用同一 `fact_pack_id`；`aggregate()` 返回 `all_same_as_of`。
+- **⚠️ 修掉一条自己造出来的空转**：`delegate` 用 `if "fact_pack" in inspect.signature(...).parameters` 防御式透传，而 `run_copilot_question` 当时并不接收这个参数 —— 包造出来了、`fact_pack_id` 也落库了，**提示词里一个字都没有**。已补 `run_copilot_question(fact_pack=)` + `fact_pack.CURRENT_PACK` contextvar（同 `EXTERNAL_RUN_ID` 范式），并在 `chat.py` 管线分支读取注入。钉子：`tests/test_fact_pack.py::test_run_copilot_question_accepts_fact_pack`。
+- **技能锁（F4b）**：`src/harness/skills.lock.json` 记 6 篇 skill 的 sha1/字数（现算，不手写）；`recipes.py` 加载时校验 `recipe.skills ⊂ lock`，缺失即 raise（此前写错技能名 = 静默不注入）；`scripts/check_skills_lock.py`（`--check` / `--write`）做门禁。
+- **调度四档（F5）**：`premarket` / `intraday`（盘中按 `interval_min` 循环，默认 20、最小 5）/ `postmarket` / `custom`；`custom` 保持存量行为一字不改；午休 11:30–13:00 与非交易日不触发、跳窗**不补跑**；每次执行落 `copilot_schedule_runs`（失败也留行，带 error）。
+- 验证：合并后跨支组合冒烟 **109 passed**（12 个文件，含新 5 个 + 既有 7 个回归）；`check_migrations` / `check_scoped_queries` / `check_is_pg_scope` / `check_skills_lock` / `ruff` 全绿。
+- 未做（下一波）：F3 审核阻断（前端标未对账数字）+ 前端证据接线。
+
 ### feat-波次记账与调度四档（schema 底座，迁移 v240/v241）
 
 - **v240 `copilot_runs` 三列**：`dispatch_reason` / `artifact_ref` / `fact_pack_id`。委派链路原本只能回答「谁跑了、成没成」，回答不了「为什么派它、产出了什么」——而派发理由 `harness/routing.py::Route.reason` 早就算出来了，只是没落库。旧行留 NULL：历史运行没有可还原的派发理由，回填就是编。

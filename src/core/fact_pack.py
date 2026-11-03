@@ -7,10 +7,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any
 
 from src.core.copilot_brief import build_copilot_brief
+
+# 当前请求应当注入提示词的共享事实包（2026-11-03）。
+#
+# 为什么用 ContextVar 而不是加一长串函数形参：委派执行链是
+# `delegate → copilot_jobs.run_copilot_question → chat.send_message → _run_tool_loop
+# → pipeline.answer*`，中间那几层对本参数毫无语义，逐层加形参只会扩散改动面。
+# 同 `src/harness/trace.py::EXTERNAL_RUN_ID` 的既有做法。
+#
+# **不设 = 不注入**：普通对话（非委派）没有父 run，也就没有冻结快照，
+# 此时行为与改造前完全一致（不会凭空多出一段「事实包」）。
+CURRENT_PACK: ContextVar[dict | None] = ContextVar("copilot_current_fact_pack", default=None)
 
 
 def build_pack(
