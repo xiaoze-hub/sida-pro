@@ -31,8 +31,8 @@ def _db_naive_tz():
     PG(Asia/Shanghai) 的 now() 写入 timestamp without time zone = app 时区(北京) naive。
     据此判断 DB 读出的 naive 时间应按哪个时区解读。
 
-    为什么不直接调 `dialect.declared_backend()`: 那个模块在 import 时缓存 IS_PG,
-    单测/热重载里改环境变量后不会跟着变（会静默给出反向口径）。这里按同一套
+    为什么不直接调 `dialect.declared_backend()`: 那个模块在 import 时就把方言判定
+    结果缓存住了, 单测/热重载里改环境变量后不会跟着变（会静默给出反向口径）。这里按同一套
     环境变量**即时**解析，优先级与 `src/db/dialect.py` 保持一致：
     `DATABASE_URL_WRITE` 优先, 其次 `SIDA_DB_URL`, 都没有 = SQLite。
     （只嗅 SIDA_DB_URL 是不够的: 只配 DATABASE_URL_WRITE 的部署会被误判成 SQLite,

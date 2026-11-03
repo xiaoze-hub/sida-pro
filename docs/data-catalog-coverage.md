@@ -6,15 +6,15 @@
 
 | 指标 | 数值 |
 | --- | --- |
-| API 路由（`src/web/api/*.py` 装饰器） | **541** |
-| 平台表（models ∪ migrations） | **141** |
-| 　其中 `models.py` `__tablename__` | 97 |
+| API 路由（`src/web/api/*.py` 装饰器） | **544** |
+| 平台表（models ∪ migrations） | **142** |
+| 　其中 `models.py` `__tablename__` | 98 |
 | 　仅 `migrations.py` 声明（含 hypertable） | 44 |
 | 目录域总数（`src/harness/data_catalog.yaml`） | **26** |
 | **有实现的域** | **26 / 26 = 100.0%** |
 | source 非空但零命中表的域 | 0 |
-| 域已触达的表 | 44 / 141 = 31.2% |
-| 未被任何域覆盖的表 | 97 |
+| 域已触达的表 | 44 / 142 = 31.0% |
+| 未被任何域覆盖的表 | 98 |
 | 域引用了不存在的表（目录写错） | 0 个域 / 0 处 |
 
 ## ① 域覆盖率：26 / 26（100.0%）
@@ -58,7 +58,7 @@
 
 口径：「已实现」= source 里至少解析出一张**真实存在**的表；source 为空或只写了模块名/路径都算待接。
 
-## ② 未被任何域覆盖的表：97 张
+## ② 未被任何域覆盖的表：98 张
 
 候选域为按表名前缀/关键词的启发式建议，仅作归类参考。
 
@@ -119,48 +119,49 @@
 | 53 | `ai_services` | models | （待归类） | — |
 | 54 | `analysis_history` | models/migrations | （待归类） | — |
 | 55 | `caliber_snapshots` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 56 | `cb_daily_snapshot` | models | （待归类） | — |
-| 57 | `cb_terms` | models | （待归类） | — |
-| 58 | `chat_conversations` | models/migrations | （待归类） | — |
-| 59 | `chat_messages` | models/migrations | （待归类） | — |
-| 60 | `copilot_actions` | models | （待归类） | — |
-| 61 | `copilot_feedback` | models | （待归类） | — |
-| 62 | `copilot_memories` | models | （待归类） | — |
-| 63 | `copilot_quotas` | models | （待归类） | — |
-| 64 | `copilot_runs` | models | （待归类） | — |
-| 65 | `copilot_steps` | models | （待归类） | — |
-| 66 | `decision_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 67 | `decision_log` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 68 | `decision_pioneer_history` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 69 | `entry_candidate_feedback` | models/migrations | （待归类） | — |
-| 70 | `entry_candidate_outcomes` | models/migrations | （待归类） | — |
-| 71 | `entry_candidates` | models/migrations | （待归类） | — |
-| 72 | `exday_daily` | models/migrations | （待归类） | — |
-| 73 | `harness_experiments` | models/migrations | （待归类） | — |
-| 74 | `harness_proposals` | models | （待归类） | — |
-| 75 | `high_value_api_logs` | models/migrations | （待归类） | — |
-| 76 | `manual_query_candidates` | models | （待归类） | — |
-| 77 | `market_phase_daily` | models | （待归类） | — |
-| 78 | `market_replay_daily` | models/migrations | （待归类） | — |
-| 79 | `market_scan_ranks` | models | （待归类） | — |
-| 80 | `market_scan_snapshots` | models/migrations | （待归类） | — |
-| 81 | `price_alert_hits` | models | （待归类） | — |
-| 82 | `price_alert_rules` | models | （待归类） | — |
-| 83 | `resonance_ai_verdicts` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 84 | `resonance_scan` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 85 | `skill_api_keys` | models/migrations | （待归类） | — |
-| 86 | `skill_usage` | models/migrations | （待归类） | — |
-| 87 | `stock_agents` | models | （待归类） | — |
-| 88 | `stock_context_snapshots` | models | （待归类） | — |
-| 89 | `stock_suggestions` | models | （待归类） | — |
-| 90 | `stock_universe_snapshots` | models | （待归类） | — |
-| 91 | `suggestion_feedback` | models/migrations | （待归类） | — |
-| 92 | `summary_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 93 | `tq_formula_signal_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 94 | `trading_halts` | models | （待归类） | — |
-| 95 | `war_report_daily` | models | （待归类） | — |
-| 96 | `webhook_subscriptions` | models/migrations | （待归类） | — |
-| 97 | `workbench_layer_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 56 | `captcha_challenges` | models/migrations | （待归类） | — |
+| 57 | `cb_daily_snapshot` | models | （待归类） | — |
+| 58 | `cb_terms` | models | （待归类） | — |
+| 59 | `chat_conversations` | models/migrations | （待归类） | — |
+| 60 | `chat_messages` | models/migrations | （待归类） | — |
+| 61 | `copilot_actions` | models | （待归类） | — |
+| 62 | `copilot_feedback` | models | （待归类） | — |
+| 63 | `copilot_memories` | models | （待归类） | — |
+| 64 | `copilot_quotas` | models | （待归类） | — |
+| 65 | `copilot_runs` | models | （待归类） | — |
+| 66 | `copilot_steps` | models | （待归类） | — |
+| 67 | `decision_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 68 | `decision_log` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 69 | `decision_pioneer_history` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 70 | `entry_candidate_feedback` | models/migrations | （待归类） | — |
+| 71 | `entry_candidate_outcomes` | models/migrations | （待归类） | — |
+| 72 | `entry_candidates` | models/migrations | （待归类） | — |
+| 73 | `exday_daily` | models/migrations | （待归类） | — |
+| 74 | `harness_experiments` | models/migrations | （待归类） | — |
+| 75 | `harness_proposals` | models | （待归类） | — |
+| 76 | `high_value_api_logs` | models/migrations | （待归类） | — |
+| 77 | `manual_query_candidates` | models | （待归类） | — |
+| 78 | `market_phase_daily` | models | （待归类） | — |
+| 79 | `market_replay_daily` | models/migrations | （待归类） | — |
+| 80 | `market_scan_ranks` | models | （待归类） | — |
+| 81 | `market_scan_snapshots` | models/migrations | （待归类） | — |
+| 82 | `price_alert_hits` | models | （待归类） | — |
+| 83 | `price_alert_rules` | models | （待归类） | — |
+| 84 | `resonance_ai_verdicts` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 85 | `resonance_scan` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 86 | `skill_api_keys` | models/migrations | （待归类） | — |
+| 87 | `skill_usage` | models/migrations | （待归类） | — |
+| 88 | `stock_agents` | models | （待归类） | — |
+| 89 | `stock_context_snapshots` | models | （待归类） | — |
+| 90 | `stock_suggestions` | models | （待归类） | — |
+| 91 | `stock_universe_snapshots` | models | （待归类） | — |
+| 92 | `suggestion_feedback` | models/migrations | （待归类） | — |
+| 93 | `summary_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 94 | `tq_formula_signal_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 95 | `trading_halts` | models | （待归类） | — |
+| 96 | `war_report_daily` | models | （待归类） | — |
+| 97 | `webhook_subscriptions` | models/migrations | （待归类） | — |
+| 98 | `workbench_layer_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
 
 ## ③ 域引用了不存在的表：0 个域
 
@@ -189,5 +190,5 @@
 | `stock.chip` | 1 | GET /chip-daily |
 | `limit.pool` | 1 | GET /ladder |
 
-可粗映射到域的路由：113 / 541 = 20.9%；其余属认证/运维/未归类。
+可粗映射到域的路由：113 / 544 = 20.8%；其余属认证/运维/未归类。
 
