@@ -118,7 +118,7 @@ const navItems = [
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
   { to: '/heatmap', icon: LayoutGrid, labelKey: 'nav.heatmap', perm: 'view_heatmap' },
   // 盘面指数(2026-11-03): 宽基指数涨跌幅/成交额/四档资金/涨跌家数
-  { to: '/indexes', icon: BarChart3, labelKey: 'nav.indexes' },
+  { to: '/indexes', icon: BarChart3, labelKey: 'nav.indexes', perm: 'view_quotes' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
   { to: '/theme-mood', icon: Activity, labelKey: 'nav.themeMood', perm: 'view_quotes' },
   { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
@@ -806,7 +806,7 @@ function App() {
               <Route path="/l2" element={<LegacyL2Redirect />} />
               {/* P1-1: 板块热力图(view_heatmap 权限) */}
               <Route path="/heatmap" element={<PermGuard perm="view_heatmap" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
-              <Route path="/indexes" element={<IndexesPage />} />
+              <Route path="/indexes" element={<PermGuard perm="view_quotes" myPerms={myPerms}><IndexesPage /></PermGuard>} />
               {/* 口径对照(2026-09-18): 三套主力资金口径并排, 消歧不合并(pro 档) */}
               <Route path="/caliber-compare" element={<PermGuard perm="view_forecast" myPerms={myPerms}><CaliberComparePage /></PermGuard>} />
               {/* 决策账本(2026-09-18): 登录即可看 —— 后端 /api/decisions/* 也只要求登录 */}

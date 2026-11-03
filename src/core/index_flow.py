@@ -28,6 +28,12 @@ TIER_KEYS = ("xl", "lg", "md", "sm")
 _TOL = 0.005
 
 
+def _int_or_none(v: Any) -> int | None:
+    """整数化但保留真实的 0（小指数"全员下跌"时 UpHome=0 是有效值，不是缺失）。"""
+    n = _num(v)
+    return int(n) if n is not None else None
+
+
 def _num(v: Any) -> float | None:
     try:
         if v is None or v == "":
@@ -168,8 +174,8 @@ def snapshot(code: str) -> dict[str, Any]:
         "high": _num(d.get("Max")),
         "low": _num(d.get("Min")),
         "avg_price": _num(d.get("Average")),
-        "up_home": int(_num(d.get("UpHome")) or 0) or None,
-        "down_home": int(_num(d.get("DownHome")) or 0) or None,
+        "up_home": _int_or_none(d.get("UpHome")),
+        "down_home": _int_or_none(d.get("DownHome")),
         "outside": _num(d.get("Outside")),
         "inside": _num(d.get("Inside")),
     }

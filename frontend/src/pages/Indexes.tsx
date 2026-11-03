@@ -38,8 +38,12 @@ type IndexItem = {
   caliber: string | null
 }
 
+type MissingEntry = { symbol: string; name: string | null; reason: string }
+
 type Overview = {
   items: IndexItem[]
+  missing?: MissingEntry[]
+  complete?: boolean
   stale: boolean
   as_of: string | null
   caliber: string
@@ -246,6 +250,11 @@ export default function IndexesPage() {
               数据时点 {data?.as_of ?? '--'}
               {data?.stale ? '（实时取数失败，展示库内最近一日）' : '（TQ 实时，15 秒刷新）'}
             </span>
+            {data && data.complete === false && (
+              <span className="text-xs text-stock-down">
+                部分指数未取到：{(data.missing ?? []).map((m) => m.name ?? m.symbol).join('、')}
+              </span>
+            )}
             {error && <span className="text-xs text-stock-down">取数失败：{error}</span>}
           </>
         }

@@ -212,3 +212,13 @@ class TestRpcShapes:
         assert r["available"] is True
         assert r["close"] is None
         assert r["pct_chg"] is None
+
+    def test_zero_breadth_is_kept_not_none(self, monkeypatch):
+        """小指数全员下跌时 UpHome=0 是有效值，不能被 `or None` 吞成"缺失"。"""
+        monkeypatch.setattr(
+            index_flow, "_rpc",
+            lambda m, p, timeout=6.0: {"ErrorId": "0", "Now": "1000.0", "UpHome": "0", "DownHome": "50"},
+        )
+        snap = index_flow.snapshot("000688.SH")
+        assert snap["up_home"] == 0
+        assert snap["down_home"] == 50

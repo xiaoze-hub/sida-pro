@@ -89,19 +89,34 @@ def overview(
     live: bool = Query(True, description="是否走 TQ 实时（false 只读库）"),
 ) -> dict[str, Any]:
     """八个宽基指数盘面总览；`stale=true` 表示实时取数失败、用的是库内数据。"""
-    cache_key = f"indexes:overview:{int(live)}"
+    # 一个缓存键：实时结果与库内兜底都落同一个键，`live=false` 时也能命中实时缓存，
+    # 不会出现"读的键从来没写过"的死分支。
+    cache_key = "indexes:overview"
     if not live:
         cached = biz_cache.get_json(cache_key)
         if cached is not None:
             return cached
 
-    payload: dict[str, Any] = {"items": [], "stale": True, "as_of": None, "caliber": "tdx_index_agg"}
+    payload: dict[str, Any] = {
+        "items": [], "missing": [], "complete": False,
+        "stale": True, "as_of": None, "caliber": "tdx_index_agg",
+    }
     if live:
         res = biz_cache.get_or_fetch(cache_key, CACHE_TTL_S, _live)
         if isinstance(res, dict) and res.get("ok"):
             items = [_normalize({**it, "trade_date": it.get("trade_date")}) for it in res["items"]
                      if it.get("available")]
+            # 部分缺失必须显式报出来：只把 available 的塞进 items、却写 stale=false，
+            # 前端会把"少了 3 个指数"当成"全部最新"。
+            missing = [
+                {"symbol": str(it.get("symbol") or "")[:6],
+                 "name": it.get("name") or index_name(it.get("symbol") or ""),
+                 "reason": it.get("reason") or "TQ 未返回"}
+                for it in res["items"] if not it.get("available")
+            ]
             payload["items"] = items
+            payload["missing"] = missing
+            payload["complete"] = not missing
             payload["stale"] = False
             payload["as_of"] = items[0].get("trade_date") if items else None
 
@@ -110,6 +125,12 @@ def overview(
         payload["items"] = rows
         payload["stale"] = True
         payload["as_of"] = rows[0].get("trade_date") if rows else None
+        have = {r["symbol"] for r in rows}
+        payload["missing"] = [
+            {"symbol": sym, "name": index_name(sym), "reason": "库内当日无记录"}
+            for sym in BOARD_ORDER if sym not in have
+        ]
+        payload["complete"] = False
         if not rows:
             payload["reason"] = "无数据：TQ 不可达且库内当日无记录"
 
