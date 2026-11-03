@@ -576,18 +576,13 @@ async def require_admin(
     raw = admin_token_from_request(request)
     if not raw:
         if not _admin_strict_mode():
-            # 过渡期开关(默认**关闭**兼容, 生产由 STRICT_ADMIN_TOKEN=1 打开):
-            # 允许"owner 的用户 token"临时顶管理员身份, 但必须 role==owner 且留审计。
-            # 存在的唯一理由: 存量会话(部署前登录的管理员)没有 admin cookie,
-            # 直接硬切会把所有管理员挡在后台外, 且既有测试大量用 owner 用户 token 打管理接口。
-            user = await get_current_user(request=request, db=db)
-            if (user.role or "").strip().lower() == "owner":
-                logger.warning(
-                    "[auth] 管理接口回落到用户 token(过渡期): user=%s path=%s",
-                    user.username, request.url.path,
-                )
-                return user
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可操作")
+            # 过渡期: 不在这里自己解用户 token(那会绕过 dependency_overrides,
+            # 也拿不到 FastAPI 注入的已认证用户), 交给 require_owner 按旧语义判定。
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "需要管理员身份(请用管理端登录)",
+                headers={"X-Admin-Strict": "0"},
+            )
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             "需要管理员身份(请用管理端登录)",
@@ -625,13 +620,27 @@ async def require_admin(
     return user
 
 
-async def require_owner(user: User = Depends(require_admin)) -> User:
+async def require_owner(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> User:
     """仅 owner 可用(用户管理/系统设置)。
 
-    保留函数名是为了不动 86 处既有调用点; 语义已升级为**必须 admin 受众 token**。
-    新增管理接口请直接用 `require_admin`。
+    保留函数名是为了不动 86 处既有调用点。两种模式:
+
+    - **严格(生产默认, STRICT_ADMIN_TOKEN=1)**: 必须额外持有 admin 受众 token
+      (`require_admin` 校验)。用户 token 单独不够 —— 这是本次隔离的核心。
+    - **过渡(STRICT_ADMIN_TOKEN=0)**: 沿用旧语义(登录用户 + role=owner)。
+      保留它是为了 (a) 部署前登录的管理员平滑过渡, (b) 依赖 `get_current_user`
+      的既有测试/依赖覆盖(dependency_overrides)继续生效。
+
+    两种模式都要求先有合法用户身份(`Depends(get_current_user)`), 所以管理接口
+    实际是"双身份": 用户会话 + 管理会话。浏览器登录时两个 Cookie 都会下发。
     """
-    if user.role != "owner":
+    if _admin_strict_mode():
+        await require_admin(request, db)  # 只校验 admin token, 失败抛 401/403
+    if (user.role or "").strip().lower() != "owner":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可操作")
     return user
 

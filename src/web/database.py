@@ -65,3 +65,55 @@ def init_db():
         backup_db_before_migration()
         backup_pg_schema_before_migration()
     run_versioned_migrations(mig)
+
+    # 2026-11-03: `auth_session_revocations`(会话墓碑) 不在 ORM models 里, 靠
+    # permissions._REVOCATION_DDL 幂等建表。角色拆分后运行时角色没有 CREATE 权限,
+    # 必须在这里(迁移角色)建好, 否则「踢设备」的墓碑写入会静默失败。
+    try:
+        from sqlalchemy import inspect, text
+
+        from src.core.permissions import _REVOCATION_DDL
+
+        with mig.begin() as _conn:
+            if not inspect(_conn).has_table("auth_session_revocations"):
+                _conn.execute(text(_REVOCATION_DDL))
+    except Exception as e:  # noqa: BLE001 - 建表失败不得阻断启动
+        import logging
+
+        logging.getLogger(__name__).warning("[db] 会话墓碑表建表跳过: %r", e)
+
+    # 角色拆分下(2026-11-03 Phase 2)新表的属主是**迁移角色**, 不是原来的 owner,
+    # 所以 ALTER DEFAULT PRIVILEGES 管不到它 —— 必须在每次启动后重新授一遍,
+    # 否则任何新建表运行时角色都读不了(表现为发版后新功能一律 500/权限错误)。
+    _sync_app_role_grants(mig)
+
+
+def _sync_app_role_grants(mig) -> None:
+    """把 public 下所有表的读写权授给运行时角色(仅角色拆分时执行)。"""
+    import os
+    import re
+
+    from sqlalchemy import text
+
+    role = (os.environ.get("SIDA_APP_DB_ROLE") or "").strip()
+    if not role:
+        return  # 未拆分部署: 运行时角色就是表属主, 不需要补授
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", role):
+        import logging
+
+        logging.getLogger(__name__).warning("[db] SIDA_APP_DB_ROLE 非法, 跳过授权: %r", role)
+        return
+    try:
+        with mig.begin() as conn:
+            conn.execute(
+                text(
+                    f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{role}"'
+                )
+            )
+            conn.execute(
+                text(f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{role}"')
+            )
+    except Exception as e:  # noqa: BLE001 - 授权失败不阻断启动, 但必须留痕
+        import logging
+
+        logging.getLogger(__name__).warning("[db] 运行时角色补授权失败: %r", e)

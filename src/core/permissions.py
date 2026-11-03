@@ -577,9 +577,19 @@ def mark_session_revoked(db: Session, session_id: str, expires_at: datetime) -> 
     if not session_id:
         return
     try:
+        from sqlalchemy import inspect as sa_inspect
         from sqlalchemy import text
 
-        db.execute(text(_REVOCATION_DDL))
+        # 2026-11-03 DB 角色拆分: 运行时角色(sida_app)**没有 CREATE 权限**,
+        # 无条件执行 `CREATE TABLE IF NOT EXISTS` 会抛 InsufficientPrivilege 并让
+        # 整个事务中止 ⇒ 墓碑写不进去、「踢设备」静默失效(异常被下面 except 吞掉)。
+        # 所以先查表在不在(纯读, 有权限), 缺了才建; 表由 init_db() 以迁移角色建好。
+        try:
+            table_exists = sa_inspect(db.get_bind()).has_table("auth_session_revocations")
+        except Exception:  # noqa: BLE001 - 查不到就当作已存在, 宁可不动 DDL
+            table_exists = True
+        if not table_exists:
+            db.execute(text(_REVOCATION_DDL))
         exp = expires_at
         if exp is not None and exp.tzinfo is None:
             exp = exp.replace(tzinfo=timezone.utc)
