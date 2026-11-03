@@ -38,10 +38,30 @@ def _num(v: Any) -> float | None:
     return f
 
 
-def _rpc(method: str, params: dict[str, Any], timeout: float = 8.0) -> Any:
+def _rpc(method: str, params: dict[str, Any], timeout: float = 6.0) -> Any:
+    """`tq_rpc` **已经**做过 `result.get("Value", result)` 的解包（见
+    `packages/marketdata/.../tq.py::_rpc`）：
+
+    - `get_pricevol`   → `{code: {...}}`（Value 层）；
+    - `get_market_snapshot` → **扁平 dict**（快照字段与 ErrorId 平级，无 result 包裹）；
+    - `get_exday_data` → **list**（Value 层）。
+
+    所以这里**不能再取 result/Value**，否则三处全部恒为空 —— 会静默写 0 行。
+    `_unwrap()` 只做防御性兼容，正常路径直接返回原值。
+    """
     from marketdata.vendors.tq import tq_rpc
 
     return tq_rpc(method, params, timeout=timeout)
+
+
+def _unwrap(resp: Any) -> Any:
+    """兼容仍带 `result`/`Value` 包裹的形态（正常路径原样返回）。"""
+    if isinstance(resp, dict):
+        if "result" in resp:
+            resp = resp["result"]
+        if isinstance(resp, dict) and "Value" in resp:
+            resp = resp["Value"]
+    return resp
 
 
 def parse_tiers(amo: Any) -> list[list[float]] | None:
@@ -113,7 +133,7 @@ def quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
         resp = _rpc("get_pricevol", {"stock_list": codes}) or {}
     except Exception:  # noqa: BLE001 - 取数失败由上游标"未知"
         return {}
-    value = resp.get("Value") if isinstance(resp, dict) else None
+    value = _unwrap(resp)
     if not isinstance(value, dict):
         return {}
     out: dict[str, dict[str, Any]] = {}
@@ -135,11 +155,13 @@ def snapshot(code: str) -> dict[str, Any]:
         resp = _rpc("get_market_snapshot", {"stock_code": code}) or {}
     except Exception:  # noqa: BLE001
         return {}
-    d = resp.get("result") if isinstance(resp, dict) else None
+    d = _unwrap(resp)
     if not isinstance(d, dict) or str(d.get("ErrorId", "0")) != "0":
         return {}
     amount_wan = _num(d.get("Amount"))
     return {
+        # `Now` = 最新价；`Average` 是**当日均价(VWAP)**，绝不可当收盘价用
+        "close": _num(d.get("Now")),
         "amount": amount_wan * 1e4 if amount_wan is not None else None,
         "volume_lots": _num(d.get("Volume")),
         "open": _num(d.get("Open")),
@@ -159,9 +181,7 @@ def tiers(code: str) -> dict[str, Any] | None:
         resp = _rpc("get_exday_data", {"stock_code": code, "count": 1}) or {}
     except Exception:  # noqa: BLE001
         return None
-    rows = resp.get("result") if isinstance(resp, dict) else None
-    if isinstance(rows, dict):
-        rows = rows.get("Value")
+    rows = _unwrap(resp)
     if not isinstance(rows, list) or not rows:
         return None
     r = rows[-1]
@@ -200,7 +220,11 @@ def fetch_one(symbol: str, quote: dict[str, Any] | None = None) -> dict[str, Any
     row = summarize(amo)
     q = quote if quote is not None else quotes([sym]).get(sym, {})
 
-    close = q.get("close") if q.get("close") is not None else snap.get("avg_price")
+    # 收盘价只认现价：快照 `Average` 是 VWAP（当日均价），
+    # 拿它当 close 会把"均价相对昨收"算成涨跌幅 —— 静默错数。
+    close = q.get("close")
+    if close is None:
+        close = snap.get("close")
     prev = q.get("prev_close")
     pct = q.get("pct_chg")
     if pct is None and close is not None and prev:

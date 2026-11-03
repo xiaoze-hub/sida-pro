@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-CACHE_TTL_S = 15
+CACHE_TTL_S = 30  # 与前端 15s 轮询错开：缓存窗口 > 轮询间隔，边界不会每次都穿透
 HISTORY_MAX_DAYS = 500
 
 _FIELDS = (

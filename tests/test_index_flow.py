@@ -161,3 +161,54 @@ class TestCollector:
         assert row["trade_date"] == "20261103"
         assert row["main_net"] is None
         assert row["source"] == "tq"
+
+class TestRpcShapes:
+    """`tq_rpc` 已经解包到 Value —— 再取一次 result/Value 会让整条链路恒为空。
+
+    这三种形状都来自 `packages/marketdata/.../tq.py::_rpc`：
+    pricevol 是 {code: {...}}、snapshot 是扁平 dict、exday 是 list。
+    """
+
+    def test_quotes_reads_flat_mapping(self, monkeypatch):
+        monkeypatch.setattr(
+            index_flow, "_rpc",
+            lambda m, p, timeout=6.0: {"000300.SH": {"Now": "4008.87", "LastClose": "4016.92", "Zaf": "-0.20"}},
+        )
+        got = index_flow.quotes(["000300"])
+        assert got["000300"]["close"] == pytest.approx(4008.87)
+        assert got["000300"]["pct_chg"] == pytest.approx(-0.2)
+
+    def test_snapshot_reads_flat_dict(self, monkeypatch):
+        monkeypatch.setattr(
+            index_flow, "_rpc",
+            lambda m, p, timeout=6.0: {"ErrorId": "0", "Now": "4008.87", "Amount": "55305360.00",
+                                       "UpHome": "210", "DownHome": "87", "Average": "4033.81"},
+        )
+        snap = index_flow.snapshot("000300.SH")
+        assert snap["close"] == pytest.approx(4008.87)     # Now 才是收盘价
+        assert snap["amount"] == pytest.approx(5.530536e11)  # 万元 → 元
+        assert snap["up_home"] == 210 and snap["down_home"] == 87
+
+    def test_tiers_reads_list(self, monkeypatch):
+        monkeypatch.setattr(
+            index_flow, "_rpc",
+            lambda m, p, timeout=6.0: [{"Date": "20261103", "Amo": SAMPLE}],
+        )
+        t = index_flow.tiers("000300.SH")
+        assert t is not None and t["trade_date"] == "20261103"
+
+    def test_tiers_tolerates_wrapped_result(self, monkeypatch):
+        monkeypatch.setattr(
+            index_flow, "_rpc",
+            lambda m, p, timeout=6.0: {"result": {"Value": [{"Date": "20261103", "Amo": SAMPLE}]}},
+        )
+        assert index_flow.tiers("000300.SH") is not None
+
+    def test_close_never_falls_back_to_vwap(self, monkeypatch):
+        """快照 Average 是当日均价(VWAP)，缺现价时必须留 None 而不是拿它顶。"""
+        monkeypatch.setattr(index_flow, "snapshot", lambda code: {"average": 4033.81, "amount": 1000.0})
+        monkeypatch.setattr(index_flow, "tiers", lambda code: {"amo": SAMPLE, "trade_date": "20261103"})
+        r = index_flow.fetch_one("000300", quote=None)
+        assert r["available"] is True
+        assert r["close"] is None
+        assert r["pct_chg"] is None

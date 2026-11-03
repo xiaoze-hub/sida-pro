@@ -10,7 +10,8 @@
  * 2. `get_exday_data` 只返当日 1 行 → 历史柱子来自日表累积，首日为空是正常的；
  * 3. 取数失败不能展示 0，一律显示 `--` 并标「数据未取到」。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { usePausedInterval } from '@sida/base-ui'
 import PageHeader from '@/components/PageHeader'
 import { safeFixed, safePercent, toAmount } from '@/lib/format'
 
@@ -172,7 +173,6 @@ export default function IndexesPage() {
   const [selected, setSelected] = useState<string>('000001')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const timer = useRef<number | null>(null)
 
   const loadOverview = useCallback(async () => {
     setLoading(true)
@@ -206,13 +206,9 @@ export default function IndexesPage() {
     }
   }, [])
 
-  useEffect(() => {
-    void loadOverview()
-    timer.current = window.setInterval(() => void loadOverview(), REFRESH_MS)
-    return () => {
-      if (timer.current) window.clearInterval(timer.current)
-    }
-  }, [loadOverview])
+  // 页签 keep-alive：隐藏时停表、回前台补一次（裸 setInterval 会在隐藏页签里
+  // 一直打 TQ —— 每个指数 3 次 RPC，N 个页签就是 N 路）。
+  usePausedInterval(() => void loadOverview(), REFRESH_MS)
 
   useEffect(() => {
     void loadHistory(selected)
