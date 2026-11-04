@@ -31,10 +31,13 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+from src.core.client_ip import UNKNOWN_IP, normalize_client_ip
 from src.core.db_safe import safe_rollback
+from src.core.skill_labels import is_known_label, label_for
 from src.web.api._scope import allow_cross_user  # C3(2026-09-18): 见各豁免点理由
 from src.web.cache.biz_cache import biz_cache
 from src.web.database import get_db
@@ -2070,7 +2073,8 @@ def _log_usage(
             duration_ms=duration_ms,
             channel=channel or "api",
             user_id=user_id,
-            client_ip=client_ip,
+            # 落库前收口: 只存合法 IP 且长度受控(列宽 64), 其余统一 unknown
+            client_ip=normalize_client_ip(client_ip),
         ))
         db.commit()
     except Exception as e:  # noqa: BLE001
@@ -2182,122 +2186,63 @@ def _usage_by_channel(db: Session, base_filters: list, day_start: datetime) -> d
     return out
 
 
-from src.web.api.auth import get_current_user as _get_current_user
+from src.web.api.auth import require_owner as _require_owner
+
+# ── 用量监控(2026-11-04): 自助 /api/usage + 管理端 analytics ──────────
+
+#: 管理端只开放两个窗口: 周报(7) / 月报(30)。任意天数会让前端图表的横轴
+#: 和"每日新增"对比失去意义, 也让 SQL 窗口不受控。
+_USAGE_ANALYTICS_DAYS: tuple[int, ...] = (7, 30)
+
+#: IP 聚合先在 SQL 侧取前 N 个来源, 再归一化合并脏值; 避免把全表 IP 拉进内存。
+_USAGE_TOP_IP_SCAN = 200
 
 
-@router.get("/admin/analytics/usage-trends")
-@allow_cross_user  # 管理员统计全局 API Key 用量走势，跨用户聚合查询合规
-def get_admin_usage_analytics(
-    days: int = 7,
-    db: Session = Depends(get_db),
-    user: Any = Depends(_get_current_user),
-) -> dict:
-    """管理后台：API Key 用量监控增强分析接口（2026-11-04）。
+def _as_day_text(value: Any) -> str | None:
+    """把 SQL 分桶结果(PG=date / SQLite='YYYY-MM-DD' 字符串)统一成日期文本。"""
+    if value is None:
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    return str(value)[:10]
 
-    提供：
-    - 实时 QPS 与最近峰值
-    - 每日新增 API Key 趋势
-    - 全局总调用量每日走势（带客户端 IP 分布与中文接口映射）
+
+def _second_bucket(db: Session):
+    """按秒分桶的 SQL 表达式(方言感知): PG 用 date_trunc, SQLite 用 strftime。
+
+    峰值必须由 SQL 聚合算出 —— 把最近 60 秒的行全取回 Python 数一遍在高流量下
+    同样是一次不小的拉取, 而 group_by+count 只要一行结果。
     """
-    from src.core.skill_labels import label_for
-    from src.db.models import SkillApiKey, SkillUsage
+    bind = db.get_bind()
+    dialect = (getattr(getattr(bind, "dialect", None), "name", "") or "").lower()
+    if dialect == "postgresql":
+        return func.date_trunc("second", SkillUsage.created_at)
+    return func.strftime("%Y-%m-%d %H:%M:%S", SkillUsage.created_at)
 
-    # 简单权限门禁：owner/admin
-    uid = getattr(user, "id", None)
-    role = getattr(user, "role", "member")
-    if role != "owner" and uid not in ("admin", "1", 1):
-        # 兼容现有管理面鉴权：非 owner 提示权限不足
-        raise HTTPException(403, "需要管理员权限访问用量监控分析")
 
-    days = max(1, min(90, int(days)))
-    now_utc = datetime.now(timezone.utc)
-    cutoff = now_utc - timedelta(days=days)
-
-    # 1. 实时 QPS 计算（过去 10 秒 / 60 秒）
-    t10 = now_utc - timedelta(seconds=10)
-    t60 = now_utc - timedelta(seconds=60)
-    count_10s = db.query(SkillUsage).filter(SkillUsage.created_at >= t10).count()
-    count_60s = db.query(SkillUsage).filter(SkillUsage.created_at >= t60).count()
-    qps_current = round(count_10s / 10.0, 2)
-    qps_avg_60s = round(count_60s / 60.0, 2)
-
-    # 2. 每日新增 API Key 趋势
-    key_rows = db.query(SkillApiKey.created_at).filter(SkillApiKey.created_at >= cutoff).all()
-    daily_keys_map: dict[str, int] = {}
-    for (c_at,) in key_rows:
-        if c_at:
-            d_str = c_at.strftime("%Y-%m-%d")
-            daily_keys_map[d_str] = daily_keys_map.get(d_str, 0) + 1
-
-    # 3. 全局总调用量每日走势 & Top Skills (带中文注释) & IP 追踪
-    usage_rows = (
-        db.query(SkillUsage.created_at, SkillUsage.skill_name, SkillUsage.client_ip, SkillUsage.status_code)
-        .filter(SkillUsage.created_at >= cutoff)
-        .all()
-    )
-
-    daily_usage_map: dict[str, int] = {}
-    skill_counts: dict[str, int] = {}
-    ip_counts: dict[str, int] = {}
-
-    for c_at, skill_name, client_ip, s_code in usage_rows:
-        if c_at:
-            d_str = c_at.strftime("%Y-%m-%d")
-            daily_usage_map[d_str] = daily_usage_map.get(d_str, 0) + 1
-        if skill_name:
-            skill_counts[skill_name] = skill_counts.get(skill_name, 0) + 1
-        if client_ip:
-            ip_counts[client_ip] = ip_counts.get(client_ip, 0) + 1
-
-    # 构造按天连续的完整序列
-    dates_list = [(cutoff + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days + 1)]
-    daily_trend = [
-        {
-            "date": d,
-            "new_keys": daily_keys_map.get(d, 0),
-            "total_calls": daily_usage_map.get(d, 0),
-        }
-        for d in dates_list
-    ]
-
-    # Top Skills 带中文名称
-    top_skills = [
-        {
-            "skill_name": s,
-            "display_name": label_for(s),
-            "count": cnt,
-        }
-        for s, cnt in sorted(skill_counts.items(), key=lambda x: x[1], reverse=True)[:15]
-    ]
-
-    # Top Client IPs
-    top_ips = [
-        {"ip": ip, "count": cnt}
-        for ip, cnt in sorted(ip_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-    ]
-
-    return {
-        "success": True,
-        "days": days,
-        "qps": {
-            "current_10s": qps_current,
-            "avg_60s": qps_avg_60s,
-        },
-        "daily_trend": daily_trend,
-        "top_skills": top_skills,
-        "top_ips": top_ips,
-        "total_calls_in_window": len(usage_rows),
-    }
+@router.get("/usage")
+def get_usage(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
     """自查当日用量与剩余配额。
 
-    - 带 X-API-Key: 按 key 查(兼容旧路径)
+    - 带 X-API-Key: *** key 查(兼容旧路径)
     - 仅 JWT: 按 user_id 查该用户全部 channel 用量(不分 channel 汇总)
     - 响应含 by_channel 统计
+
+    2026-11-04 恢复: 上一版新增 admin analytics 时把本函数的 `@router.get("/usage")`
+    装饰器和函数签名一起替换掉了, 整个函数体沦为上一函数 `return` 之后的死代码
+    —— 路由不存在但代码还在, 任何 `/api/usage` 请求 404。此处按原样恢复声明,
+    只把日界改成 `db_now_naive()`(见下方注释)。
     """
     refresh_tier_configs(db)
     x_api_key = _header_str(request, "X-API-Key")
     authorization = _header_str(request, "Authorization")
-    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # 日界必须与列同口径: PG 的 created_at 是**北京 naive**(func.now()), 拿
+    # `datetime.now(timezone.utc)` 的 UTC 零点去比 → 每天前 8 小时的调用被算进"昨天",
+    # used_today 偏小、remaining_today 偏大(额度超发)。
+    day_start = db_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
 
     if x_api_key and x_api_key.startswith("sk_"):
         row = _validate_api_key_row(x_api_key, db)
@@ -2341,6 +2286,164 @@ def get_admin_usage_analytics(
         "remaining_today": max(0, daily_limit - today),
         "expires_at": best.expires_at.isoformat() if best is not None and best.expires_at else None,
         "by_channel": by_channel,
+    }
+
+
+@router.get("/admin/analytics/usage-trends")
+@allow_cross_user  # 管理员全局 API Key 用量走势, 按设计跨用户聚合; 门禁=_require_owner(严格 admin token)
+def get_admin_usage_analytics(
+    days: int = Query(default=7, description="统计窗口天数, 仅支持 7 / 30"),
+    db: Session = Depends(get_db),
+    user: _User = Depends(_require_owner),
+) -> dict:
+    """管理后台: API Key 用量监控分析(2026-11-04)。
+
+    修复后的口径:
+
+    - **权限**: 走 `auth.require_owner`。生产严格模式(STRICT_ADMIN_TOKEN=1)下要求
+      用户会话 + admin 受众 token 双身份, 且 role=owner。首版这里是
+      `role != "owner" and uid not in ("admin", "1", 1)` 的手写判断 —— 把
+      "id 恰好是 1 / 用户名恰好叫 admin" 当管理员, 是提权口, 已删。
+    - **时间**: 一律 `db_now_naive()` 与列同口径。首版用 `datetime.now(timezone.utc)`
+      去比 PG 的**北京 naive** `created_at`(func.now()) → 窗口静默偏 8 小时,
+      "今天"的桶永远缺 8 小时。
+    - **窗口**: 只允许 7 / 30 天; 返回按天**连续**序列(无数据补 0), 首尾对齐自然日。
+    - **聚合**: 日走势、每日新增 key、Top skill、Top IP 全部 SQL `group_by`,
+      不再把窗口内全部行 `.all()` 到 Python 里循环(首版 `usage_rows` 即全量拉取,
+      月窗口下是几十万行)。
+    - **QPS**: 10s / 60s 精确均值(= 计数/秒数) + 最近 60 秒的每秒峰值(SQL 按秒聚合)。
+    - **IP**: 只接受合法 IP 且长度受控(`normalize_client_ip`), 脏值/空值归入
+      "unknown" 并**保留该档**, 不丢弃也不冒充真实来源。
+    """
+    if days not in _USAGE_ANALYTICS_DAYS:
+        allowed = " / ".join(str(d) for d in _USAGE_ANALYTICS_DAYS)
+        raise HTTPException(400, f"days 仅支持 {allowed} 天")
+
+    now = db_now_naive()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_start = today - timedelta(days=days - 1)
+    dates = [(window_start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+
+    # ── 1) 实时 QPS(有界 60s 窗口) ──
+    t10 = now - timedelta(seconds=10)
+    t60 = now - timedelta(seconds=60)
+    samples_10s = int(
+        db.query(func.count(SkillUsage.id))
+        .filter(SkillUsage.created_at >= t10)
+        .scalar()
+        or 0
+    )
+    samples_60s = int(
+        db.query(func.count(SkillUsage.id))
+        .filter(SkillUsage.created_at >= t60)
+        .scalar()
+        or 0
+    )
+    sec_col = _second_bucket(db)
+    peak_row = (
+        db.query(sec_col.label("sec"), func.count(SkillUsage.id).label("calls"))
+        .filter(SkillUsage.created_at >= t60)
+        .group_by(sec_col)
+        .order_by(func.count(SkillUsage.id).desc())
+        .limit(1)
+        .first()
+    )
+    qps = {
+        "current_10s": round(samples_10s / 10.0, 2),
+        "avg_60s": round(samples_60s / 60.0, 2),
+        "peak_per_sec": int(peak_row[1]) if peak_row is not None else 0,
+        "peak_second": str(peak_row[0]) if peak_row is not None else None,
+        "samples_10s": samples_10s,
+        "samples_60s": samples_60s,
+    }
+
+    # ── 2) 每日调用量(SQL 按天聚合) ──
+    usage_day_col = func.date(SkillUsage.created_at)
+    usage_daily_rows = (
+        db.query(usage_day_col.label("day"), func.count(SkillUsage.id).label("calls"))
+        .filter(SkillUsage.created_at >= window_start)
+        .group_by(usage_day_col)
+        .all()
+    )
+    calls_by_day = {
+        day_text: int(calls or 0)
+        for day_text, calls in ((_as_day_text(d), c) for d, c in usage_daily_rows)
+        if day_text
+    }
+
+    # ── 3) 每日新增 API Key(SQL 按天聚合) ──
+    key_day_col = func.date(SkillApiKey.created_at)
+    key_daily_rows = (
+        db.query(key_day_col.label("day"), func.count(SkillApiKey.id).label("calls"))
+        .filter(SkillApiKey.created_at >= window_start)
+        .group_by(key_day_col)
+        .all()
+    )
+    new_keys_by_day = {
+        day_text: int(calls or 0)
+        for day_text, calls in ((_as_day_text(d), c) for d, c in key_daily_rows)
+        if day_text
+    }
+
+    daily_trend = [
+        {
+            "date": d,
+            "new_keys": new_keys_by_day.get(d, 0),
+            "total_calls": calls_by_day.get(d, 0),
+        }
+        for d in dates
+    ]
+
+    # ── 4) Top Skills(中文标签; 未收录保留原名并标注) ──
+    skill_rows = (
+        db.query(SkillUsage.skill_name, func.count(SkillUsage.id).label("calls"))
+        .filter(SkillUsage.created_at >= window_start)
+        .group_by(SkillUsage.skill_name)
+        .order_by(func.count(SkillUsage.id).desc())
+        .limit(15)
+        .all()
+    )
+    top_skills = [
+        {
+            "skill_name": name or "unknown",
+            "display_name": label_for(name),
+            "known": is_known_label(name),
+            "count": int(calls or 0),
+        }
+        for name, calls in skill_rows
+    ]
+
+    # ── 5) Top Client IP(SQL 聚合 + 合法性与长度收口) ──
+    ip_rows = (
+        db.query(SkillUsage.client_ip, func.count(SkillUsage.id).label("calls"))
+        .filter(SkillUsage.created_at >= window_start)
+        .group_by(SkillUsage.client_ip)
+        .order_by(func.count(SkillUsage.id).desc())
+        .limit(_USAGE_TOP_IP_SCAN)
+        .all()
+    )
+    ip_totals: dict[str, int] = {}
+    for raw_ip, calls in ip_rows:
+        key_ip = normalize_client_ip(raw_ip)
+        ip_totals[key_ip] = ip_totals.get(key_ip, 0) + int(calls or 0)
+    top_ips = [
+        {"ip": ip, "count": cnt}
+        # "unknown" 排在同量级的真实来源之后, 但**保留**, 不隐藏未知来源
+        for ip, cnt in sorted(
+            ip_totals.items(), key=lambda kv: (-kv[1], kv[0] == UNKNOWN_IP, kv[0])
+        )[:10]
+    ]
+
+    return {
+        "success": True,
+        "days": days,
+        "window": {"start": dates[0], "end": dates[-1]},
+        "qps": qps,
+        "daily_trend": daily_trend,
+        "top_skills": top_skills,
+        "top_ips": top_ips,
+        "unique_ips": len(ip_totals),
+        "total_calls_in_window": sum(calls_by_day.values()),
     }
 
 

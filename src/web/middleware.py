@@ -73,13 +73,21 @@ def _get_client_ip(request: Request) -> str:
     `X-Forwarded-For: 1.2.3.4` 绕过 IP 限流)。仅当直连 peer 是 loopback 或私网时
     才认 XFF(等价 uvicorn --forwarded-allow-ips=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
     的语义), 直连 peer 是公网(裸跑 / 非可信反代)时直接用 peer.host。
+
+    2026-11-04: 采信的 XFF 也必须**是合法 IP**（且长度受控）。此前只取首段不校验,
+    反代后面任何人发 `X-Forwarded-For: <64+ 字节垃圾>` 都会原样进限流桶和
+    `skill_usage.client_ip`。现在非法值一律回落到 peer；peer 本身也不是合法 IP
+    （如 TestClient 的 "testclient"）时返回 "unknown"。
     """
     import ipaddress
+
+    from src.core.client_ip import UNKNOWN_IP, normalize_client_ip
+
     peer = getattr(getattr(request, "client", None), "host", None)
     if not peer:
-        return "unknown"
+        return UNKNOWN_IP
     try:
-        peer_ip = ipaddress.ip_address(peer)
+        peer_ip = ipaddress.ip_address(str(peer).strip())
         # 直连 peer 是 loopback 或私网 → 可信反代, 取 XFF 首段
         trusted = (
             peer_ip.is_loopback
@@ -91,8 +99,10 @@ def _get_client_ip(request: Request) -> str:
     if trusted:
         xff = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
         if xff:
-            return xff
-    return peer
+            candidate = normalize_client_ip(xff)
+            if candidate != UNKNOWN_IP:
+                return candidate
+    return normalize_client_ip(peer)
 
 
 def _is_exempt(path: str) -> bool:
