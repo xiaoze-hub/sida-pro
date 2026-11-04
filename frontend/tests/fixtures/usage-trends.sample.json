@@ -8,7 +8,7 @@
     "current_10s": 0.5,
     "avg_60s": 0.08,
     "peak_per_sec": 5,
-    "peak_second": "2026-11-04 12:49:24",
+    "peak_second": "2026-11-04 15:12:44",
     "samples_10s": 5,
     "samples_60s": 5
   },
@@ -75,6 +75,28 @@
     {
       "ip": "unknown",
       "count": 1
+    }
+  ],
+  "keys_with_ips": [
+    {
+      "api_key_id": 1,
+      "key_prefix": "sk_6BVS21mQ",
+      "owner_label": "contract-test",
+      "total_calls": 8,
+      "ips": [
+        {
+          "ip": "203.0.113.7",
+          "count": 6
+        },
+        {
+          "ip": "203.0.113.8",
+          "count": 1
+        },
+        {
+          "ip": "unknown",
+          "count": 1
+        }
+      ]
     }
   ],
   "unique_ips": 3,

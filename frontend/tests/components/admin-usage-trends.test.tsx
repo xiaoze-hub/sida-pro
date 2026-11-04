@@ -60,6 +60,26 @@ const FULL = {
     { ip: '10.0.0.7', count: 640 },
     { ip: '10.0.0.9', count: 3 },
   ],
+  // 按 Key 聚合的来源 IP（真实后端字段名 keys_with_ips）
+  keys_with_ips: [
+    {
+      api_key_id: 11,
+      key_prefix: 'sk_abcd',
+      owner_label: '张三',
+      total_calls: 500,
+      ips: [
+        { ip: '10.0.0.7', count: 480 },
+        { ip: '10.0.0.9', count: 20 },
+      ],
+    },
+    {
+      api_key_id: 12,
+      key_prefix: 'sk_efgh',
+      owner_label: 'guest',
+      total_calls: 140,
+      ips: [{ ip: '10.0.0.7', count: 140 }],
+    },
+  ],
   total_calls_in_window: 1234,
 }
 
@@ -146,9 +166,14 @@ describe('用量监控 · 实时 QPS 与走势', () => {
 
   it('Top IP 逐条列出并带调用次数', async () => {
     mount(<UsageTrendsPanel />)
+    // 页面上有两处 IP 展示(全局 Top IP + 按 Key 的来源 IP), 同一个 IP 会匹配到多个元素。
+    // 用"这一行同时含 IP 与全局次数 640"定位全局表的行, 避免依赖 DOM 层级猜测。
     await screen.findByText('Top 客户端 IP（近 7 天）')
-    const row = screen.getByText('10.0.0.7').closest('tr') as HTMLElement
-    expect(within(row).getByText('640')).toBeTruthy()
+    const row = Array.from(document.querySelectorAll('tr')).find(
+      (tr) => tr.textContent?.includes('10.0.0.7') && tr.textContent?.includes('640'),
+    )
+    expect(row).toBeTruthy()
+    expect(within(row as HTMLElement).getByText('640')).toBeTruthy()
   })
 })
 
@@ -273,5 +298,31 @@ describe('Admin 页接线', () => {
 
   it('用量监控分类里挂了完整走势面板', () => {
     expect(usageSection).toContain('<UsageTrendsPanel />')
+  })
+})
+
+describe('用量监控 · IP 与 API Key 的归属', () => {
+  it('按 Key 列出各自的来源 IP 与次数(这是判断 Key 共用/被盗用的依据)', async () => {
+    mount(<UsageTrendsPanel />)
+    await screen.findByText(/按 API Key 的来源 IP/)
+
+    const firstKeyRow = screen.getByText('sk_abcd').closest('tr') as HTMLElement
+    expect(within(firstKeyRow).getByText('张三')).toBeTruthy()
+    expect(within(firstKeyRow).getByText('500')).toBeTruthy()
+    // 同一个 IP 在两个 Key 下各自计数, 不合并成全局值
+    expect(within(firstKeyRow).getAllByText('10.0.0.7')).toHaveLength(1)
+    expect(within(firstKeyRow).getAllByText('480')).toHaveLength(1)
+    expect(within(firstKeyRow).getAllByText('20')).toHaveLength(1)
+
+    const secondKeyRow = screen.getByText('sk_efgh').closest('tr') as HTMLElement
+    expect(within(secondKeyRow).getAllByText('140').length).toBeGreaterThanOrEqual(2) // 调用数 + IP 次数
+  })
+
+  it('后端不返回 keys_with_ips 时是明确空态, 不伪造归属', async () => {
+    const { keys_with_ips: _drop, ...withoutKeyIps } = FULL
+    api.payload = { default: withoutKeyIps, d7: withoutKeyIps, d30: withoutKeyIps }
+    mount(<UsageTrendsPanel />)
+    await screen.findByText('没有 Key 级 IP 记录')
+    expect(screen.queryByText('sk_abcd')).toBeNull()
   })
 })

@@ -2470,7 +2470,56 @@ def get_admin_usage_analytics(
         for name, calls in skill_rows
     ]
 
-    # ── 5) Top Client IP(SQL 聚合 + 合法性与长度收口) ──
+    # ── 5b) 按 API Key 聚合的客户端 IP 分布（2026-11-04 新增：满足 IP 对应 Key 的需求）──
+    key_ip_rows = (
+        db.query(
+            SkillUsage.api_key_id,
+            SkillUsage.client_ip,
+            func.count(SkillUsage.id).label("calls"),
+        )
+        .filter(SkillUsage.created_at >= window_start, SkillUsage.created_at <= now)
+        .group_by(SkillUsage.api_key_id, SkillUsage.client_ip)
+        .all()
+    )
+    # 查出所有涉及的 key 信息方便展示
+    key_ids_set = {row[0] for row in key_ip_rows if row[0]}
+    key_meta_map = {}
+    if key_ids_set:
+        k_rows = db.query(SkillApiKey.id, SkillApiKey.key_prefix, SkillApiKey.owner_label).filter(SkillApiKey.id.in_(key_ids_set)).all()
+        for kid, kpref, olabel in k_rows:
+            key_meta_map[kid] = {"key_prefix": kpref or f"id#{kid}", "owner_label": olabel or "无标签"}
+
+    key_ip_grouped: dict[int, dict[str, Any]] = {}
+    for kid, raw_ip, calls in key_ip_rows:
+        if not kid:
+            continue
+        if kid not in key_ip_grouped:
+            meta = key_meta_map.get(kid, {"key_prefix": f"id#{kid}", "owner_label": "无标签"})
+            key_ip_grouped[kid] = {
+                "api_key_id": kid,
+                "key_prefix": meta["key_prefix"],
+                "owner_label": meta["owner_label"],
+                "ips_map": {},
+                "total_calls": 0,
+            }
+        norm_ip = normalize_client_ip(raw_ip)
+        g = key_ip_grouped[kid]
+        g["ips_map"][norm_ip] = g["ips_map"].get(norm_ip, 0) + int(calls or 0)
+        g["total_calls"] += int(calls or 0)
+
+    keys_with_ips = []
+    for kid, data in sorted(key_ip_grouped.items(), key=lambda kv: kv[1]["total_calls"], reverse=True)[:20]:
+        ips_list = [
+            {"ip": ip, "count": cnt}
+            for ip, cnt in sorted(data["ips_map"].items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+        keys_with_ips.append({
+            "api_key_id": kid,
+            "key_prefix": data["key_prefix"],
+            "owner_label": data["owner_label"],
+            "total_calls": data["total_calls"],
+            "ips": ips_list,
+        })
     # 先按原始值分组(最多 CAP+1 行)判断能否精确统计; 归并脏值/写法变体在 Python 里做。
     ip_rows = (
         db.query(SkillUsage.client_ip, func.count(SkillUsage.id).label("calls"))
@@ -2503,6 +2552,10 @@ def get_admin_usage_analytics(
         "daily_trend": daily_trend,
         "top_skills": top_skills,
         "top_ips": top_ips,
+        # 按 API Key 聚合的客户端 IP 分布（哪个 Key 从哪些 IP 调过）。
+        # 与上面的 top_ips 是两个视角：top_ips 回答"全站谁在打"，
+        # keys_with_ips 回答"这把 Key 被哪些来源用过"——后者才是共用/被盗用的判据。
+        "keys_with_ips": keys_with_ips,
         # 精确值; 超过扫描上限时是 null(不拿采样条数冒充)。
         "unique_ips": len(ip_totals) if exact else None,
         "unique_ips_exact": exact,

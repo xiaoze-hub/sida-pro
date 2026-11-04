@@ -397,3 +397,30 @@ def test_top_skills带中文名与已知标记(env):
     assert by_name["get_stock_quote"]["known"] is True
     assert by_name["totally_unknown_skill"]["known"] is False
     assert "totally_unknown_skill" in by_name["totally_unknown_skill"]["display_name"]
+
+
+def test_按Key聚合IP_字段真实返回且归属正确(env):
+    """`keys_with_ips` 必须出现在响应里，且 IP 真的挂在对应 Key 下。
+
+    2026-11-04 踩过：这段聚合写好了、变量也算了，但**没放进 return 字典** ——
+    接口 200、字段缺失、前端只能拿到 undefined。当时没有任何测试覆盖返回体键，
+    所以"算完就丢"上线了。这条断言就是那种缺失会立刻变红的钉子。
+    """
+    base = _today() + timedelta(hours=10)
+    ip_a, ip_b = "198.51.100.7", "198.51.100.8"
+    _add_usage(env["key_id"], at=base, ip=ip_a)
+    _add_usage(env["key_id"], at=base + timedelta(minutes=1), ip=ip_a)
+    _add_usage(env["key_id"], at=base + timedelta(minutes=2), ip=ip_b)
+
+    body = _data(_analytics(env, days=7))
+    assert "keys_with_ips" in body, "返回体缺少 keys_with_ips —— 聚合算了却没接线"
+    rows = body["keys_with_ips"]
+    assert rows, "窗口内有调用时 keys_with_ips 不应为空"
+
+    mine = next((r for r in rows if r["api_key_id"] == env["key_id"]), None)
+    assert mine is not None, f"自己的 key 未出现在 keys_with_ips: {rows}"
+    ips = {x["ip"]: x["count"] for x in mine["ips"]}
+    assert ips.get(ip_a) == 2, f"IP {ip_a} 应计 2 次，实际 {ips}"
+    assert ips.get(ip_b) == 1, f"IP {ip_b} 应计 1 次，实际 {ips}"
+    assert mine["total_calls"] >= 3
+    assert mine["key_prefix"], "key_prefix 不能为空（前端要显示是哪把 Key）"
