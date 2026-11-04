@@ -161,10 +161,20 @@ describe('ToolTimeline 展开', () => {
 })
 
 describe('ToolTimeline 空态', () => {
+  it('运行中和加载中不谎称没有工具调用；读取失败可重试', () => {
+    const retry = vi.fn()
+    const view = render(<ToolTimeline runs={[]} running />)
+    expect(screen.getByTestId('copilot-tool-timeline-empty').textContent).toContain('分析进行中')
+    view.rerender(<ToolTimeline runs={[]} loading />)
+    expect(screen.getByTestId('copilot-tool-timeline-empty').textContent).toContain('正在加载')
+    view.rerender(<ToolTimeline runs={[]} error onRetry={retry} />)
+    fireEvent.click(screen.getByText('重新加载'))
+    expect(retry).toHaveBeenCalledOnce()
+  })
   it('runs 为空 → 「本轮没有工具调用」', () => {
     render(<ToolTimeline runs={[]} />)
     expect(screen.getByTestId('copilot-tool-timeline-empty').textContent).toContain(
-      '本轮没有工具调用',
+      '暂无可用的过程记录',
     )
   })
 

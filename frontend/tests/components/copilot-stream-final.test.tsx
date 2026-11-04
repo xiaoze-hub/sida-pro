@@ -111,6 +111,14 @@ describe('只有终稿的拒答', () => {
 })
 
 describe('没有终稿 / 坏帧', () => {
+  it('连接异常不泄露内部标识，并提供查看过程入口', async () => {
+    apiMock.sendMessageStream.mockRejectedValue(new Error('network error trace_id=secret'))
+    await ask('600111 怎么样')
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('本次分析未能完成'))
+    expect(screen.getByRole('alert').textContent).not.toContain('secret')
+    fireEvent.click(screen.getByText('查看过程'))
+    expect(screen.getByText('本轮过程')).toBeTruthy()
+  })
   it('断流（无 done）：正文保留但气泡带可见的"未拿到终稿"，且出错误条', async () => {
     apiMock.sendMessageStream.mockImplementation(async (_id: number, _q: string, handlers: any) => {
       handlers.onDelta('只有一半')

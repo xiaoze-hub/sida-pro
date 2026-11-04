@@ -82,6 +82,7 @@ const TOOL_META: Record<string, { label: string; group: ReadinessGroup }> = {
   get_thsdk_market_data_index: { label: '指数', group: '走势' },
   // 筹码
   get_chip_accumulation: { label: '底仓筹码', group: '筹码' },
+  get_stock_chips: { label: '筹码分布', group: '筹码' },
   get_cancel_order_intent: { label: '撤单', group: '筹码' },
   get_orderbook: { label: '盘口', group: '筹码' },
   // 主力
@@ -104,6 +105,7 @@ const TOOL_META: Record<string, { label: string; group: ReadinessGroup }> = {
   get_market_news: { label: '消息面', group: '消息' },
   get_thsdk_news: { label: '个股新闻', group: '消息' },
   get_irm_qa: { label: '互动易', group: '消息' },
+  get_fundamentals_detail: { label: '基本面', group: '消息' },
   get_event_catalyst: { label: '事件催化', group: '消息' },
   get_web_content: { label: '网页', group: '消息' },
   // 情景
@@ -113,6 +115,9 @@ const TOOL_META: Record<string, { label: string; group: ReadinessGroup }> = {
   get_decision_pioneer: { label: '决策三指标', group: '情景' },
   get_demon_factor: { label: '妖股因子', group: '情景' },
   get_stock_dossier: { label: '全景档案', group: '情景' },
+  get_stock_factors: { label: '个股因子', group: '情景' },
+  get_factor_ic_report: { label: '因子有效性', group: '情景' },
+  get_factor_winrate: { label: '因子胜率', group: '情景' },
   get_portfolio: { label: '持仓', group: '情景' },
 }
 
@@ -357,12 +362,12 @@ export function applyRunSteps(
   steps: Array<{ tool?: string | null; ok?: boolean | null }> | null | undefined,
 ): ReadinessState {
   if (!state.items.length || !steps || !steps.length) return state
-  const byTool = new Map<string, boolean[]>()
+  const byTool = new Map<string, Array<boolean | null>>()
   for (const st of steps) {
     const tool = (st?.tool || '').trim()
     if (!tool) continue
     const list = byTool.get(tool) ?? []
-    list.push(st.ok !== false)  // ok 缺失按成功算？不：只把显式 false 当失败，其余视为未断言
+    list.push(typeof st.ok === 'boolean' ? st.ok : null)
     byTool.set(tool, list)
   }
   if (!byTool.size) return state
@@ -371,9 +376,11 @@ export function applyRunSteps(
     if (it.status === 'ok' || it.status === 'failed') return it
     const flags = byTool.get(it.key)
     if (!flags || !flags.length) return it
-    changed = true
+    const hasSuccess = flags.some((f) => f === true)
     const allFailed = flags.every((f) => f === false)
-    return { ...it, status: (allFailed ? 'failed' : 'ok') as ReadinessStatus }
+    if (!hasSuccess && !allFailed) return it
+    changed = true
+    return { ...it, status: (hasSuccess ? 'ok' : 'failed') as ReadinessStatus }
   })
   return changed ? recount(items, state.total) : state
 }

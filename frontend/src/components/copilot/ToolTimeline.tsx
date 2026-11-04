@@ -37,6 +37,10 @@ export interface ToolTimelineProps {
   onLoadDetail?: (runId: string) => void
   /** 已加载的单轮详情：run_id → 详情。未命中的轮次显示"加载中"骨架 */
   details?: ToolTimelineDetails
+  loading?: boolean
+  running?: boolean
+  error?: boolean
+  onRetry?: () => void
   className?: string
 }
 
@@ -63,7 +67,7 @@ function digestOf(text: string | null | undefined): string {
   return t.length > 120 ? `${t.slice(0, 120)}…` : t
 }
 
-export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTimelineProps) {
+export function ToolTimeline({ runs, onLoadDetail, details, className, loading, running, error, onRetry }: ToolTimelineProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
   const toggle = (runId: string) => {
@@ -82,7 +86,9 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
           className="py-1 text-[12px] text-muted-foreground"
           data-testid="copilot-tool-timeline-empty"
         >
-          本轮没有工具调用
+          {error ? (
+            <>过程暂时无法获取。{onRetry ? <button type="button" className="ml-1 text-primary" onClick={onRetry}>重新加载</button> : null}</>
+          ) : loading ? '正在加载本轮过程…' : running ? '分析进行中，过程尚未同步。' : '暂无可用的过程记录。'}
         </div>
       </div>
     )
@@ -147,7 +153,7 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
                       className="py-1 text-[12px] text-muted-foreground"
                       data-testid="copilot-run-empty"
                     >
-                      本轮没有工具调用
+                      {run.status === 'running' || run.status === 'queued' ? '任务进行中，暂无已记录的工具步骤。' : '本轮没有工具调用'}
                     </div>
                   ) : !detail ? (
                     <div className="space-y-1 py-1" data-testid="copilot-run-loading">

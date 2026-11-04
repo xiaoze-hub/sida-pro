@@ -37,7 +37,7 @@ import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
-import { publicAssistantContent } from '@/lib/copilot/public-content'
+import { publicAssistantContent, publicResearchError } from '@/lib/copilot/public-content'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
 import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
 import { MentionPicker, type MentionTab } from '@/components/copilot/MentionPicker'
@@ -1331,7 +1331,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             },
             onError: (e) => {
               if (!isCurrent()) return
-              setError(e)
+              setError(publicResearchError(e))
             },
             onMalformed: () => {
               // 坏帧的具体数量在返回值里（result.corruptedFrames），收尾统一提示；
@@ -1351,7 +1351,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         // 2026-10-28: 没拿到终稿 = 失败, 不许把半截正文当成品亮着
         const streamResult = result as ChatStreamResult | undefined
         if (streamResult?.failure) {
-          setError(streamResult.failure)
+          setError(publicResearchError(streamResult.failure))
           setMsgs((m) => settleStreamBubble(m, streamResult.content || assistant, true))
         } else if (streamResult?.corruptedFrames) {
           setStreamNotice(`流式数据有 ${streamResult.corruptedFrames} 处损坏，已按服务端终稿校正`)
@@ -1360,7 +1360,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         // 2026-10-28: 旧流（已切走/已被新流顶掉）的失败文案只属于它自己那一轮,
         // 不许挂到别人正在看的会话上（回归用例 tests/components/copilot-stream-race.test.tsx）。
         if (!isCurrent()) return
-        setError(e instanceof Error ? e.message : '对话失败')
+        setError(publicResearchError(e))
         // 2026-10-28 验收（P0）：fetch 中途 reject 时屏幕上的半截正文**必须**带"不完整"标记。
         // 原来这里只 setError —— 用户看着几行正文正常亮着，会当成结论读（那几行甚至连终稿附言都没有）。
         // `assistant` 为空时 settleStreamBubble 一次都不铺（空 ≠ 半成品）。
@@ -2087,8 +2087,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             </div>
           ) : null}
           {error ? (
-            <div className="card-surface bg-card rounded px-2 py-1.5 text-[12px] text-role-risk">
+            <div role="alert" className="card-surface bg-card rounded px-2 py-1.5 text-[12px] text-role-risk">
               {error}
+              <button type="button" className="ml-2 text-primary" onClick={() => { setPanelTab('runs'); runsState.reload() }}>查看过程</button>
             </div>
           ) : null}
           {streamNotice ? (
@@ -2341,6 +2342,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                 runs={runsState.runs}
                 details={runsState.details}
                 onLoadDetail={(rid) => void runsState.loadDetail(rid)}
+                loading={runsState.loading}
+                running={streaming || backgroundPending}
+                error={!runsState.ok}
+                onRetry={runsState.reload}
               />
             ) : panelTab === 'memory' ? (
               <MemoryPanel />

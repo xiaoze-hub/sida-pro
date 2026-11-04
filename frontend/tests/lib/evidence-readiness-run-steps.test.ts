@@ -23,6 +23,21 @@ const UNKNOWN_13: ReadinessItem[] = [
 ]
 
 describe('applyRunSteps', () => {
+  it('轨迹未断言成功或失败时，维度保持未确认', () => {
+    const out = applyRunSteps(state(UNKNOWN_13), [
+      { tool: 'get_stock_chips' },
+      { tool: 'get_stock_quote', ok: null },
+    ])
+    expect(out.items.find((item) => item.key === 'get_stock_chips')?.status).toBe('unknown')
+    expect(out.items.find((item) => item.key === 'get_stock_quote')?.status).toBe('unknown')
+  })
+  it('同一工具有失败和未确认结果时，不能断言全部失败', () => {
+    const out = applyRunSteps(state(UNKNOWN_13), [
+      { tool: 'get_stock_chips', ok: false },
+      { tool: 'get_stock_chips', ok: null },
+    ])
+    expect(out.items.find((item) => item.key === 'get_stock_chips')?.status).toBe('unknown')
+  })
   it('轨迹里成功的工具把 unknown 补成 ok（13 未确认 → 有据可查）', () => {
     const out = applyRunSteps(state(UNKNOWN_13), [
       { tool: 'get_stock_quote', ok: true },
