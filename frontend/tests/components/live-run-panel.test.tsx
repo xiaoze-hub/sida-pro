@@ -69,6 +69,7 @@ describe('LiveRunPanel', () => {
       { seq: 2, tool: 'get_technical_analysis', ok: true, elapsed_ms: 900 },
     ] })
     await waitFor(() => expect(screen.getByText('执行中')).toBeTruthy())
+    expect(screen.getByText('2 次工具')).toBeTruthy()
     expect(screen.getByText('get_stock_quote')).toBeTruthy()
     expect(screen.getByText('get_technical_analysis')).toBeTruthy()
   })
@@ -112,8 +113,9 @@ describe('LiveRunPanel', () => {
     const a = reduceEvent(base, 'status', { status: 'running', tool_calls: 2 })
     expect(a.status).toBe('running')
     expect(a.toolCalls).toBe(2)
-    const b = reduceEvent(a, 'steps', { items: [{ seq: 1, tool: 'x', ok: true, elapsed_ms: 5 }] })
+    const b = reduceEvent(a, 'steps', { count: 1, items: [{ seq: 1, tool: 'x', ok: true, elapsed_ms: 5 }] })
     expect(b.steps.length).toBe(1)
+    expect(b.toolCalls).toBe(1)
     expect(b.status).toBe('running')
     const c = reduceEvent(b, 'error', { message: '事件流超时' })
     expect(c.error).toBe('事件流超时')

@@ -63,7 +63,11 @@ export function reduceEvent(prev: LiveState, name: string, data: Record<string, 
   }
   if (name === 'steps') {
     const items = Array.isArray(data.items) ? (data.items as LiveStep[]) : []
-    return { ...prev, steps: items }
+    return {
+      ...prev,
+      steps: items,
+      toolCalls: typeof data.count === 'number' && data.count >= 0 ? data.count : prev.toolCalls,
+    }
   }
   if (name === 'done') {
     // ⚠️ done 必须自己带状态：实测只处理 status 事件时，终态可能先被 done 推出，
