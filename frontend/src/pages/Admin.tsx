@@ -30,6 +30,7 @@ import {
 } from '@/components/dev/DevPageLayout'
 import { useI18n } from '@/hooks/useI18n'
 import { InviteCodesSection } from '@/components/admin/InviteCodesSection'
+import { UsageTrendsOverview, UsageTrendsPanel } from '@/components/admin/UsageTrendsPanel'
 
 /**
  * Admin 管理后台(2026-09-16)。
@@ -750,7 +751,7 @@ export default function AdminPage() {
       <Section
         id="sec-keys"
         title="API Key 管理"
-        description="全部 Skill Gateway Key，可冻结/解冻/禁用"
+        description="全部 Skill Gateway Key，可冻结/解冻/禁用；顶部概览显示实时 QPS 与近 7 天新增/调用"
         icon={<KeyRound className="h-4 w-4" />}
       >
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -770,6 +771,11 @@ export default function AdminPage() {
             <div className="text-[12px] text-muted-foreground">今日调用量</div>
             <div className="font-mono text-[20px] font-semibold text-cyan-400">{keyStats.totalCalls}</div>
           </InfoCard>
+        </div>
+
+        {/* 用量概览 + 进入完整监控(2026-11-04): Key 页要能直接看到压力与增长, 不用先找用量页 */}
+        <div className="mb-4">
+          <UsageTrendsOverview />
         </div>
 
         {keysLoading ? (
@@ -896,9 +902,14 @@ export default function AdminPage() {
       <Section
         id="sec-usage"
         title="用量监控"
-        description="按 Key / 按用户接口 / 按天 聚合近 7 天调用"
+        description="实时 QPS 与 7/30 天走势、Top IP / 中文 Top Skills，再按 Key / 按用户接口 / 按天聚合"
         icon={<BarChart3 className="h-4 w-4" />}
       >
+        {/* 新接口 /admin/analytics/usage-trends(2026-11-04): QPS、每日新增 Key/总调用、Top IP/Skills */}
+        <div className="mb-6">
+          <UsageTrendsPanel />
+        </div>
+
         {/* 按 Key */}
         <div className="mb-2 text-[12px] font-medium text-muted-foreground">按 API Key</div>
         {skillUsageLoading ? (
