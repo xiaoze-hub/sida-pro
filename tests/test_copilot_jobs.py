@@ -139,6 +139,32 @@ def test_后台运行启动即记录心跳(Session):
     assert _row(Session, "r-heartbeat").heartbeat_at is not None
 
 
+@pytest.mark.parametrize("terminal", ["cancelled", "failed"])
+def test_并发终态先于收尾写入时不能被成功覆盖(Session, monkeypatch, terminal):
+    from sqlalchemy import update
+    from sqlalchemy.orm import Query
+
+    _mk_run(Session, "r-race", status="running")
+    original = Query.update
+    raced = False
+
+    def update_after_terminal(query, *args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            db = Session()
+            try:
+                db.execute(update(CopilotRun).where(CopilotRun.run_id == "r-race").values(status=terminal))
+                db.commit()
+            finally:
+                db.close()
+        return original(query, *args, **kwargs)
+
+    monkeypatch.setattr(Query, "update", update_after_terminal)
+    copilot_jobs._mark("r-race", status="ok", conversation_id=99)
+    assert _row(Session, "r-race").status == terminal
+
+
 @pytest.mark.parametrize("status", ["cancelled", "failed"])
 def test_迟到轨迹不能重开或覆盖终态(Session, monkeypatch, status):
     from src.harness import trace as trace_mod

@@ -97,7 +97,7 @@ async function ask(question: string) {
 }
 
 describe('流中途 reject · 半截正文必须标成不完整', () => {
-  it('已有半截正文时断流：正文保留但带不完整标记，失败原因可见', async () => {
+  it('已有半截正文时断流：正文保留并标记不完整，内部异常不外露', async () => {
     hangStreams()
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
@@ -125,7 +125,8 @@ describe('流中途 reject · 半截正文必须标成不完整', () => {
     expect(flag.textContent).toMatch(/不完整/)
     // 半截正文不许被抹掉（用户看得见写了什么），但也不能被当成定稿
     expect(screen.getByText(/主力净流出约 1\.2 亿/)).toBeTruthy()
-    expect(screen.getByText(/socket hang up/)).toBeTruthy()
+    expect(screen.getByText(/本次分析未能完成/)).toBeTruthy()
+    expect(screen.queryByText(/socket hang up/)).toBeNull()
   })
 
   it('首字还没到就断流：不铺空气泡，只报错', async () => {
@@ -144,7 +145,8 @@ describe('流中途 reject · 半截正文必须标成不完整', () => {
     })
 
     expect(screen.queryByTestId('copilot-stream-incomplete')).toBeNull()
-    expect(await screen.findByText(/socket hang up/)).toBeTruthy()
+    expect(await screen.findByText(/本次分析未能完成/)).toBeTruthy()
+    expect(screen.queryByText(/socket hang up/)).toBeNull()
   })
 
   it('切走的旧流断在半截：标记与正文都不许落到新会话上', async () => {

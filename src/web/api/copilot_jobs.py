@@ -347,19 +347,27 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
             if changed:
                 db.commit()
             return
-        row.status = status
+        values: dict[Any, Any] = {CopilotRun.status: status}
         if status == "running" and row.heartbeat_at is None:
-            row.heartbeat_at = db_now_naive()
+            values[CopilotRun.heartbeat_at] = db_now_naive()
         if error:
-            row.error = error[:2000]
+            values[CopilotRun.error] = error[:2000]
         if elapsed_ms is not None:
-            row.elapsed_ms = elapsed_ms
+            values[CopilotRun.elapsed_ms] = elapsed_ms
         if tool_calls is not None:
-            row.tool_calls = tool_calls
+            values[CopilotRun.tool_calls] = tool_calls
         if conversation_id is not None:
-            row.conversation_id = conversation_id
+            values[CopilotRun.conversation_id] = conversation_id
         if rt.is_terminal(status):
-            row.finished_at = db_now_naive()
+            values[CopilotRun.finished_at] = db_now_naive()
+        # 与心跳接管/取消并发时，读取后状态可能已改变；按原状态原子更新，
+        # 不能用迟到的成功覆盖新的终态。
+        changed = db.query(CopilotRun).filter(
+            CopilotRun.run_id == run_id, CopilotRun.status == row.status,
+        ).update(values, synchronize_session=False)
+        if not changed:
+            logger.info("[copilot_jobs] 状态已变化，跳过迟到更新: %s", run_id)
+            return
         db.commit()
     finally:
         db.close()
