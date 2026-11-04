@@ -19,7 +19,7 @@
  */
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Activity, ArrowRight, BarChart3, Clock3, Globe2, Loader2, RefreshCw, Timer } from 'lucide-react'
+import { Activity, ArrowRight, BarChart3, Clock3, Globe2, KeyRound, Loader2, RefreshCw, Timer } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@sida/base-ui/components/ui/tabs'
 import { Button } from '@sida/base-ui/components/ui/button'
 import { EmptyState } from '@/components/EmptyState'
@@ -51,6 +51,14 @@ export interface UsageTrendsRaw {
     count?: number | string | null
   }[]
   top_ips?: { ip?: string; count?: number | string | null }[]
+  /** 按 API Key 聚合的来源 IP：回答"这把 Key 被哪些 IP 用过"（共用/盗用判据）。 */
+  keys_with_ips?: {
+    api_key_id?: number | string | null
+    key_prefix?: string
+    owner_label?: string
+    total_calls?: number | string | null
+    ips?: { ip?: string; count?: number | string | null }[]
+  }[]
   total_calls_in_window?: number | string | null
 }
 
@@ -61,6 +69,14 @@ export interface UsageTrends {
   daily: { date: string; newKeys: number | null; totalCalls: number | null }[]
   skills: { skillName: string; displayName: string | null; known: boolean | null; count: number | null }[]
   ips: { ip: string; count: number | null }[]
+  /** 每把 Key 的来源 IP 明细；后端未返回时为空数组（不补假数据）。 */
+  keysWithIps: {
+    apiKeyId: number | null
+    keyPrefix: string
+    ownerLabel: string
+    totalCalls: number | null
+    ips: { ip: string; count: number | null }[]
+  }[]
   windowCalls: number | null
 }
 
@@ -100,6 +116,19 @@ export function normalizeUsageTrends(raw: UsageTrendsRaw | null | undefined): Us
     }))
     .filter((row) => row.ip !== '')
 
+  // 每把 Key 的来源 IP：Key 标识缺失的行丢弃(没有归属的 IP 明细没有意义)
+  const keysWithIps = (Array.isArray(raw?.keys_with_ips) ? raw!.keys_with_ips! : [])
+    .map((row) => ({
+      apiKeyId: toNum(row?.api_key_id),
+      keyPrefix: typeof row?.key_prefix === 'string' ? row.key_prefix : '',
+      ownerLabel: typeof row?.owner_label === 'string' ? row.owner_label : '',
+      totalCalls: toNum(row?.total_calls),
+      ips: (Array.isArray(row?.ips) ? row!.ips! : [])
+        .map((x) => ({ ip: typeof x?.ip === 'string' ? x.ip : '', count: toNum(x?.count) }))
+        .filter((x) => x.ip !== ''),
+    }))
+    .filter((row) => row.keyPrefix !== '' || row.apiKeyId !== null)
+
   return {
     days: toNum(raw?.days),
     qps: {
@@ -112,6 +141,7 @@ export function normalizeUsageTrends(raw: UsageTrendsRaw | null | undefined): Us
     daily,
     skills,
     ips,
+    keysWithIps,
     windowCalls: toNum(raw?.total_calls_in_window),
   }
 }
@@ -388,6 +418,77 @@ function UsageRangeBody({ days }: { days: 7 | 30 }) {
               </table>
             </div>
           )}
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center gap-2 text-[12px] font-medium text-muted-foreground">
+            <KeyRound className="h-3.5 w-3.5" />
+            按 API Key 的来源 IP（近 {days} 天）
+          </div>
+          {view.keysWithIps.length === 0 ? (
+            <EmptyState
+              compact
+              icon={<KeyRound className="h-5 w-5" />}
+              title="没有 Key 级 IP 记录"
+              description="本次响应未返回 keys_with_ips，或窗口内没有带 Key 归属的调用"
+            />
+          ) : (
+            <div className="overflow-x-auto rounded-xl bg-card">
+              <table className="w-full min-w-[520px]">
+                <thead className="border-b border-border">
+                  <tr>
+                    <th className="px-3 py-2 text-left text-[12px] font-medium text-muted-foreground">Key</th>
+                    <th className="px-3 py-2 text-left text-[12px] font-medium text-muted-foreground">归属</th>
+                    <th className="px-3 py-2 text-right text-[12px] font-medium text-muted-foreground">调用</th>
+                    <th className="px-3 py-2 text-left text-[12px] font-medium text-muted-foreground">来源 IP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {view.keysWithIps.map((row) => (
+                    <tr
+                      key={row.keyPrefix || String(row.apiKeyId)}
+                      className="border-b border-border last:border-0"
+                    >
+                      <td className="px-3 py-2">
+                        <code className="font-mono text-[12px] text-foreground">{row.keyPrefix || '--'}</code>
+                      </td>
+                      <td className="px-3 py-2 text-[12px] text-muted-foreground" title={row.ownerLabel}>
+                        {row.ownerLabel || '--'}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-[12px] text-foreground">
+                        {fmtCount(row.totalCalls)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-x-2 gap-y-1">
+                          {row.ips.length === 0 ? (
+                            <span className="text-[12px] text-muted-foreground">--</span>
+                          ) : (
+                            row.ips.map((x) => (
+                              <span
+                                key={x.ip}
+                                className="font-mono text-[12px] text-muted-foreground"
+                                title={`${x.ip} · ${x.count ?? '--'} 次`}
+                              >
+                                {x.ip}
+                                <span className="ml-1 text-[12px] text-muted-foreground">
+                                  {fmtCount(x.count)}
+                                </span>
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {view.keysWithIps.length > 0 ? (
+            <MissingFieldNote>
+              仅展示调用量最高的 20 把 Key；IP 只统计窗口内、且计量时能解析来源的调用。
+            </MissingFieldNote>
+          ) : null}
         </div>
       </div>
     </div>

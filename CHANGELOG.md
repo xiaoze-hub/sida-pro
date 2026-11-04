@@ -4,6 +4,12 @@
 
 ## 2026-11-04
 
+### feat-用量监控按 API Key 归属来源 IP
+
+- `GET /api/admin/analytics/usage-trends` 新增 `keys_with_ips`：按 Key 聚合各自的来源 IP 与次数（`api_key_id/key_prefix/owner_label/total_calls/ips[]`），回答"这把 Key 被哪些 IP 用过"。原来的 `top_ips` 只回答"全站谁在打"，两者视角不同。
+- 管理后台「按 API Key 的来源 IP」表格直接展示，同一 IP 在不同 Key 下各自计数，不合并成全局值。
+- 踩坑记录：该聚合首版只算不进 return 字典 —— 接口 200、字段缺失、前端拿 undefined，且没有任何测试覆盖返回体键。已补 `test_按Key聚合IP_字段真实返回且归属正确`，并**反向验证**（去掉字段该用例立刻红）后才提交。
+
 ### fix-API Key 监控复核：管理面鉴权、XFF 信任边界、IP 归一与额度口径
 
 - **管理面鉴权**：`skills_gateway._require_owner_admin` 不再自判 `role`，复用 `auth.require_owner` —— 生产严格模式下 owner 的**用户面** token 不能读全局 Key 清单/调额度/看全局用量与耗时，必须用户 token + 独立 admin token 双身份；member 即使持 admin token 仍 403（keys/usage/latency/analytics 四类调用点同一矩阵回归）。
