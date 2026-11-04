@@ -75,7 +75,7 @@ def _get_client_ip(request: Request) -> str:
     的语义), 直连 peer 是公网(裸跑 / 非可信反代)时直接用 peer.host。
     """
     import ipaddress
-    peer = request.client.host if request.client else None
+    peer = getattr(getattr(request, "client", None), "host", None)
     if not peer:
         return "unknown"
     try:
