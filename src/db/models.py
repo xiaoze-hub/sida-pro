@@ -1814,6 +1814,7 @@ class SkillUsage(UpdatedAtMixin, Base):
     output_tokens = Column(Integer, default=0)
     channel = Column(String(16), default="api", nullable=False)  # api/web/guest
     user_id = Column(String(36), nullable=True, index=True)  # 冗余, 方便按用户统计
+    client_ip = Column(String(64), nullable=True)             # 客户端真实 IP (2026-11-04)
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
     __table_args__ = (

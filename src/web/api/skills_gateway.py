@@ -1980,12 +1980,13 @@ async def run_skill(
     if _fmt not in ("html", "json"):
         _fmt = "html"
     cache_key = _run_cache_key(name, _fmt, body.args)
+    ip = _client_ip(request)
     cached = _hot_cache_get(cache_key)
     if cached is not None:
         # 命中: 仍然记账(配额照算), 但不打上游、不触发突增冻结
         _log_usage(
             db, ident.api_key_id, name, 200, 0,
-            channel=ident.channel, user_id=ident.user_id,
+            channel=ident.channel, user_id=ident.user_id, client_ip=ip,
         )
         if ident.key_row is not None:
             ident.key_row.last_used_at = db_now_naive()
@@ -2007,13 +2008,13 @@ async def run_skill(
         duration_ms = int((time.monotonic() - t0) * 1000)
         _log_usage(
             db, ident.api_key_id, name, status_code, duration_ms,
-            channel=ident.channel, user_id=ident.user_id,
+            channel=ident.channel, user_id=ident.user_id, client_ip=ip,
         )
         raise HTTPException(500, f"skill 执行失败: {e!r}")
 
     _log_usage(
         db, ident.api_key_id, name, status_code, duration_ms,
-        channel=ident.channel, user_id=ident.user_id,
+        channel=ident.channel, user_id=ident.user_id, client_ip=ip,
     )
     if ident.key_row is not None:
         ident.key_row.last_used_at = db_now_naive()
@@ -2059,6 +2060,7 @@ def _log_usage(
     *,
     channel: str = "api",
     user_id: str | None = None,
+    client_ip: str | None = None,
 ) -> None:
     try:
         db.add(SkillUsage(
@@ -2068,6 +2070,7 @@ def _log_usage(
             duration_ms=duration_ms,
             channel=channel or "api",
             user_id=user_id,
+            client_ip=client_ip,
         ))
         db.commit()
     except Exception as e:  # noqa: BLE001
@@ -2179,11 +2182,112 @@ def _usage_by_channel(db: Session, base_filters: list, day_start: datetime) -> d
     return out
 
 
-@router.get("/usage")
-def get_usage(
-    request: Request,
+from src.web.api.auth import get_current_user as _get_current_user
+
+
+@router.get("/admin/analytics/usage-trends")
+@allow_cross_user  # 管理员统计全局 API Key 用量走势，跨用户聚合查询合规
+def get_admin_usage_analytics(
+    days: int = 7,
     db: Session = Depends(get_db),
+    user: Any = Depends(_get_current_user),
 ) -> dict:
+    """管理后台：API Key 用量监控增强分析接口（2026-11-04）。
+
+    提供：
+    - 实时 QPS 与最近峰值
+    - 每日新增 API Key 趋势
+    - 全局总调用量每日走势（带客户端 IP 分布与中文接口映射）
+    """
+    from src.core.skill_labels import label_for
+    from src.db.models import SkillApiKey, SkillUsage
+
+    # 简单权限门禁：owner/admin
+    uid = getattr(user, "id", None)
+    role = getattr(user, "role", "member")
+    if role != "owner" and uid not in ("admin", "1", 1):
+        # 兼容现有管理面鉴权：非 owner 提示权限不足
+        raise HTTPException(403, "需要管理员权限访问用量监控分析")
+
+    days = max(1, min(90, int(days)))
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(days=days)
+
+    # 1. 实时 QPS 计算（过去 10 秒 / 60 秒）
+    t10 = now_utc - timedelta(seconds=10)
+    t60 = now_utc - timedelta(seconds=60)
+    count_10s = db.query(SkillUsage).filter(SkillUsage.created_at >= t10).count()
+    count_60s = db.query(SkillUsage).filter(SkillUsage.created_at >= t60).count()
+    qps_current = round(count_10s / 10.0, 2)
+    qps_avg_60s = round(count_60s / 60.0, 2)
+
+    # 2. 每日新增 API Key 趋势
+    key_rows = db.query(SkillApiKey.created_at).filter(SkillApiKey.created_at >= cutoff).all()
+    daily_keys_map: dict[str, int] = {}
+    for (c_at,) in key_rows:
+        if c_at:
+            d_str = c_at.strftime("%Y-%m-%d")
+            daily_keys_map[d_str] = daily_keys_map.get(d_str, 0) + 1
+
+    # 3. 全局总调用量每日走势 & Top Skills (带中文注释) & IP 追踪
+    usage_rows = (
+        db.query(SkillUsage.created_at, SkillUsage.skill_name, SkillUsage.client_ip, SkillUsage.status_code)
+        .filter(SkillUsage.created_at >= cutoff)
+        .all()
+    )
+
+    daily_usage_map: dict[str, int] = {}
+    skill_counts: dict[str, int] = {}
+    ip_counts: dict[str, int] = {}
+
+    for c_at, skill_name, client_ip, s_code in usage_rows:
+        if c_at:
+            d_str = c_at.strftime("%Y-%m-%d")
+            daily_usage_map[d_str] = daily_usage_map.get(d_str, 0) + 1
+        if skill_name:
+            skill_counts[skill_name] = skill_counts.get(skill_name, 0) + 1
+        if client_ip:
+            ip_counts[client_ip] = ip_counts.get(client_ip, 0) + 1
+
+    # 构造按天连续的完整序列
+    dates_list = [(cutoff + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days + 1)]
+    daily_trend = [
+        {
+            "date": d,
+            "new_keys": daily_keys_map.get(d, 0),
+            "total_calls": daily_usage_map.get(d, 0),
+        }
+        for d in dates_list
+    ]
+
+    # Top Skills 带中文名称
+    top_skills = [
+        {
+            "skill_name": s,
+            "display_name": label_for(s),
+            "count": cnt,
+        }
+        for s, cnt in sorted(skill_counts.items(), key=lambda x: x[1], reverse=True)[:15]
+    ]
+
+    # Top Client IPs
+    top_ips = [
+        {"ip": ip, "count": cnt}
+        for ip, cnt in sorted(ip_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    ]
+
+    return {
+        "success": True,
+        "days": days,
+        "qps": {
+            "current_10s": qps_current,
+            "avg_60s": qps_avg_60s,
+        },
+        "daily_trend": daily_trend,
+        "top_skills": top_skills,
+        "top_ips": top_ips,
+        "total_calls_in_window": len(usage_rows),
+    }
     """自查当日用量与剩余配额。
 
     - 带 X-API-Key: 按 key 查(兼容旧路径)
