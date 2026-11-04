@@ -269,6 +269,19 @@ describe('③ 重开后换票：旧会话（含快照）不能再被复用', () 
 })
 
 describe('④ 后台执行 × 换票/再提问：旧会话必须作废', () => {
+  it('状态查询临时断线后继续查询已有任务，不重复提交', async () => {
+    const networkError = Object.assign(new Error('network error'), { kind: 'NETWORK' })
+    jobsMock.getCopilotRunStatus
+      .mockRejectedValueOnce(networkError)
+      .mockResolvedValue({ run_id: 'run-1', status: 'ok', conversation_id: null })
+    renderPage(null)
+    fireEvent.click(screen.getByTestId('copilot-bg-toggle'))
+    await ask('分析 600111')
+    await waitFor(() => expect(screen.getByText(/连接暂时中断/)).toBeTruthy(), { timeout: 5000 })
+    await waitFor(() => expect(jobsMock.getCopilotRunStatus).toHaveBeenCalledTimes(2), { timeout: 7000 })
+    expect(jobsMock.submitCopilotRun).toHaveBeenCalledTimes(1)
+  }, 10000)
+
   it('后台换票后任务没给新会话 id：不得回落到旧会话 21', async () => {
     jobsMock.getCopilotRunStatus.mockResolvedValue({ run_id: 'run-1', status: 'ok', conversation_id: null })
     publishChartContext(workbenchContext())

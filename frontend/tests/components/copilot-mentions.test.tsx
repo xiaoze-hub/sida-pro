@@ -78,6 +78,20 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('@ 提及', () => {
+  it('选择专家入口保留草稿，打开智能体列表并将选择带入提问', async () => {
+    render(<AiCopilotPage />)
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
+    typeIn(ta, '复盘今天')
+    fireEvent.click(screen.getByText('选择专家'))
+    expect(ta.value).toBe('复盘今天 @')
+    fireEvent.click(await screen.findByText('盘后复盘官'))
+    fireEvent.click(screen.getByLabelText('发送'))
+    await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
+    expect(apiMock.sendMessageStream.mock.calls[0][6]).toEqual([
+      { type: 'agent', value: 'postmarket_reviewer', label: '盘后复盘官' },
+    ])
+  })
+
   it('打 @ 弹出面板，默认股票 tab', async () => {
     render(<AiCopilotPage />)
     const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement

@@ -80,6 +80,21 @@ async function ask(question: string) {
 }
 
 describe('终稿替换流式草稿', () => {
+  it('拟定跟踪只追加草稿，不提交动作或替换已有输入', async () => {
+    apiMock.sendMessageStream.mockImplementation(async (_id: number, _q: string, handlers: any) => {
+      handlers.onDone({ id: 7, role: 'assistant', content: FINAL, created_at: '' })
+      return { content: FINAL, authoritative: true, corruptedFrames: 0, errors: [] }
+    })
+    await ask('600111 怎么样')
+    const button = await screen.findByText('拟定后续跟踪')
+    const input = screen.getByPlaceholderText(/问点什么|补充说明/) as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '我的补充' } })
+    fireEvent.click(button)
+    expect(input.value).toContain('我的补充')
+    expect(input.value).toContain('先展示待确认方案')
+    expect(apiMock.sendMessageStream).toHaveBeenCalledTimes(1)
+  })
+
   it('done.content 与 delta 不同 → 屏上是终稿（附言不丢），草稿不残留', async () => {
     apiMock.sendMessageStream.mockImplementation(async (_id: number, _q: string, handlers: any) => {
       handlers.onDelta(DRAFT)

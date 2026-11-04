@@ -336,7 +336,7 @@ async def _call_tool(tool: str, sym: str, executor, market: str) -> tuple[bool, 
     return True, text, None, _ms(t0)
 
 
-async def _run_symbol(recipe, sym: str, executor, market: str, trace=None, on_start=None):
+async def _run_symbol(recipe, sym: str, executor, market: str, trace=None, on_start=None, on_finish=None):
     """单个标的：内部有界并发取数，返回 (PipelineRun, errors)。
 
     - 普通工具占 `PIPELINE_CONCURRENCY` 个信号量槽；
@@ -357,7 +357,14 @@ async def _run_symbol(recipe, sym: str, executor, market: str, trace=None, on_st
                 on_start(tool)  # 进度旁路，报不出去也不影响取数
             except Exception:  # noqa: BLE001
                 pass
-        slots[idx] = await _call_tool(tool, sym, executor, market)
+        try:
+            slots[idx] = await _call_tool(tool, sym, executor, market)
+        finally:
+            if on_finish is not None:
+                try:
+                    on_finish(tool)
+                except Exception:  # noqa: BLE001 - 进度旁路
+                    pass
 
     async def _one(idx: int, tool: str) -> None:
         try:
@@ -437,16 +444,27 @@ async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
         for sym in symbols:
             q: asyncio.Queue = asyncio.Queue()
             task = asyncio.create_task(
-                _run_symbol(recipe, sym, executor, market, trace=trace, on_start=q.put_nowait)
+                _run_symbol(
+                    recipe, sym, executor, market, trace=trace,
+                    on_start=lambda tool: q.put_nowait(("start", tool)),
+                    # 多标的同工具可能仍在执行，不能以单次返回代表整个维度完成。
+                    on_finish=(lambda tool: q.put_nowait(("returned", tool)))
+                    if len(symbols) == 1 else None,
+                )
             )
             task.add_done_callback(lambda _t, _q=q: _q.put_nowait(None))  # 结束哨兵
             try:
                 while True:
-                    tool = await q.get()
-                    if tool is None:
+                    event = await q.get()
+                    if event is None:
                         break
-                    done += 1
-                    yield "stage", f"正在取数 {done}/{total}：{tool}"
+                    kind, tool = event
+                    if kind == "start":
+                        done += 1
+                        yield "stage", f"正在取数 {done}/{total}：{tool}"
+                    else:
+                        # 返回只表示调用结束，非空结果也可能是错误文本。
+                        yield "stage", f"查询已返回：{tool}"
             finally:
                 if not task.done():  # 调用方提前关闭生成器：别把后台取数漏在运行里
                     task.cancel()
@@ -539,15 +557,13 @@ def _emit_evidence(runs, trace, fact_pack, sink: list | None = None) -> None:
         from src.core import evidence_pack
 
         run_id = (getattr(trace, "run_id", None) or "adhoc") if trace is not None else "adhoc"
-        as_of = ""
-        if isinstance(fact_pack, dict):
-            as_of = str(fact_pack.get("as_of") or "")
+        # 事实包冻结时间并非各工具数据的基准日，不得移作证据时间。
         # sink 直接放**可序列化 dict**：它会原样进 SSE done 载荷，dataclass 会在 json.dumps 炸掉
         if sink is not None:
             sink.extend(evidence_pack.to_payload(
-                evidence_pack.build_refs(runs, run_id, as_of=as_of or None)))
+                evidence_pack.build_refs(runs, run_id)))
         else:
-            evidence_pack.emit(runs, run_id, as_of=as_of or None)
+            evidence_pack.emit(runs, run_id)
     except Exception as exc:  # noqa: BLE001 - 证据是旁路，不许影响回答
         logger.warning("证据对象构建失败（不影响回答）：%s", type(exc).__name__)
 

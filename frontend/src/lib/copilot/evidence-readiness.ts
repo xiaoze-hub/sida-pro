@@ -37,7 +37,7 @@
  * pending = 开跑了，结果还不知道；ok = 有完成证据；failed = 有失败证据；
  * unknown = 本轮结束仍未确认（流结束/中断）—— 既不等于成功，也不栽赃成失败。
  */
-export type ReadinessStatus = 'pending' | 'ok' | 'failed' | 'unknown'
+export type ReadinessStatus = 'pending' | 'returned' | 'ok' | 'failed' | 'unknown'
 
 /** 六个证据维度 + 「其他」（未知工具的唯一诚实去处，不硬塞进六个维度之一）。 */
 export type ReadinessGroup = '走势' | '筹码' | '主力' | '盘面' | '消息' | '情景' | '其他'
@@ -203,6 +203,7 @@ export interface NormalizedStageEvent {
   failed: boolean
   /** 显式完成证据（`ok:true` / `status:'ok'|'done'`）。字符串帧永远是 false —— 它没有这个字段。 */
   ok: boolean
+  returned: boolean
   index: number | null
   total: number | null
 }
@@ -248,6 +249,7 @@ export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | n
       failed: FAIL_TEXT_RE.test(event),
       // 字符串帧（后端 SSE 的实际形状）不带完成字段：认得出失败文案就 failed，否则只是「开跑了」
       ok: false,
+      returned: /^查询已返回[:：]/.test(event),
       index: parsed.index,
       total: parsed.total,
     }
@@ -265,6 +267,7 @@ export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | n
     group: meta.group,
     failed,
     ok: okOfObject(event),
+    returned: false,
     index: parsed?.index ?? null,
     total: parsed?.total ?? null,
   }
@@ -306,8 +309,9 @@ export function foldStageEvent(state: ReadinessState, event: StageEvent): Readin
     if (it.key !== ev.tool) return it
     if (ev.failed) return { ...it, status: 'failed' as ReadinessStatus }
     if (ev.ok) return { ...it, status: 'ok' as ReadinessStatus }
+    if (ev.returned && it.status === 'pending') return { ...it, status: 'returned' as ReadinessStatus }
     // 没有任何结果证据：开跑帧只证明「又跑了一次」，状态不可推进
-    if (it.status === 'ok' || it.status === 'failed') return it
+    if (it.status === 'ok' || it.status === 'failed' || it.status === 'returned') return it
     return { ...it, status: 'pending' as ReadinessStatus }
   })
 
@@ -316,7 +320,7 @@ export function foldStageEvent(state: ReadinessState, event: StageEvent): Readin
       key: ev.tool,
       label: ev.label,
       group: ev.group,
-      status: ev.failed ? 'failed' : ev.ok ? 'ok' : 'pending',
+      status: ev.failed ? 'failed' : ev.ok ? 'ok' : ev.returned ? 'returned' : 'pending',
     })
   }
 
@@ -338,7 +342,7 @@ export function foldStageEvents(events: StageEvent[]): ReadinessState {
 export function settleReadiness(state: ReadinessState): ReadinessState {
   if (!state.items.length) return state
   const items = state.items.map((it) =>
-    it.status === 'pending' ? { ...it, status: 'unknown' as ReadinessStatus } : it,
+    it.status === 'pending' || it.status === 'returned' ? { ...it, status: 'unknown' as ReadinessStatus } : it,
   )
   return recount(items, state.total)
 }
@@ -441,5 +445,6 @@ export function statusText(status: ReadinessStatus): string {
   if (status === 'ok') return '✓'
   if (status === 'failed') return '未取到'
   if (status === 'unknown') return '未确认'
+  if (status === 'returned') return '已返回，待核验'
   return '⏳'
 }

@@ -88,6 +88,15 @@ describe('工具名 → 人话 + 维度', () => {
 })
 
 describe('foldStageEvent / 计数', () => {
+  it('查询返回只表示结束，不能计入已取；流结束后仍须核验', () => {
+    const state = foldStageEvents([
+      '正在取数 1/1：get_stock_quote',
+      '查询已返回：get_stock_quote',
+    ])
+    expect(state.items[0].status).toBe('returned')
+    expect(state.done).toBe(0)
+    expect(settleReadiness(state).items[0].status).toBe('unknown')
+  })
   it('三条开跑事件后：全部 pending，done=0/total=3（开跑 ≠ 取到）', () => {
     const state = foldStageEvents([
       '正在取数 1/3：get_stock_quote',

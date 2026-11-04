@@ -105,11 +105,12 @@ def test_心跳超时的_running_被接管(db):
     assert alive.status == "running", "心跳正常的不能动"
 
 
-def test_没有心跳列的老数据_视为超时(db):
-    """老记录从没写过心跳，说明写它的进程早就不在了 —— 正是要收的尸。"""
+def test_无心跳的前台或老数据不能猜成超时(db):
+    """无心跳也可能是另一 worker 正在处理的前台流式请求。"""
     now = datetime(2026, 10, 25, 14, 0, 0)
     _add(db, "legacy", "running", hb=None)
-    assert rt.reap_stale_runs(db, now=now) == ["legacy"]
+    assert rt.reap_stale_runs(db, now=now) == []
+    assert db.query(FakeRun).filter_by(run_id="legacy").one().status == "running"
 
 
 def test_排队中的没心跳不算死(db):

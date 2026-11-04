@@ -171,6 +171,16 @@ async def lifespan(app):
             logger.warning(f"[WS-Hub] 启动绑定失败(降级运行): {e}")
         rt.scheduler = rt.build_scheduler()
         rt.scheduler.start()
+        # 心跳可能在启动时仍未过期；定期复查才能处理重启后晚到阈值的后台任务。
+        try:
+            from src.core.copilot_runtime import reap_heartbeat_runs
+
+            rt.scheduler.scheduler.add_job(
+                reap_heartbeat_runs, "interval", seconds=30, id="copilot-heartbeat-reaper",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+        except Exception:
+            logger.warning("参谋心跳检查注册失败", exc_info=True)
         logger.info("Agent 调度器已启动")
         try:
             settings = Settings()

@@ -16,8 +16,8 @@ POST /copilot/runs/{id}/cancel → 取消（running→cancelled）
 在后台 task 里传 user 对象就能跑。这样**不动 chat.py**（该文件有 2310 行硬护栏），
 也不复制一份 LLM 管线 —— 复制出来的第二份必然与主路径漂移。
 
-**重启怎么办**：心跳由独立协程每 30s 刷新；进程死掉后心跳停，下次启动
-`copilot_runtime.reap_stale_runs()` 把它标 failed 并写"可点重试"。**不自动重跑**。
+**重启怎么办**：启动即记心跳，独立协程每 30s 刷新；定期检查已过期心跳并标 failed。
+**不自动重跑**。
 
 **不做假异步**：提交立即返回是真的（不 sleep、不排队等结果）；SSE 里每条状态都来自
 DB 真实迁移，不按时间假装进度。
@@ -322,6 +322,13 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
         row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
         if row is None:
             return
+        # 轨迹可先结算为 degraded/error；执行体随后拿到会话 id。
+        # 保留轨迹真实终态，但仍须关联已保存的回答，不能因拒绝状态迁移丢失结果。
+        if status == "ok" and row.status in {"degraded", "error"}:
+            if conversation_id is not None and row.conversation_id is None:
+                row.conversation_id = conversation_id
+                db.commit()
+            return
         if not rt.can_transition(row.status, status):
             logger.warning("[copilot_jobs] 非法迁移 %s: %s → %s", run_id, row.status, status)
             return
@@ -341,6 +348,8 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
                 db.commit()
             return
         row.status = status
+        if status == "running" and row.heartbeat_at is None:
+            row.heartbeat_at = db_now_naive()
         if error:
             row.error = error[:2000]
         if elapsed_ms is not None:
@@ -615,7 +624,7 @@ async def run_events(run_id: str, user=Depends(get_current_user)):
                 yield _sse("status", {
                     "status": row.status,
                     "elapsed_ms": row.elapsed_ms,
-                    "error": row.error,
+                    "error": "任务未能完成，请查看本轮过程。" if row.error else None,
                     "tool_calls": row.tool_calls,
                     "conversation_id": row.conversation_id,
                 })
@@ -630,7 +639,10 @@ async def run_events(run_id: str, user=Depends(get_current_user)):
                     ],
                 })
             if rt.is_terminal(row.status):
-                yield _sse("done", {"status": row.status, "error": row.error})
+                yield _sse("done", {
+                    "status": row.status,
+                    "error": "任务未能完成，请查看本轮过程。" if row.error else None,
+                })
                 return
             await asyncio.sleep(POLL_S)
             elapsed += POLL_S

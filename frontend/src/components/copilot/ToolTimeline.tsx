@@ -41,6 +41,7 @@ export interface ToolTimelineProps {
   running?: boolean
   error?: boolean
   onRetry?: () => void
+  onTrack?: (runId: string) => void
   className?: string
 }
 
@@ -67,7 +68,7 @@ function digestOf(text: string | null | undefined): string {
   return t.length > 120 ? `${t.slice(0, 120)}…` : t
 }
 
-export function ToolTimeline({ runs, onLoadDetail, details, className, loading, running, error, onRetry }: ToolTimelineProps) {
+export function ToolTimeline({ runs, onLoadDetail, details, className, loading, running, error, onRetry, onTrack }: ToolTimelineProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
   const toggle = (runId: string) => {
@@ -148,6 +149,11 @@ export function ToolTimeline({ runs, onLoadDetail, details, className, loading, 
                   className="border-l border-border pb-1 pl-2"
                   data-testid={`copilot-run-steps-${run.run_id}`}
                 >
+                  {(run.status === 'running' || run.status === 'queued') && onTrack ? (
+                    <button type="button" className="min-h-9 text-[12px] text-primary" onClick={() => onTrack(run.run_id)}>
+                      跟踪此任务
+                    </button>
+                  ) : null}
                   {knownEmpty ? (
                     <div
                       className="py-1 text-[12px] text-muted-foreground"
@@ -163,8 +169,8 @@ export function ToolTimeline({ runs, onLoadDetail, details, className, loading, 
                   ) : (
                     <ul className="m-0 list-none space-y-0.5 p-0 py-1">
                       {detail.steps.map((step) => {
-                        // 失败原因：优先 error 字段，接口没带就退回结果摘要
-                        const reason = digestOf(step.error) || digestOf(step.result_digest)
+                        // 失败摘要可能含上游异常与请求标识；只在服务端日志保留。
+                        const reason = step.ok ? digestOf(step.result_digest) : ''
                         return (
                           <li
                             key={step.seq}
@@ -181,11 +187,11 @@ export function ToolTimeline({ runs, onLoadDetail, details, className, loading, 
                             {step.ok ? (
                               <span className="shrink-0 text-[12px] text-muted-foreground">ok</span>
                             ) : (
-                              <span className="shrink-0 text-[12px] text-red-500">失败</span>
+                              <span className="shrink-0 text-[12px] text-red-500">未取到</span>
                             )}
                             {reason ? (
                               <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
-                                {step.ok ? reason : `原因：${reason}`}
+                                {reason}
                               </span>
                             ) : null}
                           </li>

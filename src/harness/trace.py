@@ -87,9 +87,15 @@ class CopilotTrace:
                 if self._reuse:
                     row = db.query(CopilotRun).filter(CopilotRun.run_id == self.run_id).one_or_none()
                     if row is not None:
-                        row.status = "running"
-                        row.error = None
-                        row.recipe = self.recipe or row.recipe
+                        # 取消或心跳接管后不能被迟到的执行体重新开启。
+                        db.query(CopilotRun).filter(
+                            CopilotRun.run_id == self.run_id,
+                            CopilotRun.status.in_(("queued", "running")),
+                        ).update({
+                            CopilotRun.status: "running",
+                            CopilotRun.error: None,
+                            CopilotRun.recipe: self.recipe or row.recipe,
+                        }, synchronize_session=False)
                         db.commit()
                         return
                     # 行不在了（被清库/回滚）→ 退回正常插入，别把执行搞挂
@@ -227,13 +233,18 @@ class CopilotTrace:
                         finished_at=db_now_naive(),
                     ))
                 else:
-                    row.status = status
-                    row.recipe = self.recipe
-                    row.error = _clip(error, 500)
-                    row.tool_calls = self.tool_calls
-                    row.elapsed_ms = elapsed_ms
-                    # 与 INSERT 分支保持一致：列是 naive，写 aware 会被 PG 按会话时区换算
-                    row.finished_at = db_now_naive()
+                    # 原子限制活跃态：不能把已取消或被接管的任务改回成功。
+                    db.query(CopilotRun).filter(
+                        CopilotRun.run_id == self.run_id,
+                        CopilotRun.status.in_(("queued", "running", "paused")),
+                    ).update({
+                        CopilotRun.status: status,
+                        CopilotRun.recipe: self.recipe,
+                        CopilotRun.error: _clip(error, 500),
+                        CopilotRun.tool_calls: self.tool_calls,
+                        CopilotRun.elapsed_ms: elapsed_ms,
+                        CopilotRun.finished_at: db_now_naive(),
+                    }, synchronize_session=False)
                 db.commit()
             finally:
                 db.close()

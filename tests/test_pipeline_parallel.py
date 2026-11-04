@@ -231,11 +231,25 @@ def test_run_stream_emits_stage_per_tool_and_keeps_results():
 
     asyncio.run(go())
     stages = [v for k, v in events if k == "stage"]
-    assert len(stages) == 4, f"进度条数 {len(stages)} != 工具数 4"
-    assert all("正在取数" in s for s in stages)
-    assert f"/4" in stages[0]
+    starts = [s for s in stages if s.startswith("正在取数")]
+    returned = [s for s in stages if s.startswith("查询已返回")]
+    assert len(starts) == len(returned) == 4
+    assert f"/4" in starts[0]
     kind, payload = events[-1]
     assert kind == "runs"
     runs, errs = payload
     assert errs == [] and runs[0].ok == 4
     assert [t for t, _ in runs[0].outputs] == ORDER_TOOLS[:4]
+
+
+def test_run_stream_multisymbol_does_not_claim_dimension_returned():
+    async def ex(name, args):
+        return "data"
+
+    async def go():
+        return [event async for event in run_stream(Recipe(ORDER_TOOLS[:2]), ["002050", "600111"], ex)]
+
+    events = asyncio.run(go())
+    stages = [text for kind, text in events if kind == "stage"]
+    assert len(stages) == 4
+    assert all(text.startswith("正在取数") for text in stages)

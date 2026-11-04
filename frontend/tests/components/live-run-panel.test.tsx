@@ -6,7 +6,7 @@
  * 耗时/工具数缺失一律 `--`，不补 0。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 type Handler = (ev: MessageEvent) => void
 
@@ -88,6 +88,9 @@ describe('LiveRunPanel', () => {
     es.emit('status', { status: 'running' })
     es.onerror?.()
     await waitFor(() => expect(screen.getByText(/事件流已断开/)).toBeTruthy())
+    fireEvent.click(screen.getByText('重新连接'))
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
+    expect(FakeEventSource.instances[1].url).toBe('/api/copilot/runs/r-4/events')
   })
 
   it('缺耗时显示 --，不补 0', () => {
@@ -117,10 +120,17 @@ describe('LiveRunPanel', () => {
   })
 
   it('isTerminalStatus 认全五个终态', () => {
-    for (const s of ['ok', 'succeeded', 'failed', 'degraded', 'cancelled']) {
+    for (const s of ['ok', 'succeeded', 'failed', 'error', 'degraded', 'cancelled']) {
       expect(isTerminalStatus(s)).toBe(true)
     }
     expect(isTerminalStatus('running')).toBe(false)
     expect(isTerminalStatus('')).toBe(false)
+  })
+
+  it('失败信息不展示上游原始异常', async () => {
+    render(<LiveRunPanel runId="r-error" />)
+    last().emit('done', { status: 'error', error: 'trace_id=secret' })
+    await waitFor(() => expect(screen.getByText('任务未能完成，请查看本轮过程。')).toBeTruthy())
+    expect(screen.queryByText(/trace_id/)).toBeNull()
   })
 })

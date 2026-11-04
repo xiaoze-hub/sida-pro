@@ -31,7 +31,7 @@ export interface LiveState {
   conversationId: number | null
 }
 
-const TERMINAL = new Set(['ok', 'succeeded', 'failed', 'degraded', 'cancelled'])
+const TERMINAL = new Set(['ok', 'succeeded', 'failed', 'error', 'degraded', 'cancelled'])
 
 const STATUS_LABEL: Record<string, string> = {
   queued: '排队中',
@@ -40,6 +40,7 @@ const STATUS_LABEL: Record<string, string> = {
   succeeded: '已完成',
   degraded: '降级完成',
   failed: '失败',
+  error: '失败',
   cancelled: '已取消',
 }
 
@@ -87,7 +88,7 @@ export function LiveRunPanel({
   className?: string
 }) {
   const [state, setState] = useState<LiveState>({
-    status: 'queued',
+    status: '',
     toolCalls: null,
     elapsedMs: null,
     steps: [],
@@ -95,11 +96,15 @@ export function LiveRunPanel({
     conversationId: null,
   })
   const [broken, setBroken] = useState(false)
+  const [connection, setConnection] = useState(0)
   const esRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
+    setState({ status: '', toolCalls: null, elapsedMs: null, steps: [], error: null, conversationId: null })
+  }, [runId])
+
+  useEffect(() => {
     if (!runId) return
-    setState({ status: 'queued', toolCalls: null, elapsedMs: null, steps: [], error: null, conversationId: null })
     setBroken(false)
 
     // 用 cookie 认证（sida_token），EventSource 带 withCredentials 即可，不用把 token 拼进 URL
@@ -138,7 +143,7 @@ export function LiveRunPanel({
       es.close()
       esRef.current = null
     }
-  }, [runId])
+  }, [runId, connection])
 
   if (!runId) return null
 
@@ -154,7 +159,7 @@ export function LiveRunPanel({
           ) : (
             <Loader2 className="h-3 w-3 animate-spin" />
           )}
-          <span className="font-medium">{STATUS_LABEL[status] ?? (status || '--')}</span>
+          <span className="font-medium">{STATUS_LABEL[status] ?? (status || '等待状态')}</span>
           <span className="tabular-nums text-muted-foreground">
             {state.toolCalls === null ? '--' : `${state.toolCalls} 次工具`}
           </span>
@@ -174,6 +179,9 @@ export function LiveRunPanel({
       {broken && !done ? (
         <div className="mt-2 text-[12px] text-amber-500">
           事件流已断开（任务可能仍在跑），可到证据页看最终状态
+          <button type="button" className="ml-2 min-h-9 text-primary" onClick={() => setConnection((value) => value + 1)}>
+            重新连接
+          </button>
         </div>
       ) : null}
 
@@ -190,11 +198,13 @@ export function LiveRunPanel({
           ))}
         </ol>
       ) : (
-        <div className="mt-2 text-[12px] text-muted-foreground">还没有工具调用</div>
+        <div className="mt-2 text-[12px] text-muted-foreground">
+          {done ? '暂无已记录的工具步骤' : status ? '任务进行中，暂无已记录的工具步骤' : '等待任务状态'}
+        </div>
       )}
 
       {state.error && done && status !== 'ok' && status !== 'succeeded' ? (
-        <div className="mt-2 text-[12px] text-stock-down">{state.error}</div>
+        <div className="mt-2 text-[12px] text-role-risk">任务未能完成，请查看本轮过程。</div>
       ) : null}
 
       {/* 治理条(2026-10-26): 预算/白名单/Frozen Ring 在运行时就可见, 不再等跑完翻轨迹 */}
