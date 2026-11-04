@@ -2329,20 +2329,20 @@ def get_admin_usage_analytics(
     t60 = now - timedelta(seconds=60)
     samples_10s = int(
         db.query(func.count(SkillUsage.id))
-        .filter(SkillUsage.created_at >= t10)
+        .filter(SkillUsage.created_at >= t10, SkillUsage.created_at <= now)
         .scalar()
         or 0
     )
     samples_60s = int(
         db.query(func.count(SkillUsage.id))
-        .filter(SkillUsage.created_at >= t60)
+        .filter(SkillUsage.created_at >= t60, SkillUsage.created_at <= now)
         .scalar()
         or 0
     )
     sec_col = _second_bucket(db)
     peak_row = (
         db.query(sec_col.label("sec"), func.count(SkillUsage.id).label("calls"))
-        .filter(SkillUsage.created_at >= t60)
+        .filter(SkillUsage.created_at >= t60, SkillUsage.created_at <= now)
         .group_by(sec_col)
         .order_by(func.count(SkillUsage.id).desc())
         .limit(1)
@@ -2361,7 +2361,7 @@ def get_admin_usage_analytics(
     usage_day_col = func.date(SkillUsage.created_at)
     usage_daily_rows = (
         db.query(usage_day_col.label("day"), func.count(SkillUsage.id).label("calls"))
-        .filter(SkillUsage.created_at >= window_start)
+        .filter(SkillUsage.created_at >= window_start, SkillUsage.created_at <= now)
         .group_by(usage_day_col)
         .all()
     )
@@ -2375,7 +2375,7 @@ def get_admin_usage_analytics(
     key_day_col = func.date(SkillApiKey.created_at)
     key_daily_rows = (
         db.query(key_day_col.label("day"), func.count(SkillApiKey.id).label("calls"))
-        .filter(SkillApiKey.created_at >= window_start)
+        .filter(SkillApiKey.created_at >= window_start, SkillApiKey.created_at <= now)
         .group_by(key_day_col)
         .all()
     )
@@ -2397,7 +2397,7 @@ def get_admin_usage_analytics(
     # ── 4) Top Skills(中文标签; 未收录保留原名并标注) ──
     skill_rows = (
         db.query(SkillUsage.skill_name, func.count(SkillUsage.id).label("calls"))
-        .filter(SkillUsage.created_at >= window_start)
+        .filter(SkillUsage.created_at >= window_start, SkillUsage.created_at <= now)
         .group_by(SkillUsage.skill_name)
         .order_by(func.count(SkillUsage.id).desc())
         .limit(15)
@@ -2416,7 +2416,7 @@ def get_admin_usage_analytics(
     # ── 5) Top Client IP(SQL 聚合 + 合法性与长度收口) ──
     ip_rows = (
         db.query(SkillUsage.client_ip, func.count(SkillUsage.id).label("calls"))
-        .filter(SkillUsage.created_at >= window_start)
+        .filter(SkillUsage.created_at >= window_start, SkillUsage.created_at <= now)
         .group_by(SkillUsage.client_ip)
         .order_by(func.count(SkillUsage.id).desc())
         .limit(_USAGE_TOP_IP_SCAN)

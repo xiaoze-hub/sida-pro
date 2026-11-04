@@ -281,6 +281,13 @@ def test_窗口边界按自然日且与库真值一致(env):
     assert body["total_calls_in_window"] == sum(d["total_calls"] for d in body["daily_trend"])
 
 
+def test_未来记录不进入统计(env):
+    _add_usage(env["key_id"], skill="future_only", at=db_now_naive() + timedelta(days=2))
+    body = _data(_analytics(env, days=7))
+    assert body["total_calls_in_window"] == sum(d["total_calls"] for d in body["daily_trend"])
+    assert all(s["skill_name"] != "future_only" for s in body["top_skills"])
+
+
 def test_新增key按自然日统计(env):
     body = _data(_analytics(env, days=7))
     assert sum(d["new_keys"] for d in body["daily_trend"]) >= 1  # 本 fixture 刚建了一把 key
