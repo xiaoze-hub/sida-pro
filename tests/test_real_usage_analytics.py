@@ -184,8 +184,11 @@ def test_usage_有效key返回当日用量(env):
     """真实 HTTP：有效 X-API-Key → 200，used_today 只数该 key 的今天。"""
     now = db_now_naive()
     today = _today()
-    _add_usage(env["key_id"], at=now - timedelta(minutes=1), channel="api")
-    _add_usage(env["key_id"], at=now - timedelta(minutes=2), channel="web")
+    # 日界附近(00:00-00:02)跑测试时, now-1min 会落到昨天 → 断言假红。
+    # 夹到"今天 +1s"保证两条都落在今天(日界内), 不再随运行时刻漂移。
+    recent = max(now - timedelta(minutes=1), today + timedelta(seconds=1))
+    _add_usage(env["key_id"], at=recent, channel="api")
+    _add_usage(env["key_id"], at=recent, channel="web")
     _add_usage(env["key_id"], at=today - timedelta(minutes=1), channel="api")  # 昨天, 不计
 
     r = env["client"].get("/api/usage", headers={"X-API-Key": env["raw_key"]})
@@ -284,8 +287,10 @@ def test_新增key按自然日统计(env):
 
 
 def test_qps均值与每秒峰值(env):
-    now = db_now_naive()
-    burst_second = (now - timedelta(seconds=2)).replace(microsecond=0)
+    now = db_now_naive().replace(microsecond=0)
+    # 突刺放在 now(而不是 now-2s): 从插入到请求若被 CI 拖慢 >8s, 10s 窗口会把
+    # now-2s 的样本挤出去, samples_10s 断言假红。同一秒 5 条 → peak_per_sec>=5。
+    burst_second = now
     for _ in range(5):
         _add_usage(env["key_id"], at=burst_second)
     for _ in range(2):

@@ -8,10 +8,14 @@
  *   ③ Top Skills(后端给中文 display_name)与 Top Client IP。
  *
  * 诚实性约束(见 docs/UI_GUIDELINES §6):
- *   - 后端字段缺失(`peak_qps` / `daily_trend` / `top_ips` 在旧版本不存在)一律显示 `--` 并说明原因,
+ *   - 后端字段缺失(`qps.peak_per_sec` / `daily_trend` / `top_ips` 在旧版本不存在)一律显示 `--` 并说明原因,
  *     **不补 0** —— 0 是"确实没有调用", 缺字段是"我们不知道", 两者不能混。
  *   - 后端显式给的 0 照实显示(那是真实读数), 只有 null/undefined 才降级成 `--`。
  *   - 刷新失败但仍有上次成功数据时, 保留数据并标注"本次刷新失败", 不清空成错误页。
+ *
+ * 字段名以 `src/web/api/skills_gateway.py::get_admin_usage_analytics` 的真实响应为准,
+ * 契约由 `tests/fixtures/usage-trends.sample.json`(后端实测 payload)钉住
+ * (前端 `admin-usage-trends-contract.test.tsx` + 后端 `test_usage_trends_contract.py`)。
  */
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -29,19 +33,33 @@ export const USAGE_SECTION_ID = 'sec-usage'
 export interface UsageTrendsRaw {
   success?: boolean
   days?: number
-  qps?: { current_10s?: number | string | null; avg_60s?: number | string | null; peak_qps?: number | string | null }
+  /** 后端字段名是 `peak_per_sec`(最近 60 秒内单秒最高调用数), 不是 `peak_qps`。 */
+  qps?: {
+    current_10s?: number | string | null
+    avg_60s?: number | string | null
+    peak_per_sec?: number | string | null
+    peak_second?: string | null
+    samples_10s?: number | string | null
+    samples_60s?: number | string | null
+  }
   daily_trend?: { date?: string; new_keys?: number | string | null; total_calls?: number | string | null }[]
-  top_skills?: { skill_name?: string; display_name?: string | null; count?: number | string | null }[]
+  top_skills?: {
+    skill_name?: string
+    display_name?: string | null
+    /** 后端标注该接口是否有中文映射; 未收录的名字会自带「（未收录）」后缀。 */
+    known?: boolean
+    count?: number | string | null
+  }[]
   top_ips?: { ip?: string; count?: number | string | null }[]
   total_calls_in_window?: number | string | null
 }
 
 export interface UsageTrends {
   days: number | null
-  qps: { current10s: number | null; avg60s: number | null; peak: number | null }
+  qps: { current10s: number | null; avg60s: number | null; peak: number | null; peakSecond: string | null }
   /** 仅保留日期合法的行; 行内数值缺失 → null(渲染成 `--`) */
   daily: { date: string; newKeys: number | null; totalCalls: number | null }[]
-  skills: { skillName: string; displayName: string | null; count: number | null }[]
+  skills: { skillName: string; displayName: string | null; known: boolean | null; count: number | null }[]
   ips: { ip: string; count: number | null }[]
   windowCalls: number | null
 }
@@ -69,6 +87,8 @@ export function normalizeUsageTrends(raw: UsageTrendsRaw | null | undefined): Us
     .map((row) => ({
       skillName: typeof row?.skill_name === 'string' ? row.skill_name : '',
       displayName: typeof row?.display_name === 'string' && row.display_name.trim() !== '' ? row.display_name : null,
+      // known 是后端显式标记; 旧后端没有该字段时退回 null(不知道, 不冒充已收录)
+      known: typeof row?.known === 'boolean' ? row.known : null,
       count: toNum(row?.count),
     }))
     .filter((row) => row.skillName !== '')
@@ -85,7 +105,9 @@ export function normalizeUsageTrends(raw: UsageTrendsRaw | null | undefined): Us
     qps: {
       current10s: toNum(raw?.qps?.current_10s),
       avg60s: toNum(raw?.qps?.avg_60s),
-      peak: toNum(raw?.qps?.peak_qps),
+      // 后端真实字段: peak_per_sec。此前误写成 peak_qps → 新后端下峰值永远 `--`。
+      peak: toNum(raw?.qps?.peak_per_sec),
+      peakSecond: typeof raw?.qps?.peak_second === 'string' && raw.qps.peak_second !== '' ? raw.qps.peak_second : null,
     },
     daily,
     skills,
@@ -102,6 +124,27 @@ function fmtCount(v: number | null): string {
 function fmtQps(v: number | null): string {
   if (v === null) return '--'
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/** 峰值 QPS = 单秒调用数(后端给整数), 不补两位小数假装更精确。 */
+function fmtPeak(v: number | null): string {
+  return v === null ? '--' : v.toLocaleString('zh-CN')
+}
+
+/** `2026-11-04 20:18:53` / `2026-11-04T20:18:53` → `20:18:53`(解析不了原样显示)。 */
+function fmtPeakSecond(v: string | null): string | null {
+  if (!v) return null
+  const m = /(\d{2}:\d{2}:\d{2})/.exec(v)
+  return m ? m[1] : v
+}
+
+/** 权限类失败要说清差在哪一层, 不能只显示 `HTTP 403`。 */
+function describeError(error: unknown): string {
+  const err = error as { status?: number; message?: string } | null
+  if (err?.status === 401) return '登录已过期，请重新登录管理端'
+  if (err?.status === 403) return '需要管理员权限（owner 账号 + 管理端登录）'
+  const msg = String(err?.message ?? '').trim()
+  return msg === '' ? '未知错误' : msg
 }
 
 /**
@@ -162,6 +205,8 @@ function UsageRangeBody({ days }: { days: 7 | 30 }) {
   const callsTotal = sumOrNull(view.daily.map((d) => d.totalCalls))
   const maxCalls = view.daily.reduce<number>((max, row) => (row.totalCalls !== null && row.totalCalls > max ? row.totalCalls : max), 0)
   const peakMissing = view.qps.peak === null
+  const peakAt = fmtPeakSecond(view.qps.peakSecond)
+  const unmapped = view.skills.filter((row) => row.known === false)
 
   return (
     <div className="space-y-6">
@@ -180,7 +225,7 @@ function UsageRangeBody({ days }: { days: 7 | 30 }) {
       {/* 刷新失败但保留上次成功数据: 不把页面清空成错误页 */}
       {error ? (
         <div className="rounded-lg bg-s2 px-3 py-2 text-[12px] text-amber-500" role="alert">
-          本次刷新失败（{String((error as { message?: string })?.message ?? '未知错误').slice(0, 80)}），以下为上次成功读取的结果。
+          本次刷新失败（{describeError(error).slice(0, 80)}），以下为上次成功读取的结果。
         </div>
       ) : null}
 
@@ -193,11 +238,15 @@ function UsageRangeBody({ days }: { days: 7 | 30 }) {
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-xl bg-s2 p-4 sm:grid-cols-4">
           <Metric label="当前 QPS（10 秒均值）" value={fmtQps(view.qps.current10s)} hint="后端过去 10 秒调用数 ÷ 10" />
           <Metric label="QPS（60 秒均值）" value={fmtQps(view.qps.avg60s)} hint="后端过去 60 秒调用数 ÷ 60" />
-          <Metric label="峰值 QPS" value={fmtQps(view.qps.peak)} hint={peakMissing ? '接口未返回峰值口径' : `近 ${days} 天窗口峰值`} />
+          <Metric
+            label="峰值 QPS（单秒）"
+            value={fmtPeak(view.qps.peak)}
+            hint={peakMissing ? '接口未返回峰值口径' : peakAt ? `最近 60 秒峰值出现在 ${peakAt}` : '最近 60 秒内单秒最高调用数'}
+          />
           <Metric label="窗口内总调用" value={fmtCount(view.windowCalls)} hint={`近 ${days} 天全部 Key 的调用条数`} />
         </dl>
         {peakMissing ? (
-          <MissingFieldNote>后端本次未返回 `peak_qps`（旧版本接口），峰值显示 `--`；不拿其他口径折算补齐。</MissingFieldNote>
+          <MissingFieldNote>后端本次未返回 `qps.peak_per_sec`（旧版本接口），峰值显示 `--`；不拿均值折算补齐。</MissingFieldNote>
         ) : null}
       </div>
 
@@ -296,8 +345,14 @@ function UsageRangeBody({ days }: { days: 7 | 30 }) {
               </table>
             </div>
           )}
-          {view.skills.some((row) => row.displayName === null) ? (
-            <MissingFieldNote>部分接口缺少中文映射（display_name 为空），直接显示原始接口名。</MissingFieldNote>
+          {unmapped.length > 0 ? (
+            <MissingFieldNote>
+              有 {unmapped.length} 个接口未收录中文映射（后端标记 known=false）：{unmapped.slice(0, 3).map((row) => row.skillName).join('、')}
+              {unmapped.length > 3 ? ' 等' : ''}
+              ，按「原名（未收录）」展示。
+            </MissingFieldNote>
+          ) : view.skills.some((row) => row.known === null && row.displayName === null) ? (
+            <MissingFieldNote>部分接口缺少中文映射（display_name 为空，旧后端未给 known 标记），直接显示原始接口名。</MissingFieldNote>
           ) : null}
         </div>
 
@@ -412,7 +467,7 @@ export function UsageTrendsOverview() {
 
       {error && view ? (
         <p className="mb-2 text-[12px] text-amber-500" role="alert">
-          本次刷新失败（{String((error as { message?: string })?.message ?? '未知错误').slice(0, 60)}），以下为上次成功读取的结果。
+          本次刷新失败（{describeError(error).slice(0, 60)}），以下为上次成功读取的结果。
         </p>
       ) : null}
 
@@ -424,7 +479,7 @@ export function UsageTrendsOverview() {
       ) : !view ? (
         <div className="space-y-2">
           <p className="text-[12px] text-muted-foreground" role="alert">
-            用量接口读取失败（{String((error as { message?: string })?.message ?? '未知错误').slice(0, 80)}），因此不展示 QPS 与新增 Key 读数。
+            用量接口读取失败（{describeError(error).slice(0, 80)}），因此不展示 QPS 与新增 Key 读数。
           </p>
           <Button size="sm" variant="outline" className="h-8" onClick={() => void refetch()}>
             <RefreshCw className="h-3.5 w-3.5" />

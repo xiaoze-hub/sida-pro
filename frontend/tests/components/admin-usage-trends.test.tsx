@@ -4,7 +4,7 @@
 //
 // 本用例走**真实组件 + 真实 useApiQuery**, 只 mock 网络层(@sida/api.fetchAPI), 钉住四件事:
 //  ① 7/30 天切换各自打到 `?days=N`, 且当前只发一个窗口的请求(不是两个都拉);
-//  ② qps 的 10s / 60s 均值上屏; 旧后端不返回 `peak_qps` 时显示 `--` 并说明原因, **不写 0**;
+//  ② qps 的 10s / 60s 均值与峰值上屏; 旧后端不返回 `peak_per_sec` 时显示 `--` 并说明原因, **不写 0**;
 //  ③ `daily_trend` / `top_ips` 缺失时是明确的"未返回"空态, 不补一行 0;
 //  ④ 后端显式给的 0 照实显示(真实零调用 ≠ 字段缺失), 以及失败态可重试;
 //  ⑤ Key 管理页顶部直接有概览与入口, 点击写入 `section=sec-usage` 并保留其他查询参数。
@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   calls: [] as string[],
-  fail: null as string | null,
+  fail: null as string | Error | null,
   payload: {} as Record<string, unknown>,
 }))
 
@@ -27,7 +27,7 @@ vi.mock('@sida/api', async (importOriginal) => {
     ...actual,
     fetchAPI: (path: string) => {
       api.calls.push(path)
-      if (api.fail) return Promise.reject(new Error(api.fail))
+      if (api.fail) return Promise.reject(api.fail)
       const days = /days=(\d+)/.exec(path)?.[1] ?? '7'
       return Promise.resolve(api.payload[`d${days}`] ?? api.payload.default)
     },
@@ -39,14 +39,22 @@ import { USAGE_SECTION_ID, UsageTrendsOverview, UsageTrendsPanel } from '@/compo
 const FULL = {
   success: true,
   days: 7,
-  qps: { current_10s: 0.3, avg_60s: 0.12, peak_qps: 1.75 },
+  // 字段名与真实后端一致(src/web/api/skills_gateway.py: peak_per_sec, 不是 peak_qps)
+  qps: {
+    current_10s: 0.3,
+    avg_60s: 0.12,
+    peak_per_sec: 5,
+    peak_second: '2026-11-04 20:18:53',
+    samples_10s: 3,
+    samples_60s: 7,
+  },
   daily_trend: [
     { date: '2026-11-03', new_keys: 3, total_calls: 1234 },
     { date: '2026-11-04', new_keys: 0, total_calls: 0 },
   ],
   top_skills: [
-    { skill_name: 'get_stock_quote', display_name: '实时行情', count: 900 },
-    { skill_name: 'get_kline', display_name: null, count: 334 },
+    { skill_name: 'get_stock_quote', display_name: '实时行情', known: true, count: 900 },
+    { skill_name: 'zz_probe_skill', display_name: 'zz_probe_skill（未收录）', known: false, count: 334 },
   ],
   top_ips: [
     { ip: '10.0.0.7', count: 640 },
@@ -92,8 +100,10 @@ describe('用量监控 · 实时 QPS 与走势', () => {
     const strip = screen.getByText('当前 QPS（10 秒均值）').closest('dl') as HTMLElement
     expect(within(strip).getByText('0.30')).toBeTruthy()
     expect(within(strip).getByText('0.12')).toBeTruthy()
-    expect(within(strip).getByText('1.75')).toBeTruthy()
+    // 峰值 = 后端 peak_per_sec(单秒调用数, 整数), 不是均值折算
+    expect(within(strip).getByText('5')).toBeTruthy()
     expect(within(strip).getByText('1,234')).toBeTruthy()
+    expect(screen.getByText(/峰值出现在 20:18:53/)).toBeTruthy()
 
     expect(api.calls).toEqual(['/admin/analytics/usage-trends?days=7'])
   })
@@ -115,12 +125,23 @@ describe('用量监控 · 实时 QPS 与走势', () => {
     expect(fullBar.style.width).toBe('100%')
   })
 
-  it('Top Skills 用后端中文名, 缺映射时退回原始接口名', async () => {
+  it('Top Skills 用后端中文名; 未收录接口按 known=false 标注, 不冒充官方名', async () => {
     mount(<UsageTrendsPanel />)
     await screen.findByText('Top Skills（近 7 天调用最多）')
     expect(screen.getByText('实时行情')).toBeTruthy()
-    expect(screen.getAllByText('get_stock_quote').length).toBeGreaterThan(0)
-    expect(screen.getByText('部分接口缺少中文映射（display_name 为空），直接显示原始接口名。')).toBeTruthy()
+    expect(screen.getByText('zz_probe_skill（未收录）')).toBeTruthy()
+    expect(screen.getByText(/有 1 个接口未收录中文映射（后端标记 known=false）/)).toBeTruthy()
+  })
+
+  it('旧后端 display_name 为空时退回原始接口名并说明', async () => {
+    api.payload = {
+      default: { ...FULL, top_skills: [{ skill_name: 'get_kline', display_name: null, count: 334 }] },
+      d7: { ...FULL, top_skills: [{ skill_name: 'get_kline', display_name: null, count: 334 }] },
+    }
+    mount(<UsageTrendsPanel />)
+    await screen.findByText('Top Skills（近 7 天调用最多）')
+    expect(screen.getAllByText('get_kline').length).toBeGreaterThan(0)
+    expect(screen.getByText(/旧后端未给 known 标记/)).toBeTruthy()
   })
 
   it('Top IP 逐条列出并带调用次数', async () => {
@@ -132,18 +153,31 @@ describe('用量监控 · 实时 QPS 与走势', () => {
 })
 
 describe('用量监控 · 字段缺失不造 0', () => {
-  it('旧后端不返回 peak_qps 时峰值显示 --, 并说明原因', async () => {
+  it('旧后端不返回 peak_per_sec 时峰值显示 --, 并说明原因', async () => {
     api.payload = {
       default: { ...FULL, qps: { current_10s: 0.3, avg_60s: 0.12 } },
       d7: { ...FULL, qps: { current_10s: 0.3, avg_60s: 0.12 } },
     }
     mount(<UsageTrendsPanel />)
-    await screen.findByText('峰值 QPS')
+    await screen.findByText('峰值 QPS（单秒）')
 
-    const strip = screen.getByText('峰值 QPS').closest('dl') as HTMLElement
+    const strip = screen.getByText('峰值 QPS（单秒）').closest('dl') as HTMLElement
     expect(within(strip).getByText('--')).toBeTruthy()
     expect(within(strip).queryByText('0.00')).toBeNull()
-    expect(screen.getByText(/后端本次未返回 `peak_qps`/)).toBeTruthy()
+    expect(screen.getByText(/后端本次未返回 `qps.peak_per_sec`/)).toBeTruthy()
+  })
+
+  it('历史误名 peak_qps 不被当作峰值(新后端只给 peak_per_sec)', async () => {
+    // 回归钉子: 前端曾读 qps.peak_qps, 而真实后端只返回 peak_per_sec → 峰值永远 `--`。
+    api.payload = {
+      default: { ...FULL, qps: { current_10s: 0.3, avg_60s: 0.12, peak_qps: 9 } },
+      d7: { ...FULL, qps: { current_10s: 0.3, avg_60s: 0.12, peak_qps: 9 } },
+    }
+    mount(<UsageTrendsPanel />)
+    await screen.findByText('峰值 QPS（单秒）')
+    const strip = screen.getByText('峰值 QPS（单秒）').closest('dl') as HTMLElement
+    expect(within(strip).getByText('--')).toBeTruthy()
+    expect(within(strip).queryByText('9')).toBeNull()
   })
 
   it('缺 daily_trend 时是"未返回逐日数据"空态, 不渲染 0 行', async () => {
@@ -217,6 +251,13 @@ describe('API Key 管理页 · 用量概览与入口', () => {
     await screen.findByText(/用量接口读取失败/)
     expect(screen.queryByText('当前 QPS（10 秒）')).toBeNull()
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
+  })
+
+  it('403 说清缺的是管理员身份, 不是只显示 HTTP 状态码', async () => {
+    api.fail = Object.assign(new Error('HTTP 403'), { status: 403 })
+    mount(<UsageTrendsOverview />)
+    await screen.findByText(/需要管理员权限（owner 账号 \+ 管理端登录）/)
+    expect(screen.queryByText('当前 QPS（10 秒）')).toBeNull()
   })
 })
 
