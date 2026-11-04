@@ -8,6 +8,12 @@
 
 ## 2026-11-04
 
+### docs-官网增加 Skill 安装部署说明
+
+- `/developers` 新增「Skill 安装」章节：一键脚本（`/api/skills/install.sh`，写入 `SIDA_API_KEY`/`SIDA_BASE_URL` 并当场校验 Key、幂等重装）、手动环境变量（容器/无交互 Shell）、装进支持 Skill 的 Agent 客户端（`skills/sida-market-data` 整包）、验证与卸载、常见问题（401、cron 读不到变量、换机需重新注入）。
+- 文案只写仓库里**真实存在**的端点与目录：安装端点、两个环境变量名、技能包路径、`/api/usage` 与 `/api/skills` 均逐条核对；公开面继续不出现任何 `/api/admin/*` 路径。
+- 测试：`public-docs-plans.test.tsx` 新增一条钉住该章节（标题/安装命令/变量名/包路径/验证端点），并断言正文不含管理员端点；反向验证——改坏标题或安装命令该用例立刻红。
+
 ### feat-用量监控按 API Key 归属来源 IP
 
 - `GET /api/admin/analytics/usage-trends` 新增 `keys_with_ips`：按 Key 聚合各自的来源 IP 与次数（`api_key_id/key_prefix/owner_label/total_calls/ips[]`），回答"这把 Key 被哪些 IP 用过"。原来的 `top_ips` 只回答"全站谁在打"，两者视角不同。
