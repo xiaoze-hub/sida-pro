@@ -6504,6 +6504,18 @@ def _m235_chat_message_evidence_audit(conn: Connection) -> None:
     )
 
 
+def _m242_skill_usage_client_ip(conn: Connection) -> None:
+    """SkillUsage 计量表新增 client_ip 字段（2026-11-04）。
+
+    用于管理后台用量监控、审计异常请求和高频调用来源 IP。
+    旧行留 NULL。
+    """
+    _add_column_if_missing(
+        conn, "skill_usage", "client_ip",
+        "ALTER TABLE skill_usage ADD COLUMN client_ip VARCHAR(64)",
+    )
+
+
 # v237 一次性平移: UTC naive → 北京 naive。表清单 = (表, [列...])
 _UTC_NAIVE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("user_ai_prefs", ("updated_at",)),
@@ -6947,6 +6959,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(239, "index_flow_daily", _m239_index_flow_daily),
     Migration(240, "copilot_run_ledger", _m240_copilot_run_ledger),
     Migration(241, "copilot_schedule_windows", _m241_copilot_schedule_windows),
+    Migration(242, "skill_usage_client_ip", _m242_skill_usage_client_ip),
 )
 
 
