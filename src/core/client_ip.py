@@ -12,6 +12,12 @@
 
 - 只接受合法 IPv4/IPv6 字面量，返回 `ipaddress` 的规范压缩写法；
 - 超长（> ``MAX_IP_LEN``）直接不认，避免把列宽当输入上限；
+- **拒绝 IPv6 scope id**（`fe80::1%eth0`）。`ipaddress` 从 3.9 起接受 scope id，
+  且 `.compressed` 会原样带出来 —— zone 名由客户端随便写、长度与字符都不受控，
+  直接落库等于绕过长度校验（2026-11-04 复核发现）；
+- **IPv4-mapped IPv6 归一成 IPv4**（`::ffff:203.0.113.9` → `203.0.113.9`）。
+  否则同一来源经不同链路（dual-stack / 反代）会落成两个"不同 IP"，
+  Top IP 与 unique_ips 都会重复计数（2026-11-04 复核发现）；
 - 认不出来一律返回 ``UNKNOWN_IP``（"unknown"）——报表里**保留"未知来源"这一档**，
   既不丢行，也不把它算到某个真实 IP 头上。
 
@@ -22,6 +28,7 @@
 from __future__ import annotations
 
 import ipaddress
+from typing import Union
 
 #: 与 `skill_usage.client_ip VARCHAR(64)` 对齐；比 IPv6 字面量上限（45）留了余量，
 #: 但明确拒绝任何明显超长的输入。
@@ -30,18 +37,37 @@ MAX_IP_LEN = 64
 #: 无法识别来源时的统一取值（不要用空串：空串在 SQL 聚合里和 NULL 混在一起）。
 UNKNOWN_IP = "unknown"
 
+IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
 
-def normalize_client_ip(raw: object) -> str:
-    """把任意输入规范成合法 IP 字符串；不合法/超长/空 → ``"unknown"``。"""
+
+def parse_client_ip(raw: object) -> IPAddress | None:
+    """解析成规范 ``ipaddress`` 对象；不合法/超长/带 scope id → ``None``。
+
+    IPv4-mapped IPv6 还原成 IPv4 对象，保证同一来源只有一种表示。
+    """
     if raw is None:
-        return UNKNOWN_IP
+        return None
     try:
         text = str(raw).strip()
     except Exception:  # noqa: BLE001 — 脏对象 __str__ 抛错也不能拖垮记账
-        return UNKNOWN_IP
+        return None
     if not text or len(text) > MAX_IP_LEN:
-        return UNKNOWN_IP
+        return None
+    # scope id（`%eth0` / `%25eth0`）不是地址的一部分，且 zone 名不受长度/字符约束。
+    if "%" in text:
+        return None
     try:
-        return ipaddress.ip_address(text).compressed
+        addr = ipaddress.ip_address(text)
     except ValueError:
-        return UNKNOWN_IP
+        return None
+    if isinstance(addr, ipaddress.IPv6Address):
+        mapped = addr.ipv4_mapped
+        if mapped is not None:
+            return mapped
+    return addr
+
+
+def normalize_client_ip(raw: object) -> str:
+    """把任意输入规范成合法 IP 字符串；不合法/超长/scope id/空 → ``"unknown"``。"""
+    addr = parse_client_ip(raw)
+    return UNKNOWN_IP if addr is None else addr.compressed

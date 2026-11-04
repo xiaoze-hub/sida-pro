@@ -8,7 +8,7 @@
     "current_10s": 0.5,
     "avg_60s": 0.08,
     "peak_per_sec": 5,
-    "peak_second": "2026-11-04 12:21:58",
+    "peak_second": "2026-11-04 12:49:24",
     "samples_10s": 5,
     "samples_60s": 5
   },
@@ -78,5 +78,7 @@
     }
   ],
   "unique_ips": 3,
+  "unique_ips_exact": true,
+  "top_ips_truncated": false,
   "total_calls_in_window": 8
 }

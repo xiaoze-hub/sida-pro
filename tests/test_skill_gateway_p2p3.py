@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """Gateway P2/P3: 红线词 + 突增冻结 + 管理接口。"""
-import pytest
 from unittest.mock import MagicMock, patch
 
 from src.web.api import skills_gateway as gw
@@ -42,18 +41,26 @@ def test_freeze_on_spike():
         pass
 
 
-def test_admin_require_owner():
-    user = MagicMock()
-    user.role = "member"
-    import asyncio
+def test_admin_gate_reuses_require_owner():
+    """管理端点必须复用 `auth.require_owner`(严格模式=独立 admin token)。
 
-    # 2026-09-18: 原用 `asyncio.get_event_loop()`, 在全量跑里会抛
-    # "There is no current event loop in thread 'MainThread'"(前面的用例消费/关闭了默认 loop),
-    # 于是 `ei.value` 是 RuntimeError 而不是要断言的 403。改 `asyncio.run` —— 每次自建并收尾 loop,
-    # 与全局 loop 状态解耦。
-    with pytest.raises(Exception) as ei:
-        asyncio.run(gw._require_owner_admin(user))
-    assert "owner" in str(ei.value).lower() or "403" in str(ei.value)
+    2026-11-04 复核: 这里原来是 `Depends(get_current_user)` + 手判 `user.role`,
+    生产严格模式下 owner 的**用户面** token 就能读全局 Key 清单/调额度/看全局用量,
+    绕过了管理面 admin 受众隔离。现在 `_require_owner_admin` 必须是
+    `auth.require_owner` 本身(不是"长得像"的另一套实现)。
+    """
+    import inspect
+    import re
+
+    from src.web.api import auth
+
+    assert gw._require_owner_admin is auth.require_owner
+
+    # 结构钉子: 不许再出现手写 role 判断/管理员白名单
+    src = inspect.getsource(gw)
+    code = re.sub(r'"""[\s\S]*?"""', "", src)
+    assert 'user.role != "owner"' not in code, "手写 role 判断复活了"
+    assert '"admin", "1", 1' not in code, "管理员白名单复活了"
 
 
 def test_admin_key_action_freeze():

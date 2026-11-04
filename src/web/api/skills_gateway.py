@@ -42,7 +42,7 @@ from src.web.api._scope import allow_cross_user  # C3(2026-09-18): 见各豁免�
 from src.web.cache.biz_cache import biz_cache
 from src.web.database import get_db
 from src.web.models import SkillApiKey, SkillUsage
-from src.core.timezone import db_now_naive
+from src.core.timezone import db_naive_from_utc, db_now_naive
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["skill-gateway"])
@@ -1311,6 +1311,41 @@ def _redis_client():
         return None
 
 
+def _quota_now_utc() -> datetime:
+    """配额时钟(UTC)。单独成函数是为了让测试能冻结时间(北京 00:00-08:00 场景)。"""
+    return datetime.now(timezone.utc)
+
+
+def quota_day_key(now_utc: datetime | None = None) -> str:
+    """当前配额日键(UTC 自然日, ``YYYYMMDD``)。
+
+    2026-11-04 复核(额度口径一致性): 配额一直按 UTC 自然日结算
+    (`skill_quota:{key_hash}:{YYYYMMDD}`), 而展示侧(`/api/usage`、单 key 用量)
+    用的是**北京**自然日零点 —— 两者在北京 00:00-08:00 这 8 小时里不是同一个窗口:
+    此时配额还在按"昨天(UTC)"累计, 展示的 `used_today` 却只数北京零点之后的调用,
+    `remaining_today` 因此偏大, 用户看到"还有额度"但下一次调用就 429。
+
+    处理方式: **不改额度语义**(把日键改北京会让切换当天额度翻倍, 也影响已发放的
+    用量统计), 改为让所有"今日用量/剩余额度"的展示复用同一把尺子 —— 这里。
+    新增展示/对账口径一律调 `quota_day_key()` / `quota_day_start_naive()`,
+    禁止再写 `datetime.now(...).replace(hour=0...)`。
+    """
+    now = now_utc if now_utc is not None else _quota_now_utc()
+    return now.astimezone(timezone.utc).strftime("%Y%m%d")
+
+
+def quota_day_start_naive(now_utc: datetime | None = None) -> tuple[str, datetime]:
+    """(配额日键, 该日 00:00 UTC 在 **DB 列时钟**下的 naive 时间)。
+
+    列时钟见 `src/core/timezone.py`: PG(Asia/Shanghai) 存北京 naive, SQLite 存
+    UTC naive。拿 UTC 零点直接和北京 naive 的 `created_at` 比会整体偏 8 小时。
+    """
+    now = now_utc if now_utc is not None else _quota_now_utc()
+    now = now.astimezone(timezone.utc)
+    start_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return now.strftime("%Y%m%d"), db_naive_from_utc(start_utc)
+
+
 def _check_rate_limit(
     key_hash: str,
     daily_limit: int,
@@ -1318,8 +1353,11 @@ def _check_rate_limit(
     tier: str = "free",
     minute_limit: int | None = None,
 ) -> None:
-    """令牌桶限流 + 日配额。超限抛 HTTPException 429, 响应头带 Retry-After。"""
-    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    """令牌桶限流 + 日配额。超限抛 HTTPException 429, 响应头带 Retry-After。
+
+    日配额按 UTC 自然日结算(见 `quota_day_key`); 展示侧必须用同一口径。
+    """
+    day = quota_day_key()
     now = time.time()
     burst = TIER_BURST.get(tier, 30)
     refill_per_min = TIER_REFILL_PER_MIN.get(tier, 15)
@@ -2194,8 +2232,20 @@ from src.web.api.auth import require_owner as _require_owner
 #: 和"每日新增"对比失去意义, 也让 SQL 窗口不受控。
 _USAGE_ANALYTICS_DAYS: tuple[int, ...] = (7, 30)
 
-#: IP 聚合先在 SQL 侧取前 N 个来源, 再归一化合并脏值; 避免把全表 IP 拉进内存。
+#: Top IP 报表展示条数。
+_USAGE_TOP_IP_SHOW = 10
+
+#: IP 聚合先在 SQL 侧取前 N 个**原始值**, 再归一化合并脏值; 避免把全表 IP 拉进内存。
+#: 仅用于"差异过大时的降级采样", 正常路径见 `_USAGE_UNIQUE_IP_CAP`。
 _USAGE_TOP_IP_SCAN = 200
+
+#: 精确统计 `unique_ips` 时最多扫多少个不同原始值(分组后行数, 不是调用行数)。
+#: 归并脏值必须在 Python 里做(IPv6 压缩写法 / IPv4-mapped / unknown 都无法跨方言
+#: 用 SQL 归并), 所以这里给一个明确上限: 超过就**不宣称准确值**, 返回
+#: `unique_ips=null` + `unique_ips_exact=false`, 而不是拿前 200 条的条数冒充全量。
+#: 2026-11-04 复核: 首版 `.limit(200)` 之后 `len(ip_totals)` 直接当 unique_ips,
+#: 窗口内来源超过 200 个时每次都返回 200 附近, 数字稳定但**是错的**。
+_USAGE_UNIQUE_IP_CAP = 5000
 
 
 def _as_day_text(value: Any) -> str | None:
@@ -2233,16 +2283,18 @@ def get_usage(
 
     2026-11-04 恢复: 上一版新增 admin analytics 时把本函数的 `@router.get("/usage")`
     装饰器和函数签名一起替换掉了, 整个函数体沦为上一函数 `return` 之后的死代码
-    —— 路由不存在但代码还在, 任何 `/api/usage` 请求 404。此处按原样恢复声明,
-    只把日界改成 `db_now_naive()`(见下方注释)。
+    —— 路由不存在但代码还在, 任何 `/api/usage` 请求 404。此处按原样恢复声明。
+
+    2026-11-04 口径对齐: 日界改回**配额日界**(UTC 自然日, 见 `quota_day_key`),
+    与 `_check_rate_limit` 扣额度的窗口完全一致。此前用 `db_now_naive()` 的北京
+    零点去数, 北京 00:00-08:00 期间展示的 `used_today` 比配额实际计数少 8 小时,
+    `remaining_today` 偏大(用户以为还有额度, 下一次调用就 429)。
     """
     refresh_tier_configs(db)
     x_api_key = _header_str(request, "X-API-Key")
     authorization = _header_str(request, "Authorization")
-    # 日界必须与列同口径: PG 的 created_at 是**北京 naive**(func.now()), 拿
-    # `datetime.now(timezone.utc)` 的 UTC 零点去比 → 每天前 8 小时的调用被算进"昨天",
-    # used_today 偏小、remaining_today 偏大(额度超发)。
-    day_start = db_now_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 窗口 = 配额窗口(UTC 自然日), 且换成与 created_at 列相同口径的 naive 时间。
+    quota_day, day_start = quota_day_start_naive()
 
     if x_api_key and x_api_key.startswith("sk_"):
         row = _validate_api_key_row(x_api_key, db)
@@ -2258,6 +2310,7 @@ def get_usage(
             "daily_limit": row.daily_limit,
             "used_today": today,
             "remaining_today": remaining,
+            "quota_day": quota_day,
             "expires_at": row.expires_at.isoformat() if row.expires_at else None,
             "by_channel": by_channel,
         }
@@ -2284,6 +2337,7 @@ def get_usage(
         "daily_limit": daily_limit,
         "used_today": today,
         "remaining_today": max(0, daily_limit - today),
+        "quota_day": quota_day,
         "expires_at": best.expires_at.isoformat() if best is not None and best.expires_at else None,
         "by_channel": by_channel,
     }
@@ -2313,7 +2367,10 @@ def get_admin_usage_analytics(
       月窗口下是几十万行)。
     - **QPS**: 10s / 60s 精确均值(= 计数/秒数) + 最近 60 秒的每秒峰值(SQL 按秒聚合)。
     - **IP**: 只接受合法 IP 且长度受控(`normalize_client_ip`), 脏值/空值归入
-      "unknown" 并**保留该档**, 不丢弃也不冒充真实来源。
+      "unknown" 并**保留该档**, 不丢弃也不冒充真实来源。`unique_ips` 走全量归并
+      精确统计(上限 `_USAGE_UNIQUE_IP_CAP` 个不同原始值), 超过上限返回
+      `unique_ips=null` + `unique_ips_exact=false` + `top_ips_truncated=true`
+      —— 不拿采样条数冒充准确值。
     """
     if days not in _USAGE_ANALYTICS_DAYS:
         allowed = " / ".join(str(d) for d in _USAGE_ANALYTICS_DAYS)
@@ -2414,16 +2471,20 @@ def get_admin_usage_analytics(
     ]
 
     # ── 5) Top Client IP(SQL 聚合 + 合法性与长度收口) ──
+    # 先按原始值分组(最多 CAP+1 行)判断能否精确统计; 归并脏值/写法变体在 Python 里做。
     ip_rows = (
         db.query(SkillUsage.client_ip, func.count(SkillUsage.id).label("calls"))
         .filter(SkillUsage.created_at >= window_start, SkillUsage.created_at <= now)
         .group_by(SkillUsage.client_ip)
         .order_by(func.count(SkillUsage.id).desc())
-        .limit(_USAGE_TOP_IP_SCAN)
+        .limit(_USAGE_UNIQUE_IP_CAP + 1)
         .all()
     )
+    exact = len(ip_rows) <= _USAGE_UNIQUE_IP_CAP
+    # 超上限时只展示前 N 个原始值归并出的 Top IP, 并显式标注 top_ips_truncated。
+    sample = ip_rows if exact else ip_rows[:_USAGE_TOP_IP_SCAN]
     ip_totals: dict[str, int] = {}
-    for raw_ip, calls in ip_rows:
+    for raw_ip, calls in sample:
         key_ip = normalize_client_ip(raw_ip)
         ip_totals[key_ip] = ip_totals.get(key_ip, 0) + int(calls or 0)
     top_ips = [
@@ -2431,7 +2492,7 @@ def get_admin_usage_analytics(
         # "unknown" 排在同量级的真实来源之后, 但**保留**, 不隐藏未知来源
         for ip, cnt in sorted(
             ip_totals.items(), key=lambda kv: (-kv[1], kv[0] == UNKNOWN_IP, kv[0])
-        )[:10]
+        )[:_USAGE_TOP_IP_SHOW]
     ]
 
     return {
@@ -2442,7 +2503,11 @@ def get_admin_usage_analytics(
         "daily_trend": daily_trend,
         "top_skills": top_skills,
         "top_ips": top_ips,
-        "unique_ips": len(ip_totals),
+        # 精确值; 超过扫描上限时是 null(不拿采样条数冒充)。
+        "unique_ips": len(ip_totals) if exact else None,
+        "unique_ips_exact": exact,
+        # top_ips 是否只来自前 N 个原始值(超过上限时可能漏掉被写法拆分的真实 Top)。
+        "top_ips_truncated": not exact,
         "total_calls_in_window": sum(calls_by_day.values()),
     }
 
@@ -2616,13 +2681,17 @@ def my_key_usage(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """单 Key 用量: 今日 / 本周(近7天) / 本月(近30天)。"""
+    """单 Key 用量: 今日(配额日) / 本周(近7天) / 本月(近30天)。
+
+    `used_today` / `remaining_today` 与 `/api/usage`、`_check_rate_limit` 同口径:
+    配额按 UTC 自然日结算(见 `quota_day_key`), 不再各写一个"今天"。
+    周/月是滚动窗口(近 7/30 天), 只用于展示趋势。
+    """
     user = _require_jwt_user(request, db)
     row = _get_owned_key(db, user, key_id)
-    now = datetime.now(timezone.utc)
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = now - timedelta(days=7)
-    month_start = now - timedelta(days=30)
+    quota_day, day_start = quota_day_start_naive()
+    week_start = day_start - timedelta(days=6)
+    month_start = day_start - timedelta(days=29)
 
     def _count(since: datetime) -> int:
         # 只按 api_key_id 过滤, 而 row 来自 _get_owned_key(db, user, key_id)(归属已在上游校验),
@@ -2638,22 +2707,25 @@ def my_key_usage(
         "daily_limit": row.daily_limit,
         "used_today": today,
         "remaining_today": max(0, row.daily_limit - today),
+        "quota_day": quota_day,
         "used_7d": _count(week_start),
         "used_30d": _count(month_start),
     }
 
 
-# ── 后台管理(Phase 3.3): 仅 owner(JWT)可操作 ────────────────────────
+# ── 后台管理(Phase 3.3): 仅 owner(管理面双身份)可操作 ────────────────
 
-from fastapi import Depends as _Dep  # noqa: E402  (避免文件头过长)
 from src.web.api.auth import get_current_user as _get_current_user  # noqa: E402
 from src.db.models import User as _User  # noqa: E402
 
-
-async def _require_owner_admin(user: _User = _Dep(_get_current_user)) -> _User:
-    if user.role != "owner":
-        raise HTTPException(403, "仅 owner 可管理 Skill Key")
-    return user
+# 2026-11-04 复核(管理面隔离): 这里原来是 `async def ...(user=Depends(get_current_user))`
+# + 手判 role 是否为 owner —— 只认用户面 JWT。生产严格模式(STRICT_ADMIN_TOKEN=1)下,
+# 一把 owner 的**用户面** token(没拿到 admin 受众 token、也没过管理端登录)就能读
+# 全局 Key 清单、调额度、看全局用量, 与 `auth.require_owner` 的"双身份"隔离不一致;
+# 手写 role 判断本身也是提权面(id/用户名白名单那类改法的温床)。
+# 现在统一复用 `auth.require_owner`: 严格模式要求独立的 admin token, 过渡模式
+# (STRICT_ADMIN_TOKEN=0)沿用旧语义, 不存在两套口径。
+_require_owner_admin = _require_owner
 
 
 @router.get("/admin/skills/keys")
@@ -2677,7 +2749,9 @@ def admin_list_keys(
     )
 
     # 今日用量聚合(skill_usage.created_at 与 server_default 同源)
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 2026-11-04: 与配额日界对齐(UTC 自然日 → DB 列时钟), 不再用 datetime.now() 的
+    # 服务器本地零点(容器 TZ 未必是北京, 且与 _check_rate_limit 的 UTC 日不同窗口)。
+    _quota_day, today_start = quota_day_start_naive()
     usage_today = dict(
         db.query(SkillUsage.api_key_id, _func.count(SkillUsage.id))
         .filter(SkillUsage.created_at >= today_start)

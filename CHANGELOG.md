@@ -1,5 +1,14 @@
 ## 2026-11-04
 
+### fix-API Key 监控复核：管理面鉴权、XFF 信任边界、IP 归一与额度口径
+
+- **管理面鉴权**：`skills_gateway._require_owner_admin` 不再自判 `role`，复用 `auth.require_owner` —— 生产严格模式下 owner 的**用户面** token 不能读全局 Key 清单/调额度/看全局用量与耗时，必须用户 token + 独立 admin token 双身份；member 即使持 admin token 仍 403（keys/usage/latency/analytics 四类调用点同一矩阵回归）。
+- **XFF 信任边界**：`_get_client_ip` 从"取首段"改为从右往左解析（跳过自有反代/内网跳，取最近一跳不可信地址）。此前取的首段正是客户端自己发的那段，追加式反代下可伪造以绕过按 IP 限流/领 key/用量记账。仓库无部署侧 nginx 配置、无法证明单跳，语义保守收口为"可信反代可背书的最近一跳"，不宣称端到端真实 IP；公网直连仍一律不认 XFF（全局限流口径不变）。
+- **IP 规范化**：拒绝 IPv6 scope id（`fe80::1%eth0` 不再原样落库），IPv4-mapped IPv6 归一成 IPv4，同一来源不再被算成两个。
+- **unique_ips 准确性**：不再把 `limit(200)` 后的采样条数当唯一 IP 总数；改为全量归并精确统计（上限 `_USAGE_UNIQUE_IP_CAP`），超限返回 `unique_ips=null` + `unique_ips_exact=false` + `top_ips_truncated=true`，不拿采样冒充准确值。
+- **额度口径一致**：`/api/usage`、`/api/keys/{id}/usage`、`/api/keys/my/{id}/usage`、管理端 Key 列表今日用量统一到配额日界（UTC 自然日 → DB 列时钟），修掉北京 00:00-08:00 展示 `used_today` 偏小、`remaining_today` 偏大；额度语义（UTC 日结算）保持不变。
+- 回归：新增 `tests/test_usage_security_review.py`（鉴权矩阵 / XFF / IP 归一 / unique_ips / 北京 00-08 点口径），契约 fixture 随新增字段重生；定向 pytest 113 passed，ruff 与 `check_scoped_queries` 全绿。
+
 ### fix-管理后台用量监控真实接线与权限修复
 
 - 恢复 /api/usage，管理统计使用独立管理员令牌；按数据库时区聚合，限定统计窗口并剔除未来数据。

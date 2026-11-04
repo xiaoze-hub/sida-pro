@@ -87,6 +87,18 @@ def to_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def db_naive_from_utc(dt: datetime) -> datetime:
+    """把绝对时刻转成 **DB 列同口径**的 naive 时间。
+
+    `db_now_naive()` 的反向操作: 已知一个 UTC 时刻(如"UTC 自然日 00:00"),
+    要拿去和 `created_at`(PG=北京 naive / SQLite=UTC naive)比较时用它。
+    配额结算按 UTC 自然日, 而列可能是北京 naive —— 直接拿 UTC 零点去比会差 8 小时。
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_db_naive_tz()).replace(tzinfo=None)
+
+
 def to_beijing(dt: datetime) -> datetime:
     """将时间转换为默认时区（历史命名保留）。
 

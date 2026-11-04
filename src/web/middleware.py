@@ -14,6 +14,7 @@
 """
 
 import hmac
+import ipaddress
 import json
 import logging
 import secrets
@@ -66,42 +67,93 @@ EXEMPT_PATHS = {
 }
 
 
+#: XFF 链最多看多少跳。反代链再长也没意义，且允许客户端塞几 KB 的 header
+#: 让我们逐条解析本身就是一种放大器。
+_XFF_MAX_HOPS = 16
+
+#: "我们自己的反代/内网"地址段 —— 这些跳不能代表客户端，从右往左解析时跳过。
+#:
+#: 不用 `IPv4Address.is_private`: Python 3.13 起它把 TEST-NET(192.0.2.0/24、
+#: 198.51.100.0/24、203.0.113.0/24)也判成 private(它们 is_global=False)，
+#: 于是"公网地址"被当成内网跳跳过，取到链里上一个内网地址（实测 3.14 上
+#: `203.0.113.5, 10.0.0.1` 会返回 10.0.0.1）。这里显式列举私有段，语义与版本无关。
+#: 也不把 CGNAT(100.64.0.0/10)算可信跳 —— 那是**运营商侧**地址，客户端可能就落在
+#: 里面；算成可信会把真实来源跳过，退回左边可伪造的段。
+_TRUSTED_NETS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "127.0.0.0/8",       # loopback
+        "10.0.0.0/8",        # RFC1918
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",    # link-local
+        "0.0.0.0/32",        # unspecified
+        "::1/128",
+        "fc00::/7",          # unique local
+        "fe80::/10",         # IPv6 link-local
+        "::/128",
+    )
+)
+
+
+def _is_trusted_hop(addr) -> bool:
+    """是不是"我们自己的反代/内网"这一侧地址（这类跳不能代表客户端）。"""
+    return any(addr in net for net in _TRUSTED_NETS)
+
+
 def _get_client_ip(request: Request) -> str:
     """获取客户端 IP。
 
     P1-9 (2026-08-23 审计): 不再无条件信任 X-Forwarded-For 首段(攻击者可伪造
-    `X-Forwarded-For: 1.2.3.4` 绕过 IP 限流)。仅当直连 peer 是 loopback 或私网时
-    才认 XFF(等价 uvicorn --forwarded-allow-ips=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
-    的语义), 直连 peer 是公网(裸跑 / 非可信反代)时直接用 peer.host。
+    `X-Forwarded-For: 1.2.3.4` 绕过 IP 限流)。仅当直连 peer 是 loopback/私网时
+    才认 XFF(= uvicorn --forwarded-allow-ips 的可信反代语义), 直连 peer 是公网
+    (裸跑 / 非可信反代)时直接用 peer.host。
 
-    2026-11-04: 采信的 XFF 也必须**是合法 IP**（且长度受控）。此前只取首段不校验,
-    反代后面任何人发 `X-Forwarded-For: <64+ 字节垃圾>` 都会原样进限流桶和
-    `skill_usage.client_ip`。现在非法值一律回落到 peer；peer 本身也不是合法 IP
-    （如 TestClient 的 "testclient"）时返回 "unknown"。
+    2026-11-04: 采信的 XFF 也必须**是合法 IP**（长度受控、拒绝 scope id、
+    IPv4-mapped 归一），非法值跳过而不是原样落库。
+
+    2026-11-04 复核（XFF 信任边界）: 此前取的是 XFF **首段** —— 首段恰恰是客户端
+    自己发的那一段。只要部署用的是 `proxy_set_header X-Forwarded-For
+    $proxy_add_x_forwarded_for`（nginx 最常见写法，我们的仓库里没有 nginx 配置，
+    无法证明生产用的是覆盖式 `$remote_addr`），首段就可以被客户端任意伪造：
+    `X-Forwarded-For: 1.2.3.4` 经反代后变成 `1.2.3.4, <真实IP>`，旧代码取 1.2.3.4
+    ⇒ 按 IP 限流/领 key/用量记账全部可以一人刷成 N 个"来源"。
+
+    现在改为**从右往左**解析：右边是离我们最近、由可信反代追加的跳，跳过我们
+    自己的反代/内网跳，取第一个不可信地址 —— 这是"可信反代能背书的最近一跳"。
+    覆盖式（XFF 只有一个值）与追加式（`客户端伪造值..., 真实值`）都得到真实来源。
+
+    保守边界（不宣称超出能力的事）：仓库里没有部署侧 nginx/LB 配置，无法证明
+    生产是单跳还是多层。若链路经过 CDN/多层 LB，本函数返回的是**最近一跳**而非
+    端到端真实客户端，仍然比"信首段"更安全（不会比真实来源更宽松）；整条链都是
+    内网/非法值时退回 peer。边界语义详见 `docs/` 之外的代码注释与本函数的测试
+    `tests/test_usage_security_review.py`。
     """
-    import ipaddress
-
-    from src.core.client_ip import UNKNOWN_IP, normalize_client_ip
+    from src.core.client_ip import UNKNOWN_IP, normalize_client_ip, parse_client_ip
 
     peer = getattr(getattr(request, "client", None), "host", None)
     if not peer:
         return UNKNOWN_IP
-    try:
-        peer_ip = ipaddress.ip_address(str(peer).strip())
-        # 直连 peer 是 loopback 或私网 → 可信反代, 取 XFF 首段
-        trusted = (
-            peer_ip.is_loopback
-            or peer_ip.is_private
-            or peer_ip.is_link_local
-        )
-    except ValueError:
-        trusted = False
-    if trusted:
-        xff = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-        if xff:
-            candidate = normalize_client_ip(xff)
-            if candidate != UNKNOWN_IP:
-                return candidate
+    peer_ip = parse_client_ip(peer)
+    if peer_ip is None or not _is_trusted_hop(peer_ip):
+        # 公网直连（或 peer 本身不是合法 IP）：XFF 一概不认。
+        return normalize_client_ip(peer)
+
+    raw_xff = request.headers.get("x-forwarded-for", "") or ""
+    hops = [h.strip() for h in raw_xff.split(",") if h.strip()][-_XFF_MAX_HOPS:]
+    nearest_valid = None
+    for raw_hop in reversed(hops):
+        addr = parse_client_ip(raw_hop)
+        if addr is None:
+            continue  # 垃圾段直接跳过，不因一条脏值放弃整条链
+        if nearest_valid is None:
+            nearest_valid = addr
+        if not _is_trusted_hop(addr):
+            return addr.compressed
+    # 整条链都是内网跳（内网调用方）：用最右一跳（最近由反代追加的那个），
+    # 仍然不会取到客户端可自由伪造的最左段。
+    if nearest_valid is not None:
+        return nearest_valid.compressed
     return normalize_client_ip(peer)
 
 
