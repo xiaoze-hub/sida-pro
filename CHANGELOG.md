@@ -1,3 +1,7 @@
+## release: v0.99.3（官网新增 Skill 安装部署说明）
+
+- `/developers` 增加「Skill 安装」章节：一键脚本、手动环境变量、装入 Agent 客户端、验证与卸载、常见问题。
+
 ## release: v0.99.2（用量监控：IP 与 API Key 归属）
 
 - 管理后台用量监控新增"按 API Key 的来源 IP"，可直接看出某把 Key 被哪些 IP 调用。
