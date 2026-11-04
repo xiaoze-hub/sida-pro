@@ -1,13 +1,14 @@
 import { NoAccessPage } from '@/components/NoAccessPage'
 import { GithubMark } from '@/components/icons/GithubMark'
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { createContext, useContext, useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
 import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, BarChart3, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { useI18n } from '@/hooks/useI18n'
-import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@sida/api'
+import { appApi, fetchAPI, getToken, isAuthenticated } from '@sida/api'
+import { useMyPermissions } from '@/hooks/useMyPermissions'
 // 2026-08-12 性能优化: 路由懒加载 — 17 个页面原本静态 import 打进单 bundle 1.2MB,
 // 点任意路由都要下载/解析整个应用。改为按需加载, 首屏只下载登录页+当前页。
 // 2026-10-10 加载韧性: 统一走 lazyWithRetry —— 发版后旧页面点开已被删掉的 chunk(404)
@@ -303,9 +304,18 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 // 配合后端 403 + 导航过滤, 三层防"未授权模块可见"。
 // 安全审计 2026-09-15: myPerms 尚未加载(null)时不再放行(fail-open),
 // 改为渲染 loading, 加载完成后再判定 —— 防止权限未就绪期间短暂可见未授权内容。
+const PermissionLoadContext = createContext<{ failed: boolean; retry: () => void }>({ failed: false, retry: () => {} })
+
 function PermGuard({ perm, myPerms, children }: { perm?: string; myPerms: Set<string> | null; children: React.ReactNode }) {
+  const permissionLoad = useContext(PermissionLoadContext)
   if (!perm) return <>{children}</>
   if (!myPerms) {
+    if (permissionLoad.failed) {
+      return <div role="alert" className="p-4 text-[14px] text-foreground">
+        权限信息暂时无法读取，请检查网络后重试。
+        <button type="button" className="ml-2 min-h-9 text-primary" onClick={permissionLoad.retry}>重新读取</button>
+      </div>
+    }
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
         <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
@@ -404,15 +414,8 @@ function App() {
   const [upgradeInfo, setUpgradeInfo] = useState<{ latest: string; url: string } | null>(null)
   const checkedUpdateRef = useRef(false)
   // 当前用户模块权限(导航过滤: 未授权模块隐藏入口; 拉取失败回退角色判断)
-  const [myPerms, setMyPerms] = useState<Set<string> | null>(null)
+  const { permissions: myPerms, failed: permissionsFailed, retry: retryPermissions } = useMyPermissions(getToken())
   const repoUrl = 'https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics'
-
-  useEffect(() => {
-    if (!isAuthenticated()) return
-    getMyPermissions()
-      .then(p => p && setMyPerms(new Set(p.effective)))
-      .catch(() => {})
-  }, [])
 
   useEffect(() => {
     appApi.version()
@@ -530,6 +533,7 @@ function App() {
 
   return (
     <RequireAuth>
+    <PermissionLoadContext.Provider value={{ failed: permissionsFailed, retry: retryPermissions }}>
     <SystemStatusProvider enabled={getJwtRole() === 'owner'}>
     <AssistantWorkspaceProvider enabled={!isNavHiddenForPerm({ perm: 'view_quotes' }, myPerms)}>
     <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
@@ -932,6 +936,7 @@ function App() {
     </div>
     </AssistantWorkspaceProvider>
     </SystemStatusProvider>
+    </PermissionLoadContext.Provider>
     </RequireAuth>
   )
 }
