@@ -8,6 +8,10 @@
 
 ## 2026-11-04
 
+### test-参谋运行事件四账号隔离
+
+- 覆盖四个用户分别访问本人和其他用户的任务事件流，越权请求不暴露运行记录。
+
 ### feat-用量监控按 API Key 归属来源 IP
 
 - `GET /api/admin/analytics/usage-trends` 新增 `keys_with_ips`：按 Key 聚合各自的来源 IP 与次数（`api_key_id/key_prefix/owner_label/total_calls/ips[]`），回答"这把 Key 被哪些 IP 用过"。原来的 `top_ips` 只回答"全站谁在打"，两者视角不同。
