@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -31,6 +31,7 @@ from src.web.api.skills_gateway import (
     TIER_DAILY_LIMIT,
     _gen_key,
     _hash_key,
+    quota_day_start_naive,
     refresh_tier_configs,
 )
 from src.web.database import get_db
@@ -170,8 +171,11 @@ def key_usage(
 ) -> dict:
     """单 Key 用量统计: 今日/累计调用、按日近 7 天、按 channel 今日。"""
     row = _get_owned_key(db, user, key_id)
-    now = datetime.now(timezone.utc)
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # 2026-11-04: 与配额日界对齐。此前这里用 UTC 零点去比 **北京 naive** 的
+    # created_at(PG 列口径), 每天前 8 小时的调用被算进"昨天" → used_today 偏小、
+    # remaining_today 偏大, 且与 /api/usage、_check_rate_limit 三个口径互不一致。
+    # 额度语义不动(仍按 UTC 自然日结算), 只把展示窗口统一到 quota_day_start_naive()。
+    quota_day, day_start = quota_day_start_naive()
     week_start = day_start - timedelta(days=6)
 
     today_count = (
@@ -211,6 +215,7 @@ def key_usage(
         "key": _key_to_dict(row),
         "used_today": int(today_count),
         "remaining_today": max(0, int(row.daily_limit) - int(today_count)),
+        "quota_day": quota_day,
         "total_calls": int(total_count),
         "daily_last_7d": daily,
         "by_channel_today": by_channel,
