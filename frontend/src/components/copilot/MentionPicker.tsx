@@ -17,6 +17,8 @@ export function MentionPicker({
   onHover,
   onPick,
   loading,
+  error,
+  onRetry,
 }: {
   tab: MentionTab
   onTab: (t: MentionTab) => void
@@ -26,6 +28,8 @@ export function MentionPicker({
   onHover: (i: number) => void
   onPick: (item: MentionStock | MentionAgent) => void
   loading?: boolean
+  error?: boolean
+  onRetry?: () => void
 }) {
   const rows: (MentionStock | MentionAgent)[] = tab === 'stock' ? stocks : agents
   return (
@@ -53,7 +57,13 @@ export function MentionPicker({
         {loading && rows.length === 0 ? (
           <div className="px-2.5 py-2 text-[12px] text-muted-foreground">检索中…</div>
         ) : null}
-        {!loading && rows.length === 0 ? (
+        {!loading && error ? (
+          <div role="alert" className="px-2.5 py-2 text-[12px] text-role-risk">
+            选择列表暂时无法读取。
+            <button type="button" className="ml-2 min-h-9 text-primary" onClick={onRetry}>重新读取</button>
+          </div>
+        ) : null}
+        {!loading && !error && rows.length === 0 ? (
           <div className="px-2.5 py-2 text-[12px] text-muted-foreground">
             {tab === 'stock' ? '自选里没有匹配的股票' : '没有匹配的智能体'}
           </div>

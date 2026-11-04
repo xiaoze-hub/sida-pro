@@ -78,6 +78,15 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('@ 提及', () => {
+  it('专家列表读取失败时显示重试，不误报没有匹配项', async () => {
+    copilotMock.getCopilotMentions.mockRejectedValueOnce(new Error('network error'))
+    render(<AiCopilotPage />)
+    fireEvent.click(screen.getByText('选择专家'))
+    expect(await screen.findByText(/选择列表暂时无法读取/)).toBeTruthy()
+    expect(screen.queryByText('没有匹配的智能体')).toBeNull()
+    fireEvent.click(screen.getByText('重新读取'))
+    expect(await screen.findByText('盘后复盘官')).toBeTruthy()
+  })
   it('选择专家入口保留草稿，打开智能体列表并将选择带入提问', async () => {
     render(<AiCopilotPage />)
     const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement

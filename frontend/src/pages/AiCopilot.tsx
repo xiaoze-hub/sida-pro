@@ -508,6 +508,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const [mentionTab, setMentionTab] = useState<MentionTab>('stock')
   const [mentionIdx, setMentionIdx] = useState(0)
   const [mentionLoading, setMentionLoading] = useState(false)
+  const [mentionError, setMentionError] = useState(false)
+  const [mentionRetry, setMentionRetry] = useState(0)
   const [mentionPool, setMentionPool] = useState<{ stocks: MentionStock[]; agents: MentionAgent[] }>({
     stocks: [],
     agents: [],
@@ -714,8 +716,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   useEffect(() => {
     if (!mentionHit) return
     let alive = true
+    setMentionError(false)
+    setMentionPool({ stocks: [], agents: [] })
+    setMentionLoading(true)
     const timer = window.setTimeout(() => {
-      setMentionLoading(true)
       getCopilotMentions(mentionHit.query)
         .then((res) => {
           if (!alive) return
@@ -723,7 +727,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           setMentionIdx(0)
         })
         .catch(() => {
-          if (alive) setMentionPool({ stocks: [], agents: [] })
+          if (alive) setMentionError(true)
         })
         .finally(() => alive && setMentionLoading(false))
     }, 150)
@@ -731,7 +735,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       alive = false
       window.clearTimeout(timer)
     }
-  }, [mentionHit])
+  }, [mentionHit, mentionRetry])
 
   const mentionRows = mentionHit
     ? mentionTab === 'stock'
@@ -2209,6 +2213,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                   onHover={setMentionIdx}
                   onPick={pickMention}
                   loading={mentionLoading}
+                  error={mentionError}
+                  onRetry={() => setMentionRetry((value) => value + 1)}
                 />
               ) : null}
               {mentions.length ? (
