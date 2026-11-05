@@ -62,11 +62,6 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      # ⚠️ 2026-10-26 删除「Install system libs for WeasyPrint」这一步：
-      # 实测它在本作业占 1131s（19 分钟，apt 源抖动），而 gates 根本不跑 PDF 用例
-      # （pytest 2026-09-29 已拆到 backend-pytest，那里自己会装）。留着纯粹让每次
-      # 发版白等 20 分钟 —— 这是"部署越来越慢"的真正原因，不是测试变多。
-
       - name: Backend static gates (lock drift / scoped queries / dialect scope)
         # W2.5/E6(2026-09-09): 依赖统一走 requirements-lock.txt(生产容器 freeze 的精确版本)
         # W2.1/C3(2026-09-09): 越权静态扫描(与 build-and-push-image.yml 同门禁)
