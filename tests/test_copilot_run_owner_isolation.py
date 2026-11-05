@@ -102,6 +102,23 @@ def _row(Session, run_id: str) -> CopilotRun:
         db.close()
 
 
+def test_四账号事件流仅可访问本人运行(env):
+    client, Session = env
+    users = ["account-a", "account-b", "account-c", "account-d"]
+    db = Session()
+    try:
+        for uid in users:
+            db.add(CopilotRun(run_id=f"run-{uid}", user_id=uid, question=uid, status="ok"))
+        db.commit()
+    finally:
+        db.close()
+    for current in users:
+        client.act_as(current)
+        for owner in users:
+            response = client.get(f"/api/copilot/runs/run-{owner}/events")
+            assert response.status_code == (200 if current == owner else 404)
+
+
 # ── 基线：自己的 run 四处都能用（防过度收紧）──────────────────────────────
 def test_自己的run_治理页可读(env):
     client, _ = env

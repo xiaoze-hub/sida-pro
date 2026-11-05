@@ -133,6 +133,50 @@ def test_执行完成写_ok_并回填会话与耗时(Session, monkeypatch):
     assert row.finished_at is not None
 
 
+def test_后台运行启动即记录心跳(Session):
+    _mk_run(Session, "r-heartbeat")
+    copilot_jobs._mark("r-heartbeat", status="running")
+    assert _row(Session, "r-heartbeat").heartbeat_at is not None
+
+
+@pytest.mark.parametrize("terminal", ["cancelled", "failed"])
+def test_并发终态先于收尾写入时不能被成功覆盖(Session, monkeypatch, terminal):
+    from sqlalchemy import update
+    from sqlalchemy.orm import Query
+
+    _mk_run(Session, "r-race", status="running")
+    original = Query.update
+    raced = False
+
+    def update_after_terminal(query, *args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            db = Session()
+            try:
+                db.execute(update(CopilotRun).where(CopilotRun.run_id == "r-race").values(status=terminal))
+                db.commit()
+            finally:
+                db.close()
+        return original(query, *args, **kwargs)
+
+    monkeypatch.setattr(Query, "update", update_after_terminal)
+    copilot_jobs._mark("r-race", status="ok", conversation_id=99)
+    assert _row(Session, "r-race").status == terminal
+
+
+@pytest.mark.parametrize("status", ["cancelled", "failed"])
+def test_迟到轨迹不能重开或覆盖终态(Session, monkeypatch, status):
+    from src.harness import trace as trace_mod
+
+    monkeypatch.setattr(trace_mod, "SessionLocal", Session)
+    _mk_run(Session, "r-terminal", status=status)
+    trace = trace_mod.CopilotTrace(reuse_run_id="r-terminal")
+    trace.open()
+    trace.finish(status="ok")
+    assert _row(Session, "r-terminal").status == status
+
+
 def test_执行抛异常落成_failed_并带原因(Session, monkeypatch):
     async def boom(**_kw):
         raise RuntimeError("模型网关 502")
@@ -176,6 +220,30 @@ def test_轨迹已写终态时仍要补上_conversation_id(Session, monkeypatch)
     row = _row(Session, "r-ok2")
     assert row.conversation_id == 99
     assert row.status == "ok"
+
+
+@pytest.mark.parametrize("status", ["degraded", "error"])
+def test_轨迹降级或失败时补会话但不改终态(Session, status):
+    _mk_run(Session, "r-partial", status=status)
+    copilot_jobs._mark("r-partial", status="ok", conversation_id=99)
+    row = _row(Session, "r-partial")
+    assert row.status == status
+    assert row.conversation_id == 99
+
+
+def test_事件流不公开上游异常(client, Session):
+    _mk_run(Session, "r-private", status="failed")
+    db = Session()
+    try:
+        row = db.query(CopilotRun).filter_by(run_id="r-private").one()
+        row.error = "gateway trace_id=secret"
+        db.commit()
+    finally:
+        db.close()
+    response = client.get("/api/copilot/runs/r-private/events")
+    assert response.status_code == 200
+    assert "secret" not in response.text
+    assert "任务未能完成" in response.text
 
 
 def test_终态不再被改写(Session, monkeypatch):

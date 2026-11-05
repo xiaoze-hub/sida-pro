@@ -10,7 +10,7 @@ import { safeFixed } from '@/lib/format'
  *
  * 诚实纪律：
  *  - **不假装进度百分比**——只有 queued/running/ok/failed/cancelled 与步数，没有分母就不算百分比；
- *  - 失败要把服务端给的 `error` 原文透出来，不吞成「出错了」。
+ *  - 用户界面不展示原始上游错误；诊断信息保留在服务端。
  */
 
 export interface SubmittedRun {
@@ -33,12 +33,13 @@ export async function submitCopilotRun(
   question: string,
   conversationId?: number | null,
   signal?: AbortSignal,
+  recipe?: string | null,
 ): Promise<SubmittedRun> {
   return fetchAPI<SubmittedRun>('/copilot/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // fetchAPI 不自动 stringify（只补 Content-Type），body 必须是字符串
-    body: JSON.stringify({ question, conversation_id: conversationId ?? null }),
+    body: JSON.stringify({ question, conversation_id: conversationId ?? null, recipe: recipe ?? null }),
     signal,
   })
 }
@@ -66,6 +67,12 @@ export async function getCopilotRunStatus(runId: string, signal?: AbortSignal): 
 
 const TERMINAL = new Set(['ok', 'degraded', 'error', 'failed', 'succeeded', 'cancelled'])
 
+/** 只对查询状态的临时失败重连；提交 POST 永不自动重发。 */
+export function isRetryableRunStatusError(error: unknown): boolean {
+  const kind = (error as { kind?: unknown } | null)?.kind
+  return kind === 'NETWORK' || kind === 'TIMEOUT' || kind === 'HTTP_5xx'
+}
+
 export function isTerminalStatus(status: string | null | undefined): boolean {
   return TERMINAL.has(status ?? '')
 }
@@ -92,7 +99,7 @@ export function progressText(s: RunStatus | null): string {
       return ['完成（部分工具失败）', steps, secs].filter(Boolean).join(' · ')
     case 'failed':
     case 'error':
-      return `执行失败${s.error ? `：${s.error}` : ''}`
+      return '执行失败，请查看本轮过程'
     case 'cancelled':
       return '已取消'
     default:

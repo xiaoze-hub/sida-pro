@@ -68,12 +68,21 @@ describe('AnswerCard 结构化证据区', () => {
     expect(items).toHaveLength(2)
     expect(items[0].getAttribute('data-status')).toBe('ok')
     expect(items[1].getAttribute('data-status')).toBe('missing')
+    expect(items[0].textContent).toContain('已返回（未核验）')
 
     // 时点缺失显示 --，不补今日
-    expect(screen.getByText('--')).toBeTruthy()
+    expect(screen.getAllByText('--（基准日未确认）')).toHaveLength(2)
     // missing 行写「未取到」，且工具名走弱化（删除线）
     expect(screen.getByText('未取到')).toBeTruthy()
     expect(screen.getByText('get_l2').className).toContain('line-through')
+  })
+
+  it('旧默认元数据和未知来源、口径明确显示未确认', () => {
+    render(<AnswerCard parsed={parseAnswer(RAW)} evidence={[ITEM({})]} />)
+    const item = screen.getByTestId('copilot-evidence-item')
+    expect(item.textContent).toContain('来源 未确认 · 口径 未确认')
+    expect(item.textContent).toContain('基准日未确认')
+    expect(item.textContent).not.toContain('2026-11-03 14:30')
   })
 
   it('未对账数字写明条数并加不可复制的弱化标记，答案正文不隐藏', () => {

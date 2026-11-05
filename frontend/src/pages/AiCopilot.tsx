@@ -37,7 +37,7 @@ import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
-import { publicAssistantContent } from '@/lib/copilot/public-content'
+import { publicAssistantContent, publicResearchError } from '@/lib/copilot/public-content'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
 import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
 import { MentionPicker, type MentionTab } from '@/components/copilot/MentionPicker'
@@ -67,6 +67,7 @@ import { useConversations } from '@/hooks/useConversations'
 import { useCopilotRuns } from '@/hooks/useCopilotRuns'
 import {
   getCopilotRunStatus,
+  isRetryableRunStatusError,
   isTerminalStatus,
   progressText,
   submitCopilotRun,
@@ -507,6 +508,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const [mentionTab, setMentionTab] = useState<MentionTab>('stock')
   const [mentionIdx, setMentionIdx] = useState(0)
   const [mentionLoading, setMentionLoading] = useState(false)
+  const [mentionError, setMentionError] = useState(false)
+  const [mentionRetry, setMentionRetry] = useState(0)
   const [mentionPool, setMentionPool] = useState<{ stocks: MentionStock[]; agents: MentionAgent[] }>({
     stocks: [],
     agents: [],
@@ -713,8 +716,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   useEffect(() => {
     if (!mentionHit) return
     let alive = true
+    setMentionError(false)
+    setMentionPool({ stocks: [], agents: [] })
+    setMentionLoading(true)
     const timer = window.setTimeout(() => {
-      setMentionLoading(true)
       getCopilotMentions(mentionHit.query)
         .then((res) => {
           if (!alive) return
@@ -722,7 +727,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           setMentionIdx(0)
         })
         .catch(() => {
-          if (alive) setMentionPool({ stocks: [], agents: [] })
+          if (alive) setMentionError(true)
         })
         .finally(() => alive && setMentionLoading(false))
     }, 150)
@@ -730,7 +735,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       alive = false
       window.clearTimeout(timer)
     }
-  }, [mentionHit])
+  }, [mentionHit, mentionRetry])
 
   const mentionRows = mentionHit
     ? mentionTab === 'stock'
@@ -969,7 +974,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
    * 轮询有上限（10 分钟），超时不再假装还在跑。
    */
   const runInBackground = useCallback(
-    async (question: string, attachment?: { name: string; isImage: boolean }, freshConversation = false, turnSymbol = '') => {
+    async (question: string, attachment?: { name: string; isImage: boolean }, freshConversation = false, turnSymbol = '', recipeId?: string) => {
       setBackgroundPending(true)
       /**
        * 视图归属快照（2026-10-29 三审）：后台轮可能跑几分钟，期间用户完全可以去点开别的会话。
@@ -997,16 +1002,31 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           return [...m.slice(0, -1), { ...last, content }]
         })
 
+      let submittedRunId: string | null = null
       try {
-        const submitted = await submitCopilotRun(question, freshConversation ? null : convId)
+        const submitted = await submitCopilotRun(question, freshConversation ? null : convId, undefined, recipeId)
+        submittedRunId = submitted.run_id
         if (!mounted.current) return
         setLiveRunId(submitted.run_id)
         const deadline = Date.now() + 10 * 60 * 1000
         let last = null as Awaited<ReturnType<typeof getCopilotRunStatus>> | null
+        let consecutiveFailures = 0
         while (mounted.current && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 2000))
           if (!mounted.current) return
-          last = await getCopilotRunStatus(submitted.run_id)
+          try {
+            last = await getCopilotRunStatus(submitted.run_id)
+            consecutiveFailures = 0
+          } catch (e) {
+            if (!isRetryableRunStatusError(e)) throw e
+            consecutiveFailures += 1
+            patch('连接暂时中断，正在重新查询任务状态…')
+            if (consecutiveFailures >= 5) {
+              patch('暂时无法查询任务状态，任务可能仍在运行。请在参谋任务中查看，避免重复提交。')
+              return
+            }
+            continue
+          }
           if (!mounted.current) return
           patch(`⏳ ${progressText(last)}`)
           if (isTerminalStatus(last.status)) {
@@ -1015,7 +1035,12 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             for (let k = 0; k < 4 && !last.conversation_id; k += 1) {
               await new Promise((r) => setTimeout(r, 500))
               if (!mounted.current) return
-              last = await getCopilotRunStatus(submitted.run_id)
+              try {
+                last = await getCopilotRunStatus(submitted.run_id)
+              } catch {
+                // 已观察到终态：后续读取失败不应改称提交失败。
+                break
+              }
               if (!mounted.current) return
             }
             break
@@ -1066,8 +1091,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         } else {
           patch(`❌ ${progressText(last)}`)
         }
-      } catch (e) {
-        patch(`❌ 提交失败：${e instanceof Error ? e.message : String(e)}`)
+      } catch {
+        patch(submittedRunId
+          ? '暂时无法查询任务状态，任务可能仍在运行。请在参谋任务中查看，避免重复提交。'
+          : '未能确认任务是否提交成功。请先在参谋任务中查看，避免重复提交。')
       } finally {
         if (mounted.current) setBackgroundPending(false)
       }
@@ -1151,7 +1178,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                 : `标的已换（${rec?.symbol || '上一标的'} → ${turnTarget.symbol}）：这一轮在新会话里后台执行，不再沿用旧图的快照。`,
           )
         }
-        await runInBackground(content, sentAttachment, bgStale, turnTarget.symbol)
+        const agent = mentions.find((m) => m.type === 'agent') as MentionAgent | undefined
+        await runInBackground(content, sentAttachment, bgStale, turnTarget.symbol, agent?.id)
         return
       }
       setError(null)
@@ -1331,7 +1359,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             },
             onError: (e) => {
               if (!isCurrent()) return
-              setError(e)
+              setError(publicResearchError(e))
             },
             onMalformed: () => {
               // 坏帧的具体数量在返回值里（result.corruptedFrames），收尾统一提示；
@@ -1351,7 +1379,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         // 2026-10-28: 没拿到终稿 = 失败, 不许把半截正文当成品亮着
         const streamResult = result as ChatStreamResult | undefined
         if (streamResult?.failure) {
-          setError(streamResult.failure)
+          setError(publicResearchError(streamResult.failure))
           setMsgs((m) => settleStreamBubble(m, streamResult.content || assistant, true))
         } else if (streamResult?.corruptedFrames) {
           setStreamNotice(`流式数据有 ${streamResult.corruptedFrames} 处损坏，已按服务端终稿校正`)
@@ -1360,7 +1388,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         // 2026-10-28: 旧流（已切走/已被新流顶掉）的失败文案只属于它自己那一轮,
         // 不许挂到别人正在看的会话上（回归用例 tests/components/copilot-stream-race.test.tsx）。
         if (!isCurrent()) return
-        setError(e instanceof Error ? e.message : '对话失败')
+        setError(publicResearchError(e))
         // 2026-10-28 验收（P0）：fetch 中途 reject 时屏幕上的半截正文**必须**带"不完整"标记。
         // 原来这里只 setError —— 用户看着几行正文正常亮着，会当成结论读（那几行甚至连终稿附言都没有）。
         // `assistant` 为空时 settleStreamBubble 一次都不铺（空 ≠ 半成品）。
@@ -2045,6 +2073,18 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                       </a>
                     ))
                   : null}
+                {m.role === 'assistant' && i === msgs.length - 1 && !m.incomplete && !error && !streaming && !backgroundPending && !/^[⏳❌⚠️]/u.test(m.content.trim()) ? (
+                  <button
+                    type="button"
+                    className="mt-2 block min-h-9 text-left text-[12px] text-primary hover:underline"
+                    onClick={() => setInput((draft) => [
+                      draft.trim(),
+                      '请根据上一轮研究中可验证的观察条件，提出跟踪方案。请说明适用的提醒或定时任务、数据限制和缺失参数；先展示待确认方案，不要直接执行。',
+                    ].filter(Boolean).join('\n\n'))}
+                  >
+                    拟定后续跟踪
+                  </button>
+                ) : null}
                 <MessageActions
                   role={m.role}
                   copyText={m.role === 'assistant' ? publicAssistantContent(m.content) : m.content}
@@ -2087,8 +2127,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             </div>
           ) : null}
           {error ? (
-            <div className="card-surface bg-card rounded px-2 py-1.5 text-[12px] text-role-risk">
+            <div role="alert" className="card-surface bg-card rounded px-2 py-1.5 text-[12px] text-role-risk">
               {error}
+              <button type="button" className="ml-2 text-primary" onClick={() => { setPanelTab('runs'); runsState.reload() }}>查看过程</button>
             </div>
           ) : null}
           {streamNotice ? (
@@ -2172,6 +2213,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                   onHover={setMentionIdx}
                   onPick={pickMention}
                   loading={mentionLoading}
+                  error={mentionError}
+                  onRetry={() => setMentionRetry((value) => value + 1)}
                 />
               ) : null}
               {mentions.length ? (
@@ -2275,6 +2318,20 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                disabled={streaming || uploading || backgroundPending}
+                className="min-h-11 shrink-0 px-2 text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-40 md:min-h-9"
+                onClick={() => {
+                  const prefix = input && !/\s$/.test(input) ? `${input} ` : input
+                  setInput(`${prefix}@`)
+                  setMentionTab('agent')
+                  setMentionIdx(0)
+                  setMentionHit({ start: prefix.length, query: '' })
+                }}
+              >
+                选择专家
+              </button>
+              <button
+                type="button"
                 onClick={() => fileRef.current?.click()}
                 disabled={streaming || uploading || backgroundPending}
                 aria-label={ATTACH_HINT}
@@ -2341,6 +2398,11 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
                 runs={runsState.runs}
                 details={runsState.details}
                 onLoadDetail={(rid) => void runsState.loadDetail(rid)}
+                loading={runsState.loading}
+                running={streaming || backgroundPending}
+                error={!runsState.ok}
+                onRetry={runsState.reload}
+                onTrack={setLiveRunId}
               />
             ) : panelTab === 'memory' ? (
               <MemoryPanel />

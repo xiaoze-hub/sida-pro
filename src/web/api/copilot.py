@@ -896,9 +896,33 @@ def post_schedule(
             weekdays=str(body.get("weekdays") or "mon-fri"),
             conversation_id=body.get("conversation_id"),
             payload=body.get("payload") or {},
+            window_kind=str(body.get("window_kind") or "custom"),
+            interval_min=body.get("interval_min"),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/schedules/{sched_id}/runs")
+def get_schedule_runs(
+    sched_id: int,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> list[dict]:
+    """读取本人任务的运行记录，内部异常仅保留在服务端日志。"""
+    from src.core.copilot_schedule import list_runs
+    from src.db.models import CopilotSchedule
+
+    user_id = str(getattr(user, "id", None))
+    owned = db.query(CopilotSchedule.id).filter(
+        CopilotSchedule.id == sched_id, CopilotSchedule.user_id == user_id,
+    ).first()
+    if owned is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    rows = list_runs(db, user_id, sched_id)
+    for row in rows:
+        row["error"] = "任务执行失败，请稍后重试" if row.get("error") else None
+    return rows
 
 
 @router.patch("/schedules/{sched_id}")

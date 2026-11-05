@@ -80,6 +80,21 @@ async function ask(question: string) {
 }
 
 describe('终稿替换流式草稿', () => {
+  it('拟定跟踪只追加草稿，不提交动作或替换已有输入', async () => {
+    apiMock.sendMessageStream.mockImplementation(async (_id: number, _q: string, handlers: any) => {
+      handlers.onDone({ id: 7, role: 'assistant', content: FINAL, created_at: '' })
+      return { content: FINAL, authoritative: true, corruptedFrames: 0, errors: [] }
+    })
+    await ask('600111 怎么样')
+    const button = await screen.findByText('拟定后续跟踪')
+    const input = screen.getByPlaceholderText(/问点什么|补充说明/) as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '我的补充' } })
+    fireEvent.click(button)
+    expect(input.value).toContain('我的补充')
+    expect(input.value).toContain('先展示待确认方案')
+    expect(apiMock.sendMessageStream).toHaveBeenCalledTimes(1)
+  })
+
   it('done.content 与 delta 不同 → 屏上是终稿（附言不丢），草稿不残留', async () => {
     apiMock.sendMessageStream.mockImplementation(async (_id: number, _q: string, handlers: any) => {
       handlers.onDelta(DRAFT)
@@ -111,6 +126,14 @@ describe('只有终稿的拒答', () => {
 })
 
 describe('没有终稿 / 坏帧', () => {
+  it('连接异常不泄露内部标识，并提供查看过程入口', async () => {
+    apiMock.sendMessageStream.mockRejectedValue(new Error('network error trace_id=secret'))
+    await ask('600111 怎么样')
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('本次分析未能完成'))
+    expect(screen.getByRole('alert').textContent).not.toContain('secret')
+    fireEvent.click(screen.getByText('查看过程'))
+    expect(screen.getByText('本轮过程')).toBeTruthy()
+  })
   it('断流（无 done）：正文保留但气泡带可见的"未拿到终稿"，且出错误条', async () => {
     apiMock.sendMessageStream.mockImplementation(async (_id: number, _q: string, handlers: any) => {
       handlers.onDelta('只有一半')

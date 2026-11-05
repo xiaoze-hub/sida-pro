@@ -37,7 +37,7 @@
  * pending = 开跑了，结果还不知道；ok = 有完成证据；failed = 有失败证据；
  * unknown = 本轮结束仍未确认（流结束/中断）—— 既不等于成功，也不栽赃成失败。
  */
-export type ReadinessStatus = 'pending' | 'ok' | 'failed' | 'unknown'
+export type ReadinessStatus = 'pending' | 'returned' | 'ok' | 'failed' | 'unknown'
 
 /** 六个证据维度 + 「其他」（未知工具的唯一诚实去处，不硬塞进六个维度之一）。 */
 export type ReadinessGroup = '走势' | '筹码' | '主力' | '盘面' | '消息' | '情景' | '其他'
@@ -82,6 +82,7 @@ const TOOL_META: Record<string, { label: string; group: ReadinessGroup }> = {
   get_thsdk_market_data_index: { label: '指数', group: '走势' },
   // 筹码
   get_chip_accumulation: { label: '底仓筹码', group: '筹码' },
+  get_stock_chips: { label: '筹码分布', group: '筹码' },
   get_cancel_order_intent: { label: '撤单', group: '筹码' },
   get_orderbook: { label: '盘口', group: '筹码' },
   // 主力
@@ -104,6 +105,7 @@ const TOOL_META: Record<string, { label: string; group: ReadinessGroup }> = {
   get_market_news: { label: '消息面', group: '消息' },
   get_thsdk_news: { label: '个股新闻', group: '消息' },
   get_irm_qa: { label: '互动易', group: '消息' },
+  get_fundamentals_detail: { label: '基本面', group: '消息' },
   get_event_catalyst: { label: '事件催化', group: '消息' },
   get_web_content: { label: '网页', group: '消息' },
   // 情景
@@ -113,6 +115,9 @@ const TOOL_META: Record<string, { label: string; group: ReadinessGroup }> = {
   get_decision_pioneer: { label: '决策三指标', group: '情景' },
   get_demon_factor: { label: '妖股因子', group: '情景' },
   get_stock_dossier: { label: '全景档案', group: '情景' },
+  get_stock_factors: { label: '个股因子', group: '情景' },
+  get_factor_ic_report: { label: '因子有效性', group: '情景' },
+  get_factor_winrate: { label: '因子胜率', group: '情景' },
   get_portfolio: { label: '持仓', group: '情景' },
 }
 
@@ -198,6 +203,7 @@ export interface NormalizedStageEvent {
   failed: boolean
   /** 显式完成证据（`ok:true` / `status:'ok'|'done'`）。字符串帧永远是 false —— 它没有这个字段。 */
   ok: boolean
+  returned: boolean
   index: number | null
   total: number | null
 }
@@ -243,6 +249,7 @@ export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | n
       failed: FAIL_TEXT_RE.test(event),
       // 字符串帧（后端 SSE 的实际形状）不带完成字段：认得出失败文案就 failed，否则只是「开跑了」
       ok: false,
+      returned: /^查询已返回[:：]/.test(event),
       index: parsed.index,
       total: parsed.total,
     }
@@ -260,6 +267,7 @@ export function normalizeStageEvent(event: StageEvent): NormalizedStageEvent | n
     group: meta.group,
     failed,
     ok: okOfObject(event),
+    returned: false,
     index: parsed?.index ?? null,
     total: parsed?.total ?? null,
   }
@@ -301,8 +309,9 @@ export function foldStageEvent(state: ReadinessState, event: StageEvent): Readin
     if (it.key !== ev.tool) return it
     if (ev.failed) return { ...it, status: 'failed' as ReadinessStatus }
     if (ev.ok) return { ...it, status: 'ok' as ReadinessStatus }
+    if (ev.returned && it.status === 'pending') return { ...it, status: 'returned' as ReadinessStatus }
     // 没有任何结果证据：开跑帧只证明「又跑了一次」，状态不可推进
-    if (it.status === 'ok' || it.status === 'failed') return it
+    if (it.status === 'ok' || it.status === 'failed' || it.status === 'returned') return it
     return { ...it, status: 'pending' as ReadinessStatus }
   })
 
@@ -311,7 +320,7 @@ export function foldStageEvent(state: ReadinessState, event: StageEvent): Readin
       key: ev.tool,
       label: ev.label,
       group: ev.group,
-      status: ev.failed ? 'failed' : ev.ok ? 'ok' : 'pending',
+      status: ev.failed ? 'failed' : ev.ok ? 'ok' : ev.returned ? 'returned' : 'pending',
     })
   }
 
@@ -325,7 +334,7 @@ export function foldStageEvents(events: StageEvent[]): ReadinessState {
 }
 
 /**
- * 流结束：还在 pending 的落 **unknown（未确认）**，不是 ok。
+ * 流结束：还在 pending 的落 **unknown（未确认）**；已返回仍需核验。
  *
  * 「回答写完了」只证明这一轮结束了，不证明某个维度的数据到手了 —— 整条管线失败回落 tool loop
  * 时同样会正常结束。已确认的 ok / 已留痕的 failed 原样保留。
@@ -339,7 +348,7 @@ export function settleReadiness(state: ReadinessState): ReadinessState {
 }
 
 /**
- * 用运行轨迹（`GET /copilot/runs/{run_id}` 的 steps）把 `unknown` 补成 ok / failed。
+ * 用运行轨迹补充调用结果。step.ok 只表示调用有返回，并不保证数据有效。
  *
  * 背景（2026-10-31 线上）：SSE 的 `stage` 只在工具**开跑**时发一条，没有完成帧，
  * 于是每条回答都挂着「已取 0/13 · 未确认 13」——正文却写满了数据，用户读成"13 项都没取到、
@@ -347,9 +356,8 @@ export function settleReadiness(state: ReadinessState): ReadinessState {
  * 只是没走这条路回到界面。
  *
  * 规则（与 foldFailureNotices 同一条克制原则）：
- *  - 只认**工具名精确命中**的 step；一个工具多条 step（重试/多标的）以「有任一成功即 ok」为准，
- *    全部失败才 failed —— 多标的扫描里单只失败不等于整维度没数据；
- *  - steps 里没有的条目保持原状（unknown 不会被猜成 ok）；
+ *  - 只认**工具名精确命中**的 step；有任一返回记为 returned，全部失败才 failed；
+ *  - steps 里没有的条目保持原状，返回不升级为数据已确认；
  *  - 已有 ok/failed 的条目不被覆盖（流里已知的事实优先，轨迹只补缺口）。
  */
 export function applyRunSteps(
@@ -357,12 +365,12 @@ export function applyRunSteps(
   steps: Array<{ tool?: string | null; ok?: boolean | null }> | null | undefined,
 ): ReadinessState {
   if (!state.items.length || !steps || !steps.length) return state
-  const byTool = new Map<string, boolean[]>()
+  const byTool = new Map<string, Array<boolean | null>>()
   for (const st of steps) {
     const tool = (st?.tool || '').trim()
     if (!tool) continue
     const list = byTool.get(tool) ?? []
-    list.push(st.ok !== false)  // ok 缺失按成功算？不：只把显式 false 当失败，其余视为未断言
+    list.push(typeof st.ok === 'boolean' ? st.ok : null)
     byTool.set(tool, list)
   }
   if (!byTool.size) return state
@@ -371,9 +379,11 @@ export function applyRunSteps(
     if (it.status === 'ok' || it.status === 'failed') return it
     const flags = byTool.get(it.key)
     if (!flags || !flags.length) return it
-    changed = true
+    const hasSuccess = flags.some((f) => f === true)
     const allFailed = flags.every((f) => f === false)
-    return { ...it, status: (allFailed ? 'failed' : 'ok') as ReadinessStatus }
+    if (!hasSuccess && !allFailed) return it
+    changed = true
+    return { ...it, status: (hasSuccess ? 'returned' : 'failed') as ReadinessStatus }
   })
   return changed ? recount(items, state.total) : state
 }
@@ -434,5 +444,6 @@ export function statusText(status: ReadinessStatus): string {
   if (status === 'ok') return '✓'
   if (status === 'failed') return '未取到'
   if (status === 'unknown') return '未确认'
+  if (status === 'returned') return '已返回，待核验'
   return '⏳'
 }

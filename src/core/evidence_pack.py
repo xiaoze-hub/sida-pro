@@ -31,7 +31,8 @@ def build_refs(runs: list[Any], run_id: str, *, as_of: str | None = None) -> lis
     - 成功且文本非空 → status="ok"。
     - 失败或无文本 → status="missing"。
     - digest 取文本前 200 字（超出则截断，换行规范化或直接保留切片）。
-    - source 和 caliber 赋予默认兜底（如 "TDX", "default" 或从输入推导）。
+    - 尚未传入逐项来源和口径时均标为 unknown，不从工具名推断。
+    - as_of 仅能由调用方传入经核实的该证据时点；空值表示未确认。
     """
     refs: list[EvidenceRef] = []
     seq = 0
@@ -55,9 +56,9 @@ def build_refs(runs: list[Any], run_id: str, *, as_of: str | None = None) -> lis
                 EvidenceRef(
                     evidence_id=eid,
                     tool=str(tool),
-                    source="TDX",
+                    source="unknown",
                     as_of=resolved_as_of,
-                    caliber="default",
+                    caliber="unknown",
                     status=status,
                     digest=digest,
                     run_id=str(run_id),

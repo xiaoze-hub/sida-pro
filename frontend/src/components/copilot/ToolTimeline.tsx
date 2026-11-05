@@ -37,6 +37,11 @@ export interface ToolTimelineProps {
   onLoadDetail?: (runId: string) => void
   /** 已加载的单轮详情：run_id → 详情。未命中的轮次显示"加载中"骨架 */
   details?: ToolTimelineDetails
+  loading?: boolean
+  running?: boolean
+  error?: boolean
+  onRetry?: () => void
+  onTrack?: (runId: string) => void
   className?: string
 }
 
@@ -63,7 +68,7 @@ function digestOf(text: string | null | undefined): string {
   return t.length > 120 ? `${t.slice(0, 120)}…` : t
 }
 
-export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTimelineProps) {
+export function ToolTimeline({ runs, onLoadDetail, details, className, loading, running, error, onRetry, onTrack }: ToolTimelineProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
   const toggle = (runId: string) => {
@@ -82,7 +87,9 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
           className="py-1 text-[12px] text-muted-foreground"
           data-testid="copilot-tool-timeline-empty"
         >
-          本轮没有工具调用
+          {error ? (
+            <>过程暂时无法获取。{onRetry ? <button type="button" className="ml-1 text-primary" onClick={onRetry}>重新加载</button> : null}</>
+          ) : loading ? '正在加载本轮过程…' : running ? '分析进行中，过程尚未同步。' : '暂无可用的过程记录。'}
         </div>
       </div>
     )
@@ -142,12 +149,17 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
                   className="border-l border-border pb-1 pl-2"
                   data-testid={`copilot-run-steps-${run.run_id}`}
                 >
+                  {(run.status === 'running' || run.status === 'queued') && onTrack ? (
+                    <button type="button" className="min-h-9 text-[12px] text-primary" onClick={() => onTrack(run.run_id)}>
+                      跟踪此任务
+                    </button>
+                  ) : null}
                   {knownEmpty ? (
                     <div
                       className="py-1 text-[12px] text-muted-foreground"
                       data-testid="copilot-run-empty"
                     >
-                      本轮没有工具调用
+                      {run.status === 'running' || run.status === 'queued' ? '任务进行中，暂无已记录的工具步骤。' : '本轮没有工具调用'}
                     </div>
                   ) : !detail ? (
                     <div className="space-y-1 py-1" data-testid="copilot-run-loading">
@@ -157,8 +169,8 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
                   ) : (
                     <ul className="m-0 list-none space-y-0.5 p-0 py-1">
                       {detail.steps.map((step) => {
-                        // 失败原因：优先 error 字段，接口没带就退回结果摘要
-                        const reason = digestOf(step.error) || digestOf(step.result_digest)
+                        // 失败摘要可能含上游异常与请求标识；只在服务端日志保留。
+                        const reason = step.ok ? digestOf(step.result_digest) : ''
                         return (
                           <li
                             key={step.seq}
@@ -175,11 +187,11 @@ export function ToolTimeline({ runs, onLoadDetail, details, className }: ToolTim
                             {step.ok ? (
                               <span className="shrink-0 text-[12px] text-muted-foreground">ok</span>
                             ) : (
-                              <span className="shrink-0 text-[12px] text-red-500">失败</span>
+                              <span className="shrink-0 text-[12px] text-red-500">未取到</span>
                             )}
                             {reason ? (
                               <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
-                                {step.ok ? reason : `原因：${reason}`}
+                                {reason}
                               </span>
                             ) : null}
                           </li>

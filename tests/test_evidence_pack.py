@@ -21,6 +21,8 @@ def test_evidence_pack_basic():
     assert refs[0].digest == "short text"
     assert refs[0].run_id == "run-123"
     assert refs[0].as_of == "2026-11-03 15:00"
+    assert refs[0].source == "unknown"
+    assert refs[0].caliber == "unknown"
 
     assert refs[1].evidence_id == "run-123:2"
     assert refs[1].status == "ok"
@@ -91,7 +93,9 @@ def test_emit_evidence_writes_serializable_dicts():
     assert len(sink) == 1
     assert isinstance(sink[0], dict), "sink 必须是可序列化 dict"
     assert sink[0]["evidence_id"] == "run-abc:1"
-    assert sink[0]["as_of"] == "2026-11-03 15:00"
+    assert sink[0]["as_of"] == ""
+    assert sink[0]["source"] == "unknown"
+    assert sink[0]["caliber"] == "unknown"
     # 真序列化一次，这是 SSE 实际会做的事
     assert json.dumps(sink, ensure_ascii=False)
 

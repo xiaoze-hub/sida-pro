@@ -14,7 +14,8 @@ queued ──start──> running ──ok/degraded──> 终态
 计划书里写的是 `succeeded / failed`。**两者都算终态，都认**，不迁移存量数据 ——
 改词汇的代价是历史轨迹全部变成未知状态，收益为零。
 
-**接管判据**：`heartbeat_at` 超过 120s 未更新 = 进程已死（心跳 30s 一次，容忍 4 次丢失）。
+**接管判据**：仅对启用心跳的任务，`heartbeat_at` 超过 120s 未更新视为中断；
+没有心跳的前台和历史记录不能据此判断。
 
 **为什么不自动重跑**：重跑会消耗额度、且用户可能已经看到半截答案。
 这里只把状态改成 `failed` 并写明"可重试"，**重试由用户点**（幂等入口在
@@ -98,8 +99,9 @@ def reap_stale_runs(
     **为什么按心跳而不是按进程**：多 worker 部署时，"这个进程还活着"不代表
     "它负责的那个 run 还在跑"。心跳是 run 级的事实。
 
-    **为什么 heartbeat 为 NULL 也算超时**：老数据没有心跳列，若它们卡在 running，
-    说明写入它的那次进程早就不在了 —— 这正是要收的尸。
+    无心跳的前台流式请求和历史记录无法区分：它们不参与自动接管。
+    仅处理明确启用了心跳且已过期的任务。更新时再次校验心跳和状态，
+    防止读取候选后另一进程刚刷新心跳或完成时被误改。
     """
     from src.db.models import CopilotRun
 
@@ -108,24 +110,30 @@ def reap_stale_runs(
         db.query(CopilotRun)
         .filter(CopilotRun.status.in_(tuple(ACTIVE_STATES)))
         .filter(
-            (CopilotRun.heartbeat_at.is_(None)) | (CopilotRun.heartbeat_at < cutoff)
+            CopilotRun.heartbeat_at.is_not(None), CopilotRun.heartbeat_at < cutoff
         )
         .all()
     )
 
     reaped: list[str] = []
     for row in rows:
-        # queued 的还没开始跑，不能因为"没心跳"就判死（它本来就还没开始）
-        if row.status == QUEUED and row.heartbeat_at is None:
-            continue
         if not can_transition(row.status, "failed"):
             continue
-        reaped.append(row.run_id)
         if dry_run:
+            reaped.append(row.run_id)
             continue
-        row.status = "failed"
-        row.error = takeover_error(now)
-        row.finished_at = now or db_now_naive()
+        count = (
+            db.query(CopilotRun)
+            .filter(CopilotRun.run_id == row.run_id, CopilotRun.status.in_(tuple(ACTIVE_STATES)))
+            .filter(CopilotRun.heartbeat_at.is_not(None), CopilotRun.heartbeat_at < cutoff)
+            .update({
+                CopilotRun.status: "failed",
+                CopilotRun.error: takeover_error(now),
+                CopilotRun.finished_at: now or db_now_naive(),
+            }, synchronize_session=False)
+        )
+        if count:
+            reaped.append(row.run_id)
 
     if reaped and not dry_run:
         try:
@@ -137,6 +145,19 @@ def reap_stale_runs(
             raise
         logger.warning("[copilot_runtime] 接管 %d 个中断 run: %s", len(reaped), reaped[:10])
     return reaped
+
+
+def reap_heartbeat_runs() -> None:
+    """调度器调用：独立会话定期检查有心跳的后台运行。"""
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        reap_stale_runs(db)
+    except Exception:
+        logger.warning("[copilot_runtime] 定期检查失败", exc_info=True)
+    finally:
+        db.close()
 
 
 def heartbeat(db, run_id: str, *, now: datetime | None = None) -> bool:

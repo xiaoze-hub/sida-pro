@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isTerminalStatus, progressText, type RunStatus } from '@/lib/copilot/jobs'
+import { isRetryableRunStatusError, isTerminalStatus, progressText, type RunStatus } from '@/lib/copilot/jobs'
 
 /**
  * 后台执行进度文案（纯函数）。
@@ -40,14 +40,14 @@ describe('progressText', () => {
     expect(progressText({ status: 'degraded', tool_calls: 2 })).toContain('部分工具失败')
   })
 
-  it('failed 把服务端 error 原文透出来，不吞成"出错了"', () => {
+  it('failed 不把内部错误原文展示给用户', () => {
     const t = progressText({ status: 'failed', error: 'RuntimeError: 模型网关 502' })
     expect(t).toContain('执行失败')
-    expect(t).toContain('模型网关 502')
+    expect(t).not.toContain('模型网关 502')
   })
 
   it('failed 且无 error 时不编原因', () => {
-    expect(progressText({ status: 'failed', error: null })).toBe('执行失败')
+    expect(progressText({ status: 'failed', error: null })).toBe('执行失败，请查看本轮过程')
   })
 
   it('cancelled 明确说取消', () => {
@@ -62,6 +62,16 @@ describe('progressText', () => {
     for (const st of ['queued', 'running', 'ok', 'degraded', 'failed', 'cancelled']) {
       expect(progressText({ status: st, tool_calls: 3, elapsed_ms: 5000 })).not.toContain('%')
     }
+  })
+})
+
+describe('后台任务状态查询重连', () => {
+  it('只重连临时网络、超时和服务端错误，不重试权限错误', () => {
+    for (const kind of ['NETWORK', 'TIMEOUT', 'HTTP_5xx']) {
+      expect(isRetryableRunStatusError({ kind })).toBe(true)
+    }
+    expect(isRetryableRunStatusError({ kind: 'HTTP_4xx' })).toBe(false)
+    expect(isRetryableRunStatusError(null)).toBe(false)
   })
 })
 

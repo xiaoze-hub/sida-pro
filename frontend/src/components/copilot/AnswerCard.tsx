@@ -595,12 +595,16 @@ export function AnswerCard({
           <ul data-testid="copilot-evidence-list" className="mt-1 space-y-0.5">
             {evidenceList.map((ev, i) => {
               const missing = ev.status === 'missing'
+              // 旧版曾把所有工具默认写成 TDX/default，这对来源不是有效证据。
+              const legacyDefault = ev.caliber === 'default'
+              const source = !ev.source || ev.source === 'unknown' || legacyDefault ? '未确认' : ev.source
+              const caliber = !ev.caliber || ev.caliber === 'unknown' || legacyDefault ? '未确认' : ev.caliber
               return (
                 <li
                   key={ev.evidence_id || `ev-${i}`}
                   data-testid="copilot-evidence-item"
                   data-status={missing ? 'missing' : 'ok'}
-                  title={`${ev.tool} · 来源 ${ev.source || '未标注'} · 口径 ${ev.caliber || '未标注'}${
+                  title={`${ev.tool} · 来源 ${source} · 口径 ${caliber}${
                     ev.digest ? `\n${ev.digest}` : ''
                   }`}
                   className="flex items-baseline gap-1.5 text-[12px] leading-relaxed"
@@ -616,11 +620,13 @@ export function AnswerCard({
                     </span>
                     <span className="mx-1 text-muted-foreground">·</span>
                     <span className="tabular-nums text-muted-foreground">
-                      {ev.as_of ? ev.as_of : '--'}
+                      {ev.as_of && !legacyDefault ? ev.as_of : '--（基准日未确认）'}
                     </span>
                     <span className="mx-1 text-muted-foreground">·</span>
+                    <span className="text-muted-foreground">来源 {source} · 口径 {caliber}</span>
+                    <span className="mx-1 text-muted-foreground">·</span>
                     <span className={missing ? 'text-amber-500' : 'text-muted-foreground'}>
-                      {missing ? ANSWER_PROVENANCE_MISSING : ev.status}
+                      {missing ? ANSWER_PROVENANCE_MISSING : '已返回（未核验）'}
                     </span>
                   </span>
                 </li>

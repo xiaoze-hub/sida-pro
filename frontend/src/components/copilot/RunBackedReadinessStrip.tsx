@@ -10,7 +10,7 @@ import { applyRunSteps, type ReadinessState } from '@/lib/copilot/evidence-readi
  * 为什么需要这层：SSE 的 `stage` 只在工具**开跑**时发一条，没有完成帧，所以每条回答都挂着
  * 「已取 0/13 · 未确认 13」，正文却写满数据 —— 用户读成"13 项全没取到，这篇是编的"。
  * 服务端其实逐工具记了 `ok`（`CopilotStep.ok`，`GET /copilot/runs/{run_id}`），
- * 这里在**仍有 unknown 时**补拉一次轨迹，把能确认的条目改成 已取/失败。
+ * 这里补拉轨迹，区分已返回但待核验和明确失败；返回本身不代表数据有效。
  *
  * 克制之处：只在存在 unknown 时才请求（一条回答最多一次）；请求失败保持原样（不猜成功）；
  * 已有结论的条目不覆盖。
@@ -29,7 +29,7 @@ export function RunBackedReadinessStrip({
   const [loaded, setLoaded] = useState<{ runId: string; steps: CopilotRunStep[] } | null>(null)
   const loadRef = useRef(loadDetail)
   loadRef.current = loadDetail
-  const needsEvidence = state.items.some((it) => it.status === 'unknown')
+  const needsEvidence = state.items.some((it) => it.status === 'unknown' || it.status === 'returned')
 
   useEffect(() => {
     if (!runId || !needsEvidence) return

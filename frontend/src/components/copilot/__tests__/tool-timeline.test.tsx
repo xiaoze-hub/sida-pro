@@ -87,6 +87,15 @@ describe('ToolTimeline 骨架', () => {
 })
 
 describe('ToolTimeline 展开', () => {
+  it('活动任务可重新跟踪，终态不出现跟踪入口', () => {
+    const onTrack = vi.fn()
+    render(<ToolTimeline runs={[makeRun({ run_id: 'live', status: 'running' }), makeRun({ run_id: 'done' })]} onTrack={onTrack} />)
+    fireEvent.click(screen.getByTestId('copilot-run-row-live'))
+    fireEvent.click(screen.getByText('跟踪此任务'))
+    expect(onTrack).toHaveBeenCalledWith('live')
+    fireEvent.click(screen.getByTestId('copilot-run-row-done'))
+    expect(screen.getAllByText('跟踪此任务')).toHaveLength(1)
+  })
   it('点开某轮触发 onLoadDetail（组件自己不取数）', () => {
     const onLoadDetail = vi.fn()
     render(<ToolTimeline runs={RUNS} onLoadDetail={onLoadDetail} />)
@@ -152,8 +161,8 @@ describe('ToolTimeline 展开', () => {
     expect(screen.getByTestId('copilot-step-1').textContent).toContain('quote_snapshot')
     expect(screen.getByTestId('copilot-step-2').textContent).toContain('auction_flow')
     // 失败原因
-    expect(screen.getByTestId('copilot-step-2').textContent).toContain('失败')
-    expect(screen.getByTestId('copilot-step-2').textContent).toContain('竞价数据源超时')
+    expect(screen.getByTestId('copilot-step-2').textContent).toContain('未取到')
+    expect(screen.getByTestId('copilot-step-2').textContent).not.toContain('竞价数据源超时')
     // 成功步给摘要 + ok
     expect(screen.getByTestId('copilot-step-1').textContent).toContain('ok')
     expect(screen.getByTestId('copilot-step-1').textContent).toContain('量比 1.8')
@@ -161,10 +170,20 @@ describe('ToolTimeline 展开', () => {
 })
 
 describe('ToolTimeline 空态', () => {
+  it('运行中和加载中不谎称没有工具调用；读取失败可重试', () => {
+    const retry = vi.fn()
+    const view = render(<ToolTimeline runs={[]} running />)
+    expect(screen.getByTestId('copilot-tool-timeline-empty').textContent).toContain('分析进行中')
+    view.rerender(<ToolTimeline runs={[]} loading />)
+    expect(screen.getByTestId('copilot-tool-timeline-empty').textContent).toContain('正在加载')
+    view.rerender(<ToolTimeline runs={[]} error onRetry={retry} />)
+    fireEvent.click(screen.getByText('重新加载'))
+    expect(retry).toHaveBeenCalledOnce()
+  })
   it('runs 为空 → 「本轮没有工具调用」', () => {
     render(<ToolTimeline runs={[]} />)
     expect(screen.getByTestId('copilot-tool-timeline-empty').textContent).toContain(
-      '本轮没有工具调用',
+      '暂无可用的过程记录',
     )
   })
 

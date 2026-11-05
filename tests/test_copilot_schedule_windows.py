@@ -132,6 +132,16 @@ def test_non_trading_day_skipped():
         db.close()
 
 
+def test_national_day_holiday_does_not_trigger():
+    db = SessionLocal()
+    try:
+        created = cs.create(db, "u1", kind="auction_digest", at_hhmm="09:30", window_kind="intraday")
+        cs.run_due(datetime(2026, 10, 1, 9, 30))
+        assert cs.list_runs(db, "u1", created["id"]) == []
+    finally:
+        db.close()
+
+
 def test_custom_window_backward_compatibility():
     db = SessionLocal()
     try:
