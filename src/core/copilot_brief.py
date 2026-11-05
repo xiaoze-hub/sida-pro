@@ -689,9 +689,12 @@ def _build_narrative(chips: dict, micro: dict, res: dict) -> str:
 # 顶层入口: build_copilot_brief
 # ---------------------------------------------------------------------------
 
-def build_copilot_brief(symbol: str, market: str = "CN", perms: list[str] | None = None, now: datetime | None = None) -> dict:
-    """并发汇聚 7 块证据并产出确定性参谋 Brief。"""
+def build_copilot_brief(symbol: str, market: str = "CN", perms: list[str] | None = None, now: datetime | None = None, fact_pack: dict | None = None) -> dict:
+    """并发汇聚 7 块证据并产出确定性参谋 Brief。若传入 fact_pack 且命中快照，则直接复用行情 quote。"""
+    from src.core.fact_pack import apply_fact_pack_to_quotes
+
     quote_res = _fetch_quote_evidence(symbol, market)
+    quote_res = apply_fact_pack_to_quotes(fact_pack, symbol, quote_res) or quote_res
 
     evidence_getters = {
         "chips": lambda: _fetch_chips_evidence(symbol, market),

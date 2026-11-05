@@ -155,3 +155,26 @@ def to_prompt_block(pack: dict[str, Any] | None) -> str:
 def current_pack() -> dict | None:
     """当前请求该注入的事实包；没有（普通对话）返回 None。"""
     return CURRENT_PACK.get()
+
+
+def apply_fact_pack_to_quotes(fact_pack: dict | None, symbol: str, default_quote: dict | None) -> dict | None:
+    """若 fact_pack 中包含该标的的快照数据，直接复用事实包中的现价/涨跌幅/时间，
+    防止委派子任务在同一分钟内再次向上游发起重复行情请求。
+    """
+    if not fact_pack or not isinstance(fact_pack, dict):
+        return default_quote
+    syms_data = fact_pack.get("symbols") or {}
+    if symbol in syms_data:
+        dat = syms_data[symbol]
+        q = dict(default_quote or {})
+        if dat.get("price") is not None:
+            q["close"] = dat["price"]
+            q["price"] = dat["price"]
+        if dat.get("pct") is not None:
+            q["change_pct"] = dat["pct"]
+        if dat.get("as_of"):
+            q["as_of"] = dat["as_of"]
+        q["source"] = f"{dat.get('source', 'brief')} (via FactPack {fact_pack.get('pack_id', '')})"
+        q["stale"] = dat.get("stale", False)
+        return q
+    return default_quote

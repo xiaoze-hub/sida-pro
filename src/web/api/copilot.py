@@ -71,7 +71,13 @@ def get_copilot_brief(
                 res["cache"] = {"hit": True, "ttl_s": hit_ttl, "key": cache_key}
                 return res
 
-        brief = build_copilot_brief(symbol, market=market)
+        # 若当前线程带了共享事实包 ContextVar，优先喂给 build_copilot_brief
+        try:
+            from src.core.fact_pack import current_pack as _cp
+            _fp = _cp()
+        except Exception:
+            _fp = None
+        brief = build_copilot_brief(symbol, market=market, fact_pack=_fp)
         # 若不是全降级，写缓存
         evidence_used = brief.get("verdict", {}).get("evidence_used", [])
         if len(evidence_used) >= 1:
