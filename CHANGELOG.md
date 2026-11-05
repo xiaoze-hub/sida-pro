@@ -1,3 +1,7 @@
+## release: v0.10.2（官网新增 Skill 安装部署说明）
+
+- 官网 `/developers` 页面新增「Skill 安装」章节，提供一键安装脚本、手动配置及 Agent 客户端接入说明。
+
 ## release: v0.10.1（数智参谋：事实包行情快照复用）
 
 - 闭环交接项 1：实现 `apply_fact_pack_to_quotes` 并在 `build_copilot_brief` 与 `/copilot/{symbol}` 路由中落地，委派子任务与单标的查询可直接复用事实包内的冻结行情快照，避免重复向上游取数并保证多标的/并行会诊口径一致。
