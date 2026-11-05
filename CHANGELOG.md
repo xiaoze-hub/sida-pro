@@ -1,3 +1,7 @@
+## release: v0.10.1（数智参谋：事实包行情快照复用）
+
+- 闭环交接项 1：实现 `apply_fact_pack_to_quotes` 并在 `build_copilot_brief` 与 `/copilot/{symbol}` 路由中落地，委派子任务与单标的查询可直接复用事实包内的冻结行情快照，避免重复向上游取数并保证多标的/并行会诊口径一致。
+
 ## release: v0.10.0（数智参谋：定时任务四档调度、盘中循环、运行恢复与会话投递隔离）
 
 - **定时任务调度增强**：支持 premarket/intraday/postmarket/custom 四档时段语义，盘中循环按 `interval_min` 调度，自带 `copilot_schedule_runs` 失败留痕与运行记录入口。
