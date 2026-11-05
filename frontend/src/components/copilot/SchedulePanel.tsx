@@ -31,8 +31,13 @@ interface ScheduleRow {
   conversation_id: number | null
   enabled: boolean
   last_run_date: string | null
+  window_kind?: string | null
+  interval_min?: number | null
   created_at?: string | null
 }
+
+interface ScheduleRun { id: number; status: string; trigger_at: string | null; created_at: string; error: string | null }
+const WINDOW_LABELS: Record<string, string> = { custom: '自定义时间', premarket: '盘前', intraday: '盘中循环', postmarket: '盘后' }
 
 /** 类型下拉。后端只认 `auction_digest` / `daily_brief`（src/core/copilot_schedule.py）。 */
 const KIND_OPTIONS: { value: string; label: string }[] = [
@@ -176,6 +181,9 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
   // 录入带
   const [kind, setKind] = useState('auction_digest')
   const [at, setAt] = useState('09:20')
+  const [windowKind, setWindowKind] = useState('custom')
+  const [interval, setInterval] = useState('20')
+  const [history, setHistory] = useState<{ id: number; runs: ScheduleRun[]; error?: boolean; loading?: boolean } | null>(null)
   const [weekdays, setWeekdays] = useState<string[]>(['mon', 'tue', 'wed', 'thu', 'fri'])
   const [creating, setCreating] = useState(false)
 
@@ -235,6 +243,10 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
       setError('至少选一个工作日')
       return
     }
+    if (windowKind === 'intraday' && (!/^\d+$/.test(interval) || Number(interval) < 5)) {
+      setError('盘中循环间隔至少为 5 分钟')
+      return
+    }
     const spec = weekdaysSpec(weekdays)
     const hhmm = `${at.trim()}`
     setCreating(true)
@@ -243,7 +255,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
       const created = await fetchAPI<ScheduleRow>('/copilot/schedules', {
         method: 'POST',
         headers: jsonHeaders,
-        body: JSON.stringify({ kind, at_hhmm: hhmm, weekdays: spec }),
+        body: JSON.stringify({ kind, at_hhmm: hhmm, weekdays: spec, window_kind: windowKind, interval_min: windowKind === 'intraday' ? Number(interval) : null }),
       })
       if (!aliveRef.current) return
       setRows((prev) => [created, ...prev])
@@ -253,7 +265,17 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
     } finally {
       if (aliveRef.current) setCreating(false)
     }
-  }, [at, creating, kind, weekdays, weekdaysSpec])
+  }, [at, creating, interval, kind, weekdays, weekdaysSpec, windowKind])
+
+  const loadHistory = useCallback(async (id: number) => {
+    setHistory({ id, runs: [], loading: true })
+    try {
+      const runs = await fetchAPI<ScheduleRun[]>(`/copilot/schedules/${id}/runs`, { cacheMode: false })
+      if (aliveRef.current) setHistory((prev) => prev?.id === id ? { id, runs } : prev)
+    } catch {
+      if (aliveRef.current) setHistory((prev) => prev?.id === id ? { id, runs: [], error: true } : prev)
+    }
+  }, [])
 
   const toggle = useCallback(
     async (row: ScheduleRow, next: boolean) => {
@@ -310,7 +332,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
   return (
     <section className={`flex flex-col gap-3 ${className}`} data-testid="copilot-schedule-panel">
       <p className="text-[12px] leading-relaxed text-muted-foreground">
-        定时任务按工作日到点执行，结果写成一条消息进会话
+        任务仅在交易日执行，结果写入会话；盘中循环在午休和收盘时暂停。
       </p>
 
       {/* 录入带：类型 + 时间 + 工作日多选 + 创建 */}
@@ -328,6 +350,11 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
             </option>
           ))}
         </select>
+        <select aria-label="执行时段" value={windowKind} onChange={(e) => setWindowKind(e.target.value)} className="rounded border border-border bg-transparent px-1 py-0.5 text-[12px] text-foreground">
+          {Object.entries(WINDOW_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {windowKind === 'intraday' ? <label className="text-[12px] text-muted-foreground">间隔（分钟）<input aria-label="循环间隔分钟" type="number" min={5} value={interval} onChange={(e) => setInterval(e.target.value)} className="ml-1 w-16 rounded border border-border bg-transparent px-1 py-0.5 text-foreground" /></label> : null}
+        {windowKind === 'custom' ? (
         <input
           aria-label="触发时间"
           data-testid="schedule-time-input"
@@ -337,6 +364,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
           value={at}
           onChange={(e) => setAt(e.target.value)}
         />
+        ) : <span className="text-[12px] text-muted-foreground">{windowKind === 'premarket' ? '09:00–09:30 触发一次' : windowKind === 'postmarket' ? '15:00–15:59 触发一次' : '09:30–11:30、13:00–15:00'}</span>}
         <div
           className="flex items-center gap-1"
           role="group"
@@ -395,7 +423,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
           {rows.map((row) => {
             const confirming = confirmId === row.id
             const pending = pendingIds.includes(row.id)
-            const nextRun = deriveNextRun(row.last_run_date, row.at_hhmm, row.weekdays, now.current)
+            const nextRun = !row.window_kind || row.window_kind === 'custom' ? deriveNextRun(row.last_run_date, row.at_hhmm, row.weekdays, now.current) : null
             return (
               <li
                 key={row.id}
@@ -412,7 +440,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                       data-testid="schedule-time"
                       className="font-mono text-[12px] text-muted-foreground"
                     >
-                      {row.at_hhmm || '--'}
+                      {row.window_kind && row.window_kind !== 'custom' ? `${WINDOW_LABELS[row.window_kind] || row.window_kind}${row.window_kind === 'intraday' ? ` · ${row.interval_min ?? 20} 分钟` : ''}` : row.at_hhmm || '--'}
                     </span>
                     <span data-testid="schedule-weekdays-text" className="text-[12px] text-muted-foreground">
                       {formatWeekdays(row.weekdays)}
@@ -427,9 +455,13 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                     <span data-testid="schedule-last-run">
                       上次 {formatLastRun(row.last_run_date)}
                     </span>
-                    <span data-testid="schedule-next-run">下次 {nextRun || '--'}</span>
+                    <span data-testid="schedule-next-run">{row.window_kind && row.window_kind !== 'custom' ? '下次时间未计算' : `预计下次 ${nextRun || '--'}（未核对节假日）`}</span>
+                    <button type="button" onClick={() => history?.id === row.id ? setHistory(null) : void loadHistory(row.id)} className="underline">运行记录</button>
                     {pending ? <span className="text-muted-foreground">处理中…</span> : null}
                   </div>
+                  {history?.id === row.id ? <div className="mt-1 text-[12px] text-muted-foreground" aria-live="polite">
+                    {history.loading ? '记录读取中…' : history.error ? <button type="button" onClick={() => void loadHistory(row.id)}>记录读取失败，点击重试</button> : history.runs.length === 0 ? '暂无运行记录' : history.runs.map((run) => <div key={run.id}>{run.created_at || '--'} · {run.status === 'ok' ? '已完成' : run.status === 'failed' ? '执行失败' : '已跳过'}{run.error ? ` · ${run.error}` : ''}</div>)}
+                  </div> : null}
                 </div>
 
                 <div className="flex shrink-0 items-center gap-1">

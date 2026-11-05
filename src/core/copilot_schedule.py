@@ -68,8 +68,12 @@ def create(db, user_id, *, kind: str, at_hhmm: str,
     
     norm_hhmm = f"{t.hour:02d}:{t.minute:02d}"
     
-    if window_kind == "intraday" and interval_min is not None:
-        if int(interval_min) < 5:
+    if interval_min is not None:
+        try:
+            interval_min = int(interval_min)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("循环间隔应为整数分钟") from exc
+        if interval_min < 5:
             interval_min = 5
 
     row = CopilotSchedule(
@@ -165,7 +169,7 @@ def _should_trigger_now(row: CopilotSchedule, now: datetime) -> bool:
     2. 必须匹配星期。
     3. 根据 window_kind 分流：
        - premarket：09:00 至 09:30 之间（含 09:00, 09:30），且当天没跑过。
-       - intraday：在两个交易时段 09:30–11:30 / 13:00–15:00 内（不含 11:30~13:00 午休），
+       - intraday：在两个交易时段 09:30–11:30 / 13:00–15:00 内（不含午休和收盘边界），
          且距离上次运行时间 >= interval_min（默认 20 分钟，最小 5 分钟）。
        - postmarket：15:00 至 15:59 之间（含 15:00, 15:59），且当天没跑过。
        - custom：完全保持现有行为（精确匹配 at_hhmm 且当天没跑过）。
@@ -213,7 +217,6 @@ def _should_trigger_now(row: CopilotSchedule, now: datetime) -> bool:
                 db.query(CopilotScheduleRun)
                 .filter(
                     CopilotScheduleRun.schedule_id == row.id,
-                    CopilotScheduleRun.status == "ok"
                 )
                 .order_by(CopilotScheduleRun.id.desc())
                 .first()
@@ -228,7 +231,8 @@ def _should_trigger_now(row: CopilotSchedule, now: datetime) -> bool:
                 if delta.total_seconds() < interval * 60:
                     return False
         except Exception:
-            pass
+            logger.exception("[copilot-sched] 无法读取任务上次运行时间 #%s", row.id)
+            return False
         finally:
             db.close()
         return True

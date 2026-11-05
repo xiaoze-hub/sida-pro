@@ -63,6 +63,7 @@ beforeEach(() => {
       method,
       body: typeof init?.body === 'string' ? init.body : null,
     })
+    if (method === 'GET' && String(url).includes('/runs')) return jsonResponse([{ id: 4, status: 'failed', created_at: '2026-11-03 09:30', error: '任务执行失败，请稍后重试' }])
     if (method === 'GET') return jsonResponse(scheduleRows)
     if (method === 'POST') {
       const parsed = JSON.parse(String(init?.body || '{}'))
@@ -89,6 +90,20 @@ afterEach(() => {
 })
 
 describe('SchedulePanel', () => {
+  it('盘中循环提交时段和间隔，并可查看执行失败记录', async () => {
+    render(<SchedulePanel />)
+    await waitFor(() => expect(screen.getAllByTestId('schedule-row')).toHaveLength(2))
+    fireEvent.change(screen.getByLabelText('执行时段'), { target: { value: 'intraday' } })
+    fireEvent.change(screen.getByLabelText('循环间隔分钟'), { target: { value: '15' } })
+    fireEvent.click(screen.getByTestId('schedule-create-btn'))
+    await waitFor(() => {
+      const body = JSON.parse(String(calls.find((call) => call.method === 'POST')?.body))
+      expect(body.window_kind).toBe('intraday')
+      expect(body.interval_min).toBe(15)
+    })
+    fireEvent.click(screen.getAllByText('运行记录')[0])
+    expect(await screen.findByText(/任务执行失败，请稍后重试/)).toBeTruthy()
+  })
   it('渲染 enabled 与 disabled 两种任务，可分辨', async () => {
     render(<SchedulePanel />)
     await waitFor(() => expect(screen.getAllByTestId('schedule-row')).toHaveLength(2))
