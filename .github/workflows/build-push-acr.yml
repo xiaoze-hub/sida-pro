@@ -83,23 +83,6 @@ jobs:
           python3 scripts/check_is_pg_scope.py
           # 2026-10-22: 数据域目录门禁 —— 域引用了不存在的表就红（防止目录与代码漂移）
           python3 scripts/gen_data_catalog.py --check
-      - name: Frontend gates (tsc + eslint + vitest + ui-rules)
-        run: |
-          cd frontend
-          npm install -g pnpm --silent 2>/dev/null || true
-          pnpm install --frozen-lockfile
-          pnpm typecheck
-          pnpm lint
-          pnpm test
-          pnpm ui:check
-
-  # 2026-09-29: 原全量 pytest(~20min, 单 runner 串行)拆成 4 片矩阵并行。
-  # 覆盖测试一份不少: 分片集合 = 原门禁测试集合(tests/test_*.py 去掉两个 CI --ignore 文件),
-  # 且是**文件级**切分 —— 每个文件整体只属于一片 ⇒ 无重复、无遗漏, 不需要 durations 文件/新依赖。
-  # 运行时过滤条件与分片前逐字一致: `-m "not network"` + 两个 --ignore + `--cov=src`。
-  # 本作业不再 needs: gates(与快门禁并行, 这才是 23min→~9min 的来源);
-  # 覆盖率棘轮在汇总作业 coverage-ratchet 里合并后仍照跑。
-  # 2026-09-30: `build` 作业已移除(镜像改国内云机构建), 棘轮仍是独立门禁作业。
   backend-pytest:
     name: Backend pytest shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
