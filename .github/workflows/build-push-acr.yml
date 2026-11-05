@@ -62,6 +62,11 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
+      # ⚠️ 2026-10-26 删除「Install system libs for WeasyPrint」这一步：
+      # 实测它在本作业占 1131s（19 分钟，apt 源抖动），而 gates 根本不跑 PDF 用例
+      # （pytest 2026-09-29 已拆到 backend-pytest，那里自己会装）。留着纯粹让每次
+      # 发版白等 20 分钟 —— 这是"部署越来越慢"的真正原因，不是测试变多。
+
       - name: Backend static gates (lock drift / scoped queries / dialect scope)
         # W2.5/E6(2026-09-09): 依赖统一走 requirements-lock.txt(生产容器 freeze 的精确版本)
         # W2.1/C3(2026-09-09): 越权静态扫描(与 build-and-push-image.yml 同门禁)
@@ -78,8 +83,15 @@ jobs:
           python3 scripts/check_is_pg_scope.py
           # 2026-10-22: 数据域目录门禁 —— 域引用了不存在的表就红（防止目录与代码漂移）
           python3 scripts/gen_data_catalog.py --check
-      # [DISABLED] Frontend gates temporarily bypassed to unblock deployment
+      - name: Frontend gates (tsc + eslint + vitest + ui-rules)
         run: |
+          cd frontend
+          npm install -g pnpm --silent 2>/dev/null || true
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm ui:check
 
   # 2026-09-29: 原全量 pytest(~20min, 单 runner 串行)拆成 4 片矩阵并行。
   # 覆盖测试一份不少: 分片集合 = 原门禁测试集合(tests/test_*.py 去掉两个 CI --ignore 文件),

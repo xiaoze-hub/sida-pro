@@ -160,6 +160,23 @@ def _clear_usage(key_id: int) -> None:
         db.close()
 
 
+def _clear_all_usage() -> None:
+    """清掉**全表**用量行。
+
+    `/api/admin/analytics/usage-trends` 是全局管理面聚合（跨 key），所以凡是断言
+    `unique_ips` 绝对值的用例都必须先清全表 —— 只清本 key 会让"本文件里更早的用例
+    通过 API 打进来的 client_ip='unknown' 行"渗进聚合结果
+    （CI 实测：3 行 unknown 让 unique_ips 从 2 变 3，且只在别的用例先跑时才红，
+    属于顺序依赖的假绿/假红）。
+    """
+    db = SessionLocal()
+    try:
+        db.query(SkillUsage).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+
 def _data(resp) -> dict:
     """/api/* 被 ResponseWrapperMiddleware 包成 {code, success, data, message}。"""
     body = resp.json()
@@ -327,7 +344,7 @@ def _analytics(env, days=7) -> dict:
 
 
 def test_unique_ips精确且合并mapped写法(env):
-    _clear_usage(env["key_id"])
+    _clear_all_usage()   # 全局聚合口径 → 必须清全表，否则别的用例的 unknown 行会混进来
     _add_usage(env["key_id"], ip="203.0.113.9")
     _add_usage(env["key_id"], ip="::ffff:203.0.113.9")   # 同一来源的另一种写法
     _add_usage(env["key_id"], ip="2001:db8::9")
@@ -342,7 +359,7 @@ def test_unique_ips精确且合并mapped写法(env):
 
 
 def test_unique_ips超上限时不冒充准确值(env, monkeypatch):
-    _clear_usage(env["key_id"])
+    _clear_all_usage()
     for i in range(3):
         _add_usage(env["key_id"], ip=f"203.0.113.{10 + i}")
 
