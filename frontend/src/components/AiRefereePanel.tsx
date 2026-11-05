@@ -130,7 +130,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
       {/* 弃权: 显式说明维持模型方向, 不伪装成「裁判确认过」 */}
       {isAbstain && (
         <div data-testid="ai-referee-abstain-note" className="text-[12px] text-muted-foreground">
-          裁判弃权：未给出方向裁定，维持上方模型方向（裁判不可用/未表态，不代表认可）。
+          裁判弃权：模型预测已按期输出，AI 裁判层未对本次预测给出独立修正（不影响主模型预测结果）。
         </div>
       )}
 
