@@ -53,6 +53,14 @@ def create(db, user_id, *, kind: str, at_hhmm: str,
         raise ValueError(f"不支持的任务类型：{kind}（可选 {', '.join(KINDS)}）")
     if window_kind not in WINDOW_KINDS:
         raise ValueError(f"不支持的时段语义：{window_kind}（可选 {', '.join(WINDOW_KINDS)}）")
+
+    if conversation_id is not None:
+        owned = db.query(ChatConversation.id).filter(
+            ChatConversation.id == conversation_id,
+            ChatConversation.user_id == str(user_id),
+        ).first()
+        if owned is None:
+            raise ValueError("会话不存在或无权访问")
     
     t = _parse_hhmm(at_hhmm)
     if t is None:
@@ -192,8 +200,8 @@ def _should_trigger_now(row: CopilotSchedule, now: datetime) -> bool:
 
     if wk == "intraday":
         in_session = (
-            (time(9, 30) <= current_time <= time(11, 30)) or
-            (time(13, 0) <= current_time <= time(15, 0))
+            (time(9, 30) <= current_time < time(11, 30)) or
+            (time(13, 0) <= current_time < time(15, 0))
         )
         if not in_session:
             return False
@@ -292,19 +300,15 @@ def run_due(now: datetime | None = None) -> dict:
                 _deliver(db, row, text)
                 row.last_run_date = today
                 if run_row:
-                    try:
-                        run_row.status = "ok"
-                        run_row.finished_at = now
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                else:
-                    db.commit()
+                    run_row.status = "ok"
+                    run_row.finished_at = now
+                db.commit()
                 stats["ran"] += 1
             except Exception as e:  # noqa: BLE001 - 单条失败不影响其他任务
                 stats["failed"] += 1
                 err_msg = str(e)[:255]
                 logger.warning("[copilot-sched] #%s %s 执行失败: %s", row.id, row.kind, e)
+                db.rollback()
                 if run_row:
                     try:
                         run_row.status = "failed"
@@ -369,8 +373,9 @@ def _build_text(row: CopilotSchedule) -> str | None:
                 pct = getattr(q, "change_pct", None)
                 pct_s = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "--"
                 lines.append(f"- {getattr(q, 'symbol', '')} {getattr(q, 'name', '')} {pct_s}")
-        except Exception as e:  # noqa: BLE001
-            lines.append(f"行情读取失败：{e}")
+        except Exception:  # noqa: BLE001
+            logger.exception("[copilot-sched] 行情读取失败")
+            lines.append("行情读取失败，请稍后重试。")
         lines.append("\n（客观数据 · 不构成买卖指令）")
         return "\n".join(lines)
 
@@ -394,21 +399,20 @@ def _watchlist_symbols(user_id) -> list[str]:
 
 def _deliver(db, row: CopilotSchedule, text: str) -> None:
     """把结果写成 assistant 消息；没有会话就新建一个（标题标明是定时任务）。"""
-    try:
-        conv_id = row.conversation_id
-        if conv_id:
-            exists = db.query(ChatConversation).filter(ChatConversation.id == conv_id).one_or_none()
-            if exists is None:
-                conv_id = None
-        if not conv_id:
-            conv = ChatConversation(user_id=str(row.user_id), title="定时任务",
-                                   stock_symbol=None, stock_market=None)
-            db.add(conv)
-            db.flush()
-            conv_id = conv.id
-            row.conversation_id = conv_id
-        db.add(ChatMessage(conversation_id=conv_id, role="assistant", content=text))
-        db.commit()
-    except Exception:
-        db.rollback()
-        pass
+    conv_id = row.conversation_id
+    if conv_id:
+        exists = db.query(ChatConversation).filter(
+            ChatConversation.id == conv_id,
+            ChatConversation.user_id == str(row.user_id),
+        ).one_or_none()
+        if exists is None:
+            conv_id = None
+    if not conv_id:
+        conv = ChatConversation(user_id=str(row.user_id), title="定时任务",
+                               stock_symbol=None, stock_market=None)
+        db.add(conv)
+        db.flush()
+        conv_id = conv.id
+        row.conversation_id = conv_id
+    db.add(ChatMessage(conversation_id=conv_id, role="assistant", content=text))
+    db.flush()
