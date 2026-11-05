@@ -44,8 +44,8 @@ export function EvidenceReadinessStrip({
       data-testid="evidence-readiness"
       /*
        * 来源（2026-10-29 P1）：这些 pill 全部折自**本条回答自己的流式 `stage` 事件**
-       * （`evidence-readiness.ts` 文件头的事件契约），所以这一层是已核验的 ——
-       * 但它说明的是「本轮取了哪几路」，不是「哪一句依据来自哪一路」。
+       * （`evidence-readiness.ts` 文件头的事件契约），它说明调用过程，
+       * 不代表返回数据已核验，也不说明哪一句依据来自哪一路。
        * 两层不许混，逐句出处见 `EvidenceTraceNote`。
        */
       data-provenance="stream-stage"
@@ -54,7 +54,7 @@ export function EvidenceReadinessStrip({
     >
       <span
         data-testid="evidence-readiness-progress"
-        title="统计自本条回答的取数流（已核验）；它说明本轮取了哪几路，不含任何逐句依据的出处"
+        title="统计自本条回答的取数过程；工具返回不代表数据已核验，也不包含逐句出处"
         className="shrink-0 text-[12px] tabular-nums text-muted-foreground"
       >
         {progress}

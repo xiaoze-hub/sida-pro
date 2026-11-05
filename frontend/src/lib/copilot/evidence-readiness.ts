@@ -334,7 +334,7 @@ export function foldStageEvents(events: StageEvent[]): ReadinessState {
 }
 
 /**
- * 流结束：还在 pending 的落 **unknown（未确认）**，不是 ok。
+ * 流结束：还在 pending 的落 **unknown（未确认）**；已返回仍需核验。
  *
  * 「回答写完了」只证明这一轮结束了，不证明某个维度的数据到手了 —— 整条管线失败回落 tool loop
  * 时同样会正常结束。已确认的 ok / 已留痕的 failed 原样保留。
@@ -342,13 +342,13 @@ export function foldStageEvents(events: StageEvent[]): ReadinessState {
 export function settleReadiness(state: ReadinessState): ReadinessState {
   if (!state.items.length) return state
   const items = state.items.map((it) =>
-    it.status === 'pending' || it.status === 'returned' ? { ...it, status: 'unknown' as ReadinessStatus } : it,
+    it.status === 'pending' ? { ...it, status: 'unknown' as ReadinessStatus } : it,
   )
   return recount(items, state.total)
 }
 
 /**
- * 用运行轨迹（`GET /copilot/runs/{run_id}` 的 steps）把 `unknown` 补成 ok / failed。
+ * 用运行轨迹补充调用结果。step.ok 只表示调用有返回，并不保证数据有效。
  *
  * 背景（2026-10-31 线上）：SSE 的 `stage` 只在工具**开跑**时发一条，没有完成帧，
  * 于是每条回答都挂着「已取 0/13 · 未确认 13」——正文却写满了数据，用户读成"13 项都没取到、
@@ -356,9 +356,8 @@ export function settleReadiness(state: ReadinessState): ReadinessState {
  * 只是没走这条路回到界面。
  *
  * 规则（与 foldFailureNotices 同一条克制原则）：
- *  - 只认**工具名精确命中**的 step；一个工具多条 step（重试/多标的）以「有任一成功即 ok」为准，
- *    全部失败才 failed —— 多标的扫描里单只失败不等于整维度没数据；
- *  - steps 里没有的条目保持原状（unknown 不会被猜成 ok）；
+ *  - 只认**工具名精确命中**的 step；有任一返回记为 returned，全部失败才 failed；
+ *  - steps 里没有的条目保持原状，返回不升级为数据已确认；
  *  - 已有 ok/failed 的条目不被覆盖（流里已知的事实优先，轨迹只补缺口）。
  */
 export function applyRunSteps(
@@ -384,7 +383,7 @@ export function applyRunSteps(
     const allFailed = flags.every((f) => f === false)
     if (!hasSuccess && !allFailed) return it
     changed = true
-    return { ...it, status: (hasSuccess ? 'ok' : 'failed') as ReadinessStatus }
+    return { ...it, status: (hasSuccess ? 'returned' : 'failed') as ReadinessStatus }
   })
   return changed ? recount(items, state.total) : state
 }

@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  applyRunSteps,
   emptyReadiness,
   foldFailureNotices,
   foldStageEvent,
@@ -88,6 +89,19 @@ describe('工具名 → 人话 + 维度', () => {
 })
 
 describe('foldStageEvent / 计数', () => {
+  it('轨迹中有返回只标记待核验，全失败才标记未取到', () => {
+    const state = settleReadiness(foldStageEvents([
+      '正在取数 1/2：get_stock_quote',
+      '正在取数 2/2：get_delta_series',
+    ]))
+    const merged = applyRunSteps(state, [
+      { tool: 'get_stock_quote', ok: true },
+      { tool: 'get_delta_series', ok: false },
+    ])
+    expect(merged.items.map((item) => item.status)).toEqual(['returned', 'failed'])
+    expect(merged.done).toBe(0)
+    expect(merged.failed).toBe(1)
+  })
   it('查询返回只表示结束，不能计入已取；流结束后仍须核验', () => {
     const state = foldStageEvents([
       '正在取数 1/1：get_stock_quote',
@@ -95,7 +109,7 @@ describe('foldStageEvent / 计数', () => {
     ])
     expect(state.items[0].status).toBe('returned')
     expect(state.done).toBe(0)
-    expect(settleReadiness(state).items[0].status).toBe('unknown')
+    expect(settleReadiness(state).items[0].status).toBe('returned')
   })
   it('三条开跑事件后：全部 pending，done=0/total=3（开跑 ≠ 取到）', () => {
     const state = foldStageEvents([
