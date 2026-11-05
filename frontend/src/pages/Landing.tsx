@@ -38,7 +38,7 @@ const demos = [
 const capabilities = [
   { icon: Database, title: '先确认数据，再讨论结论', text: '行情、K 线与资金指标保留来源和口径。没有取到的数据明确显示缺失，不用猜测填补。' },
   { icon: ShieldCheck, title: '每一步都有上下文', text: '会话、工具过程、运行记录与口径对照各有位置，让你能回头检查分析所依据的内容。' },
-  { icon: Code2, title: '按自己的方式接入', text: '通过设置管理模型与通知，使用 API Key 调用 Skill 接口。具体能力取决于数据源与服务配置。' },
+  { icon: Code2, title: '支持 Skill 技能与 API 接入', text: '支持一键安装和部署 Markdown 技能包（Skill），并提供带 API Key 的 Skill 接口与用量监控。' },
 ]
 
 export default function LandingPage() {
@@ -164,7 +164,7 @@ export default function LandingPage() {
 
         <section id="resources" className="mx-auto max-w-7xl scroll-mt-24 px-5 pt-14 sm:px-8 sm:pt-20" aria-labelledby="resources-title">
           <div className="grid items-center gap-8 rounded-xl bg-card p-6 sm:p-8 lg:grid-cols-2">
-            <div><Server size={24} className="mb-4 text-primary" /><h2 id="resources-title" className="text-[28px] font-semibold tracking-tight">可管理、可配置的研究环境</h2><p className="mt-4 text-[14px] leading-7 text-muted-foreground">通过系统状态确认依赖连接，在设置中管理模型与通知。自行部署使用 PostgreSQL 与 Redis；预测引擎按需单独配置。</p><Button asChild variant="ghost" className="mt-5 gap-3 px-0 text-foreground hover:bg-transparent hover:text-primary"><Link to="/developers"><BookOpen size={18} />查阅开发者文档<ArrowUpRight size={16} /></Link></Button><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex min-h-11 items-center gap-2 text-[14px] font-medium hover:text-primary">GitHub 社区版开源部署<ArrowUpRight size={16} /></a><p className="mt-2 text-[12px] leading-6 text-muted-foreground">开发者文档可公开阅读；API Key 管理需登录。免费社区版按 AGPL-3.0 开源，与本实例的 Pro 权限分别管理。</p></div>
+            <div><Server size={24} className="mb-4 text-primary" /><h2 id="resources-title" className="text-[28px] font-semibold tracking-tight">可管理、可配置的研究与 Skill 环境</h2><p className="mt-4 text-[14px] leading-7 text-muted-foreground">通过系统状态确认依赖连接，在设置中管理模型、通知与 Skill。自行部署使用 PostgreSQL 与 Redis；预测引擎按需单独配置。</p><Button asChild variant="ghost" className="mt-5 gap-3 px-0 text-foreground hover:bg-transparent hover:text-primary"><Link to="/developers"><BookOpen size={18} />查阅开发者与 Skill 部署文档<ArrowUpRight size={16} /></Link></Button><a href={COMMUNITY_REPOSITORY} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex min-h-11 items-center gap-2 text-[14px] font-medium hover:text-primary">GitHub 社区版开源部署<ArrowUpRight size={16} /></a><p className="mt-2 text-[12px] leading-6 text-muted-foreground">开发者文档与 Skill 安装指南可公开阅读；API Key 管理需登录。免费社区版按 AGPL-3.0 开源，与本实例的 Pro 权限分别管理。</p></div>
             <figure><img src={`${media}system-light.webp`} width="1440" height="960" alt="系统状态连接图：服务、数据库与缓存正常，未配置和异常模块明确标记" loading="lazy" className="h-auto w-full rounded-lg" /><figcaption className="mt-3 text-[12px] leading-6 text-muted-foreground">系统状态实拍 · 点击节点查看连接依据与检测结果</figcaption></figure>
           </div>
         </section>
