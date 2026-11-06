@@ -53,6 +53,7 @@ from src.web.api import (
     stock_pool,
     boards,
     main_flow,
+    etf_watch,
     theme_mood,
     auction_pool,
     cb_radar,
@@ -844,6 +845,13 @@ app.include_router(
     tags=["resonance"],
     # 数智决策三指标(机构活跃度/GS/主力净流入)扫描与明细: pro 专属(默认不在免费档)
     dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
+# 国家队 ETF 看板(2026-11-05): 20 只重点宽基 ETF 分钟成交额 + 市场级净申购(SC8)
+app.include_router(
+    etf_watch.router,
+    prefix="/api/etf-watch",
+    tags=["etf-watch"],
+    dependencies=protected,
 )
 # 题材情绪分(2026-09-12, 老板口径): 榜单/20日矩阵/详情, 收盘确认口径
 app.include_router(

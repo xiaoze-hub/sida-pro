@@ -2,7 +2,7 @@ import { NoAccessPage } from '@/components/NoAccessPage'
 import { GithubMark } from '@/components/icons/GithubMark'
 import { createContext, useContext, useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, BarChart3, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Sun, Moon, ArrowRight } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, BarChart3, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Landmark, Sun, Moon, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -51,6 +51,8 @@ const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page
 const IndexesPage = lazyWithRetry(() => import('@/pages/Indexes'), 'indexes-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
+// 国家队 ETF 看板(2026-11-05): 20 只重点宽基 ETF 分钟成交额 + 市场级净申购
+const EtfWatchPage = lazyWithRetry(() => import('@/pages/EtfWatch'), 'etf-watch-page')
 const QuoteEntryPage = lazyWithRetry(() => import('@/pages/QuoteEntry'), 'quote-entry-page')
 const StockWorkbenchPage = lazyWithRetry(() => import('@/pages/StockWorkbench'), 'stock-workbench-page')
 const ProfilePage = lazyWithRetry(() => import('@/pages/Profile'), 'profile-page')
@@ -122,6 +124,8 @@ const navItems = [
   { to: '/indexes', icon: BarChart3, labelKey: 'nav.indexes', perm: 'view_quotes' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
   { to: '/theme-mood', icon: Activity, labelKey: 'nav.themeMood', perm: 'view_quotes' },
+  // 国家队 ETF(2026-11-05): 20 只重点宽基 ETF 分钟成交额 + 市场级净申购(SC8)
+  { to: '/etf-watch', icon: Landmark, labelKey: 'nav.etfWatch', perm: 'view_quotes' },
   { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
   { to: '/auction', icon: Flame, labelKey: 'nav.auction', perm: 'view_opportunities' },
   // AI 数智参谋(2026-10-18): 独立一级入口。**不进 desktopNavGroups** —— 侧栏里渲染成
@@ -168,7 +172,7 @@ const navItems = [
 // ② 新增「决策」组 —— 之前 `/decision-ledger` 与 `/caliber-compare` **只存在于 navItems,
 //    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
 const desktopNavGroups = [
-  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/quotes', '/indexes', '/heatmap', '/theme-mood'].includes(n.to)) },
+  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/quotes', '/indexes', '/heatmap', '/theme-mood', '/etf-watch'].includes(n.to)) },
   { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/auction', '/dark-fund-top', '/war-report', '/replay-tree'].includes(n.to)) },
   // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
   // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
@@ -854,6 +858,7 @@ function App() {
               <Route path="/terms" element={<TermsPage />} />
               <Route path="/tiers" element={<TiersPage />} />
               <Route path="/factor-ic" element={<FactorICPage />} />
+              <Route path="/etf-watch" element={<EtfWatchPage />} />
               {/* Admin 管理后台(2026-09-16): PermGuard(manage_users) + 后端 require_owner 双重 */}
               <Route path="/admin" element={<PermGuard perm="manage_users" myPerms={myPerms}><AdminPage /></PermGuard>} />
               <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />

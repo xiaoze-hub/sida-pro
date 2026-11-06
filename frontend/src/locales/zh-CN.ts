@@ -68,6 +68,7 @@ const zhCN = {
     factorIC: '因子有效性',
     decision: '分析证据',
     themeMood: '题材情绪',
+    etfWatch: '国家队ETF',
     opportunities: '市场扫描',
     auction: '集合竞价',
     aiCopilot: '数智参谋',
