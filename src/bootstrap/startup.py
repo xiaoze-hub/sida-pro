@@ -442,6 +442,47 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"撤单率采样注册失败: {e}")
 
+        # 国家队 ETF 看板(2026-11-05): 20 只重点宽基 ETF 的分钟成交额。
+        # 盘中 60s 采一次（**一次批量调用**实测 0.15s 拿全 20 只，窗口外自动跳过），
+        # 收盘 15:35 定型并回补 SC8 市场级净申购；启动时后台自愈补最近 3 个交易日
+        # （表空则补 30 日）—— 发版多在收盘后，重启即补齐，不留空洞。
+        try:
+            from src.collectors import tq_etf_watch as _etf_watch
+
+            rt.scheduler.scheduler.add_job(
+                _etf_watch.run_intraday,
+                "interval",
+                seconds=60,
+                id="etf-watch-minute",
+                name="国家队ETF分钟成交额",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=30,
+            )
+            rt.scheduler.scheduler.add_job(
+                _etf_watch.run_close,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=35,
+                id="etf-watch-close",
+                name="国家队ETF收盘定型",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            import threading as _threading
+
+            _threading.Thread(
+                target=_etf_watch.ensure_backfilled,
+                name="etf-watch-backfill",
+                daemon=True,
+            ).start()
+            logger.info("国家队 ETF 看板采集已注册(60s + 15:35 定型)")
+        except Exception as e:
+            logger.error(f"国家队 ETF 看板采集注册失败: {e}")
+
         # 个股因子日快照(2026-10-21): 收盘后算一次, 给全景诊断的「位置与因子」提供横截面分位。
         try:
             from src.core.trading_calendar import is_trading_day

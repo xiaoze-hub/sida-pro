@@ -6516,6 +6516,49 @@ def _m242_skill_usage_client_ip(conn: Connection) -> None:
     )
 
 
+def _m243_etf_minute_flow(conn: Connection) -> None:
+    """国家队 ETF 看板 · 分钟成交额表（2026-11-05）。
+
+    为什么要落库而不是每次实时取：盘中每分钟要出「今日累计 vs 过去 20 日同期均值」，
+    实时算就要每次拉 20 个交易日的分钟线（20 次 RPC）；落库后基线是本地 SQL 聚合。
+    表按 (trade_date, minute, etf_code) 唯一，采集用 upsert 幂等 —— 盘中每分钟重复
+    采当前分钟不会写成多行。
+
+    净申购**不在这张表**：单只 ETF 的 `get_gb_info` 份额是当前值回填（实测 6 只 × 63 日
+    零变化），算出来恒为 0。市场级净申购走 `market_sentiment_daily.etf_net_sub`（SC8）。
+    """
+    if not _has_table(conn, "etf_minute_flow"):
+        id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS etf_minute_flow (
+    id {id_col},
+    trade_date VARCHAR(8) NOT NULL,
+    minute VARCHAR(4) NOT NULL,
+    etf_code VARCHAR(12) NOT NULL,
+    amount_wan DOUBLE PRECISION,
+    volume BIGINT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+"""
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_etf_minute_flow_key "
+                "ON etf_minute_flow (trade_date, minute, etf_code)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_etf_minute_flow_date "
+                "ON etf_minute_flow (trade_date)"
+            )
+        )
+
+
 # v237 一次性平移: UTC naive → 北京 naive。表清单 = (表, [列...])
 _UTC_NAIVE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("user_ai_prefs", ("updated_at",)),
@@ -6960,6 +7003,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(240, "copilot_run_ledger", _m240_copilot_run_ledger),
     Migration(241, "copilot_schedule_windows", _m241_copilot_schedule_windows),
     Migration(242, "skill_usage_client_ip", _m242_skill_usage_client_ip),
+    Migration(243, "etf_minute_flow", _m243_etf_minute_flow),
 )
 
 
