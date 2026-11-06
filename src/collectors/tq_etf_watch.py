@@ -127,76 +127,112 @@ def _hhmm(raw: Any) -> str | None:
     return s.zfill(6)[:4]  # HHMMSS / HMMSS
 
 
+def _rpc_full(method: str, params: dict, timeout: float = 20.0) -> dict:
+    """取**完整 result**（含 `has_more` / `stock_page_index` 等分页控制字段）。
+
+    `tq_rpc` 只回 `result.Value`，把分页元信息丢掉了 —— 而带日期窗口的批量取数
+    **是按标的分页的**（实测 20 只只回第 1 只 + `has_more=true`），拿不到 `has_more`
+    就会静默只入库 1 只。这是本模块上线后实测抓到的真实缺陷。
+    """
+    from marketdata.vendors.tq import _rpc as _vendor_rpc
+
+    return _vendor_rpc(method, params, timeout=timeout, full=True)
+
+
+def _parse_minute_node(node: dict, trade_date: str) -> list[tuple[str, float | None, int | None]]:
+    dates = node.get("Date") or []
+    times = node.get("Time") or node.get("Minute") or []
+    amounts = node.get("Amount") or []
+    volumes = node.get("Volume") or []
+    rows: list[tuple[str, float | None, int | None]] = []
+    for i in range(len(dates)):
+        if str(dates[i]) != trade_date:
+            continue
+        hm = _hhmm(times[i]) if i < len(times) else None
+        if not hm:
+            continue
+        amt = _num(amounts[i]) if i < len(amounts) else None
+        vol = _num(volumes[i]) if i < len(volumes) else None
+        rows.append((hm, amt, int(vol) if vol is not None else None))
+    return rows
+
+
 def fetch_minute(
-    codes: list[str], trade_date: str, *, timeout: float = 20.0
+    codes: list[str], trade_date: str, *, timeout: float = 20.0, max_pages: int = 40
 ) -> dict[str, list[tuple[str, float | None, int | None]]]:
     """取指定交易日全部分钟线 → {code: [(HHMM, 成交额万元, 成交量股), ...]}。
 
-    `trade_date` 用 'YYYYMMDD'。**一次调用批量取全部标的**（20 只实测 0.15s）。
-    TQ 不可用/无数据 → 抛异常或返回空 dict，由调用方决定是否写库（绝不写 0 冒充）。
-    """
-    payload = _rpc(
-        "get_market_data",
-        {
-            "stock_list": list(codes),
-            "period": "1m",
-            "start_time": trade_date,
-            "end_time": trade_date,
-        },
-        timeout=timeout,
-    )
-    if not isinstance(payload, dict):
-        return {}
+    `trade_date` 用 'YYYYMMDD'。
 
+    ⚠️ 带日期窗口的批量取数是**按标的分页**的：一次只回 1 只 + `has_more`。
+    `stock_page_size` 传 20/50/100 **都无效**（实测仍只回 1 只），只能按
+    `stock_page_index` 逐页翻。20 只 = 20 页，实测每页 ~0.2s。
+
+    不传窗口（只给 `count`）确实能一次回多只，但那样拿不到**指定历史日**，所以
+    历史回补只能走分页；盘中当日仍用窗口（同一天，页码循环到底）。
+
+    TQ 不可用/无数据 → 返回空 dict（调用方决定是否写库，绝不写 0 冒充）。
+    """
     out: dict[str, list[tuple[str, float | None, int | None]]] = {}
-    for code in codes:
-        node = payload.get(code)
-        if not isinstance(node, dict):
-            continue
-        dates = node.get("Date") or []
-        times = node.get("Time") or node.get("Minute") or []
-        amounts = node.get("Amount") or []
-        volumes = node.get("Volume") or []
-        rows: list[tuple[str, float | None, int | None]] = []
-        for i in range(len(dates)):
-            if str(dates[i]) != trade_date:
-                continue
-            hm = _hhmm(times[i]) if i < len(times) else None
-            if not hm:
-                continue
-            amt = _num(amounts[i]) if i < len(amounts) else None
-            vol = _num(volumes[i]) if i < len(volumes) else None
-            rows.append((hm, amt, int(vol) if vol is not None else None))
-        if rows:
-            out[code] = rows
+    wanted = set(codes)
+    for page in range(max_pages):
+        payload = _rpc_full(
+            "get_market_data",
+            {
+                "stock_list": list(codes),
+                "period": "1m",
+                "start_time": trade_date,
+                "end_time": trade_date,
+                "stock_page_index": page,
+            },
+            timeout=timeout,
+        )
+        value = payload.get("Value") if isinstance(payload, dict) else None
+        if not isinstance(value, dict) or not value:
+            break
+        new_keys = [k for k in value if k in wanted and k not in out]
+        for code in new_keys:
+            node = value.get(code)
+            if isinstance(node, dict):
+                rows = _parse_minute_node(node, trade_date)
+                if rows:
+                    out[code] = rows
+        # 没有任何新标的 → 说明翻页没前进（或返回了重复页），停，避免死循环
+        if not new_keys:
+            break
+        if not payload.get("has_more"):
+            break
     return out
 
 
 def fetch_index_minute(trade_date: str, *, timeout: float = 20.0) -> list[tuple[str, float | None, float | None]]:
     """上证综指同分钟线 → [(HHMM, 点位, 成交额万元)]。拿不到返回 []。"""
-    got = fetch_minute([BENCHMARK_INDEX], trade_date, timeout=timeout)
-    rows = got.get(BENCHMARK_INDEX) or []
-    # fetch_minute 只回 (HHMM, amount, volume)；指数要的是收盘点位，这里再取一次 Close
     payload = _rpc(
         "get_market_data",
         {"stock_list": [BENCHMARK_INDEX], "period": "1m",
          "start_time": trade_date, "end_time": trade_date},
         timeout=timeout,
     )
-    closes: dict[str, float | None] = {}
-    if isinstance(payload, dict):
-        node = payload.get(BENCHMARK_INDEX) or {}
-        if isinstance(node, dict):
-            ds = node.get("Date") or []
-            ts = node.get("Time") or []
-            cs = node.get("Close") or []
-            for i in range(len(ds)):
-                if str(ds[i]) != trade_date or i >= len(ts):
-                    continue
-                hm = _hhmm(ts[i])
-                if hm:
-                    closes[hm] = _num(cs[i]) if i < len(cs) else None
-    return [(hm, closes.get(hm), amt) for hm, amt, _vol in rows]
+    node = (payload or {}).get(BENCHMARK_INDEX) if isinstance(payload, dict) else None
+    if not isinstance(node, dict):
+        return []
+    ds = node.get("Date") or []
+    ts = node.get("Time") or []
+    cs = node.get("Close") or []
+    ams = node.get("Amount") or []
+    out: list[tuple[str, float | None, float | None]] = []
+    for i in range(len(ds)):
+        if str(ds[i]) != trade_date or i >= len(ts):
+            continue
+        hm = _hhmm(ts[i])
+        if not hm:
+            continue
+        out.append((
+            hm,
+            _num(cs[i]) if i < len(cs) else None,
+            _num(ams[i]) if i < len(ams) else None,
+        ))
+    return out
 
 
 def fetch_sc8(start_date: str, end_date: str, *, timeout: float = 30.0) -> list[tuple[str, float | None, float | None]]:

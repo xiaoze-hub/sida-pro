@@ -190,11 +190,28 @@ def get_intraday(date_str: str | None = Query(default=None, alias="date")) -> di
 
     expected = len(ew.ETF_BASKET)
     mins = _minute_rows(target)
+    # 当日还没有分钟数据时，回退到最近一个有数据的交易日并**显式标注**。
+    # 为什么必须回退：盘中/收盘后短期内通达信的当日分钟线尚未就绪（实测 15:21 仍取不到，
+    # `refresh_kline` 也无效），若直接显示"无数据"，页面在交易日大部分时间都是空白。
+    # 但**不能**把旧数据伪装成今天 —— 所以 `fallback_from` / `note` 必须一起返回。
+    fallback_from: str | None = None
+    if not mins and date_str is None:
+        latest_rows = _q("SELECT MAX(trade_date) AS d FROM etf_minute_flow")
+        latest = (latest_rows[0]["d"] if latest_rows else None)
+        if latest and latest != target:
+            mins = _minute_rows(latest)
+            fallback_from = target
+            target = latest
+            try:
+                d_obj = datetime.strptime(target, "%Y%m%d").date()
+            except ValueError:
+                pass
     if not mins:
         return {
             "date": target,
             "phase": _phase_of(d_obj),
             "state": "no_data",
+            "fallback_from": fallback_from,
             "note": "当日无分钟数据（未采集或非交易日）；盘中采集每分钟一次，收盘后 15:35 补采。",
             "series": [],
             "totals": None,
@@ -252,6 +269,7 @@ def get_intraday(date_str: str | None = Query(default=None, alias="date")) -> di
         "date": target,
         "phase": _phase_of(d_obj),
         "state": state,
+        "fallback_from": fallback_from,
         "benchmark": {"code": ew.BENCHMARK_INDEX, "name": ew.BENCHMARK_NAME, "points": points},
         "series": series,
         "totals": {

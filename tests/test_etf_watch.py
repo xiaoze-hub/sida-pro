@@ -114,14 +114,59 @@ def test_fetch_minute按日期过滤并解析(monkeypatch):
             "Volume": ["1000", "2000", "3000"],
         }
     }
-    monkeypatch.setattr(ew, "_rpc", lambda *a, **k: payload)
+    monkeypatch.setattr(ew, "_rpc_full", lambda *a, **k: {"Value": payload, "has_more": False})
     got = ew.fetch_minute(["510300.SH"], "20261105")
     assert list(got) == ["510300.SH"]
     assert got["510300.SH"] == [("0930", 100.5, 1000), ("0931", 200.0, 2000)]
 
 
+def test_fetch_minute按标的分页必须翻到最后一页(monkeypatch):
+    """带日期窗口的批量取数是**按标的分页**的：一次只回 1 只 + has_more。
+
+    上线首版没翻页，实测只入库了第 1 只 ETF（510300），其余 19 只静默丢失 ——
+    页面看起来正常（有图有线），但"20 只合计"其实只是 1 只，属于最危险的那种静默错误。
+    `stock_page_size` 传 20/50/100 都无效（实测仍只回 1 只）。
+    """
+    pages = {
+        0: {"Value": {"510300.SH": {"Date": ["20261105"], "Time": ["093000"], "Amount": ["1"], "Volume": ["1"]}},
+            "has_more": True},
+        1: {"Value": {"510050.SH": {"Date": ["20261105"], "Time": ["093000"], "Amount": ["2"], "Volume": ["1"]}},
+            "has_more": True},
+        2: {"Value": {"159919.SZ": {"Date": ["20261105"], "Time": ["093000"], "Amount": ["3"], "Volume": ["1"]}},
+            "has_more": False},
+    }
+    calls: list[int] = []
+
+    def fake_full(method, params, timeout=20.0):
+        assert method == "get_market_data"
+        idx = params.get("stock_page_index", 0)
+        calls.append(idx)
+        return pages.get(idx, {"Value": {}, "has_more": False})
+
+    monkeypatch.setattr(ew, "_rpc_full", fake_full)
+    got = ew.fetch_minute(["510300.SH", "510050.SH", "159919.SZ"], "20261105")
+    assert set(got) == {"510300.SH", "510050.SH", "159919.SZ"}, got
+    assert len(calls) == 3, f"应翻满 3 页，实际 {calls}"
+
+
+def test_fetch_minute翻页不前进时不死循环(monkeypatch):
+    """网关若一直回同一页（has_more 恒 true），必须能自己停下来。"""
+    same = {"Value": {"510300.SH": {"Date": ["20261105"], "Time": ["093000"], "Amount": ["1"], "Volume": ["1"]}},
+            "has_more": True}
+    n = {"c": 0}
+
+    def fake_full(method, params, timeout=20.0):
+        n["c"] += 1
+        return same
+
+    monkeypatch.setattr(ew, "_rpc_full", fake_full)
+    got = ew.fetch_minute(["510300.SH"], "20261105")
+    assert list(got) == ["510300.SH"]
+    assert n["c"] <= 2, f"重复页应立即停，实际请求 {n['c']} 次"
+
+
 def test_fetch_minute空响应返回空dict(monkeypatch):
-    monkeypatch.setattr(ew, "_rpc", lambda *a, **k: {})
+    monkeypatch.setattr(ew, "_rpc_full", lambda *a, **k: {})
     assert ew.fetch_minute(["510300.SH"], "20261105") == {}
 
 
@@ -180,6 +225,21 @@ def test_intraday空缺ETF时判数据不全(clean_flow):
         _insert("20261105", "0930", code, 100.0)
     body = api.get_intraday(date_str="20261105")
     assert body["state"] == "insufficient"
+
+
+def test_今日无数据时回退最近交易日并显式标注(clean_flow, monkeypatch):
+    """当日分钟线未就绪 → 回退到最近交易日，但必须带 fallback_from，不能伪装成今天。"""
+    from datetime import datetime as _dt
+
+    for code in [c for c, _n, _cat in ew.ETF_BASKET]:
+        _insert("20261104", "0930", code, 1_000.0)
+        _insert("20261104", "0931", code, 1_000.0)
+
+    monkeypatch.setattr(api, "_now_cn", lambda: _dt(2026, 11, 6, 10, 0))
+    body = api.get_intraday(None)
+    assert body["date"] == "20261104"
+    assert body["fallback_from"] == "20261106"
+    assert body["totals"]["cum_yi"] == pytest.approx(4.0, abs=0.05)
 
 
 def test_intraday无数据显式null不编造(clean_flow):

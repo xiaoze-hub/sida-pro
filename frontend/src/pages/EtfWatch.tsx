@@ -35,6 +35,8 @@ type IntradayResp = {
   date: string
   phase: string
   state: string
+  /** 当日尚无分钟数据时回退到的最近交易日；有值即说明「显示的不是今天」。 */
+  fallback_from?: string | null
   series: IntradayPoint[]
   totals: null | {
     cum_yi: number
@@ -277,6 +279,16 @@ export default function EtfWatchPage() {
                 <div className="mt-4">
                   <CumChart series={intraday?.series || []} />
                 </div>
+
+                {intraday?.fallback_from ? (
+                  <div className="mt-3 flex items-start gap-2 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] leading-6 text-role-watch">
+                    <Info className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>
+                      今日（{intraday.fallback_from}）的分钟数据尚未就绪，当前显示最近交易日 {intraday.date} 的完整数据。
+                      这不是今天的行情。
+                    </span>
+                  </div>
+                ) : null}
 
                 {intraday?.state === 'insufficient' ? (
                   <div className="mt-3 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] text-role-watch">
