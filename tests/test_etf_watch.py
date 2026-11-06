@@ -175,6 +175,36 @@ def test_fetch_sc8解析两列(monkeypatch):
     ]
 
 
+def test_since只写该分钟之后的行(clean_flow):
+    """盘中增量：只回看最近几分钟，不重写全天（全天 4800 行实测 1.5~1.8s/次）。"""
+    data = {"510300.SH": [("0930", 1.0, 10), ("1430", 2.0, 20), ("1431", 3.0, 30)]}
+    assert ew.write_minute("20261105", data, since="1430") == 2
+    with engine.connect() as conn:
+        got = [r[0] for r in conn.execute(text(
+            "SELECT minute FROM etf_minute_flow WHERE trade_date='20261105' ORDER BY minute"
+        ))]
+    assert got == ["1430", "1431"], got
+
+
+def test_minus_minutes跨小时():
+    assert ew._minus_minutes("1432", 5) == "1427"
+    assert ew._minus_minutes("1002", 5) == "0957"
+    assert ew._minus_minutes("0003", 5) == "0000"
+
+
+def test_盘中增量不因写入行数少而判失败(clean_flow, monkeypatch):
+    """`ok` 看取到的标的数，不看写入行数 —— 增量只有几行是正常，不是失败。"""
+    from datetime import datetime as _dt
+
+    monkeypatch.setattr(ew, "_now", lambda: _dt(2026, 11, 5, 14, 32))
+    monkeypatch.setattr(ew, "fetch_minute", lambda *a, **k: {
+        "510300.SH": [("0930", 1.0, 10), ("1431", 2.0, 20)]
+    })
+    out = ew.run_intraday()
+    assert out["ok"] is True, out
+    assert out["rows"] == 1, out  # 只写了 1431（since=1427）
+
+
 def test_写入幂等_upsert不重复(clean_flow):
     data = {"510300.SH": [("0930", 100.0, 1000)]}
     assert ew.write_minute("20261105", data) == 1

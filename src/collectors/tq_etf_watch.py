@@ -267,8 +267,34 @@ def fetch_sc8(start_date: str, end_date: str, *, timeout: float = 30.0) -> list[
 
 # ── 落库 ─────────────────────────────────────────────────────────────────
 
-def write_minute(trade_date: str, data: dict[str, list[tuple[str, float | None, int | None]]]) -> int:
-    """写 etf_minute_flow（幂等 upsert）。返回写入行数；失败返回 0 并记 warning。"""
+#: 单条 upsert 语句的最大行数。PG 的 `ON CONFLICT` 一次塞 4800 行要 1.5~1.8s
+#: （APM 实测每次都报「慢操作 insert:etf_minute_flow」），按 400 行分批后单批 <100ms。
+_WRITE_CHUNK = 400
+
+#: 盘中增量回看的分钟数。已写入的分钟不会再变，只有最近几分钟可能晚到/被修正，
+#: 所以盘中不需要重写全天的 4800 行。给 5 分钟余量吸收网关的发布抖动。
+INTRADAY_LOOKBACK_MIN = 5
+
+
+def _minus_minutes(hm: str, minutes: int) -> str:
+    """'1432' - 5 → '1427'（跨小时/跨 11:30-13:00 午休都不用管：只用来卡下限）。"""
+    h, m = int(hm[:2]), int(hm[2:])
+    total = max(0, h * 60 + m - minutes)
+    return f"{total // 60:02d}{total % 60:02d}"
+
+
+def write_minute(
+    trade_date: str,
+    data: dict[str, list[tuple[str, float | None, int | None]]],
+    *,
+    since: str | None = None,
+) -> int:
+    """写 etf_minute_flow（幂等 upsert）。返回写入行数；失败返回 0 并记 warning。
+
+    `since` 给 'HHMM' 时只写**该分钟及之后**的行（盘中增量用）：全量重写 4800 行实测
+    单次 1.5~1.8s，会一直触发 APM 慢操作告警；增量通常只有 20 只 × 5 分钟 = 100 行。
+    收盘定型（`run_close`）仍写全天，保证缺口被补上。
+    """
     if not data:
         return 0
     try:
@@ -286,6 +312,8 @@ def write_minute(trade_date: str, data: dict[str, list[tuple[str, float | None, 
         params: list[dict[str, Any]] = []
         for code, rows in data.items():
             for hm, amt, vol in rows:
+                if since and hm < since:
+                    continue
                 params.append({
                     "trade_date": trade_date, "minute": hm, "etf_code": code,
                     "amount_wan": amt, "volume": vol, "updated_at": now,
@@ -293,7 +321,8 @@ def write_minute(trade_date: str, data: dict[str, list[tuple[str, float | None, 
         if not params:
             return 0
         with engine.begin() as conn:
-            conn.execute(text(sql), params)
+            for i in range(0, len(params), _WRITE_CHUNK):
+                conn.execute(text(sql), params[i:i + _WRITE_CHUNK])
         return len(params)
     except Exception as e:  # noqa: BLE001
         logger.warning("[etf-watch] 分钟数据写库失败(%s): %s", trade_date, e)
@@ -367,16 +396,21 @@ def recent_trade_dates(n: int, *, end: date | None = None) -> list[str]:
     return list(reversed(out))
 
 
-def ingest_day(trade_date: str) -> dict:
-    """采集并落库单日分钟数据。返回 {date, rows, etfs, ok}。"""
+def ingest_day(trade_date: str, *, since: str | None = None) -> dict:
+    """采集并落库单日分钟数据。返回 {date, rows, etfs, ok}。
+
+    `since` 只影响**写库范围**（盘中增量），取数仍是整日 —— TQ 的分钟线按标的分页，
+    没有"只给最后 5 分钟"的参数，取数成本固定；省的是写库。
+    """
     codes = [c for c, _n, _cat in ETF_BASKET]
     try:
         data = fetch_minute(codes, trade_date)
     except Exception as e:  # noqa: BLE001
         logger.warning("[etf-watch] %s 取数失败: %s", trade_date, e)
         return {"date": trade_date, "rows": 0, "etfs": 0, "ok": False, "error": str(e)[:160]}
-    rows = write_minute(trade_date, data)
-    return {"date": trade_date, "rows": rows, "etfs": len(data), "ok": rows > 0}
+    rows = write_minute(trade_date, data, since=since)
+    # ok 判据看"取到的标的数"，不看写入行数：盘中增量可能只有几行，但那不是失败。
+    return {"date": trade_date, "rows": rows, "etfs": len(data), "ok": len(data) > 0}
 
 
 def run_intraday() -> dict:
@@ -394,7 +428,9 @@ def run_intraday() -> dict:
     hm = now.strftime("%H%M")
     if not ("0925" <= hm <= "1505"):
         return {"skipped": "out-of-session", "date": today.strftime("%Y%m%d"), "at": hm}
-    return ingest_day(today.strftime("%Y%m%d"))
+    # 增量写：只回看最近几分钟（网关晚到/修正的容差），不重写全天 4800 行。
+    since = _minus_minutes(hm, INTRADAY_LOOKBACK_MIN)
+    return ingest_day(today.strftime("%Y%m%d"), since=since)
 
 
 def run_close() -> dict:
