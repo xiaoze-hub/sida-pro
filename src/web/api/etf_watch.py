@@ -299,9 +299,9 @@ def get_support(days: int = Query(default=750, ge=30, le=1500)) -> dict:
     days = _int_param(days, 750)
     rows = _q(
         """
-        SELECT trade_date, etf_scale, etf_net_sub
-        FROM market_sentiment_daily
-        WHERE etf_net_sub IS NOT NULL
+        SELECT trade_date, scale_yi AS etf_scale, net_sub_yi AS etf_net_sub
+        FROM etf_flow_daily
+        WHERE net_sub_yi IS NOT NULL
         ORDER BY trade_date DESC
         LIMIT :n
         """,
@@ -401,8 +401,8 @@ def get_daily(days: int = Query(default=30, ge=5, le=120)) -> dict:
 
     net_rows = _q(
         f"""
-        SELECT trade_date, etf_scale, etf_net_sub
-        FROM market_sentiment_daily
+        SELECT trade_date, scale_yi AS etf_scale, net_sub_yi AS etf_net_sub
+        FROM etf_flow_daily
         WHERE trade_date IN ({ph})
         """,
         in_params,

@@ -6559,6 +6559,30 @@ CREATE TABLE IF NOT EXISTS etf_minute_flow (
         )
 
 
+def _m244_etf_flow_daily(conn: Connection) -> None:
+    """市场级 ETF 规模/净申购日序列（2026-11-05）。
+
+    为什么不复用 `market_sentiment_daily`：那张表的行集由 **SC3 交易日骨架**决定，
+    往里插入"只有 etf 列、其余全 NULL"的行会稀释情绪基线（该表的下游按 20 日均值算分位）。
+    而 SC8 的历史比情绪表早两年（能回溯到 2023-10），硬塞进去就要么丢历史、要么污染基线。
+
+    本表只服务 ETF 看板，行集 = SC8 自己的发布日，互不干扰。
+    """
+    if not _has_table(conn, "etf_flow_daily"):
+        conn.execute(
+            text(
+                """
+CREATE TABLE IF NOT EXISTS etf_flow_daily (
+    trade_date VARCHAR(8) NOT NULL PRIMARY KEY,
+    scale_yi DOUBLE PRECISION,
+    net_sub_yi DOUBLE PRECISION,
+    updated_at TIMESTAMP
+)
+"""
+            )
+        )
+
+
 # v237 一次性平移: UTC naive → 北京 naive。表清单 = (表, [列...])
 _UTC_NAIVE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("user_ai_prefs", ("updated_at",)),
@@ -7004,6 +7028,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(241, "copilot_schedule_windows", _m241_copilot_schedule_windows),
     Migration(242, "skill_usage_client_ip", _m242_skill_usage_client_ip),
     Migration(243, "etf_minute_flow", _m243_etf_minute_flow),
+    Migration(244, "etf_flow_daily", _m244_etf_flow_daily),
 )
 
 

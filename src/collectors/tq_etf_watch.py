@@ -301,33 +301,43 @@ def write_minute(trade_date: str, data: dict[str, list[tuple[str, float | None, 
 
 
 def write_sc8(rows: list[tuple[str, float | None, float | None]]) -> int:
-    """把 SC8 写回 market_sentiment_daily（只覆盖 etf_scale/etf_net_sub 两列）。
+    """把 SC8 落库。两处写，职责不同：
 
-    该表以 trade_date 为主键（字符串 YYYYMMDD）；行不存在时不插入 —— 情绪序列的
-    行集由 SC3 交易日骨架决定，本模块只补列不造行，避免污染情绪基线。
+    1. `etf_flow_daily`（**主存**）：本模块自己的表，行集 = SC8 自己的发布日，
+       可以回溯到 2023-10（情绪表做不到，那表的行集由 SC3 骨架定，2025-07 才开始）。
+    2. `market_sentiment_daily`（**兼容**）：只在**已存在**该交易日的行时补两列。
+       `UPDATE` 不 `INSERT` —— 造出"只有 etf 列、其余全 NULL"的行会稀释情绪 20 日基线。
     """
     if not rows:
         return 0
     try:
         from sqlalchemy import text
 
+        from src.db.dialect import upsert_sql
         from src.web.database import engine
 
-        n = 0
+        sql = upsert_sql(
+            "etf_flow_daily", ["trade_date", "scale_yi", "net_sub_yi", "updated_at"],
+            ["trade_date"], ["scale_yi", "net_sub_yi", "updated_at"],
+        )
+        now = datetime.now()
+        params = [
+            {"trade_date": d, "scale_yi": s, "net_sub_yi": n, "updated_at": now}
+            for d, s, n in rows
+        ]
         with engine.begin() as conn:
-            for d, scale, net in rows:
-                res = conn.execute(
+            conn.execute(text(sql), params)
+            for d, s, n in rows:
+                conn.execute(
                     text(
                         "UPDATE market_sentiment_daily "
-                        "SET etf_scale = :s, etf_net_sub = :n "
-                        "WHERE trade_date = :d"
+                        "SET etf_scale = :s, etf_net_sub = :n WHERE trade_date = :d"
                     ),
-                    {"s": scale, "n": net, "d": d},
+                    {"s": s, "n": n, "d": d},
                 )
-                n += int(res.rowcount or 0)
-        return n
+        return len(params)
     except Exception as e:  # noqa: BLE001
-        logger.warning("[etf-watch] SC8 回写失败: %s", e)
+        logger.warning("[etf-watch] SC8 落库失败: %s", e)
         return 0
 
 

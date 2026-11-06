@@ -33,32 +33,25 @@ def clean_flow():
 
 
 @pytest.fixture()
-def isolated_sentiment():
-    """快照 + 还原 `market_sentiment_daily`。
-
-    ⚠️ 这张表是**共享的市场情绪表**，别的用例（如 test_tq_sentiment_series 的
-    "两次同步都应 30 行"）依赖表里的存量行。此前本文件直接 `DELETE FROM` 它，
-    在 CI 上把那条用例打成 31 != 30 —— 是测试污染，不是产品 bug。
-    这里改成先快照全部行、测完原样写回，不改变其它用例看到的世界。
-    """
-    from sqlalchemy import inspect
-
-    cols = [c["name"] for c in inspect(engine).get_columns("market_sentiment_daily")]
+def isolated_flow():
+    """快照 + 还原 `etf_flow_daily`（本模块自己的表，仍要还原以免影响其它用例的托底日样本）。"""
     with engine.connect() as conn:
         rows = [dict(r) for r in conn.execute(
-            text("SELECT * FROM market_sentiment_daily")
+            text("SELECT * FROM etf_flow_daily")
         ).mappings()]
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM market_sentiment_daily"))
+        conn.execute(text("DELETE FROM etf_flow_daily"))
     yield
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM market_sentiment_daily"))
-        if rows and cols:
-            placeholders = ", ".join(f":{c}" for c in cols)
-            sql = text(
-                f"INSERT INTO market_sentiment_daily ({', '.join(cols)}) VALUES ({placeholders})"
+        conn.execute(text("DELETE FROM etf_flow_daily"))
+        if rows:
+            conn.execute(
+                text(
+                    "INSERT INTO etf_flow_daily (trade_date, scale_yi, net_sub_yi, updated_at) "
+                    "VALUES (:trade_date, :scale_yi, :net_sub_yi, :updated_at)"
+                ),
+                rows,
             )
-            conn.execute(sql, rows)
 
 
 def _insert(day: str, minute: str, code: str, amount_wan: float) -> None:
@@ -255,7 +248,7 @@ def test_intraday非法日期返回错误():
 
 # ── 托底信号 ─────────────────────────────────────────────────────────────
 
-def test_support筛出净申购达标日并给出分位(clean_flow, isolated_sentiment, monkeypatch):
+def test_support筛出净申购达标日并给出分位(clean_flow, isolated_flow, monkeypatch):
     with engine.begin() as conn:
         rows = [
             ("20261103", 32000.0, 50.0),
@@ -265,7 +258,7 @@ def test_support筛出净申购达标日并给出分位(clean_flow, isolated_sen
         for d, s, n in rows:
             conn.execute(
                 text(
-                    "INSERT INTO market_sentiment_daily (trade_date, etf_scale, etf_net_sub) "
+                    "INSERT INTO etf_flow_daily (trade_date, scale_yi, net_sub_yi) "
                     "VALUES (:d, :s, :n)"
                 ),
                 {"d": d, "s": s, "n": n},
@@ -281,7 +274,7 @@ def test_support筛出净申购达标日并给出分位(clean_flow, isolated_sen
     assert "单只" in body["single_share_note"]
 
 
-def test_support无数据时不伪造(clean_flow, isolated_sentiment):
+def test_support无数据时不伪造(clean_flow, isolated_flow):
     body = api.get_support()
     assert body["state"] == "no_data"
     assert "series" not in body
@@ -289,11 +282,11 @@ def test_support无数据时不伪造(clean_flow, isolated_sentiment):
 
 # ── 日度全景 ─────────────────────────────────────────────────────────────
 
-def test_daily按分类聚合并带市场级净申购(clean_flow, isolated_sentiment):
+def test_daily按分类聚合并带市场级净申购(clean_flow, isolated_flow):
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO market_sentiment_daily (trade_date, etf_scale, etf_net_sub) "
+                "INSERT INTO etf_flow_daily (trade_date, scale_yi, net_sub_yi) "
                 "VALUES ('20261105', 32393.07, 154.94)"
             )
         )
