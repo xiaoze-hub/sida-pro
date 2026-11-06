@@ -406,7 +406,11 @@ def test_按Key聚合IP_字段真实返回且归属正确(env):
     接口 200、字段缺失、前端只能拿到 undefined。当时没有任何测试覆盖返回体键，
     所以"算完就丢"上线了。这条断言就是那种缺失会立刻变红的钉子。
     """
-    base = _today() + timedelta(hours=10)
+    # ⚠️ 不能用 `_today() + 10h`：那是「今天 10:00」，而端点按 `created_at <= now` 过滤
+    # —— 北京时间 18:00 之前跑，这个时间点在**未来**，行会被过滤掉，用例随机红。
+    # 实测 2026-11-06 15:03 北京（db_now_naive=07:03 UTC）就踩到：rows 恒为空。
+    # 固定在「现在之前 10 分钟」：永远落在过去且在 7 天窗口内，与运行时刻无关。
+    base = db_now_naive() - timedelta(minutes=10)
     ip_a, ip_b = "198.51.100.7", "198.51.100.8"
     _add_usage(env["key_id"], at=base, ip=ip_a)
     _add_usage(env["key_id"], at=base + timedelta(minutes=1), ip=ip_a)
