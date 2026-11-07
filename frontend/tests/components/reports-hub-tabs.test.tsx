@@ -22,7 +22,8 @@ const P = vi.hoisted(() => ({
   locationSearch: '',
 }))
 
-vi.mock('@sida/api', () => ({
+vi.mock('@sida/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@sida/api')>()),
   getToken: () => 'test-token',
   // 分析记录: /history → 空列表(空态文案落在页内); 报告归档: /reports/list → 空
   fetchAPI: () => Promise.resolve([]),
