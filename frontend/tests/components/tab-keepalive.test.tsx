@@ -258,9 +258,9 @@ describe('⑥ 页签上限: 挤掉最久未访问的非首页页签并提示(L2-
       '/heatmap',
       '/opportunities',
       '/reports',
-      '/theme-mood',
-      '/dark-fund-top',
-      '/war-report',
+      '/market-mood',
+      '/funds',
+      '/market-watch',
       '/caliber-compare',
       '/decision-ledger',
       '/factor-ic',
@@ -281,7 +281,7 @@ describe('⑥ 页签上限: 挤掉最久未访问的非首页页签并提示(L2-
     expect(tabLabels()).toContain('个人中心') // 刚开的还在
     const toasts = screen.getAllByText(new RegExp(`页签最多 ${MAX_TABS} 个`))
     expect(toasts.length).toBe(3) // 连续打开多个页面也只保留最近三条，避免遮住内容
-    expect(toasts.at(-1)?.textContent).toContain('主力战报')
+    expect(toasts.at(-1)?.textContent).toContain('大盘观察')
     // 被挤掉的页签面板也不在 DOM 里了(它的状态随之释放)
     expect(
       document.querySelector('[data-testid="workspace-tab-pane"][data-tab-key="/heatmap"]'),
