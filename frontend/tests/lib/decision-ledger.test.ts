@@ -165,6 +165,9 @@ describe('页面与路由接线(源码级)', () => {
 
   it('路由与导航都挂上了', () => {
     expect(app).toContain('path="/decision-ledger"')
-    expect(app).toContain("'nav.decisionLedger'")
+    // P0(2026-11-07): 导航清单/文案 key 收敛到 lib/navigation.ts(菜单/底栏/面板/页签同源)
+    const nav = read('src/lib/navigation.ts')
+    expect(nav).toContain("to: '/decision-ledger'")
+    expect(nav).toContain("'nav.decisionLedger'")
   })
 })

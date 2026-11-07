@@ -18,6 +18,12 @@
  */
 
 import { normalizeType, type WorkbenchType } from './workbench-tabs'
+import {
+  LEGACY_ALIAS_PATHS as LEGACY_ALIAS_PATHS_SHARED,
+  LEGACY_ALIAS_PREFIXES as LEGACY_ALIAS_PREFIXES_SHARED,
+  PUBLIC_PAGE_PATHS as PUBLIC_PAGE_PATHS_SHARED,
+  ROUTE_LABEL_KEYS as ROUTE_LABEL_KEYS_SHARED,
+} from './navigation'
 
 /** 首页页签 key —— 常驻页签, 不可关闭(关掉最后一个功能页签的落点) */
 export const HOME_TAB_KEY = '/'
@@ -27,27 +33,15 @@ export const TABS_STORAGE_KEY = 'sida_workspace_tabs_v1'
  *  为什么不是 FIFO: 用户会在两三个页签之间反复切, 早打开但一直在用的页签被挤掉会让人莫名其妙。 */
 export const MAX_TABS = 8
 /**
- * 整页路由(不页签化)。
+ * 整页路由(不页签化) —— 清单已挪到 lib/navigation.ts(与老路由别名同表), 此处仅转发,
+ * 保持既有 import 路径与语义不变。
  * (a) 公开文档面: 用户协议 / 档位对比 / 登录 —— 不在功能菜单里, 打开即整页;
- * (b) 老路由别名: App.tsx 里一律 `LegacyXRedirect`/`LegacyTabRedirect` 到新地址。
- *     若给别名开页签, 跳转后页签集里会**留一个再也回不去的僵尸页签** —— 故别名不参与页签。
+ * (b) 老路由别名: App.tsx 里按 LEGACY_ALIASES 生成重定向。若给别名开页签,
+ *     跳转后页签集里会**留一个再也回不去的僵尸页签** —— 故别名不参与页签。
  */
-export const PUBLIC_PAGE_PATHS: readonly string[] = ['/terms', '/tiers', '/login']
-export const LEGACY_ALIAS_PATHS: readonly string[] = [
-  '/history',
-  '/paper-trading',
-  '/alerts',
-  '/agents',
-  '/datasources',
-  '/audit',
-  '/help',
-  '/stocks',
-  '/quote',
-  '/quotes',
-  '/l2',
-  '/forecast',
-]
-export const LEGACY_ALIAS_PREFIXES: readonly string[] = ['/quote/', '/index/', '/boards/']
+export const PUBLIC_PAGE_PATHS: readonly string[] = PUBLIC_PAGE_PATHS_SHARED
+export const LEGACY_ALIAS_PATHS: readonly string[] = LEGACY_ALIAS_PATHS_SHARED
+export const LEGACY_ALIAS_PREFIXES: readonly string[] = LEGACY_ALIAS_PREFIXES_SHARED
 
 export interface WorkspaceTab {
   /** 页签身份(去重键, 见 tabKeyOf) */
@@ -64,43 +58,11 @@ export interface RouteTabSpec {
   path: string
 }
 
-/** 页签标题的 i18n key 注册表(与 App.tsx 的 navItems 对齐, 有钉子测试兜底) */
-export const ROUTE_LABEL_KEYS: Record<string, string> = {
-  '/': 'nav.home',
-  '/heatmap': 'nav.heatmap',
-  '/indexes': 'nav.indexes',
-  '/theme-mood': 'nav.themeMood',
-  '/opportunities': 'nav.opportunities',
-  '/auction': 'nav.auction',
-  '/ai-copilot': 'nav.aiCopilot',
-  // 2026-10-25: 参谋任务列表. 只加 Route 不加这里 -> 被判"不可开页签"并回落首屏(实测)
-  '/copilot/runs': 'nav.copilotRuns',
-  // 2026-10-25: 经验库（只加 Route 不加这里 -> 被判"不可开页签"并回落首屏）
-  '/copilot/experiments': 'nav.copilotExperiments',
-  '/copilot/agents': 'nav.copilotAgents',
-  // 2026-10-25: 工具目录（插件面板）/ 能力提案审核台
-  '/copilot/tools': 'nav.copilotTools',
-  '/copilot/proposals': 'nav.copilotProposals',
-  '/copilot/parallel': 'nav.copilotParallel',
-  '/copilot/governance': 'nav.copilotGovernance',
-  '/dark-fund-top': 'nav.darkFundTop',
-  '/war-report': 'nav.warReport',
-  '/replay-tree': 'nav.replayTree',
-  '/caliber-compare': 'nav.caliberCompare',
-  '/decision-ledger': 'nav.decisionLedger',
-  '/factor-ic': 'nav.factorIC',
-  '/reports': 'nav.reports',
-  '/portfolio': 'nav.portfolio',
-  '/shadow': 'nav.shadow',
-  '/notifications': 'nav.notifications',
-  '/profile': 'nav.profile',
-  '/api-keys': 'nav.apiKeys',
-  '/system': 'nav.system',
-  '/system/status': 'nav.systemStatus',
-  '/settings': 'nav.settings',
-  '/developers': 'nav.developers',
-  '/admin': 'nav.admin',
-}
+/**
+ * 页签标题的 i18n key 注册表 —— 由 lib/navigation.ts 的 NAV_ITEMS/SECONDARY_ROUTES 派生
+ * (单一事实源; 这里保留同名导出, 页签状态机与既有测试无需改 import)。
+ */
+export const ROUTE_LABEL_KEYS: Readonly<Record<string, string>> = ROUTE_LABEL_KEYS_SHARED
 
 /** `/stocks/:symbol` 的品种后缀(个股/指数/板块), 标题形如 "600111 个股" */
 export function stockSuffixKey(type: WorkbenchType): string {

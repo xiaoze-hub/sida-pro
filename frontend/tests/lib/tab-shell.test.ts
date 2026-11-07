@@ -7,14 +7,12 @@
  *   ② 关页签只关那一个功能页, 首页常驻 ⇒ **永不"全关掉"**; 关当前页签落相邻页签;
  *   ③ 持久化往返(存了能读回; 存储损坏不炸、不编数据);
  *   ④ 老路由别名/公开文档面不页签化(否则留僵尸页签);
- *   ⑤ 左侧菜单每个入口都有页签标题(不留裸路径页签)—— 走 App.tsx 源码级覆盖, 同 nav-ia 的做法。
+ *   ⑤ 左侧菜单每个入口都有页签标题(不留裸路径页签) —— 直接读 NAV_ITEMS 表(navigation.ts)。
  */
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import zhCN from '@/locales/zh-CN'
+import { NAV_ITEMS, routePathOf, SECONDARY_ROUTES } from '@/lib/navigation'
 import {
   HOME_TAB_KEY,
   LEGACY_ALIAS_PATHS,
@@ -142,22 +140,24 @@ describe('页签标题', () => {
 })
 
 describe('⑤ 左侧菜单全覆盖: 每个入口都有页签标题', () => {
-  const appSrc = readFileSync(resolve(__dirname, '../..', 'src/App.tsx'), 'utf-8')
-  const navBlock = appSrc.slice(appSrc.indexOf('const navItems'), appSrc.indexOf('const desktopNavGroups'))
-  const navPaths = [...navBlock.matchAll(/to:\s*'([^']+)'/g)].map((m) => m[1])
-
-  it('navItems 解析到了(否则下面的断言是空跑)', () => {
-    expect(navPaths.length).toBeGreaterThan(15)
+  it('NAV_ITEMS 表非空(否则下面的断言是空跑)', () => {
+    expect(NAV_ITEMS.length).toBeGreaterThan(15)
   })
 
   it('每个菜单入口要么有标题、要么被明确列为非页签路由', () => {
-    const orphans = navPaths.filter((to) => {
-      const pathname = to.split('?')[0]
-      if (pathname.startsWith('/stocks/')) return false // 个股标题现算(代码+品种)
-      if (!isTabbable(pathname)) return false // 已明确排除(老别名)
-      return !ROUTE_LABEL_KEYS[pathname]
-    })
+    const orphans = NAV_ITEMS.filter((n) => n.tabbable !== false)
+      .map((n) => routePathOf(n.to))
+      .filter((pathname) => {
+        if (pathname.startsWith('/stocks/')) return false // 个股标题现算(代码+品种)
+        if (!isTabbable(pathname)) return false // 已明确排除(老别名/解析器页)
+        return !ROUTE_LABEL_KEYS[pathname]
+      })
     expect(orphans, `这些菜单入口会以裸路径当页签标题: ${orphans.join(', ')}`).toEqual([])
+  })
+
+  it('二级路由(不进菜单)也全部有页签标题', () => {
+    const missing = SECONDARY_ROUTES.filter((r) => !ROUTE_LABEL_KEYS[r.path]).map((r) => r.path)
+    expect(missing).toEqual([])
   })
 })
 

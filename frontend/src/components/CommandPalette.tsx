@@ -5,9 +5,14 @@ import { Search, TrendingUp, Plus, Zap } from 'lucide-react'
 import { fetchAPI } from '@sida/api'
 import { useToast } from '@sida/base-ui/components/ui/toast'
 import { navBackState } from '@/lib/nav-back'
+import { useI18n } from '@/hooks/useI18n'
+import { getJwtRole, isGuestUser } from '@/lib/jwt'
+import { navGroupLabelKey, palettePageCommands, type NavViewer } from '@/lib/navigation'
 
 // 设计稿 v2.0 §4.4: 全局搜索(Ctrl+K)命令面板 —— 搜股票跳行情, 搜功能跳页面。
 // A2 (2026-09-10): 结果动作化 —— Enter 跳转, 股票项 Shift+Enter 直接加自选(不离开面板流程)。
+// P0 共享导航元数据(2026-11-07): 页面命令不再手写 —— 与侧栏/底栏/页签同源(navigation.ts),
+// 文案走同一个 nav.* 词表, 并按同一套权限/角色规则过滤(此前面板零过滤, guest 能点进 /admin)。
 
 interface StockHit {
   symbol: string
@@ -15,40 +20,11 @@ interface StockHit {
   market: string
 }
 
-interface PageCommand {
-  to: string
-  label: string
-  group: string
-}
-
 type Item =
   | { type: 'page'; to: string; label: string; group: string }
   | { type: 'stock'; symbol: string; name: string; market: string }
   | { type: 'action'; id: string; label: string; group: string; hint?: string }
 
-// 6 项主导航对应页面命令(与 App.tsx desktopNavGroups 对齐)
-const PAGE_COMMANDS: PageCommand[] = [
-  { to: '/', label: '首页 · 驾驶舱', group: '驾驶舱' },
-  { to: '/forecast', label: '预测', group: '行情' },
-  { to: '/opportunities', label: '市场扫描 · 技术特征', group: '研究' },
-  { to: '/auction', label: '集合竞价 · 量价分析', group: '研究' },
-  // §4.3 补齐(2026-09-01): 历史/模拟盘/提醒 收纳后指向新地址(带 ?tab= 直达对应页签)
-  { to: '/reports?tab=reports', label: '报告中心', group: '投研' },
-  { to: '/reports?tab=history', label: '历史分析', group: '投研' },
-  { to: '/portfolio', label: '持仓 · 自选', group: '我的' },
-  { to: '/shadow?tab=shadow', label: '影子账户', group: '我的' },
-  { to: '/shadow?tab=paper', label: '模拟盘', group: '我的' },
-  { to: '/profile', label: '个人中心', group: '我的' },
-  { to: '/api-keys', label: 'API Key 控制台', group: '我的' },
-  // §4.3: 指向收纳后的新地址(带 ?tab= 直达对应页签)
-  { to: '/system?tab=agents', label: 'Agent 管理', group: '系统' },
-  { to: '/system?tab=datasources', label: '数据源', group: '系统' },
-  { to: '/notifications?tab=notifications', label: '通知中心', group: '系统' },
-  { to: '/notifications?tab=alerts', label: '价格提醒', group: '系统' },
-  { to: '/settings?tab=settings', label: '设置', group: '系统' },
-  { to: '/settings?tab=audit', label: '日志审计', group: '系统' },
-  { to: '/settings?tab=help', label: '帮助 · 快捷键', group: '系统' },
-]
 
 function localDate(): string {
   const d = new Date()
@@ -138,9 +114,20 @@ function pushRecent(key: string) {
   }
 }
 
-export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function CommandPalette({
+  open,
+  onClose,
+  myPerms = null,
+}: {
+  open: boolean
+  onClose: () => void
+  /** 当前账号 effective 权限点; null = 未加载(沿用导航的 fail-open 口径) */
+  myPerms?: ReadonlySet<string> | null
+}) {
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { t } = useI18n()
+  const viewer: NavViewer = { perms: myPerms, role: getJwtRole(), guest: isGuestUser() }
   const [q, setQ] = useState('')
   const [stocks, setStocks] = useState<StockHit[]>([])
   const [loading, setLoading] = useState(false)
@@ -182,7 +169,24 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     return () => clearTimeout(t)
   }, [q, open])
 
-  const pageHits = PAGE_COMMANDS.filter((c) => !q.trim() || c.label.includes(q.trim()))
+  // 页面命令: 与侧栏/底栏/页签同源 + 同一套可见性过滤(guest/owner/模块权限)
+  const pageCommands = palettePageCommands(viewer).map((c) => {
+    const groupKey = c.groupKey ? navGroupLabelKey(c.groupKey) : null
+    return {
+      to: c.to,
+      label: t(c.labelKey),
+      group: groupKey ? t(groupKey) : '',
+      keywords: c.keywords ?? [],
+    }
+  })
+  const needle = q.trim().toLowerCase()
+  const pageHits = pageCommands.filter(
+    (c) =>
+      !needle ||
+      c.label.toLowerCase().includes(needle) ||
+      c.group.toLowerCase().includes(needle) ||
+      c.keywords.some((k) => k.toLowerCase().includes(needle)),
+  )
   const actionHits = ACTION_COMMANDS.filter((c) => !q.trim() || c.label.includes(q.trim()))
   // frecency(2026-09-20): 最近用过的排在前面 —— 面板的价值在"常用项零思考命中"
   const recent = readRecent()

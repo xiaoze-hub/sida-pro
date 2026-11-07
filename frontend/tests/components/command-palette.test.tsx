@@ -115,4 +115,55 @@ describe('CommandPalette A2 动作化', () => {
     renderPalette()
     expect(screen.getByText(/加自选/)).toBeTruthy()
   })
+
+  // P0 共享导航元数据(2026-11-07): 面板此前对页面命令**零权限过滤** ——
+  // 菜单里藏起来的模块, 键盘仍能点进去再吃 403。这里钉住"面板与菜单同一套可见性"。
+  it('缺少模块权限的页面不出现在面板(暗盘资金需要 view_dark)', async () => {
+    mocks.fetchAPI.mockResolvedValue([])
+    render(
+      <MemoryRouter>
+        <CommandPalette open onClose={() => {}} myPerms={new Set(['view_dashboard', 'view_quotes'])} />
+      </MemoryRouter>,
+    )
+    const input = screen.getByPlaceholderText(/搜索股票/)
+    fireEvent.change(input, { target: { value: '暗盘' } })
+    await waitFor(() => expect(screen.getByText('无匹配结果')).toBeTruthy())
+    expect(screen.queryByText('暗盘资金')).toBeNull()
+  })
+
+  it('非 owner 看不到管理后台(即便权限点齐全, ownerOnly 仍按角色挡)', async () => {
+    mocks.fetchAPI.mockResolvedValue([])
+    render(
+      <MemoryRouter>
+        <CommandPalette open onClose={() => {}} myPerms={new Set(['manage_users'])} />
+      </MemoryRouter>,
+    )
+    const input = screen.getByPlaceholderText(/搜索股票/)
+    fireEvent.change(input, { target: { value: '管理后台' } })
+    await waitFor(() => expect(screen.getByText('无匹配结果')).toBeTruthy())
+  })
+
+  it('owner 在面板能看到管理后台(角色可见性与侧栏一致)', async () => {
+    mocks.fetchAPI.mockResolvedValue([])
+    // role=owner 的 JWT: 面板与 App 读同一份 claims(lib/jwt)
+    localStorage.setItem('token', `h.${btoa(JSON.stringify({ role: 'owner' }))}.s`)
+    render(
+      <MemoryRouter>
+        <CommandPalette open onClose={() => {}} myPerms={new Set(['manage_users'])} />
+      </MemoryRouter>,
+    )
+    const input = screen.getByPlaceholderText(/搜索股票/)
+    fireEvent.change(input, { target: { value: '管理后台' } })
+    await waitFor(() => expect(screen.getByText('管理后台')).toBeTruthy())
+  })
+
+  it('旧面板的检索词仍能命中(预测 → 行情工作台入口)', async () => {
+    mocks.fetchAPI.mockResolvedValue([])
+    renderPalette()
+    const input = screen.getByPlaceholderText(/搜索股票/)
+    fireEvent.change(input, { target: { value: '预测' } })
+    await waitFor(() => expect(screen.getAllByText('行情').length).toBeGreaterThan(0))
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(mocks.navigate).toHaveBeenCalledWith('/quotes')
+  })
 })

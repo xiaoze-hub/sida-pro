@@ -2,7 +2,7 @@ import { NoAccessPage } from '@/components/NoAccessPage'
 import { GithubMark } from '@/components/icons/GithubMark'
 import { createContext, useContext, useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, BarChart3, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, Landmark, Sun, Moon, ArrowRight } from 'lucide-react'
+import { List, Sun, Moon, PanelLeftClose, PanelLeftOpen, ScrollText, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -96,6 +96,17 @@ import { CapabilityPill } from '@/components/DataCapabilities'
 import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
 import { normalizeType } from '@/lib/workbench-tabs'
 import { isNavItemActive } from '@/lib/nav-active'
+// P0 共享导航元数据(2026-11-07): 桌面侧栏 / 移动底栏+更多 / 命令面板 / 页签标题 / 老 URL
+// 全部从同一份表派生 —— 不再在 App.tsx 手写 navItems/分组/可见性/override 清单。
+import {
+  LEGACY_ALIASES,
+  isNavItemVisible,
+  legacyRedirectTarget,
+  mobileNavItems,
+  spotlightNavItem,
+  visibleNavGroups,
+  type NavViewer,
+} from '@/lib/navigation'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
@@ -113,109 +124,9 @@ import { closeOpenDialogs } from '@/lib/dialog-route-guard'
 import Disclaimer from '@/components/Disclaimer'
 import { onApiFailure } from '@sida/api'
 
-const navItems = [
-  { to: '/', icon: LayoutDashboard, labelKey: 'nav.home', perm: 'view_dashboard' },
-  // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
-  // 行情入口按当前账号持仓/关注解析默认标的；盘口内容在工作台「盘口资金」标签。
-  { to: '/quotes', icon: LineChart, labelKey: 'nav.stocks', perm: 'view_quotes' },
-  // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
-  { to: '/heatmap', icon: LayoutGrid, labelKey: 'nav.heatmap', perm: 'view_heatmap' },
-  // 盘面指数(2026-11-03): 宽基指数涨跌幅/成交额/四档资金/涨跌家数
-  { to: '/indexes', icon: BarChart3, labelKey: 'nav.indexes', perm: 'view_quotes' },
-  // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
-  { to: '/theme-mood', icon: Activity, labelKey: 'nav.themeMood', perm: 'view_quotes' },
-  // 国家队 ETF(2026-11-05): 20 只重点宽基 ETF 分钟成交额 + 市场级净申购(SC8)
-  { to: '/etf-watch', icon: Landmark, labelKey: 'nav.etfWatch', perm: 'view_quotes' },
-  { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
-  { to: '/auction', icon: Flame, labelKey: 'nav.auction', perm: 'view_opportunities' },
-  // AI 数智参谋(2026-10-18): 独立一级入口。**不进 desktopNavGroups** —— 侧栏里渲染成
-  // 独立高亮卡(见 Sidebar 的 aiEntry), 组数仍为 6(设计稿 §9.3 方案 A)。移动端落"更多"。
-  { to: '/ai-copilot', icon: Sparkles, labelKey: 'nav.aiCopilot', perm: 'view_quotes' },
-  // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
-  { to: '/dark-fund-top', icon: TrendingUp, labelKey: 'nav.darkFundTop', perm: 'view_dark' },
-  // 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总(TOP/BOTTOM + 行业分布 + 拆单/对倒)
-  { to: '/war-report', icon: TrendingUp, labelKey: 'nav.warReport', perm: 'view_forecast' },
-  // 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池 + 连板梯队与晋级率(market_replay_daily)。
-  // 复盘属机会域盘后动线, 落「机会」组; 登录可见(行情统计, 非 pro 专属)。
-  { to: '/replay-tree', icon: GitBranch, labelKey: 'nav.replayTree', perm: 'view_quotes' },
-  // 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排; 属 pro 档数据 → view_forecast
-  { to: '/caliber-compare', icon: Activity, labelKey: 'nav.caliberCompare', perm: 'view_forecast' },
-  // 决策账本(2026-09-18, B6 前端 / 设计稿 v3.0 §六 新增"决策"一级入口): 信号→结果的账。
-  // 后端只要求登录(不含 pro 数据), 故用通用权限点, 不挡普通用户看自己的账。
-  { to: '/decision-ledger', icon: ClipboardList, labelKey: 'nav.decisionLedger', perm: 'view_quotes' },
-  // 因子有效性(2026-09-19, B9 数据资产): 解释"信号为什么有效"。研究/复核性质,
-  // 仅登录可见(不涉 pro 数据), 但**不代表买卖建议**。
-  { to: '/factor-ic', icon: FlaskConical, labelKey: 'nav.factorIC', perm: 'view_quotes' },
-  { to: '/reports', icon: FileText, labelKey: 'nav.reports', perm: 'view_reports' },
-  { to: '/history', icon: Clock, labelKey: 'nav.history' },
-  { to: '/portfolio', icon: List, labelKey: 'nav.portfolio', perm: 'edit_portfolio' },
-  { to: '/shadow', icon: Shield, labelKey: 'nav.shadow', perm: 'manage_shadow' },
-  { to: '/paper-trading', icon: Activity, labelKey: 'nav.paperTrading', perm: 'manage_paper_trading' },
-  { to: '/profile', icon: User, labelKey: 'nav.profile' },
-  // API Key 控制台(2026-09-16): 个人中心组
-  { to: '/api-keys', icon: KeyRound, labelKey: 'nav.apiKeys' },
-  // §4.3: Agent + 数据源 收纳进「系统」二级页(/agents /datasources 保留为重定向)
-  { to: '/system', icon: ServerCog, labelKey: 'nav.system' },
-  { to: '/notifications', icon: Bell, labelKey: 'nav.notifications' },
-  { to: '/alerts', icon: BellRing, labelKey: 'nav.alerts' },
-  // §4.3: 审计 + 帮助 收纳进「设置」页签(/audit /help 保留为重定向)
-  { to: '/settings', icon: Settings, labelKey: 'nav.settings' },
-  // 开发者文档(2026-09-16): Skill Gateway API 文档 + 调试台; 公开页, 紧挨设置
-  { to: '/developers', icon: Code2, labelKey: 'nav.developers' },
-  // Admin 管理后台(2026-09-16): owner 专属入口(用户/Key/用量/Pro 审核)
-  { to: '/admin', icon: ShieldCheck, labelKey: 'nav.admin', ownerOnly: true, perm: 'manage_users' },
-]
-// 设计稿 v2.0 §4.2/§4.3: 6 项主导航(驾驶舱/行情/机会/投研/我的/系统), 取代原 21 项扁平三组。
-// 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
-// 一级导航 **6 组**(设计稿 v3.0 §六: 一级 ≤6 + 新增「决策」入口)。
-// 2026-09-18 P2-2: ① 首页从独立「驾驶舱」组并入「行情」(它本来就是行情的入口, 省出一组);
-// ② 新增「决策」组 —— 之前 `/decision-ledger` 与 `/caliber-compare` **只存在于 navItems,
-//    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
-const desktopNavGroups = [
-  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/quotes', '/indexes', '/heatmap', '/theme-mood', '/etf-watch'].includes(n.to)) },
-  { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/auction', '/dark-fund-top', '/war-report', '/replay-tree'].includes(n.to)) },
-  // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
-  // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
-  { key: 'decision', labelKey: 'nav.decision', items: navItems.filter(n => ['/decision-ledger', '/caliber-compare', '/factor-ic'].includes(n.to)) },
-  // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
-  // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
-  { key: 'research', labelKey: 'nav.reports', items: navItems.filter(n => ['/reports'].includes(n.to)) },
-  { key: 'mine', labelKey: 'nav.profile', items: navItems.filter(n => ['/portfolio', '/shadow', '/profile', '/api-keys'].includes(n.to)) },
-  // §4.3: 系统域从 7 项瘦身到 3 项(Agent/数据源→系统页, 审计/帮助→设置页签, 提醒→通知页签)
-  { key: 'system', labelKey: 'nav.system', items: navItems.filter(n => ['/system', '/notifications', '/settings', '/developers', '/admin'].includes(n.to)) },
-]
-// 移动端底部 5 槽位按 to 路径挑选: 首页/持仓/机会/预测/通知(2026-09-01 §4.3 补齐:
-// 提醒并入通知后底栏由 /alerts 改指 /notifications; 提醒 Tab 在通知页内直达,
-// 老书签 /alerts 仍经 LegacyTabRedirect 跳到 /notifications?tab=alerts)。
-// navItems 数组顺序保持不动, 桌面端平铺分组完全不变。
-const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/quotes', '/notifications']
+// 导航清单已移到 src/lib/navigation.ts(单一事实源): 菜单/底栏/命令面板/页签标题/老 URL 共用。
+// 这里只保留 shell 层的渲染与路由(见下方 App 组件内的 viewer 派生)。
 
-// ═══ demo 账号只读模式(2026-08-15): 从 JWT payload 解出 username/role, 按角色控制导航 ═══
-// 2026-09-12: claims 解析抽到 src/lib/jwt.ts 共用(情绪周期回填按钮也要按角色控制)。
-// 仅用于 UI 展示用途的 claims 解析, 不参与授权判断(权限最终看后端).
-// 角色化隐藏导航: owner/member 全部显示(现状不变); guest(demo) 隐藏管理/个人页面
-// (数据源/AI配置/Agent/策略等核心内容; 设置/持仓/自选可浏览但只读)
-const GUEST_HIDDEN_PATHS = ['/paper-trading', '/alerts', '/shadow', '/system']
-const isNavHiddenForGuest = (to: string): boolean =>
-  GUEST_HIDDEN_PATHS.includes(to) || to.startsWith('/manage')
-// owner 专属导航(审计页): 非 owner 一律隐藏(2026-08-15)
-const isNavHiddenForRole = (n: { to: string; ownerOnly?: boolean }): boolean =>
-  !!n.ownerOnly && getJwtRole() !== 'owner'
-// 模块权限过滤(2026-08-16): 导航项带 perm 权限点 → 当前用户 effective 权限
-// 不含该点则隐藏(未授权模块前端也看不到, 不再"能点进去但数据403")。
-// 注意: 拉取失败(myPerms==null)或权限点未映射的项 → 不隐藏(回退角色判断, 不误伤)。
-const isNavHiddenForPerm = (n: { perm?: string }, myPerms: Set<string> | null): boolean => {
-  if (!n.perm) return false
-  if (!myPerms) return false
-  return !myPerms.has(n.perm)
-}
-const mobilePrimaryNavItems = navItems.filter(n => MOBILE_PRIMARY_TO.includes(n.to))
-const mobileMoreNavItems = navItems.filter(n => !MOBILE_PRIMARY_TO.includes(n.to))
-
-function LegacyStocksRedirect() {
-  const location = useLocation()
-  return <Navigate to={`/portfolio${location.search}`} replace />
-}
 
 // ═══ 个股工作台三合一(Task 2, 2026-09-13): 旧行情/盘口/指数/板块路由 → 工作台 ═══
 // 行情页(/forecast /quote /quote/:symbol)、盘口页(/l2)、指数详情(/index/:symbol)、
@@ -249,11 +160,8 @@ function LegacyIndexRedirect({ type }: { type: 'index' | 'board' }) {
  */
 function LegacyTabRedirect({ to }: { to: string }) {
   const location = useLocation()
-  // 老链接可能自带 query, 合并进去(新地址的 ?tab= 由调用方给出, 优先级更高)
-  const merged = new URLSearchParams(location.search)
-  const target = new URLSearchParams(to.split('?')[1] || '')
-  target.forEach((v, k) => merged.set(k, v))
-  return <Navigate to={`${to.split('?')[0]}?${merged.toString()}`} replace />
+  // query 合并规则(保留老链接筛选 / 新地址 ?tab= 优先 / 不留裸 '?')是纯函数, 见 navigation.ts
+  return <Navigate to={legacyRedirectTarget(to, location.search)} replace />
 }
 
 // 认证守卫组件
@@ -419,6 +327,13 @@ function App() {
   const checkedUpdateRef = useRef(false)
   // 当前用户模块权限(导航过滤: 未授权模块隐藏入口; 拉取失败回退角色判断)
   const { permissions: myPerms, failed: permissionsFailed, retry: retryPermissions } = useMyPermissions(getToken())
+  // 共享导航元数据(2026-11-07): 桌面/移动/命令面板/助理工作台共用同一个 viewer 与同一套判定,
+  // 不再各自 if(isNavHiddenForXxx) —— 避免"桌面藏了、面板还能点进去"这类分叉。
+  const viewer: NavViewer = { perms: myPerms, role: getJwtRole(), guest: isGuestUser() }
+  const desktopGroups = visibleNavGroups(viewer)
+  const aiEntry = spotlightNavItem(viewer)
+  const mobilePrimaryNav = mobileNavItems('primary', viewer)
+  const mobileMoreNav = mobileNavItems('more', viewer)
   const repoUrl = 'https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics'
 
   useEffect(() => {
@@ -539,7 +454,7 @@ function App() {
     <RequireAuth>
     <PermissionLoadContext.Provider value={{ failed: permissionsFailed, retry: retryPermissions }}>
     <SystemStatusProvider enabled={getJwtRole() === 'owner'}>
-    <AssistantWorkspaceProvider enabled={!isNavHiddenForPerm({ perm: 'view_quotes' }, myPerms)}>
+    <AssistantWorkspaceProvider enabled={isNavItemVisible({ perm: 'view_quotes' }, viewer)}>
     <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
       <BrowserNotificationBridge />
       {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}
@@ -575,10 +490,8 @@ function App() {
           {/* AI 数智参谋: 独立高亮卡(设计稿 §9.3 方案 A —— 不进分组, 组数仍 6)。
               AI 是产品第一心智, 塞进「机会」组会变成第 4 个子项 = 等于没做入口。 */}
           {(() => {
-            const ai = navItems.find((n) => n.to === '/ai-copilot')
+            const ai = aiEntry
             if (!ai) return null
-            if (isNavHiddenForRole(ai) || isNavHiddenForPerm(ai, myPerms)) return null
-            if (isGuestUser() && isNavHiddenForGuest(ai.to)) return null
             const label = t(ai.labelKey)
             const active = isNavItemActive(ai.to, location.pathname)
             return (
@@ -598,7 +511,7 @@ function App() {
                 <AssistantAvatar size={sidebarCollapsed ? 32 : 44} />
                 {!sidebarCollapsed && (
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] font-semibold">数智参谋</span>
+                    <span className="block truncate text-[14px] font-semibold">{label}</span>
                     <span className="mt-0.5 block truncate text-[12px] opacity-80">
                       点击开始技术分析
                     </span>
@@ -607,9 +520,8 @@ function App() {
               </NavLink>
             )
           })()}
-          {desktopNavGroups.map((group) => {
-            // guest(demo): 隐藏管理/个人页面导航; 模块权限: 未授权模块隐藏入口
-            const items = group.items.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))
+          {desktopGroups.map((group) => {
+            const items = group.items
             if (items.length === 0) return null
             return (
               <div key={group.key} className="mb-3 last:mb-0">
@@ -724,7 +636,7 @@ function App() {
               <NotificationBell size="sm" />
               <AccountMenu
                 size="sm"
-                navItems={(isGuestUser() ? mobileMoreNavItems.filter(n => !isNavHiddenForGuest(n.to) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)) : mobileMoreNavItems.filter(n => !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))).map(n => ({ ...n, label: t(n.labelKey) }))}
+                navItems={mobileMoreNav.map((n) => ({ to: n.to, icon: n.icon, label: t(n.labelKey) }))}
                 mode={mode}
                 onSetMode={setMode}
                 onOpenSelfCheck={() => navigate('/system/status')}
@@ -737,7 +649,7 @@ function App() {
       {/* Mobile Bottom Nav */}
       <nav data-mobile-navigation className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-card border-t border-border px-2 pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center justify-around h-14">
-          {mobilePrimaryNavItems.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)).map(({ to, icon: Icon, labelKey }) => {
+          {mobilePrimaryNav.map(({ to, icon: Icon, labelKey }) => {
             const isActive = isNavItemActive(to, location.pathname)
             return (
               <NavLink
@@ -769,7 +681,7 @@ function App() {
             <div className="flex flex-wrap items-center gap-2">
               <SystemStatusIndicator />
               <SourceHeartbeat />
-              {!isNavHiddenForPerm({ perm: 'edit_portfolio' }, myPerms) && <Button variant="ghost" size="sm" data-testid="quick-portfolio" onClick={() => {
+              {isNavItemVisible({ perm: 'edit_portfolio' }, viewer) && <Button variant="ghost" size="sm" data-testid="quick-portfolio" onClick={() => {
                 navigate('/portfolio?view=positions')
                 window.dispatchEvent(new Event('sida:portfolio-positions'))
               }}><List className="h-4 w-4" />我的持仓</Button>}
@@ -827,31 +739,24 @@ function App() {
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
               <Route path="/quotes" element={<PermGuard perm="view_quotes" myPerms={myPerms}><QuoteEntryPage /></PermGuard>} />
               <Route path="/stocks/:symbol" element={<PermGuard perm="view_quotes" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
-              <Route path="/stocks" element={<LegacyStocksRedirect />} />
               {/* §4.3: Agent + 数据源 → /system 二级页 */}
               <Route path="/system/status" element={<SystemStatusPage />} />
               <Route path="/system" element={<SystemPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
-              <Route path="/agents" element={<LegacyTabRedirect to="/system?tab=agents" />} />
               {/* §4.3 补齐: 历史并入报告(投研内"历史Tab"), 都是研究产出。
                   权限粒度对齐原路由: reports Tab=view_reports(Tab级过滤), history 原本无守卫。
                   路由级不再套 PermGuard, 避免只有 history 权限的用户被整页拦住。 */}
               <Route path="/reports" element={<ReportsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
-              <Route path="/history" element={<LegacyTabRedirect to="/reports?tab=history" />} />
               {/* §4.3 补齐: 模拟盘并入影子(我的内"模拟Tab"), 都是模拟资金。
                   权限粒度对齐原路由: shadow=manage_shadow / paper=manage_paper_trading,
                   均为 Tab 级过滤 —— 只有模拟盘权限的用户仍能从 /paper-trading 进入。 */}
               <Route path="/shadow" element={<ShadowHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
-              <Route path="/paper-trading" element={<LegacyTabRedirect to="/shadow?tab=paper" />} />
               {/* §4.3 补齐: 提醒并入通知(通知内"提醒Tab"), 提醒是通知一种 */}
               <Route path="/notifications" element={<NotificationsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
-              <Route path="/alerts" element={<LegacyTabRedirect to="/notifications?tab=alerts" />} />
               <Route path="/profile" element={<ProfilePage />} />
               {/* API Key 控制台(2026-09-16): 个人中心组 */}
               <Route path="/api-keys" element={<ApiKeysPage />} />
               {/* §4.3: 审计 + 帮助 → /settings 页签 */}
               <Route path="/settings" element={<SettingsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
-              <Route path="/audit" element={<LegacyTabRedirect to="/settings?tab=audit" />} />
-              <Route path="/help" element={<LegacyTabRedirect to="/settings?tab=help" />} />
               {/* 开发者文档: 已登录走正常壳层; 未登录已在上方 early-return 公开渲染 */}
               <Route path="/developers" element={<DevelopersPage />} />
               {/* 用户协议/隐私政策(合规, 2026-09-16): 已登录也可从设置等处回看 */}
@@ -861,9 +766,15 @@ function App() {
               <Route path="/etf-watch" element={<EtfWatchPage />} />
               {/* Admin 管理后台(2026-09-16): PermGuard(manage_users) + 后端 require_owner 双重 */}
               <Route path="/admin" element={<PermGuard perm="manage_users" myPerms={myPerms}><AdminPage /></PermGuard>} />
-              <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />
               {/* 安全审计 2026-09-15: /analysis 详情页原本无权限守卫, 补 PermGuard */}
               <Route path="/analysis/:symbol/:date" element={<PermGuard perm="view_reports" myPerms={myPerms}><AnalysisDetailPage /></PermGuard>} />
+              {/* 老 URL 兼容(§4.3 收纳 / 个股工作台三合一): 静态别名由 LEGACY_ALIASES 生成,
+                  清单在 lib/navigation.ts; 目标路由由 tests/lib/navigation.test.ts 逐一核对。
+                  动态别名(/forecast /quote /quote/:symbol /l2 /index/:symbol /boards/:blockCode)
+                  需读参数, 仍由上方专用组件处理。 */}
+              {LEGACY_ALIASES.filter((a) => a.kind === 'static').map((a) => (
+                <Route key={a.from} path={a.from} element={<LegacyTabRedirect to={a.to} />} />
+              ))}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </AppErrorBoundary>
@@ -872,7 +783,7 @@ function App() {
         </WorkspaceTabShell>
       </main>
       <ChatWidget />
-      <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
+      <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} myPerms={myPerms} />
       <LogsModal open={logsOpen} onOpenChange={setLogsOpen} />
       <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
         <DialogContent className="max-w-md">
