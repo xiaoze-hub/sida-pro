@@ -1,4 +1,4 @@
-import { API_BASE, fetchAPI, getToken, logout } from './client'
+import { API_BASE, authErrorFor401, fetchAPI, getRequestToken } from './client'
 
 export interface ChatConversation {
   id: number
@@ -250,11 +250,14 @@ export const chatApi = {
     mentions?: { type: string; value: string; label?: string }[],
   ): Promise<ChatStreamResult> =>
     new Promise<ChatStreamResult>((resolve, reject) => {
+      // 2026-11-07: 凭证只读一次(旧实现头里读了两次 `getToken()`, 两次之间被清号就会发出
+      // `Bearer null` —— 后端把它当真凭证验签, Cookie 有效也 401); 这个值同时是 401 时的判据。
+      const credentialToken = getRequestToken()
       fetch(`${API_BASE}/chat/conversations/${conversationId}/messages/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+          ...(credentialToken ? { Authorization: `Bearer ${credentialToken}` } : {}),
         },
         body: JSON.stringify({
           content,
@@ -268,8 +271,9 @@ export const chatApi = {
       })
         .then(async (res) => {
           if (res.status === 401) {
-            logout()
-            throw new Error('登录已过期')
+            // 与 fetchAPI 同一裁决: 只有"这一发带的凭证还是当前凭证"才登出;
+            // A 的流式请求迟到 401 时 B 刚登录的会话必须活下来。
+            throw authErrorFor401(credentialToken)
           }
           if (!res.ok || !res.body) {
             throw new Error(`HTTP ${res.status}`)

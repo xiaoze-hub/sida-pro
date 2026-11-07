@@ -1,4 +1,4 @@
-import { fetchAPI, getToken, logout } from './client'
+import { authErrorFor401, fetchAPI, getRequestToken } from './client'
 
 export interface SelfCheckItem {
   category: 'system' | 'datasource' | 'ai' | 'notify'
@@ -64,9 +64,11 @@ export interface SystemStatusUpdate {
 }
 
 async function streamSystemStatus(onUpdate: (update: SystemStatusUpdate) => void, signal: AbortSignal) {
-  const token = getToken()
-  const response = await fetch('/api/health/system/stream', { credentials: 'include', cache: 'no-store', headers: token ? { Authorization: `Bearer ${token}` } : {}, signal })
-  if (response.status === 401) { logout(); throw new Error('登录已过期') }
+  // 2026-11-07: 凭证只读一次 —— 头里带出去的值就是 401 时判"这一发属于哪个世界"的依据。
+  const credentialToken = getRequestToken()
+  const response = await fetch('/api/health/system/stream', { credentials: 'include', cache: 'no-store', headers: credentialToken ? { Authorization: `Bearer ${credentialToken}` } : {}, signal })
+  // 迟到 401 不能登出刚登录的另一个账号(与 fetchAPI 同一裁决, 见 authErrorFor401)。
+  if (response.status === 401) throw authErrorFor401(credentialToken)
   if (!response.ok || !response.body) throw new Error(response.status === 403 ? '仅管理员可查看系统状态' : `状态读取失败 HTTP ${response.status}`)
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

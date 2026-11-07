@@ -102,8 +102,13 @@ export default function LoginPage() {
   const saveToken = (data: AuthTokenPayload) => {
     localStorage.setItem('token', data.token)
     localStorage.setItem('token_expires', data.expires_at)
+    // 2026-11-07: 响应没带 user 时必须**删掉上一个人的 user**, 不能留着。
+    // `user` 是自选记忆 / 系统状态快照 / 头像 / 设置页当前用户的分区依据, 而登录(密码/验证码)与
+    // 注册的响应体里 user 都是可选的 —— 留着旧值等于让 B 按 A 的身份读写私有状态。
     if (data.user) {
       localStorage.setItem('user', JSON.stringify(data.user))
+    } else {
+      localStorage.removeItem('user')
     }
     notifyAuthIdentityChanged('login')
     clearQueryCache()

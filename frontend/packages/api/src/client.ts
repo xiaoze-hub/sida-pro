@@ -69,6 +69,29 @@ export function getToken(): string | null {
   return localStorage.getItem('token')
 }
 
+/**
+ * 请求要带出去的 Bearer 凭证(2026-11-07 归一化)。
+ *
+ * 与 `getToken()` 的区别只有一个: **坏值一律当没有凭证**。空串 / 纯空白 / 字符串 `'null'`
+ * 与 `'undefined'`(历史上被写坏的存储值)都不算凭证 —— 后端 `_bearer_from_header` 只在
+ * Bearer 非空时采纳它, 而 `Bearer null` 会被当成**真凭证**去验签, 验不过就 401:
+ * httpOnly Cookie 明明有效, 用户却被判"登录已过期"。
+ *
+ * 返回 `null` 时调用方不发 Authorization 头, 让 Cookie 兜底(后端口径: 有 header 才是权威身份)。
+ */
+export function getRequestToken(): string | null {
+  let raw: string | null = null
+  try {
+    raw = localStorage.getItem('token')
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'string') return null
+  const token = raw.trim()
+  if (!token || token === 'null' || token === 'undefined') return null
+  return token
+}
+
 /** 身份切换事件名(2026-11-07): 同一标签页登录/登出/换号后同步广播, 供上层清/重建缓存。 */
 export const AUTH_IDENTITY_EVENT = 'sida:auth-changed'
 
@@ -190,6 +213,10 @@ export function logout() {
   _logoutInProgress = true
   localStorage.removeItem('token')
   localStorage.removeItem('token_expires')
+  // 2026-11-07: `user` 是好几处私有状态的分区依据(自选记忆 / 系统状态快照 / 头像 / 设置页),
+  // 登出必须一起清 —— 否则下一个人登录时若响应里没带 user, 页面继续按上一个人的 id 读写。
+  // 与注销(DataPrivacySection)保持同一套键, 别让两条收尾路径各删一半。
+  localStorage.removeItem('user')
   // 2026-11-07: 身份已不可信 —— 立即清响应缓存/在途表并广播。代次(epoch)随之递增,
   // 登出前发出的在途请求即使晚到, 也写不进"下一个身份"的缓存。
   notifyAuthIdentityChanged('logout')
@@ -211,6 +238,30 @@ export function logout() {
   } catch { /* sessionStorage 不可用就略过 */ }
   // 2026-09-16: 退出登录跳落地页(官网), 不再跳 /login
   window.location.href = '/'
+}
+
+/**
+ * 401 的统一裁决(2026-11-07): 这一发请求带出去的凭证**还是不是**当前凭证。
+ *
+ * `fetchAPI` 与两个自己 `fetch` 的流式入口(health / chat)都必须走这里, 否则同一条
+ * "A 的在途请求在 B 登录后才 401" 会在其中一条路径上把 B 踢下线。
+ *
+ * 判据是"发起时带出去的凭证"与"现在的凭证"是否相同:
+ *   - 相同 ⇒ 当前会话真的失效 → 登出(清本地身份 + 广播);
+ *   - 不同(换号 / 登出 / 同账号换发) ⇒ 这个 401 属于旧世界, 只让本次请求失败(staleAuth),
+ *     不动当前会话与缓存。
+ *
+ * 两种凭证都取不到(Cookie-only 会话 / 匿名)时属于"不可区分": 按当前会话处理(登出是保守方向,
+ * 反正本地没有可保护的凭证), 与既有行为一致。
+ */
+export function authErrorFor401(credentialToken: string | null): ApiError {
+  const stale = getRequestToken() !== credentialToken
+  if (!stale) logout()
+  const err = new Error(stale ? '本次请求的登录状态已失效' : '登录已过期') as ApiError
+  err.status = 401
+  err.kind = 'HTTP_4xx'
+  if (stale) err.staleAuth = true
+  return err
 }
 
 // 修复(L-4, 2026-08-23): 原 `new Date(string) < new Date()` 受本地时区影响(后端 UTC / 前端 CST
@@ -304,7 +355,9 @@ function reportFailure(f: ApiFailure) {
 export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Promise<T> {
   const headers: Record<string, string> = {}
 
-  const token = getToken()
+  // 2026-11-07: 用归一化后的凭证(见 getRequestToken) —— 头里带出去的那个值同时就是 401 时
+  // 判断"这一发是否属于旧世界"的依据, 两处必须是同一个值, 不能在别处再读一次存储。
+  const token = getRequestToken()
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
@@ -429,25 +482,11 @@ async function _parseResponse<T>(
      * A 那个请求此时才收到 401 → 旧实现无条件 `logout()` ⇒ 刚登录好的 B 被踢回登录页,
      * 而且是在 B 的会话完全有效的情况下。
      *
-     * 判据是"这一发请求带的凭证是否还是当前凭证": 不同(或已经登出) ⇒ 这个 401 属于旧世界,
-     * 只让本次请求失败(staleAuth), 不动当前会话/缓存; 相同 ⇒ 当前会话真的失效了, 才登出。
+     * 裁决只在 `authErrorFor401` 一处(health/chat 两个流式入口共用同一份), 这里只负责
+     * 把"旧世界的失败"排除在告警流之外 —— 否则换号后右栏会凭空出现一条"登录过期"。
      */
-    let currentToken: string | null = null
-    try {
-      currentToken = localStorage.getItem('token')
-    } catch {
-      currentToken = null
-    }
-    const stale = currentToken !== credentialToken
-    if (!stale) logout()
-    const err = new Error(stale ? '本次请求的登录状态已失效' : '登录已过期') as ApiError
-    err.status = 401
-    err.kind = 'HTTP_4xx'
-    if (stale) {
-      err.staleAuth = true
-      // 旧世界的失败不往会话消息流里灌 —— 否则换号后右栏凭空出现一条"登录过期"告警。
-      throw err
-    }
+    const err = authErrorFor401(credentialToken)
+    if (err.staleAuth) throw err
     reportFailure({ path, method, status: 401, message: err.message })
     throw err
   }
