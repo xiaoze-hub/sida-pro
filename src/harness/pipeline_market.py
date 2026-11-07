@@ -414,7 +414,7 @@ def compose_market_prompt(recipe, run: MarketRun, question: str,
     并写出原因 —— 否则模型会把「没查」写成「没有」。
 
     `fact_pack` 非空时把冻结锚点放到 system 最前面（与符号管线同一位置、同一措辞），
-    委派场景下子 run 才不会引用晚于父 run 冻结时点的数据。
+    委派场景下向模型提示父 run 的冻结时点；这不是硬性时点校验，工具可能返回更晚的数据。
     """
     sections = " / ".join(recipe.output_sections) if recipe.output_sections else ""
     rule = (

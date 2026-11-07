@@ -19,8 +19,9 @@ MAX_WATCHLIST = 8
 # 上下文透传口径（2026-11-07 修缺口）：`chat.py` 对两条管线是同一次调用，会递
 # `context` / `fact_pack` / `evidence_sink` / `view_state` / `db` / `user`。路由**不许**
 # 因为分支不同就静默丢参数 —— 全市场分支此前只转 `watchlist`/`context`，另外两个
-# 参数掉了，于是「用真数据写出的全市场结论」对外宣称零证据、委派时也不受父 run
-# 冻结时点约束。现在按各分支**真的会消费**的集合分发：
+# 参数掉了，于是全市场结论缺证据，委派时缺少父 run 冻结时点的提示。
+# 新增的时间约束仍是提示词，并不校验工具数据是否晚于该时点。现在按各分支
+# 真的会消费的集合分发：
 #   - 两条都消费：`context` / `fact_pack` / `evidence_sink` / `trace` / `market`。
 #   - 只有符号管线消费：`db` / `user`（`propose_levels` 写关键位）与 `view_state`
 #     （单标的页面锚点）。`db`/`user` 在全市场分支由 `resolve_watchlist` 消费完，
