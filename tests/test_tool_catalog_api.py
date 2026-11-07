@@ -50,8 +50,8 @@ def test_catalog_lists_every_registered_tool(client):
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
     body = client.get("/api/copilot/tools").json()
-    assert body["total"] == len(CHAT_TOOL_REGISTRY) == 78
-    assert len(body["tools"]) == 78
+    assert body["total"] == len(CHAT_TOOL_REGISTRY) == 80
+    assert len(body["tools"]) == 80
     assert {t["name"] for t in body["tools"]} == set(CHAT_TOOL_REGISTRY)
 
 
