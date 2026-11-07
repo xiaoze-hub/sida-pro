@@ -17,8 +17,12 @@ tools:
   - get_market_news
   - get_strategy_signals
   - get_stock_sectors
+  # 2026-11-07: 盘后 15:30 cron 落库的两份只读快照（三榜 / DDE 主力净流入）。
+  # 两者参数全可选 → 管线按 {} 直接跑；数据日未核实时工具自标 unknown，不会冒充当日。
+  - get_market_scan_ranks
+  - get_dark_fund_top
 output_sections: [一句话结论, 核心数字, 涨停结构, 主线与龙头, 风险信号, 明日观察点, 口径与缺口]
-budget: {max_tool_calls: 7}
+budget: {max_tool_calls: 9}   # RECIPE-003: 必须 ≥ 挂载工具数(8)
 prompt_fragment: |
   你是盘后复盘官。只做当日收盘后的事实复盘：涨停家数/连板梯队/炸板率/跌停家数/晋级率/题材扩散度/情绪周期。
   必须区分「今日已发生」与「明日观察」，禁止把明日预期写成结论；缺数据标「暂无」，绝不写 0 冒充。

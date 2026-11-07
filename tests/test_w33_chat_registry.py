@@ -104,6 +104,8 @@ def test_registry_integrity():
         "get_stock_report",  # 2026-10-26 体检报告(聚合四类数据)
            # 2026-10-21 数据域架构 P0: 目录 + 统一取数入口
            "list_data_domains", "query_data_domain",
+           # 2026-11-07: 市场扫描三榜 / DDE 主力净流入只读快照(权限在 handler 内 enforce_perm)
+           "get_market_scan_ranks", "get_dark_fund_top",
            # 2026-10-22 P0 采集层: 新分析维度提案(handler-only, 不进任何配方)
            "note_new_dimension",
            # 2026-10-23 盘前 Agent B 支线: 当日盘前底稿(self, fallback=False)
@@ -117,7 +119,7 @@ def test_registry_integrity():
            # 2026-10-25: 归因维度 —— 两融(A股杠杆) + 外部宏观(美债/油价/美元/VIX)
            "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 78
+    assert len(CHAT_TOOL_REGISTRY) == 80
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -177,6 +179,8 @@ def test_exported_tool_order():
         "get_trader_playbook",
         "get_stock_report",  # 2026-10-26 体检报告(聚合四类数据)
         "list_data_domains", "query_data_domain",
+        # 2026-11-07: 市场扫描三榜 / DDE 主力净流入只读快照(页面同源权限 + 高价值审计)
+        "get_market_scan_ranks", "get_dark_fund_top",
         # 提案采集(2026-10-22 晚间): schema 就位以打通采集链路, fallback=False 由路由挡闲聊
         "note_new_dimension",
         # 盘前底稿(2026-10-23 B 支线): self 口径, fallback=False 由路由挡闲聊
@@ -186,7 +190,8 @@ def test_exported_tool_order():
            # 2026-10-23 盘后复盘: 涨停/炸板/跌停三池同源同日 + 晋级率 + 情绪周期
            "get_market_replay", "search_news", "web_search_fallback", "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking"}
     # 末尾 22 个（2026-10-26: get_stock_report 归位到末尾、排在 get_market_ranking 前）
-    assert set(tail[-22:]) == {"remember_preference", "create_daily_task",
+    assert set(tail[-24:]) == {"remember_preference", "create_daily_task",
+                               "get_market_scan_ranks", "get_dark_fund_top",
                                "get_intraday_profile", "get_trend_profile",
                                "get_stock_factors", "get_scenario_matrix",
                                "get_fund_structure", "get_order_granularity", "get_factor_winrate",

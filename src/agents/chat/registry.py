@@ -2782,6 +2782,15 @@ from src.agents.chat import tools_catalog as _tools_catalog  # noqa: E402  (仅 
 _tools_catalog.register_catalog_tools()
 
 
+# ──────────────── 市场扫描榜 / DDE 榜只读工具(2026-11-07 接线) ────────────────
+# 位置: 数据域目录工具之后。`tools_scan_read.py` 早已写好权限/审计/时效口径, 但**从未注册**,
+# 模型永远调不到(action 配方也无从挂载)。这里只做注册接线, 实现仍在 tools_scan_read。
+# 只读、无写库、参数全可选 → fallback 保持 True(闲聊里被调也只是读快照, 无副作用)。
+from src.agents.chat import tools_scan_read as _tools_scan_read  # noqa: E402
+
+_tools_scan_read.register_scan_read_tools()
+
+
 # ──────────────── 新分析维度提案(2026-10-22, P0 采集层) ────────────────
 # 位置: 注册表最末。
 #

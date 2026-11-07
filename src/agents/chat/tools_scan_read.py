@@ -737,3 +737,156 @@ def render_dark_fund_top(data: dict[str, Any]) -> str:
         "未触发扫描/刷新；时效由系统时钟推导，数据日见上。"
     )
     return "\n".join(lines)
+
+
+# ──────────────── 注册为 chat 工具（2026-11-07 接线：此前只读层没注册，模型调不到） ────────────────
+# 位置：由 `registry.py` 在数据域目录工具之后调用 `register_scan_read_tools()`。
+# core 工具是连续前缀（tests/test_w33_chat_registry.py 的 EXPECTED_CORE_ORDER index 断言），
+# 因此这两个工具只能追加在尾部，不得插进 core 段中间。
+#
+# 三件必须同时成立，否则「接线」是假的：
+#   1. schema 就位 → 模型看得见（schema=None 的 handler-only 工具模型永远调不到）；
+#   2. 挂进真实配方（postmarket_reviewer 盘后复盘）→ 路由命中时真的下发给模型；
+#   3. fallback=True → 不命中配方时的全量兜底路径同样可达（只读、不写库、无副作用，
+#      不像 note_new_dimension 那种采集工具要 fallback=False 挡住闲聊）。
+#
+# 权限口径与页面**同一函数**：`read_*` 内部走 `_authorize`（身份 → enforce_perm → 高价值审计），
+# 因此 member 无「机会/暗盘资金」权限时的拒绝、pro 的审计行、试用计数全部与
+# GET /api/market-scan/* 逐字同源。工具层只把 HTTPException 翻成一行可读的拒绝文案
+# —— 让 401/403 直接冒泡会炸掉整轮对话（chat 的 _execute_tool 不做 HTTP 语义处理）。
+
+
+def _denial_text(exc: HTTPException) -> str:
+    """HTTPException → 一行拒绝文案：带状态码与页面同源原因，绝不含榜单数据。"""
+    detail = exc.detail
+    msg = str((detail or {}).get("message") if isinstance(detail, dict) else detail or "").strip()
+    if exc.status_code == 401:
+        head = "需要登录（页面同源：未登录不可读取该榜）"
+    elif isinstance(detail, dict) and detail.get("pro_only"):
+        head = f"无权限：{msg or '该榜为 Pro 专属功能'}"
+    elif isinstance(detail, dict) and detail.get("pro_guide"):
+        head = f"无权限：{msg or '试用次数已用完'}"
+    else:
+        head = f"无权限（HTTP {exc.status_code}）：{msg or '当前账号不具备该数据权限'}"
+    return (
+        f"[市场扫描榜] {head}。本工具与页面端点同源同权限"
+        f"（三榜 {PERM_HINT_RANKS} / DDE 榜 {PERM_HINT_DARK}），未取数、不猜数据，也不含买卖建议。"
+    )
+
+
+async def _tool_get_market_scan_ranks(db: Any, args: dict | None = None, user: Any = None) -> str:
+    """chat 工具：三榜只读快照（权限 view_opportunities，同 GET /api/market-scan/ranks）。"""
+    from fastapi import HTTPException as _HTTPException
+
+    market = str((args or {}).get("market") or "CN").strip().upper()
+    try:
+        data = read_market_scan_ranks(db, user, market=market)
+    except _HTTPException as exc:
+        logger.info("get_market_scan_ranks 被拒: %s %s", exc.status_code, exc.detail)
+        return _denial_text(exc)
+    except Exception as exc:  # noqa: BLE001 — 单工具故障不许炸整轮对话，也不许编数据
+        logger.warning("get_market_scan_ranks 失败: %s", exc)
+        return f"[市场扫描榜] 取数失败（{type(exc).__name__}）——本次不猜数据，请稍后重试或看页面同源榜单。"
+    return render_market_scan_ranks(data)
+
+
+async def _tool_get_dark_fund_top(db: Any, args: dict | None = None, user: Any = None) -> str:
+    """chat 工具：DDE 主力净流入只读快照（权限 view_dark，同 /api/market-scan/dark-fund-top）。"""
+    from fastapi import HTTPException as _HTTPException
+
+    market = str((args or {}).get("market") or "CN").strip().upper()
+    try:
+        data = read_dark_fund_top(db, user, market=market)
+    except _HTTPException as exc:
+        logger.info("get_dark_fund_top 被拒: %s %s", exc.status_code, exc.detail)
+        return _denial_text(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_dark_fund_top 失败: %s", exc)
+        return f"[DDE 主力净流入] 取数失败（{type(exc).__name__}）——本次不猜数据，请稍后重试或看页面同源榜单。"
+    return render_dark_fund_top(data)
+
+
+#: 拒绝文案里给模型看的权限点名（与 read_* 内部 enforce_perm 的权限点一致）
+PERM_HINT_RANKS = "view_opportunities"
+PERM_HINT_DARK = "view_dark"
+
+_RANKS_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "get_market_scan_ranks",
+        "description": (
+            "市场扫描三榜**只读快照**（盘后 15:30 cron 落库或页面手动刷新产生）："
+            "新 G 点（疑似待确认）、暗盘资金 TOP（OHLC 日K分摊**对照项**，approximation=True，"
+            "非暗盘拆单）、机构活跃度 TOP、ZLJC 主力进出覆盖数。"
+            "回答「市场扫描榜」「G 点名单」「活跃度排行」「扫描结果」时用它。"
+            "**不触发扫描/刷新**；数据日期未核实会显式标注「未核实、时效不可判断」，"
+            "不得据此声称今日/实时；无快照时返回「暂无」而不是编数字。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "market": {
+                    "type": "string",
+                    "description": "市场代码，目前只有 CN",
+                    "default": "CN",
+                }
+            },
+            "required": [],
+        },
+    },
+}
+
+_DARK_FUND_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "get_dark_fund_top",
+        "description": (
+            "DDE **主力净流入** TOP 只读快照（thsdk dde 口径，source=thsdk_dde）："
+            "主力净额（万元）/成交额，按主力净额排序。"
+            "回答「主力净流入榜」「大单资金流入前几」「DDE 榜」时用它。"
+            "口径是**主力/大单资金**，不是暗盘拆单、也与三榜 dark_top 的 OHLC 分摊近似项互不相通，"
+            "三者禁止合并或互算；**不触发扫描/刷新**；数据日期未核实会显式标注，不得声称实时。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "market": {
+                    "type": "string",
+                    "description": "市场代码，目前只有 CN",
+                    "default": "CN",
+                }
+            },
+            "required": [],
+        },
+    },
+}
+
+
+def register_scan_read_tools() -> None:
+    """把两个只读榜工具登记进 chat 注册表（幂等：重复注册由 registry 报错保证）。"""
+    from src.agents.chat.registry import register_chat_tool
+
+    register_chat_tool(
+        "get_market_scan_ranks",
+        schema=_RANKS_SCHEMA,
+        caliber=(
+            "market_scan_ranks 最新快照（页面 GET /api/market-scan/ranks 同源）· 权限 view_opportunities"
+            " · 数据日未核实=unknown, 不冒充实时 · dark_top 为 OHLC 分摊对照项非暗盘拆单"
+        ),
+        # requires 只接受 ""/"self"(registry 契约): 本工具的权限点在 handler 内由
+        # `enforce_perm`(permissions.py, 含 member 试用计数) 硬校验, 与页面端点同一函数;
+        # 不把权限点名塞进 requires —— 那是运行时只认 "self" 的字段, 写了等于假元数据。
+        requires="",
+    )(_tool_get_market_scan_ranks)
+    register_chat_tool(
+        "get_dark_fund_top",
+        schema=_DARK_FUND_SCHEMA,
+        caliber=(
+            "dark_fund_top_snapshots 最新快照（页面 GET /api/market-scan/dark-fund-top 同源）"
+            " · 权限 view_dark · thsdk DDE 主力净流入, 非暗盘拆单/非 OHLC 近似"
+        ),
+        requires="",  # 权限点在 handler 内 enforce_perm(view_dark), 见上一条说明
+    )(_tool_get_dark_fund_top)
+
+
+__all__ += ["register_scan_read_tools"]
