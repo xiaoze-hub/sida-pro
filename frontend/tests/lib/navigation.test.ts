@@ -171,6 +171,11 @@ describe('③ 权限感知可见性(菜单与命令面板同一判定)', () => {
     expect(visible.has('/portfolio')).toBe(true) // edit_portfolio
   })
 
+  it('大盘观察入口保留无行情权限账号进入原无守卫ETF视图的能力', () => {
+    const market = NAV_ITEMS.find((item) => item.to === '/market-watch')!
+    expect(isNavItemVisible(market, { perms: new Set(), role: 'member', guest: false })).toBe(true)
+  })
+
   it('主力资金入口只在拥有至少一个资金视图权限时可见', () => {
     const funds = NAV_ITEMS.find((item) => item.to === '/funds')!
     for (const perm of ['view_dark', 'view_forecast']) {

@@ -103,7 +103,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // 行情入口是"解析器": 按当前账号持仓/关注跳到 /stocks/:symbol, 本身不该占页签
   { to: '/quotes', labelKey: 'nav.stocks', icon: LineChart, group: 'market', mobile: 'primary', mobileOrder: 3, perm: 'view_quotes', tabbable: false, keywords: ['个股', '工作台', '行情', '预测'] },
   { to: '/heatmap', labelKey: 'nav.heatmap', icon: LayoutGrid, group: 'market', mobile: 'more', perm: 'view_heatmap', keywords: ['热力图', '板块'] },
-  { to: '/market-watch', labelKey: 'nav.marketWatch', icon: BarChart3, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['指数', '宽基', 'ETF'] },
+  // ETF 原入口对已登录用户无额外权限要求；指数页签由工作区单独校验 view_quotes。
+  { to: '/market-watch', labelKey: 'nav.marketWatch', icon: BarChart3, group: 'market', mobile: 'more', keywords: ['指数', '宽基', 'ETF'] },
   { to: '/market-mood', labelKey: 'nav.marketMood', icon: Activity, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['题材', '情绪', '复盘', '连板'] },
   { to: '/opportunities', labelKey: 'nav.opportunities', icon: Sparkles, group: 'opportunity', mobile: 'primary', mobileOrder: 2, perm: 'view_opportunities', keywords: ['扫描', '机会'] },
   { to: '/auction', labelKey: 'nav.auction', icon: Flame, group: 'opportunity', mobile: 'more', perm: 'view_opportunities', keywords: ['竞价', '集合竞价'] },
