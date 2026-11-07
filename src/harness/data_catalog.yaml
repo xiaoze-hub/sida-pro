@@ -206,6 +206,14 @@ domains:
   params: {}
   source: copilot_schedules / notify_channels / notifications
   desc: 本人定时任务（时点/周别/启用状态）、推送渠道、站内通知；只读展示，不创建任务
+- id: etf.flow
+  label: ETF 托底资金（国家队看板）
+  level: L0
+  scope: market
+  params:
+    days: 可选 日度回溯天数（默认 30，上限 120）
+  source: etf_minute_flow / etf_flow_daily
+  desc: 20 只重点宽基 ETF（12 类）分钟/日度合计成交额、分钟覆盖率与全市场 SC8 净申购/托底日样本；净申购只到市场级，不可拆单只
 - id: ops.config
   label: 平台设置与数据源
   level: L2

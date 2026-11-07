@@ -6,7 +6,7 @@
 平台有 132 张表 / 443 路由，但 chat 只有 62 个工具、可触达约 14%。继续堆工具数会把
 模型的选择成本推到不可用。这里改为「**先给目录，再查数据**」：
 
-- `list_data_domains()`  —— 一句话 + 26 个域的一行摘要（≤2500 字），模型据此知道有什么可查；
+- `list_data_domains()`  —— 一句话 + 每个域的一行摘要（≤2500 字），模型据此知道有什么可查；
 - `query_data_domain(domain, params_json)` —— 封闭白名单的统一取数入口。
 
 域目录的唯一权威是 `src/harness/data_catalog.yaml`（**只读，本模块不改它**）。
@@ -36,6 +36,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
+
+from src.core import etf_watch_feed as etf_feed
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -116,7 +118,7 @@ def _cap(text: str, limit: int) -> str:
 
 
 def render_domain_catalog() -> str:
-    """26 个域的一行摘要（`域id | 标签 | 必填参数 | 覆盖什么`），总长 ≤2500 字。"""
+    """全部登记域的一行摘要（`域id | 标签 | 必填参数 | 覆盖什么`），总长 ≤2500 字。"""
     if not DOMAINS:
         return (
             "数据域目录不可用：src/harness/data_catalog.yaml 读不到或为空。"
@@ -1578,6 +1580,10 @@ _SQL: dict[str, str] = {
     ),
 }
 
+#: ETF 看板（etf.flow）：语句与 `/api/etf-watch/*` 共用 `src/core/etf_watch_feed.SQL`，
+#: 页面和参谋因此读同一批表、同一套聚合（含 {ph} 模板键，由调用方展开）。
+_SQL.update(etf_feed.SQL)
+
 #: 客户端传入 db 为 None 时自开/自关会话（测试与定时任务路径）。
 
 def _session(db: Any) -> tuple[Any, bool]:
@@ -2802,6 +2808,185 @@ async def _query_ops_config(db: Any, params: dict[str, Any], user: Any) -> str:
 
 
 
+# ──────────────────────────── ETF 看板（etf.flow，只读） ────────────────────────────
+
+#: 语句键 → 人话标签（读取失败时写进「未取到（原因）」）。
+_ETF_SQL_LABELS = {
+    "etf_minute_rows": "ETF 分钟成交额",
+    "etf_latest_date": "分钟表最新交易日",
+    "etf_baseline_dates": "基线交易日",
+    "etf_baseline_rows": "20 日同期基线",
+    "etf_support": "SC8 市场级净申购",
+    "etf_daily_dates": "日度交易日",
+    "etf_daily_minute": "日度分类成交额",
+    "etf_daily_net": "日度净申购",
+}
+
+_STATE_CN = {
+    "surge": "放量（≥1.5× 同期基线）",
+    "active": "偏活跃（≥1.15×）",
+    "normal": "与同期基线相当",
+    "quiet": "缩量（≤0.7×）",
+    "no_baseline": "无同期基线可比",
+    "insufficient": "数据不全（覆盖不足 80%）",
+    "no_data": "未取到",
+}
+
+_PHASE_CN = {"pre": "盘前", "live": "盘中", "closed": "已收盘", "non_trading_day": "非交易日"}
+
+
+_SQL_WORDS = ("SELECT", "INSERT", "UPDATE", "DELETE", "FROM")
+
+
+def _etf_reason(exc: Exception) -> str:
+    """异常 → 短原因，且**切掉任何 SQL 正文**（`_clean_reason` 只挡 `[SQL:` 一种形态）。"""
+    txt = _clean_reason(exc)
+    upper = txt.upper()
+    cut = len(txt)
+    for word in _SQL_WORDS:
+        idx = upper.find(word)
+        if idx != -1:
+            cut = min(cut, idx)
+    head = txt[:cut].strip(" :：-—")
+    return (head or type(exc).__name__)[:120]
+
+
+def _etf_runner(db: Any, missing: list[str]):
+    """语句键 → 行；失败写 missing 返回空（不补 0、不炸整域）。"""
+
+    def run(key: str, params: dict[str, Any] | None = None, fmt: dict[str, str] | None = None):
+        try:
+            if not fmt:
+                return _read(db, key, params or {})
+            from sqlalchemy import text as _text
+
+            sql = etf_feed.SQL[key].format(**fmt)
+            session, own = _session(db)
+            try:
+                return [dict(r) for r in session.execute(_text(sql), params or {}).mappings().all()]
+            finally:
+                if own:
+                    session.close()
+        except Exception as exc:  # noqa: BLE001 — 单表不可读不该让整域失败
+            reason = _etf_reason(exc)
+            missing.append(f"{_ETF_SQL_LABELS.get(key, key)} 读取失败（{reason}）")
+            logger.warning("ETF 语句 %s 失败: %s", key, reason)
+            return []
+
+    return run
+
+
+def render_etf_flow(
+    *,
+    as_of: str,
+    source: str,
+    intraday: dict[str, Any] | None = None,
+    support: dict[str, Any] | None = None,
+    missing: list[str] | None = None,
+) -> str:
+    """ETF 托底资金：篮子成交额 / 分钟覆盖 / 时段 / 市场级 SC8，口径逐条标注。"""
+    sections: list[str] = []
+    miss = list(missing or [])
+
+    intraday = intraday or {}
+    totals = intraday.get("totals")
+    if totals:
+        ratio = totals.get("ratio_vs_baseline")
+        state = _STATE_CN.get(str(intraday.get("state") or ""), str(intraday.get("state") or ""))
+        phase = _PHASE_CN.get(str(intraday.get("phase") or ""), str(intraday.get("phase") or ""))
+        sections.append(
+            f"- **篮子成交额**：20 只重点宽基 ETF（12 类）合计 {_num(totals.get('cum_yi'))} 亿元"
+            f"（截至 {totals.get('last_minute') or '未知'}）；20 日同期均值 "
+            f"{_num(totals.get('baseline_avg_yi'))} 亿元，比值 {_num(ratio, 3)} —— {state}"
+        )
+        minutes = int(totals.get("minutes") or 0)
+        full = int(totals.get("full_minutes") or 0)
+        cov = totals.get("coverage")
+        cov_txt = f"{_num((cov or 0) * 100, 1)}%" if cov is not None else "未披露"
+        sections.append(
+            f"- **分钟覆盖**：{full}/{minutes} 分钟 20 只齐全（{cov_txt}）；"
+            f"覆盖不足 80% 判「数据不全」，不参与活跃度结论"
+        )
+        if intraday.get("fallback_from"):
+            sections.append(
+                f"- **时点**：{phase}；当日（{intraday.get('fallback_from')}）分钟未就绪，"
+                f"已回退到最近交易日 {intraday.get('date')}（非当日，勿当今日读数）"
+            )
+        else:
+            sections.append(f"- **时点**：{phase}（{intraday.get('date') or '未知'}）")
+    elif not any("分钟成交额" in m for m in miss):
+        # 读表已经失败时不再叠加「无数据」措辞，避免把故障说成「今天没行情」。
+        note = intraday.get("note") or "当日无分钟数据"
+        miss.append(f"篮子成交额：未取到（{note}）")
+
+    sup = support or {}
+    latest = sup.get("latest") or {}
+    if sup.get("state") == "ok" and latest:
+        pct = sup.get("latest_percentile_in_support_days")
+        sections.append(
+            f"- **市场级 SC8**：{latest.get('date') or '未知'} 净申购 "
+            f"{_num(latest.get('net_sub_yi'))} 亿元（规模 {_num(latest.get('scale_yi'))} 亿元）；"
+            f"托底日（单日净申购 ≥{_num(sup.get('threshold_yi'), 0)} 亿元）"
+            f"{sup.get('support_count')}/{sup.get('sample_count')} 个样本，"
+            f"最新日在托底日中分位 {_num(pct, 1)}%"
+        )
+    elif sup:
+        miss.append(f"市场级 SC8：未取到（{sup.get('note') or '无落库数据'}）")
+    else:
+        miss.append("市场级 SC8：未取到（本次未取到该表）")
+
+    sections.append(
+        "- **口径提醒**：SC8 是**全市场** ETF 口径，不等于 20 只篮子的净申购，"
+        "也不能按篮子拆分；单只 ETF 净申购不可用（通达信份额为当前值回填，实测零变化）。"
+        "成交额为 20 只篮子合计，单位亿元。"
+    )
+    return render_domain_sections(
+        "etf.flow", as_of=as_of, source=source, sections=sections, missing=miss
+    )
+
+
+async def _query_etf_flow(db: Any, params: dict[str, Any], user: Any) -> str:
+    """ETF 看板只读域：与 /api/etf-watch/* 同源同口径。"""
+    missing: list[str] = []
+    run = _etf_runner(db, missing)
+    try:
+        days = min(max(int(params.get("days") or 30), 5), 120)
+    except (TypeError, ValueError):
+        days = 30
+
+    now = datetime.now(_CST)
+    intraday = etf_feed.intraday_payload(run, None, now=now)
+    support = etf_feed.support_payload(run, 750)
+    if support.get("state") != "ok":
+        daily = etf_feed.daily_payload(run, days)
+        if daily.get("state") == "ok" and daily.get("net_sub_yi"):
+            last_val = daily["net_sub_yi"][-1]
+            if last_val is not None:
+                support = {
+                    "state": "ok",
+                    "threshold_yi": etf_feed.ew.SUPPORT_FLOW_THRESHOLD_YI,
+                    "latest": {
+                        "date": daily["dates"][-1],
+                        "scale_yi": daily["scale_yi"][-1],
+                        "net_sub_yi": last_val,
+                    },
+                    "support_count": sum(
+                        1 for v in daily["net_sub_yi"]
+                        if v is not None and v >= etf_feed.ew.SUPPORT_FLOW_THRESHOLD_YI
+                    ),
+                    "sample_count": sum(1 for v in daily["net_sub_yi"] if v is not None),
+                    "latest_percentile_in_support_days": None,
+                }
+    as_of = str(intraday.get("date") or (support.get("latest") or {}).get("date") or "未知")
+    return render_etf_flow(
+        as_of=as_of,
+        source="etf_minute_flow / etf_flow_daily（TDX/TQ，只读）",
+        intraday=intraday,
+        support=support,
+        missing=missing,
+    )
+
+
 # ──────────────────────────── 统一入口 ────────────────────────────
 
 
@@ -2870,6 +3055,7 @@ async def query_data_domain(
         "notify.task": _query_notify_task,
         "backtest": _query_backtest,
         "ops.config": _query_ops_config,
+        "etf.flow": _query_etf_flow,
         "limit.pool": None,  # 见下（自带只读 SQL）
         "lhb.daily": None,   # 见下（自带只读 SQL）
         "theme.mood": None,  # 见下（自带只读 SQL）
@@ -2944,7 +3130,7 @@ _CATALOG_SCHEMA = {
     "function": {
         "name": "list_data_domains",
         "description": (
-            "列出平台可查询的**数据域目录**（26 个域：域id | 标签 | 必填参数 | 覆盖什么）。"
+            f"列出平台可查询的**数据域目录**（{len(DOMAINS)} 个域：域id | 标签 | 必填参数 | 覆盖什么）。"
             "任何『平台有哪些数据可查 / 这个数据从哪来』的问题，或使用 query_data_domain 之前，"
             "都先调本工具拿目录，不要凭印象猜表名或域 id。"
         ),
@@ -2958,11 +3144,12 @@ _QUERY_SCHEMA = {
         "name": "query_data_domain",
         "description": (
             "**数据域统一取数入口**：传域 id + 参数，返回人话 Markdown（首行「域 / 时点 / 来源表」，"
-            "末尾缺数据会写「未取到（原因）」）。26 个域全部已接入。"
+            f"末尾缺数据会写「未取到（原因）」）。{len(DOMAINS)} 个域全部已接入。"
             "市场/个股类：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date、min_streak）、"
             "lhb.daily（龙虎榜/席位，可选 symbol、date）、theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
             "market.index（大盘指数/两市成交额）、market.breadth（涨跌家数+ADL/ARMS 分位+九档分布+市场状态）、"
             "market.mainline（主线榜排名/主线分/龙头，可选 top_n）、board.daily（板块涨跌与资金排行，可选 top_n）、"
+            "etf.flow（20 只重点宽基 ETF 篮子成交额+分钟覆盖率+全市场 SC8 净申购/托底日样本，可选 days）、"
             "strategy.signal（策略因子分+信号发出/T+1T+5 事后收益，可选 top_n）、"
             "auction.flow（集合竞价 9:25 快照/逐帧/异动池，可选 symbol、limit）、"
             "stock.quote（实时报价，必填 symbol，库内行超 60s 转实时取数）、"
@@ -3035,6 +3222,7 @@ __all__ = [
     "render_auction_flow",
     "render_backtest",
     "render_board_daily",
+    "render_etf_flow",
     "render_domain_catalog",
     "render_domain_sections",
     "render_kline",

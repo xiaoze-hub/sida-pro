@@ -2,7 +2,7 @@
 """数据域架构 P0 验收（2026-10-21）：list_data_domains + query_data_domain。
 
 覆盖 7 条硬要求（缺一条就是这套架构跑偏）：
-1. 目录返回 26 个域且 ≤2500 字（模型上下文预算）；
+1. 目录返回全部登记域（≥26 个）且 ≤2500 字（模型上下文预算）；
 2. 域不在白名单 → 明确拒绝，并指回 list_data_domains；
 3. 必填参数（symbol）缺省 → 拒绝并说明，不猜代码；
 4. 渲染函数对「空结果」写「未取到」，**不写 0、不编造**；
@@ -39,11 +39,11 @@ def _run(coro):
 
 # ──────────────────────────── 1. 目录 ────────────────────────────
 
-def test_catalog_lists_26_domains_within_budget():
+def test_catalog_lists_all_domains_within_budget():
     out = tc.render_domain_catalog()
     assert len(out) <= tc.MAX_CATALOG_CHARS <= 2500
     ids = [line.split(" | ")[0] for line in out.splitlines() if " | " in line]
-    assert len(ids) == 26
+    assert len(ids) == len(tc.DOMAINS)
     assert set(ids) == tc.DOMAIN_IDS
     # 一行摘要必须带「必填参数 + 覆盖什么」，否则模型无法选域
     assert all(line.count(" | ") >= 3 for line in out.splitlines()[1:] if " | " in line)
@@ -88,11 +88,11 @@ def test_bad_params_json_rejected():
 
 
 def test_no_domain_is_left_unimplemented():
-    """26 个域全部接线：没有域再报「尚未接入实现 / P1 待接」。"""
+    """全部登记域接线：没有域再报「尚未接入实现 / P1 待接」。"""
     import yaml
 
     raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
-    assert len(raw["domains"]) == 26
+    assert len(raw["domains"]) == len(tc.DOMAINS)
     for d in raw["domains"]:
         domain = str(d["id"])
         assert str(d.get("source") or "").strip(), f"{domain} 的 source 不能为空"
@@ -103,7 +103,7 @@ def test_no_domain_is_left_unimplemented():
 
 
 def test_all_twenty_six_domains_are_wired(monkeypatch):
-    """全部 26 个域都能路由到实现（转发层给占位，读库层全当空表）。"""
+    """全部登记域都能路由到实现（转发层给占位，读库层全当空表）。"""
     import yaml
 
     _canned_reads(monkeypatch, {})   # 不碰真库：全部当空表处理
@@ -114,7 +114,7 @@ def test_all_twenty_six_domains_are_wired(monkeypatch):
     monkeypatch.setattr(tc, "_delegate", _fake)
     raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
     domains = [str(d["id"]) for d in raw["domains"]]
-    assert len(domains) == 26
+    assert len(domains) == len(tc.DOMAINS)
     for domain in sorted(domains):
         out = _run(tc.query_data_domain(None, {"domain": domain, "params_json": '{"symbol": "002361"}'}))
         assert "尚未接入实现" not in out, f"{domain} 未接线"
@@ -173,7 +173,7 @@ def test_whitelist_matches_yaml_exactly():
     yaml_ids = {str(d["id"]) for d in raw["domains"]}
     assert yaml_ids == tc.DOMAIN_IDS
     assert yaml_ids == {d["id"] for d in tc.DOMAINS}
-    assert len(yaml_ids) == 26
+    assert len(yaml_ids) == len(tc.DOMAINS)
 
 
 def test_required_params_come_from_yaml():
@@ -729,7 +729,7 @@ def test_stock_quote_stale_and_tool_dead_marks_expired(monkeypatch):
 
 
 # ──────────────────────────── 11. P2 十二域（2026-10-22） ────────────────────────────
-# 覆盖：26 域全部路由到实现 / 用户域 user=None 拒绝 / 空结果写「未取到」不补 0 /
+# 覆盖：全部域路由到实现 / 用户域 user=None 拒绝 / 空结果写「未取到」不补 0 /
 #       每域输出含「时点」「来源」/ 用户域按 user_id 过滤 / 只读 SQL 全带 LIMIT。
 
 #: 2026-10-22 新接的 12 个域。
@@ -783,15 +783,15 @@ def _stub_reads(monkeypatch, table: dict[str, list[dict]]):
     monkeypatch.setattr(tc, "_read_one_safe", lambda db, key, params=None, missing=None, label="": _read_one(db, key, params))
 
 
-# ── 11.1 全部 26 域都能路由到实现（不允许「P1 待接」） ────────────────────────────
+# ── 11.1 全部登记域都能路由到实现（不允许「P1 待接」） ────────────────────────────
 
-def test_all_26_domains_route_to_an_implementation(monkeypatch):
-    """目录里 26 个域每一个都能路由到实现 —— 没有域再报「尚未接入」。"""
+def test_all_domains_route_to_an_implementation(monkeypatch):
+    """目录里每个域都能路由到实现 —— 没有域再报「尚未接入」。"""
     import yaml
 
     raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
     domains = [str(d["id"]) for d in raw["domains"]]
-    assert len(domains) == 26
+    assert len(domains) == len(tc.DOMAINS)
     _stub_reads(monkeypatch, {})
     _no_delegate(monkeypatch)
     for domain in sorted(domains):

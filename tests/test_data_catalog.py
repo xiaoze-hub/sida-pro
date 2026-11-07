@@ -1,7 +1,7 @@
 """数据域目录（data_catalog.yaml）与覆盖率生成器的回归防护。
 
 三块：
-1. 目录本身可解析、结构合法（26 域 / id 唯一 / 必填字段 / level / scope 枚举）；
+1. 目录本身可解析、结构合法（≥26 域 / id 唯一 / 必填字段 / level / scope 枚举）；
 2. 生成器能真跑通（直接 import 调函数，不 subprocess），路由/表规模符合平台现状；
 3. 「域引用了不存在的表」这条分支真的能报出来，并且 --check 会以 exit 1 拦截
    —— 这是目录写错时唯一能自动挡住的地方，必须有负例覆盖。
@@ -23,7 +23,12 @@ CATALOG_PATH = REPO_ROOT / "src" / "harness" / "data_catalog.yaml"
 REQUIRED_FIELDS = ("id", "label", "level", "scope", "params", "source", "desc")
 VALID_LEVELS = {"L0", "L1", "L2"}
 VALID_SCOPES = {"market", "symbol", "symbol_or_market", "user", "admin"}
+#: 目录规模下限（2026-10 的 26 域）；实际数量以 yaml 为准，新增域不必改这里。
 EXPECTED_DOMAINS = 26
+
+
+def _catalog_domain_count() -> int:
+    return len(yaml.safe_load(CATALOG_PATH.read_text(encoding="utf-8"))["domains"])
 
 
 @pytest.fixture(scope="module")
@@ -77,8 +82,8 @@ def test_catalog_file_exists_and_is_mapping(catalog_raw):
     assert isinstance(catalog_raw.get("domains"), list)
 
 
-def test_catalog_has_26_domains(catalog_raw):
-    assert len(catalog_raw["domains"]) == EXPECTED_DOMAINS
+def test_catalog_has_at_least_26_domains(catalog_raw):
+    assert len(catalog_raw["domains"]) >= EXPECTED_DOMAINS
 
 
 def test_domain_ids_globally_unique(gen, catalog_raw):
@@ -150,7 +155,7 @@ def test_tables_parsed_at_least_100(gen, report):
 
 
 def test_generate_returns_consistent_report(gen, report):
-    assert len(report.domains) == EXPECTED_DOMAINS
+    assert len(report.domains) == _catalog_domain_count()
     covered = report.covered_tables
     assert covered <= set(report.tables), "covered 里出现了不存在的表"
     assert set(report.uncovered_tables) == set(report.tables) - covered
