@@ -38,16 +38,16 @@ describe('applyRunSteps', () => {
     ])
     expect(out.items.find((item) => item.key === 'get_stock_chips')?.status).toBe('unknown')
   })
-  it('轨迹里成功的工具把 unknown 补成 ok（13 未确认 → 有据可查）', () => {
+  it('轨迹返回仅标记 returned，不等于确认数据有效', () => {
     const out = applyRunSteps(state(UNKNOWN_13), [
       { tool: 'get_stock_quote', ok: true },
       { tool: 'get_technical_analysis', ok: true },
       { tool: 'get_stock_chips', ok: true },
       { tool: 'get_main_intent', ok: true },
     ])
-    expect(out.done).toBe(4)
+    expect(out.done).toBe(0)
     expect(out.unknown).toBe(0)
-    expect(out.items.every((i) => i.status === 'ok')).toBe(true)
+    expect(out.items.every((i) => i.status === 'returned')).toBe(true)
   })
 
   it('轨迹里失败的工具标 failed，不并进已取', () => {
@@ -57,15 +57,17 @@ describe('applyRunSteps', () => {
     ])
     expect(out.items.find((i) => i.key === 'get_stock_chips')?.status).toBe('failed')
     expect(out.failed).toBe(1)
-    expect(out.done).toBe(1)
+    expect(out.done).toBe(0)
+    expect(out.items.find((i) => i.key === 'get_stock_quote')?.status).toBe('returned')
   })
 
-  it('同一工具多次调用：任一成功即 ok（多标的扫描单只失败不算整维度没数据）', () => {
+  it('同一工具多次调用：任一返回则为 returned，不证明数据有效', () => {
     const out = applyRunSteps(state(UNKNOWN_13), [
       { tool: 'get_stock_chips', ok: false },
       { tool: 'get_stock_chips', ok: true },
     ])
-    expect(out.items.find((i) => i.key === 'get_stock_chips')?.status).toBe('ok')
+    expect(out.items.find((i) => i.key === 'get_stock_chips')?.status).toBe('returned')
+    expect(out.done).toBe(0)
   })
 
   it('轨迹里没有的工具保持 unknown（不猜成功）', () => {
