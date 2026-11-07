@@ -1,4 +1,4 @@
-## release: v0.11.0（数智参谋原生融合 + 设置写入权限收口 + ETF 数据完整性）
+## release: v0.11.2（数智参谋原生融合 + 设置写入权限收口 + ETF 数据完整性）
 
 ### fix-设置写入越权（安全）
 - `PUT /api/settings/{key}` 与 `/avatar` 增加端点级 `manage_settings` 校验，按写库的实时角色判定（降权立即生效），服务身份/无身份 fail closed；此前仅靠中间件前缀，`/api/v1/settings/*` 别名可绕过，普通成员能改 `http_proxy`/凭证键。
