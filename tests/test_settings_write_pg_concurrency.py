@@ -29,8 +29,13 @@ def _admin_url() -> str:
     url = (os.getenv(ADMIN_URL_ENV) or "").strip()
     if not url:
         pytest.skip(f"未配置 {ADMIN_URL_ENV}(本机隔离 PG), 跳过并发事务用例")
-    if "127.0.0.1" not in url and "localhost" not in url:
-        pytest.skip("仅在本机隔离 PG 上执行(拒绝远程/生产库)")
+    from sqlalchemy.engine import make_url
+
+    parsed = make_url(url)
+    if (parsed.get_backend_name() != 'postgresql'
+            or parsed.host not in {'localhost', '127.0.0.1', '::1'}
+            or parsed.database != 'postgres'):
+        raise ValueError('破坏性测试只允许本机 postgres 维护库')
     return url
 
 
@@ -43,17 +48,20 @@ def pg_engine():
     try:
         with admin.connect() as c:
             c.execute(text(f'CREATE DATABASE "{name}"'))
-    except Exception as exc:  # noqa: BLE001 —— 连不上就跳过, 不给 CI 假红
+    except Exception:  # noqa: BLE001 —— 不输出连接异常，避免泄露凭据
         admin.dispose()
-        pytest.skip(f"隔离 PG 不可用: {exc!r}")
+        pytest.skip("隔离 PG 不可用或无建库权限")
 
     url = _admin_url().rsplit("/", 1)[0] + "/" + name
     engine = create_engine(url, pool_size=8, max_overflow=8)
     from src.web.models import AppSettings, AuditLog
 
-    AppSettings.__table__.create(engine)
-    AuditLog.__table__.create(engine)
     try:
+        with engine.connect() as conn:
+            if conn.execute(text("SELECT current_database()")).scalar_one() != name:
+                raise RuntimeError("临时数据库身份不匹配")
+        AppSettings.__table__.create(engine)
+        AuditLog.__table__.create(engine)
         yield engine
     finally:
         engine.dispose()
