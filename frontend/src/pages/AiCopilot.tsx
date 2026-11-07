@@ -56,6 +56,7 @@ import {
 } from '@/lib/copilot/chart-context'
 import { currentAccountId } from '@/lib/copilot/annotationLedger'
 import { ConversationSidebar } from '@/components/copilot/ConversationSidebar'
+import { CopilotEntryMenu } from '@/components/copilot/CopilotEntryMenu'
 import { MessageActions } from '@/components/copilot/MessageActions'
 import { ToolTimeline } from '@/components/copilot/ToolTimeline'
 import { MemoryPanel } from '@/components/copilot/MemoryPanel'
@@ -1732,7 +1733,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           ) : null}
           {/*
             2026-10-26 工具条收拢：原来 6 个并列小按钮 + 3 个右侧控件挤成一条，
-            视觉重心全跑到顶部。现在只留高频两个（过程 / 治理），其余收进「更多」。
+            视觉重心全跑到顶部。现在只留高频「过程」，记忆/定时/提案收进「更多」，
+            全页视图（任务/经验库/工具/提案/治理…）收进「入口」下拉（2026-11-07）。
           */}
           {(['runs'] as const).map((tab) => (
             <button
@@ -1771,13 +1773,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               ))}
             </div>
           </details>
-          <a
-            href="/copilot-governance"
-            className="h-7 rounded-md px-2 text-[12px] leading-7 text-muted-foreground hover:bg-muted hover:text-foreground"
-            data-testid="copilot-governance-link"
-          >
-            治理
-          </a>
+          {/* 2026-11-07 入口整合：任务/经验库/工具/提案/Agent/并行/治理 收进一个下拉，
+              取代原来的「治理」单链接。不再新增侧栏，也不动 rail 里的过程/提案面板。 */}
+          <CopilotEntryMenu />
           <div className="ml-auto flex items-center gap-2">
             {metrics ? (
               <span className="hidden text-[12px] text-muted-foreground xl:inline">
