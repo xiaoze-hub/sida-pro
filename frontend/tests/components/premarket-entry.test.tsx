@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // 入口扶正(2026-10-23) 回归钉: 盘前/盘后分析入口
-//   1. ReportsHub 默认打开「分析」Tab(history 内容),「底稿归档」排第二位(?tab= 兼容不变);
+//   1. ReportsHub 默认打开「分析记录」Tab(history 内容),「定时任务归档」排第二位(?tab= 兼容不变);
 //   2. 点「▶ 立即分析」→ premarketApi.run() 入队 → 按钮转「分析生成中…」并禁用(防连点);
 //   3. run 429/报错 → 显式内联展示原因(不静默吞错), 按钮可重试;
 //   4. 点「问参谋」→ 跳 /ai-copilot?agent=premarket_strategist&q=<编码问题>;
@@ -239,15 +239,18 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('ReportsHub 盘前入口(入口扶正 2026-10-23)', () => {
-  it('默认打开「报告中心」Tab(原 history 内容, L3-D 改名),「底稿归档」排第二位', async () => {
+  it('默认打开「分析记录」Tab(原 history 内容, P1 按数据源正名),「定时任务归档」排第二位', async () => {
     renderHub()
-    // 默认 Tab = 分析: history 页空态落地(不要求 URL 带 ?tab=)
+    // 默认 Tab = 分析记录: history 页空态落地(不要求 URL 带 ?tab=)
     await screen.findByText('暂无分析记录')
-    // 两个 Tab 都在: 「报告中心」默认选中,「底稿归档」在第二位未选中
-    const analysisTab = screen.getByRole('tab', { name: '报告中心' })
+    // 两个 Tab 都在: 「分析记录」默认选中,「定时任务归档」在第二位未选中
+    const analysisTab = screen.getByRole('tab', { name: '分析记录' })
     expect(analysisTab.getAttribute('aria-selected')).toBe('true')
-    const archiveTab = screen.getByRole('tab', { name: '底稿归档' })
+    const archiveTab = screen.getByRole('tab', { name: '定时任务归档' })
     expect(archiveTab.getAttribute('aria-selected')).toBe('false')
+    // 旧名字不再出现(避免「报告中心 / 底稿归档」两套叫法并存)
+    expect(screen.queryByRole('tab', { name: '报告中心' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: '底稿归档' })).toBeNull()
   })
 
   it('点「▶ 立即分析」触发 premarketApi.run(), 入队后转「分析生成中…」并禁用防连点', async () => {
