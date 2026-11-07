@@ -2879,8 +2879,6 @@ _ETF_SQL_LABELS = {
     "etf_daily_dates": "日度交易日",
     "etf_daily_minute": "日度分类成交额",
     "etf_daily_net": "日度净申购",
-    "etf_daily_minutes": "日度分钟覆盖",
-    "etf_daily_net_window": "SC8 窗口数据日",
 }
 
 _STATE_CN = {
@@ -2951,10 +2949,18 @@ def render_etf_flow(
     source: str,
     intraday: dict[str, Any] | None = None,
     support: dict[str, Any] | None = None,
-    daily: dict[str, Any] | None = None,
     missing: list[str] | None = None,
 ) -> str:
-    """ETF 托底资金：篮子成交额 / 分钟覆盖 / 时段 / 市场级 SC8，口径逐条标注。"""
+    """ETF 托底资金：**分钟级已采集累计** / 分钟覆盖 / 时段 / 市场级 SC8 原始样本。
+
+    参谋出口只报两类可证事实：
+    1. 分钟表里**已采集**的篮子成交额累计（截至最后一根分钟线）+ 覆盖率与缺失；
+    2. 市场级 SC8 的原始最新日与真实样本窗口（`support` 读源原样）。
+
+    多日「日度合计」一律不输出：分钟表里「某日有行」既证明不了 240 根分钟采齐，
+    也证明不了 20 只标的齐，按日求和就是把残缺日冒充全天成交额。跨表再把 SC8
+    净申购按分钟日期相加，等于两个不同样本窗口的伪造累计 —— 两者都不做。
+    """
     sections: list[str] = []
     miss = list(missing or [])
 
@@ -2971,7 +2977,8 @@ def render_etf_flow(
         gate = int(totals.get("min_etfs_for_complete") or 0) or etf_feed.min_etfs_for_complete(expected)
         base_avg = totals.get("baseline_avg_yi")
         sections.append(
-            f"- **篮子成交额**：{expected} 只重点宽基 ETF（12 类）合计 {_num(totals.get('cum_yi'))} 亿元"
+            f"- **篮子成交额（分钟级已采集累计，非全天成交额）**：{expected} 只重点宽基 ETF（12 类）"
+            f"已采集合计 {_num(totals.get('cum_yi'))} 亿元"
             f"（截至 {totals.get('last_minute') or '未知'}）；同期基线 "
             f"{'未披露' if base_avg is None else _num(base_avg) + ' 亿元'}，"
             f"比值 {_num(ratio, 3)} —— {state}"
@@ -2985,7 +2992,7 @@ def render_etf_flow(
         dropped = int(totals.get("baseline_days_dropped") or 0)
         base_txt = f"- **基线样本**：{days_used if days_used is not None else '未披露'}/{days_req} 个交易日「同一分钟」累计均值"
         if totals.get("baseline_confirmed"):
-            base_txt += "（窗口完整）"
+            base_txt += "（基线样本齐备）"
         else:
             if missing_days:
                 base_txt += f"；窗口内缺 {missing_days} 个交易日样本（未采集还是非交易日未确认）"
@@ -2998,10 +3005,23 @@ def render_etf_flow(
         strict = int(totals.get("strict_minutes") or 0)  # 真正 20 只全齐的分钟
         cov = totals.get("coverage")
         cov_txt = f"{_num((cov or 0) * 100, 1)}%" if cov is not None else "未披露"
-        sections.append(
-            f"- **分钟覆盖**：{minutes} 分钟中 {full} 个达 ≥{gate}/{expected} 只（{cov_txt}），"
-            f"{strict} 个为 {expected} 只全齐；覆盖率 <80% 判「数据不全」，不参与活跃度结论"
+        cov_line = (
+            f"- **分钟覆盖（分母仅已采集分钟）**：已采集 {minutes} 分钟，其中 {full} 个达 "
+            f"≥{gate}/{expected} 只（{cov_txt}），{strict} 个为 {expected} 只全齐；"
+            f"覆盖率 <80% 判「数据不全」，不参与活跃度结论；"
+            f"未采集的分钟不在分母里，既不补 0 也不当成交额缺失之外的结论依据"
         )
+        no_amt = int(totals.get("minutes_without_amount") or 0)
+        if no_amt:
+            cov_line += (
+                f"；其中 {no_amt} 分钟金额全是 NULL（未落库），未按 0 计入累计，"
+                f"也不计为达标分钟"
+            )
+        # 数据日已收盘而最后一根分钟线不到 15:00 → 收盘段就是「缺失」，只能如实点名。
+        last_min = str(totals.get("last_minute") or "")
+        if str(intraday.get("phase") or "") == "closed" and last_min and last_min < "1500":
+            cov_line += f"；⚠️ 数据日已收盘，但最后一根分钟线是 {last_min}，收盘段（至 15:00）未采集"
+        sections.append(cov_line)
         stamp = intraday.get("session_time") or ""
         ts = f"- **时点**：当前时段 {session or '未披露'}"
         if stamp:
@@ -3022,123 +3042,33 @@ def render_etf_flow(
     latest = sup.get("latest") or {}
     if sup.get("state") == "ok" and latest:
         pct = sup.get("latest_percentile_in_support_days")
-        sections.append(
+        line = (
             f"- **市场级 SC8**：{latest.get('date') or '未知'} 净申购 "
             f"{_num(latest.get('net_sub_yi'))} 亿元（规模 {_num(latest.get('scale_yi'))} 亿元）；"
             f"托底日（单日净申购 ≥{_num(sup.get('threshold_yi'), 0)} 亿元）"
             f"{sup.get('support_count')}/{sup.get('sample_count')} 个样本，"
             f"最新日在托底日中分位 {_num(pct, 1)}%"
         )
+        # 样本窗口按读源返回的首末行原样写（不做任何窗口对齐或补日）。
+        series = sup.get("series") or []
+        if series:
+            first_d = series[0].get("date")
+            last_d = series[-1].get("date")
+            if first_d and last_d and first_d != last_d:
+                line += f"；样本窗口 {first_d}~{last_d}"
+            elif last_d:
+                line += f"；样本窗口仅 {last_d} 一日"
+        sections.append(line)
     elif sup:
         miss.append(f"市场级 SC8：未取到（{sup.get('note') or '无落库数据'}）")
     else:
         miss.append("市场级 SC8：未取到（本次未取到该表）")
 
-    day = daily or {}
-    dates = day.get("dates") or []
-    sc8_out = day.get("sc8_days_not_in_minutes") or []
-    if day.get("state") == "ok" and dates:
-        # 2026-11-07 修: 原实现 `sum([v for v in amounts if v is not None])` —— 全 None 时
-        # sum([])==0，出口把「一个成交额都没采到」说成「合计 0.00 亿元」，是凭空造数。
-        # 另外各指标的样本日期常常不同（成交额来自分钟表、净申购来自 etf_flow_daily），
-        # 标题却声称「近 N 日合计」，等于把不同样本当同一窗口比较。
-        # 三审补两条：日度日期只来自分钟表 → 分钟表没更新的 SC8 数据日必须单独列；
-        # 单日只要有几根分钟线就把该日当「完整日」算进合计 → 改为先证覆盖再给合计。
-        req = int(day.get("days_requested") or len(dates))
-        amt = [
-            (d, float(v))
-            for d, v in zip(dates, day.get("total_amount_yi") or [])
-            if v is not None
-        ]
-        net_pairs = [
-            (d, float(v))
-            for d, v in zip(dates, day.get("net_sub_yi") or [])
-            if v is not None
-        ]
-        span = f"{dates[0]}~{dates[-1]}" if len(dates) > 1 else dates[0]
-        stats = day.get("day_stats") or {}
-        min_minutes = int(day.get("min_full_day_minutes") or etf_feed.MIN_FULL_DAY_MINUTES)
-        complete = [d for d in dates if (stats.get(d) or {}).get("complete")]
-        partial = [d for d in dates if d not in complete]
-        line = (
-            f"- **日度（最近 {len(dates)} 个有数据交易日 / 请求 {req} 日，"
-            f"分钟数据日窗口 {span}）**："
-        )
-        if amt:
-            a_span = f"{amt[0][0]}~{amt[-1][0]}" if len(amt) > 1 else amt[0][0]
-            full_amt = sum(v for d, v in amt if d in complete)
-            part_amt = sum(v for d, v in amt if d in partial)
-            line += f"篮子成交额 {len(amt)}/{len(dates)} 日有成交额采集（{a_span}）"
-            if complete:
-                line += (
-                    f"；其中 {len(complete)} 日可证全天完整，完整日合计 "
-                    f"{_num(full_amt)} 亿元（{', '.join(complete)}）"
-                )
-            else:
-                line += "；**无一日可证全天完整 → 不给日合计**"
-            if partial:
-                def _day_brief(d: str) -> str:
-                    st = stats.get(d) or {}
-                    if not st.get("stats_available"):
-                        return f"{d} 无覆盖统计"
-                    return (
-                        f"{d} 仅 {int(st.get('minutes') or 0)} 分钟/"
-                        f"{int(st.get('etfs') or 0)} 只"
-                    )
-
-                detail = "；".join(_day_brief(d) for d in partial[:3])
-                if len(partial) > 3:
-                    detail += f" 等 {len(partial)} 日"
-                line += (
-                    f"；其余 {len(partial)} 日仅部分采集（{detail}），"
-                    f"已采集部分 {_num(part_amt)} 亿元 —— 完整性未确认，"
-                    f"既非全天成交额也非有效样本，不可并入完整日合计"
-                    f"（判完整需 ≥{min_minutes} 分钟且每分钟 ≥{int(day.get('min_etfs_for_complete') or etf_feed.min_etfs_for_complete())} 只）"
-                )
-        else:
-            line += f"篮子成交额未取到（{len(dates)} 个交易日无一有成交额数据）"
-        if net_pairs:
-            n_span = (
-                f"{net_pairs[0][0]}~{net_pairs[-1][0]}"
-                if len(net_pairs) > 1
-                else net_pairs[0][0]
-            )
-            line += (
-                f"；市场级累计净申购 {_num(sum(v for _d, v in net_pairs))} 亿元"
-                f"（{len(net_pairs)}/{len(dates)} 日有净申购，{n_span}）"
-            )
-        else:
-            line += f"；市场级净申购未取到（{len(dates)} 个交易日均无落库值）"
-        if amt and net_pairs and (len(amt) != len(net_pairs) or amt[0][0] != net_pairs[0][0]):
-            line += "；⚠️ 两项的有效日期不同，不可当作同一窗口的「成交额 vs 净申购」对比"
-        sections.append(line)
-        if sc8_out:
-            head = "、".join(
-                f"{x.get('date')} 净申购 {_num(x.get('net_sub_yi'))} 亿元"
-                for x in sc8_out[:5]
-            )
-            if len(sc8_out) > 5:
-                head += f" 等 {len(sc8_out)} 日"
-            sections.append(
-                f"- **SC8 独立数据日**：市场级 SC8 另有 {len(sc8_out)} 个数据日"
-                f"**不在分钟窗口（{span}）内**，已单独列出、未计入上列任何日合计：{head}"
-                f"；分钟表对这一天没有数据，全天完整性无法确认（未采集还是非交易日亦未确认）。"
-            )
-    elif day and not any("日度交易日" in m for m in miss):
-        note = f"日度成交额：未取到（{day.get('note') or '无落库数据'}）"
-        if sc8_out:
-            latest_sc8 = sc8_out[-1]
-            note += (
-                f"；分钟表无数据，但 SC8 有 {len(sc8_out)} 个数据日（最新 "
-                f"{latest_sc8.get('date')} 净申购 {_num(latest_sc8.get('net_sub_yi'))} 亿元）"
-                f"——仅市场级净申购，篮子成交额缺失，不可由 SC8 反推"
-            )
-        miss.append(note)
-
     sections.append(
         "- **口径提醒**：SC8 是**全市场** ETF 口径，不等于 20 只篮子的净申购，"
         "也不能按篮子拆分；单只 ETF 净申购不可用（通达信份额为当前值回填，实测零变化）。"
-        "成交额为 20 只篮子合计，单位亿元。"
+        "篮子成交额只是分钟表**已采集**部分的累计（单位亿元），不等于全天成交额，"
+        "本报不做任何按日汇总。"
     )
     return render_domain_sections(
         "etf.flow", as_of=as_of, source=source, sections=sections, missing=miss
@@ -3146,21 +3076,19 @@ def render_etf_flow(
 
 
 async def _query_etf_flow(db: Any, params: dict[str, Any], user: Any) -> str:
-    """ETF 看板只读域：与 /api/etf-watch/* 同源同口径。"""
+    """ETF 看板只读域：与 /api/etf-watch/* 同源同口径。
+
+    参谋只取两段：分钟表当日**已采集**累计（含覆盖率/缺失）+ 市场级 SC8 原始样本。
+    日度多日合计不取也不渲染（`daily_payload` 仍服务 Web API 的日度列契约）。
+    """
     missing: list[str] = []
     run = _etf_runner(db, missing)
-    try:
-        days = min(max(int(params.get("days") or 30), 5), 120)
-    except (TypeError, ValueError):
-        days = 30
 
     now = datetime.now(_CST)
     intraday = etf_feed.intraday_payload(run, None, now=now)
     support = etf_feed.support_payload(run, 750)
-    daily = etf_feed.daily_payload(run, days)
-    # 不再用 daily 的净申购「救」SC8：两者是同一条 etf_flow_daily，救不出独立证据；
-    # 而且 daily 只取 days 窗口（默认 30），把 30 日样本冒充全量样本、托底日计数与分位
-    # 全换成分母不同的数 —— 属于静默改口径。SC8 读不到就如实报「未取到（原因）」。
+    # 不再用日度窗口的净申购「救」SC8：两者是同一条 etf_flow_daily，救不出独立证据；
+    # SC8 读不到就如实报「未取到（原因）」。
     if support.get("state") != "ok":
         logger.info("etf.flow: SC8 市场级样本未取到（%s）", support.get("note") or "无落库数据")
     as_of = str(intraday.get("date") or (support.get("latest") or {}).get("date") or "未知")
@@ -3169,7 +3097,6 @@ async def _query_etf_flow(db: Any, params: dict[str, Any], user: Any) -> str:
         source="etf_minute_flow / etf_flow_daily（TDX/TQ，只读）",
         intraday=intraday,
         support=support,
-        daily=daily,
         missing=missing,
     )
 

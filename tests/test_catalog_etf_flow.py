@@ -315,7 +315,7 @@ def test_coverage_gate_is_16_of_20_not_full_basket(flow_db):
 
     out = tc.render_etf_flow(
         as_of=_TODAY, source="etf_minute_flow", intraday=p,
-        support={"state": "no_data"}, daily={"state": "no_data"},
+        support={"state": "no_data"},
     )
     assert "≥16/20" in out
     assert "3 个为 20 只全齐" in out
@@ -641,24 +641,32 @@ def test_support_and_daily_payload_match_previous_api(flow_db):
     assert day["scale_yi"][0] == pytest.approx(32393.07, abs=0.01)
 
 
-def test_daily_section_uses_days_param(flow_db):
-    """days 参数真的生效（域内日度一行按最近 N 个交易日聚合）。"""
+def test_daily_api_days_param_keeps_frontend_contract(flow_db):
+    """日度 API（Web 看板）的 days 参数与列契约不变；参谋不再渲染日度多日合计。"""
     for i, d in enumerate(("20261103", "20261104", "20261105")):
         for code in _BASKET:
             _ins_min(flow_db, d, "0930", code, 1_000.0)
         _ins_flow(flow_db, d, 32_000.0, 100.0 + i)
     flow_db.commit()
 
+    day2 = feed.daily_payload(_sql_runner(flow_db), 2)
+    day3 = feed.daily_payload(_sql_runner(flow_db), 3)
+    assert day2["dates"] == ["20261104", "20261105"]
+    assert day3["dates"] == ["20261103", "20261104", "20261105"]
+    assert day2["days_requested"] == 2
+    assert day2["total_amount_yi"] == [pytest.approx(2.0, abs=0.01)] * 2
+    assert day2["net_sub_yi"] == [pytest.approx(101.0, abs=0.01), pytest.approx(102.0, abs=0.01)]
+    # 日度 payload 不再自带「完整日」判定字段（那套判定已被删掉，不做新口径）
+    for gone in ("day_stats", "complete_days", "partial_days", "min_full_day_minutes"):
+        assert gone not in day2, gone
+
     out = tc.render_etf_flow(
         as_of="20261105", source="etf_minute_flow",
         intraday=feed.intraday_payload(_sql_runner(flow_db), "20261105", now=_NOW_LIVE),
         support=feed.support_payload(_sql_runner(flow_db), 750),
-        daily=feed.daily_payload(_sql_runner(flow_db), 2),
     )
-    assert "最近 2 个有数据交易日 / 请求 2 日" in out
-    assert "2/2 日有成交额" in out
-    assert "4.00 亿元" in out
-    assert len(out) <= tc.MAX_DOMAIN_CHARS
+    assert "日度" not in out
+    assert "完整日" not in out and "日合计" not in out and "完整" not in out
 
 
 # 5.8 LIMIT 上界：不能把整窗口分组截断（原实现无 LIMIT）
@@ -674,49 +682,25 @@ def test_sql_limits_cover_full_windows():
     assert _limit("etf_minute_rows") >= feed.MAX_MINUTES_PER_DAY
 
 
-# ── 6. 日度缺值：全 None 不得写成 0；样本日期不同不得当同窗口（2026-11-07 二审） ─────
+# ── 6. 日度缺值：NULL 不得写成 0（API 层保留原语义，参谋层不再产出日度合计） ──────
 
-def test_daily_all_none_is_missing_not_zero():
-    """成交额/净申购全 None：原实现 sum([]) == 0 → 出口写「合计 0.00 亿元」= 造数。"""
+def test_daily_all_none_is_missing_not_zero(flow_db):
+    """成交额 NULL：原实现 `amount_wan or 0.0` 会把「全部没采到」写成本日 0.00 亿。"""
+    for code in _BASKET:
+        _ins_min(flow_db, "20261104", "0930", code, None)
+    _ins_flow(flow_db, "20261104", 32_000.0, None)
+    flow_db.commit()
+
+    day = feed.daily_payload(_sql_runner(flow_db), 5)
+    assert day["total_amount_yi"] == [None], "金额全 NULL 的日子必须是 None，不是 0.0"
+    assert day["net_sub_yi"] == [None]
+
     out = tc.render_etf_flow(
-        as_of="20261105", source="etf_minute_flow",
+        as_of="20261104", source="etf_minute_flow",
         intraday={"state": "no_data"}, support={"state": "no_data"},
-        daily={
-            "state": "ok", "days_requested": 5,
-            "dates": ["20261104", "20261105"],
-            "total_amount_yi": [None, None],
-            "net_sub_yi": [None, None],
-        },
     )
-    assert "篮子成交额未取到" in out
-    assert "市场级净申购未取到" in out
-    assert "2 个交易日无一有成交额数据" in out
     assert "合计 0.00 亿元" not in out
     assert "净申购 0.00 亿元" not in out
-    assert "2/2 日有成交额" not in out, "全缺时不许出现样本比例暗示有值"
-
-
-def test_daily_partial_samples_labeled_separately_and_not_compared():
-    """成交额 2/3 日、净申购 1/3 日且日期不同：必须各报各的样本+日期范围，并明写不可当同窗口。"""
-    out = tc.render_etf_flow(
-        as_of="20261105", source="etf_minute_flow",
-        intraday={"state": "no_data"}, support={"state": "no_data"},
-        daily={
-            "state": "ok", "days_requested": 5,
-            "dates": ["20261103", "20261104", "20261105"],
-            "total_amount_yi": [1.5, None, 2.5],
-            "net_sub_yi": [None, 120.0, None],
-        },
-    )
-    assert "最近 3 个有数据交易日 / 请求 5 日" in out, "请求 5 日只有 3 日数据，不能声称近 5 日"
-    assert "分钟数据日窗口 20261103~20261105" in out, "必须显式标注分钟数据日窗口（不是「近 5 日」）"
-    assert "2/3 日有成交额" in out and "4.00 亿元" in out
-    assert "1/3 日有净申购" in out and "120.00 亿元" in out
-    assert "不可当作同一窗口" in out
-    # 精确到字段级：120.00 亿元里也含子串「0.00 亿元」，笼统断言会误伤，容易被写反
-    assert "合计 0.00 亿元" not in out
-    assert "净申购 0.00 亿元" not in out
-    assert len(out) <= tc.MAX_DOMAIN_CHARS
 
 
 def test_real_db_net_null_is_none_and_amounts_keep_actual_sample(flow_db):
@@ -736,42 +720,23 @@ def test_real_db_net_null_is_none_and_amounts_keep_actual_sample(flow_db):
 
     out = tc.render_etf_flow(
         as_of="20261105", source="etf_minute_flow",
-        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+        intraday={"state": "no_data"}, support={"state": "no_data"},
     )
-    assert "2/2 日有成交额" in out and "3.60 亿元" in out
-    assert "市场级净申购未取到" in out
+    assert "3.60 亿元" not in out, "参谋不再给多日成交额合计"
     assert "净申购 0.00" not in out
-    assert "近 5 个交易日" not in out
 
 
-def test_real_db_different_sample_dates_flagged(flow_db):
-    """真表：只有一天有净申购、两天都有成交额 → 标样本差异，不许当同一窗口比较。"""
-    for d, wan in (("20261104", 800.0), ("20261105", 900.0)):
-        for code in _BASKET:
-            _ins_min(flow_db, d, "0930", code, wan)
-    _ins_flow(flow_db, "20261104", 32_000.0, 90.0)
-    flow_db.commit()
-
-    day = feed.daily_payload(_sql_runner(flow_db), 5)
-    assert day["total_amount_yi"] == [pytest.approx(1.6, abs=0.01), pytest.approx(1.8, abs=0.01)]
-    assert [v is None for v in day["net_sub_yi"]] == [False, True]
-    out = tc.render_etf_flow(
-        as_of="20261105", source="etf_minute_flow",
-        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
-    )
-    assert "2/2 日有成交额" in out
-    assert "1/2 日有净申购" in out and "20261104" in out
-    assert "不可当作同一窗口" in out
-
-
-# ── 7. 三审阻断：SC8 更新日被分钟表截断 + 一根分钟线冒充完整日（2026-11-07） ─────
+# ── 7. 独立审计 5 处虚假数据：全部只留可证事实（2026-11-07 收敛） ──────────────
 #
-# 这两条都只影响**参谋出口**，不改 Web API 日度列契约（`dates`/`total_amount_yi` 等
-# 全部照旧按分钟数据日对齐）；证据全走真 SQLite 表 + 真 SQL。
+# 反例逐条落地：200/240 分钟、240 分钟但只有 16/20 只、金额全 NULL、
+# SC8 落在分钟日期范围的空洞里、400+ 行且有未来日期 —— 参谋出口都不许
+# 产出「完整日 / 虚假累计 / 空值 0 / 未来行」。
 
 from datetime import timedelta  # noqa: E402
 
-_FULL_DAY_MINUTES = [
+_NEXT_DAY = datetime(2026, 11, 7, 10, 0, tzinfo=_CST)   # 周六：当日无分钟 → 必须回退且不取未来行
+
+_SESSION_MINUTES = [
     (datetime(2026, 11, 4, 9, 31) + timedelta(minutes=i)).strftime("%H%M")
     for i in range(120)
 ] + [
@@ -780,12 +745,11 @@ _FULL_DAY_MINUTES = [
 ]
 
 
-def _full_day(conn, day: str, wan_each: float) -> None:
-    """写一个真·全天：240 个分钟 × 20 只（覆盖可证完整）。"""
+def _bulk_minutes(conn, day: str, minutes, codes, wan) -> None:
     rows = [
-        {"d": day, "m": m, "c": code, "a": wan_each}
-        for m in _FULL_DAY_MINUTES
-        for code in _BASKET
+        {"d": day, "m": m, "c": c, "a": wan}
+        for m in minutes
+        for c in codes
     ]
     conn.execute(
         text(
@@ -796,117 +760,96 @@ def _full_day(conn, day: str, wan_each: float) -> None:
     )
 
 
-def test_sc8_newer_day_is_listed_not_silently_dropped(flow_db):
-    """分钟表只到 20261104，SC8 已有 20261105（88 亿）：这一天必须被看见。
-
-    RED 依据：原 `daily_payload` 的日期只来自 `etf_minute_flow`，SC8 多出的一天
-    既不在 dates 也不在任何提示里，出口等于「这一天不存在」。
-    """
-    _day(flow_db, "20261104", "0930", 20, 1_000.0)
-    _ins_flow(flow_db, "20261104", 32_000.0, 100.0)
-    _ins_flow(flow_db, "20261105", 32_200.0, 88.0)
+def test_200_of_240_minutes_is_not_a_complete_day(flow_db):
+    """采了 200 分钟（不到收盘）：只能叫「已采集累计」，且必须点名收盘段缺失。"""
+    _bulk_minutes(flow_db, "20261104", _SESSION_MINUTES[:200], _BASKET, 100.0)
     flow_db.commit()
 
-    day = feed.daily_payload(_sql_runner(flow_db), 6)
-    assert day["dates"] == ["20261104"], "Web API 日度列仍按分钟数据日对齐，不许塞 SC8 独有日期"
-    assert day["minute_window"] == {"from": "20261104", "to": "20261104", "days": 1}
-    assert [
-        (x["date"], x["net_sub_yi"]) for x in day["sc8_days_not_in_minutes"]
-    ] == [("20261105", 88.0)], "SC8 更新日必须原值带出，不许丢也不许改"
+    p = feed.intraday_payload(_sql_runner(flow_db), "20261104", now=_NOW_LIVE)
+    assert p["totals"]["minutes"] == 200
+    assert p["totals"]["cum_yi"] == pytest.approx(40.0, abs=0.01)   # 200 × 20 × 100 万
+
+    out = tc.render_etf_flow(
+        as_of="20261104", source="etf_minute_flow", intraday=p, support={"state": "no_data"},
+    )
+    assert "分钟级已采集累计" in out
+    assert "已采集 200 分钟" in out
+    assert "40.00" in out
+    assert "收盘段（至 15:00）未采集" in out
+    assert "完整" not in out and "日合计" not in out
+
+
+def test_240_minutes_but_only_16_of_20_etfs_not_full(flow_db):
+    """240 分钟全在、但每分钟只有 16/20 只：过 80% 闸门 ≠ 20 只全齐，更不是「完整日」。"""
+    _bulk_minutes(flow_db, "20261104", _SESSION_MINUTES, _BASKET[:16], 100.0)
+    flow_db.commit()
+
+    t = feed.intraday_payload(_sql_runner(flow_db), "20261104", now=_NOW_LIVE)["totals"]
+    assert (t["minutes"], t["full_minutes"], t["strict_minutes"]) == (240, 240, 0)
 
     out = tc.render_etf_flow(
         as_of="20261104", source="etf_minute_flow",
-        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+        intraday=feed.intraday_payload(_sql_runner(flow_db), "20261104", now=_NOW_LIVE),
+        support={"state": "no_data"},
     )
-    assert "分钟数据日窗口 20261104" in out
-    assert "SC8 独立数据日" in out
-    assert "20261105" in out and "88.00 亿元" in out
-    assert "未计入" in out
-    assert "188.00" not in out, "SC8 独立日不得被并入日度净申购合计"
+    assert "0 个为 20 只全齐" in out
+    assert "完整" not in out and "日合计" not in out
 
 
-def test_no_minute_days_still_surfaces_sc8_days(flow_db):
-    """分钟表整库为空但 SC8 有落库：日度说「未取到」，同时报出 SC8 的数据日与数值。"""
-    _ins_flow(flow_db, "20261105", 32_000.0, 88.0)
+def test_minute_amounts_all_null_never_counted_as_zero(flow_db):
+    """分钟行在、金额全 NULL：累计必须是未知，不许补 0.00，也不算达标分钟。"""
+    _bulk_minutes(flow_db, _TODAY, ["0930", "0931"], _BASKET, None)
     flow_db.commit()
 
-    day = feed.daily_payload(_sql_runner(flow_db), 5)
-    assert day["state"] == "no_data"
-    assert [(x["date"], x["net_sub_yi"]) for x in day["sc8_days_not_in_minutes"]] == [
-        ("20261105", 88.0)
-    ]
-    out = tc.render_etf_flow(
-        as_of="20261105", source="etf_minute_flow",
-        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
-    )
-    assert "日度成交额：未取到" in out
-    assert "20261105 净申购 88.00 亿元" in out
-    assert "不可由 SC8 反推" in out
-
-
-def test_single_etf_single_minute_day_is_partial_not_complete(flow_db):
-    """1 只 ETF × 1 根分钟线的日子：原实现直接把该日成交额当完整日计入合计。
-
-    RED 依据：`etf_daily_dates` 只问「这一天有没有行」，`total_amount_yi` 于是把
-    0.2 亿（甚至 1 万）当成该日全天成交额。现在必须先证覆盖：240 分钟的 20 只才算完整。
-    """
-    _full_day(flow_db, "20261104", 100.0)              # 240 分钟 × 20 只 × 100 万 = 48 亿
-    _ins_min(flow_db, "20261105", "0930", _BASKET[0], 10_000.0)   # 1 只 × 1 分钟 = 1 亿
-    _ins_flow(flow_db, "20261105", 32_000.0, 88.0)
-    flow_db.commit()
-
-    day = feed.daily_payload(_sql_runner(flow_db), 6)
-    assert day["dates"] == ["20261104", "20261105"]
-    assert day["complete_days"] == ["20261104"]
-    assert day["partial_days"] == ["20261105"]
-    st = day["day_stats"]["20261105"]
-    assert (st["minutes"], st["etfs"], st["complete"]) == (1, 1, False)
-    full_st = day["day_stats"]["20261104"]
-    assert full_st["minutes"] == 240 and full_st["etfs"] == 20 and full_st["complete"] is True
-    # 数值一个都不能丢：两天各自的金额都还在列里
-    assert day["total_amount_yi"] == [pytest.approx(48.0, abs=0.01), pytest.approx(1.0, abs=0.01)]
+    t = feed.intraday_payload(_sql_runner(flow_db), _TODAY, now=_NOW_LIVE)["totals"]
+    assert t["cum_yi"] is None, "一笔金额都没采到 → 累计未知，不能是 0.00"
+    assert t["minutes_without_amount"] == 2
+    assert t["full_minutes"] == 0 and t["coverage"] == 0.0
 
     out = tc.render_etf_flow(
-        as_of="20261105", source="etf_minute_flow",
-        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+        as_of=_TODAY, source="etf_minute_flow",
+        intraday=feed.intraday_payload(_sql_runner(flow_db), _TODAY, now=_NOW_LIVE),
+        support={"state": "no_data"},
     )
-    assert "完整日合计 48.00 亿元（20261104）" in out
-    assert "20261105 仅 1 分钟/1 只" in out
-    assert "已采集部分 1.00 亿元" in out
-    assert "完整性未确认" in out and "不可并入完整日合计" in out
-    assert "有效样本" in out          # 明写「非有效样本」
-    assert "49.00" not in out, "残缺日不许并进合计"
+    assert "0.00 亿元" not in out
+    assert "已采集合计 未披露 亿元" in out
+    assert "2 分钟金额全是 NULL" in out
 
 
-def test_all_partial_days_give_no_daily_total(flow_db):
-    """没有一日可证完整：出口不得给「日合计」，只能报已采集部分。"""
-    for d, wan in (("20261104", 10_000.0), ("20261105", 20_000.0)):
-        _ins_min(flow_db, d, "0930", _BASKET[0], wan)
+def test_sc8_hole_and_newer_day_are_not_summed_into_basket(flow_db):
+    """SC8 有 3 天（含分钟表的空洞日 20261104），参谋只报原始最新日/样本，不做跨表累计。"""
+    _day(flow_db, "20261103", "0930", 20, 1_000.0)
+    _day(flow_db, "20261105", "0930", 20, 1_000.0)   # 20261104 分钟缺失
+    _ins_flow(flow_db, "20261103", 32_000.0, 100.0)
+    _ins_flow(flow_db, "20261104", 32_100.0, 88.0)
+    _ins_flow(flow_db, "20261105", 32_200.0, -20.0)
     flow_db.commit()
 
-    day = feed.daily_payload(_sql_runner(flow_db), 6)
-    assert day["complete_days"] == [] and day["partial_days"] == ["20261104", "20261105"]
+    sup = feed.support_payload(_sql_runner(flow_db), 750)
+    assert sup["sample_count"] == 3
+    assert sup["latest"] == {"date": "20261105", "scale_yi": 32200.0, "net_sub_yi": -20.0}
+
     out = tc.render_etf_flow(
-        as_of="20261105", source="etf_minute_flow",
-        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+        as_of="20261105", source="x", intraday={"state": "no_data"}, support=sup,
     )
-    assert "无一日可证全天完整 → 不给日合计" in out
-    assert re.search(r"完整日合计 \d", out) is None, "无完整日时不许出现任何「完整日合计 N 亿元」"
-    assert "2/2 日有成交额采集" in out
-    assert "已采集部分 3.00 亿元" in out
+    assert "20261105 净申购 -20.00 亿元" in out
+    assert "样本窗口 20261103~20261105" in out
+    assert "市场级累计净申购" not in out, "跨日 SC8 累计已被删除，不许复活"
+    assert "168.00" not in out, "100 + 88 - 20 的伪造合计不得出现"
+    assert "68.00" not in out, "100 + 88 - 120 之类跨窗口合计不得出现"
 
 
-def test_daily_minutes_sql_counts_per_day_minutes_and_gate(flow_db):
-    """覆盖统计语句本身：分钟数 = 该日不同分钟数，covered = 每分钟 ≥16 只的分钟数。"""
-    _full_day(flow_db, "20261104", 100.0)
-    _day(flow_db, "20261104", "1501", 3, 100.0)   # 3 只的残留分钟：不算过闸门
+def test_future_and_bulk_rows_never_surface_as_data_day(flow_db):
+    """400+ 行且含未来日期：回退只能取 < 目标日，未来行不得成为数据日。"""
+    _day(flow_db, _TODAY, "0930", 20, 1_000.0)
+    _bulk_minutes(flow_db, "20261231", _SESSION_MINUTES, _BASKET, 100.0)   # 4800 行未来数据
     flow_db.commit()
 
-    rows = tc._read(
-        flow_db, "etf_daily_minutes",
-        {"d0": "20261104", "gate": feed.min_etfs_for_complete()},
-        {"ph": ":d0"},
-    )
-    assert len(rows) == 1
-    assert rows[0]["minutes"] == 241
-    assert rows[0]["covered_minutes"] == 240
+    p = feed.intraday_payload(_sql_runner(flow_db), None, now=_NEXT_DAY)
+    assert p["date"] == _TODAY and p["fallback_from"] == "20261107"
+    assert p["totals"]["minutes"] == 1
+
+    out = tc.render_etf_flow(as_of=_TODAY, source="x", intraday=p, support={"state": "no_data"})
+    assert "20261231" not in out
+    assert "2.00 亿元" in out, "只报当日已采集的 20 × 1000 万"
+    assert "完整" not in out and "日合计" not in out
