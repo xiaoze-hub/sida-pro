@@ -14,6 +14,7 @@
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 
 const apiMock = vi.hoisted(() => ({
   uploadAttachment: vi.fn(),
@@ -51,7 +52,7 @@ afterEach(() => {
 })
 
 async function renderPage() {
-  render(<AiCopilot />)
+  render(<MemoryRouter initialEntries={['/ai-copilot']}><AiCopilot /></MemoryRouter>)
   await waitFor(() => expect(screen.getByTestId('ai-copilot-page')).toBeTruthy())
 }
 

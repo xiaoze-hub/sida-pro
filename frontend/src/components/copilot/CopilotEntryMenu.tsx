@@ -18,6 +18,7 @@
  *     页签标题照旧由那份表派生。
  */
 import { useEffect, useId, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 export interface CopilotEntryLink {
   key: string
@@ -86,17 +87,17 @@ export function CopilotEntryMenu() {
             全页视图；本页「过程 / 提案」仍是会话内嵌面板
           </p>
           {COPILOT_ENTRY_LINKS.map((item) => (
-            <a
+            <Link
               key={item.key}
               role="menuitem"
-              href={item.href}
+              to={item.href}
               data-testid={`copilot-entry-${item.key}`}
               title={item.hint}
               className="rounded-md px-2 py-1.5 hover:bg-muted"
             >
               <span className="block text-[12px] text-foreground">{item.label}</span>
               <span className="block text-[12px] leading-4 text-muted-foreground">{item.hint}</span>
-            </a>
+            </Link>
           ))}
         </div>
       ) : null}
