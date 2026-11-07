@@ -1,58 +1,202 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { fetchAPI } from '@sida/api'
+import { safeJwtPayload } from '@/lib/jwt'
 
 const EVENT = 'sida:avatar-changed'
+/**
+ * 个人头像走 `/api/profile`(users.avatar, 按用户隔离), **不是** `/settings/avatar`
+ * —— 后者落的是全局单行 `ui_avatar`, 任何账号读到的都是同一个人(多账号串头像)。
+ * 2026-11-07 收敛: 前端所有头像读写只认个人资料接口。
+ */
+const PROFILE_PATH = '/profile'
 
-// 仅 SPA 会话内的内存缓存(避免一次会话内重复请求)。
-// 真正的持久化在后端 DB(data/sida.db 的 ui_avatar),刷新后会重新从后端拉取。
-let cache: string | null = null
-let inflight: Promise<string> | null = null
+interface AvatarSnapshot {
+  /** 该 value 属于哪个登录身份; 与当前身份不符时**一律不对外可见**。 */
+  identity: string
+  value: string
+  /** 已从后端拿到确定结果(含"确实没有头像")。 */
+  loaded: boolean
+  /** 上次读取失败; 允许重试, 但失败期间同样只显示空(绝不回退旧账号)。 */
+  failed: boolean
+}
 
-function load(): Promise<string> {
-  if (cache !== null) return Promise.resolve(cache)
-  if (!inflight) {
-    inflight = fetchAPI<{ value: string }>('/settings/avatar')
-      .then(r => {
-        cache = r?.value || ''
-        return cache as string
-      })
-      .catch(() => {
-        cache = ''
-        return ''
-      })
-      .finally(() => {
-        inflight = null
-      })
+let snapshot: AvatarSnapshot = { identity: '', value: '', loaded: false, failed: false }
+let inflight: { identity: string; controller: AbortController } | null = null
+const listeners = new Set<() => void>()
+
+function notify() {
+  // 复制一份再遍历: 监听器在回调里退订/挂载新组件时不影响本轮分发
+  for (const fn of Array.from(listeners)) fn()
+}
+
+let cachedToken: string | null = null
+let cachedIdentity = ''
+
+/**
+ * 当前登录身份(账号切换的唯一判据)。未登录返回 ''。
+ *
+ * 用 JWT 里的 username/sub 而不是 token 前缀: `fetchAPI` 的响应缓存 key 只取 token
+ * 前 8 字符, HS256 头(`{"alg":...}`)对每个用户都一样 ⇒ 前缀会撞; 头像缓存必须按身份
+ * 精确分区, 否则 A 的请求命中 B 的缓存就是串号。
+ */
+export function currentAvatarIdentity(): string {
+  let token = ''
+  try {
+    token = localStorage.getItem('token') || ''
+  } catch {
+    token = ''
   }
-  return inflight
+  if (token === cachedToken) return cachedIdentity
+  cachedToken = token
+  if (!token) {
+    cachedIdentity = ''
+    return cachedIdentity
+  }
+  const payload = safeJwtPayload(token)
+  const claim = payload?.username ?? payload?.sub
+  cachedIdentity = typeof claim === 'string' && claim ? `u:${claim}` : `t:${token}`
+  return cachedIdentity
+}
+
+/** 对外可见值: 身份不符(切号瞬间/已登出) 时恒为空, 不回退上一个账号的头像。 */
+function visibleValue(): string {
+  const identity = currentAvatarIdentity()
+  return snapshot.identity === identity ? snapshot.value : ''
+}
+
+function subscribe(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
 }
 
 /**
- * 保存头像(传空字符串=清空):后端把图片落成 data/avatars 文件、DB 仅记文件名;
- * 本地广播即时更新。注意 cache 存的是 data URL(GET 也返回 data URL)。
+ * 确保当前身份的头像已加载(幂等; 可每帧调用)。
+ * - 切号: 立刻清空可见值 + abort 旧请求, 旧响应回来也不会写进新账号;
+ * - 未登录: 不发请求(否则 401 会触发 logout 跳走)。
  */
-export async function saveAvatar(value: string): Promise<void> {
-  await fetchAPI('/settings/avatar', { method: 'PUT', body: JSON.stringify({ value }) })
-  cache = value
-  window.dispatchEvent(new CustomEvent<string>(EVENT, { detail: value }))
+function ensureLoaded(): void {
+  const identity = currentAvatarIdentity()
+
+  if (!identity) {
+    if (snapshot.identity !== '' || snapshot.value !== '' || snapshot.loaded) {
+      snapshot = { identity: '', value: '', loaded: true, failed: false }
+      notify()
+    }
+    return
+  }
+
+  if (snapshot.identity !== identity) {
+    // 之前那个账号的数据/在途请求与当前账号无关: 丢弃 + 取消
+    inflight?.controller.abort()
+    inflight = null
+    snapshot = { identity, value: '', loaded: false, failed: false }
+    notify()
+  }
+
+  if (snapshot.loaded) return
+  if (snapshot.failed) return // 失败不自动重试(否则每帧一次请求风暴); 等事件/重新挂载
+  if (inflight && inflight.identity === identity) return
+
+  const controller = new AbortController()
+  inflight = { identity, controller }
+  fetchAPI<{ avatar?: string }>(PROFILE_PATH, { cacheMode: 'reload', signal: controller.signal })
+    .then(res => {
+      // 乱序保护: 响应回来时可能已经切到别的账号 ⇒ 丢弃, 不写缓存不广播
+      if (currentAvatarIdentity() !== identity) return
+      snapshot = {
+        identity,
+        value: typeof res?.avatar === 'string' ? res.avatar : '',
+        loaded: true,
+        failed: false,
+      }
+      notify()
+    })
+    .catch(() => {
+      if (currentAvatarIdentity() !== identity) return
+      snapshot = { identity, value: '', loaded: false, failed: true }
+      notify()
+    })
+    .finally(() => {
+      if (inflight?.controller === controller) inflight = null
+    })
 }
 
-/** 当前头像(data URL 或图片地址)。来源为后端 DB;跨组件即时同步。 */
+/** 丢弃当前账号的缓存并重取(收到"头像已改"广播但没带值时用)。 */
+function reload(): void {
+  const identity = currentAvatarIdentity()
+  if (!identity) return
+  if (snapshot.identity === identity) {
+    snapshot = { identity, value: snapshot.value, loaded: false, failed: false }
+  }
+  ensureLoaded()
+}
+
+function onAvatarEvent(event: Event): void {
+  const identity = currentAvatarIdentity()
+  if (!identity) return
+  const detail = (event as CustomEvent<unknown>).detail
+  if (typeof detail === 'string') {
+    // 本会话保存成功后带值广播(服务端已确认): 直接采纳, 省一次往返
+    snapshot = { identity, value: detail, loaded: true, failed: false }
+    notify()
+    return
+  }
+  // 无值广播(如个人中心保存后)只表示"变了", 不能当成清空 —— 去后端重取
+  reload()
+}
+
+/**
+ * 保存头像(传空字符串=清空)。写个人资料接口 `/api/profile`(按用户隔离);
+ * 成功后仅当身份未变时才写缓存/广播, 避免切号后把旧账号结果喂给新账号。
+ */
+export async function saveAvatar(value: string): Promise<void> {
+  const identity = currentAvatarIdentity()
+  if (!identity) throw new Error('未登录, 无法保存头像')
+  const res = await fetchAPI<{ avatar?: string }>(PROFILE_PATH, {
+    method: 'PUT',
+    body: JSON.stringify({ avatar: value }),
+  })
+  if (currentAvatarIdentity() !== identity) return
+  const saved = typeof res?.avatar === 'string' ? res.avatar : value
+  snapshot = { identity, value: saved, loaded: true, failed: false }
+  notify()
+  window.dispatchEvent(new CustomEvent<string>(EVENT, { detail: saved }))
+}
+
+/** 清空内存缓存(登出/切号兜底; 不触发请求)。 */
+export function resetAvatarCache(): void {
+  inflight?.controller.abort()
+  inflight = null
+  snapshot = { identity: '', value: '', loaded: false, failed: false }
+  notify()
+}
+
+/**
+ * 当前头像(data URL 或图片地址)。来源为个人资料(按账号隔离), 跨组件即时同步。
+ * 未加载/加载失败/刚切号 ⇒ 空串(调用方回退到首字母/图标), 不会短暂显示他人头像。
+ */
 export function useAvatar(): string {
-  const [avatar, setAvatar] = useState<string>(cache ?? '')
+  const value = useSyncExternalStore(subscribe, visibleValue, () => '')
   useEffect(() => {
-    let alive = true
-    load().then(v => {
-      if (alive) setAvatar(v)
-    })
-    const onChange = (e: Event) => setAvatar((e as CustomEvent<string>).detail ?? '')
-    window.addEventListener(EVENT, onChange)
+    const onStorage = (event: StorageEvent) => {
+      // 别的标签页换号/登出 → 本标签页身份已变, 立刻重判(不能再挂旧账号头像)
+      if (event.key === null || event.key === 'token' || event.key === 'user') ensureLoaded()
+    }
+    window.addEventListener('storage', onStorage)
+    window.addEventListener(EVENT, onAvatarEvent)
+    ensureLoaded()
     return () => {
-      alive = false
-      window.removeEventListener(EVENT, onChange)
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener(EVENT, onAvatarEvent)
     }
   }, [])
-  return avatar
+  // 无依赖: 同页切号(登录页 navigate 回 SPA, 组件不重挂)时, 任意一次重渲染都能跟上身份
+  useEffect(() => {
+    ensureLoaded()
+  })
+  return value
 }
 
 /**
