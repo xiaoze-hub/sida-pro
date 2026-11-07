@@ -125,17 +125,17 @@ function CaliberDiff() {
     {
       key: 'dark',
       name: '暗盘资金 TOP',
-      source: 'thsdk_dde(同花顺 DDE 大单, 全市场批量约 5200 只)',
-      timing: '盘后快照日(snapshot_date); 时点由各自快照决定',
-      update: '页内「重新扫描」独立触发, 全市场约 16s',
-      scope: '个股榜单; .tck 暗盘对照仅持仓股有值',
+      source: 'thsdk_dde(同花顺 DDE 大单)',
+      timing: '以页面实际快照日期为准',
+      update: '页面内「重新扫描」',
+      scope: '个股榜单；另有 .tck 对照列，覆盖和有效性以页面说明为准',
     },
     {
       key: 'war',
       name: '主力战报',
       source: 'thsdk_dde + TQ SUPAMO 行业子块',
-      timing: '当日快照(独立 snapshot_date, 与暗盘榜不同步)',
-      update: '页内「重新生成」独立触发, 全市场约 16s',
+      timing: '以页面实际快照日期为准',
+      update: '页面内「重新生成」',
       scope: '吸筹/派发 TOP-BOTTOM + 行业分布(亿元) + 拆单计数(对倒无源)',
     },
   ]
