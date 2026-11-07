@@ -439,6 +439,7 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
     return {
         "state": "ok",
         "dates": dates,
+        "days_requested": int(days),
         "total_amount_yi": [round_or_none(total.get(d)) for d in dates],
         "net_sub_yi": [
             round_or_none(net[d]["etf_net_sub"]) if d in net else None for d in dates

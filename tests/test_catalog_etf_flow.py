@@ -88,7 +88,7 @@ def test_query_data_domain_routes_to_etf_render(monkeypatch):
 
 
 def test_etf_flow_reachable_with_empty_tables(monkeypatch):
-    monkeypatch.setattr(tc, "_read", lambda db, key, params=None: [])
+    monkeypatch.setattr(tc, "_read", lambda db, key, params=None, fmt=None: [])
     out = _run(tc.query_data_domain(None, {"domain": "etf.flow"}))
     assert "未知数据域" not in out and "尚未接入实现" not in out
     assert "未取到" in out
@@ -192,12 +192,19 @@ def test_read_failure_is_reported_without_sql_leak(monkeypatch):
     class Boom(Exception):
         pass
 
-    def boom(db, key, params=None):
+    raised: list[str] = []
+
+    # 签名必须与 `_read(db, key, params, fmt)` 一致：少一个 fmt 参数时 CPython 抛
+    # TypeError 而不是 Boom，用例会「因为桩没被正确调用」而假绿。
+    def boom(db, key, params=None, fmt=None):
+        raised.append(key)
         raise Boom("SELECT * FROM etf_minute_flow -- secret")
 
     monkeypatch.setattr(tc, "_read", boom)
     out = _run(tc.query_data_domain(None, {"domain": "etf.flow"}))
+    assert raised, "桩没被调用到，异常脱敏路径未被执行"
     assert "未取到" in out
+    assert "读取失败" in out or "数据库连接/驱动错误" in out
     assert "SELECT" not in out.upper()
     assert "etf_minute_flow --" not in out
 
@@ -416,13 +423,17 @@ def test_driver_error_does_not_leak_connection_credentials(monkeypatch, caplog):
     dsn = "postgresql://sida:Secr3tPw@10.0.0.5:5432/sida"
     leak = Exception(f"could not connect to server: {dsn} password=hunter2 user=sida host=10.0.0.5")
 
+    raised: list[str] = []
+
     def boom(db, key, params=None, fmt=None):
+        raised.append(key)
         raise OperationalError("SELECT 1 FROM etf_minute_flow", {"d": "20261106"}, leak)
 
     monkeypatch.setattr(tc, "_read", boom)
     with caplog.at_level("WARNING", logger="src.agents.chat.tools_catalog"):
         out = _run(tc.query_data_domain(None, {"domain": "etf.flow"}))
 
+    assert raised, "驱动异常路径没被触发（桩签名不匹配会抛 TypeError 掩盖目标异常）"
     for secret in ("Secr3tPw", "hunter2", "10.0.0.5", "postgresql://", "sida@", "password="):
         assert secret not in out, f"用户可见内容泄露了 {secret}"
         assert secret not in caplog.text, f"日志泄露了 {secret}"
@@ -644,7 +655,8 @@ def test_daily_section_uses_days_param(flow_db):
         support=feed.support_payload(_sql_runner(flow_db), 750),
         daily=feed.daily_payload(_sql_runner(flow_db), 2),
     )
-    assert "近 2 个交易日" in out
+    assert "最近 2 个有数据交易日 / 请求 2 日" in out
+    assert "2/2 日有成交额" in out
     assert "4.00 亿元" in out
     assert len(out) <= tc.MAX_DOMAIN_CHARS
 
@@ -660,3 +672,93 @@ def test_sql_limits_cover_full_windows():
     assert _limit("etf_daily_minute") >= 120 * len(_BASKET)   # days 上限 120 × 20 只
     assert _limit("etf_daily_net") >= 120                     # days 上限 120 天
     assert _limit("etf_minute_rows") >= feed.MAX_MINUTES_PER_DAY
+
+
+# ── 6. 日度缺值：全 None 不得写成 0；样本日期不同不得当同窗口（2026-11-07 二审） ─────
+
+def test_daily_all_none_is_missing_not_zero():
+    """成交额/净申购全 None：原实现 sum([]) == 0 → 出口写「合计 0.00 亿元」= 造数。"""
+    out = tc.render_etf_flow(
+        as_of="20261105", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"},
+        daily={
+            "state": "ok", "days_requested": 5,
+            "dates": ["20261104", "20261105"],
+            "total_amount_yi": [None, None],
+            "net_sub_yi": [None, None],
+        },
+    )
+    assert "篮子成交额未取到" in out
+    assert "市场级净申购未取到" in out
+    assert "2 个交易日无一有成交额数据" in out
+    assert "合计 0.00 亿元" not in out
+    assert "净申购 0.00 亿元" not in out
+    assert "2/2 日有成交额" not in out, "全缺时不许出现样本比例暗示有值"
+
+
+def test_daily_partial_samples_labeled_separately_and_not_compared():
+    """成交额 2/3 日、净申购 1/3 日且日期不同：必须各报各的样本+日期范围，并明写不可当同窗口。"""
+    out = tc.render_etf_flow(
+        as_of="20261105", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"},
+        daily={
+            "state": "ok", "days_requested": 5,
+            "dates": ["20261103", "20261104", "20261105"],
+            "total_amount_yi": [1.5, None, 2.5],
+            "net_sub_yi": [None, 120.0, None],
+        },
+    )
+    assert "最近 3 个有数据交易日 / 请求 5 日" in out, "请求 5 日只有 3 日数据，不能声称近 5 日"
+    assert "数据日 20261103~20261105" in out
+    assert "2/3 日有成交额" in out and "4.00 亿元" in out
+    assert "1/3 日有净申购" in out and "120.00 亿元" in out
+    assert "不可当作同一窗口" in out
+    # 精确到字段级：120.00 亿元里也含子串「0.00 亿元」，笼统断言会误伤，容易被写反
+    assert "合计 0.00 亿元" not in out
+    assert "净申购 0.00 亿元" not in out
+    assert len(out) <= tc.MAX_DOMAIN_CHARS
+
+
+def test_real_db_net_null_is_none_and_amounts_keep_actual_sample(flow_db):
+    """真表：日度行存在但净申购为 NULL → 仍是 None，出口不许把它折成 0。"""
+    for d, wan in (("20261104", 800.0), ("20261105", 1_000.0)):
+        for code in _BASKET:
+            _ins_min(flow_db, d, "0930", code, wan)
+    _ins_flow(flow_db, "20261105", 32_000.0, None)
+    flow_db.commit()
+
+    day = feed.daily_payload(_sql_runner(flow_db), 5)
+    assert day["state"] == "ok"
+    assert day["days_requested"] == 5
+    assert day["dates"] == ["20261104", "20261105"]
+    assert day["total_amount_yi"] == [pytest.approx(1.6, abs=0.01), pytest.approx(2.0, abs=0.01)]
+    assert day["net_sub_yi"] == [None, None], "净申购 NULL 必须原样保留 None"
+
+    out = tc.render_etf_flow(
+        as_of="20261105", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+    )
+    assert "2/2 日有成交额" in out and "3.60 亿元" in out
+    assert "市场级净申购未取到" in out
+    assert "净申购 0.00" not in out
+    assert "近 5 个交易日" not in out
+
+
+def test_real_db_different_sample_dates_flagged(flow_db):
+    """真表：只有一天有净申购、两天都有成交额 → 标样本差异，不许当同一窗口比较。"""
+    for d, wan in (("20261104", 800.0), ("20261105", 900.0)):
+        for code in _BASKET:
+            _ins_min(flow_db, d, "0930", code, wan)
+    _ins_flow(flow_db, "20261104", 32_000.0, 90.0)
+    flow_db.commit()
+
+    day = feed.daily_payload(_sql_runner(flow_db), 5)
+    assert day["total_amount_yi"] == [pytest.approx(1.6, abs=0.01), pytest.approx(1.8, abs=0.01)]
+    assert [v is None for v in day["net_sub_yi"]] == [False, True]
+    out = tc.render_etf_flow(
+        as_of="20261105", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+    )
+    assert "2/2 日有成交额" in out
+    assert "1/2 日有净申购" in out and "20261104" in out
+    assert "不可当作同一窗口" in out

@@ -116,8 +116,24 @@ function signed(v: number | null | undefined, digits = 2): string {
   return safeNetInflow(v, digits)
 }
 
-/** 双线迷你图：今日累计 vs 20 日同期基线。只有 ≥2 个点才画（1 个点画成线是撒谎）。 */
-function CumChart({ series }: { series: IntradayPoint[] }) {
+/** 双线迷你图：今日累计 vs 同期基线。只有 ≥2 个点才画（1 个点画成线是撒谎）。
+ *
+ * 2026-11-07 修: ARIA/图例原来写死「过去 20 日」「最近 20 个有数据交易日」—— 实际可能只有
+ * 2 个有效基线日，这属于虚报样本量。基线天数一律按 payload 的真实值展示，最多 20 日。 */
+function CumChart({
+  series,
+  baselineDays,
+  baselineRequested,
+}: {
+  series: IntradayPoint[]
+  baselineDays?: number | null
+  baselineRequested?: number | null
+}) {
+  const req = baselineRequested ?? 20
+  const baseDesc =
+    baselineDays === null || baselineDays === undefined
+      ? '同期基线（样本交易日数未披露，最多 20 日）'
+      : `同期基线（实际 ${baselineDays}/${req} 个交易日${baselineDays >= req ? '' : '，样本不足 20 日'}）`
   const usable = series.filter(p => p.cum_yi !== null)
   if (usable.length < 2) {
     return <div className="flex h-[220px] items-center justify-center text-[14px] text-muted-foreground">数据点不足（需要至少 2 分钟）</div>
@@ -140,14 +156,14 @@ function CumChart({ series }: { series: IntradayPoint[] }) {
 
   return (
     <div className="w-full overflow-hidden">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-[220px] w-full" role="img" aria-label="今日累计成交额与过去 20 日同期基线对比">
+      <svg viewBox={`0 0 ${w} ${h}`} className="h-[220px] w-full" role="img" aria-label={`今日累计成交额与同期基线对比（${baseDesc.replace('同期基线（', '').replace(/）$/, '')}）`}>
         <path d={basePath} fill="none" stroke="var(--muted-foreground)" strokeWidth="1.5" strokeDasharray="4 3" opacity="0.7" />
         <path d={todayPath} fill="none" stroke="var(--primary)" strokeWidth="2" />
         <line x1={pad.l} y1={h - pad.b} x2={w - pad.r} y2={h - pad.b} stroke="var(--border)" strokeWidth="1" />
       </svg>
       <div className="mt-2 flex flex-wrap items-center gap-4 text-[12px] text-muted-foreground">
         <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 bg-primary" />今日累计</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 border-t border-dashed border-muted-foreground" />同期基线（最近 20 个有数据交易日）</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 border-t border-dashed border-muted-foreground" />{baseDesc}</span>
         <span>纵轴上限 {safeFixed(maxY, 1)} 亿元</span>
       </div>
     </div>
@@ -268,7 +284,7 @@ export default function EtfWatchPage() {
           {/* ① 盘中分钟观测 */}
           <Section
             title="盘中分钟观测"
-            desc="20 只重点宽基 ETF 每分钟成交额加总。国家队进场常先体现在宽基 ETF 放量，而不是个股涨停；基线取最近 20 个有数据交易日「同一分钟」的累计均值，比的是同日同期（不足 20 日会标注）。"
+            desc="20 只重点宽基 ETF 每分钟成交额加总。国家队进场常先体现在宽基 ETF 放量，而不是个股涨停；基线取最多 20 个有数据交易日「同一分钟」的累计均值，比的是同日同期；实际参与的样本交易日数按图例/字段标注，不足 20 日不做等同处理。"
             extra={
               <span className={cn('rounded-full bg-s2 px-2 py-0.5 text-[12px] font-medium', stateMeta.cls)}>
                 {stateMeta.text}
@@ -290,7 +306,11 @@ export default function EtfWatchPage() {
                 </div>
 
                 <div className="mt-4">
-                  <CumChart series={intraday?.series || []} />
+                  <CumChart
+                    series={intraday?.series || []}
+                    baselineDays={totals?.baseline_days ?? null}
+                    baselineRequested={totals?.baseline_days_requested ?? 20}
+                  />
                 </div>
 
                 {intraday?.fallback_from ? (

@@ -3035,16 +3035,48 @@ def render_etf_flow(
     day = daily or {}
     dates = day.get("dates") or []
     if day.get("state") == "ok" and dates:
-        amounts = [v for v in (day.get("total_amount_yi") or []) if v is not None]
-        nets = [v for v in (day.get("net_sub_yi") or []) if v is not None]
+        # 2026-11-07 修: 原实现 `sum([v for v in amounts if v is not None])` —— 全 None 时
+        # sum([])==0，出口把「一个成交额都没采到」说成「合计 0.00 亿元」，是凭空造数。
+        # 另外各指标的样本日期常常不同（成交额来自分钟表、净申购来自 etf_flow_daily），
+        # 标题却声称「近 N 日合计」，等于把不同样本当同一窗口比较。
+        req = int(day.get("days_requested") or len(dates))
+        amt = [
+            (d, float(v))
+            for d, v in zip(dates, day.get("total_amount_yi") or [])
+            if v is not None
+        ]
+        net_pairs = [
+            (d, float(v))
+            for d, v in zip(dates, day.get("net_sub_yi") or [])
+            if v is not None
+        ]
+        span = f"{dates[0]}~{dates[-1]}" if len(dates) > 1 else dates[0]
         line = (
-            f"- **日度（近 {len(dates)} 个交易日）**：篮子成交额合计 {_num(sum(amounts))} 亿元"
+            f"- **日度（最近 {len(dates)} 个有数据交易日 / 请求 {req} 日，"
+            f"数据日 {span}）**："
         )
-        if nets:
+        if amt:
+            a_span = f"{amt[0][0]}~{amt[-1][0]}" if len(amt) > 1 else amt[0][0]
             line += (
-                f"；市场级累计净申购 {_num(sum(nets))} 亿元"
-                f"（{len(nets)}/{len(dates)} 日有净申购数据）"
+                f"篮子成交额合计 {_num(sum(v for _d, v in amt))} 亿元"
+                f"（{len(amt)}/{len(dates)} 日有成交额，{a_span}）"
             )
+        else:
+            line += f"篮子成交额未取到（{len(dates)} 个交易日无一有成交额数据）"
+        if net_pairs:
+            n_span = (
+                f"{net_pairs[0][0]}~{net_pairs[-1][0]}"
+                if len(net_pairs) > 1
+                else net_pairs[0][0]
+            )
+            line += (
+                f"；市场级累计净申购 {_num(sum(v for _d, v in net_pairs))} 亿元"
+                f"（{len(net_pairs)}/{len(dates)} 日有净申购，{n_span}）"
+            )
+        else:
+            line += f"；市场级净申购未取到（{len(dates)} 个交易日均无落库值）"
+        if amt and net_pairs and (len(amt) != len(net_pairs) or amt[0][0] != net_pairs[0][0]):
+            line += "；⚠️ 两项的有效日期不同，不可当作同一窗口的「成交额 vs 净申购」对比"
         sections.append(line)
     elif day and not any("日度交易日" in m for m in miss):
         miss.append(f"日度成交额：未取到（{day.get('note') or '无落库数据'}）")

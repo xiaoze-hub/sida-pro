@@ -396,7 +396,7 @@ def test_theme_mood_renders_five_dims(monkeypatch):
 
 
 def test_sql_failure_degrades_to_missing(monkeypatch):
-    def _boom(db, key, params=None):
+    def _boom(db, key, params=None, fmt=None):
         raise RuntimeError("table missing")
 
     monkeypatch.setattr(tc, "_read", _boom)
@@ -771,10 +771,10 @@ def _no_delegate(monkeypatch):
 def _stub_reads(monkeypatch, table: dict[str, list[dict]]):
     """读库层喂假数据（同时覆盖 _read / _read_one / _read_safe / _read_one_safe）。"""
 
-    def _read(db, key, params=None):
+    def _read(db, key, params=None, fmt=None):
         return list(table.get(key, []))
 
-    def _read_one(db, key, params=None):
+    def _read_one(db, key, params=None, fmt=None):
         return (list(table.get(key, [])) or [None])[0]
 
     monkeypatch.setattr(tc, "_read", _read)
@@ -878,7 +878,7 @@ def test_user_domains_only_query_own_user_id(monkeypatch, domain):
     """用户域的每条只读 SQL 都必须带 user_id 绑定参数（:uid），不能漏成全表。"""
     calls: list[tuple[str, dict]] = []
 
-    def _read(db, key, params=None):
+    def _read(db, key, params=None, fmt=None):
         calls.append((key, dict(params or {})))
         return []
 
