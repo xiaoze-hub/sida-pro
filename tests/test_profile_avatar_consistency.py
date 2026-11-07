@@ -106,6 +106,7 @@ def env(tmp_path, monkeypatch):
         "files": files,
         "db_avatar": db_avatar,
         "set_db_avatar": set_db_avatar,
+        "session": SessionF,
         "path": lambda f: os.path.join(avatar_dir, f),
     }
 
@@ -194,6 +195,19 @@ def test_shared_legacy_avatar_file_not_deleted(env):
     assert f3 not in (f1, f2)
     assert not os.path.exists(env["path"](f2))
     assert os.path.isfile(env["path"](f1))
+
+
+def test_global_settings_reference_preserves_avatar(env):
+    from src.web.models import AppSettings
+
+    c = env['client']
+    assert c.put('/api/profile', json={'avatar': _IMG_A}).status_code == 200
+    old = env['db_avatar']()
+    with env['session']() as db:
+        db.add(AppSettings(key='ui_avatar', value=old))
+        db.commit()
+    assert c.put('/api/profile', json={'avatar': _IMG_B}).status_code == 200
+    assert os.path.isfile(env['path'](old))
 
 
 def test_two_users_avatars_do_not_collide(env):

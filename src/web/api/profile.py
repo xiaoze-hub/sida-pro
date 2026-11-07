@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
-from src.web.models import AgentPredictionOutcome, Position, Stock, User
+from src.web.models import AgentPredictionOutcome, AppSettings, Position, Stock, User
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +111,14 @@ def _avatar_shared_by_other_user(db: Session | None, fname: str, user_id) -> boo
         return False
     try:
         rows = db.query(User.id).filter(User.avatar == fname).all()
+        global_avatar = db.query(AppSettings).filter(AppSettings.key == 'ui_avatar', AppSettings.value == fname).first()
+        if global_avatar:
+            return True
     except Exception as exc:  # noqa: BLE001 — 清理是尽力而为, 不得倒灌到接口
         logger.warning("头像引用检查失败, 保守保留文件 %s: %r", fname, exc)
         return True
-    return any(str(r[0]) != str(user_id) for r in rows)
+    # 提交后只要仍有任意用户引用就保留，包括并发请求使当前用户重新引用旧文件。
+    return bool(rows)
 
 
 def _cleanup_replaced_avatar(
