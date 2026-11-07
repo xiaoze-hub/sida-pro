@@ -1188,7 +1188,7 @@ async def _run_tool_loop_inner(
                 ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get(),
                 fact_pack=_fpack,
             ):
-                _hit = True
+                _hit = _hit or _k in ("delta", "done")
                 yield _k, _v
             if _hit:
                 return
