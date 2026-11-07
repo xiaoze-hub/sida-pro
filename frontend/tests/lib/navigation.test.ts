@@ -171,6 +171,14 @@ describe('③ 权限感知可见性(菜单与命令面板同一判定)', () => {
     expect(visible.has('/portfolio')).toBe(true) // edit_portfolio
   })
 
+  it('主力资金入口只在拥有至少一个资金视图权限时可见', () => {
+    const funds = NAV_ITEMS.find((item) => item.to === '/funds')!
+    for (const perm of ['view_dark', 'view_forecast']) {
+      expect(isNavItemVisible(funds, { perms: new Set([perm]), role: 'member', guest: false })).toBe(true)
+    }
+    expect(isNavItemVisible(funds, { perms: new Set(['view_quotes']), role: 'member', guest: false })).toBe(false)
+  })
+
   it('ownerOnly: 非 owner 即便有 manage_users 也隐藏管理后台(Role 优先)', () => {
     const memberWithPerm: NavViewer = { perms: new Set(['manage_users']), role: 'member', guest: false }
     const admin = NAV_ITEMS.find((n) => n.to === '/admin')!
