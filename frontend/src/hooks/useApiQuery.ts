@@ -11,15 +11,32 @@ import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 
 import { useTabActive } from '@sida/base-ui'
-import { ApiTimeoutError, fetchAPI, type ApiRequestOptions } from '@sida/api'
-
-import { safeJwtPayload } from '@/lib/jwt'
+import {
+  ApiTimeoutError,
+  AUTH_IDENTITY_EVENT,
+  fetchAPI,
+  getAuthIdentity,
+  getAuthScope,
+  notifyAuthIdentityChanged,
+  onAuthIdentityChanged,
+  type ApiRequestOptions,
+  type AuthIdentityChangeReason,
+} from '@sida/api'
 
 let _queryClient: QueryClient | null = null
 
-/** main.tsx 装配时注册, 供非组件代码(登出流程)清缓存。 */
+/**
+ * main.tsx 装配时注册, 供非组件代码(登出/撤销会话)清缓存。
+ *
+ * 2026-11-07: 同时挂到 `onAuthIdentityChanged` —— 登出发生在 `packages/api` 里, 它不认识
+ * TanStack; 只清 fetchAPI 那层会留下 query 缓存, 同标签页重新登录后仍可能读到上一个身份/
+ * 上一代 token 的条目。注册一次, 两层缓存走同一个收尾点。
+ */
 export function registerQueryClient(client: QueryClient) {
   _queryClient = client
+  onAuthIdentityChanged(() => {
+    _queryClient?.clear()
+  })
 }
 
 // ── 登录身份: 个人数据按账号隔离的唯一判据(2026-11-07) ──
@@ -27,48 +44,39 @@ export function registerQueryClient(client: QueryClient) {
 // 故障背景: 登录页是 `navigate('/')`(同标签页 SPA 换号, 不刷新), TanStack 缓存里
 // `['profile']` / `['profile','stats']` 之类的 key **不含身份** ⇒ B 登录后个人中心
 // 直接读到 A 的昵称/头像/统计, 在 B 的新数据回来前一直挂着别人的资料。
-// 修法: 个人页查询 key 必须带身份后缀(`scopedKey`), 且身份变化要能主动触发重渲染
-// (统一事件 `sida:auth-changed` 立即重判, 1s 轮询只作兜底)。
+//
+// 2026-11-07 复审收敛: 身份解析只留 `packages/api/src/client.ts` **一处**
+// (`getAuthIdentity` = JWT `sub` 优先, 退化到 `username`; `getAuthScope` = 身份 + 凭证代次)。
+// 原来这里第二份实现用 `username ?? sub` 且解不出时退化成 `t:<整条 token>` —— 前者在
+// 同名不同 sub(`username` 可重名/改名)时把两个人的分桶合并, 后者把**原 token 写进 query key**
+// (key 会进 devtools/错误上报/持久化, 等于泄漏凭证)。两条都删掉:
+//   - 无法确认身份 ⇒ 返回 null/''(fail-closed), 由页面拒绝展示与写入, 不退化成共享分桶;
+//   - 同 sub 换发 token 时代次变化 ⇒ key 变化, 旧会话时代的缓存不再命中。
 const IDENTITY_POLL_MS = 1000
 
 /**
- * 统一的登录身份变更事件(2026-11-07)。
- *
- * 登录/登出/同页换号(登录页 `navigate('/')`, 不刷新、没有 storage 事件)完成后, 由登录流程
- * dispatch 一次。身份判据的消费方(`useIdentityScope` / 头像缓存)收到后**立刻**重判:
- * 只靠 1s 轮询的话, 换号后最长 1s 内页面还挂在旧身份上 —— 这段时间里看到的资料/头像/可见按钮
- * 都是上一个人的, 而且用户可能就在这一秒里点了保存(写进新账号, 见 Profile 的提交前核对)。
- * 轮询保留下来当兜底: 事件漏发(其它入口改 token)时行为不退化成"永远不刷新"。
+ * 统一的登录身份变更事件(2026-11-07): 与 `@sida/api` 的 `AUTH_IDENTITY_EVENT` 是**同一个**
+ * 契约(同一个字符串), 不再各发各的 —— 否则登录流程广播一次、query 层广播另一次,
+ * 头像/查询各听一半, 总有一条路径漏更新。
  */
-export const AUTH_CHANGED_EVENT = 'sida:auth-changed'
+export const AUTH_CHANGED_EVENT = AUTH_IDENTITY_EVENT
 
-/** 登录/登出/换号后广播身份已变(幂等; 由登录流程调用)。 */
+/** 登录/登出/换号/撤销会话后广播身份已变(幂等; 由重定向入口调用)。 */
 export function notifyAuthChanged(): void {
-  if (typeof window === 'undefined') return
-  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
+  notifyAuthIdentityChanged('manual')
 }
 
-let _idToken: string | null = null
-let _idValue = ''
-
-/** 当前登录身份; 未登录返回 ''。用 JWT 的 username/sub, 不用 token 前缀(HS256 头人人相同)。 */
+/**
+ * 当前登录身份(响应式判据的取值): `u:<sub>@<代次>`; 无法确认返回 ''。
+ * 未登录 / Cookie-only / token 解不开都算"无法确认" —— 调用方不得据此展示或写入私有数据。
+ */
 export function currentIdentity(): string {
-  let token = ''
-  try {
-    token = localStorage.getItem('token') || ''
-  } catch {
-    token = ''
-  }
-  if (token === _idToken) return _idValue
-  _idToken = token
-  if (!token) {
-    _idValue = ''
-    return _idValue
-  }
-  const payload = safeJwtPayload(token)
-  const claim = payload?.username ?? payload?.sub
-  _idValue = typeof claim === 'string' && claim ? `u:${claim}` : `t:${token}`
-  return _idValue
+  return getAuthScope() ?? ''
+}
+
+/** 调用方是否拿到了**可信**的登录身份(有没有可用的 localStorage 凭证 + 能解出 sub/username)。 */
+export function hasTrustedIdentity(): boolean {
+  return getAuthIdentity() !== null
 }
 
 let _idListeners = new Set<() => void>()
@@ -128,7 +136,10 @@ export function useIdentityScope(): string {
   return useSyncExternalStore(subscribeIdentity, currentIdentity, () => '')
 }
 
-/** 给个人数据 query key 加身份后缀: `['profile']` → `['profile', 'u:alice']`。 */
+/**
+ * 给个人数据 query key 加身份后缀: `['profile']` → `['profile', 'u:<sub>@<代次>']`。
+ * 分桶串里只有 claim 与代次, **没有 token 本身**。
+ */
 export function scopedKey(base: QueryKey, identity: string = currentIdentity()): QueryKey {
   return [...base, identity || 'anon']
 }
@@ -278,4 +289,18 @@ export function useApiMutation<TData = unknown, TVars = void>(
 /** 登出/切换账号时清空全部服务端状态缓存(配合既有 clearResponseCache 调用点)。 */
 export function clearQueryCache() {
   _queryClient?.clear()
+}
+
+/**
+ * 统一的"登录身份已变"收尾(2026-11-07): 登录 / 登出 / 撤销当前会话 / 注销账号都必须走这里。
+ *
+ * 只清其中一层就会留下跨账号数据:
+ *   - `notifyAuthIdentityChanged` → 清 fetchAPI 的响应缓存与在途合并表、推进代次、广播统一事件;
+ *   - `clearQueryCache` → 清 TanStack 的服务端状态(否则从别的入口回到页面时仍命中旧身份/
+ *     旧代次 token 的条目, 例如"撤销当前会话 → 重新登录"这种不刷新的路径);
+ *   - 头像模块缓存订阅的是同一个事件, 会自行按新身份作废(见 use-avatar)。
+ */
+export function resetIdentityState(reason: AuthIdentityChangeReason = 'manual'): void {
+  notifyAuthIdentityChanged(reason)
+  clearQueryCache()
 }

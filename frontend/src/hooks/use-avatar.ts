@@ -50,10 +50,10 @@ function notify() {
 /**
  * 当前登录身份(账号切换的唯一判据)。未登录返回 ''。
  *
- * 与 `useApiQuery.currentIdentity` 是**同一个**判据(不再各存一份 token 缓存: 两份缓存迟早
- * 分叉, 一处认 B 一处认 A 时读写就会串号)。用 JWT 里的 username/sub 而不是 token 前缀:
- * `fetchAPI` 的响应缓存 key 只取 token 前 8 字符, HS256 头(`{"alg":...}`)对每个用户都一样
- * ⇒ 前缀会撞; 头像缓存必须按身份精确分区, 否则 A 的请求命中 B 的缓存就是串号。
+ * 与 `useApiQuery.currentIdentity` 是**同一个**判据 —— 由 `@sida/api` 的 `getAuthScope`
+ * 统一给出(`u:<sub>@<凭证代次>`): sub 优先于 username(用户名可重名/可改, 只有 sub 稳定),
+ * 且同 sub 换发 token(撤销会话后重登)会换代次, 快照随之作废重取。
+ * 不再各存一份 token 缓存: 两份缓存迟早分叉, 一处认 B 一处认 A 时读写就会串号。
  */
 export function currentAvatarIdentity(): string {
   return currentIdentity()
@@ -263,9 +263,13 @@ export function useAvatar(): string {
       // 别的标签页换号/登出 → 本标签页身份已变, 立刻重判(不能再挂旧账号头像)
       if (event.key === null || event.key === 'token' || event.key === 'user') ensureLoaded()
     }
-    // 同标签页登录/登出/换号会广播统一事件(无 storage 事件): 立刻重判身份并重取,
+    // 同标签页登录/登出/换号/撤销会话会广播统一事件(无 storage 事件): 立刻重判身份并重取,
     // 否则头像会一直挂在"上一个人"上直到别的原因触发重渲染。
-    const onAuthChanged = () => ensureLoaded()
+    // 登出/撤销(无身份)必须连内存快照一起清: 只"不显示"不足以让旧值彻底失联。
+    const onAuthChanged = () => {
+      if (!currentAvatarIdentity()) resetAvatarCache()
+      ensureLoaded()
+    }
     window.addEventListener('storage', onStorage)
     window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged)
     window.addEventListener(EVENT, onAvatarEvent)

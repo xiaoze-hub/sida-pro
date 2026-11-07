@@ -21,10 +21,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiTimeoutError } from '@sida/api'
+import { ApiTimeoutError, notifyAuthIdentityChanged } from '@sida/api'
 import {
   AUTH_CHANGED_EVENT,
+  currentIdentity,
+  hasTrustedIdentity,
   notifyAuthChanged,
+  registerQueryClient,
   scopedKey,
   useApiQuery,
   useIdentityScope,
@@ -32,6 +35,11 @@ import {
 
 function tokenOf(name: string): string {
   return `e30.${btoa(JSON.stringify({ username: name, sub: name }))}.sig`
+}
+
+/** 造任意 claim 组合的 token: 用来区分"username 同名"与"sub 不同"的两个真实账号。 */
+function tokenWith(claims: Record<string, unknown>): string {
+  return `e30.${btoa(JSON.stringify(claims))}.sig`
 }
 
 function makeClient() {
@@ -95,20 +103,26 @@ describe('登录身份: 统一事件 sida:auth-changed', () => {
     return <span data-testid="identity">{identity || 'anon'}</span>
   }
 
+  /** 身份分桶串形如 `u:<sub>@<代次>`: 断言主体, 不锁定具体的代次数字。 */
+  const idNow = () => screen.getByTestId('identity').textContent || ''
+  const expectSubject = (expected: string) => {
+    expect(idNow().startsWith(`u:${expected}@`)).toBe(true)
+  }
+
   it('同页换号(无 storage 事件): 收到事件即刻换身份, 不等 1s 轮询', () => {
     localStorage.setItem('token', tokenOf('alice'))
     render(<Probe />)
-    expect(screen.getByTestId('identity').textContent).toBe('u:alice')
+    expectSubject('alice')
 
     // 只改 token、不广播: 轮询还没到点, 身份暂时还是旧的(这正是那 1s 空窗)
     act(() => {
       localStorage.setItem('token', tokenOf('bob'))
     })
-    expect(screen.getByTestId('identity').textContent).toBe('u:alice')
+    expectSubject('alice')
 
     // 登录流程广播统一事件 ⇒ 同一帧内就换成新身份(不需要推进任何计时器)
     act(() => notifyAuthChanged())
-    expect(screen.getByTestId('identity').textContent).toBe('u:bob')
+    expectSubject('bob')
   })
 
   it('事件名是对外契约: 直接 dispatch 同名事件也生效', () => {
@@ -118,7 +132,7 @@ describe('登录身份: 统一事件 sida:auth-changed', () => {
       localStorage.setItem('token', tokenOf('bob'))
       window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
     })
-    expect(screen.getByTestId('identity').textContent).toBe('u:bob')
+    expectSubject('bob')
   })
 
   it('登出(清 token)事件同样立刻生效, 不会把上一个账号当当前身份', () => {
@@ -133,9 +147,62 @@ describe('登录身份: 统一事件 sida:auth-changed', () => {
 
   it('scopedKey 用当前身份分桶(切号后 key 自动变, 不会命中上一账号缓存)', () => {
     localStorage.setItem('token', tokenOf('alice'))
-    expect(scopedKey(['profile'])).toEqual(['profile', 'u:alice'])
+    const alice = scopedKey(['profile'])
+    expect(alice[0]).toBe('profile')
+    expect(String(alice[1])).toMatch(/^u:alice@\d+$/)
     localStorage.setItem('token', tokenOf('bob'))
-    expect(scopedKey(['profile'])).toEqual(['profile', 'u:bob'])
+    const bob = scopedKey(['profile'])
+    expect(String(bob[1])).toMatch(/^u:bob@\d+$/)
+    expect(alice[1]).not.toBe(bob[1])
+  })
+
+  it('同名不同 sub: 分桶按 sub 而不是 username(用户名可重名/可改)', () => {
+    // 两个真实账号用了同一个显示名 —— 按 username 分桶就会互相命中对方的资料
+    localStorage.setItem('token', tokenWith({ username: 'shared', sub: 'user-a', role: 'member' }))
+    const a = currentIdentity()
+    localStorage.setItem('token', tokenWith({ username: 'shared', sub: 'user-b', role: 'member' }))
+    const b = currentIdentity()
+    expect(a.startsWith('u:user-a@')).toBe(true)
+    expect(b.startsWith('u:user-b@')).toBe(true)
+    expect(a).not.toBe(b)
+  })
+
+  it('同 sub 换发 token(撤销会话后重登/静默续期): 代次变化, 分桶不得复用', () => {
+    localStorage.setItem('token', tokenWith({ username: 'alice', sub: 'user-a', v: 1 }))
+    const first = currentIdentity()
+    localStorage.setItem('token', tokenWith({ username: 'alice', sub: 'user-a', v: 2 }))
+    const second = currentIdentity()
+    expect(first.startsWith('u:user-a@')).toBe(true)
+    expect(second.startsWith('u:user-a@')).toBe(true)
+    // 同一个人、不同代凭证 ⇒ 必须是不同的分桶(旧 token 时代的缓存不能再命中)
+    expect(first).not.toBe(second)
+  })
+
+  it('无凭证(Cookie-only / 未登录): 身份不可信 ⇒ 空串 + 共享分桶, 页面据此拒绝展示/写入', () => {
+    expect(currentIdentity()).toBe('')
+    expect(hasTrustedIdentity()).toBe(false)
+    expect(scopedKey(['profile'])).toEqual(['profile', 'anon'])
+  })
+
+  it('token 解不出 sub/username(残缺 JWT): fail-closed, 不退化成 token 分桶', () => {
+    localStorage.setItem('token', 'not-a-jwt')
+    expect(currentIdentity()).toBe('')
+    expect(hasTrustedIdentity()).toBe(false)
+    // 关键反例: 分桶里绝不能出现 token 本身(以前会退化成 `t:<整条 token>` 写进 query key)
+    expect(JSON.stringify(scopedKey(['profile']))).not.toContain('not-a-jwt')
+  })
+})
+
+describe('身份收尾: 登录/登出/撤销会话/注销走同一条清缓存路径', () => {
+  it('notifyAuthIdentityChanged(任一口径) 都清空 TanStack 缓存(不只是 fetchAPI 那层)', () => {
+    const client = makeClient()
+    registerQueryClient(client)
+    client.setQueryData(['profile', 'u:alice@1'], { nickname: 'A' })
+    expect(client.getQueryData(['profile', 'u:alice@1'])).toBeTruthy()
+
+    notifyAuthIdentityChanged('revoke')
+    // 撤销会话后同页重新登录: 上一代 token 的条目不能再被命中
+    expect(client.getQueryData(['profile', 'u:alice@1'])).toBeUndefined()
   })
 })
 

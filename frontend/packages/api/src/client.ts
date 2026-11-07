@@ -33,6 +33,11 @@ export interface ApiError extends Error {
   proGate?: { proOnly: boolean; feature?: string }
   /** 429 限流时后端 `Retry-After` 头换算的等待毫秒(可能缺失) —— 供轮询层做退避。 */
   retryAfterMs?: number
+  /**
+   * 迟到的旧会话 401(2026-11-07): 这个 401 属于**发起时**的凭证, 而当前凭证已经换人/换代。
+   * 调用方必须把它当成"这一发请求过期"处理, 不能据此登出当前账号。
+   */
+  staleAuth?: boolean
 }
 
 /**
@@ -67,6 +72,9 @@ export function getToken(): string | null {
 /** 身份切换事件名(2026-11-07): 同一标签页登录/登出/换号后同步广播, 供上层清/重建缓存。 */
 export const AUTH_IDENTITY_EVENT = 'sida:auth-changed'
 
+/** 身份变化原因。`revoke` = 用户主动下线当前会话, `delete` = 账号注销。 */
+export type AuthIdentityChangeReason = 'login' | 'logout' | 'manual' | 'revoke' | 'delete'
+
 /**
  * 从 JWT payload 解出**可信的账号身份**(2026-11-07), 解不出返回 null。
  *
@@ -90,6 +98,41 @@ let _identityToken: string | null = null
 let _identityValue: string | null = null
 
 /**
+ * 缓存代次(2026-11-07): 身份 / 凭证换代、显式清理时 +1。
+ *
+ * 只把身份写进 key 还不够 —— 两种情况都会让"旧世界"的数据被当成当前数据:
+ *   ① 登出前发出的请求**晚到**时, 会带着旧 key 写回表里(同一个人重新登录后又读得到它);
+ *   ② **同一个 sub 换发 token**(撤销会话后重登 / 静默续期): 身份字符串一模一样, 旧缓存与
+ *      在途请求会被继续复用 —— 被撤销的会话时代取到的私有数据还挂在新会话上。
+ * 代次让"请求发起时的世界"与"响应落地时的世界"可比: 不一致即丢弃写入, key 也不再命中。
+ *
+ * 代次只在本模块内与 token 比较,**token 本身绝不进 key / 日志 / 事件**。
+ */
+let _cacheEpoch = 0
+/** 当前代次对应的 token(仅内存比较用; 不导出、不进任何 key)。 */
+let _epochToken: string | null = null
+
+/**
+ * 同步凭证代次(2026-11-07): token 变了(换号 / 同账号换发 / 登出)就推进代次并清表。
+ *
+ * 调用点覆盖每个会用到身份的地方(取身份、算缓存 key), 所以**静默替换 token**(没有广播事件、
+ * 没有 storage 事件的入口)也一定会被下一次请求发现, 而不是等上层记得通知。
+ */
+function _syncTokenGeneration(): void {
+  let token: string | null = null
+  try {
+    token = localStorage.getItem('token')
+  } catch {
+    token = null
+  }
+  if (token === _epochToken) return
+  _epochToken = token
+  _cacheEpoch += 1
+  _RESP_CACHE.clear()
+  _INFLIGHT.clear()
+}
+
+/**
  * 当前请求的缓存身份(2026-11-07)。**没有可信身份时返回 null** = 禁用共享缓存。
  *
  * 故障背景: 旧 `_cacheKey` 用 `token.slice(0, 8)` 当身份 —— HS256 的 JWT 头部
@@ -103,6 +146,7 @@ let _identityValue: string | null = null
  * - token 解不出 sub/username(非 JWT / 残缺)⇒ 同样 null, fail-closed。
  */
 export function getAuthIdentity(): string | null {
+  _syncTokenGeneration()
   const token = getToken()
   if (!token) {
     _identityToken = null
@@ -117,6 +161,21 @@ export function getAuthIdentity(): string | null {
   // 身份标识只由 claim 组成 —— **不含 token 本身**, 避免任何路径把它带进日志/错误信息。
   _identityValue = sub || username ? `u:${sub || username}` : null
   return _identityValue
+}
+
+/** 当前凭证代次(单调递增; 换号/同账号换发 token/显式清理都会推进)。 */
+export function getAuthGeneration(): number {
+  _syncTokenGeneration()
+  return _cacheEpoch
+}
+
+/**
+ * 统一身份分桶串: `u:<sub>@<代次>`; 无法确认身份时 null(fail-closed)。
+ * 上层(query key / 头像快照)只用它做分区, **不再各自解析 token**, 也不把原 token 写进 key。
+ */
+export function getAuthScope(): string | null {
+  const identity = getAuthIdentity()
+  return identity ? `${identity}@${_cacheEpoch}` : null
 }
 
 // 修复(M-1 + L-5, 2026-08-23): 多并发 401 同时触发 logout() 会重复跳转,
@@ -187,14 +246,7 @@ export interface ApiRequestOptions extends RequestInit {
 const _RESP_CACHE = new Map<string, { ts: number; data: unknown }>()
 const _CACHE_TTL_DEFAULT = 30_000 // 30s
 
-/**
- * 缓存代次(2026-11-07): 每次身份切换/显式清理 +1。
- *
- * 只把身份写进 key 还不够 —— 登出前发出的请求**晚到**时, 会带着旧身份 key 写回表里
- * (同一个人重新登录后又读得到它)。代次让"请求发起时的世界"与"响应落地时的世界"可比:
- * 不一致即丢弃写入。
- */
-let _cacheEpoch = 0
+// 缓存代次 `_cacheEpoch` 的声明与其语义见上方 `_syncTokenGeneration`(身份分区 + 凭证换代)。
 
 /**
  * 2026-10-02 首屏并发化: 同一 GET 的**在途**请求合并(single-flight)。
@@ -217,14 +269,14 @@ const _INFLIGHT = new Map<string, Promise<unknown>>()
 
 function _cacheKey(path: string, options?: ApiRequestOptions): string | null {
   if (!options || options.method === undefined || options.method === 'GET' || options.method === null) {
-    // 2026-11-07: 身份必须来自 JWT claim(sub/username), **绝不能用 token 前缀** ——
-    // HS256 头部对所有用户相同(恒为 `eyJhbGci`), 前缀分区等于不分區。
+    // 2026-11-07: 身份必须来自 JWT claim(sub/username)+ 凭证代次, **绝不能用 token 前缀** ——
+    // HS256 头部对所有用户相同(恒为 `eyJhbGci`), 前缀分区等于不分區; 同 sub 换发的新 token
+    // 也必须换一个代次, 否则被撤销会话时代的响应还挂在新会话上。
     // 没有可信身份(Cookie-only / 匿名 / 解不开)时返回 null: 不读缓存、不写缓存、不合并
     // 在途请求 —— 宁可多打一次请求, 也不能让两个身份共享同一份响应。
-    const identity = getAuthIdentity()
-    if (!identity) return null
-    // 代次入键: 身份切换/显式清理后, 旧世界的在途请求不会命中新世界的条目。
-    return `${identity}@${_cacheEpoch}:${path}`
+    const scope = getAuthScope()
+    if (!scope) return null
+    return `${scope}:${path}`
   }
   return null // 只缓存 GET
 }
@@ -281,7 +333,7 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     if (inflight) return inflight as Promise<T>
   }
 
-  const p = _fetchNow<T>(path, options, headers, ckey)
+  const p = _fetchNow<T>(path, options, headers, ckey, token)
   if (dedupable) {
     const key = ckey as string
     _INFLIGHT.set(key, p as Promise<unknown>)
@@ -367,10 +419,37 @@ async function _parseResponse<T>(
   method: string,
   options: ApiRequestOptions | undefined,
   ckey: string | null,
+  credentialToken: string | null,
 ): Promise<T> {
   if (res.status === 401) {
-    logout()
-    throw new Error('登录已过期')
+    /*
+     * 2026-11-07 跨账号风险: **迟到的旧会话 401 不能把新账号登出**。
+     *
+     * 真实序列: A 的页面在途请求正在等响应 → 用户登出/换号, B 登录成功并已写入新 token →
+     * A 那个请求此时才收到 401 → 旧实现无条件 `logout()` ⇒ 刚登录好的 B 被踢回登录页,
+     * 而且是在 B 的会话完全有效的情况下。
+     *
+     * 判据是"这一发请求带的凭证是否还是当前凭证": 不同(或已经登出) ⇒ 这个 401 属于旧世界,
+     * 只让本次请求失败(staleAuth), 不动当前会话/缓存; 相同 ⇒ 当前会话真的失效了, 才登出。
+     */
+    let currentToken: string | null = null
+    try {
+      currentToken = localStorage.getItem('token')
+    } catch {
+      currentToken = null
+    }
+    const stale = currentToken !== credentialToken
+    if (!stale) logout()
+    const err = new Error(stale ? '本次请求的登录状态已失效' : '登录已过期') as ApiError
+    err.status = 401
+    err.kind = 'HTTP_4xx'
+    if (stale) {
+      err.staleAuth = true
+      // 旧世界的失败不往会话消息流里灌 —— 否则换号后右栏凭空出现一条"登录过期"告警。
+      throw err
+    }
+    reportFailure({ path, method, status: 401, message: err.message })
+    throw err
   }
 
   const body: ApiResponse<T> = await res.json().catch(() => ({
@@ -425,6 +504,7 @@ async function _fetchNow<T>(
   options: ApiRequestOptions | undefined,
   headers: Record<string, string>,
   ckey: string | null,
+  credentialToken: string | null,
 ): Promise<T> {
   const method = (options?.method ?? 'GET').toUpperCase()
   const callerSignal = options?.signal ?? null
@@ -465,7 +545,7 @@ async function _fetchNow<T>(
         continue
       }
       // 体在这里读完；计时器在读完之前一直有效（B1：头到了不算完成）。
-      return await _parseResponse<T>(handle.res, path, method, options, ckey)
+      return await _parseResponse<T>(handle.res, path, method, options, ckey, credentialToken)
     } catch (error) {
       // 体读到一半被超时计时器 abort：仍归类为 TIMEOUT（不是"响应解析失败"）。
       if (handle.timedOut()) {
@@ -498,7 +578,20 @@ export function clearResponseCache() {
 }
 
 /**
- * 同步通知"登录身份已切换"(2026-11-07), 登录/登出/换号都必须调用。
+ * 身份变更的额外清理回调(2026-11-07): 让上层(React Query 缓存)能挂在**同一个**收尾点上。
+ *
+ * `packages/api` 是底层包, 不能反向 import 业务层; 但登出/撤销会话必须同时清掉两层缓存,
+ * 否则"同标签页重新登录"这类不刷新的路径仍会命中上一个身份/上一代 token 的条目。
+ * 上层在启动时注册一次(`registerQueryClient`), 这里只负责通知。
+ */
+let identityResetListener: ((reason: AuthIdentityChangeReason) => void) | null = null
+
+export function onAuthIdentityChanged(fn: ((reason: AuthIdentityChangeReason) => void) | null): void {
+  identityResetListener = fn
+}
+
+/**
+ * 同步通知"登录身份已切换"(2026-11-07), 登录/登出/换号/撤销会话都必须调用。
  *
  * 做两件事, 且都是**同步**的 —— 不能等下一次身份轮询:
  *   1. 能力层: 清响应缓存 + 在途合并表 + 推进代次(旧响应迟到写不进来);
@@ -506,8 +599,15 @@ export function clearResponseCache() {
  *
  * 事件 detail 只带 reason, **不带 token / 用户标识** —— 避免凭证流向日志或第三方监听者。
  */
-export function notifyAuthIdentityChanged(reason: 'login' | 'logout' | 'manual' = 'login'): void {
+export function notifyAuthIdentityChanged(reason: AuthIdentityChangeReason = 'login'): void {
+  // 登录成功后必须解除登出单飞锁 —— 否则"登出一次 → 重新登录"之后再遇到真 401 不会登出。
+  if (reason === 'login') _logoutInProgress = false
   clearResponseCache()
+  try {
+    identityResetListener?.(reason)
+  } catch {
+    /* 上层清理失败不能阻断登录/登出主流程 */
+  }
   try {
     if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
       window.dispatchEvent(new CustomEvent(AUTH_IDENTITY_EVENT, { detail: { reason } }))

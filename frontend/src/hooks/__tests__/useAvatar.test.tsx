@@ -16,7 +16,11 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
-vi.mock('@sida/api', () => ({ fetchAPI: api.fetchAPI }))
+// 只替换传输层: 身份解析(`getAuthScope`)必须用真实实现 —— 这里要验的正是"按真实身份分桶"。
+vi.mock('@sida/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@sida/api')>()
+  return { ...actual, fetchAPI: api.fetchAPI }
+})
 
 import { resetAvatarCache, saveAvatar, useAvatar } from '../use-avatar'
 

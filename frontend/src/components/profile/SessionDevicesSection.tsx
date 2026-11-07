@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchAPI } from '@sida/api'
+import { resetIdentityState } from '@/hooks/useApiQuery'
 import { Button } from '@sida/base-ui/components/ui/button'
 import { useToast } from '@sida/base-ui/components/ui/toast'
 import { AlertTriangle, Laptop, LogOut, MonitorSmartphone, ShieldCheck } from 'lucide-react'
@@ -64,10 +65,13 @@ export default function SessionDevicesSection() {
         { method: 'DELETE' },
       )
       if (res.current) {
-        // 用户把当前这台也下线了: 清本地凭证并回登录页
+        // 用户把当前这台也下线了: 清本地凭证, 并按统一收尾清缓存/广播身份变更
+        // (2026-11-07: 只删 token 不清缓存 ⇒ 同标签页重新登录时, 上一代 token 的响应
+        //  缓存/TanStack 条目仍会被当成"我的"命中; 撤销会话必须与登出同一条路径)。
         localStorage.removeItem('token')
         localStorage.removeItem('token_expires')
         localStorage.removeItem('user')
+        resetIdentityState('revoke')
         toast('当前设备已下线, 请重新登录', 'success')
         navigate('/login')
         return

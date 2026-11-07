@@ -113,16 +113,24 @@ export function Profile() {
   // B 登录进个人中心看到的是 A 的昵称/头像/统计。旧身份迟到的响应只会落进旧身份的分桶,
   // 碰不到当前页面。
   const identity = useIdentityScope()
+  // 无法确认身份(无 localStorage 凭证 / token 解不开) ⇒ 个人页**不展示、不写入**:
+  // 这种情况下 query key 只能是 'anon' 这类共享分桶, 展示出来就是把别人的资料当成自己的。
+  const trustedIdentity = identity !== ''
   const { data: profile, isLoading, error: profileError, refetch: refetchProfile, isFetching: profileFetching } =
-    useApiQuery<ProfileInfo>(scopedKey(['profile'], identity), '/profile', { cancelOnQueryAbort: true })
+    useApiQuery<ProfileInfo>(scopedKey(['profile'], identity), '/profile', {
+      cancelOnQueryAbort: true,
+      enabled: trustedIdentity,
+    })
   const { data: stats, error: statsError } = useApiQuery<ProfileStats>(
     scopedKey(['profile', 'stats'], identity),
     '/profile/stats',
+    { enabled: trustedIdentity },
   )
   // 2026-10-10 AI 链路 P1: 分 Agent 命中榜(此前后端已实现、零前端消费)。独立 query, 不拖累账号区。
   const { data: board, error: boardError } = useApiQuery<AccuracyBoard>(
     scopedKey(['profile', 'stats', 'accuracy'], identity),
     '/profile/stats/accuracy',
+    { enabled: trustedIdentity },
   )
   const [editOpen, setEditOpen] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
@@ -203,6 +211,11 @@ export function Profile() {
 
 
   const saveProfile = async () => {
+    // 没有可信身份就没有"写给谁"这回事: 拒绝写入, 不拿匿名/共享分桶当归属。
+    if (!trustedIdentity) {
+      toast('无法确认当前登录身份, 已拒绝保存, 请重新登录', 'error')
+      return
+    }
     const nickname = nicknameDraft.trim()
     if (!nickname) {
       toast('昵称不能为空', 'error')
@@ -228,14 +241,23 @@ export function Profile() {
       const updated = await fetchAPI<ProfileInfo>('/profile', { method: 'PUT', body: JSON.stringify(payload) })
       // 并发保存乱序: 被后一次保存取代的旧结果直接丢弃(既不写缓存也不改草稿)。
       if (seq !== saveSeqRef.current) return
+      // 只把**服务端返回的**结果写回缓存 —— 页头/顶栏头像必须用后端落库后的真实值,
+      // 不能沿用本地草稿(data URL 会被后端重新编码/存放, 与服务端读取结果可能不同;
+      // 用草稿"装作已保存"在失败/并发时会显示一张服务器上并不存在的头像)。
       queryClient.setQueryData(scopedKey(['profile'], saveIdentity), updated)
       if (currentIdentity() !== saveIdentity) return
       setNicknameDraft(updated.nickname || '')
       setAvatarDraft(updated.avatar || '')
       setAvatarChanged(false)
-      // 广播头像变更(2026-08-15 评审 A): 右上角 AccountMenu 头像本会话内同步刷新
+      // 广播头像变更(2026-08-15 评审 A): 右上角 AccountMenu / 顶栏头像本会话内同步刷新。
+      // 2026-11-07: 带**服务端确认值**(而不是无值广播) —— 带值的事件让头像缓存直接采纳真值并
+      // 作废在途的旧读; 服务端契约没给 avatar 时退化成无值事件, 让它自己去后端重取(不猜)。
       if (avatarChanged) {
-        window.dispatchEvent(new CustomEvent('sida:avatar-changed'))
+        if (typeof updated.avatar === 'string') {
+          window.dispatchEvent(new CustomEvent<string>('sida:avatar-changed', { detail: updated.avatar }))
+        } else {
+          window.dispatchEvent(new CustomEvent('sida:avatar-changed'))
+        }
       }
       toast('资料已保存', 'success')
       setEditOpen(false)
@@ -280,10 +302,33 @@ export function Profile() {
 
   const displayName = profile?.nickname || profile?.username || ''
 
+  /*
+   * 无法确认登录身份 ⇒ fail-closed(2026-11-07)。
+   * 以前这里用 `identity || 'anon'` 继续取数并渲染: 同一浏览器里没有可读凭证(Cookie-only)
+   * 或 token 残缺时, 页面会用共享分桶的响应充当"我的资料" —— 既可能展示别人的昵称/头像,
+   * 也可能让保存写到不属于任何人的分桶。宁可停在这里, 也不猜归属。
+   */
+  if (!trustedIdentity) {
+    return (
+      <div className="sida-page-enter">
+        <PageHeader title={t('profile.title')} description={t('profile.subtitle')} />
+        <div className="card flex flex-col gap-2 p-4" role="alert" data-testid="profile-identity-unknown">
+          <div className="flex items-start gap-1.5 text-[12px] text-amber-600 dark:text-amber-500">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>无法确认当前登录身份(本地凭证缺失或无法解析), 已暂停展示与写入个人资料。</span>
+          </div>
+          <Link to="/login" className="text-[12px] text-primary underline underline-offset-4">
+            重新登录
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="sida-page-enter">
       <PageHeader title={t('profile.title')} description={t('profile.subtitle')} />
-      <div className="card mb-5 flex flex-wrap items-center gap-4 p-4">
+      <div className="card mb-5 flex flex-wrap items-center gap-4 p-4" data-testid="profile-header">
         <AvatarCircle name={displayName} avatar={profile?.avatar || ''} />
         <div className="min-w-0 flex-1 basis-[180px]"><p className="text-[20px] font-semibold">{displayName || '个人账户'}</p><p className="mt-1 text-[12px] text-muted-foreground">管理个人资料、分析记录与账户安全</p></div>
         <div className="flex flex-wrap gap-2 sm:ml-auto"><Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>编辑资料</Button>

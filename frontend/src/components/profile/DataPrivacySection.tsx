@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { fetchAPI, API_BASE } from '@sida/api'
+import { resetIdentityState } from '@/hooks/useApiQuery'
 import { Button } from '@sida/base-ui/components/ui/button'
 import { Input } from '@sida/base-ui/components/ui/input'
 import { Label } from '@sida/base-ui/components/ui/label'
@@ -108,10 +109,13 @@ export default function DataPrivacySection({ username }: { username?: string }) 
       setPassword('')
       setAck(false)
       toast(res.message || '删除申请已受理', 'success')
-      // 软删后 token_version 已递增 → 当前会话失效, 回登录页更诚实
+      // 软删后 token_version 已递增 → 当前会话失效, 回登录页更诚实。
+      // 2026-11-07: 注销走与登出/撤销会话同一条收尾路径 —— 清本地凭证 + 清两级缓存 +
+      // 广播身份变更。只删 token 的话, 注销后同页仍挂着上一个身份的资料/头像缓存。
       localStorage.removeItem('token')
       localStorage.removeItem('token_expires')
       localStorage.removeItem('user')
+      resetIdentityState('delete')
       window.setTimeout(() => {
         window.location.href = '/login'
       }, 1200)
