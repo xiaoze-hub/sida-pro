@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -23,7 +24,17 @@ from src.core.timezone import db_now_naive, to_iso_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_KINDS = ("annotation", "watchlist", "alert", "schedule")
+#: apply_action → handler 传递当前正在确认的 action_id（setting 类动作的审计必须
+#: 绑定到这一条 CopilotAction 行，绝不能让模型/handler 自报一个 id 去伪造关联）。
+_CURRENT_ACTION_ID: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "copilot_action_id", default=0
+)
+
+ALLOWED_KINDS = ("annotation", "watchlist", "alert", "schedule", "setting")
+
+#: 真能撤销的动作类型。**setting 不在其中**：设置类动作只支持「重新提议修正」，
+#: 不做快照回滚（回滚要把 key 写回 before，而 before 之后可能又被用户/其他动作改过，
+#: 硬写回就是覆盖他人修改 —— 无法安全实现，故不暴露可撤销）。
 
 #: 真能撤销的动作类型。
 #:  - `annotation`：走**标注撤销**（删掉那条 `kline_annotations` 行 + 动作转 rolled_back），
@@ -39,6 +50,7 @@ SNAPSHOT_ROLLBACK_KINDS: tuple[str, ...] = ("watchlist", "alert", "schedule")
 
 _KIND_NAMES: dict[str, str] = {
     "annotation": "标注", "watchlist": "加自选", "alert": "盯盘提醒", "schedule": "定时任务",
+    "setting": "通知设置",
 }
 
 
@@ -70,6 +82,25 @@ def propose(db: Session, *, user_id: Any, kind: str, payload: dict, run_id: str 
         _guard_annotation_target(
             payload.get("symbol"), payload.get("market") or "CN", payload.get("instrument")
         )
+    if kind == "setting":
+        # 提议阶段就校验权限 + 计算基线：key/before/value 由 prepare_setting 在
+        # **本事务内**读取并固化进 payload，apply 阶段再从行里读，不接受模型另传 dict。
+        from src.harness.setting_changes import (
+            SettingPermissionError,
+            prepare_setting,
+        )
+
+        key = payload.get("key")
+        value = payload.get("value")
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ActionError("通知设置需要 key 与 value")
+        try:
+            baseline = prepare_setting(db, user_id=user_id, key=key, value=value)
+        except SettingPermissionError as exc:
+            raise ActionError(str(exc), status_code=exc.status_code) from exc
+        except ValueError as exc:
+            raise ActionError(str(exc), status_code=400) from exc
+        payload = dict(baseline)
     # P1-1.3: 提议时就把"会改什么"算出来给用户看。diff 算失败不能拦住提议
     # （有些动作类型没有 diff），但要在结果里如实为空，不能编。
     # ⚠️ 2026-10-25 CI 拦下：这里**不能**把 ActionError 抛出去。
@@ -138,6 +169,7 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         "annotation": _apply_annotation,
         "alert": _apply_alert,
         "schedule": _apply_schedule,
+        "setting": _apply_setting,
     }.get(row.kind)
     if handler is None:
         raise ActionError(f"{row.kind} 动作暂未开放执行")
@@ -170,7 +202,13 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
 
     extra: dict = {}
     try:
-        result = handler(db, user_id=user_id, payload=payload)
+        # setting 类动作的审计必须绑定到这一条动作行；用 contextvar 把 action_id
+        # 传进 handler，杜绝 handler 自报 id 伪造关联。
+        token = _CURRENT_ACTION_ID.set(action_id)
+        try:
+            result = handler(db, user_id=user_id, payload=payload)
+        finally:
+            _CURRENT_ACTION_ID.reset(token)
         if isinstance(result, tuple):  # 标注类动作回传 (文案, {annotation_id, annotation})
             result, extra = result
         if extra.get("alert"):
@@ -1530,6 +1568,42 @@ def _apply_schedule(db: Session, *, user_id: Any, payload: dict) -> str:
     label = "竞价摘要" if kind == "auction_digest" else "收盘小结"
     return f"已创建定时任务 #{row['id']}：{label} 每{row['weekdays']} {row['at_hhmm']} 推送到会话"
 
+
+def _apply_setting(db: Session, *, user_id: Any, payload: dict) -> str:
+    """受控修改三键通知设置（propose → 确认 → CAS → 同事务审计）。
+
+    关键安全约束（2026-11-07 审计修复）:
+      - key/before/value 全部从**这条已持久化 CopilotAction 行**的 payload 读取，
+        绝不接受模型另传的 proposal dict —— 伪造/跨用户/改 action_id 都不成立。
+      - `setting_changes.apply_setting` 在**同一事务**里做 CAS + 写审计，audit 的
+        action_id 就是本条动作的 id；业务 commit 由 apply_action 统一提交。
+      - 权限在 apply 时按 DB 实时角色 + 权限扩展再判一次（propose 时已判、apply 再判），
+        失权/禁用/服务身份拒绝。
+    """
+    from src.harness.setting_changes import (
+        SettingConflict,
+        SettingNotFound,
+        SettingPermissionError,
+        apply_setting,
+    )
+
+    try:
+        apply_setting(db, user_id=user_id, payload=payload, action_id=_CURRENT_ACTION_ID.get())
+    except SettingPermissionError as exc:
+        raise ActionError(str(exc), status_code=exc.status_code) from exc
+    except SettingNotFound as exc:
+        raise ActionError(str(exc), status_code=exc.status_code) from exc
+    except SettingConflict as exc:
+        raise ActionError(str(exc), status_code=exc.status_code) from exc
+    key = str(payload.get("key") or "")
+    val = str(payload.get("value") or "")
+    before = payload.get("before")
+    present = bool(payload.get("before_present"))
+    # 明确「改成什么、原来是啥」，空字符串也如实念出来，不吞成 None。
+    before_txt = "（不存在）" if not present else ("（空）" if before == "" else before)
+    return f"已把「{key}」从 {before_txt} 改为 {val or '（空，关闭/继承默认）'}"
+
+
 # ── P1-1.3 dry-run diff + 回滚（2026-10-25）───────────────────────────────
 # 为什么要有 diff：propose 只写"我要加自选 600111"，用户点确认前**看不到会改什么**。
 # 这不是 UI 问题，是授权问题 —— 让人确认一件描述不清的事，等于没确认。
@@ -1538,7 +1612,7 @@ def _apply_schedule(db: Session, *, user_id: Any, payload: dict) -> str:
 # 而且两次操作在审计里是两件互不相关的事。回滚才是"这次动作"的闭合。
 
 # 支持 diff 的动作类型（annotation 是画图批注，没有"改前值"，不做 diff）
-DIFF_KINDS = ("watchlist", "alert", "schedule")
+DIFF_KINDS = ("watchlist", "alert", "schedule", "setting")
 
 
 def preview_diff(db: Session, *, user_id: Any, kind: str, payload: dict) -> list[dict]:
@@ -1553,7 +1627,29 @@ def preview_diff(db: Session, *, user_id: Any, kind: str, payload: dict) -> list
         return _diff_watchlist(db, user_id=user_id, payload=payload)
     if kind == "alert":
         return _diff_alert(db, user_id=user_id, payload=payload)
+    if kind == "setting":
+        return _diff_setting(db, user_id=user_id, payload=payload)
     return _diff_schedule(db, user_id=user_id, payload=payload)
+
+
+def _diff_setting(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
+    """通知设置动作的 diff —— 如实念出 before/after，空字符串不吞成 None。
+
+    `payload` 是 propose 时由 `prepare_setting` 固化好的基线（含 before/before_present），
+    这里只读它做展示，不再二次查库。
+    """
+    key = str(payload.get("key") or "")
+    value = payload.get("value")
+    present = bool(payload.get("before_present"))
+    before = payload.get("before")
+    before_txt = "（不存在）" if not present else ("（空）" if before == "" else before)
+    after_txt = value if value != "" else "（空，关闭/继承默认）"
+    return [{
+        "field": key,
+        "before": before_txt,
+        "after": after_txt,
+        "change": "noop" if (present and before == value) else ("update" if present else "add"),
+    }]
 
 
 def _diff_watchlist(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
