@@ -33,7 +33,13 @@ type IntradayPoint = {
 }
 type IntradayResp = {
   date: string
+  /** 数据日相位（回退到历史日时是那天的相位，不是当前时段）。 */
   phase: string
+  /** 当前时段相位（pre/live/closed/non_trading_day）。 */
+  session_phase?: string
+  session_time?: string
+  /** 数据不是当日的（已回退），页面上必须标明「不是今天的行情」。 */
+  stale?: boolean
   state: string
   /** 当日尚无分钟数据时回退到的最近交易日；有值即说明「显示的不是今天」。 */
   fallback_from?: string | null
@@ -43,9 +49,16 @@ type IntradayResp = {
     baseline_avg_yi: number | null
     ratio_vs_baseline: number | null
     baseline_days: number
+    baseline_days_requested?: number
+    baseline_missing_days?: number
+    baseline_confirmed?: boolean
     last_minute: string | null
     etfs_expected: number
+    /** 过 ≥80% 闸门（20 只篮子 = ≥16 只）的分钟数。 */
     full_minutes: number
+    /** 真·20 只全齐的分钟数（与 full_minutes 不同，别混）。 */
+    strict_minutes?: number
+    min_etfs_for_complete?: number
     minutes: number
   }
   benchmark?: { code: string; name: string; points: { minute: string; close: number }[] }
@@ -134,7 +147,7 @@ function CumChart({ series }: { series: IntradayPoint[] }) {
       </svg>
       <div className="mt-2 flex flex-wrap items-center gap-4 text-[12px] text-muted-foreground">
         <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 bg-primary" />今日累计</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 border-t border-dashed border-muted-foreground" />过去 20 日同期均值</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 border-t border-dashed border-muted-foreground" />同期基线（最近 20 个有数据交易日）</span>
         <span>纵轴上限 {safeFixed(maxY, 1)} 亿元</span>
       </div>
     </div>
@@ -222,7 +235,7 @@ export default function EtfWatchPage() {
           <>
             <span>数据源·通达信 TQ</span>
             <span>{intraday?.date ? `${intraday.date.slice(0, 4)}-${intraday.date.slice(4, 6)}-${intraday.date.slice(6, 8)}` : '--'}</span>
-            <span>{PHASE_LABEL[intraday?.phase || ''] || '--'}</span>
+            <span>当前时段 {PHASE_LABEL[intraday?.session_phase || intraday?.phase || ''] || '--'}</span>
           </>
         }
         actions={
@@ -255,7 +268,7 @@ export default function EtfWatchPage() {
           {/* ① 盘中分钟观测 */}
           <Section
             title="盘中分钟观测"
-            desc="20 只重点宽基 ETF 每分钟成交额加总。国家队进场常先体现在宽基 ETF 放量，而不是个股涨停；基线取过去 20 个交易日「同一分钟」的累计均值，比的是同日同期。"
+            desc="20 只重点宽基 ETF 每分钟成交额加总。国家队进场常先体现在宽基 ETF 放量，而不是个股涨停；基线取最近 20 个有数据交易日「同一分钟」的累计均值，比的是同日同期（不足 20 日会标注）。"
             extra={
               <span className={cn('rounded-full bg-s2 px-2 py-0.5 text-[12px] font-medium', stateMeta.cls)}>
                 {stateMeta.text}
@@ -271,9 +284,9 @@ export default function EtfWatchPage() {
               <>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Stat label="今日累计成交额" value={`${fmt(totals?.cum_yi)} 亿`} hint={totals?.last_minute ? `截至 ${totals.last_minute.slice(0, 2)}:${totals.last_minute.slice(2)}` : undefined} />
-                  <Stat label="过去 20 日同期均值" value={`${fmt(totals?.baseline_avg_yi)} 亿`} hint={`基线 ${totals?.baseline_days ?? 0} 个交易日`} />
+                  <Stat label="同期基线均值" value={`${fmt(totals?.baseline_avg_yi)} 亿`} hint={`基线 ${totals?.baseline_days ?? 0}/${totals?.baseline_days_requested ?? 20} 个交易日`} />
                   <Stat label="相对基线" value={ratio === null ? '--' : `${fmt(ratio)} 倍`} tone={ratioTone} hint={ratio === null ? '基线不足，不外推' : ratio >= 1.15 ? '放量' : ratio <= 0.7 ? '清淡' : '接近常态'} />
-                  <Stat label="已采到分钟" value={`${totals?.minutes ?? 0} 分钟`} hint={`20 只齐全 ${totals?.full_minutes ?? 0} 分钟`} />
+                  <Stat label="已采到分钟" value={`${totals?.minutes ?? 0} 分钟`} hint={`≥${totals?.min_etfs_for_complete ?? 16} 只 ${totals?.full_minutes ?? 0} 分钟`} />
                 </div>
 
                 <div className="mt-4">
@@ -285,14 +298,14 @@ export default function EtfWatchPage() {
                     <Info className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     <span>
                       今日（{intraday.fallback_from}）的分钟数据尚未就绪，当前显示最近交易日 {intraday.date} 的完整数据。
-                      这不是今天的行情。
+                      这不是今天的行情（数据日 {intraday.date} 为{PHASE_LABEL[intraday.phase] || '未知'}，当前时段 {PHASE_LABEL[intraday.session_phase || ''] || '未知'}）。
                     </span>
                   </div>
                 ) : null}
 
                 {intraday?.state === 'insufficient' ? (
                   <div className="mt-3 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] text-role-watch">
-                    当日多数分钟未采到全部 20 只 ETF，活跃度结论不可用（半场数据会把成交额算少一截）。
+                    当日多数分钟未达 ≥16/20（80%）覆盖闸门，活跃度结论不可用（半场数据会把成交额算少一截）。
                   </div>
                 ) : null}
               </>

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime
 from typing import Any, Callable
 
@@ -32,6 +33,20 @@ COVERAGE_MIN = 0.80
 #: 20 日基线窗口（交易日，不含当日）。
 BASELINE_DAYS = 20
 
+#: 单日分钟上限（含 11:30 / 13:00 边界与盘后残留行；SQL 的 LIMIT 按它取上界）。
+MAX_MINUTES_PER_DAY = 1440
+
+
+def min_etfs_for_complete(expected: int | None = None) -> int:
+    """一个分钟「可用」的标的数门槛：**≥80%，不是全部**（20 只篮子 → 16 只）。
+
+    以前出口文案把过闸门的分钟说成「20 只齐全」，把 16 只也说成 20 只，
+    属于把覆盖口径说满；现在门槛与文案都从本函数取，只有一个真值。
+    """
+    n = len(ew.ETF_BASKET) if expected is None else int(expected)
+    return max(1, math.ceil(n * COVERAGE_MIN - 1e-9))
+
+
 #: 单域只读语句（全部带 LIMIT；`tools_catalog._SQL` 直接复用这批字符串）。
 SQL: dict[str, str] = {
     "etf_minute_rows": (
@@ -39,7 +54,11 @@ SQL: dict[str, str] = {
         "FROM etf_minute_flow WHERE trade_date = :d "
         "GROUP BY minute ORDER BY minute LIMIT 1440"
     ),
-    "etf_latest_date": "SELECT MAX(trade_date) AS d FROM etf_minute_flow LIMIT 1",
+    # 回退基准必须**早于目标日**：表里若有未来日期的行，MAX() 会把未来日当「最近交易日」。
+    "etf_latest_date": (
+        "SELECT MAX(trade_date) AS d FROM etf_minute_flow "
+        "WHERE trade_date < :d LIMIT 1"
+    ),
     "etf_baseline_dates": (
         "SELECT DISTINCT trade_date FROM etf_minute_flow "
         "WHERE trade_date < :d ORDER BY trade_date DESC LIMIT :n"
@@ -47,7 +66,9 @@ SQL: dict[str, str] = {
     "etf_baseline_rows": (
         "SELECT minute, trade_date, SUM(amount_wan) AS amount_wan, "
         "COUNT(DISTINCT etf_code) AS etfs FROM etf_minute_flow "
-        "WHERE trade_date IN ({ph}) GROUP BY minute, trade_date LIMIT 6000"
+        # 上界 = 窗口交易日 × 单日分钟上限（20 × 1440 = 28800）。写死 6000 会把
+        # 20 个完整交易日的分组截断，基线被静默算低 —— 原实现没有 LIMIT，这里只是护栏。
+        "WHERE trade_date IN ({ph}) GROUP BY minute, trade_date LIMIT 30000"
     ),
     "etf_support": (
         "SELECT trade_date, scale_yi AS etf_scale, net_sub_yi AS etf_net_sub "
@@ -122,20 +143,36 @@ def basket_payload() -> dict[str, Any]:
 
 # ── intraday ─────────────────────────────────────────────────────────────
 
-def baseline_cum(run: Runner, dates: list[str]) -> dict[str, float]:
-    """过去 N 日「同一分钟」的累计成交额均值（亿元）。只统计 20 只齐全的分钟。"""
+def baseline_curve(run: Runner, dates: list[str]) -> dict[str, Any]:
+    """过去 N 日「同一分钟」的累计成交额均值 + **真实样本数**。
+
+    返回 `cum`（分钟 → 均值亿元）、`days`（分钟 → 实际参与该分钟的交易日数）、
+    `days_used`（有合规分钟的交易日数）、`days_requested`、`gate_etfs`。
+
+    为什么要把样本数一起带出来：原来只回 `cum`，出口就拿「请求了 20 日」当「有 20 日基线」，
+    窗口里只有 2 天也会写「过去 20 个交易日」。分母缺失（缺失日是未采集还是非交易日）
+    无法从分钟表反推，所以只报**能算出的实际样本数**，剩余标「未确认」。
+    """
+    out: dict[str, Any] = {
+        "cum": {},
+        "days": {},
+        "days_used": 0,
+        "days_requested": len(dates),
+        "gate_etfs": min_etfs_for_complete(),
+    }
     if not dates:
-        return {}
+        return out
     ph, in_params = in_clause("d", dates)
     rows = run("etf_baseline_rows", in_params, {"ph": ph})
-    expected = len(ew.ETF_BASKET)
+    gate = int(out["gate_etfs"])
     per_day: dict[str, dict[str, float]] = {}
     for r in rows:
-        if int(r["etfs"] or 0) < expected * COVERAGE_MIN:
+        if int(r["etfs"] or 0) < gate:
             continue
         per_day.setdefault(r["trade_date"], {})[r["minute"]] = float(r["amount_wan"] or 0.0)
+    out["days_used"] = len(per_day)
     if not per_day:
-        return {}
+        return out
 
     acc: dict[str, float] = {}
     cnt: dict[str, int] = {}
@@ -145,7 +182,14 @@ def baseline_cum(run: Runner, dates: list[str]) -> dict[str, float]:
             cum += mins[m]
             acc[m] = acc.get(m, 0.0) + cum
             cnt[m] = cnt.get(m, 0) + 1
-    return {m: (acc[m] / cnt[m]) / 1e4 for m in acc if cnt[m] > 0}
+    out["cum"] = {m: (acc[m] / cnt[m]) / 1e4 for m in acc if cnt[m] > 0}
+    out["days"] = {m: cnt[m] for m in cnt if cnt[m] > 0}
+    return out
+
+
+def baseline_cum(run: Runner, dates: list[str]) -> dict[str, float]:
+    """`baseline_curve` 的均值部分（保留旧签名，调用方只关心曲线时用）。"""
+    return baseline_curve(run, dates)["cum"]
 
 
 def intraday_payload(
@@ -155,7 +199,11 @@ def intraday_payload(
     now: datetime,
     index_points: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """盘中分钟观测：20 只 ETF 合计成交额 + 20 日同期均值（+ 可选指数旁证）。"""
+    """盘中分钟观测：20 只 ETF 合计成交额 + 近 N 个交易日同期均值（+ 可选指数旁证）。
+
+    `N` 只报实际可用样本（`totals.baseline_days`），窗口请求数是 20；不足时不写「过去 20 日」。
+    `phase` 是**数据日**的相位，`session_phase` 才是当前时段 —— 回退到历史日时两者不同。
+    """
     target = date_str or now.strftime("%Y%m%d")
     try:
         d_obj = datetime.strptime(target, "%Y%m%d").date()
@@ -163,15 +211,18 @@ def intraday_payload(
         return {"error": "date 需为 YYYYMMDD", "date": target}
 
     expected = len(ew.ETF_BASKET)
+    gate = min_etfs_for_complete(expected)
+    session_phase = phase_of(now.date(), now)
     mins = run("etf_minute_rows", {"d": target})
     # 当日还没有分钟数据时，回退到最近一个有数据的交易日并**显式标注**。
     # 盘中/收盘后通达信当日分钟线未就绪（实测 15:21 仍取不到），不回退页面会长时间空白；
     # 但不能把旧数据伪装成今天 —— `fallback_from` 必须一起返回。
     fallback_from: str | None = None
     if not mins and date_str is None:
-        latest_rows = run("etf_latest_date", {})
+        # 只取 < 今日的日期：表里若有未来行，MAX() 会把未来日当成「最近的交易日」。
+        latest_rows = run("etf_latest_date", {"d": target})
         latest = latest_rows[0]["d"] if latest_rows else None
-        if latest and latest != target:
+        if latest and str(latest) < target:
             mins = run("etf_minute_rows", {"d": latest})
             fallback_from = target
             target = latest
@@ -183,8 +234,11 @@ def intraday_payload(
         return {
             "date": target,
             "phase": phase_of(d_obj, now),
+            "session_phase": session_phase,
+            "session_time": now.strftime("%H:%M"),
             "state": "no_data",
             "fallback_from": fallback_from,
+            "stale": fallback_from is not None,
             "note": "当日无分钟数据（未采集或非交易日）；盘中采集每分钟一次，收盘后 15:35 补采。",
             "series": [],
             "totals": None,
@@ -195,17 +249,22 @@ def intraday_payload(
         r["trade_date"]
         for r in run("etf_baseline_dates", {"d": target, "n": BASELINE_DAYS})
     ]
-    baseline = baseline_cum(run, base_dates)
+    base = baseline_curve(run, base_dates)
+    baseline: dict[str, float] = base["cum"]
 
     series: list[dict[str, Any]] = []
     cum = 0.0
     full_minutes = 0
+    strict_minutes = 0
     for r in mins:
         amt_yi = float(r["amount_wan"] or 0.0) / 1e4
         cum += amt_yi
-        complete = int(r["etfs"] or 0) >= expected * COVERAGE_MIN
+        got = int(r["etfs"] or 0)
+        complete = got >= gate
         if complete:
             full_minutes += 1
+        if got >= expected:
+            strict_minutes += 1
         series.append({
             "minute": r["minute"],
             "amount_yi": round_or_none(amt_yi, 3),
@@ -233,28 +292,60 @@ def intraday_payload(
         state = "normal"
 
     points = index_points or []
+    days_requested = BASELINE_DAYS
+    days_available = len(base_dates)          # 窗口内真的有行情的交易日
+    days_used = int(base["days_used"])        # 其中至少有 1 个合规分钟、真进均值的天数
+    missing_days = max(days_requested - days_available, 0)
+    dropped_days = max(days_available - days_used, 0)
+    sample_days = int((base["days"] or {}).get(last_minute, 0)) if last_minute else 0
+    confirmed = missing_days == 0 and dropped_days == 0
+
+    if confirmed:
+        base_note = (
+            f"基线取过去 {days_requested} 个交易日同一分钟的累计均值，口径为「同日同期」，不是全天对比"
+        )
+    else:
+        base_note = (
+            f"基线仅 {days_used} 个交易日可用（请求 {days_requested} 日；"
+            f"窗口内缺 {missing_days} 个交易日样本"
+        )
+        if dropped_days:
+            base_note += f"，另有 {dropped_days} 个交易日无达标分钟被剔除"
+        base_note += "；缺的日期是未采集还是非交易日无法从分钟表确认，标未确认）"
+
     return {
         "date": target,
         "phase": phase_of(d_obj, now),
+        "session_phase": session_phase,
+        "session_time": now.strftime("%H:%M"),
         "state": state,
         "fallback_from": fallback_from,
+        "stale": fallback_from is not None,
         "benchmark": {"code": ew.BENCHMARK_INDEX, "name": ew.BENCHMARK_NAME, "points": points},
         "series": series,
         "totals": {
             "cum_yi": round_or_none(cum, 2),
             "baseline_avg_yi": round_or_none(base_at),
             "ratio_vs_baseline": round_or_none(ratio, 3),
-            "baseline_days": len(base_dates),
+            "baseline_days": days_used,
+            "baseline_days_requested": days_requested,
+            "baseline_days_in_window": days_available,
+            "baseline_missing_days": missing_days,
+            "baseline_days_dropped": dropped_days,
+            "baseline_sample_days": sample_days,
+            "baseline_confirmed": confirmed,
             "last_minute": last_minute,
             "etfs_expected": expected,
+            "min_etfs_for_complete": gate,
             "full_minutes": full_minutes,
+            "strict_minutes": strict_minutes,
             "minutes": len(series),
             "coverage": round_or_none(coverage, 3),
         },
         "note": (
-            "成交额为 20 只重点宽基 ETF 合计（通达信分钟线，单位亿元）；"
-            "基线取过去 %d 个交易日同一分钟的累计均值，口径为「同日同期」，不是全天对比。"
-            % BASELINE_DAYS
+            f"成交额为 {expected} 只重点宽基 ETF 合计（通达信分钟线，单位亿元）；"
+            + base_note
+            + "。"
         ),
         "source": "tdx_tq",
     }
@@ -369,12 +460,15 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
 __all__ = [
     "BASELINE_DAYS",
     "COVERAGE_MIN",
+    "MAX_MINUTES_PER_DAY",
     "SQL",
     "basket_payload",
     "baseline_cum",
+    "baseline_curve",
     "daily_payload",
     "in_clause",
     "intraday_payload",
+    "min_etfs_for_complete",
     "phase_of",
     "round_or_none",
     "support_payload",

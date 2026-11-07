@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1594,11 +1595,23 @@ def _session(db: Any) -> tuple[Any, bool]:
     return SessionLocal(), True
 
 
-def _read(db: Any, key: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """执行一条只读语句，返回 dict 行。缺 LIMIT 直接拒绝（编程期错误，不发给库）。"""
+def _read(
+    db: Any,
+    key: str,
+    params: dict[str, Any] | None = None,
+    fmt: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """执行一条只读语句，返回 dict 行。缺 LIMIT 直接拒绝（编程期错误，不发给库）。
+
+    `fmt` 只用于展开 `{ph}` 这类 IN 占位符模板（跨方言必须逐个绑定）。**展开后仍然走
+    这条路径**：同一 LIMIT 守卫、同一会话获取/关闭。ETF 域曾经自己开 session 执行
+    展开后的语句，绕过 `_read`，导致测试桩拦不住、LIMIT 校验也漏掉。
+    """
     sql = _SQL.get(key)
     if not sql:
         raise KeyError(f"未登记只读语句: {key}")
+    if fmt:
+        sql = sql.format(**fmt)
     if "LIMIT" not in sql.upper():
         raise ValueError(f"只读查询必须带 LIMIT（禁止全表扫）: {key}")
     from sqlalchemy import text
@@ -1657,11 +1670,57 @@ def _read_one_safe(
         return None
 
 
+#: 凭据形态：`scheme://user:pass@host`、`password=...`、`user=...@...`、`host=...`。
+#: 驱动/连接异常的 args 里**直接带 DSN**（实测 SQLAlchemy OperationalError 会回显整条
+#: `postgresql://user:pass@ip:5432/db`），这些串绝不允许进用户可见文案。
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;)\]'\"]+"),
+    re.compile(r"(?i)\b(user|username|dsn|db_url|database_url|url)\s*[=:]\s*[^\s,;)\]'\"]+"),
+    # 整条 URL/DSN 打掉（userinfo + host + port + 库名都算连接参数），只留协议头。
+    re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^\s,;)\]'\"]+"),
+    re.compile(r"(?i)\b(host|port|server)\s*[=:]\s*[^\s,;)\]'\"]+"),
+)
+
+#: 驱动/连接层异常名：文案里一律不给原文，只给通用原因。
+_DRIVER_EXC_NAMES = frozenset({
+    "OperationalError",
+    "InterfaceError",
+    "InternalError",
+    "DatabaseError",
+    "DBAPIError",
+    "DisconnectionError",
+    "InvalidRequestError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "TimeoutError",
+    "OperationalErrorExt",
+})
+
+#: 唯一允许从驱动异常里回显的片段：schema 事实（表/列不存在、锁、只读），不含连接参数。
+_SAFE_DB_FACTS = (
+    re.compile(r"no such table:?\s*[A-Za-z0-9_.]+", re.I),
+    re.compile(r"no such column:?\s*[A-Za-z0-9_.]+", re.I),
+    re.compile(r'relation "[A-Za-z0-9_.]+" does not exist', re.I),
+    re.compile(r"(database is locked|readonly database|permission denied for table [A-Za-z0-9_.]+|disk I/O error)", re.I),
+    re.compile(r"(timeout expired|timed out|server closed the connection unexpectedly)", re.I),
+)
+
+
+def _mask_secrets(text: str) -> str:
+    """把 DSN / 账号密码 / host:port 一律打码，保留可读的失败形态。"""
+    out = text
+    out = _SECRET_PATTERNS[2].sub(r"\1***", out)
+    for pat in (_SECRET_PATTERNS[0], _SECRET_PATTERNS[1], _SECRET_PATTERNS[3]):
+        out = pat.sub(lambda m: f"{m.group(1)}=***", out)
+    return out
+
+
 def _clean_reason(exc: Exception) -> str:
     """异常 → 短原因（去掉 SQL 正文/换行，避免把 SQL 泄进用户可见文案）。"""
     raw = str(exc)
     head = raw.split("[SQL:", 1)[0].strip()
     head = head.replace("\n", " ").strip()
+    head = _mask_secrets(head)
     name = type(exc).__name__
     if not head:
         head = name
@@ -2815,7 +2874,7 @@ _ETF_SQL_LABELS = {
     "etf_minute_rows": "ETF 分钟成交额",
     "etf_latest_date": "分钟表最新交易日",
     "etf_baseline_dates": "基线交易日",
-    "etf_baseline_rows": "20 日同期基线",
+    "etf_baseline_rows": "同期基线",
     "etf_support": "SC8 市场级净申购",
     "etf_daily_dates": "日度交易日",
     "etf_daily_minute": "日度分类成交额",
@@ -2839,8 +2898,25 @@ _SQL_WORDS = ("SELECT", "INSERT", "UPDATE", "DELETE", "FROM")
 
 
 def _etf_reason(exc: Exception) -> str:
-    """异常 → 短原因，且**切掉任何 SQL 正文**（`_clean_reason` 只挡 `[SQL:` 一种形态）。"""
-    txt = _clean_reason(exc)
+    """异常 → 短原因：切掉 SQL 正文，并且**驱动/连接错误一律给通用原因**。
+
+    两道口子分别对应两类泄露：
+    1. `[SQL: ...]` / 裸 `SELECT` —— 把语句和参数交给模型；
+    2. 驱动异常的 `str()` 里带完整 DSN（`postgresql://user:pass@ip:5432/db`）——
+       `_clean_reason` 原来只做 SQL 截断，这条会一路写进「未取到（原因）」。
+
+    驱动层只保留 schema 事实（表/列不存在、锁、只读、超时），其余返回固定通用文案；
+    连接参数（账号/密码/host/port/库名 DSN）不进任何出口。日志同样写脱敏后的原因。
+    """
+    name = type(exc).__name__
+    if name in _DRIVER_EXC_NAMES or isinstance(exc, (ConnectionError, OSError)):
+        raw = str(exc)
+        facts = [m.group(0) for pat in _SAFE_DB_FACTS for m in [pat.search(raw)] if m]
+        if facts:
+            return _mask_secrets(f"{name}: {facts[0]}")[:120]
+        return f"{name}：数据库连接/驱动错误（参数已脱敏）"[:120]
+
+    txt = _mask_secrets(_clean_reason(exc))
     upper = txt.upper()
     cut = len(txt)
     for word in _SQL_WORDS:
@@ -2848,7 +2924,7 @@ def _etf_reason(exc: Exception) -> str:
         if idx != -1:
             cut = min(cut, idx)
     head = txt[:cut].strip(" :：-—")
-    return (head or type(exc).__name__)[:120]
+    return (head or name)[:120]
 
 
 def _etf_runner(db: Any, missing: list[str]):
@@ -2856,17 +2932,8 @@ def _etf_runner(db: Any, missing: list[str]):
 
     def run(key: str, params: dict[str, Any] | None = None, fmt: dict[str, str] | None = None):
         try:
-            if not fmt:
-                return _read(db, key, params or {})
-            from sqlalchemy import text as _text
-
-            sql = etf_feed.SQL[key].format(**fmt)
-            session, own = _session(db)
-            try:
-                return [dict(r) for r in session.execute(_text(sql), params or {}).mappings().all()]
-            finally:
-                if own:
-                    session.close()
+            # 走 `_read` 唯一路径（含 LIMIT 守卫与同一会话策略），`fmt` 只交给它展开。
+            return _read(db, key, params or {}, fmt)
         except Exception as exc:  # noqa: BLE001 — 单表不可读不该让整域失败
             reason = _etf_reason(exc)
             missing.append(f"{_ETF_SQL_LABELS.get(key, key)} 读取失败（{reason}）")
@@ -2882,6 +2949,7 @@ def render_etf_flow(
     source: str,
     intraday: dict[str, Any] | None = None,
     support: dict[str, Any] | None = None,
+    daily: dict[str, Any] | None = None,
     missing: list[str] | None = None,
 ) -> str:
     """ETF 托底资金：篮子成交额 / 分钟覆盖 / 时段 / 市场级 SC8，口径逐条标注。"""
@@ -2894,26 +2962,55 @@ def render_etf_flow(
         ratio = totals.get("ratio_vs_baseline")
         state = _STATE_CN.get(str(intraday.get("state") or ""), str(intraday.get("state") or ""))
         phase = _PHASE_CN.get(str(intraday.get("phase") or ""), str(intraday.get("phase") or ""))
-        sections.append(
-            f"- **篮子成交额**：20 只重点宽基 ETF（12 类）合计 {_num(totals.get('cum_yi'))} 亿元"
-            f"（截至 {totals.get('last_minute') or '未知'}）；20 日同期均值 "
-            f"{_num(totals.get('baseline_avg_yi'))} 亿元，比值 {_num(ratio, 3)} —— {state}"
+        session = _PHASE_CN.get(
+            str(intraday.get("session_phase") or ""), str(intraday.get("session_phase") or "")
         )
+        expected = int(totals.get("etfs_expected") or 0) or len(etf_feed.ew.ETF_BASKET)
+        gate = int(totals.get("min_etfs_for_complete") or 0) or etf_feed.min_etfs_for_complete(expected)
+        base_avg = totals.get("baseline_avg_yi")
+        sections.append(
+            f"- **篮子成交额**：{expected} 只重点宽基 ETF（12 类）合计 {_num(totals.get('cum_yi'))} 亿元"
+            f"（截至 {totals.get('last_minute') or '未知'}）；同期基线 "
+            f"{'未披露' if base_avg is None else _num(base_avg) + ' 亿元'}，"
+            f"比值 {_num(ratio, 3)} —— {state}"
+        )
+
+        # 基线样本数只报能算出的实际值：请求 20 日 ≠ 有 20 日样本；缺的日期属「未采集还
+        # 是非交易日」分钟表反推不出来，必须标未确认，不能继续说「过去 20 日」。
+        days_used = totals.get("baseline_days")
+        days_req = int(totals.get("baseline_days_requested") or etf_feed.BASELINE_DAYS)
+        missing_days = int(totals.get("baseline_missing_days") or 0)
+        dropped = int(totals.get("baseline_days_dropped") or 0)
+        base_txt = f"- **基线样本**：{days_used if days_used is not None else '未披露'}/{days_req} 个交易日「同一分钟」累计均值"
+        if totals.get("baseline_confirmed"):
+            base_txt += "（窗口完整）"
+        else:
+            if missing_days:
+                base_txt += f"；窗口内缺 {missing_days} 个交易日样本（未采集还是非交易日未确认）"
+            if dropped:
+                base_txt += f"；{dropped} 个交易日无达标分钟被剔除"
+        sections.append(base_txt)
+
         minutes = int(totals.get("minutes") or 0)
-        full = int(totals.get("full_minutes") or 0)
+        full = int(totals.get("full_minutes") or 0)   # 过 ≥80% 闸门的分钟
+        strict = int(totals.get("strict_minutes") or 0)  # 真正 20 只全齐的分钟
         cov = totals.get("coverage")
         cov_txt = f"{_num((cov or 0) * 100, 1)}%" if cov is not None else "未披露"
         sections.append(
-            f"- **分钟覆盖**：{full}/{minutes} 分钟 20 只齐全（{cov_txt}）；"
-            f"覆盖不足 80% 判「数据不全」，不参与活跃度结论"
+            f"- **分钟覆盖**：{minutes} 分钟中 {full} 个达 ≥{gate}/{expected} 只（{cov_txt}），"
+            f"{strict} 个为 {expected} 只全齐；覆盖率 <80% 判「数据不全」，不参与活跃度结论"
         )
+        stamp = intraday.get("session_time") or ""
+        ts = f"- **时点**：当前时段 {session or '未披露'}"
+        if stamp:
+            ts += f"（{stamp}）"
+        ts += f"；本段数据日 {intraday.get('date') or '未知'}（{phase or '未披露'}）"
         if intraday.get("fallback_from"):
-            sections.append(
-                f"- **时点**：{phase}；当日（{intraday.get('fallback_from')}）分钟未就绪，"
-                f"已回退到最近交易日 {intraday.get('date')}（非当日，勿当今日读数）"
+            ts += (
+                f"；当日（{intraday.get('fallback_from')}）分钟未就绪，已回退到最近交易日"
+                f"（非当日盘面，勿当今日读数）"
             )
-        else:
-            sections.append(f"- **时点**：{phase}（{intraday.get('date') or '未知'}）")
+        sections.append(ts)
     elif not any("分钟成交额" in m for m in miss):
         # 读表已经失败时不再叠加「无数据」措辞，避免把故障说成「今天没行情」。
         note = intraday.get("note") or "当日无分钟数据"
@@ -2934,6 +3031,23 @@ def render_etf_flow(
         miss.append(f"市场级 SC8：未取到（{sup.get('note') or '无落库数据'}）")
     else:
         miss.append("市场级 SC8：未取到（本次未取到该表）")
+
+    day = daily or {}
+    dates = day.get("dates") or []
+    if day.get("state") == "ok" and dates:
+        amounts = [v for v in (day.get("total_amount_yi") or []) if v is not None]
+        nets = [v for v in (day.get("net_sub_yi") or []) if v is not None]
+        line = (
+            f"- **日度（近 {len(dates)} 个交易日）**：篮子成交额合计 {_num(sum(amounts))} 亿元"
+        )
+        if nets:
+            line += (
+                f"；市场级累计净申购 {_num(sum(nets))} 亿元"
+                f"（{len(nets)}/{len(dates)} 日有净申购数据）"
+            )
+        sections.append(line)
+    elif day and not any("日度交易日" in m for m in miss):
+        miss.append(f"日度成交额：未取到（{day.get('note') or '无落库数据'}）")
 
     sections.append(
         "- **口径提醒**：SC8 是**全市场** ETF 口径，不等于 20 只篮子的净申购，"
@@ -2957,32 +3071,19 @@ async def _query_etf_flow(db: Any, params: dict[str, Any], user: Any) -> str:
     now = datetime.now(_CST)
     intraday = etf_feed.intraday_payload(run, None, now=now)
     support = etf_feed.support_payload(run, 750)
+    daily = etf_feed.daily_payload(run, days)
+    # 不再用 daily 的净申购「救」SC8：两者是同一条 etf_flow_daily，救不出独立证据；
+    # 而且 daily 只取 days 窗口（默认 30），把 30 日样本冒充全量样本、托底日计数与分位
+    # 全换成分母不同的数 —— 属于静默改口径。SC8 读不到就如实报「未取到（原因）」。
     if support.get("state") != "ok":
-        daily = etf_feed.daily_payload(run, days)
-        if daily.get("state") == "ok" and daily.get("net_sub_yi"):
-            last_val = daily["net_sub_yi"][-1]
-            if last_val is not None:
-                support = {
-                    "state": "ok",
-                    "threshold_yi": etf_feed.ew.SUPPORT_FLOW_THRESHOLD_YI,
-                    "latest": {
-                        "date": daily["dates"][-1],
-                        "scale_yi": daily["scale_yi"][-1],
-                        "net_sub_yi": last_val,
-                    },
-                    "support_count": sum(
-                        1 for v in daily["net_sub_yi"]
-                        if v is not None and v >= etf_feed.ew.SUPPORT_FLOW_THRESHOLD_YI
-                    ),
-                    "sample_count": sum(1 for v in daily["net_sub_yi"] if v is not None),
-                    "latest_percentile_in_support_days": None,
-                }
+        logger.info("etf.flow: SC8 市场级样本未取到（%s）", support.get("note") or "无落库数据")
     as_of = str(intraday.get("date") or (support.get("latest") or {}).get("date") or "未知")
     return render_etf_flow(
         as_of=as_of,
         source="etf_minute_flow / etf_flow_daily（TDX/TQ，只读）",
         intraday=intraday,
         support=support,
+        daily=daily,
         missing=missing,
     )
 
