@@ -1637,8 +1637,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               const locked = acting !== null
               return (
                 <span key={a.id} className="flex flex-wrap items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[12px]">
-                  <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : '盯盘提醒'}</span>
-                  <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
+                  <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : a.kind === 'setting' ? '改设置' : a.kind === 'schedule' ? '定时任务' : '盯盘提醒'}</span>
+                  <span className="text-muted-foreground">{a.kind === 'setting' ? String((a.payload as Record<string, unknown>).key ?? '') : String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
                   <button
                     type="button"
                     data-testid="copilot-pending-apply"

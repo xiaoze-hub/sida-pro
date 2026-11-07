@@ -1730,16 +1730,23 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                 "kind=alert：建盯盘提醒。**确认后真的会写库**：在该标的的自选上建一条价格提醒"
                 "（price 必填=触发价；direction=above 上破(默认)/below 下破）；"
                 "若该标的还不在自选，确认时会**顺带把它加入自选**；"
-                "提醒条数与自选数量都受账号配额约束，配额不足时确认会失败并说明原因。"
-                "只在用户明确要「标注/加自选/盯一下」时调用；不要用它代替分析结论。"
+                "提醒条数与自选数量都受账号配额约束，配额不足时确认会失败并说明原因；"
+                "kind=setting：受控修改三键非敏感通知设置（key 必填 + value 必填）。"
+                "key 只收 notify_retry_attempts（0-3 整数）/ notify_retry_backoff_seconds"
+                "（0-10，最多一位小数）/ notify_quiet_hours（HH:MM-HH:MM，起止不可相同）；"
+                "value 传空字符串表示「关闭/继承默认」，不是非法值。"
+                "**该动作不可撤销**：改错了只能重新提议修正，不要声称可以回滚。"
+                "只在用户明确要「标注/加自选/盯一下/改通知设置」时调用；不要用它代替分析结论。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["annotation", "watchlist", "alert"]},
+                    "kind": {"type": "string", "enum": ["annotation", "watchlist", "alert", "setting"]},
                     "symbol": {"type": "string", "description": "6 位 A 股代码"},
                     "label": {"type": "string", "description": "标注短标签（annotation 必填，≤20 字）"},
                     "price": {"type": "number", "description": "水平线价位；annotation 的 price 或 ts 至少一项；alert 时为提醒触发价（必填）"},
+                    "key": {"type": "string", "description": "通知设置键（setting 必填）：notify_retry_attempts / notify_retry_backoff_seconds / notify_quiet_hours"},
+                    "value": {"type": "string", "description": "设置值（setting 必填）；静默时段格式 HH:MM-HH:MM；空字符串=关闭/继承默认"},
                     "direction": {
                         "type": "string",
                         "enum": ["above", "below"],
@@ -1771,7 +1778,11 @@ async def _tool_propose_action(db: Session, args: dict, user: User | None = None
     kind = str(args.get("kind") or "").strip()
     if kind not in ALLOWED_KINDS:
         return f"不支持的 kind：{kind}（可选 {', '.join(ALLOWED_KINDS)}）"
-    payload = {k: v for k, v in args.items() if k != "kind" and v not in (None, "")}
+    # setting 的 value 允许空字符串（= 关闭/继承默认），其它字段才过滤空值。
+    if kind == "setting":
+        payload = {k: v for k, v in args.items() if k != "kind" and v is not None}
+    else:
+        payload = {k: v for k, v in args.items() if k != "kind" and v not in (None, "")}
     try:
         item = propose(db, user_id=user.id, kind=kind, payload=payload)
     except ActionError as exc:
@@ -1798,6 +1809,9 @@ async def _tool_propose_action(db: Session, args: dict, user: User | None = None
                 break
         if any(d.get("field") == "自选" for d in diffs):
             lines.append("同时占 1 个自选名额（上一条里已列出「自选」）。")
+    if kind == "setting":
+        # 设置类动作不可撤销：如实告知，不冒充可回滚。
+        lines.append("这条设置修改**不可撤销**；确认后如需改回，请重新提议一次修正。")
     lines.append("请提醒用户在参谋面板点确认后才会生效；不要声称已经加好或已经标注。")
     return "\n".join(lines)
 

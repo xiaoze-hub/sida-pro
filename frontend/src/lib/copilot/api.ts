@@ -118,7 +118,7 @@ export const reportViewState = (payload: ViewStatePayload) =>
 /** 动作回写（P1）：AI 只能提议，用户点确认才落库。 */
 export interface PendingAction {
   id: number
-  kind: 'annotation' | 'watchlist' | 'alert' | 'schedule'
+  kind: 'annotation' | 'watchlist' | 'alert' | 'schedule' | 'setting'
   payload: Record<string, unknown>
   status: string
   result?: string | null
