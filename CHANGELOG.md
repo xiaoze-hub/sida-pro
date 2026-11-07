@@ -1,3 +1,27 @@
+## release: v0.12.0（信息架构收敛 + 账号隔离 + 指数K线口径）
+
+### feat-入口收敛（导航单一事实源）
+- 导航元数据集中到 `lib/navigation.ts`：桌面侧栏、移动底栏、命令面板、工作台页签标题、旧 URL 共用一份，权限过滤同一判定；命令面板此前完全不过滤权限，现与菜单一致。
+- 资金榜与战报收进 `/funds?tab=dark|war`（任一 `view_dark`/`view_forecast` 可见，各页签仍按自身权限过滤）；情绪与晋级树收进 `/market-mood`；指数与 ETF 收进 `/market-watch`。
+- 旧地址 `/indexes`、`/etf-watch`、`/dark-fund-top`、`/war-report` 继续可用，并带 `?tab=` 上下文重定向；报告页拆「分析记录 / 定时任务归档」，历史分析并入 `/reports?tab=history`。
+- 大盘观察未确认权限时 fail closed（此前 `myPerms=null` 直接放行指数视图）；导航不为该入口加单点权限，避免「只有 ETF 权限」的账号看不到入口。
+
+### fix-账号身份隔离（安全）
+- 迟到的 401 不再登出新账号：`fetchAPI` 与 `health`/`chat` 两条自建流式入口统一走 `authErrorFor401(credentialToken)`，凭证未换代才登出，换代只让本次请求失败（`staleAuth`）。
+- 身份缓存按可信 `sub` 分桶并带凭据代次；Cookie-only 或身份不可解析时**不**全局登出（无法归属的失败只让本次请求失败），Profile 拒绝展示与写入。
+- 登出清 `token`/`token_expires`/`user`；登录与注册响应不带 `user` 时删除旧值（此前 B 会沿用 A 的身份分区读写自选/头像/设置）。
+- 空串、`null`、`undefined` 存储值不再发出 `Bearer null`（后端会当真凭证验签），改由 httpOnly Cookie 兜底。
+- 会话撤销、账号注销、登录/登出统一清查询缓存并广播身份变更；头像保存后以服务端返回值为准，在途旧读不回写。
+
+### fix-旧用户删除改停用（安全）
+- `DELETE /api/auth/users/{user_id}` 不再硬删账号：保留持仓、自选、会话与审计，改为停用 + 递增 `token_version`；隔离 PostgreSQL 实测账户与关联数据在停用与重启后仍在。管理界面文案同步为「停用/启用」。
+
+### fix-指数K线口径
+- 指数图不再混入个股数据：`IndexBody` 不再拉个股 `summary`，父传支撑压力/标注/交割单/成本线在指数图整层置空，筹码面板收起时不留空槽。
+- 月K 真聚合：后端认前端实际发送的 `1mth`（此前只认 `1m`/`m`，月K 一直回的是日K）。
+- 分钟K 不做伪标：该端点没有分钟源，`5m/15m/30m/60m/1m` 一律 400（此前原样返回日K 却标 `interval=5m`）；前端同步下线分钟档，历史链接带入分钟周期时钳回日K 并显式提示。
+- 旧 `/index/:symbol`、`/boards/:code` 链接保留 `?period=` 等查询串（此前硬拼目标地址会丢周期）；指数正文接受 URL 周期并可回写。
+
 ## release: v0.11.2（数智参谋原生融合 + 设置写入权限收口 + ETF 数据完整性）
 
 ### fix-设置写入越权（安全）
