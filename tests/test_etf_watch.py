@@ -192,8 +192,8 @@ def test_minus_minutes跨小时():
     assert ew._minus_minutes("0003", 5) == "0000"
 
 
-def test_盘中增量不因写入行数少而判失败(clean_flow, monkeypatch):
-    """`ok` 看取到的标的数，不看写入行数 —— 增量只有几行是正常，不是失败。"""
+def test_盘中对账不因重复数据而判失败(clean_flow, monkeypatch):
+    """盘中对账全天数据，已有行不变化也不是失败。"""
     from datetime import datetime as _dt
 
     monkeypatch.setattr(ew, "_now", lambda: _dt(2026, 11, 5, 14, 32))
@@ -202,7 +202,8 @@ def test_盘中增量不因写入行数少而判失败(clean_flow, monkeypatch):
     })
     out = ew.run_intraday()
     assert out["ok"] is True, out
-    assert out["rows"] == 1, out  # 只写了 1431（since=1427）
+    assert out["rows"] == 2, out  # 返回对账处理条数，而非数据库实际更新条数
+    assert ew.run_intraday()["ok"] is True
 
 
 def test_写入幂等_upsert不重复(clean_flow):

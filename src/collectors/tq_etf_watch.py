@@ -267,12 +267,10 @@ def fetch_sc8(start_date: str, end_date: str, *, timeout: float = 30.0) -> list[
 
 # ── 落库 ─────────────────────────────────────────────────────────────────
 
-#: 单条 upsert 语句的最大行数。PG 的 `ON CONFLICT` 一次塞 4800 行要 1.5~1.8s
-#: （APM 实测每次都报「慢操作 insert:etf_minute_flow」），按 400 行分批后单批 <100ms。
+#: 分批避免单次提交参数过大；盘中仍全量对账，不能假设旧分钟永不修订。
 _WRITE_CHUNK = 400
 
-#: 盘中增量回看的分钟数。已写入的分钟不会再变，只有最近几分钟可能晚到/被修正，
-#: 所以盘中不需要重写全天的 4800 行。给 5 分钟余量吸收网关的发布抖动。
+#: 仅供显式调用方选择窗口；调度路径不依赖固定回看窗口保证完整性。
 INTRADAY_LOOKBACK_MIN = 5
 
 
@@ -289,11 +287,10 @@ def write_minute(
     *,
     since: str | None = None,
 ) -> int:
-    """写 etf_minute_flow（幂等 upsert）。返回写入行数；失败返回 0 并记 warning。
+    """幂等对账分钟数据；返回处理行数，数据库失败返回 -1。
 
-    `since` 给 'HHMM' 时只写**该分钟及之后**的行（盘中增量用）：全量重写 4800 行实测
-    单次 1.5~1.8s，会一直触发 APM 慢操作告警；增量通常只有 20 只 × 5 分钟 = 100 行。
-    收盘定型（`run_close`）仍写全天，保证缺口被补上。
+    冲突值不变时跳过 UPDATE，允许每次检查全天数据而不重写未变化的行。
+    `since` 仅在调用方明确不需要历史对账时使用。
     """
     if not data:
         return 0
@@ -307,6 +304,9 @@ def write_minute(
         sql = upsert_sql(
             "etf_minute_flow", cols, ["trade_date", "minute", "etf_code"],
             ["amount_wan", "volume", "updated_at"],
+        ) + (
+            " WHERE etf_minute_flow.amount_wan IS DISTINCT FROM excluded.amount_wan"
+            " OR etf_minute_flow.volume IS DISTINCT FROM excluded.volume"
         )
         now = datetime.now()
         params: list[dict[str, Any]] = []
@@ -326,7 +326,7 @@ def write_minute(
         return len(params)
     except Exception as e:  # noqa: BLE001
         logger.warning("[etf-watch] 分钟数据写库失败(%s): %s", trade_date, e)
-        return 0
+        return -1
 
 
 def write_sc8(rows: list[tuple[str, float | None, float | None]]) -> int:
@@ -409,7 +409,8 @@ def ingest_day(trade_date: str, *, since: str | None = None) -> dict:
         logger.warning("[etf-watch] %s 取数失败: %s", trade_date, e)
         return {"date": trade_date, "rows": 0, "etfs": 0, "ok": False, "error": str(e)[:160]}
     rows = write_minute(trade_date, data, since=since)
-    # ok 判据看"取到的标的数"，不看写入行数：盘中增量可能只有几行，但那不是失败。
+    if rows < 0:
+        return {"date": trade_date, "rows": 0, "etfs": len(data), "ok": False, "error": "minute_write_failed"}
     return {"date": trade_date, "rows": rows, "etfs": len(data), "ok": len(data) > 0}
 
 
@@ -428,9 +429,8 @@ def run_intraday() -> dict:
     hm = now.strftime("%H%M")
     if not ("0925" <= hm <= "1505"):
         return {"skipped": "out-of-session", "date": today.strftime("%Y%m%d"), "at": hm}
-    # 增量写：只回看最近几分钟（网关晚到/修正的容差），不重写全天 4800 行。
-    since = _minus_minutes(hm, INTRADAY_LOOKBACK_MIN)
-    return ingest_day(today.strftime("%Y%m%d"), since=since)
+    # 每次对账源端提供的全天分钟，处理迟到、重启缺口与历史修订。
+    return ingest_day(today.strftime("%Y%m%d"))
 
 
 def run_close() -> dict:
