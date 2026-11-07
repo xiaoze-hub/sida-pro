@@ -34,6 +34,7 @@ import {
 } from '@/lib/copilot/evidence-readiness'
 import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
+import { SettingPendingPreview } from '@/components/copilot/SettingPendingPreview'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
@@ -1638,7 +1639,13 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               return (
                 <span key={a.id} className="flex flex-wrap items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[12px]">
                   <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : a.kind === 'setting' ? '改设置' : a.kind === 'schedule' ? '定时任务' : '盯盘提醒'}</span>
-                  <span className="text-muted-foreground">{a.kind === 'setting' ? String((a.payload as Record<string, unknown>).key ?? '') : String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
+                  {a.kind === 'setting' ? (
+                    /* 设置类动作：旧值/新值/三态/风险全部来自后端持久化 diff，
+                       不接受 payload 里模型自带的 before（见 lib/copilot/settingPreview）。 */
+                    <SettingPendingPreview action={a} />
+                  ) : (
+                    <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
+                  )}
                   <button
                     type="button"
                     data-testid="copilot-pending-apply"

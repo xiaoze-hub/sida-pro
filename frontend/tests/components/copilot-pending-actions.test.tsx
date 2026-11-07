@@ -176,4 +176,37 @@ describe('待确认动作 · 提交中禁重 + 失败就地提示', () => {
     expect(copilotMock.getPendingActions.mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(rejections).toEqual([])
   })
+
+  it('改设置的待确认行显示本动作旧值/新值/三态与不可撤销风险（不采信 payload 里模型编的 before）', async () => {
+    copilotMock.getPendingActions.mockImplementation(async () => [
+      {
+        id: 9,
+        kind: 'setting',
+        status: 'pending',
+        result: null,
+        created_at: '',
+        payload: { key: 'notify_retry_attempts', value: '3', before: '999', before_present: true },
+        diff: [
+          {
+            field: 'notify_retry_attempts',
+            before: '2',
+            after: '3',
+            change: 'update',
+            before_state: 'value',
+            immutable: true,
+          },
+        ],
+      },
+    ])
+    await mount()
+
+    expect(screen.getByTestId('setting-pending-key').textContent).toBe('通知失败重试次数')
+    expect(screen.getByTestId('setting-pending-before').textContent).toBe('2')
+    expect(screen.getByTestId('setting-pending-after').textContent).toBe('3')
+    expect(screen.getByTestId('setting-pending-state').textContent).toContain('已配置明确值')
+    expect(screen.getByTestId('setting-pending-risk').textContent).toContain('不可撤销')
+    // 模型自报的旧值一个字符都不许上屏
+    expect(screen.queryByText('999')).toBeNull()
+    expect(rejections).toEqual([])
+  })
 })

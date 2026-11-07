@@ -123,8 +123,17 @@ export interface PendingAction {
   status: string
   result?: string | null
   created_at: string
-  /** 服务端给的"会改什么"预演（`actions.preview_diff`；算不出来就是空数组） */
-  diff?: Array<{ field: string; before: unknown; after: unknown; change: string }>
+  /** 服务端给的"会改什么"预演（`actions.preview_diff`；算不出来就是空数组）。
+   *  setting 类动作额外带 `before_state`（absent/null/value 三态）与 `immutable`
+   *  —— 确认面板只认这一份，不读 payload 里模型自带的 before。 */
+  diff?: Array<{
+    field: string
+    before: unknown
+    after: unknown
+    change: string
+    before_state?: 'absent' | 'null' | 'value'
+    immutable?: boolean
+  }>
   /** 服务端判定这条动作此刻能否回滚（`before_snapshot` 存在且 status=applied） */
   can_rollback?: boolean
   applied_at?: string
