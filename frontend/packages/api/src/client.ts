@@ -65,7 +65,7 @@ export function getToken(): string | null {
 }
 
 /** 身份切换事件名(2026-11-07): 同一标签页登录/登出/换号后同步广播, 供上层清/重建缓存。 */
-export const AUTH_IDENTITY_EVENT = 'sida:auth-identity-changed'
+export const AUTH_IDENTITY_EVENT = 'sida:auth-changed'
 
 /**
  * 从 JWT payload 解出**可信的账号身份**(2026-11-07), 解不出返回 null。

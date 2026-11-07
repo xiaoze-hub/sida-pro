@@ -23,6 +23,11 @@ import {
   logout,
   notifyAuthIdentityChanged,
 } from '@sida/api'
+import { AUTH_CHANGED_EVENT } from '@/hooks/useApiQuery'
+
+it('登录事件与身份订阅使用同一名称', () => {
+  expect(AUTH_IDENTITY_EVENT).toBe(AUTH_CHANGED_EVENT)
+})
 
 /** base64url(无填充) —— 与真实 JWT 段编码一致。 */
 function b64url(value: unknown): string {
