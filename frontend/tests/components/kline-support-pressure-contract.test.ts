@@ -17,9 +17,9 @@ describe('KlineChart 支撑压力价位线画线契约', () => {
   // 图表也要把自己从 summary 取到的 unlock_levels 合并进来，否则参谋标注一上图，
   // 筹码支撑压力整批消失、同价位画两条重合虚线。语义见 `mergePriceLines`。
   it('父传 supportPressure 与自取图层 unlock_levels **合并**（不是父接管覆盖）', () => {
-    expect(KC).toMatch(
-      /const effPriceLines = useMemo\(\s*\(\) => mergePriceLines\(props\.supportPressure, layer\?\.priceLines\)/,
-    )
+    expect(KC).toMatch(/indexChart \? undefined : props\.supportPressure/)
+    expect(KC).toMatch(/indexChart \? undefined : layer\?\.priceLines/)
+    expect(KC).toMatch(/mergePriceLines\(/)
     // 合并函数本体：同向同价去重（primary 优先）
     const EVENTS = readFileSync(
       resolve(__dirname, '../../packages/biz-ui/src/klineEvents.ts'),

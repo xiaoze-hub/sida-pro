@@ -40,6 +40,7 @@ function Harness() {
 }
 
 beforeEach(() => {
+  localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'dashboard-test' }))}.signature`)
   clearResponseCache()
   calls = []
   vi.stubGlobal('fetch', async (input: string) => {
@@ -51,6 +52,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  localStorage.removeItem('token')
   vi.unstubAllGlobals()
   clearResponseCache()
 })

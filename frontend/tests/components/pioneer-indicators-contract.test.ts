@@ -31,8 +31,8 @@ describe('KlineChart 决策先锋辅助指标图层契约', () => {
   it('父传 trendLine/niuxiong 则不重复自取(own*)', () => {
     expect(KC).toMatch(/const ownTrendLine = props\.trendLine === undefined/)
     expect(KC).toMatch(/const ownNiuxiong = props\.niuxiong === undefined/)
-    expect(KC).toMatch(/const effTrendLine = props\.trendLine \?\? trendLineData/)
-    expect(KC).toMatch(/const effNiuxiong = props\.niuxiong \?\? niuxiongData/)
+    expect(KC).toMatch(/const effTrendLine = indexChart \? null : \(props\.trendLine \?\? trendLineData\)/)
+    expect(KC).toMatch(/const effNiuxiong = indexChart \? null : \(props\.niuxiong \?\? niuxiongData\)/)
   })
 
   it('三线序列用自己的 params 展开(不硬编码周期) + 仅日线口径画线', () => {

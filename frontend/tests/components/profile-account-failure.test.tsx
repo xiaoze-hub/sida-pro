@@ -48,10 +48,11 @@ function mount() {
 }
 
 beforeEach(() => {
+  localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'profile-account-test' }))}.signature`)
   api.fail = null
   api.resp = null
 })
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); localStorage.removeItem('token') })
 
 /**
  * 2026-10-23: 个人中心新增「在线设备」「数据隐私」两个区块, 它们失败时也带 role="alert" /
