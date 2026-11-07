@@ -142,7 +142,7 @@ function CaliberDiff() {
   return (
     <section
       data-testid="main-funds-caliber"
-      className="rounded-lg border border-border bg-s2/60 px-3 py-2"
+      className="rounded-lg bg-s2 px-3 py-2"
       aria-label="两页数据源与时间口径差异"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
