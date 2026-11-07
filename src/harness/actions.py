@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func
@@ -1034,6 +1034,33 @@ def _normalized_condition(condition: Any) -> Any:
     return {**condition, "items": out}
 
 
+def _alert_rule_expired(rule: Any) -> bool:
+    """规则是否已过期（与引擎 `_can_trigger` 的 `expire_at` 判定同口径）。"""
+    exp = getattr(rule, "expire_at", None)
+    if not exp:
+        return False
+    try:
+        from src.core.timezone import to_utc
+
+        return to_utc(datetime.now(timezone.utc)) > to_utc(exp)
+    except Exception:  # noqa: BLE001
+        # 比不出来就按"已过期"处理：宁可多建一条能被看见的提醒，也不猜。
+        return True
+
+
+def _alert_rule_will_never_fire(rule: Any) -> bool:
+    """这条规则即使改价格也不会再触发 —— 过期，或 once 已触发过。
+
+    与 `price_alert_engine._can_trigger` 的两个提前返回一一对应：
+    `expired` / `once_triggered`。
+    """
+    if _alert_rule_expired(rule):
+        return True
+    return str(getattr(rule, "repeat_mode", "") or "") == "once" and bool(
+        getattr(rule, "last_trigger_at", None)
+    )
+
+
 def _is_updatable_alert_rule(rule: Any) -> bool:
     """这条既有规则能否被「就地改写」为一条价格线 —— 不能就新增，绝不动它。
 
@@ -1043,9 +1070,17 @@ def _is_updatable_alert_rule(rule: Any) -> bool:
     A，执行的是 B。宁可多建一条（多占一个提醒名额，disclose 在 diff 里），也不动用户
     配置过的规则。
 
-    可更新 = 启用中 + 单条 price 条件 + `and`/无组操作 + 比较符在 `>=`/`<=` + 数值阈值。
+    可更新 = 启用中 + 单条 price 条件 + `and`/无组操作 + 比较符在 `>=`/`<=` + 数值阈值
+    + **还能真正触发**（2026-11-07 二次复审）：
+
+    `price_alert_engine._can_trigger` 对 `expire_at` 已过的规则返回 `expired`，对
+    `repeat_mode=="once"` 且 `last_trigger_at` 非空的规则返回 `once_triggered` ——
+    这两种规则改完价格也永远不会再触发。把它们判成"可更新"，等于让用户确认了一条
+    永不响的提醒（比多建一条更坏：用户以为设好了）。所以一律新增独立提醒。
     """
     if rule is None or not bool(getattr(rule, "enabled", False)):
+        return False
+    if _alert_rule_will_never_fire(rule):
         return False
     group = getattr(rule, "condition_group", None)
     if not isinstance(group, dict):
@@ -1083,6 +1118,12 @@ def _rule_brief(rule: Any) -> str:
     parts: list[str] = []
     if not bool(getattr(rule, "enabled", True)):
         parts.append("已停用")
+    # 2026-11-07 二次复审: "为什么不覆盖它"必须说出真正的原因 —— 过期/一次性的规则
+    # 即使条件长得像可更新，也永远不会再响。
+    if _alert_rule_expired(rule):
+        parts.append("已过期（不会触发）")
+    elif str(getattr(rule, "repeat_mode", "") or "") == "once" and getattr(rule, "last_trigger_at", None):
+        parts.append("一次性提醒已触发（不会再次触发）")
     group = getattr(rule, "condition_group", None) or {}
     items = group.get("items") if isinstance(group, dict) else None
     items = items if isinstance(items, list) else []
@@ -1323,8 +1364,64 @@ def _annotation_link_alive(db: Session, row: Any) -> bool:
     )
 
 
+def _alert_rollback_provable(db: Session, row: Any) -> bool:
+    """撤销这条提醒动作**真的会成功**吗 —— 与 `_rollback_alert` 的拒绝条件一一对应。
+
+    2026-11-07 二次复审（虚假可撤销）：此前 alert 只看"快照非空"就报 true，老记录
+    （没有 `applied` 段、也没有 `rule_id`）点下去必得 409，前端却显示"可撤销"。这里把
+    撤销真正需要的三件事逐条实测：可证的规则 ID、属主/自选一致、内容仍是本次写入的值。
+    """
+    from src.db.models import PriceAlertRule
+
+    raw = getattr(row, "before_snapshot", None)
+    if not raw:
+        return False
+    try:
+        snap = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(snap, dict) or not snap:
+        return False
+
+    facts = _alert_facts(snap)
+    payload: dict = {}
+    if facts:
+        rid = facts.get("rule_id")
+        sid = facts.get("stock_id")
+        expected = facts.get("rule_condition")
+        legacy = False
+    else:
+        try:
+            payload = json.loads(getattr(row, "payload", None) or "{}")
+        except (TypeError, ValueError):
+            return False
+        rid = snap.get("rule_id")
+        sid = snap.get("stock_id")
+        expected = snap.get("rule_condition")
+        # 老记录的两项最低证明：ID + 本次写入的条件。缺一项就没法撤（见 `_rollback_alert`）。
+        if rid is None or not expected:
+            return False
+        legacy = True
+    if rid is None:
+        return False
+    try:
+        rule = db.query(PriceAlertRule).filter(PriceAlertRule.id == int(rid)).first()
+    except (TypeError, ValueError):
+        return False
+    if rule is None:
+        # 规则已被删除 —— 撤销是幂等的空操作，可以说"可撤销"。
+        return True
+    if str(rule.user_id) != str(getattr(row, "user_id", "")):
+        return False
+    if sid is not None and rule.stock_id != sid:
+        return False
+    if legacy:
+        return _legacy_condition_matches(payload, rule)
+    return _normalized_condition(rule.condition_group) == _normalized_condition(expected)
+
+
 def _can_rollback(row: Any, *, db: Session | None = None) -> bool:
-    """`can_rollback` 的唯一判定口径（2026-10-29）。"""
+    """`can_rollback` 的唯一判定口径（2026-10-29；2026-11-07 二次复审补 alert）。"""
     if getattr(row, "status", None) != "applied":
         return False
     if getattr(row, "kind", None) == "annotation":
@@ -1332,6 +1429,9 @@ def _can_rollback(row: Any, *, db: Session | None = None) -> bool:
             return False
         # 没有 session 就证明不了"这条线还在、还是我的" ⇒ 不许说 true（见 `_to_dict`）。
         return False if db is None else _annotation_link_alive(db, row)
+    if getattr(row, "kind", None) == "alert":
+        # 同上：没有 session 就证明不了快照里的规则 ID 还在、还没被改动 ⇒ false。
+        return False if db is None else _alert_rollback_provable(db, row)
     return (
         getattr(row, "kind", None) in SNAPSHOT_ROLLBACK_KINDS
         and _has_rollback_snapshot(row)
@@ -1432,13 +1532,25 @@ def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
     }]
     if latest is not None and target is None:
         # 关键披露：不会覆盖这条既有规则，只会新增一条。用户点确认前必须知道
-        # "我原有的复合条件/停用状态不动，但会多一条提醒（多占一个名额）"。
+        # "我原有的复合条件/停用/过期/一次性已触发的状态不动，但会多一条提醒（多占一个名额）"。
         diffs.append({
             "field": "现有提醒",
             "before": _rule_brief(latest),
-            "after": "保持原样（复合条件或已停用的规则不覆盖）；本次另建一条独立提醒",
+            "after": "保持原样（复合条件、已停用、已过期或一次性已触发的规则不覆盖）；"
+                     "本次另建一条独立提醒",
             "change": "noop",
         })
+    elif target is not None:
+        # 2026-11-07 二次复审: apply 会按 label 改写 rule.name —— 改名同样是"会改什么"，
+        # diff 漏了它就等于让用户确认了一件看不到的修改。
+        label = str(payload.get("label") or "").strip()[:60]
+        if label and label != str(target.name or ""):
+            diffs.append({
+                "field": "提醒名称",
+                "before": str(target.name or "") or None,
+                "after": label,
+                "change": "update",
+            })
     # 2026-11-07: 真实副作用必须进 diff。确认这个动作会在标的不在自选时**顺手建自选**，
     # 既占自选名额也会改变用户的自选列表 —— 用户在点确认前有权看到。
     if stock is None:
@@ -1904,8 +2016,13 @@ def _rollback_alert(db: Session, *, user_id: Any, payload: dict, snapshot: dict)
                 "拒绝改写这条规则（fail-closed）"
             )
         elif not _legacy_condition_matches(payload, target):
-            undone.append(
-                f"提醒 #{int(rid)} 已被改动（条件不再是这条动作写入的值），本次撤销未覆盖它"
+            # 2026-11-07 二次复审（错误撤销状态）：此前这里只 append 一句"未覆盖它"，
+            # 动作照样被标成 rolled_back —— 前端显示"已撤销"，实际一行都没改。用户随后
+            # 也没法再撤（只有 applied 能撤）。条件已被改过 ⇒ 必须先拒绝，状态原样保留。
+            raise _deny(
+                f"提醒 #{int(rid)} 的条件已不再是这条动作写入的值（你在确认之后改过它），"
+                "撤销会覆盖掉你的修改，因此本次不撤、动作状态保持不变（fail-closed）；"
+                "如确实要清理请到提醒列表手动处理。"
             )
         else:
             target.condition_group = cond

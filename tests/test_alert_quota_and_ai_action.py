@@ -623,3 +623,178 @@ def test_提议文案说明不会覆盖既有复合规则(db):
 
     assert "保持原样" in msg, "不覆盖既有规则这件事必须在提议里说出来"
     assert "新增" in msg and "配额" in msg
+
+
+# ── 2026-11-07 二次复审: 虚假可撤销 / 错误撤销状态 / 未披露改名 / 一次性失效 ──
+#
+# 四条硬约束:
+#   1. `can_rollback` 只在**实测**能撤成功时才为 true —— 老记录证明不出规则 ID、
+#      规则已被改动/换了属主，一律 false（前端不许拿一个会 409 的按钮骗人）。
+#   2. 老记录条件已被用户改过 → 撤销 409 **原状态不变**，绝不"只写个文字提示就
+#      把动作标成 rolled_back"（那会让前端显示已撤销、实际什么都没撤）。
+#   3. `rule.name` 会被 apply 改写 → diff 必须把"改名"这一项如实列出来。
+#   4. 已过期 / 一次性已触发的规则**永远不会再触发** → 不许判为可更新（那等于写进去
+#      一条永不触发的提醒）；改为新增独立提醒，并在 diff 里说明原规则为何保持原样。
+
+def _legacy_action(db, *, snapshot: dict, payload: dict | None = None) -> int:
+    """造一条"本次修复之前"的 applied 动作（老快照格式，没有 applied 段）。"""
+    import json as _json
+
+    item = act.propose(
+        db, user_id="u1", kind="alert",
+        payload=payload or {"symbol": "600519", "price": 30, "direction": "above", "market": "CN"},
+    )
+    aid = item["id"]
+    act.apply_action(db, user_id="u1", action_id=aid)
+    row = db.query(CopilotAction).filter(CopilotAction.id == aid).one()
+    row.before_snapshot = _json.dumps(snapshot, ensure_ascii=False)
+    db.commit()
+    return aid
+
+
+def test_过期规则不被判为可更新(db):
+    """已过期规则永远不会触发 —— 更新它等于写进去一条永不触发的提醒。"""
+    from datetime import datetime, timedelta
+
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    old = PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="已过期",
+        enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+        expire_at=datetime.utcnow() - timedelta(days=1),
+    )
+    db.add(old)
+    db.commit()
+    oid = old.id
+
+    diffs = act.preview_diff(db, user_id="u1", kind="alert",
+                             payload={"symbol": "600519", "price": 30})
+    cond = next(d for d in diffs if "触发条件" in d["field"])
+    assert cond["change"] == "add", "过期规则不能就地更新"
+    kept = next(d for d in diffs if d["field"] == "现有提醒")
+    assert "过期" in kept["before"], "diff 必须说明原规则为何不覆盖"
+
+    _apply_alert_action(db, price=30)
+    db.expire_all()
+    assert db.query(PriceAlertRule).filter(PriceAlertRule.id == oid).one().expire_at is not None
+    assert db.query(PriceAlertRule).count() == 2, "应新增一条能真正触发的提醒"
+
+
+def test_一次性已触发规则不被判为可更新(db):
+    """once 规则已触发（引擎对 once 只放行第一次）—— 改它等于永不触发。"""
+    from datetime import datetime
+
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    once = PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="一次性已触发",
+        enabled=True, repeat_mode="once", last_trigger_at=datetime.utcnow(),
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+    )
+    db.add(once)
+    db.commit()
+    oid = once.id
+
+    diffs = act.preview_diff(db, user_id="u1", kind="alert",
+                             payload={"symbol": "600519", "price": 30})
+    assert next(d for d in diffs if "触发条件" in d["field"])["change"] == "add"
+    assert "已触发" in next(d for d in diffs if d["field"] == "现有提醒")["before"]
+
+    _apply_alert_action(db, price=30)
+    db.expire_all()
+    kept = db.query(PriceAlertRule).filter(PriceAlertRule.id == oid).one()
+    assert kept.condition_group["items"][0]["value"] == 12.0, "原规则一个字都不能动"
+    assert db.query(PriceAlertRule).count() == 2
+
+
+def test_就地更新时改名必须进diff(db):
+    """apply 会按 label 改名 —— 改名也是"会改什么"，diff 不能漏。"""
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    db.add(PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="原始提醒", enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+    ))
+    db.commit()
+
+    diffs = act.preview_diff(db, user_id="u1", kind="alert",
+                             payload={"symbol": "600519", "price": 30, "label": "突破提醒"})
+    name_diff = next(d for d in diffs if "名称" in d["field"])
+    assert name_diff["before"] == "原始提醒"
+    assert name_diff["after"] == "突破提醒"
+    assert name_diff["change"] == "update"
+
+    # 不给 label 就不改名，也不该凭空多一条 diff
+    diffs2 = act.preview_diff(db, user_id="u1", kind="alert",
+                              payload={"symbol": "600519", "price": 30})
+    assert not [d for d in diffs2 if "名称" in d["field"]]
+
+
+def test_老记录条件被改后撤销必须409且不标rolled_back(db):
+    """错误撤销状态: 只写"未覆盖"文字却把动作标成 rolled_back = 骗前端已撤销。"""
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    rule = PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="原始", enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+    )
+    db.add(rule)
+    db.commit()
+    rid = rule.id
+
+    aid = _legacy_action(db, snapshot={
+        "stock_existed": True, "stock_id": stock.id, "stock_market": "CN",
+        "rule_id": rid, "rule_condition": rule.condition_group,
+        "rule_enabled": True, "rule_name": "原始", "rule_updatable": True,
+    })
+    # 用户在动作之后自己改了条件 → 已接管这条规则
+    rule.condition_group = {"op": "and", "items": [{"type": "price", "op": "<=", "value": 5.0}]}
+    db.commit()
+
+    with pytest.raises(act.ActionError) as ei:
+        act.rollback_action(db, user_id="u1", action_id=aid, reason="x")
+    assert ei.value.status_code == 409
+
+    db.expire_all()
+    assert db.query(CopilotAction).filter(CopilotAction.id == aid).one().status == "applied", \
+        "撤销失败必须保持 applied，不能标成 rolled_back"
+    kept = db.query(PriceAlertRule).filter(PriceAlertRule.id == rid).one()
+    assert kept.condition_group["items"][0]["value"] == 5.0, "用户改动必须原样保留"
+
+
+def test_can_rollback只在实测能撤时为true(db):
+    """老记录无 ID / 规则被改过 → can_rollback 必须 false（不许给会 409 的按钮）。"""
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    rule = PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="原始", enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+    )
+    db.add(rule)
+    db.commit()
+    rid = rule.id
+
+    # 1) 新记录（有 applied 段）→ 真能撤
+    aid_new, _ = _apply_alert_action(db, price=40)
+    row = db.query(CopilotAction).filter(CopilotAction.id == aid_new).one()
+    assert act._to_dict(row, db=db)["can_rollback"] is True
+
+    # 2) 老记录没有可证 ID → false
+    aid_legacy = _legacy_action(db, snapshot={
+        "stock_existed": False, "stock_id": None, "stock_market": "CN",
+        "rule_id": None, "rule_condition": None,
+    })
+    row = db.query(CopilotAction).filter(CopilotAction.id == aid_legacy).one()
+    assert act._to_dict(row, db=db)["can_rollback"] is False, \
+        "没有可证 ID 的老记录不许声称可撤"
+
+    # 3) 本次规则已被用户改过 → false（撤销会 409）
+    own = db.query(PriceAlertRule).filter(PriceAlertRule.id == rid).one()
+    own.condition_group = {"op": "and", "items": [{"type": "price", "op": ">=", "value": 999.0}]}
+    db.commit()
+    row = db.query(CopilotAction).filter(CopilotAction.id == aid_new).one()
+    assert act._to_dict(row, db=db)["can_rollback"] is False
+
+    # 4) 没有 session 就证明不了 → 一律 false
+    assert act._to_dict(row)["can_rollback"] is False
