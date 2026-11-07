@@ -18,6 +18,7 @@ import logging
 import math
 from datetime import date, datetime
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from src.collectors import tq_etf_watch as ew
 
@@ -68,14 +69,15 @@ SQL: dict[str, str] = {
     ),
     "etf_baseline_rows": (
         "SELECT minute, trade_date, SUM(amount_wan) AS amount_wan, "
-        "COUNT(DISTINCT etf_code) AS etfs FROM etf_minute_flow "
+        "COUNT(DISTINCT CASE WHEN amount_wan IS NOT NULL THEN etf_code END) AS etfs "
+        "FROM etf_minute_flow "
         # 上界 = 窗口交易日 × 单日分钟上限（20 × 1440 = 28800）。写死 6000 会把
         # 20 个完整交易日的分组截断，基线被静默算低 —— 原实现没有 LIMIT，这里只是护栏。
         "WHERE trade_date IN ({ph}) GROUP BY minute, trade_date LIMIT 30000"
     ),
     "etf_support": (
         "SELECT trade_date, scale_yi AS etf_scale, net_sub_yi AS etf_net_sub "
-        "FROM etf_flow_daily WHERE net_sub_yi IS NOT NULL "
+        "FROM etf_flow_daily WHERE net_sub_yi IS NOT NULL AND trade_date <= :as_of "
         "ORDER BY trade_date DESC LIMIT :n"
     ),
     "etf_daily_dates": (
@@ -136,8 +138,8 @@ def basket_payload() -> dict[str, Any]:
         "source": "tdx_tq",
         "single_share_supported": supported,
         "single_share_note": (
-            "单只 ETF 净申购不可用：通达信 ETF 份额为当前值回填（实测 63 个交易日零变化），"
-            "净申购一律采用市场级 SC8 口径。"
+            "单只 ETF 净申购不可用：通达信 ETF 历史份额尚未通过独立数据验证，"
+            "此处只展示市场级 SC8 口径。"
             if not supported
             else f"单只份额来源：{ew.single_share_source}"
         ),
@@ -373,7 +375,7 @@ def intraday_payload(
 # ── support（市场级 SC8） ────────────────────────────────────────────────
 
 def support_payload(run: Runner, days: int) -> dict[str, Any]:
-    rows = run("etf_support", {"n": days})
+    rows = run("etf_support", {"n": days, "as_of": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")})
     # 读源是 ORDER BY trade_date DESC；这里显式按日期升序，最新日不依赖 SQL 返回顺序。
     rows = sorted(rows, key=lambda r: str(r["trade_date"]))
     supported = ew.single_share_source is not None
@@ -416,7 +418,7 @@ def support_payload(run: Runner, days: int) -> dict[str, Any]:
         "min_net_sub_yi": values[0] if values else None,
         "single_share_supported": supported,
         "single_share_note": (
-            "单只 ETF 净申购不可用（通达信 ETF 份额为当前值回填，实测零变化）；"
+            "单只 ETF 净申购不可用（通达信 ETF 历史份额尚未通过独立数据验证）；"
             "此处为全市场 ETF 口径（SC8），不能拆到单只。"
             if not supported
             else f"单只份额来源：{ew.single_share_source}"
