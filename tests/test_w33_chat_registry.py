@@ -210,7 +210,7 @@ def test_execute_tool_dispatcher(monkeypatch):
 
     tool = CHAT_TOOL_REGISTRY["get_watchlist"]
     monkeypatch.setitem(CHAT_TOOL_REGISTRY, "get_watchlist", dataclasses.replace(tool, handler=boom))
-    out = asyncio.run(chat_api._execute_tool(None, "get_watchlist", {}))
+    out = asyncio.run(chat_api._execute_tool(None, "get_watchlist", {}, user=type("User", (), {"id": "test-user"})()))
     assert out == "工具执行出错: boom"
 
 

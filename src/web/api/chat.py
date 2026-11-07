@@ -799,6 +799,8 @@ async def _execute_tool(
     tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:
         return f"未知工具: {name}"
+    if tool.requires == "self" and not getattr(user, "id", None):
+        return "该工具需要已登录的用户身份。"
 
     # 标的锁定守卫：只作用于"按单只股票取全维度"的工具
     if name == "get_stock_dossier":
