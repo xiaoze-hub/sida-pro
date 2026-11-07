@@ -102,6 +102,7 @@ import {
   LEGACY_ALIASES,
   isNavItemVisible,
   legacyRedirectTarget,
+  legacySymbolTarget,
   mobileNavItems,
   spotlightNavItem,
   visibleNavGroups,
@@ -150,8 +151,10 @@ function LegacyL2Redirect() {
 function LegacyIndexRedirect({ type }: { type: 'index' | 'board' }) {
   // 两条来源路由参数名不同: /index/:symbol 给 symbol, /boards/:blockCode 给 blockCode
   const params = useParams()
+  const location = useLocation()
   const symbol = params.symbol ?? params.blockCode ?? ''
-  return <Navigate to={`/stocks/${encodeURIComponent(symbol)}?type=${type}`} replace />
+  // 老链接自带 query(?period= 等)由纯函数合并, 打开不会从周K 掉回日K。
+  return <Navigate to={legacySymbolTarget(symbol, type, location.search)} replace />
 }
 
 /**

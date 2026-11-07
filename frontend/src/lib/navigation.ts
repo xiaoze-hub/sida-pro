@@ -253,6 +253,21 @@ export function legacyRedirectTarget(to: string, currentSearch = ''): string {
   return search ? `${base}?${search}` : base
 }
 
+/**
+ * 旧「指数/板块详情」路由 → 工作台目标(2026-11-07)。
+ *
+ * 与 `legacyRedirectTarget` 同因: `/index/000001?period=w1` 这类老链接**自带 query**,
+ * 直接硬拼 `/stocks/000001?type=index` 会把 `?period=` 丢掉 —— 打开就从周K 掉回日K。
+ * 这里保留老链接全部查询串, 只覆盖 `type`(路由身份由 type 决定, 不许被老参数改写)。
+ */
+export function legacySymbolTarget(symbol: string, type: 'index' | 'board', currentSearch = ''): string {
+  const next = new URLSearchParams(currentSearch)
+  next.set('type', type)
+  const search = next.toString()
+  const base = `/stocks/${encodeURIComponent(symbol)}`
+  return search ? `${base}?${search}` : base
+}
+
 /** 组标题文案 key; 未知分组返回 null(不编标题) */
 export function navGroupLabelKey(key: NavGroupKey | null): string | null {
   if (!key) return null

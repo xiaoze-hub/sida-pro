@@ -230,13 +230,22 @@ function IndexBoardHost({
   type,
   symbol,
   refreshToken,
+  initialInterval,
+  onIntervalChange,
 }: {
   type: WorkbenchType
   symbol: string
   refreshToken?: number
+  initialInterval?: KlineInterval
+  onIntervalChange?: (interval: KlineInterval) => void
 }) {
   return type === 'index' ? (
-    <IndexBody symbol={symbol} refreshToken={refreshToken} />
+    <IndexBody
+      symbol={symbol}
+      refreshToken={refreshToken}
+      initialInterval={initialInterval}
+      onIntervalChange={onIntervalChange}
+    />
   ) : (
     <BoardBody code={symbol} refreshToken={refreshToken} />
   )
@@ -567,7 +576,13 @@ export default function StockWorkbench() {
            改为把 `refreshKey` 当 `refreshToken` prop 传下去 —— 正文据此重跑取数 effect。
            `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
         <div className="card-surface mt-3 rounded-lg bg-card p-2 shadow-sm">
-          <IndexBoardHost type={type} symbol={symbol} refreshToken={refreshKey} />
+          <IndexBoardHost
+            type={type}
+            symbol={symbol}
+            refreshToken={refreshKey}
+            initialInterval={periodFromUrl}
+            onIntervalChange={handleIntervalChange}
+          />
         </div>
       ) : (
         /* 个股分支**保留** `key={refreshKey}`: `KlineChart`/`QuickRail`/六个标签都没有

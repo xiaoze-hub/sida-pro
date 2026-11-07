@@ -76,6 +76,10 @@ afterEach(() => {
 })
 
 describe('IndexBody · 不发个股 summary, 主图走指数口径', () => {
+  it('指数正文接受分享链接指定的周K周期', async () => {
+    render(<IndexBody symbol="000001" initialInterval="1w" />)
+    await waitFor(() => expect(H.calls.some((u) => u.includes('interval=1w') && u.includes('instrument=index'))).toBe(true))
+  })
   it('请求清单里没有 /klines/000001/summary, 主图带 instrument=index', async () => {
     render(<IndexBody symbol="000001" />)
 

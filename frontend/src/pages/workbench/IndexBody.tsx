@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { TrendingUp, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@sida/api'
-import KlineChart from '@sida/biz-ui/components/KlineChart'
+import KlineChart, { type KlineInterval } from '@sida/biz-ui/components/KlineChart'
 import SectionHeader from '@sida/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import { describeApiError } from '@/lib/api-error'
@@ -82,13 +82,14 @@ interface IndexDetail {
  * ② **分时保留**: `enableMinute` 走的是 `MinutePane` → `/quotes/minute?...&instrument=index`,
  *    那是另一条真实的分钟源(与 K 线的分钟档不同, 后者对指数回传的是日 K)。
  */
-function IndexKline({ symbol, market }: { symbol: string; market: string }) {
+function IndexKline({ symbol, market, initialInterval, onIntervalChange }: { symbol: string; market: string; initialInterval?: KlineInterval; onIntervalChange?: (interval: KlineInterval) => void }) {
   return (
     <KlineChart
       symbol={symbol}
       market={market}
       instrument="index"
-      initialInterval="1d"
+      initialInterval={initialInterval ?? '1d'}
+      onIntervalChange={onIntervalChange}
       initialDays={120}
       enableMinute
     />
@@ -122,7 +123,7 @@ function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
   )
 }
 
-export default function IndexBody({ symbol, refreshToken }: { symbol: string; refreshToken?: number }) {
+export default function IndexBody({ symbol, refreshToken, initialInterval, onIntervalChange }: { symbol: string; refreshToken?: number; initialInterval?: KlineInterval; onIntervalChange?: (interval: KlineInterval) => void }) {
   const [data, setData] = useState<IndexDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -221,7 +222,7 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
               title="K线走势"
               action={<span className="text-[12px] text-muted-foreground">MA/成交量/MACD/RSI · 日K/周K/月K 切换</span>}
             />
-            <IndexKline symbol={symbol || ''} market={data.market || 'CN'} />
+            <IndexKline symbol={symbol || ''} market={data.market || 'CN'} initialInterval={initialInterval} onIntervalChange={onIntervalChange} />
           </div>
 
           {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}

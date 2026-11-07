@@ -28,6 +28,7 @@ import {
   SECONDARY_ROUTES,
   isNavItemVisible,
   legacyRedirectTarget,
+  legacySymbolTarget,
   mobileNavItems,
   navGroupLabelKey,
   navItemsForGroup,
@@ -169,6 +170,14 @@ describe('③ 权限感知可见性(菜单与命令面板同一判定)', () => {
     expect(visible.has('/admin')).toBe(false) // ownerOnly + manage_users
     expect(visible.has('/heatmap')).toBe(false) // view_heatmap
     expect(visible.has('/portfolio')).toBe(true) // edit_portfolio
+  })
+
+  it('旧指数/板块链接保留 ?period= 等查询串(不把周K 掉回日K)', () => {
+    expect(legacySymbolTarget('000001', 'index', '?period=w1')).toBe('/stocks/000001?period=w1&type=index')
+    expect(legacySymbolTarget('BK0475', 'board', '?period=mn&tab=l2')).toBe('/stocks/BK0475?period=mn&tab=l2&type=board')
+    // 老链接若带 type, 以路由身份为准(不许被老参数改掉)
+    expect(legacySymbolTarget('000001', 'index', '?type=stock')).toBe('/stocks/000001?type=index')
+    expect(legacySymbolTarget('000001', 'index')).toBe('/stocks/000001?type=index')
   })
 
   it('大盘观察入口保留无行情权限账号进入原无守卫ETF视图的能力', () => {
