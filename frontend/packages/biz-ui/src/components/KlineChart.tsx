@@ -246,6 +246,23 @@ const PRICE_SCALE_MARGINS = { top: 0.08, bottom: 0.08 } as const
 const SUMMARY_SLOW_LANE_DELAY_MS = 350
 const SUMMARY_TIMEOUT_MS = 45000
 
+/**
+ * 指数图的周期闸门(2026-11-07 复审证实缺陷)。
+ *
+ * 实测: `GET /klines/{symbol}?instrument=index&interval=1m|5m|15m|30m|60m` 后端**回传的是日 K**
+ * (指数源只产日频序列, 分钟参数被静默忽略)。前端若照旧按分钟口径渲染, 就是把日 K 标注成
+ * 「5分/60分」—— 数据错标, 比空着更糟。故指数图**只允许日/周/月**:
+ *  - 状态层: 进来先钳成日 K(父传 `initialInterval='5m'` 也一样);
+ *  - UI 层: 不渲染分钟按钮(不给点了没用的入口);
+ *  - 请求层: URL 里的 interval 再过一次, 任何路径都不发指数分钟 K 请求。
+ * 分时(MinutePane, `/quotes/minute`)走的是另一条真实分钟源, 不受此闸门影响。
+ *
+ * 将来后端把指数分钟 K 做对(真正的分钟聚合序列): 删这里 + 放开 UI 即可, 一处开关。
+ */
+function indexSafeInterval(i: KlineInterval, isIndex: boolean): KlineInterval {
+  return isIndex && !DAY_BUCKETS.includes(i) ? '1d' : i
+}
+
 
 export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity' | 'dark_pool'
 
@@ -269,6 +286,10 @@ const EMPTY_PATTERNS: PatternMark[] = []
 const EMPTY_NOTES: ChartNote[] = []
 const EMPTY_DARKPOOL: DarkPoolPoint[] = []
 const EMPTY_SCENARIO_LINES: ScenarioLine[] = []
+/** 个股专属标记的稳定空数组(指数图复用同一引用, 避免每帧新数组触发 effect 重跑) */
+const EMPTY_ANNOTATIONS: KlineAnnotationMarker[] = []
+const EMPTY_TRADE_MARKERS: Array<{ date: string; side: 'buy' | 'sell'; text?: string }> = []
+const EMPTY_COST_LINES: Array<{ price: number; title: string }> = []
 
 /**
  * 情景关键位图层(2026-10-22)的语义色 → 实际颜色(canvas 不认 Tailwind 类, 读 CSS 变量)。
@@ -538,13 +559,25 @@ export default function KlineChart(props: {
   const darkPoolSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   // 活跃度阈值线 (subchart==='activity' 时建在 volumeSeries 上, 值域与价格独立)
   const activityLinesRef = useRef<ReturnType<ISeriesApi<'Histogram'>['createPriceLine']>[]>([])
-  const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
-
+  /**
+   * 周期(2026-11-07 复审修复): `initialInterval` 是**初始**周期, 只在它**变化**时生效。
+   *
+   * 旧写法 `if (props.initialInterval !== interval) setInterval(props.initialInterval)` 会在
+   * **每次**用户点周期按钮后把状态打回父传值 —— 只要父组件传了 `initialInterval`(指数正文
+   * 传的是常量 `"1d"`), 用户永远停在日 K, 点「周K/月K」等于没点(复审实测缺陷)。
+   */
+  const [interval, setInterval] = useState<KlineInterval>(() =>
+    indexSafeInterval(props.initialInterval || '1d', props.instrument === 'index'),
+  )
+  const initialIntervalRef = useRef(props.initialInterval)
   useEffect(() => {
-    if (props.initialInterval && props.initialInterval !== interval) {
-      setInterval(props.initialInterval)
+    // 只在 props.initialInterval **变化**时才重置(父组件换标的/恢复 URL 周期), 不钳住用户选择
+    if (props.initialInterval === initialIntervalRef.current) return
+    initialIntervalRef.current = props.initialInterval
+    if (props.initialInterval) {
+      setInterval(indexSafeInterval(props.initialInterval, props.instrument === 'index'))
     }
-  }, [props.initialInterval, interval])
+  }, [props.initialInterval, props.instrument])
 
   // ── 分时模式(P1): 只保留 "分时/K线" 切换; 取数与四种状态由 MinutePane 自持 ──
   const [mode, setMode] = useState<'kline' | 'minute'>('kline')
@@ -573,6 +606,17 @@ export default function KlineChart(props: {
    * 这个开关), 否则又会把个股数据画回指数上。
    */
   const indexChart = props.instrument === 'index'
+  /**
+   * 指数图的周期按钮: **不给分钟档**(见 `indexSafeInterval` 头注 —— 后端回传的是日 K)。
+   * 个股图(`instrument` 未传或 `'stock'`)按钮集合一字不变。
+   */
+  const intervalOptions = indexChart
+    ? INTERVAL_OPTIONS.filter((o) => DAY_BUCKETS.includes(o.key))
+    : INTERVAL_OPTIONS
+  // 指数图: 父组件/历史状态把分钟周期塞进来时先钳回日 K(声明在 `indexChart` 之后才可用)
+  useEffect(() => {
+    if (indexChart && !DAY_BUCKETS.includes(interval)) setInterval('1d')
+  }, [indexChart, interval])
 
   // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
   const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
@@ -1046,7 +1090,10 @@ export default function KlineChart(props: {
       setDataLen(0)
       try {
         const days = props.initialDays ?? 120
-        const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(interval)}${props.instrument ? `&instrument=${props.instrument}` : ''}`
+        // 请求层闸门(见 `indexSafeInterval` 头注): 指数**绝不出**分钟 K 请求 —— 后端会静默
+        // 把日 K 当分钟序列回传, 前端据此渲染就是错标周期。
+        const reqInterval = indexSafeInterval(interval, indexChart)
+        const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(reqInterval)}${props.instrument ? `&instrument=${props.instrument}` : ''}`
         const res = await fetchAPI<KlinesResponse>(query)
         if (cancelled) return
         setLiveBar(res.live_bar ?? null)
@@ -1412,7 +1459,14 @@ export default function KlineChart(props: {
    * 父未传时原样返回图层数组(同引用), 不改变未接入标注的页面行为。
    */
   const effPriceLines = useMemo(
-    () => mergePriceLines(props.supportPressure, indexChart ? undefined : layer?.priceLines),
+    () =>
+      mergePriceLines(
+        // 指数图: 父传的 `supportPressure` 也是**个股**通道的产物(页面接线的服务端标注按 symbol
+        // 归属; `useKlineLayer` 取的是个股 summary 的 unlock_levels) —— `000001` 在那边是平安银行。
+        // 故指数图整层置空(2026-11-07 复审: 此前只挡了 layer 侧, 父传照样会画到指数上)。
+        indexChart ? undefined : props.supportPressure,
+        indexChart ? undefined : layer?.priceLines,
+      ),
     [props.supportPressure, layer?.priceLines, indexChart],
   )
   const effActivitySeries = indexChart ? EMPTY_ACTIVITY : (props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY)
@@ -1433,6 +1487,14 @@ export default function KlineChart(props: {
   const effZoneNote = indexChart ? null : (props.zoneNote ?? chartNotesData?.zoneNote ?? null)
   // 暗盘资金序列: 父传优先 → 自取(切到该档才取; null=未取, 空数组=降级不画)
   const effDarkPool = indexChart ? EMPTY_DARKPOOL : (props.darkPoolSeries ?? darkPoolFetched ?? EMPTY_DARKPOOL)
+  /**
+   * 个股专属标记(2026-11-07 复审): 时间点标注 / 交割单买卖点 / 持仓成本, 三者语义都绑在
+   * **个股**上(标注按 symbol 归属、交割单是本人对该股票的成交、成本来自持仓)。指数图即便父组件
+   * 误传也不画 —— 与 `supportPressure` 同一口径: 宁可空, 不可把个股的东西标到指数上。
+   */
+  const effAnnotationMarkers = indexChart ? EMPTY_ANNOTATIONS : normalizeAnnotationMarkers(props.annotationMarkers)
+  const effTradeMarkers = indexChart ? EMPTY_TRADE_MARKERS : (props.tradeMarkers ?? EMPTY_TRADE_MARKERS)
+  const effCostLines = indexChart ? EMPTY_COST_LINES : (props.costLines ?? EMPTY_COST_LINES)
   // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
   const fundRef = useRef<FundFlowBar[]>(effFundFlow)
   fundRef.current = effFundFlow
@@ -1478,7 +1540,7 @@ export default function KlineChart(props: {
     if (!chart || !series) {
       // 图表还没建好 ⇒ 一个 marker 都没画。有时间点标注时如实说"无法确认"，不能沉默
       // 让状态条停在上一次目标的"已上图"上（复审阻断 ②/⑤）。
-      const pending = normalizeAnnotationMarkers(props.annotationMarkers)
+      const pending = effAnnotationMarkers
       if (pending.length > 0) {
         reportAnnotationDraw({
           drawn: [],
@@ -1553,7 +1615,7 @@ export default function KlineChart(props: {
       }
     }
     // §6.2: 本人交割单买卖点(买卖方向来自真实成交, 不是推测)
-    if (showSignal && props.tradeMarkers && props.tradeMarkers.length > 0) {
+    if (showSignal && effTradeMarkers.length > 0) {
       const gs = readGsColors()
       const bars = rawKlinesRef.current
       const inBars = new Set<number>()
@@ -1561,7 +1623,7 @@ export default function KlineChart(props: {
         const k = dayKey(b.time)
         if (k !== null) inBars.add(k)
       }
-      for (const t of props.tradeMarkers) {
+      for (const t of effTradeMarkers) {
         const time = toChartTime(t.date, interval)
         const k = dayKey(time)
         if (k === null || !inBars.has(k)) continue // 非交易日成交: 不画(不贴柱)
@@ -1650,7 +1712,7 @@ export default function KlineChart(props: {
      *  3. `drawn` 只在 `setMarkers` 真的成功之后才记 —— 图表抛错（`render-failed`）时图层上
      *     什么都没有，不能说已上图。
      */
-    const annMarkers = normalizeAnnotationMarkers(props.annotationMarkers)
+    const annMarkers = effAnnotationMarkers
     /** 已通过全部定位检查、等着 `setMarkers` 最后确认的记号 */
     const annotationCandidates: Array<{ marker: KlineAnnotationMarker; time: Time }> = []
     const annotationSkipped: Array<{
@@ -1824,7 +1886,7 @@ export default function KlineChart(props: {
     for (const line of costLinesRef.current) series.removePriceLine(line)
     costLinesRef.current = []
     if (showSignal) {
-      for (const line of props.costLines || []) {
+      for (const line of effCostLines) {
         if (!Number.isFinite(line.price)) continue
         costLinesRef.current.push(
           series.createPriceLine({
@@ -1959,7 +2021,7 @@ export default function KlineChart(props: {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, effScenarioLines, showScenarioLayer, interval, props.sourceReady, props.tradeMarkers, props.annotationMarkers, dataLen, intent, props.symbol, props.market])
+  }, [effEvents, effPriceLines, effCostLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, effScenarioLines, showScenarioLayer, interval, props.sourceReady, effTradeMarkers, effAnnotationMarkers, dataLen, intent, props.symbol, props.market])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -2092,6 +2154,21 @@ export default function KlineChart(props: {
       ? darkPoolCombo(hoverReadout.poolChg ?? null, hoverReadout.poolNet ?? null)
       : null
 
+  /**
+   * 筹码面板是否**真的**在画(2026-11-07 复审证实缺陷)。
+   *
+   * 旧写法只按 `chipProfileOpen` 给画布留右侧 152px 槽位, 但面板本身还要满足「K 线模式 + 真拿到
+   * `prices`」。于是开关存过 `'1'`(localStorage)而数据没到(取数失败/指数图/分时模式)时,
+   * 那条槽位就是**一段 152px 纯空白**: 图表被无理由挤窄, 右边什么都没有。
+   * 现在槽位与面板共用同一条判据 —— 面板不画, 槽位就是 0。
+   */
+  const chipPanelVisible =
+    !indexChart &&
+    chipProfileOpen &&
+    mode === 'kline' &&
+    Array.isArray(effAccumulationChips?.prices) &&
+    effAccumulationChips.prices.length > 0
+
   return (
     <div
       className="flex flex-col gap-2"
@@ -2102,7 +2179,7 @@ export default function KlineChart(props: {
     >
       {/* 周期切换器 */}
       <div className="flex items-center gap-1 flex-wrap">
-        {INTERVAL_OPTIONS.map((opt) => (
+        {intervalOptions.map((opt) => (
           <button
             key={opt.key}
             onClick={() => {
@@ -2198,7 +2275,8 @@ export default function KlineChart(props: {
           会自动缩窄; 面板放进这条槽位里, 不再 absolute 压在 K 线上。K 线是主角, 不许被盖。 */}
       <div
         className="relative w-full"
-        style={{ paddingRight: chipProfileOpen && mode === 'kline' ? 152 : 0 }}
+        data-testid="kline-canvas-slot"
+        style={{ paddingRight: chipPanelVisible ? 152 : 0 }}
       >
         <div
           ref={containerRef}
@@ -2206,7 +2284,7 @@ export default function KlineChart(props: {
           style={{ minHeight: props.height ?? 360 }}
         />
         {/* K线右侧横向筹码分布山形图 (CYQ 直方图) */}
-        {chipProfileOpen && mode === 'kline' && effAccumulationChips && effAccumulationChips.prices && effAccumulationChips.prices.length > 0 && (
+        {chipPanelVisible && (
           <div
             data-testid="chip-profile-histogram"
             className="absolute top-4 right-2 bottom-28 w-36 pointer-events-none flex flex-col justify-between z-20"

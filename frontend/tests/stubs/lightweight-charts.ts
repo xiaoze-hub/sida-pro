@@ -25,12 +25,29 @@ function makeSeries(): FakeSeries {
   return {
     setData: () => {},
     applyOptions: () => {},
-    createPriceLine: () => ({}),
+    createPriceLine: (o: unknown) => {
+      // 测试钩子(2026-11-07): 记录每次建线的入参 —— 供「错误价位/不该画的线不画」这类断言。
+      __priceLines.push(o)
+      return {}
+    },
     removePriceLine: () => {},
     priceScale: () => ({ applyOptions: () => {} }),
     coordinateToPrice: () => 0,
     priceToCoordinate: () => null,
   }
+}
+
+/**
+ * 已创建的价位线入参(按创建顺序)。
+ *
+ * 只给测试读: 组件把 `series.createPriceLine(...)` 的**参数**原样记下来, 于是
+ * 「某价位没画 / 某价位画了」可以直接断言, 不必依赖 canvas 像素。
+ */
+export const __priceLines: unknown[] = []
+
+/** 清空记录(每个用例开始时调, 避免跨用例串账)。 */
+export function __resetPriceLines(): void {
+  __priceLines.length = 0
 }
 
 interface FakeChart {

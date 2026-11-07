@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { TrendingUp, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@sida/api'
 import KlineChart from '@sida/biz-ui/components/KlineChart'
-import { useKlineLayer } from '@/hooks/useKlineLayer'
 import SectionHeader from '@sida/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import { describeApiError } from '@/lib/api-error'
@@ -73,14 +72,17 @@ interface IndexDetail {
 // 成交额柱状图(大盘资金流替代: 近20日成交额)
 
 /**
- * 设计稿 v2.1 §5 接线(2026-09-18 审计断链修复): 指数正文的 K 线同样接上图层数据
- * (原先注释写"图层开关由 InteractiveKline 内部 DEFAULT_LAYERS 控制", 但数据没人传,
- * 开关开着也是空的)。指数用 GS 交叉/资金柱/事件标注同一口径, 取不到就不画。
+ * 指数正文的 K 线(2026-11-07 复审修复)。
+ *
+ * ① **不发个股图层请求**: 旧写法在这里 `useKlineLayer(symbol, market)`, 打的是
+ *    `GET /klines/{symbol}/summary?market=CN` —— 该端点**没有 instrument 参数**, 按个股解析,
+ *    于是 `000001` 在那边是**平安银行**。指数主图用的是指数源(腾讯 sh000001), 图层却来自个股
+ *    ⇒ 串标的。指数侧也没有 summary 的指数口径, 故本视图**不取图层**、一个图层 prop 都不传
+ *    (指数图上这些图层已被 `KlineChart` 的 `indexChart` 闸门整层置空, 传了也不画)。
+ * ② **分时保留**: `enableMinute` 走的是 `MinutePane` → `/quotes/minute?...&instrument=index`,
+ *    那是另一条真实的分钟源(与 K 线的分钟档不同, 后者对指数回传的是日 K)。
  */
 function IndexKline({ symbol, market }: { symbol: string; market: string }) {
-  const layer = useKlineLayer(symbol, market)
-  // P2(2026-09-18): 由 InteractiveKline 迁到 KlineChart —— props 一一对应
-  // (只把 initialDays 从字符串改数字); enableMinute 保留原有的「分时」视图。
   return (
     <KlineChart
       symbol={symbol}
@@ -88,10 +90,6 @@ function IndexKline({ symbol, market }: { symbol: string; market: string }) {
       instrument="index"
       initialInterval="1d"
       initialDays={120}
-      gsSignals={layer.gsSignals}
-      fundFlow={layer.fundFlow}
-      events={layer.events}
-      supportPressure={layer.supportPressure}
       enableMinute
     />
   )
