@@ -1784,7 +1784,20 @@ async def _tool_propose_action(db: Session, args: dict, user: User | None = None
         before = d.get("before") or "无"
         lines.append(f"· {d.get('field')}：{before} → {d.get('after')}")
     if kind == "alert":
-        lines.append("确认后会占用该账号 1 条提醒配额；若上一条里列出了「自选」，则同时占 1 个自选名额。")
+        diffs = item.get("diff") or []
+        # 只有**真的新增**一条才占新名额：就地更新既有简单价格规则不占。
+        # 不覆盖既有规则时（复合条件/已停用）diff 里带「现有提醒」这一条，必须念出来，
+        # 否则用户以为"改了一下我的提醒"，实际是多了一条。
+        if any("触发条件" in str(d.get("field")) and d.get("change") == "add" for d in diffs):
+            lines.append("确认后会**新增** 1 条提醒，占 1 条提醒配额。")
+        else:
+            lines.append("确认后只更新该标的现有提醒的触发条件，不占新的提醒配额。")
+        for d in diffs:
+            if d.get("field") == "现有提醒":
+                lines.append(f"· 你已有的提醒（{d.get('before')}）保持原样，本次另建一条。")
+                break
+        if any(d.get("field") == "自选" for d in diffs):
+            lines.append("同时占 1 个自选名额（上一条里已列出「自选」）。")
     lines.append("请提醒用户在参谋面板点确认后才会生效；不要声称已经加好或已经标注。")
     return "\n".join(lines)
 

@@ -173,6 +173,17 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         result = handler(db, user_id=user_id, payload=payload)
         if isinstance(result, tuple):  # 标注类动作回传 (文案, {annotation_id, annotation})
             result, extra = result
+        if extra.get("alert"):
+            # 2026-11-07 复审 B1：**这次动作实际写下的是哪一条规则**必须跟着动作走。
+            # 旧撤销靠"该标的最新一条规则"反推，用户在确认之后自己又建了一条同标的的
+            # 提醒时，撤销就把用户那条删了。这里把 rule_id / stock_id / 是否新建 一起
+            # 存进快照（`applied` 段），撤销只认这个 ID；没有它就不猜（fail-closed）。
+            try:
+                base = json.loads(row.before_snapshot or "{}") or {}
+            except (TypeError, ValueError):
+                base = {}
+            base["applied"] = extra["alert"]
+            row.before_snapshot = json.dumps(base, ensure_ascii=False)
         row.status = "applied"
         row.result = result
         row.annotation_id = extra.get("annotation_id")
@@ -986,6 +997,104 @@ def _alert_market(payload: dict) -> str:
     return str(payload.get("market") or "CN").strip().upper() or "CN"
 
 
+#: 只有这两种比较符是「一条价格线」—— 也是 `_alert_condition` 唯一会写出的东西。
+_ALERT_PRICE_OPS = (">=", "<=")
+
+
+def _alert_condition(direction: str, price: Any) -> dict:
+    """本次动作要写入的触发条件（结构必须匹配 `price_alert_engine.eval_rule`）。"""
+    return {
+        "op": "and",
+        "items": [{
+            "type": "price",
+            "op": ">=" if direction == "above" else "<=",
+            "value": float(price),
+        }],
+    }
+
+
+def _normalized_condition(condition: Any) -> Any:
+    """条件比的归一化：只用于**相等判定**，不用于写库。
+
+    已落库的 JSON 可能被 SQLite/PG 读成略有差异的形态（int → float），拿字面量比会
+    把"没变"判成"变了"。这里统一数值类型后再比，避免误判成"用户改过"。
+    """
+    if not isinstance(condition, dict):
+        return condition
+    items = condition.get("items")
+    if not isinstance(items, list):
+        return condition
+    out = []
+    for item in items:
+        if isinstance(item, dict):
+            v = item.get("value")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                item = {**item, "value": float(v)}
+        out.append(item)
+    return {**condition, "items": out}
+
+
+def _is_updatable_alert_rule(rule: Any) -> bool:
+    """这条既有规则能否被「就地改写」为一条价格线 —— 不能就新增，绝不动它。
+
+    **为什么要有这个判断**（2026-11-07 复审 B3）：把"同标的已有规则就更新"当默认行为，
+    等于用一条 `>= x` 静默覆盖用户的复合条件（`or` 组 / 多条件组合），还会把用户**主动
+    停用**的规则重新启用。diff 只能显示一条价格，覆盖却发生了几件事 —— 用户确认的是
+    A，执行的是 B。宁可多建一条（多占一个提醒名额，disclose 在 diff 里），也不动用户
+    配置过的规则。
+
+    可更新 = 启用中 + 单条 price 条件 + `and`/无组操作 + 比较符在 `>=`/`<=` + 数值阈值。
+    """
+    if rule is None or not bool(getattr(rule, "enabled", False)):
+        return False
+    group = getattr(rule, "condition_group", None)
+    if not isinstance(group, dict):
+        return False
+    if str(group.get("op") or "and").lower() != "and":
+        return False
+    items = group.get("items")
+    if not isinstance(items, list) or len(items) != 1:
+        return False
+    item = items[0]
+    if not isinstance(item, dict):
+        return False
+    if str(item.get("type") or "price") != "price":
+        return False
+    if str(item.get("op")) not in _ALERT_PRICE_OPS:
+        return False
+    value = item.get("value")
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _latest_alert_rule(db: Session, *, user_id: Any, stock_id: Any) -> Any:
+    """该自选上**最新一条**规则（没有返回 None）。只用来"找候选"，不当作归属证明。"""
+    from src.db.models import PriceAlertRule
+
+    return (
+        db.query(PriceAlertRule)
+        .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock_id)
+        .order_by(PriceAlertRule.id.desc())
+        .first()
+    )
+
+
+def _rule_brief(rule: Any) -> str:
+    """规则的给人看的一句话摘要（diff 用）。解析不了就如实说，不编。"""
+    parts: list[str] = []
+    if not bool(getattr(rule, "enabled", True)):
+        parts.append("已停用")
+    group = getattr(rule, "condition_group", None) or {}
+    items = group.get("items") if isinstance(group, dict) else None
+    items = items if isinstance(items, list) else []
+    if len(items) == 1 and isinstance(items[0], dict) and str(items[0].get("type") or "price") == "price":
+        parts.append(f"{items[0].get('op')} {items[0].get('value')}")
+    elif items:
+        parts.append(f"{len(items)} 个条件（{group.get('op') or 'and'}）")
+    else:
+        parts.append("条件无法解析")
+    return "，".join(parts)
+
+
 def _quota_subject(db: Session, user_id: Any) -> Any:
     """取当前账号行，用于配额判定。
 
@@ -1058,17 +1167,20 @@ def _demo_watchlist_block(db: Session, user: Any, stock_model: Any) -> str | Non
     return None
 
 
-def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
-    """建/更新一条价格提醒规则（2026-10-20, P2；2026-11-07 补配额与副作用披露）。
+def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> tuple[str, dict]:
+    """建/更新一条价格提醒规则（2026-10-20, P2；2026-11-07 补配额、披露、可撤销归属）。
 
     规则必须挂在一只**自选**上（表结构是 stock_id 外键），所以先确保自选里有这只票，
     没有就顺带加进去 —— 用户点「盯一下」时不会想要"先去自选添加再来一次"。
-    这个副作用现在必须**明说**（结果文案 + diff + 工具提示词三处一致），因为它同时
+    这个副作用必须**明说**（结果文案 + diff + 工具提示词三处一致），因为它同时
     消耗用户的自选名额。
 
-    同一标的已有规则时**更新**条件而不是再插一条：`_diff_alert` 对该情况本来就报
-    "update"，若真插第二条，用户看到的是更新、实际多烧一条提醒配额，且撤销口径
-    （快照只记一条 rule_id）也对不上。
+    更新口径（B3 收紧）：只有当该标的最新一条规则是**启用中的单条价格条件**时才就地
+    改写；复合条件 / 已停用的规则一个字都不动，改为新增一条独立提醒。这样 diff 里
+    "update" 说的就是真的只改了一条价格线。
+
+    返回值第二项是本次动作**实际写下**的事实（规则 ID / 是否新建 / 自选 ID），由
+    `apply_action` 落进动作快照 —— 撤销只删这里记下的那条，绝不按"最新一条"猜。
     """
     from src.db.models import PriceAlertRule
 
@@ -1085,18 +1197,12 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
     arrow = "上破" if direction == "above" else "下破"
 
     stock = _my_watchlist_row(db, user_id=user_id, symbol=symbol, market=market)
-    rule = None
-    if stock is not None:
-        rule = (
-            db.query(PriceAlertRule)
-            .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock.id)
-            .order_by(PriceAlertRule.id.desc())
-            .first()
-        )
+    latest = _latest_alert_rule(db, user_id=user_id, stock_id=stock.id) if stock is not None else None
+    target = latest if _is_updatable_alert_rule(latest) else None
     # 「更新既有规则」不占新名额 —— 到上限的用户仍可改自己的条件；只有真的新增才查配额。
     _enforce_quotas(
         db, user_id=user_id,
-        need_alert_slot=rule is None,
+        need_alert_slot=target is None,
         need_watchlist_slot=stock is None,
     )
 
@@ -1115,16 +1221,10 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
 
     # 必须匹配 price_alert_engine.eval_rule 的期望结构，否则规则入库但永远不触发
     # （engine: {"op": "and"|"or", "items": [{"type","op","value"}]}）
-    condition = {
-        "op": "and",
-        "items": [{
-            "type": "price",
-            "op": ">=" if direction == "above" else "<=",
-            "value": float(price),
-        }],
-    }
-    updated = rule is not None
-    if rule is None:
+    condition = _alert_condition(direction, price)
+    updated = target is not None
+    before_state: dict | None = None
+    if target is None:
         rule = PriceAlertRule(
             user_id=str(user_id),
             stock_id=stock.id,
@@ -1136,6 +1236,13 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
         )
         db.add(rule)
     else:
+        rule = target
+        # 撤销要能把这三样都写回去 —— 只存 condition 的话，"顺便启用"就恢复不了。
+        before_state = {
+            "condition": _normalized_condition(rule.condition_group),
+            "enabled": bool(rule.enabled),
+            "name": rule.name,
+        }
         rule.condition_group = condition
         rule.enabled = True
         if payload.get("label"):
@@ -1143,10 +1250,20 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
     # 只 flush，不 commit：由 apply_action 统一提交，配额/约束失败时整笔回滚。
     db.flush()
 
+    facts: dict[str, Any] = {
+        "rule_id": int(rule.id),
+        "rule_created": not updated,
+        "rule_condition": _normalized_condition(condition),
+        "stock_id": int(stock.id),
+        "stock_created": bool(added_watchlist),
+    }
+    if before_state is not None:
+        facts["rule_before"] = before_state
+
     head = f"已更新盯盘提醒：{symbol} {arrow} {price}" if updated else f"已建盯盘提醒：{symbol} {arrow} {price}"
     if added_watchlist:
-        return f"{head}（原来不在自选，已一并加入自选：{market}）"
-    return head
+        return f"{head}（原来不在自选，已一并加入自选：{market}）", {"alert": facts}
+    return head, {"alert": facts}
 
 
 def _has_rollback_snapshot(row: Any) -> bool:
@@ -1285,8 +1402,12 @@ def _diff_watchlist(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
 
 
 def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
-    from src.db.models import PriceAlertRule
+    """提醒动作的字段级 diff —— 必须与 `_apply_alert` **同源判定**。
 
+    判定共用 `_is_updatable_alert_rule`：diff 说 update，apply 才真的只改一条价格线；
+    既有规则是复合条件/已停用时 diff 说 add，并额外用「现有提醒」这一条明说它保持原样。
+    diff 与执行口径一旦分叉，用户确认的就是他看不到的那件事。
+    """
     symbol = str(payload.get("symbol") or "").strip()
     price = payload.get("price")
     direction = str(payload.get("direction") or "above")
@@ -1295,17 +1416,12 @@ def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
     market = _alert_market(payload)
     op = ">=" if direction == "above" else "<="
     stock = _my_watchlist_row(db, user_id=user_id, symbol=symbol, market=market)
-    existing = None
-    if stock is not None:
-        existing = (
-            db.query(PriceAlertRule)
-            .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock.id)
-            .order_by(PriceAlertRule.id.desc())
-            .first()
-        )
+    latest = _latest_alert_rule(db, user_id=user_id, stock_id=stock.id) if stock is not None else None
+    target = latest if _is_updatable_alert_rule(latest) else None
+
     before_rule = None
-    if existing is not None:
-        items = (existing.condition_group or {}).get("items") or []
+    if target is not None:
+        items = (target.condition_group or {}).get("items") or []
         before_rule = f"{items[0].get('op')} {items[0].get('value')}" if items else None
     after_rule = f"{op} {price}"
     diffs = [{
@@ -1314,6 +1430,15 @@ def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
         "after": after_rule,
         "change": "noop" if before_rule == after_rule else ("update" if before_rule else "add"),
     }]
+    if latest is not None and target is None:
+        # 关键披露：不会覆盖这条既有规则，只会新增一条。用户点确认前必须知道
+        # "我原有的复合条件/停用状态不动，但会多一条提醒（多占一个名额）"。
+        diffs.append({
+            "field": "现有提醒",
+            "before": _rule_brief(latest),
+            "after": "保持原样（复合条件或已停用的规则不覆盖）；本次另建一条独立提醒",
+            "change": "noop",
+        })
     # 2026-11-07: 真实副作用必须进 diff。确认这个动作会在标的不在自选时**顺手建自选**，
     # 既占自选名额也会改变用户的自选列表 —— 用户在点确认前有权看到。
     if stock is None:
@@ -1347,7 +1472,7 @@ def _diff_schedule(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
 
 def _snapshot(db: Session, *, user_id: Any, kind: str, payload: dict) -> dict:
     """apply 前拍快照（回滚要用）。只存回滚必需的键，不存整行。"""
-    from src.db.models import PriceAlertRule, Stock
+    from src.db.models import Stock
 
     if kind == "watchlist":
         symbol = str(payload.get("symbol") or "").strip()
@@ -1357,20 +1482,18 @@ def _snapshot(db: Session, *, user_id: Any, kind: str, payload: dict) -> dict:
         symbol = str(payload.get("symbol") or "").strip()
         market = _alert_market(payload)
         stock = _my_watchlist_row(db, user_id=user_id, symbol=symbol, market=market)
-        rule = None
-        if stock is not None:
-            rule = (
-                db.query(PriceAlertRule)
-                .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock.id)
-                .order_by(PriceAlertRule.id.desc())
-                .first()
-            )
+        rule = _latest_alert_rule(db, user_id=user_id, stock_id=stock.id) if stock is not None else None
         return {
             "stock_existed": stock is not None,
             "stock_id": stock.id if stock else None,
             "stock_market": market,
             "rule_id": rule.id if rule else None,
             "rule_condition": (rule.condition_group if rule else None),
+            # 2026-11-07: 只有条件不够 —— apply 还会把规则改成 enabled=True 并按 label 改名，
+            # 撤销要能把这两样一起写回去，否则"撤销"会留下一条被重新启用的规则。
+            "rule_enabled": bool(rule.enabled) if rule else None,
+            "rule_name": rule.name if rule else None,
+            "rule_updatable": _is_updatable_alert_rule(rule),
         }
     if kind == "schedule":
         from src.core.copilot_schedule import list_for_user
@@ -1713,13 +1836,142 @@ def revoke_annotation(db: Session, *, user_id: Any, annotation_id: Any, reason: 
     )
 
 
+def _alert_facts(snapshot: dict) -> dict:
+    """apply 时随动作落库的「本次实际写下」事实（老记录没有这一段）。"""
+    facts = snapshot.get("applied")
+    return facts if isinstance(facts, dict) else {}
+
+
+def _legacy_condition_matches(payload: dict, rule: Any) -> bool:
+    """老记录（快照没存"本次写入的条件"）里，判断规则当前值是否仍是本次动作写下的。
+
+    payload 缺 price 时**证明不出**，返回 False（调用方按"已被改动、不覆盖"处理）——
+    fail-closed 的方向永远是"不动用户数据"。
+    """
+    price = payload.get("price")
+    if price is None:
+        return False
+    try:
+        expected = _alert_condition(str(payload.get("direction") or "above"), price)
+    except (TypeError, ValueError):
+        return False
+    return _normalized_condition(rule.condition_group) == _normalized_condition(expected)
+
+
+def _rollback_alert(db: Session, *, user_id: Any, payload: dict, snapshot: dict) -> list[str]:
+    """撤销一次提醒动作 —— **只撤本次动作确认属于它的那条规则**。
+
+    硬约束（2026-11-07 复审 B1/B2）:
+
+    1. **归属只认 ID**：`apply` 时把 `rule_id` 写进快照 `applied` 段。撤销按这个 ID
+       取行，再核对属主 / 自选 / 内容。绝不"取该标的最新一条"—— 用户在确认之后自己
+       建的同标的提醒会被那条逻辑删掉。
+    2. **证明不了就不动（fail-closed）**：老记录（本次修复之前 apply）没有 `applied`
+       段，只有可选的 `rule_id`；连 `rule_id` 都没有时**抛 409、一行不删**，而不是猜。
+    3. **内容被改过就不删**：规则当前条件等于本次动作写下的值才删。用户随后改过条件
+       / 停用过，说明这条规则已被用户接管，删它就是销毁用户的编辑 ⇒ 同样 409 拒绝。
+    4. **自选行保留**：动作顺带建的自选**不删**。`Stock.positions` / `Stock.agents` 是
+       `cascade="all, delete-orphan"`，删自选会连带删掉用户后来加的持仓、监控配置；
+       为了让"撤销干净"而毁用户数据，次序反了。保留这件事写进撤销结果，不静默。
+    """
+    from src.db.models import PriceAlertRule, Stock
+
+    undone: list[str] = []
+    facts = _alert_facts(snapshot)
+
+    def _deny(msg: str) -> ActionError:
+        return ActionError(msg, status_code=409)
+
+    def _matches_applied(rule: Any, expected: Any) -> bool:
+        return _normalized_condition(rule.condition_group) == _normalized_condition(expected)
+
+    if not facts:
+        # ── 老记录：只有快照，没有"本次写下的是哪一条" ────────────────────
+        rid = snapshot.get("rule_id")
+        cond = snapshot.get("rule_condition")
+        if rid is None or not cond:
+            raise _deny(
+                "这条提醒动作早于本次修复的记录格式：快照里没有本次动作写下的规则 ID。"
+                "按「该标的最新一条」猜删会误删你后来在同标的建的提醒，因此本次撤销"
+                "不改动任何规则（fail-closed）；如需清理请到提醒列表手动删除。"
+            )
+        target = db.query(PriceAlertRule).filter(PriceAlertRule.id == int(rid)).first()
+        if target is None:
+            undone.append(f"提醒 #{int(rid)} 已不存在，无需恢复")
+        elif str(target.user_id) != str(user_id) or target.stock_id != snapshot.get("stock_id"):
+            raise _deny(
+                f"提醒 #{int(rid)} 的属主或所属自选与这条动作的快照不一致（编号可能已被复用），"
+                "拒绝改写这条规则（fail-closed）"
+            )
+        elif not _legacy_condition_matches(payload, target):
+            undone.append(
+                f"提醒 #{int(rid)} 已被改动（条件不再是这条动作写入的值），本次撤销未覆盖它"
+            )
+        else:
+            target.condition_group = cond
+            if snapshot.get("rule_enabled") is not None:
+                target.enabled = bool(snapshot["rule_enabled"])
+            if snapshot.get("rule_name"):
+                target.name = snapshot["rule_name"]
+            undone.append(f"已恢复提醒 #{int(rid)} 的触发条件")
+            if snapshot.get("rule_enabled") is None:
+                undone.append("历史快照未记录启用状态，如该规则原本停用请手动停用")
+        return undone
+
+    # ── 新记录：ID 明确 ────────────────────────────────────────────────
+    rule_id = facts.get("rule_id")
+    stock_id = facts.get("stock_id")
+    if rule_id is None:
+        raise _deny("动作快照缺少本次写下的规则 ID，拒绝猜删（fail-closed）")
+
+    rule = db.query(PriceAlertRule).filter(PriceAlertRule.id == int(rule_id)).first()
+    if rule is not None:
+        if str(rule.user_id) != str(user_id) or rule.stock_id != stock_id:
+            raise _deny(
+                f"提醒 #{int(rule_id)} 的属主或所属自选与本次动作记录不一致（编号可能已被复用），"
+                "拒绝改动这条规则（fail-closed）"
+            )
+        if not _matches_applied(rule, facts.get("rule_condition")):
+            raise _deny(
+                f"提醒 #{int(rule_id)} 在确认之后已被改动（条件不再是本次动作写入的值），"
+                "删除它会毁掉你的修改，因此本次撤销不改动它（fail-closed）；"
+                "如确实要撤销请到提醒列表手动删除。"
+            )
+        if facts.get("rule_created"):
+            db.delete(rule)
+            db.flush()
+            undone.append(f"已删除本次新建的盯盘提醒 #{int(rule_id)}")
+        else:
+            before = facts.get("rule_before") or {}
+            if before.get("condition") is not None:
+                rule.condition_group = before["condition"]
+            if before.get("enabled") is not None:
+                rule.enabled = bool(before["enabled"])
+            if before.get("name") is not None:
+                rule.name = before["name"]
+            db.flush()
+            undone.append(f"已恢复提醒 #{int(rule_id)} 的触发条件与启用状态")
+    else:
+        undone.append(f"提醒 #{int(rule_id)} 已被删除，无需撤销")
+
+    if facts.get("stock_created") and stock_id is not None:
+        still = db.query(Stock).filter(Stock.id == int(stock_id), Stock.user_id == str(user_id)).first()
+        if still is not None:
+            # 明确保留 + 说明：删自选会级联删用户持仓/监控。
+            undone.append(
+                f"自选 {still.symbol}（{still.market}）已保留：删除自选会连带删掉挂在这只票上的"
+                "持仓/监控等数据，撤销不碰它；如不需要请到自选页手动移出"
+            )
+    return undone
+
+
 def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = "") -> dict:
     """把一次已 apply 的动作退回到 apply 之前的状态，并写审计。
 
     支持四类：标注（删掉那条线 + 动作转 rolled_back）/ 加自选 / 建提醒 / 建定时任务。
     撤销只删"这次动作新建的东西"或写回快照值，**不碰用户其它数据**。
     """
-    from src.db.models import CopilotAction, PriceAlertRule, Stock
+    from src.db.models import CopilotAction, Stock
 
     row = (
         db.query(CopilotAction)
@@ -1763,54 +2015,9 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
                     db.delete(obj)
                     undone.append(f"已移出自选：{sym}")
         elif row.kind == "alert":
-            # 2026-11-07: 按快照里的 stock_id 定位本次新建的规则，而不是"该用户最新一条规则"
-            # —— 后者在并发/用户随后又建了别的提醒时会删错行。
-            # 快照在 apply 之前拍，那时若标的不在自选则 stock_id 为 None（自选是 apply 才建的），
-            # 此时按 payload 的 (symbol, market) 在**本人名下**重查一次；查不到就不猜。
-            sid = snapshot.get("stock_id")
-            if sid is None:
-                sid_row = _my_watchlist_row(
-                    db, user_id=user_id,
-                    symbol=payload.get("symbol"), market=_alert_market(payload),
-                )
-                sid = sid_row.id if sid_row is not None else None
-            rid = snapshot.get("rule_id")
-            if rid is None:
-                created = None
-                if sid is not None:
-                    created = (
-                        db.query(PriceAlertRule)
-                        .filter(
-                            PriceAlertRule.user_id == str(user_id),
-                            PriceAlertRule.stock_id == sid,
-                        )
-                        .order_by(PriceAlertRule.id.desc())
-                        .first()
-                    )
-                if created is not None:
-                    db.delete(created)
-                    db.flush()
-                    undone.append("已删除本次新建的盯盘提醒")
-            elif snapshot.get("rule_condition"):
-                target = db.query(PriceAlertRule).filter(PriceAlertRule.id == rid).first()
-                if target is not None:
-                    target.condition_group = snapshot["rule_condition"]
-                    undone.append("已恢复提醒触发条件")
-            # 同一次动作顺手建的自选也要退回 —— 副作用已经明说，撤销就必须一起撤，
-            # 否则用户的配额被一条"已撤销"的动作永久占着。
-            if snapshot.get("stock_existed") is False and sid is not None:
-                still_used = (
-                    db.query(PriceAlertRule.id).filter(PriceAlertRule.stock_id == sid).first()
-                )
-                stock_obj = (
-                    db.query(Stock)
-                    .filter(Stock.id == sid, Stock.user_id == str(user_id))
-                    .first()
-                )
-                if stock_obj is not None and still_used is None:
-                    db.delete(stock_obj)
-                    db.flush()
-                    undone.append("已移出这次动作顺带加入的自选")
+            undone.extend(
+                _rollback_alert(db, user_id=user_id, payload=payload, snapshot=snapshot)
+            )
         elif row.kind == "schedule":
             from src.core.copilot_schedule import delete as _delete
 
