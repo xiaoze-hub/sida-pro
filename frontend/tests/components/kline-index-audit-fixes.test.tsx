@@ -103,6 +103,7 @@ describe('指数图 · 分钟 K 陷阱(后端回传日 K)', () => {
     expect(H.calls.filter((u) => MINUTE_URL.test(u))).toEqual([])
     expect(H.calls[0]).toBe('/klines/000001?market=CN&days=120&interval=1d&instrument=index')
     expect(screen.queryByText('5分')).toBeNull()
+    expect(screen.getByText(/分钟K暂不可用.*当前显示日K/)).toBeTruthy()
   })
 })
 

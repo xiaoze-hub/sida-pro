@@ -2184,6 +2184,11 @@ export default function KlineChart(props: {
       data-chart-panes={paneInfo}
     >
       {/* 周期切换器 */}
+      {props.initialInterval && !DAY_BUCKETS.includes(props.initialInterval) && interval === '1d' && (
+        <div role="status" className="text-[12px] text-muted-foreground">
+          原链接请求的分钟K暂不可用，当前显示日K。
+        </div>
+      )}
       <div className="flex items-center gap-1 flex-wrap">
         {intervalOptions.map((opt) => (
           <button

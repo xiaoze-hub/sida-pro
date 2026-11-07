@@ -41,7 +41,7 @@ DAILY = [
 
 
 # ── ① 月线真聚合 ────────────────────────────────────────────────────────
-@pytest.mark.parametrize("interval", ["1mth", "1M", "mth", "month", "月"])
+@pytest.mark.parametrize("interval", ["1mth", "1M", "mth", "m", "month", "月"])
 def test_month_interval_aggregates_to_monthly_bars(interval):
     out = klines._aggregate_klines([_clone(k) for k in DAILY], interval)
     assert len(out) == 3, f"{interval} 必须按月聚成 3 根, 实得 {len(out)} 根(日K透传=伪标)"

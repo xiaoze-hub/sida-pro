@@ -178,7 +178,7 @@ _DAY_INTERVALS = frozenset({"1d", "d", "day", "daily", "日", "日k"})
 _WEEK_INTERVALS = frozenset({"1w", "w", "week", "weekly", "周", "周k"})
 #: 月线: 前端 `KlineInterval` 用 **1mth**(见 frontend/packages/biz-ui ... KlineChart),
 #: 这里必须认它 —— 旧实现只认 "1m"/"m", 导致月K 请求被当成未知周期原样返回日K。
-_MONTH_INTERVALS = frozenset({"1mth", "mth", "1mo", "month", "monthly", "mn", "月", "月k"})
+_MONTH_INTERVALS = frozenset({"1mth", "mth", "m", "1mo", "month", "monthly", "mn", "月", "月k"})
 
 
 def resolve_interval(interval: str | None) -> str:
