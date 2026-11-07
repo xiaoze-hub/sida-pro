@@ -70,6 +70,7 @@ vi.mock('@sida/api', async importOriginal => {
 })
 
 import { Profile } from '@/pages/Profile'
+import { AUTH_CHANGED_EVENT } from '@/hooks/useApiQuery'
 
 function mount(section = 'account') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -277,5 +278,59 @@ describe('个人中心按登录身份隔离 (2026-11-07)', () => {
     expect(after?.avatar).toBe(AVATAR_NEW)
     expect(after?.nickname).toBe('老板A 改名')
     expect((document.querySelector('img[alt="头像"]') as HTMLImageElement).getAttribute('src')).toBe(AVATAR_NEW)
+  })
+
+  /**
+   * 换号后页面还挂在旧身份上的那一小段窗口(登录已把 token 换成 B, 渲染还是 A):
+   * 这是最危险的一秒 —— 用户看到的是 A 的资料和 A 的草稿, 点保存却会用 B 的凭证提交。
+   * 提交前必须拿 currentIdentity() 和渲染身份对一次, 不一致就拒绝写入。
+   */
+  it('页面还挂在旧身份时点保存: 拒绝写入(不发 PUT), 不把 A 的草稿写成 B 的资料', async () => {
+    mount()
+    expect(await screen.findByText('老板A')).toBeTruthy()
+
+    // A 的编辑框已经打开、草稿已经改好(这份草稿只属于 alice)
+    fireEvent.click(screen.getByRole('button', { name: '编辑资料' }))
+    const input = (await screen.findByLabelText(/昵称/)) as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'A 的草稿' } })
+
+    // 点保存前一刻 token 已被换成 bob(静默换号, 页面还没来得及重渲染成 bob)
+    act(() => {
+      localStorage.setItem('token', tokenOf('bob'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存资料' }))
+    })
+
+    // 一个字节都不许写到 bob 名下
+    expect(store.puts).toHaveLength(0)
+    expect(store.puts.filter(p => p.identity === identityOf('bob'))).toHaveLength(0)
+  })
+
+  it('收到 sida:auth-changed 即刻换身份(不等 1s 轮询), 紧接着保存写到新账号', async () => {
+    mount()
+    expect(await screen.findByText('老板A')).toBeTruthy()
+
+    act(() => {
+      localStorage.setItem('token', tokenOf('bob'))
+      window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
+    })
+    // 同一帧内旧账号资料就下屏了(没有推进任何计时器 ⇒ 不是轮询兜的底)
+    expect(screen.queryByText('老板A')).toBeNull()
+
+    expect(await screen.findByText('老板B')).toBeTruthy()
+
+    // 换号后立刻操作: 打开编辑框、改昵称、保存 —— 必须写到 bob 名下
+    fireEvent.click(screen.getByRole('button', { name: '编辑资料' }))
+    const input = (await screen.findByLabelText(/昵称/)) as HTMLInputElement
+    await waitFor(() => expect(input.value).toBe('老板B'))
+    fireEvent.change(input, { target: { value: '老板B 改名' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存资料' }))
+    })
+    await waitFor(() => expect(store.puts).toHaveLength(1))
+
+    expect(store.puts[0].identity).toBe(identityOf('bob'))
+    expect(store.puts[0].body.nickname).toBe('老板B 改名')
   })
 })

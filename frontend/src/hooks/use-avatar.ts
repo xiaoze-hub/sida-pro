@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { fetchAPI } from '@sida/api'
-import { safeJwtPayload } from '@/lib/jwt'
+import { AUTH_CHANGED_EVENT, createRequestDeadline, currentIdentity } from '@/hooks/useApiQuery'
 
 const EVENT = 'sida:avatar-changed'
 /**
@@ -30,11 +30,16 @@ let inflight: { identity: string; controller: AbortController } | null = null
 /**
  * 读写顺序保护(2026-11-07): 同一账号里"读"和"存"会并发 —— 早发的读如果晚于保存落地,
  * 就会拿旧头像盖掉刚存的新头像。规则:
- *  - 每次保存开始 writeEpoch +1; 读请求记下发起时的 epoch, 回来时 epoch 变了就丢弃;
+ *  - 每次保存开始 + 落地各 writeEpoch +1; 读请求记下发起时的 epoch, 回来时 epoch 变了就丢弃
+ *    (开始那次作废保存前的读, 落地那次作废保存途中发起的读 —— 它们读到的同样是旧值);
+ *  - "头像已改"的无值事件同样 +1 并 abort 在途读: 事件只说明值变了, 不知道新值, 事件前发出的读
+ *    晚到会把新头像盖回旧的;
  *  - 并发保存只认最后一次(seq), 先发后到的旧保存结果不写缓存也不广播。
  */
 let writeEpoch = 0
 let saveSeq = 0
+/** 在途保存数: 保存期间不重启读(否则那次读拿到的是保存前的值, 还会白跑一趟)。 */
+let savingWrites = 0
 const listeners = new Set<() => void>()
 
 function notify() {
@@ -42,33 +47,16 @@ function notify() {
   for (const fn of Array.from(listeners)) fn()
 }
 
-let cachedToken: string | null = null
-let cachedIdentity = ''
-
 /**
  * 当前登录身份(账号切换的唯一判据)。未登录返回 ''。
  *
- * 用 JWT 里的 username/sub 而不是 token 前缀: `fetchAPI` 的响应缓存 key 只取 token
- * 前 8 字符, HS256 头(`{"alg":...}`)对每个用户都一样 ⇒ 前缀会撞; 头像缓存必须按身份
- * 精确分区, 否则 A 的请求命中 B 的缓存就是串号。
+ * 与 `useApiQuery.currentIdentity` 是**同一个**判据(不再各存一份 token 缓存: 两份缓存迟早
+ * 分叉, 一处认 B 一处认 A 时读写就会串号)。用 JWT 里的 username/sub 而不是 token 前缀:
+ * `fetchAPI` 的响应缓存 key 只取 token 前 8 字符, HS256 头(`{"alg":...}`)对每个用户都一样
+ * ⇒ 前缀会撞; 头像缓存必须按身份精确分区, 否则 A 的请求命中 B 的缓存就是串号。
  */
 export function currentAvatarIdentity(): string {
-  let token = ''
-  try {
-    token = localStorage.getItem('token') || ''
-  } catch {
-    token = ''
-  }
-  if (token === cachedToken) return cachedIdentity
-  cachedToken = token
-  if (!token) {
-    cachedIdentity = ''
-    return cachedIdentity
-  }
-  const payload = safeJwtPayload(token)
-  const claim = payload?.username ?? payload?.sub
-  cachedIdentity = typeof claim === 'string' && claim ? `u:${claim}` : `t:${token}`
-  return cachedIdentity
+  return currentIdentity()
 }
 
 /** 对外可见值: 身份不符(切号瞬间/已登出) 时恒为空, 不回退上一个账号的头像。 */
@@ -121,9 +109,13 @@ function ensureLoaded(options?: { retryFailed?: boolean }): void {
   const controller = new AbortController()
   inflight = { identity, controller }
   const startedEpoch = writeEpoch
+  // 取消 + 超时合并信号(2026-11-07): 不再用 AbortSignal.any/timeout(老 Safari/内嵌 WebView
+  // 没有, 一调用就 TypeError)。fetchAPI 收到 signal 后不自建超时, 所以计时器在 fetchAPI
+  // settle 之后才 dispose —— 窗口覆盖响应体, 体挂住也会落到下面的失败分支(可重挂重试)。
+  const deadline = createRequestDeadline(controller.signal, AVATAR_TIMEOUT_MS)
   fetchAPI<{ avatar?: string }>(PROFILE_PATH, {
     cacheMode: 'reload',
-    signal: AbortSignal.any([controller.signal, AbortSignal.timeout(AVATAR_TIMEOUT_MS)]),
+    signal: deadline.signal,
     timeoutMs: AVATAR_TIMEOUT_MS,
   })
     .then(res => {
@@ -131,7 +123,7 @@ function ensureLoaded(options?: { retryFailed?: boolean }): void {
       if (currentAvatarIdentity() !== identity) return
       // 同账号读写乱序: 这期间有过保存 ⇒ 本次读已是旧值, 丢弃并让缓存的保存值生效
       if (startedEpoch !== writeEpoch) {
-        if (!snapshot.loaded && !snapshot.failed) ensureLoaded()
+        if (!savingWrites && !snapshot.loaded && !snapshot.failed) ensureLoaded()
         return
       }
       snapshot = {
@@ -146,33 +138,63 @@ function ensureLoaded(options?: { retryFailed?: boolean }): void {
       if (currentAvatarIdentity() !== identity) return
       if (startedEpoch !== writeEpoch) {
         // 保存已把结果写进缓存(或保存失败, 需重新取): 不要用这次过期读的失败覆盖
-        if (!snapshot.loaded && !snapshot.failed) ensureLoaded()
+        if (!savingWrites && !snapshot.loaded && !snapshot.failed) ensureLoaded()
         return
       }
       snapshot = { identity, value: '', loaded: false, failed: true }
       notify()
     })
     .finally(() => {
+      deadline.dispose()
       if (inflight?.controller === controller) inflight = null
     })
 }
 
-/** 丢弃当前账号的缓存并重取(收到"头像已改"广播但没带值时用)。 */
+/**
+ * 作废在途读取并重取(收到"头像已改"的无值广播时用)。
+ *
+ * 无值广播只知道"变了", 不知道新值。事件**之前**发出的读拿的是旧值, 如果放任它落地就会把
+ * 刚存的新头像盖回去(个人中心保存后正好是这条路径: PUT 成功 → 广播 → 旧读才回来)。
+ * 所以: epoch +1 作废它 + abort 掉(省一次无意义往返, 也免它占着 inflight 让重取被跳过),
+ * 再从头取一次。
+ */
 function reload(): void {
   const identity = currentAvatarIdentity()
   if (!identity) return
-  if (snapshot.identity === identity) {
-    snapshot = { identity, value: snapshot.value, loaded: false, failed: false }
+  writeEpoch += 1
+  inflight?.controller.abort()
+  inflight = null
+  snapshot = {
+    identity,
+    // 同账号保留当前可见值, 避免重取期间头像闪成空白; 换了号则一律清空(绝不回退旧账号)
+    value: snapshot.identity === identity ? snapshot.value : '',
+    loaded: false,
+    failed: false,
   }
+  notify()
   ensureLoaded()
 }
 
+/**
+ * 上一次处理过的事件对象(2026-11-07): 每个挂载的 useAvatar 实例都注册了自己的监听器,
+ * 同一次 `dispatchEvent` 会被投递给所有实例 —— 同源事件只处理一次, 否则"无值事件 ⇒ 重取"
+ * 会被执行 N 次(每次都 abort 掉上一次刚发起的读, 白跑 N 个请求)。
+ */
+let lastHandledEvent: Event | null = null
+
 function onAvatarEvent(event: Event): void {
+  if (event === lastHandledEvent) return
+  lastHandledEvent = event
+
   const identity = currentAvatarIdentity()
   if (!identity) return
   const detail = (event as CustomEvent<unknown>).detail
   if (typeof detail === 'string') {
-    // 本会话保存成功后带值广播(服务端已确认): 直接采纳, 省一次往返
+    // 本会话保存成功后带值广播(服务端已确认): 直接采纳, 省一次往返。
+    // 同时作废在途读: 它们读到的是保存前的值, 晚到会把这里的新值盖回去。
+    writeEpoch += 1
+    inflight?.controller.abort()
+    inflight = null
     snapshot = { identity, value: detail, loaded: true, failed: false }
     notify()
     return
@@ -191,24 +213,39 @@ export async function saveAvatar(value: string): Promise<void> {
   const seq = ++saveSeq
   // 保存一开始就作废在途的旧读: 它读到的是保存前的头像, 晚到会把新头像盖回去
   writeEpoch += 1
+  savingWrites += 1
   inflight?.controller.abort()
   inflight = null
-  const res = await fetchAPI<{ avatar?: string }>(PROFILE_PATH, {
-    method: 'PUT',
-    body: JSON.stringify({ avatar: value }),
-    timeoutMs: AVATAR_TIMEOUT_MS,
-  })
-  // 并发保存: 只认最后一次, 先发后到的旧结果不写缓存不广播
-  if (seq !== saveSeq) return
-  if (currentAvatarIdentity() !== identity) return
-  const saved = typeof res?.avatar === 'string' ? res.avatar : value
-  snapshot = { identity, value: saved, loaded: true, failed: false }
-  notify()
-  window.dispatchEvent(new CustomEvent<string>(EVENT, { detail: saved }))
+  try {
+    const res = await fetchAPI<{ avatar?: string }>(PROFILE_PATH, {
+      method: 'PUT',
+      body: JSON.stringify({ avatar: value }),
+      timeoutMs: AVATAR_TIMEOUT_MS,
+    })
+    // 并发保存: 只认最后一次, 先发后到的旧结果不写缓存不广播
+    if (seq !== saveSeq) return
+    if (currentAvatarIdentity() !== identity) return
+    // 落地再作废一次: 保存途中发起的读读到的同样是旧值(它可能比 PUT 先提交), 晚到会盖掉新头像
+    writeEpoch += 1
+    const saved = typeof res?.avatar === 'string' ? res.avatar : value
+    snapshot = { identity, value: saved, loaded: true, failed: false }
+    notify()
+    window.dispatchEvent(new CustomEvent<string>(EVENT, { detail: saved }))
+  } catch (error) {
+    // 保存失败: 被我们 abort 的那次读不会自己回来 —— 重取一次拿真实值(仍走身份校验)。
+    // 被后一次保存取代的旧保存不管: 让最新那次自己收尾。
+    if (seq === saveSeq && currentAvatarIdentity() === identity && !snapshot.loaded) ensureLoaded()
+    throw error
+  } finally {
+    savingWrites = Math.max(0, savingWrites - 1)
+  }
 }
 
 /** 清空内存缓存(登出/切号兜底; 不触发请求)。 */
 export function resetAvatarCache(): void {
+  // 作废在途读: 登出再登录成同一个账号时, 登出前发出的读仍可能落地(身份字符串一样,
+  // 单靠身份校验拦不住), epoch 变化是唯一可靠的判据。
+  writeEpoch += 1
   inflight?.controller.abort()
   inflight = null
   snapshot = { identity: '', value: '', loaded: false, failed: false }
@@ -226,12 +263,17 @@ export function useAvatar(): string {
       // 别的标签页换号/登出 → 本标签页身份已变, 立刻重判(不能再挂旧账号头像)
       if (event.key === null || event.key === 'token' || event.key === 'user') ensureLoaded()
     }
+    // 同标签页登录/登出/换号会广播统一事件(无 storage 事件): 立刻重判身份并重取,
+    // 否则头像会一直挂在"上一个人"上直到别的原因触发重渲染。
+    const onAuthChanged = () => ensureLoaded()
     window.addEventListener('storage', onStorage)
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged)
     window.addEventListener(EVENT, onAvatarEvent)
     // 重新挂载 = 用户重新进页面: 上一次失败(超时/网络)可以重试一次, 不靠刷新浏览器
     ensureLoaded({ retryFailed: true })
     return () => {
       window.removeEventListener('storage', onStorage)
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged)
       window.removeEventListener(EVENT, onAvatarEvent)
     }
   }, [])

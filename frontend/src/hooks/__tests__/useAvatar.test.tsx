@@ -288,4 +288,114 @@ describe('个人头像按账号隔离', () => {
     })
     expect(result.current).toBe(AVATAR_BOB)
   })
+
+  it('无值"头像已改"事件(个人中心保存后): 作废并取消在途旧读, 立即重取, 旧读不覆盖新头像', async () => {
+    setAccountToken('alice')
+    const staleRead = deferred<{ avatar?: string }>()
+    api.fetchAPI.mockReturnValueOnce(staleRead.promise)
+    const { result } = renderHook(() => useAvatar())
+    expect(api.fetchAPI).toHaveBeenCalledTimes(1)
+    const staleSignal = (api.fetchAPI.mock.calls[0][1] as { signal?: AbortSignal }).signal
+    expect(staleSignal?.aborted).toBe(false)
+
+    // 个人中心保存成功 → 广播"头像已变"但不带值(新值由后端持有)
+    const fresh = deferred<{ avatar?: string }>()
+    api.fetchAPI.mockReturnValueOnce(fresh.promise)
+    act(() => {
+      window.dispatchEvent(new CustomEvent('sida:avatar-changed'))
+    })
+
+    // 事件前发出的读已经无意义: 必须被取消, 并且真的重新发一次读
+    expect(staleSignal?.aborted).toBe(true)
+    expect(api.fetchAPI).toHaveBeenCalledTimes(2)
+
+    // 旧读(保存前发出)现在才回来, 带的是保存前的值 —— 不能盖掉新头像
+    await act(async () => {
+      staleRead.resolve({ avatar: AVATAR_BOB })
+      await staleRead.promise
+    })
+    expect(result.current).toBe('')
+    expect(api.fetchAPI).toHaveBeenCalledTimes(2) // 过期读回来不再额外发请求
+
+    await act(async () => {
+      fresh.resolve({ avatar: AVATAR_ALICE })
+      await fresh.promise
+    })
+    await waitFor(() => expect(result.current).toBe(AVATAR_ALICE))
+  })
+
+  it('保存途中发起的读(忽略取消)晚到, 不覆盖保存落地的新头像', async () => {
+    setAccountToken('alice')
+    const firstRead = deferred<{ avatar?: string }>() // 一直不回, 让缓存处于"未加载"
+    api.fetchAPI.mockReturnValueOnce(firstRead.promise)
+    const { result } = renderHook(() => useAvatar())
+    expect(result.current).toBe('')
+
+    const put = deferred<{ avatar?: string }>()
+    api.fetchAPI.mockReturnValueOnce(put.promise)
+    const pendingSave = saveAvatar(AVATAR_ALICE)
+
+    // 保存途中另一个组件挂载 ⇒ 发起一次读(拿到的会是保存前的值)
+    const midRead = deferred<{ avatar?: string }>()
+    api.fetchAPI.mockReturnValueOnce(midRead.promise)
+    const other = renderHook(() => useAvatar())
+    expect(api.fetchAPI).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      put.resolve({ avatar: AVATAR_ALICE })
+      await pendingSave
+    })
+    await waitFor(() => expect(result.current).toBe(AVATAR_ALICE))
+
+    // 这次读比 PUT 早提交, 现在才回来: 不能把新头像盖回旧值
+    await act(async () => {
+      midRead.resolve({ avatar: AVATAR_BOB })
+      await midRead.promise
+    })
+    expect(result.current).toBe(AVATAR_ALICE)
+    expect(other.result.current).toBe(AVATAR_ALICE)
+  })
+
+  it('同页切号广播 sida:auth-changed: 不等 1s 轮询, 立刻清掉旧账号头像并重取', async () => {
+    setAccountToken('alice')
+    api.fetchAPI.mockResolvedValueOnce({ avatar: AVATAR_ALICE })
+    const { result } = renderHook(() => useAvatar())
+    await waitFor(() => expect(result.current).toBe(AVATAR_ALICE))
+
+    const bobPending = deferred<{ avatar?: string }>()
+    api.fetchAPI.mockReturnValueOnce(bobPending.promise)
+    // 登录页换号: 只写 localStorage, 但按统一约定广播事件(同页不会有 storage 事件)
+    act(() => {
+      setAccountToken('bob')
+      window.dispatchEvent(new CustomEvent('sida:auth-changed'))
+    })
+
+    // 同一帧内就必须是空白 —— 不能等到下一次 1s 轮询/某次无关重渲染
+    expect(result.current).toBe('')
+    expect(api.fetchAPI).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      bobPending.resolve({ avatar: AVATAR_BOB })
+      await bobPending.promise
+    })
+    await waitFor(() => expect(result.current).toBe(AVATAR_BOB))
+  })
+
+  it('多个组件同时挂载: 同一次无值事件只重取一次(不按监听器数量放大请求)', async () => {
+    setAccountToken('alice')
+    api.fetchAPI.mockResolvedValueOnce({ avatar: AVATAR_ALICE })
+    const first = renderHook(() => useAvatar())
+    await waitFor(() => expect(first.result.current).toBe(AVATAR_ALICE))
+    const second = renderHook(() => useAvatar()) // 读的是同一份模块缓存, 不再发请求
+    expect(api.fetchAPI).toHaveBeenCalledTimes(1)
+
+    api.fetchAPI.mockResolvedValueOnce({ avatar: AVATAR_BOB })
+    act(() => {
+      window.dispatchEvent(new CustomEvent('sida:avatar-changed'))
+    })
+    expect(api.fetchAPI).toHaveBeenCalledTimes(2)
+
+    await waitFor(() => expect(first.result.current).toBe(AVATAR_BOB))
+    expect(second.result.current).toBe(AVATAR_BOB)
+  })
 })

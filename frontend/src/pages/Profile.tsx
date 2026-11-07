@@ -159,6 +159,23 @@ export function Profile() {
   /** 保存序号: 同一账号并发保存时只认最后一次, 先发后到的旧结果不得覆盖新头像/新昵称。 */
   const saveSeqRef = useRef(0)
 
+  /**
+   * 提交前身份核对(2026-11-07)。
+   *
+   * `identity` 是"页面上这份草稿属于谁"(渲染时的身份), `currentIdentity()` 是"这一发请求会
+   * 写到谁"(token 里的身份)。同页换号后两者会有一段不一致的窗口: 登录已经把 token 换成 B,
+   * 页面还挂在 A 的渲染上(A 的昵称草稿、A 的开着的编辑框)。这时候点保存 =
+   * 用 B 的凭证提交 A 的资料 —— 会把 A 的草稿写进 B 的账号。
+   * 一致性是写入的前提, 不是写入之后再纠正: 宁可不写, 也不能写错账号。
+   */
+  const identityChangedSinceRender = (): boolean => currentIdentity() !== identity
+
+  const refuseOnIdentityChange = (action: string): boolean => {
+    if (!identityChangedSinceRender()) return false
+    toast(`账号已切换, ${action}已取消`, 'error')
+    return true
+  }
+
   useEffect(() => {
     if (!profile) return
     setNicknameDraft(profile.nickname || '')
@@ -195,6 +212,8 @@ export function Profile() {
       toast('昵称最多 32 个字', 'error')
       return
     }
+    // 提交前身份核对: 页面挂在 A 上而 token 已换成 B ⇒ 这一发会把 A 的草稿写进 B 的账号。
+    if (refuseOnIdentityChange('保存')) return
     const seq = ++saveSeqRef.current
     // 记下发起时的身份: 保存期间换号, 结果只能落回原账号的分桶, 不许改写当前页面。
     const saveIdentity = identity
@@ -202,6 +221,8 @@ export function Profile() {
     try {
       // 先掐掉在途的旧读(否则它在 PUT 之后落地, 会用旧头像盖掉刚保存的新值)。
       await queryClient.cancelQueries({ queryKey: scopedKey(['profile'], saveIdentity) })
+      // 等取消的这点时间里也可能换了号 —— 发请求前再核对一次。
+      if (refuseOnIdentityChange('保存')) return
       const payload: { nickname: string; avatar?: string } = { nickname }
       if (avatarChanged) payload.avatar = avatarDraft // 未改动头像则不提交, 避免无谓回写
       const updated = await fetchAPI<ProfileInfo>('/profile', { method: 'PUT', body: JSON.stringify(payload) })
@@ -232,6 +253,8 @@ export function Profile() {
   }
 
   const handleChangePassword = async () => {
+    // 改密也是"属于某个账号"的写操作: 换了号就不许拿 A 的旧密码去改 B 的密码。
+    if (refuseOnIdentityChange('修改密码')) return
     // 2026-08-17: 改用公共 helper (关闭 A P1-8 双份实现)
     await submitChangePassword({
       oldPwd, newPwd, confirmPwd,
