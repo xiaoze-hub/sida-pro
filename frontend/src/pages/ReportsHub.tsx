@@ -36,14 +36,14 @@ const REPORTS_TABS: TabDef[] = [
     key: 'history',
     label: '分析记录',
     icon: Clock,
-    hint: '你自己账号内的分析记录（盘前 / 收盘复盘 / 盘中 / 深度分析），可重试、可续问参谋 · 数据源：分析历史表 /history（按用户隔离）',
+    hint: '分析历史按账号权限展示；管理员还可查看归属未知的历史记录。可重试、可续问参谋。',
     render: () => (
       <Suspense fallback={<TabLoading />}>
         <TabSourceNote
           source="history"
           label="分析记录"
-          detail="账号内的 agent 产出：可筛选成功/失败、失败可重试、可在参谋里接着问"
-          origin="分析历史（按用户隔离）"
+          detail="按账号权限展示；管理员可查看归属未知的历史记录。可筛选、可重试及续问参谋"
+          origin="分析历史"
         />
         <HistoryPage />
       </Suspense>

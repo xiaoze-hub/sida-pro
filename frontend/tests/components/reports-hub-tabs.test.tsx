@@ -115,8 +115,8 @@ describe('ReportsHub 页签按数据源正名', () => {
     await screen.findByText('暂无分析记录')
 
     const historyHint = tab('分析记录').getAttribute('title') || ''
-    expect(historyHint).toContain('分析历史表')
-    expect(historyHint).toContain('按用户隔离')
+    expect(historyHint).toContain('分析历史')
+    expect(historyHint).toContain('归属未知')
 
     const archiveHint = tab('定时任务归档').getAttribute('title') || ''
     expect(archiveHint).toContain('cron')
@@ -130,7 +130,7 @@ describe('ReportsHub 页签按数据源正名', () => {
 
     expect(note().getAttribute('data-source')).toBe('history')
     expect(note().textContent).toContain('分析记录')
-    expect(note().textContent).toContain('分析历史（按用户隔离）')
+    expect(note().textContent).toContain('管理员可查看归属未知的历史记录')
     expect(note().textContent).toContain('可重试')
 
     fireEvent.click(tab('定时任务归档'))
