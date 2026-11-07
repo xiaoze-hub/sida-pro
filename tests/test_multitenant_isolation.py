@@ -220,7 +220,10 @@ def _create_alert_rule(client: TestClient, token: str, stock_id: int, name: str)
 
 def _insert_hit(rule_id: int, stock_id: int) -> int:
     import datetime as _dt
+    from zoneinfo import ZoneInfo
+    from src.web.api.price_alerts import Settings
 
+    now = _dt.datetime.now(ZoneInfo(Settings().app_timezone or "UTC")).replace(tzinfo=None)
     db = SessionLocal()
     try:
         db.execute(
@@ -231,8 +234,8 @@ def _insert_hit(rule_id: int, stock_id: int) -> int:
             ),
             {
                 "rid": rule_id, "sid": stock_id,
-                "ts": _dt.datetime.now().replace(tzinfo=None),
-                "bucket": _dt.datetime.now().strftime("%Y%m%d%H%M%S") + rule_id.__str__(),
+                "ts": now,
+                "bucket": now.strftime("%Y%m%d%H%M%S") + rule_id.__str__(),
             },
         )
         db.commit()

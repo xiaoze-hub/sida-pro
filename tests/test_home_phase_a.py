@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine
@@ -64,7 +65,7 @@ def test_todos_flags_holding_without_alert(db):
 def test_today_hits_aggregate_with_stock_name(db):
     """今日命中跨规则聚合,带标的名/代码。"""
     _, mt, pa, rule = _seed(db)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(ZoneInfo(alerts_api.Settings().app_timezone or "UTC")).replace(tzinfo=None)
     db.add(
         M.PriceAlertHit(
             rule_id=rule.id,
