@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Users, Plus, Trash2, KeyRound, Ban, CheckCircle2, UserCog, Boxes, ShieldCheck, Loader2 } from 'lucide-react'
-import { authApi, fetchAPI, UserInfo } from '@sida/api'
+import { Users, Plus, KeyRound, Ban, CheckCircle2, UserCog, Boxes, ShieldCheck, Loader2, RotateCcw } from 'lucide-react'
+import { fetchAPI, UserInfo } from '@sida/api'
 import { formatDateTime } from '@/lib/utils'
 import { Button } from '@sida/base-ui/components/ui/button'
 import { useToast } from '@sida/base-ui/components/ui/toast'
@@ -124,13 +124,40 @@ export default function UserManagement({ currentUser }: Props) {
     }
   }
 
-  const handleToggleActive = async (u: AdminUserRow) => {
+  /**
+   * 停用/启用用户(2026-11-07): 走 `/users/admin/{uid}/toggle-active`。
+   *
+   * 为什么不再调 `authApi.deleteUser`(DELETE /api/auth/users/{id}):
+   * - 后端那条是「停用」语义(is_active=False + token_version+1), 但方法名/文案是删除,
+   *   用户以为数据没了; 且设置页与 /admin 两个入口行为不一致(后台走 toggle-active,
+   *   设置页走 DELETE + PATCH)。
+   * - PATCH /api/auth/users/{id} 写 is_active 时**不递增 token_version**, 被停用者的旧 JWT
+   *   仍然有效; toggle-active 会踢掉存量会话。
+   * 所以两个入口统一走 toggle-active, 且**永不**调用任何硬删除路径。
+   */
+  const setUserActive = async (u: AdminUserRow, nextActive: boolean) => {
+    if (!nextActive && !window.confirm(
+      `确定停用用户 ${u.username}？\n\n停用后该账号无法登录，已登录的会话立即失效；其持仓、自选、通知渠道、对话等数据全部保留，随时可以重新启用。`,
+    )) return
     try {
-      await authApi.updateUser(u.id, { is_active: !u.is_active })
-      toast(u.is_active ? `已禁用 ${u.username}` : `已启用 ${u.username}`, 'success')
+      await fetchAPI(`/users/admin/${u.id}/toggle-active`, {
+        method: 'POST',
+        body: JSON.stringify({ is_active: nextActive }),
+      })
+      toast(nextActive ? `已启用 ${u.username}` : `已停用 ${u.username}(数据保留, 可随时启用)`, 'success')
       void load()
     } catch (e) {
       toast(e instanceof Error ? e.message : '操作失败', 'error')
+    }
+  }
+
+  const handleRestore = async (u: AdminUserRow) => {
+    try {
+      await fetchAPI(`/users/admin/${u.id}/restore`, { method: 'POST' })
+      toast(`已恢复 ${u.username}`, 'success')
+      void load()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '恢复失败', 'error')
     }
   }
 
@@ -147,17 +174,6 @@ export default function UserManagement({ currentUser }: Props) {
       setResetPass('')
     } catch (e) {
       toast(e instanceof Error ? e.message : '重置失败', 'error')
-    }
-  }
-
-  const handleDelete = async (u: AdminUserRow) => {
-    if (!window.confirm(`确定删除用户 ${u.username}?其持仓/自选/渠道将一并删除`)) return
-    try {
-      await authApi.deleteUser(u.id)
-      toast(`已删除 ${u.username}`, 'success')
-      void load()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '删除失败', 'error')
     }
   }
 
@@ -253,7 +269,7 @@ export default function UserManagement({ currentUser }: Props) {
 
   return (
     <div className="card-surface rounded-xl bg-card p-4">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-1 flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-[14px] font-semibold">
           <Users className="h-4 w-4 text-primary" /> 用户管理({users.length})
         </h3>
@@ -261,6 +277,9 @@ export default function UserManagement({ currentUser }: Props) {
           <Plus className="mr-1 h-3.5 w-3.5" /> 新建子账号
         </Button>
       </div>
+      <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
+        停用只禁止登录并让已登录会话失效，用户的持仓、自选、通知渠道、对话等数据全部保留，可随时重新启用；系统不在这里物理删除用户。
+      </p>
 
       {showCreate && (
         <div className="card-surface mb-3 space-y-2 rounded-lg bg-s2 p-3">
@@ -317,9 +336,11 @@ export default function UserManagement({ currentUser }: Props) {
                 >
                   {u.role === 'owner' ? '管理员' : u.role === 'pro' ? 'Pro' : u.role === 'guest' ? '访客' : '成员'}
                 </span>
-                {u.is_deleted && (
-                  <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[12px] text-rose-500">已注销（宽限期）</span>
-                )}
+                {u.is_deleted ? (
+                  <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[12px] text-rose-500">已注销（宽限期，可恢复）</span>
+                ) : !u.is_active ? (
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[12px] text-muted-foreground">已停用</span>
+                ) : null}
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-4 text-[12px] text-muted-foreground">
                 <span className="truncate" title={u.email || ''}>{u.email || '无邮箱'}</span>
@@ -328,7 +349,7 @@ export default function UserManagement({ currentUser }: Props) {
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              {u.id !== currentUser?.id && (
+              {u.id !== currentUser?.id && !u.is_deleted && (
                 <>
                 <button
                   className="flex items-center gap-1 rounded border border-border px-1.5 py-1 text-[12px] text-muted-foreground hover:border-primary/30 hover:text-primary"
@@ -348,7 +369,16 @@ export default function UserManagement({ currentUser }: Props) {
                 </button>
                 </>
               )}
-              {u.role !== 'owner' && (
+              {u.is_deleted ? (
+                <button
+                  className="flex items-center gap-1 rounded border border-border px-1.5 py-1 text-[12px] text-muted-foreground hover:border-emerald-500/40 hover:text-emerald-500"
+                  title="恢复该账号(数据一直在, 恢复后可正常登录)"
+                  aria-label={`恢复 ${u.username}`}
+                  onClick={() => void handleRestore(u)}
+                >
+                  <RotateCcw className="h-3 w-3" /> 恢复
+                </button>
+              ) : u.role !== 'owner' ? (
                 <>
                   <button
                     className="rounded p-1.5 text-muted-foreground hover:bg-accent"
@@ -359,23 +389,20 @@ export default function UserManagement({ currentUser }: Props) {
                     <KeyRound className="h-3.5 w-3.5" />
                   </button>
                   <button
-                    className="rounded p-1.5 text-muted-foreground hover:bg-accent"
-                    title={u.is_active ? '禁用' : '启用'}
-                    aria-label={u.is_active ? `禁用 ${u.username}` : `启用 ${u.username}`}
-                    onClick={() => handleToggleActive(u)}
+                    className={`flex items-center gap-1 rounded border border-border px-1.5 py-1 text-[12px] ${
+                      u.is_active
+                        ? 'text-muted-foreground hover:border-amber-500/40 hover:text-amber-600'
+                        : 'text-muted-foreground hover:border-emerald-500/40 hover:text-emerald-500'
+                    }`}
+                    title={u.is_active ? '停用(禁止登录, 数据保留, 可随时启用)' : '启用(恢复登录)'}
+                    aria-label={u.is_active ? `停用 ${u.username}` : `启用 ${u.username}`}
+                    onClick={() => void setUserActive(u, !u.is_active)}
                   >
-                    {u.is_active ? <Ban className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                  </button>
-                  <button
-                    className="rounded p-1.5 text-rose-500/70 hover:bg-rose-500/10"
-                    title="删除"
-                    aria-label={`删除 ${u.username}`}
-                    onClick={() => handleDelete(u)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    {u.is_active ? <Ban className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                    {u.is_active ? '停用' : '启用'}
                   </button>
                 </>
-              )}
+              ) : null}
             </div>
           </div>
         ))}

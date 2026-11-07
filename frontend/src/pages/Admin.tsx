@@ -288,14 +288,22 @@ export default function AdminPage() {
   }, [refetchUsers, refetchStats, refetchKeys, refetchPro])
 
   // ── 用户操作 ──
+  //
+  // 停用 vs 删除(2026-11-07): 后台只提供「停用/启用」, 语义是 is_active=False +
+  // token_version+1(踢掉存量会话), 用户行与画像/持仓/自选/对话等数据全部保留,
+  // 一键即可恢复。物理删除只走用户本人 GDPR 自助注销(30 天宽限期)那条路,
+  // 后台任何按钮都不得直连硬删除接口。
   const toggleActive = async (u: AdminUser) => {
+    if (u.is_active && !confirm(
+      `确定停用 ${u.username}？\n\n停用后该账号无法登录，已登录会话立即失效；其持仓、自选、通知渠道、对话等数据全部保留，可随时重新启用。`,
+    )) return
     setUserActionId(u.id)
     try {
       await fetchAPI(`/users/admin/${u.id}/toggle-active`, {
         method: 'POST',
         body: JSON.stringify({ is_active: !u.is_active }),
       })
-      toast(u.is_active ? `已禁用 ${u.username}` : `已启用 ${u.username}`, 'success')
+      toast(u.is_active ? `已停用 ${u.username}(数据保留, 可随时启用)` : `已启用 ${u.username}`, 'success')
       void refetchUsers()
       void refetchStats()
     } catch (e: any) {
@@ -485,7 +493,7 @@ export default function AdminPage() {
       <Section
         id="sec-users"
         title="用户管理"
-        description="查看全部账号，启用/禁用、改角色、重置密码、新建用户；已注销账号可在 30 天宽限期内恢复"
+        description="查看全部账号，停用/启用、改角色、重置密码、新建用户；停用只禁止登录、数据完整保留，已注销账号可在 30 天宽限期内恢复"
         icon={<Users className="h-4 w-4" />}
         action={
           <Button size="sm" variant="outline" className="h-8" onClick={() => setShowCreate(v => !v)}>
@@ -637,8 +645,8 @@ export default function AdminPage() {
                           启用
                         </span>
                       ) : (
-                        <span className="inline-flex items-center rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[12px] text-red-400">
-                          禁用
+                        <span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[12px] text-amber-500">
+                          已停用
                         </span>
                       )}
                     </Td>
@@ -686,7 +694,7 @@ export default function AdminPage() {
                               ) : (
                                 <CheckCircle2 className="h-3 w-3" />
                               )}
-                              {u.is_active ? '禁用' : '启用'}
+                              {u.is_active ? '停用' : '启用'}
                             </Button>
                           </>
                         )}

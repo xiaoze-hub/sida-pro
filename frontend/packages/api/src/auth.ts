@@ -91,6 +91,9 @@ export const authApi = {
       body: JSON.stringify(payload),
     }),
   deleteUser: (id: string) =>
+    // @deprecated 2026-11-07: 后端该路径已是「停用」语义(数据保留), 名称与 UI 文案不符。
+    // 用户管理两个入口统一用 POST `/users/admin/{uid}/toggle-active`(会递增 token_version
+    // 踢掉存量会话), 不要再新增对 DELETE 的调用。
     fetchAPI<{ message: string }>(`/auth/users/${id}`, {
       method: 'DELETE',
     }),
