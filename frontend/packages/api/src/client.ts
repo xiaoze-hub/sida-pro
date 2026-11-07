@@ -251,11 +251,11 @@ export function logout() {
  *   - 不同(换号 / 登出 / 同账号换发) ⇒ 这个 401 属于旧世界, 只让本次请求失败(staleAuth),
  *     不动当前会话与缓存。
  *
- * 两种凭证都取不到(Cookie-only 会话 / 匿名)时属于"不可区分": 按当前会话处理(登出是保守方向,
- * 反正本地没有可保护的凭证), 与既有行为一致。
+ * Cookie-only 或匿名请求无法通过本地 token 判断会话是否切换；不得因为不可区分而全局登出。
+ * 返回 staleAuth 仅表示无法安全归属本次失败，调用方仍收到 401。
  */
 export function authErrorFor401(credentialToken: string | null): ApiError {
-  const stale = getRequestToken() !== credentialToken
+  const stale = !credentialToken || getRequestToken() !== credentialToken
   if (!stale) logout()
   const err = new Error(stale ? '本次请求的登录状态已失效' : '登录已过期') as ApiError
   err.status = 401

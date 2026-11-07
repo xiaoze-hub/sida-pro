@@ -100,6 +100,17 @@ afterEach(() => {
 })
 
 describe('chatApi.sendMessageStream: 401 只处理当前凭证', () => {
+  it('Cookie-only 会话换号后旧请求 401 不得清除新身份', async () => {
+    const pending = deferred<Response>()
+    stubFetch(pending.promise)
+    const request = chatApi.sendMessageStream(7, 'q', {})
+    localStorage.setItem('user', JSON.stringify({ id: 'user-b' }))
+    notifyAuthIdentityChanged('login')
+    pending.resolve(unauthorized())
+    const err = (await request.catch(e => e)) as ApiError
+    expect(err.status).toBe(401)
+    expect(localStorage.getItem('user')).toContain('user-b')
+  })
   it('A 的流式请求在 B 登录后才 401 ⇒ 不登出 B, 该请求以 staleAuth 失败', async () => {
     localStorage.setItem('token', A_TOKEN)
     const pending = deferred<Response>()
