@@ -77,7 +77,10 @@ def test_postmarket_window_trigger():
         db.close()
 
 
-def test_intraday_loop_and_noon_break():
+def test_intraday_loop_and_noon_break(monkeypatch):
+    # `_build_text` 用 `date.today()` 判交易日：周末跑这条用例会整体 skipped（0 条 ok），
+    # 与本用例要验的「盘中节奏」无关。钉死为交易日，避免按日历星期数变红。
+    monkeypatch.setattr(cs, "is_trading_day", lambda _d: True)
     db = SessionLocal()
     try:
         created = cs.create(
