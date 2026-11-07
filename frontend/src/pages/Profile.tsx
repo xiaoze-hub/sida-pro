@@ -13,7 +13,7 @@ import { useToast } from '@sida/base-ui/components/ui/toast'
 import { fileToAvatarDataUrl } from '@/hooks/use-avatar'
 import { formatDateTime } from '@/lib/utils'
 import { submitChangePassword } from '@/lib/change-password'
-import { useApiQuery } from '@/hooks/useApiQuery'
+import { currentIdentity, scopedKey, useApiQuery, useIdentityScope } from '@/hooks/useApiQuery'
 import NotifyChannelsSection from '@/components/profile/NotifyChannelsSection'
 import SessionDevicesSection from '@/components/profile/SessionDevicesSection'
 import DataPrivacySection from '@/components/profile/DataPrivacySection'
@@ -107,12 +107,21 @@ export function Profile() {
   // ── 个人资料 ──
   // W3.7/D7: GET /profile 与 /profile/stats 交给 TanStack Query; 编辑态(nicknameDraft 等)仍是本地 state,
   // 由 data 变化同步; PUT 保存后用 setQueryData 就地更新缓存, 不整页重取。
+  //
+  // 2026-11-07 账号隔离: 个人页全是"属于某个登录身份"的数据。key 必须带身份后缀,
+  // 否则同标签页换号(登录页 navigate('/'), 不刷新)后会先命中上一个账号的缓存 ——
+  // B 登录进个人中心看到的是 A 的昵称/头像/统计。旧身份迟到的响应只会落进旧身份的分桶,
+  // 碰不到当前页面。
+  const identity = useIdentityScope()
   const { data: profile, isLoading, error: profileError, refetch: refetchProfile, isFetching: profileFetching } =
-    useApiQuery<ProfileInfo>(['profile'], '/profile')
-  const { data: stats, error: statsError } = useApiQuery<ProfileStats>(['profile', 'stats'], '/profile/stats')
+    useApiQuery<ProfileInfo>(scopedKey(['profile'], identity), '/profile')
+  const { data: stats, error: statsError } = useApiQuery<ProfileStats>(
+    scopedKey(['profile', 'stats'], identity),
+    '/profile/stats',
+  )
   // 2026-10-10 AI 链路 P1: 分 Agent 命中榜(此前后端已实现、零前端消费)。独立 query, 不拖累账号区。
   const { data: board, error: boardError } = useApiQuery<AccuracyBoard>(
-    ['profile', 'stats', 'accuracy'],
+    scopedKey(['profile', 'stats', 'accuracy'], identity),
     '/profile/stats/accuracy',
   )
   const [editOpen, setEditOpen] = useState(false)
@@ -131,12 +140,31 @@ export function Profile() {
   const [pwdError, setPwdError] = useState<string | null>(null)
   const [changingPwd, setChangingPwd] = useState(false)
 
+  // 换人即清编辑态(渲染期同步重置, 不留一帧旧草稿): 上一个账号没保存的昵称/头像草稿
+  // 绝不能出现在新账号的编辑框里 —— 否则用户一按保存就把 A 的草稿写成 B 的资料。
+  const [draftOwner, setDraftOwner] = useState(identity)
+  if (draftOwner !== identity) {
+    setDraftOwner(identity)
+    setEditOpen(false)
+    setPasswordOpen(false)
+    setNicknameDraft('')
+    setAvatarDraft('')
+    setAvatarChanged(false)
+    setOldPwd('')
+    setNewPwd('')
+    setConfirmPwd('')
+    setPwdError(null)
+  }
+
+  /** 保存序号: 同一账号并发保存时只认最后一次, 先发后到的旧结果不得覆盖新头像/新昵称。 */
+  const saveSeqRef = useRef(0)
+
   useEffect(() => {
     if (!profile) return
     setNicknameDraft(profile.nickname || '')
     setAvatarDraft(profile.avatar || '')
     setAvatarChanged(false)
-  }, [profile])
+  }, [profile, identity])
 
   useEffect(() => {
     if (profileError) toast(profileError instanceof Error ? profileError.message : '加载个人资料失败', 'error')
@@ -167,12 +195,20 @@ export function Profile() {
       toast('昵称最多 32 个字', 'error')
       return
     }
+    const seq = ++saveSeqRef.current
+    // 记下发起时的身份: 保存期间换号, 结果只能落回原账号的分桶, 不许改写当前页面。
+    const saveIdentity = identity
     setSavingProfile(true)
     try {
+      // 先掐掉在途的旧读(否则它在 PUT 之后落地, 会用旧头像盖掉刚保存的新值)。
+      await queryClient.cancelQueries({ queryKey: scopedKey(['profile'], saveIdentity) })
       const payload: { nickname: string; avatar?: string } = { nickname }
       if (avatarChanged) payload.avatar = avatarDraft // 未改动头像则不提交, 避免无谓回写
       const updated = await fetchAPI<ProfileInfo>('/profile', { method: 'PUT', body: JSON.stringify(payload) })
-      queryClient.setQueryData(['profile'], updated)
+      // 并发保存乱序: 被后一次保存取代的旧结果直接丢弃(既不写缓存也不改草稿)。
+      if (seq !== saveSeqRef.current) return
+      queryClient.setQueryData(scopedKey(['profile'], saveIdentity), updated)
+      if (currentIdentity() !== saveIdentity) return
       setNicknameDraft(updated.nickname || '')
       setAvatarDraft(updated.avatar || '')
       setAvatarChanged(false)
@@ -183,9 +219,10 @@ export function Profile() {
       toast('资料已保存', 'success')
       setEditOpen(false)
     } catch (e) {
+      if (seq !== saveSeqRef.current) return
       toast(e instanceof Error ? e.message : '保存失败', 'error')
     } finally {
-      setSavingProfile(false)
+      if (seq === saveSeqRef.current) setSavingProfile(false)
     }
   }
 
@@ -272,7 +309,8 @@ export function Profile() {
           </div>
 
           </section>
-          <section className="analysis-section"><SessionDevicesSection /></section>
+          {/* 子区块自身也是按账号取数: 换人必须重挂, 否则在线设备列表还挂着上一个账号的会话 */}
+          <section className="analysis-section"><SessionDevicesSection key={identity} /></section>
         </SectionPanel>
         <SectionPanel id="activity">        {/* ④ 我的数据 */}
         <section className="analysis-section">
@@ -393,7 +431,7 @@ export function Profile() {
         </section>
 
         </SectionPanel>
-        <SectionPanel id="notifications"><NotifyChannelsSection /></SectionPanel>
+        <SectionPanel id="notifications"><NotifyChannelsSection key={identity} /></SectionPanel>
         <SectionPanel id="access">        {/* ③ 我的 API Key(2026-09-16 控制台) */}
         <MyApiKeyCard />
 
@@ -415,7 +453,7 @@ export function Profile() {
         </SectionPanel>
         <SectionPanel id="privacy">        {/* ④½ 数据与隐私(2026-10-23): 导出/注销此前有后端无前端 */}
         <section className="analysis-section">
-          <DataPrivacySection username={profile?.username} />
+          <DataPrivacySection key={identity} username={profile?.username} />
         </section>
 
         </SectionPanel>
@@ -494,8 +532,9 @@ export function Profile() {
 
 function MyApiKeyCard() {
   const navigate = useNavigate()
+  const identity = useIdentityScope()
   const { data, isLoading } = useApiQuery<{ keys: Array<{ key_prefix: string; status: string; tier: string }> }>(
-    ['api-keys', 'my'],
+    scopedKey(['api-keys', 'my'], identity),
     '/keys/my',
   )
   const keys = data?.keys ?? []

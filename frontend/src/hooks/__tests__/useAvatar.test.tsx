@@ -205,6 +205,69 @@ describe('个人头像按账号隔离', () => {
     await waitFor(() => expect(result.current).toBe(AVATAR_ALICE))
   })
 
+  it('读取失败后重新挂载可重试, 且请求带显式超时(不靠浏览器默认)', async () => {
+    setAccountToken('alice')
+    api.fetchAPI.mockRejectedValueOnce(new Error('请求超时，请稍后重试'))
+    const first = renderHook(() => useAvatar())
+    await waitFor(() => expect(api.fetchAPI).toHaveBeenCalledTimes(1))
+    expect(first.result.current).toBe('')
+
+    // 卡住的请求会一直占着 inflight：必须给显式超时，失败后挂载才能重来
+    const opts = api.fetchAPI.mock.calls[0][1] as { timeoutMs?: number }
+    expect(opts.timeoutMs).toBeGreaterThan(0)
+
+    // 页面重新挂载(= 用户重新进来)才允许重试，且不需要刷新浏览器
+    first.unmount()
+    api.fetchAPI.mockResolvedValueOnce({ avatar: AVATAR_ALICE })
+    const second = renderHook(() => useAvatar())
+    await waitFor(() => expect(second.result.current).toBe(AVATAR_ALICE))
+    expect(api.fetchAPI).toHaveBeenCalledTimes(2)
+  })
+
+  it('同账号: 早发的读晚到, 不覆盖刚保存的新头像', async () => {
+    setAccountToken('alice')
+    const staleRead = deferred<{ avatar?: string }>()
+    api.fetchAPI.mockReturnValueOnce(staleRead.promise)
+    const { result } = renderHook(() => useAvatar())
+    expect(api.fetchAPI).toHaveBeenCalledTimes(1)
+
+    // 保存(服务端已确认新头像)
+    api.fetchAPI.mockResolvedValueOnce({ avatar: AVATAR_ALICE })
+    await act(async () => {
+      await saveAvatar(AVATAR_ALICE)
+    })
+    await waitFor(() => expect(result.current).toBe(AVATAR_ALICE))
+
+    // 保存前发出的读此刻才回来, 带的是旧头像 —— 必须丢弃
+    await act(async () => {
+      staleRead.resolve({ avatar: AVATAR_BOB })
+      await staleRead.promise
+    })
+    expect(result.current).toBe(AVATAR_ALICE)
+  })
+
+  it('同账号并发保存: 先发后到的旧保存不覆盖新头像', async () => {
+    setAccountToken('alice')
+    api.fetchAPI.mockResolvedValueOnce({ avatar: '' })
+    const { result } = renderHook(() => useAvatar())
+    await waitFor(() => expect(api.fetchAPI).toHaveBeenCalledTimes(1))
+
+    const slowSave = deferred<{ avatar?: string }>()
+    api.fetchAPI.mockReturnValueOnce(slowSave.promise)
+    const firstSave = saveAvatar('data:image/png;base64,T0xE') // 旧头像, 慢
+    api.fetchAPI.mockResolvedValueOnce({ avatar: 'data:image/png;base64,TkVX' })
+    await act(async () => {
+      await saveAvatar('data:image/png;base64,TkVX') // 新头像, 快
+    })
+    await waitFor(() => expect(result.current).toBe('data:image/png;base64,TkVX'))
+
+    await act(async () => {
+      slowSave.resolve({ avatar: 'data:image/png;base64,T0xE' })
+      await firstSave
+    })
+    expect(result.current).toBe('data:image/png;base64,TkVX')
+  })
+
   it('切号后迟到的保存结果不喂给新账号', async () => {
     setAccountToken('alice')
     api.fetchAPI.mockResolvedValueOnce({ avatar: AVATAR_ALICE })

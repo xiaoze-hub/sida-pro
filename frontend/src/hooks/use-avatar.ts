@@ -9,6 +9,11 @@ const EVENT = 'sida:avatar-changed'
  * 2026-11-07 收敛: 前端所有头像读写只认个人资料接口。
  */
 const PROFILE_PATH = '/profile'
+/**
+ * 头像读取的显式超时(2026-11-07): 默认 15s 之外再收紧一点 —— 卡住的请求会一直占着
+ * `inflight`, 期间不能重试; 到点失败后用户重新进页面即可重取(见 useAvatar 挂载重试)。
+ */
+const AVATAR_TIMEOUT_MS = 10_000
 
 interface AvatarSnapshot {
   /** 该 value 属于哪个登录身份; 与当前身份不符时**一律不对外可见**。 */
@@ -22,6 +27,14 @@ interface AvatarSnapshot {
 
 let snapshot: AvatarSnapshot = { identity: '', value: '', loaded: false, failed: false }
 let inflight: { identity: string; controller: AbortController } | null = null
+/**
+ * 读写顺序保护(2026-11-07): 同一账号里"读"和"存"会并发 —— 早发的读如果晚于保存落地,
+ * 就会拿旧头像盖掉刚存的新头像。规则:
+ *  - 每次保存开始 writeEpoch +1; 读请求记下发起时的 epoch, 回来时 epoch 变了就丢弃;
+ *  - 并发保存只认最后一次(seq), 先发后到的旧保存结果不写缓存也不广播。
+ */
+let writeEpoch = 0
+let saveSeq = 0
 const listeners = new Set<() => void>()
 
 function notify() {
@@ -76,7 +89,7 @@ function subscribe(fn: () => void): () => void {
  * - 切号: 立刻清空可见值 + abort 旧请求, 旧响应回来也不会写进新账号;
  * - 未登录: 不发请求(否则 401 会触发 logout 跳走)。
  */
-function ensureLoaded(): void {
+function ensureLoaded(options?: { retryFailed?: boolean }): void {
   const identity = currentAvatarIdentity()
 
   if (!identity) {
@@ -95,16 +108,32 @@ function ensureLoaded(): void {
     notify()
   }
 
+  if (options?.retryFailed && snapshot.failed) {
+    // 重新挂载(进页面/换回本账号)才允许重试失败过的读取 —— 期间不会每帧重试
+    snapshot = { identity, value: snapshot.value, loaded: false, failed: false }
+    notify()
+  }
   if (snapshot.loaded) return
-  if (snapshot.failed) return // 失败不自动重试(否则每帧一次请求风暴); 等事件/重新挂载
+  // 失败不自动重试(否则每帧一次请求风暴); 由重新挂载(retryFailed)或"头像已改"事件触发
+  if (snapshot.failed) return
   if (inflight && inflight.identity === identity) return
 
   const controller = new AbortController()
   inflight = { identity, controller }
-  fetchAPI<{ avatar?: string }>(PROFILE_PATH, { cacheMode: 'reload', signal: controller.signal })
+  const startedEpoch = writeEpoch
+  fetchAPI<{ avatar?: string }>(PROFILE_PATH, {
+    cacheMode: 'reload',
+    signal: controller.signal,
+    timeoutMs: AVATAR_TIMEOUT_MS,
+  })
     .then(res => {
       // 乱序保护: 响应回来时可能已经切到别的账号 ⇒ 丢弃, 不写缓存不广播
       if (currentAvatarIdentity() !== identity) return
+      // 同账号读写乱序: 这期间有过保存 ⇒ 本次读已是旧值, 丢弃并让缓存的保存值生效
+      if (startedEpoch !== writeEpoch) {
+        if (!snapshot.loaded && !snapshot.failed) ensureLoaded()
+        return
+      }
       snapshot = {
         identity,
         value: typeof res?.avatar === 'string' ? res.avatar : '',
@@ -115,6 +144,11 @@ function ensureLoaded(): void {
     })
     .catch(() => {
       if (currentAvatarIdentity() !== identity) return
+      if (startedEpoch !== writeEpoch) {
+        // 保存已把结果写进缓存(或保存失败, 需重新取): 不要用这次过期读的失败覆盖
+        if (!snapshot.loaded && !snapshot.failed) ensureLoaded()
+        return
+      }
       snapshot = { identity, value: '', loaded: false, failed: true }
       notify()
     })
@@ -154,10 +188,18 @@ function onAvatarEvent(event: Event): void {
 export async function saveAvatar(value: string): Promise<void> {
   const identity = currentAvatarIdentity()
   if (!identity) throw new Error('未登录, 无法保存头像')
+  const seq = ++saveSeq
+  // 保存一开始就作废在途的旧读: 它读到的是保存前的头像, 晚到会把新头像盖回去
+  writeEpoch += 1
+  inflight?.controller.abort()
+  inflight = null
   const res = await fetchAPI<{ avatar?: string }>(PROFILE_PATH, {
     method: 'PUT',
     body: JSON.stringify({ avatar: value }),
+    timeoutMs: AVATAR_TIMEOUT_MS,
   })
+  // 并发保存: 只认最后一次, 先发后到的旧结果不写缓存不广播
+  if (seq !== saveSeq) return
   if (currentAvatarIdentity() !== identity) return
   const saved = typeof res?.avatar === 'string' ? res.avatar : value
   snapshot = { identity, value: saved, loaded: true, failed: false }
@@ -186,7 +228,8 @@ export function useAvatar(): string {
     }
     window.addEventListener('storage', onStorage)
     window.addEventListener(EVENT, onAvatarEvent)
-    ensureLoaded()
+    // 重新挂载 = 用户重新进页面: 上一次失败(超时/网络)可以重试一次, 不靠刷新浏览器
+    ensureLoaded({ retryFailed: true })
     return () => {
       window.removeEventListener('storage', onStorage)
       window.removeEventListener(EVENT, onAvatarEvent)
