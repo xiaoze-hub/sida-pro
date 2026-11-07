@@ -42,8 +42,56 @@ export function getCopilotMentions(q = ''): Promise<{ stocks: MentionStock[]; ag
   return fetchAPI(`/copilot/mentions?q=${encodeURIComponent(q)}`, { timeoutMs: 8000 })
 }
 
+/**
+ * `@` 面板的内置智能体数组。
+ *
+ * 路径 `/copilot/agents` 返回**数组**（历史契约，@ 面板按数组渲染）。
+ * 服务端同一路径上曾并存一个返回目录对象的 handler，先注册者胜 → 目录页拿不到对象；
+ * 现目录单独走 `/copilot/agent-catalog`（见下方 getAgentCatalog）。这里保持数组语义不动。
+ */
 export function getCopilotAgents(): Promise<MentionAgent[]> {
   return fetchAPI('/copilot/agents', { timeoutMs: 8000 })
+}
+
+/** 目录条目：能干什么 + 挂哪些工具 + 内容指纹版本（文档口径，不是手写版本号）。 */
+export interface AgentCatalogRow {
+  id: string
+  label: string
+  icon?: string
+  desc: string
+  when: string[]
+  tools: string[]
+  output_sections: string[]
+  version: string | null
+  updated_at: string | null
+}
+
+export type AgentCatalog = {
+  available: boolean
+  reason?: string
+  items: AgentCatalogRow[]
+  count: number
+}
+
+export type AgentCatalogDetail = {
+  available: boolean
+  reason?: string
+  item: AgentCatalogRow | null
+  history: { fingerprint: string; created_at: string }[]
+}
+
+/**
+ * 专家目录（对象）。
+ *
+ * 必须用独立路径 `/copilot/agent-catalog`：`/copilot/agents` 已被 @ 面板的数组占用，
+ * 同路径再注册对象 handler 会被 FastAPI 先注册者吃掉 → 页面永远「服务端未给出原因」。
+ */
+export function getAgentCatalog(): Promise<AgentCatalog> {
+  return fetchAPI('/copilot/agent-catalog', { timeoutMs: 8000 })
+}
+
+export function getAgentCatalogDetail(id: string): Promise<AgentCatalogDetail> {
+  return fetchAPI(`/copilot/agent-catalog/${encodeURIComponent(id)}`, { timeoutMs: 8000 })
 }
 
 /** 页面即上下文（P1）：把当前视图推给后端，提问时自动带上标的/周期/圈选区。 */

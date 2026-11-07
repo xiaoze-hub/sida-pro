@@ -28,7 +28,7 @@ const listOk = {
 
 function wire(opts: { list?: unknown; detail?: unknown; listError?: Error; detailError?: Error }) {
   fetchAPIMock.mockImplementation((url: string) => {
-    const isDetail = /\/agents\/[^/]+$/.test(url)
+    const isDetail = /\/agent-catalog\/[^/]+$/.test(url)
     if (isDetail) {
       if (opts.detailError) throw opts.detailError
       return Promise.resolve(opts.detail ?? { available: true, item: null, history: [] })
@@ -99,5 +99,26 @@ describe('Agent 目录页', () => {
     fireEvent.click(screen.getByTestId('agent-row-deep_diagnosis'))
     const d = await screen.findByTestId('agent-detail-deep_diagnosis')
     await waitFor(() => expect(d.textContent).toContain('只有当前一次观察记录'))
+  })
+
+  /**
+   * 路由撞车回归（P0, 2026-11-07）。
+   *
+   * 后端曾把「目录对象」也注册在 `GET /copilot/agents` 上 —— 那是 @ 面板的**数组**路径，
+   * FastAPI 先注册者胜，于是本页永远读到数组 → `res.available === undefined` → 固定「服务端未给出原因」。
+   * 钉住：目录列表与详情都必须走独立路径 `/copilot/agent-catalog…`，且**不再**请求 `/copilot/agents`。
+   */
+  it('目录走独立路径 /copilot/agent-catalog，不占用 @ 面板的 /copilot/agents', async () => {
+    wire({})
+    render(<AgentCatalogPage />)
+    await screen.findByText('全景诊断')
+    fireEvent.click(screen.getByTestId('agent-row-deep_diagnosis'))
+    await screen.findByTestId('agent-detail-deep_diagnosis')
+
+    const urls = fetchAPIMock.mock.calls.map((c) => String(c[0]))
+    expect(urls[0]).toBe('/copilot/agent-catalog')
+    expect(urls).toContain('/copilot/agent-catalog/deep_diagnosis')
+    // 数组路径是 @ 面板的契约，目录页碰它就是撞车复发
+    expect(urls.some((u) => /^\/copilot\/agents(\/|$)/.test(u))).toBe(false)
   })
 })

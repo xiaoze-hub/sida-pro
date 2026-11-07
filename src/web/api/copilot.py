@@ -1124,9 +1124,15 @@ def _experiment_row(r) -> dict:
 
 # ──────────────── Agent 目录 / 配方版本（P2-2.1）─────────────────────────
 # 只读。配方来自 YAML 文件，版本用内容指纹（不是手写版本号），历史惰性落库。
+#
+# **路径为什么不叫 `/agents`**（2026-11-07 P0 路由撞车）：
+# 本文件上方已有 `GET /copilot/agents` → `list[dict]`，那是前端 @ 面板
+# （`api.ts::getCopilotAgents`）吃的**数组**。两个 handler 同名注册时 FastAPI 先注册者胜，
+# 目录这条永远 404 不可达，AgentCatalog 页把数组当对象读 → 固定显示「服务端未给出原因」。
+# 所以目录单独占 `/agent-catalog`：数组契约一个字不动，目录对象也不再被覆盖。
 
 
-@router.get("/agents")
+@router.get("/agent-catalog")
 def list_agents(db: Session = Depends(get_db), user: Any = Depends(get_current_user)) -> dict:
     """全部配方的目录：能干什么、挂哪些工具、当前版本指纹。
 
@@ -1154,7 +1160,8 @@ def list_agents(db: Session = Depends(get_db), user: Any = Depends(get_current_u
     }
 
 
-@router.get("/agents/{recipe_id}")
+@router.get("/agent-catalog/{recipe_id}")
+@router.get("/agents/{recipe_id}")  # 兼容旧路径（目录页曾用它取详情，外部脚本也可能在用）
 def get_agent(
     recipe_id: str,
     db: Session = Depends(get_db),
