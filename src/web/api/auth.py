@@ -1397,15 +1397,58 @@ async def delete_user_api(
     owner: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    """删除用户(仅 owner)。不能删自己。"""
+    """停用用户(仅 owner)。**绝不删除任何数据**(2026-11-07 P0 数据安全)。
+
+    改前行为(实测, 两条分支都不可接受):
+    - `db.delete(target)` —— 生产 PG 上 `users.id` 被 13 张表 FK 引用、22 处
+      `ondelete="CASCADE"`, 删 users 行会**连带物理删除**该用户的账户/持仓/自选/
+      通知渠道/对话/告警/会话/API Key, 而且没有任何审计行;
+    - 若该用户有非级联 FK 引用(`user_sessions` NOT NULL、`skill_api_keys`),
+      同一条 SQL 直接撞 FK → 500 IntegrityError(`DELETE FROM users WHERE id=?`),
+      连"删除成功"都做不到。
+
+    两条路都与 `src/web/api/user_data.py` 的 GDPR 设计冲突(那边是「用户本人带密码
+    确认 → 软删 → 30 天宽限期 → 物理清除」), 且绕过宽限期后
+    `/api/users/admin/{uid}/restore` 无从恢复 —— 只能靠备份。
+
+    现在的语义 = 停用: is_active=False + token_version+1(踢掉存量 JWT/WS),
+    用户行与全部关联数据原样保留; 误操作由 PATCH `is_active=true`
+    (或 `/api/users/admin/{uid}/toggle-active`)一键恢复。
+    真删除只走 GDPR 自助注销那条路。
+
+    向后兼容: 方法/路径/200 状态不变, 响应仍含 `message`
+    (前端 `authApi.deleteUser` 声明的返回类型就是 `{ message: string }`);
+    新增 `status` / `deleted=false` / `user`, 让新调用方能区分「停用」与「已删除」。
+    """
     target = get_user_by_id(db, user_id)
     if not target:
         raise HTTPException(404, "用户不存在")
     if target.id == owner.id:
-        raise HTTPException(400, "不能删除自己")
+        raise HTTPException(400, "不能停用自己")
     if target.role == "owner":
-        raise HTTPException(400, "不能删除其他管理员")
+        raise HTTPException(400, "不能停用其他管理员")
 
-    db.delete(target)
+    # 幂等: 已停用则不重复递增 token_version(重复点击不产生副作用)
+    if target.is_active is not False:
+        target.is_active = False
+        target.token_version = int(target.token_version or 1) + 1  # 踢掉存量 JWT
     db.commit()
-    return {"message": "用户已删除"}
+
+    try:
+        from src.web.api.audit import log_audit
+        log_audit(
+            db,
+            owner,
+            "manage_user",
+            detail=f"disable: 停用用户 {target.username}({target.id}), 数据保留(未删除)",
+            ip="",
+        )
+    except Exception:
+        pass
+
+    return {
+        "message": "用户已停用(账号无法登录, 全部数据保留)",
+        "status": "disabled",
+        "deleted": False,
+        "user": user_to_dict(target),
+    }
