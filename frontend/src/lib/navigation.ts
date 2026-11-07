@@ -221,6 +221,8 @@ export const LEGACY_ALIAS_PATHS: readonly string[] = [
   '/datasources',
   '/audit',
   '/help',
+  '/dark-fund-top',
+  '/war-report',
   '/stocks',
   '/quote',
   '/quotes',

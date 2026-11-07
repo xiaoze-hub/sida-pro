@@ -29,13 +29,10 @@ const ProposalsPage = lazyWithRetry(() => import('@/pages/copilot/ProposalsPage'
 const ParallelDiagnosisPage = lazyWithRetry(() => import('@/pages/copilot/ParallelDiagnosis'), 'parallel-diagnosis-page')
 const CopilotRunDetailPage = lazyWithRetry(() => import('@/pages/copilot/RunDetailPage'), 'copilot-run-detail')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
-const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
 const MainFundsHubPage = lazyWithRetry(() => import('@/pages/MainFundsHub'), 'main-funds-hub-page')
 const MarketMoodHubPage = lazyWithRetry(() => import('@/components/market-mood/MarketMoodHub'), 'market-mood-hub-page')
 const MarketWatchHubPage = lazyWithRetry(() => import('@/components/market-watch/MarketWatchHub'), 'market-watch-hub-page')
-// 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总
-const WarReportPage = lazyWithRetry(() => import('@/pages/WarReport'), 'war-report-page')
-// 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池 + 梯队晋级(market_replay_daily 消费)
+// 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池 + 连板梯队与晋级率(market_replay_daily 消费)
 const ReplayTreePage = lazyWithRetry(() => import('@/pages/ReplayTree'), 'replay-tree-page')
 const StocksPage = lazyWithRetry(() => import('@/pages/Stocks'), 'stocks-page')
 // §4.3: Settings/Agents/DataSources/Help/Audit/Forecast 已不再由 App 直接挂载 —
@@ -221,9 +218,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 // 改为渲染 loading, 加载完成后再判定 —— 防止权限未就绪期间短暂可见未授权内容。
 const PermissionLoadContext = createContext<{ failed: boolean; retry: () => void }>({ failed: false, retry: () => {} })
 
-function PermGuard({ perm, myPerms, children }: { perm?: string; myPerms: Set<string> | null; children: React.ReactNode }) {
+function PermGuard({ perm, anyOf, myPerms, children }: { perm?: string; anyOf?: readonly string[]; myPerms: Set<string> | null; children: React.ReactNode }) {
   const permissionLoad = useContext(PermissionLoadContext)
-  if (!perm) return <>{children}</>
+  if (!perm && !anyOf?.length) return <>{children}</>
   if (!myPerms) {
     if (permissionLoad.failed) {
       return <div role="alert" className="p-4 text-[14px] text-foreground">
@@ -239,7 +236,8 @@ function PermGuard({ perm, myPerms, children }: { perm?: string; myPerms: Set<st
   }
   // 2026-10-27: 原来是静默 <Navigate to="/" replace /> —— 用户点了导航却回到首页,
   // 既不知道发生了什么也不知道怎么拿权限。改为明确的说明 + 一键申请 Pro。
-  if (!myPerms.has(perm)) return <NoAccessPage perm={perm} />
+  if (perm && !myPerms.has(perm)) return <NoAccessPage perm={perm} />
+  if (anyOf?.length && !anyOf.some((item) => myPerms.has(item))) return <NoAccessPage perm={anyOf[0]} />
   return <>{children}</>
 }
 
@@ -717,11 +715,11 @@ function App() {
               {/* 单轮证据卡(2026-10-25): 详情页, 同档权限 */}
               <Route path="/copilot/runs/:runId" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunDetailPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}
-              <Route path="/funds" element={<MainFundsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
+              <Route path="/funds" element={<PermGuard anyOf={['view_dark', 'view_forecast']} myPerms={myPerms}><MainFundsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} /></PermGuard>} />
               <Route path="/market-watch" element={<MarketWatchHubPage myPerms={myPerms} />} />
               <Route path="/market-mood" element={<PermGuard perm="view_quotes" myPerms={myPerms}><MarketMoodHubPage myPerms={myPerms} /></PermGuard>} />
-              <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
-              <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><WarReportPage /></PermGuard>} />
+              <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><LegacyTabRedirect to="/funds?tab=dark" /></PermGuard>} />
+              <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><LegacyTabRedirect to="/funds?tab=war" /></PermGuard>} />
               {/* 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池, 行情统计非 pro 专属 → view_quotes */}
               <Route path="/replay-tree" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ReplayTreePage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页退役 →
