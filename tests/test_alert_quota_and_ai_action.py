@@ -907,3 +907,32 @@ def test_配额满时新建提醒明确失败且原规则不动(db):
     assert back.condition_group["items"][0]["value"] == 12.0
     assert back.expire_at is not None
     assert _pending(db, item["id"]).status == "pending"
+
+
+def test_带过期时间的启用旧规则_diff明说会重复触发(db):
+    """旧规则带 expire_at 且仍启用 → 新建后会与它同时命中，diff 必须明说重复推送。"""
+    from datetime import datetime, timedelta
+
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    db.add(PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="月底到期", enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+        expire_at=datetime.utcnow() + timedelta(days=7),
+    ))
+    db.commit()
+
+    diffs = act.preview_diff(db, user_id="u1", kind="alert",
+                             payload={"symbol": "600519", "price": 30})
+    kept = next(d for d in diffs if d["field"] == "现有提醒")
+    assert "仍然启用" in kept["after"], "必须说清旧规则还开着，不是已失效"
+    assert "重复" in kept["after"], "必须在 diff 里给出重复触发/推送的后果"
+    assert "停用" in kept["after"] and "删除" in kept["after"], "要给出避免重复的做法"
+
+
+def test_sqlite不冒充拥有行锁(db):
+    """SQLite 没有 FOR UPDATE 行锁: 辅助函数必须如实返回 False，不能让上层/测试误会。"""
+    from src.core.permissions import lock_quota_row
+
+    u = _user(db, "u1")
+    assert lock_quota_row(db, u) is False

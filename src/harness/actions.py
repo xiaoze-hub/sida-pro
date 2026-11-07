@@ -1187,6 +1187,12 @@ def _enforce_quotas(
 
     user = _quota_subject(db, user_id)
     try:
+        # 演示账号的上限判定(`_demo_watchlist_block`)同样先数后写 —— 锁放在所有
+        # 计数之前，两条 check_* 内部也会各自取同一把锁(同事务内重复取锁无副作用)。
+        from src.core.permissions import ROLE_OWNER, ROLE_PRO, lock_quota_row, normalize_role
+
+        if normalize_role(getattr(user, "role", None)) not in (ROLE_PRO, ROLE_OWNER):
+            lock_quota_row(db, user)
         if need_alert_slot:
             check_alert_quota(db, user)
         if need_watchlist_slot:
@@ -1597,11 +1603,21 @@ def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
     if latest is not None and target is None:
         # 关键披露：不会覆盖这条既有规则，只会新增一条。用户点确认前必须知道
         # "我原有的复合条件/停用/过期/一次性已触发的状态不动，但会多一条提醒（多占一个名额）"。
+        # 2026-11-07 复审: 带 expire_at 的旧规则**仍然启用**（只是到点自己失效），
+        # 所以到期前两条规则会同时命中同一条件 → 重复触发/重复推送。必须写进 diff，
+        # 否则用户以为"新增一条"，实际得到的是"双份提醒"。
+        expire_note = ""
+        expire_at = getattr(latest, "expire_at", None)
+        if expire_at is not None and bool(getattr(latest, "enabled", False)):
+            expire_note = (
+                f"它带过期时间 {expire_at} 且仍然启用，到期前两条规则会同时命中同一条件，"
+                "提醒/推送会重复触发；要避免重复，请先停用或删除旧规则再确认本次新建。"
+            )
         diffs.append({
             "field": "现有提醒",
             "before": _rule_brief(latest),
             "after": "保持原样（复合条件、已停用、带过期时间、已过期或一次性已触发的规则不覆盖）；"
-                     "本次另建一条独立提醒",
+                     "本次另建一条独立提醒" + expire_note,
             "change": "noop",
         })
     elif target is not None:

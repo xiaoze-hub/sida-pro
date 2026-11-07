@@ -346,11 +346,47 @@ def get_trial_remaining(db: Session, user_id: str, feature: str) -> int:
 # ════════════════════════════════════════════════════════════════════
 # 配额检查
 # ════════════════════════════════════════════════════════════════════
+def lock_quota_row(db: Session, user) -> bool:
+    """把「配额计数 → 写入」这一段串行化到**同一个用户行**上。
+
+    2026-11-07 复审: `check_alert_quota` / `check_watchlist_quota` 都是
+    `COUNT(*)` 然后由调用方另起 INSERT —— 这是典型的 check-then-act 竞态:
+    两个并发请求都看到 n = limit-1, 于是都写入, 最终 n = limit+1。SQLite 不受
+    影响(整库写锁), 但生产 PostgreSQL 上没有行锁就没有任何互斥, 单测全绿也不
+    代表线上不超卖。
+
+    做法: `SELECT id FROM users WHERE id = :uid FOR UPDATE`，在**计数之前**取,
+    锁随本事务的 commit/rollback 释放 —— 所以调用方**不能**在检查后自行
+    rollback 或换 session, 否则锁提前失效。所有配额写路径都按「先锁 users 行,
+    再数 stocks/price_alert_rules」的同一顺序取锁, 单锁资源不成环, 不会死锁。
+
+    返回是否真的加了锁。非 PostgreSQL 方言没有 `FOR UPDATE` 行锁语义, 这里
+    退化 no-op 并返回 False —— 调用方/测试**不得**把 SQLite 的通过当成并发安全
+    的证明。用户行不存在(ghost id)时同样锁不到, 返回 False。
+
+    注意: 本函数只保证「同一用户的并发写互斥」，不做超时/重试; 锁等待由数据库
+    的 `lock_timeout` 兜底。
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        return False
+    uid = getattr(user, "id", user)
+    if uid is None:
+        return False
+    from sqlalchemy import text
+
+    row = db.execute(
+        text("SELECT id FROM users WHERE id = :uid FOR UPDATE"), {"uid": str(uid)}
+    ).first()
+    return row is not None
+
+
 def check_watchlist_quota(db: Session, user) -> None:
     """普通账号自选≤10。"""
     role = normalize_role(getattr(user, "role", None))
     if role in (ROLE_PRO, ROLE_OWNER):
         return
+    # 计数前先锁用户行: 调用方随后 INSERT 时本事务仍持有该锁 (见 lock_quota_row)。
+    lock_quota_row(db, user)
     from src.db.models import Stock
 
     limit = MEMBER_WATCHLIST_MAX
@@ -370,6 +406,8 @@ def check_alert_quota(db: Session, user) -> None:
     role = normalize_role(getattr(user, "role", None))
     if role in (ROLE_PRO, ROLE_OWNER):
         return
+    # 计数前先锁用户行（HTTP create 与 AI apply 共用这一处，锁持有到调用方 commit）。
+    lock_quota_row(db, user)
     try:
         from src.db.models import PriceAlertRule
 

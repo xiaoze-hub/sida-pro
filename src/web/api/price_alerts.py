@@ -320,6 +320,14 @@ def adopt_alert_rule_to_private(
         logger.warning("adopt 拒绝: 当前账号缺少 user_id(rule_id=%s)", rule_id)
         raise HTTPException(403, "无法确认当前账号身份，已拒绝迁移")
 
+    # 2026-11-07: 取锁顺序统一为「users 行 → stocks/price_alert_rules 行」。
+    # 迁移稍后会对自选行 FOR UPDATE、并按自选配额 INSERT —— 若先拿自选行再等
+    # users 行，就会与「AI 提醒动作(先 users 后写规则)」构成反向等待。
+    from src.core.permissions import ROLE_OWNER, ROLE_PRO, lock_quota_row, normalize_role
+
+    if normalize_role(getattr(user, "role", None)) not in (ROLE_PRO, ROLE_OWNER):
+        lock_quota_row(db, user)
+
     row = (
         db.query(PriceAlertRule)
         .filter(PriceAlertRule.id == rule_id, PriceAlertRule.user_id == uid)
