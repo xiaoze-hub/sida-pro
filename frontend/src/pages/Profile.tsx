@@ -114,7 +114,7 @@ export function Profile() {
   // 碰不到当前页面。
   const identity = useIdentityScope()
   const { data: profile, isLoading, error: profileError, refetch: refetchProfile, isFetching: profileFetching } =
-    useApiQuery<ProfileInfo>(scopedKey(['profile'], identity), '/profile')
+    useApiQuery<ProfileInfo>(scopedKey(['profile'], identity), '/profile', { cancelOnQueryAbort: true })
   const { data: stats, error: statsError } = useApiQuery<ProfileStats>(
     scopedKey(['profile', 'stats'], identity),
     '/profile/stats',

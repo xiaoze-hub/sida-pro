@@ -124,7 +124,7 @@ def test_clear_only_removes_own_avatar_file(tmp_path, monkeypatch):
     assert client.get("/profile").json()["avatar"] == AVATAR_BOB
 
     files = sorted(os.listdir(os.path.join(str(tmp_path), "avatars")))
-    assert "avatar_uu-bob.jpg" in files
+    assert len(files) == 1 and files[0].startswith('avatar_uu-bob-') and files[0].endswith('.jpg')
     assert not any("alice" in name for name in files)
 
 
@@ -141,7 +141,7 @@ def test_db_stores_filename_only_per_user(tmp_path, monkeypatch):
     finally:
         db.close()
 
-    assert rows["alice"] == "avatar_uu-alice.png"
-    assert rows["bob"] == "avatar_uu-bob.jpg"
+    assert rows['alice'].startswith('avatar_uu-alice-') and rows['alice'].endswith('.png')
+    assert rows['bob'].startswith('avatar_uu-bob-') and rows['bob'].endswith('.jpg')
     # 只存文件名, 不把 data URL 塞进 users 行
     assert all(not value.startswith("data:") for value in rows.values())

@@ -123,7 +123,7 @@ function ensureLoaded(options?: { retryFailed?: boolean }): void {
   const startedEpoch = writeEpoch
   fetchAPI<{ avatar?: string }>(PROFILE_PATH, {
     cacheMode: 'reload',
-    signal: controller.signal,
+    signal: AbortSignal.any([controller.signal, AbortSignal.timeout(AVATAR_TIMEOUT_MS)]),
     timeoutMs: AVATAR_TIMEOUT_MS,
   })
     .then(res => {

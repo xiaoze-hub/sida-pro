@@ -109,6 +109,8 @@ export function scopedKey(base: QueryKey, identity: string = currentIdentity()):
 export interface UseApiQueryOptions {
   /** 传给 fetchAPI 的额外选项(timeoutMs 等) */
   requestOptions?: ApiRequestOptions
+  /** 保存前需要取消在途请求的页面显式启用；不能改变全站默认超时语义。 */
+  cancelOnQueryAbort?: boolean
   /** 条件启用; enabled=false 时不发请求 */
   enabled?: boolean
   /** 覆盖全局 staleTime(毫秒) */
@@ -130,9 +132,13 @@ export function useApiQuery<T>(
     queryKey: key,
     queryFn: ({ signal }) => {
       if (!path) throw new Error('useApiQuery: path 为空但已启用')
-      // signal 透传(2026-11-07): 保存个人资料前会 cancelQueries 掐掉在途旧读 ——
-      // 不接 signal 的话旧读照样落库, 迟到的旧值会盖掉刚保存的新头像/新昵称。
-      return fetchAPI<T>(path, { cacheMode: 'reload', ...options?.requestOptions, signal: options?.requestOptions?.signal ?? signal })
+      // 只有明确需要取消的查询才传 signal；fetchAPI 收到 signal 后不会自行启用超时。
+      // 将超时与取消合并，避免响应体挂起时一直等待。
+      const request = { cacheMode: 'reload' as const, ...options?.requestOptions }
+      if (options?.cancelOnQueryAbort && !request.signal) {
+        request.signal = AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs ?? 15000)])
+      }
+      return fetchAPI<T>(path, request)
     },
     enabled,
     staleTime: options?.staleTime,
