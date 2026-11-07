@@ -1070,15 +1070,25 @@ def _is_updatable_alert_rule(rule: Any) -> bool:
     A，执行的是 B。宁可多建一条（多占一个提醒名额，disclose 在 diff 里），也不动用户
     配置过的规则。
 
-    可更新 = 启用中 + 单条 price 条件 + `and`/无组操作 + 比较符在 `>=`/`<=` + 数值阈值
-    + **还能真正触发**（2026-11-07 二次复审）：
+    可更新 = 启用中 + **没有过期时间** + 单条 price 条件 + `and`/无组操作 + 比较符在
+    `>=`/`<=` + 数值阈值 + **还能真正触发**（2026-11-07 二次复审）：
 
     `price_alert_engine._can_trigger` 对 `expire_at` 已过的规则返回 `expired`，对
     `repeat_mode=="once"` 且 `last_trigger_at` 非空的规则返回 `once_triggered` ——
     这两种规则改完价格也永远不会再触发。把它们判成"可更新"，等于让用户确认了一条
     永不响的提醒（比多建一条更坏：用户以为设好了）。所以一律新增独立提醒。
+
+    三次复审把门槛再收紧一格：`expire_at` 在**未来**的规则同样不更新 —— 它今天会响，
+    但到点后静默失效，而 diff 只谈价格。规则上的过期时间是用户设的，本次动作不改它、
+    也不该让它成为一条没披露的失效承诺。
     """
     if rule is None or not bool(getattr(rule, "enabled", False)):
+        return False
+    # 2026-11-07 三次复审: **任何**带 `expire_at` 的规则都不就地改写 —— 不只是已过期。
+    # apply 只改条件，`expire_at` 会原样留下来：一条"1 小时后到期"的提醒被就地更新后，
+    # 用户以为设好了，一小时后它自己失效，而 diff 里一个字都没提。过期时间属于用户的
+    # 配置，改写别人的规则时既不能清也不能背着一句没说的失效承诺 ⇒ 新增独立提醒。
+    if getattr(rule, "expire_at", None):
         return False
     if _alert_rule_will_never_fire(rule):
         return False
@@ -1122,6 +1132,10 @@ def _rule_brief(rule: Any) -> str:
     # 即使条件长得像可更新，也永远不会再响。
     if _alert_rule_expired(rule):
         parts.append("已过期（不会触发）")
+    elif getattr(rule, "expire_at", None):
+        # 三次复审: 未来到期的规则也不能就地更新 —— 把"到点会自己失效"说出来，
+        # 否则用户以为这条提醒会一直盯着。
+        parts.append(f"带过期时间（{str(rule.expire_at)[:16]} 之后失效）")
     elif str(getattr(rule, "repeat_mode", "") or "") == "once" and getattr(rule, "last_trigger_at", None):
         parts.append("一次性提醒已触发（不会再次触发）")
     group = getattr(rule, "condition_group", None) or {}
@@ -1364,15 +1378,91 @@ def _annotation_link_alive(db: Session, row: Any) -> bool:
     )
 
 
-def _alert_rollback_provable(db: Session, row: Any) -> bool:
-    """撤销这条提醒动作**真的会成功**吗 —— 与 `_rollback_alert` 的拒绝条件一一对应。
+def _alert_rollback_ref(snapshot: dict) -> tuple[Any, Any, Any, bool]:
+    """从快照取「撤哪条、凭什么」的原始证据：(rule_id, stock_id, 条件, 是否老记录)。"""
+    facts = _alert_facts(snapshot)
+    if facts:
+        return (
+            facts.get("rule_id"), facts.get("stock_id"),
+            facts.get("rule_condition"), False,
+        )
+    return (
+        snapshot.get("rule_id"), snapshot.get("stock_id"),
+        snapshot.get("rule_condition"), True,
+    )
 
-    2026-11-07 二次复审（虚假可撤销）：此前 alert 只看"快照非空"就报 true，老记录
-    （没有 `applied` 段、也没有 `rule_id`）点下去必得 409，前端却显示"可撤销"。这里把
-    撤销真正需要的三件事逐条实测：可证的规则 ID、属主/自选一致、内容仍是本次写入的值。
+
+def _same_id(a: Any, b: Any) -> bool:
+    """编号相等（库里 int、JSON 里 int/str 都可能，按数值比，不从字符串形态猜）。"""
+    if a is None or b is None:
+        return False
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def _alert_rollback_rule(
+    db: Session, *, user_id: Any, payload: dict, snapshot: dict
+) -> tuple[Any, str | None]:
+    """撤销目标的**唯一**判据 —— `can_rollback` 与真正撤销共用这一份。
+
+    2026-11-07 三次复审（虚假可撤销的根因）：两个函数各写一遍判断，就会分叉 ——
+    老快照缺 `stock_id` 时 `_alert_rollback_provable` 跳过归属比对报 true，而
+    `_rollback_alert` 拿 `None` 去比必然 409；前端给了一个点了必失败的按钮。
+    现在只有这一份：证据四件套（规则 ID、属主、所属自选、本次写入的条件）缺一不可。
+
+    返回 `(rule, deny)`：
+      * `(row, None)`  → 可以动这一行；
+      * `(None, None)` → 快照里的规则已经不在了，撤销是幂等空操作（算成功）；
+      * `(None, 原因)` → 证明不了 / 已被用户改动 ⇒ 一行不动（fail-closed）。
     """
     from src.db.models import PriceAlertRule
 
+    rid, sid, expected, legacy = _alert_rollback_ref(snapshot)
+    if rid is None or not expected:
+        return None, (
+            "这条提醒动作早于本次修复的记录格式：快照里没有本次动作写下的规则 ID/条件。"
+            "按「该标的最新一条」猜删会误删你后来在同标的建的提醒，因此本次撤销"
+            "不改动任何规则（fail-closed）；如需清理请到提醒列表手动删除。"
+        )
+    if sid is None:
+        # 没记所属自选就证明不出这条规则属于本次动作：既不敢删，也不该报"可撤销"。
+        return None, (
+            "这条提醒动作的快照没有记录所属自选，无法证明规则归属，"
+            "拒绝改动任何规则（fail-closed）；如需清理请到提醒列表手动删除。"
+        )
+    try:
+        rule = db.query(PriceAlertRule).filter(PriceAlertRule.id == int(rid)).first()
+    except (TypeError, ValueError):
+        return None, f"提醒编号 {rid!r} 不是有效 ID，无法定位规则，拒绝改动（fail-closed）"
+    if rule is None:
+        return None, None
+    if str(rule.user_id) != str(user_id) or not _same_id(rule.stock_id, sid):
+        return None, (
+            f"提醒 #{int(rule.id)} 的属主或所属自选与这条动作的记录不一致（编号可能已被复用），"
+            "拒绝改动这条规则（fail-closed）"
+        )
+    if legacy:
+        ok = _legacy_condition_matches(payload, rule)
+    else:
+        ok = _normalized_condition(rule.condition_group) == _normalized_condition(expected)
+    if not ok:
+        return None, (
+            f"提醒 #{int(rule.id)} 的条件已不再是这条动作写入的值（你在确认之后改过它），"
+            "撤销会覆盖掉你的修改，因此本次不撤、动作状态保持不变（fail-closed）；"
+            "如确实要清理请到提醒列表手动处理。"
+        )
+    return rule, None
+
+
+def _alert_rollback_provable(db: Session, row: Any) -> bool:
+    """撤销这条提醒动作**真的会成功**吗 —— 直接用 `_alert_rollback_rule` 的结论。
+
+    2026-11-07 二次复审（虚假可撤销）：此前 alert 只看"快照非空"就报 true，老记录
+    （没有 `applied` 段、也没有 `rule_id`）点下去必得 409，前端却显示"可撤销"。
+    三次复审：判定改为与真正撤销**同一函数**，不再各写一份会分叉的规则。
+    """
     raw = getattr(row, "before_snapshot", None)
     if not raw:
         return False
@@ -1382,42 +1472,16 @@ def _alert_rollback_provable(db: Session, row: Any) -> bool:
         return False
     if not isinstance(snap, dict) or not snap:
         return False
-
-    facts = _alert_facts(snap)
-    payload: dict = {}
-    if facts:
-        rid = facts.get("rule_id")
-        sid = facts.get("stock_id")
-        expected = facts.get("rule_condition")
-        legacy = False
-    else:
-        try:
-            payload = json.loads(getattr(row, "payload", None) or "{}")
-        except (TypeError, ValueError):
-            return False
-        rid = snap.get("rule_id")
-        sid = snap.get("stock_id")
-        expected = snap.get("rule_condition")
-        # 老记录的两项最低证明：ID + 本次写入的条件。缺一项就没法撤（见 `_rollback_alert`）。
-        if rid is None or not expected:
-            return False
-        legacy = True
-    if rid is None:
-        return False
     try:
-        rule = db.query(PriceAlertRule).filter(PriceAlertRule.id == int(rid)).first()
+        payload = json.loads(getattr(row, "payload", None) or "{}")
     except (TypeError, ValueError):
         return False
-    if rule is None:
-        # 规则已被删除 —— 撤销是幂等的空操作，可以说"可撤销"。
-        return True
-    if str(rule.user_id) != str(getattr(row, "user_id", "")):
+    if not isinstance(payload, dict):
         return False
-    if sid is not None and rule.stock_id != sid:
-        return False
-    if legacy:
-        return _legacy_condition_matches(payload, rule)
-    return _normalized_condition(rule.condition_group) == _normalized_condition(expected)
+    _rule, deny = _alert_rollback_rule(
+        db, user_id=getattr(row, "user_id", ""), payload=payload, snapshot=snap
+    )
+    return deny is None
 
 
 def _can_rollback(row: Any, *, db: Session | None = None) -> bool:
@@ -1536,7 +1600,7 @@ def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
         diffs.append({
             "field": "现有提醒",
             "before": _rule_brief(latest),
-            "after": "保持原样（复合条件、已停用、已过期或一次性已触发的规则不覆盖）；"
+            "after": "保持原样（复合条件、已停用、带过期时间、已过期或一次性已触发的规则不覆盖）；"
                      "本次另建一条独立提醒",
             "change": "noop",
         })
@@ -1973,91 +2037,41 @@ def _legacy_condition_matches(payload: dict, rule: Any) -> bool:
 def _rollback_alert(db: Session, *, user_id: Any, payload: dict, snapshot: dict) -> list[str]:
     """撤销一次提醒动作 —— **只撤本次动作确认属于它的那条规则**。
 
-    硬约束（2026-11-07 复审 B1/B2）:
+    硬约束（2026-11-07 复审 B1/B2；三次复审统一判据）:
 
     1. **归属只认 ID**：`apply` 时把 `rule_id` 写进快照 `applied` 段。撤销按这个 ID
        取行，再核对属主 / 自选 / 内容。绝不"取该标的最新一条"—— 用户在确认之后自己
        建的同标的提醒会被那条逻辑删掉。
-    2. **证明不了就不动（fail-closed）**：老记录（本次修复之前 apply）没有 `applied`
-       段，只有可选的 `rule_id`；连 `rule_id` 都没有时**抛 409、一行不删**，而不是猜。
+    2. **证明不了就不动（fail-closed）**：证据四件套（规则 ID、属主、所属自选、本次
+       写入的条件）由 `_alert_rollback_rule` 一处判定 —— 与 `can_rollback` 完全同源，
+       不会出现"前端说可撤、点下去必 409"。缺任何一项都 409、一行不删，不猜。
     3. **内容被改过就不删**：规则当前条件等于本次动作写下的值才删。用户随后改过条件
        / 停用过，说明这条规则已被用户接管，删它就是销毁用户的编辑 ⇒ 同样 409 拒绝。
     4. **自选行保留**：动作顺带建的自选**不删**。`Stock.positions` / `Stock.agents` 是
        `cascade="all, delete-orphan"`，删自选会连带删掉用户后来加的持仓、监控配置；
        为了让"撤销干净"而毁用户数据，次序反了。保留这件事写进撤销结果，不静默。
     """
-    from src.db.models import PriceAlertRule, Stock
+    from src.db.models import Stock
 
     undone: list[str] = []
     facts = _alert_facts(snapshot)
+    rid, sid, _expected, _legacy = _alert_rollback_ref(snapshot)
 
-    def _deny(msg: str) -> ActionError:
-        return ActionError(msg, status_code=409)
+    rule, deny = _alert_rollback_rule(
+        db, user_id=user_id, payload=payload, snapshot=snapshot
+    )
+    if deny is not None:
+        raise ActionError(deny, status_code=409)
 
-    def _matches_applied(rule: Any, expected: Any) -> bool:
-        return _normalized_condition(rule.condition_group) == _normalized_condition(expected)
-
-    if not facts:
-        # ── 老记录：只有快照，没有"本次写下的是哪一条" ────────────────────
-        rid = snapshot.get("rule_id")
-        cond = snapshot.get("rule_condition")
-        if rid is None or not cond:
-            raise _deny(
-                "这条提醒动作早于本次修复的记录格式：快照里没有本次动作写下的规则 ID。"
-                "按「该标的最新一条」猜删会误删你后来在同标的建的提醒，因此本次撤销"
-                "不改动任何规则（fail-closed）；如需清理请到提醒列表手动删除。"
-            )
-        target = db.query(PriceAlertRule).filter(PriceAlertRule.id == int(rid)).first()
-        if target is None:
-            undone.append(f"提醒 #{int(rid)} 已不存在，无需恢复")
-        elif str(target.user_id) != str(user_id) or target.stock_id != snapshot.get("stock_id"):
-            raise _deny(
-                f"提醒 #{int(rid)} 的属主或所属自选与这条动作的快照不一致（编号可能已被复用），"
-                "拒绝改写这条规则（fail-closed）"
-            )
-        elif not _legacy_condition_matches(payload, target):
-            # 2026-11-07 二次复审（错误撤销状态）：此前这里只 append 一句"未覆盖它"，
-            # 动作照样被标成 rolled_back —— 前端显示"已撤销"，实际一行都没改。用户随后
-            # 也没法再撤（只有 applied 能撤）。条件已被改过 ⇒ 必须先拒绝，状态原样保留。
-            raise _deny(
-                f"提醒 #{int(rid)} 的条件已不再是这条动作写入的值（你在确认之后改过它），"
-                "撤销会覆盖掉你的修改，因此本次不撤、动作状态保持不变（fail-closed）；"
-                "如确实要清理请到提醒列表手动处理。"
-            )
-        else:
-            target.condition_group = cond
-            if snapshot.get("rule_enabled") is not None:
-                target.enabled = bool(snapshot["rule_enabled"])
-            if snapshot.get("rule_name"):
-                target.name = snapshot["rule_name"]
-            undone.append(f"已恢复提醒 #{int(rid)} 的触发条件")
-            if snapshot.get("rule_enabled") is None:
-                undone.append("历史快照未记录启用状态，如该规则原本停用请手动停用")
-        return undone
-
-    # ── 新记录：ID 明确 ────────────────────────────────────────────────
-    rule_id = facts.get("rule_id")
-    stock_id = facts.get("stock_id")
-    if rule_id is None:
-        raise _deny("动作快照缺少本次写下的规则 ID，拒绝猜删（fail-closed）")
-
-    rule = db.query(PriceAlertRule).filter(PriceAlertRule.id == int(rule_id)).first()
-    if rule is not None:
-        if str(rule.user_id) != str(user_id) or rule.stock_id != stock_id:
-            raise _deny(
-                f"提醒 #{int(rule_id)} 的属主或所属自选与本次动作记录不一致（编号可能已被复用），"
-                "拒绝改动这条规则（fail-closed）"
-            )
-        if not _matches_applied(rule, facts.get("rule_condition")):
-            raise _deny(
-                f"提醒 #{int(rule_id)} 在确认之后已被改动（条件不再是本次动作写入的值），"
-                "删除它会毁掉你的修改，因此本次撤销不改动它（fail-closed）；"
-                "如确实要撤销请到提醒列表手动删除。"
-            )
+    if rule is None:
+        undone.append(f"提醒 #{int(rid)} 已不存在，无需恢复")
+    elif facts:
+        # ── 新记录：ID 明确，按 `applied` 段恢复 ──────────────────────────
+        rule_id = int(rule.id)
         if facts.get("rule_created"):
             db.delete(rule)
             db.flush()
-            undone.append(f"已删除本次新建的盯盘提醒 #{int(rule_id)}")
+            undone.append(f"已删除本次新建的盯盘提醒 #{rule_id}")
         else:
             before = facts.get("rule_before") or {}
             if before.get("condition") is not None:
@@ -2067,11 +2081,23 @@ def _rollback_alert(db: Session, *, user_id: Any, payload: dict, snapshot: dict)
             if before.get("name") is not None:
                 rule.name = before["name"]
             db.flush()
-            undone.append(f"已恢复提醒 #{int(rule_id)} 的触发条件与启用状态")
+            undone.append(f"已恢复提醒 #{rule_id} 的触发条件与启用状态")
     else:
-        undone.append(f"提醒 #{int(rule_id)} 已被删除，无需撤销")
+        # ── 老记录：只有快照，写回快照里的原值 ────────────────────────────
+        rule_id = int(rule.id)
+        rule.condition_group = snapshot.get("rule_condition")
+        if snapshot.get("rule_enabled") is not None:
+            rule.enabled = bool(snapshot["rule_enabled"])
+        if snapshot.get("rule_name"):
+            rule.name = snapshot["rule_name"]
+        db.flush()
+        undone.append(f"已恢复提醒 #{rule_id} 的触发条件")
+        if snapshot.get("rule_enabled") is None:
+            undone.append("历史快照未记录启用状态，如该规则原本停用请手动停用")
 
-    if facts.get("stock_created") and stock_id is not None:
+    stock_id = facts.get("stock_id") if facts else sid
+    stock_created = bool(facts.get("stock_created")) if facts else False
+    if stock_created and stock_id is not None:
         still = db.query(Stock).filter(Stock.id == int(stock_id), Stock.user_id == str(user_id)).first()
         if still is not None:
             # 明确保留 + 说明：删自选会级联删用户持仓/监控。

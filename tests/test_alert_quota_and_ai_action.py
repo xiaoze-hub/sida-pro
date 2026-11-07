@@ -798,3 +798,112 @@ def test_can_rollback只在实测能撤时为true(db):
 
     # 4) 没有 session 就证明不了 → 一律 false
     assert act._to_dict(row)["can_rollback"] is False
+
+
+# ── 2026-11-07 三次复审: 带过期时间的旧规则 / 缺 stock_id 的虚假可撤销 ──────
+#
+# 两条硬约束:
+#   1. **任何**带 `expire_at` 的旧规则都不是更新对象（不只是已过期）：就地更新只改条件，
+#      过期时间原样留着 —— 用户以为设好了，到点却静默失效，而 diff 一个字都没提。
+#      改为明确新增独立提醒（占一个名额），原规则条件/过期时间一字不动。
+#   2. `can_rollback` 与真正撤销共用 `_alert_rollback_rule` 一个判据：证据四件套
+#      （规则 ID、属主、所属自选、本次写入的条件）缺一不可 —— 老快照缺 `stock_id`
+#      时报 false、撤销 409，不许出现"按钮可点、点了必失败"。
+
+def test_未来过期规则不被就地更新_原规则与过期时间完整保留(db):
+    """1 小时后到期的旧提醒：不覆盖、不清 expire_at、不静默换条件，新增一条。"""
+    from datetime import datetime, timedelta
+
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    exp = datetime.utcnow() + timedelta(hours=1)
+    old = PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="一小时后到期", enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+        expire_at=exp,
+    )
+    db.add(old)
+    db.commit()
+    oid = old.id
+
+    diffs = act.preview_diff(db, user_id="u1", kind="alert",
+                             payload={"symbol": "600519", "price": 30})
+    assert next(d for d in diffs if "触发条件" in d["field"])["change"] == "add", \
+        "带（未来）过期时间的规则不能就地更新"
+    kept = next(d for d in diffs if d["field"] == "现有提醒")
+    assert "过期时间" in kept["before"], "diff 必须说明这条提醒带过期时间"
+    assert "过期时间" in kept["after"]
+
+    _apply_alert_action(db, price=30)
+    db.expire_all()
+    back = db.query(PriceAlertRule).filter(PriceAlertRule.id == oid).one()
+    assert back.condition_group["items"][0]["value"] == 12.0, "原规则条件一个字都不能动"
+    assert back.expire_at is not None, "过期时间不能被本次动作清掉"
+    assert back.name == "一小时后到期"
+    assert db.query(PriceAlertRule).count() == 2, "应新增一条独立提醒"
+
+
+def test_缺stock_id的老快照不可撤销且拒绝时不改一行(db):
+    """缺 stock_id ⇒ can_rollback=false、撤销 409、规则与动作状态原样。"""
+    import json as _json
+
+    _user(db, "u1")
+    stock = _stock(db, "u1", "600519")
+    rule = PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="原始", enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+    )
+    db.add(rule)
+    db.commit()
+    rid = rule.id
+
+    aid = _legacy_action(db, snapshot={
+        "stock_existed": True, "stock_id": None, "stock_market": "CN",
+        "rule_id": rid, "rule_condition": rule.condition_group,
+        "rule_enabled": True, "rule_name": "原始", "rule_updatable": True,
+    })
+    row = db.query(CopilotAction).filter(CopilotAction.id == aid).one()
+    assert act._to_dict(row, db=db)["can_rollback"] is False, \
+        "缺 stock_id 时撤销必然 409，不许声称可撤销"
+
+    with pytest.raises(act.ActionError) as ei:
+        act.rollback_action(db, user_id="u1", action_id=aid, reason="x")
+    assert ei.value.status_code == 409
+    assert "归属" in str(ei.value)
+
+    db.expire_all()
+    assert db.query(CopilotAction).filter(CopilotAction.id == aid).one().status == "applied"
+    kept = db.query(PriceAlertRule).filter(PriceAlertRule.id == rid).one()
+    assert kept.condition_group["items"][0]["value"] == 30.0, "拒绝撤销 = 一行不动"
+    assert _json.loads(row.before_snapshot)["stock_id"] is None
+
+
+def test_配额满时新建提醒明确失败且原规则不动(db):
+    """带过期时间的旧规则 → 走新增；配额已满 ⇒ 明确 403，原规则与动作都不受影响。"""
+    from datetime import datetime, timedelta
+
+    _user(db, "u1")
+    _fill_rules(db, "u1", 3)  # member 上限 3
+    stock = _stock(db, "u1", "600519")
+    old = PriceAlertRule(
+        user_id="u1", stock_id=stock.id, name="一小时后到期", enabled=True,
+        condition_group={"op": "and", "items": [{"type": "price", "op": ">=", "value": 12.0}]},
+        expire_at=datetime.utcnow() + timedelta(hours=1),
+    )
+    db.add(old)
+    db.commit()
+    oid = old.id
+
+    item = act.propose(db, user_id="u1", kind="alert",
+                       payload={"symbol": "600519", "price": 30})
+    with pytest.raises(act.ActionError) as ei:
+        act.apply_action(db, user_id="u1", action_id=item["id"])
+    assert ei.value.status_code == 403
+    assert "上限" in str(ei.value), "配额失败必须是明确原因，不能静默"
+
+    db.expire_all()
+    assert db.query(PriceAlertRule).count() == 4, "被拒的动作不能多写一条规则"
+    back = db.query(PriceAlertRule).filter(PriceAlertRule.id == oid).one()
+    assert back.condition_group["items"][0]["value"] == 12.0
+    assert back.expire_at is not None
+    assert _pending(db, item["id"]).status == "pending"
