@@ -46,15 +46,22 @@ recipes / actions / chat，也不触发任何 scan / refresh。
 - `expected_data_day` = 「到此刻为止本应已落库的最近数据日」：
   交易日 15:30（盘后 cron）之后算当日，之前算上一交易日；非交易日回看上一交易日。
   交易日历不可用（如年份未覆盖）时**不回落自然日**，直接判「时效不可判断」。
-- `data_date` 只在能确证时才给：快照日期可解析、且**本身是 A 股交易日**、且不晚于今天。
-  写入日 ≠ 数据日 —— 节假日/周末补跑写进来的快照（`snapshot_date` 落在非交易日）无法
-  确认装的是哪个交易日的数据，一律 `data_date=None`、`freshness="unknown"`、
-  `stale=None`，并在 `note` 里写明「数据日期未知、时效不可判断」，**绝不**给出
-  `stale=False`，也绝不说「今日/实时」。
-- 数据日不可确证时 `available=False`（fail-closed）：宁可说「不知道/不给」，也不把
-  无法定日的数据当最新榜单喂给模型。
-- `stale=False` 只表示「数据日不早于最近应有数据日」，不代表盘中实时；所有渲染都以
-  `as_of`（当前系统日期）为视角写明数据日。
+- **写入日 ≠ 数据日**（本层最后一条阻断）：`snapshot_date` 是 cron 落库时
+  `datetime.now()` 写进去的**快照写入日**（`src/core/market_scan_jobs.py:38,82`），
+  payload 里唯一的日期类字段 `generated_at` 是**扫描生成时刻**
+  （`market_scan.scan()` / `scan_dde_universe()` 内 `datetime.now()`）。
+  两者都不携带 TQ/thsdk 行情**所属交易日**，因此「写入日恰好是 A 股交易日」
+  **不构成数据日证据** —— 盘前/盘中刷新、跨日补采、源端延迟都会让实际行情落在别的交易日。
+- 结论：`data_date` 一律 `None`、`data_date_status="unverified"`、
+  `freshness="unknown"`、`stale=None`，`note/freshness_note` 明写
+  「快照写入日期 X；数据日期未核实，不得推断为当日」。**绝不**把写入日当数据日，
+  也绝不说「今日/实时/未过期」。
+- unknown 是**时态未知**，不是「数据不可用」：榜单照常返回并逐行标注
+  （隐瞒可用数据同样是失真）。只有 payload 显式 `available=False`、无快照行、
+  或 payload 为空时才 `available=False`。
+- 将来若生成方真的落一个明确的数据所属交易日字段并有可信来源证据，必须在
+  `_resolve_data_date` 里显式接入并按交易日校验，不得用 `snapshot_date` /
+  `generated_at` 顶替。
 
 ## 口径红线
 
@@ -63,9 +70,12 @@ recipes / actions / chat，也不触发任何 scan / refresh。
      `approximation=True`，信封标 `dark_top_source="ohlc_approx"`；
    - `dark_fund_top_snapshots`：thsdk DDE **主力净流入**（同花顺官方 main_net 口径），
      行级 `source="thsdk_dde"`。它属于「主力/大单资金」，**不是**暗盘拆单/拆单隐藏意图；
-   - 真正的暗盘拆单是 `.tck` 委托号级（`postmarket_review` / `dark_flow._detect_split_orders`），
-     本模块**不提供**该口径，也不拿 DDE 数字冒充它；若 payload 附带
-     `tck_dark_net_wan`，只作**并列另列**展示，不合并成单一数字。
+   - `.tck` **不是**委托号级精确暗盘：项目研究已证伪该口径（逐笔不落委托号，
+     所谓「委托号级」实为时间指针归属；被动 maker 侧委托号未落盘，
+     见 `docs/data_source_triangulation.md`「`.tck` 时间指针已证伪 / 不做 .tck 委托号拆单」）。
+     本模块**不提供**任何「委托号级」口径，也不拿 DDE 数字冒充拆单；若 payload 附带
+     `tck_dark_net_wan`，只作**并列另列**的近似参考展示（标注非委托号级、勿互算），
+     不合并成单一数字。
    两榜各自独立函数、独立标签，本模块**不提供**合并入口。
 2. **payload 不得冒充信封**：payload 自带的 `available` / `stale` / `snapshot_date` /
    `data_date` / `source` 等元信息一律不采信；`payload.available=False`（扫描失败落库）
@@ -220,37 +230,44 @@ def _trading_gap(start: date, end: date) -> int | None:
         return None
 
 
-def _resolve_data_date(raw_snapshot: Any, today: date) -> tuple[date | None, str]:
-    """快照行上的日期 → 可确证的**数据日**。返回 (data_date, 不可确证原因)。
+def _resolve_data_date(
+    raw_snapshot: Any, payload: dict[str, Any] | None, today: date
+) -> tuple[date | None, str]:
+    """快照行上的日期 + payload → 可确证的**数据日**。返回 (data_date, 不可核实原因)。
 
-    写入日 ≠ 数据日：盘后 cron / 手动 refresh 都是 `datetime.now()` 落 `snapshot_date`，
-    节假日补跑（或历史手写行）会让写入日落在非交易日，那时无法判断里面装的是哪个
-    交易日的数据 —— 只能如实说「数据日期未知」，不能拿写入日冒充数据日。
+    写入日 ≠ 数据日（**即使写入日本身是交易日**）：
+    - `snapshot_date` 由 `market_scan_jobs` 落库时 `datetime.now()` 写入，是**写入日**；
+    - payload 只有 `generated_at`（扫描生成时刻，同样是 `datetime.now()`），
+      不携带 TQ/thsdk 行情所属交易日；
+    - 因此不存在可核验的数据日证据，一律返回 `None`，由上层标
+      `data_date_status="unverified"` / `freshness="unknown"`，
+      明写「快照写入日期 + 数据日期未核实」，**不得推断为当日**。
+    将来生成方若落明确的数据所属交易日字段，才在这里显式接入并校验交易日。
     """
     snap = _coerce_date(raw_snapshot)
     if snap is None:
-        return None, f"快照日期 {raw_snapshot!r} 无法解析为日期"
+        return None, f"快照写入日期 {raw_snapshot!r} 无法解析为日期，数据日期未核实"
     if snap > today:
-        return None, f"快照日期 {snap} 晚于当前系统日期 {today}（时钟或落库异常）"
-    try:
-        from src.core.trading_calendar import is_trading_day
-
-        trading = is_trading_day(snap)
-    except Exception as e:  # noqa: BLE001
-        return None, f"交易日历不可用（{e}），无法判定 {snap} 是否为交易日"
-    if not trading:
-        return None, (
-            f"快照写入日 {snap} 不是 A 股交易日（节假日/周末休市/停市），"
-            "写入日不等于数据日，无法确认数据所属交易日"
-        )
-    return snap, ""
+        return None, f"快照写入日期 {snap} 晚于当前系统日期 {today}（时钟或落库异常）"
+    gen = str((payload or {}).get("generated_at") or "").strip()
+    evidence = (
+        f"payload 仅有扫描生成时刻 generated_at={gen}（扫描生成时间，非行情所属交易日）"
+        if gen
+        else "payload 无任何数据所属交易日字段（仅扫描生成时间）"
+    )
+    return None, (
+        f"快照写入日期 {snap} 仅为落库写入日；{evidence}；"
+        "数据日期未核实，不得推断为当日"
+    )
 
 
-def _freshness(raw_snapshot: Any, now: datetime) -> dict[str, Any]:
-    """时效块：data_date / freshness / stale / age_* + 不可判断时的原因。"""
+def _freshness(
+    raw_snapshot: Any, payload: dict[str, Any] | None, now: datetime
+) -> dict[str, Any]:
+    """时效块：data_date / data_date_status / freshness / stale / age_* + 不可核实原因。"""
     today = now.date()
     expected = _expected_data_day(now)
-    data_date, why = _resolve_data_date(raw_snapshot, today)
+    data_date, why = _resolve_data_date(raw_snapshot, payload, today)
     snap = _coerce_date(raw_snapshot)
     raw = None if raw_snapshot is None else str(raw_snapshot).strip() or None
 
@@ -262,6 +279,7 @@ def _freshness(raw_snapshot: Any, now: datetime) -> dict[str, Any]:
         "raw_snapshot_date": raw,
         "expected_data_day": expected.isoformat() if expected else None,
         "data_date": data_date.isoformat() if data_date else None,
+        "data_date_status": "unverified",
         "freshness": FRESHNESS_UNKNOWN,
         "freshness_note": "",
         "stale": None,
@@ -270,10 +288,12 @@ def _freshness(raw_snapshot: Any, now: datetime) -> dict[str, Any]:
     }
 
     if data_date is None:
-        meta["freshness_note"] = f"数据日期未知，时效不可判断：{why}"
+        # 数据日未核实是**常态**（见 _resolve_data_date）：列出视图，不冒充新鲜/过期
+        meta["freshness_note"] = f"数据日期未核实，时效不可判断：{why}"
         return meta
 
-    # 数据日可确证 → 自然日龄总能算（不依赖交易日历），先落上
+    # 仅当将来接入可信数据日字段才会走到这里；当前无此类证据
+    meta["data_date_status"] = "verified"
     meta["age_days"] = (today - data_date).days
 
     if expected is None:
@@ -374,17 +394,9 @@ def _envelope(
             note = f"{note}（payload.available=false，不覆盖）"
         return _unavailable(source=source, market=market, now=now, note=note)
 
-    meta = _freshness(getattr(row, "snapshot_date", None), now)
-    if meta["data_date"] is None:
-        # 数据日不可确证 → fail-closed: 不把无法定日的数据当最新榜单
-        return _unavailable(
-            source=source,
-            market=market,
-            now=now,
-            note=f"{meta['freshness_note']}；本次不提供榜单数据（避免旧数据装新鲜）",
-            raw_snapshot_date=meta["raw_snapshot_date"],
-            extra=extra,
-        )
+    # 数据日未核实 → 照常返回榜单（隐瞒可用数据同样是失真），但时效显式 unknown，
+    # 逐字写明「快照写入日期 + 数据日期未核实」，不标 fresh/stale、不说今日。
+    meta = _freshness(getattr(row, "snapshot_date", None), payload, now)
 
     data: dict[str, Any] = {
         k: v for k, v in (payload or {}).items() if k not in _RESERVED_KEYS
@@ -417,7 +429,7 @@ def _unavailable(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """无数据 / 数据日不可确证：`available=False` + 明确 note，绝不编造榜单。"""
-    meta = _freshness(None, now)
+    meta = _freshness(None, None, now)
     meta.update(
         {
             "snapshot_date": None,
@@ -594,16 +606,18 @@ def _freshness_line(data: dict[str, Any]) -> str:
             f"（当前系统日期 {data.get('as_of')}；最近应有数据日 "
             f"{data.get('expected_data_day')}，未过期——不代表盘中实时）"
         )
-    note = data.get("freshness_note") or "数据日期未知，时效不可判断"
+    note = data.get("freshness_note") or "数据日期未核实，时效不可判断"
     return f"⚠️ {note}"
 
 
 def _head_date(data: dict[str, Any]) -> str:
     if data.get("data_date"):
         return f"数据日 {data['data_date']}"
+    if data.get("snapshot_date"):
+        return f"写入日 {data['snapshot_date']}（数据日期未核实）"
     if data.get("raw_snapshot_date"):
-        return f"写入日 {data['raw_snapshot_date']}（数据日未知）"
-    return "数据日未知"
+        return f"写入日 {data['raw_snapshot_date']}（数据日期未核实）"
+    return "数据日期未核实"
 
 
 def _symbols(rows: Any, limit: int = _DISPLAY_ROWS) -> str:
@@ -633,7 +647,7 @@ def render_market_scan_ranks(data: dict[str, Any]) -> str:
     )
     if data.get("generated_at"):
         lines.append(f"  扫描生成时间：{data.get('generated_at')}")
-    lines.append(f"  新 G 点（快照日末根疑似，待确认）：{_symbols(data.get('new_g_points'))}")
+    lines.append(f"  新 G 点（快照末根疑似，待确认）：{_symbols(data.get('new_g_points'))}")
 
     dark_rows = [r for r in (data.get("dark_top") or []) if isinstance(r, dict)]
 
@@ -700,9 +714,12 @@ def render_dark_fund_top(data: dict[str, Any]) -> str:
             f"主力净额 {_num(r.get('main_net_wan'))} 万元"
             f"（成交额 {_num(r.get('total_amount_wan'))} 万元）"
         )
-        # .tck 委托号级精确暗盘 = 真正的暗盘拆单口径; 只并列另列, 绝不与主力净额合并/互算
+        # .tck「委托号级精确」已证伪（时间指针归属、被动侧不落盘）：只作近似另列，绝不互算
         if isinstance(r.get("tck_dark_net_wan"), (int, float)):
-            line += f"｜委托号级暗盘拆单另列 {_num(r.get('tck_dark_net_wan'))} 万元（勿与主力净额互算）"
+            line += (
+                f"｜.tck 近似暗盘列 {_num(r.get('tck_dark_net_wan'))} 万元"
+                "（非委托号级、未经验证；勿与主力净额互算）"
+            )
         lines.append(line)
     if len(rows) > _DISPLAY_ROWS:
         lines.append(f"  …另有 {len(rows) - _DISPLAY_ROWS} 只")
@@ -711,8 +728,9 @@ def render_dark_fund_top(data: dict[str, Any]) -> str:
 
     lines.append(
         "  口径：thsdk DDE **主力净流入**（main_net_wan，source=thsdk_dde），属主力/大单资金；"
-        "**不是暗盘拆单**（暗盘拆单 = .tck 委托号级拆单隐藏意图），也不等于三榜 dark_top 的 "
-        "OHLC 分摊近似项（approximation=True）—— 三者禁止合并/互算/互相校验。"
+        "**不是暗盘拆单**（`.tck` 的委托号级精确拆单已被项目研究证伪，只能作近似参考），"
+        "也不等于三榜 dark_top 的 OHLC 分摊近似项（approximation=True）"
+        "—— 三者禁止合并/互算/互相校验。"
     )
     lines.append(
         "  只读快照，与页面 GET /api/market-scan/dark-fund-top 同源（页面历史名「暗盘资金 TOP」），"

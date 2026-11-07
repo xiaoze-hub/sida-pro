@@ -6,13 +6,15 @@
 | # | 复审阻断 | 红测 |
 | :-- | :--- | :--- |
 | 1 | 外部 `as_of` 可让旧数据装新鲜 | `test_public_api_has_no_as_of_override` |
-| 2 | 快照写入日≠数据日（节假日/周末补跑） | `test_holiday_write_day_refuses_to_date_data` / `test_weekend_write_day_not_treated_fresh` |
-| 3 | 日期不可解析仍 available=True | `test_unparseable_snapshot_date_is_unknown_not_available` |
+| 2 | 快照写入日≠数据日（交易日也一样） | `test_weekday_write_day_is_not_data_date` / `test_holiday_write_day_refuses_to_date_data` / `test_weekend_write_day_not_treated_fresh` |
+| 3 | 日期不可解析被当成「没有时效信息」 | `test_unparseable_snapshot_date_is_unverified_but_readable` |
 | 3b | 交易日历不可用仍判新鲜 | `test_calendar_unavailable_is_unknown_not_fresh` |
+| 3c | unknown 时把整个榜单藏起来（另一个极端） | `test_unknown_data_date_still_returns_boards_with_labels` |
 | 4 | 禁用账户对象绕过页面身份条件 | `test_disabled_account_denied` / `test_soft_deleted_account_denied` /
       `test_service_identity_denied` / `test_empty_identity_denied` |
 | 5 | payload.available=False 被覆盖成 True | `test_payload_available_false_is_not_masked` |
 | 6 | DDE 主力净流入被说成「暗盘拆单」 | `test_dde_render_separates_main_net_from_dark_split` |
+| 7 | `.tck` 被说成「委托号级精确暗盘」（已证伪） | `test_tck_column_not_claimed_order_level_exact` |
 
 ## 测试隔离
 
@@ -165,18 +167,21 @@ def test_holiday_write_day_refuses_to_date_data(db, set_now):
 
     data = tsr.read_market_scan_ranks(db, user)
 
-    assert data["available"] is False
+    assert data["available"] is True, "数据日未知 ≠ 数据不可用：不得把可用榜单整个藏掉"
     assert data["data_date"] is None
     assert data["freshness"] == "unknown"
     assert data["stale"] is None, "日期不可判定时绝不允许给出 stale=False"
-    assert data["raw_snapshot_date"] == "2026-10-05"
-    assert "数据日期未知" in data["note"] and "时效不可判断" in data["note"]
-    assert "dark_top" not in data, "数据日不可判定时不得输出榜单内容"
+    assert data["data_date_status"] == "unverified"
+    assert data["snapshot_date"] == "2026-10-05"  # 仅作「快照写入日」展示
+    assert "2026-10-05" in data["freshness_note"]
+    assert "未核实" in data["freshness_note"]
+    assert data["dark_top"][0]["symbol"] == "000002"
 
     text = tsr.render_market_scan_ranks(data)
-    assert "数据日期未知" in text
+    assert "写入日 2026-10-05" in text
+    assert "数据日期未核实" in text
     assert "今日" not in text and "实时" not in text
-    assert "未过期" not in text
+    assert "未过期" not in text and "新鲜" not in text
 
 
 def test_weekend_write_day_not_treated_fresh(db, set_now):
@@ -190,7 +195,37 @@ def test_weekend_write_day_not_treated_fresh(db, set_now):
     assert data["freshness"] == "unknown"
     assert data["stale"] is None
     assert data["data_date"] is None
-    assert data["available"] is False
+    assert data["available"] is True
+    assert "写入日" in data["freshness_note"] and "未核实" in data["freshness_note"]
+
+
+def test_weekday_write_day_is_not_data_date(db, set_now):
+    """(本次最后一条阻断) 写入日**本身是交易日**也不等于数据日。
+
+    盘后 cron 用 `datetime.now()` 落 `snapshot_date`；payload 里只有 `generated_at`
+    （扫描生成时刻）。写入日恰好是交易日、但只要底层 TQ/thsdk 行情不是当日，
+    就仍然是「快照写入日期 + 数据日期未核实」。旧实现 `return snap` 就是拿写入日冒数据日。
+    """
+    user = _user(db, "pro")
+    _add_rank(db, date(2026, 11, 6), RANK_PAYLOAD)  # 周五收盘后写入
+    set_now(datetime(2026, 11, 6, 16, 0))
+
+    data = tsr.read_market_scan_ranks(db, user)
+
+    assert data["snapshot_date"] == "2026-11-06"
+    assert data["expected_data_day"] == "2026-11-06"
+    assert data["data_date"] is None, "写入日是交易日不构成数据日证据"
+    assert data["data_date_status"] == "unverified"
+    assert data["freshness"] == "unknown", "不得因写入日=交易日就标 fresh"
+    assert data["stale"] is None
+    assert data["age_days"] is None
+    assert data["available"] is True
+    assert "2026-11-06" in data["freshness_note"] and "写入" in data["freshness_note"]
+    assert "未核实" in data["freshness_note"]
+
+    text = tsr.render_market_scan_ranks(data)
+    assert "写入日 2026-11-06（数据日期未核实）" in text
+    assert "未过期" not in text and "已过期" not in text
 
 
 def test_snapshot_in_future_is_unknown(db, set_now):
@@ -202,14 +237,15 @@ def test_snapshot_in_future_is_unknown(db, set_now):
     data = tsr.read_market_scan_ranks(db, user)
     assert data["freshness"] == "unknown"
     assert data["stale"] is None
-    assert "晚于当前系统日期" in data["note"]
+    assert data["available"] is True
+    assert "晚于当前系统日期" in data["freshness_note"]
 
 
 # ─────────────── 阻断 3: 日期不可解析 / 日历不可用 ───────────────
 
 
-def test_unparseable_snapshot_date_is_unknown_not_available(db, set_now):
-    """snapshot_date 不可解析：不能照旧 available=True 且不提时效。
+def test_unparseable_snapshot_date_is_unverified_but_readable(db, set_now):
+    """snapshot_date 不可解析：数据日未核实必须写明，但不把可用榜单藏起来。
 
     `dark_fund_top_snapshots.snapshot_date` 是 String 列（历史/手写/迁移可写入任意串），
     所以这个用例走 DDE 榜 —— 真实库里脏日期就长这样。
@@ -220,17 +256,19 @@ def test_unparseable_snapshot_date_is_unknown_not_available(db, set_now):
 
     data = tsr.read_dark_fund_top(db, user)
 
-    assert data["available"] is False
+    assert data["available"] is True
     assert data["data_date"] is None
+    assert data["data_date_status"] == "unverified"
     assert data["freshness"] == "unknown"
     assert data["stale"] is None
     assert data["raw_snapshot_date"] == "2026-13-45"
-    assert "无法解析" in data["note"]
-    assert "top" not in data, "数据日不可判定时不得输出榜单内容"
+    assert "无法解析" in data["freshness_note"]
+    assert data["top"][0]["symbol"] == "600000"
 
     text = tsr.render_dark_fund_top(data)
-    assert "数据日期未知" in text
-    assert "2026-11-06" not in text  # 不拿 payload 里的 generated_at 冒充数据日
+    assert "数据日期未核实" in text
+    assert "数据日 2026-11-06" not in text  # 不拿 generated_at 冒充数据日
+    assert "扫描生成时间：2026-11-06" in text  # 只能当扫描时刻展示，且必须标明
 
 
 def test_calendar_unavailable_is_unknown_not_fresh(db, set_now, monkeypatch):
@@ -252,30 +290,35 @@ def test_calendar_unavailable_is_unknown_not_fresh(db, set_now, monkeypatch):
     assert data["freshness"] == "unknown"
     assert data["stale"] is None
     assert data["data_date"] is None
-    assert data["available"] is False
-    assert "交易日历不可用" in data["note"]
-
-
-def test_calendar_out_of_range_keeps_data_date_but_flags_unknown(db, set_now):
-    """数据日可确证、但应在日不可知（日历未覆盖 2031）→ 保留数据日 + 明确时效不可判断。
-
-    不能因为「算不出应在日」就默认新鲜；自然日龄照给，让模型看得到已经很旧。
-    """
-    user = _user(db, "pro")
-    _add_rank(db, date(2026, 11, 6), RANK_PAYLOAD)
-    set_now(datetime(2031, 1, 6, 16, 0))
-
-    data = tsr.read_market_scan_ranks(db, user)
-
-    assert data["data_date"] == "2026-11-06"
+    assert data["available"] is True, "日历缺口 → 时效 unknown，但不是数据不可用"
     assert data["expected_data_day"] is None
-    assert data["freshness"] == "unknown"
-    assert data["stale"] is None
-    assert data["age_days"] > 1500
+    assert "未核实" in data["freshness_note"]
 
     text = tsr.render_market_scan_ranks(data)
-    assert "时效不可判断" in text and "距当前" in text
+    assert "数据日期未核实" in text
     assert "未过期" not in text
+
+
+def test_unknown_data_date_still_returns_boards_with_labels(db, set_now):
+    """两个极端都要避免：把 unknown 当 fresh（旧 bug），或把 unknown 当不可用（藏数据）。"""
+    user = _user(db, "pro")
+    _add_rank(db, date(2026, 11, 6), RANK_PAYLOAD)
+    _add_dark(db, "2026-11-06", DARK_PAYLOAD)
+    set_now(datetime(2026, 11, 6, 16, 0))
+
+    ranks = tsr.read_market_scan_ranks(db, user)
+    dark = tsr.read_dark_fund_top(db, user)
+
+    for data in (ranks, dark):
+        assert data["available"] is True
+        assert data["freshness"] == "unknown"
+        assert data["data_date"] is None
+        assert data["stale"] is None
+        assert data["data_date_status"] == "unverified"
+        assert "未核实" in data["freshness_note"]
+
+    assert ranks["dark_top"] and ranks["activity_top"]
+    assert dark["top"]
 
 
 # ─────────────── 阻断 4: 身份条件（禁用/软删除/服务/空身份） ───────────────
@@ -379,9 +422,9 @@ def test_payload_cannot_forge_freshness_fields(db, set_now):
 
     data = tsr.read_market_scan_ranks(db, user)
 
-    assert data["stale"] is True
-    assert data["data_date"] == "2026-10-30"
-    assert data["snapshot_date"] == "2026-10-30"
+    assert data["stale"] is None
+    assert data["data_date"] is None, "payload.data_date 也不得采信"
+    assert data["snapshot_date"] == "2026-10-30"  # 只有行上的写入日
     assert data["source"] == "market_scan_ranks"
 
 
@@ -400,6 +443,24 @@ def test_dde_render_separates_main_net_from_dark_split(db, set_now):
     assert "暗盘拆单" in text and "非暗盘拆单" in text
     assert "真实暗盘" not in text  # 旧文案把 DDE 说成真实暗盘，已删
     assert text.splitlines()[0].find("暗盘资金 TOP") == -1  # 不许再用「暗盘资金」当主标题
+
+
+def test_tck_column_not_claimed_order_level_exact(db, set_now):
+    """`.tck` 的委托号级精确归属已在项目研究中证伪（时间指针归属 + 被动侧未落盘），
+    渲染不得再把 `tck_dark_net_wan` 说成「委托号级精确暗盘」。"""
+    user = _user(db, "pro")
+    payload = dict(DARK_PAYLOAD)
+    payload["top"] = [{**DARK_PAYLOAD["top"][0], "tck_dark_net_wan": 12.34, "tck_available": True}]
+    _add_dark(db, "2026-11-06", payload)
+
+    data = tsr.read_dark_fund_top(db, user)
+    text = tsr.render_dark_fund_top(data)
+
+    assert "12.34" in text
+    assert "非委托号级" in text  # 显式否认精确归属
+    assert "委托号级精确暗盘" not in text and "委托号级暗盘" not in text
+    assert "已被项目研究证伪" in text
+    assert "近似" in text
 
 
 def test_boards_are_never_merged(db, set_now):
@@ -430,15 +491,16 @@ def test_ranks_pro_user_gets_latest_snapshot_and_audit(db, set_now):
 
     assert data["available"] is True
     assert data["snapshot_date"] == "2026-11-06"
-    assert data["data_date"] == "2026-11-06"
-    assert data["freshness"] == "fresh"
+    assert data["data_date"] is None  # 写入日 ≠ 数据日
+    assert data["data_date_status"] == "unverified"
+    assert data["freshness"] == "unknown"
     assert data["market"] == "CN"
     assert data["source"] == "market_scan_ranks"
     assert data["dark_top_source"] == "ohlc_approx"
     assert data["dark_top"][0]["approximation"] is True
     assert data["new_g_points"][0]["symbol"] == "000001"
     assert data["activity_top"][0]["activity"] == 6.5
-    assert data["stale"] is False
+    assert data["stale"] is None
     assert data["time_source"] == "system_clock_cst"
     assert _hv_count(db, "opportunities") == 1
 
@@ -519,7 +581,8 @@ def test_dark_fund_pro_user_tags_thsdk_dde(db, set_now):
     assert data["caliber"] == "ths"
     assert data["top"][0]["source"] == "thsdk_dde"
     assert "dark_top" not in data
-    assert data["freshness"] == "fresh"
+    assert data["freshness"] == "unknown"
+    assert data["data_date"] is None
     assert _hv_count(db, "dark_fund") == 1
 
 
@@ -538,7 +601,7 @@ def test_dark_fund_missing_snapshot_and_denied(db, set_now):
     assert _hv_count(db, "dark_fund") == 1
 
 
-def test_weekend_reads_friday_snapshot_as_fresh(db, set_now):
+def test_weekend_reads_friday_snapshot_without_fresh_claim(db, set_now):
     user = _user(db, "pro")
     _add_rank(db, date(2026, 11, 6), RANK_PAYLOAD)
     set_now(datetime(2026, 11, 7, 10, 0))  # 周六
@@ -546,10 +609,11 @@ def test_weekend_reads_friday_snapshot_as_fresh(db, set_now):
     data = tsr.read_market_scan_ranks(db, user)
 
     assert data["expected_data_day"] == "2026-11-06"
-    assert data["stale"] is False
-    assert data["freshness"] == "fresh"
-    assert data["age_days"] == 1
-    assert "已过期" not in tsr.render_market_scan_ranks(data)
+    assert data["stale"] is None
+    assert data["freshness"] == "unknown"
+    assert data["age_days"] is None
+    text = tsr.render_market_scan_ranks(data)
+    assert "未核实" in text and "已过期" not in text
 
 
 def test_intraday_trading_day_does_not_expect_today(db, set_now):
@@ -560,42 +624,44 @@ def test_intraday_trading_day_does_not_expect_today(db, set_now):
 
     data = tsr.read_market_scan_ranks(db, user)
     assert data["expected_data_day"] == "2026-11-05"
-    assert data["stale"] is False
+    assert data["stale"] is None
+    assert data["freshness"] == "unknown"
 
 
-def test_stale_snapshot_is_explicitly_dated(db, set_now):
+def test_old_snapshot_not_dated_by_write_day(db, set_now):
+    """两周前的写入日也不能被当成「数据日」, 更不能据此断言过期/新鲜。"""
     user = _user(db, "pro")
     _add_rank(db, date(2026, 10, 30), RANK_PAYLOAD)
     set_now(datetime(2026, 11, 13, 16, 0))
 
     data = tsr.read_market_scan_ranks(db, user)
 
-    assert data["stale"] is True
-    assert data["freshness"] == "stale"
+    assert data["stale"] is None
+    assert data["freshness"] == "unknown"
     assert data["snapshot_date"] == "2026-10-30"
-    assert data["data_date"] == "2026-10-30"
+    assert data["data_date"] is None
+    assert data["age_days"] is None
     assert data["expected_data_day"] == "2026-11-13"
-    assert data["age_days"] == 14
-    assert data["age_trading_days"] == 10
 
     text = tsr.render_market_scan_ranks(data)
     assert "2026-10-30" in text
-    assert "2026-11-13" in text
-    assert "已过期" in text
+    assert "未核实" in text
+    assert "已过期" not in text
 
 
-def test_stale_dark_snapshot_is_explicitly_dated(db, set_now):
+def test_old_dark_snapshot_not_dated_by_write_day(db, set_now):
     user = _user(db, "pro")
     _add_dark(db, "2026-10-30", DARK_PAYLOAD)
     set_now(datetime(2026, 11, 13, 16, 0))
 
     data = tsr.read_dark_fund_top(db, user)
 
-    assert data["stale"] is True
+    assert data["stale"] is None
+    assert data["data_date"] is None
     assert data["snapshot_date"] == "2026-10-30"
     text = tsr.render_dark_fund_top(data)
-    assert "2026-10-30" in text
-    assert "已过期" in text
+    assert "2026-10-30" in text and "未核实" in text
+    assert "已过期" not in text
 
 
 def test_reads_do_not_write_business_tables(db, set_now):
