@@ -2879,6 +2879,8 @@ _ETF_SQL_LABELS = {
     "etf_daily_dates": "日度交易日",
     "etf_daily_minute": "日度分类成交额",
     "etf_daily_net": "日度净申购",
+    "etf_daily_minutes": "日度分钟覆盖",
+    "etf_daily_net_window": "SC8 窗口数据日",
 }
 
 _STATE_CN = {
@@ -3034,11 +3036,14 @@ def render_etf_flow(
 
     day = daily or {}
     dates = day.get("dates") or []
+    sc8_out = day.get("sc8_days_not_in_minutes") or []
     if day.get("state") == "ok" and dates:
         # 2026-11-07 修: 原实现 `sum([v for v in amounts if v is not None])` —— 全 None 时
         # sum([])==0，出口把「一个成交额都没采到」说成「合计 0.00 亿元」，是凭空造数。
         # 另外各指标的样本日期常常不同（成交额来自分钟表、净申购来自 etf_flow_daily），
         # 标题却声称「近 N 日合计」，等于把不同样本当同一窗口比较。
+        # 三审补两条：日度日期只来自分钟表 → 分钟表没更新的 SC8 数据日必须单独列；
+        # 单日只要有几根分钟线就把该日当「完整日」算进合计 → 改为先证覆盖再给合计。
         req = int(day.get("days_requested") or len(dates))
         amt = [
             (d, float(v))
@@ -3051,16 +3056,45 @@ def render_etf_flow(
             if v is not None
         ]
         span = f"{dates[0]}~{dates[-1]}" if len(dates) > 1 else dates[0]
+        stats = day.get("day_stats") or {}
+        min_minutes = int(day.get("min_full_day_minutes") or etf_feed.MIN_FULL_DAY_MINUTES)
+        complete = [d for d in dates if (stats.get(d) or {}).get("complete")]
+        partial = [d for d in dates if d not in complete]
         line = (
             f"- **日度（最近 {len(dates)} 个有数据交易日 / 请求 {req} 日，"
-            f"数据日 {span}）**："
+            f"分钟数据日窗口 {span}）**："
         )
         if amt:
             a_span = f"{amt[0][0]}~{amt[-1][0]}" if len(amt) > 1 else amt[0][0]
-            line += (
-                f"篮子成交额合计 {_num(sum(v for _d, v in amt))} 亿元"
-                f"（{len(amt)}/{len(dates)} 日有成交额，{a_span}）"
-            )
+            full_amt = sum(v for d, v in amt if d in complete)
+            part_amt = sum(v for d, v in amt if d in partial)
+            line += f"篮子成交额 {len(amt)}/{len(dates)} 日有成交额采集（{a_span}）"
+            if complete:
+                line += (
+                    f"；其中 {len(complete)} 日可证全天完整，完整日合计 "
+                    f"{_num(full_amt)} 亿元（{', '.join(complete)}）"
+                )
+            else:
+                line += "；**无一日可证全天完整 → 不给日合计**"
+            if partial:
+                def _day_brief(d: str) -> str:
+                    st = stats.get(d) or {}
+                    if not st.get("stats_available"):
+                        return f"{d} 无覆盖统计"
+                    return (
+                        f"{d} 仅 {int(st.get('minutes') or 0)} 分钟/"
+                        f"{int(st.get('etfs') or 0)} 只"
+                    )
+
+                detail = "；".join(_day_brief(d) for d in partial[:3])
+                if len(partial) > 3:
+                    detail += f" 等 {len(partial)} 日"
+                line += (
+                    f"；其余 {len(partial)} 日仅部分采集（{detail}），"
+                    f"已采集部分 {_num(part_amt)} 亿元 —— 完整性未确认，"
+                    f"既非全天成交额也非有效样本，不可并入完整日合计"
+                    f"（判完整需 ≥{min_minutes} 分钟且每分钟 ≥{int(day.get('min_etfs_for_complete') or etf_feed.min_etfs_for_complete())} 只）"
+                )
         else:
             line += f"篮子成交额未取到（{len(dates)} 个交易日无一有成交额数据）"
         if net_pairs:
@@ -3078,8 +3112,28 @@ def render_etf_flow(
         if amt and net_pairs and (len(amt) != len(net_pairs) or amt[0][0] != net_pairs[0][0]):
             line += "；⚠️ 两项的有效日期不同，不可当作同一窗口的「成交额 vs 净申购」对比"
         sections.append(line)
+        if sc8_out:
+            head = "、".join(
+                f"{x.get('date')} 净申购 {_num(x.get('net_sub_yi'))} 亿元"
+                for x in sc8_out[:5]
+            )
+            if len(sc8_out) > 5:
+                head += f" 等 {len(sc8_out)} 日"
+            sections.append(
+                f"- **SC8 独立数据日**：市场级 SC8 另有 {len(sc8_out)} 个数据日"
+                f"**不在分钟窗口（{span}）内**，已单独列出、未计入上列任何日合计：{head}"
+                f"；分钟表对这一天没有数据，全天完整性无法确认（未采集还是非交易日亦未确认）。"
+            )
     elif day and not any("日度交易日" in m for m in miss):
-        miss.append(f"日度成交额：未取到（{day.get('note') or '无落库数据'}）")
+        note = f"日度成交额：未取到（{day.get('note') or '无落库数据'}）"
+        if sc8_out:
+            latest_sc8 = sc8_out[-1]
+            note += (
+                f"；分钟表无数据，但 SC8 有 {len(sc8_out)} 个数据日（最新 "
+                f"{latest_sc8.get('date')} 净申购 {_num(latest_sc8.get('net_sub_yi'))} 亿元）"
+                f"——仅市场级净申购，篮子成交额缺失，不可由 SC8 反推"
+            )
+        miss.append(note)
 
     sections.append(
         "- **口径提醒**：SC8 是**全市场** ETF 口径，不等于 20 只篮子的净申购，"

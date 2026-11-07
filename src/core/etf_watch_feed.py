@@ -36,6 +36,11 @@ BASELINE_DAYS = 20
 #: 单日分钟上限（含 11:30 / 13:00 边界与盘后残留行；SQL 的 LIMIT 按它取上界）。
 MAX_MINUTES_PER_DAY = 1440
 
+#: 一个交易日「可证完整」的分钟下限（A 股连续竞价 240 根分钟线，留缺口容忍）。
+#: 低于它就只承认「已采集部分」——决不从一根/几根分钟线推断全天成交额。
+MIN_FULL_DAY_MINUTES = 200
+
+
 
 def min_etfs_for_complete(expected: int | None = None) -> int:
     """一个分钟「可用」的标的数门槛：**≥80%，不是全部**（20 只篮子 → 16 只）。
@@ -87,6 +92,22 @@ SQL: dict[str, str] = {
     "etf_daily_net": (
         "SELECT trade_date, scale_yi AS etf_scale, net_sub_yi AS etf_net_sub "
         "FROM etf_flow_daily WHERE trade_date IN ({ph}) LIMIT 400"
+    ),
+    # 每日**分钟/标的覆盖统计**：判「可证完整」的唯一依据。只按 (日, 分钟) 聚合一遍，
+    # 再数每日子分钟数与过闸门分钟数 —— 一根分钟线也会算成 1 分钟、1 只，不会被当成整日。
+    "etf_daily_minutes": (
+        "SELECT trade_date, COUNT(*) AS minutes, "
+        "SUM(CASE WHEN etfs_this_minute >= :gate THEN 1 ELSE 0 END) AS covered_minutes, "
+        "MAX(etfs_this_minute) AS max_etfs, MIN(etfs_this_minute) AS min_etfs "
+        "FROM (SELECT trade_date, minute, COUNT(DISTINCT etf_code) AS etfs_this_minute "
+        "FROM etf_minute_flow WHERE trade_date IN ({ph}) "
+        "GROUP BY trade_date, minute) s GROUP BY trade_date LIMIT 400"
+    ),
+    # SC8 在同一窗口内的**全部**数据日（含分钟表没有更新的那些日）。锚点是分钟窗口起点，
+    # 往新方向不设上界：SC8 比分钟表新一天时，那一天必须被看见，不能被静默丢掉。
+    "etf_daily_net_window": (
+        "SELECT trade_date, scale_yi AS etf_scale, net_sub_yi AS etf_net_sub "
+        "FROM etf_flow_daily WHERE trade_date >= :lo ORDER BY trade_date DESC LIMIT 400"
     ),
 }
 
@@ -411,18 +432,48 @@ def support_payload(run: Runner, days: int) -> dict[str, Any]:
 
 # ── daily（日度资金全景） ────────────────────────────────────────────────
 
+def _sc8_day(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "date": r["trade_date"],
+        "net_sub_yi": round_or_none(r["etf_net_sub"]),
+        "scale_yi": round_or_none(r["etf_scale"]),
+    }
+
+
 def daily_payload(run: Runner, days: int) -> dict[str, Any]:
+    """日度资金全景（Web API 列契约不变：所有数组都对齐 `dates`）。
+
+    两条独立事实在 2026-11-07 二审被钉死，这里各给一列，绝不互相覆盖：
+    1. `dates` 仍是**分钟表**的数据日（前端按列对齐，不能塞 SC8 独有的日期）；
+       分钟表没更新的 SC8 数据日单独进 `sc8_days_not_in_minutes`，数值原样保留。
+    2. 每日成交额是否**全天完整**要看分钟/标的覆盖：一根分钟线、1 只 ETF 只能算
+       「已采集部分」。`day_stats`/`complete_days`/`partial_days` 是判定依据，
+       渲染层据此决定能不能给「完整日合计」。
+    """
     dates = sorted(
         r["trade_date"] for r in run("etf_daily_dates", {"n": days})
     )
     if not dates:
-        return {"state": "no_data", "note": "尚无分钟数据落库。", "source": "tdx_tq"}
+        # 分钟表空 ≠ SC8 空。SC8 有更新日时要如实带出来，不能因为 minutes 为空就丢。
+        sc8_only = [_sc8_day(r) for r in run("etf_support", {"n": int(days)})]
+        sc8_only.reverse()
+        return {
+            "state": "no_data",
+            "note": "尚无分钟数据落库。",
+            "dates": [],
+            "days_requested": int(days),
+            "sc8_days_not_in_minutes": sc8_only,
+            "minute_window": None,
+            "source": "tdx_tq",
+        }
 
     ph, in_params = in_clause("d", dates)
     rows = run("etf_daily_minute", in_params, {"ph": ph})
     cat_of = {c: cat for c, _n, cat in ew.ETF_BASKET}
+    gate = min_etfs_for_complete()
     by_cat: dict[str, dict[str, float]] = {cat: {} for cat in ew.categories()}
     total: dict[str, float] = {}
+    etfs_of_day: dict[str, set[str]] = {}
     for r in rows:
         cat = cat_of.get(r["etf_code"])
         if not cat:
@@ -430,16 +481,55 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
         yi = float(r["amount_wan"] or 0.0) / 1e4
         by_cat[cat][r["trade_date"]] = by_cat[cat].get(r["trade_date"], 0.0) + yi
         total[r["trade_date"]] = total.get(r["trade_date"], 0.0) + yi
+        etfs_of_day.setdefault(r["trade_date"], set()).add(r["etf_code"])
 
     net = {
         r["trade_date"]: r
         for r in run("etf_daily_net", in_params, {"ph": ph})
     }
 
+    # 覆盖统计（真分钟数 / 过闸门分钟数）：完整性的唯一证据。
+    stat_rows = run("etf_daily_minutes", {**in_params, "gate": gate}, {"ph": ph})
+    raw_stats = {r["trade_date"]: r for r in stat_rows}
+
+    day_stats: dict[str, dict[str, Any]] = {}
+    for d in dates:
+        s = raw_stats.get(d) or {}
+        minutes = int(s.get("minutes") or 0)
+        covered = int(s.get("covered_minutes") or 0)
+        etfs = len(etfs_of_day.get(d, ()))
+        complete = (
+            minutes >= MIN_FULL_DAY_MINUTES
+            and covered == minutes
+            and etfs >= gate
+        )
+        day_stats[d] = {
+            "minutes": minutes,
+            "covered_minutes": covered,
+            "etfs": etfs,
+            "max_etfs_per_minute": int(s.get("max_etfs") or 0),
+            "min_etfs_per_minute": int(s.get("min_etfs") or 0),
+            # 没有统计行 = 没证据，只能算未确认（决不当完整）
+            "stats_available": d in raw_stats,
+            "complete": bool(complete),
+        }
+
+    # SC8 在窗口内但分钟表没有的日期：原值带出，标注「未纳入日度窗口」。
+    sc8_window = run("etf_daily_net_window", {"lo": dates[0]})
+    minute_set = set(dates)
+    sc8_only = sorted(
+        (_sc8_day(r) for r in sc8_window if r["trade_date"] not in minute_set),
+        key=lambda x: x["date"],
+    )
+
+    complete_days = [d for d in dates if day_stats[d]["complete"]]
+    partial_days = [d for d in dates if not day_stats[d]["complete"]]
+
     return {
         "state": "ok",
         "dates": dates,
         "days_requested": int(days),
+        "minute_window": {"from": dates[0], "to": dates[-1], "days": len(dates)},
         "total_amount_yi": [round_or_none(total.get(d)) for d in dates],
         "net_sub_yi": [
             round_or_none(net[d]["etf_net_sub"]) if d in net else None for d in dates
@@ -452,8 +542,17 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
             for cat, m in by_cat.items()
             if m
         ],
+        "day_stats": day_stats,
+        "complete_days": complete_days,
+        "partial_days": partial_days,
+        "min_full_day_minutes": MIN_FULL_DAY_MINUTES,
+        "min_etfs_for_complete": gate,
+        "sc8_days_not_in_minutes": sc8_only,
         "single_share_supported": ew.single_share_source is not None,
-        "note": "成交额为 20 只 ETF 合计（亿元）；净申购为市场级 SC8 口径，只到全市场一层。",
+        "note": (
+            "成交额为 20 只 ETF 合计（亿元）；净申购为市场级 SC8 口径，只到全市场一层。"
+            "日成交额仅在当日分钟/标的覆盖可证全天完整时才算完整日，否则只报已采集部分。"
+        ),
         "source": "tdx_tq",
     }
 
@@ -462,6 +561,7 @@ __all__ = [
     "BASELINE_DAYS",
     "COVERAGE_MIN",
     "MAX_MINUTES_PER_DAY",
+    "MIN_FULL_DAY_MINUTES",
     "SQL",
     "basket_payload",
     "baseline_cum",

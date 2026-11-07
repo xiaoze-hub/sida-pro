@@ -709,7 +709,7 @@ def test_daily_partial_samples_labeled_separately_and_not_compared():
         },
     )
     assert "最近 3 个有数据交易日 / 请求 5 日" in out, "请求 5 日只有 3 日数据，不能声称近 5 日"
-    assert "数据日 20261103~20261105" in out
+    assert "分钟数据日窗口 20261103~20261105" in out, "必须显式标注分钟数据日窗口（不是「近 5 日」）"
     assert "2/3 日有成交额" in out and "4.00 亿元" in out
     assert "1/3 日有净申购" in out and "120.00 亿元" in out
     assert "不可当作同一窗口" in out
@@ -762,3 +762,151 @@ def test_real_db_different_sample_dates_flagged(flow_db):
     assert "2/2 日有成交额" in out
     assert "1/2 日有净申购" in out and "20261104" in out
     assert "不可当作同一窗口" in out
+
+
+# ── 7. 三审阻断：SC8 更新日被分钟表截断 + 一根分钟线冒充完整日（2026-11-07） ─────
+#
+# 这两条都只影响**参谋出口**，不改 Web API 日度列契约（`dates`/`total_amount_yi` 等
+# 全部照旧按分钟数据日对齐）；证据全走真 SQLite 表 + 真 SQL。
+
+from datetime import timedelta  # noqa: E402
+
+_FULL_DAY_MINUTES = [
+    (datetime(2026, 11, 4, 9, 31) + timedelta(minutes=i)).strftime("%H%M")
+    for i in range(120)
+] + [
+    (datetime(2026, 11, 4, 13, 1) + timedelta(minutes=i)).strftime("%H%M")
+    for i in range(120)
+]
+
+
+def _full_day(conn, day: str, wan_each: float) -> None:
+    """写一个真·全天：240 个分钟 × 20 只（覆盖可证完整）。"""
+    rows = [
+        {"d": day, "m": m, "c": code, "a": wan_each}
+        for m in _FULL_DAY_MINUTES
+        for code in _BASKET
+    ]
+    conn.execute(
+        text(
+            "INSERT INTO etf_minute_flow (trade_date, minute, etf_code, amount_wan, volume) "
+            "VALUES (:d, :m, :c, :a, 0)"
+        ),
+        rows,
+    )
+
+
+def test_sc8_newer_day_is_listed_not_silently_dropped(flow_db):
+    """分钟表只到 20261104，SC8 已有 20261105（88 亿）：这一天必须被看见。
+
+    RED 依据：原 `daily_payload` 的日期只来自 `etf_minute_flow`，SC8 多出的一天
+    既不在 dates 也不在任何提示里，出口等于「这一天不存在」。
+    """
+    _day(flow_db, "20261104", "0930", 20, 1_000.0)
+    _ins_flow(flow_db, "20261104", 32_000.0, 100.0)
+    _ins_flow(flow_db, "20261105", 32_200.0, 88.0)
+    flow_db.commit()
+
+    day = feed.daily_payload(_sql_runner(flow_db), 6)
+    assert day["dates"] == ["20261104"], "Web API 日度列仍按分钟数据日对齐，不许塞 SC8 独有日期"
+    assert day["minute_window"] == {"from": "20261104", "to": "20261104", "days": 1}
+    assert [
+        (x["date"], x["net_sub_yi"]) for x in day["sc8_days_not_in_minutes"]
+    ] == [("20261105", 88.0)], "SC8 更新日必须原值带出，不许丢也不许改"
+
+    out = tc.render_etf_flow(
+        as_of="20261104", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+    )
+    assert "分钟数据日窗口 20261104" in out
+    assert "SC8 独立数据日" in out
+    assert "20261105" in out and "88.00 亿元" in out
+    assert "未计入" in out
+    assert "188.00" not in out, "SC8 独立日不得被并入日度净申购合计"
+
+
+def test_no_minute_days_still_surfaces_sc8_days(flow_db):
+    """分钟表整库为空但 SC8 有落库：日度说「未取到」，同时报出 SC8 的数据日与数值。"""
+    _ins_flow(flow_db, "20261105", 32_000.0, 88.0)
+    flow_db.commit()
+
+    day = feed.daily_payload(_sql_runner(flow_db), 5)
+    assert day["state"] == "no_data"
+    assert [(x["date"], x["net_sub_yi"]) for x in day["sc8_days_not_in_minutes"]] == [
+        ("20261105", 88.0)
+    ]
+    out = tc.render_etf_flow(
+        as_of="20261105", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+    )
+    assert "日度成交额：未取到" in out
+    assert "20261105 净申购 88.00 亿元" in out
+    assert "不可由 SC8 反推" in out
+
+
+def test_single_etf_single_minute_day_is_partial_not_complete(flow_db):
+    """1 只 ETF × 1 根分钟线的日子：原实现直接把该日成交额当完整日计入合计。
+
+    RED 依据：`etf_daily_dates` 只问「这一天有没有行」，`total_amount_yi` 于是把
+    0.2 亿（甚至 1 万）当成该日全天成交额。现在必须先证覆盖：240 分钟的 20 只才算完整。
+    """
+    _full_day(flow_db, "20261104", 100.0)              # 240 分钟 × 20 只 × 100 万 = 48 亿
+    _ins_min(flow_db, "20261105", "0930", _BASKET[0], 10_000.0)   # 1 只 × 1 分钟 = 1 亿
+    _ins_flow(flow_db, "20261105", 32_000.0, 88.0)
+    flow_db.commit()
+
+    day = feed.daily_payload(_sql_runner(flow_db), 6)
+    assert day["dates"] == ["20261104", "20261105"]
+    assert day["complete_days"] == ["20261104"]
+    assert day["partial_days"] == ["20261105"]
+    st = day["day_stats"]["20261105"]
+    assert (st["minutes"], st["etfs"], st["complete"]) == (1, 1, False)
+    full_st = day["day_stats"]["20261104"]
+    assert full_st["minutes"] == 240 and full_st["etfs"] == 20 and full_st["complete"] is True
+    # 数值一个都不能丢：两天各自的金额都还在列里
+    assert day["total_amount_yi"] == [pytest.approx(48.0, abs=0.01), pytest.approx(1.0, abs=0.01)]
+
+    out = tc.render_etf_flow(
+        as_of="20261105", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+    )
+    assert "完整日合计 48.00 亿元（20261104）" in out
+    assert "20261105 仅 1 分钟/1 只" in out
+    assert "已采集部分 1.00 亿元" in out
+    assert "完整性未确认" in out and "不可并入完整日合计" in out
+    assert "有效样本" in out          # 明写「非有效样本」
+    assert "49.00" not in out, "残缺日不许并进合计"
+
+
+def test_all_partial_days_give_no_daily_total(flow_db):
+    """没有一日可证完整：出口不得给「日合计」，只能报已采集部分。"""
+    for d, wan in (("20261104", 10_000.0), ("20261105", 20_000.0)):
+        _ins_min(flow_db, d, "0930", _BASKET[0], wan)
+    flow_db.commit()
+
+    day = feed.daily_payload(_sql_runner(flow_db), 6)
+    assert day["complete_days"] == [] and day["partial_days"] == ["20261104", "20261105"]
+    out = tc.render_etf_flow(
+        as_of="20261105", source="etf_minute_flow",
+        intraday={"state": "no_data"}, support={"state": "no_data"}, daily=day,
+    )
+    assert "无一日可证全天完整 → 不给日合计" in out
+    assert re.search(r"完整日合计 \d", out) is None, "无完整日时不许出现任何「完整日合计 N 亿元」"
+    assert "2/2 日有成交额采集" in out
+    assert "已采集部分 3.00 亿元" in out
+
+
+def test_daily_minutes_sql_counts_per_day_minutes_and_gate(flow_db):
+    """覆盖统计语句本身：分钟数 = 该日不同分钟数，covered = 每分钟 ≥16 只的分钟数。"""
+    _full_day(flow_db, "20261104", 100.0)
+    _day(flow_db, "20261104", "1501", 3, 100.0)   # 3 只的残留分钟：不算过闸门
+    flow_db.commit()
+
+    rows = tc._read(
+        flow_db, "etf_daily_minutes",
+        {"d0": "20261104", "gate": feed.min_etfs_for_complete()},
+        {"ph": ":d0"},
+    )
+    assert len(rows) == 1
+    assert rows[0]["minutes"] == 241
+    assert rows[0]["covered_minutes"] == 240
