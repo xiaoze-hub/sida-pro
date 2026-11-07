@@ -16,6 +16,17 @@ from src.harness import pipeline_market as _mkt
 MAX_WATCHLIST = 8
 
 
+# 上下文透传口径（2026-11-07 修缺口）：`chat.py` 对两条管线是同一次调用，会递
+# `context` / `fact_pack` / `evidence_sink` / `view_state` / `db` / `user`。路由**不许**
+# 因为分支不同就静默丢参数 —— 全市场分支此前只转 `watchlist`/`context`，另外两个
+# 参数掉了，于是「用真数据写出的全市场结论」对外宣称零证据、委派时也不受父 run
+# 冻结时点约束。现在按各分支**真的会消费**的集合分发：
+#   - 两条都消费：`context` / `fact_pack` / `evidence_sink` / `trace` / `market`。
+#   - 只有符号管线消费：`db` / `user`（`propose_levels` 写关键位）与 `view_state`
+#     （单标的页面锚点）。`db`/`user` 在全市场分支由 `resolve_watchlist` 消费完，
+#     不再下传；`view_state` 在全市场分支没有那一个标的，下传就是死形参。
+
+
 def is_market_scope(recipe) -> bool:
     """这份配方是不是全市场/无标的口径。"""
     return (getattr(recipe, "scope", "symbol") or "symbol").lower() == "market"
@@ -61,6 +72,7 @@ async def answer(ai_client, recipe, question: str, bound, executor, *,
         return await _mkt.answer_market(
             ai_client, recipe, executor, question, market=market, trace=trace,
             watchlist=resolve_watchlist(db, user), context=context,
+            fact_pack=fact_pack, evidence_sink=evidence_sink,
         )
     return await _sym.answer(
         ai_client, recipe, question, bound, executor, market=market, trace=trace,
@@ -80,6 +92,7 @@ async def answer_stream(ai_client, recipe, question: str, bound, executor, *,
         async for ev in _mkt.answer_market_stream(
             ai_client, recipe, executor, question, market=market, trace=trace,
             watchlist=resolve_watchlist(db, user), context=context,
+            fact_pack=fact_pack, evidence_sink=evidence_sink,
         ):
             yield ev
         return

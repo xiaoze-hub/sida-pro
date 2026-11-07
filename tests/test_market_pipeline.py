@@ -6,7 +6,9 @@
   3. handler-only / 参数填不上的工具一律 fail-closed（不盲调，也不悄悄复活隐藏工具）；
   4. 全部取数失败 → 返回 None，调用方回落多轮 loop（管线挂了不许变成没答案）；
   5. 证据裁剪（单工具 2500 / 合计 12000）；
-  6. 流式作答先报进度、最后 done；全失败时**不产出 done**（回落的信号）。
+  6. 流式作答先报进度、最后 done；全失败时**不产出 done**（回落的信号）；
+  7. 上下文透传：证据旁路（显式 sink + ContextVar sink）与事实包冻结时点必须
+     真的进到出站载荷与提示词里，回落路径一条证据都不许留（假证据比没证据更坏）。
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ from src.harness.pipeline_market import (
     compose_market_prompt,
     run_market_pipeline,
 )
+from src.core.evidence_pack import CURRENT_SINK
 from src.harness.recipes import Recipe, _parse, list_recipes, load_recipes, match_recipe
 
 
@@ -36,6 +39,9 @@ class _Trace:
 
     def __init__(self) -> None:
         self.steps: list[dict] = []
+        # 证据对象的 evidence_id = f"{run_id}:{seq}"，轨迹句柄必须带 run_id，
+        # 否则旁路会退化成 "adhoc"，出站载荷无法回到本轮 run（审计断链）。
+        self.run_id = "run-t-market"
 
     def step(self, tool, args=None, *, ok=True, error=None, result=None, elapsed_ms=None):
         self.steps.append({"tool": str(tool), "args": dict(args or {}), "ok": bool(ok),
@@ -379,3 +385,152 @@ def test_market_recipe_plans_are_symbol_safe():
     assert {s.tool for s in no_wl if not s.skip} == {
         "scan_auction_anomaly", "get_auction_data", "get_hot_stocks",
     }
+
+
+# ------------------- 8. 上下文透传：证据旁路（显式 sink / ContextVar）+ 事实包
+
+# 证据旁路是**出站载荷**：chat.py 每轮 `_EV_SINK.set([])`，SSE 的 done 里
+# `_attach_evidence(<sink>)` 原样带出去。符号管线一直在写这个 sink，
+# 全市场管线此前一条都不写 —— 于是「用真数据写出的结论」对外宣称「零证据」，
+# 治理页/前端拿到的是空证据，等于把已消费的数据说成没有消费过。
+_FPACK = {
+    "pack_id": "p-test",
+    "as_of": "2026-11-07T09:15:00",
+    "source": "SIDA-Pro FactPack Engine",
+    "symbols": {"600111": {"price": 12.34, "pct": 1.5}},
+    "missing": [],
+}
+
+
+async def test_answer_market_emits_evidence_into_explicit_sink():
+    recipe = _recipe(["get_hot_stocks", "get_sentiment_cycle"])
+    ex = _Exec(out={"get_hot_stocks": "涨停 42 家，炸板率 21%", "get_sentiment_cycle": "情绪冰点"})
+    trace = _Trace()
+    sink: list = []
+    ai = _SyncAI("结论：涨停 42 家，炸板率 21%。")
+
+    text = await answer_market(ai, recipe, ex, "今天怎么看", trace=trace, evidence_sink=sink)
+    assert text and "涨停 42 家" in text
+    # 一条成功工具 = 一条证据；顺序 == 配方顺序（审计要能对上第 N 个工具）
+    assert [r["tool"] for r in sink] == ["get_hot_stocks", "get_sentiment_cycle"]
+    assert all(isinstance(r, dict) for r in sink), "sink 里必须是可序列化 dict（要进 SSE done）"
+    assert [r["evidence_id"] for r in sink] == [f"{trace.run_id}:1", f"{trace.run_id}:2"]
+    assert all(r["run_id"] == trace.run_id and r["status"] == "ok" for r in sink)
+    # digest 必须来自真实工具输出，不许是占位串
+    assert sink[0]["digest"].startswith("涨停 42 家")
+
+
+async def test_answer_market_emits_evidence_via_contextvar_sink():
+    """生产路径：chat.py 不传 evidence_sink，只 set CURRENT_SINK。"""
+    recipe = _recipe(["get_hot_stocks"])
+    sink: list = []
+    token = CURRENT_SINK.set(sink)
+    try:
+        text = await answer_market(_SyncAI("结论：情绪冰点。"), recipe, _Exec(), "今天怎么看")
+    finally:
+        CURRENT_SINK.reset(token)
+
+    assert text
+    assert [r["tool"] for r in sink] == ["get_hot_stocks"]
+    assert sink[0]["digest"].startswith("证据正文"), "digest 必须抄工具原文"
+
+
+async def test_market_evidence_never_leaks_across_requests():
+    """两个请求各自的 sink 互不串味；新上下文（无 sink）绝不继承上一轮。"""
+    import asyncio as _asyncio
+
+    recipe = _recipe(["get_hot_stocks"])
+    a: list = []
+    b: list = []
+    await answer_market(_SyncAI(), recipe, _Exec(), "复盘", evidence_sink=a)
+    await answer_market(_SyncAI(), recipe, _Exec(), "复盘", evidence_sink=b)
+
+    assert len(a) == 1 and len(b) == 1
+    assert a[0] is not b[0] and a[0]["evidence_id"] == b[0]["evidence_id"]
+
+    # 没有显式 sink 也没有 ContextVar sink = no-op（不许抛，也不许落到全局）
+    assert await answer_market(_SyncAI(), recipe, _Exec(), "复盘") is not None
+
+    loop = _asyncio.get_running_loop()
+    assert await loop.run_in_executor(None, CURRENT_SINK.get) is None, \
+        "工作线程/新请求上下文不该看到别的请求的 sink"
+
+
+async def test_answer_market_fallback_emits_no_evidence():
+    """全部取数失败 → 回落多轮 loop，那些数据没被用来写答案，一条证据都不许发。"""
+    recipe = _recipe(["get_hot_stocks", "get_sentiment_cycle"])
+    ex = _Exec(out={"get_hot_stocks": RuntimeError("down"), "get_sentiment_cycle": ""})
+    sink: list = []
+
+    assert await answer_market(_SyncAI(), recipe, ex, "今天怎么看",
+                               trace=_Trace(), evidence_sink=sink) is None
+    assert sink == []
+
+
+async def test_answer_market_stream_emits_evidence_before_done():
+    recipe = _recipe(["get_hot_stocks", "get_sentiment_cycle"])
+    ex = _Exec(out={"get_hot_stocks": "涨停 42 家", "get_sentiment_cycle": "情绪冰点"})
+    trace = _Trace()
+    sink: list = []
+    ai = _StreamAI("结论：涨停 42 家。")
+
+    kinds: list[str] = []
+    at_done: int | None = None
+    async for k, _v in answer_market_stream(ai, recipe, ex, "今天怎么看",
+                                            trace=trace, evidence_sink=sink):
+        kinds.append(k)
+        if k == "done":
+            at_done = len(sink)
+
+    assert kinds[0] == "stage" and kinds[-1] == "done"
+    assert at_done == 2, f"证据必须在 done 之前落盘（SSE done 读的就是它），实际 {at_done}"
+    assert [r["tool"] for r in sink] == ["get_hot_stocks", "get_sentiment_cycle"]
+
+
+async def test_answer_market_stream_fallback_emits_no_evidence():
+    recipe = _recipe(["get_hot_stocks"])
+    ex = _Exec(out={"get_hot_stocks": RuntimeError("down")})
+    sink: list = []
+
+    events = [ev async for ev in answer_market_stream(_StreamAI(), recipe, ex, "复盘",
+                                                      evidence_sink=sink)]
+    assert all(k != "done" for k, _ in events), "全失败不产出 done（回落信号）"
+    assert sink == []
+
+
+async def test_fact_pack_freeze_anchor_reaches_market_prompt():
+    """委派场景父 run 冻结的时点是硬约束：晚于该时点的数据不许引用。"""
+    ai = _SyncAI("结论：情绪冰点。")
+    await answer_market(ai, _recipe(["get_hot_stocks"]), _Exec(), "复盘今天", fact_pack=_FPACK)
+
+    system = ai.calls[0][0]["content"]
+    assert "本轮事实包（冻结于 2026-11-07T09:15:00，来源 SIDA-Pro FactPack Engine）" in system
+    assert "不得引用晚于该时点" in system
+    # 只消费冻结锚点，不把父 run 的标的快照塞进全市场结论（那会变成假证据）
+    assert "12.34" not in system and "600111" not in system
+
+
+async def test_fact_pack_reaches_market_stream_prompt():
+    ai = _StreamAI("结论：情绪冰点。")
+    async for _ev in answer_market_stream(ai, _recipe(["get_hot_stocks"]), _Exec(),
+                                          "复盘今天", fact_pack=_FPACK):
+        pass
+    assert "冻结于 2026-11-07T09:15:00" in ai.calls[0][0]["content"]
+
+
+async def test_market_prompt_has_no_fact_block_without_pack():
+    """没事实包（普通对话）= 一字不变，不许凭空多出一段。"""
+    ai = _SyncAI("结论：情绪冰点。")
+    await answer_market(ai, _recipe(["get_hot_stocks"]), _Exec(), "复盘今天")
+    assert "事实包" not in ai.calls[0][0]["content"]
+
+
+def test_market_entrypoints_take_no_dead_context_params():
+    """`view_state` / `db` / `user` 不进全市场入口：前者是单标的页面锚点，
+    后两者已在路由层由 `resolve_watchlist` 消费 —— 只加形参不接线是假修复。"""
+    import inspect
+
+    for fn in (answer_market, answer_market_stream):
+        params = set(inspect.signature(fn).parameters)
+        assert {"fact_pack", "evidence_sink"} <= params, fn.__name__
+        assert not ({"view_state", "db", "user"} & params), fn.__name__
