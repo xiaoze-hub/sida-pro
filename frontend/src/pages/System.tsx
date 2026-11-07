@@ -1,7 +1,8 @@
 import PageHeader from '@/components/PageHeader'
 import { SystemStatusPanel } from '@/components/system/SystemStatusPanel'
 import { Suspense } from 'react'
-import { Bot, Database, ListChecks, Loader2, ShieldAlert } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Bot, Database, KeyRound, ListChecks, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
@@ -19,7 +20,7 @@ const DataSourcesPage = lazyWithRetry(() => import('@/pages/DataSources'), 'data
 const ErrorLogPage = lazyWithRetry(() => import('@/pages/ErrorLog'), 'error-log-page')
 const JobPanelPage = lazyWithRetry(() => import('@/components/JobPanel').then(m => ({ default: m.JobPanel })), 'job-panel-page')
 
-const SYSTEM_TABS: TabDef[] = [
+export const SYSTEM_TABS: TabDef[] = [
   { key: 'status', label: '系统状态', icon: ListChecks, ownerOnly: true, render: () => <div className="card-surface rounded-xl bg-card p-4"><SystemStatusPanel compact /></div> },
   {
     key: 'agents',
@@ -68,6 +69,33 @@ const SYSTEM_TABS: TabDef[] = [
   },
 ]
 
+/**
+ * 相关入口(2026-11-07): 「系统」只管 Agent/数据源/任务/错误, 「设置」管账号与偏好,
+ * 「管理后台」管用户与发放类 Key。三者互不重叠, 但此前互不互链, 只能从侧栏绕。
+ * 这里补两条跨页链接(纯导航, 不动任何 Tab 的权限/默认落点/旧地址), 过滤口径同 navigation.ts。
+ */
+export function SystemRelatedEntries({ myPerms, isOwner }: { myPerms?: Set<string> | null; isOwner?: () => boolean }) {
+  const canAdmin = (!isOwner || isOwner()) && (!myPerms || myPerms.has('manage_users'))
+  const link = 'inline-flex min-w-0 items-center gap-1.5 text-[12px] font-medium text-primary hover:underline'
+  return (
+    <nav aria-label="相关入口" className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+      <span className="text-[12px] text-muted-foreground">相关入口</span>
+      <Link to="/settings" className={link}>
+        <KeyRound className="h-3.5 w-3.5 shrink-0" />
+        设置
+        <span className="font-normal text-muted-foreground">数据源凭证(接口 Key) / AI 服务 / 通知 / 账户偏好</span>
+      </Link>
+      {canAdmin && (
+        <Link to="/admin" className={link}>
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+          管理后台
+          <span className="font-normal text-muted-foreground">用户 / 邀请码 / API Key 发放 / 用量</span>
+        </Link>
+      )}
+    </nav>
+  )
+}
+
 function TabLoading() {
   return (
     <div className="flex h-[40vh] items-center justify-center text-[12px] text-muted-foreground">
@@ -79,7 +107,11 @@ function TabLoading() {
 export default function SystemPage({ myPerms, isOwner }: { myPerms?: Set<string> | null; isOwner?: () => boolean }) {
   return (
     <div className="page-container">
-      <PageHeader title="系统与数据" description="管理分析任务、数据来源与运行状态" />
+      <PageHeader
+        title="系统与数据"
+        description="管理分析任务、数据来源与运行状态"
+        metadata={<SystemRelatedEntries myPerms={myPerms} isOwner={isOwner} />}
+      />
     <TabbedPage tabs={SYSTEM_TABS} defaultTab="agents" myPerms={myPerms} isOwner={isOwner} />
     </div>
   )
