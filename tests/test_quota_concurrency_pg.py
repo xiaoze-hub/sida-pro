@@ -49,8 +49,17 @@ pytestmark = pytest.mark.skipif(
 LIMIT = 3  # MEMBER_ALERT_MAX 默认值
 
 
+def _validate_admin_url(url: str) -> None:
+    parsed = make_url(url)
+    if (parsed.get_backend_name() != "postgresql"
+            or parsed.host not in {"127.0.0.1", "::1", "localhost"}
+            or parsed.database != "postgres"):
+        raise ValueError("并发破坏性测试只允许本机 postgres 维护库")
+
+
 def _admin_engine():
     assert ADMIN_URL
+    _validate_admin_url(ADMIN_URL)
     return create_engine(ADMIN_URL, isolation_level="AUTOCOMMIT", future=True)
 
 
@@ -62,26 +71,38 @@ def pg():
     pwd = f"pw_{suffix}"
     dbname = f"qt_{suffix}"
     admin = _admin_engine()
-    with admin.connect() as c:
-        c.execute(text(f'CREATE ROLE "{role}" LOGIN PASSWORD \'{pwd}\''))
-        c.execute(text(f'CREATE DATABASE "{dbname}" OWNER "{role}"'))
-    url = make_url(ADMIN_URL).set(username=role, password=pwd, database=dbname)
-    engine = create_engine(url, future=True, pool_size=5, max_overflow=5)
+    engine = None
+    role_created = False
+    db_created = False
     try:
+        with admin.connect() as c:
+            c.execute(text(f'CREATE ROLE "{role}" LOGIN PASSWORD \'{pwd}\''))
+            role_created = True
+            c.execute(text(f'CREATE DATABASE "{dbname}" OWNER "{role}"'))
+            db_created = True
+        url = make_url(ADMIN_URL).set(username=role, password=pwd, database=dbname)
+        engine = create_engine(url, future=True, pool_size=5, max_overflow=5)
+        with engine.connect() as conn:
+            actual = conn.execute(text("SELECT current_database(), current_user")).one()
+            if tuple(actual) != (dbname, role):
+                raise RuntimeError("临时数据库身份不匹配")
         Base.metadata.create_all(engine)
         yield engine, dbname, role
     finally:
-        engine.dispose()
+        if engine is not None:
+            engine.dispose()
         with admin.connect() as c:
-            c.execute(
-                text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :d AND pid <> pg_backend_pid()"
-                ),
-                {"d": dbname},
-            )
-            c.execute(text(f'DROP DATABASE IF EXISTS "{dbname}"'))
-            c.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+            if db_created:
+                c.execute(
+                    text(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        "WHERE datname = :d AND pid <> pg_backend_pid()"
+                    ),
+                    {"d": dbname},
+                )
+                c.execute(text(f'DROP DATABASE IF EXISTS "{dbname}"'))
+            if role_created:
+                c.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
         admin.dispose()
 
 
