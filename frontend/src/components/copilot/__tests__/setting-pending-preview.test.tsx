@@ -71,5 +71,34 @@ describe('SettingPendingPreview', () => {
     expect(text('setting-pending-before')).toBe('--')
     expect(text('setting-pending-risk')).toContain('不要确认')
     expect(screen.getByTestId('setting-pending-risk').className).toContain('text-role-risk')
+    // 明说按钮已禁用：不允许「提示一句、仍可盲签」
+    expect(text('setting-pending-risk')).toContain('确认按钮已禁用')
+  })
+
+  it('有 diff 但缺 before_state（老 pending 行）：红色风险 + 声明按钮已禁用', () => {
+    render(
+      <SettingPendingPreview
+        action={{
+          payload: { key: 'notify_quiet_hours' },
+          diff: [{ field: 'notify_quiet_hours', before: '23:00-07:00', after: '22:00-06:00', change: 'update' }],
+        }}
+      />,
+    )
+    expect(text('setting-pending-state')).toContain('未知')
+    expect(text('setting-pending-risk')).toContain('确认按钮已禁用')
+  })
+
+  it('风险文案是「下一次运行起生效」，不是立即生效', () => {
+    render(
+      <SettingPendingPreview
+        action={{
+          payload: { key: 'notify_retry_attempts' },
+          diff: [{ field: 'notify_retry_attempts', before: '2', after: '3', change: 'update', before_state: 'value' }],
+        }}
+      />,
+    )
+    expect(text('setting-pending-risk')).toContain('下一次运行起生效')
+    expect(text('setting-pending-risk')).not.toContain('立即生效')
+    expect(text('setting-pending-risk')).not.toContain('确认按钮已禁用')
   })
 })

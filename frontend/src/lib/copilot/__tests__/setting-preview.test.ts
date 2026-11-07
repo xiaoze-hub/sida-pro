@@ -8,7 +8,12 @@
  *  3. 后端没给 diff 时明说"不知道"，不猜、不编。
  */
 import { describe, expect, it } from 'vitest'
-import { describeSettingPreview, SETTING_MISSING_RISK, SETTING_RISK } from '../settingPreview'
+import {
+  describeSettingPreview,
+  SETTING_MISSING_RISK,
+  SETTING_RISK,
+  SETTING_UNKNOWN_STATE_RISK,
+} from '../settingPreview'
 
 describe('describeSettingPreview', () => {
   it('旧值/新值来自后端 diff，而不是 payload 里模型自带的 before', () => {
@@ -30,6 +35,7 @@ describe('describeSettingPreview', () => {
     expect(preview.keyLabel).toBe('通知失败重试次数')
     expect(preview.missing).toBe(false)
     expect(preview.risk).toBe(SETTING_RISK)
+    expect(preview.confirmable).toBe(true)
   })
 
   it.each([
@@ -52,6 +58,8 @@ describe('describeSettingPreview', () => {
       diff: [],
     })
     expect(preview.missing).toBe(true)
+    // fail closed：没有可信 diff 就不许确认
+    expect(preview.confirmable).toBe(false)
     expect(preview.state).toBe('unknown')
     expect(preview.beforeLabel).toBe('--')
     expect(preview.risk).toBe(SETTING_MISSING_RISK)
@@ -66,6 +74,9 @@ describe('describeSettingPreview', () => {
     })
     expect(preview.state).toBe('unknown')
     expect(preview.stateLabel).toContain('未知')
+    // 老 pending 行（before_state 之前落库）同样 fail closed，不许盲签
+    expect(preview.confirmable).toBe(false)
+    expect(preview.risk).toBe(SETTING_UNKNOWN_STATE_RISK)
   })
 
   it('与当前值相同时标出 noop', () => {
@@ -74,5 +85,14 @@ describe('describeSettingPreview', () => {
       diff: [{ field: 'notify_retry_attempts', before: '3', after: '3', change: 'noop', before_state: 'value' }],
     })
     expect(preview.noop).toBe(true)
+  })
+
+  it('风险文案说的是「下次运行生效」，不谎称立即生效', () => {
+    const preview = describeSettingPreview({
+      payload: { key: 'notify_retry_attempts' },
+      diff: [{ field: 'notify_retry_attempts', before: '2', after: '3', change: 'update', before_state: 'value' }],
+    })
+    expect(preview.risk).toContain('下一次运行起生效')
+    expect(preview.risk).not.toContain('立即生效')
   })
 })

@@ -31,6 +31,7 @@ export function SettingPendingPreview({ action }: { action: SettingActionLike })
         role="note"
       >
         {preview.risk}
+        {preview.confirmable ? '' : '（确认按钮已禁用）'}
       </span>
     </span>
   )

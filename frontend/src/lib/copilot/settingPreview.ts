@@ -16,6 +16,11 @@
  *
  * ⚠️ 绝不说「空 = 关闭」：`_build_notifier` 的口径是 `app_settings or env默认`，
  * 空值只会回退默认值。空值现在也在后端被直接拒收。
+ *
+ * 确认按钮的开关（2026-11-07 独立审查阻断项）：diff 缺失、或 diff 里没有后端算出的
+ * `before_state`，界面就**无法核对自己要签的是什么** —— 此时必须 fail closed
+ * （`confirmable=false` → 按钮 disabled，点击处理器同样拒绝），而不是「只提示一句、
+ * 按钮照旧可点」。老 pending 行（before_state 引入之前落的库）走同一条路径。
  */
 export type SettingBeforeState = 'absent' | 'null' | 'value'
 
@@ -47,6 +52,11 @@ export interface SettingPreview {
   missing: boolean
   /** 与当前值相同（点了也不会有变化） */
   noop: boolean
+  /**
+   * 能否允许用户确认：只有「后端 diff 存在且带 before_state」才为 true。
+   * false 时确认按钮必须 disabled，`act()` 里也必须再拒一次（双保险，防绕过）。
+   */
+  confirmable: boolean
 }
 
 /** 三个允许修改的通知设置键 → 中文名（只做标识，不参与任何取值判断） */
@@ -62,8 +72,9 @@ const STATE_LABELS: Record<SettingBeforeState, string> = {
   value: '已配置明确值',
 }
 
-export const SETTING_RISK = '确认后立即生效且不可撤销，只能重新提议修正。空值不会被当成「关闭」（运行时是回退环境变量默认值），后端会直接拒收。'
+export const SETTING_RISK = '确认后从下一次运行起生效且不可撤销，只能重新提议修正。空值不会被当成「关闭」（运行时是回退环境变量默认值），后端会直接拒收。'
 export const SETTING_MISSING_RISK = '后端没有给出这次变更的旧值预演：不要确认，请忽略后重新提议。'
+export const SETTING_UNKNOWN_STATE_RISK = '后端没有标出旧值状态，无法核对此改动：不要确认，请忽略后重新提议。'
 
 function textOf(value: unknown): string {
   if (value === null || value === undefined || value === '') return '--'
@@ -96,6 +107,7 @@ export function describeSettingPreview(action: SettingActionLike): SettingPrevie
       risk: SETTING_MISSING_RISK,
       missing: true,
       noop: false,
+      confirmable: false,
     }
   }
 
@@ -107,8 +119,9 @@ export function describeSettingPreview(action: SettingActionLike): SettingPrevie
     afterLabel: textOf(entry.after),
     state,
     stateLabel: state === 'unknown' ? '后端未标注旧值状态（按未知处理）' : STATE_LABELS[state],
-    risk: SETTING_RISK,
+    risk: state === 'unknown' ? SETTING_UNKNOWN_STATE_RISK : SETTING_RISK,
     missing: false,
     noop: entry.change === 'noop',
+    confirmable: state !== 'unknown',
   }
 }
