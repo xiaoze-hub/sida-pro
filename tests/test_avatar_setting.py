@@ -58,9 +58,11 @@ def test_avatar_saved_as_file_db_stores_filename(tmp_path, monkeypatch):
     r = c.put("/settings/avatar", json={"value": _IMG})
     assert r.status_code == 200, r.text
     # 文件已落盘到 data/avatars
-    assert os.listdir(os.path.join(str(tmp_path), "avatars")) == ["avatar.jpg"]
+    files = os.listdir(os.path.join(str(tmp_path), "avatars"))
+    # 2026-11-07: 唯一文件名(avatar-<uuid>.jpg), 并发/切换扩展名不互相覆盖
+    assert len(files) == 1 and files[0].startswith("avatar-") and files[0].endswith(".jpg")
     # DB 仅存文件名(短,非 base64)
-    assert r.json()["value"] == "avatar.jpg"
+    assert r.json()["value"] == files[0]
     # GET 读回 data URL
     assert c.get("/settings/avatar").json()["value"] == _IMG
 

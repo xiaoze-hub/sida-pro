@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -59,7 +60,9 @@ class SettingResponse(BaseModel):
 # 配置项描述
 SETTING_DESCRIPTIONS = {
     "http_proxy": "HTTP 代理地址(配置后所有对外请求含行情/新闻/AI/通知统一走此代理)",
-    "notify_quiet_hours": "通知静默时间段（HH:MM-HH:MM，空为关闭）",
+    # 2026-11-07(复审): 空值不是"关闭" —— runtime._build_notifier 是
+    # `_get_app_setting(...) or settings.notify_quiet_hours`, 空值会回落到环境默认。
+    "notify_quiet_hours": "通知静默时间段（HH:MM-HH:MM，留空继承环境默认 NOTIFY_QUIET_HOURS）",
     "notify_retry_attempts": "通知失败重试次数（不含首次）",
     "notify_retry_backoff_seconds": "通知重试退避秒数（基数）",
     "notify_dedupe_ttl_overrides": "通知幂等窗口覆盖（JSON，空为默认）",
@@ -261,6 +264,70 @@ def _audit_safe(key: str, value: str) -> str:
     return v[:50] + ("…" if len(v) > 50 else "")
 
 
+def _split_url_userinfo(value: str):
+    """拆 ``scheme://userinfo@host`` → ``(prefix, userinfo, host)``；无 userinfo 返回 None。"""
+    v = str(value or "")
+    if "://" not in v:
+        return None
+    scheme, rest = v.split("://", 1)
+    if "@" not in rest:
+        return None
+    userinfo, host = rest.rsplit("@", 1)
+    if not userinfo or not host:
+        return None
+    return f"{scheme}://", userinfo, host
+
+
+def mask_url_password(value: str) -> str:
+    """把 URL userinfo 里的密码掩成 SECRET_MASK（保留账号/主机，设置页仍可编辑）。
+
+    P0(走查 2026-11-07): `http_proxy` 不在 SECRET_SETTING_KEYS(掩码整串会让设置页
+    改不动)，但 `http://user:pass@host` 的 userinfo 是**真凭证** —— 原 GET 把它按
+    普通字符串原样回吐，任意 member 一次 GET /api/settings 就拿到代理密码。
+    """
+    parts = _split_url_userinfo(value)
+    if not parts:
+        return str(value or "")
+    prefix, userinfo, host = parts
+    user = userinfo.split(":", 1)[0]
+    if ":" not in userinfo:
+        # 只有账号没有密码段, 没有可掩的凭证
+        return str(value)
+    return f"{prefix}{user}:{SECRET_MASK}@{host}"
+
+
+def _looks_masked_proxy_password(pwd: str) -> bool:
+    return pwd in {"***", "**"} or is_mask_placeholder(pwd)
+
+
+def merge_proxy_credentials(new_value: str, old_value: str) -> str | None:
+    """PUT 回填的代理地址 password 若是掩码占位，用旧值里的真密码补回。
+
+    返回 None = 掩码占位但旧值没有可用凭证 ⇒ 调用方必须 400，**绝不把掩码写进 DB**
+    (与 SECRET_SETTING_KEYS 的掩码拒写同一策略：否则代理静默失效且设置页仍显示可用)。
+    """
+    parts = _split_url_userinfo(new_value)
+    if not parts:
+        return new_value
+    prefix, userinfo, host = parts
+    if ":" not in userinfo:
+        return new_value
+    user, pwd = userinfo.split(":", 1)
+    if not _looks_masked_proxy_password(pwd):
+        return new_value
+    old_parts = _split_url_userinfo(old_value)
+    if not old_parts:
+        return None
+    _, old_userinfo, _ = old_parts
+    if ":" not in old_userinfo:
+        return None
+    old_user, old_pwd = old_userinfo.split(":", 1)
+    if not old_pwd or is_mask_placeholder(old_pwd):
+        return None
+    keep_user = user if user and not is_mask_placeholder(user) else old_user
+    return f"{prefix}{keep_user}:{old_pwd}@{host}"
+
+
 def _get_env_defaults() -> dict[str, str]:
     """从 .env / 环境变量读取当前值作为默认"""
     s = Settings()
@@ -311,6 +378,9 @@ def list_settings(db: Session = Depends(get_db)):
         val = s.value
         if s.key in SECRET_SETTING_KEYS and val:
             val = SECRET_MASK
+        elif s.key == "http_proxy":
+            # member 也能 GET 设置列表: 代理 userinfo 的密码是真凭证, 一律掩码
+            val = mask_url_password(val)
         response.append(SettingResponse(key=s.key, value=val, description=s.description))
     return response
 
@@ -355,6 +425,18 @@ def get_avatar(db: Session = Depends(get_db)):
     return {"value": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"}
 
 
+def _remove_avatar_file(fname: str) -> None:
+    """尽力删除头像文件(不在 DB 事务内): 失败只记日志, 不影响已提交的设置。"""
+    if not fname:
+        return
+    try:
+        os.remove(os.path.join(_avatar_dir(), fname))
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning("头像旧文件清理失败(忽略): %s err=%r", fname, exc)
+
+
 @router.put("/avatar")
 def set_avatar(
     update: SettingUpdate,
@@ -362,12 +444,20 @@ def set_avatar(
     db: Session = Depends(get_db),
     actor: SettingsActor = Depends(require_settings_write),
 ):
-    """保存/清空用户头像:把 data URL 落成 data/avatars/avatar.* 文件,DB 仅记文件名。
+    """保存/清空用户头像:把 data URL 落成 data/avatars/avatar-<uuid>.* 文件,DB 仅记文件名。
 
     需在 /{key} 之前注册以优先匹配。传空字符串即清空(删文件 + 清记录)。
 
     2026-11-07: `ui_avatar` 是**全局单行**(不是 per-user), 属全局设置写 → 与
     /{key} 同门槛(manage_settings)。此前只有中间件前缀在拦, /api/v1 别名可绕过。
+
+    2026-11-07 #2(复审): 文件系统不受 DB 事务保护。原实现先写/删固定名文件再
+    commit —— commit 失败回滚后仍返回 503, 但**磁盘已经变了**: 新头像"没保存"
+    却生效, 清空"失败"却真的没了。现在改为:
+      1. 新图先落 staged 临时文件, 再 ``os.replace`` 到唯一名(绝不覆盖原头像);
+      2. 先提交 DB(含审计), 成功后才清理旧文件;
+      3. commit 失败(503) → 清掉刚写的新文件, 旧文件与 DB 原值保持一致;
+      4. 清空同样先提交 DB 再删文件, 清理失败不影响结果。
     """
     row = db.query(AppSettings).filter(AppSettings.key == AVATAR_KEY).first()
     # P2(audit-20260915): old 来自 DB, 删除前须 basename 净化
@@ -375,18 +465,15 @@ def set_avatar(
     value = (update.value or "").strip()
 
     if not value:
-        if old:
-            try:
-                os.remove(os.path.join(_avatar_dir(), old))
-            except OSError:
-                pass
         if row:
             row.value = ""
         _stage_audit(
             db, actor, f"settings_update:{AVATAR_KEY}", "改前=<已设置> 改后=<清空>",
             ip=_client_ip(request),
         )
+        # 先提交: 提交失败时文件还在, DB 仍指向旧头像, 状态一致
         _commit_or_500(db, AVATAR_KEY, actor)
+        _remove_avatar_file(old)
         return {"value": ""}
 
     if not (value.startswith("data:") and "," in value):
@@ -398,14 +485,22 @@ def set_avatar(
     except Exception:
         raise HTTPException(400, "头像数据无效")
 
-    fname = f"avatar.{ext}"
-    with open(os.path.join(_avatar_dir(), fname), "wb") as f:
-        f.write(raw)
-    if old and old != fname:  # 扩展名变化时清掉旧文件
-        try:
-            os.remove(os.path.join(_avatar_dir(), old))
-        except OSError:
-            pass
+    avatar_dir = _avatar_dir()
+    # 唯一名: 并发写入/扩展名切换都不会互相覆盖, 也不会覆盖尚未提交的旧头像
+    fname = f"avatar-{uuid.uuid4().hex}.{ext}"
+    staged = os.path.join(avatar_dir, f".staged-{uuid.uuid4().hex}.part")
+    try:
+        with open(staged, "wb") as f:
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(staged, os.path.join(avatar_dir, fname))
+    except OSError as exc:
+        _remove_avatar_file(os.path.basename(staged))
+        _remove_avatar_file(fname)
+        logger.error("头像文件写入失败: %r", exc)
+        raise HTTPException(503, "头像未保存: 文件写入失败, 请重试") from exc
+
     if not row:
         row = AppSettings(key=AVATAR_KEY, value=fname, description="用户头像文件名")
         db.add(row)
@@ -415,7 +510,13 @@ def set_avatar(
     _stage_audit(
         db, actor, f"settings_update:{AVATAR_KEY}", f"改后={fname}", ip=_client_ip(request)
     )
-    _commit_or_500(db, AVATAR_KEY, actor)
+    try:
+        _commit_or_500(db, AVATAR_KEY, actor)
+    except HTTPException:
+        # DB 回滚 ⇒ 旧头像仍被 DB 引用, 只清掉这张没被登记的新文件
+        _remove_avatar_file(fname)
+        raise
+    _remove_avatar_file(old)
     return {"value": fname}
 
 
@@ -452,6 +553,8 @@ def update_setting(
     # " ******** " / "*********" / "········" 一律拦下, 否则字面掩码会覆盖真凭证。
     raw_value = update.value or ""
     value_to_store = raw_value
+    setting = db.query(AppSettings).filter(AppSettings.key == key).first()
+    old_value = (setting.value if setting else "") or ""
     if key in SECRET_SETTING_KEYS:
         if is_mask_placeholder(raw_value):
             raise HTTPException(400, "敏感值未变更(掩码占位), 拒绝写入")
@@ -461,9 +564,21 @@ def update_setting(
             raise HTTPException(400, "敏感值不能为空(如需清除请显式传 clear=true)")
         # 凭证两侧空白一律去掉: 带尾随空格/换行的 token 会静默失效
         value_to_store = "" if update.clear else stripped
+    elif key == "http_proxy":
+        # 设置页 GET 回来的是掩码 userinfo。用户只改主机时会把掩码原样提交回来,
+        # 直接落库等于用字面掩码覆盖真密码 ⇒ 代理静默失效。这里按 SECRET 同一策略:
+        # 掩码占位 → 用旧值补回真凭证; 补不回就 400, 绝不写掩码。
+        value_to_store = raw_value.strip()
+        # 生效值口径是 DB 优先、回落 env(见 _get_env_defaults / runtime), 掩码还原
+        # 也必须按同一口径取旧凭证, 否则"env 配了带密码代理"时用户改主机就被 400 挡住。
+        base_value = old_value or (_get_env_defaults().get("http_proxy") or "")
+        merged = merge_proxy_credentials(value_to_store, base_value)
+        if merged is None:
+            raise HTTPException(
+                400, "代理密码为掩码占位且无可还原凭证, 请重新输入完整代理地址"
+            )
+        value_to_store = merged
 
-    setting = db.query(AppSettings).filter(AppSettings.key == key).first()
-    old_value = (setting.value if setting else "") or ""
     if not setting:
         desc = SETTING_DESCRIPTIONS.get(key, "")
         setting = AppSettings(key=key, value=value_to_store, description=desc)
@@ -489,7 +604,8 @@ def update_setting(
     if key == "http_proxy":
         try:
             from server import apply_proxy_env
-            apply_proxy_env(update.value)
+            # 用**落库值**(已把掩码 userinfo 补回真凭证), 掩码本身不能当代理地址用
+            apply_proxy_env(value_to_store)
         except Exception:
             pass
 
@@ -498,6 +614,13 @@ def update_setting(
     # 响应体 / DevTools Network / 任何请求日志里, 与 list_settings 的掩码策略自相矛盾。
     if key in SECRET_SETTING_KEYS:
         return {"key": key, "updated": True, "masked": SECRET_MASK}
+    if key == "http_proxy":
+        # 与 GET 一致: 响应里的 userinfo 密码同样掩码(管理员也不例外)
+        return SettingResponse(
+            key=setting.key,
+            value=mask_url_password(setting.value),
+            description=setting.description,
+        )
 
     return SettingResponse(key=setting.key, value=setting.value, description=setting.description)
 
