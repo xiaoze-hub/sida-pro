@@ -10,6 +10,7 @@
 """
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -233,3 +234,113 @@ def test_scenario_engine_uses_scope_cache(monkeypatch):
     finally:
         bc.end_bar_scope(token)
     assert fake.queries == 1, f"情景矩阵两次调用打了 {fake.queries} 次库（期望 1）"
+
+
+# ── 5. 上下文透传：路由不许在 market 分支上吞掉 evidence_sink / fact_pack ──
+#
+# chat.py 对两条管线是同一次调用（它不知道 recipe.scope），把 `fact_pack`（委派父 run
+# 冻结的事实包）与 `evidence_sink`（SSE done 的证据落点）都递给了路由。
+# market 分支此前只转 `watchlist`/`context`，另外两个参数**静默丢弃** ——
+# 全市场结论于是「用了真数据，却对外零证据」，委派时也不受冻结时点约束。
+
+
+class _MarketRecipe(_Recipe):
+    """带真实市场级工具的配方（`_Recipe` 的 `("a",)` 会被判 unknown_tool）。"""
+
+    def __init__(self):
+        super().__init__("market")
+        self.tools = ("get_hot_stocks", "get_sentiment_cycle")
+
+
+class _OneShotAI:
+    """非流式 ai_client：只回一条消息，记录收到的 msgs。"""
+
+    def __init__(self, text="结论：情绪冰点。"):
+        self.text = text
+        self.calls = []
+
+    async def chat_with_tools(self, msgs, tools=None, temperature=None):
+        self.calls.append(list(msgs))
+        return SimpleNamespace(content=self.text)
+
+
+def test_answer_market_forwards_evidence_sink_and_fact_pack(monkeypatch):
+    seen = {}
+
+    async def _fake_market(ai_client, recipe, executor, question, **kw):
+        seen.update(kw)
+        return "market-answer"
+
+    monkeypatch.setattr(router._mkt, "answer_market", _fake_market)
+    monkeypatch.setattr(router, "resolve_watchlist", lambda db, user: [])
+
+    sink: list = []
+    pack = {"pack_id": "p", "as_of": "2026-11-07T09:15:00", "source": "x", "text": ""}
+    out = asyncio.run(router.answer(None, _MarketRecipe(), "盘前怎么看", None, None,
+                                    evidence_sink=sink, fact_pack=pack))
+
+    assert out == "market-answer"
+    assert seen["evidence_sink"] is sink, "证据落点必须原对象传下去（不是拷贝）"
+    assert seen["fact_pack"] is pack, "冻结事实包必须原对象传下去"
+    # 契约：market 分支只转它真的消费的参数（db/user/view_state 在那边没有语义）
+    assert set(seen) == {"market", "trace", "watchlist", "context", "fact_pack", "evidence_sink"}
+
+
+def test_answer_stream_market_forwards_evidence_sink_and_fact_pack(monkeypatch):
+    seen = {}
+
+    async def _fake_market_stream(ai_client, recipe, executor, question, **kw):
+        seen.update(kw)
+        yield "done", "market-answer"
+
+    monkeypatch.setattr(router._mkt, "answer_market_stream", _fake_market_stream)
+    monkeypatch.setattr(router, "resolve_watchlist", lambda db, user: [])
+
+    sink: list = []
+    pack = {"pack_id": "p", "as_of": "2026-11-07T09:15:00", "source": "x", "text": ""}
+
+    async def go():
+        return [ev async for ev in router.answer_stream(
+            None, _MarketRecipe(), "复盘", None, None, evidence_sink=sink, fact_pack=pack)]
+
+    assert asyncio.run(go()) == [("done", "market-answer")]
+    assert seen["evidence_sink"] is sink and seen["fact_pack"] is pack
+    assert set(seen) == {"market", "trace", "watchlist", "context", "fact_pack", "evidence_sink"}
+
+
+def test_router_market_scope_fills_sink_from_real_tool_output(monkeypatch):
+    """端到端：路由 → 真实全市场管线 → 证据落进调用方的 sink，摘要抄工具原文。"""
+    monkeypatch.setattr(router, "resolve_watchlist", lambda db, user: [])
+
+    async def ex(name, args):
+        assert args == {}, "市场级工具必须用 {} 调（路由不许塞假参数）"
+        return f"{name} 真数据：涨停 42 家"
+
+    sink: list = []
+    ai = _OneShotAI("结论：涨停 42 家。")
+    out = asyncio.run(router.answer(ai, _MarketRecipe(), "复盘今天", None, ex,
+                                    evidence_sink=sink))
+
+    assert out and "涨停 42 家" in out
+    assert [r["tool"] for r in sink] == ["get_hot_stocks", "get_sentiment_cycle"]
+    assert all(r["status"] == "ok" for r in sink)
+    assert sink[0]["digest"].startswith("get_hot_stocks 真数据"), "证据摘要必须是真实工具输出"
+
+
+def test_symbol_scope_still_receives_full_context(monkeypatch):
+    """符号管线分支的既有透传一个字都不许变（改动只针对 market 缺口）。"""
+    seen = {}
+
+    async def _fake_symbol(*_a, **kw):
+        seen.update(kw)
+        return "symbol-answer"
+
+    monkeypatch.setattr(router._sym, "answer", _fake_symbol)
+
+    sink: list = []
+    pack = {"pack_id": "p"}
+    view = {"symbol": "600111", "instrument": "stock"}
+    assert asyncio.run(router.answer(None, _Recipe("symbol"), "600111 怎么样", "600111", None,
+                                     view_state=view, evidence_sink=sink, fact_pack=pack)) == "symbol-answer"
+    assert seen["view_state"] is view and seen["evidence_sink"] is sink
+    assert seen["fact_pack"] is pack

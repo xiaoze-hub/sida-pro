@@ -343,6 +343,18 @@ def get_quotes(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 @router.post("", response_model=StockResponse)
 def create_stock(stock: StockCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    # 2026-11-07: 配额是「先数后写」，并发下会超卖。所有用户级配额写路径统一
+    # 「先锁 users 行，再计数/写 stocks|price_alert_rules」，锁持有到 commit。
+    from src.core.permissions import (
+        ROLE_OWNER,
+        ROLE_PRO,
+        check_watchlist_quota,
+        lock_quota_row,
+        normalize_role,
+    )
+
+    if normalize_role(getattr(user, "role", None)) not in (ROLE_PRO, ROLE_OWNER):
+        lock_quota_row(db, user)
     # demo 账号: 自选数量上限(演示体验; 防公开账号堆积垃圾数据)
     # B3(2026-09-29): 上限从「免费档」面板的 guest_strategy.watchlist_limit 读, 未配置 → 1
     if str(getattr(user, "username", "")) == "demo" or str(getattr(user, "role", "")) == "guest":
@@ -354,8 +366,6 @@ def create_stock(stock: StockCreate, db: Session = Depends(get_db), user: User =
             if own_count >= watch_limit:
                 raise HTTPException(403, f"演示账号仅可添加 {watch_limit} 只自选股。请先删除当前自选,再添加其他股票体验。")
     # 权限体系 2026-09-15: 普通账号自选≤10, pro/owner 无限
-    from src.core.permissions import check_watchlist_quota
-
     check_watchlist_quota(db, user)
 
     existing = db.query(Stock).filter(

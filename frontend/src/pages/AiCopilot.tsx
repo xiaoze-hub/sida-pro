@@ -34,6 +34,8 @@ import {
 } from '@/lib/copilot/evidence-readiness'
 import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
+import { SettingPendingPreview } from '@/components/copilot/SettingPendingPreview'
+import { describeSettingPreview } from '@/lib/copilot/settingPreview'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
@@ -1477,12 +1479,25 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
 
   const act = useCallback(
     async (id: number, kind: 'apply' | 'reject') => {
+      /**
+       * 2026-11-07 独立审查阻断项：改设置的动作如果后端没给 diff / diff 里没有
+       * `before_state`，界面就无法核对自己要签的是什么 —— 按钮已经 disabled，
+       * 这里再拒一次，防止键盘/脚本/未来重构绕过 disabled 直接调 `act()`。
+       * 只拦「确认」：忽略永远允许（不落库，没有风险）。
+       */
+      const target = pending.find((p) => p.id === id)
+      if (kind === 'apply' && target?.kind === 'setting' && !describeSettingPreview(target).confirmable) {
+        setActError({
+          id,
+          message: '这条改设置缺少后端变更预演（旧值/三态），不能在界面上确认。请忽略后重新提议。',
+        })
+        return false
+      }
       // 同步守卫（ref 立即生效）：连点两次「确认」只发一次 POST
       if (actLock.current) return false
       actLock.current = true
       setActing({ id, kind })
       setActError(null)
-      const target = pending.find((p) => p.id === id)
       const symbol = String((target?.payload as Record<string, unknown> | undefined)?.symbol ?? '')
       const verb = kind === 'apply' ? '确认' : '忽略'
       try {
@@ -1635,15 +1650,27 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               const rowBusy = acting?.id === a.id
               // 任何一条动作在途都禁掉全部按钮：守卫是全局的（一次只跑一条裁决）
               const locked = acting !== null
+              /**
+               * 改设置：没有可信 diff（老 pending 行无 before_state / 后端算不出预演）
+               * 时确认必须 disabled —— 盲签不可接受。忽略不受影响。
+               */
+              const blocked = a.kind === 'setting' && !describeSettingPreview(a).confirmable
               return (
                 <span key={a.id} className="flex flex-wrap items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[12px]">
-                  <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : '盯盘提醒'}</span>
-                  <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
+                  <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : a.kind === 'setting' ? '改设置' : a.kind === 'schedule' ? '定时任务' : '盯盘提醒'}</span>
+                  {a.kind === 'setting' ? (
+                    /* 设置类动作：旧值/新值/三态/风险全部来自后端持久化 diff，
+                       不接受 payload 里模型自带的 before（见 lib/copilot/settingPreview）。 */
+                    <SettingPendingPreview action={a} />
+                  ) : (
+                    <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
+                  )}
                   <button
                     type="button"
                     data-testid="copilot-pending-apply"
                     aria-busy={rowBusy && acting?.kind === 'apply' ? 'true' : undefined}
-                    disabled={locked}
+                    disabled={locked || blocked}
+                    title={blocked ? '缺少后端变更预演，不能确认；请忽略后重新提议' : undefined}
                     className="inline-flex items-center gap-1 text-role-watch hover:underline disabled:opacity-50 disabled:no-underline"
                     onClick={() => void act(a.id, 'apply')}
                   >

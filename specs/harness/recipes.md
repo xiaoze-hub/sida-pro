@@ -24,6 +24,8 @@
 
 ## 验收标准
 
+盘后复盘可调用 `get_market_scan_ranks` 与 `get_dark_fund_top`；它们读取已保存快照并执行页面同口径权限检查。快照写入日期不能证明行情数据日，未核实时必须标明，不得称当日实时。
+
 - **RECIPE-001** 每份 recipe 必须声明 `acceptance`（≥1 条）—— 没有验收标准的配方等于没有承诺，改坏了没人能发现
 - **RECIPE-002** `prompt_fragment` 必须原文出现 `output_sections` 的每一个段落名 —— 段落名是输出契约，提示词里缺一段，模型就不写那一段
 - **RECIPE-003** `budget.max_tool_calls` 必须 ≥ 该配方挂载的工具数 —— 否则排在后面的工具永远轮不到，等于白挂

@@ -37,6 +37,10 @@ def _client(tmp_path, monkeypatch) -> TestClient:
             s.close()
 
     app.dependency_overrides[get_db] = _db
+    # 2026-11-07: 写权限已在端点收口(manage_settings), 本文件只验掩码/白名单判据。
+    app.dependency_overrides[settings_api.require_settings_write] = lambda: (
+        settings_api.SettingsActor(id="test", username="tester", role="owner")
+    )
     return TestClient(app)
 
 

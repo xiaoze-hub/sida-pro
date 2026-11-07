@@ -114,3 +114,67 @@ def test_middleware_end_to_end_pro_is_not_403_for_intraday_scan(monkeypatch):
     assert not (resp.status_code == 403 and "无权限访问该管理功能" in body), (
         f"盘中扫描仍被管理区拦截: {resp.status_code} {body[:200]}"
     )
+
+
+# ── 2026-11-07: /api/v1 版本别名绕过管理区鉴权(独立复审 P0) ────────────────
+def test_version_alias_path_is_normalized_for_authz():
+    """`/api/v1/x` 与 `/api/x` 必须是同一个判权结论。
+
+    `ApiVersionAliasMiddleware` 在内层, 外层 demo 隔离中间件看到的仍是带 /v1 的
+    原始路径 —— 不做归一, 前缀表就匹配不到, member 直接写穿管理区(实测 200)。
+    """
+    from src.web.app import _authz_path
+
+    assert _authz_path("/api/v1/settings/http_proxy") == "/api/settings/http_proxy"
+    assert _authz_path("/api/v1") == "/api"
+    assert _authz_path("/api/settings/http_proxy") == "/api/settings/http_proxy"
+    assert _authz_path("/api/v10/settings") == "/api/v10/settings"  # 只认 /api/v1
+    for path in ("/api/settings", "/api/datasources", "/api/providers", "/api/users", "/api/admin"):
+        assert admin_prefix_denied("PUT", "/api/v1" + path[len("/api"):], MEMBER) is True
+        assert admin_prefix_denied("PUT", path, MEMBER) is True
+
+
+def test_version_alias_still_allows_member_reads():
+    """归一不能顺手把只读浏览也拦掉: 掩码后的 GET 仍对登录用户开放。"""
+    from src.web.app import _authz_path
+
+    for path in ("/api/settings", "/api/providers", "/api/agents"):
+        assert admin_prefix_denied("GET", "/api/v1" + path[len("/api"):], MEMBER) is False
+        assert _authz_path("/api/v1" + path[len("/api"):]) == path
+
+
+def test_version_alias_does_not_reopen_intraday_scan():
+    """用户功能例外按精确路径登记, 归一后仍要命中。"""
+    assert admin_prefix_denied("POST", "/api/v1/agents/intraday/scan", PRO) is False
+
+
+def test_middleware_blocks_member_admin_write_via_version_alias(monkeypatch):
+    """端到端: member 带 /api/v1 前缀写数据源配置, 中间件必须 403(不再是 200 写穿)。"""
+    from datetime import datetime, timedelta, timezone
+
+    import jwt
+
+    import src.web.app as app_module
+    from fastapi.testclient import TestClient
+
+    from src.core.auth_tokens import JWT_ALGORITHM, get_jwt_secret
+
+    monkeypatch.setattr(app_module, "_resolve_user_auth", lambda username: ("member", set()))
+    token = jwt.encode(
+        {
+            "sub": "member-user",
+            "username": "member-user",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        get_jwt_secret(),
+        algorithm=JWT_ALGORITHM,
+    )
+    with TestClient(app_module.app) as client:
+        resp = client.put(
+            "/api/v1/datasources/1",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": "pwned"},
+        )
+    assert resp.status_code == 403, f"{resp.status_code} {resp.text[:200]}"
+    assert "无权限访问该管理功能" in resp.text

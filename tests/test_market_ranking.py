@@ -172,10 +172,10 @@ def test_取数失败如实说_不当作没有(monkeypatch):
 # ── 注册表钉子 ─────────────────────────────────────────────────────
 
 
-def test_工具数78且新工具在末尾():
-    assert len(CHAT_TOOL_REGISTRY) == 78
+def test_工具数80且市场排行在末尾():
+    assert len(CHAT_TOOL_REGISTRY) == 80
     assert list(CHAT_TOOL_REGISTRY)[-1] == "get_market_ranking", "新工具必须追加末尾，否则索引钉子整体错位"
-    assert len(chat_tool_schemas()) == 77
+    assert len(chat_tool_schemas()) == 79
 
 
 def test_新工具有非空caliber():

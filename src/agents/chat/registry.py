@@ -1727,16 +1727,32 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                 "就传 index；声明与代码不符（如 399001 传 stock、000858 传 index）同样拒绝，"
                 "请直接告诉用户原因，不要重试；"
                 "kind=watchlist：把某只票加入自选，需要 symbol，可选 name/market；"
-                "kind=alert：建盯盘提醒（当前仅记录，暂不执行）。"
-                "只在用户明确要「标注/加自选/盯一下」时调用；不要用它代替分析结论。"
+                "kind=alert：建盯盘提醒。**确认后真的会写库**：在该标的的自选上建一条价格提醒"
+                "（price 必填=触发价；direction=above 上破(默认)/below 下破）；"
+                "若该标的还不在自选，确认时会**顺带把它加入自选**；"
+                "提醒条数与自选数量都受账号配额约束，配额不足时确认会失败并说明原因；"
+                "kind=setting：受控修改三键非敏感通知设置（key 必填 + value 必填）。"
+                "key 只收 notify_retry_attempts（0-3 整数）/ notify_retry_backoff_seconds"
+                "（0-10，最多一位小数）/ notify_quiet_hours（HH:MM-HH:MM，起止不可相同）；"
+                "value 必填且**不可为空**：空值不是「关闭」，运行时会静默回退到环境变量默认值，"
+                "所以后端直接拒收；想关就说得清具体取值，别传空串。"
+                "**该动作不可撤销**：改错了只能重新提议修正，不要声称可以回滚。"
+                "只在用户明确要「标注/加自选/盯一下/改通知设置」时调用；不要用它代替分析结论。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["annotation", "watchlist", "alert"]},
+                    "kind": {"type": "string", "enum": ["annotation", "watchlist", "alert", "setting"]},
                     "symbol": {"type": "string", "description": "6 位 A 股代码"},
                     "label": {"type": "string", "description": "标注短标签（annotation 必填，≤20 字）"},
-                    "price": {"type": "number", "description": "水平线价位；annotation 的 price 或 ts 至少一项"},
+                    "price": {"type": "number", "description": "水平线价位；annotation 的 price 或 ts 至少一项；alert 时为提醒触发价（必填）"},
+                    "key": {"type": "string", "description": "通知设置键（setting 必填）：notify_retry_attempts / notify_retry_backoff_seconds / notify_quiet_hours"},
+                    "value": {"type": "string", "description": "设置值（setting 必填且不可为空）；静默时段格式 HH:MM-HH:MM。空值不是关闭：运行时回退环境变量默认值，会被后端拒收"},
+                    "direction": {
+                        "type": "string",
+                        "enum": ["above", "below"],
+                        "description": "alert 的触发方向：above=上破(默认)、below=下破；其它 kind 忽略",
+                    },
                     "ts": {"type": "string", "description": "标注日期，仅 YYYY-MM-DD；单独提供时仅在对应日线且已加载该日K线时可显示，其他周期不假定上图"},
                     "instrument": {
                         "type": "string",
@@ -1763,15 +1779,43 @@ async def _tool_propose_action(db: Session, args: dict, user: User | None = None
     kind = str(args.get("kind") or "").strip()
     if kind not in ALLOWED_KINDS:
         return f"不支持的 kind：{kind}（可选 {', '.join(ALLOWED_KINDS)}）"
-    payload = {k: v for k, v in args.items() if k != "kind" and v not in (None, "")}
+    # setting 的 value 原样传下去（不过滤空串）：让 validate_setting 给出「空值≠关闭」
+    # 那句明确理由，比笼统的"缺少 value"更能纠正模型；其它字段仍过滤空值。
+    if kind == "setting":
+        payload = {k: v for k, v in args.items() if k != "kind" and v is not None}
+    else:
+        payload = {k: v for k, v in args.items() if k != "kind" and v not in (None, "")}
     try:
         item = propose(db, user_id=user.id, kind=kind, payload=payload)
     except ActionError as exc:
         return f"动作提议失败：{exc}"
-    return (
-        f"已在「待确认动作」里生成一条提议（#{item['id']}，类型 {kind}）。"
-        "请提醒用户在参谋面板点确认后才会生效；不要声称已经加好或已经标注。"
-    )
+    lines = [f"已在「待确认动作」里生成一条提议（#{item['id']}，类型 {kind}）。"]
+    # 确认后真正会改什么：照 diff 说，不替服务端编。diff 为空(算不出来)就只提示去确认。
+    for d in item.get("diff") or []:
+        if d.get("change") not in ("add", "update"):
+            continue
+        before = d.get("before") or "无"
+        lines.append(f"· {d.get('field')}：{before} → {d.get('after')}")
+    if kind == "alert":
+        diffs = item.get("diff") or []
+        # 只有**真的新增**一条才占新名额：就地更新既有简单价格规则不占。
+        # 不覆盖既有规则时（复合条件/已停用）diff 里带「现有提醒」这一条，必须念出来，
+        # 否则用户以为"改了一下我的提醒"，实际是多了一条。
+        if any("触发条件" in str(d.get("field")) and d.get("change") == "add" for d in diffs):
+            lines.append("确认后会**新增** 1 条提醒，占 1 条提醒配额。")
+        else:
+            lines.append("确认后只更新该标的现有提醒的触发条件，不占新的提醒配额。")
+        for d in diffs:
+            if d.get("field") == "现有提醒":
+                lines.append(f"· 你已有的提醒（{d.get('before')}）保持原样，本次另建一条。")
+                break
+        if any(d.get("field") == "自选" for d in diffs):
+            lines.append("同时占 1 个自选名额（上一条里已列出「自选」）。")
+    if kind == "setting":
+        # 设置类动作不可撤销：如实告知，不冒充可回滚。
+        lines.append("这条设置修改**不可撤销**；确认后如需改回，请重新提议一次修正。")
+    lines.append("请提醒用户在参谋面板点确认后才会生效；不要声称已经加好或已经标注。")
+    return "\n".join(lines)
 
 
 @register_chat_tool(
@@ -2736,6 +2780,15 @@ async def _tool_get_trader_playbook(db: Session, args: dict, user: User | None =
 from src.agents.chat import tools_catalog as _tools_catalog  # noqa: E402  (仅 stdlib 级依赖)
 
 _tools_catalog.register_catalog_tools()
+
+
+# ──────────────── 市场扫描榜 / DDE 榜只读工具(2026-11-07 接线) ────────────────
+# 位置: 数据域目录工具之后。`tools_scan_read.py` 早已写好权限/审计/时效口径, 但**从未注册**,
+# 模型永远调不到(action 配方也无从挂载)。这里只做注册接线, 实现仍在 tools_scan_read。
+# 只读、无写库、参数全可选 → fallback 保持 True(闲聊里被调也只是读快照, 无副作用)。
+from src.agents.chat import tools_scan_read as _tools_scan_read  # noqa: E402
+
+_tools_scan_read.register_scan_read_tools()
 
 
 # ──────────────── 新分析维度提案(2026-10-22, P0 采集层) ────────────────

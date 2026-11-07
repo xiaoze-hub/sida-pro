@@ -107,7 +107,7 @@ describe('AiRefereePanel 三态徽标', () => {
     rerender(<AiRefereePanel referee={{ verdict: 'abstain', direction: null, reason: '裁判不可用' }} />)
     expect(screen.getByTestId('ai-referee-badge').textContent).toContain('裁判弃权')
     expect(screen.getByTestId('ai-referee-panel').getAttribute('data-verdict')).toBe('abstain')
-    expect(screen.getByTestId('ai-referee-abstain-note').textContent).toContain('维持上方模型方向')
+    expect(screen.getByTestId('ai-referee-abstain-note').textContent).toContain('未对本次预测给出独立修正')
 
     rerender(<AiRefereePanel referee={{ verdict: 'mystery', direction: null, reason: '?' }} />)
     expect(screen.getByTestId('ai-referee-badge').textContent).toContain('未知结论')

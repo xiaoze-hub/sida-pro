@@ -168,6 +168,13 @@ def create_alert_rule(
         raise HTTPException(404, "股票不存在")
     _validate_condition_group(body.condition_group)
 
+    # 2026-11-07: 配额闸门。`check_alert_quota` 早已存在但**从未被任何写路径调用**
+    # —— 直接 API 能无限制建规则，AI 动作路径又能绕过它，配额形同虚设。
+    # 放在入参校验之后、入库之前：非法条件先给 400，超额才给 403；被拒时不落库。
+    from src.core.permissions import check_alert_quota
+
+    check_alert_quota(db, user)
+
     expire_at = None
     if body.expire_at:
         try:
@@ -312,6 +319,14 @@ def adopt_alert_rule_to_private(
     if not uid:
         logger.warning("adopt 拒绝: 当前账号缺少 user_id(rule_id=%s)", rule_id)
         raise HTTPException(403, "无法确认当前账号身份，已拒绝迁移")
+
+    # 2026-11-07: 取锁顺序统一为「users 行 → stocks/price_alert_rules 行」。
+    # 迁移稍后会对自选行 FOR UPDATE、并按自选配额 INSERT —— 若先拿自选行再等
+    # users 行，就会与「AI 提醒动作(先 users 后写规则)」构成反向等待。
+    from src.core.permissions import ROLE_OWNER, ROLE_PRO, lock_quota_row, normalize_role
+
+    if normalize_role(getattr(user, "role", None)) not in (ROLE_PRO, ROLE_OWNER):
+        lock_quota_row(db, user)
 
     row = (
         db.query(PriceAlertRule)

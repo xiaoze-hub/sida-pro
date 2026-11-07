@@ -69,6 +69,19 @@ function row(id = 7, symbol = '600111') {
   return { id, kind: 'watchlist' as const, payload: { symbol }, status: 'pending', result: null, created_at: '' }
 }
 
+/** 一条待确认的「改设置」；diff 由调用方给（缺省=后端没给预演）。 */
+function settingRow(id = 9, diff?: unknown[], payload: Record<string, unknown> = {}) {
+  return {
+    id,
+    kind: 'setting' as const,
+    status: 'pending',
+    result: null,
+    created_at: '',
+    payload: { key: 'notify_retry_attempts', value: '3', ...payload },
+    ...(diff === undefined ? {} : { diff }),
+  }
+}
+
 /** unhandled rejection 必须为空 —— 这正是验收里控制台报的那条。 */
 let rejections: unknown[] = []
 const onRejection = (reason: unknown) => rejections.push(reason)
@@ -174,6 +187,87 @@ describe('待确认动作 · 提交中禁重 + 失败就地提示', () => {
 
     await waitFor(() => expect(screen.queryByTestId('copilot-pending-actions')).toBeNull())
     expect(copilotMock.getPendingActions.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(rejections).toEqual([])
+  })
+
+  it('改设置的待确认行显示本动作旧值/新值/三态与不可撤销风险（不采信 payload 里模型编的 before）', async () => {
+    copilotMock.getPendingActions.mockImplementation(async () => [
+      {
+        id: 9,
+        kind: 'setting',
+        status: 'pending',
+        result: null,
+        created_at: '',
+        payload: { key: 'notify_retry_attempts', value: '3', before: '999', before_present: true },
+        diff: [
+          {
+            field: 'notify_retry_attempts',
+            before: '2',
+            after: '3',
+            change: 'update',
+            before_state: 'value',
+            immutable: true,
+          },
+        ],
+      },
+    ])
+    await mount()
+
+    expect(screen.getByTestId('setting-pending-key').textContent).toBe('通知失败重试次数')
+    expect(screen.getByTestId('setting-pending-before').textContent).toBe('2')
+    expect(screen.getByTestId('setting-pending-after').textContent).toBe('3')
+    expect(screen.getByTestId('setting-pending-state').textContent).toContain('已配置明确值')
+    expect(screen.getByTestId('setting-pending-risk').textContent).toContain('不可撤销')
+    // 模型自报的旧值一个字符都不许上屏
+    expect(screen.queryByText('999')).toBeNull()
+    // 有可信 diff：确认可用
+    expect(confirmButtons()[0].disabled).toBe(false)
+    expect(rejections).toEqual([])
+  })
+
+  /**
+   * 反例（2026-11-07 独立审查阻断项）：后端没给 diff 时界面**不知道自己签什么**，
+   * 只提示一句不够 —— 确认必须 disabled，且点了也不能发 POST（处理器二次拒绝）。
+   * 忽略不受影响（不落库，没有风险）。
+   */
+  it('改设置缺后端 diff：确认按钮 disabled，点击不发请求，忽略仍可用', async () => {
+    copilotMock.getPendingActions.mockImplementation(async () => [settingRow(11)])
+    await mount()
+
+    expect(screen.getByTestId('setting-pending-before').textContent).toBe('--')
+    expect(screen.getByTestId('setting-pending-risk').textContent).toContain('确认按钮已禁用')
+    expect(confirmButtons()[0].disabled).toBe(true)
+
+    await act(async () => {
+      fireEvent.click(confirmButtons()[0])
+    })
+    expect(copilotMock.applyPendingAction).not.toHaveBeenCalled()
+    // 按钮都没触发，就不该冒出一条"失败"来吓人
+    expect(screen.queryByTestId('copilot-pending-error')).toBeNull()
+
+    // 忽略照旧：这是唯一的安全出口
+    await act(async () => {
+      fireEvent.click(ignoreButtons()[0])
+    })
+    expect(copilotMock.rejectPendingAction).toHaveBeenCalledTimes(1)
+    expect(rejections).toEqual([])
+  })
+
+  /** 老 pending 行（before_state 引入之前落的库）：同样 fail closed，不许盲签。 */
+  it('改设置 diff 缺 before_state（老行）：确认 disabled，不落库', async () => {
+    copilotMock.getPendingActions.mockImplementation(async () => [
+      settingRow(12, [
+        { field: 'notify_retry_attempts', before: '2', after: '3', change: 'update' },
+      ]),
+    ])
+    await mount()
+
+    expect(screen.getByTestId('setting-pending-state').textContent).toContain('未知')
+    expect(confirmButtons()[0].disabled).toBe(true)
+    await act(async () => {
+      fireEvent.click(confirmButtons()[0])
+    })
+    expect(copilotMock.applyPendingAction).not.toHaveBeenCalled()
     expect(rejections).toEqual([])
   })
 })

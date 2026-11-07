@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas, charge_tool_budget
+from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas, charge_tool_budget, schema_tool_name
 from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
 from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
 from src.core import gap_collector
@@ -793,10 +793,11 @@ async def _execute_tool(
         return (f"{label} 本轮不使用工具 `{name}`。可用工具：{', '.join(sorted(allow))}。"
                 f"请用已有工具回答，或直接说明数据不足。")
 
+    tool = CHAT_TOOL_REGISTRY.get(name)
+    if tool is not None and tool.requires == "self" and (not getattr(user, "id", None) or getattr(user, "is_service", False)):
+        return "该工具需要已登录的用户身份。"
     if (deny := charge_tool_budget(_REQ_BUDGET.get(), name, _REQ_RECIPE_LABEL.get() or "当前智能体")):
         return deny
-
-    tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:
         return f"未知工具: {name}"
 
@@ -818,7 +819,6 @@ async def _execute_tool(
     except Exception as e:
         logger.error(f"工具执行失败 {name}: {e}")
         return f"工具执行出错: {e}"
-
 
 
 def _summarize_old_messages(msgs: list) -> str:
@@ -1161,8 +1161,7 @@ async def _run_tool_loop_inner(
             if stream:
                 yield ("done", _qa)
             return
-    # 确定性路由(2026-10-21): 命中配方关键词 → 工具白名单收紧 + 温度降到 0.2。
-    # 实测同一问题工具集合 Jaccard 仅 0.52，方差主要来自"模型自选工具"，不是模型能力。
+    # 命中配方则收紧白名单，未命中则限制为实际下发的 schema。
     _route, _ptxt = _route_with_persona(db, _utext, _REQ_BOUND.get(), _stock_q, CHAT_TOOLS, _REQ_TOOLS.get())
     if _ptxt: messages_for_ai.insert(0, {"role": "system", "content": _ptxt})
     if _route.recipe is not None:
@@ -1172,6 +1171,8 @@ async def _run_tool_loop_inner(
         _REQ_BUDGET.set({"max": _route.recipe.max_tool_calls, "used": 0})
         _inject_recipe(messages_for_ai, _route.recipe)
     _tools, _temp = _route.tools, _route.temperature
+    if _route.recipe is None:
+        _REQ_TOOLS.set(frozenset(schema_tool_name(s) for s in _tools if schema_tool_name(s)))
     if _route.recipe is not None and getattr(_route.recipe, "pipeline", False):
         # 管线模式：harness 按固定顺序取数，模型只写结论（工具选择方差 → 0）
         async def _px(name, args):
@@ -1186,7 +1187,7 @@ async def _run_tool_loop_inner(
                 ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user, view_state=_REQ_VIEW.get(),
                 fact_pack=_fpack,
             ):
-                _hit = True
+                _hit = _hit or _k in ("delta", "done")
                 yield _k, _v
             if _hit:
                 return

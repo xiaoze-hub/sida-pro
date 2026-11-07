@@ -76,3 +76,22 @@
 | 限流参数 | 系统设置 | owner |
 | 用户管理 | 系统设置 | owner |
 | key 冻结/额度 | 系统设置 | owner |
+
+## `GET/PUT /api/settings` 的读写拆口（2026-11-07）
+
+| 端点 | 门槛 | 说明 |
+|---|---|---|
+| `GET /api/settings`、`GET /api/settings/avatar`、`GET /api/settings/version` | 登录即可 | 敏感 key 已掩码（`********`），只读无风险 |
+| `PUT /api/settings/{key}` | `manage_settings`（端点级依赖 `require_settings_write`） | 全局配置写：数据源 token / `http_proxy` / 通知参数 |
+| `PUT /api/settings/avatar` | `manage_settings` | `ui_avatar` 是全局单行，不是 per-user |
+
+判权细节（三条都必须同时成立）：
+
+1. **必须在执行端判权**，不能只靠 `demo_isolation_middleware` 的路径前缀 ——
+   `ApiVersionAliasMiddleware` 在内层，会把 `/api/v1/settings/x` 改写成
+   `/api/settings/x`，前缀判断曾因此落空（member 实测 200 写穿）。
+2. 角色**实时从写库读**，不信 JWT 里的 `role` claim（降权后旧 token 立即失效）。
+3. 服务身份（`ServicePrincipal` / `role=service`）一律 403；判权查询异常一律 403（fail closed）。
+
+写入审计与设置**同一次提交**：审计写不进去 → 整笔回滚 + 5xx，不谎报成功；
+明细里敏感值只记 `********`，代理地址去 userinfo（`http://***@host`）。

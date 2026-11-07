@@ -8,28 +8,14 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { fetchAPI } from '@sida/api'
+import { getAgentCatalog, getAgentCatalogDetail } from '@/lib/copilot/api'
+import type { AgentCatalogDetail, AgentCatalogRow } from '@/lib/copilot/api'
 import { Skeleton } from '@/components/Skeleton'
 
-type AgentRow = {
-  id: string
-  label: string
-  icon?: string
-  desc: string
-  when: string[]
-  tools: string[]
-  output_sections: string[]
-  version: string | null
-  updated_at: string | null
-}
-
-type AgentCatalog = { available: boolean; reason?: string; items: AgentRow[]; count: number }
-type AgentDetail = {
-  available: boolean
-  reason?: string
-  item: AgentRow | null
-  history: { fingerprint: string; created_at: string }[]
-}
+// 口径：目录必须走 `/copilot/agent-catalog`（对象）。`/copilot/agents` 是 @ 面板的**数组**，
+// 两个 handler 曾同路径注册 → FastAPI 先注册者胜 → 本页读到数组，固定报「服务端未给出原因」。
+type AgentRow = AgentCatalogRow
+type AgentDetail = AgentCatalogDetail
 
 export default function AgentCatalogPage() {
   const [state, setState] = useState<'loading' | 'ok' | 'empty' | 'error'>('loading')
@@ -43,7 +29,7 @@ export default function AgentCatalogPage() {
     setState('loading')
     setError('')
     try {
-      const res = await fetchAPI<AgentCatalog>('/copilot/agents')
+      const res = await getAgentCatalog()
       if (!res.available) {
         setState('error')
         setError(res.reason || '服务端未给出原因')
@@ -71,7 +57,7 @@ export default function AgentCatalogPage() {
     setDetail(null)
     setDetailError('')
     try {
-      const res = await fetchAPI<AgentDetail>(`/copilot/agents/${encodeURIComponent(id)}`)
+      const res = await getAgentCatalogDetail(id)
       if (!res.available) {
         setDetailError(res.reason || '服务端未给出原因')
         return

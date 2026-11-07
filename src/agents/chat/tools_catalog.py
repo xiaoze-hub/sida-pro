@@ -6,7 +6,7 @@
 平台有 132 张表 / 443 路由，但 chat 只有 62 个工具、可触达约 14%。继续堆工具数会把
 模型的选择成本推到不可用。这里改为「**先给目录，再查数据**」：
 
-- `list_data_domains()`  —— 一句话 + 26 个域的一行摘要（≤2500 字），模型据此知道有什么可查；
+- `list_data_domains()`  —— 一句话 + 每个域的一行摘要（≤2500 字），模型据此知道有什么可查；
 - `query_data_domain(domain, params_json)` —— 封闭白名单的统一取数入口。
 
 域目录的唯一权威是 `src/harness/data_catalog.yaml`（**只读，本模块不改它**）。
@@ -32,10 +32,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
+
+from src.core import etf_watch_feed as etf_feed
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -116,7 +119,7 @@ def _cap(text: str, limit: int) -> str:
 
 
 def render_domain_catalog() -> str:
-    """26 个域的一行摘要（`域id | 标签 | 必填参数 | 覆盖什么`），总长 ≤2500 字。"""
+    """全部登记域的一行摘要（`域id | 标签 | 必填参数 | 覆盖什么`），总长 ≤2500 字。"""
     if not DOMAINS:
         return (
             "数据域目录不可用：src/harness/data_catalog.yaml 读不到或为空。"
@@ -1578,6 +1581,10 @@ _SQL: dict[str, str] = {
     ),
 }
 
+#: ETF 看板（etf.flow）：语句与 `/api/etf-watch/*` 共用 `src/core/etf_watch_feed.SQL`，
+#: 页面和参谋因此读同一批表、同一套聚合（含 {ph} 模板键，由调用方展开）。
+_SQL.update(etf_feed.SQL)
+
 #: 客户端传入 db 为 None 时自开/自关会话（测试与定时任务路径）。
 
 def _session(db: Any) -> tuple[Any, bool]:
@@ -1588,11 +1595,23 @@ def _session(db: Any) -> tuple[Any, bool]:
     return SessionLocal(), True
 
 
-def _read(db: Any, key: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """执行一条只读语句，返回 dict 行。缺 LIMIT 直接拒绝（编程期错误，不发给库）。"""
+def _read(
+    db: Any,
+    key: str,
+    params: dict[str, Any] | None = None,
+    fmt: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """执行一条只读语句，返回 dict 行。缺 LIMIT 直接拒绝（编程期错误，不发给库）。
+
+    `fmt` 只用于展开 `{ph}` 这类 IN 占位符模板（跨方言必须逐个绑定）。**展开后仍然走
+    这条路径**：同一 LIMIT 守卫、同一会话获取/关闭。ETF 域曾经自己开 session 执行
+    展开后的语句，绕过 `_read`，导致测试桩拦不住、LIMIT 校验也漏掉。
+    """
     sql = _SQL.get(key)
     if not sql:
         raise KeyError(f"未登记只读语句: {key}")
+    if fmt:
+        sql = sql.format(**fmt)
     if "LIMIT" not in sql.upper():
         raise ValueError(f"只读查询必须带 LIMIT（禁止全表扫）: {key}")
     from sqlalchemy import text
@@ -1651,11 +1670,57 @@ def _read_one_safe(
         return None
 
 
+#: 凭据形态：`scheme://user:pass@host`、`password=...`、`user=...@...`、`host=...`。
+#: 驱动/连接异常的 args 里**直接带 DSN**（实测 SQLAlchemy OperationalError 会回显整条
+#: `postgresql://user:pass@ip:5432/db`），这些串绝不允许进用户可见文案。
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;)\]'\"]+"),
+    re.compile(r"(?i)\b(user|username|dsn|db_url|database_url|url)\s*[=:]\s*[^\s,;)\]'\"]+"),
+    # 整条 URL/DSN 打掉（userinfo + host + port + 库名都算连接参数），只留协议头。
+    re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^\s,;)\]'\"]+"),
+    re.compile(r"(?i)\b(host|port|server)\s*[=:]\s*[^\s,;)\]'\"]+"),
+)
+
+#: 驱动/连接层异常名：文案里一律不给原文，只给通用原因。
+_DRIVER_EXC_NAMES = frozenset({
+    "OperationalError",
+    "InterfaceError",
+    "InternalError",
+    "DatabaseError",
+    "DBAPIError",
+    "DisconnectionError",
+    "InvalidRequestError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "TimeoutError",
+    "OperationalErrorExt",
+})
+
+#: 唯一允许从驱动异常里回显的片段：schema 事实（表/列不存在、锁、只读），不含连接参数。
+_SAFE_DB_FACTS = (
+    re.compile(r"no such table:?\s*[A-Za-z0-9_.]+", re.I),
+    re.compile(r"no such column:?\s*[A-Za-z0-9_.]+", re.I),
+    re.compile(r'relation "[A-Za-z0-9_.]+" does not exist', re.I),
+    re.compile(r"(database is locked|readonly database|permission denied for table [A-Za-z0-9_.]+|disk I/O error)", re.I),
+    re.compile(r"(timeout expired|timed out|server closed the connection unexpectedly)", re.I),
+)
+
+
+def _mask_secrets(text: str) -> str:
+    """把 DSN / 账号密码 / host:port 一律打码，保留可读的失败形态。"""
+    out = text
+    out = _SECRET_PATTERNS[2].sub(r"\1***", out)
+    for pat in (_SECRET_PATTERNS[0], _SECRET_PATTERNS[1], _SECRET_PATTERNS[3]):
+        out = pat.sub(lambda m: f"{m.group(1)}=***", out)
+    return out
+
+
 def _clean_reason(exc: Exception) -> str:
     """异常 → 短原因（去掉 SQL 正文/换行，避免把 SQL 泄进用户可见文案）。"""
     raw = str(exc)
     head = raw.split("[SQL:", 1)[0].strip()
     head = head.replace("\n", " ").strip()
+    head = _mask_secrets(head)
     name = type(exc).__name__
     if not head:
         head = name
@@ -2802,6 +2867,240 @@ async def _query_ops_config(db: Any, params: dict[str, Any], user: Any) -> str:
 
 
 
+# ──────────────────────────── ETF 看板（etf.flow，只读） ────────────────────────────
+
+#: 语句键 → 人话标签（读取失败时写进「未取到（原因）」）。
+_ETF_SQL_LABELS = {
+    "etf_minute_rows": "ETF 分钟成交额",
+    "etf_latest_date": "分钟表最新交易日",
+    "etf_baseline_dates": "基线交易日",
+    "etf_baseline_rows": "同期基线",
+    "etf_support": "SC8 市场级净申购",
+    "etf_daily_dates": "日度交易日",
+    "etf_daily_minute": "日度分类成交额",
+    "etf_daily_net": "日度净申购",
+}
+
+_STATE_CN = {
+    "surge": "放量（≥1.5× 同期基线）",
+    "active": "偏活跃（≥1.15×）",
+    "normal": "与同期基线相当",
+    "quiet": "缩量（≤0.7×）",
+    "no_baseline": "无同期基线可比",
+    "insufficient": "数据不全（覆盖不足 80%）",
+    "no_data": "未取到",
+}
+
+_PHASE_CN = {"pre": "盘前", "live": "盘中", "closed": "已收盘", "non_trading_day": "非交易日"}
+
+
+_SQL_WORDS = ("SELECT", "INSERT", "UPDATE", "DELETE", "FROM")
+
+
+def _etf_reason(exc: Exception) -> str:
+    """异常 → 短原因：切掉 SQL 正文，并且**驱动/连接错误一律给通用原因**。
+
+    两道口子分别对应两类泄露：
+    1. `[SQL: ...]` / 裸 `SELECT` —— 把语句和参数交给模型；
+    2. 驱动异常的 `str()` 里带完整 DSN（`postgresql://user:pass@ip:5432/db`）——
+       `_clean_reason` 原来只做 SQL 截断，这条会一路写进「未取到（原因）」。
+
+    驱动层只保留 schema 事实（表/列不存在、锁、只读、超时），其余返回固定通用文案；
+    连接参数（账号/密码/host/port/库名 DSN）不进任何出口。日志同样写脱敏后的原因。
+    """
+    name = type(exc).__name__
+    if name in _DRIVER_EXC_NAMES or isinstance(exc, (ConnectionError, OSError)):
+        raw = str(exc)
+        facts = [m.group(0) for pat in _SAFE_DB_FACTS for m in [pat.search(raw)] if m]
+        if facts:
+            return _mask_secrets(f"{name}: {facts[0]}")[:120]
+        return f"{name}：数据库连接/驱动错误（参数已脱敏）"[:120]
+
+    txt = _mask_secrets(_clean_reason(exc))
+    upper = txt.upper()
+    cut = len(txt)
+    for word in _SQL_WORDS:
+        idx = upper.find(word)
+        if idx != -1:
+            cut = min(cut, idx)
+    head = txt[:cut].strip(" :：-—")
+    return (head or name)[:120]
+
+
+def _etf_runner(db: Any, missing: list[str]):
+    """语句键 → 行；失败写 missing 返回空（不补 0、不炸整域）。"""
+
+    def run(key: str, params: dict[str, Any] | None = None, fmt: dict[str, str] | None = None):
+        try:
+            # 走 `_read` 唯一路径（含 LIMIT 守卫与同一会话策略），`fmt` 只交给它展开。
+            return _read(db, key, params or {}, fmt)
+        except Exception as exc:  # noqa: BLE001 — 单表不可读不该让整域失败
+            reason = _etf_reason(exc)
+            missing.append(f"{_ETF_SQL_LABELS.get(key, key)} 读取失败（{reason}）")
+            logger.warning("ETF 语句 %s 失败: %s", key, reason)
+            return []
+
+    return run
+
+
+def render_etf_flow(
+    *,
+    as_of: str,
+    source: str,
+    intraday: dict[str, Any] | None = None,
+    support: dict[str, Any] | None = None,
+    missing: list[str] | None = None,
+) -> str:
+    """ETF 托底资金：**分钟级已采集累计** / 分钟覆盖 / 时段 / 市场级 SC8 原始样本。
+
+    参谋出口只报两类可证事实：
+    1. 分钟表里**已采集**的篮子成交额累计（截至最后一根分钟线）+ 覆盖率与缺失；
+    2. 市场级 SC8 的原始最新日与真实样本窗口（`support` 读源原样）。
+
+    多日「日度合计」一律不输出：分钟表里「某日有行」既证明不了 240 根分钟采齐，
+    也证明不了 20 只标的齐，按日求和就是把残缺日冒充全天成交额。跨表再把 SC8
+    净申购按分钟日期相加，等于两个不同样本窗口的伪造累计 —— 两者都不做。
+    """
+    sections: list[str] = []
+    miss = list(missing or [])
+
+    intraday = intraday or {}
+    totals = intraday.get("totals")
+    if totals:
+        ratio = totals.get("ratio_vs_baseline")
+        state = _STATE_CN.get(str(intraday.get("state") or ""), str(intraday.get("state") or ""))
+        phase = _PHASE_CN.get(str(intraday.get("phase") or ""), str(intraday.get("phase") or ""))
+        session = _PHASE_CN.get(
+            str(intraday.get("session_phase") or ""), str(intraday.get("session_phase") or "")
+        )
+        expected = int(totals.get("etfs_expected") or 0) or len(etf_feed.ew.ETF_BASKET)
+        gate = int(totals.get("min_etfs_for_complete") or 0) or etf_feed.min_etfs_for_complete(expected)
+        base_avg = totals.get("baseline_avg_yi")
+        sections.append(
+            f"- **篮子成交额（分钟级已采集累计，非全天成交额）**：{expected} 只重点宽基 ETF（12 类）"
+            f"已采集合计 {_num(totals.get('cum_yi'))} 亿元"
+            f"（截至 {totals.get('last_minute') or '未知'}）；同期基线 "
+            f"{'未披露' if base_avg is None else _num(base_avg) + ' 亿元'}，"
+            f"比值 {_num(ratio, 3)} —— {state}"
+        )
+
+        # 基线样本数只报能算出的实际值：请求 20 日 ≠ 有 20 日样本；缺的日期属「未采集还
+        # 是非交易日」分钟表反推不出来，必须标未确认，不能继续说「过去 20 日」。
+        days_used = totals.get("baseline_days")
+        days_req = int(totals.get("baseline_days_requested") or etf_feed.BASELINE_DAYS)
+        missing_days = int(totals.get("baseline_missing_days") or 0)
+        dropped = int(totals.get("baseline_days_dropped") or 0)
+        base_txt = f"- **基线样本**：{days_used if days_used is not None else '未披露'}/{days_req} 个交易日「同一分钟」累计均值"
+        if totals.get("baseline_confirmed"):
+            base_txt += "（基线样本齐备）"
+        else:
+            if missing_days:
+                base_txt += f"；窗口内缺 {missing_days} 个交易日样本（未采集还是非交易日未确认）"
+            if dropped:
+                base_txt += f"；{dropped} 个交易日无达标分钟被剔除"
+        sections.append(base_txt)
+
+        minutes = int(totals.get("minutes") or 0)
+        full = int(totals.get("full_minutes") or 0)   # 过 ≥80% 闸门的分钟
+        strict = int(totals.get("strict_minutes") or 0)  # 真正 20 只全齐的分钟
+        cov = totals.get("coverage")
+        cov_txt = f"{_num((cov or 0) * 100, 1)}%" if cov is not None else "未披露"
+        cov_line = (
+            f"- **分钟覆盖（分母仅已采集分钟）**：已采集 {minutes} 分钟，其中 {full} 个达 "
+            f"≥{gate}/{expected} 只（{cov_txt}），{strict} 个为 {expected} 只全齐；"
+            f"覆盖率 <80% 判「数据不全」，不参与活跃度结论；"
+            f"未采集的分钟不在分母里，既不补 0 也不当成交额缺失之外的结论依据"
+        )
+        no_amt = int(totals.get("minutes_without_amount") or 0)
+        if no_amt:
+            cov_line += (
+                f"；其中 {no_amt} 分钟金额全是 NULL（未落库），未按 0 计入累计，"
+                f"也不计为达标分钟"
+            )
+        # 数据日已收盘而最后一根分钟线不到 15:00 → 收盘段就是「缺失」，只能如实点名。
+        last_min = str(totals.get("last_minute") or "")
+        if str(intraday.get("phase") or "") == "closed" and last_min and last_min < "1500":
+            cov_line += f"；⚠️ 数据日已收盘，但最后一根分钟线是 {last_min}，收盘段（至 15:00）未采集"
+        sections.append(cov_line)
+        stamp = intraday.get("session_time") or ""
+        ts = f"- **时点**：当前时段 {session or '未披露'}"
+        if stamp:
+            ts += f"（{stamp}）"
+        ts += f"；本段数据日 {intraday.get('date') or '未知'}（{phase or '未披露'}）"
+        if intraday.get("fallback_from"):
+            ts += (
+                f"；当日（{intraday.get('fallback_from')}）分钟未就绪，已回退到最近交易日"
+                f"（非当日盘面，勿当今日读数）"
+            )
+        sections.append(ts)
+    elif not any("分钟成交额" in m for m in miss):
+        # 读表已经失败时不再叠加「无数据」措辞，避免把故障说成「今天没行情」。
+        note = intraday.get("note") or "当日无分钟数据"
+        miss.append(f"篮子成交额：未取到（{note}）")
+
+    sup = support or {}
+    latest = sup.get("latest") or {}
+    if sup.get("state") == "ok" and latest:
+        pct = sup.get("latest_percentile_in_support_days")
+        line = (
+            f"- **市场级 SC8**：{latest.get('date') or '未知'} 净申购 "
+            f"{_num(latest.get('net_sub_yi'))} 亿元（规模 {_num(latest.get('scale_yi'))} 亿元）；"
+            f"托底日（单日净申购 ≥{_num(sup.get('threshold_yi'), 0)} 亿元）"
+            f"{sup.get('support_count')}/{sup.get('sample_count')} 个样本，"
+            f"最新日在托底日中分位 {_num(pct, 1)}%"
+        )
+        # 样本窗口按读源返回的首末行原样写（不做任何窗口对齐或补日）。
+        series = sup.get("series") or []
+        if series:
+            first_d = series[0].get("date")
+            last_d = series[-1].get("date")
+            if first_d and last_d and first_d != last_d:
+                line += f"；样本窗口 {first_d}~{last_d}"
+            elif last_d:
+                line += f"；样本窗口仅 {last_d} 一日"
+        sections.append(line)
+    elif sup:
+        miss.append(f"市场级 SC8：未取到（{sup.get('note') or '无落库数据'}）")
+    else:
+        miss.append("市场级 SC8：未取到（本次未取到该表）")
+
+    sections.append(
+        "- **口径提醒**：SC8 是**全市场** ETF 口径，不等于 20 只篮子的净申购，"
+        "也不能按篮子拆分；单只 ETF 净申购不可用（通达信份额为当前值回填，实测零变化）。"
+        "篮子成交额只是分钟表**已采集**部分的累计（单位亿元），不等于全天成交额，"
+        "本报不做任何按日汇总。"
+    )
+    return render_domain_sections(
+        "etf.flow", as_of=as_of, source=source, sections=sections, missing=miss
+    )
+
+
+async def _query_etf_flow(db: Any, params: dict[str, Any], user: Any) -> str:
+    """ETF 看板只读域：与 /api/etf-watch/* 同源同口径。
+
+    参谋只取两段：分钟表当日**已采集**累计（含覆盖率/缺失）+ 市场级 SC8 原始样本。
+    日度多日合计不取也不渲染（`daily_payload` 仍服务 Web API 的日度列契约）。
+    """
+    missing: list[str] = []
+    run = _etf_runner(db, missing)
+
+    now = datetime.now(_CST)
+    intraday = etf_feed.intraday_payload(run, None, now=now)
+    support = etf_feed.support_payload(run, 750)
+    # 不再用日度窗口的净申购「救」SC8：两者是同一条 etf_flow_daily，救不出独立证据；
+    # SC8 读不到就如实报「未取到（原因）」。
+    if support.get("state") != "ok":
+        logger.info("etf.flow: SC8 市场级样本未取到（%s）", support.get("note") or "无落库数据")
+    as_of = str(intraday.get("date") or (support.get("latest") or {}).get("date") or "未知")
+    return render_etf_flow(
+        as_of=as_of,
+        source="etf_minute_flow / etf_flow_daily（TDX/TQ，只读）",
+        intraday=intraday,
+        support=support,
+        missing=missing,
+    )
+
+
 # ──────────────────────────── 统一入口 ────────────────────────────
 
 
@@ -2870,6 +3169,7 @@ async def query_data_domain(
         "notify.task": _query_notify_task,
         "backtest": _query_backtest,
         "ops.config": _query_ops_config,
+        "etf.flow": _query_etf_flow,
         "limit.pool": None,  # 见下（自带只读 SQL）
         "lhb.daily": None,   # 见下（自带只读 SQL）
         "theme.mood": None,  # 见下（自带只读 SQL）
@@ -2944,7 +3244,7 @@ _CATALOG_SCHEMA = {
     "function": {
         "name": "list_data_domains",
         "description": (
-            "列出平台可查询的**数据域目录**（26 个域：域id | 标签 | 必填参数 | 覆盖什么）。"
+            f"列出平台可查询的**数据域目录**（{len(DOMAINS)} 个域：域id | 标签 | 必填参数 | 覆盖什么）。"
             "任何『平台有哪些数据可查 / 这个数据从哪来』的问题，或使用 query_data_domain 之前，"
             "都先调本工具拿目录，不要凭印象猜表名或域 id。"
         ),
@@ -2958,11 +3258,12 @@ _QUERY_SCHEMA = {
         "name": "query_data_domain",
         "description": (
             "**数据域统一取数入口**：传域 id + 参数，返回人话 Markdown（首行「域 / 时点 / 来源表」，"
-            "末尾缺数据会写「未取到（原因）」）。26 个域全部已接入。"
+            f"末尾缺数据会写「未取到（原因）」）。{len(DOMAINS)} 个域全部已接入。"
             "市场/个股类：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date、min_streak）、"
             "lhb.daily（龙虎榜/席位，可选 symbol、date）、theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
             "market.index（大盘指数/两市成交额）、market.breadth（涨跌家数+ADL/ARMS 分位+九档分布+市场状态）、"
             "market.mainline（主线榜排名/主线分/龙头，可选 top_n）、board.daily（板块涨跌与资金排行，可选 top_n）、"
+            "etf.flow（20 只重点宽基 ETF 篮子成交额+分钟覆盖率+全市场 SC8 净申购/托底日样本，可选 days）、"
             "strategy.signal（策略因子分+信号发出/T+1T+5 事后收益，可选 top_n）、"
             "auction.flow（集合竞价 9:25 快照/逐帧/异动池，可选 symbol、limit）、"
             "stock.quote（实时报价，必填 symbol，库内行超 60s 转实时取数）、"
@@ -3035,6 +3336,7 @@ __all__ = [
     "render_auction_flow",
     "render_backtest",
     "render_board_daily",
+    "render_etf_flow",
     "render_domain_catalog",
     "render_domain_sections",
     "render_kline",

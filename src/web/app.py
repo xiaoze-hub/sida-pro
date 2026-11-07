@@ -257,6 +257,28 @@ _USER_FACING_ADMIN_EXCEPTIONS = frozenset({
     ("POST", "/api/agents/intraday/scan"),
 })
 
+#: 版本别名前缀(与 ApiVersionAliasMiddleware 同规则: /api/v1/<rest> → /api/<rest>)
+_API_VERSION_PREFIX = "/api/v1"
+
+
+def _authz_path(path: str) -> str:
+    """权限判定用的**规范路径**: 把 `/api/v1/*` 还原成 `/api/*`。
+
+    为什么必须还原: 中间件栈里 `ApiVersionAliasMiddleware` 是**内层**(后 add 的
+    demo 隔离中间件在外层), 于是这里看到的还是原始 `/api/v1/datasources/1`,
+    前缀表 `_ADMIN_PREFIX_PERMISSIONS` 里的 `/api/datasources` 匹配不上 →
+    `admin_prefix_denied` 返回 False → member 走 `/api/v1/...` 就能写管理区。
+
+    实测(2026-11-07 复审):
+        PUT /api/settings/http_proxy     → 403
+        PUT /api/v1/settings/http_proxy  → 200(member 改全站出网代理)
+    同一手法对 `/api/datasources`(数据源凭证)、`/api/providers`(AI 服务 key)、
+    `/api/agents` 全部成立。判定按最终路由路径来, 才不会随别名/改写漏。
+    """
+    if path == _API_VERSION_PREFIX or path.startswith(_API_VERSION_PREFIX + "/"):
+        return "/api" + path[len(_API_VERSION_PREFIX):]
+    return path
+
 
 def admin_prefix_denied(method: str, path: str, perms: set) -> bool:
     """管理区前缀鉴权判定（中间件用）。True = 应当 403。
@@ -267,6 +289,9 @@ def admin_prefix_denied(method: str, path: str, perms: set) -> bool:
     # 防御性去掉 query/fragment：中间件拿的是 request.url.path（本无 query），
     # 但这个纯函数要能被直接调用/单测，别让调用方多传一个参数就判错。
     normalized = path.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+    # 版本别名归一(2026-11-07): /api/v1/x 最终路由到 /api/x, 判权必须按后者算,
+    # 否则 member 只要在 URL 里插一层 /v1 就绕过全部管理区前缀鉴权(实测 200 写穿)。
+    normalized = _authz_path(normalized)
     if (method.upper(), normalized) in _USER_FACING_ADMIN_EXCEPTIONS:
         return False
     for prefix, required in _ADMIN_PREFIX_PERMISSIONS.items():
@@ -319,6 +344,9 @@ async def demo_isolation_middleware(request: Request, call_next):
     # 非 API 路径(静态资源)直接放行
     if not path.startswith("/api/"):
         return await call_next(request)
+    # 2026-11-07: 之后的判定一律用**规范化路径**(/api/v1/x → /api/x) —— 端点最终
+    # 就是按后者执行的, 判权跟路由必须同一把尺子, 否则 /v1 别名就是一道后门。
+    path = _authz_path(path)
 
     username = None
     payload = None

@@ -21,9 +21,19 @@ def client(monkeypatch):
     login_ratelimit.reset()
     db = __import__("src.web.database", fromlist=["SessionLocal"]).SessionLocal()
     try:
+        from src.db.models import AppSettings, User
         from tests.conftest import purge_users
 
         purge_users(db, only_username=ADMIN_USER)
+        # 同片前面的用例可能留下别的 owner 行或旧单用户迁移键；ensure_admin 会优先复用
+        # 第一个 owner / AppSettings 里的旧哈希，导致这里用 env 口令登录 401（片内顺序依赖）。
+        # 本文件的语义是「env 口令 + 验证码」，必须先把这些遗留状态清干净。
+        owners = [u.id for u in db.query(User).filter(User.role == "owner").all()]
+        if owners:
+            purge_users(db, ids=owners)
+        db.query(AppSettings).filter(
+            AppSettings.key.in_(("auth_username", "auth_password_hash"))
+        ).delete(synchronize_session=False)
         db.commit()
     finally:
         db.close()

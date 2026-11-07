@@ -28,6 +28,22 @@
 工具直接记 `budget_exhausted`。**所有工具都没取到 → 返回 None**，调用方回落原来的多轮 loop
 （管线挂了不许变成没答案）。记录类工具（`fallback=False`）照旧只写库、不进取数 lane。
 
+**上下文透传（2026-11-07 补齐）**：调用方（`chat.py` → `pipeline_router`）对两条管线
+是同一次调用，会递 `context` / `fact_pack` / `evidence_sink` / `view_state` / `db` / `user`。
+这里**只接收真的会消费的那部分**，逐项说清楚，避免「加了形参不作数」：
+
+- `context`：会话上下文（本人/页面/持仓/偏好）→ 拼进 system。消费。
+- `fact_pack`：委派场景父 run 冻结的事实包。**只消费 `as_of` / `source` / `text` 三个键**
+  的冻结锚点（与 `pipeline.compose_prompt` 同口径），绝不把包里的标的快照塞进全市场
+  结论 —— 全市场问题没有单标的，塞进去就是假证据。
+- `evidence_sink`：出站证据落点（SSE `done` 里 `_attach_evidence` 读的就是它）。
+  结论真的产出后写 `evidence_pack` 结构；**回落路径一条都不写**。
+  未给 sink 时退回 `evidence_pack.CURRENT_SINK`（生产路径就是这么走的）：
+  只 `extend` 那个 list、不 `set` 变量，所以不会跨请求/跨上下文串味。
+- `view_state` / `db` / `user`：**本模块不接收**。`view_state` 是单标的页面锚点
+  （`propose_levels` 用），全市场结论没有那一个标的；`db`/`user` 已在路由层由
+  `resolve_watchlist` 消费完，再传下来就是死形参。
+
 **边界**：纯增量模块，不改 `pipeline.py` 的既有语义，也不碰 `chat.py`。
 接线由集成方做：`recipe.pipeline and recipe.scope == "market"` → 走这里，否则走原路。
 """
@@ -44,6 +60,7 @@ from src.harness.pipeline import (
     PER_TOOL_TIMEOUT,
     TOTAL_EVIDENCE_CHARS,
     _concurrency,
+    _emit_evidence,
     _is_heavy_tool,
     _ms,
     _record,
@@ -372,13 +389,32 @@ async def run_market_pipeline_stream(recipe, executor, *, market: str = "CN", tr
 # ---------------------------------------------------------------- 结论提示词
 
 
+def _fact_pack_header(fact_pack: dict | None) -> str:
+    """冻结事实包的前缀（与 `pipeline.compose_prompt` 逐字同口径）。
+
+    只读 `as_of` / `source` / `text`：事实包冻结点不是各工具数据的基准日，除这句
+    约束外不掺别的东西；包里 `symbols` 的标的价格属于父 run 的单标的快照，
+    全市场结论引用它就是把「某只票的行情」冒充「盘面数据」。
+    """
+    if not fact_pack or not isinstance(fact_pack, dict):
+        return ""
+    return (
+        f"--- 本轮事实包（冻结于 {fact_pack.get('as_of', '')}，"
+        f"来源 {fact_pack.get('source', '')}）---\n"
+        f"{fact_pack.get('text', '')}\n任何结论不得引用晚于该时点的数据；缺项写「暂无」\n\n"
+    )
+
+
 def compose_market_prompt(recipe, run: MarketRun, question: str,
-                          context: str = "") -> tuple[str, str]:
+                          context: str = "", fact_pack: dict | None = None) -> tuple[str, str]:
     """把全市场证据拼成 (system, user)。
 
     规则文本与 `pipeline.compose_prompt` 同口径（不许补、不许算、缺维度写「暂无」），
     额外多一条：本轮**明确没跑**的维度（没自选 / 参数填不上）必须在「口径」里写「未取到」，
     并写出原因 —— 否则模型会把「没查」写成「没有」。
+
+    `fact_pack` 非空时把冻结锚点放到 system 最前面（与符号管线同一位置、同一措辞），
+    委派场景下向模型提示父 run 的冻结时点；这不是硬性时点校验，工具可能返回更晚的数据。
     """
     sections = " / ".join(recipe.output_sections) if recipe.output_sections else ""
     rule = (
@@ -393,6 +429,7 @@ def compose_market_prompt(recipe, run: MarketRun, question: str,
             "不许用常识或印象补齐，也不许据此断言「没有」。"
         )
     system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "") + '\n\n【通用排版铁律 —— 禁止教科书式长段落】\n1) 第一段必须先给一句话结论（≤45 字，带方向/状态 + 两个关键数字）。\n2) 每个段落下的内容一律写「- 」要点列表或 GFM 表格；每条要点独立成行、≤50 字、以数字或标的开头。\n3) 任何地方禁止出现超过 3 行的连续散文段落；禁止使用「从盘面看/整体而言/值得注意的是/综上所述」等套话。\n4) 段落标题单独成行（用【段落名】包起来），不许用 markdown `#` 标题。'
+    system = _fact_pack_header(fact_pack) + system
     if context:
         system += "\n\n--- 会话上下文（用户本人 / 当前页面 / 持仓与偏好）---\n" + context
 
@@ -429,13 +466,19 @@ def _audit(text: str, run: MarketRun, system: str, question: str) -> str:
 
 
 async def answer_market(ai_client, recipe, executor, question: str, *, market: str = "CN",
-                        trace=None, watchlist=None, context: str = "") -> str | None:
-    """非流式全市场作答。返回 None = 没跑成，调用方回落多轮 loop。"""
+                        trace=None, watchlist=None, context: str = "",
+                        fact_pack: dict | None = None,
+                        evidence_sink: list | None = None) -> str | None:
+    """非流式全市场作答。返回 None = 没跑成，调用方回落多轮 loop。
+
+    `fact_pack` / `evidence_sink` 与符号管线同名同义（见模块 docstring 的透传口径）：
+    冻结锚点进提示词，证据旁路只在**真的产出了结论**时写。
+    """
     run = await run_market_pipeline(recipe, executor, market=market, trace=trace,
                                     watchlist=watchlist)
     if run is None:
         return None
-    system, user_block = compose_market_prompt(recipe, run, question, context)
+    system, user_block = compose_market_prompt(recipe, run, question, context, fact_pack)
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user_block}]
     try:
         if hasattr(ai_client, "chat_with_tools"):
@@ -448,14 +491,24 @@ async def answer_market(ai_client, recipe, executor, question: str, *, market: s
         return None
     if not text:
         return None
-    return _audit(text, run, system, question)
+    audited = _audit(text, run, system, question)
+    # 证据旁路：走到这里说明这些数据真的被用来写结论了，才允许出站。
+    # 上面两条 `return None`（取数全失败 / 写结论失败）都在这之前，回落路径不留证据。
+    _emit_evidence([run], trace, fact_pack, evidence_sink)
+    return audited
 
 
 async def answer_market_stream(ai_client, recipe, executor, question: str, *, market: str = "CN",
-                               trace=None, watchlist=None, context: str = ""):
+                               trace=None, watchlist=None, context: str = "",
+                               fact_pack: dict | None = None,
+                               evidence_sink: list | None = None):
     """流式全市场作答：("stage", 进度) → ("delta", 增量) → ("done", 全文)。
 
     一个维度都没取到 → 直接 return（不产出 done），调用方据此回落多轮 loop。
+
+    证据旁路在 `("done", ...)` **之前**落盘：调用方读 sink 拼 done 载荷，晚一步就是
+    「正文到了、证据没到」。只 `extend` 传入/ContextVar 里的 list，不 `set` ContextVar
+    —— 生成器在调用方 context 里跑，`set` 会漏给外层请求。
     """
     run: MarketRun | None = None
     async for kind, payload in run_market_pipeline_stream(
@@ -467,7 +520,7 @@ async def answer_market_stream(ai_client, recipe, executor, question: str, *, ma
             run = payload if isinstance(payload, MarketRun) else None
     if run is None:
         return
-    system, user_block = compose_market_prompt(recipe, run, question, context)
+    system, user_block = compose_market_prompt(recipe, run, question, context, fact_pack)
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user_block}]
     acc: list[str] = []
     final = None
@@ -487,4 +540,5 @@ async def answer_market_stream(ai_client, recipe, executor, question: str, *, ma
     if len(audited) > len(text):    # 对账附言作为增量补发，不重复正文
         yield "delta", audited[len(text):]
         text = audited
+    _emit_evidence([run], trace, fact_pack, evidence_sink)
     yield "done", text
