@@ -1727,7 +1727,10 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                 "就传 index；声明与代码不符（如 399001 传 stock、000858 传 index）同样拒绝，"
                 "请直接告诉用户原因，不要重试；"
                 "kind=watchlist：把某只票加入自选，需要 symbol，可选 name/market；"
-                "kind=alert：建盯盘提醒（当前仅记录，暂不执行）。"
+                "kind=alert：建盯盘提醒。**确认后真的会写库**：在该标的的自选上建一条价格提醒"
+                "（price 必填=触发价；direction=above 上破(默认)/below 下破）；"
+                "若该标的还不在自选，确认时会**顺带把它加入自选**；"
+                "提醒条数与自选数量都受账号配额约束，配额不足时确认会失败并说明原因。"
                 "只在用户明确要「标注/加自选/盯一下」时调用；不要用它代替分析结论。"
             ),
             "parameters": {
@@ -1736,7 +1739,12 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                     "kind": {"type": "string", "enum": ["annotation", "watchlist", "alert"]},
                     "symbol": {"type": "string", "description": "6 位 A 股代码"},
                     "label": {"type": "string", "description": "标注短标签（annotation 必填，≤20 字）"},
-                    "price": {"type": "number", "description": "水平线价位；annotation 的 price 或 ts 至少一项"},
+                    "price": {"type": "number", "description": "水平线价位；annotation 的 price 或 ts 至少一项；alert 时为提醒触发价（必填）"},
+                    "direction": {
+                        "type": "string",
+                        "enum": ["above", "below"],
+                        "description": "alert 的触发方向：above=上破(默认)、below=下破；其它 kind 忽略",
+                    },
                     "ts": {"type": "string", "description": "标注日期，仅 YYYY-MM-DD；单独提供时仅在对应日线且已加载该日K线时可显示，其他周期不假定上图"},
                     "instrument": {
                         "type": "string",
@@ -1768,10 +1776,17 @@ async def _tool_propose_action(db: Session, args: dict, user: User | None = None
         item = propose(db, user_id=user.id, kind=kind, payload=payload)
     except ActionError as exc:
         return f"动作提议失败：{exc}"
-    return (
-        f"已在「待确认动作」里生成一条提议（#{item['id']}，类型 {kind}）。"
-        "请提醒用户在参谋面板点确认后才会生效；不要声称已经加好或已经标注。"
-    )
+    lines = [f"已在「待确认动作」里生成一条提议（#{item['id']}，类型 {kind}）。"]
+    # 确认后真正会改什么：照 diff 说，不替服务端编。diff 为空(算不出来)就只提示去确认。
+    for d in item.get("diff") or []:
+        if d.get("change") not in ("add", "update"):
+            continue
+        before = d.get("before") or "无"
+        lines.append(f"· {d.get('field')}：{before} → {d.get('after')}")
+    if kind == "alert":
+        lines.append("确认后会占用该账号 1 条提醒配额；若上一条里列出了「自选」，则同时占 1 个自选名额。")
+    lines.append("请提醒用户在参谋面板点确认后才会生效；不要声称已经加好或已经标注。")
+    return "\n".join(lines)
 
 
 @register_chat_tool(

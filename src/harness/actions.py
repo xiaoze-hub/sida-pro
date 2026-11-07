@@ -402,6 +402,8 @@ def _apply_watchlist(db: Session, *, user_id: Any, payload: dict) -> str:
     )
     if exists:
         return f"{symbol} 已在自选"
+    # 与 `POST /api/stocks` 同一把配额尺子：AI「加自选」不能比 API 多加一只。
+    _enforce_quotas(db, user_id=user_id, need_alert_slot=False, need_watchlist_slot=True)
     db.add(Stock(
         user_id=str(user_id),
         symbol=symbol,
@@ -959,13 +961,116 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> tuple[str,
     }
 
 
+def _my_watchlist_row(db: Session, *, user_id: Any, symbol: Any, market: Any) -> Any:
+    """本人在**同一市场**上的自选行（不存在返回 None）。
+
+    必须带 market：`stocks` 只保证 (user_id, symbol, market) 语义唯一，代码串在多市场
+    重名（00700 港股 / 某些 A 股代码段就撞过）。只按 symbol 取会让提醒挂到别的市场的
+    那条自选上 —— 用户以为在盯港股，实际盯的是另一只票。
+    """
+    from src.db.models import Stock
+
+    return (
+        db.query(Stock)
+        .filter(
+            Stock.user_id == str(user_id),
+            Stock.symbol == str(symbol or "").strip(),
+            Stock.market == market,
+        )
+        .first()
+    )
+
+
+def _alert_market(payload: dict) -> str:
+    """提醒标的的市场口径：大写字面量，空 → CN（与 stocks 写入端一致）。"""
+    return str(payload.get("market") or "CN").strip().upper() or "CN"
+
+
+def _quota_subject(db: Session, user_id: Any) -> Any:
+    """取当前账号行，用于配额判定。
+
+    账号行查不到时按 **member** 口径判定 —— 这是最严的普通账号档（不是 pro/owner），
+    既不会因为查不到就放行，也不凭空发明一个"pro 权限"。
+    """
+    from src.db.models import User
+
+    row = db.query(User).filter(User.id == str(user_id)).first()
+    if row is not None:
+        return row
+
+    class _MemberStub:
+        id = str(user_id)
+        role = "member"
+        username = ""
+
+    logger.warning("配额判定: user_id=%s 没有账号行, 按 member 口径处理", user_id)
+    return _MemberStub()
+
+
+def _enforce_quotas(
+    db: Session, *, user_id: Any, need_alert_slot: bool, need_watchlist_slot: bool
+) -> None:
+    """确认执行前的配额闸门（与直接 API 路径同一把尺子）。
+
+    `check_alert_quota` / `check_watchlist_quota` 在 HTTP 层抛 `HTTPException(403)`；
+    harness 的动作语义是 `ActionError`（带 status_code），在这里翻译，避免配额拒绝
+    变成 500。放在动作认领之后、写业务表之前，失败时 apply_action 会整笔回滚、
+    动作回到 pending。
+    """
+    from fastapi import HTTPException
+
+    from src.core.permissions import check_alert_quota, check_watchlist_quota
+
+    user = _quota_subject(db, user_id)
+    try:
+        if need_alert_slot:
+            check_alert_quota(db, user)
+        if need_watchlist_slot:
+            # 演示/guest 账号在 `POST /api/stocks`、`/adopt` 上走的是 guest_strategy
+            # 的 watchlist_limit（默认 1），不是会员档的 10。AI 动作必须同口径，
+            # 否则参谋面板成了绕过演示上限的后门。
+            from src.db.models import Stock
+
+            blocked = _demo_watchlist_block(db, user, Stock)
+            if blocked:
+                raise HTTPException(403, blocked)
+            # 提醒动作会顺带建自选 —— 这条副作用同样占自选名额，不能白送。
+            check_watchlist_quota(db, user)
+    except HTTPException as exc:
+        raise ActionError(str(exc.detail), status_code=int(exc.status_code or 403)) from exc
+
+
+def _demo_watchlist_block(db: Session, user: Any, stock_model: Any) -> str | None:
+    """演示/guest 账号的自选上限文案（与 `POST /api/stocks` 同一口径）；不适用返回 None。"""
+    if str(getattr(user, "username", "")) != "demo" and str(getattr(user, "role", "")) != "guest":
+        return None
+    try:
+        from src.core import free_tier
+
+        limit = int(free_tier.guest_strategy(db).get("watchlist_limit", 1))
+    except Exception:  # noqa: BLE001
+        limit = 1
+    if limit <= 0:
+        return None
+    own = db.query(stock_model).filter(stock_model.user_id == str(user.id)).count()
+    if own >= limit:
+        return f"演示账号仅可添加 {limit} 只自选股，请先删除当前自选再确认这个动作。"
+    return None
+
+
 def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
-    """建一条价格提醒规则（2026-10-20, P2）。
+    """建/更新一条价格提醒规则（2026-10-20, P2；2026-11-07 补配额与副作用披露）。
 
     规则必须挂在一只**自选**上（表结构是 stock_id 外键），所以先确保自选里有这只票，
     没有就顺带加进去 —— 用户点「盯一下」时不会想要"先去自选添加再来一次"。
+    这个副作用现在必须**明说**（结果文案 + diff + 工具提示词三处一致），因为它同时
+    消耗用户的自选名额。
+
+    同一标的已有规则时**更新**条件而不是再插一条：`_diff_alert` 对该情况本来就报
+    "update"，若真插第二条，用户看到的是更新、实际多烧一条提醒配额，且撤销口径
+    （快照只记一条 rule_id）也对不上。
     """
-    from src.db.models import PriceAlertRule, Stock
+    from src.db.models import PriceAlertRule
 
     symbol = str(payload.get("symbol") or "").strip()
     if not symbol:
@@ -976,41 +1081,72 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
     direction = str(payload.get("direction") or "above")
     if direction not in ("above", "below"):
         raise ActionError("direction 只能是 above / below")
+    market = _alert_market(payload)
+    arrow = "上破" if direction == "above" else "下破"
 
-    stock = (
-        db.query(Stock)
-        .filter(Stock.user_id == str(user_id), Stock.symbol == symbol)
-        .first()
+    stock = _my_watchlist_row(db, user_id=user_id, symbol=symbol, market=market)
+    rule = None
+    if stock is not None:
+        rule = (
+            db.query(PriceAlertRule)
+            .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock.id)
+            .order_by(PriceAlertRule.id.desc())
+            .first()
+        )
+    # 「更新既有规则」不占新名额 —— 到上限的用户仍可改自己的条件；只有真的新增才查配额。
+    _enforce_quotas(
+        db, user_id=user_id,
+        need_alert_slot=rule is None,
+        need_watchlist_slot=stock is None,
     )
+
+    added_watchlist = False
     if stock is None:
+        from src.db.models import Stock
+
         stock = Stock(
             user_id=str(user_id), symbol=symbol,
-            name=str(payload.get("name") or symbol), market=str(payload.get("market") or "CN"),
+            name=str(payload.get("name") or symbol), market=market,
+            sort_order=0,
         )
         db.add(stock)
         db.flush()
+        added_watchlist = True
 
-    rule = PriceAlertRule(
-        user_id=str(user_id),
-        stock_id=stock.id,
-        name=str(payload.get("label") or f"{symbol} {'上破' if direction == 'above' else '下破'} {price}")[:60],
-        enabled=True,
-        # 必须匹配 price_alert_engine.eval_rule 的期望结构，否则规则入库但永远不触发
-        # （engine: {"op": "and"|"or", "items": [{"type","op","value"}]}）
-        condition_group={
-            "op": "and",
-            "items": [{
-                "type": "price",
-                "op": ">=" if direction == "above" else "<=",
-                "value": float(price),
-            }],
-        },
-        market_hours_mode="trading_only",
-        repeat_mode="once",
-    )
-    db.add(rule)
-    db.commit()
-    return f"已建盯盘提醒：{symbol} {'上破' if direction == 'above' else '下破'} {price}"
+    # 必须匹配 price_alert_engine.eval_rule 的期望结构，否则规则入库但永远不触发
+    # （engine: {"op": "and"|"or", "items": [{"type","op","value"}]}）
+    condition = {
+        "op": "and",
+        "items": [{
+            "type": "price",
+            "op": ">=" if direction == "above" else "<=",
+            "value": float(price),
+        }],
+    }
+    updated = rule is not None
+    if rule is None:
+        rule = PriceAlertRule(
+            user_id=str(user_id),
+            stock_id=stock.id,
+            name=str(payload.get("label") or f"{symbol} {arrow} {price}")[:60],
+            enabled=True,
+            condition_group=condition,
+            market_hours_mode="trading_only",
+            repeat_mode="once",
+        )
+        db.add(rule)
+    else:
+        rule.condition_group = condition
+        rule.enabled = True
+        if payload.get("label"):
+            rule.name = str(payload["label"])[:60]
+    # 只 flush，不 commit：由 apply_action 统一提交，配额/约束失败时整笔回滚。
+    db.flush()
+
+    head = f"已更新盯盘提醒：{symbol} {arrow} {price}" if updated else f"已建盯盘提醒：{symbol} {arrow} {price}"
+    if added_watchlist:
+        return f"{head}（原来不在自选，已一并加入自选：{market}）"
+    return head
 
 
 def _has_rollback_snapshot(row: Any) -> bool:
@@ -1149,20 +1285,22 @@ def _diff_watchlist(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
 
 
 def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
-    from src.db.models import PriceAlertRule, Stock
+    from src.db.models import PriceAlertRule
 
     symbol = str(payload.get("symbol") or "").strip()
     price = payload.get("price")
     direction = str(payload.get("direction") or "above")
     if not symbol or price is None:
         raise ActionError("盯盘提醒需要 symbol 与 price")
+    market = _alert_market(payload)
     op = ">=" if direction == "above" else "<="
-    stock = db.query(Stock).filter(Stock.user_id == str(user_id), Stock.symbol == symbol).first()
+    stock = _my_watchlist_row(db, user_id=user_id, symbol=symbol, market=market)
     existing = None
     if stock is not None:
         existing = (
             db.query(PriceAlertRule)
             .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock.id)
+            .order_by(PriceAlertRule.id.desc())
             .first()
         )
     before_rule = None
@@ -1170,12 +1308,22 @@ def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
         items = (existing.condition_group or {}).get("items") or []
         before_rule = f"{items[0].get('op')} {items[0].get('value')}" if items else None
     after_rule = f"{op} {price}"
-    return [{
+    diffs = [{
         "field": f"{symbol} 触发条件",
         "before": before_rule,
         "after": after_rule,
         "change": "noop" if before_rule == after_rule else ("update" if before_rule else "add"),
     }]
+    # 2026-11-07: 真实副作用必须进 diff。确认这个动作会在标的不在自选时**顺手建自选**，
+    # 既占自选名额也会改变用户的自选列表 —— 用户在点确认前有权看到。
+    if stock is None:
+        diffs.append({
+            "field": "自选",
+            "before": None,
+            "after": f"一并加入自选（{symbol} / {market}）",
+            "change": "add",
+        })
+    return diffs
 
 
 def _diff_schedule(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
@@ -1207,7 +1355,8 @@ def _snapshot(db: Session, *, user_id: Any, kind: str, payload: dict) -> dict:
         return {"stock_id": row.id if row else None, "existed": row is not None}
     if kind == "alert":
         symbol = str(payload.get("symbol") or "").strip()
-        stock = db.query(Stock).filter(Stock.user_id == str(user_id), Stock.symbol == symbol).first()
+        market = _alert_market(payload)
+        stock = _my_watchlist_row(db, user_id=user_id, symbol=symbol, market=market)
         rule = None
         if stock is not None:
             rule = (
@@ -1219,6 +1368,7 @@ def _snapshot(db: Session, *, user_id: Any, kind: str, payload: dict) -> dict:
         return {
             "stock_existed": stock is not None,
             "stock_id": stock.id if stock else None,
+            "stock_market": market,
             "rule_id": rule.id if rule else None,
             "rule_condition": (rule.condition_group if rule else None),
         }
@@ -1613,23 +1763,54 @@ def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = 
                     db.delete(obj)
                     undone.append(f"已移出自选：{sym}")
         elif row.kind == "alert":
+            # 2026-11-07: 按快照里的 stock_id 定位本次新建的规则，而不是"该用户最新一条规则"
+            # —— 后者在并发/用户随后又建了别的提醒时会删错行。
+            # 快照在 apply 之前拍，那时若标的不在自选则 stock_id 为 None（自选是 apply 才建的），
+            # 此时按 payload 的 (symbol, market) 在**本人名下**重查一次；查不到就不猜。
+            sid = snapshot.get("stock_id")
+            if sid is None:
+                sid_row = _my_watchlist_row(
+                    db, user_id=user_id,
+                    symbol=payload.get("symbol"), market=_alert_market(payload),
+                )
+                sid = sid_row.id if sid_row is not None else None
             rid = snapshot.get("rule_id")
             if rid is None:
-                # 这次新建了规则 → 删掉它
-                created = (
-                    db.query(PriceAlertRule)
-                    .filter(PriceAlertRule.user_id == str(user_id))
-                    .order_by(PriceAlertRule.id.desc())
-                    .first()
-                )
+                created = None
+                if sid is not None:
+                    created = (
+                        db.query(PriceAlertRule)
+                        .filter(
+                            PriceAlertRule.user_id == str(user_id),
+                            PriceAlertRule.stock_id == sid,
+                        )
+                        .order_by(PriceAlertRule.id.desc())
+                        .first()
+                    )
                 if created is not None:
                     db.delete(created)
+                    db.flush()
                     undone.append("已删除本次新建的盯盘提醒")
             elif snapshot.get("rule_condition"):
                 target = db.query(PriceAlertRule).filter(PriceAlertRule.id == rid).first()
                 if target is not None:
                     target.condition_group = snapshot["rule_condition"]
                     undone.append("已恢复提醒触发条件")
+            # 同一次动作顺手建的自选也要退回 —— 副作用已经明说，撤销就必须一起撤，
+            # 否则用户的配额被一条"已撤销"的动作永久占着。
+            if snapshot.get("stock_existed") is False and sid is not None:
+                still_used = (
+                    db.query(PriceAlertRule.id).filter(PriceAlertRule.stock_id == sid).first()
+                )
+                stock_obj = (
+                    db.query(Stock)
+                    .filter(Stock.id == sid, Stock.user_id == str(user_id))
+                    .first()
+                )
+                if stock_obj is not None and still_used is None:
+                    db.delete(stock_obj)
+                    db.flush()
+                    undone.append("已移出这次动作顺带加入的自选")
         elif row.kind == "schedule":
             from src.core.copilot_schedule import delete as _delete
 
