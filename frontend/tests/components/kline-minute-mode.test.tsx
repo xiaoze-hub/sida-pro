@@ -60,7 +60,9 @@ describe('KlineChart 主力意图接线(P2 补搬)', () => {
   it('支持 mainIntent prop, 且没给时会自取 summary(与 IK 原行为一致)', () => {
     expect(KC).toMatch(/mainIntent\?: MainIntentStructured \| null/)
     expect(KC).toMatch(/\/klines\/\$\{encodeURIComponent\(props\.symbol\)\}\/summary\?market=CN/)
-    expect(KC).toMatch(/const intent = props\.mainIntent \?\? intentFetched/)
+    // 2026-11-07: 指数图(`instrument='index'`)不画个股主力意图, 表达式外面多了一层
+    // `indexChart ? null : (...)` 闸门 —— 契约本身不变: prop 优先, 没给才用自取结果。
+    expect(KC).toMatch(/props\.mainIntent \?\? intentFetched/)
   })
 
   it('三种渲染都接上了: 箭头(markers)/筹码线(priceLine)/图例卡', () => {

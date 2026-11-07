@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAPI } from '@sida/api'
 import { usePausedInterval } from '@sida/base-ui'
+import KlineChart from '@sida/biz-ui/components/KlineChart'
 import PageHeader from '@/components/PageHeader'
 import { safeFixed, safePercent, toAmount } from '@/lib/format'
 
@@ -62,6 +63,41 @@ type HistoryPoint = {
 
 const REFRESH_MS = 15_000
 const HISTORY_DAYS = 60
+
+/**
+ * 大盘主图的**固定标的**(2026-11-07)。
+ *
+ * 为什么写死而不跟上面八张指数卡片: 卡片切换的是「四档资金/宽度/历史」那套 `tdx_index_agg`
+ * 日聚合口径, 而 K 线走的是 `GET /klines/000001?instrument=index`(腾讯 sh000001 / 新浪兜底)。
+ * 两个接口的标的集合、频率、口径都不同, 指数卡片里也没有 000001 之外的 K 线数据源可用;
+ * 把主图接到卡片选择上会变成"点 000300 却画出别的图"或"切了没反应" —— 两种都是伪联动。
+ * 所以这里**只做上证指数一张主图**, 页面上把"固定标的"写明, 不暗示跟筛选联动。
+ */
+const MAIN_INDEX = { symbol: '000001', market: 'CN', name: '上证指数' } as const
+
+/**
+ * 指数主图的图层开关: **个股图层一律关**。
+ *
+ * `instrument=index` 目前只有主图 K 线这一条有后端口径; summary / patterns / wyckoff /
+ * chart-notes / scenario / trend-line / niuxiong / minute-breakthrough / pool-flow-series
+ * 都只按 symbol 解析 —— 对 `000001` 它们返回的是**平安银行**。KlineChart 已按
+ * `instrument==='index'` 在组件内拒绝这些请求与图层(见其 `indexChart` 头注), 这里再显式关一遍:
+ * 页面自己声明"不画个股图层", 读代码的人不必追进组件才知道。
+ * 均线(trend)保留 —— 它由 K 线收盘价自算, 指数同样成立。
+ */
+const MAIN_INDEX_LAYERS = {
+  trend: true,
+  signal: false,
+  capital: false,
+  event: false,
+  pattern: false,
+  wyckoff: false,
+  trendLine: false,
+  niuxiong: false,
+  explain: false,
+  scenario: false,
+  annotation: false,
+} as const
 
 function toneOf(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return 'text-muted-foreground'
@@ -233,7 +269,7 @@ export default function IndexesPage() {
     <div className="sida-page-enter space-y-4">
       <PageHeader
         title="盘面指数"
-        description={`八大宽基指数的涨跌幅、成交额与四档资金结构；口径 ${data?.caliber ?? 'tdx_index_agg'}（成分股按单笔金额分档聚合），与东财/同花顺主力净流入不可换算。`}
+        description={`上证指数日K主图（固定标的 000001，指数口径 instrument=index）+ 八大宽基指数的涨跌幅、成交额与四档资金结构；四档口径 ${data?.caliber ?? 'tdx_index_agg'}（成分股按单笔金额分档聚合），与东财/同花顺主力净流入不可换算。`}
         actions={
           <button
             type="button"
@@ -259,6 +295,32 @@ export default function IndexesPage() {
           </>
         }
       />
+
+      {/* 上证指数 K线主图(2026-11-07)。
+          固定标的: 不跟随下方指数卡片选择(两侧数据源/口径不同, 见 `MAIN_INDEX` 头注)——
+          标题行把「固定」写出来, 不给用户"这张图会跟着选"的错觉。
+          缺数据时不做任何兜底/占位: KlineChart 自己给原生空态(`无数据` / `错误: …`),
+          取不到就显示取不到, 不画 0 线也不拿别的标的顶上。 */}
+      <section className="analysis-section space-y-2" data-testid="index-kline-section" aria-labelledby="index-kline-title">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <h2 id="index-kline-title" className="text-base text-foreground">
+            {MAIN_INDEX.name} K线（主图）
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            固定标的 {MAIN_INDEX.symbol} · 指数口径（instrument=index）· 不随上方指数切换；
+            个股专属图层（主力意图/形态/操盘线/牛熊线/分时突破/暗盘资金等）在指数图上一律不取不画
+          </p>
+        </div>
+        <KlineChart
+          symbol={MAIN_INDEX.symbol}
+          market={MAIN_INDEX.market}
+          instrument="index"
+          initialInterval="1d"
+          initialDays={120}
+          height={360}
+          layersVisible={MAIN_INDEX_LAYERS}
+        />
+      </section>
 
       <section className="analysis-section">
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">

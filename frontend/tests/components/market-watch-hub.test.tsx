@@ -23,6 +23,15 @@ vi.mock('@sida/api', () => ({
 
 import MarketWatchHub from '@/components/market-watch/MarketWatchHub'
 
+// 2026-11-07: 指数视图内嵌上证指数 KlineChart 主图, 其容器尺寸自适应用 ResizeObserver
+// (jsdom 无此 API) → 桩掉, 只补浏览器能力, 不改任何断言语义。
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub
+
 const OVERVIEW = {
   items: [
     {

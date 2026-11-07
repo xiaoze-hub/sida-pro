@@ -549,6 +549,31 @@ export default function KlineChart(props: {
   // ── 分时模式(P1): 只保留 "分时/K线" 切换; 取数与四种状态由 MinutePane 自持 ──
   const [mode, setMode] = useState<'kline' | 'minute'>('kline')
 
+  /**
+   * 指数图(`instrument='index'`)的**数据边界**(2026-11-07)。
+   *
+   * 现状(实测, 后端只为**主图**这一条开了指数口径):
+   *  - `GET /klines/{symbol}?instrument=index` 走指数 K 线源(腾讯 sh000001 / 新浪兜底);
+   *  - 而 `summary` / `patterns` / `wyckoff` / `chart-notes` / `scenario` / `trend-line` /
+   *    `niuxiong` / `minute-breakthrough` / `pool-flow-series` 这些图层端点**只按 symbol+market
+   *    解析, 没有 instrument 参数** —— 它们读的是个股那一套数据(`.. get_kline_summary(symbol)`
+   *    → `collector.get_klines(symbol)` = PG 个股日表)。
+   *
+   * 于是 `000001` 在这些端点上不是上证指数, 而是**平安银行**: 指数图若照发这些请求,
+   * 会在指数蜡烛上叠个股的 GS 买卖点/形态/操盘线/牛熊线/主力意图/暗盘资金 —— 数据错标不是
+   * 小事(复审口径: 宁可空, 不可串标的)。故指数图: **不发**这些请求, 也不画它们的数据
+   * (父组件传了也不画: 现有父传源 —— `useKlineLayer` —— 同样取的是个股 summary)。
+   *
+   * 空态语义: 这些图层的空缺是「该图层不适用于指数 / 接口尚无所指口径」, 不是「取数失败」;
+   * 主图 K 线取不到时仍由图表自己的 `无数据` / `错误: …` 原生空态表达。
+   *
+   * 个股图(`instrument` 未传或 `'stock'`)行为**一字不变**。
+   *
+   * 将来若后端给这些端点加了指数的 instrument 口径: 先在此按端点逐条放开(而不是整体删掉
+   * 这个开关), 否则又会把个股数据画回指数上。
+   */
+  const indexChart = props.instrument === 'index'
+
   // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
   const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
   // L2-B(2026-10-24): 筹码分布默认收起 —— 原默认 true 时 w-36 的浮层常驻压在 K 线右侧 1/3 上,
@@ -562,7 +587,7 @@ export default function KlineChart(props: {
       setIntentFetched(null)
       return
     }
-    if (!props.symbol || props.market !== 'CN') {
+    if (!props.symbol || props.market !== 'CN' || indexChart) {
       setIntentFetched(null)
       return
     }
@@ -593,10 +618,10 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, props.mainIntent])
-  const intent = props.mainIntent ?? intentFetched
+  }, [props.symbol, props.market, props.mainIntent, indexChart])
+  const intent = indexChart ? null : (props.mainIntent ?? intentFetched)
   const intentLegend = intentLabelFor(intent)
-  const effAccumulationChips = props.mainAccumulationChips ?? accumulationChipsFetched
+  const effAccumulationChips = indexChart ? null : (props.mainAccumulationChips ?? accumulationChipsFetched)
   const intentLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
 
   const [loading, setLoading] = useState(false)
@@ -621,7 +646,8 @@ export default function KlineChart(props: {
   const ownEvents = props.events === undefined
   const ownLines = props.supportPressure === undefined
   const ownActivity = props.activitySeries === undefined
-  const needLayer = ownGs || ownFund || ownEvents || ownLines || ownActivity
+  // 指数图不发个股图层请求(见 `indexChart` 头注): 整层都不需要 summary
+  const needLayer = !indexChart && (ownGs || ownFund || ownEvents || ownLines || ownActivity)
   // v2.1 §10.2④: 可视区间(订阅只注册一次, 结果落 state 再由纯函数算统计)
   const [visibleRange, setVisibleRange] = useState<{ from: number; to: number } | null>(null)
   // 统计回调走 latest-ref: 父组件内联箭头函数身份每帧变, 进 deps 会造成重复上报
@@ -1095,7 +1121,7 @@ export default function KlineChart(props: {
 
   // ── 图层数据: 按需自取 summary(仅父未接管的分量才发请求) ────────
   useEffect(() => {
-    if (!needLayer) {
+    if (!needLayer || indexChart) {
       setLayer(null)
       return
     }
@@ -1131,7 +1157,7 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, needLayer])
+  }, [props.symbol, props.market, needLayer, indexChart])
 
   // ── K线形态标注自取(2026-10-10) ─────────────────────────────
   // 数据源: GET /klines/{symbol}/patterns(与主图 /klines/{symbol} 同源同口径, 标注与 K 线对齐)。
@@ -1141,7 +1167,7 @@ export default function KlineChart(props: {
   const showPatternLayer = props.layersVisible?.pattern !== false
   const [patternMarks, setPatternMarks] = useState<PatternMark[] | null>(null)
   useEffect(() => {
-    if (!ownPatterns || !showPatternLayer || !props.symbol) {
+    if (indexChart || !ownPatterns || !showPatternLayer || !props.symbol) {
       setPatternMarks(null)
       return
     }
@@ -1164,7 +1190,7 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, ownPatterns, showPatternLayer])
+  }, [props.symbol, props.market, ownPatterns, showPatternLayer, indexChart])
 
   // ── 威科夫量价结构标注自取(本土三层滤网 P1) ─────────────────────────
   // 数据源: GET /klines/{symbol}/wyckoff(与主图 /klines/{symbol} 同源同口径, 标注与 K 线对齐)。
@@ -1184,7 +1210,7 @@ export default function KlineChart(props: {
    */
   const [wyckoffMarks, setWyckoffMarks] = useState<PatternMark[] | null>(null)
   useEffect(() => {
-    if (!ownWyckoff || !showWyckoffLayer || !props.symbol) {
+    if (indexChart || !ownWyckoff || !showWyckoffLayer || !props.symbol) {
       setWyckoffMarks(null)
       return
     }
@@ -1207,7 +1233,7 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, ownWyckoff, showWyckoffLayer])
+  }, [props.symbol, props.market, ownWyckoff, showWyckoffLayer, indexChart])
 
   // ── 情景关键位自取(2026-10-22) ───────────────────────────────────────────────
   // 数据源: GET /klines/{symbol}/scenario(后端情景矩阵, 与 chat 工具同一套计算)。
@@ -1227,7 +1253,7 @@ export default function KlineChart(props: {
         : scenarioLocalOn
   const [scenarioData, setScenarioData] = useState<ScenarioMatrixResponse | null>(null)
   useEffect(() => {
-    if (!ownScenario || !showScenarioLayer || !props.symbol) {
+    if (indexChart || !ownScenario || !showScenarioLayer || !props.symbol) {
       setScenarioData(null)
       return
     }
@@ -1243,7 +1269,7 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, ownScenario, showScenarioLayer])
+  }, [props.symbol, props.market, ownScenario, showScenarioLayer, indexChart])
 
   // ── 图表说明自取(2026-10-14 看图决策产品件): 逐标记「为什么在那」 ─────────────
   // 数据源: GET /klines/{symbol}/chart-notes(后端与图层标记**单一事实源**)。
@@ -1256,7 +1282,7 @@ export default function KlineChart(props: {
     zoneNote: ChartNote | null
   } | null>(null)
   useEffect(() => {
-    if (!ownChartNotes || !showExplainLayer || !props.symbol) {
+    if (indexChart || !ownChartNotes || !showExplainLayer || !props.symbol) {
       setChartNotesData(null)
       return
     }
@@ -1279,7 +1305,7 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, ownChartNotes, showExplainLayer])
+  }, [props.symbol, props.market, ownChartNotes, showExplainLayer, indexChart])
 
   // ── 决策先锋辅助指标自取(2026-10-10): 趋势操盘线 + 牛熊线 ─────────────────
   // 与形态标注同策略: 父传优先(own* 布尔, 原子化)、错峰不发抢主图、取不到显式降级(不编造)。
@@ -1291,8 +1317,8 @@ export default function KlineChart(props: {
   const [trendLineData, setTrendLineData] = useState<TrendLineData | null>(null)
   const [niuxiongData, setNiuxiongData] = useState<NiuxiongData | null>(null)
   useEffect(() => {
-    const wantTrend = ownTrendLine && showTrendLineLayer && !!props.symbol && props.market === 'CN'
-    const wantNx = ownNiuxiong && showNiuxiongLayer && !!props.symbol && props.market === 'CN'
+    const wantTrend = !indexChart && ownTrendLine && showTrendLineLayer && !!props.symbol && props.market === 'CN'
+    const wantNx = !indexChart && ownNiuxiong && showNiuxiongLayer && !!props.symbol && props.market === 'CN'
     if (!wantTrend && !wantNx) {
       setTrendLineData(null)
       setNiuxiongData(null)
@@ -1317,13 +1343,13 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, ownTrendLine, ownNiuxiong, showTrendLineLayer, showNiuxiongLayer])
+  }, [props.symbol, props.market, ownTrendLine, ownNiuxiong, showTrendLineLayer, showNiuxiongLayer, indexChart])
 
   // ── 分时突破「突/积」提示条自取(2026-10-10) ────────────────────────────────
   // 缺输入时后端显式 `available=false` + reasons → 前端**照实展示降级文案**(不编造信号)。
   const [minuteBreakthrough, setMinuteBreakthrough] = useState<MinuteBreakthroughData | null>(null)
   useEffect(() => {
-    if (!props.symbol || props.market !== 'CN') {
+    if (!props.symbol || props.market !== 'CN' || indexChart) {
       setMinuteBreakthrough(null)
       return
     }
@@ -1337,7 +1363,7 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market])
+  }, [props.symbol, props.market, indexChart])
 
   // ── 暗盘资金副图自取(2026-10-11 规格 §2) ────────────────────────────────────
   // 懒取数: 仅切到「暗盘资金」档才发请求(不给首屏加债); 父传 props.darkPoolSeries 则以父为准。
@@ -1345,7 +1371,7 @@ export default function KlineChart(props: {
   const ownDarkPool = props.darkPoolSeries === undefined
   const [darkPoolFetched, setDarkPoolFetched] = useState<DarkPoolPoint[] | null>(null)
   useEffect(() => {
-    const want = ownDarkPool && !!props.symbol && props.market === 'CN' && subchart === 'dark_pool'
+    const want = !indexChart && ownDarkPool && !!props.symbol && props.market === 'CN' && subchart === 'dark_pool'
     if (!want) {
       setDarkPoolFetched(null)
       return
@@ -1368,12 +1394,14 @@ export default function KlineChart(props: {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [props.symbol, props.market, ownDarkPool, subchart])
+  }, [props.symbol, props.market, ownDarkPool, subchart, indexChart])
 
   // 有效图层值: 父传优先 → 自取 → 稳定空数组(fetch 用回调整体覆盖, 不用偏函数风格)
-  const effGsSignals = props.gsSignals ?? layer?.gsSignals ?? EMPTY_GS
-  const effFundFlow = props.fundFlow ?? layer?.fundFlow ?? EMPTY_FUND
-  const effEvents = props.events ?? layer?.events ?? EMPTY_EVENTS
+  // 指数图: 这些图层**一律为空**(见 `indexChart` 头注: 后端图层端点没有指数口径, symbol
+  // `000001` 在那边是平安银行 —— 父传的同一批图层也来自个股 summary, 同样不画)。
+  const effGsSignals = indexChart ? EMPTY_GS : (props.gsSignals ?? layer?.gsSignals ?? EMPTY_GS)
+  const effFundFlow = indexChart ? EMPTY_FUND : (props.fundFlow ?? layer?.fundFlow ?? EMPTY_FUND)
+  const effEvents = indexChart ? EMPTY_EVENTS : (props.events ?? layer?.events ?? EMPTY_EVENTS)
   /**
    * 价位线是**合并**而不是"父接管"(2026-10-28 复审阻断 ③):
    * `supportPressure` 传的是页面接线的服务端标注(`lib/copilot/annotationLink`), 而图表自己
@@ -1384,27 +1412,27 @@ export default function KlineChart(props: {
    * 父未传时原样返回图层数组(同引用), 不改变未接入标注的页面行为。
    */
   const effPriceLines = useMemo(
-    () => mergePriceLines(props.supportPressure, layer?.priceLines),
-    [props.supportPressure, layer?.priceLines],
+    () => mergePriceLines(props.supportPressure, indexChart ? undefined : layer?.priceLines),
+    [props.supportPressure, layer?.priceLines, indexChart],
   )
-  const effActivitySeries = props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY
-  const effPatterns = props.patterns ?? patternMarks ?? EMPTY_PATTERNS
+  const effActivitySeries = indexChart ? EMPTY_ACTIVITY : (props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY)
+  const effPatterns = indexChart ? EMPTY_PATTERNS : (props.patterns ?? patternMarks ?? EMPTY_PATTERNS)
   // 威科夫量价结构(本土三层滤网 P1): 父传优先 → 自取 → 稳定空数组(与 patterns 同策略)
-  const effWyckoff = props.wyckoff ?? wyckoffMarks ?? EMPTY_PATTERNS
+  const effWyckoff = indexChart ? EMPTY_PATTERNS : (props.wyckoff ?? wyckoffMarks ?? EMPTY_PATTERNS)
   // 情景关键位(2026-10-22): 父传优先 → 自取 → 稳定空数组; 清洗/去重/排序全在 lib/scenario-lines(纯函数)
-  const effScenarioMatrix = props.scenario ?? scenarioData
+  const effScenarioMatrix = indexChart ? null : (props.scenario ?? scenarioData)
   const effScenarioLines = useMemo(
     () => (effScenarioMatrix ? buildScenarioLines(effScenarioMatrix) : EMPTY_SCENARIO_LINES),
     [effScenarioMatrix],
   )
   // 决策先锋辅助指标: 父传优先 → 自取(可能为 null = 无数据/降级, 图层据此不画)
-  const effTrendLine = props.trendLine ?? trendLineData
-  const effNiuxiong = props.niuxiong ?? niuxiongData
+  const effTrendLine = indexChart ? null : (props.trendLine ?? trendLineData)
+  const effNiuxiong = indexChart ? null : (props.niuxiong ?? niuxiongData)
   // 图表说明: 父传优先 → 自取(空 = 本次不展示说明, 不编造)
-  const effChartNotes = props.chartNotes ?? chartNotesData?.notes ?? EMPTY_NOTES
-  const effZoneNote = props.zoneNote ?? chartNotesData?.zoneNote ?? null
+  const effChartNotes = indexChart ? EMPTY_NOTES : (props.chartNotes ?? chartNotesData?.notes ?? EMPTY_NOTES)
+  const effZoneNote = indexChart ? null : (props.zoneNote ?? chartNotesData?.zoneNote ?? null)
   // 暗盘资金序列: 父传优先 → 自取(切到该档才取; null=未取, 空数组=降级不画)
-  const effDarkPool = props.darkPoolSeries ?? darkPoolFetched ?? EMPTY_DARKPOOL
+  const effDarkPool = indexChart ? EMPTY_DARKPOOL : (props.darkPoolSeries ?? darkPoolFetched ?? EMPTY_DARKPOOL)
   // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
   const fundRef = useRef<FundFlowBar[]>(effFundFlow)
   fundRef.current = effFundFlow
@@ -2106,7 +2134,9 @@ export default function KlineChart(props: {
         {/* L2-B: 分组分隔线 —— 左=周期, 右=叠加/工具, 不再是 15 个平铺按钮 */}
         <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         {props.subchart === undefined &&
-          SUBCHART_OPTS.map(([k, label]) => {
+          // 指数图: 「活跃度」来自个股 summary、「暗盘资金」来自个股 pool-flow-series ——
+          // 两个副图都没有指数口径(见 `indexChart` 头注), 直接不给开关, 免得点了永远是空档。
+          SUBCHART_OPTS.filter(([k]) => !indexChart || (k !== 'activity' && k !== 'dark_pool')).map(([k, label]) => {
           const active = subchart === k
           const disabled = (k === 'active_ratio' || k === 'phase')
           return (
@@ -2140,24 +2170,27 @@ export default function KlineChart(props: {
           </button>
         )}
         <span aria-hidden className="mx-1 h-4 w-px bg-border" />
-        <button
-          type="button"
-          onClick={() => {
-            setChipProfileOpen((v) => {
-              const next = !v
-              try { localStorage.setItem('sida_chip_profile', next ? '1' : '0') } catch { /* ignore */ }
-              return next
-            })
-          }}
-          className={`min-h-[28px] px-2.5 py-1 text-xs rounded font-medium transition-colors ${
-            chipProfileOpen
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
-          }`}
-          title="在K线右侧展示/隐藏 120日主力波段筹码分布峰(CYQ)"
-        >
-          📊 筹码分布
-        </button>
+        {/* 筹码分布来自个股 summary(`main_accumulation_chips`), 指数图无该口径 → 不给入口 */}
+        {!indexChart && (
+          <button
+            type="button"
+            onClick={() => {
+              setChipProfileOpen((v) => {
+                const next = !v
+                try { localStorage.setItem('sida_chip_profile', next ? '1' : '0') } catch { /* ignore */ }
+                return next
+              })
+            }}
+            className={`min-h-[28px] px-2.5 py-1 text-xs rounded font-medium transition-colors ${
+              chipProfileOpen
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+            }`}
+            title="在K线右侧展示/隐藏 120日主力波段筹码分布峰(CYQ)"
+          >
+            📊 筹码分布
+          </button>
+        )}
       </div>
       {/* 图表容器与右侧筹码分布图 */}
       {/* L2-B 第2步(2026-10-24): 筹码面板展开时**挤压**画布而不是盖住它。
@@ -2339,7 +2372,7 @@ export default function KlineChart(props: {
           <span className="text-[12px]">条件-反应 · 非方向预测</span>
         </div>
       )}
-      {!showScenarioLayer && props.layersVisible?.scenario === undefined && (
+      {!indexChart && !showScenarioLayer && props.layersVisible?.scenario === undefined && (
         <div
           data-testid="scenario-layer-toggle"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"

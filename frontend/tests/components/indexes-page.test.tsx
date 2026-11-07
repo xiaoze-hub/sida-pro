@@ -12,10 +12,23 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import IndexesPage from '@/pages/Indexes'
 
+// jsdom 无 ResizeObserver(主图 KlineChart 容器尺寸自适应用) → 桩掉
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub
+
 // 页面走共享客户端 @sida/api::fetchAPI（自动带 token/401/去重），测试里替身它，
 // 不要去 mock 全局 fetch —— 那样测的是"fetch 能返回什么"，不是页面的取数路径。
+// 主图 KlineChart 还会 import `fetchScenario`(情景关键位), 页面把它关掉了, 这里给个空实现
+// 免得命名导出缺失直接把模块加载打挂。
 const apiMock = vi.fn()
-vi.mock('@sida/api', () => ({ fetchAPI: (path: string) => apiMock(path) }))
+vi.mock('@sida/api', () => ({
+  fetchAPI: (path: string) => apiMock(path),
+  fetchScenario: async () => ({ available: false }),
+}))
 
 const OVERVIEW = {
   caliber: 'tdx_index_agg',
@@ -51,9 +64,13 @@ const HISTORY = {
 
 function usePayload(payload: unknown) {
   apiMock.mockReset()
-  apiMock.mockImplementation(async (path: string) =>
-    String(path).includes('history') ? { items: [] } : payload,
-  )
+  apiMock.mockImplementation(async (path: string) => {
+    const p = String(path)
+    if (p.includes('history')) return { items: [] }
+    // 上证指数主图 K 线(固定标的): 默认空载荷 → 图表走原生「无数据」空态
+    if (p.startsWith('/klines/')) return { klines: [] }
+    return payload
+  })
 }
 
 describe('IndexesPage', () => {
@@ -71,9 +88,12 @@ describe('IndexesPage', () => {
 
   it('有历史时按日渲染主力净额柱', async () => {
     apiMock.mockReset()
-    apiMock.mockImplementation(async (path: string) =>
-      String(path).includes('history') ? HISTORY : OVERVIEW,
-    )
+    apiMock.mockImplementation(async (path: string) => {
+      const p = String(path)
+      if (p.includes('history')) return HISTORY
+      if (p.startsWith('/klines/')) return { klines: [] }
+      return OVERVIEW
+    })
     render(<IndexesPage />)
     await waitFor(() => expect(screen.getByLabelText(/主力净额/)).toBeTruthy())
   })
@@ -103,11 +123,30 @@ describe('IndexesPage', () => {
 
   it('历史为空时给出「从本次上线开始累积」而不是空白图', async () => {
     apiMock.mockReset()
-    apiMock.mockImplementation(async (path: string) =>
-      String(path).includes('history') ? { items: [] } : OVERVIEW,
-    )
+    apiMock.mockImplementation(async (path: string) => {
+      const p = String(path)
+      if (p.includes('history')) return { items: [] }
+      if (p.startsWith('/klines/')) return { klines: [] }
+      return OVERVIEW
+    })
     render(<IndexesPage />)
     await waitFor(() => expect(screen.getByText(/开始累积/)).toBeTruthy())
     expect(screen.getAllByText(/20261103/).length).toBeGreaterThan(0)
+  })
+
+  it('主图固定上证指数 000001 并走指数口径: 只发一条带 instrument=index 的 K线请求', async () => {
+    render(<IndexesPage />)
+    await waitFor(() => expect(screen.getByTestId('index-kline-section')).toBeTruthy())
+
+    const paths = apiMock.mock.calls.map((c) => String(c[0]))
+    expect(paths).toContain('/klines/000001?market=CN&days=120&interval=1d&instrument=index')
+    // 本页只有两类取数: 指数概览/历史 + 主图 K 线。多出来的任何东西(尤其 /summary、
+    // /patterns、/indicators/* 这些个股图层端点)都算串标的。
+    for (const p of paths) {
+      expect(p.startsWith('/indexes/') || p.startsWith('/klines/000001?')).toBe(true)
+    }
+    // 文案写明"固定标的", 不暗示跟上方指数卡片联动(标题行与说明同段文字, 用 getAllByText)
+    expect(screen.getAllByText(/固定标的 000001/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/不随上方指数切换/).length).toBeGreaterThan(0)
   })
 })
