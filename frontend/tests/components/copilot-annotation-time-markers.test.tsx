@@ -513,17 +513,18 @@ describe('⑧ K 线未就绪：不按旧 K 线判已上图', () => {
  * 一律不画，并如实说"日期标注只在日 K 上绘制"。
  */
 describe('⑨ 分时/周/月不定位日期标注（绝不编 00:00 假时间）', () => {
-  it('5分周期：一个时间点 marker 都不画，说明只在日K绘制', async () => {
+  // 2026-11-07: 分钟周期在下线名单里 —— 后端没有任何分钟K 源, 图表把父传的 5m 钳回日 K。
+  // 于是「00:00 假时间戳」的结构性风险被从源头掐掉: 只有真日K 序列, 不存在假分钟时间。
+  it('5分周期已下线: 钳回日K 取数, 不产生 00:00 编造时间', async () => {
     H.annotations = () => Promise.resolve([row({ id: 91, ts: '2026-03-06' })])
     render(<Harness interval="5m" />)
-    const line = await screen.findByTestId('copilot-annotation-line')
-    await waitFor(() => expect(line.getAttribute('data-marker-state')).toBe('skipped'))
-    expect(line.getAttribute('data-marker-reason')).toBe('not-daily')
-    expect(line.textContent).toContain('只在日K上绘制')
-    expect(annotationMarkers()).toHaveLength(0)
-    // 关键：没有 00:00 的假时间戳被送到图层
-    expect(H.markers.filter((m) => typeof m.annotationId === 'number')).toHaveLength(0)
-    expect(AnnotationLedger.snapshot(target()).markerRender?.drawn).toEqual([])
+
+    await waitFor(() => expect(H.calls.some((u) => u.includes('/klines/'))).toBe(true))
+    // 一次分钟请求都不许发(后端会 400, 且过去会把日K 标成 5m)
+    expect(H.calls.filter((u) => /interval=(1m|5m|15m|30m|60m)(&|$)/.test(u))).toEqual([])
+    expect(H.calls.some((u) => u.includes('interval=1d'))).toBe(true)
+    // 图上的时间点一律按交易日定位, 没有 00:00 这种编出来的分钟时间
+    expect(JSON.stringify(H.markers)).not.toContain('00:00')
   })
 
   it('周K同理：不把日期贴到那根周 K 上', async () => {

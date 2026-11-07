@@ -259,11 +259,27 @@ describe('MarketWatchHub 大盘观察工作区', () => {
     expect(calls('/indexes/')).toHaveLength(0)
   })
 
-  it('myPerms=null(权限未加载)时不闪隐: 两视图可见且默认仍是指数', async () => {
+  // 安全复审 2026-11-07: 旧实现 myPerms=null 时 viewAllowed() 一律放行(fail OPEN) ——
+  // 权限还没读到/读失败时, 受 view_quotes 守卫的指数视图照常渲染, 与 App.tsx PermGuard
+  // 2026-09-15 结论(未加载=fail closed)相反。下面两条钉死 fail closed。
+  it('myPerms=null(权限未加载/拉取失败): fail closed —— 不渲染受守卫视图, 也不发起取数', async () => {
     renderHub({ myPerms: null })
 
-    expect(await screen.findByText('盘面指数')).toBeTruthy()
-    expect(screen.getAllByRole('tab')).toHaveLength(2)
-    expect(screen.getByTestId('market-watch-hub').dataset.view).toBe('index')
+    expect(await screen.findByTestId('market-watch-hub-perm-pending')).toBeTruthy()
+    // 受 view_quotes 守卫的指数页一行都不许出现, 接口一次都不许打
+    expect(screen.queryByText('盘面指数')).toBeNull()
+    expect(calls('/indexes/')).toHaveLength(0)
+    expect(calls('/etf-watch/')).toHaveLength(0)
+    // 未确权前不猜视图, 页签也不出
+    expect(screen.queryByTestId('market-watch-hub')).toBeNull()
+    expect(screen.queryAllByRole('tab')).toHaveLength(0)
+  })
+
+  it('深链 ?view=index + myPerms=null 也不放行(不能靠 URL 绕过未确权)', async () => {
+    renderHub({ initialEntries: ['/market-watch?view=index'], myPerms: null })
+
+    expect(await screen.findByTestId('market-watch-hub-perm-pending')).toBeTruthy()
+    expect(screen.queryByText('盘面指数')).toBeNull()
+    expect(calls('/indexes/')).toHaveLength(0)
   })
 })

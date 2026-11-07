@@ -106,6 +106,24 @@ describe('指数图 · 分钟 K 陷阱(后端回传日 K)', () => {
   })
 })
 
+describe('个股图 · 分钟档同步下线(后端无分钟K, 不许发伪请求)', () => {
+  // 2026-11-07: 后端 `/klines/{symbol}?interval=5m` 过去把日K 回传并标成 "5m"(伪标),
+  // 现在改为 400 显式拒绝 —— 图表侧必须一起收口: 不给按钮、不发请求、不显示"5分"。
+  it('个股图也只有 日K/周K/月K, 一分钟请求都不发', async () => {
+    renderChart({}) // instrument 未传 = 个股
+    await waitFor(() => expect(screen.getByText('3 根K线')).toBeTruthy())
+    await settleSlowLane()
+
+    expect(screen.getByText('日K')).toBeTruthy()
+    expect(screen.getByText('周K')).toBeTruthy()
+    expect(screen.getByText('月K')).toBeTruthy()
+    for (const minute of ['1分', '5分', '15分', '30分', '60分']) {
+      expect(screen.queryByText(minute)).toBeNull()
+    }
+    expect(H.calls.filter((u) => MINUTE_URL.test(u))).toEqual([])
+  })
+})
+
 describe('指数图 · 周期选择不被 initialInterval 钳住', () => {
   it('点「周K」真的切过去(旧实现会被父传的常量 1d 打回日 K)', async () => {
     renderChart({ instrument: 'index' })

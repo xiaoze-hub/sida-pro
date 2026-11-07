@@ -19,9 +19,12 @@
  *   ④ **旧页面保留**: `/indexes`、`/etf-watch` 仍是真实路由, 老书签继续可用; 工作区提供
  *      「单独打开」指向当前视图的原路由。本组件**不做**旧路径重定向(重定向等于下线旧页)。
  *
- * 权限: 视图级 `perm` 与 App.tsx 现状逐条对齐(指数 = `view_quotes`, ETF = 无守卫);
- * `myPerms` 为 null(未加载/拉取失败)时不过滤, 避免闪隐。**路由级守卫不要用单点 `view_quotes`**
- * —— 那会把「只能看 ETF」的用户挡掉(他们今天能进 /etf-watch)。
+ * 权限(2026-11-07 复审收口, fail closed): 视图级 `perm` 与 App.tsx 现状逐条对齐
+ * (指数 = `view_quotes`, ETF = 无守卫, 与 /etf-watch 现状一致)。`myPerms` 为 null
+ * (未加载 / 拉取失败)时**不渲染任何视图、不发任何取数**, 只显示"权限读取中" ——
+ * 与 App.tsx `PermGuard` 2026-09-15 的结论一致(未加载 ≠ 放行); 旧实现在这里是
+ * fail OPEN(权限没读到就把 view_quotes 视图照常渲染), 属越权可见。
+ * **路由级守卫不要用单点 `view_quotes`** —— 那会把「只能看 ETF」的用户挡掉。
  *
  * 指数视图另用指数 K 线接口显示上证指数，ETF 视图保持原有独立成交额口径。
  * 两者不互相换算，不能把 ETF 篮子或市场级 SC8 称为单只 ETF 的净申购。
@@ -112,7 +115,8 @@ export interface MarketWatchHubProps {
 
 function viewAllowed(view: MarketWatchView, myPerms: Set<string> | null | undefined): boolean {
   if (!view.perm) return true
-  if (!myPerms) return true
+  // 未确权 = 不放行(fail closed); 组件在 myPerms==null 时更早就整页停在"读取中"。
+  if (!myPerms) return false
   return myPerms.has(view.perm)
 }
 
@@ -126,6 +130,25 @@ export default function MarketWatchHub({ myPerms, initialView }: MarketWatchHubP
   const rawView = params.get('view')
   const rawTab = params.get('tab')
   const requested = normalizeMarketWatchView(rawView ?? rawTab)
+
+  // 权限未加载/拉取失败: 不猜、不放行、不改写 URL(等权限到位再规范化)。
+  // 受守卫视图一秒钟都不许先渲染 —— 那正是"权限未就绪期间短暂可见未授权内容"。
+  if (!myPerms) {
+    return (
+      <div
+        className="py-10 text-center"
+        data-testid="market-watch-hub-perm-pending"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="text-[14px] font-medium text-foreground">权限读取中…</div>
+        <p className="mt-1 text-[12px] text-muted-foreground">
+          正在确认大盘观察视图的访问权限(view_quotes); 确认前不展示指数/ETF 视图。
+        </p>
+      </div>
+    )
+  }
+
   // 默认指数; 指数视图不可见时才回退到第一个可用视图(ETF), 与今天「ETF 页无守卫」一致。
   const preferred: MarketWatchViewKey = initialView ?? DEFAULT_MARKET_WATCH_VIEW
   const fallback: MarketWatchViewKey | null = visible.some((v) => v.key === preferred)

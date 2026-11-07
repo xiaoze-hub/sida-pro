@@ -247,7 +247,7 @@ const SUMMARY_SLOW_LANE_DELAY_MS = 350
 const SUMMARY_TIMEOUT_MS = 45000
 
 /**
- * 指数图的周期闸门(2026-11-07 复审证实缺陷)。
+ * K 线周期闸门(2026-11-07 后端契约收口; 原为「仅指数」)。
  *
  * 实测: `GET /klines/{symbol}?instrument=index&interval=1m|5m|15m|30m|60m` 后端**回传的是日 K**
  * (指数源只产日频序列, 分钟参数被静默忽略)。前端若照旧按分钟口径渲染, 就是把日 K 标注成
@@ -259,8 +259,9 @@ const SUMMARY_TIMEOUT_MS = 45000
  *
  * 将来后端把指数分钟 K 做对(真正的分钟聚合序列): 删这里 + 放开 UI 即可, 一处开关。
  */
-function indexSafeInterval(i: KlineInterval, isIndex: boolean): KlineInterval {
-  return isIndex && !DAY_BUCKETS.includes(i) ? '1d' : i
+function daySafeInterval(i: KlineInterval): KlineInterval {
+  // 后端 `/klines` 没有任何分钟 K 源(分钟参数过去被静默当未知周期透传日 K, 现为 400)
+  return DAY_BUCKETS.includes(i) ? i : '1d'
 }
 
 
@@ -567,7 +568,7 @@ export default function KlineChart(props: {
    * 传的是常量 `"1d"`), 用户永远停在日 K, 点「周K/月K」等于没点(复审实测缺陷)。
    */
   const [interval, setInterval] = useState<KlineInterval>(() =>
-    indexSafeInterval(props.initialInterval || '1d', props.instrument === 'index'),
+    daySafeInterval(props.initialInterval || '1d'),
   )
   const initialIntervalRef = useRef(props.initialInterval)
   useEffect(() => {
@@ -575,7 +576,7 @@ export default function KlineChart(props: {
     if (props.initialInterval === initialIntervalRef.current) return
     initialIntervalRef.current = props.initialInterval
     if (props.initialInterval) {
-      setInterval(indexSafeInterval(props.initialInterval, props.instrument === 'index'))
+      setInterval(daySafeInterval(props.initialInterval))
     }
   }, [props.initialInterval, props.instrument])
 
@@ -607,16 +608,18 @@ export default function KlineChart(props: {
    */
   const indexChart = props.instrument === 'index'
   /**
-   * 指数图的周期按钮: **不给分钟档**(见 `indexSafeInterval` 头注 —— 后端回传的是日 K)。
-   * 个股图(`instrument` 未传或 `'stock'`)按钮集合一字不变。
+   * 周期按钮: **一律不给分钟档**(2026-11-07 后端契约收口)。
+   *
+   * 过去只有指数图剥掉分钟档; 个股图照发 `interval=1m|5m|...`, 而后端把它当未知周期
+   * 原样回传日K、只在 `interval` 字段写 "5m" —— 图上标“5分”画的却是日K(伪标)。
+   * 现在后端改为 400 显式拒绝(无分钟K 源), 前端同步下线按钮: 不发必然失败的请求,
+   * 也不让用户误以为在看分钟K。分钟数据将来接入图表源时, 在此按端点/周期逐条放开。
    */
-  const intervalOptions = indexChart
-    ? INTERVAL_OPTIONS.filter((o) => DAY_BUCKETS.includes(o.key))
-    : INTERVAL_OPTIONS
-  // 指数图: 父组件/历史状态把分钟周期塞进来时先钳回日 K(声明在 `indexChart` 之后才可用)
+  const intervalOptions = INTERVAL_OPTIONS.filter((o) => DAY_BUCKETS.includes(o.key))
+  // 父组件/历史链接把分钟周期塞进来时一律钳回日 K —— 后端没有任何分钟K 源, 发出去只会拿到 400
   useEffect(() => {
-    if (indexChart && !DAY_BUCKETS.includes(interval)) setInterval('1d')
-  }, [indexChart, interval])
+    if (!DAY_BUCKETS.includes(interval)) setInterval('1d')
+  }, [interval])
 
   // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
   const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
@@ -1090,9 +1093,9 @@ export default function KlineChart(props: {
       setDataLen(0)
       try {
         const days = props.initialDays ?? 120
-        // 请求层闸门(见 `indexSafeInterval` 头注): 指数**绝不出**分钟 K 请求 —— 后端会静默
-        // 把日 K 当分钟序列回传, 前端据此渲染就是错标周期。
-        const reqInterval = indexSafeInterval(interval, indexChart)
+        // 请求层闸门(见 `daySafeInterval` 头注): 任何路径都不出分钟 K 请求 ——
+        // 后端无分钟源, 过去把日 K 当分钟序列回传, 前端据此渲染就是错标周期。
+        const reqInterval = daySafeInterval(interval)
         const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(reqInterval)}${props.instrument ? `&instrument=${props.instrument}` : ''}`
         const res = await fetchAPI<KlinesResponse>(query)
         if (cancelled) return

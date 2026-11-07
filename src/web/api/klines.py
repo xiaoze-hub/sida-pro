@@ -165,13 +165,55 @@ def _serialize_klines(klines) -> list[dict]:
     ]
 
 
-def _aggregate_klines(klines, interval: str) -> list:
-    """Aggregate daily klines to week/month."""
+#: 分钟周期 —— 本端点的 K 线源(腾讯/新浪日线 + PG klines period='1d')没有分钟序列,
+#: 必须显式拒绝。过去这些值不在聚合白名单里 → 原样返回日K, 却把 interval 字段写成
+#: "5m"/"15m" → **日K 冒充分钟K**(前端画成“5分”图)。宁可 400, 不可伪标。
+#: 分钟 1m 早已落库(src/core/klines_minute.py, period='1m'), 但**没有读接口**,
+#: 且只覆盖自选∪候选池、未复权、单源 —— 不能在这里冒充当图表分钟K。
+_MINUTE_INTERVALS = frozenset(
+    {"1m", "5m", "15m", "30m", "60m", "1min", "5min", "15min", "30min", "60min",
+     "min", "minute", "minutes", "intra", "intraday", "分时"}
+)
+_DAY_INTERVALS = frozenset({"1d", "d", "day", "daily", "日", "日k"})
+_WEEK_INTERVALS = frozenset({"1w", "w", "week", "weekly", "周", "周k"})
+#: 月线: 前端 `KlineInterval` 用 **1mth**(见 frontend/packages/biz-ui ... KlineChart),
+#: 这里必须认它 —— 旧实现只认 "1m"/"m", 导致月K 请求被当成未知周期原样返回日K。
+_MONTH_INTERVALS = frozenset({"1mth", "mth", "1mo", "month", "monthly", "mn", "月", "月k"})
 
-    iv = (interval or "1d").lower()
-    if iv in ("1d", "day", "d"):
-        return klines
-    if iv not in ("1w", "1m", "week", "month", "w", "m"):
+
+def resolve_interval(interval: str | None) -> str:
+    """把外部周期字面量收敛成 `1d|1w|1mth`, 不支持的一律 400(不静默降级)。
+
+    · `1M`(大写) = 月线(月线国际写法); `1m`(小写) **歧义**(分/月), 显式拒绝并指路 1mth
+      —— 旧实现把 1m 按月聚合, 而用户/前端读作“1 分钟”, 是本次复审点名的事故。
+    · 分钟周期一律拒绝: 不返回任何 bar, 也就不存在“日K 冒充分钟K”。
+    · 未知值(7d 之类)同样 400, 旧实现会原样透传日K(伪标)。
+    """
+    raw = (interval or "1d").strip()
+    low = raw.lower()
+    if raw == "1M" or low in _MONTH_INTERVALS:
+        return "1mth"
+    if low in _DAY_INTERVALS:
+        return "1d"
+    if low in _WEEK_INTERVALS:
+        return "1w"
+    if low in _MINUTE_INTERVALS:
+        raise HTTPException(
+            400,
+            f"分钟K暂不可用: interval={raw}(本端点只提供 1d/1w/1mth; 分钟数据未接入"
+            f"图表K线源, 不做“日K 冒充分钟”的回退; 月线请用 1mth)",
+        )
+    raise HTTPException(
+        400,
+        f"不支持的K线周期: {raw}(支持 1d / 1w / 1mth; 注意 1m 有歧义, 月线请用 1mth)",
+    )
+
+
+def _aggregate_klines(klines, interval: str) -> list:
+    """Aggregate daily klines to week/month (interval 先经 :func:`resolve_interval`)."""
+
+    iv = resolve_interval(interval)
+    if iv == "1d":
         return klines
 
     parsed = []
@@ -185,7 +227,7 @@ def _aggregate_klines(klines, interval: str) -> list:
     parsed.sort(key=lambda x: x[0])
     buckets: dict[str, list] = {}
     for dt, k in parsed:
-        if iv in ("1w", "week", "w"):
+        if iv == "1w":
             y, w, _ = dt.isocalendar()
             key = f"{y:04d}-W{w:02d}"
         else:
@@ -571,6 +613,9 @@ def get_scenario_matrix(symbol: str, market: str = "CN", _: User = Depends(get_c
 @router.get("/{symbol}")
 def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d", instrument: Literal["auto", "stock", "index"] = "auto"):
     """K 线主数据（60s 缓存 + 同 key 单飞，防图表轮询风暴打爆取数链）。"""
+    # 2026-11-07: 周期先收敛(1mth/1M → 1mth; 分钟/未知 → 400), 再进缓存键 ——
+    # 否则别名各占一个 key, 且非法周期会命中"日K 冒充"的旧缓存条目。
+    interval = resolve_interval(interval)
     key = f"{market}:{symbol}:{instrument}:{interval}:{days}"
     now = _time.time()
     hit = _kl_cache.get(key)
@@ -588,6 +633,9 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
 
 def _get_klines_uncached(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d", instrument: str = "auto"):
     """获取单只股票/指数K线数据(指数代码自动识别,走指数K线源)"""
+    # 取数前收敛: 分钟周期/未知周期在这里就 400, 绝不让日K 挂上分钟标签(复审红线)。
+    # 指数分支与个股分支共用这一道闸, 两条路径口径一致。
+    interval = resolve_interval(interval)
     market_code = _parse_market(market)
     # 指数识别: 已知指数代码 → 走指数K线(支持大盘详情页复用 InteractiveKline)
     from src.web.api.market import MARKET_INDICES
@@ -815,7 +863,7 @@ def get_klines_batch(payload: KlineBatchRequest):
     for item in payload.items:
         market_code = _parse_market(item.market)
         days = item.days or 60
-        interval = item.interval or "1d"
+        interval = resolve_interval(item.interval)
         # P2-6 (2026-09-05 28号审计): batch 与单股同口径, 先 PG 再联网
         pg_klines, pg_asof = _pg_klines(item.symbol, market_code, days)
         source = None
