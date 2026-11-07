@@ -30,6 +30,8 @@ const ParallelDiagnosisPage = lazyWithRetry(() => import('@/pages/copilot/Parall
 const CopilotRunDetailPage = lazyWithRetry(() => import('@/pages/copilot/RunDetailPage'), 'copilot-run-detail')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
 const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
+const MainFundsHubPage = lazyWithRetry(() => import('@/pages/MainFundsHub'), 'main-funds-hub-page')
+const MarketMoodHubPage = lazyWithRetry(() => import('@/components/market-mood/MarketMoodHub'), 'market-mood-hub-page')
 // 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总
 const WarReportPage = lazyWithRetry(() => import('@/pages/WarReport'), 'war-report-page')
 // 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池 + 梯队晋级(market_replay_daily 消费)
@@ -714,6 +716,8 @@ function App() {
               {/* 单轮证据卡(2026-10-25): 详情页, 同档权限 */}
               <Route path="/copilot/runs/:runId" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunDetailPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}
+              <Route path="/funds" element={<MainFundsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
+              <Route path="/market-mood" element={<PermGuard perm="view_quotes" myPerms={myPerms}><MarketMoodHubPage myPerms={myPerms} /></PermGuard>} />
               <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
               <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><WarReportPage /></PermGuard>} />
               {/* 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池, 行情统计非 pro 专属 → view_quotes */}

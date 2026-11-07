@@ -31,7 +31,6 @@ import {
   FileText,
   FlaskConical,
   Flame,
-  GitBranch,
   KeyRound,
   Landmark,
   LayoutDashboard,
@@ -81,6 +80,8 @@ export interface NavItem {
   mobileOrder?: number
   /** 模块权限点: 有值且权限已加载时, 不含该点则不可见 */
   perm?: string
+  /** 至少持有一个权限点时可见 */
+  anyPerm?: readonly string[]
   /** owner 专属(管理后台) */
   ownerOnly?: boolean
   /** demo/guest 只读账号隐藏 */
@@ -104,15 +105,13 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/quotes', labelKey: 'nav.stocks', icon: LineChart, group: 'market', mobile: 'primary', mobileOrder: 3, perm: 'view_quotes', tabbable: false, keywords: ['个股', '工作台', '行情', '预测'] },
   { to: '/heatmap', labelKey: 'nav.heatmap', icon: LayoutGrid, group: 'market', mobile: 'more', perm: 'view_heatmap', keywords: ['热力图', '板块'] },
   { to: '/indexes', labelKey: 'nav.indexes', icon: BarChart3, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['指数', '宽基'] },
-  { to: '/theme-mood', labelKey: 'nav.themeMood', icon: Activity, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['题材', '情绪'] },
+  { to: '/market-mood', labelKey: 'nav.marketMood', icon: Activity, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['题材', '情绪', '复盘', '连板'] },
   { to: '/etf-watch', labelKey: 'nav.etfWatch', icon: Landmark, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['ETF', '国家队'] },
   { to: '/opportunities', labelKey: 'nav.opportunities', icon: Sparkles, group: 'opportunity', mobile: 'primary', mobileOrder: 2, perm: 'view_opportunities', keywords: ['扫描', '机会'] },
   { to: '/auction', labelKey: 'nav.auction', icon: Flame, group: 'opportunity', mobile: 'more', perm: 'view_opportunities', keywords: ['竞价', '集合竞价'] },
   // 数智参谋: 独立一级入口(设计稿 §9.3 方案 A) —— 不进分组, 桌面渲染独立高亮卡
   { to: '/ai-copilot', labelKey: 'nav.aiCopilot', icon: Sparkles, group: null, mobile: 'more', perm: 'view_quotes', spotlight: true, keywords: ['AI', '参谋', '助手'] },
-  { to: '/dark-fund-top', labelKey: 'nav.darkFundTop', icon: TrendingUp, group: 'opportunity', mobile: 'more', perm: 'view_dark', keywords: ['暗盘', 'DDE'] },
-  { to: '/war-report', labelKey: 'nav.warReport', icon: TrendingUp, group: 'opportunity', mobile: 'more', perm: 'view_forecast', keywords: ['主力', '战报'] },
-  { to: '/replay-tree', labelKey: 'nav.replayTree', icon: GitBranch, group: 'opportunity', mobile: 'more', perm: 'view_quotes', keywords: ['复盘', '连板'] },
+  { to: '/funds', labelKey: 'nav.mainFunds', icon: TrendingUp, group: 'opportunity', mobile: 'more', anyPerm: ['view_dark', 'view_forecast'], keywords: ['暗盘', 'DDE', '主力', '战报'] },
   // 决策域: 决策账本 + 口径对照 + 因子有效性(证据链, 不是账户视图)
   { to: '/caliber-compare', labelKey: 'nav.caliberCompare', icon: Activity, group: 'decision', mobile: 'more', perm: 'view_forecast', keywords: ['口径', 'L2', '暗盘'] },
   { to: '/decision-ledger', labelKey: 'nav.decisionLedger', icon: ClipboardList, group: 'decision', mobile: 'more', perm: 'view_quotes', keywords: ['决策', '账本'] },
@@ -149,6 +148,10 @@ export interface SecondaryRoute {
 }
 
 export const SECONDARY_ROUTES: readonly SecondaryRoute[] = [
+  { path: '/theme-mood', labelKey: 'nav.themeMood', perm: 'view_quotes' },
+  { path: '/replay-tree', labelKey: 'nav.replayTree', perm: 'view_quotes' },
+  { path: '/dark-fund-top', labelKey: 'nav.darkFundTop', perm: 'view_dark' },
+  { path: '/war-report', labelKey: 'nav.warReport', perm: 'view_forecast' },
   { path: '/system/status', labelKey: 'nav.systemStatus' },
   { path: '/copilot-governance', labelKey: 'nav.copilotGovernance', perm: 'view_quotes' },
   { path: '/copilot/runs', labelKey: 'nav.copilotRuns', perm: 'view_quotes' },
@@ -271,7 +274,7 @@ export interface NavViewer {
  *   · 有权限点 + 权限已加载 + 不含 → 隐藏; 权限未加载 → **不隐藏**(回退角色判断)。
  */
 export function isNavItemVisible(
-  item: { perm?: string; ownerOnly?: boolean; guestHidden?: boolean; to?: string },
+  item: { perm?: string; anyPerm?: readonly string[]; ownerOnly?: boolean; guestHidden?: boolean; to?: string },
   viewer: NavViewer,
 ): boolean {
   if (item.ownerOnly && viewer.role !== 'owner') return false
@@ -281,6 +284,7 @@ export function isNavItemVisible(
     if (pathname === '/manage' || pathname.startsWith('/manage/')) return false
   }
   if (item.perm && viewer.perms && !viewer.perms.has(item.perm)) return false
+  if (item.anyPerm?.length && viewer.perms && !item.anyPerm.some((perm) => viewer.perms?.has(perm))) return false
   return true
 }
 

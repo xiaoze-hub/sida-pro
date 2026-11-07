@@ -69,6 +69,8 @@ const enUS: Messages = {
     factorIC: 'Factor IC',
     decision: 'Evidence',
     themeMood: 'Theme Mood',
+    marketMood: 'Market Sentiment',
+    mainFunds: 'Main Funds',
     etfWatch: 'National Team ETF',
     opportunities: 'Market scan',
     auction: 'Auction',

@@ -295,7 +295,7 @@ export default function AdminPage() {
   // 后台任何按钮都不得直连硬删除接口。
   const toggleActive = async (u: AdminUser) => {
     if (u.is_active && !confirm(
-      `确定停用 ${u.username}？\n\n停用后该账号无法登录，已登录会话立即失效；其持仓、自选、通知渠道、对话等数据全部保留，可随时重新启用。`,
+      `确定停用 ${u.username}？\n\n停用后该账号无法登录，现有登录凭证将不能用于后续鉴权；其持仓、自选、通知渠道、对话等数据全部保留，可随时重新启用。`,
     )) return
     setUserActionId(u.id)
     try {

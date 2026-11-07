@@ -137,7 +137,7 @@ export default function UserManagement({ currentUser }: Props) {
    */
   const setUserActive = async (u: AdminUserRow, nextActive: boolean) => {
     if (!nextActive && !window.confirm(
-      `确定停用用户 ${u.username}？\n\n停用后该账号无法登录，已登录的会话立即失效；其持仓、自选、通知渠道、对话等数据全部保留，随时可以重新启用。`,
+      `确定停用用户 ${u.username}？\n\n停用后该账号无法登录，现有登录凭证将不能用于后续鉴权；其持仓、自选、通知渠道、对话等数据全部保留，随时可以重新启用。`,
     )) return
     try {
       await fetchAPI(`/users/admin/${u.id}/toggle-active`, {
@@ -278,7 +278,7 @@ export default function UserManagement({ currentUser }: Props) {
         </Button>
       </div>
       <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
-        停用只禁止登录并让已登录会话失效，用户的持仓、自选、通知渠道、对话等数据全部保留，可随时重新启用；系统不在这里物理删除用户。
+        停用会禁止登录并使旧凭证无法通过后续鉴权，用户的持仓、自选、通知渠道、对话等数据全部保留，可随时重新启用；系统不在这里物理删除用户。
       </p>
 
       {showCreate && (

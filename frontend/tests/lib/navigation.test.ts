@@ -187,7 +187,7 @@ describe('③ 权限感知可见性(菜单与命令面板同一判定)', () => {
   it('权限未加载(null) → 回退角色判断, 不误伤(与旧口径一致)', () => {
     const loading: NavViewer = { perms: null, role: 'member', guest: false }
     const visible = new Set(palettePageCommands(loading).map((e) => e.to))
-    expect(visible.has('/dark-fund-top')).toBe(true)
+    expect(visible.has('/funds')).toBe(true)
     expect(visible.has('/heatmap')).toBe(true)
     expect(visible.has('/admin')).toBe(false) // ownerOnly 仍按角色挡
   })
