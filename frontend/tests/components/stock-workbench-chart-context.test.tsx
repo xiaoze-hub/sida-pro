@@ -152,6 +152,12 @@ describe('发布真实视图', () => {
     expect(ctx.market).toBe('CN')
   })
 
+  it('分钟K旧链接降级为日K时，参谋上下文不得误报分钟周期', async () => {
+    renderAt('/stocks/600111?period=m5')
+    const ctx = await waitForContext('600111')
+    expect(ctx.period).toBe('d1')
+  })
+
   it('?period=w1 → 周期按 URL 原样带上；区间未上报前不写区间', async () => {
     renderAt('/stocks/600111?period=w1')
     const ctx = await waitForContext('600111')

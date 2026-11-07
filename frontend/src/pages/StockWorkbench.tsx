@@ -17,6 +17,7 @@ import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
+import { DAY_BUCKETS } from '@sida/biz-ui/lib/fund-bar'
 import { currentAccountId } from '@/lib/copilot/annotationLedger'
 import { requestAnnotations, revokeAnnotation } from '@/lib/copilot/annotationLink'
 import type { AnnotationTarget as AnnotationTargetType } from '@/lib/copilot/serverAnnotations'
@@ -396,6 +397,8 @@ export default function StockWorkbench() {
    * 解析不出(缺失/非法/`intra` 分时) → `undefined` → 图表用自身默认周期(不假装支持)。
    */
   const periodFromUrl = periodToInterval(sp.get('period'))
+  // 图表会将不可用的分钟 K 降级为日 K；下游标注/参谋必须看到同一周期。
+  const displayedPeriod = periodFromUrl && !DAY_BUCKETS.includes(periodFromUrl) ? '1d' : periodFromUrl
 
   /**
    * 参谋结论价位线叠加（2026-10-28 P2 四收口）。
@@ -410,7 +413,7 @@ export default function StockWorkbench() {
    *    不需等新请求（迟到的旧响应由账本序号丢弃）；
    *  - 不可画的目标（未登录/指数/000001 这类指数个股同号）直接给出原因，不发请求。
    */
-  const annotationPeriod = periodFromUrl ?? '1d'
+  const annotationPeriod = displayedPeriod ?? '1d'
   const annotationOwner = currentAccountId() ?? ''
   const annotationTarget = useMemo<AnnotationTargetType | null>(
     () =>
@@ -443,11 +446,11 @@ export default function StockWorkbench() {
         symbol,
         market: type === 'stock' ? 'CN' : type,
         instrument: type === 'stock' ? 'stock' : type === 'index' ? 'index' : undefined,
-        period: periodFromUrl ?? undefined,
+        period: displayedPeriod ?? undefined,
       },
-      `wb:${symbol}:${periodFromUrl ?? '-'}:${type}`,
+      `wb:${symbol}:${displayedPeriod ?? '-'}:${type}`,
     )
-  }, [symbol, periodFromUrl, type])
+  }, [symbol, displayedPeriod, type])
 
   /**
    * 设计稿 v2.1 §10.2④: 区间统计(拖拽选段/缩放后, 资金面板顶部那一行)。
@@ -482,11 +485,11 @@ export default function StockWorkbench() {
       symbol,
       instrument: 'stock',
       market: MARKET,
-      period: sp.get('period'),
+      period: periodFromUrl && !DAY_BUCKETS.includes(periodFromUrl) ? 'd1' : sp.get('period'),
       range: rangeStats,
       levels: annotationSnapshot.lines,
     })
-  }, [type, symbol, MARKET, annotationOwner, sp, rangeStats, annotationSnapshot.lines])
+  }, [type, symbol, MARKET, annotationOwner, sp, periodFromUrl, rangeStats, annotationSnapshot.lines])
   useEffect(() => {
     if (!chartContext || !active) return
     const key = publishChartContext(chartContext)
