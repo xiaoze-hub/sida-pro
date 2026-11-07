@@ -23,9 +23,8 @@
  * `myPerms` 为 null(未加载/拉取失败)时不过滤, 避免闪隐。**路由级守卫不要用单点 `view_quotes`**
  * —— 那会把「只能看 ETF」的用户挡掉(他们今天能进 /etf-watch)。
  *
- * 与「K 线主位」的关系(限制, 不是缺陷隐瞒): 这两页都不含 K 线。指数页是聚合资金结构,
- * ETF 页是篮子累计成交额曲线, 两个接口都不给单标的 OHLC 序列, 所以本工作区**无法**把 K 线
- * 放在主位; K 线主位仍在个股工作台 `/stocks/:symbol`(IndexBody)。此处不造图、不拼假 K 线。
+ * 指数视图另用指数 K 线接口显示上证指数，ETF 视图保持原有独立成交额口径。
+ * 两者不互相换算，不能把 ETF 篮子或市场级 SC8 称为单只 ETF 的净申购。
  */
 import { useId, type ReactNode } from 'react'
 import { Navigate, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
