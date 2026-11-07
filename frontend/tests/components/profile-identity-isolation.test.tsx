@@ -70,7 +70,7 @@ vi.mock('@sida/api', async importOriginal => {
 })
 
 import { Profile } from '@/pages/Profile'
-import { AUTH_CHANGED_EVENT } from '@/hooks/useApiQuery'
+import { AUTH_CHANGED_EVENT, currentIdentity, scopedKey } from '@/hooks/useApiQuery'
 
 function mount(section = 'account') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -236,7 +236,7 @@ describe('个人中心按登录身份隔离 (2026-11-07)', () => {
     expect((document.querySelector('img[alt="头像"]') as HTMLImageElement).getAttribute('src')).toBe(AVATAR_NEW)
 
     // 保存前先发一次读(模拟回到前台触发的重取), 把响应扣住
-    const scoped = ['profile', identityOf('alice')]
+    const scoped = scopedKey(['profile'], currentIdentity())
     const before = profileGetCount()
     const staleRead = deferred<unknown>()
     const heldKey = `GET /profile#${identityOf('alice')}`

@@ -21,7 +21,7 @@ const KC = readFileSync(
 function markerEffectDeps(source: string): string[] {
   const found = [...source.matchAll(/\},\s*\[([^\]\n]*)\]\)/g)]
     .map((m) => m[1].split(',').map((s) => s.trim()).filter(Boolean))
-    .find((deps) => deps.includes('props.tradeMarkers'))
+    .find((deps) => deps.includes('effTradeMarkers'))
   if (!found) throw new Error('未找到 marker/价位线重绘 effect 的依赖数组')
   return found
 }
@@ -89,8 +89,8 @@ describe('KlineChart 主力意图接线(P2 补搬)', () => {
         'props.symbol',
         'props.market',
         'interval',
-        'props.tradeMarkers',
-        'props.annotationMarkers',
+        'effTradeMarkers',
+        'effAnnotationMarkers',
         'props.layersVisible',
         'props.priceLinesVisible',
       ]),

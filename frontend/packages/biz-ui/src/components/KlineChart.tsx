@@ -1164,7 +1164,7 @@ export default function KlineChart(props: {
     return () => {
       cancelled = true
     }
-  }, [props.symbol, props.market, props.instrument, interval, props.initialDays])
+  }, [props.symbol, props.market, props.instrument, indexChart, interval, props.initialDays])
 
   // ── 图层数据: 按需自取 summary(仅父未接管的分量才发请求) ────────
   useEffect(() => {
@@ -1492,7 +1492,10 @@ export default function KlineChart(props: {
    * **个股**上(标注按 symbol 归属、交割单是本人对该股票的成交、成本来自持仓)。指数图即便父组件
    * 误传也不画 —— 与 `supportPressure` 同一口径: 宁可空, 不可把个股的东西标到指数上。
    */
-  const effAnnotationMarkers = indexChart ? EMPTY_ANNOTATIONS : normalizeAnnotationMarkers(props.annotationMarkers)
+  const effAnnotationMarkers = useMemo(
+    () => indexChart ? EMPTY_ANNOTATIONS : normalizeAnnotationMarkers(props.annotationMarkers),
+    [indexChart, props.annotationMarkers],
+  )
   const effTradeMarkers = indexChart ? EMPTY_TRADE_MARKERS : (props.tradeMarkers ?? EMPTY_TRADE_MARKERS)
   const effCostLines = indexChart ? EMPTY_COST_LINES : (props.costLines ?? EMPTY_COST_LINES)
   // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
