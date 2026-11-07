@@ -18,9 +18,10 @@ describe('KlineChart 持仓成本线契约(P1-2)', () => {
     expect(KC).toMatch(/costLines\?: Array<\{ price: number; title: string \}>/)
   })
 
-  it('按 props.costLines 逐条 createPriceLine(水平实线 + 轴标签显示 title)', () => {
-    // 遍历传入的成本线并建价格线(实线, 与支撑压力虚线区分)
-    expect(KC).toMatch(/for \(const line of props\.costLines \|\| \[\]\)/)
+  it('个股成本线逐条 createPriceLine(水平实线 + 轴标签显示 title)', () => {
+    // 指数不得画个股成本，个股沿用传入成本线。
+    expect(KC).toMatch(/const effCostLines = indexChart \? EMPTY_COST_LINES : \(props\.costLines \?\? EMPTY_COST_LINES\)/)
+    expect(KC).toMatch(/for \(const line of effCostLines\)/)
     expect(KC).toMatch(/series\.createPriceLine\(\{/)
     expect(KC).toMatch(/axisLabelVisible: true/)
     expect(KC).toMatch(/title: line\.title/)
@@ -32,7 +33,7 @@ describe('KlineChart 持仓成本线契约(P1-2)', () => {
   })
 
   it('重绘依赖含 costLines(切股/持仓变化时成本线跟着刷新, 不残留)', () => {
-    expect(KC).toMatch(/props\.costLines,/)
+    expect(KC).toMatch(/\}, \[[^\]]*effCostLines,/)
     // 重绘前先移除上一轮成本线(否则切股残留旧成本线)
     expect(KC).toMatch(/for \(const line of costLinesRef\.current\) series\.removePriceLine\(line\)/)
   })

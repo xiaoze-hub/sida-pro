@@ -42,6 +42,7 @@ function mount() {
 }
 
 beforeEach(() => {
+  localStorage.setItem('token', `e30.${btoa(JSON.stringify({ sub: 'profile-agent-test' }))}.signature`)
   api.fail = null
   api.board = { since: null, scope: 'global', note: '预测记录无用户维度, 按全平台统计', overall: {}, agents: [] }
   api.stats = {
@@ -51,7 +52,7 @@ beforeEach(() => {
     has_shadow_profile: false,
   }
 })
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); localStorage.removeItem('token') })
 
 describe('个人中心 Agent 命中榜 (AI 链路 P1)', () => {
   it('渲染分 Agent 行: 命中率/命中/平均收益; 样本不足显式不参评', async () => {
