@@ -1599,9 +1599,11 @@ def _apply_setting(db: Session, *, user_id: Any, payload: dict) -> str:
     val = str(payload.get("value") or "")
     before = payload.get("before")
     present = bool(payload.get("before_present"))
-    # 明确「改成什么、原来是啥」，空字符串也如实念出来，不吞成 None。
-    before_txt = "（不存在）" if not present else ("（空）" if before == "" else before)
-    return f"已把「{key}」从 {before_txt} 改为 {val or '（空，关闭/继承默认）'}"
+    # 如实念出「原来是什么、改成什么」。三态：无行 / 有行但无有效值 / 有值。
+    # 绝不说「空=关闭」—— 空值已被 validate_setting 拒绝，历史空/NULL 行在运行时
+    # 是回退环境变量默认值（`_build_notifier` 的 `or`），不是关闭。
+    before_txt = _setting_before_text(present, before)
+    return f"已把「{key}」从 {before_txt} 改为 {val}"
 
 
 # ── P1-1.3 dry-run diff + 回滚（2026-10-25）───────────────────────────────
@@ -1632,23 +1634,38 @@ def preview_diff(db: Session, *, user_id: Any, kind: str, payload: dict) -> list
     return _diff_schedule(db, user_id=user_id, payload=payload)
 
 
+def _setting_before_text(present: bool, before: Any) -> str:
+    """旧值的三态文案。空/NULL 说的是「回退默认值」，不是「关闭」。"""
+    if not present:
+        return "（未配置：当前生效的是环境变量默认值）"
+    if before is None or before == "":
+        return "（已存在但无有效值：运行时会回退环境变量默认值）"
+    return str(before)
+
+
 def _diff_setting(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
-    """通知设置动作的 diff —— 如实念出 before/after，空字符串不吞成 None。
+    """通知设置动作的 diff —— 如实念出 before/after，并带上三态给界面。
 
     `payload` 是 propose 时由 `prepare_setting` 固化好的基线（含 before/before_present），
     这里只读它做展示，不再二次查库。
+
+    额外字段（界面用来显示"三态/风险"，不接受模型自报的 before）:
+      - `before_state`: absent / null / value —— 由**后端持久化的基线**算出；
+      - `immutable`: 设置类动作不可撤销，只能重新提议修正。
     """
+    from src.harness.setting_policy import setting_value_state
+
     key = str(payload.get("key") or "")
     value = payload.get("value")
     present = bool(payload.get("before_present"))
     before = payload.get("before")
-    before_txt = "（不存在）" if not present else ("（空）" if before == "" else before)
-    after_txt = value if value != "" else "（空，关闭/继承默认）"
     return [{
         "field": key,
-        "before": before_txt,
-        "after": after_txt,
+        "before": _setting_before_text(present, before),
+        "after": str(value),
         "change": "noop" if (present and before == value) else ("update" if present else "add"),
+        "before_state": setting_value_state(present, before),
+        "immutable": True,
     }]
 
 

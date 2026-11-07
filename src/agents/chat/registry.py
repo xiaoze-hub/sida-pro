@@ -1734,7 +1734,8 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                 "kind=setting：受控修改三键非敏感通知设置（key 必填 + value 必填）。"
                 "key 只收 notify_retry_attempts（0-3 整数）/ notify_retry_backoff_seconds"
                 "（0-10，最多一位小数）/ notify_quiet_hours（HH:MM-HH:MM，起止不可相同）；"
-                "value 传空字符串表示「关闭/继承默认」，不是非法值。"
+                "value 必填且**不可为空**：空值不是「关闭」，运行时会静默回退到环境变量默认值，"
+                "所以后端直接拒收；想关就说得清具体取值，别传空串。"
                 "**该动作不可撤销**：改错了只能重新提议修正，不要声称可以回滚。"
                 "只在用户明确要「标注/加自选/盯一下/改通知设置」时调用；不要用它代替分析结论。"
             ),
@@ -1746,7 +1747,7 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
                     "label": {"type": "string", "description": "标注短标签（annotation 必填，≤20 字）"},
                     "price": {"type": "number", "description": "水平线价位；annotation 的 price 或 ts 至少一项；alert 时为提醒触发价（必填）"},
                     "key": {"type": "string", "description": "通知设置键（setting 必填）：notify_retry_attempts / notify_retry_backoff_seconds / notify_quiet_hours"},
-                    "value": {"type": "string", "description": "设置值（setting 必填）；静默时段格式 HH:MM-HH:MM；空字符串=关闭/继承默认"},
+                    "value": {"type": "string", "description": "设置值（setting 必填且不可为空）；静默时段格式 HH:MM-HH:MM。空值不是关闭：运行时回退环境变量默认值，会被后端拒收"},
                     "direction": {
                         "type": "string",
                         "enum": ["above", "below"],
@@ -1778,7 +1779,8 @@ async def _tool_propose_action(db: Session, args: dict, user: User | None = None
     kind = str(args.get("kind") or "").strip()
     if kind not in ALLOWED_KINDS:
         return f"不支持的 kind：{kind}（可选 {', '.join(ALLOWED_KINDS)}）"
-    # setting 的 value 允许空字符串（= 关闭/继承默认），其它字段才过滤空值。
+    # setting 的 value 原样传下去（不过滤空串）：让 validate_setting 给出「空值≠关闭」
+    # 那句明确理由，比笼统的"缺少 value"更能纠正模型；其它字段仍过滤空值。
     if kind == "setting":
         payload = {k: v for k, v in args.items() if k != "kind" and v is not None}
     else:
