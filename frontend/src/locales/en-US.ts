@@ -70,6 +70,7 @@ const enUS: Messages = {
     decision: 'Evidence',
     themeMood: 'Theme Mood',
     marketMood: 'Market Sentiment',
+    marketWatch: 'Market Watch',
     mainFunds: 'Main Funds',
     etfWatch: 'National Team ETF',
     opportunities: 'Market scan',

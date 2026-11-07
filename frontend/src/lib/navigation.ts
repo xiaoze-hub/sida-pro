@@ -32,7 +32,6 @@ import {
   FlaskConical,
   Flame,
   KeyRound,
-  Landmark,
   LayoutDashboard,
   LayoutGrid,
   LineChart,
@@ -104,9 +103,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // 行情入口是"解析器": 按当前账号持仓/关注跳到 /stocks/:symbol, 本身不该占页签
   { to: '/quotes', labelKey: 'nav.stocks', icon: LineChart, group: 'market', mobile: 'primary', mobileOrder: 3, perm: 'view_quotes', tabbable: false, keywords: ['个股', '工作台', '行情', '预测'] },
   { to: '/heatmap', labelKey: 'nav.heatmap', icon: LayoutGrid, group: 'market', mobile: 'more', perm: 'view_heatmap', keywords: ['热力图', '板块'] },
-  { to: '/indexes', labelKey: 'nav.indexes', icon: BarChart3, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['指数', '宽基'] },
+  { to: '/market-watch', labelKey: 'nav.marketWatch', icon: BarChart3, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['指数', '宽基', 'ETF'] },
   { to: '/market-mood', labelKey: 'nav.marketMood', icon: Activity, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['题材', '情绪', '复盘', '连板'] },
-  { to: '/etf-watch', labelKey: 'nav.etfWatch', icon: Landmark, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['ETF', '国家队'] },
   { to: '/opportunities', labelKey: 'nav.opportunities', icon: Sparkles, group: 'opportunity', mobile: 'primary', mobileOrder: 2, perm: 'view_opportunities', keywords: ['扫描', '机会'] },
   { to: '/auction', labelKey: 'nav.auction', icon: Flame, group: 'opportunity', mobile: 'more', perm: 'view_opportunities', keywords: ['竞价', '集合竞价'] },
   // 数智参谋: 独立一级入口(设计稿 §9.3 方案 A) —— 不进分组, 桌面渲染独立高亮卡
@@ -148,6 +146,8 @@ export interface SecondaryRoute {
 }
 
 export const SECONDARY_ROUTES: readonly SecondaryRoute[] = [
+  { path: '/indexes', labelKey: 'nav.indexes', perm: 'view_quotes' },
+  { path: '/etf-watch', labelKey: 'nav.etfWatch' },
   { path: '/theme-mood', labelKey: 'nav.themeMood', perm: 'view_quotes' },
   { path: '/replay-tree', labelKey: 'nav.replayTree', perm: 'view_quotes' },
   { path: '/dark-fund-top', labelKey: 'nav.darkFundTop', perm: 'view_dark' },
