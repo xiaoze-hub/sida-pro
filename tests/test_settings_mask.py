@@ -78,6 +78,12 @@ def app(db, monkeypatch):
         yield db
 
     application.dependency_overrides[get_db] = _override_db
+    # 2026-11-07: 写权限已在端点收口(require_settings_write / manage_settings)。
+    # 本文件只验掩码与落库判据, 判权用依赖覆盖跳过;
+    # 真实 HTTP 判权(owner/member/无身份/服务身份/降权)见 tests/test_settings_write_authz.py。
+    application.dependency_overrides[settings_api.require_settings_write] = lambda: (
+        settings_api.SettingsActor(id="test", username="tester", role="owner")
+    )
     return application
 
 

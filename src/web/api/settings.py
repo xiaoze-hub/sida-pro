@@ -1,14 +1,17 @@
 import base64
 import logging
 import os
+from dataclasses import dataclass
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from src.web.database import get_db
-from src.web.models import AppSettings, User
+from src.web.models import AppSettings, AuditLog, User
 from src.config import Settings
 from src.core.update_checker import check_update
+from src.db.session import WriteSessionLocal
+from src.web.api.auth import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -111,7 +114,151 @@ def is_mask_placeholder(value) -> bool:
         return False
     return all(ch in SECRET_MASK_CHARS for ch in v)
 
+
 SETTING_KEYS = list(SETTING_DESCRIPTIONS.keys())
+
+
+# ════════════════════════════════════════════════════════════════════
+# 全局设置写权限(2026-11-07 独立复审 P0: 权限绕过)
+# ════════════════════════════════════════════════════════════════════
+# 事故面: 本模块的 PUT 端点**自身没有任何权限依赖**, 唯一防线是
+# `app.demo_isolation_middleware` 对 `/api/settings` 前缀的 manage_settings 判定。
+# 而 `ApiVersionAliasMiddleware` 是内层中间件, 会把 `/api/v1/settings/{key}`
+# 改写成 `/api/settings/{key}` —— 外层中间件看到的仍是 `/api/v1/...`, 前缀匹配
+# 落空 ⇒ 任意 member 可以写 `zhitu_token` / `wudao_mcp_token` / `http_proxy`
+# (把全站出网流量导向自己的代理)等全局配置。实测 member 走 /api/v1 一路 200。
+#
+# 结论: 权限判定必须落在**执行端**(端点依赖), 不能只靠路径前缀。这里同时:
+#   1. 实时从**写库**读真实角色(不信 JWT claim、不信读副本滞后) —— 降权立即生效;
+#   2. 复用 core 的角色权限表 + `users.permissions` 白名单(既有兼容通道);
+#   3. 拒绝服务身份(ServicePrincipal / role=service), 写链路不给服务方开口子;
+#   4. 判权过程任何异常一律 403(fail closed), 绝不因为查不到就放行。
+SETTINGS_MANAGE_PERM = "manage_settings"
+#: 服务身份的角色名(ServicePrincipal.role / 服务账号 role) —— 不得写全局设置
+SERVICE_ROLE = "service"
+
+
+@dataclass(frozen=True)
+class SettingsActor:
+    """已鉴权的设置写入者(id/username 供审计, role 供排障)。"""
+
+    id: str | None
+    username: str
+    role: str
+
+
+def _granted_perms(row) -> set[str]:
+    """`users.permissions` 白名单权限点(兼容 list 与 {"permissions": [...]} 两种形态)。
+
+    与 `app._resolve_user_auth` 同口径: owner 给某个 member 单独开权限点时,
+    中间件与端点必须给出同一裁决, 否则出现"中间件放行、端点拒绝"的幽灵 403。
+    """
+    raw = getattr(row, "permissions", None)
+    if isinstance(raw, dict):
+        raw = raw.get("permissions") or []
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return {p for p in raw if isinstance(p, str)}
+    return set()
+
+
+def require_settings_write(user: User = Depends(get_current_user)) -> SettingsActor:
+    """FastAPI 依赖: 全局设置**写**权限(manage_settings), 任何异常都拒绝。
+
+    只挂在写端点(`PUT /{key}`、`PUT /avatar`)上; GET 保持"登录即可浏览"
+    (敏感 key 已掩码) —— 成员看版本/头像/通知参数是既有功能, 不收口。
+
+    四道关:
+    1. 登录身份由 `get_current_user` 给出(401 未登录/失效; 服务 token 无法通过);
+    2. **实时从写库**取角色 —— 不信 JWT claim(降权后旧 token 仍是 owner claim),
+       也不信读副本(带读分离时副本滞后会让降权延后生效);
+    3. 权限 = 角色权限表 ∪ `users.permissions` 白名单(既有兼容通道, 与中间件同口径);
+    4. 服务身份(role=service)与查询异常一律 403 —— fail closed, 绝不"查不到就放行"。
+    """
+    from src.core.permissions import get_role_permissions, normalize_role
+
+    # ServicePrincipal(get_user_or_service 侧)不是 User; 万一将来被挂到本路由上,
+    # 按鸭子类型显式拒绝, 不给服务身份留写全局配置的口子。
+    if getattr(user, "is_service", False):
+        raise HTTPException(403, "服务身份不可修改全局设置")
+
+    try:
+        db = WriteSessionLocal()
+        try:
+            row = db.query(User).filter(User.id == user.id).first()
+            if row is None:
+                raise HTTPException(403, "账号不存在, 拒绝修改全局设置")
+            raw_role = str(getattr(row, "role", "") or "").strip().lower()
+            perms = get_role_permissions(normalize_role(raw_role)) | _granted_perms(row)
+            active = bool(getattr(row, "is_active", False)) and not bool(
+                getattr(row, "is_deleted", False)
+            )
+            actor = SettingsActor(
+                id=getattr(row, "id", None),
+                username=str(getattr(row, "username", "") or ""),
+                role=raw_role or "member",
+            )
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 —— 判权失败必须拒绝, 不能放行
+        logger.warning("settings 写权限判定异常, 保守拒绝: %r", exc)
+        raise HTTPException(403, f"无权限: {SETTINGS_MANAGE_PERM}") from exc
+
+    if not active:
+        raise HTTPException(403, "账号不可用, 拒绝修改全局设置")
+    if raw_role == SERVICE_ROLE:
+        raise HTTPException(403, "服务身份不可修改全局设置")
+    if SETTINGS_MANAGE_PERM not in perms:
+        raise HTTPException(403, f"无权限: {SETTINGS_MANAGE_PERM}")
+    return actor
+
+
+def _stage_audit(
+    db: Session, actor: SettingsActor, action: str, detail: str, ip: str = ""
+) -> None:
+    """把审计行**挂到当前事务**, 由调用方与设置写入一并提交。
+
+    P0(2026-11-07): 原实现把 `log_audit(...)` 整个包在 `except Exception: pass` 里 ——
+    审计写失败既不回滚也不报错, 前端照样拿到 200「改好了」, 事后无从追溯是谁把
+    token / 代理换掉的。现在审计与设置写入**同一次 commit**:
+      - 审计失败 ⇒ 整笔回滚 + 5xx, 绝不谎报成功(设置也不会落地);
+      - 不用 `log_audit` 的独立 session —— 同请求双 session 双 commit 就是
+        2026-08-21 那次 `PendingRollbackError` 挂死端点的成因。
+    """
+    db.add(
+        AuditLog(
+            user_id=actor.id,
+            username=actor.username,
+            action=action,
+            detail=detail or "",
+            ip=ip or "",
+        )
+    )
+
+
+def _client_ip(request: Request) -> str:
+    try:
+        from src.web.middleware import _get_client_ip
+
+        return _get_client_ip(request) or ""
+    except Exception:  # noqa: BLE001 —— 审计 ip 只影响可读性, 不影响判权
+        return ""
+
+
+def _audit_safe(key: str, value: str) -> str:
+    """审计明细里的值: 敏感键一律掩码, 其余去掉 URL userinfo 后再截断。
+
+    `http_proxy` 不在 SECRET_SETTING_KEYS(它不是凭证, 掩码会让设置页改不动),
+    但 `http://user:pass@host` 形态里确实带凭证, 写进审计表就等于把密码落库。
+    """
+    if key in SECRET_SETTING_KEYS and value:
+        return SECRET_MASK
+    v = str(value or "")
+    if "://" in v and "@" in v.split("://", 1)[1]:
+        scheme, rest = v.split("://", 1)
+        v = f"{scheme}://***@{rest.split('@', 1)[1]}"
+    return v[:50] + ("…" if len(v) > 50 else "")
 
 
 def _get_env_defaults() -> dict[str, str]:
@@ -209,10 +356,18 @@ def get_avatar(db: Session = Depends(get_db)):
 
 
 @router.put("/avatar")
-def set_avatar(update: SettingUpdate, db: Session = Depends(get_db)):
+def set_avatar(
+    update: SettingUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: SettingsActor = Depends(require_settings_write),
+):
     """保存/清空用户头像:把 data URL 落成 data/avatars/avatar.* 文件,DB 仅记文件名。
 
     需在 /{key} 之前注册以优先匹配。传空字符串即清空(删文件 + 清记录)。
+
+    2026-11-07: `ui_avatar` 是**全局单行**(不是 per-user), 属全局设置写 → 与
+    /{key} 同门槛(manage_settings)。此前只有中间件前缀在拦, /api/v1 别名可绕过。
     """
     row = db.query(AppSettings).filter(AppSettings.key == AVATAR_KEY).first()
     # P2(audit-20260915): old 来自 DB, 删除前须 basename 净化
@@ -227,7 +382,11 @@ def set_avatar(update: SettingUpdate, db: Session = Depends(get_db)):
                 pass
         if row:
             row.value = ""
-        db.commit()
+        _stage_audit(
+            db, actor, f"settings_update:{AVATAR_KEY}", "改前=<已设置> 改后=<清空>",
+            ip=_client_ip(request),
+        )
+        _commit_or_500(db, AVATAR_KEY, actor)
         return {"value": ""}
 
     if not (value.startswith("data:") and "," in value):
@@ -252,8 +411,28 @@ def set_avatar(update: SettingUpdate, db: Session = Depends(get_db)):
         db.add(row)
     else:
         row.value = fname
-    db.commit()
+    # 审计只记文件名/动作, 绝不记 data URL 本身(那是可还原的图片正文)
+    _stage_audit(
+        db, actor, f"settings_update:{AVATAR_KEY}", f"改后={fname}", ip=_client_ip(request)
+    )
+    _commit_or_500(db, AVATAR_KEY, actor)
     return {"value": fname}
+
+
+def _commit_or_500(db: Session, key: str, actor: SettingsActor) -> None:
+    """提交设置 + 审计; 任一失败整笔回滚并 5xx(不谎报成功)。
+
+    审计与设置同事务: 要么"改了且有据可查", 要么"没改且明确报错"。
+    """
+    try:
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 —— 审计/写入失败必须让调用方看到失败
+        db.rollback()
+        logger.error(
+            "settings 写入失败(含审计), 已回滚: key=%s actor=%s err=%r",
+            key, actor.username, exc,
+        )
+        raise HTTPException(503, "设置未保存: 审计写入失败, 已回滚, 请稍后重试") from exc
 
 
 @router.put("/{key}")
@@ -262,24 +441,8 @@ def update_setting(
     update: SettingUpdate,
     request: Request,
     db: Session = Depends(get_db),
+    actor: SettingsActor = Depends(require_settings_write),
 ):
-    from src.web.api.auth import get_current_user
-
-    # 懒 import 避开循环; 2026-09-18: 与 HTTP 依赖同源裁决(Bearer 优先 → Cookie),
-    # 保证审计记的就是请求真正以之执行的那个用户。
-    user = None
-    try:
-        from src.web.api.auth import decode_token, principal_from_payload, token_from_request
-
-        raw = token_from_request(request) or ""
-        if raw:
-            payload = decode_token(raw)
-            if payload:
-                user = principal_from_payload(payload)
-    except Exception as e:
-        # P1: JWT 解析失败属可选降级路径(audit 将以 user=None 记), debug 留痕
-        logger.debug(f"settings audit JWT 解析失败: {e}")
-
     # P2-1 (2026-09-05 28号审计): key 白名单, 系统保留键拒绝直写
     if key not in SETTING_KEYS:
         raise HTTPException(400, f"未知设置键: {key}")
@@ -308,25 +471,19 @@ def update_setting(
     else:
         setting.value = value_to_store
 
-    db.commit()
+    # B.6 系统设置审计: 记改前改后(敏感值记掩码, 不记明文; 代理去 userinfo)
+    # 2026-11-07: 审计与写入**同一次 commit**, 审计失败整笔回滚 + 5xx。
+    # 原实现 `except Exception: pass` 会在审计写不进去时仍然返回 200「已保存」,
+    # 等于"改了没人知道"—— 对凭证/代理这类全局配置是不可接受的。
+    _stage_audit(
+        db,
+        actor,
+        f"settings_update:{key}",
+        f"改前={_audit_safe(key, old_value)!r} 改后={_audit_safe(key, value_to_store)!r}",
+        ip=_client_ip(request),
+    )
+    _commit_or_500(db, key, actor)
     db.refresh(setting)
-
-    # B.6 系统设置审计: 记改前改后(敏感值记掩码, 不记明文)
-    if user:
-        try:
-            from src.web.api.audit import log_audit
-
-            def _mask(v: str) -> str:
-                if key in SECRET_SETTING_KEYS and v:
-                    return SECRET_MASK
-                return v[:50] + ("…" if len(v) > 50 else "")
-
-            log_audit(
-                db, user, f"settings_update:{key}",
-                detail=f"改前={_mask(old_value)!r} 改后={_mask(value_to_store)!r}",
-            )
-        except Exception:
-            pass
 
     # http_proxy 改动立刻反映到进程 env,所有 httpx(trust_env=True)免重启即走新代理
     if key == "http_proxy":

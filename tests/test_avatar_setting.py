@@ -38,6 +38,11 @@ def _client(tmp_path, monkeypatch) -> TestClient:
             s.close()
 
     app.dependency_overrides[get_db] = _db
+    # 2026-11-07: 头像写是全局设置写(manage_settings), 判权用依赖覆盖跳过;
+    # 真实 HTTP 判权见 tests/test_settings_write_authz.py。
+    app.dependency_overrides[settings_api.require_settings_write] = lambda: (
+        settings_api.SettingsActor(id="test", username="tester", role="owner")
+    )
     return TestClient(app)
 
 

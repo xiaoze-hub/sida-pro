@@ -143,6 +143,11 @@ def test_token_resolution_has_single_source_of_truth():
     root = Path(__file__).resolve().parents[1]
     for rel in ("src/web/middleware.py", "src/web/app.py", "src/web/api/settings.py"):
         text = (root / rel).read_text(encoding="utf-8")
-        assert "token_from_request" in text, f"{rel} 未走同源裁决"
+        # 2026-11-07: settings 写端点改成端点级 `Depends(get_current_user)`
+        # (require_settings_write) —— 身份直接取自 HTTP 依赖, 比模块内手工解析更强,
+        # 因此该文件不再出现 token_from_request。两者都算"走同源裁决"。
+        assert ("token_from_request" in text) or ("get_current_user" in text), (
+            f"{rel} 未走同源裁决"
+        )
         # 旧写法: 先读 Cookie 再兜 Bearer
         assert 'cookies.get(AUTH_COOKIE_NAME) or ""' not in text, f"{rel} 仍保留 Cookie 优先的旧写法"
