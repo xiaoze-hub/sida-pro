@@ -78,6 +78,10 @@ def pg():
         with admin.connect() as c:
             c.execute(text(f'CREATE ROLE "{role}" LOGIN PASSWORD \'{pwd}\''))
             role_created = True
+            # PostgreSQL 16 要求建库者具备 SET ROLE；刚建角色的管理员可授予自己。
+            admin_name = c.execute(text("SELECT current_user")).scalar_one()
+            quoted_admin = c.dialect.identifier_preparer.quote(admin_name)
+            c.execute(text(f'GRANT "{role}" TO {quoted_admin}'))
             c.execute(text(f'CREATE DATABASE "{dbname}" OWNER "{role}"'))
             db_created = True
         url = make_url(ADMIN_URL).set(username=role, password=pwd, database=dbname)
