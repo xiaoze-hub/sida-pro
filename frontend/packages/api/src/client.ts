@@ -64,6 +64,61 @@ export function getToken(): string | null {
   return localStorage.getItem('token')
 }
 
+/** 身份切换事件名(2026-11-07): 同一标签页登录/登出/换号后同步广播, 供上层清/重建缓存。 */
+export const AUTH_IDENTITY_EVENT = 'sida:auth-identity-changed'
+
+/**
+ * 从 JWT payload 解出**可信的账号身份**(2026-11-07), 解不出返回 null。
+ *
+ * 为什么不校验签名: 前端本来就只做展示/分区, 授权始终由后端验签决定; 这里只需要一个
+ * "同一浏览器内区分 A/B 账号"的稳定标识。解不开(**失败即关闭**)时调用方必须关闭共享缓存。
+ */
+function _claimsOf(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.')
+    if (parts.length < 2) return null
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    while (b64.length % 4) b64 += '='
+    const obj = JSON.parse(atob(b64))
+    return obj && typeof obj === 'object' && !Array.isArray(obj) ? (obj as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+let _identityToken: string | null = null
+let _identityValue: string | null = null
+
+/**
+ * 当前请求的缓存身份(2026-11-07)。**没有可信身份时返回 null** = 禁用共享缓存。
+ *
+ * 故障背景: 旧 `_cacheKey` 用 `token.slice(0, 8)` 当身份 —— HS256 的 JWT 头部
+ * (`{"alg":"HS256","typ":"JWT"}`)对**所有用户完全相同**, 前 8 字符恒为 `eyJhbGci`。
+ * 于是同一标签页里 A 登录后写下的响应/在途请求, B 登录后被当成"自己的"直接命中,
+ * 个人中心/头像/统计串号。
+ *
+ * 现在的判据是 payload 的 `sub`(后端 user.id)优先, 退化到 `username`。
+ * - 无 localStorage token(Cookie-only 会话): 身份由 httpOnly `sida_token` 决定, JS 读不到,
+ *   无法区分 A/B ⇒ 返回 null, 禁用响应缓存与在途合并(宁可多打一次请求, 不可串号)。
+ * - token 解不出 sub/username(非 JWT / 残缺)⇒ 同样 null, fail-closed。
+ */
+export function getAuthIdentity(): string | null {
+  const token = getToken()
+  if (!token) {
+    _identityToken = null
+    _identityValue = null
+    return null
+  }
+  if (token === _identityToken) return _identityValue
+  _identityToken = token
+  const claims = _claimsOf(token)
+  const sub = typeof claims?.sub === 'string' ? claims.sub : ''
+  const username = typeof claims?.username === 'string' ? claims.username : ''
+  // 身份标识只由 claim 组成 —— **不含 token 本身**, 避免任何路径把它带进日志/错误信息。
+  _identityValue = sub || username ? `u:${sub || username}` : null
+  return _identityValue
+}
+
 // 修复(M-1 + L-5, 2026-08-23): 多并发 401 同时触发 logout() 会重复跳转,
 // 用 _logoutInProgress 标志位保证单飞(single-flight):
 //   - 第一个 401 拿到锁, 构造 returnUrl 后跳转 login
@@ -76,6 +131,9 @@ export function logout() {
   _logoutInProgress = true
   localStorage.removeItem('token')
   localStorage.removeItem('token_expires')
+  // 2026-11-07: 身份已不可信 —— 立即清响应缓存/在途表并广播。代次(epoch)随之递增,
+  // 登出前发出的在途请求即使晚到, 也写不进"下一个身份"的缓存。
+  notifyAuthIdentityChanged('logout')
   // P0(2026-09-18): best-effort 清服务端 httpOnly Cookie(JS 清不掉, 须走 API)
   try {
     void fetch(`${API_BASE}/auth/logout`, {
@@ -125,9 +183,18 @@ export interface ApiRequestOptions extends RequestInit {
 
 // 2026-08-12 前端状态缓存: GET 响应内存缓存(TTL 30s, 与行情刷新周期一致)。
 // 解决"切换页面/重开弹窗每次都重新请求"——同会话内二次打开直接命中, 零请求。
-// 仅缓存 GET(带 token 的请求也可缓存, 因为 key 含 path, token 变化影响小)。
+// 仅缓存 GET, 且**必须**按认证身份分区(见 getAuthIdentity): A/B 账号的响应绝不能互相命中。
 const _RESP_CACHE = new Map<string, { ts: number; data: unknown }>()
 const _CACHE_TTL_DEFAULT = 30_000 // 30s
+
+/**
+ * 缓存代次(2026-11-07): 每次身份切换/显式清理 +1。
+ *
+ * 只把身份写进 key 还不够 —— 登出前发出的请求**晚到**时, 会带着旧身份 key 写回表里
+ * (同一个人重新登录后又读得到它)。代次让"请求发起时的世界"与"响应落地时的世界"可比:
+ * 不一致即丢弃写入。
+ */
+let _cacheEpoch = 0
 
 /**
  * 2026-10-02 首屏并发化: 同一 GET 的**在途**请求合并(single-flight)。
@@ -142,13 +209,22 @@ const _CACHE_TTL_DEFAULT = 30_000 // 30s
  * 跳过条件(任一):
  *   - `cacheMode:'reload' | false` —— 调用方显式要新数据(如实时端点/手动刷新);
  *   - 自带 `signal` —— 取消权归调用方, 共享会让一方 abort 影响另一方;
- *   - 非 GET(ckey 为 null)。
+ *   - 非 GET(ckey 为 null);
+ *   - **身份不可信**(ckey 为 null, 见 getAuthIdentity) —— Cookie-only / 匿名会话里
+ *     JS 看不到真实身份, 合并等于赌"两个调用方是同一个账号"。
  */
 const _INFLIGHT = new Map<string, Promise<unknown>>()
 
 function _cacheKey(path: string, options?: ApiRequestOptions): string | null {
   if (!options || options.method === undefined || options.method === 'GET' || options.method === null) {
-    return `${getToken()?.slice(0, 8) || 'anon'}:${path}`
+    // 2026-11-07: 身份必须来自 JWT claim(sub/username), **绝不能用 token 前缀** ——
+    // HS256 头部对所有用户相同(恒为 `eyJhbGci`), 前缀分区等于不分區。
+    // 没有可信身份(Cookie-only / 匿名 / 解不开)时返回 null: 不读缓存、不写缓存、不合并
+    // 在途请求 —— 宁可多打一次请求, 也不能让两个身份共享同一份响应。
+    const identity = getAuthIdentity()
+    if (!identity) return null
+    // 代次入键: 身份切换/显式清理后, 旧世界的在途请求不会命中新世界的条目。
+    return `${identity}@${_cacheEpoch}:${path}`
   }
   return null // 只缓存 GET
 }
@@ -328,7 +404,9 @@ async function _parseResponse<T>(
     throw err
   }
   // 2026-08-12: GET 成功后写缓存
-  if (ckey && options?.cacheMode !== false) {
+  // 2026-11-07: 写回前重新算一次 key —— 身份切换/登出(→ null)或缓存代次已推进时,
+  // 本次响应属于**上一个世界**, 直接丢弃(旧请求迟到不得污染新身份的缓存)。
+  if (ckey && options?.cacheMode !== false && _cacheKey(path, options) === ckey) {
     _RESP_CACHE.set(ckey, { ts: Date.now(), data: body.data })
   }
   return body.data
@@ -413,8 +491,30 @@ async function _fetchNow<T>(
  *  2026-10-02: 一并清掉在途合并表 —— 登出/显式刷新语义上是「别再复用这一轮的结果」,
  *  在途项被移除后, 新调用会重新发起真实请求(在途的旧 promise 仍会 resolve 给原调用方)。 */
 export function clearResponseCache() {
+  // 2026-11-07: 代次推进 —— 清理后仍在途的请求回来时, key 已不匹配, 写入被丢弃。
+  _cacheEpoch += 1
   _RESP_CACHE.clear()
   _INFLIGHT.clear()
+}
+
+/**
+ * 同步通知"登录身份已切换"(2026-11-07), 登录/登出/换号都必须调用。
+ *
+ * 做两件事, 且都是**同步**的 —— 不能等下一次身份轮询:
+ *   1. 能力层: 清响应缓存 + 在途合并表 + 推进代次(旧响应迟到写不进来);
+ *   2. 事件层: 广播 `AUTH_IDENTITY_EVENT`, 让上层(React Query 缓存等)立刻按新身份重建。
+ *
+ * 事件 detail 只带 reason, **不带 token / 用户标识** —— 避免凭证流向日志或第三方监听者。
+ */
+export function notifyAuthIdentityChanged(reason: 'login' | 'logout' | 'manual' = 'login'): void {
+  clearResponseCache()
+  try {
+    if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(AUTH_IDENTITY_EVENT, { detail: { reason } }))
+    }
+  } catch {
+    /* 非浏览器环境(SSR / 单测)没有 dispatchEvent 也不该影响登录流程 */
+  }
 }
 
 export const apiClient = {

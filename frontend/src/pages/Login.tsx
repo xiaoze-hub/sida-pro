@@ -3,7 +3,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
 import { Lock, Eye, EyeOff, User, Mail, ShieldCheck, Ticket, Sun, Moon } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
-import { authApi, fetchAPI, type AuthTokenPayload } from '@sida/api'
+import { authApi, fetchAPI, notifyAuthIdentityChanged, type AuthTokenPayload } from '@sida/api'
+import { clearQueryCache } from '@/hooks/useApiQuery'
 import { Button } from '@sida/base-ui/components/ui/button'
 import { Input } from '@sida/base-ui/components/ui/input'
 import { Label } from '@sida/base-ui/components/ui/label'
@@ -88,12 +89,24 @@ export default function LoginPage() {
     }, 1000)
   }, [])
 
+  /**
+   * 落本地凭证 + **同步**通知身份切换(2026-11-07)。
+   *
+   * 登录页是同标签页 SPA 换号(不刷新), 若不清缓存: ① fetchAPI 的 30s 响应缓存 /
+   * 在途合并里还是上一个账号的数据; ② TanStack Query 里 `['profile']` 之类的 key 没有身份,
+   * B 登录后会先渲染 A 的昵称/头像/统计。
+   *
+   * 顺序很关键: 先把新 token 写进去, 再清 —— 清理/代次推进必须在"新身份生效"之后,
+   * 否则新身份刚写下的响应可能被当成旧世界丢弃。
+   */
   const saveToken = (data: AuthTokenPayload) => {
     localStorage.setItem('token', data.token)
     localStorage.setItem('token_expires', data.expires_at)
     if (data.user) {
       localStorage.setItem('user', JSON.stringify(data.user))
     }
+    notifyAuthIdentityChanged('login')
+    clearQueryCache()
   }
 
   const doLogin = async (uname: string, pwd: string) => {

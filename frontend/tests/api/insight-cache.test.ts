@@ -24,11 +24,22 @@ function okResponse() {
   } as unknown as Response
 }
 
+/**
+ * 2026-11-07: 响应缓存改为**按认证身份分区**, 无 localStorage token(Cookie-only/匿名)时
+ * 身份不可信 ⇒ 缓存与在途合并一律关闭。本文件钉的是"已登录会话"里的缓存契约,
+ * 所以先落一个可信 JWT(头部/载荷按真实 HS256 形状编码)。
+ */
+function signInForCacheContract() {
+  const seg = (v: unknown) => btoa(JSON.stringify(v)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  localStorage.setItem('token', `${seg({ alg: 'HS256', typ: 'JWT' })}.${seg({ sub: 'cache-test-user', username: 'cache-tester' })}.sig`)
+}
+
 describe('insightApi 实时端点默认跳过 30s GET 缓存', () => {
   const fetchMock = vi.fn(async () => okResponse())
 
   beforeEach(() => {
     clearResponseCache()
+    signInForCacheContract()
     fetchMock.mockClear()
     vi.stubGlobal('fetch', fetchMock)
   })
@@ -77,6 +88,7 @@ describe('insightApi.suggestions 默认跳过 30s GET 缓存(复审 Finding 2)',
 
   beforeEach(() => {
     clearResponseCache()
+    signInForCacheContract()
     fetchMock.mockClear()
     vi.stubGlobal('fetch', fetchMock)
   })

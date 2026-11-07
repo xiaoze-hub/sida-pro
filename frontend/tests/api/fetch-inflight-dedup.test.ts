@@ -15,6 +15,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearResponseCache, fetchAPI } from '@sida/api'
 
+/**
+ * 2026-11-07: 响应缓存与在途合并改为**按认证身份分区**(无 token 的 Cookie-only/匿名会话
+ * 身份不可信 ⇒ 一律关闭)。本文件的断言都针对"已登录会话", 所以先落一个可信 JWT。
+ */
+function signInForCacheContract() {
+  const seg = (v: unknown) => btoa(JSON.stringify(v)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  localStorage.setItem('token', `${seg({ alg: 'HS256', typ: 'JWT' })}.${seg({ sub: 'dedup-test-user', username: 'dedup-tester' })}.sig`)
+}
+
 /** 最小 Response 替身(fetchAPI 只读 status / json())。 */
 function okResponse(data: unknown): Response {
   return { status: 200, json: async () => ({ code: 0, data, message: '' }) } as unknown as Response
@@ -31,10 +40,12 @@ function deferredResponse() {
 
 beforeEach(() => {
   clearResponseCache()
+  signInForCacheContract()
 })
 afterEach(() => {
   vi.unstubAllGlobals()
   clearResponseCache()
+  localStorage.clear()
 })
 
 describe('fetchAPI 在途同键合并(single-flight)', () => {
