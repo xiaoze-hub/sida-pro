@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -24,6 +24,8 @@ from src.web.api.chat import _get_ai_client
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
 from src.web.models import (
+    AIModel,
+    AIService,
     AnalysisHistory,
     EntryCandidate,
     LogEntry,
@@ -462,9 +464,127 @@ class CurateRequest(BaseModel):
     model_id: int | None = None
 
 
+def _curate_model_access(user) -> tuple[str, set[int]]:
+    """读 users.permissions.model_access, 归一为 (mode, 授权模型 id 集合)。
+
+    与 /chat、/copilot/model 共用 `src.core.ai_client._get_model_access` 的同一份口径;
+    permissions 仍是旧 list 形态时视为 inherit(无 model_access)。
+    """
+    from src.core.ai_client import _get_model_access  # noqa: PLC2701
+
+    access = _get_model_access(user) or {}
+    mode = str(access.get("mode") or "inherit")
+    ids = {
+        int(i)
+        for i in (access.get("model_ids") or [])
+        if isinstance(i, (int, str)) and str(i).strip().isdigit()
+    }
+    return mode, ids
+
+
+def _granted_client_pairs(db: Session, model_ids: set[int]) -> set[tuple[str, str]]:
+    """授权模型 → {(base_url, model)}; 用于事后校验"真正被用上的客户端"确实在授权内。"""
+    if not model_ids:
+        return set()
+    rows = db.query(AIModel).filter(AIModel.id.in_(model_ids)).all()
+    if not rows:
+        return set()
+    services = {
+        s.id: s
+        for s in db.query(AIService).filter(
+            AIService.id.in_({r.service_id for r in rows if r.service_id})
+        )
+    }
+    pairs: set[tuple[str, str]] = set()
+    for r in rows:
+        svc = services.get(r.service_id)
+        if svc is not None:
+            pairs.add(((svc.base_url or ""), (r.model or "")))
+    return pairs
+
+
+def _resolve_curate_client(db: Session, user, model_id: int | None):
+    """按**当前用户**解析策展用 AI 客户端; 任何越权/未知一律 fail closed。
+
+    本端点修复前既无 `get_current_user` 依赖, 调 `_get_ai_client` 也不传 user ——
+    等于以"系统调用"身份烧平台额度: deny_all / granted 用户照样出 AI 结果,
+    BYOK 用户的自有 key 被无视。这里按 `_get_ai_client` 的真实授权契约收口:
+
+      1. 身份缺失 → 401(dependency 已拦, 这里再兜一层);
+      2. demo/guest → 403(与 get_model_for_scene ③ 零授权一致);
+      3. model_access.mode=deny_all → 403; granted 但授权列表为空 → 403;
+      4. 请求带 model_id: 必须在授权内且模型行/服务商都存在, 否则 403
+         —— 绝不静默替换成别的模型(旧的 `_get_ai_client` 会落到全局默认);
+      5. 交给 `_get_ai_client(db, model_id, user=user)` 做用户级解析
+         (显式模型 → 偏好 → BYOK → granted/场景绑定 → 全局);
+      6. granted 用户再做一次事后校验: 解析出来的 (base_url, model) 必须落在
+         授权集合内 —— 授权模型行被删干净时 `_get_ai_client` 会回落到全局默认,
+         这里把它挡掉; 用户自己的 BYOK 客户端不算越权。
+
+    拿不到可用客户端时抛 403, **绝不返回全局系统模型**。
+    """
+    from src.core.ai_client import _resolve_user_byok  # noqa: PLC2701
+
+    if not getattr(user, "id", None):
+        raise HTTPException(status_code=401, detail="未登录")
+
+    if getattr(user, "username", None) == "demo" or getattr(user, "role", None) == "guest":
+        raise HTTPException(status_code=403, detail="访客账户无 AI 策展权限")
+
+    mode, granted_ids = _curate_model_access(user)
+    if mode == "deny_all":
+        raise HTTPException(status_code=403, detail="该账号未开通 AI 模型权限")
+    if mode == "granted" and not granted_ids:
+        raise HTTPException(status_code=403, detail="该账号未获授权任何 AI 模型")
+
+    if model_id is not None:
+        if mode == "granted" and int(model_id) not in granted_ids:
+            raise HTTPException(
+                status_code=403, detail=f"模型 {model_id} 不在你的授权范围内"
+            )
+        row = db.query(AIModel).filter(AIModel.id == model_id).first()
+        if row is None:
+            raise HTTPException(
+                status_code=403, detail=f"模型 {model_id} 不存在或已下线"
+            )
+        if db.query(AIService).filter(AIService.id == row.service_id).first() is None:
+            raise HTTPException(
+                status_code=403, detail=f"模型 {model_id} 无可用服务商"
+            )
+
+    client = _get_ai_client(db, model_id, user=user)
+
+    if mode == "granted":
+        byok = _resolve_user_byok(db, user, "chat") or {}
+        resolved = (
+            getattr(client, "base_url", "") or "",
+            getattr(client, "model", "") or "",
+        )
+        is_byok = bool(byok) and resolved == (
+            byok.get("base_url") or "",
+            byok.get("model") or "",
+        )
+        if not is_byok and resolved not in _granted_client_pairs(db, granted_ids):
+            logger.warning(
+                "curate 拒绝越权模型: user=%s resolved=%s granted=%s",
+                getattr(user, "id", None), resolved, sorted(granted_ids),
+            )
+            raise HTTPException(status_code=403, detail="解析到的模型不在授权范围内")
+
+    return client
+
+
 @router.post("/curate")
-async def curate_today(req: CurateRequest, db: Session = Depends(get_db)):
-    """把首页候选事件交 AI 排序+精炼,返回 [{index, importance, why}];AI 失败按原序兜底。"""
+async def curate_today(
+    req: CurateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """把首页候选事件交 AI 排序+精炼,返回 [{index, importance, why}];AI 失败按原序兜底。
+
+    S(2026-11-08): 模型权限/BYOK 归属按调用者判定 —— 无权限一律 403,
+    不回落全局系统模型; AI 运行时失败只做本地原序兜底(不换模型重试)。
+    """
     cands = req.candidates[:20]
     if not cands:
         return {"items": []}
@@ -485,10 +605,17 @@ async def curate_today(req: CurateRequest, db: Session = Depends(get_db)):
     items: list[dict] = []
     try:
         from src.core.ai_client import with_compliance  # D3 合规护栏
+        from src.core.llm_context import bind, unbind
 
-        content = await _get_ai_client(db, req.model_id).chat(
-            with_compliance(system_prompt), user_content, temperature=0.3
-        )
+        client = _resolve_curate_client(db, user, req.model_id)
+        # 成本/配额归因(P3): 谁调的记谁名下, 不能记到平台系统账上。
+        tokens = bind(user_id=getattr(user, "id", None), scene="chat")
+        try:
+            content = await client.chat(
+                with_compliance(system_prompt), user_content, temperature=0.3
+            )
+        finally:
+            unbind(tokens)
         for line in (content or "").splitlines():
             parts = line.split("|")
             idx_raw = parts[0].strip().rstrip(".、) ")
@@ -506,6 +633,9 @@ async def curate_today(req: CurateRequest, db: Session = Depends(get_db)):
                     if not why or why not in signal:
                         why = signal
                     items.append({"index": i, "importance": imp, "why": why})
+    except HTTPException:
+        # 授权/越权拒绝必须冒泡(403/401), 不能被"AI 失败兜底"吞掉。
+        raise
     except Exception as e:
         logger.debug(f"curate AI 失败,按原序兜底: {e}")
 
