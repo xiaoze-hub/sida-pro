@@ -40,6 +40,12 @@ export interface DashboardMarketCapitalFlow {
   sz?: { point?: number; change_pct?: number } | null
   cyb?: { point?: number; change_pct?: number } | null
   source?: string
+  /** 成交额的独立来源(主力资金缺失时由腾讯指数/TQ 兜底, 与 source 可能不同) */
+  amount_source?: string | null
+  /** 涨跌家数的独立来源(如 tdx_tq), 与资金类字段可能不同 */
+  breadth_source?: string | null
+  /** 仅涨跌家数可用(资金字段整体降级) */
+  degraded?: boolean
   /** B3/3.4 口径标签: eastmoney4=按单金额四档归类, 禁用于主力意图判定 */
   caliber?: string
   caliber_label?: string
@@ -280,6 +286,8 @@ export interface DashboardOverviewResponse {
     total_assets_estimate: number
     executable_opportunities: number
     risk_positions: number
+    /** 成本价缺失/脏值的持仓条数(计入持仓数, 但不计入 invested_cost —— 诚实分列) */
+    unpriced_positions?: number
     win_rate_3d?: number | null
     win_sample_3d: number
     errors_24h: number
@@ -294,6 +302,8 @@ export interface DashboardOverviewResponse {
       positions: number
       invested_cost: number
     }>
+    /** 同上: 成本价缺失的持仓条数 */
+    unpriced_positions?: number
   }
   action_center: {
     opportunities: StrategySignalItem[]

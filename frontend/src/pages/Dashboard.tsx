@@ -21,7 +21,6 @@ import {
   type AlertHitToday,
   type PortfolioTodo,
   type PremarketTodayResponse,
-  type CurateCandidate,
   type CuratedItem,
   type AttributionItem,
   type PortfolioAiReview,
@@ -75,6 +74,23 @@ import { useI18n } from '@/hooks/useI18n'
 import Stat from '@sida/biz-ui/components/Stat'
 import { navBackState } from '@/lib/nav-back'
 import CaliberBadge, { caliberOf } from '@sida/biz-ui/components/CaliberBadge'
+import {
+  AGENDA_LIMIT,
+  HOME_INDEX_LIMIT,
+  agendaSnapshotKey,
+  buildAgendaCandidates,
+  buildAgendaFeed,
+  flowSourceLabel,
+  flowSourceParts,
+  formatSealRate,
+  mainlineLeaderName,
+  opportunityBaselineDate,
+  opportunityPlanIssue,
+  snapshotClock,
+  splitPremarketPlans,
+  type AgendaCandidate,
+  type AgendaRow,
+} from '@/lib/dashboard-home-audit'
 
 /** 安全 toFixed: 处理 string / null / undefined / 非有限数, 一律返回 fallback。
  *  修复 2026-08-21: Dashboard 报 TypeError: c.price.toFixed is not a function
@@ -195,12 +211,17 @@ export default function DashboardPage() {
   const [scan, setScan] = useState<DashboardMonitorStock[]>([])
   const [overview, setOverview] = useState<DashboardOverviewResponse | null>(null)
   const [diag, setDiag] = useState<PortfolioDiagnostics | null>(null)
+  // 请求态(2026-11-08): 失败 ≠ 空数据。缺了这三态, 一次超时就会被渲染成
+  // "今日暂无明显异动 ✓ / 未见明显风险" —— 把"没取到"说成"没有"。
+  const [scanState, setScanState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [overviewState, setOverviewState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [diagState, setDiagState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [alertsState, setAlertsState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [bench, setBench] = useState<PortfolioBenchmark | null>(null)
   const [benchState, setBenchState] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading')
   const [oppFallback, setOppFallback] = useState<StrategySignalItem[]>([])
   const [alertHits, setAlertHits] = useState<AlertHitToday[]>([])
   const [todos, setTodos] = useState<PortfolioTodo[]>([])
-  const [curated, setCurated] = useState<CuratedItem[]>([])
   const [attribution, setAttribution] = useState<AttributionItem[]>([])
   const [aiReview, setAiReview] = useState<PortfolioAiReview | null>(null)
   const [aiReviewLoading, setAiReviewLoading] = useState(false)
@@ -357,10 +378,10 @@ export default function DashboardPage() {
       dashboardApi.marketStatus(),
     ])
     if (stale()) return  // 已被更新的一轮 load 取代 → 丢弃本轮全部结果
-    if (sc.status === 'fulfilled') setScan(sc.value.stocks || [])
-    if (ov.status === 'fulfilled') setOverview(ov.value)
-    if (dg.status === 'fulfilled') setDiag(dg.value)
-    if (ht.status === 'fulfilled') setAlertHits(ht.value)
+    if (sc.status === 'fulfilled') { setScan(sc.value.stocks || []); setScanState('ready') } else setScanState('error')
+    if (ov.status === 'fulfilled') { setOverview(ov.value); setOverviewState('ready') } else setOverviewState('error')
+    if (dg.status === 'fulfilled') { setDiag(dg.value); setDiagState('ready') } else setDiagState('error')
+    if (ht.status === 'fulfilled') { setAlertHits(ht.value); setAlertsState('ready') } else setAlertsState('error')
     if (td.status === 'fulfilled') setTodos(td.value.todos || [])
     if (ms.status === 'fulfilled') setMarketStatus(ms.value)
     if ([sc, ov, dg, ht, td, ms].some((r) => r.status === 'rejected')) {
@@ -532,7 +553,7 @@ export default function DashboardPage() {
     const items = (scan || []).filter((s) => s.has_position || s.alert_type || s.suggestion?.should_alert)
     const weight = (s: DashboardMonitorStock) =>
       (s.suggestion?.should_alert ? 1000 : 0) + (s.has_position ? 500 : 0) + Math.abs(s.change_pct || 0)
-    return items.sort((a, b) => weight(b) - weight(a)).slice(0, 8)
+    return items.sort((a, b) => weight(b) - weight(a)).slice(0, AGENDA_LIMIT)
   }, [scan])
 
   const opportunities = useMemo(() => {
@@ -540,9 +561,22 @@ export default function DashboardPage() {
     return list.slice(0, 5)
   }, [overview, oppFallback])
 
-  // 今日必读候选(多源)→ 交 AI 策展(失败兜底原序)
-  const candidates = useMemo<CurateCandidate[]>(() => {
-    const out: CurateCandidate[] = []
+  /** 机会精选里的标的 —— 用于把"要紧事"里的重复条目让位给机会模块(机会本身不动) */
+  const opportunitySymbols = useMemo(
+    () => new Set(opportunities.map((o) => `${(o.stock_market || 'CN').toUpperCase()}:${o.stock_symbol}`)),
+    [opportunities],
+  )
+
+  // 今日必读候选(多源) → 交 AI 策展(失败兜底原序)
+  //
+  // 2026-11-08(home-audit-ui): 生产上真出现过"股票与 AI 说明错配"。根因不是提示词, 是
+  // **序号归属**: `/dashboard/curate` 回的是 `{index, why}`, index 指向"发送时"的候选数组;
+  // 而页面按"回来时"的数组下标取人 —— 30s 轮询/刷新让候选变了, 说明就挂到别人头上。
+  // 现在: ①候选先定稿(去重/去与机会精选重复/缺标识丢弃, 见 lib/dashboard-home-audit);
+  //       ②响应只在"快照指纹一致 + 序号合法 + 未点名别的标的"时才采用, 否则整份作废,
+  //         按原始顺序 + 原始信号展示 —— 最坏是少一句 AI 摘要, 绝不是张冠李戴。
+  const rawAgenda = useMemo<AgendaCandidate[]>(() => {
+    const out: AgendaCandidate[] = []
     for (const h of alertHits) {
       out.push({ type: 'alert', symbol: h.symbol, name: h.name || h.symbol, market: h.market, signal: `触发提醒 ${h.rule_name}` })
     }
@@ -563,33 +597,59 @@ export default function DashboardPage() {
     return out
   }, [alertHits, urgent, diag, opportunities, t])
 
-  const candKey = useMemo(
-    () => candidates.map((c) => `${c.type}:${c.symbol}:${c.change_pct ?? ''}`).join('|'),
-    [candidates],
+  const agenda = useMemo(
+    () => buildAgendaCandidates(rawAgenda, opportunitySymbols),
+    [rawAgenda, opportunitySymbols],
   )
+  const candidates = agenda.candidates
+  const candKey = useMemo(() => agendaSnapshotKey(candidates), [candidates])
+
+  /** AI 策展结果 + 它所对应的候选快照指纹(指纹不符 = 说明属于旧候选, 不可用) */
+  const [curatedState, setCuratedState] = useState<{ key: string; items: CuratedItem[] | null } | null>(null)
+  const curateSeqRef = useRef(0)
+  /** 请求用的候选快照。effect 只认指纹: 30s 轮询会重算候选数组, 内容没变就不该再打一次 AI。 */
+  const agendaRef = useRef<AgendaCandidate[]>(candidates)
+  agendaRef.current = candidates
 
   useEffect(() => {
-    if (candidates.length === 0) {
-      setCurated([])
+    const snapshot = agendaRef.current
+    if (snapshot.length === 0) {
+      curateSeqRef.current += 1 // 作废在途响应
+      setCuratedState(null)
       return
     }
+    const seq = ++curateSeqRef.current
     let alive = true
+    const key = candKey
     dashboardApi
-      .curate(candidates)
-      .then((r) => alive && setCurated(r.items || []))
-      .catch(() => alive && setCurated([]))
+      .curate(snapshot)
+      .then((r) => {
+        // 乱序守卫: 只认最后一次请求的响应(后发先至的旧响应不得落地)
+        if (!alive || seq !== curateSeqRef.current) return
+        setCuratedState({ key, items: Array.isArray(r?.items) ? r.items : null })
+      })
+      .catch(() => {
+        if (!alive || seq !== curateSeqRef.current) return
+        setCuratedState({ key, items: null }) // 失败: 明确无说明, 走原始信号
+      })
     return () => {
       alive = false
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // 只认候选指纹(snapshot 走 ref): 数组引用每次 load 都变, 放进 deps 会重复请求 AI
   }, [candKey])
 
-  const feed = useMemo(() => {
-    const rows = curated.length
-      ? curated.map((ci) => (candidates[ci.index] ? { ...candidates[ci.index], why: ci.why } : null))
-      : candidates.map((c) => ({ ...c, why: c.signal }))
-    return rows.filter((x): x is CurateCandidate & { why: string } => !!x)
-  }, [curated, candidates])
+  const agendaFeed = useMemo(
+    () =>
+      buildAgendaFeed({
+        snapshot: candidates,
+        curated: curatedState?.items ?? null,
+        responseForSnapshot: curatedState?.key ?? null,
+        currentSnapshot: candKey,
+      }),
+    [candidates, curatedState, candKey],
+  )
+  const feed: AgendaRow[] = agendaFeed.rows
+  const agendaRequestFailed = scanState === 'error' || alertsState === 'error'
 
   const today = useMemo(() => {
     const d = new Date()
@@ -626,6 +686,21 @@ export default function DashboardPage() {
   // v0.4.6 KPI 带: 情绪周期标签 + 主线 Top1(轻量拉取, 与下方完整卡错峰复用缓存)
   const phaseKpi = usePhaseLabel()
   const mainlineKpi = useMainlineTop1()
+  /** 龙头名(真实嵌套 leader.name; 兼容旧扁平字段) —— 取不到 = null, 表头不渲染 */
+  const mainlineLeader = mainlineLeaderName(mainlineKpi.top)
+  /** 资金流三指标各自的上游(可能不同源) —— 逐个标注, 不合并成一句 */
+  const flowParts = useMemo(() => flowSourceParts(marketFlow), [marketFlow])
+  /** 机会精选基准日: 全一致才给日期, 缺失/不一致都如实标出(不挑一个冒充) */
+  const picksBaseline = useMemo(
+    () => opportunityBaselineDate(opportunities.map((o) => ({ snapshot_date: o.snapshot_date }))),
+    [opportunities],
+  )
+  /** 持仓成本缺失条数(计入持仓数但不计入投入成本, 后端诚实分列) */
+  const unpricedPositions = Number(overview?.kpis?.unpriced_positions ?? overview?.portfolio?.unpriced_positions ?? 0) || 0
+  /** 组合风险项(overview.action_center.risk_items —— 此前首页从未接线) */
+  const riskItems = overview?.action_center?.risk_items ?? []
+  /** 盘前预案: 拆出可执行(有标的+有动作)与不可执行, 后者明示条数而不是渲染成空行 */
+  const premarketPlans = useMemo(() => splitPremarketPlans(premarket?.structured?.plans), [premarket])
 
 
   return (
@@ -694,11 +769,38 @@ export default function DashboardPage() {
         </div>
         {/* 细项降为第二行小字: 封板率 / 成交 / 主力净流入 / 口径 */}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[12px] text-muted-foreground">
-          <span>封板率 <b className="font-mono text-foreground">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
+          {/* 2026-11-08: seal_rate 是**比例**(0.62 = 62%), 原实现直接 toFixed(0)+'%' → 显示 1%。
+              归一化在 lib 层(formatSealRate), 缺值仍写 '--' 不写 0%。 */}
+          <span>封板率 <b className="font-mono text-foreground">{formatSealRate(phaseKpi.sealRate)}</b></span>
           <span>成交 <b className="font-mono text-foreground">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
           <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
           <span className="ml-auto">
             <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
+          </span>
+        </div>
+        {/* 分源日期与口径(2026-11-08 audit): 上面 4 个数字来自 2 个不同源(阶段快照 / 大盘资金流),
+            原来并排却不标来源与日期 → 读者会当成同一时刻同一口径。这里逐源写清:
+            有日期写日期, 没有就明写"未提供/时点未知" —— 绝不拿"今天"或另一源的时间顶上。 */}
+        <div
+          data-testid="conclusion-sources"
+          className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
+        >
+          <span title="情绪阶段/涨停家数来自 /market/phase 的日频阶段快照">
+            情绪·涨停 <b className="font-normal text-foreground">/market/phase</b> · 日期未提供
+          </span>
+          <span title="涨跌家数/成交额/主力净流入来自大盘资金流接口; 三者可能各自回落不同上游, 故逐个标注">
+            主力 <b className="font-normal text-foreground">{flowParts.main}</b>
+            {' · '}成交 <b className="font-normal text-foreground">{flowParts.amount}</b>
+            {' · '}涨跌 <b className="font-normal text-foreground">{flowParts.breadth}</b>
+            {' · '}
+            {marketFlow?.timestamp
+              ? `快照 ${snapshotClock(marketFlow.timestamp) ?? '时点无法解析'}`
+              : '快照时点未知'}
+            {marketFlow?.degraded ? ' · 资金字段降级(仅涨跌家数可用)' : ''}
+            {marketFlow?.stale ? ' · 滞后快照' : ''}
+          </span>
+          <span title="主线 Top1 来自 /market/mainline(涨停池聚合, 日频刷新的 SWR 缓存)">
+            主线 <b className="font-normal text-foreground">/market/mainline</b> · 日期未提供
           </span>
         </div>
         <div className="mt-2 border-t border-border pt-2">
@@ -717,18 +819,19 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-4">
       {/* 指数走势 pills */}
       {shown('indices') && (
-      <div style={{ order: orderIndex(layout, 'indices') }} className="grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
+      <div style={{ order: orderIndex(layout, 'indices') }} className="grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-6">
         {loading && indices.length === 0
-          ? Array.from({ length: 5 }).map((_, i) => (
+          ? Array.from({ length: HOME_INDEX_LIMIT }).map((_, i) => (
               <div key={i} className="p-2.5">
                 <Skeleton className="h-2.5 w-16" />
                 <Skeleton className="mt-1.5 h-4 w-14" />
                 <Skeleton className="mt-2 h-6 w-full" />
               </div>
             ))
-          : indices.slice(0, 5).map((ix) => (
+          : indices.slice(0, HOME_INDEX_LIMIT).map((ix) => (
           <button
             key={`${ix.market}:${ix.symbol}`}
+            data-testid="index-pill"
             onClick={() => navigate(`/index/${ix.symbol}`)}
             className="relative rounded-md border border-border p-2.5 text-left hover:border-primary/40 transition-colors cursor-pointer min-h-[44px] bg-card"
           >
@@ -799,7 +902,7 @@ export default function DashboardPage() {
           三张卡本身是**直方图 + 刻度**(实测 13 个数字), 属于「证据」不是「结论」;
           但它们的结论(哪个阶段、主线是谁)必须常显 —— 所以放进表头, 卡体折叠。 */}
       {shown('overview') && (
-      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="min-w-0">
+      <div id="market-phase-anchor" data-testid="market-panorama" style={{ order: orderIndex(layout, 'overview') }} className="min-w-0">
         <CollapsibleSection
           id="overview"
           presentation="group"
@@ -811,8 +914,11 @@ export default function DashboardPage() {
               </span>
               <span className="text-[12px] text-foreground">
                 主线 <b className="font-medium">{mainlineKpi.top?.name ?? (mainlineKpi.loading ? '识别中' : '尚未识别')}</b>
-                {mainlineKpi.top?.leader_name ? (
-                  <span className="ml-1 text-[12px] text-muted-foreground">龙头 {mainlineKpi.top.leader_name}</span>
+                {/* 2026-11-08: /market/mainline 的龙头是**嵌套对象** `leader:{code,name,days,amount}`,
+                    原代码读扁平 `leader_name`(接口从未返回) → 表头永远没有龙头。
+                    这里按真实结构接线(helper 兼容旧字段), 取不到就不渲染, 不编造。 */}
+                {mainlineLeader ? (
+                  <span className="ml-1 text-[12px] text-muted-foreground">龙头 {mainlineLeader}</span>
                 ) : null}
               </span>
               <span className="text-[12px] text-muted-foreground">展开看阶段分布 / 强度对比 / 温度刻度</span>
@@ -859,7 +965,20 @@ export default function DashboardPage() {
                 <span className="text-[12px] text-muted-foreground">
                   {t('dashboard.sh')} {safeFixed(marketFlow.sh_flow, 1)}亿 · {t('dashboard.sz')} {safeFixed(marketFlow.sz_flow, 1)}亿
                 </span>
-                <span className="text-[12px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
+                {/* 2026-11-08: 来源与时点必须来自**响应本身**, 不能写死一句"东财·两市主力"
+                    (库内快照/同花顺降级时那句话就是错的)。缺 timestamp → 明写"时点未知"。 */}
+                <span
+                  data-testid="flow-snapshot"
+                  className="text-[12px] text-muted-foreground"
+                  title="来源与快照时点取自本次响应字段(source/timestamp); 时点缺失时不做任何推断"
+                >
+                  {flowSourceLabel(marketFlow.source)}
+                  {' · '}
+                  {marketFlow.timestamp
+                    ? `快照 ${snapshotClock(marketFlow.timestamp) ?? '时点无法解析'}`
+                    : '快照时点未知'}
+                  {marketFlow.degraded ? ' · 资金字段降级(仅涨跌家数)' : ''}
+                </span>
                 <span
                   className="cursor-help text-[12px] text-muted-foreground underline decoration-dotted underline-offset-2"
                   title={marketFlow.caliber_label || t('dashboard.caliberHint')}
@@ -1017,7 +1136,7 @@ export default function DashboardPage() {
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* 今日要紧事(左列,窄) */}
         {shown('agenda') && (
-        <div style={{ order: orderIndex(layout, 'agenda') }} className="analysis-section lg:col-span-7 xl:col-span-3">
+        <div data-testid="agenda-panel" style={{ order: orderIndex(layout, 'agenda') }} className="analysis-section lg:col-span-7 xl:col-span-3">
           <SectionHeader
             title="今日要紧事"
             action={
@@ -1041,7 +1160,22 @@ export default function DashboardPage() {
             /* 首次加载骨架(扫描完成后替换为真实列表) */
             <SkeletonRows rows={6} />
           ) : candidates.length === 0 ? (
-            todos.length > 0 ? (
+            /* 2026-11-08: 请求失败 ≠ 今天没事。原来只要数组为空就写"今日暂无明显异动 ✓",
+               一次 502 就变成给人吃定心丸的假空态。失败必须显式说明并可重试。 */
+            agendaRequestFailed ? (
+              <div data-testid="agenda-request-failed" className="py-5 text-center">
+                <div className="text-[12px] text-amber-600 dark:text-amber-500">
+                  扫描请求失败 · 不代表今天没有事件
+                </div>
+                <button
+                  type="button"
+                  onClick={() => load()}
+                  className="mt-2 rounded border border-border px-3 py-1 text-[12px] text-primary transition-colors hover:bg-accent"
+                >
+                  重试
+                </button>
+              </div>
+            ) : todos.length > 0 ? (
               <div className="space-y-1.5 py-1">
                 <div className="text-[12px] text-muted-foreground">今日暂无异动/触发 ✓ · 待办:</div>
                 {todos.map((t, i) => (
@@ -1065,12 +1199,19 @@ export default function DashboardPage() {
               <div className="py-6 text-center text-[12px] text-muted-foreground">今日暂无明显异动或触发信号 ✓</div>
             )
           ) : (
-            <div className="divide-y divide-border/40">
+            <div data-testid="agenda-feed" className="divide-y divide-border/40">
+              {/* fail closed 要可见: AI 说明被作废时明说一句, 而不是悄悄换成原始信号让人以为 AI 没跑 */}
+              {agendaFeed.mode === 'raw' && curatedState?.items ? (
+                <div data-testid="agenda-ai-fallback" className="pt-1 text-[12px] text-muted-foreground">
+                  AI 摘要未采用（候选已变化或说明与标的不符）· 以下为原始事件与信号
+                </div>
+              ) : null}
               {feed.map((it, i) => {
                 const badge = FEED_BADGE[it.type] || { labelKey: '', cls: 'bg-accent text-muted-foreground' }
                 return (
                   <div
-                    key={i}
+                    key={`${it.type}:${it.symbol || it.name || i}`}
+                    data-testid="agenda-row"
                     className={`flex items-center gap-3 py-2 min-h-[44px] ${it.symbol ? 'cursor-pointer hover:bg-s2' : ''}`}
                     onClick={() => it.symbol && openStock(it.symbol, it.market || 'CN', it.name || '')}
                     onContextMenu={(e) => {
@@ -1135,7 +1276,19 @@ export default function DashboardPage() {
               </details>
             )}
           </div>
-          {loading && !diag ? (
+          {diagState === 'error' && !diag ? (
+            /* 2026-11-08: 诊断接口失败原来被渲染成"暂无持仓" —— 把故障说成"你没持仓", 最坏的一种假空态 */
+            <div data-testid="portfolio-request-failed" className="py-5 text-center">
+              <div className="text-[12px] text-amber-600 dark:text-amber-500">持仓诊断请求失败 · 不代表没有持仓</div>
+              <button
+                type="button"
+                onClick={() => load()}
+                className="mt-2 rounded border border-border px-3 py-1 text-[12px] text-primary transition-colors hover:bg-accent"
+              >
+                重试
+              </button>
+            </div>
+          ) : loading && !diag ? (
             /* 首次加载骨架 */
             <SkeletonRows rows={4} />
           ) : !hasHoldings ? (
@@ -1148,7 +1301,7 @@ export default function DashboardPage() {
               )}
             </div>
           ) : (
-            <div className="space-y-3 text-[12px]">
+            <div data-testid="portfolio-body" className="space-y-3 text-[12px]">
               {/* 图例行:色块 + 我的组合/基准收益 + 超额 chip */}
               <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
                 <div className="flex items-center gap-3">
@@ -1246,6 +1399,14 @@ export default function DashboardPage() {
                   )
                 })}
 
+              {/* 成本缺失(2026-11-08): 后端把脏/缺失成本单列 unpriced_positions ——
+                  这些持仓计入持仓数但**不计入**投入成本, 不说明就会让人把缺值看成 0。 */}
+              {unpricedPositions > 0 ? (
+                <div data-testid="portfolio-unpriced" className="text-[12px] text-amber-600 dark:text-amber-500">
+                  成本待补全: {unpricedPositions} 只持仓缺成本价, 未计入投入成本(占比与盈亏会被低估)
+                </div>
+              ) : null}
+
               {diag!.alerts.length > 0 ? (
                 <div className="space-y-1 pt-1">
                   {diag!.alerts.map((a, i) => (
@@ -1256,8 +1417,39 @@ export default function DashboardPage() {
                   ))}
                 </div>
               ) : (
-                <div className="pt-1 text-[12px] text-stock-up">✓ 集中度/分布未见明显风险</div>
+                <div className="pt-1 text-[12px] text-muted-foreground">集中度/分布: 未触发告警阈值</div>
               )}
+
+              {/* 风险项(overview.action_center.risk_items): 首页此前**完全没接线**, 后端算好的
+                  个股风险在首页不可见。失败时明说失败 —— 没拿到 ≠ 没有风险。 */}
+              <div data-testid="portfolio-risk-items" className="space-y-1">
+                {overviewState === 'error' ? (
+                  <div className="text-[12px] text-amber-600 dark:text-amber-500">风险项请求失败 · 不代表没有风险</div>
+                ) : riskItems.length > 0 ? (
+                  <>
+                    <div className="text-[12px] text-muted-foreground">风险项 {riskItems.length}</div>
+                    {riskItems.slice(0, 4).map((r) => {
+                      const flags = (r.risk_flags || []).filter(Boolean).join(' · ')
+                      return (
+                        <div
+                          key={`${r.stock_market}:${r.stock_symbol}:${r.id}`}
+                          className="flex items-start gap-1 text-[12px] text-amber-500"
+                        >
+                          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                          <span
+                            className="min-w-0 flex-1 truncate"
+                            title={[r.stock_name || r.stock_symbol, r.risk_level_label, flags].filter(Boolean).join(' · ')}
+                          >
+                            {r.stock_name || r.stock_symbol}
+                            {r.risk_level_label ? ` · ${r.risk_level_label}` : ''}
+                            {flags ? ` · ${flags}` : ''}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={runAiReview}
@@ -1278,7 +1470,7 @@ export default function DashboardPage() {
 
         {/* 机会精选(右列,窄) */}
         {shown('picks') && (
-        <div style={{ order: orderIndex(layout, 'picks') }} className="analysis-section lg:col-span-5 xl:col-span-3">
+        <div data-testid="picks-panel" style={{ order: orderIndex(layout, 'picks') }} className="analysis-section lg:col-span-5 xl:col-span-3">
           {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描区的图标 */}
           <SectionHeader
             title="机会精选"
@@ -1292,11 +1484,33 @@ export default function DashboardPage() {
               </button>
             }
           />
+          {/* 2026-11-08 audit: 机会是**某个交易日**的快照, 不标基准日就是在拿旧信号当今天用。
+              日期缺失 / 多日期混排都如实写, 不挑一个冒充。 */}
+          {opportunities.length > 0 ? (
+            picksBaseline.kind === 'ok' ? (
+              <div data-testid="picks-baseline" className="pb-1 text-[12px] text-muted-foreground">
+                基准日 {picksBaseline.date}
+              </div>
+            ) : (
+              <div data-testid="picks-baseline" className="pb-1 text-[12px] text-amber-600 dark:text-amber-500">
+                {picksBaseline.kind === 'mixed'
+                  ? `基准日不一致（${picksBaseline.dates.join(' / ')}）`
+                  : '基准日缺失（后端未返回 snapshot_date）'}
+              </div>
+            )
+          ) : null}
           {opportunities.length === 0 ? (
-            <div className="py-6 text-center text-[12px] text-muted-foreground">{loading ? '加载中…' : '暂无活跃机会信号'}</div>
+            overviewState === 'error' ? (
+              <div data-testid="picks-request-failed" className="py-6 text-center text-[12px] text-amber-600 dark:text-amber-500">
+                机会请求失败 · 不代表没有活跃机会
+              </div>
+            ) : (
+              <div className="py-6 text-center text-[12px] text-muted-foreground">{loading ? '加载中…' : '暂无活跃机会信号'}</div>
+            )
           ) : (
             <div className="divide-y divide-border/40">
               {opportunities.slice(0, 3).map((o) => {
+                const planIssue = opportunityPlanIssue(o)
                 return (
                   <div
                     key={`${o.stock_market}:${o.stock_symbol}`}
@@ -1315,6 +1529,14 @@ export default function DashboardPage() {
                       <div className="flex items-center gap-1.5">
                         <span className="truncate text-[14px] font-medium" title={o.stock_name || o.stock_symbol}>{o.stock_name || o.stock_symbol}</span>
                         {o.action_label && <span className="rounded bg-primary/10 px-1 text-[12px] text-primary">{o.action_label}</span>}
+                        {planIssue && (
+                          <span
+                            className="shrink-0 rounded bg-amber-500/15 px-1 text-[12px] text-amber-500"
+                            title={planIssue}
+                          >
+                            计划无效
+                          </span>
+                        )}
                       </div>
                       {(o.signal || o.reason) && <div className="truncate text-[12px] text-muted-foreground" title={o.signal || o.reason}>{o.signal || o.reason}</div>}
                     </div>
@@ -1375,6 +1597,15 @@ export default function DashboardPage() {
                       基准日 {premarket.date}（非今日）
                     </span>
                   )}
+                  {/* 2026-11-08: 有内容却没日期 = 不知道这份预案是哪天的 —— 明写"缺失", 不默认今天 */}
+                  {!premarket.date && (
+                    <span
+                      data-testid="premarket-date-missing"
+                      className="shrink-0 rounded bg-amber-500/10 px-1.5 text-[12px] text-amber-600 dark:text-amber-500"
+                    >
+                      基准日缺失（不确定是否为今日）
+                    </span>
+                  )}
                 </div>
                 {premarket.structured?.gate?.score || premarket.structured?.gate?.position_cap ? (
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -1401,9 +1632,9 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
               </div>
-              {premarket.structured?.plans && premarket.structured.plans.length > 0 ? (
+              {premarketPlans.valid.length > 0 || premarketPlans.invalid > 0 ? (
                 <div>
-                  {premarket.structured.plans.slice(0, 3).map((p, i) => (
+                  {premarketPlans.valid.slice(0, 3).map((p, i) => (
                     <div key={p.symbol || `plan-${i}`} className="flex items-center gap-2 py-1.5">
                       <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground">{p.symbol}</span>
                       <span className="min-w-0 flex-1 truncate text-[12px]" title={p.name || p.symbol}>
@@ -1419,6 +1650,11 @@ export default function DashboardPage() {
                       ) : null}
                     </div>
                   ))}
+                  {premarketPlans.invalid > 0 ? (
+                    <div data-testid="premarket-plan-invalid" className="pt-1 text-[12px] text-amber-600 dark:text-amber-500">
+                      {premarketPlans.invalid} 条预案缺标的或动作, 无法执行 → 已略过
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
