@@ -102,10 +102,10 @@ describe('BreadthDistributionChart 时效/回补/超时行为', () => {
 
     render(<BreadthDistributionChart />)
     await waitFor(() => expect(mocks.fetchAPI).toHaveBeenCalledTimes(1))
-    // t≈3.6s: 旧实现会在 t=3.0s 再发一笔(立刻拿回 pending)把慢响应的序号顶掉
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 3600))
-    })
+    // 等首次 pending 的 React 更新生效，再等待回补请求实际发出；不能在 act 里
+    // 长时间睡眠，否则 pending 更新可能直到 act 结束才提交、定时器尚未启动。
+    await waitFor(() => expect(mocks.fetchAPI).toHaveBeenCalledTimes(2), { timeout: 10000 })
+    await new Promise((r) => setTimeout(r, 2200))
     expect(mocks.fetchAPI).toHaveBeenCalledTimes(2)
 
     await act(async () => {
