@@ -1203,7 +1203,7 @@ export default function DashboardPage() {
               {/* fail closed 要可见: AI 说明被作废时明说一句, 而不是悄悄换成原始信号让人以为 AI 没跑 */}
               {agendaFeed.mode === 'raw' && curatedState?.items ? (
                 <div data-testid="agenda-ai-fallback" className="pt-1 text-[12px] text-muted-foreground">
-                  AI 摘要未采用（候选已变化或说明与标的不符）· 以下为原始事件与信号
+                  AI 排序未采用；以下为原始事件与信号。
                 </div>
               ) : null}
               {feed.map((it, i) => {
@@ -1641,6 +1641,7 @@ export default function DashboardPage() {
                         {p.name || p.symbol}
                       </span>
                       <span className="shrink-0 text-[12px] text-primary">{PLAN_ACTION_LABEL[p.action || ''] || p.action || '动作未提供'}</span>
+                      {(!p.symbol && !p.name || !p.action) && <span className="text-[12px] text-amber-600 dark:text-amber-500">预案信息不完整</span>}
                       {p.trigger || p.stop ? (
                         <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">
                           {p.trigger ? `触发 ${p.trigger}` : ''}
