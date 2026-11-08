@@ -342,7 +342,7 @@ export default function EtfWatchPage() {
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Stat label="最新交易日净申购" value={`${signed(support?.latest?.net_sub_yi)} 亿`} tone={(support?.latest?.net_sub_yi ?? 0) >= 0 ? 'up' : 'down'} hint={support?.latest?.date} />
+                  <Stat label="最新交易日净申购" value={signed(support?.latest?.net_sub_yi)} tone={(support?.latest?.net_sub_yi ?? 0) >= 0 ? 'up' : 'down'} hint={support?.latest?.date} />
                   <Stat label="全市场 ETF 规模" value={`${fmt(support?.latest?.scale_yi)} 亿`} />
                   <Stat label="托底日样本数" value={`${support?.support_count ?? 0} 天`} hint={`样本区间 ${support?.sample_count ?? 0} 个交易日`} />
                   <Stat

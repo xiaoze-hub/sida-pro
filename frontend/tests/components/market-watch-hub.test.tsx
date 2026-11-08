@@ -158,6 +158,25 @@ afterEach(() => {
 })
 
 describe('MarketWatchHub 大盘观察工作区', () => {
+  it.each([
+    [120.5, '+120.50亿'],
+    [-12.34, '-12.34亿'],
+    [0, '0.00亿'],
+    [null, '--'],
+  ])('最新市场级净申购 %s 的数值和单位不重复', async (amount, expected) => {
+    mocks.fetchAPI.mockImplementation((url: string) => {
+      if (url.includes('/etf-watch/support')) return Promise.resolve({ ...SUPPORT, latest: { ...SUPPORT.latest, net_sub_yi: amount } })
+      if (url.includes('/etf-watch/intraday')) return Promise.resolve(INTRADAY)
+      if (url.includes('/etf-watch/daily')) return Promise.resolve(DAILY)
+      return Promise.resolve({})
+    })
+    renderHub({ initialEntries: ['/market-watch?view=etf'] })
+    const label = await screen.findByText('最新交易日净申购')
+    await waitFor(() => expect(label.parentElement?.textContent).toContain('20261106'))
+    const value = label.nextElementSibling?.textContent
+    expect(value).toBe(expected)
+    expect(screen.getAllByText(/净申购只有市场级/).length).toBeGreaterThan(0)
+  })
   it('默认「指数全景」: 只渲染指数页, 不请求 ETF 接口, 页签与 URL 一致', async () => {
     renderHub({ initialEntries: ['/market-watch?window=30'] })
 
