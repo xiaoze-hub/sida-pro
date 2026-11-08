@@ -32,16 +32,16 @@ describe('候选整理: 去重 / 去机会重复 / 缺标识闭合', () => {
       new Set(['CN:300750']),
     )
     expect(candidates).toHaveLength(0)
-    expect(drops[0].reason).toBe('duplicate-of-opportunity')
+    expect(drops).toHaveLength(0)
   })
 
-  it('自选与机会精选同一标的 → 只留机会精选那份', () => {
+  it('自选异动与机会语义不同，保留', () => {
     const { candidates, drops } = buildAgendaCandidates(
       [c({ type: 'watch', symbol: '300750', name: '宁德时代' })],
       new Set(['CN:300750']),
     )
-    expect(candidates).toHaveLength(0)
-    expect(drops[0].reason).toBe('duplicate-of-opportunity')
+    expect(candidates).toHaveLength(1)
+    expect(drops).toHaveLength(0)
   })
 
   it('持仓也在机会精选 → 持仓行保留(告警语义不同, 不能一起删)', () => {
@@ -52,10 +52,10 @@ describe('候选整理: 去重 / 去机会重复 / 缺标识闭合', () => {
     expect(candidates).toHaveLength(1)
   })
 
-  it('缺标识(无代码)的非风险条目 → 丢弃, 不送 AI 猜', () => {
+  it('缺标识也保留原始事件，不伪造标识', () => {
     const { candidates, drops } = buildAgendaCandidates([c({ type: 'watch', name: '' })])
-    expect(candidates).toHaveLength(0)
-    expect(drops[0].reason).toBe('missing-identity')
+    expect(candidates).toHaveLength(1)
+    expect(drops).toHaveLength(0)
   })
 
   it('组合风险允许无代码', () => {
@@ -63,14 +63,14 @@ describe('候选整理: 去重 / 去机会重复 / 缺标识闭合', () => {
     expect(candidates).toHaveLength(1)
   })
 
-  it('两个账户持有同一只票(重复行) → 合并为一行并标歧义', () => {
+  it('两个账户持有同一只票，原始信息均保留', () => {
     const { candidates, drops } = buildAgendaCandidates([
       c({ type: 'holding', symbol: '600519', name: '贵州茅台', market: 'CN', signal: '账户A 浮盈 12%' }),
       c({ type: 'holding', symbol: '600519', name: '贵州茅台', market: 'CN', signal: '账户B 浮盈 3%' }),
     ])
-    expect(candidates).toHaveLength(1)
-    expect(candidates[0].ambiguous).toBe(true)
-    expect(drops[0].reason).toBe('duplicate-symbol')
+    expect(candidates).toHaveLength(2)
+    expect(candidates.map(x => x.signal)).toEqual(['账户A 浮盈 12%', '账户B 浮盈 3%'])
+    expect(drops).toHaveLength(0)
   })
 
   it('同一代码不同市场不合并', () => {
@@ -81,16 +81,13 @@ describe('候选整理: 去重 / 去机会重复 / 缺标识闭合', () => {
     expect(candidates).toHaveLength(2)
   })
 
-  it('持仓 + 触发的提醒(跨来源)合成一行, 信息不被去重吃掉', () => {
+  it('持仓与提醒各自保留', () => {
     const { candidates } = buildAgendaCandidates([
       c({ type: 'alert', symbol: '600519', name: '贵州茅台', market: 'CN', signal: '触发提醒 放量突破' }),
       c({ type: 'holding', symbol: '600519', name: '贵州茅台', market: 'CN', signal: '持仓浮盈 12%' }),
     ])
-    expect(candidates).toHaveLength(1)
-    expect(candidates[0].type).toBe('holding') // 类型取更重要的
-    expect(candidates[0].signal).toContain('触发提醒 放量突破')
-    expect(candidates[0].signal).toContain('持仓浮盈 12%')
-    expect(candidates[0].ambiguous).toBeUndefined() // 跨来源不是"两账户歧义"
+    expect(candidates).toHaveLength(2)
+    expect(candidates.map(x => x.signal)).toEqual(['触发提醒 放量突破', '持仓浮盈 12%'])
   })
 })
 
@@ -113,7 +110,8 @@ describe('AI 说明归属: 一律 fail closed', () => {
     })
     expect(feed.mode).toBe('ai')
     expect(feed.rows.map((r) => r.symbol)).toEqual(['300750', '600519'])
-    expect(feed.rows[0].whyFromAI).toBe(true)
+    expect(feed.rows[0].whyFromAI).toBe(false)
+    expect(feed.rows[0].why).toBe('触发提醒 放量涨停')
   })
 
   it('候选变了(旧快照响应) → 整份作废, 原始顺序原样保留', () => {
@@ -292,8 +290,8 @@ describe('日期/时点: 缺失就写未知, 不从别的源借', () => {
     expect(parts.breadth).toBe('tdx_tq')
   })
 
-  it('没给的独立来源沿用主 source', () => {
-    expect(flowSourceParts({ source: 'db_snapshot' })).toEqual({ main: '库内快照', amount: '库内快照', breadth: '库内快照' })
+  it('没给的独立来源标未知', () => {
+    expect(flowSourceParts({ source: 'db_snapshot' })).toEqual({ main: '库内快照', amount: '来源未知', breadth: '来源未知' })
     expect(flowSourceParts(null)).toEqual({ main: '来源未知', amount: '来源未知', breadth: '来源未知' })
   })
 })
@@ -328,8 +326,8 @@ describe('盘前预案分拣', () => {
       { symbol: '000001' },
       {},
     ])
-    expect(valid).toHaveLength(2)
-    expect(invalid).toBe(2)
+    expect(valid).toHaveLength(4)
+    expect(invalid).toBe(0)
   })
   it('undefined 不炸', () => {
     expect(splitPremarketPlans(undefined)).toEqual({ valid: [], invalid: 0 })

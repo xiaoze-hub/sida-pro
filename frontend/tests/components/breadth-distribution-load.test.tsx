@@ -10,8 +10,8 @@
 //   1. pending 时先出壳(占满同高度 + 显式文案), 绝不把 0 渲染成分布柱;
 //   2. 命中 pending 后以短间隔回补轮询, 算完**立即**画(不必等 60s);
 //   3. 拉取失败且从未拿到数据 → 显式失败态(与\"暂无分布数据\"区分), 不画假柱;
-//   4. 竞态守卫: 早发晚到的过期响应被丢弃, 不覆盖新结果。
-import { act, cleanup, render, screen } from '@testing-library/react'
+//   4. 竞态守卫: 回补单飞(在途时不叠请求), 被重试顶掉的旧响应迟到即丢弃, 不覆盖新结果。
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn(), setOption: vi.fn() }))
@@ -114,35 +114,42 @@ describe('BreadthDistributionChart 异步分布加载链(先出壳后补数)', (
     expect(container.querySelector('.w-full')).toBeNull()
   })
 
-  it('竞态守卫: 早发晚到的过期响应被丢弃, 不覆盖已画出的新结果', async () => {
+  it('竞态守卫: 被重试顶掉的在途旧响应迟到时, 不覆盖已画出的新结果', async () => {
     // 挂载: pending(先出壳, 建立回补轮询)
     mocks.fetchAPI.mockResolvedValueOnce(PENDING)
-    // 回补第 1 次(t=1.5s): 慢响应, 手动放行
+    // 回补第 1 次(t=1.5s): 慢响应, 一直挂着(手动放行) —— 超时那一刻它仍在途
     let releaseSlow!: (v: unknown) => void
     const slow = new Promise((res) => {
       releaseSlow = res
     })
     mocks.fetchAPI.mockImplementationOnce(() => slow)
-    // 回补第 2 次(t=3s): 先返回真实数据
-    mocks.fetchAPI.mockResolvedValueOnce(READY)
+    mocks.fetchAPI.mockResolvedValue(PENDING)
+    // 回补是单飞的: 慢请求在途期间不会再发第二笔, 也就不会出现「自己顶掉自己」的丢结果
 
     render(<BreadthDistributionChart />)
     await flush()
 
+    // 慢请求挂着 → 60s 后是显式超时(带重试入口)
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1600) // 触发慢响应(t=1.5s, 仍未回)
+      await vi.advanceTimersByTimeAsync(61_000)
     })
+    expect(screen.getByText(/计算超时/)).toBeTruthy()
+
+    // 手动重试: 新请求拿到真实分布并画出来
+    mocks.fetchAPI.mockResolvedValueOnce(READY)
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1600) // 触发 ready(t=3s, 已回)
+      fireEvent.click(screen.getByRole('button', { name: '重试' }))
     })
+    await flush()
     expect(mocks.setOption).toHaveBeenCalled()
 
-    // 现在放行那条**更早发起**的慢响应 —— 它已过期(seq 落后), 必须被丢弃
+    // 现在放行那条**被顶掉**的旧慢响应 —— 它的序号已落后, 必须整笔丢弃
     await act(async () => {
       releaseSlow({ count: 0, total: 0, items: items(0), note: '后台计算中', pending: true })
       await Promise.resolve()
     })
     expect(screen.queryByText(/涨跌分布后台计算中/)).toBeNull()
     expect(screen.queryByText(/暂无分布数据/)).toBeNull()
+    expect(mocks.fetchAPI).toHaveBeenCalledTimes(3)
   })
 })

@@ -1210,7 +1210,7 @@ export default function DashboardPage() {
                 const badge = FEED_BADGE[it.type] || { labelKey: '', cls: 'bg-accent text-muted-foreground' }
                 return (
                   <div
-                    key={`${it.type}:${it.symbol || it.name || i}`}
+                    key={`${it.type}:${it.symbol || it.name || ''}:${i}`}
                     data-testid="agenda-row"
                     className={`flex items-center gap-3 py-2 min-h-[44px] ${it.symbol ? 'cursor-pointer hover:bg-s2' : ''}`}
                     onClick={() => it.symbol && openStock(it.symbol, it.market || 'CN', it.name || '')}
@@ -1640,7 +1640,7 @@ export default function DashboardPage() {
                       <span className="min-w-0 flex-1 truncate text-[12px]" title={p.name || p.symbol}>
                         {p.name || p.symbol}
                       </span>
-                      <span className="shrink-0 text-[12px] text-primary">{PLAN_ACTION_LABEL[p.action || ''] || p.action}</span>
+                      <span className="shrink-0 text-[12px] text-primary">{PLAN_ACTION_LABEL[p.action || ''] || p.action || '动作未提供'}</span>
                       {p.trigger || p.stop ? (
                         <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground">
                           {p.trigger ? `触发 ${p.trigger}` : ''}
@@ -1805,7 +1805,7 @@ function PhaseGaugeCardInner() {
     <div className="min-w-0">
       <div className="mb-1 flex items-baseline gap-2">
         <h2 className="text-[14px] font-semibold">市场温度</h2>
-        <span className="text-[12px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
+        <span className="text-[12px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45（缺项不计算）</span>
       </div>
       {state.kind === 'ready' ? (
         <>

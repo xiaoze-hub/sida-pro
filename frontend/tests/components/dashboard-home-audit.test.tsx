@@ -432,11 +432,11 @@ describe('A. AI 说明错配必须 fail closed, 原始候选不丢', () => {
     })
     await flush()
     agenda = screen.getByTestId('agenda-feed')
-    expect(agenda.textContent).toContain('平安银行跌破年线')
+    expect(agenda.textContent).not.toContain('平安银行跌破年线')
     expect(within(agenda).getByText('平安银行')).toBeTruthy()
   })
 
-  it('同一标的来自两个账户(重复行) → 只留一行, 且不用 AI 说明', async () => {
+  it('同一标的来自两个账户，各自原始信号保留', async () => {
     S.scan = {
       stocks: [
         stock({ symbol: '600519', name: '贵州茅台', has_position: true, suggestion: { action: 'hold', action_label: '持有', signal: '持仓浮盈 12%', should_alert: true } }),
@@ -447,9 +447,10 @@ describe('A. AI 说明错配必须 fail closed, 原始候选不丢', () => {
     renderPage()
     await flush()
     const rows = screen.getAllByTestId('agenda-row')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].textContent).toContain('持仓浮盈 12%')
-    expect(rows[0].textContent).not.toContain('减仓一半')
+    expect(rows).toHaveLength(2)
+    expect(rows.map(r => r.textContent).join(' ')).toContain('持仓浮盈 12%')
+    expect(rows.map(r => r.textContent).join(' ')).toContain('持仓浮盈 3%')
+    expect(rows.map(r => r.textContent).join(' ')).not.toContain('减仓一半')
   })
 
   it('缺 why / 越界序号 → 整份作废, 仍按原始顺序展示', async () => {

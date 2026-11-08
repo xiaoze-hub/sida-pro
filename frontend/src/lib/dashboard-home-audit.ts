@@ -33,10 +33,6 @@ export interface AgendaDrop {
   reason: AgendaDropReason
 }
 
-/** 同一标的被多条来源命中时的合并优先级(持仓最重要, 提醒次之, 自选最后) */
-const KIND_PRIORITY: Record<AgendaKind, number> = { holding: 3, alert: 2, watch: 1, risk: 0, opportunity: 0 }
-const SIGNAL_MERGE_MAX = 80
-
 /** 今日要紧事最多展示条数(与 scan 的 urgent 上限一致) */
 export const AGENDA_LIMIT = 8
 /** 首页指数卡最多展示条数 —— 后端给 6 个(上证/深证/创业板/科创50/沪深300/恒生…), 全给 */
@@ -58,61 +54,15 @@ export function buildAgendaCandidates(
   raw: AgendaCandidate[],
   opportunitySymbols: ReadonlySet<string> = new Set(),
 ): { candidates: AgendaCandidate[]; drops: AgendaDrop[] } {
-  const out: AgendaCandidate[] = []
-  const drops: AgendaDrop[] = []
-  const seen = new Map<string, AgendaCandidate>()
+  // 机会在独立模块展示，提醒/持仓/自选及组合风险逐条保留，不按标的合并。
+  void opportunitySymbols
+  return { candidates: raw.filter(c => c.type !== 'opportunity').map(c => ({ ...c })), drops: [] }
 
-  for (const c of raw) {
-    const symbol = (c.symbol || '').trim()
-    // 机会条目: 右侧「机会精选」已经完整展示同一批标的 —— 从要紧事里移出, 去重而非删机会
-    if (c.type === 'opportunity') {
-      drops.push({ type: c.type, symbol, reason: 'duplicate-of-opportunity' })
-      continue
-    }
-    // 组合风险这类"无标的"的宏观条目允许没有 symbol; 其余缺标识 = 无法归属 → 不猜
-    if (!symbol && c.type !== 'risk') {
-      drops.push({ type: c.type, symbol, reason: 'missing-identity' })
-      continue
-    }
-    if (symbol && c.type === 'watch' && opportunitySymbols.has(symKey(c))) {
-      drops.push({ type: c.type, symbol, reason: 'duplicate-of-opportunity' })
-      continue
-    }
-    const key = symbol ? symKey(c) : `risk:${(c.signal || '').slice(0, 24)}`
-    const hit = seen.get(key)
-    if (hit) {
-      if (hit.type === c.type) {
-        // 同一标的出现多条同类型事件(典型: 同一只票同时挂在两个账户) → 保留首行, 但标记歧义:
-        // 这类行永远不采用 AI 说明(说明可能讲的是另一个账户的持仓成本/盈亏)。
-        hit.ambiguous = true
-      } else {
-        // 跨来源命中(如"持仓"+"触发的提醒"): 合成一行, 信号并集, 类型取更重要的那个 ——
-        // 不能让"去重"把原来能看到的信息吃掉。
-        const prev = (hit.signal || '').trim()
-        const next = (c.signal || '').trim()
-        if (next && !prev.includes(next)) {
-          const merged = prev ? `${prev} · ${next}` : next
-          hit.signal = merged.length > SIGNAL_MERGE_MAX ? `${merged.slice(0, SIGNAL_MERGE_MAX - 1)}…` : merged
-        }
-        if (KIND_PRIORITY[c.type] > KIND_PRIORITY[hit.type]) hit.type = c.type
-        if (c.change_pct != null) hit.change_pct = c.change_pct
-      }
-      drops.push({ type: c.type, symbol, reason: 'duplicate-symbol' })
-      continue
-    }
-    const row: AgendaCandidate = { ...c, symbol: symbol || undefined }
-    seen.set(key, row)
-    out.push(row)
-  }
-
-  return { candidates: out.slice(0, AGENDA_LIMIT), drops }
 }
 
 /** 候选快照指纹 —— 响应回来时用它判断"这份说明是不是发给当前候选的" */
 export function agendaSnapshotKey(list: AgendaCandidate[]): string {
-  return list
-    .map((c) => `${c.type}:${(c.market || 'CN').toUpperCase()}:${c.symbol || ''}:${c.change_pct ?? ''}`)
-    .join('|')
+  return JSON.stringify(list.map(c => [c.type, c.market ?? null, c.symbol ?? null, c.name ?? null, c.signal ?? null, c.change_pct ?? null, c.ambiguous ?? false]))
 }
 
 export type AgendaFailReason =
@@ -251,15 +201,19 @@ export function buildAgendaFeed(args: {
     byIndex.set(idx, { importance, why })
   }
 
+  // 部分 AI 响应只改变排序，不能隐藏没有被选中的提醒或风险。
+  for (let i = 0; i < snapshot.length; i++) {
+    if (!byIndex.has(i)) byIndex.set(i, { importance: -1, why: (snapshot[i].signal || '').trim() })
+  }
   const ordered = Array.from(byIndex.entries())
     .sort((a, b) => b[1].importance - a[1].importance || a[0] - b[0])
     .map(([idx, v]) => {
       const base = snapshot[idx]
       return {
         ...base,
-        // 多账户/重复行: 说明可能讲的是另一条持仓 → 只保留原始信号
-        why: base.ambiguous ? (base.signal || '').trim() : v.why,
-        whyFromAI: !base.ambiguous,
+        // 仅允许候选原始信号中可逐字核验的文本；其余回退原始信号。
+        why: !base.ambiguous && base.signal && base.signal.includes(v.why) ? v.why : (base.signal || '').trim(),
+        whyFromAI: !!(!base.ambiguous && base.signal && base.signal.includes(v.why)),
       }
     })
 
@@ -301,8 +255,8 @@ export function flowSourceParts(flow?: {
   const main = flowSourceLabel(flow?.source)
   return {
     main,
-    amount: flowSourceLabel(flow?.amount_source || flow?.source),
-    breadth: flowSourceLabel(flow?.breadth_source || flow?.source),
+    amount: flowSourceLabel(flow?.amount_source),
+    breadth: flowSourceLabel(flow?.breadth_source),
   }
 }
 
@@ -366,6 +320,7 @@ export type BaselineDate =
 export function opportunityBaselineDate(
   items: Array<{ snapshot_date?: string | null }>,
 ): BaselineDate {
+  if (items.some(i => !dateOrNull(i?.snapshot_date))) return { kind: 'missing' }
   const dates = Array.from(
     new Set(items.map((i) => dateOrNull(i?.snapshot_date)).filter((d): d is string => !!d)),
   ).sort()
@@ -405,10 +360,9 @@ export function splitPremarketPlans(plans?: PremarketPlanLike[] | null): {
   const valid: PremarketPlanLike[] = []
   let invalid = 0
   for (const p of list) {
-    const hasId = !!((p?.symbol || '').trim() || (p?.name || '').trim())
-    const hasAction = !!(p?.action || '').trim()
-    if (hasId && hasAction) valid.push(p)
-    else invalid += 1
+    if (!p || typeof p !== 'object') { invalid += 1; continue }
+    const text = (v: unknown) => typeof v === 'string' || typeof v === 'number' ? String(v) : ''
+    valid.push({ ...p, symbol: text(p.symbol), name: text(p.name), action: text(p.action) })
   }
   return { valid, invalid }
 }
