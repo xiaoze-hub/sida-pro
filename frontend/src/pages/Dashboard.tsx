@@ -786,7 +786,7 @@ export default function DashboardPage() {
           className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span title="情绪阶段/涨停家数来自 /market/phase 的日频阶段快照">
-            情绪·涨停 <b className="font-normal text-foreground">/market/phase</b> · 日期未提供
+            情绪·涨停 <b className="font-normal text-foreground">/market/phase</b> · 日期未获取
           </span>
           <span title="涨跌家数/成交额/主力净流入来自大盘资金流接口; 三者可能各自回落不同上游, 故逐个标注">
             主力 <b className="font-normal text-foreground">{flowParts.main}</b>
@@ -800,7 +800,7 @@ export default function DashboardPage() {
             {marketFlow?.stale ? ' · 滞后快照' : ''}
           </span>
           <span title="主线 Top1 来自 /market/mainline(涨停池聚合, 日频刷新的 SWR 缓存)">
-            主线 <b className="font-normal text-foreground">/market/mainline</b> · 日期未提供
+            主线 <b className="font-normal text-foreground">/market/mainline</b> · 日期未获取
           </span>
         </div>
         <div className="mt-2 border-t border-border pt-2">
