@@ -499,7 +499,13 @@ async def curate_today(req: CurateRequest, db: Session = Depends(get_db)):
                         imp = int(re.sub(r"[^0-9]", "", parts[1]) or 0)
                     except Exception:
                         imp = 0
-                    items.append({"index": i, "importance": imp, "why": parts[2].strip()})
+                    # 模型只能排序；说明必须有候选原文支撑，防止串股及编造事实。
+                    # 未经验证的自由文本不能通过索引绑定被当成该标的证据。
+                    why = parts[2].strip()
+                    signal = cands[i].signal or ''
+                    if not why or why not in signal:
+                        why = signal
+                    items.append({"index": i, "importance": imp, "why": why})
     except Exception as e:
         logger.debug(f"curate AI 失败,按原序兜底: {e}")
 

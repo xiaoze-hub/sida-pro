@@ -24,7 +24,7 @@ def test_curate_orders_by_importance(monkeypatch):
         db.close()
     assert res["items"][0]["index"] == 1
     assert res["items"][0]["importance"] == 90
-    assert res["items"][0]["why"] == "提醒触发"
+    assert res["items"][0]["why"] == "y"  # 模型理由不在候选原文中，回退该候选的真实信号
 
 
 def test_curate_fallback_on_ai_fail(monkeypatch):
