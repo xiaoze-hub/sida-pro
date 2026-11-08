@@ -23,7 +23,25 @@ import {
   type AuthIdentityChangeReason,
 } from '@sida/api'
 
+import { CREDENTIAL_STORAGE_KEYS } from '@/lib/identity-lifecycle'
+
 let _queryClient: QueryClient | null = null
+let _crossTabIdentityBound = false
+
+/**
+ * 跨标签页凭证变化(2026-11-08): 另一个标签页登录/登出/换号只改 `localStorage`, 不经过
+ * 本页的任何登录/登出代码 —— 原来只有同标签页的 `onAuthIdentityChanged` 会清缓存。
+ *
+ * 不清的后果: 本页的 TanStack 缓存(键大多不含身份, 如 `['portfolio']`)会把上一个账号的
+ * 数据直接喂给新身份; 即使身份生命周期把页面重建了, 重建后的第一帧仍是旧用户的缓存
+ * (stale-while-revalidate)。这里把跨 tab 信号并到**同一个收尾点**:
+ * `notifyAuthIdentityChanged` → 清 fetchAPI 响应/在途表 + 推进凭证代次 + 广播统一事件
+ * → `registerQueryClient` 挂的回调清 TanStack。
+ */
+function onCrossTabCredentialChange(event: StorageEvent): void {
+  if (event.key !== null && !CREDENTIAL_STORAGE_KEYS.has(event.key)) return
+  notifyAuthIdentityChanged('manual')
+}
 
 /**
  * main.tsx 装配时注册, 供非组件代码(登出/撤销会话)清缓存。
@@ -31,12 +49,17 @@ let _queryClient: QueryClient | null = null
  * 2026-11-07: 同时挂到 `onAuthIdentityChanged` —— 登出发生在 `packages/api` 里, 它不认识
  * TanStack; 只清 fetchAPI 那层会留下 query 缓存, 同标签页重新登录后仍可能读到上一个身份/
  * 上一代 token 的条目。注册一次, 两层缓存走同一个收尾点。
+ * 2026-11-08: 另挂 `storage`, 覆盖**跨标签页**换号(见 onCrossTabCredentialChange)。
  */
 export function registerQueryClient(client: QueryClient) {
   _queryClient = client
   onAuthIdentityChanged(() => {
     _queryClient?.clear()
   })
+  if (!_crossTabIdentityBound && typeof window !== 'undefined') {
+    window.addEventListener('storage', onCrossTabCredentialChange)
+    _crossTabIdentityBound = true
+  }
 }
 
 // ── 登录身份: 个人数据按账号隔离的唯一判据(2026-11-07) ──

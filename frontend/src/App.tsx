@@ -111,6 +111,9 @@ import {
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
+// 认证守卫(2026-11-08): 抽到 components/auth —— 接身份生命周期(跨标签页换号先封锁再重建)
+import RequireAuth from '@/components/auth/RequireAuth'
+import { useAuthIdentityGate } from '@/hooks/useAuthIdentityGate'
 import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@sida/base-ui/components/ui/dialog'
 import { Button } from '@sida/base-ui/components/ui/button'
@@ -167,53 +170,8 @@ function LegacyTabRedirect({ to }: { to: string }) {
   return <Navigate to={legacyRedirectTarget(to, location.search)} replace />
 }
 
-// 认证守卫组件
-function RequireAuth({ children }: { children: React.ReactNode }) {
-  const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking')
-  const location = useLocation()
-
-  // P2 修复(2026-09-15): 原先仅 mount 时校验一次, 会话过期后路由切换不再复检。
-  // 改为挂载 + 每次路由变化(location.key)都重新 isAuthenticated()
-  // (内部识别 token_expires 过期并触发 logout)。
-  // 401 统一登出已由 packages/api fetchAPI 在 res.status===401 时调用 logout()。
-  useEffect(() => {
-    setAuthState(isAuthenticated() ? 'authenticated' : 'unauthenticated')
-  }, [location.key])
-
-  if (authState === 'checking') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-      </div>
-    )
-  }
-
-  if (authState === 'unauthenticated') {
-    // 官网落地页(2026-09-16): 未登录访问 / 直接展示 Landing(不再跳 /login)
-    if (location.pathname === '/') {
-      return (
-        <Suspense fallback={<PageFallback />}>
-          <LandingPage />
-        </Suspense>
-      )
-    }
-    return <Navigate to="/login" state={{ from: location }} replace />
-  }
-
-  // L2-D(2026-10-24): 首次进入落 /ai-copilot(小白先看到"能问什么"), 老用户仍落首页。
-  // 先写标记再跳转: /ai-copilot 有 PermGuard(view_quotes), 无权限用户会被弹回 `/`,
-  // 此时标记已写 → 不会来回弹致死循环。隐私模式写不进去 → 视为老用户, 不跳。
-  if (location.pathname === '/') {
-    let firstRun = false
-    try { firstRun = localStorage.getItem('sida_first_run_landed') === null } catch { /* 隐私模式 */ }
-    if (firstRun) {
-      try { localStorage.setItem('sida_first_run_landed', '1') } catch { /* 忽略 */ }
-      return <Navigate to="/ai-copilot" replace />
-    }
-  }
-
-  return <>{children}</>
-}
+// 认证守卫已抽到 components/auth/RequireAuth(2026-11-08): 它的 fail-closed 身份生命周期
+// 见该文件头注释。这里保留路由/菜单/壳层的渲染。
 
 // 模块权限路由守卫(2026-08-16): 未授权模块直接跳首页。
 // 配合后端 403 + 导航过滤, 三层防"未授权模块可见"。
@@ -261,6 +219,10 @@ function App() {
   const { mode, setMode, theme, toggleTheme } = useTheme()
   const { t } = useI18n()
   const location = useLocation()
+  // 身份生命周期(2026-11-08): 跨标签页换号/登出时壳层也要跟着重算 —— `useMyPermissions(getToken())`
+  // 与 `getJwtRole()` 都是在本层求值的; 只在 RequireAuth 里订阅的话, 重建出来的侧栏/导航仍带着
+  // 上一个账号的权限集。同一账号换发 token 时 userId 不变, 页签与页面状态不受影响。
+  const identity = useAuthIdentityGate()
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -455,7 +417,14 @@ function App() {
   }
 
   return (
-    <RequireAuth>
+    <RequireAuth
+      identity={identity}
+      landing={
+        <Suspense fallback={<PageFallback />}>
+          <LandingPage />
+        </Suspense>
+      }
+    >
     <PermissionLoadContext.Provider value={{ failed: permissionsFailed, retry: retryPermissions }}>
     <SystemStatusProvider enabled={getJwtRole() === 'owner'}>
     <AssistantWorkspaceProvider enabled={isNavItemVisible({ perm: 'view_quotes' }, viewer)}>
