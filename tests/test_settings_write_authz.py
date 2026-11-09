@@ -186,11 +186,18 @@ def _restore_keys(snap: dict) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_settings():
+def _reset_settings(monkeypatch):
     """每个用例前把关键设置置成已知值; 用完**还原**, 不污染同库的其它测试文件。
 
     (共享库: 别的用例会断言"库里有/没有 zhitu token", 本文件写过 fake 值必须还回去。)
     """
+    import sys
+    import types
+
+    # 授权测试只验证真实端点和 DB，不改变整个 pytest 进程的出网代理。
+    server_stub = types.ModuleType("server")
+    setattr(server_stub, "apply_proxy_env", lambda _value: None)
+    monkeypatch.setitem(sys.modules, "server", server_stub)
     snap = _snapshot_keys(_TOUCHED_KEYS)
     _set_db(SECRET_KEY, FAKE_SECRET)
     _set_db(PLAIN_KEY, "")
