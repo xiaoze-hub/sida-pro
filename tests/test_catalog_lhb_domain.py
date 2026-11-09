@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -267,8 +268,15 @@ def test_same_name_institution_seats_are_not_collapsed(monkeypatch):
     assert "仅列一次" not in out                   # 不同席位不该被当成重复
 
 
-def test_truly_duplicate_reason_rows_listed_once(monkeypatch):
-    """同侧同股同营业部同金额（多个上榜原因重复落行）→ 只列一次，不重复计数。"""
+def test_no_uid_rows_with_different_reasons_are_not_merged(monkeypatch):
+    """没有 row_uid 的桩/旧数据：同侧同股同营业部同金额但**上榜原因不同** → 两条源行，不合并。
+
+    2026-11-09 二轮审查：按「名称+编码+金额」判重会把不同机构/不同上榜原因的记录吞掉。
+    现在只认 row_uid（真源行身份），没有 row_uid 时至少要把上榜原因计入键，并显式提示
+    「同名同额」可能不是同一家。
+
+    @spec LHB-002
+    """
     row = {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
            "operate_dept_code": "A01", "reason": "涨幅偏离", "buy_amt": 8.2e7,
            "sell_amt": 0.0, "net_amt": 8.2e7}
@@ -282,8 +290,8 @@ def test_truly_duplicate_reason_rows_listed_once(monkeypatch):
         },
     )
     out = _query({"domain": "lhb.daily", "params_json": '{"symbol": "002361"}'})
-    assert out.count("机构专用") == 2       # 席位行 1 次 + 口径说明里的原文举例 1 次
-    assert "仅列一次" in out
+    assert out.count("8200万") >= 2, out
+    assert "同名同额" in out and "不合并" in out, out
 
 
 def test_seat_amount_uses_seat_buy_sell_not_stock_turnover(monkeypatch):
@@ -702,3 +710,302 @@ def test_catalog_description_does_not_claim_identity_labels():
     assert "不推断" in tc._QUERY_SCHEMA["function"]["description"]
 
 
+# ─────────── 9. 二轮审查复现：同名同额 / 整行截断 / 混合问句路由 / 排名口径 ───────────
+
+
+def test_same_name_same_amount_seats_are_kept_with_reason_hint(monkeypatch):
+    """同名 + 同额也不能推定是同一家席位 —— 必须保留源行，并给出原因/身份提示。
+
+    东财把一堆不同机构都写成「机构专用」，营业部代码可能同为空：若按「名称+金额」去重，
+    两家金额恰好相同的机构会被吞成一条，席位家数与买卖力量直接失真。真实的重复只有
+    「同一条源记录」（同 row_uid）被重复返回，按内容猜重复不可靠。
+
+    @spec LHB-002
+    """
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_events_symbol": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
+                                   "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
+            "lhb_seats": [
+                {"row_uid": "u1", "side": "buy", "symbol": "002361",
+                 "operate_dept_name": "机构专用", "operate_dept_code": "",
+                 "reason": "日涨幅偏离值达7%",
+                 "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
+                {"row_uid": "u2", "side": "buy", "symbol": "002361",
+                 "operate_dept_name": "机构专用", "operate_dept_code": "",
+                 "reason": "连续三个交易日收盘价涨幅偏离值累计20%",
+                 "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
+            ],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"symbol": "002361"}'})
+    # 两条源行都要出现（不是按名字+金额合成一条）
+    assert out.count("8200万") >= 2, out
+    assert "同名同额" in out and "不合并" in out, out
+    # 同名同额的提示要带上各自的上榜原因，别让模型以为是一条记录
+    assert "连续三个交易日收盘价涨幅偏离值累计20%" in out, out
+
+
+def test_duplicate_source_row_uid_still_listed_once(monkeypatch):
+    """同一条源记录（同 row_uid）被重复返回时才合并 —— 这是唯一可证明的重复。"""
+    row = {"row_uid": "u1", "side": "buy", "symbol": "002361",
+           "operate_dept_name": "机构专用", "operate_dept_code": "A01",
+           "reason": "涨幅偏离", "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7}
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_events_symbol": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
+                                   "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
+            "lhb_seats": [row, dict(row, reason="连续三日涨幅偏离")],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"symbol": "002361"}'})
+    assert out.count("机构专用") == 2       # 席位行 1 次 + 口径说明里的原文举例 1 次
+    assert "同一源记录" in out or "仅列一次" in out, out
+
+
+def test_truncation_cuts_whole_lines_only_and_keeps_caliber(monkeypatch):
+    """单域 1200 字上限必须按整行截断：不能把金额截成「+1.2」半截，也必须保住口径行。
+
+    旧实现 `text[:1200]` 在字符上硬切：正文一长，正好切在「+1.2」/「8.2」中间，
+    模型读到半个金额；末行的「席位口径」被整段吞掉，于是它不知道金额是席位自身买卖额。
+
+    @spec LHB-003
+    """
+    long_reason = (
+        "日涨幅偏离值达7%、连续三个交易日收盘价涨幅偏离值累计20%、换手率异常放大且"
+        "成交量较前五日均值放大三倍以上（交易所公开信息口径，含盘中异动提示与收盘后复核说明）"
+    )
+    rows = [
+        {"symbol": f"00{i:04d}", "name": f"样本股{i}", "net_buy": 1.2345e8 - i * 1e6,
+         "buy_amt": 2.3456e8, "sell_amt": 1.1111e8, "change_pct": 5.55,
+         "turnover_pct": 12.34, "reason": long_reason}
+        for i in range(60)
+    ]
+    sell_rows = [
+        {"symbol": f"60{i:04d}", "name": f"样本卖出股{i}", "net_buy": -(1.3456e8 - i * 1e6),
+         "buy_amt": 1.1111e8, "sell_amt": 2.4567e8, "change_pct": -6.66,
+         "turnover_pct": 15.43, "reason": long_reason}
+        for i in range(20)
+    ]
+    seats = [
+        {"side": "buy", "symbol": f"00{i:04d}", "operate_dept_name": f"某某证券营业部{i}",
+         "operate_dept_code": f"D{i:03d}", "buy_amt": 9.8765e7 - i * 1e5,
+         "sell_amt": 0.0, "net_amt": 9.8765e7 - i * 1e5}
+        for i in range(60)
+    ]
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_rank_count": [{"n": 60, "syms": 60}],
+            "lhb_top_buy": rows,
+            "lhb_top_sell": sell_rows,
+            "lhb_seats_top": seats,
+            "lhb_seat_total": [{"n": 60}],
+        },
+    )
+    monkeypatch.setattr(tc, "MAX_DOMAIN_CHARS", 20000)
+    full = _query({"domain": "lhb.daily", "params_json": '{"date": "20261020"}'})
+    assert len(full) > 1200, f"样本不够长，测不到截断: {len(full)}"
+
+    monkeypatch.setattr(tc, "MAX_DOMAIN_CHARS", 1200)
+    out = _query({"domain": "lhb.daily", "params_json": '{"date": "20261020"}'})
+    assert len(out) <= 1200, len(out)
+    assert "已截断" in out
+    # 必需口径行必须活过截断（否则模型不知道席位金额是什么）
+    assert "席位口径" in out, out
+    # 除截断提示行外，每一行都必须是原文里的完整一行；被截的那一行只能按「；」断条目。
+    full_lines = full.splitlines()
+    for line in out.splitlines():
+        if "已截断" in line:
+            continue
+        assert line in full_lines or (
+            line.endswith("；") and any(fl.startswith(line) for fl in full_lines)
+        ), f"截断切断了整行/半条记录: {line!r}"
+    # 被边界截断的那一行以「；」收尾，不留半截数字
+    for line in out.splitlines():
+        assert not re.search(r"\d\.?\d*$", line), f"行尾是半截数字: {line!r}"
+    assert "+1.23亿" in out or "+1.23亿" in full
+
+
+def test_mixed_review_question_routes_to_lhb_capable_recipe():
+    """「收盘复盘，龙虎榜和涨停梯队」不能只落进盘后管线：管线取不到龙虎榜。
+
+    postmarket_reviewer 命中「收盘/复盘/涨停梯队」得分 24，lhb_reviewer 只命中「龙虎榜」
+    得 9 —— 旧实现直接判给管线，而 pipeline 按 {} 调工具，query_data_domain 必填 domain
+    会被判 unsatisfiable 静默跳过：龙虎榜在这类问句里永远取不到。混合问句必须落在一份
+    既能调 query_data_domain(domain=lhb.daily)、也能查涨停梯队的非 pipeline 配方上。
+
+    @spec LHB-001
+    """
+    from src.agents.chat.registry import chat_tool_schemas
+    from src.harness.routing import route_for_request
+
+    q = "收盘复盘，龙虎榜和涨停梯队"
+    route = route_for_request(q, chat_tool_schemas())
+    assert route.recipe is not None, f"{q} 落到无配方兜底"
+    assert not route.recipe.pipeline, f"{q} → {route.recipe.id}（pipeline 取不到龙虎榜）"
+    names = {(s.get("function") or {}).get("name") for s in route.tools}
+    assert "query_data_domain" in names, f"{q} 路由后看不到取数入口"
+    frag = route.recipe.prompt_fragment
+    assert "lhb.daily" in frag, "提示词必须指明龙虎榜域"
+    assert "limit.pool" in frag, "同句问涨停梯队时也必须指明 limit.pool，不能丢掉这一半"
+
+    # 不含龙虎榜的纯盘后复盘仍走原管线
+    plain = route_for_request("收盘复盘和涨停梯队", chat_tool_schemas())
+    assert plain.recipe is not None and plain.recipe.id == "postmarket_reviewer"
+
+
+def test_board_ranking_scope_and_multi_reason_are_spelled_out(monkeypatch):
+    """榜单必须写清「按个股排名」与同股多原因的处理方式，不能只写一句「合并为一条」。
+
+    @spec LHB-004
+    """
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_rank_count": [{"n": 92, "syms": 41}],
+            "lhb_top_buy": [
+                {"symbol": "002361", "name": "闽东电力", "net_buy": 3.0e8, "buy_amt": 4.0e8,
+                 "sell_amt": 1.0e8, "change_pct": 9.98, "reason": "日涨幅偏离值达7%"},
+                {"symbol": "002361", "name": "闽东电力", "net_buy": 2.1e8, "buy_amt": 3.0e8,
+                 "sell_amt": 0.9e8, "change_pct": 9.98, "reason": "连续三个交易日涨幅偏离值累计20%"},
+                {"symbol": "600111", "name": "北方稀土", "net_buy": 1.1e8, "buy_amt": 2.0e8,
+                 "sell_amt": 0.9e8, "change_pct": 6.1, "reason": "涨幅偏离"},
+                {"symbol": "600222", "name": "太龙药业", "net_buy": 9e7, "buy_amt": 1.5e8,
+                 "sell_amt": 0.6e8, "change_pct": 5.0, "reason": "涨幅偏离"},
+                {"symbol": "600333", "name": "长春燃气", "net_buy": 8e7, "buy_amt": 1.4e8,
+                 "sell_amt": 0.6e8, "change_pct": 4.0, "reason": "涨幅偏离"},
+                {"symbol": "600444", "name": "国机通用", "net_buy": 7e7, "buy_amt": 1.3e8,
+                 "sell_amt": 0.6e8, "change_pct": 3.0, "reason": "涨幅偏离"},
+                {"symbol": "600555", "name": "海立股份", "net_buy": 6e7, "buy_amt": 1.2e8,
+                 "sell_amt": 0.6e8, "change_pct": 2.0, "reason": "涨幅偏离"},
+            ],
+            "lhb_top_sell": [],
+            "lhb_seats_top": [],
+            "lhb_seat_total": [{"n": 0}],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"date": "20261020"}'})
+    assert "按个股" in out, out                       # 排名单位是个股，不是上榜记录
+    assert "同股" in out and "净额" in out, out        # 同股多原因取哪条、怎么合并
+    assert "92" in out and "41" in out, out
+    # 代表行要带上「另有 N 个上榜原因」，不能把多原因悄悄丢掉
+    assert "原因" in out
+    # 第 6/7 只确实没列（截断披露与内容一致）
+    assert "600555" not in out
+
+
+def test_symbol_path_lists_every_listing_reason(monkeypatch):
+    """单标的路径要把该股当日**全部**上榜原因列出来，不能只留净额最大那条。
+
+    @spec LHB-004
+    """
+    ev = {"symbol": "002361", "name": "闽东电力", "net_buy": 1.2e8, "buy_amt": 2.0e8,
+          "sell_amt": 0.8e8, "change_pct": 9.98}
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_events_symbol": [
+                dict(ev, reason="日涨幅偏离值达7%"),
+                dict(ev, net_buy=1.19e8, reason="连续三个交易日收盘价涨幅偏离值累计20%"),
+            ],
+            "lhb_seats": [],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"symbol": "002361"}'})
+    assert "日涨幅偏离值达7%" in out, out
+    assert "连续三个交易日收盘价涨幅偏离值累计20%" in out, out
+    assert "2 条" in out or "2 个" in out, out
+
+
+
+
+def test_mixed_review_route_executes_both_domains_through_chat_tool_layer(tmp_path):
+    """混合问句全链路：路由 → 配方白名单 → _REQ_TOOLS → _execute_tool → 真 SQL。
+
+    「收盘复盘，龙虎榜和涨停梯队」必须同时能取到 lhb.daily 与 limit.pool —— 只落进
+    pipeline 配方时两个域都调不到（管线按 {} 拼参数）。这里用临时 sqlite 真跑一遍，
+    证明模型在这条路由下**真的**能拿到龙虎榜席位与涨停梯队两段数据。
+
+    @spec LHB-001
+    """
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from src.agents.chat.registry import chat_tool_schemas
+    from src.harness.routing import route_for_request
+    from src.web.api import chat as chat_api
+
+    q = "收盘复盘，龙虎榜和涨停梯队"
+    route = route_for_request(q, chat_tool_schemas())
+    recipe = route.recipe
+    assert recipe is not None and recipe.id == "lhb_reviewer"
+    tools = tuple(getattr(recipe, "tools", ()))
+    assert {"query_data_domain", "get_market_replay"} <= set(tools)
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'lhb_mixed.db'}")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE dragon_tiger_events (trade_date TEXT, symbol TEXT, market TEXT, "
+            "name TEXT, reason TEXT, close REAL, change_pct REAL, net_buy REAL, buy_amt REAL, "
+            "sell_amt REAL, deal_amt REAL, turnover_pct REAL)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE lhb_seat_details (row_uid TEXT PRIMARY KEY, trade_date TEXT, "
+            "side TEXT, symbol TEXT, name TEXT, reason TEXT, operate_dept_code TEXT, "
+            "operate_dept_name TEXT, close REAL, change_pct REAL, accum_amount REAL, "
+            "accum_volume REAL, buy_amt REAL, sell_amt REAL, net_amt REAL)"
+        ))
+        # limit.pool 所需三表（空表即可：本条断言的是「能查、且如实说无记录」）
+        conn.execute(text(
+            "CREATE TABLE limit_up_events (trade_date TEXT, symbol TEXT, name TEXT, "
+            "sealed INTEGER, boards INTEGER, first_time TEXT, open_times INTEGER)"
+        ))
+        conn.execute(text(
+            "INSERT INTO dragon_tiger_events VALUES "
+            "('20261020','002361','CN','闽东电力','日涨幅偏离值达7%',12.5,9.98,1.23e8,"
+            "2.1e8,0.87e8,2.97e8,12.3)"
+        ))
+        conn.execute(text(
+            "INSERT INTO lhb_seat_details VALUES "
+            "('u1','20261020','buy','002361','','涨幅偏离','D001','机构专用',12.5,9.98,"
+            "2.97e8,100,8.2e7,0.0,8.2e7)"
+        ))
+
+    token = chat_api._REQ_TOOLS.set(frozenset(tools))
+    try:
+        with Session(engine) as s:
+            lhb = _run(chat_api._execute_tool(
+                s, "query_data_domain",
+                {"domain": "lhb.daily", "params_json": '{"date": "20261020"}'}, user=None,
+            ))
+            pool = _run(chat_api._execute_tool(
+                s, "query_data_domain",
+                {"domain": "limit.pool", "params_json": '{"date": "20261020"}'}, user=None,
+            ))
+    finally:
+        chat_api._REQ_TOOLS.reset(token)
+    assert "不使用工具" not in lhb, lhb[:200]
+    assert "时点 20261020" in lhb and "闽东电力" in lhb and "8200万" in lhb
+    assert "limit.pool" in pool, pool[:200]
+
+
+def test_symbol_level_pipeline_is_not_hijacked_by_lhb_keyword():
+    """反例：「深度诊断 002361 龙虎榜」不能被改路由到市场级龙虎榜配方。
+
+    单标的管线（deep_diagnosis）有自己的 14 个维度证据链，龙虎榜只是其中一句提到的
+    维度；为补一个域而丢掉其余维度，是另一种失真。改路由只对 scope=market 的
+    pipeline 配方生效。
+    """
+    from src.agents.chat.registry import chat_tool_schemas
+    from src.harness.routing import route_for_request
+
+    route = route_for_request("深度诊断 002361 的龙虎榜和筹码", chat_tool_schemas())
+    assert route.recipe is not None and route.recipe.id == "deep_diagnosis", route.recipe

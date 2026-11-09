@@ -21,7 +21,8 @@
 2. **只读**：只发 SELECT，必带 LIMIT（禁止全表扫），一律 `sqlalchemy.text()` + 绑定参数，
    禁止字符串拼接。本模块不依赖 Web 层（不 import src/web），只用 `src.db.session.SessionLocal`。
 3. **说人话 + 不编**：首行「域 / 时点 / 来源表」，正文分条；取不到就写「未取到（原因）」，
-   **绝不补 0**；单域渲染 ≤1200 字（超出截断并标注）。
+   **绝不补 0**；单域渲染 ≤1200 字，超出时**按整行/条目边界截断**（不切半行 → 不切出假金额），
+   并保留「口径」行与「未取到」行、标注省略行数。
 
 注册方式与 `tools_thsdk.py` 一致：import 时登记（`registry.py` 末尾调用 `register_catalog_tools()`），
 两个工具排在导出清单最末，不破坏 core 工具的连续前缀。
@@ -111,11 +112,31 @@ def required_params(domain: str) -> tuple[str, ...]:
 
 
 def _cap(text: str, limit: int) -> str:
-    """截断到 limit 字，并显式标注被截断（不静默丢内容）。"""
+    """截断到 limit 字，**按整行**丢弃并显式标注省略行数（不静默丢内容）。
+
+    不能按字符硬切：一行一个域时，硬切会把某条描述/金额切成半截，模型读到
+    「+1.2」这种不存在的值。整行丢弃至少保证留下的是真实完整的一行。
+    """
     text = text or ""
     if len(text) <= limit:
         return text
-    return text[: max(limit - 24, 0)].rstrip() + f"\n…（已截断，原文 {len(text)} 字）"
+    lines = text.splitlines()
+    footer_tpl = "…（已截断：省略 {n} 行，原文 {total} 字）"
+    reserve = len(footer_tpl.format(n=len(lines), total=len(text))) + 1
+    keep: list[str] = []
+    used = 0
+    for line in lines:
+        cost = len(line) + 1
+        if used + cost + reserve > limit:
+            break
+        keep.append(line)
+        used += cost
+    if not keep and lines:
+        head = _trim_line(lines[0], max(limit - reserve - 1, 0))
+        keep = [head] if head else []
+    omitted = len(lines) - len(keep)
+    out = "\n".join(keep + [footer_tpl.format(n=omitted, total=len(text))])
+    return out if len(out) <= limit else _trim_line(out, limit)
 
 
 def render_domain_catalog() -> str:
@@ -141,6 +162,40 @@ def render_domain_catalog() -> str:
 # ──────────────────────────── 渲染（人话 Markdown，缺数据说「未取到」） ────────────────────────────
 
 
+#: 行内截断的安全边界，按「丢多少信息」从轻到重：先断条目（；），再断句子，最后才断短语。
+_LINE_BREAK_GROUPS = ("；;", "。", "，,、|）)")
+
+
+def _trim_line(line: str, budget: int) -> str:
+    """把单行压到 budget 字以内，**不切在数字中间**、也不切半条记录。
+
+    优先在「；」断（一条记录一个 token，金额/代码/原因都在条目内完整保留）；没有再退到
+    句号/逗号；实在没有边界才硬切，并把尾部残缺的数字片段剪掉 —— 「+1.2」「3.」「45%」
+    这类半截值一律不留，否则模型会把截断出来的假数字当成真实金额。
+    """
+    if budget <= 0:
+        return ""
+    if len(line) <= budget:
+        return line
+    head = line[:budget]
+    for group in _LINE_BREAK_GROUPS:
+        cut = max(head.rfind(ch) for ch in group)
+        if cut >= max(int(budget * 0.5), 8):
+            return head[: cut + 1]
+    head = re.sub(r"[\d.,+\-]+\s*[%％]?$", "", head).rstrip()
+    return head
+
+
+def _is_caliber_line(line: str) -> bool:
+    """「口径」行（必须活过截断）：席位口径 / 排名口径 / 口径与缺口。
+
+    这些行说明金额、排名、截断的统计方式；被截掉的后果是模型拿错口径去解释数字，
+    所以截断时先给它们留预算，而不是按出现顺序排队。
+    """
+    s = str(line or "").lstrip("-•* ").strip()
+    return s.startswith("口径") or "口径：" in s[:10] or "口径:" in s[:10]
+
+
 def render_domain_sections(
     domain: str,
     *,
@@ -154,9 +209,13 @@ def render_domain_sections(
     首行固定「域 / 时点 / 来源表」；`sections` 全空 → 明确写「未取到」，
     **不写 0、不写「持平/正常」这类看起来有值的措辞**。
 
-    截断策略：**先截正文、保首行与末尾的「未取到」行** —— 否则长正文会把
-    「未取到（原因）」整行挤掉，模型就看不到「这块没取到」这个事实。
+    截断策略（2026-11-09 二轮审查修）：
+    - **按整行截断**，绝不按字符硬切 —— 硬切会把「+1.23亿」切成「+1.2」，
+      模型读到的是不存在的金额；
+    - 先保首行、必需「口径」行与末尾的「未取到」行，再用剩余预算装正文；
+    - 某一行整行放不下时，在该行的标点边界截断，并标注省略了多少行。
     """
+    limit = MAX_DOMAIN_CHARS
     label = (_DOMAIN_BY_ID.get(domain) or {}).get("label") or ""
     title = f"**{domain}{(' · ' + label) if label else ''}** ｜ 时点 {as_of or '未知'}"
     title += f" ｜ 来源 {source or '未标注'}"
@@ -171,21 +230,67 @@ def render_domain_sections(
         miss = miss or ["该域本次没有取到任何记录（数据源无行或尚未采集）"]
     miss_line = f"{MISSING_TAG}：" + "；".join(miss) if miss else ""
 
-    # 正文预算 = 上限 - 首行 - 缺数据行 - 分隔空行（保证「未取到」行永不被截掉）
-    fixed = len(title) + (len(miss_line) + 1 if miss_line else 0) + 1
-    budget = max(MAX_DOMAIN_CHARS - fixed, 200)
-    body_text = "\n".join(body)
-    if len(body_text) > budget:
-        body_text = (
-            body_text[: max(budget - 24, 0)].rstrip()
-            + f"\n…（已截断，原文 {len(body_text)} 字）"
-        )
-    out = [title]
-    if body_text:
-        out.append(body_text)
-    if miss_line:
-        out.append(miss_line)
-    return "\n".join(out)[:MAX_DOMAIN_CHARS]
+    total_chars = len("\n".join(body))
+    footer_tpl = "…（已截断：省略 {n} 行，原文 {total} 字）"
+
+    caliber = [ln for ln in body if _is_caliber_line(ln)]
+    rest = [ln for ln in body if not _is_caliber_line(ln)]
+
+    fixed_len = len(title) + 1 + (len(miss_line) + 1 if miss_line else 0)
+    footer_len = len(footer_tpl.format(n=len(body), total=total_chars)) + 1
+    budget = limit - fixed_len - footer_len
+
+    # 口径行优先（最多吃掉 45% 预算，避免口径把正文全挤掉）
+    kept_caliber: list[str] = []
+    used = 0
+    caliber_cap = max(int(budget * 0.45), 0)
+    for ln in caliber:
+        if used + len(ln) + 1 <= caliber_cap:
+            kept_caliber.append(ln)
+            used += len(ln) + 1
+    body_budget = max(budget - used, 0)
+
+    kept_rest: list[str] = []
+    rest_used = 0
+    skipped = 0
+    for idx, ln in enumerate(rest):
+        cost = len(ln) + 1
+        if rest_used + cost <= body_budget:
+            kept_rest.append(ln)
+            rest_used += cost
+            continue
+        # 整行放不下：先记省略，继续看后面更短的行能否放下（保信息面，不保顺序完整）。
+        # 一条都放不下时才在该行的条目边界截断，至少留点证据。
+        skipped += 1
+        if not kept_rest and idx == 0:
+            cut = _trim_line(ln, body_budget - 1)
+            if cut:
+                kept_rest.append(cut)
+                rest_used += len(cut) + 1
+
+    omitted = len(body) - len(kept_rest) - len(kept_caliber)
+
+    def _assemble() -> str:
+        lines = [title, *kept_rest, *kept_caliber]
+        if miss_line:
+            lines.append(miss_line)
+        if skipped or omitted > 0:
+            lines.append(footer_tpl.format(n=omitted, total=total_chars))
+        return "\n".join(lines)
+
+    out = _assemble()
+    # 兜底：固定行本身就吃掉上限时，逐条退让（先正文、后口径），最后硬保首行
+    while len(out) > limit and kept_rest:
+        kept_rest.pop()
+        omitted += 1
+        out = _assemble()
+    while len(out) > limit and kept_caliber:
+        kept_caliber.pop()
+        omitted += 1
+        out = _assemble()
+    if len(out) > limit:
+        out = _trim_line(title, limit - 1)
+    return out
 
 
 def _num(v: Any, digits: int = 2, signed: bool = False) -> str:
@@ -361,19 +466,20 @@ def render_lhb(
 ) -> str:
     """龙虎榜榜单 + 席位明细。空结果 → 「未取到」。
 
-    榜单口径（2026-11-09 修）：
+    榜单口径（2026-11-09 二轮审查修）：
     - 全市场 `buys`/`sells` 由 SQL **按净买额排序后取前 N**（`lhb_top_buy` / `lhb_top_sell`），
       不是「按代码顺序抽样 60 条再排序」——后者会把抽样冒充全市场排名；
-    - 同一只票多个上榜原因 → 榜单只列一次（并入一条，金额不累加，避免重复计数）；
+    - **排名单位是「个股」不是「上榜记录」**：同一只票多个上榜原因先合并成 1 只，取净额
+      绝对值最大的那条记录作代表，其余原因不重复计入排名（单标的路径会逐条列出全部原因）；
     - `total_rows` / `total_symbols` 来自库内 COUNT，**不拿本轮取到的行数冒充全日规模**，
       并在文中写明「只列前 5 / 共 N 条」，不让人误读成全量。
 
-    席位口径（2026-11-09 修）：
+    席位口径（2026-11-09 二轮审查修）：
     - 金额只认席位自身 `buy_amt` / `sell_amt` / `net_amt`；`accum_amount` 是该股当日
       **累计成交额**（与榜单的股票总成交额同值），当席位金额用会让每家营业部都显示同一个数；
-    - 去重键含营业部代码 + 买卖额 —— 「机构专用」是东财原文占位名，多家机构同名，
-      按名字去重会把不同机构席位吞掉；只有同侧/同股/同营业部/同金额（多个上榜原因
-      重复落行）才合并；
+    - **只有同一条源记录（同 `row_uid`）被重复返回时才合并**。不能用「名称+代码+金额」判重：
+      「机构专用」是东财原文占位名，多家机构同名、代码可能同为空、金额也可能恰好相同，
+      按内容猜重复会把真实席位吞掉。源行逐条保留，并在出现同名同额时给出原因/身份提示；
     - 只展示东财原文营业部名称 + 所属代码，**不做游资/机构/量化归类**。
     """
     sections: list[str] = []
@@ -384,16 +490,35 @@ def render_lhb(
     all_sells = _rank_board(sell_rows, limit=10_000, ascending=True)
     ranked_buys, ranked_sells = all_buys[:5], all_sells[:5]
     board_rows = buy_rows + sell_rows or rows
+    reason_counts = _reason_counts(board_rows)
     if board_rows:
         total = total_rows if total_rows is not None else len(rows or board_rows)
         syms = total_symbols
         if syms is None:
             syms = len({str(r.get("symbol") or "") for r in board_rows})
         sections.append(f"- 上榜记录 {total} 条（涉及 {syms} 只个股）")
+        if symbol and rows:
+            # 单标的：该股当日全部上榜原因逐条列出（多原因不合并，也不只留净额最大的那条）
+            items = []
+            for r in rows:
+                reason = str(r.get("reason") or "").strip() or "未披露原因"
+                items.append(f"「{reason}」净买 {_amt(r.get('net_buy'))}")
+            multi = "（多原因不合并）" if len(rows) > 1 else ""
+            sections.append(f"- 该股当日 {len(rows)} 条上榜记录{multi}：" + "；".join(items))
         if ranked_buys:
-            sections.append("- 净买入前列：" + "；".join(_fmt_lhb_row(r) for r in ranked_buys))
+            sections.append(
+                "- 净买入前列：" + "；".join(
+                    _fmt_lhb_row(r, reason_count=reason_counts.get(str(r.get("symbol") or ""), 1))
+                    for r in ranked_buys
+                )
+            )
         if ranked_sells:
-            sections.append("- 净卖出前列：" + "；".join(_fmt_lhb_row(r) for r in ranked_sells))
+            sections.append(
+                "- 净卖出前列：" + "；".join(
+                    _fmt_lhb_row(r, reason_count=reason_counts.get(str(r.get("symbol") or ""), 1))
+                    for r in ranked_sells
+                )
+            )
         if not ranked_buys and not ranked_sells:
             sections.append("- 净额均为 0 或未披露，不排序（不编方向）")
             shown_rows = board_rows[:5]
@@ -405,12 +530,21 @@ def render_lhb(
                 )
         elif len(all_buys) > 5 or len(all_sells) > 5:
             sections.append(
-                f"- 榜单已截断：只列净买额最大的 {len(ranked_buys)} 只 / 净卖额最大的 "
-                f"{len(ranked_sells)} 只（当日 {total} 条记录），同股多个上榜原因合并为一条"
+                f"- 榜单已截断：净买前列只列前 {len(ranked_buys)} 只、净卖前列只列前 "
+                f"{len(ranked_sells)} 只（本轮参与排名的净买记录 {len(all_buys)} 条、"
+                f"净卖记录 {len(all_sells)} 条；库内当日共 {total} 条 / {syms} 只）"
+            )
+        if ranked_buys or ranked_sells:
+            sections.append(
+                "- 排名口径：净买/净卖前列**按个股**计 —— 同股（同一只票）多个上榜原因先合并成 1 只，"
+                "取净额绝对值最大的那条记录作代表、其余原因不重复计入排名（要看清全部原因请按代码单查）；"
+                "不是按上榜记录条数排名"
             )
     if seats:
         seen: set[tuple[Any, ...]] = set()
         deduped = False
+        # 同名同额分组：只用于提示，**不用于合并**（同名同额不代表同一家席位）
+        same_sig: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
         for side, cn in (("buy", "买入席位"), ("sell", "卖出席位")):
             if symbol:
                 head = f"- {cn}（{symbol}）"
@@ -431,13 +565,41 @@ def render_lhb(
                     deduped = True
                     continue
                 seen.add(key)
+                sig = (
+                    side,
+                    dept,
+                    str(r.get("operate_dept_code") or "").strip(),
+                    _f(r.get("buy_amt")),
+                    _f(r.get("sell_amt")),
+                )
+                same_sig.setdefault(sig, []).append(r)
                 label = f"{dept}（{code}）" if code and not symbol else dept
                 if len(items) < 5:
                     items.append(f"{label} {_seat_amt_text(r, side)}")
             if items:
                 sections.append(head + "：" + "；".join(items))
+        groups = [rows_ for rows_ in same_sig.values() if len(rows_) > 1]
+        if groups:
+            bits = []
+            for rows_ in groups[:2]:
+                r0 = rows_[0]
+                dept = str(r0.get("operate_dept_name") or "").strip() or "未披露营业部"
+                reasons = [
+                    str(x.get("reason") or "").strip()
+                    for x in rows_
+                    if str(x.get("reason") or "").strip()
+                ]
+                reasons = list(dict.fromkeys(reasons))
+                reason_txt = f"，上榜原因：{' / '.join(reasons)}" if reasons else ""
+                bits.append(f"「{dept}」{_seat_amt_text(r0, str(r0.get('side') or 'buy'))} × {len(rows_)} 条{reason_txt}")
+            sections.append(
+                f"- 同名同额席位 {len(groups)} 组：" + "｜".join(bits)
+                + "。同名同额**不代表同一家**（「机构专用」等是东财原文占位名，多家机构同名、"
+                "代码可能同为空、金额也可能恰好相同），源行逐条保留、不合并；"
+                "只有同一条源记录（同 row_uid）被重复返回时才只列一次"
+            )
         if deduped:
-            sections.append("- 同一营业部同侧同额的重复上榜原因记录仅列一次（金额不累加）")
+            sections.append("- 同一源记录（同 row_uid）被重复返回，仅列一次（金额不累加）")
         sections.append(
             "- 席位口径：金额为席位自身买入/卖出/净额（不是该股当日总成交额）；"
             "营业部名称按东财原文披露（「机构专用」等为源方原文命名，不同机构可能同名），"
@@ -455,10 +617,11 @@ def render_lhb(
 def _rank_board(
     rows: list[dict[str, Any]], *, limit: int, ascending: bool = False
 ) -> list[dict[str, Any]]:
-    """按净买额排序并**按个股去重**（同股多上榜原因只算一条，取该股当日最大净额）。
+    """按净买额排序并**按个股去重**（同股多个上榜原因只算 1 只，取净额绝对值最大的那条作代表）。
 
     SQL 已经按净额排好序（`lhb_top_buy` / `lhb_top_sell`），这里保留一次同向排序是为了
-    单标的路径与桩数据也稳定；去重后最多 `limit` 只。
+    单标的路径与桩数据也稳定；去重后最多 `limit` 只。代表行之外的其余上榜原因不在榜单里
+    重复计入（单标的路径会逐条列出），渲染时需显式说明这条口径。
     """
     ordered = sorted(
         rows,
@@ -479,21 +642,42 @@ def _rank_board(
 
 
 def _seat_key(r: dict[str, Any]) -> tuple[Any, ...]:
-    """席位去重键：同侧 + 同股 + 同营业部代码 + 同名 + 同买卖额 → 同一条记录。
+    """席位源行身份：**只认 `row_uid`**（同一条源记录）；没有时按整行内容（含上榜原因）判等。
 
-    不能用 `(side, symbol, 营业部名)`：东财把一堆不同机构都写成「机构专用」，按名字
-    去重会把不同机构席位合并掉。营业部代码缺失时退回 `row_uid`（内容哈希，含上榜原因）。
+    2026-11-09 二轮审查：不能用「同侧 + 同股 + 营业部代码/名称 + 买卖额」当去重键。
+    东财把一堆不同机构都写成「机构专用」，营业部代码可能同为空，买卖额也可能恰好相同；
+    按内容判重会把真实的不同席位吞成一条（席位家数、买卖力量直接失真）。能证明「重复」
+    的只有同一条源记录被重复返回，也就是同 `row_uid`。
     """
     side = str(r.get("side") or "").lower()
     sym = str(r.get("symbol") or "")
-    code = str(r.get("operate_dept_code") or "").strip()
-    dept = str(r.get("operate_dept_name") or "").strip()
-    buy, sell = _f(r.get("buy_amt")), _f(r.get("sell_amt"))
-    if not code and not dept:
-        uid = str(r.get("row_uid") or "").strip()
-        if uid:
-            return (side, sym, uid)
-    return (side, sym, code, dept, buy, sell)
+    uid = str(r.get("row_uid") or "").strip()
+    if uid:
+        return ("uid", uid)
+    return (
+        "row",
+        side,
+        sym,
+        str(r.get("operate_dept_code") or "").strip(),
+        str(r.get("operate_dept_name") or "").strip(),
+        _f(r.get("buy_amt")),
+        _f(r.get("sell_amt")),
+        str(r.get("reason") or "").strip(),
+    )
+
+
+def _reason_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """每只票的上榜原因**条数**（去重后），用于榜单代表行标注「共 N 个原因」。"""
+    out: dict[str, set[str]] = {}
+    for r in rows:
+        sym = str(r.get("symbol") or "").strip()
+        if not sym:
+            continue
+        reason = str(r.get("reason") or "").strip()
+        out.setdefault(sym, set())
+        if reason:
+            out[sym].add(reason)
+    return {k: max(len(v), 1) for k, v in out.items()}
 
 
 def _seat_amt_text(r: dict[str, Any], side: str) -> str:
@@ -613,7 +797,7 @@ def render_theme_mood(
     )
 
 
-def _fmt_lhb_row(r: dict[str, Any]) -> str:
+def _fmt_lhb_row(r: dict[str, Any], *, reason_count: int = 1) -> str:
     bits = [f"{r.get('symbol') or '?'} {r.get('name') or ''}".strip()]
     bits.append(f"净买 {_amt(r.get('net_buy'))}")
     buy, sell = r.get("buy_amt"), r.get("sell_amt")
@@ -624,7 +808,8 @@ def _fmt_lhb_row(r: dict[str, Any]) -> str:
         bits.append(f"换手 {_num(r.get('turnover_pct'))}%")
     reason = str(r.get("reason") or "").strip()
     if reason:
-        bits.append(f"原因「{reason[:24]}」")
+        tail = f"（同股 {reason_count} 个原因已合并为 1 只）" if reason_count > 1 else ""
+        bits.append(f"原因「{reason[:24]}」{tail}")
     return f"{bits[0]}（{'，'.join(bits[1:])}）"
 
 
@@ -3501,8 +3686,9 @@ _QUERY_SCHEMA = {
             "市场/个股类：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date、min_streak）、"
             "lhb.daily（龙虎榜/席位；可选 symbol=6 位代码、date=YYYYMMDD 或 YYYY-MM-DD，"
             "date 缺省取库内最新交易日并标注；指定日无数据只报无记录，不回退日期；"
-            "榜单按净买额排序后只列前 5 并标明当日总条数，同股多个上榜原因合并为一条；"
-            "席位金额为席位自身买入/卖出/净额；营业部只给东财原文名称，不推断游资/机构身份）、"
+            "榜单按个股净买额排序后只列前 5 并标明当日总条数（同股多个上榜原因合并成 1 只，"
+            "取净额最大的那条作代表）；席位金额为席位自身买入/卖出/净额，同名同额不合并（源行逐条列出）；"
+            "营业部只给东财原文名称，不推断游资/机构身份；单域输出超 1200 字按整行截断并保留口径行）、"
             "theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
             "market.index（大盘指数/两市成交额）、market.breadth（涨跌家数+ADL/ARMS 分位+九档分布+市场状态）、"
             "market.mainline（主线榜排名/主线分/龙头，可选 top_n）、board.daily（板块涨跌与资金排行，可选 top_n）、"

@@ -44,6 +44,10 @@ class Recipe:
     #              要 symbol 的工具按用户自选/持仓展开，展不开就如实写「未取到」。
     # 只是**声明**，不改变路由；真正决定走哪条管线的仍是 `pipeline` + 这个字段的组合。
     scope: str = "symbol"
+    # 本配方能取的**数据域**（`query_data_domain` 的 domain id）。用途只有一个：
+    # 当关键词得分被一份 pipeline 配方压过时，告诉路由「这份配方能真取到这些域」——
+    # pipeline 按 {} 调工具，必填 domain 的域工具会被判 unsatisfiable 静默跳过。
+    covers_domains: tuple[str, ...] = ()
 
     def public(self) -> dict:
         """给前端 /api/copilot/agents 的元信息（不含提示词正文，避免泄露与大包体）。"""
@@ -97,6 +101,7 @@ def _parse(path: Path) -> Recipe:
         output_sections=tuple(str(x) for x in (raw.get("output_sections") or ())),
         max_tool_calls=int(budget.get("max_tool_calls") or 10),
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),
+        covers_domains=tuple(str(x) for x in (raw.get("covers_domains") or ())),
     )
 
 
@@ -194,10 +199,19 @@ def match_recipe(text: str) -> Recipe | None:
         就是最大的方差源。命中关键词就固定工具清单，模型只能在清单内挑。
 
     打分：命中关键词的**字符总长度**（越长越具体，避免"盘口"这种短词抢走"撤单趋势"）。
+    例外：胜出的是**全市场** pipeline 配方时，若另有**非 pipeline 配方声明了
+    covers_domains** 且关键词也命中，则改走后者 —— 管线按 `{}` 调工具，必填 `domain`
+    的 `query_data_domain` 会被判 unsatisfiable 静默跳过，「复盘+龙虎榜」里的龙虎榜
+    就永远取不到。这条规则只对显式声明的数据域配方生效，不改变全局优先级。
+
+    为什么限定 `scope == "market"`：单标的管线（深度诊断/空头司令）有自己的固定证据链，
+    「深度诊断 002361 龙虎榜」里的龙虎榜只是其中一个维度，改走市场级数据域配方会把
+    其余 13 个维度全丢掉 —— 那是另一种失真，不能拿一个缺口换另一个。
     """
     if not text:
         return None
     best: tuple[int, int, int, Recipe] | None = None
+    domain_alts: list[tuple[int, int, int, Recipe]] = []
     for r in list_recipes():
         hits = [k for k in r.when if k and k in text]
         if not hits:
@@ -207,7 +221,19 @@ def match_recipe(text: str) -> Recipe | None:
         key = (score, max(len(k) for k in hits), r.priority, r)
         if best is None or (key[0], key[1], key[2]) > (best[0], best[1], best[2]):
             best = key
-    return best[3] if best else None
+        if not r.pipeline and r.covers_domains:
+            domain_alts.append(key)
+    if best is None:
+        return None
+    winner = best[3]
+    if winner.pipeline and winner.scope == "market" and domain_alts:
+        alt = max(domain_alts, key=lambda k: (k[0], k[1], k[2]))
+        logger.info(
+            "配方改走数据域配方: %s(score=%s) 是 pipeline 取不到域, 改 %s(covers=%s)",
+            winner.id, best[0], alt[3].id, ",".join(alt[3].covers_domains),
+        )
+        return alt[3]
+    return winner
 
 
 def filter_schemas(schemas: list[dict], allowed: frozenset[str] | set[str] | None) -> list[dict]:
