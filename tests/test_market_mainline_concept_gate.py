@@ -22,6 +22,17 @@ import pytest
 from src.core import market_mainline as mm
 
 
+def test_non_theme_tdx_buckets_not_ranked_as_concepts():
+    from src.core.market_mainline import aggregate_mainline
+
+    labels = ['中证2000', '国证2000', '最近情绪指数', '最近多板', '深股通标的', '沪股通标的', '扣非亏损', '近期强势', '商业航天']
+    pool = [{'code': str(i), 'name': str(i), 'days': 1, 'concepts': labels, 'source': 'tq'} for i in range(3)]
+    result = aggregate_mainline(pool)
+    names = {row['name'] for row in result['concept_groups']}
+    assert '商业航天' in names
+    assert not names.intersection(set(labels) - {'商业航天'})
+
+
 def test_window_bars_excludes_stocks_without_requested_day():
     from src.collectors.market_sentiment_collector import _window_bars
 
