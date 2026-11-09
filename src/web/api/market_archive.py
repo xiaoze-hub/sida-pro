@@ -235,13 +235,27 @@ def chip_daily(date: str | None = None, symbol: str | None = None, limit: int = 
 
 
 @router.get("/dragon-tiger")
-def dragon_tiger(date: str | None = None, symbol: str | None = None, days: int = 0, limit: int = 2000):
-    """龙虎榜明细: date=某日全榜 / symbol=某股近 days 日; 至少给一个。"""
+def dragon_tiger(
+    date: str | None = None,
+    symbol: str | None = None,
+    days: int = 0,
+    limit: int = 2000,
+    market: str | None = None,
+):
+    """龙虎榜明细: date=某日全榜 / symbol=某股近 days 日; 至少给一个。
+
+    另带 `quality`(仅 date 查询): `dragon_tiger_events` 的**独立**完整性定性 ——
+    该表是定时回源落库的独立来源, **没有官方完整清单可核对**, 因此
+    `complete=False` / `completeness_claimed=False`, 不声明完整; 有行时
+    `severity=caution`(无证据表明残缺), 无行时 `severity=missing`。
+    不要把这里的 `count` 读成"完整上榜数"。
+    """
     if not date and not (symbol and symbol.strip()):
         raise HTTPException(status_code=400, detail="date 与 symbol 至少一个")
     limit = max(min(limit, 5000), 1)
     params: dict = {"lim": limit}
     where_parts = []
+    mkt = (market or "").strip().upper() or None
     if date:
         where_parts.append("trade_date = :d")
         params["d"] = _norm_date(date)
@@ -256,16 +270,83 @@ def dragon_tiger(date: str | None = None, symbol: str | None = None, days: int =
             start = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=int(days))).strftime("%Y%m%d")
             where_parts.append("trade_date >= :start")
             params["start"] = start
+    if mkt:
+        where_parts.append("market = :mkt")
+        params["mkt"] = mkt
     rows = _fetch_rows(
         f"SELECT * FROM dragon_tiger_events WHERE {' AND '.join(where_parts)}"
         " ORDER BY trade_date DESC, symbol ASC LIMIT :lim",
         params,
     )
-    return {
+    payload = {
         "count": len(rows),
-        "note": "完整榜单(含 ETF/可转债 6 位码); 空=无覆盖" if not rows else "",
+        "note": (
+            "龙虎榜明细(含 ETF/可转债 6 位码); 空=无覆盖; "
+            "无官方完整清单可核对, 不声明完整(见 quality)"
+        ),
         "items": rows,
     }
+    if date:
+        payload["quality"] = _events_quality(_norm_date(date), rows, mkt or "CN")
+    return payload
+
+
+def _daily_symbols(trade_date: str, market: str = "CN") -> list[str] | None:
+    """`dragon_tiger_daily` 当日同市场 symbol(仅作交叉提示); 读不到 → None(不猜)。"""
+    try:
+        rows = _fetch_rows(
+            "SELECT symbol FROM dragon_tiger_daily WHERE trade_date = :d AND market = :m",
+            {"d": trade_date, "m": market},
+        )
+        return [str(r.get("symbol")) for r in rows if r.get("symbol")]
+    except Exception as e:  # noqa: BLE001 - 表缺失/库不可达 → 交叉提示缺席, 不编造
+        logger.debug("龙虎榜 daily 交叉提示读取失败(不阻断): %s", e)
+        return None
+
+
+def _events_quality(trade_date: str, rows: list[dict], market: str) -> dict:
+    """`dragon_tiger_events` 的独立定性(不声明完整); 定性失败也如实说"不可用"。"""
+    try:
+        from src.core import lhb_quality as lq
+
+        same = [
+            r for r in rows
+            if str(r.get("market") or "CN").strip().upper() == market
+        ]
+        fw, lw = lq.beijing_write_window([r.get("created_at") for r in same])
+        qual = lq.assess_events_date(
+            trade_date,
+            market,
+            event_symbols=[r.get("symbol") for r in same if r.get("symbol")],
+            first_write_at=fw,
+            last_write_at=lw,
+            daily_symbols=_daily_symbols(trade_date, market),
+        )
+        if len(same) != len(rows):
+            # items 未按市场过滤时, 定性只覆盖一个市场 —— 明说, 别让 count 与产量对不上。
+            qual["rows_total"] = len(rows)
+            qual["rows_in_market"] = len(same)
+            qual["market_scope_note"] = (
+                f"本次定性仅覆盖 {market} 市场 {len(same)}/{len(rows)} 行; "
+                "其余市场未参与定性(不据此推断其残缺或完整)。"
+            )
+            qual["note"] = f"{qual['note']} {qual['market_scope_note']}"
+        return qual
+    except Exception as e:  # noqa: BLE001 - 定性是增强, 不拖垮明细读取
+        logger.debug("dragon_tiger_events 完整性定性失败(不阻断): %s", e)
+        return {
+            "table": "dragon_tiger_events",
+            "trade_date": trade_date,
+            "market": market,
+            "status": "unknown",
+            "complete": False,
+            "completeness_claimed": False,
+            "verified_against_official": False,
+            "degraded": True,
+            "severity": "unknown",
+            "label": "定性不可用",
+            "note": "完整性定性不可用; 不声明该日榜单完整, 也不据此声明无上榜。",
+        }
 
 
 # ── 通达信龙虎榜(客户端页面缓存, 2026-09-10 老板要求) ─────────────────────────

@@ -815,11 +815,15 @@ async def dragon_tiger_quality(
     时被请求过, 该日快照就被"已落库 → 读库"短路**永久冻结成残缺**, 而旧响应体只有
     `count`, 看不出残缺。本端点把证据摊开:
 
-    - `status`: absent | unverified | partial | complete, `degraded = status != complete`;
-    - `references`: 与独立来源(`dragon_tiger_events` / `lhb_seat_details`)的对照。
+    - `status`: absent | unverified | partial | complete;
+      `degraded` 只表示**已证不可当完整使用**(partial/absent), `unverified` 用
+      `severity=caution` 标注"无证据表明残缺、但未经核对";
+    - `references`: 与独立来源(`dragon_tiger_events` / `lhb_seat_details`)的**同市场**
+      对照(跨市场/无法核验市场的参考不比较, 见 `references_skipped`)。
       **独立来源不是官方完整清单**, 只能证伪完整、不能证明完整;
     - `missing_symbols` / `missing_total`: 可证明的缺口;
-    - `early_freeze` + `first_write_at`: 首写早于发布就绪(17:16 北京)的证据。
+    - `early_freeze` + `first_write_at`: 首写早于**生产经验下界** 17:16(北京)的早写
+      **风险提示**; 17:16 非官方发布时间, 该标记不构成残缺结论。
 
     只有调用方拿到官方完整清单时才会 `complete` —— **股数一致不算完整**。
     本端点不写库、不回源: 回源修复必须显式授权后另行执行。
@@ -1726,7 +1730,12 @@ def _lhb_snapshot_quality(trade_date: str, market: str = "CN") -> dict:
 
 
 def _with_lhb_quality(payload: dict, trade_date: str, market: str = "CN") -> dict:
-    """给龙虎榜响应补完整性定性: 只增 quality/degraded/quality_note, 旧键一律不动。"""
+    """给龙虎榜响应补完整性定性: 只增字段, 旧键一律不动。
+
+    `degraded` 只表示**已证不可当完整使用**(partial/absent); "未经核对"不再与
+    "已证残缺"共用同一个布尔, 由 `quality_status`/`quality_severity`/`quality_label`
+    区分, 避免把 caution 误读成告警、或把残缺误读成正常。
+    """
     if not isinstance(payload, dict) or payload.get("pending"):
         return payload
     quality = _lhb_snapshot_quality(trade_date, market)
@@ -1734,12 +1743,22 @@ def _with_lhb_quality(payload: dict, trade_date: str, market: str = "CN") -> dic
         # 定性不可用 ≠ 完整: 显式标 degraded, 免得"字段缺席"被读成"没问题"。
         out = dict(payload)
         out["degraded"] = True
+        out["quality_status"] = "unknown"
+        out["quality_severity"] = "unknown"
+        out["quality_label"] = "定性不可用"
+        out["verified_complete"] = False
         out["quality_note"] = "完整性定性不可用, 不据此声明该日榜单完整"
         return out
     out = dict(payload)
+    status = quality.get("status")
     out["quality"] = quality
     out["degraded"] = bool(quality.get("degraded"))
-    if out["degraded"]:
+    out["quality_status"] = status
+    out["quality_severity"] = quality.get("severity")
+    out["quality_label"] = quality.get("label")
+    out["quality_warnings"] = list(quality.get("warnings") or [])
+    out["verified_complete"] = bool(quality.get("complete"))
+    if status != "complete":
         out["quality_note"] = quality.get("note") or ""
     else:
         out.pop("quality_note", None)

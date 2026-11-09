@@ -12,10 +12,16 @@
   ① 不得凭**股数一致**宣称完整 —— `dragon_tiger_events` / `lhb_seat_details` 是独立
      来源, 不是官方完整清单, 只能当下界(能证伪, 不能证明);
   ② 缺口必须**可证明**: 参考源里有、快照里没有的 symbol 要逐个列出;
-  ③ 首写落在发布就绪窗口之前 → `early_freeze=True`(一维证据, 不等于已证明完整);
-  ④ 只有"权威完整清单已覆盖"才允许 `status=complete`, 其余一律 `degraded=True`;
+     参考源必须先**同市场**过滤/核验, 跨市场代码不得当缺口(避免误报);
+  ③ 首写早于**生产经验下界** 17:16 → `early_freeze=True`, 只作**风险提示**
+     (17:16 非官方发布时间), 不改变 status;
+  ④ 只有"权威完整清单已覆盖"才允许 `status=complete`; `unverified`(无证据) 与
+     `partial`(有证据) 用 `verification`/`severity`/`label` 显著区分, `degraded`
+     只表示已证不可当完整使用;
   ⑤ 定性过程**只读**, 不写库、不回源(写入需另行授权);
-  ⑥ 现有读库响应键(`count/items/source/data_origin/pending`)保持兼容, 只增不改。
+  ⑥ 现有读库响应键(`count/items/source/data_origin/pending`)保持兼容, 只增不改;
+     7. archive/events(`dragon_tiger_events`)有独立定性: 永不声明完整
+        (`completeness_claimed=False`), 差异只作交叉提示。
 
 全部禁真实网络(vendor 打桩, 库用内存 SQLite)。
 """
@@ -58,7 +64,7 @@ def _use_engine(monkeypatch, eng):
     monkeypatch.setattr(database, "engine", eng)
 
 
-def _add_daily(eng, rows, trade_date: str = "20261019"):
+def _add_daily(eng, rows, trade_date: str = "20261019", market: str = "CN"):
     """rows: [(symbol, updated_at)] → 直插 dragon_tiger_daily(绕过 upsert 便于控首写时刻)。"""
     with eng.begin() as conn:
         for sym, ts in rows:
@@ -66,16 +72,32 @@ def _add_daily(eng, rows, trade_date: str = "20261019"):
                 text(
                     "INSERT INTO dragon_tiger_daily "
                     "(trade_date, symbol, market, name, reason, close, net_buy, source, updated_at) "
-                    "VALUES (:d, :s, 'CN', '某票', '日涨幅偏离值达7%', 10.0, 1.0, "
+                    "VALUES (:d, :s, :mkt, '某票', '日涨幅偏离值达7%', 10.0, 1.0, "
                     "'em_ftshare', :ts)"
                 ),
-                {"d": trade_date, "s": sym, "ts": ts},
+                {"d": trade_date, "s": sym, "mkt": market, "ts": ts},
+            )
+
+
+def _add_events(eng, rows, trade_date: str = "20261019"):
+    """rows: [(symbol, market, created_at)] → 直插 dragon_tiger_events(可造跨市场/早写)。"""
+    with eng.begin() as conn:
+        for i, (sym, mkt, ts) in enumerate(rows):
+            conn.execute(
+                text(
+                    "INSERT INTO dragon_tiger_events "
+                    "(trade_date, symbol, market, name, reason, close, change_pct, source, created_at) "
+                    "VALUES (:d, :s, :mkt, '某票', :reason, 10.0, 10.0, 'eastmoney', :ts)"
+                ),
+                {"d": trade_date, "s": sym, "mkt": mkt, "ts": ts, "reason": f"原因{i}"},
             )
 
 
 def _add_seats(eng, symbols, trade_date: str = "20261019"):
+    from uuid import uuid4
+
     with eng.begin() as conn:
-        for i, sym in enumerate(symbols):
+        for sym in symbols:
             conn.execute(
                 text(
                     "INSERT INTO lhb_seat_details "
@@ -85,7 +107,7 @@ def _add_seats(eng, symbols, trade_date: str = "20261019"):
                     "VALUES (:uid, :d, :s, '某票', '日涨幅偏离值达7%', 'buy', '10031935', '某营业部', "
                     "1000.0, 0.0, 1000.0)"
                 ),
-                {"uid": f"u{i}", "d": trade_date, "s": sym},
+                {"uid": f"u-{uuid4().hex}", "d": trade_date, "s": sym},
             )
 
 
@@ -106,7 +128,10 @@ def test_仅与独立源股数相同_不得宣称完整():
     )
     # 股数完全一致, 但参考源不是官方完整清单 → 只能"未核对"
     assert r["status"] == "unverified"
-    assert r["complete"] is False and r["degraded"] is True
+    assert r["complete"] is False
+    # 未核对 ≠ 已证残缺: 不许用 degraded=True 糊在一起
+    assert r["degraded"] is False and r["severity"] == "caution"
+    assert r["verification"] == "unverified"
     assert r["missing_total"] == 0
     assert r["references"][0]["relation"] == "equal"
     assert r["references"][0]["authoritative"] is False
@@ -177,8 +202,8 @@ def test_首写早于发布窗口_标记提前冻结():
     assert r["first_write_at"] == "2026-10-19 16:48:00"
     assert r["publish_ready_after"] == "17:16"
     assert r["status"] == "unverified"          # 时间只是证据, 不足以下"残缺"结论
-    assert r["degraded"] is True and r["complete"] is False
-    assert any("提前冻结" in e for e in r["evidence"])
+    assert r["complete"] is False and r["degraded"] is False
+    assert any("风险" in e for e in r["evidence"])
 
 
 def test_首写晚于发布窗口_无早冻标记():
@@ -187,7 +212,7 @@ def test_首写晚于发布窗口_无早冻标记():
         actual_symbols=["000001"],
         first_write_at=datetime(2026, 10, 19, 17, 31),
     )
-    assert r["early_freeze"] is False and r["degraded"] is True
+    assert r["early_freeze"] is False and r["degraded"] is False
 
 
 def test_首写不在交易当日_不算提前冻结():
@@ -260,7 +285,7 @@ def test_非权威预期清单不判完整():
         expected_source="dragon_tiger_events",
         expected_authoritative=False,
     )
-    assert r["status"] == "unverified" and r["degraded"] is True
+    assert r["status"] == "unverified" and r["degraded"] is False
     assert r["expected"]["authoritative"] is False
 
 
@@ -446,3 +471,185 @@ def test_range输出带每日完整性定性(monkeypatch):
     qual = out["quality_by_date"][d]
     assert qual["status"] == "partial" and qual["missing_symbols"] == ["600000"]
     assert qual["early_freeze"] is True
+
+
+# ═══════════════ ⑦ 审查回修: max([])、跨市场、早冻风险、degraded 语义 ═══════════════
+
+def test_非权威预期清单有缺口_不因max空而崩且判残缺():
+    """非权威 expected 有缺口且无 references 时, note 生成不得对空序列取 max([])。"""
+    r = q.assess_daily_completeness(
+        "20261019",
+        actual_symbols=["000001"],
+        expected_symbols=["000001", "600000"],
+        expected_source="eastmoney_preview",
+        expected_authoritative=False,
+    )
+    assert r["status"] == "partial"
+    assert r["degraded"] is True and r["severity"] == "incomplete"
+    assert r["missing_symbols"] == ["600000"] and r["missing_total"] == 1
+    assert "非官方" in r["note"] and "残缺" in r["note"]
+
+
+def test_unverified与partial语义显著区分():
+    ok_ref = {"lhb_seat_details": ["000001"]}
+    bad_ref = {"lhb_seat_details": ["000001", "600000"]}
+    u = q.assess_daily_completeness("20261019", actual_symbols=["000001"], references=ok_ref)
+    p = q.assess_daily_completeness("20261019", actual_symbols=["000001"], references=bad_ref)
+
+    assert u["status"] == "unverified" and p["status"] == "partial"
+    assert u["complete"] is False and p["complete"] is False     # 两者都不能当完整
+    # 但"没证据"与"有证据残缺"必须能区分: 严重度/核验态/降级布尔
+    assert u["verification"] == "unverified" and p["verification"] == "disproven"
+    assert u["severity"] == "caution" and p["severity"] == "incomplete"
+    assert u["label"] != p["label"]
+    assert u["degraded"] is False and p["degraded"] is True
+    # 文案不得互相冒充: 未核对不能说"残缺", 已证残缺要说"残缺"
+    assert "残缺" not in u["note"] and "未经官方清单核对" in u["note"]
+    assert "残缺" in p["note"]
+
+
+def test_早冻只作风险_不冒充官方发布时间():
+    r = q.assess_daily_completeness(
+        "20261019", actual_symbols=["000001"], first_write_at=datetime(2026, 10, 19, 16, 48)
+    )
+    assert r["early_freeze"] is True and r["early_freeze_risk"] is True
+    assert r["status"] == "unverified" and r["severity"] == "caution"   # 时间不是残缺结论
+    assert "风险" in r["early_freeze_note"]
+    assert "非官方发布时间" in r["early_freeze_note"]
+    assert "不构成残缺结论" in r["early_freeze_note"]
+    assert "非官方发布时间" in r["publish_ready_basis"]
+    assert any("风险" in w for w in r["warnings"])
+    assert r["note"].startswith("早写风险")          # 突出到 note 开头, 不埋在 evidence
+    # 早冻不得把 status 抬成 partial
+    assert r["missing_total"] == 0
+
+
+def test_跨市场参考源_不被当成本市场缺口(monkeypatch):
+    eng = _mk_engine(with_events=True)
+    _use_engine(monkeypatch, eng)
+    _add_daily(eng, [("000001", "2026-10-19 09:31:00"), ("000002", "2026-10-19 09:31:00")])
+    _add_events(
+        eng,
+        [("000001", "CN", "2026-10-19 09:31:00"), ("000002", "CN", "2026-10-19 09:31:00"),
+         ("00700", "HK", "2026-10-19 09:31:00"), ("AAPL", "US", "2026-10-19 09:31:00")],
+    )
+
+    r = q.assess_date("20261019", "CN")
+    assert r["status"] == "unverified"          # 同市场无缺口 → 未核对, 而非 partial
+    assert r["missing_total"] == 0
+    ref = r["references"][0]
+    assert ref["reference"] == "dragon_tiger_events"
+    assert ref["market"] == "CN" and ref["market_verified"] is True
+
+
+def test_无market列参考源_符号非本市场形态则跳过比较(monkeypatch):
+    eng = _mk_engine(with_seats=True)
+    _use_engine(monkeypatch, eng)
+    _add_daily(eng, [("000001", "2026-10-19 09:31:00")])
+    _add_seats(eng, ["000001", "00700"])        # 5 位 HK 码混进无 market 列的席位表
+
+    r = q.assess_date("20261019", "CN")
+    assert r["status"] == "unverified" and r["missing_total"] == 0
+    assert "lhb_seat_details" in r["references_skipped"]
+    assert "无法核验" in r["references_skipped"]["lhb_seat_details"]
+
+
+def test_非CN市场_无market列参考源不比较(monkeypatch):
+    eng = _mk_engine(with_seats=True)
+    _use_engine(monkeypatch, eng)
+    _add_daily(eng, [("00700", "2026-10-19 09:31:00")], market="HK")
+    _add_seats(eng, ["00700"])
+
+    r = q.assess_date("20261019", "HK")
+    assert r["status"] == "unverified" and r["references"] == []
+    assert "lhb_seat_details" in r["references_skipped"]
+
+
+# ─────────────── ⑧ archive/events 工作区的独立定性(不冒充完整) ───────────────
+
+def _archive_client(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import sessionmaker
+
+    import src.web.database as webdb
+    from src.web.api import market_archive
+
+    eng = _mk_engine(with_events=True, with_seats=False)
+    _add_daily(eng, [("000001", "2026-10-19 09:31:00")])
+    _add_events(
+        eng,
+        [("000001", "CN", "2026-10-19 08:50:00"), ("600000", "CN", "2026-10-19 08:50:00")],
+    )
+    monkeypatch.setattr(webdb, "SessionLocal", sessionmaker(bind=eng))
+    app = FastAPI()
+    app.include_router(market_archive.router, prefix="/api/archive")
+    return TestClient(app), eng
+
+
+def test_archive_events定性独立且不声明完整(monkeypatch):
+    client, _ = _archive_client(monkeypatch)
+    data = client.get("/api/archive/dragon-tiger", params={"date": "20261019"}).json()
+
+    assert data["count"] == 2 and len(data["items"]) == 2      # 旧键不变
+    assert "完整榜单" not in data["note"]                       # 不再冒充完整
+    qual = data["quality"]
+    assert qual["table"] == "dragon_tiger_events"
+    assert qual["status"] == "unverified"
+    assert qual["complete"] is False and qual["completeness_claimed"] is False
+    assert qual["verified_against_official"] is False
+    assert "不声明完整" in qual["note"]
+    # 早写只作风险提示, 不下残缺结论
+    assert qual["early_freeze"] is True and qual["status"] == "unverified"
+    assert any("风险" in w for w in qual["warnings"])
+    # 与 daily 的差异只作交叉提示, 不判任何一方完整
+    assert qual["cross_check"]["only_in_events"] == 1
+    assert qual["cross_check"]["only_in_daily"] == 0
+    assert "不能据此判定" in qual["cross_check"]["note"]
+    assert qual["note"].startswith("早写风险")
+
+
+def test_archive_events空行如实absent(monkeypatch):
+    client, _ = _archive_client(monkeypatch)
+    data = client.get("/api/archive/dragon-tiger", params={"date": "20261020"}).json()
+    assert data["count"] == 0
+    qual = data["quality"]
+    assert qual["status"] == "absent" and qual["degraded"] is True
+    assert qual["complete"] is False and qual["completeness_claimed"] is False
+    assert "无覆盖不等于无上榜" in qual["note"]
+
+
+def test_API层unverified与partial字段可区分(monkeypatch):
+    eng = _mk_engine(with_seats=True)
+    _use_engine(monkeypatch, eng)
+    _add_daily(eng, [("000001", "2026-10-19 08:48:00")])
+    _add_seats(eng, ["000001"])                       # 同股数同集合 → unverified
+
+    out = mdm._dragon_tiger_from_db("20261019", "CN")
+    assert out["count"] == 1 and out["source"] == "db"  # 旧键不动
+    assert out["quality_status"] == "unverified"
+    assert out["quality_severity"] == "caution"
+    assert out["quality_label"] == "未经核对"
+    assert out["degraded"] is False and out["verified_complete"] is False
+    assert out["quality_note"] and "不得作为完整榜单展示" not in out["quality_note"]
+
+    _add_seats(eng, ["600000"])                       # 参考源多出一只 → partial
+    out2 = mdm._dragon_tiger_from_db("20261019", "CN")
+    assert out2["quality_status"] == "partial"
+    assert out2["quality_severity"] == "incomplete"
+    assert out2["quality_label"] == "已证残缺"
+    assert out2["degraded"] is True and out2["verified_complete"] is False
+    assert "残缺" in out2["quality_note"]
+
+
+def test_archive_events跨市场行不混进CN定性(monkeypatch):
+    client, eng = _archive_client(monkeypatch)
+    _add_events(eng, [("00700", "HK", "2026-10-19 08:50:00")])
+
+    data = client.get("/api/archive/dragon-tiger", params={"date": "20261019"}).json()
+    assert data["count"] == 3                              # items 未过滤: 旧行为不变
+    qual = data["quality"]
+    assert qual["market"] == "CN" and qual["actual_symbols"] == 2   # 只定性 CN
+    assert qual["rows_total"] == 3 and qual["rows_in_market"] == 2
+    assert "2/3" in qual["note"]
+    assert qual["status"] == "unverified" and qual["complete"] is False
