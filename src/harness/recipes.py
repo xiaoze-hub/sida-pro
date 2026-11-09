@@ -48,6 +48,10 @@ class Recipe:
     # 当关键词得分被一份 pipeline 配方压过时，告诉路由「这份配方能真取到这些域」——
     # pipeline 按 {} 调工具，必填 domain 的域工具会被判 unsatisfiable 静默跳过。
     covers_domains: tuple[str, ...] = ()
+    # 本配方获准**接管**哪些 pipeline 配方（按配方 id 点名）。空 = 不接管任何管线：
+    # 「能取到更多域」本身不是抢路由的理由，否则「持仓要不要减，看看席位」这种附带一句
+    # 「席位」的问题会被换到龙虎榜配方上，持仓/盘中工具全丢。只有明确列出的管线允许被接管。
+    rescues_pipelines: tuple[str, ...] = ()
 
     def public(self) -> dict:
         """给前端 /api/copilot/agents 的元信息（不含提示词正文，避免泄露与大包体）。"""
@@ -102,6 +106,7 @@ def _parse(path: Path) -> Recipe:
         max_tool_calls=int(budget.get("max_tool_calls") or 10),
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),
         covers_domains=tuple(str(x) for x in (raw.get("covers_domains") or ())),
+        rescues_pipelines=tuple(str(x) for x in (raw.get("rescues_pipelines") or ())),
     )
 
 
@@ -199,10 +204,15 @@ def match_recipe(text: str) -> Recipe | None:
         就是最大的方差源。命中关键词就固定工具清单，模型只能在清单内挑。
 
     打分：命中关键词的**字符总长度**（越长越具体，避免"盘口"这种短词抢走"撤单趋势"）。
-    例外：胜出的是**全市场** pipeline 配方时，若另有**非 pipeline 配方声明了
-    covers_domains** 且关键词也命中，则改走后者 —— 管线按 `{}` 调工具，必填 `domain`
-    的 `query_data_domain` 会被判 unsatisfiable 静默跳过，「复盘+龙虎榜」里的龙虎榜
-    就永远取不到。这条规则只对显式声明的数据域配方生效，不改变全局优先级。
+    例外：胜出的是**全市场** pipeline 配方时，若另有非 pipeline 配方的
+    `rescues_pipelines` **点名了这条管线**（且它声明了 covers_domains、关键词也命中），
+    才改走后者 —— 管线按 `{}` 调工具，必填 `domain` 的 `query_data_domain` 会被判
+    unsatisfiable 静默跳过，「收盘复盘+龙虎榜和涨停梯队」里的龙虎榜就永远取不到。
+
+    为什么必须按管线 id 点名、不能「只要赢家是市场级管线就抢」：关键词打平时谁先命中
+    谁赢，「持仓要不要减，看看席位」（持仓 4 分 / 席位 4 分）会落到 intraday_watcher，
+    再被无条件改跳到龙虎榜配方，`get_portfolio` 与盘中工具全被丢掉 —— 用户问的是减仓，
+    拿到的却是一份龙虎榜复盘。这不是「补一个域」，而是换了问题。
 
     为什么限定 `scope == "market"`：单标的管线（深度诊断/空头司令）有自己的固定证据链，
     「深度诊断 002361 龙虎榜」里的龙虎榜只是其中一个维度，改走市场级数据域配方会把
@@ -227,12 +237,15 @@ def match_recipe(text: str) -> Recipe | None:
         return None
     winner = best[3]
     if winner.pipeline and winner.scope == "market" and domain_alts:
-        alt = max(domain_alts, key=lambda k: (k[0], k[1], k[2]))
-        logger.info(
-            "配方改走数据域配方: %s(score=%s) 是 pipeline 取不到域, 改 %s(covers=%s)",
-            winner.id, best[0], alt[3].id, ",".join(alt[3].covers_domains),
-        )
-        return alt[3]
+        # 只有**点名**了这条管线的配方才许接管；没点名的（持仓/盘中/竞价）保持原路由。
+        allowed = [k for k in domain_alts if winner.id in k[3].rescues_pipelines]
+        if allowed:
+            alt = max(allowed, key=lambda k: (k[0], k[1], k[2]))
+            logger.info(
+                "配方改走数据域配方: %s(score=%s) 是 pipeline 取不到域, 改 %s(covers=%s)",
+                winner.id, best[0], alt[3].id, ",".join(alt[3].covers_domains),
+            )
+            return alt[3]
     return winner
 
 

@@ -11,10 +11,16 @@ when: [龙虎榜, 席位]
 #
 # 2026-11-09 二轮审查：`covers_domains` 是给路由的声明 —— 「收盘复盘，龙虎榜和涨停梯队」
 # 这类混合问句按关键词得分会被 postmarket_reviewer(24) 压过本配方(9)，可管线取不到龙虎榜。
-# 路由看到「pipeline 胜出 + 另有非 pipeline 配方声明了数据域」时改走后者（见
-# src/harness/recipes.py:match_recipe）。这里同时声明 limit.pool，因为混合问句的另一半
+# 路由看到「pipeline 胜出 + 另有非 pipeline 配方声明了数据域**且点名该管线**」时改走后者
+# （见 src/harness/recipes.py:match_recipe）。这里同时声明 limit.pool，因为混合问句的另一半
 # （涨停梯队）也要在这份配方里真的查到，不能只答龙虎榜。
+#
+# 2026-11-09 三轮审查：接管必须**按管线点名**，不能「凡是市场级管线就抢」。
+# 「持仓要不要减，看看席位」里 持仓(4) 与 席位(4) 打平 → intraday_watcher 先命中取胜，
+# 无条件改路由会把 get_portfolio 等盘中工具全换掉，等于答非所问。本配方只在
+# **盘后复盘**场景接管，并显式列出允许接管的管线 id；要扩场景必须改这里、留痕。
 covers_domains: [lhb.daily, limit.pool]
+rescues_pipelines: [postmarket_reviewer]
 scope: market
 pipeline: false
 tools:
@@ -63,7 +69,8 @@ prompt_fragment: |
 # 验收标准（人写的事实源，specs/harness/recipes.md 逐条对照；仅静态声明，不影响运行）
 acceptance:
   - 「复盘 + 龙虎榜」类问题必须路由到本配方，且模型能看到并调用 query_data_domain(domain=lhb.daily)
-  - 「收盘复盘，龙虎榜和涨停梯队」这类混合问句也必须落到本配方（covers_domains 生效），且提示词要求补查 limit.pool
+  - 「收盘复盘，龙虎榜和涨停梯队」这类混合问句也必须落到本配方（covers_domains + rescues_pipelines 生效），且提示词要求补查 limit.pool
+  - 「持仓要不要减，看看席位」「盘中/竞价 + 席位」不得被本配方接管：改路由只对点名的盘后复盘管线生效
   - 席位金额必须是席位自身买入/卖出/净额，不得用该股当日累计成交额冒充
   - 同名「机构专用」席位不得按名称或名称+金额合并；同名同额也要保留源行并给出原因/身份提示
   - 榜单只列净额前 5 时必须写明当日总条数与截断事实，并说明排名按个股、同股多原因取净额最大的一条作代表

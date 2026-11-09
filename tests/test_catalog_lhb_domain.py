@@ -1009,3 +1009,96 @@ def test_symbol_level_pipeline_is_not_hijacked_by_lhb_keyword():
 
     route = route_for_request("深度诊断 002361 的龙虎榜和筹码", chat_tool_schemas())
     assert route.recipe is not None and route.recipe.id == "deep_diagnosis", route.recipe
+
+
+# ─────────── 10. 三轮审查复现：covers_domains 改路由只限盘后复盘 / 记录数与只数口径 ───────────
+
+
+def test_seat_keyword_does_not_hijack_position_or_intraday_recipes():
+    """「席位」只是问句里附带的一句，不能把持仓/盘中/竞价工具集换掉。
+
+    旧实现：只要「pipeline + scope=market」胜出且另有配方声明了 covers_domains 就改路由。
+    「持仓要不要减，看看席位」里持仓(4分)与席位(4分)打平 → intraday_watcher 先命中取胜，
+    随后被改跳到 lhb_reviewer，`get_portfolio` 与持仓/异动/破位工具全被丢掉 —— 用户问的是
+    **要不要减仓**，拿到的却是一份龙虎榜复盘。改路由只允许在盘后复盘场景发生
+    （lhb_reviewer 显式声明 `rescues_pipelines: [postmarket_reviewer]`）。
+
+    @spec LHB-001
+    """
+    from src.agents.chat.registry import chat_tool_schemas
+    from src.harness.routing import route_for_request
+
+    cases = [
+        ("持仓要不要减，看看席位", "intraday_watcher", "get_portfolio"),
+        ("盘中持仓破位，顺便看下席位", "intraday_watcher", "get_portfolio"),
+        ("竞价高开要不要看席位", "auction_hunter", None),
+    ]
+    for q, rid, tool in cases:
+        route = route_for_request(q, chat_tool_schemas())
+        assert route.recipe is not None, q
+        assert route.recipe.id == rid, f"{q} → {route.recipe.id}（应保留原配方）"
+        names = {(s.get("function") or {}).get("name") for s in route.tools}
+        if tool:
+            assert tool in names, f"{q} 的工具集被换掉了: {sorted(names)[:10]}"
+        assert "query_data_domain" not in names, f"{q} 不该改走取数域配方"
+
+
+def test_lhb_recipe_rescue_is_declared_and_scoped_to_postmarket():
+    """改路由的授权写在配方里，而不是「任何市场级管线都能被抢」—— 只点名盘后复盘。"""
+    from src.harness.recipes import get_recipe
+
+    lhb = get_recipe("lhb_reviewer")
+    assert lhb is not None
+    assert tuple(lhb.rescues_pipelines) == ("postmarket_reviewer",)
+    for rid in ("intraday_watcher", "auction_hunter", "premarket_strategist", "deep_diagnosis"):
+        assert rid not in lhb.rescues_pipelines, f"{rid} 不在盘后复盘场景，不许被改路由"
+
+
+def test_truncation_reports_record_count_and_stock_count_separately(monkeypatch):
+    """截断说明里的「净买记录 N 条」必须是真的记录条数，不是按个股去重后的只数。
+
+    旧实现写 `净买记录 {len(all_buys)} 条`，而 all_buys 是 `_rank_board` 按个股去重后的
+    结果：8 条上榜记录（6 只个股）会被写成「净买记录 6 条」，读者据此判断当日上榜规模会
+    少算。记录数与只数必须分开写。
+
+    @spec LHB-004
+    """
+    buy_rows = [
+        {"symbol": "002361", "name": "闽东电力", "net_buy": 3.0e8, "buy_amt": 4.0e8,
+         "sell_amt": 1.0e8, "change_pct": 9.98, "reason": "日涨幅偏离值达7%"},
+        {"symbol": "002361", "name": "闽东电力", "net_buy": 2.1e8, "buy_amt": 3.0e8,
+         "sell_amt": 0.9e8, "change_pct": 9.98, "reason": "连续三个交易日涨幅偏离值累计20%"},
+        {"symbol": "600111", "name": "北方稀土", "net_buy": 1.1e8, "buy_amt": 2.0e8,
+         "sell_amt": 0.9e8, "change_pct": 6.1, "reason": "涨幅偏离"},
+        {"symbol": "600111", "name": "北方稀土", "net_buy": 9e7, "buy_amt": 1.8e8,
+         "sell_amt": 0.9e8, "change_pct": 6.1, "reason": "连续三日涨幅偏离"},
+        *[
+            {"symbol": f"60022{i}", "name": f"样本{i}", "net_buy": 8e7 - i * 1e7,
+             "buy_amt": 1.4e8, "sell_amt": 6e7, "change_pct": 4.0, "reason": "涨幅偏离"}
+            for i in range(4)
+        ],
+    ]
+    sell_rows = [
+        {"symbol": "300750", "name": "宁德时代", "net_buy": -4.2e8, "buy_amt": 1.0e8,
+         "sell_amt": 5.2e8, "change_pct": -8.4, "reason": "跌幅偏离"},
+        {"symbol": "300750", "name": "宁德时代", "net_buy": -3.0e8, "buy_amt": 1.0e8,
+         "sell_amt": 4.0e8, "change_pct": -8.4, "reason": "连续三日跌幅偏离"},
+    ]
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_rank_count": [{"n": 9, "syms": 6}],
+            "lhb_top_buy": buy_rows,
+            "lhb_top_sell": sell_rows,
+            "lhb_seats_top": [],
+            "lhb_seat_total": [{"n": 0}],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"date": "20261020"}'})
+    assert "已截断" in out, out
+    # 8 条净买记录、按个股 6 只；净卖 2 条记录、1 只
+    assert "净买 8 条记录 / 6 只" in out, out
+    assert "净卖 2 条记录 / 1 只" in out, out
+    # 不是把去重后的 6 只误写成 6 条记录
+    assert "净买 6 条记录" not in out, out

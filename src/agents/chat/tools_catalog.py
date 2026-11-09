@@ -471,6 +471,8 @@ def render_lhb(
       不是「按代码顺序抽样 60 条再排序」——后者会把抽样冒充全市场排名；
     - **排名单位是「个股」不是「上榜记录」**：同一只票多个上榜原因先合并成 1 只，取净额
       绝对值最大的那条记录作代表，其余原因不重复计入排名（单标的路径会逐条列出全部原因）；
+    - 截断说明里「记录 N 条 / M 只」必须分开写：N 是本轮参与排名的**上榜记录条数**，
+      M 是按个股去重后的**只数**。拿去重后的只数冒充记录数会少算当日上榜规模；
     - `total_rows` / `total_symbols` 来自库内 COUNT，**不拿本轮取到的行数冒充全日规模**，
       并在文中写明「只列前 5 / 共 N 条」，不让人误读成全量。
 
@@ -531,8 +533,9 @@ def render_lhb(
         elif len(all_buys) > 5 or len(all_sells) > 5:
             sections.append(
                 f"- 榜单已截断：净买前列只列前 {len(ranked_buys)} 只、净卖前列只列前 "
-                f"{len(ranked_sells)} 只（本轮参与排名的净买记录 {len(all_buys)} 条、"
-                f"净卖记录 {len(all_sells)} 条；库内当日共 {total} 条 / {syms} 只）"
+                f"{len(ranked_sells)} 只（本轮参与排名：净买 {len(buy_rows)} 条记录 / "
+                f"{len(all_buys)} 只，净卖 {len(sell_rows)} 条记录 / {len(all_sells)} 只；"
+                f"库内当日共 {total} 条 / {syms} 只）"
             )
         if ranked_buys or ranked_sells:
             sections.append(
