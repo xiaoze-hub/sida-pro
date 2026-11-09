@@ -343,7 +343,7 @@ export interface LhbCopilotHandoff {
  * 所以这里只说**可核实的事实**: 入口没把它识别为股票锚点; 至于它是什么, 本页不判断。
  */
 export function lhbAnchorNote(symbol: string): string {
-  return `${symbol} 未被参谋入口识别为股票锚点（入口只按既定的 6 位代码规则设锚点，本页不判断它的证券类型）。`
+  return `${symbol} 未被参谋入口识别为股票锚点（入口按既定代码前缀规则设锚点，本页不判断它的证券类型）。`
 }
 
 export function lhbCopilotHandoff(input: { symbol: string; name?: string; date: string }): LhbCopilotHandoff {
