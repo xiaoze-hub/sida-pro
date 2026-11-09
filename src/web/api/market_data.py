@@ -9,6 +9,7 @@
 暴露:
 - GET /api/market-data/dragon-tiger/{date}  龙虎榜(ftshare vendor; P1 后台化+缓存)
 - GET /api/market-data/dragon-tiger/{date}/status  龙虎榜单日抓取状态
+- GET /api/market-data/dragon-tiger/{date}/quality 该日快照完整性定性(只读)
 - GET /api/market-data/dragon-tiger/range/status  龙虎榜多日范围抓取状态
 - GET /api/market-data/capital-flow/{symbol}  资金流(经 MarketData Engine, 走 UI 配置 vendor)
 - GET /api/market-data/fundamentals-detail/{symbol}  个股基本面明细合并端点(龙虎榜/两融/股东户数/分红/事件日历)
@@ -662,7 +663,11 @@ async def dragon_tiger_proxy(
 
     cached = biz_cache.get_json(cache_key)
     if cached is not None:
-        return cached
+        # 上线前写入的缓存载荷没有 quality 键 → 补一次定性, 别让残缺日继续冒充完整。
+        # 新载荷都自带 quality, 这里零额外成本。
+        if not isinstance(cached, dict) or "quality" in cached or cached.get("pending"):
+            return cached
+        return _with_lhb_quality(cached, trade_date, market)
 
     # 读侧(2026-10-14 落库收口): 该日已落库 → 直接读库返回(历史日永不回源),
     # 并回填响应缓存。仅当库里没有该日(冷启动/当日未落)才走下面的回源链路。
@@ -735,7 +740,7 @@ async def dragon_tiger_proxy(
                 items, market=market,
                 source="em_ftshare+tq_amt" if _used_tq else "em_ftshare",
             )
-        return {
+        payload = {
             "trade_date": trade_date,
             "market": market,
             "count": len(items),
@@ -745,6 +750,11 @@ async def dragon_tiger_proxy(
             "amount_source": "tdx_tq_gp02(缺失逐票回落东财)",
             "data_origin": "realtime",
         }
+        # 落库后立即定性: 若东财此刻仍不全(如 16:30 请求), 响应当场标 degraded,
+        # 而不是等下次读库时才发现残缺已冻结。
+        if items:
+            return _with_lhb_quality(payload, trade_date, market)
+        return payload
 
     started = _bg_start(job_key, _compute, result_key=cache_key, cache_ttl=cache_ttl)
 
@@ -792,6 +802,33 @@ async def dragon_tiger_status(
         "ready": cached is not None,
         "count": (cached or {}).get("count", 0) if cached else 0,
     }
+
+
+@router.get("/dragon-tiger/{trade_date}/quality")
+async def dragon_tiger_quality(
+    trade_date: str,
+    market: str = Query("CN", description="市场"),
+):
+    """某交易日 `dragon_tiger_daily` 快照的完整性定性(**只读**)。
+
+    为什么需要: 榜单是读侧请求驱动落库的, 一旦在"东财发布未完"(实测 16:26–16:51)
+    时被请求过, 该日快照就被"已落库 → 读库"短路**永久冻结成残缺**, 而旧响应体只有
+    `count`, 看不出残缺。本端点把证据摊开:
+
+    - `status`: absent | unverified | partial | complete, `degraded = status != complete`;
+    - `references`: 与独立来源(`dragon_tiger_events` / `lhb_seat_details`)的对照。
+      **独立来源不是官方完整清单**, 只能证伪完整、不能证明完整;
+    - `missing_symbols` / `missing_total`: 可证明的缺口;
+    - `early_freeze` + `first_write_at`: 首写早于发布就绪(17:16 北京)的证据。
+
+    只有调用方拿到官方完整清单时才会 `complete` —— **股数一致不算完整**。
+    本端点不写库、不回源: 回源修复必须显式授权后另行执行。
+    """
+    quality = _lhb_snapshot_quality(trade_date, market)
+    if not quality:
+        raise HTTPException(503, "完整性定性不可用(数据库未就绪), 不给出结论")
+    quality.setdefault("market", market)
+    return quality
 
 
 @router.get("/capital-flow/{symbol}")
@@ -1248,6 +1285,9 @@ def _compute_lhb_range(market: str, days: int) -> dict:
 
     scanned = max(1, min(int(days), 30))
     by_date: dict[str, list[dict]] = {}
+    # 同一处"已落库不回源"短路的定性结果(只读); 消费方可据此标注"该日残缺",
+    # 而不是因为"库里有行"就当该日榜单完整。
+    quality_by_date: dict[str, dict] = {}
     d = date.today()
     errors: list[str] = []
     for _ in range(scanned):
@@ -1261,6 +1301,7 @@ def _compute_lhb_range(market: str, days: int) -> dict:
         day_db = _lhb_read_date(ds, market)
         if day_db:
             by_date[ds] = day_db
+            quality_by_date[ds] = _lhb_snapshot_quality(ds, market)
             continue
         try:
             rows = md.dragon_tiger(date=ds, market=market) or []
@@ -1299,10 +1340,12 @@ def _compute_lhb_range(market: str, days: int) -> dict:
             # 拉到即落(2026-10-14): 东财-ftshare 按日落库, 下次(1h TTL 过期/重启)直接读库。
             _lhb_upsert_rows(day_items, market=market, source="em_ftshare")
             by_date[ds] = day_items
+            quality_by_date[ds] = _lhb_snapshot_quality(ds, market)
     return {
         "market": market,
         "days": scanned,
         "by_date": by_date,
+        "quality_by_date": quality_by_date,
         "errors": errors,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1654,7 +1697,7 @@ def _dragon_tiger_from_db(trade_date: str, market: str = "CN") -> dict | None:
     rows = _lhb_read_date(trade_date, market)
     if not rows:
         return None
-    return {
+    payload = {
         "trade_date": str(trade_date or "")[:10].replace("-", ""),
         "market": market,
         "count": len(rows),
@@ -1663,6 +1706,44 @@ def _dragon_tiger_from_db(trade_date: str, market: str = "CN") -> dict | None:
         "source": "db",
         "data_origin": "dragon_tiger_daily",
     }
+    # 完整性定性(2026-11-09): 读库短路会让"发布未完就落库"的残缺快照被永久冻结。
+    # 这里只加字段不改旧键: 残缺日 degraded=True + quality.status=partial, 供展示层标注。
+    return _with_lhb_quality(payload, trade_date, market)
+
+
+def _lhb_snapshot_quality(trade_date: str, market: str = "CN") -> dict:
+    """该日 `dragon_tiger_daily` 快照的完整性定性(**只读**: 不回源、不写库)。
+
+    失败返回 {} —— 定性不可用时不阻断主响应, 但也**不会**因此把快照当完整。
+    """
+    try:
+        from src.core.lhb_quality import assess_date
+
+        return assess_date(trade_date, market) or {}
+    except Exception as e:  # noqa: BLE001 - 定性是增强, 不拖垮榜单读取
+        logger.debug("龙虎榜完整性定性失败(不阻断): %s", e)
+        return {}
+
+
+def _with_lhb_quality(payload: dict, trade_date: str, market: str = "CN") -> dict:
+    """给龙虎榜响应补完整性定性: 只增 quality/degraded/quality_note, 旧键一律不动。"""
+    if not isinstance(payload, dict) or payload.get("pending"):
+        return payload
+    quality = _lhb_snapshot_quality(trade_date, market)
+    if not quality:
+        # 定性不可用 ≠ 完整: 显式标 degraded, 免得"字段缺席"被读成"没问题"。
+        out = dict(payload)
+        out["degraded"] = True
+        out["quality_note"] = "完整性定性不可用, 不据此声明该日榜单完整"
+        return out
+    out = dict(payload)
+    out["quality"] = quality
+    out["degraded"] = bool(quality.get("degraded"))
+    if out["degraded"]:
+        out["quality_note"] = quality.get("note") or ""
+    else:
+        out.pop("quality_note", None)
+    return out
 
 
 def _next_day_yyyymmdd(d: str) -> str:
