@@ -22,6 +22,18 @@ import pytest
 from src.core import market_mainline as mm
 
 
+def test_window_bars_excludes_stocks_without_requested_day():
+    from src.collectors.market_sentiment_collector import _window_bars
+
+    bars = {
+        '000001.SZ': {'Date': ['20261106', '20261109'], 'Close': [10, 11]},
+        '000002.SZ': {'Date': ['20261105', '20261106'], 'Close': [10, 11]},
+    }
+    window, covered = _window_bars(bars, '20261109')
+    assert covered is True
+    assert set(window) == {'000001.SZ'}
+
+
 def _z(code: str, name: str, days: int, sector: str = "", concepts=None, source: str = "tq", **kw) -> dict:
     row = {
         "code": code,

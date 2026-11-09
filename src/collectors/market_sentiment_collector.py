@@ -59,7 +59,7 @@ def _window_bars(bars: dict[str, dict], ymd: str) -> tuple[dict[str, dict], bool
                 keep = i
             else:
                 break
-        if keep < 0:
+        if keep < 0 or str(dates[keep]).strip() != ymd:
             continue
         cut: dict = {}
         for k, v in payload.items():
