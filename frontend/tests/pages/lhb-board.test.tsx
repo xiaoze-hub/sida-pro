@@ -272,7 +272,7 @@ describe('龙虎榜工作区 · 覆盖口径(无完整性凭据)', () => {
   it('有数据时仍常驻「覆盖未核实」, 且数据日期单独标注, 不承诺完整', async () => {
     archiveApi.dragonTiger.mockResolvedValue(dayOk([dt()]))
     renderPage()
-    const chip = await screen.findByTestId('lhb-coverage-note')
+    const chip = await screen.findByTestId('lhb-quality-note')
     expect(chip.textContent).toContain('覆盖未核实')
     // 不得把入库记录说成"完整榜单/今日已发布"
     expect(chip.textContent).not.toContain('完整榜单')
@@ -283,7 +283,7 @@ describe('龙虎榜工作区 · 覆盖口径(无完整性凭据)', () => {
   it('空榜同样标「覆盖未核实」: 归档无记录不等于当日没有龙虎榜', async () => {
     archiveApi.dragonTiger.mockResolvedValue({ count: 0, note: '空=无覆盖(非交易日)', items: [] })
     renderPage()
-    const chip = await screen.findByTestId('lhb-coverage-note')
+    const chip = await screen.findByTestId('lhb-quality-note')
     expect(chip.textContent).toContain('覆盖未核实')
     expect(chip.textContent).toContain('不代表')
   })

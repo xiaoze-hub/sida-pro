@@ -33,9 +33,10 @@ vi.mock('../../src/lib/copilot/api', () => ({
 }))
 
 import AiCopilot from '@/pages/AiCopilot'
-import { buildLhbCopilotUrl } from '@/lib/lhb'
+import { buildLhbCopilotUrl, lhbCopilotHandoff } from '@/lib/lhb'
 
 const URL_FOR_600000 = buildLhbCopilotUrl({ symbol: '600000', name: '浦发银行', date: '20261106' })
+const URL_FOR_ETF = lhbCopilotHandoff({ symbol: '510300', name: '沪深300ETF', date: '20261106' }).url
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -79,5 +80,19 @@ describe('龙虎榜 → 参谋: 带过去的东西必须真的落地', () => {
   it('没有 agent 参数就不会凭空多出一个配方 chip', async () => {
     await renderCopilotAt(URL_FOR_600000)
     expect(screen.queryByTestId('copilot-mention-chips')).toBeNull()
+  })
+
+  it('ETF 代码不给锚点: 参谋页没有锚点条, 只预填问题(未发送)', async () => {
+    await renderCopilotAt(URL_FOR_ETF)
+
+    // 入口 SYMBOL_RE 只认 [03468] 开头的 6 位 A 股代码; 510300 不是股票 → 不许有锚点条
+    expect(screen.queryByTestId('copilot-context-anchor')).toBeNull()
+
+    const composer = screen.getByTestId('copilot-composer')
+    const textarea = within(composer).getByRole('textbox') as HTMLTextAreaElement
+    expect(textarea.value).toContain('510300')
+    expect(textarea.value).toContain('2026-11-06')
+    // 只预填, 不自动发送
+    expect(screen.getByTestId('copilot-empty-hero')).toBeTruthy()
   })
 })

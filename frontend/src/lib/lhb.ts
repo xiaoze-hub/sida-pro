@@ -44,36 +44,200 @@ export const DEPT_FALLBACK = '未披露营业部'
 export const LHB_DAY_LIMIT = 2000
 
 /**
- * 覆盖口径: 归档接口只回已入库行, **没有任何完整性凭据**。
- *
- * 抓取到记录 ≠ 当日已发布全量, 也 ≠ 交易所披露完整: 采集可能只跑了一半、可能只覆盖
- * 部分榜单类型, 且 `dragon_tiger_events` 与行情日质量补丁没有关联。所以页面对任何
- * 非空结果都要标"覆盖未核实", 不许写成"完整榜单/今日榜单已更新"。
+ * 覆盖口径: 归档接口**没有官方完整清单**, 但后端(2026-11-09 质量定性)会随日榜返回
+ * `quality`(缺口/风险/交叉提示)。页面两件事分开说:
+ *   · 截断 = 前端**可证明**的事实(行数触达单次上限);
+ *   · 完整性 = 只转述后端定性, 拿不到就是未知 —— 绝不因"有行"就推断完整。
  */
 export interface LhbCoverage {
   /** true = 行数触达单次上限, 可能被截断 */
   truncated: boolean
-  /** 页面常驻说明(含条数; 数据日期单独展示, 不混在这句里) */
+  /** 展示用语气(截断/无覆盖为 danger, 其余 warning) */
+  tone: 'warning' | 'danger'
+  /** 页面说明文本(含条数与后端定性; 数据日期单独展示, 不混在这句里) */
   text: string
 }
 
-export function lhbCoverage(rows: number, limit: number = LHB_DAY_LIMIT): LhbCoverage {
-  const n = Number.isFinite(rows) && rows > 0 ? Math.floor(rows) : 0
-  if (n === 0) {
+/** 后端没给 quality 时的统一说法: 未知, 不猜两边。 */
+export const QUALITY_UNKNOWN_LABEL = '覆盖未核实'
+export const QUALITY_UNKNOWN_TEXT =
+  '覆盖未核实：后端未返回该日质量定性，完整性保持未知；已入库条数不等于当日已披露全量，也不能据此认为榜单残缺。'
+
+export type LhbQualitySeverity = 'ok' | 'caution' | 'missing' | 'danger' | 'unknown'
+
+export interface LhbQualityView {
+  /** false = 后端没给可识别的定性; 页面只能显示"未知" */
+  known: boolean
+  severity: LhbQualitySeverity
+  tone: 'success' | 'warning' | 'danger' | 'info'
+  /** 页面标签(来自后端, 但"完整"类标签必须经官方核对才允许出现) */
+  label: string
+  /** 定性说明(后端 note 原文 + 必要的口径补充) */
+  text: string
+  /** 风险提示(后端 warnings / 早写风险), 逐条展示 */
+  risks: string[]
+  /** 两表交叉提示(仅提示, 不推完整性) */
+  crossCheck: string
+  /** 写入窗口 + 发布就绪经验下界 */
+  writeWindow: string
+  /** 页面是否允许出现"已核对完整"——只有 verified_against_official=true 才为 true */
+  completenessClaim: boolean
+  rowsTotal: number | null
+  rowsInMarket: number | null
+}
+
+function obj(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+
+function strArr(v: unknown): string[] {
+  if (!Array.isArray(v)) return []
+  return v.map((x) => text(x)).filter(Boolean)
+}
+
+/**
+ * 后端 quality → 展示视图。**唯一允许说"已核对完整"的路径**是
+ * `status=complete && complete=true && verified_against_official=true`;
+ * 其它情况(尤其后端口头声明 complete 却没核对)一律降级为"不采信", 并把理由写进正文。
+ */
+export function lhbQualityView(raw: unknown): LhbQualityView {
+  const o = obj(raw)
+  const status = text(o?.status).toLowerCase()
+  if (!o || !status) {
     return {
-      truncated: false,
-      text: '覆盖未核实：该日归档库无入库记录，不代表当日没有龙虎榜（可能尚未采集，或当日为非交易日）。',
+      known: false,
+      severity: 'unknown',
+      tone: 'warning',
+      label: QUALITY_UNKNOWN_LABEL,
+      text: QUALITY_UNKNOWN_TEXT,
+      risks: [],
+      crossCheck: '',
+      writeWindow: '',
+      completenessClaim: false,
+      rowsTotal: null,
+      rowsInMarket: null,
     }
   }
-  if (n >= limit) {
-    return {
-      truncated: true,
-      text: `覆盖未核实：本页取到 ${n} 条，已触达单次上限 ${limit} 条，可能被截断；入库记录不等于当日已披露全量。`,
-    }
+
+  const verified = o.verified_against_official === true
+  const claimsComplete = o.complete === true || o.completeness_claimed === true
+  const backendLabel = text(o.label)
+
+  let severity: LhbQualitySeverity
+  let tone: LhbQualityView['tone']
+  let label: string
+  let base: string
+
+  if (status === 'absent') {
+    severity = 'missing'
+    tone = 'danger'
+    label = backendLabel || '无快照'
+    base = '后端定性「无快照」：该日归档无行，无覆盖不等于当日没有龙虎榜（可能尚未采集，或当日为非交易日）。'
+  } else if (status === 'partial') {
+    severity = 'danger'
+    tone = 'danger'
+    label = backendLabel || '部分覆盖'
+    base = '后端定性「部分覆盖」：该日数据存在可证明的缺口，不能当作全量。'
+  } else if (status === 'complete') {
+    severity = verified ? 'ok' : 'caution'
+    tone = verified ? 'success' : 'warning'
+    label = verified ? '已核对完整' : '完整未经核对'
+    base = verified
+      ? '后端定性「已核对完整」：该日榜单已与官方完整清单核对一致。'
+      : '后端声称完整，但未与官方完整清单核对：页面不采信该完整性声明。'
+  } else if (status === 'unverified') {
+    severity = 'caution'
+    tone = 'warning'
+    label = backendLabel && backendLabel !== '完整' ? backendLabel : '未经核对'
+    base = '后端定性「未经核对」：该表为定时回源落库的独立来源，无官方完整清单可核对，不声明完整，也无证据表明残缺。'
+  } else {
+    severity = 'unknown'
+    tone = 'info'
+    label = backendLabel || status
+    base = `后端定性「${label}」。`
   }
+
+  const note = text(o.note)
+  const risks = strArr(o.warnings)
+  const early = text(o.early_freeze_note)
+  if (early && !risks.some((r) => r.includes(early))) risks.unshift(early)
+
+  // 后端声称完整却未核对: 无论 status 怎么写, 都不许把"完整"当结论放行。
+  if (claimsComplete && !verified) {
+    label = status === 'complete' ? '完整未经核对' : label
+    if (!base.includes('不采信')) base += ' 后端完整性声明未经官方核对，页面不采信。'
+    const warn = '完整性声明未经官方核对，不采信该声明。'
+    if (!risks.includes(warn)) risks.push(warn)
+  }
+
+  // 标签兜底: 只有三项同时成立才允许出现"已核对完整"这类确定性表述。
+  if (!(status === 'complete' && claimsComplete && verified) && (label === '完整' || label.includes('已核对完整'))) {
+    label = '完整未经核对'
+  }
+
+  let textOut = note && status !== 'unverified' && status !== 'absent' ? `${base} ${note}` : base
+  const scope = text(o.market_scope_note)
+  if (scope) textOut += ` ${scope}`
+
+  const cc = obj(o.cross_check)
+  let crossCheck = ''
+  if (cc) {
+    const daily = num(cc.daily_symbols)
+    const onlyEvents = num(cc.only_in_events)
+    const onlyDaily = num(cc.only_in_daily)
+    const parts: string[] = []
+    if (onlyEvents !== null) parts.push(`多 ${onlyEvents} 只`)
+    if (onlyDaily !== null) parts.push(`少 ${onlyDaily} 只`)
+    if (daily !== null) parts.push(`daily ${daily} 只`)
+    const head = parts.length ? `交叉提示：events 相对 daily ${parts.join('、')}；` : '交叉提示：'
+    crossCheck = `${head}${text(cc.note) || '两表均非官方完整清单，差异不能判定任何一方完整。'}`
+  }
+
+  const fw = text(o.first_write_at)
+  const lw = text(o.last_write_at)
+  const ready = text(o.publish_ready_after)
+  const basis = text(o.publish_ready_basis)
+  const winParts: string[] = []
+  if (fw || lw) winParts.push(`写入窗口 ${fw || '未知'} → ${lw || '未知'}`)
+  if (ready) winParts.push(`发布就绪下界 ${ready}${basis ? `（${basis}）` : '（经验值，非官方发布时间）'}`)
+  const writeWindow = winParts.join('；')
+
   return {
-    truncated: false,
-    text: `覆盖未核实：本页仅展示归档库已入库的 ${n} 条记录，接口无完整性凭据，不等于当日已披露全量。`,
+    known: true,
+    severity,
+    tone,
+    label,
+    text: textOut,
+    risks,
+    crossCheck,
+    writeWindow,
+    completenessClaim: status === 'complete' && claimsComplete && verified,
+    rowsTotal: num(o.rows_total),
+    rowsInMarket: num(o.rows_in_market),
+  }
+}
+
+export function lhbCoverage(rows: number, limit: number = LHB_DAY_LIMIT, quality?: unknown): LhbCoverage {
+  const n = Number.isFinite(rows) && rows > 0 ? Math.floor(rows) : 0
+  const q = lhbQualityView(quality)
+  const truncated = n > 0 && n >= limit
+
+  const countLine =
+    n === 0
+      ? quality === undefined || quality === null
+        ? '该日归档库无入库记录，不代表当日没有龙虎榜（可能尚未采集，或当日为非交易日）。'
+        : ''
+      : `本页展示归档库已入库的 ${n} 条记录。`
+
+  const truncLine = truncated
+    ? `本页取到 ${n} 条，已触达单次上限 ${limit} 条，可能被截断；截断部分未被读取，不能当作全榜。`
+    : ''
+
+  const text = [countLine, truncLine, q.text].filter(Boolean).join(' ')
+  return {
+    truncated,
+    tone: truncated || q.severity === 'missing' || q.severity === 'danger' ? 'danger' : 'warning',
+    text,
   }
 }
 
@@ -92,6 +256,20 @@ export function archiveNoteText(note: unknown): string {
 
 /** 数智参谋一级入口(与 ReportsHub / History 同一个真实地址)。 */
 export const COPILOT_PATH = '/ai-copilot'
+
+/**
+ * 参谋入口认作**股票锚点**的代码口径 —— 与 `src/pages/AiCopilot.tsx` 的
+ * `SYMBOL_RE = /^[03468]\d{5}$/` 完全一致。
+ *
+ * 为什么前端必须自己判一次: 入口对 `?symbol=` 只是 `if (SYMBOL_RE.test(sym)) setAnchorSymbol(sym)`。
+ * ETF(510300/159915…)、可转债(110xxx/113xxx/123xxx/127xxx/128xxx…)都是 6 位但不是股票,
+ * 带进去**不会**出现锚点条。交接文案若统一写"会带上锚点", 就是在承诺一个不会发生的状态。
+ */
+export const COPILOT_ANCHOR_RE = /^[03468]\d{5}$/
+
+export function isCopilotAnchorSymbol(symbol: unknown): boolean {
+  return COPILOT_ANCHOR_RE.test(text(symbol))
+}
 
 /**
  * 「分析此股龙虎榜」要问参谋的问题 —— 只交代**事实**(代码、名称、交易日)与边界
@@ -113,8 +291,8 @@ export function lhbCopilotQuestion(input: { symbol: string; name?: string; date:
  * 拼参谋跳转地址(纯函数, 便于钉住"带了什么、没带什么")。
  *
  * 只用入口**真实生效**的参数(见 `src/pages/AiCopilot.tsx` 的 URL 解析):
- *   · `symbol` → 锚点股票(页面进入"正在看"状态);
- *   · `q`      → 预填问题(不自动发送)。
+ *   · `symbol` → 锚点股票(**只对 A 股代码生效**, 见 COPILOT_ANCHOR_RE);
+ *   · `q`      → 预填问题(不自动发送, 需用户自己点发送)。
  * 刻意**不带**:
  *   · `agent` —— 现有配方(premarket/postmarket/chip…)都没有龙虎榜工具, `lhb.daily`
  *     只挂在通用问答的 `query_data_domain` 上; 硬塞一个配方等于把问题路由到没有数据的
@@ -124,14 +302,33 @@ export function lhbCopilotQuestion(input: { symbol: string; name?: string; date:
  *
  * 代码或日期非法 → 返回 ''(调用方不得跳转, 不许跳到一个没有标的的空问答)。
  */
-export function buildLhbCopilotUrl(input: { symbol: string; name?: string; date: string }): string {
+export interface LhbCopilotHandoff {
+  url: string
+  /** 入口是否真的会把这个代码设为股票锚点(A 股代码才为 true) */
+  anchor: boolean
+  /** 非股票代码的说明(ETF/可转债等), 供页面提示; 股票为空串 */
+  nonStockNote: string
+}
+
+export function lhbCopilotHandoff(input: { symbol: string; name?: string; date: string }): LhbCopilotHandoff {
   const symbol = text(input.symbol)
   const date = toApiDate(input.date)
-  if (!symbol || !date) return ''
+  if (!symbol || !date) return { url: '', anchor: false, nonStockNote: '' }
+  const anchor = isCopilotAnchorSymbol(symbol)
   const params = new URLSearchParams()
-  params.set('symbol', symbol)
+  // 非股票代码(ETF/可转债)不传 symbol: 入口会静默忽略, 传了只会让"已带锚点"的文案变成假话。
+  if (anchor) params.set('symbol', symbol)
   params.set('q', lhbCopilotQuestion({ symbol, name: text(input.name), date }))
-  return `${COPILOT_PATH}?${params.toString()}`
+  return {
+    url: `${COPILOT_PATH}?${params.toString()}`,
+    anchor,
+    nonStockNote: anchor ? '' : `${symbol} 属 ETF/可转债等非股票代码，参谋入口不会把它作为股票锚点。`,
+  }
+}
+
+/** 只要地址的调用方(单测/旧调用)用这个; 口径与 lhbCopilotHandoff 同一份。 */
+export function buildLhbCopilotUrl(input: { symbol: string; name?: string; date: string }): string {
+  return lhbCopilotHandoff(input).url
 }
 
 export interface LhbReasonRow {
@@ -320,4 +517,43 @@ export function splitSeats(items: ArchiveLhbSeatItem[] | null | undefined): { bu
   buy.sort(byNetDesc)
   sell.sort(byNetDesc)
   return { buy, sell }
+}
+
+/**
+ * 席位计数口径: **行数 ≠ 独立席位家数**。
+ *
+ * `lhb_seat_details` 的 `row_uid` 是内容哈希, 同一营业部同一只票若命中多条上榜原因,
+ * 每个原因下会有独立一行(金额是各原因口径的原始读数)。页面说"N 席"会让用户以为是
+ * N 家不同营业部 —— 实际可能只有 1 家。这里分开返回"记录条数"与"营业部家数",
+ * 家数按营业部名去重(名缺失时退回代码; 两者都缺 = 未知, 各算一家, 不合并)。
+ */
+export interface SeatSummary {
+  /** 席位明细行数(≠ 独立席位数) */
+  rows: number
+  /** 去重后的营业部家数 */
+  departments: number
+  /** true = 这些行覆盖了多条上榜原因(行数可能被同一营业部重复占位) */
+  multipleReasons: boolean
+}
+
+export function seatSummary(seats: LhbSeatRow[] | null | undefined): SeatSummary {
+  const list = seats ?? []
+  const depts = new Set<string>()
+  const reasons = new Set<string>()
+  let unknownDept = 0
+  for (const s of list) {
+    if (!s) continue
+    const name = text(s.operate_dept_name)
+    const code = text(s.operate_dept_code)
+    if (name) depts.add(`n:${name}`)
+    else if (code) depts.add(`c:${code}`)
+    else unknownDept += 1
+    const reason = text(s.reason)
+    if (reason) reasons.add(reason)
+  }
+  return {
+    rows: list.length,
+    departments: depts.size + unknownDept,
+    multipleReasons: reasons.size > 1,
+  }
 }

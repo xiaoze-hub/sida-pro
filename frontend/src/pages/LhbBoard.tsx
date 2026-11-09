@@ -18,11 +18,12 @@
  *  ③ **空/失败/加载如实显示**: 空榜透出后端 note, 失败给可重试错误态, 不伪造任何一行。
  *
  * 两条 2026-11-09 复审补上的口径:
- *  ④ **覆盖未核实**: 归档接口没有完整性凭据(与行情日质量补丁无关), 拿到记录 ≠ 当日已发布全量;
- *     页面常驻「数据日期 + 覆盖未核实 + 条数」, 触达单次上限时明说可能被截断;
+ *  ④ **质量定性来自后端, 前端只转述**: 后端 `quality` 给缺口/早写风险/两表交叉提示;
+ *     拿不到就是未知(不猜完整), 即使后端声称 complete 但未与官方核对, 页面也不采信;
  *  ⑤ **分析此股龙虎榜**: 带着页面上真实显示过的代码与交易日进数智参谋(只带入口生效的
  *     symbol + q, 不塞无龙虎榜工具的 agent、不塞被入口忽略的 date), 问题正文写明日期,
- *     不预置任何结论 —— 没选股票就不渲染入口。
+ *     不预置任何结论 —— 没选股票就不渲染入口; ETF/可转债不传 symbol(入口只认 A 股代码,
+ *     传了也只会静默忽略), 文案明说不会成为锚点、只是预填、需手动发送。
  *
  * 竞态: 切日期 / 切股票都会发新请求, 慢响应的旧请求必须被丢弃(序号守卫),
  * 否则页面会出现"日期=11-05 但表格是 11-06"这种自相矛盾的状态。
@@ -41,16 +42,20 @@ import {
   LHB_DAY_LIMIT,
   SEAT_IDENTITY_DISCLAIMER,
   archiveNoteText,
-  buildLhbCopilotUrl,
   formatTradeDate,
   groupLhbBySymbol,
   latestDragonTigerDate,
+  lhbCopilotHandoff,
   lhbCoverage,
+  lhbQualityView,
   reasonLabel,
+  seatSummary,
   splitSeats,
   toApiDate,
   toDateInputValue,
   type LhbSeatRow,
+  type LhbQualityView,
+  type SeatSummary,
 } from '@/lib/lhb'
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -60,6 +65,15 @@ interface DayState {
   date: string
   items: ArchiveDragonTigerItem[]
   note: string
+  /** 后端质量定性(缺口/风险); 缺失=未知, 页面不得自行推断完整 */
+  quality: unknown
+}
+
+/** 参谋交接(锚点/预填), 页面上显示的每句话都以它为准 */
+interface HandoffState {
+  url: string
+  anchor: boolean
+  nonStockNote: string
 }
 
 interface SeatTarget {
@@ -118,13 +132,29 @@ function SeatRow({ seat, side }: { seat: LhbSeatRow; side: 'buy' | 'sell' }) {
   )
 }
 
-function SeatSection({ title, seats, side }: { title: string; seats: LhbSeatRow[]; side: 'buy' | 'sell' }) {
+function SeatSection({
+  title,
+  seats,
+  side,
+  summary,
+}: {
+  title: string
+  seats: LhbSeatRow[]
+  side: 'buy' | 'sell'
+  summary: SeatSummary
+}) {
   return (
     <section className="space-y-1" data-testid={`lhb-seats-${side}`}>
-      <h3 className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+      <h3 className="flex flex-wrap items-center gap-2 text-[14px] font-medium text-foreground">
         <span className={cn('h-2 w-2 rounded-full', side === 'buy' ? 'bg-gs-go' : 'bg-gs-stop')} aria-hidden />
         {title}
-        <span className="font-num text-xs font-normal text-muted-foreground">{seats.length} 席</span>
+        {/*
+          条数 ≠ 独立席位家数: 同一营业部可因多条上榜原因各占一行。
+          这里分别给"记录条数"和"去重营业部家数", 不再写容易被读成家数的"N 席"。
+        */}
+        <span className="font-num text-xs font-normal text-muted-foreground" data-testid={`lhb-seat-count-${side}`}>
+          {summary.rows} 条记录 · {summary.departments} 家营业部
+        </span>
       </h3>
       {seats.length === 0 ? (
         <p className="py-2 text-xs text-muted-foreground">本侧无披露席位</p>
@@ -199,10 +229,11 @@ export default function LhbBoardPage() {
     setSeatsError('')
     archiveApi
       // 显式带 limit: 只有知道自己要了多少条, 才能判断"刚好取满 = 可能被截断"。
-      .dragonTiger({ date: apiDate, limit: LHB_DAY_LIMIT })
+      // market=CN: 让后端质量定性的行数与页面展示的行数同口径(否则定性可能只覆盖一个市场)。
+      .dragonTiger({ date: apiDate, limit: LHB_DAY_LIMIT, market: 'CN' })
       .then((res) => {
         if (seq !== daySeq.current) return
-        setDay({ date: apiDate, items: res?.items ?? [], note: res?.note ?? '' })
+        setDay({ date: apiDate, items: res?.items ?? [], note: res?.note ?? '', quality: res?.quality ?? null })
         setDayStatus('ready')
       })
       .catch((e) => {
@@ -236,21 +267,40 @@ export default function LhbBoardPage() {
   const groups = useMemo(() => groupLhbBySymbol(day?.items), [day])
   const hasMultipleReasons = groups.some((g) => g.multipleReasons)
   const seatSplit = useMemo(() => splitSeats(seats), [seats])
+  const buySummary = useMemo(() => seatSummary(seatSplit.buy), [seatSplit])
+  const sellSummary = useMemo(() => seatSummary(seatSplit.sell), [seatSplit])
+  const seatsHaveMultipleReasons = buySummary.multipleReasons || sellSummary.multipleReasons
   const selectedName = seatTarget?.name || seatTarget?.symbol || ''
   const dataDate = day?.date ?? toApiDate(dateInput)
 
   /**
    * 覆盖口径只看"这一份数据实际是什么": 已完成加载就按条数算(0 条 = 归档无记录),
    * 加载中/失败时为 null(不拿空数组冒充"覆盖 0 条", 那会读成"当日没上榜")。
+   * 质量定性由后端 quality 决定; 后端没给就是未知, 不自行补"完整"。
    */
   const coverage = useMemo(
-    () => (dayStatus === 'ready' ? lhbCoverage(day?.items.length ?? 0, LHB_DAY_LIMIT) : null),
+    () => (dayStatus === 'ready' ? lhbCoverage(day?.items.length ?? 0, LHB_DAY_LIMIT, day?.quality) : null),
     [dayStatus, day],
   )
 
-  /** 参谋跳转地址: 选中的股票 + 该数据的交易日; 任一缺失 → ''(不跳, 不造上下文)。 */
-  const copilotUrl = useMemo(
-    () => (seatTarget ? buildLhbCopilotUrl({ symbol: seatTarget.symbol, name: seatTarget.name, date: seatTarget.date }) : ''),
+  /**
+   * 质量定性只认"这一份已加载完的数据": 切日期时 `day` 还留着上一日的数据,
+   * 若直接读它, 加载中会显示上一个交易日的早写风险/写入窗口 —— 那是串日期。未 ready 一律未知。
+   */
+  const quality: LhbQualityView = useMemo(
+    () => lhbQualityView(dayStatus === 'ready' ? day?.quality : null),
+    [dayStatus, day],
+  )
+
+  /**
+   * 参谋交接: 锚点只对 A 股代码成立; ETF/可转债不传 symbol(入口会忽略), 只把代码写进问题正文。
+   * 两种情况的文案都写明"预填、不自动发送", 不让用户以为已经替他把问题发出去了。
+   */
+  const handoff: HandoffState = useMemo(
+    () =>
+      seatTarget
+        ? lhbCopilotHandoff({ symbol: seatTarget.symbol, name: seatTarget.name, date: seatTarget.date })
+        : { url: '', anchor: false, nonStockNote: '' },
     [seatTarget],
   )
 
@@ -291,11 +341,11 @@ export default function LhbBoardPage() {
               数据日期 {formatTradeDate(dataDate)}
             </StatusChip>
             {/*
-              覆盖口径常驻: 归档接口没有完整性凭据, 抓取到记录 ≠ 当日已发布全量。
-              这条不许随"有数据"消失 —— 有数据时用户更容易误以为看的是全榜。
+              质量定性常驻: 由后端 quality 决定措辞; 后端没给就是"覆盖未核实"(未知),
+              不因有行就改成"完整"。这是页面最容易骗人的地方 —— 有数据时用户更会以为看的是全榜。
             */}
-            <StatusChip tone={coverage?.truncated ? 'danger' : 'warning'} data-testid="lhb-coverage-chip">
-              覆盖未核实
+            <StatusChip tone={quality.tone} data-testid="lhb-quality-chip">
+              {quality.label}
             </StatusChip>
             <StatusChip tone="info" data-testid="lhb-unit-note">
               金额单位：元（万/亿为换算显示）
@@ -316,20 +366,45 @@ export default function LhbBoardPage() {
       />
 
       {/*
-        覆盖说明放在榜单上方(而不是塞进 chip): 句子较长, 但它是这个页面最重要的诚实标记 ——
-        条数、是否可能被截断、"不等于当日已披露全量" 三件事必须能被读到。
+        质量说明放在榜单上方(而不是塞进 chip): 句子较长, 但它是这个页面最重要的诚实标记 ——
+        条数、是否可能被截断、后端定性(缺口/风险)三件事必须能被读到。没有 quality 就写"未知"。
       */}
       {coverage && (
         <p
-          data-testid="lhb-coverage-note"
+          data-testid="lhb-quality-note"
           className={cn(
             'rounded-lg px-2.5 py-2 text-xs',
-            coverage.truncated
+            coverage.tone === 'danger'
               ? 'bg-destructive/10 text-destructive'
               : 'bg-role-opp/10 text-role-opp',
           )}
         >
           {coverage.text}
+        </p>
+      )}
+
+      {/* 后端给的风险提示(早写风险等): 逐条展示, 不合并成一句含糊的"可能有问题" */}
+      {quality.risks.length > 0 && (
+        <ul data-testid="lhb-quality-risks" className="space-y-1 rounded-lg bg-muted px-2.5 py-2 text-xs text-muted-foreground">
+          {quality.risks.map((risk) => (
+            <li key={risk}>风险提示：{risk}</li>
+          ))}
+        </ul>
+      )}
+
+      {/*
+        交叉提示只说明两张表对不上, 不据此判定任何一方完整 —— 后端 note 原话已经写明,
+        这里原样转述, 不改写成"发现问题/数据缺失"。
+      */}
+      {quality.crossCheck && (
+        <p data-testid="lhb-quality-crosscheck" className="rounded-lg bg-s2 px-2.5 py-2 text-xs text-muted-foreground">
+          {quality.crossCheck}
+        </p>
+      )}
+
+      {quality.writeWindow && (
+        <p data-testid="lhb-quality-write-window" className="rounded-lg bg-s2 px-2.5 py-2 text-xs text-muted-foreground">
+          {quality.writeWindow}
         </p>
       )}
 
@@ -457,18 +532,20 @@ export default function LhbBoardPage() {
                 </span>
                 {/*
                   「分析此股龙虎榜」= 带着**已在页面上看到的**代码与交易日去参谋继续追问。
-                  不选股就不渲染(没有标的/日期时不造上下文), 地址由 buildLhbCopilotUrl 统一拼,
-                  只带参谋入口真实生效的 symbol + q, 且问题正文里写明日期 —— 不预置任何结论。
+                  不选股就不渲染(没有标的/日期时不造上下文), 地址由 lhbCopilotHandoff 统一拼:
+                  只带参谋入口真实生效的 symbol + q; **ETF/可转债不传 symbol**(入口只认 A 股代码,
+                  传了会静默忽略, 文案却会承诺一个不存在的锚点)。q 只是预填, 需用户自己点发送。
                 */}
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
                   data-testid="lhb-analyze-copilot"
-                  disabled={!copilotUrl}
-                  title="在数智参谋中继续：带上该股与榜单日期提问（不预置结论）"
+                  data-anchor={handoff.anchor ? 'true' : 'false'}
+                  disabled={!handoff.url}
+                  title="打开数智参谋并预填问题（不会自动发送，需你确认后手动发送）"
                   onClick={() => {
-                    if (copilotUrl) navigate(copilotUrl)
+                    if (handoff.url) navigate(handoff.url)
                   }}
                 >
                   <Sparkles className="h-3.5 w-3.5" /> 分析此股龙虎榜
@@ -483,7 +560,11 @@ export default function LhbBoardPage() {
 
           {seatTarget && (
             <p className="text-xs text-muted-foreground" data-testid="lhb-analyze-hint">
-              将在数智参谋中带着该股代码与 {formatTradeDate(seatTarget.date)} 这个交易日继续提问；本页只展示原始读数，不预置结论。
+              {handoff.anchor
+                ? `将打开数智参谋并预填问题（不会自动发送）：锚点 ${seatTarget.symbol}，日期 ${formatTradeDate(
+                    seatTarget.date,
+                  )} 写在问题正文里，需你确认后手动发送。本页只展示原始读数，不预置结论。`
+                : `将打开数智参谋并预填问题（不会自动发送）。${handoff.nonStockNote}代码与日期只写在问题正文里，需你确认后手动发送；本页不预置结论。`}
             </p>
           )}
 
@@ -528,8 +609,14 @@ export default function LhbBoardPage() {
 
           {seatTarget && seatsStatus === 'ready' && seats.length > 0 && (
             <div className="space-y-3">
-              <SeatSection title="买方席位" seats={seatSplit.buy} side="buy" />
-              <SeatSection title="卖方席位" seats={seatSplit.sell} side="sell" />
+              <SeatSection title="买方席位" seats={seatSplit.buy} side="buy" summary={buySummary} />
+              <SeatSection title="卖方席位" seats={seatSplit.sell} side="sell" summary={sellSummary} />
+              {seatsHaveMultipleReasons && (
+                <p className="rounded-lg bg-muted px-2 py-1.5 text-xs text-muted-foreground" data-testid="lhb-seat-rows-note">
+                  同一营业部可能因多条上榜原因重复出现：上方「条记录」是席位明细行数，「家营业部」按营业部名去重；
+                  记录条数不等于独立席位家数。
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 排序：按净额降序；净额缺失的行排在最后（缺失不等于 0）。营业部名缺失显示「{DEPT_FALLBACK}」。
               </p>

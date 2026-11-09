@@ -87,6 +87,60 @@ export interface ArchiveListResponse<T> {
   items: T[]
 }
 
+/**
+ * 龙虎榜日榜的**质量定性**(后端 `src/core/lhb_quality.py` 产出, 2026-11-09)。
+ *
+ * 契约要点(照抄后端语义, 前端不要二次推断):
+ *  · `dragon_tiger_events` 是定时回源落库的独立来源, **没有官方完整清单可核对** ⇒
+ *    `complete=false` / `completeness_claimed=false` / `verified_against_official=false`,
+ *    有行时 `status=unverified`(无证据表明残缺), 无行时 `status=absent`(确实没数据);
+ *  · `warnings` 是风险提示(如早写风险), **不构成残缺结论**;
+ *  · `cross_check` 只是与 `dragon_tiger_daily` 的双向差异提示, **不能据此判定任一方完整**;
+ *  · 定性本身失败时后端给 `status=unknown` + `degraded=true`, 前端照实显示"定性不可用"。
+ */
+export interface ArchiveLhbQualityCrossCheck {
+  daily_symbols?: number | null
+  only_in_events?: number | null
+  only_in_daily?: number | null
+  note?: string | null
+}
+
+export interface ArchiveLhbQuality {
+  table?: string | null
+  trade_date?: string | null
+  market?: string | null
+  /** 'unverified' | 'absent' | 'partial' | 'complete' | 'unknown' …(后端枚举) */
+  status?: string | null
+  complete?: boolean | null
+  degraded?: boolean | null
+  verification?: string | null
+  severity?: string | null
+  label?: string | null
+  completeness_claimed?: boolean | null
+  verified_against_official?: boolean | null
+  actual_symbols?: number | null
+  first_write_at?: string | null
+  last_write_at?: string | null
+  publish_ready_after?: string | null
+  publish_ready_basis?: string | null
+  early_freeze?: boolean | null
+  early_freeze_risk?: boolean | null
+  early_freeze_note?: string | null
+  cross_check?: ArchiveLhbQualityCrossCheck | null
+  evidence?: string[] | null
+  warnings?: string[] | null
+  note?: string | null
+  /** items 未按市场过滤时, 定性覆盖的行数范围(后端明说只定性了一个市场) */
+  rows_total?: number | null
+  rows_in_market?: number | null
+  market_scope_note?: string | null
+}
+
+/** `GET /archive/dragon-tiger?date=` 的响应: 日榜另带 quality(按 symbol 查询时无)。 */
+export interface ArchiveDragonTigerResponse extends ArchiveListResponse<ArchiveDragonTigerItem> {
+  quality?: ArchiveLhbQuality | null
+}
+
 export interface ArchiveTableFreshness {
   table: string
   rows: number | null
@@ -127,14 +181,16 @@ export const archiveApi = {
    * @param date   YYYYMMDD(可带 '-', 后端会归一) —— 工作区按日看榜只用 date
    * @param symbol 个股代码(与 date 至少给一个)
    * @param days   配合 symbol: 近 N 日
+   * @param market 市场(日榜工作区固定 CN; 传了才能让后端 quality 的行数与页面一致)
    */
-  dragonTiger(params: { date?: string; symbol?: string; days?: number; limit?: number }): Promise<ArchiveListResponse<ArchiveDragonTigerItem>> {
-    return fetchAPI<ArchiveListResponse<ArchiveDragonTigerItem>>(
+  dragonTiger(params: { date?: string; symbol?: string; days?: number; limit?: number; market?: string }): Promise<ArchiveDragonTigerResponse> {
+    return fetchAPI<ArchiveDragonTigerResponse>(
       withQuery('/archive/dragon-tiger', {
         date: params.date,
         symbol: params.symbol,
         days: params.days,
         limit: params.limit,
+        market: params.market,
       }),
       { cacheMode: 'reload' },
     )
