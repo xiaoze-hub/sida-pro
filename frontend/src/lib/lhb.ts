@@ -36,6 +36,31 @@ export const SEAT_IDENTITY_DISCLAIMER =
 export const DEPT_FALLBACK = '未披露营业部'
 
 /**
+ * 「身份共用的席位称号」—— 交易所披露里这些名字**不指向某一家**具体机构:
+ *   · `机构专用` —— 多家机构共用同一个称号, 3 条「机构专用」可能是 3 家不同机构,
+ *     也可能只有 1 家重复上榜; 合并成"1 家"是凭空断言, 拆成"3 家"同样是凭空断言;
+ *   · `其他` / `未披露营业部` / `未知` —— 根本没说身份。
+ * 命中即视为身份不可核实, 只按源记录条数展示, 不并入任何家数。
+ *
+ * 注: `沪股通专用` / `深股通专用` 不在此列 —— 那是单一通道, 名字本身就唯一。
+ */
+const GENERIC_SEAT_NAME_RE = /^(机构专用|机构席位|其他|未披露|未知)/
+
+/** 这条记录的身份是否只是共用称号/占位(→ 不可核实)。 */
+export function isGenericSeatName(name: unknown): boolean {
+  const n = (typeof name === 'string' ? name : '').replace(/\s+/g, '')
+  if (!n) return true
+  if (n === DEPT_FALLBACK) return true
+  return GENERIC_SEAT_NAME_RE.test(n)
+}
+
+/**
+ * 身份不可核实时的页面说明 —— 只解释"为什么只报条数", 不给任何家数。
+ */
+export const SEAT_IDENTITY_UNKNOWN_NOTE =
+  '本次明细中有席位身份无法核实：交易所披露的「机构专用」等称号由多家机构共用，未披露营业部也不指向具体机构。这些记录只按源记录条数列出，既不合并也不拆分，不作独立家数统计。'
+
+/**
  * 单日榜单的请求上限(与后端 `limit` 默认值同档; 后端夹在 1..5000)。
  *
  * 页面显式传它, 才能判断"是不是刚好取满" —— 取满就**不能**说"这是全榜",
@@ -306,23 +331,34 @@ export interface LhbCopilotHandoff {
   url: string
   /** 入口是否真的会把这个代码设为股票锚点(A 股代码才为 true) */
   anchor: boolean
-  /** 非股票代码的说明(ETF/可转债等), 供页面提示; 股票为空串 */
-  nonStockNote: string
+  /** 无法设锚点时的说明(只说入口没认它, 不猜证券类型); 有锚点为空串 */
+  anchorNote: string
+}
+
+/**
+ * 无法设股票锚点时的说明 —— **不猜证券类型**。
+ *
+ * 旧文案写"属 ETF/可转债等非股票代码": 950/920 段(北交所)与 5xxxxx/1xxxxx 一样不满足
+ * 入口的 `^[03468]\d{5}$`, 于是北交所股票被说成"非股票"。前端没有权威的证券类型表,
+ * 所以这里只说**可核实的事实**: 入口没把它识别为股票锚点; 至于它是什么, 本页不判断。
+ */
+export function lhbAnchorNote(symbol: string): string {
+  return `${symbol} 未被参谋入口识别为股票锚点（入口只按既定的 6 位代码规则设锚点，本页不判断它的证券类型）。`
 }
 
 export function lhbCopilotHandoff(input: { symbol: string; name?: string; date: string }): LhbCopilotHandoff {
   const symbol = text(input.symbol)
   const date = toApiDate(input.date)
-  if (!symbol || !date) return { url: '', anchor: false, nonStockNote: '' }
+  if (!symbol || !date) return { url: '', anchor: false, anchorNote: '' }
   const anchor = isCopilotAnchorSymbol(symbol)
   const params = new URLSearchParams()
-  // 非股票代码(ETF/可转债)不传 symbol: 入口会静默忽略, 传了只会让"已带锚点"的文案变成假话。
+  // 入口不会设锚点的代码不传 symbol: 传了只会让"已带锚点"的文案变成假话。
   if (anchor) params.set('symbol', symbol)
   params.set('q', lhbCopilotQuestion({ symbol, name: text(input.name), date }))
   return {
     url: `${COPILOT_PATH}?${params.toString()}`,
     anchor,
-    nonStockNote: anchor ? '' : `${symbol} 属 ETF/可转债等非股票代码，参谋入口不会把它作为股票锚点。`,
+    anchorNote: anchor ? '' : lhbAnchorNote(symbol),
   }
 }
 
@@ -520,18 +556,31 @@ export function splitSeats(items: ArchiveLhbSeatItem[] | null | undefined): { bu
 }
 
 /**
- * 席位计数口径: **行数 ≠ 独立席位家数**。
+ * 席位计数口径: **行数 ≠ 独立席位家数**, 而且**家数只有在身份可核实时才存在**。
  *
- * `lhb_seat_details` 的 `row_uid` 是内容哈希, 同一营业部同一只票若命中多条上榜原因,
- * 每个原因下会有独立一行(金额是各原因口径的原始读数)。页面说"N 席"会让用户以为是
- * N 家不同营业部 —— 实际可能只有 1 家。这里分开返回"记录条数"与"营业部家数",
- * 家数按营业部名去重(名缺失时退回代码; 两者都缺 = 未知, 各算一家, 不合并)。
+ * 两层事实分开:
+ *  · `rows` —— 源记录条数, 任何时候都可展示, 不需要任何推断;
+ *  · `departments` —— 可核实的独立席位数(按席位代码去重, 无代码时按具体营业部全名),
+ *    只有 `identityVerified=true` 时才能当"家营业部"展示。
+ *
+ * `identityVerified=false` 的三种情形(都只报条数 + 身份未知):
+ *  ① 有「机构专用」这类**多家机构共用**的称号 —— 合并成 1 家是断言"只有一家",
+ *     拆成 N 家是断言"有 N 家", 两者都是凭空的; (复审 2026-11-09 第二轮)
+ *  ② 营业部名与席位代码都缺 —— 没有任何身份证据, 之前"各算一家"同样是凭空;
+ *  ③ 同一具体营业部名对应多个不同席位代码 —— 名称不足以区分, 计数不可信。
+ *
+ * 判定只用身份证据(名称/席位代码)。**绝不用金额相等去推同一家** —— 金额相同的两行
+ * 可能是两家不同席位恰好同额, 也可能是同一笔成交的两个原因口径, 金额不携带身份信息。
  */
 export interface SeatSummary {
-  /** 席位明细行数(≠ 独立席位数) */
+  /** 源记录条数(≠ 独立席位数), 恒可展示 */
   rows: number
-  /** 去重后的营业部家数 */
+  /** 可核实的独立席位数; identityVerified=false 时恒为 0 —— 不提供任何可被误读成家数的数字 */
   departments: number
+  /** true = 每一行身份都可核实, departments 才能读作"家营业部" */
+  identityVerified: boolean
+  /** 身份不可核实的记录条数(共用称号 / 名称代码都缺 / 名称冲突) */
+  unknownIdentityRows: number
   /** true = 这些行覆盖了多条上榜原因(行数可能被同一营业部重复占位) */
   multipleReasons: boolean
 }
@@ -540,20 +589,51 @@ export function seatSummary(seats: LhbSeatRow[] | null | undefined): SeatSummary
   const list = seats ?? []
   const depts = new Set<string>()
   const reasons = new Set<string>()
-  let unknownDept = 0
+  // 具体营业部名 → 出现过的席位代码集合, 用来发现"同名多码"的身份冲突
+  const codesByName = new Map<string, Set<string>>()
+  let unknown = 0
   for (const s of list) {
     if (!s) continue
-    const name = text(s.operate_dept_name)
+    const rawName = text(s.operate_dept_name)
+    const name = rawName === DEPT_FALLBACK ? '' : rawName
     const code = text(s.operate_dept_code)
-    if (name) depts.add(`n:${name}`)
-    else if (code) depts.add(`c:${code}`)
-    else unknownDept += 1
+    if (isGenericSeatName(name) || (!name && !code)) {
+      // 共用称号 / 无任何身份证据: 不并入任何一家, 也不各自算一家
+      unknown += 1
+    } else if (code) {
+      depts.add(`c:${code}`)
+      const set = codesByName.get(name || `c:${code}`) ?? new Set<string>()
+      set.add(code)
+      codesByName.set(name || `c:${code}`, set)
+    } else {
+      depts.add(`n:${name}`)
+      const set = codesByName.get(name) ?? new Set<string>()
+      set.add(`n:${name}`)
+      codesByName.set(name, set)
+    }
     const reason = text(s.reason)
     if (reason) reasons.add(reason)
   }
+  // 同名多码 / 同名既有带码行又有无码行 → 名称不足以区分, 计数不可信
+  const conflict = [...codesByName.values()].some((codes) => codes.size > 1)
   return {
     rows: list.length,
-    departments: depts.size + unknownDept,
+    departments: unknown > 0 || conflict ? 0 : depts.size,
+    // 没有行就没有"身份不可核实"这回事: 空侧照样算已核实(展示只是 0 条记录)
+    identityVerified: unknown === 0 && !conflict,
+    unknownIdentityRows: unknown,
     multipleReasons: reasons.size > 1,
   }
+}
+
+/**
+ * 席位计数展示文案(单一份口径, 组件不自己拼)。
+ *
+ * 身份核实了才写"家营业部"; 核实不了**只写条数 + 身份未知** —— 不写任何家数,
+ * 也不说"至少 N 家"这种换个说法的推测。
+ */
+export function seatCountText(s: SeatSummary): string {
+  if (s.rows === 0) return '0 条记录'
+  if (s.identityVerified) return `${s.rows} 条记录 · ${s.departments} 家营业部`
+  return `${s.rows} 条记录 · 身份未知，不统计独立家数`
 }

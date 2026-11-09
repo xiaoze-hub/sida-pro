@@ -22,8 +22,13 @@
  *     拿不到就是未知(不猜完整), 即使后端声称 complete 但未与官方核对, 页面也不采信;
  *  ⑤ **分析此股龙虎榜**: 带着页面上真实显示过的代码与交易日进数智参谋(只带入口生效的
  *     symbol + q, 不塞无龙虎榜工具的 agent、不塞被入口忽略的 date), 问题正文写明日期,
- *     不预置任何结论 —— 没选股票就不渲染入口; ETF/可转债不传 symbol(入口只认 A 股代码,
- *     传了也只会静默忽略), 文案明说不会成为锚点、只是预填、需手动发送。
+ *     不预置任何结论 —— 没选股票就不渲染入口; 入口不认的代码不传 symbol(传了只会静默忽略),
+ *     文案只说"没被识别为股票锚点", **不猜证券类型**(北交所 920xxx 也曾被旧文案误称非股票),
+ *     并明说只是预填、需手动发送。
+ *
+ * 第二轮复审补上的口径:
+ *  ⑥ **席位家数只在身份可核实时才说** —— 「机构专用」是多家机构共用的称号,
+ *     按名称去重会把它们算成"1 家"; 核实不了就只报源记录条数 + 身份未知(seatCountText)。
  *
  * 竞态: 切日期 / 切股票都会发新请求, 慢响应的旧请求必须被丢弃(序号守卫),
  * 否则页面会出现"日期=11-05 但表格是 11-06"这种自相矛盾的状态。
@@ -41,6 +46,7 @@ import {
   DEPT_FALLBACK,
   LHB_DAY_LIMIT,
   SEAT_IDENTITY_DISCLAIMER,
+  SEAT_IDENTITY_UNKNOWN_NOTE,
   archiveNoteText,
   formatTradeDate,
   groupLhbBySymbol,
@@ -49,6 +55,7 @@ import {
   lhbCoverage,
   lhbQualityView,
   reasonLabel,
+  seatCountText,
   seatSummary,
   splitSeats,
   toApiDate,
@@ -73,7 +80,8 @@ interface DayState {
 interface HandoffState {
   url: string
   anchor: boolean
-  nonStockNote: string
+  /** 无法设锚点时的中性说明(不猜证券类型); 有锚点为空串 */
+  anchorNote: string
 }
 
 interface SeatTarget {
@@ -150,10 +158,11 @@ function SeatSection({
         {title}
         {/*
           条数 ≠ 独立席位家数: 同一营业部可因多条上榜原因各占一行。
-          这里分别给"记录条数"和"去重营业部家数", 不再写容易被读成家数的"N 席"。
+          而且家数只在身份可核实时才存在: 「机构专用」是多家机构共用的称号, 按名称去重
+          会把它们误称"1 家"。核实不了就只报源记录条数 + 身份未知(seatCountText 统一拼)。
         */}
         <span className="font-num text-xs font-normal text-muted-foreground" data-testid={`lhb-seat-count-${side}`}>
-          {summary.rows} 条记录 · {summary.departments} 家营业部
+          {seatCountText(summary)}
         </span>
       </h3>
       {seats.length === 0 ? (
@@ -293,14 +302,14 @@ export default function LhbBoardPage() {
   )
 
   /**
-   * 参谋交接: 锚点只对 A 股代码成立; ETF/可转债不传 symbol(入口会忽略), 只把代码写进问题正文。
+   * 参谋交接: 锚点只对入口认的 A 股代码成立; 其它代码不传 symbol(入口会忽略), 只把代码写进问题正文。
    * 两种情况的文案都写明"预填、不自动发送", 不让用户以为已经替他把问题发出去了。
    */
   const handoff: HandoffState = useMemo(
     () =>
       seatTarget
         ? lhbCopilotHandoff({ symbol: seatTarget.symbol, name: seatTarget.name, date: seatTarget.date })
-        : { url: '', anchor: false, nonStockNote: '' },
+        : { url: '', anchor: false, anchorNote: '' },
     [seatTarget],
   )
 
@@ -564,7 +573,7 @@ export default function LhbBoardPage() {
                 ? `将打开数智参谋并预填问题（不会自动发送）：锚点 ${seatTarget.symbol}，日期 ${formatTradeDate(
                     seatTarget.date,
                   )} 写在问题正文里，需你确认后手动发送。本页只展示原始读数，不预置结论。`
-                : `将打开数智参谋并预填问题（不会自动发送）。${handoff.nonStockNote}代码与日期只写在问题正文里，需你确认后手动发送；本页不预置结论。`}
+                : `将打开数智参谋并预填问题（不会自动发送）。${handoff.anchorNote}代码与日期只写在问题正文里，需你确认后手动发送；本页不预置结论。`}
             </p>
           )}
 
@@ -613,8 +622,13 @@ export default function LhbBoardPage() {
               <SeatSection title="卖方席位" seats={seatSplit.sell} side="sell" summary={sellSummary} />
               {seatsHaveMultipleReasons && (
                 <p className="rounded-lg bg-muted px-2 py-1.5 text-xs text-muted-foreground" data-testid="lhb-seat-rows-note">
-                  同一营业部可能因多条上榜原因重复出现：上方「条记录」是席位明细行数，「家营业部」按营业部名去重；
-                  记录条数不等于独立席位家数。
+                  同一营业部可能因多条上榜原因重复出现：上方「条记录」是席位明细行数；
+                  记录条数不等于独立席位家数，只有身份可核实的席位才按家数统计。
+                </p>
+              )}
+              {(!buySummary.identityVerified || !sellSummary.identityVerified) && (
+                <p className="rounded-lg bg-muted px-2 py-1.5 text-xs text-muted-foreground" data-testid="lhb-seat-identity-note">
+                  {SEAT_IDENTITY_UNKNOWN_NOTE}
                 </p>
               )}
               <p className="text-xs text-muted-foreground">

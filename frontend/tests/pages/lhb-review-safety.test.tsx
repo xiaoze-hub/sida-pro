@@ -4,7 +4,8 @@
  *
  * 这里渲染**真组件**, 只把 `archiveApi` 换成可控返回值。断言的是用户实际看到的字:
  *  ① 后端 quality 的定性/风险/交叉提示真的出现在页面上; 没给时是"未知", 不是"完整";
- *  ② ETF/可转债点「分析此股龙虎榜」: 不带 symbol 锚点, 且页面明说不会成为锚点;
+ *  ② 入口不认的代码点「分析此股龙虎榜」: 不带 symbol 锚点, 页面明说没被识别为股票锚点
+ *     (第二轮起改为不猜证券类型的中性文案, 见 lhb-seat-identity-ui.test.tsx);
  *  ③ 文案明确是"预填、需手动发送", 不是自动发送;
  *  ④ 同营业部多原因多行时, 显示"条记录/家营业部", 不写"N 席"。
  */
@@ -258,7 +259,7 @@ describe('席位条数: 同营业部多原因多行不得说成独立席位', ()
 })
 
 describe('ETF/可转债交接参谋: 不承诺不会出现的股票锚点', () => {
-  it('ETF 510300: 不带 symbol, 提示写明非股票代码不会成为锚点, 且是预填不自动发送', async () => {
+  it('ETF 510300: 不带 symbol, 提示写明没被识别为锚点(不猜类型), 且是预填不自动发送', async () => {
     archiveApi.dragonTiger.mockResolvedValue(dayOk([dt({ symbol: '510300', name: '沪深300ETF' })]))
     renderPage()
 
@@ -266,7 +267,8 @@ describe('ETF/可转债交接参谋: 不承诺不会出现的股票锚点', () =
     const hint = await screen.findByTestId('lhb-analyze-hint')
     expect(hint.textContent).toContain('预填')
     expect(hint.textContent).toContain('不会自动发送')
-    expect(hint.textContent).toContain('不会把它作为股票锚点')
+    expect(hint.textContent).toContain('未被参谋入口识别为股票锚点')
+    expect(hint.textContent).not.toContain('非股票')
 
     fireEvent.click(screen.getByTestId('lhb-analyze-copilot'))
     const probe = await screen.findByTestId('copilot-probe')
@@ -283,7 +285,8 @@ describe('ETF/可转债交接参谋: 不承诺不会出现的股票锚点', () =
 
     fireEvent.click(await screen.findByTestId('lhb-stock-113050'))
     const hint = await screen.findByTestId('lhb-analyze-hint')
-    expect(hint.textContent).toContain('不会把它作为股票锚点')
+    expect(hint.textContent).toContain('未被参谋入口识别为股票锚点')
+    expect(hint.textContent).not.toContain('非股票')
 
     fireEvent.click(screen.getByTestId('lhb-analyze-copilot'))
     await screen.findByTestId('copilot-probe')

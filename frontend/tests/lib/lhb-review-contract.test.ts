@@ -19,6 +19,7 @@ import {
   lhbCopilotHandoff,
   lhbCoverage,
   lhbQualityView,
+  seatCountText,
   seatSummary,
   splitSeats,
 } from '@/lib/lhb'
@@ -186,18 +187,28 @@ describe('席位条数 ≠ 独立席位(同营业部可因多原因多行)', () 
     expect(s.multipleReasons).toBe(true)
   })
 
-  it('营业部名缺失的行不能互相合并(没有代码/名称证据就是未知, 分别计数)', () => {
+  it('营业部名缺失的行: 没有代码/名称证据, 只能算身份未知, 不得"各算一家"', () => {
     const { buy } = splitSeats([
       seat({ row_uid: 'a', operate_dept_code: '', operate_dept_name: '', reason: '日涨幅偏离值达7%' }),
       seat({ row_uid: 'b', operate_dept_code: '', operate_dept_name: '', reason: '日换手率达20%' }),
     ])
     const s = seatSummary(buy)
     expect(s.rows).toBe(2)
-    expect(s.departments).toBe(2)
+    expect(s.identityVerified).toBe(false)
+    expect(s.unknownIdentityRows).toBe(2)
+    expect(seatCountText(s)).toContain('身份未知')
+    expect(seatCountText(s)).not.toContain('家营业部')
   })
 
-  it('空列表 → 0 条 0 家, 不显示 NaN', () => {
-    expect(seatSummary([])).toEqual({ rows: 0, departments: 0, multipleReasons: false })
+  it('空列表 → 0 条记录, 不显示 NaN, 不写家数', () => {
+    expect(seatSummary([])).toEqual({
+      rows: 0,
+      departments: 0,
+      identityVerified: true,
+      unknownIdentityRows: 0,
+      multipleReasons: false,
+    })
+    expect(seatCountText(seatSummary([]))).toBe('0 条记录')
   })
 })
 
