@@ -467,7 +467,7 @@ def test_tq_pool_without_date_marks_concept_day_separately(monkeypatch):
 
 
 def test_zdt_backup_uses_real_names_for_st_boards(monkeypatch):
-    """快照备源也要拿真实名称判 ST(主板 5%), 否则备源把 ST 连板算成 0。"""
+    """快照备源使用真实名称和交易日期；新规后主板 ST 涨停为 10%。"""
     import marketdata.vendors.tq as tqmod
     from src.core import limit_pool_zdt as zdt
 
@@ -475,7 +475,7 @@ def test_zdt_backup_uses_real_names_for_st_boards(monkeypatch):
         if method == "get_stock_list":
             return [{"Code": "600001.SH", "Name": "ST样本"}]
         if method == "get_market_data":
-            return {"600001.SH": {"Close": ["10.0", "10.5"], "Amount": ["1", "1"]}}
+            return {"600001.SH": {"Close": ["10.0", "11.0"], "Amount": ["1", "1"], "Date": ["20261106", "20261109"]}}
         return {}
 
     monkeypatch.setattr(tqmod, "tq_rpc", fake_rpc, raising=True)
