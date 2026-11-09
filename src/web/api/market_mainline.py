@@ -112,31 +112,95 @@ def _upsert_today_snapshot(today_iso: str, ranked_groups: list[dict]) -> None:
         logger.debug(f"mainline_rank_daily 写入当日快照失败(静默): {e}")
 
 
-def _enrich_with_rank_change(ranked_groups: list[dict]) -> list[dict]:
+def _data_date(as_of: str | None) -> str | None:
+    """数据日校验: 只接受 ISO(YYYY-MM-DD); 其它/缺失 → None(不猜成今天)。"""
+    s = str(as_of or "").strip()
+    if len(s) != 10 or s[4] != "-" or s[7] != "-":
+        return None
+    try:
+        date.fromisoformat(s)
+    except ValueError:
+        return None
+    return s
+
+
+def _enrich_with_rank_change(ranked_groups: list[dict], as_of: str | None = None) -> list[dict]:
     """给 ranked_groups 每项加 rank(1-indexed)+ rank_change(昨日-今日, 正=上升)。
 
+    日期口径(2026-11-09): 一律按**涨停池数据日** as_of, 不用墙钟 today ——
+    盘前跑的是上一交易日数据, 按 today 落快照/找"昨日"就是把两天的名次错配。
+    as_of 未知 → 不落快照、rank_change=null(不假装有对比)。
     首次无昨日快照 → rank_change=null(数据缺失诚实标注, 不编造)。
     """
     if not ranked_groups:
         return ranked_groups
-    today_iso = date.today().isoformat()
-    yesterday = _load_yesterday_ranks(today_iso)
+    data_date = _data_date(as_of)
+    yesterday = _load_yesterday_ranks(data_date) if data_date else {}
 
     enriched: list[dict] = []
     for idx, g in enumerate(ranked_groups, start=1):
         item = dict(g)
         item["rank"] = idx
         name = g.get("name")
-        if name in yesterday:
+        if data_date and name in yesterday:
             # rank_change 正数=上升(昨日排名 - 今日排名)
             item["rank_change"] = int(yesterday[name]) - idx
         else:
             item["rank_change"] = None
         enriched.append(item)
 
-    # 落当日快照(失败静默, 不影响响应)
-    _upsert_today_snapshot(today_iso, enriched)
+    # 落当日快照(失败静默, 不影响响应); 时点未知则不落(落"今日"即错标)
+    if data_date:
+        _upsert_today_snapshot(data_date, enriched)
     return enriched
+
+
+def _normalize_payload(payload: dict) -> dict:
+    """旧版本缓存/快照载荷补齐新键(**不臆测**, 并显式说明为什么是空)。
+
+    2026-11-09 概念维度上线前的载荷没有 concept_* 键 —— 直接透传会让前端拿到
+    `undefined`, 看起来像"今日没有概念题材"。这里补空结构 + legacy_payload 标记,
+    旧字段原样保留; as_of 不从载荷里推导(它本来就没带)。
+    """
+    if not isinstance(payload, dict) or not payload:
+        return payload
+    out = dict(payload)
+    out.setdefault("dimension", "industry")
+    legacy = "concept_groups" not in payload
+    if legacy:
+        out.setdefault("concept_groups", [])
+        out.setdefault("concept_unranked", [])
+        stats = dict(payload.get("concept_stats") or {})
+        stats.update(
+            {
+                "distinct_stocks": stats.get("distinct_stocks", 0),
+                "tagged_stocks": stats.get("tagged_stocks", 0),
+                "untagged_stocks": stats.get("untagged_stocks", 0),
+                "multi_concept_stocks": stats.get("multi_concept_stocks", 0),
+                "member_count_sum": stats.get("member_count_sum", 0),
+                "overlap_excess": stats.get("overlap_excess", 0),
+                "overlap_ratio": stats.get("overlap_ratio", 0.0),
+                "summable": False,
+                "legacy_payload": True,
+                "note": "旧版本缓存载荷未包含概念维度（未重算）；空概念不代表今日无概念题材。",
+            }
+        )
+        out["concept_stats"] = stats
+        out["concept_status"] = "unavailable"
+        out["concept_note"] = "旧版本缓存载荷未包含概念维度，需等下次回源重算；空概念不代表今日无概念题材。"
+        meta = dict(payload.get("data_meta") or {})
+        meta.setdefault("as_of", None)
+        meta["concept_source"] = meta.get("concept_source")
+        meta["concept_status"] = "unavailable"
+        meta["concept_note"] = out["concept_note"]
+        out["data_meta"] = meta
+    else:
+        out.setdefault("concept_status", "available" if out.get("concept_groups") else "unavailable")
+        out.setdefault("concept_note", "")
+        meta = dict(payload.get("data_meta") or {})
+        meta.setdefault("concept_status", out["concept_status"])
+        out.setdefault("data_meta", meta)
+    return out
 
 
 # ──────────── 缓存: biz_cache(L1 内存 + L2 Redis) + 日频快照落库 ────────────
@@ -219,14 +283,19 @@ def _read_daily_snapshot() -> dict | None:
         return None
 
 
-def _upsert_daily_snapshot(payload: dict) -> bool:
-    """upsert 当日主线快照(date 主键 → 同日覆盖为最新)。失败静默返回 False。"""
+def _upsert_daily_snapshot(payload: dict, snapshot_date: str | None = None) -> bool:
+    """upsert 快照(date 主键 → 同日覆盖为最新)。失败静默返回 False。
+
+    date 优先取调用方给的快照日, 其次载荷里的 data_meta.as_of(数据日), 最后才 today ——
+    盘前把上一交易日的榜落成"今日"快照会让 rank_change 跨日错配。
+    """
     if not payload:
         return False
     try:
         from src.db.dialect import upsert_sql
         from src.web.database import engine
 
+        row_date = snapshot_date or _data_date((payload.get("data_meta") or {}).get("as_of")) or date.today().isoformat()
         body = json.dumps(payload, default=str, ensure_ascii=False)
         stmt = upsert_sql(
             "mainline_daily_snapshot",
@@ -238,7 +307,7 @@ def _upsert_daily_snapshot(payload: dict) -> bool:
             conn.execute(
                 text(stmt),
                 {
-                    "date": date.today().isoformat(),
+                    "date": row_date,
                     "payload": body,
                     "computed_ts": payload.get("cache_ts"),
                 },
@@ -349,11 +418,12 @@ def _fetch_mainline() -> dict:
     # 增加一个 cache_ts(给前端读"最近一次拉取时间")
     result = dict(result)
     result["cache_ts"] = time.time()
-    # v0.4.7: 排名变动(对比昨日快照, 失败静默)
+    # v0.4.7: 排名变动(对比昨日快照, 失败静默)。日期用池子数据日, 不用墙钟。
     try:
         ranked = result.get("ranked_groups") or []
         if ranked:
-            result["ranked_groups"] = _enrich_with_rank_change(ranked)
+            as_of = (result.get("data_meta") or {}).get("as_of")
+            result["ranked_groups"] = _enrich_with_rank_change(ranked, as_of=as_of)
     except Exception as e:
         logger.debug("market_mainline: rank_change 增强失败(静默): %s", e)
     return result
@@ -382,14 +452,16 @@ def get_market_mainline() -> dict:
     clear_market_mainline_cache() 可强制刷新缓存(运维用)。
     """
     # ① biz_cache(内存 + Redis): 跨 worker / 重启共享 —— 够新直接返, 过旧先返旧值+标 stale
+    #    旧版本载荷(概念键上线前写入)先补齐新键, 否则新字段在缓存命中期整体消失
     hit = biz_cache.get_json(_CACHE_KEY)
     if isinstance(hit, dict) and hit:
-        return _cached_response(hit)
+        return _cached_response(_normalize_payload(hit))
 
     # ② 日频快照读库(重启/换 worker 兜底): 够新直接给; 过旧仍先给旧值 + stale 标注,
     #    不阻塞用户(库里的就是历史数据, 同步回源也无新意 —— 交给后台单飞去刷)
     snap = _read_daily_snapshot()
     if snap:
+        snap = _normalize_payload(snap)
         _warm_biz_cache(snap)
         return _cached_response(snap)
 

@@ -5,6 +5,12 @@
 - 概念 leader 只标「本概念内连板→成交额排序第一，非该股专属驱动」，并给 `leader_shared_concepts`、`exclusive_ratio` 和成分股 `concept_count`，不伪造专属驱动或龙头。
 - `data_meta` 标注 `as_of`（取自日线真实日期，取不到写 None + 说明，不拿「今天」冒充）、`computed_at`、`pool_source`、`concept_source`。
 
+### fix-主线概念上线阻断（降级告知 / 日期错配 / 计数去重 / 旧载荷）
+- 降级源（东财/wudao/TQ快照）无概念字段时显式返回 `concept_status=unavailable` + `concept_note`，写明「源未提供概念，不代表今日无概念题材」；部分覆盖标 `partial`。降级源能安全拿到 TQ `get_relation` 时补概念（当日池），补不到保持空，绝不拿行业/题材冒充概念。
+- `get_limit_up_pool(date)` 的日期透传到 TQ 主源：按该交易日截断日线并要求末根日期匹配（覆盖不到返回空交回备源），不再拿最新一天冒充「昨日池」；`rank_change`/`mainline_daily_snapshot` 按池子数据日写入，`as_of` 未知时不落「今日」快照、`rank_change=null`。
+- 概念来源不再硬编码：优先用条目 `block_source`，无标记且非 TQ 族池子标 `unknown`；行业分组只认 881 行业块，缺失留空；涨停池按代码去重，家数与 `total_limit_ups` 不再虚高。
+- 旧版本 biz_cache / 日频快照载荷（无 concept_* 键）读取时补齐空结构并标 `legacy_payload=true` + 说明，旧字段原样保留。
+
 ### fix-首页 AI 策展说明状态
 - 今日要紧事在采用 AI 排序时，明确标注逐股 AI 解释暂不可用；保留原始信号，避免无法核实的模型解释串股。
 

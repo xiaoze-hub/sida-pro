@@ -309,6 +309,63 @@ def _pool_source(pool: list[dict]) -> str:
     return max(counts, key=lambda k: counts[k])
 
 
+def _dedupe_pool(pool: list[dict]) -> list[dict]:
+    """按代码去重(先到保留)。池子可能因翻页/多源并集残留重复条目 ——
+    重复条目会让家数虚高(同一只票计 2 家), 这里一处收敛, 后续所有计数复用。"""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in pool:
+        code = str(item.get("code") or "").strip()
+        if code:
+            if code in seen:
+                continue
+            seen.add(code)
+        out.append(item)
+    return out
+
+
+def _concept_meta(pool: list[dict], pool_source: str, tagged: int) -> dict:
+    """概念维度的可用性 / 来源标注(缺就明说, 不拿行业补, 不臆测来源)。"""
+    total = len(pool)
+    if tagged <= 0:
+        status = "unavailable"
+        note = (
+            f"当前涨停池来源({pool_source})未提供概念字段，概念维度为空——"
+            "这不等于「今日没有概念题材」；本卡片不拿行业/题材冒充概念。"
+        )
+    elif tagged < total:
+        status = "partial"
+        note = (
+            f"{tagged}/{total} 只涨停股有概念归属，其余缺失（数据源未提供概念字段），"
+            "概念家数可能偏低；缺失未被行业/题材补造。"
+        )
+    else:
+        status = "available"
+        note = ""
+
+    # 来源: 优先条目自带的 block_source(采集侧写实); 无标记时只在 TQ 族池子上
+    # 才敢说 tq:get_relation(TQ 是概念字段的唯一生产者), 其余一律 unknown。
+    src_counts: dict[str, int] = {}
+    for item in pool:
+        v = str(item.get("block_source") or "").strip()
+        if v and _concept_names(item):
+            src_counts[v] = src_counts.get(v, 0) + 1
+    if src_counts:
+        source = max(src_counts, key=lambda k: src_counts[k])
+        source_note = ""
+    elif tagged > 0 and pool_source in ("tq", "tq_zdt"):
+        source = "tq:get_relation"
+        source_note = "概念字段未带来源标记，按 TQ 族涨停池推定"
+    elif tagged > 0:
+        source = "unknown"
+        source_note = "概念字段缺少来源标记且涨停池非 TQ 族，未臆测来源"
+    else:
+        source = None
+        source_note = ""
+
+    return {"status": status, "note": note, "source": source, "source_note": source_note}
+
+
 def _aggregate_concepts(pool: list[dict]) -> tuple[list[dict], dict]:
     """概念**独立维度**聚合: 一只票可进多个概念, 各概念家数不可相加。
 
@@ -381,6 +438,7 @@ def _aggregate_concepts(pool: list[dict]) -> tuple[list[dict], dict]:
         "broad_filtered": len(broad_names),
         "summable": False,
         "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
+        "legacy_payload": False,
         "note": "概念为独立维度：一只股票可同时属于多个概念，各概念涨停家数不可相加（相加会重复计同一只票）。",
     }
     return groups, stats
@@ -408,21 +466,27 @@ def aggregate_mainline(
     宽基过滤说明: 被 _is_broad_sector 命中的分组(融资融券/沪深股通/昨日涨停/MSCI 等)
     整体剔除(不进 ranked_groups 也不进 unranked), 防止噪声占用前端卡片空间。
     """
-    pool = list(limit_up_pool) if limit_up_pool else []
+    pool = _dedupe_pool(list(limit_up_pool)) if limit_up_pool else []
     computed_at = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
     resolved_as_of = as_of or _pool_as_of(pool)
     resolved_source = pool_source or _pool_source(pool)
+    # 概念独立维度先算(可用性标注要用它的去重计数; 空池分支不在此列)
+    concept_all, concept_stats = _aggregate_concepts(pool)
+    cmeta = _concept_meta(pool, resolved_source, concept_stats["tagged_stocks"])
     data_meta = {
         "as_of": resolved_as_of,
         "computed_at": computed_at,
         "pool_source": resolved_source,
-        "concept_source": "tq:get_relation" if any(_concept_names(i) for i in pool) else None,
+        "concept_source": cmeta["source"],
+        "concept_source_note": cmeta["source_note"],
+        "concept_status": cmeta["status"],
+        "concept_note": cmeta["note"],
         "as_of_note": ""
         if resolved_as_of
         else "涨停池未提供交易日字段，数据时点未知（未猜测为当日）",
         "dimensions": {
             "industry": "theme > sector > industry 单一归属（原有口径，未变）",
-            "concept": "TQ 概念独立维度：一股多概念，各概念家数独立统计、不可相加",
+            "concept": "概念独立维度：一股多概念，各概念家数独立统计、不可相加；来源见 concept_source，缺失即空，不补造",
         },
     }
     if not pool:
@@ -440,6 +504,8 @@ def aggregate_mainline(
             "dimension": "industry",
             "concept_groups": [],
             "concept_unranked": [],
+            "concept_status": "unavailable",
+            "concept_note": "无涨停池数据（非交易日/数据源不可用），概念维度无输入，不代表今日没有概念题材。",
             "concept_stats": {
                 "distinct_stocks": 0,
                 "tagged_stocks": 0,
@@ -451,6 +517,7 @@ def aggregate_mainline(
                 "broad_filtered": 0,
                 "summable": False,
                 "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
+                "legacy_payload": False,
                 "note": "无概念归属数据（涨停池为空或数据源未提供概念字段）",
             },
             "data_meta": data_meta,
@@ -495,7 +562,6 @@ def aggregate_mainline(
 
     # ④ 概念独立维度(2026-11-09): 行业结果一条不丢, 概念另起一份排名。
     #    概念"一股多概念" ⇒ 各概念家数独立统计, 不可相加(concept_stats 里写明)。
-    concept_all, concept_stats = _aggregate_concepts(pool)
     concept_eligible: list[dict] = []
     concept_below: list[dict] = []
     for g in concept_all:
@@ -525,6 +591,8 @@ def aggregate_mainline(
         "dimension": "industry",
         "concept_groups": concept_ranked,
         "concept_unranked": concept_below[:10],
+        "concept_status": cmeta["status"],
+        "concept_note": cmeta["note"],
         "concept_stats": concept_stats,
         "data_meta": data_meta,
     }

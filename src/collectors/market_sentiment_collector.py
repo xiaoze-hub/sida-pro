@@ -29,6 +29,47 @@ _ZT_HEADERS = {
 }
 
 
+def _ymd_to_iso(ymd: str | None) -> str | None:
+    """YYYYMMDD → YYYY-MM-DD; 非 8 位数字 → 原样返回(不硬转, 不编造)。"""
+    s = str(ymd or "").strip()
+    if len(s) >= 8 and s[:8].isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return s or None
+
+
+def _window_bars(bars: dict[str, dict], ymd: str) -> tuple[dict[str, dict], bool]:
+    """把每只票的日线截到 ≤ ymd, 并判断是否真正覆盖该交易日。
+
+    返回 (截断后的 bars, covered)。covered=False(没有任何票的末根日期 == ymd)时
+    调用方必须放弃该源 —— 用最新一天的 K 线回答"昨天"就是数据错配。
+    日期列表与 Close/Amount 按下标对齐; 形态异常(非 list)的字段原样保留由
+    build_pool_items 自己兜底(算不出连板数 → 不入池, 不猜)。
+    """
+    out: dict[str, dict] = {}
+    covered = False
+    for code, payload in (bars or {}).items():
+        if not isinstance(payload, dict):
+            continue
+        dates = payload.get("Date")
+        if not isinstance(dates, list) or not dates:
+            continue
+        keep = -1
+        for i, d in enumerate(dates):
+            if str(d).strip() <= ymd:
+                keep = i
+            else:
+                break
+        if keep < 0:
+            continue
+        cut: dict = {}
+        for k, v in payload.items():
+            cut[k] = v[: keep + 1] if isinstance(v, list) and len(v) == len(dates) else v
+        out[code] = cut
+        if str(dates[keep]).strip() == ymd:
+            covered = True
+    return out, covered
+
+
 def _safe_float(v, default: float = 0.0) -> float:
     """展示层安全转 float: 缺失/非法回退 default(历史口径 0.0)。委托 numutil。"""
     return _num_safe_float(v, default)
@@ -52,7 +93,7 @@ class MarketSentimentCollector:
     _TQ_CHUNK = 50
     _TQ_BARS = 12  # 连板数最多往回数 12 根(足够覆盖市场最高板)
 
-    def _limit_up_pool_tq(self) -> list[dict]:
+    def _limit_up_pool_tq(self, date: str | None = None) -> list[dict]:
         """通达信涨停池: 全A列表 → 分片取日线(不复权) → 自算涨停与**连板数** → 池子。
 
         为什么用 K 线而不是快照: `get_market_snapshot` 传列表会**崩客户端**(实测 10 只即崩,
@@ -60,6 +101,11 @@ class MarketSentimentCollector:
 
         口径: 连板数由 `limit_up_calc.consecutive_boards` 从收盘价自算 —— 修掉此前"东财 `days`
         字段读错(实为 `lbc`)导致连板股全塌成首板"的问题。板块(行业优先)由 `stock_blocks` 补齐。
+
+        date(YYYYMMDD, 2026-11-09): 显式传入时**只认该交易日** —— 把每只票的日线截到
+        ≤ 该日, 且要求末根日期恰好等于该日; 覆盖不到就返回 [] (让带日期参数的备源接手),
+        绝不拿最新一天的 K 线冒充"昨日池"(那会让 promo_rate/排名变动全错)。
+        不传 = 取客户端最新一根(盘前即上一交易日), 时点按真实日线日期标注。
         """
         from src.core.limit_up_calc import build_pool_items
 
@@ -103,62 +149,87 @@ class MarketSentimentCollector:
         if not bars:
             return []
 
+        # ②b 显式日期: 截断到该交易日; 覆盖不到 → 空池(不拿最新一天冒充请求日)
+        requested = str(date).strip() if date else ""
+        if requested:
+            bars, covered = _window_bars(bars, requested)
+            if not bars or not covered:
+                logger.warning("涨停池(TQ): 日线未覆盖请求日 %s → 交回备源(不冒充)", requested)
+                return []
+
         # ③ 判涨停 + 连板数(纯函数, 可单测)
         pool = build_pool_items(bars, names)
 
-        # ③b 数据时点: 取日线真实日期(YYYYMMDD → YYYY-MM-DD), 取不到就留空 —
-        #     绝不用"今天"冒充(盘前跑的是上一交易日数据)。
+        # ③b 数据时点: 显式日期即请求日; 否则取日线真实日期(YYYYMMDD → YYYY-MM-DD),
+        #     取不到就留空 —— 绝不用"今天"冒充(盘前跑的是上一交易日数据)。
         try:
-            dates = [
-                str(d).strip()
-                for payload in bars.values()
-                if isinstance(payload, dict)
-                for d in (payload.get("Date") or [])
-                if str(d).strip()
-            ]
-            if dates:
-                last = max(dates)
-                as_of = f"{last[:4]}-{last[4:6]}-{last[6:8]}" if len(last) >= 8 and last.isdigit() else last
+            if requested:
+                as_of = _ymd_to_iso(requested)
+            else:
+                dates = [
+                    str(d).strip()
+                    for payload in bars.values()
+                    if isinstance(payload, dict)
+                    for d in (payload.get("Date") or [])
+                    if str(d).strip()
+                ]
+                as_of = _ymd_to_iso(max(dates)) if dates else None
+            if as_of:
                 for row in pool:
                     row["as_of"] = as_of
         except Exception as e:  # noqa: BLE001
             logger.debug("涨停池(TQ): 日线日期解析失败(不影响池子): %s", e)
 
         # ④ 板块(行业优先) —— 只对涨停的几十只反查, 每只日内缓存
+        #    显式历史日期不补板块: 板块归属是"当前"成员关系, 拿今天的概念盖昨天会错配。
+        if not requested or requested == datetime.now().strftime("%Y%m%d"):
+            self._enrich_pool_blocks(pool)
+
+        return pool
+
+    def _enrich_pool_blocks(self, pool: list[dict]) -> list[dict]:
+        """给池子补**行业(仅 881)** 与**概念(非 881, 独立字段)**, 安全富化。
+
+        · 行业缺失 → 留空, **绝不**拿 880 概念名顶到 sector(概念冒充行业);
+        · 概念缺失 → 用 TQ get_relation 全量补, 去空/去重, 标 block_source;
+        · 单只失败/无数据 → 跳过, 不编造; 池子为空直接返回。
+        """
+        if not pool:
+            return pool
         try:
             from src.core.tdx_boards import stock_blocks
-
-            for row in pool:
-                if row.get("sector") and row.get("concepts"):
-                    continue
-                try:
-                    blocks = stock_blocks(row["code"]) or []
-                except Exception:  # noqa: BLE001
-                    blocks = []
-                ind = [b for b in blocks if "881" in str(b.get("code") or "")] or blocks
-                if ind and not row.get("sector"):
-                    row["sector"] = str(ind[0].get("name") or "")
-                # 概念板块放进**独立字段** `concepts`(展示/概念维度聚合用), **不写 theme** ——
-                # 聚合的 `_resolve_group_name` 是"theme 优先、其次 sector", 而 TDX 概念有 269 个且
-                # 每只票归属多个, 拼成 theme 会让每只票自成一个组(实测: 37 只票 → 37 个组 → 全部
-                # below_min → ranked=0, 明明"通用设备"有 4 只够门槛却被拆散)。行业口径不动。
-                #
-                # 2026-11-09: 概念**全量保存**(此前 [:3]), 否则第 4+ 位的归属概念(如"商业航天")
-                # 永远进不了概念维度 —— 实证: 880548 概念当日 20 只涨停却分属不同行业,
-                # 只留前 3 会让该类题材在主线上完全消失。一股多概念由 concept 维度独立统计
-                # (不累加成"家数"), 故全量保存不会污染行业排名。
-                concept = [b for b in blocks if "881" not in str(b.get("code") or "")]
-                names_seen: list[str] = []
-                for b in concept:
-                    nm = str(b.get("name") or "").strip()
-                    if nm and nm not in names_seen:
-                        names_seen.append(nm)
-                if names_seen:
-                    row["concepts"] = names_seen
-                    row["block_source"] = "tq:get_relation"
         except Exception as e:  # noqa: BLE001
-            logger.debug("涨停池(TQ): 板块反查降级(不影响池子): %s", e)
+            logger.debug("涨停池: 板块反查不可用(不影响池子): %s", e)
+            return pool
 
+        for row in pool:
+            if row.get("sector") and row.get("concepts"):
+                continue
+            try:
+                blocks = stock_blocks(row.get("code") or "") or []
+            except Exception:  # noqa: BLE001
+                blocks = []
+            ind = [b for b in blocks if str(b.get("code") or "").startswith("881")]
+            if ind and not row.get("sector"):
+                row["sector"] = str(ind[0].get("name") or "")
+            # 概念板块放进**独立字段** `concepts`(展示/概念维度聚合用), **不写 theme** ——
+            # 聚合的 `_resolve_group_name` 是"theme 优先、其次 sector", 而 TDX 概念有 269 个且
+            # 每只票归属多个, 拼成 theme 会让每只票自成一个组(实测: 37 只票 → 37 个组 → 全部
+            # below_min → ranked=0, 明明"通用设备"有 4 只够门槛却被拆散)。行业口径不动。
+            #
+            # 2026-11-09: 概念**全量保存**(此前 [:3]), 否则第 4+ 位的归属概念(如"商业航天")
+            # 永远进不了概念维度 —— 实证: 880548 概念当日 20 只涨停却分属不同行业,
+            # 只留前 3 会让该类题材在主线上完全消失。一股多概念由 concept 维度独立统计
+            # (不累加成"家数"), 故全量保存不会污染行业排名。
+            concept = [b for b in blocks if "881" not in str(b.get("code") or "")]
+            names_seen: list[str] = []
+            for b in concept:
+                nm = str(b.get("name") or "").strip()
+                if nm and nm not in names_seen:
+                    names_seen.append(nm)
+            if names_seen:
+                row["concepts"] = names_seen
+                row["block_source"] = "tq:get_relation"
         return pool
 
     def _limit_up_pool_zdt_tq(self) -> list[dict]:
@@ -246,6 +317,7 @@ class MarketSentimentCollector:
         """
         # 修复(L-2): 总预算封顶
         deadline = time.monotonic() + _LIMITUP_TOTAL_BUDGET_S
+        explicit_date = str(date).strip() if date else ""
         date = date or datetime.now().strftime("%Y%m%d")
         from datetime import timedelta
 
@@ -258,8 +330,9 @@ class MarketSentimentCollector:
                 return date
 
         # ⓿ 通达信(TQ)主源(2026-09-23)。空/异常 → 先试快照备源, 再降级 wudao/东财。
+        #    date 必须透传: 显式"昨日池"拿今日 K 线 = 数据错配(market_phase promo_rate 恒 0)。
         try:
-            tq_pool = self._limit_up_pool_tq()
+            tq_pool = self._limit_up_pool_tq(explicit_date or None)
             if tq_pool:
                 return tq_pool
             logger.warning("涨停池(TQ)为空 → 先试涨跌停快照备源, 再降级 wudao/东财兜底")
@@ -271,7 +344,7 @@ class MarketSentimentCollector:
         try:
             zdt_pool = self._limit_up_pool_zdt_tq()
             if zdt_pool:
-                return zdt_pool
+                return self._maybe_enrich_fallback(zdt_pool, explicit_date)
         except Exception as e:  # noqa: BLE001
             logger.warning("涨停池(TQ备源-快照)失败 → 继续 wudao/东财: %s", e)
 
@@ -288,7 +361,7 @@ class MarketSentimentCollector:
                 logger.warning("wudao 涨停池失败(%s): %s", probe, e)
                 pool = []
             if pool:
-                return pool
+                return self._maybe_enrich_fallback(pool, explicit_date)
 
         # ② 东财兜底: 同逻辑找最近非空交易日。
         #    2026-09-23 修两处缺陷(都在这里):
@@ -337,8 +410,27 @@ class MarketSentimentCollector:
                 if tc and len(pool) < tc:
                     # 没取全就说清楚, 不假装完整
                     logger.warning("涨停池(东财 %s): 取到 %d 只 < 总数 %d(翻页未取全)", probe, len(pool), tc)
-                return pool
+                return self._maybe_enrich_fallback(pool, explicit_date)
         return []
+
+    def _maybe_enrich_fallback(self, pool: list[dict], explicit_date: str) -> list[dict]:
+        """降级源的**安全富化**: 能补概念就补, 补不到就空着(聚合层会显式标注)。
+
+        只对"当日/无日期"的池子补板块归属 —— 历史日期的板块成员关系与当日不同,
+        拿今天的概念盖昨天是另一种数据错配, 宁可空着说"概念不可用"。
+        """
+        if not pool:
+            return pool
+        today = datetime.now().strftime("%Y%m%d")
+        if explicit_date and explicit_date != today:
+            for row in pool:
+                row.setdefault("block_source", "")
+            return pool
+        try:
+            return self._enrich_pool_blocks(pool)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("涨停池(降级源): 概念富化失败(不影响池子): %s", e)
+            return pool
 
     def get_sentiment_summary(self) -> dict:
         """市场情绪摘要:涨停家数/连板梯队/最高板/涨停板块分布。"""

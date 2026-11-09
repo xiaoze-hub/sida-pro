@@ -18,7 +18,7 @@ def _stop(method: str):
 
 def test_主源有数据时不走快照(monkeypatch):
     coll = MarketSentimentCollector()
-    monkeypatch.setattr(coll, "_limit_up_pool_tq", lambda: [{"code": "001234", "days": 1, "source": "tq"}])
+    monkeypatch.setattr(coll, "_limit_up_pool_tq", lambda date=None: [{"code": "001234", "days": 1, "source": "tq"}])
     called = {"zdt": False}
 
     def fake_zdt():
@@ -73,7 +73,7 @@ def test_快照也挂时继续走wudao(monkeypatch):
 
 def test_快照返回空列表时继续走wudao(monkeypatch):
     coll = MarketSentimentCollector()
-    monkeypatch.setattr(coll, "_limit_up_pool_tq", lambda: [])
+    monkeypatch.setattr(coll, "_limit_up_pool_tq", lambda date=None: [])
     monkeypatch.setattr(coll, "_limit_up_pool_zdt_tq", lambda: [])
     wudao_rows = [{"code": "300750", "days": 3, "source": "wudao"}]
     monkeypatch.setattr(coll, "_limit_up_pool_wudao", lambda date: wudao_rows)
