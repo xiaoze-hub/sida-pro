@@ -405,6 +405,24 @@ export interface LhbSeatRow extends ArchiveLhbSeatItem {
   sellAmt: number | null
 }
 
+/**
+ * 席位占比量纲换算: `lhb_seat_details.total_buy_ratio` / `total_sell_ratio`
+ * 落库是 **0~1 小数**(0.1981 = 19.81%), 不是百分点。
+ *
+ * 生产只读对拍(2026-11-09)确认的字段口径:
+ *  · `total_buy_ratio` / `total_sell_ratio` —— 0~1 小数 ⇒ 展示前 ×100;
+ *  · `rise_probability_3d` —— 已是百分点(55.5 = 55.5%) ⇒ **不乘 100**。
+ *
+ * 旧代码把占比直接交给 `safePercent`(它收百分点), 页面显示被缩小 100 倍
+ * (0.1981 → "0.20%")。量纲换算只在这一处做, 不散落到渲染代码里。
+ * 缺失(null/undefined/空串/非数)恒为 null —— 由 `safePercent` 显示 "--",
+ * 不冒充 0%; 真实的 0 仍然是 0 → 显示 "0.00%"。
+ */
+export function seatRatioPercentPoints(v: unknown): number | null {
+  const n = num(v)
+  return n === null ? null : n * 100
+}
+
 function num(v: unknown): number | null {
   if (v === null || v === undefined) return null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null

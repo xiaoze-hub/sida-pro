@@ -74,7 +74,9 @@ export interface ArchiveLhbSeatItem {
   rise_probability_3d?: number | string | null
   change_type?: string | null
   trade_id?: string | null
+  /** 该席位买入占当日龙虎榜买入总额之比; 落库为 **0~1 小数**(0.1981 = 19.81%), 展示需 ×100 */
   total_buy_ratio?: number | string | null
+  /** 该席位卖出占当日龙虎榜卖出总额之比; 落库为 **0~1 小数**, 展示需 ×100 */
   total_sell_ratio?: number | string | null
   source?: string | null
   created_at?: string | null

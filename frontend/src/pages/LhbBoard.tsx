@@ -56,6 +56,7 @@ import {
   lhbQualityView,
   reasonLabel,
   seatCountText,
+  seatRatioPercentPoints,
   seatSummary,
   splitSeats,
   toApiDate,
@@ -114,6 +115,8 @@ function pctClass(v: number | null): string {
 
 function SeatRow({ seat, side }: { seat: LhbSeatRow; side: 'buy' | 'sell' }) {
   const ratio = side === 'buy' ? seat.total_buy_ratio : seat.total_sell_ratio
+  // 库内占比是 0~1 小数(0.1981 = 19.81%), safePercent 收百分点 ⇒ 先换算一次。
+  const ratioPct = seatRatioPercentPoints(ratio)
   return (
     <li className="flex flex-col gap-1 py-2 first:pt-0 last:pb-0" data-testid={`lhb-seat-${side}-${seat.row_uid}`}>
       <div className="flex items-start justify-between gap-2">
@@ -130,7 +133,7 @@ function SeatRow({ seat, side }: { seat: LhbSeatRow; side: 'buy' | 'sell' }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span>买 {safeMoneyUnsigned(seat.buyAmt)}</span>
         <span>卖 {safeMoneyUnsigned(seat.sellAmt)}</span>
-        <span>占{side === 'buy' ? '买入' : '卖出'}总额 {safePercent(ratio, 2, false)}</span>
+        <span>占{side === 'buy' ? '买入' : '卖出'}总额 {safePercent(ratioPct, 2, false)}</span>
         {seat.rise_probability_3d !== null && seat.rise_probability_3d !== undefined && (
           <span title="源字段原值，未回测">3日上涨概率 {safePercent(seat.rise_probability_3d, 2, false)}</span>
         )}
