@@ -230,6 +230,48 @@ def _ymd(v: Any) -> str:
     return digits[:8] if len(digits) >= 8 else ""
 
 
+_LHB_DATE_RE = re.compile(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$")
+
+
+def _lhb_trade_date(raw: Any) -> tuple[str, str]:
+    """龙虎榜日期参数 → ``(YYYYMMDD, 认不出的原文)``；合法返回 ``(日期, "")``。
+
+    为什么要严格校验，而不复用 ``_ymd``：``_ymd`` 对认不出的输入返回空串，而
+    ``_lhb_payload`` 收到空日期会回退到库内**最新交易日** —— 用户问 10-20，
+    模型却拿到 11-10 的榜单并把日期说成用户问的那天，等于替模型编了数据日期。
+    认不出就明确拒绝，宁可这轮不取数。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return "", ""
+    m = _LHB_DATE_RE.match(s)
+    if m:
+        y, mo, dd = (int(x) for x in m.groups())
+    elif s.isdigit() and len(s) == 8:
+        y, mo, dd = int(s[:4]), int(s[4:6]), int(s[6:8])
+    else:
+        return "", s
+    try:
+        return datetime(y, mo, dd).strftime("%Y%m%d"), ""
+    except ValueError:
+        return "", s
+
+
+def _lhb_symbol(raw: Any) -> tuple[str, str]:
+    """股票代码参数 → ``(6 位代码, 认不出的原文)``。
+
+    兼容 ``SZ002361`` / ``002361.SZ`` 这类带市场前后缀的写法（取其中连续 6 位数字）；
+    既不是 6 位数字也不是带后缀写法 → 拒绝，避免拿 "6001" 查空后声称「该股没上榜」。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return "", ""
+    m = re.search(r"(?<!\d)(\d{6})(?!\d)", s)
+    if m:
+        return m.group(1), ""
+    return "", s
+
+
 def _iso_date(v: Any) -> str:
     """日期归一为 ISO YYYY-MM-DD（signal_snapshots 存 YYYYMMDD，其余存 YYYY-MM-DD）。
 
@@ -310,8 +352,15 @@ def render_lhb(
     events: list[dict[str, Any]] | None = None,
     seats: list[dict[str, Any]] | None = None,
     missing: list[str] | None = None,
+    symbol: str = "",
 ) -> str:
-    """龙虎榜榜单 + 席位明细。空结果 → 「未取到」。"""
+    """龙虎榜榜单 + 席位明细。空结果 → 「未取到」。
+
+    席位只展示东财原文营业部名称 + 所属代码：`lhb_seat_details` 没有身份标签列，
+    这里**不做游资/机构/量化归类**（「机构专用」是数据源原文，不是本模块判定）。
+    全市场榜单的席位是按代码顺序抽样（SQL LIMIT），必须标明「抽样/非全量」并带代码，
+    否则同一行席位会被误读成某一只票的席位。
+    """
     sections: list[str] = []
     rows = list(events or [])
     if rows:
@@ -327,15 +376,35 @@ def render_lhb(
         if not buys and not sells:
             sections.append("- 净额均为 0 或未披露，不排序（不编方向）")
     if seats:
+        seen: set[tuple[str, str, str]] = set()
+        deduped = False
         for side, cn in (("buy", "买入席位"), ("sell", "卖出席位")):
-            group = [r for r in seats if str(r.get("side") or "").lower() == side][:5]
-            if not group:
-                continue
-            items = []
-            for r in group:
-                dept = str(r.get("operate_dept_name") or "未知营业部")
-                items.append(f"{dept} {_amt_plain(r.get('accum_amount'))}")
-            sections.append(f"- {cn}：" + "；".join(items))
+            head = (
+                f"- {cn}（{symbol}）" if symbol
+                else f"- {cn}（全市场·按代码顺序前 40 条，非全量）"
+            )
+            items: list[str] = []
+            for r in seats:
+                if str(r.get("side") or "").lower() != side:
+                    continue
+                dept = str(r.get("operate_dept_name") or "").strip() or "未披露营业部"
+                code = str(r.get("symbol") or "").strip()
+                key = (side, code, dept)
+                if key in seen:
+                    deduped = True
+                    continue
+                seen.add(key)
+                label = f"{dept}（{code}）" if code and not symbol else dept
+                if len(items) < 5:
+                    items.append(f"{label} {_amt_plain(r.get('accum_amount'))}")
+            if items:
+                sections.append(head + "：" + "；".join(items))
+        if deduped:
+            sections.append("- 同一营业部多条上榜原因记录仅列一次（金额未合并，不重复计数）")
+        sections.append(
+            "- 席位口径：营业部名称按东财原文披露（「机构专用」等为源方原文命名），"
+            "不推断游资/机构/量化身份；席位数据不含买卖方向之外的意图判断"
+        )
     return render_domain_sections(
         "lhb.daily",
         as_of=as_of,
@@ -2118,6 +2187,7 @@ def _theme_payload(db: Any, date: str, top_n: int) -> dict[str, Any]:
 
 
 def _lhb_payload(db: Any, date: str, symbol: str) -> dict[str, Any]:
+    explicit = bool(date)
     d = date or (_ymd((_read_one(db, "lhb_date") or {}).get("d")))
     if not d:
         return {"as_of": "未知", "missing": ["dragon_tiger_events 为空（尚未回填龙虎榜）"]}
@@ -2132,7 +2202,13 @@ def _lhb_payload(db: Any, date: str, symbol: str) -> dict[str, Any]:
         missing.append(f"dragon_tiger_events 在 {d} 无记录" + (f"（symbol={symbol}）" if symbol else ""))
     if not seats:
         missing.append(f"lhb_seat_details 在 {d} 无席位明细" + (f"（symbol={symbol}）" if symbol else ""))
-    return {"as_of": d, "events": events, "seats": seats, "missing": missing}
+    return {
+        "as_of": d,
+        "date_source": "explicit" if explicit else "latest",
+        "events": events,
+        "seats": seats,
+        "missing": missing,
+    }
 
 
 def _index_payload(db: Any) -> dict[str, Any]:
@@ -3201,12 +3277,31 @@ async def query_data_domain(
                 missing=payload.get("missing"),
             )
         if domain == "lhb.daily":
-            payload = _lhb_payload(db, _ymd(params.get("date")), str(params.get("symbol") or "").strip().upper())
+            raw_date = str(params.get("date") or "").strip()
+            day, derr = _lhb_trade_date(raw_date)
+            if derr:
+                return (
+                    f"日期参数无法识别（收到「{derr[:20]}」），本次未取到数据。"
+                    "龙虎榜按交易日查，请传 YYYYMMDD 或 YYYY-MM-DD（如 20261020）；"
+                    "不猜日期、也不改查库内最新交易日。"
+                )
+            raw_symbol = str(params.get("symbol") or "").strip()
+            symbol, serr = _lhb_symbol(raw_symbol)
+            if serr:
+                return (
+                    f"股票代码需 6 位数字（收到「{serr[:20]}」），本次未取到数据。"
+                    "如 002361（可带 SH/SZ 前后缀），不支持名称或拼音检索。"
+                )
+            payload = _lhb_payload(db, day, symbol)
+            as_of = payload.get("as_of") or "未知"
+            if payload.get("date_source") == "latest" and as_of != "未知":
+                as_of = f"{as_of}（库内最新交易日）"
             return render_lhb(
-                as_of=payload.get("as_of") or "未知",
+                as_of=as_of,
                 events=payload.get("events"),
                 seats=payload.get("seats"),
                 missing=payload.get("missing"),
+                symbol=symbol,
             )
         if domain == "theme.mood":
             try:
@@ -3260,7 +3355,9 @@ _QUERY_SCHEMA = {
             "**数据域统一取数入口**：传域 id + 参数，返回人话 Markdown（首行「域 / 时点 / 来源表」，"
             f"末尾缺数据会写「未取到（原因）」）。{len(DOMAINS)} 个域全部已接入。"
             "市场/个股类：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date、min_streak）、"
-            "lhb.daily（龙虎榜/席位，可选 symbol、date）、theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
+            "lhb.daily（龙虎榜/席位；可选 symbol=6 位代码、date=YYYYMMDD 或 YYYY-MM-DD，"
+            "date 缺省取库内最新交易日并标注；指定日无数据只报无记录，不回退日期；"
+            "席位只给营业部原文名称，不推断游资/机构身份）、theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
             "market.index（大盘指数/两市成交额）、market.breadth（涨跌家数+ADL/ARMS 分位+九档分布+市场状态）、"
             "market.mainline（主线榜排名/主线分/龙头，可选 top_n）、board.daily（板块涨跌与资金排行，可选 top_n）、"
             "etf.flow（20 只重点宽基 ETF 篮子成交额+分钟覆盖率+全市场 SC8 净申购/托底日样本，可选 days）、"
