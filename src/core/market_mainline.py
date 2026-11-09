@@ -41,7 +41,9 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -263,9 +265,133 @@ def _score_groups(groups: list[dict]) -> list[dict]:
     return groups
 
 
+def _concept_names(item: dict) -> list[str]:
+    """从涨停条目取**完整概念归属**(去空/去'无'/保序去重)。
+
+    2026-11-09: TQ `get_relation` 返回 880xxx 概念全量; 采集侧不再截前 3,
+    否则"商业航天"这类第 4+ 位归属的概念永远进不了主线(漏题材)。
+    """
+    raw = item.get("concepts")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in raw:
+        name = str(v or "").strip()
+        if not name or name == "无" or name == DEFAULT_GROUP or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _pool_as_of(pool: list[dict]) -> str | None:
+    """池子的数据交易日: 取条目 `as_of` 的众数; 全缺 → None(不猜成今天)。"""
+    counts: dict[str, int] = {}
+    for item in pool:
+        v = str(item.get("as_of") or "").strip()
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=lambda k: counts[k])
+
+
+def _pool_source(pool: list[dict]) -> str:
+    """池子的主数据源(按条目 source 众数); 缺失 → 'unknown'。"""
+    counts: dict[str, int] = {}
+    for item in pool:
+        v = str(item.get("source") or "").strip()
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        return "unknown"
+    return max(counts, key=lambda k: counts[k])
+
+
+def _aggregate_concepts(pool: list[dict]) -> tuple[list[dict], dict]:
+    """概念**独立维度**聚合: 一只票可进多个概念, 各概念家数不可相加。
+
+    返回 (groups, stats)。统计口径写死在 stats 里, 供前端/报告原样展示:
+      · distinct_stocks   有概念归属的去重股票数
+      · member_count_sum  各概念 limit_up_count 之和(会重复计同一只票)
+      · overlap_excess    sum - distinct(重复计数次数, >0 即证明不可相加)
+      · multi_concept_stocks 同时属于 ≥2 个概念的票数
+      · summable          False —— 契约钉子, 消费方别把概念家数当唯一家数
+    """
+    stock_concepts: dict[str, list[str]] = {}  # code -> 本池内的非宽基概念
+    for item in pool:
+        code = str(item.get("code") or "")
+        if not code:
+            continue
+        names = [n for n in _concept_names(item) if not _is_broad_sector(n)]
+        if names:
+            stock_concepts[code] = names
+
+    bucket: dict[str, list[dict]] = {}
+    broad_names: set[str] = set()
+    for item in pool:
+        code = str(item.get("code") or "")
+        raw_names = _concept_names(item)
+        if not raw_names:
+            continue
+        kept = stock_concepts.get(code)
+        if not kept:
+            broad_names.update(raw_names)  # 全部命中宽基黑名单
+            continue
+        for name in kept:
+            bucket.setdefault(name, []).append(item)
+        broad_names.update(n for n in raw_names if n not in kept)
+
+    groups: list[dict] = []
+    for name, items in bucket.items():
+        # 同一概念内按代码去重(脏数据重复归属只算 1 只)
+        uniq: dict[str, dict] = {}
+        for it in items:
+            uniq.setdefault(str(it.get("code") or ""), it)
+        members = [v for k, v in uniq.items() if k]
+        if not members:
+            continue
+        g = _aggregate_one(name, members)
+        g["dimension"] = "concept"
+        # 归属诚实: leader 只是"本概念内排序第一", 不是这只票的专属驱动
+        leader_code = str((g.get("leader") or {}).get("code") or "")
+        others = sorted(n for n in (stock_concepts.get(leader_code) or []) if n != name)
+        g["leader_shared_concepts"] = others
+        g["leader_basis"] = "本概念内连板数优先、成交额次之排序第一；非该股专属驱动"
+        solo = sum(1 for it in members if len(stock_concepts.get(str(it.get("code") or ""), [])) <= 1)
+        g["exclusive_ratio"] = round(solo / len(members), 2)
+        for c in g["constituents"]:
+            c["concept_count"] = len(stock_concepts.get(c["code"], []))
+        groups.append(g)
+
+    distinct_stocks = len(stock_concepts)
+    member_count_sum = sum(g["limit_up_count"] for g in groups)
+    multi = sum(1 for names in stock_concepts.values() if len(names) >= 2)
+    stats = {
+        "distinct_stocks": distinct_stocks,
+        "tagged_stocks": distinct_stocks,
+        "untagged_stocks": max(0, len(pool) - distinct_stocks),
+        "multi_concept_stocks": multi,
+        "member_count_sum": member_count_sum,
+        "overlap_excess": max(0, member_count_sum - distinct_stocks),
+        "overlap_ratio": round((member_count_sum - distinct_stocks) / member_count_sum, 2)
+        if member_count_sum
+        else 0.0,
+        "broad_filtered": len(broad_names),
+        "summable": False,
+        "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
+        "note": "概念为独立维度：一只股票可同时属于多个概念，各概念涨停家数不可相加（相加会重复计同一只票）。",
+    }
+    return groups, stats
+
+
 def aggregate_mainline(
     limit_up_pool: Iterable[dict] | None,
     top_n: int = 20,
+    *,
+    as_of: str | None = None,
+    pool_source: str | None = None,
 ) -> dict:
     """主入口: 涨停池 → 主线排名 TopN + 未入榜分组。
 
@@ -283,6 +409,22 @@ def aggregate_mainline(
     整体剔除(不进 ranked_groups 也不进 unranked), 防止噪声占用前端卡片空间。
     """
     pool = list(limit_up_pool) if limit_up_pool else []
+    computed_at = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
+    resolved_as_of = as_of or _pool_as_of(pool)
+    resolved_source = pool_source or _pool_source(pool)
+    data_meta = {
+        "as_of": resolved_as_of,
+        "computed_at": computed_at,
+        "pool_source": resolved_source,
+        "concept_source": "tq:get_relation" if any(_concept_names(i) for i in pool) else None,
+        "as_of_note": ""
+        if resolved_as_of
+        else "涨停池未提供交易日字段，数据时点未知（未猜测为当日）",
+        "dimensions": {
+            "industry": "theme > sector > industry 单一归属（原有口径，未变）",
+            "concept": "TQ 概念独立维度：一股多概念，各概念家数独立统计、不可相加",
+        },
+    }
     if not pool:
         return {
             "total_groups": 0,
@@ -294,6 +436,24 @@ def aggregate_mainline(
             "total_limit_ups": 0,
             "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
             "note": "无涨停池数据(非交易日/数据源不可用)",
+            # 概念维度(2026-11-09): 空池同样回空结构, 契约不随数据有无而变
+            "dimension": "industry",
+            "concept_groups": [],
+            "concept_unranked": [],
+            "concept_stats": {
+                "distinct_stocks": 0,
+                "tagged_stocks": 0,
+                "untagged_stocks": 0,
+                "multi_concept_stocks": 0,
+                "member_count_sum": 0,
+                "overlap_excess": 0,
+                "overlap_ratio": 0.0,
+                "broad_filtered": 0,
+                "summable": False,
+                "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
+                "note": "无概念归属数据（涨停池为空或数据源未提供概念字段）",
+            },
+            "data_meta": data_meta,
         }
 
     # ① 按 sector/theme 分组
@@ -313,6 +473,8 @@ def aggregate_mainline(
 
     # ③ 聚合 + 打分
     aggregated = [_aggregate_one(name, items) for name, items in filtered_bucket.items()]
+    for g in aggregated:
+        g["dimension"] = "industry"
 
     eligible: list[dict] = []
     below_min: list[dict] = []
@@ -331,6 +493,20 @@ def aggregate_mainline(
     below_min.sort(key=lambda g: (-g["limit_up_count"], -g["max_boards"], g["name"]))
     below_min_trim = below_min[:10]
 
+    # ④ 概念独立维度(2026-11-09): 行业结果一条不丢, 概念另起一份排名。
+    #    概念"一股多概念" ⇒ 各概念家数独立统计, 不可相加(concept_stats 里写明)。
+    concept_all, concept_stats = _aggregate_concepts(pool)
+    concept_eligible: list[dict] = []
+    concept_below: list[dict] = []
+    for g in concept_all:
+        if g["limit_up_count"] >= MIN_LIMITUP_FOR_RANK:
+            concept_eligible.append(g)
+        else:
+            g["score"] = None
+            concept_below.append(g)
+    concept_ranked = _score_groups(concept_eligible)[: max(0, int(top_n))]
+    concept_below.sort(key=lambda g: (-g["limit_up_count"], -g["max_boards"], g["name"]))
+
     return {
         "total_groups": len(filtered_bucket),
         "ranked_groups": ranked_top,
@@ -345,4 +521,10 @@ def aggregate_mainline(
         "total_limit_ups": len(pool),
         "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
         "note": "",
+        # ── 概念维度(2026-11-09, 纯新增键) ──
+        "dimension": "industry",
+        "concept_groups": concept_ranked,
+        "concept_unranked": concept_below[:10],
+        "concept_stats": concept_stats,
+        "data_meta": data_meta,
     }

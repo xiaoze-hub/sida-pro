@@ -1,3 +1,10 @@
+### fix-主线概念维度（独立统计·不叠加）
+- 涨停池改用 TQ 概念**全量**归属（原先只留前 3 个，导致「商业航天」这类第 4+ 位归属的概念在主线上完全消失；实测 880548 当日 20 只涨停却分属不同行业）。
+- `/api/market/mainline` 新增 `concept_groups` / `concept_unranked` / `concept_stats` / `data_meta`，行业/题材 `ranked_groups` 一条不丢、口径不变（纯新增键，契约向后兼容）。
+- `concept_stats` 明确 `summable: false`：一只票可同时属于多个概念，各概念家数独立统计、**不可相加**；同时给 `distinct_stocks` / `member_count_sum` / `overlap_excess` / `multi_concept_stocks` 供核对。
+- 概念 leader 只标「本概念内连板→成交额排序第一，非该股专属驱动」，并给 `leader_shared_concepts`、`exclusive_ratio` 和成分股 `concept_count`，不伪造专属驱动或龙头。
+- `data_meta` 标注 `as_of`（取自日线真实日期，取不到写 None + 说明，不拿「今天」冒充）、`computed_at`、`pool_source`、`concept_source`。
+
 ### fix-首页 AI 策展说明状态
 - 今日要紧事在采用 AI 排序时，明确标注逐股 AI 解释暂不可用；保留原始信号，避免无法核实的模型解释串股。
 

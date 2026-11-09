@@ -367,8 +367,14 @@ def get_market_mainline() -> dict:
       {
         "total_groups", "ranked_groups": [...], "unranked": [...],
         "filter_stats": {broad_filtered, below_min, ranked},
+        "dimension": "industry",
+        "concept_groups": [...], "concept_unranked": [...],
+        "concept_stats": {..., "summable": false},
+        "data_meta": {as_of, computed_at, pool_source, concept_source, as_of_note},
         "note", "cache_ts", "stale", "age_s"
       }
+    概念维度(2026-11-09): 一股多概念 ⇒ 各概念家数**独立统计、不可相加**;
+    concept leader 仅是本概念内排序第一, 不是该股专属驱动。
 
     缓存三层(2026-10-14 缓存收口): biz_cache(L1 内存 + L2 Redis, 跨 worker/重启
     共享) → mainline_daily_snapshot 日频快照读库 → 回源拉涨停池聚合。

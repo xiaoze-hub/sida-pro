@@ -106,28 +106,56 @@ class MarketSentimentCollector:
         # ③ 判涨停 + 连板数(纯函数, 可单测)
         pool = build_pool_items(bars, names)
 
+        # ③b 数据时点: 取日线真实日期(YYYYMMDD → YYYY-MM-DD), 取不到就留空 —
+        #     绝不用"今天"冒充(盘前跑的是上一交易日数据)。
+        try:
+            dates = [
+                str(d).strip()
+                for payload in bars.values()
+                if isinstance(payload, dict)
+                for d in (payload.get("Date") or [])
+                if str(d).strip()
+            ]
+            if dates:
+                last = max(dates)
+                as_of = f"{last[:4]}-{last[4:6]}-{last[6:8]}" if len(last) >= 8 and last.isdigit() else last
+                for row in pool:
+                    row["as_of"] = as_of
+        except Exception as e:  # noqa: BLE001
+            logger.debug("涨停池(TQ): 日线日期解析失败(不影响池子): %s", e)
+
         # ④ 板块(行业优先) —— 只对涨停的几十只反查, 每只日内缓存
         try:
             from src.core.tdx_boards import stock_blocks
 
             for row in pool:
-                if row.get("sector"):
+                if row.get("sector") and row.get("concepts"):
                     continue
                 try:
                     blocks = stock_blocks(row["code"]) or []
                 except Exception:  # noqa: BLE001
                     blocks = []
                 ind = [b for b in blocks if "881" in str(b.get("code") or "")] or blocks
-                if ind:
+                if ind and not row.get("sector"):
                     row["sector"] = str(ind[0].get("name") or "")
-                # 概念板块放进**独立字段** `concepts`(展示用), **不写 theme** ——
+                # 概念板块放进**独立字段** `concepts`(展示/概念维度聚合用), **不写 theme** ——
                 # 聚合的 `_resolve_group_name` 是"theme 优先、其次 sector", 而 TDX 概念有 269 个且
                 # 每只票归属多个, 拼成 theme 会让每只票自成一个组(实测: 37 只票 → 37 个组 → 全部
-                # below_min → ranked=0, 明明"通用设备"有 4 只够门槛却被拆散)。
-                # 口径与东财源保持一致: 用**行业**分组。
+                # below_min → ranked=0, 明明"通用设备"有 4 只够门槛却被拆散)。行业口径不动。
+                #
+                # 2026-11-09: 概念**全量保存**(此前 [:3]), 否则第 4+ 位的归属概念(如"商业航天")
+                # 永远进不了概念维度 —— 实证: 880548 概念当日 20 只涨停却分属不同行业,
+                # 只留前 3 会让该类题材在主线上完全消失。一股多概念由 concept 维度独立统计
+                # (不累加成"家数"), 故全量保存不会污染行业排名。
                 concept = [b for b in blocks if "881" not in str(b.get("code") or "")]
-                if concept:
-                    row["concepts"] = [str(b.get("name") or "") for b in concept[:3]]
+                names_seen: list[str] = []
+                for b in concept:
+                    nm = str(b.get("name") or "").strip()
+                    if nm and nm not in names_seen:
+                        names_seen.append(nm)
+                if names_seen:
+                    row["concepts"] = names_seen
+                    row["block_source"] = "tq:get_relation"
         except Exception as e:  # noqa: BLE001
             logger.debug("涨停池(TQ): 板块反查降级(不影响池子): %s", e)
 
