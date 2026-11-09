@@ -218,4 +218,66 @@ describe('BoardHeatmap 板块热力图', () => {
     expect(await screen.findByText('数据加载失败')).toBeTruthy()
     expect(screen.getByText('重试')).toBeTruthy()
   })
+
+  // 2026-11-09: 概念板块 ~457 条, 用户无法在色块里找到某个题材(如商业航天)。
+  // 最小交互 = 本地过滤已返回数据 + 结果行明示代码/真实涨幅/来源, 点击下钻原板块。
+  const CONCEPT_RESP = {
+    type: 'concept',
+    trade_date: '2026-11-07',
+    count: 3,
+    source: 'tdx',
+    items: [
+      { block_code: '880548', name: '商业航天', board_type: 'concept', change_pct: 2.13, fund_net: 5.2e8, volume: 3.1e10, date: '2026-11-07', has_daily: true },
+      { block_code: '880001', name: '低空经济', board_type: 'concept', change_pct: -0.42, fund_net: -1e8, volume: 1.2e10, date: '2026-11-07', has_daily: true },
+      { block_code: '880002', name: '空天信息', board_type: 'concept', change_pct: null, fund_net: null, volume: null, date: null, has_daily: false },
+    ],
+  }
+
+  async function openConceptSearch(query: string) {
+    mocks.fetchAPI.mockImplementation((path: string) =>
+      Promise.resolve(String(path).includes('type=concept') ? CONCEPT_RESP : RESP),
+    )
+    const onOpenBoard = vi.fn()
+    render(<BoardHeatmap onOpenBoard={onOpenBoard} />)
+    fireEvent.click(screen.getByText('概念'))
+    await waitFor(() => {
+      expect(String(mocks.fetchAPI.mock.calls.at(-1)?.[0] ?? '')).toContain('type=concept')
+    })
+    // 等概念数据真正落到组件里(结果行依赖 items, 不依赖色块是否画得出来)
+    const input = screen.getByLabelText('搜索板块') as HTMLInputElement
+    fireEvent.change(input, { target: { value: query } })
+    return { onOpenBoard, input }
+  }
+
+  it('概念视图可搜索到商业航天, 明示代码/真实涨幅/来源, 点击打开原板块', async () => {
+    const { onOpenBoard } = await openConceptSearch('商业航天')
+    const panel = await screen.findByTestId('heatmap-search-results')
+    const hit = await screen.findByTestId('heatmap-search-hit-880548')
+    expect(panel.textContent).toContain('商业航天')
+    expect(hit.textContent).toContain('880548')
+    expect(hit.textContent).toContain('+2.13%')
+    expect(hit.textContent).toContain('通达信')
+    fireEvent.click(hit)
+    expect(onOpenBoard).toHaveBeenCalledWith('880548', '商业航天')
+  })
+
+  it('搜索只过滤后端已返回板块; 无匹配时明说未找到, 不编造条目', async () => {
+    await openConceptSearch('不存在的题材')
+    expect(await screen.findByTestId('heatmap-search-results')).toBeTruthy()
+    expect(screen.getByText(/未找到匹配板块/)).toBeTruthy()
+    expect(screen.queryByTestId('heatmap-search-hit-880548')).toBeNull()
+  })
+
+  it('搜索框为空时不展示结果面板(不倾倒全量板块)', async () => {
+    await openConceptSearch('')
+    expect(screen.queryByTestId('heatmap-search-results')).toBeNull()
+  })
+
+  it('搜索命中无当日数据的板块时如实标注, 不显示伪造涨幅/实时', async () => {
+    await openConceptSearch('空天信息')
+    const hit = await screen.findByTestId('heatmap-search-hit-880002')
+    expect(hit.textContent).toContain('暂无当日数据')
+    expect(hit.textContent).toContain('无数据')
+    expect(hit.textContent).not.toContain('实时')
+  })
 })

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePausedInterval } from '@sida/base-ui'
-import { AlertTriangle, RefreshCw, Zap } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Search, Zap } from 'lucide-react'
 import { useECharts } from '@sida/biz-ui/hooks/useECharts'
+import { searchBoards } from '@sida/biz-ui/lib/board-search'
 import { hslaVar, readStockColors } from '@sida/biz-ui/lib/stock-colors'
 import {
   detectHeatAnomaly,
@@ -267,6 +268,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
   const { ref, chartRef } = useECharts()
   const [btype, setBtype] = useState<BoardType>('industry')
   const [areaMetric, setAreaMetric] = useState<HeatAreaMetric>('volume')
+  const [query, setQuery] = useState('')
   const [data, setData] = useState<HeatmapResp | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
@@ -334,6 +336,22 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       .sort((a, b) => Math.abs(b.item.speed ?? 0) - Math.abs(a.item.speed ?? 0))
       .slice(0, MAX_ANOMALY_CHIPS)
   }, [liveMode, items])
+
+  /**
+   * 板块查找(2026-11-09): 概念视图约 457 个色块, 肉眼找「商业航天」这类单板块不现实。
+   * 只在**后端已返回的 items** 上本地过滤; 不预置主题、不造排名、找不到就明说未找到。
+   */
+  const searchActive = query.trim().length > 0
+  const searchHits = useMemo(() => searchBoards(items, query), [items, query])
+  /** 实际数据来源(后端 source 字段原样标注; 缺失则不给标签, 不猜) */
+  const sourceLabel =
+    fresh && data?.source
+      ? data.source === 'tdx'
+        ? '通达信'
+        : data.source === 'ths'
+          ? '同花顺'
+          : data.source
+      : null
 
   useEffect(() => {
     const chart = chartRef.current
@@ -479,6 +497,66 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </button>
         </div>
       </div>
+
+      {/* 板块查找(2026-11-09): 457 个概念色块里定位单个板块的最小交互。 */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <label className="flex h-8 min-w-[176px] flex-1 items-center gap-1.5 rounded-md border border-border bg-background px-2 sm:max-w-[320px]">
+          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <input
+            aria-label="搜索板块"
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`搜索${btype === 'industry' ? '行业' : '概念'}板块名称或代码`}
+            className="h-7 w-full bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
+          />
+        </label>
+        {searchActive && (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            className="rounded px-2 py-1 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            清空
+          </button>
+        )}
+      </div>
+
+      {searchActive && (
+        <div
+          data-testid="heatmap-search-results"
+          aria-live="polite"
+          className="mb-2 flex flex-wrap items-center gap-1.5 text-[12px]"
+        >
+          {!fresh ? (
+            <span className="text-muted-foreground">板块数据加载中…</span>
+          ) : searchHits.length === 0 ? (
+            <span className="text-muted-foreground">
+              未找到匹配板块 —— 当前为{btype === 'industry' ? '行业' : '概念'}视图，可切换分类或换个关键词
+            </span>
+          ) : (
+            <>
+              <span className="text-muted-foreground">{searchHits.length} 个匹配</span>
+              {searchHits.map((hit) => (
+                <button
+                  key={hit.blockCode}
+                  type="button"
+                  data-testid={`heatmap-search-hit-${hit.blockCode}`}
+                  title={`${hit.name} ${formatHeatPct(hit.changePct)}`}
+                  onClick={() => onOpenRef.current(hit.blockCode, hit.name)}
+                  className="inline-flex items-center gap-1.5 rounded border border-border bg-background px-1.5 py-0.5 text-foreground transition-colors hover:bg-accent"
+                >
+                  <span className="font-medium">{hit.name}</span>
+                  <span className="font-mono text-muted-foreground">{hit.blockCode}</span>
+                  <span className="font-mono">{formatHeatPct(hit.changePct)}</span>
+                  {!hit.hasDaily && <span className="text-muted-foreground">暂无当日数据</span>}
+                  {sourceLabel && <span className="rounded bg-s2 px-1 text-muted-foreground">{sourceLabel}</span>}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
 
       {stale && (
         <div className="card-surface mb-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[12px] text-amber-600 dark:text-amber-500">
