@@ -309,6 +309,72 @@ def _pool_source(pool: list[dict]) -> str:
     return max(counts, key=lambda k: counts[k])
 
 
+def _pool_as_of_basis(pool: list[dict]) -> str:
+    """数据日的**可证实程度**: `kline`(K线末根日期) / `source_request`(按请求日推定) / `unknown`。"""
+    counts: dict[str, int] = {}
+    for item in pool:
+        v = str(item.get("as_of_basis") or "").strip()
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        return "unknown"
+    return max(counts, key=lambda k: counts[k])
+
+
+def _pool_coverage(pool: list[dict]) -> dict:
+    """池子覆盖率(条目 `pool_coverage` 众数)。**缺失 → unknown, 绝不声称完整**。
+
+    涨停家数只有在"全市场代码都取到日线"时才是完整口径; 分片失败/漏回的票会让
+    家数偏低, 消费方必须能看出这是下限而不是全量。
+    """
+    counts: dict[str, int] = {}
+    detail: dict[str, dict] = {}
+    for item in pool:
+        cov = item.get("pool_coverage")
+        if isinstance(cov, dict) and str(cov.get("status") or "").strip():
+            st = str(cov["status"]).strip()
+            counts[st] = counts.get(st, 0) + 1
+            detail.setdefault(st, cov)
+    if not counts:
+        return {
+            "status": "unknown",
+            "requested_codes": None,
+            "fetched_codes": None,
+            "batch_failures": None,
+            "note": "涨停池未提供覆盖率信息，无法确认是否覆盖全市场（未声称完整）",
+        }
+    status = max(counts, key=lambda k: counts[k])
+    cov = detail.get(status) or {}
+    if status == "complete":
+        note = ""
+    elif status == "partial":
+        note = (
+            f"涨停池未取全：{cov.get('fetched_codes')}/{cov.get('requested_codes')} 只取到日线"
+            f"（{cov.get('batch_failures') or 0} 批失败），涨停家数为下限，不代表全市场完整池"
+        )
+    else:
+        note = "涨停池未提供覆盖率信息，无法确认是否覆盖全市场（未声称完整）"
+    return {
+        "status": status,
+        "requested_codes": cov.get("requested_codes"),
+        "fetched_codes": cov.get("fetched_codes"),
+        "batch_failures": cov.get("batch_failures"),
+        "note": note,
+    }
+
+
+def _concept_as_of(pool: list[dict]) -> str | None:
+    """概念/行业归属的反查日期(条目 `block_as_of` 众数); 全缺 → None(不猜成池子同日)。"""
+    counts: dict[str, int] = {}
+    for item in pool:
+        v = str(item.get("block_as_of") or "").strip()
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=lambda k: counts[k])
+
+
 def _dedupe_pool(pool: list[dict]) -> list[dict]:
     """按代码去重(先到保留)。池子可能因翻页/多源并集残留重复条目 ——
     重复条目会让家数虚高(同一只票计 2 家), 这里一处收敛, 后续所有计数复用。"""
@@ -324,7 +390,7 @@ def _dedupe_pool(pool: list[dict]) -> list[dict]:
     return out
 
 
-def _concept_meta(pool: list[dict], pool_source: str, tagged: int) -> dict:
+def _concept_meta(pool: list[dict], pool_source: str, tagged: int, pool_as_of: str | None = None) -> dict:
     """概念维度的可用性 / 来源标注(缺就明说, 不拿行业补, 不臆测来源)。"""
     total = len(pool)
     if tagged <= 0:
@@ -363,7 +429,30 @@ def _concept_meta(pool: list[dict], pool_source: str, tagged: int) -> dict:
         source = None
         source_note = ""
 
-    return {"status": status, "note": note, "source": source, "source_note": source_note}
+    # 归属时点(2026-11-09): 概念/行业是**反查当前成员关系**得来的, 而池子可能是上一
+    # 交易日的 K 线。两者不同日时必须分开标注 —— 否则消费方会把"今天的归属"当成
+    # "那天的归属"(同日伪装)。
+    c_as_of = _concept_as_of(pool)
+    if c_as_of is None:
+        c_as_of_note = "概念归属未提供反查日期，归属时点未知（未猜成与池子同日）"
+    elif pool_as_of and c_as_of != pool_as_of:
+        c_as_of_note = (
+            f"概念归属取当前（{c_as_of}）成员关系，与涨停池数据日（{pool_as_of}）不同日，"
+            "不能当作该日的概念归属"
+        )
+    else:
+        c_as_of_note = ""
+
+    return {
+        "status": status,
+        "note": note,
+        "source": source,
+        "source_note": source_note,
+        # 有来源标记才算"可核实"; 无标记时 source 是推定值
+        "source_verified": bool(src_counts),
+        "as_of": c_as_of,
+        "as_of_note": c_as_of_note,
+    }
 
 
 def _aggregate_concepts(pool: list[dict]) -> tuple[list[dict], dict]:
@@ -472,13 +561,27 @@ def aggregate_mainline(
     resolved_source = pool_source or _pool_source(pool)
     # 概念独立维度先算(可用性标注要用它的去重计数; 空池分支不在此列)
     concept_all, concept_stats = _aggregate_concepts(pool)
-    cmeta = _concept_meta(pool, resolved_source, concept_stats["tagged_stocks"])
+    cmeta = _concept_meta(
+        pool, resolved_source, concept_stats["tagged_stocks"], pool_as_of=resolved_as_of
+    )
+    coverage = _pool_coverage(pool)
+    as_of_basis = _pool_as_of_basis(pool)
     data_meta = {
         "as_of": resolved_as_of,
+        # 数据日怎么来的: K线证实 / 按请求日推定 / 未知 —— 消费方可据此决定能否当历史真值用
+        "as_of_basis": as_of_basis,
+        "as_of_verified": as_of_basis == "kline",
         "computed_at": computed_at,
         "pool_source": resolved_source,
+        # 覆盖率(2026-11-09): 取数不全/无覆盖率信息时如实标出, 家数别被当全量
+        "pool_coverage": coverage,
+        "coverage_note": coverage["note"],
         "concept_source": cmeta["source"],
         "concept_source_note": cmeta["source_note"],
+        "concept_source_verified": cmeta["source_verified"],
+        # 概念/行业归属的反查日 ≠ 池子数据日时必须分开说(不许伪装同日)
+        "concept_as_of": cmeta["as_of"],
+        "concept_as_of_note": cmeta["as_of_note"],
         "concept_status": cmeta["status"],
         "concept_note": cmeta["note"],
         "as_of_note": ""

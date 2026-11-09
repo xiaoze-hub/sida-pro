@@ -113,15 +113,19 @@ def _upsert_today_snapshot(today_iso: str, ranked_groups: list[dict]) -> None:
 
 
 def _data_date(as_of: str | None) -> str | None:
-    """数据日校验: 只接受 ISO(YYYY-MM-DD); 其它/缺失 → None(不猜成今天)。"""
+    """数据日校验: 接受 ISO(YYYY-MM-DD) 与紧凑 YYYYMMDD; 其它/缺失 → None(不猜成今天)。"""
     s = str(as_of or "").strip()
-    if len(s) != 10 or s[4] != "-" or s[7] != "-":
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        candidate = s
+    elif len(s) >= 8 and s[:8].isdigit():
+        candidate = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    else:
         return None
     try:
-        date.fromisoformat(s)
+        date.fromisoformat(candidate)
     except ValueError:
         return None
-    return s
+    return candidate
 
 
 def _enrich_with_rank_change(ranked_groups: list[dict], as_of: str | None = None) -> list[dict]:
@@ -193,12 +197,37 @@ def _normalize_payload(payload: dict) -> dict:
         meta["concept_source"] = meta.get("concept_source")
         meta["concept_status"] = "unavailable"
         meta["concept_note"] = out["concept_note"]
+        meta["concept_source_verified"] = False
+        meta["concept_as_of"] = None
+        meta["concept_as_of_note"] = "旧版本载荷未带概念归属日期，归属时点未知（未猜成与池子同日）"
+        meta["pool_coverage"] = {
+            "status": "unknown",
+            "requested_codes": None,
+            "fetched_codes": None,
+            "batch_failures": None,
+            "note": "旧版本载荷未带覆盖率信息，无法确认是否覆盖全市场（未声称完整）",
+        }
+        meta["coverage_note"] = meta["pool_coverage"]["note"]
         out["data_meta"] = meta
     else:
         out.setdefault("concept_status", "available" if out.get("concept_groups") else "unavailable")
         out.setdefault("concept_note", "")
         meta = dict(payload.get("data_meta") or {})
         meta.setdefault("concept_status", out["concept_status"])
+        meta.setdefault("concept_source_verified", bool(meta.get("concept_source")))
+        meta.setdefault("concept_as_of", None)
+        meta.setdefault("concept_as_of_note", "")
+        meta.setdefault(
+            "pool_coverage",
+            {
+                "status": "unknown",
+                "requested_codes": None,
+                "fetched_codes": None,
+                "batch_failures": None,
+                "note": "载荷未带覆盖率信息，无法确认是否覆盖全市场（未声称完整）",
+            },
+        )
+        meta.setdefault("coverage_note", (meta["pool_coverage"] or {}).get("note") or "")
         out.setdefault("data_meta", meta)
     return out
 
@@ -286,16 +315,20 @@ def _read_daily_snapshot() -> dict | None:
 def _upsert_daily_snapshot(payload: dict, snapshot_date: str | None = None) -> bool:
     """upsert 快照(date 主键 → 同日覆盖为最新)。失败静默返回 False。
 
-    date 优先取调用方给的快照日, 其次载荷里的 data_meta.as_of(数据日), 最后才 today ——
-    盘前把上一交易日的榜落成"今日"快照会让 rank_change 跨日错配。
+    date 只取**可信来源**: 调用方显式快照日, 或载荷里的 data_meta.as_of(数据日)。
+    两者都没有 ⇒ **不落库** —— 盘前把上一交易日的榜落成"今日"快照会让 rank_change
+    跨日错配, 而且事后无法分辨哪一行是猜的。
     """
     if not payload:
+        return False
+    row_date = snapshot_date or _data_date((payload.get("data_meta") or {}).get("as_of"))
+    if not row_date:
+        logger.debug("mainline_daily_snapshot: 数据日未知 → 不落库(不按今日冒充)")
         return False
     try:
         from src.db.dialect import upsert_sql
         from src.web.database import engine
 
-        row_date = snapshot_date or _data_date((payload.get("data_meta") or {}).get("as_of")) or date.today().isoformat()
         body = json.dumps(payload, default=str, ensure_ascii=False)
         stmt = upsert_sql(
             "mainline_daily_snapshot",

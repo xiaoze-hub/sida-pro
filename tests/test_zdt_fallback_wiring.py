@@ -6,7 +6,13 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from src.collectors.market_sentiment_collector import MarketSentimentCollector
+
+# 快照备源**不带日期**(只给最新状态) ⇒ 只有请求当日才会被采用; 请求历史日改用带日期的源。
+# 接线测试用"今天", 保证验的是备源接管本身, 不是日期口径。
+_TODAY = datetime.now().strftime("%Y%m%d")
 
 
 def _stop(method: str):
@@ -26,7 +32,7 @@ def test_主源有数据时不走快照(monkeypatch):
         return [{"code": "999999", "days": 1, "source": "tq_zdt"}]
 
     monkeypatch.setattr(coll, "_limit_up_pool_zdt_tq", fake_zdt)
-    out = coll.get_limit_up_pool("20260928")
+    out = coll.get_limit_up_pool(_TODAY)
     assert [r["code"] for r in out] == ["001234"]
     assert not called["zdt"], "主源成功时绝不应触发备源"
 
@@ -53,7 +59,7 @@ def test_主源挂掉时快照备源接管(monkeypatch):
 
     monkeypatch.setattr(msc, "market_get", _stop("market_get"))
 
-    out = coll.get_limit_up_pool("20260928")
+    out = coll.get_limit_up_pool(_TODAY)
     assert [r["code"] for r in out] == ["001234"]
     assert out[0]["source"] == "tq_zdt"
     assert out[0]["open_times"] == 2

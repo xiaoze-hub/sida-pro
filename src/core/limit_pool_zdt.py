@@ -27,7 +27,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 _ZDT_CHUNK = 50  # 事故铁律: 单次 TQ 请求 ≤50 只
-_BARS = 12  # 连板数最多往回数 12 根(与主源一致)
+# 连板窗口与主源一致: 数出 N 连板要 N+1 根, 取 21 根覆盖到 20 连板
+# (12 根只能数出 11 板, 12 连板龙头会被少算一板)。
+_BARS = 21
 
 
 from src.core.tq_chips import normalize_code
@@ -69,6 +71,7 @@ def zdt_fallback_pool(codes: list[str] | None = None) -> list[dict]:
     import marketdata.vendors.tq as tqmod
 
     zdt_snapshot = tqmod.zdt_snapshot
+    names: dict[str, str] = {}
     if not codes:
         try:
             items = tqmod.tq_rpc("get_stock_list", {"market": "5", "list_type": 1}, timeout=15.0)
@@ -77,6 +80,12 @@ def zdt_fallback_pool(codes: list[str] | None = None) -> list[dict]:
             return []
         items = items if isinstance(items, list) else []
         codes = [str(i.get("Code")) for i in items if isinstance(i, dict) and i.get("Code")]
+        # 名称是判 ST(主板 5% 涨停)的唯一依据; 与主源同口径传给 build_pool_items
+        names = {
+            str(i.get("Code")): str(i.get("Name") or "")
+            for i in items
+            if isinstance(i, dict) and i.get("Code")
+        }
         if not codes:
             return []
 
@@ -108,7 +117,6 @@ def zdt_fallback_pool(codes: list[str] | None = None) -> list[dict]:
     from src.core.limit_up_calc import build_pool_items
 
     bars: dict[str, dict] = {}
-    names: dict[str, str] = {}
     for i in range(0, len(live), _ZDT_CHUNK):
         part = list(live.keys())[i : i + _ZDT_CHUNK]
         try:
@@ -132,7 +140,8 @@ def zdt_fallback_pool(codes: list[str] | None = None) -> list[dict]:
         row = by_code.get(bare)
         if row is None:
             row = {
-                "code": bare, "name": "", "price": 0.0, "pct": 0.0, "amount": 0.0,
+                "code": bare, "name": names.get(tq_code) or names.get(bare) or "",
+                "price": 0.0, "pct": 0.0, "amount": 0.0,
                 "ltsz": 0.0, "first_time": "", "last_time": "", "days": 0,
                 "sector": "", "theme": "", "reason": "", "turnover_rate": 0.0,
                 "order_amount": 0.0, "source": "tq",

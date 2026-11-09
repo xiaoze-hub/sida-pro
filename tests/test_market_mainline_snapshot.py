@@ -56,6 +56,8 @@ def _snap_payload(note: str = "snap", age_s: float = 0.0) -> dict:
         "unranked": [],
         "note": note,
         "cache_ts": time.time() - age_s,
+        # 数据日必须自带: 没有可信日期的载荷一律不落库(2026-11-09 起)
+        "data_meta": {"as_of": _today()},
     }
 
 

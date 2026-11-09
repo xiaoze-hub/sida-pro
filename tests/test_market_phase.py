@@ -561,19 +561,24 @@ class TestMarketPhaseApi:
 
         # Mock collector: 当日池 8 只, 昨日池 15 只(满足 PROMO_MIN_POOL)
         # 构造一个使 ge2=20, height=7, promo>=0.23 → rally
+        # 2026-11-09: 池子必须自报数据日(as_of), 否则 sync 拒绝按今日落库。
+        _as_of = _date.today().isoformat()
         today_pool = [
-            {"code": f"{i:06d}", "days": 1} for i in range(80)  # 80 只首板
+            {"code": f"{i:06d}", "days": 1, "as_of": _as_of} for i in range(80)  # 80 只首板
         ] + [
-            {"code": f"{100+i:06d}", "days": 2} for i in range(15)  # 15 只 2 板
+            {"code": f"{100+i:06d}", "days": 2, "as_of": _as_of} for i in range(15)  # 15 只 2 板
         ] + [
-            {"code": f"{200+i:06d}", "days": 3} for i in range(3)
+            {"code": f"{200+i:06d}", "days": 3, "as_of": _as_of} for i in range(3)
         ] + [
-            {"code": f"{300:06d}", "days": 7}  # 1 只 7 板(高度)
+            {"code": f"{300:06d}", "days": 7, "as_of": _as_of}  # 1 只 7 板(高度)
         ]
         # 昨日池: 让部分今日续封
-        prev_pool = [{"code": f"{100+i:06d}", "days": 2} for i in range(15)]
+        _prev_as_of = (_date.today() - timedelta(days=1)).isoformat()
+        prev_pool = [
+            {"code": f"{100+i:06d}", "days": 2, "as_of": _prev_as_of} for i in range(15)
+        ]
         # 让 12/15 续封 — 把今日的 100~111 也放进 prev_pool
-        prev_pool += [{"code": f"{300:06d}", "days": 6}]  # 让今日高度股昨日也存在
+        prev_pool += [{"code": f"{300:06d}", "days": 6, "as_of": _prev_as_of}]  # 让今日高度股昨日也存在
 
         class MockCol:
             def get_limit_up_pool(self, date_str=None):
@@ -610,6 +615,7 @@ class TestMarketPhaseApi:
         resp = api.sync_phase()
         assert resp["synced"] is True
         assert "metrics" in resp
+        assert resp["yesterday_data_date"] == _prev_as_of
         assert resp["metrics"]["ge2_count"] >= 15  # 至少 15 个 >=2 板
         assert resp["metrics"]["max_height"] == 7
         # 验证落库

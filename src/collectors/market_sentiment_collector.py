@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 
@@ -29,12 +30,31 @@ _ZT_HEADERS = {
 }
 
 
-def _ymd_to_iso(ymd: str | None) -> str | None:
-    """YYYYMMDD → YYYY-MM-DD; 非 8 位数字 → 原样返回(不硬转, 不编造)。"""
-    s = str(ymd or "").strip()
-    if len(s) >= 8 and s[:8].isdigit():
-        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
-    return s or None
+def _norm_ymd(value) -> str:
+    """任意常见写法(20261109 / 2026-11-09 / 2026/11/09 / 2026.11.09 / int)→ YYYYMMDD。
+
+    解析不了 → ""(**不猜**成今天): 调用方据此拒绝请求, 而不是拿别的日期顶替。
+    """
+    s = str(value if value is not None else "").strip()
+    if not s:
+        return ""
+    digits = re.sub(r"[^0-9]", "", s.split("T")[0].split(" ")[0])
+    if len(digits) < 8:
+        return ""
+    ymd = digits[:8]
+    try:
+        datetime.strptime(ymd, "%Y%m%d")
+    except ValueError:
+        return ""
+    return ymd
+
+
+def _ymd_to_iso(ymd) -> str | None:
+    """YYYYMMDD / YYYY-MM-DD → YYYY-MM-DD; 解析不了 → None(不编造)。"""
+    y = _norm_ymd(ymd)
+    if not y:
+        return None
+    return f"{y[:4]}-{y[4:6]}-{y[6:8]}"
 
 
 def _window_bars(bars: dict[str, dict], ymd: str) -> tuple[dict[str, dict], bool]:
@@ -42,31 +62,38 @@ def _window_bars(bars: dict[str, dict], ymd: str) -> tuple[dict[str, dict], bool
 
     返回 (截断后的 bars, covered)。covered=False(没有任何票的末根日期 == ymd)时
     调用方必须放弃该源 —— 用最新一天的 K 线回答"昨天"就是数据错配。
+    日期先归一化(`2026-11-09` / `20261109` / int 都认), 否则字符串比较恒不相等 →
+    ISO 调用方会拿到空池并悄悄降级。任何一根日期解析不了 ⇒ 该票整体不可用(不猜顺序)。
     日期列表与 Close/Amount 按下标对齐; 形态异常(非 list)的字段原样保留由
     build_pool_items 自己兜底(算不出连板数 → 不入池, 不猜)。
     """
     out: dict[str, dict] = {}
     covered = False
+    target = _norm_ymd(ymd)
+    if not target:
+        return {}, False
     for code, payload in (bars or {}).items():
         if not isinstance(payload, dict):
             continue
         dates = payload.get("Date")
         if not isinstance(dates, list) or not dates:
             continue
+        norm = [_norm_ymd(d) for d in dates]
+        if any(not d for d in norm):
+            continue
         keep = -1
-        for i, d in enumerate(dates):
-            if str(d).strip() <= ymd:
+        for i, d in enumerate(norm):
+            if d <= target:
                 keep = i
             else:
                 break
-        if keep < 0 or str(dates[keep]).strip() != ymd:
+        if keep < 0 or norm[keep] != target:
             continue
         cut: dict = {}
         for k, v in payload.items():
             cut[k] = v[: keep + 1] if isinstance(v, list) and len(v) == len(dates) else v
         out[code] = cut
-        if str(dates[keep]).strip() == ymd:
-            covered = True
+        covered = True
     return out, covered
 
 
@@ -91,7 +118,10 @@ class MarketSentimentCollector:
     # 行情降级腾讯(0.1s→2.2s), 恢复只能整机重启。而 50 只/批 实测仅 0.05~0.17s,
     # 全市场 112 批约 6~20s —— 分批几乎不额外花钱, 却把风险降到零。改这里前先读这段。
     _TQ_CHUNK = 50
-    _TQ_BARS = 12  # 连板数最多往回数 12 根(足够覆盖市场最高板)
+    # 连板数窗口: 数出 N 连板需要 **N+1** 根收盘价(12 连板 = 13 根), 故取 21 根
+    # (覆盖到 20 连板, 市场历史最高板也在范围内)。此前 12 根 ⇒ 最高只能数出 11 板,
+    # 12 连板龙头恰好卡在边界被少算一板(高度维度失真)。
+    _TQ_BARS = 21
 
     def _limit_up_pool_tq(self, date: str | None = None) -> list[dict]:
         """通达信涨停池: 全A列表 → 分片取日线(不复权) → 自算涨停与**连板数** → 池子。
@@ -150,12 +180,26 @@ class MarketSentimentCollector:
             return []
 
         # ②b 显式日期: 截断到该交易日; 覆盖不到 → 空池(不拿最新一天冒充请求日)
-        requested = str(date).strip() if date else ""
+        requested = _norm_ymd(date) if date else ""
+        if date and not requested:
+            logger.warning("涨停池(TQ): 日期 %r 无法解析 → 空池(不猜成今天)", date)
+            return []
         if requested:
             bars, covered = _window_bars(bars, requested)
             if not bars or not covered:
                 logger.warning("涨停池(TQ): 日线未覆盖请求日 %s → 交回备源(不冒充)", requested)
                 return []
+
+        # ②c 覆盖率: 分片失败/漏回的票会让涨停家数偏低 —— 池子照样给, 但**必须标出**
+        #     "这不是全市场完整池", 缺来源不许被读成覆盖完整。
+        fetched = len(bars)
+        total = len(codes)
+        coverage = {
+            "status": "complete" if fails == 0 and fetched >= total else "partial",
+            "requested_codes": total,
+            "fetched_codes": fetched,
+            "batch_failures": fails,
+        }
 
         # ③ 判涨停 + 连板数(纯函数, 可单测)
         pool = build_pool_items(bars, names)
@@ -177,8 +221,12 @@ class MarketSentimentCollector:
             if as_of:
                 for row in pool:
                     row["as_of"] = as_of
+                    # 日线末根日期 == as_of(K线可证实), 与"按请求日推定"区分开
+                    row["as_of_basis"] = "kline"
         except Exception as e:  # noqa: BLE001
             logger.debug("涨停池(TQ): 日线日期解析失败(不影响池子): %s", e)
+        for row in pool:
+            row["pool_coverage"] = dict(coverage)
 
         # ④ 板块(行业优先) —— 只对涨停的几十只反查, 每只日内缓存
         #    显式历史日期不补板块: 板块归属是"当前"成员关系, 拿今天的概念盖昨天会错配。
@@ -187,15 +235,19 @@ class MarketSentimentCollector:
 
         return pool
 
-    def _enrich_pool_blocks(self, pool: list[dict]) -> list[dict]:
+    def _enrich_pool_blocks(self, pool: list[dict], block_as_of: str | None = None) -> list[dict]:
         """给池子补**行业(仅 881)** 与**概念(非 881, 独立字段)**, 安全富化。
 
         · 行业缺失 → 留空, **绝不**拿 880 概念名顶到 sector(概念冒充行业);
         · 概念缺失 → 用 TQ get_relation 全量补, 去空/去重, 标 block_source;
         · 单只失败/无数据 → 跳过, 不编造; 池子为空直接返回。
+        · 每条被富化的票盖 `block_as_of`(反查日期): 成员关系是"当前"快照,
+          盘前池子的数据日是上一交易日, 两者不同日 —— 上游据此禁止把当天的
+          概念归属说成那天的概念归属。
         """
         if not pool:
             return pool
+        stamp = str(block_as_of or datetime.now().strftime("%Y-%m-%d"))
         try:
             from src.core.tdx_boards import stock_blocks
         except Exception as e:  # noqa: BLE001
@@ -230,6 +282,8 @@ class MarketSentimentCollector:
             if names_seen:
                 row["concepts"] = names_seen
                 row["block_source"] = "tq:get_relation"
+            if row.get("sector") or names_seen:
+                row["block_as_of"] = stamp
         return pool
 
     def _limit_up_pool_zdt_tq(self) -> list[dict]:
@@ -296,6 +350,17 @@ class MarketSentimentCollector:
                     "order_amount": _f(item.get("orderAmount")),
                     # P2(2026-10-08): 统一标来源, 降级链各源可追溯
                     "source": "wudao",
+                    # 数据日 = 实际请求的探测日(源按该日返回); 覆盖完整性 wudao 不给总数
+                    # ⇒ unknown, 不声称完整。
+                    "as_of": _ymd_to_iso(date),
+                    # 源按 date 参数返回, 无法从自身字段二次证实 → 标为请求日口径
+                    "as_of_basis": "source_request",
+                    "pool_coverage": {
+                        "status": "unknown",
+                        "requested_codes": None,
+                        "fetched_codes": len(rows),
+                        "batch_failures": None,
+                    },
                 }
             )
         return out
@@ -317,8 +382,14 @@ class MarketSentimentCollector:
         """
         # 修复(L-2): 总预算封顶
         deadline = time.monotonic() + _LIMITUP_TOTAL_BUDGET_S
-        explicit_date = str(date).strip() if date else ""
-        date = date or datetime.now().strftime("%Y%m%d")
+        # 日期口径(2026-11-09): 入口统一归一化成 YYYYMMDD。传了日期却解析不了 ⇒ 空池,
+        # 不拿"今天/最近交易日"顶替(那正是把别的交易日数据说成请求日)。
+        explicit_date = _norm_ymd(date) if date else ""
+        if date and not explicit_date:
+            logger.warning("涨停池: 日期 %r 无法解析 → 空池(不猜成今天)", date)
+            return []
+        today_ymd = datetime.now().strftime("%Y%m%d")
+        date = explicit_date or today_ymd
         from datetime import timedelta
 
         def _probe(back: int) -> str:
@@ -341,12 +412,15 @@ class MarketSentimentCollector:
 
         # ⓿b TQ 涨跌停快照备源(A-6, 2026-09-28): 主源全市场 K线扫描挂掉时,
         # 快照只需对"真涨停"分片取数, 且自带首封/炸板/封单真值。空/异常 → 继续 wudao/东财。
-        try:
-            zdt_pool = self._limit_up_pool_zdt_tq()
-            if zdt_pool:
-                return self._maybe_enrich_fallback(zdt_pool, explicit_date)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("涨停池(TQ备源-快照)失败 → 继续 wudao/东财: %s", e)
+        # 快照接口**不带日期**(只给最新状态) ⇒ 只有请求当日时才可用; 请求历史日拿到的是
+        # 最新那天, 属于数据日错配, 宁可跳过交给带日期的源。
+        if not explicit_date or explicit_date == today_ymd:
+            try:
+                zdt_pool = self._limit_up_pool_zdt_tq()
+                if zdt_pool:
+                    return self._maybe_enrich_fallback(zdt_pool, explicit_date)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("涨停池(TQ备源-快照)失败 → 继续 wudao/东财: %s", e)
 
         # ① wudao 优先:找最近非空交易日(最多 5 天)。wudao 字段更全(题材/原因/封单/换手)
         for back in range(6):
@@ -410,6 +484,18 @@ class MarketSentimentCollector:
                 if tc and len(pool) < tc:
                     # 没取全就说清楚, 不假装完整
                     logger.warning("涨停池(东财 %s): 取到 %d 只 < 总数 %d(翻页未取全)", probe, len(pool), tc)
+                # 数据日 = 实际探测日(东财接口按 date 参数返回); 有 tc 才能判完整性。
+                cov_status = "complete" if tc and len(pool) >= tc else ("partial" if tc else "unknown")
+                as_of = _ymd_to_iso(probe)
+                for row in pool:
+                    row["as_of"] = as_of
+                    row["as_of_basis"] = "source_request"
+                    row["pool_coverage"] = {
+                        "status": cov_status,
+                        "requested_codes": tc or None,
+                        "fetched_codes": len(pool),
+                        "batch_failures": None,
+                    }
                 return self._maybe_enrich_fallback(pool, explicit_date)
         return []
 
@@ -418,9 +504,20 @@ class MarketSentimentCollector:
 
         只对"当日/无日期"的池子补板块归属 —— 历史日期的板块成员关系与当日不同,
         拿今天的概念盖昨天是另一种数据错配, 宁可空着说"概念不可用"。
+        缺覆盖率信息的条目补 unknown(不声称完整, 不编造总数)。
         """
         if not pool:
             return pool
+        for row in pool:
+            row.setdefault(
+                "pool_coverage",
+                {
+                    "status": "unknown",
+                    "requested_codes": None,
+                    "fetched_codes": len(pool),
+                    "batch_failures": None,
+                },
+            )
         today = datetime.now().strftime("%Y%m%d")
         if explicit_date and explicit_date != today:
             for row in pool:

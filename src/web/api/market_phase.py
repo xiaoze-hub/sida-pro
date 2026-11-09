@@ -50,6 +50,22 @@ def _date_to_ymd(d: date) -> str:
     return d.strftime("%Y%m%d")
 
 
+def _pool_data_date(pool: list[dict] | None) -> str | None:
+    """池子的数据日(条目 `as_of` 众数); 全缺 → None(**不猜**成 target/今天)。
+
+    降级源(wudao/东财)按探测日返回时也会带 as_of; TQ 快照备源不带日期 → None,
+    此时上游必须拒绝"按今日落库"。
+    """
+    counts: dict[str, int] = {}
+    for row in pool or []:
+        v = str((row or {}).get("as_of") or "").strip()[:10]
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=lambda k: counts[k])
+
+
 def _sh_index_pct_today() -> float | None:
     """拉今日上证指数涨跌幅(%), 数据源不可用时 None。
 
@@ -226,7 +242,33 @@ def sync_phase(date_str: str | None = None) -> dict:
     col = MarketSentimentCollector()
     pool_today = col.get_limit_up_pool(ymd_today) or []
     pool_yesterday_raw = col.get_limit_up_pool(ymd_yesterday) or []
-    pool_yesterday = pool_yesterday_raw if pool_yesterday_raw else None
+    # 昨日池: 数据日未知 ⇒ 不参与晋级率计算(宁可 None, 不拿不清楚日期的池子凑对比)
+    yesterday_data_date = _pool_data_date(pool_yesterday_raw)
+    pool_yesterday = pool_yesterday_raw if (pool_yesterday_raw and yesterday_data_date) else None
+
+    # 数据日闸门(2026-11-09): 只有池子自报的数据日恰好等于 target 才允许落库。
+    # 盘前/非交易日时降级源会回溯到别的交易日 —— 按 target 落库就是把别的交易日的
+    # 梯队指标记成今天(不可逆的历史污染)。未知数据日同样不落(不猜成今天)。
+    data_date = _pool_data_date(pool_today)
+    if data_date is None:
+        return {
+            "synced": False,
+            "date": target.isoformat(),
+            "data_date": None,
+            "pool_size_today": len(pool_today),
+            "error": "涨停池未提供数据日 → 无法确认是否为目标日数据, 未落库(不按今日冒充)",
+        }
+    if data_date != target.isoformat():
+        return {
+            "synced": False,
+            "date": target.isoformat(),
+            "data_date": data_date,
+            "pool_size_today": len(pool_today),
+            "error": (
+                f"涨停池数据日 {data_date} 与同步目标日 {target.isoformat()} 不同 → 未落库"
+                "(避免把别的交易日数据记成今天)"
+            ),
+        }
 
     metrics = compute_daily_metrics(pool_today, pool_yesterday)
     metrics.sh_index_pct = _sh_index_pct_today()
@@ -278,8 +320,10 @@ def sync_phase(date_str: str | None = None) -> dict:
         return {
             "synced": True,
             "date": target.isoformat(),
+            "data_date": data_date,
             "pool_size_today": len(pool_today),
             "pool_size_yesterday": len(pool_yesterday_raw),
+            "yesterday_data_date": yesterday_data_date,
             "metrics": {
                 "first_board": metrics.first_board,
                 "ge2_count": metrics.ge2_count,
