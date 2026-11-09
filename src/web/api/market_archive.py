@@ -249,6 +249,11 @@ def dragon_tiger(
     `complete=False` / `completeness_claimed=False`, 不声明完整; 有行时
     `severity=caution`(无证据表明残缺), 无行时 `severity=missing`。
     不要把这里的 `count` 读成"完整上榜数"。
+
+    `date` + `symbol` 同时给时, `items`/`count` 仍只含本股, 但 `quality` **始终按该日
+    全日实际市场范围**计算(不用过滤后的行做全日定性); 本股当日有没有行另见
+    `quality.subject`(`recorded`: True/False/None) —— "本股无记录"与"全日无覆盖"
+    是两件事。
     """
     if not date and not (symbol and symbol.strip()):
         raise HTTPException(status_code=400, detail="date 与 symbol 至少一个")
@@ -256,11 +261,13 @@ def dragon_tiger(
     params: dict = {"lim": limit}
     where_parts = []
     mkt = (market or "").strip().upper() or None
+    sym = (symbol or "").strip() or None
+    d: str | None = None
     if date:
+        d = _norm_date(date)
         where_parts.append("trade_date = :d")
-        params["d"] = _norm_date(date)
-    if symbol and symbol.strip():
-        sym = symbol.strip()
+        params["d"] = d
+    if sym:
         where_parts.append("symbol = :sym")
         params["sym"] = sym
         if days and days > 0:
@@ -278,17 +285,52 @@ def dragon_tiger(
         " ORDER BY trade_date DESC, symbol ASC LIMIT :lim",
         params,
     )
-    payload = {
-        "count": len(rows),
-        "note": (
-            "龙虎榜明细(含 ETF/可转债 6 位码); 空=无覆盖; "
-            "无官方完整清单可核对, 不声明完整(见 quality)"
-        ),
-        "items": rows,
-    }
-    if date:
-        payload["quality"] = _events_quality(_norm_date(date), rows, mkt or "CN")
+    note = (
+        "龙虎榜明细(含 ETF/可转债 6 位码); 空=无覆盖; "
+        "无官方完整清单可核对, 不声明完整(见 quality)"
+    )
+    if sym:
+        # 明细按 symbol 过滤, count 只是**本股记录数**; 不能让读侧把它当全日覆盖。
+        note += (
+            f" 本次按 symbol={sym} 过滤: count 是本股记录数; 空=本股"
+            + ("当日" if d else "在该区间")
+            + "无记录, 不代表全日无覆盖"
+            + ("(全日定性见 quality)" if d else "")
+            + "。"
+        )
+    payload = {"count": len(rows), "note": note, "items": rows}
+    if d:
+        if sym:
+            # 质量必须看**全日实际市场范围**: 用 symbol 过滤后的行做全日定性, 会把
+            # 「本股无记录」误判成「全日无快照」(空 rows → status=absent)。
+            day_rows = _day_event_rows(d, mkt)
+            if day_rows is None:
+                payload["quality"] = _quality_unavailable(
+                    d, mkt or "CN", "全日范围读取失败(单股过滤结果不作全日定性)", symbol=sym
+                )
+            else:
+                payload["quality"] = _events_quality(d, day_rows, mkt or "CN", symbol=sym)
+        else:
+            payload["quality"] = _events_quality(d, rows, mkt or "CN")
     return payload
+
+
+def _day_event_rows(trade_date: str, market: str | None = None) -> list[dict] | None:
+    """该日**全市场** `dragon_tiger_events` 的最小列(symbol/market/created_at)。
+
+    只读、按 trade_date 取(命中唯一键 (trade_date, symbol, reason) 的前缀索引),
+    不 `SELECT *`、不分页; 读失败 → None(调用方如实说「定性不可用」, 不猜)。
+    """
+    sql = "SELECT symbol, market, created_at FROM dragon_tiger_events WHERE trade_date = :d"
+    params: dict = {"d": trade_date}
+    if market:
+        sql += " AND market = :mkt"
+        params["mkt"] = market
+    try:
+        return _fetch_rows(sql, params)
+    except Exception as e:  # noqa: BLE001 - 表缺失/库不可达 → 定性不可用
+        logger.debug("龙虎榜全日范围读取失败(不阻断): %s", e)
+        return None
 
 
 def _daily_symbols(trade_date: str, market: str = "CN") -> list[str] | None:
@@ -304,8 +346,14 @@ def _daily_symbols(trade_date: str, market: str = "CN") -> list[str] | None:
         return None
 
 
-def _events_quality(trade_date: str, rows: list[dict], market: str) -> dict:
-    """`dragon_tiger_events` 的独立定性(不声明完整); 定性失败也如实说"不可用"。"""
+def _events_quality(
+    trade_date: str, rows: list[dict], market: str, *, symbol: str | None = None
+) -> dict:
+    """`dragon_tiger_events` 的**全日**独立定性(不声明完整); 失败也如实说"不可用"。
+
+    `rows` 必须是该日**全日实际市场范围**(按 symbol 过滤后的行只能说明本股) ——
+    单股查询另由 `symbol` 附加 `subject` 视角, 不改变全日 `status`。
+    """
     try:
         from src.core import lhb_quality as lq
 
@@ -314,10 +362,11 @@ def _events_quality(trade_date: str, rows: list[dict], market: str) -> dict:
             if str(r.get("market") or "CN").strip().upper() == market
         ]
         fw, lw = lq.beijing_write_window([r.get("created_at") for r in same])
+        day_syms = [r.get("symbol") for r in same if r.get("symbol")]
         qual = lq.assess_events_date(
             trade_date,
             market,
-            event_symbols=[r.get("symbol") for r in same if r.get("symbol")],
+            event_symbols=day_syms,
             first_write_at=fw,
             last_write_at=lw,
             daily_symbols=_daily_symbols(trade_date, market),
@@ -331,22 +380,50 @@ def _events_quality(trade_date: str, rows: list[dict], market: str) -> dict:
                 "其余市场未参与定性(不据此推断其残缺或完整)。"
             )
             qual["note"] = f"{qual['note']} {qual['market_scope_note']}"
+        if symbol:
+            qual["scope"] = "day_market"
+            qual["subject"] = lq.assess_symbol_scope(
+                symbol, day_symbols=day_syms, day_status=qual["status"]
+            )
+            qual["note"] = f"{qual['note']} 单股视角: {qual['subject']['note']}"
         return qual
     except Exception as e:  # noqa: BLE001 - 定性是增强, 不拖垮明细读取
         logger.debug("dragon_tiger_events 完整性定性失败(不阻断): %s", e)
-        return {
-            "table": "dragon_tiger_events",
-            "trade_date": trade_date,
-            "market": market,
-            "status": "unknown",
-            "complete": False,
-            "completeness_claimed": False,
-            "verified_against_official": False,
-            "degraded": True,
-            "severity": "unknown",
-            "label": "定性不可用",
-            "note": "完整性定性不可用; 不声明该日榜单完整, 也不据此声明无上榜。",
+        return _quality_unavailable(
+            trade_date, market, f"定性异常({type(e).__name__})", symbol=symbol
+        )
+
+
+def _quality_unavailable(
+    trade_date: str, market: str, reason: str, *, symbol: str | None = None
+) -> dict:
+    """定性不可用时的显式降级载荷: 不声明完整, 也不据此声明无上榜。"""
+    note = "完整性定性不可用; 不声明该日榜单完整, 也不据此声明无上榜。"
+    payload = {
+        "table": "dragon_tiger_events",
+        "trade_date": trade_date,
+        "market": market,
+        "status": "unknown",
+        "complete": False,
+        "completeness_claimed": False,
+        "verified_against_official": False,
+        "degraded": True,
+        "severity": "unknown",
+        "label": "定性不可用",
+        "note": note,
+    }
+    if symbol:
+        payload["scope"] = "day_market"
+        payload["subject"] = {
+            "symbol": symbol,
+            "recorded": None,
+            "day_symbols": None,
+            "day_status": "unknown",
+            "note": f"本股({symbol})是否在榜不可判定: 全日范围定性未取得。",
         }
+        note = f"{note} 单股视角: {payload['subject']['note']}"
+    payload["note"] = f"{note} 原因: {reason}。"
+    return payload
 
 
 # ── 通达信龙虎榜(客户端页面缓存, 2026-09-10 老板要求) ─────────────────────────

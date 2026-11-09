@@ -39,6 +39,11 @@
    使用**(partial/absent), 不再是"非 complete 一律 degraded"的粗粒度标记。
 6. 时间列按 DB 方言解读后再转北京(`src.core.timezone.to_beijing`): SQLite 的
    `CURRENT_TIMESTAMP` 是 UTC naive, PG(Asia/Shanghai) 的 `now()` 是北京 naive。
+7. **单股过滤不得改变全日口径。** `GET /api/archive/dragon-tiger?date&symbol` 的
+   items/count 只含本股, 但完整性的市场范围必须是该日**全日**行; 拿过滤后的行做
+   全日定性会把"本股无记录"报成"全日无快照"。本股是否有行另由
+   `assess_symbol_scope` 表达(`recorded` True/False/None), 且 `None`(全日无覆盖/
+   没读到)不得被说成"本股没上榜"。
 """
 from __future__ import annotations
 
@@ -496,6 +501,56 @@ def assess_date(trade_date, market: str = "CN") -> dict:
     )
 
 
+def assess_symbol_scope(
+    symbol, *, day_symbols: Iterable = (), day_status: str = STATUS_UNVERIFIED
+) -> dict:
+    """单股视角: 回答"本股在该表当日有没有行", **绝不替换全日结论**。
+
+    archive 的 `GET /api/archive/dragon-tiger?date=..&symbol=..` 会用 symbol 过滤明细;
+    曾把过滤后的行拿去做全日定性, 于是"本股当日无记录"被报成 `status=absent`
+    (全日无快照)。本函数把两个结论拆开:
+
+    - `recorded=True`: 该表当日有本股行(不等于该股一定上榜 —— 该表非官方清单);
+    - `recorded=False`: 该表当日**本股无行**, 但全日有覆盖 → 是本股无记录,
+      **不是**全日无覆盖;
+    - `recorded=None`: 全日无覆盖(或全日范围没读到)→ 本股是否在榜**不可判定**,
+      不能把"没数据"说成"本股没上榜"。
+
+    返回 dict 可直接 JSON 化; `day_status` 原样透出, 便于调用方知道全日定性口径。
+    """
+    sym_set = _norm_symbols([symbol])
+    sym = next(iter(sym_set), str(symbol or "").strip())
+    day = _norm_symbols(day_symbols)
+    day_status = str(day_status or "").strip().lower()
+
+    if day_status == STATUS_ABSENT:
+        recorded: bool | None = None
+        note = (
+            f"全日无覆盖(dragon_tiger_events 该市场当日无任何行): 本股({sym})是否在榜"
+            "无法判定; 无覆盖不等于无上榜。本股视角不改变全日结论。"
+        )
+    elif sym_set & day:
+        recorded = True
+        note = (
+            f"本股({sym})当日在该表有记录; 该表当日覆盖 {len(day)} 只, "
+            "是否完整见全日定性(不声明完整)。"
+        )
+    else:
+        recorded = False
+        note = (
+            f"本股({sym})当日在该表无记录 —— 这是本股无记录, 不是全日无覆盖"
+            f"(该表当日覆盖 {len(day)} 只); 该表非官方完整清单, "
+            "本股无行也不等于未上榜。"
+        )
+    return {
+        "symbol": sym,
+        "recorded": recorded,
+        "day_symbols": len(day),
+        "day_status": day_status,
+        "note": note,
+    }
+
+
 def assess_events_date(
     trade_date,
     market: str = "CN",
@@ -616,5 +671,6 @@ __all__ = [
     "assess_date",
     "assess_daily_completeness",
     "assess_events_date",
+    "assess_symbol_scope",
     "beijing_write_window",
 ]

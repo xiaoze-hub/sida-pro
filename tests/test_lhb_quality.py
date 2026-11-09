@@ -653,3 +653,162 @@ def test_archive_events跨市场行不混进CN定性(monkeypatch):
     assert qual["rows_total"] == 3 and qual["rows_in_market"] == 2
     assert "2/3" in qual["note"]
     assert qual["status"] == "unverified" and qual["complete"] is False
+
+
+# ═══════ ⑨ 单股过滤不得改变全日质量(archive: 全日范围定性 + 本股视角) ═══════
+
+def test_纯函数_本股无记录_不等于全日无覆盖():
+    s = q.assess_symbol_scope("600000", day_symbols=["000001", "000002"], day_status="unverified")
+    assert s["recorded"] is False and s["day_symbols"] == 2
+    assert s["day_status"] == "unverified"
+    assert "本股" in s["note"] and "无记录" in s["note"]
+    assert "不是全日无覆盖" in s["note"]
+    assert "不等于未上榜" in s["note"]        # events 非官方清单, 只能说"该表无行"
+
+
+def test_纯函数_全日无覆盖时本股不可判定():
+    s = q.assess_symbol_scope("600000", day_symbols=[], day_status="absent")
+    assert s["recorded"] is None             # 不可判定 ≠ 本股无记录
+    assert "全日无覆盖" in s["note"] and "无法判定" in s["note"]
+
+
+def test_纯函数_本股有记录_去后缀归一():
+    s = q.assess_symbol_scope("600000.SH", day_symbols=["600000"], day_status="unverified")
+    assert s["recorded"] is True and s["symbol"] == "600000"
+
+
+def _capture_sql(eng) -> list[str]:
+    from sqlalchemy import event
+
+    seen: list[str] = []
+
+    def _cb(conn, cursor, statement, parameters, context, executemany):
+        seen.append(statement)
+
+    event.listen(eng, "before_cursor_execute", _cb)
+    return seen
+
+
+def test_archive单股无记录_质量仍按全日范围而非无快照(monkeypatch):
+    """date+symbol 过滤后明细为空, 但该日全榜有行 → 不得把全日质量误判为 absent。"""
+    client, _ = _archive_client(monkeypatch)
+    data = client.get(
+        "/api/archive/dragon-tiger", params={"date": "20261019", "symbol": "000002"}
+    ).json()
+
+    assert data["count"] == 0 and data["items"] == []       # 旧键: 明细仍按 symbol 过滤
+    qual = data["quality"]
+    assert qual["status"] == "unverified"                    # 不再是 absent
+    assert qual["degraded"] is False and qual["label"] != "无快照"
+    assert qual["actual_symbols"] == 2                       # 全日实际市场范围
+    assert qual["scope"] == "day_market"
+    assert qual["subject"]["symbol"] == "000002"
+    assert qual["subject"]["recorded"] is False and qual["subject"]["day_symbols"] == 2
+    assert "不是全日无覆盖" in qual["subject"]["note"]
+    assert "单股视角" in qual["note"] and "本股(000002)" in qual["note"]
+    # 明细 note 要区分"本股无记录"与"全日无覆盖"
+    assert data["note"].startswith("龙虎榜明细")
+    assert "不声明完整" in data["note"]                       # 旧语义保留
+    assert "不代表全日无覆盖" in data["note"]
+
+
+def test_archive单股有记录_明细一支但质量仍是全日(monkeypatch):
+    client, _ = _archive_client(monkeypatch)
+    data = client.get(
+        "/api/archive/dragon-tiger", params={"date": "20261019", "symbol": "600000"}
+    ).json()
+    assert data["count"] == 1
+    qual = data["quality"]
+    assert qual["actual_symbols"] == 2 and qual["status"] == "unverified"
+    assert qual["subject"]["recorded"] is True
+
+
+def test_archive全日无覆盖_单股查询如实区分且不臆断未上榜(monkeypatch):
+    client, _ = _archive_client(monkeypatch)
+    data = client.get(
+        "/api/archive/dragon-tiger", params={"date": "20261021", "symbol": "600000"}
+    ).json()
+    qual = data["quality"]
+    assert qual["status"] == "absent" and qual["degraded"] is True
+    assert qual["subject"]["recorded"] is None               # 不可判定, 不谎称无记录
+    assert "全日无覆盖" in qual["subject"]["note"]
+    assert "无法判定" in qual["subject"]["note"]
+    assert "无覆盖不等于无上榜" in qual["note"]
+
+
+def test_archive单股查询只读且只补一次轻量全日范围(monkeypatch):
+    client, eng = _archive_client(monkeypatch)
+    seen = _capture_sql(eng)
+    data = client.get(
+        "/api/archive/dragon-tiger", params={"date": "20261019", "symbol": "000002"}
+    ).json()
+    assert data["quality"]["actual_symbols"] == 2
+    assert all(s.lstrip().upper().startswith("SELECT") for s in seen)   # 只读, 无写/回源
+    day_sql = [s for s in seen if "FROM dragon_tiger_events" in s]
+    assert len(day_sql) == 2                       # 明细 1 次 + 全日范围 1 次
+    scope = [s for s in day_sql if "SELECT symbol, market, created_at" in s]
+    assert len(scope) == 1 and "SELECT *" not in scope[0]   # 不全表重扫
+
+
+def test_archive按日查询不额外补查询(monkeypatch):
+    client, eng = _archive_client(monkeypatch)
+    seen = _capture_sql(eng)
+    client.get("/api/archive/dragon-tiger", params={"date": "20261019"})
+    assert len([s for s in seen if "FROM dragon_tiger_events" in s]) == 1
+
+
+def test_全日范围读取失败_不拿单股结果冒充全日(monkeypatch):
+    client, _ = _archive_client(monkeypatch)
+    from src.web.api import market_archive as ma
+
+    monkeypatch.setattr(ma, "_day_event_rows", lambda d, mkt=None: None)
+    data = client.get(
+        "/api/archive/dragon-tiger", params={"date": "20261019", "symbol": "000002"}
+    ).json()
+    qual = data["quality"]
+    assert qual["status"] == "unknown" and qual["status"] != "absent"
+    assert qual["complete"] is False and qual["completeness_claimed"] is False
+    assert qual["subject"]["recorded"] is None
+    assert "不可判定" in qual["note"]
+
+
+def test_全日范围查询走trade_date索引而非全表扫(monkeypatch):
+    """单股查询只补一次轻量全日范围, 且按 trade_date 命中索引(不整表扫)。"""
+    client, eng = _archive_client(monkeypatch)
+    seen = _capture_sql(eng)
+    client.get("/api/archive/dragon-tiger", params={"date": "20261019", "symbol": "000002"})
+    stmt = next(
+        s for s in seen
+        if "FROM dragon_tiger_events" in s and "SELECT symbol, market, created_at" in s
+    )
+    with eng.connect() as c:
+        # 监听器拿到的是编译后 SQL(占位符 ?), 走 driver 层按位置传参
+        plan = " | ".join(
+            str(tuple(r))
+            for r in c.exec_driver_sql("EXPLAIN QUERY PLAN " + stmt, ("20261019",))
+        )
+    assert "SCAN dragon_tiger_events" not in plan
+    assert "trade_date=?" in plan
+
+
+def test_archive单股查询带market_筛选_全日范围同市场(monkeypatch):
+    client, eng = _archive_client(monkeypatch)
+    _add_events(eng, [("00700", "HK", "2026-10-19 08:50:00")])
+    data = client.get(
+        "/api/archive/dragon-tiger",
+        params={"date": "20261019", "symbol": "000001", "market": "CN"},
+    ).json()
+    qual = data["quality"]
+    assert qual["actual_symbols"] == 2 and "rows_total" not in qual   # 只取 CN 全日范围
+    assert qual["subject"]["recorded"] is True and qual["subject"]["day_symbols"] == 2
+
+
+def test_archive仅按symbol查询_不加全日定性且旧行为不变(monkeypatch):
+    client, _ = _archive_client(monkeypatch)
+    data = client.get("/api/archive/dragon-tiger", params={"symbol": "600000"}).json()
+    assert data["count"] == 1 and "quality" not in data
+    assert "在该区间无记录" in data["note"]
+
+    empty = client.get("/api/archive/dragon-tiger", params={"symbol": "000002"}).json()
+    assert empty["count"] == 0 and "quality" not in empty
+    assert "不代表全日无覆盖" in empty["note"]
