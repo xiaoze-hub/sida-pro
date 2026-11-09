@@ -1205,6 +1205,10 @@ export default function DashboardPage() {
                 <div data-testid="agenda-ai-fallback" className="pt-1 text-[12px] text-muted-foreground">
                   AI 排序未采用；以下为原始事件与信号。
                 </div>
+              ) : agendaFeed.mode === 'ai' ? (
+                <div data-testid="agenda-ai-limited" className="pt-1 text-[12px] text-muted-foreground">
+                  AI 用于排序，逐股 AI 解释暂不可用；以下展示原始信号。
+                </div>
               ) : null}
               {feed.map((it, i) => {
                 const badge = FEED_BADGE[it.type] || { labelKey: '', cls: 'bg-accent text-muted-foreground' }

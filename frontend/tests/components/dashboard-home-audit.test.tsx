@@ -379,6 +379,15 @@ describe('B. 今日要紧事与机会精选不重复(机会本身不删)', () =>
 })
 
 describe('A. AI 说明错配必须 fail closed, 原始候选不丢', () => {
+  it('AI 排序生效时明确告知逐股解释不可用并保留原始信号', async () => {
+    S.alerts = [{ symbol: '600519', name: '贵州茅台', market: 'CN', rule_name: '放量突破' }]
+    S.curateItems = [{ index: 0, importance: 90, why: '触发提醒 放量突破' }]
+    renderPage()
+    await flush()
+    const agenda = screen.getByTestId('agenda-feed')
+    expect(within(agenda).getByTestId('agenda-ai-limited').textContent).toContain('逐股 AI 解释暂不可用')
+    expect(agenda.textContent).toContain('触发提醒 放量突破')
+  })
   it('说明点名的不是这条候选的标的 → 不采用, 显示原始信号', async () => {
     S.alerts = [
       { symbol: '600519', name: '贵州茅台', market: 'CN', rule_name: '放量突破' },
