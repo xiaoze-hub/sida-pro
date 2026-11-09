@@ -109,6 +109,7 @@ export interface MainlineResp {
   /** ── 概念独立维度(2026-11-09) ── */
   dimension?: string
   concept_groups?: MainlineGroup[]
+  concept_breadth_leaders?: Array<{ name: string; limit_up_count: number }>
   concept_unranked?: MainlineGroup[]
   concept_stats?: MainlineConceptStats
   /** available | partial | unavailable(源没给概念字段 ⇒ 不等于今日无概念) */
@@ -746,9 +747,9 @@ export default function MarketMainlineCard() {
         <ConceptCaliber stats={conceptStats} meta={meta} poolSize={poolSize} empty={conceptTop.length === 0} />
       ) : null}
 
-      {activeView !== 'industry' && conceptRanked.length > 0 ? (
+      {activeView !== 'industry' && (data?.concept_breadth_leaders?.length ?? 0) > 0 ? (
         <div data-testid="concept-breadth-leaders" className="mb-2 text-[12px] text-muted-foreground">
-          返回概念榜中涨停家数靠前：{[...conceptRanked].sort((a, b) => b.limit_up_count - a.limit_up_count).slice(0, 3).map((g) => `${g.name} ${g.limit_up_count}家`).join('、')}
+          概念涨停家数靠前：{data?.concept_breadth_leaders?.map((g) => `${g.name} ${g.limit_up_count}家`).join('、')}
         </div>
       ) : null}
 

@@ -190,6 +190,17 @@ class MarketSentimentCollector:
                 logger.warning("涨停池(TQ): 日线未覆盖请求日 %s → 交回备源(不冒充)", requested)
                 return []
 
+        fetched = len(bars)
+        if not requested:
+            dates = [_norm_ymd(d) for payload in bars.values() for d in (payload.get('Date') or [])]
+            target = max((d for d in dates if d), default='')
+            if not target:
+                logger.warning('涨停池(TQ): 日线缺少可核验日期')
+                return []
+            bars, covered = _window_bars(bars, target)
+            if not covered:
+                return []
+
         # ②c 覆盖率: 分片失败/漏回的票会让涨停家数偏低 —— 池子照样给, 但**必须标出**
         #     "这不是全市场完整池", 缺来源不许被读成覆盖完整。
         fetched = len(bars)

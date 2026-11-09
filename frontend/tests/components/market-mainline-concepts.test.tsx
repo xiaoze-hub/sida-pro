@@ -120,7 +120,7 @@ describe('市场主线 · 概念维度接入', () => {
   it('涨停家数靠前但综合分在第十一的概念仍在默认视图可见', async () => {
     const groups = Array.from({ length: 10 }, (_, i) => ({ ...conceptGroup(`题材${i}`), limit_up_count: 3 }))
     groups.push({ ...conceptGroup('商业航天'), limit_up_count: 13 })
-    mocks.fetchAPI.mockResolvedValue(baseResp({ concept_groups: groups }))
+    mocks.fetchAPI.mockResolvedValue(baseResp({ concept_groups: groups, concept_breadth_leaders: [{ name: '商业航天', limit_up_count: 13 }] }))
     render(<MarketMainlineCard />)
     expect((await screen.findByTestId('concept-breadth-leaders')).textContent).toContain('商业航天')
   })

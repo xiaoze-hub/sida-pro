@@ -124,7 +124,7 @@ class TestTqChunkGuard:
             if method == "get_market_data":
                 part = params.get("stock_list") or []
                 seen.append(len(part))
-                return {c: {"Close": ["10.0", "11.0"], "Amount": ["1", "1"]} for c in part}
+                return {c: {"Close": ["10.0", "11.0"], "Amount": ["1", "1"], "Date": ["20261106", "20261109"]} for c in part}
             return {}
 
         import marketdata.vendors.tq as tqmod

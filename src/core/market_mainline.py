@@ -700,6 +700,7 @@ def aggregate_mainline(
         # ── 概念维度(2026-11-09, 纯新增键) ──
         "dimension": "industry",
         "concept_groups": concept_ranked,
+        "concept_breadth_leaders": [{"name": g["name"], "limit_up_count": g["limit_up_count"]} for g in sorted(concept_eligible, key=lambda g: (-g["limit_up_count"], g["name"]))[:3]],
         "concept_unranked": concept_below[:10],
         "concept_status": cmeta["status"],
         "concept_note": cmeta["note"],
