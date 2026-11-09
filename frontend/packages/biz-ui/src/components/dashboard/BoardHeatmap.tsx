@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePausedInterval } from '@sida/base-ui'
 import { AlertTriangle, RefreshCw, Search, Zap } from 'lucide-react'
 import { useECharts } from '@sida/biz-ui/hooks/useECharts'
-import { searchBoards } from '@sida/biz-ui/lib/board-search'
+import { searchBoardMatches } from '@sida/biz-ui/lib/board-search'
 import { hslaVar, readStockColors } from '@sida/biz-ui/lib/stock-colors'
 import {
   detectHeatAnomaly,
@@ -244,7 +244,16 @@ function tooltipHtml(c: TreemapCell): string {
   const anomaly = c.anomaly
     ? `<div style="margin-top:2px;font-size:11px;color:#f59e0b">异动: ${c.anomaly.label}</div>`
     : ''
-  const stale = c.hasDaily ? '' : '<div style="margin-top:2px;font-size:11px;opacity:.65">暂无当日数据</div>'
+  // has_daily=false 只说明**日线未覆盖**, 不等于没有行情: 盘中实时快照会覆盖 change_pct
+  // (后端 _merge_live 不改 has_daily)。所以这里不能说「暂无当日数据/无当日行情」。
+  const coverage = c.hasDaily
+    ? ''
+    : c.changePct !== null
+      ? '仅实时(日线未覆盖)'
+      : '无日线/实时行情'
+  const stale = coverage
+    ? `<div style="margin-top:2px;font-size:11px;opacity:.65">${coverage}</div>`
+    : ''
   return (
     `<div style="font-size:12px;min-width:150px">` +
     `<div style="font-weight:600;margin-bottom:4px">${c.name}</div>` +
@@ -271,7 +280,11 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
   const [query, setQuery] = useState('')
   const [data, setData] = useState<HeatmapResp | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<unknown>(null)
+  /**
+   * 失败要**记所属分类**(2026-11-09 复审): 切到概念时, 行业的失败既不能冒充概念的错误态,
+   * 也不能让搜索面板一直说「加载中」。旧实现只存一个 error, 切页签的那一帧 / 之后都会串味。
+   */
+  const [failure, setFailure] = useState<{ type: BoardType; error: unknown } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   const onOpenRef = useRef(onOpenBoard)
@@ -293,10 +306,10 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       const res = await fetchAPI<HeatmapResp>(`/boards/heatmap?type=${btype}`)
       if (!aliveRef.current || seq !== seqRef.current) return
       setData(res)
-      setError(null)
+      setFailure(null)
     } catch (e) {
       if (!aliveRef.current || seq !== seqRef.current) return
-      setError(e)
+      setFailure({ type: btype, error: e })
     } finally {
       if (aliveRef.current && seq === seqRef.current) setLoading(false)
     }
@@ -308,6 +321,14 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
   }, POLL_MS, { deps: [btype, reloadKey] })
 
   const fresh = data !== null && data.type === btype
+  /** 只认**当前分类**的失败, 别把上一个页签的错误挂到新页签上 */
+  const error = failure && failure.type === btype ? failure.error : null
+  /**
+   * 当前分类还没有结果且也没有失败 ⇒ 正在加载。
+   * 不直接用 `loading` 状态: `loading` 只在轮询回调里置位, 切页签的第一帧它还是 false,
+   * 会把「新分类还没数据」画成空态/旧错误。用数据归属推导才是唯一可信的状态源。
+   */
+  const awaiting = !fresh && error === null
   const items = fresh && data ? data.items : NO_ITEMS
   const cells = useMemo(
     () => (fresh && items.length > 0 ? toTreemapCells(items, { palette: buildPalette(), areaMetric }) : null),
@@ -342,7 +363,11 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
    * 只在**后端已返回的 items** 上本地过滤; 不预置主题、不造排名、找不到就明说未找到。
    */
   const searchActive = query.trim().length > 0
-  const searchHits = useMemo(() => searchBoards(items, query), [items, query])
+  /**
+   * total/truncated 与 hits 一起取: 面板只展示前 12 条, 但**不能把 12 当匹配总数**报给用户。
+   */
+  const searchResult = useMemo(() => searchBoardMatches(items, query), [items, query])
+  const searchHits = searchResult.hits
   /** 实际数据来源(后端 source 字段原样标注; 缺失则不给标签, 不猜) */
   const sourceLabel =
     fresh && data?.source
@@ -418,7 +443,21 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
   }, [cells, chartRef, volumeUnavailable])
 
   const stale = Boolean(error) && fresh
-  const noDataCount = fresh ? items.filter((i) => !i.has_daily).length : 0
+  /**
+   * 「没有行情」= 涨跌幅缺失(日线与实时都没有)。
+   * 不能用 `!has_daily` 计数: 后端实时覆盖只改 change_pct, **不改 has_daily** ——
+   * 盘中大量板块 has_daily=false 但有实时涨跌, 按 has_daily 报「暂无当日数据」就是误导。
+   */
+  const noQuoteCount = fresh ? items.filter((i) => i.change_pct === null).length : 0
+  /** 旧数据要说得清「哪天的」, 不能只甩一句「上次数据」 */
+  const staleDetail =
+    fresh && data
+      ? data.live && data.as_of
+        ? `实时 · ${fmtClock(data.as_of)}`
+        : data.trade_date
+          ? `数据截至 ${data.trade_date}`
+          : ''
+      : ''
 
   return (
     <div className={className}>
@@ -465,9 +504,9 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           <span className="ml-1 whitespace-nowrap">-3% → +3%，灰=平盘</span>
         </span>
         <div className="ml-auto flex items-center gap-2">
-          {fresh && data.source ? (
+          {fresh && sourceLabel ? (
             <span className="rounded bg-s2 px-1.5 py-0.5 text-[12px] text-muted-foreground">
-              {data.source === 'tdx' ? '通达信' : '同花顺'}
+              {sourceLabel}
             </span>
           ) : null}
           {liveMode ? (
@@ -478,7 +517,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           ) : fresh && data.trade_date ? (
             <span className="text-[12px] text-muted-foreground">
               数据截至 {data.trade_date}
-              {noDataCount > 0 ? ` · ${noDataCount} 个暂无当日数据` : ''}
+              {noQuoteCount > 0 ? ` · ${noQuoteCount} 个板块无行情数据` : ''}
             </span>
           ) : null}
           <button
@@ -497,6 +536,15 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </button>
         </div>
       </div>
+
+      {/* 刷新失败/旧数据: 放在搜索面板**之前** —— 下面的搜索结果与色块都来自这份旧数据,
+          读者先看到「这是哪天的数据」再读结果。没说清哪天的「上次数据」等于没说。 */}
+      {stale && (
+        <div className="card-surface mb-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[12px] text-amber-600 dark:text-amber-500">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          刷新失败，当前展示上次成功数据{staleDetail ? `（${staleDetail}）` : ''}
+        </div>
+      )}
 
       {/* 板块查找(2026-11-09): 457 个概念色块里定位单个板块的最小交互。 */}
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -528,15 +576,28 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           aria-live="polite"
           className="mb-2 flex flex-wrap items-center gap-1.5 text-[12px]"
         >
-          {!fresh ? (
+          {awaiting ? (
             <span className="text-muted-foreground">板块数据加载中…</span>
+          ) : error !== null && !fresh ? (
+            // 请求失败 ≠ 加载中: 明说失败并指出出路, 否则用户会一直等一个不会来的结果。
+            <span className="text-amber-600 dark:text-amber-500">
+              当前分类数据加载失败，暂时无法搜索 —— 请点右上角刷新重试
+            </span>
+          ) : items.length === 0 ? (
+            // 当前分类本身就是空载荷: 不是「查询没命中」, 换个关键词也不会有结果。
+            <span className="text-muted-foreground">
+              当前{btype === 'industry' ? '行业' : '概念'}分类暂无板块数据，暂无可搜索内容
+            </span>
           ) : searchHits.length === 0 ? (
             <span className="text-muted-foreground">
               未找到匹配板块 —— 当前为{btype === 'industry' ? '行业' : '概念'}视图，可切换分类或换个关键词
             </span>
           ) : (
             <>
-              <span className="text-muted-foreground">{searchHits.length} 个匹配</span>
+              <span className="text-muted-foreground">共 {searchResult.total} 个匹配</span>
+              {searchResult.truncated && (
+                <span className="text-muted-foreground">仅显示前 {searchHits.length} 个</span>
+              )}
               {searchHits.map((hit) => (
                 <button
                   key={hit.blockCode}
@@ -549,19 +610,14 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
                   <span className="font-medium">{hit.name}</span>
                   <span className="font-mono text-muted-foreground">{hit.blockCode}</span>
                   <span className="font-mono">{formatHeatPct(hit.changePct)}</span>
-                  {!hit.hasDaily && <span className="text-muted-foreground">暂无当日数据</span>}
-                  {sourceLabel && <span className="rounded bg-s2 px-1 text-muted-foreground">{sourceLabel}</span>}
+                  {/* has_daily=false 只代表日线未覆盖; 有实时涨跌时说明「仅实时」, 不说没有行情 */}
+                  {!hit.hasDaily && hit.changePct !== null && (
+                    <span className="text-muted-foreground">仅实时</span>
+                  )}
                 </button>
               ))}
             </>
           )}
-        </div>
-      )}
-
-      {stale && (
-        <div className="card-surface mb-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[12px] text-amber-600 dark:text-amber-500">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          刷新失败，当前展示上次数据
         </div>
       )}
 
@@ -610,9 +666,9 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
         </div>
       ) : drawable ? (
         <div ref={ref} data-testid="heatmap-canvas" style={{ height: CHART_HEIGHT }} className="w-full" />
-      ) : loading && !fresh ? (
+      ) : awaiting ? (
         <LoadingState rows={3} />
-      ) : error && !fresh ? (
+      ) : error !== null && !fresh ? (
         <ErrorState
           message={error instanceof Error ? error.message : String(error)}
           onRetry={() => setReloadKey((k) => k + 1)}

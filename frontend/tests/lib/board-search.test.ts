@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardHeatItem } from '@sida/biz-ui/lib/board-heatmap'
-import { normalizeBoardQuery, searchBoards } from '@sida/biz-ui/lib/board-search'
+import { normalizeBoardQuery, searchBoardMatches, searchBoards } from '@sida/biz-ui/lib/board-search'
 
 // 板块查找(2026-11-09): 板块热力图 400+ 概念里定位单个板块的最小交互。
 // 只做**本地已被后端返回的数据**上的过滤, 不编造条目/涨幅, 也不预置热门主题。
@@ -78,6 +78,30 @@ describe('searchBoards 板块查找', () => {
   it('limit 只截断结果, 不改变匹配语义', () => {
     const many = Array.from({ length: 30 }, (_, i) => item({ block_code: `B${i}`, name: `测试板块${i}` }))
     expect(searchBoards(many, '测试板块', { limit: 5 })).toHaveLength(5)
+  })
+
+  // 2026-11-09 复审: 展示上限(12)不是匹配总数。UI 必须能拿到真实 total 与是否截断。
+  it('searchBoardMatches 给出真实匹配总数与截断标记, hits 仍按 limit 截断', () => {
+    const many = Array.from({ length: 30 }, (_, i) => item({ block_code: `B${i}`, name: `测试板块${i}` }))
+    const res = searchBoardMatches(many, '测试板块', { limit: 5 })
+    expect(res.hits).toHaveLength(5)
+    expect(res.total).toBe(30)
+    expect(res.truncated).toBe(true)
+  })
+
+  it('未截断时 truncated=false, 总数等于命中数; 空查询/无匹配 total=0', () => {
+    const few = searchBoardMatches(ITEMS, '航天', { limit: 12 })
+    expect(few.total).toBe(few.hits.length)
+    expect(few.truncated).toBe(false)
+    expect(searchBoardMatches(ITEMS, '', { limit: 12 })).toEqual({ hits: [], total: 0, truncated: false })
+    expect(searchBoardMatches(ITEMS, '不存在的板块', { limit: 12 })).toEqual({ hits: [], total: 0, truncated: false })
+  })
+
+  it('total 不受 limit=0 影响(仍报真实命中数)', () => {
+    const res = searchBoardMatches(ITEMS, '航天', { limit: 0 })
+    expect(res.hits).toHaveLength(0)
+    expect(res.total).toBe(2)
+    expect(res.truncated).toBe(true)
   })
 
   it('normalizeBoardQuery 去首尾空白并小写', () => {

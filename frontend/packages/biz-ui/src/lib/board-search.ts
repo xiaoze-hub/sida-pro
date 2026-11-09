@@ -24,6 +24,15 @@ export interface BoardSearchHit {
   match: BoardSearchMatch
 }
 
+export interface BoardSearchResult {
+  /** 实际返回的条目(受 limit 截断) */
+  hits: BoardSearchHit[]
+  /** 真实匹配总数(**不**是 hits.length) —— 展示上限不能当总数报给用户 */
+  total: number
+  /** 是否因 limit 截断(total > hits.length) */
+  truncated: boolean
+}
+
 /** 查询归一化: 去首尾空白 + 小写(名称里中英文混排时英文忽略大小写) */
 export function normalizeBoardQuery(raw: string): string {
   return (raw ?? '').trim().toLowerCase()
@@ -45,19 +54,23 @@ function classify(nameLower: string, codeLower: string, q: string): BoardSearchM
 }
 
 /**
- * 在已返回板块里查找。
+ * 在已返回板块里查找, 同时给出**真实匹配总数**。
+ *
+ * 为什么要 total: 面板只展示前 12 条(不刷屏), 但曾把 `hits.length` 当总数显示成
+ * 「12 个匹配」—— 其实命中 30 个。总数与展示上限必须分开报。
+ *
  * @param items 后端返回的板块列表(不额外请求、不跨视图猜数据)
- * @param rawQuery 用户输入; 空/全空白 → `[]`(不倾倒全量板块)
+ * @param rawQuery 用户输入; 空/全空白 → 空结果(不倾倒全量板块)
  * @param opts.limit 最多返回条数(默认 12, UI 小面板不刷屏), 仅截断不改匹配语义
  */
-export function searchBoards(
+export function searchBoardMatches(
   items: readonly BoardHeatItem[],
   rawQuery: string,
   opts: { limit?: number } = {},
-): BoardSearchHit[] {
+): BoardSearchResult {
   const q = normalizeBoardQuery(rawQuery)
-  if (!q) return []
-  const limit = opts.limit ?? 12
+  if (!q) return { hits: [], total: 0, truncated: false }
+  const limit = Math.max(0, opts.limit ?? 12)
   const hits: Array<BoardSearchHit & { rank: number }> = []
   for (const it of items) {
     const name = it.name ?? ''
@@ -75,5 +88,15 @@ export function searchBoards(
   }
   // Array.prototype.sort 是稳定排序 ⇒ 同档保持后端顺序。
   hits.sort((a, b) => a.rank - b.rank)
-  return hits.slice(0, Math.max(0, limit)).map(({ rank: _rank, ...hit }) => hit)
+  const limited = hits.slice(0, limit).map(({ rank: _rank, ...hit }) => hit)
+  return { hits: limited, total: hits.length, truncated: hits.length > limited.length }
+}
+
+/** 只要条目(兼容旧调用方); 需要总数请用 {@link searchBoardMatches}。 */
+export function searchBoards(
+  items: readonly BoardHeatItem[],
+  rawQuery: string,
+  opts: { limit?: number } = {},
+): BoardSearchHit[] {
+  return searchBoardMatches(items, rawQuery, opts).hits
 }
