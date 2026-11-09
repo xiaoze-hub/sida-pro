@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
@@ -298,7 +299,7 @@ def test_读库定性_残缺快照带缺口与早冻证据(monkeypatch):
     _add_daily(eng, [("000001", "2026-10-19 08:48:00"), ("000002", "2026-10-19 08:48:00")])
     _add_seats(eng, ["000001", "000002", "600000"])
 
-    r = q.assess_date("20261019")
+    r = q.assess_date("20261019", engine=eng)
     assert r["status"] == "partial" and r["degraded"] is True
     assert r["actual_symbols"] == 2
     assert r["first_write_at"] == "2026-10-19 16:48:00"   # UTC → 北京
@@ -309,7 +310,7 @@ def test_读库定性_残缺快照带缺口与早冻证据(monkeypatch):
     assert [c["reference"] for c in r["references"]] == ["lhb_seat_details"]
 
 
-def test_读库定性_只读不写(monkeypatch):
+def test_读库定性_只读不写():
     eng = _mk_engine(with_seats=True)
     _add_daily(eng, [("000001", "2026-10-19 08:48:00")])
     _add_seats(eng, ["000001", "600000"])
@@ -321,17 +322,14 @@ def test_读库定性_只读不写(monkeypatch):
         def begin(self):
             raise AssertionError("完整性定性不得写库")
 
-    import src.web.database as database
-
-    monkeypatch.setattr(database, "engine", _ReadOnly())
-    r = q.assess_date("20261019")
+    r = q.assess_date("20261019", engine=_ReadOnly())
     assert r["status"] == "partial"
 
 
 def test_空库定性返回absent而不抛(monkeypatch):
     eng = _mk_engine()
     _use_engine(monkeypatch, eng)
-    r = q.assess_date("20261019")
+    r = q.assess_date("20261019", engine=eng)
     assert r["status"] == "absent" and r["degraded"] is True
     assert r["references"] == []
 
@@ -341,10 +339,96 @@ def test_表缺失或不可读_如实标absent且说明读库失败(monkeypatch)
         "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     _use_engine(monkeypatch, eng)      # 不建表 → SELECT 抛错
-    r = q.assess_date("20261019")
+    r = q.assess_date("20261019", engine=eng)
     assert r["status"] == "absent" and r["degraded"] is True
     assert "读库失败" in r["note"]
     assert any(e.startswith("db_error=") for e in r["evidence"])
+
+
+def test_入口到只读SQL_注入engine即真实读库且只发SELECT():
+    """B4.1 回归: 定性不得自己 import src.web 找库 —— 注入哪个库就读哪个库。
+
+    且从入口(`assess_date`)到 SQL 只许 SELECT: 读不到要如实标读库失败,
+    不能悄悄变出一份"无快照"。
+    """
+    eng = _mk_engine(with_seats=True)
+    _add_daily(eng, [("000001", "2026-10-19 09:31:00")])
+    _add_seats(eng, ["000001", "600000"])
+    seen = _capture_sql(eng)
+
+    r = q.assess_date("20261019", "CN", engine=eng)
+
+    assert r["actual_symbols"] == 1 and r["sources"] == {"em_ftshare": 1}
+    assert r["status"] == "partial" and r["missing_symbols"] == ["600000"]
+    assert not any(e.startswith("db_error=") for e in r["evidence"])   # 无读库异常
+    assert len(seen) >= 2, "快照与参考源各应读一次, 实际没发 SQL 说明没读注入库"
+    verbs = {s.lstrip().split(None, 1)[0].upper() for s in seen}
+    assert verbs == {"SELECT"}, f"定性是只读路径, 实际发出: {sorted(verbs)}"
+
+
+def test_注入哪个engine就读哪个_不回落全局(monkeypatch):
+    eng = _mk_engine(with_seats=True)
+    _add_daily(eng, [("000001", "2026-10-19 09:31:00")])
+    empty = _mk_engine()
+
+    class _Boom:
+        def connect(self):
+            raise AssertionError("不得读全局 engine, 只能用注入的那个")
+
+    import src.web.database as database
+
+    monkeypatch.setattr(database, "engine", _Boom())
+
+    r1 = q.assess_date("20261019", engine=eng)
+    assert r1["actual_symbols"] == 1 and r1["status"] != "absent"
+    r2 = q.assess_date("20261019", engine=empty)
+    assert r2["actual_symbols"] == 0 and r2["status"] == "absent"
+
+
+def test_未注入engine_显式报错而非静默无快照():
+    with pytest.raises(TypeError):                        # 参数必填, 忘了传直接炸
+        q.assess_date("20261019")
+    with pytest.raises(ValueError, match="显式注入"):
+        q.assess_date("20261019", engine=None)
+    with pytest.raises(TypeError, match="connect"):
+        q.assess_date("20261019", engine=object())
+
+
+def test_API入口把同一engine注入定性(monkeypatch):
+    """真实调用必须注入 engine, 且就是本次载荷读的那个库; 否则定性会静默无数据。"""
+    import src.core.lhb_quality as lq
+    import src.web.database as database
+
+    sentinel = object()
+    seen: dict = {}
+
+    def _fake(trade_date, market="CN", *, engine=None):
+        seen.update(trade_date=trade_date, market=market, engine=engine)
+        return {"status": "unverified", "degraded": False}
+
+    monkeypatch.setattr(database, "engine", sentinel)
+    monkeypatch.setattr(lq, "assess_date", _fake)
+
+    out = mdm._lhb_snapshot_quality("20261019", "CN")
+
+    assert seen["engine"] is sentinel, "定性必须和载荷读同一个库"
+    assert seen["trade_date"] == "20261019" and seen["market"] == "CN"
+    assert out["status"] == "unverified"
+
+
+def test_API入口到SQL_只读不写(monkeypatch):
+    eng = _mk_engine(with_seats=True)
+    _use_engine(monkeypatch, eng)
+    _add_daily(eng, [("000001", "2026-10-19 09:31:00")])
+    _add_seats(eng, ["000001"])
+    seen = _capture_sql(eng)
+
+    out = mdm._dragon_tiger_from_db("20261019", "CN")
+
+    assert out is not None and out["count"] == 1 and out["source"] == "db"
+    assert out["quality_status"] == "unverified"                # 定性真的读到库了
+    writes = [s for s in seen if s.lstrip().split(None, 1)[0].upper() != "SELECT"]
+    assert not writes, f"读库响应路径不得写库: {writes}"
 
 
 # ─────────────────── ⑥ API 兼容: 只增字段, 不改旧键 ───────────────────
@@ -534,7 +618,7 @@ def test_跨市场参考源_不被当成本市场缺口(monkeypatch):
          ("00700", "HK", "2026-10-19 09:31:00"), ("AAPL", "US", "2026-10-19 09:31:00")],
     )
 
-    r = q.assess_date("20261019", "CN")
+    r = q.assess_date("20261019", "CN", engine=eng)
     assert r["status"] == "unverified"          # 同市场无缺口 → 未核对, 而非 partial
     assert r["missing_total"] == 0
     ref = r["references"][0]
@@ -548,7 +632,7 @@ def test_无market列参考源_符号非本市场形态则跳过比较(monkeypat
     _add_daily(eng, [("000001", "2026-10-19 09:31:00")])
     _add_seats(eng, ["000001", "00700"])        # 5 位 HK 码混进无 market 列的席位表
 
-    r = q.assess_date("20261019", "CN")
+    r = q.assess_date("20261019", "CN", engine=eng)
     assert r["status"] == "unverified" and r["missing_total"] == 0
     assert "lhb_seat_details" in r["references_skipped"]
     assert "无法核验" in r["references_skipped"]["lhb_seat_details"]
@@ -560,7 +644,7 @@ def test_非CN市场_无market列参考源不比较(monkeypatch):
     _add_daily(eng, [("00700", "2026-10-19 09:31:00")], market="HK")
     _add_seats(eng, ["00700"])
 
-    r = q.assess_date("20261019", "HK")
+    r = q.assess_date("20261019", "HK", engine=eng)
     assert r["status"] == "unverified" and r["references"] == []
     assert "lhb_seat_details" in r["references_skipped"]
 

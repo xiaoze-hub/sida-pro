@@ -1719,11 +1719,15 @@ def _lhb_snapshot_quality(trade_date: str, market: str = "CN") -> dict:
     """该日 `dragon_tiger_daily` 快照的完整性定性(**只读**: 不回源、不写库)。
 
     失败返回 {} —— 定性不可用时不阻断主响应, 但也**不会**因此把快照当完整。
+
+    engine 显式注入(B4.1: core 不得反向 import src/web): 与 `_lhb_read_date`
+    用**同一个** engine, 定性口径才和这次响应读到的快照同源; 不能留给 core 猜。
     """
     try:
         from src.core.lhb_quality import assess_date
+        from src.web.database import engine
 
-        return assess_date(trade_date, market) or {}
+        return assess_date(trade_date, market, engine=engine) or {}
     except Exception as e:  # noqa: BLE001 - 定性是增强, 不拖垮榜单读取
         logger.debug("龙虎榜完整性定性失败(不阻断): %s", e)
         return {}

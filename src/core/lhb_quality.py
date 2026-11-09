@@ -364,12 +364,27 @@ def assess_daily_completeness(
 # ─────────────────────────── 读库(只读) ───────────────────────────
 
 
-def _fetch_snapshot(trade_date: str, market: str) -> tuple[list[tuple], str]:
+def _require_engine(engine):
+    """校验显式注入的只读连接源; 缺失/形态不对**直接报错**。
+
+    core 层不再反向 import `src.web.database`(B4.1): 定性必须由调用方把
+    "本次响应所依据的那个 engine" 传进来。绝不能自己猜一个库 —— 猜错会把
+    "读到别的库/读不到" 静默报成 `absent`(无快照), 那是把无数据当结论。
+    """
+    if engine is None:
+        raise ValueError(
+            "lhb_quality 需要显式注入只读 engine(如 src.db.session.get_read_engine() "
+            "或与载荷同源的 src.web.database.engine); 未注入不得静默按无快照处理"
+        )
+    if not callable(getattr(engine, "connect", None)):
+        raise TypeError(f"engine 需提供 connect(), 拿到 {type(engine).__name__}")
+    return engine
+
+
+def _fetch_snapshot(trade_date: str, market: str, engine) -> tuple[list[tuple], str]:
     """读该日快照行 [(symbol, source, updated_at)]; 失败返回 ([], 原因)。"""
     try:
         from sqlalchemy import text
-
-        from src.web.database import engine
 
         with engine.connect() as conn:
             recs = conn.execute(
@@ -385,7 +400,7 @@ def _fetch_snapshot(trade_date: str, market: str) -> tuple[list[tuple], str]:
 
 
 def _fetch_references(
-    trade_date: str, market: str = "CN"
+    trade_date: str, market: str = "CN", engine=None
 ) -> tuple[dict[str, list[str]], dict[str, dict], dict[str, str]]:
     """独立参考源的**同市场**当日 symbol 集合。
 
@@ -395,17 +410,15 @@ def _fetch_references(
       (`market_verified=False`, scope=symbol_shape); 否则**不比较**并记录原因。
       拿跨市场代码当缺口是误报, 宁可不比。
     - 单表不可用/无行 → 跳过(不当作"完整")。
+
+    `engine` 显式传入(见 `_require_engine`); 缺失由调用方先校验, 这里再兜一层。
     """
     refs: dict[str, list[str]] = {}
     meta: dict[str, dict] = {}
     skipped: dict[str, str] = {}
     market = str(market or "CN").strip().upper()
-    try:
-        from sqlalchemy import text
-
-        from src.web.database import engine
-    except Exception:  # noqa: BLE001
-        return refs, meta, {"*": "数据库不可用"}
+    engine = _require_engine(engine)
+    from sqlalchemy import text
 
     for table in REFERENCE_TABLES:
         try:
@@ -475,16 +488,22 @@ def _to_beijing_naive(dt: datetime | None) -> datetime | None:
         return dt
 
 
-def assess_date(trade_date, market: str = "CN") -> dict:
-    """某交易日快照的完整性定性(**只读**: 不回源、不写库)。"""
+def assess_date(trade_date, market: str = "CN", *, engine) -> dict:
+    """某交易日快照的完整性定性(**只读**: 不回源、不写库)。
+
+    `engine` 必须显式注入(见 `_require_engine`): 定性要读的就是调用方这次响应
+    所依据的那个库。core 不自己 import src.web / 不猜全局 engine —— 猜错的后果是
+    "读到别的库/读不到" 被静默报成 `absent`(无快照), 比报错更危险。
+    """
+    eng = _require_engine(engine)
     market = str(market or "CN").strip().upper()
     d = _norm_date(trade_date)
     if not d:
         return assess_daily_completeness(
             trade_date, market=market, actual_symbols=[], db_error="非法交易日"
         )
-    rows, err = _fetch_snapshot(d, market)
-    refs, meta, skipped = _fetch_references(d, market)
+    rows, err = _fetch_snapshot(d, market, eng)
+    refs, meta, skipped = _fetch_references(d, market, eng)
     fw, lw = beijing_write_window([r[2] for r in rows if r[2]])
     src_counter = Counter(str(r[1] or "unknown") for r in rows)
     return assess_daily_completeness(
