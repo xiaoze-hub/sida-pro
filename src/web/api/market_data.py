@@ -827,11 +827,39 @@ async def dragon_tiger_quality(
 
     只有调用方拿到官方完整清单时才会 `complete` —— **股数一致不算完整**。
     本端点不写库、不回源: 回源修复必须显式授权后另行执行。
+
+    读库失败/定性未完成时回 **503**(不可判定), 绝不回 200 + `status=absent`:
+    `absent` 是"查询成功且该日没有行", 与"库挂了/没读到"是两回事。
     """
     quality = _lhb_snapshot_quality(trade_date, market)
     if not quality:
-        raise HTTPException(503, "完整性定性不可用(数据库未就绪), 不给出结论")
+        raise HTTPException(
+            503,
+            {
+                "trade_date": trade_date,
+                "market": market,
+                "status": "unknown",
+                "label": "定性不可用",
+                "note": "完整性定性不可用(定性链路未完成), 不给出结论; "
+                        "不据此声明该日没有快照, 也不声明完整。",
+            },
+        )
     quality.setdefault("market", market)
+    if quality.get("status") in {"unavailable", "unknown"}:
+        # 不可判定不是结论: 503 + 结构化原因, 防止调用方把"没读到"当成"没数据"。
+        raise HTTPException(
+            503,
+            {
+                "trade_date": quality.get("trade_date") or trade_date,
+                "market": market,
+                "status": quality.get("status"),
+                "verification": quality.get("verification"),
+                "severity": quality.get("severity"),
+                "label": quality.get("label"),
+                "snapshot_read": quality.get("snapshot_read"),
+                "note": quality.get("note"),
+            },
+        )
     return quality
 
 
@@ -1719,6 +1747,8 @@ def _lhb_snapshot_quality(trade_date: str, market: str = "CN") -> dict:
     """该日 `dragon_tiger_daily` 快照的完整性定性(**只读**: 不回源、不写库)。
 
     失败返回 {} —— 定性不可用时不阻断主响应, 但也**不会**因此把快照当完整。
+    注意: 返回 {} 只表示"定性链路自己抛了"; 读库失败由 core 以
+    `status=unavailable` 正常返回(那是"没读到", 不是"没数据")。
 
     engine 显式注入(B4.1: core 不得反向 import src/web): 与 `_lhb_read_date`
     用**同一个** engine, 定性口径才和这次响应读到的快照同源; 不能留给 core 猜。
@@ -1729,7 +1759,10 @@ def _lhb_snapshot_quality(trade_date: str, market: str = "CN") -> dict:
 
         return assess_date(trade_date, market, engine=engine) or {}
     except Exception as e:  # noqa: BLE001 - 定性是增强, 不拖垮榜单读取
-        logger.debug("龙虎榜完整性定性失败(不阻断): %s", e)
+        # 只记原因码: 异常文本可能带连接串凭据, 不该进日志之外的任何地方。
+        from src.core.lhb_quality import safe_error_code
+
+        logger.debug("龙虎榜完整性定性失败(不阻断): %s", safe_error_code(e))
         return {}
 
 

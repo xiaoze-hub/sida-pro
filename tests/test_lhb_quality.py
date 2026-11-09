@@ -334,13 +334,19 @@ def test_空库定性返回absent而不抛(monkeypatch):
     assert r["references"] == []
 
 
-def test_表缺失或不可读_如实标absent且说明读库失败(monkeypatch):
+def test_表缺失或不可读_如实标unavailable而非无快照(monkeypatch):
+    """表缺失/库不可达 = 没读到, 必须 `unavailable`(不可判定), 不能冒充 absent。
+
+    历史契约曾把它判成 absent(把"读不到"说成"该日没有行"), 2026-11-09 更正:
+    absent 只留给"查询成功且零行"。
+    """
     eng = create_engine(
         "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     _use_engine(monkeypatch, eng)      # 不建表 → SELECT 抛错
     r = q.assess_date("20261019", engine=eng)
-    assert r["status"] == "absent" and r["degraded"] is True
+    assert r["status"] == "unavailable" and r["degraded"] is True
+    assert r["verification"] == "unavailable" and r["snapshot_read"] == "failed"
     assert "读库失败" in r["note"]
     assert any(e.startswith("db_error=") for e in r["evidence"])
 

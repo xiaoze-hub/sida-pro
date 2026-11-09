@@ -44,28 +44,45 @@
    全日定性会把"本股无记录"报成"全日无快照"。本股是否有行另由
    `assess_symbol_scope` 表达(`recorded` True/False/None), 且 `None`(全日无覆盖/
    没读到)不得被说成"本股没上榜"。
+8. **"没读到"≠"没有数据"。** `absent` 只用于**查询成功且零行**; 读库失败
+   (连不上/表缺失)是 `unavailable`, 定性未完成(非法入参/未评估)是 `unknown`。
+   两者都不可判定, 都不得被调用方当成"该日没人上榜", 也不能当完整。同时
+   **异常详情与连接串一律不得外发**: 只暴露原因码(异常类名级别), message 里的
+   DSN/用户名/口令/host 全部丢弃 —— 这些响应会被任何能打这个端点的调用方读到。
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta, timezone
 
 _CST = timezone(timedelta(hours=8))   # Asia/Shanghai 自 1991 起无夏令时, 固定 +08:00
 
-STATUS_ABSENT = "absent"          # 该日没有任何快照行
+STATUS_ABSENT = "absent"          # 查询成功, 但该日没有任何快照行
 STATUS_UNVERIFIED = "unverified"  # 有行, 但没拿到官方完整清单核对 → 不得称完整
 STATUS_PARTIAL = "partial"        # 可证明残缺(参考源有而本快照没有)
 STATUS_COMPLETE = "complete"      # 仅当权威完整清单已被覆盖
+STATUS_UNAVAILABLE = "unavailable"  # 读库失败(连不上/表缺失) → 不可判定, 绝非"无快照"
+STATUS_UNKNOWN = "unknown"        # 定性根本没完成(入参非法/未评估) → 不可判定
 
 # 状态 → (核验态, 严重度, 人读标签)。unverified/partial 都不能当完整, 但语义不同:
 # 前者"没证据", 后者"有证据", 不允许用同一个 degraded=True 糊在一起。
+# unavailable/unknown 是第三种情况: **没读到结论**, 与"读了确实没有"(absent)严格分开 ——
+# 把读库异常报成 absent 会让调用方把"库挂了"当成"该日没人上榜"。
 _STATUS_META: dict[str, tuple[str, str, str]] = {
     STATUS_COMPLETE: ("authoritative", "ok", "完整(已由权威清单核对)"),
     STATUS_UNVERIFIED: ("unverified", "caution", "未经核对"),
     STATUS_PARTIAL: ("disproven", "incomplete", "已证残缺"),
     STATUS_ABSENT: ("no_snapshot", "missing", "无快照"),
+    STATUS_UNAVAILABLE: ("unavailable", "unavailable", "读库不可用"),
+    STATUS_UNKNOWN: ("unknown", "unknown", "定性不可用"),
 }
+
+# 不可当完整使用(已证残缺 / 确认无数据 / 根本没读到)。
+_DEGRADED_STATUSES = frozenset(
+    {STATUS_PARTIAL, STATUS_ABSENT, STATUS_UNAVAILABLE, STATUS_UNKNOWN}
+)
 
 # 东财当日完整榜单"发布就绪"时刻(HHMM, 北京)。这是**生产实测经验下界**
 # (最早 17:16/稳定 17:30), 不是交易所/东财的官方发布时间公告。
@@ -136,6 +153,51 @@ def _hhmm(moment: datetime) -> int:
     return moment.hour * 100 + moment.minute
 
 
+# ───────────────────── 读库异常: 只吐原因码, 绝不吐异常详情 ─────────────────────
+
+_SAFE_CODE_RE = re.compile(r"[^0-9A-Za-z_.\-]")
+# 一旦出现这些片段, 原串里极可能带 DSN/凭据/主机拓扑 → 整段丢弃, 换成定值。
+_CRED_HINTS = ("://", "@", "password", "passwd", "pwd", "secret", "token", "api_key", "dsn=")
+_SANITIZED_REASON = "read_failed"
+
+
+def safe_error_code(exc: object) -> str:
+    """异常 → **粗粒度原因码**(只保留类名), 不带 message/参数/堆栈。
+
+    为什么不用 `str(exc)`: SQLAlchemy 的连接错误里会原样带上 DSN
+    (`postgresql://user:pass@host:5432/db`) 与服务器内部地址, 直接拼进 API
+    响应就是把凭据和拓扑交给任何能打这个端点的调用方。定性只需要"读失败"这个
+    事实, 不需要底层细节 —— 细节留在服务端日志里。
+    """
+    name = _SAFE_CODE_RE.sub("", type(exc).__name__ if exc is not None else "")[:40]
+    return name or "Error"
+
+
+def sanitize_reason(reason: object) -> str:
+    """把调用方给的失败原因收口成**可安全外发**的短码。
+
+    合法短码(如 `非法交易日` / `OperationalError`)原样保留; 一旦像连接串/带凭据
+    的长文本, 整段替换为 `read_failed`, 不让详情穿透到响应体。
+    """
+    s = str(reason or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if any(h in low for h in _CRED_HINTS) or len(s) > 60:
+        return _SANITIZED_REASON
+    if any(ch in s for ch in "\n\r\t"):
+        return _SANITIZED_REASON
+    return s
+
+
+def _read_status_of(read_status: object, db_error: str) -> str:
+    """归一读库结果: ok | failed | unknown。给了 db_error 却没声明 → 按 failed。"""
+    s = str(read_status or "").strip().lower()
+    if s in {"ok", "failed", "unknown"}:
+        return s
+    return "failed" if db_error else "ok"
+
+
 # ─────────────────────────── 纯函数: 定性 ───────────────────────────
 
 
@@ -156,6 +218,7 @@ def assess_daily_completeness(
     missing_sample: int = _MISSING_SAMPLE,
     publish_ready_hhmm: int = PUBLISH_READY_HHMM,
     db_error: str = "",
+    read_status: str = "",
 ) -> dict:
     """给某交易日的 `dragon_tiger_daily` 快照定性(纯函数, 不碰 IO)。
 
@@ -164,11 +227,15 @@ def assess_daily_completeness(
       声明市场与核验方式; 声明市场与 `market` 不同 → 该参考不参与比较(跨市场不比较);
     - `references_skipped`: {参考源名: 不比较的原因}, 原样透出, 不静默丢弃;
     - `expected_symbols` + `expected_source` + `expected_authoritative=True`: 调用方
-      拿到的**官方完整清单**; 只有它被实际覆盖时 `status` 才是 `complete`。
+      拿到的**官方完整清单**; 只有它被实际覆盖时 `status` 才是 `complete`;
+    - `read_status`: 读库结果 `ok|failed|unknown`(缺省按 `db_error` 是否为空推断)。
+      **读库失败 ≠ 无快照**: failed → `unavailable`, unknown → `unknown`,
+      只有 ok 且零行才是 `absent`。`db_error` 只收原因码(外发前经
+      `sanitize_reason` 收口), 异常原文/连接串绝不进响应。
 
     返回 dict 可直接 JSON 化。`complete` 只在权威清单覆盖时为真;
-    `degraded` 表示**已证不可当完整使用**(partial/absent), 与"仅未经核对"(unverified)
-    严格区分。
+    `degraded` 表示**已证不可当完整使用**(partial/absent/unavailable/unknown),
+    与"仅未经核对"(unverified)严格区分。
     """
     d = _norm_date(trade_date)
     market = str(market or "CN").strip().upper()
@@ -178,6 +245,8 @@ def assess_daily_completeness(
     sample = max(1, int(missing_sample))
     meta_in = reference_meta or {}
     skipped: dict[str, str] = {str(k): str(v) for k, v in (references_skipped or {}).items()}
+    db_error = sanitize_reason(db_error)
+    read_state = _read_status_of(read_status, db_error)
 
     checks: list[dict] = []
     missing_all: set[str] = set()
@@ -237,7 +306,13 @@ def assess_daily_completeness(
         }
 
     exp_authoritative = bool(expected and expected["authoritative"])
-    if not actual:
+    # 三态顺序很重要: 先看"读到没有", 再看"读到的东西是否完整"。反过来写就会把
+    # 读库异常(actual 为空)混进"该日没有快照"。
+    if read_state == "failed":
+        status = STATUS_UNAVAILABLE
+    elif read_state == "unknown":
+        status = STATUS_UNKNOWN
+    elif not actual:
         status = STATUS_ABSENT
     elif exp_authoritative and expected_covered:
         status = STATUS_COMPLETE
@@ -313,12 +388,15 @@ def assess_daily_completeness(
                 "本日快照**不得**作为完整榜单展示。"
             )
     elif status == STATUS_ABSENT:
-        if db_error:
-            note = (f"读库失败, 无法判定该日快照({db_error}); "
-                    "不据此声明完整, 也不据此声明无上榜。")
-        else:
-            note = ("该日无 dragon_tiger_daily 快照行(未落库/非交易日); "
-                    "无覆盖不等于无上榜。")
+        note = ("该日无 dragon_tiger_daily 快照行(未落库/非交易日); "
+                "无覆盖不等于无上榜。")
+    elif status == STATUS_UNAVAILABLE:
+        # 读库失败: 只报"没读到", 绝不写成"该日没有快照"。原因码已脱敏。
+        note = (f"读库失败, 无法判定该日快照({db_error or '原因未明'}); "
+                "不据此声明完整, 也不据此声明无上榜或该日为空。")
+    elif status == STATUS_UNKNOWN:
+        note = (f"完整性定性未完成({db_error or '原因未明'}), 无法判定该日快照; "
+                "不据此声明完整, 也不据此声明无上榜或该日为空。")
     else:
         note = ("未经官方清单核对: 与独立来源股数一致**不足以**判定完整"
                 "(参考源非官方清单, 可能同样不完整)。无证据表明缺漏, 但展示时须标注为未经核对。")
@@ -336,10 +414,12 @@ def assess_daily_completeness(
         "market": market,
         "status": status,
         "complete": complete,
-        "degraded": status in (STATUS_PARTIAL, STATUS_ABSENT),
+        "degraded": status in _DEGRADED_STATUSES,
         "verification": verification,
         "severity": severity,
         "label": label,
+        # 显式区分"读到了 0 行"(ok) 与"没读到"(failed/unknown): 调用方不必从 status 猜。
+        "snapshot_read": read_state,
         "actual_symbols": len(actual),
         "first_write_at": _fmt_dt(fw),
         "last_write_at": _fmt_dt(lw),
@@ -382,7 +462,11 @@ def _require_engine(engine):
 
 
 def _fetch_snapshot(trade_date: str, market: str, engine) -> tuple[list[tuple], str]:
-    """读该日快照行 [(symbol, source, updated_at)]; 失败返回 ([], 原因)。"""
+    """读该日快照行 [(symbol, source, updated_at)]; 失败返回 ([], 原因码)。
+
+    失败时**只回原因码**(异常类名), 不回 message —— 连接串/凭据/内部主机名
+    都可能藏在 SQLAlchemy 的异常文本里, 而这份结果会直接进 HTTP 响应。
+    """
     try:
         from sqlalchemy import text
 
@@ -395,8 +479,8 @@ def _fetch_snapshot(trade_date: str, market: str, engine) -> tuple[list[tuple], 
                 {"d": trade_date, "m": market or "CN"},
             ).fetchall()
         return [(r[0], r[1], r[2]) for r in recs], ""
-    except Exception as e:  # noqa: BLE001 - 表缺失/库不可达: 如实标 absent
-        return [], f"{type(e).__name__}: {e}"
+    except Exception as e:  # noqa: BLE001 - 表缺失/库不可达: 如实标"没读到"
+        return [], safe_error_code(e)
 
 
 def _fetch_references(
@@ -430,7 +514,8 @@ def _fetch_references(
                 keys = {str(k).lower() for k in res.keys()}
                 rows = res.fetchall()
         except Exception as e:  # noqa: BLE001 - 表不存在/结构不同 → 该参考缺席
-            skipped[table] = f"不可读({type(e).__name__})"
+            # 只留异常类名: 该原因会进 references_skipped 并对外返回。
+            skipped[table] = f"不可读({safe_error_code(e)})"
             continue
         if not rows:
             continue  # 参考源当日无数据 ≠ 快照完整
@@ -499,8 +584,14 @@ def assess_date(trade_date, market: str = "CN", *, engine) -> dict:
     market = str(market or "CN").strip().upper()
     d = _norm_date(trade_date)
     if not d:
+        # 入参本身不成立 → 连"该日有没有快照"都谈不上, 归 unknown(不可判定),
+        # 不能记成 absent(那等于替调用方断言"那天没有数据")。
         return assess_daily_completeness(
-            trade_date, market=market, actual_symbols=[], db_error="非法交易日"
+            trade_date,
+            market=market,
+            actual_symbols=[],
+            db_error="invalid_trade_date",
+            read_status="unknown",
         )
     rows, err = _fetch_snapshot(d, market, eng)
     refs, meta, skipped = _fetch_references(d, market, eng)
@@ -517,6 +608,7 @@ def assess_date(trade_date, market: str = "CN", *, engine) -> dict:
         reference_meta=meta,
         references_skipped=skipped,
         db_error=err,
+        read_status="failed" if err else "ok",
     )
 
 
@@ -542,12 +634,19 @@ def assess_symbol_scope(
     day = _norm_symbols(day_symbols)
     day_status = str(day_status or "").strip().lower()
 
-    if day_status == STATUS_ABSENT:
+    if day_status in (STATUS_ABSENT, STATUS_UNAVAILABLE, STATUS_UNKNOWN):
         recorded: bool | None = None
-        note = (
-            f"全日无覆盖(dragon_tiger_events 该市场当日无任何行): 本股({sym})是否在榜"
-            "无法判定; 无覆盖不等于无上榜。本股视角不改变全日结论。"
-        )
+        if day_status == STATUS_ABSENT:
+            note = (
+                f"全日无覆盖(dragon_tiger_events 该市场当日无任何行): 本股({sym})是否在榜"
+                "无法判定; 无覆盖不等于无上榜。本股视角不改变全日结论。"
+            )
+        else:
+            # 全日范围根本没读到 → 不能顺手说"本股无记录"(那是拿读库失败当结论)。
+            note = (
+                f"全日范围未能读取({day_status}), 本股({sym})是否在榜无法判定; "
+                "本股视角不改变全日结论。"
+            )
     elif sym_set & day:
         recorded = True
         note = (
@@ -579,6 +678,7 @@ def assess_events_date(
     last_write_at: datetime | str | None = None,
     daily_symbols: Iterable | None = None,
     db_error: str = "",
+    read_status: str = "",
 ) -> dict:
     """给 `dragon_tiger_events`(archive/events 页面实际读的表)做**独立**定性。
 
@@ -586,7 +686,9 @@ def assess_events_date(
     官方完整清单 → **永不声明完整**(`complete=False`, `completeness_claimed=False`,
     `verified_against_official=False`), 也不因"没核对"就谎报残缺:
     - 有行 → `status=unverified` / `severity=caution` / `degraded=False`(无残缺证据);
-    - 无行 → `status=absent` / `severity=missing` / `degraded=True`(确实没数据)。
+    - 查询成功且无行 → `status=absent` / `severity=missing` / `degraded=True`;
+    - 读库失败 → `status=unavailable`(不可判定, **不是**无数据);
+    - 定性未完成 → `status=unknown`。原因码经 `sanitize_reason` 收口, 不带异常详情。
 
     `daily_symbols` 给了就做**双向交叉提示**(仅供人看: 两张表都不是官方清单, 差异不能
     判定任何一方完整), 不用它推 status。
@@ -596,12 +698,19 @@ def assess_events_date(
     ev = _norm_symbols(event_symbols)
     fw = _as_naive_dt(first_write_at)
     lw = _as_naive_dt(last_write_at)
+    db_error = sanitize_reason(db_error)
+    read_state = _read_status_of(read_status, db_error)
 
-    status = STATUS_ABSENT if not ev else STATUS_UNVERIFIED
+    if read_state == "failed":
+        status = STATUS_UNAVAILABLE
+    elif read_state == "unknown":
+        status = STATUS_UNKNOWN
+    elif not ev:
+        status = STATUS_ABSENT
+    else:
+        status = STATUS_UNVERIFIED
     complete = False
-    verification = "no_snapshot" if status == STATUS_ABSENT else "unverified"
-    severity = "missing" if status == STATUS_ABSENT else "caution"
-    label = "无快照" if status == STATUS_ABSENT else "未经核对"
+    verification, severity, label = _STATUS_META[status]
     ready = f"{PUBLISH_READY_HHMM // 100:02d}:{PUBLISH_READY_HHMM % 100:02d}"
 
     early_freeze = False
@@ -641,13 +750,22 @@ def assess_events_date(
 
     if status == STATUS_ABSENT:
         note = "该日 dragon_tiger_events 无行(定时回源未覆盖/非交易日); 无覆盖不等于无上榜。"
+    elif status == STATUS_UNAVAILABLE:
+        note = (
+            f"读库失败({db_error or '原因未明'}), 该日 dragon_tiger_events 是否为空不可判定; "
+            "不据此声明无数据, 也不声明完整。"
+        )
+    elif status == STATUS_UNKNOWN:
+        note = (
+            f"完整性定性未完成({db_error or '原因未明'}), 该日 dragon_tiger_events 是否为空"
+            "不可判定; 不据此声明无数据, 也不声明完整。"
+        )
     else:
         note = (
             "dragon_tiger_events 为定时回源落库的独立来源, 无官方完整清单可核对: "
             "不声明完整, 也无证据表明残缺。"
         )
-    if db_error:
-        note += f" (读库异常: {db_error})"
+    if db_error and status in (STATUS_UNAVAILABLE, STATUS_UNKNOWN):
         evidence.append(f"db_error={db_error}")
     if early_freeze_note:
         note = f"{early_freeze_note} {note}"
@@ -658,10 +776,11 @@ def assess_events_date(
         "market": market,
         "status": status,
         "complete": complete,
-        "degraded": status == STATUS_ABSENT,
+        "degraded": status in _DEGRADED_STATUSES,
         "verification": verification,
         "severity": severity,
         "label": label,
+        "snapshot_read": read_state,
         "completeness_claimed": False,
         "verified_against_official": False,
         "actual_symbols": len(ev),
@@ -686,10 +805,14 @@ __all__ = [
     "STATUS_ABSENT",
     "STATUS_COMPLETE",
     "STATUS_PARTIAL",
+    "STATUS_UNAVAILABLE",
+    "STATUS_UNKNOWN",
     "STATUS_UNVERIFIED",
     "assess_date",
     "assess_daily_completeness",
     "assess_events_date",
     "assess_symbol_scope",
     "beijing_write_window",
+    "safe_error_code",
+    "sanitize_reason",
 ]
