@@ -51,6 +51,8 @@ const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page
 const IndexesPage = lazyWithRetry(() => import('@/pages/Indexes'), 'indexes-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
+// 龙虎榜独立工作区(2026-11-09): 按日看榜 + 选股看买卖席位(archive 只读接口)
+const LhbBoardPage = lazyWithRetry(() => import('@/pages/LhbBoard'), 'lhb-board-page')
 // 国家队 ETF 看板(2026-11-05): 20 只重点宽基 ETF 分钟成交额 + 市场级净申购
 const EtfWatchPage = lazyWithRetry(() => import('@/pages/EtfWatch'), 'etf-watch-page')
 const QuoteEntryPage = lazyWithRetry(() => import('@/pages/QuoteEntry'), 'quote-entry-page')
@@ -694,6 +696,8 @@ function App() {
               <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><LegacyTabRedirect to="/funds?tab=war" /></PermGuard>} />
               {/* 连板晋级树(创新 1, 2026-10-24): 盘后复盘三池, 行情统计非 pro 专属 → view_quotes */}
               <Route path="/replay-tree" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ReplayTreePage /></PermGuard>} />
+              {/* 龙虎榜独立工作区(2026-11-09): archive 只读, 与行情同档(view_quotes) */}
+              <Route path="/lhb" element={<PermGuard perm="view_quotes" myPerms={myPerms}><LhbBoardPage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页退役 →
                   旧路由 redirect 到 /stocks/:symbol(工作台), 内容并入「盘口资金/预测」等标签 */}
               <Route path="/forecast" element={<LegacyForecastRedirect />} />

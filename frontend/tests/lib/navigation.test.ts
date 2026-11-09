@@ -193,6 +193,13 @@ describe('③ 权限感知可见性(菜单与命令面板同一判定)', () => {
     expect(isNavItemVisible(funds, { perms: new Set(['view_quotes']), role: 'member', guest: false })).toBe(false)
   })
 
+  it('龙虎榜入口与页面守卫同档: 需要 view_quotes', () => {
+    const lhb = NAV_ITEMS.find((item) => item.to === '/lhb')!
+    expect(lhb).toBeTruthy()
+    expect(isNavItemVisible(lhb, OWNER)).toBe(true)
+    expect(isNavItemVisible(lhb, { perms: new Set(['view_dashboard']), role: 'member', guest: false })).toBe(false)
+  })
+
   it('ownerOnly: 非 owner 即便有 manage_users 也隐藏管理后台(Role 优先)', () => {
     const memberWithPerm: NavViewer = { perms: new Set(['manage_users']), role: 'member', guest: false }
     const admin = NAV_ITEMS.find((n) => n.to === '/admin')!

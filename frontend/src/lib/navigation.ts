@@ -115,6 +115,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/caliber-compare', labelKey: 'nav.caliberCompare', icon: Activity, group: 'decision', mobile: 'more', perm: 'view_forecast', keywords: ['口径', 'L2', '暗盘'] },
   { to: '/decision-ledger', labelKey: 'nav.decisionLedger', icon: ClipboardList, group: 'decision', mobile: 'more', perm: 'view_quotes', keywords: ['决策', '账本'] },
   { to: '/factor-ic', labelKey: 'nav.factorIC', icon: FlaskConical, group: 'decision', mobile: 'more', perm: 'view_quotes', keywords: ['因子', 'IC'] },
+  // 龙虎榜(2026-11-09): 独立工作区 —— 按日看榜 + 选股看买卖席位, 属资金证据域。
+  { to: '/lhb', labelKey: 'nav.lhb', icon: List, group: 'decision', mobile: 'more', perm: 'view_quotes', keywords: ['龙虎榜', '席位', '营业部', '游资'] },
   { to: '/reports', labelKey: 'nav.reports', icon: FileText, group: 'research', mobile: 'more', perm: 'view_reports', keywords: ['报告'] },
   // 历史分析并入报告页(?tab=history); 老地址 /history 仍可用
   { to: '/reports?tab=history', labelKey: 'nav.history', icon: Clock, group: null, mobile: 'more', keywords: ['历史', '分析'] },

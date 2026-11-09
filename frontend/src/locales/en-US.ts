@@ -86,6 +86,7 @@ const enUS: Messages = {
     darkFundTop: 'Dark Flow TOP',
     caliberCompare: 'Caliber Compare',
     decisionLedger: 'Decision Ledger',
+    lhb: 'Dragon-Tiger List',
     warReport: 'Capital Report',
     replayTree: 'Replay Tree',
     reports: 'Reports',
