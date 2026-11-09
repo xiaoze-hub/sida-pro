@@ -3,6 +3,7 @@ import { usePausedInterval } from '@sida/base-ui'
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Layers, Crown, Info } from 'lucide-react'
 import { fetchAPI } from '@sida/api'
 import SectionHeader from '@sida/biz-ui/components/SectionHeader'
+import { mainlineAsOfDate, mainlineAsOfText, mainlineCacheText } from '@sida/biz-ui/lib/mainline-meta'
 
 /**
  * 市场主线识别卡片 (2026-08-24, v0.3.0)
@@ -78,6 +79,8 @@ export interface MainlineConceptStats {
   broad_filtered?: number
   summable?: boolean
   min_limitup_for_rank?: number
+  /** 旧版本缓存载荷(概念键上线前)标记: 空概念不代表今日无概念 */
+  legacy_payload?: boolean
   note?: string
 }
 
@@ -87,6 +90,9 @@ export interface MainlineDataMeta {
   computed_at?: string
   pool_source?: string
   concept_source?: string | null
+  concept_source_note?: string
+  concept_status?: string
+  concept_note?: string
   as_of_note?: string
   dimensions?: { industry?: string; concept?: string }
 }
@@ -105,9 +111,15 @@ export interface MainlineResp {
   concept_groups?: MainlineGroup[]
   concept_unranked?: MainlineGroup[]
   concept_stats?: MainlineConceptStats
+  /** available | partial | unavailable(源没给概念字段 ⇒ 不等于今日无概念) */
+  concept_status?: string
+  concept_note?: string
   data_meta?: MainlineDataMeta
   note?: string
   cache_ts?: number
+  /** ── SWR 读侧契约: 返的是不是旧值 + 载荷数据年龄秒 ── */
+  stale?: boolean | null
+  age_s?: number | null
 }
 
 type MainlineView = 'industry' | 'concept' | 'both'
@@ -137,12 +149,51 @@ function fmtPct(ratio: number | null | undefined): string {
   return `${Math.round(ratio * 100)}%`
 }
 
-/** 时点显示: '2026-11-09' → '11-09'; 完整时间戳保留原样的日期段 */
-function fmtAsOf(v: string | null | undefined): string {
-  if (!v) return '时点未知'
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v)
-  if (m) return `${m[2]}-${m[3]}`
-  return v.slice(0, 16)
+/**
+ * 数据时点/来源/缓存时效条 —— 行业、并列、概念、空态**一律要显示**(2026-11-09 复审)。
+ *
+ * 之前这三条信息只出现在概念口径条里, 行业视图与空态只剩「本次拉取墙钟」:
+ * 用户看不出这张榜是哪天的、是不是旧快照。口径集中在 lib/mainline-meta:
+ * as_of 缺失写「时点未知」、stale 缺失写「缓存时效未知」, 绝不拿今天顶上。
+ */
+function DataMetaLine({
+  meta,
+  stale,
+  ageS,
+}: {
+  meta?: MainlineDataMeta
+  stale?: boolean | null
+  ageS?: number | null
+}) {
+  const asOf = mainlineAsOfDate(meta?.as_of)
+  const cache = mainlineCacheText(stale, ageS)
+  const clock = meta?.computed_at && meta.computed_at.length >= 19 ? meta.computed_at.slice(11, 19) : null
+  return (
+    <div
+      data-testid="mainline-meta"
+      className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted-foreground"
+    >
+      <span title="涨停池的数据交易日(后端 data_meta.as_of; 缺失即未知, 不拿今天顶替)">
+        数据日 <b className="font-mono font-normal text-foreground">{mainlineAsOfText(meta?.as_of)}</b>
+      </span>
+      {clock ? <span className="font-mono">· 算于 {clock}</span> : null}
+      <span title="涨停池数据源(后端按条目 source 众数给出)">
+        · 池源 <span className="font-mono">{meta?.pool_source || '来源未知'}</span>
+      </span>
+      {cache ? (
+        <span
+          data-testid="mainline-cache"
+          className={stale === true ? 'text-amber-600 dark:text-amber-400' : undefined}
+          title="SWR 读侧: stale=返的是旧值; 年龄=载荷距上次成功聚合的时长"
+        >
+          · {cache}
+        </span>
+      ) : null}
+      {!asOf && meta?.as_of_note ? (
+        <span data-testid="mainline-asof-note" className="text-amber-600 dark:text-amber-400">· {meta.as_of_note}</span>
+      ) : null}
+    </div>
+  )
 }
 
 /** 单主线行 */
@@ -319,11 +370,13 @@ function DimensionTabs({
   )
 }
 
-/** 数据口径条: 时点 / 来源 / 概念不可相加 (有概念数据才显示) */
-function ConceptCaliber({ stats, meta, poolSize }: {
+/** 概念口径条: 独立维度 / 不可相加 / 去重计数 / 概念源 / 龙头口径(有概念数据才显示) */
+function ConceptCaliber({ stats, meta, poolSize, empty }: {
   stats?: MainlineConceptStats
   meta?: MainlineDataMeta
   poolSize?: number
+  /** 概念榜为空: 原因由空态那行统一说, 这里不再重复整段 note */
+  empty?: boolean
 }) {
   if (!stats && !meta) return null
   const parts: string[] = []
@@ -336,11 +389,12 @@ function ConceptCaliber({ stats, meta, poolSize }: {
   if (poolSize != null && stats?.distinct_stocks != null && poolSize > stats.distinct_stocks) {
     parts.push(`未标概念 ${Math.max(0, poolSize - stats.distinct_stocks)} 只`)
   }
-  const asOf = meta?.as_of ? fmtAsOf(meta.as_of) : '时点未知'
   const source = meta?.concept_source ?? '概念源未提供'
+  const status = meta?.concept_status ?? (stats?.legacy_payload ? 'unavailable' : undefined)
+  const note = meta?.concept_note
 
   return (
-    <div className="mb-2 rounded-md bg-s2 px-2 py-1.5 text-[12px] text-muted-foreground leading-relaxed">
+    <div data-testid="concept-caliber" className="mb-2 rounded-md bg-s2 px-2 py-1.5 text-[12px] text-muted-foreground leading-relaxed">
       <div className="flex items-start gap-1.5">
         <Info className="w-3 h-3 mt-0.5 shrink-0" />
         <div className="min-w-0">
@@ -356,15 +410,87 @@ function ConceptCaliber({ stats, meta, poolSize }: {
             ) : null}
           </div>
           <div className="mt-0.5">
-            时点 <span className="font-mono text-foreground">{asOf}</span>
-            {meta?.computed_at ? <span className="ml-1 font-mono">(算于 {meta.computed_at.slice(11, 19)})</span> : null}
-            <span className="mx-1">·</span>
-            源 <span className="font-mono">{source}</span>
+            概念源 <span className="font-mono">{source}</span>
+            {status && status !== 'available' ? (
+              <span
+                data-testid="concept-caliber-status"
+                className="ml-1 text-amber-600 dark:text-amber-400"
+                title={note || undefined}
+              >
+                · {status === 'partial' ? '部分股票缺概念归属' : '源未提供概念字段'}
+              </span>
+            ) : null}
             <span className="mx-1">·</span>
             <span title="概念榜的「龙头」只是本概念内排序第一，不是这只票的专属驱动">龙头仅组内排序</span>
           </div>
-          {!meta?.as_of && meta?.as_of_note ? <div className="mt-0.5">{meta.as_of_note}</div> : null}
+          {!empty && note ? (
+            <div data-testid="concept-caliber-note" className="mt-0.5 text-amber-600 dark:text-amber-400">{note}</div>
+          ) : null}
         </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 概念榜为空时说清**是哪种空**(2026-11-09 复审):
+ *   ① 有概念、只是都没到 ≥N 只涨停门槛 → 「未入榜」(后端 concept_unranked 就是证据);
+ *   ② 一只票都没概念归属(源没给概念字段) → 「无归属」并引用后端 concept_note,
+ *      绝不说成「今日没有概念题材」, 更不能拿行业榜顶上。
+ * 之前一律写"暂无概念归属数据", 把 ① 误报成 ②。
+ */
+type ConceptEmptyKind = 'below_threshold' | 'no_attribution'
+
+function conceptEmptyInfo(args: {
+  status?: string | null
+  note?: string | null
+  unranked: number
+  distinctStocks?: number | null
+  minLimitUp: number
+}): { kind: ConceptEmptyKind; text: string } {
+  const { status, note, unranked, distinctStocks, minLimitUp } = args
+  const distinct = distinctStocks ?? 0
+  if (unranked > 0) {
+    return {
+      kind: 'below_threshold',
+      text: `概念榜为空: ${unranked} 个概念有涨停但未达「≥${minLimitUp} 只」门槛(见下方未入榜)`,
+    }
+  }
+  if (status === 'unavailable' || distinct <= 0) {
+    return {
+      kind: 'no_attribution',
+      text:
+        (note && note.trim()) ||
+        '概念归属缺失: 数据源未提供概念字段, 不等于今日没有概念题材(未以行业数据代替)',
+    }
+  }
+  return {
+    kind: 'below_threshold',
+    text: `概念榜为空: ${distinct} 只有概念归属的涨停股分散在各概念, 但没有概念达到「≥${minLimitUp} 只涨停」门槛`,
+  }
+}
+
+/** 概念未入榜 chips(概念单列空态/非空态都要列, 之前只在非空分支才有) */
+function ConceptUnrankedChips({ groups, minLimitUp }: { groups: MainlineGroup[]; minLimitUp: number }) {
+  if (groups.length === 0) return null
+  return (
+    <div className="mt-2 pt-2 border-t border-border">
+      <div className="text-[12px] text-muted-foreground mb-1">
+        概念未入榜(涨停 {`<`}{minLimitUp} 家): {groups.length} 个
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {groups.map((g) => (
+          <span
+            key={g.name}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 text-[12px] text-muted-foreground"
+            title={`${g.name} ${g.limit_up_count}家 最高${g.max_boards}板 · 概念家数与其他概念重叠, 不可相加`}
+          >
+            <span>{g.name}</span>
+            <span className="text-stock-up font-mono">{g.limit_up_count}家</span>
+            <span className="text-muted-foreground">/</span>
+            <span className="text-amber-600 dark:text-amber-400 font-mono">{g.max_boards}B</span>
+          </span>
+        ))}
       </div>
     </div>
   )
@@ -379,6 +505,7 @@ function DimensionColumn({
   onToggle,
   limit,
   viewKey,
+  emptyText,
 }: {
   title: string
   groups: MainlineGroup[]
@@ -387,6 +514,8 @@ function DimensionColumn({
   onToggle: (k: string) => void
   limit: number
   viewKey: string
+  /** 空态原因(概念列由 conceptEmptyInfo 给, 不许写死"暂无概念归属数据") */
+  emptyText?: string
 }) {
   const rows = groups.slice(0, limit)
   return (
@@ -396,8 +525,11 @@ function DimensionColumn({
         <span className="tabular-nums">Top {rows.length}</span>
       </div>
       {rows.length === 0 ? (
-        <p className="px-2.5 py-2 text-[12px] text-muted-foreground">
-          {viewKey === 'concept' ? '暂无概念归属数据' : '暂无行业主线数据'}
+        <p
+          data-testid={viewKey === 'concept' ? 'concept-empty-reason' : 'industry-empty-reason'}
+          className="px-2.5 py-2 text-[12px] text-muted-foreground"
+        >
+          {emptyText || (viewKey === 'concept' ? '概念榜为空' : '暂无行业主线数据')}
         </p>
       ) : (
         rows.map((g) => {
@@ -474,6 +606,9 @@ export default function MarketMainlineCard() {
   const note = data?.note
   const totalGroups = data?.total_groups ?? 0
   const hasConcept = conceptRanked.length > 0 || conceptUnranked.length > 0
+  // 概念可用性跟着后端走(旧缓存载荷没有顶层键时回落 data_meta)
+  const conceptStatus = data?.concept_status ?? meta?.concept_status
+  const conceptNote = data?.concept_note || meta?.concept_note || ''
   // 缺省: 有概念数据就并列(热点概念不被行业榜遮住); 没有概念数据老实停在行业
   const activeView: MainlineView = view ?? (hasConcept ? 'both' : 'industry')
 
@@ -490,14 +625,27 @@ export default function MarketMainlineCard() {
         ? `今日涨停池 ${poolSize} 只, 分属 ${totalGroups} 个板块, 均未达到「≥${minPerGroup} 只涨停」的入榜门槛`
         : `今日 ${totalGroups} 个涨停板块均未达到「≥${minPerGroup} 只涨停」的入榜门槛`
 
+  /** 概念榜为空的原因: 未入榜(有概念、没到门槛) vs 无归属(源没给概念字段) */
+  const conceptEmpty = conceptEmptyInfo({
+    status: conceptStatus,
+    // 顶层/ data_meta 的 concept_note 优先; 旧载荷只有 concept_stats.note, 也照样引用
+    note: conceptNote || conceptStats?.note,
+    unranked: conceptUnranked.length,
+    distinctStocks: conceptStats?.distinct_stocks,
+    minLimitUp: conceptStats?.min_limitup_for_rank ?? minPerGroup,
+  })
+
   if (ranked.length === 0 && conceptRanked.length === 0) {
     return (
-      <div className="border-t border-border pt-2.5">
+      <div data-testid="mainline-empty" className="border-t border-border pt-2.5">
         <SectionHeader
           title="市场主线"
           action={
             updatedAt ? (
-              <span className="text-[12px] text-muted-foreground font-mono">
+              <span
+                className="text-[12px] text-muted-foreground font-mono"
+                title="本次拉取的墙钟时间(不是数据日; 数据日见下方)"
+              >
                 {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
               </span>
             ) : undefined
@@ -505,13 +653,17 @@ export default function MarketMainlineCard() {
         />
         {/* 2026-09-23 修: 原来无论什么原因都写"非交易日/涨停池为空" —— 而当日实测是
             "涨停池有 33 只、分属 26 个板块, 但没有任何板块达到 ≥3 只涨停的入榜门槛"。
-            归因说错比不显示更糟: 用户会以为系统没数据/没开盘。现在按 filter_stats 说真话。 */}
+            归因说错比不显示更糟: 用户会以为系统没数据/没开盘。现在按 filter_stats 说真话。
+            2026-11-09 复审: 空态同样要显示数据日与缓存时效, 否则连"这份空是哪天的"都不知道。 */}
+        <DataMetaLine meta={meta} stale={data?.stale} ageS={data?.age_s} />
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <AlertTriangle className="w-3.5 h-3.5" />
           <span>{error || note || honestReason}</span>
         </div>
         {hasConcept ? null : (
-          <p className="mt-1 text-[12px] text-muted-foreground">概念维度: 暂无概念归属数据（未以行业数据代替）</p>
+          <p data-testid="concept-status-note" className="mt-1 text-[12px] text-muted-foreground">
+            概念维度: {conceptEmpty.text}
+          </p>
         )}
       </div>
     )
@@ -571,6 +723,9 @@ export default function MarketMainlineCard() {
         }
       />
 
+      {/* 数据日 / 算于 / 池源 / 缓存时效 —— 所有视图共用, 不再只有概念页才有时点 */}
+      <DataMetaLine meta={meta} stale={data?.stale} ageS={data?.age_s} />
+
       {/* 错误细条: 与 data 并存(上次成功数据不丢) */}
       {error ? (
         <div className="mb-2 flex items-center gap-1.5 text-[12px] text-amber-600 dark:text-amber-500">
@@ -579,9 +734,16 @@ export default function MarketMainlineCard() {
         </div>
       ) : null}
 
-      {/* 概念口径条: 时点/来源/重叠不可相加/龙头仅组内排序 */}
+      {/* 行业视图: 概念不可用/部分缺失也要可见, 否则默认视图会让人以为"今日无概念" */}
+      {activeView === 'industry' && conceptStatus && conceptStatus !== 'available' ? (
+        <p data-testid="concept-status-note" className="mb-2 text-[12px] text-muted-foreground">
+          概念维度: {conceptNote || (conceptStatus === 'partial' ? '部分涨停股缺概念归属(数据源未提供)，未用行业数据补造' : '数据源未提供概念字段，不等于今日没有概念题材(未以行业数据代替)')}
+        </p>
+      ) : null}
+
+      {/* 概念口径条: 概念源/重叠不可相加/龙头仅组内排序 */}
       {activeView === 'concept' || activeView === 'both' ? (
-        <ConceptCaliber stats={conceptStats} meta={meta} poolSize={poolSize} />
+        <ConceptCaliber stats={conceptStats} meta={meta} poolSize={poolSize} empty={conceptTop.length === 0} />
       ) : null}
 
       {/* 并列视图: 行业 / 概念 同屏, 各 Top6 */}
@@ -604,6 +766,7 @@ export default function MarketMainlineCard() {
             onToggle={(k) => setExpandedKey(expandedKey === k ? null : k)}
             limit={6}
             viewKey="concept"
+            emptyText={conceptEmpty.text}
           />
         </div>
       ) : null}
@@ -611,10 +774,13 @@ export default function MarketMainlineCard() {
       {/* 概念单列 */}
       {activeView === 'concept' ? (
         conceptTop.length === 0 ? (
-          <p className="py-3 text-[12px] text-muted-foreground">
-            {conceptStats?.note || `概念榜为空: 涨停池 ${poolSize ?? '--'} 只, 没有概念达到「≥${minPerGroup} 只涨停」的入榜门槛`}
-            <span className="block mt-0.5">未以行业数据代替概念。</span>
-          </p>
+          <div data-testid="concept-empty" className="py-1">
+            <p data-testid="concept-empty-reason" className="py-1 text-[12px] text-muted-foreground">
+              {conceptEmpty.text}
+              <span className="block mt-0.5">未以行业数据代替概念。</span>
+            </p>
+            <ConceptUnrankedChips groups={conceptUnranked} minLimitUp={conceptStats?.min_limitup_for_rank ?? minPerGroup} />
+          </div>
         ) : (
           <>
             <div className="space-y-1 lg:max-h-[300px] lg:overflow-y-auto">
@@ -650,27 +816,10 @@ export default function MarketMainlineCard() {
                 </div>
               </details>
             ) : null}
-            {conceptUnranked.length > 0 ? (
-              <div className="mt-2 pt-2 border-t border-border">
-                <div className="text-[12px] text-muted-foreground mb-1">
-                  概念未入榜(涨停 {`<`}{conceptStats?.min_limitup_for_rank ?? minPerGroup} 家): {conceptUnranked.length} 个
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {conceptUnranked.map((g) => (
-                    <span
-                      key={g.name}
-                      className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 text-[12px] text-muted-foreground"
-                      title={`${g.name} ${g.limit_up_count}家 最高${g.max_boards}板 · 概念家数与其他概念重叠, 不可相加`}
-                    >
-                      <span>{g.name}</span>
-                      <span className="text-stock-up font-mono">{g.limit_up_count}家</span>
-                      <span className="text-muted-foreground">/</span>
-                      <span className="text-amber-600 dark:text-amber-400 font-mono">{g.max_boards}B</span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+            <ConceptUnrankedChips
+              groups={conceptUnranked}
+              minLimitUp={conceptStats?.min_limitup_for_rank ?? minPerGroup}
+            />
           </>
         )
       ) : null}

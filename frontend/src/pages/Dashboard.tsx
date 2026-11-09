@@ -34,6 +34,7 @@ import { Onboarding } from '@sida/biz-ui/components/onboarding'
 import KpiBand, { usePhaseLabel, useMainlineTop1 } from '@sida/biz-ui/components/KpiBand'
 import MarketPhaseCard from '@sida/biz-ui/components/MarketPhaseCard'
 import MarketMainlineCard from '@sida/biz-ui/components/MarketMainlineCard'
+import { mainlineSourceLine } from '@sida/biz-ui/lib/mainline-meta'
 import BreadthDistributionChart from '@sida/biz-ui/components/dashboard/BreadthDistributionChart'
 import SentimentGauge from '@sida/biz-ui/components/dashboard/SentimentGauge'
 import FlowHistoryChart from '@sida/biz-ui/components/dashboard/FlowHistoryChart'
@@ -799,8 +800,14 @@ export default function DashboardPage() {
             {marketFlow?.degraded ? ' · 资金字段降级(仅涨跌家数可用)' : ''}
             {marketFlow?.stale ? ' · 滞后快照' : ''}
           </span>
-          <span title="主线 Top1 来自 /market/mainline(涨停池聚合, 日频刷新的 SWR 缓存)">
-            主线 <b className="font-normal text-foreground">/market/mainline</b> · 日期未获取
+          <span title="主线 Top1 来自 /market/mainline(涨停池聚合, 日频刷新的 SWR 缓存); 日期为涨停池数据日, 非本次拉取时间">
+            主线 <b className="font-normal text-foreground">/market/mainline</b> ·{' '}
+            {mainlineSourceLine({
+              asOf: mainlineKpi.asOf,
+              stale: mainlineKpi.stale,
+              ageS: mainlineKpi.ageS,
+              loading: mainlineKpi.loading,
+            })}
           </span>
         </div>
         <div className="mt-2 border-t border-border pt-2">

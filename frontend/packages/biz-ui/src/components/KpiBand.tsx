@@ -309,19 +309,37 @@ export interface MainlineKpi {
   top: MainlineTop1 | null
   loading: boolean
   error: string | null
+  /** 涨停池数据日(后端 data_meta.as_of); 拿不到 = null(不猜) */
+  asOf: string | null
+  /** SWR: 本次返的是不是旧值; 契约没给 = null(未知) */
+  stale: boolean | null
+  /** 载荷数据年龄(秒); 契约没给 = null */
+  ageS: number | null
 }
 export function useMainlineTop1(): MainlineKpi {
   const [top, setTop] = useState<MainlineTop1 | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [asOf, setAsOf] = useState<string | null>(null)
+  const [stale, setStale] = useState<boolean | null>(null)
+  const [ageS, setAgeS] = useState<number | null>(null)
   const aliveRef = useRef(true)
   useEffect(() => {
     aliveRef.current = true
     void (async () => {
       try {
-        const res = await fetchAPI<{ ranked_groups: MainlineTop1[] }>('/market/mainline')
+        const res = await fetchAPI<{
+          ranked_groups: MainlineTop1[]
+          data_meta?: { as_of?: string | null }
+          stale?: boolean | null
+          age_s?: number | null
+        }>('/market/mainline')
         if (!aliveRef.current) return
         setTop(res?.ranked_groups?.[0] ?? null)
+        // 首页来源标签要展示真实数据日: 后端给了就显示, 没给才说"未获取"
+        setAsOf(res?.data_meta?.as_of ?? null)
+        setStale(typeof res?.stale === 'boolean' ? res.stale : null)
+        setAgeS(typeof res?.age_s === 'number' && Number.isFinite(res.age_s) ? res.age_s : null)
         setError(null)
       } catch (e) {
         // 失败不再静默: 由 KpiBand 渲染"加载失败", 与 '--' 缺值态区分
@@ -335,5 +353,5 @@ export function useMainlineTop1(): MainlineKpi {
     }
   }, [])
   // perf(2026-10-02): 同上, 稳定引用以便首页 memo 命中。
-  return useMemo(() => ({ top, loading, error }), [top, loading, error])
+  return useMemo(() => ({ top, loading, error, asOf, stale, ageS }), [top, loading, error, asOf, stale, ageS])
 }
