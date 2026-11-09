@@ -35,6 +35,105 @@ export const SEAT_IDENTITY_DISCLAIMER =
 /** 营业部名缺失时的占位(不编造机构名)。 */
 export const DEPT_FALLBACK = '未披露营业部'
 
+/**
+ * 单日榜单的请求上限(与后端 `limit` 默认值同档; 后端夹在 1..5000)。
+ *
+ * 页面显式传它, 才能判断"是不是刚好取满" —— 取满就**不能**说"这是全榜",
+ * 只能说"可能被截断"。不传的话用的是后端默认值, 前端无从判断。
+ */
+export const LHB_DAY_LIMIT = 2000
+
+/**
+ * 覆盖口径: 归档接口只回已入库行, **没有任何完整性凭据**。
+ *
+ * 抓取到记录 ≠ 当日已发布全量, 也 ≠ 交易所披露完整: 采集可能只跑了一半、可能只覆盖
+ * 部分榜单类型, 且 `dragon_tiger_events` 与行情日质量补丁没有关联。所以页面对任何
+ * 非空结果都要标"覆盖未核实", 不许写成"完整榜单/今日榜单已更新"。
+ */
+export interface LhbCoverage {
+  /** true = 行数触达单次上限, 可能被截断 */
+  truncated: boolean
+  /** 页面常驻说明(含条数; 数据日期单独展示, 不混在这句里) */
+  text: string
+}
+
+export function lhbCoverage(rows: number, limit: number = LHB_DAY_LIMIT): LhbCoverage {
+  const n = Number.isFinite(rows) && rows > 0 ? Math.floor(rows) : 0
+  if (n === 0) {
+    return {
+      truncated: false,
+      text: '覆盖未核实：该日归档库无入库记录，不代表当日没有龙虎榜（可能尚未采集，或当日为非交易日）。',
+    }
+  }
+  if (n >= limit) {
+    return {
+      truncated: true,
+      text: `覆盖未核实：本页取到 ${n} 条，已触达单次上限 ${limit} 条，可能被截断；入库记录不等于当日已披露全量。`,
+    }
+  }
+  return {
+    truncated: false,
+    text: `覆盖未核实：本页仅展示归档库已入库的 ${n} 条记录，接口无完整性凭据，不等于当日已披露全量。`,
+  }
+}
+
+/**
+ * 后端的空榜 `note` 里混着"完整榜单(含 ETF/可转债 6 位码)"这种**无凭据的完整性承诺**
+ * (见 `src/web/api/market_archive.py` 的 dragon_tiger 返回值)。原样展示等于替后端担保
+ * 全量, 与"覆盖未核实"自相矛盾 —— 这里只保留可核对的分句("空=无覆盖")。
+ */
+export function archiveNoteText(note: unknown): string {
+  return text(note)
+    .split(/[;；]/)
+    .map((s) => s.trim())
+    .filter((s) => s && !s.includes('完整'))
+    .join('；')
+}
+
+/** 数智参谋一级入口(与 ReportsHub / History 同一个真实地址)。 */
+export const COPILOT_PATH = '/ai-copilot'
+
+/**
+ * 「分析此股龙虎榜」要问参谋的问题 —— 只交代**事实**(代码、名称、交易日)与边界
+ * (只引用当日归档、缺数据直说), 不预写任何结论(不写"净买入意味着…")。
+ */
+export function lhbCopilotQuestion(input: { symbol: string; name?: string; date: string }): string {
+  const symbol = text(input.symbol)
+  const name = text(input.name)
+  const day = formatTradeDate(input.date)
+  const who = name ? `${symbol} ${name}` : symbol
+  return (
+    `分析 ${day} 的龙虎榜：${who}。` +
+    '请按上榜原因逐条说明买入额、卖出额与净买额，并列出买方/卖方营业部席位。' +
+    '只引用该交易日的归档数据；没有数据就直接说没有，不要推测、不要用其它日期顶替。'
+  )
+}
+
+/**
+ * 拼参谋跳转地址(纯函数, 便于钉住"带了什么、没带什么")。
+ *
+ * 只用入口**真实生效**的参数(见 `src/pages/AiCopilot.tsx` 的 URL 解析):
+ *   · `symbol` → 锚点股票(页面进入"正在看"状态);
+ *   · `q`      → 预填问题(不自动发送)。
+ * 刻意**不带**:
+ *   · `agent` —— 现有配方(premarket/postmarket/chip…)都没有龙虎榜工具, `lhb.daily`
+ *     只挂在通用问答的 `query_data_domain` 上; 硬塞一个配方等于把问题路由到没有数据的
+ *     参谋, 属于臆造上下文;
+ *   · `date`  —— 入口目前对 `?date=` 只是 `void sp.get('date')`, 不进模型上下文;
+ *     带上会让人以为参谋已按该日取数。日期写进问题正文, 用户可见可核对。
+ *
+ * 代码或日期非法 → 返回 ''(调用方不得跳转, 不许跳到一个没有标的的空问答)。
+ */
+export function buildLhbCopilotUrl(input: { symbol: string; name?: string; date: string }): string {
+  const symbol = text(input.symbol)
+  const date = toApiDate(input.date)
+  if (!symbol || !date) return ''
+  const params = new URLSearchParams()
+  params.set('symbol', symbol)
+  params.set('q', lhbCopilotQuestion({ symbol, name: text(input.name), date }))
+  return `${COPILOT_PATH}?${params.toString()}`
+}
+
 export interface LhbReasonRow {
   /** 原始上榜原因(已 trim; 空串由 reasonLabel 兜底) */
   reason: string
@@ -127,8 +226,16 @@ export function latestDragonTigerDate(
 
 /**
  * 榜单行 → 按股票分组(保持后端顺序: 日期降序、代码升序, 不重排)。
- * 同股同原因只留一条(唯一键兜底); 同股不同原因全部保留。
+ * 同股同原因且**整行读数一致**才算重复行(唯一键兜底); 同股不同原因全部保留。
+ *
+ * 只按 reason 去重是错的: `reason` 为 NULL/空串时唯一键在 SQL 里不去重(多个 NULL 互不相等),
+ * 两行金额完全不同却会被折叠成一条 —— 用户看到的净买额就不是任何一行的原值了。金额是逐行
+ * 披露的, 折一行等于吞掉一整条读数。
  */
+function reasonRowKey(r: LhbReasonRow): string {
+  return [r.reason, r.netBuy, r.buyAmt, r.sellAmt, r.dealAmt].map((v) => (v === null ? '' : String(v))).join('|')
+}
+
 export function groupLhbBySymbol(items: ArchiveDragonTigerItem[] | null | undefined): LhbStockGroup[] {
   const groups = new Map<string, LhbStockGroup>()
   for (const item of items ?? []) {
@@ -151,16 +258,17 @@ export function groupLhbBySymbol(items: ArchiveDragonTigerItem[] | null | undefi
     }
     if (!group.name && item.name) group.name = text(item.name)
 
-    const reason = text(item.reason)
-    if (group.reasons.some((r) => r.reason === reason)) continue
-    group.reasons.push({
-      reason,
+    const reason: LhbReasonRow = {
+      reason: text(item.reason),
       netBuy: num(item.net_buy),
       buyAmt: num(item.buy_amt),
       sellAmt: num(item.sell_amt),
       dealAmt: num(item.deal_amt),
       turnoverPct: num(item.turnover_pct),
-    })
+    }
+    const key = reasonRowKey(reason)
+    if (group.reasons.some((r) => reasonRowKey(r) === key)) continue
+    group.reasons.push(reason)
   }
   for (const group of groups.values()) group.multipleReasons = group.reasons.length > 1
   return [...groups.values()]

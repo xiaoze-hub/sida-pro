@@ -17,11 +17,19 @@
  *  ② **营业部席位 ≠ 已验证游资**: 席位只代表成交归属, 页面常驻声明(SEAT_IDENTITY_DISCLAIMER);
  *  ③ **空/失败/加载如实显示**: 空榜透出后端 note, 失败给可重试错误态, 不伪造任何一行。
  *
+ * 两条 2026-11-09 复审补上的口径:
+ *  ④ **覆盖未核实**: 归档接口没有完整性凭据(与行情日质量补丁无关), 拿到记录 ≠ 当日已发布全量;
+ *     页面常驻「数据日期 + 覆盖未核实 + 条数」, 触达单次上限时明说可能被截断;
+ *  ⑤ **分析此股龙虎榜**: 带着页面上真实显示过的代码与交易日进数智参谋(只带入口生效的
+ *     symbol + q, 不塞无龙虎榜工具的 agent、不塞被入口忽略的 date), 问题正文写明日期,
+ *     不预置任何结论 —— 没选股票就不渲染入口。
+ *
  * 竞态: 切日期 / 切股票都会发新请求, 慢响应的旧请求必须被丢弃(序号守卫),
  * 否则页面会出现"日期=11-05 但表格是 11-06"这种自相矛盾的状态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { AlertCircle, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import { archiveApi, type ArchiveDragonTigerItem, type ArchiveLhbSeatItem } from '@sida/api'
 import PageHeader from '@/components/PageHeader'
 import { Button } from '@sida/base-ui/components/ui/button'
@@ -30,10 +38,14 @@ import { safeInt, safeMoney, safeMoneyUnsigned, safePercent, safePrice } from '@
 import { cn } from '@/lib/utils'
 import {
   DEPT_FALLBACK,
+  LHB_DAY_LIMIT,
   SEAT_IDENTITY_DISCLAIMER,
+  archiveNoteText,
+  buildLhbCopilotUrl,
   formatTradeDate,
   groupLhbBySymbol,
   latestDragonTigerDate,
+  lhbCoverage,
   reasonLabel,
   splitSeats,
   toApiDate,
@@ -118,8 +130,12 @@ function SeatSection({ title, seats, side }: { title: string; seats: LhbSeatRow[
         <p className="py-2 text-xs text-muted-foreground">本侧无披露席位</p>
       ) : (
         <ul className="divide-y divide-border">
-          {seats.map((seat) => (
-            <SeatRow key={`${side}-${seat.row_uid}`} seat={seat} side={side} />
+          {seats.map((seat, i) => (
+            /*
+              key 带序号兜底: row_uid 是后端内容哈希, 正常都有; 但若某行缺失, 只用 `side-row_uid`
+              会让两行拿到同一个 key —— React 复用节点, 营业部名与金额就会串到相邻行。
+            */
+            <SeatRow key={`${side}-${seat.row_uid || 'norow'}-${i}`} seat={seat} side={side} />
           ))}
         </ul>
       )}
@@ -129,6 +145,7 @@ function SeatSection({ title, seats, side }: { title: string; seats: LhbSeatRow[
 
 export default function LhbBoardPage() {
   const today = useMemo(() => todayCst(), [])
+  const navigate = useNavigate()
   const [dateInput, setDateInput] = useState('')
 
   const [latestDate, setLatestDate] = useState<string | null>(null)
@@ -181,7 +198,8 @@ export default function LhbBoardPage() {
     setSeatsStatus('idle')
     setSeatsError('')
     archiveApi
-      .dragonTiger({ date: apiDate })
+      // 显式带 limit: 只有知道自己要了多少条, 才能判断"刚好取满 = 可能被截断"。
+      .dragonTiger({ date: apiDate, limit: LHB_DAY_LIMIT })
       .then((res) => {
         if (seq !== daySeq.current) return
         setDay({ date: apiDate, items: res?.items ?? [], note: res?.note ?? '' })
@@ -221,6 +239,21 @@ export default function LhbBoardPage() {
   const selectedName = seatTarget?.name || seatTarget?.symbol || ''
   const dataDate = day?.date ?? toApiDate(dateInput)
 
+  /**
+   * 覆盖口径只看"这一份数据实际是什么": 已完成加载就按条数算(0 条 = 归档无记录),
+   * 加载中/失败时为 null(不拿空数组冒充"覆盖 0 条", 那会读成"当日没上榜")。
+   */
+  const coverage = useMemo(
+    () => (dayStatus === 'ready' ? lhbCoverage(day?.items.length ?? 0, LHB_DAY_LIMIT) : null),
+    [dayStatus, day],
+  )
+
+  /** 参谋跳转地址: 选中的股票 + 该数据的交易日; 任一缺失 → ''(不跳, 不造上下文)。 */
+  const copilotUrl = useMemo(
+    () => (seatTarget ? buildLhbCopilotUrl({ symbol: seatTarget.symbol, name: seatTarget.name, date: seatTarget.date }) : ''),
+    [seatTarget],
+  )
+
   return (
     <div className="page-container space-y-4" data-testid="lhb-page">
       <PageHeader
@@ -257,13 +290,20 @@ export default function LhbBoardPage() {
             <StatusChip data-testid="lhb-source-date">
               数据日期 {formatTradeDate(dataDate)}
             </StatusChip>
+            {/*
+              覆盖口径常驻: 归档接口没有完整性凭据, 抓取到记录 ≠ 当日已发布全量。
+              这条不许随"有数据"消失 —— 有数据时用户更容易误以为看的是全榜。
+            */}
+            <StatusChip tone={coverage?.truncated ? 'danger' : 'warning'} data-testid="lhb-coverage-chip">
+              覆盖未核实
+            </StatusChip>
             <StatusChip tone="info" data-testid="lhb-unit-note">
               金额单位：元（万/亿为换算显示）
             </StatusChip>
             {dayStatus === 'ready' && (
               <span className="text-xs text-muted-foreground">
                 上榜 {safeInt(groups.length)} 只 / {safeInt(day?.items.length)} 条原因行
-                {latestKnown && latestDate && dataDate === latestDate ? ' · 已是最新可用日' : ''}
+                {latestKnown && latestDate && dataDate === latestDate ? ' · 库内最新交易日' : ''}
               </span>
             )}
             {latestKnown && !latestDate && (
@@ -274,6 +314,24 @@ export default function LhbBoardPage() {
           </>
         }
       />
+
+      {/*
+        覆盖说明放在榜单上方(而不是塞进 chip): 句子较长, 但它是这个页面最重要的诚实标记 ——
+        条数、是否可能被截断、"不等于当日已披露全量" 三件事必须能被读到。
+      */}
+      {coverage && (
+        <p
+          data-testid="lhb-coverage-note"
+          className={cn(
+            'rounded-lg px-2.5 py-2 text-xs',
+            coverage.truncated
+              ? 'bg-destructive/10 text-destructive'
+              : 'bg-role-opp/10 text-role-opp',
+          )}
+        >
+          {coverage.text}
+        </p>
+      )}
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
         {/* ── 左: 当日榜单 ─────────────────────────────────────────────── */}
@@ -309,7 +367,11 @@ export default function LhbBoardPage() {
             <div className="py-6" data-testid="lhb-empty">
               <p className="text-[14px] text-foreground">{formatTradeDate(dataDate)} 无龙虎榜数据</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {day?.note?.trim() || '后端未给出空榜原因'}。归档表没有该日记录时不会用其它日期数据顶替。
+                {/*
+                  后端 note 里那句"完整榜单(含 ETF/可转债 6 位码)"是无凭据的完整性承诺, 不能替它转述;
+                  这里只保留可核对的分句, 空不空的原因仍以后端给的原话为准。
+                */}
+                {archiveNoteText(day?.note) || '后端未给出空榜原因'}。归档表没有该日记录时不会用其它日期数据顶替。
               </p>
             </div>
           )}
@@ -389,15 +451,41 @@ export default function LhbBoardPage() {
               {seatTarget ? `${selectedName} 席位` : '营业部席位'}
             </h2>
             {seatTarget && (
-              <span className="text-xs text-muted-foreground">
-                来源日期 {formatTradeDate(seatTarget.date)}
-              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  来源日期 {formatTradeDate(seatTarget.date)}
+                </span>
+                {/*
+                  「分析此股龙虎榜」= 带着**已在页面上看到的**代码与交易日去参谋继续追问。
+                  不选股就不渲染(没有标的/日期时不造上下文), 地址由 buildLhbCopilotUrl 统一拼,
+                  只带参谋入口真实生效的 symbol + q, 且问题正文里写明日期 —— 不预置任何结论。
+                */}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  data-testid="lhb-analyze-copilot"
+                  disabled={!copilotUrl}
+                  title="在数智参谋中继续：带上该股与榜单日期提问（不预置结论）"
+                  onClick={() => {
+                    if (copilotUrl) navigate(copilotUrl)
+                  }}
+                >
+                  <Sparkles className="h-3.5 w-3.5" /> 分析此股龙虎榜
+                </Button>
+              </div>
             )}
           </div>
 
           <p className="rounded-lg bg-muted px-2 py-1.5 text-xs text-muted-foreground" data-testid="lhb-seat-disclaimer">
             {SEAT_IDENTITY_DISCLAIMER}
           </p>
+
+          {seatTarget && (
+            <p className="text-xs text-muted-foreground" data-testid="lhb-analyze-hint">
+              将在数智参谋中带着该股代码与 {formatTradeDate(seatTarget.date)} 这个交易日继续提问；本页只展示原始读数，不预置结论。
+            </p>
+          )}
 
           {!seatTarget && (
             <p className="py-6 text-[14px] text-muted-foreground" data-testid="lhb-seats-idle">

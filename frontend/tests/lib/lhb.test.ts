@@ -11,10 +11,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  LHB_DAY_LIMIT,
   SEAT_IDENTITY_DISCLAIMER,
+  buildLhbCopilotUrl,
   formatTradeDate,
   groupLhbBySymbol,
   latestDragonTigerDate,
+  lhbCoverage,
   reasonLabel,
   splitSeats,
 } from '@/lib/lhb'
@@ -65,9 +68,15 @@ describe('groupLhbBySymbol', () => {
     expect(groups[0].reasons).toHaveLength(2)
   })
 
-  it('同一原因重复出现只保留一条(唯一键兜底), 不重复展示', () => {
-    const groups = groupLhbBySymbol([row(), row({ net_buy: 1 })])
-    expect(groups[0].reasons).toHaveLength(1)
+  it('整行完全一致的重复只保留一条, 但同原因不同金额必须都留(不吞行)', () => {
+    // 完全一致 = 重复拉取/重复入库, 折叠安全
+    const dup = groupLhbBySymbol([row(), row()])
+    expect(dup[0].reasons).toHaveLength(1)
+
+    // 同 reason 但金额不同 = 两条独立读数(唯一键对 NULL/空 reason 不去重), 折叠会吞掉一整行
+    const mixed = groupLhbBySymbol([row({ reason: '' }), row({ reason: '', net_buy: 1 })])
+    expect(mixed[0].reasons).toHaveLength(2)
+    expect(mixed[0].reasons.map((r) => r.netBuy)).toEqual([120_000_000, 1])
   })
 
   it('缺失代码/空行被丢弃, 不产出幽灵分组', () => {
@@ -151,6 +160,14 @@ describe('splitSeats', () => {
     const out = splitSeats([seat({ operate_dept_name: '' })])
     expect(out.buy[0].deptName).toBe('未披露营业部')
   })
+
+  it('row_uid 缺失时按内容指纹去重: 不同营业部不能互相吞掉(那会串数据)', () => {
+    const out = splitSeats([
+      seat({ row_uid: '', operate_dept_name: '甲营业部' }),
+      seat({ row_uid: '', operate_dept_name: '乙营业部' }),
+    ])
+    expect(out.buy.map((s) => s.deptName)).toEqual(['甲营业部', '乙营业部'])
+  })
 })
 
 describe('来源日期', () => {
@@ -175,5 +192,61 @@ describe('来源日期', () => {
   it('营业部身份免责声明不能被悄悄删掉', () => {
     expect(SEAT_IDENTITY_DISCLAIMER).toContain('营业部席位')
     expect(SEAT_IDENTITY_DISCLAIMER).toContain('不等于已验证游资')
+  })
+})
+
+describe('覆盖口径(无完整性凭据)', () => {
+  it('有数据时也必须说「覆盖未核实」, 不能把入库记录说成当日已发布全量', () => {
+    const c = lhbCoverage(37)
+    expect(c.truncated).toBe(false)
+    expect(c.text).toContain('覆盖未核实')
+    expect(c.text).toContain('37')
+    // 不得承诺完整/全量已发布
+    expect(c.text).not.toMatch(/完整披露|已全部发布|全量已发布/)
+    expect(c.text).toContain('不等于')
+  })
+
+  it('空榜: 说明是归档无记录, 不等于当日没有龙虎榜', () => {
+    const c = lhbCoverage(0)
+    expect(c.text).toContain('无入库记录')
+    expect(c.text).toContain('不代表')
+    expect(c.truncated).toBe(false)
+  })
+
+  it('行数触达单次上限 → 明确可能被截断(不假装拿全了)', () => {
+    const c = lhbCoverage(LHB_DAY_LIMIT)
+    expect(c.truncated).toBe(true)
+    expect(c.text).toContain('截断')
+    expect(c.text).toContain(String(LHB_DAY_LIMIT))
+  })
+})
+
+describe('分析此股龙虎榜 → 参谋入口', () => {
+  const parse = (url: string) => new URL(url, 'http://local.test')
+
+  it('只走参谋真实入口(/ai-copilot)的 symbol + q 两个参数, 并显式带股票与日期', () => {
+    const url = buildLhbCopilotUrl({ symbol: '600000', name: '浦发银行', date: '20261106' })
+    const u = parse(url)
+    expect(u.pathname).toBe('/ai-copilot')
+    expect(u.searchParams.get('symbol')).toBe('600000')
+    const q = u.searchParams.get('q') || ''
+    expect(q).toContain('2026-11-06')
+    expect(q).toContain('600000')
+    expect(q).toContain('龙虎榜')
+    // 要求基于当日数据作答, 缺数据就直说 —— 不预设结论
+    expect(q).toContain('不要推测')
+  })
+
+  it('不塞入口没有副作用的参数: 不带 agent(现有配方无龙虎榜工具), 也不带 date(?date= 当前被忽略)', () => {
+    const u = parse(buildLhbCopilotUrl({ symbol: '000001', name: '平安银行', date: '2026-11-05' }))
+    expect(u.searchParams.has('agent')).toBe(false)
+    expect(u.searchParams.has('date')).toBe(false)
+  })
+
+  it('股票名缺失/脏值不留 undefined, 代码或日期非法 → 不生成地址', () => {
+    const q = parse(buildLhbCopilotUrl({ symbol: '600000', date: '20261106' })).searchParams.get('q') || ''
+    expect(q).not.toContain('undefined')
+    expect(buildLhbCopilotUrl({ symbol: '', date: '20261106' })).toBe('')
+    expect(buildLhbCopilotUrl({ symbol: '600000', date: '2026' })).toBe('')
   })
 })

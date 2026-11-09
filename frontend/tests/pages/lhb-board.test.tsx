@@ -11,6 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 
 const archiveApi = vi.hoisted(() => ({
   overview: vi.fn(),
@@ -20,6 +21,23 @@ const archiveApi = vi.hoisted(() => ({
 vi.mock('@sida/api', () => ({ archiveApi }))
 
 import LhbBoardPage from '@/pages/LhbBoard'
+
+/** 参谋落点探针: 断言页面真的跳到了 /ai-copilot, 且查询串是页面自己拼的。 */
+function CopilotProbe() {
+  const loc = useLocation()
+  return <div data-testid="copilot-probe" data-path={loc.pathname} data-search={loc.search} />
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter initialEntries={['/lhb']}>
+      <Routes>
+        <Route path="/lhb" element={<LhbBoardPage />} />
+        <Route path="/ai-copilot" element={<CopilotProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -111,7 +129,7 @@ describe('龙虎榜工作区 · 日榜', () => {
         dt({ reason: '连续三个交易日涨幅偏离值达20%', net_buy: 120_000_000 }),
       ]),
     )
-    render(<LhbBoardPage />)
+    renderPage()
 
     const dateInput = (await screen.findByTestId('lhb-date')) as HTMLInputElement
     await waitFor(() => expect(dateInput.value).toBe('2026-11-06'))
@@ -134,7 +152,7 @@ describe('龙虎榜工作区 · 日榜', () => {
     archiveApi.dragonTiger.mockImplementation(({ date }: { date: string }) =>
       date === '20261106' ? slow.promise : fast.promise,
     )
-    render(<LhbBoardPage />)
+    renderPage()
 
     const dateInput = (await screen.findByTestId('lhb-date')) as HTMLInputElement
     await waitFor(() => expect(dateInput.value).toBe('2026-11-06'))
@@ -153,7 +171,7 @@ describe('龙虎榜工作区 · 日榜', () => {
 
   it('空榜 → 明确空态 + 透出后端原因, 不渲染假行', async () => {
     archiveApi.dragonTiger.mockResolvedValue({ count: 0, note: '空=无覆盖(非交易日)', items: [] })
-    render(<LhbBoardPage />)
+    renderPage()
     const empty = await screen.findByTestId('lhb-empty')
     expect(empty.textContent).toContain('无覆盖')
     expect(screen.queryByTestId('lhb-stock-list')).toBeNull()
@@ -163,7 +181,7 @@ describe('龙虎榜工作区 · 日榜', () => {
     archiveApi.dragonTiger
       .mockRejectedValueOnce(new Error('archive 502'))
       .mockResolvedValueOnce(dayOk([dt()]))
-    render(<LhbBoardPage />)
+    renderPage()
     const err = await screen.findByTestId('lhb-error')
     expect(err.textContent).toContain('502')
 
@@ -182,7 +200,7 @@ describe('龙虎榜工作区 · 席位', () => {
         seat({ row_uid: 's1', side: 'sell', operate_dept_name: '另一证券股份有限公司深圳某营业部', net_amt: 30_000_000 }),
       ]),
     )
-    render(<LhbBoardPage />)
+    renderPage()
     fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
 
     const buy = await screen.findByTestId('lhb-seats-buy')
@@ -196,7 +214,7 @@ describe('龙虎榜工作区 · 席位', () => {
   it('营业部 ≠ 已验证游资: 席位面板常驻身份声明', async () => {
     archiveApi.dragonTiger.mockResolvedValue(dayOk([dt()]))
     archiveApi.lhbSeats.mockResolvedValue(seatsOk([seat()]))
-    render(<LhbBoardPage />)
+    renderPage()
     fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
     const note = await screen.findByTestId('lhb-seat-disclaimer')
     expect(note.textContent).toContain('营业部席位')
@@ -212,7 +230,7 @@ describe('龙虎榜工作区 · 席位', () => {
     archiveApi.lhbSeats.mockImplementation(({ symbol }: { symbol: string }) =>
       symbol === '600000' ? slow.promise : fast.promise,
     )
-    render(<LhbBoardPage />)
+    renderPage()
 
     fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
     fireEvent.click(await screen.findByTestId('lhb-stock-000001'))
@@ -227,7 +245,7 @@ describe('龙虎榜工作区 · 席位', () => {
   it('席位为空 → 明确"未披露/无明细", 不编造营业部', async () => {
     archiveApi.dragonTiger.mockResolvedValue(dayOk([dt()]))
     archiveApi.lhbSeats.mockResolvedValue({ count: 0, note: '空=无覆盖(榜单无营业部明细)', items: [] })
-    render(<LhbBoardPage />)
+    renderPage()
     fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
     const empty = await screen.findByTestId('lhb-seats-empty')
     expect(empty.textContent).toContain('无')
@@ -239,7 +257,7 @@ describe('龙虎榜工作区 · 席位', () => {
     archiveApi.lhbSeats
       .mockRejectedValueOnce(new Error('seats 500'))
       .mockResolvedValueOnce(seatsOk([seat()]))
-    render(<LhbBoardPage />)
+    renderPage()
     fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
     const err = await screen.findByTestId('lhb-seats-error')
     expect(err.textContent).toContain('500')
@@ -247,5 +265,131 @@ describe('龙虎榜工作区 · 席位', () => {
 
     fireEvent.click(screen.getByTestId('lhb-seats-retry'))
     expect(await screen.findByText('某某证券股份有限公司上海某营业部')).toBeTruthy()
+  })
+})
+
+describe('龙虎榜工作区 · 覆盖口径(无完整性凭据)', () => {
+  it('有数据时仍常驻「覆盖未核实」, 且数据日期单独标注, 不承诺完整', async () => {
+    archiveApi.dragonTiger.mockResolvedValue(dayOk([dt()]))
+    renderPage()
+    const chip = await screen.findByTestId('lhb-coverage-note')
+    expect(chip.textContent).toContain('覆盖未核实')
+    // 不得把入库记录说成"完整榜单/今日已发布"
+    expect(chip.textContent).not.toContain('完整榜单')
+    expect(screen.getByTestId('lhb-source-date').textContent).toContain('2026-11-06')
+    expect(screen.getByTestId('lhb-page').textContent).not.toContain('完整榜单')
+  })
+
+  it('空榜同样标「覆盖未核实」: 归档无记录不等于当日没有龙虎榜', async () => {
+    archiveApi.dragonTiger.mockResolvedValue({ count: 0, note: '空=无覆盖(非交易日)', items: [] })
+    renderPage()
+    const chip = await screen.findByTestId('lhb-coverage-note')
+    expect(chip.textContent).toContain('覆盖未核实')
+    expect(chip.textContent).toContain('不代表')
+  })
+})
+
+describe('龙虎榜工作区 · 多原因行金额不串行', () => {
+  it('两条原因各自带自己的买卖净额, 不互相串值', async () => {
+    archiveApi.dragonTiger.mockResolvedValue(
+      dayOk([
+        dt({ reason: '日涨幅偏离值达7%', net_buy: 120_000_000, buy_amt: 500_000_000, sell_amt: 380_000_000 }),
+        dt({ reason: '日换手率达20%', net_buy: 30_000_000, buy_amt: 90_000_000, sell_amt: 60_000_000 }),
+      ]),
+    )
+    renderPage()
+    const first = await screen.findByTestId('lhb-reason-600000-0')
+    const second = screen.getByTestId('lhb-reason-600000-1')
+
+    expect(first.textContent).toContain('日涨幅偏离值达7%')
+    expect(first.textContent).toContain('1.20亿')
+    expect(first.textContent).toContain('5.00亿')
+    expect(first.textContent).toContain('3.80亿')
+
+    expect(second.textContent).toContain('日换手率达20%')
+    expect(second.textContent).toContain('3000.00万')
+    expect(second.textContent).toContain('9000.00万')
+    expect(second.textContent).toContain('6000.00万')
+    // 第二行不得出现第一行的读数
+    expect(second.textContent).not.toContain('1.20亿')
+    expect(second.textContent).not.toContain('5.00亿')
+    expect(second.textContent).not.toContain('3.80亿')
+  })
+})
+
+describe('龙虎榜工作区 · 分析此股龙虎榜(参谋真实入口)', () => {
+  const probeParams = () => {
+    const el = screen.getByTestId('copilot-probe')
+    return new URLSearchParams(el.getAttribute('data-search') || '')
+  }
+
+  it('未选股时不渲染分析入口: 没有股票/日期就不造上下文', async () => {
+    archiveApi.dragonTiger.mockResolvedValue(dayOk([dt()]))
+    renderPage()
+    await screen.findByTestId('lhb-stock-600000')
+    expect(screen.queryByTestId('lhb-analyze-copilot')).toBeNull()
+  })
+
+  it('选股后点「分析此股龙虎榜」→ /ai-copilot, 只带 symbol 与含明确日期的 q', async () => {
+    archiveApi.dragonTiger.mockResolvedValue(dayOk([dt()]))
+    archiveApi.lhbSeats.mockResolvedValue(seatsOk([seat()]))
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
+    fireEvent.click(await screen.findByTestId('lhb-analyze-copilot'))
+
+    const probe = await screen.findByTestId('copilot-probe')
+    expect(probe.getAttribute('data-path')).toBe('/ai-copilot')
+    const sp = probeParams()
+    expect(sp.get('symbol')).toBe('600000')
+    expect(sp.get('q')).toContain('2026-11-06')
+    expect(sp.get('q')).toContain('600000')
+    // 入口没有龙虎榜配方时不许硬塞 agent, 也不许塞被入口忽略的 date
+    expect(sp.has('agent')).toBe(false)
+    expect(sp.has('date')).toBe(false)
+  })
+
+  it('切股票后分析入口跟随当前股票, 不沿用上一只', async () => {
+    archiveApi.dragonTiger.mockResolvedValue(
+      dayOk([dt({ symbol: '600000' }), dt({ symbol: '000001', name: '平安银行' })]),
+    )
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
+    fireEvent.click(await screen.findByTestId('lhb-stock-000001'))
+    fireEvent.click(await screen.findByTestId('lhb-analyze-copilot'))
+
+    const sp = probeParams()
+    expect(sp.get('symbol')).toBe('000001')
+    expect(sp.get('q')).toContain('平安银行')
+    expect(sp.get('q')).not.toContain('600000')
+  })
+
+  it('切日期后分析入口用当前榜单日期, 旧日期的选中股票不会带过去', async () => {
+    archiveApi.dragonTiger.mockImplementation(({ date }: { date: string }) =>
+      Promise.resolve(
+        date === '20261106'
+          ? dayOk([dt({ symbol: '600000' })])
+          : dayOk([dt({ trade_date: '20261105', symbol: '000001', name: '平安银行' })]),
+      ),
+    )
+    renderPage()
+
+    const dateInput = (await screen.findByTestId('lhb-date')) as HTMLInputElement
+    await waitFor(() => expect(dateInput.value).toBe('2026-11-06'))
+    fireEvent.click(await screen.findByTestId('lhb-stock-600000'))
+    expect(screen.getByTestId('lhb-analyze-copilot')).toBeTruthy()
+
+    fireEvent.change(dateInput, { target: { value: '2026-11-05' } })
+    expect(await screen.findByTestId('lhb-stock-000001')).toBeTruthy()
+    // 换日后旧选中股票被清掉 → 分析入口消失, 必须重新选股
+    expect(screen.queryByTestId('lhb-analyze-copilot')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('lhb-stock-000001'))
+    fireEvent.click(await screen.findByTestId('lhb-analyze-copilot'))
+    const sp = probeParams()
+    expect(sp.get('symbol')).toBe('000001')
+    expect(sp.get('q')).toContain('2026-11-05')
+    expect(sp.get('q')).not.toContain('2026-11-06')
   })
 })
