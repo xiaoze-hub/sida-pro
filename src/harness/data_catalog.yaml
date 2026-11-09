@@ -25,7 +25,7 @@ domains:
     symbol: 可选 6 位代码
     date: 可选
   source: dragon_tiger_events / lhb_seat_details
-  desc: 净买额、买卖席位、游资/机构/量化标签
+  desc: 净买额、买卖席位（东财原文营业部名称与席位买卖额，不含身份归类）
 - id: theme.mood
   label: 题材情绪与生命周期
   level: L0

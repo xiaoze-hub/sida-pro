@@ -1,10 +1,10 @@
 # 数智参谋 · Harness 配方验收契约
 
-规格事实源。对应实现：`src/harness/recipes/*.yaml`（12 份）、`src/harness/recipes.py`（加载与路由）、
+规格事实源。对应实现：`src/harness/recipes/*.yaml`（13 份）、`src/harness/recipes.py`（加载与路由）、
 `src/harness/pipeline.py`（确定性管线）。
 
 **基准日**：2026-10-22（commit `4faae6c` 起）
-**覆盖范围**：11 份 recipe 的结构性契约（工具存在性 / 预算 / 段落 / 关键词唯一 / 验收声明）。
+**覆盖范围**：12 份 recipe 的结构性契约（工具存在性 / 预算 / 段落 / 关键词唯一 / 验收声明）。
 **不覆盖**：提示词措辞优劣、模型输出质量 —— 那些交给 trace 与人工复核。
 
 > 判据：每条标准都要能回答「删了这个测试，会漏掉哪个 bug？」答不上来的不放进来。
@@ -21,6 +21,7 @@
 | 两套配方抢同一个关键词，路由结果取决于字典序 | RECIPE-005 |
 | 空头类结论最容易被模型"脑补"证据（编一个上方套牢峰、把四档资金方向当主力意图） | DEVIL-003/004/005 |
 | 预算写 9 却挂 12 个工具，后 3 个永远轮不到 | RECIPE-003 |
+| 「复盘 + 龙虎榜」被 `postmarket_reviewer` 吞掉：pipeline 配方按 `{}` 调工具，必填 `domain` 的域工具被判 unsatisfiable 静默跳过，结论照写、龙虎榜永远取不到 | LHB-001 |
 
 ## 验收标准
 
@@ -44,6 +45,7 @@
 - **DEVIL-004** `devil_advocate` 的 `prompt_fragment` 必须要求证据缺失显式写「无数据」、无现成工具的维度（商誉/解禁等）写「无数据源」，并声明禁止编造数字、禁止用 0 冒充缺失 —— 空头证据恰恰最容易被模型"脑补"，这是压力测试的生命线
 - **DEVIL-005** `devil_advocate` 的 `prompt_fragment` 必须原文声明三口径红线：主力意图只认逐笔 `get_main_intent`、`get_capital_flow` 禁做主力意图方向判定、L2 主力净流入标 TQ（`get_decision_pioneer`）—— 看空结论引用资金方向若用错口径，等于造谣
 - **DEVIL-006** `devil_advocate` 的 `output_sections` 首段必须是「一句话结论」，且必须包含「口径与缺口」收尾段 —— 与全站参谋输出契约一致（结论前置 + 缺口显式），无数据源的维度要有固定落点而不是散落在死因里
+- **LHB-001** 「复盘 + 龙虎榜」类问题必须落到 `lhb_reviewer`（`pipeline: false`、工具白名单含 `query_data_domain`）—— 塞进 pipeline 配方等于把必填 `domain` 的域工具判成 unsatisfiable 静默跳过：管线照跑、结论照写，龙虎榜永远取不到，模型只能凭印象编席位。纯「复盘」仍走 `postmarket_reviewer`
 
 ## 维护方式
 

@@ -317,7 +317,8 @@ async def test_answer_market_non_stream_and_fallback():
 def test_recipes_still_parse_and_scope_defaults_to_symbol():
     recipes = load_recipes()
     # 2026-10-24: 创新 6 新增 devil_advocate（12 = 11 + 1），纯 prompt 编排不加工具
-    assert len(recipes) == 12
+    # 2026-11-09: 新增 lhb_reviewer（13 = 12 + 1），非 pipeline —— 见下方断言
+    assert len(recipes) == 13
     assert {r.scope for r in recipes.values()} <= {"symbol", "market"}
     # 5 份单标的管线配方不写 scope → 默认 symbol（旧行为，一个字都不许变）
     for rid in ("chip_analyst", "deep_diagnosis", "demon_diagnosis",
@@ -335,6 +336,11 @@ def test_recipes_still_parse_and_scope_defaults_to_symbol():
     # 风控裁判要的是"每只持仓读数"，取数阶段拿不到持仓代码 → 明确不接（不许假装接上）
     assert recipes["risk_judge"].pipeline is False
     assert recipes["risk_judge"].scope == "symbol"
+    # 2026-11-09 龙虎榜复盘：全市场口径 + **非管线**（pipeline 会在 planner 阶段跳过
+    # 必填 domain 的 query_data_domain，模型就永远调不到龙虎榜域）
+    assert recipes["lhb_reviewer"].scope == "market"
+    assert recipes["lhb_reviewer"].pipeline is False
+    assert "query_data_domain" in recipes["lhb_reviewer"].tools
 
 
 def test_scope_parsed_from_yaml(tmp_path):
@@ -364,11 +370,14 @@ def test_routing_unchanged_for_market_recipes():
     assert match_recipe("帮我复盘今天").id == "postmarket_reviewer"
     assert match_recipe("现在盘中持仓要不要减").id in {"intraday_watcher", "intraday_analyst"}
     assert match_recipe("用一句话说明你能做什么") is None
+    # 2026-11-09: 「复盘 + 龙虎榜」另有一条非 pipeline 配方（pipeline 会在 planner 阶段
+    # 跳过必填 domain 的 query_data_domain，等于永远取不到龙虎榜）。
+    assert match_recipe("复盘今天的龙虎榜").id == "lhb_reviewer"
     assert {r.id for r in list_recipes()} == {
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
         "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
-        "devil_advocate",
+        "devil_advocate", "lhb_reviewer",
     }
 
 

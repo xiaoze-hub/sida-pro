@@ -353,56 +353,94 @@ def render_lhb(
     seats: list[dict[str, Any]] | None = None,
     missing: list[str] | None = None,
     symbol: str = "",
+    buys: list[dict[str, Any]] | None = None,
+    sells: list[dict[str, Any]] | None = None,
+    total_rows: int | None = None,
+    total_symbols: int | None = None,
+    seat_total: int | None = None,
 ) -> str:
     """龙虎榜榜单 + 席位明细。空结果 → 「未取到」。
 
-    席位只展示东财原文营业部名称 + 所属代码：`lhb_seat_details` 没有身份标签列，
-    这里**不做游资/机构/量化归类**（「机构专用」是数据源原文，不是本模块判定）。
-    全市场榜单的席位是按代码顺序抽样（SQL LIMIT），必须标明「抽样/非全量」并带代码，
-    否则同一行席位会被误读成某一只票的席位。
+    榜单口径（2026-11-09 修）：
+    - 全市场 `buys`/`sells` 由 SQL **按净买额排序后取前 N**（`lhb_top_buy` / `lhb_top_sell`），
+      不是「按代码顺序抽样 60 条再排序」——后者会把抽样冒充全市场排名；
+    - 同一只票多个上榜原因 → 榜单只列一次（并入一条，金额不累加，避免重复计数）；
+    - `total_rows` / `total_symbols` 来自库内 COUNT，**不拿本轮取到的行数冒充全日规模**，
+      并在文中写明「只列前 5 / 共 N 条」，不让人误读成全量。
+
+    席位口径（2026-11-09 修）：
+    - 金额只认席位自身 `buy_amt` / `sell_amt` / `net_amt`；`accum_amount` 是该股当日
+      **累计成交额**（与榜单的股票总成交额同值），当席位金额用会让每家营业部都显示同一个数；
+    - 去重键含营业部代码 + 买卖额 —— 「机构专用」是东财原文占位名，多家机构同名，
+      按名字去重会把不同机构席位吞掉；只有同侧/同股/同营业部/同金额（多个上榜原因
+      重复落行）才合并；
+    - 只展示东财原文营业部名称 + 所属代码，**不做游资/机构/量化归类**。
     """
     sections: list[str] = []
-    rows = list(events or [])
-    if rows:
-        uniq = {str(r.get("symbol") or "") for r in rows}
-        sections.append(f"- 上榜记录 {len(rows)} 条（涉及 {len(uniq)} 只个股）")
-        ordered = sorted(rows, key=lambda r: (r.get("net_buy") is None, -(r.get("net_buy") or 0)))
-        buys = [r for r in ordered if (r.get("net_buy") or 0) > 0][:5]
-        sells = [r for r in ordered if (r.get("net_buy") or 0) < 0][-5:]
-        if buys:
-            sections.append("- 净买入前列：" + "；".join(_fmt_lhb_row(r) for r in buys))
-        if sells:
-            sections.append("- 净卖出前列：" + "；".join(_fmt_lhb_row(r) for r in sells))
-        if not buys and not sells:
+    rows = [r for r in (events or []) if isinstance(r, dict)]
+    buy_rows = [r for r in (buys if buys is not None else rows) if (_f(r.get("net_buy")) or 0) > 0]
+    sell_rows = [r for r in (sells if sells is not None else rows) if (_f(r.get("net_buy")) or 0) < 0]
+    all_buys = _rank_board(buy_rows, limit=10_000)
+    all_sells = _rank_board(sell_rows, limit=10_000, ascending=True)
+    ranked_buys, ranked_sells = all_buys[:5], all_sells[:5]
+    board_rows = buy_rows + sell_rows or rows
+    if board_rows:
+        total = total_rows if total_rows is not None else len(rows or board_rows)
+        syms = total_symbols
+        if syms is None:
+            syms = len({str(r.get("symbol") or "") for r in board_rows})
+        sections.append(f"- 上榜记录 {total} 条（涉及 {syms} 只个股）")
+        if ranked_buys:
+            sections.append("- 净买入前列：" + "；".join(_fmt_lhb_row(r) for r in ranked_buys))
+        if ranked_sells:
+            sections.append("- 净卖出前列：" + "；".join(_fmt_lhb_row(r) for r in ranked_sells))
+        if not ranked_buys and not ranked_sells:
             sections.append("- 净额均为 0 或未披露，不排序（不编方向）")
+            shown_rows = board_rows[:5]
+            if shown_rows:
+                label = "最多 5 条" if len(board_rows) > 5 else f"{len(shown_rows)} 条"
+                sections.append(
+                    f"- 上榜记录（未按净额排序，{label}）："
+                    + "；".join(_fmt_lhb_row(r) for r in shown_rows)
+                )
+        elif len(all_buys) > 5 or len(all_sells) > 5:
+            sections.append(
+                f"- 榜单已截断：只列净买额最大的 {len(ranked_buys)} 只 / 净卖额最大的 "
+                f"{len(ranked_sells)} 只（当日 {total} 条记录），同股多个上榜原因合并为一条"
+            )
     if seats:
-        seen: set[tuple[str, str, str]] = set()
+        seen: set[tuple[Any, ...]] = set()
         deduped = False
         for side, cn in (("buy", "买入席位"), ("sell", "卖出席位")):
-            head = (
-                f"- {cn}（{symbol}）" if symbol
-                else f"- {cn}（全市场·按代码顺序前 40 条，非全量）"
-            )
+            if symbol:
+                head = f"- {cn}（{symbol}）"
+            else:
+                head = (
+                    f"- {cn}（全市场·按净额绝对值降序前 5"
+                    + (f"；当日席位明细共 {seat_total} 条，非全量" if seat_total else "，非全量")
+                    + "）"
+                )
             items: list[str] = []
             for r in seats:
                 if str(r.get("side") or "").lower() != side:
                     continue
                 dept = str(r.get("operate_dept_name") or "").strip() or "未披露营业部"
                 code = str(r.get("symbol") or "").strip()
-                key = (side, code, dept)
+                key = _seat_key(r)
                 if key in seen:
                     deduped = True
                     continue
                 seen.add(key)
                 label = f"{dept}（{code}）" if code and not symbol else dept
                 if len(items) < 5:
-                    items.append(f"{label} {_amt_plain(r.get('accum_amount'))}")
+                    items.append(f"{label} {_seat_amt_text(r, side)}")
             if items:
                 sections.append(head + "：" + "；".join(items))
         if deduped:
-            sections.append("- 同一营业部多条上榜原因记录仅列一次（金额未合并，不重复计数）")
+            sections.append("- 同一营业部同侧同额的重复上榜原因记录仅列一次（金额不累加）")
         sections.append(
-            "- 席位口径：营业部名称按东财原文披露（「机构专用」等为源方原文命名），"
+            "- 席位口径：金额为席位自身买入/卖出/净额（不是该股当日总成交额）；"
+            "营业部名称按东财原文披露（「机构专用」等为源方原文命名，不同机构可能同名），"
             "不推断游资/机构/量化身份；席位数据不含买卖方向之外的意图判断"
         )
     return render_domain_sections(
@@ -412,6 +450,65 @@ def render_lhb(
         sections=sections,
         missing=missing,
     )
+
+
+def _rank_board(
+    rows: list[dict[str, Any]], *, limit: int, ascending: bool = False
+) -> list[dict[str, Any]]:
+    """按净买额排序并**按个股去重**（同股多上榜原因只算一条，取该股当日最大净额）。
+
+    SQL 已经按净额排好序（`lhb_top_buy` / `lhb_top_sell`），这里保留一次同向排序是为了
+    单标的路径与桩数据也稳定；去重后最多 `limit` 只。
+    """
+    ordered = sorted(
+        rows,
+        key=lambda r: (_f(r.get("net_buy")) is None, _f(r.get("net_buy")) or 0),
+        reverse=not ascending,
+    )
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in ordered:
+        sym = str(r.get("symbol") or "")
+        if sym and sym in seen:
+            continue
+        seen.add(sym)
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _seat_key(r: dict[str, Any]) -> tuple[Any, ...]:
+    """席位去重键：同侧 + 同股 + 同营业部代码 + 同名 + 同买卖额 → 同一条记录。
+
+    不能用 `(side, symbol, 营业部名)`：东财把一堆不同机构都写成「机构专用」，按名字
+    去重会把不同机构席位合并掉。营业部代码缺失时退回 `row_uid`（内容哈希，含上榜原因）。
+    """
+    side = str(r.get("side") or "").lower()
+    sym = str(r.get("symbol") or "")
+    code = str(r.get("operate_dept_code") or "").strip()
+    dept = str(r.get("operate_dept_name") or "").strip()
+    buy, sell = _f(r.get("buy_amt")), _f(r.get("sell_amt"))
+    if not code and not dept:
+        uid = str(r.get("row_uid") or "").strip()
+        if uid:
+            return (side, sym, uid)
+    return (side, sym, code, dept, buy, sell)
+
+
+def _seat_amt_text(r: dict[str, Any], side: str) -> str:
+    """席位金额：买/卖额（量级）+ 净额（方向）。缺哪个说哪个，不补 0。"""
+    amount = _f(r.get("buy_amt") if side == "buy" else r.get("sell_amt"))
+    net = _f(r.get("net_amt"))
+    verb = "买" if side == "buy" else "卖"
+    parts = []
+    if amount is not None:
+        parts.append(f"{verb} {_amt_plain(amount)}")
+    if net is not None:
+        parts.append(f"净 {_amt(net)}")
+    if not parts:
+        return "买卖额未披露"
+    return "/".join(parts)
 
 
 def _amt_plain(v: Any) -> str:
@@ -1455,24 +1552,45 @@ _SQL: dict[str, str] = {
         "WHERE date = :d ORDER BY block_code LIMIT :n"
     ),
     "lhb_date": "SELECT MAX(trade_date) AS d FROM dragon_tiger_events LIMIT 1",
-    "lhb_events": (
-        "SELECT symbol, market, name, reason, close, change_pct, net_buy, buy_amt, sell_amt, "
-        "deal_amt, turnover_pct FROM dragon_tiger_events WHERE trade_date = :d "
-        "ORDER BY symbol LIMIT :n"
+    # 全市场榜单：**先在库内按净额排序再取前 N**（不能 ORDER BY symbol 抽样后在 Python 里排名，
+    # 那是「代码最小的 60 条」里挑出来的前 5，冒充全市场净买入前列）。
+    "lhb_rank_count": (
+        "SELECT COUNT(*) AS n, COUNT(DISTINCT symbol) AS syms FROM dragon_tiger_events "
+        "WHERE trade_date = :d LIMIT 1"
     ),
+    "lhb_top_buy": (
+        "SELECT symbol, market, name, reason, close, change_pct, net_buy, buy_amt, sell_amt, "
+        "deal_amt, turnover_pct FROM dragon_tiger_events "
+        "WHERE trade_date = :d AND net_buy > 0 ORDER BY net_buy DESC LIMIT :n"
+    ),
+    "lhb_top_sell": (
+        "SELECT symbol, market, name, reason, close, change_pct, net_buy, buy_amt, sell_amt, "
+        "deal_amt, turnover_pct FROM dragon_tiger_events "
+        "WHERE trade_date = :d AND net_buy < 0 ORDER BY net_buy ASC LIMIT :n"
+    ),
+    # 单标的：同一只票的全部上榜原因（条数很少，按净额排序只为稳定）
     "lhb_events_symbol": (
         "SELECT symbol, market, name, reason, close, change_pct, net_buy, buy_amt, sell_amt, "
         "deal_amt, turnover_pct FROM dragon_tiger_events WHERE trade_date = :d AND symbol = :s "
-        "ORDER BY symbol LIMIT :n"
+        "ORDER BY net_buy DESC LIMIT :n"
     ),
+    # 席位金额只认席位自身 BUY/SELL/NET；ACCUM_AMOUNT 是**该股当日累计成交额**（与榜单的
+    # 股票总成交额同值），拿它当席位金额会让所有席位都显示同一个「亿」级数字。
     "lhb_seats": (
-        "SELECT side, symbol, name, operate_dept_name, close, change_pct, accum_amount, accum_volume "
+        "SELECT row_uid, side, symbol, name, reason, operate_dept_code, operate_dept_name, "
+        "close, change_pct, buy_amt, sell_amt, net_amt "
         "FROM lhb_seat_details WHERE trade_date = :d AND symbol = :s "
-        "ORDER BY side, symbol LIMIT :n"
+        "ORDER BY side, ABS(COALESCE(net_amt, 0)) DESC LIMIT :n"
     ),
     "lhb_seats_top": (
-        "SELECT side, symbol, name, operate_dept_name, close, change_pct, accum_amount, accum_volume "
-        "FROM lhb_seat_details WHERE trade_date = :d ORDER BY symbol LIMIT :n"
+        "SELECT row_uid, side, symbol, name, reason, operate_dept_code, operate_dept_name, "
+        "close, change_pct, buy_amt, sell_amt, net_amt "
+        "FROM lhb_seat_details WHERE trade_date = :d "
+        "ORDER BY ABS(COALESCE(net_amt, 0)) DESC LIMIT :n"
+    ),
+    "lhb_seat_total": (
+        "SELECT COUNT(*) AS n FROM lhb_seat_details WHERE trade_date = :d "
+        "AND (:s = '' OR symbol = :s) LIMIT 1"
     ),
     # —— market.index（quote_snapshots 的指数桶 market='IDX'，日线表兜底）——
     "idx_snapshot_ts": (
@@ -2187,16 +2305,32 @@ def _theme_payload(db: Any, date: str, top_n: int) -> dict[str, Any]:
 
 
 def _lhb_payload(db: Any, date: str, symbol: str) -> dict[str, Any]:
+    """lhb.daily 取数：榜单按净额排序取前 N（全市场）/全部上榜原因（单标的）+ 席位明细。
+
+    - 全市场：`lhb_top_buy` / `lhb_top_sell` 在库内按 `net_buy` 排好序再 LIMIT，另取
+      `lhb_rank_count` 的真实条数与个股数（不能用本轮取到的行数冒充全日规模）；
+    - 单标的：`lhb_events_symbol` 直接给该票全部上榜原因（条数很少，无需排名）；
+    - 席位：按净额绝对值降序取前 N，另取 `lhb_seat_total` 的真实总条数，供渲染写明截断。
+    """
     explicit = bool(date)
     d = date or (_ymd((_read_one(db, "lhb_date") or {}).get("d")))
     if not d:
         return {"as_of": "未知", "missing": ["dragon_tiger_events 为空（尚未回填龙虎榜）"]}
     if symbol:
-        events = _read(db, "lhb_events_symbol", {"d": d, "s": symbol, "n": 30})
-        seats = _read(db, "lhb_seats", {"d": d, "s": symbol, "n": 40})
+        events = _read(db, "lhb_events_symbol", {"d": d, "s": symbol, "n": 60})
+        buys = [r for r in events if (_f(r.get("net_buy")) or 0) > 0]
+        sells = [r for r in events if (_f(r.get("net_buy")) or 0) < 0]
+        seats = _read(db, "lhb_seats", {"d": d, "s": symbol, "n": 60})
+        total_rows, total_symbols = len(events), (1 if events else 0)
     else:
-        events = _read(db, "lhb_events", {"d": d, "n": 60})
-        seats = _read(db, "lhb_seats_top", {"d": d, "n": 40})
+        buys = _read(db, "lhb_top_buy", {"d": d, "n": 30})
+        sells = _read(db, "lhb_top_sell", {"d": d, "n": 30})
+        events = list(buys) + list(sells)
+        seats = _read(db, "lhb_seats_top", {"d": d, "n": 30})
+        counted = _read_one(db, "lhb_rank_count", {"d": d}) or {}
+        total_rows = counted.get("n")
+        total_symbols = counted.get("syms")
+    seat_counted = _read_one(db, "lhb_seat_total", {"d": d, "s": symbol}) or {}
     missing: list[str] = []
     if not events:
         missing.append(f"dragon_tiger_events 在 {d} 无记录" + (f"（symbol={symbol}）" if symbol else ""))
@@ -2206,7 +2340,12 @@ def _lhb_payload(db: Any, date: str, symbol: str) -> dict[str, Any]:
         "as_of": d,
         "date_source": "explicit" if explicit else "latest",
         "events": events,
+        "buys": buys,
+        "sells": sells,
         "seats": seats,
+        "total_rows": total_rows,
+        "total_symbols": total_symbols,
+        "seat_total": seat_counted.get("n"),
         "missing": missing,
     }
 
@@ -3299,9 +3438,14 @@ async def query_data_domain(
             return render_lhb(
                 as_of=as_of,
                 events=payload.get("events"),
+                buys=payload.get("buys"),
+                sells=payload.get("sells"),
                 seats=payload.get("seats"),
                 missing=payload.get("missing"),
                 symbol=symbol,
+                total_rows=payload.get("total_rows"),
+                total_symbols=payload.get("total_symbols"),
+                seat_total=payload.get("seat_total"),
             )
         if domain == "theme.mood":
             try:
@@ -3357,7 +3501,9 @@ _QUERY_SCHEMA = {
             "市场/个股类：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date、min_streak）、"
             "lhb.daily（龙虎榜/席位；可选 symbol=6 位代码、date=YYYYMMDD 或 YYYY-MM-DD，"
             "date 缺省取库内最新交易日并标注；指定日无数据只报无记录，不回退日期；"
-            "席位只给营业部原文名称，不推断游资/机构身份）、theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
+            "榜单按净买额排序后只列前 5 并标明当日总条数，同股多个上榜原因合并为一条；"
+            "席位金额为席位自身买入/卖出/净额；营业部只给东财原文名称，不推断游资/机构身份）、"
+            "theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
             "market.index（大盘指数/两市成交额）、market.breadth（涨跌家数+ADL/ARMS 分位+九档分布+市场状态）、"
             "market.mainline（主线榜排名/主线分/龙头，可选 top_n）、board.daily（板块涨跌与资金排行，可选 top_n）、"
             "etf.flow（20 只重点宽基 ETF 篮子成交额+分钟覆盖率+全市场 SC8 净申购/托底日样本，可选 days）、"

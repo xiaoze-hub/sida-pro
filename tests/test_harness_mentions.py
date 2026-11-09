@@ -40,12 +40,14 @@ def test_six_recipes_loaded_and_valid():
     recipes = list_recipes()
     # 2026-10-24: devil_advocate(空头司令) 为第 12 个配方 —— 新加配方必须同步本钉子,
     # 本文件不叫 harness_routing/test_market_pipeline, 所以定向跑永远扫不到(踩过两次)。
-    assert len(recipes) == 12
+    # 2026-11-09: lhb_reviewer(龙虎榜复盘官) 为第 13 个 —— 「复盘+龙虎榜」必须有非 pipeline
+    # 配方才能真的调到 query_data_domain(domain=lhb.daily)。
+    assert len(recipes) == 13
     assert {r.id for r in recipes} == {
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
         "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
-        "devil_advocate",
+        "devil_advocate", "lhb_reviewer",
     }
     for r in recipes:
         assert r.label and r.prompt_fragment

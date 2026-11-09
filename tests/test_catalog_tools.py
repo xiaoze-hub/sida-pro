@@ -319,16 +319,20 @@ def test_lhb_renders_board_and_seats(monkeypatch):
         monkeypatch,
         {
             "lhb_date": [{"d": "20261020"}],
-            "lhb_events": [
+            "lhb_top_buy": [
                 {"symbol": "002361", "name": "闽东电力", "reason": "日涨幅偏离值达7%", "net_buy": 1.23e8,
                  "buy_amt": 2.1e8, "sell_amt": 0.87e8, "change_pct": 9.98, "turnover_pct": 12.3},
+            ],
+            "lhb_top_sell": [
                 {"symbol": "600111", "name": "北方稀土", "reason": "日跌幅偏离值达7%", "net_buy": -0.5e8,
                  "buy_amt": 0.3e8, "sell_amt": 0.8e8, "change_pct": -7.1, "turnover_pct": 5.2},
             ],
             "lhb_seats": [],
             "lhb_seats_top": [
-                {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用", "accum_amount": 8.2e7},
-                {"side": "sell", "symbol": "600111", "operate_dept_name": "某游资营业部", "accum_amount": 4.1e7},
+                {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
+                 "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
+                {"side": "sell", "symbol": "600111", "operate_dept_name": "某游资营业部",
+                 "buy_amt": 0.0, "sell_amt": 4.1e7, "net_amt": -4.1e7},
             ],
         },
     )
@@ -351,7 +355,8 @@ def test_lhb_symbol_path(monkeypatch):
                  "buy_amt": 2e7, "sell_amt": 1e7, "turnover_pct": 3.0, "reason": "涨幅偏离"},
             ],
             "lhb_seats": [
-                {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用", "accum_amount": 8.2e7},
+                {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
+                 "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
             ],
         },
     )

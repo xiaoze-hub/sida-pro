@@ -92,14 +92,14 @@ def test_lhb_callable_through_registered_handler(monkeypatch):
         monkeypatch,
         {
             "lhb_date": [{"d": "20261020"}],
-            "lhb_events": [
+            "lhb_top_buy": [
                 {"symbol": "002361", "name": "闽东电力", "reason": "日涨幅偏离值达7%",
                  "net_buy": 1.23e8, "buy_amt": 2.1e8, "sell_amt": 0.87e8,
                  "change_pct": 9.98, "turnover_pct": 12.3},
             ],
             "lhb_seats_top": [
                 {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
-                 "accum_amount": 8.2e7},
+                 "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
             ],
         },
     )
@@ -118,7 +118,7 @@ def test_explicit_date_wins_over_latest(monkeypatch):
         {
             # 库内最新是 11-10，但用户指定 10-16 → 必须按 10-16 查
             "lhb_date": [{"d": "20261110"}],
-            "lhb_events": [
+            "lhb_top_buy": [
                 {"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
                  "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 3.0, "reason": "涨幅偏离"},
             ],
@@ -128,7 +128,7 @@ def test_explicit_date_wins_over_latest(monkeypatch):
     assert "时点 20261016" in out
     assert "20261110" not in out
     assert "lhb_date" not in rec.keys()          # 指定日期时不该去读最新日期
-    assert rec.params_of("lhb_events")[0]["d"] == "20261016"
+    assert rec.params_of("lhb_top_buy")[0]["d"] == "20261016"
 
 
 def test_latest_date_is_labelled_when_date_omitted(monkeypatch):
@@ -136,8 +136,8 @@ def test_latest_date_is_labelled_when_date_omitted(monkeypatch):
         monkeypatch,
         {
             "lhb_date": [{"d": "20261110"}],
-            "lhb_events": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
-                            "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 3.0}],
+            "lhb_top_buy": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
+                             "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 3.0}],
         },
     )
     out = _query({"domain": "lhb.daily"})
@@ -147,7 +147,7 @@ def test_latest_date_is_labelled_when_date_omitted(monkeypatch):
 
 def test_unparseable_date_refuses_instead_of_latest(monkeypatch):
     rec = _patch(monkeypatch, {"lhb_date": [{"d": "20261110"}],
-                               "lhb_events": [{"symbol": "002361", "net_buy": 1e7}]})
+                               "lhb_top_buy": [{"symbol": "002361", "net_buy": 1e7}]})
     out = _query({"domain": "lhb.daily", "params_json": '{"date": "上周五"}'})
     assert "日期无法识别" in out or "日期参数无法识别" in out
     assert "未取到" in out
@@ -167,7 +167,7 @@ def test_explicit_empty_date_says_no_records(monkeypatch):
     assert "时点 20261020" in out
     assert "未取到" in out and "无记录" in out
     assert "20261110" not in out
-    assert rec.params_of("lhb_events")[0]["d"] == "20261020"   # 不回退
+    assert rec.params_of("lhb_top_buy")[0]["d"] == "20261020"   # 不回退
 
 
 # ──────────────────────────── 3. 席位：归属代码 + 不编身份 ────────────────────────────
@@ -177,18 +177,21 @@ def test_market_seat_rows_carry_stock_code_and_no_identity_claim(monkeypatch):
         monkeypatch,
         {
             "lhb_date": [{"d": "20261020"}],
-            "lhb_events": [
+            "lhb_top_buy": [
                 {"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
                  "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98},
+            ],
+            "lhb_top_sell": [
                 {"symbol": "600111", "name": "北方稀土", "net_buy": -5e6,
                  "buy_amt": 1e7, "sell_amt": 1.5e7, "change_pct": -7.1},
             ],
             "lhb_seats_top": [
                 {"side": "buy", "symbol": "002361", "name": "",
                  "operate_dept_name": "华泰证券股份有限公司深圳益田路荣超商务中心证券营业部",
-                 "accum_amount": 8.2e7},
+                 "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
                 {"side": "sell", "symbol": "600111", "name": "",
-                 "operate_dept_name": "机构专用", "accum_amount": 4.1e7},
+                 "operate_dept_name": "机构专用",
+                 "buy_amt": 0.0, "sell_amt": 4.1e7, "net_amt": -4.1e7},
             ],
         },
     )
@@ -208,7 +211,7 @@ def test_symbol_path_seats_are_scoped_and_normalized(monkeypatch):
             "lhb_events_symbol": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
                                    "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
             "lhb_seats": [{"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
-                           "accum_amount": 8.2e7}],
+                           "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7}],
         },
     )
     out = _query({"domain": "lhb.daily",
@@ -230,8 +233,8 @@ def test_empty_seats_report_missing_without_invented_names(monkeypatch):
         monkeypatch,
         {
             "lhb_date": [{"d": "20261020"}],
-            "lhb_events": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
-                            "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
+            "lhb_top_buy": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
+                             "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
             "lhb_seats_top": [],
         },
     )
@@ -241,25 +244,72 @@ def test_empty_seats_report_missing_without_invented_names(monkeypatch):
     assert "游资" not in out and "量化" not in out
 
 
-def test_duplicate_dept_rows_listed_once(monkeypatch):
-    """同一营业部同日同股多个上榜原因 → 只列一次，不重复堆榜。"""
+def test_same_name_institution_seats_are_not_collapsed(monkeypatch):
+    """「机构专用」是东财原文占位名，多家机构同名 → 金额不同就是不同席位，不能按名字去重。"""
     _patch(
         monkeypatch,
         {
             "lhb_date": [{"d": "20261020"}],
-            "lhb_events": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
-                            "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
+            "lhb_events_symbol": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
+                                   "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
             "lhb_seats": [
                 {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
-                 "accum_amount": 8.2e7},
+                 "operate_dept_code": "A01", "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
                 {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
-                 "accum_amount": 3.0e7},
+                 "operate_dept_code": "A02", "buy_amt": 3.0e7, "sell_amt": 0.0, "net_amt": 3.0e7},
             ],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"symbol": "002361"}'})
+    # 两个不同机构席位（同名、不同营业部代码、不同金额）都必须列出来
+    assert "8200万" in out and "3000万" in out, out
+    assert out.count("机构专用") >= 3, out        # 2 条席位 + 口径说明里的原文举例
+    assert "仅列一次" not in out                   # 不同席位不该被当成重复
+
+
+def test_truly_duplicate_reason_rows_listed_once(monkeypatch):
+    """同侧同股同营业部同金额（多个上榜原因重复落行）→ 只列一次，不重复计数。"""
+    row = {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
+           "operate_dept_code": "A01", "reason": "涨幅偏离", "buy_amt": 8.2e7,
+           "sell_amt": 0.0, "net_amt": 8.2e7}
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_events_symbol": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
+                                   "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
+            "lhb_seats": [row, dict(row, reason="连续三日涨幅偏离")],
         },
     )
     out = _query({"domain": "lhb.daily", "params_json": '{"symbol": "002361"}'})
     assert out.count("机构专用") == 2       # 席位行 1 次 + 口径说明里的原文举例 1 次
     assert "仅列一次" in out
+
+
+def test_seat_amount_uses_seat_buy_sell_not_stock_turnover(monkeypatch):
+    """席位金额必须是席位自身的 BUY/SELL/NET，不是 ACCUM_AMOUNT（该股当日累计成交额）。
+
+    ACCUM_AMOUNT 与榜单里的股票总成交额同值：拿它当席位金额，等于每一家营业部都
+    显示 12 亿，席位强弱比较彻底失真（test_lhb_detail_backfill 的样本里同一只票的
+    机构表与席位表 ACCUM_AMOUNT 都是 1.2e9，而席位 BUY 只有 2.88e8）。
+    """
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_events_symbol": [{"symbol": "002636", "name": "金安国纪", "net_buy": 1.4e8,
+                                   "buy_amt": 2.88e8, "sell_amt": 1.48e8, "change_pct": 10.02}],
+            "lhb_seats": [
+                {"side": "buy", "symbol": "002636", "operate_dept_name": "深股通专用",
+                 "operate_dept_code": "10456710", "accum_amount": 1.2e9,
+                 "buy_amt": 2.88e8, "sell_amt": 1.48e8, "net_amt": 1.4e8},
+            ],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"symbol": "002636", "date": "20261020"}'})
+    assert "2.88亿" in out, out          # 席位买入额
+    assert "1.40亿" in out, out          # 席位净额
+    assert "12.00亿" not in out and "1.20亿" not in out, out   # 股票总成交额不得冒充席位金额
 
 
 def test_plain_lhb_question_keeps_domain_tool_visible():
@@ -307,8 +357,8 @@ def test_lhb_no_login_required(monkeypatch):
         monkeypatch,
         {
             "lhb_date": [{"d": "20261020"}],
-            "lhb_events": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
-                            "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
+            "lhb_top_buy": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e7,
+                             "buy_amt": 2e7, "sell_amt": 1e7, "change_pct": 9.98}],
         },
     )
     out = _run(tc.query_data_domain(None, {"domain": "lhb.daily"}, None))
@@ -338,7 +388,7 @@ def test_lhb_real_sql_roundtrip_on_sqlite(tmp_path):
             "CREATE TABLE lhb_seat_details (row_uid TEXT PRIMARY KEY, trade_date TEXT, "
             "side TEXT, symbol TEXT, name TEXT, reason TEXT, operate_dept_code TEXT, "
             "operate_dept_name TEXT, close REAL, change_pct REAL, accum_amount REAL, "
-            "accum_volume REAL)"
+            "accum_volume REAL, buy_amt REAL, sell_amt REAL, net_amt REAL)"
         ))
         conn.execute(
             text(
@@ -350,7 +400,8 @@ def test_lhb_real_sql_roundtrip_on_sqlite(tmp_path):
         conn.execute(
             text(
                 "INSERT INTO lhb_seat_details VALUES "
-                "('u1','20261020','buy','002361','','涨幅偏离','D001','机构专用',12.5,9.98,8.2e7,100)"
+                "('u1','20261020','buy','002361','','涨幅偏离','D001','机构专用',12.5,9.98,"
+                "2.97e8,100,8.2e7,0.0,8.2e7)"
             )
         )
     with Session(engine) as s:
@@ -368,4 +419,286 @@ def test_lhb_real_sql_roundtrip_on_sqlite(tmp_path):
         ))
         assert "时点 20261021" in empty and "无记录" in empty and "未取到" in empty
         assert "闽东电力" not in empty
+
+
+# ──────────────────────────── 6. 全市场榜单：先排序后截断，去重口径明示 ────────────────────────────
+
+def test_market_board_ranks_in_sql_before_limit(monkeypatch):
+    """全市场净买/净卖前列必须是「全表按净额排序后取前 N」，不能按代码顺序抽样后再排序。
+
+    旧实现：`SELECT … ORDER BY symbol LIMIT 60` 再在 Python 里挑净买额最大的 5 条 ——
+    样本是「代码最小的 60 条」，榜单却被写成「净买入前列」，等于把抽样冒充全市场排名。
+    """
+    rec = _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_rank_count": [{"n": 92, "syms": 41}],
+            "lhb_top_buy": [
+                {"symbol": "002361", "name": "闽东电力", "net_buy": 3.0e8, "buy_amt": 4.0e8,
+                 "sell_amt": 1.0e8, "change_pct": 9.98, "reason": "日涨幅偏离值达7%"},
+                # 同股第二个上榜原因 → 榜单只算一只
+                {"symbol": "002361", "name": "闽东电力", "net_buy": 3.0e8, "buy_amt": 4.0e8,
+                 "sell_amt": 1.0e8, "change_pct": 9.98, "reason": "连续三日涨幅偏离"},
+                {"symbol": "600111", "name": "北方稀土", "net_buy": 1.1e8, "buy_amt": 2.0e8,
+                 "sell_amt": 0.9e8, "change_pct": 6.1, "reason": "涨幅偏离"},
+            ],
+            "lhb_top_sell": [
+                {"symbol": "300750", "name": "宁德时代", "net_buy": -4.2e8, "buy_amt": 1.0e8,
+                 "sell_amt": 5.2e8, "change_pct": -8.4, "reason": "跌幅偏离"},
+            ],
+            "lhb_seats_top": [],
+            "lhb_seat_total": [{"n": 0}],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"date": "20261020"}'})
+    # 榜单条数用库内真实计数，不是本轮取到的行数
+    assert "92 条" in out and "41" in out, out
+    assert "净买入前列" in out and "闽东电力" in out and "北方稀土" in out
+    assert out.count("闽东电力") == 1, f"同股多上榜原因在榜单里只该出现一次: {out}"
+    assert "净卖出前列" in out and "宁德时代" in out
+    # 取数走的是排序语句（ORDER BY net_buy），不是 symbol 抽样语句
+    assert "lhb_top_buy" in rec.keys() and "lhb_top_sell" in rec.keys()
+    assert rec.params_of("lhb_top_buy")[0]["d"] == "20261020"
+    assert "lhb_events" not in rec.keys()
+    assert "lhb_rank_count" in rec.keys()        # 榜单规模来自库内 COUNT，不是取到的行数
+
+
+def test_board_truncation_is_disclosed_when_more_than_five(monkeypatch):
+    """净买额超过 5 只时必须写明「已截断/只列前 5」，不能让人以为榜单只有 5 只。"""
+    rows = [
+        {"symbol": f"00{i:04d}", "name": f"票{i}", "net_buy": 1e8 - i * 1e7,
+         "buy_amt": 2e8, "sell_amt": 1e8, "change_pct": 5.0}
+        for i in range(7)
+    ]
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_rank_count": [{"n": 7, "syms": 7}],
+            "lhb_top_buy": rows,
+            "lhb_top_sell": [],
+            "lhb_seats_top": [],
+            "lhb_seat_total": [{"n": 0}],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"date": "20261020"}'})
+    assert "已截断" in out and "5 只" in out, out
+    assert "000005" not in out and "000006" not in out     # 第 6/7 只确实没列
+
+
+def test_rank_sql_orders_by_amount_not_symbol():
+    """SQL 层就必须按净额排序（幂等/无桩时也一样），否则「前 5」只是抽样前 5。"""
+    buy = tc._SQL["lhb_top_buy"].upper()
+    sell = tc._SQL["lhb_top_sell"].upper()
+    assert "NET_BUY > 0" in buy and "ORDER BY NET_BUY DESC" in buy
+    assert "NET_BUY < 0" in sell and "ORDER BY NET_BUY ASC" in sell
+    for sql in (buy, sell):
+        assert "ORDER BY SYMBOL" not in sql
+    seats = tc._SQL["lhb_seats_top"].upper()
+    assert "ORDER BY SYMBOL" not in seats and "NET_AMT" in seats
+
+
+def test_seat_listing_discloses_total_and_truncation(monkeypatch):
+    """全市场席位按净额排序后取前几条，必须写明「共 N 条 / 只列前 5」，不冒充全量。"""
+    _patch(
+        monkeypatch,
+        {
+            "lhb_date": [{"d": "20261020"}],
+            "lhb_rank_count": [{"n": 10, "syms": 4}],
+            "lhb_top_buy": [{"symbol": "002361", "name": "闽东电力", "net_buy": 1e8,
+                             "buy_amt": 2e8, "sell_amt": 1e8, "change_pct": 9.0}],
+            "lhb_top_sell": [],
+            "lhb_seats_top": [
+                {"side": "buy", "symbol": "002361", "operate_dept_name": "机构专用",
+                 "operate_dept_code": "A01", "buy_amt": 8.2e7, "sell_amt": 0.0, "net_amt": 8.2e7},
+            ],
+            "lhb_seat_total": [{"n": 137}],
+        },
+    )
+    out = _query({"domain": "lhb.daily", "params_json": '{"date": "20261020"}'})
+    assert "137" in out and "前 5" in out, out
+    assert "非全量" in out or "已截断" in out, out
+    assert "8200万" in out
+
+
+# ──────────────────────────── 7. 复盘 + 龙虎榜：路由 → 执行 → 返回 全链路 ────────────────────────────
+
+def test_lhb_review_question_routes_to_non_pipeline_recipe_that_can_fetch():
+    """「复盘 + 龙虎榜」必须有一条真能取数到 lhb.daily 的路径。
+
+    旧行为：`复盘` 命中 `postmarket_reviewer`（pipeline: true），其工具白名单里没有
+    `query_data_domain` —— 用户问「复盘今天的龙虎榜」，管线自己跑完 8 个工具就写结论，
+    模型**没有任何机会**调到龙虎榜域，只能凭印象编席位。修法不是把域工具塞进 pipeline
+    白名单（pipeline 按 {} 调用，query_data_domain 必填 domain，会被判 unsatisfiable
+    静默跳过），而是给龙虎榜一份专门的非 pipeline 配方。
+
+    @spec LHB-001
+    """
+    from src.agents.chat.registry import chat_tool_schemas
+    from src.harness.routing import route_for_request
+
+    for q in ("复盘今天的龙虎榜", "今天龙虎榜席位谁在买", "看下龙虎榜净买入和营业部"):
+        route = route_for_request(q, chat_tool_schemas())
+        assert route.recipe is not None, f"{q} 落到了无配方兜底，取数路径不受控"
+        assert route.recipe.id == "lhb_reviewer", f"{q} → {route.recipe.id}"
+        assert not route.recipe.pipeline, "pipeline 模式按 {} 调工具，query_data_domain 会被静默跳过"
+        names = {(s.get("function") or {}).get("name") for s in route.tools}
+        assert "query_data_domain" in names, f"{q} 路由后模型看不到取数入口"
+
+    # 纯复盘仍走原管线（不被新配方抢走）
+    plain = route_for_request("帮我复盘今天", chat_tool_schemas())
+    assert plain.recipe is not None and plain.recipe.id == "postmarket_reviewer"
+
+
+def test_pipeline_recipe_would_silently_skip_domain_tool():
+    """反面证据：把域工具塞进 pipeline 白名单救不了复盘 —— 必填 domain 被判 unsatisfiable 直接跳过。
+
+    这条锁的是「为什么必须另建非 pipeline 配方」这个判断本身：管线只按 schema 的 required
+    拼参数（{} / {symbol}），`query_data_domain` 的 required=['domain'] 永远填不上，
+    `build_steps` 会生成一个 skip 步骤，工具根本没被调用过。
+    """
+    from dataclasses import replace
+
+    from src.harness.pipeline_market import build_steps
+    from src.harness.recipes import get_recipe
+
+    recipe = get_recipe("postmarket_reviewer")
+    assert recipe is not None
+    assert recipe.pipeline is True
+    assert "query_data_domain" not in recipe.tools     # 现状：管线里没有它
+    fake = replace(recipe, tools=tuple(recipe.tools) + ("query_data_domain",))
+    steps = {s.tool: s for s in build_steps(fake, watchlist=["002361"])}
+    step = steps["query_data_domain"]
+    assert step.skip, "pipeline 里必填 domain 的工具不会被调用"
+    assert step.skip.startswith("unsatisfiable_args"), step.skip
+
+
+def test_lhb_review_executes_through_chat_tool_layer(tmp_path):
+    """执行层证据：路由产出的配方白名单下，chat._execute_tool 真的放行并返回龙虎榜数据。
+
+    注册表 handler 能跑通只说明「函数可调用」；配方白名单是**运行时硬闸**
+    (`_REQ_TOOLS`)，名字不在 `recipe.tools` 里会被直接拒绝。这里走完整链路：
+    route → recipe.tools → _REQ_TOOLS → _execute_tool → registry handler → 渲染。
+    """
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from src.agents.chat.registry import chat_tool_schemas
+    from src.harness.routing import route_for_request
+    from src.web.api import chat as chat_api
+
+    route = route_for_request("复盘今天的龙虎榜", chat_tool_schemas())
+    recipe = route.recipe
+    assert recipe is not None and getattr(recipe, "id", "") == "lhb_reviewer"
+    tools = tuple(getattr(recipe, "tools", ()))
+    assert "query_data_domain" in tools
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'lhb_exec.db'}")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE dragon_tiger_events (trade_date TEXT, symbol TEXT, market TEXT, "
+            "name TEXT, reason TEXT, close REAL, change_pct REAL, net_buy REAL, buy_amt REAL, "
+            "sell_amt REAL, deal_amt REAL, turnover_pct REAL)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE lhb_seat_details (row_uid TEXT PRIMARY KEY, trade_date TEXT, "
+            "side TEXT, symbol TEXT, name TEXT, reason TEXT, operate_dept_code TEXT, "
+            "operate_dept_name TEXT, close REAL, change_pct REAL, accum_amount REAL, "
+            "accum_volume REAL, buy_amt REAL, sell_amt REAL, net_amt REAL)"
+        ))
+        conn.execute(text(
+            "INSERT INTO dragon_tiger_events VALUES "
+            "('20261020','002361','CN','闽东电力','日涨幅偏离值达7%',12.5,9.98,1.23e8,"
+            "2.1e8,0.87e8,2.97e8,12.3)"
+        ))
+        conn.execute(text(
+            "INSERT INTO lhb_seat_details VALUES "
+            "('u1','20261020','buy','002361','','涨幅偏离','D001','机构专用',12.5,9.98,"
+            "2.97e8,100,8.2e7,0.0,8.2e7)"
+        ))
+
+    token = chat_api._REQ_TOOLS.set(frozenset(tools))
+    try:
+        with Session(engine) as s:
+            out = _run(chat_api._execute_tool(
+                s, "query_data_domain",
+                {"domain": "lhb.daily", "params_json": '{"date": "20261020"}'}, user=None,
+            ))
+    finally:
+        chat_api._REQ_TOOLS.reset(token)
+    assert "不使用工具" not in out, out[:200]
+    assert "时点 20261020" in out and "闽东电力" in out
+    assert "8200万" in out and "买入席位" in out
+
+
+def test_lhb_review_route_executes_and_returns_seat_evidence(tmp_path):
+    """路由命中后，真的按 schema 调 registry handler，从临时 sqlite 取到席位证据。"""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
+    from src.harness.routing import route_for_request
+
+    route = route_for_request("复盘今天的龙虎榜", chat_tool_schemas())
+    schema = next(
+        s for s in route.tools if (s.get("function") or {}).get("name") == "query_data_domain"
+    )
+    props = schema["function"]["parameters"]["properties"]
+    assert {"domain", "params_json"} <= set(props)     # 模型能构造出合法参数
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'lhb_route.db'}")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE dragon_tiger_events (trade_date TEXT, symbol TEXT, market TEXT, "
+            "name TEXT, reason TEXT, close REAL, change_pct REAL, net_buy REAL, buy_amt REAL, "
+            "sell_amt REAL, deal_amt REAL, turnover_pct REAL)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE lhb_seat_details (row_uid TEXT PRIMARY KEY, trade_date TEXT, "
+            "side TEXT, symbol TEXT, name TEXT, reason TEXT, operate_dept_code TEXT, "
+            "operate_dept_name TEXT, close REAL, change_pct REAL, accum_amount REAL, "
+            "accum_volume REAL, buy_amt REAL, sell_amt REAL, net_amt REAL)"
+        ))
+        conn.execute(text(
+            "INSERT INTO dragon_tiger_events VALUES "
+            "('20261020','002361','CN','闽东电力','日涨幅偏离值达7%',12.5,9.98,1.23e8,"
+            "2.1e8,0.87e8,2.97e8,12.3)"
+        ))
+        conn.execute(text(
+            "INSERT INTO lhb_seat_details VALUES "
+            "('u1','20261020','buy','002361','','涨幅偏离','D001','机构专用',12.5,9.98,"
+            "2.97e8,100,8.2e7,0.0,8.2e7)"
+        ))
+    handler = CHAT_TOOL_REGISTRY["query_data_domain"].handler
+    with Session(engine) as s:
+        out = _run(handler(s, {"domain": "lhb.daily", "params_json": '{"date": "20261020"}'}, None))
+    assert "时点 20261020" in out
+    assert "闽东电力" in out
+    # 席位证据来自 buy_amt/net_amt（8.2e7 / 8.2e7），不是 accum_amount（2.97e8）
+    assert "8200万" in out and "2.97亿" not in out
+    assert "买入席位" in out and "机构专用" in out
+
+
+# ──────────────────────────── 8. 模型可见的身份描述不得撒谎 ────────────────────────────
+
+def test_catalog_description_does_not_claim_identity_labels():
+    """`list_data_domains` 的描述会原样喂给模型 → 不能写目录里没有的「游资/机构/量化标签」。
+
+    `lhb_seat_details` 没有身份标签列（只有东财原文营业部名称）。目录写成「游资/机构/量化
+    标签」，模型就会把这个描述当成能力说明，回头把「机构专用」当成身份判定来引用。
+    """
+    lhb = next(d for d in tc.DOMAINS if d["id"] == "lhb.daily")
+    desc = lhb["desc"]
+    assert "标签" not in desc, f"目录描述不能声称有身份标签: {desc}"
+    for word in ("游资", "量化"):
+        assert word not in desc, f"目录描述不能声称能区分 {word}: {desc}"
+    # 真正该说的：东财原文营业部名 + 无身份标签
+    assert "席位" in desc
+    catalog = tc.render_domain_catalog()
+    line = next(ln for ln in catalog.splitlines() if ln.startswith("lhb.daily"))
+    assert "标签" not in line and "游资" not in line, line
+    # 取数说明里的身份红线仍在（不推断）
+    assert "不推断" in tc._QUERY_SCHEMA["function"]["description"]
+
 
