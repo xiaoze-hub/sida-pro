@@ -66,12 +66,21 @@ def test_route_scope_split(q, bound, expected):
     assert (r.id if r else None) == expected, f"{q} → {r.id if r else None}"
 
 
-def test_has_symbol_scope_is_pure_regex():
+def test_has_symbol_scope_is_pure_regex(monkeypatch):
+    from src.core import symbol_guard
+    from src.harness import routing as routing_mod
+
+    monkeypatch.setattr(symbol_guard, "_tq_match", lambda w: [("002050", "三花智控")])
+    symbol_guard._TQ_MATCH_CACHE.clear()
+    routing_mod._NAME_MISS.clear()
     assert has_symbol_scope("002361 怎么样") is True
+    # 简称必须先核对到这只票才算标的（不能见后缀就猜，2026-11-10 复审 P0）
     assert has_symbol_scope("三花智控这波怎么样") is True
     assert has_symbol_scope("分时怎么样", "002361") is True
     assert has_symbol_scope(REPORTED) is False
     assert has_symbol_scope("创业板今天怎么样") is False, "板块词不是标的"
+    symbol_guard._TQ_MATCH_CACHE.clear()
+    routing_mod._NAME_MISS.clear()
 
 
 def test_reported_question_gets_scan_tools():

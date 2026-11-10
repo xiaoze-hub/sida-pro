@@ -8,6 +8,8 @@ desc: 没有标的、问「今天有没有能建仓的票」→ 市场级候选�
 when: [建仓, 选股, 买什么, 买哪只, 候选股, 有什么票, 埋伏什么]
 scope: market
 pipeline: true
+# 纯扫描：没有任何单标的读数工具。正文点了代码/简称时不许拿它答（见 match_recipe_for）。
+scan_only: true
 tools:
   - get_market_scan_ranks   # 扫描三榜：新 G 点 / 机构活跃 / 暗盘 TOP 近似项
   - get_hot_stocks          # 当日热度榜（情绪在谁身上）

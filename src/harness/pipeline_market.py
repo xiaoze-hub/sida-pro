@@ -52,8 +52,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time as _time
 from dataclasses import dataclass, field
+from datetime import date as _date
 
 from src.harness.pipeline import (
     PER_TOOL_CHARS,
@@ -86,6 +88,50 @@ SKIP_UNKNOWN = "unknown_tool"
 SKIP_HANDLER_ONLY = "no_schema"
 SKIP_SYMBOL_CAP = "symbol_tool_cap"
 
+# 工具"回了字"不等于"给到了证据"（2026-11-10 复审 P0）。
+# 生产上最常见的假证据是拒权/未开通/空库这类**有响应的失败**：旧实现只看
+# `text.strip()` 非空就记 ok，于是「无权限访问」被当成一条证据写进结论，
+# 模型据此答「今天没机会」——比没有数据更坏。
+DENY_MARKERS = (
+    "无权限", "权限不足", "未授权", "拒绝访问", "未开通", "请先开通", "套餐不包含",
+    "请先登录", "登录后查看", "unauthorized", "forbidden", "access denied",
+    "not authorized", "permission denied",
+)
+EMPTY_MARKERS = (
+    "暂无数据", "无数据", "没有数据", "查询结果为空", "数据不存在",
+    "empty result", "no data",
+)
+# 只有**开头**这么长的正文才按"整条都是拒权/空"处理：长证据正文里偶尔出现
+# 「暂无数据」是某个字段的口径说明，不能整条丢掉。
+_VERDICT_HEAD = 300
+
+# 榜单/行情类证据里的日期。昨日榜认今日是 2026-11-10 复审点名的第二个 P0：
+# 「昨日龙虎榜」写进今天的建仓结论，用户看到的是已经走完的行情。
+_DATE_RE = re.compile(r"(20\d{2})[-/年.](\d{1,2})[-/月.](\d{1,2})")
+
+
+def _verdict(text: str) -> str:
+    """把工具返回分成 ok / denied / empty 三态（只读开头，避免误伤长证据）。"""
+    head = (text or "").strip()[:_VERDICT_HEAD].lower()
+    if any(m in head for m in DENY_MARKERS):
+        return "denied"
+    if any(m in head for m in EMPTY_MARKERS):
+        return "empty"
+    return "ok"
+
+
+def payload_date(text: str) -> _date | None:
+    """证据正文里出现的**最晚**日期；没有日期返回 None（不猜）。"""
+    latest = None
+    for y, m, d in _DATE_RE.findall(text or ""):
+        try:
+            cur = _date(int(y), int(m), int(d))
+        except ValueError:
+            continue
+        if latest is None or cur > latest:
+            latest = cur
+    return latest
+
 
 @dataclass
 class MarketRun:
@@ -97,10 +143,71 @@ class MarketRun:
     failed: int = 0
     skipped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # 拒权 / 空库分开记：它们不是"工具挂了"，而是"我们没有这个数据权限"，
+    # 结论里必须写清是哪种缺口（治理页也要能按原因聚合）。
+    denied: list[str] = field(default_factory=list)
+    empty: list[str] = field(default_factory=list)
+    # (标签, 数据日)：取到的是更早日期的数据，只能当"昨日"，不许当今日。
+    stale: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def usable(self) -> bool:
         return self.ok > 0
+
+    @property
+    def data_date(self) -> str | None:
+        """本轮所有证据里最晚的数据日期（ISO）；一条都没日期就不给。"""
+        dates = [payload_date(t) for _, t in self.outputs]
+        dates = [d for d in dates if d is not None]
+        return max(dates).isoformat() if dates else None
+
+    @property
+    def candidate_codes(self) -> list[str]:
+        """证据里出现的 6 位代码（去重保序）——「有候选」是数据事实，不是措辞。"""
+        out: list[str] = []
+        for _, text in self.outputs:
+            for code in re.findall(r"(?<!\d)((?:00|30|60|68|83|87|43)\d{4})(?!\d)", str(text)):
+                if code not in out:
+                    out.append(code)
+        return out
+
+    @property
+    def no_candidates(self) -> bool:
+        return bool(self.outputs) and not self.candidate_codes
+
+    def missing_note(self) -> str:
+        """一句结构化的缺口说明（进提示词，也进确定性前缀）。"""
+        parts = []
+        if self.denied:
+            parts.append(f"拒权 {len(self.denied)} 项（{', '.join(self.denied[:3])}）")
+        if self.empty:
+            parts.append(f"空数据 {len(self.empty)} 项（{', '.join(self.empty[:3])}）")
+        if self.stale:
+            days = sorted({d for _, d in self.stale})
+            parts.append(f"非今日数据 {len(self.stale)} 项（数据日 {', '.join(days)}）")
+        if self.skipped:
+            parts.append(f"未跑 {len(self.skipped)} 项")
+        if self.no_candidates:
+            parts.append("未取到任何候选标的（不是「没有机会」）")
+        if not parts:
+            return ""
+        return "本轮缺数据：" + "；".join(parts)
+
+
+def evidence_payload(run: MarketRun) -> dict:
+    """出站证据的缺口摘要（与 `evidence_pack` 的 ok/missing 互补，不替代它）。"""
+    return {
+        "market": run.market,
+        "ok": run.ok,
+        "failed": run.failed,
+        "skipped": list(run.skipped),
+        "denied": list(run.denied),
+        "empty": list(run.empty),
+        "stale": [[label, day] for label, day in run.stale],
+        "data_date": run.data_date,
+        "no_candidates": run.no_candidates,
+        "missing_note": run.missing_note(),
+    }
 
 
 @dataclass(frozen=True)
@@ -259,6 +366,10 @@ async def _call(tool: str, args: dict, executor, *,
     text = str(out or "").strip()
     if not text:
         return False, None, "empty", _ms(t0)
+    # 有响应 ≠ 有证据：拒权/未开通/空库整条按失败记（2026-11-10 复审 P0）。
+    verdict = _verdict(text)
+    if verdict != "ok":
+        return False, None, verdict, _ms(t0)
     return True, text, None, _ms(t0)
 
 
@@ -312,6 +423,7 @@ async def _exec_steps(steps: list[_Step], executor, market: str, trace=None,
         await asyncio.gather(*(_one(i, s) for i, s in pending), return_exceptions=True)
 
     run = MarketRun(market=market)
+    today = _date.today()
     # 统一按步骤顺序结算 + 记轨迹：账目与执行先后无关，便于回归比对
     for idx, step in enumerate(steps):
         if step.skip:
@@ -322,11 +434,26 @@ async def _exec_steps(steps: list[_Step], executor, market: str, trace=None,
             continue
         ok, text, err, ms = slots[idx] or (False, None, "unknown", 0)
         if ok and text is not None:
+            # 昨日榜不许认今日（2026-11-10 复审 P0）：正文自带的最晚日期早于今天，
+            # 这条证据只能算「数据日 X」，不能进今天的证据块。
+            d = payload_date(text)
+            if d is not None and d < today:
+                day = d.isoformat()
+                run.stale.append((step.label, day))
+                run.failed += 1
+                run.errors.append(f"{step.label}:stale_data:{day}")
+                _record(trace, step.tool, step.symbol, ok=False,
+                        error=f"stale_data:{day}", ms=ms, args=step.args)
+                continue
             run.outputs.append((step.label, text))
             run.ok += 1
             _record(trace, step.tool, step.symbol, ok=True, ms=ms, result=text, args=step.args)
             continue
         run.failed += 1
+        if err == "denied":
+            run.denied.append(step.label)
+        elif err == "empty":
+            run.empty.append(step.label)
         if err != "empty":
             run.errors.append(f"{step.label}:{err}")
         _record(trace, step.tool, step.symbol, ok=False, error=err, ms=ms, args=step.args)
@@ -422,6 +549,29 @@ def compose_market_prompt(recipe, run: MarketRun, question: str,
         "请只依据这些数据写结论：每个数字必须能在下面的证据里找到原文，缺失的维度写「暂无」，"
         "不要补充任何未列出的数据，也不要推测。"
     )
+    note = run.missing_note()
+    if note:
+        rule += (
+            f"\n\n【本轮缺口（系统判定，必须写进口径段）】{note}。"
+            "拒权/空数据/非今日数据都算**没取到**：不许写成「没有」「为零」，也不许拿别的日期或常识补齐。"
+        )
+    if run.stale:
+        days = ", ".join(sorted({d for _, d in run.stale}))
+        rule += (
+            f"\n以下维度的数据日不是今天（{days}），**禁止当作今日行情**："
+            f"{', '.join(label for label, _ in run.stale)}。"
+            "引用时必须写明数据日期，结论里不得出现「今天」「今日」指代它们。"
+        )
+    if run.denied:
+        rule += (
+            f"\n以下维度是**无权限/未开通**（不是没有数据）：{', '.join(run.denied)}；"
+            "口径段要写「未取到（数据源未授权）」。"
+        )
+    if run.no_candidates:
+        rule += (
+            "\n本轮证据里**没有任何候选代码**：候选段落必须写「未取到候选（数据未覆盖）」，"
+            "不许把热度/情绪描述当成候选标的，更不许据此断言「今天没有机会」。"
+        )
     if run.skipped:
         rule += (
             f"\n以下维度本轮**没有取到**：{', '.join(run.skipped)}。"
@@ -435,9 +585,16 @@ def compose_market_prompt(recipe, run: MarketRun, question: str,
 
     head = f"【用户问题】{question}"
     blocks = [head,
-              f"\n===== 全市场（{run.market}）：成功 {run.ok} / 失败 {run.failed} / 未跑 {len(run.skipped)} ====="]
+              f"\n===== 全市场（{run.market}）：成功 {run.ok} / 失败 {run.failed} / "
+              f"未跑 {len(run.skipped)} / 拒权 {len(run.denied)} / 空 {len(run.empty)} / "
+              f"非今日 {len(run.stale)} ====="]
+    if run.data_date:
+        blocks.append(f"（证据中最晚数据日：{run.data_date}）")
     if run.skipped:
         blocks.append(f"（本轮未跑：{', '.join(run.skipped)}）")
+    if run.stale:
+        blocks.append("（非今日数据，不许当今日："
+                      + ", ".join(f"{label}@{day}" for label, day in run.stale) + "）")
     used = 0
     for label, text in run.outputs:
         body = text if len(text) <= PER_TOOL_CHARS else text[:PER_TOOL_CHARS] + "\n…（后略）"
@@ -449,6 +606,14 @@ def compose_market_prompt(recipe, run: MarketRun, question: str,
     if not run.outputs:
         blocks.append("（全部工具取数失败：请在结论里明确写「数据未取到」，不要推断）")
     return system, "\n".join(blocks)
+
+
+def _missing_prefix(run: MarketRun) -> str:
+    """确定性缺口前缀：缺口不靠模型自觉写，由代码写在正文最前面（2026-11-10 复审 P0）。"""
+    note = run.missing_note()
+    if not note:
+        return ""
+    return f"> 数据口径：{note}\n\n"
 
 
 def _audit(text: str, run: MarketRun, system: str, question: str) -> str:
@@ -491,8 +656,7 @@ async def answer_market(ai_client, recipe, executor, question: str, *, market: s
         return None
     if not text:
         return None
-    audited = _audit(text, run, system, question)
-    # 证据旁路：走到这里说明这些数据真的被用来写结论了，才允许出站。
+    audited = _missing_prefix(run) + _audit(text, run, system, question)
     # 上面两条 `return None`（取数全失败 / 写结论失败）都在这之前，回落路径不留证据。
     _emit_evidence([run], trace, fact_pack, evidence_sink)
     return audited
@@ -520,9 +684,12 @@ async def answer_market_stream(ai_client, recipe, executor, question: str, *, ma
             run = payload if isinstance(payload, MarketRun) else None
     if run is None:
         return
+    prefix = _missing_prefix(run)
+    if prefix:                 # 缺口先于正文出站：读第一段就知道哪些没取到
+        yield "delta", prefix
     system, user_block = compose_market_prompt(recipe, run, question, context, fact_pack)
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user_block}]
-    acc: list[str] = []
+    acc: list[str] = [prefix] if prefix else []
     final = None
     try:
         async for kind, payload in ai_client.chat_with_tools_stream(msgs, tools=[], temperature=0.2):

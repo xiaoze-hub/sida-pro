@@ -52,6 +52,11 @@ class Recipe:
     # 「能取到更多域」本身不是抢路由的理由，否则「持仓要不要减，看看席位」这种附带一句
     # 「席位」的问题会被换到龙虎榜配方上，持仓/盘中工具全丢。只有明确列出的管线允许被接管。
     rescues_pipelines: tuple[str, ...] = ()
+    # 「只做全市场扫描」的配方（2026-11-10 复审 P0）：工具集里没有任何单标的读数，
+    # 正文点了票时拿它答等于答错对象。声明出来，路由才知道该退到单标的诊断，
+    # 而不是靠"工具名像不像扫描"去猜 —— intraday_watcher/auction_hunter 同样 scope=market，
+    # 但它们能吃自选/持仓的代码，不许被这条规则换走。
+    scan_only: bool = False
 
     def public(self) -> dict:
         """给前端 /api/copilot/agents 的元信息（不含提示词正文，避免泄露与大包体）。"""
@@ -107,6 +112,7 @@ def _parse(path: Path) -> Recipe:
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),
         covers_domains=tuple(str(x) for x in (raw.get("covers_domains") or ())),
         rescues_pipelines=tuple(str(x) for x in (raw.get("rescues_pipelines") or ())),
+        scan_only=bool(raw.get("scan_only") or False),
     )
 
 
@@ -285,6 +291,32 @@ def match_recipe_for(text: str, *, has_symbol: bool) -> Recipe | None:
     winner = match_recipe(text or "")
     if winner is None:
         return None
+
+    # 持仓护栏（2026-11-10 复审 P0）：问「我的持仓…尾盘/加仓」时，赢家可能只是被
+    # `尾盘` 抓到的单标的配方，工具里没有 `get_portfolio` —— 用户问的是自己那篮子，
+    # 却拿到一只票的分时解读。持仓类问句只在「带 get_portfolio 的配方」里选。
+    from src.harness.routing import has_symbol_scope, is_portfolio_intent
+
+    # 口径可能由调用方按 bound 传进来；这里统一按问句本身复核一次 ——
+    # 绑着 002361 不代表「今天有什么能建仓的」是在问那只票（复审 P0 原句）。
+    if has_symbol:
+        has_symbol = has_symbol_scope(text or "", bound="bound")
+
+    if is_portfolio_intent(text or ""):
+        # 持仓问句只认带 get_portfolio 的配方；后面的 symbol/market 口径改道会把它换掉
+        # （`我的持仓现在什么风险` → 单标的管线 → 持仓工具全丢），所以这里定点返回。
+        if "get_portfolio" in winner.tools:
+            return winner
+        pool = [k for k in _scored(text or "") if "get_portfolio" in k[3].tools]
+        alt = _best(pool)
+        if alt is not None:
+            logger.info("持仓问句改走带 get_portfolio 的配方: %s → %s", winner.id, alt[3].id)
+            return alt[3]
+        _rj = get_recipe("risk_judge")
+        if _rj is not None and "get_portfolio" in _rj.tools:
+            logger.info("持仓问句无关键词候选，落到风控裁判: %s → risk_judge", winner.id)
+            return _rj
+
     want = "symbol" if has_symbol else "market"
     if (getattr(winner, "scope", "symbol") or "symbol") == want:
         return winner
@@ -294,6 +326,13 @@ def match_recipe_for(text: str, *, has_symbol: bool) -> Recipe | None:
             if (getattr(k[3], "scope", "symbol") or "symbol") == want]
     alt = _best(pool)
     if alt is None or alt[3] is winner:
+        if want == "symbol" and getattr(winner, "scan_only", False):
+            # 正文点了票，命中的却只有全市场扫描配方（`建仓` → entry_scanner）。
+            # 单标的问句不许跑全市场扫描：退到全景诊断，宁可少扫也不答错对象。
+            _dd = get_recipe("deep_diagnosis")
+            if _dd is not None:
+                logger.info("单标的问句命中纯扫描配方，改走全景诊断: %s → deep_diagnosis", winner.id)
+                return _dd
         return winner
     logger.info(
         "配方按问句口径改路由: %s(%s) → %s(%s, score=%s, has_symbol=%s)",
