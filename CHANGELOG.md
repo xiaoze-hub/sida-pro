@@ -1,5 +1,8 @@
 ## [未发布]
 
+### test-反馈接口测试隔离
+- 清理隔离测试库中前序测试遗留的 owner，保证登录引导不受测试顺序影响。
+
 ### fix-数智参谋单股问句兜底口径（CI shard2 回归）
 - 兜底路由恢复听护栏：`route_for_request` 的最后一档重新以 `symbol_guard.is_stock_question` 判定单股问句（记 `stock_question`、温度 0.2）。上一版把这一档整体换成 `has_symbol_scope`（只认正文 6 位代码/会话绑定），护栏判「是单股问句」的输入掉进 `default`，口径被记成闲聊且温度回到 0.5；`tests/test_proposal_collection_gating.py::test_stock_question_fallback_excludes_collection_tool` 因此在 CI shard 2 变红。
 - 新档位排在市场问句之后：举例代码（`有没有像 600111 这样的票`）护栏同样返回 True，但口径是市场，仍由前面的市场分支接走，不被拽回单标的；全市场（`今天尾盘有适合建仓的股票吗，可以有创业板` → `entry_scanner`）、持仓（→ `intraday_watcher`，`get_portfolio` 仍在车道）、明确代码（→ `intraday_analyst`）三处截图口径与工具权限不变，采集工具（`fallback=False`）仍不进兜底集。

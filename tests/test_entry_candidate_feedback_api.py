@@ -27,7 +27,9 @@ def client(monkeypatch):
     try:
         from tests.conftest import purge_users
 
-        purge_users(db, only_username="admin")
+        # pytest 使用独立临时数据库；先清掉其他测试留下的 owner，
+        # 否则惰性 bootstrap 不会创建当前测试账号。
+        purge_users(db)
         db.commit()
     finally:
         db.close()
