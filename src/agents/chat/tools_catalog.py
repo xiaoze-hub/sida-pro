@@ -2130,13 +2130,41 @@ async def _delegate(name: str, db: Any, args: dict[str, Any], user: Any) -> str:
         return ""
 
 
+def _evidence_base_date(sections: list[str]) -> str | None:
+    """从各分条正文里抽真实数据基准日（YYYY-MM-DD），抽不到 → None（未知）。
+
+    2026-11-10: 域信封的「时点」过去写 `_now_cn()`（调用墙钟），于是 11-05 的
+    证据在 11-10 的信封上写成「时点 11-10 14:40」，模型据此把它当今日。
+    现在只认真实日期：多段证据取**最早**的那天（域整体只有最旧那天那么新），
+    没有任何日期就写「未知」。
+    """
+    from src.core.signal_summary import extract_dates
+
+    found: list[str] = []
+    for s in sections:
+        for d in extract_dates(s):
+            if d not in found:
+                found.append(d)
+    return min(found) if found else None
+
+
 async def _query_market_sentiment(db: Any, params: dict[str, Any], user: Any) -> str:
     text_out = await _delegate("get_sentiment_cycle", db, {}, user)
     sections = [text_out] if text_out.strip() else []
+    base = _evidence_base_date(sections)
+    source = "复用 get_sentiment_cycle（涨停池/连板高度情绪周期模型 + 市场广度）"
+    if sections:
+        # 该域每个分条各自带自己的交易日；整体时效按最旧的那天判（保守）。
+        from src.core.signal_summary import resolve_freshness
+
+        fresh = resolve_freshness(base)
+        source += f"；数据基准日 {fresh['base_date'] or '未知'}"
+        if fresh.get("is_current") is not True:
+            sections = sections + [f"时效：{fresh['note']}"]
     return render_domain_sections(
         "market.sentiment",
-        as_of=_now_cn(),
-        source="复用 get_sentiment_cycle（涨停池/连板高度情绪周期模型 + 市场广度）",
+        as_of=base or "未知",
+        source=source,
         sections=sections,
         missing=[] if sections else ["get_sentiment_cycle 未返回内容（涨停池可能不可用）"],
     )

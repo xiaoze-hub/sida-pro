@@ -331,43 +331,16 @@ def _read_forecast(symbol: str = "", limit: int = 5) -> str:
         return f"系统预测读取失败: {e}"
 
 
+def _chat_now_cn() -> datetime:
+    """当前北京时间（抽成函数便于测试注入；不要在业务里直接用墙钟）。"""
+    from src.core.signal_summary import now_cn
+
+    return now_cn()
+
+
 def _read_opportunities(db: Session, limit: int = 10) -> str:
-    """读取今日机会候选(主库 entry_candidates, active 且有信号, 取最新日期, 按得分降序)。"""
-    latest = (
-        db.query(func.max(EntryCandidate.snapshot_date))
-        .filter(EntryCandidate.status == "active")
-        .scalar()
-    )
-    if not latest:
-        return "暂无机会候选（今日没有 active 候选）。"
-    total = (
-        db.query(func.count(EntryCandidate.id))
-        .filter(EntryCandidate.status == "active", EntryCandidate.snapshot_date == latest)
-        .scalar()
-    )
-    rows = (
-        db.query(EntryCandidate)
-        .filter(
-            EntryCandidate.status == "active",
-            EntryCandidate.snapshot_date == latest,
-            EntryCandidate.signal.isnot(None),
-            EntryCandidate.signal != "",
-        )
-        .order_by(EntryCandidate.score.desc())
-        .limit(max(1, min(int(limit), 50)))
-        .all()
-    )
-    if not rows:
-        return f"今日({latest})暂无带信号的机会候选（共{total}条 active，均无 signal）。"
-    lines = [f"【今日机会候选】{latest} 共{total}条active，按得分Top{len(rows)}:"]
-    for c in rows:
-        target = c.target_price
-        target_str = f"{target:.2f}" if isinstance(target, (int, float)) else "—"
-        lines.append(
-            f"- {c.stock_symbol} {c.stock_name} 得分{c.score:g} 操作:{c.action_label} "
-            f"信号:{c.signal} 目标价:{target_str}"
-        )
-    return "\n".join(lines)
+    from src.agents.chat.opportunities_read import read_opportunities
+    return read_opportunities(db, limit, now=_chat_now_cn())
 
 
 async def _read_sentiment_cycle() -> str:
@@ -1018,6 +991,16 @@ async def _build_ai_messages(
     send_message(非流式)与 send_message_stream(流式)共用, 保证两条链路逻辑一致。
     """
     system_content = SYSTEM_PROMPT + CAPABILITY_NOTES
+
+    # 时间锚（2026-11-10 硬校验）：SYSTEM_PROMPT 里没有任何当前日期，模型只能靠
+    # 墙钟/猜测，于是 11-05 的证据会被当成 11-10 的今日。这里用代码算出北京时间 +
+    # 交易日历（最近交易日/是否已收盘），与证据时效判定同一事实源。
+    try:
+        from src.core.signal_summary import time_anchor_block
+
+        system_content += "\n\n" + time_anchor_block()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[chat] 时间锚注入失败(静默降级): %s", e)
 
     # 绑定股票提示
     if conv.stock_symbol and conv.stock_market:

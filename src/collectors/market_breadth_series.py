@@ -234,12 +234,16 @@ def sync_breadth_series(db, *, days: int = DEFAULT_DAYS) -> dict[str, Any]:
     }
 
 
-def latest_with_percentile(db, *, days: int = DEFAULT_DAYS) -> dict[str, Any]:
+def latest_with_percentile(db, *, days: int = DEFAULT_DAYS, now=None) -> dict[str, Any]:
     """最新一日广度 + 各指标历史分位（API / AI 工具用）。
 
     读**落库表**而非重算（毫秒级）：重算要在 5000+ 标的上跑 250 交易日窗口，
     会把 chat 对话卡住（实测过重会触发 PG statement timeout）。表由每日
     `sync_breadth_series` 维护，分位在内存里按表内序列算。
+
+    2026-11-10 时效修复：返回体里带上 `expected`（最近交易日）/`stale`/
+    `is_today`/`lag_trading_days`/`freshness`，由 `resolve_freshness` 按
+    **该行真实 trade_date** 判定；日历不可用时这些字段为 None（不猜今日）。
     """
     bars = _load_stored_bars(db, days=days)
     if not bars:
@@ -261,6 +265,15 @@ def latest_with_percentile(db, *, days: int = DEFAULT_DAYS) -> dict[str, Any]:
     out["complete"] = complete
     out["median_symbols"] = median
     out["complete_threshold"] = threshold
+
+    from src.core.signal_summary import resolve_freshness
+
+    fresh = resolve_freshness(out.get("trade_date"), now=now)
+    out["expected"] = fresh["expected"]
+    out["stale"] = fresh["stale"]
+    out["is_today"] = fresh["is_today"]
+    out["lag_trading_days"] = fresh["lag_trading_days"]
+    out["freshness"] = fresh
     return out
 
 
@@ -310,6 +323,11 @@ def render_text(summary: dict[str, Any]) -> str:
         else:
             lines.append(f"· {label}：{_fmt_metric(val, pct)}")
     lines.append(f"· 样本：近 {summary.get('bars_used', '?')} 个交易日")
+    fresh = summary.get("freshness") or {}
+    if fresh and fresh.get("is_current") is not True:
+        # 2026-11-10: 基准日不是最近交易日（或日历不可用）时，必须当场写清，
+        # 否则模型会把 11-05 的读数当今日盘面。
+        lines.insert(1, f"· ⏳ 时效：{fresh.get('note') or '基准日无法判定'}")
     if not summary.get("complete", True):
         lines.append("· ⚠️ 该交易日标的数偏少（数据未收全），涨跌家数仅供参考")
     lines.append(

@@ -35,7 +35,11 @@ def test_render_all_blocks():
         "indices_flow": {"data_status": "ok", "content": "指数资金：上证-0.3%"},
     }
     text = ss.render_signal_summary(blocks)
-    assert "今日系统信号摘要" in text
+    # 2026-11-10 时效修复：标题只写「系统信号摘要(基准日 ...)」，且带时效行；
+    # 不再无条件写「今日」。
+    assert "系统信号摘要" in text and "基准日" in text
+    assert "今日系统信号摘要" not in text
+    assert "时效：" in text
     for b in blocks.values():
         assert b["content"] in text
     # 5 块按 _BLOCK_ORDER 顺序出现
@@ -170,5 +174,13 @@ def test_read_latest_summary_text_none():
 
 def test_read_latest_summary_text_hit():
     class Row:
-        text = "--- 今日系统信号摘要 ---"
-    assert ss.read_latest_summary_text(_DB(Row())) == "--- 今日系统信号摘要 ---"
+        snapshot_date = "2026-11-05"
+        text = "--- 今日系统信号摘要(2026-11-05) ---\n情绪周期：发酵"
+    out = ss.read_latest_summary_text(_DB(Row()))
+    head = out.splitlines()[0]
+    # 2026-11-10 时效修复：库里旧标题「今日系统信号摘要」必须被改写成真实基准日，
+    # 并补一行时效说明。
+    assert head == "--- 系统信号摘要(基准日 2026-11-05) ---"
+    assert "时效：" in out
+    assert "今日系统信号摘要" not in out
+    assert "情绪周期：发酵" in out

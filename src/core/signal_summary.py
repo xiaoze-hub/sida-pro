@@ -15,9 +15,232 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+import re
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+_CST = ZoneInfo("Asia/Shanghai")
+_WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+#: A 股连续竞价收盘时刻（用于判定「最近已收盘交易日」）。
+MARKET_CLOSE_HOUR = 15
+_ISO_DAY_RE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+
+
+# ──────────────────────── 证据时效硬校验（2026-11-10）────────────────────────
+# 用户现场：11-05 的旧证据被当成 11-10 的「今日盘面」。提示词叮嘱不算校验，
+# 所以时效在这里用**代码**判定：每一条注入路径各自用自己的真实基准日比对
+# 交易日历（单一事实源 src.core.ladder_freshness），得出：
+#   - 基准日是不是今天 / 是不是最近交易日；
+#   - 落后几个交易日；
+#   - 无交易日历（年份未覆盖）时**不猜**、明写无法判定。
+# 历史数据允许在场（历史对比有价值），但必须写真实基准日 + 过期说明，
+# 不得冒充今日，也不许被静默删除。
+
+
+def opportunity_header(latest, *, now=None) -> str:
+    """按快照实际日期标注机会候选，日历缺失时不猜。"""
+    fresh = resolve_freshness(latest, now=now)
+    if fresh.get("is_today") is True:
+        return f"【今日机会候选】{latest}"
+    if fresh.get("is_current") is True:
+        return f"【机会候选·基准日 {latest}】最近交易日候选"
+    if fresh.get("calendar") == "unavailable":
+        return f"【机会候选·基准日 {latest}】时效未判定（交易日历不可用）"
+    lag = fresh.get("lag_trading_days")
+    return f"【历史机会候选】基准日 {latest}（落后 {lag if lag is not None else '?'} 个交易日，非今日，仅作背景/对比）"
+
+
+def now_cn(now: datetime | None = None) -> datetime:
+    """北京时间当前时刻。传入 naive datetime 视为北京时间（测试注入用）。"""
+    if now is None:
+        return datetime.now(_CST)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=_CST)
+    return now.astimezone(_CST)
+
+
+def _parse_day(value) -> date | None:
+    """YYYY-MM-DD / YYYYMMDD / date / datetime → date；其它 → None（不猜）。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    m = _ISO_DAY_RE.search(s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 8:
+        try:
+            return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        except ValueError:
+            return None
+    return None
+
+
+def extract_dates(text: str) -> list[str]:
+    """抽出文本里所有 ISO 日期（YYYY-MM-DD），去重保序。"""
+    out: list[str] = []
+    for m in _ISO_DAY_RE.finditer(str(text or "")):
+        day = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        if day not in out:
+            out.append(day)
+    return out
+
+
+def _expected_latest(now: datetime) -> tuple[date | None, str]:
+    """期望最新交易日（<= now 当日）。日历未覆盖年份 → (None, "unavailable")。"""
+    try:
+        from src.core.ladder_freshness import expected_latest_trading_date
+
+        return _parse_day(expected_latest_trading_date(now)), "ok"
+    except Exception as exc:  # noqa: BLE001 - 日历缺失/未覆盖年份
+        logger.warning("[时效] 交易日历不可用，无法判定最新交易日: %s", exc)
+        return None, "unavailable"
+
+
+def _trading_lag(base: date, expected: date) -> int | None:
+    try:
+        from src.core.ladder_freshness import missing_trading_days
+
+        return len(
+            missing_trading_days(base.strftime("%Y%m%d"), expected.strftime("%Y%m%d"))
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[时效] 缺失交易日计数失败: %s", exc)
+        return None
+
+
+def resolve_freshness(base_date, *, now: datetime | None = None) -> dict:
+    """判定某条证据的真实基准日相对「今天（北京时间）」的时效。
+
+    返回 dict:
+      base_date / today / weekday / expected / calendar(ok|unavailable)
+      is_today(bool|None)   base == 北京今天
+      is_current(bool|None) base == 最近交易日
+      stale(bool|None)      base != 最近交易日
+      lag_trading_days(int|None) / label / note
+    任何一项判不出来就返回 None，**不回落墙钟猜测**。
+    """
+    dt = now_cn(now)
+    today = dt.date()
+    weekday = _WEEKDAY_CN[today.weekday()]
+    base = _parse_day(base_date)
+    expected, calendar = _expected_latest(dt)
+
+    out: dict = {
+        "base_date": base.isoformat() if base else None,
+        "today": today.isoformat(),
+        "weekday": weekday,
+        "expected": expected.isoformat() if expected else None,
+        "calendar": calendar,
+        "is_today": None,
+        "is_current": None,
+        "stale": None,
+        "lag_trading_days": None,
+        "label": "",
+        "note": "",
+    }
+
+    if base is None:
+        out["label"] = "基准日未知"
+        out["note"] = (
+            "该域未标注数据基准日（未知），无法判定新旧 —— "
+            "不得当作今日盘面，需人工核对后再用"
+        )
+        return out
+
+    out["is_today"] = base == today
+
+    if calendar != "ok" or expected is None:
+        out["label"] = f"基准日 {base.isoformat()}"
+        out["note"] = (
+            f"基准日 {base.isoformat()}；北京时间今日 {today.isoformat()}；"
+            "交易日历不可用，无法判定是否为最新交易日 —— "
+            "不得当作今日盘面，需人工核对"
+        )
+        return out
+
+    lag = _trading_lag(base, expected) if base <= expected else None
+    out["lag_trading_days"] = lag
+    out["is_current"] = base == expected
+    out["stale"] = base != expected
+
+    if base == expected and base == today:
+        out["label"] = "今日"
+        out["note"] = (
+            f"基准日 {base.isoformat()}（今日，与最近交易日一致，可用于今日结论）"
+        )
+    elif base == expected:
+        out["label"] = "最近交易日"
+        out["note"] = (
+            f"基准日 {base.isoformat()}（最近交易日；今日 {today.isoformat()} "
+            f"{weekday} 休市，非今日新增数据，禁止写成「今日」）"
+        )
+    elif base < expected:
+        out["label"] = "历史"
+        out["note"] = (
+            f"基准日 {base.isoformat()} 早于最近交易日 {expected.isoformat()}"
+            f"（落后 {lag if lag is not None else '?'} 个交易日）；"
+            "属历史快照，可作背景/对比，不得冒充今日盘面或直接当作今日结论依据"
+        )
+    else:
+        out["label"] = "基准日异常"
+        out["note"] = (
+            f"基准日 {base.isoformat()} 晚于最近交易日 {expected.isoformat()}"
+            "（库内日期异常或时区错位），不得当作今日盘面"
+        )
+    return out
+
+
+def time_anchor_block(now: datetime | None = None) -> str:
+    """system 用的时间锚（北京时间 + 交易日历），全部由代码算出。"""
+    dt = now_cn(now)
+    today = dt.date()
+    weekday = _WEEKDAY_CN[today.weekday()]
+    expected, calendar = _expected_latest(dt)
+    lines = [
+        "--- 当前时间（北京时间，代码计算，非模型推测/非宿主墙钟）---",
+        f"现在：{dt:%Y-%m-%d %H:%M} {weekday}",
+    ]
+    if calendar != "ok" or expected is None:
+        lines.append(
+            f"今日：{today.isoformat()}（{weekday}）；交易日历不可用，"
+            "无法判定今日是否开市、最近交易日是哪天 —— "
+            "任何数据基准日都不得改写成今日"
+        )
+        return "\n".join(lines)
+
+    if expected == today:
+        if dt.hour < MARKET_CLOSE_HOUR:
+            try:
+                from src.core.trading_calendar import prev_trading_day
+
+                closed = prev_trading_day(today)
+            except Exception:  # noqa: BLE001
+                closed = None
+            lines.append(f"今日：{today.isoformat()}（{weekday}，交易日，尚未收盘）")
+            if closed is not None:
+                lines.append(f"最近已收盘交易日：{closed.isoformat()}")
+        else:
+            lines.append(f"今日：{today.isoformat()}（{weekday}，交易日，已收盘）")
+            lines.append(f"最近已收盘交易日：{today.isoformat()}")
+        lines.append(f"最近交易日（<=今日）：{expected.isoformat()}")
+    else:
+        lines.append(f"今日：{today.isoformat()}（{weekday}，休市）")
+        lines.append(f"最近已收盘交易日：{expected.isoformat()}")
+        lines.append(f"最近交易日（<=今日）：{expected.isoformat()}")
+    return "\n".join(lines)
+
 
 # 5 块顺序(决定 text 渲染顺序)
 _BLOCK_ORDER = ("sentiment", "mainline", "market_scan", "limit_up", "indices_flow")
@@ -283,18 +506,30 @@ async def build_signal_summary(db) -> dict:
         "limit_up": await _block_limit_up(),
         "indices_flow": await _block_indices_flow(),
     }
-    text = render_signal_summary(blocks)
+    dt = now_cn()
+    snap = dt.strftime("%Y-%m-%d")
+    text = render_signal_summary(blocks, snapshot_date=snap, now=dt)
     return {
-        "snapshot_date": datetime.now().strftime("%Y-%m-%d"),
+        "snapshot_date": snap,
         "blocks": blocks,
         "text": text,
     }
 
 
-def render_signal_summary(blocks: dict) -> str:
-    """渲染纯文本摘要(≤800 字), 注入 system message 用。"""
-    date = datetime.now().strftime("%Y-%m-%d")
-    lines = [f"--- 今日系统信号摘要({date}) ---"]
+def render_signal_summary(blocks: dict, *, snapshot_date: str | None = None,
+                          now: datetime | None = None) -> str:
+    """渲染纯文本摘要(≤800 字), 注入 system message 用。
+
+    标题写**真实基准日**并用 `resolve_freshness` 判时效（2026-11-10）：
+    旧实现标题一律写「今日系统信号摘要(now)」，把 11-05 的快照伪装成当天数据。
+    """
+    dt = now_cn(now)
+    day = str(snapshot_date or "").strip() or dt.strftime("%Y-%m-%d")
+    fresh = resolve_freshness(day, now=dt)
+    lines = [
+        f"--- 系统信号摘要(基准日 {fresh['base_date'] or day}) ---",
+        f"时效：{fresh['note']}",
+    ]
     for key in _BLOCK_ORDER:
         b = blocks.get(key) or {}
         lines.append(b.get("content", "数据缺失"))
@@ -344,8 +579,15 @@ def run_signal_summary_job() -> dict:
         db.close()
 
 
-def read_latest_summary_text(db) -> str | None:
-    """对话热路径: 读最新信号摘要 text(纯文本), 无快照 → None(不注入)。"""
+def read_latest_summary_text(db, *, now: datetime | None = None) -> str | None:
+    """对话热路径: 读最新信号摘要 text(纯文本), 无快照 → None(不注入)。
+
+    2026-11-10 时效修复: 旧实现原样返回库里的 text —— 而 text 第一行是写入时
+    渲染的「今日系统信号摘要(当天)」, 于是 11-05 的快照进了 11-10 的 system 后
+    仍自称「今日」。现在**每条快照都按自己的 snapshot_date 重算时效**:
+    标题换成真实基准日, 第二行写时效(今日 / 最近交易日 / 历史落后 N 个交易日 /
+    日历不可用时无法判定)。历史快照仍注入(作背景), 但不再冒充今日。
+    """
     try:
         from src.db.models import SignalSummaryDaily
 
@@ -354,9 +596,25 @@ def read_latest_summary_text(db) -> str | None:
             .order_by(SignalSummaryDaily.snapshot_date.desc(), SignalSummaryDaily.id.desc())
             .first()
         )
-        if row and row.text:
-            return row.text
-        return None
+        if not (row and row.text):
+            return None
+        dt = now_cn(now)
+        base = str(getattr(row, "snapshot_date", "") or "").strip() or None
+        if not base:
+            dates = extract_dates(row.text)
+            base = dates[0] if dates else None
+        fresh = resolve_freshness(base, now=dt)
+
+        body = [
+            ln
+            for ln in str(row.text).splitlines()
+            if not (ln.strip().startswith("---") and "系统信号摘要" in ln)
+            and not ln.strip().startswith("时效：")
+        ]
+        while body and not body[0].strip():
+            body.pop(0)
+        header = f"--- 系统信号摘要(基准日 {fresh['base_date'] or '未知'}) ---"
+        return "\n".join([header, f"时效：{fresh['note']}", *body])
     except Exception as e:  # noqa: BLE001
         logger.warning("[信号摘要] 读快照失败: %s", e)
         return None
