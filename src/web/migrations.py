@@ -6559,6 +6559,29 @@ CREATE TABLE IF NOT EXISTS etf_minute_flow (
         )
 
 
+def _m245_etf_minute_source(conn: Connection) -> None:
+    """`etf_minute_flow` 增加来源列（2026-11-10）。
+
+    为什么必须落来源：TQ 的 1m 来自客户端 `minline/*.lc1`，2026-11-05 21:20 后停更，
+    11/06、11/09 的分钟数据只能由东财 `trends2` 兜底。两种来源的口径不同（竞价归属、
+    量单位原始写法），混在一张表里而不标来源，事后无法判断「这一天的分钟是谁的、
+    能不能和 TQ 的基线直接比」。列出来才能守住「同一交易日不混源」。
+
+    存量行判定：迁移之前该表**唯一**的写入方是 `src/collectors/tq_etf_watch.write_minute`
+    （全仓 grep 确认），所以存量行回填 `tdx_tq`；新写入方各自显式写自己的标识
+    （`tdx_tq` / `em_trends2`）。NULL 表示"来源未知"，只可能出现在手工构造的数据里。
+    """
+    _add_column_if_missing(
+        conn, "etf_minute_flow", "source",
+        "ALTER TABLE etf_minute_flow ADD COLUMN source VARCHAR(16)",
+    )
+    if not _has_table(conn, "etf_minute_flow"):
+        return
+    conn.execute(
+        text("UPDATE etf_minute_flow SET source = 'tdx_tq' WHERE source IS NULL")
+    )
+
+
 def _m244_etf_flow_daily(conn: Connection) -> None:
     """市场级 ETF 规模/净申购日序列（2026-11-05）。
 
@@ -7029,6 +7052,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(242, "skill_usage_client_ip", _m242_skill_usage_client_ip),
     Migration(243, "etf_minute_flow", _m243_etf_minute_flow),
     Migration(244, "etf_flow_daily", _m244_etf_flow_daily),
+    Migration(245, "etf_minute_source", _m245_etf_minute_source),
 )
 
 

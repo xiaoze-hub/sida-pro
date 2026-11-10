@@ -73,6 +73,10 @@ single_share_source: str | None = None
 #: 分钟落库保留交易日数（20 日基线 + 余量）。
 MINUTE_RETENTION_DAYS = 30
 
+#: 本采集器写入 `etf_minute_flow.source` 的标识（迁移 245）。兜底源用 `em_trends2`
+#: （见 `src/collectors/em_etf_minute.py`）—— 同一交易日只允许一种来源。
+MINUTE_SOURCE_TQ = "tdx_tq"
+
 
 # ── 元数据查询（纯函数，前端/API 共用） ────────────────────────────────────
 
@@ -300,10 +304,10 @@ def write_minute(
         from src.db.dialect import upsert_sql
         from src.web.database import engine
 
-        cols = ["trade_date", "minute", "etf_code", "amount_wan", "volume", "updated_at"]
+        cols = ["trade_date", "minute", "etf_code", "amount_wan", "volume", "source", "updated_at"]
         sql = upsert_sql(
             "etf_minute_flow", cols, ["trade_date", "minute", "etf_code"],
-            ["amount_wan", "volume", "updated_at"],
+            ["amount_wan", "volume", "source", "updated_at"],
         ) + (
             " WHERE etf_minute_flow.amount_wan IS DISTINCT FROM excluded.amount_wan"
             " OR etf_minute_flow.volume IS DISTINCT FROM excluded.volume"
@@ -316,7 +320,8 @@ def write_minute(
                     continue
                 params.append({
                     "trade_date": trade_date, "minute": hm, "etf_code": code,
-                    "amount_wan": amt, "volume": vol, "updated_at": now,
+                    "amount_wan": amt, "volume": vol, "source": MINUTE_SOURCE_TQ,
+                    "updated_at": now,
                 })
         if not params:
             return 0
