@@ -490,6 +490,35 @@ def test_batch_question_without_code_is_not_dragged_into_symbol_pipeline():
     assert route.reason != "recipe:intraday_analyst"
 
 
+def test_fallback_stock_reason_honours_symbol_guard(monkeypatch):
+    """兜底路径上「这是单股问句」的判据必须听护栏（`symbol_guard.is_stock_question`）。
+
+    2026-11-10 复审把这一档换成 `has_symbol_scope`（只看正文代码/绑定这类字面证据），
+    护栏说"是单股问句"的输入于是掉到 `default` —— 口径被记成闲聊、温度 0.5。
+    正文里挑不出单股证据时，护栏就是唯一权威，故用桩替换它来钉这一档。
+    """
+    import src.core.symbol_guard as guard
+
+    monkeypatch.setattr(guard, "is_stock_question", lambda _t: True)
+    route = route_for_request("随便看看这个", SCHEMAS)
+    assert route.reason == "stock_question", route.reason
+    assert route.temperature == 0.2, "单股问句是数据题，温度必须降到 0.2"
+
+
+@pytest.mark.parametrize("q", [
+    "有没有类似600111这种低位放量的票",
+    "今天还有哪些票能买，比如 600111 这种",
+])
+def test_guard_stock_detection_does_not_hijack_batch_question(monkeypatch, q):
+    """护栏的 `is_stock_question` 对举例代码也返回 True，但口径是市场 —— 不许被劫持回去。"""
+    import src.core.symbol_guard as guard
+
+    monkeypatch.setattr(guard, "is_stock_question", lambda _t: True)
+    route = route_for_request(q, SCHEMAS)
+    assert route.recipe is None, getattr(route.recipe, "id", None)
+    assert route.reason == "market_question", route.reason
+
+
 def test_singular_reference_still_means_the_bound_stock():
     """"这票有没有放量" 是单数指代：绑定标的仍然是问句对象，不许被当成"要一批"。"""
     q = "这票有没有放量"

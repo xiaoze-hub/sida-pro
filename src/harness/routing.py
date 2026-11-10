@@ -204,6 +204,16 @@ def route_for_request(text: str, all_schemas: list[dict],
     if _asks_for_batch(text or ""):
         return Route(recipe=None, tools=fallback_tools, temperature=0.2,
                      reason="market_question")
+    # 最后一档听护栏：`has_symbol_scope` 只认正文代码/绑定这类**字面证据**，而
+    # 「这句话是不是在问某只票」的权威判定一直是 `symbol_guard.is_stock_question`
+    # （`context`/`chat` 两处都按它决定要不要先取数）。上一版把这一档整体换成
+    # `has_symbol_scope`，护栏判「是单股问句」的输入就掉进 `default`：口径被记成
+    # 闲聊、温度 0.5（单股问句是数据题，必须 0.2）。
+    # 顺序不能提前：护栏对举例代码（`有没有像 600111 这样的票`）同样返回 True，
+    # 那类问句的口径是市场，先被上面的市场分支接走，不许在这里被拽回单标的。
+    if is_stock_question(text or ""):
+        return Route(recipe=None, tools=fallback_tools, temperature=0.2,
+                     reason="stock_question")
     return Route(recipe=None, tools=fallback_tools, temperature=0.5, reason="default")
 
 

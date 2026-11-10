@@ -1,5 +1,10 @@
 ## [未发布]
 
+### fix-数智参谋单股问句兜底口径（CI shard2 回归）
+- 兜底路由恢复听护栏：`route_for_request` 的最后一档重新以 `symbol_guard.is_stock_question` 判定单股问句（记 `stock_question`、温度 0.2）。上一版把这一档整体换成 `has_symbol_scope`（只认正文 6 位代码/会话绑定），护栏判「是单股问句」的输入掉进 `default`，口径被记成闲聊且温度回到 0.5；`tests/test_proposal_collection_gating.py::test_stock_question_fallback_excludes_collection_tool` 因此在 CI shard 2 变红。
+- 新档位排在市场问句之后：举例代码（`有没有像 600111 这样的票`）护栏同样返回 True，但口径是市场，仍由前面的市场分支接走，不被拽回单标的；全市场（`今天尾盘有适合建仓的股票吗，可以有创业板` → `entry_scanner`）、持仓（→ `intraday_watcher`，`get_portfolio` 仍在车道）、明确代码（→ `intraday_analyst`）三处截图口径与工具权限不变，采集工具（`fallback=False`）仍不进兜底集。
+- 新增回归用例 `test_fallback_stock_reason_honours_symbol_guard` 与 `test_guard_stock_detection_does_not_hijack_batch_question`（后者钉顺序：护栏真也不许劫持举例/要一批的问句）。
+
 ### fix-数智参谋时效终审（未知标未知，无权威时间不称已核验）
 - 老 text 快照只认「数据日期/统计日期/数据截至」显式标签，裸日期（旧格式「（2026-11-05）」）不再当数据日；且要求每条读数都带同一个显式日期才算有基准日，纯文本快照**永不**写「已核验/可用于今日结论」。
 - `blocks` 以 JSON 字符串落库（历史双编码）时先解析再逐块核验；解析失败按无结构化块处理，不再退回正文裸日期推断后整份自称今日已核验。
