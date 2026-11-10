@@ -20,8 +20,10 @@ TQ 的 1m 分钟线全部来自客户端 `vipdoc/*/minline/*.lc1`。2026-11-05 �
 3. **必须可证实对账**：`require_verified=True` 写死，`daily_ref` 缺省就地构造
    `em_etf_minute.tq_daily_ref(codes)`。本模块**不提供**跳过对账的开关（测试会检查
    源码里不存在这类字面量）。拿不到 TQ 日线 ⇒ 当天不写、报 `unverified`。
+   对账粒度是**全篮子逐只**：20 只里差一只都叫 `insufficient_etfs`，不接受 80%/16 只。
 4. **假日/残缺日/取数失败都是显式失败**：`ok=False` + 结构化原因，不吞、不当成功。
-   `deferred_today`（未闭市）与 `complete`（本来就有完整数据）是唯一不算失败的两类跳过。
+   `deferred_today`（未闭市）与 `complete`（本来就有完整全篮子数据）是唯一不算失败的两类跳过；
+   `complete` 只进 `complete_days`，不再混进 `deferred_days`。
 5. **不阻塞启动、不抢 TQ 客户端**：`register()` 只挂 cron；启动恢复在 daemon 线程里
    延迟执行，交易时段直接跳过。补缺请求是 20 只 ETF 一次批量（EM 侧）+ 一次日线 RPC。
 
@@ -53,6 +55,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import sys
 import threading
 import time
 from datetime import date, datetime
@@ -66,9 +69,42 @@ logger = logging.getLogger(__name__)
 CLOSE_HM = "1535"
 #: 错过收盘定型的补跑窗口上界；过了这个点不再回溯（有限窗口，不无限重试）。
 RETRY_DEADLINE_HM = "2200"
-#: 交易时段（含集合竞价与尾盘）：启动恢复在这两段里直接跳过，不抢 TQ 客户端进程。
+#: 交易时段（含集合竞价与尾盘 5 分钟缓冲）：启动恢复在这两段里直接跳过，不抢 TQ 客户端。
 _AM_SESSION = ("0915", "1135")
 _PM_SESSION = ("1255", "1505")
+#: TQ 收盘定型重负载窗口（15:35 起 run_close + 启动自愈同时在跑）。启动恢复若撞进来
+#: 会和分钟采集/定型抢同一个 TQ 客户端，且 catch_up_close 可能与定时 run_close 并行。
+_TQ_CLOSE_WINDOW = ("1535", "1630")
+
+
+def _app_now(now: datetime | None = None) -> datetime:
+    """把"现在"统一成 app 时区(默认 Asia/Shanghai)的 naive 时间。
+
+    调度器/启动线程传进来的可能是 aware UTC（`datetime.now(timezone.utc)`）。直接
+    `strftime("%H%M")` 会得到 UTC 的钟点 —— 北京 10:00 被看成 02:00，交易时段判断
+    整体错 8 小时，启动恢复会在盘中抢 TQ。naive 输入按现有约定视为本地钟点，不改。
+    """
+    now = now or datetime.now()
+    if now.tzinfo is None:
+        return now
+    from src.core.timezone import to_beijing
+
+    return to_beijing(now).replace(tzinfo=None)
+
+
+def _in_span(hm: str, span: tuple[str, str]) -> bool:
+    """闭区间判断（缓冲段的端点本身也算在内，避免 11:35/15:05 这种整点漏判）。"""
+    return span[0] <= hm <= span[1]
+
+
+def _in_session(now: datetime) -> bool:
+    hm = _app_now(now).strftime("%H%M")
+    return _in_span(hm, _AM_SESSION) or _in_span(hm, _PM_SESSION)
+
+
+def _in_tq_close_window(now: datetime) -> bool:
+    return _in_span(_app_now(now).strftime("%H%M"), _TQ_CLOSE_WINDOW)
+
 
 DEFAULT_DAYS = 5
 #: 更长的"补不到"巡检窗口：东财只能回最近 5 个交易日，超出窗口的空洞必须被看见
@@ -143,6 +179,74 @@ def reset_state() -> None:
         _RUN_SEQ = 0
 
 
+# ── 只读 engine：显式注入（core 不得在运行时 import web） ──────────────
+
+class EngineNotInjected(RuntimeError):
+    """没有可用的只读 engine。core 层必须由 startup 注入，不能自己找库。"""
+
+
+_ENGINE_LOCK = threading.Lock()
+_ENGINE_PROVIDER: Callable[[], Any] | None = None
+
+
+def configure_engine(provider: Callable[[], Any] | None) -> None:
+    """由 startup 注入 engine 提供者（返回 SQLAlchemy Engine）。
+
+    `src/core` 不允许在运行时反向依赖 `src.web.database.engine`（B4.1）：一旦 web
+    层没初始化/连到别的库，这里会把"读不到"静默降级成 `tq_empty`，然后自动补数写进
+    错误的库。显式注入把"用哪个库"交给装配层，也让隔离测试能直接注入 tmp SQLite。
+
+    `provider=None` 表示撤销注入（测试清理用）。
+    """
+    global _ENGINE_PROVIDER
+    if provider is not None and not callable(provider):
+        raise TypeError(f"engine provider 必须可调用，拿到 {type(provider).__name__}")
+    with _ENGINE_LOCK:
+        _ENGINE_PROVIDER = provider
+
+
+def _engine_from_startup_modules():
+    """复用**启动阶段已经构造好**的中立层 engine（`src.db.session`），不触发 import。
+
+    这是未显式 `configure_engine()` 时的兜底：server 进程在 lifespan 之前就已建立
+    `src.db.session`（`src.web.database` 只是 re-export），所以这里只读 `sys.modules`
+    即可，不会在 core 里制造 web 依赖，也不会为测试凭空建一个新 engine。
+    """
+    mod = sys.modules.get("src.db.session")
+    eng = getattr(mod, "engine", None) if mod is not None else None
+    if eng is not None and callable(getattr(eng, "connect", None)):
+        return eng
+    return None
+
+
+def _require_engine(engine):
+    """校验/解析 engine：显式参数 → startup 注入 → 已构造的中立层 engine。
+
+    三条路都拿不到就**直接报错**，绝不静默返回 None 让上层把"没有库"当成
+    "该日 0 行"（那会触发一次盲补）。
+    """
+    if engine is not None:
+        if not callable(getattr(engine, "connect", None)):
+            raise TypeError(f"engine 需提供 connect()，拿到 {type(engine).__name__}")
+        return engine
+    with _ENGINE_LOCK:
+        provider = _ENGINE_PROVIDER
+    if provider is not None:
+        eng = provider()
+        if eng is not None:
+            if not callable(getattr(eng, "connect", None)):
+                raise TypeError(f"engine provider 返回的对象没有 connect(): {type(eng).__name__}")
+            return eng
+    eng = _engine_from_startup_modules()
+    if eng is not None:
+        return eng
+    raise EngineNotInjected(
+        "ETF 分钟补缺缺少只读 engine：startup 必须调用 "
+        "etf_minute_gapfill.configure_engine(lambda: src.db.session.engine)，"
+        "或显式把 engine 传给各入口；core 不得自行 import web 层找库"
+    )
+
+
 # ── 依赖缝（测试只打桩这几处） ────────────────────────────────────────────
 
 def _em():
@@ -158,26 +262,20 @@ def _basket_codes() -> list[str]:
 
 
 def _coverage_gate(n: int) -> int:
-    """覆盖率闸门，唯一真值在 `src.core.etf_watch_feed.min_etfs_for_complete`。"""
-    try:
-        from src.core.etf_watch_feed import min_etfs_for_complete
+    """覆盖率闸门：**全篮子**（20 只 → 20 只），不接受 80%。
 
-        return int(min_etfs_for_complete(n))
-    except Exception:  # noqa: BLE001 - 隔离测试/拆库场景退化成同值计算
-        import math
-
-        return max(1, math.ceil(int(n) * 0.8 - 1e-9))
+    旧实现借 `src.core.etf_watch_feed.min_etfs_for_complete`（80%）：16/20 的日期
+    会被 `existing_overview(min_codes=16)` 判成 complete，自动补缺于是把它当
+    "已补过"跳过 —— 残缺永久留库，且报告显示成功。审计口径是每只齐全 + 逐只对账，
+    所以这里与 `em_etf_minute._gate` 一起收紧为 100%，不再有按比例放行的入口。
+    """
+    return max(1, int(n))
 
 
 def _is_trading_day(d: date) -> bool:
     from src.core.trading_calendar import is_trading_day
 
     return d.weekday() < 5 and bool(is_trading_day(d))
-
-
-def _in_session(now: datetime) -> bool:
-    hm = now.strftime("%H%M")
-    return (_AM_SESSION[0] <= hm < _AM_SESSION[1]) or (_PM_SESSION[0] <= hm < _PM_SESSION[1])
 
 
 def _day_to_date(day: Any) -> date | None:
@@ -218,11 +316,19 @@ def _publish_gap_event(day: str, kind: str, detail: str, **context: Any) -> None
 
 # ── 逐日分类（只读，不联网） ──────────────────────────────────────────────
 
-def classify_day(day: str, *, today: date, engine, gate: int) -> dict[str, Any]:
+def classify_day(
+    day: str,
+    *,
+    today: date,
+    engine,
+    gate: int,
+    codes: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """判断一天属于哪种状态。**只读库 + 只读交易日历，不联网、不写库。**
 
     `ST_TQ_EMPTY` 是唯一会触发补缺的状态；`ST_PARTIAL` 永远只报失败 ——
-    「有 1 行」不等于「已采完」，也不等于「可以覆盖重写」。
+    「有 1 行」不等于「已采完」，也不等于「可以覆盖重写」。`codes` 传入全篮子时，
+    「完整」要求**每只篮子标的都在库且都是 240 根**；旧的 16/20 只是 `ST_PARTIAL`。
     """
     out: dict[str, Any] = {
         "date": str(day),
@@ -230,7 +336,9 @@ def classify_day(day: str, *, today: date, engine, gate: int) -> dict[str, Any]:
         "rows": 0,
         "codes": 0,
         "sources": [],
+        "null_source_rows": 0,
         "minutes": 0,
+        "missing_codes": [],
         "detail": "日期格式必须是 YYYYMMDD",
     }
     d = _day_to_date(day)
@@ -250,7 +358,7 @@ def classify_day(day: str, *, today: date, engine, gate: int) -> dict[str, Any]:
         return out
 
     try:
-        ov = _em().existing_overview(engine, str(day), min_codes=gate)
+        ov = _em().existing_overview(engine, str(day), min_codes=gate, codes=codes)
     except Exception as e:  # noqa: BLE001
         out.update(state=ST_DB_ERROR, detail=f"读库失败: {e}"[:200])
         return out
@@ -259,14 +367,26 @@ def classify_day(day: str, *, today: date, engine, gate: int) -> dict[str, Any]:
         rows=int(ov.get("rows") or 0),
         codes=int(ov.get("codes") or 0),
         sources=list(ov.get("sources") or []),
+        null_source_rows=int(ov.get("null_source_rows") or 0),
         minutes=int(ov.get("minutes") or 0),
         missing_minutes=list(ov.get("missing_minutes") or []),
         short_codes=list(ov.get("short_codes") or []),
+        missing_codes=list(ov.get("missing_codes") or []),
     )
     if out["rows"] == 0:
         out.update(state=ST_TQ_EMPTY, detail="该交易日 0 行（TQ 空源）")
     elif ov.get("complete"):
         out.update(state=ST_COMPLETE, detail=None)
+    elif out["null_source_rows"]:
+        out.update(
+            state=ST_PARTIAL,
+            detail=f"已有行但 {out['null_source_rows']} 行来源为 NULL/空：无法归因，不补、不覆盖",
+        )
+    elif out["missing_codes"]:
+        out.update(
+            state=ST_PARTIAL,
+            detail=f"篮子缺 {len(out['missing_codes'])} 只（{out['missing_codes'][:5]}）：不补、不覆盖",
+        )
     else:
         out.update(state=ST_PARTIAL, detail="已有行但残缺：不补、不覆盖，报失败")
     return out
@@ -281,14 +401,13 @@ def plan_gapfill(
     codes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """只做分类（不联网、不写库），返回 {"days": [...], "pending": [待补日期]}。"""
-    em = _em()
-    eng = engine if engine is not None else em._default_engine()
-    now = now or datetime.now()
+    eng = _require_engine(engine)
+    now = _app_now(now)
     today = now.date()
     codes = list(codes) if codes is not None else _basket_codes()
     gate = _coverage_gate(len(codes))
     wanted = _candidate_dates(dates, days, today)
-    states = [classify_day(d, today=today, engine=eng, gate=gate) for d in wanted]
+    states = [classify_day(d, today=today, engine=eng, gate=gate, codes=codes) for d in wanted]
     return {
         "at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "gate_etfs": gate,
@@ -345,19 +464,24 @@ def run_gapfill(
     落库全部走 `em_etf_minute.backfill(..., require_verified=True, daily_ref=...)`，
     这里不复制它的任何校验/写入逻辑，也不存在跳过对账的入口。
 
+    审计口径：**20 只篮子必须 20 只齐全、每只 240 根且与 TQ 日线逐只对账**才允许写入；
+    旧实现把 16/20 当 complete（80% 闸门），残缺日从此被当"已补过"跳过，必须按
+    partial 报失败且不覆盖。`deferred_days` 只放「未闭市」，complete 单独进
+    `complete_days`（旧实现把 complete 混进 deferred_days，等于把"已完成"说成"排队中"）。
+
     返回报告：`ok`、每天的 `state`/`result`/`attempts`/`reason`、`written_days`、
-    `failed_days`、`deferred_days`、`empty_source_days`、`attempts`。
+    `complete_days`、`failed_days`、`deferred_days`、`empty_source_days`、`attempts`。
     """
     em = _em()
-    eng = engine if engine is not None else em._default_engine()
-    now = now or datetime.now()
+    eng = _require_engine(engine)
+    now = _app_now(now)
     today = now.date()
     codes = list(codes) if codes is not None else _basket_codes()
     gate = _coverage_gate(len(codes))
     planned = _candidate_dates(dates, days, today)
 
     states: list[dict[str, Any]] = [
-        classify_day(d, today=today, engine=eng, gate=gate) for d in planned
+        classify_day(d, today=today, engine=eng, gate=gate, codes=codes) for d in planned
     ]
     pending = [s for s in states if s["state"] == ST_TQ_EMPTY]
 
@@ -370,6 +494,8 @@ def run_gapfill(
     max_attempts = max(1, int(max_attempts))
     while pending and attempts < max_attempts:
         attempts += 1
+        elapsed = monotonic() - started
+        remaining = max(1.0, float(deadline_s) - elapsed)
         try:
             rep = em.backfill(
                 [s["date"] for s in pending],
@@ -379,6 +505,7 @@ def run_gapfill(
                 dry_run=dry_run,
                 daily_ref=daily_ref,
                 require_verified=True,  # 写死：自动补缺不接受未经对账的数据
+                fetch_budget_s=remaining,  # 不让取数阶段把整轮 deadline 吃掉
             )
         except Exception as e:  # noqa: BLE001 - 单轮异常不该炸掉整个调度
             logger.warning("[etf-gapfill] backfill 抛异常（按可重试失败处理）: %s", e)
@@ -402,9 +529,16 @@ def run_gapfill(
             continue
         break
 
+    deadline_exceeded = bool(pending and (monotonic() - started) >= deadline_s)
+    if deadline_exceeded:
+        # deadline 用尽后仍是可重试失败：明确标 deadline_exceeded，不再谎报瞬时超时。
+        for s in pending:
+            s["backfill"] = {"action": "skipped", "reason": "deadline_exceeded"}
+
     days_report: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     written: list[str] = []
+    completed: list[str] = []
     deferred: list[str] = []
     empty_source: list[str] = []
 
@@ -415,6 +549,8 @@ def run_gapfill(
             "rows": s.get("rows", 0),
             "codes": s.get("codes", 0),
             "sources": s.get("sources", []),
+            "null_source_rows": s.get("null_source_rows", 0),
+            "missing_codes": s.get("missing_codes", []),
             "minutes": s.get("minutes", 0),
             "detail": s.get("detail"),
             "attempts": int(s.get("attempts") or 0),
@@ -445,38 +581,45 @@ def run_gapfill(
                 )
             elif reason in ("date_already_ingested", "date_partially_ingested"):
                 # 分类与写入之间的并发先到者。以库里的真实状态为准重新判定。
-                after = classify_day(s["date"], today=today, engine=eng, gate=gate)
+                after = classify_day(s["date"], today=today, engine=eng, gate=gate, codes=codes)
                 if after["state"] == ST_COMPLETE:
                     item.update(state=ST_COMPLETE, result="complete", rows=after["rows"],
                                 codes=after["codes"], sources=after["sources"],
                                 minutes=after["minutes"], detail=None)
-                    deferred.append(s["date"])
+                    completed.append(s["date"])
                 else:
                     item.update(result="partial_conflict", reason=reason,
                                 rows=after["rows"], sources=after["sources"],
-                                detail="该日已被其它写入方占住但数据残缺：不覆盖，报失败")
+                                null_source_rows=after.get("null_source_rows", 0),
+                                missing_codes=after.get("missing_codes", []),
+                                detail=after.get("detail") or "该日已被其它写入方占住但数据残缺：不覆盖，报失败")
                     failures.append(item)
                     _publish_gap_event(
-                        s["date"], "partial_conflict", item["detail"], sources=after["sources"]
+                        s["date"], "partial_conflict", item["detail"],
+                        sources=after["sources"], null_source_rows=after.get("null_source_rows", 0),
                     )
             else:
                 item.update(result="failed", reason=reason or "unknown")
                 item["detail"] = (
-                    entry.get("error") or entry.get("reconcile_error") or item["detail"] or ""
+                    entry.get("error") or entry.get("reconcile_error")
+                    or entry.get("detail") or item["detail"] or ""
                 )[:300]
+                item["missing_codes"] = entry.get("missing_codes") or item["missing_codes"]
                 failures.append(item)
                 _publish_gap_event(
                     s["date"],
                     "empty_source",
                     f"{item['reason']}: {item['detail']}",
                     attempts=item["attempts"],
+                    missing_codes=item["missing_codes"],
                 )
         elif s["state"] in _BENIGN_STATES:
             item["result"] = s["state"]
-            deferred.append(s["date"])
             if s["state"] == ST_COMPLETE:
+                completed.append(s["date"])
                 _emit("complete", date=s["date"], rows=item["rows"], sources=item["sources"])
             else:
+                deferred.append(s["date"])
                 _emit("deferred_today", date=s["date"], detail=item["detail"])
         else:
             # 假日 / 残缺日 / 日期非法 / 读库失败 / 日历不可用：一律显式失败。
@@ -488,7 +631,9 @@ def run_gapfill(
                   detail=item["detail"])
             if s["state"] in (ST_PARTIAL, ST_HOLIDAY):
                 _publish_gap_event(s["date"], kind, str(item["detail"] or s["state"]),
-                                   rows=item["rows"], sources=item["sources"])
+                                   rows=item["rows"], sources=item["sources"],
+                                   null_source_rows=item["null_source_rows"],
+                                   missing_codes=item["missing_codes"])
         days_report.append(item)
 
     report: dict[str, Any] = {
@@ -496,9 +641,12 @@ def run_gapfill(
         "at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "days_requested": planned,
         "gate_etfs": gate,
+        "expected_etfs": len(codes),
         "attempts": attempts,
         "max_attempts": max_attempts,
+        "deadline_exceeded": deadline_exceeded,
         "written_days": written,
+        "complete_days": completed,
         "deferred_days": deferred,
         "empty_source_days": empty_source,
         "failed_days": [f["date"] for f in failures],
@@ -536,8 +684,8 @@ def survey_unfillable_gaps(
     并出现在报告的 `unfillable_days` 里。
     """
     em = _em()
-    eng = engine if engine is not None else em._default_engine()
-    now = now or datetime.now()
+    eng = _require_engine(engine)
+    now = _app_now(now)
     today = now.date()
     codes = list(codes) if codes is not None else _basket_codes()
     gate = _coverage_gate(len(codes))
@@ -546,7 +694,7 @@ def survey_unfillable_gaps(
 
     unfillable: list[str] = []
     for day in older:
-        st = classify_day(day, today=today, engine=eng, gate=gate)
+        st = classify_day(day, today=today, engine=eng, gate=gate, codes=codes)
         if st["state"] == ST_TQ_EMPTY:
             unfillable.append(day)
     if unfillable:
@@ -586,8 +734,8 @@ def catch_up_close(
     `write_minute` 返回 -2，这里也提前停手并记录 `foreign_source`。
     """
     em = _em()
-    eng = engine if engine is not None else em._default_engine()
-    now = now or datetime.now()
+    eng = _require_engine(engine)
+    now = _app_now(now)
     today = now.date()
     day = today.strftime("%Y%m%d")
     hm = now.strftime("%H%M")
@@ -612,7 +760,7 @@ def catch_up_close(
     codes = list(codes) if codes is not None else _basket_codes()
     gate = _coverage_gate(len(codes))
     try:
-        ov = em.existing_overview(eng, day, min_codes=gate)
+        ov = em.existing_overview(eng, day, min_codes=gate, codes=codes)
     except Exception as e:  # noqa: BLE001
         out.update(reason=ST_DB_ERROR, detail=f"读库失败: {e}"[:200])
         return out
@@ -620,8 +768,11 @@ def catch_up_close(
     foreign = [s for s in (ov.get("sources") or []) if s != _SOURCE_TQ]
     if foreign:
         out.update(reason="foreign_source", sources=ov.get("sources"),
-                   detail="当日已有非 TQ 来源，拒绝重跑收盘定型（同日不混源）", ok=True)
-        _emit("foreign_source", date=day, sources=",".join(foreign))
+                   null_source_rows=ov.get("null_source_rows", 0),
+                   detail="当日已有非 TQ/来源不明（NULL）的行，拒绝重跑收盘定型（同日不混源）",
+                   ok=True)
+        _emit("foreign_source", date=day, sources=",".join(foreign),
+              null_source_rows=ov.get("null_source_rows", 0))
         return out
     if ov.get("complete"):
         out.update(reason="already_complete", rows=ov.get("rows"), ok=True)
@@ -665,11 +816,13 @@ def run_after_close(
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """收盘后一轮：先补跑错过的 15:35 定型，再补已闭市日的 TQ 空源。"""
-    close = catch_up_close(now=now, engine=engine, runner=close_runner, dry_run=dry_run, codes=codes)
+    now = _app_now(now)
+    eng = _require_engine(engine)
+    close = catch_up_close(now=now, engine=eng, runner=close_runner, dry_run=dry_run, codes=codes)
     gap = run_gapfill(
         dates,
         days=days,
-        engine=engine,
+        engine=eng,
         now=now,
         codes=codes,
         daily_ref=daily_ref,
@@ -678,7 +831,7 @@ def run_after_close(
         retry_sleep_s=retry_sleep_s,
         sleep=sleep,
     )
-    survey = survey_unfillable_gaps(now=now, engine=engine, codes=codes)
+    survey = survey_unfillable_gaps(now=now, engine=eng, codes=codes)
     return {
         "ok": bool(close.get("ok")) and bool(gap.get("ok")),
         "close": close,
@@ -702,12 +855,18 @@ def startup_recovery(
     """启动时的后台恢复：补跑收盘定型 + 补已闭市空源。
 
     - 交易时段内直接跳过（TQ 背后只有一个客户端进程，启动预热别和 60s 采集抢）；
+    - 15:35–16:30 的 TQ 收盘定型重负载窗口也跳过：此刻 `run_close` 与 TQ 启动自愈
+      正在跑同一个客户端，再并行一轮 `catch_up_close` 既抢资源又可能重复写；
     - 其它时间只做一次，没有循环、没有无限重试。
     """
-    now = now or datetime.now()
-    if _in_session(now) and not force:
+    now = _app_now(now)
+    if not force and _in_session(now):
         logger.info("[etf-gapfill] 启动恢复跳过：交易时段 %s，不抢 TQ 客户端", now.strftime("%H:%M"))
         return {"ok": True, "action": "skipped", "reason": "in_session",
+                "at": now.strftime("%Y-%m-%d %H:%M:%S")}
+    if not force and _in_tq_close_window(now):
+        logger.info("[etf-gapfill] 启动恢复跳过：TQ 收盘定型窗口 %s，交给定时任务", now.strftime("%H:%M"))
+        return {"ok": True, "action": "skipped", "reason": "tq_close_window",
                 "at": now.strftime("%Y-%m-%d %H:%M:%S")}
     return run_after_close(
         now=now,
@@ -729,14 +888,20 @@ def start_startup_recovery(
     wait_for: threading.Thread | None = None,
     wait_timeout_s: float = 300.0,
     name: str = "etf-minute-gapfill-recovery",
+    engine_provider: Callable[[], Any] | None = None,
     **kwargs: Any,
 ) -> threading.Thread | None:
     """起一个 daemon 线程做启动恢复。**立即返回**，绝不阻塞 lifespan。
 
     只允许起一次（幂等）；参数透传给 `startup_recovery`（测试注入 `now`/`engine`）。
+    `engine_provider` 是 startup 的注入点：把「本进程用的只读 engine」交给 core，
+    避免 core 在运行时反向 import web 层。
+
     `wait_for` 用来等先前的 TQ 启动自愈线程跑完，避免"东财先写、TQ 后到被判异源"
     的无谓冲突 —— 等待在 worker 线程里做，调用方不受影响。
     """
+    if engine_provider is not None:
+        configure_engine(engine_provider)
 
     global _STARTED
     with _STARTED_LOCK:
@@ -799,8 +964,19 @@ JOB_SPECS: tuple[tuple[str, Callable[[], dict[str, Any]], int, int, str], ...] =
 )
 
 
-def register(scheduler) -> bool:
-    """把三个 cron 挂到调度器。**不做任何取数/写库动作**（装配期零 I/O）。"""
+def register(
+    scheduler,
+    *,
+    engine_provider: Callable[[], Any] | None = None,
+) -> bool:
+    """把三个 cron 挂到调度器。**不做任何取数/写库动作**（装配期零 I/O）。
+
+    `engine_provider` 是 startup 的注入入口（例如
+    `lambda: src.db.session.engine`），core 由此获得本进程的只读库；不传时各 job
+    在运行时按 `_require_engine` 解析（显式参数 / sys.modules 中已构造的中立层 engine）。
+    """
+    if engine_provider is not None:
+        configure_engine(engine_provider)
     if scheduler is None:
         logger.warning("[etf-gapfill] 调度器不可用，跳过注册")
         return False

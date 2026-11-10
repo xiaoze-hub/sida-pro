@@ -429,8 +429,11 @@ def test_backfill_aborts_whole_date_when_too_few_etfs(iso_engine, monkeypatch):
     assert _rows(iso_engine) == []
 
 
-def test_backfill_drops_one_partial_code_but_still_writes(iso_engine, monkeypatch):
-    """19 只完整 + 1 只残缺 → 只丢那一只（记入 dropped），日期仍然写，且不补造那只。"""
+def test_backfill_refuses_write_when_one_basket_code_incomplete(iso_engine, monkeypatch):
+    """19 只完整 + 1 只残缺 → **整天不写**（20/20 全篮子闸门），残只进 dropped。
+
+    旧行为：丢弃残只后按 80% 闸门写 19 只，返库后还可能在别处被当成"已覆盖"。
+    """
     bad = _CODES[3]
 
     def _fetch(code: str):
@@ -443,16 +446,19 @@ def test_backfill_drops_one_partial_code_but_still_writes(iso_engine, monkeypatc
     monkeypatch.setattr(em, "_get_json", _fake_fetch(_fetch))
     rep = em.backfill(["20261106"], engine=iso_engine, now=datetime(2026, 11, 10, 9, 0), dry_run=False)
     day = rep["days"][0]
-    assert day["action"] == "written"
+    assert day["action"] == "skipped"
+    assert day["reason"] == "insufficient_etfs"
+    assert day["expected_etfs"] == len(_CODES)
     assert day["etfs"] == len(_CODES) - 1
     assert bad in day["dropped"]
-    codes = {r["etf_code"] for r in _rows(iso_engine, "20261106")}
-    assert bad not in codes
-    assert len(codes) == len(_CODES) - 1
+    assert bad in day["missing_codes"]
+    assert day["verified"] is False
+    assert _rows(iso_engine) == []
+    assert em.exit_code(rep) == 1
 
 
 def test_backfill_reconciles_against_daily_reference(iso_engine, monkeypatch):
-    """给到日线参照（TQ 1d）时逐只对账：超差的标的整只丢弃，不写进库。"""
+    """给到日线参照（TQ 1d）时逐只对账：超差的标的整只丢弃，且 19/20 → 整天不写。"""
     monkeypatch.setattr(em, "_get_json", _fake_fetch(_all_codes_payload))
     # 日线成交额含集合竞价：东财 241 根（09:30 独立一根 + 240 根）归一后金额一分不丢，
     # 所以参照必须是 241 根的合计，而不是 240 根 —— 写少了会误伤所有标的。
@@ -462,14 +468,15 @@ def test_backfill_reconciles_against_daily_reference(iso_engine, monkeypatch):
 
     rep = em.backfill(
         ["20261106"], engine=iso_engine, now=datetime(2026, 11, 10, 9, 0),
-        dry_run=False, daily_ref=lambda d: totals,
+        dry_run=False, daily_ref=lambda d: totals, require_verified=True,
     )
     day = rep["days"][0]
-    assert day["action"] == "written"
-    assert day["reconciled"] is True
+    assert day["action"] == "skipped"
+    assert day["reason"] == "unverified", "结构 20 只齐全但有一只对账超差 → 不可证实，不写"
+    assert day["reconciled"] is False, "有一只超差被丢掉 → 写入集不完整，不能称已对账"
     assert day["verified"] is False, "有一只被对账丢掉 → 整体不可称 verified"
-    assert skew in day["dropped"]
-    assert skew not in {r["etf_code"] for r in _rows(iso_engine, "20261106")}
+    assert skew in day["dropped"] and skew in day["missing_codes"]
+    assert _rows(iso_engine) == []
 
 
 def test_backfill_marks_unreconciled_when_reference_missing(iso_engine, monkeypatch):
@@ -592,14 +599,15 @@ def test_gap_dates_lists_trading_days_without_rows(iso_engine):
     assert dates[-1] == "20261110"
     with iso_engine.begin() as conn:
         for code in _CODES:
-            conn.execute(
-                text(
-                    "INSERT INTO etf_minute_flow "
-                    "(trade_date, minute, etf_code, amount_wan, volume, source) "
-                    "VALUES ('20261105','0931',:c, 1.0, 100, 'tdx_tq')"
-                ),
-                {"c": code},
-            )
+            for hm in em.SESSION_MINUTES:
+                conn.execute(
+                    text(
+                        "INSERT INTO etf_minute_flow "
+                        "(trade_date, minute, etf_code, amount_wan, volume, source) "
+                        "VALUES ('20261105',:m,:c, 1.0, 100, 'tdx_tq')"
+                    ),
+                    {"m": hm, "c": code},
+                )
     gaps = em.gap_dates(days=5, end=date(2026, 11, 10), engine=iso_engine)
     assert "20261105" not in gaps
     assert "20261106" in gaps and "20261109" in gaps
@@ -620,3 +628,152 @@ def test_gap_dates_counts_only_complete_baskets(iso_engine):
             )
     gaps = em.gap_dates(days=5, end=date(2026, 11, 10), engine=iso_engine)
     assert "20261106" in gaps
+
+
+def test_gap_dates_flags_16_of_20_even_though_it_is_80_percent(iso_engine):
+    """16/20（旧 80% 闸门会判"达标"）按全篮子口径必须是缺口。"""
+    with iso_engine.begin() as conn:
+        for code in _CODES[:16]:
+            for hm in em.SESSION_MINUTES:
+                conn.execute(
+                    text(
+                        "INSERT INTO etf_minute_flow "
+                        "(trade_date, minute, etf_code, amount_wan, volume, source) "
+                        "VALUES ('20261106',:m,:c, 1.0, 100, 'tdx_tq')"
+                    ),
+                    {"m": hm, "c": code},
+                )
+    assert "20261106" in em.gap_dates(days=5, end=date(2026, 11, 10), engine=iso_engine)
+
+
+# ── 9. 审计阻断：全篮子 / NULL 来源归因 / 取数预算 ──────────────────────
+
+def test_gate_is_full_basket_not_80_percent():
+    assert em._gate(20) == 20, "20 只篮子必须 20 只齐全，80% 闸门(16)已删除"
+    assert em._gate(3) == 3
+    assert em.REQUIRED_COVERAGE == 1.0
+
+
+def test_existing_overview_16_of_20_is_not_complete(iso_engine):
+    """旧库里的 16/20 天必须判残缺（不可称 complete、不可被自动补缺跳过）。"""
+    with iso_engine.begin() as conn:
+        for code in _CODES[:16]:
+            for hm in em.SESSION_MINUTES:
+                conn.execute(
+                    text(
+                        "INSERT INTO etf_minute_flow "
+                        "(trade_date, minute, etf_code, amount_wan, volume, source) "
+                        "VALUES ('20261106',:m,:c, 1.0, 100, 'tdx_tq')"
+                    ),
+                    {"m": hm, "c": code},
+                )
+    ov = em.existing_overview(iso_engine, "20261106", min_codes=20, codes=_CODES)
+    assert ov["complete"] is False
+    assert ov["codes"] == 16
+    assert ov["missing_codes"] == sorted(_CODES[16:])
+    assert ov["short_codes"] == []
+
+
+def test_existing_overview_requires_basket_membership_not_just_count(iso_engine):
+    """20 个代码但其中一个不是篮子标的：仍算缺一只，不能按总数判 complete。"""
+    stray = "510999.SH"
+    codes = list(_CODES[:-1]) + [stray]
+    with iso_engine.begin() as conn:
+        for code in codes:
+            for hm in em.SESSION_MINUTES:
+                conn.execute(
+                    text(
+                        "INSERT INTO etf_minute_flow "
+                        "(trade_date, minute, etf_code, amount_wan, volume, source) "
+                        "VALUES ('20261106',:m,:c, 1.0, 100, 'tdx_tq')"
+                    ),
+                    {"m": hm, "c": code},
+                )
+    ov = em.existing_overview(iso_engine, "20261106", min_codes=20, codes=_CODES)
+    assert ov["complete"] is False
+    assert ov["missing_codes"] == [_CODES[-1]]
+    assert ov["unexpected_codes"] == [stray]
+
+
+def test_existing_overview_null_source_is_attributed_unknown(iso_engine):
+    """NULL 来源不能被静默并进唯一来源：必须显式归为 unknown 且阻断 complete。"""
+    with iso_engine.begin() as conn:
+        for code in _CODES[:-1]:
+            for hm in em.SESSION_MINUTES:
+                conn.execute(
+                    text(
+                        "INSERT INTO etf_minute_flow "
+                        "(trade_date, minute, etf_code, amount_wan, volume, source) "
+                        "VALUES ('20261106',:m,:c, 1.0, 100, 'tdx_tq')"
+                    ),
+                    {"m": hm, "c": code},
+                )
+        for hm in em.SESSION_MINUTES:
+            conn.execute(
+                text(
+                    "INSERT INTO etf_minute_flow "
+                    "(trade_date, minute, etf_code, amount_wan, volume, source) "
+                    "VALUES ('20261106',:m,:c, 1.0, 100, NULL)"
+                ),
+                {"m": hm, "c": _CODES[-1]},
+            )
+    ov = em.existing_overview(iso_engine, "20261106", min_codes=20, codes=_CODES)
+    assert ov["sources"] == ["tdx_tq", "unknown"]
+    assert ov["null_source_rows"] == len(em.SESSION_MINUTES)
+    assert ov["complete"] is False
+
+
+def test_tq_daily_ref_total_budget_bounds_paging(iso_engine, monkeypatch):
+    """40 页 × 15s 的旧实现会拖 10 分钟；现在整次取数有 wall-clock 预算。"""
+    from src.collectors import tq_etf_watch as ew
+
+    calls: list[float] = []
+    clock = {"t": 0.0}
+
+    def _tick() -> float:
+        clock["t"] += 2.0
+        return clock["t"]
+
+    codes = ["510300.SH", "159919.SZ", "510310.SH"]
+
+    def _fake_rpc(method, params, timeout=20.0):
+        calls.append(timeout)
+        idx = int(params["stock_page_index"])
+        code = codes[idx] if idx < len(codes) else codes[-1]
+        return {
+            "Value": {
+                code: {"Date": ["20261106"], "Amount": [10008.0]},
+            },
+            "has_more": True,
+        }
+
+    monkeypatch.setattr(ew, "_rpc_full", _fake_rpc)
+    ref = em.tq_daily_ref(codes, timeout=15.0, budget_s=5.0, monotonic=_tick)
+    out = ref("20261106")
+    assert calls, "至少应发一页"
+    assert len(calls) < len(codes) + 1, f"预算耗尽后不应继续翻页: {len(calls)}"
+    assert all(t <= 15.0 for t in calls)
+    assert set(out) <= set(codes)
+
+    # 一页都没拿到时必须显式报「预算」，不能静默返回空参照
+    monkeypatch.setattr(ew, "_rpc_full", lambda *a, **kw: {"Value": {}, "has_more": True})
+    empty_ref = em.tq_daily_ref(codes, budget_s=1.0, monotonic=_tick)
+    with pytest.raises(RuntimeError, match="预算"):
+        empty_ref("20261106")
+
+
+def test_backfill_fetch_budget_stops_issuing_requests(iso_engine, monkeypatch):
+    """取数预算用尽后不再发 HTTP，剩余标的显式记 budget exhausted。"""
+    fetch = _fake_fetch(_all_codes_payload)
+    monkeypatch.setattr(em, "_get_json", fetch)
+    ticks = iter(range(0, 10_000, 100))
+    rep = em.backfill(
+        ["20261106"], engine=iso_engine, now=datetime(2026, 11, 10, 9, 0),
+        dry_run=False, fetch_budget_s=150.0, monotonic=lambda: next(ticks),
+    )
+    day = rep["days"][0]
+    assert len(fetch.calls) == 1
+    assert day["action"] == "skipped"
+    assert day["reason"] in ("insufficient_etfs", "fetch_failed")
+    assert any("fetch_budget_exhausted" in v for v in day["dropped"].values())
+    assert _rows(iso_engine) == []

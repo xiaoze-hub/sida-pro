@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import threading
 import time
 from datetime import datetime
@@ -29,7 +30,8 @@ from src.core import etf_minute_gapfill as gap
 from src.collectors import em_etf_minute as em
 
 _REPO = Path(__file__).resolve().parents[1]
-_CODES = [c for c, _n, _cat in __import__("src.collectors.tq_etf_watch", fromlist=["x"]).ETF_BASKET][:3]
+_BASKET = [c for c, _n, _cat in __import__("src.collectors.tq_etf_watch", fromlist=["x"]).ETF_BASKET]
+_CODES = _BASKET[:3]
 _DAY = "20261106"          # 2026-11-06 周五（交易日，已闭市）
 _TODAY = datetime(2026, 11, 10, 20, 0)  # 2026-11-10 周二
 
@@ -78,7 +80,7 @@ def gap_events(monkeypatch):
     gap.reset_state()
 
 
-def _insert(eng, day: str, code: str, minutes, source: str = "tdx_tq") -> None:
+def _insert(eng, day: str, code: str, minutes, source: str | None = "tdx_tq") -> None:
     with eng.begin() as conn:
         for hm in minutes:
             conn.execute(
@@ -295,7 +297,7 @@ def test_non_retryable_failure_is_not_retried(iso_engine, monkeypatch):
 
 def test_retry_stops_at_deadline(iso_engine, monkeypatch):
     """整轮 deadline 用尽后不再 sleep/重试（防止把调度线程拖死）。"""
-    clock = iter([0.0, 1000.0, 2000.0])
+    clock = iter([0.0, 1000.0, 2000.0, 3000.0, 4000.0])
     slept: list[float] = []
     monkeypatch.setattr(
         em, "backfill",
@@ -603,3 +605,125 @@ def test_survey_is_quiet_when_older_days_have_data(iso_engine, gap_events):
     assert "20261028" not in out["unfillable_days"]
     for ev in gap_events:
         assert "20261028" not in ev[3]["days"]
+
+
+# ── 9. 审计阻断：全篮子 20/20、旧残缺日、NULL 来源、engine 注入、窗口 ──
+
+def test_complete_days_are_not_misreported_as_deferred(iso_engine, monkeypatch):
+    """complete 是"已完成"，不是"排队中"：旧实现把它混进 deferred_days。"""
+    for c in _CODES:
+        _insert(iso_engine, _DAY, c, em.SESSION_MINUTES, source="tdx_tq")
+    _no_backfill(monkeypatch)
+    rep = gap.run_gapfill([_DAY], engine=iso_engine, now=_TODAY, codes=_CODES)
+    assert rep["ok"] is True
+    assert rep["days"][0]["state"] == gap.ST_COMPLETE
+    assert rep["complete_days"] == [_DAY]
+    assert rep["deferred_days"] == []
+
+
+def test_legacy_16_of_20_day_is_partial_and_never_overwritten(iso_engine, monkeypatch, gap_events):
+    """旧 80% 闸门留下的 16/20 天：必须残缺 + 不覆盖 + 不调 backfill。"""
+    for c in _BASKET[:16]:
+        _insert(iso_engine, _DAY, c, em.SESSION_MINUTES, source="tdx_tq")
+    before = _count(iso_engine)
+    _no_backfill(monkeypatch)
+
+    rep = gap.run_gapfill([_DAY], engine=iso_engine, now=_TODAY, codes=_BASKET)
+    day = rep["days"][0]
+    assert day["state"] == gap.ST_PARTIAL
+    assert day["result"] == "partial"
+    assert day["codes"] == 16
+    assert day["missing_codes"] == sorted(_BASKET[16:])
+    assert rep["ok"] is False and rep["failed_days"] == [_DAY]
+    assert rep["written_days"] == [] and rep["deferred_days"] == []
+    assert _count(iso_engine) == before, "残缺日一行都不许动"
+    assert [e[1] for e in gap_events] == ["partial_day"]
+
+
+def test_null_source_day_is_partial_and_cannot_be_reclassified_as_tq(iso_engine, monkeypatch, gap_events):
+    """NULL 来源不能并进 tdx_tq：要显式归为 unknown，且收盘定型拒绝重跑。"""
+    for c in _BASKET[:-1]:
+        _insert(iso_engine, _DAY, c, em.SESSION_MINUTES, source="tdx_tq")
+    _insert(iso_engine, _DAY, _BASKET[-1], em.SESSION_MINUTES, source=None)
+    _no_backfill(monkeypatch)
+
+    rep = gap.run_gapfill([_DAY], engine=iso_engine, now=_TODAY, codes=_BASKET)
+    day = rep["days"][0]
+    assert day["state"] == gap.ST_PARTIAL
+    assert day["null_source_rows"] == len(em.SESSION_MINUTES)
+    assert "unknown" in day["sources"]
+    assert "tdx_tq" in day["sources"]
+    assert rep["ok"] is False
+    assert gap_events and gap_events[0][1] == "partial_day"
+    assert gap_events[0][3]["null_source_rows"] == len(em.SESSION_MINUTES)
+
+    def _runner():
+        raise AssertionError("来源不明/异源日不该重跑 TQ 收盘定型")
+
+    close = gap.catch_up_close(now=datetime(2026, 11, 6, 16, 50), engine=iso_engine,
+                               codes=_BASKET, runner=_runner)
+    assert close["reason"] == "foreign_source" and close["ok"] is True
+    assert close["null_source_rows"] == len(em.SESSION_MINUTES)
+
+
+def test_run_gapfill_requires_injected_engine_and_never_imports_web(monkeypatch):
+    """core 运行时不再自己找 web engine：未注入即显式报错。"""
+    gap.configure_engine(None)
+    monkeypatch.setattr(gap, "_engine_from_startup_modules", lambda: None)
+    with pytest.raises(gap.EngineNotInjected):
+        gap.run_gapfill([_DAY], now=_TODAY, codes=_CODES)
+
+    src = inspect.getsource(gap)
+    assert "_default_engine" not in src
+    assert re.search(r"^\s*(from|import)\s+src\.web", src, re.M) is None
+
+
+def test_configure_engine_is_the_startup_injection_seam(iso_engine, monkeypatch):
+    """startup 注入的 provider 会在未显式传 engine 时被使用（同一实例）。"""
+    seen: dict = {}
+
+    def _fake_backfill(dates, **kw):
+        seen.update(kw)
+        return {"days": [{"date": d, "action": "written", "rows": 720, "etfs": len(_CODES),
+                          "verified": True} for d in dates]}
+
+    monkeypatch.setattr(em, "backfill", _fake_backfill)
+    gap.configure_engine(lambda: iso_engine)
+    try:
+        rep = gap.run_gapfill([_DAY], now=_TODAY, codes=_CODES, daily_ref=lambda d: {})
+    finally:
+        gap.configure_engine(None)
+    assert rep["ok"] is True
+    assert seen["engine"] is iso_engine
+    assert seen["require_verified"] is True
+
+
+def test_in_session_normalizes_aware_utc():
+    """aware UTC 的 02:00 = 北京 10:00，必须判为交易时段（旧实现按 UTC 钟点会漏）。"""
+    from datetime import timezone
+
+    assert gap._in_session(datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)) is True
+    assert gap._in_session(datetime(2026, 11, 10, 4, 0, tzinfo=timezone.utc)) is False
+
+
+def test_startup_recovery_skips_tq_close_window(iso_engine, monkeypatch):
+    """15:35–16:30 是 TQ 收盘定型重负载窗口：启动恢复不并跑。"""
+    monkeypatch.setattr(
+        gap, "run_after_close",
+        lambda **kw: (_ for _ in ()).throw(AssertionError("收盘定型窗口不该跑启动恢复")),
+    )
+    for hm in ((15, 45), (16, 0)):
+        out = gap.startup_recovery(now=datetime(2026, 11, 10, hm[0], hm[1]), engine=iso_engine)
+        assert out["ok"] is True and out["reason"] == "tq_close_window"
+    edge = gap.startup_recovery(now=datetime(2026, 11, 10, 16, 30), engine=iso_engine)
+    assert edge["reason"] == "tq_close_window"
+
+    seen: dict = {}
+
+    def _fake(**kw):
+        seen.update(kw)
+        return {"ok": True, "close": {}, "gapfill": {}}
+
+    monkeypatch.setattr(gap, "run_after_close", _fake)
+    out = gap.startup_recovery(now=datetime(2026, 11, 10, 16, 31), engine=iso_engine)
+    assert out["ok"] is True and seen["engine"] is iso_engine
