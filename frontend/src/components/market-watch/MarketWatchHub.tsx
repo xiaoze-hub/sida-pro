@@ -98,9 +98,9 @@ export const MARKET_WATCH_VIEWS: readonly MarketWatchView[] = [
     label: 'ETF 观察',
     hint: '20 只宽基 ETF 分钟成交额 + 市场级 SC8 份额(独立视图)',
     icon: Landmark,
-    source: '/etf-watch/intraday · /etf-watch/support · /etf-watch/daily · 通达信 TQ 网关 + 市场级 SC8',
+    source: '/etf-watch/intraday · /etf-watch/support · /etf-watch/daily · 分钟表实际来源(TQ/东财 trends2/混合/未知) + 市场级 SC8',
     caliber:
-      'ETF 口径: 20 只宽基 ETF 篮子分钟成交额与同期基线对比; 市场级只有 SC8 份额(全市场 ETF 总份额与份额变动, 单位亿份, 是份额不是金额, 不得换算成金额净流入), 单只 ETF 份额在通达信是当前值回填, 故不提供单只净申购。SC8 序列已停更, 页面按库内真实日期展示并标滞后。\n本视图是市场级聚合, 不代表任何单只 ETF 的身份、持仓或可交易性; 与指数四档资金不同源, 不做合并或换算。',
+      'ETF 口径: 20 只宽基 ETF 篮子分钟成交额与同期基线对比; 分钟来源按 etf_minute_flow.source 逐日标注(TQ/东财 trends2/混合/未知), 不写死单一来源, 混源比值只作参考; 市场级只有 SC8 份额(全市场 ETF 总份额与份额变动, 单位推断为亿份, 是份额不是金额, 不得换算成金额净流入; 无官方字段定义, 单位是推断), 单只 ETF 份额在通达信是当前值回填, 故不提供单只净申购。不按任何单一阈值判定托底日(采集器 100 是"单日净流入 100 亿元"金额口径, 与份额不可换算)。SC8 序列已停更, 页面按库内真实日期展示并标滞后。\n本视图是市场级聚合, 不代表任何单只 ETF 的身份、持仓或可交易性; 与指数四档资金不同源, 不做合并或换算。',
     legacyPath: '/etf-watch',
     render: () => <EtfWatchPage />,
   },

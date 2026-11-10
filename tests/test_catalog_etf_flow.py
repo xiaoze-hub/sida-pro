@@ -627,11 +627,14 @@ def test_support_and_daily_payload_match_previous_api(flow_db):
     ).mappings()]
     assert [s["date"] for s in sup["series"]] == [r["trade_date"] for r in rows]
     assert [s["net_sub_yi"] for s in sup["series"]] == [round(r["net_sub_yi"], 2) for r in rows]
-    support_rows = [r for r in rows if r["net_sub_yi"] >= feed.ew.SUPPORT_FLOW_THRESHOLD_YI]
-    assert sup["support_count"] == len(support_rows)
     assert sup["sample_count"] == len(rows)
-    # 最新值 154.94 在托底样本中排名最低 → 分位 0.0（与旧实现一致）
-    assert sup["latest_percentile_in_support_days"] == 0.0
+    # 分位只在同一读源样本内算；没有任何「托底日」阈值筛选，旧字段必须消失。
+    assert sup["latest_percentile_in_samples"] == round(
+        sum(1 for r in rows if r["net_sub_yi"] < rows[-1]["net_sub_yi"]) / len(rows) * 100, 1
+    )
+    for gone in ("support_days", "support_count", "threshold_share_yi", "threshold_yi"):
+        assert gone not in sup, gone
+    assert sup["unit_confidence"] == "inferred"
 
     day = feed.daily_payload(_sql_runner(flow_db), 5)
     assert day["state"] == "ok"
@@ -855,3 +858,55 @@ def test_future_and_bulk_rows_never_surface_as_data_day(flow_db):
     assert "20261231" not in out
     assert "2.00 亿元" in out, "只报当日已采集的 20 × 1000 万"
     assert "完整" not in out and "日合计" not in out
+
+
+# ── 8. 分钟来源：按 etf_minute_flow.source 读，不写死 TQ；混源/未知显式 ──────
+#
+# 三个反例：兜底日（em_trends2）被写成 TQ、同日混源被挑成单一来源、source 为 NULL
+# 被默认认领成 TQ。出口必须分别给出 em_trends2 / mixed / unknown。
+
+def _source_table(day: str, sources: list[str]) -> dict[str, list[dict]]:
+    table = _intraday_table(day)
+    table["etf_minute_sources"] = [
+        {"trade_date": day, "source": s, "n": 60} for s in sources
+    ]
+    return table
+
+
+def test_render_reports_real_em_source_not_hardcoded_tq():
+    table = _source_table("20261106", ["em_trends2"])
+    p = feed.intraday_payload(_runner(table), "20261106",
+                              now=datetime(2026, 11, 6, 10, 0, tzinfo=_CST))
+    assert p["source"] == "em_trends2"
+    assert p["source_labels"] == ["东财 trends2"]
+    out = tc.render_etf_flow(
+        as_of="20261106", source="x", intraday=p, support={"state": "no_data"},
+    )
+    assert "分钟来源" in out and "东财 trends2" in out
+    assert "通达信 TQ" not in out, "该日没有任何 TQ 行，出口不许写 TQ"
+
+
+def test_render_flags_mixed_minute_sources():
+    table = _source_table("20261106", ["tdx_tq", "em_trends2"])
+    p = feed.intraday_payload(_runner(table), "20261106",
+                              now=datetime(2026, 11, 6, 10, 0, tzinfo=_CST))
+    assert p["source"] == "mixed"
+    out = tc.render_etf_flow(
+        as_of="20261106", source="x", intraday=p, support={"state": "no_data"},
+    )
+    assert "混合来源" in out
+    assert "东财 trends2" in out and "通达信 TQ" in out
+    assert "比值只作参考" in out, "混源基线必须显式降级为参考"
+
+
+def test_render_unknown_source_is_not_labelled_tq():
+    table = _intraday_table()          # 没有 etf_minute_sources 行 = 未取到/全 NULL
+    p = feed.intraday_payload(_runner(table), "20261106",
+                              now=datetime(2026, 11, 6, 10, 0, tzinfo=_CST))
+    assert p["source"] == "unknown"
+    assert p["source"] != "tdx_tq"
+    out = tc.render_etf_flow(
+        as_of="20261106", source="x", intraday=p, support={"state": "no_data"},
+    )
+    assert "来源未知" in out
+    assert "不默认当成通达信 TQ" in out

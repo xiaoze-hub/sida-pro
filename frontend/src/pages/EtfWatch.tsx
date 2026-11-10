@@ -7,17 +7,20 @@
  *    意义：国家队进场往往先体现在**宽基 ETF 的成交额突然放大**，而不是个股涨停。
  *    基线取「过去 20 个交易日同一分钟」的累计均值 —— 比的是同日同期，不是全天，
  *    否则早盘永远"清淡"、尾盘永远"放量"，结论全是假的。
- * 2. **托底信号**：市场级 SC8 两列 = 全市场 ETF 总份额与当日份额变动（**亿份，不是金额**）。
- *    单日份额变动 ≥100 亿份视为托底日样本；盘中先看成交额在历史托底日里的分位。
+ * 2. **份额信号（SC8）**：市场级 SC8 两列**推断**为全市场 ETF 总份额与当日份额变动
+ *    （单位推断为亿份，不是金额）。没有官方字段定义，也没有可换算的金额阈值：
+ *    **不做托底日判定**，只报原始样本与样本内分位（推断依据见接口的 unit_evidence）。
  *    SC8 上游序列已停更（库内止于 2026-10-16），接口给 `stale/as_of`，
  *    页面必须带真实日期展示并标滞后，**不许**把停更日当今天。
  * 3. **日度全景**：20 只 ETF 按跟踪指数分 12 类的成交额。
+ * 4. **分钟来源按库内 `etf_minute_flow.source` 逐日展示**：通达信 TQ / 东财 trends2 兜底 /
+ *    混合 / 未知（NULL）都照实标，绝不写死「通达信 TQ」。混源基线只作参考。
  *
  * ## 口径纪律（不许违反）
  * - **单只 ETF 净申购不存在**：通达信 ETF 份额是"当前值回填到每一天"（实测 63 个交易日
- *   零变化），算出来恒为 0。所以只给市场级净申购，页面上必须显式说明，不能用别的算法凑。
+ *   零变化），算出来恒为 0。所以只给市场级 SC8 份额（份额变动），页面上必须显式说明，不能用别的算法凑。
  * - 数据缺失一律显示 `--` + 原因，不写 0、不猜。
- * - 单位：成交额亿元；SC8 份额变动/总份额 **亿份**（不得写成亿元，也不得乘净值换算）。数字一律 tabular-nums。
+ * - 单位：成交额亿元；SC8 份额变动/总份额 **推断为亿份**（不得写成亿元，也不得乘净值换算）。数字一律 tabular-nums。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Info, Loader2, RefreshCw } from 'lucide-react'
@@ -65,6 +68,17 @@ type IntradayResp = {
   }
   benchmark?: { code: string; name: string; points: { minute: string; close: number }[] }
   note?: string
+  /** 分钟表真实来源：tdx_tq / em_trends2 / mixed / unknown / no_data。 */
+  source?: string
+  sources?: string[]
+  source_labels?: string[]
+  /** 逐日来源（混源时逐日不同）。 */
+  source_by_date?: Record<string, string[]>
+  source_note?: string
+  /** 基线窗口的来源：非 TQ 时比值只能当参考。 */
+  baseline_sources?: string[]
+  baseline_source_labels?: string[]
+  baseline_source_note?: string
 }
 type SupportResp = {
   state: string
@@ -81,19 +95,19 @@ type SupportResp = {
     stale?: boolean
     reason?: string | null
   }
-  /** SC8 单位（亿份，份额口径）。 */
+  /** SC8 单位：**推断**为份额（亿份）。 */
   unit?: string
   scale_unit?: string
   net_sub_unit?: string
-  threshold_share_yi?: number
-  /** @deprecated 旧字段名，语义同为亿份；新代码用 threshold_share_yi。 */
-  threshold_yi?: number
+  unit_confidence?: string
+  /** 单位推断的正证与反证（照接口原文展示，不加工）。 */
+  unit_evidence?: string
+  unit_basis?: string
   series?: { date: string; scale_yi: number | null; net_sub_yi: number | null }[]
-  support_days?: { date: string; net_sub_yi: number | null }[]
-  support_count?: number
   sample_count?: number
   latest?: { date: string; scale_yi: number | null; net_sub_yi: number | null }
-  latest_percentile_in_support_days?: number | null
+  /** 最新值在**同一读源样本**内的分位；不是托底日分位（无任何阈值筛选）。 */
+  latest_percentile_in_samples?: number | null
   max_net_sub_yi?: number | null
   min_net_sub_yi?: number | null
   single_share_supported?: boolean
@@ -106,9 +120,29 @@ type DailyResp = {
   total_amount_yi?: (number | null)[]
   net_sub_yi?: (number | null)[]
   by_category?: { category: string; amount_yi: (number | null)[] }[]
-  /** 每个数列自己的单位：成交额亿元、SC8 份额亿份。 */
+  /** 每个数列自己的单位：成交额亿元、SC8 份额亿份（推断）。 */
   units?: { total_amount?: string; net_sub?: string; scale?: string }
   note?: string
+  source?: string
+  sources?: string[]
+  source_labels?: string[]
+  source_by_date?: Record<string, string[]>
+  source_note?: string
+}
+
+/** 来源标识 → 页面文案。未登记标识直接显示原值，不猜成 TQ。 */
+const SOURCE_STATE_LABEL: Record<string, string> = {
+  tdx_tq: '通达信 TQ',
+  em_trends2: '东财 trends2',
+  mixed: '混合来源',
+  unknown: '来源未知',
+  no_data: '无数据',
+}
+
+function sourceText(resp?: { source?: string; source_labels?: string[] } | null): string {
+  const labels = resp?.source_labels || []
+  if (labels.length) return labels.join(' / ')
+  return SOURCE_STATE_LABEL[resp?.source || ''] || resp?.source || '来源未知'
 }
 
 const STATE_LABEL: Record<string, { text: string; cls: string }> = {
@@ -262,21 +296,31 @@ export default function EtfWatchPage() {
   const ratio = totals?.ratio_vs_baseline ?? null
   const ratioTone: 'up' | 'down' | 'neutral' = ratio === null ? 'neutral' : ratio >= 1.15 ? 'up' : ratio <= 0.7 ? 'down' : 'neutral'
 
-  const supportRows = useMemo(() => (support?.support_days || []).slice(-12).reverse(), [support])
+  const supportRows = useMemo(() => (support?.series || []).slice(-12).reverse(), [support])
   const dailyDates = daily?.dates || []
-  /** SC8 单位由接口给（亿份）；阈值同为份额口径。 */
+  /** SC8 单位由接口给（推断为亿份）。 */
   const shareUnit = support?.net_sub_unit || support?.unit || '亿份'
-  const thresholdShares = support?.threshold_share_yi ?? support?.threshold_yi ?? 100
+  /** 单位是推断（不是已确认事实）：页面必须把这个词摆出来。 */
+  const unitInferred = (support?.unit_confidence || 'inferred') === 'inferred'
   const supportLag = support?.freshness?.lag_trading_days ?? null
+  const intradaySource = sourceText(intraday)
+  const intradayMixed = intraday?.source === 'mixed'
+  const dailySource = sourceText(daily)
+  // 逐日来源明细只在窗口较小的时候展开（120 日窗口全展开会把脚注挤爆）。
+  const dailySourceEntries = Object.entries(daily?.source_by_date || {})
+  const dailySourceDetail =
+    dailySourceEntries.length && dailySourceEntries.length <= 8
+      ? `；逐日 ${dailySourceEntries.map(([d, labels]) => `${d}=${labels.join('/')}`).join('、')}`
+      : ''
 
   return (
     <div className="page-container">
       <PageHeader
         title="国家队 ETF"
-        description="20 只重点宽基 ETF 的分钟成交额与市场级 SC8 份额（亿份）。用于判断托底资金是否在场，不构成投资建议。"
+        description="20 只重点宽基 ETF 的分钟成交额与市场级 SC8 份额（单位推断为亿份）。用于观察宽基 ETF 的成交与份额变化，不构成投资建议。"
         metadata={
           <>
-            <span>数据源·通达信 TQ</span>
+            <span>分钟来源·{intradaySource}{intradayMixed ? '（混源）' : ''}</span>
             <span>{intraday?.date ? `${intraday.date.slice(0, 4)}-${intraday.date.slice(4, 6)}-${intraday.date.slice(6, 8)}` : '--'}</span>
             <span>当前时段 {PHASE_LABEL[intraday?.session_phase || intraday?.phase || ''] || '--'}</span>
           </>
@@ -326,10 +370,22 @@ export default function EtfWatchPage() {
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Stat label="今日累计成交额" value={`${fmt(totals?.cum_yi)} 亿`} hint={totals?.last_minute ? `截至 ${totals.last_minute.slice(0, 2)}:${totals.last_minute.slice(2)}` : undefined} />
-                  <Stat label="同期基线均值" value={`${fmt(totals?.baseline_avg_yi)} 亿`} hint={`基线 ${totals?.baseline_days ?? 0}/${totals?.baseline_days_requested ?? 20} 个交易日`} />
+                  <Stat label="今日累计成交额" value={`${fmt(totals?.cum_yi)} 亿元`} hint={totals?.last_minute ? `截至 ${totals.last_minute.slice(0, 2)}:${totals.last_minute.slice(2)}` : undefined} />
+                  <Stat label="同期基线均值" value={`${fmt(totals?.baseline_avg_yi)} 亿元`} hint={`基线 ${totals?.baseline_days ?? 0}/${totals?.baseline_days_requested ?? 20} 个交易日`} />
                   <Stat label="相对基线" value={ratio === null ? '--' : `${fmt(ratio)} 倍`} tone={ratioTone} hint={ratio === null ? '基线不足，不外推' : ratio >= 1.15 ? '放量' : ratio <= 0.7 ? '清淡' : '接近常态'} />
                   <Stat label="已采到分钟" value={`${totals?.minutes ?? 0} 分钟`} hint={`≥${totals?.min_etfs_for_complete ?? 16} 只 ${totals?.full_minutes ?? 0} 分钟`} />
+                </div>
+
+                <div
+                  className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-s2 px-3 py-2 text-[12px] leading-6 text-muted-foreground"
+                  role="status"
+                  aria-label="分钟数据来源"
+                >
+                  <span>分钟数据来源：{intradaySource}{intradayMixed ? '（混源，逐日不同）' : ''}</span>
+                  {intraday?.source_note ? <span>· {intraday.source_note}</span> : null}
+                  {intraday?.baseline_sources?.some(s => s !== 'tdx_tq') ? (
+                    <span className="text-role-watch">· 基线含非 TQ / 未标注来源，比值只作参考</span>
+                  ) : null}
                 </div>
 
                 <div className="mt-4">
@@ -359,10 +415,10 @@ export default function EtfWatchPage() {
             )}
           </Section>
 
-          {/* ② 托底信号 */}
+          {/* ② 份额信号（SC8，单位推断） */}
           <Section
-            title="ETF 托底信号"
-            desc={`市场级 SC8 两列是全市场 ETF 总份额与当日份额变动（单位${shareUnit}，份额口径，不是金额），单日份额变动 ≥${thresholdShares} ${shareUnit}视为托底日样本。盘中先看成交额在历史托底日里的位置，等交易所份额公布后再看份额变动。`}
+            title="ETF 份额信号（SC8）"
+            desc={`市场级 SC8 两列推断为全市场 ETF 总份额与当日份额变动（单位推断为 ${shareUnit}，不是金额）。没有官方字段定义、也没有可换算的金额阈值，因此本页不按任何阈值判定「托底日」，只展示原始样本与样本内分位。`}
           >
             {support?.state === 'no_data' ? (
               <div className="rounded-lg bg-s2 px-3 py-3 text-[14px] text-muted-foreground">{support.note || '暂无市场级 SC8 份额数据。'}</div>
@@ -374,20 +430,27 @@ export default function EtfWatchPage() {
                     <span>
                       数据停在 {support?.as_of || support?.latest?.date || '--'}（
                       {supportLag === null ? '滞后天数无法确认' : `已滞后 ${supportLag} 个交易日`}
-                      ），上游 SC8 市场统计序列未更新。以下为历史份额，不是当前读数，不能当作今日规模或净申购。
+                      ），上游 SC8 市场统计序列未更新。以下为历史份额，不是当前读数，不能当作今日份额或份额变动。
                     </span>
                   </div>
                 ) : null}
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Stat label="最新交易日份额变动" value={signed(support?.latest?.net_sub_yi)} tone={(support?.latest?.net_sub_yi ?? 0) >= 0 ? 'up' : 'down'} hint={`${support?.latest?.date ?? '--'}（${shareUnit}）`} />
-                  <Stat label="全市场 ETF 总份额" value={`${fmt(support?.latest?.scale_yi)} 亿`} hint={shareUnit} />
-                  <Stat label="托底日样本数" value={`${support?.support_count ?? 0} 天`} hint={`样本区间 ${support?.sample_count ?? 0} 个交易日`} />
+                  <Stat label="全市场 ETF 总份额" value={fmt(support?.latest?.scale_yi)} hint={`${shareUnit}（推断口径）`} />
+                  <Stat label="样本交易日数" value={`${support?.sample_count ?? 0} 天`} hint="读源原样，未做阈值筛选" />
                   <Stat
-                    label="最新值在托底样本中的分位"
-                    value={support?.latest_percentile_in_support_days === null || support?.latest_percentile_in_support_days === undefined ? '--' : `${support.latest_percentile_in_support_days}%`}
-                    hint="越高说明这次份额变化在历史托底日里越靠前"
+                    label="最新值在样本内分位"
+                    value={support?.latest_percentile_in_samples === null || support?.latest_percentile_in_samples === undefined ? '--' : `${support.latest_percentile_in_samples}%`}
+                    hint="仅描述在同一读源样本里的排名，不是托底判定"
                   />
                 </div>
+
+                {unitInferred ? (
+                  <div className="mt-3 rounded-lg bg-s2 px-3 py-2 text-[12px] leading-6 text-muted-foreground" role="note">
+                    <span className="font-medium text-foreground">单位口径为推断（inferred），不是已确认事实。</span>
+                    {support?.unit_evidence ? ` ${support.unit_evidence}` : ' 正证是交易所份额合计对拍 -0.07%，反证是同口径 Σ份额×净值 为列0 的 1.42 倍。'}
+                  </div>
+                ) : null}
 
                 {supportRows.length ? (
                   <div className="mt-4 overflow-x-auto">
@@ -401,20 +464,19 @@ export default function EtfWatchPage() {
                       </thead>
                       <tbody>
                         {supportRows.map(row => {
-                          const scale = support?.series?.find(x => x.date === row.date)?.scale_yi ?? null
                           return (
                             <tr key={row.date} className="border-t border-border">
                               <td className="py-1.5 font-num tabular-nums">{row.date}</td>
                               <td className={cn('py-1.5 text-right font-num tabular-nums', (row.net_sub_yi ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down')}>
                                 {signed(row.net_sub_yi)}
                               </td>
-                              <td className="py-1.5 text-right font-num tabular-nums">{fmt(scale)}</td>
+                              <td className="py-1.5 text-right font-num tabular-nums">{fmt(row.scale_yi)}</td>
                             </tr>
                           )
                         })}
                       </tbody>
                     </table>
-                    <p className="mt-2 text-[12px] leading-6 text-muted-foreground">最近 12 个托底日。托底日密集出现（连续多日 ≥{thresholdShares} {shareUnit}）时，说明资金是持续进场而非单日脉冲；份额变动不等于金额净流入。</p>
+                    <p className="mt-2 text-[12px] leading-6 text-muted-foreground">最近 12 个样本日（不是按阈值筛出的托底日）。份额变动只是份额口径，不等于金额净流入。</p>
                   </div>
                 ) : null}
 
@@ -431,7 +493,7 @@ export default function EtfWatchPage() {
           {/* ③ 日度全景 */}
           <Section
             title="日度资金全景"
-            desc="按跟踪指数分 12 类看每天的钱去了哪一类。分类成交额能看出是「全面托底」还是「只护沪深300」——单日总量看不出这个区别。"
+            desc="按跟踪指数分 12 类看每天的钱去了哪一类。分类成交额能看出是「全面放量」还是「只在沪深300」——单日总量看不出这个区别。"
             extra={
               <div className="flex items-center gap-1 rounded-lg bg-s2 p-0.5">
                 {[10, 20, 40].map(n => (
@@ -492,8 +554,13 @@ export default function EtfWatchPage() {
                   </table>
                 </div>
                 <p className="mt-2 text-[12px] leading-6 text-muted-foreground">
-                  成交额单位亿元；市场级列为 SC8 份额口径（单位亿份，是份额不是金额）。成交额按 20 只重点 ETF 归入 12 类；
+                  成交额单位亿元；市场级列为 SC8 份额口径（单位推断为亿份，是份额不是金额）。成交额按 20 只重点 ETF 归入 12 类；
                   份额变动只有市场级（全市场 ETF 合计），不能拆到单只或单类，也不能换算成金额净流入。
+                </p>
+                <p className="mt-1 text-[12px] leading-6 text-muted-foreground">
+                  分钟数据来源（逐日）：{dailySource}
+                  {daily?.source_note ? `；${daily.source_note}` : ''}
+                  {dailySourceDetail}
                 </p>
               </>
             )}
@@ -501,8 +568,11 @@ export default function EtfWatchPage() {
 
           <div className="rounded-xl bg-card p-4 text-[12px] leading-6 text-muted-foreground">
             <p>
-              口径说明：分钟成交额来自通达信 TQ 网关（一次批量调用取 20 只，非逐只请求）；市场级数据来自 SC8 序列
-              （全市场 ETF 总份额与份额变动，单位亿份；该序列已停更，页面按库内真实日期展示并标滞后）。
+              口径说明：分钟成交额按库内 <code>etf_minute_flow.source</code> 逐日标注真实来源
+              （通达信 TQ / 东财 trends2 兜底 / 混合 / 未知 NULL 照实展示，不写死单一来源）；本次页面读到的来源为
+              {intradaySource}{intradayMixed ? '（混源，比值只作参考）' : ''}。市场级数据来自 SC8 序列
+              （推断为全市场 ETF 总份额与份额变动，单位推断为亿份；单位是推断而非已确认事实；
+              该序列已停更，页面按库内真实日期展示并标滞后）。
               单只 ETF 的份额在通达信是当前值回填，因此**不提供单只净申购**；需要拆到单只时须另接份额数据源。
               本页只陈述资金行为，不构成任何投资建议。
             </p>

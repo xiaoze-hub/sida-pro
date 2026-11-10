@@ -6,20 +6,29 @@
 纪律（与 `src/web/api/etf_watch.py` 原有口径逐条一致，改动必须同步这里）：
 1. 只读：不 INSERT/UPDATE，不调采集器，不联网。
 2. 数据缺失一律 `None` + note，不写 0；分钟覆盖不足 80% 判 `insufficient`。
-3. 净申购只有市场级 SC8 是真的；20 只篮子的净申购**不存在**，不能拆。
+3. 份额变动只有市场级 SC8 有（且单位是推断）；20 只篮子的净申购**不存在**，不能拆。
 4. 单位：库内 `amount_wan` 是万元，出口 ÷10000 转亿元。
 
-SC8 单位与新鲜度（2026-11-10 独立核查后钉死，别再按「亿元」写）：
-- `get_scjy_value(SC8)` 两列是**份额（亿份）**，不是金额：2026-10-16 上交所 924 只（TOT_VOL 万份）
-  + 深交所 761 只（份）合计 32863.16 亿份，SC8 列0 = 32886.32（差 -0.07%，缺口 = 沪市货币
-  ETF 不在交易所份额接口）；同口径「Σ份额 × 净值」= 46548 亿元，是列0 的 1.42 倍（若列0 是金额，
-  隐含平均净值 1.415，不可能与份额合计巧合到 0.07%）。2024-09-13→10-08 沪深300 涨约 25–30%，
-  列0 只涨 4.6%（份数不随市值走）—— 同样只支持份额口径。
-  列1 ≈ Δ列0（914 天中 557 天精确相等）⇒ 两列同源，
-  **不能**用「规模×净值」互证，也不许把列1 标成亿元净申购。
-- TQ SC8 全历史止于 2026-10-16（915 行，上游市场统计序列停更）。读源直接取 `series[-1]`
-  当最新会让 10-16 长期冒充今天，故 `support_payload` 必须按交易日历算滞后并给出
-  `stale/as_of`；前端与参谋一律带真实日期与滞后提示，**不改库、不改历史行**。
+来源纪律（2026-11-10 读侧安全修复）：
+- `etf_minute_flow.source`（迁移 245）是**每分钟行**的真实写入来源：TQ 主源 `tdx_tq`、
+  东财 trends2 兜底 `em_trends2`。读侧必须按该列回报实际来源，**不许**在出口写死
+  「tdx_tq」：兜底日、混源日、或 source 为 NULL 的历史行（来源未知）说成 TQ 就是虚构。
+- 有分钟行但 source 为 NULL → 出口 `unknown`；同一份数据出现多种来源 → `mixed` 并逐日列出。
+  基线窗口若含非 TQ / 未标注来源，必须显式提示「与当前数据可能不同源，比值只作参考」。
+
+SC8 单位与新鲜度（2026-11-10 核查；**单位是推断，不是已确认事实**）：
+- `get_scjy_value(SC8)` 两列**更可能是份额（亿份）**而非金额：2026-10-16 上交所 924 只
+  （TOT_VOL 万份）+ 深交所 761 只（份）合计 32863.16 亿份，SC8 列0 = 32886.32（差 -0.07%）；
+  列1 ≈ Δ列0（914 天中 557 天精确相等）。
+- 但反证同样存在：同口径「Σ份额 × 净值」= 46548 亿元，是列0 的 1.42 倍；且没有交易所/
+  通达信官方字段定义可引用。所以**只能标为推断**（`unit_confidence="inferred"`），
+  出口措辞一律「推断为份额」，不得写成「已确认 / 钉死」，也不得据此换算金额。
+- 因此**不提供任何「托底日」判定**：`SUPPORT_FLOW_THRESHOLD_YI`（100，采集器里是
+  「单日净流入 100 **亿元**」的金额阈值）与份额单位不可换算，拿它当「100 亿份」筛样本
+  是无依据的推断，已从读侧移除（含旧兼容字段 `threshold_yi`）。
+- TQ SC8 全历史止于 2026-10-16（915 行，上游市场统计序列停更）。读源直接取
+  `series[-1]` 当最新会让 10-16 长期冒充今天，故 `support_payload` 必须按交易日历算滞后并
+  给出 `stale/as_of`；前端与参谋一律带真实日期与滞后提示，**不改库、不改历史行**。
 
 调用方传入 `run(sql, params) -> list[dict]`，因此本模块不依赖 Web 层也不绑定 engine。
 """
@@ -49,9 +58,32 @@ BASELINE_DAYS = 20
 #: 单日分钟上限（含 11:30 / 13:00 边界与盘后残留行；SQL 的 LIMIT 按它取上界）。
 MAX_MINUTES_PER_DAY = 1440
 
-#: SC8 两列的单位：**份额（亿份）**，不是金额。落库列名 `scale_yi` / `net_sub_yi` 保留
+#: SC8 两列的单位：**推断为份额（亿份）**，不是金额。落库列名 `scale_yi` / `net_sub_yi` 保留
 #: （历史表与 API 契约），但出口必须带这个显式单位，禁止再渲染成「亿元」。
+#: 证据只能支持「更可能是份额」，无法唯一确认 —— 见 `SC8_UNIT_CAVEAT` 与 `unit_confidence`。
 SC8_UNIT = "亿份"
+
+#: 单位置信度：`inferred` = 推断（不是已确认）。出口与测试都照这个值断言。
+SC8_UNIT_CONFIDENCE = "inferred"
+
+#: 单位推断的证据与反证（原样外发，别只留结论）：正证是份额合计对拍 -0.07%，
+#: 反证是「Σ份额×净值」为列0 的 1.42 倍。两条都在，所以只能叫推断。
+SC8_UNIT_CAVEAT = (
+    "推断依据：2026-10-16 沪深交易所份额合计 32863.16 亿份 vs SC8 列0 32886.32（差 -0.07%），"
+    "且列1≈Δ列0；反证：同口径 Σ份额×净值 = 46548 亿元，是列0 的 1.42 倍，"
+    "且无交易所/通达信官方字段定义可引用 —— 故单位为推断，不是已确认事实。"
+)
+
+#: `etf_minute_flow.source`：主源与未知。兜底源标识见 `src/collectors/em_etf_minute.py`。
+SOURCE_TQ = "tdx_tq"
+SOURCE_EM_TRENDS2 = "em_trends2"
+#: source 为 NULL（迁移前手工构造行/未标注）→ 未知。**不许**当成 tdx_tq。
+SOURCE_UNKNOWN = "unknown"
+SOURCE_LABELS = {
+    SOURCE_TQ: "通达信 TQ",
+    SOURCE_EM_TRENDS2: "东财 trends2",
+    SOURCE_UNKNOWN: "来源未知",
+}
 
 #: SC8 新鲜度容差（交易日）。T+1 序列在交易日当天的最新日 = 上一交易日（滞后 0），
 #: 早间采集窗口内允许滞后 1；再多就是上游停更/采集失败，必须标 stale。
@@ -113,6 +145,12 @@ SQL: dict[str, str] = {
         "SELECT trade_date, scale_yi AS etf_scale, net_sub_yi AS etf_net_sub "
         "FROM etf_flow_daily WHERE trade_date IN ({ph}) LIMIT 400"
     ),
+    #: 每日真实写入来源（迁移 245 的 `source` 列）。**不聚合掉 NULL**：source 为 NULL 的
+    #: 行会以 source=NULL 分组回来，读侧据此报「未知」，而不是默认成 TQ。
+    "etf_minute_sources": (
+        "SELECT trade_date, source, COUNT(*) AS n FROM etf_minute_flow "
+        "WHERE trade_date IN ({ph}) GROUP BY trade_date, source LIMIT 400"
+    ),
 }
 
 
@@ -127,6 +165,96 @@ def in_clause(prefix: str, values: list[str]) -> tuple[str, dict[str, str]]:
     params = {f"{prefix}{i}": v for i, v in enumerate(values)}
     ph = ", ".join(f":{k}" for k in params)
     return ph, params
+
+
+def _source_word(raw: str) -> str:
+    """来源标识 → 人话；未登记标识按原值显示（不猜、不映射成 TQ）。"""
+    return SOURCE_LABELS.get(raw, raw)
+
+
+def summarize_minute_sources(
+    rows: list[dict[str, Any]],
+    *,
+    has_data: bool,
+) -> dict[str, Any]:
+    """分钟表真实来源汇总：单源 / 混源 / 未知，逐日展开，绝不再写死 `tdx_tq`。
+
+    `rows` 来自 `SQL["etf_minute_sources"]`（trade_date, source, n）。source 为 NULL
+    的行按 `unknown` 计 —— 迁移 245 之前的存量行虽被回填为 `tdx_tq`，但手工构造/未标注
+    的行仍可能是 NULL，读侧只能照实说「未知」，不能替它认领来源。
+    """
+    by_date: dict[str, list[str]] = {}
+    for r in rows or []:
+        day = str(r.get("trade_date") or "")
+        raw = r.get("source")
+        raw = str(raw) if raw not in (None, "") else SOURCE_UNKNOWN
+        bucket = by_date.setdefault(day, [])
+        if raw not in bucket:
+            bucket.append(raw)
+
+    raw_all = sorted({s for v in by_date.values() for s in v})
+    if not has_data:
+        state = "no_data"
+    elif not raw_all or raw_all == [SOURCE_UNKNOWN]:
+        state = "unknown"
+    elif len(raw_all) == 1:
+        state = raw_all[0]
+    else:
+        state = "mixed"
+
+    labels = [_source_word(s) for s in raw_all]
+    # 逐日来源固定按标识排序（同日多条时 SQL 的 GROUP BY 顺序不保证），出口才可复现。
+    by_date_labels = {d: [_source_word(s) for s in sorted(v)] for d, v in sorted(by_date.items())}
+
+    if state == "no_data":
+        note = "无分钟行，来源无从判断"
+    elif state == "unknown":
+        note = (
+            "分钟表 source 为 NULL 或来源列未取到：该数据来源未知（unknown），"
+            "不默认当成通达信 TQ"
+        )
+    elif state == "mixed":
+        parts = []
+        for d, vs in by_date_labels.items():
+            parts.append(f"{d}={'/'.join(vs)}")
+        note = (
+            "⚠️ 分钟表来源混合（" + "；".join(parts) + "）：混源数据不能当成单一来源口径，"
+            "与基线比较只作参考"
+        )
+    elif state == SOURCE_EM_TRENDS2:
+        note = "该数据由东财 trends2 兜底写入（em_trends2），不是 TQ 原生分钟线"
+    elif state == SOURCE_TQ:
+        note = "分钟表来源为通达信 TQ（tdx_tq），单一来源"
+    else:
+        note = f"分钟表来源为未登记标识 {state}（按原值展示，不映射成 TQ）"
+
+    return {
+        "state": state,
+        "sources": raw_all,
+        "labels": labels,
+        "by_date": by_date_labels,
+        "note": note,
+    }
+
+
+def minute_sources(run: Runner, dates: list[str]) -> dict[str, Any]:
+    """按交易日集合查真实来源；调用方 dates 为空时明确 `no_data`。
+
+    来源列读不到（老库缺列/单表不可读）时按 **unknown** 出口，不猜成 TQ：来源只是
+    解释性元数据，不该让整张看板 500，但也不能因此编一个来源出来。
+    """
+    if not dates:
+        return summarize_minute_sources([], has_data=False)
+    ph, in_params = in_clause("s", dates)
+    try:
+        rows = run("etf_minute_sources", in_params, {"ph": ph})
+    except Exception as exc:  # noqa: BLE001 — 来源是旁证, 读不到只能标未知
+        # 只记异常类型：驱动异常的 str() 可能带 DSN，来源本身也不是结论依据。
+        logger.warning("[etf-feed] 分钟来源列读取失败，按未知处理: %s", type(exc).__name__)
+        out = summarize_minute_sources([], has_data=True)
+        out["note"] = "分钟来源列读取失败，来源未知（unknown），不默认当成通达信 TQ"
+        return out
+    return summarize_minute_sources(rows, has_data=True)
 
 
 def phase_of(d: date, now: datetime) -> str:
@@ -155,7 +283,10 @@ def basket_payload() -> dict[str, Any]:
         "items": ew.basket_payload(),
         "categories": ew.categories(),
         "benchmark": {"code": ew.BENCHMARK_INDEX, "name": ew.BENCHMARK_NAME},
-        "source": "tdx_tq",
+        "source": "config",
+        # 篮子名单是代码里的静态配置，不是从分钟表读出的数据源；分钟数据的真实来源
+        # 由 intraday/daily 按 `etf_minute_flow.source` 回报（tdx_tq / em_trends2 / unknown）。
+        "source_note": "20 只名单与分类来自静态配置；分钟数据来源见 intraday/daily 的 source 字段。",
         "single_share_supported": supported,
         "single_share_note": (
             "单只 ETF 净申购不可用：通达信 ETF 历史份额尚未通过独立数据验证，"
@@ -267,8 +398,16 @@ def intraday_payload(
             "note": "当日无分钟数据（未采集或非交易日）；盘中采集每分钟一次，收盘后 15:35 补采。",
             "series": [],
             "totals": None,
-            "source": "tdx_tq",
+            # 没有行就没有来源；不写 tdx_tq（那是虚构）。
+            "source": "no_data",
+            "sources": [],
+            "source_labels": [],
+            "source_by_date": {},
+            "source_note": "无分钟行，来源无从判断",
         }
+
+    # 真实来源：按 `etf_minute_flow.source` 逐日查，单源/混源/未知都在出口照实说。
+    src = minute_sources(run, [target])
 
     base_dates = [
         r["trade_date"]
@@ -276,6 +415,11 @@ def intraday_payload(
     ]
     base = baseline_curve(run, base_dates)
     baseline: dict[str, float] = base["cum"]
+    base_src = minute_sources(run, [str(d) for d in base_dates])
+    # 基线里只要出现非 TQ 或未知来源，这个「同期比值」就不是同源同比，必须显式提示。
+    base_foreign = [
+        s for s in base_src["sources"] if s not in (SOURCE_TQ,)
+    ]
 
     series: list[dict[str, Any]] = []
     cum = 0.0
@@ -352,6 +496,12 @@ def intraday_payload(
         if dropped_days:
             base_note += f"，另有 {dropped_days} 个交易日无达标分钟被剔除"
         base_note += "；缺的日期是未采集还是非交易日无法从分钟表确认，标未确认）"
+    if base_dates and base_foreign:
+        # 混源基线不是同源同比：只提示，不改数、不剔除（剔除也是无依据的取舍）。
+        base_note += (
+            f"；⚠️ 基线窗口含非 TQ／未标注来源（{'/'.join(base_src['labels']) or '来源未知'}），"
+            "基线均值与当前数据可能不同源，比值只作参考"
+        )
 
     return {
         "date": target,
@@ -384,11 +534,20 @@ def intraday_payload(
             "coverage": round_or_none(coverage, 3),
         },
         "note": (
-            f"成交额为 {expected} 只重点宽基 ETF 合计（通达信分钟线，单位亿元）；"
+            f"成交额为 {expected} 只重点宽基 ETF 合计（单位亿元）；"
             + base_note
             + "。"
+            + src["note"]
         ),
-        "source": "tdx_tq",
+        # 分钟数据真实来源：`tdx_tq` / `em_trends2` / `mixed` / `unknown`，绝不写死。
+        "source": src["state"],
+        "sources": src["sources"],
+        "source_labels": src["labels"],
+        "source_by_date": src["by_date"],
+        "source_note": src["note"],
+        "baseline_sources": base_src["sources"],
+        "baseline_source_labels": base_src["labels"],
+        "baseline_source_note": base_src["note"],
     }
 
 
@@ -438,12 +597,11 @@ def sc8_freshness(
     return out
 
 
-def _support_note(fresh: dict[str, Any], threshold: float) -> str:
-    """SC8 口径说明：份额（亿份）+ 真实日期 + 滞后。金额口径一律不出现。"""
+def _support_note(fresh: dict[str, Any]) -> str:
+    """SC8 口径说明：**推断**为份额（亿份）+ 真实日期 + 滞后。不做任何托底判定。"""
     base = (
-        f"SC8 两列为全市场 ETF 总份额与当日份额变动（单位{SC8_UNIT}，是份额不是金额，"
-        "不做金额换算）；"
-        f"单日份额变动 ≥{threshold:g} {SC8_UNIT} 视为托底日样本。"
+        f"SC8 两列推断为全市场 ETF 总份额与当日份额变动（单位推断为 {SC8_UNIT}，不是金额；"
+        "推断依据与反证见 unit_evidence）；不做金额换算，也不按单一阈值筛「托底日」。"
     )
     if not fresh.get("stale"):
         return base
@@ -461,7 +619,7 @@ def _support_note(fresh: dict[str, Any], threshold: float) -> str:
     return base + (
         f"⚠️ 最新日为 {fresh.get('as_of')}，距 {fresh.get('checked_at')} 已 {lag} 个交易日未更新"
         "（上游市场统计序列停更）；下列历史份额照实展示，不是当前读数，"
-        "不得当作今日规模/净申购。"
+        "不得当作今日份额/份额变动。"
     )
 
 
@@ -471,10 +629,15 @@ def support_payload(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """市场级 SC8 原始序列 + 托底日样本 + 新鲜度闸门。
+    """市场级 SC8 原始序列 + 新鲜度闸门（**不做托底日筛选，不提供阈值判定**）。
 
     `now` 由调用方注入（测试可固定）；默认取上海时区当前时间。
     输出里 `as_of` 永远是库内真实最新日，滞后只加标注，不改日期、不删行、不写库。
+
+    为什么删掉 `support_days/support_count/threshold_yi`：那套统计把采集器里
+    「单日净流入 100 **亿元**」的金额阈值直接当成「100 亿份」份额阈值用，单位不可换算，
+    是没有任何依据的托底推断；旧的 `threshold_yi` 兼容字段也在继续误导调用方，一并移除。
+    现在只给原始样本、样本内分位（不加任何阈值）与单位推断说明。
     """
     now = now or datetime.now(ZoneInfo("Asia/Shanghai"))
     rows = run("etf_support", {"n": days, "as_of": now.strftime("%Y%m%d")})
@@ -486,7 +649,8 @@ def support_payload(
             "state": "no_data",
             "note": "市场级 ETF 份额（SC8）尚无落库数据；采集器回补后可用。",
             "single_share_supported": supported,
-            "source": "tdx_tq",
+            "source": SOURCE_TQ,
+            "source_table": "etf_flow_daily（TDX SC8 序列）",
         }
 
     series = [
@@ -497,16 +661,15 @@ def support_payload(
         }
         for r in rows
     ]
-    # 阈值语义是**亿份**：`ew.SUPPORT_FLOW_THRESHOLD_YI` 的 100 指 100 亿份，不是 100 亿元。
-    support = [x for x in series if (x["net_sub_yi"] or 0) >= ew.SUPPORT_FLOW_THRESHOLD_YI]
     values = sorted(x["net_sub_yi"] for x in series if x["net_sub_yi"] is not None)
 
     latest = series[-1]
     latest_val = latest.get("net_sub_yi")
+    # 分位只描述「最新值在本样本窗口内排第几」，样本就是读源原样：不做阈值筛选，
+    # 因此它不是「托底日分位」，文案也必须这么说。
     pct = None
-    if latest_val is not None and support:
-        below = sum(1 for x in support if (x["net_sub_yi"] or 0) < latest_val)
-        pct = round(below / len(support) * 100, 1)
+    if latest_val is not None and values:
+        pct = round(sum(1 for v in values if v < latest_val) / len(values) * 100, 1)
 
     fresh = sc8_freshness(latest["date"], now)
 
@@ -517,18 +680,15 @@ def support_payload(
         "freshness": fresh,
         # 显式单位：前端/参谋照它渲染，别再按字段名的 `_yi` 猜成亿元。
         "unit": SC8_UNIT,
+        "unit_confidence": SC8_UNIT_CONFIDENCE,
+        "unit_evidence": SC8_UNIT_CAVEAT,
         "scale_unit": SC8_UNIT,
         "net_sub_unit": SC8_UNIT,
-        "unit_basis": "全市场 ETF 份额（非金额；份额变动 ≠ 金额净申购）",
-        "threshold_share_yi": ew.SUPPORT_FLOW_THRESHOLD_YI,
-        # 旧字段名保留（外部调用方兼容），值同为亿份；新代码用 threshold_share_yi。
-        "threshold_yi": ew.SUPPORT_FLOW_THRESHOLD_YI,
+        "unit_basis": "推断为全市场 ETF 份额（非金额；份额变动 ≠ 金额净申购）",
         "series": series,
-        "support_days": support[-80:],
-        "support_count": len(support),
         "sample_count": len(series),
         "latest": latest,
-        "latest_percentile_in_support_days": pct,
+        "latest_percentile_in_samples": pct,
         "max_net_sub_yi": values[-1] if values else None,
         "min_net_sub_yi": values[0] if values else None,
         "single_share_supported": supported,
@@ -538,8 +698,10 @@ def support_payload(
             if not supported
             else f"单只份额来源：{ew.single_share_source}"
         ),
-        "note": _support_note(fresh, ew.SUPPORT_FLOW_THRESHOLD_YI),
-        "source": "tdx_tq",
+        "note": _support_note(fresh),
+        "source": SOURCE_TQ,
+        # SC8 不在分钟表里：它的来源是 etf_flow_daily（TQ SC8 序列），不能套用分钟来源。
+        "source_table": "etf_flow_daily（TDX SC8 序列）",
     }
 
 
@@ -562,10 +724,15 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
             "note": "尚无分钟数据落库。",
             "dates": [],
             "days_requested": int(days),
-            "source": "tdx_tq",
+            "source": "no_data",
+            "sources": [],
+            "source_labels": [],
+            "source_by_date": {},
+            "source_note": "无分钟行，来源无从判断",
         }
 
     ph, in_params = in_clause("d", dates)
+    src = minute_sources(run, [str(d) for d in dates])
     rows = run("etf_daily_minute", in_params, {"ph": ph})
     cat_of = {c: cat for c, _n, cat in ew.ETF_BASKET}
     by_cat: dict[str, dict[str, float]] = {cat: {} for cat in ew.categories()}
@@ -610,10 +777,18 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
         ],
         "single_share_supported": ew.single_share_source is not None,
         "note": (
-            "成交额为 20 只 ETF 合计（亿元）；净申购/规模列为市场级 SC8 的**份额**口径"
-            f"（单位{SC8_UNIT}，是份额不是金额），且只到全市场一层。"
+            "成交额为 20 只 ETF 合计（亿元）；份额变动/总份额列（字段名 net_sub_yi/scale_yi）"
+            "是市场级 SC8 的**推断份额**口径"
+            f"（单位推断为{SC8_UNIT}，是份额不是金额，依据见 support_payload.unit_evidence），"
+            "且只到全市场一层；"
+            + src["note"]
         ),
-        "source": "tdx_tq",
+        # 分钟成交额的真实来源（逐日）：混合窗口会被标成 mixed，未知标 unknown。
+        "source": src["state"],
+        "sources": src["sources"],
+        "source_labels": src["labels"],
+        "source_by_date": src["by_date"],
+        "source_note": src["note"],
     }
 
 
@@ -622,6 +797,10 @@ __all__ = [
     "COVERAGE_MIN",
     "MAX_MINUTES_PER_DAY",
     "SC8_UNIT",
+    "SC8_UNIT_CAVEAT",
+    "SC8_UNIT_CONFIDENCE",
+    "SOURCE_LABELS",
+    "SOURCE_UNKNOWN",
     "SQL",
     "STALE_MAX_LAG_TRADING_DAYS",
     "basket_payload",
@@ -631,8 +810,10 @@ __all__ = [
     "in_clause",
     "intraday_payload",
     "min_etfs_for_complete",
+    "minute_sources",
     "phase_of",
     "round_or_none",
+    "summarize_minute_sources",
     "sc8_freshness",
     "support_payload",
 ]

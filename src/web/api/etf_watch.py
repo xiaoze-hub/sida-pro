@@ -4,8 +4,8 @@
 
 GET /api/etf-watch/basket              20 只重点 ETF + 12 类分组 + 数据源声明
 GET /api/etf-watch/intraday?date=      分钟级聚合：20 只合计 + 上证综指 + 20 日同期均值
-GET /api/etf-watch/support             市场级 ETF 份额（SC8）+ 托底日样本 + 分位 + 新鲜度
-GET /api/etf-watch/daily?days=30       日度：总成交额 / 分类成交额 / 净申购
+GET /api/etf-watch/support             市场级 ETF 份额（SC8，单位推断）+ 样本分位 + 新鲜度
+GET /api/etf-watch/daily?days=30       日度：总成交额 / 分类成交额 / 份额变动（SC8）
 
 **取数与聚合实现在 `src/core/etf_watch_feed.py`**，与数智参谋 `query_data_domain("etf.flow")`
 共用同一批 SQL —— 页面和参谋不会算出两个「20 只篮子成交额」。本文件只做 HTTP 收尾：
@@ -13,17 +13,21 @@ GET /api/etf-watch/daily?days=30       日度：总成交额 / 分类成交额 /
 
 口径纪律（用户对幻觉敏感，这里逐条写死）：
 
-1. **净申购只有市场级是真的**。单只 ETF 的 `get_gb_info` 份额是「当前值回填到每一天」
+1. **份额变动只有市场级有**。单只 ETF 的 `get_gb_info` 份额是「当前值回填到每一天」
    （实测 6 只主流 ETF × 63 个交易日零变化），拿它做单只净申购必然恒为 0。
    所以响应里 `single_share_supported=false` + `single_share_note`，前端必须显式标注，
    **禁止用别的算法"凑"一个单只净申购出来**。
 2. 数据缺失一律 `null` + `note`，不写 0。分钟行不全（覆盖率 <80%）时 `state="insufficient"`
    而不是拿半场数据算活跃度。
-3. 单位：成交额对外统一 **亿元**（库内 `amount_wan` 是万元，出口 ÷10000）；**SC8 两列是份额
-   （亿份）不是金额**，出口带 `unit/scale_unit/net_sub_unit`，不许渲染成亿元或「净申购金额」。
+3. 单位：成交额对外统一 **亿元**（库内 `amount_wan` 是万元，出口 ÷10000）；**SC8 两列推断为
+   份额（亿份），不是金额**（无官方字段定义，`unit_confidence=inferred`），出口带
+   `unit/scale_unit/net_sub_unit`，不许渲染成亿元或「净申购金额」。
    最新日超出 T+1 容差时 `state="stale"` 且 `as_of` 原样返回真实日期（上游 SC8 已停更）。
+   也不按任何阈值筛「托底日」：采集器的 100 是金额口径，与份额不可换算。
 4. 时段：`phase` 区分 `pre / live / closed / non_trading_day`，盘中均值只和**同日已发生
    的分钟**比（拿今天累计比过去 20 日全天累计是错的）。
+5. 来源：分钟数据的 `source` 逐日从 `etf_minute_flow.source` 读取（`tdx_tq` / `em_trends2` /
+   `mixed` / `unknown`），**不写死通达信 TQ**；基线窗口混入非 TQ 来源时比值只作参考。
 """
 
 from __future__ import annotations
@@ -114,11 +118,15 @@ def get_intraday(date_str: str | None = Query(default=None, alias="date")) -> di
     return payload
 
 
-# ── support（托底信号） ──────────────────────────────────────────────────
+# ── support（市场级份额，单位推断） ──────────────────────────────────────
 
 @router.get("/support")
 def get_support(days: int = Query(default=750, ge=30, le=1500)) -> dict:
-    """市场级 ETF 份额（SC8）+ 托底日样本 + 分位 + 新鲜度（滞后只标注，不改数据）。"""
+    """市场级 ETF 份额（SC8）+ 样本内分位 + 新鲜度（滞后只标注，不改数据）。
+
+    不做「托底日」筛选：采集器的 100 是「单日净流入 100 亿元」金额阈值，SC8 是份额
+    口径（且单位本身是推断），两者不可换算，按阈值筛样本属于无依据推断。
+    """
     return feed.support_payload(_feed_run, _int_param(days, 750), now=_now_cn())
 
 
@@ -126,5 +134,5 @@ def get_support(days: int = Query(default=750, ge=30, le=1500)) -> dict:
 
 @router.get("/daily")
 def get_daily(days: int = Query(default=30, ge=5, le=120)) -> dict:
-    """日度：总成交额 / 分类成交额 / 净申购（净申购仅市场级）。"""
+    """日度：总成交额 / 分类成交额 / 市场份额变动（SC8 份额变动仅市场级）。"""
     return feed.daily_payload(_feed_run, _int_param(days, 30))

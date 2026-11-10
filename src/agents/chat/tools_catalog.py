@@ -3275,13 +3275,14 @@ async def _query_ops_config(db: Any, params: dict[str, Any], user: Any) -> str:
 #: 语句键 → 人话标签（读取失败时写进「未取到（原因）」）。
 _ETF_SQL_LABELS = {
     "etf_minute_rows": "ETF 分钟成交额",
+    "etf_minute_sources": "分钟来源",
     "etf_latest_date": "分钟表最新交易日",
     "etf_baseline_dates": "基线交易日",
     "etf_baseline_rows": "同期基线",
     "etf_support": "SC8 市场级份额",
     "etf_daily_dates": "日度交易日",
     "etf_daily_minute": "日度分类成交额",
-    "etf_daily_net": "日度净申购",
+    "etf_daily_net": "日度份额变动",
 }
 
 _STATE_CN = {
@@ -3354,7 +3355,7 @@ def render_etf_flow(
     support: dict[str, Any] | None = None,
     missing: list[str] | None = None,
 ) -> str:
-    """ETF 托底资金：**分钟级已采集累计** / 分钟覆盖 / 时段 / 市场级 SC8 原始样本。
+    """ETF 资金观察：**分钟级已采集累计** / 真实分钟来源 / 分钟覆盖 / 时段 / 市场级 SC8 原始样本。
 
     参谋出口只报两类可证事实：
     1. 分钟表里**已采集**的篮子成交额累计（截至最后一根分钟线）+ 覆盖率与缺失；
@@ -3436,6 +3437,25 @@ def render_etf_flow(
                 f"（非当日盘面，勿当今日读数）"
             )
         sections.append(ts)
+        # 分钟数据真实来源：按 `etf_minute_flow.source` 逐日查，单源/混源/未知都照实说。
+        src_state = str(intraday.get("source") or "unknown")
+        src_labels = intraday.get("source_labels") or []
+        label_txt = "/".join(src_labels) if src_labels else "来源未知"
+        prefix = "⚠️ 混合来源 " if src_state == "mixed" else ""
+        suffix = "（历史未标注）" if src_state == "unknown" else ""
+        sections.append(
+            f"- **分钟来源（etf_minute_flow.source）**：{prefix}{label_txt}{suffix}"
+            f"；{intraday.get('source_note') or '来源未标注'}"
+        )
+        # 基线窗口里混入非 TQ / 未标注来源时，同期比值不是同源同比：必须显式降级。
+        base_sources = intraday.get("baseline_sources") or []
+        if any(s != etf_feed.SOURCE_TQ for s in base_sources):
+            base_labels = intraday.get("baseline_source_labels") or []
+            sections.append(
+                "- **基线来源**："
+                + ("/".join(base_labels) or "来源未知")
+                + "（基线窗口含非 TQ／未标注来源，均值与当前数据可能不同源）；比值只作参考"
+            )
     elif not any("分钟成交额" in m for m in miss):
         # 读表已经失败时不再叠加「无数据」措辞，避免把故障说成「今天没行情」。
         note = intraday.get("note") or "当日无分钟数据"
@@ -3444,19 +3464,16 @@ def render_etf_flow(
     sup = support or {}
     latest = sup.get("latest") or {}
     unit = sup.get("net_sub_unit") or etf_feed.SC8_UNIT
-    threshold = sup.get("threshold_share_yi")
-    if threshold is None:
-        threshold = sup.get("threshold_yi") or 100.0
     if sup.get("state") in ("ok", "stale") and latest:
-        pct = sup.get("latest_percentile_in_support_days")
-        # SC8 两列是**份额（亿份）**，不是金额：出口不许出现「亿元 / 规模 / 净申购金额」。
+        pct = sup.get("latest_percentile_in_samples")
+        # SC8 两列**推断**为份额（亿份），不是金额：这一行不许出现「元」，也不许出现
+        # 任何托底日/阈值——阈值来自采集器的 100 亿元金额口径，与份额不可换算。
         line = (
-            f"- **市场级 SC8（{unit}，份额口径非金额）**：{latest.get('date') or '未知'} "
+            f"- **市场级 SC8（{unit}，份额口径·单位推断）**：{latest.get('date') or '未知'} "
             f"份额变动 {_num(latest.get('net_sub_yi'))} {unit}"
             f"（全市场总份额 {_num(latest.get('scale_yi'))} {unit}）；"
-            f"托底日（单日份额变动 ≥{_num(threshold, 0)} {unit}）"
-            f"{sup.get('support_count')}/{sup.get('sample_count')} 个样本，"
-            f"最新日在托底日中分位 {_num(pct, 1)}%"
+            f"样本 {sup.get('sample_count')} 个交易日，"
+            f"最新值在样本内分位 {_num(pct, 1)}%"
         )
         # 样本窗口按读源返回的首末行原样写（不做任何窗口对齐或补日）。
         series = sup.get("series") or []
@@ -3480,17 +3497,23 @@ def render_etf_flow(
                 line += (
                     f"；⚠️ 最新日 {sup.get('as_of') or latest.get('date') or '未知'} 距 "
                     f"{fresh.get('checked_at') or '今日'} 已 {lag} 个交易日无更新（上游 SC8 停更），"
-                    "这是历史读数，不可视为当前规模/净申购"
+                    "这是历史读数，不可视为当前份额/份额变动"
                 )
         sections.append(line)
+        sections.append(
+            f"- **SC8 单位口径（推断）**：推断为份额（{unit}），不是金额；"
+            "依据与反证见 support.unit_evidence。不按任何单一阈值筛样本"
+            "（采集器的 100 是「单日净流入 100 亿元」金额口径，与份额不可换算）。"
+        )
     elif sup:
         miss.append(f"市场级 SC8：未取到（{sup.get('note') or '无落库数据'}）")
     else:
         miss.append("市场级 SC8：未取到（本次未取到该表）")
 
     sections.append(
-        "- **口径提醒**：SC8 两列是**全市场 ETF 份额与份额变动（亿份）**，不是金额、也不是"
-        "「净申购金额」：不得乘净值换算成亿元，且两列同源（列1≈Δ列0）不能互相印证。"
+        "- **口径提醒**：SC8 两列是**全市场 ETF 份额与份额变动**（单位**推断**为亿份，"
+        "不是已确认事实：正证是交易所份额合计对拍 -0.07%，反证是同口径 Σ份额×净值 为列0 的 1.42 倍），"
+        "不是金额、也不是「净申购金额」：不得乘净值换算成亿元，两列同源（列1≈Δ列0）不能互相印证。"
         "它是全市场口径，不等于 20 只篮子的净申购，也不能按篮子拆分；"
         "单只 ETF 净申购不可用（通达信份额为当前值回填，实测零变化）。"
         "篮子成交额只是分钟表**已采集**部分的累计（单位亿元），不等于全天成交额，"
@@ -3518,9 +3541,15 @@ async def _query_etf_flow(db: Any, params: dict[str, Any], user: Any) -> str:
     if support.get("state") != "ok":
         logger.info("etf.flow: SC8 市场级样本未取到（%s）", support.get("note") or "无落库数据")
     as_of = str(intraday.get("date") or (support.get("latest") or {}).get("date") or "未知")
+    # 首行「来源」必须反映本次实际读到的分钟来源，不能写死 TDX/TQ（兜底日/混源/未知都会说谎）。
+    src_labels = intraday.get("source_labels") or []
+    if intraday.get("source") in (None, "", "no_data"):
+        minute_src = "本次无分钟行，来源未知"
+    else:
+        minute_src = "/".join(src_labels) if src_labels else "来源未知"
     return render_etf_flow(
         as_of=as_of,
-        source="etf_minute_flow / etf_flow_daily（TDX/TQ，只读）",
+        source=f"etf_minute_flow（{minute_src}） / etf_flow_daily（TDX SC8 序列）",
         intraday=intraday,
         support=support,
         missing=missing,
@@ -3718,7 +3747,8 @@ _QUERY_SCHEMA = {
             "theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
             "market.index（大盘指数/两市成交额）、market.breadth（涨跌家数+ADL/ARMS 分位+九档分布+市场状态）、"
             "market.mainline（主线榜排名/主线分/龙头，可选 top_n）、board.daily（板块涨跌与资金排行，可选 top_n）、"
-            "etf.flow（20 只重点宽基 ETF 篮子成交额+分钟覆盖率+全市场 SC8 净申购/托底日样本，可选 days）、"
+            "etf.flow（20 只重点宽基 ETF 篮子成交额+分钟覆盖率+真实分钟来源（TQ/东财兜底/混合/未知）"
+            "+全市场 SC8 份额推断样本，可选 days）、"
             "strategy.signal（策略因子分+信号发出/T+1T+5 事后收益，可选 top_n）、"
             "auction.flow（集合竞价 9:25 快照/逐帧/异动池，可选 symbol、limit）、"
             "stock.quote（实时报价，必填 symbol，库内行超 60s 转实时取数）、"

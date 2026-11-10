@@ -27,8 +27,6 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -61,17 +59,28 @@ def _rows(*dates: str) -> list[dict]:
 
 # ── 1. 单位：亿份，不是亿元 ────────────────────────────────────────────────
 
-def test_support_declares_share_unit_and_never_yuan():
+def test_support_declares_share_unit_as_inference_and_never_yuan():
     sup = _support(_rows("20261015", "20261016"))
     # 显式单位元数据，供前端/参谋渲染，不靠字段名猜
     assert sup["unit"] == "亿份"
     assert sup["scale_unit"] == "亿份"
     assert sup["net_sub_unit"] == "亿份"
-    # 阈值也是份额口径：100 亿份，不是 100 亿元
-    assert sup["threshold_share_yi"] == pytest.approx(100.0)
-    assert "亿元" not in sup["note"]
-    assert "净申购金额" not in sup["note"]
+    # 证据只能支持「更像份额」，没有官方字段定义 ⇒ 必须标为推断，不能写成已确认
+    assert sup["unit_confidence"] == "inferred"
+    assert "推断" in sup["note"]
+    assert "不是金额" in sup["note"]
     assert "× 净值" not in sup["note"]
+    assert "反证" in sup["unit_evidence"] and "1.42" in sup["unit_evidence"]
+    # 旧 100 亿元阈值被当成 100 亿份托底阈值的整套推断 + 兼容字段必须消失
+    for gone in (
+        "threshold_share_yi",
+        "threshold_yi",
+        "support_days",
+        "support_count",
+        "latest_percentile_in_support_days",
+    ):
+        assert gone not in sup, gone
+    assert "100" not in sup["note"], "读侧不许再出现任何按 100 筛选的托底阈值"
     # 历史数据原样：日期与数值不许被改
     assert sup["series"][-1] == {
         "date": "20261016", "scale_yi": 32773.84, "net_sub_yi": 112.48,

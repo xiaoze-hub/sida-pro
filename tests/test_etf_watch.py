@@ -55,14 +55,14 @@ def isolated_flow():
             )
 
 
-def _insert(day: str, minute: str, code: str, amount_wan: float) -> None:
+def _insert(day: str, minute: str, code: str, amount_wan: float, source: str | None = None) -> None:
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO etf_minute_flow (trade_date, minute, etf_code, amount_wan, volume) "
-                "VALUES (:d, :m, :c, :a, 0)"
+                "INSERT INTO etf_minute_flow (trade_date, minute, etf_code, amount_wan, volume, source) "
+                "VALUES (:d, :m, :c, :a, 0, :s)"
             ),
-            {"d": day, "m": minute, "c": code, "a": amount_wan},
+            {"d": day, "m": minute, "c": code, "a": amount_wan, "s": source},
         )
 
 
@@ -278,14 +278,14 @@ def test_intraday非法日期返回错误():
     assert "error" in body
 
 
-# ── 托底信号 ─────────────────────────────────────────────────────────────
+# ── 市场级 SC8 份额（单位推断） ──────────────────────────────────────────
 
-def test_support筛出净申购达标日并给出分位(clean_flow, isolated_flow, monkeypatch):
+def test_support_reports_share_inference_without_unfounded_threshold(clean_flow, isolated_flow, monkeypatch):
     with engine.begin() as conn:
         rows = [
             ("20261103", 32000.0, 50.0),
-            ("20261104", 32238.13, 193.43),   # 托底日
-            ("20261105", 32393.07, 154.94),   # 托底日
+            ("20261104", 32238.13, 193.43),
+            ("20261105", 32393.07, 154.94),
         ]
         for d, s, n in rows:
             conn.execute(
@@ -306,14 +306,23 @@ def test_support筛出净申购达标日并给出分位(clean_flow, isolated_flo
     assert body["stale"] is False
     assert body["as_of"] == "20261105"
     assert body["freshness"]["lag_trading_days"] == 0
-    # SC8 是份额口径：出口带单位，且不许写成金额
+    # SC8 是**推断的份额口径**：出口带单位与置信度，且不许写成金额。
     assert body["unit"] == "亿份" and body["net_sub_unit"] == "亿份"
-    assert body["threshold_share_yi"] == pytest.approx(100.0)
+    assert body["unit_confidence"] == "inferred"
+    assert "推断" in body["note"] and "不是金额" in body["note"]
     assert "亿元" not in body["note"]
-    assert body["support_count"] == 2
-    assert [x["date"] for x in body["support_days"]] == ["20261104", "20261105"]
-    # 最新一天 154.94 在托底样本里排第 1（高于 193.43 的没有）→ 分位 0%
-    assert body["latest_percentile_in_support_days"] == 0.0
+    # 旧 100 亿元阈值被当成「100 亿份」托底阈值的整套推断必须消失（含误导性兼容字段）。
+    for gone in (
+        "threshold_share_yi",
+        "threshold_yi",
+        "support_days",
+        "support_count",
+        "latest_percentile_in_support_days",
+    ):
+        assert gone not in body, gone
+    assert body["sample_count"] == 3
+    # 分位只在本读源样本内算：154.94 低于 193.43 → 1/3。
+    assert body["latest_percentile_in_samples"] == pytest.approx(33.3, abs=0.1)
     assert body["single_share_supported"] is False
     assert "单只" in body["single_share_note"]
 
@@ -369,6 +378,73 @@ def test_daily按分类聚合并带市场级净申购(clean_flow, isolated_flow)
     assert body["net_sub_yi"][0] == pytest.approx(154.94, abs=0.01)
     cats = {x["category"] for x in body["by_category"]}
     assert "沪深300" in cats and "行业主题" in cats
+
+
+# ── 真实 HTTP：分钟来源必须从 etf_minute_flow.source 读 ──────────────────
+
+def _client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(api.router, prefix="/api/etf-watch")
+    return TestClient(app)
+
+
+def test_http_intraday_reports_real_em_source(clean_flow, monkeypatch):
+    """兜底日（em_trends2）必须显示东财，而不是写死的通达信 TQ。"""
+    monkeypatch.setattr(api, "_index_points", lambda target: [])
+    for code in [c for c, _n, _cat in ew.ETF_BASKET]:
+        _insert("20261105", "0930", code, 1_000.0, source="em_trends2")
+        _insert("20261105", "0931", code, 1_000.0, source="em_trends2")
+    resp = _client().get("/api/etf-watch/intraday", params={"date": "20261105"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "em_trends2"
+    assert body["sources"] == ["em_trends2"]
+    assert body["source_labels"] == ["东财 trends2"]
+    assert "东财 trends2" in body["source_note"]
+    assert "通达信" not in body["source_note"]
+
+
+def test_http_intraday_flags_mixed_sources(clean_flow, monkeypatch):
+    """同一天出现两种来源 → mixed + 逐日明细，不能挑一个当成单一来源。"""
+    monkeypatch.setattr(api, "_index_points", lambda target: [])
+    for code in [c for c, _n, _cat in ew.ETF_BASKET]:
+        _insert("20261105", "0930", code, 1_000.0, source="tdx_tq")
+        _insert("20261105", "0931", code, 1_000.0, source="em_trends2")
+    body = _client().get("/api/etf-watch/intraday", params={"date": "20261105"}).json()
+    assert body["source"] == "mixed"
+    assert set(body["source_labels"]) == {"通达信 TQ", "东财 trends2"}
+    assert body["source_by_date"]["20261105"] == ["东财 trends2", "通达信 TQ"]
+    assert "来源混合" in body["source_note"]
+
+
+def test_http_intraday_null_source_is_unknown_not_tq(clean_flow, monkeypatch):
+    """历史行 source 为 NULL（未标注）→ unknown，不许默认认领成通达信 TQ。"""
+    monkeypatch.setattr(api, "_index_points", lambda target: [])
+    for code in [c for c, _n, _cat in ew.ETF_BASKET]:
+        _insert("20261105", "0930", code, 1_000.0)   # source 不写 → NULL
+    body = _client().get("/api/etf-watch/intraday", params={"date": "20261105"}).json()
+    assert body["source"] == "unknown"
+    assert body["source"] != "tdx_tq"
+    assert body["source_labels"] == ["来源未知"]
+    assert "未知" in body["source_note"]
+    assert "通达信" not in body["source_note"].replace("不默认当成通达信 TQ", "")
+
+
+def test_http_daily_reports_source_per_date(clean_flow):
+    """日度窗口跨来源 → mixed，且逐日来源照实列出。"""
+    for code in [c for c, _n, _cat in ew.ETF_BASKET]:
+        _insert("20261103", "0930", code, 1_000.0, source="tdx_tq")
+        _insert("20261104", "0930", code, 1_000.0, source="em_trends2")
+    body = _client().get("/api/etf-watch/daily", params={"days": 5}).json()
+    assert body["state"] == "ok"
+    assert body["source"] == "mixed"
+    assert body["source_by_date"] == {
+        "20261103": ["通达信 TQ"],
+        "20261104": ["东财 trends2"],
+    }
 
 
 # ── basket 接口声明 ──────────────────────────────────────────────────────

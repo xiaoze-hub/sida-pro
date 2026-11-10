@@ -50,7 +50,8 @@ const STALE_SUPPORT = {
   unit: '亿份',
   net_sub_unit: '亿份',
   scale_unit: '亿份',
-  threshold_share_yi: 100,
+  unit_confidence: 'inferred',
+  unit_evidence: '推断依据：交易所份额合计对拍 -0.07%；反证：Σ份额×净值 为列0 的 1.42 倍。',
   freshness: {
     as_of: '20261016',
     checked_at: '2026-11-10',
@@ -60,11 +61,9 @@ const STALE_SUPPORT = {
     stale: true,
   },
   series: [{ date: '20261016', scale_yi: 32886.32, net_sub_yi: 113.48 }],
-  support_days: [{ date: '20261016', net_sub_yi: 113.48 }],
-  support_count: 1,
   sample_count: 915,
   latest: { date: '20261016', scale_yi: 32886.32, net_sub_yi: 113.48 },
-  latest_percentile_in_support_days: 100,
+  latest_percentile_in_samples: 100,
   single_share_supported: false,
   single_share_note: '单只 ETF 净申购不可用（全市场 SC8 份额口径）。',
 }
@@ -83,7 +82,6 @@ const FRESH_SUPPORT = {
     stale: false,
   },
   series: [{ date: '20261109', scale_yi: 32900.1, net_sub_yi: -20.0 }],
-  support_days: [{ date: '20261109', net_sub_yi: -20.0 }],
   latest: { date: '20261109', scale_yi: 32900.1, net_sub_yi: -20.0 },
 }
 
@@ -122,8 +120,11 @@ describe('EtfWatch · SC8 份额口径与停更提示', () => {
     expect(screen.queryByText(/ETF 规模（亿元）/)).toBeNull()
     expect(screen.getAllByText(/份额变动（亿份）/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/总份额（亿份）/).length).toBeGreaterThan(0)
-    // 阈值口径也是份额：100 亿份，不是 100 亿元
+    // 旧「100 亿元/100 亿份」托底阈值整套推断必须消失：单位只是推断，不筛样本
     expect(screen.queryByText(/100 亿元/)).toBeNull()
+    expect(screen.queryByText(/托底日样本数/)).toBeNull()
+    expect(screen.queryByText(/≥100/)).toBeNull()
+    expect(screen.getByText(/单位口径为推断/)).toBeTruthy()
   })
 
   it('数据新鲜时不显示停更提示，但仍按份额口径渲染', async () => {
