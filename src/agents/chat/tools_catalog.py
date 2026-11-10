@@ -2130,22 +2130,21 @@ async def _delegate(name: str, db: Any, args: dict[str, Any], user: Any) -> str:
         return ""
 
 
-def _evidence_base_date(sections: list[str]) -> str | None:
-    """从各分条正文里抽真实数据基准日（YYYY-MM-DD），抽不到 → None（未知）。
+def _evidence_base_date(sections: list[str], *, now=None) -> str | None:
+    """抽**显式标注**的数据基准日（数据日期/统计日期/数据截至…），抽不到 → None（未知）。
 
-    2026-11-10: 域信封的「时点」过去写 `_now_cn()`（调用墙钟），于是 11-05 的
-    证据在 11-10 的信封上写成「时点 11-10 14:40」，模型据此把它当今日。
-    现在只认真实日期：多段证据取**最早**的那天（域整体只有最旧那天那么新），
-    没有任何日期就写「未知」。
+    2026-11-10 时效审计：旧实现把分条正文里**任意** ISO 日期都当候选（取最早那天），
+    于是「对比 2026-10-20 那次高潮」这类历史参考日会被当成数据基准日，信封写
+    「时点 2026-10-20」并据此判「历史」。现在只认显式标签，且：
+      · 未来日期直接剔除（不可能是已有数据的基准日）；
+      · 多个不一致的值 → 未知（不猜哪个真）。
     """
-    from src.core.signal_summary import extract_dates
+    from src.core.signal_summary import extract_labelled_dates, pick_base_date
 
-    found: list[str] = []
+    candidates: list[str] = []
     for s in sections:
-        for d in extract_dates(s):
-            if d not in found:
-                found.append(d)
-    return min(found) if found else None
+        candidates.extend(extract_labelled_dates(s))
+    return pick_base_date(candidates, now=now)
 
 
 async def _query_market_sentiment(db: Any, params: dict[str, Any], user: Any) -> str:
@@ -2154,13 +2153,15 @@ async def _query_market_sentiment(db: Any, params: dict[str, Any], user: Any) ->
     base = _evidence_base_date(sections)
     source = "复用 get_sentiment_cycle（涨停池/连板高度情绪周期模型 + 市场广度）"
     if sections:
-        # 该域每个分条各自带自己的交易日；整体时效按最旧的那天判（保守）。
+        # 基准日只能来自**显式标注**（或未知）；每块/分条各有日期时按显式值统一判。
         from src.core.signal_summary import resolve_freshness
 
         fresh = resolve_freshness(base)
-        source += f"；数据基准日 {fresh['base_date'] or '未知'}"
-        if fresh.get("is_current") is not True:
-            sections = sections + [f"时效：{fresh['note']}"]
+        note = f"时效：{fresh['note']}"
+        if not fresh.get("usable_for_today") and note not in text_out:
+            # 盘中/昨收/历史/未知/日历不可用 —— 一律当场写清，不能靠模型自觉。
+            # 分条自己已写过同一句（如广度块）就不再重复。
+            sections = sections + [note]
     return render_domain_sections(
         "market.sentiment",
         as_of=base or "未知",

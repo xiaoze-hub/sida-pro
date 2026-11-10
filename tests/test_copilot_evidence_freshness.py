@@ -33,6 +33,7 @@ STALE_DAY = "2026-11-05"                      # 上周四
 LEGACY_TEXT = (
     f"--- 今日系统信号摘要({STALE_DAY}) ---\n"
     "情绪周期：发酵(置信度中)。涨停58家/连板5板/炸板率18%\n"
+    f"📊 市场广度·情绪温度（{STALE_DAY}）\n"
     "指数资金：上证+0.42%、深证+0.31%；主力净流入+18亿"
 )
 
@@ -61,10 +62,13 @@ def test_stale_data_is_labelled_historical_and_counted_in_trading_days():
     assert f["is_current"] is False
     assert f["stale"] is True
     assert f["expected"] == "2026-11-10"
-    # 11-06 / 11-09 / 11-10 三个交易日
-    assert f["lag_trading_days"] == 3
+    # 2026-11-10 时段修复：14:40 盘中，11-10 尚未收盘，缺的是 11-06 / 11-09 两个已收盘交易日
+    assert f["lag_trading_days"] == 2
+    # 收盘后（同一基准日）才算落后 3 个交易日
+    assert ss.resolve_freshness(STALE_DAY, now=datetime(2026, 11, 10, 16, 10))["lag_trading_days"] == 3
     assert "历史" in f["label"]
-    assert STALE_DAY in f["note"] and "2026-11-10" in f["note"]
+    # 盘中「最近已收盘交易日」是 11-09（前日），不是今天 11-10
+    assert STALE_DAY in f["note"] and "2026-11-09" in f["note"]
     # 允许作背景，禁止冒充今日
     assert "不得" in f["note"]
 
@@ -134,24 +138,35 @@ def test_time_anchor_block_no_calendar_is_honest(monkeypatch):
 
 def test_render_uses_real_snapshot_date_not_wall_clock():
     text = ss.render_signal_summary(
-        {"sentiment": {"content": "情绪周期：发酵"}},
+        {"sentiment": {"content": "情绪周期：发酵", "base_date": STALE_DAY}},
         snapshot_date=STALE_DAY,
         now=CST_TODAY,
     )
     head = text.splitlines()[0]
-    assert "系统信号摘要" in head and STALE_DAY in head
+    assert "系统信号摘要" in head and f"生成日 {STALE_DAY}" in head
     assert "今日系统信号摘要" not in head
-    assert "历史" in text
+    assert f"基准日 {STALE_DAY}" in text and "落后 2 个交易日" in text
+    assert "仅背景" in text and "不得作为今日结论依据" in text
 
 
 def test_render_fresh_snapshot_marks_today():
-    text = ss.render_signal_summary(
-        {"sentiment": {"content": "情绪周期：发酵"}},
-        snapshot_date="2026-11-10",
-        now=CST_TODAY,
+    """今日结论只能来自「块自带今日基准日 + 已收盘」的代码核验。"""
+    blocks = {
+        "sentiment": {"content": "情绪周期：发酵", "base_date": "2026-11-10"},
+        "mainline": {"content": "市场主线：机器人", "base_date": "2026-11-10"},
+        "market_scan": {"content": "三榜：新G点[A]", "base_date": "2026-11-10"},
+        "limit_up": {"content": "涨停复盘：42家", "base_date": "2026-11-10"},
+        "indices_flow": {"content": "指数资金：上证+0.4%", "base_date": "2026-11-10"},
+    }
+    closed = ss.render_signal_summary(
+        blocks, snapshot_date="2026-11-10", now=datetime(2026, 11, 10, 16, 10)
     )
-    assert "基准日 2026-11-10" in text
-    assert "今日" in text
+    assert "基准日 2026-11-10" in closed
+    assert "可用于今日结论" in closed
+
+    intraday = ss.render_signal_summary(blocks, snapshot_date="2026-11-10", now=CST_TODAY)
+    assert "可用于今日结论" not in intraday
+    assert "今日盘中未收盘" in intraday
 
 
 def _sqlite_db():
@@ -236,7 +251,7 @@ def test_breadth_stale_flags_expected_and_render_text_warns(monkeypatch):
     assert out["trade_date"] == STALE_DAY
     assert out["expected"] == "2026-11-10"
     assert out["stale"] is True
-    assert out["lag_trading_days"] == 3
+    assert out["lag_trading_days"] == 2   # 盘中：只数 11-06 / 11-09
     txt = M.render_text(out)
     assert "时效" in txt and "历史" in txt
     assert "今日读数" not in txt or "非今日" in txt
@@ -255,6 +270,12 @@ def test_breadth_weekend_is_current_not_stale(monkeypatch):
 
 
 # ──────────────────────── ⑤ market.sentiment 信封时点 ────────────────────────
+# 2026-11-10 时效审计：只认**显式标注**的数据日期（数据日期/统计日期/数据截至），
+# 正文里任意参考日期（「对比 2026-10-20」）不许当基准日；全部用例冻结在 11-10 14:40。
+
+def _freeze(monkeypatch, when: datetime = CST_TODAY):
+    monkeypatch.setattr(ss, "now_cn", lambda now=None: now if now is not None else when.replace(tzinfo=ss._CST))
+
 
 def _patch_delegate(monkeypatch, payload: str):
     import src.agents.chat.tools_catalog as tc
@@ -267,17 +288,19 @@ def _patch_delegate(monkeypatch, payload: str):
 
 
 def test_sentiment_envelope_asof_is_data_date_not_clock(monkeypatch):
-    payload = f"短线情绪周期: 发酵\n\n📊 市场广度·情绪温度（{STALE_DAY}）\n· 涨跌家数：上涨 3000"
+    _freeze(monkeypatch)
+    payload = f"短线情绪周期: 发酵\n\n📊 市场广度·情绪温度（数据日期 {STALE_DAY}）\n· 涨跌家数：上涨 3000"
     tc = _patch_delegate(monkeypatch, payload)
     out = _run(tc._query_market_sentiment(None, {}, None))
     head = out.splitlines()[0]
     assert "market.sentiment" in head
     assert f"时点 {STALE_DAY}" in head
-    assert ss.now_cn().strftime("%Y-%m-%d") not in head.replace(STALE_DAY, "")
-    assert "历史" in out
+    assert "14:40" not in head
+    assert "落后 2 个交易日" in out
 
 
 def test_sentiment_envelope_asof_unknown_when_no_evidence(monkeypatch):
+    _freeze(monkeypatch)
     tc = _patch_delegate(monkeypatch, "")
     out = _run(tc._query_market_sentiment(None, {}, None))
     head = out.splitlines()[0]
@@ -286,16 +309,18 @@ def test_sentiment_envelope_asof_unknown_when_no_evidence(monkeypatch):
 
 
 def test_sentiment_envelope_fresh_data_has_no_stale_note(monkeypatch):
-    payload = "短线情绪周期: 发酵\n\n📊 市场广度·情绪温度（2026-11-10）\n· 涨跌家数：上涨 3000"
+    _freeze(monkeypatch, datetime(2026, 11, 10, 16, 10))   # 已收盘
+    payload = "短线情绪周期: 发酵\n\n📊 市场广度·情绪温度（数据日期 2026-11-10）\n· 涨跌家数：上涨 3000"
     tc = _patch_delegate(monkeypatch, payload)
     out = _run(tc._query_market_sentiment(None, {}, None))
     assert "时点 2026-11-10" in out.splitlines()[0]
-    assert "早于最近交易日" not in out
+    assert "早于最近已收盘交易日" not in out
 
 
 def test_sentiment_domain_route_uses_data_date(monkeypatch):
     """走公开入口 query_data_domain，同一结论（防有人绕过 _query_market_sentiment）。"""
-    payload = f"📊 市场广度·情绪温度（{STALE_DAY}）\n· 涨跌家数：上涨 3000"
+    _freeze(monkeypatch)
+    payload = f"📊 市场广度·情绪温度（数据日期 {STALE_DAY}）\n· 涨跌家数：上涨 3000"
     tc = _patch_delegate(monkeypatch, payload)
     out = _run(
         tc.query_data_domain(
@@ -358,11 +383,17 @@ def test_opportunities_header_marks_stale_snapshot(monkeypatch):
 
 
 def test_opportunities_header_today_only_when_data_is_today(monkeypatch):
+    """盘中（14:40）不许叫「今日机会候选」，只有收盘后（16:10）才行。"""
     import src.web.api.chat as chat
 
-    monkeypatch.setattr(chat, "_chat_now_cn", lambda: CST_TODAY, raising=False)
+    monkeypatch.setattr(chat, "_chat_now_cn", lambda: datetime(2026, 11, 10, 16, 10), raising=False)
     out = chat._read_opportunities(_candidate_db("2026-11-10", [_Row()]), 10)
     assert "今日机会候选" in out
+
+    monkeypatch.setattr(chat, "_chat_now_cn", lambda: CST_TODAY, raising=False)
+    intraday = chat._read_opportunities(_candidate_db("2026-11-10", [_Row()]), 10)
+    assert "今日机会候选" not in intraday
+    assert "今日盘中机会候选" in intraday and "不得作为今日结论" in intraday
 
 
 def test_opportunities_empty_has_no_pseudo_today():

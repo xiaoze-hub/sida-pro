@@ -86,7 +86,10 @@ class _Row:
 class _Query:
     def __init__(self, row):
         self._row = row
-    def order_by(self, *a):
+    def filter(self, *a, **k):
+        # 2026-11-10: 三榜/摘要查询加了 `snapshot_date <= 今天` 过滤（未来脏行不当最新）
+        return self
+    def order_by(self, *a, **k):
         return self
     def first(self):
         return self._row
@@ -173,14 +176,49 @@ def test_read_latest_summary_text_none():
 
 
 def test_read_latest_summary_text_hit():
+    """老快照（只有 text）：生成日只写「生成日」；标题里的生成日**不当**数据基准日。"""
+    from datetime import datetime
+
     class Row:
         snapshot_date = "2026-11-05"
         text = "--- 今日系统信号摘要(2026-11-05) ---\n情绪周期：发酵"
-    out = ss.read_latest_summary_text(_DB(Row()))
+
+    # 冻结到 2026-11-10 14:40（周二盘中）
+    spent = ss.now_cn
+    ss.now_cn = lambda now=None: now or datetime(2026, 11, 10, 14, 40, tzinfo=ss._CST)
+    try:
+        out = ss.read_latest_summary_text(_DB(Row()))
+    finally:
+        ss.now_cn = spent
     head = out.splitlines()[0]
-    # 2026-11-10 时效修复：库里旧标题「今日系统信号摘要」必须被改写成真实基准日，
-    # 并补一行时效说明。
-    assert head == "--- 系统信号摘要(基准日 2026-11-05) ---"
+    # 2026-11-10 时效审计：正文没有任何数据日期 → 基准日未知（不许拿标题里的生成日兜底）
+    assert head == "--- 系统信号摘要（生成日 2026-11-05；基准日 未知）---"
     assert "时效：" in out
     assert "今日系统信号摘要" not in out
+    assert "未标注数据基准日" in out
+    assert "可用于今日结论" not in out
     assert "情绪周期：发酵" in out
+
+
+def test_read_latest_summary_text_uses_body_date_not_header():
+    """正文有数据日期时用正文；标题里的生成日（11-10）不得被当基准日。"""
+    from datetime import datetime
+
+    class Row:
+        snapshot_date = "2026-11-10"
+        text = (
+            "--- 今日系统信号摘要(2026-11-10) ---\n"
+            "情绪周期：发酵\n"
+            "📊 市场广度·情绪温度（2026-11-05）"
+        )
+
+    spent = ss.now_cn
+    ss.now_cn = lambda now=None: now or datetime(2026, 11, 10, 14, 40, tzinfo=ss._CST)
+    try:
+        out = ss.read_latest_summary_text(_DB(Row()))
+    finally:
+        ss.now_cn = spent
+    head = out.splitlines()[0]
+    assert "基准日 2026-11-05" in head and "生成日 2026-11-10" in head
+    assert "历史" in out and "落后 2 个交易日" in out
+    assert "可用于今日结论" not in out

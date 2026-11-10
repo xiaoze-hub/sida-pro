@@ -55,16 +55,20 @@ def _day_expr(col: str = "ts") -> str:
     return f"({col})::date" if _is_pg() else f"date({col})"
 
 
-def load_bars_from_pg(db, *, days: int = DEFAULT_DAYS) -> list[BreadthBar]:
+def load_bars_from_pg(db, *, days: int = DEFAULT_DAYS, now=None) -> list[BreadthBar]:
     """取近 `days` 个交易日的全市场涨跌家数与涨/跌成交量。
 
     起始日期在 Python 侧算好再传参（双方言日期算术写法不同，避免拼接出错）。
+    「今天」取**北京时间**（不是宿主墙钟/UTC）：UTC 机器在 00:00~08:00 之间算出来的
+    窗口会少一天，这条 SQL 又是每日一次的重活，少一天就少一根 bar。
     """
+    from src.core.signal_summary import now_cn
+
     d = _day_expr()
     # 交易日→自然日按 1.7 倍估(含长假), 再多给 30 天缓冲; 窗口越小查询越轻(实测过宽的
     # 窗口会触发 PG statement timeout)。
     lookback_calendar_days = int(int(days) * 1.7) + 30
-    start = date.today() - timedelta(days=lookback_calendar_days)
+    start = now_cn(now).date() - timedelta(days=lookback_calendar_days)
     sql = text(
         f"""
 WITH dedup AS (
@@ -306,7 +310,9 @@ def render_text(summary: dict[str, Any]) -> str:
     total = int(summary.get("symbols") or (up + down + flat))
     score = summary.get("sentiment_score")
     lines = [
-        f"📊 市场广度·情绪温度（{summary.get('trade_date') or '?'}）",
+        # 「数据日期」是**显式标签**：下游（market.sentiment 信封）只认显式标注的日期，
+        # 不抓正文里任意日期（2026-11-10 时效审计）。
+        f"📊 市场广度·情绪温度（数据日期 {summary.get('trade_date') or '未知'}）",
         f"· 涨跌家数：上涨 {up} / 下跌 {down} / 平盘 {flat}（共 {total} 只）",
         f"· 情绪温度：{score if score is not None else '—'}/100（各指标历史分位均值）",
     ]
@@ -324,9 +330,9 @@ def render_text(summary: dict[str, Any]) -> str:
             lines.append(f"· {label}：{_fmt_metric(val, pct)}")
     lines.append(f"· 样本：近 {summary.get('bars_used', '?')} 个交易日")
     fresh = summary.get("freshness") or {}
-    if fresh and fresh.get("is_current") is not True:
-        # 2026-11-10: 基准日不是最近交易日（或日历不可用）时，必须当场写清，
-        # 否则模型会把 11-05 的读数当今日盘面。
+    if fresh and not fresh.get("usable_for_today"):
+        # 2026-11-10 时效审计：只要不是「今日已收盘且代码核验通过」，就当场写清——
+        # 包括盘中快照（未收盘，会变）、昨收（前日）、历史、日历不可用。
         lines.insert(1, f"· ⏳ 时效：{fresh.get('note') or '基准日无法判定'}")
     if not summary.get("complete", True):
         lines.append("· ⚠️ 该交易日标的数偏少（数据未收全），涨跌家数仅供参考")
