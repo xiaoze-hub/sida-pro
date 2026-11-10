@@ -5,19 +5,26 @@
 1m 恒 0 根，而且返回 `ErrorId:"0"` + `Value:[]`（**不报错**）。TQ 侧没有"不碰客户端就能
 补齐历史分钟"的官方方法（`refresh_kline` 只刷本地缓存，`.lc1` mtime 不动）。
 
-东财 `trends2` 仍在服务这些日期：滚动 **5 个交易日**、每天 **241 根**（含 09:30 竞价根）、
-不带 key、20 只 ETF 串行 12.4s。它补不回更早历史，但足以救「最近几个缺口日」。
+东财 `trends2` 仍在服务这些日期：滚动 **5 个交易日（含当日）**、每天 **241 根**（含 09:30
+竞价根）、不带 key、20 只 ETF 串行 12.4s。当日被 `not_closed_day` 闸门排除，所以实际能补的
+已收盘日通常只有最近 4 个；更早的历史补不到。
 
 本模块的三条硬纪律（写错会静默出错，不会抛异常）：
 
-1. **只写缺口、只 INSERT**：`write_day` 在事务内先查该交易日是否已有行，有则整日放弃
-   （返回 0）；写入语句是 INSERT-IGNORE，永不 UPDATE。所以「东财半小时数据覆盖 TQ 完整
-   数据」在代码路径上不可能发生。
-2. **同一天不混源**：`backfill` 的日期闸门是"该日有任何行就跳过"，因此一天的
-   `etf_minute_flow.source` 只有一种值。已有行的来源会写进报告（`existing_sources`）。
-3. **不拿残缺冒充完整**：根数 < 235、末根不是 15:00、出现非交易时段分钟、成交量单位不自洽
+1. **只写缺口、只 INSERT**：`write_day` 在事务内**先取该交易日的数据库写锁**
+   （PG `pg_advisory_xact_lock` / SQLite `BEGIN IMMEDIATE`），拿到锁之后才查该日是否
+   已有行，有则整日放弃（返回 0）；写入语句是 INSERT-IGNORE，永不 UPDATE。所以
+   「东财半小时数据覆盖 TQ 完整数据」和「两个写者都看到 0 行、各写一半」在代码路径上
+   都不可能发生。**不允许用无锁 SELECT 做判重** —— 那是先查后写的经典竞态。
+2. **同一天不混源**：日级写锁 + 「该日已有任何行（任何来源）就整日跳过」+ 提交前在
+   同一事务内复核「该日所有行的 source 都等于本次来源」，三者同时成立才算写入成功。
+   `tq_etf_watch.write_minute` 用同一把锁，并且发现该日已有别的来源时直接拒绝写
+   （返回 -2 / `source_conflict`），不会把 `tdx_tq` 覆盖到东财的日上。
+3. **不拿残缺冒充完整**：必须是**恰好 240 个交易分钟**（09:31–11:30 / 13:01–15:00，
+   缺一根、多一根、重复一根都不行）、末根 15:00、成交量单位自洽
    （`amount/(volume×close)` 偏离 1 超过 2%）、覆盖标的数不到 80% 闸门 —— 整天不写，
-   报告里写原因。绝不留半天数据。
+   报告里写原因。绝不留半天数据。对账只在「每一只待写标的都拿到日线参照且都在容差内」
+   时才标记 `verified=True`，否则 CLI 默认拒绝写入并退出非 0。
 
 口径（对齐 TQ，逐条实测标定）：
 
@@ -71,9 +78,19 @@ MAX_NDAYS = 5
 AUCTION_MINUTE = "0930"
 OPEN_MINUTE = "0931"
 LAST_MINUTE = "1500"
-#: 归一后应有 240 根（TQ 口径）。低于此数按「数据不全」拒绝。
+#: 归一后必须**恰好** 240 根（TQ 口径：09:31–11:30 + 13:01–15:00）。
 EXPECTED_MINUTES = 240
-MIN_MINUTES = 235
+#: 旧名保留（下游/测试可能引用），语义已收紧为「必须 240 根」，不再有 235 的宽容。
+MIN_MINUTES = EXPECTED_MINUTES
+
+#: 完整交易日的 240 个分钟槽。校验用集合相等，不用「根数 ≥ N」——根数够但缺根、
+#: 多根、重复根的报文同样不能入库（基线按分钟对齐，缺一根就是一个假空洞）。
+SESSION_MINUTES: tuple[str, ...] = tuple(
+    f"{h:02d}{m:02d}"
+    for h, lo, hi in ((9, 31, 59), (10, 0, 59), (11, 0, 30), (13, 1, 59), (14, 0, 59), (15, 0, 0))
+    for m in range(lo, hi + 1)
+)
+assert len(SESSION_MINUTES) == EXPECTED_MINUTES == len(set(SESSION_MINUTES))
 
 #: 单位自检：amount(元) / (volume(股) × close) 应 ≈ 1（可用均价/收盘差异 ≤2%）。
 UNIT_RATIO_LO, UNIT_RATIO_HI = 0.98, 1.02
@@ -255,21 +272,30 @@ def _in_session(hm: str) -> bool:
 
 
 def validate_day(day: str, bars: Sequence[MinuteBar]) -> tuple[bool, list[str]]:
-    """单日完整性 + 单位自洽校验。返回 (ok, problems)。**problems 非空即整天不写。**"""
+    """单日完整性 + 单位自洽校验。返回 (ok, problems)。**problems 非空即整天不写。**
+
+    完整性是「240 个交易分钟集合相等」，不是「根数够就行」：缺一根、多一根、
+    重复一根、或混进 09:30/13:00 这类 TQ 没有的分钟，都会让下游按分钟对齐的基线
+    出现单样本假尖峰。
+    """
     problems: list[str] = []
     if not bars:
         return False, ["无分钟数据"]
     minutes = [b.minute for b in bars]
-    if len(bars) < MIN_MINUTES:
-        problems.append(f"根数不足: {len(bars)} < {MIN_MINUTES}（东财完整日应为 {EXPECTED_MINUTES} 根）")
+    present = set(minutes)
+    missing = [m for m in SESSION_MINUTES if m not in present]
+    extra = sorted(present - set(SESSION_MINUTES))
+    if len(bars) != EXPECTED_MINUTES:
+        problems.append(f"根数不是 {EXPECTED_MINUTES}: {len(bars)}")
+    if missing:
+        problems.append(f"缺 {len(missing)} 个交易分钟: {missing[:5]}")
+    if extra:
+        problems.append(f"非交易时段/多余分钟: {extra[:5]}")
     if minutes[0] != OPEN_MINUTE:
         problems.append(f"首根不是 {OPEN_MINUTE}（竞价未归一？首根={minutes[0]}）")
     if minutes[-1] != LAST_MINUTE:
         problems.append(f"末根不是 {LAST_MINUTE}，判为 partial（实际末根={minutes[-1]}）")
-    off = sorted({m for m in minutes if not _in_session(m)})
-    if off:
-        problems.append(f"非交易时段分钟: {off[:5]}")
-    if len(set(minutes)) != len(minutes):
+    if len(present) != len(minutes):
         dup = sorted({m for m in minutes if minutes.count(m) > 1})
         problems.append(f"重复分钟: {dup[:5]}")
     total_vol = sum(b.volume for b in bars)
@@ -303,9 +329,71 @@ def _default_engine():
 _INSERT_COLS = ["trade_date", "minute", "etf_code", "amount_wan", "volume", "source",
                 "created_at", "updated_at"]
 
+#: 日级写锁命名空间（换表/换粒度时改这里，避免和别的表的 advisory lock 撞号）。
+_DAY_LOCK_NS = "etf_minute_flow"
 
-def existing_overview(engine, day: str) -> dict[str, Any]:
-    """该交易日现有行概览：行数、标的数、来源集合（混源排查用）。"""
+
+def day_lock_key(day: str) -> int:
+    """`YYYYMMDD` → 稳定的 64 位整数 key（PG advisory lock 用）。
+
+    不用 Python `hash()`：它带进程随机化，两个进程会算出不同的 key，锁等于没加。
+    """
+    import hashlib
+
+    digest = hashlib.blake2b(f"{_DAY_LOCK_NS}:{day}".encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+def _insert_ignore_sql(dialect: str, table: str, cols: Sequence[str]) -> str:
+    """按**真实连接的方言**生成冲突跳过 SQL。
+
+    不走 `src.db.dialect.insert_ignore_sql` 是有意的：那个函数按环境变量判定后端，
+    测试/迁移场景里 engine 可能是独立 SQLite 而进程环境仍写着 PG —— 用错语法就是
+    硬报错或静默写不进去。这里只看 `conn.dialect.name`。
+    """
+    names = ", ".join(cols)
+    values = ", ".join(f":{c}" for c in cols)
+    if dialect == "postgresql":
+        return f"INSERT INTO {table} ({names}) VALUES ({values}) ON CONFLICT DO NOTHING"
+    if dialect == "sqlite":
+        return f"INSERT OR IGNORE INTO {table} ({names}) VALUES ({values})"
+    raise RuntimeError(f"不支持的后端方言 {dialect!r}：拒绝写入（无日级锁语义）")
+
+
+def lock_day(conn, day: str) -> str:
+    """在事务开头取得该交易日的**数据库级写锁**，返回方言名。
+
+    必须在任何判重 SELECT 之前调用 —— 先查后写、中间没有锁，是「两个写者都看到 0 行、
+    各自写一半」的根因。
+
+    - PostgreSQL：`pg_advisory_xact_lock(key)`，事务结束自动释放；锁 key 只由交易日期
+      决定，TQ 与东财写同一日时争的是同一把锁。
+    - SQLite：`BEGIN IMMEDIATE`，立即拿库级写锁（配合 busy handler 等待），而不是等到
+      第一条 INSERT 才升级锁（升级时可能直接 SQLITE_BUSY 失败）。
+    - 其它方言：抛错 = **安全禁用写入**，宁可 CLI 失败也不留无锁写入路径。
+    """
+    from sqlalchemy import text
+
+    dialect = conn.dialect.name
+    if dialect == "postgresql":
+        conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": day_lock_key(day)})
+    elif dialect == "sqlite":
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+    else:
+        raise RuntimeError(f"不支持的后端方言 {dialect!r}：拒绝在没有日级锁的情况下写入")
+    return dialect
+
+
+def existing_overview(engine, day: str, *, min_codes: int = 1) -> dict[str, Any]:
+    """该交易日现有行概览：行数、标的数、来源集合、分钟覆盖（混源/残缺排查用）。
+
+    `complete=True` 的条件（全部满足）：
+    - 只有一个来源（`sources` 长度 1）；
+    - 标的数 ≥ `min_codes`（默认 1，编排层传覆盖率闸门）；
+    - 该日出现的分钟**恰好**是 240 个交易分钟；
+    - 每只标的的行数都是 240（没有「某只只写了半天」）。
+    不满足就是 partial —— 不能因为 `COUNT(*) > 0` 就当成「已采完」。
+    """
     from sqlalchemy import text
 
     with engine.connect() as conn:
@@ -316,6 +404,20 @@ def existing_overview(engine, day: str) -> dict[str, Any]:
             ),
             {"d": day},
         ).mappings().first() or {}
+        per_code = conn.execute(
+            text(
+                "SELECT etf_code, COUNT(*) AS n FROM etf_minute_flow "
+                "WHERE trade_date = :d GROUP BY etf_code"
+            ),
+            {"d": day},
+        ).all()
+        minutes = [
+            str(r[0])
+            for r in conn.execute(
+                text("SELECT DISTINCT minute FROM etf_minute_flow WHERE trade_date = :d"),
+                {"d": day},
+            ).all()
+        ]
         sources = [
             str(r[0]) if r[0] is not None else ""
             for r in conn.execute(
@@ -323,10 +425,30 @@ def existing_overview(engine, day: str) -> dict[str, Any]:
                 {"d": day},
             ).all()
         ]
+    counts = {str(r[0]): int(r[1] or 0) for r in per_code}
+    present = set(minutes)
+    missing = [m for m in SESSION_MINUTES if m not in present]
+    extra = sorted(present - set(SESSION_MINUTES))
+    short_codes = sorted(c for c, n in counts.items() if n != EXPECTED_MINUTES)
+    uniq_sources = sorted(s for s in sources if s)
+    complete = bool(
+        counts
+        and len(uniq_sources) == 1
+        and "" not in sources
+        and len(counts) >= max(1, int(min_codes))
+        and not missing
+        and not extra
+        and not short_codes
+    )
     return {
         "rows": int(row.get("rows") or 0),
         "codes": int(row.get("codes") or 0),
-        "sources": sorted(s for s in sources if s),
+        "sources": uniq_sources,
+        "minutes": len(present),
+        "missing_minutes": missing[:5],
+        "extra_minutes": extra[:5],
+        "short_codes": short_codes[:5],
+        "complete": complete,
     }
 
 
@@ -339,18 +461,19 @@ def write_day(
 ) -> int:
     """写单日分钟数据。返回写入行数；已有数据/冲突/失败返回 0 或 -1。
 
-    两道锁：
-    1. **事务内**先查该日是否已有行 —— 有任何行（任何来源）就整日放弃，保证同日不混源；
-    2. 写入用 INSERT-IGNORE（`src.db.dialect.insert_ignore_sql`），并发下也不会覆盖已有分钟。
+    三道闸，全部在**同一个事务、同一把日级锁之下**：
+
+    1. `lock_day()`：先拿 DB 级写锁（PG advisory xact lock / SQLite BEGIN IMMEDIATE），
+       并发写者在此串行化，判重不再依赖无锁 SELECT；
+    2. 锁内查该日是否已有行（任何来源）—— 有就整日放弃（返回 0），保证同一交易日不混源；
+    3. INSERT-IGNORE 后在同一事务内复核：该日总行数 == 本次应写行数，且所有行
+       `source` 都等于本次来源；任何一条不满足就抛错回滚，绝不留半天/混源数据。
     """
     if not data:
         return 0
     eng = engine if engine is not None else _default_engine()
     from sqlalchemy import text
 
-    from src.db.dialect import insert_ignore_sql
-
-    sql = insert_ignore_sql("etf_minute_flow", _INSERT_COLS)
     now = datetime.now()
     params = [
         {
@@ -370,17 +493,32 @@ def write_day(
         return 0
     try:
         with eng.begin() as conn:
+            dialect = lock_day(conn, day)
             have = conn.execute(
                 text("SELECT COUNT(*) FROM etf_minute_flow WHERE trade_date = :d"), {"d": day}
             ).scalar()
             if have:
                 logger.info("[etf-em-1m] %s 已有 %s 行，整日跳过（不混源/不覆盖）", day, have)
                 return 0
+            sql = _insert_ignore_sql(dialect, "etf_minute_flow", _INSERT_COLS)
             res = conn.execute(text(sql), params)
             inserted = getattr(res, "rowcount", -1)
-            # 并发写入者抢先插了同一主键 → 这里会少于应写行数。回滚，别把半天数据留下。
             if isinstance(inserted, int) and 0 <= inserted < len(params):
                 raise RuntimeError(f"并发写入冲突: 仅插入 {inserted}/{len(params)} 行")
+            total = conn.execute(
+                text("SELECT COUNT(*) FROM etf_minute_flow WHERE trade_date = :d"), {"d": day}
+            ).scalar()
+            foreign = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM etf_minute_flow "
+                    "WHERE trade_date = :d AND (source IS NULL OR source <> :s)"
+                ),
+                {"d": day, "s": source},
+            ).scalar()
+            if int(total or 0) != len(params) or int(foreign or 0) != 0:
+                raise RuntimeError(
+                    f"写入后复核失败: 该日 {total} 行（应 {len(params)}），异源 {foreign} 行"
+                )
         return len(params)
     except Exception as e:  # noqa: BLE001
         logger.warning("[etf-em-1m] %s 写库失败（已回滚）: %s", day, e)
@@ -399,7 +537,7 @@ def _gate(expected: int) -> int:
         return max(1, math.ceil(expected * COVERAGE_MIN - 1e-9))
 
 
-def _plan(day: str, today: date, engine) -> dict[str, Any]:
+def _plan(day: str, today: date, engine, *, min_codes: int = 1) -> dict[str, Any]:
     """日期闸门：只决定「能不能取数」，不联网。"""
     from src.core.trading_calendar import is_trading_day
 
@@ -413,17 +551,22 @@ def _plan(day: str, today: date, engine) -> dict[str, Any]:
         # 当日盘中东财的 09:30 根/尾根形态未验证，且 15:00 前必然是 partial —— 一律不补。
         return {"date": day, "action": "skipped", "reason": "not_closed_day"}
     try:
-        ov = existing_overview(engine, day)
+        ov = existing_overview(engine, day, min_codes=min_codes)
     except Exception as e:  # noqa: BLE001
         return {"date": day, "action": "skipped", "reason": "db_unavailable", "error": str(e)[:200]}
     if ov["rows"]:
+        # 关键：有行 ≠ 已采完。只写了一两只、或某只只写了半天，都是 partial，
+        # 必须作为**失败**暴露给 CLI，而不是当成「已补过」静默成功。
         return {
             "date": day,
             "action": "skipped",
-            "reason": "date_already_ingested",
+            "reason": "date_already_ingested" if ov["complete"] else "date_partially_ingested",
             "existing_rows": ov["rows"],
             "existing_codes": ov["codes"],
             "existing_sources": ov["sources"],
+            "existing_minutes": ov["minutes"],
+            "existing_short_codes": ov["short_codes"],
+            "existing_missing_minutes": ov["missing_minutes"],
         }
     return {"date": day, "action": "fetch"}
 
@@ -437,7 +580,11 @@ def calibration_note() -> dict[str, str]:
         "volume": "股",
         "auction": "09:30 集合竞价并入 09:31 根（对齐 TQ 口径）",
         "session": "09:31-11:30 / 13:01-15:00（无 13:00 根；14:58-14:59 常为零量占位）",
-        "window": f"东财滚动 {MAX_NDAYS} 个交易日，超过窗口的日期补不到",
+        "window": (
+            f"东财 trends2 只回最近 {MAX_NDAYS} 个交易日（**含当日**）的滚动窗口；当日已由"
+            f" not_closed_day 闸门排除，所以实际可补的已收盘日通常只有 {MAX_NDAYS - 1} 个，"
+            "更早的日期补不到"
+        ),
         "trading_day_source": "src.core.trading_calendar（节假日/调休感知）",
         "verified_against": "TQ 2026-11-04 / 2026-11-05 分钟线（240/240 根；close 0 差，量 ≤100 股，额 ≤0.06 元）",
     }
@@ -503,14 +650,20 @@ def backfill(
     dry_run: bool = True,
     daily_ref: DayRef | None = None,
     max_ndays: int = MAX_NDAYS,
+    require_verified: bool = False,
 ) -> dict[str, Any]:
     """把指定交易日的分钟数据用东财补齐。**默认 dry_run=True（不写库）。**
 
-    逐日纪律：日期闸门 → 按标的取一次报文（同一报文覆盖 5 天，20 只 ETF 一次 20 请求）
-    → 竞价归一 → 完整性/单位校验 → 覆盖率闸门 → （可选）TQ 日线对账 → 整日写入。
+    逐日纪律：日期闸门 → 按标的取一次报文（同一报文覆盖东财滚动窗口，20 只 ETF 一次
+    20 请求）→ 竞价归一 → 完整 240 分钟/单位校验 → 覆盖率闸门 → TQ 日线对账 → 整日写入。
+
+    `require_verified=True`（CLI 默认）时：只要该日本来要写的标的里有一只没拿到日线
+    参照、或对账超差、或 `daily_ref` 缺失，就不写，`reason="unverified"`，退出码非 0。
+    `daily_ref=None` 仍可用（显式 `--no-reconcile`），但报告里 `verified=False`，
+    不会出现「没对过账却说对过账」。
 
     报告里每天都有 `action`（written/planned/skipped）、`reason`、`rows`、`etfs`、
-    `dropped`（被丢弃的标的及原因）、`reconciled` —— 不允许静默成功。
+    `dropped`（被丢弃的标的及原因）、`reconciled`、`verified` —— 不允许静默成功。
     """
     from src.collectors.tq_etf_watch import ETF_BASKET
 
@@ -520,7 +673,7 @@ def backfill(
     codes = [str(c) for c in (codes if codes is not None else [c for c, _n, _cat in ETF_BASKET])]
     gate = _gate(len(codes))
 
-    plans = [_plan(str(d), today, eng) for d in dates]
+    plans = [_plan(str(d), today, eng, min_codes=gate) for d in dates]
     pending = [p for p in plans if p["action"] == "fetch"]
 
     fetched: dict[str, dict[str, list[MinuteBar]]] = {}
@@ -547,7 +700,8 @@ def backfill(
             continue
         day = plan["date"]
         entry: dict[str, Any] = {"date": day, "action": "skipped", "reason": None,
-                                 "rows": 0, "etfs": 0, "dropped": {}, "reconciled": None}
+                                 "rows": 0, "etfs": 0, "dropped": {}, "reconciled": False,
+                                 "verified": False}
         if not fetched:
             entry.update(reason="fetch_failed", error=next(iter(fetch_errors.values()), "全部标的取数失败"))
             entry["dropped"] = dict(fetch_errors)
@@ -574,30 +728,68 @@ def backfill(
         for code, err in fetch_errors.items():
             dropped.setdefault(code, err)
 
-        if daily_ref is not None and bars_by_code:
+        candidates = len(bars_by_code)
+        reconcile: dict[str, Any] = {"compared": 0, "missing": [], "mismatched": []}
+        if daily_ref is None:
+            # 显式不做对账：诚实地把 reconciled 留 False，不许把「没对过」写成「对过」。
+            entry["reconcile_error"] = "未提供日线参照（--no-reconcile），本日对账不可证实"
+        elif bars_by_code:
             try:
                 ref = daily_ref(day) or {}
-                entry["reconciled"] = True
             except Exception as e:  # noqa: BLE001
-                ref = {}
-                entry["reconciled"] = False
+                # 参照整体取不到时**不能**把每只都当「缺参照」丢掉：那会把一个本来
+                # 完整的日子变成 insufficient_etfs。保留数据，明确标 reconciled=False。
                 entry["reconcile_error"] = f"{type(e).__name__}: {e}"[:200]
-            for code in list(bars_by_code):
-                want = ref.get(code)
-                if want is None or want <= 0:
-                    continue
-                total = sum(b.amount_wan for b in bars_by_code[code])
-                if abs(total - want) / want > RECONCILE_TOL:
-                    dropped[code] = (
-                        f"对账超差: 分钟合计 {total:.2f} 万 vs TQ 日线 {want:.2f} 万"
-                        f"（容差 {RECONCILE_TOL:.1%}）"
-                    )
-                    del bars_by_code[code]
+            else:
+                for code in list(bars_by_code):
+                    want = ref.get(code)
+                    if want is None or want <= 0:
+                        reconcile["missing"].append(code)
+                        dropped[code] = "对账缺少 TQ 日线参照（无法证实，整只不写）"
+                        del bars_by_code[code]
+                        continue
+                    total = sum(b.amount_wan for b in bars_by_code[code])
+                    if abs(total - want) / want > RECONCILE_TOL:
+                        reconcile["mismatched"].append(code)
+                        dropped[code] = (
+                            f"对账超差: 分钟合计 {total:.2f} 万 vs TQ 日线 {want:.2f} 万"
+                            f"（容差 {RECONCILE_TOL:.1%}）"
+                        )
+                        del bars_by_code[code]
+                        continue
+                    reconcile["compared"] += 1
+            # reconciled 的含义收紧为「**写入集**里每一只都拿到了参照且都在容差内」；
+            # verified 更严：候选集里没有任何一只因缺参照/超差被丢掉。
+            entry["reconciled"] = bool(
+                not entry.get("reconcile_error")
+                and reconcile["compared"] > 0
+                and reconcile["compared"] == len(bars_by_code)
+            )
+            entry["reconcile_compared"] = reconcile["compared"]
+            entry["reconcile_missing"] = reconcile["missing"]
+            entry["reconcile_mismatched"] = reconcile["mismatched"]
+
+        entry["verified"] = bool(
+            entry["reconciled"]
+            and candidates
+            and not reconcile["missing"]
+            and not reconcile["mismatched"]
+        )
 
         entry["etfs"] = len(bars_by_code)
         entry["dropped"] = dropped
         if len(bars_by_code) < gate:
             entry.update(reason="insufficient_etfs", gate=gate)
+            days_report.append(entry)
+            continue
+        if require_verified and not entry["verified"]:
+            # CLI 默认路径：没有可证实的对账就不写。部分可证实（丢了几只）同样拒绝 ——
+            # 宁可整天不补，也不要把一个「说不清是谁的」日子留在库里。
+            entry.update(
+                reason="unverified",
+                gate=gate,
+                rows_planned=sum(len(b) for b in bars_by_code.values()),
+            )
             days_report.append(entry)
             continue
 
@@ -610,7 +802,19 @@ def backfill(
         if written < 0:
             entry.update(reason="write_failed")
         elif written == 0:
-            entry.update(reason="date_already_ingested")
+            # 写 0 行只可能是「并发/先到者已占住这一天」。区分完整占用与残缺占用：
+            # 残缺日必须报失败（partial），不能因为 COUNT(*)>0 就当成已补过。
+            try:
+                ov = existing_overview(eng, day, min_codes=gate)
+                entry.update(
+                    reason="date_already_ingested" if ov["complete"] else "date_partially_ingested",
+                    existing_rows=ov["rows"],
+                    existing_codes=ov["codes"],
+                    existing_sources=ov["sources"],
+                    existing_minutes=ov["minutes"],
+                )
+            except Exception:  # noqa: BLE001
+                entry.update(reason="date_already_ingested")
         else:
             entry.update(action="written", rows=written)
         days_report.append(entry)
@@ -667,27 +871,44 @@ def gap_dates(
 # ── CLI（显式运维入口，默认 dry-run） ────────────────────────────────────
 
 #: 这些原因属于「本来就不该补」，不算失败（退出码 0）。
+#: 注意：`date_already_ingested` 只在现有数据**完整**（单来源 + 240 分钟 + 每只 240 行
+#: + 覆盖达标）时才会出现；残缺日一律是 `date_partially_ingested` → 退出码 1。
 _BENIGN_SKIP = {"date_already_ingested", "non_trading_day", "not_closed_day"}
 
 
 def exit_code(report: Mapping[str, Any]) -> int:
-    """0 = 每个请求日要么写了/能写，要么属于正当跳过；1 = 有真正没补上的。"""
+    """0 = 每个请求日要么写了/能写，要么属于正当跳过；1 = 有真正没补上的。
+
+    残缺日（`date_partially_ingested`）、对账不可证实（`unverified`）、取数/写库失败
+    都返回 1 —— 运维脚本必须能靠退出码分辨「补好了」和「看起来有行其实只有半天」。
+    """
     bad = [
         d for d in report.get("days", [])
         if d.get("action") not in ("written", "planned") and d.get("reason") not in _BENIGN_SKIP
     ]
     return 0 if not bad else 1
 
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="python -m src.collectors.em_etf_minute",
-        description="东财 trends2 补 ETF 分钟缺口（默认 dry-run 不写库）",
+        description="东财 trends2 补 ETF 分钟缺口（默认 dry-run 不写库；写库默认要求可证实对账）",
     )
     ap.add_argument("--dates", help="逗号分隔的 YYYYMMDD")
     ap.add_argument("--gaps", type=int, default=0, help="先盘查最近 N 个交易日的缺口并补这些日期")
-    ap.add_argument("--days", type=int, default=5, help="--gaps 的窗口（默认 5，即东财窗口上限）")
+    ap.add_argument(
+        "--days",
+        type=int,
+        default=5,
+        help="--gaps 的盘查窗口（默认 5 个交易日）；东财只能回最近 5 个交易日（含当日），"
+        "已收盘可补的通常只有 4 个",
+    )
     ap.add_argument("--write", action="store_true", help="真的写库（缺省只演练）")
-    ap.add_argument("--no-reconcile", action="store_true", help="跳过 TQ 日线对账")
+    ap.add_argument(
+        "--no-reconcile",
+        action="store_true",
+        help="跳过 TQ 日线对账（显式放弃可证实性；报告 verified=False，仍可写库）",
+    )
     args = ap.parse_args(argv)
 
     engine = _default_engine()
@@ -701,7 +922,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     from src.collectors.tq_etf_watch import ETF_BASKET
 
     daily_ref = None if args.no_reconcile else tq_daily_ref([c for c, _n, _cat in ETF_BASKET])
-    report = backfill(dates, engine=engine, dry_run=not args.write, daily_ref=daily_ref)
+    report = backfill(
+        dates,
+        engine=engine,
+        dry_run=not args.write,
+        daily_ref=daily_ref,
+        require_verified=not args.no_reconcile,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return exit_code(report)
 

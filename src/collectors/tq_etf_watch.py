@@ -278,6 +278,10 @@ _WRITE_CHUNK = 400
 INTRADAY_LOOKBACK_MIN = 5
 
 
+class SourceConflict(RuntimeError):
+    """该交易日已被别的来源占用（如东财兜底 `em_trends2`）。TQ 不得覆盖/混写。"""
+
+
 def _minus_minutes(hm: str, minutes: int) -> str:
     """'1432' - 5 → '1427'（跨小时/跨 11:30-13:00 午休都不用管：只用来卡下限）。"""
     h, m = int(hm[:2]), int(hm[2:])
@@ -290,27 +294,45 @@ def write_minute(
     data: dict[str, list[tuple[str, float | None, int | None]]],
     *,
     since: str | None = None,
+    engine=None,
 ) -> int:
-    """幂等对账分钟数据；返回处理行数，数据库失败返回 -1。
+    """幂等对账分钟数据；返回处理行数。
 
-    冲突值不变时跳过 UPDATE，允许每次检查全天数据而不重写未变化的行。
-    `since` 仅在调用方明确不需要历史对账时使用。
+    返回码：`>=0` 处理行数；`-1` 数据库/写库失败；`-2` **来源冲突**（该日已有
+    `em_trends2` 等别的来源，TQ 拒绝写入，保持同日单源）。
+
+    并发/混源处理（2026-11-10 修复）：
+    1. 事务开头用 `em_etf_minute.lock_day()` 拿该交易日的数据库写锁 —— PG advisory
+       xact lock / SQLite BEGIN IMMEDIATE。TQ 与东财补数争同一把锁，判重不再是
+       「无锁 SELECT 后写」；
+    2. 锁内读该日 `DISTINCT source`，出现任何非 `tdx_tq` 的来源（含 NULL）立即拒绝，
+       不写一行。TQ 恢复后不会把东财补好的日子改成混源；
+    3. upsert 的 DO UPDATE 额外带 `source = 'tdx_tq'` 条件，提交前再复核该日不存在
+       异源行；不满足就抛错整笔回滚。
     """
     if not data:
         return 0
     try:
         from sqlalchemy import text
 
+        from src.collectors.em_etf_minute import lock_day
         from src.db.dialect import upsert_sql
-        from src.web.database import engine
+
+        if engine is None:
+            from src.web.database import engine as _engine
+
+            eng = _engine
+        else:
+            eng = engine
 
         cols = ["trade_date", "minute", "etf_code", "amount_wan", "volume", "source", "updated_at"]
         sql = upsert_sql(
             "etf_minute_flow", cols, ["trade_date", "minute", "etf_code"],
             ["amount_wan", "volume", "source", "updated_at"],
         ) + (
-            " WHERE etf_minute_flow.amount_wan IS DISTINCT FROM excluded.amount_wan"
-            " OR etf_minute_flow.volume IS DISTINCT FROM excluded.volume"
+            " WHERE etf_minute_flow.source = :own_source"
+            " AND (etf_minute_flow.amount_wan IS DISTINCT FROM excluded.amount_wan"
+            " OR etf_minute_flow.volume IS DISTINCT FROM excluded.volume)"
         )
         now = datetime.now()
         params: list[dict[str, Any]] = []
@@ -321,14 +343,41 @@ def write_minute(
                 params.append({
                     "trade_date": trade_date, "minute": hm, "etf_code": code,
                     "amount_wan": amt, "volume": vol, "source": MINUTE_SOURCE_TQ,
-                    "updated_at": now,
+                    "updated_at": now, "own_source": MINUTE_SOURCE_TQ,
                 })
         if not params:
             return 0
-        with engine.begin() as conn:
+        with eng.begin() as conn:
+            lock_day(conn, trade_date)
+            sources = {
+                str(r[0]) if r[0] is not None else ""
+                for r in conn.execute(
+                    text("SELECT DISTINCT source FROM etf_minute_flow WHERE trade_date = :d"),
+                    {"d": trade_date},
+                ).all()
+            }
+            foreign = sorted(s for s in sources if s != MINUTE_SOURCE_TQ)
+            if foreign:
+                logger.error(
+                    "[etf-watch] %s 已有其它来源 %s，拒绝 TQ 写入（同日不混源）",
+                    trade_date, foreign,
+                )
+                return -2
             for i in range(0, len(params), _WRITE_CHUNK):
                 conn.execute(text(sql), params[i:i + _WRITE_CHUNK])
+            bad = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM etf_minute_flow "
+                    "WHERE trade_date = :d AND (source IS NULL OR source <> :s)"
+                ),
+                {"d": trade_date, "s": MINUTE_SOURCE_TQ},
+            ).scalar()
+            if int(bad or 0) != 0:
+                raise SourceConflict(f"{trade_date} 写入后出现 {bad} 行异源数据")
         return len(params)
+    except SourceConflict as e:
+        logger.error("[etf-watch] %s 来源冲突，已回滚: %s", trade_date, e)
+        return -2
     except Exception as e:  # noqa: BLE001
         logger.warning("[etf-watch] 分钟数据写库失败(%s): %s", trade_date, e)
         return -1
@@ -401,7 +450,7 @@ def recent_trade_dates(n: int, *, end: date | None = None) -> list[str]:
     return list(reversed(out))
 
 
-def ingest_day(trade_date: str, *, since: str | None = None) -> dict:
+def ingest_day(trade_date: str, *, since: str | None = None, engine=None) -> dict:
     """采集并落库单日分钟数据。返回 {date, rows, etfs, ok}。
 
     `since` 只影响**写库范围**（盘中增量），取数仍是整日 —— TQ 的分钟线按标的分页，
@@ -413,7 +462,13 @@ def ingest_day(trade_date: str, *, since: str | None = None) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning("[etf-watch] %s 取数失败: %s", trade_date, e)
         return {"date": trade_date, "rows": 0, "etfs": 0, "ok": False, "error": str(e)[:160]}
-    rows = write_minute(trade_date, data, since=since)
+    rows = write_minute(trade_date, data, since=since, engine=engine)
+    if rows == -2:
+        return {
+            "date": trade_date, "rows": 0, "etfs": len(data), "ok": False,
+            "error": "source_conflict",
+            "detail": "该交易日已有非 tdx_tq 来源（东财兜底），TQ 拒绝写入以保持同日单源",
+        }
     if rows < 0:
         return {"date": trade_date, "rows": 0, "etfs": len(data), "ok": False, "error": "minute_write_failed"}
     return {"date": trade_date, "rows": rows, "etfs": len(data), "ok": len(data) > 0}

@@ -358,6 +358,11 @@ def test_backfill_writes_complete_date_with_provenance(iso_engine, monkeypatch):
 
 
 def test_backfill_skips_date_that_already_has_any_rows(iso_engine, monkeypatch):
+    """已有行（哪怕只有 1 行）就不再取数/写入；但只有 1 行属于残缺日 → 必须报 partial。
+
+    旧行为把「有行」当「已采完」→ CLI 退出码 0，把只有零星几只的日期掩盖成成功。
+    现在 `date_partially_ingested` 不在 benign 集合里，exit_code 返回 1。
+    """
     with iso_engine.begin() as conn:
         conn.execute(
             text(
@@ -371,10 +376,12 @@ def test_backfill_skips_date_that_already_has_any_rows(iso_engine, monkeypatch):
     rep = em.backfill(["20261106"], engine=iso_engine, now=datetime(2026, 11, 10, 9, 0), dry_run=False)
     day = rep["days"][0]
     assert day["action"] == "skipped"
-    assert day["reason"] == "date_already_ingested"
+    assert day["reason"] == "date_partially_ingested"
     assert day["existing_sources"] == ["tdx_tq"]
+    assert day["existing_codes"] == 1
     assert fetch.calls == [], "已有数据的日期连取数都不该做"
     assert len(_rows(iso_engine)) == 1
+    assert em.exit_code(rep) == 1
 
 
 def test_backfill_refuses_today_and_future(iso_engine, monkeypatch):
@@ -447,7 +454,9 @@ def test_backfill_drops_one_partial_code_but_still_writes(iso_engine, monkeypatc
 def test_backfill_reconciles_against_daily_reference(iso_engine, monkeypatch):
     """给到日线参照（TQ 1d）时逐只对账：超差的标的整只丢弃，不写进库。"""
     monkeypatch.setattr(em, "_get_json", _fake_fetch(_all_codes_payload))
-    totals = {c: 240 * 1000 * 100 * 4.17 / 1e4 for c in _CODES}
+    # 日线成交额含集合竞价：东财 241 根（09:30 独立一根 + 240 根）归一后金额一分不丢，
+    # 所以参照必须是 241 根的合计，而不是 240 根 —— 写少了会误伤所有标的。
+    totals = {c: 241 * 1000 * 100 * 4.17 / 1e4 for c in _CODES}
     skew = _CODES[0]
     totals[skew] *= 1.5  # 差 50% → 单位/标的错配
 
@@ -456,7 +465,9 @@ def test_backfill_reconciles_against_daily_reference(iso_engine, monkeypatch):
         dry_run=False, daily_ref=lambda d: totals,
     )
     day = rep["days"][0]
+    assert day["action"] == "written"
     assert day["reconciled"] is True
+    assert day["verified"] is False, "有一只被对账丢掉 → 整体不可称 verified"
     assert skew in day["dropped"]
     assert skew not in {r["etf_code"] for r in _rows(iso_engine, "20261106")}
 
