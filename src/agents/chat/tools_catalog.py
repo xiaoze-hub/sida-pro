@@ -2130,38 +2130,74 @@ async def _delegate(name: str, db: Any, args: dict[str, Any], user: Any) -> str:
         return ""
 
 
-def _evidence_base_date(sections: list[str], *, now=None) -> str | None:
-    """抽**显式标注**的数据基准日（数据日期/统计日期/数据截至…），抽不到 → None（未知）。
+def _evidence_items(sections: list[str]) -> list[str]:
+    """把证据正文切成独立条目（空行分段，一段 = 一个分条/一块）。
 
-    2026-11-10 时效审计：旧实现把分条正文里**任意** ISO 日期都当候选（取最早那天），
-    于是「对比 2026-10-20 那次高潮」这类历史参考日会被当成数据基准日，信封写
-    「时点 2026-10-20」并据此判「历史」。现在只认显式标签，且：
-      · 未来日期直接剔除（不可能是已有数据的基准日）；
-      · 多个不一致的值 → 未知（不猜哪个真）。
+    2026-11-10 时效终审 P0：一个分条标了「数据日期」不许给信封里其他分条盖同一个戳。
+    逐条判日期前必须先切开，否则「📊 市场广度·情绪温度（数据日期 11-10）」会把
+    上面没有日期的情绪周期行也顶成 11-10。
     """
-    from src.core.signal_summary import extract_labelled_dates, pick_base_date
+    items: list[str] = []
+    for s in sections or []:
+        for para in re.split(r"\n\s*\n", str(s or "")):
+            para = para.strip()
+            if para:
+                items.append(para)
+    return items
 
-    candidates: list[str] = []
-    for s in sections:
-        candidates.extend(extract_labelled_dates(s))
-    return pick_base_date(candidates, now=now)
+
+def _tag_item_dates(items: list[str], info: dict) -> list[str]:
+    """逐条贴本条的日期状况（仅在整体基准日不成立时用，避免模型整段继承）。"""
+    undated = set(info.get("undated") or [])
+    dated = info.get("dated") or {}
+    out: list[str] = []
+    for it in items:
+        s = str(it or "").strip()
+        if s in undated:
+            out.append(f"{s}〔本分条未标数据日期·不得当作今日，也不得继承其他分条的日期〕")
+        elif s in dated:
+            out.append(f"{s}〔本分条数据日期 {dated[s]}〕")
+        else:
+            out.append(s)
+    return out
 
 
 async def _query_market_sentiment(db: Any, params: dict[str, Any], user: Any) -> str:
     text_out = await _delegate("get_sentiment_cycle", db, {}, user)
     sections = [text_out] if text_out.strip() else []
-    base = _evidence_base_date(sections)
     source = "复用 get_sentiment_cycle（涨停池/连板高度情绪周期模型 + 市场广度）"
+    base = None
     if sections:
-        # 基准日只能来自**显式标注**（或未知）；每块/分条各有日期时按显式值统一判。
-        from src.core.signal_summary import resolve_freshness
+        from src.core.signal_summary import evidence_item_dates, resolve_freshness
 
+        # 2026-11-10 时效终审 P0：整封信封的基准日只能来自「每条证据都显式标注且一致」；
+        # 已知子项（广度块）的日期不许盖给没标日期的子项（情绪周期/涨停池那部分）。
+        items = _evidence_items(sections)
+        info = evidence_item_dates(items)
+        base = info["base_date"]
         fresh = resolve_freshness(base)
-        note = f"时效：{fresh['note']}"
-        if not fresh.get("usable_for_today") and note not in text_out:
-            # 盘中/昨收/历史/未知/日历不可用 —— 一律当场写清，不能靠模型自觉。
-            # 分条自己已写过同一句（如广度块）就不再重复。
+        if base is None:
+            sections = _tag_item_dates(items, info)
+            if info["bases"]:
+                seen = "、".join(
+                    f"{d}（{resolve_freshness(d)['label']}）" for d in info["bases"]
+                )
+                note = (
+                    f"时效：整体基准日未知 —— 只有部分分条显式标注了数据日期（{seen}），"
+                    f"另有 {len(info['undated'])} 条没有标注数据日期；"
+                    "一个分条的日期不得当作其余分条的数据日，"
+                    "整封信封不得声称已核验，也不得当成今日结论依据"
+                )
+            else:
+                note = f"时效：{fresh['note']}"
             sections = sections + [note]
+        elif not fresh.get("usable_for_today"):
+            # 盘中/昨收/历史/日历不可用 —— 一律当场写清，不能靠模型自觉。
+            note = f"时效：{fresh['note']}"
+            if note not in text_out:
+                sections = items + [note]
+            else:
+                sections = items
     return render_domain_sections(
         "market.sentiment",
         as_of=base or "未知",

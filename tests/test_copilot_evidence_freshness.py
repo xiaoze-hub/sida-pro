@@ -192,16 +192,51 @@ def _seed_summary(db, snapshot_date: str, text: str):
     db.commit()
 
 
-def test_read_latest_rewrites_legacy_today_header_and_marks_stale():
+def test_read_latest_legacy_text_bare_date_is_unknown_not_today():
+    """老 text 快照的裸「（2026-11-05）」是参考日期，不是数据日期标签。"""
     db = _sqlite_db()
     _seed_summary(db, STALE_DAY, LEGACY_TEXT)
     out = ss.read_latest_summary_text(db, now=CST_TODAY)
     head = out.splitlines()[0]
     assert "今日系统信号摘要" not in out
-    assert f"基准日 {STALE_DAY}" in head
-    assert "历史" in out and "落后" in out
+    # 2026-11-10 时效终审：裸日期不再当基准日；有读数没标日期 → 整体未知
+    assert "基准日 未知" in head
+    assert "可用于今日结论" not in out
+    assert "已核验" not in out
     # 历史数据仍在（不静默删除），只是不许冒充今日
     assert "涨停58家" in out
+
+
+def test_read_latest_legacy_text_all_labelled_is_background_only():
+    """老 text 每条都带显式数据日期 → 可判「历史/落后」，但纯文本永远不算已核验。"""
+    text = (
+        f"--- 今日系统信号摘要({STALE_DAY}) ---\n"
+        f"情绪周期：发酵（数据日期 {STALE_DAY}）\n"
+        f"指数资金：上证+0.42%（数据日期 {STALE_DAY}）"
+    )
+    db = _sqlite_db()
+    _seed_summary(db, STALE_DAY, text)
+    out = ss.read_latest_summary_text(db, now=CST_TODAY)
+    assert f"基准日 {STALE_DAY}" in out.splitlines()[0]
+    assert "历史" in out and "落后" in out
+    assert "可用于今日结论" not in out
+    assert "逐块" in out or "纯文本" in out
+
+
+def test_read_latest_legacy_text_labelled_today_still_not_verified():
+    """即使每条都标「今天」，纯文本老快照也没有逐块结构化基准日 → 不许宣称已核验。"""
+    text = (
+        "--- 今日系统信号摘要(2026-11-10) ---\n"
+        "情绪周期：发酵（数据日期 2026-11-10）\n"
+        "指数资金：上证+0.42%（数据日期 2026-11-10）"
+    )
+    db = _sqlite_db()
+    _seed_summary(db, "2026-11-10", text)
+    out = ss.read_latest_summary_text(db, now=datetime(2026, 11, 10, 16, 10))
+    assert "可用于今日结论" not in out
+    assert "代码核验通过" not in out
+    assert "不得声称已核验" in out
+
 
 
 def test_read_latest_fresh_snapshot_keeps_today_but_no_duplicate_header():
@@ -288,15 +323,19 @@ def _patch_delegate(monkeypatch, payload: str):
 
 
 def test_sentiment_envelope_asof_is_data_date_not_clock(monkeypatch):
+    """分条日期不一致（情绪周期未标）→ 时点未知，但该条自己的日期与历史判定如实保留。"""
     _freeze(monkeypatch)
     payload = f"短线情绪周期: 发酵\n\n📊 市场广度·情绪温度（数据日期 {STALE_DAY}）\n· 涨跌家数：上涨 3000"
     tc = _patch_delegate(monkeypatch, payload)
     out = _run(tc._query_market_sentiment(None, {}, None))
     head = out.splitlines()[0]
     assert "market.sentiment" in head
-    assert f"时点 {STALE_DAY}" in head
+    assert "时点 未知" in head                      # 一个分条的日期不许给整封盖戳
     assert "14:40" not in head
-    assert "落后 2 个交易日" in out
+    assert f"本分条数据日期 {STALE_DAY}" in out
+    assert f"{STALE_DAY}（历史）" in out             # 该条自己的时效仍如实给出
+    assert "可用于今日结论" not in out
+
 
 
 def test_sentiment_envelope_asof_unknown_when_no_evidence(monkeypatch):
@@ -309,12 +348,28 @@ def test_sentiment_envelope_asof_unknown_when_no_evidence(monkeypatch):
 
 
 def test_sentiment_envelope_fresh_data_has_no_stale_note(monkeypatch):
+    """一条今日已收盘、另一条没标日期 → 整体仍未知，不许因「今天」就免掉时效说明。"""
     _freeze(monkeypatch, datetime(2026, 11, 10, 16, 10))   # 已收盘
     payload = "短线情绪周期: 发酵\n\n📊 市场广度·情绪温度（数据日期 2026-11-10）\n· 涨跌家数：上涨 3000"
     tc = _patch_delegate(monkeypatch, payload)
     out = _run(tc._query_market_sentiment(None, {}, None))
+    assert "时点 未知" in out.splitlines()[0]
+    assert "整体基准日未知" in out
+    assert "可用于今日结论" not in out
+
+
+def test_sentiment_all_items_labelled_same_day_stays_dated(monkeypatch):
+    """所有分条都标了同一个显式日期 → 时点成立（今日已收盘时也不额外唠叨）。"""
+    _freeze(monkeypatch, datetime(2026, 11, 10, 16, 10))
+    payload = (
+        "短线情绪周期: 发酵（数据日期 2026-11-10）\n\n"
+        "📊 市场广度·情绪温度（数据日期 2026-11-10）\n· 涨跌家数：上涨 3000"
+    )
+    tc = _patch_delegate(monkeypatch, payload)
+    out = _run(tc._query_market_sentiment(None, {}, None))
     assert "时点 2026-11-10" in out.splitlines()[0]
-    assert "早于最近已收盘交易日" not in out
+    assert "\n时效：" not in out and not out.startswith("时效：")
+
 
 
 def test_sentiment_domain_route_uses_data_date(monkeypatch):
@@ -420,5 +475,9 @@ def test_build_ai_messages_anchors_clock_and_labels_stale_summary():
     assert "北京时间" in system
     assert "2026-11" in system            # 真实年月
     assert "今日系统信号摘要" not in system
-    assert f"基准日 {STALE_DAY}" in system
-    assert "历史" in system
+    # 2026-11-10 时效终审：老 text 的裸「（2026-11-05）」是参考日期 → 整体基准日未知，
+    # 但证据仍在场，且明确写出「不得当作今日」。
+    assert "基准日 未知" in system
+    assert "不得当作今日" in system
+    assert "涨停58家" in system
+    assert "可用于今日结论" not in system

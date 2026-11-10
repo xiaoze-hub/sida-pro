@@ -201,7 +201,11 @@ def test_read_latest_summary_text_hit():
 
 
 def test_read_latest_summary_text_uses_body_date_not_header():
-    """正文有数据日期时用正文；标题里的生成日（11-10）不得被当基准日。"""
+    """正文有**显式标注**的数据日期时用它；标题里的生成日（11-10）不得被当基准日。
+
+    2026-11-10 时效终审：裸日期（旧格式「（2026-11-05）」）不再当基准日 —— 只认
+    「数据日期/统计日期/数据截至」标签；且纯文本老快照永远不宣称可用于今日结论。
+    """
     from datetime import datetime
 
     class Row:
@@ -209,7 +213,7 @@ def test_read_latest_summary_text_uses_body_date_not_header():
         text = (
             "--- 今日系统信号摘要(2026-11-10) ---\n"
             "情绪周期：发酵\n"
-            "📊 市场广度·情绪温度（2026-11-05）"
+            "📊 市场广度·情绪温度（数据日期 2026-11-05）"
         )
 
     spent = ss.now_cn
@@ -219,6 +223,7 @@ def test_read_latest_summary_text_uses_body_date_not_header():
     finally:
         ss.now_cn = spent
     head = out.splitlines()[0]
-    assert "基准日 2026-11-05" in head and "生成日 2026-11-10" in head
-    assert "历史" in out and "落后 2 个交易日" in out
+    # 一条读数未标日期（情绪周期）→ 整体基准日未知，不许拿广度那天的日期盖整份
+    assert "基准日 未知" in head and "生成日 2026-11-10" in head
+    assert "2026-11-05" in out                      # 该条自己的日期如实出现
     assert "可用于今日结论" not in out

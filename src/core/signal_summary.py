@@ -179,6 +179,43 @@ def pick_base_date(candidates, *, now: datetime | None = None) -> str | None:
     return valid[0] if valid else None
 
 
+def evidence_item_dates(items, *, now: datetime | None = None) -> dict:
+    """逐条证据抽**显式标注**的数据日期，并给出「整体基准日」是否成立。
+
+    2026-11-10 时效终审 P0：一个分条标了日期，不许给同一封信/同一份摘要里**没有日期**
+    的其他分条盖同一个戳（「广度块 11-10」≠ 「情绪周期也是 11-10」）。因此公共基准日
+    只在两种情况成立：
+      · 每条证据都有自己的显式日期，且这些日期完全一致（单一值）；
+    否则整体基准日 = None（未知），并把每条的真实情况（有日期/没日期）交回调用方，
+    由调用方逐条标注 —— 未知就写未知，不拿别的条目的日期顶上。
+
+    只认 `extract_labelled_dates` 的标签（数据日期/统计日期/数据截至…），正文里的
+    参考日期（「对比 2026-10-20」）与裸日期一律不当基准日。
+
+    返回：
+      base_date  整体基准日（未知 → None）
+      dated      {条目: 该条显式日期}
+      undated    没有显式日期的条目
+      bases      出现过的显式日期（去重排序）
+    """
+    dt = now_cn(now)
+    dated: dict[str, str] = {}
+    undated: list[str] = []
+    for it in items or []:
+        s = str(it or "").strip()
+        if not s:
+            continue
+        labels = extract_labelled_dates(s)
+        day = pick_base_date(labels, now=dt) if labels else None
+        if day:
+            dated[s] = day
+        else:
+            undated.append(s)
+    bases = sorted(set(dated.values()))
+    base = bases[0] if (bases and not undated and len(bases) == 1) else None
+    return {"base_date": base, "dated": dated, "undated": undated, "bases": bases}
+
+
 def _expected_latest(now: datetime) -> tuple[date | None, str]:
     """期望最新交易日（<= now 当日）。日历未覆盖年份 → (None, "unavailable")。"""
     try:
@@ -601,6 +638,15 @@ async def _block_limit_up() -> dict:
             "caliber": summary.get("limit_up_source") or "unknown",
         }
 
+        # 2026-11-10 时效终审 P0：涨停池本身不返回交易日，**不许**借 market_replay 的
+        # as_of 给整块盖章 ——「今天的涨停家数」被标成「11-09 的数据」，比不标更糟。
+        # 只有涨停池自己显式给出的数据日才认；没有就保持未知（不给无权威时间的块盖章）。
+        pool_day = _parse_day(
+            summary.get("trade_date") or summary.get("data_date") or summary.get("as_of")
+        )
+        if pool_day is not None:
+            block["base_date"] = pool_day.isoformat()
+
         # 炸板/跌停：取自 `market_replay_daily`（东财三池同源同日），缺失就写缺口不写 0
         try:
             from src.core.market_replay import read_latest
@@ -615,20 +661,29 @@ async def _block_limit_up() -> dict:
             if replay:
                 bk = replay.get("broken") or {}
                 dt = replay.get("limit_down") or {}
-                # 盘后复盘的 as_of 是显式数据日：有它才敢写块的基准日（涨停池本身不带日期）
+                # 盘后复盘的 as_of 是显式数据日，但它只属于「炸板/跌停」这两个读数，
+                # 不能升级成整块的基准日（涨停家数来自另一个源，日期未知）。
                 replay_day = _parse_day(replay.get("as_of"))
                 if replay_day is not None:
-                    block["base_date"] = replay_day.isoformat()
+                    block["replay_base_date"] = replay_day.isoformat()
+                supplement = ""
                 if bk.get("break_rate_pct") is not None:
                     block["break_rate_pct"] = bk.get("break_rate_pct")
                     block["seal_rate_pct"] = bk.get("seal_rate_pct")
-                    content += (
+                    supplement += (
                         f"，炸板{bk.get('total')}家/{bk.get('break_rate_pct')}%"
                         f"(封板率{bk.get('seal_rate_pct')}%)"
                     )
                 if dt.get("total") is not None:
                     block["limit_down"] = dt.get("total")
-                    content += f"，跌停{dt.get('total')}家"
+                    supplement += f"，跌停{dt.get('total')}家"
+                if supplement:
+                    # 显式写清这两个读数自己的数据日；不写就默认它们与涨停家数同日。
+                    if replay_day is not None:
+                        supplement += f"（炸板/跌停数据日期 {replay_day.isoformat()}）"
+                    else:
+                        supplement += "（炸板/跌停数据日期未知）"
+                    content += supplement
         except Exception as e:  # noqa: BLE001
             logger.debug("[信号摘要] 炸板/跌停补充失败: %s", e)
 
@@ -947,6 +1002,32 @@ def run_signal_summary_job() -> dict:
         db.close()
 
 
+def _coerce_blocks(value) -> dict:
+    """落库的 blocks → dict；JSON 字符串（历史双编码）解析成功才用，解析不了按无块处理。
+
+    2026-11-10 时效终审 P0：旧实现只认 dict，JSON 字符串被静默当成「没有 blocks」，
+    于是退回「老文本」路径，从正文裸日期推断数据日并宣称已核验 —— 明明带着逐块
+    base_date 的快照被整份当成今日数据。这里解析出来交给逐块核验；解析失败就是没有
+    结构化基准日（未知），绝不拿正文日期回填。
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (str, bytes)):
+        try:
+            import json
+
+            parsed = json.loads(value)
+        except Exception as e:  # noqa: BLE001 - 坏 JSON 不猜
+            logger.warning("[信号摘要] blocks JSON 解析失败，按无结构化块处理: %s", e)
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+        logger.warning(
+            "[信号摘要] blocks JSON 不是对象（%s），按无结构化块处理", type(parsed).__name__
+        )
+    return {}
+
+
 def read_latest_summary_text(db, *, now: datetime | None = None) -> str | None:
     """对话热路径: 读最新信号摘要 text(纯文本), 无快照 → None(不注入)。
 
@@ -957,7 +1038,11 @@ def read_latest_summary_text(db, *, now: datetime | None = None) -> str | None:
       · 落库 text 里**上一次渲染**的标题、时效行、块级标签先剥掉再按当前时间重算 ——
         否则 11-10 收盘写下的「今日已收盘·可用于今日结论」会被 11-11 的对话原样带出；
       · 只有 text 的老快照：只认正文里**显式标注**的数据日期（数据日期/统计日期/数据截至），
-        标题里的日期是生成日不是数据日，裸日期一律不当基准日；冲突/未来 → 未知；
+        标题里的日期是生成日不是数据日，裸日期/参考日期一律不当基准日；要求**每一条**读数
+        都带同一个显式日期才算有基准日，否则未知；且纯文本无法逐块核验 —— 永远不写
+        「已核验/可用于今日结论」；
+      · blocks 以 JSON 字符串落库（历史双编码）时先解析再逐块核验，解析失败按无结构化块，
+        不退回正文日期推断；
       · 未来日期的脏行不参与「最新快照」选择；
       · 历史快照仍注入（作背景），但不冒充今日，也不写「可用于今日结论」。
     """
@@ -977,8 +1062,7 @@ def read_latest_summary_text(db, *, now: datetime | None = None) -> str | None:
         if not row:
             return None
         gen = str(getattr(row, "snapshot_date", "") or "").strip() or None
-        blocks = getattr(row, "blocks", None)
-        blocks = blocks if isinstance(blocks, dict) else {}
+        blocks = _coerce_blocks(getattr(row, "blocks", None))
         raw_text = str(getattr(row, "text", "") or "")
 
         # 先剥旧渲染结论（标题行 / 时效行 / 块级〔基准日…〕标签），再重算。
@@ -1014,18 +1098,40 @@ def read_latest_summary_text(db, *, now: datetime | None = None) -> str | None:
                 [header, f"时效：{_summary_verdict(bf, gen, now=dt)}", *body]
             )
 
-        # 老快照：只有 text。基准日只从**正文**抽（标题行已剥掉，所以生成日不会回流成数据日），
-        # 裸日期也认（旧格式的广度行只写「（2026-11-05）」没标签），但未来日期剔除、
-        # 多值冲突 → 未知（不猜）。
-        if not body:
+        # 老快照：只有 text。2026-11-10 时效终审 P0 —— **不许**从正文里的参考日期
+        # 推断数据日再宣称已核验：旧格式的「（2026-11-05）」只是排版上的参考日期，
+        # 不是「数据日期」标签。这里只认显式标注，且要求**每一条**读数都带同一个显式
+        # 日期才算有基准日；任何一条没标日期 → 整体基准日未知（纯文本无法逐块核验）。
+        items = [ln for ln in body if ln.strip()]
+        if not items:
             return None
-        base = pick_base_date(extract_dates("\n".join(body)), now=dt)
+        info = evidence_item_dates(items, now=dt)
+        base = info["base_date"]
         fresh = resolve_freshness(base, now=dt)
         header = (
             f"--- 系统信号摘要（生成日 {gen or '未知'}；"
-            f"基准日 {fresh['base_date'] or '未知'}）---"
+            f"基准日 {base or '未知'}）---"
         )
-        return "\n".join([header, f"时效：{fresh['note']}", *body])
+        if base is None and info["bases"]:
+            seen = "、".join(
+                f"{d}（{resolve_freshness(d, now=dt)['label']}）" for d in info["bases"]
+            )
+            note = (
+                f"老快照仅有纯文本：正文显式数据日期 {seen}，但 "
+                f"{len(info['undated'])} 条读数没有标注数据日期/日期不一致 → 整体基准日未知，"
+                "无法逐条核验；一个分条的日期不得当作其余分条的数据日，"
+                "也不得声称已核验或当成今日结论依据"
+            )
+        elif base is None:
+            note = f"{fresh['note']}；该快照仅有纯文本，无逐块基准日，无法核验"
+        elif fresh.get("usable_for_today"):
+            note = (
+                f"正文各条均显式标注数据日期 {base}（今日已收盘），但该快照仅有纯文本、"
+                "无逐块结构化基准日 —— 不得声称已核验，也不得当成今日结论依据"
+            )
+        else:
+            note = f"{fresh['note']}；该快照仅有纯文本（各条显式日期一致），结论仅作背景"
+        return "\n".join([header, f"时效：{note}", *body])
     except Exception as e:  # noqa: BLE001
         logger.warning("[信号摘要] 读快照失败: %s", e)
         return None

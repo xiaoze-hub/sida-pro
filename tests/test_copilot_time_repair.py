@@ -438,6 +438,7 @@ def test_sentiment_does_not_grab_arbitrary_reference_date(monkeypatch):
 
 
 def test_sentiment_uses_explicit_labelled_date(monkeypatch):
+    """一个分条带显式日期，不过程序里另一条（情绪周期）没标 —— 不许给整封盖戳。"""
     _freeze(monkeypatch, INTRADAY)
     tc = _patch_delegate(
         monkeypatch,
@@ -445,8 +446,11 @@ def test_sentiment_uses_explicit_labelled_date(monkeypatch):
     )
     out = _run(tc._query_market_sentiment(None, {}, None))
     head = out.splitlines()[0]
-    assert f"时点 {STALE_DAY}" in head
-    assert "落后 2 个交易日" in out
+    assert "时点 未知" in head                     # 整体基准日未知
+    assert f"本分条数据日期 {STALE_DAY}" in out     # 该条自己的日期如实标注
+    assert "本分条未标数据日期" in out              # 没标的那条不许继承
+    assert "可用于今日结论" not in out
+
 
 
 def test_sentiment_future_labelled_date_is_filtered(monkeypatch):
@@ -657,6 +661,159 @@ def test_market_scan_block_skips_future_row():
         db.close()
         engine.dispose()
 
+
+# ─────────────── ⑨ 终审 P0：未知就写未知，无权威时间不许称已核验 ───────────────
+# 三条都是「借日期」：老文本借参考日期、涨停池借 replay 日期、信封借兄弟分条日期。
+# 前两条曾被整份摘要写成「今日已收盘，可用于今日结论」，第三条曾让情绪周期（涨停池，
+# 没日期）跟着广度块变成「今天」。
+
+
+def test_evidence_item_dates_requires_all_items_dated_and_consistent():
+    same = ss.evidence_item_dates(
+        [f"a（数据日期 {TODAY}）", f"b（统计日期 {TODAY}）"], now=CLOSED
+    )
+    assert same["base_date"] == TODAY and same["undated"] == []
+    mixed = ss.evidence_item_dates([f"a（数据日期 {TODAY}）", "b 没有日期"], now=CLOSED)
+    assert mixed["base_date"] is None and mixed["undated"] == ["b 没有日期"]
+    conflict = ss.evidence_item_dates(
+        [f"a（数据日期 {TODAY}）", f"b（数据日期 {STALE_DAY}）"], now=CLOSED
+    )
+    assert conflict["base_date"] is None
+    bare = ss.evidence_item_dates([f"只写（{TODAY}）的参考日期"], now=CLOSED)
+    assert bare["base_date"] is None
+
+
+def test_legacy_text_bare_reference_date_never_claims_verified():
+    """反例：正文只有裸「（2026-11-10）」→ 曾写「基准日今日，代码核验通过，可用于今日结论」。"""
+    db, _, engine = _sqlite_db()
+    try:
+        _seed_summary(
+            db,
+            TODAY,
+            f"--- 今日系统信号摘要({TODAY}) ---\n情绪周期：发酵\n"
+            f"📊 市场广度·情绪温度（{TODAY}）",
+        )
+        out = ss.read_latest_summary_text(db, now=CLOSED)
+        head = out.splitlines()[0]
+        assert "基准日 未知" in head
+        assert f"基准日 {TODAY}" not in head
+        assert "可用于今日结论" not in out
+        assert "代码核验通过" not in out
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_json_string_blocks_are_parsed_and_judged_per_block():
+    """反例：blocks 是 JSON 字符串 → 曾被当成无块，退回正文裸日期 → 整份「今日已核验」。"""
+    import json
+
+    db, _, engine = _sqlite_db()
+    try:
+        blocks = {
+            "sentiment": {"data_status": "ok", "content": "情绪周期：发酵"},
+            "market_scan": {"data_status": "ok", "content": "三榜：新G点[A]", "base_date": STALE_DAY},
+        }
+        _seed_summary(
+            db,
+            TODAY,
+            f"--- 今日系统信号摘要({TODAY}) ---\n情绪周期：发酵\n三榜：新G点[A]\n"
+            f"📊 市场广度·情绪温度（{TODAY}）",
+            json.dumps(blocks, ensure_ascii=False),
+        )
+        out = ss.read_latest_summary_text(db, now=CLOSED)
+        assert "可用于今日结论" not in out
+        assert "1 块无显式基准日（sentiment）" in out
+        assert f"market_scan 基准日 {STALE_DAY}" in out
+        assert "三榜：新G点[A]" in out            # 证据不丢
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_invalid_json_string_blocks_not_replaced_by_body_dates():
+    db, _, engine = _sqlite_db()
+    try:
+        _seed_summary(
+            db, TODAY, f"情绪周期：发酵\n📊 市场广度·情绪温度（{TODAY}）", "{not-json"
+        )
+        out = ss.read_latest_summary_text(db, now=CLOSED)
+        assert "基准日 未知" in out.splitlines()[0]
+        assert "可用于今日结论" not in out
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_limit_up_block_never_borrows_market_replay_date():
+    """反例：涨停池不带日期，却拿 market_replay.as_of=11-09 给整块盖戳。"""
+    import src.core.market_replay as mr
+    import src.core.report_generator as rg
+
+    async def fake_summary():
+        return {"limit_up_count": 68, "max_streak": 5, "ladder": {5: 1},
+                "top_stocks": ["A(000001)5板"], "limit_up_source": "tq"}
+
+    orig_sum, orig_read = rg._collect_limit_up_summary, mr.read_latest
+    rg._collect_limit_up_summary = fake_summary
+    mr.read_latest = lambda db, **kw: {
+        "as_of": PREV_CLOSED,
+        "broken": {"total": 3, "break_rate_pct": 12.0, "seal_rate_pct": 88.0},
+        "limit_down": {"total": 2},
+    }
+    try:
+        block = _run(ss._block_limit_up())
+    finally:
+        rg._collect_limit_up_summary = orig_sum
+        mr.read_latest = orig_read
+
+    assert "base_date" not in block                      # 不借日期
+    assert block["replay_base_date"] == PREV_CLOSED      # 只作为补充读数自己的日期
+    assert f"（炸板/跌停数据日期 {PREV_CLOSED}）" in block["content"]
+    bf = ss.block_freshness({"limit_up": block}, now=CLOSED)
+    row = [r for r in bf["blocks"] if r["key"] == "limit_up"][0]
+    assert row["base_date"] is None and "基准日未知" in row["tag"]
+    text = ss.render_signal_summary({"limit_up": block}, snapshot_date=TODAY, now=CLOSED)
+    assert "可用于今日结论" not in text
+
+
+def test_limit_up_block_uses_its_own_explicit_trade_date():
+    import src.core.report_generator as rg
+
+    async def fake_summary():
+        return {"limit_up_count": 68, "max_streak": 5, "ladder": {5: 1},
+                "top_stocks": [], "limit_up_source": "tq", "trade_date": TODAY}
+
+    orig = rg._collect_limit_up_summary
+    rg._collect_limit_up_summary = fake_summary
+    try:
+        block = _run(ss._block_limit_up())
+    finally:
+        rg._collect_limit_up_summary = orig
+    assert block["base_date"] == TODAY
+
+
+def test_sentiment_one_item_date_does_not_stamp_undated_items(monkeypatch):
+    """反例：广度块标了「数据日期 11-10」，情绪周期没标 → 整体被写成今日并免掉时效说明。"""
+    import src.agents.chat.tools_catalog as tc
+
+    payload = (
+        "📊 短线情绪周期: 发酵\n📈 置信度: 中\n📝 依据: 昨日涨停溢价\n\n"
+        f"📊 市场广度·情绪温度（数据日期 {TODAY}）\n· 涨跌家数：上涨 3000"
+    )
+
+    async def _fake(name, db, args, user):
+        return payload
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _freeze(monkeypatch, CLOSED)
+    out = _run(tc._query_market_sentiment(None, {}, None))
+    head = out.splitlines()[0]
+    assert "时点 未知" in head
+    assert "本分条未标数据日期" in out              # 情绪周期不许继承今日
+    assert f"本分条数据日期 {TODAY}" in out
+    assert "整体基准日未知" in out
+    assert "可用于今日结论" not in out
 
 # ── 反例对照（真实调用，2026-11-10 14:40 冻结）────────────────────
 # 修复前：
