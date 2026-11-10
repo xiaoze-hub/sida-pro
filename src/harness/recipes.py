@@ -196,6 +196,27 @@ def list_recipes() -> list[Recipe]:
     return sorted(load_recipes().values(), key=lambda r: r.id)
 
 
+def _scored(text: str) -> list[tuple[int, int, int, Recipe]]:
+    """命中配方的打分表：`(分数, 最长命中词长度, priority, 配方)`，按 list_recipes 顺序。"""
+    out: list[tuple[int, int, int, Recipe]] = []
+    for r in list_recipes():
+        hits = [k for k in r.when if k and k in text]
+        if not hits:
+            continue
+        # 长关键词的权重按平方放大：'深度诊断'(4) 应当压过 '盘口'(2) 这类泛词
+        out.append((sum(len(k) ** 2 for k in hits), max(len(k) for k in hits), r.priority, r))
+    return out
+
+
+def _best(scored: list[tuple[int, int, int, Recipe]]) -> tuple[int, int, int, Recipe] | None:
+    """打分表里最高分的一条（并列时保留**先出现**的那条，与旧实现逐字一致）。"""
+    best = None
+    for key in scored:
+        if best is None or (key[0], key[1], key[2]) > (best[0], best[1], best[2]):
+            best = key
+    return best
+
+
 def match_recipe(text: str) -> Recipe | None:
     """按 when 关键词把问题**确定性地**路由到一份配方（2026-10-21）。
 
@@ -220,21 +241,11 @@ def match_recipe(text: str) -> Recipe | None:
     """
     if not text:
         return None
-    best: tuple[int, int, int, Recipe] | None = None
-    domain_alts: list[tuple[int, int, int, Recipe]] = []
-    for r in list_recipes():
-        hits = [k for k in r.when if k and k in text]
-        if not hits:
-            continue
-        # 长关键词的权重按平方放大：'深度诊断'(4) 应当压过 '盘口'(2) 这类泛词
-        score = sum(len(k) ** 2 for k in hits)
-        key = (score, max(len(k) for k in hits), r.priority, r)
-        if best is None or (key[0], key[1], key[2]) > (best[0], best[1], best[2]):
-            best = key
-        if not r.pipeline and r.covers_domains:
-            domain_alts.append(key)
+    scored = _scored(text)
+    best = _best(scored)
     if best is None:
         return None
+    domain_alts = [k for k in scored if not k[3].pipeline and k[3].covers_domains]
     winner = best[3]
     if winner.pipeline and winner.scope == "market" and domain_alts:
         # 只有**点名**了这条管线的配方才许接管；没点名的（持仓/盘中/竞价）保持原路由。
@@ -247,6 +258,48 @@ def match_recipe(text: str) -> Recipe | None:
             )
             return alt[3]
     return winner
+
+
+def match_recipe_for(text: str, *, has_symbol: bool) -> Recipe | None:
+    """按**问句口径**（有没有标的）在关键词命中里选配方（2026-11-10）。
+
+    为什么需要这一层：`Recipe.scope` 原来只是声明（"这份配方天生有没有标的"），
+    不参与路由；而 `pipeline=True` 的单标的配方在 `pipeline.answer` 第一句就
+    `symbols_of()`，解析不到标的就 `return None` 回落多轮 loop —— 但回落时
+    `_REQ_TOOLS` 已被收窄成那 4 个只吃 `symbol` 的工具。于是「今天尾盘有适合建仓的
+    股票吗」被 `尾盘` 一个词抓到 `intraday_analyst`，用户得到的是一句「我是分时解读员，
+    只能看个股分时」：既没有市场扫描工具，也没人告诉他这是路由错了。
+
+    判据只有一条：命中里挑**与问句口径一致**的那份（有标的 → symbol，无标的 → market）。
+    两条例外，否则会把老行为改坏：
+
+    1. **只抢「单标的管线」** —— `pipeline=True and scope=="symbol"` 是唯一真的会因为
+       "没有标的"而跑不起来的组合（`pipeline.answer` 第一句 `symbols_of()` 就 return None）。
+       `risk_judge` 虽然 `scope=symbol` 但 `pipeline=False`，它的 `get_portfolio` 不需要代码，
+       「持仓体检」不许被 `持仓` 二字换到 `intraday_watcher` 上。
+    2. **没有同口径候选就不抢** —— 「帮我做红蓝对抗压力测试」没有标的也没有 market 候选，
+       照旧走 `devil_advocate`（原样交回调用方，由它决定管线失败后怎么回落）。
+    `has_symbol` 由调用方用**纯正则**判定（代码 / 股票名后缀 / 会话绑定），
+    不在路由层发网络请求。
+    """
+    winner = match_recipe(text or "")
+    if winner is None:
+        return None
+    want = "symbol" if has_symbol else "market"
+    if (getattr(winner, "scope", "symbol") or "symbol") == want:
+        return winner
+    if want == "market" and not (winner.pipeline and winner.scope == "symbol"):
+        return winner      # 例外 1：只有"单标的管线"才需要按口径改道
+    pool = [k for k in _scored(text or "")
+            if (getattr(k[3], "scope", "symbol") or "symbol") == want]
+    alt = _best(pool)
+    if alt is None or alt[3] is winner:
+        return winner
+    logger.info(
+        "配方按问句口径改路由: %s(%s) → %s(%s, score=%s, has_symbol=%s)",
+        winner.id, getattr(winner, "scope", "symbol"), alt[3].id, want, alt[0], has_symbol,
+    )
+    return alt[3]
 
 
 def filter_schemas(schemas: list[dict], allowed: frozenset[str] | set[str] | None) -> list[dict]:

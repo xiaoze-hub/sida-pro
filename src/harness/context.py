@@ -222,19 +222,21 @@ def route_with_persona(db, text: str, bound: str | None, stock_q: bool,
     """
     from src.harness.routing import route_for_request
 
-    route = route_for_request(text, all_schemas, forced)
+    # `bound` 进路由：关键词命中里优先与问句口径一致的那份（有标的→symbol / 无标的→market）
+    route = route_for_request(text, all_schemas, forced, bound=bound)
     if stock_q and route.recipe is None:
         p, txt = detect_persona(db, text, bound)
         # 只有"尺子会量错"的三类才接管：妖股/左侧/题材龙头。
         # 趋势/常规交回模型自选 —— 否则每只正常票都会被塞进 10 工具管线，慢且没必要。
         if p is not None and getattr(p, "kind", "") in ("demon", "left", "leader"):
-            route = route_for_request(text, all_schemas, forced, persona_recipe=p.recipe)
+            route = route_for_request(text, all_schemas, forced, persona_recipe=p.recipe, bound=bound)
             return route, txt
         # 判断类问题（能不能拿/洗盘还是出货/该不该卖）必须有证据才能答。
         # 关键词表里没有这些词时，旧行为是「给模型全量工具让它自己选」——实测它会一个都不调，
         # 最后触发零工具拒答。这里确定性兜底到全景诊断（10 个工具、六段输出）。
         if _is_judgment_question(text):
-            route = route_for_request(text, all_schemas, forced, persona_recipe="deep_diagnosis")
+            route = route_for_request(text, all_schemas, forced,
+                                      persona_recipe="deep_diagnosis", bound=bound)
             return route, txt
     return route, ""
 

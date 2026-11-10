@@ -23,16 +23,41 @@ class Route:
     reason: str = "default"
 
 
+def has_symbol_scope(text: str, bound: str | None = None) -> bool:
+    """这句话是不是在问**某只具体标的**（决定 symbol / market 口径的配方谁能赢）。
+
+    只用**纯正则**三件事：会话绑定、6 位代码、股票名后缀词（`symbol_guard` 那张表）。
+    故意不做 TQ 名称核对 —— 路由层每轮都发网络请求既慢又在源故障时不确定；
+    核不准就当"没有标的"，此时只影响「同口径优先」这一层：没有 market 候选就保持原赢家。
+    """
+    if bound:
+        return True
+    try:
+        from src.core.symbol_guard import _CODE_RE, mention_candidates
+
+        if _CODE_RE.search(text or ""):
+            return True
+        return bool(mention_candidates(text or ""))
+    except Exception:  # noqa: BLE001 - 判定失败按"没有标的"处理，不许打断路由
+        return False
+
+
 def route_for_request(text: str, all_schemas: list[dict],
                       forced: frozenset[str] | set[str] | None = None,
-                      persona_recipe: str | None = None) -> Route:
+                      persona_recipe: str | None = None,
+                      bound: str | None = None) -> Route:
     """决定本轮工具集与温度。
 
     优先级：@提及白名单 > 标的画像（persona_recipe）> 关键词路由 > 默认。
     画像是确定性判定（stock_persona.detect），比关键词更可靠 ——
     妖股用「趋势+估值」的配方分析必然输出废话，所以画像命中时直接锁定配方。
+
+    `bound`（会话锁定标的）参与路由：关键词命中里优先选**与问句口径一致**的配方
+    （有标的 → symbol，无标的 → market），见 `recipes.match_recipe_for`。
+    2026-11-10：「今天尾盘有适合建仓的股票吗」被 `尾盘` 抓到单标的 `intraday_analyst`，
+    管线解析不到标的就 `None`，用户最后拿到一句"我是分时解读员，不能扫描"。
     """
-    from src.harness.recipes import filter_schemas, get_recipe, match_recipe
+    from src.harness.recipes import filter_schemas, get_recipe, match_recipe_for
     from src.core.symbol_guard import is_stock_question
 
     if forced:
@@ -48,7 +73,7 @@ def route_for_request(text: str, all_schemas: list[dict],
                          temperature=0.2,
                          reason=f"persona:{_pr.id}")
 
-    recipe = match_recipe(text or "")
+    recipe = match_recipe_for(text or "", has_symbol=has_symbol_scope(text or "", bound))
     if recipe is not None:
         return Route(recipe=recipe,
                      tools=filter_schemas(all_schemas, frozenset(recipe.tools)),

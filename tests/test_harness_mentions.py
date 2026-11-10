@@ -42,12 +42,14 @@ def test_six_recipes_loaded_and_valid():
     # 本文件不叫 harness_routing/test_market_pipeline, 所以定向跑永远扫不到(踩过两次)。
     # 2026-11-09: lhb_reviewer(龙虎榜复盘官) 为第 13 个 —— 「复盘+龙虎榜」必须有非 pipeline
     # 配方才能真的调到 query_data_domain(domain=lhb.daily)。
-    assert len(recipes) == 13
+    # 2026-11-10: entry_scanner(建仓候选筛查) 为第 14 个 —— 「尾盘有适合建仓的股票吗」这类
+    # 无标的的市场级问题原来没有配方认领，被 time-word 抓到单标的 intraday_analyst。
+    assert len(recipes) == 14
     assert {r.id for r in recipes} == {
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
         "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
-        "devil_advocate", "lhb_reviewer",
+        "devil_advocate", "lhb_reviewer", "entry_scanner",
     }
     for r in recipes:
         assert r.label and r.prompt_fragment
