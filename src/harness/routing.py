@@ -49,6 +49,19 @@ _MARKET_INTENT_WORDS = (
 # bound 里的那只票不是用户问的对象（见 `recipes.match_recipe_for` 的持仓护栏）。
 _PORTFOLIO_WORDS = ("我的持仓", "持仓", "仓位", "加仓", "减仓", "调仓", "自选")
 
+# 「举例代码」的判定词（2026-11-10 复审 P1）：`有没有像 600111 这样的票` 里的
+# 600111 是**例子**，不是提问对象。三项同时成立才算举例，缺一不可：
+#   a. 代码前/后紧邻举例框架（比如/例如/类似/像 … 这样/这种/这类/之类）；
+#   b. 正文里有"一批"的名词（票/股票/标的/个股/品种）；
+#   c. 问句在要一批（市场意图词，或 有没有/哪些/哪几/还有什么/其他）。
+# 只靠 a 会把「300750 这样的走势还能追吗」误判成市场问句 —— 那是在问那只票。
+_EXAMPLE_BEFORE = ("比如", "例如", "譬如", "类似", "好比", "诸如", "像", "如")
+_EXAMPLE_AFTER = ("这样", "这种", "这类", "之类", "那种", "那样")
+_BATCH_NOUNS = ("股票", "标的", "个股", "品种", "票")
+_BATCH_ASKS = ("有没有", "哪些", "哪几", "还有什么", "其他", "另外", "几只")
+#: 单数指代：「这票有没有放量」问的是当前那一只，不是要一批。
+_SINGULAR_MARKERS = ("这票", "这只", "那只", "该股", "该票", "此股", "这家")
+
 
 def is_market_intent(text: str) -> bool:
     t = text or ""
@@ -60,18 +73,46 @@ def is_portfolio_intent(text: str) -> bool:
     return any(w in t for w in _PORTFOLIO_WORDS)
 
 
-def _explicit_code(text: str) -> bool:
-    """正文里**明确写了** 6 位 A 股代码 —— 唯一能确认"在问某只票"的证据。
+def _asks_for_batch(text: str) -> bool:
+    """问句是不是在要一批标的。
 
-    纯本地正则（`symbol_guard._CODE_RE`），不联网、不猜。导入失败就按"没有代码"处理：
-    路由宁可少认一只标的，也不能因为护栏模块炸了把市场问句判成单标的。
+    判据只两条，都要落在字面上：市场意图词（"复盘/建仓/板块…"），
+    或者「复数问法 + 批量名词」（"有没有…的票"，"哪些股票"）。
+    只靠复数问法会把「分时有没有放量」这种绑定单标的的问句判成市场问句。
     """
+    t = text or ""
+    if is_market_intent(t):
+        return True
+    if any(w in t for w in _SINGULAR_MARKERS):
+        return False
+    return any(n in t for n in _BATCH_NOUNS) and any(w in t for w in _BATCH_ASKS)
+
+
+def _code_spans(text: str) -> list[tuple[int, int]]:
+    """正文里 6 位 A 股代码的 (起, 止) 位置。纯本地正则，不联网、不猜。"""
     try:
         from src.core.symbol_guard import _CODE_RE
+    except Exception:  # noqa: BLE001 - 护栏模块炸了就当没有代码，不打断路由
+        return []
+    return [(m.start(), m.end()) for m in _CODE_RE.finditer(text or "")]
 
-        return bool(_CODE_RE.search(text or ""))
-    except Exception:  # noqa: BLE001 - 判定失败按"没有标的"处理，不许打断路由
+
+def _is_example_code(text: str, start: int, end: int) -> bool:
+    """这个代码是不是被当**例子**写的（`像 600111 这样的票`）。
+
+    判定只用明确的举例框架 + 批量名词 + 复数问法，不做语义猜测；
+    任一条不成立就按"点了这只票"处理（宁可多认一只标的，也不把单标的问句改成市场）。
+    """
+    t = text or ""
+    before = t[max(0, start - 4):start].rstrip(" \t\u3000，,：:（(")
+    after = t[end:end + 5].lstrip(" \t\u3000，,：:（(")
+    framed = any(before.endswith(w) for w in _EXAMPLE_BEFORE) or any(
+        after.startswith(w) for w in _EXAMPLE_AFTER)
+    if not framed:
         return False
+    if not any(n in t for n in _BATCH_NOUNS):
+        return False
+    return _asks_for_batch(t)
 
 
 def _name_like_mention(text: str) -> bool:
@@ -93,17 +134,22 @@ def has_symbol_scope(text: str, bound: str | None = None) -> bool:
 
     顺序即语义（2026-11-10 复审 P0，全程本地判断、不发网络请求）：
 
-    1. 正文写了 6 位代码 → 单标的（用户明确点了票，bound 与市场词都不改道）；
+    1. 正文写了 6 位代码**且不是在举例** → 单标的（用户明确点了票，bound 与市场词都不改道）；
+       `有没有像 600111 这样的票` 里的代码是例子，按市场口径（2026-11-10 复审 P1）；
     2. 持仓/市场意图词 → 市场（bound 是会话状态，不是这句问句的口径）；
     3. 才轮到 bound（会话绑定 / 上游名字解析的结果）；
     4. 都不是，但正文像点了股票名 → 仍按单标的处置：核不到是哪只就交给上游核对/追问，
        绝不改成市场配方拿全市场名单**代答**。
     """
     t = text or ""
-    if _explicit_code(t):
+    spans = _code_spans(t)
+    if spans and any(not _is_example_code(t, s, e) for s, e in spans):
         return True
     # 持仓问句问的是「我这一篮子」，市场问句要的是一批标的；bound 只是会话状态。
-    if is_portfolio_intent(t) or is_market_intent(t):
+    # 「正文的代码全是举例」（`有没有像 600111 这样的票`）同样按市场处置：
+    # 否则会话绑定会把这类"要一批"的问句拽成那只示例票（2026-11-10 复审 P1）。
+    example_only = bool(spans) and all(_is_example_code(t, s, e) for s, e in spans)
+    if is_portfolio_intent(t) or _asks_for_batch(t) or example_only:
         return False
     if bound:
         return True
@@ -150,9 +196,14 @@ def route_for_request(text: str, all_schemas: list[dict],
     # 兜底路径服务的是「没有配方管这个」的任意输入（含闲聊/问价）——
     # 采集类工具（fallback=False）一律不放进去，否则模型会在闲聊里自由写库。
     fallback_tools = _fallback_tools(all_schemas)
-    if is_stock_question(text or ""):
+    # 口径如实标出来（2026-11-10 复审 P1）：`有没有像 600111 这样的票` 是市场问句，
+    # 不能因为正文里有个示例代码就被日志/治理页记成「单标的问句」。
+    if has_symbol_scope(text or "", bound):
         return Route(recipe=None, tools=fallback_tools, temperature=0.2,
                      reason="stock_question")
+    if _asks_for_batch(text or ""):
+        return Route(recipe=None, tools=fallback_tools, temperature=0.2,
+                     reason="market_question")
     return Route(recipe=None, tools=fallback_tools, temperature=0.5, reason="default")
 
 

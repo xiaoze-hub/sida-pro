@@ -95,21 +95,44 @@ SKIP_SYMBOL_CAP = "symbol_tool_cap"
 # 当拒权，静默删掉一条可用证据 —— 比假证据更坏。
 #
 # 现在只认两种**声明**，都有稳定契约：
-#   a. 执行层/我方 renderer 的**首行**固定文案（拒权/失败/数据日）；
+#   a. 执行层/我方 renderer 的**首行**固定文案（拒权/失败/无数据/数据日）；
 #   b. 工具返回的 JSON 对象里的显式字段（`available` / `data_date_status` / `symbols`）。
 # 认不出的就是"未知"：未知绝不冒充今日，也绝不改写成"没有"。
+#
+# 首行的**域名标签**是渲染约定，不是正文（2026-11-10 复审第 2 轮 P0）：
+#   生产真实拒权行是 `[市场扫描榜] 无权限：该榜为 Pro 专属功能…`，
+#   复盘失败行是 `[盘后复盘] 读取异常：KeyError…`。
+# 旧实现只比对整行首字符前缀，于是这些**真实声明一条都没被识别**，
+# 全被记成「已获可用证据」写进结论。标签由我方 renderer 自己写在首行，
+# 所以「标签 + 声明词」同样是稳定契约 —— 认它，不等于扫正文。
+_LABEL_RE = re.compile(r"^(?:\[[^\]\n]{1,40}\]|【[^】\n]{1,40}】)\s*")
+
 DENIED_PREFIXES = (
     "无权限", "需要登录", "权限不足", "未授权", "该工具需要已登录的用户身份",
 )
+#: 显式声明「这次没取到」（不是拒权，也不是"没有数据"）
 FAILED_PREFIXES = (
-    "工具执行出错", "取数失败", "未知工具", "本轮不使用工具",
+    "工具执行出错", "取数失败", "读取异常", "未知工具", "本轮不使用工具",
+    "请提供股票代码",
 )
+#: 显式声明「本条没有数据」——**只在带标签的首行**认（`[市场扫描榜] 暂无三榜快照…`、
+#: `[盘后复盘] 无数据。`）。无标签的同名词太容易是正文（"暂无涨停"），见下方正则。
+NO_DATA_PREFIXES = ("暂无", "无数据", "未取到")
 #: 首行是复合文案的失败声明（如 registry 的预算拒绝，前缀是本轮配方名）
 _FAILED_PATTERNS = (
     re.compile(r"^.+?的工具预算（\d+\s*次）已用尽"),
+    # 执行层的白名单拒绝：`{配方名} 本轮不使用工具 \`x\`…`
+    re.compile(r"^.{0,30}? 本轮不使用工具 "),
     # 各 handler 自己的失败开场（`同花顺热榜查询失败: …` / `…拉取出错: …`）。
     # 只认**首行**且必须带冒号：正文里出现"失败"二字是行情描述，不是这条证据的状态。
     re.compile(r"^.{0,24}?(?:失败|出错|报错)[:：（]"),
+)
+#: 无标签首行里的「没有数据」自述（工具自己写的开场，不是数据里的字）
+_NO_DATA_PATTERNS = (
+    # `同花顺热榜暂无数据(可能非交易时段…)` / `东财异动池暂无数据(…)`
+    re.compile(r"^[^。\n]{0,24}?暂无数据"),
+    # `通达信客户端(TQ)当前取不到该数据(...)`
+    re.compile(r"^[^。\n]{0,16}?取不到该数据"),
 )
 
 #: 数据日的**声明行**。只有工具自己说"数据日是 X"才算数：
@@ -133,6 +156,19 @@ def _first_line(text: str) -> str:
     return ""
 
 
+def _declaration(text: str) -> tuple[str, str]:
+    """首行 → (域名标签, 标签后的正文)。无标签时标签为空串。
+
+    标签是 renderer 自己写在首行的域名（`[市场扫描榜] `、`【盘后复盘证据】 `），
+    声明词跟在它后面。只剥**一个**前缀标签，不做任何其它清洗。
+    """
+    head = _first_line(text)
+    match = _LABEL_RE.match(head)
+    if not match:
+        return "", head
+    return match.group(0).strip(), head[match.end():].strip()
+
+
 def _json_payload(text: str) -> dict | None:
     """工具返回的 JSON 对象；不是对象就返回 None（不做任何修补/猜测）。"""
     body = str(text or "").strip()
@@ -148,8 +184,10 @@ def _json_payload(text: str) -> dict | None:
 def tool_status(text: str) -> str:
     """把工具返回分成 ok / denied / unavailable（只读**声明**，不扫正文）。
 
-    - `denied`：首行就是我们/执行层的拒权文案（"无权限…"、"需要登录…"）；
-    - `unavailable`：首行是取数失败/工具缺失/预算用尽，或 JSON 显式 `available=False`。
+    - `denied`：首行就是我们/执行层的拒权文案（"无权限…"、"需要登录…"），
+      允许带域名标签（`[市场扫描榜] 无权限：…`）；
+    - `unavailable`：首行是取数失败/工具缺失/预算用尽/显式"无数据"，
+      或 JSON 显式 `available=False`。
     正文里出现同样的词**不算** —— 那是口径说明，不是这条证据的状态。
     """
     payload = _json_payload(text)
@@ -158,10 +196,22 @@ def tool_status(text: str) -> str:
             return "denied"
         if payload.get("available") is False or payload.get("ok") is False:
             return "unavailable"
-    head = _first_line(text)
+    label, body = _declaration(text)
+    if label:
+        # 标签行的声明词位置是稳定的：标签 → 声明词 → 解释。
+        if body.startswith(DENIED_PREFIXES):
+            return "denied"
+        if body.startswith(FAILED_PREFIXES) or body.startswith(NO_DATA_PREFIXES):
+            return "unavailable"
+        if any(p.match(body) for p in _FAILED_PATTERNS):
+            return "unavailable"
+        return "ok"
+    head = body
     if head.startswith(DENIED_PREFIXES):
         return "denied"
     if head.startswith(FAILED_PREFIXES) or any(p.match(head) for p in _FAILED_PATTERNS):
+        return "unavailable"
+    if any(p.match(head) for p in _NO_DATA_PATTERNS):
         return "unavailable"
     return "ok"
 
@@ -191,8 +241,15 @@ def declared_data_day(text: str) -> tuple[str, str | None]:
     只认两处声明，认不出返回 `("unknown", None)`：
     1. JSON 里 `data_date` + `data_date_status == "verified"`
        （只带 data_date 不算 —— 与 `tools_scan_read._resolve_data_date` 同口径）；
-    2. 首行声明行：`数据日 2026-11-10（…）` / `⚠️ 快照已过期：数据日 2026-11-09` /
-       `数据日期未核实…`。
+    2. **无标签**首行声明行：`数据日 2026-11-10（…）` /
+       `⚠️ 快照已过期：数据日 2026-11-09` / `数据日期未核实…`。
+       这两句只由 `tools_scan_read._freshness_line` 在**结构化 data_date_status
+       = verified** 时渲染，所以认它们等于认结构化字段。
+
+    带**域名标签**的首行一律不算数据日（2026-11-10 复审 P0）：
+    `【盘后复盘证据】20261110 · 口径 …` 里的日期是 `build_replay` 的
+    **取数/时钟日**（无参调用直接 `datetime.now()`），池子取空时它照样写今天。
+    把它当数据日 = 把"日期未知"标成"今日"。认不出就维持 unknown。
     绝不再从正文里取"最晚日期"：`2027-01-01 限售解禁` 会把未来日期冒充今日。
     """
     payload = _json_payload(text)
@@ -200,11 +257,14 @@ def declared_data_day(text: str) -> tuple[str, str | None]:
         day = str(payload.get("data_date") or "").strip()
         if day and str(payload.get("data_date_status") or "") == "verified":
             return _classify_day(day)
-    head = _first_line(text)
-    if any(marker in head for marker in _DECL_UNKNOWN_MARKERS):
+    label, body = _declaration(text)
+    if label:
+        # 标签行只声明"这是什么域"，不声明数据日（见 docstring）。
+        return "unknown", None
+    if any(marker in body for marker in _DECL_UNKNOWN_MARKERS):
         return "unknown", None
     for pattern in (_DECL_STALE_RE, _DECL_DAY_RE):
-        match = pattern.match(head)
+        match = pattern.match(body)
         if match:
             return _classify_day(match.group(1))
     return "unknown", None
@@ -216,6 +276,10 @@ def declared_candidates(text: str) -> tuple[str, list[str]]:
     状态 ∈ {"declared","unknown"}。只认 JSON 里 `symbols` / `candidates` 这种
     **结构化名单**；正文里的 6 位数字一律不算（`成交额 3001234.56 万` 会造出假代码）。
     `unknown` ≠ "没有候选"，两者的措辞在 `missing_note()` 里是分开的。
+
+    现实约束（2026-11-10 复审）：市场级工具目前**全部返回人话字符串**（三榜/DDE/
+    复盘/热榜/异动），没有一个是 symbols JSON。所以生产里这条几乎总是 `unknown`
+    —— 结论必须写"名单未结构化声明"，不许写成"已有候选"或"没有候选"。
     """
     payload = _json_payload(text)
     if payload is None:
@@ -268,8 +332,14 @@ class MarketRun:
 
     @property
     def data_date_status(self) -> str:
-        """verified = 有唯一声明数据日；unverified = 未声明/混杂（不得称今日/实时）。"""
-        return "verified" if self.data_date else "unverified"
+        """verified = 全部成功证据都声明了同一个数据日；partial = 只有一部分声明了；
+        unverified = 没有声明或声明互相矛盾（这两种都不得称今日/实时）。"""
+        days = set(self.dates.values())
+        if not days:
+            return "unverified"
+        if len(days) > 1:
+            return "unverified"
+        return "partial" if self.undated else "verified"
 
     @property
     def candidates(self) -> list[str]:
@@ -323,8 +393,12 @@ class MarketRun:
 
 
 def evidence_payload(run: MarketRun) -> dict:
-    """出站证据的缺口摘要（与 `evidence_pack` 的 ok/missing 互补，不替代它）。"""
-    return {
+    """出站证据的缺口摘要（与 `evidence_pack` 的 ok/missing 互补，不替代它）。
+
+    `candidates` **只在结构化声明过名单时**才出现：生产工具回的都是人话字符串，
+    出站带一个空数组等于对外宣称"没有候选"，而事实是"没人声明过"。
+    """
+    payload = {
         "market": run.market,
         "ok": run.ok,
         "failed": run.failed,
@@ -336,9 +410,11 @@ def evidence_payload(run: MarketRun) -> dict:
         "data_date_status": run.data_date_status,
         "undated": list(run.undated),
         "candidates_status": run.candidates_status,
-        "candidates": run.candidates,
         "missing_note": run.missing_note(),
     }
+    if run.candidates_status == "declared":
+        payload["candidates"] = run.candidates
+    return payload
 
 
 @dataclass(frozen=True)
@@ -738,8 +814,14 @@ def compose_market_prompt(recipe, run: MarketRun, question: str,
               f"未跑 {len(run.skipped)} / 拒权 {len(run.denied)} / "
               f"未取到 {len(run.unavailable)} / 非今日 {len(run.stale)} / "
               f"未声明数据日 {len(run.undated)} ====="]
-    if run.data_date:
+    if run.data_date and run.data_date_status == "verified":
         blocks.append(f"（工具声明的数据日：{run.data_date}）")
+    elif run.data_date:
+        # 只有一部分维度声明了这个数据日：不许用它代表整轮（复审：缺结构化证据
+        # 维持未知，不许把"部分已验证"写成"整轮今日"）。
+        blocks.append(
+            f"（部分工具声明的数据日：{run.data_date}；另有 {len(run.undated)} 项未声明，"
+            "不得据此把整轮称今日/实时）")
     else:
         blocks.append("（数据日：未声明 —— 不得称今日/实时）")
     if run.skipped:

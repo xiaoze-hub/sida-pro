@@ -295,12 +295,15 @@ def match_recipe_for(text: str, *, has_symbol: bool) -> Recipe | None:
     # 持仓护栏（2026-11-10 复审 P0）：问「我的持仓…尾盘/加仓」时，赢家可能只是被
     # `尾盘` 抓到的单标的配方，工具里没有 `get_portfolio` —— 用户问的是自己那篮子，
     # 却拿到一只票的分时解读。持仓类问句只在「带 get_portfolio 的配方」里选。
-    from src.harness.routing import has_symbol_scope, is_portfolio_intent
+    from src.harness.routing import _asks_for_batch, has_symbol_scope, is_portfolio_intent
 
-    # 口径可能由调用方按 bound 传进来；这里统一按问句本身复核一次 ——
-    # 绑着 002361 不代表「今天有什么能建仓的」是在问那只票（复审 P0 原句）。
-    if has_symbol:
-        has_symbol = has_symbol_scope(text or "", bound="bound")
+    # 口径由调用方算好（路由层已经用**问句本身**判过一次）。这里只做一件事：
+    # 允许把"有标的"**降级**成"无标的" —— 绑着 002361 不代表「今天有什么能建仓的」
+    # 是在问那只票（复审 P0 原句）。反过来绝不允许升级：
+    # 调用方说"没有标的"（没代码、没绑定）时，这里若凭空认定有标的，
+    # 「有没有低位放量的票」这类要一批的问句又会被单标的管线拽走（复审 P1）。
+    if has_symbol and not has_symbol_scope(text or "", bound="bound"):
+        has_symbol = False
 
     if is_portfolio_intent(text or ""):
         # 持仓问句只认带 get_portfolio 的配方；后面的 symbol/market 口径改道会把它换掉
@@ -326,6 +329,17 @@ def match_recipe_for(text: str, *, has_symbol: bool) -> Recipe | None:
             if (getattr(k[3], "scope", "symbol") or "symbol") == want]
     alt = _best(pool)
     if alt is None or alt[3] is winner:
+        if (want == "market" and winner.pipeline and winner.scope == "symbol"
+                and _asks_for_batch(text or "")):
+            # 问句明确要一批（举例代码不算标的）、命中的却只有单标的管线：
+            # `symbols_of()` 第一句就解析不到标的 → return None，而工具集已被收窄成
+            # 那几个只吃 symbol 的工具，用户只会拿到一句「看不了全市场」。
+            # 没有同口径配方就**不代答**，交回调用方走兜底（全量工具的多轮 loop）
+            # （2026-11-10 复审 P1：代码举例不许劫持市场问句）。
+            # 只在**问句真的要一批**时生效：「帮我做红蓝对抗压力测试」没有标的也照样
+            # 能跑（devil_advocate 不吃 symbol），不许被这条规则换走。
+            logger.info("市场口径问句命中单标的管线且无同口径候选，交回兜底: %s", winner.id)
+            return None
         if want == "symbol" and getattr(winner, "scan_only", False):
             # 正文点了票，命中的却只有全市场扫描配方（`建仓` → entry_scanner）。
             # 单标的问句不许跑全市场扫描：退到全景诊断，宁可少扫也不答错对象。

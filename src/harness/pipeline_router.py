@@ -63,6 +63,45 @@ def resolve_watchlist(db, user) -> list[str]:
         return []
 
 
+def question_codes(question: str) -> list[str]:
+    """问句正文里**明确写出的** 6 位代码（去重保序）。纯本地正则，不联网。
+
+    只认正文，不认 `bound`：`bound` 是会话状态，把它塞进名单就是让上一轮的标的
+    改道这一轮的市场问句（复审 P0 的绑定劫持）。举例代码（`像 600111 这样的票`）
+    同样不算 —— 判定复用路由层的同一套规则，免得两处口径打架。
+    """
+    try:
+        from src.core.symbol_guard import _CODE_RE
+        from src.harness.routing import _is_example_code
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[str] = []
+    for m in _CODE_RE.finditer(question or ""):
+        if _is_example_code(question or "", m.start(), m.end()):
+            continue
+        code = str(m.group(1) or "").strip()
+        if code and code not in out:
+            out.append(code)
+    return out
+
+
+def watchlist_for(question: str, db, user) -> list[str]:
+    """全市场管线的展开名单：**正文点名的标的优先**，再用自选补齐（上限 8）。
+
+    为什么点名标的排在自选之前（2026-11-10 复审 P1「持仓+代码双语义」）：
+    「我的持仓里 600111 要不要减」命中的是 market 口径的盯盘配方（带 `get_portfolio`
+    + `get_stock_quote`/`get_main_intent` 这类要 symbol 的工具）。旧实现只把**自选**
+    展开进 symbol 车道：600111 不在自选里，整条"指定股"维度就被静默跳过，
+    结论只剩账户口径 —— 账户与指定股本来是两个维度，缺一个都不算答对。
+    自选已满 8 只时优先保留点名的这只（用户这句话问的就是它）。
+    """
+    named = question_codes(question)
+    if not named:
+        return resolve_watchlist(db, user)
+    rest = [s for s in resolve_watchlist(db, user) if s not in named]
+    return (named + rest)[:MAX_WATCHLIST]
+
+
 async def answer(ai_client, recipe, question: str, bound, executor, *,
                  market: str = "CN", trace=None, context: str = "",
                  db=None, user=None, view_state: dict | None = None,
@@ -72,7 +111,7 @@ async def answer(ai_client, recipe, question: str, bound, executor, *,
     if is_market_scope(recipe):
         return await _mkt.answer_market(
             ai_client, recipe, executor, question, market=market, trace=trace,
-            watchlist=resolve_watchlist(db, user), context=context,
+            watchlist=watchlist_for(question, db, user), context=context,
             fact_pack=fact_pack, evidence_sink=evidence_sink,
         )
     return await _sym.answer(
@@ -92,7 +131,7 @@ async def answer_stream(ai_client, recipe, question: str, bound, executor, *,
     if is_market_scope(recipe):
         async for ev in _mkt.answer_market_stream(
             ai_client, recipe, executor, question, market=market, trace=trace,
-            watchlist=resolve_watchlist(db, user), context=context,
+            watchlist=watchlist_for(question, db, user), context=context,
             fact_pack=fact_pack, evidence_sink=evidence_sink,
         ):
             yield ev
