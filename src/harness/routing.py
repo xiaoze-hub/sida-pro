@@ -28,12 +28,21 @@ class Route:
 # 截图原句「今天尾盘有适合建仓的股票吗，可以有创业板」在 bound=002361 的会话里发出，
 # 旧实现见 bound 就判「有标的」，`尾盘` 抓到的单标的 `intraday_analyst` 压过了
 # `建仓` 的 `entry_scanner`，用户拿到「我是分时解读员，只能看个股分时」。
-# 判定顺序：正文写了代码/核对得到的简称 > 市场意图 > bound > 无标的。
+# 判定顺序：正文代码 > 市场/持仓意图 > bound > 名字像票但核不到 > 无标的。
+#
+# **路由层不发任何网络请求**（2026-11-10 复审阻断）：上一版在这里调
+# `symbol_guard._match_cached` 核对简称，TQ 单次探测预算 3s，直接在请求链路上
+# 阻塞事件循环，源故障时还给出不确定结论。名字解析本来就在上游
+# （`enter_request_ctx` → `first_code_from_names`）做过，结果体现在 `bound` 里；
+# 这里只做本地正则判断，核不到就**不猜**。
 _MARKET_INTENT_WORDS = (
     "市场", "全市场", "两市", "大盘", "选股", "扫一遍", "扫描",
     "有哪些股票", "有什么股票", "哪些票", "有什么票", "买什么", "买哪只",
     "建仓", "埋伏", "候选", "涨幅榜", "跌幅榜", "涨停", "跌停", "热点",
     "题材", "轮动", "板块", "龙虎榜", "复盘",
+    # 板块/指数名不是标的：会话绑着 002361 时问「创业板今天怎么样」问的还是板块，
+    # 绑定不许把它拽成那只票（2026-11-10 复审：无代码的市场问句避免绑定劫持）。
+    "创业板", "科创板", "北交所", "主板", "指数", "概念股",
 )
 
 # 「我的持仓」类问题：必须有 `get_portfolio` 才可能答对，
@@ -51,60 +60,54 @@ def is_portfolio_intent(text: str) -> bool:
     return any(w in t for w in _PORTFOLIO_WORDS)
 
 
-_NAME_MISS_TTL_S = 120.0
-_NAME_MISS: dict[str, float] = {}
+def _explicit_code(text: str) -> bool:
+    """正文里**明确写了** 6 位 A 股代码 —— 唯一能确认"在问某只票"的证据。
 
-
-def _lookup_name(word: str):
-    """名称核对 + 120s 负缓存：查不到的词不每轮重探（TQ 探测预算 3s 起）。"""
-    import time as _time
-
-    now = _time.time()
-    if _NAME_MISS.get(word, 0.0) > now - _NAME_MISS_TTL_S:
-        return []
-    from src.core.symbol_guard import _match_cached
-
-    hits = _match_cached(word)
-    if not hits:
-        _NAME_MISS[word] = now
-    return hits
-
-
-def _verified_symbol_mention(text: str) -> bool:
-    """正文里是否真的点了标的：6 位代码，或**核对得到**的简称（不猜）。
-
-    简称核对走 `symbol_guard._match_cached` —— 它在请求链路上本来就会跑
-    （`enter_request_ctx` 的 `first_code_from_names`），10 分钟缓存，不新增一类网络请求。
-    核对不上（无此票 / 行情源不可用）一律当「没有标的」：宁可把市场问题交给市场配方，
-    也不能拿「创业板」「半导体科技」这种词去当票查。
+    纯本地正则（`symbol_guard._CODE_RE`），不联网、不猜。导入失败就按"没有代码"处理：
+    路由宁可少认一只标的，也不能因为护栏模块炸了把市场问句判成单标的。
     """
     try:
-        from src.core.symbol_guard import _CODE_RE, mention_candidates
+        from src.core.symbol_guard import _CODE_RE
 
-        if _CODE_RE.search(text or ""):
-            return True
-        for word in mention_candidates(text or ""):
-            if _lookup_name(word):
-                return True
+        return bool(_CODE_RE.search(text or ""))
     except Exception:  # noqa: BLE001 - 判定失败按"没有标的"处理，不许打断路由
         return False
-    return False
+
+
+def _name_like_mention(text: str) -> bool:
+    """正文里像点了某只票的名字（后缀词），**不核对**（核不了就不猜是哪只）。
+
+    这一层只用来决定"别拿市场配方代答"，绝不据此认定是哪只票：
+    真正的名字→代码解析在上游 `enter_request_ctx`，结果走 `bound`。
+    """
+    try:
+        from src.core.symbol_guard import mention_candidates
+
+        return bool(mention_candidates(text or ""))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def has_symbol_scope(text: str, bound: str | None = None) -> bool:
     """这句话是不是在问**某只具体标的**（决定 symbol / market 口径的配方谁能赢）。
 
-    顺序即语义（2026-11-10 复审 P0）：
-    1. 正文有代码 / 核对得到的简称 → 单标的（用户明确点了票，bound 与市场词都不改道）；
-    2. 有市场意图词 → 市场（bound 是会话状态，不是这句问句的口径）；
-    3. 才轮到 bound。
+    顺序即语义（2026-11-10 复审 P0，全程本地判断、不发网络请求）：
+
+    1. 正文写了 6 位代码 → 单标的（用户明确点了票，bound 与市场词都不改道）；
+    2. 持仓/市场意图词 → 市场（bound 是会话状态，不是这句问句的口径）；
+    3. 才轮到 bound（会话绑定 / 上游名字解析的结果）；
+    4. 都不是，但正文像点了股票名 → 仍按单标的处置：核不到是哪只就交给上游核对/追问，
+       绝不改成市场配方拿全市场名单**代答**。
     """
-    if _verified_symbol_mention(text or ""):
+    t = text or ""
+    if _explicit_code(t):
         return True
-    # 持仓问句问的是「我这一篮子」，bound 只是会话状态；市场问句同理。
-    if is_portfolio_intent(text or "") or is_market_intent(text or ""):
+    # 持仓问句问的是「我这一篮子」，市场问句要的是一批标的；bound 只是会话状态。
+    if is_portfolio_intent(t) or is_market_intent(t):
         return False
-    return bool(bound)
+    if bound:
+        return True
+    return _name_like_mention(t)
 
 
 def route_for_request(text: str, all_schemas: list[dict],

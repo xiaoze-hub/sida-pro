@@ -67,20 +67,22 @@ def test_route_scope_split(q, bound, expected):
 
 
 def test_has_symbol_scope_is_pure_regex(monkeypatch):
+    """口径判定全是本地正则：不发网络请求（2026-11-10 复审阻断）。"""
     from src.core import symbol_guard
-    from src.harness import routing as routing_mod
 
-    monkeypatch.setattr(symbol_guard, "_tq_match", lambda w: [("002050", "三花智控")])
-    symbol_guard._TQ_MATCH_CACHE.clear()
-    routing_mod._NAME_MISS.clear()
+    calls: list[str] = []
+    monkeypatch.setattr(symbol_guard, "_tq_match",
+                        lambda w, *a, **k: (calls.append(w), [])[1])
+    monkeypatch.setattr(symbol_guard, "_match_cached",
+                        lambda w, *a, **k: (calls.append(w), [])[1])
     assert has_symbol_scope("002361 怎么样") is True
-    # 简称必须先核对到这只票才算标的（不能见后缀就猜，2026-11-10 复审 P0）
+    # 正文只写名字 = 像在问某只票，但**不在这里核**（上游 bound 才是核对结果）
     assert has_symbol_scope("三花智控这波怎么样") is True
     assert has_symbol_scope("分时怎么样", "002361") is True
     assert has_symbol_scope(REPORTED) is False
     assert has_symbol_scope("创业板今天怎么样") is False, "板块词不是标的"
-    symbol_guard._TQ_MATCH_CACHE.clear()
-    routing_mod._NAME_MISS.clear()
+    assert has_symbol_scope("创业板今天怎么样", "002361") is False, "绑定不许劫持板块问句"
+    assert calls == [], f"路由层不该联网: {calls}"
 
 
 def test_reported_question_gets_scan_tools():
