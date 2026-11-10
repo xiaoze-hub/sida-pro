@@ -196,6 +196,7 @@ const PHASE_LABEL: Record<string, string> = {
   pre: '盘前',
   live: '盘中',
   closed: '已收盘',
+  lunch: '午间休市',
   non_trading_day: '非交易日',
 }
 

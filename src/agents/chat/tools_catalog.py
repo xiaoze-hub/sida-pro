@@ -3295,7 +3295,7 @@ _STATE_CN = {
     "no_data": "未取到",
 }
 
-_PHASE_CN = {"pre": "盘前", "live": "盘中", "closed": "已收盘", "non_trading_day": "非交易日"}
+_PHASE_CN = {"pre": "盘前", "live": "盘中", "lunch": "午间休市", "closed": "已收盘", "non_trading_day": "非交易日"}
 
 
 _SQL_WORDS = ("SELECT", "INSERT", "UPDATE", "DELETE", "FROM")

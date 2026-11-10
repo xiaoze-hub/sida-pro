@@ -79,11 +79,10 @@ BASELINE_DAYS = 20
 #: 单日分钟上限（含 11:30 / 13:00 边界与盘后残留行；SQL 的 LIMIT 按它取上界）。
 MAX_MINUTES_PER_DAY = 1440
 
-#: 交易时段的分钟网格（当日分钟数，闭区间）：09:30-11:30、13:00-15:00。
-#: 用来判「已观测分钟之间有没有洞」—— 缺一根分钟会让累计少一截，比值随之失真。
+#: 交易分钟网格；下午第一根为 13:01，13:00 不存在于 TQ 240 根口径。
 SESSION_WINDOWS: tuple[tuple[int, int], ...] = (
     (9 * 60 + 30, 11 * 60 + 30),
-    (13 * 60, 15 * 60),
+    (13 * 60 + 1, 15 * 60),
 )
 
 #: SC8 两列的单位：**推断为份额（亿份）**，不是金额。落库列名 `scale_yi` / `net_sub_yi` 保留
@@ -382,7 +381,9 @@ def phase_of(d: date, now: datetime) -> str:
     today = now.date()
     if d != today:
         return "closed" if d < today else "pre"
-    if "0930" <= hm <= "1130" or "1300" <= hm <= "1500":
+    if "1131" <= hm < "1300":
+        return "lunch"
+    if "0930" <= hm <= "1500":
         return "live"
     if hm < "0930":
         return "pre"
