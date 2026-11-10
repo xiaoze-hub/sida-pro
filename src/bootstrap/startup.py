@@ -495,9 +495,13 @@ async def lifespan(app):
         #     先等 TQ 启动自愈线程收尾, 避免东财先写、TQ 后到被判异源的无谓冲突。
         try:
             from src.core import etf_minute_gapfill as _gapfill
+            from src.db import session as _db_session
 
-            _gapfill.register(rt.scheduler.scheduler)
-            _gapfill.start_startup_recovery(wait_for=locals().get("_etf_backfill_thread"))
+            _gapfill.register(rt.scheduler.scheduler, engine_provider=lambda: _db_session.engine)
+            _gapfill.start_startup_recovery(
+                wait_for=locals().get("_etf_backfill_thread"),
+                engine_provider=lambda: _db_session.engine,
+            )
             logger.info("ETF 分钟空源补缺已注册(08:40/16:50/18:50 + 启动后台恢复)")
         except Exception as e:
             logger.error(f"ETF 分钟空源补缺注册失败: {e}")

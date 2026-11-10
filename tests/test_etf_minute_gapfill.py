@@ -241,7 +241,7 @@ def test_source_has_no_reconcile_bypass_switch():
     params = inspect.signature(gap.run_gapfill).parameters
     assert not [p for p in params if "reconcile" in p]
     built_src = (_REPO / "src/bootstrap/startup.py").read_text(encoding="utf-8")
-    assert "_gapfill.register(rt.scheduler.scheduler)" in built_src
+    assert "_gapfill.register(rt.scheduler.scheduler, engine_provider=lambda: _db_session.engine)" in built_src
     assert "_gapfill.start_startup_recovery(" in built_src
 
 
