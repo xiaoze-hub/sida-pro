@@ -96,6 +96,12 @@ const INTRADAY = {
 
 const SUPPORT = {
   state: 'ok',
+  as_of: '20261106',
+  stale: false,
+  unit: '亿份',
+  net_sub_unit: '亿份',
+  scale_unit: '亿份',
+  threshold_share_yi: 100,
   threshold_yi: 100,
   series: [{ date: '20261106', scale_yi: 26800, net_sub_yi: 120.5 }],
   support_days: [{ date: '20261106', net_sub_yi: 120.5 }],
@@ -163,7 +169,7 @@ describe('MarketWatchHub 大盘观察工作区', () => {
     [-12.34, '-12.34亿'],
     [0, '0.00亿'],
     [null, '--'],
-  ])('最新市场级净申购 %s 的数值和单位不重复', async (amount, expected) => {
+  ])('最新市场级份额变动 %s 的数值和单位不重复', async (amount, expected) => {
     mocks.fetchAPI.mockImplementation((url: string) => {
       if (url.includes('/etf-watch/support')) return Promise.resolve({ ...SUPPORT, latest: { ...SUPPORT.latest, net_sub_yi: amount } })
       if (url.includes('/etf-watch/intraday')) return Promise.resolve(INTRADAY)
@@ -171,11 +177,11 @@ describe('MarketWatchHub 大盘观察工作区', () => {
       return Promise.resolve({})
     })
     renderHub({ initialEntries: ['/market-watch?view=etf'] })
-    const label = await screen.findByText('最新交易日净申购')
+    const label = await screen.findByText('最新交易日份额变动')
     await waitFor(() => expect(label.parentElement?.textContent).toContain('20261106'))
     const value = label.nextElementSibling?.textContent
     expect(value).toBe(expected)
-    expect(screen.getAllByText(/净申购只有市场级/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/市场级只有 SC8 份额/).length).toBeGreaterThan(0)
   })
   it('默认「指数全景」: 只渲染指数页, 不请求 ETF 接口, 页签与 URL 一致', async () => {
     renderHub({ initialEntries: ['/market-watch?window=30'] })

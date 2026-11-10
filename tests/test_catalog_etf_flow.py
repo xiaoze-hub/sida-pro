@@ -114,7 +114,7 @@ def test_basket_amount_and_sc8_are_separated_and_labeled():
     table = _intraday_table()
     payload_i = feed.intraday_payload(_runner(table), "20261106",
                                      now=datetime(2026, 11, 6, 10, 0, tzinfo=_CST))
-    payload_s = feed.support_payload(_runner(table), 750)
+    payload_s = feed.support_payload(_runner(table), 750, now=_NOW_LIVE)
     out = tc.render_etf_flow(
         as_of="20261106", source="etf_minute_flow / etf_flow_daily",
         intraday=payload_i, support=payload_s,
@@ -361,7 +361,7 @@ def test_baseline_sample_count_is_actual_and_unconfirmed(flow_db):
     assert "未确认" in p["note"]
     assert "过去 20 个交易日" not in p["note"]
 
-    support = feed.support_payload(_sql_runner(flow_db), 750)
+    support = feed.support_payload(_sql_runner(flow_db), 750, now=_NOW_LIVE)
     out = tc.render_etf_flow(as_of=_TODAY, source="etf_minute_flow", intraday=p, support=support)
     assert "2/20 个交易日" in out
     assert "缺 18 个交易日样本" in out and "未确认" in out
@@ -621,7 +621,7 @@ def test_support_and_daily_payload_match_previous_api(flow_db):
         _ins_min(flow_db, "20261105", "0930", code, 1_000.0)
     flow_db.commit()
 
-    sup = feed.support_payload(_sql_runner(flow_db), 750)
+    sup = feed.support_payload(_sql_runner(flow_db), 750, now=_NOW_LIVE)
     rows = [dict(r) for r in flow_db.execute(
         text("SELECT trade_date, net_sub_yi FROM etf_flow_daily WHERE net_sub_yi IS NOT NULL ORDER BY trade_date")
     ).mappings()]
@@ -663,7 +663,7 @@ def test_daily_api_days_param_keeps_frontend_contract(flow_db):
     out = tc.render_etf_flow(
         as_of="20261105", source="etf_minute_flow",
         intraday=feed.intraday_payload(_sql_runner(flow_db), "20261105", now=_NOW_LIVE),
-        support=feed.support_payload(_sql_runner(flow_db), 750),
+        support=feed.support_payload(_sql_runner(flow_db), 750, now=_NOW_LIVE),
     )
     assert "日度" not in out
     assert "完整日" not in out and "日合计" not in out and "完整" not in out
@@ -825,14 +825,16 @@ def test_sc8_hole_and_newer_day_are_not_summed_into_basket(flow_db):
     _ins_flow(flow_db, "20261105", 32_200.0, -20.0)
     flow_db.commit()
 
-    sup = feed.support_payload(_sql_runner(flow_db), 750)
+    sup = feed.support_payload(_sql_runner(flow_db), 750, now=_NOW_LIVE)
     assert sup["sample_count"] == 3
     assert sup["latest"] == {"date": "20261105", "scale_yi": 32200.0, "net_sub_yi": -20.0}
 
     out = tc.render_etf_flow(
         as_of="20261105", source="x", intraday={"state": "no_data"}, support=sup,
     )
-    assert "20261105 净申购 -20.00 亿元" in out
+    # SC8 是份额口径：不许再写「净申购 X 亿元」
+    assert "20261105 份额变动 -20.00 亿份" in out
+    assert "净申购 -20.00 亿元" not in out
     assert "样本窗口 20261103~20261105" in out
     assert "市场级累计净申购" not in out, "跨日 SC8 累计已被删除，不许复活"
     assert "168.00" not in out, "100 + 88 - 20 的伪造合计不得出现"

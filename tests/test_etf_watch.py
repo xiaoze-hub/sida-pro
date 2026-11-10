@@ -13,7 +13,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -295,14 +296,51 @@ def test_support筛出净申购达标日并给出分位(clean_flow, isolated_flo
                 {"d": d, "s": s, "n": n},
             )
     monkeypatch.setattr(ew, "single_share_source", None)
+    # 固定时钟：本用例的数据止于 20261105，用 11-06 盘前看才是「T+1 新鲜」。
+    monkeypatch.setattr(
+        api, "_now_cn",
+        lambda: datetime(2026, 11, 6, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
     body = api.get_support()
     assert body["state"] == "ok"
+    assert body["stale"] is False
+    assert body["as_of"] == "20261105"
+    assert body["freshness"]["lag_trading_days"] == 0
+    # SC8 是份额口径：出口带单位，且不许写成金额
+    assert body["unit"] == "亿份" and body["net_sub_unit"] == "亿份"
+    assert body["threshold_share_yi"] == pytest.approx(100.0)
+    assert "亿元" not in body["note"]
     assert body["support_count"] == 2
     assert [x["date"] for x in body["support_days"]] == ["20261104", "20261105"]
     # 最新一天 154.94 在托底样本里排第 1（高于 193.43 的没有）→ 分位 0%
     assert body["latest_percentile_in_support_days"] == 0.0
     assert body["single_share_supported"] is False
     assert "单只" in body["single_share_note"]
+
+
+def test_support停更时标stale且保留真实日期(clean_flow, isolated_flow, monkeypatch):
+    """接口层也要挡住「停更日冒充今天」：日期照实返回，滞后按交易日算。"""
+    with engine.begin() as conn:
+        for d, s_, n in (("20261015", 32772.84, 227.10), ("20261016", 32886.32, 113.48)):
+            conn.execute(
+                text(
+                    "INSERT INTO etf_flow_daily (trade_date, scale_yi, net_sub_yi) "
+                    "VALUES (:d, :s, :n)"
+                ),
+                {"d": d, "s": s_, "n": n},
+            )
+    monkeypatch.setattr(
+        api, "_now_cn",
+        lambda: datetime(2026, 11, 10, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    body = api.get_support()
+    assert body["state"] == "stale"
+    assert body["stale"] is True
+    assert body["as_of"] == "20261016"
+    assert body["latest"]["date"] == "20261016"
+    assert body["freshness"]["lag_trading_days"] == 16
+    assert "16 个交易日" in body["note"]
+    assert "不是当前读数" in body["note"]
 
 
 def test_support无数据时不伪造(clean_flow, isolated_flow):

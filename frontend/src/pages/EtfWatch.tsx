@@ -7,15 +7,17 @@
  *    意义：国家队进场往往先体现在**宽基 ETF 的成交额突然放大**，而不是个股涨停。
  *    基线取「过去 20 个交易日同一分钟」的累计均值 —— 比的是同日同期，不是全天，
  *    否则早盘永远"清淡"、尾盘永远"放量"，结论全是假的。
- * 2. **托底信号**：市场级 ETF 规模与当日净申购（SC8）。净申购 = 份额变动 × 净值，
- *    单日 ≥100 亿视为托底日样本；盘中先看成交额在历史托底日里的分位。
+ * 2. **托底信号**：市场级 SC8 两列 = 全市场 ETF 总份额与当日份额变动（**亿份，不是金额**）。
+ *    单日份额变动 ≥100 亿份视为托底日样本；盘中先看成交额在历史托底日里的分位。
+ *    SC8 上游序列已停更（库内止于 2026-10-16），接口给 `stale/as_of`，
+ *    页面必须带真实日期展示并标滞后，**不许**把停更日当今天。
  * 3. **日度全景**：20 只 ETF 按跟踪指数分 12 类的成交额。
  *
  * ## 口径纪律（不许违反）
  * - **单只 ETF 净申购不存在**：通达信 ETF 份额是"当前值回填到每一天"（实测 63 个交易日
  *   零变化），算出来恒为 0。所以只给市场级净申购，页面上必须显式说明，不能用别的算法凑。
  * - 数据缺失一律显示 `--` + 原因，不写 0、不猜。
- * - 单位：成交额亿元；净申购亿元。数字一律 tabular-nums。
+ * - 单位：成交额亿元；SC8 份额变动/总份额 **亿份**（不得写成亿元，也不得乘净值换算）。数字一律 tabular-nums。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Info, Loader2, RefreshCw } from 'lucide-react'
@@ -66,6 +68,25 @@ type IntradayResp = {
 }
 type SupportResp = {
   state: string
+  /** 库内真实最新日（不上移、不改写）。 */
+  as_of?: string
+  /** 最新日超出 T+1 容差 → 页面必须显式提示「不是当前读数」。 */
+  stale?: boolean
+  freshness?: {
+    as_of?: string | null
+    checked_at?: string
+    lag_trading_days?: number | null
+    max_lag_trading_days?: number
+    verified?: boolean
+    stale?: boolean
+    reason?: string | null
+  }
+  /** SC8 单位（亿份，份额口径）。 */
+  unit?: string
+  scale_unit?: string
+  net_sub_unit?: string
+  threshold_share_yi?: number
+  /** @deprecated 旧字段名，语义同为亿份；新代码用 threshold_share_yi。 */
   threshold_yi?: number
   series?: { date: string; scale_yi: number | null; net_sub_yi: number | null }[]
   support_days?: { date: string; net_sub_yi: number | null }[]
@@ -85,6 +106,8 @@ type DailyResp = {
   total_amount_yi?: (number | null)[]
   net_sub_yi?: (number | null)[]
   by_category?: { category: string; amount_yi: (number | null)[] }[]
+  /** 每个数列自己的单位：成交额亿元、SC8 份额亿份。 */
+  units?: { total_amount?: string; net_sub?: string; scale?: string }
   note?: string
 }
 
@@ -241,12 +264,16 @@ export default function EtfWatchPage() {
 
   const supportRows = useMemo(() => (support?.support_days || []).slice(-12).reverse(), [support])
   const dailyDates = daily?.dates || []
+  /** SC8 单位由接口给（亿份）；阈值同为份额口径。 */
+  const shareUnit = support?.net_sub_unit || support?.unit || '亿份'
+  const thresholdShares = support?.threshold_share_yi ?? support?.threshold_yi ?? 100
+  const supportLag = support?.freshness?.lag_trading_days ?? null
 
   return (
     <div className="page-container">
       <PageHeader
         title="国家队 ETF"
-        description="20 只重点宽基 ETF 的分钟成交额与市场级净申购。用于判断托底资金是否在场，不构成投资建议。"
+        description="20 只重点宽基 ETF 的分钟成交额与市场级 SC8 份额（亿份）。用于判断托底资金是否在场，不构成投资建议。"
         metadata={
           <>
             <span>数据源·通达信 TQ</span>
@@ -335,20 +362,30 @@ export default function EtfWatchPage() {
           {/* ② 托底信号 */}
           <Section
             title="ETF 托底信号"
-            desc={`净申购 = 当日 ETF 份额变动 × 净值，单日 ≥${support?.threshold_yi ?? 100} 亿元视为托底日样本。盘中先看成交额在历史托底日里的位置，等份额公布后再看净申购强度。`}
+            desc={`市场级 SC8 两列是全市场 ETF 总份额与当日份额变动（单位${shareUnit}，份额口径，不是金额），单日份额变动 ≥${thresholdShares} ${shareUnit}视为托底日样本。盘中先看成交额在历史托底日里的位置，等交易所份额公布后再看份额变动。`}
           >
             {support?.state === 'no_data' ? (
-              <div className="rounded-lg bg-s2 px-3 py-3 text-[14px] text-muted-foreground">{support.note || '暂无市场级净申购数据。'}</div>
+              <div className="rounded-lg bg-s2 px-3 py-3 text-[14px] text-muted-foreground">{support.note || '暂无市场级 SC8 份额数据。'}</div>
             ) : (
               <>
+                {support?.stale || support?.freshness?.stale ? (
+                  <div className="mb-3 flex items-start gap-2 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] leading-6 text-role-watch" role="status">
+                    <AlertTriangle className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>
+                      数据停在 {support?.as_of || support?.latest?.date || '--'}（
+                      {supportLag === null ? '滞后天数无法确认' : `已滞后 ${supportLag} 个交易日`}
+                      ），上游 SC8 市场统计序列未更新。以下为历史份额，不是当前读数，不能当作今日规模或净申购。
+                    </span>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Stat label="最新交易日净申购" value={signed(support?.latest?.net_sub_yi)} tone={(support?.latest?.net_sub_yi ?? 0) >= 0 ? 'up' : 'down'} hint={support?.latest?.date} />
-                  <Stat label="全市场 ETF 规模" value={`${fmt(support?.latest?.scale_yi)} 亿`} />
+                  <Stat label="最新交易日份额变动" value={signed(support?.latest?.net_sub_yi)} tone={(support?.latest?.net_sub_yi ?? 0) >= 0 ? 'up' : 'down'} hint={`${support?.latest?.date ?? '--'}（${shareUnit}）`} />
+                  <Stat label="全市场 ETF 总份额" value={`${fmt(support?.latest?.scale_yi)} 亿`} hint={shareUnit} />
                   <Stat label="托底日样本数" value={`${support?.support_count ?? 0} 天`} hint={`样本区间 ${support?.sample_count ?? 0} 个交易日`} />
                   <Stat
                     label="最新值在托底样本中的分位"
                     value={support?.latest_percentile_in_support_days === null || support?.latest_percentile_in_support_days === undefined ? '--' : `${support.latest_percentile_in_support_days}%`}
-                    hint="越高说明这次净流入在历史托底日里越靠前"
+                    hint="越高说明这次份额变化在历史托底日里越靠前"
                   />
                 </div>
 
@@ -358,8 +395,8 @@ export default function EtfWatchPage() {
                       <thead>
                         <tr className="text-left text-[12px] text-muted-foreground">
                           <th className="py-1.5 font-normal">日期</th>
-                          <th className="py-1.5 text-right font-normal">净申购（亿元）</th>
-                          <th className="py-1.5 text-right font-normal">ETF 规模（亿元）</th>
+                          <th className="py-1.5 text-right font-normal">份额变动（{shareUnit}）</th>
+                          <th className="py-1.5 text-right font-normal">总份额（{shareUnit}）</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -377,7 +414,7 @@ export default function EtfWatchPage() {
                         })}
                       </tbody>
                     </table>
-                    <p className="mt-2 text-[12px] leading-6 text-muted-foreground">最近 12 个托底日。托底日密集出现（连续多日 ≥{support?.threshold_yi ?? 100} 亿）时，说明资金是持续进场而非单日脉冲。</p>
+                    <p className="mt-2 text-[12px] leading-6 text-muted-foreground">最近 12 个托底日。托底日密集出现（连续多日 ≥{thresholdShares} {shareUnit}）时，说明资金是持续进场而非单日脉冲；份额变动不等于金额净流入。</p>
                   </div>
                 ) : null}
 
@@ -436,7 +473,7 @@ export default function EtfWatchPage() {
                         ))}
                       </tr>
                       <tr className="border-t border-border">
-                        <td className="sticky left-0 bg-card py-1.5">市场级净申购</td>
+                        <td className="sticky left-0 bg-card py-1.5">市场级份额变动</td>
                         {(daily.net_sub_yi || []).map((v, i) => (
                           <td key={i} className={cn('py-1.5 text-right font-num tabular-nums', (v ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down')}>
                             {signed(v, 1)}
@@ -455,7 +492,8 @@ export default function EtfWatchPage() {
                   </table>
                 </div>
                 <p className="mt-2 text-[12px] leading-6 text-muted-foreground">
-                  单位亿元。成交额按 20 只重点 ETF 归入 12 类；净申购只有市场级（全市场 ETF 合计），不能拆到单只或单类。
+                  成交额单位亿元；市场级列为 SC8 份额口径（单位亿份，是份额不是金额）。成交额按 20 只重点 ETF 归入 12 类；
+                  份额变动只有市场级（全市场 ETF 合计），不能拆到单只或单类，也不能换算成金额净流入。
                 </p>
               </>
             )}
@@ -463,7 +501,8 @@ export default function EtfWatchPage() {
 
           <div className="rounded-xl bg-card p-4 text-[12px] leading-6 text-muted-foreground">
             <p>
-              口径说明：分钟成交额来自通达信 TQ 网关（一次批量调用取 20 只，非逐只请求）；净申购来自市场级 SC8 序列。
+              口径说明：分钟成交额来自通达信 TQ 网关（一次批量调用取 20 只，非逐只请求）；市场级数据来自 SC8 序列
+              （全市场 ETF 总份额与份额变动，单位亿份；该序列已停更，页面按库内真实日期展示并标滞后）。
               单只 ETF 的份额在通达信是当前值回填，因此**不提供单只净申购**；需要拆到单只时须另接份额数据源。
               本页只陈述资金行为，不构成任何投资建议。
             </p>

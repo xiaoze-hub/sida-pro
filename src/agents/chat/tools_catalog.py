@@ -3278,7 +3278,7 @@ _ETF_SQL_LABELS = {
     "etf_latest_date": "分钟表最新交易日",
     "etf_baseline_dates": "基线交易日",
     "etf_baseline_rows": "同期基线",
-    "etf_support": "SC8 市场级净申购",
+    "etf_support": "SC8 市场级份额",
     "etf_daily_dates": "日度交易日",
     "etf_daily_minute": "日度分类成交额",
     "etf_daily_net": "日度净申购",
@@ -3443,12 +3443,18 @@ def render_etf_flow(
 
     sup = support or {}
     latest = sup.get("latest") or {}
-    if sup.get("state") == "ok" and latest:
+    unit = sup.get("net_sub_unit") or etf_feed.SC8_UNIT
+    threshold = sup.get("threshold_share_yi")
+    if threshold is None:
+        threshold = sup.get("threshold_yi") or 100.0
+    if sup.get("state") in ("ok", "stale") and latest:
         pct = sup.get("latest_percentile_in_support_days")
+        # SC8 两列是**份额（亿份）**，不是金额：出口不许出现「亿元 / 规模 / 净申购金额」。
         line = (
-            f"- **市场级 SC8**：{latest.get('date') or '未知'} 净申购 "
-            f"{_num(latest.get('net_sub_yi'))} 亿元（规模 {_num(latest.get('scale_yi'))} 亿元）；"
-            f"托底日（单日净申购 ≥{_num(sup.get('threshold_yi'), 0)} 亿元）"
+            f"- **市场级 SC8（{unit}，份额口径非金额）**：{latest.get('date') or '未知'} "
+            f"份额变动 {_num(latest.get('net_sub_yi'))} {unit}"
+            f"（全市场总份额 {_num(latest.get('scale_yi'))} {unit}）；"
+            f"托底日（单日份额变动 ≥{_num(threshold, 0)} {unit}）"
             f"{sup.get('support_count')}/{sup.get('sample_count')} 个样本，"
             f"最新日在托底日中分位 {_num(pct, 1)}%"
         )
@@ -3461,6 +3467,21 @@ def render_etf_flow(
                 line += f"；样本窗口 {first_d}~{last_d}"
             elif last_d:
                 line += f"；样本窗口仅 {last_d} 一日"
+        # 新鲜度：日期照实写，滞后只做警示 —— 停更的 10-16 不许冒充当前读数。
+        fresh = sup.get("freshness") or {}
+        if fresh.get("stale") or sup.get("stale"):
+            lag = fresh.get("lag_trading_days")
+            if lag is None:
+                line += (
+                    f"；⚠️ 最新日 {sup.get('as_of') or latest.get('date') or '未知'} 无法与交易日历比对，"
+                    "不能确认是当前读数"
+                )
+            else:
+                line += (
+                    f"；⚠️ 最新日 {sup.get('as_of') or latest.get('date') or '未知'} 距 "
+                    f"{fresh.get('checked_at') or '今日'} 已 {lag} 个交易日无更新（上游 SC8 停更），"
+                    "这是历史读数，不可视为当前规模/净申购"
+                )
         sections.append(line)
     elif sup:
         miss.append(f"市场级 SC8：未取到（{sup.get('note') or '无落库数据'}）")
@@ -3468,8 +3489,10 @@ def render_etf_flow(
         miss.append("市场级 SC8：未取到（本次未取到该表）")
 
     sections.append(
-        "- **口径提醒**：SC8 是**全市场** ETF 口径，不等于 20 只篮子的净申购，"
-        "也不能按篮子拆分；单只 ETF 净申购不可用（通达信份额为当前值回填，实测零变化）。"
+        "- **口径提醒**：SC8 两列是**全市场 ETF 份额与份额变动（亿份）**，不是金额、也不是"
+        "「净申购金额」：不得乘净值换算成亿元，且两列同源（列1≈Δ列0）不能互相印证。"
+        "它是全市场口径，不等于 20 只篮子的净申购，也不能按篮子拆分；"
+        "单只 ETF 净申购不可用（通达信份额为当前值回填，实测零变化）。"
         "篮子成交额只是分钟表**已采集**部分的累计（单位亿元），不等于全天成交额，"
         "本报不做任何按日汇总。"
     )
@@ -3489,7 +3512,7 @@ async def _query_etf_flow(db: Any, params: dict[str, Any], user: Any) -> str:
 
     now = datetime.now(_CST)
     intraday = etf_feed.intraday_payload(run, None, now=now)
-    support = etf_feed.support_payload(run, 750)
+    support = etf_feed.support_payload(run, 750, now=now)
     # 不再用日度窗口的净申购「救」SC8：两者是同一条 etf_flow_daily，救不出独立证据；
     # SC8 读不到就如实报「未取到（原因）」。
     if support.get("state") != "ok":

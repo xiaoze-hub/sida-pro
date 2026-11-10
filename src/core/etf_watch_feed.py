@@ -9,6 +9,18 @@
 3. 净申购只有市场级 SC8 是真的；20 只篮子的净申购**不存在**，不能拆。
 4. 单位：库内 `amount_wan` 是万元，出口 ÷10000 转亿元。
 
+SC8 单位与新鲜度（2026-11-10 独立核查后钉死，别再按「亿元」写）：
+- `get_scjy_value(SC8)` 两列是**份额（亿份）**，不是金额：2026-10-16 上交所 924 只（TOT_VOL 万份）
+  + 深交所 761 只（份）合计 32863.16 亿份，SC8 列0 = 32886.32（差 -0.07%，缺口 = 沪市货币
+  ETF 不在交易所份额接口）；同口径「Σ份额 × 净值」= 46548 亿元，是列0 的 1.42 倍（若列0 是金额，
+  隐含平均净值 1.415，不可能与份额合计巧合到 0.07%）。2024-09-13→10-08 沪深300 涨约 25–30%，
+  列0 只涨 4.6%（份数不随市值走）—— 同样只支持份额口径。
+  列1 ≈ Δ列0（914 天中 557 天精确相等）⇒ 两列同源，
+  **不能**用「规模×净值」互证，也不许把列1 标成亿元净申购。
+- TQ SC8 全历史止于 2026-10-16（915 行，上游市场统计序列停更）。读源直接取 `series[-1]`
+  当最新会让 10-16 长期冒充今天，故 `support_payload` 必须按交易日历算滞后并给出
+  `stale/as_of`；前端与参谋一律带真实日期与滞后提示，**不改库、不改历史行**。
+
 调用方传入 `run(sql, params) -> list[dict]`，因此本模块不依赖 Web 层也不绑定 engine。
 """
 
@@ -36,6 +48,14 @@ BASELINE_DAYS = 20
 
 #: 单日分钟上限（含 11:30 / 13:00 边界与盘后残留行；SQL 的 LIMIT 按它取上界）。
 MAX_MINUTES_PER_DAY = 1440
+
+#: SC8 两列的单位：**份额（亿份）**，不是金额。落库列名 `scale_yi` / `net_sub_yi` 保留
+#: （历史表与 API 契约），但出口必须带这个显式单位，禁止再渲染成「亿元」。
+SC8_UNIT = "亿份"
+
+#: SC8 新鲜度容差（交易日）。T+1 序列在交易日当天的最新日 = 上一交易日（滞后 0），
+#: 早间采集窗口内允许滞后 1；再多就是上游停更/采集失败，必须标 stale。
+STALE_MAX_LAG_TRADING_DAYS = 1
 
 
 def min_etfs_for_complete(expected: int | None = None) -> int:
@@ -374,15 +394,97 @@ def intraday_payload(
 
 # ── support（市场级 SC8） ────────────────────────────────────────────────
 
-def support_payload(run: Runner, days: int) -> dict[str, Any]:
-    rows = run("etf_support", {"n": days, "as_of": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")})
+def sc8_freshness(
+    as_of: str | None,
+    now: datetime,
+    *,
+    max_lag: int = STALE_MAX_LAG_TRADING_DAYS,
+) -> dict[str, Any]:
+    """SC8 最新日相对 `now` 的滞后（**交易日**，开区间）。
+
+    `lag_trading_days` = (as_of, now.date()) 之间的交易日数：T+1 序列在交易日当天应为 0
+    （最新日 = 上一交易日），1 是早间采集窗口的容差，≥2 即上游停更/采集失败。
+    日历未覆盖该年份时**不给 0**：`verified=False` 且判 stale —— 无法确认就不能当当前。
+
+    单独拎出来是因为 Web API、参谋出口、测试都要同一个滞后数，不能各算一套。
+    """
+    today = now.date()
+    out: dict[str, Any] = {
+        "as_of": as_of,
+        "checked_at": now.strftime("%Y-%m-%d"),
+        "lag_trading_days": None,
+        "max_lag_trading_days": int(max_lag),
+        "verified": False,
+        "stale": True,
+        "reason": "calendar_unavailable",
+    }
+    if not as_of:
+        return out
+    from src.core.trading_calendar import TradingCalendarError, trading_days_between
+
+    try:
+        d = datetime.strptime(str(as_of), "%Y%m%d").date()
+        lag = trading_days_between(d, today, inclusive=False)
+    except (ValueError, TradingCalendarError):
+        return out
+    if d > today:
+        # 未来日期只可能来自时钟错乱或脏行：既不新鲜也不能当最新日。
+        out["reason"] = "future_date"
+        return out
+    out["lag_trading_days"] = lag
+    out["verified"] = True
+    out["stale"] = lag > int(max_lag)
+    out["reason"] = "lag" if out["stale"] else None
+    return out
+
+
+def _support_note(fresh: dict[str, Any], threshold: float) -> str:
+    """SC8 口径说明：份额（亿份）+ 真实日期 + 滞后。金额口径一律不出现。"""
+    base = (
+        f"SC8 两列为全市场 ETF 总份额与当日份额变动（单位{SC8_UNIT}，是份额不是金额，"
+        "不做金额换算）；"
+        f"单日份额变动 ≥{threshold:g} {SC8_UNIT} 视为托底日样本。"
+    )
+    if not fresh.get("stale"):
+        return base
+    lag = fresh.get("lag_trading_days")
+    if lag is None:
+        if fresh.get("reason") == "future_date":
+            return base + (
+                f"⚠️ 最新日 {fresh.get('as_of')} 晚于今日（时钟或数据异常），"
+                "不能确认新鲜度；下列数据照实展示，不得当作当前读数。"
+            )
+        return base + (
+            f"⚠️ 最新日为 {fresh.get('as_of')}，交易日历不可用，无法确认是否仍是最新；"
+            "下列历史份额照实展示，不得当作当前读数。"
+        )
+    return base + (
+        f"⚠️ 最新日为 {fresh.get('as_of')}，距 {fresh.get('checked_at')} 已 {lag} 个交易日未更新"
+        "（上游市场统计序列停更）；下列历史份额照实展示，不是当前读数，"
+        "不得当作今日规模/净申购。"
+    )
+
+
+def support_payload(
+    run: Runner,
+    days: int,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """市场级 SC8 原始序列 + 托底日样本 + 新鲜度闸门。
+
+    `now` 由调用方注入（测试可固定）；默认取上海时区当前时间。
+    输出里 `as_of` 永远是库内真实最新日，滞后只加标注，不改日期、不删行、不写库。
+    """
+    now = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+    rows = run("etf_support", {"n": days, "as_of": now.strftime("%Y%m%d")})
     # 读源是 ORDER BY trade_date DESC；这里显式按日期升序，最新日不依赖 SQL 返回顺序。
     rows = sorted(rows, key=lambda r: str(r["trade_date"]))
     supported = ew.single_share_source is not None
     if not rows:
         return {
             "state": "no_data",
-            "note": "市场级 ETF 规模/净申购（SC8）尚无落库数据；采集器回补后可用。",
+            "note": "市场级 ETF 份额（SC8）尚无落库数据；采集器回补后可用。",
             "single_share_supported": supported,
             "source": "tdx_tq",
         }
@@ -395,6 +497,7 @@ def support_payload(run: Runner, days: int) -> dict[str, Any]:
         }
         for r in rows
     ]
+    # 阈值语义是**亿份**：`ew.SUPPORT_FLOW_THRESHOLD_YI` 的 100 指 100 亿份，不是 100 亿元。
     support = [x for x in series if (x["net_sub_yi"] or 0) >= ew.SUPPORT_FLOW_THRESHOLD_YI]
     values = sorted(x["net_sub_yi"] for x in series if x["net_sub_yi"] is not None)
 
@@ -405,8 +508,20 @@ def support_payload(run: Runner, days: int) -> dict[str, Any]:
         below = sum(1 for x in support if (x["net_sub_yi"] or 0) < latest_val)
         pct = round(below / len(support) * 100, 1)
 
+    fresh = sc8_freshness(latest["date"], now)
+
     return {
-        "state": "ok",
+        "state": "stale" if fresh["stale"] else "ok",
+        "stale": bool(fresh["stale"]),
+        "as_of": latest["date"],
+        "freshness": fresh,
+        # 显式单位：前端/参谋照它渲染，别再按字段名的 `_yi` 猜成亿元。
+        "unit": SC8_UNIT,
+        "scale_unit": SC8_UNIT,
+        "net_sub_unit": SC8_UNIT,
+        "unit_basis": "全市场 ETF 份额（非金额；份额变动 ≠ 金额净申购）",
+        "threshold_share_yi": ew.SUPPORT_FLOW_THRESHOLD_YI,
+        # 旧字段名保留（外部调用方兼容），值同为亿份；新代码用 threshold_share_yi。
         "threshold_yi": ew.SUPPORT_FLOW_THRESHOLD_YI,
         "series": series,
         "support_days": support[-80:],
@@ -419,14 +534,11 @@ def support_payload(run: Runner, days: int) -> dict[str, Any]:
         "single_share_supported": supported,
         "single_share_note": (
             "单只 ETF 净申购不可用（通达信 ETF 历史份额尚未通过独立数据验证）；"
-            "此处为全市场 ETF 口径（SC8），不能拆到单只。"
+            "此处为全市场 ETF 份额口径（SC8），不能拆到单只。"
             if not supported
             else f"单只份额来源：{ew.single_share_source}"
         ),
-        "note": (
-            "净申购 = 当日 ETF 份额变动 × 净值（通达信 SC8 市场级口径，亿元）。"
-            "单日净申购 ≥%g 亿元视为托底日样本。" % ew.SUPPORT_FLOW_THRESHOLD_YI
-        ),
+        "note": _support_note(fresh, ew.SUPPORT_FLOW_THRESHOLD_YI),
         "source": "tdx_tq",
     }
 
@@ -480,6 +592,8 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
         "state": "ok",
         "dates": dates,
         "days_requested": int(days),
+        # 单位分开写：成交额是金额（亿元），SC8 两列是份额（亿份）——混用一个「单位」必错。
+        "units": {"total_amount": "亿元", "net_sub": SC8_UNIT, "scale": SC8_UNIT},
         "total_amount_yi": [
             round_or_none(total.get(d)) if d in has_amount else None for d in dates
         ],
@@ -495,7 +609,10 @@ def daily_payload(run: Runner, days: int) -> dict[str, Any]:
             if m
         ],
         "single_share_supported": ew.single_share_source is not None,
-        "note": "成交额为 20 只 ETF 合计（亿元）；净申购为市场级 SC8 口径，只到全市场一层。",
+        "note": (
+            "成交额为 20 只 ETF 合计（亿元）；净申购/规模列为市场级 SC8 的**份额**口径"
+            f"（单位{SC8_UNIT}，是份额不是金额），且只到全市场一层。"
+        ),
         "source": "tdx_tq",
     }
 
@@ -504,7 +621,9 @@ __all__ = [
     "BASELINE_DAYS",
     "COVERAGE_MIN",
     "MAX_MINUTES_PER_DAY",
+    "SC8_UNIT",
     "SQL",
+    "STALE_MAX_LAG_TRADING_DAYS",
     "basket_payload",
     "baseline_cum",
     "baseline_curve",
@@ -514,5 +633,6 @@ __all__ = [
     "min_etfs_for_complete",
     "phase_of",
     "round_or_none",
+    "sc8_freshness",
     "support_payload",
 ]

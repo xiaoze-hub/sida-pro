@@ -3,7 +3,7 @@
  *
  * 把既有两页收进一个分视图入口, **只做视图切换与边界标注**, 不改两页一行代码:
  *   · 指数全景 `/indexes`    → 八大宽基指数涨跌幅 + 四档资金结构 + 主力净额历史(TQ `get_exday_data`)
- *   · ETF 观察 `/etf-watch` → 20 只宽基 ETF 分钟成交额 vs 同期基线 + 市场级净申购 + 日度 12 类全景
+ *   · ETF 观察 `/etf-watch` → 20 只宽基 ETF 分钟成交额 vs 同期基线 + 市场级 SC8 份额(亿份) + 日度 12 类全景
  *
  * 默认视图 = **指数**, ETF 是**独立视图**(不是指数的附属面板、不是第三个数据源)。
  *
@@ -96,11 +96,11 @@ export const MARKET_WATCH_VIEWS: readonly MarketWatchView[] = [
   {
     key: 'etf',
     label: 'ETF 观察',
-    hint: '20 只宽基 ETF 分钟成交额 + 市场级净申购(独立视图)',
+    hint: '20 只宽基 ETF 分钟成交额 + 市场级 SC8 份额(独立视图)',
     icon: Landmark,
     source: '/etf-watch/intraday · /etf-watch/support · /etf-watch/daily · 通达信 TQ 网关 + 市场级 SC8',
     caliber:
-      'ETF 口径: 20 只宽基 ETF 篮子分钟成交额与同期基线对比; 净申购只有市场级(全市场 ETF 份额变动 × 净值), 单只 ETF 份额在通达信是当前值回填, 故不提供单只净申购。\n本视图是市场级聚合, 不代表任何单只 ETF 的身份、持仓或可交易性; 与指数四档资金不同源, 不做合并或换算。',
+      'ETF 口径: 20 只宽基 ETF 篮子分钟成交额与同期基线对比; 市场级只有 SC8 份额(全市场 ETF 总份额与份额变动, 单位亿份, 是份额不是金额, 不得换算成金额净流入), 单只 ETF 份额在通达信是当前值回填, 故不提供单只净申购。SC8 序列已停更, 页面按库内真实日期展示并标滞后。\n本视图是市场级聚合, 不代表任何单只 ETF 的身份、持仓或可交易性; 与指数四档资金不同源, 不做合并或换算。',
     legacyPath: '/etf-watch',
     render: () => <EtfWatchPage />,
   },

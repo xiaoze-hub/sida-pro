@@ -4,7 +4,7 @@
 
 GET /api/etf-watch/basket              20 只重点 ETF + 12 类分组 + 数据源声明
 GET /api/etf-watch/intraday?date=      分钟级聚合：20 只合计 + 上证综指 + 20 日同期均值
-GET /api/etf-watch/support             市场级 ETF 规模/净申购（SC8）+ 托底日样本 + 今日分位
+GET /api/etf-watch/support             市场级 ETF 份额（SC8）+ 托底日样本 + 分位 + 新鲜度
 GET /api/etf-watch/daily?days=30       日度：总成交额 / 分类成交额 / 净申购
 
 **取数与聚合实现在 `src/core/etf_watch_feed.py`**，与数智参谋 `query_data_domain("etf.flow")`
@@ -19,7 +19,9 @@ GET /api/etf-watch/daily?days=30       日度：总成交额 / 分类成交额 /
    **禁止用别的算法"凑"一个单只净申购出来**。
 2. 数据缺失一律 `null` + `note`，不写 0。分钟行不全（覆盖率 <80%）时 `state="insufficient"`
    而不是拿半场数据算活跃度。
-3. 单位：成交额对外统一 **亿元**（库内 `amount_wan` 是万元，出口 ÷10000）；净申购本来就是亿元。
+3. 单位：成交额对外统一 **亿元**（库内 `amount_wan` 是万元，出口 ÷10000）；**SC8 两列是份额
+   （亿份）不是金额**，出口带 `unit/scale_unit/net_sub_unit`，不许渲染成亿元或「净申购金额」。
+   最新日超出 T+1 容差时 `state="stale"` 且 `as_of` 原样返回真实日期（上游 SC8 已停更）。
 4. 时段：`phase` 区分 `pre / live / closed / non_trading_day`，盘中均值只和**同日已发生
    的分钟**比（拿今天累计比过去 20 日全天累计是错的）。
 """
@@ -116,8 +118,8 @@ def get_intraday(date_str: str | None = Query(default=None, alias="date")) -> di
 
 @router.get("/support")
 def get_support(days: int = Query(default=750, ge=30, le=1500)) -> dict:
-    """市场级 ETF 规模/净申购 + 托底日样本 + 今日分位。"""
-    return feed.support_payload(_feed_run, _int_param(days, 750))
+    """市场级 ETF 份额（SC8）+ 托底日样本 + 分位 + 新鲜度（滞后只标注，不改数据）。"""
+    return feed.support_payload(_feed_run, _int_param(days, 750), now=_now_cn())
 
 
 # ── daily（日度资金全景） ────────────────────────────────────────────────
