@@ -92,6 +92,13 @@ describe('EtfWatch 覆盖口径', () => {
     expect(document.body.textContent).not.toContain('1.25 倍')
   })
 
+  it('回退到残缺日时不将已采集数据说成完整', async () => {
+    mockIntraday({ ...common, state: 'insufficient', fallback_from: '20261110', conclusive: false })
+    render(<MemoryRouter><EtfWatchPage /></MemoryRouter>)
+    expect(await screen.findByText(/最近有数据的交易日 20261106 的已采集数据/)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('的完整数据')
+  })
+
   it('今日缺只/缺分钟：逐条列出不给结论的原因与覆盖明细', async () => {
     mockIntraday({
       ...common,
