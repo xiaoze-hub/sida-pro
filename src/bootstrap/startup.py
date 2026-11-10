@@ -474,14 +474,33 @@ async def lifespan(app):
             )
             import threading as _threading
 
-            _threading.Thread(
+            _etf_backfill_thread = _threading.Thread(
                 target=_etf_watch.ensure_backfilled,
                 name="etf-watch-backfill",
                 daemon=True,
-            ).start()
+            )
+            _etf_backfill_thread.start()
             logger.info("国家队 ETF 看板采集已注册(60s + 15:35 定型)")
         except Exception as e:
             logger.error(f"国家队 ETF 看板采集注册失败: {e}")
+
+        # ETF 分钟「TQ 空源」自动补缺(2026-11-10): TQ 的 1m 来自客户端 minline/*.lc1,
+        # 2026-11-05 晚间起不再下载 → 后续交易日 `Value:[]` 且不报错, 15:35 定型与启动
+        # 自愈都"成功"写入 0 行, 库里静默留洞。这里只做调度装配:
+        #   · 只补「已闭市且该日 0 行」的交易日, 已有任何行(含用户数据)一律不碰;
+        #   · 落库走 em_etf_minute.backfill(require_verified=True, daily_ref=tq_daily_ref),
+        #     不可证实对账就不写, 假日/残缺日显式失败;
+        #   · 08:40 / 16:50 / 18:50 三个 cron(错过 15:35 在 [15:35,22:00] 窗口内补跑);
+        #   · 启动恢复在 daemon 线程里延迟执行, 不阻塞 lifespan, 交易时段直接跳过;
+        #     先等 TQ 启动自愈线程收尾, 避免东财先写、TQ 后到被判异源的无谓冲突。
+        try:
+            from src.core import etf_minute_gapfill as _gapfill
+
+            _gapfill.register(rt.scheduler.scheduler)
+            _gapfill.start_startup_recovery(wait_for=locals().get("_etf_backfill_thread"))
+            logger.info("ETF 分钟空源补缺已注册(08:40/16:50/18:50 + 启动后台恢复)")
+        except Exception as e:
+            logger.error(f"ETF 分钟空源补缺注册失败: {e}")
 
         # 个股因子日快照(2026-10-21): 收盘后算一次, 给全景诊断的「位置与因子」提供横截面分位。
         try:
