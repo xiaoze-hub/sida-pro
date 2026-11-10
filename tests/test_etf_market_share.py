@@ -240,12 +240,17 @@ def test_sse_rows_with_bad_or_foreign_dates_dropped_and_counted():
         "pageHelp": {"total": 3},
     }
     day = m.parse_sse_payload(payload, "2026-11-09")
-    assert day.usable is True
     assert day.n_funds == 1
     assert day.rows[0].code == "510300"
     assert day.dropped_bad_date == 1
     assert day.out_of_date_rows == 1
     assert day.data_date == "2026-11-09"
+    # 日期脏的那行代码有效（510500）→ 可能就是当日的真实基金行，丢弃即低报 → fail-closed
+    assert day.usable is False
+    assert "dropped_bad_date" in (day.gap_reason or "")
+    report = m.build_dry_run({"2026-11-09": [day]})
+    assert report["markets"]["SSE"]["sum_shares"] is None
+    assert report["markets"]["SSE"]["sum_withheld"] is True
 
 
 def test_szse_rows_without_date_not_mixed_into_requested_day():
@@ -259,6 +264,9 @@ def test_szse_rows_without_date_not_mixed_into_requested_day():
     assert day.rows[0].code == "158002"
     assert day.dropped_bad_date == 2
     assert day.data_date == "2026-11-09"
+    # 两行代码有效（158000/158001）但日期脏 → 可能属于请求日，丢弃即低报 → fail-closed
+    assert day.usable is False
+    assert "dropped_bad_date" in (day.gap_reason or "")
 
 
 # ── 4. 重复：同值去重、异值拒绝 ──────────────────────────────────────────
@@ -572,10 +580,19 @@ def test_money_etf_gap_is_documented_and_total_marked_not_full_market():
     report = m.build_dry_run({"2026-11-09": [sse, szse]})
 
     mt = report["market_total"]
-    assert mt["excludes_money_etf"] is True
-    assert mt["covers_money_etf"] is False
+    # 覆盖只给分市场状态：沪市不含、深市当日未观测到货币 ETF → 汇总只能是 partial/unverified，
+    # 不许用一句 covers_money_etf=False 把「深市有、沪市没有」抹平成「全都没有」。
+    cov = mt["money_etf_coverage"]
+    assert cov["sse"] == "excluded"
+    assert cov["szse"] in ("included", "unverified")
+    assert mt["covers_money_etf"] in ("none", "partial", "unverified")
+    assert mt["covers_money_etf"] is not False
+    assert mt["covers_money_etf_complete"] is False
     assert mt["full_market_total"] is False
+    assert mt["full_market_total_reason"]
     assert "货币" in mt["coverage_note"]
+    assert report["complete_scope"] == "exchange_share_api"
+    assert report["full_market_total"] is False
 
     gap = report["known_gaps"]["sse_money_etf"]
     assert gap["affects_total"] is True
@@ -584,7 +601,10 @@ def test_money_etf_gap_is_documented_and_total_marked_not_full_market():
     assert "不含" in gap["note"]
 
     v = report["verdict"]
-    assert v["covers_money_etf"] is False
+    assert v["covers_money_etf"] == mt["covers_money_etf"]
+    assert v["covers_money_etf_complete"] is False
+    assert v["full_market_share_level"] is False
+    assert v["exchange_share_level_complete"] is True
     assert "货币" in v["note"]
 
 

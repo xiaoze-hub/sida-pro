@@ -186,3 +186,103 @@ def test_D8_unusable_diff_must_not_expose_change_numbers():
 def test_D9_test_docstring_must_not_say_net_subscription_allowed():
     txt = open(f"{ROOT}/tests/test_etf_market_share.py", encoding="utf-8").read()
     assert "才允许叫\"净申购\"" not in txt, "测试头部口径仍写着'相邻交易日可称净申购'，与模块硬口径冲突"
+
+
+# ── 2026-11-10 复审残留（本 worktree 整改）──────────────────────────────
+
+def test_D10_dropped_bad_date_with_valid_code_must_fail_closed():
+    """日期脏但代码有效 = 可能就是请求日的真实基金行：丢掉即低报，不能 usable=True。"""
+    rows = [sse_row("510300", "100"),
+            sse_row("510500", "100", "2026-11-9"),      # 代码有效、日期脏
+            sse_row("510900", "100", "2026-11-06")]     # 别的日子（可证明）
+    day = m.parse_sse_payload(sse(rows), D)
+    assert day.dropped_bad_date == 1
+    assert day.out_of_date_rows == 1
+    assert day.usable is False, "代码有效但日期脏的行被丢弃后仍 usable=True（合计静默低报）"
+    assert "dropped_bad_date" in (day.gap_reason or "")
+    assert any("fail-closed" in w for w in day.warnings)
+
+    sz = m.parse_szse_records([sz_row(158000, 1e6), sz_row(158001, 2e6, "2026-11-9")], D)
+    assert sz.usable is False and "dropped_bad_date" in (sz.gap_reason or "")
+
+    rep = m.build_dry_run({D: [day, m.parse_szse_records([sz_row(158000, 1e6)], D)]})
+    assert rep["complete"] is False
+    assert rep["markets"]["SSE"]["sum_shares"] is None
+    assert rep["markets"]["SSE"]["sum_withheld"] is True
+    assert m.cli_exit_code(rep) != 0
+
+
+def test_D10b_szse_window_undated_row_must_not_be_silently_dropped():
+    """区间 xlsx 里「代码有效但日期脏」的行不能直接消失：它可能属于窗口内任何一天。"""
+    recs = [sz_row(158000, 1e6), sz_row(158002, 3e6, "2026-11-9")]
+
+    def fake(url, *, params, headers, timeout):
+        return R(xlsx(recs))
+
+    days = m.fetch_szse_window(D, D, http=fake)
+    day = days[D]
+    assert day.usable is False, "日期脏的行被静默丢弃，当天仍标 usable=True"
+    assert "undated_rows_in_window" in (day.gap_reason or "")
+    assert any("日期无法严格解析" in w for w in day.warnings)
+
+
+def _walk(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k, v
+            yield from _walk(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _walk(v)
+
+
+def test_D11_money_etf_coverage_and_full_market_fields_must_not_contradict():
+    """深市确实含货币 ETF，所以不能写 covers_money_etf=False；full_market 字段不许自相矛盾。"""
+    sse_d = m.parse_sse_payload(sse([sse_row("510300", "100")]), D)
+    sz_with = m.parse_szse_records([sz_row(158000, 1e6), sz_row(159001, 5e5)], D)
+    sz_without = m.parse_szse_records([sz_row(158000, 1e6)], D)
+
+    rep = m.build_dry_run({D: [sse_d, sz_with]})
+    mt = rep["market_total"]
+    assert mt["money_etf_coverage"]["sse"] == "excluded"
+    assert mt["money_etf_coverage"]["szse"] == "included"
+    assert mt["covers_money_etf"] == "partial", \
+        f"深市合计含货币 ETF，汇总却写 {mt['covers_money_etf']!r}（把两市抹平）"
+    assert mt["covers_money_etf"] is not False
+    assert mt["covers_money_etf_complete"] is False
+    # verdict 与 market_total 必须同源，不能一个说含一个说不含
+    assert rep["verdict"]["money_etf_coverage"] == mt["money_etf_coverage"]
+    assert rep["verdict"]["covers_money_etf"] == mt["covers_money_etf"]
+
+    # 覆盖不可证明完整 → 任何声称「完整全市场 / 覆盖完整」的字段都不许为真
+    for k, v in _walk(rep):
+        lk = k.lower()
+        if "full_market" in lk or lk.endswith("money_etf_complete"):
+            assert v is not True and v != "complete", f"{k}={v!r} 与 money_etf_coverage 矛盾"
+    assert rep["verdict"]["full_market_share_level"] is False
+    assert rep["verdict"]["exchange_share_level_complete"] is True
+    assert rep["complete_scope"] == "exchange_share_api"
+    assert rep["complete"] is True, "两市交易所口径取全时 complete 仍应为 True（作用域由 complete_scope 声明）"
+
+    # 深市当日没观测到货币 ETF：只能说「未能验证」，不能说「不含」
+    rep2 = m.build_dry_run({D: [sse_d, sz_without]})
+    assert rep2["market_total"]["money_etf_coverage"]["szse"] == "unverified"
+    assert rep2["market_total"]["covers_money_etf"] != "none"
+
+
+def test_D12_tq_sc8_copy_must_not_claim_yuan_or_net_subscription():
+    """SC8 两列推断为份额（亿份）且列1≈Δ列0：注释不许写成亿元/净申购。"""
+    src = open(f"{ROOT}/src/collectors/tq_etf_watch.py", encoding="utf-8").read()
+    for bad in (
+        "ETF规模(亿元)",
+        "ETF规模（亿元）",
+        "当日净申购(亿元)",
+        "当日净申购（亿元）",
+        "规模/净申购（SC8）",
+        "SC8 两列 = **亿元**",
+        "唯一**可信的净申购来源",
+    ):
+        assert bad not in src, f"采集器注释仍在把 SC8 说成金额/净申购: {bad}"
+    assert "亿份" in src and "推断" in src, "SC8 必须标成推断为份额，不能只说结论"
+    assert "列1" in src and "Δ列0" in src, "必须写清列1≈Δ列0（两列同源，不能互证）"
+    assert "净申购金额" in src, "必须显式否掉 net_sub_yi 的净申购语义"

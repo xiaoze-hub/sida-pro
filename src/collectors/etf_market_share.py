@@ -27,8 +27,14 @@ TQ 的 `SC8` 序列（`src/collectors/tq_etf_watch.py`）在 2026-10-16 之后�
    一律标成 gap（`usable=False` + `gap_reason`），**不写 0、不外推、不用别的源偷偷填**。
    任何一行份额/代码解析失败而被丢弃（`dropped_no_value` / `dropped_bad_value`）同样 fail-closed：
    该日 `usable=False`，报告**不输出部分和**（`sum_shares=None` + `sum_withheld=True`），
-   因为丢一行就等于合计低报一行。日期脏的行（`dropped_bad_date`）单独计数并告警，
-   同样不参与求和。
+   因为丢一行就等于合计低报一行。
+   日期脏的行（`dropped_bad_date`）**一样 fail-closed**：能走到这一步说明代码已经解析成功，
+   也就是说它很可能就是请求日的一只真实 ETF，只是日期字段脏到无法证明——把它丢掉就是低报，
+   所以该日同样 `usable=False`（`gap_reason=dropped_bad_date(...)`）且不出部分和，
+   绝不「计数 + 告警」之后照样宣称完整。
+   深交所区间取数（`fetch_szse_window`）里日期脏但有代码的行同理：它可能属于窗口内任何一天，
+   无法证明不属于，因此**整个窗口的各日**一并 fail-closed（`undated_rows_in_window(N)`），
+   不静默丢弃后再宣告完整。
 
 ## 上市/终止的处理（这是最容易算错的地方）
 
@@ -69,11 +75,20 @@ TQ 的 `SC8` 序列（`src/collectors/tq_etf_watch.py`）在 2026-10-16 之后�
   `candidate_list_complete=False`。候选一旦在源里出现（例如 511990 恢复披露），
   它会自动从 `codes` 移到 `present_codes`，不允许继续宣称缺失。
 - **深市不同**：深交所份额接口实测**返回**货币 ETF（159001 / 159003 / 159005 在源里），
-  所以深市合计含货币 ETF、沪市合计不含。`known_gaps.szse_money_etf` 按当日实际返回核对，
-  `market_total.money_etf_coverage` 分市场标注，避免一句 `covers_money_etf=False`
-  把「深市有、沪市没有」抹平成「全都没有」。
-- 因此 `market_total.sum_shares` **不是完整全市场份额**：`full_market_total=False`，
-  `coverage_note` 说明缺的是沪市货币 ETF（且缺口集合未知）。
+  所以深市合计含货币 ETF、沪市合计不含。
+- **货币 ETF 覆盖只给「分市场状态」，不给单一布尔**。`market_total.money_etf_coverage`
+  （`verdict.money_etf_coverage` 同一份）：
+  `sse` ∈ {`excluded`, `partial`}、`szse` ∈ {`included`, `unverified`}、
+  `covers_money_etf` ∈ {`none`, `partial`, `unverified`}（深市含、沪市不含 → `partial`；
+  深市当日取不到 → `unverified`）、`complete` **恒为 False**。
+  `complete=False` 的理由是硬的：沪市货币 ETF 的完整名单无法从免费接口枚举，
+  所以「货币 ETF 覆盖完整」永远不可证明——不许用一个 `covers_money_etf=False`
+  把「深市有、沪市没有」抹平成「全都没有」，也不许把不可证明的覆盖写成完整。
+- 因此 `market_total.sum_shares` **不是完整全市场份额**：`full_market_total=False`
+  + `full_market_total_reason`；`verdict.full_market_share_level` **恒为 False**，
+  两市交易所口径取全只体现在 `market_total.complete` /
+  `verdict.exchange_share_level_complete`，`coverage_note` 说明缺的是沪市货币 ETF
+  （且缺口集合未知）。报告里不存在任何声称「完整全市场」为真的字段。
 - 两个交易所都是 **T+1** 发布，没有盘中；请求当日拿不到当日份额（返回空 → 记 gap）。
 - **上交所分页必须证明取全**：`pageHelp.pageSize` 实测被服务端截到 2000
   （`pageSizeWithOutLimit=2000`，请求 10000 也只给 2000），单页装满就会静默截断。
@@ -110,8 +125,10 @@ python -m src.collectors.etf_market_share --prev 2026-11-06 --date 2026-11-09
   （`market_total.sum_shares=None` / `share_change.*=None` + `*_withheld=True`）；
 - `2`：参数非法或完全无数据（报告 `verdict.status=unusable`）。
 
-`0` **只代表交易所份额接口口径的两市数据完整**，不代表完整全市场——沪市货币 ETF
-缺口见 `known_gaps.sse_money_etf`（缺口是未知集合，深市则该接口含货币 ETF）。
+`0` **只代表交易所份额接口口径的两市数据完整**（`complete_scope="exchange_share_api"`），
+不代表完整全市场：`full_market_total` / `verdict.full_market_share_level` 恒为 `False`，
+沪市货币 ETF 缺口见 `known_gaps.sse_money_etf`（缺口是未知集合，深市则该接口含货币 ETF），
+覆盖程度只从 `market_total.money_etf_coverage` 的分市场状态读，不从任何布尔旗标读。
 """
 
 from __future__ import annotations
@@ -231,6 +248,8 @@ class SourceDay:
     conflicting_duplicates: tuple[str, ...] = ()
     dropped_no_value: int = 0
     dropped_bad_value: int = 0
+    #: 代码已解析成功、但日期无法严格解析的行数。这些行**可能属于请求日**（只是日期字段脏），
+    #: 丢掉即低报 → 一旦 >0，该日必须 `usable=False`，报告不出部分和。
     dropped_bad_date: int = 0
     out_of_date_rows: int = 0
     unit_source: str = ""
@@ -561,9 +580,16 @@ def parse_sse_payload(payload: Mapping[str, Any] | Sequence[Mapping[str, Any]],
             "→ 该日合计必然低报，已 fail-closed（不出部分和）"
         )
     if day.dropped_bad_date:
+        # 能走到日期解析这一步，说明代码已经通过（代码先于日期解析）——这行很可能就是
+        # 请求日的一只真实 ETF，只是日期字段脏到无法证明。丢掉它等于合计低报一行，
+        # 所以必须 fail-closed，而不是「计数 + 告警 + 照样宣称完整」。
+        day.usable = False
+        day.gap_reason = day.gap_reason or (
+            f"dropped_bad_date({day.dropped_bad_date} 行代码有效但日期无法严格解析)"
+        )
         day.warnings.append(
-            f"{day.dropped_bad_date} 行日期无法严格解析被丢弃，未参与求和"
-            "（无法证明它不属于请求日，未据此宣称完整）"
+            f"{day.dropped_bad_date} 行日期无法严格解析被丢弃（代码有效），未参与求和"
+            "→ 无法证明它不属于请求日，已 fail-closed（不出部分和）"
         )
 
     if not by_code:
@@ -700,9 +726,14 @@ def parse_szse_records(records: Iterable[Mapping[str, Any]],
             "→ 该日合计必然低报，已 fail-closed（不出部分和）"
         )
     if day.dropped_bad_date:
+        # 同 SSE：代码先解析成功、日期脏 → 这行可能就是请求日的真实基金行，丢弃即低报。
+        day.usable = False
+        day.gap_reason = day.gap_reason or (
+            f"dropped_bad_date({day.dropped_bad_date} 行代码有效但日期无法严格解析)"
+        )
         day.warnings.append(
-            f"{day.dropped_bad_date} 行日期无法严格解析被丢弃，未参与求和"
-            "（无法证明它不属于请求日，未据此宣称完整）"
+            f"{day.dropped_bad_date} 行日期无法严格解析被丢弃（代码有效），未参与求和"
+            "→ 无法证明它不属于请求日，已 fail-closed（不出部分和）"
         )
 
     if not by_code:
@@ -898,6 +929,46 @@ def _szse_money_etf_coverage(day: SourceDay | None, as_of: str | None) -> dict[s
     }
 
 
+def _money_etf_coverage_rollup(sse_gap: Mapping[str, Any],
+                               szse_money: Mapping[str, Any]) -> dict[str, Any]:
+    """把沪深两侧的货币 ETF 覆盖事实合成一份**只有分市场状态、没有单一布尔**的声明。
+
+    为什么不能只给一个布尔：沪市合计不含货币 ETF、深市合计含——写 `covers_money_etf=False`
+    会把「深市有、沪市没有」抹平成「全都没有」，写 `True` 又是把未知集合说成已知。
+    而「覆盖完整」本身不可证明（免费接口无法枚举沪市货币 ETF 完整名单），
+    所以 `complete` 恒为 False，`covers_money_etf` 只取 `none` / `partial` / `unverified`。
+    """
+    sse_present = list(sse_gap.get("present_codes") or ())
+    # 沪市：源不返回货币 ETF；若候选当日出现在返回里，说明合计**含**部分货币 ETF（名单仍不完整）
+    sse_state = "partial" if sse_present else "excluded"
+    # 深市：实测返回货币 ETF；当日没观测到 → 只能说「未能验证」，不能说「不含」
+    szse_state = "included" if szse_money.get("covered") else "unverified"
+
+    if sse_state == "excluded":
+        covers = "partial" if szse_state == "included" else "none"
+    else:
+        covers = "partial"
+    if szse_state == "unverified" and covers == "none":
+        covers = "unverified"
+
+    return {
+        "sse": sse_state,
+        "szse": szse_state,
+        "covers_money_etf": covers,
+        # 覆盖完整性**永远无法证明**：沪市货币 ETF 名单不可枚举
+        "complete": False,
+        "complete_reason": (
+            "沪市货币 ETF 的完整名单无法从免费接口枚举，缺口是未知集合 → "
+            "货币 ETF 覆盖完整不可证明，任何 covers_money_etf_complete=True 都是编造"
+        ),
+        "unknown_set": sse_state == "excluded",
+        "affects_total": True,
+        "note": MONEY_ETF_GAP_NOTE,
+        "sse_gap_codes": list(sse_gap.get("codes") or ()),
+        "szse_observed_codes": list(szse_money.get("codes") or ()),
+    }
+
+
 def build_dry_run(
     days: Mapping[str, Sequence[SourceDay]],
     prev_days: Mapping[str, Sequence[SourceDay]] | None = None,
@@ -1002,6 +1073,7 @@ def build_dry_run(
         else _sse_money_etf_gap(sse_day, current_date)
     )
     szse_money = _szse_money_etf_coverage(szse_day, current_date)
+    money_cov = _money_etf_coverage_rollup(money_gap, szse_money)
 
     return {
         "kind": "etf_market_share_dry_run",
@@ -1013,6 +1085,14 @@ def build_dry_run(
         "amount_fields_present": False,   # 显式声明：本报告没有金额/市值
         "basket_proxy_used": False,       # 显式声明：不是 20 只宽基
         "complete": complete,
+        # `complete` 的作用域必须写清：只到「交易所份额接口口径的两市取全」，
+        # 不是「完整全市场」——后者因沪市货币 ETF 缺口不可枚举而恒定不可证明。
+        "complete_scope": "exchange_share_api",
+        "full_market_total": False,
+        "full_market_total_reason": (
+            "沪市货币 ETF 不在交易所份额接口返回里，完整名单也无法枚举 → "
+            "全市场份额合计无法证明完整；深市合计则含货币 ETF，两市口径不一致"
+        ),
         "markets": markets,
         "market_total": {
             "n_funds": sum(markets[m]["n_funds"] for m in usable_markets),
@@ -1027,21 +1107,25 @@ def build_dry_run(
             ),
             "unit": UNIT_SHARES,
             "complete": bool(markets_complete),
+            # 作用域：只到「交易所份额接口口径的两市取全」，不是完整全市场
+            "complete_scope": "exchange_share_api",
             "usable_markets": usable_markets,
             "missing_markets": gap_markets,
-            "excludes_money_etf": True,
-            # 口径声明：沪市不含货币 ETF；深市实测含 → 合计不构成完整货币 ETF 覆盖
-            "covers_money_etf": False,
-            "money_etf_coverage": {
-                "sse": "excluded",
-                "szse": "included" if szse_money["covered"] else "unverified",
-            },
+            # 货币 ETF：只给分市场状态 + 三态汇总，不给会把两市抹平的单一布尔
+            "money_etf_coverage": dict(money_cov),
+            "covers_money_etf": money_cov["covers_money_etf"],
+            "covers_money_etf_complete": False,
             "full_market_total": False,
+            "full_market_total_reason": (
+                "沪市货币 ETF 不在交易所份额接口返回里且名单不可枚举 → "
+                "该合计不是完整全市场份额（深市合计则含货币 ETF）"
+            ),
             "coverage_note": MONEY_ETF_GAP_NOTE,
             "note": (
                 "仅含可用市场合计；不可用市场未计入且未补零（不出部分和）"
                 if not markets_complete
-                else "沪深两市已取到，但合计仍不含沪市货币 ETF，不是完整全市场"
+                else "沪深两市交易所口径已取到，但合计仍不是完整全市场"
+                     "（沪市货币 ETF 缺口为未知集合，深市合计含货币 ETF）"
             ),
         },
         "share_change": {
@@ -1097,15 +1181,22 @@ def build_dry_run(
             "szse_money_etf": szse_money,
         },
         "tq_sc8_reference": tq_sc8_reference or {"available": False},
-        "verdict": _verdict(markets, diffs, markets_complete, prev_requested),
+        "verdict": _verdict(markets, diffs, markets_complete, prev_requested, money_cov),
     }
 
 
 def _verdict(markets: Mapping[str, Mapping[str, Any]],
              diffs: Mapping[str, Mapping[str, Any]],
              markets_complete: bool,
-             prev_requested: bool) -> dict[str, Any]:
-    """给出「可否用于产品」的机器可读判断——只描述取数本身，不外推。"""
+             prev_requested: bool,
+             money_cov: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """给出「可否用于产品」的机器可读判断——只描述取数本身，不外推。
+
+    `exchange_share_level_complete` 是两市交易所份额口径的取全事实；
+    `full_market_share_level` **恒为 False**：沪市货币 ETF 缺口是未知集合，
+    全市场份额完整不可证明，不因为两市都取到就变成 True。
+    """
+    cov = dict(money_cov or {})
     blockers: list[str] = []
     if not markets:
         blockers.append("no_market_data")
@@ -1126,8 +1217,16 @@ def _verdict(markets: Mapping[str, Mapping[str, Any]],
     return {
         "status": status,
         "blockers": blockers,
-        "full_market_share_level": bool(markets_complete),
-        "covers_money_etf": False,
+        "exchange_share_level_complete": bool(markets_complete),
+        # 恒 False：两市取全只说明交易所份额口径取全，不说明全市场份额完整
+        "full_market_share_level": False,
+        "full_market_share_level_reason": (
+            "沪市货币 ETF 不在交易所份额接口返回里、完整名单不可枚举 → "
+            "全市场份额无法证明完整；exchange_share_level_complete 只描述交易所口径取全"
+        ),
+        "money_etf_coverage": cov or None,
+        "covers_money_etf": cov.get("covers_money_etf"),
+        "covers_money_etf_complete": False,
         "supports_intraday": False,
         "supports_amount": False,
         "supports_full_market_total": False,
@@ -1378,6 +1477,9 @@ def fetch_szse_window(start: str, end: str, *, http: Callable[..., Any] | None =
     缺失的日子不会出现在返回值里（调用方据此判 gap，而不是补零）；
     某个窗口取数失败时：该窗口起始日放一个 `fetch_error` 的 gap，
     同时把窗口区间记进 `failed_windows`，供调用方把错误传播到目标日。
+    窗口内若有**代码有效但日期无法严格解析**的行（`undated_rows_in_window`）：
+    这些行可能属于窗口内任何一天，无法证明不属于 → 该窗口各日一并 `usable=False`，
+    不静默丢弃后照常宣告完整。
     """
     out = SzseWindowDays()
     for win_start, win_end in iter_windows(start, end):
@@ -1412,13 +1514,28 @@ def fetch_szse_window(start: str, end: str, *, http: Callable[..., Any] | None =
             records = [rec for rec in records if not _is_szse_no_data_row(rec)]
 
         by_date: dict[str, list[Mapping[str, Any]]] = {}
+        undated_codes: list[str] = []
         for rec in records:
-            d = _norm_date(rec.get("日期") if isinstance(rec, Mapping) else None)
+            if not isinstance(rec, Mapping):
+                continue
+            d = _norm_date(rec.get("日期") if "日期" in rec else rec.get("date"))
             if d:
                 by_date.setdefault(d, []).append(rec)
+                continue
+            # 代码有效但日期脏：这一行可能属于窗口内**任何一天**，无法证明不属于。
+            # 静默丢掉再按「其他行」宣告完整，等于把「不知道」写成「没有」。
+            code = _norm_code(rec.get("基金代码") if "基金代码" in rec else rec.get("code"))
+            if code:
+                undated_codes.append(code)
 
         if not by_date:
-            if sentinel_found or not records:
+            if undated_codes:
+                reason = f"undated_rows_in_window({len(undated_codes)})"
+                warn = (
+                    f"窗口 {win_start}~{win_end} 有 {len(undated_codes)} 行代码有效但日期无法"
+                    "严格解析、且没有任何可解析日期的行：无法确定这些份额属于哪天，不能当空结果"
+                )
+            elif sentinel_found or not records:
                 reason = "empty_result"
                 warn = (
                     f"窗口 {win_start}~{win_end} 源返回无数据占位行"
@@ -1434,6 +1551,22 @@ def fetch_szse_window(start: str, end: str, *, http: Callable[..., Any] | None =
             continue
         for d, recs in by_date.items():
             out[d] = parse_szse_records(recs, d)
+
+        if undated_codes:
+            # 日期脏但有代码的行无法归日 → 整个窗口的每一天都可能少算这一行，
+            # 因此窗口内各日一并 fail-closed，而不是让它们看起来完整。
+            warn = (
+                f"窗口 {win_start}~{win_end} 有 {len(undated_codes)} 行代码有效但日期无法严格"
+                f"解析（代码示例 {sorted(set(undated_codes))[:5]}）：无法证明这些份额不属于"
+                "本窗口任何一天 → 窗口内各日一并 fail-closed（不出部分和）"
+            )
+            for d in by_date:
+                day = out[d]
+                day.usable = False
+                day.gap_reason = day.gap_reason or (
+                    f"undated_rows_in_window({len(undated_codes)})"
+                )
+                day.warnings.append(warn)
 
     ordered = SzseWindowDays()
     ordered.failed_windows = out.failed_windows

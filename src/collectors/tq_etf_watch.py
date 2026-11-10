@@ -9,12 +9,17 @@
    （零配额、零外部依赖）。可按 `start_time/end_time` 取任意历史交易日的 240 根分钟线
    （实测回溯到 2026-09-01 正常），因此"今日 vs 过去 20 日同期均值"可直接算，不必等累积。
 
-2. **净申购只有市场级是真的，单只份额是假的**：
-   `get_scjy_value(SC8)` 给全市场 `[ETF规模(亿元), 当日净申购(亿元)]`，日频，回溯到 2023-10
-   —— 正是这类看板的起点。而 `get_gb_info(gb_type=1)` 对 ETF 返回的 `Zgb` 是
+2. **市场级序列只有 SC8 一条，但两列都不能当「资金净申购」用**：
+   `get_scjy_value(SC8)` 给两条市场级日频序列 `[列0, 列1]`（回溯到 2023-10，正是这类看板的起点）。
+   2026-11-10 独立重建对拍后只能得出**推断**：列0 更像全市场 ETF 份额合计（亿份），
+   列1 ≈ Δ列0（914 天里 557 天精确相等）——两列同源，不能互为证据。
+   没有交易所/通达信官方字段定义可引用，所以只标 `unit_confidence="inferred"`，
+   出口与下游**不许**写成「规模 X 亿元 / 净申购 X 亿元 / 份额×净值」，
+   也不许拿份额序列去推资金流。而 `get_gb_info(gb_type=1)` 对 ETF 返回的 `Zgb` 是
    **当前份额回填到每一天**：实测 6 只主流 ETF × 63 个交易日 **0 次变化**，
-   拿它算单只净申购必然恒为 0。所以本模块：
-   - 净申购一律走 SC8（市场级），落 `market_sentiment_daily.etf_scale/etf_net_sub`；
+   拿它算单只份额变动必然恒为 0。所以本模块：
+   - 市场级两列按「份额序列（推断）」原值落库：列0 → `etf_flow_daily.scale_yi`，
+     列1 → `net_sub_yi`（**列名是历史 schema，语义就是列1 原值，不是净申购金额**）；
    - **预留 `single_share_source` 开关**（默认 None）：将来接 Tushare/交易所份额时填这里，
      不改变上层 API 契约。未接时 API 显式返回 `single_share_supported=False`，不伪造。
 
@@ -22,7 +27,10 @@
 - `get_market_data` 的 `Amount` = **万元**（510300 日线 1,206,621.63 万元，与
   2,951,453,184 股 × 4.085 元 ≈ 120.6 亿元精确吻合）
 - `Volume` = **股**
-- SC8 两列 = **亿元**
+- SC8 两列 = **推断为份额（亿份）**，不是金额。证据：2026-10-16 沪深两市交易所份额合计
+  32863.16 亿份 vs 列0 = 32886.32（差 -0.07%，缺口正是沪市货币 ETF 不在交易所接口）；
+  反证：Σ份额 × 净值 = 46548 亿元，是列0 的 1.42 倍 → 只能叫推断，不许换算金额。
+  详见 `src/core/etf_watch_feed.py` 的 SC8 段（`SC8_UNIT_CAVEAT` / `unit_confidence`）。
 """
 
 from __future__ import annotations
@@ -63,7 +71,11 @@ ETF_BASKET: tuple[tuple[str, str, str], ...] = (
 BENCHMARK_INDEX = "999999.SH"
 BENCHMARK_NAME = "上证综指"
 
-#: 托底日判定阈值（亿元）——与公开口径一致：单日净流入超 100 亿视为托底日。
+#: **已废弃、无依据的常量**：这个 100 来自公开口径里「单日净流入超 100 亿元算托底日」的
+#: **金额**阈值，而 SC8 两列推断为份额（亿份）——金额阈值与份额不同量纲，不可换算，
+#: 拿它去筛份额样本（例如当成「100 亿份」）是无依据的推断。本模块**不用它做任何判定**，
+#: 读侧（`src/core/etf_watch_feed.py`）也明确移除了这套「托底日」推断。
+#: 保留常量只为兼容旧 import，新代码不得再引用它做筛样本/下结论。
 SUPPORT_FLOW_THRESHOLD_YI = 100.0
 
 #: 单只份额数据源开关。None = 仅市场级 SC8（当前实现）；非 None 时由未来接入方填写标识
@@ -240,9 +252,12 @@ def fetch_index_minute(trade_date: str, *, timeout: float = 20.0) -> list[tuple[
 
 
 def fetch_sc8(start_date: str, end_date: str, *, timeout: float = 30.0) -> list[tuple[str, float | None, float | None]]:
-    """市场级 ETF 规模/净申购 → [(YYYYMMDD, 规模亿元, 净申购亿元)]。
+    """市场级 SC8 → [(YYYYMMDD, 列0, 列1)]，**原值直传，不做单位换算、不赋予市场含义**。
 
-    这是**唯一**可信的净申购来源：单只 ETF 的 `get_gb_info` 份额是当前值回填，不可用。
+    列0 / 列1 推断为份额（亿份）而非金额（见模块头部单位口径与
+    `src/core/etf_watch_feed.py` 的 SC8 段）；列1 ≈ Δ列0，两列同源，
+    **不能**解读为资金净申购、也不能据此推资金流。
+    单只份额仍然不可用：`get_gb_info` 的 `Zgb` 是当前值回填，算变动必然恒为 0。
     """
     payload = _rpc(
         "get_scjy_value",
@@ -390,6 +405,10 @@ def write_sc8(rows: list[tuple[str, float | None, float | None]]) -> int:
        可以回溯到 2023-10（情绪表做不到，那表的行集由 SC3 骨架定，2025-07 才开始）。
     2. `market_sentiment_daily`（**兼容**）：只在**已存在**该交易日的行时补两列。
        `UPDATE` 不 `INSERT` —— 造出"只有 etf 列、其余全 NULL"的行会稀释情绪 20 日基线。
+
+    列名口径：`scale_yi` / `net_sub_yi` / `etf_net_sub` 都是**历史 schema 名**，
+    存的是 SC8 列0 / 列1 原值（推断为亿份）；`net_sub_yi` **不是**净申购金额，
+    读侧必须按推断单位渲染，不得改写成「亿元」或据此下资金流结论。
     """
     if not rows:
         return 0
@@ -545,7 +564,10 @@ def run_backfill(days: int = MINUTE_RETENTION_DAYS) -> dict:
 
 
 def run_sc8_backfill(start_date: str = "20231001") -> dict:
-    """回补市场级 ETF 规模/净申购（SC8），补齐到最近交易日。"""
+    """回补市场级 SC8 两列（推断为份额序列），补齐到最近交易日。
+
+    只补源端真实发布日；上游停更后最新日就停在停更日，不补造、不外推。
+    """
     try:
         rows = fetch_sc8(start_date, today_str())
     except Exception as e:  # noqa: BLE001
