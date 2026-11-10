@@ -44,7 +44,7 @@ function mockPayloads(baselineDays: number, requested = 20) {
           etfs_expected: 20,
           full_minutes: 2,
           strict_minutes: 2,
-          min_etfs_for_complete: 16,
+          min_etfs_for_complete: 20,
           minutes: 2,
         },
       })

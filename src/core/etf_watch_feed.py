@@ -16,6 +16,27 @@
 - 有分钟行但 source 为 NULL → 出口 `unknown`；同一份数据出现多种来源 → `mixed` 并逐日列出。
   基线窗口若含非 TQ / 未标注来源，必须显式提示「与当前数据可能不同源，比值只作参考」。
 
+覆盖纪律（2026-11-10 复审：80% 闸门曾把 16/20 的基线当成「可用」，把 20/20 的今日
+算成「偏活跃」）：
+- **齐备（complete）只有一个口径：全篮子 20/20 只且金额非空。** 16/20 只的分钟合计
+  天然少 4 只的钱；拿它当「可用」会让基线被系统性压低（同一只 ETF 的同样成交额，
+  20 只今日 ÷ 16 只基线 ≈ 1.25 → 假 active）。80%（`COVERAGE_MIN`）只用于
+  「齐备分钟占已观测分钟的比例」这一件事，不再用来判某分钟是否可用。
+- **基线只收「同日全篮子 + 同一批分钟」的交易日**：基线日必须在本次比较的分钟集合上
+  逐分钟齐备、且没有缺口；否则整日剔除并记原因（`incomplete_basket` / `minute_gap`），
+  绝不进均值。基线均值是「同一分钟集合的累计」的日均，不是「有行的分钟各自均值」。
+- **缺分钟/缺金额不许单边漏算**：今日和基线都只累加同一批分钟（`minutes_compared`），
+  任何一侧有缺口或残缺分钟就不做比较 —— 缺一根分钟既会让累计少算一截，也会让比值
+  凭空放大或缩小。
+- **部分数据只能无结论**：缺只 / 金额全 NULL / 分钟缺口 / 齐备分钟占比不足 80% →
+  `state="insufficient"`、`conclusive=False`、`ratio_vs_baseline=None`，只报已采集累计
+  与覆盖明细（哪些分钟缺只、缺几根、缺哪几分钟）。
+- **真实零值保留**：`amount_wan = 0.0` 是「这一分钟确实成交 0」，照常进累计与齐备计数；
+  只有 NULL 才是缺失，且缺失不补 0。
+- **盘中实时可用**：盘中「时钟当前那一分钟」往往还在成形（部分标的尚未回报），单列
+  `in_progress` 并不计入累计/结论，但不会让整张看板在盘中永远「数据不全」；更早的分钟
+  缺只/缺额就是真的数据残缺，不给结论。
+
 SC8 单位与新鲜度（2026-11-10 核查；**单位是推断，不是已确认事实**）：
 - `get_scjy_value(SC8)` 两列**更可能是份额（亿份）**而非金额：2026-10-16 上交所 924 只
   （TOT_VOL 万份）+ 深交所 761 只（份）合计 32863.16 亿份，SC8 列0 = 32886.32（差 -0.07%）；
@@ -36,7 +57,6 @@ SC8 单位与新鲜度（2026-11-10 核查；**单位是推断，不是已确认
 from __future__ import annotations
 
 import logging
-import math
 from datetime import date, datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -49,7 +69,8 @@ Runner = Callable[..., list[dict[str, Any]]]
 #: `run(key, params, fmt)` —— key 对应 `SQL`，fmt 用于 IN 占位符展开。
 #: 调用方可以用 `_read(db, key, params)`（键已登记在 tools_catalog._SQL）或自行执行 SQL。
 
-#: 覆盖率闸门：不足 80% 的交易日判「数据不全」，不参与活跃度结论。
+#: 齐备（complete）的唯一口径：全篮子齐只。`min_etfs_for_complete` 见函数说明。
+#: 80% 只用于「齐备分钟 / 已观测分钟」这一条覆盖率闸门，**不再**用来把 16/20 只当成可用分钟。
 COVERAGE_MIN = 0.80
 
 #: 20 日基线窗口（交易日，不含当日）。
@@ -57,6 +78,13 @@ BASELINE_DAYS = 20
 
 #: 单日分钟上限（含 11:30 / 13:00 边界与盘后残留行；SQL 的 LIMIT 按它取上界）。
 MAX_MINUTES_PER_DAY = 1440
+
+#: 交易时段的分钟网格（当日分钟数，闭区间）：09:30-11:30、13:00-15:00。
+#: 用来判「已观测分钟之间有没有洞」—— 缺一根分钟会让累计少一截，比值随之失真。
+SESSION_WINDOWS: tuple[tuple[int, int], ...] = (
+    (9 * 60 + 30, 11 * 60 + 30),
+    (13 * 60, 15 * 60),
+)
 
 #: SC8 两列的单位：**推断为份额（亿份）**，不是金额。落库列名 `scale_yi` / `net_sub_yi` 保留
 #: （历史表与 API 契约），但出口必须带这个显式单位，禁止再渲染成「亿元」。
@@ -89,15 +117,102 @@ SOURCE_LABELS = {
 #: 早间采集窗口内允许滞后 1；再多就是上游停更/采集失败，必须标 stale。
 STALE_MAX_LAG_TRADING_DAYS = 1
 
+#: 「不给结论」的原因 → 人话。出口与测试都照这张表，避免各写一套说法。
+WITHHELD_LABELS = {
+    "no_minutes": "没有可用于比较的分钟（无累计可算）",
+    "minutes_without_amount": "有分钟金额全是 NULL（未落库，不补 0）",
+    "minutes_short_basket": "有分钟篮子缺只（未达全篮子 20/20）",
+    "minute_gaps": "已采集分钟之间有缺口（缺分钟会让累计少算一截）",
+    "coverage_below_min": "齐备分钟占已观测分钟的比例不足 80%",
+    "baseline_no_sample": "基线没有「同日全篮子 + 同一批分钟」的可比交易日",
+    "baseline_zero": "基线同期累计为 0（除不出比值）",
+}
+
 
 def min_etfs_for_complete(expected: int | None = None) -> int:
-    """一个分钟「可用」的标的数门槛：**≥80%，不是全部**（20 只篮子 → 16 只）。
+    """一个分钟「齐备」所需的标的数：**全篮子**（20 只篮子 → 20 只），不是 80%。
 
-    以前出口文案把过闸门的分钟说成「20 只齐全」，把 16 只也说成 20 只，
-    属于把覆盖口径说满；现在门槛与文案都从本函数取，只有一个真值。
+    旧实现返回 `ceil(n * 0.8)`（20 只 → 16），于是 16/20 只的分钟被当成「可用」并入
+    基线与结论：16 只的合计天然只有 20 只的 80%，同一笔成交额会算出 1.25 倍 → 假「偏活跃」。
+    与采集侧（`etf_minute_gapfill` 逐只对账：20 里差一只即 `insufficient_etfs`）对齐后，
+    「齐备」只有一个含义：全篮子且金额非空。
+
+    80%（`COVERAGE_MIN`）仍保留，但只用于「齐备分钟 / 已观测分钟」的覆盖率闸门，
+    不再参与「这一分钟算不算数」的判定。
     """
     n = len(ew.ETF_BASKET) if expected is None else int(expected)
-    return max(1, math.ceil(n * COVERAGE_MIN - 1e-9))
+    return max(1, n)
+
+
+def minute_of_day(minute: Any) -> int | None:
+    """`"0930"` → 570；脏值返回 None（不猜）。"""
+    m = str(minute or "").strip()
+    if len(m) != 4 or not m.isdigit():
+        return None
+    hh, mm = int(m[:2]), int(m[2:])
+    if hh > 23 or mm > 59:
+        return None
+    return hh * 60 + mm
+
+
+def hhmm_of(value: int) -> str:
+    return f"{value // 60:02d}{value % 60:02d}"
+
+
+def session_minute_grid(first: str, last: str) -> list[str]:
+    """`first..last` 之间的交易分钟网格（跳过午休）；任一端非法返回空。
+
+    只用来找「已观测分钟之间的洞」：网格里没有、但区间内本应有行的那几分钟就是缺口。
+    """
+    a, b = minute_of_day(first), minute_of_day(last)
+    if a is None or b is None or b < a:
+        return []
+    out: list[str] = []
+    for lo, hi in SESSION_WINDOWS:
+        out.extend(hhmm_of(m) for m in range(max(lo, a), min(hi, b) + 1))
+    return out
+
+
+def analyze_minutes(rows: list[dict[str, Any]], expected: int) -> dict[str, Any]:
+    """把「按分钟聚合的分钟行」分成 齐备 / 缺只 / 金额全 NULL / 缺分钟（洞）。
+
+    `rows` 来自 `SQL["etf_minute_rows"]` / `SQL["etf_baseline_rows"]`：
+    `minute, [trade_date,] amount_wan, etfs`。`amount_wan` 为 None 表示这一分钟
+    没有任何非空金额（`etfs` 也会是 0），必须与「真实 0.0」区分开。
+    """
+    amount: dict[str, float | None] = {}
+    counts: dict[str, int] = {}
+    for r in rows or []:
+        m = str(r.get("minute") or "")
+        if minute_of_day(m) is None:
+            continue
+        raw = r.get("amount_wan")
+        amount[m] = None if raw is None else float(raw)
+        counts[m] = int(r.get("etfs") or 0)
+
+    observed = sorted(amount)
+    without_amount = [m for m in observed if amount[m] is None]
+    short_basket = [m for m in observed if amount[m] is not None and counts[m] < expected]
+    complete = [
+        m for m in observed if amount[m] is not None and counts[m] >= expected
+    ]
+    gaps = (
+        [m for m in session_minute_grid(observed[0], observed[-1]) if m not in amount]
+        if observed
+        else []
+    )
+    return {
+        "observed": observed,
+        "amount": amount,
+        "etfs": counts,
+        "complete": complete,
+        "complete_set": set(complete),
+        "without_amount": without_amount,
+        "short_basket": short_basket,
+        #: 会让「这一分钟的合计」残缺的分钟：金额全 NULL 或篮子缺只。
+        "incomplete": sorted(set(without_amount) | set(short_basket)),
+        "gaps": gaps,
+    }
 
 
 #: 单域只读语句（全部带 LIMIT；`tools_catalog._SQL` 直接复用这批字符串）。
@@ -299,47 +414,111 @@ def basket_payload() -> dict[str, Any]:
 
 # ── intraday ─────────────────────────────────────────────────────────────
 
-def baseline_curve(run: Runner, dates: list[str]) -> dict[str, Any]:
-    """过去 N 日「同一分钟」的累计成交额均值 + **真实样本数**。
+def baseline_curve(
+    run: Runner,
+    dates: list[str],
+    *,
+    minutes: list[str] | None = None,
+    expected: int | None = None,
+) -> dict[str, Any]:
+    """过去 N 日「同一分钟集合」的累计成交额均值 + **真实样本数与剔除原因**。
 
-    返回 `cum`（分钟 → 均值亿元）、`days`（分钟 → 实际参与该分钟的交易日数）、
-    `days_used`（有合规分钟的交易日数）、`days_requested`、`gate_etfs`。
+    返回 `cum`（分钟 → 日均累计亿元）、`days`（分钟 → 参与均值的交易日数）、
+    `days_used`、`days_requested`、`minutes_compared`、`days_dropped`、`drop_reasons`。
 
-    为什么要把样本数一起带出来：原来只回 `cum`，出口就拿「请求了 20 日」当「有 20 日基线」，
-    窗口里只有 2 天也会写「过去 20 个交易日」。分母缺失（缺失日是未采集还是非交易日）
-    无法从分钟表反推，所以只报**能算出的实际样本数**，剩余标「未确认」。
+    两条硬口径（2026-11-10 复审修）：
+    1. **只收同日全篮子**：一天在比较的分钟里只要有一分钟缺只（<`expected`）或金额全
+       NULL，这天就整日剔除 —— 它的「累计」是残缺的，混进均值就是把基线压低。
+    2. **同一分钟集合累计**：`minutes` 由调用方给（今日已观测分钟）；基线日必须在这批
+       分钟上逐分钟有行，少一根就整日剔除（`minute_gap`）。插值、补 0、只加「有行的
+       分钟」都会让某一天的累计少算一截，比值随之失真。
+
+    没给 `minutes` 时（`baseline_cum` 旧入口）：取各全篮子日分钟集合的**交集**当比较集，
+    保证「同一分钟集合」这条纪律在旧调用路径上同样成立。
+
+    分母缺失（缺失日是未采集还是非交易日）无法从分钟表反推，所以只报**能算出的实际
+    样本数**，剩余标「未确认」。
     """
+    expected_etfs = len(ew.ETF_BASKET) if expected is None else int(expected)
     out: dict[str, Any] = {
         "cum": {},
         "days": {},
         "days_used": 0,
         "days_requested": len(dates),
-        "gate_etfs": min_etfs_for_complete(),
+        "minutes_compared": 0,
+        "expected_etfs": expected_etfs,
+        # 兼容旧字段名：齐备门槛现在就是全篮子，不再有 16/20 这种「闸门」。
+        "gate_etfs": expected_etfs,
+        "days_dropped": 0,
+        "drop_reasons": {},
+        "days_incomplete_basket": 0,
+        "days_with_minute_gap": 0,
     }
     if not dates:
         return out
+
     ph, in_params = in_clause("d", dates)
     rows = run("etf_baseline_rows", in_params, {"ph": ph})
-    gate = int(out["gate_etfs"])
-    per_day: dict[str, dict[str, float]] = {}
+    by_day: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
-        if int(r["etfs"] or 0) < gate:
+        day = str(r.get("trade_date") or "")
+        if not day:
             continue
-        per_day.setdefault(r["trade_date"], {})[r["minute"]] = float(r["amount_wan"] or 0.0)
-    out["days_used"] = len(per_day)
-    if not per_day:
+        by_day.setdefault(day, []).append(r)
+    per_day = {d: analyze_minutes(rs, expected_etfs) for d, rs in by_day.items()}
+
+    # 比较用的分钟集合：调用方给的（今日已观测）优先；否则取各全篮子日分钟集合的交集。
+    caller_minutes = minutes is not None
+    if minutes is None:
+        clean = [a for a in per_day.values() if not a["incomplete"]]
+        common = set(clean[0]["observed"]) if clean else set()
+        for a in clean[1:]:
+            common &= set(a["observed"])
+        minutes = sorted(common)
+    target = [m for m in minutes if minute_of_day(m) is not None]
+    out["minutes_compared"] = len(target)
+    if not target:
+        # 没有可比分钟 → 没有一天能算「同一分钟集合的累计」，不拿它当 0 基线。
+        out["days_dropped"] = len(per_day)
+        out["drop_reasons"] = {"no_aligned_minutes": len(per_day)} if per_day else {}
         return out
 
+    reasons = {"incomplete_basket": 0, "minute_gap": 0}
     acc: dict[str, float] = {}
-    cnt: dict[str, int] = {}
-    for mins in per_day.values():
-        cum = 0.0
-        for m in sorted(mins):
-            cum += mins[m]
-            acc[m] = acc.get(m, 0.0) + cum
-            cnt[m] = cnt.get(m, 0) + 1
-    out["cum"] = {m: (acc[m] / cnt[m]) / 1e4 for m in acc if cnt[m] > 0}
-    out["days"] = {m: cnt[m] for m in cnt if cnt[m] > 0}
+    used = 0
+    for day in sorted(per_day):
+        info = per_day[day]
+        if caller_minutes:
+            # 只看比较集内的分钟：集外的残缺分钟不影响同一分钟集合的累计。
+            bad = [
+                m for m in target
+                if m in info["amount"]
+                and (info["amount"][m] is None or info["etfs"][m] < expected_etfs)
+            ]
+        else:
+            # 旧入口没有「今日分钟集」可对齐：整日必须齐备，否则剔除。
+            bad = list(info["incomplete"])
+        if bad:
+            reasons["incomplete_basket"] += 1
+            continue
+        missing = [m for m in target if m not in info["amount"]]
+        if missing:
+            reasons["minute_gap"] += 1
+            continue
+        used += 1
+        running = 0.0
+        for m in target:
+            running += float(info["amount"][m] or 0.0)
+            acc[m] = acc.get(m, 0.0) + running
+
+    out["days_used"] = used
+    out["days_dropped"] = sum(reasons.values())
+    out["drop_reasons"] = {k: v for k, v in reasons.items() if v}
+    out["days_incomplete_basket"] = reasons["incomplete_basket"]
+    out["days_with_minute_gap"] = reasons["minute_gap"]
+    if used and acc:
+        out["cum"] = {m: (acc[m] / used) / 1e4 for m in target}
+        out["days"] = {m: used for m in target}
     return out
 
 
@@ -409,11 +588,47 @@ def intraday_payload(
     # 真实来源：按 `etf_minute_flow.source` 逐日查，单源/混源/未知都在出口照实说。
     src = minute_sources(run, [target])
 
+    analysis = analyze_minutes(mins, expected)
+    used_observed = list(analysis["observed"])
+
+    # 盘中「当前这一分钟」往往还在成形（部分标的尚未回报）。它既不能算进累计（会少算），
+    # 也不该让整张看板在盘中永远「数据不全」：单列 `in_progress`，不进累计、不进结论。
+    # 只认**时钟当前那一分钟**（`now` 的 HH:MM）：更早的分钟缺只/缺额就是真的数据残缺，
+    # 不能拿「可能还在成形」当免罪符。
+    current_minute = now.strftime("%H%M")
+    in_progress: dict[str, Any] | None = None
+    if (
+        used_observed
+        and session_phase == "live"
+        and d_obj == now.date()
+        and used_observed[-1] == current_minute
+        and used_observed[-1] in set(analysis["incomplete"])
+    ):
+        tail = used_observed[-1]
+        tail_etfs = int(analysis["etfs"].get(tail) or 0)
+        in_progress = {
+            "minute": tail,
+            "etfs": tail_etfs,
+            "etfs_expected": expected,
+            "note": (
+                f"{tail} 这根分钟仍在成形（{tail_etfs}/{expected} 只已回报），"
+                "未计入累计与活跃度结论"
+            ),
+        }
+        used_observed = used_observed[:-1]
+
+    used_set = set(used_observed)
+    complete_used = [m for m in used_observed if m in analysis["complete_set"]]
+    missing_amount_used = [m for m in analysis["without_amount"] if m in used_set]
+    short_basket_used = [m for m in analysis["short_basket"] if m in used_set]
+
     base_dates = [
         r["trade_date"]
         for r in run("etf_baseline_dates", {"d": target, "n": BASELINE_DAYS})
     ]
-    base = baseline_curve(run, base_dates)
+    # 比较集 = 今日已观测的那批分钟（不是「基线的分钟」也不是「有行的分钟」）：
+    # 两侧都只累加这一批，缺一分钟都不会单边漏算。
+    base = baseline_curve(run, base_dates, minutes=used_observed, expected=expected)
     baseline: dict[str, float] = base["cum"]
     base_src = minute_sources(run, [str(d) for d in base_dates])
     # 基线里只要出现非 TQ 或未知来源，这个「同期比值」就不是同源同比，必须显式提示。
@@ -423,79 +638,106 @@ def intraday_payload(
 
     series: list[dict[str, Any]] = []
     cum = 0.0
-    full_minutes = 0
-    strict_minutes = 0
-    #: 有分钟行但金额全为 NULL 的分钟数：这些分钟的累计**不加 0**，也不许算达标。
-    amount_missing_minutes = 0
     #: 真正累进过金额的分钟数：为 0 时 `cum` 不是 0.00，而是「未知」。
     amount_minutes = 0
-    for r in mins:
-        got = int(r["etfs"] or 0)
-        if r["amount_wan"] is None:
-            amount_missing_minutes += 1
+    for m in used_observed:
+        amt = analysis["amount"][m]
+        if amt is None:
             series.append({
-                "minute": r["minute"],
+                "minute": m,
                 "amount_yi": None,
                 "cum_yi": round_or_none(cum, 2),
-                "baseline_cum_yi": round_or_none(baseline.get(r["minute"]), 2),
+                "baseline_cum_yi": round_or_none(baseline.get(m), 2),
                 "complete": False,
             })
             continue
-        amt_yi = float(r["amount_wan"]) / 1e4
+        amt_yi = amt / 1e4
         cum += amt_yi
         amount_minutes += 1
-        complete = got >= gate
-        if complete:
-            full_minutes += 1
-        if got >= expected:
-            strict_minutes += 1
         series.append({
-            "minute": r["minute"],
+            "minute": m,
             "amount_yi": round_or_none(amt_yi, 3),
             "cum_yi": round_or_none(cum, 2),
-            "baseline_cum_yi": round_or_none(baseline.get(r["minute"]), 2),
-            "complete": complete,
+            "baseline_cum_yi": round_or_none(baseline.get(m), 2),
+            "complete": m in analysis["complete_set"],
         })
 
-    last_minute = series[-1]["minute"] if series else None
+    last_minute = complete_used[-1] if complete_used else None
+    # `last_minute` = 参与累计/结论的最后一根齐备分钟；`last_observed_minute` = 库里真有的
+    # 最后一根（含仍在成形、被排除的那根），出口把「比较到哪」与「采到哪」分开说。
+    last_observed_minute = analysis["observed"][-1] if analysis["observed"] else None
+    coverage = (len(complete_used) / len(used_observed)) if used_observed else None
     base_at = baseline.get(last_minute) if last_minute else None
-    ratio = (cum / base_at) if (amount_minutes and base_at and base_at > 0) else None
 
-    coverage = (full_minutes / len(series)) if series else None
-    if not series or not coverage or coverage < COVERAGE_MIN:
+    # 部分数据只能无结论：任一条件不满足就不出比值，也不出活跃度结论。
+    data_withheld: list[str] = []
+    if not used_observed:
+        data_withheld.append("no_minutes")
+    if missing_amount_used:
+        data_withheld.append("minutes_without_amount")
+    if short_basket_used:
+        data_withheld.append("minutes_short_basket")
+    if analysis["gaps"]:
+        data_withheld.append("minute_gaps")
+    if coverage is not None and coverage < COVERAGE_MIN:
+        data_withheld.append("coverage_below_min")
+
+    baseline_ok = (
+        base["days_used"] > 0 and base_at is not None and base_at > 0 and amount_minutes > 0
+    )
+    conclusive = not data_withheld and baseline_ok
+    ratio = (cum / base_at) if conclusive and base_at else None
+    if data_withheld:
         state = "insufficient"
-    elif ratio is None:
+        withheld = data_withheld
+    elif not baseline_ok:
+        # 基线 0 日可用 / 基线本身就是 0 → 没有可比对象，不是「常态」。
         state = "no_baseline"
-    elif ratio >= 1.5:
-        state = "surge"
-    elif ratio >= 1.15:
-        state = "active"
-    elif ratio <= 0.7:
-        state = "quiet"
+        withheld = ["baseline_no_sample" if base["days_used"] == 0 else "baseline_zero"]
     else:
-        state = "normal"
+        withheld = []
+        if ratio is not None and ratio >= 1.5:
+            state = "surge"
+        elif ratio is not None and ratio >= 1.15:
+            state = "active"
+        elif ratio is not None and ratio <= 0.7:
+            state = "quiet"
+        else:
+            state = "normal"
 
     points = index_points or []
     days_requested = BASELINE_DAYS
     days_available = len(base_dates)          # 窗口内真的有行情的交易日
-    days_used = int(base["days_used"])        # 其中至少有 1 个合规分钟、真进均值的天数
+    days_used = int(base["days_used"])        # 其中「同日全篮子 + 同一批分钟」齐备的天数
+    days_dropped = int(base["days_dropped"])
     missing_days = max(days_requested - days_available, 0)
-    dropped_days = max(days_available - days_used, 0)
     sample_days = int((base["days"] or {}).get(last_minute, 0)) if last_minute else 0
-    confirmed = missing_days == 0 and dropped_days == 0
+    confirmed = missing_days == 0 and days_dropped == 0
+    minutes_compared = int(base["minutes_compared"])
+    has_compared_minutes = minutes_compared > 0
+    basket_note = (
+        f"基线只收「同日 {expected}/{expected} 只齐备 + 覆盖本次 {minutes_compared} 根分钟」的交易日，"
+        "按「同一分钟集合的累计」取日均，不是全天对比"
+    )
 
     if confirmed:
-        base_note = (
-            f"基线取过去 {days_requested} 个交易日同一分钟的累计均值，口径为「同日同期」，不是全天对比"
-        )
+        base_note = f"基线取过去 {days_requested} 个交易日；{basket_note}"
     else:
         base_note = (
-            f"基线仅 {days_used} 个交易日可用（请求 {days_requested} 日；"
+            f"基线本次仅 {days_used} 个交易日可用（请求 {days_requested} 日；"
             f"窗口内缺 {missing_days} 个交易日样本"
         )
-        if dropped_days:
-            base_note += f"，另有 {dropped_days} 个交易日无达标分钟被剔除"
-        base_note += "；缺的日期是未采集还是非交易日无法从分钟表确认，标未确认）"
+        if days_dropped:
+            bits = []
+            if base["days_incomplete_basket"]:
+                bits.append(f"{base['days_incomplete_basket']} 日篮子缺只")
+            if base["days_with_minute_gap"]:
+                bits.append(f"{base['days_with_minute_gap']} 日缺分钟")
+            base_note += f"，另有 {days_dropped} 个交易日被剔除（{'、'.join(bits)}）"
+        base_note += f"；{basket_note}"
+        base_note += "；缺的日期是未采集还是非交易日无法从分钟表确认，标未确认"
+    if not has_compared_minutes:
+        base_note = f"本次没有可比分钟；{basket_note}"
     if base_dates and base_foreign:
         # 混源基线不是同源同比：只提示，不改数、不剔除（剔除也是无依据的取舍）。
         base_note += (
@@ -503,39 +745,75 @@ def intraday_payload(
             "基线均值与当前数据可能不同源，比值只作参考"
         )
 
+    withheld_note = ""
+    if withheld:
+        withheld_note = "；本次不给活跃度结论：" + "、".join(
+            WITHHELD_LABELS.get(k, k) for k in withheld
+        )
+
+    coverage_note = ""
+    if used_observed:
+        coverage_note = (
+            f"；已观测 {len(used_observed)} 根分钟，其中 {len(complete_used)} 根 {expected}/{expected} 只齐备"
+            f"（{round_or_none(coverage, 3)}），{len(short_basket_used)} 根篮子缺只、"
+            f"{len(missing_amount_used)} 根金额全是 NULL、{len(analysis['gaps'])} 根分钟缺口"
+        )
+        if in_progress:
+            coverage_note += f"；{in_progress['minute']} 这根仍在成形，未计入"
+
     return {
         "date": target,
         "phase": phase_of(d_obj, now),
         "session_phase": session_phase,
         "session_time": now.strftime("%H:%M"),
         "state": state,
+        "conclusive": conclusive,
         "fallback_from": fallback_from,
         "stale": fallback_from is not None,
         "benchmark": {"code": ew.BENCHMARK_INDEX, "name": ew.BENCHMARK_NAME, "points": points},
         "series": series,
+        "in_progress": in_progress,
         "totals": {
             "cum_yi": round_or_none(cum, 2) if amount_minutes else None,
-            "baseline_avg_yi": round_or_none(base_at),
-            "ratio_vs_baseline": round_or_none(ratio, 3),
+            # 没有结论就不给比较数字：半个口径的基线均值只会被拿去心算一个假比值。
+            "baseline_avg_yi": round_or_none(base_at) if conclusive else None,
+            "ratio_vs_baseline": round_or_none(ratio, 3) if conclusive else None,
+            "conclusive": conclusive,
+            "withheld_reasons": withheld,
             "baseline_days": days_used,
             "baseline_days_requested": days_requested,
             "baseline_days_in_window": days_available,
             "baseline_missing_days": missing_days,
-            "baseline_days_dropped": dropped_days,
+            "baseline_days_dropped": days_dropped,
+            "baseline_drop_reasons": base["drop_reasons"],
+            "baseline_days_incomplete_basket": int(base["days_incomplete_basket"]),
+            "baseline_days_minute_gap": int(base["days_with_minute_gap"]),
+            "baseline_minutes_compared": minutes_compared,
+            "baseline_expected_etfs": expected,
             "baseline_sample_days": sample_days,
             "baseline_confirmed": confirmed,
             "last_minute": last_minute,
+            "last_observed_minute": last_observed_minute,
+            "in_progress_minute": (in_progress or {}).get("minute"),
             "etfs_expected": expected,
             "min_etfs_for_complete": gate,
-            "full_minutes": full_minutes,
-            "strict_minutes": strict_minutes,
-            "minutes_without_amount": amount_missing_minutes,
+            "complete_minutes": len(complete_used),
+            "full_minutes": len(complete_used),
+            #: 旧字段名兼容：`strict_minutes` 过去指「真 20 只全齐」，现在与 `full_minutes` 同义。
+            "strict_minutes": len(complete_used),
+            "minutes_short_basket": len(short_basket_used),
+            "minutes_without_amount": len(missing_amount_used),
+            "minute_gaps": len(analysis["gaps"]),
+            "minute_gaps_detail": analysis["gaps"][:10],
             "minutes": len(series),
             "coverage": round_or_none(coverage, 3),
+            "coverage_min": COVERAGE_MIN,
         },
         "note": (
-            f"成交额为 {expected} 只重点宽基 ETF 合计（单位亿元）；"
+            f"成交额为 {expected} 只重点宽基 ETF 已采集合计（单位亿元）；"
             + base_note
+            + coverage_note
+            + withheld_note
             + "。"
             + src["note"]
         ),
@@ -799,20 +1077,26 @@ __all__ = [
     "SC8_UNIT",
     "SC8_UNIT_CAVEAT",
     "SC8_UNIT_CONFIDENCE",
+    "SESSION_WINDOWS",
     "SOURCE_LABELS",
     "SOURCE_UNKNOWN",
     "SQL",
     "STALE_MAX_LAG_TRADING_DAYS",
+    "WITHHELD_LABELS",
+    "analyze_minutes",
     "basket_payload",
     "baseline_cum",
     "baseline_curve",
     "daily_payload",
+    "hhmm_of",
     "in_clause",
     "intraday_payload",
     "min_etfs_for_complete",
+    "minute_of_day",
     "minute_sources",
     "phase_of",
     "round_or_none",
+    "session_minute_grid",
     "summarize_minute_sources",
     "sc8_freshness",
     "support_payload",

@@ -38,7 +38,7 @@ const INTRADAY = {
     last_minute: '0930',
     etfs_expected: 20,
     full_minutes: 1,
-    min_etfs_for_complete: 16,
+    min_etfs_for_complete: 20,
     minutes: 1,
   },
 }

@@ -5,8 +5,11 @@
  * ## 三层，各自的"为什么看"
  * 1. **盘中分钟观测**：20 只重点宽基 ETF 每分钟成交额加总，和上证综指放一起看。
  *    意义：国家队进场往往先体现在**宽基 ETF 的成交额突然放大**，而不是个股涨停。
- *    基线取「过去 20 个交易日同一分钟」的累计均值 —— 比的是同日同期，不是全天，
- *    否则早盘永远"清淡"、尾盘永远"放量"，结论全是假的。
+ *    基线只取「同日 20/20 只齐备、金额非空、且覆盖本次同一批分钟」的交易日，按
+ *    「同一分钟集合的累计」取日均 —— 比的是同日同期，不是全天，否则早盘永远"清淡"、
+ *    尾盘永远"放量"，结论全是假的。16/20 只的日子不算样本：它的合计天然少 4 只的钱，
+ *    拿它当基线会把今日的同样成交额算成 1.25 倍「偏活跃」（2026-11-10 复审反例）。
+ *    缺只/金额 NULL/缺分钟/基线无同日同口径样本 → 一律不给活跃度结论，只报覆盖。
  * 2. **份额信号（SC8）**：市场级 SC8 两列**推断**为全市场 ETF 总份额与当日份额变动
  *    （单位推断为亿份，不是金额）。没有官方字段定义，也没有可换算的金额阈值：
  *    **不做托底日判定**，只报原始样本与样本内分位（推断依据见接口的 unit_evidence）。
@@ -50,21 +53,43 @@ type IntradayResp = {
   fallback_from?: string | null
   series: IntradayPoint[]
   totals: null | {
-    cum_yi: number
+    cum_yi: number | null
     baseline_avg_yi: number | null
     ratio_vs_baseline: number | null
+    /** 有没有得出活跃度结论：false 时 baseline_avg_yi/ratio_vs_baseline 一律为 null。 */
+    conclusive?: boolean
+    /** 不给结论的原因码（与后端 WITHHELD_LABELS 对应）。 */
+    withheld_reasons?: string[]
     baseline_days: number
     baseline_days_requested?: number
     baseline_missing_days?: number
+    baseline_days_dropped?: number
+    /** 被剔除的基线日：篮子缺只 / 缺分钟（非同日同口径的一律不算样本）。 */
+    baseline_days_incomplete_basket?: number
+    baseline_days_minute_gap?: number
+    /** 比较用的同一分钟集合大小（两侧都只累加这几根）。 */
+    baseline_minutes_compared?: number
+    baseline_sample_days?: number
     baseline_confirmed?: boolean
     last_minute: string | null
+    last_observed_minute?: string | null
+    in_progress_minute?: string | null
     etfs_expected: number
-    /** 过 ≥80% 闸门（20 只篮子 = ≥16 只）的分钟数。 */
+    /** 20/20 只齐备（金额非空）的分钟数；旧名 full_minutes/strict_minutes 仍兼容。 */
+    complete_minutes?: number
     full_minutes: number
-    /** 真·20 只全齐的分钟数（与 full_minutes 不同，别混）。 */
     strict_minutes?: number
     min_etfs_for_complete?: number
+    /** 篮子缺只的分钟数（该分钟合计是残缺的）。 */
+    minutes_short_basket?: number
+    /** 金额全 NULL 的分钟数（未落库，不补 0）。 */
+    minutes_without_amount?: number
+    /** 已采集分钟之间的缺口数（缺一分钟就让累计少一截）。 */
+    minute_gaps?: number
+    minute_gaps_detail?: string[]
     minutes: number
+    coverage?: number | null
+    coverage_min?: number
   }
   benchmark?: { code: string; name: string; points: { minute: string; close: number }[] }
   note?: string
@@ -150,10 +175,21 @@ const STATE_LABEL: Record<string, { text: string; cls: string }> = {
   active: { text: '偏活跃', cls: 'text-role-watch' },
   normal: { text: '常态', cls: 'text-foreground' },
   quiet: { text: '偏清淡', cls: 'text-muted-foreground' },
-  insufficient: { text: '数据不全', cls: 'text-muted-foreground' },
-  no_baseline: { text: '基线不足', cls: 'text-muted-foreground' },
+  insufficient: { text: '数据不全・不给结论', cls: 'text-muted-foreground' },
+  no_baseline: { text: '基线不足・不给结论', cls: 'text-muted-foreground' },
   no_data: { text: '无数据', cls: 'text-muted-foreground' },
   ok: { text: '可用', cls: 'text-foreground' },
+}
+
+/** 不给结论的原因码 → 页面文案（与后端 `WITHHELD_LABELS` 一一对应）。 */
+const WITHHELD_LABEL: Record<string, string> = {
+  no_minutes: '没有可用于比较的分钟（无累计可算）',
+  minutes_without_amount: '有分钟金额全是 NULL（未落库，不补 0）',
+  minutes_short_basket: '有分钟篮子缺只（未达全篮子 20/20）',
+  minute_gaps: '已采集分钟之间有缺口（缺一分钟就让累计少一截）',
+  coverage_below_min: '齐备分钟占已观测分钟的比例不足 80%',
+  baseline_no_sample: '基线没有「同日全篮子 + 同一批分钟」的可比交易日',
+  baseline_zero: '基线同期累计为 0（除不出比值）',
 }
 
 const PHASE_LABEL: Record<string, string> = {
@@ -355,7 +391,7 @@ export default function EtfWatchPage() {
           {/* ① 盘中分钟观测 */}
           <Section
             title="盘中分钟观测"
-            desc="20 只重点宽基 ETF 每分钟成交额加总。国家队进场常先体现在宽基 ETF 放量，而不是个股涨停；基线取最多 20 个有数据交易日「同一分钟」的累计均值，比的是同日同期；实际参与的样本交易日数按图例/字段标注，不足 20 日不做等同处理。"
+            desc="20 只重点宽基 ETF 每分钟成交额加总。国家队进场常先体现在宽基 ETF 放量，而不是个股涨停；基线只取最多 20 个交易日内「同日 20/20 只齐备、金额非空、且覆盖本次同一批分钟」的日子，按「同一分钟集合的累计」取日均（比的是同日同期，不是全天）——16/20 只的日子合计天然少 4 只的钱，不算基线样本。缺只、金额 NULL、缺分钟或缺的日期，一律不给活跃度结论，只报覆盖。"
             extra={
               <span className={cn('rounded-full bg-s2 px-2 py-0.5 text-[12px] font-medium', stateMeta.cls)}>
                 {stateMeta.text}
@@ -370,10 +406,10 @@ export default function EtfWatchPage() {
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Stat label="今日累计成交额" value={`${fmt(totals?.cum_yi)} 亿元`} hint={totals?.last_minute ? `截至 ${totals.last_minute.slice(0, 2)}:${totals.last_minute.slice(2)}` : undefined} />
-                  <Stat label="同期基线均值" value={`${fmt(totals?.baseline_avg_yi)} 亿元`} hint={`基线 ${totals?.baseline_days ?? 0}/${totals?.baseline_days_requested ?? 20} 个交易日`} />
-                  <Stat label="相对基线" value={ratio === null ? '--' : `${fmt(ratio)} 倍`} tone={ratioTone} hint={ratio === null ? '基线不足，不外推' : ratio >= 1.15 ? '放量' : ratio <= 0.7 ? '清淡' : '接近常态'} />
-                  <Stat label="已采到分钟" value={`${totals?.minutes ?? 0} 分钟`} hint={`≥${totals?.min_etfs_for_complete ?? 16} 只 ${totals?.full_minutes ?? 0} 分钟`} />
+                  <Stat label="今日累计成交额" value={`${fmt(totals?.cum_yi)} 亿元`} hint={totals?.last_minute ? `截至 ${totals.last_minute.slice(0, 2)}:${totals.last_minute.slice(2)}（已采集）` : undefined} />
+                  <Stat label="同期基线均值" value={`${fmt(totals?.baseline_avg_yi)} 亿元`} hint={`基线 ${totals?.baseline_days ?? 0}/${totals?.baseline_days_requested ?? 20} 个交易日（20/20 齐备·同一批分钟）`} />
+                  <Stat label="相对基线" value={ratio === null ? '--' : `${fmt(ratio)} 倍`} tone={ratioTone} hint={ratio === null ? '基线不足或数据不全，不外推' : ratio >= 1.15 ? '放量' : ratio <= 0.7 ? '清淡' : '接近常态'} />
+                  <Stat label="已采到分钟" value={`${totals?.minutes ?? 0} 分钟`} hint={`20/20 只齐备 ${totals?.complete_minutes ?? totals?.full_minutes ?? 0} 分钟`} />
                 </div>
 
                 <div
@@ -407,8 +443,41 @@ export default function EtfWatchPage() {
                 ) : null}
 
                 {intraday?.state === 'insufficient' ? (
-                  <div className="mt-3 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] text-role-watch">
-                    当日多数分钟未达 ≥16/20（80%）覆盖闸门，活跃度结论不可用（半场数据会把成交额算少一截）。
+                  <div className="mt-3 space-y-1 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] leading-6 text-role-watch">
+                    <p className="font-medium">数据不全，本次不给活跃度结论（不拿残缺/不同口径的样本互相比较）：</p>
+                    {(totals?.withheld_reasons || []).length ? (
+                      <ul className="list-disc pl-4">
+                        {(totals?.withheld_reasons || []).map(code => (
+                          <li key={code}>{WITHHELD_LABEL[code] || code}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <p>
+                      已采集 {totals?.minutes ?? 0} 分钟 / 20 只里 {totals?.complete_minutes ?? totals?.full_minutes ?? 0} 分钟齐备
+                      （{totals?.coverage === null || totals?.coverage === undefined ? '--' : `${Math.round(totals.coverage * 1000) / 10}%`}）
+                      {(totals?.minutes_short_basket ?? 0) ? `，${totals?.minutes_short_basket} 分钟篮子缺只` : ''}
+                      {(totals?.minutes_without_amount ?? 0) ? `，${totals?.minutes_without_amount} 分钟金额全 NULL` : ''}
+                      {(totals?.minute_gaps ?? 0) ? `，缺 ${totals?.minute_gaps} 根分钟（${(totals?.minute_gaps_detail || []).join('/') || '明细未取到'}）` : ''}
+                      ；已采集合计 {fmt(totals?.cum_yi)} 亿元只代表采到的部分，不是全天成交额。
+                    </p>
+                  </div>
+                ) : null}
+                {intraday?.state === 'no_baseline' ? (
+                  <div className="mt-3 space-y-1 rounded-lg bg-s2 px-3 py-2 text-[12px] leading-6 text-muted-foreground">
+                    <p className="font-medium text-foreground">无同期基线可比，本次不给活跃度结论：</p>
+                    <p>
+                      基线只收「同日 20/20 只齐备 + 覆盖同一批 {totals?.baseline_minutes_compared ?? 0} 根分钟」的交易日，
+                      本次可用 {totals?.baseline_days ?? 0}/{totals?.baseline_days_requested ?? 20} 日
+                      {(totals?.baseline_days_incomplete_basket ?? 0) ? `，${totals?.baseline_days_incomplete_basket} 日因篮子缺只被剔除` : ''}
+                      {(totals?.baseline_days_minute_gap ?? 0) ? `，${totals?.baseline_days_minute_gap} 日因缺分钟被剔除` : ''}
+                      {(totals?.baseline_missing_days ?? 0) ? `，窗口内缺 ${totals?.baseline_missing_days} 个交易日样本（未采集还是非交易日未确认）` : ''}
+                      。
+                    </p>
+                  </div>
+                ) : null}
+                {totals?.in_progress_minute ? (
+                  <div className="mt-3 rounded-lg bg-s2 px-3 py-2 text-[12px] leading-6 text-muted-foreground">
+                    {totals.in_progress_minute.slice(0, 2)}:{totals.in_progress_minute.slice(2)} 这根分钟仍在成形，未计入累计与结论（盘中实时观测，不因此判数据不全）。
                   </div>
                 ) : null}
               </>

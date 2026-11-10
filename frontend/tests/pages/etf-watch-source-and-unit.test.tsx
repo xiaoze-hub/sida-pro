@@ -53,7 +53,7 @@ function mockPayloads(intradaySource: Record<string, unknown>) {
           etfs_expected: 20,
           full_minutes: 2,
           strict_minutes: 2,
-          min_etfs_for_complete: 16,
+          min_etfs_for_complete: 20,
           minutes: 2,
         },
         ...intradaySource,

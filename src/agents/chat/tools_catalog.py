@@ -3290,8 +3290,8 @@ _STATE_CN = {
     "active": "偏活跃（≥1.15×）",
     "normal": "与同期基线相当",
     "quiet": "缩量（≤0.7×）",
-    "no_baseline": "无同期基线可比",
-    "insufficient": "数据不全（覆盖不足 80%）",
+    "no_baseline": "无同期基线可比（不给结论）",
+    "insufficient": "数据不全（不给结论）",
     "no_data": "未取到",
 }
 
@@ -3378,7 +3378,8 @@ def render_etf_flow(
             str(intraday.get("session_phase") or ""), str(intraday.get("session_phase") or "")
         )
         expected = int(totals.get("etfs_expected") or 0) or len(etf_feed.ew.ETF_BASKET)
-        gate = int(totals.get("min_etfs_for_complete") or 0) or etf_feed.min_etfs_for_complete(expected)
+        #: 80% 只作为对照说明用（旧口径把 16/20 当可用），不再是任何「可用分钟」的判定标准。
+        partial_ref = int(expected * etf_feed.COVERAGE_MIN)
         base_avg = totals.get("baseline_avg_yi")
         sections.append(
             f"- **篮子成交额（分钟级已采集累计，非全天成交额）**：{expected} 只重点宽基 ETF（12 类）"
@@ -3394,38 +3395,76 @@ def render_etf_flow(
         days_req = int(totals.get("baseline_days_requested") or etf_feed.BASELINE_DAYS)
         missing_days = int(totals.get("baseline_missing_days") or 0)
         dropped = int(totals.get("baseline_days_dropped") or 0)
-        base_txt = f"- **基线样本**：{days_used if days_used is not None else '未披露'}/{days_req} 个交易日「同一分钟」累计均值"
+        compared = int(totals.get("baseline_minutes_compared") or 0)
+        base_txt = (
+            f"- **基线样本**：{days_used if days_used is not None else '未披露'}/{days_req} 个交易日，"
+            f"口径为「同日 {expected}/{expected} 只齐备 + 覆盖同一批 {compared} 根分钟」的"
+            f"同一分钟集合累计均值（不是全天对比）"
+        )
         if totals.get("baseline_confirmed"):
             base_txt += "（基线样本齐备）"
         else:
             if missing_days:
                 base_txt += f"；窗口内缺 {missing_days} 个交易日样本（未采集还是非交易日未确认）"
             if dropped:
-                base_txt += f"；{dropped} 个交易日无达标分钟被剔除"
+                drop_bits = []
+                if int(totals.get("baseline_days_incomplete_basket") or 0):
+                    drop_bits.append(
+                        f"{int(totals.get('baseline_days_incomplete_basket') or 0)} 日篮子缺只"
+                    )
+                if int(totals.get("baseline_days_minute_gap") or 0):
+                    drop_bits.append(
+                        f"{int(totals.get('baseline_days_minute_gap') or 0)} 日缺分钟"
+                    )
+                base_txt += (
+                    f"；{dropped} 个交易日因不比同口径被剔除"
+                    f"（{'、'.join(drop_bits) or '原因未归类'}，"
+                    f"{partial_ref}/{expected} 只的日不算可用样本）"
+                )
         sections.append(base_txt)
 
         minutes = int(totals.get("minutes") or 0)
-        full = int(totals.get("full_minutes") or 0)   # 过 ≥80% 闸门的分钟
-        strict = int(totals.get("strict_minutes") or 0)  # 真正 20 只全齐的分钟
+        complete = int(totals.get("complete_minutes") or totals.get("full_minutes") or 0)
         cov = totals.get("coverage")
         cov_txt = f"{_num((cov or 0) * 100, 1)}%" if cov is not None else "未披露"
         cov_line = (
-            f"- **分钟覆盖（分母仅已采集分钟）**：已采集 {minutes} 分钟，其中 {full} 个达 "
-            f"≥{gate}/{expected} 只（{cov_txt}），{strict} 个为 {expected} 只全齐；"
-            f"覆盖率 <80% 判「数据不全」，不参与活跃度结论；"
-            f"未采集的分钟不在分母里，既不补 0 也不当成交额缺失之外的结论依据"
+            f"- **分钟覆盖（分母仅已采集分钟）**：已采集 {minutes} 分钟，其中 {complete} 个 "
+            f"{expected}/{expected} 只齐备（{cov_txt}）；齐备=全篮子且金额非空，"
+            f"{expected} 只里差一只都不算齐备（不再按 80% 折算成可用分钟）"
         )
         no_amt = int(totals.get("minutes_without_amount") or 0)
         if no_amt:
             cov_line += (
                 f"；其中 {no_amt} 分钟金额全是 NULL（未落库），未按 0 计入累计，"
-                f"也不计为达标分钟"
+                f"也不计为齐备分钟"
+            )
+        short_basket = int(totals.get("minutes_short_basket") or 0)
+        if short_basket:
+            cov_line += f"；{short_basket} 个分钟篮子缺只（该分钟合计是残缺的，不补 0）"
+        gaps = int(totals.get("minute_gaps") or 0)
+        if gaps:
+            detail = "/".join(str(m) for m in (totals.get("minute_gaps_detail") or [])[:5])
+            cov_line += (
+                f"；{gaps} 根分钟缺口（{detail or '明细未取到'}）—— 缺一根就让累计少一截，"
+                "所以本次不做比值"
+            )
+        if totals.get("in_progress_minute"):
+            cov_line += (
+                f"；{totals.get('in_progress_minute')} 这根仍在成形，"
+                "未计入累计与结论（盘中实时观测，不因此判数据不全）"
             )
         # 数据日已收盘而最后一根分钟线不到 15:00 → 收盘段就是「缺失」，只能如实点名。
-        last_min = str(totals.get("last_minute") or "")
+        last_min = str(totals.get("last_observed_minute") or totals.get("last_minute") or "")
         if str(intraday.get("phase") or "") == "closed" and last_min and last_min < "1500":
             cov_line += f"；⚠️ 数据日已收盘，但最后一根分钟线是 {last_min}，收盘段（至 15:00）未采集"
         sections.append(cov_line)
+        reasons = totals.get("withheld_reasons") or []
+        if reasons:
+            labels = [etf_feed.WITHHELD_LABELS.get(str(r), str(r)) for r in reasons]
+            sections.append(
+                "- **活跃度结论**：本次不给活跃度结论——" + "；".join(labels)
+                + "。只报已采集累计与上述覆盖事实，不拿残缺/不同口径样本互相比较"
+            )
         stamp = intraday.get("session_time") or ""
         ts = f"- **时点**：当前时段 {session or '未披露'}"
         if stamp:

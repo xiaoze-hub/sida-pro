@@ -294,31 +294,40 @@ def _sql_runner(conn):
     return lambda key, params=None, fmt=None: tc._read(conn, key, params or {}, fmt)
 
 
-# 5.1 覆盖率文案：闸门是 ≥16/20，不许说成「20 只齐全」
-def test_coverage_gate_is_16_of_20_not_full_basket(flow_db):
-    """16 只 = 过 80% 闸门但**不是** 20 只全齐；出口必须把两者分开报。"""
+# 5.1 齐备口径：全篮子 20/20；16/20 只的分钟是残缺分钟，不给结论
+def test_short_basket_minute_is_not_a_usable_minute(flow_db):
+    """16/20 只 ≠ 齐备（旧口径把它当「达 80% 闸门」）：出口必须报残缺、不给结论。
+
+    2026-11-10 复审反例：19 日 16/20 只的基线 + 今日 20/20 只 → 旧口径 ratio=1.25「偏活跃」。
+    齐备改成全篮子后，16/20 只的分钟既不能算进累计，也不能算进覆盖。
+    """
     _day(flow_db, _TODAY, "0930", 20, 1_000.0)
     _day(flow_db, _TODAY, "0931", 20, 1_000.0)
     _day(flow_db, _TODAY, "0932", 20, 1_000.0)
-    _day(flow_db, _TODAY, "0933", 16, 1_000.0)   # 恰好 16 只：过闸门，不全齐
+    _day(flow_db, _TODAY, "0933", 16, 1_000.0)   # 只有 16 只：不是齐备
     flow_db.commit()
 
     p = feed.intraday_payload(_sql_runner(flow_db), _TODAY, now=_NOW_LIVE)
     t = p["totals"]
     assert t["etfs_expected"] == 20
-    assert t["min_etfs_for_complete"] == 16
+    assert t["min_etfs_for_complete"] == 20, "齐备门槛就是全篮子，不再有 16 只这条闸门"
     assert t["minutes"] == 4
-    assert t["full_minutes"] == 4, "16 只已达闸门，应计入可用分钟"
-    assert t["strict_minutes"] == 3, "只有 3 个分钟真的 20 只全齐"
-    assert t["coverage"] == pytest.approx(1.0)
-    assert p["state"] != "insufficient"
+    assert t["complete_minutes"] == 3
+    assert t["full_minutes"] == t["strict_minutes"] == 3
+    assert t["minutes_short_basket"] == 1
+    assert t["coverage"] == pytest.approx(0.75)
+    assert p["state"] == "insufficient", "有残缺分钟就不给活跃度结论"
+    assert t["conclusive"] is False and t["ratio_vs_baseline"] is None
+    assert p["series"][3]["complete"] is False
 
     out = tc.render_etf_flow(
         as_of=_TODAY, source="etf_minute_flow", intraday=p,
         support={"state": "no_data"},
     )
-    assert "≥16/20" in out
-    assert "3 个为 20 只全齐" in out
+    assert "≥16/20" not in out, "80% 闸门不许再被当成「可用分钟」"
+    assert "3 个 20/20 只齐备" in out
+    assert "1 个分钟篮子缺只" in out
+    assert "不给活跃度结论" in out
     assert "20 只齐全" not in out, "16 只过闸门被写成 20 只齐全就是虚报覆盖"
     assert "未披露 亿元" not in out, "没有基线时不要拼出半个单位"
 
@@ -590,10 +599,15 @@ def _old_reference_intraday(conn, target: str) -> dict:
 
 
 def test_numeric_equivalence_with_previous_api(flow_db):
-    """同一份真表数据：新 payload 的关键数值/状态必须与重构前算法逐字段相等。"""
+    """同一份真表数据、同为全篮子时：新 payload 的关键数值/状态与重构前算法逐字段相等。
+
+    2026-11-10 复审后口径收窄：18/20 只的今日与 16/20 只的基线不再「等价」—— 旧算法把
+    它们当齐备，会算出 1.25 倍假活跃。等价的边界因此是「两侧都全篮子」，此时数值必须
+    一字不差（重构没有偷偷改算法），口径收窄的影响由 test_etf_feed_completeness 钉住。
+    """
     # 3 个基线交易日（含一天覆盖只有 10 只 → 旧/新都应剔除该日该分钟）
     for minute, wan in (("0930", 900.0), ("0931", 900.0), ("0932", 900.0)):
-        _day(flow_db, _TODAY, minute, 18, 1_000.0)   # 18 只 > 16，过闸门
+        _day(flow_db, _TODAY, minute, 20, 1_000.0)
         _day(flow_db, _BASE1, minute, 20, 800.0)
         _day(flow_db, _BASE2, minute, 20, 700.0)
         _day(flow_db, "20261102", minute, 10, 5_000.0)   # 不足 16 只 → 三天都被剔除
@@ -783,19 +797,24 @@ def test_200_of_240_minutes_is_not_a_complete_day(flow_db):
 
 
 def test_240_minutes_but_only_16_of_20_etfs_not_full(flow_db):
-    """240 分钟全在、但每分钟只有 16/20 只：过 80% 闸门 ≠ 20 只全齐，更不是「完整日」。"""
+    """240 分钟全在、但每分钟只有 16/20 只：旧口径「过 80% 闸门」= 240 个可用分钟是虚报。"""
     _bulk_minutes(flow_db, "20261104", _SESSION_MINUTES, _BASKET[:16], 100.0)
     flow_db.commit()
 
-    t = feed.intraday_payload(_sql_runner(flow_db), "20261104", now=_NOW_LIVE)["totals"]
-    assert (t["minutes"], t["full_minutes"], t["strict_minutes"]) == (240, 240, 0)
+    p = feed.intraday_payload(_sql_runner(flow_db), "20261104", now=_NOW_LIVE)
+    t = p["totals"]
+    assert (t["minutes"], t["complete_minutes"], t["strict_minutes"]) == (240, 0, 0)
+    assert t["minutes_short_basket"] == 240
+    assert t["coverage"] == 0.0
+    assert p["state"] == "insufficient"
+    assert t["conclusive"] is False and t["ratio_vs_baseline"] is None
 
     out = tc.render_etf_flow(
-        as_of="20261104", source="etf_minute_flow",
-        intraday=feed.intraday_payload(_sql_runner(flow_db), "20261104", now=_NOW_LIVE),
+        as_of="20261104", source="etf_minute_flow", intraday=p,
         support={"state": "no_data"},
     )
-    assert "0 个为 20 只全齐" in out
+    assert "0 个 20/20 只齐备" in out
+    assert "240 个分钟篮子缺只" in out
     assert "完整" not in out and "日合计" not in out
 
 
