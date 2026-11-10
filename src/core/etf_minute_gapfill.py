@@ -24,6 +24,9 @@ TQ 的 1m 分钟线全部来自客户端 `vipdoc/*/minline/*.lc1`。2026-11-05 �
 4. **假日/残缺日/取数失败都是显式失败**：`ok=False` + 结构化原因，不吞、不当成功。
    `deferred_today`（未闭市）与 `complete`（本来就有完整全篮子数据）是唯一不算失败的两类跳过；
    `complete` 只进 `complete_days`，不再混进 `deferred_days`。
+   **「有行」不等于「完整」**：`amount_wan` 为 NULL 的行算不出成交额，`existing_overview`
+   按非空金额口径判完整 —— NULL 金额日一律 partial（不补、不覆盖、必上报），否则这类
+   历史脏数据会被永久当成 complete 跳过。
 5. **不阻塞启动、不抢 TQ 客户端**：`register()` 只挂 cron；启动恢复在 daemon 线程里
    延迟执行，交易时段直接跳过。补缺请求是 20 只 ETF 一次批量（EM 侧）+ 一次日线 RPC。
 
@@ -32,8 +35,14 @@ TQ 的 1m 分钟线全部来自客户端 `vipdoc/*/minline/*.lc1`。2026-11-05 �
 - **调度级**：盘前 08:40 / 收盘后 16:50 / 补漏 18:50，三个 cron 各一次机会；
   `misfire_grace_time=900` 让发布/重启造成的短暂耽误仍能执行。
 - **单次运行内**：只对 `fetch_failed` / `write_failed` / `unverified` 这几类**可能瞬时**
-  的失败重试，`max_attempts=2`、退避 20s、整轮 deadline 480s；不对 `out_of_window` /
+  的失败重试，`max_attempts=2`、退避 20s、整轮预算 480s；不对 `out_of_window` /
   `non_trading_day` / 残缺日做无意义重试。
+- **预算不是硬上界**：`deadline_s` 只保证「预算没了就不再开新的取数/重试/退避」，
+  在途的那次 HTTP/RPC 由它自己的 timeout 收手，所以整轮可能越界。报告里
+  `deadline_s` / `elapsed_s` / `deadline_exhausted` / `deadline_breached` 四个字段
+  一起给出真相；因预算耗尽未处理的日期一律 `deadline_exceeded` 失败（`ok=False`），
+  绝不当成功。TQ 日线参照（逐只对账用）与本轮**共用同一个绝对截止时刻**，不会
+  跨日各续 90s 把预算撑破。
 - **错过 15:35 的收盘定型**：`catch_up_close()` 在 [15:35, 22:00] 窗口内、当日 0 行或
   只有本源的残缺行时重跑一次 `tq_etf_watch.run_close()`（幂等，同源 upsert）；
   一旦发现异源行立即停手，不去动别人的数据。22:00 之后不再尝试 —— 有限窗口。
@@ -41,14 +50,22 @@ TQ 的 1m 分钟线全部来自客户端 `vipdoc/*/minline/*.lc1`。2026-11-05 �
 ## 空源可观测
 
 每次运行都会：① 打 `[etf-gapfill]` 前缀的结构化日志（`empty_source` / `partial_day` /
-`backfilled` / `unfillable_gaps`）；② 未解决的缺口写一条 `EtfMinuteSourceGap` 事件进
-`error_tracker`（落 `DATA_DIR/error_events.jsonl`，即 `/api/logs` 的 `recent_errors` 面）；
-③ 把整轮报告记在模块状态里，`status()` 可读（最近一次运行、每天的状态/来源/原因、
-累计运行次数）。不是"补不上就算了"，是"补不上要在系统日志里看得见"。
+`tq_empty_attribution` / `backfilled` / `unfillable_gaps` / `incomplete_history`）；
+② 未解决的缺口写一条 `EtfMinuteSourceGap` 事件进 `error_tracker`（落
+`DATA_DIR/error_events.jsonl`，即 `/api/logs` 的 `recent_errors` 面）；③ 把整轮报告
+记在模块状态里，`status()` 可读（最近一次运行、每天的状态/来源/原因/归因、累计运行
+次数）。不是"补不上就算了"，是"补不上要在系统日志里看得见"。
+
+**0 行必须归因，不许直接说成「TQ 空源」**：库里的 0 行可能来自源本身为空，也可能来自
+采集没落库（客户端在跑、库里却没行）。`attribute_tq_empty()` 用 TQ 日线证据把两者分开：
+`tq_source_empty`（日线也没有）、`collector_missing`（日线有、分钟表 0 行 → 采集故障）、
+`tq_reference_unavailable`（拿不到日线，无从判断）、`unknown`。归因结论进日志/事件的
+`attribution` 字段，处置方向不同。
 
 另外，`survey_unfillable_gaps()` 每轮巡检最近 15 个交易日：比东财滚动窗口更早的 0 行日
 东财**补不到**，这类空洞单独以 `unfillable_gaps` 事件上报（不计入 `ok`，因为不在本模块
-能修的范围内，但绝不能因为"不在候选列表里"就从视野里消失）。
+能修的范围内，但绝不能因为"不在候选列表里"就从视野里消失）；同一窗口里的**历史残缺日**
+（16/20、金额 NULL、分钟不全）以 `incomplete_history` 上报 —— 按纪律不覆盖，但必须可见。
 """
 
 from __future__ import annotations
@@ -114,8 +131,13 @@ SURVEY_DAYS = 15
 DEFAULT_MAX_ATTEMPTS = 2
 #: 两次尝试之间的退避秒数。
 DEFAULT_RETRY_SLEEP_S = 20.0
-#: 一整轮（含重试与等待）的 wall-clock 上限，防止调度线程被拖住。
+#: 一整轮的 wall-clock **软预算**：用尽后不再开新的取数/重试，但**不是硬上界** ——
+#: 在途的那次 HTTP/RPC 只能靠它自己的 timeout 收手，报告里的 `elapsed_s` /
+#: `deadline_breached` 会把真实越界量如实写出来（旧注释谎称"上界"，实际能超出很多）。
 DEFAULT_DEADLINE_S = 480.0
+#: TQ 日线参照（逐只对账用）单次取数的预算上限；实际取 `min(这个值, 本轮剩余预算)`，
+#: 多日共用同一个绝对截止时刻（`deadline_at`），不会每天各续一份。
+DEFAULT_TQ_REF_BUDGET_S = 90.0
 #: 启动恢复线程的初始延迟：让 lifespan 先完成装配，也让 `ensure_backfilled` 先跑。
 STARTUP_DELAY_S = 150.0
 
@@ -292,7 +314,8 @@ def _emit(event: str, **fields: Any) -> None:
     降级本身就要在日志里看得见，而不是等兜底也失败才发现。
     """
     body = " ".join(f"{k}={v}" for k, v in fields.items())
-    if event in ("empty_source", "partial_day", "unverified", "backfilled", "unfillable_gaps"):
+    if event in ("empty_source", "partial_day", "unverified", "backfilled", "unfillable_gaps",
+                 "tq_empty_attribution", "incomplete_history"):
         logger.warning("[etf-gapfill] %s %s", event, body)
     else:
         logger.info("[etf-gapfill] %s %s", event, body)
@@ -337,6 +360,7 @@ def classify_day(
         "codes": 0,
         "sources": [],
         "null_source_rows": 0,
+        "null_amount_rows": 0,
         "minutes": 0,
         "missing_codes": [],
         "detail": "日期格式必须是 YYYYMMDD",
@@ -358,7 +382,8 @@ def classify_day(
         return out
 
     try:
-        ov = _em().existing_overview(engine, str(day), min_codes=gate, codes=codes)
+        em = _em()
+        ov = em.existing_overview(engine, str(day), min_codes=gate, codes=codes)
     except Exception as e:  # noqa: BLE001
         out.update(state=ST_DB_ERROR, detail=f"读库失败: {e}"[:200])
         return out
@@ -368,19 +393,32 @@ def classify_day(
         codes=int(ov.get("codes") or 0),
         sources=list(ov.get("sources") or []),
         null_source_rows=int(ov.get("null_source_rows") or 0),
+        null_amount_rows=int(ov.get("null_amount_rows") or 0),
         minutes=int(ov.get("minutes") or 0),
+        amount_minutes=int(ov.get("amount_minutes") or 0),
         missing_minutes=list(ov.get("missing_minutes") or []),
         short_codes=list(ov.get("short_codes") or []),
         missing_codes=list(ov.get("missing_codes") or []),
     )
     if out["rows"] == 0:
-        out.update(state=ST_TQ_EMPTY, detail="该交易日 0 行（TQ 空源）")
+        out.update(state=ST_TQ_EMPTY, detail="该交易日 0 行（疑 TQ 空源；归因见 attribution）")
     elif ov.get("complete"):
         out.update(state=ST_COMPLETE, detail=None)
     elif out["null_source_rows"]:
         out.update(
             state=ST_PARTIAL,
             detail=f"已有行但 {out['null_source_rows']} 行来源为 NULL/空：无法归因，不补、不覆盖",
+        )
+    elif out["null_amount_rows"]:
+        # 有行但金额为 NULL：COUNT(*) 看着满，实际算不出成交额。既不能判完整（否则
+        # 从此不再补），也不能补（会覆盖别人的行），只能显式报残缺 + 上报可观测面。
+        out.update(
+            state=ST_PARTIAL,
+            detail=(
+                f"已有行但 {out['null_amount_rows']} 行 amount_wan 为 NULL"
+                f"（{out['amount_minutes']}/{em.EXPECTED_MINUTES} 分钟有金额）："
+                "不能判完整，不补、不覆盖"
+            ),
         )
     elif out["missing_codes"]:
         out.update(
@@ -444,6 +482,76 @@ def _retryable(state: dict[str, Any], dry_run: bool) -> bool:
     return str(entry.get("reason") or "") in _RETRYABLE_REASONS
 
 
+def _cache_ref(ref):
+    """同一轮里对同一天只问一次 TQ 日线：backfill 对账与 0 行归因共用一份参照。
+
+    只缓存**成功**结果。失败不缓存 —— 一次瞬时失败之后，归因/重试还应该能重新问一次
+    （预算由 `deadline_at` 兜住，不会无限重问）。
+    """
+    if ref is None:
+        return None
+    cache: dict[str, dict[str, float]] = {}
+
+    def _cached(day: str):
+        key = str(day)
+        if key not in cache:
+            cache[key] = ref(day) or {}
+        return cache[key]
+
+    return _cached
+
+
+def attribute_tq_empty(
+    day: str,
+    *,
+    daily_ref: Callable[[str], dict[str, float]] | None,
+    codes: Sequence[str],
+) -> dict[str, Any]:
+    """给「该日 0 行」做归因，别把库里没行直接说成「TQ 空源」。
+
+    只用 TQ 自己的日线证据（和逐只对账同一份参照，不额外联网）：
+
+    - `tq_source_empty`：TQ 日线也没有该日数据 → 源本身空（客户端 `minline` 未下载/
+      该日未收录），库里的 0 行是源的真实状态；
+    - `collector_missing`：TQ 日线**有**该日数据、分钟表却 0 行 → 采集侧没落库，
+      这是采集故障，处置方式和「源空」完全不同，告警里必须分清；
+    - `tq_reference_unavailable`：拿不到日线参照（网关不可用/预算耗尽）→ 归因未知；
+    - `unknown`：本轮根本没有 TQ 参照（调用方显式没给）。
+    """
+    wanted = [str(c) for c in codes]
+    if daily_ref is None:
+        return {
+            "attribution": "unknown",
+            "attribution_detail": "本轮无 TQ 日线参照，0 行原因不可归因",
+            "tq_daily_codes": None,
+        }
+    try:
+        ref = daily_ref(day) or {}
+    except Exception as e:  # noqa: BLE001 - 归因失败不能盖掉主失败
+        return {
+            "attribution": "tq_reference_unavailable",
+            "attribution_detail": f"TQ 日线参照取不到，归因未知: {type(e).__name__}: {e}"[:220],
+            "tq_daily_codes": None,
+        }
+    have = [c for c in wanted if (ref.get(c) or 0) > 0]
+    if have:
+        return {
+            "attribution": "collector_missing",
+            "attribution_detail": (
+                f"TQ 日线有该日成交额（{len(have)}/{len(wanted)} 只）但分钟表 0 行："
+                "采集侧未落库，不是源空（TQ 客户端/调度要查）"
+            ),
+            "tq_daily_codes": len(have),
+        }
+    return {
+        "attribution": "tq_source_empty",
+        "attribution_detail": (
+            "TQ 日线同样无该日数据：分钟源本身为空（minline 未下载/该日未收录）"
+        ),
+        "tq_daily_codes": 0,
+    }
+
+
 def run_gapfill(
     dates: Sequence[str] | None = None,
     *,
@@ -469,8 +577,19 @@ def run_gapfill(
     partial 报失败且不覆盖。`deferred_days` 只放「未闭市」，complete 单独进
     `complete_days`（旧实现把 complete 混进 deferred_days，等于把"已完成"说成"排队中"）。
 
-    返回报告：`ok`、每天的 `state`/`result`/`attempts`/`reason`、`written_days`、
-    `complete_days`、`failed_days`、`deferred_days`、`empty_source_days`、`attempts`。
+    `deadline_s` 是**软预算不是硬上界**：预算用尽后不再开新的取数/重试/退避，但在途的
+    那次 HTTP/RPC 只能靠自己的 timeout 收手，所以整轮可能越界。报告如实给出
+    `elapsed_s` / `deadline_breached`；因预算耗尽而没处理的日期是 `deadline_exceeded`
+    失败（`ok=False`），绝不当成功。TQ 日线参照与逐日对账共用同一个绝对截止时刻，
+    不会"跨日各续一份预算"把 deadline 撑破。
+
+    0 行日期失败时附 `attribution`（`tq_source_empty` / `collector_missing` /
+    `tq_reference_unavailable` / `unknown`）与 `attribution_detail`：库里的 0 行
+    不等于「TQ 源空」，告警必须能区分源空与采集漏。
+
+    返回报告：`ok`、每天的 `state`/`result`/`attempts`/`reason`/`attribution`、
+    `written_days`、`complete_days`、`failed_days`、`deferred_days`、`empty_source_days`、
+    `attempts`、`deadline_s`/`elapsed_s`/`deadline_exhausted`/`deadline_breached`。
     """
     em = _em()
     eng = _require_engine(engine)
@@ -485,17 +604,33 @@ def run_gapfill(
     ]
     pending = [s for s in states if s["state"] == ST_TQ_EMPTY]
 
+    started = monotonic()
+    deadline_at = started + max(1.0, float(deadline_s))
+
     if pending and daily_ref is None:
         # 唯一路径：就地构造 TQ 日线参照。绝不退化成"不核对就写"。
-        daily_ref = em.tq_daily_ref([str(c) for c in codes])
+        # 参照取数**共用本轮的剩余预算**（deadline_at）：跨日各续 90s 会直接撑破
+        # deadline，让"整轮有上界"变成一句空话。
+        left = max(0.0, deadline_at - monotonic())
+        daily_ref = em.tq_daily_ref(
+            [str(c) for c in codes],
+            budget_s=min(DEFAULT_TQ_REF_BUDGET_S, left),
+            deadline_at=deadline_at,
+        )
+    # 归因用的是同一份参照的缓存副本：backfill 拿到的仍是调用方给的那个对象
+    # （不改变既有契约），失败日的 0 行归因只额外问一次（成功结果会被缓存）。
+    attr_ref = _cache_ref(daily_ref)
 
-    started = monotonic()
     attempts = 0
+    deadline_stop = False
     max_attempts = max(1, int(max_attempts))
     while pending and attempts < max_attempts:
+        remaining = deadline_at - monotonic()
+        if remaining <= 0:
+            # 预算在本次尝试之前就没了（分类/构造参照吃掉了时间）：一次都不再开。
+            deadline_stop = True
+            break
         attempts += 1
-        elapsed = monotonic() - started
-        remaining = max(1.0, float(deadline_s) - elapsed)
         try:
             rep = em.backfill(
                 [s["date"] for s in pending],
@@ -505,7 +640,7 @@ def run_gapfill(
                 dry_run=dry_run,
                 daily_ref=daily_ref,
                 require_verified=True,  # 写死：自动补缺不接受未经对账的数据
-                fetch_budget_s=remaining,  # 不让取数阶段把整轮 deadline 吃掉
+                fetch_budget_s=remaining,  # 取数阶段只能花剩下的预算，不许把整轮吃掉
             )
         except Exception as e:  # noqa: BLE001 - 单轮异常不该炸掉整个调度
             logger.warning("[etf-gapfill] backfill 抛异常（按可重试失败处理）: %s", e)
@@ -524,14 +659,25 @@ def run_gapfill(
             }
             s["attempts"] = attempts
         pending = [s for s in pending if _retryable(s, dry_run)]
-        if pending and attempts < max_attempts and (monotonic() - started) < deadline_s:
-            sleep(retry_sleep_s)
-            continue
-        break
+        if pending and attempts < max_attempts:
+            left = deadline_at - monotonic()
+            if left <= 0:
+                deadline_stop = True
+                break
+            # 退避也不能越过 deadline：睡到预算尽头就停，不再多开一轮。
+            sleep(min(float(retry_sleep_s), left))
+            if deadline_at - monotonic() <= 0:
+                deadline_stop = True
+                break
 
-    deadline_exceeded = bool(pending and (monotonic() - started) >= deadline_s)
+    elapsed_s = monotonic() - started
+    # `deadline_s` 是**软预算**：它只保证「不再开新活」，不保证在途的那次 HTTP/RPC
+    # 立刻返回。所以这里把真实耗时和是否越界都写进报告，不把软预算说成硬上界。
+    deadline_breached = elapsed_s > float(deadline_s)
+    deadline_exceeded = bool(pending and deadline_stop)
     if deadline_exceeded:
-        # deadline 用尽后仍是可重试失败：明确标 deadline_exceeded，不再谎报瞬时超时。
+        # 预算用尽后仍可重试的失败：明确标 deadline_exceeded（而不是原样的瞬时原因），
+        # 并且它仍然是失败（`ok=False`），不许因为「时间到了」就说成功。
         for s in pending:
             s["backfill"] = {"action": "skipped", "reason": "deadline_exceeded"}
 
@@ -550,13 +696,17 @@ def run_gapfill(
             "codes": s.get("codes", 0),
             "sources": s.get("sources", []),
             "null_source_rows": s.get("null_source_rows", 0),
+            "null_amount_rows": s.get("null_amount_rows", 0),
             "missing_codes": s.get("missing_codes", []),
             "minutes": s.get("minutes", 0),
+            "amount_minutes": s.get("amount_minutes", 0),
             "detail": s.get("detail"),
             "attempts": int(s.get("attempts") or 0),
             "result": None,
             "reason": None,
             "verified": None,
+            "attribution": None,
+            "attribution_detail": None,
         }
         entry = s.get("backfill") or {}
         if s["state"] == ST_TQ_EMPTY:
@@ -605,13 +755,26 @@ def run_gapfill(
                     or entry.get("detail") or item["detail"] or ""
                 )[:300]
                 item["missing_codes"] = entry.get("missing_codes") or item["missing_codes"]
+                # 0 行不许直接说成「TQ 空源」：先归因（源空 / 采集漏 / 无从判断），
+                # 告警里带上归因字段，处置方向才分得清。
+                attribution = attribute_tq_empty(s["date"], daily_ref=attr_ref, codes=codes)
+                item.update(attribution)
                 failures.append(item)
+                _emit(
+                    "tq_empty_attribution",
+                    date=s["date"],
+                    attribution=item["attribution"],
+                    tq_daily_codes=item["tq_daily_codes"],
+                    detail=item["attribution_detail"],
+                )
                 _publish_gap_event(
                     s["date"],
                     "empty_source",
                     f"{item['reason']}: {item['detail']}",
                     attempts=item["attempts"],
                     missing_codes=item["missing_codes"],
+                    attribution=item["attribution"],
+                    attribution_detail=item["attribution_detail"],
                 )
         elif s["state"] in _BENIGN_STATES:
             item["result"] = s["state"]
@@ -633,6 +796,7 @@ def run_gapfill(
                 _publish_gap_event(s["date"], kind, str(item["detail"] or s["state"]),
                                    rows=item["rows"], sources=item["sources"],
                                    null_source_rows=item["null_source_rows"],
+                                   null_amount_rows=item["null_amount_rows"],
                                    missing_codes=item["missing_codes"])
         days_report.append(item)
 
@@ -644,7 +808,12 @@ def run_gapfill(
         "expected_etfs": len(codes),
         "attempts": attempts,
         "max_attempts": max_attempts,
-        "deadline_exceeded": deadline_exceeded,
+        # deadline 是软预算，不是硬上界：三个字段一起看才不会误读。
+        "deadline_s": float(deadline_s),
+        "elapsed_s": round(float(elapsed_s), 3),
+        "deadline_exhausted": deadline_exceeded,
+        "deadline_breached": deadline_breached,
+        "deadline_exceeded": deadline_exceeded,  # 兼容旧字段名，语义同 deadline_exhausted
         "written_days": written,
         "complete_days": completed,
         "deferred_days": deferred,
@@ -656,7 +825,10 @@ def run_gapfill(
     }
     if empty_source and not written:
         _emit("empty_source", days=",".join(empty_source), written=0,
-              failed=len(failures))
+              failed=len(failures),
+              attribution=",".join(
+                sorted({str(f.get("attribution")) for f in failures if f.get("attribution")})
+              ) or "unknown")
     _remember(report)
     return report
 
@@ -680,8 +852,14 @@ def survey_unfillable_gaps(
 ) -> dict[str, Any]:
     """巡检比兜底窗口更早的空洞：东财补不到，必须显式上报而不是当作"最近没缺口"。
 
-    不计入 `ok`（这不是本模块能修的范围），但会打 ERROR 日志 + 一条可观测事件，
-    并出现在报告的 `unfillable_days` 里。
+    两类历史问题都要看得见（**只读**，一行都不写、也不触发补缺）：
+
+    - `unfillable_days`：0 行日 —— 东财也补不到，需人工补数；
+    - `incomplete_days`：**残缺日**（16/20、金额 NULL、分钟不全…）—— 自动补缺按纪律
+      绝不覆盖别人的行，所以它永远不会自己变好；不能因为「不是 0 行」就从视野里消失，
+      否则库里那半天数据会静默地一直当下游基线。逐日带 `detail` 上报。
+
+    不计入 `ok`（这不是本模块能修的范围），但会打 ERROR 日志 + 可观测事件。
     """
     em = _em()
     eng = _require_engine(engine)
@@ -693,10 +871,19 @@ def survey_unfillable_gaps(
     older = [d for d in _candidate_dates(None, days, today) if d not in inside]
 
     unfillable: list[str] = []
+    incomplete: list[dict[str, Any]] = []
     for day in older:
         st = classify_day(day, today=today, engine=eng, gate=gate, codes=codes)
         if st["state"] == ST_TQ_EMPTY:
             unfillable.append(day)
+        elif st["state"] == ST_PARTIAL:
+            incomplete.append({
+                "date": day,
+                "rows": st.get("rows", 0),
+                "codes": st.get("codes", 0),
+                "null_amount_rows": st.get("null_amount_rows", 0),
+                "detail": st.get("detail"),
+            })
     if unfillable:
         logger.error(
             "[etf-gapfill] unfillable_gaps days=%s 超出东财滚动窗口(%s 个交易日)，需人工补数",
@@ -708,7 +895,27 @@ def survey_unfillable_gaps(
             f"超出兜底窗口的 0 行交易日 {len(unfillable)} 个，东财补不到",
             days=unfillable,
         )
-    return {"surveyed": len(older), "window_days": sorted(inside), "unfillable_days": unfillable}
+    if incomplete:
+        # 不覆盖是纪律，但「不覆盖」不等于「不用管」：残缺历史必须进可观测面。
+        _emit(
+            "incomplete_history",
+            days=",".join(i["date"] for i in incomplete),
+            count=len(incomplete),
+            null_amount_rows=sum(int(i["null_amount_rows"] or 0) for i in incomplete),
+        )
+        _publish_gap_event(
+            f"{incomplete[0]['date']}~{incomplete[-1]['date']}",
+            "incomplete_history",
+            f"超出兜底窗口的历史残缺日 {len(incomplete)} 个：按纪律不覆盖，需人工评估是否重采",
+            days=[i["date"] for i in incomplete],
+            incomplete=incomplete,
+        )
+    return {
+        "surveyed": len(older),
+        "window_days": sorted(inside),
+        "unfillable_days": unfillable,
+        "incomplete_days": incomplete,
+    }
 
 
 # ── 错过 15:35 收盘定型：有限窗口补跑（TQ 自身） ─────────────────────────
@@ -814,6 +1021,7 @@ def run_after_close(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     retry_sleep_s: float = DEFAULT_RETRY_SLEEP_S,
     sleep: Callable[[float], None] = time.sleep,
+    deadline_s: float = DEFAULT_DEADLINE_S,
 ) -> dict[str, Any]:
     """收盘后一轮：先补跑错过的 15:35 定型，再补已闭市日的 TQ 空源。"""
     now = _app_now(now)
@@ -830,6 +1038,7 @@ def run_after_close(
         max_attempts=max_attempts,
         retry_sleep_s=retry_sleep_s,
         sleep=sleep,
+        deadline_s=deadline_s,
     )
     survey = survey_unfillable_gaps(now=now, engine=eng, codes=codes)
     return {
@@ -837,6 +1046,7 @@ def run_after_close(
         "close": close,
         "gapfill": gap,
         "unfillable_days": survey["unfillable_days"],
+        "incomplete_days": survey["incomplete_days"],
     }
 
 
@@ -932,6 +1142,7 @@ def job_morning() -> dict[str, Any]:
         out = run_gapfill(days=DEFAULT_DAYS)
         survey = survey_unfillable_gaps()
         out["unfillable_days"] = survey["unfillable_days"]
+        out["incomplete_days"] = survey["incomplete_days"]
         return out
     except Exception as e:  # noqa: BLE001
         logger.error("[etf-gapfill] 盘前补缺失败: %s", e)

@@ -26,6 +26,8 @@
    旧的 80%/16 只闸门已删除，16/20 一律判残缺）—— 整天不写，报告里写原因。
    绝不留半天数据。对账只在「每一只待写标的都拿到日线参照且都在容差内」时才标记
    `verified=True`，否则 CLI 默认拒绝写入并退出非 0。
+   `existing_overview` 的完整性按**非空金额**判（`amount_wan IS NULL` 的行不算数）：
+   有行没金额的日子和只有半天一样残缺，不能因为 `COUNT(*)` 满了就判 complete。
 
 口径（对齐 TQ，逐条实测标定）：
 
@@ -399,13 +401,20 @@ def existing_overview(
 ) -> dict[str, Any]:
     """该交易日现有行概览：行数、标的数、来源集合、分钟覆盖（混源/残缺排查用）。
 
+    **「有行」不等于「有金额」**：`amount_wan` 是可空列，缺金额的行（历史脏写/半截
+    落库）在 `COUNT(*)` 眼里和正常行一样多。只按行数判完整会把这种日子说成
+    `complete`，自动补缺从此跳过它 —— 库里永久留着一个算不出成交额的洞。所以完整性
+    一律按**非空金额**这一口径统计（`amount_rows` / `null_amount_rows`），并把
+    `gap_dates()` 早就用的 `amount_wan IS NOT NULL` 口径统一到判定处。
+
     `complete=True` 的条件（全部满足）：
     - 只有一个来源，且**没有 NULL/空来源**——来源未标明的行不能被算进任何一方，
       否则 `sources=["tdx_tq"]` 会把一批来历不明的行说成 TQ 的（归因造假）；
+    - **没有任何金额为 NULL 的行**（`null_amount_rows == 0`）；
     - 标的数 ≥ `min_codes`；传了 `codes` 时还要求这些标的**全部在库**（少一只就是
       残缺，不能因为总数凑够 20 就把缺的那只掩盖掉）；
     - 该日出现的分钟**恰好**是 240 个交易分钟；
-    - 每只标的的行数都是 240（没有「某只只写了半天」）。
+    - 每只标的**非空金额**的行数都是 240（没有「某只只写了半天」/「某只金额全空」）。
     不满足就是 partial —— 不能因为 `COUNT(*) > 0` 就当成「已采完」。
     """
     from sqlalchemy import text
@@ -414,15 +423,18 @@ def existing_overview(
     with engine.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT COUNT(*) AS rows, COUNT(DISTINCT etf_code) AS codes "
+                "SELECT COUNT(*) AS rows, COUNT(DISTINCT etf_code) AS codes, "
+                "SUM(CASE WHEN amount_wan IS NULL THEN 1 ELSE 0 END) AS null_amount_rows, "
+                "SUM(CASE WHEN amount_wan IS NULL THEN 0 ELSE 1 END) AS amount_rows "
                 "FROM etf_minute_flow WHERE trade_date = :d"
             ),
             {"d": day},
         ).mappings().first() or {}
         per_code = conn.execute(
             text(
-                "SELECT etf_code, COUNT(*) AS n FROM etf_minute_flow "
-                "WHERE trade_date = :d GROUP BY etf_code"
+                "SELECT etf_code, COUNT(*) AS n, "
+                "SUM(CASE WHEN amount_wan IS NULL THEN 1 ELSE 0 END) AS null_n "
+                "FROM etf_minute_flow WHERE trade_date = :d GROUP BY etf_code"
             ),
             {"d": day},
         ).all()
@@ -430,6 +442,16 @@ def existing_overview(
             str(r[0])
             for r in conn.execute(
                 text("SELECT DISTINCT minute FROM etf_minute_flow WHERE trade_date = :d"),
+                {"d": day},
+            ).all()
+        ]
+        amount_minutes = [
+            str(r[0])
+            for r in conn.execute(
+                text(
+                    "SELECT DISTINCT minute FROM etf_minute_flow "
+                    "WHERE trade_date = :d AND amount_wan IS NOT NULL"
+                ),
                 {"d": day},
             ).all()
         ]
@@ -441,6 +463,8 @@ def existing_overview(
             {"d": day},
         ).all()
     counts = {str(r[0]): int(r[1] or 0) for r in per_code}
+    null_amount_by_code = {str(r[0]): int(r[2] or 0) for r in per_code}
+    amount_counts = {c: counts[c] - null_amount_by_code.get(c, 0) for c in counts}
     src_counts: dict[str, int] = {}
     null_source_rows = 0
     for raw_source, n in source_rows:
@@ -452,19 +476,26 @@ def existing_overview(
         key = str(raw_source).strip()
         src_counts[key] = src_counts.get(key, 0) + n
     present = set(minutes)
+    amount_present = set(amount_minutes)
     missing = [m for m in SESSION_MINUTES if m not in present]
+    amount_missing = [m for m in SESSION_MINUTES if m not in amount_present]
     extra = sorted(present - set(SESSION_MINUTES))
-    short_codes = sorted(c for c, n in counts.items() if n != EXPECTED_MINUTES)
+    # 「短」按非空金额口径算：一只标的有 240 行但金额全空，和只写了 100 行一样残缺。
+    short_codes = sorted(c for c, n in amount_counts.items() if n != EXPECTED_MINUTES)
+    null_amount_codes = sorted(c for c, n in null_amount_by_code.items() if n)
     missing_codes = sorted(set(required) - set(counts))
     unexpected_codes = sorted(set(counts) - set(required)) if required else []
     uniq_sources = sorted(src_counts)
+    null_amount_rows = int(row.get("null_amount_rows") or 0)
     complete = bool(
         counts
         and len(uniq_sources) == 1
         and null_source_rows == 0
+        and null_amount_rows == 0
         and len(counts) >= max(1, int(min_codes))
         and not missing_codes
         and not missing
+        and not amount_missing
         and not extra
         and not short_codes
     )
@@ -473,8 +504,13 @@ def existing_overview(
         "codes": int(row.get("codes") or 0),
         "sources": uniq_sources,
         "null_source_rows": null_source_rows,
+        "null_amount_rows": null_amount_rows,
+        "amount_rows": int(row.get("amount_rows") or 0),
+        "null_amount_codes": null_amount_codes,
         "minutes": len(present),
+        "amount_minutes": len(amount_present),
         "missing_minutes": missing[:5],
+        "amount_missing_minutes": amount_missing[:5],
         "extra_minutes": extra[:5],
         "short_codes": short_codes[:5],
         "expected_codes": required,
@@ -597,8 +633,8 @@ def _plan(
     except Exception as e:  # noqa: BLE001
         return {"date": day, "action": "skipped", "reason": "db_unavailable", "error": str(e)[:200]}
     if ov["rows"]:
-        # 关键：有行 ≠ 已采完。只写了一两只、或某只只写了半天，都是 partial，
-        # 必须作为**失败**暴露给 CLI，而不是当成「已补过」静默成功。
+        # 关键：有行 ≠ 已采完。只写了一两只、或某只只写了半天、或金额为 NULL 的行，
+        # 都是 partial，必须作为**失败**暴露给 CLI，而不是当成「已补过」静默成功。
         return {
             "date": day,
             "action": "skipped",
@@ -607,6 +643,7 @@ def _plan(
             "existing_codes": ov["codes"],
             "existing_sources": ov["sources"],
             "existing_null_source_rows": ov["null_source_rows"],
+            "existing_null_amount_rows": ov.get("null_amount_rows", 0),
             "existing_minutes": ov["minutes"],
             "existing_short_codes": ov["short_codes"],
             "existing_missing_minutes": ov["missing_minutes"],
@@ -642,6 +679,7 @@ def tq_daily_ref(
     *,
     timeout: float = 15.0,
     budget_s: float = 90.0,
+    deadline_at: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> DayRef:
     """构造「TQ 日线成交额（万元）」参照函数，用于逐只对账。
@@ -653,15 +691,30 @@ def tq_daily_ref(
     整轮 deadline 形同虚设（deadline 只在外层重试之间检查，无法打断一次同步 RPC）。
     这里给**整次参照取数**一个 wall-clock 预算：每页超时取 `min(timeout, 剩余预算)`，
     预算耗尽即停止；拿不到任何参照时抛带「预算」字样的错误，让上层显式失败。
+
+    预算的作用域是**这个被返回的参照函数**，不是单日：补 4 个已闭市日会调用它 4 次，
+    若每次重新起算 90s，合计 6 分钟就能把整轮 deadline 撑破。所以：
+    - `deadline_at`（`monotonic()` 时间轴上的绝对时刻）一旦给出，**所有日子共用**
+      同一个截止时刻，跨日不会各自续期；
+    - 未给 `deadline_at` 时按 `budget_s` 起算一次，后续每日调用同样共用这个绝对时刻。
     """
     wanted = {str(c) for c in codes}
-    deadline_budget = max(1.0, float(budget_s))
+    first_call_deadline: list[float] = []
+
+    def _deadline() -> float:
+        if first_call_deadline:
+            return first_call_deadline[0]
+        deadline = monotonic() + max(1.0, float(budget_s))
+        if deadline_at is not None:
+            deadline = min(deadline, float(deadline_at))
+        first_call_deadline.append(deadline)
+        return deadline
 
     def _ref(day: str) -> dict[str, float]:
         from src.collectors.tq_etf_watch import _num as _tq_num
         from src.collectors.tq_etf_watch import _rpc_full
 
-        deadline = monotonic() + deadline_budget
+        deadline = _deadline()
         out: dict[str, float] = {}
         for page in range(40):
             remaining = deadline - monotonic()
@@ -695,8 +748,9 @@ def tq_daily_ref(
             if not new or not payload.get("has_more") or set(out) >= wanted:
                 break
         if not out:
+            spent = max(0.0, float(budget_s))
             raise RuntimeError(
-                f"TQ 日线不含 {day} 的成交额（网关无数据/该日未收录/超出 {deadline_budget:.0f}s 取数预算）"
+                f"TQ 日线不含 {day} 的成交额（网关无数据/该日未收录/超出 {spent:.0f}s 共享取数预算）"
             )
         if set(out) < wanted:
             # 部分参照不能悄悄当成完整参照：上层按 missing 逐只丢弃并拒绝写入。
@@ -737,6 +791,8 @@ def backfill(
 
     `fetch_budget_s` 是取数阶段（20 只 HTTP）的 wall-clock 预算：超时后不再发新请求，
     剩余标的记 `fetch_budget_exhausted`，避免一次慢请求把调度线程拖到整轮 deadline 之外。
+    它同样是**软预算**：在途的那一次请求由自己的 timeout 收手，所以取数阶段可能小幅越界，
+    但不会「20 只 × 各自超时」那样成倍叠加。
 
     报告里每天都有 `action`（written/planned/skipped）、`reason`、`rows`、`etfs`、
     `expected_etfs`、`missing_codes`、`dropped`（被丢弃的标的及原因）、`reconciled`、
@@ -905,6 +961,7 @@ def backfill(
                     existing_codes=ov["codes"],
                     existing_sources=ov["sources"],
                     existing_null_source_rows=ov["null_source_rows"],
+                    existing_null_amount_rows=ov.get("null_amount_rows", 0),
                     existing_missing_codes=ov["missing_codes"],
                     existing_minutes=ov["minutes"],
                 )

@@ -295,20 +295,65 @@ def test_non_retryable_failure_is_not_retried(iso_engine, monkeypatch):
     assert rep["attempts"] == 1 and rep["ok"] is False
 
 
-def test_retry_stops_at_deadline(iso_engine, monkeypatch):
-    """整轮 deadline 用尽后不再 sleep/重试（防止把调度线程拖死）。"""
-    clock = iter([0.0, 1000.0, 2000.0, 3000.0, 4000.0])
+def test_deadline_is_soft_budget_and_never_masked_as_success(iso_engine, monkeypatch, gap_events):
+    """可控慢响应：预算用尽 → 不再开新一轮；剩余日期是 deadline_exceeded 失败，ok=False。
+
+    `deadline_s` 只是「不再开新活」的软预算，但绝不能因为「时间到了」就把没补的日子
+    说成成功，也不能睡过预算再偷偷开一轮。
+    """
+    clock = [0.0]
     slept: list[float] = []
-    monkeypatch.setattr(
-        em, "backfill",
-        lambda dates, **kw: {"days": [{"date": _DAY, "action": "skipped", "reason": "write_failed"}]},
+    calls: list[int] = []
+
+    def _slow_backfill(dates, **kw):
+        calls.append(1)
+        assert kw["fetch_budget_s"] <= 10.0, "取数预算不能超过整轮剩余预算"
+        clock[0] += 5.0  # 一次调用吃掉 5s（远小于退避 20s）
+        return {"days": [{"date": d, "action": "skipped", "reason": "fetch_failed"}
+                         for d in dates]}
+
+    def _sleep(s):
+        slept.append(s)
+        clock[0] += s
+
+    monkeypatch.setattr(em, "backfill", _slow_backfill)
+    rep = gap.run_gapfill(
+        [_DAY], engine=iso_engine, now=_TODAY, codes=_CODES,
+        daily_ref=lambda d: {c: 1.0 for c in _CODES},
+        sleep=_sleep, max_attempts=5, deadline_s=10.0,
+        monotonic=lambda: clock[0],
     )
-    rep = gap.run_gapfill([_DAY], engine=iso_engine, now=_TODAY, codes=_CODES,
-                          daily_ref=lambda d: {}, sleep=slept.append, max_attempts=5,
-                          deadline_s=10.0, monotonic=lambda: next(clock))
-    assert slept == []
-    assert rep["attempts"] == 1
+    assert calls == [1], "预算耗尽后不许再开新一轮"
+    assert slept and slept[0] <= 5.0, f"退避不能越过 deadline: {slept}"
     assert rep["ok"] is False
+    assert rep["deadline_exhausted"] is True and rep["deadline_exceeded"] is True
+    assert rep["elapsed_s"] >= 10.0
+    day = rep["days"][0]
+    assert day["result"] == "failed" and day["reason"] == "deadline_exceeded"
+    assert rep["failed_days"] == [_DAY]
+    assert [e[1] for e in gap_events] == ["empty_source"]
+
+
+def test_deadline_overrun_is_reported_not_hidden(iso_engine, monkeypatch):
+    """在途 RPC 超出预算是事实：报告要写 deadline_breached，而不是宣称「上界之内」。"""
+    clock = [0.0]
+
+    def _very_slow(dates, **kw):
+        clock[0] += 30.0  # 一次在途调用越界 3 倍
+        return {"days": [{"date": d, "action": "skipped", "reason": "fetch_failed"}
+                         for d in dates]}
+
+    monkeypatch.setattr(em, "backfill", _very_slow)
+    rep = gap.run_gapfill(
+        [_DAY], engine=iso_engine, now=_TODAY, codes=_CODES,
+        daily_ref=lambda d: {},
+        sleep=lambda s: None, max_attempts=3, deadline_s=10.0,
+        monotonic=lambda: clock[0],
+    )
+    assert rep["deadline_breached"] is True
+    assert rep["elapsed_s"] >= 30.0
+    assert rep["ok"] is False
+    assert rep["days"][0]["reason"] == "deadline_exceeded"
 
 
 def test_backfill_exception_is_retried_then_reported(iso_engine, monkeypatch, gap_events):
@@ -704,6 +749,187 @@ def test_in_session_normalizes_aware_utc():
 
     assert gap._in_session(datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)) is True
     assert gap._in_session(datetime(2026, 11, 10, 4, 0, tzinfo=timezone.utc)) is False
+
+
+# ── 10. NULL 金额 / 历史残缺可见 / 共享预算 / 0 行归因 / 20-20 规则 ────────
+
+def test_existing_overview_never_treats_null_amount_as_complete(iso_engine):
+    """`amount_wan` 为 NULL 的行算不出成交额：不能因为 COUNT(*) 满 240 就判完整。"""
+    for c in _CODES:
+        _insert(iso_engine, _DAY, c, em.SESSION_MINUTES)
+    ov_ok = em.existing_overview(iso_engine, _DAY, min_codes=len(_CODES), codes=_CODES)
+    assert ov_ok["complete"] is True
+    assert ov_ok["null_amount_rows"] == 0 and ov_ok["amount_rows"] == 240 * len(_CODES)
+
+    with iso_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE etf_minute_flow SET amount_wan = NULL WHERE etf_code = :c"),
+            {"c": _CODES[0]},
+        )
+    ov = em.existing_overview(iso_engine, _DAY, min_codes=len(_CODES), codes=_CODES)
+    assert ov["complete"] is False, "NULL 金额日被当完整 → 自动补缺从此不再修它"
+    assert ov["null_amount_rows"] == len(em.SESSION_MINUTES)
+    assert ov["null_amount_codes"] == [_CODES[0]]
+    assert ov["short_codes"] == [_CODES[0]]
+    assert ov["rows"] == 240 * len(_CODES) and ov["amount_rows"] == 240 * (len(_CODES) - 1)
+    assert ov["amount_minutes"] == len(em.SESSION_MINUTES)
+
+
+def test_null_amount_day_is_partial_observable_and_never_overwritten(iso_engine, monkeypatch, gap_events):
+    """历史 NULL 金额日：报 partial + 事件里带 null_amount_rows，一行都不许改。"""
+    for c in _CODES:
+        _insert(iso_engine, _DAY, c, em.SESSION_MINUTES)
+    with iso_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE etf_minute_flow SET amount_wan = NULL WHERE etf_code = :c"),
+            {"c": _CODES[-1]},
+        )
+    before = _count(iso_engine)
+    _no_backfill(monkeypatch)
+
+    rep = gap.run_gapfill([_DAY], engine=iso_engine, now=_TODAY, codes=_CODES)
+    day = rep["days"][0]
+    assert day["state"] == gap.ST_PARTIAL and day["result"] == "partial"
+    assert day["null_amount_rows"] == len(em.SESSION_MINUTES)
+    assert "NULL" in day["detail"]
+    assert rep["ok"] is False and rep["failed_days"] == [_DAY]
+    assert _count(iso_engine) == before, "残缺日一行都不许动"
+    assert [e[1] for e in gap_events] == ["partial_day"]
+    assert gap_events[0][3]["null_amount_rows"] == len(em.SESSION_MINUTES)
+
+
+def test_legacy_incomplete_history_outside_window_is_surveyed_not_fixed(iso_engine, monkeypatch, gap_events):
+    """窗口外的历史残缺日：补不到也不能从视野里消失，且绝不覆盖。"""
+    old = "20261028"
+    for c in _BASKET[:16]:
+        _insert(iso_engine, old, c, em.SESSION_MINUTES, source="tdx_tq")
+    before = _count(iso_engine)
+    _no_backfill(monkeypatch)
+
+    out = gap.survey_unfillable_gaps(now=_TODAY, engine=iso_engine, codes=_BASKET, days=15)
+    assert old not in out["window_days"]
+    assert [i["date"] for i in out["incomplete_days"]] == [old]
+    detail = out["incomplete_days"][0]
+    assert detail["codes"] == 16 and detail["rows"] == 16 * len(em.SESSION_MINUTES)
+    kinds = [e[1] for e in gap_events]
+    assert "unfillable_gaps" in kinds  # 更早的 0 行日照旧单独上报
+    inc = [e for e in gap_events if e[1] == "incomplete_history"]
+    assert len(inc) == 1 and inc[0][3]["days"] == [old]
+    assert _count(iso_engine) == before, "巡检是只读的，一行都不许动"
+
+
+def test_tq_daily_ref_shares_one_deadline_across_days(monkeypatch):
+    """跨日共用剩余预算：第一天耗尽后，第二天不许重新起算再发 RPC。"""
+    from src.collectors import tq_etf_watch as tqw
+
+    clock = [0.0]
+    calls: list[int] = []
+
+    def _fake_rpc(_op, params, timeout=None):
+        calls.append(int(params["stock_page_index"]))
+        clock[0] += 40.0
+        return {"Value": {"510300.SH": {"Date": [], "Amount": []}}, "has_more": True}
+
+    monkeypatch.setattr(tqw, "_rpc_full", _fake_rpc)
+    ref = em.tq_daily_ref(["510300.SH"], budget_s=90.0, monotonic=lambda: clock[0])
+    with pytest.raises(RuntimeError) as first:
+        ref("20261106")
+    assert len(calls) == 3, f"90s 预算 / 每次 40s 只该发 3 页，实际 {calls}"
+    assert "共享取数预算" in str(first.value)
+
+    with pytest.raises(RuntimeError):
+        ref("20261105")
+    assert len(calls) == 3, "第二天不能各续一份预算（会成倍撑破整轮 deadline）"
+
+
+def test_attribute_tq_empty_separates_source_empty_from_collector_missing():
+    codes = list(_CODES)
+    assert gap.attribute_tq_empty(_DAY, daily_ref=None, codes=codes)["attribution"] == "unknown"
+
+    missing = gap.attribute_tq_empty(
+        _DAY, daily_ref=lambda d: {c: 5.0 for c in codes}, codes=codes)
+    assert missing["attribution"] == "collector_missing"
+    assert missing["tq_daily_codes"] == len(codes)
+    assert "不是源空" in missing["attribution_detail"]
+
+    empty = gap.attribute_tq_empty(_DAY, daily_ref=lambda d: {}, codes=codes)
+    assert empty["attribution"] == "tq_source_empty" and empty["tq_daily_codes"] == 0
+
+    def _boom(day):
+        raise RuntimeError("gateway down")
+
+    unknown = gap.attribute_tq_empty(_DAY, daily_ref=_boom, codes=codes)
+    assert unknown["attribution"] == "tq_reference_unavailable"
+    assert "gateway down" in unknown["attribution_detail"]
+
+
+def test_zero_row_failure_carries_attribution_in_report_and_event(iso_engine, monkeypatch, gap_events):
+    """0 行失败必须归因：TQ 日线有数据 → collector_missing（采集漏），不是「源空」。"""
+    monkeypatch.setattr(
+        em, "backfill",
+        lambda dates, **kw: {"days": [{"date": d, "action": "skipped", "reason": "unverified",
+                                       "reconcile_error": "TQ 无该日"} for d in dates]},
+    )
+    rep = gap.run_gapfill(
+        [_DAY], engine=iso_engine, now=_TODAY, codes=_CODES,
+        daily_ref=lambda d: {c: 5.0 for c in _CODES}, max_attempts=1,
+    )
+    day = rep["days"][0]
+    assert day["result"] == "failed" and day["reason"] == "unverified"
+    assert day["attribution"] == "collector_missing"
+    assert day["tq_daily_codes"] == len(_CODES)
+    assert gap_events[0][1] == "empty_source"
+    assert gap_events[0][3]["attribution"] == "collector_missing"
+    assert "tq_daily_codes" not in gap_events[0][3]
+
+    monkeypatch.setattr(
+        em, "backfill",
+        lambda dates, **kw: {"days": [{"date": d, "action": "skipped", "reason": "fetch_failed"}
+                                      for d in dates]},
+    )
+    rep2 = gap.run_gapfill(
+        [_DAY], engine=iso_engine, now=_TODAY, codes=_CODES,
+        daily_ref=lambda d: {}, max_attempts=1,
+    )
+    assert rep2["days"][0]["attribution"] == "tq_source_empty"
+
+
+def test_full_basket_20_of_20_rule_is_kept(iso_engine, monkeypatch, gap_events):
+    """闸门仍是真实全篮子 20/20：19/20 也必须是残缺，不写、不覆盖。"""
+    assert gap._coverage_gate(len(_BASKET)) == len(_BASKET) == 20
+    assert em._gate(len(_BASKET)) == 20
+
+    for c in _BASKET[:19]:
+        _insert(iso_engine, _DAY, c, em.SESSION_MINUTES, source="tdx_tq")
+    before = _count(iso_engine)
+    _no_backfill(monkeypatch)
+
+    rep = gap.run_gapfill([_DAY], engine=iso_engine, now=_TODAY, codes=_BASKET)
+    day = rep["days"][0]
+    assert day["state"] == gap.ST_PARTIAL and day["codes"] == 19
+    assert day["missing_codes"] == sorted(_BASKET[19:])
+    assert rep["ok"] is False and rep["written_days"] == []
+    assert _count(iso_engine) == before
+    assert [e[1] for e in gap_events] == ["partial_day"]
+
+
+def test_successful_rewrite_does_not_force_attribution_lookup(iso_engine, monkeypatch):
+    """写入成功的日子不该为归因额外问 TQ（参照只服务对账）。"""
+    calls: list[str] = []
+
+    def _fake_backfill(dates, **kw):
+        return {"days": [{"date": d, "action": "written", "rows": 720, "etfs": len(_CODES),
+                          "verified": True} for d in dates]}
+
+    monkeypatch.setattr(em, "backfill", _fake_backfill)
+
+    def _ref(day):
+        calls.append(day)
+        return {c: 1.0 for c in _CODES}
+
+    rep = gap.run_gapfill([_DAY], engine=iso_engine, now=_TODAY, codes=_CODES, daily_ref=_ref)
+    assert rep["days"][0]["attribution"] is None
+    assert calls == [], f"写入成功不需要归因取参照: {calls}"
 
 
 def test_startup_recovery_skips_tq_close_window(iso_engine, monkeypatch):
