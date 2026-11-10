@@ -9,8 +9,10 @@
    日期必须严格解析（`YYYY-MM-DD` / `YYYYMMDD` 且是真实日历日），源里别的日子必须过滤。
 4. 沪深**两个市场强制在场**：缺一个就是 gap，合计不得标完整。
 5. 新上市与终止必须从"可比口径"里剔除并单列；恒等式要闭合。
-6. 只有**相邻交易日**的份额差才允许叫"净申购"；跨日/跨节假日区间只是份额差。
-7. 免费交易所接口不含货币 ETF，必须在报告里显式说明缺口，且不得称完整全市场。
+6. 份额差**在任何情况下都不叫"净申购"**（无任何 `net_subscription` 数值）；
+   `adjacent_session` 只是"日历上相邻"的提示，不构成称净申购的许可。
+7. 免费交易所接口不含沪市货币 ETF，必须在报告里显式说明缺口（且缺口是**未知集合**，
+   不能写成"只缺三只"），且不得称完整全市场。
 8. 模块是纯只读：不 import web/DB 层，没有任何写库/写文件路径。
 9. CLI 在报告不完整时必须返回非 0。
 """
@@ -22,6 +24,7 @@ import io
 import json
 import math
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -153,6 +156,16 @@ def test_blank_or_bad_tot_vol_dropped_and_counted_not_zero_filled():
     # 关键：被丢弃的没有变成 0 份额行混进合计
     assert [r.code for r in day.rows] == ["510300"]
     assert day.sum_shares == pytest.approx(100 * 1e4)
+    # 丢行即低报 → 该日必须 fail-closed，报告不出部分和
+    assert day.usable is False
+    assert "dropped_rows" in (day.gap_reason or "")
+    assert day.warnings
+    report = m.build_dry_run({"2026-11-09": [day]})
+    assert report["markets"]["SSE"]["sum_shares"] is None
+    assert report["markets"]["SSE"]["sum_withheld"] is True
+    assert report["market_total"]["sum_shares"] is None
+    assert report["market_total"]["sum_withheld"] is True
+    assert m.cli_exit_code(report) != 0
 
 
 def test_missing_date_is_gap_not_zero():
@@ -403,6 +416,37 @@ def test_build_dry_run_forces_both_markets():
     assert report["complete"] is False
 
 
+def test_multi_date_mapping_infers_prev_instead_of_dropping_it():
+    """`{date: [...]}` 给了两天：更早那天必须当 prev，不许静默丢掉。"""
+    def day(date_str, sse_vol, sz_shares):
+        return [
+            m.parse_sse_payload(_sse([_sse_row("510300", sse_vol, stat_date=date_str)]), date_str),
+            m.parse_szse_records([_szse_row(158000, sz_shares, d=date_str)], date_str),
+        ]
+
+    report = m.build_dry_run({
+        "2026-11-06": day("2026-11-06", "1000", 1e6),
+        "2026-11-09": day("2026-11-09", "1100", 2e6),
+    })
+    sc = report["share_change"]
+    assert report["prev_requested"] == "2026-11-06"
+    assert sc["prev_source"] == "inferred_from_days"
+    assert sc["available"] is True
+    assert sc["label"] == "share_change"
+    assert sc["complete"] is True
+    assert set(sc["by_market"]) == {"SSE", "SZSE"}
+    assert sc["comparable_change_shares"] == pytest.approx(100 * 1e4 + 1e6)
+    assert report["complete"] is True
+
+    # 三天以上：多余的更早日期要显式列出来，不能悄悄吃进变动里
+    report3 = m.build_dry_run({
+        "2026-11-05": day("2026-11-05", "900", 5e5),
+        "2026-11-06": day("2026-11-06", "1000", 1e6),
+        "2026-11-09": day("2026-11-09", "1100", 2e6),
+    })
+    assert report3["share_change"]["unused_dates"] == ["2026-11-05"]
+
+
 def test_missing_prev_market_still_exposed_as_gap():
     sse_p = m.parse_sse_payload(_sse([_sse_row("510300", "100")], "2026-11-06"), "2026-11-06")
     sse_c = m.parse_sse_payload(_sse([_sse_row("510300", "110")], "2026-11-09"), "2026-11-09")
@@ -447,15 +491,23 @@ def test_szse_multi_day_window_data_date_is_requested_not_max():
     assert day.out_of_date_rows == 2
 
 
-def test_iter_windows_splits_at_six_months():
+def test_iter_windows_splits_at_calendar_six_months():
+    """深交所上限是 6 个**日历月**（183 天是错的，实测 +1 天整窗回占位行）。"""
     wins = m.iter_windows("2025-01-01", "2026-11-09")
     assert len(wins) >= 4
     for s, e in wins:
         d0 = m.parse_date_strict(s)
         d1 = m.parse_date_strict(e)
-        assert (d1 - d0).days < m.SZSE_MAX_WINDOW_DAYS
+        assert d0 is not None and d1 is not None
+        assert d1 <= m._add_months(d0, m.SZSE_MAX_WINDOW_MONTHS)
+        assert d0 <= d1
     assert wins[0][0] == "2025-01-01"
     assert wins[-1][1] == "2026-11-09"
+    # 窗口连续、无空洞：每个下一窗口从上一窗口 +1 天开始
+    for (_, prev_end), (next_start, _) in zip(wins, wins[1:]):
+        end_d = m.parse_date_strict(prev_end)
+        assert end_d is not None
+        assert (end_d + timedelta(days=1)).isoformat() == next_start
 
 
 def test_fetch_szse_window_splits_and_merges_over_six_months():
@@ -468,11 +520,14 @@ def test_fetch_szse_window_splits_and_merges_over_six_months():
     days = m.fetch_szse_window("2025-01-01", "2026-11-09", http=fake)
     assert len(calls) >= 4
     for p in calls:
-        span = (m.parse_date_strict(p["txtEnd"]) - m.parse_date_strict(p["txtStart"])).days
-        assert span < m.SZSE_MAX_WINDOW_DAYS
+        d0 = m.parse_date_strict(p["txtStart"])
+        d1 = m.parse_date_strict(p["txtEnd"])
+        assert d0 is not None and d1 is not None
+        assert d1 <= m._add_months(d0, m.SZSE_MAX_WINDOW_MONTHS)
     expected_keys = [s for s, _ in m.iter_windows("2025-01-01", "2026-11-09")]
     assert sorted(days) == sorted(expected_keys)
     assert all(d.usable for d in days.values())
+    assert days.failed_windows == []
 
 
 def test_szse_no_data_sentinel_reported_as_empty_result_not_schema_error():
@@ -592,7 +647,43 @@ def test_fetch_sse_uses_trade_date_param():
     day = m.fetch_sse_day("2026-11-09", http=fake)
     assert seen["STAT_DATE"] == "2026-11-09"
     assert seen["sqlId"] == m.SSE_SQLID
+    assert seen["pageHelp.pageSize"] == str(m.SSE_PAGE_SIZE)
     assert day.usable is True
+
+
+def test_fetch_sse_day_pages_until_page_count():
+    """服务端把 pageSize 截到 2000（实测）：必须按 pageCount 翻页，只取第 1 页会静默截断。"""
+    seen_pages = []
+
+    def fake(url, *, params, headers, timeout):
+        page_no = int(params["pageHelp.pageNo"])
+        seen_pages.append(page_no)
+        rows = [_sse_row(f"51{page_no:02d}{i:02d}", "10") for i in range(2)]
+        return _Resp({
+            "result": rows,
+            "pageHelp": {"total": 4, "pageSize": 2, "pageCount": 2, "pageNo": page_no},
+        })
+
+    day = m.fetch_sse_day("2026-11-09", http=fake)
+    assert seen_pages == [1, 2]
+    assert day.usable is True
+    assert day.n_funds == 4
+    assert any("分页取全" in w for w in day.warnings)
+
+
+def test_fetch_sse_day_fails_closed_when_page_count_missing_and_empty_page():
+    calls = []
+
+    def fake(url, *, params, headers, timeout):
+        calls.append(int(params["pageHelp.pageNo"]))
+        # 只有 total、没有 pageCount；第 2 页空 → 无法证明取全
+        rows = [_sse_row("510300", "10")] if len(calls) == 1 else []
+        return _Resp({"result": rows, "pageHelp": {"total": 2, "pageSize": 2000}})
+
+    day = m.fetch_sse_day("2026-11-09", http=fake)
+    assert day.usable is False
+    assert day.gap_reason == "pagination_incomplete"
+    assert day.fetch_error
 
 
 def test_single_market_http_entry_used_by_both_exchanges(monkeypatch):
