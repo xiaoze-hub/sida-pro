@@ -197,6 +197,10 @@ def tool_status(text: str) -> str:
         if payload.get("available") is False or payload.get("ok") is False:
             return "unavailable"
     label, body = _declaration(text)
+    # 固定首行来自对应真实 handler；不扫描正文中的普通叙述。
+    if (body.startswith(("暂无实时资讯数据", "暂无策略信号（未找到", "取不到数据：", "取不到数据:"))
+            or body.startswith(("情绪周期: 涨停池数据获取失败", "情绪周期：涨停池数据获取失败"))):
+        return "unavailable"
     if label:
         # 标签行的声明词位置是稳定的：标签 → 声明词 → 解释。
         if body.startswith(DENIED_PREFIXES):
@@ -375,6 +379,11 @@ class MarketRun:
         if self.unavailable:
             parts.append(
                 f"未取到 {len(self.unavailable)} 项（{', '.join(self.unavailable[:3])}）")
+        other_errors = [e for e in self.errors if e.split(':', 1)[0] not in
+                        set(self.denied + self.unavailable + self.skipped)
+                        and ':stale_data:' not in e]
+        if other_errors:
+            parts.append(f"调用失败 {len(other_errors)} 项（{', '.join(e.split(':', 1)[0] for e in other_errors[:3])}）")
         if self.stale:
             days = sorted({d for _, d in self.stale})
             parts.append(f"非今日数据 {len(self.stale)} 项（数据日 {', '.join(days)}）")

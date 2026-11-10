@@ -376,7 +376,7 @@ def _read_strategy_signals(db: Session, limit: int = 10) -> str:
         .scalar()
     )
     if not latest:
-        return "暂无策略信号（今日没有 active 的买/关注类信号）。"
+        return "暂无策略信号（未找到 active 的买/关注类信号，数据日期未知）。"
     rows = (
         db.query(StrategySignalRun)
         .filter(
