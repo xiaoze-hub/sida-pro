@@ -16,8 +16,14 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from datetime import datetime
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
+from src.core.commodity_chain import (
+    VARIETY_KEYWORDS,
+    annotate_news_items,
+    beneficiaries,
+    text_hits,
+)
 from src.core.timezone import beijing_now
 
 logger = logging.getLogger(__name__)
@@ -30,12 +36,21 @@ MAX_MARKET_STOCKS = 5400
 MAX_REASONABLE_STREAK = 30
 
 # 快讯主题关键词映射（纯规则聚类，不调 LLM）
+# 「大宗/涨价」的品种词取自 `commodity_chain.VARIETY_KEYWORDS`（纸浆/木浆/浆价/原纸/瓦楞纸/
+# 箱板纸/白卡纸/双胶纸 + 纯碱/尿素/磷肥/钾肥/甲醇/PTA/涤纶/乙二醇/螺纹钢/铁矿石/焦煤/动力煤/
+# 锂/钴/镍/稀土/生猪/白糖/棉花/豆粕/棕榈油/天然橡胶…）：生产库里的纸浆快讯多是期货综述
+# （『商品期货收盘涨跌不一 … 纸浆涨超1』），原先一个题材都归不进去。只共用词表，主题语义仍是
+# 「大宗/涨价」；`commodity_chain` 才负责把品种落到真实 TQ 行业。
 _NEWS_THEME_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("算力/AI", ("算力", "人工智能", "大模型", "芯片", "半导体", "智算", "GPU", "光模块")),
     ("低空/商业航天", ("低空", "eVTOL", "飞行汽车", "商业航天", "卫星", "火箭", "无人机")),
     ("机器人/智造", ("机器人", "人形", "减速器", "具身智能", "工业母机", "自动化")),
     ("新能源/电力", ("光伏", "锂电", "储能", "风电", "电网", "特高压", "新能源", "固态电池")),
-    ("大宗/涨价", ("涨价", "提价", "停产", "限产", "减产", "黄金", "原油", "铜", "稀土", "化工")),
+    (
+        "大宗/涨价",
+        ("涨价", "提价", "停产", "限产", "减产", "黄金", "原油", "铜", "稀土", "化工")
+        + VARIETY_KEYWORDS,
+    ),
     ("宏观/政策", ("央行", "降准", "降息", "财政", "证监会", "国务院", "发改委", "美联储", "GDP", "CPI")),
     ("医药/消费", ("创新药", "医疗", "集采", "白酒", "消费", "旅游", "地产", "房价")),
 )
@@ -47,6 +62,8 @@ class EvidenceBlock(TypedDict):
     reason: str
     source: str
     as_of: str
+    # 只在商品命中且 TQ 成分解析成功时出现（TQ 不可用则整键省略，不伪造名单）
+    commodity_chain: NotRequired[dict[str, list[str]]]
 
 
 class PremarketEvidence(TypedDict):
@@ -205,7 +222,7 @@ def audit_news_items(items: list[dict[str, Any]]) -> tuple[QualityStatus, str]:
 def _classify_news_theme(title: str, symbols: list[str] | None = None) -> str:
     text = title or ""
     for theme, keywords in _NEWS_THEME_KEYWORDS:
-        if any(kw in text for kw in keywords):
+        if any(text_hits(text, kw) for kw in keywords):
             return theme
     if symbols:
         return "个股异动"
@@ -451,13 +468,24 @@ def _collect_news_block(as_of: str, limit: int = 15) -> EvidenceBlock:
         )
 
     enriched = enrich_news_clusters(raw_items)
-    return _make_block(
-        enriched,
+    # 商品品种标注（静态映射，不依赖 TQ）→ 命中条目带 commodities/industries
+    annotated = annotate_news_items(enriched)
+    block = _make_block(
+        annotated,
         quality,
         reason=reason,
         source="cls/ths",
         as_of=as_of,
     )
+    # 品种 → 行业成分（需 TQ）：取不到就整键省略，绝不返回空名单冒充「板块无成分」
+    try:
+        chain = beneficiaries(annotated)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[证据层] 商品→行业链路失败: %s", e)
+        chain = None
+    if chain:
+        block["commodity_chain"] = chain
+    return block
 
 
 def _collect_sentiment_block(as_of: str) -> EvidenceBlock:

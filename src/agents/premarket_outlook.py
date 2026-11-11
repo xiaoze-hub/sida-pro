@@ -957,8 +957,21 @@ class PremarketOutlookAgent(BaseAgent):
                     f"[{','.join(news['symbols'])}]" if news["symbols"] else ""
                 )
                 link = f"([原文]({news['url']}))" if news.get("url") else ""
+                # 商品品种注释（静态映射，不碰 TQ）：纸浆类快讯直接标出「商品 → 行业」，
+                # 免得模型只读到『纸浆涨超1』这类期货综述就无从落到 A 股行业；未命中为空串，
+                # 不改变普通新闻行格式。
+                commodity_tag = ""
+                try:
+                    from src.core.commodity_chain import news_commodity_tag
+
+                    commodity_tag = news_commodity_tag(
+                        news.get("title") or "", news.get("content") or ""
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("新闻商品注释失败: %s", e)
                 lines.append(
-                    f"- [{news['time']}] {importance_star}{news['title']} {symbols_tag} {link}".strip()
+                    f"- [{news['time']}] {importance_star}{news['title']}{commodity_tag} "
+                    f"{symbols_tag} {link}".strip()
                 )
                 if news.get("content"):
                     lines.append(f"  > {news['content'][:100]}...")

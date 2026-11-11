@@ -1,3 +1,15 @@
+## [未发布]
+
+### feat-盘前快讯商品链（品种 → 真实 TQ 行业 → 成分股）
+
+- 「大宗/涨价」主题扩表：`premarket_evidence._NEWS_THEME_KEYWORDS` 新增纸浆/木浆/浆价/原纸/瓦楞纸/箱板纸/白卡纸/双胶纸、纯碱/尿素/磷肥/钾肥/甲醇/PTA/涤纶/乙二醇、螺纹钢/铁矿石/焦煤/动力煤、锂/钴/镍/稀土、生猪/白糖/棉花/豆粕/棕榈油/天然橡胶共 30 个品种词，主题语义不变。此前生产库命中的「纸浆」快讯全是期货综述（『商品期货收盘涨跌不一 钯涨超4%…纸浆涨超1』），一个题材都归不进去。词表与 `commodity_chain` 共用一份（`VARIETY_KEYWORDS`），不再两处各写一遍；ASCII 品种（PTA）大小写不敏感，`锂电池` 仍走新能源/电力，不误标成商品行情。
+- 新增 `src/core/commodity_chain.py`：`COMMODITY_CHAINS`（25 条链，行业名只用已核实的真实 TQ 二级行业名，如 造纸 881167.SH / 包装印刷 881171.SH，并与 `tdx_boards` 的 587 个板块目录对齐；每条带 `direction`：`涨价受益` / `成本承压`）、`match_commodity_news`（一条快讯可命中多品种）、`industry_members`（行业名 → 成分股，如 造纸 含 600103.SH）、`beneficiaries`（品种 + TQ 成分两步组合）、`annotate_news_items` / `news_commodity_tag`。
+- 取数口径：TQ 网关异常、目录里没有该行业名、成分返回空，三者一律 `None` —— 不返回 `[]` 冒充「板块无成分」；任一行业取不到，`beneficiaries` 整体 `None`，不给半份名单。成分按行业名缓存 300s，避免每条快讯都打网关。
+- 盘前证据接线：`news` 块命中条目新增 `commodities` / `industries`（静态映射，不依赖 TQ），块级新增 `commodity_chain`（`{行业: [成分股…]}`）；TQ 不可用时**整键省略**，快讯质量与主题聚类不受影响。`/api/premarket/evidence` 直接透传。
+- `premarket_outlook` 新闻行追加商品注释：`- [07:10] ⭐⭐商品期货收盘涨跌不一 纸浆涨超1% （商品：纸浆 → 造纸/包装印刷）`；未命中条目输出逐字节不变（注释为空串），注释异常只降级为无注释，不影响 prompt 组装。
+- 测试：新增 `tests/test_commodity_chain.py` 56 例（30 品种主题路由逐个参数化、原主题不被劫持、链表的行业名必须属于已核实集合、多品种/锂电池反例、TQ 目录/成分/空列表/未知行业四种失败均 `None`、`beneficiaries` 去重与 600103 命中、证据块注释与 TQ 失败省略键、outlook 新闻行注释与普通行不变），全部 TQ/网络打桩。实跑：新文件 56 passed；既有 `test_premarket_evidence` / `_evidence_scope` / `_harness` / `_premarket_catalyst` / `test_premarket_api` / `test_tdx_boards` 共 70 passed（0 failed）。
+- 未做/未验证：本次全部走替身，**未连真实 TQ 网关**，因此「造纸 30 只 / 包装印刷 49 只」与 600103 归属未在真网关下复测；未跑生产真实快讯端到端；报表模板 `report_generator` 的隔夜消息行本次未加注释（保持逐字节兼容用例不变）。
+
 ## release: v0.11.10（市场主线并列态排版修复）
 
 - 保留并列两列（用户口径），只修行内排版：名称/得分/家数/最高板/龙头不再互压。卡片按**容器宽度**排版（container query），不再跟视口断点走；两列门槛 400px（194px 列已实测零违规），<400 才单列兜底。
