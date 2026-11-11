@@ -1,5 +1,20 @@
 ## [未发布]
 
+### fix-mainline_rank_daily 同日遗留行清理（rank_change 不再拿过期名次）
+- 缺陷（生产实测）：`_upsert_today_snapshot` 只 upsert 从不删除，同一数据日被重算多次时，某次入榜、之后掉出榜单的组会留在表里。2026-11-11 该表 23 行，其中「造纸 rank=10」是盘中某次计算的遗留行——现算造纸只有 1 只涨停、9 组入榜、不在 `ranked_groups`，该行仍在，`_enrich_with_rank_change` 于是拿过期名次算 rank_change。
+- 改法：`_upsert_today_snapshot` 改为**同一事务**内「先 upsert 本次全部行，再 `DELETE FROM mainline_rank_daily WHERE date = :d AND name NOT IN (本次名单)`」；名单以命名参数 `n0..n{k}` 绑定（不拼字面量，中文/引号安全，SQLite 与 PG 同一条 SQL）。异常的静默口径与失败即整批回滚的语义不变。
+- 保守约定：本次 payload 为空、或列表里全无 `name`（脏载荷）⇒ **一行都不删**——分不清「还没算」和「今天真的没主线」，误删会把当日痕迹抹干净。
+- 写入方核查：全仓仅 `src/web/api/market_mainline.py::_upsert_today_snapshot` 写该表（`tests/test_migration_lock_and_failures.py` 里的 INSERT 是测试播种），无第二个写入方。
+- 新增 `tests/test_market_mainline_rank_daily_cleanup.py`（隔离 SQLite 7 例，先跑红再转绿）：① 旧行 + 少一组 payload → 旧行被删、其余覆盖；② 空 payload / 无 name 载荷 → 不删；③ 同 payload 连写幂等；④ 只清 `date=本次数据日`，别的日期历史快照不动；⑤ DELETE 失败 → upsert 一并回滚且异常静默。
+- 存量脏行不随发版自动清（本次只改写入路径）：生产人工清理 SQL 见交付说明，仅提供不执行。
+
+### fix-涨停池主源补齐封单/首封/炸板（只补缺失，不覆盖真值）
+- 生产实测缺陷：主源 `MarketSentimentCollector._limit_up_pool_tq`（K 线自算涨停）返回的 85 只涨停票 `ltsz / turnover_rate / order_amount` 全为 0、`first_time` 全空（85/85）。K 线里没有这些字段，只有 TQ `get_zdt_data` 快照有（`FirstTimeZT` / `OpenTimesZT` / `FDVolMaxZT`），而快照此前只在主源失败时当备源跑（`_limit_up_pool_zdt_tq` → `zdt_fallback_pool`），主源成功就永远拿不到。
+- 新增 `src/core/limit_pool_zdt.py::enrich_pool_with_zdt(pool, *, fetcher=None)`：只对池内代码分片取快照（≤50 只/次，同码去重），**只补缺失**字段（`first_time` 空串 / `open_times`、`order_amount`、`ltsz` 为 0 即视为缺失，盘中 0 可被更新的炸板次数刷新），已有非零值一律不覆盖；改过字段的行标 `enrich_source="tq_zdt"` 与 `enrich_as_of`（取池内统一 `as_of`，缺失/不一致 → `None`，不用今天冒充）；空快照/全脏行/网关异常**原对象原样返回**，连续 2 批失败即中止。`days` 仍只认 K 线（`OpenTimesZT` 是炸板次数，不是连板数）。
+- 接线：`_limit_up_pool_tq` 组装完成后（板块富化之后）在「非历史请求日」才调一次，异常被吞掉、不影响主流程 —— 历史日池子绝不拿当日快照盖。
+- 仍缺字段（快照本身没有，未编造）：`turnover_rate` 快照 14 字段无对应项，保持 0；`ltsz` 仅在快照记录自带 `Ltsz`（亿）时补（×1e8 元），真实快照无此字段，故生产仍是 0。
+- 新增 `tests/test_limit_pool_zdt_enrich.py`（22 例）：空快照不改入参、补字段、已有值不覆盖、盘中 0 可被刷新、日期缺失为 None、异常返回原对象、分片 50/50/20、同码去重、换手率不编造、ltsz 亿→元、幂等；含 3 例接线（当日补 / 历史日不补 / 补齐失败不影响主流程）。已做变异验证：放开覆盖保护 + 摘掉接线即 3 例变红。相邻 4 个既有用例文件 72 例全绿。
+
 ### feat-盘前快讯商品链（品种 → 真实 TQ 行业 → 成分股）
 
 - 「大宗/涨价」主题扩表：`premarket_evidence._NEWS_THEME_KEYWORDS` 新增纸浆/木浆/浆价/原纸/瓦楞纸/箱板纸/白卡纸/双胶纸、纯碱/尿素/磷肥/钾肥/甲醇/PTA/涤纶/乙二醇、螺纹钢/铁矿石/焦煤/动力煤、锂/钴/镍/稀土、生猪/白糖/棉花/豆粕/棕榈油/天然橡胶共 30 个品种词，主题语义不变。此前生产库命中的「纸浆」快讯全是期货综述（『商品期货收盘涨跌不一 钯涨超4%…纸浆涨超1』），一个题材都归不进去。词表与 `commodity_chain` 共用一份（`VARIETY_KEYWORDS`），不再两处各写一遍；ASCII 品种（PTA）大小写不敏感，`锂电池` 仍走新能源/电力，不误标成商品行情。
@@ -9,12 +24,6 @@
 - `premarket_outlook` 新闻行追加商品注释：`- [07:10] ⭐⭐商品期货收盘涨跌不一 纸浆涨超1% （商品：纸浆 → 造纸/包装印刷）`；未命中条目输出逐字节不变（注释为空串），注释异常只降级为无注释，不影响 prompt 组装。
 - 测试：新增 `tests/test_commodity_chain.py` 56 例（30 品种主题路由逐个参数化、原主题不被劫持、链表的行业名必须属于已核实集合、多品种/锂电池反例、TQ 目录/成分/空列表/未知行业四种失败均 `None`、`beneficiaries` 去重与 600103 命中、证据块注释与 TQ 失败省略键、outlook 新闻行注释与普通行不变），全部 TQ/网络打桩。实跑：新文件 56 passed；既有 `test_premarket_evidence` / `_evidence_scope` / `_harness` / `_premarket_catalyst` / `test_premarket_api` / `test_tdx_boards` 共 70 passed（0 failed）。
 - 未做/未验证：本次全部走替身，**未连真实 TQ 网关**，因此「造纸 30 只 / 包装印刷 49 只」与 600103 归属未在真网关下复测；未跑生产真实快讯端到端；报表模板 `report_generator` 的隔夜消息行本次未加注释（保持逐字节兼容用例不变）。
-### fix-涨停池主源补齐封单/首封/炸板（只补缺失，不覆盖真值）
-- 生产实测缺陷：主源 `MarketSentimentCollector._limit_up_pool_tq`（K 线自算涨停）返回的 85 只涨停票 `ltsz / turnover_rate / order_amount` 全为 0、`first_time` 全空（85/85）。K 线里没有这些字段，只有 TQ `get_zdt_data` 快照有（`FirstTimeZT` / `OpenTimesZT` / `FDVolMaxZT`），而快照此前只在主源失败时当备源跑（`_limit_up_pool_zdt_tq` → `zdt_fallback_pool`），主源成功就永远拿不到。
-- 新增 `src/core/limit_pool_zdt.py::enrich_pool_with_zdt(pool, *, fetcher=None)`：只对池内代码分片取快照（≤50 只/次，同码去重），**只补缺失**字段（`first_time` 空串 / `open_times`、`order_amount`、`ltsz` 为 0 即视为缺失，盘中 0 可被更新的炸板次数刷新），已有非零值一律不覆盖；改过字段的行标 `enrich_source="tq_zdt"` 与 `enrich_as_of`（取池内统一 `as_of`，缺失/不一致 → `None`，不用今天冒充）；空快照/全脏行/网关异常**原对象原样返回**，连续 2 批失败即中止。`days` 仍只认 K 线（`OpenTimesZT` 是炸板次数，不是连板数）。
-- 接线：`_limit_up_pool_tq` 组装完成后（板块富化之后）在「非历史请求日」才调一次，异常被吞掉、不影响主流程 —— 历史日池子绝不拿当日快照盖。
-- 仍缺字段（快照本身没有，未编造）：`turnover_rate` 快照 14 字段无对应项，保持 0；`ltsz` 仅在快照记录自带 `Ltsz`（亿）时补（×1e8 元），真实快照无此字段，故生产仍是 0。
-- 新增 `tests/test_limit_pool_zdt_enrich.py`（22 例）：空快照不改入参、补字段、已有值不覆盖、盘中 0 可被刷新、日期缺失为 None、异常返回原对象、分片 50/50/20、同码去重、换手率不编造、ltsz 亿→元、幂等；含 3 例接线（当日补 / 历史日不补 / 补齐失败不影响主流程）。已做变异验证：放开覆盖保护 + 摘掉接线即 3 例变红。相邻 4 个既有用例文件 72 例全绿。
 
 ## release: v0.11.10（市场主线并列态排版修复）
 
@@ -22,14 +31,6 @@
 - 实测（真实 Chromium，6+6 行、深/浅色、中英文长文本）：320/400/420/460/520/560/620/720/1100 全部 0 裁切/0 重叠；用户截图的 460px 卡由 100 处违规降到 0，卡高 764.8px（单列兜底要 910.9px）。
 - 展开态成分股摘要行允许换行，窄列不再被裁或撑出列边界。
 - 未做：并列视图仍只渲染 Top6，11-20 名展开器只在单列页签内（既有行为，本次未改）；真实行情数据下的肉眼复核需登录态页面。
-
-### fix-mainline_rank_daily 同日遗留行清理（rank_change 不再拿过期名次）
-- 缺陷（生产实测）：`_upsert_today_snapshot` 只 upsert 从不删除，同一数据日被重算多次时，某次入榜、之后掉出榜单的组会留在表里。2026-11-11 该表 23 行，其中「造纸 rank=10」是盘中某次计算的遗留行——现算造纸只有 1 只涨停、9 组入榜、不在 `ranked_groups`，该行仍在，`_enrich_with_rank_change` 于是拿过期名次算 rank_change。
-- 改法：`_upsert_today_snapshot` 改为**同一事务**内「先 upsert 本次全部行，再 `DELETE FROM mainline_rank_daily WHERE date = :d AND name NOT IN (本次名单)`」；名单以命名参数 `n0..n{k}` 绑定（不拼字面量，中文/引号安全，SQLite 与 PG 同一条 SQL）。异常的静默口径与失败即整批回滚的语义不变。
-- 保守约定：本次 payload 为空、或列表里全无 `name`（脏载荷）⇒ **一行都不删**——分不清「还没算」和「今天真的没主线」，误删会把当日痕迹抹干净。
-- 写入方核查：全仓仅 `src/web/api/market_mainline.py::_upsert_today_snapshot` 写该表（`tests/test_migration_lock_and_failures.py` 里的 INSERT 是测试播种），无第二个写入方。
-- 新增 `tests/test_market_mainline_rank_daily_cleanup.py`（隔离 SQLite 7 例，先跑红再转绿）：① 旧行 + 少一组 payload → 旧行被删、其余覆盖；② 空 payload / 无 name 载荷 → 不删；③ 同 payload 连写幂等；④ 只清 `date=本次数据日`，别的日期历史快照不动；⑤ DELETE 失败 → upsert 一并回滚且异常静默。
-- 存量脏行不随发版自动清（本次只改写入路径）：生产人工清理 SQL 见交付说明，仅提供不执行。
 
 ### fix-市场主线并列态文字重叠（保留并列两列，行内可换行/可省略）
 - 根因：卡片宽度由外层决定（Dashboard「市场全景」三栏里实测 ~460 CSS px；用户截图 3048×1672 @2x ⇒ 视口 ~1524），并列两列本身没问题，问题在行：名称/得分/家数/最高板/龙头全是 `shrink-0` 定宽块，223px 列里名称被压到 0px、指标互相叠字、行横向溢出再被 `overflow-hidden` 硬切。真实 Chromium 实测 460px 卡：违规 100 处（名称可见宽 0px，「82.4」与「13家」相交 130px²，行溢出 40px）。
@@ -2048,7 +2049,6 @@ v0.59.0 上线两融工具后，参谋仍然回答：
 前两条本仓已有基础（`copilot_steps` + 「过程」面板），下一步是把「过程」从按钮改成
 回答里内联的步骤条。
 
-
 ### v0.60.0 附：一处测试对齐
 `tests/test_pipeline_router.py::test_trend_profile_build_uses_scope_cache` 原断言「作用域内两次 build 打 3 次库」——
 其中 2 次是基准指数兜底链查 klines 的 000300/000001。指数改走 index_daily 后，这条链**不再碰 klines**，
@@ -2567,7 +2567,6 @@ v0.53.0 上线后实测**首屏数字 41 个，比改前 31 个还多** —— �
 两套端点（`/api/market-data/fund-structure/*` 与 `/api/market/fund-structure/*`）**仍然并存**：
 前者供个股页 `Fund4Strip`（20 日条带），后者供工作台 `L2Tab`（四档对比 + 因子格），
 取数已同源，形状不同属有意为之。若后续要合成一个，改 `Fund4Strip` 消费 `items` 即可。
-
 
 ### feat-连板晋级树页面(创新 1 前端消费)
 
@@ -3106,7 +3105,6 @@ TQ 该接口只返当日 1 行（`count`/`start_time`/`date` 参数实测全部�
   重新登录后即纳入新机制。要彻底收紧需在 JWT 过期窗口（12 小时）后开启严格模式。
 - `install.sh` 的域名推导信任 `X-Forwarded-*`（与 `Host` 同一信任级别），生产反代需覆盖该头。
 - 裸参垫片只在 `args` 为空时生效，同时传 `args` 与顶层同名键时以 `args` 为准且不告警。
-
 
 ---
 
@@ -4062,7 +4060,6 @@ assert 0 < len(calls) <= 3  # 失败: 不应扫完全部候选(4 次)
 
 ### 三、新维度采集层（P0：只记录，不生效）
 
-
 数智参谋的「分析配方」是手写 YAML（`src/harness/recipes/*.yaml`，11 份）。用户在对里
 常提出配方没覆盖的新维度（「股东户数变化」「龙虎榜席位风格」）—— 这些需求以前**无处落点**：
 助手只能拿现有工具凑合答，用户每次都要重新解释一遍，而且没人知道哪条最该补。
@@ -4990,7 +4987,6 @@ Redis 里 `rl:*` 的 TTL 实测 **-1（永不过期）** —— 计数不是"每
   - `src/web/api/klines.py`: 在 `_compute_kline_summary` 冷启动并发线程池中接入 `_enrich_cancel_order_intent`，极速聚合下发 `cancel_order_intent` 对象。
   - `frontend/packages/biz-ui/src/components/thememood/L2Tab.tsx`: 深度重构 L2 成品资金与撤单区，将原始数字升级为“买撤/卖撤率”对比指标，提示大单挂撤意愿。
   - `frontend/src/components/ThreeTierVerdictRow.tsx`: 在三层决策滤网中接入第四维度“撤单层”，直观展示主力微观挂撤意图（如：`🛡️ 压盘吸筹 (买撤31%/卖撤37%)`），与量价结构形成强共振。
-
 
 - **VERSION**: bump v0.13.90 → v0.13.91 (同步 README.md / README.zh-CN.md 徽章)。
 - **交互优化**:
@@ -6341,8 +6337,6 @@ AI机构活跃度 / 趋势操盘线 / 牛熊线 / 暗盘资金 / GS波段 / 涨�
   验证: 停在 `20260922` 的表被 `check` 正确判出缺口 `20260923…20261009`(7 交易日)、`stale=True`,
   `backfill_missing` 对真 TQ 显式失败(`ok=False, attempts=2`), `MAX(date)` 保持不变(不伪造)。
 
-
-
 `test_synthesize_no_context_is_field_identical_to_legacy` 要求无上下文 `synthesize(...)` 输出
 **逐字段等于 legacy 键集**。上一提交让 `temperature` 字段恒存在 → 破坏该契约(全量跑 1 failed)。
 
@@ -6689,7 +6683,6 @@ CI shard 1 / 全量合跑的**真正根因**: `tests/test_decision_personal_mkt.
 ### fix-聚宝盆缓存包装下沉 web 层(B4.1 门禁红)
 - v0.13.59 CI shard4 红: `src/core/jbp_pool.py` 引 `src.web.cache.biz_cache`(B4.1 core→web 禁止)。biz_cache 在 web 层, 缓存包装属 web 职责——`screen_cached` 迁至 `src/web/api/stock_pool.py`(TTL 60s 语义不变), core 只留纯计算; 测试 mock 点随之适配。
 
-
 决策先锋辅助模块『主力资金战报』(规格 §4.4)。汇总当日主力动向: 全市场大单净流入
 TOP/BOTTOM + 行业分布 + 个股主力净额变化 + 拆单/对倒计数。任一子块缺源**显式无数据**,
 绝不编造/回 0。
@@ -6924,10 +6917,8 @@ Volume 单位事故(快照=手/日线=股)教训: 既有单源对账 `unit_recon
 - **因果性反向针**(`tests/test_indicator_correctness.py`): 对 gs/活跃度/机构活跃度/K线形态, **追加未来 K 线后重算 → 历史各根取值必须逐点不变** → 任何 lookahead/repaint 都会触发断言红; 核心指标层"无未来函数"由此有机器证据。另含形态崩溃复现针、缺量针、provisional 针。
 - 验收: `pytest -k 'gs or activity or resonance or demon or caliber or calibration'` 全绿(269); `ruff check` / `scripts/check_is_pg_scope.py` 绿。**不发版、不打 tag、不 push main**。
 
-
 ### fix-决策预热 import 方向修复(B4.1 门禁红)
 - v0.13.56 CI shard4 红: `src/core/decision_precompute.py` 反向依赖 src/web(B4.1)。且不止是门禁问题——`Stock` 实际在 `src/db/models.py`, 原 `from src.web.models import Stock` 在生产会被 except 吞掉致**预热集永远为空**(预落库静默失效)。改 `src.db.models.Stock` + `src.db.session.SessionLocal`(117/157 行本就正确, 73 行统一)。
-
 
 - 新增 `docs/_archive/20261026_design/precompute-redundancy-audit.md`(含三要素: 基线 `339d2f6` / 审计对象完整路径 / 覆盖范围
   与未审项): 逐个排查工作台研究首屏 + 数智决策/选股池 + 首页热路径端点, 分类 A(读库/缓存, 快)/
@@ -7062,7 +7053,6 @@ Volume 单位事故(快照=手/日线=股)教训: 既有单源对账 `unit_recon
 ### fix-合并撞车修复(决策双维读阈值配置层)
 - v0.13.54 四支合并后组合冒烟 10 红: `decision.py` 双维合成仍 `from ai_activity import STRONG_LINE`, 而阈值配置化支已把该常量挪进 `src/core/thresholds.py`(各自基线绿、合并即 ImportError)。改读 `_thresholds.strong_line()`(默认值 3.00 逐比特一致), 文档字符串同步。
 - 教训入账: 合并后必须跑跨支组合冒烟(本次拦下带病 tag); `pytest | tail` 会吞退出码, 门禁命令禁止管道接 tail。
-
 
 AI 链路审计 P1: `src/core/intent_explain.explain_main_intent`(规则给结论 + AI 补"为什么")此前唯一
 消费点是 chat 工具(`src/agents/chat/registry.py` `get_intent_explain`), 工作台「主力意图」卡只有规则
@@ -7309,7 +7299,6 @@ Section/hairline 原子, 不卡片堆砌; 字阶只用 10/11/12/16/20, 过 UI �
 - 生产实测 5294 行回填 0 填的根因: `decision_log.trade_date` 落库紧凑格式(20260925)而 `_close_series_pg` 返回 ISO(2026-09-25), 回填比较 `series[0][0] != str(day)` 两种字面量永不相等 → 每行跳过。新增 `_norm_day()` 仅供比较归一(不改写存储值, 字面量保真)。
 - `stats()` 的 since 边界同款错配(紧凑 vs ISO 字符串比较会越界放行): 改 `length(trade_date)` 分支比较(两库通用, 不用 PG 专属函数)。
 - 回归钉子 `tests/test_decision_backfill_datefmt.py` 4 例: 真实生产形态(紧凑账本+ISO 系列)必须回填、存储值不被改写、ISO 账本兼容、错日仍不硬填。
-
 
 AI 全链路审计 P0-3: `GET /api/decision/{symbol}` 三信号合成(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由, `src/core/decision.py:synthesize`)后端路由已挂载(`src/web/app.py:673`)、前端 `insightApi.decision` 亦已定义, 但**全库零调用** —— 算得出来没有任何页面显示。
 
@@ -9502,7 +9491,6 @@ cron 注册进 scheduler_registry、上一轮未结束跳过、周末跳过、�
 **不做**: 未做"把全部数据源换成 TQ"——TQ 强在**历史序列**，涨停原因文本、F10 事件流、
 席位名称等语义字段没有，那部分继续走东财（选型原则见 `tq-capability-audit` skill）。
 
-
 ## 2026-09-23 (hotfix: 个股页漏迁 enableMinute → 分时图消失 → v0.13.3)
 
 **报障**: "还有个事情, 分时图不显示了"。
@@ -9516,7 +9504,6 @@ P2(2026-09-18) 把图表由 `InteractiveKline` 迁到 `KlineChart` 时, **指数
 
 **修**: 个股分支补回 `enableMinute`。分时数据源、`MinutePane` 的四种诚实态
 (加载中/失败原因/源异常/暂无数据)都未改动。
-
 
 ## 2026-09-23 (hotfix: 日K末根桩 bar 让"今日日K看不见" → v0.13.2)
 
@@ -9553,7 +9540,6 @@ P2(2026-09-18) 把图表由 `InteractiveKline` 迁到 `KlineChart` 时, **指数
 剔桩后补实时、补不到标 missing、库里已是真 bar 时不联网、非交易日不补、
 周线不处理、空序列不炸、实时 bar 日期不前进则不补。
 
-
 ## 2026-09-23 (hotfix: summary 缓存永不失效 → 图层数据冻结; 用户报障 GS 前后矛盾 → v0.13.1)
 
 **报障**: "利通电子, 数智决策显示 GS 信号在 S 区, 但 K 线图最新标记是 G"。
@@ -9584,7 +9570,6 @@ P2(2026-09-18) 把图表由 `InteractiveKline` 迁到 `KlineChart` 时, **指数
 **测试**: `tests/test_summary_cache_ttl.py` 7 条 —— 未来时间戳(负 age)必须过期(这条就是事故复现)、
 正常 UTC 行在 TTL 内命中、超 TTL 过期、字符串时间戳可解析、坏时间戳视为过期、无行返回 None、
 写入必须存 naive UTC(且与 UTC now 相差 <5s, 证明存的不是本地时间)。
-
 
 ## 2026-09-23 (涨停池换通达信主源 + 修两个数据缺陷 + 空态说真话 → v0.13.0)
 
@@ -9625,7 +9610,6 @@ P2(2026-09-18) 把图表由 `InteractiveKline` 迁到 `KlineChart` 时, **指数
 **测试**: `tests/test_limit_up_pool_source.py` 21 条 —— 连板数自算(首板/三板/断板/创业板20%/涨停价取整容差)、
 **分片 ≤50 铁律**(137 只必须切成 50/50/37)、连续两批失败即中止、东财 `lbc` 映射、翻页合并去重。
 
-
 ## 2026-09-23 (涨停池换通达信源: 设计文档 + TQ 能力实测 + 事故记录)
 
 **背景**: 首页「市场主线」显示"暂无主线数据(非交易日/涨停池为空)" —— 排查出三层原因与两个既存缺陷
@@ -9641,7 +9625,6 @@ P2(2026-09-18) 把图表由 `InteractiveKline` 迁到 `KlineChart` 时, **指数
 行情降级腾讯(0.1s→2.2s)。恢复: taskkill/杀僵尸均无效 → 整机重启(唯一解) → 重启后 portproxy 监听
 未自动恢复(需删了重建规则; 禁止 `net stop iphlpsvc`, 会切断 Tailscale)。教训 = **单次请求 ≤50 只**。
 
-
 ## 2026-09-22 (文档对齐: 设计系统"未做清单"已被实际收掉 → v0.12.4)
 
 `docs/_archive/20261026_design/设计系统落地_v1_20260920.md` 的「未做清单」还列着 5 项未做, 但它们在 v0.12.0~v0.12.3
@@ -9649,7 +9632,6 @@ P2(2026-09-18) 把图表由 `InteractiveKline` 迁到 `KlineChart` 时, **指数
 改为「收尾清单」表格: 每项写清**落在哪个版本/哪个文件** + 验收探针清单(后端 13 条 / 前端
 alert-bus 7 + use-batch-closes 5 + sparkline-dom 5 + nightly-batch-wiring 8 / 生产端到端 /
 7 页体检全 0)。
-
 
 ## 2026-09-22 (CI 韧性: 基础镜像回落 + 构建超时 → v0.12.3)
 
@@ -9675,7 +9657,6 @@ ERROR: failed to build: failed to resolve source metadata for docker.m.daocloud.
 镜像站健康度复测(修完当时): daocloud 401(正常, 需 token) / 1panel 403 / dockerproxy 404 /
 registry-1.docker.io 401 ⇒ **500 是瞬时故障**, 但兜底要常备。
 
-
 ## 2026-09-22 (端到端渲染验证 + 两处收尾 → v0.12.2)
 
 v0.12.1 部署后做了**端到端渲染探针**(登录→真实页面→数 DOM), 结论与两处收尾:
@@ -9696,7 +9677,6 @@ v0.12.1 部署后做了**端到端渲染探针**(登录→真实页面→数 DOM
 **② 设置页模型名截断补 title**: 体检报「截断看不全 span -83px «agnes-2.5-flash · Agnes 2.5 Flash»」
 —— 截断本身可接受, 但**看不全就是内容丢失**; 补 `title` 让悬停可见全名(该条与本次改动无关,
 是既有面, 顺手清零)。
-
 
 ## 2026-09-22 (hotfix: 部署后实测抓出两处"上了线但没用" → v0.12.1)
 
@@ -9735,7 +9715,6 @@ v0.12.0 部署完成后按惯例跑四项验证, **抓到两个真问题**(不�
 
 **教训**: "CI 全绿 + 部署成功 + 版本号变了" 都不等于功能可用。**新端点必须拿真数据实跑一次**,
 否则会以"诚实显示为空"的形式静默失效(它没报错, 只是永远没有数据)。
-
 
 ## 2026-09-22 (夜批收尾: 列表 sparkline / 会话消息 / 口径徽章 / 持仓键位 / 外观设置 → v0.12.0)
 
@@ -11322,7 +11301,6 @@ v0.10.10 的 ghcr 流水线因此红(本地因默认值恰好相同而通过, �
 修法: 用例内**固定** `_active_source` / `DARK_SOURCE`, 让断言与"灰度=非默认源"的语义都不随环境漂移;
 在 `PANWATCH_DARK_SOURCE` = thsdk / tdx_tck / tencent_ticks 三种取值下各跑一遍均 15 passed。
 
-
 ## 2026-09-18 (免费档 · 数智决策/集合竞价池 pro 收口 + 免费级别可调)
 
 ### feature: 数智决策三指标 & 集合竞价池收 pro 档 + 「免费档」可运行时调整
@@ -12562,7 +12540,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **变异验证**: 把接线换回裸 `build_context`(事故原状) ⇒ **恰好**第 ④ 条变红、其余 3 条绿; 还原后 4/4 绿。
 - **门禁**: 后端 `pytest -m "not network"` **2311 passed / 0 failed / 5 skipped**(基线 2307, 净 +4 = 本文件)。
 
-
 ### release-v0.6.3: 全站走查修复批次 + 开盘日志噪音治理(含后端改动 ⇒ 需重启)
 
 **性质**: 后端 1 处(日志治理) + 前端 8 处。**含后端改动 ⇒ 走覆盖层 + dist + 重启**(不能再只换静态面)。重启前已确认容器内无 nohup 回填在跑(回填已完成 5822/5827), 并按约定做了改动前备份。
@@ -12589,7 +12566,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 
 **过程留痕(值得记)**: 本批我用三个并行 subagent 改代码, 但它们**共用同一个工作目录**, 互相 `git checkout` 抢分支 ⇒ 提交散落在非预期分支上(收货时我按 commit 逐个核对, 未丢工作)。**教训: 同一批多路并发必须先给每路开独立 worktree。** 另: 我在题材情绪那个提交上**没跑测试就提交**, 门禁立刻抓出新用例失败(梯队面板还有两个裸滚动容器), 已在下个提交补齐 —— 再次印证"提交前必跑门禁"。
 
-
 ### fix(theme-mood): 轮动行不再冒充表头 + 矩阵滚动条跟随暗色主题
 
 **性质**: 单页样式/结构修复(`frontend/src/pages/ThemeMood.tsx`) + 2 条钉住用例。纯前端。
@@ -12599,7 +12575,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   - **已核实 `.scrollbar` 真实存在且是 token 化实现**(不是空修复) —— 这一点专门查过: 若该类不存在, 改动只是加了个无效果的 class, 而断言"className 含 scrollbar"的测试照样会绿。
 - **钉住(2 例)**: 轮动行必须独立容器 + 含 `border-t`/`mt-2`/`pt-1.5` + 标签带"新进"口径说明; 矩阵内**所有** `overflow-x-auto` 容器都必须同时带 `scrollbar` 类(防后人新增裸滚动容器)。
 - **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK / vitest 全绿。
-
 
 ### perf(obs): 传输层日志噪音不再写库 —— 修开盘后 app/PG 被日志打满
 
@@ -12612,7 +12587,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **变异验证**: 删掉 `db_handler.addFilter(...)` ⇒ 恰好 `test_setup_logging_attaches_filter_to_DB_handler` 变红, 其余 21 例仍绿; 还原后 22/22 绿。
 - **门禁**: 后端 `pytest -m "not network"` **2302 passed / 0 failed / 5 skipped**(基线 2280, 净 +22 = 本文件)。前端未改。
 - 注: 线程膨胀(单 worker 116-118 线程)与 THS 超时堆积属另一条 P1(调用并发上限+硬超时), **本次未做**, 已留痕待后续批次。
-
 
 ### fix(portfolio): 持仓页存量金额不再带 '+' (可用资金/总资产/总市值) + 盈亏不再双写号("++1.00万")
 
@@ -13797,7 +13771,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **浏览器走查**: 新页「题材情绪」渲染 15 行榜单(核心徽标 + 日变化 + 置信度) + 20 日色块矩阵; 点击「通信设备」出五维明细与核心股(**鼎信通讯 3板 核心分 81.2 连续概率 61%**、铭普光磁 1板) —— 与老板截图里"3板: 鼎信通讯"相互印证; 531px 窄视口发现矩阵被压扁 → v0.5.66 修(纵向堆叠+横向滚动)并复验; 走查临时账号已删除。
 - [tag v0.5.65 / v0.5.66 已推 origin]
 
-
 ### fix-题材情绪页窄视口布局降级; v0.5.66
 - **走查发现**(531px 视口): 左列表 420px 固定宽 + 右矩阵挤压成竖排文字。改为列表/矩阵**纵向堆叠**(`flex-col xl:flex-row`), 矩阵容器加 `overflow-x-auto`(窄屏横向滚动而不是压扁)。
 - 门禁: 前端 130 passed / tsc / eslint / UI-RULES / build 全过。
@@ -13821,7 +13794,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **浏览器走查**: 首页「三指标共振」卡片 30 行, **前 24 行行末渲染 AI 判定**(强共振, tooltip 带置信度与摘要), 其余显示 `--`; 走查用临时账号已删除(users 表复原为 5 个既有账号)。
 - [tag v0.5.64 已推 origin]
 
-
 ### feat-三指标共振盘后 AI 批量判定 + 首页行内结论; v0.5.64
 - **老板**: "可以"(批准: 每天收盘扫描后, 自动对当日全部「共振」标的批量跑一遍 AI 判定, 首页卡片直接把 AI 结论显示在每行末尾)。
 - **后端**(`src/core/resonance_ai.py`): 批量判定 `BATCH_CHUNK=12` 分组(控调用量与输出长度); `build_batch_content` 逐行 `代码|名称|趋势|活跃度(档位)|资金(亿)|规则判定`; `parse_batch_verdicts` 池外代码丢弃 / 非法枚举→**无法判定** / 解析失败该组不落库(宁缺勿编); `run_daily_verdicts` 取当日共振 top N → 分组调 LLM → 按 `(trade_date, symbol)` 幂等落库, 单组失败只记数不抛。LLM 客户端 **core 内自建** `_build_batch_client`(chat 场景绑定 → Settings 兜底), 不走 web 层 `_get_ai_client` —— 避免触发 core→web 反向依赖棘轮(B4.1)。
@@ -13837,14 +13809,12 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **浏览器走查**: 行情页「决策先锋共振」区渲染三灯(趋势/强度/资金 + 规则: 强) + 「AI 分析」按钮 → 点击后完整渲染 AI 结论/依据/风险/关注; 走查令牌已清除。
 - [tag v0.5.63 已推 origin]
 
-
 ### feat-三指标共振接入 AI 判定 + 规则三灯面板; v0.5.63
 - **老板**: "三指标共振要接入 ai 分析, 给出是否共振 —— 我现在没办法知道三指标到底有没有共振"。
 - **后端**: 新增 `src/core/resonance_ai.py`(提示词/JSON 解析容错: 脏输出→**无法判定**不编造; 统一挂 D3 合规护栏 `with_compliance`) + API `GET /api/resonance/symbol/{symbol}`(规则三灯: 日线口径趋势/强度/资金, 不依赖 L2/盘中快照, 盘后也能看) 与 `POST /api/resonance/analyze/{symbol}`(LLM 结构化判定: 强共振/弱共振/未共振/无法判定 + 置信度/依据/风险/关注点/缺项; 10 分钟缓存; **LLM 不可用→available=false 保留规则判定**, 诚实降级)。
 - **前端**: 新增 `ResonanceVerdictPanel`(三灯 + 「AI 分析」按钮 → 结构化结论), 接入行情页「决策先锋共振」区 —— 原状态表缺数据时不再只显示"数据缺失", 而是给出**三灯 + AI 判定**这条可操作的视角。
 - **测试**: 后端 `tests/test_resonance_ai.py` 5 例(提示词缺项标注/解析容错三态/接口结构化/LLM 异常降级/参数校验); 前端 panel 3 例(三灯+AI 结论/AI 不可用保留三灯/数据缺失禁用按钮 + **修掉一个只取值没给 setter 的手误**); 前端 **123 passed** / tsc / eslint / UI-RULES / build 全过; 后端离线全量 **2123 passed / 2 failed(KI-027 本机基线) / 5 skipped**。
 - [tag v0.5.63]
-
 
 ### update-v0.5.60/61/62 生产部署(决策先锋升级三件套, 冒烟 9/9)
 - **部署**: 覆盖层 v0.5.60 → 迁移 **v161 已应用**(resonance_scan)；部署中发现分片上限 → v0.5.61(100 码/片) → 走查发现卡片空态 → v0.5.62(重试) 连续三个覆盖层; `/api/version` = **v0.5.62**; 冒烟 **9/9**(16.3s, 首轮 8/9 为并发瞬时抖动, 复跑全过)。
@@ -13854,18 +13824,15 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **未完成项(如实)**: 个股页「机构活跃度副图」在走查中未定位到挂载面板(在 InteractiveKline 分时态 DarkFlowCards 内), 仅以 activity 接口 + 组件测试(2 例)验证; 下次走查补看。
 - [tag v0.5.60/61/62 已推 origin]
 
-
 ### fix-三指标共振卡片首拉易被首页并发挤掉(排队超时→空态); v0.5.62
 - **浏览器走查实撞**: 首页同时发 20+ 请求(行情/组合/看板 curate…), 卡片的 `/resonance/scan` 排在队尾超时被 abort → 组件把错误当成"空清单", 显示"今日无三指标共振标的"(实际当日 383 条)。
 - **修复**(ResonancePanel): 失败/空结果**保留上次数据**不空白 + 首拉后 8s 补一次重试 + 60s 轮询(与其他看板卡片一致)。
 - [tag v0.5.62]
 
-
 ### fix-共振扫描分片上限(首跑只扫到 1398 只); v0.5.61
 - **首跑实测发现**: v0.5.60 生产首扫仅 1398/5570 —— `get_market_data` 单次批量**实测上限 ~100 码**(超出静默截断), 原分片 400 码/次导致每片只回 100 码。
 - **修复**: `_KLINE_CHUNK 400 → 100`(注释留痕实测上限); 重扫 **5562 只 / 41s / 共振 383 / 接近 893**, 落库 5562 行。
 - [tag v0.5.61]
-
 
 ### feat-决策先锋三指标升级 A/B/C: GS 校准复现 + 全市场共振扫描 + 活跃度副图; v0.5.60
 - **老板"都做"**。三项按序交付(全部用**我们自己的实现**, 不复用客户端复刻公式 —— 规避 v0.5.59 前的双源分叉):
@@ -13880,7 +13847,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **测试**: 后端 `tests/test_resonance_scan.py` 6 例(判定三段/缺数不猜/代码映射/扫描幂等/永不抛)+ stock_pool 兼容; 前端 新增 resonance-panel 3 例 + activity-sparkline 2 例, 布局测试随 12 模块更新; **前端 vitest 120 passed** / tsc / eslint / UI-RULES(修掉 R6 toFixed 与 R4 硬编码涨跌色)/ build 全过; 后端离线全量 **2118 passed / 2 failed(KI-027 本机基线) / 5 skipped**。
 - [tag v0.5.60]
 
-
 ### update-v0.5.58/v0.5.59 生产部署(午休窗口热修, 老板"上", 冒烟 9/9)
 - **范围**: 大盘资金流曲线单位修复 + 盘中采样器(v0.5.58), 采样器时间戳统一 DB 默认(v0.5.59, 部署中就绪前发现并随即修正)。
 - **部署**: 备份 `/root/app_backup_pre_v0558_20260911.tar.gz` → 覆盖层 v0.5.58 → healthy → v0.5.59 覆盖层(仅 1 文件) → healthy; `/api/version` = **v0.5.59**; 前端产物 `assets/index-YmrTAVUS.js` 已上线; 冒烟 **9/9**(12.3s)。
@@ -13888,13 +13854,11 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **预期**: 13:00 开盘后采样器每 60s 自动补点, 页面上日内曲线将连续显示真实数值(此前为压平在 0 的直线)。
 - [tag v0.5.58/v0.5.59 已推 origin]
 
-
 ### fix-大盘资金流采样器时间戳改用 DB 默认(与既有序列同源); v0.5.59
 - **背景**: v0.5.58 采样器在容器内验证时发现时区瑕疵 —— 采样行 ts 用 `datetime.now(UTC)` 手写, 而既有写入(接口侧 `_try_write_snapshot_async`)由 DB `CURRENT_TIMESTAMP`(容器本地时区)生成 → **同一张表两套时间基准**, 会让日内曲线错位/被 4h 窗口误滤。
 - **修复**: 采样 INSERT 不再显式传 ts, 与接口侧一致由 DB 默认生成; 生产写了 1 行 UTC 时间戳的验证数据(id=477)已删除。
 - **验证**: 伪时间(13:05, 午休中校验链路)调用 `collect_once` → 真取数(主力 -695.9亿 / 沪 -325.3 / 深 -370.6)并落库; 真实时钟下当前(12:28 午休)正确 skipped。
 - [tag v0.5.59]
-
 
 ### fix-大盘资金流日内曲线"没内容"(单位除错) + 盘中独立采样; v0.5.58
 - **生产实撞**(老板截图: 大盘资金流卡片有数"主力净流入 -695.9亿"但曲线压平在 0): 库内快照值 -695.9/-636.9, 前端却画出 ~0 的直线。
@@ -13903,7 +13867,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - **配套**(后端): 新增 `src/core/market_flow_sampler.py` + 启动任务 **每 60s 独立采样**(交易时段守卫内建) —— 快照原先只在前端调用大盘资金流接口时写入, 页面不打开则日内曲线只有零星几点("没内容"的另一半原因); 采样器与接口同一网关、同字段映射(total_main_flow/sh/sz main_flow), 失败静默不抛。
 - **测试**: 前端 `flow-history-chart` 5 例(新增: 亿单位原样画图 / null 断点; 旧例夹具从"元"改正为"亿"); 后端 `test_market_flow_sampler` 3 例(时段跳过/取数失败静默/落库值); core→web 反向依赖棘轮过(采样器初版误从 `src.web.database` 取 engine, 被测试+棘轮双重拦下改为 `src.db.session`); 前端 115 passed / tsc / eslint / UI-RULES / build 全过; 离线全量 **2113 passed / 2 failed(KI-027 本机基线) / 5 skipped**。
 - [tag v0.5.58]
-
 
 ### update-v0.5.57 生产部署(收盘前热修, 老板当场点头, 冒烟 9/9)
 - **决策合成资金信号修复(v0.5.56)+未共振文案(v0.5.57)合并部署**; 老板选择"现在热修"(盘中例外, 已当场确认)。
@@ -16101,7 +16064,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - 方向预测摘除: `chat.py` get_forecast加31.7%不可靠警告+去suggested_questions引流，`daily_report.txt` 明日关注→证伪清单
 - ECharts主题注册: `echarts-core.ts` 注册SIDA双态主题，`echarts-theme.ts` CSS变量双态，`useECharts` hook+ResizeObserver，4图表白屏修复
 
-
 ## 2026-08-25
 
 ### update
@@ -16120,14 +16082,12 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   (kline_precache.py, 复用 ingest_symbol 幂等入库), 开盘后自选页/机会页/预测/AI
   直接命中 PG 缓存, 对外请求数砍约80%, 从源头降低触发数据源风控的概率
 
-
 ## 2026-08-25
 
 ### fix
 
 - /api/klines PG 优先路径加最小条数校验(<30根视为无效, 继续走联网+新浪兜底) —
   修复新加股回填失败时 PG 只有2根也直接命中返回的问题(v0.4.9.1 兜底因此没触发)
-
 
 ## 2026-08-25
 
@@ -16137,7 +16097,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   800天补数因腾讯501+东财断连全失败 → K线只显示两天。KlineCollector 在
   PG兜底之后追加新浪 CN_MarketData 日K直拉(容器内实测可达且含当日数据),
   /api/klines 与 summary 链路立即恢复完整历史
-
 
 ## 2026-08-25
 
@@ -16152,7 +16111,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
      AsyncOpenAI 客户端持有旧 loop 引用)
   ⑤ /api/quotes/ws 加入限流豁免列表 — WebSocket 行情轮询被自家限流挡(429 重连风暴)
 
-
 ## 2026-08-25
 
 ### fix
@@ -16162,7 +16120,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   点进弹窗单只重拉时后端已有缓存才有真数据。双修:
   ① 前端自选页 K线摘要拉取显式 timeoutMs=45s
   ② 后端 summary 进程内缓存 TTL 30s→5min(冷启动重算太贵, 指标分钟级刷新足够)
-
 
 ## 2026-08-25
 
@@ -16174,13 +16131,11 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - 新增「终端感」ECharts 主题(lib/echarts-theme.ts): 轴线/分割线/tooltip
   对齐设计 token, 四张大盘图 + 分时图统一观感; tooltip 毛玻璃圆角
 
-
 ## 2026-08-25
 
 ### fix
 
 - push2delay 每页上限100条 → 改分页拉全A(140页保护), 修复涨跌分布只统计到100只
-
 
 ## 2026-08-25
 
@@ -16190,14 +16145,12 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   东财 push2delay.eastmoney.com(延迟行情域)实测容器内 200 可达, 改为主源
   (15分钟延迟对统计图无影响), 原新浪/东财push2 链路保留为兜底
 
-
 ## 2026-08-25
 
 ### fix
 
 - 涨跌分布数据源修复: 东财 push2 clist 在生产云 IP 断连 → 新浪 Market_Center 主源
   (分页拉全A ~68页, 60ms/页防限流), 东财降为兜底; 合理下限1000只校验
-
 
 ## 2026-08-25
 
@@ -16216,7 +16169,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
 - 移除鸡肋: 首页热榜整块(与发现页重复)/盘前盘后简报卡(与报告中心重复);
   组合体检双分享按钮合并为「分享▾」下拉
 
-
 ## 2026-08-25
 
 ### fix
@@ -16225,14 +16177,12 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   KlineCollector._fetch_all_sources 回落读 PG klines 本地缓存(与 /api/klines 同源),
   修复个股弹窗 summary"无K线数据"→ 技术指标区消失的问题。fail-soft, 不影响正常链路。
 
-
 ## 2026-08-25
 
 ### fix
 
 - /api/klines 指数分支新浪兜底未生效修复: 腾讯被风控时 market_get 抛异常早于兜底判断,
   现单独捕获异常后再走新浪回落; 兜底失败报错文案改为"腾讯+新浪均失败"
-
 
 ## 2026-08-25
 
@@ -16243,7 +16193,6 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   新增新浪指数日K兜底(CN_MarketData.getKLineData, 生产实测可达):
   ① marketdata.index_klines 腾讯空后回落 fetch_sina_index_kline
   ② /api/klines 指数分支腾讯空 bars 后同源兜底(A股 sh/sz 前缀)
-
 
 ## 2026-08-25
 
@@ -16256,13 +16205,11 @@ tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断�
   ④ 阶段时间线 30 天→120 个交易日(recent_days 字段, recent_30d 兼容保留)
   ⑤ 后端新增 register_cron: 工作日 15:10 自动同步涨停池指标落库(此前需手动 sync)
 
-
 ## 2026-08-25
 
 ### fix
 
 - 主线识别: wudao theme='无' 时回落 sector 字段,修复主线条榜为空
-
 
 ## 2026-08-24
 
@@ -17596,8 +17543,6 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
 - 无画像显示引导卡片; 失败静默不阻断上传
 - "更新画像"按钮复用上传文件选择器; 上传完成后自动刷新画像区
 
-
-
 ### feat — 统一 LLM 配置中心
 
 - **场景绑定**: ai_scene_bindings 表, 6 场景(对话助手/TradingAgents/报告/AI裁判/自检/机会评分)各自绑定模型池模型, 回落默认。
@@ -17616,8 +17561,6 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
 - 002361: 内外盘 48.6/49.3 均衡无口诀命中(符合预期), signal=主力净流入(主动买占优)低位承接
 - 前端 build 8.8s
 
-
-
 ### feat(shadow) — 影子账户画像落地
 
 - **A 方案**: 交割单画像落库 users.shadow_profile_json(按用户隔离) + 对话助手 system prompt 注入用户交易风格(截断300字+前3条规则, 无画像零开销)。
@@ -17634,7 +17577,6 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
 - 画像注入: 对话助手输出"你423笔回合216笔盈利, 持仓中位5天" ✅
 - 预测: 002361 T+1 +9.7% 单日 ≤10% ✅
 - 27 tests passed
-
 
 ### fix
 
@@ -17659,8 +17601,6 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
 ### 实测
 - 生产 PDF 上传成功(shadow_c5c4c54e, 111s), 后端无问题, 问题纯在前端。
 
-
-
 ### feat(forecast) — 预测引擎全面升级
 
 - **模型体系重构**: 移除 Lag-Llama(50%命中+自回归爆炸),接入 **Chronos-Bolt-small**(Encoder无累积误差, CPU 0.07s),投票改**加权平均**(XGBoost 0.4 / Kronos 0.25 / Chronos 0.25 / 线性回归 0.1,保留±40% sanity clip)。
@@ -17679,16 +17619,12 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
 - 历史到期对照: 002361 miss(-3.04%) / 000938 hit(-0.97%) / 002661 hit(+3.87%) 全对
 - pytest 4 passed + 前端 build 8.5s
 
-
-
 ### fix(shadow) — 影子账户交割单上传
 
 - **修复上传报错 422 `missing file`**: `fetchAPI` 对 FormData 不再强制设置 `Content-Type: application/json`(由浏览器自动带 multipart boundary),FastAPI 才能收到 `file` 字段。
 - **修复交割单解析**: Excel/PDF 统一走"文本行 → 去 nan 占位/相邻重复 → 业务名称关键词定位 → 10 列对齐"解析,兼容券商交割单的合并单元格展开、表头不在首行、中文名称被拆开等情况。
 - **新增 PDF 格式支持**: 允许上传 .pdf 交割单(pypdf 提取文本),与 Excel 版解析结果一致(实测 PDF 更完整,xlsx 导出偶有漏行)。
 - 已实测: xlsx 562 笔 / PDF 586 笔解析成功,端到端上传 → 画像 → 报告全通,回归测试 14 passed。
-
-
 
 ### feat(auth)
 
@@ -17698,14 +17634,10 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
   - 前端校验:新密码长度、两次输入一致(红色提示),成功 toast「密码已更新」,失败展示后端错误;
   - 已通过 pytest(12 认证测试) + tsc + 浏览器全流程实测。
 
-
-
 ### feat(ui)
 
 - **PC化改造(5项, 多智能体流水线完成)**: ①桌面导航13项全平铺并按业务分组(行情/交易/系统), 不再藏进头像下拉; ②界面密度三档体系(compact/normal/comfortable, 通过 html[data-density] + CSS 变量驱动, 默认 normal 完全不变); ③PC快捷键(⌘/Ctrl+K 打开日志、⌘/Ctrl+, 跳设置、g→d 首页、g→p 持仓、? 帮助, 桌面端≥768px生效、输入框内自动失效); ④股票行右键菜单(加入自选/查看详情/复制代码/模拟买入, Stocks+Dashboard 共用 StockContextMenu 组件); ⑤Dashboard 多列工作台(≥1280px 三列: 今日要紧事3|组合体检6|机会精选3, 次级两列简报6|机会发现6, 1280px以下逐像素回退)。
 - 全部改动经生产构建(vite build) + tsc 编译 + 浏览器实测验证。
-
-
 
 ### perf
 
@@ -17732,8 +17664,6 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
 ### fix
 
 - **主力意图方向判据对齐 v14(2026-08-12 用户发现)**: `_main_intent_structured` 的 direction 原逻辑只看主力净额(>500万=买 / <-500万=卖), 与同花顺"表面结论"同样粗暴——神剑股份 002361 主力净流出-2466万(超大单+5967万/大单-8433万)被误判"派发"。修正为 v14 完整判据: 参与度≥35% 且 买占≥48% = 强吸筹力度, 净流出+强吸筹 → wash(洗盘吸筹), 净额平衡+强吸筹 → absorb(疑似吸筹)。K线 markers 同步支持 5 档(吸筹红↑/洗盘吸筹橙↑/疑似吸筹黄↑/派发绿↓/平衡), 图例加参与度/买占展示。注: 同花顺同数字判"派发"是它的结论规则问题(只看净额), 数据本身与我们逐笔一致。
-
-
 
 ### feature
 
@@ -17896,7 +17826,6 @@ agent_configs 里 premarket_outlook/daily_report 绑定商汤 deepseek-v4-flash,
 ### doc
 
 - 无。
-
 
 ## 2026-08-25
 
