@@ -1,0 +1,137 @@
+/*
+ * 市场主线卡片布局 (2026-11-11)
+ *
+ * 这张卡的外层容器决定一切, 而它**不是**页宽: Dashboard「市场全景」三栏里它只有 ~460px
+ * (用户截图 3048×1672 @2x ⇒ CSS 视口 ~1524, 卡片实测 ~460)。旧实现按**视口断点**
+ * `md:grid-cols-2` 拆两列本来是对的——病根不在两列, 而在行: 名称/得分/家数/最高板/龙头
+ * 全是 `shrink-0` 定宽块, 223px 列里名称被压到 0px、指标叠字、行横向溢出再被
+ * `overflow-hidden` 硬切(460px 卡实测 100 处违规)。
+ *
+ * 所以:**保留并列两列**(用户要的就是并列态), 把行改成可换行/可省略; 阈值一律按
+ * **容器宽度**(container query), 不看视口。阈值与数字全部是真实 Chromium 实测
+ * (视口 1600, 深色 zh, 6+6 行并列; 判定=文字可见盒相交 / 被裁剪祖先切掉 / 宽≈0 / 横向溢出):
+ *
+ *   卡宽    列数/列宽     违规   行高     整卡高(px)
+ *   320     1 / 318       0     69.6    1132.0
+ *   400     2 / 194       0     92.8     764.8
+ *   420     2 / 203       0     92.8     764.8
+ *   460 ★   2 / 223       0     92.8     764.8   ← 用户截图真实宽度, 并列两列
+ *   460(en) 2 / 223       0     92.8     764.8
+ *   520     2 / 253       0     69.6     751.7
+ *   560     2 / 273       0     69.6     732.2
+ *   620     2 / 303       0     69.6     606.2
+ *   720     2 / 353       0     69.6     606.2
+ *   1100    2 / 543       0     48.4     479.1
+ *   (旧实现 460: 2 / 223 同样是两列, 但违规 100 处 —— 差别在行, 不在列)
+ *
+ * 取 400 作两列门槛的依据: 194px 列已经是实测**零违规**的最窄列(行内折成
+ * 名称+得分 / 分条 / 指标 / 龙头 四行, 行高 92.8); 再窄就只剩叠字, 所以 <400 的**极窄**
+ * 卡片退回单列兜底。460 两列整卡 764.8px, 比同宽度单列一行式(910.9)矮 146px、比单列
+ * 两行式(1084.4)矮 320px —— 既保住并列视图, 又不给三栏网格撑出死白。
+ * 独立复核口径(只量行区)与这里一致: 460 → 223 列 × 6 行 ≈ 534px, 违规 0。
+ *
+ * 行内一行式门槛 400px: 列 ≥400 时名称/得分/家数/板/档/龙头同排(543 列行高 48.4);
+ * 更窄的列走上面那个多行式。两条门槛之外 flex-wrap 仍兜底, 英文长名/长龙头在 223px
+ * 列里自动折行, 违规仍是 0。
+ *
+ * 行内任何文字都可以省略(有 title 兜底), 但**不允许被容器硬切**。
+ */
+
+
+
+.mainline-card {
+  container-type: inline-size;
+  container-name: mainline-card;
+}
+
+.mainline-both-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 12px;
+}
+
+@container mainline-card (min-width: 400px) {
+  .mainline-both-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.mainline-col {
+  container-type: inline-size;
+  container-name: mainline-col;
+  min-width: 0;
+}
+
+.mainline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+
+/* 窄列: 主体(名称/得分/分条)独占一行, 指标与龙头整体换到下一行 */
+.mainline-row__body {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.mainline-row__name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 换行后与名称文字左对齐(让开 14px 折展图标 + 8px 间距) */
+.mainline-row__metrics {
+  min-width: 0;
+  padding-left: 22px;
+}
+
+.mainline-row__leader {
+  min-width: 0;
+}
+
+.mainline-row__leader-name {
+  min-width: 0;
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 宽列: 一行式(名称/得分 + 指标 + 龙头同排), 指标与龙头右对齐贴边 */
+@container mainline-col (min-width: 400px) {
+  .mainline-row__body {
+    flex: 1 1 auto;
+  }
+
+  .mainline-row__metrics {
+    padding-left: 0;
+    margin-left: auto;
+  }
+
+  .mainline-row__leader-name {
+    max-width: 180px;
+  }
+}
+
+/* 表头在窄卡片里必须能换行: 标题(市场主线)+ 维度页签 + 刷新在 320px 宽度下放不进一行,
+   原来 action 是 shrink-0 ⇒ 标题被压成 0px 且整卡横向溢出 8px。 */
+.mainline-card .mainline-header {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+/* 只命中 action(必为第二子节点): 用 :last-child 会在无 action 的加载态/失败空态命中的是
+   标题块本身, 把「市场主线」右对齐。 */
+.mainline-card .mainline-header > div + div {
+  /* SectionHeader 把 action 写死成 shrink-0 —— 在这里必须让它可收缩, 否则窄卡里
+     「市场主线」标题被压成 0px、action 自身撑出卡片(实测 278px 容器溢出 40px)。 */
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+}

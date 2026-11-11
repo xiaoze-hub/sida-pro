@@ -4,6 +4,7 @@ import { RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Layers, Crown, Inf
 import { fetchAPI } from '@sida/api'
 import SectionHeader from '@sida/biz-ui/components/SectionHeader'
 import { mainlineAsOfDate, mainlineAsOfText, mainlineCacheText } from '@sida/biz-ui/lib/mainline-meta'
+import './market-mainline.css'
 
 /**
  * 市场主线识别卡片 (2026-08-24, v0.3.0)
@@ -209,6 +210,7 @@ function MainlineRow({
 }) {
   const tone = scoreTone(g.score)
   const score = g.score ?? 0
+  const scoreText = g.score != null ? Number(g.score).toFixed(1) : '--'
   const leaderName = g.leader?.name || '--'
   const leaderDays = g.leader?.days ?? 0
   const isConcept = g.dimension === 'concept'
@@ -219,30 +221,34 @@ function MainlineRow({
     : `龙头 ${leaderName} ${leaderDays}板`
 
   return (
-    <div className="border-b border-border overflow-hidden">
-      {/* 主行: 可点击展开 */}
+    <div data-mainline-row-wrap className="border-b border-border">
+      {/* 主行: 可点击展开。布局由 market-mainline.css 按**列宽**切换(窄列三行, 宽列一行),
+          行内文字一律可省略(min-w-0 + ellipsis), 不允许固定宽度块把邻居挤出容器。 */}
       <button
         type="button"
         onClick={onToggle}
-        className="w-full px-2.5 py-2 flex items-center gap-2 hover:bg-s2 transition-colors text-left"
+        data-testid="mainline-row"
+        className="mainline-row w-full px-2.5 py-2 hover:bg-s2 transition-colors text-left"
       >
-        <span className="text-muted-foreground shrink-0">
-          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[14px] font-semibold text-foreground truncate" title={g.name}>{g.name}</span>
-            <span className={`text-[12px] tabular-nums font-mono ${tone.text}`}>
-              {g.score != null ? Number(g.score).toFixed(1) : '--'}
+        <div className="mainline-row__body">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-muted-foreground shrink-0">
+              {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
             </span>
-            {isConcept ? (
-              <span
-                className="text-[12px] text-muted-foreground border border-border rounded px-1 shrink-0"
-                title="概念维度: 一只股票可同属多个概念, 各家数不可相加"
-              >
-                概念
-              </span>
-            ) : null}
+            <span
+              data-mainline-name
+              className="mainline-row__name min-w-0 text-[14px] font-semibold text-foreground"
+              title={g.name}
+            >
+              {g.name}
+            </span>
+            <span
+              data-mainline-score
+              className={`shrink-0 text-[12px] tabular-nums font-mono ${tone.text}`}
+              title={`主线分 ${scoreText}`}
+            >
+              {scoreText}
+            </span>
           </div>
           {/* 主线分条形: width = score%, 底色 + 主色叠加 */}
           <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
@@ -252,8 +258,11 @@ function MainlineRow({
             />
           </div>
         </div>
-        {/* 关键指标: 涨停数 / 最高板 */}
-        <div className="flex items-center gap-2.5 shrink-0 text-[12px] tabular-nums">
+        {/* 关键指标 + 龙头: 窄列整体换行到名称下面, 宽列右对齐贴边 */}
+        <div
+          data-mainline-metrics
+          className="mainline-row__metrics flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] tabular-nums"
+        >
           <span
             className="text-stock-up font-mono"
             title={isConcept ? '本概念内涨停家数(与其他概念重叠计数, 不可相加)' : '涨停家数'}
@@ -266,13 +275,25 @@ function MainlineRow({
           <span className="text-muted-foreground font-mono" title="梯队档位">
             {g.rungs}档
           </span>
-        </div>
-        {/* 龙头 */}
-        <div className="hidden md:flex items-center gap-1 shrink-0 max-w-[100px]">
-          <Crown className="w-3 h-3 text-amber-500 shrink-0" />
-          <span className="text-[12px] text-amber-600 dark:text-amber-400 truncate" title={leaderTitle}>
-            {leaderName}
-            {leaderDays > 1 ? <span className="ml-0.5 text-muted-foreground">{leaderDays}B</span> : null}
+          {isConcept ? (
+            <span
+              className="shrink-0 rounded border border-border px-1 text-[12px] text-muted-foreground"
+              title="概念维度: 一只股票可同属多个概念, 各家数不可相加"
+            >
+              概念
+            </span>
+          ) : null}
+          <span data-mainline-leader className="mainline-row__leader inline-flex items-center gap-1">
+            <Crown className="w-3 h-3 shrink-0 text-amber-500" />
+            <span
+              className="mainline-row__leader-name text-[12px] text-amber-600 dark:text-amber-400"
+              title={leaderTitle}
+            >
+              {leaderName}
+            </span>
+            {leaderDays > 1 ? (
+              <span className="shrink-0 font-mono text-[12px] text-muted-foreground">{leaderDays}B</span>
+            ) : null}
           </span>
         </div>
       </button>
@@ -520,10 +541,10 @@ function DimensionColumn({
 }) {
   const rows = groups.slice(0, limit)
   return (
-    <div className="min-w-0">
+    <div data-mainline-col data-testid="mainline-col" className="mainline-col">
       <div className="flex items-center justify-between px-2.5 pb-1 text-[12px] text-muted-foreground">
-        <span>{title}</span>
-        <span className="tabular-nums">Top {rows.length}</span>
+        <span className="min-w-0 truncate" title={title}>{title}</span>
+        <span className="shrink-0 tabular-nums">Top {rows.length}</span>
       </div>
       {rows.length === 0 ? (
         <p
@@ -594,7 +615,12 @@ export default function MarketMainlineCard() {
   }, 30000, { deps: [load] })
 
   if (loading && !data) {
-    return <div role="status" className="min-w-0"><SectionHeader title="市场主线" /><p className="py-6 text-[12px] text-muted-foreground">正在加载市场主线…</p></div>
+    return (
+      <div role="status" data-mainline-card className="mainline-card min-w-0">
+        <SectionHeader title="市场主线" className="mainline-header" />
+        <p className="py-6 text-[12px] text-muted-foreground">正在加载市场主线…</p>
+      </div>
+    )
   }
 
   const ranked = data?.ranked_groups ?? []
@@ -638,9 +664,10 @@ export default function MarketMainlineCard() {
 
   if (ranked.length === 0 && conceptRanked.length === 0) {
     return (
-      <div data-testid="mainline-empty" className="border-t border-border pt-2.5">
+      <div data-mainline-card data-testid="mainline-empty" className="mainline-card border-t border-border pt-2.5">
         <SectionHeader
           title="市场主线"
+          className="mainline-header"
           action={
             updatedAt ? (
               <span
@@ -676,9 +703,10 @@ export default function MarketMainlineCard() {
   const conceptRest = conceptRanked.slice(10)
 
   return (
-    <div className="border-t border-border pt-2.5">
+    <div data-mainline-card className="mainline-card border-t border-border pt-2.5">
       <SectionHeader
         title="市场主线"
+        className="mainline-header"
         action={
           <>
             <DimensionTabs
@@ -688,7 +716,7 @@ export default function MarketMainlineCard() {
               conceptCount={conceptRanked.length}
             />
             {activeView === 'concept' || activeView === 'both' ? (
-              <span className="hidden lg:inline text-[12px] text-muted-foreground">
+              <span className="mainline-header-summary min-w-0 truncate text-[12px] text-muted-foreground">
                 {activeView === 'concept' ? (
                   <>概念 Top {conceptTop.length}{conceptRest.length > 0 ? ` / ${conceptRanked.length}` : ''}</>
                 ) : (
@@ -696,7 +724,7 @@ export default function MarketMainlineCard() {
                 )}
               </span>
             ) : (
-              <span className="text-[12px] text-muted-foreground">
+              <span className="mainline-header-summary min-w-0 truncate text-[12px] text-muted-foreground">
                 Top {top.length}
                 {rest.length > 0 ? ` / ${ranked.length}` : ''}
                 {stats ? (
@@ -755,7 +783,7 @@ export default function MarketMainlineCard() {
 
       {/* 并列视图: 行业 / 概念 同屏, 各 Top6 */}
       {activeView === 'both' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-3">
+        <div data-testid="mainline-both-grid" className="mainline-both-grid">
           <DimensionColumn
             title="行业 · 单一归属"
             groups={ranked}
@@ -790,7 +818,7 @@ export default function MarketMainlineCard() {
           </div>
         ) : (
           <>
-            <div className="space-y-1 lg:max-h-[300px] lg:overflow-y-auto">
+            <div data-testid="mainline-col" data-mainline-col className="mainline-col space-y-1 lg:max-h-[300px] lg:overflow-y-auto">
               {conceptTop.map((g) => {
                 const key = `concept:${g.name}`
                 return (
@@ -834,7 +862,7 @@ export default function MarketMainlineCard() {
       {/* 行业单列 */}
       {activeView === 'industry' ? (
         <>
-          <div className="space-y-1 lg:max-h-[300px] lg:overflow-y-auto">
+          <div data-testid="mainline-col" data-mainline-col className="mainline-col space-y-1 lg:max-h-[300px] lg:overflow-y-auto">
             {top.map((g) => {
               const key = `industry:${g.name}`
               return (
