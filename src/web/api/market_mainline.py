@@ -37,6 +37,11 @@ router = APIRouter()
 # 主线榜每次计算成功后 upsert 当日 (date, name, rank, score),
 # 跨日对比出 rank_change。PRIMARY KEY(date, name) 保证每日每线只留最新一条。
 # 建表由 B 层版本化迁移 src/web/migrations.py _m139 负责(W1.5/A5 收编)。
+#
+# 2026-11-11 遗留行清理: 同一数据日会被重算多次(盘中每次回源都算一遍), 只 upsert
+# 不删 ⇒ 某次入榜、之后掉出榜单的组会留在表里(生产实测 2026-11-11 的"造纸 rank=10"
+# 就是盘中遗留, 现算只有 9 组入榜), `_enrich_with_rank_change` 于是拿过期名次算
+# rank_change。现在 upsert 与 DELETE 同事务: 本次名单之外的同日行一律清掉。
 
 
 def _load_yesterday_ranks(today_iso: str) -> dict[str, int]:
@@ -76,11 +81,35 @@ def _load_yesterday_ranks(today_iso: str) -> dict[str, int]:
         return {}
 
 
+def _delete_sql_other_rows(n: int) -> str:
+    """清掉同一数据日、但不在本次名单里的行(双方言同一条 SQL)。
+
+    命名参数固定 n0..n{n-1}(不用 IN (...) 拼字面量, 名单里有引号/中文都不怕)。
+    """
+    placeholders = ", ".join(f":n{i}" for i in range(n))
+    return f"DELETE FROM mainline_rank_daily WHERE date = :date AND name NOT IN ({placeholders})"
+
+
 def _upsert_today_snapshot(today_iso: str, ranked_groups: list[dict]) -> None:
-    """当日快照 upsert: PRIMARY KEY(date, name) 冲突时覆盖 rank + score。
-    失败静默(主流程不应被落库异常阻断)。
+    """当日快照: 同一事务内 upsert 本次全部行, 再删同日不在本次名单的行。
+
+    PRIMARY KEY(date, name) 冲突时覆盖 rank + score; 同日重算掉出榜单的组会被
+    删掉, 免得 rank_change 拿过期名次做对比(见模块内 2026-11-11 备注)。
+
+    保守约定: 本次 payload 为空(或全无 name) ⇒ **一行也不删** —— 分不清"还没算"
+    和"今天真的没主线", 误删会把历史痕迹抹干净。失败静默(主流程不被落库异常阻断),
+    upsert 与 DELETE 同事务 ⇒ 任一失败整批回滚, 不会留下"删了没补"的半截快照。
     """
     if not ranked_groups:
+        return
+    # 先过滤出本次真正会写的行; 全无 name 时视为无效载荷, 不删(否则会把当日清空)
+    rows: list[tuple[str, int, object]] = []
+    for g in ranked_groups:
+        name = g.get("name")
+        if not name:
+            continue
+        rows.append((str(name), int(g.get("rank") or 0), g.get("score")))
+    if not rows:
         return
     try:
         from src.db.dialect import upsert_sql
@@ -94,20 +123,19 @@ def _upsert_today_snapshot(today_iso: str, ranked_groups: list[dict]) -> None:
             ["date", "name"],
             ["rank", "score"],
         )
+        names = sorted({r[0] for r in rows})
+        delete_stmt = _delete_sql_other_rows(len(names))
+        # engine.begin() = 单事务: upsert 与 DELETE 要么都生效, 要么都回滚
         with engine.begin() as conn:
-            for g in ranked_groups:
-                name = g.get("name")
-                if not name:
-                    continue
+            for name, rank, score in rows:
                 conn.execute(
                     text(stmt),
-                    {
-                        "date": today_iso,
-                        "name": str(name),
-                        "rank": int(g.get("rank") or 0),
-                        "score": g.get("score"),
-                    },
+                    {"date": today_iso, "name": name, "rank": rank, "score": score},
                 )
+            conn.execute(
+                text(delete_stmt),
+                {"date": today_iso, **{f"n{i}": n for i, n in enumerate(names)}},
+            )
     except Exception as e:
         logger.debug(f"mainline_rank_daily 写入当日快照失败(静默): {e}")
 

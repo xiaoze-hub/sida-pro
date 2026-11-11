@@ -23,6 +23,14 @@
 - 展开态成分股摘要行允许换行，窄列不再被裁或撑出列边界。
 - 未做：并列视图仍只渲染 Top6，11-20 名展开器只在单列页签内（既有行为，本次未改）；真实行情数据下的肉眼复核需登录态页面。
 
+### fix-mainline_rank_daily 同日遗留行清理（rank_change 不再拿过期名次）
+- 缺陷（生产实测）：`_upsert_today_snapshot` 只 upsert 从不删除，同一数据日被重算多次时，某次入榜、之后掉出榜单的组会留在表里。2026-11-11 该表 23 行，其中「造纸 rank=10」是盘中某次计算的遗留行——现算造纸只有 1 只涨停、9 组入榜、不在 `ranked_groups`，该行仍在，`_enrich_with_rank_change` 于是拿过期名次算 rank_change。
+- 改法：`_upsert_today_snapshot` 改为**同一事务**内「先 upsert 本次全部行，再 `DELETE FROM mainline_rank_daily WHERE date = :d AND name NOT IN (本次名单)`」；名单以命名参数 `n0..n{k}` 绑定（不拼字面量，中文/引号安全，SQLite 与 PG 同一条 SQL）。异常的静默口径与失败即整批回滚的语义不变。
+- 保守约定：本次 payload 为空、或列表里全无 `name`（脏载荷）⇒ **一行都不删**——分不清「还没算」和「今天真的没主线」，误删会把当日痕迹抹干净。
+- 写入方核查：全仓仅 `src/web/api/market_mainline.py::_upsert_today_snapshot` 写该表（`tests/test_migration_lock_and_failures.py` 里的 INSERT 是测试播种），无第二个写入方。
+- 新增 `tests/test_market_mainline_rank_daily_cleanup.py`（隔离 SQLite 7 例，先跑红再转绿）：① 旧行 + 少一组 payload → 旧行被删、其余覆盖；② 空 payload / 无 name 载荷 → 不删；③ 同 payload 连写幂等；④ 只清 `date=本次数据日`，别的日期历史快照不动；⑤ DELETE 失败 → upsert 一并回滚且异常静默。
+- 存量脏行不随发版自动清（本次只改写入路径）：生产人工清理 SQL 见交付说明，仅提供不执行。
+
 ### fix-市场主线并列态文字重叠（保留并列两列，行内可换行/可省略）
 - 根因：卡片宽度由外层决定（Dashboard「市场全景」三栏里实测 ~460 CSS px；用户截图 3048×1672 @2x ⇒ 视口 ~1524），并列两列本身没问题，问题在行：名称/得分/家数/最高板/龙头全是 `shrink-0` 定宽块，223px 列里名称被压到 0px、指标互相叠字、行横向溢出再被 `overflow-hidden` 硬切。真实 Chromium 实测 460px 卡：违规 100 处（名称可见宽 0px，「82.4」与「13家」相交 130px²，行溢出 40px）。
 - 改法：新增 `packages/biz-ui/src/components/market-mainline.css`，用 container query 按**容器**排版（不再看视口断点）：并列两列门槛 400px（194px 列已是实测零违规的最窄列，<400 才退回单列兜底）；列 ≥400 行内一行式，更窄的列折成「名称+得分 / 分条 / 指标 / 龙头」多行式。行内一律 `min-w-0` + ellipsis + title，行/行主体不再裁剪；龙头不再 `hidden md:flex`（窄列也要读得到）。
