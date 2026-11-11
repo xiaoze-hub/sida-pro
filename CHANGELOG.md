@@ -9,6 +9,12 @@
 - `premarket_outlook` 新闻行追加商品注释：`- [07:10] ⭐⭐商品期货收盘涨跌不一 纸浆涨超1% （商品：纸浆 → 造纸/包装印刷）`；未命中条目输出逐字节不变（注释为空串），注释异常只降级为无注释，不影响 prompt 组装。
 - 测试：新增 `tests/test_commodity_chain.py` 56 例（30 品种主题路由逐个参数化、原主题不被劫持、链表的行业名必须属于已核实集合、多品种/锂电池反例、TQ 目录/成分/空列表/未知行业四种失败均 `None`、`beneficiaries` 去重与 600103 命中、证据块注释与 TQ 失败省略键、outlook 新闻行注释与普通行不变），全部 TQ/网络打桩。实跑：新文件 56 passed；既有 `test_premarket_evidence` / `_evidence_scope` / `_harness` / `_premarket_catalyst` / `test_premarket_api` / `test_tdx_boards` 共 70 passed（0 failed）。
 - 未做/未验证：本次全部走替身，**未连真实 TQ 网关**，因此「造纸 30 只 / 包装印刷 49 只」与 600103 归属未在真网关下复测；未跑生产真实快讯端到端；报表模板 `report_generator` 的隔夜消息行本次未加注释（保持逐字节兼容用例不变）。
+### fix-涨停池主源补齐封单/首封/炸板（只补缺失，不覆盖真值）
+- 生产实测缺陷：主源 `MarketSentimentCollector._limit_up_pool_tq`（K 线自算涨停）返回的 85 只涨停票 `ltsz / turnover_rate / order_amount` 全为 0、`first_time` 全空（85/85）。K 线里没有这些字段，只有 TQ `get_zdt_data` 快照有（`FirstTimeZT` / `OpenTimesZT` / `FDVolMaxZT`），而快照此前只在主源失败时当备源跑（`_limit_up_pool_zdt_tq` → `zdt_fallback_pool`），主源成功就永远拿不到。
+- 新增 `src/core/limit_pool_zdt.py::enrich_pool_with_zdt(pool, *, fetcher=None)`：只对池内代码分片取快照（≤50 只/次，同码去重），**只补缺失**字段（`first_time` 空串 / `open_times`、`order_amount`、`ltsz` 为 0 即视为缺失，盘中 0 可被更新的炸板次数刷新），已有非零值一律不覆盖；改过字段的行标 `enrich_source="tq_zdt"` 与 `enrich_as_of`（取池内统一 `as_of`，缺失/不一致 → `None`，不用今天冒充）；空快照/全脏行/网关异常**原对象原样返回**，连续 2 批失败即中止。`days` 仍只认 K 线（`OpenTimesZT` 是炸板次数，不是连板数）。
+- 接线：`_limit_up_pool_tq` 组装完成后（板块富化之后）在「非历史请求日」才调一次，异常被吞掉、不影响主流程 —— 历史日池子绝不拿当日快照盖。
+- 仍缺字段（快照本身没有，未编造）：`turnover_rate` 快照 14 字段无对应项，保持 0；`ltsz` 仅在快照记录自带 `Ltsz`（亿）时补（×1e8 元），真实快照无此字段，故生产仍是 0。
+- 新增 `tests/test_limit_pool_zdt_enrich.py`（22 例）：空快照不改入参、补字段、已有值不覆盖、盘中 0 可被刷新、日期缺失为 None、异常返回原对象、分片 50/50/20、同码去重、换手率不编造、ltsz 亿→元、幂等；含 3 例接线（当日补 / 历史日不补 / 补齐失败不影响主流程）。已做变异验证：放开覆盖保护 + 摘掉接线即 3 例变红。相邻 4 个既有用例文件 72 例全绿。
 
 ## release: v0.11.10（市场主线并列态排版修复）
 

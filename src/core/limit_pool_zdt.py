@@ -19,6 +19,14 @@
 
 包边界: marketdata 包不 import 宿主 `src/`(架构禁止), 纯解析函数放本模块,
 TQ 侧复用包内现成封装 `zdt_snapshot()`(get_zdt_data)与 `tq_rpc()`。
+
+## 第二用途(2026-11-11): 主源**成功时**的富化步骤
+
+生产实测: 主源 `_limit_up_pool_tq`(K线自算涨停)返回的 85 只涨停票
+ltsz/turnover_rate/order_amount 全 0、first_time 全空(85/85) —— K 线里根本没有这些
+字段, 只有 `get_zdt_data` 快照有。此前快照只在主源失败时当备源跑, 主源成功就永远
+拿不到首封/炸板/封单。`enrich_pool_with_zdt()` 把同一份快照接成**主源的富化步骤**:
+只补缺失字段、已有真值不覆盖、取不到就不写(详见该函数 docstring)。
 """
 from __future__ import annotations
 
@@ -157,6 +165,134 @@ def zdt_fallback_pool(codes: list[str] | None = None) -> list[dict]:
     return pool
 
 
+def enrich_pool_with_zdt(pool: list[dict], *, fetcher=None) -> list[dict]:
+    """主源池子补齐快照独有字段(首封/炸板/封单) —— **只补缺失, 不覆盖已有真值**。
+
+    背景(2026-11-11 生产实测): 主源 `_limit_up_pool_tq` 由 K 线自算涨停, 返回的 85 只
+    涨停票 ltsz/turnover_rate/order_amount 全 0、first_time 全空(85/85) —— K 线没有这些
+    字段, 只有 `get_zdt_data` 快照有。备源 `zdt_fallback_pool` 只在主源失败时跑, 主源
+    成功就永远拿不到首封/炸板/封单; 本函数把同一份快照接成**主源的富化步骤**。
+
+    口径:
+      · 只对池内代码分片取快照(**≤50 只/次**, 事故铁律; 同码去重, 裸码/带后缀算同一只);
+      · **只补缺失**: `first_time` 空串 / `open_times` 缺失 / `order_amount<=0` /
+        `ltsz<=0` 才写; 已有非零值一律不动(其他源的真值优先, 同时保证幂等);
+      · 改过至少一个字段的行才标 `enrich_source="tq_zdt"` 与 `enrich_as_of`
+        (= 池内**统一**的 `as_of`, 即 K 线可证实的交易日; 缺失/不一致 → None,
+        绝不用"今天"冒充);
+      · 快照没有的字段不编造: `turnover_rate` 快照 14 字段里**没有**(保持原值);
+        `ltsz` 只在记录自带 `Ltsz`(单位亿, 与 get_more_info 同源)时补 → ×1e8 元;
+      · 空快照/全脏行/网关异常 → **原对象原样返回**(调用方零成本兜底);
+        连续 2 批失败即中止(绝不压测式重试, 与主源同铁律);
+      · `fetcher` 可注入(测试/其他快照源): `fetcher(codes) -> {TQ码: 记录}`。
+
+    连板数不参与: 快照 `OpenTimesZT` 是"打开次数"(炸板), 不是连板数 —— `days` 只认 K 线。
+    """
+    if not pool:
+        return pool
+    rows = [r for r in pool if isinstance(r, dict)]
+    if not rows:
+        return pool
+
+    codes: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        c = str(r.get("code") or "").strip()
+        if not c:
+            continue
+        tq_code = normalize_code(c)
+        if tq_code in seen:
+            continue
+        seen.add(tq_code)
+        codes.append(tq_code)
+    if not codes:
+        return pool
+
+    fetch = fetcher or _default_zdt_fetch
+    snap: dict = {}
+    fails = 0
+    for i in range(0, len(codes), _ZDT_CHUNK):
+        part = codes[i : i + _ZDT_CHUNK]
+        try:
+            s = fetch(part)
+        except Exception as e:  # noqa: BLE001
+            fails += 1
+            logger.warning("涨停池补快照: 第 %d 批失败(%s)", i // _ZDT_CHUNK + 1, e)
+            if fails >= 2:  # 与主源同一铁律: 连续失败即中止, 绝不压测式重试
+                break
+            continue
+        if isinstance(s, dict):
+            snap.update(s)
+
+    by_bare = {
+        str(k).split(".", 1)[0]: v for k, v in (snap or {}).items() if isinstance(v, dict)
+    }
+    if not by_bare:
+        logger.warning("涨停池补快照: 无可用记录(盘前/非交易日/网关返回空) → 池子原样返回")
+        return pool
+
+    as_of = _common_as_of(rows)
+    for row in rows:
+        rec = by_bare.get(str(row.get("code") or "").split(".", 1)[0])
+        if not rec:
+            continue
+        filled = False
+        if _fillable(row, "first_time"):
+            ft = fmt_zdt_time(rec.get("FirstTimeZT"))
+            if ft:
+                row["first_time"] = ft
+                filled = True
+        if _fillable(row, "open_times") and rec.get("OpenTimesZT") is not None:
+            row["open_times"] = _to_int(rec.get("OpenTimesZT"), 0)
+            filled = True
+        if _fillable(row, "order_amount"):
+            hands = _to_int(rec.get("FDVolMaxZT"), 0)
+            if hands > 0:
+                # 封单量单位=手(成交量, 股=手×100); 与 zdt_fallback_pool 同口径
+                row["order_amount"] = hands * 100.0
+                filled = True
+        if _fillable(row, "ltsz"):
+            yi = _to_float(rec.get("Ltsz"))
+            if yi > 0:
+                # get_zdt_data 记录若带 Ltsz(亿), 换成池子的元口径; 实测 14 字段无此项
+                row["ltsz"] = yi * 1e8
+                filled = True
+        if filled:
+            row["enrich_source"] = "tq_zdt"
+            row["enrich_as_of"] = as_of
+    return pool
+
+
+def _default_zdt_fetch(codes: list[str]) -> dict:
+    """默认快照取数(惰性 import, 便于离线测试注入 fetcher)。"""
+    import marketdata.vendors.tq as tqmod
+
+    return tqmod.zdt_snapshot(codes)
+
+
+def _fillable(row: dict, field: str) -> bool:
+    """该字段是否"缺失到可以补" —— **已有非零/非空值一律不补**(不覆盖真值)。
+
+    `0` 视同缺失: 池子里 0 是"没有这个字段"的默认值(主源 K 线路径直接给 0),
+    允许被更新的快照刷新; 一旦有非零真值, 无论来自哪一路都不再动。
+    """
+    v = row.get(field)
+    if field == "first_time":
+        return not str(v or "").strip()
+    return _to_float(v) <= 0
+
+
+def _common_as_of(rows: list[dict]) -> str | None:
+    """池内**统一**的 as_of(K 线可证实的数据日); 缺失/不一致/部分缺 → None(不猜今天)。"""
+    vals = {str(r.get("as_of") or "").strip() for r in rows}
+    vals.discard("")
+    if len(vals) != 1:
+        return None
+    if any(not str(r.get("as_of") or "").strip() for r in rows):
+        return None  # 有一只没日期 ⇒ 整体不许盖章
+    return vals.pop()
+
+
 def _to_int(v, default: int) -> int:
     """TQ 值(int/float/数字串) → int; 取不到给 default, 不猜。"""
     if isinstance(v, (int, float)):
@@ -164,6 +300,18 @@ def _to_int(v, default: int) -> int:
     if isinstance(v, str) and v.strip().isdigit():
         return int(v)
     return default
+
+
+def _to_float(v) -> float:
+    """TQ 值 → float; 取不到/非法 → 0.0(调用方用 <=0 判缺失)。"""
+    if isinstance(v, bool):
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def fmt_zdt_time(v) -> str:

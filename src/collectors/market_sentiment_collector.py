@@ -244,6 +244,18 @@ class MarketSentimentCollector:
         if not requested or requested == datetime.now().strftime("%Y%m%d"):
             self._enrich_pool_blocks(pool)
 
+        # ⑤ 快照补齐(首封/炸板/封单): K 线算不出这些, 只有 get_zdt_data 快照有 ——
+        #    此前快照只在主源失败时当备源跑, 主源成功就永远是 first_time="" / order_amount=0。
+        #    仅当日/非历史请求日接入: 快照是"当日"状态, 拿它盖历史日 = 日期错配。
+        #    失败一律吞掉 —— 富化拿不到字段 ≠ 池子不可用(不降级、不改主源 truth)。
+        if not requested or requested == datetime.now().strftime("%Y%m%d"):
+            try:
+                from src.core.limit_pool_zdt import enrich_pool_with_zdt
+
+                enrich_pool_with_zdt(pool)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("涨停池(TQ): 快照补齐失败(不影响主源池子): %s", e)
+
         return pool
 
     def _enrich_pool_blocks(self, pool: list[dict], block_as_of: str | None = None) -> list[dict]:
