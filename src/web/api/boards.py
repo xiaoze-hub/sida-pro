@@ -16,7 +16,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -362,6 +362,60 @@ def board_heatmap(
         "as_of": as_of,
         "source": "ths",
         "items": items,
+    }
+
+
+@router.get("/anomalies")
+def board_anomalies(
+    type: str = Query("all", description="industry / concept / all"),
+    date: str | None = Query(None, description="交易日 YYYY-MM-DD 或 YYYYMMDD, 缺省=最近有采样的交易日"),
+    limit: int = Query(50, ge=1, le=200, description="最多返回条数"),
+    db: Session = Depends(get_db),
+):
+    """板块异动记录(2026-11-11)。
+
+    与热力图顶部芯片的区别: 芯片是**当前快照**的瞬时判定, 刷新即消失; 本接口读的是
+    交易时段内每 2 分钟一次采样落库的**历史记录**, 带时间戳, 可回看。
+
+    诚实边界: 记录只覆盖「真的采样到的时段」—— coverage 里的 samples/first_ts/last_ts
+    是页面标注「记录自…」的依据; 没有任何采样时 available=false, 不给空列表冒充
+    「今日无异动」。
+    """
+    from src.core import board_anomaly
+
+    btype = (type or "all").lower()
+    if btype not in ("industry", "concept", "all"):
+        raise HTTPException(400, "type 仅支持 industry/concept/all")
+
+    if date:
+        raw = str(date).replace("-", "").strip()
+        if len(raw) != 8 or not raw.isdigit():
+            raise HTTPException(400, "date 需为 YYYY-MM-DD 或 YYYYMMDD")
+        td = raw
+    else:
+        td = board_anomaly.latest_trade_date_with_data(db) or datetime.now(
+            timezone(timedelta(hours=8))
+        ).strftime("%Y%m%d")
+
+    coverage = board_anomaly.read_coverage(db, trade_date=td, board_type=btype)
+    items = board_anomaly.read_events(
+        db, trade_date=td, board_type=btype, limit=limit
+    )
+    total = len(items)
+    if coverage["samples"] == 0:
+        note = "该交易日暂无采样: 板块异动只在交易时段每 2 分钟采样一次, 采样缺失时没有记录可看。"
+    else:
+        note = (
+            "记录自首次采样起, 采样中断的时段没有记录; 涨速为 5 分钟口径, 放量为量比(≥2.0)。"
+        )
+    return {
+        "available": coverage["samples"] > 0,
+        "trade_date": f"{td[:4]}-{td[4:6]}-{td[6:]}",
+        "source": "tdx_tq",
+        "coverage": coverage,
+        "count": total,
+        "items": items,
+        "note": note,
     }
 
 

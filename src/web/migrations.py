@@ -6811,6 +6811,88 @@ CREATE TABLE IF NOT EXISTS index_flow_daily (
     except Exception as exc:  # noqa: BLE001 - 普通索引不影响正确性
         logger.warning("index_flow_daily 普通索引创建失败(表与唯一索引已就位): %s", exc)
 
+def _m246_board_anomaly(conn: Connection) -> None:
+    """板块异动记录（2026-11-11）。
+
+    为什么要落库：热力图顶部的「板块异动」芯片是**当前快照**算出来的（涨速/量比），
+    刷新一次就没了 —— 盘中 10:32 的一次急拉，10:35 就再也查不到。本表把每轮采样的
+    板块快照和命中阈值的事件都留下，页面上才有「记录」可看。
+
+    两张表的分工：
+    - `board_anomaly_snapshots`：每轮采样的原始快照（价格/涨幅/成交额/主力净额）。
+      涨速 = 5 分钟价格变化，必须有两端快照才算得出；进程重启后从库里取上一轮，
+      不靠进程内内存（否则重启即断档，还可能凭空造出「涨速」）。
+    - `board_anomaly_records`：命中阈值的**事件**，带去重桶（同一板块同一类型
+      15 分钟内只记一条，避免一根长阳刷屏）。
+
+    口径：阈值与前端芯片完全一致（涨速 ≥0.5%/5分钟、量比 ≥2.0），所以「图上有环」
+    与「列表里有记录」是同一套判定，不会出现两套数字打架。
+    """
+    id_pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    if not _has_table(conn, "board_anomaly_snapshots"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS board_anomaly_snapshots (
+    id {id_pk},
+    trade_date VARCHAR(8) NOT NULL,
+    ts TIMESTAMP NOT NULL,
+    block_code VARCHAR(16) NOT NULL,
+    board_type VARCHAR(16) NOT NULL,
+    price DOUBLE PRECISION,
+    change_pct DOUBLE PRECISION,
+    amount DOUBLE PRECISION,
+    fund_net DOUBLE PRECISION
+)
+"""
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_board_anomaly_snap_key "
+                "ON board_anomaly_snapshots (ts, block_code)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_board_anomaly_snap_date "
+                "ON board_anomaly_snapshots (trade_date, ts)"
+            )
+        )
+    if not _has_table(conn, "board_anomaly_records"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS board_anomaly_records (
+    id {id_pk},
+    trade_date VARCHAR(8) NOT NULL,
+    ts TIMESTAMP NOT NULL,
+    block_code VARCHAR(16) NOT NULL,
+    name VARCHAR(64),
+    board_type VARCHAR(16),
+    kind VARCHAR(16) NOT NULL,
+    value DOUBLE PRECISION,
+    window_min INTEGER,
+    change_pct DOUBLE PRECISION,
+    fund_net DOUBLE PRECISION,
+    bucket INTEGER NOT NULL,
+    source VARCHAR(16)
+)
+"""
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_board_anomaly_rec_dedupe "
+                "ON board_anomaly_records (trade_date, block_code, kind, bucket)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_board_anomaly_rec_date "
+                "ON board_anomaly_records (trade_date, ts)"
+            )
+        )
 
 
 MIGRATIONS: tuple[Migration, ...] = (
@@ -7053,6 +7135,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(243, "etf_minute_flow", _m243_etf_minute_flow),
     Migration(244, "etf_flow_daily", _m244_etf_flow_daily),
     Migration(245, "etf_minute_source", _m245_etf_minute_source),
+    Migration(246, "board_anomaly", _m246_board_anomaly),
 )
 
 

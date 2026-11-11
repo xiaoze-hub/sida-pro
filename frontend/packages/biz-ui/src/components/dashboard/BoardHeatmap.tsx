@@ -25,6 +25,7 @@ import { fetchAPI } from '@sida/api'
 import { safeFixed } from '@/lib/format'
 import ErrorState from '@sida/biz-ui/components/ErrorState'
 import LoadingState from '@sida/biz-ui/components/LoadingState'
+import BoardAnomalyLog from '@sida/biz-ui/components/dashboard/BoardAnomalyLog'
 
 /**
  * 板块热力图 (P1-1, 2026-09-10, 借鉴 OpenTerminal treemap 热力图):
@@ -286,6 +287,12 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
    */
   const [failure, setFailure] = useState<{ type: BoardType; error: unknown } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  /**
+   * 图表**成功取数**的序号(2026-11-11): 图下方的「板块异动记录」据此与图表同拍刷新。
+   * 用成功计数而不是 reloadKey: 刷新失败时图表保留旧数据, 记录也不该再打一次后端空转;
+   * 反过来图表每拿到一次新数据(含 60s 轮询), 记录就跟着取一次, 两者节拍同一份。
+   */
+  const [dataSeq, setDataSeq] = useState(0)
 
   const onOpenRef = useRef(onOpenBoard)
   useEffect(() => {
@@ -307,6 +314,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       if (!aliveRef.current || seq !== seqRef.current) return
       setData(res)
       setFailure(null)
+      setDataSeq((n) => n + 1)
     } catch (e) {
       if (!aliveRef.current || seq !== seqRef.current) return
       setFailure({ type: btype, error: e })
@@ -687,6 +695,11 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </span>
         </div>
       )}
+
+      {/* 带时间的历史异动记录(2026-11-11): 顶部芯片只有「当前快照」, 收盘/切走就没了。
+          boardType 跟着分类走; refreshKey=dataSeq ⇒ 图表每拿到一次新数据(60s 轮询/手动刷新成功)
+          记录跟着重取一次, 图表失败时不再多打一次后端。点击行与色块/芯片同样下钻成分股。 */}
+      <BoardAnomalyLog boardType={btype} refreshKey={dataSeq} onOpenBoard={onOpenBoard} />
     </div>
   )
 }

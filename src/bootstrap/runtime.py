@@ -28,6 +28,7 @@ from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
 from src.core.market_breadth_scheduler import MarketBreadthScheduler
+from src.core.board_anomaly_scheduler import BoardAnomalyScheduler
 from src.core.decision_precompute import DecisionPrecomputeScheduler
 from src.core.layer_precompute import LayerPrecomputeScheduler
 from src.core.scheduler import AgentScheduler
@@ -69,6 +70,10 @@ tq_formula_signal_scheduler: TqFormulaSignalScheduler | None = None
 # 市场广度日序列(2026-09-25): 每交易日 18:40 从 PG klines 自算每日涨跌家数与
 # 六指标(ADL/ADR/ARMS/BTI/MCL/STIX)+情绪温度。与 TQ 类调度器错开, 不抢客户端。
 market_breadth_scheduler: MarketBreadthScheduler | None = None
+
+# 板块异动采样(2026-11-11): 交易时段每 2 分钟采一轮板块快照, 命中阈值的落"异动记录"。
+# 热力图顶部芯片只看当前快照, 刷新即丢; 这个调度器让异动可回溯。
+board_anomaly_scheduler: BoardAnomalyScheduler | None = None
 
 # 决策合成预落库(2026-10-10 冗余设计): 每工作日 15:45 对全库自选∪持仓标的批算决策基底
 # 落 decision_cache, 让 /api/decision/{symbol} 盘后/次日盘前命中缓存(免重复现算)。

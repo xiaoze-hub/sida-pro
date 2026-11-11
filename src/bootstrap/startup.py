@@ -27,6 +27,7 @@ from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
 from src.core.market_breadth_scheduler import MarketBreadthScheduler
+from src.core.board_anomaly_scheduler import BoardAnomalyScheduler
 from src.core.decision_precompute import DecisionPrecomputeScheduler
 from src.core.layer_precompute import LayerPrecomputeScheduler
 from src.web.database import SessionLocal, init_db
@@ -317,6 +318,19 @@ async def lifespan(app):
             logger.info("市场广度调度器已启动")
         except Exception as e:
             logger.error(f"市场广度调度器启动失败: {e}")
+
+        # 板块异动采样(2026-11-11)
+        # 为什么需要: 热力图顶部的「板块异动」芯片只反映**当前快照**, 10:32 的急拉
+        # 10:35 就查不到了。这里交易时段每 2 分钟落一轮板块快照 + 命中阈值的事件,
+        # 页面才有带时间戳的记录可回看。非交易时段 sample_once 自己跳过, 不写库。
+        try:
+            rt.board_anomaly_scheduler = BoardAnomalyScheduler(
+                timezone=settings.app_timezone
+            )
+            rt.board_anomaly_scheduler.start()
+            logger.info("板块异动采样调度器已启动")
+        except Exception as e:
+            logger.error(f"板块异动采样调度器启动失败: {e}")
 
         # 决策合成预落库(2026-10-10 冗余设计)
         # 为什么需要: /api/decision/{symbol} 是实时计算端点(拉 120 天 K 线 + 明暗盘资金),
