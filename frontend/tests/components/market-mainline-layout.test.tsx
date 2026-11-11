@@ -163,6 +163,16 @@ describe('市场主线 · 并列视图布局契约', () => {
     expect(css).not.toMatch(/\.mainline-row__(body|metrics)\s*\{[^}]*overflow:\s*hidden/s)
   })
 
+  it('展开态: 成分股摘要行必须可换行(窄列里不许被裁/溢出)', async () => {
+    await renderBoth()
+    const rows = screen.getAllByTestId('mainline-row')
+    fireEvent.click(rows[0])
+    // 成分股摘要(成分股 N 只 · 成交额 … · 独占 …)在 200px 列里放不进一行
+    const summary = screen.getByText(/成分股 \d+ 只/)
+    const line = summary.parentElement as HTMLElement
+    expect(line.className).toContain('flex-wrap')
+  })
+
   it('加载态(无 action)标题仍是唯一头节点: 不能被 action 样式右对齐/压宽', async () => {
     mocks.fetchAPI.mockReturnValue(new Promise(() => {})) // 永不 resolve → 停在加载态
     render(<MarketMainlineCard />)

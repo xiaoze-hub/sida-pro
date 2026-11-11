@@ -301,7 +301,7 @@ function MainlineRow({
       {/* 展开区: 成分股标签流 */}
       {expanded && g.constituents.length > 0 ? (
         <div className="px-2.5 pb-2 pt-1 border-t border-border">
-          <div className="flex items-center gap-1.5 mb-1.5 text-[12px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-1.5 mb-1.5 text-[12px] text-muted-foreground">
             <Layers className="w-3 h-3" />
             <span>成分股 {g.constituents.length} 只</span>
             <span className="text-muted-foreground">·</span>
