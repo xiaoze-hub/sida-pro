@@ -32,9 +32,15 @@ _CST = ZoneInfo("Asia/Shanghai")
 # ── 阈值(与热力图芯片一致, 改动必须同时改前端 board-heatmap.ts) ────────────────
 SPEED_PCT = 0.5          # 涨速阈值(% / 5 分钟)
 VOL_RATIO = 2.0          # 量比阈值
+# 量比代理的分母是「前 5 日均额 × 时段进度」, 而进度有 0.05 的保底(见 tdx_boards
+# volume_ratio_proxy)。开盘头十几分钟里, 集合竞价+早盘冲量让"今日额"轻松超过
+# 2×那一点点期望值 → 全市场一起"放量"。实测: 收盘后把一整天额按 0.05 折算, 576 个
+# 板块里有 3 个量比就 >2。首刷就刷屏的"异动"没有信息量, 所以进度 <10%(约 09:42 前)
+# 不做放量判定 —— 涨速判定不受影响(它要 5 分钟历史, 09:35 之后本来才有)。
 SPEED_WINDOW_S = 300.0   # 涨速窗口: 5 分钟
 SPEED_TOL_S = 120.0      # 基准样本容忍偏差(采样间隔 2 分钟 → 目标 5 分钟取最近点)
 DEDUPE_WINDOW_S = 900    # 同板块同类型 15 分钟内只记一条
+VOL_MIN_PROGRESS = 0.10  # 进度低于此值(约 09:42 前)不判放量, 否则早盘全员"放量"
 SCAN_INTERVAL_S = 120    # 采样间隔
 
 # 保留期(交易日): 快照只为算涨速, 短期足够; 记录是给人看的, 留得久些。
@@ -124,7 +130,8 @@ def detect_events(
                 elif speed <= -SPEED_PCT:
                     out.append({**base, "kind": "dump", "value": round(speed, 3), "window_min": 5})
         vr = volume_ratio_proxy(_f(row.get("amount")), (baseline or {}).get(code), progress)
-        if vr is not None and vr >= VOL_RATIO:
+        # 早盘(进度<10%)不判放量: 分母被 0.05 保底压得极小, 量比必然虚高(见 VOL_MIN_PROGRESS 注释)。
+        if vr is not None and vr >= VOL_RATIO and progress >= VOL_MIN_PROGRESS:
             out.append({**base, "kind": "heavy_volume", "value": round(vr, 2), "window_min": None})
     return out
 

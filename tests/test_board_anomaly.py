@@ -282,3 +282,12 @@ def test_api_rejects_bad_type_and_date():
     client, _ = _api_client()
     assert client.get("/api/boards/anomalies?type=xxx").status_code == 400
     assert client.get("/api/boards/anomalies?date=2026-1-1").status_code == 400
+
+def test_heavy_volume_suppressed_in_first_ten_minutes():
+    """开盘头十分钟不判放量: 进度 0.05 的保底会把量比抬到 2 倍以上, 全员"放量"没信息量。"""
+    cur = {"881290.SH": {"name": "半导体", "board_type": "concept", "price": 100.0,
+                         "change_pct": 0.0, "amount": 3.0e8}}
+    ev = ba.detect_events(
+        cur, {}, now_ts=_now().timestamp(), progress=0.05, baseline={"881290.SH": 2.0e8}
+    )
+    assert ev == []
