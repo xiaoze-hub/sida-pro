@@ -14,6 +14,7 @@ import {
 } from '@sida/api'
 import { Button } from '@sida/base-ui/components/ui/button'
 import ErrorState from '@/components/ErrorState'
+import PremarketLedgerSection from '@/components/PremarketLedgerSection'
 import { StockLabel } from '@/components/StockLabel'
 import {
   contextSummary,
@@ -250,6 +251,10 @@ export default function DecisionLedger() {
         )}
         {stats?.note && <p className="mt-1 text-[12px] text-muted-foreground">{stats.note}</p>}
       </section>
+
+      {/* ①c 盘前分析(2026-11-11): 盘前报告潜伏表 + 真实信号 + 事后对账。
+          自取数/自降级 —— 该区块失败只在本区块显示一行 + 重试, 不影响上面的命中率与下面的账本。 */}
+      <PremarketLedgerSection />
 
       {/* ①b 我的自选池信号质量(2026-10-11 胜率证据层 ②): 按 user_id 隔离的账本聚合, 只读/零预测。
           样本不足则显示『样本不足』; 不写任何建议, 只陈述实测。 */}

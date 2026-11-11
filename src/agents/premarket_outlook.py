@@ -1377,12 +1377,46 @@ class PremarketOutlookAgent(BaseAgent):
                 content = content.rstrip() + f"\n\n---\nAI: {context.model_label}"
         return content
 
+    def _append_ambush_signal_details(self, text: str, data: dict) -> str:
+        """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。"""
+        from src.core import premarket_ambush as pa
+
+        rows = pa.parse_ambush_table(text)
+        if not rows:
+            return text
+        codes = [r["code"] for r in rows]
+        demon_raw = data.get("demon_factors") or {}
+        demon_by_code: dict[str, dict] = {}
+        if isinstance(demon_raw, dict):
+            for sym, v in demon_raw.items():
+                if isinstance(v, dict):
+                    demon_by_code[str(sym).split(".")[0]] = v
+        start_day = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
+        try:
+            from src.db.session import get_read_engine
+
+            engine = get_read_engine()
+        except Exception:  # noqa: BLE001
+            engine = None
+        signals = pa.collect_signals(
+            codes, demon_by_code=demon_by_code or None, engine=engine, start_day=start_day
+        )
+        block = pa.build_signal_block(rows, signals)
+        return pa.insert_after_table(text, block)
+
     def _parse_analysis_result(
         self, content: str, context: AgentContext, data: dict
     ) -> tuple[AnalysisResult, dict, list]:
         """解析 LLM 输出 → AnalysisResult + structured JSON + suggestions(P3 拆分)。"""
         structured = try_extract_tagged_json(content) or {}
         display_content = strip_tagged_json(content)
+        # 2026-11-11: 在「潜伏表」后面补一段**确定性**的信号明细(股性因子/位置/连板)。
+        # 为什么要代码生成而不让模型写: 表里的数字必须能追溯到真实数据源; LLM 复述数字
+        # 等于把事实交给概率。取不到就写「无数据」, 整段失败不影响正文。
+        try:
+            display_content = self._append_ambush_signal_details(display_content, data)
+        except Exception as e:  # noqa: BLE001 — 明细是附加信息, 失败不阻断报告
+            logger.warning("潜伏表信号明细附加失败(忽略): %s", e)
 
         stock_items = [
             f"{(s.name or s.symbol).strip()}({s.symbol})"

@@ -201,6 +201,158 @@ def decisions_watchlist_signal_quality(
         }
 
 
+@router.get("/premarket")
+def decisions_premarket(
+    days: int = Query(5, ge=1, le=20, description="回看最近 N 期盘前分析"),
+    max_rows: int = Query(30, ge=1, le=200, description="潜伏表最多返回行数"),
+    user: User = Depends(get_current_user),
+):
+    """盘前分析账：最近 N 期「事件驱动前瞻（双轨制 · 潜伏表）」的标的 + 真实信号 + 事后表现。
+
+    为什么在决策账本里：盘前分析给出的潜伏标的此前只在报告正文里，事后无从对账。
+    本端点把那张表解析成结构化行，挂上**真实**信号（股性因子、收盘价位置/连板）与
+    事后表现（当日 / T+1 / T+3，收盘价口径），让「盘前说了什么、后来怎样」可查。
+
+    诚实边界：
+    - 表格由 LLM 撰写，**解析不到就 `parsed=false` 并返回空行**，不凭空补标的；
+    - 信号取不到 → 该项 `null`（前端显示「无数据」）；
+    - 事后表现只用已有日线收盘价；该交易日无 K 线（停牌/休市）→ `null`，不推算；
+    - 「止损是否触及」只在止损列写了**具体价位**时才算，且是**收盘价**口径（盘中路径没有数据）。
+    """
+    from src.core import premarket_ambush as pa
+    from src.core.analysis_history import analysis_history_scope_clause
+    from src.core.timezone import beijing_now
+    from src.db.models import AnalysisHistory
+    from src.db.session import SessionLocal, get_read_engine
+
+    try:
+        db = SessionLocal()
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": f"数据库不可用: {e}", "items": []}
+    try:
+        q = (
+            db.query(AnalysisHistory)
+            .filter(
+                AnalysisHistory.agent_name == "premarket_outlook",
+                AnalysisHistory.status == "success",
+                analysis_history_scope_clause(user.id, getattr(user, "role", None)),
+            )
+            .order_by(AnalysisHistory.analysis_date.desc(), AnalysisHistory.created_at.desc())
+        )
+        # 同一交易日可能有多条（重跑），只保留最新一条
+        by_date: dict[str, AnalysisHistory] = {}
+        for rec in q.limit(200).all():
+            d = str(rec.analysis_date)
+            if d not in by_date:
+                by_date[d] = rec
+            if len(by_date) >= days:
+                break
+        records = [by_date[d] for d in sorted(by_date, reverse=True)]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("盘前账查询失败: %s", e)
+        return {"available": False, "error": f"查询失败: {e}", "items": []}
+    finally:
+        db.close()
+
+    read_engine = get_read_engine()
+    close_cache: dict[str, list] = {}
+    items: list[dict] = []
+    for rec in records:
+        date = str(rec.analysis_date)
+        rows = pa.parse_ambush_table(rec.content or "")[:max_rows]
+        codes = [r["code"] for r in rows]
+        signals = pa.collect_signals(
+            codes,
+            engine=read_engine,
+            start_day=_shift_day(date, -25),
+        )
+        out_rows: list[dict] = []
+        for r in rows:
+            code = r["code"]
+            detail = pa.build_signal_detail(r, demon=(signals.get(code) or {}).get("demon"),
+                                            price=(signals.get(code) or {}).get("price"))
+            seq = close_cache.get(code)
+            if seq is None:
+                from src.core.decision_log import _close_series_pg
+
+                try:
+                    seq = _close_series_pg(read_engine, code, _shift_day(date, -25))
+                except Exception:  # noqa: BLE001
+                    seq = []
+                close_cache[code] = seq
+            detail["outcome"] = _outcome_for(seq, date, detail.get("stop_price"))
+            out_rows.append(detail)
+
+        scored = [o for o in out_rows if o["outcome"]["t0"] is not None]
+        t1 = [o for o in out_rows if o["outcome"]["t1"] is not None]
+        items.append(
+            {
+                "date": date,
+                "record_id": getattr(rec, "id", None),
+                "title": rec.title or "",
+                "quality": "ok" if (rec.content or "").strip() else "suspect",
+                "parsed": bool(out_rows),
+                "row_count": len(out_rows),
+                "rows": out_rows,
+                "summary": {
+                    "rows": len(out_rows),
+                    "t0_scored": len(scored),
+                    "t0_up": sum(1 for o in scored if (o["outcome"]["t0"] or 0) > 0),
+                    "t1_scored": len(t1),
+                    "t1_up": sum(1 for o in t1 if (o["outcome"]["t1"] or 0) > 0),
+                },
+            }
+        )
+
+    return {
+        "available": bool(items),
+        "days": days,
+        "as_of": beijing_now().isoformat(),
+        "items": items,
+        "note": (
+            "潜伏表由 AI 撰写，本页只解析并用真实行情对账；解析不到表格即 parsed=false，不补标的。"
+            "事后表现按收盘价计算，未使用盘中最低/最高。"
+        ),
+    }
+
+
+def _shift_day(day: str, delta: int) -> str:
+    from datetime import date as _date, timedelta as _td
+
+    try:
+        d = _date.fromisoformat(str(day)[:10])
+    except ValueError:
+        return str(day)
+    return (d + _td(days=delta)).isoformat()
+
+
+def _outcome_for(seq: list[tuple[str, float]], date: str, stop_price: float | None) -> dict:
+    """当日 / T+1 / T+3（相对收盘），以及收盘价是否跌破止损。缺数据一律 None。"""
+    out = {"t0": None, "t1": None, "t3": None, "stop_breached": None, "note": None}
+    if not seq:
+        out["note"] = "无日线数据"
+        return out
+    days = [d for d, _ in seq]
+    if date not in days:
+        out["note"] = "该交易日无K线(休市/停牌)"
+        return out
+    i = days.index(date)
+    closes = [c for _, c in seq]
+    if i >= 1 and closes[i - 1]:
+        out["t0"] = round((closes[i] / closes[i - 1] - 1.0) * 100.0, 2)
+    if i + 1 < len(closes) and closes[i]:
+        out["t1"] = round((closes[i + 1] / closes[i] - 1.0) * 100.0, 2)
+    if i + 3 < len(closes) and closes[i]:
+        out["t3"] = round((closes[i + 3] / closes[i] - 1.0) * 100.0, 2)
+    if stop_price is None:
+        out["note"] = "止损为条件式(非价位)，未判定"
+    else:
+        window = closes[i : i + 4]
+        out["stop_breached"] = any(c < stop_price for c in window) if window else None
+        out["note"] = "止损按收盘价判定"
+    return out
+
+
 @router.get("/thresholds")
 def decisions_thresholds(
     _: User = Depends(get_current_user),

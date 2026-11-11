@@ -277,6 +277,112 @@ export function fetchDecisionThresholds() {
   return fetchAPI<DecisionThresholdsResponse>('/decisions/thresholds', { cacheMode: 'reload' })
 }
 
+/**
+ * 盘前分析账(2026-11-11): `GET /api/decisions/premarket?days&max_rows`。
+ *
+ * 把盘前报告里「事件驱动前瞻(双轨制)·潜伏表」解析成结构化行, 挂**真实**信号与事后表现。
+ * 诚实边界(前端只透传):
+ *  · `parsed=false` = 该期报告里解析不到潜伏表 → **不补标的**, 页面明说;
+ *  · `signals.demon` / `signals.price` 为 null = 该项取不到数据 → 页面显示「无数据」, **不补 0**;
+ *  · `outcome.t0/t1/t3` 为 null = 该交易日无 K 线(停牌/休市) → `--`, 不推算;
+ *  · `stop_breached` 只在止损列写了具体价位(`stop_price != null`)时才有意义, 且是**收盘价**口径。
+ */
+export interface PremarketDemonSignal {
+  /** 股性因子分(0~100); null = 取不到 */
+  score: number | null
+  grade: string | null
+  /** 近期封板次数 */
+  n_sealed: number | null
+  max_streak: number | null
+  /** 参与度描述文本 */
+  participation: string | null
+}
+
+export interface PremarketPriceSignal {
+  /** 报告日收盘价 */
+  close: number | null
+  /** 当日涨跌(%) */
+  pct: number | null
+  limit_up_streak: number | null
+  /** 20 日涨跌(%) */
+  pct_20d: number | null
+  /** 距 20 日最高(%) —— 负数=在最高点下方 */
+  from_20d_high: number | null
+  note: string | null
+}
+
+export interface PremarketOutcome {
+  /** 当日涨跌(%) / T+1 / T+3 —— 收盘价口径; null = 无 K 线, 不推算 */
+  t0: number | null
+  t1: number | null
+  t3: number | null
+  /** 收盘价是否跌破止损价; null = 止损没写具体价位(条件式, 无法判定) */
+  stop_breached: boolean | null
+  note: string | null
+}
+
+export interface PremarketRow {
+  code: string
+  name: string
+  /** 弱化小标签(如「妖股先锋·极妖」) */
+  tags: string[]
+  event: string
+  sector: string
+  logic: string
+  strength: string
+  /** 埋伏方式(回调埋伏 / 首板回踩…) */
+  method: string
+  /** 批次(首批1/3…) */
+  batch: string
+  /** 止损原文 */
+  stop: string
+  /** 止损原文里能解析出的**具体价位**; null = 条件式(跌破10日线之类), 不能算是否触及 */
+  stop_price: number | null
+  target: string
+  falsify: string
+  signals: {
+    demon: PremarketDemonSignal | null
+    price: PremarketPriceSignal | null
+  }
+  outcome: PremarketOutcome
+}
+
+export interface PremarketItem {
+  /** 报告交易日 YYYY-MM-DD */
+  date: string
+  record_id: number | null
+  title: string
+  quality: 'ok' | 'suspect'
+  /** false = 该期报告未解析到潜伏表(rows 必为空, 不补标的) */
+  parsed: boolean
+  row_count: number
+  summary: {
+    rows: number
+    /** 当日有 K 线的行数 / 其中上涨行数 */
+    t0_scored: number
+    t0_up: number
+    t1_scored: number
+    t1_up: number
+  }
+  rows: PremarketRow[]
+}
+
+export interface PremarketLedgerResponse {
+  /** false = 最近 N 期没有成功的盘前分析记录(页面明说「暂无」, 不用空表冒充) */
+  available: boolean
+  days: number
+  as_of: string
+  items: PremarketItem[]
+  note: string
+  error?: string
+}
+
+/** 盘前分析账: 最近 N 期潜伏表 + 真实信号 + 事后对账。 */
+export function fetchPremarketLedger(days = 5, maxRows = 30) {
+  const q = new URLSearchParams({ days: String(days), max_rows: String(maxRows) })
+  return fetchAPI<PremarketLedgerResponse>(`/decisions/premarket?${q.toString()}`, { cacheMode: 'reload' })
+}
+
 /** 信号类型的中文名(后端用机器名, 页面给人看)。 */
 
 export const SIGNAL_KIND_LABEL: Record<string, string> = {
@@ -299,6 +405,8 @@ export const decisionsApi = {
   entryOutcomes: (days = 30, minSample = 20) => fetchEntryOutcomes(days, minSample),
   thresholds: () => fetchDecisionThresholds(),
   watchlistQuality: (days = 180, minSample = 30) => fetchWatchlistSignalQuality(days, minSample),
+  /** 盘前分析账(潜伏表 + 真实信号 + 事后对账) */
+  premarket: (days = 5, maxRows = 30) => fetchPremarketLedger(days, maxRows),
 }
 
 /** 信号对账(批次D)对象式导出。 */
