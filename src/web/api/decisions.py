@@ -265,6 +265,7 @@ def decisions_premarket(
             codes,
             engine=read_engine,
             start_day=_shift_day(date, -25),
+            as_of=date,
         )
         out_rows: list[dict] = []
         for r in rows:

@@ -140,3 +140,19 @@ def test_signal_block_marks_missing_as_no_data():
     block = pa.build_signal_block(rows, {})
     assert "无数据" in block
     assert "非 AI 生成" in block
+
+def test_price_signals_as_of_truncates_series():
+    """按报告日截断: 用一周后的位置冒充当时信号 = 时点错位(数字真但结论假)。"""
+    closes = [("2026-11-05", 10.0), ("2026-11-06", 10.5), ("2026-11-10", 11.0), ("2026-11-11", 12.0)]
+    latest = pa.price_signals(closes, "600183")
+    asof = pa.price_signals(closes, "600183", as_of="2026-11-06")
+    assert latest["close"] == 12.0
+    assert asof["close"] == 10.5
+    assert asof["pct"] == 5.0
+
+
+def test_name_with_leading_code_is_cleaned():
+    text = ("潜伏表\n| 事件 | 受益板块 | 代码 | 名称 | 强度 |\n|---|---|---|---|---|\n"
+            "| e | s | 002931 | 002931 锋龙股份 | A |\n")
+    rows = pa.parse_ambush_table(text)
+    assert rows[0]["name"] == "锋龙股份"

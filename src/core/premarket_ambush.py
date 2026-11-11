@@ -138,7 +138,10 @@ def parse_ambush_table(text: str) -> list[dict]:
         name_raw = row.get("name") or ""
         tags = _TAG_RE.findall(name_raw)
         row["code"] = code_match.group(1)
-        row["name"] = _TAG_RE.sub("", name_raw).strip() or row["code"]
+        name_clean = _TAG_RE.sub("", name_raw).strip()
+        # 老报告里名称列偶尔写成「002931 锋龙股份」→ 去掉重复的代码前缀
+        name_clean = re.sub(rf"^{row['code']}\s*", "", name_clean).strip()
+        row["name"] = name_clean or row["code"]
         row["tags"] = [t for t in tags if t]
         rows.append(row)
     return rows
@@ -206,11 +209,16 @@ def demon_map(db, codes: Iterable[str]) -> dict[str, dict]:
     return out
 
 
-def price_signals(close_series: list[tuple[str, float]], code: str) -> dict:
+def price_signals(close_series: list[tuple[str, float]], code: str, as_of: str | None = None) -> dict:
     """由日线收盘序列算位置与连板（序列为升序 [(YYYY-MM-DD, close)]）。
 
     全部基于**已发生的收盘价**；数据不足时对应字段为 None，不做外推。
+
+    `as_of` 用于按报告日截断 —— 否则拿今天的位置去给一周前的判断当"当时信号"，
+    数字是真的但时点错位（比错数字更难发现）。
     """
+    if as_of:
+        close_series = [(d, c) for d, c in close_series if str(d)[:10] <= str(as_of)[:10]]
     if not close_series or len(close_series) < 2:
         return {"close": None, "limit_up_streak": None, "pct_20d": None, "from_20d_high": None, "note": "日线不足"}
     closes = [c for _, c in close_series]
@@ -374,7 +382,7 @@ def insert_after_table(text: str, block: str) -> str:
 
 
 def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None = None,
-                    engine=None, start_day: str) -> dict[str, dict]:
+                    engine=None, start_day: str, as_of: str | None = None) -> dict[str, dict]:
     """按代码取真实信号。任何一块取不到 → 该块 None（页面/文本显示「无数据」）。
 
     `demon_by_code` 可由调用方直接给（报告生成时手里已有因子映射，省一次查询）。
@@ -406,6 +414,8 @@ def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None =
     for code in codes:
         out[code] = {
             "demon": demon.get(code),
-            "price": price_signals(closes_cache.get(code) or [], code) if engine is not None else None,
+            "price": price_signals(closes_cache.get(code) or [], code, as_of=as_of)
+            if engine is not None
+            else None,
         }
     return out
