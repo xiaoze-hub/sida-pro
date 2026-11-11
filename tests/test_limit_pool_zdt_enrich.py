@@ -260,3 +260,23 @@ def test_补齐失败不影响主流程(monkeypatch):
     assert [r["code"] for r in pool] == ["600001"]  # 池子照常返回
     assert pool[0]["first_time"] == ""
     assert "enrich_source" not in pool[0]
+
+def test_all_zero_snapshot_is_treated_as_no_data():
+    """收盘后 TQ get_zdt_data 对每只票都返回全 0 记录(实测 2026-11-11 16:40)。
+
+    这种快照不是"首封 0 点、封单 0 手、全天未开板", 而是**没有数据**:
+    照单全收会把 0 写成事实并盖上 enrich_source。必须整体判为不可用。
+    """
+    pool = [_row(code="600103"), _row(code="600793")]
+    before = copy.deepcopy(pool)
+    zeroed = {
+        f"{c}.SH": {
+            "ZDTStatusNow": "0", "ZDTStatusOri": "0", "TimeNow": "0",
+            "FirstTimeZT": "0", "LastTimeZT": "0",
+            "FDVolMaxZT": "0.00", "VolZT": "0.00", "OpenTimesZT": "0",
+        }
+        for c in ("600103", "600793")
+    }
+    out = enrich_pool_with_zdt(pool, fetcher=lambda codes: zeroed)
+    assert out == before
+    assert all("enrich_source" not in r for r in out)

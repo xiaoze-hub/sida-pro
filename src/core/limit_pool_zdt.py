@@ -230,6 +230,13 @@ def enrich_pool_with_zdt(pool: list[dict], *, fetcher=None) -> list[dict]:
     if not by_bare:
         logger.warning("涨停池补快照: 无可用记录(盘前/非交易日/网关返回空) → 池子原样返回")
         return pool
+    # 2026-11-11 实测: 收盘后 get_zdt_data 对每只票都返回**全 0 记录**
+    # (ZDTStatusNow=0 / FirstTimeZT=0 / FDVolMaxZT=0.00)。若照单全收, 会把
+    # 「没有数据」写成「首封 00:00、封单 0 手、炸板 0 次」并盖上 enrich_source —— 假事实。
+    # 因此全 0 快照一律视为无可用快照, 池子原样返回(盘后不补, 盘中才有真值)。
+    if _snapshot_all_zero(by_bare.values()):
+        logger.info("涨停池补快照: 快照全 0(盘后已清零) → 池子原样返回, 不写 0 值")
+        return pool
 
     as_of = _common_as_of(rows)
     for row in rows:
@@ -261,6 +268,26 @@ def enrich_pool_with_zdt(pool: list[dict], *, fetcher=None) -> list[dict]:
             row["enrich_source"] = "tq_zdt"
             row["enrich_as_of"] = as_of
     return pool
+
+
+def _snapshot_all_zero(records) -> bool:
+    """快照记录是否**全部为 0/空**(收盘后 TQ 会这样返回)。
+
+    只要有一条记录出现非零封单/非零首封/非零炸板, 就认为快照可用 —— 单只票的
+    0 值可能是真值(整天没开板、封单极小), 但**所有**票同时为 0 只能是没数据。
+    """
+    any_rec = False
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        any_rec = True
+        if _to_int(rec.get("FDVolMaxZT"), 0) > 0:
+            return False
+        if _to_int(rec.get("OpenTimesZT"), 0) > 0:
+            return False
+        if str(rec.get("FirstTimeZT") or "0").strip() not in ("0", "", "None"):
+            return False
+    return any_rec
 
 
 def _default_zdt_fetch(codes: list[str]) -> dict:
