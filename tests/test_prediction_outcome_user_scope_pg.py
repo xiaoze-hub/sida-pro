@@ -104,6 +104,10 @@ def pg_env():
 
 
 LEGACY_DDL = """
+CREATE TABLE users (
+    id VARCHAR(36) PRIMARY KEY,
+    username VARCHAR(64) NOT NULL
+);
 CREATE TABLE agent_prediction_outcomes (
     id SERIAL PRIMARY KEY,
     agent_name VARCHAR(64) NOT NULL,
@@ -125,11 +129,26 @@ CREATE TABLE agent_prediction_outcomes (
 """
 
 
-def test_m249_on_real_pg_keeps_legacy_rows_and_enforces_per_user_uniqueness(pg_env):
+def _seed_users(conn, *ids: str) -> None:
+    for uid in ids:
+        conn.execute(
+            text("INSERT INTO users(id, username) VALUES (:i, :n)"),
+            {"i": uid, "n": f"user-{uid}"},
+        )
+
+
+def test_m249_on_real_pg_keeps_legacy_rows_and_enforces_ownership(pg_env):
+    """m249: 加列 + 用户归属外键(存量不改写), 老的无状态唯一键**不再创建**。
+
+    2026-11-12 三次修正: 老版本 m249 建 `ux_prediction_outcome_user_key`, 一旦库里已有
+    "计分行 + superseded 版本行", 重跑(checksum 变化)建索引就会失败 → 启动迁移中断。
+    DB 层唯一性改由 m250 的部分唯一索引承担, 所以这里断言它**不存在**。
+    """
     from src.web import migrations as mig
 
     with pg_env.begin() as conn:
         conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a", "u-b")
         # 加列之前的老库: 同一键已有两行(历史重复), 归属不可证明
         conn.execute(
             text(
@@ -147,8 +166,25 @@ def test_m249_on_real_pg_keeps_legacy_rows_and_enforces_per_user_uniqueness(pg_e
         cols = {c["name"]: c for c in inspect(conn).get_columns("agent_prediction_outcomes")}
         assert "user_id" in cols and cols["user_id"]["nullable"] is True
         indexes = {i["name"] for i in inspect(conn).get_indexes("agent_prediction_outcomes")}
-        assert "ux_prediction_outcome_user_key" in indexes
         assert "ix_prediction_outcome_user" in indexes
+        assert "ux_prediction_outcome_user_key" not in indexes, (
+            "老的无状态唯一键会挡住版本追加、并让重跑建索引失败, 新版 m249 不再创建"
+        )
+
+        # 归属外键: 与 create_all 新库同名同语义, 且已校验(无孤儿行)
+        fk = conn.execute(
+            text(
+                "SELECT c.conname, c.convalidated, pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+                "WHERE t.relname = 'agent_prediction_outcomes' AND c.contype = 'f'"
+            )
+        ).fetchall()
+        assert len(fk) == 1, f"应有且仅有一个归属外键, 实际 {fk}"
+        name, validated, definition = fk[0]
+        assert name == "agent_prediction_outcomes_user_id_fkey"
+        assert validated is True, "无孤儿行时必须 VALIDATE, 否则约束只对新行生效"
+        assert "REFERENCES users(id)" in definition
+        assert "ON DELETE SET NULL" in definition
 
         # 存量行一个都没动
         rows = conn.execute(
@@ -162,32 +198,50 @@ def test_m249_on_real_pg_keeps_legacy_rows_and_enforces_per_user_uniqueness(pg_e
         mig._m249_prediction_outcome_user_scope(conn)
         assert conn.execute(text("SELECT COUNT(*) FROM agent_prediction_outcomes")).scalar() == 2
 
-        # 同用户同键第二行被 PG 唯一键拒绝
-        conn.execute(
-            text(
-                "INSERT INTO agent_prediction_outcomes "
-                "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, action) "
-                "VALUES ('u-a','premarket_outlook','600183','CN','2026-11-11',1,'buy')"
-            )
-        )
-        with pytest.raises(IntegrityError):
+    # 外键生效: 不存在的用户写不进去(ghost 行不再可能产生)
+    with pytest.raises(IntegrityError):
+        with pg_env.begin() as conn:
             conn.execute(
                 text(
                     "INSERT INTO agent_prediction_outcomes "
-                    "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, action) "
-                    "VALUES ('u-a','premarket_outlook','600183','CN','2026-11-11',1,'sell')"
+                    "(user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+                    "horizon_days, action) "
+                    "VALUES ('ghost-uid','premarket_outlook','600183','CN','2026-11-11',1,'buy')"
                 )
             )
+    # 存在的用户可以写; 删除用户 → ON DELETE SET NULL(行保留, 归属置空)
+    with pg_env.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO agent_prediction_outcomes "
+                "(user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+                "horizon_days, action) "
+                "VALUES ('u-a','premarket_outlook','600185','CN','2026-11-11',1,'buy')"
+            )
+        )
+    with pg_env.begin() as conn:
+        conn.execute(text("DELETE FROM users WHERE id = 'u-a'"))
+    with pg_env.begin() as conn:
+        assert conn.execute(
+            text("SELECT user_id FROM agent_prediction_outcomes WHERE stock_symbol = '600185'")
+        ).fetchall() == [(None,)], "删除用户必须按 SET NULL 保留行, 而不是连带删掉预测"
+        assert conn.execute(text("SELECT COUNT(*) FROM agent_prediction_outcomes")).scalar() == 3
 
 
 def test_m249_second_user_and_concurrent_insert_on_real_pg(pg_env):
-    """另一个账号同键可各存一行; 两个连接真并发插入只成功一个。"""
+    """另一个账号同键可各存一行; 两个连接真并发插入只成功一个。
+
+    DB 层唯一性来自 m250 的计分行部分唯一索引(新版 m249 不再建无状态唯一键),
+    所以这里跑完整的 249+250 链路。
+    """
     from src.web import migrations as mig
 
     with pg_env.begin() as conn:
         conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a", "u-b", "u-c")
     with pg_env.begin() as conn:
         mig._m249_prediction_outcome_user_scope(conn)
+        mig._m250_prediction_outcome_versions_and_system_scope(conn)
 
     insert_sql = text(
         "INSERT INTO agent_prediction_outcomes "
@@ -241,6 +295,7 @@ def test_m250_on_real_pg_allows_version_append_and_system_bucket(pg_env):
 
     with pg_env.begin() as conn:
         conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
         conn.execute(
             text(
                 "INSERT INTO agent_prediction_outcomes "
@@ -311,3 +366,128 @@ def test_m250_on_real_pg_allows_version_append_and_system_bucket(pg_env):
                 "WHERE owner_scope = 'system' AND user_id IS NULL"
             )
         ).scalar() == 1
+
+    # system 桶不得绑定真实用户: DB 层 CHECK 直接拒(不只是应用层拒写)
+    with pytest.raises(IntegrityError):
+        with pg_env.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO agent_prediction_outcomes "
+                    "(user_id, owner_scope, run_trace_id, agent_name, stock_symbol, stock_market, "
+                    "prediction_date, horizon_days, action, outcome_status) "
+                    "VALUES ('u-a','system','s9','premarket_outlook','600186','CN','2026-11-11',"
+                    "1,'buy','pending')"
+                )
+            )
+
+
+def test_m249_m250_rerun_is_safe_with_version_rows_on_real_pg(pg_env):
+    """重跑安全(真 PG): 库里已有"计分行 + superseded 版本行"时, 重跑 249/250 不能抛错。
+
+    这是本轮要修的真实故障形态: 老版 m249 的 `CREATE UNIQUE INDEX ... WHERE user_id IS NOT
+    NULL` 在有版本行的库上重跑(函数体改动 → checksum 变化 → 框架重跑)直接 UNIQUE 冲突,
+    整个启动迁移中断。修法 = m249 不再建那条索引 + m250 的唯一索引"无冲突才建"。
+    """
+    from src.web import migrations as mig
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        mig._m249_prediction_outcome_user_scope(conn)
+        mig._m250_prediction_outcome_versions_and_system_scope(conn)
+
+    insert_sql = text(
+        "INSERT INTO agent_prediction_outcomes "
+        "(user_id, owner_scope, run_trace_id, agent_name, stock_symbol, stock_market, "
+        "prediction_date, horizon_days, action, outcome_status) "
+        "VALUES ('u-a', 'user', :t, 'premarket_outlook','600183','CN','2026-11-11',1,'buy',:s)"
+    )
+    with pg_env.begin() as conn:
+        conn.execute(insert_sql, {"t": "r1", "s": "pending"})
+        conn.execute(insert_sql, {"t": "r2", "s": "superseded"})
+    with pg_env.begin() as conn:
+        before = conn.execute(
+            text(
+                "SELECT id, user_id, owner_scope, run_trace_id, outcome_status, action "
+                "FROM agent_prediction_outcomes ORDER BY id"
+            )
+        ).fetchall()
+
+    # 模拟"函数体改了 → checksum 变了 → 框架重跑", 顺序与实际一致(m249 先, m250 后)
+    with pg_env.begin() as conn:
+        mig._m249_prediction_outcome_user_scope(conn)
+    with pg_env.begin() as conn:
+        mig._m250_prediction_outcome_versions_and_system_scope(conn)
+    with pg_env.begin() as conn:
+        after = conn.execute(
+            text(
+                "SELECT id, user_id, owner_scope, run_trace_id, outcome_status, action "
+                "FROM agent_prediction_outcomes ORDER BY id"
+            )
+        ).fetchall()
+        names = {i["name"] for i in inspect(conn).get_indexes("agent_prediction_outcomes")}
+    assert after == before, f"重跑改动了存量行: {before} -> {after}"
+    assert "ux_prediction_outcome_user_key" not in names
+    assert {
+        "ux_prediction_outcome_user_active_key",
+        "ux_prediction_outcome_user_run_key",
+        "ux_prediction_outcome_system_active_key",
+        "ux_prediction_outcome_system_run_key",
+    } <= names
+
+
+def test_m249_keeps_preexisting_ghost_rows_and_adds_not_valid_fk_on_real_pg(pg_env):
+    """老库已有 ghost 行(user_id 指向已不存在用户)时:
+
+    - 迁移**不删除、不改写**这些行(也不能让上线失败);
+    - 外键以 `NOT VALID` 加上: 新写入立刻受约束, 存量孤儿行保持原样(不 VALIDATE);
+    - 这是"不改存量数据"与"新写不再产生 ghost"的唯一同时成立的方案。
+    """
+    from src.web import migrations as mig
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        # 老库已有 user_id 列(手工/早期版本), 且其中一行指向不存在的用户
+        conn.execute(text("ALTER TABLE agent_prediction_outcomes ADD COLUMN user_id VARCHAR(36)"))
+        _seed_users(conn, "u-a")
+        conn.execute(
+            text(
+                "INSERT INTO agent_prediction_outcomes "
+                "(user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+                "horizon_days, action) VALUES "
+                "('ghost-uid','premarket_outlook','600183','CN','2026-11-11',1,'buy'),"
+                "('u-a','premarket_outlook','600184','CN','2026-11-11',1,'sell')"
+            )
+        )
+
+    with pg_env.begin() as conn:
+        mig._m249_prediction_outcome_user_scope(conn)
+
+    with pg_env.begin() as conn:
+        fk = conn.execute(
+            text(
+                "SELECT c.conname, c.convalidated FROM pg_constraint c "
+                "JOIN pg_class t ON t.oid = c.conrelid "
+                "WHERE t.relname = 'agent_prediction_outcomes' AND c.contype = 'f'"
+            )
+        ).fetchall()
+        assert len(fk) == 1, fk
+        assert fk[0][0] == "agent_prediction_outcomes_user_id_fkey"
+        assert fk[0][1] is False, "有存量孤儿行时不能 VALIDATE(那会因历史数据让上线失败)"
+        rows = conn.execute(
+            text("SELECT user_id FROM agent_prediction_outcomes ORDER BY id")
+        ).fetchall()
+        assert [r[0] for r in rows] == ["ghost-uid", "u-a"], "存量 ghost 行被改写了"
+
+    # 新写入仍然受约束
+    with pytest.raises(IntegrityError):
+        with pg_env.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO agent_prediction_outcomes "
+                    "(user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+                    "horizon_days, action) "
+                    "VALUES ('ghost-2','premarket_outlook','600185','CN','2026-11-11',1,'buy')"
+                )
+            )

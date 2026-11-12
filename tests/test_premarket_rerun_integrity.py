@@ -677,7 +677,13 @@ def test_m247_and_m248_bodies_untouched_and_m249_adds_the_user_scope(tmp_path, m
 def test_m249_adds_user_column_and_partial_unique_key_without_touching_legacy_rows(
     tmp_path, monkeypatch
 ):
-    """老库(存量行 user_id 全空、甚至已有同键重复)也要能直接建索引, 且存量行一条不动。"""
+    """老库(存量行 user_id 全空、甚至已有同键重复)也要能升级, 且存量行一条不动。
+
+    2026-11-12 三次修正: 老版本 m249 自己建 `ux_prediction_outcome_user_key`(无状态唯一键),
+    它在"同键多版本行"的库上重跑会因重复键建索引失败 → 启动迁移中断。现在 m249 只加列 +
+    普通索引, 计分行唯一性由 m250 的部分唯一索引承担 —— 所以这里先验 m249(不许出现那条
+    索引), 再跑 m250 验唯一性。
+    """
     from src.web import migrations as mig
 
     for key in _DB_ENV:
@@ -732,6 +738,19 @@ CREATE TABLE agent_prediction_outcomes (
         # 幂等: 再执行一次不报错, 不新增列/不改数据
         mig._m249_prediction_outcome_user_scope(conn)
         assert conn.execute(text("SELECT COUNT(*) FROM agent_prediction_outcomes")).scalar() == 2
+
+        # 老的无状态唯一键绝不能再出现(重跑建它会 UNIQUE 冲突 → 服务起不来)
+        index_names = {
+            r[0]
+            for r in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='index'")
+            ).fetchall()
+        }
+        assert "ux_prediction_outcome_user_key" not in index_names
+        assert "ix_prediction_outcome_user" in index_names
+
+        # 计分行唯一性由 m250 的部分唯一索引承担
+        mig._m250_prediction_outcome_versions_and_system_scope(conn)
 
         # 部分唯一索引只约束有归属的行: 同用户同键第二次插入必须被 DB 拒绝
         conn.execute(text(

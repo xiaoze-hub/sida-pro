@@ -97,6 +97,21 @@ def db(tmp_path, monkeypatch):
         ],
     )
     Session = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False, future=True)
+    # 归属用户必须是**真实存在**的 users 行(2026-11-12 三次修正): 读取/评估/写入口都以
+    # "users 里还有这个人"判定归属可证明, ghost(悬空 id)不算有归属。这里种下用例会用的账号,
+    # 否则所有行都会按 ghost 排除 —— 那正是本次要修的行为, 不是测试想要的基线。
+    with Session() as s:
+        for uid, name in (("u-a", "account-a"), ("u-b", "account-b"), ("u-thread", "thread")):
+            s.add(
+                User(
+                    id=uid,
+                    username=name,
+                    password_hash="x",
+                    role="member",
+                    is_active=True,
+                )
+            )
+        s.commit()
     monkeypatch.setattr("src.db.session.SessionLocal", Session)
     monkeypatch.setattr("src.core.context_store.SessionLocal", Session)
     monkeypatch.setattr("src.core.analysis_history.SessionLocal", Session)

@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.db.session import SessionLocal
@@ -13,6 +13,7 @@ from src.db.models import (
     AgentPredictionOutcome,
     NewsTopicSnapshot,
     StockContextSnapshot,
+    User,
 )
 from src.core.json_safe import to_jsonable
 
@@ -287,6 +288,17 @@ def list_recent_agent_context_runs(
         return q.order_by(AgentContextRun.created_at.desc()).limit(max(1, limit)).all()
     finally:
         db.close()
+
+
+def _owner_alive_clause():
+    """`user_id` 必须指向**现存**的用户行 —— ghost(悬空 id)不算"有归属"。
+
+    为什么需要(2026-11-12 三次修正): 迁移库/旧库可能没有 user_id 外键(见 migrations.m249),
+    用户被物理清除后行里会留下悬空 user_id。这些行既不能证明属于谁, 也不再对应任何账号,
+    若按"有 user_id = 有归属"处理, 就会被评估、被当成成绩来源(ghost 用户错误计分)。
+    判定改为"用户行仍然存在"才叫有归属; 查不到就是 unknown, 只报数, 不评估、不呈现。
+    """
+    return AgentPredictionOutcome.user_id.in_(select(User.id))
 
 
 def _outcome_key_rows(
@@ -833,10 +845,12 @@ def list_pending_prediction_outcomes(
     limit: int = 300,
     user_id: str | None = None,
 ) -> list[AgentPredictionOutcome]:
-    """待评估的后验记录 —— **只返回归属可证明的个人计分行**（2026-11-12 二次修正）。
+    """待评估的后验记录 —— **只返回归属可证明的个人计分行**（2026-11-12 三次修正）。
 
     - 历史行 `user_id IS NULL` 无法证明属于谁 → 不取, 保持 pending(不评估、不冒充成绩),
       条数由 `count_unowned_pending_prediction_outcomes` 单独报出;
+    - ghost 行(有 user_id 但 users 里已无此人, 通常是迁移库缺外键 + 用户被清除)→ 不取,
+      条数由 `count_ghost_user_prediction_outcomes` 报出(否则等于给一个不存在的账号计分);
     - system 桶(user_id 为空 + owner_scope='system')是独立统计口径, 不并入任何个人成绩
       → 不在这里取, 条数由 `count_system_pending_prediction_outcomes` 报出;
     - 追加的审计版本(status='superseded')不是计分行 → 永不评估, 否则同键重复计分。
@@ -852,6 +866,7 @@ def list_pending_prediction_outcomes(
                 AgentPredictionOutcome.horizon_days <= max_horizon_days,
                 AgentPredictionOutcome.prediction_date <= today,
                 AgentPredictionOutcome.user_id.isnot(None),
+                _owner_alive_clause(),
                 or_(
                     AgentPredictionOutcome.owner_scope.is_(None),
                     AgentPredictionOutcome.owner_scope == SCOPE_USER,
@@ -868,6 +883,52 @@ def list_pending_prediction_outcomes(
             )
             .limit(limit)
             .all()
+        )
+    finally:
+        db.close()
+
+
+def count_ghost_user_prediction_outcomes(*, max_horizon_days: int = 10) -> int:
+    """user_id 指向**已不存在用户**的待评估行数(ghost) —— 只用于如实报告。
+
+    这些行在迁移库缺外键、用户被物理清除后出现: 有 user_id 可它已经不对应任何账号。
+    既不能评估(给谁记成绩?), 也不该被清理顺手删掉(归属问题没查清就消失, 事后无法复核)。
+    """
+    db = SessionLocal()
+    try:
+        today = date.today().strftime("%Y-%m-%d")
+        return int(
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.outcome_status == "pending",
+                AgentPredictionOutcome.horizon_days <= max_horizon_days,
+                AgentPredictionOutcome.prediction_date <= today,
+                AgentPredictionOutcome.user_id.isnot(None),
+                ~_owner_alive_clause(),
+            )
+            .count()
+        )
+    finally:
+        db.close()
+
+
+def count_detached_prediction_outcomes() -> int:
+    """账号已注销后留下的行数(user_id 已被置空, owner_scope='user') —— 只报数。
+
+    `ON DELETE SET NULL` 的必然结果(新库外键 / 迁移库触发器 / 清理任务都按这个语义执行):
+    行本身保留(历史预测不因账号注销而消失), 但归属不可再证明, 所以不评估、不计入任何成绩。
+    与"加列前的历史行"(user_id 与 owner_scope 双 NULL)分开报, 避免把"账号注销"误读成
+    "数据清洗过"。
+    """
+    db = SessionLocal()
+    try:
+        return int(
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.user_id.is_(None),
+                AgentPredictionOutcome.owner_scope == SCOPE_USER,
+            )
+            .count()
         )
     finally:
         db.close()
@@ -943,6 +1004,8 @@ def list_agent_prediction_outcomes(
         q = db.query(AgentPredictionOutcome).filter(
             AgentPredictionOutcome.prediction_date >= cutoff,
             AgentPredictionOutcome.user_id == uid,
+            # uid 对应的用户行必须仍存在: 悬空 id(ghost)的行不呈现给任何人
+            _owner_alive_clause(),
         )
         if agent_name:
             q = q.filter(AgentPredictionOutcome.agent_name == agent_name)
@@ -978,6 +1041,11 @@ def cleanup_context_data(
       归属不可证明的数据只能保留 unknown, 不能借"清理"顺手洗掉(条数记在
       `legacy_unowned_preserved`, 只统计不删除);
     - 其余各行仍按保留期删除(与旧行为一致), 不修改行内容, 只删过期行。
+
+    三次修正(归属完整性): 另外两类**归属不可证明**的行同样只报数、不删除 ——
+      - `ghost_user_preserved`: user_id 指向已不存在的用户(迁移库缺外键 + 用户被清除时出现);
+      - `detached_account_preserved`: 账号注销后 user_id 被 SET NULL 的留档(owner_scope='user')。
+    让它们随保留期一起消失, 等于把"归属问题"当"过期数据"处理掉, 事后无从复核。
     """
     db = SessionLocal()
     deleted = {
@@ -986,6 +1054,8 @@ def cleanup_context_data(
         "agent_context_runs": 0,
         "agent_prediction_outcomes": 0,
         "legacy_unowned_preserved": 0,
+        "ghost_user_preserved": 0,
+        "detached_account_preserved": 0,
         "dry_run": bool(dry_run),
     }
     try:
@@ -1012,6 +1082,34 @@ def cleanup_context_data(
             )
             .count()
         )
+        # 归属不可证明的另两类: 同样保留(不删), 分别报数
+        deleted["ghost_user_preserved"] = int(
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.prediction_date < outcome_cutoff,
+                AgentPredictionOutcome.user_id.isnot(None),
+                ~_owner_alive_clause(),
+            )
+            .count()
+        )
+        deleted["detached_account_preserved"] = int(
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.prediction_date < outcome_cutoff,
+                AgentPredictionOutcome.user_id.is_(None),
+                AgentPredictionOutcome.owner_scope == SCOPE_USER,
+            )
+            .count()
+        )
+
+        # 可删范围: 归属用户仍在的行(按保留期) + system 桶(审计留档, 有界增长)
+        prunable = or_(
+            and_(
+                AgentPredictionOutcome.user_id.isnot(None),
+                _owner_alive_clause(),
+            ),
+            AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
+        )
 
         if dry_run:
             deleted["stock_context_snapshots"] = int(
@@ -1033,10 +1131,7 @@ def cleanup_context_data(
                 db.query(AgentPredictionOutcome)
                 .filter(
                     AgentPredictionOutcome.prediction_date < outcome_cutoff,
-                    or_(
-                        AgentPredictionOutcome.user_id.isnot(None),
-                        AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
-                    ),
+                    prunable,
                 )
                 .count()
             )
@@ -1061,10 +1156,7 @@ def cleanup_context_data(
             db.query(AgentPredictionOutcome)
             .filter(
                 AgentPredictionOutcome.prediction_date < outcome_cutoff,
-                or_(
-                    AgentPredictionOutcome.user_id.isnot(None),
-                    AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
-                ),
+                prunable,
             )
             .delete(synchronize_session=False)
         )

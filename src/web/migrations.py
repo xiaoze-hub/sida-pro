@@ -101,6 +101,34 @@ def _add_column_if_missing(conn: Connection, table: str, column: str, sql: str) 
         conn.execute(text(sql))
 
 
+def _index_exists(conn: Connection, name: str) -> bool:
+    if _dialect_is_pg(conn):
+        row = conn.execute(
+            text(
+                """
+SELECT 1
+FROM pg_indexes
+WHERE schemaname = 'public' AND indexname = :name
+LIMIT 1
+"""
+            ),
+            {"name": name},
+        ).first()
+    else:
+        row = conn.execute(
+            text(
+                """
+SELECT 1
+FROM sqlite_master
+WHERE type='index' AND name=:name
+LIMIT 1
+"""
+            ),
+            {"name": name},
+        ).first()
+    return bool(row)
+
+
 def _create_index_if_missing(conn: Connection, name: str, sql: str) -> None:
     if _dialect_is_pg(conn):
         row = conn.execute(
@@ -6969,8 +6997,211 @@ def _m248_premarket_evidence_run_binding(conn: Connection) -> None:
     )
 
 
+# ── 后验记录归属完整性(m249/m250 共用) ───────────────────────────────────────
+#
+# 第三次复审发现两处"迁移库 vs create_all 新库"不一致, 都会让统计可信度取决于
+# "这个库是怎么建的":
+#   1. 模型声明 `user_id -> users.id ON DELETE SET NULL`, 而 m249 只 ALTER ADD COLUMN,
+#      迁移过的老库**没有**这个外键 → 不存在的 user_id 写得进去(ghost 行, 事后被当成
+#      "有归属"去评估/计分); 用户被物理清除后行里留着悬空 id; create_all 的新库则会被
+#      SET NULL。同一份代码在两个库上删除/归属语义不同。
+#   2. m249 原来那条无状态唯一索引 `(user_id, agent, symbol, market, date, horizon)`:
+#      一旦同键已有"追加版本"行(计分行 + superseded), 重跑 m249(函数体/注释任何改动都会
+#      改 checksum → 框架重跑)就会因重复键建索引失败 → 整个启动迁移中断, 服务起不来。
+#
+# 修法(全程不改写、不删除任何存量行):
+#   - PG: `ADD CONSTRAINT ... FOREIGN KEY ... ON DELETE SET NULL NOT VALID`。
+#     NOT VALID 只对**新写入**生效、不校验存量行 → 老库即使已有孤儿 user_id 也不会让上线
+#     失败, 也不会被回填/清空; 只有确认存量无孤儿行时才 VALIDATE。约束名取 PG 自动生成的
+#     名字(`agent_prediction_outcomes_user_id_fkey`), 让老库/新库连约束名都一致。
+#   - SQLite: 不能 ALTER TABLE ADD CONSTRAINT(要 12 步重建表, 会连带丢触发器/索引/行,
+#     风险远高于收益 —— 本轮明确不做重建)。改用**等价触发器**: 写入 user_id 时用户不存在
+#     → RAISE(ABORT)(错误文本含 "foreign key", 走 context_store 的 foreign_key 分型 →
+#     refused_unknown_user); 删除用户时把该用户的行 user_id 置 NULL(等价 ON DELETE SET
+#     NULL)。**诚实披露**: 迁移库上的这条约束不是声明式外键, `PRAGMA foreign_key_list`
+#     看不到, 也不能被 `ALTER TABLE` 之外的 DDL 工具识别; create_all 的新库是真外键。
+#     两者**行为**一致, schema 表示不同 —— 差异写在这里和 models.py 的 docstring 里。
+#   - 唯一索引: 只在"没有违反唯一性的存量行"时才建; 有冲突就跳过并记 ERROR(服务照常起,
+#     但如实报出约束缺失), 绝不为建索引去删/改数据。
+_PRED_OUTCOME_TABLE = "agent_prediction_outcomes"
+_PRED_OUTCOME_USER_FK = "agent_prediction_outcomes_user_id_fkey"
+_PRED_OUTCOME_SYSTEM_CHECK = "ck_prediction_outcome_system_scope_no_user"
+
+
+def _pred_outcome_orphan_user_count(conn: Connection) -> int:
+    """user_id 指向不存在的用户(ghost)的行数 —— 只统计, 绝不改写。"""
+    if not (_has_table(conn, _PRED_OUTCOME_TABLE) and _has_table(conn, "users")):
+        return 0
+    if not _has_column(conn, _PRED_OUTCOME_TABLE, "user_id"):
+        return 0
+    row = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM agent_prediction_outcomes o "
+            "WHERE o.user_id IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = o.user_id)"
+        )
+    ).first()
+    try:
+        return int(row[0]) if row else 0
+    except Exception:  # noqa: BLE001 — 统计失败不能影响迁移
+        return 0
+
+
+def _pg_constraint_exists(conn: Connection, table: str, name: str) -> bool:
+    if not _dialect_is_pg(conn):
+        return False
+    row = conn.execute(
+        text(
+            """
+SELECT 1
+FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+WHERE t.relname = :table AND c.conname = :name
+LIMIT 1
+"""
+        ),
+        {"table": table, "name": name},
+    ).first()
+    return bool(row)
+
+
+def _sqlite_declares_user_fk(conn: Connection) -> bool:
+    """SQLite 表里是否已声明 user_id -> users.id(create_all 新库为真)。"""
+    rows = conn.execute(text(f"PRAGMA foreign_key_list({_PRED_OUTCOME_TABLE})")).fetchall()
+    for r in rows:
+        # PRAGMA foreign_key_list: id, seq, table, from, to, on_update, on_delete, match
+        if len(r) > 4 and str(r[2]) == "users" and str(r[3]) == "user_id":
+            return True
+    return False
+
+
+_SQLITE_PRED_OUTCOME_USER_FK_DDL = (
+    # 插入时归属用户必须存在(等价 FK 的 NO ACTION/默认语义)
+    """
+CREATE TRIGGER IF NOT EXISTS trg_pred_outcome_user_fk_ins
+BEFORE INSERT ON agent_prediction_outcomes
+FOR EACH ROW WHEN NEW.user_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+BEGIN
+  SELECT RAISE(ABORT, 'FOREIGN KEY constraint failed: agent_prediction_outcomes.user_id -> users.id');
+END
+""",
+    """
+CREATE TRIGGER IF NOT EXISTS trg_pred_outcome_user_fk_upd
+BEFORE UPDATE OF user_id ON agent_prediction_outcomes
+FOR EACH ROW WHEN NEW.user_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+BEGIN
+  SELECT RAISE(ABORT, 'FOREIGN KEY constraint failed: agent_prediction_outcomes.user_id -> users.id');
+END
+""",
+    # 删除用户时把归属置空(等价 ON DELETE SET NULL; 不删行)
+    """
+CREATE TRIGGER IF NOT EXISTS trg_pred_outcome_user_fk_del
+AFTER DELETE ON users
+FOR EACH ROW
+BEGIN
+  UPDATE agent_prediction_outcomes SET user_id = NULL WHERE user_id = OLD.id;
+END
+""",
+)
+
+
+def _ensure_prediction_outcome_user_fk(conn: Connection) -> None:
+    """让"迁移库"具备与 create_all 新库相同的 user_id 归属完整性语义(m249)。
+
+    全程只加约束/触发器: 不改写、不清空、不删除任何存量行。老库已有的孤儿 user_id 行原样
+    保留(它们不会被当成"有归属"参与评估/统计, 见 context_store 的 ghost 过滤)。
+    """
+    if not (_has_table(conn, _PRED_OUTCOME_TABLE) and _has_table(conn, "users")):
+        logger.info(
+            "[m249] 缺 agent_prediction_outcomes/users 表, 跳过归属外键(交给 create_all 建表)"
+        )
+        return
+    if not _has_column(conn, _PRED_OUTCOME_TABLE, "user_id"):
+        return
+    orphans = _pred_outcome_orphan_user_count(conn)
+
+    if _dialect_is_pg(conn):
+        if not _pg_constraint_exists(conn, _PRED_OUTCOME_TABLE, _PRED_OUTCOME_USER_FK):
+            conn.execute(
+                text(
+                    f"ALTER TABLE {_PRED_OUTCOME_TABLE} "
+                    f"ADD CONSTRAINT {_PRED_OUTCOME_USER_FK} "
+                    "FOREIGN KEY (user_id) REFERENCES users(id) "
+                    "ON DELETE SET NULL NOT VALID"
+                )
+            )
+            logger.info(
+                "[m249] 已加外键 %s(NOT VALID: 不校验存量行, 新写入即受约束)", _PRED_OUTCOME_USER_FK
+            )
+        if orphans:
+            logger.error(
+                "[m249] 存量有 %s 行 user_id 指向不存在的用户(ghost): 外键保持 NOT VALID, "
+                "这些行原样保留(不改写/不删除), 读取与评估侧已按'归属不可证明'排除; "
+                "清理它们需要人工核查来源",
+                orphans,
+            )
+            return
+        try:
+            conn.execute(
+                text(f"ALTER TABLE {_PRED_OUTCOME_TABLE} VALIDATE CONSTRAINT {_PRED_OUTCOME_USER_FK}")
+            )
+        except Exception as exc:  # noqa: BLE001
+            # 并发写入刚插入孤儿 / 已 VALIDATE 过: 都不是启动失败的理由, 如实记日志。
+            logger.warning("[m249] VALIDATE CONSTRAINT 未完成(不影响新写入约束): %s", exc)
+        return
+
+    # SQLite
+    if _sqlite_declares_user_fk(conn):
+        # create_all 的新库: 已声明真外键, 保持与新库完全一致, 不再叠一层触发器
+        return
+    for ddl in _SQLITE_PRED_OUTCOME_USER_FK_DDL:
+        conn.execute(text(ddl))
+    logger.info(
+        "[m249] SQLite 迁移库无声明式外键 → 用等价触发器实现(插入/改写校验 + 删用户置空); "
+        "schema 表示与 create_all 新库不同, 行为一致"
+    )
+    if orphans:
+        logger.error(
+            "[m249] SQLite 存量有 %s 行 ghost user_id: 触发器只拦新写入, 存量行原样保留"
+            "(不改写/不删除), 读取与评估侧按'归属不可证明'排除",
+            orphans,
+        )
+
+
+def _create_unique_index_if_no_violation(
+    conn: Connection, name: str, ddl: str, violation_sql: str, what: str
+) -> bool:
+    """建唯一索引; 存量数据已有违反唯一性的行时**跳过**并记 ERROR(不删/不改数据)。
+
+    为什么: `CREATE UNIQUE INDEX` 在有重复键的库上会直接抛错 —— 幂等迁移一旦重跑就会把
+    启动链路打断(这就是 m249 老版本重跑失败的根因)。宁可少一个 DB 层约束(服务能起, 应用层
+    已有 refused_duplicate_rows/追加版本兜底), 也不删数据、也不让服务起不来 —— 但必须
+    把自己的缺失如实记成 ERROR, 不能静默。
+    """
+    if _index_exists(conn, name):
+        return True
+    row = conn.execute(text(violation_sql)).first()
+    try:
+        violations = int(row[0]) if row else 0
+    except Exception:  # noqa: BLE001
+        violations = 0
+    if violations:
+        logger.error(
+            "[%s] 存量有 %s 组违反唯一性的行 → 跳过创建 %s(不删除、不改写任何行); "
+            "DB 层缺这条约束, 版本追加/重复写入由应用层兜底, 需人工核查历史数据",
+            what,
+            violations,
+            name,
+        )
+        return False
+    conn.execute(text(ddl))
+    return True
+
+
 def _m249_prediction_outcome_user_scope(conn: Connection) -> None:
-    """给 agent_prediction_outcomes 加用户维度 + 部分唯一键（2026-11-12 P0）。
+    """给 agent_prediction_outcomes 加用户维度 + 归属完整性（2026-11-12, 三次修正）。
 
     为什么需要: 这张表原先没有任何用户列, 行键是
     (agent, symbol, market, date, horizon)。两个真实账户同标的同日的预测**撞同一个键**,
@@ -6981,12 +7212,21 @@ def _m249_prediction_outcome_user_scope(conn: Connection) -> None:
       1. `user_id VARCHAR(36)` —— 可空。加列后存量行全为 NULL = 归属不可证明的历史数据,
          存储层对这些行一律不更新、不评估、不计入个人成绩。
       2. `ix_prediction_outcome_user` —— 按用户查的普通索引。
-      3. `ux_prediction_outcome_user_key` —— **部分**唯一索引, WHERE user_id IS NOT NULL。
-         关键点: 存量行的 user_id 都是 NULL, 不落入索引范围, 所以老库里已经有同键重复行
-         也能建索引成功 —— 不需要先清洗、也不会因为历史脏数据让上线迁移失败;
-         而新写入在 DB 层就保证同用户同键至多一行（两个进程并发也只有一个插得进去）。
+      3. 归属完整性: 模型声明的是 `user_id -> users.id ON DELETE SET NULL`, 只 ADD COLUMN
+         会让迁移库缺这个外键(不存在的用户写得进去; 删用户后留悬空 id), 与 create_all
+         新库语义不一致。这里按方言补齐: PG 加 `NOT VALID` 外键(存量孤儿行不校验、不改写,
+         新写入立刻受约束; 无孤儿时才 VALIDATE), SQLite 加等价触发器(见
+         `_ensure_prediction_outcome_user_fk` 的说明与 schema 差异披露)。
 
-    幂等: 加列用 `_has_column` 判据, 索引全部 IF NOT EXISTS, 可重复执行。
+    刻意**不再**建 `ux_prediction_outcome_user_key`(老版本建的无状态唯一键):
+      - 它把"同键多版本"挡死, 而版本追加是 m250 的核心语义;
+      - 更严重的是**重跑**它会因已存在的计分行 + superseded 行重复而建索引失败, 让整个
+        启动迁移中断。DB 层的唯一性改由 m250 的部分唯一索引承担(计分行唯一 + 同 run 唯一),
+        这里只保留普通索引。老库若已按旧函数体建过那条索引, m250 的 DROP INDEX IF EXISTS
+        会把它清掉(只删索引, 不碰数据)。
+
+    幂等: 加列用 `_has_column` 判据, 索引/触发器/外键全部存在性判据 + IF NOT EXISTS,
+    可重复执行 —— 这也是"重跑不能炸"的硬要求。
     """
     if not _has_table(conn, "agent_prediction_outcomes"):
         # 老库若连表都没有(理论上 create_all 会建), 没有可加的列: 直接返回,
@@ -7004,37 +7244,116 @@ def _m249_prediction_outcome_user_scope(conn: Connection) -> None:
             "ON agent_prediction_outcomes (user_id, prediction_date)"
         )
     )
-    conn.execute(
+    _ensure_prediction_outcome_user_fk(conn)
+
+
+def _pred_outcome_system_binding_violation_count(conn: Connection) -> int:
+    """system 桶里绑定了真实 user_id 的行数(应为 0; 只统计, 不改写)。"""
+    if not _has_column(conn, _PRED_OUTCOME_TABLE, "owner_scope"):
+        return 0
+    row = conn.execute(
         text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_key "
-            "ON agent_prediction_outcomes "
-            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
-            "WHERE user_id IS NOT NULL"
+            "SELECT COUNT(*) FROM agent_prediction_outcomes "
+            "WHERE owner_scope = 'system' AND user_id IS NOT NULL"
         )
-    )
+    ).first()
+    try:
+        return int(row[0]) if row else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+_SQLITE_PRED_OUTCOME_SYSTEM_DDL = (
+    """
+CREATE TRIGGER IF NOT EXISTS trg_pred_outcome_system_no_user_ins
+BEFORE INSERT ON agent_prediction_outcomes
+FOR EACH ROW WHEN NEW.owner_scope = 'system' AND NEW.user_id IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'CHECK constraint failed: agent_prediction_outcomes system scope must not bind a user');
+END
+""",
+    """
+CREATE TRIGGER IF NOT EXISTS trg_pred_outcome_system_no_user_upd
+BEFORE UPDATE ON agent_prediction_outcomes
+FOR EACH ROW WHEN NEW.owner_scope = 'system' AND NEW.user_id IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'CHECK constraint failed: agent_prediction_outcomes system scope must not bind a user');
+END
+""",
+)
+
+
+def _ensure_prediction_outcome_system_scope_check(conn: Connection) -> None:
+    """system 桶不得绑定真实用户 —— DB 层声明式约束(PG CHECK NOT VALID / SQLite 触发器)。
+
+    代码层早已拒写(`refused_bad_scope`), 但"代码挡住了"不等于"库里不可能": 手工 SQL、
+    迁移脚本、其它写入端都不经过这段代码。加 DB 层约束后, 任何来源的 system+user_id 组合
+    都会被拒。存量违规行(理论上为 0)不改写, PG 侧保持 NOT VALID 并记 ERROR, 由人工核查。
+    """
+    if not _has_column(conn, _PRED_OUTCOME_TABLE, "owner_scope"):
+        return
+    violations = _pred_outcome_system_binding_violation_count(conn)
+    if _dialect_is_pg(conn):
+        if not _pg_constraint_exists(conn, _PRED_OUTCOME_TABLE, _PRED_OUTCOME_SYSTEM_CHECK):
+            conn.execute(
+                text(
+                    f"ALTER TABLE {_PRED_OUTCOME_TABLE} "
+                    f"ADD CONSTRAINT {_PRED_OUTCOME_SYSTEM_CHECK} "
+                    "CHECK (owner_scope IS DISTINCT FROM 'system' OR user_id IS NULL) NOT VALID"
+                )
+            )
+        if violations:
+            logger.error(
+                "[m250] 存量有 %s 行 system 桶绑定了 user_id(违反归属语义): 约束保持 NOT VALID, "
+                "行原样保留, 需人工核查来源",
+                violations,
+            )
+            return
+        try:
+            conn.execute(
+                text(
+                    f"ALTER TABLE {_PRED_OUTCOME_TABLE} VALIDATE CONSTRAINT "
+                    f"{_PRED_OUTCOME_SYSTEM_CHECK}"
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[m250] system 桶约束 VALIDATE 未完成(不影响新写入): %s", exc)
+        return
+
+    for ddl in _SQLITE_PRED_OUTCOME_SYSTEM_DDL:
+        conn.execute(text(ddl))
+    if violations:
+        logger.error(
+            "[m250] SQLite 存量有 %s 行 system 桶绑定 user_id: 触发器只拦新写入, 存量行原样保留",
+            violations,
+        )
 
 
 def _m250_prediction_outcome_versions_and_system_scope(conn: Connection) -> None:
-    """后验记录的**版本追加** + **system 独立桶**（2026-11-12 二次修正）。
+    """后验记录的**版本追加** + **system 独立桶**（2026-11-12, 三次修正）。
 
-    为什么还要加: m249 只用 (user, agent, symbol, market, date, horizon) 建了唯一索引,
-    于是"同用户同日第二次运行"只能被整个拒写 —— 后续版本的信息被丢掉。审计要求:
-    支持同用户多个 run 的**追加版本**, 并按**明确规则**计分(不覆盖、也不重复计数)。
+    为什么还要加: m249 只给了用户维度, 于是"同用户同日第二次运行"只能被整个拒写 ——
+    后续版本的信息被丢掉。审计要求: 支持同用户多个 run 的**追加版本**, 并按**明确规则**
+    计分(不覆盖、也不重复计数)。
 
-    本迁移只做加法 + 只删自己 m249 建的那个索引(不删任何**数据行**):
+    本迁移只做加法 + 只删 m249 老版本那条索引(不删任何**数据行**):
       1. `run_trace_id VARCHAR(200)` —— 版本身份(哪一次运行写下的)。
       2. `owner_scope VARCHAR(16)` —— 归属桶: 'user' / 'system'; NULL = 加列前的历史行。
-         system 桶 `user_id` 恒为 NULL, 绝不猜测绑定真实用户。
-      3. DROP INDEX ux_prediction_outcome_user_key —— m249 的无状态唯一键会把"追加版本"
-         挡死。删索引不删行, 存量数据一条不动。
+         system 桶 `user_id` 恒为 NULL, 绝不猜测绑定真实用户; 并由 DB 层 CHECK/触发器
+         强制(`_ensure_prediction_outcome_system_scope_check`)。
+      3. DROP INDEX ux_prediction_outcome_user_key —— 老版 m249 的无状态唯一键会把
+         "追加版本"挡死。删索引不删行, 存量数据一条不动(老库已按旧函数体建过才需要这一步;
+         新版 m249 已不再建它, DROP IF EXISTS 对新库是 no-op)。
       4. 计分行唯一(部分索引, `outcome_status <> 'superseded'`): 每个键至多一条计分行;
          后到版本以 superseded 追加, 不覆盖、不参与评估/统计。
       5. 版本幂等(部分索引, 含 run_trace_id): 同一个 run 重复落库不会多出一行。
       6. system 桶的 4/5 两条同样各建一份(独立于任何真实用户)。
 
-    幂等: 加列用 `_has_column`, 索引全部 IF NOT EXISTS, 可重复执行。
+    重跑安全(三次修正): 四条唯一索引一律走 `_create_unique_index_if_no_violation` ——
+    先统计数据冲突, 无冲突才建; 有冲突就跳过并记 ERROR。这样"已有版本追加行的库重跑本
+    迁移"不会再抛 IntegrityError 把启动打断(老实现直接 CREATE UNIQUE INDEX 会炸)。
     存量行(user_id IS NULL 且 owner_scope IS NULL)不落入任何部分索引: 老库即使已有同键
-    重复也能直接建索引, 不清洗、不回填、不删除。
+    重复也能建索引, 不清洗、不回填、不删除。
     """
     if not _has_table(conn, "agent_prediction_outcomes"):
         return
@@ -7066,38 +7385,66 @@ def _m250_prediction_outcome_versions_and_system_scope(conn: Connection) -> None
     )
     # m249 的无状态唯一键会挡住"追加版本"; 只删索引, 不动数据。
     conn.execute(text("DROP INDEX IF EXISTS ux_prediction_outcome_user_key"))
-    conn.execute(
-        text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_active_key "
-            "ON agent_prediction_outcomes "
-            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
-            "WHERE user_id IS NOT NULL AND outcome_status <> 'superseded'"
-        )
+    # 归属完整性: 老库若按旧版 m249 建过(没有外键/触发器), 这里再补一次(幂等)。
+    _ensure_prediction_outcome_user_fk(conn)
+    _ensure_prediction_outcome_system_scope_check(conn)
+
+    _create_unique_index_if_no_violation(
+        conn,
+        "ux_prediction_outcome_user_active_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_active_key "
+        "ON agent_prediction_outcomes "
+        "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
+        "WHERE user_id IS NOT NULL AND outcome_status <> 'superseded'",
+        "SELECT COUNT(*) FROM ("
+        "SELECT 1 FROM agent_prediction_outcomes "
+        "WHERE user_id IS NOT NULL AND outcome_status <> 'superseded' "
+        "GROUP BY user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days "
+        "HAVING COUNT(*) > 1) d",
+        "m250",
     )
-    conn.execute(
-        text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_run_key "
-            "ON agent_prediction_outcomes "
-            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, "
-            "run_trace_id) "
-            "WHERE user_id IS NOT NULL AND run_trace_id IS NOT NULL"
-        )
+    _create_unique_index_if_no_violation(
+        conn,
+        "ux_prediction_outcome_user_run_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_run_key "
+        "ON agent_prediction_outcomes "
+        "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, "
+        "run_trace_id) "
+        "WHERE user_id IS NOT NULL AND run_trace_id IS NOT NULL",
+        "SELECT COUNT(*) FROM ("
+        "SELECT 1 FROM agent_prediction_outcomes "
+        "WHERE user_id IS NOT NULL AND run_trace_id IS NOT NULL "
+        "GROUP BY user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+        "horizon_days, run_trace_id HAVING COUNT(*) > 1) d",
+        "m250",
     )
-    conn.execute(
-        text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_system_active_key "
-            "ON agent_prediction_outcomes "
-            "(agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
-            "WHERE owner_scope = 'system' AND outcome_status <> 'superseded'"
-        )
+    _create_unique_index_if_no_violation(
+        conn,
+        "ux_prediction_outcome_system_active_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_system_active_key "
+        "ON agent_prediction_outcomes "
+        "(agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
+        "WHERE owner_scope = 'system' AND outcome_status <> 'superseded'",
+        "SELECT COUNT(*) FROM ("
+        "SELECT 1 FROM agent_prediction_outcomes "
+        "WHERE owner_scope = 'system' AND outcome_status <> 'superseded' "
+        "GROUP BY agent_name, stock_symbol, stock_market, prediction_date, horizon_days "
+        "HAVING COUNT(*) > 1) d",
+        "m250",
     )
-    conn.execute(
-        text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_system_run_key "
-            "ON agent_prediction_outcomes "
-            "(agent_name, stock_symbol, stock_market, prediction_date, horizon_days, run_trace_id) "
-            "WHERE owner_scope = 'system' AND run_trace_id IS NOT NULL"
-        )
+    _create_unique_index_if_no_violation(
+        conn,
+        "ux_prediction_outcome_system_run_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_system_run_key "
+        "ON agent_prediction_outcomes "
+        "(agent_name, stock_symbol, stock_market, prediction_date, horizon_days, run_trace_id) "
+        "WHERE owner_scope = 'system' AND run_trace_id IS NOT NULL",
+        "SELECT COUNT(*) FROM ("
+        "SELECT 1 FROM agent_prediction_outcomes "
+        "WHERE owner_scope = 'system' AND run_trace_id IS NOT NULL "
+        "GROUP BY agent_name, stock_symbol, stock_market, prediction_date, horizon_days, "
+        "run_trace_id HAVING COUNT(*) > 1) d",
+        "m250",
     )
 
 
@@ -7348,10 +7695,12 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 重新执行 —— 因此 m247 的函数体保持与 8c972f63 逐字一致, 新列/新索引一律放到新的 m249。
     Migration(247, "premarket_factor_evidence", _m247_premarket_factor_evidence),
     Migration(248, "premarket_evidence_run_binding", _m248_premarket_evidence_run_binding),
-    # 后验记录用户维度 + 部分唯一键; 只加列/加索引, 不动存量行(2026-11-12 P0)
+    # 后验记录用户维度 + 归属完整性(外键/等价触发器); 只加列/加索引/加约束, 不动存量行
+    # (2026-11-12 P0, 三次修正: 不再建那条会让重跑失败的无状态唯一键)
     Migration(249, "prediction_outcome_user_scope", _m249_prediction_outcome_user_scope),
-    # 版本追加(run_trace_id/owner_scope) + 计分行唯一 + system 独立桶; 仍只加列/加索引,
-    # 唯一删除动作是丢掉 m249 自己建的无状态唯一索引(不删数据行)(2026-11-12 二次修正)
+    # 版本追加(run_trace_id/owner_scope) + 计分行唯一 + system 独立桶 + DB 层 system 归属 CHECK;
+    # 仍只加列/加索引/加约束, 唯一删除动作是丢掉老版 m249 建的无状态唯一索引(不删数据行)。
+    # 唯一索引一律"无数据冲突才建"(重跑安全, 2026-11-12 三次修正)。
     Migration(
         250,
         "prediction_outcome_versions_and_system_scope",

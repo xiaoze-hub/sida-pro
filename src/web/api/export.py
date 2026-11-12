@@ -144,13 +144,22 @@ def export_portfolio(
 
 # ========== 预测记录导出 ==========
 
+SUPERSEDED_LABEL = "superseded(审计版本·不计分)"
+
+
 def _prediction_result_label(rec: AgentPredictionOutcome) -> str:
     """结果列: pending(待验证) / hit(命中) / miss(未中) / no_base_price / evaluated。
 
-    DB 原始 outcome_status 为 pending/evaluated/no_base_price;
+    DB 原始 outcome_status 为 pending/evaluated/no_base_price/superseded;
     evaluated 时按动作方向 × 实际涨跌幅判定 hit/miss(对齐任务口径)。
+
+    2026-11-12 三次修正: `superseded`(同键后到版本, 只留档)以前会掉进 "evaluated"
+    分支按收益判 hit/miss —— 等于把不计分的审计版本算成一次成绩。现在单独标成
+    `superseded(审计版本·不计分)`, 并且 `scored` 列为"否"。
     """
     status = (rec.outcome_status or "pending").lower()
+    if status == "superseded":
+        return SUPERSEDED_LABEL
     if status == "pending":
         return "pending"
     if status == "no_base_price":
@@ -166,16 +175,31 @@ def _prediction_result_label(rec: AgentPredictionOutcome) -> str:
     return "evaluated"
 
 
+def _prediction_scored_flag(rec: AgentPredictionOutcome) -> str:
+    """这一行是否**计入**命中率: superseded 审计版本恒为"否", 其余按状态说明。"""
+    status = (rec.outcome_status or "pending").lower()
+    if status == "superseded":
+        return "否(审计版本)"
+    return "是"
+
+
 @router.get("/export/predictions")
 def export_predictions(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """预测记录 CSV: 代码/方向/目标价/日期/结果(hit/miss/pending)。
+    """预测记录 CSV: 代码/方向/目标价/日期/结果/计分。
 
     P0(2026-11-12): 这里原来导出**全表**(包括别的账号的行) —— 同一份个人导出里出现
     他人预测, 既是越权读取, 也让"我的成绩"不可信。现在只导出 `user_id == 当前用户` 的行;
     历史无归属行(user_id 为空)不导出, 并在日志里如实给出被排除的条数。
+
+    三次修正(导出也要能自查):
+      - 新增"计分"列: superseded 审计版本**显式标成不计分**, 结果列也带"(审计版本·不计分)",
+        不再按收益冒充 hit/miss;
+      - 新增"归属"列: 标明该行来自哪个归属桶(只导出本账号的用户桶行; system 桶/历史未知
+        归属/ghost 行都不在这里出现), 避免把无归属行当成自己的成绩;
+      - ghost 行(user_id 已不对应任何账号)不导出 —— 它不属于当前用户, 也不属于任何人。
     """
     # 审计(2026-08-15 评审 B 补覆盖)
     try:
@@ -202,7 +226,15 @@ def export_predictions(
             "预测导出跳过 %s 条无归属历史行(user_id 为空): 无法证明属于当前用户, 不导出",
             legacy_excluded,
         )
-    headers = ["代码", "方向", "目标价", "日期", "结果"]
+    superseded_rows = sum(
+        1 for rec in records if (rec.outcome_status or "").lower() == "superseded"
+    )
+    if superseded_rows:
+        logger.info(
+            "预测导出含 %s 条 superseded 审计版本: 已标'不计分', 不参与命中率统计",
+            superseded_rows,
+        )
+    headers = ["代码", "方向", "目标价", "日期", "结果", "计分", "归属"]
 
     rows: list[list] = []
     for rec in records:
@@ -213,6 +245,8 @@ def export_predictions(
             _fmt(rec.trigger_price),
             rec.prediction_date,
             _prediction_result_label(rec),
+            _prediction_scored_flag(rec),
+            rec.owner_scope or "user",
         ])
     return _csv_response("predictions.csv", headers, rows)
 

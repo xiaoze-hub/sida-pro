@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     Index,
+    CheckConstraint,
     text,
     false,
 )
@@ -599,10 +600,28 @@ class AgentPredictionOutcome(CreatedAtMixin, Base):
           `ux_prediction_outcome_system_run_key`。
     - 历史行(user_id/owner_scope 均 NULL)不落入任何部分索引, 老库即使已有同键重复也能
       直接建索引, 不需要先清洗、也不会因为历史脏数据让上线迁移失败。
+
+    归属完整性(2026-11-12 三次修正): `user_id` 是外键 `users.id ON DELETE SET NULL`。
+    - **create_all 建的新库**: 声明式外键(SQLite 侧由 `PRAGMA foreign_keys=ON` 生效)。
+    - **迁移过的老库**: PG 由 m249 补 `agent_prediction_outcomes_user_id_fkey`(同名同语义,
+      以 `NOT VALID` 加上: 存量孤儿行不校验、不改写, 新写入立刻受约束);
+      SQLite 无法在不重建表的前提下加外键, 由 m249 建**等价触发器**实现
+      (trg_pred_outcome_user_fk_ins/upd 校验用户存在, trg_pred_outcome_user_fk_del 删用户
+      时置空)。**schema 表示不同, 行为一致**; 触发器在 `PRAGMA foreign_key_list` 里看不到,
+      DDL 工具也不会把它当外键 —— 这是明确披露的差异, 不是遗漏。
+    - 应用层还有最后一道:`save_agent_prediction_outcome` 把外键错误分型成
+      `refused_unknown_user`, 读取/评估侧把 `user_id` 指向已不存在用户的行(ghost)按
+      "归属不可证明"排除, 既不评估也不呈现为任何人的成绩。
     """
 
     __tablename__ = "agent_prediction_outcomes"
     __table_args__ = (
+        # system 桶不得绑定真实 user_id —— 与 m250 在迁移库上加的 CHECK 同名同定义,
+        # 让 create_all 的新库与迁移过的老库在"system 桶语义"上也是同一份约束。
+        CheckConstraint(
+            "owner_scope IS DISTINCT FROM 'system' OR user_id IS NULL",
+            name="ck_prediction_outcome_system_scope_no_user",
+        ),
         Index(
             "ix_prediction_agent_stock_date",
             "agent_name",

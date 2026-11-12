@@ -227,6 +227,61 @@ def _system_evaluated_count(db: Session, since: str = "") -> int:
     return int(q.scalar() or 0)
 
 
+def _system_pending_count(db: Session) -> int:
+    """system 桶里还没评估的行数 —— 它不是"欠评估", 是**设计上不评估**的留档。
+
+    system 桶的定位(2026-11-12 三次修正, 明确写在这里免得被当成 bug): 只作
+    "系统调度跑过一次预测"的审计留档 —— 没有个人归属, 谁为它负责都证明不了, 所以
+    **不评估、不计入任何命中率**(评估它只会把无主结论混进成绩)。它也不会无限增长:
+    超过后验保留期后由 `cleanup_context_data` 按保留期删除。
+    明确**不做**的事: 不据此自动交易、不把 system 结论包装成"平台成绩"。
+    """
+    q = db.query(func.count(AgentPredictionOutcome.id)).filter(
+        AgentPredictionOutcome.user_id.is_(None),
+        AgentPredictionOutcome.owner_scope == "system",
+        AgentPredictionOutcome.outcome_status == "pending",
+    )
+    return int(q.scalar() or 0)
+
+
+def _ghost_user_evaluated_count(db: Session, since: str = "") -> int:
+    """user_id 已不指向任何用户的**已评估**行数(ghost) —— 明确标注不纳入任何成绩。
+
+    迁移库(缺 user_id 外键)在用户被物理清除后会留下这种行。它们原来会被当成"有归属"
+    去评估/计数(ghost 用户错误计分); 现在读取与评估都要求用户行仍存在, 这里只如实报数,
+    既不删也不回填。
+    """
+    q = (
+        db.query(func.count(AgentPredictionOutcome.id))
+        .filter(
+            AgentPredictionOutcome.user_id.isnot(None),
+            AgentPredictionOutcome.user_id.notin_(db.query(User.id)),
+            AgentPredictionOutcome.outcome_status == "evaluated",
+            AgentPredictionOutcome.outcome_return_pct.isnot(None),
+        )
+    )
+    if since:
+        q = q.filter(AgentPredictionOutcome.prediction_date >= since)
+    return int(q.scalar() or 0)
+
+
+def _detached_account_count(db: Session, since: str = "") -> int:
+    """账号已注销、行被 SET NULL 的留档条数(user_id 为空 + owner_scope='user')。
+
+    与"加列前的历史行"(双 NULL)分开报: 前者是明确的删除语义结果, 后者是归属未知。
+    两者都不计入任何个人成绩。
+    """
+    q = db.query(func.count(AgentPredictionOutcome.id)).filter(
+        AgentPredictionOutcome.user_id.is_(None),
+        AgentPredictionOutcome.owner_scope == "user",
+        AgentPredictionOutcome.outcome_status == "evaluated",
+        AgentPredictionOutcome.outcome_return_pct.isnot(None),
+    )
+    if since:
+        q = q.filter(AgentPredictionOutcome.prediction_date >= since)
+    return int(q.scalar() or 0)
+
+
 def _prediction_hit_stats(db: Session, *, user_id: str) -> dict:
     """当前账号的预测命中率(user_id 必传: 本表不提供跨账户口径)。"""
     return _accuracy_board(db, since="", user_id=user_id)["overall"]
@@ -252,7 +307,10 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
             "user_scoped": True,
             "legacy_unscoped_rows": 0,
             "legacy_untrusted": False,
+            "ghost_user_rows": 0,
+            "detached_account_rows": 0,
             "system_scoped_rows": 0,
+            "system_pending_rows": 0,
             "note": "缺少当前用户, 不提供跨账户统计",
             "overall": {
                 "hit_count": 0,
@@ -283,6 +341,9 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
 
     legacy = _legacy_unscoped_evaluated_count(db, since=since)
     system_rows = _system_evaluated_count(db, since=since)
+    system_pending = _system_pending_count(db)
+    ghost_rows = _ghost_user_evaluated_count(db, since=since)
+    detached_rows = _detached_account_count(db, since=since)
 
     per: dict[str, dict] = {}
     ohit = otot = 0
@@ -324,10 +385,25 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
             f"; 另有 {legacy} 条历史记录无用户归属(加列前的存量), 归属不可证明, "
             "不纳入成绩、不回填、不清洗 —— 历史重复与混算不可视为已修复"
         )
-    if system_rows:
+    if ghost_rows:
+        note += (
+            f"; 另有 {ghost_rows} 条记录的 user_id 已不对应任何账号(ghost, 旧库缺外键 + "
+            "账号被物理清除的产物), 已从评估与成绩中排除, 未删除"
+        )
+    if detached_rows:
+        note += (
+            f"; 另有 {detached_rows} 条是账号注销后的留档(user_id 已按删除语义置空), "
+            "不归任何现存账号"
+        )
+    if system_rows or system_pending:
         note += (
             f"; 另有 {system_rows} 条 system 桶记录(无会话的系统调度运行)独立统计, "
             "不并入本账号"
+        )
+    if system_pending:
+        note += (
+            f"; 其中 {system_pending} 条尚未评估 —— system 桶按设计不评估(无个人归属, "
+            "不据此自动交易), 只作审计留档, 超保留期后由维护清理"
         )
     return {
         "since": since or None,
@@ -335,7 +411,10 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
         "user_scoped": True,
         "legacy_unscoped_rows": legacy,
         "legacy_untrusted": bool(legacy),
+        "ghost_user_rows": ghost_rows,
+        "detached_account_rows": detached_rows,
         "system_scoped_rows": system_rows,
+        "system_pending_rows": system_pending,
         "note": note,
         "overall": {
             "hit_count": ohit,

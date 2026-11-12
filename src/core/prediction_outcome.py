@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 
 from src.collectors.kline_collector import KlineCollector
 from src.core.context_store import (
+    count_ghost_user_prediction_outcomes,
     count_system_pending_prediction_outcomes,
     count_unowned_pending_prediction_outcomes,
     list_pending_prediction_outcomes,
@@ -83,6 +84,8 @@ def evaluate_pending_prediction_outcomes(
     """评估到期的个人预测后验 —— 只碰**归属可证明的计分行**（2026-11-12 二次修正）。
 
     - 历史行(user_id/owner_scope 均为 NULL): 不评估(改不了"属于谁"), 但如实报出被排除量;
+    - ghost 行(user_id 指向已不存在的用户): 同样不评估 —— 那等于给一个不存在的账号计分;
+      条数在 `skipped_ghost_user` 里如实报出(不清理、不改写);
     - system 桶: 独立统计口径, 这里不评估, 单独报数(绝不并入任何个人成绩);
     - superseded 审计版本: 不是计分行, 不会出现在待评估列表里(存储层已排除);
     - `user_id` 可选: 只评估该用户的行(供按用户范围触发的维护调用)。
@@ -98,6 +101,7 @@ def evaluate_pending_prediction_outcomes(
     system_pending = count_system_pending_prediction_outcomes(
         max_horizon_days=max_horizon_days
     )
+    ghost = count_ghost_user_prediction_outcomes(max_horizon_days=max_horizon_days)
     uid = str(user_id).strip() if user_id is not None else ""
     stats = {
         "total_pending": len(pending),
@@ -108,10 +112,12 @@ def evaluate_pending_prediction_outcomes(
         "skipped_no_price": 0,
         "skipped_unowned_legacy": unowned,
         "skipped_system_bucket": system_pending,
+        "skipped_ghost_user": ghost,
         "scope": "owned_only",
         "user_scope": uid or "all_user_scoped_rows",
         "note": (
             "只评估有归属用户的计分行; 历史无归属行(user_id 为空)保持 pending 不作成绩; "
+            "ghost 行(user_id 指向已不存在用户)不评估、不清理; "
             "system 桶单独计数、不并入任何个人成绩; superseded 审计版本不评估"
         ),
     }
@@ -120,6 +126,12 @@ def evaluate_pending_prediction_outcomes(
             "预测后验评估跳过 %s 条无归属历史行(user_id 为空): 无法证明属于哪个账户, "
             "不评估、不回填, 需人工核查数据来源",
             unowned,
+        )
+    if ghost:
+        logger.error(
+            "预测后验评估跳过 %s 条 ghost 行(user_id 指向已不存在的用户): 归属不可证明, "
+            "不评估、不清理、不改写; 需人工核查这些行是怎么写进去的(旧库缺 user_id 外键)",
+            ghost,
         )
     if system_pending:
         logger.info(
