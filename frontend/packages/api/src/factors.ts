@@ -10,6 +10,11 @@ export interface FactorWeight {
   last_ir: number | null
   last_sample_size: number | null
   last_calibrated_at: string | null
+  /** 历史观测时间(meta 记录), 与 last_ic 同一份数据; 不是实时值 */
+  last_observation_at: string | null
+  /** true = 观测已过期(>7 天)或从未记录 —— UI 必须标明, 不能当当前值 */
+  last_observation_stale: boolean
+  observation_note: string
   reason: string
   updated_at: string | null
 }
@@ -24,12 +29,63 @@ export const factorsApi = {
   /** 因子权重列表(每因子按市场区分,含最近 IC/IR 标定结果)。 */
   list: () => fetchAPI<{ items: FactorWeight[] }>('/factors/weights'),
 
-  /** 更新单个因子权重(手动权重 / 锁定 / 自动标定开关)。 */
+  /** 更新单个因子权重(手动权重 / 锁定 / 自动标定开关)。需 manage_settings, 否则 403。 */
   update: (factorCode: string, market: string, patch: FactorWeightUpdatePayload) =>
     fetchAPI<FactorWeight>(`/factors/weights/${factorCode}/${market}`, {
       method: 'POST',
       body: JSON.stringify(patch),
     }),
+
+  /**
+   * 实时计算一轮**只读**标定建议。零写入, changed 恒 0。
+   * 结果按市场+参数在服务端缓存 60s; computed_at 是实际计算时间, cached 标明是否命中缓存。
+   */
+  calibrate: (market = 'CN', days = 90, horizon = 5, minSamples = 20) =>
+    fetchAPI<FactorCalibrationResp>(
+      `/factors/calibration?market=${market}&days=${days}&horizon=${horizon}&min_samples=${minSamples}`,
+    ),
+}
+
+export interface FactorCalibrationProposal {
+  factor_code: string
+  market: string
+  current_weight: number
+  base_weight: number
+  proposed_weight: number | null
+  target: number | null
+  /** proposed / unchanged / skipped_no_data / skipped_low_sample / skipped_ic_unavailable / skipped_oos_* / skipped_pinned / skipped_disabled */
+  status: string
+  ic: number | null
+  ir: number | null
+  ic_holdout: number | null
+  sample_size: number
+}
+
+export interface FactorCalibrationResp {
+  market: string
+  mode: 'readonly'
+  /** false = 计算失败, error 里有原因(不是「没有建议」) */
+  ok: boolean
+  error?: string
+  /** 本次实际计算时间(缓存命中时仍为首次计算时间) */
+  computed_at: string
+  cached: boolean
+  cache_age_seconds: number
+  cache_ttl_seconds: number
+  checked: number
+  proposed: number
+  changed: 0
+  write_back: false
+  /** 库里已有多少权重行; 0 说明这是「无行」而不是「没样本」 */
+  rows_present: number
+  no_rows: boolean
+  skipped_oos: number
+  skipped_low_sample: number
+  skipped_no_data: number
+  skipped_ic_unavailable: number
+  skipped_pinned: number
+  skipped_disabled: number
+  proposals: FactorCalibrationProposal[]
 }
 
 // ── 因子有效性(B9 数据资产 E1, 2026-09-19) ────────────────────────────────

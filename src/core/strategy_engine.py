@@ -2141,7 +2141,13 @@ def rebalance_strategy_weights(
     min_samples: int = 8,
     alpha: float = 0.35,
     regime: str = "default",
+    actor: str | None = None,
 ) -> dict:
+    """按近期 outcome 重平衡策略权重(写库)。
+
+    `actor` 是服务端认证身份(HTTP 触发时由 manage_settings 依赖给出),
+    只用于历史行 meta 追溯; 调度器内部调用不传, 与既有行为一致。
+    """
     ensure_strategy_catalog()
     reg = (regime or "default").strip() or "default"
     alpha = _clamp(float(alpha or 0.35), 0.05, 0.95)
@@ -2237,6 +2243,7 @@ def rebalance_strategy_weights(
                         "win_rate": round(win_rate, 3),
                         "avg_return_pct": round(avg_ret, 4),
                         "target": round(target, 4),
+                        **({"by": actor} if actor else {}),
                     },
                 )
             )

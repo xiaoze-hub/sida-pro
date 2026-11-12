@@ -17,6 +17,13 @@ def _mem_db():
     return sessionmaker(bind=engine)()
 
 
+def _actor():
+    """直接调 handler 时用的服务端身份(HTTP 层由 require_settings_write 提供)。"""
+    from src.web.api.settings import SettingsActor
+
+    return SettingsActor(id="u-test", username="unit-owner", role="owner")
+
+
 def test_list_weights_returns_all_market_factor_pairs():
     """GET 列表返回 5 因子 × 3 市场。"""
     from src.web.api import factors
@@ -37,7 +44,7 @@ def test_update_weight_pins_and_sets_value():
     db = _mem_db()
     try:
         payload = factors.FactorWeightUpdate(weight=1.25, is_pinned=True)
-        res = factors.update_weight("alpha_score", "CN", payload, db=db)
+        res = factors.update_weight("alpha_score", "CN", payload, db=db, actor=_actor())
         assert res["weight"] == 1.25
         assert res["is_pinned"] is True
     finally:
@@ -52,7 +59,7 @@ def test_update_weight_unknown_factor_returns_400():
     try:
         payload = factors.FactorWeightUpdate(weight=1.1)
         with pytest.raises(HTTPException) as ei:
-            factors.update_weight("bad_factor", "CN", payload, db=db)
+            factors.update_weight("bad_factor", "CN", payload, db=db, actor=_actor())
         assert ei.value.status_code == 400
     finally:
         db.close()

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 import threading
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from src.core.entry_candidates import (
@@ -32,6 +32,7 @@ from src.core.factor_eval import evaluate_factor_ic
 from src.core.signal_explain import enrich_signal
 from src.web.database import SessionLocal
 from src.web.models import StrategySignalRun
+from src.web.api.settings import SettingsActor, require_settings_write
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -482,12 +483,20 @@ def rebalance_strategy_weights_api(
     window_days: int = Query(45, ge=7, le=365),
     min_samples: int = Query(8, ge=3, le=500),
     alpha: float = Query(0.35, ge=0.05, le=0.95),
+    _actor: SettingsActor = Depends(require_settings_write),
 ):
+    """按近期 outcome 重平衡**全局**策略权重(写库)。
+
+    与因子权重同一门槛: 改的是所有用户共用的权重, 必须 `manage_settings`
+    (owner / 白名单成员); 不能因为「只是点个按钮」就放宽。调度器走
+    `core.context_scheduler` 内部调用, 不经此端点。
+    """
     return rebalance_strategy_weights(
         window_days=window_days,
         min_samples=min_samples,
         alpha=alpha,
         regime="default",
+        actor=getattr(_actor, "username", None) or None,
     )
 
 

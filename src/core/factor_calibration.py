@@ -12,6 +12,8 @@ EMA 平滑 + clamp 后**只产出建议**,绝不改变任何生效权重。
 - 本模块**只读**:不建 `FactorWeight` 行、不写 `meta`、不写
   `FactorWeightHistory`、不改 `weight / reason / effective_from`。
   返回值里的 `proposals` 就是全部产物(含 IC/IR/holdout/样本量观测)。
+- 连 lazy seed 都不做:库里没有权重行时报 `rows_present=0 / no_rows=True`,
+  由调用方决定是否要看「无行」这件事 —— 只读计算不替任何人建行。
 - 不存在 `mode=apply` / `approved_by` / `persist_proposals` 之类的写权开关,
   也没有「提案落地」入口:历史上一度存在的自动写权重与提案持久化路径已撤除,
   自动化调度不可能悄悄改动有效权重。
@@ -19,6 +21,12 @@ EMA 平滑 + clamp 后**只产出建议**,绝不改变任何生效权重。
   本模块不提供任何绕过人工授权的通道。
 - 失败必须显式:IC 评估异常时返回 `error` 字段,不会把「失败」伪装成
   「本轮无提案」,也不会清空/覆盖任何已存观测(本模块不写观测)。
+- 结果里带 `computed_at`(本次计算时间)与每因子 `sample_size`,并把
+  `skipped_no_data`(一条已走完持有期的样本都没有)/ `skipped_low_sample`
+  (有样本但不够)/ `skipped_ic_unavailable`(期数不够算 IC)分开报,
+  三者对应的排查方向完全不同。
+- 出错时**只回滚自己开的 session**; 调用方传入 db 时不碰其事务, 否则会把
+  调用方尚未提交的写入静默丢掉。
 """
 
 from __future__ import annotations
@@ -27,6 +35,8 @@ import logging
 
 from src.core.factor_eval import evaluate_factor_ic
 from src.core.factor_weights import CALIBRATABLE_FACTORS, MARKETS, PENALTY_FACTORS
+from src.core.db_safe import safe_rollback
+from src.core.timezone import utc_now
 from src.db.session import SessionLocal
 from src.db.models import FactorWeight
 
@@ -107,8 +117,16 @@ def _build_proposal(code: str, market: str, current: float, stats: dict, *,
         "ic_holdout": holdout,
         "sample_size": n,
     }
-    if n < min_samples or ic is None:
+    # 「没有任何已走完持有期的样本」≠「样本不够」≠「期数不够算不出 IC」。
+    # 三者必须分开报, 否则运维看到 skipped_low_sample 会去查样本, 实际是 SQL 没行。
+    if n <= 0:
+        out["status"] = "skipped_no_data"
+        return out
+    if n < min_samples:
         out["status"] = "skipped_low_sample"
+        return out
+    if ic is None:
+        out["status"] = "skipped_ic_unavailable"
         return out
     # 样本外门禁: 信息不足 / 强度不够 / 符号翻转 → 不出可执行建议
     if holdout is None or abs(float(holdout)) < float(oos_min_ic):
@@ -148,6 +166,7 @@ def calibrate_factor_weights(
     """
     own = db is None
     db = db or SessionLocal()
+    computed_at = utc_now().isoformat()
     try:
         ic_result = evaluate_factor_ic(
             days=days, horizon=horizon, min_samples=min_samples, market=market,
@@ -158,10 +177,26 @@ def calibrate_factor_weights(
         # 只读加载,不预 seed:避免观测副作用建行。
         rows = _read_rows(db, market)
 
+        # 评估器内部吞异常后以 error 字段返回; 这里必须原样上抛,
+        # 不能把「算失败」显示成「本轮无数据/无建议」。
+        if ic_result.get("error"):
+            return {
+                "market": market, "mode": "readonly", "ok": False,
+                "computed_at": computed_at, "checked": 0, "proposed": 0,
+                "changed": 0, "write_back": False, "rows": [],
+                "rows_present": len(rows), "no_rows": len(rows) == 0,
+                "skipped_oos": 0, "skipped_low_sample": 0, "skipped_no_data": 0,
+                "skipped_ic_unavailable": 0, "skipped_pinned": 0,
+                "skipped_disabled": 0, "proposals": [],
+                "error": str(ic_result.get("error")),
+            }
+
         lo, hi = float(clamp[0]), float(clamp[1])
         proposed = 0
         skipped_oos = 0
         skipped_low_sample = 0
+        skipped_no_data = 0
+        skipped_ic_unavailable = 0
         skipped_pinned = 0
         skipped_disabled = 0
         proposals: list[dict] = []
@@ -182,8 +217,12 @@ def calibrate_factor_weights(
                 proposal["status"] = "skipped_disabled"
 
             status = proposal["status"]
-            if status == "skipped_low_sample":
+            if status == "skipped_no_data":
+                skipped_no_data += 1
+            elif status == "skipped_low_sample":
                 skipped_low_sample += 1
+            elif status == "skipped_ic_unavailable":
+                skipped_ic_unavailable += 1
             elif status in ("skipped_oos_insufficient", "skipped_oos_sign_flip"):
                 skipped_oos += 1
             elif status == "skipped_pinned":
@@ -197,14 +236,20 @@ def calibrate_factor_weights(
         return {
             "market": market,
             "mode": "readonly",
+            "ok": True,
+            "computed_at": computed_at,
             "checked": len(CALIBRATABLE_FACTORS),
             "proposed": proposed,
             # 只读模式下恒为 0 / False:保留键位,调用方不会把「建议」误读成「已生效」。
             "changed": 0,
             "write_back": False,
             "rows": [],
+            "rows_present": len(rows),
+            "no_rows": len(rows) == 0,
             "skipped_oos": skipped_oos,
             "skipped_low_sample": skipped_low_sample,
+            "skipped_no_data": skipped_no_data,
+            "skipped_ic_unavailable": skipped_ic_unavailable,
             "skipped_pinned": skipped_pinned,
             "skipped_disabled": skipped_disabled,
             "proposals": proposals,
@@ -213,11 +258,17 @@ def calibrate_factor_weights(
         logger.warning(
             "[因子标定] market=%s 只读计算失败(未写入任何数据): %s", market, e
         )
-        db.rollback()
+        # 只回滚**自己开的** session。db 由调用方传入时不碰它的事务 ——
+        # 否则会把调用方未提交的写入一起静默丢掉(只读计算不该有这种副作用)。
+        if own:
+            safe_rollback(db)
         return {
-            "market": market, "mode": "readonly", "checked": 0, "proposed": 0,
+            "market": market, "mode": "readonly", "ok": False,
+            "computed_at": computed_at, "checked": 0, "proposed": 0,
             "changed": 0, "write_back": False, "rows": [],
-            "skipped_oos": 0, "skipped_low_sample": 0, "skipped_pinned": 0,
+            "rows_present": 0, "no_rows": True,
+            "skipped_oos": 0, "skipped_low_sample": 0, "skipped_no_data": 0,
+            "skipped_ic_unavailable": 0, "skipped_pinned": 0,
             "skipped_disabled": 0, "proposals": [], "error": str(e),
         }
     finally:

@@ -71,7 +71,12 @@ def test_calibrate_all_markets_reports_proposals_without_changing_scoring():
 
 
 def test_calibrate_all_markets_marks_low_sample_markets(monkeypatch):
-    """无观测的市场也得如实标 skipped_low_sample,不能伪装成「有提案」。"""
+    """无观测的市场如实标 `skipped_no_data`, 不能伪装成「有提案」。
+
+    2026-11-12: 空库从此前笼统的 `skipped_low_sample` 细化为 `skipped_no_data`
+    —— 「一条已走完持有期的样本都没有」和「有样本但不够」是两种故障, 混在一起
+    会让运维按「补样本」去查, 实际是采集/SQL 断了。
+    """
     from src.core.factor_calibration import calibrate_all_markets
 
     db = _mem_db()
@@ -79,7 +84,9 @@ def test_calibrate_all_markets_marks_low_sample_markets(monkeypatch):
         res = calibrate_all_markets(db=db, min_samples=5)
         for market in ("CN", "HK", "US"):
             statuses = {p["status"] for p in res[market]["proposals"]}
-            assert statuses == {"skipped_low_sample"}
+            assert statuses == {"skipped_no_data"}
             assert res[market]["proposed"] == 0
+            assert res[market]["skipped_no_data"] == 5
+            assert res[market]["no_rows"] is True
     finally:
         db.close()
