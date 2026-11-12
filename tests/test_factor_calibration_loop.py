@@ -33,7 +33,10 @@ def _seed_pair(db, sid, *, market, snapshot_date, alpha, ret, horizon=5):
 
 
 def test_calibrate_all_markets_closes_loop_into_scoring():
-    """端到端:快照+outcome → calibrate_all_markets → CN alpha 权重上调 → 评分 raw_score 提升。"""
+    """端到端:快照+outcome → calibrate_all_markets(授权 apply)→ CN alpha 权重上调 → 评分 raw_score 提升。
+
+    2026-11-12: 默认 suggest 不写权重,故端到端写权路径需显式授权。
+    """
     from src.core.factor_calibration import calibrate_all_markets
     from src.core.factor_weights import get_factor_weights
     from src.core.strategy_engine import _compute_factor_breakdown
@@ -50,7 +53,8 @@ def test_calibrate_all_markets_closes_loop_into_scoring():
                 sid += 1
         db.commit()
 
-        res = calibrate_all_markets(db=db, min_samples=5)
+        res = calibrate_all_markets(db=db, min_samples=5, mode="apply",
+                                    approved_by="test-approver")
         assert set(res) == {"CN", "HK", "US"}
 
         w = get_factor_weights("CN", db=db)

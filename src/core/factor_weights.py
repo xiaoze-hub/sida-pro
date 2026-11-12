@@ -85,6 +85,9 @@ def _serialize(row: FactorWeight) -> dict:
         "last_ir": meta.get("last_ir"),
         "last_sample_size": meta.get("last_sample_size"),
         "last_calibrated_at": meta.get("last_calibrated_at"),
+        # 待审提案(只读展示;落地须走 manual 授权路径,不会自动生效)
+        "pending_proposal": meta.get("pending_proposal"),
+        "applied_proposal": meta.get("applied_proposal"),
         "reason": row.reason or "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

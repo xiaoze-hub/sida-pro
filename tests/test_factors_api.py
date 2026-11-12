@@ -65,3 +65,51 @@ def test_factors_router_mounted():
     paths = set(app.openapi().get("paths", {}).keys())
     assert "/api/factors/weights" in paths
     assert "/api/factors/weights/{factor_code}/{market}" in paths
+    assert "/api/factors/proposals/{market}/refresh" in paths
+    assert "/api/factors/proposals/{factor_code}/{market}/apply" in paths
+
+
+def test_list_weights_exposes_pending_proposal_field():
+    """列表要给出待审提案槽位(默认 None),UI 才看得见「有建议但未生效」。"""
+    from src.web.api import factors
+
+    db = _mem_db()
+    try:
+        res = factors.list_weights(db=db)
+        item = res["items"][0]
+        assert item["pending_proposal"] is None
+        assert item["applied_proposal"] is None
+    finally:
+        db.close()
+
+
+def test_refresh_proposals_writes_no_effective_weight():
+    """POST refresh:只在已有 meta 里留提案,不建行、不改权重。"""
+    from src.web.api import factors
+    from src.web.models import FactorWeight
+
+    db = _mem_db()
+    try:
+        res = factors.refresh_proposals("CN", db=db)
+        assert res["mode"] == "suggest"
+        assert res["changed"] == 0
+        assert len(res["proposals"]) == 5
+        assert db.query(FactorWeight).count() == 0  # 空库:不因观测/提案建行
+    finally:
+        db.close()
+
+
+def test_apply_proposal_without_pending_returns_400():
+    """无待审提案 → HTTP 400,绝不顺手写权重。"""
+    from src.web.api import factors
+    from src.web.models import FactorWeightHistory
+
+    db = _mem_db()
+    try:
+        payload = factors.ProposalApply(approved_by="alice")
+        with pytest.raises(HTTPException) as ei:
+            factors.apply_proposal("alpha_score", "CN", payload, db=db)
+        assert ei.value.status_code == 400
+        assert db.query(FactorWeightHistory).count() == 0
+    finally:
+        db.close()

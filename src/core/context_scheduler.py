@@ -115,21 +115,22 @@ class ContextMaintenanceScheduler:
                 rebalance.get("skipped_low_sample", 0),
             )
 
-            # Phase 4 → 因子自校准闭环:把 IC/IR 接进每因子权重的轻量标定
-            # (calibrate_all_markets 内部按市场算 IC 并据此调权,不再只是记录)。
+            # Phase 4 → 因子自校准闭环:把 IC/IR 接进每因子权重的轻量标定。
+            # 默认 suggest:调度器只产出「待审提案」,绝不自动改写有效权重;
+            # 落地须人工经 apply_pending_proposal(走 manual 审计路径)。
             try:
-                from src.core.factor_calibration import calibrate_all_markets
+                from src.core.factor_calibration import MODE_SUGGEST, calibrate_all_markets
 
-                fcal = await asyncio.to_thread(calibrate_all_markets)
-                changed = sum(r.get("changed", 0) for r in fcal.values())
+                fcal = await asyncio.to_thread(calibrate_all_markets, mode=MODE_SUGGEST)
+                proposed = sum(r.get("proposed", 0) for r in fcal.values())
                 logger.log(
-                    logging.INFO if changed else logging.DEBUG,
-                    "[上下文维护] 因子自校准完成: changed=%s detail=%s",
-                    changed,
-                    {m: r.get("changed", 0) for m, r in fcal.items()},
+                    logging.INFO if proposed else logging.DEBUG,
+                    "[上下文维护] 因子标定提案完成(未写权重): proposed=%s detail=%s",
+                    proposed,
+                    {m: r.get("proposed", 0) for m, r in fcal.items()},
                 )
             except Exception as fc_err:
-                logger.debug("[上下文维护] 因子自校准跳过: %s", fc_err)
+                logger.debug("[上下文维护] 因子标定提案跳过: %s", fc_err)
         except Exception as e:
             logger.exception(f"[上下文维护] 后验评估异常: {e}")
         finally:
@@ -184,10 +185,13 @@ class ContextMaintenanceScheduler:
             strategy_eval_task,
             strategy_rebalance_task,
         )
-        # 因子自校准:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather。
-        from src.core.factor_calibration import calibrate_all_markets
+        # 因子标定提案:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather;
+        # 默认 suggest —— 只回提案,不改有效权重。
+        from src.core.factor_calibration import MODE_SUGGEST, calibrate_all_markets
 
-        factor_calibration_stats = await asyncio.to_thread(calibrate_all_markets)
+        factor_calibration_stats = await asyncio.to_thread(
+            calibrate_all_markets, mode=MODE_SUGGEST
+        )
         return {
             "agent_predictions": agent_stats,
             "entry_candidates": candidate_stats,

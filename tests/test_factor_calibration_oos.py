@@ -48,14 +48,15 @@ def _seed_dates(db, *, reversed_from: int | None = None):
 
 
 def test_oos_gate_allows_consistent_factor():
-    """样本内外一致 → 权重上调, 无 OOS 拒绝。"""
+    """样本内外一致 → 授权 apply 后权重上调, 无 OOS 拒绝。"""
     from src.core.factor_calibration import calibrate_factor_weights
     from src.web.models import FactorWeight
 
     db = _mem_db()
     try:
         _seed_dates(db)
-        res = calibrate_factor_weights("CN", min_samples=5, db=db)
+        res = calibrate_factor_weights("CN", mode="apply", approved_by="test-approver",
+                                       min_samples=5, db=db)
         row = db.query(FactorWeight).filter_by(factor_code="alpha_score", market="CN").first()
         assert row.weight > 1.0
         assert res["skipped_oos"] == 0
@@ -65,17 +66,19 @@ def test_oos_gate_allows_consistent_factor():
 
 
 def test_oos_gate_blocks_sign_flip():
-    """样本外段符号翻转 → 本轮不调权, meta 记录 oos_rejected。"""
+    """样本外段符号翻转 → 不出可执行提案、不调权、不写 History。"""
     from src.core.factor_calibration import calibrate_factor_weights
     from src.web.models import FactorWeight, FactorWeightHistory
 
     db = _mem_db()
     try:
         _seed_dates(db, reversed_from=5)  # 后 3 个快照日横截面反向
-        res = calibrate_factor_weights("CN", min_samples=5, db=db)
+        res = calibrate_factor_weights("CN", mode="apply", approved_by="test-approver",
+                                       min_samples=5, db=db)
+        by_code = {p["factor_code"]: p for p in res["proposals"]}
+        assert by_code["alpha_score"]["status"] == "skipped_oos_sign_flip"
         row = db.query(FactorWeight).filter_by(factor_code="alpha_score", market="CN").first()
-        assert row.weight == 1.0, "OOS 不通过不得调权"
-        assert row.meta.get("oos_rejected") == "sign_flip"
+        assert row is None, "OOS 不通过不得落任何权重行"
         assert res["skipped_oos"] >= 1
         hist = (db.query(FactorWeightHistory)
                 .filter_by(factor_code="alpha_score", market="CN", reason="auto").all())
