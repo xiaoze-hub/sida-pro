@@ -269,7 +269,14 @@ def _patch_scheduler_jobs(monkeypatch, captured):
     monkeypatch.setattr(cs, "evaluate_pending_prediction_outcomes", lambda **kw: {})
     monkeypatch.setattr(cs, "evaluate_entry_candidate_outcomes", lambda *a, **kw: {})
     monkeypatch.setattr(cs, "evaluate_strategy_outcomes", lambda *a, **kw: {})
-    monkeypatch.setattr(cs, "rebalance_strategy_weights", lambda *a, **kw: {})
+    # 自动调权已停用: 若调度器仍持有该符号, 打桩记录调用以证明它再也不会被触发。
+    rebalance_calls: list[dict] = []
+    if hasattr(cs, "rebalance_strategy_weights"):
+        monkeypatch.setattr(
+            cs, "rebalance_strategy_weights",
+            lambda *a, **kw: rebalance_calls.append({"args": a, "kwargs": kw}) or {},
+        )
+    monkeypatch.setattr(cs, "_rebalance_calls_probe", rebalance_calls, raising=False)
 
     @contextlib.contextmanager
     def _kline(*a, **kw):
@@ -308,6 +315,66 @@ def test_evaluate_once_passes_no_write_kwargs(monkeypatch):
 
     assert captured[0]["kwargs"] == {}
     assert res["factor_calibration"]["CN"]["mode"] == "readonly"
+
+
+# ------------------------------ 自动调权必须停用 ------------------------------
+
+def test_scheduler_never_rebalances_strategy_weights(monkeypatch):
+    """每 6h 的后验评估不得顺手改**全局**策略权重(无 actor 的静默写入)。"""
+    captured: list[dict] = []
+    cs = _patch_scheduler_jobs(monkeypatch, captured)
+    scheduler = cs.ContextMaintenanceScheduler()
+
+    asyncio.run(scheduler._evaluate_job())
+    res = asyncio.run(scheduler.evaluate_once())
+
+    assert getattr(cs, "_rebalance_calls_probe", []) == [], "调度器仍在自动调权"
+    assert res["strategy_rebalance"]["disabled"] is True
+    assert res["strategy_rebalance"]["changed"] == 0
+    assert "手动" in res["strategy_rebalance"]["reason"]
+
+
+def test_scheduler_module_has_no_rebalance_entrypoint():
+    """结构性保证: 调度器模块不再导入/调用自动调权函数(防止改回来)。"""
+    import re
+
+    from src.core import context_scheduler as cs
+
+    assert not hasattr(cs, "rebalance_strategy_weights")
+    src = __import__("inspect").getsource(cs)
+    # 注释/文档里提到名字没关系, 不允许的是 import 或实际调用。
+    assert not re.search(
+        r"^(?:\s*(?:from|import)\s+.*rebalance_strategy_weights"
+        r"|\s*rebalance_strategy_weights\()",
+        src,
+        flags=re.MULTILINE,
+    )
+
+
+def test_rebalance_rejects_missing_actor_and_writes_nothing():
+    """核心函数本身也拒绝匿名调用: 无认证身份 ⇒ ValueError, 且不落任何权重。"""
+    from src.core.strategy_engine import rebalance_strategy_weights
+    from src.db.session import SessionLocal
+    from src.web.models import StrategyWeight, StrategyWeightHistory
+
+    db = SessionLocal()
+    try:
+        before_w = db.query(StrategyWeight).count()
+        before_h = db.query(StrategyWeightHistory).count()
+    finally:
+        db.close()
+
+    with pytest.raises(ValueError):
+        rebalance_strategy_weights(actor=None)
+    with pytest.raises(ValueError):
+        rebalance_strategy_weights()
+
+    db = SessionLocal()
+    try:
+        assert db.query(StrategyWeight).count() == before_w
+        assert db.query(StrategyWeightHistory).count() == before_h
+    finally:
+        db.close()
 
 
 def test_scheduler_surfaces_calibration_error_as_warning(monkeypatch, caplog):

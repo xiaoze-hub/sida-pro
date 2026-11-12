@@ -29,8 +29,8 @@ const STATUS_LABELS: Record<string, string> = {
   skipped_ic_unavailable: '期数不足, 算不出 IC',
   skipped_oos_insufficient: '样本外不成立',
   skipped_oos_sign_flip: '样本外符号翻转',
-  skipped_pinned: '已锁定',
-  skipped_disabled: '已关闭自动标定',
+  skipped_pinned: '已锁定(不出建议)',
+  skipped_disabled: '已关闭标定建议',
 }
 
 const factorLabel = (code: string) => FACTOR_LABELS[code] || code
@@ -131,10 +131,11 @@ export default function FactorWeightsPanel() {
         <div>
           <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground flex items-center gap-1.5">
             <Scale className="w-3.5 h-3.5 text-muted-foreground" />
-            因子权重自校准
+            因子权重(手动 + 只读建议)
           </h3>
           <p className="text-[12px] text-muted-foreground mt-1">
-            权重可手动覆盖;「最近IC」是历史观测(附观测时间, 过期会标注), 实时口径请点「计算建议」。
+            权重只能由有权限的人手动覆盖; 系统不会自动调权。「最近IC」是历史观测(附观测时间, 过期会标注),
+            实时口径请点「计算建议」(只算建议, 不落库)。
           </p>
           {!canManage && (
             <p className="text-[12px] text-muted-foreground mt-1">
@@ -191,7 +192,12 @@ export default function FactorWeightsPanel() {
                 <th className="py-2 pr-3 font-medium text-right">样本</th>
                 <th className="py-2 pr-3 font-medium">观测时间</th>
                 <th className="py-2 pr-3 font-medium text-center">锁定</th>
-                <th className="py-2 font-medium text-center">自动标定</th>
+                <th
+                  className="py-2 font-medium text-center"
+                  title="仅决定只读标定是否为该因子出建议; 任何开关都不会自动改权重"
+                >
+                  标定建议
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -226,6 +232,7 @@ export default function FactorWeightsPanel() {
                         <Switch
                           checked={item.auto_calibrate}
                           disabled={busy || !canManage}
+                          title="关闭后只读标定会跳过该因子; 不会自动改权重"
                           onCheckedChange={(v) => updateFlag(item, { auto_calibrate: v })}
                         />
                       </div>

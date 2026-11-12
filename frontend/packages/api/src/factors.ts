@@ -5,6 +5,7 @@ export interface FactorWeight {
   market: string
   weight: number
   is_pinned: boolean
+  /** 仅决定只读标定是否跳过该因子; 不表示会自动改权重 */
   auto_calibrate: boolean
   last_ic: number | null
   last_ir: number | null
@@ -29,7 +30,7 @@ export const factorsApi = {
   /** 因子权重列表(每因子按市场区分,含最近 IC/IR 标定结果)。 */
   list: () => fetchAPI<{ items: FactorWeight[] }>('/factors/weights'),
 
-  /** 更新单个因子权重(手动权重 / 锁定 / 自动标定开关)。需 manage_settings, 否则 403。 */
+  /** 更新单个因子权重(手动权重 / 锁定 / 标定建议开关)。不会自动调权; 需 manage_settings, 否则 403。 */
   update: (factorCode: string, market: string, patch: FactorWeightUpdatePayload) =>
     fetchAPI<FactorWeight>(`/factors/weights/${factorCode}/${market}`, {
       method: 'POST',

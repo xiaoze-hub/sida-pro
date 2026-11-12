@@ -20,6 +20,7 @@ demo(guest) 登录后都能改**全局**因子权重(影响所有人的信号合
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -87,12 +88,23 @@ def client(monkeypatch):
         for name in (ADMIN_USER, MEMBER_USER, PRO_USER, DEMO_USER, "fac_w_owner2"):
             purge_users(db, only_username=name)
         _ensure_owner(db, ADMIN_USER, ADMIN_PW)
-        # 清掉因子权重/历史, 用例之间互不影响
-        from src.web.models import FactorWeight, FactorWeightHistory, StrategyWeight
+        # 清掉因子权重/历史/策略权重, 用例之间互不影响
+        from src.web.models import (
+            AuditLog,
+            FactorWeight,
+            FactorWeightHistory,
+            StrategyWeight,
+        )
 
         db.query(FactorWeightHistory).delete()
         db.query(FactorWeight).delete()
         db.query(StrategyWeight).delete()
+        # 本文件新增的审计行也逐例清掉, 否则计数会被上一例残留污染。
+        db.query(AuditLog).filter(
+            AuditLog.action.in_(
+                ("update_factor_weight", "rebalance_strategy_weights")
+            )
+        ).delete(synchronize_session=False)
         db.commit()
     finally:
         db.close()
@@ -363,3 +375,223 @@ def test_strategy_rebalance_requires_manage_settings(client, member_token, owner
 def test_strategy_rebalance_no_token_rejected(client):
     r = client.post("/api/recommendations/strategy-weights/rebalance")
     assert r.status_code in (401, 403), r.text
+
+
+# ── 3. 人工改动的持久审计(pin / auto_calibrate 不得混进权重历史快照) ──────
+def _audit_rows(action: str | None = None):
+    from src.web.database import SessionLocal
+    from src.web.models import AuditLog
+
+    db = SessionLocal()
+    try:
+        q = db.query(AuditLog)
+        if action:
+            q = q.filter(AuditLog.action == action)
+        return q.order_by(AuditLog.id.asc()).all()
+    finally:
+        db.close()
+
+
+def test_pin_and_auto_calibrate_changes_are_audited(client, owner_token):
+    """pin/auto_calibrate 改动必须留持久审计, 且**不写** FactorWeightHistory。"""
+    import json
+
+    first = client.post(
+        "/api/factors/weights/alpha_score/CN",
+        headers=_hdr(owner_token),
+        json={"is_pinned": True},
+    )
+    assert first.status_code == 200, first.text
+    second = client.post(
+        "/api/factors/weights/alpha_score/CN",
+        headers=_hdr(owner_token),
+        json={"auto_calibrate": False},
+    )
+    assert second.status_code == 200, second.text
+
+    # 权重历史是时间快照, 只允许真权重变化; 开关翻转不许污染 as_of 回放。
+    assert _history() == []
+
+    rows = _audit_rows("update_factor_weight")
+    assert len(rows) == 2, [r.action for r in _audit_rows()]
+    assert all(r.username == ADMIN_USER for r in rows)
+    details = [json.loads(r.detail) for r in rows]
+    assert details[0]["changes"]["is_pinned"] == {"before": False, "after": True}
+    assert details[1]["changes"]["auto_calibrate"] == {"before": True, "after": False}
+    assert all(d["via"] == "api" for d in details)
+
+
+def test_weight_change_audit_is_same_transaction_as_history(client, owner_token):
+    """权重变化: 历史行 + 审计行同时落地, 审计可追到人。"""
+    r = client.post(
+        "/api/factors/weights/alpha_score/CN",
+        headers=_hdr(owner_token),
+        json={"weight": 1.25},
+    )
+    assert r.status_code == 200, r.text
+    hist = _history()
+    assert len(hist) == 1 and hist[0].new_weight == 1.25
+    rows = _audit_rows("update_factor_weight")
+    assert len(rows) == 1
+    assert rows[0].username == ADMIN_USER
+
+
+def test_strategy_rebalance_writes_audit_with_actor(client, owner_token):
+    r = client.post(
+        "/api/recommendations/strategy-weights/rebalance", headers=_hdr(owner_token)
+    )
+    assert r.status_code == 200, r.text
+    rows = _audit_rows("rebalance_strategy_weights")
+    assert len(rows) == 1
+    assert rows[0].username == ADMIN_USER
+    assert "window_days" in rows[0].detail
+
+
+# ── 4. 只读标定的并发/缓存安全 ───────────────────────────────────────────
+def _calib(client, token, path="/api/factors/calibration?market=CN"):
+    return client.get(path, headers=_hdr(token))
+
+
+def test_calibration_error_is_not_cached(client, owner_token, monkeypatch):
+    """失败结果不得进缓存: 下一次请求必须真的重算, 而不是复读错误。"""
+    from src.core import factor_calibration as fc
+    from src.web.api import factors as factors_api
+
+    monkeypatch.setattr(
+        fc, "evaluate_factor_ic",
+        lambda **kw: {"factors": {}, "error": "boom"},
+    )
+    bad = _calib(client, owner_token)
+    assert bad.status_code == 200, bad.text
+    assert bad.json()["data"]["ok"] is False
+
+    monkeypatch.setattr(
+        fc, "evaluate_factor_ic",
+        lambda **kw: {"factors": {}, "error": None},
+    )
+    monkeypatch.setattr(factors_api, "_CALIB_LAST_COMPUTE", 0.0)
+    good = _calib(client, owner_token)
+    assert good.status_code == 200, good.text
+    assert good.json()["data"]["ok"] is True
+    assert good.json()["data"]["cached"] is False
+
+
+def test_calibration_single_flight_rejects_concurrent_compute(
+    client, owner_token, monkeypatch
+):
+    """同一时刻只允许一轮实际计算; 并发请求立即 429, 不叠线程池。"""
+    import threading
+
+    from src.core import factor_calibration as fc
+    from src.web.api import factors as factors_api
+
+    started = threading.Event()
+    release = threading.Event()
+    real = fc.evaluate_factor_ic
+
+    def _slow(**kwargs):
+        started.set()
+        assert release.wait(10), "测试未释放慢计算"
+        return real(**kwargs)
+
+    monkeypatch.setattr(fc, "evaluate_factor_ic", _slow)
+
+    errors: list[BaseException] = []
+
+    def _run_first():
+        try:
+            _calib(client, owner_token, "/api/factors/calibration?market=CN&days=30")
+        except BaseException as e:  # pragma: no cover - 线程里只记录
+            errors.append(e)
+
+    t = threading.Thread(target=_run_first)
+    t.start()
+    try:
+        assert started.wait(10), "首轮计算未启动"
+        deadline = 50
+        while not getattr(factors_api, "_CALIB_INFLIGHT", None) and deadline:
+            time.sleep(0.02)
+            deadline -= 1
+        assert factors_api._CALIB_INFLIGHT, "未登记 single-flight 状态"
+
+        second = _calib(client, owner_token, "/api/factors/calibration?market=HK")
+        assert second.status_code == 429, f"并发未拦截: {second.status_code}"
+        assert "进行中" in second.text or "频繁" in second.text
+    finally:
+        release.set()
+        t.join(20)
+    assert not errors, errors
+
+
+def test_calibration_cache_is_bounded(client, owner_token, monkeypatch):
+    """参数有界 + 缓存条目上限: 换参数不能无限堆内存。"""
+    from src.core import factor_calibration as fc
+    from src.web.api import factors as factors_api
+
+    monkeypatch.setattr(
+        fc, "evaluate_factor_ic", lambda **kw: {"factors": {}, "error": None}
+    )
+    monkeypatch.setattr(factors_api, "_CALIB_CACHE_MAX_ENTRIES", 2)
+
+    for days in (30, 40, 50):
+        monkeypatch.setattr(factors_api, "_CALIB_LAST_COMPUTE", 0.0)
+        r = _calib(client, owner_token, f"/api/factors/calibration?market=CN&days={days}")
+        assert r.status_code == 200, r.text
+
+    assert len(factors_api._CALIB_CACHE) <= 2
+
+
+def test_calibration_cache_does_not_serve_stale_current_weight(
+    client, owner_token, monkeypatch
+):
+    """缓存不得让 current_weight 停留在旧值: 人工改权重后必须反映新值。"""
+    from src.core import factor_calibration as fc
+
+    monkeypatch.setattr(
+        fc, "evaluate_factor_ic", lambda **kw: {"factors": {}, "error": None}
+    )
+
+    first = _calib(client, owner_token).json()["data"]
+    alpha = next(p for p in first["proposals"] if p["factor_code"] == "alpha_score")
+    assert alpha["current_weight"] == 1.0
+
+    r = client.post(
+        "/api/factors/weights/alpha_score/CN",
+        headers=_hdr(owner_token),
+        json={"weight": 1.4},
+    )
+    assert r.status_code == 200, r.text
+
+    second = _calib(client, owner_token).json()["data"]
+    alpha2 = next(p for p in second["proposals"] if p["factor_code"] == "alpha_score")
+    assert alpha2["current_weight"] == 1.4, "缓存回放了陈旧 current_weight"
+    assert second["cached"] is False
+
+
+def test_calibration_cached_payload_is_isolated_per_caller(monkeypatch):
+    """缓存命中返回深拷贝: 一个调用方改返回值不能污染其他用户看到的建议。"""
+    from src.core import factor_calibration as fc
+    from src.web.api import factors as factors_api
+    from src.web.database import SessionLocal
+
+    monkeypatch.setattr(
+        fc, "evaluate_factor_ic", lambda **kw: {"factors": {}, "error": None}
+    )
+    factors_api._reset_calibration_cache()
+    db = SessionLocal()
+    try:
+        first = factors_api.calibration(
+            market="CN", days=90, horizon=5, min_samples=20, db=db
+        )
+        n = len(first["proposals"])
+        first["proposals"].append({"factor_code": "tampered"})
+        first["proposals"][0]["current_weight"] = 9.99
+
+        second = factors_api.calibration(
+            market="CN", days=90, horizon=5, min_samples=20, db=db
+        )
+        assert second["cached"] is True
+        assert len(second["proposals"]) == n
+        assert second["proposals"][0]["current_weight"] != 9.99
+    finally:
+        db.close()

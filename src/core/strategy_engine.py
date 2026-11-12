@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, time, timedelta
 from math import sqrt
@@ -23,6 +24,7 @@ from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
 from src.db.session import SessionLocal
 from src.db.models import (
+    AuditLog,
     EntryCandidate,
     MarketRegimeSnapshot,
     NewsCache,
@@ -2142,12 +2144,24 @@ def rebalance_strategy_weights(
     alpha: float = 0.35,
     regime: str = "default",
     actor: str | None = None,
+    actor_id: str | None = None,
+    ip: str = "",
 ) -> dict:
     """按近期 outcome 重平衡策略权重(写库)。
 
-    `actor` 是服务端认证身份(HTTP 触发时由 manage_settings 依赖给出),
-    只用于历史行 meta 追溯; 调度器内部调用不传, 与既有行为一致。
+    这是**唯一**的策略权重写入口, 且必须由已认证的人触发:
+    `actor` 是服务端认证身份(HTTP 触发时由 `require_settings_write` 给出),
+    **缺失即拒绝**(ValueError)。调度器/后台任务没有身份, 不允许再静默调权 ——
+    历史上这里接受 `actor=None` 的内部调用, 等于让 6h 定时任务绕过所有授权。
+
+    人工调用会与权重改动**同一次 commit** 落一条 `AuditLog`
+    (`action=rebalance_strategy_weights`), 记录是谁、用什么参数、改了几条。
     """
+    if not (actor or "").strip():
+        raise ValueError(
+            "策略调权必须由已认证用户触发(actor 不可为空); "
+            "自动/后台调权已停用, 不得绕过 manage_settings"
+        )
     ensure_strategy_catalog()
     reg = (regime or "default").strip() or "default"
     alpha = _clamp(float(alpha or 0.35), 0.05, 0.95)
@@ -2258,6 +2272,26 @@ def rebalance_strategy_weights(
                 }
             )
 
+        db.add(
+            AuditLog(
+                user_id=actor_id,
+                username=actor,
+                action="rebalance_strategy_weights",
+                detail=json.dumps(
+                    {
+                        "window_days": window_days,
+                        "min_samples": min_samples,
+                        "alpha": alpha,
+                        "regime": reg,
+                        "checked": checked,
+                        "changed": changed,
+                        "skipped_low_sample": skipped_low_sample,
+                    },
+                    ensure_ascii=False,
+                ),
+                ip=ip or "",
+            )
+        )
         db.commit()
         return {
             "window_days": window_days,

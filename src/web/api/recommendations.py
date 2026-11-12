@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 import threading
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from src.core.entry_candidates import (
@@ -480,6 +480,7 @@ def evaluate_strategy_signal_outcomes(
 
 @router.post("/strategy-weights/rebalance")
 def rebalance_strategy_weights_api(
+    request: Request,
     window_days: int = Query(45, ge=7, le=365),
     min_samples: int = Query(8, ge=3, le=500),
     alpha: float = Query(0.35, ge=0.05, le=0.95),
@@ -488,15 +489,29 @@ def rebalance_strategy_weights_api(
     """按近期 outcome 重平衡**全局**策略权重(写库)。
 
     与因子权重同一门槛: 改的是所有用户共用的权重, 必须 `manage_settings`
-    (owner / 白名单成员); 不能因为「只是点个按钮」就放宽。调度器走
-    `core.context_scheduler` 内部调用, 不经此端点。
+    (owner / 白名单成员); 不能因为「只是点个按钮」就放宽。
+
+    这是**唯一**的策略权重手动入口。自动调权已停用:
+    `core.context_scheduler` 不再调用 `rebalance_strategy_weights`, 且核心函数
+    在缺少认证 actor 时直接 ValueError —— 后台任务没有绕过授权的通道。
+    调用会与权重改动同事务写 `AuditLog(action=rebalance_strategy_weights)`。
     """
+    ip = ""
+    if request is not None:
+        try:
+            from src.web.middleware import _get_client_ip
+
+            ip = _get_client_ip(request) or ""
+        except Exception:  # noqa: BLE001
+            ip = ""
     return rebalance_strategy_weights(
         window_days=window_days,
         min_samples=min_samples,
         alpha=alpha,
         regime="default",
         actor=getattr(_actor, "username", None) or None,
+        actor_id=getattr(_actor, "id", None),
+        ip=ip,
     )
 
 

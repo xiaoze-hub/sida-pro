@@ -16,12 +16,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
 from src.core.timezone import utc_now
 from src.db.session import SessionLocal
-from src.db.models import FactorWeight, FactorWeightHistory
+from src.db.models import AuditLog, FactorWeight, FactorWeightHistory
 
 logger = logging.getLogger(__name__)
 
@@ -156,13 +157,22 @@ def set_factor_weight(
     factor_code: str, market: str, *,
     weight: float | None = None, is_pinned: bool | None = None,
     auto_calibrate: bool | None = None, db=None,
-    actor: str | None = None, via: str = "api",
+    actor: str | None = None, actor_id: str | None = None,
+    via: str = "api", ip: str = "",
 ) -> dict:
-    """手动覆盖某因子权重 / pin / 开关自动标定;权重变化写 manual 审计。
+    """手动覆盖某因子权重 / pin / 开关自动标定;改动写审计。
 
     actor 必须是**服务端已认证身份**(web 层从 `require_settings_write` 拿),
-    与权重改动同一次 commit 落进历史行 meta, 事后可追溯是谁改的。
-    绝不接受客户端自报的身份。
+    与改动同一次 commit 落审计, 事后可追溯是谁改的。绝不接受客户端自报的身份。
+
+    审计落点分工(2026-11-12 独立审计):
+    - **权重变化** → `FactorWeightHistory`(manual), 这是时间快照的来源,
+      `get_factor_weights(as_of=...)` 按它回放历史; meta 继续带 by/via。
+    - **pin / auto_calibrate 翻转** → `AuditLog`, **不写** History ——
+      开关不是权重快照, 写进 History 会让 as_of 回放多出一堆同权重行,
+      污染「某时点生效权重」的语义。
+    - 两类变化都各写一条 `AuditLog`(`action=update_factor_weight`),
+      与变更同事务提交: 审计写不进去就整笔失败, 不允许「改了但无据可查」。
     """
     if factor_code not in CALIBRATABLE_FACTORS:
         raise ValueError(f"未知因子: {factor_code}")
@@ -177,10 +187,12 @@ def set_factor_weight(
             .filter(FactorWeight.factor_code == factor_code, FactorWeight.market == market)
             .first()
         )
+        changes: dict[str, dict] = {}
         if weight is not None:
             old = float(row.weight)
             new = round(max(0.1, min(3.0, float(weight))), 4)  # 手动也有界,防误填
             if abs(new - old) >= 1e-9:
+                changes["weight"] = {"before": round(old, 4), "after": round(new, 4)}
                 row.weight = new
                 row.reason = "manual"
                 row.effective_from = utc_now()
@@ -191,11 +203,37 @@ def set_factor_weight(
                     meta=({"by": actor} if actor else {}) | {"via": via},
                 ))
         if is_pinned is not None:
-            row.is_pinned = bool(is_pinned)
-            row.updated_at = utc_now()
+            before = bool(row.is_pinned)
+            after = bool(is_pinned)
+            if before != after:
+                changes["is_pinned"] = {"before": before, "after": after}
+                row.is_pinned = after
+                row.updated_at = utc_now()
         if auto_calibrate is not None:
-            row.auto_calibrate = bool(auto_calibrate)
-            row.updated_at = utc_now()
+            before = bool(row.auto_calibrate)
+            after = bool(auto_calibrate)
+            if before != after:
+                changes["auto_calibrate"] = {"before": before, "after": after}
+                row.auto_calibrate = after
+                row.updated_at = utc_now()
+        if changes:
+            db.add(
+                AuditLog(
+                    user_id=actor_id,
+                    username=actor or "",
+                    action="update_factor_weight",
+                    detail=json.dumps(
+                        {
+                            "factor_code": factor_code,
+                            "market": market,
+                            "via": via,
+                            "changes": changes,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    ip=ip or "",
+                )
+            )
         db.commit()
         return _serialize(row)
     finally:

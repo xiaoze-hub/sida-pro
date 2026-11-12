@@ -17,6 +17,13 @@ def _mem_db():
     return sessionmaker(bind=engine)()
 
 
+def _fake_request():
+    """真实 Starlette Request 壳(带 loopback peer), 供直调端点时取审计 IP。"""
+    from starlette.requests import Request
+
+    return Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+
+
 def _actor():
     """直接调 handler 时用的服务端身份(HTTP 层由 require_settings_write 提供)。"""
     from src.web.api.settings import SettingsActor
@@ -44,7 +51,9 @@ def test_update_weight_pins_and_sets_value():
     db = _mem_db()
     try:
         payload = factors.FactorWeightUpdate(weight=1.25, is_pinned=True)
-        res = factors.update_weight("alpha_score", "CN", payload, db=db, actor=_actor())
+        res = factors.update_weight(
+            "alpha_score", "CN", payload, request=_fake_request(), db=db, actor=_actor()
+        )
         assert res["weight"] == 1.25
         assert res["is_pinned"] is True
     finally:
@@ -59,7 +68,10 @@ def test_update_weight_unknown_factor_returns_400():
     try:
         payload = factors.FactorWeightUpdate(weight=1.1)
         with pytest.raises(HTTPException) as ei:
-            factors.update_weight("bad_factor", "CN", payload, db=db, actor=_actor())
+            factors.update_weight(
+                "bad_factor", "CN", payload, request=_fake_request(), db=db,
+                actor=_actor(),
+            )
         assert ei.value.status_code == 400
     finally:
         db.close()
