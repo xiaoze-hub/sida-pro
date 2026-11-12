@@ -11,6 +11,7 @@ from src.web.database import get_db
 from src.web.api.auth import get_current_user
 from src.web.models import NotifyChannel, User
 from src.core.notifier import NotifierManager, CHANNEL_TYPES
+from src.core.notify_errors import failure_text, public_failure_text
 
 router = APIRouter()
 
@@ -194,4 +195,9 @@ async def test_channel(channel_id: int, db: Session = Depends(get_db), user: Use
             }
         return {"ok": True, "message": "测试通知发送成功"}
     else:
-        raise HTTPException(500, f"通知发送失败: {result.get('error', '未知错误')}")
+        # 返回值直接渲染在设置页: error 已是「固定类别 + 关联号」(notify_errors),
+        # 不再把渠道异常原文拼进 HTTP 响应(含 webhook URL/bot token 的可能)。
+        reason = public_failure_text(result.get("error")) or failure_text(
+            "internal", action="测试通知发送"
+        )
+        raise HTTPException(500, reason)

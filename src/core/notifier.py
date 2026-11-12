@@ -10,6 +10,13 @@ import apprise
 import asyncio
 import httpx
 
+from src.core.error_report import log_failure, new_error_ref
+from src.core.notify_errors import (
+    NotifyFailure,
+    as_failure,
+    classify,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -272,7 +279,14 @@ class NotifierManager:
             else:
                 raise ValueError(f"不支持的通知渠道: {channel_type}")
         except ValueError as e:
-            logger.error(f"注册通知渠道失败: {e}")
+            # 渠道配置里的 key/token 可能被拼进异常文本 → 只落关联号 + 类型名。
+            log_failure(
+                logger,
+                "通知渠道注册",
+                e,
+                ref=new_error_ref(),
+                context={"channel_type": str(channel_type or "")},
+            )
             raise
         return True
 
@@ -360,11 +374,33 @@ class NotifierManager:
                         channel_results.append({"type": "apprise", "success": True, "delivered_at": sent_at})
                         logger.info(f"Apprise 通知发送成功: {title}")
                         break
-                    last_err = "Apprise 通知发送失败（可能是网络问题或配置错误）"
-                    logger.error(f"{last_err}: {title}")
+                    # apprise 只回 bool: 没有异常可分类, 归"未确认送达", 但仍给
+                    # 关联号 —— 否则前端只看到一句无法追查的失败。
+                    failure = NotifyFailure(
+                        "not_delivered", channel_type="apprise", action="Apprise 通知发送"
+                    )
+                    last_err = failure.public_message
+                    log_failure(
+                        logger,
+                        "Apprise 通知外发",
+                        None,
+                        ref=failure.ref,
+                        error_type="NotDelivered",
+                        context={"channel_type": "apprise"},
+                    )
                 except Exception as e:
-                    last_err = f"Apprise 通知异常: {e}"
-                    logger.error(last_err)
+                    # httpx/apprise 的异常文本里可能有 webhook URL 与 token。
+                    failure = as_failure(
+                        e, channel_type="apprise", action="Apprise 通知发送"
+                    )
+                    last_err = failure.public_message
+                    log_failure(
+                        logger,
+                        "Apprise 通知外发",
+                        e,
+                        ref=failure.ref,
+                        context={"channel_type": "apprise", "category": failure.category},
+                    )
                 if attempt < retry_attempts:
                     await _sleep_retry(attempt + 1)
             if not apprise_ok:
@@ -395,8 +431,18 @@ class NotifierManager:
                     channel_results.append(result_item)
                     break
                 except Exception as e:
-                    last_err = f"{ch_type} 发送失败: {e}"
-                    logger.error(last_err)
+                    # 同上: 渠道 URL/token 就在异常链里, 对外只给类别 + 关联号。
+                    failure = as_failure(
+                        e, channel_type=str(ch_type), action=f"{ch_type} 通知发送"
+                    )
+                    last_err = failure.public_message
+                    log_failure(
+                        logger,
+                        "通知渠道外发",
+                        e,
+                        ref=failure.ref,
+                        context={"channel_type": str(ch_type), "category": failure.category},
+                    )
                 if attempt < retry_attempts:
                     await _sleep_retry(attempt + 1)
             if not ch_ok:
@@ -468,30 +514,36 @@ class NotifierManager:
         transport = None
         if proxy:
             transport = httpx.AsyncHTTPTransport(proxy=proxy)
-            logger.debug(f"Telegram 使用代理: {proxy}")
+            # 代理 URL 里常带 `http://user:pass@host:port`, 不能整串进日志。
+            logger.debug("Telegram 渠道使用代理发送(地址不落日志)")
 
         try:
             async with httpx.AsyncClient(transport=transport, timeout=30) as client:
                 resp = await client.post(url, json=payload)
                 data = resp.json()
                 if not data.get("ok"):
-                    raise RuntimeError(f"Telegram API 错误: {data.get('description')}")
+                    # description 是 provider 原文(可能回显 bot token), 不复述。
+                    code = data.get("error_code")
+                    raise NotifyFailure(
+                        "auth_rejected" if code == 401 else "http_rejected",
+                        channel_type="telegram",
+                        status=code if isinstance(code, int) else None,
+                    )
                 logger.info(f"Telegram 通知发送成功: {title}")
-        except httpx.ConnectError as e:
-            if proxy:
-                raise RuntimeError(f"连接代理失败 ({proxy}): {e}")
-            else:
-                raise RuntimeError(f"无法连接 Telegram API（可能需要配置代理）: {e}")
-        except httpx.TimeoutException:
-            raise RuntimeError("请求超时（网络问题或代理配置错误）")
-        except Exception as e:
-            if (
-                "ConnectError" in str(type(e).__name__)
-                or "connection" in str(e).lower()
-            ):
-                if not proxy:
-                    raise RuntimeError(f"网络连接失败，建议配置代理: {e}")
+        except NotifyFailure:
             raise
+        except httpx.ProxyError as e:
+            raise NotifyFailure("proxy_failed", channel_type="telegram") from e
+        except httpx.TimeoutException as e:
+            raise NotifyFailure("timeout", channel_type="telegram") from e
+        except httpx.ConnectError as e:
+            # 走代理时连不上通常就是代理本身不可用, 但代理串不能出现在文案里。
+            raise NotifyFailure(
+                "proxy_failed" if proxy else "network_unreachable",
+                channel_type="telegram",
+            ) from e
+        except Exception as e:
+            raise NotifyFailure(classify(e), channel_type="telegram") from e
 
     async def _send_wecom(self, config: dict, title: str, content: str):
         """企业微信机器人 Webhook"""
@@ -508,7 +560,13 @@ class NotifierManager:
             resp = await client.post(url, json=payload, timeout=30)
             data = resp.json()
             if data.get("errcode") != 0:
-                raise RuntimeError(f"企业微信发送失败: {data.get('errmsg')}")
+                # errmsg 是企微原文, 有时会把 webhook key 回显出来 —— 不复述。
+                code = data.get("errcode")
+                raise NotifyFailure(
+                    "auth_rejected" if code == 93000 else "http_rejected",
+                    channel_type="wecom",
+                    status=code if isinstance(code, int) else None,
+                )
             logger.info(f"企业微信通知发送成功: {title}")
 
     async def _send_hermes(self, config: dict, title: str, content: str):
@@ -535,15 +593,18 @@ class NotifierManager:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, content=raw, headers=headers, timeout=30)
             if resp.status_code != 200:
-                raise RuntimeError(
-                    f"Hermes 中转失败: HTTP {resp.status_code} {resp.text[:200]}"
+                # resp.text 是网关回包, 可能回显 webhook_url 的路径/签名头 —— 不落库。
+                raise NotifyFailure(
+                    "auth_rejected" if resp.status_code in (401, 403) else "http_rejected",
+                    channel_type="hermes",
+                    status=resp.status_code,
                 )
             try:
                 data = resp.json()
             except Exception:
                 data = {}
             if data.get("status") not in (None, "delivered", "ok"):
-                raise RuntimeError(f"Hermes 中转未送达: {data}")
+                raise NotifyFailure("not_delivered", channel_type="hermes")
             logger.info(f"Hermes 中转通知发送成功: {title}")
 
     async def _send_wechat_ilink(self, config: dict, title: str, content: str):
@@ -572,18 +633,31 @@ class NotifierManager:
             )
         except Exception as exc:
             # 会话 token 过期/失效 → getupdates 拉最新 context_token 重试一次
-            logger.warning(f"微信 iLink 首次发送失败({exc}), 刷新 context_token 重试")
+            # iLink 的异常文本带 token/接口地址; 首次失败仍可重试, 只记关联号。
+            first_ref = new_error_ref()
+            log_failure(
+                logger,
+                "个人微信(iLink)首次发送(将刷新会话token重试)",
+                exc,
+                ref=first_ref,
+                context={"channel_type": "wechat_ilink"},
+            )
             try:
                 updates = await wechat_ilink.get_updates(account)
                 new_ctx = _extract_context_token(updates, wechat_user_id)
                 if not new_ctx:
-                    raise RuntimeError(f"未能获取会话 token: {exc}")
+                    raise NotifyFailure("not_delivered", channel_type="wechat_ilink")
                 resp = await wechat_ilink.send_text(
                     account, wechat_user_id, text, context_token=new_ctx
                 )
                 self._persist_context_token(config, new_ctx)
             except Exception as exc2:
-                raise RuntimeError(f"微信 iLink 发送失败: {exc2}")
+                failure = as_failure(
+                    exc2, channel_type="wechat_ilink", action="个人微信(iLink)通知发送"
+                )
+                if failure is exc2:  # 已经是安全异常: 不自我链式, 避免环状 traceback
+                    raise
+                raise failure from exc2
         message_id = str(resp.get("message_id") or "")[:128] if isinstance(resp, dict) else ""
         logger.info(f"个人微信(iLink)通知发送成功: {title}")
         return {"ok": True, "message_id": message_id}
@@ -616,7 +690,14 @@ class NotifierManager:
             finally:
                 db.close()
         except Exception as exc:
-            logger.warning(f"context_token 持久化失败: {exc}")
+            # 这里是 DB 写: 异常文本自带 SQL/绑定参数/DSN。
+            log_failure(
+                logger,
+                "微信 context_token 持久化",
+                exc,
+                ref=new_error_ref(),
+                context={"channel_type": "wechat_ilink"},
+            )
 
     async def _send_serverchan(self, config: dict, title: str, content: str):
         sendkey = config.get("sendkey", "")
@@ -631,7 +712,8 @@ class NotifierManager:
             resp = await client.post(url, json=payload, timeout=30)
             data = resp.json()
             if data.get("code") != 0:
-                raise RuntimeError(f"Server酱发送失败: {data.get('message')}")
+                # provider 原文带 sendkey 的风险, 不复述。
+                raise NotifyFailure("http_rejected", channel_type="serverchan")
             logger.info(f"Server酱通知发送成功: {title}")
 
     async def _send_pushplus(self, config: dict, title: str, content: str):
@@ -660,12 +742,15 @@ class NotifierManager:
             try:
                 data = resp.json()
             except Exception as exc:
-                raise RuntimeError("PushPlus 返回了无效 JSON") from exc
+                raise NotifyFailure("bad_response", channel_type="pushplus") from exc
             if str(data.get("code")) != "200":
-                message = str(data.get("msg") or "未知错误")
-                if message == "服务端验证错误":
-                    message += "（可能是重复消息，或 token/topic 参数无效）"
-                raise RuntimeError(f"PushPlus 发送失败: {message}")
+                # msg 是 provider 原文(可能回显 token), 只保留有界数值码。
+                code = data.get("code")
+                raise NotifyFailure(
+                    "auth_rejected" if str(code) in ("903", "401", "403") else "http_rejected",
+                    channel_type="pushplus",
+                    status=int(code) if str(code).lstrip("-").isdigit() else None,
+                )
             logger.info(f"PushPlus 通知发送成功: {title}")
             # data 为 PushPlus 消息流水号，可用于设置页确认 API 已接收。
             return {"accepted": True, "message_id": str(data.get("data") or "")[:128]}
