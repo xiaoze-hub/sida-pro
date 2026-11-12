@@ -7,13 +7,15 @@
 1. `parse_ambush_table(text)`：从报告正文里**解析**那张表（事件/受益板块/代码/名称/受益逻辑/
    强度/埋伏方式/分批计划/止损/目标/证伪条件），拿到结构化行。解析不到就返回空列表，
    不猜、不合成。
-2. `ambush_signals(codes)`：按代码取**真实**信号（股性因子、位置与连板），每项都带来源与
+2. `ambush_signals(codes)`：按代码取信号（股性因子、位置与连板），每项都带来源与
    缺失标记。取不到就是 `None`，页面显示「无数据」，绝不用 0 或估算值糊过去。
 
-口径说明：
+口径说明（不要读成「真实涨停」）：
 - 股性分来自 `demon_factors` 表（近一年封板/连板统计的既有口径，非本次新造）。
-- 位置/连板由 PG 日线收盘价算：涨停判定用收盘涨幅 ≥9.8%（A股 10% 限制的常见四舍五入边界，
-  科创/创业板 20% 的在 `limit_pct` 里区分），连板 = 连续满足涨停的交易日数。
+- 位置/连板由日线收盘价算：以「收盘涨幅 ≥ 板块涨停幅度 - 0.3pct」判定当日达涨停阈值
+  （科创/创业板 20%、北交所 30%、其余 10%），连板 = 连续满足该阈值的交易日数。
+  这是**收盘价推断**，没有核对交易所涨停价、封单/开板记录，所以文案一律写
+  「达涨停阈值(推断)」，**不得简称「真实涨停」**。
 - 止损是否触发只看**收盘价**，不假装知道盘中最低价（那需要分钟线，且盘前报告也没给盘中路径）。
 - **时点（PIT）**：盘前报告写于 D 日开盘前，D 日当天收盘、D 日（或之后）重算的股性因子快照
   在那一刻都还不存在。所有「当时信号」只接受 **交易日 < D** 的数据；拿不到就留空 + 写明
@@ -220,6 +222,31 @@ def _parse_dt(v: Any) -> _DT | None:
     return dt
 
 
+def _parse_dt_aware(v: Any) -> _DT | None:
+    """严格解析**带时区**的时间戳 → 北京时区 aware datetime；其余一律 None。
+
+    为什么单独一个函数: 盘前证据的「采样时点」必须带时区才可核对 09:30 边界。
+    naive 时间在服务器时区未知时既可能是 08:20 也可能是 16:20, 拿它证明盘前
+    就是猜 —— 所以 naive / 缺偏移 / 非法格式都返回 None, 由调用方按 unknown 处理。
+    """
+    if isinstance(v, _DT):
+        if v.tzinfo is None:
+            return None
+        return v.astimezone(_BEIJING)
+    s = str(v or "").strip()
+    if not _DATETIME_RE.match(s):
+        return None
+    if not re.search(r"(Z|[+-]\d{2}:?\d{2})$", s):
+        return None  # 没写时区 = 不可核对
+    try:
+        dt = _DT.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return None
+    return dt.astimezone(_BEIJING)
+
+
 def _norm_day(v: Any) -> str | None:
     """把合法日/时间戳统一成 `YYYY-MM-DD`；非法/认不出 → None（不猜一个日子）。"""
     dt = _parse_dt(v)
@@ -308,6 +335,10 @@ def filter_demon_for_generation(
         }
     out = _filter_demon_rows(factors or {}, cutoff, preopen_generation=preopen)
     out["preopen"] = preopen
+    _gen = _parse_dt_aware(generated_at)
+    if _gen is None:
+        _gen = _parse_dt(generated_at)
+    out["generated_at"] = _gen.isoformat() if _gen else None
     return out
 
 
@@ -326,13 +357,28 @@ def _demon_signal_row(row: dict) -> dict:
     }
 
 
-def demon_evidence_from_record(raw_data: Any, report_day: str) -> dict:
-    """从历史报告的 `raw_data` 取「生成时冻结的股性因子快照」，并验证它确实是盘前。
+def demon_evidence_verified(
+    snapshot: Any,
+    generated_at: Any,
+    report_day: str,
+    *,
+    source: str | None = None,
+    declared_preopen: bool | None = None,
+    fingerprint: str | None = None,
+) -> dict:
+    """核对一份「生成时冻结的股性因子快照」能否证明报告日盘前可见。
 
-    为什么不能直接读 `demon_factors` 表：那是每股一行的当前快照，`factor_date` 早于
-    报告日既不能证明生成时可见（可能是后来重算但因子日没变），也不能证明数据截至 D-1
-    完整。唯一可验证的凭证是生成时写进 raw_data 的冻结副本 + 可解析的生成时间戳，
-    且该时间必须落在报告日 09:30 之前。没有凭证 → `verified=False`，调用方一律 unknown。
+    唯一可接受的门槛（缺一不可）:
+    1. 有非空快照本体；
+    2. 有**带时区**的采样完成时点（`demon_factors_frozen_at`）—— 不接受
+       `raw_data["timestamp"]` 之类的兜底: 那是整份报告采集结束的时刻, 不是这份快照
+       真正被读出来的时刻, 拿它证明采样时点属于张冠李戴；
+    3. 该时点换算到北京时区后落在报告日 09:30 之前；
+    4. 调用方若另外标了 `preopen=True`, 必须与第 3 条一致, 不一致按「凭证自相矛盾」
+       处理（痕量标记不能压过时间证据）。
+
+    `fingerprint`（sha256）**只用于一致性校验**: 对不上说明存储内容被改过或串行,
+    直接判不可信; 对得上也**不证明**来源、采样时点或数据完整性。
     """
     result: dict = {
         "verified": False,
@@ -341,28 +387,57 @@ def demon_evidence_from_record(raw_data: Any, report_day: str) -> dict:
         "dropped": [],
         "frozen_at": None,
         "asof": None,
+        "preopen": False,
+        "source": source,
         "reason": None,
     }
     cutoff = _norm_day(report_day)
     if cutoff is None:
         result["reason"] = f"报告日无法解析({report_day!r}), 无法确认盘前时点"
         return result
-    snap = raw_data.get("demon_factors") if isinstance(raw_data, dict) else None
-    if not isinstance(snap, dict) or not snap:
+    if not isinstance(snapshot, dict) or not snapshot:
         result["reason"] = "该期报告未保存生成时的股性因子冻结快照, 无盘前凭证, 不展示"
         return result
-    stamp = raw_data.get("demon_factors_frozen_at") or raw_data.get("timestamp")
-    gen = _parse_dt(stamp)
-    if gen is None:
-        result["reason"] = "冻结快照缺少可解析的生成时点, 无法证明盘前可见, 不展示"
-        return result
-    if gen.date().isoformat() != cutoff or gen.time() >= _PREOPEN:
+    if generated_at is None or str(generated_at).strip() == "":
         result["reason"] = (
-            f"生成时点 {gen.isoformat()} 不在报告日 {cutoff} 盘前(09:30 前), "
-            "冻结快照含当日事件, 无法证明盘前可见"
+            "冻结快照缺少带时区的采样时点(demon_factors_frozen_at), "
+            "不拿报告 timestamp 兜底, 盘前可见性按 unknown"
         )
         return result
-    filtered = _filter_demon_rows(snap, cutoff, preopen_generation=True)
+    gen = _parse_dt_aware(generated_at)
+    if gen is None:
+        if _parse_dt(generated_at) is not None:
+            result["reason"] = (
+                f"采样时点 {generated_at!r} 不带时区, 无法核对报告日 09:30 边界, "
+                "按 unknown 处理(不以本机时区猜)"
+            )
+        else:
+            result["reason"] = f"采样时点无法解析({generated_at!r}), 无法证明盘前可见"
+        return result
+    is_preopen = gen.date().isoformat() == cutoff and gen.time() < _PREOPEN
+    if declared_preopen is not None and bool(declared_preopen) != is_preopen:
+        result["reason"] = (
+            f"凭证自相矛盾: 标记 preopen={bool(declared_preopen)} 但采样时点 "
+            f"{gen.isoformat()} 对应 preopen={is_preopen}, 一律按 unknown"
+        )
+        return result
+    if not is_preopen:
+        result["reason"] = (
+            f"采样时点 {gen.isoformat()} 不在报告日 {cutoff} 盘前(09:30 前), "
+            "冻结快照含当日事件, 无法证明盘前可见"
+        )
+        result["frozen_at"] = gen.isoformat()
+        return result
+    if fingerprint:
+        actual = factor_snapshot_fingerprint(snapshot)
+        if str(fingerprint).strip().lower() != actual:
+            result["reason"] = (
+                "冻结快照与记录的一致性指纹不一致(仅一致性校验失败, 不涉及来源判断), "
+                "按 unknown 处理"
+            )
+            result["frozen_at"] = gen.isoformat()
+            return result
+    filtered = _filter_demon_rows(snapshot, cutoff, preopen_generation=True)
     result.update(
         verified=True,
         kept={code: _demon_signal_row(row) for code, row in filtered["kept"].items()},
@@ -370,10 +445,48 @@ def demon_evidence_from_record(raw_data: Any, report_day: str) -> dict:
         dropped=filtered["dropped"],
         asof=filtered["asof"],
         frozen_at=gen.isoformat(),
+        preopen=True,
     )
     if not filtered["kept"]:
         result["reason"] = "冻结快照中没有可确认盘前可见的股性因子行"
     return result
+
+
+def factor_snapshot_fingerprint(snapshot: Any) -> str:
+    """快照内容指纹(sha256, 键排序) —— **只用于一致性校验**。
+
+    它能回答「存的东西还是原来那份吗」, 不能回答「这份东西从哪来、何时采的、
+    是否完整」。任何把 fingerprint 当作来源/时点证明的用法都是错的。
+    """
+    import hashlib
+    import json as _json
+
+    payload = _json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def demon_evidence_from_record(raw_data: Any, report_day: str) -> dict:
+    """从历史报告的 `raw_data` 取「生成时冻结的股性因子快照」，并核对盘前可见性。
+
+    为什么不能直接读 `demon_factors` 表：那是每股一行的当前快照，`factor_date` 早于
+    报告日既不能证明生成时可见（可能是后来重算但因子日没变），也不能证明数据截至 D-1
+    完整。唯一可验证的凭证是生成时写进 raw_data 的冻结副本 + **带时区**的采样完成
+    时点（`demon_factors_frozen_at`），且该时点落在报告日 09:30 之前。
+
+    明确拒绝 `raw_data["timestamp"]` 兜底: 它是整份报告采集结束的时刻, 不是因子快照
+    被读出的时刻; 历史上也没存时区, 无法核对 09:30。缺凭证 → `verified=False`。
+    """
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+    declared = raw_data.get("demon_factors_preopen")
+    return demon_evidence_verified(
+        raw_data.get("demon_factors"),
+        raw_data.get("demon_factors_frozen_at"),
+        report_day,
+        source=raw_data.get("demon_factors_source"),
+        declared_preopen=bool(declared) if isinstance(declared, bool) else None,
+        fingerprint=raw_data.get("demon_factors_sha256"),
+    )
 
 
 def demon_map(db, codes: Iterable[str], *, cutoff: str | None = None) -> dict[str, dict]:
@@ -616,8 +729,14 @@ def _price_text(p: dict | None) -> str:
     if p.get("close_date"):
         closing += f"({p['close_date']})"
     seg = [closing]
-    if p.get("limit_up_streak") is not None:
-        seg.append("涨停" if p.get("limit_up_streak") else f"连板{p['limit_up_streak']}")
+    streak = p.get("limit_up_streak")
+    if streak is not None:
+        if streak == 0:
+            seg.append("当日收盘未达涨停阈值")
+        elif streak == 1:
+            seg.append("当日收盘达涨停阈值(推断, 非交易所涨停确认)")
+        else:
+            seg.append(f"{streak}日连续收盘达涨停阈值(推断, 非交易所涨停确认)")
     if p.get("from_20d_high") is not None:
         seg.append(f"距20日高{_fmt(p.get('from_20d_high'), 1, '%')}")
     if p.get("pct_20d") is not None:
@@ -647,10 +766,11 @@ def build_signal_block(rows: list[dict], signals: dict[str, dict]) -> str:
         )
     lines.append("")
     lines.append(
-        "> 股性来自既有股性因子表（近一年封板/连板统计）；位置与连板由日线**收盘价**计算，"
-        "未用盘中路径。**盘前口径**：位置只用报告日之前的收盘（括号里是真实收盘日）；"
-        "股性因子只在**有生成时冻结、且生成时点在报告日 09:30 前**的快照时给出（并标快照日，"
-        "不保证数据已截至报告日前一交易日），否则写「无数据」并注明原因。"
+        "> 股性来自既有股性因子表（近一年封板/连板统计）；位置按日线**收盘价**计算，"
+        "「达涨停阈值」是按收盘涨幅对照板块涨停幅度**推断**，未核对交易所涨停价/封板记录，"
+        "**不是真实涨停次数**。**盘前口径**：位置只用报告日之前的收盘（括号里是真实收盘日）；"
+        "股性因子只在**有生成时冻结、带时区采样时点、且采样时点在报告日 09:30 前**的快照时给出"
+        "（并标快照日，不保证数据已截至报告日前一交易日），否则写「无数据」并注明原因。"
         "缺数据不做估算。上表的受益逻辑/埋伏方式/止损仍是 AI 判断，与本节数据分开看。"
     )
     return "\n".join(lines)

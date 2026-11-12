@@ -222,11 +222,14 @@ def decisions_premarket(
     时点（PIT）边界 —— 盘前报告写于报告日 D 开盘前：
     - 「位置/连板」只用 **trade_date < D** 的收盘（`as_of=D` 的 `<=` 语义会把 D 日当天收盘
       当成盘前信号，那是收盘后才知道的事），并用 `signals.price.close_date` 标出真实收盘日；
-    - 「股性因子」只展示该期报告**生成时冻结**（raw_data）且生成时点可验证在 D 日 09:30
-      前的快照 —— `demon_factors` 是每股一行的当前快照，`factor_date` 早于 D 也不证明当时
-      可见/完整，所以没有冻结凭证就一律 `null`，并在 `signals.demon_note` 写明原因，
-      **不伪造历史快照、不拿今天的表反推历史**；
-    - 「事后表现」（当日/T+1/T+3）本身是 post-hoc 字段，与上面的盘前信号严格分开。
+    - 「股性因子」只展示该期报告**生成时冻结**（追加式 `premarket_factor_evidence`，其次
+      raw_data）且采样时点**带时区**、换算后落在 D 日 09:30 前的快照 —— `demon_factors`
+      是每股一行的当前快照，`factor_date` 早于 D 也不证明当时可见/完整，所以没有冻结凭证
+      就一律 `null`，并在 `signals.demon_note` 写明原因，**不伪造历史快照、不拿今天的表
+      反推历史**；`raw_data.timestamp`（整份报告采集结束时刻）不能兜底证明采样时点；
+    - 「事后表现」（当日/T+1/T+3）本身是 post-hoc 字段，与上面的盘前信号严格分开；
+      只有 `preopen=true` 的期次才算盘前候选成绩 —— 盘后重跑（preopen=false）或时点
+      不可证明（preopen=null）的期次一律留空，并展示真实生成时刻。
     """
     from src.core import premarket_ambush as pa
     from src.core.analysis_history import analysis_history_scope_clause
@@ -248,7 +251,7 @@ def decisions_premarket(
             )
             .order_by(AnalysisHistory.analysis_date.desc(), AnalysisHistory.created_at.desc())
         )
-        # 同一交易日可能有多条（重跑），只保留最新一条
+        # 同一交易日可能有多条（重跑），只保留最新一条报告正文
         by_date: dict[str, AnalysisHistory] = {}
         for rec in q.limit(200).all():
             d = str(rec.analysis_date)
@@ -257,6 +260,15 @@ def decisions_premarket(
             if len(by_date) >= days:
                 break
         records = [by_date[d] for d in sorted(by_date, reverse=True)]
+        # 凭证是追加式的: 同一天每一次真实采样一行, 不会被盘后重跑的正文覆盖。
+        from src.core.premarket_factor_evidence import load_evidence_map
+
+        evidence_map = load_evidence_map(
+            db,
+            [str(r.analysis_date) for r in records],
+            user_id=user.id,
+            role=getattr(user, "role", None),
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("盘前账查询失败: %s", e)
         return {"available": False, "error": f"查询失败: {e}", "items": []}
@@ -275,9 +287,35 @@ def decisions_premarket(
         date = pa._norm_day(str(rec.analysis_date)) or str(rec.analysis_date)
         rows = pa.parse_ambush_table(rec.content or "")[:max_rows]
         codes = [r["code"] for r in rows]
-        # 历史股性: 只认生成时冻结快照(raw_data) + 可验证的盘前生成时点;
-        # 无凭证 → verified=False, 一律 unknown(不拿当前 demon_factors 表反推历史)。
-        evidence = pa.demon_evidence_from_record(getattr(rec, "raw_data", None), date)
+        # 盘前凭证优先取追加式证据表(重跑不覆盖), 老记录回落到 raw_data。
+        # 两者都必须有「带时区的真实采样时点」才可能 verified; 没有就 unknown。
+        ev = evidence_map.get(date)
+        if ev:
+            generated_at = ev["generated_at"]
+            preopen_state: bool | None = True if ev["verified"] else False
+            evidence = {
+                "verified": bool(ev["verified"]),
+                "kept": ev["kept"] if ev["verified"] else {},
+                "notes": dict(ev["notes"]) if ev["verified"] else {},
+                "dropped": list(ev["dropped"]),
+                "asof": ev["asof"],
+                "frozen_at": generated_at,
+                "reason": ev["reason"],
+                "source": ev["source"],
+                "evidence_rows": ev["evidence_rows"],
+            }
+        else:
+            evidence = pa.demon_evidence_from_record(getattr(rec, "raw_data", None), date)
+            generated_at = evidence.get("frozen_at")
+            # 老记录没有追加式凭证: 能过门禁才算盘前, 否则时点不可证明 → unknown(不是 False)
+            preopen_state = True if evidence["verified"] else None
+        if not evidence["verified"]:
+            for code in codes:
+                evidence["notes"].setdefault(
+                    code,
+                    evidence.get("reason")
+                    or "股性因子无生成时冻结凭证, 盘前不可得(不用当前表/快照日重建历史)",
+                )
         signals = pa.collect_signals(
             codes,
             demon_by_code=evidence["kept"],
@@ -305,7 +343,21 @@ def decisions_premarket(
                 except Exception:  # noqa: BLE001
                     seq = []
                 close_cache[code] = seq
-            detail["outcome"] = _outcome_for(seq, date, detail.get("stop_price"))
+            if preopen_state is True:
+                detail["outcome"] = _outcome_for(seq, date, detail.get("stop_price"))
+            else:
+                # 非盘前生成 / 时点不可证明 → 绝不把这些涨跌当成「当日盘前候选成绩」
+                detail["outcome"] = {
+                    "t0": None,
+                    "t1": None,
+                    "t3": None,
+                    "stop_breached": None,
+                    "note": (
+                        "非盘前生成, 不作为当日盘前候选成绩"
+                        if preopen_state is False
+                        else "生成时点不可证明为盘前, 不作为当日盘前候选成绩"
+                    ),
+                }
             out_rows.append(detail)
 
         scored = [o for o in out_rows if o["outcome"]["t0"] is not None]
@@ -329,6 +381,10 @@ def decisions_premarket(
                 "quality": "ok" if (rec.content or "").strip() else "suspect",
                 "parsed": bool(out_rows),
                 "row_count": len(out_rows),
+                # 非盘前生成/时点不可证明: 这一期不能作为「当日盘前候选」对账
+                "premarket_eligible": preopen_state is True,
+                "preopen": preopen_state,
+                "generated_at": generated_at,
                 "rows": out_rows,
                 # 盘前时点证据: 信号用的到底是哪一天的收盘 / 因子快照日上限与凭证
                 "pit": {
@@ -336,9 +392,13 @@ def decisions_premarket(
                     "price_close_dates": sorted(set(price_dates)),
                     "demon_before": date,
                     "demon_evidence": bool(evidence["verified"]),
-                    "demon_frozen_at": evidence["frozen_at"],
+                    "demon_frozen_at": evidence["frozen_at"] if evidence["verified"] else None,
                     "demon_reason": evidence["reason"],
                     "demon_asof": evidence["asof"],
+                    "demon_source": evidence.get("source"),
+                    "evidence_rows": evidence.get("evidence_rows", 0),
+                    "preopen": preopen_state,
+                    "generated_at": generated_at,
                     "demon_available": demon_n,
                     "demon_unavailable": len(out_rows) - demon_n,
                 },
@@ -359,11 +419,15 @@ def decisions_premarket(
         "items": items,
         "note": (
             "潜伏表由 AI 撰写，本页只解析并用真实行情对账；解析不到表格即 parsed=false，不补标的。"
-            "盘前与事后严格分开：位置/连板只用报告日之前的收盘（close_date 标真实收盘日）；"
-            "股性因子只展示该期报告生成时冻结、且生成时点可验证在报告日 09:30 前的快照"
-            "（标快照日，不保证数据已截至报告日前一交易日），没有这份凭证就留空并注明"
+            "盘前与事后严格分开：位置只用报告日之前的收盘（close_date 标真实收盘日）；"
+            "股性因子只展示该期报告生成时冻结、带时区采样时点、且采样时点在报告日 09:30 前的"
+            "快照（标快照日，不保证数据已截至报告日前一交易日），没有这份凭证就留空并注明"
             "「盘前不可得」——不拿当前因子表反推历史，也不伪造快照。"
-            "事后表现（当日/T+1/T+3）是 post-hoc 字段，按收盘价计算，未使用盘中最低/最高。"
+            "凭证是追加式保存的（premarket_factor_evidence，重跑不会销毁历史采样），"
+            "但报告正文仍是同日覆盖：若某期在盘前成功保存后又被盘前重跑覆盖，正文只保留最新一版。"
+            "非盘前生成（preopen=false）或生成时点不可证明（preopen=null）的期次只展示真实生成时刻，"
+            "当日/T+1/T+3 一律留空，绝不当作盘前候选成绩。"
+            "事后表现（当日/T+1/T+3）按收盘价计算，未使用盘中最低/最高。"
         ),
     }
 

@@ -404,7 +404,16 @@ def _patched(monkeypatch, series):
 
 def test_endpoint_signals_price_cannot_include_report_day_close(monkeypatch):
     _clean()
-    _seed_report("2026-11-11")
+    _seed_report(
+        "2026-11-11",
+        raw_data={
+            # 有可验证盘前凭证 → 这一期才允许算「盘前候选成绩」
+            "timestamp": "2026-11-11T08:20:00+08:00",
+            "demon_factors_frozen_at": "2026-11-11T08:20:00+08:00",
+            "demon_factors_preopen": True,
+            "demon_factors": {"600183": {"total": 88.0, "grade": "妖", "factor_date": "20261110"}},
+        },
+    )
     _patched(
         monkeypatch,
         {
@@ -473,8 +482,9 @@ def test_endpoint_uses_verified_preopen_frozen_snapshot_from_raw_data(monkeypatc
     _seed_report(
         "2026-11-11",
         raw_data={
-            "timestamp": "2026-11-11T08:20:00",
-            "demon_factors_frozen_at": "2026-11-11T08:20:00",
+            "timestamp": "2026-11-11T08:20:00+08:00",
+            "demon_factors_frozen_at": "2026-11-11T08:20:00+08:00",
+            "demon_factors_preopen": True,
             "demon_factors": {
                 "600183": {"total": 88.0, "grade": "妖", "factor_date": "20261110"},
             },
@@ -566,7 +576,8 @@ def test_agent_signal_detail_block_keeps_preopen_same_morning_snapshot(monkeypat
 
     text = "0. 事件驱动前瞻\n| 代码 | 名称 |\n|---|---|\n| 600183 | 生益科技 |\n"
     data = {
-        "timestamp": "2026-11-11T08:30:00",
+        "timestamp": "2026-11-11T08:30:00+08:00",
+        "demon_factors_frozen_at": "2026-11-11T08:30:00+08:00",
         "demon_factors": {"600183": {"total": 99.5, "grade": "极妖", "factor_date": "20261111"}},
     }
     out = PremarketOutlookAgent()._append_ambush_signal_details(text, data)
@@ -730,18 +741,38 @@ def test_demon_evidence_rejects_snapshot_not_taken_preopen_on_report_day():
     from src.core import premarket_ambush as pa
 
     snap = {"600183": {"total": 88.0, "factor_date": "20261110"}}
-    for stamp in ("2026-11-11T09:30:00", "2026-11-11T20:00:00", "2026-11-10T08:20:00"):
-        out = pa.demon_evidence_from_record({"timestamp": stamp, "demon_factors": snap}, "2026-11-11")
+    for stamp in ("2026-11-11T09:30:00+08:00", "2026-11-11T20:00:00+08:00", "2026-11-10T08:20:00+08:00"):
+        out = pa.demon_evidence_from_record(
+            {"demon_factors_frozen_at": stamp, "demon_factors": snap}, "2026-11-11"
+        )
         assert out["verified"] is False, stamp
         assert out["kept"] == {}
         assert "盘前" in (out["reason"] or "")
+    # 不带时区的采样时点不猜时区 —— 直接 unknown(不拿 timestamp 兜底)
+    naive = pa.demon_evidence_from_record(
+        {
+            "timestamp": "2026-11-11T08:20:00",
+            "demon_factors_frozen_at": "2026-11-11T08:20:00",
+            "demon_factors": snap,
+        },
+        "2026-11-11",
+    )
+    assert naive["verified"] is False
+    assert "时区" in (naive["reason"] or "")
+    # 没有 frozen_at, 只有整份报告的 timestamp → 不能当采样时点
+    only_ts = pa.demon_evidence_from_record(
+        {"timestamp": "2026-11-11T08:20:00+08:00", "demon_factors": snap}, "2026-11-11"
+    )
+    assert only_ts["verified"] is False
+    assert "timestamp" in (only_ts["reason"] or "")
 
 
 def test_demon_evidence_accepts_preopen_snapshot_and_drops_bad_rows():
     from src.core import premarket_ambush as pa
 
     raw = {
-        "demon_factors_frozen_at": "2026-11-11T08:20:00",
+        "demon_factors_frozen_at": "2026-11-11T08:20:00+08:00",
+        "demon_factors_preopen": True,
         "demon_factors": {
             "600183": {"total": 88.0, "factor_date": "20261110"},
             "600722": {"total": 70.0},                      # 无快照日 → 剔
@@ -753,7 +784,8 @@ def test_demon_evidence_accepts_preopen_snapshot_and_drops_bad_rows():
     assert out["verified"] is True
     assert set(out["kept"]) == {"600183"}
     assert out["kept"]["600183"]["factor_date"] == "2026-11-10"
-    assert out["frozen_at"] == "2026-11-11T08:20:00"
+    assert out["frozen_at"] == "2026-11-11T08:20:00+08:00"
+    assert out["preopen"] is True
     assert set(out["dropped"]) == {"600722", "000636", "300750"}
 
 
@@ -811,5 +843,5 @@ def test_endpoint_invalid_report_date_gives_no_price_numbers(monkeypatch):
     assert row["signals"]["price"]["close"] is None
     assert "无法解析" in (row["signals"]["price"]["note"] or "")
     assert row["outcome"]["t0"] is None
-    assert "无法解析" in (row["outcome"]["note"] or "")
+    assert "不可证明" in (row["outcome"]["note"] or "") or "非盘前" in (row["outcome"]["note"] or "")
     assert item["pit"]["price_close_dates"] == []

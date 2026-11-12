@@ -6895,6 +6895,54 @@ CREATE TABLE IF NOT EXISTS board_anomaly_records (
         )
 
 
+def _m247_premarket_factor_evidence(conn: Connection) -> None:
+    """盘前股性因子凭证（追加式, 2026-11-12 复审）。
+
+    为什么需要: `analysis_history` 同键 upsert, 盘后重跑会把当天盘前写进 raw_data 的
+    冻结因子快照 + 采样时点一起覆盖 —— 账本随后只能显示「盘前不可得」, 与正文矛盾。
+    本表只 INSERT(没有任何 UPDATE/DELETE 路径), 同一天每次真实采样一行。
+
+    刻意**没有** unique 约束: 同一天盘前/盘后重跑各自的凭证都要留; 查询方按
+    「最早一条可验证盘前的凭证」对账。`snapshot_sha256` 仅一致性校验。
+    """
+    id_pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    # JSON 列在 PG 用 JSON, SQLite 用 TEXT(SQLAlchemy JSON 类型在 SQLite 落 TEXT)
+    snapshot_type = "JSON" if _dialect_is_pg(conn) else "TEXT"
+    if not _has_table(conn, "premarket_factor_evidence"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS premarket_factor_evidence (
+    id {id_pk},
+    user_id VARCHAR(36),
+    agent_name VARCHAR(64) NOT NULL DEFAULT 'premarket_outlook',
+    stock_symbol VARCHAR(32) NOT NULL DEFAULT '*',
+    analysis_date VARCHAR(10) NOT NULL,
+    generated_at VARCHAR(40) NOT NULL,
+    preopen BOOLEAN NOT NULL DEFAULT FALSE,
+    source TEXT NOT NULL DEFAULT '',
+    snapshot {snapshot_type},
+    snapshot_sha256 VARCHAR(64),
+    note TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+            )
+        )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_premarket_factor_evidence_date "
+            "ON premarket_factor_evidence (analysis_date, agent_name)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_premarket_factor_evidence_user "
+            "ON premarket_factor_evidence (user_id, analysis_date)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -7136,6 +7184,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(244, "etf_flow_daily", _m244_etf_flow_daily),
     Migration(245, "etf_minute_source", _m245_etf_minute_source),
     Migration(246, "board_anomaly", _m246_board_anomaly),
+    Migration(247, "premarket_factor_evidence", _m247_premarket_factor_evidence),
 )
 
 

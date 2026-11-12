@@ -105,7 +105,11 @@ function PriceDetail({ price }: { price: PremarketRow['signals']['price'] }) {
         <Pct value={price.pct} />
       </span>
       <span className="ml-2 font-sans text-muted-foreground">
-        {streak === null ? '连板 --' : streak > 0 ? `连板 ${safeInt(streak)}` : '非涨停'}
+        {streak === null
+          ? '连板 --'
+          : streak > 0
+            ? `连板 ${safeInt(streak)}(收盘推断)`
+            : '未达涨停阈值(收盘推断)'}
       </span>
       <span className="ml-2 font-sans text-muted-foreground">
         20日 <Pct value={price.pct_20d} /> · 距20日高 <Pct value={price.from_20d_high} />
@@ -165,7 +169,7 @@ function RowDetail({ row }: { row: PremarketRow }) {
         <Field label="目标">{row.target || '--'}</Field>
         <Field label="证伪条件">{row.falsify || '--'}</Field>
         <Field label="批次">{row.batch || '--'}</Field>
-        <Field label="事后表现(收盘价口径 · 事后)">
+        <Field label="事后表现(收盘价口径 · 事后 · 仅盘前生成计)">
           <span className="font-mono">
             当日 <Pct value={row.outcome?.t0} /> · T+1 <Pct value={row.outcome?.t1} /> · T+3{' '}
             <Pct value={row.outcome?.t3} />
@@ -193,6 +197,10 @@ function PeriodBlock({
   onToggle: (key: string) => void
 }) {
   const s = item.summary
+  // 只有能证明「盘前采样」的期次才算当日盘前候选成绩; 盘后重跑/时点不可证明一律不当成绩。
+  const notEligible = item.premarket_eligible === false
+  const ineligibleLabel =
+    item.preopen === false ? '非盘前生成 · 不计当日候选成绩' : '生成时点不可证明 · 不计当日候选成绩'
   return (
     <div className="mt-3 first:mt-2" data-testid="premarket-period">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border pb-1">
@@ -207,9 +215,24 @@ function PeriodBlock({
             正文异常
           </span>
         )}
+        {notEligible && (
+          <span
+            className="rounded border border-border px-1 text-[12px] text-muted-foreground"
+            data-testid="premarket-not-eligible"
+            title="该期不是报告日 09:30 前采样, 当日/T+1/T+3 不作为盘前候选成绩"
+          >
+            {ineligibleLabel}
+          </span>
+        )}
         <span className="ml-auto text-[12px] text-muted-foreground">
-          潜伏 {safeInt(s?.rows)} 只 · 当日上涨 {safeInt(s?.t0_up)}/{safeInt(s?.t0_scored)} · T+1 上涨{' '}
-          {safeInt(s?.t1_up)}/{safeInt(s?.t1_scored)}
+          {notEligible ? (
+            <>实际生成 {item.generated_at ?? '时点不可证明'}</>
+          ) : (
+            <>
+              潜伏 {safeInt(s?.rows)} 只 · 当日上涨 {safeInt(s?.t0_up)}/{safeInt(s?.t0_scored)} · T+1 上涨{' '}
+              {safeInt(s?.t1_up)}/{safeInt(s?.t1_scored)}
+            </>
+          )}
         </span>
       </div>
 
@@ -228,12 +251,18 @@ function PeriodBlock({
             股性因子: {item.pit.demon_available ?? 0}/{item.row_count} 可用
             {item.pit.demon_asof ? ` · 快照日 ≤ ${item.pit.demon_asof}` : ''}
           </span>
+          <span data-testid="premarket-sample-time">
+            采样时点: {item.generated_at ?? '不可证明'}
+            {item.preopen === false ? '(非盘前)' : item.preopen === null ? '(时点不可证明)' : ''}
+          </span>
           {!item.pit.demon_evidence && (
             <span title={item.pit.demon_reason ?? undefined}>
               无生成时冻结快照, 股性按盘前不可得留空
             </span>
           )}
-          <span>当日/T+1/T+3 为事后表现(收盘价口径)</span>
+          <span>
+            {notEligible ? '当日/T+1/T+3 不计入盘前候选成绩' : '当日/T+1/T+3 为事后表现(收盘价口径)'}
+          </span>
         </div>
       ) : null}
 
@@ -373,8 +402,10 @@ export default function PremarketLedgerSection() {
       <h2 className="text-[16px] font-semibold">盘前分析</h2>
       <p className="mt-0.5 text-[12px] text-muted-foreground">
         盘前报告里潜伏表(事件驱动前瞻 · 双轨制)的标的, 用真实行情对账。盘前信号与事后表现分开:
-        位置/连板只用报告日**之前**的收盘(标真实收盘日), 股性因子只展示报告生成时冻结、且可验证
-        盘前可见的快照; 当日 / T+1 / T+3 是事后表现, 按收盘价算。止损只在写了具体价位时判是否跌破;
+        位置只用报告日**之前**的收盘(标真实收盘日, 连板为收盘涨幅推断、非交易所涨停确认),
+        股性因子只展示报告生成时冻结、带时区采样时点且证明盘前可见的快照; 当日 / T+1 / T+3
+        是按收盘价算的事后表现, **只有盘前生成且时点可证明的期次**才计入候选成绩 ——
+        盘后重跑会标「非盘前生成」并留空。止损只在写了具体价位时判是否跌破;
         潜伏标的由 AI 撰写, 本页只解析、不补造。
       </p>
 

@@ -289,6 +289,56 @@ describe('DecisionLedger · 盘前分析区块', () => {
     expect(d.textContent).not.toContain('0.00')
   })
 
+  it('非盘前生成: 展示真实生成时刻与非盘前标志, 当日/T+1/T+3 绝不当盘前候选成绩', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          premarket_eligible: false,
+          preopen: false,
+          generated_at: '2026-11-11T20:10:00+08:00',
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: '2026-11-11T20:10:00+08:00',
+            demon_reason: '采样时点 2026-11-11T20:10:00+08:00 不在报告日 2026-11-11 盘前(09:30 前)',
+            demon_asof: null,
+            demon_source: null,
+            evidence_rows: 1,
+            preopen: false,
+            generated_at: '2026-11-11T20:10:00+08:00',
+            demon_available: 0,
+            demon_unavailable: 1,
+          },
+          summary: { rows: 1, t0_scored: 0, t0_up: 0, t1_scored: 0, t1_up: 0 },
+          rows: [
+            row({
+              signals: { demon: null, price: null, demon_note: '非盘前生成, 股性因子不作盘前证据, 不展示' },
+              outcome: {
+                t0: null,
+                t1: null,
+                t3: null,
+                stop_breached: null,
+                note: '非盘前生成, 不作为当日盘前候选成绩',
+              },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+
+    const period = within(sec).getAllByTestId('premarket-period')[0]
+    expect(within(period).getByTestId('premarket-not-eligible').textContent).toContain('非盘前生成')
+    expect(period.textContent).toContain('实际生成 2026-11-11T20:10:00+08:00')
+    expect(period.textContent).not.toContain('当日上涨')
+    expect(within(period).getByTestId('premarket-sample-time').textContent).toContain('(非盘前)')
+    expect(period.textContent).toContain('不计入盘前候选成绩')
+  })
+
   it('接口报错只降级本区块: 显示一行「盘前分析加载失败」+ 重试, 其他区块照常且不抢 role=alert', async () => {
     mocks.premarket.mockRejectedValueOnce(Object.assign(new Error('502 Bad Gateway'), { kind: 'HTTP_5xx', status: 502 }))
     render(<DecisionLedger />)

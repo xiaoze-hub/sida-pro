@@ -460,6 +460,44 @@ class AnalysisHistory(AuditMixin, Base):
     error = Column(String, nullable=True)  # 降级/失败原因
 
 
+class PremarketFactorEvidence(CreatedAtMixin, Base):
+    """盘前股性因子「生成时冻结快照」的**追加式**凭证(2026-11-12 复审修正)。
+
+    为什么单独一张表, 而不是塞在 `analysis_history.raw_data` 里:
+    `analysis_history` 同键是 upsert(`uq_agent_stock_date_user`), 同一天盘后重跑会
+    **覆盖**前一版的 raw_data —— 生成时冻结的因子快照与采样时点会随正文一起消失,
+    账本就再也证明不了「当时看到了什么」。本表只 INSERT、不 UPDATE(见
+    `src/core/premarket_factor_evidence.py`), 因此重跑不会销毁已有凭证。
+
+    诚实边界(不要读成「报告不可变」):
+    - `analysis_history` 正文仍是可覆盖的; 只保护凭证, 不保护正文历史版本。
+    - 本表没有 unique 约束(同一天可有多条, 每次真实采样一条), 查询方按
+      「最早一条已证明盘前的凭证」对账, 其余作为重跑记录保留。
+    - `snapshot_sha256` **只用于一致性校验**(检测存储内容是否被改动),
+      不证明来源、不证明采样时点、不证明数据完整。
+    """
+
+    __tablename__ = "premarket_factor_evidence"
+    __table_args__ = (
+        Index("ix_premarket_factor_evidence_date", "analysis_date", "agent_name"),
+        Index("ix_premarket_factor_evidence_user", "user_id", "analysis_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True)  # 报告归属(系统调度 NULL)
+    agent_name = Column(String, nullable=False, default="premarket_outlook")
+    stock_symbol = Column(String, nullable=False, default="*")
+    analysis_date = Column(String, nullable=False)  # 报告交易日 YYYY-MM-DD
+    # 真实完成采样的时刻, **带时区** ISO8601(如 2026-11-11T08:20:03+08:00)
+    generated_at = Column(String, nullable=False)
+    # 由 generated_at 与 analysis_date 推导, 不接受调用方自称(见 save_analysis)
+    preopen = Column(Boolean, nullable=False, default=False)
+    source = Column(Text, nullable=False, default="")  # 可核验来源描述(表/选择器/过滤)
+    snapshot = Column(JSON, default={})  # 冻结的股性因子原始行
+    snapshot_sha256 = Column(String(64), nullable=True)  # 仅一致性校验
+    note = Column(String, nullable=False, default="")
+
+
 class StockContextSnapshot(CreatedAtMixin, Base):
     """按股票/日期保存结构化上下文快照（用于跨天记忆）"""
 

@@ -362,14 +362,22 @@ export interface PremarketPit {
   price_close_dates: string[]
   /** 股性因子时点上界 */
   demon_before: string
-  /** true = 该期有可验证的生成时冻结因子快照(生成时点在盘前) */
+  /** true = 该期有可验证的生成时冻结因子快照(采样时点在盘前) */
   demon_evidence: boolean
-  /** 冻结快照的生成时点(ISO); null = 无凭证 */
+  /** 冻结快照的采样时点(带时区 ISO); null = 无凭证/不可验证 */
   demon_frozen_at: string | null
   /** 无凭证/不可用的原因 */
   demon_reason: string | null
   /** 冻结快照里最大快照日 */
   demon_asof: string | null
+  /** 凭证的可核验来源描述(表/选择器/过滤); null = 无 */
+  demon_source: string | null
+  /** 追加式凭证的同日条数(重跑只增不减) */
+  evidence_rows: number
+  /** true=已证明盘前; false=盘后重跑; null=旧记录时点不可证明 */
+  preopen: boolean | null
+  /** 真实采样完成时刻(带时区 ISO); null = 时点不可证明 */
+  generated_at: string | null
   /** 有可用股性因子的行数 / 不可用行数 */
   demon_available: number
   demon_unavailable: number
@@ -384,6 +392,12 @@ export interface PremarketItem {
   /** false = 该期报告未解析到潜伏表(rows 必为空, 不补标的) */
   parsed: boolean
   row_count: number
+  /** 该期能否作为「当日盘前候选」对账(只有 preopen=true 才行) */
+  premarket_eligible: boolean
+  /** 盘前/非盘前/不可证明 */
+  preopen: boolean | null
+  /** 真实采样完成时刻(带时区 ISO); null = 时点不可证明 */
+  generated_at: string | null
   /** 盘前/事后时点证据 */
   pit: PremarketPit
   summary: {

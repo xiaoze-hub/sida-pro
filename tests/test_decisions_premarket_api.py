@@ -28,7 +28,18 @@ class _User:
     role = "owner"
 
 
-def _seed(db, date="2026-11-11", content=REPORT):
+PREOPEN_RAW = {
+    # 有带时区采样时点的冻结凭证 → 这一期才算「盘前候选」, 事后表现才对账
+    "timestamp": "2026-11-11T08:20:00+08:00",
+    "demon_factors_frozen_at": "2026-11-11T08:20:00+08:00",
+    "demon_factors_preopen": True,
+    "demon_factors": {
+        "600183": {"total": 88.0, "grade": "妖", "factor_date": "20261110"},
+    },
+}
+
+
+def _seed(db, date="2026-11-11", content=REPORT, raw_data=None):
     rec = AnalysisHistory(
         user_id=None,
         agent_name="premarket_outlook",
@@ -36,7 +47,7 @@ def _seed(db, date="2026-11-11", content=REPORT):
         analysis_date=date,
         title=f"【盘前分析】{date}",
         content=content,
-        raw_data={},
+        raw_data=raw_data or {},
         status="success",
     )
     db.add(rec)
@@ -78,7 +89,7 @@ def test_endpoint_returns_parsed_rows_with_signals_and_outcome(patched):
     from src.db.session import SessionLocal
 
     db = SessionLocal()
-    _seed(db)
+    _seed(db, raw_data=PREOPEN_RAW)
     db.close()
 
     out = dec.decisions_premarket(days=5, max_rows=30, user=_User())

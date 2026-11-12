@@ -69,12 +69,19 @@ def save_analysis(
     user_id: str | None = None,
     status: str = "success",
     error: str | None = None,
+    *,
+    premarket_evidence: dict | None = None,
 ) -> bool:
     """
     保存分析结果
 
-    - 同一天可以覆盖
-    - 历史记录不可覆盖（通过数据库约束保证）
+    - 同一天同一用户**会覆盖**报告行（upsert）—— 这不是不可变存储。
+      盘前报告额外传 `premarket_evidence` 时，凭证单独追加到
+      `premarket_factor_evidence`（只 INSERT），重跑不会销毁已采样的快照；
+      但正文历史版本仍会被覆盖，见该表 docstring 的诚实边界。
+    - 盘前保护: 当天已有「可证明盘前」的成功记录时, 盘后重跑**不覆盖**它
+      （返回 False 并记 error 日志）—— 盘后报告不是当日盘前候选, 不能顶掉
+      盘前那一版, 否则账本会把事后报告当成盘前成绩。
     - M3(2026-08-23): 增加 user_id 维度, 调度入口传入触发用户。
       多账号下报告归属当前用户, history 端点按 user 过滤(S1)。
     - 0.3(2026-09-08): 增加 status/error —— 降级报告显式落库,
@@ -90,6 +97,9 @@ def save_analysis(
         user_id: 触发用户 UUID(系统调度/批量任务传 None, 走存量 NULL 共享)
         status: success / degraded / failed
         error: 降级或失败原因
+        premarket_evidence: 盘前股性因子凭证(生成时真实采样 + 带时区时点)。
+            由 `premarket_factor_evidence.build_snapshot_evidence()` 生成;
+            传了就在同一事务里追加一条, 不参与覆盖。
 
     Returns:
         是否保存成功
@@ -113,6 +123,27 @@ def save_analysis(
             if user_id is None
             else AnalysisHistory.user_id == user_id,
         ).first()
+
+        if existing and (premarket_evidence is not None or agent_name == "premarket_outlook"):
+            from src.core.premarket_factor_evidence import preopen_flag
+
+            old_raw = existing.raw_data if isinstance(existing.raw_data, dict) else {}
+            old_preopen = preopen_flag(old_raw.get("demon_factors_frozen_at"), date_str)
+            if premarket_evidence is not None:
+                new_preopen = preopen_flag(premarket_evidence.get("generated_at"), date_str)
+            else:
+                # 采样失败(无凭证)的盘后重跑同样不能顶掉盘前记录
+                new_preopen = preopen_flag(payload.get("demon_factors_frozen_at"), date_str)
+            if old_preopen is True and new_preopen is not True:
+                logger.error(
+                    "拒绝盘后重跑覆盖当日盘前记录: %s/%s/%s (旧采样盘前, 新采样 preopen=%s)",
+                    agent_name,
+                    stock_symbol,
+                    date_str,
+                    new_preopen,
+                )
+                db.rollback()
+                return False
 
         if existing:
             # 更新（同一天可覆盖, 但保持原 user_id 不变 —— 避免覆盖过程中丢失归属）
@@ -139,6 +170,13 @@ def save_analysis(
             )
             db.add(record)
             logger.info(f"新增分析记录: {agent_name}/{stock_symbol}/{date_str}")
+
+        if premarket_evidence is not None:
+            from src.core.premarket_factor_evidence import append_evidence
+
+            if not append_evidence(db, premarket_evidence, user_id=user_id):
+                db.rollback()
+                return False
 
         db.commit()
         return True
