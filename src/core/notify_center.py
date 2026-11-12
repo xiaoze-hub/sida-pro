@@ -18,6 +18,7 @@ import time as _time_module
 
 from src.db.session import SessionLocal
 from src.db.models import Notification, NotifyChannel, User
+from src.core.error_report import log_failure, new_error_ref
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +109,26 @@ def _build_notifier_checked(*, user_id: str | None = None, channel_ids=None):
             except Exception as e:
                 record["status"] = "failed"
                 record["error"] = str(e)[:400]
-                logger.warning("[通知中心] 渠道 %s 初始化失败: %s", ch.type, e)
+                # 渠道配置里可能带 webhook token/URL; 异常文本也可能带出来。
+                # 只落关联号 + 类型 + 帧位置, 渠道类型走白名单(形态不符会被丢弃)。
+                log_failure(
+                    logger,
+                    "通知渠道初始化",
+                    e,
+                    ref=new_error_ref(),
+                    context={"channel_type": str(ch.type or "")},
+                )
             records.append(record)
         return (mgr if ok else None), records, audit
     except Exception as e:
-        logger.warning("[通知中心] 读取渠道失败: %s", e)
+        # 读渠道是 DB 查询: 异常文本自带 SQL/绑定参数/DSN, 不能进日志。
+        log_failure(
+            logger,
+            "通知渠道读取",
+            e,
+            ref=new_error_ref(),
+            context={"via": "notify_center"},
+        )
         return None, [], {"requested": None, "granted": [], "denied": [], "error": str(e)}
     finally:
         db.close()
@@ -165,9 +181,20 @@ def push_notification(
         db.refresh(n)
         nid = int(n.id)  # type: ignore[arg-type]
     except Exception as e:
-        logger.exception("[通知中心] 站内写入失败: %s", e)
-        db.rollback()
-        db.close()
+        # 这里是**真实**的站内写入异常(调用方看到的只是 None, 不会收到异常)。
+        # logger.exception 会把 SQLAlchemy 的 SQL 文本 + [parameters: (...)] +
+        # DSN 连同堆栈原样印进日志; 改成白名单口径: 关联号 + 异常类型 + 帧位置。
+        log_failure(
+            logger,
+            "站内通知写入",
+            e,
+            ref=new_error_ref(),
+            context={"category": str(category or "")},
+        )
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 - 回滚失败也不能把通知失败升级成业务异常
+            pass
         return None
     finally:
         try:
@@ -229,9 +256,24 @@ def push_notification(
             task.add_done_callback(_BACKGROUND_TASKS.discard)
             _set_push_status(nid, "pending", "异步发送中", channels=channel_records)
         except Exception as e:
+            log_failure(
+                logger,
+                "通知异步外发登记",
+                e,
+                ref=new_error_ref(),
+                context={"notify_id": nid},
+            )
             _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))
     except Exception as e:
-        logger.warning("[通知中心] 外发失败: %s", e)
+        # 外发异常文本常含渠道 URL/token(webhook、bot token), 不能进日志。
+        # 关联号 + 类型 + 帧位置足够定位; 渠道回执仍按原样写 push_status。
+        log_failure(
+            logger,
+            "通知外发",
+            e,
+            ref=new_error_ref(),
+            context={"notify_id": nid},
+        )
         _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))
     _after_push_hook(
         user_id, category, level, title, body, link, source, trace_id, nid,
@@ -285,7 +327,12 @@ def _after_push_hook(
         if user_id:
             incr_unread(user_id, 1)
     except Exception as e:
-        logger.debug("[通知中心] WS Hub 钩子失败 (不影响主流程): %s", e)
+        # 这里是有意静默的降级分支: 只留在 debug, 且只记类型 ——
+        # 异常文本里可能有 payload(标题/正文)或连接串。
+        logger.debug(
+            "[通知中心] WS Hub 钩子失败 (不影响主流程): type=%s",
+            type(e).__name__,
+        )
 
 
 async def push_notification_async(title: str, body: str = "", **kw) -> int | None:
@@ -300,6 +347,13 @@ async def _async_push(nid: int | None, mgr, title: str, body: str, channel_recor
         final_status, final_error = _push_result_status(result, final_channels)
         _set_push_status(nid, final_status, final_error, channels=final_channels)
     except Exception as e:
+        log_failure(
+            logger,
+            "通知异步外发",
+            e,
+            ref=new_error_ref(),
+            context={"notify_id": nid},
+        )
         _set_push_status(
             nid,
             "failed",
@@ -368,7 +422,14 @@ def _set_push_status(nid: int | None, status: str, err: str = "", *, channels: l
             if channels is not None:
                 n.push_channels = channels
             db.commit()
-    except Exception:
+    except Exception as e:
+        log_failure(
+            logger,
+            "通知推送状态回写",
+            e,
+            ref=new_error_ref(),
+            context={"notify_id": nid},
+        )
         db.rollback()
     finally:
         db.close()
@@ -395,7 +456,13 @@ def _resolve_owner_user_id() -> str | None:
         )
         return str(u.id) if u else None
     except Exception as e:
-        logger.warning("[通知中心] 解析 owner 失败: %s", e)
+        log_failure(
+            logger,
+            "解析通知归属owner",
+            e,
+            ref=new_error_ref(),
+            context={"via": "notify_owner_fallback"},
+        )
         return None
     finally:
         db.close()

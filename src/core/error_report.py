@@ -59,6 +59,8 @@ SAFE_CONTEXT_KEYS = frozenset(
         "actor",
         "actor_kind",
         "alpha",
+        "category",
+        "channel_type",
         "days",
         "endpoint",
         "factor_code",
@@ -67,6 +69,7 @@ SAFE_CONTEXT_KEYS = frozenset(
         "limit",
         "market",
         "min_samples",
+        "notify_id",
         "regime",
         "role",
         "snapshot_days",
@@ -207,12 +210,18 @@ def log_failure(
         pass
 
 
-def public_error(action: str, ref: str) -> str:
+def public_error(action: str, ref: str, *, claims_no_change: bool = True) -> str:
     """给客户端的固定安全文案: 只有动作 + 关联号, 不含任何内部细节。
 
     `action` 用中文短动作名(如「标定计算」「策略调权」), 拼出来是
     `标定计算失败; 本次未做任何改动。错误参考号: ERR-XXXXXXXX(详情见服务端日志)`。
+
+    `claims_no_change=False` 用于**已经可能提交过副作用**的路径(如权重列表读取
+    会先补默认行并 commit, 之后的读/序列化才失败): 这时回滚撤不掉已提交的补行,
+    再写「本次未做任何改动」就是假话。此时只回动作 + 关联号。
     """
+    if not claims_no_change:
+        return f"{action}失败。错误参考号: {ref}(详情见服务端日志)"
     return (
         f"{action}失败; 本次未做任何改动。"
         f"错误参考号: {ref}(详情见服务端日志)"

@@ -222,9 +222,13 @@ def list_weights(db: Session = Depends(get_write_db)):
             logger, "因子权重列表读取", e, ref=ref,
             context={"endpoint": "factors_weights_list"},
         )
-        # 「本次未做任何改动」必须是真的: 补行与读都在这个会话里, 先回滚再说。
+        # 先回滚当前事务(不留半截写入); 但**不能宣称零改动**: get_all_factor_weights
+        # 会先补默认行并 commit, 之后的读/序列化失败时补行已经落库, 回滚撤不掉。
         safe_rollback(db)
-        raise HTTPException(status_code=503, detail=public_error("读取因子权重", ref))
+        raise HTTPException(
+            status_code=503,
+            detail=public_error("读取因子权重", ref, claims_no_change=False),
+        )
 
 
 @router.get("/calibration")
@@ -285,6 +289,9 @@ def calibration(
 
     key = (market, int(days), int(horizon), int(min_samples))
     now = utc_now()
+    # 记录请求起点: waiter 醒来后据此判断 `_CALIB_LAST_FAILURE` 是「这一轮刚失败」
+    # 还是别人早先留下的旧结论。
+    request_started = time.monotonic()
     try:
         fingerprint = _weights_fingerprint(db, market)
     except Exception as e:  # noqa: BLE001 - 指纹读失败同样是「本轮算不了」
@@ -381,6 +388,12 @@ def calibration(
                         (utc_now() - ready["_at"]).total_seconds(), 3
                     )
                     return out
+                # owner 失败时不会写建议缓存, 只留 `_CALIB_LAST_FAILURE`。
+                # 等到的若是**本轮**刚发生的失败, 必须回同一条 503 + 关联号;
+                # 否则「计算进行中」的 429 会把真实故障原因盖掉(和节流分支同口径)。
+                last_fail = _CALIB_LAST_FAILURE.get(key)
+                if last_fail is not None and last_fail[0] >= request_started:
+                    raise HTTPException(503, detail=last_fail[1])
         raise HTTPException(
             429,
             detail={

@@ -24,8 +24,10 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
@@ -201,6 +203,8 @@ def test_weights_list_db_error_is_safe_json_with_ref(http_client, caplog):
     assert body["success"] is False
     assert body["data"] is None, "失败时不能给半截数据"
     assert "ERR-" in body["message"], body["message"]
+    # 权重列表会先补默认行并 commit: 失败时不能宣称「本次未做任何改动」。
+    assert "本次未做任何改动" not in body["message"], body["message"]
     for leak in ("factor_weights", "SELECT", "no such table", "sqlite", DSN,
                  DB_PASSWORD, "Traceback"):
         assert leak not in r.text, f"响应泄漏: {leak!r}"
@@ -267,6 +271,93 @@ def test_calibration_fingerprint_db_error_is_safe_503(http_client, caplog):
     assert "ERR-" in logs and "OperationalError" in logs, logs
     for leak in ("SELECT", "no such table", DSN, DB_PASSWORD):
         assert leak not in logs, f"日志泄漏: {leak!r}"
+
+
+def test_waiter_gets_real_failure_not_429(monkeypatch):
+    """并发 waiter 等到的是**真实失败**(503 + 同一关联号), 不是 429。
+
+    旧行为: owner 失败时不写建议缓存, waiter 醒来只看到「没有缓存」⇒ 429
+    「计算进行中」, 把真实故障原因盖成限流文案。这里用可追踪 Event 精确证明
+    waiter 确实走了 `waiter.wait()` 分支(不是恰好在 owner 结束后才进锁)。
+    """
+    from src.web.api import factors as factors_api
+    from src.web.database import SessionLocal
+
+    detail = "标定计算失败; 本次未做任何改动。错误参考号: ERR-WAIT1234"
+    entered = threading.Event()
+    release = threading.Event()
+    created: list = []
+
+    class _TrackedEvent(threading.Event):
+        def __init__(self):
+            super().__init__()
+            self.waiting = threading.Event()
+            created.append(self)
+
+        def wait(self, timeout=None):
+            self.waiting.set()
+            return super().wait(timeout)
+
+    # 只替换 factors 模块里 Event 的构造, 不动全局 threading(免得影响 pytest/HTTP)。
+    monkeypatch.setattr(
+        factors_api, "threading", SimpleNamespace(Event=_TrackedEvent)
+    )
+    monkeypatch.setattr(factors_api, "_CALIB_WAIT_SECONDS", 5.0)
+    def _slow_failure(*_args, **_kwargs):
+        entered.set()
+        release.wait(5)
+        return {"ok": False, "error": detail}
+
+    monkeypatch.setattr(factors_api, "calibrate_factor_weights", _slow_failure)
+    factors_api._reset_calibration_cache()
+
+    results: dict = {}
+
+    def _call(name: str) -> None:
+        db = SessionLocal()
+        try:
+            results[name] = factors_api.calibration(
+                market="CN", days=60, horizon=5, min_samples=20, db=db, _actor=None
+            )
+        except HTTPException as e:  # noqa: PERF203 - 被测路径就是异常分支
+            results[name] = e
+        finally:
+            db.close()
+
+    owner = threading.Thread(target=_call, args=("owner",), daemon=True)
+    owner.start()
+    try:
+        assert entered.wait(5), "owner 没有进入实际计算"
+        assert created, "single-flight Event 没有被创建"
+        waiter = threading.Thread(target=_call, args=("waiter",), daemon=True)
+        waiter.start()
+        # 精确等 waiter 进入 wait(), 再让 owner 失败收尾。
+        assert created[0].waiting.wait(5), "waiter 没有进入 single-flight 等待"
+        release.set()
+        owner.join(10)
+        waiter.join(10)
+    finally:
+        release.set()
+        factors_api._reset_calibration_cache()
+
+    assert not owner.is_alive() and not waiter.is_alive()
+    for name in ("owner", "waiter"):
+        got = results.get(name)
+        assert isinstance(got, HTTPException), f"{name} 未返回 HTTPException: {got!r}"
+        assert got.status_code == 503, f"{name} 拿到 {got.status_code}: {got.detail!r}"
+        assert got.detail == detail, f"{name} 拿到别人的文案: {got.detail!r}"
+    # 失败结论绝不进建议缓存(只留节流窗口内的 last_failure)。
+    assert factors_api._CALIB_CACHE == {}
+
+
+def test_public_error_zero_change_claim_is_opt_in():
+    """「本次未做任何改动」只在真能保证零改动时出现。"""
+    from src.core.error_report import public_error
+
+    assert "本次未做任何改动" in public_error("标定计算", "ERR-AAAA1111")
+    msg = public_error("读取因子权重", "ERR-BBBB2222", claims_no_change=False)
+    assert "读取因子权重失败" in msg and "ERR-BBBB2222" in msg
+    assert "本次未做任何改动" not in msg
 
 
 def test_weights_list_roles_unchanged(http_client):
