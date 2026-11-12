@@ -139,14 +139,18 @@ def test_concurrent_factor_weight_writes_keep_history_chain(clean_weights, monke
 
 # ── 2. 读行真的加了行锁 ────────────────────────────────────────────────
 def test_load_row_for_update_uses_for_update(monkeypatch):
-    """`_load_row_for_update` 必须走 `FOR UPDATE`(SQLite 忽略, PG/MySQL 生效)。
+    """`_load_row_for_update` 必须走 `FOR UPDATE` + `populate_existing()`。
 
     SQLite 编译器会把 FOR UPDATE 丢掉, 光看 SQL 文本验不出来, 所以这里用
     spy 记录 Query 上是否真的调过 `with_for_update()`。
+
+    `populate_existing()`(2026-11-12 复审三)同样是必须的: FOR UPDATE 只保证
+    SELECT 拿到最新行, 属性仍可能来自会话身份映射里的旧对象 —— 少了它, 历史里的
+    before 就是会话缓存值(真实 PG 上实测 1.0 vs 库里 1.7)。
     """
     from src.core import factor_weights as fw
 
-    calls = {"for_update": 0}
+    calls = {"for_update": 0, "populate_existing": 0}
 
     class _SpyQuery:
         def __init__(self, real):
@@ -154,6 +158,11 @@ def test_load_row_for_update_uses_for_update(monkeypatch):
 
         def filter(self, *args, **kwargs):
             self._real = self._real.filter(*args, **kwargs)
+            return self
+
+        def populate_existing(self, *args, **kwargs):
+            calls["populate_existing"] += 1
+            self._real = self._real.populate_existing(*args, **kwargs)
             return self
 
         def with_for_update(self, *args, **kwargs):
@@ -179,6 +188,7 @@ def test_load_row_for_update_uses_for_update(monkeypatch):
     finally:
         db.close()
     assert calls["for_update"] == 1, "读权重行没有加行锁"
+    assert calls["populate_existing"] == 1, "读权重行没有用 SELECT 结果覆盖会话里的旧对象"
 
 
 # ── 3. 调权: 目录读进同一事务 + 全段持锁 ────────────────────────────────

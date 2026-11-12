@@ -186,7 +186,11 @@ export default function FactorWeightsPanel() {
           <span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
         </div>
       ) : sortedItems.length === 0 ? (
-        <div className="text-[12px] text-muted-foreground text-center py-6">暂无因子权重数据</div>
+        // 读失败(后端 503)与「库里真的没有行」是两件事: 失败时只在上面显示错误,
+        // 不再叠一句「暂无数据」, 否则用户会以为库里空了。
+        error ? null : (
+          <div className="text-[12px] text-muted-foreground text-center py-6">暂无因子权重数据</div>
+        )
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]">

@@ -17,6 +17,9 @@
 - 列表会补默认行(写), 标定要读「刚改过的权重」当 current_weight;
 - 正确性优先于把这点读流量摊给副本。
 
+失败口径(2026-11-12 复审三): 列表读取/补行出错 → **503 + 安全文案 + 关联号**
+(先回滚, 不留半截写入); 只读标定计算失败同样以 503 反映, 不再 200 带 ok=false。
+
 响应由 ResponseWrapperMiddleware 统一包成 {code,data,message},路由直接返回原始数据。
 """
 
@@ -64,6 +67,10 @@ _CALIB_CACHE_MAX_ENTRIES = 32
 #: 无限等待会占满 FastAPI 的同步线程池。
 _CALIB_WAIT_SECONDS = 1.0
 _CALIB_CACHE: dict[tuple, dict] = {}
+#: 上一轮的**失败结论**(key → (monotonic 时刻, 安全文案))。只用于节流分支: 窗口内
+#: 同参数的重复请求回同一条失败, 而不是被改写成 429「过于频繁」。
+#: 它不是建议缓存 —— 失败永不出现在 `_CALIB_CACHE` 里, 窗口一过就真的重算。
+_CALIB_LAST_FAILURE: dict[tuple, tuple[float, str]] = {}
 #: 正在计算的 key → Event。**进程内最多一轮实际计算**: 并发不同参数也不并行,
 #: 否则一个脚本换参数就能把线程池/DB 一起打满。
 _CALIB_INFLIGHT: dict[tuple, threading.Event] = {}
@@ -97,6 +104,7 @@ def _reset_calibration_cache() -> None:
     global _CALIB_LAST_COMPUTE
     with _CALIB_LOCK:
         _CALIB_CACHE.clear()
+        _CALIB_LAST_FAILURE.clear()
         for ev in _CALIB_INFLIGHT.values():
             ev.set()
         _CALIB_INFLIGHT.clear()
@@ -144,6 +152,25 @@ def _cache_put(key: tuple, payload: dict, fingerprint: tuple, now) -> None:
         _CALIB_CACHE.pop(next(iter(_CALIB_CACHE)))
 
 
+def _remember_failure(key: tuple, detail: str) -> None:
+    """记住「这一轮失败了」(**不是**缓存建议): 只保留一个节流窗口那么久。
+
+    参数组合有界但数量多(days×horizon×min_samples), 所以除了按窗口清理过期项,
+    还要按条目上限修剪 —— 否则失败一次就永久留下一个键, 又变成一个内存增长点。
+    调用方必须已持有 `_CALIB_LOCK`。
+    """
+    now = time.monotonic()
+    for stale_key in [
+        k
+        for k, (at, _text) in _CALIB_LAST_FAILURE.items()
+        if now - at >= _CALIB_MIN_INTERVAL_SECONDS
+    ]:
+        _CALIB_LAST_FAILURE.pop(stale_key, None)
+    _CALIB_LAST_FAILURE[key] = (now, detail)
+    while len(_CALIB_LAST_FAILURE) > _CALIB_CACHE_MAX_ENTRIES:
+        _CALIB_LAST_FAILURE.pop(next(iter(_CALIB_LAST_FAILURE)), None)
+
+
 def _request_ip(request: Request | None) -> str:
     """审计用客户端 IP; 取不到就留空(不影响判权/写入)。"""
     if request is None:
@@ -182,8 +209,22 @@ def list_weights(db: Session = Depends(get_write_db)):
     观测时间与是否过期; 要当前口径请看 `GET /calibration`。
 
     首次打开面板会补齐默认权重行, 这是写操作, 所以走写库会话。
+
+    失败口径(2026-11-12 复审三): 库读/补行失败**不再让异常裸奔**(裸 500 既没有
+    关联号, 也可能被上层把 traceback 带进日志/响应)。这里先回滚, 再返回
+    503 + 安全文案 + 关联号; 面板前端据此显示「加载失败」而不是「暂无数据」。
     """
-    return {"items": get_all_factor_weights(db=db)}
+    try:
+        return {"items": get_all_factor_weights(db=db)}
+    except Exception as e:  # noqa: BLE001 - 内部错误统一脱敏
+        ref = new_error_ref()
+        log_failure(
+            logger, "因子权重列表读取", e, ref=ref,
+            context={"endpoint": "factors_weights_list"},
+        )
+        # 「本次未做任何改动」必须是真的: 补行与读都在这个会话里, 先回滚再说。
+        safe_rollback(db)
+        raise HTTPException(status_code=503, detail=public_error("读取因子权重", ref))
 
 
 @router.get("/calibration")
@@ -203,8 +244,12 @@ def calibration(
 
     返回里的可消费信息:
     - `computed_at`: 本次实际计算时间(缓存命中时仍是首次计算时间)
-    - `ok` / `error` / `error_ref`: 失败时 `error` 是**安全文案 + 关联号**,
-      不含异常文本/SQL/连接串; 具体原因在服务端日志 `[err:<ref>]`
+    - 失败时**不是** 200 + `ok=false`: 本端点直接返回 **503** + 安全文案
+      (动作 + 关联号), 不含异常文本/SQL/连接串; 具体原因在服务端日志
+      `[err:<ref>]`。`ok=false` 只可能出现在更内层(核心函数)的返回值里,
+      到 HTTP 这一层一定伴随非 2xx 状态 —— 监控只看状态码也不会漏报失败。
+    - 同一参数在节流窗口(3s)内重复请求且上一轮失败时, 回**同一条** 503 + 同一个
+      关联号(不重算, 也不改写成 429) —— 免得 5xx 自动重试把故障原因盖成「过于频繁」。
     - `rows_present` / `no_rows`: 库里已有多少权重行(本端点不会替你建行)
     - 每因子 `sample_size` + `status`: `skipped_no_data`(无已走完持有期的样本) /
       `skipped_low_sample`(有样本但不够) / `skipped_ic_unavailable`(期数不够算 IC) /
@@ -240,7 +285,17 @@ def calibration(
 
     key = (market, int(days), int(horizon), int(min_samples))
     now = utc_now()
-    fingerprint = _weights_fingerprint(db, market)
+    try:
+        fingerprint = _weights_fingerprint(db, market)
+    except Exception as e:  # noqa: BLE001 - 指纹读失败同样是「本轮算不了」
+        # 这条读发生在计算之前: 不兜底就是裸 500 + 无关联号(监控也看不到原因)。
+        ref = new_error_ref()
+        log_failure(
+            logger, "标定权重指纹读取", e, ref=ref,
+            context={"endpoint": "factors_calibration", "market": market},
+        )
+        safe_rollback(db)
+        raise HTTPException(status_code=503, detail=public_error("标定计算", ref))
     waiter: threading.Event | None = None
     owner: threading.Event | None = None
 
@@ -265,6 +320,7 @@ def calibration(
             # 权重/pin/开关被人工改过: 旧建议里的 current_weight 已经不对,
             # 直接丢弃这条缓存(而不是把旧值当「当前」发出去)。
             _CALIB_CACHE.pop(key, None)
+            _CALIB_LAST_FAILURE.pop(key, None)
 
         if key in _CALIB_INFLIGHT:
             # 同参数已有请求在算: 有界等待它的结果, 不再起第二轮。
@@ -285,6 +341,17 @@ def calibration(
                 started - _CALIB_LAST_COMPUTE < _CALIB_MIN_INTERVAL_SECONDS
             ):
                 # 新参数/新计算之间的进程内节流(指纹变化 = 人工改权重, 放行一次重算)。
+                last_fail = _CALIB_LAST_FAILURE.get(key)
+                if last_fail is not None and (
+                    started - last_fail[0] < _CALIB_MIN_INTERVAL_SECONDS
+                ):
+                    # 上一轮(窗口内、同参数)刚失败: 把**同一条**失败如实回给调用方
+                    # (同一个状态码/关联号), 不重算、也不改写成 429。
+                    # 这不是「缓存失败结果」—— 失败仍不进建议缓存, 窗口一过就会真的
+                    # 重算; 只是不让 5xx 的自动重试(GET 会重试一次)把故障原因
+                    # 显示成「过于频繁」, 那等于用限流文案掩盖真实错误。
+                    raise HTTPException(503, detail=last_fail[1])
+                _CALIB_LAST_FAILURE.pop(key, None)
                 raise HTTPException(
                     429,
                     detail={
@@ -337,11 +404,26 @@ def calibration(
         payload["cache_ttl_seconds"] = _CALIB_TTL_SECONDS
         payload["concurrency"] = _concurrency_block()
 
+        # 计算失败必须让 **HTTP 状态本身**失败: 200 + ok=false 会被监控/客户端当成功,
+        # 前端也只有翻 body 才知道出错("200 就是好")。文案已由 core 层脱敏
+        # (安全文案 + 关联号), 这里只负责把状态码对齐。
+        # 不在这里现编关联号: 编出来的号在日志里查不到, 等于给排障添乱。
+        fail_detail = payload.get("error") or (
+            "标定计算失败; 本次未做任何改动(核心层未返回错误详情, 详见服务端日志)"
+        )
+
         with _CALIB_LOCK:
             _CALIB_LAST_COMPUTE = time.monotonic()
             # 失败的 payload 不入缓存: 否则一次 DB 抖动会被复读一整分钟。
             if payload.get("ok") is not False:
+                _CALIB_LAST_FAILURE.pop(key, None)
                 _cache_put(key, payload, fingerprint, now)
+            else:
+                # 只记「这一轮失败 + 安全文案」, 供上面节流分支如实回同一条失败;
+                # 建议缓存里仍然什么都没有。
+                _remember_failure(key, fail_detail)
+        if payload.get("ok") is False:
+            raise HTTPException(503, detail=fail_detail)
         return payload
     finally:
         with _CALIB_LOCK:

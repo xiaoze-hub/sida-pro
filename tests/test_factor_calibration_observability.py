@@ -242,24 +242,45 @@ def test_calibration_endpoint_reports_low_sample_with_sample_size(client):
     assert data["skipped_low_sample"] >= 1
 
 
-def test_calibration_endpoint_reports_error_explicitly(client, monkeypatch):
+def test_calibration_endpoint_reports_error_explicitly(client, monkeypatch, caplog):
     from src.core import factor_calibration as fc
 
     def _boom(**kwargs):
-        raise RuntimeError("sqlite 读失败")
+        raise RuntimeError(
+            "sqlite 读失败: SELECT weight, meta FROM factor_weights WHERE market='CN'; "
+            "dsn=postgresql://sida:S1da-Pr0d-Pa55w0rd@db.internal:5432/sida; "
+            "[parameters: ('622-CN-bound-param',)]"
+        )
 
     monkeypatch.setattr(fc, "evaluate_factor_ic", _boom)
     token = _login(client)
-    r = _get(client, token)
-    assert r.status_code == 200, r.text
-    data = r.json()["data"]
-    assert data["ok"] is False
-    # 失败必须显式, 但**不得把异常原文/SQL 回给客户端**: 只给安全文案 + 关联号。
-    assert "sqlite 读失败" not in (data.get("error") or "")
-    assert "ERR-" in (data.get("error") or "")
-    assert data.get("error_ref", "").startswith("ERR-")
-    assert data["proposals"] == []
-    assert data["computed_at"]
+    with caplog.at_level("ERROR"):
+        r = _get(client, token)
+    # 失败必须让 **HTTP 状态本身**失败: 200 + ok=false 会被监控当成功。
+    assert r.status_code == 503, r.text
+    body = r.json()
+    assert body["success"] is False and body["data"] is None
+    message = body["message"]
+    # 失败必须显式, 但**不得把异常原文/SQL/DSN/绑定参数回给客户端**。
+    for leak in ("sqlite 读失败", "SELECT weight", "postgresql://", "S1da-Pr0d-Pa55w0rd",
+                 "622-CN-bound-param", "factor_weights", "Traceback"):
+        assert leak not in r.text, f"响应泄漏: {leak!r}"
+    assert "ERR-" in message
+
+    # 服务端日志: 关联号 + 异常类型在, SQL/DSN/参数/表名不在(白名单口径)。
+    logs = "\n".join(rec.getMessage() for rec in caplog.records)
+    ref = next(
+        (tok for tok in message.replace("(", " ").replace(")", " ").split()
+         if tok.startswith("ERR-")),
+        "",
+    )
+    assert ref and ref in logs, f"日志里没有同一个关联号: {logs!r}"
+    assert "RuntimeError" in logs
+    # 注意: 不能拿 "factor_weights" 当日志泄漏串 —— 帧位置里的函数名
+    # `calibrate_factor_weights` 合法地含这个子串(代码标识符, 不是数据)。
+    for leak in ("SELECT weight", "postgresql://", "S1da-Pr0d-Pa55w0rd",
+                 "622-CN-bound-param"):
+        assert leak not in logs, f"日志泄漏: {leak!r}"
 
     from src.web.models import FactorWeight, FactorWeightHistory
 

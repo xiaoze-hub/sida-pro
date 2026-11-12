@@ -133,9 +133,13 @@ describe('因子权重面板 · 已生效', () => {
     expect(screen.queryByText(/只读建议, 不落库/)).toBeNull()
   })
 
-  it('跨 worker 门闩生效时说明跨 worker, 并注明缓存仍按 worker', async () => {
+  it('后端即使自报「跨 worker」, 面板也只说「仅本进程」—— 不替后端许下它没有的保证', async () => {
+    // 2026-11-12 复审三: 后端已撤掉 Redis 租约, `concurrency.scope` 恒为 process。
+    // 这里故意喂一份「集群互斥」的旧结构, 面板仍然不得显示「跨 worker」(那会
+    // 让人以为多 worker 下真的串行), 只能如实说仅本进程 + 缓存按 worker。
     await renderAndCalibrate(calibration())
-    expect(await screen.findByText(/并发保护: 跨 worker/)).toBeTruthy()
+    expect(await screen.findByText(/并发保护: 仅本进程/)).toBeTruthy()
+    expect(screen.queryByText(/并发保护: 跨 worker/)).toBeNull()
     expect(screen.getByText(/缓存按 worker/)).toBeTruthy()
   })
 
@@ -152,6 +156,46 @@ describe('因子权重面板 · 已生效', () => {
     )
     expect(await screen.findByText(/并发保护: 仅本进程/)).toBeTruthy()
     expect(screen.queryByText(/并发保护: 跨 worker/)).toBeNull()
+  })
+})
+
+describe('因子权重面板 · 失败要显式(2026-11-12 复审三)', () => {
+  beforeEach(() => {
+    api.list.mockReset()
+    api.calibrate.mockReset()
+    api.update.mockReset()
+    api.getMyPermissions.mockResolvedValue({
+      effective: ['manage_settings'],
+      granted: [],
+      role: 'owner',
+    })
+  })
+
+  afterEach(() => cleanup())
+
+  it('标定计算失败(后端 503)→ 显示失败与关联号, 不残留「已生效」建议', async () => {
+    api.list.mockResolvedValue({ items: [weightRow] })
+    api.calibrate.mockRejectedValue(
+      new Error('标定计算失败; 本次未做任何改动。错误参考号: ERR-ABC12345(详情见服务端日志)'),
+    )
+    render(<FactorWeightsPanel />)
+    await waitFor(() => expect(api.list).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: '计算建议' }))
+
+    expect(await screen.findByText(/标定失败: .*ERR-ABC12345/)).toBeTruthy()
+    // 失败不能顺带展示一份「已生效」/建议表格, 那会让人以为算成功了
+    expect(screen.queryByText(/已生效/)).toBeNull()
+    expect(screen.queryByText(/只读标定建议 ·/)).toBeNull()
+  })
+
+  it('列表读取失败(后端 503)→ 显示加载失败, 不显示「暂无因子权重数据」', async () => {
+    api.list.mockRejectedValue(
+      new Error('读取因子权重失败; 本次未做任何改动。错误参考号: ERR-DEF67890(详情见服务端日志)'),
+    )
+    render(<FactorWeightsPanel />)
+
+    expect(await screen.findByText(/读取因子权重失败/)).toBeTruthy()
+    expect(screen.queryByText('暂无因子权重数据')).toBeNull()
   })
 })
 

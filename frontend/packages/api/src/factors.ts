@@ -27,7 +27,11 @@ export interface FactorWeightUpdatePayload {
 }
 
 export const factorsApi = {
-  /** 因子权重列表(每因子按市场区分,含最近 IC/IR 标定结果)。 */
+  /**
+   * 因子权重列表(每因子按市场区分,含最近 IC/IR 标定结果)。
+   * 库读/补行失败时后端返回 **503 + 安全文案 + 关联号**(不是 200 空列表):
+   * 调用方必须把 rejection 显示成「加载失败」, 不能渲染成「暂无数据」。
+   */
   list: () => fetchAPI<{ items: FactorWeight[] }>('/factors/weights'),
 
   /** 更新单个因子权重(手动权重 / 锁定 / 标定建议开关)。不会自动调权; 需 manage_settings, 否则 403。 */
@@ -44,6 +48,9 @@ export const factorsApi = {
    * 结果按市场+参数在服务端缓存 60s; computed_at 是实际计算时间, cached 标明是否命中缓存。
    * 并发保护只有**进程内** single-flight; `concurrency.scope` 恒为 process,
    * 多 worker 部署下每个 worker 可能各有 1 轮(不是全局互斥)。
+   * **计算失败 = 非 2xx(503)** + 安全文案 + 关联号, 不会以 200 + ok=false 返回;
+   * 调用方必须把 rejection 当作失败显示, 不能只看 `ok` 字段。
+   * 节流窗口内同参数重复失败会回同一条 503(同一关联号), 不会被改写成 429。
    */
   calibrate: (market = 'CN', days = 90, horizon = 5, minSamples = 20) =>
     fetchAPI<FactorCalibrationResp>(
@@ -69,7 +76,11 @@ export interface FactorCalibrationProposal {
 export interface FactorCalibrationResp {
   market: string
   mode: 'readonly'
-  /** false = 计算失败, error 里有原因(不是「没有建议」) */
+  /**
+   * 成功响应里恒为 true。**计算失败不走本结构**: 后端返回 503 + 安全文案
+   * (fetchAPI 会 reject), 所以页面必须处理 rejection —— 不要只靠翻 `ok`。
+   * 字段保留是为了兼容内层/旧缓存结构, 不能当成「失败也 200」的依据。
+   */
   ok: boolean
   error?: string
   /** 本次实际计算时间(缓存命中时仍为首次计算时间) */

@@ -211,8 +211,17 @@ def _notify_refresh_done(ok: bool, detail: str) -> None:
             # 显式 opt-in 兜底, 不靠"漏传 user_id 自动推 owner"。
             allow_owner_fallback=True,
         )
-    except Exception:
-        logger.exception("写入站内通知失败: 策略信号刷新")
+    except Exception as e:  # noqa: BLE001 - 通知失败不得顶掉刷新本身
+        # 这里是**另一条**失败路径, 之前用 logger.exception ⇒ SQLAlchemy 的
+        # 「SQL + [parameters: (...)]」和 DSN 会原样印进服务端日志(审计实测:
+        # 通知表写入失败时日志里就有完整 SQL 与绑定参数)。通知失败只影响
+        # 「一条站内消息」, 与用户看到的失败文案无关, 所以走同一套白名单口径:
+        # 只落关联号 + 异常类型 + 帧位置, 上下文只放有界枚举。
+        ref = new_error_ref()
+        log_failure(
+            logger, "站内通知写入(策略信号刷新)", e, ref=ref,
+            context={"endpoint": "strategy_signals_refresh"},
+        )
 
 
 def _start_refresh_job(**kwargs) -> tuple[bool, dict]:

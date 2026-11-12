@@ -15,6 +15,14 @@
   经 `pin_write_bind`: 事务从第一条语句起就绑在**写库**, 旧值也取自写库,
   不会拿副本的滞后值当 before。
 
+并发写(2026-11-12 复审三):
+- 「读旧值 → 写新值 → 记历史」要串行: 进程内 `_WRITE_LOCK` + 读行 `FOR UPDATE`
+  (PG/MySQL 行锁), 且读行时 `populate_existing()`, 否则身份映射里的旧对象会让
+  历史里的 before 变成会话缓存值而不是库里真实值。
+- 首次补行(库里还没有权重行)时, 别的 worker 可能同时补同一批行 → 唯一键冲突。
+  `_ensure_rows` 用 SAVEPOINT 只回滚补行这一段, 再按库里真实行重读, 属于可恢复
+  竞态; 重读后仍缺行则原样上抛(不吞错)。
+
 口径提示(2026-11-12):
 - `meta.last_ic / last_ir` 是**最后一次记录下来的历史观测**, 不是实时值;
   `_serialize` 额外给出 `last_observation_at / last_observation_stale /
@@ -31,6 +39,8 @@ import json
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
+
+from sqlalchemy.exc import IntegrityError
 
 from src.core.db_safe import safe_rollback
 from src.core.timezone import utc_now
@@ -84,9 +94,17 @@ def _parse_observed_at(raw) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _rows_for_market(db, market: str) -> dict[str, float]:
-    rows = db.query(FactorWeight).filter(FactorWeight.market == market).all()
-    return {r.factor_code: float(r.weight) for r in rows}
+def _rows_for_market(db, market: str, *, refresh: bool = False) -> dict[str, float]:
+    """读某市场已存在的权重行(纯读, 不建行)。
+
+    `refresh=True` 用于「别人刚补过行, 我要库里真实值」的恢复路径:
+    `populate_existing()` 强制用本次 SELECT 的结果覆盖会话里已加载的对象,
+    不让身份映射里的旧属性冒充当前值。
+    """
+    query = db.query(FactorWeight).filter(FactorWeight.market == market)
+    if refresh:
+        query = query.populate_existing()
+    return {r.factor_code: float(r.weight) for r in query.all()}
 
 
 def _ensure_rows(db, market: str) -> dict[str, float]:
@@ -94,14 +112,38 @@ def _ensure_rows(db, market: str) -> dict[str, float]:
 
     只有写路径(权重面板列表 / 手工改权)调用它: 读路径不要建行, 否则在只读
     副本上执行时会直接失败。
+
+    首次并发(2026-11-12 复审三): 进程内 `_WRITE_LOCK` 挡不住**别的 worker /
+    进程**同时给同一 (factor_code, market) 补行。两边都看到「缺行」→ 都 INSERT
+    → 后提交的那笔撞唯一键 IntegrityError。旧实现直接 500, 面板首次打开就会
+    因为并发互相打架。这里用 SAVEPOINT 只回滚「补行」这一段, 然后按库里的真实
+    行重读: 冲突说明别人已经补上了, 属于可恢复竞态。
+    但**不吞错** —— 重读之后仍然缺行, 说明冲突不是补行竞态(约束/数据异常),
+    原异常原样上抛, 交回调用方。
     """
     existing = _rows_for_market(db, market)
     missing = [f for f in CALIBRATABLE_FACTORS if f not in existing]
-    for f in missing:
-        db.add(FactorWeight(factor_code=f, market=market, weight=1.0))
-        existing[f] = 1.0
-    if missing:
-        db.flush()
+    if not missing:
+        return existing
+    try:
+        with db.begin_nested():
+            for f in missing:
+                db.add(FactorWeight(factor_code=f, market=market, weight=1.0))
+    except IntegrityError:
+        fresh = _rows_for_market(db, market, refresh=True)
+        still_missing = [f for f in CALIBRATABLE_FACTORS if f not in fresh]
+        if still_missing:
+            logger.warning(
+                "因子权重补行冲突且重读后仍缺行, 按真实错误上抛: market=%s missing=%d",
+                market, len(still_missing),
+            )
+            raise
+        logger.info(
+            "因子权重补行撞并发(唯一键), 已按库内真实行重读: market=%s rows=%d",
+            market, len(fresh),
+        )
+        return fresh
+    existing.update({f: 1.0 for f in missing})
     return existing
 
 
@@ -110,6 +152,12 @@ def _load_row_for_update(db, factor_code: str, market: str):
 
     `FOR UPDATE` 让并发事务在 PG/MySQL 上串行读到**对方已提交的最新值**,
     而不是各自缓存一份旧 `weight` 后再写历史 —— 后者会让历史链的 before 失真。
+
+    `populate_existing()` 是必须的, 不是保险: `FOR UPDATE` 只保证「这一条 SELECT
+    拿到的是最新行」, 而 SQLAlchemy 默认会把**会话身份映射里已加载**的同一行
+    对象直接返回, 属性仍是旧值 —— 于是行锁拿到了、历史里的 before 却还是旧值
+    (本函数调用前 `_ensure_rows` 已经把这些行读进过身份映射, 正好踩中)。
+    只有 `populate_existing()` 才保证属性被这次 SELECT 的结果覆盖。
     """
     return (
         db.query(FactorWeight)
@@ -117,6 +165,7 @@ def _load_row_for_update(db, factor_code: str, market: str):
             FactorWeight.factor_code == factor_code,
             FactorWeight.market == market,
         )
+        .populate_existing()
         .with_for_update()
         .first()
     )

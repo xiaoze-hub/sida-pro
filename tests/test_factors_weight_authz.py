@@ -455,7 +455,11 @@ def _calib(client, token, path="/api/factors/calibration?market=CN"):
 
 
 def test_calibration_error_is_not_cached(client, owner_token, monkeypatch):
-    """失败结果不得进缓存: 下一次请求必须真的重算, 而不是复读错误。"""
+    """失败结果不得进缓存: 下一次请求必须真的重算, 而不是复读错误。
+
+    补充(2026-11-12 复审三): 失败一律以 **503** 反映(不是 200+ok=false);
+    节流窗口内同参数的重复请求回**同一条** 503(同关联号), 不能被改写成 429。
+    """
     from src.core import factor_calibration as fc
     from src.web.api import factors as factors_api
 
@@ -464,8 +468,15 @@ def test_calibration_error_is_not_cached(client, owner_token, monkeypatch):
         lambda **kw: {"factors": {}, "error": "boom"},
     )
     bad = _calib(client, owner_token)
-    assert bad.status_code == 200, bad.text
-    assert bad.json()["data"]["ok"] is False
+    assert bad.status_code == 503, bad.text
+    assert bad.json()["success"] is False
+    ref = bad.json()["message"]
+
+    # 立刻重放(不跳过节流窗口): 同一条失败, 不是「过于频繁」。
+    repeat = _calib(client, owner_token)
+    assert repeat.status_code == 503, repeat.text
+    assert repeat.json()["message"] == ref, "重复请求被改写成别的错误(限流掩盖真实故障)"
+    assert "频繁" not in repeat.text
 
     monkeypatch.setattr(
         fc, "evaluate_factor_ic",
@@ -723,18 +734,24 @@ def test_calibration_error_hides_sql_and_dsn(client, owner_token, monkeypatch, c
     caplog.clear()
     with caplog.at_level(logging.ERROR, logger="src.core.factor_calibration"):
         r = _calib(client, owner_token)
-    assert r.status_code == 200, r.text
-    data = r.json()["data"]
-    assert data["ok"] is False
+    # 失败必须体现在状态码上(200+ok=false 会被监控/客户端当成功)。
+    assert r.status_code == 503, r.text
+    body = r.json()
+    assert body["success"] is False and body["data"] is None
+    msg = body["message"]
 
-    msg = data.get("error") or ""
     for leak in (sql, "factor_weights", secret, "postgresql://", "db.internal", bound_param):
         assert leak not in msg, f"错误文案泄漏内部信息: {leak} 出现在 {msg!r}"
-    assert data["error_ref"].startswith("ERR-")
-    assert data["error_ref"] in msg, "安全文案必须带关联号, 否则无法与日志对账"
+    assert msg.startswith("标定计算失败"), msg
+    assert "ERR-" in msg, "安全文案必须带关联号, 否则无法与日志对账"
 
     logged = "\n".join(rec.getMessage() for rec in caplog.records)
-    assert data["error_ref"] in logged, "日志里必须能用关联号找到这次失败"
+    ref = next(
+        (tok for tok in msg.replace("(", " ").replace(")", " ").split()
+         if tok.startswith("ERR-")),
+        "",
+    )
+    assert ref and ref in logged, "日志里必须能用关联号找到这次失败"
     assert "RuntimeError" in logged, "日志要留下异常类型, 否则只能靠猜"
     # 注意: 不能拿 "factor_weights" 当泄漏串 —— 函数名 `calibrate_factor_weights`
     # 合法地含这个子串(那是代码标识符, 不是数据)。
