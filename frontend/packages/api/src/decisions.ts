@@ -296,18 +296,23 @@ export interface PremarketDemonSignal {
   max_streak: number | null
   /** 参与度描述文本 */
   participation: string | null
+  /** 因子快照日; null = 无有效快照日(该行不会被展示) */
+  factor_date: string | null
 }
 
 export interface PremarketPriceSignal {
-  /** 报告日收盘价 */
+  /** 盘前口径: 报告日**之前**最后一个交易日的收盘价, 不是报告日收盘 */
   close: number | null
+  /** close 对应的真实交易日(YYYY-MM-DD); 页面必须展示, 别让人以为是报告日收盘 */
+  close_date: string | null
   /** 当日涨跌(%) */
   pct: number | null
   limit_up_streak: number | null
-  /** 20 日涨跌(%) */
+  /** 20 日涨跌(%); 不足 21 根收盘 → null(不拿短窗口冒充) */
   pct_20d: number | null
-  /** 距 20 日最高(%) —— 负数=在最高点下方 */
+  /** 距 20 日最高(%) —— 负数=在最高点下方; 不足 21 根收盘 → null */
   from_20d_high: number | null
+  /** 口径/缺数原因(如「盘前口径: 截至 X 收盘」/「20日指标需≥21根收盘」) */
   note: string | null
 }
 
@@ -343,8 +348,31 @@ export interface PremarketRow {
   signals: {
     demon: PremarketDemonSignal | null
     price: PremarketPriceSignal | null
+    /** 股性因子为什么不可用(无生成时冻结凭证 / 快照日无法证明盘前可见) */
+    demon_note: string | null
   }
   outcome: PremarketOutcome
+}
+
+/** 盘前时点证据: 这一期报告的信号到底用了哪天的数据。 */
+export interface PremarketPit {
+  /** 价格截断上界: 只用 trade_date < price_before 的收盘 */
+  price_before: string
+  /** 实际用到的真实收盘日(可多只) */
+  price_close_dates: string[]
+  /** 股性因子时点上界 */
+  demon_before: string
+  /** true = 该期有可验证的生成时冻结因子快照(生成时点在盘前) */
+  demon_evidence: boolean
+  /** 冻结快照的生成时点(ISO); null = 无凭证 */
+  demon_frozen_at: string | null
+  /** 无凭证/不可用的原因 */
+  demon_reason: string | null
+  /** 冻结快照里最大快照日 */
+  demon_asof: string | null
+  /** 有可用股性因子的行数 / 不可用行数 */
+  demon_available: number
+  demon_unavailable: number
 }
 
 export interface PremarketItem {
@@ -356,6 +384,8 @@ export interface PremarketItem {
   /** false = 该期报告未解析到潜伏表(rows 必为空, 不补标的) */
   parsed: boolean
   row_count: number
+  /** 盘前/事后时点证据 */
+  pit: PremarketPit
   summary: {
     rows: number
     /** 当日有 K 线的行数 / 其中上涨行数 */

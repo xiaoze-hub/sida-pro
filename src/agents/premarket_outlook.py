@@ -389,6 +389,8 @@ class PremarketOutlookAgent(BaseAgent):
         demon_factors: dict = {}
         demon_factors_asof = None
         demon_factors_dropped: list[str] = []
+        demon_factors_frozen_at = None
+        demon_factors_preopen = False
         try:
             from src.core.ambush_score import enrich_ambush_list
             from src.core.mood_cycle import current_mood
@@ -396,18 +398,25 @@ class PremarketOutlookAgent(BaseAgent):
             mood = current_mood()
             try:
                 from src.core.demon_factors import top_demon_factors
-                from src.core.premarket_ambush import filter_demon_by_asof
+                from src.core.premarket_ambush import filter_demon_for_generation
 
                 # 扩大至 Top 50，确保覆盖主线题材中的潜在妖股先锋
                 demon_factors = top_demon_factors(50)
-                # PIT(2026-11-12): 因子表是每股一行的**当前快照**, 报告日当天重算的行已含
-                # 当天的封板事件 —— 盘前那一刻不存在。只保留快照日 < 报告日的行, 剩下的
-                # 直接剔除(不参与先锋组/埋伏加分), 并在报告里注明截止日。
-                report_day = datetime.now().strftime("%Y-%m-%d")
-                _pit = filter_demon_by_asof(demon_factors or {}, report_day)
+                # PIT(2026-11-12, 复审修正): 因子表是每股一行的**当前快照**。生成时看到的
+                # 就是当时可见的, 所以这里按「实际生成时点」判定: 09:30 前生成时, 当天早上
+                # 算的快照(factor_date=D)确实已存在; 收盘后重生成时 factor_date=D 已含当天
+                # 封板事件 → 剔除。保留下来的行只标快照日, 不宣称数据已截至 D-1。
+                _frozen_at = datetime.now()
+                _pit = filter_demon_for_generation(
+                    demon_factors or {},
+                    _frozen_at.strftime("%Y-%m-%d"),
+                    generated_at=_frozen_at.isoformat(),
+                )
                 demon_factors = _pit["kept"]
                 demon_factors_asof = _pit["asof"]
                 demon_factors_dropped = _pit["dropped"]
+                demon_factors_frozen_at = _frozen_at.isoformat()
+                demon_factors_preopen = bool(_pit.get("preopen"))
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 先锋组因子不可用: %s", trace_id, e)
             ambush_scored = await asyncio.to_thread(
@@ -528,6 +537,9 @@ class PremarketOutlookAgent(BaseAgent):
             "demon_factors": demon_factors,
             "demon_factors_asof": demon_factors_asof,
             "demon_factors_dropped": demon_factors_dropped,
+            # 生成时冻结凭证: 历史页只认这份快照 + 这个时点(见 demon_evidence_from_record)
+            "demon_factors_frozen_at": demon_factors_frozen_at,
+            "demon_factors_preopen": demon_factors_preopen,
             "futures_snapshot": futures_snapshot,
             "catalyst_analysis": catalyst_analysis,
             "tdx_wenda": tdx_wenda,
@@ -680,7 +692,8 @@ class PremarketOutlookAgent(BaseAgent):
         if _ts:
             lines.append(
                 f"> 数据采集时点：{_ts}。盘前信号只用该时点**之前已收盘**的数据；"
-                "报告日当天收盘与当日重算的股性因子快照不属于盘前可得信息，不要引用。\n"
+                "报告日当天收盘不属于盘前可得信息，不要引用。股性因子是采集时冻结的快照"
+                "（见下方快照日），快照日只说明上次计算日，不代表数据已截至报告日前一交易日。\n"
             )
         symbol_contexts = data.get("symbol_contexts", {}) or {}
         quality_overview = data.get("quality_overview", {}) or {}
@@ -845,17 +858,19 @@ class PremarketOutlookAgent(BaseAgent):
             _df_asof = data.get("demon_factors_asof")
             lines.append(
                 "## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)"
-                + (f"【因子快照日 ≤ {_df_asof}】" if _df_asof else "【快照日未知】")
+                + (f"【因子快照日 ≤ {_df_asof}（数据截止未验证）】" if _df_asof else "【快照日未知】")
             )
             _df_dropped = data.get("demon_factors_dropped") or []
             if _df_dropped:
                 lines.append(
-                    f"- 已剔除 {len(_df_dropped)} 只: 因子快照含报告日(或之后)的封板事件, 盘前不可得。"
+                    f"- 已剔除 {len(_df_dropped)} 只: 快照日/生成时点无法证明盘前可见, 不展示。"
                 )
             for sym, f in list(df_map.items())[:15]:
+                _fd = f.get("factor_date") or "无快照日"
                 lines.append(
-                    f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) | "
-                    f"近一年封板{f.get('n_sealed')}次 最高{f.get('max_streak')}连板 | {f.get('participation')}"
+                    f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) "
+                    f"快照日{_fd} | 近一年封板{f.get('n_sealed')}次 最高{f.get('max_streak')}连板 | "
+                    f"{f.get('participation')}"
                 )
             if mood.get("demon_veto"):
                 lines.append("- ⛔ 当前退潮/高潮档位: 先锋组整体禁推(妖股退潮期跌最狠), 只提示不进观察池")
@@ -1412,9 +1427,10 @@ class PremarketOutlookAgent(BaseAgent):
     def _append_ambush_signal_details(self, text: str, data: dict) -> str:
         """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。
 
-        PIT(2026-11-12): 报告日是 `data["timestamp"]`（与 analysis_date 同源）；明细块
-        只用 **report_day 之前** 的收盘与股性因子快照 —— 否则盘后重跑/手工重生成时
-        当天收盘会被写成"盘前位置"，时点错位比数字错更难发现。
+        PIT(2026-11-12, 复审修正): 报告日是 `data["timestamp"]`（与 analysis_date 同源）；明细块
+        只用 **report_day 之前** 的收盘。股性因子用 `collect()` 刚冻结进 data 的快照
+        （`demon_factors` + `demon_factors_frozen_at`）—— 它就是这期报告写入 raw_data 的
+        生成时凭证，历史页也只认这份；没有它的股票一律「盘前不可得」，不拿当前表补。
         """
         from src.core import premarket_ambush as pa
 
@@ -1428,8 +1444,27 @@ class PremarketOutlookAgent(BaseAgent):
             for sym, v in demon_raw.items():
                 if isinstance(v, dict):
                     demon_by_code[str(sym).split(".")[0]] = v
-        report_day = str(data.get("timestamp") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
-        start_day = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
+        report_day = pa._norm_day(data.get("timestamp")) or datetime.now().strftime("%Y-%m-%d")
+        # 防御: 传进来的快照只有在生成时点(09:30 前)确实可见才用;
+        # 收盘后重生成/时点不可验证 → 按不可得处理, 与 collect() 同一门禁。
+        _gen_at = data.get("demon_factors_frozen_at") or data.get("timestamp")
+        _visible = pa.filter_demon_for_generation(
+            demon_by_code, report_day, generated_at=_gen_at
+        )
+        demon_by_code = _visible["kept"]
+        notes: dict[str, str] = dict(_visible["notes"])
+        dropped = {str(c).split(".")[0] for c in (data.get("demon_factors_dropped") or [])}
+        dropped.update(_visible["dropped"])
+        for code in codes:
+            if code in demon_by_code:
+                notes.pop(code, None)
+                continue
+            notes[code] = (
+                "股性因子快照不在盘前可取范围, 不展示"
+                if code in dropped
+                else "该股不在本期盘前因子快照内, 盘前不可得"
+            )
+        start_day = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
         try:
             from src.db.session import get_read_engine
 
@@ -1438,7 +1473,9 @@ class PremarketOutlookAgent(BaseAgent):
             engine = None
         signals = pa.collect_signals(
             codes,
-            demon_by_code=demon_by_code or None,
+            demon_by_code=demon_by_code,
+            demon_notes=notes,
+            verified_frozen=True,  # 这是生成时冻结、并随 raw_data 落库的同一份快照
             engine=engine,
             start_day=start_day,
             report_day=report_day,

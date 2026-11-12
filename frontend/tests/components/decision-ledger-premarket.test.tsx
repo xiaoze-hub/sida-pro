@@ -58,8 +58,9 @@ function row(over: Record<string, unknown> = {}) {
     target: '+10%',
     falsify: '提价落空',
     signals: {
-      demon: { score: 78.1, grade: '妖', n_sealed: 12, max_streak: 4, participation: '高度参与' },
-      price: { close: 12.2, pct: 0.83, limit_up_streak: 0, pct_20d: 8.3, from_20d_high: -1.2, note: null },
+      demon: { score: 78.1, grade: '妖', n_sealed: 12, max_streak: 4, participation: '高度参与', factor_date: '2026-11-10' },
+      price: { close: 12.2, close_date: '2026-11-10', pct: 0.83, limit_up_streak: 0, pct_20d: 8.3, from_20d_high: -1.2, note: '盘前口径: 截至 2026-11-10 收盘(报告日 2026-11-11 收盘不计入)' },
+      demon_note: null,
     },
     outcome: { t0: 5.0, t1: -2.86, t3: null, stop_breached: null, note: '止损按收盘价判定' },
     ...over,
@@ -76,6 +77,17 @@ function item(over: Record<string, unknown> = {}) {
     quality: 'ok',
     parsed: true,
     row_count: rows.length,
+    pit: {
+      price_before: '2026-11-11',
+      price_close_dates: ['2026-11-10'],
+      demon_before: '2026-11-11',
+      demon_evidence: true,
+      demon_frozen_at: '2026-11-11T08:20:00',
+      demon_reason: null,
+      demon_asof: '2026-11-10',
+      demon_available: rows.filter((r) => !!(r as { signals?: { demon?: unknown } }).signals?.demon).length,
+      demon_unavailable: rows.filter((r) => !(r as { signals?: { demon?: unknown } }).signals?.demon).length,
+    },
     summary: { rows: rows.length, t0_scored: rows.length, t0_up: 1, t1_scored: 1, t1_up: 0 },
     rows,
     ...over,
@@ -118,6 +130,11 @@ describe('DecisionLedger · 盘前分析区块', () => {
     expect(periods[0].textContent).toContain('潜伏 1 只')
     expect(periods[0].textContent).toContain('当日上涨 1/1')
     expect(periods[0].textContent).toContain('T+1 上涨 0/1')
+    const pit = within(periods[0]).getByTestId('premarket-pit')
+    expect(pit.textContent).toContain('盘前取数: 收盘 < 2026-11-11')
+    expect(pit.textContent).toContain('实际 2026-11-10')
+    expect(pit.textContent).toContain('事后表现')
+    expect(pit.textContent).not.toContain('无生成时冻结快照')
 
     const rows = within(sec).getAllByTestId('premarket-row')
     expect(rows).toHaveLength(2)
@@ -187,7 +204,7 @@ describe('DecisionLedger · 盘前分析区块', () => {
               code: '300750',
               name: '宁德时代',
               tags: [],
-              signals: { demon: null, price: null }, // 信号取不到 → 「无数据」
+              signals: { demon: null, price: null, demon_note: '该期报告未保存生成时的股性因子冻结快照, 无盘前凭证' }, // 信号取不到 → 「无数据」
               outcome: { t0: null, t1: null, t3: null, stop_breached: null, note: '该交易日无K线(休市/停牌)' },
             }),
           ],
@@ -216,14 +233,60 @@ describe('DecisionLedger · 盘前分析区块', () => {
     expect(d1.textContent).toContain('封板 12 次')
     expect(d1.textContent).toContain('最高 4 连板')
     expect(d1.textContent).toContain('12.2') // 收盘价
+    // 盘前口径必须标真实收盘日 + 快照日, 且明确事后表现
+    expect(d1.textContent).toContain('2026-11-10')
+    expect(d1.textContent).toContain('快照日 2026-11-10')
+    expect(d1.textContent).toContain('盘前')
+    expect(d1.textContent).toContain('事后')
 
-    // 再展开缺信号那行 → 两处「无数据」, 且没有把 null 渲染成 0
+    // 再展开缺信号那行 → 两处「无数据」+ 不可得原因, 且没有把 null 渲染成 0
     fireEvent.click(within(within(sec).getAllByTestId('premarket-row')[1]).getByText('明细'))
     await waitFor(() => expect(within(sec).getAllByTestId('premarket-row-detail')).toHaveLength(2))
     const d2 = within(sec).getAllByTestId('premarket-row-detail')[1]
     expect(d2.textContent).toContain('无数据')
+    expect(d2.textContent).toContain('无盘前凭证')
     expect(d2.textContent).toContain('该交易日无K线(休市/停牌)')
     expect(d2.textContent).not.toContain('0.00')
+  })
+
+  it('无生成时冻结凭证: 明说股性按盘前不可得留空, 不拿当前因子表反推', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: null,
+            demon_reason: '该期报告未保存生成时的股性因子冻结快照, 无盘前凭证, 不展示',
+            demon_asof: null,
+            demon_available: 0,
+            demon_unavailable: 1,
+          },
+          rows: [
+            row({
+              signals: {
+                demon: null,
+                price: null,
+                demon_note: '该期报告未保存生成时的股性因子冻结快照, 无盘前凭证',
+              },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+    expect(within(sec).getByTestId('premarket-pit').textContent).toContain('无生成时冻结快照')
+
+    fireEvent.click(within(within(sec).getAllByTestId('premarket-row')[0]).getByText('明细'))
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row-detail')).toHaveLength(1))
+    const d = within(sec).getAllByTestId('premarket-row-detail')[0]
+    expect(d.textContent).toContain('无数据')
+    expect(d.textContent).toContain('无盘前凭证')
+    expect(d.textContent).not.toContain('0.00')
   })
 
   it('接口报错只降级本区块: 显示一行「盘前分析加载失败」+ 重试, 其他区块照常且不抢 role=alert', async () => {

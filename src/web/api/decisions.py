@@ -222,9 +222,10 @@ def decisions_premarket(
     时点（PIT）边界 —— 盘前报告写于报告日 D 开盘前：
     - 「位置/连板」只用 **trade_date < D** 的收盘（`as_of=D` 的 `<=` 语义会把 D 日当天收盘
       当成盘前信号，那是收盘后才知道的事），并用 `signals.price.close_date` 标出真实收盘日；
-    - 「股性因子」只在**快照日 < D** 时展示（`demon_factors` 是每股一行的当前快照，
-      表里没有历史版本；D 日当天/之后重算的行含 D 日封板事件，盘前不可得）→ 否则 `null`
-      并在 `signals.demon_note` 写明原因，**不伪造历史快照、不拿今天的表冒充当时**；
+    - 「股性因子」只展示该期报告**生成时冻结**（raw_data）且生成时点可验证在 D 日 09:30
+      前的快照 —— `demon_factors` 是每股一行的当前快照，`factor_date` 早于 D 也不证明当时
+      可见/完整，所以没有冻结凭证就一律 `null`，并在 `signals.demon_note` 写明原因，
+      **不伪造历史快照、不拿今天的表反推历史**；
     - 「事后表现」（当日/T+1/T+3）本身是 post-hoc 字段，与上面的盘前信号严格分开。
     """
     from src.core import premarket_ambush as pa
@@ -263,16 +264,27 @@ def decisions_premarket(
         db.close()
 
     read_engine = get_read_engine()
+    # 跨期缓存: 每期报告用各自 report_day 截断, 但日线只取一份 —— 起点取**所有期里最早**
+    # 的那个。否则先处理的近期报告会把缓存起点抬到近期, 旧一期被截断成「无日线」。
+    lookback_days = 45  # ≈31 个交易日, 满足 21 根收盘的 20 日指标
+    _valid_days = [d for d in (pa._norm_day(str(r.analysis_date)) for r in records) if d]
+    earliest_start = _shift_day(min(_valid_days), -lookback_days) if _valid_days else None
     close_cache: dict[str, list] = {}
     items: list[dict] = []
     for rec in records:
-        date = str(rec.analysis_date)
+        date = pa._norm_day(str(rec.analysis_date)) or str(rec.analysis_date)
         rows = pa.parse_ambush_table(rec.content or "")[:max_rows]
         codes = [r["code"] for r in rows]
+        # 历史股性: 只认生成时冻结快照(raw_data) + 可验证的盘前生成时点;
+        # 无凭证 → verified=False, 一律 unknown(不拿当前 demon_factors 表反推历史)。
+        evidence = pa.demon_evidence_from_record(getattr(rec, "raw_data", None), date)
         signals = pa.collect_signals(
             codes,
+            demon_by_code=evidence["kept"],
+            demon_notes=evidence["notes"],
+            verified_frozen=bool(evidence["verified"]),
             engine=read_engine,
-            start_day=_shift_day(date, -25),
+            start_day=earliest_start or _shift_day(date, -lookback_days),
             report_day=date,
         )
         out_rows: list[dict] = []
@@ -287,7 +299,9 @@ def decisions_premarket(
                 from src.core.decision_log import _close_series_pg
 
                 try:
-                    seq = _close_series_pg(read_engine, code, _shift_day(date, -25))
+                    seq = _close_series_pg(
+                        read_engine, code, earliest_start or _shift_day(date, -lookback_days)
+                    )
                 except Exception:  # noqa: BLE001
                     seq = []
                 close_cache[code] = seq
@@ -316,11 +330,15 @@ def decisions_premarket(
                 "parsed": bool(out_rows),
                 "row_count": len(out_rows),
                 "rows": out_rows,
-                # 盘前时点证据: 信号用的到底是哪一天的收盘 / 因子快照日上限
+                # 盘前时点证据: 信号用的到底是哪一天的收盘 / 因子快照日上限与凭证
                 "pit": {
                     "price_before": date,
                     "price_close_dates": sorted(set(price_dates)),
                     "demon_before": date,
+                    "demon_evidence": bool(evidence["verified"]),
+                    "demon_frozen_at": evidence["frozen_at"],
+                    "demon_reason": evidence["reason"],
+                    "demon_asof": evidence["asof"],
                     "demon_available": demon_n,
                     "demon_unavailable": len(out_rows) - demon_n,
                 },
@@ -341,9 +359,11 @@ def decisions_premarket(
         "items": items,
         "note": (
             "潜伏表由 AI 撰写，本页只解析并用真实行情对账；解析不到表格即 parsed=false，不补标的。"
-            "信号按盘前时点取数：位置/连板只用报告日之前的收盘（close_date 标出真实收盘日），"
-            "股性因子只在快照日早于报告日时展示，否则留空并注明「盘前不可得」。"
-            "事后表现（当日/T+1/T+3）按收盘价计算，未使用盘中最低/最高，与盘前信号分开看。"
+            "盘前与事后严格分开：位置/连板只用报告日之前的收盘（close_date 标真实收盘日）；"
+            "股性因子只展示该期报告生成时冻结、且生成时点可验证在报告日 09:30 前的快照"
+            "（标快照日，不保证数据已截至报告日前一交易日），没有这份凭证就留空并注明"
+            "「盘前不可得」——不拿当前因子表反推历史，也不伪造快照。"
+            "事后表现（当日/T+1/T+3）是 post-hoc 字段，按收盘价计算，未使用盘中最低/最高。"
         ),
     }
 
@@ -360,15 +380,21 @@ def _shift_day(day: str, delta: int) -> str:
 
 def _outcome_for(seq: list[tuple[str, float]], date: str, stop_price: float | None) -> dict:
     """当日 / T+1 / T+3（相对收盘），以及收盘价是否跌破止损。缺数据一律 None。"""
-    out = {"t0": None, "t1": None, "t3": None, "stop_breached": None, "note": None}
+    out: dict = {"t0": None, "t1": None, "t3": None, "stop_breached": None, "note": None}
+    from src.core.premarket_ambush import _norm_day
+
+    day = _norm_day(date)
+    if day is None:
+        out["note"] = "报告日无法解析, 不做事后对账"
+        return out
     if not seq:
         out["note"] = "无日线数据"
         return out
     days = [d for d, _ in seq]
-    if date not in days:
+    if day not in days:
         out["note"] = "该交易日无K线(休市/停牌)"
         return out
-    i = days.index(date)
+    i = days.index(day)
     closes = [c for _, c in seq]
     if i >= 1 and closes[i - 1]:
         out["t0"] = round((closes[i] / closes[i - 1] - 1.0) * 100.0, 2)
