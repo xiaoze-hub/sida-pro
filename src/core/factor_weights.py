@@ -85,16 +85,17 @@ def _serialize(row: FactorWeight) -> dict:
         "last_ir": meta.get("last_ir"),
         "last_sample_size": meta.get("last_sample_size"),
         "last_calibrated_at": meta.get("last_calibrated_at"),
-        # 待审提案(只读展示;落地须走 manual 授权路径,不会自动生效)
-        "pending_proposal": meta.get("pending_proposal"),
-        "applied_proposal": meta.get("applied_proposal"),
         "reason": row.reason or "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
 def get_all_factor_weights(*, db=None) -> list[dict]:
-    """列出所有市场 × 因子的权重(含最近 IC/IR 观测),供只读 API/UI 展示。"""
+    """列出所有市场 × 因子的权重(含最近记录到的 IC/IR 观测),供只读 API/UI 展示。
+
+    只读标定不落库,故 last_* 是「最后一次记录下来的观测」而非实时值;
+    判断新鲜度请看 last_calibrated_at。
+    """
     own = db is None
     db = db or SessionLocal()
     try:

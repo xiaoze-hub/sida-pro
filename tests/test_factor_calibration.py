@@ -144,10 +144,10 @@ def test_evaluate_factor_ic_excludes_unelapsed_horizon():
 
 # --------------------------- DB:calibrate_factor_weights ---------------------------
 
-def test_calibrate_moves_weight_from_ic_and_audits():
-    """横截面 alpha 与收益完全正相关 → IC=+1 → 授权 apply 后权重上调并写审计(B0.4)。
+def test_calibrate_reports_proposal_without_writing_weight():
+    """横截面 alpha 与收益完全正相关 → IC=+1 → 只出加权限提案(B0.4 口径不变)。
 
-    2026-11-12: 默认模式改为 suggest(只提案);写权重必须显式 mode=apply + approved_by。
+    2026-11-12: 标定只读 —— 不建行、不写 History、不改任何有效权重。
     """
     from src.core.factor_calibration import calibrate_factor_weights
     from src.web.models import FactorWeight, FactorWeightHistory
@@ -162,23 +162,23 @@ def test_calibrate_moves_weight_from_ic_and_audits():
                 sid += 1
         db.commit()
 
-        calibrate_factor_weights("CN", mode="apply", approved_by="test-approver",
-                                 min_samples=5, db=db)
+        res = calibrate_factor_weights("CN", min_samples=5, db=db)
 
-        row = db.query(FactorWeight).filter_by(factor_code="alpha_score", market="CN").first()
-        assert row.weight > 1.0
-        assert abs(row.weight - 1.14) < 0.02
-
-        hist = (db.query(FactorWeightHistory)
-                .filter_by(factor_code="alpha_score", market="CN", reason="auto").all())
-        assert len(hist) == 1
-        assert hist[0].ic is not None
+        by_code = {p["factor_code"]: p for p in res["proposals"]}
+        alpha = by_code["alpha_score"]
+        assert alpha["status"] == "proposed"
+        assert abs(alpha["proposed_weight"] - 1.14) < 0.02
+        assert alpha["ic"] is not None
+        assert res["changed"] == 0
+        assert res["write_back"] is False
+        assert db.query(FactorWeight).count() == 0
+        assert db.query(FactorWeightHistory).count() == 0
     finally:
         db.close()
 
 
 def test_calibrate_skips_pinned():
-    """已 pin 的因子即使有强 IC 也不动(默认 suggest 下不出可执行提案)。"""
+    """已 pin 的因子即使有强 IC 也不出可执行提案,更不改权重。"""
     from src.core.factor_calibration import calibrate_factor_weights
     from src.web.models import FactorWeight
 

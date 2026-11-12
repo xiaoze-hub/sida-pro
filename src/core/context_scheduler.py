@@ -115,22 +115,36 @@ class ContextMaintenanceScheduler:
                 rebalance.get("skipped_low_sample", 0),
             )
 
-            # Phase 4 → 因子自校准闭环:把 IC/IR 接进每因子权重的轻量标定。
-            # 默认 suggest:调度器只产出「待审提案」,绝不自动改写有效权重;
-            # 落地须人工经 apply_pending_proposal(走 manual 审计路径)。
+            # Phase 4 → 因子标定:只读产出「建议」,调度器绝不自动改写有效权重;
+            # 改权须人工走既有手工 API(manual 审计),本模块无任何写权开关。
             try:
-                from src.core.factor_calibration import MODE_SUGGEST, calibrate_all_markets
+                from src.core.factor_calibration import calibrate_all_markets
 
-                fcal = await asyncio.to_thread(calibrate_all_markets, mode=MODE_SUGGEST)
+                fcal = await asyncio.to_thread(calibrate_all_markets)
                 proposed = sum(r.get("proposed", 0) for r in fcal.values())
+                errors = {m: r["error"] for m, r in fcal.items() if r.get("error")}
                 logger.log(
-                    logging.INFO if proposed else logging.DEBUG,
-                    "[上下文维护] 因子标定提案完成(未写权重): proposed=%s detail=%s",
+                    logging.WARNING if errors else (
+                        logging.INFO if proposed else logging.DEBUG
+                    ),
+                    "[上下文维护] 因子标定建议完成(未写权重): proposed=%s detail=%s errors=%s",
                     proposed,
                     {m: r.get("proposed", 0) for m, r in fcal.items()},
+                    errors or None,
+                )
+                # 观测保留在日志里(只读,不落库):每因子 IC 便于事后核查。
+                logger.debug(
+                    "[上下文维护] 因子标定观测(只读): %s",
+                    {
+                        m: {
+                            p.get("factor_code"): p.get("ic")
+                            for p in r.get("proposals", [])
+                        }
+                        for m, r in fcal.items()
+                    },
                 )
             except Exception as fc_err:
-                logger.debug("[上下文维护] 因子标定提案跳过: %s", fc_err)
+                logger.warning("[上下文维护] 因子标定建议失败(未写权重): %s", fc_err)
         except Exception as e:
             logger.exception(f"[上下文维护] 后验评估异常: {e}")
         finally:
@@ -185,13 +199,16 @@ class ContextMaintenanceScheduler:
             strategy_eval_task,
             strategy_rebalance_task,
         )
-        # 因子标定提案:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather;
-        # 默认 suggest —— 只回提案,不改有效权重。
-        from src.core.factor_calibration import MODE_SUGGEST, calibrate_all_markets
+        # 因子标定建议:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather;
+        # 只读 —— 只回建议,不改有效权重。
+        from src.core.factor_calibration import calibrate_all_markets
 
-        factor_calibration_stats = await asyncio.to_thread(
-            calibrate_all_markets, mode=MODE_SUGGEST
-        )
+        factor_calibration_stats = await asyncio.to_thread(calibrate_all_markets)
+        fcal_errors = {
+            m: r["error"] for m, r in factor_calibration_stats.items() if r.get("error")
+        }
+        if fcal_errors:
+            logger.warning("[上下文维护] 因子标定建议失败(未写权重): %s", fcal_errors)
         return {
             "agent_predictions": agent_stats,
             "entry_candidates": candidate_stats,
