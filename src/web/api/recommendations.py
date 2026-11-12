@@ -17,6 +17,7 @@ from src.core.entry_candidates import (
     save_entry_candidate_feedback,
 )
 from src.core.strategy_catalog import list_strategy_catalog
+from src.core.error_report import log_failure, new_error_ref, public_error
 from src.core.strategy_engine import (
     evaluate_strategy_outcomes,
     get_strategy_factor_snapshot,
@@ -120,13 +121,15 @@ def _refresh_worker(
         )
         _notify_refresh_done(True, f"快照日期 {result.get('snapshot_date') or '—'}，可前往「机会」页查看。")
     except Exception as e:
-        logger.exception("后台刷新策略信号失败: %s", e)
+        ref = new_error_ref()
+        log_failure(logger, "策略信号刷新", e, ref=ref)
         _set_refresh_state(
             running=False,
             finished_at=_now_iso(),
-            last_error=str(e),
+            # 状态接口会对客户端可见 —— 只放安全文案 + 关联号, 细节在日志里。
+            last_error=public_error("策略信号刷新", ref),
         )
-        _notify_refresh_done(False, str(e)[:500])
+        _notify_refresh_done(False, public_error("策略信号刷新", ref))
 
 
 def _notify_refresh_done(ok: bool, detail: str) -> None:
@@ -499,6 +502,9 @@ def rebalance_strategy_weights_api(
     失败语义(2026-11-12 复审): 核心函数把异常收敛成 `error` 字段是为了让
     调度/脚本也能读到失败, 但 **HTTP 层不能照样回 200** —— 那样前端会把
     「回滚了、一条没改」显示成成功。这里把 `error` 映射成 500, 并说明已回滚。
+
+    错误文案不含异常原文: 核心层已经把它换成安全文案 + `error_ref`
+    (SQL/表名/DSN 只进服务端日志)。本层只透传, 不再拼 `str(exc)`。
     """
     ip = ""
     if request is not None:
@@ -520,15 +526,13 @@ def rebalance_strategy_weights_api(
     if result.get("error"):
         from fastapi import HTTPException
 
-        err = str(result.get("error"))
-        # ResponseWrapperMiddleware 只把 detail 里的 message 透给客户端(dict 其余字段
-        # 被压成文本), 所以失败原因必须写进 message —— 否则前端只看到「失败」两个字,
-        # 排障时无从下手。
+        ref = str(result.get("error_ref") or "")
+        safe_msg = str(result.get("error") or public_error("策略调权", ref or "未知"))
         raise HTTPException(
             status_code=500,
             detail={
-                "message": f"策略调权失败, 本次改动已整体回滚(未改动任何权重): {err}",
-                "error": err,
+                "message": f"{safe_msg}(本次改动已整体回滚, 未改动任何权重)",
+                "error_ref": ref,
                 "window_days": result.get("window_days", window_days),
                 "min_samples": result.get("min_samples", min_samples),
                 "changed": 0,

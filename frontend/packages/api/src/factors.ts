@@ -40,8 +40,10 @@ export const factorsApi = {
   /**
    * 实时计算一轮**只读**标定建议。零写入: `changed` 恒 0、`write_back` 恒 false
    * (界面要显示这两个真实字段, 不要写死)。
+   * 需 `manage_settings`(受限管理员): 每轮都要扫快照, 不对普通成员开放。
    * 结果按市场+参数在服务端缓存 60s; computed_at 是实际计算时间, cached 标明是否命中缓存。
-   * 并发保护范围见返回里的 `concurrency`(cluster=跨 worker / process=仅本进程)。
+   * 并发保护只有**进程内** single-flight; `concurrency.scope` 恒为 process,
+   * 多 worker 部署下每个 worker 可能各有 1 轮(不是全局互斥)。
    */
   calibrate: (market = 'CN', days = 90, horizon = 5, minSamples = 20) =>
     fetchAPI<FactorCalibrationResp>(
@@ -83,8 +85,9 @@ export interface FactorCalibrationResp {
   write_back: boolean
   /**
    * 这次计算实际受到的并发保护范围。缓存命中时描述的是产生这份结果的那一轮。
-   * scope=cluster 才是跨 worker 互斥; process 表示 Redis 不可用, 只有本进程单飞
-   * (多 worker 下可能各有 1 轮), cache_scope 恒为 process。
+   * 后端已移除跨 worker 租约: `scope` 恒为 process、`cross_worker_exclusive`
+   * 恒为 false —— 只有本进程 single-flight, 多 worker 下每个 worker 可能各有 1 轮。
+   * `cache_scope` 恒为 process(缓存不跨 worker 共享)。
    */
   concurrency?: {
     scope: 'cluster' | 'process'
@@ -92,6 +95,10 @@ export interface FactorCalibrationResp {
     cache_scope: 'process'
     note: string
   }
+  /** 失败时的关联号(与后端日志 [err:<ref>] 对应); error 文案里已含, 便于报障 */
+  error_ref?: string
+  /** true = 本轮超出墙钟预算被中止(未写入任何数据) */
+  timeout?: boolean
   /** 库里已有多少权重行; 0 说明这是「无行」而不是「没样本」 */
   rows_present: number
   no_rows: boolean

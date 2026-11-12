@@ -254,7 +254,10 @@ def test_calibration_endpoint_reports_error_explicitly(client, monkeypatch):
     assert r.status_code == 200, r.text
     data = r.json()["data"]
     assert data["ok"] is False
-    assert "sqlite 读失败" in (data.get("error") or "")
+    # 失败必须显式, 但**不得把异常原文/SQL 回给客户端**: 只给安全文案 + 关联号。
+    assert "sqlite 读失败" not in (data.get("error") or "")
+    assert "ERR-" in (data.get("error") or "")
+    assert data.get("error_ref", "").startswith("ERR-")
     assert data["proposals"] == []
     assert data["computed_at"]
 
@@ -392,7 +395,8 @@ def test_calibration_error_does_not_rollback_caller_session(monkeypatch):
         db.add(pending)  # 调用方尚未提交
 
         res = fc.calibrate_factor_weights("CN", db=db)
-        assert "读失败" in (res.get("error") or "")
+        assert res["ok"] is False and res.get("error_ref", "").startswith("ERR-")
+        assert "读失败" not in (res.get("error") or "")
 
         # 若核心层擅自 rollback, 这笔未提交事务会被无声丢弃
         db.commit()

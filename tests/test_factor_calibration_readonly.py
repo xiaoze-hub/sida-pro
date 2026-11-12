@@ -232,7 +232,11 @@ def test_evaluation_failure_is_reported_not_masked(monkeypatch):
         monkeypatch.setattr(fc, "evaluate_factor_ic", _boom)
         res = fc.calibrate_factor_weights("CN", min_samples=5, db=db)
 
-        assert "sqlite 读失败" in (res.get("error") or "")
+        # 显式失败: 安全文案 + 关联号; 异常原文只进服务端日志, 不出现在响应里。
+        assert res["ok"] is False
+        assert "sqlite 读失败" not in (res.get("error") or "")
+        assert res["error_ref"].startswith("ERR-")
+        assert res["error_ref"] in res["error"]
         assert res["proposals"] == []
         assert res["proposed"] == 0
         assert res["write_back"] is False
@@ -349,7 +353,7 @@ def test_set_factor_weight_rolls_back_when_audit_fails(monkeypatch):
     )
     Base.metadata.create_all(engine)
     Factory = sessionmaker(bind=engine)
-    monkeypatch.setattr(fw, "SessionLocal", Factory)
+    monkeypatch.setattr(fw, "WriteSessionLocal", Factory)
 
     seed = Factory()
     try:

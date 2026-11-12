@@ -1,10 +1,19 @@
 """因子权重存取层(M1)。
 
 把信号合成时各因子的权重从「隐式 = 1 的硬编码」变成「外置 + 可标定」:
-- `get_factor_weights(market)`:读取某市场各因子权重,缺失则 lazy seed 为 1.0;
-  供 `strategy_engine._compute_factor_breakdown` 合成 raw_score 时按因子相乘。
+- `get_factor_weights(market)`:读取某市场各因子权重;缺失按 1.0 返回(纯读,
+  **不建行**);供 `strategy_engine._compute_factor_breakdown` 合成 raw_score 时按因子相乘。
+- `get_all_factor_weights()`:权重面板用的全量列表, 会补齐缺失行(写路径)。
+- `set_factor_weight()`:唯一的手工改权入口。
 
 标定逻辑见 `factor_calibration.py`;只读/手动覆盖的 API 在 `web/api/factors.py`。
+
+读写分离口径(2026-11-12 复审):
+- `get_factor_weights` 是**纯读**, 不再 lazy seed —— 读路径可能在只读副本上执行,
+  在那里 INSERT 会直接报「readonly database」;缺行语义就是默认权重 1.0。
+- 会写的地方(`get_all_factor_weights` 补行、`set_factor_weight` 改权重)统一
+  经 `pin_write_bind`: 事务从第一条语句起就绑在**写库**, 旧值也取自写库,
+  不会拿副本的滞后值当 before。
 
 口径提示(2026-11-12):
 - `meta.last_ic / last_ir` 是**最后一次记录下来的历史观测**, 不是实时值;
@@ -24,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.core.db_safe import safe_rollback
 from src.core.timezone import utc_now
-from src.db.session import SessionLocal
+from src.db.session import SessionLocal, WriteSessionLocal, pin_write_bind
 from src.db.models import AuditLog, FactorWeight, FactorWeightHistory
 
 logger = logging.getLogger(__name__)
@@ -66,18 +75,41 @@ def _parse_observed_at(raw) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _rows_for_market(db, market: str) -> dict[str, float]:
+    rows = db.query(FactorWeight).filter(FactorWeight.market == market).all()
+    return {r.factor_code: float(r.weight) for r in rows}
+
+
+def _ensure_rows(db, market: str) -> dict[str, float]:
+    """在**写库会话**里补齐该市场缺失的因子行(不 commit, 由调用方定事务边界)。
+
+    只有写路径(权重面板列表 / 手工改权)调用它: 读路径不要建行, 否则在只读
+    副本上执行时会直接失败。
+    """
+    existing = _rows_for_market(db, market)
+    missing = [f for f in CALIBRATABLE_FACTORS if f not in existing]
+    for f in missing:
+        db.add(FactorWeight(factor_code=f, market=market, weight=1.0))
+        existing[f] = 1.0
+    if missing:
+        db.flush()
+    return existing
+
+
 def get_factor_weights(market: str, *, as_of=None, db=None) -> dict[str, float]:
-    """读取某市场各可标定因子的权重;缺失因子 lazy seed 为 1.0。
+    """读取某市场各可标定因子的权重;缺失因子按 1.0 返回。
+
+    **纯读**: 不建行、不 commit —— 本函数可能运行在读副本上;想要「补齐默认行」
+    请用 `get_all_factor_weights`(它显式走写库)。
 
     as_of(B0.5, 2026-09-09): 传入 datetime 时按 `FactorWeightHistory` 取该时点**之前**
     最近一次生效的权重(历史快照可复现, 不套用今天的权重); 无历史记录则回落当前值。
     返回 {factor_code: weight},键恒为 CALIBRATABLE_FACTORS 全集。
     """
     own = db is None
-    db = db or SessionLocal()
+    db = db or SessionLocal()  # 纯读: 允许路由到读副本
     try:
-        rows = db.query(FactorWeight).filter(FactorWeight.market == market).all()
-        existing = {r.factor_code: float(r.weight) for r in rows}
+        existing = _rows_for_market(db, market)
         if as_of is not None:
             hist = (
                 db.query(FactorWeightHistory)
@@ -93,13 +125,6 @@ def get_factor_weights(market: str, *, as_of=None, db=None) -> dict[str, float]:
                 if h.factor_code:
                     asof_map[h.factor_code] = float(h.new_weight or 1.0)
             return {f: asof_map.get(f, existing.get(f, 1.0)) for f in CALIBRATABLE_FACTORS}
-        missing = [f for f in CALIBRATABLE_FACTORS if f not in existing]
-        if missing:
-            for f in missing:
-                db.add(FactorWeight(factor_code=f, market=market, weight=1.0))
-            db.commit()
-            for f in missing:
-                existing[f] = 1.0
         return {f: existing.get(f, 1.0) for f in CALIBRATABLE_FACTORS}
     finally:
         if own:
@@ -143,20 +168,32 @@ def _serialize(row: FactorWeight) -> dict:
 def get_all_factor_weights(*, db=None) -> list[dict]:
     """列出所有市场 × 因子的权重(含最近记录到的 IC/IR 观测),供只读 API/UI 展示。
 
+    面板首次打开时库里可能还没有权重行, 这里会**补齐默认行** —— 因为补行是写操作,
+    整个函数钉在写库(`pin_write_bind`), 不会在读副本上尝试 INSERT。
+    注意: 补行会 commit 传入会话的当前事务(调用方应传专用写会话, 别拿它夹带
+    自己的未提交改动)。
+
     只读标定不落库,故 last_* 是「最后一次记录下来的观测」而非实时值;
     判断新鲜度请看 last_calibrated_at。
     """
     own = db is None
-    db = db or SessionLocal()
+    db = db or WriteSessionLocal()
+    pin_write_bind(db)
     try:
         for m in MARKETS:
-            get_factor_weights(m, db=db)  # 确保各市场已 seed
+            _ensure_rows(db, m)
+        db.commit()
         rows = (
             db.query(FactorWeight)
             .order_by(FactorWeight.market, FactorWeight.factor_code)
             .all()
         )
         return [_serialize(r) for r in rows]
+    except Exception:
+        # 只回滚自己开的事务; 调用方传入的 session 由调用方决定事务边界。
+        if own:
+            safe_rollback(db)
+        raise
     finally:
         if own:
             db.close()
@@ -188,6 +225,12 @@ def set_factor_weight(
     - 两类变化都各写一条 `AuditLog`(`action=update_factor_weight`),
       与变更同事务提交: 审计写不进去就整笔失败(自己开的 session 会回滚),
       不允许「改了但无据可查」。
+
+    读写分离(2026-11-12 复审): 本函数**先读旧值再写新值**, 且读路径必须在写库上,
+    否则 before/after 会用副本的滞后值, 甚至把 UPDATE 发到只读副本。所以:
+    - 自开 session 用 `WriteSessionLocal()`(专用写引擎);
+    - 调用方传入会话时先 `pin_write_bind`(已在副本事务里 ⇒ 直接报错, 不静默分裂);
+    - 补行 / 改权重 / 历史 / 审计在**同一个事务**里 commit。
     """
     who = (actor or "").strip()
     kind = (actor_kind or "").strip().lower()
@@ -211,9 +254,10 @@ def set_factor_weight(
     if market not in MARKETS:
         raise ValueError(f"未知市场: {market}")
     own = db is None
-    db = db or SessionLocal()
+    db = db or WriteSessionLocal()
+    pin_write_bind(db)
     try:
-        get_factor_weights(market, db=db)  # 确保行存在
+        _ensure_rows(db, market)  # 补行也落在同一个写事务里
         row = (
             db.query(FactorWeight)
             .filter(FactorWeight.factor_code == factor_code, FactorWeight.market == market)

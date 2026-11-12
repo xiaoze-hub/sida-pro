@@ -126,7 +126,7 @@ const API_GROUPS = [
     apis: [
       { method: 'GET', path: '/api/recommendations/strategy-factor-ic?days=90&horizon=5', auth: '登录', desc: '各因子横截面 IC / t / IR / 样本外 IC(pooled 仅参考)' },
       { method: 'GET', path: '/api/factors/weights', auth: '登录', desc: '因子权重(按市场区分); last_ic/last_ir 为历史观测, 附 last_observation_at / last_observation_stale' },
-      { method: 'GET', path: '/api/factors/calibration?market=CN&days=90&horizon=5', auth: '登录', desc: '实时计算只读标定建议(computed_at / ok / error / 每因子 sample_size / rows_present / no_rows; changed 恒 0, 不落库)' },
+      { method: 'GET', path: '/api/factors/calibration?market=CN&days=90&horizon=5', auth: 'manage_settings', desc: '实时计算只读标定建议(受限管理员; computed_at / ok / error+error_ref 安全文案 / 每因子 sample_size / rows_present / no_rows; changed 恒 0, 不落库; 只有进程内 single-flight)' },
       { method: 'POST', path: '/api/factors/weights/{factor_code}/{market}', auth: 'owner 或 manage_settings', desc: '手动调整因子权重 / 锁定 / 标定建议开关(不会自动调权); 审计记服务端身份' },
       { method: 'GET', path: '/api/recommendations/strategy-factors/{signal_run_id}', auth: '登录', desc: '单次信号运行的因子明细' },
     ],

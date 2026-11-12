@@ -11,6 +11,7 @@ from sqlalchemy import case, func
 
 from src.collectors.kline_collector import KlineCollector
 from src.core.entry_candidates import refresh_entry_candidates
+from src.core.error_report import log_failure, new_error_ref, public_error
 from src.core.json_safe import to_jsonable
 from src.core.strategy_catalog import (
     ensure_strategy_catalog,
@@ -22,7 +23,7 @@ from src.core.factor_weights import get_factor_weights
 from src.core.timezone import to_iso_with_tz, utc_now
 from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
-from src.db.session import SessionLocal
+from src.db.session import SessionLocal, WriteSessionLocal
 from src.db.models import (
     AuditLog,
     EntryCandidate,
@@ -1751,7 +1752,8 @@ def refresh_strategy_signals(
             skip_market_scan=skip_market_scan,
         )
 
-    db = SessionLocal()
+    # 读候选 + 写快照: 必须从第一条语句起就绑写库(路由会话会被 SELECT 带到副本)
+    db = WriteSessionLocal()
     try:
         snapshot, candidates, as_of_dt = _load_signal_candidates(
             db,
@@ -1962,7 +1964,8 @@ def evaluate_strategy_outcomes(
     if not safe_horizons:
         safe_horizons = [1, 3, 5]
 
-    db = SessionLocal()
+    # 读信号 + 写 outcome: 写库会话, 避免「副本读主库写」的事务分裂
+    db = WriteSessionLocal()
     try:
         cutoff = date.today() - timedelta(days=max(7, int(snapshot_days)))
         signals = (
@@ -2096,7 +2099,12 @@ def evaluate_strategy_outcomes(
         return stats
     except Exception as e:
         db.rollback()
-        logger.warning(f"策略后验评估失败: {e}")
+        # 服务端日志也要脱敏: 异常文本里可能带 DSN 口令。
+        ref = new_error_ref()
+        log_failure(
+            logger, "策略后验评估", e, ref=ref,
+            context=f"horizons={safe_horizons} snapshot_days={snapshot_days}",
+        )
         return stats
     finally:
         db.close()
@@ -2168,7 +2176,8 @@ def rebalance_strategy_weights(
     window_days = max(7, min(int(window_days or 45), 365))
     min_samples = max(3, min(int(min_samples or 8), 200))
 
-    db = SessionLocal()
+    # 读目录/近期结果 + 写权重/历史/审计: 全部落在写库的同一事务
+    db = WriteSessionLocal()
     try:
         catalogs = list_strategy_catalog(enabled_only=True)
         by_pair, by_all = _aggregate_recent_outcomes(db=db, days=window_days)
@@ -2304,7 +2313,11 @@ def rebalance_strategy_weights(
         }
     except Exception as e:
         db.rollback()
-        logger.warning(f"策略调权失败: {e}")
+        ref = new_error_ref()
+        log_failure(
+            logger, "策略调权", e, ref=ref,
+            context=f"window_days={window_days} min_samples={min_samples} alpha={alpha}",
+        )
         return {
             "window_days": window_days,
             "min_samples": min_samples,
@@ -2313,7 +2326,10 @@ def rebalance_strategy_weights(
             "changed": 0,
             "skipped_low_sample": 0,
             "changes": [],
-            "error": str(e),
+            # 调用方(HTTP / 脚本)只能拿到安全文案 + 关联号: 异常原文里可能带
+            # SQL、表名或 DSN。细节见服务端日志 `[err:<ref>]`。
+            "error": public_error("策略调权", ref),
+            "error_ref": ref,
         }
     finally:
         db.close()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.db.session import SessionLocal
+from src.db.session import SessionLocal, WriteSessionLocal
 from src.db.models import StrategyCatalog, StrategyWeight
 
 
@@ -106,7 +106,9 @@ DEFAULT_STRATEGIES: tuple[StrategySpec, ...] = (
 
 
 def ensure_strategy_catalog() -> None:
-    db = SessionLocal()
+    # 「先查有没有再插入」必须全程在写库: 路由会话的 SELECT 会把事务绑到读副本,
+    # 随后 INSERT 落错引擎(只读副本报错 / 分裂成两条连接)。
+    db = WriteSessionLocal()
     try:
         changed = False
         for spec in DEFAULT_STRATEGIES:

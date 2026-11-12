@@ -19,8 +19,9 @@ EMA 平滑 + clamp 后**只产出建议**,绝不改变任何生效权重。
   自动化调度不可能悄悄改动有效权重。
 - 改权重只能走既有手工 API(`factor_weights.set_factor_weight`,manual 审计);
   本模块不提供任何绕过人工授权的通道。
-- 失败必须显式:IC 评估异常时返回 `error` 字段,不会把「失败」伪装成
-  「本轮无提案」,也不会清空/覆盖任何已存观测(本模块不写观测)。
+- 失败必须显式:IC 评估异常时返回 `ok=False` + `error`(安全文案 + `error_ref`),
+  不会把「失败」伪装成「本轮无提案」,也不会清空/覆盖任何已存观测(本模块不写观测)。
+  异常文本/SQL/连接串只进服务端日志(脱敏), 响应里不给客户端。
 - 结果里带 `computed_at`(本次计算时间)与每因子 `sample_size`,并把
   `skipped_no_data`(一条已走完持有期的样本都没有)/ `skipped_low_sample`
   (有样本但不够)/ `skipped_ic_unavailable`(期数不够算 IC)分开报,
@@ -32,7 +33,9 @@ EMA 平滑 + clamp 后**只产出建议**,绝不改变任何生效权重。
 from __future__ import annotations
 
 import logging
+import time
 
+from src.core.error_report import log_failure, new_error_ref, public_error
 from src.core.factor_eval import evaluate_factor_ic
 from src.core.factor_weights import CALIBRATABLE_FACTORS, MARKETS, PENALTY_FACTORS
 from src.core.db_safe import safe_rollback
@@ -153,6 +156,7 @@ def calibrate_factor_weights(
     clamp: tuple[float, float] = (0.5, 1.5),
     min_samples: int = 20, horizon: int = 5, days: int = 90,
     oos_ratio: float = OOS_RATIO, oos_min_ic: float = OOS_MIN_IC, db=None,
+    time_budget_seconds: float | None = None,
 ) -> dict:
     """对单个市场跑一轮因子标定,**只产出建议**(零写入)。
 
@@ -162,11 +166,22 @@ def calibrate_factor_weights(
     门控一致:is_pinned / auto_calibrate=False / 样本不足 / IC 缺失 /
     OOS 不通过 → 不出可执行建议(status 说明原因),同样零写入。
 
-    失败显式:评估异常 → 返回 `error`,不静默伪装成「无提案」。
+    失败显式:评估异常 → `ok=False` + 安全文案(带关联号),不静默伪装成
+    「无提案」;细节只进服务端日志(`error_report.log_failure`),**响应里不带
+    异常文本/SQL/DSN**。
+
+    `time_budget_seconds`: 粗粒度墙钟预算(在因子之间检查)。本函数不能中断
+    已经开始的单次 IC 评估, 所以它是「不让一轮无限拖下去」的兜底, 不是硬超时;
+    超预算即中止并返回 `ok=False`, 已算出的建议一并丢弃(不会部分生效, 本就不写库)。
     """
     own = db is None
     db = db or SessionLocal()
     computed_at = utc_now().isoformat()
+    deadline = (
+        time.monotonic() + float(time_budget_seconds)
+        if time_budget_seconds and float(time_budget_seconds) > 0
+        else None
+    )
     try:
         ic_result = evaluate_factor_ic(
             days=days, horizon=horizon, min_samples=min_samples, market=market,
@@ -177,9 +192,14 @@ def calibrate_factor_weights(
         # 只读加载,不预 seed:避免观测副作用建行。
         rows = _read_rows(db, market)
 
-        # 评估器内部吞异常后以 error 字段返回; 这里必须原样上抛,
-        # 不能把「算失败」显示成「本轮无数据/无建议」。
+        # 评估器内部吞异常后以 error 字段返回; 这里必须原样上抛(用安全文案,
+        # 不能把「算失败」显示成「本轮无数据/无建议」, 也不能把内部错误文本回给客户端)。
         if ic_result.get("error"):
+            ref = new_error_ref()
+            log_failure(
+                logger, "因子标定", ic_result.get("error"), ref=ref,
+                context=f"market={market} days={days} horizon={horizon}",
+            )
             return {
                 "market": market, "mode": "readonly", "ok": False,
                 "computed_at": computed_at, "checked": 0, "proposed": 0,
@@ -188,7 +208,8 @@ def calibrate_factor_weights(
                 "skipped_oos": 0, "skipped_low_sample": 0, "skipped_no_data": 0,
                 "skipped_ic_unavailable": 0, "skipped_pinned": 0,
                 "skipped_disabled": 0, "proposals": [],
-                "error": str(ic_result.get("error")),
+                "error": public_error("标定计算", ref),
+                "error_ref": ref,
             }
 
         lo, hi = float(clamp[0]), float(clamp[1])
@@ -202,6 +223,10 @@ def calibrate_factor_weights(
         proposals: list[dict] = []
 
         for code in CALIBRATABLE_FACTORS:
+            if deadline is not None and time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"标定计算超出时间预算 {time_budget_seconds}s(未写入任何数据)"
+                )
             row = rows.get(code)
             current = float(row.weight) if row is not None else 1.0
             stats = factors.get(code, {}) or {}
@@ -255,9 +280,12 @@ def calibrate_factor_weights(
             "proposals": proposals,
         }
     except Exception as e:  # pragma: no cover - 防御性
-        logger.warning(
-            "[因子标定] market=%s 只读计算失败(未写入任何数据): %s", market, e
+        ref = new_error_ref()
+        log_failure(
+            logger, "因子标定", e, ref=ref,
+            context=f"market={market} days={days} horizon={horizon}",
         )
+        timed_out = isinstance(e, TimeoutError)
         # 只回滚**自己开的** session。db 由调用方传入时不碰它的事务 ——
         # 否则会把调用方未提交的写入一起静默丢掉(只读计算不该有这种副作用)。
         if own:
@@ -269,7 +297,15 @@ def calibrate_factor_weights(
             "rows_present": 0, "no_rows": True,
             "skipped_oos": 0, "skipped_low_sample": 0, "skipped_no_data": 0,
             "skipped_ic_unavailable": 0, "skipped_pinned": 0,
-            "skipped_disabled": 0, "proposals": [], "error": str(e),
+            "skipped_disabled": 0, "proposals": [],
+            "error": (
+                f"标定计算超出时间预算(已中止, 未写入任何数据); "
+                f"错误参考号: {ref}(可减小 days/horizon 后重试)"
+                if timed_out
+                else public_error("标定计算", ref)
+            ),
+            "error_ref": ref,
+            "timeout": timed_out,
         }
     finally:
         if own:

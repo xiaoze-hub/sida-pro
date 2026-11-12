@@ -5,9 +5,17 @@
   因此必须基于**服务端认证身份**判 `manage_settings`(与 /api/settings 同一门槛),
   不能靠路径前缀中间件、也不能信客户端自报的角色/身份。owner 与管理白名单可写,
   member / pro / demo(guest) 一律 403。判权与审计身份都来自 `require_settings_write`。
-- **读** 保持登录即可(登录依赖由 app 层 `protected` 提供)。
+- **读** `GET /weights` 保持登录即可(登录依赖由 app 层 `protected` 提供)。
+- **只读标定** `GET /calibration` 每轮要扫最近 N 天快照 × 持有期回填, 是不轻的
+  查询, 因此收敛到同一 `manage_settings` 门槛(受限管理员), 并加参数上限 +
+  墙钟预算; 普通成员拿到 403 而不是替全站触发一次重扫。
 
 标定建议不落库、不可从此 API 生效:改权重只有本模块的手工覆盖路径(manual 审计)。
+
+读库/写库(2026-11-12 复审): 本模块三个端点都用 `get_write_db`(专用写会话):
+- 写端点必须先读旧值再写新值, 用路由会话会把事务绑到读副本(读到滞后旧值/写副本报错);
+- 列表会补默认行(写), 标定要读「刚改过的权重」当 current_weight;
+- 正确性优先于把这点读流量摊给副本。
 
 响应由 ResponseWrapperMiddleware 统一包成 {code,data,message},路由直接返回原始数据。
 """
@@ -15,6 +23,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 import time
 
@@ -22,7 +31,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.core import readonly_gate
+from src.core.db_safe import safe_rollback
+from src.core.error_report import log_failure, new_error_ref, public_error
 from src.core.factor_calibration import calibrate_factor_weights
 from src.core.factor_weights import (
     CALIBRATABLE_FACTORS,
@@ -33,9 +43,11 @@ from src.core.factor_weights import (
 from src.core.timezone import utc_now
 from src.db.models import FactorWeight
 from src.web.api.settings import SettingsActor, require_settings_write
-from src.web.database import get_db
+from src.web.database import get_write_db
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 # ── 只读标定的进程内缓存 ────────────────────────────────────────────────
 # 一轮标定要扫最近 N 天快照 × 持有期回填, 是个不轻的只读查询; 页面/外部脚本反复
@@ -43,7 +55,7 @@ router = APIRouter()
 # 调用方仍能看到实际计算时间, 不会把旧结果当新结果。
 _CALIB_TTL_SECONDS = 60
 #: 两次**实际计算**之间的最小间隔(秒). 窗口参数可以变, 缓存键也跟着变, 所以
-#: 光靠 TTL 缓存挡不住「换参数扫一轮」; 这里做全局节流, 命中缓存不受影响。
+#: 光靠 TTL 缓存挡不住「换参数扫一轮」; 这里做**进程内**节流(不是全局), 命中缓存不受影响。
 _CALIB_MIN_INTERVAL_SECONDS = 3
 #: 缓存条目上限。参数本身已被 Query 有界(market×days×horizon×min_samples),
 #: 但仍显式限长: 没有上限的 dict 就是一个内存增长点。
@@ -57,10 +69,25 @@ _CALIB_CACHE: dict[tuple, dict] = {}
 _CALIB_INFLIGHT: dict[tuple, threading.Event] = {}
 _CALIB_LOCK = threading.Lock()
 _CALIB_LAST_COMPUTE = 0.0
-#: 跨 worker 门闩的名字(Redis 租约, 见 `src/core/readonly_gate.py`)。
-#: 进程内 `_CALIB_INFLIGHT` 只保护本进程; 生产 `WEB_WORKERS` 默认 4, 必须再加
-#: 一层跨进程门闩, 否则「全局最多一轮」是假话。
-_CALIB_GATE_NAME = "factors:calibration"
+#: 一轮计算的墙钟预算(秒): 超了就中止这一轮并如实报「超时/未写入」, 不让一个
+#: 大参数请求无限占着同步线程。粒度是「因子之间」, 不中断单次 IC 评估(见
+#: `factor_calibration.calibrate_factor_weights` 的说明)。
+_CALIB_TIME_BUDGET_SECONDS = 20.0
+
+#: 并发保护**范围**: 只有本进程内的 single-flight。生产 `WEB_WORKERS` 默认 4,
+#: 进程内状态跨不过进程边界, 所以这里如实写 process / cross_worker_exclusive=False,
+#: 不宣称任何「全局独占」—— 之前那层 Redis 租约已被移除(它没有续租、失败时
+#: 静默降级, 既不能保证全链路互斥, 又让响应看起来像"已全局串行")。
+_CONCURRENCY_SCOPE = {
+    "scope": "process",
+    "cross_worker_exclusive": False,
+    "cache_scope": "process",
+    "note": (
+        "只有本进程内的 single-flight: 同一 worker 同一时刻最多一轮实际计算; "
+        "多 worker 部署下每个 worker 可能各有 1 轮, 结果缓存也是每 worker 一份。"
+        "没有跨 worker/全局互斥(未使用 Redis 租约)。"
+    ),
+}
 
 
 def _reset_calibration_cache() -> None:
@@ -127,20 +154,9 @@ def _request_ip(request: Request | None) -> str:
         return ""
 
 
-def _concurrency_block(ticket) -> dict:
-    """把门闩范围翻译成**可展示的事实**(不要美化: 没跨 worker 就说没跨)。"""
-    cluster = ticket.scope == readonly_gate.GATE_SCOPE_CLUSTER
-    return {
-        "scope": ticket.scope,
-        "cross_worker_exclusive": cluster,
-        # 缓存始终是进程内的 L1: 换 worker 不复用, 与门闩范围无关。
-        "cache_scope": "process",
-        "note": (
-            "跨 worker 互斥生效(Redis 租约): 同一时刻最多一轮实际计算"
-            if cluster
-            else "Redis 不可用: 只有本进程内的单飞, 多 worker 下可能各有 1 轮; 结果缓存也仍是每 worker 一份"
-        ),
-    }
+def _concurrency_block() -> dict:
+    """把并发保护范围翻译成**可展示的事实**(不美化: 只有进程内就说只有进程内)。"""
+    return dict(_CONCURRENCY_SCOPE)
 
 
 class FactorWeightUpdate(BaseModel):
@@ -156,12 +172,14 @@ class FactorWeightUpdate(BaseModel):
 
 
 @router.get("/weights")
-def list_weights(db: Session = Depends(get_db)):
-    """列出所有市场 × 因子的权重 + 最近记录到的 IC/IR 观测(只读)。
+def list_weights(db: Session = Depends(get_write_db)):
+    """列出所有市场 × 因子的权重 + 最近记录到的 IC/IR 观测(只读展示)。
 
     `last_ic/last_ir` 是 meta 里**最后一次记录的观测**, 不是实时值 —— 响应里
     `last_observation_at / last_observation_stale / observation_note` 显式说明
     观测时间与是否过期; 要当前口径请看 `GET /calibration`。
+
+    首次打开面板会补齐默认权重行, 这是写操作, 所以走写库会话。
     """
     return {"items": get_all_factor_weights(db=db)}
 
@@ -169,16 +187,22 @@ def list_weights(db: Session = Depends(get_db)):
 @router.get("/calibration")
 def calibration(
     market: str = Query("CN", description="市场(CN/HK/US)"),
-    days: int = Query(90, ge=7, le=365, description="回看快照天数"),
-    horizon: int = Query(5, ge=1, le=60, description="持有期(交易日)"),
-    min_samples: int = Query(20, ge=3, le=500, description="出建议的最小样本量"),
-    db: Session = Depends(get_db),
+    days: int = Query(90, ge=7, le=180, description="回看快照天数(上限收敛: 越大越慢)"),
+    horizon: int = Query(5, ge=1, le=30, description="持有期(交易日)"),
+    min_samples: int = Query(20, ge=3, le=200, description="出建议的最小样本量"),
+    db: Session = Depends(get_write_db),
+    _actor: SettingsActor = Depends(require_settings_write),
 ):
     """实时计算一轮**只读**因子标定建议(零写入、不 lazy seed)。
 
+    权限(2026-11-12 复审): 收口到 `manage_settings`。这不是改数据的操作, 但每轮
+    都要扫快照 + 回填持有期, 让任意登录用户反复触发等于把只读重查询开放给所有人;
+    受限管理员 + 参数上限 + 墙钟预算才是有界的面。
+
     返回里的可消费信息:
     - `computed_at`: 本次实际计算时间(缓存命中时仍是首次计算时间)
-    - `ok` / `error`: 计算是否成功; 失败的原因原样带出, 不伪装成「无建议」
+    - `ok` / `error` / `error_ref`: 失败时 `error` 是**安全文案 + 关联号**,
+      不含异常文本/SQL/连接串; 具体原因在服务端日志 `[err:<ref>]`
     - `rows_present` / `no_rows`: 库里已有多少权重行(本端点不会替你建行)
     - 每因子 `sample_size` + `status`: `skipped_no_data`(无已走完持有期的样本) /
       `skipped_low_sample`(有样本但不够) / `skipped_ic_unavailable`(期数不够算 IC) /
@@ -188,19 +212,19 @@ def calibration(
     - `concurrency`: 这次计算实际受到的并发保护**范围**(见下)。缓存命中时描述的
       是产生这份结果的那一轮。
 
-    并发与缓存(2026-11-12 两次审计):
-    - **进程内 single-flight**: 本进程最多一轮实际计算; 同参数并发请求有界等待
+    并发与缓存(2026-11-12 复审后):
+    - **只有进程内 single-flight**: 本进程最多一轮实际计算; 同参数并发请求有界等待
       (最多 `_CALIB_WAIT_SECONDS`)复用结果, 其余立即 429。
-    - **跨 worker 门闩**(`src/core/readonly_gate.py`): 生产 `WEB_WORKERS` 默认 4,
-      进程内状态跨不过进程边界, 所以再加一个 Redis 租约(`SET NX EX`)+ 跨进程
-      最小间隔。生效时 `concurrency.scope == "cluster"`。
-    - **Redis 不可用时降级为进程内单飞**, `concurrency.scope == "process"` 且
-      `cross_worker_exclusive == False` —— 多 worker 下可能各有 1 轮。这是如实
-      标注的限制, 不是「全局」。
+    - **不宣称跨 worker / 全局互斥**: 多 worker 部署下每个 worker 各自最多一轮,
+      响应里恒为 `concurrency.scope="process"` / `cross_worker_exclusive=false`。
+      之前那层 Redis 租约(`readonly_gate`)已移除 —— 它没有续租、Redis 抖动时静默
+      降级, 既给不出全链路独占, 又容易被误读成"已全局串行"。
     - 缓存条目有上限(`_CALIB_CACHE_MAX_ENTRIES`), TTL 60s; **失败结果不入缓存**。
       缓存是**每 worker 一份**(进程内), 不从 Redis 共享。
-    - 命中缓存前比对当前权重/pin/开关指纹: 人工改过权重就作废旧缓存, 绝不回放
-      陈旧的 `current_weight`。
+    - 命中缓存前比对当前权重/pin/开关指纹(读写库): 人工改过权重就作废旧缓存,
+      绝不回放陈旧的 `current_weight`。
+    - 墙钟预算 `_CALIB_TIME_BUDGET_SECONDS`: 超预算即中止并返回 `ok=False`
+      (`timeout=true`), 不会挂着不返回。
     - 缓存按调用方**深拷贝**返回, 一个请求改返回值不会污染其他人的建议。
     """
     global _CALIB_LAST_COMPUTE
@@ -214,7 +238,6 @@ def calibration(
     fingerprint = _weights_fingerprint(db, market)
     waiter: threading.Event | None = None
     owner: threading.Event | None = None
-    prev_last_compute = 0.0
 
     with _CALIB_LOCK:
         hit = _CALIB_CACHE.get(key)
@@ -247,7 +270,7 @@ def calibration(
                 429,
                 detail={
                     "message": "已有标定计算进行中, 请稍后再试",
-                    "scope": readonly_gate.GATE_SCOPE_PROCESS,
+                    "scope": "process",
                     "retry_after_seconds": _CALIB_MIN_INTERVAL_SECONDS,
                 },
             )
@@ -256,12 +279,12 @@ def calibration(
             if not fingerprint_changed and (
                 started - _CALIB_LAST_COMPUTE < _CALIB_MIN_INTERVAL_SECONDS
             ):
-                # 新参数/新计算之间的全局节流(指纹变化 = 人工改权重, 放行一次重算)。
+                # 新参数/新计算之间的进程内节流(指纹变化 = 人工改权重, 放行一次重算)。
                 raise HTTPException(
                     429,
                     detail={
                         "message": "标定计算过于频繁, 请稍后再试",
-                        "scope": readonly_gate.GATE_SCOPE_PROCESS,
+                        "scope": "process",
                         "retry_after_seconds": round(
                             _CALIB_MIN_INTERVAL_SECONDS
                             - (started - _CALIB_LAST_COMPUTE),
@@ -272,7 +295,6 @@ def calibration(
             # 锁内占位: 同一瞬间的并发请求只有这一轮真正去扫库。
             owner = threading.Event()
             _CALIB_INFLIGHT[key] = owner
-            prev_last_compute = _CALIB_LAST_COMPUTE
             _CALIB_LAST_COMPUTE = started
 
     if waiter is not None:
@@ -291,50 +313,24 @@ def calibration(
             429,
             detail={
                 "message": "标定计算进行中, 请稍后再试",
-                "scope": readonly_gate.GATE_SCOPE_PROCESS,
+                "scope": "process",
                 "retry_after_seconds": round(_CALIB_WAIT_SECONDS, 1),
             },
         )
 
     assert owner is not None  # 走到这里一定是本轮的实际计算者
 
-    # 跨 worker 门闩: 进程内已经是唯一计算者, 但别的 worker 可能也在算。
-    # Redis 不可用时这里放行, 并把 scope 如实标成 "process"。
-    ticket = readonly_gate.acquire(
-        _CALIB_GATE_NAME,
-        ttl_seconds=readonly_gate.MAX_LEASE_SECONDS,
-        min_interval_seconds=_CALIB_MIN_INTERVAL_SECONDS,
-    )
-    if not ticket.held:
-        # 让位: 撤销本进程的占位并恢复节流时间戳(这一轮没有真的算)。
-        with _CALIB_LOCK:
-            _CALIB_INFLIGHT.pop(key, None)
-            _CALIB_LAST_COMPUTE = prev_last_compute
-            owner.set()
-        busy_here = ticket.reason == "busy"
-        raise HTTPException(
-            429,
-            detail={
-                "message": (
-                    "已有标定计算进行中(跨 worker), 请稍后再试"
-                    if busy_here
-                    else "标定计算过于频繁(跨 worker), 请稍后再试"
-                ),
-                "scope": ticket.scope,
-                "retry_after_seconds": _CALIB_MIN_INTERVAL_SECONDS,
-            },
-        )
-
     try:
         result = calibrate_factor_weights(
             market, days=int(days), horizon=int(horizon),
             min_samples=int(min_samples), db=db,
+            time_budget_seconds=_CALIB_TIME_BUDGET_SECONDS,
         )
         payload = dict(result)
         payload["cached"] = False
         payload["cache_age_seconds"] = 0.0
         payload["cache_ttl_seconds"] = _CALIB_TTL_SECONDS
-        payload["concurrency"] = _concurrency_block(ticket)
+        payload["concurrency"] = _concurrency_block()
 
         with _CALIB_LOCK:
             _CALIB_LAST_COMPUTE = time.monotonic()
@@ -346,8 +342,6 @@ def calibration(
         with _CALIB_LOCK:
             _CALIB_INFLIGHT.pop(key, None)
             owner.set()
-        # 先撤占位再放租约: 让下一个请求能立刻接手(失败也不能漏放, 否则 TTL 内全 429)。
-        readonly_gate.release(ticket, _CALIB_GATE_NAME)
 
 
 @router.post("/weights/{factor_code}/{market}")
@@ -356,7 +350,7 @@ def update_weight(
     market: str,
     payload: FactorWeightUpdate,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
     actor: SettingsActor = Depends(require_settings_write),
 ):
     """手动覆盖某因子权重 / pin / 开关自动标定(权重变化写 manual 审计)。
@@ -367,6 +361,10 @@ def update_weight(
 
     这里再兜一道: 依赖理论上必然给出 username, 但万一为空也**不许**落到核心层
     「无身份写全局权重」的老路 —— 直接 403, 库内零变化。
+
+    错误口径(2026-11-12 复审): 参数/身份类错误(ValueError)是给人看的校验文案,
+    原样 400; 其余异常**不回显异常文本**(可能带 SQL/表名/DSN), 统一 500 +
+    安全文案 + 关联号, 先回滚再返回 —— 不留半截写入。
     """
     actor_name = (getattr(actor, "username", None) or "").strip()
     if not actor_name:
@@ -387,4 +385,13 @@ def update_weight(
             via="api", ip=_request_ip(request),
         )
     except ValueError as e:
+        # 核心层的校验文案(未知因子/市场、非法 actor_kind ...), 不含库内细节。
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001 - 内部错误统一脱敏
+        ref = new_error_ref()
+        log_failure(
+            logger, "因子权重写入", e, ref=ref,
+            context=f"factor={factor_code} market={market} by={actor_name}",
+        )
+        safe_rollback(db)
+        raise HTTPException(status_code=500, detail=public_error("因子权重写入", ref))

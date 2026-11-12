@@ -142,7 +142,7 @@ export default function FactorWeightsPanel() {
           </p>
           {!canManage && (
             <p className="text-[12px] text-muted-foreground mt-1">
-              只读: 调整权重/开关需要 manage_settings(owner 授予), 否则服务端会拒绝。
+              只读: 调整权重/开关与「计算建议」都需要 manage_settings(owner 授予), 否则服务端会拒绝。
             </p>
           )}
         </div>
@@ -164,7 +164,12 @@ export default function FactorWeightsPanel() {
           <button
             type="button"
             onClick={runCalibration}
-            disabled={calibLoading}
+            disabled={calibLoading || !canManage}
+            title={
+              canManage
+                ? '实时只算建议, 不落库'
+                : '需要 manage_settings: 每轮要扫快照, 仅对受限管理员开放'
+            }
             className="px-2.5 py-1 text-[12px] rounded border border-border text-foreground disabled:opacity-50"
           >
             {calibLoading ? '计算中…' : '计算建议'}
@@ -267,8 +272,7 @@ export default function FactorWeightsPanel() {
             </span>
             {calib.concurrency && (
               <span title={calib.concurrency.note}>
-                并发保护: {calib.concurrency.cross_worker_exclusive ? '跨 worker' : '仅本进程'}
-                (缓存按 worker)
+                并发保护: 仅本进程(不跨 worker; 缓存按 worker)
               </span>
             )}
             {calib.ok === false && <span className="text-amber-500">计算失败: {calib.error}</span>}

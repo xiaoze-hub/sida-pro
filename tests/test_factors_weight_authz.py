@@ -15,6 +15,8 @@ demo(guest) 登录后都能改**全局**因子权重(影响所有人的信号合
 5. `/api/v1/...` 版本别名同样被端点自身拦住(不靠路径前缀中间件);
 6. 策略权重重平衡(POST /recommendations/strategy-weights/rebalance)同一门槛;
 7. 只读标定端点: 实时计算 + computed_at/error/样本/无行状态, 零写入、不 seed;
+   收口到 manage_settings(受限管理员), 并发范围如实报 "process"(无跨 worker 承诺),
+   失败只回安全文案 + 关联号(异常原文/SQL/DSN 不进响应);
 8. 旧 meta 里的最近 IC 必须显式标注为**历史观测**及其时间, 不得冒充当前。
 """
 from __future__ import annotations
@@ -630,7 +632,9 @@ def test_rebalance_failure_returns_500_and_rolls_back(client, owner_token, monke
         "/api/recommendations/strategy-weights/rebalance", headers=_hdr(owner_token)
     )
     assert r.status_code == 500, f"调权失败却回了 {r.status_code}: {r.text[:300]}"
-    assert "catalog 读取失败" in r.text, "失败原因没有带出来"
+    # 失败原因不再原样回显(可能带 SQL/表名/DSN), 只给安全文案 + 关联号。
+    assert "catalog 读取失败" not in r.text, "异常原文泄漏到响应里"
+    assert "ERR-" in r.text, "安全文案必须带关联号"
     assert "回滚" in r.text, "响应没有说明已回滚"
 
     assert _strategy_snapshot() == before, "失败路径留下了权重/历史改动"
@@ -646,128 +650,103 @@ def test_rebalance_denied_requests_leave_no_rows(client, member_token):
     assert r.status_code == 403, r.text
     assert _strategy_snapshot() == before
     assert _audit_rows("rebalance_strategy_weights") == []
+# ── 6. 只读标定: 受限管理员 + 如实上报「只有进程内单飞」 ──────────────────
+#
+# 2026-11-12 复审: 之前给标定加过一层 Redis 租约并宣称「跨 worker 互斥」, 但那层
+# 没有续租、Redis 抖动时静默降级, 给不出全链路独占。现在租约已移除: 端点收口到
+# manage_settings(受限管理员) + 参数上限 + 墙钟预算, 并发范围如实写 "process"。
 
 
-# ── 6. 只读标定的跨 worker 门闩: 范围必须如实上报 ────────────────────────
-_GATE_KEY = "sida:readonly_gate:factors:calibration:gate"
-_TS_KEY = "sida:readonly_gate:factors:calibration:ts"
-
-
-class _FakeRedis:
-    """够用的 Redis 替身: 只实现门闩用到的 SET NX / GET / DEL / EVAL。
-
-    故意**不**实现 TTL 过期: 测试要看键在不在, 不模拟时间流逝。
-    """
-
-    def __init__(self, preset: dict[str, str] | None = None):
-        self.store: dict[str, str] = dict(preset or {})
-
-    def set(self, key, value, nx=False, ex=None, px=None):
-        if nx and key in self.store:
-            return False
-        self.store[key] = value
-        return True
-
-    def get(self, key):
-        return self.store.get(key)
-
-    def delete(self, *keys):
-        n = 0
-        for k in keys:
-            if k in self.store:
-                del self.store[k]
-                n += 1
-        return n
-
-    def eval(self, script, numkeys, key, token):
-        if self.store.get(key) == token:
-            del self.store[key]
-            return 1
-        return 0
-
-
-def _patch_gate(monkeypatch, fake):
-    from src.core import readonly_gate as rg
-    from src.web.api import factors as factors_api
-
-    factors_api._reset_calibration_cache()
-    monkeypatch.setattr(rg, "_redis", lambda: fake)
-
-
-def _stub_calibration(monkeypatch):
+def _stub_calibration(monkeypatch, calls: dict | None = None):
     from src.core import factor_calibration as fc
 
-    monkeypatch.setattr(
-        fc, "evaluate_factor_ic", lambda **kw: {"factors": {}, "error": None}
-    )
+    def _fake(**kwargs):
+        if calls is not None:
+            calls["n"] = calls.get("n", 0) + 1
+        return {"factors": {}, "error": None}
+
+    monkeypatch.setattr(fc, "evaluate_factor_ic", _fake)
 
 
-def test_calibration_reports_cluster_scope_and_releases_gate(
-    client, owner_token, monkeypatch
-):
-    """Redis 可用 → concurrency.scope=cluster, 且算完立刻放掉租约。"""
-    fake = _FakeRedis()
-    _patch_gate(monkeypatch, fake)
+def test_calibration_requires_manage_settings(client, member_token, owner_token, monkeypatch):
+    """member 403 且**不触发**扫库; owner 才真正算一轮。"""
+    calls: dict = {"n": 0}
+    _stub_calibration(monkeypatch, calls)
+
+    denied = _calib(client, member_token)
+    assert denied.status_code == 403, f"member 竟能触发只读重查询: {denied.status_code}"
+    assert calls["n"] == 0, "被拒绝的请求不得开始扫库"
+
+    ok = _calib(client, owner_token)
+    assert ok.status_code == 200, ok.text
+    assert calls["n"] == 1
+
+
+def test_calibration_no_token_rejected(client):
+    assert _calib(client, None).status_code in (401, 403)
+
+
+def test_calibration_reports_process_scope_only(client, owner_token, monkeypatch):
+    """并发范围必须如实: 只有本进程 single-flight, 没有跨 worker/全局互斥。"""
     _stub_calibration(monkeypatch)
-
-    r = _calib(client, owner_token)
-    assert r.status_code == 200, r.text
-    conc = r.json()["data"]["concurrency"]
-    assert conc["scope"] == "cluster"
-    assert conc["cross_worker_exclusive"] is True
-    assert conc["cache_scope"] == "process", "缓存是每 worker 一份, 不许说成全局"
-    assert _GATE_KEY not in fake.store, "租约没有释放(会堵住后续 worker 直到 TTL)"
-    assert _TS_KEY in fake.store, "跨 worker 最小间隔键应当保留"
-
-
-def test_calibration_reports_process_scope_when_redis_unavailable(
-    client, owner_token, monkeypatch
-):
-    """Redis 不可用 → 降级为进程内单飞, 并且**如实**说不是跨 worker。"""
-    _patch_gate(monkeypatch, None)
-    _stub_calibration(monkeypatch)
-
     r = _calib(client, owner_token)
     assert r.status_code == 200, r.text
     conc = r.json()["data"]["concurrency"]
     assert conc["scope"] == "process"
-    assert conc["cross_worker_exclusive"] is False
-    assert "多 worker" in conc["note"], "降级说明必须点明多 worker 下的实际并发"
+    assert conc["cross_worker_exclusive"] is False, "不得宣称跨 worker 互斥"
+    assert conc["cache_scope"] == "process", "缓存是每 worker 一份"
+    assert "多 worker" in conc["note"], "必须点明多 worker 下的真实并发"
 
 
-def test_calibration_cross_worker_busy_returns_429_without_leaking_state(
-    client, owner_token, monkeypatch
-):
-    """别的 worker 持锁 → 429(scope=cluster), 且本进程占位必须撤销干净。"""
-    from src.web.api import factors as factors_api
+def test_calibration_error_hides_sql_and_dsn(client, owner_token, monkeypatch):
+    """失败文案只含关联号: SQL / 表名 / DSN 凭证一律不回给客户端。"""
+    from src.core import factor_calibration as fc
 
-    fake = _FakeRedis({_GATE_KEY: "peer-worker"})
-    _patch_gate(monkeypatch, fake)
-    _stub_calibration(monkeypatch)
+    sql = "SELECT weight FROM factor_weights WHERE market='CN'"
+    dsn = "postgresql://sida:sup3r-secret@db.internal:5432/sida"
 
-    busy = _calib(client, owner_token)
-    assert busy.status_code == 429, busy.text
-    assert "跨 worker" in busy.text
-    assert factors_api._CALIB_INFLIGHT == {}, "让位后仍占着 single-flight 占位"
-    assert fake.store[_GATE_KEY] == "peer-worker", "不能删掉别的 worker 的租约"
+    def _boom(**kwargs):
+        raise RuntimeError(f"{sql} 失败; dsn={dsn}")
 
-    # 门闩空出来后必须能正常算(说明上一轮没有漏状态)。
-    fake.store.clear()
-    ok = _calib(client, owner_token)
-    assert ok.status_code == 200, ok.text
-    assert ok.json()["data"]["cached"] is False
+    monkeypatch.setattr(fc, "evaluate_factor_ic", _boom)
+    r = _calib(client, owner_token)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["ok"] is False
+
+    msg = data.get("error") or ""
+    for leak in (sql, "factor_weights", "sup3r-secret", "postgresql://", "db.internal"):
+        assert leak not in msg, f"错误文案泄漏内部信息: {leak} 出现在 {msg!r}"
+    assert data["error_ref"].startswith("ERR-")
+    assert data["error_ref"] in msg, "安全文案必须带关联号, 否则无法与日志对账"
 
 
-def test_calibration_cross_worker_throttle_returns_429(client, owner_token, monkeypatch):
-    """全局最小间隔键被占(别的 worker 刚算过) → 429, 且自己那把租约要还回去。"""
-    from src.web.api import factors as factors_api
+def test_calibration_time_budget_aborts_explicitly(monkeypatch):
+    """墙钟预算超了就要如实中止(未写入), 不能挂着不返回。"""
+    import time as _time
 
-    fake = _FakeRedis({_TS_KEY: "peer-worker"})
-    _patch_gate(monkeypatch, fake)
-    _stub_calibration(monkeypatch)
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
 
-    r = _calib(client, owner_token, "/api/factors/calibration?market=CN&days=30")
-    assert r.status_code == 429, r.text
-    assert "频繁" in r.text
-    assert _GATE_KEY not in fake.store, "节流拒绝后没释放自己刚拿的租约"
-    assert factors_api._CALIB_INFLIGHT == {}
+    import src.web.models  # noqa: F401
+    from src.core import factor_calibration as fc
+    from src.web.database import Base
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+
+    def _slow(**kwargs):
+        _time.sleep(0.02)
+        return {"factors": {}, "error": None}
+
+    monkeypatch.setattr(fc, "evaluate_factor_ic", _slow)
+    try:
+        res = fc.calibrate_factor_weights("CN", db=db, time_budget_seconds=0.001)
+        assert res["ok"] is False
+        assert res.get("timeout") is True
+        assert "时间预算" in res["error"]
+        assert res["proposals"] == []
+        assert res["write_back"] is False
+    finally:
+        db.close()
