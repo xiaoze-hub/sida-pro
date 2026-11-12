@@ -69,9 +69,11 @@ _CALIB_CACHE: dict[tuple, dict] = {}
 _CALIB_INFLIGHT: dict[tuple, threading.Event] = {}
 _CALIB_LOCK = threading.Lock()
 _CALIB_LAST_COMPUTE = 0.0
-#: 一轮计算的墙钟预算(秒): 超了就中止这一轮并如实报「超时/未写入」, 不让一个
-#: 大参数请求无限占着同步线程。粒度是「因子之间」, 不中断单次 IC 评估(见
-#: `factor_calibration.calibrate_factor_weights` 的说明)。
+#: 一轮计算的墙钟预算(秒): 只在**因子之间**检查, 超了就中止剩下的因子并如实
+#: 报「超时/未写入」。它**不能中断**已经开始的那一次 `evaluate_factor_ic`
+#: (Python 线程无法安全打断), 所以单次 IC 评估本身挂住时预算不生效 ——
+#: 这是「不让一轮按因子个数无限拖」的粗粒度上限, **不是防挂死机制**。
+#: 真正兜住耗时的仍然是参数上限(days<=180 / horizon<=30 / min_samples<=200)。
 _CALIB_TIME_BUDGET_SECONDS = 20.0
 
 #: 并发保护**范围**: 只有本进程内的 single-flight。生产 `WEB_WORKERS` 默认 4,
@@ -223,8 +225,11 @@ def calibration(
       缓存是**每 worker 一份**(进程内), 不从 Redis 共享。
     - 命中缓存前比对当前权重/pin/开关指纹(读写库): 人工改过权重就作废旧缓存,
       绝不回放陈旧的 `current_weight`。
-    - 墙钟预算 `_CALIB_TIME_BUDGET_SECONDS`: 超预算即中止并返回 `ok=False`
-      (`timeout=true`), 不会挂着不返回。
+    - 墙钟预算 `_CALIB_TIME_BUDGET_SECONDS`(20s): 粒度是**因子之间**。
+      超预算会中止后续因子并返回 `ok=False`(`timeout=true`), 但**不具备中断
+      能力**: 单次 `evaluate_factor_ic` 已经开始就打断不了, 它在内部挂住时
+      预算不会生效。因此这里**不承诺「防挂死」**, 只承诺「不按因子个数叠加
+      下去」; 耗时上限主要靠参数上限(days/horizon/min_samples)与进程内节流。
     - 缓存按调用方**深拷贝**返回, 一个请求改返回值不会污染其他人的建议。
     """
     global _CALIB_LAST_COMPUTE
@@ -391,7 +396,12 @@ def update_weight(
         ref = new_error_ref()
         log_failure(
             logger, "因子权重写入", e, ref=ref,
-            context=f"factor={factor_code} market={market} by={actor_name}",
+            context={
+                "factor_code": factor_code,
+                "market": market,
+                "actor": actor_name,
+                "via": "api",
+            },
         )
         safe_rollback(db)
         raise HTTPException(status_code=500, detail=public_error("因子权重写入", ref))

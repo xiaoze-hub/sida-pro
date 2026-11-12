@@ -698,27 +698,48 @@ def test_calibration_reports_process_scope_only(client, owner_token, monkeypatch
     assert "多 worker" in conc["note"], "必须点明多 worker 下的真实并发"
 
 
-def test_calibration_error_hides_sql_and_dsn(client, owner_token, monkeypatch):
-    """失败文案只含关联号: SQL / 表名 / DSN 凭证一律不回给客户端。"""
+def test_calibration_error_hides_sql_and_dsn(client, owner_token, monkeypatch, caplog):
+    """失败文案只含关联号: SQL / 表名 / DSN 凭证不回给客户端, **日志也不留**。
+
+    用真实形态的假 secret(`***` 这种占位串证明不了任何事), 且同时检查响应与服务端
+    日志: 日志只允许有 关联号 + 异常类型 + 白名单上下文, 不许有 DSN 口令/SQL 参数。
+    """
+    import logging
+
     from src.core import factor_calibration as fc
 
+    secret = "S1da-Pr0d-Pa55w0rd"
     sql = "SELECT weight FROM factor_weights WHERE market='CN'"
-    dsn = "postgresql://sida:sup3r-secret@db.internal:5432/sida"
+    dsn = f"postgresql://sida:{secret}@db.internal:5432/sida"
+    bound_param = "622-CN-bound-param"
 
     def _boom(**kwargs):
-        raise RuntimeError(f"{sql} 失败; dsn={dsn}")
+        raise RuntimeError(
+            f"{sql} 失败; dsn={dsn}; "
+            f'[parameters: ({bound_param!r}, \'CN\')]'
+        )
 
     monkeypatch.setattr(fc, "evaluate_factor_ic", _boom)
-    r = _calib(client, owner_token)
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger="src.core.factor_calibration"):
+        r = _calib(client, owner_token)
     assert r.status_code == 200, r.text
     data = r.json()["data"]
     assert data["ok"] is False
 
     msg = data.get("error") or ""
-    for leak in (sql, "factor_weights", "sup3r-secret", "postgresql://", "db.internal"):
+    for leak in (sql, "factor_weights", secret, "postgresql://", "db.internal", bound_param):
         assert leak not in msg, f"错误文案泄漏内部信息: {leak} 出现在 {msg!r}"
     assert data["error_ref"].startswith("ERR-")
     assert data["error_ref"] in msg, "安全文案必须带关联号, 否则无法与日志对账"
+
+    logged = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert data["error_ref"] in logged, "日志里必须能用关联号找到这次失败"
+    assert "RuntimeError" in logged, "日志要留下异常类型, 否则只能靠猜"
+    # 注意: 不能拿 "factor_weights" 当泄漏串 —— 函数名 `calibrate_factor_weights`
+    # 合法地含这个子串(那是代码标识符, 不是数据)。
+    for leak in (secret, dsn, sql, bound_param):
+        assert leak not in logged, f"服务端日志泄漏: {leak!r} in {logged!r}"
 
 
 def test_calibration_time_budget_aborts_explicitly(monkeypatch):

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 
 from src.core.db_safe import safe_rollback
@@ -63,6 +64,14 @@ SYSTEM_ACTOR_PREFIX = "system:"
 #: 只读标定不落库, 所以这个时间戳只代表「最后一次被记录的时刻」。
 OBSERVATION_STALE_AFTER = timedelta(days=7)
 
+#: 进程内写序列化(**不是全局互斥**): 权重写入是「读旧值 → 写新值 → 记历史」,
+#: 两笔并发若都读到同一个旧值, 历史链就断成 `1.0→1.2` + `1.0→1.8`, 后一笔的
+#: before 是错的, `get_factor_weights(as_of=...)` 回放会把中间那次改动吞掉。
+#: 这里用可重入锁把同一进程的读改写串起来; 跨进程的正确性靠下面
+#: `_load_row_for_update` 的行锁(PG/MySQL), SQLite 且多进程时**没有**跨进程
+#: 保证 —— 这一点写在函数注释里, 不假装是全局锁。
+_WRITE_LOCK = threading.RLock()
+
 
 def _parse_observed_at(raw) -> datetime | None:
     """把 meta 里的 ISO 时间串解析成带时区 datetime; 解析不了就当没有。"""
@@ -94,6 +103,23 @@ def _ensure_rows(db, market: str) -> dict[str, float]:
     if missing:
         db.flush()
     return existing
+
+
+def _load_row_for_update(db, factor_code: str, market: str):
+    """在写事务里读权重行并加行锁(SQLite 忽略 `FOR UPDATE`, 由 `_WRITE_LOCK` 兜)。
+
+    `FOR UPDATE` 让并发事务在 PG/MySQL 上串行读到**对方已提交的最新值**,
+    而不是各自缓存一份旧 `weight` 后再写历史 —— 后者会让历史链的 before 失真。
+    """
+    return (
+        db.query(FactorWeight)
+        .filter(
+            FactorWeight.factor_code == factor_code,
+            FactorWeight.market == market,
+        )
+        .with_for_update()
+        .first()
+    )
 
 
 def get_factor_weights(market: str, *, as_of=None, db=None) -> dict[str, float]:
@@ -180,9 +206,12 @@ def get_all_factor_weights(*, db=None) -> list[dict]:
     db = db or WriteSessionLocal()
     pin_write_bind(db)
     try:
-        for m in MARKETS:
-            _ensure_rows(db, m)
-        db.commit()
+        # 补行也是写: 与读改写共用同一把进程内锁, 避免两个请求同时 INSERT 同一
+        # (factor_code, market) 撞唯一键。
+        with _WRITE_LOCK:
+            for m in MARKETS:
+                _ensure_rows(db, m)
+            db.commit()
         rows = (
             db.query(FactorWeight)
             .order_by(FactorWeight.market, FactorWeight.factor_code)
@@ -231,6 +260,12 @@ def set_factor_weight(
     - 自开 session 用 `WriteSessionLocal()`(专用写引擎);
     - 调用方传入会话时先 `pin_write_bind`(已在副本事务里 ⇒ 直接报错, 不静默分裂);
     - 补行 / 改权重 / 历史 / 审计在**同一个事务**里 commit。
+
+    并发写(2026-11-12 复审二): 「读旧值 → 写新值 → 记历史」不是原子语句。两笔
+    并发若都读到 1.0, 历史会出现两行 before=1.0(后一笔的 before 是错的),
+    `as_of` 回放会把中间改动吞掉。因此: 进程内 `_WRITE_LOCK` 串行化 + 读行时
+    `FOR UPDATE`(PG/MySQL 行锁)双保险。SQLite 忽略 `FOR UPDATE`, 多进程部署在
+    SQLite 上**没有**跨进程保证 —— 生产用 PG 时行锁生效; 这里不宣称全局互斥。
     """
     who = (actor or "").strip()
     kind = (actor_kind or "").strip().lower()
@@ -257,61 +292,58 @@ def set_factor_weight(
     db = db or WriteSessionLocal()
     pin_write_bind(db)
     try:
-        _ensure_rows(db, market)  # 补行也落在同一个写事务里
-        row = (
-            db.query(FactorWeight)
-            .filter(FactorWeight.factor_code == factor_code, FactorWeight.market == market)
-            .first()
-        )
-        changes: dict[str, dict] = {}
-        if weight is not None:
-            old = float(row.weight)
-            new = round(max(0.1, min(3.0, float(weight))), 4)  # 手动也有界,防误填
-            if abs(new - old) >= 1e-9:
-                changes["weight"] = {"before": round(old, 4), "after": round(new, 4)}
-                row.weight = new
-                row.reason = "manual" if kind == "user" else who  # 系统身份已带 system: 前缀
-                row.effective_from = utc_now()
-                row.updated_at = utc_now()
-                db.add(FactorWeightHistory(
-                    factor_code=factor_code, market=market,
-                    old_weight=old, new_weight=new, sample_size=0, reason="manual",
-                    meta={"by": who, "by_kind": kind, "via": via},
-                ))
-        if is_pinned is not None:
-            before = bool(row.is_pinned)
-            after = bool(is_pinned)
-            if before != after:
-                changes["is_pinned"] = {"before": before, "after": after}
-                row.is_pinned = after
-                row.updated_at = utc_now()
-        if auto_calibrate is not None:
-            before = bool(row.auto_calibrate)
-            after = bool(auto_calibrate)
-            if before != after:
-                changes["auto_calibrate"] = {"before": before, "after": after}
-                row.auto_calibrate = after
-                row.updated_at = utc_now()
-        if changes:
-            db.add(
-                AuditLog(
-                    user_id=actor_id,
-                    username=who,
-                    action="update_factor_weight",
-                    detail=json.dumps(
-                        {
-                            "factor_code": factor_code,
-                            "market": market,
-                            "actor_kind": kind,
-                            "via": via,
-                            "changes": changes,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    ip=ip or "",
+        with _WRITE_LOCK:
+            _ensure_rows(db, market)  # 补行也落在同一个写事务里
+            row = _load_row_for_update(db, factor_code, market)
+            changes: dict[str, dict] = {}
+            if weight is not None:
+                old = float(row.weight)
+                new = round(max(0.1, min(3.0, float(weight))), 4)  # 手动也有界,防误填
+                if abs(new - old) >= 1e-9:
+                    changes["weight"] = {"before": round(old, 4), "after": round(new, 4)}
+                    row.weight = new
+                    row.reason = "manual" if kind == "user" else who  # 系统身份已带 system: 前缀
+                    row.effective_from = utc_now()
+                    row.updated_at = utc_now()
+                    db.add(FactorWeightHistory(
+                        factor_code=factor_code, market=market,
+                        old_weight=old, new_weight=new, sample_size=0, reason="manual",
+                        meta={"by": who, "by_kind": kind, "via": via},
+                    ))
+            if is_pinned is not None:
+                before = bool(row.is_pinned)
+                after = bool(is_pinned)
+                if before != after:
+                    changes["is_pinned"] = {"before": before, "after": after}
+                    row.is_pinned = after
+                    row.updated_at = utc_now()
+            if auto_calibrate is not None:
+                before = bool(row.auto_calibrate)
+                after = bool(auto_calibrate)
+                if before != after:
+                    changes["auto_calibrate"] = {"before": before, "after": after}
+                    row.auto_calibrate = after
+                    row.updated_at = utc_now()
+            if changes:
+                db.add(
+                    AuditLog(
+                        user_id=actor_id,
+                        username=who,
+                        action="update_factor_weight",
+                        detail=json.dumps(
+                            {
+                                "factor_code": factor_code,
+                                "market": market,
+                                "actor_kind": kind,
+                                "via": via,
+                                "changes": changes,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        ip=ip or "",
+                    )
                 )
-            )
-        db.commit()
+            db.commit()
         return _serialize(row)
     except Exception:
         # 自己开的 session: 审计/落库任一步失败就整笔回滚, 不留「改了但无审计」。

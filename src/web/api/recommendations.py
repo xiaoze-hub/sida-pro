@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 import threading
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.core.entry_candidates import (
@@ -32,11 +32,73 @@ from src.core.strategy_engine import (
 from src.core.factor_eval import evaluate_factor_ic
 from src.core.signal_explain import enrich_signal
 from src.web.database import SessionLocal
-from src.web.models import StrategySignalRun
+from src.web.models import StrategySignalRun, User
+from src.db.session import WriteSessionLocal
+from src.web.api.auth import get_current_user
 from src.web.api.settings import SettingsActor, require_settings_write
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+#: 可以触发「全局写」入口(信号刷新 / 后验评估)的角色。
+#: guest(试用号)与服务身份一律拒绝; member 保留 —— 机会页的「刷新」是既有的
+#: 成员功能(见 frontend/src/pages/Opportunities.tsx), 一刀切收口到 owner 只是
+#: 换一种坏法: 权限设计不贴实际使用, 用户会去找绕过路径。
+OPPORTUNITY_WRITE_ROLES = frozenset({"member", "pro", "owner", "admin"})
+
+
+def _require_opportunity_write(user) -> SettingsActor:
+    """判权: 全局写入口必须由「真人登录 + 非试用档」触发(2026-11-12 复审)。
+
+    修的是这类入口原来只挂 `protected`(登录即可)的问题:
+    `POST /strategy-signals/refresh`、`POST /strategy-signals/outcomes/evaluate`、
+    `POST /entry-candidates/refresh`、`POST /entry-candidates/outcomes/evaluate`
+    都会写**全站共用**的快照/后验数据, 任意登录用户(含 guest 试用号)、服务
+    token 都能反复触发全市场重算。
+
+    四道关(与 `require_settings_write` 同口径, 只是门槛不同):
+    1. 服务身份(role=service)直接 403 —— 写链路不给服务方开口子;
+    2. 角色**实时从写库**读: 不信 JWT claim(降权后旧 token 仍是旧 claim),
+       也不信读副本(滞后会让降权延后生效);
+    3. 角色不在 `OPPORTUNITY_WRITE_ROLES`(guest 等)→ 403;
+    4. 查询异常一律 403(fail closed), 绝不因为查不到就放行。
+    """
+    from src.core.permissions import normalize_role
+
+    if getattr(user, "is_service", False):
+        raise HTTPException(403, "服务身份不可触发全局写操作")
+    user_id = getattr(user, "id", None)
+    if not user_id:
+        raise HTTPException(403, "无法确认操作者身份, 拒绝触发全局写操作")
+    try:
+        db = WriteSessionLocal()
+        try:
+            row = db.query(User).filter(User.id == user_id).first()
+            if row is None:
+                raise HTTPException(403, "账号不存在, 拒绝触发全局写操作")
+            if not bool(getattr(row, "is_active", False)) or bool(
+                getattr(row, "is_deleted", False)
+            ):
+                raise HTTPException(403, "账号不可用, 拒绝触发全局写操作")
+            role = normalize_role(str(getattr(row, "role", "") or "").strip().lower())
+            if role not in OPPORTUNITY_WRITE_ROLES:
+                raise HTTPException(403, f"当前角色({role})不可触发全局写操作")
+            return SettingsActor(
+                id=getattr(row, "id", None),
+                username=str(getattr(row, "username", "") or ""),
+                role=role,
+            )
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 —— 判权失败必须拒绝, 不能放行
+        raise HTTPException(403, "权限校验失败, 拒绝触发全局写操作")
+
+
+def require_opportunity_write(user: User = Depends(get_current_user)) -> SettingsActor:
+    """FastAPI 依赖: 全局写入口的角色范围检查(见 `_require_opportunity_write`)。"""
+    return _require_opportunity_write(user)
 
 _refresh_state_lock = threading.Lock()
 _refresh_state = {
@@ -122,7 +184,10 @@ def _refresh_worker(
         _notify_refresh_done(True, f"快照日期 {result.get('snapshot_date') or '—'}，可前往「机会」页查看。")
     except Exception as e:
         ref = new_error_ref()
-        log_failure(logger, "策略信号刷新", e, ref=ref)
+        log_failure(
+            logger, "策略信号刷新", e, ref=ref,
+            context={"endpoint": "strategy_signals_refresh"},
+        )
         _set_refresh_state(
             running=False,
             finished_at=_now_iso(),
@@ -198,8 +263,12 @@ def get_entry_candidates(
     volume_ratio_min: float = Query(0, ge=0, description="量比下限"),
     change_pct_min: float | None = Query(None, description="涨跌幅下限(%)"),
     change_pct_max: float | None = Query(None, description="涨跌幅上限(%)"),
+    user: User = Depends(get_current_user),
 ):
+    # `refresh=true` 会写候选池: 与 POST /entry-candidates/refresh 同一角色门槛。
+    # 只读查询(默认)保持登录即可 —— 收口只加在**写**上。
     if refresh:
+        _require_opportunity_write(user)
         refresh_entry_candidates()
     return list_entry_candidates(
         market=market,
@@ -224,7 +293,9 @@ def get_entry_candidates(
 def refresh_candidates(
     max_inputs: int = Query(300, ge=10, le=1000),
     market_scan_limit: int = Query(60, ge=20, le=300),
+    _actor: SettingsActor = Depends(require_opportunity_write),
 ):
+    """重算候选池(写全站共用快照): 需要非试用档角色, 见 `require_opportunity_write`。"""
     cand = refresh_entry_candidates(
         max_inputs=max_inputs,
         market_scan_limit=market_scan_limit,
@@ -274,7 +345,9 @@ def candidate_stats(days: int = Query(30, ge=1, le=365)):
 def evaluate_candidate_outcomes(
     limit: int = Query(400, ge=20, le=2000),
     snapshot_days: int = Query(45, ge=7, le=365),
+    _actor: SettingsActor = Depends(require_opportunity_write),
 ):
+    """后验评估候选(写 outcome): 同上, 非试用档角色才可触发。"""
     return evaluate_entry_candidate_outcomes(
         horizons=(1, 3, 5, 10),
         snapshot_days=snapshot_days,
@@ -408,7 +481,9 @@ def refresh_strategy_signal_list(
         False,
         description="跳过东财榜单抓取, 市场池沿用 7 日内快照(共振查询联动秒级重算用)",
     ),
+    _actor: SettingsActor = Depends(require_opportunity_write),
 ):
+    """刷新全站策略信号快照(写库)。角色门槛见 `require_opportunity_write`。"""
     # B0.5(2026-09-09): 禁止对历史快照重算 —— 历史日的新闻/权重无法完整还原,
     # 重算会覆盖既有因子行并引入前视污染(KI-035)。确需回补须显式开环境开关。
     if snapshot_date:
@@ -424,6 +499,13 @@ def refresh_strategy_signal_list(
                     "如确需回补请显式设置 SIDA_ALLOW_FACTOR_BACKFILL=1"
                 ),
             )
+    # 记录「是谁触发的全站写」: 权限已在上面的依赖里判定, 这里只做可追溯。
+    # getattr 兜底: 直接调用函数(脚本/测试)时没有依赖注入的 actor。
+    logger.info(
+        "策略信号刷新被触发: actor=%s rebuild=%s snapshot_date=%s wait=%s",
+        getattr(_actor, "username", "") or "-", rebuild_candidates,
+        snapshot_date or "-", wait,
+    )
     if wait:
         return refresh_strategy_signals(
             snapshot_date=snapshot_date,
@@ -473,7 +555,9 @@ def strategy_signal_refresh_status():
 def evaluate_strategy_signal_outcomes(
     limit: int = Query(800, ge=20, le=5000),
     snapshot_days: int = Query(60, ge=7, le=365),
+    _actor: SettingsActor = Depends(require_opportunity_write),
 ):
+    """策略后验评估(写 outcome)。角色门槛见 `require_opportunity_write`。"""
     return evaluate_strategy_outcomes(
         horizons=(1, 3, 5, 10),
         snapshot_days=snapshot_days,

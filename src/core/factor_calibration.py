@@ -170,9 +170,11 @@ def calibrate_factor_weights(
     「无提案」;细节只进服务端日志(`error_report.log_failure`),**响应里不带
     异常文本/SQL/DSN**。
 
-    `time_budget_seconds`: 粗粒度墙钟预算(在因子之间检查)。本函数不能中断
-    已经开始的单次 IC 评估, 所以它是「不让一轮无限拖下去」的兜底, 不是硬超时;
-    超预算即中止并返回 `ok=False`, 已算出的建议一并丢弃(不会部分生效, 本就不写库)。
+    `time_budget_seconds`: 粗粒度墙钟预算(只在**因子之间**检查)。本函数**没有
+    中断能力**: 已经开始的那次 `evaluate_factor_ic` 打断不了, 它在内部挂住时
+    预算不会生效。所以它的语义是「不按因子个数把耗时叠加下去」, 不是硬超时,
+    也**不是防挂死**; 超预算会中止后续因子并返回 `ok=False`, 已算出的建议一并
+    丢弃(不会部分生效, 本就不写库)。
     """
     own = db is None
     db = db or SessionLocal()
@@ -197,8 +199,14 @@ def calibrate_factor_weights(
         if ic_result.get("error"):
             ref = new_error_ref()
             log_failure(
-                logger, "因子标定", ic_result.get("error"), ref=ref,
-                context=f"market={market} days={days} horizon={horizon}",
+                logger, "因子标定", None, ref=ref,
+                error_type=ic_result.get("error_type") or "FactorICError",
+                context={
+                    "market": market,
+                    "days": days,
+                    "horizon": horizon,
+                    "min_samples": min_samples,
+                },
             )
             return {
                 "market": market, "mode": "readonly", "ok": False,
@@ -283,7 +291,12 @@ def calibrate_factor_weights(
         ref = new_error_ref()
         log_failure(
             logger, "因子标定", e, ref=ref,
-            context=f"market={market} days={days} horizon={horizon}",
+            context={
+                "market": market,
+                "days": days,
+                "horizon": horizon,
+                "min_samples": min_samples,
+            },
         )
         timed_out = isinstance(e, TimeoutError)
         # 只回滚**自己开的** session。db 由调用方传入时不碰它的事务 ——
