@@ -333,9 +333,67 @@ describe('DecisionLedger · 盘前分析区块', () => {
 
     const period = within(sec).getAllByTestId('premarket-period')[0]
     expect(within(period).getByTestId('premarket-not-eligible').textContent).toContain('非盘前生成')
-    expect(period.textContent).toContain('实际生成 2026-11-11T20:10:00+08:00')
+    // 2026-11-12 P0: 展示的是「整份报告实际完成时刻」, 不是因子采样时点
+    expect(period.textContent).toContain('实际完成 2026-11-11T20:10:00+08:00')
     expect(period.textContent).not.toContain('当日上涨')
     expect(within(period).getByTestId('premarket-sample-time').textContent).toContain('(非盘前)')
+    expect(period.textContent).toContain('不计入盘前候选成绩')
+  })
+
+  it('报告 09:30 后才完成: 采样时点在盘前也要显式说「报告完成晚于开盘」, 不冒充盘前', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          premarket_eligible: false,
+          preopen: false,
+          run_trace_id: 'run-late-1005',
+          generated_at: '2026-11-11T08:20:00+08:00', // 因子采样确实在盘前
+          report_completed_at: '2026-11-11T10:05:00+08:00', // 但整份报告 10:05 才完成
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: null,
+            demon_reason: '整份报告生成完成时刻 2026-11-11T10:05:00+08:00 不在报告日 2026-11-11 09:30 前',
+            demon_asof: null,
+            demon_source: null,
+            evidence_rows: 1,
+            run_trace_id: 'run-late-1005',
+            record_scope: 'system',
+            evidence_matched: 0,
+            evidence_source_kind: null,
+            binding_reason: '同一天同一归属下没有这一版报告的凭证(run_trace_id=run-late-1005)',
+            report_completed_at: '2026-11-11T10:05:00+08:00',
+            collection_finished_at: '2026-11-11T08:22:00+08:00',
+            gate_reason: '整份报告生成完成时刻 2026-11-11T10:05:00+08:00 不在报告日 2026-11-11 09:30 前',
+            preopen: false,
+            generated_at: '2026-11-11T08:20:00+08:00',
+            demon_available: 0,
+            demon_unavailable: 1,
+          },
+          summary: { rows: 1, t0_scored: 0, t0_up: 0, t1_scored: 0, t1_up: 0 },
+          rows: [
+            row({
+              signals: { demon: null, price: null, demon_note: '非盘前报告, 股性因子不作盘前证据' },
+              outcome: { t0: null, t1: null, t3: null, stop_breached: null, note: '非盘前生成, 不作为当日盘前候选成绩' },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+    const period = within(sec).getAllByTestId('premarket-period')[0]
+
+    // 采样时点在盘前(08:20), 但「报告完成」10:05 → 非盘前, 两个时点都必须上屏
+    expect(within(period).getByTestId('premarket-sample-time').textContent).toContain('2026-11-11T08:20:00+08:00')
+    const done = within(period).getByTestId('premarket-report-completed')
+    expect(done.textContent).toContain('2026-11-11T10:05:00+08:00')
+    expect(within(period).getByTestId('premarket-gate-reason').textContent).toContain('09:30')
+    expect(period.textContent).toContain('实际完成 2026-11-11T10:05:00+08:00')
+    expect(within(period).getByTestId('premarket-not-eligible').textContent).toContain('非盘前生成')
     expect(period.textContent).toContain('不计入盘前候选成绩')
   })
 

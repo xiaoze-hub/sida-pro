@@ -6903,7 +6903,8 @@ def _m247_premarket_factor_evidence(conn: Connection) -> None:
     本表只 INSERT(没有任何 UPDATE/DELETE 路径), 同一天每次真实采样一行。
 
     刻意**没有** unique 约束: 同一天盘前/盘后重跑各自的凭证都要留; 查询方按
-    「最早一条可验证盘前的凭证」对账。`snapshot_sha256` 仅一致性校验。
+    `run_trace_id` + 相同 user scope 绑定到具体某一版报告对账（不按日期回退）。
+    `snapshot_sha256` 仅一致性校验。
     """
     id_pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
     # JSON 列在 PG 用 JSON, SQLite 用 TEXT(SQLAlchemy JSON 类型在 SQLite 落 TEXT)
@@ -6923,6 +6924,7 @@ CREATE TABLE IF NOT EXISTS premarket_factor_evidence (
     source TEXT NOT NULL DEFAULT '',
     snapshot {snapshot_type},
     snapshot_sha256 VARCHAR(64),
+    run_trace_id VARCHAR(64),
     note TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
@@ -6939,6 +6941,32 @@ CREATE TABLE IF NOT EXISTS premarket_factor_evidence (
         text(
             "CREATE INDEX IF NOT EXISTS ix_premarket_factor_evidence_user "
             "ON premarket_factor_evidence (user_id, analysis_date)"
+        )
+    )
+
+
+def _m248_premarket_evidence_run_binding(conn: Connection) -> None:
+    """盘前凭证绑定到具体某一版报告（2026-11-12 P0）。
+
+    为什么需要: 凭证表原先是「按 analysis_date」查询的 —— 同一天系统盘前跑 + owner
+    盘后重跑 + 盘前二次重跑都会各留一条, 账本按日期取「最早一条可验证盘前」, 结果把
+    **盘后正文**挂到**盘前凭证**上（盘后结果记进盘前成绩）, 或把上一版因子挂到新版正文上。
+    本迁移加 `run_trace_id`: 只有与报告 `raw_data.run_trace_id` 严格相等、且 user scope
+    完全相同的凭证才可对账; 匹配不上就是 unknown, 不按日期回退。
+
+    只加列 + 索引, 不改写任何既有行（旧凭证 `run_trace_id` 保持 NULL = 不参与对账,
+    仍作为「那次采样确实发生过」的留档）。可重复执行。
+    """
+    if not _has_table(conn, "premarket_factor_evidence"):
+        _m247_premarket_factor_evidence(conn)
+    if not _has_column(conn, "premarket_factor_evidence", "run_trace_id"):
+        conn.execute(
+            text("ALTER TABLE premarket_factor_evidence ADD COLUMN run_trace_id VARCHAR(64)")
+        )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_premarket_factor_evidence_run "
+            "ON premarket_factor_evidence (run_trace_id)"
         )
     )
 
@@ -7185,6 +7213,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(245, "etf_minute_source", _m245_etf_minute_source),
     Migration(246, "board_anomaly", _m246_board_anomaly),
     Migration(247, "premarket_factor_evidence", _m247_premarket_factor_evidence),
+    Migration(248, "premarket_evidence_run_binding", _m248_premarket_evidence_run_binding),
 )
 
 

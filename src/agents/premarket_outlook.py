@@ -36,6 +36,8 @@ def build_history_raw_data(data: dict, *, extra: dict | None = None) -> dict:
         "us_indices": data.get("us_indices"),
         "global_indices": data.get("global_indices"),
         "timestamp": data.get("timestamp"),
+        # 报告版本身份: 盘前凭证只认与这份 raw_data 相同 run_trace_id 的采样(2026-11-12 P0)
+        "run_trace_id": data.get("run_trace_id"),
         # 生成时冻结的股性因子快照 + 带时区采样时点 + 可核验来源/一致性指纹
         "demon_factors": data.get("demon_factors"),
         "demon_factors_asof": data.get("demon_factors_asof"),
@@ -478,6 +480,8 @@ class PremarketOutlookAgent(BaseAgent):
                         dropped=demon_factors_dropped,
                         asof=demon_factors_asof,
                         source=SOURCE_TOP_N,
+                        # 绑定到「这一次报告运行」, 账本才不会把同日其他版本的凭证挂过来
+                        run_trace_id=trace_id,
                     )
                 else:
                     demon_factors_frozen_at = None
@@ -1527,18 +1531,25 @@ class PremarketOutlookAgent(BaseAgent):
         raw_extra: dict | None = None,
         status: str | None = None,
         error: str | None = None,
-    ) -> bool:
+        report_completed_at: str | None = None,
+    ):
         """报告唯一的落库入口（正文行 + 追加式盘前凭证）。
 
         抽出来是为了让测试能**穿越真实 save_analysis 路径**（而不是复制一份白名单
         再断言）: 盘后重跑、跨时区、缺凭证、冲突都在这里过同一道门。
+
+        返回 `SaveResult`（不再是 bool）: 正文是否落库、证据是否写入、以及「盘后重跑
+        未覆盖盘前正文」这种按规则保留的情形要分开告诉调用方 —— 三种状态不能压成一个
+        False。`report_completed_at` 生产传 None（= 真实落库时刻），只有测试会显式注入。
         """
+        from src.core.analysis_history import SaveResult
+
         evidence = data.get("_demon_evidence")
         if isinstance(evidence, dict):
             evidence = {**evidence, "agent_name": self.name}
         else:
             evidence = None
-        return save_analysis(
+        saved = save_analysis(
             agent_name=self.name,
             stock_symbol="*",
             content=result.content,
@@ -1549,7 +1560,43 @@ class PremarketOutlookAgent(BaseAgent):
             status=status or getattr(result, "status", None) or "success",
             error=error if error is not None else getattr(result, "error", None),
             premarket_evidence=evidence,
+            report_completed_at=report_completed_at,
         )
+        # 兼容历史调用方/旧桩: 万一拿到的是 bool, 包成 SaveResult 再往下走
+        if isinstance(saved, SaveResult):
+            return saved
+        return SaveResult(body_saved=bool(saved))
+
+    @staticmethod
+    def _log_persist_result(saved, *, trace_id: str, label: str) -> None:
+        """把落库的三种真实状态分别告警（不再用一句「失败」吞掉）。
+
+        - 正文没进库 → ERROR（这是真失败, 报告丢了）;
+        - 正文按规则保留（当日已有盘前成功版）→ WARNING 说明「未覆盖」, 别让运维以为写进去了;
+        - 证据没写进 → ERROR（正文在, 但账本只能回落到 raw_data 凭证, 不算完整）。
+        """
+        from src.core.analysis_history import SaveResult
+
+        if not isinstance(saved, SaveResult):
+            if not saved:
+                logger.error("[%s] %s落库失败", trace_id, label)
+            return
+        if saved.content_skipped:
+            logger.warning(
+                "[%s] %s正文未覆盖当日盘前版本(按规则保留): %s",
+                trace_id,
+                label,
+                saved.reason,
+            )
+        elif not saved.body_saved:
+            logger.error("[%s] %s正文落库失败: %s", trace_id, label, saved.reason)
+        if saved.evidence_saved is False:
+            logger.error(
+                "[%s] %s盘前因子凭证未写入(正文在, 账本回落 raw_data): %s",
+                trace_id,
+                label,
+                saved.reason,
+            )
 
     def _append_ambush_signal_details(self, text: str, data: dict) -> str:
         """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。
@@ -1733,8 +1780,7 @@ class PremarketOutlookAgent(BaseAgent):
                 status="degraded",
                 error=result.error,
             )
-            if not save_analysis_result:
-                logger.error("[%s] 降级快报落库失败", trace_id)
+            self._log_persist_result(save_analysis_result, trace_id=trace_id, label="降级快报")
             logger.warning(
                 "[%s] LLM 降级改为事实快报: chars=%s reason=%s",
                 trace_id, len(brief), result.error[:120],
@@ -1969,15 +2015,15 @@ class PremarketOutlookAgent(BaseAgent):
                 "suggestions": suggestions,
             },
         )
-        if history_saved:
+        if history_saved.body_saved and not history_saved.content_skipped:
             logger.info(
                 "[%s] 盘前分析已保存到历史记录: suggestions=%s prompt_chars=%s",
                 trace_id,
                 len(suggestions),
                 len(user_content),
             )
-        else:
-            logger.error("[%s] 盘前分析保存历史记录失败", trace_id)
+        # 真失败/正文按规则保留/证据没写进 三种状态分别告警(不再压成一句「保存失败」)
+        self._log_persist_result(history_saved, trace_id=trace_id, label="盘前报告")
 
         # C4(批次C, 2026-09-06): 盘前埋伏简报推送(站内+外发渠道), 失败静默不拖垮主流程。
         # M7(2026-09-10): ①只推本人(user_id, 不再 user_id=None 全局广播给所有人);

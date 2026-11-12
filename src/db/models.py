@@ -472,7 +472,10 @@ class PremarketFactorEvidence(CreatedAtMixin, Base):
     诚实边界(不要读成「报告不可变」):
     - `analysis_history` 正文仍是可覆盖的; 只保护凭证, 不保护正文历史版本。
     - 本表没有 unique 约束(同一天可有多条, 每次真实采样一条), 查询方按
-      「最早一条已证明盘前的凭证」对账, 其余作为重跑记录保留。
+      **`run_trace_id` + 完全相同的 user scope** 绑定到具体某一版报告
+      (`resolve_report_evidence`), 同一天其他版本的凭证不作数 —— 绝不按日期回退。
+    - `run_trace_id` 为 NULL 的行 = 采样发生过但绑定不到报告(旧记录/生成侧没给 trace),
+      只留档, 不参与对账。
     - `snapshot_sha256` **只用于一致性校验**(检测存储内容是否被改动),
       不证明来源、不证明采样时点、不证明数据完整。
     """
@@ -481,6 +484,7 @@ class PremarketFactorEvidence(CreatedAtMixin, Base):
     __table_args__ = (
         Index("ix_premarket_factor_evidence_date", "analysis_date", "agent_name"),
         Index("ix_premarket_factor_evidence_user", "user_id", "analysis_date"),
+        Index("ix_premarket_factor_evidence_run", "run_trace_id"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -495,6 +499,8 @@ class PremarketFactorEvidence(CreatedAtMixin, Base):
     source = Column(Text, nullable=False, default="")  # 可核验来源描述(表/选择器/过滤)
     snapshot = Column(JSON, default={})  # 冻结的股性因子原始行
     snapshot_sha256 = Column(String(64), nullable=True)  # 仅一致性校验
+    # 产生这条凭证的那次报告运行的 trace id(与 raw_data.run_trace_id 严格相等才可对账)
+    run_trace_id = Column(String(64), nullable=True)
     note = Column(String, nullable=False, default="")
 
 

@@ -31,6 +31,9 @@ class _User:
 PREOPEN_RAW = {
     # 有带时区采样时点的冻结凭证 → 这一期才算「盘前候选」, 事后表现才对账
     "timestamp": "2026-11-11T08:20:00+08:00",
+    # 2026-11-12 P0: 盘前判定要求「整份报告完成时刻 + 采集结束时刻」都在 09:30 前
+    "report_completed_at": "2026-11-11T08:21:00+08:00",
+    "premarket_report_preopen": True,
     "demon_factors_frozen_at": "2026-11-11T08:20:00+08:00",
     "demon_factors_preopen": True,
     "demon_factors": {

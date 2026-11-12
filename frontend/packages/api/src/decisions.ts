@@ -374,6 +374,34 @@ export interface PremarketPit {
   demon_source: string | null
   /** 追加式凭证的同日条数(重跑只增不减) */
   evidence_rows: number
+  /**
+   * 这一期绑定的是哪一次运行(2026-11-12 P0)。同日可能有系统版/本人版/多次重跑,
+   * 只有与正文 `run_trace_id` 相同、归属也相同的凭证才参与对账; null = 旧记录未绑定。
+   */
+  run_trace_id?: string | null
+  /** 正文归属: user=本人, system=系统调度(user_id NULL) */
+  record_scope?: 'user' | 'system' | null
+  /** 与本期绑定的凭证条数(0 = 无凭证可对账, 不按日期回退) */
+  evidence_matched?: number
+  /** 凭证来源: appended=追加式凭证表, raw_data=该报告自己 raw_data 的冻结副本 */
+  evidence_source_kind?: 'appended' | 'raw_data' | null
+  /** 为什么没法绑定/为什么按 unknown(给运维复核用) */
+  binding_reason?: string | null
+  /** 整份报告生成完成时刻(带时区); null = 不可证明 */
+  report_completed_at?: string | null
+  /** 数据采集结束时刻(带时区); null = 不可证明 */
+  collection_finished_at?: string | null
+  /** 报告级盘前门槛的判定说明(09:30 边界/自相矛盾等) */
+  gate_reason?: string | null
+  /** 同日其它版本(系统/本人/重跑), 只供复核, 不参与本期对账 */
+  candidates?: {
+    record_id: number | null
+    run_trace_id: string | null
+    scope: 'user' | 'system' | null
+    preopen: boolean | null
+    report_completed_at: string | null
+    generated_at: string | null
+  }[]
   /** true=已证明盘前; false=盘后重跑; null=旧记录时点不可证明 */
   preopen: boolean | null
   /** 真实采样完成时刻(带时区 ISO); null = 时点不可证明 */
@@ -387,6 +415,10 @@ export interface PremarketItem {
   /** 报告交易日 YYYY-MM-DD */
   date: string
   record_id: number | null
+  /** 这一期绑定的运行 trace(与凭证严格相等); null = 旧记录未绑定 */
+  run_trace_id?: string | null
+  /** 正文归属(user/system) */
+  record_scope?: 'user' | 'system' | null
   title: string
   quality: 'ok' | 'suspect'
   /** false = 该期报告未解析到潜伏表(rows 必为空, 不补标的) */
@@ -398,6 +430,10 @@ export interface PremarketItem {
   preopen: boolean | null
   /** 真实采样完成时刻(带时区 ISO); null = 时点不可证明 */
   generated_at: string | null
+  /** 整份报告生成完成时刻(带时区); null = 不可证明。盘前门槛看这个 + 采集结束时刻 */
+  report_completed_at?: string | null
+  /** 数据采集结束时刻(带时区) */
+  collection_finished_at?: string | null
   /** 盘前/事后时点证据 */
   pit: PremarketPit
   summary: {

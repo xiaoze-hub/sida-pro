@@ -409,6 +409,8 @@ def test_endpoint_signals_price_cannot_include_report_day_close(monkeypatch):
         raw_data={
             # 有可验证盘前凭证 → 这一期才允许算「盘前候选成绩」
             "timestamp": "2026-11-11T08:20:00+08:00",
+            # 2026-11-12 P0: 整份报告也必须在 09:30 前完成才算盘前
+            "report_completed_at": "2026-11-11T08:21:00+08:00",
             "demon_factors_frozen_at": "2026-11-11T08:20:00+08:00",
             "demon_factors_preopen": True,
             "demon_factors": {"600183": {"total": 88.0, "grade": "妖", "factor_date": "20261110"}},
@@ -470,7 +472,11 @@ def test_endpoint_live_demon_table_never_leaks_into_history(monkeypatch):
     out = dec.decisions_premarket(days=5, max_rows=30, user=_User())
     row = out["items"][0]["rows"][0]
     assert row["signals"]["demon"] is None
-    assert "冻结" in (row["signals"]["demon_note"] or "") or "凭证" in (row["signals"]["demon_note"] or "")
+    # 没有生成时冻结凭证 → unknown + 写明原因(时点不可证明/缺凭证, 不是「0 分」)
+    assert row["signals"]["demon_note"]
+    assert "盘前" in (row["signals"]["demon_note"] or "") or "凭证" in (
+        row["signals"]["demon_note"] or ""
+    )
     pit = out["items"][0]["pit"]
     assert pit["demon_evidence"] is False
     assert pit["demon_available"] == 0 and pit["demon_unavailable"] == 1
@@ -483,6 +489,8 @@ def test_endpoint_uses_verified_preopen_frozen_snapshot_from_raw_data(monkeypatc
         "2026-11-11",
         raw_data={
             "timestamp": "2026-11-11T08:20:00+08:00",
+            # 2026-11-12 P0: 整份报告也必须在 09:30 前完成才算盘前
+            "report_completed_at": "2026-11-11T08:21:00+08:00",
             "demon_factors_frozen_at": "2026-11-11T08:20:00+08:00",
             "demon_factors_preopen": True,
             "demon_factors": {

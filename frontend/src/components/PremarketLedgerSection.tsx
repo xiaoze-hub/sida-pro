@@ -226,7 +226,9 @@ function PeriodBlock({
         )}
         <span className="ml-auto text-[12px] text-muted-foreground">
           {notEligible ? (
-            <>实际生成 {item.generated_at ?? '时点不可证明'}</>
+            <>
+              实际完成 {item.report_completed_at ?? item.generated_at ?? '时点不可证明'}
+            </>
           ) : (
             <>
               潜伏 {safeInt(s?.rows)} 只 · 当日上涨 {safeInt(s?.t0_up)}/{safeInt(s?.t0_scored)} · T+1 上涨{' '}
@@ -255,6 +257,19 @@ function PeriodBlock({
             采样时点: {item.generated_at ?? '不可证明'}
             {item.preopen === false ? '(非盘前)' : item.preopen === null ? '(时点不可证明)' : ''}
           </span>
+          <span data-testid="premarket-report-completed">
+            报告完成: {item.report_completed_at ?? '不可证明'}
+          </span>
+          {!item.pit.demon_evidence && item.run_trace_id && (
+            <span data-testid="premarket-binding" title={item.pit.binding_reason ?? undefined}>
+              凭证绑定 {item.run_trace_id} · {safeInt(item.pit.evidence_matched ?? 0)} 条
+            </span>
+          )}
+          {item.pit.gate_reason && item.preopen !== true && (
+            <span data-testid="premarket-gate-reason" title={item.pit.gate_reason}>
+              {item.pit.gate_reason}
+            </span>
+          )}
           {!item.pit.demon_evidence && (
             <span title={item.pit.demon_reason ?? undefined}>
               无生成时冻结快照, 股性按盘前不可得留空

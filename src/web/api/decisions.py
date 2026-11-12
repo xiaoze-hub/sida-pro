@@ -222,17 +222,27 @@ def decisions_premarket(
     时点（PIT）边界 —— 盘前报告写于报告日 D 开盘前：
     - 「位置/连板」只用 **trade_date < D** 的收盘（`as_of=D` 的 `<=` 语义会把 D 日当天收盘
       当成盘前信号，那是收盘后才知道的事），并用 `signals.price.close_date` 标出真实收盘日；
-    - 「股性因子」只展示该期报告**生成时冻结**（追加式 `premarket_factor_evidence`，其次
-      raw_data）且采样时点**带时区**、换算后落在 D 日 09:30 前的快照 —— `demon_factors`
-      是每股一行的当前快照，`factor_date` 早于 D 也不证明当时可见/完整，所以没有冻结凭证
-      就一律 `null`，并在 `signals.demon_note` 写明原因，**不伪造历史快照、不拿今天的表
-      反推历史**；`raw_data.timestamp`（整份报告采集结束时刻）不能兜底证明采样时点；
+    - 「股性因子」只展示**这一版报告自己**生成时冻结的快照（追加式
+      `premarket_factor_evidence` 里 `run_trace_id` 与 user scope 都**完全相同**的那条，
+      其次它自己 raw_data 里的冻结副本），且采样时点带时区、落在 D 日 09:30 前 ——
+      `demon_factors` 是每股一行的当前快照，`factor_date` 早于 D 也不证明当时可见/完整，
+      所以没有冻结凭证就一律 `null`，并在 `signals.demon_note` 写明原因，**不伪造历史快照、
+      不拿今天的表反推历史**；`raw_data.timestamp`（采集结束时刻）不能兜底证明采样时点；
+    - **同日多版本绝不混配**（2026-11-12 P0）：每期只认与展示的正文**同一次运行**的凭证。
+      同一天可能有「系统盘前版(NULL)」+「owner 盘后重跑版」+「盘前二次重跑版」，按日期取
+      「最早一条盘前凭证」会把盘后正文挂到盘前凭证上（把盘后结果记入盘前成绩），或把上一版
+      因子挂到新版正文上。现在按 `run_trace_id` + 相同 user scope 绑定，匹配不上就是
+      unknown（**不按日期回退**），并在 `pit.candidates` 里列出同日的其它版本；
+    - 「整份报告是否盘前」= 报告完成时刻 + 采集结束时刻都在 D 日 09:30 前
+      （`pit.report_completed_at` / `pit.collection_finished_at` 如实展示）；只有因子
+      采样在盘前、而整份报告 09:30 后才完成（LLM 慢/重试/手工补跑）的，不算盘前；
     - 「事后表现」（当日/T+1/T+3）本身是 post-hoc 字段，与上面的盘前信号严格分开；
       只有 `preopen=true` 的期次才算盘前候选成绩 —— 盘后重跑（preopen=false）或时点
       不可证明（preopen=null）的期次一律留空，并展示真实生成时刻。
     """
     from src.core import premarket_ambush as pa
     from src.core.analysis_history import analysis_history_scope_clause
+    from src.core.premarket_factor_evidence import resolve_report_evidence
     from src.core.timezone import beijing_now
     from src.db.models import AnalysisHistory
     from src.db.session import SessionLocal, get_read_engine
@@ -251,24 +261,53 @@ def decisions_premarket(
             )
             .order_by(AnalysisHistory.analysis_date.desc(), AnalysisHistory.created_at.desc())
         )
-        # 同一交易日可能有多条（重跑），只保留最新一条报告正文
-        by_date: dict[str, AnalysisHistory] = {}
+        # 同一交易日可能有多条（系统调度 NULL + owner 自己 + 各自重跑），全部收进来再按期收敛;
+        # 每一条都按**自己的** run_trace_id/user scope 取凭证, 绝不按日期共用一份。
+        by_date: dict[str, list[AnalysisHistory]] = {}
         for rec in q.limit(200).all():
-            d = str(rec.analysis_date)
-            if d not in by_date:
-                by_date[d] = rec
-            if len(by_date) >= days:
-                break
-        records = [by_date[d] for d in sorted(by_date, reverse=True)]
-        # 凭证是追加式的: 同一天每一次真实采样一行, 不会被盘后重跑的正文覆盖。
-        from src.core.premarket_factor_evidence import load_evidence_map
-
-        evidence_map = load_evidence_map(
-            db,
-            [str(r.analysis_date) for r in records],
-            user_id=user.id,
-            role=getattr(user, "role", None),
-        )
+            by_date.setdefault(str(rec.analysis_date), []).append(rec)
+        dates = sorted(by_date, reverse=True)[:days]
+        resolved: list[tuple[AnalysisHistory, dict]] = []
+        for d in dates:
+            candidates = sorted(
+                by_date[d],
+                # created_at 可能是 NULL(旧行) → 转成字符串再比, 不让 datetime/int 混排炸掉
+                key=lambda r: (
+                    str(getattr(r, "created_at", None) or ""),
+                    getattr(r, "id", 0) or 0,
+                ),
+                reverse=True,
+            )
+            views = []
+            for rec in candidates:
+                try:
+                    views.append((rec, resolve_report_evidence(db, rec)))
+                except Exception as e:  # noqa: BLE001 — 单条失败按 unknown, 不带垮整页
+                    logger.warning("盘前凭证解析失败(按 unknown 处理): %s", e)
+                    views.append((rec, {"preopen": None, "reason": f"凭证解析失败: {e}"}))
+            # 收敛: 优先「能证明盘前的」那一版(最早完成), 否则优先本人归属, 再否则最新
+            proven = [v for v in views if v[1].get("preopen") is True]
+            if proven:
+                chosen = sorted(
+                    proven,
+                    key=lambda v: (v[1].get("report_completed_at") or "", v[0].id or 0),
+                )[0]
+            else:
+                own = [v for v in views if getattr(v[0], "user_id", None) == user.id]
+                chosen = (own or views)[0]
+            rec, evidence = chosen
+            evidence["candidates"] = [
+                {
+                    "record_id": getattr(r, "id", None),
+                    "run_trace_id": v.get("run_trace_id"),
+                    "scope": v.get("scope"),
+                    "preopen": v.get("preopen"),
+                    "report_completed_at": v.get("report_completed_at"),
+                    "generated_at": v.get("generated_at"),
+                }
+                for r, v in views
+            ]
+            resolved.append((rec, evidence))
     except Exception as e:  # noqa: BLE001
         logger.warning("盘前账查询失败: %s", e)
         return {"available": False, "error": f"查询失败: {e}", "items": []}
@@ -279,36 +318,29 @@ def decisions_premarket(
     # 跨期缓存: 每期报告用各自 report_day 截断, 但日线只取一份 —— 起点取**所有期里最早**
     # 的那个。否则先处理的近期报告会把缓存起点抬到近期, 旧一期被截断成「无日线」。
     lookback_days = 45  # ≈31 个交易日, 满足 21 根收盘的 20 日指标
-    _valid_days = [d for d in (pa._norm_day(str(r.analysis_date)) for r in records) if d]
+    _valid_days = [d for d in (pa._norm_day(str(r.analysis_date)) for r, _ in resolved) if d]
     earliest_start = _shift_day(min(_valid_days), -lookback_days) if _valid_days else None
     close_cache: dict[str, list] = {}
     items: list[dict] = []
-    for rec in records:
+    for rec, ev in resolved:
         date = pa._norm_day(str(rec.analysis_date)) or str(rec.analysis_date)
         rows = pa.parse_ambush_table(rec.content or "")[:max_rows]
         codes = [r["code"] for r in rows]
-        # 盘前凭证优先取追加式证据表(重跑不覆盖), 老记录回落到 raw_data。
-        # 两者都必须有「带时区的真实采样时点」才可能 verified; 没有就 unknown。
-        ev = evidence_map.get(date)
-        if ev:
-            generated_at = ev["generated_at"]
-            preopen_state: bool | None = True if ev["verified"] else False
-            evidence = {
-                "verified": bool(ev["verified"]),
-                "kept": ev["kept"] if ev["verified"] else {},
-                "notes": dict(ev["notes"]) if ev["verified"] else {},
-                "dropped": list(ev["dropped"]),
-                "asof": ev["asof"],
-                "frozen_at": generated_at,
-                "reason": ev["reason"],
-                "source": ev["source"],
-                "evidence_rows": ev["evidence_rows"],
-            }
-        else:
-            evidence = pa.demon_evidence_from_record(getattr(rec, "raw_data", None), date)
-            generated_at = evidence.get("frozen_at")
-            # 老记录没有追加式凭证: 能过门禁才算盘前, 否则时点不可证明 → unknown(不是 False)
-            preopen_state = True if evidence["verified"] else None
+        # 凭证已在上面按「这一版报告」绑定好: 只用它自己的 run_trace_id + 相同 user scope。
+        # preopen 是**整份报告**的盘前状态(True/False/None), verified 才是因子凭证是否可用。
+        evidence = {
+            "verified": bool(ev.get("verified")),
+            "kept": ev.get("kept") if ev.get("verified") else {},
+            "notes": dict(ev.get("notes") or {}) if ev.get("verified") else {},
+            "dropped": list(ev.get("dropped") or []),
+            "asof": ev.get("asof"),
+            "frozen_at": ev.get("generated_at"),
+            "reason": ev.get("reason"),
+            "source": ev.get("source"),
+            "evidence_rows": ev.get("evidence_rows", 0),
+        }
+        generated_at = ev.get("generated_at")
+        preopen_state: bool | None = ev.get("preopen")
         if not evidence["verified"]:
             for code in codes:
                 evidence["notes"].setdefault(
@@ -377,6 +409,9 @@ def decisions_premarket(
             {
                 "date": date,
                 "record_id": getattr(rec, "id", None),
+                # 这一期到底对应哪一版报告: run_trace_id + 归属(NULL=系统调度)
+                "run_trace_id": ev.get("run_trace_id"),
+                "record_scope": ev.get("scope"),
                 "title": rec.title or "",
                 "quality": "ok" if (rec.content or "").strip() else "suspect",
                 "parsed": bool(out_rows),
@@ -385,6 +420,8 @@ def decisions_premarket(
                 "premarket_eligible": preopen_state is True,
                 "preopen": preopen_state,
                 "generated_at": generated_at,
+                "report_completed_at": ev.get("report_completed_at"),
+                "collection_finished_at": ev.get("collection_finished_at"),
                 "rows": out_rows,
                 # 盘前时点证据: 信号用的到底是哪一天的收盘 / 因子快照日上限与凭证
                 "pit": {
@@ -397,6 +434,18 @@ def decisions_premarket(
                     "demon_asof": evidence["asof"],
                     "demon_source": evidence.get("source"),
                     "evidence_rows": evidence.get("evidence_rows", 0),
+                    # 绑定: 这一期凭证来自哪一次运行/哪个归属, 匹配了几条(0 = 不可对账)
+                    "run_trace_id": ev.get("run_trace_id"),
+                    "record_scope": ev.get("scope"),
+                    "evidence_matched": ev.get("matched_rows", 0),
+                    "evidence_source_kind": (ev.get("binding") or {}).get("source_kind"),
+                    "binding_reason": (ev.get("binding") or {}).get("reason"),
+                    # 整份报告的盘前判定: 完成时刻 / 采集结束时刻 / 冲突说明
+                    "report_completed_at": ev.get("report_completed_at"),
+                    "collection_finished_at": ev.get("collection_finished_at"),
+                    "gate_reason": (ev.get("gate") or {}).get("reason"),
+                    # 同日其它版本(系统/本人/重跑), 收敛结果可复核, 但绝不参与本期对账
+                    "candidates": ev.get("candidates") or [],
                     "preopen": preopen_state,
                     "generated_at": generated_at,
                     "demon_available": demon_n,
@@ -420,9 +469,12 @@ def decisions_premarket(
         "note": (
             "潜伏表由 AI 撰写，本页只解析并用真实行情对账；解析不到表格即 parsed=false，不补标的。"
             "盘前与事后严格分开：位置只用报告日之前的收盘（close_date 标真实收盘日）；"
-            "股性因子只展示该期报告生成时冻结、带时区采样时点、且采样时点在报告日 09:30 前的"
-            "快照（标快照日，不保证数据已截至报告日前一交易日），没有这份凭证就留空并注明"
+            "股性因子只展示**这一次运行**（run_trace_id 与 user scope 完全相同）生成时冻结、"
+            "带时区采样时点、且采样时点在报告日 09:30 前的快照（标快照日，不保证数据已截至"
+            "报告日前一交易日）；同日其它版本的凭证不参与本期对账，没有匹配凭证就留空并注明"
             "「盘前不可得」——不拿当前因子表反推历史，也不伪造快照。"
+            "「是否盘前」看整份报告：报告完成时刻 + 采集结束时刻都在 09:30 前才算，"
+            "只有因子采样在盘前、整份报告 09:30 后才完成的不算盘前（不把盘后结果记入盘前成绩）。"
             "凭证是追加式保存的（premarket_factor_evidence，重跑不会销毁历史采样），"
             "但报告正文仍是同日覆盖：若某期在盘前成功保存后又被盘前重跑覆盖，正文只保留最新一版。"
             "非盘前生成（preopen=false）或生成时点不可证明（preopen=null）的期次只展示真实生成时刻，"
