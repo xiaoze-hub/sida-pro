@@ -105,7 +105,10 @@ def init_db():
     except Exception as e:  # noqa: BLE001 - 体检失败不得阻断启动, 但必须留痕
         import logging
 
-        logging.getLogger(__name__).warning("[scoring] 启动体检异常: %r", e)
+        # 只记异常类型: 数据库异常原文可能带 SQL/参数/连接串。
+        logging.getLogger(__name__).warning(
+            "[scoring] 启动体检异常: %s", type(e).__name__
+        )
 
 
 def _sync_app_role_grants(mig) -> None:

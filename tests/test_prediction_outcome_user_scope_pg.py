@@ -714,6 +714,230 @@ def test_pg_forged_index_and_concurrent_repair_converge_without_data_change(pg_e
     assert after_idx[_GUARD_USER_ACTIVE].count("CREATE UNIQUE INDEX") == 1
 
 
+def test_pg_sql_literal_case_is_mismatch_and_repair_restores_lowercase(pg_env):
+    """真 PG: 'Superseded' / 'SYSTEM' 必须判 mismatch(整段小写会造成 fail-open);
+    有权修复时写回小写字面量, 且不改任何行。"""
+    from src.core.scoring_guard import check_scoring_health
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        _upgrade_legacy_to_250(conn)
+    with pg_env.begin() as conn:
+        _insert_owned_rows(conn, [("600183", "v1", "buy")])
+
+    cases = (
+        (
+            _GUARD_USER_ACTIVE,
+            "user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days",
+            "user_id IS NOT NULL AND outcome_status <> 'Superseded'",
+        ),
+        (
+            "ux_prediction_outcome_system_active_key",
+            "agent_name, stock_symbol, stock_market, prediction_date, horizon_days",
+            "owner_scope = 'SYSTEM' AND outcome_status <> 'superseded'",
+        ),
+    )
+    before_rows, _ = _pg_snapshot(pg_env)
+    for name, cols, where in cases:
+        _pg_drop(pg_env, name)
+        with pg_env.begin() as conn:
+            conn.execute(
+                text(
+                    f"CREATE UNIQUE INDEX {name} ON agent_prediction_outcomes "
+                    f"({cols}) WHERE {where}"
+                )
+            )
+        health = check_scoring_health(pg_env, allow_repair=False)
+        state = {i.name: i for i in health.indexes}[name]
+        assert health.blocked is True
+        assert state.status == "mismatch" and "谓词" in state.detail, state
+        assert "index_definition_mismatch" in health.reason_code
+
+        fixed = check_scoring_health(pg_env, allow_repair=True)
+        assert fixed.blocked is False, fixed.detail
+        with pg_env.begin() as conn:
+            ddl = conn.execute(
+                text("SELECT indexdef FROM pg_indexes WHERE indexname = :n"),
+                {"n": name},
+            ).scalar()
+        assert "'Superseded'" not in ddl and "'SYSTEM'" not in ddl
+        assert "'superseded'" in ddl
+    after_rows, _ = _pg_snapshot(pg_env)
+    assert after_rows == before_rows, "重建索引不得改任何数据行"
+
+
+def test_pg_same_name_index_on_another_table_is_never_dropped(pg_env):
+    """真 PG: 规范索引名被另一张表的索引占用 → wrong table 阻断, 修复不得删它。"""
+    from src.core.scoring_guard import check_scoring_health
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        _upgrade_legacy_to_250(conn)
+    with pg_env.begin() as conn:
+        _insert_owned_rows(conn, [("600183", "v1", "buy")])
+    _pg_drop(pg_env, _GUARD_USER_ACTIVE)
+    other_cols = (
+        "user_id VARCHAR(36), agent_name VARCHAR(64), stock_symbol VARCHAR(32), "
+        "stock_market VARCHAR(16), prediction_date VARCHAR(10), horizon_days INTEGER, "
+        "outcome_status VARCHAR(16)"
+    )
+    with pg_env.begin() as conn:
+        conn.execute(text(f"CREATE TABLE other_prediction_outcomes ({other_cols})"))
+        conn.execute(
+            text(
+                f"CREATE UNIQUE INDEX {_GUARD_USER_ACTIVE} ON other_prediction_outcomes "
+                "(user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+                "horizon_days) WHERE user_id IS NOT NULL AND outcome_status <> 'superseded'"
+            )
+        )
+    before_rows, _ = _pg_snapshot(pg_env)
+
+    health = check_scoring_health(pg_env, allow_repair=False)
+    state = {i.name: i for i in health.indexes}[_GUARD_USER_ACTIVE]
+    assert health.blocked is True
+    assert state.status == "wrong_table" and "别的表" in state.detail
+    assert "index_wrong_table" in health.reason_code
+
+    repaired = check_scoring_health(pg_env, allow_repair=True)
+    assert repaired.blocked is True
+    with pg_env.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT tablename FROM pg_indexes WHERE indexname = :n"
+            ),
+            {"n": _GUARD_USER_ACTIVE},
+        ).fetchall()
+    assert [r[0] for r in rows] == ["other_prediction_outcomes"], "不得删除其他表的索引"
+    after_rows, _ = _pg_snapshot(pg_env)
+    assert after_rows == before_rows
+
+
+def test_pg_check_and_repair_are_bound_to_public_regardless_of_search_path(pg_env):
+    """search_path 里有同名表时: 校验/建索引仍必须落在 public(否则体检错表=fail-open)。"""
+    from src.core.scoring_guard import check_scoring_health
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        _upgrade_legacy_to_250(conn)
+    with pg_env.begin() as conn:
+        _insert_owned_rows(conn, [("600183", "v1", "buy")])
+        conn.execute(text("CREATE SCHEMA shadow_schema"))
+        conn.execute(
+            text(
+                "CREATE TABLE shadow_schema.agent_prediction_outcomes "
+                "(user_id VARCHAR(36), agent_name VARCHAR(64), stock_symbol VARCHAR(32), "
+                "stock_market VARCHAR(16), prediction_date VARCHAR(10), horizon_days INTEGER, "
+                "owner_scope VARCHAR(16), run_trace_id VARCHAR(64), outcome_status VARCHAR(16))"
+            )
+        )
+
+    with pg_env.begin() as conn:
+        conn.execute(text("SET search_path TO shadow_schema, public"))
+        # 正常状态下: 必须看到 public 的四条索引, 不能因为 shadow 无索引而误判
+        ok = check_scoring_health(conn, allow_repair=False)
+        assert ok.blocked is False, ok.detail
+
+        _pg_drop(pg_env, _GUARD_USER_ACTIVE)
+        # 同一连接(search_path 仍以 shadow 开头)按需修复 → 索引必须建在 public
+        fixed = check_scoring_health(conn, allow_repair=True)
+        assert fixed.blocked is False, fixed.detail
+    with pg_env.begin() as conn:
+        on_public = conn.execute(
+            text(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = :n"
+            ),
+            {"n": _GUARD_USER_ACTIVE},
+        ).first()
+        on_shadow = conn.execute(
+            text(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = 'shadow_schema' AND indexname = :n"
+            ),
+            {"n": _GUARD_USER_ACTIVE},
+        ).first()
+    assert on_public is not None, "修复必须落在 public.agent_prediction_outcomes"
+    assert on_shadow is None, "不得把索引建到 search_path 里的同名表上"
+
+
+def test_pg_runtime_role_without_ddl_cannot_repair_and_gets_generic_reason(pg_env):
+    """真 PG 权限不足: 运行期角色即使 allow_repair=True 也不做任何 DDL(repair_denied),
+    对外原因不含异常原文/SQL/参数, 数据与索引都不变。"""
+    import json as _json
+
+    from src.core.scoring_guard import check_scoring_health
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        _upgrade_legacy_to_250(conn)
+    with pg_env.begin() as conn:
+        _insert_owned_rows(conn, [("600183", "v1", "buy")])
+    _pg_drop(pg_env, _GUARD_USER_ACTIVE)
+    forged = (
+        f"CREATE INDEX {_GUARD_USER_ACTIVE} ON agent_prediction_outcomes (user_id)"
+    )
+    with pg_env.begin() as conn:
+        conn.execute(text(forged))
+    before_rows, before_idx = _pg_snapshot(pg_env)
+
+    suffix = uuid.uuid4().hex[:10]
+    ro_role = _ident(f"sida_predoutcome_ro_{suffix}", re.compile(r"^sida_predoutcome_ro_[0-9a-f]{10}$"))
+    pwd = f"pw_{uuid.uuid4().hex[:16]}"
+    base = make_url(ADMIN_URL)
+    dbname = str(pg_env.url.database)
+    admin = create_engine(ADMIN_URL, isolation_level="AUTOCOMMIT", future=True)
+    ro_eng = None
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE ROLE "{ro_role}" LOGIN PASSWORD \'{pwd}\''))
+        with pg_env.begin() as conn:
+            conn.execute(text(f'GRANT CONNECT ON DATABASE "{dbname}" TO "{ro_role}"'))
+            conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{ro_role}"'))
+            conn.execute(text(f'GRANT SELECT ON agent_prediction_outcomes TO "{ro_role}"'))
+        ro_eng = create_engine(
+            base.set(database=dbname, username=ro_role, password=pwd), future=True
+        )
+        with ro_eng.connect() as conn:
+            assert conn.execute(text("SELECT current_user")).scalar() == ro_role
+
+        health = check_scoring_health(ro_eng, allow_repair=True)
+        assert health.blocked is True
+        assert "repair_denied" in health.reason_code, health.reason_code
+        blob = _json.dumps(health.as_payload(), ensure_ascii=False)
+        for leaked in ("permission denied", "psycopg", "CREATE INDEX", "Traceback"):
+            assert leaked not in blob, f"对外原因泄露: {leaked}"
+
+        after_rows, after_idx = _pg_snapshot(pg_env)
+        assert after_rows == before_rows, "无 DDL 权限时不得改数据"
+        assert after_idx[_GUARD_USER_ACTIVE] == before_idx[_GUARD_USER_ACTIVE], (
+            "无 DDL 权限时连错定义索引也不得尝试删除/重建"
+        )
+    finally:
+        if ro_eng is not None:
+            ro_eng.dispose()
+        # 由授权方(库/表属主)显式收回, 再删角色: 否则 DROP ROLE 会因 ACL 依赖失败。
+        try:
+            with pg_env.begin() as conn:
+                conn.execute(
+                    text(f'REVOKE ALL ON TABLE agent_prediction_outcomes FROM "{ro_role}"')
+                )
+                conn.execute(text(f'REVOKE ALL ON SCHEMA public FROM "{ro_role}"'))
+                conn.execute(text(f'REVOKE ALL ON DATABASE "{dbname}" FROM "{ro_role}"'))
+        except Exception:  # noqa: BLE001 — 收权失败不掩盖上面的断言
+            pass
+        try:
+            with admin.connect() as conn:
+                conn.execute(text(f'DROP ROLE IF EXISTS "{ro_role}"'))
+        finally:
+            admin.dispose()
+
+
 def test_pg_m250_success_no_longer_hides_forged_index(pg_env):
     """"迁移 success=1"不等于"约束在位": 迁移前同名索引就是错定义时, m250 必须在同一次
     迁移里识别并重建它(不删不改任何数据行), 而不是看到名字就跳过。"""

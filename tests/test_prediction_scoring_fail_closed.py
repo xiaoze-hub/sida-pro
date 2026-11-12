@@ -252,23 +252,113 @@ def test_missing_index_blocks_every_scoring_path_and_changes_no_data(tmp_path, m
     assert after[1] == before[1], "只读巡检不得偷偷补索引"
 
 
-def test_evaluation_repairs_missing_index_then_proceeds_and_says_so(tmp_path, monkeypatch):
-    """评估是"发现安全状态就按需幂等重建"的入口: 缺索引且**无重复键**时先建回来再算,
-    并如实报出 `scoring_repaired`; 不会像断言的"阻断"那样在有救的情况下白停一天。"""
+def test_evaluation_only_checks_never_ddl_and_keeps_scoring_blocked(tmp_path, monkeypatch):
+    """运行期评估**只检查、不 DDL**: 缺索引时直接 blocked, 不补索引、不回填、数据不变。"""
+    from src.core import scoring_guard as sg
     from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
 
     eng, Session = _make_db(tmp_path, rows=({"user_id": "u-a", "run_trace_id": "run-1"},))
     _wire(monkeypatch, eng, Session)
     _drop(eng, _ACTIVE, _RUN)
-    rows_before = _table_rows(eng)
+    before = _snapshot(eng)
+
+    checks = {"n": 0}
+    real_check = sg.check_scoring_health
+
+    def _counting_check(*args, **kwargs):
+        checks["n"] += 1
+        assert kwargs.get("allow_repair") is not True, "运行期评估不得请求修复(DDL)"
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(sg, "check_scoring_health", _counting_check)
 
     stats = evaluate_pending_prediction_outcomes()
-    assert stats["scoring_blocked"] is False
-    assert sorted(stats["scoring_repaired"]) == sorted((_ACTIVE, _RUN))
-    rebuilt = _index_ddl(eng, _ACTIVE) or ""
-    assert "UNIQUE" in rebuilt.upper()
-    # 重建只碰索引: 行内容不变(评估本身可能改 outcome_*; 这里行情价取不到, 只会 skipped)
-    assert len(_table_rows(eng)) == len(rows_before)
+    assert stats["scoring_blocked"] is True
+    assert stats["evaluated"] == 0 and stats["eligible"] == 0
+    assert stats["total_pending"] == 1
+    assert "index_missing" in stats["scoring_status"]["reason_code"]
+    assert checks["n"] == 1, "批次边界只检查一次"
+    # 只读路径不允许建索引, 数据一行不动
+    assert _index_ddl(eng, _ACTIVE) is None
+    assert _snapshot(eng) == before
+
+
+def test_batch_evaluation_reuses_one_session_and_one_check(tmp_path, monkeypatch):
+    """批量评估复用同一会话/只检查一次; 小连接池(1)跑 20 行不因按行新建连接而耗尽。"""
+    import types
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import QueuePool
+
+    import src.core.context_store as cs
+    import src.core.prediction_outcome as po
+    from src.core import scoring_guard as sg
+
+    n_rows = 20
+    rows = tuple(
+        {
+            "user_id": "u-a",
+            "run_trace_id": f"run-{i}",
+            "stock_symbol": f"{600000 + i}",
+            "prediction_date": DAY,
+            "horizon_days": 1,
+            "trigger_price": 100.0,
+        }
+        for i in range(n_rows)
+    )
+    eng, _ = _make_db(tmp_path, rows=rows)
+    # 全新 engine: 连接池只有 1 个连接, 按行新建连接就会超时
+    pooled = create_engine(
+        str(eng.url),
+        future=True,
+        poolclass=QueuePool,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.2,
+    )
+    Session = sessionmaker(bind=pooled, future=True)
+
+    factory_calls = {"n": 0}
+
+    def _factory(*a, **kw):
+        factory_calls["n"] += 1
+        return Session(*a, **kw)
+
+    monkeypatch.setattr(cs, "SessionLocal", _factory)
+
+    checks = {"n": 0}
+    real_check = sg.check_scoring_health
+
+    def _counting_check(*args, **kwargs):
+        checks["n"] += 1
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(sg, "check_scoring_health", _counting_check)
+
+    class _FakeKline:
+        def __init__(self, symbol=None, days=None):
+            pass
+
+        def get_klines(self, symbol, days=120):
+            target = po._add_trading_days(date.fromisoformat(DAY), 1).isoformat()
+            return [types.SimpleNamespace(date=target, close=101.0)]
+
+    monkeypatch.setattr(po, "KlineCollector", _FakeKline)
+
+    stats = po.evaluate_pending_prediction_outcomes(limit=100)
+    assert stats["scoring_blocked"] is False, stats
+    assert stats["evaluated"] == n_rows, stats
+    assert checks["n"] == 1, "批次只允许检查一次评分闸门"
+    assert factory_calls["n"] == 1, "批次应复用同一个会话(不按行新建)"
+    with eng.begin() as c:
+        evaluated = c.execute(
+            sqltext(
+                "SELECT COUNT(*) FROM agent_prediction_outcomes "
+                "WHERE outcome_status = 'evaluated'"
+            )
+        ).scalar()
+    assert evaluated == n_rows
 
 
 def test_readonly_check_never_creates_indexes(tmp_path, monkeypatch):
@@ -343,6 +433,142 @@ def test_same_name_unique_index_with_wrong_predicate_is_a_mismatch(tmp_path, mon
     state = {i.name: i for i in health.indexes}[_RUN]
     assert state.status == "mismatch" and "谓词" in state.detail
     assert check_scoring_health(eng, allow_repair=True).blocked is False
+
+
+def test_sql_literal_case_is_semantic_not_noise(tmp_path, monkeypatch):
+    """'Superseded' / 'SYSTEM' 不是 'superseded' / 'system': 大小写不同的同名索引必须
+    判 mismatch(旧实现把整段谓词小写, 会假通过)。重建后必须写回小写字面量。"""
+    from src.core.scoring_guard import check_scoring_health
+
+    eng, Session = _make_db(tmp_path, rows=({"user_id": "u-a", "run_trace_id": "run-1"},))
+    _wire(monkeypatch, eng, Session)
+
+    cases = (
+        (
+            _ACTIVE,
+            "user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days",
+            "user_id IS NOT NULL AND outcome_status <> 'Superseded'",
+        ),
+        (
+            _SYS_ACTIVE,
+            "agent_name, stock_symbol, stock_market, prediction_date, horizon_days",
+            "owner_scope = 'SYSTEM' AND outcome_status <> 'superseded'",
+        ),
+    )
+    for name, cols, where in cases:
+        _drop(eng, name)
+        with eng.begin() as c:
+            c.execute(
+                sqltext(f"CREATE UNIQUE INDEX {name} ON agent_prediction_outcomes ({cols}) WHERE {where}")
+            )
+        before = _table_rows(eng)
+        health = check_scoring_health(eng, allow_repair=False)
+        state = {i.name: i for i in health.indexes}[name]
+        assert health.blocked is True, health.detail
+        assert state.status == "mismatch" and "谓词" in state.detail, state
+        # 只读路径不 DDL
+        assert _index_ddl(eng, name) == (
+            f"CREATE UNIQUE INDEX {name} ON agent_prediction_outcomes ({cols}) WHERE {where}"
+        )
+
+        fixed = check_scoring_health(eng, allow_repair=True)
+        assert fixed.blocked is False, fixed.detail
+        rebuilt = _index_ddl(eng, name) or ""
+        assert "'Superseded'" not in rebuilt and "'SYSTEM'" not in rebuilt
+        assert "'superseded'" in rebuilt
+        assert _table_rows(eng) == before, "重建只碰索引, 不改任何数据行"
+
+
+def test_predicate_with_or_is_never_treated_as_equivalent(tmp_path, monkeypatch):
+    """抹平括号后做字符串比较的另一个 fail-open: 含 OR 的谓词不得与纯 AND 规范等价。"""
+    from src.core.scoring_guard import check_scoring_health
+
+    eng, Session = _make_db(tmp_path)
+    _wire(monkeypatch, eng, Session)
+    _drop(eng, _ACTIVE)
+    with eng.begin() as c:
+        c.execute(
+            sqltext(
+                f"CREATE UNIQUE INDEX {_ACTIVE} ON agent_prediction_outcomes "
+                "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
+                "WHERE (user_id IS NOT NULL AND outcome_status <> 'superseded') OR (user_id IS NULL)"
+            )
+        )
+    health = check_scoring_health(eng, allow_repair=False)
+    state = {i.name: i for i in health.indexes}[_ACTIVE]
+    assert health.blocked is True
+    assert state.status == "mismatch" and "谓词" in state.detail
+
+
+def test_same_name_index_on_another_table_is_wrong_table_and_never_dropped(tmp_path, monkeypatch):
+    """同名索引建在别的表上: 诊断 wrong table; 修复路径**绝不**删别人的索引, 只阻断。"""
+    from src.core.scoring_guard import check_scoring_health
+
+    eng, Session = _make_db(tmp_path, rows=({"user_id": "u-a", "run_trace_id": "run-1"},))
+    _wire(monkeypatch, eng, Session)
+    _drop(eng, _ACTIVE)
+    other_ddl = (
+        f"CREATE UNIQUE INDEX {_ACTIVE} ON other_prediction_outcomes "
+        "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
+        "WHERE user_id IS NOT NULL AND outcome_status <> 'superseded'"
+    )
+    with eng.begin() as c:
+        c.execute(
+            sqltext(
+                "CREATE TABLE other_prediction_outcomes ("
+                "user_id TEXT, agent_name TEXT, stock_symbol TEXT, stock_market TEXT, "
+                "prediction_date TEXT, horizon_days INTEGER, outcome_status TEXT)"
+            )
+        )
+        c.execute(sqltext(other_ddl))
+    before_rows = _table_rows(eng)
+
+    health = check_scoring_health(eng, allow_repair=False)
+    state = {i.name: i for i in health.indexes}[_ACTIVE]
+    assert health.blocked is True
+    assert state.status == "wrong_table" and "别的表" in state.detail
+    assert "index_wrong_table" in health.reason_code
+
+    # 有权修复也不能删别的表的索引; 目标表保持缺失并继续阻断
+    repaired = check_scoring_health(eng, allow_repair=True)
+    assert repaired.blocked is True
+    assert _index_ddl(eng, _ACTIVE) == other_ddl, "不得删除/改写其他表的索引"
+    with eng.begin() as c:
+        on_target = c.execute(
+            sqltext(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=:n "
+                "AND tbl_name='agent_prediction_outcomes'"
+            ),
+            {"n": _ACTIVE},
+        ).first()
+    assert on_target is None, "名字被别的表占用, 不得在本表建同名索引"
+    assert _table_rows(eng) == before_rows
+
+
+def test_check_failure_exposes_generic_reason_and_logs_no_sql(tmp_path, monkeypatch, caplog):
+    """检查本身抛错: 对外只报 check_failed(类型/SQLSTATE 白名单), 不回显 SQL/参数原文。"""
+    import json as _json
+    import logging
+
+    from src.core import scoring_guard as sg
+
+    eng, Session = _make_db(tmp_path)
+    secret = "PARAM_SECRET_9f3a"
+    real = sg._all_index_ddls
+
+    def _boom(conn):
+        raise RuntimeError(f"SELECT * FROM agent_prediction_outcomes WHERE x='{secret}'")
+
+    monkeypatch.setattr(sg, "_all_index_ddls", _boom)
+    with caplog.at_level(logging.ERROR, logger="src.core.scoring_guard"):
+        health = sg.check_scoring_health(eng, allow_repair=False)
+    monkeypatch.setattr(sg, "_all_index_ddls", real)
+
+    assert health.blocked is True and health.reason_code == "check_failed"
+    blob = _json.dumps(health.as_payload(), ensure_ascii=False)
+    for leaked in (secret, "SELECT", "agent_prediction_outcomes WHERE"):
+        assert leaked not in blob, f"对外原因泄露了 SQL/参数: {leaked}"
+    assert secret not in caplog.text and "SELECT *" not in caplog.text
 
 
 # ── C. 有重复键则不建索引、不清理数据, 继续阻断 ───────────────────────────

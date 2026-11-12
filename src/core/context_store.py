@@ -97,12 +97,42 @@ def _scoring_gate(*, bind=None, allow_repair: bool = False):
     计分键唯一性完全依赖 `scoring_guard.INDEX_SPECS` 的四条部分唯一索引; 它们缺失或定义
     不符时, 写入/回填会制造同键重复计分行(命中率双计)。这里不猜、不兜底: 直接问闸门。
 
-    `bind` 传**这次会话自己的绑定引擎**, 保证体检的就是接下来要写的那个库(而不是 import
-    时定下的模块级引擎)。
+    `bind` 传**这次会话自己的连接/引擎**, 保证体检的就是接下来要写的那个库(而不是 import
+    时定下的模块级引擎)。运行期一律 `allow_repair=False`: 业务角色没有 DDL 权限, 热点路径
+    不建/删索引。
     """
     from src.core.scoring_guard import check_scoring_health
 
     return check_scoring_health(bind=bind, allow_repair=allow_repair)
+
+
+def _session_gate_bind(db):
+    """给闸门挑"这次会话正在用的"绑定: 优先复用会话连接(不多 checkout), 退化到 bind。
+
+    测试/包装会话可能没有 `connection()`; 这时回落 `bind`, 保证闸门仍检查同一个库,
+    而不是退回模块级默认引擎。
+    """
+    getter = getattr(db, "connection", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:  # noqa: BLE001 — 取连接失败时退回 bind, 由闸门按不可用阻断
+            pass
+    return getattr(db, "bind", None)
+
+
+def _scoring_gate_for_session(db):
+    """用**本会话的绑定**过闸门; 拿不到绑定就按不可用阻断(绝不退回默认引擎)。"""
+    bind = _session_gate_bind(db)
+    if bind is None:
+        from src.core.scoring_guard import STATUS_BLOCKED, ScoringHealth
+
+        return ScoringHealth(
+            status=STATUS_BLOCKED,
+            reason_code="unavailable",
+            detail="无法确定本次会话的数据库绑定 → 不能断言索引在位, 评分阻断",
+        )
+    return _scoring_gate(bind=bind)
 
 
 def save_stock_context_snapshot(
@@ -513,13 +543,14 @@ def save_agent_prediction_outcome(
 
     # 评分闸门(fail-closed, 2026-11-13): 计分键唯一性只由 m250 的四条部分唯一索引保证。
     # 索引缺失/定义错误时并发或重跑会写出第二条计分行(双计分), 因此**拒写**而不是"先写着
-    # 看"。这里只读巡检: 重建由启动/评估/维护路径按需执行, 写路径不在热点上做 DDL。
+    # 看"。这里只读巡检(复用本会话连接, 不再额外 checkout); 运行期禁止 DDL, 修复只由
+    # 启动/迁移角色或运维显式执行。
     db = SessionLocal()
-    health = _scoring_gate(bind=getattr(db, "bind", None))
+    health = _scoring_gate_for_session(db)
     if health.blocked:
         logger.error(
             "预测后验不写入(评分阻断: %s): %s/%s/%s h=%s scope=%s user=%r —— 唯一约束不可信, "
-            "写入会制造同键重复计分行; 先恢复索引(重启/维护按需重建)再重试",
+            "写入会制造同键重复计分行; 先由启动/迁移角色或运维恢复索引再重试",
             health.reason_code,
             agent_name,
             stock_symbol,
@@ -754,24 +785,24 @@ def save_agent_prediction_outcome(
             except IntegrityError as e2:
                 db.rollback()
                 logger.warning(
-                    "预测后验并发追加仍被唯一键拒绝: scope=%s user=%r %s/%s/%s h=%s err=%s",
+                    "预测后验并发追加仍被唯一键拒绝: scope=%s user=%r %s/%s/%s h=%s kind=%s",
                     scope,
                     uid or None,
                     agent_name,
                     stock_symbol,
                     date_str,
                     horizon,
-                    e2,
+                    _db_error_kind(e2),
                 )
         logger.warning(
-            "预测后验并发重复(DB 唯一键挡住), 本次没有写入: scope=%s user=%r %s/%s/%s h=%s err=%s",
+            "预测后验并发重复(DB 唯一键挡住), 本次没有写入: scope=%s user=%r %s/%s/%s h=%s kind=%s",
             scope,
             uid or None,
             agent_name,
             stock_symbol,
             date_str,
             horizon,
-            e,
+            _db_error_kind(e),
         )
         return OutcomeSaveResult(
             status="concurrent_duplicate", written=False, reason="并发写入被唯一键拒绝"
@@ -779,23 +810,23 @@ def save_agent_prediction_outcome(
     except OperationalError as e:
         db.rollback()
         logger.error(
-            "预测后验写入失败(数据库不可用/锁冲突): scope=%s user=%r %s/%s/%s h=%s err=%s",
+            "预测后验写入失败(数据库不可用/锁冲突): scope=%s user=%r %s/%s/%s h=%s kind=%s",
             scope,
             uid or None,
             agent_name,
             stock_symbol,
             date_str,
             horizon,
-            e,
+            _db_error_kind(e),
         )
         return OutcomeSaveResult(
-            status="db_unavailable", written=False, reason=f"OperationalError: {e}"
+            status="db_unavailable", written=False, reason="数据库不可用/锁冲突"
         )
     except Exception as e:
         db.rollback()
-        logger.warning("保存 prediction outcome 失败: %s", e)
+        logger.warning("保存 prediction outcome 失败: %s", type(e).__name__)
         return OutcomeSaveResult(
-            status="write_failed", written=False, reason=f"{type(e).__name__}: {e}"
+            status="write_failed", written=False, reason=type(e).__name__
         )
     finally:
         db.close()
@@ -807,6 +838,8 @@ def mark_agent_prediction_outcome(
     outcome_price: float | None,
     outcome_return_pct: float | None,
     status: str = "evaluated",
+    db=None,
+    health=None,
 ) -> bool:
     """回填某条预测的评估结果（只有归属可证明的**计分行**才允许写）。
 
@@ -819,19 +852,24 @@ def mark_agent_prediction_outcome(
 
     三次修正(2026-11-13): 回填**前**先过评分闸门。唯一索引缺失/定义错误时, "这是一条合法
     计分行"本身就无法证明(同键可能已有第二条), 此时回填同样是不可信成绩 → 拒绝并记 ERROR。
+
+    批量评估(2026-11-13): `db` / `health` 允许调用方传入**同一个会话**与批次开始时**只算
+    一次**的闸门结论, 避免每一行都开新会话/新连接、把连接池耗干。传了 `health` 就只认它
+    (调用方负责在批次边界现查, 不允许用缓存跨批次)。
     """
-    db = SessionLocal()
-    gate = _scoring_gate(bind=getattr(db, "bind", None))
-    if gate.blocked:
-        db.close()
-        logger.error(
-            "拒绝回填预测后验(id=%s): 评分阻断(%s) —— %s",
-            record_id,
-            gate.reason_code,
-            gate.detail,
-        )
-        return False
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
     try:
+        gate = health if health is not None else _scoring_gate_for_session(db)
+        if gate.blocked:
+            logger.error(
+                "拒绝回填预测后验(id=%s): 评分阻断(%s) —— %s",
+                record_id,
+                gate.reason_code,
+                gate.detail,
+            )
+            return False
         rec = (
             db.query(AgentPredictionOutcome)
             .filter(AgentPredictionOutcome.id == int(record_id))
@@ -869,24 +907,28 @@ def mark_agent_prediction_outcome(
         db.commit()
         return True
     except OperationalError as e:
-        logger.error("回填 prediction outcome 失败(数据库不可用): id=%s err=%s", record_id, e)
+        logger.error(
+            "回填 prediction outcome 失败(数据库不可用): id=%s err=%s",
+            record_id,
+            _db_error_kind(e),
+        )
         db.rollback()
         return False
     except IntegrityError as e:
         logger.error(
-            "回填 prediction outcome 违反完整性约束(%s): id=%s err=%s",
-            _db_error_kind(e),
+            "回填 prediction outcome 违反完整性约束: id=%s kind=%s",
             record_id,
-            e,
+            _db_error_kind(e),
         )
         db.rollback()
         return False
     except Exception as e:
-        logger.warning("更新 prediction outcome 失败: %s", e)
+        logger.warning("更新 prediction outcome 失败: %s", type(e).__name__)
         db.rollback()
         return False
     finally:
-        db.close()
+        if own_db:
+            db.close()
 
 
 def list_pending_prediction_outcomes(
@@ -894,6 +936,7 @@ def list_pending_prediction_outcomes(
     max_horizon_days: int = 10,
     limit: int = 300,
     user_id: str | None = None,
+    db=None,
 ) -> list[AgentPredictionOutcome]:
     """待评估的后验记录 —— **只返回归属可证明的个人计分行**（2026-11-12 三次修正）。
 
@@ -906,8 +949,11 @@ def list_pending_prediction_outcomes(
     - 追加的审计版本(status='superseded')不是计分行 → 永不评估, 否则同键重复计分。
 
     `user_id` 可选: 传了就只取该用户的行(供按用户范围触发的维护评估使用)。
+    `db` 可选: 批量评估传入**同一个会话**, 不再为每条查询新建连接。
     """
-    db = SessionLocal()
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
     try:
         today = date.today().strftime("%Y-%m-%d")
         q = db.query(AgentPredictionOutcome).filter(
@@ -935,16 +981,19 @@ def list_pending_prediction_outcomes(
             .all()
         )
     finally:
-        db.close()
+        if own_db:
+            db.close()
 
 
-def count_ghost_user_prediction_outcomes(*, max_horizon_days: int = 10) -> int:
+def count_ghost_user_prediction_outcomes(*, max_horizon_days: int = 10, db=None) -> int:
     """user_id 指向**已不存在用户**的待评估行数(ghost) —— 只用于如实报告。
 
     这些行在迁移库缺外键、用户被物理清除后出现: 有 user_id 可它已经不对应任何账号。
     既不能评估(给谁记成绩?), 也不该被清理顺手删掉(归属问题没查清就消失, 事后无法复核)。
     """
-    db = SessionLocal()
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
     try:
         today = date.today().strftime("%Y-%m-%d")
         return int(
@@ -959,7 +1008,8 @@ def count_ghost_user_prediction_outcomes(*, max_horizon_days: int = 10) -> int:
             .count()
         )
     finally:
-        db.close()
+        if own_db:
+            db.close()
 
 
 def count_detached_prediction_outcomes() -> int:
@@ -984,9 +1034,11 @@ def count_detached_prediction_outcomes() -> int:
         db.close()
 
 
-def count_unowned_pending_prediction_outcomes(*, max_horizon_days: int = 10) -> int:
+def count_unowned_pending_prediction_outcomes(*, max_horizon_days: int = 10, db=None) -> int:
     """无归属(pending 且 user_id 为空、owner_scope 也为空)的历史行数 —— 只用于如实报告。"""
-    db = SessionLocal()
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
     try:
         today = date.today().strftime("%Y-%m-%d")
         return int(
@@ -1001,12 +1053,15 @@ def count_unowned_pending_prediction_outcomes(*, max_horizon_days: int = 10) -> 
             .count()
         )
     finally:
-        db.close()
+        if own_db:
+            db.close()
 
 
-def count_system_pending_prediction_outcomes(*, max_horizon_days: int = 10) -> int:
+def count_system_pending_prediction_outcomes(*, max_horizon_days: int = 10, db=None) -> int:
     """system 桶的待评估行数 —— 独立统计, 从不并入任何个人成绩。"""
-    db = SessionLocal()
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
     try:
         today = date.today().strftime("%Y-%m-%d")
         return int(
@@ -1021,7 +1076,8 @@ def count_system_pending_prediction_outcomes(*, max_horizon_days: int = 10) -> i
             .count()
         )
     finally:
-        db.close()
+        if own_db:
+            db.close()
 
 
 def list_agent_prediction_outcomes(

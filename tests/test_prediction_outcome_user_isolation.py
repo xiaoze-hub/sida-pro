@@ -586,6 +586,14 @@ def test_foreign_key_violation_is_not_reported_as_concurrency(db, monkeypatch):
         def query(self, *a, **k):
             return self._inner.query(*a, **k)
 
+        # 与真实 Session 同接口: 闸门会复用本次会话的连接/绑定
+        @property
+        def bind(self):
+            return self._inner.bind
+
+        def connection(self):
+            return self._inner.connection()
+
         def close(self):
             self._inner.close()
 

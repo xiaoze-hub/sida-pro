@@ -23,12 +23,19 @@ ERROR), 所以"迁移成功"绝不能当成"约束在位"。
    不返回任何 user_id —— 索引/状态诊断本身不泄露其他用户。
 2. 四条索引任何一条 `missing` 或**定义不符**(唯一性/列/谓词, 不只看名字)→ `blocked`;
    调用方必须显示 `scoring_blocked` 并**不评估、不回填、不计分**。
-3. `allow_repair=True`(启动 / 评估 / 显式维护)时按需**幂等重建**: 先统计该索引谓词下的
-   重复键组数, `0` 才 `CREATE UNIQUE INDEX`; 有重复就**不建**, 如实报
-   `duplicate_rows`。定义不符的同名索引先 `DROP INDEX`(它本来就不是我们要的约束)再建。
-   **全程不 UPDATE / DELETE 任何数据行**, 也不做任何回填。
-4. 拿不到连接 / 检查本身抛错 → 同样 `blocked`(`unavailable` / `check_failed`)。宁可显示
-   "评分阻断", 也不输出一个可能双计的可信命中率。
+3. **运行期只检查, 绝不 DDL**: 评估 / 写入 / 回填 / 统计全部走 `allow_repair=False`;
+   业务角色没有 DDL 权限, 这些路径连 `CREATE/DROP` 都不会尝试。
+4. 修复(`allow_repair=True`)只允许**启动 / 迁移角色路径**或另行运维显式调用。即便被误用,
+   也会先探测当前连接的 DDL 能力( PG 看表属主 / 建索引权限), 无权时**不尝试任何 DDL**,
+   直接 `blocked`(`repair_denied`)。有权时按需**幂等重建**: 先统计该索引谓词下的重复键组数,
+   `0` 才 `CREATE UNIQUE INDEX`; 有重复就**不建**, 如实报 `duplicate_rows`。定义不符且
+   **确认在本表**的同名索引先 `DROP INDEX` 再建; 建在别的表上的同名索引**绝不删**(不是
+   我们的对象, 需人工处理)。**全程不 UPDATE / DELETE 任何数据行**, 也不做任何回填。
+5. 拿不到连接 / 检查本身抛错 → 同样 `blocked`(`unavailable` / `check_failed`)。对外只报
+   通用类别(异常类型 / SQLSTATE 白名单), **不回显 SQL、绑定参数或数据库异常原文**;
+   日志同样只写白名单字段。宁可显示"评分阻断", 也不输出一个可能双计的可信命中率。
+6. 批量评估复用**同一个会话**并在批次边界**只检查一次**, 不按行新建连接(池耗尽)。
+   不引入 TTL 缓存: 缓存会把"索引刚被删"的窗口当成 ok; 无证据一律阻断。
 """
 
 from __future__ import annotations
@@ -56,6 +63,7 @@ STATUS_BLOCKED = "blocked"
 IDX_OK = "ok"
 IDX_MISSING = "missing"
 IDX_MISMATCH = "mismatch"
+IDX_WRONG_TABLE = "wrong_table"
 
 
 @dataclass(frozen=True)
@@ -67,13 +75,16 @@ class IndexSpec:
     where: str
     description: str
 
-    @property
-    def violation_sql(self) -> str:
-        """该谓词下"重复键组数" —— 只做 COUNT, 不读写任何行内容。"""
+    def violation_sql(self, table_ref: str) -> str:
+        """该谓词下"重复键组数" —— 只做 COUNT, 不读写任何行内容。
+
+        `table_ref` 由调用方按方言给出( PG 必须显式 `public.`) —— 否则 search_path 里
+        有同名表时, 统计/建索引会落到**另一个表**上。
+        """
         cols = ", ".join(self.columns)
         return (
             "SELECT COUNT(*) FROM ("
-            f"SELECT 1 FROM {TABLE} WHERE {self.where} "
+            f"SELECT 1 FROM {table_ref} WHERE {self.where} "
             f"GROUP BY {cols} HAVING COUNT(*) > 1) d"
         )
 
@@ -185,21 +196,48 @@ class ScoringHealth:
 
 # ── DDL / 谓词归一化 ────────────────────────────────────────────────────────
 
+# SQL 单引号字符串字面量(含 `''` 转义)。归一化时先整体摘下, 只对小写**非字面量**部分
+# 做大小写折叠 —— 否则谓词里的 'system' / 'superseded' 被小写后, 'SYSTEM' /
+# 'Superseded' 这类**语义不同**的错定义会被当成等价(假通过/fail-open)。
+_SQL_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+
 
 def _canon_sql(sql: str) -> str:
     """把 DDL 片段归一化到可比较的形式(PG 会加 `::text` 与成堆括号, SQLite 不会)。
 
-    只用于**比较**, 从不用于执行。保留字符串字面量的单引号(谓词里的 'superseded' /
-    'system' 是语义的一部分)。
+    只用于**比较**, 从不用于执行。字符串字面量**逐字保留**(含大小写) —— 谓词里
+    `'superseded'` / `'system'` 是语义的一部分, 不是可以随便折叠的大小写噪声。
+
+    另外拒绝任何布尔 `OR`: 四条索引的谓词都是纯 AND 合取, 一旦把括号抹平后拿来做
+    字符串相等, `a AND (b OR c)` 可能被误判成 `a AND b AND c`。含 OR 的谓词直接
+    归一化成不可能与规范谓词相等的哨兵, 由调用方按"无法证明等价"阻断。
     """
-    s = (sql or "").strip().lower()
+    s = (sql or "").strip()
+    if not s:
+        return ""
+    literals: list[str] = []
+
+    def _stash(match: re.Match[str]) -> str:
+        literals.append(match.group(0))
+        return f"\x00{len(literals) - 1}\x00"
+
+    s = _SQL_LITERAL_RE.sub(_stash, s)
+    s = s.lower()
+    # 非字面量部分里出现 OR 词元 → 不是我们认可的合取谓词, 直接给不可匹配哨兵。
+    if re.search(r"\bor\b", s):
+        return "\x01unsupported-or-predicate\x01"
     for noise in ("::text", "::character varying", "::varchar", "::bpchar"):
         s = s.replace(noise, "")
     s = s.replace("!=", "<>")
     for ch in '"`[]':
         s = s.replace(ch, "")
     s = re.sub(r"\s+", "", s)
-    return s.replace("(", "").replace(")", "")
+    s = s.replace("(", "").replace(")", "")
+
+    def _restore(match: re.Match[str]) -> str:
+        return literals[int(match.group(1))]
+
+    return re.sub(r"\x00(\d+)\x00", _restore, s)
 
 
 _INDEX_DDL_RE = re.compile(
@@ -265,6 +303,59 @@ def _dialect_name(conn: Connection) -> str:
     return str(getattr(conn.dialect, "name", "") or "")
 
 
+def _table_ref(conn: Connection) -> str:
+    """PG 必须**显式 public. 限定**; SQLite 无 schema 概念。
+
+    search_path 里若存在同名表, 不带 schema 的 SELECT/CREATE INDEX 会落到另一个表上,
+    检查结论与实际写入表就"绑不上"了(典型 fail-open)。
+    """
+    return f"public.{TABLE}" if _dialect_name(conn) == "postgresql" else TABLE
+
+
+_SAFE_SQLSTATE_RE = re.compile(r"^[0-9A-Z]{5}$")
+
+
+def _safe_error(exc: BaseException) -> str:
+    """只返回可公开的异常分类: 类型名 + 合法 SQLSTATE 白名单, **不带任何原文**。
+
+    数据库异常原文常把 SQL、绑定参数、列值甚至连接串带出来(日志/API 泄露风险),
+    因此这里只保留"可行动的分类", 不拼接 `str(exc)` / `repr(exc)`。
+    """
+    name = type(exc).__name__
+    orig = getattr(exc, "orig", None)
+    code = str(getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None) or "").strip()
+    if code and _SAFE_SQLSTATE_RE.fullmatch(code):
+        return f"{name}(sqlstate={code})"
+    return name
+
+
+def _can_apply_ddl(conn: Connection) -> bool:
+    """当前连接是否有建/删索引的能力( PG: 必须是目标表属主或超级用户)。
+
+    运行期业务角色没有 DDL 权限 —— 即使调用方误传 `allow_repair=True`, 这里也会在
+    执行任何 DDL **之前**返回 False, 避免"评估时自动建删索引"和对热表的反复加锁。
+    探测失败 → False(无证据不放行)。
+    """
+    if _dialect_name(conn) != "postgresql":
+        return True  # SQLite 测试/本地库没有角色拆分
+    try:
+        row = conn.execute(
+            text(
+                """
+SELECT pg_has_role(current_user, c.relowner, 'USAGE') AS owner_ok
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relname = :t AND n.nspname = 'public' AND c.relkind IN ('r', 'p')
+LIMIT 1
+"""
+            ),
+            {"t": TABLE},
+        ).first()
+    except Exception:  # noqa: BLE001 — 探测失败按"无权"处理, 绝不因此放行 DDL
+        return False
+    return bool(row and row[0])
+
+
 def _has_table(conn: Connection, table: str) -> bool:
     if _dialect_name(conn) == "postgresql":
         row = conn.execute(
@@ -297,24 +388,32 @@ def _table_columns(conn: Connection) -> set[str]:
 
 
 def _all_index_ddls(conn: Connection) -> dict[str, str]:
-    """一次取回本表**全部**索引的 DDL(名字 → 原文)。只读目录, 不碰数据。
+    """一次取回**本表**索引 + 四条规范名在 public 下的任何同名索引(名字 → 原文)。
 
-    一次查全(而不是四条索引各查一次)是为了把写入热路径上的目录查询压到固定 3 次
-    (表存在 / 列存在 / 索引定义) —— 见模块末尾"性能"说明。
+    为什么要带上"同名但建在别的表上"的索引: 否则我们只会看到"缺失", 然后拿
+    `CREATE INDEX IF NOT EXISTS` 去撞一个已占用的名字(静默 no-op), 永远无法给出
+    "wrong table" 这种可行动诊断。看到它之后 `_check_spec` 会判 `wrong_table`, 修复
+    路径**绝不 DROP**(不是我们的对象), 只阻断并交人工处理。
     """
+    spec_names = tuple(_SPEC_BY_NAME)
     if _dialect_name(conn) == "postgresql":
+        placeholders = ", ".join(f":n{i}" for i in range(len(spec_names)))
+        params = {"t": TABLE, **{f"n{i}": n for i, n in enumerate(spec_names)}}
         rows = conn.execute(
             text(
-                """
+                f"""
 SELECT ic.relname AS name, pg_get_indexdef(i.indexrelid) AS ddl, i.indisvalid AS valid
 FROM pg_index i
 JOIN pg_class ic ON ic.oid = i.indexrelid
 JOIN pg_class tc ON tc.oid = i.indrelid
 JOIN pg_namespace n ON n.oid = ic.relnamespace
-WHERE tc.relname = :t AND n.nspname = 'public'
-"""
+JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+WHERE tn.nspname = 'public'
+  AND n.nspname = 'public'
+  AND (tc.relname = :t OR ic.relname IN ({placeholders}))
+"""  # noqa: S608 — 占位符只来自**常量** INDEX_SPECS 名字, 值走绑定参数
             ),
-            {"t": TABLE},
+            params,
         ).fetchall()
         out: dict[str, str] = {}
         for r in rows:
@@ -323,9 +422,14 @@ WHERE tc.relname = :t AND n.nspname = 'public'
             # 无效索引(建到一半/被标记 invalid): 不能当成"约束在位"
             out[str(r[0])] = str(r[1]) if bool(r[2]) else f"-- invalid index: {r[1]}"
         return out
+    placeholders = ", ".join(f":n{i}" for i in range(len(spec_names)))
+    params = {"t": TABLE, **{f"n{i}": n for i, n in enumerate(spec_names)}}
     rows = conn.execute(
-        text("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=:t"),
-        {"t": TABLE},
+        text(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' "
+            f"AND (tbl_name = :t OR name IN ({placeholders}))"
+        ),
+        params,
     ).fetchall()
     return {str(r[0]): str(r[1]) for r in rows if r[1]}
 
@@ -346,7 +450,11 @@ def _check_spec(ddls: dict[str, str], spec: IndexSpec) -> IndexState:
     if parsed is None:
         return IndexState(spec.name, IDX_MISMATCH, "定义无法解析, 无法证明语义等价")
     if parsed["table"] != TABLE:
-        return IndexState(spec.name, IDX_MISMATCH, "索引建在别的表上")
+        return IndexState(
+            spec.name,
+            IDX_WRONG_TABLE,
+            f"同名索引建在别的表上({parsed['table']}), 不是本表的计分约束; 不删该索引",
+        )
     if not parsed["unique"]:
         return IndexState(spec.name, IDX_MISMATCH, "不是唯一索引(允许同键重复行)")
     if sorted(parsed["columns"]) != sorted(spec.columns):
@@ -367,7 +475,7 @@ def inspect_index_specs(conn: Connection) -> tuple[IndexState, ...]:
 
 def _duplicate_group_count(conn: Connection, spec: IndexSpec) -> int:
     """该索引谓词下的重复键组数 —— 纯 COUNT/聚合, 不返回键值、不含 user_id。"""
-    row = conn.execute(text(spec.violation_sql)).first()
+    row = conn.execute(text(spec.violation_sql(_table_ref(conn)))).first()
     try:
         return int(row[0]) if row else 0
     except Exception:  # noqa: BLE001 — 统计失败按"有冲突"处理(保守)
@@ -376,9 +484,11 @@ def _duplicate_group_count(conn: Connection, spec: IndexSpec) -> int:
 
 def _create_spec_index(conn: Connection, spec: IndexSpec) -> None:
     cols = ", ".join(spec.columns)
+    # PG 的 CREATE INDEX 名字**不能带 schema 前缀**(索引只能建在表所在 schema),
+    # 但表名必须显式 public. 限定, 否则 search_path 有同名表时会建错对象。
     conn.execute(
         text(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS {spec.name} ON {TABLE} ({cols}) "
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {spec.name} ON {_table_ref(conn)} ({cols}) "
             f"WHERE {spec.where}"
         )
     )
@@ -387,6 +497,7 @@ def _create_spec_index(conn: Connection, spec: IndexSpec) -> None:
 def _drop_index(conn: Connection, name: str) -> None:
     if not _IDENT_RE.match(name):
         raise ValueError(f"拒绝操作非本模块索引名: {name!r}")
+    # PG 的 DROP INDEX 可以/必须限定 schema; SQLite 名字是全局的。
     prefix = "public." if _dialect_name(conn) == "postgresql" else ""
     conn.execute(text(f"DROP INDEX IF EXISTS {prefix}{name}"))
 
@@ -394,8 +505,16 @@ def _drop_index(conn: Connection, name: str) -> None:
 def _repair_one(conn: Connection, state: IndexState) -> tuple[bool, str]:
     """尝试把一条 missing/mismatch 的索引恢复成预期定义。
 
-    返回 `(是否已恢复, 失败原因码)`。**绝不**为了建索引去删/改任何数据行。
+    返回 `(是否已恢复, 失败原因码)`。**绝不**为了建索引去删/改任何数据行, 也绝不删除
+    建在别的表上的同名索引(那不是我们的对象)。
     """
+    if state.status == IDX_WRONG_TABLE:
+        # 同名索引属于另一张表: 不能 DROP(会破坏别的表), 也不能同名重建(名字被占)。
+        logger.error(
+            "[scoring] 规范索引名 %s 被另一张表上的索引占用: 不删除、不重建, 需人工处理",
+            state.name,
+        )
+        return False, "wrong_table"
     spec = _SPEC_BY_NAME[state.name]
     dup = _duplicate_group_count(conn, spec)
     if dup:
@@ -405,7 +524,7 @@ def _repair_one(conn: Connection, state: IndexState) -> tuple[bool, str]:
         # 不把外层事务(启动体检 / 迁移 / 评估)一起打进 aborted 状态。
         with conn.begin_nested():
             if state.status == IDX_MISMATCH:
-                # 同名但语义不符的索引: 它本来就不是我们要的约束, 先丢掉再重建。
+                # 同名但语义不符、且**确认在本表**: 它本来就不是我们要的约束, 先丢掉再重建。
                 # 只删索引, 不碰数据。
                 logger.warning(
                     "[scoring] 索引 %s 定义错误(%s) → 删除该索引后按预期定义重建(不动数据)",
@@ -414,8 +533,10 @@ def _repair_one(conn: Connection, state: IndexState) -> tuple[bool, str]:
                 )
                 _drop_index(conn, state.name)
             _create_spec_index(conn, spec)
-    except Exception as exc:  # noqa: BLE001 — 并发建索引/锁冲突都会走到这里, 交给复核判定
-        logger.warning("[scoring] 重建索引 %s 未成功(将复核): %r", state.name, exc)
+    except Exception as exc:  # noqa: BLE001 — 并发建索引/锁冲突/权限不足都会走到这里
+        logger.warning(
+            "[scoring] 重建索引 %s 未成功(将复核): %s", state.name, _safe_error(exc)
+        )
         return False, "repair_failed"
     logger.warning(
         "[scoring] 已按预期定义重建索引 %s (%s); 数据行未做任何回填/清理",
@@ -450,6 +571,7 @@ def _health_from_states(
     repaired: tuple[str, ...],
     allow_repair: bool,
     duplicate_blocked: tuple[str, ...] = (),
+    repair_denied: bool = False,
 ) -> ScoringHealth:
     """把一次巡检结果翻成闸门结论(全部 ok 才是 ok, 否则一律 blocked)。"""
     bad = [s for s in states if s.status != IDX_OK]
@@ -471,8 +593,12 @@ def _health_from_states(
         codes.append("index_missing")
     if any(s.status == IDX_MISMATCH for s in bad):
         codes.append("index_definition_mismatch")
+    if any(s.status == IDX_WRONG_TABLE for s in bad):
+        codes.append("index_wrong_table")
     if duplicate_blocked:
         codes.append("duplicate_rows")
+    if repair_denied:
+        codes.append("repair_denied")
     detail = "后验计分唯一索引不可信 → 评分阻断(不评估、不回填、不计分): " + "; ".join(
         f"{s.name}: {s.detail}" for s in bad
     )
@@ -481,10 +607,15 @@ def _health_from_states(
             f"; 其中 {', '.join(duplicate_blocked)} 在该谓词下已有重复键组, "
             "按契约不建索引、不删除也不改写任何行(需人工核查)"
         )
+    if repair_denied:
+        detail += (
+            "; 当前连接无 DDL 权限(运行期业务角色): 未尝试任何建/删索引, "
+            "需由启动/迁移角色或运维显式修复"
+        )
     if repaired:
         detail += f"; 本次已尝试重建但仍未全部就位: {', '.join(repaired)}"
     if not allow_repair:
-        detail += "; 本次为只读检查, 未做任何修复(重启或评估/维护路径会按需幂等重建)"
+        detail += "; 本次为只读检查, 未做任何修复(恢复由启动/迁移角色或运维显式执行)"
     return _blocked(
         "+".join(codes), detail, states, repaired, allow_repair, duplicate_blocked
     )
@@ -494,42 +625,58 @@ def _check_with_conn(conn: Connection, *, allow_repair: bool) -> ScoringHealth:
     if not _has_table(conn, TABLE):
         return _blocked(
             "table_missing",
-            f"表 {TABLE} 不存在 → 没有可评估的后验记录, 评分链路不可信(评分阻断)",
+            f"表 {_table_ref(conn)} 不存在 → 没有可评估的后验记录, 评分链路不可信(评分阻断)",
             allow_repair=allow_repair,
         )
     missing_cols = [c for c in _REQUIRED_COLUMNS if c not in _table_columns(conn)]
     if missing_cols:
         return _blocked(
             "schema_incomplete",
-            f"表 {TABLE} 缺列 {', '.join(missing_cols)} → 计分键/归属桶无法定义(评分阻断)",
+            f"表 {_table_ref(conn)} 缺列 {', '.join(missing_cols)} → 计分键/归属桶无法定义(评分阻断)",
             allow_repair=allow_repair,
         )
 
     states = inspect_index_specs(conn)
     repaired: list[str] = []
     duplicate_blocked: list[str] = []
+    repair_denied = False
     if allow_repair and any(s.status != IDX_OK for s in states):
-        for state in states:
-            if state.status == IDX_OK:
-                continue
-            ok, reason = _repair_one(conn, state)
-            if ok:
-                repaired.append(state.name)
-            elif reason == "duplicate_rows":
-                duplicate_blocked.append(state.name)
-                logger.error(
-                    "[scoring] 索引 %s 缺失/定义错误, 且该谓词下已存在重复键组: "
-                    "不建索引、不删不改任何数据行(需人工核查这批重复行)",
-                    state.name,
-                )
-        # 并发下的 DDL 冲突/锁等待: 复核一次实测状态, 不信"我以为建好了"
-        states = inspect_index_specs(conn)
+        if not _can_apply_ddl(conn):
+            # 运行期业务角色没有 DDL 权限: 不尝试 CREATE/DROP(不锁热表、不制造失败日志噪音),
+            # 直接 fail-closed。修复只能由启动/迁移角色或运维执行。
+            repair_denied = True
+            logger.error(
+                "[scoring] 当前连接对 %s 无 DDL 权限: 运行期不尝试建/删索引, 评分阻断",
+                _table_ref(conn),
+            )
+        else:
+            for state in states:
+                if state.status == IDX_OK:
+                    continue
+                ok, reason = _repair_one(conn, state)
+                if ok:
+                    repaired.append(state.name)
+                elif reason == "duplicate_rows":
+                    duplicate_blocked.append(state.name)
+                    logger.error(
+                        "[scoring] 索引 %s 缺失/定义错误, 且该谓词下已存在重复键组: "
+                        "不建索引、不删不改任何数据行(需人工核查这批重复行)",
+                        state.name,
+                    )
+                elif reason == "wrong_table":
+                    logger.error(
+                        "[scoring] 索引名 %s 被另一张表占用: 不删除、不重建(需人工处理)",
+                        state.name,
+                    )
+            # 并发下的 DDL 冲突/锁等待: 复核一次实测状态, 不信"我以为建好了"
+            states = inspect_index_specs(conn)
 
     return _health_from_states(
         states,
         repaired=tuple(repaired),
         allow_repair=allow_repair,
         duplicate_blocked=tuple(duplicate_blocked),
+        repair_denied=repair_denied,
     )
 
 
@@ -559,8 +706,10 @@ def check_scoring_health(bind: Engine | Connection | None = None, *, allow_repai
     `bind` 可以是 Engine / Connection; 省略时用应用默认引擎(`src.db.session.engine`,
     写库)。
 
-    `allow_repair=True` 时, 对缺失或定义错误的索引按需**幂等重建**(前提: 该谓词下无重复
-    键组), 全程不 UPDATE / DELETE 任何数据行。只读路径(`allow_repair=False`)只巡检。
+    `allow_repair=True` **仅供启动/迁移角色路径或运维显式调用**, 且会先探测 DDL 权限;
+    有权时对缺失或定义错误的索引按需**幂等重建**(前提: 该谓词下无重复键组), 全程不
+    UPDATE / DELETE 任何数据行。运行期(评估/写入/回填/统计)一律 `allow_repair=False`,
+    只巡检、不 DDL; 业务角色即使误传 True 也会因无权而 `repair_denied` 阻断。
     """
     engine = None
     conn = None
@@ -572,8 +721,10 @@ def check_scoring_health(bind: Engine | Connection | None = None, *, allow_repai
         try:
             engine = _default_bind()
         except Exception as exc:  # noqa: BLE001
-            logger.error("[scoring] 拿不到数据库引擎, 评分按阻断处理: %r", exc)
-            return _blocked("unavailable", f"无法获取数据库引擎: {type(exc).__name__}")
+            logger.error(
+                "[scoring] 拿不到数据库引擎, 评分按阻断处理: %s", _safe_error(exc)
+            )
+            return _blocked("unavailable", f"无法获取数据库引擎({_safe_error(exc)})")
 
     try:
         if conn is not None:
@@ -581,10 +732,12 @@ def check_scoring_health(bind: Engine | Connection | None = None, *, allow_repai
         with engine.begin() as new_conn:
             return _check_with_conn(new_conn, allow_repair=allow_repair)
     except Exception as exc:  # noqa: BLE001 — 检查失败绝不等于"没问题"
-        logger.error("[scoring] 评分可信度检查失败, 按阻断处理: %r", exc)
+        # 对外只报通用类别; 不把 SQL/绑定参数/数据库异常原文写进 detail 或日志。
+        safe = _safe_error(exc)
+        logger.error("[scoring] 评分可信度检查失败, 按阻断处理: %s", safe)
         return _blocked(
             "check_failed",
-            f"评分可信度检查失败({type(exc).__name__}: {exc}) → 不能断言索引在位, 评分阻断",
+            f"评分可信度检查失败({safe}) → 不能断言索引在位, 评分阻断",
             allow_repair=allow_repair,
         )
 

@@ -331,7 +331,8 @@ def _blocked_accuracy_board(health: dict, *, since: str, user_id: str) -> dict:
             "评分已阻断(scoring_blocked): "
             + str(health.get("reason") or "")
             + " —— 四条后验计分唯一索引不可信时, 同键可能已有多条计分行, 任何命中率都会"
-            "双计。本接口不给命中率、不做回填、不清理数据; 恢复索引(重启/维护按需幂等重建)"
+            "双计。本接口不给命中率、不做回填、不清理数据; 恢复索引只能由启动/迁移角色或"
+            "运维显式执行(运行期只检查, 不自动建删索引)"
             "后重新查询即可"
         ),
         "overall": {

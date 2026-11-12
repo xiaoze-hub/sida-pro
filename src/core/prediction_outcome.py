@@ -91,26 +91,51 @@ def evaluate_pending_prediction_outcomes(
     - `user_id` 可选: 只评估该用户的行(供按用户范围触发的维护调用)。
 
     评分闸门(2026-11-13, fail-closed): 计分键唯一性只由 m250 的四条部分唯一索引保证。
-    评估路径先按需**幂等重建**索引(该谓词下无重复键才建, 不删不改任何数据行); 若重建后仍有
-    索引缺失/定义不符(例如存量已有重复键组), 直接返回 `scoring_blocked=True` 的统计骨架,
-    **一条都不回填** —— 宁可显示"评分阻断", 也不输出可能双计的命中率。
+    评估路径**只检查、不 DDL**(业务角色没有建/删索引权限, 也不该在评估时反复锁热表);
+    索引缺失/定义不符时直接返回 `scoring_blocked=True` 的统计骨架, **一条都不回填** ——
+    宁可显示"评分阻断", 也不输出可能双计的命中率。
+
+    批量性能(2026-11-13): 整个批次复用**同一个会话**、闸门只在批次边界**检查一次**,
+    不按行新建连接(避免连接池耗尽)。批次读取完成后先结束只读事务再抓 K 线, 不在网络
+    IO 期间占着池连接。不跨批次缓存闸门结论。
     """
+    from src.core import context_store as _cs
+
+    db = _cs.SessionLocal()
+    try:
+        return _evaluate_pending_with_session(
+            db, max_horizon_days=max_horizon_days, limit=limit, user_id=user_id
+        )
+    finally:
+        db.close()
+
+
+def _evaluate_pending_with_session(db, *, max_horizon_days: int, limit: int, user_id: str | None) -> dict:
     from src.core.scoring_guard import check_scoring_health
 
-    health = check_scoring_health(allow_repair=True)
+    # 只读检查: 运行期任何情况下都不在这里建/删索引。
+    health = check_scoring_health(bind=db.connection(), allow_repair=False)
     if health.blocked:
         logger.error(
             "预测后验评估被评分闸门阻断(%s): %s", health.reason_code, health.detail
         )
+        # 检查失败可能把只读事务打进 aborted 状态; 先结束它再读欠评估条数。
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 — 回滚失败不影响"阻断"结论
+            pass
         # 只读地报出"欠着多少条"(不评估、不改写), 免得把阻断误读成"没有待评估数据"
         try:
             backlog = len(
                 list_pending_prediction_outcomes(
-                    max_horizon_days=max_horizon_days, limit=limit, user_id=user_id
+                    max_horizon_days=max_horizon_days,
+                    limit=limit,
+                    user_id=user_id,
+                    db=db,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — 连读取都失败时如实报 -1, 不假装是 0
-            logger.warning("评分阻断下读取待评估条数失败: %r", exc)
+            logger.warning("评分阻断下读取待评估条数失败: %s", type(exc).__name__)
             backlog = -1
         return {
             "scoring_blocked": True,
@@ -131,29 +156,53 @@ def evaluate_pending_prediction_outcomes(
             ),
             "note": (
                 "评分阻断: " + health.detail + " —— 本次不评估、不回填、不计分; "
-                "数据一行未改(重建索引只在无重复键时进行)"
+                "运行期只检查、不做任何 DDL, 数据一行未改"
             ),
         }
 
-    pending = list_pending_prediction_outcomes(
-        max_horizon_days=max_horizon_days,
-        limit=limit,
-        user_id=user_id,
-    )
-    # 无归属的历史待评估行: 不评估(改不了"属于谁"), 但必须如实报出被排除的量,
-    # 不能让人以为"待评估为 0 = 都评估完了"。
-    unowned = count_unowned_pending_prediction_outcomes(max_horizon_days=max_horizon_days)
-    system_pending = count_system_pending_prediction_outcomes(
-        max_horizon_days=max_horizon_days
-    )
-    ghost = count_ghost_user_prediction_outcomes(max_horizon_days=max_horizon_days)
+    try:
+        pending = list_pending_prediction_outcomes(
+            max_horizon_days=max_horizon_days,
+            limit=limit,
+            user_id=user_id,
+            db=db,
+        )
+        # 无归属的历史待评估行: 不评估(改不了"属于谁"), 但必须如实报出被排除的量,
+        # 不能让人以为"待评估为 0 = 都评估完了"。
+        unowned = count_unowned_pending_prediction_outcomes(
+            max_horizon_days=max_horizon_days, db=db
+        )
+        system_pending = count_system_pending_prediction_outcomes(
+            max_horizon_days=max_horizon_days, db=db
+        )
+        ghost = count_ghost_user_prediction_outcomes(
+            max_horizon_days=max_horizon_days, db=db
+        )
+        # 把本批次要用的行字段拷成纯数据: 随后结束只读事务(见下), 不依赖 ORM 刷新。
+        pending_rows = [
+            {
+                "id": rec.id,
+                "prediction_date": rec.prediction_date,
+                "horizon_days": rec.horizon_days,
+                "stock_symbol": rec.stock_symbol,
+                "stock_market": rec.stock_market,
+                "trigger_price": rec.trigger_price,
+            }
+            for rec in pending
+        ]
+    finally:
+        # 结束只读事务再进入网络 IO(K 线): 不要把池连接整批握着, 否则并发评估会耗尽连接池。
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 — 已拿到本批次数据, 回滚失败不改变评估结论
+            pass
+
     uid = str(user_id).strip() if user_id is not None else ""
     stats = {
         "scoring_blocked": False,
-        # 本次评估前是否按需重建过索引(空 = 索引本来就在位)。调用方据此知道"这一刻的命中率
-        # 是在刚恢复的约束下算出来的", 而不是把修复悄悄藏起来。
+        # 本批次检查时是否恢复过索引(运行期不 DDL, 正常恒为空)。保留字段形状给旧调用方。
         "scoring_repaired": list(health.repaired),
-        "total_pending": len(pending),
+        "total_pending": len(pending_rows),
         "eligible": 0,
         "evaluated": 0,
         "skipped_not_due": 0,
@@ -188,19 +237,19 @@ def evaluate_pending_prediction_outcomes(
             "不并入任何账户成绩",
             system_pending,
         )
-    if not pending:
+    if not pending_rows:
         return stats
 
     today = date.today()
     kline_cache: dict[tuple[str, str], list] = {}
 
-    for rec in pending:
-        pred_day = _parse_day(rec.prediction_date)
+    for rec in pending_rows:
+        pred_day = _parse_day(rec["prediction_date"])
         if pred_day is None:
             stats["skipped_invalid_date"] += 1
             continue
 
-        horizon = max(1, int(rec.horizon_days or 1))
+        horizon = max(1, int(rec["horizon_days"] or 1))
         # 交易日口径: 从 pred_day 起算 horizon 个工作日(与回测引擎一致)
         target_day = _add_trading_days(pred_day, horizon)
         if target_day > today:
@@ -208,19 +257,19 @@ def evaluate_pending_prediction_outcomes(
             continue
 
         stats["eligible"] += 1
-        market = _to_market(rec.stock_market)
-        cache_key = (rec.stock_symbol, market.value)
+        market = _to_market(rec["stock_market"])
+        cache_key = (rec["stock_symbol"], market.value)
         if cache_key not in kline_cache:
             lookback_days = max(120, (today - pred_day).days + 30)
             try:
                 kline_cache[cache_key] = KlineCollector(market).get_klines(
-                    rec.stock_symbol,
+                    rec["stock_symbol"],
                     days=min(lookback_days, 600),
                 )
             except Exception as e:
                 logger.warning(
                     "评估建议获取K线失败: %s %s - %s",
-                    rec.stock_symbol,
+                    rec["stock_symbol"],
                     market.value,
                     e,
                 )
@@ -233,9 +282,9 @@ def evaluate_pending_prediction_outcomes(
             continue
 
         base_price = None
-        if rec.trigger_price is not None and rec.trigger_price > 0:
+        if rec["trigger_price"] is not None and rec["trigger_price"] > 0:
             try:
-                base_price = float(rec.trigger_price)
+                base_price = float(rec["trigger_price"])
             except Exception:
                 base_price = None
         if base_price is None:
@@ -243,18 +292,22 @@ def evaluate_pending_prediction_outcomes(
 
         if base_price is None or base_price <= 0:
             ok = mark_agent_prediction_outcome(
-                record_id=rec.id,
+                record_id=rec["id"],
                 outcome_price=outcome_price,
                 outcome_return_pct=None,
                 status="no_base_price",
+                db=db,
+                health=health,
             )
         else:
             outcome_ret = (outcome_price - base_price) / base_price * 100
             ok = mark_agent_prediction_outcome(
-                record_id=rec.id,
+                record_id=rec["id"],
                 outcome_price=outcome_price,
                 outcome_return_pct=outcome_ret,
                 status="evaluated",
+                db=db,
+                health=health,
             )
         if ok:
             stats["evaluated"] += 1

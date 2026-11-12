@@ -54,11 +54,11 @@ class ContextMaintenanceScheduler:
                     stats.get("total_pending"),
                 )
             elif stats.get("scoring_repaired"):
-                # 索引本来缺失/错定义, 本轮按需重建后才继续评估 —— 这是"曾经不可信"的证据,
-                # 必须留痕(不能因为自愈成功就当没发生过)
+                # 兼容旧结果字段: 运行期不再自动重建索引, 正常不会进入这里。若真的出现,
+                # 说明调用链被改回了 DDL 路径, 必须告警核查。
                 logger.warning(
-                    "[上下文维护] 后验计分索引缺失/定义错误, 已在评估前按需重建: %s "
-                    "(数据行未回填/未清理); 请核查索引是怎么丢的",
+                    "[上下文维护] 评估路径报告了索引重建(运行期不应发生, 请核查是否误用 "
+                    "allow_repair=True): %s",
                     ", ".join(stats.get("scoring_repaired") or []),
                 )
             level = logging.INFO if stats.get("evaluated", 0) else logging.DEBUG
