@@ -15,6 +15,9 @@
 - 位置/连板由 PG 日线收盘价算：涨停判定用收盘涨幅 ≥9.8%（A股 10% 限制的常见四舍五入边界，
   科创/创业板 20% 的在 `limit_pct` 里区分），连板 = 连续满足涨停的交易日数。
 - 止损是否触发只看**收盘价**，不假装知道盘中最低价（那需要分钟线，且盘前报告也没给盘中路径）。
+- **时点（PIT）**：盘前报告写于 D 日开盘前，D 日当天收盘、D 日（或之后）重算的股性因子快照
+  在那一刻都还不存在。所有「当时信号」只接受 **交易日 < D** 的数据；拿不到就留空 + 写明
+  不可得的原因，绝不把事后数据（或今天的快照）当成盘前证据，也不伪造历史快照。
 """
 
 from __future__ import annotations
@@ -170,8 +173,79 @@ def _limit_pct(code: str) -> float:
     return 10.0
 
 
-def demon_map(db, codes: Iterable[str]) -> dict[str, dict]:
-    """从 `demon_factors` 表取股性因子（表缺失/查询失败 → {}，不猜）。"""
+def _norm_day(v: Any) -> str | None:
+    """把 `20261110` / `2026-11-10` / `2026-11-10 00:00:00+08` / date 统一成 `YYYY-MM-DD`。
+
+    认不出 → None（调用方据此判定「无法确认时点」，而不是猜一个日子）。
+    """
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    digits = "".join(ch for ch in s[:10] if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return None
+
+
+def _demon_row_date(row: dict | None) -> str | None:
+    """股性因子快照日（表里是 `factor_date`，YYYYMMDD）。无字段/认不出 → None。"""
+    if not isinstance(row, dict):
+        return None
+    return _norm_day(row.get("factor_date") or row.get("snapshot_date") or row.get("updated_at"))
+
+
+def filter_demon_by_asof(factors: dict[str, dict], report_day: str) -> dict:
+    """按报告日筛股性因子快照：只留**快照日 < 报告日**的行。
+
+    为什么不是「取最近一条就对」：`demon_factors` 是每股一行、就地 upsert 的当前快照，
+    报告日当天（或之后）重算的行已经包含报告日的封板事件 —— 盘前那一刻不存在。历史时点
+    没有存档快照，所以这里只能「证明可见才给」：证明不了的一律剔除并写明原因（不造快照）。
+    """
+    cutoff = _norm_day(report_day)
+    kept: dict[str, dict] = {}
+    notes: dict[str, str] = {}
+    dropped: list[str] = []
+    unknown: list[str] = []
+    if cutoff is None:
+        # 报告日都认不出来就谈不上"当时可见" —— 全剔, 明说原因(不默认放行)
+        for sym in (factors or {}):
+            code = str(sym).split(".")[0]
+            dropped.append(code)
+            notes[code] = f"报告日无法解析({report_day!r}), 无法确认盘前时点, 不展示"
+        return {"kept": {}, "asof": None, "dropped": dropped,
+                "dropped_unknown_date": [], "notes": notes}
+    for sym, row in (factors or {}).items():
+        code = str(sym).split(".")[0]
+        d = _demon_row_date(row if isinstance(row, dict) else None)
+        if d is None:
+            dropped.append(code)
+            unknown.append(code)
+            notes[code] = "股性因子快照无快照日, 无法确认盘前可得, 不展示"
+            continue
+        if cutoff and d >= cutoff:
+            dropped.append(code)
+            notes[code] = f"股性因子快照日 {d} 不早于报告日 {cutoff}, 盘前不可得"
+            continue
+        # 统一成 YYYY-MM-DD（上游可能是 YYYYMMDD），页面/正文看到的日期口径一致
+        kept[code] = {**row, "factor_date": d} if isinstance(row, dict) else row
+    kept_dates = [d for d in (_demon_row_date(r) for r in kept.values()) if d]
+    return {
+        "kept": kept,
+        "asof": max(kept_dates) if kept_dates else None,
+        "dropped": dropped,
+        "dropped_unknown_date": unknown,
+        "notes": notes,
+    }
+
+
+def demon_map(db, codes: Iterable[str], *, cutoff: str | None = None) -> dict[str, dict]:
+    """从 `demon_factors` 表取股性因子（表缺失/查询失败 → {}，不猜）。
+
+    `cutoff` 给了就只保留**快照日 < cutoff** 的行（盘前口径，见模块 docstring 的时点说明）；
+    拿不到快照日的行同样剔除 —— 证明不了「当时可见」就不展示。
+    """
     symbols = [c for c in {str(c) for c in codes} if c]
     if not symbols:
         return {}
@@ -186,7 +260,7 @@ def demon_map(db, codes: Iterable[str]) -> dict[str, dict]:
     try:
         rows = db.execute(
             text(
-                "SELECT symbol, name, total, grade, n_sealed, max_streak, participation "
+                "SELECT factor_date, symbol, name, total, grade, n_sealed, max_streak, participation "
                 f"FROM demon_factors WHERE symbol IN ({ph})"
             ),
             params,
@@ -194,10 +268,17 @@ def demon_map(db, codes: Iterable[str]) -> dict[str, dict]:
     except Exception as e:  # noqa: BLE001 — 表不存在(SQLite/早期库)也算取不到
         logger.debug("股性因子查询失败: %s", e)
         return {}
+    cut = _norm_day(cutoff) if cutoff else None
+    if cutoff and cut is None:
+        logger.debug("股性因子 cutoff 无法解析(%r), 全部按不可得处理", cutoff)
+        return {}
     out: dict[str, dict] = {}
     for r in rows:
         code = str(r["symbol"]).split(".")[0]
         if code in out:  # 多个市场代码变体时保留第一条（结果确定）
+            continue
+        factor_date = _norm_day(r["factor_date"])
+        if cut is not None and (factor_date is None or factor_date >= cut):
             continue
         out[code] = {
             "score": _num(r["total"]),
@@ -205,24 +286,59 @@ def demon_map(db, codes: Iterable[str]) -> dict[str, dict]:
             "n_sealed": r["n_sealed"],
             "max_streak": r["max_streak"],
             "participation": r["participation"],
+            "factor_date": factor_date,
         }
     return out
 
 
-def price_signals(close_series: list[tuple[str, float]], code: str, as_of: str | None = None) -> dict:
+def price_signals(
+    close_series: list[tuple[str, float]],
+    code: str,
+    as_of: str | None = None,
+    before: str | None = None,
+) -> dict:
     """由日线收盘序列算位置与连板（序列为升序 [(YYYY-MM-DD, close)]）。
 
     全部基于**已发生的收盘价**；数据不足时对应字段为 None，不做外推。
 
     `as_of` 用于按报告日截断 —— 否则拿今天的位置去给一周前的判断当"当时信号"，
     数字是真的但时点错位（比错数字更难发现）。
+
+    `before` 是**盘前口径**（严格小于）：D 日的盘前报告只能用 trade_date < D 的收盘，
+    因为 D 日收盘在开盘前根本不存在。返回带 `close_date`（真实用到的最后一根收盘日），
+    页面/正文必须显示这个真实时点，别让读者以为是报告日收盘。
     """
     if as_of:
         close_series = [(d, c) for d, c in close_series if str(d)[:10] <= str(as_of)[:10]]
+    cut = _norm_day(before) if before else None
+    if before and cut is None:
+        # 报告日认不出来 ⇒ 无法确定"哪些收盘在报告前", 一律不给数字(不默认放行)
+        return {
+            "close": None,
+            "close_date": None,
+            "limit_up_streak": None,
+            "pct_20d": None,
+            "from_20d_high": None,
+            "note": f"报告日无法解析({before!r}), 无法确认盘前时点",
+        }
+    if cut:
+        close_series = [
+            (d, c)
+            for d, c in close_series
+            if (_norm_day(d) or "") and (_norm_day(d) or "") < cut
+        ]
     if not close_series or len(close_series) < 2:
-        return {"close": None, "limit_up_streak": None, "pct_20d": None, "from_20d_high": None, "note": "日线不足"}
+        return {
+            "close": None,
+            "close_date": None,
+            "limit_up_streak": None,
+            "pct_20d": None,
+            "from_20d_high": None,
+            "note": (f"日线不足(报告日 {cut} 之前不足两根收盘)" if cut else "日线不足"),
+        }
     closes = [c for _, c in close_series]
     last = closes[-1]
+    close_date = _norm_day(close_series[-1][0])
     pct = None
     if len(closes) >= 2 and closes[-2]:
         pct = round((last / closes[-2] - 1.0) * 100.0, 2)
@@ -243,13 +359,18 @@ def price_signals(close_series: list[tuple[str, float]], code: str, as_of: str |
     window = closes[-20:] if len(closes) >= 20 else closes
     high20 = max(window) if window else None
     from_high = round((last / high20 - 1.0) * 100.0, 2) if high20 else None
+    note = None
+    if cut:
+        # 真实时点上屏: 这是「截至哪一天的收盘」, 不是报告日收盘
+        note = f"盘前口径: 截至 {close_date} 收盘(报告日 {cut} 收盘不计入)"
     return {
         "close": round(last, 2),
+        "close_date": close_date,
         "pct": pct,
         "limit_up_streak": streak,
         "pct_20d": pct20,
         "from_20d_high": from_high,
-        "note": None,
+        "note": note,
     }
 
 
@@ -267,8 +388,14 @@ def _parse_stop_price(stop_text: str | None) -> float | None:
     return v if v and v > 0 else None
 
 
-def build_signal_detail(row: dict, *, demon: dict | None, price: dict | None) -> dict:
-    """把一行潜伏表 + 真实信号拼成页面要的明细（缺项 = None，让前端显示「无数据」）。"""
+def build_signal_detail(
+    row: dict, *, demon: dict | None, price: dict | None, demon_note: str | None = None
+) -> dict:
+    """把一行潜伏表 + 真实信号拼成页面要的明细（缺项 = None，让前端显示「无数据」）。
+
+    `demon_note` 说明股性因子为什么不可用（盘前时点不可证明）—— 页面/正文据此解释，
+    不把缺失当 0，也不拿当前快照冒充当时信号。
+    """
     return {
         "code": row.get("code"),
         "name": row.get("name"),
@@ -286,6 +413,7 @@ def build_signal_detail(row: dict, *, demon: dict | None, price: dict | None) ->
         "signals": {
             "demon": demon or None,
             "price": price or None,
+            "demon_note": demon_note or None,
         },
     }
 
@@ -302,9 +430,10 @@ def _fmt(v: Any, digits: int = 2, suffix: str = "") -> str:
         return "无数据"
 
 
-def _demon_text(d: dict | None) -> str:
+def _demon_text(d: dict | None, note: str | None = None) -> str:
     if not d:
-        return "无数据"
+        # 拿不到 ≠ 0 分: 把「为什么拿不到」写出来（盘前不可得 / 无快照日）
+        return f"无数据({note})" if note else "无数据"
     parts = []
     if d.get("score") is not None:
         parts.append(f"{d.get('grade') or ''}{_fmt(d.get('score'), 1)}".strip())
@@ -318,7 +447,11 @@ def _demon_text(d: dict | None) -> str:
 def _price_text(p: dict | None) -> str:
     if not p or p.get("close") is None:
         return p.get("note") if p and p.get("note") else "无数据"
-    seg = [f"收盘{_fmt(p.get('close'), 2)}"]
+    # 收盘后面带真实交易日: 盘前视角下这是「上一交易日收盘」, 不是报告日收盘
+    closing = f"收盘{_fmt(p.get('close'), 2)}"
+    if p.get("close_date"):
+        closing += f"({p['close_date']})"
+    seg = [closing]
     if p.get("limit_up_streak") is not None:
         seg.append("涨停" if p.get("limit_up_streak") else f"连板{p['limit_up_streak']}")
     if p.get("from_20d_high") is not None:
@@ -341,14 +474,16 @@ def build_signal_block(rows: list[dict], signals: dict[str, dict]) -> str:
     for r in rows:
         sig = signals.get(r["code"]) or {}
         lines.append(
-            f"| {r['code']} | {r.get('name') or ''} | {_demon_text(sig.get('demon'))} | "
+            f"| {r['code']} | {r.get('name') or ''} | "
+            f"{_demon_text(sig.get('demon'), sig.get('demon_note'))} | "
             f"{_price_text(sig.get('price'))} |"
         )
     lines.append("")
     lines.append(
         "> 股性来自既有股性因子表（近一年封板/连板统计）；位置与连板由日线**收盘价**计算，"
-        "未用盘中路径。缺数据的格子写「无数据」，不做估算。上表的受益逻辑/埋伏方式/止损仍是 AI 判断，"
-        "与本节数据分开看。"
+        "未用盘中路径。**盘前口径**：位置只用报告日之前的收盘（括号里是真实收盘日），"
+        "股性因子只在快照日早于报告日时给出（否则写「无数据」并注明原因）。"
+        "缺数据不做估算。上表的受益逻辑/埋伏方式/止损仍是 AI 判断，与本节数据分开看。"
     )
     return "\n".join(lines)
 
@@ -382,10 +517,14 @@ def insert_after_table(text: str, block: str) -> str:
 
 
 def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None = None,
-                    engine=None, start_day: str, as_of: str | None = None) -> dict[str, dict]:
+                    engine=None, start_day: str, report_day: str | None = None,
+                    as_of: str | None = None) -> dict[str, dict]:
     """按代码取真实信号。任何一块取不到 → 该块 None（页面/文本显示「无数据」）。
 
     `demon_by_code` 可由调用方直接给（报告生成时手里已有因子映射，省一次查询）。
+
+    `report_day`（YYYY-MM-DD）是**盘前时点**：报告日 D 的盘前报告只能看 trade_date < D 的
+    收盘、快照日 < D 的股性因子。给了它就严格收窄；不给保持历史调用行为（不做时点推断）。
     """
     out: dict[str, dict] = {}
     if not codes:
@@ -394,11 +533,19 @@ def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None =
     if demon is None and engine is not None:
         try:
             with engine.connect() as conn:
+                # 先取全量(带快照日), 再由 filter_demon_by_asof 筛时点并给出原因 ——
+                # 若在 SQL 里直接剔掉, 就说不清"为什么这只没有股性因子"。
                 demon = demon_map(conn, codes)
         except Exception as e:  # noqa: BLE001
             logger.debug("股性因子取数失败: %s", e)
             demon = {}
     demon = demon or {}
+    demon_notes: dict[str, str] = {}
+    if report_day:
+        # 再筛一次(调用方直接给的映射/表里读到的行都要过时点门禁), 并保留不可用原因
+        filtered = filter_demon_by_asof(demon, report_day)
+        demon = filtered["kept"]
+        demon_notes = filtered["notes"]
 
     closes_cache: dict[str, list] = {}
     if engine is not None:
@@ -414,7 +561,8 @@ def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None =
     for code in codes:
         out[code] = {
             "demon": demon.get(code),
-            "price": price_signals(closes_cache.get(code) or [], code, as_of=as_of)
+            "demon_note": demon_notes.get(code),
+            "price": price_signals(closes_cache.get(code) or [], code, as_of=as_of, before=report_day)
             if engine is not None
             else None,
         }

@@ -387,6 +387,8 @@ class PremarketOutlookAgent(BaseAgent):
         mood: dict = {}
         ambush_scored: list = []
         demon_factors: dict = {}
+        demon_factors_asof = None
+        demon_factors_dropped: list[str] = []
         try:
             from src.core.ambush_score import enrich_ambush_list
             from src.core.mood_cycle import current_mood
@@ -394,9 +396,18 @@ class PremarketOutlookAgent(BaseAgent):
             mood = current_mood()
             try:
                 from src.core.demon_factors import top_demon_factors
+                from src.core.premarket_ambush import filter_demon_by_asof
 
                 # 扩大至 Top 50，确保覆盖主线题材中的潜在妖股先锋
                 demon_factors = top_demon_factors(50)
+                # PIT(2026-11-12): 因子表是每股一行的**当前快照**, 报告日当天重算的行已含
+                # 当天的封板事件 —— 盘前那一刻不存在。只保留快照日 < 报告日的行, 剩下的
+                # 直接剔除(不参与先锋组/埋伏加分), 并在报告里注明截止日。
+                report_day = datetime.now().strftime("%Y-%m-%d")
+                _pit = filter_demon_by_asof(demon_factors or {}, report_day)
+                demon_factors = _pit["kept"]
+                demon_factors_asof = _pit["asof"]
+                demon_factors_dropped = _pit["dropped"]
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 先锋组因子不可用: %s", trace_id, e)
             ambush_scored = await asyncio.to_thread(
@@ -432,11 +443,13 @@ class PremarketOutlookAgent(BaseAgent):
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 候选快照落库失败: %s", trace_id, e)
             logger.info(
-                "[%s] 四维埋伏评分完成: %s 条, 情绪=%s, 先锋组=%s",
+                "[%s] 四维埋伏评分完成: %s 条, 情绪=%s, 先锋组=%s(快照日<=%s, 剔除=%s)",
                 trace_id,
                 len(ambush_scored),
                 (mood or {}).get("label", "无数据"),
                 len(demon_factors),
+                demon_factors_asof or "无",
+                len(demon_factors_dropped),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("[%s] 四维埋伏评分失败: %s", trace_id, e)
@@ -513,6 +526,8 @@ class PremarketOutlookAgent(BaseAgent):
             "ambush_scored": ambush_scored,
             "mood": mood,
             "demon_factors": demon_factors,
+            "demon_factors_asof": demon_factors_asof,
+            "demon_factors_dropped": demon_factors_dropped,
             "futures_snapshot": futures_snapshot,
             "catalyst_analysis": catalyst_analysis,
             "tdx_wenda": tdx_wenda,
@@ -659,6 +674,14 @@ class PremarketOutlookAgent(BaseAgent):
 
         lines = []
         lines.append(f"## 日期：{datetime.now().strftime('%Y-%m-%d')} 盘前\n")
+        # PIT(2026-11-12): 写明数据采集时点与盘前口径 —— 模型不得把报告日当天收盘、
+        # 或报告日重算的股性因子快照当成"盘前已知"的信息写进结论。
+        _ts = str(data.get("timestamp") or "")[:16].replace("T", " ")
+        if _ts:
+            lines.append(
+                f"> 数据采集时点：{_ts}。盘前信号只用该时点**之前已收盘**的数据；"
+                "报告日当天收盘与当日重算的股性因子快照不属于盘前可得信息，不要引用。\n"
+            )
         symbol_contexts = data.get("symbol_contexts", {}) or {}
         quality_overview = data.get("quality_overview", {}) or {}
 
@@ -819,7 +842,16 @@ class PremarketOutlookAgent(BaseAgent):
         # 妖股先锋组(批次C×B 集成): 题材轮到时先锋名单, 情绪退潮/高潮禁推
         df_map = data.get("demon_factors") or {}
         if df_map:
-            lines.append("## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)")
+            _df_asof = data.get("demon_factors_asof")
+            lines.append(
+                "## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)"
+                + (f"【因子快照日 ≤ {_df_asof}】" if _df_asof else "【快照日未知】")
+            )
+            _df_dropped = data.get("demon_factors_dropped") or []
+            if _df_dropped:
+                lines.append(
+                    f"- 已剔除 {len(_df_dropped)} 只: 因子快照含报告日(或之后)的封板事件, 盘前不可得。"
+                )
             for sym, f in list(df_map.items())[:15]:
                 lines.append(
                     f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) | "
@@ -1378,7 +1410,12 @@ class PremarketOutlookAgent(BaseAgent):
         return content
 
     def _append_ambush_signal_details(self, text: str, data: dict) -> str:
-        """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。"""
+        """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。
+
+        PIT(2026-11-12): 报告日是 `data["timestamp"]`（与 analysis_date 同源）；明细块
+        只用 **report_day 之前** 的收盘与股性因子快照 —— 否则盘后重跑/手工重生成时
+        当天收盘会被写成"盘前位置"，时点错位比数字错更难发现。
+        """
         from src.core import premarket_ambush as pa
 
         rows = pa.parse_ambush_table(text)
@@ -1391,6 +1428,7 @@ class PremarketOutlookAgent(BaseAgent):
             for sym, v in demon_raw.items():
                 if isinstance(v, dict):
                     demon_by_code[str(sym).split(".")[0]] = v
+        report_day = str(data.get("timestamp") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
         start_day = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
         try:
             from src.db.session import get_read_engine
@@ -1399,7 +1437,11 @@ class PremarketOutlookAgent(BaseAgent):
         except Exception:  # noqa: BLE001
             engine = None
         signals = pa.collect_signals(
-            codes, demon_by_code=demon_by_code or None, engine=engine, start_day=start_day
+            codes,
+            demon_by_code=demon_by_code or None,
+            engine=engine,
+            start_day=start_day,
+            report_day=report_day,
         )
         block = pa.build_signal_block(rows, signals)
         return pa.insert_after_table(text, block)

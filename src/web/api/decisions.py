@@ -218,6 +218,14 @@ def decisions_premarket(
     - 信号取不到 → 该项 `null`（前端显示「无数据」）；
     - 事后表现只用已有日线收盘价；该交易日无 K 线（停牌/休市）→ `null`，不推算；
     - 「止损是否触及」只在止损列写了**具体价位**时才算，且是**收盘价**口径（盘中路径没有数据）。
+
+    时点（PIT）边界 —— 盘前报告写于报告日 D 开盘前：
+    - 「位置/连板」只用 **trade_date < D** 的收盘（`as_of=D` 的 `<=` 语义会把 D 日当天收盘
+      当成盘前信号，那是收盘后才知道的事），并用 `signals.price.close_date` 标出真实收盘日；
+    - 「股性因子」只在**快照日 < D** 时展示（`demon_factors` 是每股一行的当前快照，
+      表里没有历史版本；D 日当天/之后重算的行含 D 日封板事件，盘前不可得）→ 否则 `null`
+      并在 `signals.demon_note` 写明原因，**不伪造历史快照、不拿今天的表冒充当时**；
+    - 「事后表现」（当日/T+1/T+3）本身是 post-hoc 字段，与上面的盘前信号严格分开。
     """
     from src.core import premarket_ambush as pa
     from src.core.analysis_history import analysis_history_scope_clause
@@ -265,13 +273,15 @@ def decisions_premarket(
             codes,
             engine=read_engine,
             start_day=_shift_day(date, -25),
-            as_of=date,
+            report_day=date,
         )
         out_rows: list[dict] = []
         for r in rows:
             code = r["code"]
-            detail = pa.build_signal_detail(r, demon=(signals.get(code) or {}).get("demon"),
-                                            price=(signals.get(code) or {}).get("price"))
+            sig = signals.get(code) or {}
+            detail = pa.build_signal_detail(r, demon=sig.get("demon"),
+                                            price=sig.get("price"),
+                                            demon_note=sig.get("demon_note"))
             seq = close_cache.get(code)
             if seq is None:
                 from src.core.decision_log import _close_series_pg
@@ -286,6 +296,17 @@ def decisions_premarket(
 
         scored = [o for o in out_rows if o["outcome"]["t0"] is not None]
         t1 = [o for o in out_rows if o["outcome"]["t1"] is not None]
+        price_dates = sorted(
+            {
+                d
+                for d in (
+                    ((o.get("signals") or {}).get("price") or {}).get("close_date")
+                    for o in out_rows
+                )
+                if d
+            }
+        )
+        demon_n = sum(1 for o in out_rows if (o.get("signals") or {}).get("demon"))
         items.append(
             {
                 "date": date,
@@ -295,6 +316,14 @@ def decisions_premarket(
                 "parsed": bool(out_rows),
                 "row_count": len(out_rows),
                 "rows": out_rows,
+                # 盘前时点证据: 信号用的到底是哪一天的收盘 / 因子快照日上限
+                "pit": {
+                    "price_before": date,
+                    "price_close_dates": sorted(set(price_dates)),
+                    "demon_before": date,
+                    "demon_available": demon_n,
+                    "demon_unavailable": len(out_rows) - demon_n,
+                },
                 "summary": {
                     "rows": len(out_rows),
                     "t0_scored": len(scored),
@@ -312,7 +341,9 @@ def decisions_premarket(
         "items": items,
         "note": (
             "潜伏表由 AI 撰写，本页只解析并用真实行情对账；解析不到表格即 parsed=false，不补标的。"
-            "事后表现按收盘价计算，未使用盘中最低/最高。"
+            "信号按盘前时点取数：位置/连板只用报告日之前的收盘（close_date 标出真实收盘日），"
+            "股性因子只在快照日早于报告日时展示，否则留空并注明「盘前不可得」。"
+            "事后表现（当日/T+1/T+3）按收盘价计算，未使用盘中最低/最高，与盘前信号分开看。"
         ),
     }
 
