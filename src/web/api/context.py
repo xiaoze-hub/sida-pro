@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from src.config import Settings
@@ -17,8 +18,11 @@ from src.core.context_store import (
     list_recent_agent_context_runs,
 )
 from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
+from src.web.api.auth import get_current_user, require_owner
+from src.web.models import User
 
 router = APIRouter(prefix="/context", tags=["context"])
+logger = logging.getLogger(__name__)
 
 
 def _format_datetime(dt) -> str:
@@ -152,18 +156,26 @@ def list_context_runs(
 
 @router.get("/predictions", response_model=list[AgentPredictionOutcomeResponse])
 def list_prediction_outcomes(
+    user: User = Depends(get_current_user),
     agent_name: str | None = None,
     stock_symbol: str | None = None,
     status: str | None = None,
     days: int = Query(default=90, ge=1, le=720),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
+    """当前账号的预测后验列表。
+
+    P0(2026-11-12): 本表加了 user_id 后, 这里必须按登录用户过滤 —— 原来不带用户维度,
+    任何人登录都能看到所有账号(以及无法归属的历史)的预测, 既是越权也是"成绩"混算的入口。
+    历史无归属行不返回(归属不可证明), 也不拿它们凑数。
+    """
     rows = list_agent_prediction_outcomes(
         agent_name=agent_name,
         stock_symbol=stock_symbol,
         status=status,
         days=days,
         limit=limit,
+        user_id=user.id,
     )
     return [
         AgentPredictionOutcomeResponse(
@@ -192,10 +204,24 @@ def list_prediction_outcomes(
 def evaluate_predictions(
     max_horizon_days: int = Query(default=10, ge=1, le=30),
     limit: int = Query(default=300, ge=1, le=2000),
+    user_id: str | None = Query(
+        default=None,
+        description="只评估该用户的行; 省略=评估全部有归属的个人计分行(不会碰历史未知行/system 桶)",
+    ),
+    _admin: User = Depends(require_owner),
 ):
+    """全局后验评估 —— 跨账户写接口, 必须服务端管理员身份（2026-11-12 二次修正）。
+
+    原先没有鉴权: 任意登录用户 POST 一次就能改写**所有账号**的后验成绩。现在:
+    - 只有 owner/admin(严格模式下还需 admin 受众 token)可调用;
+    - 评估范围永远是"有归属的个人计分行", 不会碰历史未知归属行, 也不会把 system 桶
+      并进任何账户;
+    - 可用 `user_id` 把范围收敛到单个用户(管理员按用户排查时用)。
+    """
     return evaluate_pending_prediction_outcomes(
         max_horizon_days=max_horizon_days,
         limit=limit,
+        user_id=user_id,
     )
 
 
@@ -205,10 +231,41 @@ def cleanup_context(
     topic_days: int = Query(default=180, ge=30, le=2000),
     context_run_days: int = Query(default=180, ge=30, le=2000),
     outcome_days: int = Query(default=365, ge=60, le=4000),
+    dry_run: bool = Query(
+        default=True,
+        description="默认只统计不删除; 只有显式 dry_run=false 且管理员确认后才真正执行",
+    ),
+    _admin: User = Depends(require_owner),
 ):
+    """全局清理 —— 跨账户**删除**接口, 必须服务端管理员, 且默认不执行（2026-11-12）。
+
+    二次修正: 原来是任意登录用户可调、直接按保留期批量删除(包括无法证明归属的历史行)。
+    现在:
+    - 只有 owner/admin 可调用;
+    - `dry_run` 默认 True —— 只返回将被清理的条数, **不执行任何删除**;
+    - 历史未知归属行(user_id/owner_scope 均为 NULL)永不删除, 只报 `legacy_unowned_preserved`。
+    """
+    if dry_run:
+        return cleanup_context_data(
+            snapshot_days=snapshot_days,
+            topic_days=topic_days,
+            context_run_days=context_run_days,
+            outcome_days=outcome_days,
+            dry_run=True,
+        )
+    logger.warning(
+        "[context] 管理员触发真实清理: snapshot_days=%s topic_days=%s context_run_days=%s "
+        "outcome_days=%s admin=%s",
+        snapshot_days,
+        topic_days,
+        context_run_days,
+        outcome_days,
+        getattr(_admin, "id", None),
+    )
     return cleanup_context_data(
         snapshot_days=snapshot_days,
         topic_days=topic_days,
         context_run_days=context_run_days,
         outcome_days=outcome_days,
+        dry_run=False,
     )

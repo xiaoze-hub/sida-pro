@@ -6969,6 +6969,138 @@ def _m248_premarket_evidence_run_binding(conn: Connection) -> None:
     )
 
 
+def _m249_prediction_outcome_user_scope(conn: Connection) -> None:
+    """给 agent_prediction_outcomes 加用户维度 + 部分唯一键（2026-11-12 P0）。
+
+    为什么需要: 这张表原先没有任何用户列, 行键是
+    (agent, symbol, market, date, horizon)。两个真实账户同标的同日的预测**撞同一个键**,
+    后跑的重跑会把别人 pending 的行原地改写（动作/置信度/触发价/元数据全变）, 命中率统计
+    也只能把不同账号混在一起算。这类更新无法证明「这行属于谁」, 必须从根上取消。
+
+    本迁移只做加法, 且**不改写/不删除任何既有行**:
+      1. `user_id VARCHAR(36)` —— 可空。加列后存量行全为 NULL = 归属不可证明的历史数据,
+         存储层对这些行一律不更新、不评估、不计入个人成绩。
+      2. `ix_prediction_outcome_user` —— 按用户查的普通索引。
+      3. `ux_prediction_outcome_user_key` —— **部分**唯一索引, WHERE user_id IS NOT NULL。
+         关键点: 存量行的 user_id 都是 NULL, 不落入索引范围, 所以老库里已经有同键重复行
+         也能建索引成功 —— 不需要先清洗、也不会因为历史脏数据让上线迁移失败;
+         而新写入在 DB 层就保证同用户同键至多一行（两个进程并发也只有一个插得进去）。
+
+    幂等: 加列用 `_has_column` 判据, 索引全部 IF NOT EXISTS, 可重复执行。
+    """
+    if not _has_table(conn, "agent_prediction_outcomes"):
+        # 老库若连表都没有(理论上 create_all 会建), 没有可加的列: 直接返回,
+        # 交给 create_all 按 ORM 全新建表(含 user_id 与部分唯一索引)。
+        return
+    _add_column_if_missing(
+        conn,
+        "agent_prediction_outcomes",
+        "user_id",
+        "ALTER TABLE agent_prediction_outcomes ADD COLUMN user_id VARCHAR(36)",
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_prediction_outcome_user "
+            "ON agent_prediction_outcomes (user_id, prediction_date)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_key "
+            "ON agent_prediction_outcomes "
+            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
+            "WHERE user_id IS NOT NULL"
+        )
+    )
+
+
+def _m250_prediction_outcome_versions_and_system_scope(conn: Connection) -> None:
+    """后验记录的**版本追加** + **system 独立桶**（2026-11-12 二次修正）。
+
+    为什么还要加: m249 只用 (user, agent, symbol, market, date, horizon) 建了唯一索引,
+    于是"同用户同日第二次运行"只能被整个拒写 —— 后续版本的信息被丢掉。审计要求:
+    支持同用户多个 run 的**追加版本**, 并按**明确规则**计分(不覆盖、也不重复计数)。
+
+    本迁移只做加法 + 只删自己 m249 建的那个索引(不删任何**数据行**):
+      1. `run_trace_id VARCHAR(200)` —— 版本身份(哪一次运行写下的)。
+      2. `owner_scope VARCHAR(16)` —— 归属桶: 'user' / 'system'; NULL = 加列前的历史行。
+         system 桶 `user_id` 恒为 NULL, 绝不猜测绑定真实用户。
+      3. DROP INDEX ux_prediction_outcome_user_key —— m249 的无状态唯一键会把"追加版本"
+         挡死。删索引不删行, 存量数据一条不动。
+      4. 计分行唯一(部分索引, `outcome_status <> 'superseded'`): 每个键至多一条计分行;
+         后到版本以 superseded 追加, 不覆盖、不参与评估/统计。
+      5. 版本幂等(部分索引, 含 run_trace_id): 同一个 run 重复落库不会多出一行。
+      6. system 桶的 4/5 两条同样各建一份(独立于任何真实用户)。
+
+    幂等: 加列用 `_has_column`, 索引全部 IF NOT EXISTS, 可重复执行。
+    存量行(user_id IS NULL 且 owner_scope IS NULL)不落入任何部分索引: 老库即使已有同键
+    重复也能直接建索引, 不清洗、不回填、不删除。
+    """
+    if not _has_table(conn, "agent_prediction_outcomes"):
+        return
+    # 模型里声明的两个基础索引历史上没有迁移负责(只靠 create_all 建), 早期库可能缺失。
+    # 这里补成 IF NOT EXISTS, 保证"迁移过的老库"和"create_all 的新库"索引集合一致。
+    _create_index_if_missing(
+        conn,
+        "ix_prediction_agent_stock_date",
+        "CREATE INDEX IF NOT EXISTS ix_prediction_agent_stock_date "
+        "ON agent_prediction_outcomes (agent_name, stock_symbol, prediction_date)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_prediction_status_horizon",
+        "CREATE INDEX IF NOT EXISTS ix_prediction_status_horizon "
+        "ON agent_prediction_outcomes (outcome_status, horizon_days)",
+    )
+    _add_column_if_missing(
+        conn,
+        "agent_prediction_outcomes",
+        "run_trace_id",
+        "ALTER TABLE agent_prediction_outcomes ADD COLUMN run_trace_id VARCHAR(200)",
+    )
+    _add_column_if_missing(
+        conn,
+        "agent_prediction_outcomes",
+        "owner_scope",
+        "ALTER TABLE agent_prediction_outcomes ADD COLUMN owner_scope VARCHAR(16)",
+    )
+    # m249 的无状态唯一键会挡住"追加版本"; 只删索引, 不动数据。
+    conn.execute(text("DROP INDEX IF EXISTS ux_prediction_outcome_user_key"))
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_active_key "
+            "ON agent_prediction_outcomes "
+            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
+            "WHERE user_id IS NOT NULL AND outcome_status <> 'superseded'"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_user_run_key "
+            "ON agent_prediction_outcomes "
+            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, "
+            "run_trace_id) "
+            "WHERE user_id IS NOT NULL AND run_trace_id IS NOT NULL"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_system_active_key "
+            "ON agent_prediction_outcomes "
+            "(agent_name, stock_symbol, stock_market, prediction_date, horizon_days) "
+            "WHERE owner_scope = 'system' AND outcome_status <> 'superseded'"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prediction_outcome_system_run_key "
+            "ON agent_prediction_outcomes "
+            "(agent_name, stock_symbol, stock_market, prediction_date, horizon_days, run_trace_id) "
+            "WHERE owner_scope = 'system' AND run_trace_id IS NOT NULL"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -7210,8 +7342,21 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(244, "etf_flow_daily", _m244_etf_flow_daily),
     Migration(245, "etf_minute_source", _m245_etf_minute_source),
     Migration(246, "board_anomaly", _m246_board_anomaly),
+    # 更正标注(2026-11-12 复审): 审计基线 5f79714a 的 MIGRATIONS 最高是 **246**, 没有 247;
+    # 247 首次出现在 8c972f63, 248 出现在 f97514d7。所以此前"m247 在基线已发布、函数体被改动
+    # 会重跑"的说法不准确。真实约束只有一条: 函数体一旦进过任何库, 改动会让 checksum 变化并
+    # 重新执行 —— 因此 m247 的函数体保持与 8c972f63 逐字一致, 新列/新索引一律放到新的 m249。
     Migration(247, "premarket_factor_evidence", _m247_premarket_factor_evidence),
     Migration(248, "premarket_evidence_run_binding", _m248_premarket_evidence_run_binding),
+    # 后验记录用户维度 + 部分唯一键; 只加列/加索引, 不动存量行(2026-11-12 P0)
+    Migration(249, "prediction_outcome_user_scope", _m249_prediction_outcome_user_scope),
+    # 版本追加(run_trace_id/owner_scope) + 计分行唯一 + system 独立桶; 仍只加列/加索引,
+    # 唯一删除动作是丢掉 m249 自己建的无状态唯一索引(不删数据行)(2026-11-12 二次修正)
+    Migration(
+        250,
+        "prediction_outcome_versions_and_system_scope",
+        _m250_prediction_outcome_versions_and_system_scope,
+    ),
 )
 
 

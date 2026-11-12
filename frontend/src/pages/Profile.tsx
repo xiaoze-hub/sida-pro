@@ -54,12 +54,18 @@ interface AccuracyBoard {
   since: string | null
   scope: string
   note?: string
+  /** 归属不可证明的历史行(加列前存量), 不纳入成绩; >0 时界面必须说明 */
+  legacy_unscoped_rows?: number
+  legacy_untrusted?: boolean
+  /** system 桶(无会话的系统调度运行)的独立统计条数; 绝不并入本账号 */
+  system_scoped_rows?: number
   overall?: {
     hit_count: number
     total: number
     hit_rate: number | null
     avg_return_pct: number | null
     scope: string
+    legacy_unscoped_rows?: number
   }
   agents?: AccuracyAgent[]
 }
@@ -434,9 +440,27 @@ export function Profile() {
             <div className="mb-3 flex flex-wrap items-baseline gap-2">
               <span className="text-[12px] font-semibold text-foreground">Agent 命中榜</span>
               <span className="text-[12px] text-muted-foreground">
-                分智能体预测命中率 · 近 30 天 · 样本不足不参评(按全平台统计, 预测记录无用户维度)
+                分智能体预测命中率 · 近 30 天 · 样本不足不参评(仅统计本账号)
               </span>
             </div>
+            {(board?.legacy_unscoped_rows ?? 0) > 0 && (
+              <div
+                className="mb-2 text-[12px] text-amber-600 dark:text-amber-500"
+                data-testid="profile-agent-board-legacy"
+              >
+                另有 {board?.legacy_unscoped_rows} 条历史预测无用户归属(加列前的存量), 归属不可证明,
+                不纳入成绩; 历史混算/重复不可视为已修复
+              </div>
+            )}
+            {(board?.system_scoped_rows ?? 0) > 0 && (
+              <div
+                className="mb-2 text-[12px] text-muted-foreground"
+                data-testid="profile-agent-board-system"
+              >
+                另有 {board?.system_scoped_rows} 条 system 桶记录(无会话的系统调度运行)独立统计,
+                不并入本账号
+              </div>
+            )}
             {boardError ? (
               <div className="text-[12px] text-amber-600 dark:text-amber-500" data-testid="profile-agent-board-error">
                 Agent 命中榜加载失败: {boardError instanceof Error ? boardError.message : '未知错误'}

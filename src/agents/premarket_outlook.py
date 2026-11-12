@@ -1623,11 +1623,19 @@ class PremarketOutlookAgent(BaseAgent):
         - `body_saved and not content_skipped` —— 正文确实是这一版;
         - `save_result.preopen is True` —— 这一版被证明是报告日 09:30 前生成的盘前报告;
         任一不满足就只记一条 WARNING 说明「没写 + 为什么」, **不写任何统计表**。
+
+        预测后验(2026-11-12 P0 复审): 存储层改为「只插入, 绝不改写既有结果」——
+        必须带 `user_id`(无归属拒写), 同用户同键的 pending/evaluated 行一律不覆盖,
+        只有 `run_trace_id` 完全相同的重复写入算幂等。因此本函数**只统计真的插入成功的行**
+        (`res.written`), `kept_evaluated` / `refused_*` / `concurrent_duplicate` 计入
+        `outcome_not_written`, 不再像旧代码那样把「没写」当 saved 报出去。
         """
         counters = {
             "suggestion_saved": 0,
             "suggestion_failed": 0,
             "outcome_saved": 0,
+            "outcome_version_appended": 0,
+            "outcome_not_written": 0,
             "outcome_failed": 0,
             "skipped": False,
         }
@@ -1666,6 +1674,11 @@ class PremarketOutlookAgent(BaseAgent):
         packs = data.get("signal_packs", {}) or {}
         symbol_contexts = data.get("symbol_contexts", {}) or {}
         analysis_date = analysis_date or (data.get("timestamp") or "")[:10]
+        # 预测后验必须有可核验的归属: 有 context.user → 个人桶; 无会话/系统调度 →
+        # **显式** system 桶(user_id 恒为空, 绝不猜测绑定真实用户)。
+        owner_id = _resolve_user_id(context)
+        owner_scope = "user" if owner_id else "system"
+        trace_id_run = getattr(save_result, "run_trace_id", None)
         for symbol, sug in suggestions.items():
             stock = stock_map.get(symbol)
             if not stock:
@@ -1715,7 +1728,7 @@ class PremarketOutlookAgent(BaseAgent):
             else:
                 counters["suggestion_failed"] += 1
             for horizon in (1, 5):
-                ok_outcome = save_agent_prediction_outcome(
+                res = save_agent_prediction_outcome(
                     agent_name=self.name,
                     stock_symbol=symbol,
                     stock_market=stock.market.value,
@@ -1729,21 +1742,44 @@ class PremarketOutlookAgent(BaseAgent):
                     trigger_price=trigger_price,
                     meta={
                         "source": "premarket_outlook",
-                        "run_trace_id": getattr(save_result, "run_trace_id", None),
+                        "run_trace_id": trace_id_run,
                         "reason": sug.get("reason", ""),
                         "signal": sug.get("signal", ""),
                     },
+                    # P0: 归属用户 + 版本身份。个人桶必须有 owner; 无 owner 走显式 system 桶。
+                    user_id=owner_id,
+                    owner_scope=owner_scope,
+                    run_trace_id=trace_id_run,
                 )
-                if ok_outcome:
+                # 只有**真的写入了计分行**才算 saved; 追加的审计版本单列 version_appended;
+                # 「被拒/幂等/并发」都不是成功, 不能像旧代码那样一律当 saved 报出去。
+                if res.scored:
                     counters["outcome_saved"] += 1
-                else:
+                elif res.written:
+                    counters["outcome_version_appended"] += 1
+                elif res.status in ("write_failed", "db_unavailable", "refused_unknown_user"):
                     counters["outcome_failed"] += 1
+                else:
+                    # refused_* / unchanged / concurrent: 明确"没写", 存储层已按级别记了细节日志。
+                    counters["outcome_not_written"] += 1
+                    logger.info(
+                        "[%s] 预测后验未写入(%s): %s/%s h=%s %s",
+                        trace_id,
+                        res.status,
+                        self.name,
+                        symbol,
+                        horizon,
+                        res.reason,
+                    )
         logger.info(
-            "[%s] 建议落库完成: suggestion_saved=%s failed=%s outcome_saved=%s failed=%s",
+            "[%s] 建议落库完成: suggestion_saved=%s failed=%s outcome_saved=%s "
+            "outcome_version_appended=%s outcome_not_written=%s outcome_failed=%s",
             trace_id,
             counters["suggestion_saved"],
             counters["suggestion_failed"],
             counters["outcome_saved"],
+            counters["outcome_version_appended"],
+            counters["outcome_not_written"],
             counters["outcome_failed"],
         )
         if counters["suggestion_failed"] or counters["outcome_failed"]:

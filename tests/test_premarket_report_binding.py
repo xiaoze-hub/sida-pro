@@ -448,8 +448,11 @@ def test_preopen_gate_boundaries():
 
     assert state(f"{DAY}T09:29:59+08:00")["preopen"] is True
     assert state(f"{DAY}T09:30:00+08:00")["preopen"] is False  # 开盘瞬间不算盘前
-    assert state(f"{DAY}T00:59:59+08:00")["preopen"] is True
-    assert state(f"{DAY}T01:00:00+08:00")["preopen"] is True  # 9:30 之前都算(含凌晨)
+    # 凌晨也算盘前 —— 但采集必须在报告完成**之前**(否则时序不可能, 见下)
+    assert state(f"{DAY}T00:59:59+08:00", coll=f"{DAY}T00:30:00+08:00")["preopen"] is True
+    assert state(f"{DAY}T01:00:00+08:00", coll=f"{DAY}T00:40:00+08:00")["preopen"] is True
+    # 2026-11-12 P0: 完成时刻早于采集结束 = 时序不可能 → unknown(不许因"都在 09:30 前"放行)
+    assert state(f"{DAY}T00:59:59+08:00", coll=f"{DAY}T08:00:00+08:00")["preopen"] is None
     assert state(f"{DAY}T20:00:00+08:00")["preopen"] is False
     assert state(f"{DAY}T08:00:00")["preopen"] is None  # naive → unknown
     assert state(None)["preopen"] is None

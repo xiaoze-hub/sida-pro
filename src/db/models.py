@@ -574,7 +574,32 @@ class AgentContextRun(CreatedAtMixin, Base):
 
 
 class AgentPredictionOutcome(CreatedAtMixin, Base):
-    """建议后验评估记录（用于回放与效果统计）"""
+    """建议后验评估记录（用于回放与效果统计）
+
+    P0(2026-11-12 复审 + 二次修正): 本表原先**没有用户维度** —— 行维度只有
+    (agent_name, stock_symbol, prediction_date, horizon_days), 于是两个真实账户同标的同日
+    的预测落在同一个键上: 后跑的那次会把别人的 pending 行原地改写(收益口径/动作/触发价
+    全变), 统计也只能混着算。现在:
+
+    - `user_id`: 归属用户, 只由调用方**显式传入的 context.user.id** 决定;
+      NULL = 加列之前的**历史行**(归属不可证明, 保留 unknown, 不清洗/不回填/不评估)。
+    - `owner_scope`: 归属桶。'user' = 个人预测; 'system' = 无会话的系统调度运行
+      (**独立桶, user_id 恒为 NULL, 绝不猜测绑定任何真实用户**); NULL = 加列前的历史行。
+    - `run_trace_id`: 这一行的**版本身份**(哪一次运行写下的)。
+    - 版本规则(追加, 不覆盖):
+        * 计分版本 = 同键**最早写入**的那一版(先到先得): 盘前/盘中的第一版是当时能拿到的
+          真实判断, 后续重跑不因"看到了更多行情"而替换它 —— 否则等于事后挑一个更好看的版本;
+        * 同一 (用户, agent, symbol, market, date, horizon) 至多 **一条非 superseded 行**
+          —— 由部分唯一索引 `ux_prediction_outcome_user_active_key` 在 DB 层强制;
+        * 该行就是唯一**计分行**(后验评估/命中率只看它), 后到的其它版本以
+          `outcome_status='superseded'` **追加**为审计版本, 不覆盖、不参与计分;
+        * 同一版本(相同 run_trace_id)重复写入是幂等, 由
+          `ux_prediction_outcome_user_run_key` 兜底;
+        * system 桶同理, 用 `ux_prediction_outcome_system_active_key` /
+          `ux_prediction_outcome_system_run_key`。
+    - 历史行(user_id/owner_scope 均 NULL)不落入任何部分索引, 老库即使已有同键重复也能
+      直接建索引, 不需要先清洗、也不会因为历史脏数据让上线迁移失败。
+    """
 
     __tablename__ = "agent_prediction_outcomes"
     __table_args__ = (
@@ -585,9 +610,73 @@ class AgentPredictionOutcome(CreatedAtMixin, Base):
             "prediction_date",
         ),
         Index("ix_prediction_status_horizon", "outcome_status", "horizon_days"),
+        # m249: 按用户查询(加列迁移建立, 名字/列必须与迁移逐字一致)
+        Index("ix_prediction_outcome_user", "user_id", "prediction_date"),
+        # m250: 计分行唯一(每键至多一条非 superseded) —— 版本追加的 DB 层保证
+        Index(
+            "ux_prediction_outcome_user_active_key",
+            "user_id",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            unique=True,
+            sqlite_where=text("user_id IS NOT NULL AND outcome_status <> 'superseded'"),
+            postgresql_where=text("user_id IS NOT NULL AND outcome_status <> 'superseded'"),
+        ),
+        # m250: 同一版本幂等(同一 run_trace_id 不能出现两行)
+        Index(
+            "ux_prediction_outcome_user_run_key",
+            "user_id",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            "run_trace_id",
+            unique=True,
+            sqlite_where=text("user_id IS NOT NULL AND run_trace_id IS NOT NULL"),
+            postgresql_where=text("user_id IS NOT NULL AND run_trace_id IS NOT NULL"),
+        ),
+        # m250: system 桶的计分行唯一 / 版本幂等(独立于任何真实用户)
+        Index(
+            "ux_prediction_outcome_system_active_key",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            unique=True,
+            sqlite_where=text("owner_scope = 'system' AND outcome_status <> 'superseded'"),
+            postgresql_where=text("owner_scope = 'system' AND outcome_status <> 'superseded'"),
+        ),
+        Index(
+            "ux_prediction_outcome_system_run_key",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            "run_trace_id",
+            unique=True,
+            sqlite_where=text("owner_scope = 'system' AND run_trace_id IS NOT NULL"),
+            postgresql_where=text("owner_scope = 'system' AND run_trace_id IS NOT NULL"),
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # 归属用户(NULL=加列前的历史行: 不可更新/不评估/不计入个人成绩)
+    user_id = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # 归属桶: 'user' / 'system'; NULL = 加列前的历史行(归属不可证明)
+    owner_scope = Column(String(16), nullable=True)
+    # 版本身份: 写这一行的运行 id; 同一键的重复写入靠它幂等
+    run_trace_id = Column(String(200), nullable=True)
+
     agent_name = Column(String, nullable=False)
     stock_symbol = Column(String, nullable=False)
     stock_market = Column(String, nullable=False, default="CN")

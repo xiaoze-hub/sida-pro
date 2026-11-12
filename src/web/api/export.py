@@ -171,7 +171,12 @@ def export_predictions(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """预测记录 CSV: 代码/方向/目标价/日期/结果(hit/miss/pending)。"""
+    """预测记录 CSV: 代码/方向/目标价/日期/结果(hit/miss/pending)。
+
+    P0(2026-11-12): 这里原来导出**全表**(包括别的账号的行) —— 同一份个人导出里出现
+    他人预测, 既是越权读取, 也让"我的成绩"不可信。现在只导出 `user_id == 当前用户` 的行;
+    历史无归属行(user_id 为空)不导出, 并在日志里如实给出被排除的条数。
+    """
     # 审计(2026-08-15 评审 B 补覆盖)
     try:
         from src.web.api.audit import log_audit
@@ -180,12 +185,23 @@ def export_predictions(
         pass
     records = (
         db.query(AgentPredictionOutcome)
+        .filter(AgentPredictionOutcome.user_id == user.id)
         .order_by(
             AgentPredictionOutcome.prediction_date.desc(),
             AgentPredictionOutcome.id.desc(),
         )
         .all()
     )
+    legacy_excluded = (
+        db.query(AgentPredictionOutcome)
+        .filter(AgentPredictionOutcome.user_id.is_(None))
+        .count()
+    )
+    if legacy_excluded:
+        logger.warning(
+            "预测导出跳过 %s 条无归属历史行(user_id 为空): 无法证明属于当前用户, 不导出",
+            legacy_excluded,
+        )
     headers = ["代码", "方向", "目标价", "日期", "结果"]
 
     rows: list[list] = []

@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta
 
 from src.collectors.kline_collector import KlineCollector
 from src.core.context_store import (
+    count_system_pending_prediction_outcomes,
+    count_unowned_pending_prediction_outcomes,
     list_pending_prediction_outcomes,
     mark_agent_prediction_outcome,
 )
@@ -76,11 +78,27 @@ def evaluate_pending_prediction_outcomes(
     *,
     max_horizon_days: int = 10,
     limit: int = 300,
+    user_id: str | None = None,
 ) -> dict:
+    """评估到期的个人预测后验 —— 只碰**归属可证明的计分行**（2026-11-12 二次修正）。
+
+    - 历史行(user_id/owner_scope 均为 NULL): 不评估(改不了"属于谁"), 但如实报出被排除量;
+    - system 桶: 独立统计口径, 这里不评估, 单独报数(绝不并入任何个人成绩);
+    - superseded 审计版本: 不是计分行, 不会出现在待评估列表里(存储层已排除);
+    - `user_id` 可选: 只评估该用户的行(供按用户范围触发的维护调用)。
+    """
     pending = list_pending_prediction_outcomes(
         max_horizon_days=max_horizon_days,
         limit=limit,
+        user_id=user_id,
     )
+    # 无归属的历史待评估行: 不评估(改不了"属于谁"), 但必须如实报出被排除的量,
+    # 不能让人以为"待评估为 0 = 都评估完了"。
+    unowned = count_unowned_pending_prediction_outcomes(max_horizon_days=max_horizon_days)
+    system_pending = count_system_pending_prediction_outcomes(
+        max_horizon_days=max_horizon_days
+    )
+    uid = str(user_id).strip() if user_id is not None else ""
     stats = {
         "total_pending": len(pending),
         "eligible": 0,
@@ -88,7 +106,27 @@ def evaluate_pending_prediction_outcomes(
         "skipped_not_due": 0,
         "skipped_invalid_date": 0,
         "skipped_no_price": 0,
+        "skipped_unowned_legacy": unowned,
+        "skipped_system_bucket": system_pending,
+        "scope": "owned_only",
+        "user_scope": uid or "all_user_scoped_rows",
+        "note": (
+            "只评估有归属用户的计分行; 历史无归属行(user_id 为空)保持 pending 不作成绩; "
+            "system 桶单独计数、不并入任何个人成绩; superseded 审计版本不评估"
+        ),
     }
+    if unowned:
+        logger.warning(
+            "预测后验评估跳过 %s 条无归属历史行(user_id 为空): 无法证明属于哪个账户, "
+            "不评估、不回填, 需人工核查数据来源",
+            unowned,
+        )
+    if system_pending:
+        logger.info(
+            "预测后验评估跳过 %s 条 system 桶待评估行: 系统运行无个人归属, 独立统计, "
+            "不并入任何账户成绩",
+            system_pending,
+        )
     if not pending:
         return stats
 

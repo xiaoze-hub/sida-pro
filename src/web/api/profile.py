@@ -11,10 +11,17 @@ users 行(导出/审计等并行子任务也在读 users 表, 保持行内轻量
 文件名唯一(avatar_u<uid>-<uuid>.<ext>): 换头像写新文件 → 提交 DB → 成功后才删旧文件,
 失败只清新文件(详见下方"一致性约定")。
 
-预测命中率说明: agent_prediction_outcomes 表无 user_id 列(记录维度是
-agent_name/stock_symbol/prediction_date), 无法按当前用户过滤 → 统计全平台并显式标注
-scope=global。命中定义: outcome_status='evaluated' 且有收益的记录中, buy/add 且
-收益>0、reduce/sell/avoid 且收益<0 记命中; watch/hold/alert 等中性动作不计入分母。
+预测命中率说明(2026-11-12 P0 更正): agent_prediction_outcomes 原来**没有 user_id**,
+两个账号同标的同日的预测落同一个键 —— 后跑的会把别人的行改写, 统计也只能"全平台"混算。
+现在加了 user_id(历史行保持 NULL = 归属不可证明), 因此:
+
+- 本接口**只统计当前账号自己的记录**(scope=user), 不再给"全平台命中率";
+- 历史无归属行不纳入成绩, 条数在 `legacy_unscoped_rows` 里如实报出并标 `legacy_untrusted`,
+  不把"历史已清洗/已修好"当结论(没清洗, 也不会去动生产既有数据);
+- system 桶(无会话的系统调度运行, user_id 恒空)独立计数在 `system_scoped_rows`, 绝不并入
+  任何账号 —— 也不去猜它属于谁;
+- 命中定义不变: outcome_status='evaluated' 且有收益的记录中, buy/add 且收益>0、
+  reduce/sell/avoid 且收益<0 记命中; watch/hold/alert 等中性动作不计入分母。
 """
 import base64
 import logging
@@ -186,18 +193,78 @@ def _profile_to_dict(user: User) -> dict:
     }
 
 
-def _prediction_hit_stats(db: Session) -> dict:
-    """预测命中率(agent_prediction_outcomes 无 user_id → 全平台统计, 标注 scope=global)。"""
-    return _accuracy_board(db, since="")["overall"]
+def _legacy_unscoped_evaluated_count(db: Session, since: str = "") -> int:
+    """窗口内「历史无归属」的已评估条数 —— 只用于如实标注, 不参与成绩。
 
-
-def _accuracy_board(db: Session, since: str = "", min_n: int = 1) -> dict:
-    """分 Agent 命中榜(2026-09-08 方向3: 回测闭环的上半场 — 先看见谁准)。
-
-    同 _prediction_hit_stats 口径: buy/add 涨>0 命中、reduce/sell/avoid 跌<0 命中,
-    中性动作不计分母。since=YYYY-MM-DD 过滤 prediction_date(字符串比较)。
-    样本 <min_n 的 agent 标 qualified=false(不参与排名, 防 1 中 1 刷榜)。
+    这些行是加 user_id/owner_scope 之前的存量数据: 无法证明属于哪个账号, 也没被清洗/回填。
+    统计里必须显式说明它们被排除, 否则"总样本变小"会被误读成"记录少了"。
     """
+    q = db.query(func.count(AgentPredictionOutcome.id)).filter(
+        AgentPredictionOutcome.user_id.is_(None),
+        AgentPredictionOutcome.owner_scope.is_(None),
+        AgentPredictionOutcome.outcome_status == "evaluated",
+        AgentPredictionOutcome.outcome_return_pct.isnot(None),
+    )
+    if since:
+        q = q.filter(AgentPredictionOutcome.prediction_date >= since)
+    return int(q.scalar() or 0)
+
+
+def _system_evaluated_count(db: Session, since: str = "") -> int:
+    """窗口内 system 桶的已评估条数 —— **独立口径**, 绝不并入任何账号成绩。
+
+    system 桶 = 无会话的系统调度运行(user_id 恒为空, owner_scope='system')。
+    这里只报数, 不猜它属于谁。
+    """
+    q = db.query(func.count(AgentPredictionOutcome.id)).filter(
+        AgentPredictionOutcome.user_id.is_(None),
+        AgentPredictionOutcome.owner_scope == "system",
+        AgentPredictionOutcome.outcome_status == "evaluated",
+        AgentPredictionOutcome.outcome_return_pct.isnot(None),
+    )
+    if since:
+        q = q.filter(AgentPredictionOutcome.prediction_date >= since)
+    return int(q.scalar() or 0)
+
+
+def _prediction_hit_stats(db: Session, *, user_id: str) -> dict:
+    """当前账号的预测命中率(user_id 必传: 本表不提供跨账户口径)。"""
+    return _accuracy_board(db, since="", user_id=user_id)["overall"]
+
+
+def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: str) -> dict:
+    """当前账号的分 Agent 命中榜(2026-09-08 方向3; 2026-11-12 P0 改为按用户)。
+
+    口径: buy/add 涨>0 命中、reduce/sell/avoid 跌<0 命中, 中性动作不计分母。
+    since=YYYY-MM-DD 过滤 prediction_date(字符串比较)。样本 <min_n 的 agent 标
+    qualified=false(不参与排名, 防 1 中 1 刷榜)。
+
+    P0: 只读 `user_id == 当前用户` 的行。历史行(user_id 为空)归属不可证明 → 不纳入,
+    但在 `legacy_unscoped_rows` / `legacy_untrusted` / `note` 里如实交代被排除的量,
+    不把"没数据"说成"成绩很好", 也不声称历史重复已被修好。
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        # 没有归属就不出成绩: 宁可空榜, 也不拿全平台数据冒充"我的命中率"
+        return {
+            "since": since or None,
+            "scope": "user",
+            "user_scoped": True,
+            "legacy_unscoped_rows": 0,
+            "legacy_untrusted": False,
+            "system_scoped_rows": 0,
+            "note": "缺少当前用户, 不提供跨账户统计",
+            "overall": {
+                "hit_count": 0,
+                "total": 0,
+                "hit_rate": None,
+                "avg_return_pct": None,
+                "scope": "user",
+                "legacy_unscoped_rows": 0,
+            },
+            "agents": [],
+        }
+
     q = (
         db.query(
             AgentPredictionOutcome.agent_name,
@@ -205,6 +272,7 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1) -> dict:
             AgentPredictionOutcome.outcome_return_pct,
         )
         .filter(
+            AgentPredictionOutcome.user_id == uid,
             AgentPredictionOutcome.outcome_status == "evaluated",
             AgentPredictionOutcome.outcome_return_pct.isnot(None),
         )
@@ -212,6 +280,9 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1) -> dict:
     if since:
         q = q.filter(AgentPredictionOutcome.prediction_date >= since)
     rows = q.all()
+
+    legacy = _legacy_unscoped_evaluated_count(db, since=since)
+    system_rows = _system_evaluated_count(db, since=since)
 
     per: dict[str, dict] = {}
     ohit = otot = 0
@@ -247,16 +318,32 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1) -> dict:
             "qualified": n >= min_n,
         })
     agents.sort(key=lambda a: (not a["qualified"], -(a["hit_rate"] or -1)))
+    note = "仅统计归属本账号的预测记录"
+    if legacy:
+        note += (
+            f"; 另有 {legacy} 条历史记录无用户归属(加列前的存量), 归属不可证明, "
+            "不纳入成绩、不回填、不清洗 —— 历史重复与混算不可视为已修复"
+        )
+    if system_rows:
+        note += (
+            f"; 另有 {system_rows} 条 system 桶记录(无会话的系统调度运行)独立统计, "
+            "不并入本账号"
+        )
     return {
         "since": since or None,
-        "scope": "global",
-        "note": "预测记录无用户维度, 按全平台统计",
+        "scope": "user",
+        "user_scoped": True,
+        "legacy_unscoped_rows": legacy,
+        "legacy_untrusted": bool(legacy),
+        "system_scoped_rows": system_rows,
+        "note": note,
         "overall": {
             "hit_count": ohit,
             "total": otot,
             "hit_rate": round(ohit / otot * 100, 1) if otot else None,
             "avg_return_pct": round(oret_sum / oret_n, 2) if oret_n else None,
-            "scope": "global",
+            "scope": "user",
+            "legacy_unscoped_rows": legacy,
         },
         "agents": agents,
     }
@@ -360,7 +447,7 @@ def prediction_accuracy_board(
     from datetime import date, timedelta
 
     since = (date.today() - timedelta(days=days)).isoformat()
-    return _accuracy_board(db, since=since, min_n=min_n)
+    return _accuracy_board(db, since=since, min_n=min_n, user_id=user.id)
 
 
 @router.get("/stats")
@@ -368,7 +455,7 @@ def profile_stats(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """我的数据: 预测命中率(全局)/自选数/持仓数/影子账户画像有无。"""
+    """我的数据: 预测命中率(**仅本账号**)/自选数/持仓数/影子账户画像有无。"""
     watchlist_count = (
         db.query(func.count(Stock.id))
         .filter(or_(Stock.user_id == user.id, Stock.user_id.is_(None)))
@@ -383,7 +470,7 @@ def profile_stats(
     )
     shadow_profile = user.shadow_profile_json or {}
     return {
-        "prediction": _prediction_hit_stats(db),
+        "prediction": _prediction_hit_stats(db, user_id=user.id),
         "watchlist_count": watchlist_count,
         "position_count": position_count,
         "has_shadow_profile": bool(shadow_profile),

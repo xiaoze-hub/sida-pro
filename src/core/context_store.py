@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.db.session import SessionLocal
 from src.db.models import (
@@ -15,6 +17,77 @@ from src.db.models import (
 from src.core.json_safe import to_jsonable
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OutcomeSaveResult:
+    """一次预测后验写入的**真实**结果(不是"调用成功")。
+
+    `written` 只有真的插入了新行才为 True; `bool(result)` 与之一致。调用方据此计数,
+    避免把「已评估不改」「本版被拒」「并发被唯一键挡住」当成保存成功上报。
+
+    `scored` 表示这一行是**计分行**(参与后验评估/命中率); 追加的审计版本
+    (`status='appended_superseded'`) 是 `written=True, scored=False` —— 存下来了,
+    但绝不重复计分。
+
+    status 取值:
+      inserted / appended_superseded / unchanged_same_version / kept_evaluated /
+      refused_no_owner / refused_bad_scope / refused_bad_key / refused_no_version /
+      refused_duplicate_rows / refused_unknown_user / concurrent_duplicate /
+      db_unavailable / write_failed
+    """
+
+    status: str
+    written: bool
+    scored: bool = False
+    reason: str = ""
+    record_id: int | None = None
+
+    def __bool__(self) -> bool:  # 只在真写入时为真
+        return bool(self.written)
+
+    @property
+    def ok(self) -> bool:
+        """写入了新行 = True; 其余(unwritten/refused)一律 False。"""
+        return bool(self.written)
+
+
+# 归属桶: 个人 / 系统。系统桶 user_id 恒为 NULL, 绝不猜测绑定真实用户。
+SCOPE_USER = "user"
+SCOPE_SYSTEM = "system"
+SCOPE_UNKNOWN_LEGACY = None  # 加列前的历史行: 归属不可证明, 保留 unknown
+# 追加的审计版本: 不是计分行, 不参与评估/命中率
+STATUS_SUPERSEDED = "superseded"
+
+
+def _db_error_kind(exc: BaseException) -> str:
+    """把 DB 异常分成可行动的类型(不再一律当"保存失败")。
+
+    - unique: 唯一键冲突(并发同版本 / 并发计分行) —— 可以按幂等或追加处理;
+    - foreign_key: 归属用户不存在(users 表无此 id) —— 不能写, 也不能假装是并发;
+    - not_null / check: 数据本身不合 schema;
+    - pg_<code>: 其它 PG SQLSTATE;
+    - other: 其它完整性错误。
+
+    PG 优先用 SQLSTATE(psycopg 的 orig.pgcode), 没有时退回匹配错误文本(sqlite)。
+    """
+    orig = getattr(exc, "orig", None)
+    code = str(getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None) or "").strip()
+    if code:
+        return {
+            "23505": "unique",
+            "23503": "foreign_key",
+            "23502": "not_null",
+            "23514": "check",
+        }.get(code, f"pg_{code}")
+    msg = f"{orig or exc}".lower()
+    if "unique constraint" in msg or "duplicate key" in msg or "unique failed" in msg:
+        return "unique"
+    if "foreign key" in msg:
+        return "foreign_key"
+    if "not null" in msg:
+        return "not_null"
+    return "other"
 
 
 def save_stock_context_snapshot(
@@ -216,6 +289,75 @@ def list_recent_agent_context_runs(
         db.close()
 
 
+def _outcome_key_rows(
+    db,
+    *,
+    scope: str,
+    user_id: str,
+    agent_name: str,
+    stock_symbol: str,
+    stock_market: str,
+    prediction_date: str,
+    horizon_days: int,
+):
+    """取同一键下的**全部**版本行(含 superseded), 按 id 升序。
+
+    个人桶按 `user_id` 精确过滤; system 桶要求 `user_id IS NULL` 且
+    `owner_scope='system'` —— 两类桶互不重叠, system 桶永远不会把真实用户的行算进来,
+    也永远不会被"猜"成某个真实用户。
+    """
+    q = db.query(AgentPredictionOutcome).filter(
+        AgentPredictionOutcome.agent_name == agent_name,
+        AgentPredictionOutcome.stock_symbol == stock_symbol,
+        AgentPredictionOutcome.stock_market == stock_market,
+        AgentPredictionOutcome.prediction_date == prediction_date,
+        AgentPredictionOutcome.horizon_days == horizon_days,
+    )
+    if scope == SCOPE_USER:
+        q = q.filter(AgentPredictionOutcome.user_id == user_id)
+    else:
+        q = q.filter(
+            AgentPredictionOutcome.user_id.is_(None),
+            AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
+        )
+    return q.order_by(AgentPredictionOutcome.id.asc()).all()
+
+
+def _build_outcome_row(
+    *,
+    scope: str,
+    user_id: str,
+    agent_name: str,
+    stock_symbol: str,
+    stock_market: str,
+    prediction_date: str,
+    horizon_days: int,
+    action: str,
+    action_label: str,
+    confidence: float | None,
+    trigger_price: float | None,
+    meta_payload: dict,
+    outcome_status: str,
+    run_trace_id: str,
+) -> AgentPredictionOutcome:
+    return AgentPredictionOutcome(
+        user_id=(user_id or None) if scope == SCOPE_USER else None,
+        owner_scope=scope,
+        run_trace_id=run_trace_id,
+        agent_name=agent_name,
+        stock_symbol=stock_symbol,
+        stock_market=stock_market,
+        prediction_date=prediction_date,
+        horizon_days=horizon_days,
+        action=action or "watch",
+        action_label=action_label or "观望",
+        confidence=confidence,
+        trigger_price=trigger_price,
+        outcome_status=outcome_status,
+        meta=meta_payload,
+    )
+
+
 def save_agent_prediction_outcome(
     *,
     agent_name: str,
@@ -228,87 +370,384 @@ def save_agent_prediction_outcome(
     confidence: float | None = None,
     trigger_price: float | None = None,
     meta: dict | None = None,
-) -> bool:
-    """写入一条待后验的预测记录（同一键幂等）。
+    user_id: str | None = None,
+    run_trace_id: str | None = None,
+    owner_scope: str | None = None,
+) -> OutcomeSaveResult:
+    """写入一条待后验的预测记录 —— **只追加, 绝不改写既有结果**（2026-11-12 二次修正）。
 
-    2026-11-12 P0: 原先每次调用都 INSERT。盘前同日重跑一次就多一套
-    (agent, symbol, date, horizon) 行 —— 命中率统计按行聚合, 重跑直接把分母灌水,
-    「预测成绩」被重复污染。现在:
-    - 同键已有 **pending** 行 → 原地更新方向/置信度/触发价/meta（正文保留的是最新一版,
-      后验跟着同一版走, 并在 meta 记 revision）;
-    - 同键已是 **evaluated** 行 → 不覆盖、不再插入（已回填的成绩不能被后来的重跑改写）。
+    规则（每条都保守、可验证）:
+      1. 归属桶只由调用方声明: `owner_scope='user'` + 显式 `user_id`
+         (来自 `context.user.id`), 或 `owner_scope='system'`(无会话的系统调度运行)。
+         **绝不猜测绑定真实用户**: system 桶的 user_id 恒为 NULL; 传了 user_id 又要
+         system 桶 → 直接拒写(`refused_bad_scope`)。个人桶缺 user_id → 拒写
+         (`refused_no_owner`), 不静默归到某个账号或系统桶。
+      2. 同一键(用户/系统, agent, symbol, market, date, horizon)只有**一条计分行**, 且
+         计分版本 = **最早写入的那一版**(先到先得; 后续重跑不能因看到了更多行情而替换):
+         - 没有计分行 → 本版插入为 `pending`, 是计分行(`inserted`, scored=True);
+         - 已有计分行、且 `run_trace_id` 与它相同 → 幂等, 不写(`unchanged_same_version`);
+         - 已有计分行、版本不同 → **追加**一条 `superseded` 审计版本(`appended_superseded`,
+           written=True/scored=False): 信息不丢, 但绝不覆盖、绝不重复计分;
+         - 已有计分行且它是终态(已评估等) → 同样只追加 superseded 审计版本
+           (`appended_superseded`), 绝不改成绩;
+         - 同键出现**多条计分行**(历史脏数据/索引被手工删过) → `refused_duplicate_rows`:
+           无法判定哪条是计分行, 不挑一行改, 也不再插第三行, 记 ERROR 要求人工核查。
+      3. 版本身份是 `run_trace_id`, 缺失则拒写(`refused_no_version`) —— 没有版本号就
+         无法证明"这是同一次运行", 追加会把同一份结果重复存成两版。
+      4. DB 兜底: `ux_prediction_outcome_user_active_key` / `_run_key`(system 桶同理)
+         保证"至多一条计分行 / 同版本不重复"。并发下按错误类型分派:
+         unique → 先看是不是同版本并发(幂等), 不是则只追加 superseded;
+         foreign_key → `refused_unknown_user`(归属用户不存在); 其它 → `write_failed`。
 
-    诚实边界: 这是「应用层幂等」, 表上没有 (agent, symbol, date, horizon) 唯一约束
-    （历史库可能已有重复行, 直接加唯一索引会让迁移失败/需要删数据, 不在本次范围）;
-    因此两个**真正并发**的进程仍可能各插一行。调度侧是单飞的, 重跑/重复调用不会。
+    返回值是 `OutcomeSaveResult`(不是 bool): `written` 只在**真的写入了行**时为 True,
+    `scored` 只有计分行为 True。调用方据此计数, 杜绝「没写却报 saved」和「审计版本被
+    当成计分行重复计数」。
     """
+    uid = str(user_id).strip() if user_id is not None else ""
+    trace = str(run_trace_id).strip() if run_trace_id is not None else ""
+    scope = str(owner_scope).strip().lower() if owner_scope is not None else ""
+    horizon = max(1, int(horizon_days))
+    market = (stock_market or "CN").strip().upper() or "CN"
+    date_str = str(prediction_date or "").strip()
+
+    if scope not in ("", SCOPE_USER, SCOPE_SYSTEM):
+        logger.error(
+            "预测后验不写入(未知归属桶 %r): %s/%s/%s h=%s —— 只接受 user/system",
+            scope,
+            agent_name,
+            stock_symbol,
+            date_str,
+            horizon,
+        )
+        return OutcomeSaveResult(
+            status="refused_bad_scope", written=False, reason=f"未知 owner_scope={scope!r}"
+        )
+    if not scope:
+        # 未显式声明时只按"有没有用户"区分, 绝不猜具体是谁; 并明确留日志。
+        scope = SCOPE_USER if uid else SCOPE_SYSTEM
+        logger.info(
+            "预测后验未显式声明 owner_scope, 按存在性判为 %s 桶(不绑定任何真实用户): %s/%s/%s",
+            scope,
+            agent_name,
+            stock_symbol,
+            date_str,
+        )
+    if scope == SCOPE_USER and not uid:
+        logger.warning(
+            "预测后验不写入(个人桶缺少归属用户): %s/%s/%s h=%s —— 无用户维度的行无法隔离, "
+            "只能污染统计; 调用方必须传 context.user.id",
+            agent_name,
+            stock_symbol,
+            date_str,
+            horizon,
+        )
+        return OutcomeSaveResult(
+            status="refused_no_owner", written=False, reason="个人桶缺少可核验的归属用户"
+        )
+    if scope == SCOPE_SYSTEM and uid:
+        logger.error(
+            "预测后验不写入(system 桶不接受真实用户 id): user=%s %s/%s/%s h=%s —— "
+            "系统运行不得冒充/绑定某个账号",
+            uid,
+            agent_name,
+            stock_symbol,
+            date_str,
+            horizon,
+        )
+        return OutcomeSaveResult(
+            status="refused_bad_scope",
+            written=False,
+            reason="system 桶的 user_id 必须为空(不得绑定真实用户)",
+        )
+    if not date_str:
+        logger.error(
+            "预测后验不写入(报告日为空): %s/%s h=%s scope=%s user=%r",
+            agent_name,
+            stock_symbol,
+            horizon,
+            scope,
+            uid or None,
+        )
+        return OutcomeSaveResult(status="refused_bad_key", written=False, reason="prediction_date 为空")
+    if not trace:
+        logger.warning(
+            "预测后验不写入(缺少 run_trace_id, 无法证明版本): %s/%s/%s h=%s scope=%s user=%r",
+            agent_name,
+            stock_symbol,
+            date_str,
+            horizon,
+            scope,
+            uid or None,
+        )
+        return OutcomeSaveResult(
+            status="refused_no_version",
+            written=False,
+            reason="缺少 run_trace_id: 同一结果会被重复追加成多版",
+        )
+
     db = SessionLocal()
     try:
         meta_safe = to_jsonable(meta or {})
         if not isinstance(meta_safe, dict):
             meta_safe = {}
-        horizon = max(1, int(horizon_days))
-        existing = (
-            db.query(AgentPredictionOutcome)
-            .filter(
-                AgentPredictionOutcome.agent_name == agent_name,
-                AgentPredictionOutcome.stock_symbol == stock_symbol,
-                AgentPredictionOutcome.stock_market == (stock_market or "CN"),
-                AgentPredictionOutcome.prediction_date == prediction_date,
-                AgentPredictionOutcome.horizon_days == horizon,
-            )
-            .order_by(AgentPredictionOutcome.id.asc())
-            .first()
+        meta_payload = {
+            **meta_safe,
+            "run_trace_id": trace,
+            "owner_scope": scope,
+        }
+        common = dict(
+            scope=scope,
+            user_id=uid,
+            agent_name=agent_name,
+            stock_symbol=stock_symbol,
+            stock_market=market,
+            prediction_date=date_str,
+            horizon_days=horizon,
+            action=action,
+            action_label=action_label,
+            confidence=confidence,
+            trigger_price=trigger_price,
+            meta_payload=meta_payload,
         )
-        if existing is not None:
-            if str(existing.outcome_status or "") != "pending":
+
+        rows = _outcome_key_rows(
+            db,
+            scope=scope,
+            user_id=uid,
+            agent_name=agent_name,
+            stock_symbol=stock_symbol,
+            stock_market=market,
+            prediction_date=date_str,
+            horizon_days=horizon,
+        )
+
+        # 同一版本重复写入: 幂等(不新增、不改写)
+        for r in rows:
+            if (str(r.run_trace_id or "").strip()) == trace:
                 logger.info(
-                    "预测后验已评估, 不因重跑改写: %s/%s/%s h=%s status=%s",
+                    "预测后验同一版本重复写入(幂等, 不新增/不改写): id=%s scope=%s user=%r "
+                    "%s/%s/%s h=%s trace=%s",
+                    r.id,
+                    scope,
+                    uid or None,
                     agent_name,
                     stock_symbol,
-                    prediction_date,
+                    date_str,
                     horizon,
-                    existing.outcome_status,
+                    trace,
                 )
-                return True
-            prev_meta = existing.meta if isinstance(existing.meta, dict) else {}
-            revision = int(prev_meta.get("revision") or 0) + 1
-            existing.action = action or "watch"
-            existing.action_label = action_label or "观望"
-            existing.confidence = confidence
-            existing.trigger_price = trigger_price
-            existing.meta = {**meta_safe, "revision": revision}
-            db.commit()
-            logger.info(
-                "预测后验同键更新(避免重复行污染统计): %s/%s/%s h=%s revision=%s",
+                return OutcomeSaveResult(
+                    status="unchanged_same_version",
+                    written=False,
+                    record_id=r.id,
+                    reason="同一 run_trace_id 的重复写入",
+                )
+
+        active = [
+            r for r in rows if str(r.outcome_status or "") != STATUS_SUPERSEDED
+        ]
+        if len(active) > 1:
+            logger.error(
+                "预测后验同键已有多条计分行(历史脏数据, 归属/版本不可判定), 本次不写入: "
+                "scope=%s user=%r %s/%s/%s h=%s ids=%s",
+                scope,
+                uid or None,
                 agent_name,
                 stock_symbol,
-                prediction_date,
+                date_str,
                 horizon,
-                revision,
+                [r.id for r in active],
             )
-            return True
-        db.add(
-            AgentPredictionOutcome(
+            return OutcomeSaveResult(
+                status="refused_duplicate_rows",
+                written=False,
+                reason="同键已有多条计分行, 无法判定计分版本",
+            )
+
+        if active:
+            keep = active[0]
+            keep_status = str(keep.outcome_status or "pending")
+            row = _build_outcome_row(
+                **common, outcome_status=STATUS_SUPERSEDED, run_trace_id=trace
+            )
+            db.add(row)
+            db.commit()
+            logger.warning(
+                "预测后验追加审计版本(不改写计分行, 不参与计分): new_id=%s keep_id=%s "
+                "keep_status=%s scope=%s user=%r %s/%s/%s h=%s 既有trace=%r 本次trace=%r",
+                row.id,
+                keep.id,
+                keep_status,
+                scope,
+                uid or None,
+                agent_name,
+                stock_symbol,
+                date_str,
+                horizon,
+                str(keep.run_trace_id or "") or None,
+                trace,
+            )
+            return OutcomeSaveResult(
+                status="appended_superseded",
+                written=True,
+                scored=False,
+                record_id=row.id,
+                reason=f"同键已有计分行 id={keep.id}(status={keep_status}), 本版仅留档",
+            )
+
+        row = _build_outcome_row(**common, outcome_status="pending", run_trace_id=trace)
+        db.add(row)
+        db.commit()
+        return OutcomeSaveResult(
+            status="inserted", written=True, scored=True, record_id=row.id
+        )
+    except IntegrityError as e:
+        db.rollback()
+        kind = _db_error_kind(e)
+        if kind == "foreign_key":
+            logger.error(
+                "预测后验写入被外键拒绝(归属用户不存在?): scope=%s user=%r %s/%s/%s h=%s err=%s",
+                scope,
+                uid or None,
+                agent_name,
+                stock_symbol,
+                date_str,
+                horizon,
+                e,
+            )
+            return OutcomeSaveResult(
+                status="refused_unknown_user",
+                written=False,
+                reason="归属用户不存在(user_id 外键校验失败)",
+            )
+        if kind != "unique":
+            logger.error(
+                "预测后验写入违反完整性约束(%s): scope=%s user=%r %s/%s/%s h=%s err=%s",
+                kind,
+                scope,
+                uid or None,
+                agent_name,
+                stock_symbol,
+                date_str,
+                horizon,
+                e,
+            )
+            return OutcomeSaveResult(
+                status="write_failed", written=False, reason=f"完整性约束({kind}): {e}"
+            )
+        # 唯一键: 重新读一次, 判断"同版本并发"还是"计分行并发"
+        try:
+            rows = _outcome_key_rows(
+                db,
+                scope=scope,
+                user_id=uid,
                 agent_name=agent_name,
                 stock_symbol=stock_symbol,
-                stock_market=stock_market or "CN",
-                prediction_date=prediction_date,
+                stock_market=market,
+                prediction_date=date_str,
                 horizon_days=horizon,
-                action=action or "watch",
-                action_label=action_label or "观望",
-                confidence=confidence,
-                trigger_price=trigger_price,
-                outcome_status="pending",
-                meta={**meta_safe, "revision": 0},
             )
+        except Exception:  # noqa: BLE001 - 读失败也要按保守路径返回, 不能假装成功
+            rows = []
+        for r in rows:
+            if str(r.run_trace_id or "").strip() == trace:
+                logger.info(
+                    "预测后验并发同版本(唯一键挡住, 已有同一 trace): id=%s trace=%s",
+                    r.id,
+                    trace,
+                )
+                return OutcomeSaveResult(
+                    status="unchanged_same_version",
+                    written=False,
+                    record_id=r.id,
+                    reason="并发写入同一 run_trace_id",
+                )
+        if any(str(r.outcome_status or "") != STATUS_SUPERSEDED for r in rows):
+            # 另一进程刚插了计分行: 本版只能作为审计版本追加一次
+            try:
+                row = _build_outcome_row(
+                    scope=scope,
+                    user_id=uid,
+                    agent_name=agent_name,
+                    stock_symbol=stock_symbol,
+                    stock_market=market,
+                    prediction_date=date_str,
+                    horizon_days=horizon,
+                    action=action,
+                    action_label=action_label,
+                    confidence=confidence,
+                    trigger_price=trigger_price,
+                    meta_payload=meta_payload,
+                    outcome_status=STATUS_SUPERSEDED,
+                    run_trace_id=trace,
+                )
+                db.add(row)
+                db.commit()
+                logger.warning(
+                    "预测后验并发下追加审计版本(计分行已在别处写入): new_id=%s scope=%s "
+                    "user=%r %s/%s/%s h=%s trace=%s",
+                    row.id,
+                    scope,
+                    uid or None,
+                    agent_name,
+                    stock_symbol,
+                    date_str,
+                    horizon,
+                    trace,
+                )
+                return OutcomeSaveResult(
+                    status="appended_superseded",
+                    written=True,
+                    scored=False,
+                    record_id=row.id,
+                    reason="并发下本版仅留档(计分行已存在)",
+                )
+            except IntegrityError as e2:
+                db.rollback()
+                logger.warning(
+                    "预测后验并发追加仍被唯一键拒绝: scope=%s user=%r %s/%s/%s h=%s err=%s",
+                    scope,
+                    uid or None,
+                    agent_name,
+                    stock_symbol,
+                    date_str,
+                    horizon,
+                    e2,
+                )
+        logger.warning(
+            "预测后验并发重复(DB 唯一键挡住), 本次没有写入: scope=%s user=%r %s/%s/%s h=%s err=%s",
+            scope,
+            uid or None,
+            agent_name,
+            stock_symbol,
+            date_str,
+            horizon,
+            e,
         )
-        db.commit()
-        return True
-    except Exception as e:
-        logger.warning(f"保存 prediction outcome 失败: {e}")
+        return OutcomeSaveResult(
+            status="concurrent_duplicate", written=False, reason="并发写入被唯一键拒绝"
+        )
+    except OperationalError as e:
         db.rollback()
-        return False
+        logger.error(
+            "预测后验写入失败(数据库不可用/锁冲突): scope=%s user=%r %s/%s/%s h=%s err=%s",
+            scope,
+            uid or None,
+            agent_name,
+            stock_symbol,
+            date_str,
+            horizon,
+            e,
+        )
+        return OutcomeSaveResult(
+            status="db_unavailable", written=False, reason=f"OperationalError: {e}"
+        )
+    except Exception as e:
+        db.rollback()
+        logger.warning("保存 prediction outcome 失败: %s", e)
+        return OutcomeSaveResult(
+            status="write_failed", written=False, reason=f"{type(e).__name__}: {e}"
+        )
     finally:
         db.close()
 
@@ -320,6 +759,15 @@ def mark_agent_prediction_outcome(
     outcome_return_pct: float | None,
     status: str = "evaluated",
 ) -> bool:
+    """回填某条预测的评估结果（只有归属可证明的**计分行**才允许写）。
+
+    P0(2026-11-12): 加列之前的历史行 `user_id IS NULL` = 归属不可证明。回填它们等于给
+    一条不知道属于谁的预测记成绩, 统计里无法隔离 → 直接拒绝并留 WARNING, 让它们保持
+    pending(不评估、不冒充成绩), 由人工决定, 不做静默回填。
+
+    二次修正: 追加的审计版本(`outcome_status='superseded'`)也拒绝回填 —— 否则同一键
+    会有两条"evaluated", 命中率重复计数; 计分永远只落在唯一那条计分行上。
+    """
     db = SessionLocal()
     try:
         rec = (
@@ -329,14 +777,50 @@ def mark_agent_prediction_outcome(
         )
         if not rec:
             return False
+        if not (rec.user_id or "").strip():
+            logger.warning(
+                "拒绝回填无归属的历史/系统预测(id=%s scope=%r %s/%s/%s h=%s): "
+                "无法证明属于哪个账户, 不评估、不改写",
+                rec.id,
+                rec.owner_scope,
+                rec.agent_name,
+                rec.stock_symbol,
+                rec.prediction_date,
+                rec.horizon_days,
+            )
+            return False
+        if str(rec.outcome_status or "") == STATUS_SUPERSEDED:
+            logger.warning(
+                "拒绝回填审计版本(id=%s %s/%s/%s h=%s): 计分只落在唯一计分行, "
+                "回填审计版本会造成同键重复计分",
+                rec.id,
+                rec.agent_name,
+                rec.stock_symbol,
+                rec.prediction_date,
+                rec.horizon_days,
+            )
+            return False
         rec.outcome_price = outcome_price
         rec.outcome_return_pct = outcome_return_pct
         rec.outcome_status = status
         rec.evaluated_at = datetime.now()
         db.commit()
         return True
+    except OperationalError as e:
+        logger.error("回填 prediction outcome 失败(数据库不可用): id=%s err=%s", record_id, e)
+        db.rollback()
+        return False
+    except IntegrityError as e:
+        logger.error(
+            "回填 prediction outcome 违反完整性约束(%s): id=%s err=%s",
+            _db_error_kind(e),
+            record_id,
+            e,
+        )
+        db.rollback()
+        return False
     except Exception as e:
-        logger.warning(f"更新 prediction outcome 失败: {e}")
+        logger.warning("更新 prediction outcome 失败: %s", e)
         db.rollback()
         return False
     finally:
@@ -347,7 +831,18 @@ def list_pending_prediction_outcomes(
     *,
     max_horizon_days: int = 10,
     limit: int = 300,
+    user_id: str | None = None,
 ) -> list[AgentPredictionOutcome]:
+    """待评估的后验记录 —— **只返回归属可证明的个人计分行**（2026-11-12 二次修正）。
+
+    - 历史行 `user_id IS NULL` 无法证明属于谁 → 不取, 保持 pending(不评估、不冒充成绩),
+      条数由 `count_unowned_pending_prediction_outcomes` 单独报出;
+    - system 桶(user_id 为空 + owner_scope='system')是独立统计口径, 不并入任何个人成绩
+      → 不在这里取, 条数由 `count_system_pending_prediction_outcomes` 报出;
+    - 追加的审计版本(status='superseded')不是计分行 → 永不评估, 否则同键重复计分。
+
+    `user_id` 可选: 传了就只取该用户的行(供按用户范围触发的维护评估使用)。
+    """
     db = SessionLocal()
     try:
         today = date.today().strftime("%Y-%m-%d")
@@ -356,8 +851,16 @@ def list_pending_prediction_outcomes(
                 AgentPredictionOutcome.outcome_status == "pending",
                 AgentPredictionOutcome.horizon_days <= max_horizon_days,
                 AgentPredictionOutcome.prediction_date <= today,
+                AgentPredictionOutcome.user_id.isnot(None),
+                or_(
+                    AgentPredictionOutcome.owner_scope.is_(None),
+                    AgentPredictionOutcome.owner_scope == SCOPE_USER,
+                ),
             )
         )
+        uid = str(user_id).strip() if user_id is not None else ""
+        if uid:
+            q = q.filter(AgentPredictionOutcome.user_id == uid)
         return (
             q.order_by(
                 AgentPredictionOutcome.prediction_date.asc(),
@@ -370,6 +873,46 @@ def list_pending_prediction_outcomes(
         db.close()
 
 
+def count_unowned_pending_prediction_outcomes(*, max_horizon_days: int = 10) -> int:
+    """无归属(pending 且 user_id 为空、owner_scope 也为空)的历史行数 —— 只用于如实报告。"""
+    db = SessionLocal()
+    try:
+        today = date.today().strftime("%Y-%m-%d")
+        return int(
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.outcome_status == "pending",
+                AgentPredictionOutcome.horizon_days <= max_horizon_days,
+                AgentPredictionOutcome.prediction_date <= today,
+                AgentPredictionOutcome.user_id.is_(None),
+                AgentPredictionOutcome.owner_scope.is_(None),
+            )
+            .count()
+        )
+    finally:
+        db.close()
+
+
+def count_system_pending_prediction_outcomes(*, max_horizon_days: int = 10) -> int:
+    """system 桶的待评估行数 —— 独立统计, 从不并入任何个人成绩。"""
+    db = SessionLocal()
+    try:
+        today = date.today().strftime("%Y-%m-%d")
+        return int(
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.outcome_status == "pending",
+                AgentPredictionOutcome.horizon_days <= max_horizon_days,
+                AgentPredictionOutcome.prediction_date <= today,
+                AgentPredictionOutcome.user_id.is_(None),
+                AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
+            )
+            .count()
+        )
+    finally:
+        db.close()
+
+
 def list_agent_prediction_outcomes(
     *,
     agent_name: str | None = None,
@@ -377,12 +920,29 @@ def list_agent_prediction_outcomes(
     status: str | None = None,
     days: int = 90,
     limit: int = 200,
+    user_id: str | None = None,
 ) -> list[AgentPredictionOutcome]:
+    """按用户读取后验记录（不做跨账户读取）。
+
+    `user_id` 是读取范围:**只返回该用户的行**(个人页 / 导出走这条)。没有 user_id 时
+    返回空列表并留 WARNING —— 这张表没有任何"全平台成绩"口径是可信的(历史行归属不可
+    证明), 所以不提供"不过滤"的读取方式。
+    """
+    uid = str(user_id).strip() if user_id is not None else ""
+    if not uid:
+        logger.warning(
+            "list_agent_prediction_outcomes 未指定用户 → 返回空(本表不允许跨账户/无归属读取): "
+            "agent=%s symbol=%s",
+            agent_name,
+            stock_symbol,
+        )
+        return []
     db = SessionLocal()
     try:
         cutoff = (date.today() - timedelta(days=max(days, 1))).strftime("%Y-%m-%d")
         q = db.query(AgentPredictionOutcome).filter(
-            AgentPredictionOutcome.prediction_date >= cutoff
+            AgentPredictionOutcome.prediction_date >= cutoff,
+            AgentPredictionOutcome.user_id == uid,
         )
         if agent_name:
             q = q.filter(AgentPredictionOutcome.agent_name == agent_name)
@@ -408,13 +968,25 @@ def cleanup_context_data(
     topic_days: int = 180,
     context_run_days: int = 180,
     outcome_days: int = 365,
+    dry_run: bool = False,
 ) -> dict:
+    """按保留期清理 context 数据（全局维护操作, 只应由服务端管理员/调度触发）。
+
+    二次修正:
+    - `dry_run=True` 只统计将被删除的条数, **不执行任何删除**(维护接口默认走这条路);
+    - 后验记录里 `user_id IS NULL AND owner_scope IS NULL` 的**历史未知归属行永不删除**:
+      归属不可证明的数据只能保留 unknown, 不能借"清理"顺手洗掉(条数记在
+      `legacy_unowned_preserved`, 只统计不删除);
+    - 其余各行仍按保留期删除(与旧行为一致), 不修改行内容, 只删过期行。
+    """
     db = SessionLocal()
     deleted = {
         "stock_context_snapshots": 0,
         "news_topic_snapshots": 0,
         "agent_context_runs": 0,
         "agent_prediction_outcomes": 0,
+        "legacy_unowned_preserved": 0,
+        "dry_run": bool(dry_run),
     }
     try:
         snapshot_cutoff = (
@@ -429,6 +1001,46 @@ def cleanup_context_data(
         outcome_cutoff = (
             date.today() - timedelta(days=max(1, int(outcome_days)))
         ).strftime("%Y-%m-%d")
+
+        # 历史未知归属行: 永不清理, 只如实报数
+        deleted["legacy_unowned_preserved"] = int(
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.prediction_date < outcome_cutoff,
+                AgentPredictionOutcome.user_id.is_(None),
+                AgentPredictionOutcome.owner_scope.is_(None),
+            )
+            .count()
+        )
+
+        if dry_run:
+            deleted["stock_context_snapshots"] = int(
+                db.query(StockContextSnapshot)
+                .filter(StockContextSnapshot.snapshot_date < snapshot_cutoff)
+                .count()
+            )
+            deleted["news_topic_snapshots"] = int(
+                db.query(NewsTopicSnapshot)
+                .filter(NewsTopicSnapshot.snapshot_date < topic_cutoff)
+                .count()
+            )
+            deleted["agent_context_runs"] = int(
+                db.query(AgentContextRun)
+                .filter(AgentContextRun.analysis_date < context_run_cutoff)
+                .count()
+            )
+            deleted["agent_prediction_outcomes"] = int(
+                db.query(AgentPredictionOutcome)
+                .filter(
+                    AgentPredictionOutcome.prediction_date < outcome_cutoff,
+                    or_(
+                        AgentPredictionOutcome.user_id.isnot(None),
+                        AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
+                    ),
+                )
+                .count()
+            )
+            return deleted
 
         deleted["stock_context_snapshots"] = (
             db.query(StockContextSnapshot)
@@ -447,7 +1059,13 @@ def cleanup_context_data(
         )
         deleted["agent_prediction_outcomes"] = (
             db.query(AgentPredictionOutcome)
-            .filter(AgentPredictionOutcome.prediction_date < outcome_cutoff)
+            .filter(
+                AgentPredictionOutcome.prediction_date < outcome_cutoff,
+                or_(
+                    AgentPredictionOutcome.user_id.isnot(None),
+                    AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
+                ),
+            )
             .delete(synchronize_session=False)
         )
         db.commit()

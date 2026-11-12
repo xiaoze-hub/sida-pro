@@ -92,9 +92,16 @@ def report_preopen_state(
 
     门槛（缺一不可）:
     1. `report_completed_at`（整份报告落库完成时刻）—— 带时区、落在报告日 09:30 前;
-    2. `collection_finished_at`（`raw_data["timestamp"]`，数据采集结束时刻）—— 同上。
-    任一缺失/不带时区/不可解析 → `preopen=None`（unknown, 不猜、不按日期回退）;
-    两者都拿到但有一个不早于 09:30 → `preopen=False`（明确非盘前）。
+    2. `collection_finished_at`（`raw_data["timestamp"]`，数据采集结束时刻）—— 同上;
+    3. **时序自洽**: `report_completed_at >= collection_finished_at`。
+
+    判定顺序很重要:
+    - 先看"有没有哪个时刻**可证明**不早于 09:30 / 不在报告日" → 有就是 `preopen=False`
+      （明确非盘前; 这时即使时序也不可能, 结论仍然是"不是盘前", 不含糊）;
+    - 两个时刻都"看起来在 09:30 前"、却 `report_completed_at < collection_finished_at`
+      → `preopen=None`(unknown): 报告不可能在采集结束前生成完成, 至少一个是事后补写的,
+      证据链断了 —— 这时**绝不能**因为"两个都早于 09:30"就放行成盘前;
+    - 任一缺失/不带时区/不可解析 → `preopen=None`（unknown, 不猜、不按日期回退）。
 
     返回 `{preopen: bool|None, reason: str|None, report_completed_at, collection_finished_at}`
     （后两个是规范化后的带时区 ISO 文本或 None, 供页面展示真实时刻）。
@@ -130,11 +137,25 @@ def report_preopen_state(
         if dt.date().isoformat() != day or dt.time() >= PREOPEN_AT
     ]
     if late:
+        # 可证明非盘前: 这里的结论不依赖两个时刻的先后, 所以时序异常也不改判
         out["preopen"] = False
         out["reason"] = "；".join(
             f"{label} {dt.isoformat()} 不在报告日 {day} 09:30 前" for label, dt in late
         )
         return out
+
+    completed_label, completed_dt = parsed[0]
+    collected_label, collected_dt = parsed[1]
+    if completed_dt < collected_dt:
+        # 两个时刻都"看着盘前", 但完成时刻早于采集结束 → 不可能, 只能是补写的时刻:
+        # 证据链断裂 → unknown, 不按"都在 09:30 前"放行。
+        out["preopen"] = None
+        out["reason"] = (
+            f"{completed_label} {completed_dt.isoformat()} 早于{collected_label} "
+            f"{collected_dt.isoformat()} —— 时序不可能, 无法证明盘前生成"
+        )
+        return out
+
     out["preopen"] = True
     return out
 

@@ -29,6 +29,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 REPORT = """
@@ -294,7 +295,7 @@ def test_successful_premarket_body_can_still_replace_an_old_degraded_row(db):
 # ── 2. 盘后/unknown 重跑: 不写 stock_suggestions / agent_prediction_outcomes ──
 
 
-def _analyze_ctx():
+def _analyze_ctx(user: Any | None = None):
     from src.agents.base import AgentContext
     from src.config import AppConfig, Settings, StockConfig
     from src.models.market import MarketCode
@@ -306,6 +307,9 @@ def _analyze_ctx():
             settings=Settings(),
             watchlist=[StockConfig(symbol="600183", name="生益科技", market=MarketCode.CN)],
         ),
+        # P0(2026-11-12): 后验记录必须有归属用户; 真实路径由调度注入 context.user。
+        # 不注入(= 系统调度/无会话)时存储层会拒写, 见 test_unscoped_run_does_not_write_outcomes。
+        user=user,
     )
 
 
@@ -361,7 +365,7 @@ async def test_post_close_rerun_writes_no_suggestions_or_outcomes(db, monkeypatc
     _freeze_now(monkeypatch, POST_DONE)
 
     data = _data(at=POST_AT, run="run-post", completed_at=POST_DONE)
-    await agent.analyze(_analyze_ctx(), data)
+    await agent.analyze(_analyze_ctx(user=SimpleNamespace(id='u-owner')), data)
 
     rows = _reports(db)
     assert len(rows) == 1 and rows[0].status == "success", "正文本身是真成功, 应落库"
@@ -382,7 +386,7 @@ async def test_unknown_generation_time_writes_no_suggestions_or_outcomes(db, mon
     _freeze_now(monkeypatch, f"{DAY}T08:22:00")
 
     data = _data(at=PRE_AT, run="run-unknown", completed_at=None)
-    await agent.analyze(_analyze_ctx(), data)
+    await agent.analyze(_analyze_ctx(user=SimpleNamespace(id='u-owner')), data)
 
     assert _reports(db)[0].raw_data["premarket_report_preopen"] is None
     assert _suggestions(db) == []
@@ -396,7 +400,7 @@ async def test_premarket_run_writes_once_and_rerun_does_not_duplicate(db, monkey
     _quiet_notify(monkeypatch)
     agent = PremarketOutlookAgent()
     _stub_llm(monkeypatch, agent)
-    ctx = _analyze_ctx()
+    ctx = _analyze_ctx(user=SimpleNamespace(id='u-owner'))
 
     _freeze_now(monkeypatch, PRE_DONE)
     await agent.analyze(ctx, _data(at=PRE_AT, run="run-pre-1", completed_at=PRE_DONE))
@@ -416,9 +420,14 @@ async def test_premarket_run_writes_once_and_rerun_does_not_duplicate(db, monkey
     out2 = _outcomes(db)
     assert len(sug2) == 1, "同日重跑在建议池里多插了一行(看起来像两次建议)"
     assert int((sug2[0].meta or {}).get("revision") or 0) >= 1
-    assert len(out2) == 2, f"预测后验被重跑重复插入: {len(out2)} 行"
-    assert sorted((o.horizon_days for o in out2)) == [1, 5]
-    assert all(o.outcome_status == "pending" for o in out2)
+    scored = [o for o in out2 if o.outcome_status != "superseded"]
+    assert len(scored) == 2, f"重跑把计分行重复插入了: {len(scored)} 条计分行"
+    assert sorted(o.horizon_days for o in scored) == [1, 5]
+    assert all(o.outcome_status == "pending" for o in scored)
+    assert all(o.run_trace_id == "run-pre-1" for o in scored), "计分行仍应是第一版"
+    # 2026-11-12 二次修正: 新版不覆盖、也不是丢掉 —— 以 superseded 审计版本留档, 不参与计分
+    superseded = [o for o in out2 if o.outcome_status == "superseded"]
+    assert len(superseded) == 2 and all(o.run_trace_id == "run-pre-2" for o in superseded)
     assert _reports(db)[0].raw_data["run_trace_id"] == "run-pre-2"
 
 
@@ -429,7 +438,7 @@ async def test_post_close_rerun_after_premarket_keeps_tables_untouched(db, monke
     _quiet_notify(monkeypatch)
     agent = PremarketOutlookAgent()
     _stub_llm(monkeypatch, agent)
-    ctx = _analyze_ctx()
+    ctx = _analyze_ctx(user=SimpleNamespace(id='u-owner'))
 
     _freeze_now(monkeypatch, PRE_DONE)
     await agent.analyze(ctx, _data(at=PRE_AT, run="run-pre", completed_at=PRE_DONE))
@@ -622,9 +631,16 @@ def test_saving_the_same_run_twice_appends_evidence_once(db):
     assert len(_reports(db)) == 1
 
 
-# ── 7. 迁移 247 基线不动, 新增迁移 248 负责加列 ──────────────────────────
+# ── 7. 迁移 247/248 不动, 新列由 249 负责; 历史版本号如实核对 ─────────────
+#
+# 事实核对(2026-11-12 复审, 用 git 逐版本查过):
+#   基线 5f79714a 的 MIGRATIONS 最高是 **246** —— 基线**没有** 247;
+#   247 首次出现在 8c972f63, 248 出现在 f97514d7。
+# 所以此前"m247 是基线里已发布的迁移、函数体被改动会重跑"的说法不准确。真正成立的约束只有:
+# 迁移函数体一旦进过任何库, 改一个字符(含注释/文档串)都会让 inspect.getsource 的 checksum
+# 变化并被重新执行 —— 因此新列必须放新版本(249), 而不是改 247。
 
-def test_published_m247_body_is_untouched_and_m248_adds_the_run_binding(tmp_path, monkeypatch):
+def test_m247_and_m248_bodies_untouched_and_m249_adds_the_user_scope(tmp_path, monkeypatch):
     from src.web import migrations as mig
 
     # 独立空库: 不能用 db fixture 的库(Base.metadata 已按当前模型建表, 会把 m247 的 DDL 骗过去)
@@ -639,8 +655,7 @@ def test_published_m247_body_is_untouched_and_m248_adds_the_run_binding(tmp_path
         mig._m247_premarket_factor_evidence(conn)
         cols = {c["name"] for c in inspect(conn).get_columns("premarket_factor_evidence")}
         assert "run_trace_id" not in cols, (
-            "m247 是已发布迁移, 函数体被改动会让 checksum 变化并重新执行; "
-            "加列必须在新的 m248 里做"
+            "m247 的函数体必须与首次落库时逐字一致(checksum 不能变); 加列必须在新的 m248/m249 里做"
         )
 
         mig._m248_premarket_evidence_run_binding(conn)
@@ -653,4 +668,89 @@ def test_published_m247_body_is_untouched_and_m248_adds_the_run_binding(tmp_path
         assert n == 0
 
     versions = [m.version for m in mig.MIGRATIONS]
-    assert versions[-1] == 248 and len(versions) == len(set(versions))
+    assert versions == sorted(versions) and len(versions) == len(set(versions))
+    assert versions[-1] == 250, (
+        "新增列/索引必须排在新版本号上; 历史版本(246/247/248/249)号段不得跳号或复用"
+    )
+
+
+def test_m249_adds_user_column_and_partial_unique_key_without_touching_legacy_rows(
+    tmp_path, monkeypatch
+):
+    """老库(存量行 user_id 全空、甚至已有同键重复)也要能直接建索引, 且存量行一条不动。"""
+    from src.web import migrations as mig
+
+    for key in _DB_ENV:
+        monkeypatch.delenv(key, raising=False)
+    path = tmp_path / "mig249.db"
+    assert not os.path.exists(path)
+    eng = create_engine(f"sqlite:///{path}", future=True)
+
+    with eng.begin() as conn:
+        # 模拟加列之前的老库: 没有 user_id, 而且同一键已有两行历史重复
+        conn.execute(text(
+            """
+CREATE TABLE agent_prediction_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_name VARCHAR(64) NOT NULL,
+    stock_symbol VARCHAR(32) NOT NULL,
+    stock_market VARCHAR(16) NOT NULL DEFAULT 'CN',
+    prediction_date VARCHAR(10) NOT NULL,
+    horizon_days INTEGER NOT NULL DEFAULT 1,
+    action VARCHAR(16) NOT NULL DEFAULT 'watch',
+    action_label VARCHAR(32) NOT NULL DEFAULT '观望',
+    confidence FLOAT,
+    trigger_price FLOAT,
+    outcome_price FLOAT,
+    outcome_return_pct FLOAT,
+    outcome_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    meta TEXT,
+    evaluated_at TIMESTAMP,
+    created_at TIMESTAMP
+)
+"""
+        ))
+        conn.execute(text(
+            "INSERT INTO agent_prediction_outcomes "
+            "(agent_name, stock_symbol, stock_market, prediction_date, horizon_days, action) "
+            "VALUES ('premarket_outlook','600183','CN','2026-11-11',1,'buy'),"
+            "       ('premarket_outlook','600183','CN','2026-11-11',1,'sell')"
+        ))
+
+        mig._m249_prediction_outcome_user_scope(conn)
+        cols = {c["name"] for c in inspect(conn).get_columns("agent_prediction_outcomes")}
+        assert "user_id" in cols
+
+        # 存量行原样保留: 行数不变、user_id 全空、动作没被改写
+        rows = conn.execute(text(
+            "SELECT id, user_id, action FROM agent_prediction_outcomes ORDER BY id"
+        )).fetchall()
+        assert len(rows) == 2
+        assert all(r[1] is None for r in rows)
+        assert [r[2] for r in rows] == ["buy", "sell"]
+
+        # 幂等: 再执行一次不报错, 不新增列/不改数据
+        mig._m249_prediction_outcome_user_scope(conn)
+        assert conn.execute(text("SELECT COUNT(*) FROM agent_prediction_outcomes")).scalar() == 2
+
+        # 部分唯一索引只约束有归属的行: 同用户同键第二次插入必须被 DB 拒绝
+        conn.execute(text(
+            "INSERT INTO agent_prediction_outcomes "
+            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, action) "
+            "VALUES ('u-a','premarket_outlook','600183','CN','2026-11-11',1,'buy')"
+        ))
+        with pytest.raises(IntegrityError):
+            conn.execute(text(
+                "INSERT INTO agent_prediction_outcomes "
+                "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, action) "
+                "VALUES ('u-a','premarket_outlook','600183','CN','2026-11-11',1,'sell')"
+            ))
+        # 另一个用户同键仍可各自一行(账户隔离, 不再撞同一个键)
+        conn.execute(text(
+            "INSERT INTO agent_prediction_outcomes "
+            "(user_id, agent_name, stock_symbol, stock_market, prediction_date, horizon_days, action) "
+            "VALUES ('u-b','premarket_outlook','600183','CN','2026-11-11',1,'sell')"
+        ))
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM agent_prediction_outcomes WHERE user_id IS NOT NULL"
+        )).scalar() == 2
