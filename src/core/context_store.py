@@ -229,22 +229,78 @@ def save_agent_prediction_outcome(
     trigger_price: float | None = None,
     meta: dict | None = None,
 ) -> bool:
+    """写入一条待后验的预测记录（同一键幂等）。
+
+    2026-11-12 P0: 原先每次调用都 INSERT。盘前同日重跑一次就多一套
+    (agent, symbol, date, horizon) 行 —— 命中率统计按行聚合, 重跑直接把分母灌水,
+    「预测成绩」被重复污染。现在:
+    - 同键已有 **pending** 行 → 原地更新方向/置信度/触发价/meta（正文保留的是最新一版,
+      后验跟着同一版走, 并在 meta 记 revision）;
+    - 同键已是 **evaluated** 行 → 不覆盖、不再插入（已回填的成绩不能被后来的重跑改写）。
+
+    诚实边界: 这是「应用层幂等」, 表上没有 (agent, symbol, date, horizon) 唯一约束
+    （历史库可能已有重复行, 直接加唯一索引会让迁移失败/需要删数据, 不在本次范围）;
+    因此两个**真正并发**的进程仍可能各插一行。调度侧是单飞的, 重跑/重复调用不会。
+    """
     db = SessionLocal()
     try:
         meta_safe = to_jsonable(meta or {})
+        if not isinstance(meta_safe, dict):
+            meta_safe = {}
+        horizon = max(1, int(horizon_days))
+        existing = (
+            db.query(AgentPredictionOutcome)
+            .filter(
+                AgentPredictionOutcome.agent_name == agent_name,
+                AgentPredictionOutcome.stock_symbol == stock_symbol,
+                AgentPredictionOutcome.stock_market == (stock_market or "CN"),
+                AgentPredictionOutcome.prediction_date == prediction_date,
+                AgentPredictionOutcome.horizon_days == horizon,
+            )
+            .order_by(AgentPredictionOutcome.id.asc())
+            .first()
+        )
+        if existing is not None:
+            if str(existing.outcome_status or "") != "pending":
+                logger.info(
+                    "预测后验已评估, 不因重跑改写: %s/%s/%s h=%s status=%s",
+                    agent_name,
+                    stock_symbol,
+                    prediction_date,
+                    horizon,
+                    existing.outcome_status,
+                )
+                return True
+            prev_meta = existing.meta if isinstance(existing.meta, dict) else {}
+            revision = int(prev_meta.get("revision") or 0) + 1
+            existing.action = action or "watch"
+            existing.action_label = action_label or "观望"
+            existing.confidence = confidence
+            existing.trigger_price = trigger_price
+            existing.meta = {**meta_safe, "revision": revision}
+            db.commit()
+            logger.info(
+                "预测后验同键更新(避免重复行污染统计): %s/%s/%s h=%s revision=%s",
+                agent_name,
+                stock_symbol,
+                prediction_date,
+                horizon,
+                revision,
+            )
+            return True
         db.add(
             AgentPredictionOutcome(
                 agent_name=agent_name,
                 stock_symbol=stock_symbol,
-                stock_market=stock_market,
+                stock_market=stock_market or "CN",
                 prediction_date=prediction_date,
-                horizon_days=max(1, int(horizon_days)),
+                horizon_days=horizon,
                 action=action or "watch",
                 action_label=action_label or "观望",
                 confidence=confidence,
                 trigger_price=trigger_price,
                 outcome_status="pending",
-                meta=meta_safe,
+                meta={**meta_safe, "revision": 0},
             )
         )
         db.commit()

@@ -58,12 +58,17 @@ def save_suggestion(
     stock_market: str = "CN",
     meta: dict | None = None,
     user_id: str | None = None,
+    dedupe_same_day: bool = False,
 ) -> bool:
     """
     M2(2026-08-23): 增加 user_id 维度。
     - 同一标的在不同账号下可分别存建议(不同账号决策互不干扰)
     - dedupe key 加 user_id: (user_id, stock_symbol, stock_market, agent_name)
     - 旧数据 user_id=NULL 与新建 user_id=某值 视为不同账号 → 不会触发误 dedupe
+
+    `dedupe_same_day`(2026-11-12 P0): 盘前报告的 `meta.analysis_date` 相同的重跑
+    视为**同一版报告的建议**, 不受分钟窗口限制, 更新既有行而不是再插一条。
+    否则同一天第 4 小时重跑一次, 建议池就多一条看起来像"两次独立建议"的行。
     """
     """
     保存 Agent 建议到建议池
@@ -120,13 +125,46 @@ def save_suggestion(
                 latest_created = to_utc(latest.created_at)
 
                 window = timedelta(minutes=_dedupe_window_minutes(agent_name))
+                same_report_day = False
+                if dedupe_same_day:
+                    latest_meta = latest.meta if isinstance(latest.meta, dict) else {}
+                    new_meta = meta if isinstance(meta, dict) else {}
+                    latest_day = str(latest_meta.get("analysis_date") or "")
+                    same_report_day = bool(
+                        latest_day and latest_day == str(new_meta.get("analysis_date") or "")
+                    )
+                if same_report_day:
+                    # 同一报告日的盘前重跑 = 同一版建议的修订: 原地改写这一行, 不新增。
+                    # 理由: 建议池对同一 (user, 标的, agent, 报告日) 只应有一条"当时说了什么";
+                    # 多插一条会让复盘/统计看起来像两次独立建议。
+                    prev_meta = latest.meta if isinstance(latest.meta, dict) else {}
+                    revision = int(prev_meta.get("revision") or 0) + 1
+                    latest.action = action
+                    latest.action_label = action_label
+                    latest.signal = signal
+                    latest.reason = reason
+                    latest.stock_name = stock_name or latest.stock_name
+                    latest.expires_at = (
+                        expires_at.replace(tzinfo=None)
+                        if expires_at.tzinfo is not None
+                        else expires_at
+                    )
+                    latest.prompt_context = prompt_context[:2000] if prompt_context else ""
+                    latest.ai_response = ai_response[:2000] if ai_response else ""
+                    latest.meta = {**to_jsonable(meta or {}), "revision": revision}
+                    db.commit()
+                    logger.info(
+                        f"建议同日修订(不新增行): {stock_symbol} {action_label} "
+                        f"(来源: {agent_label}, revision={revision})"
+                    )
+                    return True
                 same_key = (
                     _norm_text(latest.action) == _norm_text(action)
                     and _norm_text(latest.action_label) == _norm_text(action_label)
                     and _norm_text(latest.signal or "") == _norm_text(signal)
                 )
 
-                if same_key and (now - latest_created) <= window:
+                if same_key and (same_report_day or (now - latest_created) <= window):
                     # Extend expiry (keep the first message to avoid churn).
                     # 注意(2026-08-23 bug fix): latest.expires_at 可能 naive(SQLite 默认无 tz),
                     # expires_at 是 tz-aware(utc_now()), 直接比较抛 TypeError 被 except 吞掉,

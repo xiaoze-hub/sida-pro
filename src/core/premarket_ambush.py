@@ -357,6 +357,26 @@ def _demon_signal_row(row: dict) -> dict:
     }
 
 
+def demon_snapshot_rows(snapshot: Any) -> dict[str, dict]:
+    """把一份**报告自己存的**冻结快照原样转成页面信号形状 —— **不做可用性判定**。
+
+    用于「历史未验证」展示(2026-11-12 审计): 旧报告的生成时点不可证明时, 因子分数
+    不能当盘前信号(不纳入成绩), 但也不该凭空消失 —— 页面上标「历史未验证」照原样给出,
+    由调用方加标签, 绝不把它说成「盘前可得」。
+    """
+    if not isinstance(snapshot, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for sym, row in snapshot.items():
+        if not isinstance(row, dict):
+            continue
+        code = str(sym).split(".")[0]
+        if not code:
+            continue
+        out[code] = _demon_signal_row(row)
+    return out
+
+
 def demon_evidence_verified(
     snapshot: Any,
     generated_at: Any,
@@ -661,12 +681,15 @@ def _parse_stop_price(stop_text: str | None) -> float | None:
 
 
 def build_signal_detail(
-    row: dict, *, demon: dict | None, price: dict | None, demon_note: str | None = None
+    row: dict, *, demon: dict | None, price: dict | None, demon_note: str | None = None,
+    demon_historical: dict | None = None,
 ) -> dict:
     """把一行潜伏表 + 真实信号拼成页面要的明细（缺项 = None，让前端显示「无数据」）。
 
     `demon_note` 说明股性因子为什么不可用（盘前时点不可证明）—— 页面/正文据此解释，
     不把缺失当 0，也不拿当前快照冒充当时信号。
+    `demon_historical`(2026-11-12 审计): 报告自己存着但证明不了盘前可得的冻结快照,
+    只作「历史未验证/不纳入成绩」展示, 与 `demon`(可验证的盘前信号) 严格分开。
     """
     return {
         "code": row.get("code"),
@@ -684,6 +707,7 @@ def build_signal_detail(
         "falsify": row.get("falsify") or "",
         "signals": {
             "demon": demon or None,
+            "demon_historical": None if demon else (demon_historical or None),
             "price": price or None,
             "demon_note": demon_note or None,
         },
@@ -807,6 +831,7 @@ def insert_after_table(text: str, block: str) -> str:
 def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None = None,
                     demon_notes: dict[str, str] | None = None,
                     verified_frozen: bool = False,
+                    unverified_by_code: dict[str, dict] | None = None,
                     engine=None, start_day: str, report_day: str | None = None,
                     as_of: str | None = None) -> dict[str, dict]:
     """按代码取真实信号。任何一块取不到 → 该块 None（页面/文本显示「无数据」）。
@@ -816,6 +841,10 @@ def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None =
     `filter_demon_for_generation()`（生成时）验证过的冻结快照，才能以 `verified_frozen=True`
     传进来；否则本函数**不读** `demon_factors` 当前表，一律 unknown 并写明原因（不造历史）。
     不给 `report_day` 时保持历史调用行为（不做时点推断）。
+
+    `unverified_by_code`(2026-11-12): 报告自己存着、但**证明不了盘前可得**的冻结快照。
+    它只会被放进 `demon_historical`（历史未验证展示通道，不参与成绩），永远不进 `demon`
+    —— 页面必须把它标成「历史未验证/不纳入成绩」，不许冒充盘前信号。
     """
     out: dict[str, dict] = {}
     if not codes:
@@ -842,6 +871,7 @@ def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None =
                 logger.debug("股性因子取数失败: %s", e)
                 demon = {}
         demon = demon or {}
+    historical = unverified_by_code or {}
 
     closes_cache: dict[str, list] = {}
     if engine is not None:
@@ -861,6 +891,8 @@ def collect_signals(codes: list[str], *, demon_by_code: dict[str, dict] | None =
             note = "该股无生成时冻结的股性因子快照, 盘前不可得"
         out[code] = {
             "demon": row,
+            # 只做展示的「历史未验证」数值: 不进 demon, 不参与成绩
+            "demon_historical": None if row is not None else historical.get(code),
             "demon_note": None if row is not None else note,
             "price": price_signals(closes_cache.get(code) or [], code, as_of=as_of, before=report_day)
             if engine is not None

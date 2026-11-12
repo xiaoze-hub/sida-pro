@@ -49,7 +49,14 @@ class SaveResult:
     content_skipped: bool = False
     reason: str | None = None
     run_trace_id: str | None = None
+    # 生成完成时刻(调用方在报告真正生成完成时取的带时区时刻); None = 不可证明
     report_completed_at: str | None = None
+    # 保存时刻(落库这一刻); **不是**报告完成时刻, 不能拿它判断盘前
+    report_saved_at: str | None = None
+    # 这份报告自己的盘前门槛结论: True/False/None(unknown)。非盘前 agent → None
+    preopen: bool | None = None
+    # 本次请求的正文状态(success/degraded/failed), 供调用方决定要不要写建议池
+    body_status: str | None = None
     record_id: int | None = None
 
     @property
@@ -119,9 +126,12 @@ def save_analysis(
       —— 不再用一句 “保存失败” 把真实状态吞掉。
       若当日旧记录是 degraded/failed(没成功过), 新的成功报告**必须**能覆盖它
       （「成功恢复报告」不能被旧失败记录挡住）。
-    - 落库时写入 `raw_data.report_completed_at`（整份报告生成完成时刻, 带时区）与
-      `raw_data.premarket_report_preopen`（由该时刻 + 采集结束时刻推导）。
+    - 落库时写入 `raw_data.report_completed_at`（**整份报告生成完成时刻**, 由生成侧在报告
+      真正生成完成时取带时区时刻传入)与 `raw_data.report_saved_at`（保存时刻, 两者分开,
+      保存慢不能把盘前报告改成盘后、保存早也不能把盘后报告冒充盘前）与
+      `raw_data.premarket_report_preopen`（由完成时刻 + 采集结束时刻推导）。
       盘前账本据此判定「这一期是否盘前」, 而不是只看因子采样时点。
+      调用方不传完成时刻 → 落 NULL, 门槛按 unknown(不拿保存时刻兜底)。
     - 证据写失败**不再回滚正文**: 正文先提交, 凭证单独一个事务; 凭证失败时
       `SaveResult.evidence_saved=False` + `reason` 显式告知调用方（报告不丢, 也不冒充完整）。
     - M3(2026-08-23): 增加 user_id 维度, 调度入口传入触发用户。
@@ -142,8 +152,9 @@ def save_analysis(
         premarket_evidence: 盘前股性因子凭证(生成时真实采样 + 带时区时点)。
             由 `premarket_factor_evidence.build_snapshot_evidence()` 生成;
             传了就追加一条(只 INSERT), 不参与覆盖。
-        report_completed_at: 整份报告生成完成时刻(带时区 ISO)。生产传 None = 用真实
-            落库时刻; 仅测试显式注入(不让测试把「盘前」写死成系统时间)。
+        report_completed_at: 整份报告**生成完成**时刻(带时区 ISO)。生成侧必须在报告真的
+            写完那一刻取; 传 None = 时点不可证明(落 NULL, 门槛 unknown)。**绝不**用保存
+            时刻兜底 —— 那是另一个事实。
 
     Returns:
         SaveResult(真值 = 正文已落库或按规则保留; 证据结果见 evidence_saved)
@@ -153,6 +164,7 @@ def save_analysis(
 
     date_str = analysis_date.strftime("%Y-%m-%d")
     is_premarket_agent = agent_name == "premarket_outlook"
+    body_status = str(status or "success").strip() or "success"
 
     from src.core.premarket_factor_evidence import (
         normalize_generated_at,
@@ -160,12 +172,14 @@ def save_analysis(
         report_preopen_state,
     )
 
-    completed_at = normalize_generated_at(report_completed_at) or normalize_generated_at(
-        beijing_now()
-    )
+    # 生成完成时刻只认调用方传进来的那个带时区时刻; 保存时刻单独记, 二者不互相冒充。
+    completed_at = normalize_generated_at(report_completed_at)
+    saved_at = normalize_generated_at(beijing_now())
     result = SaveResult(
         run_trace_id=None,
         report_completed_at=completed_at,
+        report_saved_at=saved_at,
+        body_status=body_status,
     )
 
     db = SessionLocal()
@@ -176,13 +190,16 @@ def save_analysis(
         result.run_trace_id = str(payload.get("run_trace_id") or "").strip() or None
         if is_premarket_agent:
             # 生成完成时刻: 盘前账本用它判定「整份报告是否在 09:30 前完成」, 不能缺。
+            # 缺就是 unknown —— 不拿保存时刻(report_saved_at)兜底冒充生成时刻。
             # 只写盘前报告 —— 别的 agent 的 raw_data 形状不因这次 P0 改动而变化。
             payload["report_completed_at"] = completed_at
+            payload["report_saved_at"] = saved_at
             gate = report_preopen_state(
-                report_completed_at=payload.get("report_completed_at"),
+                report_completed_at=completed_at,
                 collection_finished_at=payload.get("timestamp"),
                 report_day=date_str,
             )
+            result.preopen = gate["preopen"]
             # 落库时把同一个门槛的结论一并存下(账本会重算, 两边冲突按 unknown 处理)
             payload["premarket_report_preopen"] = gate["preopen"]
             payload["premarket_gate_reason"] = gate["reason"]
@@ -200,6 +217,11 @@ def save_analysis(
         ).first()
 
         # ── 盘前保护: 只有「当日已有一份可证明盘前的**成功**正文」才保留不被覆盖 ──
+        # 2026-11-12(审计补充): 被保护的不只「盘后重跑」——
+        #   · 降级/失败正文(事实快报/AI 不可用)即便在 09:30 前生成, 也**不许**顶掉
+        #     当日已经成功生成的盘前正文;
+        #   · 盘后/时点不可证明的重跑同样不许覆盖。
+        # 反过来, 旧记录是 degraded/failed(当天没成功过)时, 新成功报告必须能覆盖它。
         if existing and is_premarket_agent:
             old_raw = existing.raw_data if isinstance(existing.raw_data, dict) else {}
             old_gate = report_preopen_state(
@@ -218,30 +240,40 @@ def save_analysis(
                 collection_finished_at=payload.get("timestamp"),
                 report_day=date_str,
             )
-            new_looks_preopen = (
-                new_gate["preopen"] is True
-                or (
-                    premarket_evidence is not None
-                    and preopen_flag(premarket_evidence.get("generated_at"), date_str) is True
-                )
-                or preopen_flag(payload.get("demon_factors_frozen_at"), date_str) is True
-            )
             old_status = str(getattr(existing, "status", "") or "success")
-            if old_looks_preopen and old_status == "success" and not new_looks_preopen:
+            is_downgrade = body_status != "success"
+            # 只有「本次同样是成功正文, 且整份报告被证明在 09:30 前完成」才允许替换。
+            # unknown 也不行 —— 证明不了的版本没有资格顶掉已经证明过的盘前成功正文。
+            if (
+                old_looks_preopen
+                and old_status == "success"
+                and (is_downgrade or new_gate["preopen"] is not True)
+            ):
+                if is_downgrade:
+                    why = (
+                        f"本次是 {body_status} 正文(非成功报告), 不能顶掉当日成功生成的盘前报告; "
+                        f"本次完成于 {completed_at or '时点不可证明'}"
+                    )
+                else:
+                    why = (
+                        f"本次报告完成于 {completed_at or '时点不可证明'}, "
+                        f"按 09:30 门槛不是盘前(preopen={new_gate['preopen']})"
+                    )
                 result.content_skipped = True
                 result.record_id = getattr(existing, "id", None)
                 result.reason = (
                     f"当日已有一份可证明盘前的成功报告(record_id={getattr(existing, 'id', None)}), "
-                    f"本次不覆盖正文: 新报告完成于 {completed_at}, "
-                    f"按 09:30 门槛不是盘前(preopen={new_gate['preopen']})。"
+                    f"本次不覆盖正文: {why}。"
                     "本次采样凭证仍会追加留档(绑定本次 run_trace_id)。"
                 )
                 logger.warning(
-                    "盘后重跑未覆盖当日盘前正文(已显式告知调用方): %s/%s/%s run=%s",
+                    "盘前正文未覆盖(按规则保留当日成功盘前版, 已显式告知调用方): "
+                    "%s/%s/%s run=%s status=%s",
                     agent_name,
                     stock_symbol,
                     date_str,
                     result.run_trace_id,
+                    body_status,
                 )
                 db.rollback()
                 body_saved = False

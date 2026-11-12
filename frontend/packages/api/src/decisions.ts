@@ -350,6 +350,11 @@ export interface PremarketRow {
     price: PremarketPriceSignal | null
     /** 股性因子为什么不可用(无生成时冻结凭证 / 快照日无法证明盘前可见) */
     demon_note: string | null
+    /**
+     * 历史未验证快照(2026-11-12 审计): 报告自己存了冻结快照, 但证明不了盘前可得。
+     * 只作历史展示、**不纳入成绩**; 与 `demon`(可验证盘前信号) 严格分开, 不得冒充盘前。
+     */
+    demon_historical?: PremarketDemonSignal | null
   }
   outcome: PremarketOutcome
 }
@@ -409,6 +414,10 @@ export interface PremarketPit {
   /** 有可用股性因子的行数 / 不可用行数 */
   demon_available: number
   demon_unavailable: number
+  /** 历史未验证快照的行数(展示但明确不纳入成绩; 0 = 无) */
+  demon_unverified?: number
+  /** 历史未验证的原因说明 */
+  demon_unverified_reason?: string | null
 }
 
 export interface PremarketItem {

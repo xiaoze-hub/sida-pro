@@ -341,8 +341,34 @@ def decisions_premarket(
         }
         generated_at = ev.get("generated_at")
         preopen_state: bool | None = ev.get("preopen")
+        # ── 历史未验证通道(2026-11-12 审计) ───────────────────────────────
+        # 该期报告自己 raw_data 里存着冻结因子快照, 但**证明不了**盘前可得(缺带时区生成
+        # 完成时刻 / 非盘前生成)。这些数值不能当盘前信号(不纳入成绩), 也不能凭空消失 ——
+        # 原样展示, 并明确标成「历史未验证 · 不纳入成绩」。
+        raw_record = getattr(rec, "raw_data", None)
+        raw_record = raw_record if isinstance(raw_record, dict) else {}
+        unverified_demon: dict[str, dict] = {}
+        unverified_reason: str | None = None
+        if not evidence["verified"]:
+            unverified_demon = pa.demon_snapshot_rows(raw_record.get("demon_factors"))
+            if unverified_demon:
+                if preopen_state is False:
+                    unverified_reason = (
+                        "非盘前生成(报告 09:30 后才完成/采集), 快照非盘前可得; "
+                        "只作历史展示, 不纳入盘前候选成绩"
+                    )
+                else:
+                    gate_why = str(
+                        (ev.get("gate") or {}).get("reason") or "缺带时区的生成完成时刻"
+                    ).strip()
+                    unverified_reason = (
+                        f"历史未验证({gate_why}); 只作历史展示, 不纳入盘前候选成绩"
+                    )
         if not evidence["verified"]:
             for code in codes:
+                if code in unverified_demon and unverified_reason:
+                    evidence["notes"].setdefault(code, unverified_reason)
+                    continue
                 evidence["notes"].setdefault(
                     code,
                     evidence.get("reason")
@@ -353,6 +379,7 @@ def decisions_premarket(
             demon_by_code=evidence["kept"],
             demon_notes=evidence["notes"],
             verified_frozen=bool(evidence["verified"]),
+            unverified_by_code=unverified_demon,
             engine=read_engine,
             start_day=earliest_start or _shift_day(date, -lookback_days),
             report_day=date,
@@ -363,7 +390,8 @@ def decisions_premarket(
             sig = signals.get(code) or {}
             detail = pa.build_signal_detail(r, demon=sig.get("demon"),
                                             price=sig.get("price"),
-                                            demon_note=sig.get("demon_note"))
+                                            demon_note=sig.get("demon_note"),
+                                            demon_historical=sig.get("demon_historical"))
             seq = close_cache.get(code)
             if seq is None:
                 from src.core.decision_log import _close_series_pg
@@ -450,6 +478,15 @@ def decisions_premarket(
                     "generated_at": generated_at,
                     "demon_available": demon_n,
                     "demon_unavailable": len(out_rows) - demon_n,
+                    # 历史未验证通道: 报告自己存了快照但证明不了盘前可得 → 展示但明确不纳入成绩
+                    "demon_unverified": sum(
+                        1
+                        for o in out_rows
+                        if (o.get("signals") or {}).get("demon_historical")
+                    ),
+                    "demon_unverified_reason": (
+                        unverified_reason if unverified_demon else None
+                    ),
                 },
                 "summary": {
                     "rows": len(out_rows),
@@ -479,6 +516,9 @@ def decisions_premarket(
             "但报告正文仍是同日覆盖：若某期在盘前成功保存后又被盘前重跑覆盖，正文只保留最新一版。"
             "非盘前生成（preopen=false）或生成时点不可证明（preopen=null）的期次只展示真实生成时刻，"
             "当日/T+1/T+3 一律留空，绝不当作盘前候选成绩。"
+            "旧报告自己 raw_data 里存着冻结因子快照、但证明不了盘前可得时，数值仍原样展示在"
+            "「历史未验证」通道（signals.demon_historical）并注明不纳入成绩 —— 不冒充盘前可得，"
+            "也不让历史数值凭空消失。"
             "事后表现（当日/T+1/T+3）按收盘价计算，未使用盘中最低/最高。"
         ),
     }

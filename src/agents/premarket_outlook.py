@@ -8,6 +8,7 @@ import time
 from collections import Counter
 from datetime import datetime, date, timedelta
 from pathlib import Path
+from typing import Any
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult, apply_scene_binding
 from src.core.ai_client import LLMDegradedError
@@ -1538,9 +1539,11 @@ class PremarketOutlookAgent(BaseAgent):
         抽出来是为了让测试能**穿越真实 save_analysis 路径**（而不是复制一份白名单
         再断言）: 盘后重跑、跨时区、缺凭证、冲突都在这里过同一道门。
 
-        返回 `SaveResult`（不再是 bool）: 正文是否落库、证据是否写入、以及「盘后重跑
+        返回 `SaveResult`（不再是 bool）: 正文是否落库、证据是否写入、以及「盘前重跑
         未覆盖盘前正文」这种按规则保留的情形要分开告诉调用方 —— 三种状态不能压成一个
-        False。`report_completed_at` 生产传 None（= 真实落库时刻），只有测试会显式注入。
+        False。`report_completed_at` 必须是**报告真正生成完成**的带时区时刻(调用方在
+        生成结束后立刻取); 传 None = 时点不可证明(落 NULL, 门槛 unknown), 绝不拿保存
+        时刻兜底。
         """
         from src.core.analysis_history import SaveResult
 
@@ -1597,6 +1600,160 @@ class PremarketOutlookAgent(BaseAgent):
                 label,
                 saved.reason,
             )
+
+    def _persist_suggestions(
+        self,
+        *,
+        suggestions: Any,
+        context: AgentContext,
+        data: dict,
+        analysis_date: str,
+        user_content: str,
+        result: AnalysisResult,
+        trace_id: str,
+        save_result,
+    ) -> dict:
+        """把建议池 + 预测后验写进库 —— **只在本次是成功盘前正文时**。
+
+        2026-11-12 P0 审计: 这两张表原来在正文落库**之前**无条件写。
+        一张盘后 16:00 (或生成时点不可证明) 的重跑即使正文被按规则保留,
+        建议池也会多出一批「盘前建议」、`agent_prediction_outcomes` 再多一套待后验行 ——
+        profile 的命中率 / 复盘统计直接被重复行灌水。现在:
+
+        - `body_saved and not content_skipped` —— 正文确实是这一版;
+        - `save_result.preopen is True` —— 这一版被证明是报告日 09:30 前生成的盘前报告;
+        任一不满足就只记一条 WARNING 说明「没写 + 为什么」, **不写任何统计表**。
+        """
+        counters = {
+            "suggestion_saved": 0,
+            "suggestion_failed": 0,
+            "outcome_saved": 0,
+            "outcome_failed": 0,
+            "skipped": False,
+        }
+        if not suggestions:
+            return counters
+        if save_result is None or not getattr(save_result, "body_saved", False):
+            reason = getattr(save_result, "reason", None) or "正文未落库"
+            counters["skipped"] = True
+            logger.warning(
+                "[%s] 不写建议池/预测后验(正文没落库, 写进去就是无正文的假建议): %s",
+                trace_id,
+                reason,
+            )
+            return counters
+        if getattr(save_result, "content_skipped", False):
+            counters["skipped"] = True
+            logger.warning(
+                "[%s] 不写建议池/预测后验(本次正文按规则未覆盖, 保留的是当日盘前成功版): %s",
+                trace_id,
+                getattr(save_result, "reason", None),
+            )
+            return counters
+        preopen = getattr(save_result, "preopen", None)
+        if preopen is not True:
+            counters["skipped"] = True
+            logger.warning(
+                "[%s] 不写建议池/预测后验(非盘前/时点不可证明 preopen=%s, 完成时刻=%s): "
+                "盘后或 unknown 重跑不能伪装盘前成绩, 也不能重复污染命中率",
+                trace_id,
+                preopen,
+                getattr(save_result, "report_completed_at", None),
+            )
+            return counters
+
+        stock_map = {s.symbol: s for s in context.watchlist}
+        packs = data.get("signal_packs", {}) or {}
+        symbol_contexts = data.get("symbol_contexts", {}) or {}
+        analysis_date = analysis_date or (data.get("timestamp") or "")[:10]
+        for symbol, sug in suggestions.items():
+            stock = stock_map.get(symbol)
+            if not stock:
+                continue
+            pack = packs.get(symbol)
+            trigger_price = (
+                getattr(pack.quote, "current_price", None) if pack and pack.quote else None
+            )
+            quality_score = (
+                (symbol_contexts.get(symbol, {}) or {}).get("data_quality", {}).get("score")
+            )
+            meta = {
+                "analysis_date": analysis_date,
+                "run_trace_id": getattr(save_result, "run_trace_id", None),
+                "source": "premarket_outlook",
+                "context_quality_score": quality_score,
+                "plan": {
+                    "triggers": sug.get("triggers") if isinstance(sug.get("triggers"), list) else [],
+                    "invalidations": sug.get("invalidations")
+                    if isinstance(sug.get("invalidations"), list)
+                    else [],
+                    "risks": sug.get("risks") if isinstance(sug.get("risks"), list) else [],
+                }
+                if isinstance(sug, dict)
+                else {},
+            }
+            ok = save_suggestion(
+                stock_symbol=symbol,
+                stock_name=stock.name,
+                action=sug["action"],
+                action_label=sug["action_label"],
+                signal=(sug.get("signal") or "") if isinstance(sug, dict) else "",
+                reason=sug.get("reason", ""),
+                agent_name=self.name,
+                agent_label=self.display_name,
+                expires_hours=12,  # 盘前建议当日有效
+                prompt_context=user_content,
+                ai_response=result.content,
+                stock_market=stock.market.value,
+                user_id=_resolve_user_id(context),
+                meta=meta,
+                # 同一报告日的重跑是同一版建议的修订 → 原地改写, 不新增一行
+                dedupe_same_day=True,
+            )
+            if ok:
+                counters["suggestion_saved"] += 1
+            else:
+                counters["suggestion_failed"] += 1
+            for horizon in (1, 5):
+                ok_outcome = save_agent_prediction_outcome(
+                    agent_name=self.name,
+                    stock_symbol=symbol,
+                    stock_market=stock.market.value,
+                    prediction_date=analysis_date,
+                    horizon_days=horizon,
+                    action=sug.get("action") or "watch",
+                    action_label=sug.get("action_label") or "观望",
+                    confidence=(float(quality_score) / 100.0)
+                    if quality_score is not None
+                    else None,
+                    trigger_price=trigger_price,
+                    meta={
+                        "source": "premarket_outlook",
+                        "run_trace_id": getattr(save_result, "run_trace_id", None),
+                        "reason": sug.get("reason", ""),
+                        "signal": sug.get("signal", ""),
+                    },
+                )
+                if ok_outcome:
+                    counters["outcome_saved"] += 1
+                else:
+                    counters["outcome_failed"] += 1
+        logger.info(
+            "[%s] 建议落库完成: suggestion_saved=%s failed=%s outcome_saved=%s failed=%s",
+            trace_id,
+            counters["suggestion_saved"],
+            counters["suggestion_failed"],
+            counters["outcome_saved"],
+            counters["outcome_failed"],
+        )
+        if counters["suggestion_failed"] or counters["outcome_failed"]:
+            logger.error(
+                "[%s] 建议/预测后验有写入失败: suggestion_failed=%s outcome_failed=%s",
+                trace_id,
+                counters["suggestion_failed"],
+                counters["outcome_failed"],
+            )
+        return counters
 
     def _append_ambush_signal_details(self, text: str, data: dict) -> str:
         """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。
@@ -1717,6 +1874,8 @@ class PremarketOutlookAgent(BaseAgent):
 
     async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
         """调用 AI 分析并保存到历史/建议池"""
+        from src.core.premarket_factor_evidence import normalize_generated_at
+
         trace_id = str(data.get("run_trace_id") or datetime.now().strftime("%m%d%H%M%S%f")[-10:])
         start_ts = time.monotonic()
         logger.info(
@@ -1779,10 +1938,12 @@ class PremarketOutlookAgent(BaseAgent):
                 },
                 status="degraded",
                 error=result.error,
+                # 事实快报也是"生成完成"在此时; 但它本身是降级正文, 不写建议池/后验
+                report_completed_at=normalize_generated_at(beijing_now()),
             )
             self._log_persist_result(save_analysis_result, trace_id=trace_id, label="降级快报")
             logger.warning(
-                "[%s] LLM 降级改为事实快报: chars=%s reason=%s",
+                "[%s] LLM 降级改为事实快报: chars=%s reason=%s (降级正文不写建议池/预测后验)",
                 trace_id, len(brief), result.error[:120],
             )
             return result
@@ -1813,99 +1974,16 @@ class PremarketOutlookAgent(BaseAgent):
             except LLMDegradedError as e:
                 logger.warning("[%s] 结构化重试失败(忽略): %s", trace_id, str(e)[:100])
 
-        # 保存各股票建议到建议池
-        stock_map = {s.symbol: s for s in context.watchlist}
-        packs = data.get("signal_packs", {}) or {}
+        # 保存各股票建议到建议池(写入动作在正文落库之后, 见 _persist_suggestions)
         symbol_contexts = data.get("symbol_contexts", {}) or {}
         analysis_date = (data.get("timestamp") or "")[:10] or date.today().strftime(
             "%Y-%m-%d"
         )
-        suggestion_saved = 0
-        suggestion_failed = 0
-        outcome_saved = 0
-        outcome_failed = 0
-        for symbol, sug in suggestions.items():
-            stock = stock_map.get(symbol)
-            if stock:
-                pack = packs.get(symbol)
-                trigger_price = (
-                    getattr(pack.quote, "current_price", None)
-                    if pack and pack.quote
-                    else None
-                )
-                quality_score = (
-                    (symbol_contexts.get(symbol, {}) or {})
-                    .get("data_quality", {})
-                    .get("score")
-                )
-                ok = save_suggestion(
-                    stock_symbol=symbol,
-                    stock_name=stock.name,
-                    action=sug["action"],
-                    action_label=sug["action_label"],
-                    signal=(sug.get("signal") or "") if isinstance(sug, dict) else "",
-                    reason=sug.get("reason", ""),
-                    agent_name=self.name,
-                    agent_label=self.display_name,
-                    expires_hours=12,  # 盘前建议当日有效
-                    prompt_context=user_content,
-                    ai_response=result.content,
-                    stock_market=stock.market.value,
-                    user_id=_resolve_user_id(context),
-                    meta={
-                        "analysis_date": analysis_date,
-                        "source": "premarket_outlook",
-                        "context_quality_score": quality_score,
-                        "plan": {
-                            "triggers": sug.get("triggers")
-                            if isinstance(sug.get("triggers"), list)
-                            else [],
-                            "invalidations": sug.get("invalidations")
-                            if isinstance(sug.get("invalidations"), list)
-                            else [],
-                            "risks": sug.get("risks")
-                            if isinstance(sug.get("risks"), list)
-                            else [],
-                        }
-                        if isinstance(sug, dict)
-                        else {},
-                    },
-                )
-                if ok:
-                    suggestion_saved += 1
-                else:
-                    suggestion_failed += 1
-                for horizon in (1, 5):
-                    ok_outcome = save_agent_prediction_outcome(
-                        agent_name=self.name,
-                        stock_symbol=symbol,
-                        stock_market=stock.market.value,
-                        prediction_date=analysis_date,
-                        horizon_days=horizon,
-                        action=sug.get("action") or "watch",
-                        action_label=sug.get("action_label") or "观望",
-                        confidence=(float(quality_score) / 100.0)
-                        if quality_score is not None
-                        else None,
-                        trigger_price=trigger_price,
-                        meta={
-                            "source": "premarket_outlook",
-                            "reason": sug.get("reason", ""),
-                            "signal": sug.get("signal", ""),
-                        },
-                    )
-                    if ok_outcome:
-                        outcome_saved += 1
-                    else:
-                        outcome_failed += 1
-        logger.info(
-            "[%s] 建议落库完成: suggestion_saved=%s failed=%s outcome_saved=%s failed=%s",
-            trace_id,
-            suggestion_saved,
-            suggestion_failed,
-            outcome_saved,
-            outcome_failed,
-        )
+        # 建议池 / 预测后验的写入**移到正文落库之后**(见 _persist_suggestions):
+        # 先落库才知道这一版是不是「成功盘前正文」; 盘后重跑/降级/时点不可证明一律不写,
+        # 否则会往建议池和命中率里灌一批假装盘前给出的建议(重跑还会重复灌水)。
+        # 报告生成到此真正完成(含结构化重试) → 现在取带时区完成时刻, 与保存时刻分开记。
+        report_completed_at = normalize_generated_at(beijing_now())
 
         compact_context = {}
         context_payload = {}
@@ -2014,6 +2092,8 @@ class PremarketOutlookAgent(BaseAgent):
                 "news_debug": news_debug,
                 "suggestions": suggestions,
             },
+            # 真完成的时刻(报告生成结束时取的带时区时刻), 不是落库时刻
+            report_completed_at=report_completed_at,
         )
         if history_saved.body_saved and not history_saved.content_skipped:
             logger.info(
@@ -2024,6 +2104,19 @@ class PremarketOutlookAgent(BaseAgent):
             )
         # 真失败/正文按规则保留/证据没写进 三种状态分别告警(不再压成一句「保存失败」)
         self._log_persist_result(history_saved, trace_id=trace_id, label="盘前报告")
+
+        # 建议池 + 预测后验: 只有「本次正文真的落库且被证明是盘前报告」才写。
+        # 盘后/unknown 重跑、正文被按规则保留、降级报告 → 一律跳过(不伪装盘前、不重复灌统计)。
+        self._persist_suggestions(
+            suggestions=suggestions,
+            context=context,
+            data=data,
+            analysis_date=analysis_date,
+            user_content=user_content,
+            result=result,
+            trace_id=trace_id,
+            save_result=history_saved,
+        )
 
         # C4(批次C, 2026-09-06): 盘前埋伏简报推送(站内+外发渠道), 失败静默不拖垮主流程。
         # M7(2026-09-10): ①只推本人(user_id, 不再 user_id=None 全局广播给所有人);

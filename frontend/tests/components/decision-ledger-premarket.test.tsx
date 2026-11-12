@@ -397,6 +397,63 @@ describe('DecisionLedger · 盘前分析区块', () => {
     expect(period.textContent).toContain('不计入盘前候选成绩')
   })
 
+  it('历史未验证: 旧报告冻结快照的数值仍显示, 但标「历史未验证 · 不纳入成绩」且不给涨跌', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          premarket_eligible: false,
+          preopen: null,
+          report_completed_at: null,
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: null,
+            demon_reason: '历史未验证: 缺带时区的生成完成时刻',
+            demon_asof: null,
+            demon_source: null,
+            evidence_rows: 0,
+            preopen: null,
+            generated_at: null,
+            demon_available: 0,
+            demon_unavailable: 1,
+            demon_unverified: 1,
+            demon_unverified_reason: '历史未验证: 缺带时区的生成完成时刻, 无法证明盘前可见; 不纳入盘前候选成绩',
+          },
+          summary: { rows: 1, t0_scored: 0, t0_up: 0, t1_scored: 0, t1_up: 0 },
+          rows: [
+            row({
+              signals: {
+                demon: null,
+                demon_historical: { score: 88, grade: '妖', n_sealed: 12, max_streak: 4, participation: '活跃', factor_date: '2026-11-10' },
+                price: null,
+                demon_note: '历史未验证: 缺带时区的生成完成时刻, 无法证明盘前可见; 不纳入盘前候选成绩',
+              },
+              outcome: { t0: null, t1: null, t3: null, stop_breached: null, note: '生成时点不可证明, 不作为当日盘前候选成绩' },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+
+    const period = within(sec).getAllByTestId('premarket-period')[0]
+    // 历史数值不消失: 期次行解释有 1 行「历史未验证」
+    expect(period.textContent).toContain('历史未验证')
+
+    fireEvent.click(within(within(sec).getAllByTestId('premarket-row')[0]).getByText('明细'))
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row-detail')).toHaveLength(1))
+    const detail = within(sec).getAllByTestId('premarket-row-detail')[0]
+    // 数值照旧展示(不凭空消失), 但必须带「历史未验证 · 不纳入成绩」标签
+    expect(detail.textContent).toContain('88.0')
+    expect(within(detail).getByTestId('premarket-demon-unverified').textContent).toContain('不纳入成绩')
+    // 不冒充盘前成绩: 涨跌一格都不给数字
+    expect(detail.textContent).not.toContain('0.00%')
+  })
+
   it('接口报错只降级本区块: 显示一行「盘前分析加载失败」+ 重试, 其他区块照常且不抢 role=alert', async () => {
     mocks.premarket.mockRejectedValueOnce(Object.assign(new Error('502 Bad Gateway'), { kind: 'HTTP_5xx', status: 502 }))
     render(<DecisionLedger />)

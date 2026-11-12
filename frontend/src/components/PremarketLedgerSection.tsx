@@ -52,34 +52,51 @@ function NoData() {
   return <span className="text-[12px] text-muted-foreground">无数据</span>
 }
 
-/** 股性因子(封板/连板/参与度) —— null 一律「无数据」并说明原因(不补 0)。 */
+/** 股性因子(封板/连板/参与度) —— null 一律「无数据」并说明原因(不补 0)。
+ *
+ * 2026-11-12 审计: 旧报告自己存了冻结快照、但证明不了盘前可得时, 数值不消失 ——
+ * 以「历史未验证 · 不纳入成绩」标签原样展示, **不许**看起来像盘前信号。
+ */
 function DemonDetail({
   demon,
+  historical,
   note,
 }: {
   demon: PremarketRow['signals']['demon']
+  historical?: PremarketRow['signals']['demon_historical']
   note: string | null | undefined
 }) {
-  if (!demon) {
+  const shown = demon ?? historical ?? null
+  if (!shown) {
     return (
       <span className="text-[12px] text-muted-foreground">
         无数据{note ? `(${note})` : ''}
       </span>
     )
   }
-  const seen = [demon.score, demon.grade, demon.n_sealed, demon.max_streak, demon.participation]
+  const seen = [shown.score, shown.grade, shown.n_sealed, shown.max_streak, shown.participation]
+  const unverified = !demon && !!historical
   if (seen.every((v) => v === null || v === undefined || v === '')) return <NoData />
   return (
     <span className="font-mono">
-      {demon.grade ? <span className="mr-1">{demon.grade}</span> : null}
-      {safeFixed(demon.score, 1)}
+      {shown.grade ? <span className="mr-1">{shown.grade}</span> : null}
+      {safeFixed(shown.score, 1)}
       <span className="ml-2 font-sans text-muted-foreground">
-        封板 {safeInt(demon.n_sealed)} 次 · 最高 {safeInt(demon.max_streak)} 连板
+        封板 {safeInt(shown.n_sealed)} 次 · 最高 {safeInt(shown.max_streak)} 连板
       </span>
-      {demon.participation ? <span className="ml-2 font-sans text-muted-foreground">{demon.participation}</span> : null}
-      {demon.factor_date ? (
+      {shown.participation ? <span className="ml-2 font-sans text-muted-foreground">{shown.participation}</span> : null}
+      {shown.factor_date ? (
         <span className="ml-2 font-sans text-muted-foreground" title="因子快照日(只说明上次计算日, 不保证数据已截至报告日前一交易日)">
-          快照日 {demon.factor_date}
+          快照日 {shown.factor_date}
+        </span>
+      ) : null}
+      {unverified ? (
+        <span
+          className="ml-2 rounded border border-border px-1 font-sans text-[12px] text-muted-foreground"
+          data-testid="premarket-demon-unverified"
+          title={note ?? '该快照无法证明在报告日盘前可得, 只作历史展示'}
+        >
+          历史未验证 · 不纳入成绩
         </span>
       ) : null}
     </span>
@@ -177,7 +194,11 @@ function RowDetail({ row }: { row: PremarketRow }) {
           {row.outcome?.note ? <span className="ml-2 text-muted-foreground">{row.outcome.note}</span> : null}
         </Field>
         <Field label="股性因子(盘前)">
-          <DemonDetail demon={row.signals?.demon ?? null} note={row.signals?.demon_note} />
+          <DemonDetail
+            demon={row.signals?.demon ?? null}
+            historical={row.signals?.demon_historical ?? null}
+            note={row.signals?.demon_note}
+          />
         </Field>
         <Field label="价格位置(盘前口径)">
           <PriceDetail price={row.signals?.price ?? null} />
@@ -252,6 +273,9 @@ function PeriodBlock({
           <span>
             股性因子: {item.pit.demon_available ?? 0}/{item.row_count} 可用
             {item.pit.demon_asof ? ` · 快照日 ≤ ${item.pit.demon_asof}` : ''}
+            {(item.pit.demon_unverified ?? 0) > 0
+              ? ` · 历史未验证 ${safeInt(item.pit.demon_unverified)} 行(不纳入成绩)`
+              : ''}
           </span>
           <span data-testid="premarket-sample-time">
             采样时点: {item.generated_at ?? '不可证明'}

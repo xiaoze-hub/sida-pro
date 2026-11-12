@@ -6903,8 +6903,7 @@ def _m247_premarket_factor_evidence(conn: Connection) -> None:
     本表只 INSERT(没有任何 UPDATE/DELETE 路径), 同一天每次真实采样一行。
 
     刻意**没有** unique 约束: 同一天盘前/盘后重跑各自的凭证都要留; 查询方按
-    `run_trace_id` + 相同 user scope 绑定到具体某一版报告对账（不按日期回退）。
-    `snapshot_sha256` 仅一致性校验。
+    「最早一条可验证盘前的凭证」对账。`snapshot_sha256` 仅一致性校验。
     """
     id_pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
     # JSON 列在 PG 用 JSON, SQLite 用 TEXT(SQLAlchemy JSON 类型在 SQLite 落 TEXT)
@@ -6924,7 +6923,6 @@ CREATE TABLE IF NOT EXISTS premarket_factor_evidence (
     source TEXT NOT NULL DEFAULT '',
     snapshot {snapshot_type},
     snapshot_sha256 VARCHAR(64),
-    run_trace_id VARCHAR(64),
     note TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
