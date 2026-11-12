@@ -495,6 +495,10 @@ def rebalance_strategy_weights_api(
     `core.context_scheduler` 不再调用 `rebalance_strategy_weights`, 且核心函数
     在缺少认证 actor 时直接 ValueError —— 后台任务没有绕过授权的通道。
     调用会与权重改动同事务写 `AuditLog(action=rebalance_strategy_weights)`。
+
+    失败语义(2026-11-12 复审): 核心函数把异常收敛成 `error` 字段是为了让
+    调度/脚本也能读到失败, 但 **HTTP 层不能照样回 200** —— 那样前端会把
+    「回滚了、一条没改」显示成成功。这里把 `error` 映射成 500, 并说明已回滚。
     """
     ip = ""
     if request is not None:
@@ -504,7 +508,7 @@ def rebalance_strategy_weights_api(
             ip = _get_client_ip(request) or ""
         except Exception:  # noqa: BLE001
             ip = ""
-    return rebalance_strategy_weights(
+    result = rebalance_strategy_weights(
         window_days=window_days,
         min_samples=min_samples,
         alpha=alpha,
@@ -513,6 +517,24 @@ def rebalance_strategy_weights_api(
         actor_id=getattr(_actor, "id", None),
         ip=ip,
     )
+    if result.get("error"):
+        from fastapi import HTTPException
+
+        err = str(result.get("error"))
+        # ResponseWrapperMiddleware 只把 detail 里的 message 透给客户端(dict 其余字段
+        # 被压成文本), 所以失败原因必须写进 message —— 否则前端只看到「失败」两个字,
+        # 排障时无从下手。
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"策略调权失败, 本次改动已整体回滚(未改动任何权重): {err}",
+                "error": err,
+                "window_days": result.get("window_days", window_days),
+                "min_samples": result.get("min_samples", min_samples),
+                "changed": 0,
+            },
+        )
+    return result
 
 
 @router.get("/strategy-stats")

@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from src.core import readonly_gate
 from src.core.factor_calibration import calibrate_factor_weights
 from src.core.factor_weights import (
     CALIBRATABLE_FACTORS,
@@ -51,11 +52,15 @@ _CALIB_CACHE_MAX_ENTRIES = 32
 #: 无限等待会占满 FastAPI 的同步线程池。
 _CALIB_WAIT_SECONDS = 1.0
 _CALIB_CACHE: dict[tuple, dict] = {}
-#: 正在计算的 key → Event。**全局最多一轮实际计算**: 并发不同参数也不并行,
+#: 正在计算的 key → Event。**进程内最多一轮实际计算**: 并发不同参数也不并行,
 #: 否则一个脚本换参数就能把线程池/DB 一起打满。
 _CALIB_INFLIGHT: dict[tuple, threading.Event] = {}
 _CALIB_LOCK = threading.Lock()
 _CALIB_LAST_COMPUTE = 0.0
+#: 跨 worker 门闩的名字(Redis 租约, 见 `src/core/readonly_gate.py`)。
+#: 进程内 `_CALIB_INFLIGHT` 只保护本进程; 生产 `WEB_WORKERS` 默认 4, 必须再加
+#: 一层跨进程门闩, 否则「全局最多一轮」是假话。
+_CALIB_GATE_NAME = "factors:calibration"
 
 
 def _reset_calibration_cache() -> None:
@@ -122,6 +127,22 @@ def _request_ip(request: Request | None) -> str:
         return ""
 
 
+def _concurrency_block(ticket) -> dict:
+    """把门闩范围翻译成**可展示的事实**(不要美化: 没跨 worker 就说没跨)。"""
+    cluster = ticket.scope == readonly_gate.GATE_SCOPE_CLUSTER
+    return {
+        "scope": ticket.scope,
+        "cross_worker_exclusive": cluster,
+        # 缓存始终是进程内的 L1: 换 worker 不复用, 与门闩范围无关。
+        "cache_scope": "process",
+        "note": (
+            "跨 worker 互斥生效(Redis 租约): 同一时刻最多一轮实际计算"
+            if cluster
+            else "Redis 不可用: 只有本进程内的单飞, 多 worker 下可能各有 1 轮; 结果缓存也仍是每 worker 一份"
+        ),
+    }
+
+
 class FactorWeightUpdate(BaseModel):
     """手动覆盖入参,均可选(只传要改的字段)。
 
@@ -164,11 +185,20 @@ def calibration(
       `proposed` 等, 前三种含义不同, 不要混读
     - `changed` 恒为 0、`write_back` 恒为 False: 建议**不会**生效, 改权重仍须走
       受 manage_settings 保护的手工覆盖端点。
+    - `concurrency`: 这次计算实际受到的并发保护**范围**(见下)。缓存命中时描述的
+      是产生这份结果的那一轮。
 
-    并发与缓存(2026-11-12 审计):
-    - **single-flight**: 全局最多一轮实际计算; 同参数并发请求有界等待(最多
-      `_CALIB_WAIT_SECONDS`)复用结果, 其余立即 429 —— 不叠线程池、不扫库。
+    并发与缓存(2026-11-12 两次审计):
+    - **进程内 single-flight**: 本进程最多一轮实际计算; 同参数并发请求有界等待
+      (最多 `_CALIB_WAIT_SECONDS`)复用结果, 其余立即 429。
+    - **跨 worker 门闩**(`src/core/readonly_gate.py`): 生产 `WEB_WORKERS` 默认 4,
+      进程内状态跨不过进程边界, 所以再加一个 Redis 租约(`SET NX EX`)+ 跨进程
+      最小间隔。生效时 `concurrency.scope == "cluster"`。
+    - **Redis 不可用时降级为进程内单飞**, `concurrency.scope == "process"` 且
+      `cross_worker_exclusive == False` —— 多 worker 下可能各有 1 轮。这是如实
+      标注的限制, 不是「全局」。
     - 缓存条目有上限(`_CALIB_CACHE_MAX_ENTRIES`), TTL 60s; **失败结果不入缓存**。
+      缓存是**每 worker 一份**(进程内), 不从 Redis 共享。
     - 命中缓存前比对当前权重/pin/开关指纹: 人工改过权重就作废旧缓存, 绝不回放
       陈旧的 `current_weight`。
     - 缓存按调用方**深拷贝**返回, 一个请求改返回值不会污染其他人的建议。
@@ -184,6 +214,7 @@ def calibration(
     fingerprint = _weights_fingerprint(db, market)
     waiter: threading.Event | None = None
     owner: threading.Event | None = None
+    prev_last_compute = 0.0
 
     with _CALIB_LOCK:
         hit = _CALIB_CACHE.get(key)
@@ -211,11 +242,12 @@ def calibration(
             # 同参数已有请求在算: 有界等待它的结果, 不再起第二轮。
             waiter = _CALIB_INFLIGHT[key]
         elif _CALIB_INFLIGHT:
-            # 别的参数正在算: 全局只允许一轮实际计算, 直接拒绝。
+            # 别的参数正在算: 本进程只允许一轮实际计算, 直接拒绝。
             raise HTTPException(
                 429,
                 detail={
                     "message": "已有标定计算进行中, 请稍后再试",
+                    "scope": readonly_gate.GATE_SCOPE_PROCESS,
                     "retry_after_seconds": _CALIB_MIN_INTERVAL_SECONDS,
                 },
             )
@@ -229,6 +261,7 @@ def calibration(
                     429,
                     detail={
                         "message": "标定计算过于频繁, 请稍后再试",
+                        "scope": readonly_gate.GATE_SCOPE_PROCESS,
                         "retry_after_seconds": round(
                             _CALIB_MIN_INTERVAL_SECONDS
                             - (started - _CALIB_LAST_COMPUTE),
@@ -239,6 +272,7 @@ def calibration(
             # 锁内占位: 同一瞬间的并发请求只有这一轮真正去扫库。
             owner = threading.Event()
             _CALIB_INFLIGHT[key] = owner
+            prev_last_compute = _CALIB_LAST_COMPUTE
             _CALIB_LAST_COMPUTE = started
 
     if waiter is not None:
@@ -257,11 +291,40 @@ def calibration(
             429,
             detail={
                 "message": "标定计算进行中, 请稍后再试",
+                "scope": readonly_gate.GATE_SCOPE_PROCESS,
                 "retry_after_seconds": round(_CALIB_WAIT_SECONDS, 1),
             },
         )
 
     assert owner is not None  # 走到这里一定是本轮的实际计算者
+
+    # 跨 worker 门闩: 进程内已经是唯一计算者, 但别的 worker 可能也在算。
+    # Redis 不可用时这里放行, 并把 scope 如实标成 "process"。
+    ticket = readonly_gate.acquire(
+        _CALIB_GATE_NAME,
+        ttl_seconds=readonly_gate.MAX_LEASE_SECONDS,
+        min_interval_seconds=_CALIB_MIN_INTERVAL_SECONDS,
+    )
+    if not ticket.held:
+        # 让位: 撤销本进程的占位并恢复节流时间戳(这一轮没有真的算)。
+        with _CALIB_LOCK:
+            _CALIB_INFLIGHT.pop(key, None)
+            _CALIB_LAST_COMPUTE = prev_last_compute
+            owner.set()
+        busy_here = ticket.reason == "busy"
+        raise HTTPException(
+            429,
+            detail={
+                "message": (
+                    "已有标定计算进行中(跨 worker), 请稍后再试"
+                    if busy_here
+                    else "标定计算过于频繁(跨 worker), 请稍后再试"
+                ),
+                "scope": ticket.scope,
+                "retry_after_seconds": _CALIB_MIN_INTERVAL_SECONDS,
+            },
+        )
+
     try:
         result = calibrate_factor_weights(
             market, days=int(days), horizon=int(horizon),
@@ -271,6 +334,7 @@ def calibration(
         payload["cached"] = False
         payload["cache_age_seconds"] = 0.0
         payload["cache_ttl_seconds"] = _CALIB_TTL_SECONDS
+        payload["concurrency"] = _concurrency_block(ticket)
 
         with _CALIB_LOCK:
             _CALIB_LAST_COMPUTE = time.monotonic()
@@ -282,6 +346,8 @@ def calibration(
         with _CALIB_LOCK:
             _CALIB_INFLIGHT.pop(key, None)
             owner.set()
+        # 先撤占位再放租约: 让下一个请求能立刻接手(失败也不能漏放, 否则 TTL 内全 429)。
+        readonly_gate.release(ticket, _CALIB_GATE_NAME)
 
 
 @router.post("/weights/{factor_code}/{market}")
@@ -298,7 +364,13 @@ def update_weight(
     权限 = `manage_settings`(owner 或经白名单授权的成员), 由
     `require_settings_write` 实时从**写库**读角色判定; 审计身份用该依赖返回的
     服务端身份, 请求体里的任何身份字段都不采信。
+
+    这里再兜一道: 依赖理论上必然给出 username, 但万一为空也**不许**落到核心层
+    「无身份写全局权重」的老路 —— 直接 403, 库内零变化。
     """
+    actor_name = (getattr(actor, "username", None) or "").strip()
+    if not actor_name:
+        raise HTTPException(403, "无法确认操作者身份, 拒绝修改全局因子权重")
     if factor_code not in CALIBRATABLE_FACTORS:
         raise HTTPException(400, detail=f"未知因子: {factor_code}")
     market = (market or "").strip().upper()
@@ -309,8 +381,9 @@ def update_weight(
             factor_code, market,
             weight=payload.weight, is_pinned=payload.is_pinned,
             auto_calibrate=payload.auto_calibrate, db=db,
-            actor=getattr(actor, "username", None) or None,
+            actor=actor_name,
             actor_id=getattr(actor, "id", None),
+            actor_kind="user",
             via="api", ip=_request_ip(request),
         )
     except ValueError as e:

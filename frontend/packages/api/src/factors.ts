@@ -38,8 +38,10 @@ export const factorsApi = {
     }),
 
   /**
-   * 实时计算一轮**只读**标定建议。零写入, changed 恒 0。
+   * 实时计算一轮**只读**标定建议。零写入: `changed` 恒 0、`write_back` 恒 false
+   * (界面要显示这两个真实字段, 不要写死)。
    * 结果按市场+参数在服务端缓存 60s; computed_at 是实际计算时间, cached 标明是否命中缓存。
+   * 并发保护范围见返回里的 `concurrency`(cluster=跨 worker / process=仅本进程)。
    */
   calibrate: (market = 'CN', days = 90, horizon = 5, minSamples = 20) =>
     fetchAPI<FactorCalibrationResp>(
@@ -75,8 +77,21 @@ export interface FactorCalibrationResp {
   cache_ttl_seconds: number
   checked: number
   proposed: number
-  changed: 0
-  write_back: false
+  /** 本次真正改了多少条生效权重; 只读模式恒为 0 —— UI 必须显示这个字段, 不要硬编码 */
+  changed: number
+  /** true 才会写回生效权重; 只读模式恒为 false */
+  write_back: boolean
+  /**
+   * 这次计算实际受到的并发保护范围。缓存命中时描述的是产生这份结果的那一轮。
+   * scope=cluster 才是跨 worker 互斥; process 表示 Redis 不可用, 只有本进程单飞
+   * (多 worker 下可能各有 1 轮), cache_scope 恒为 process。
+   */
+  concurrency?: {
+    scope: 'cluster' | 'process'
+    cross_worker_exclusive: boolean
+    cache_scope: 'process'
+    note: string
+  }
   /** 库里已有多少权重行; 0 说明这是「无行」而不是「没样本」 */
   rows_present: number
   no_rows: boolean

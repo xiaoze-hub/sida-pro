@@ -245,20 +245,134 @@ def test_evaluation_failure_is_reported_not_masked(monkeypatch):
 # ------------------------------ 旧手工 API 不放宽 ------------------------------
 
 def test_manual_set_factor_weight_path_unchanged():
-    """既有手动授权路径语义不变:0.1~3.0 clamp + manual 审计。"""
+    """既有手动授权路径语义不变:0.1~3.0 clamp + manual 审计。
+
+    注意: 身份是硬门槛(空 actor 直接 ValueError), 所以这里显式带授权身份 ——
+    语义断言(clamp / manual 历史 / 审计可追溯)与改造前一致。
+    """
     from src.core.factor_weights import set_factor_weight
     from src.web.models import FactorWeightHistory
 
     db = _mem_db()
     try:
-        set_factor_weight("alpha_score", "CN", weight=9.0, db=db)
-        set_factor_weight("alpha_score", "CN", weight=1.2, db=db)
+        set_factor_weight("alpha_score", "CN", weight=9.0, db=db, actor="alice")
+        set_factor_weight("alpha_score", "CN", weight=1.2, db=db, actor="alice")
         hist = db.query(FactorWeightHistory).filter_by(factor_code="alpha_score").all()
         assert [(h.old_weight, h.new_weight, h.reason) for h in hist] == [
             (1.0, 3.0, "manual"), (3.0, 1.2, "manual"),
         ]
+        assert all((h.meta or {}).get("by") == "alice" for h in hist)
     finally:
         db.close()
+
+
+# ------------------------------ 身份是硬门槛(2026-11-12 复审) -------------------
+
+
+def test_set_factor_weight_rejects_anonymous_and_writes_nothing():
+    """空身份 / 无 actor 一律 ValueError, 且**一个字节都不写**(不 seed 行)。"""
+    from src.core.factor_weights import set_factor_weight
+    from src.web.models import AuditLog, FactorWeight, FactorWeightHistory
+
+    db = _mem_db()
+    try:
+        for kwargs in ({}, {"actor": ""}, {"actor": "   "}, {"actor": None}):
+            with pytest.raises(ValueError):
+                set_factor_weight("alpha_score", "CN", weight=1.5, db=db, **kwargs)
+        assert _count(db, FactorWeight) == 0, "被拒绝的写不得留下 lazy seed 行"
+        assert _count(db, FactorWeightHistory) == 0
+        assert _count(db, AuditLog) == 0
+    finally:
+        db.close()
+
+
+def test_set_factor_weight_accepts_explicit_system_identity():
+    """系统身份必须显式声明(actor_kind=system + system: 前缀), 审计可区分。"""
+    import json
+
+    from src.core.factor_weights import set_factor_weight
+    from src.web.models import AuditLog, FactorWeightHistory
+
+    db = _mem_db()
+    try:
+        res = set_factor_weight(
+            "catalyst_score", "HK", weight=1.1, db=db,
+            actor="system:scheduler", actor_kind="system", via="scheduler",
+        )
+        assert res["weight"] == 1.1
+        hist = db.query(FactorWeightHistory).filter_by(factor_code="catalyst_score").one()
+        assert (hist.meta or {})["by"] == "system:scheduler"
+        assert (hist.meta or {})["by_kind"] == "system"
+        audit = db.query(AuditLog).filter_by(action="update_factor_weight").one()
+        assert audit.username == "system:scheduler"
+        detail = json.loads(audit.detail)
+        assert detail["actor_kind"] == "system" and detail["via"] == "scheduler"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"actor": "scheduler", "actor_kind": "system"},   # 缺 system: 前缀
+    {"actor": "alice", "actor_kind": "robot"},        # 未知类别
+])
+def test_set_factor_weight_rejects_malformed_identity(kwargs):
+    from src.core.factor_weights import set_factor_weight
+    from src.web.models import AuditLog, FactorWeight, FactorWeightHistory
+
+    db = _mem_db()
+    try:
+        with pytest.raises(ValueError):
+            set_factor_weight("alpha_score", "CN", weight=1.5, db=db, **kwargs)
+        assert _count(db, FactorWeight) == 0
+        assert _count(db, FactorWeightHistory) == 0
+        assert _count(db, AuditLog) == 0
+    finally:
+        db.close()
+
+
+def test_set_factor_weight_rolls_back_when_audit_fails(monkeypatch):
+    """审计写不进去 ⇒ 整笔失败并回滚: 不允许「权重改了但查不到是谁改的」。
+
+    走**自开 session** 的生产路径(db=None): 函数自己回滚, 事后用新 session
+    读到的是改动前的值。
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from src.core import factor_weights as fw
+    from src.web.database import Base
+    from src.web.models import FactorWeight, FactorWeightHistory
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    Factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(fw, "SessionLocal", Factory)
+
+    seed = Factory()
+    try:
+        seed.add(FactorWeight(factor_code="alpha_score", market="CN", weight=1.0))
+        seed.commit()
+    finally:
+        seed.close()
+
+    class _BoomAudit:
+        def __init__(self, *a, **kw):
+            raise RuntimeError("audit 表写失败")
+
+    monkeypatch.setattr(fw, "AuditLog", _BoomAudit)
+    with pytest.raises(RuntimeError):
+        fw.set_factor_weight("alpha_score", "CN", weight=1.7, actor="alice")
+
+    check = Factory()
+    try:
+        row = check.query(FactorWeight).filter_by(factor_code="alpha_score").one()
+        assert row.weight == 1.0, "审计失败仍改动了权重(未回滚)"
+        assert check.query(FactorWeightHistory).count() == 0
+    finally:
+        check.close()
 
 
 # ------------------------------ 调度器调用入口 ------------------------------

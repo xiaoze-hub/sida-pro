@@ -22,7 +22,7 @@ interface AuditResponse {
 }
 
 /** 操作类型 → 中文标签(与后端 AuditLog.action 约定一致) */
-const ACTION_LABELS: Record<string, { label: string; tone: string }> = {
+export const ACTION_LABELS: Record<string, { label: string; tone: string }> = {
   login: { label: '登录', tone: 'text-sky-600 dark:text-sky-400' },
   register: { label: '注册', tone: 'text-emerald-600 dark:text-emerald-700' },
   logout: { label: '登出', tone: 'text-muted-foreground' },
@@ -31,6 +31,9 @@ const ACTION_LABELS: Record<string, { label: string; tone: string }> = {
   manage_user: { label: '用户管理', tone: 'text-violet-600 dark:text-violet-400' },
   update_settings: { label: '配置修改', tone: 'text-rose-600 dark:text-rose-400' },
   update_datasource: { label: '数据源修改', tone: 'text-rose-600 dark:text-rose-400' },
+  // 因子权重 / 策略权重都是**全局**权重改动(影响所有人的信号合成), 必须能认出来。
+  update_factor_weight: { label: '因子权重改动', tone: 'text-rose-600 dark:text-rose-400' },
+  rebalance_strategy_weights: { label: '策略权重调权', tone: 'text-rose-600 dark:text-rose-400' },
   export: { label: '导出', tone: 'text-indigo-600 dark:text-indigo-400' },
 }
 

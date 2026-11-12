@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Scale } from 'lucide-react'
 import { factorsApi, getToken, type FactorCalibrationResp, type FactorWeight } from '@sida/api'
 import { Switch } from '@sida/base-ui/components/ui/switch'
+import { effectiveSummary } from '@/lib/factor-calibration'
 import { useMyPermissions } from '@/hooks/useMyPermissions'
 
 const FACTOR_LABELS: Record<string, string> = {
@@ -65,6 +66,8 @@ export default function FactorWeightsPanel() {
   const { permissions } = useMyPermissions(getToken())
   // 写权限由服务端判(manage_settings); 这里只决定按钮是否可点, 不是安全边界。
   const canManage = permissions?.has('manage_settings') ?? false
+  // 「已生效」口径来自后端 changed/write_back, 不在此处写死数字。
+  const effective = effectiveSummary(calib)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -258,7 +261,16 @@ export default function FactorWeightsPanel() {
             <span>计算时间: {formatObservedAt(calib.computed_at)}{calib.cached ? '(缓存)' : ''}</span>
             <span>权重行: {calib.rows_present}{calib.no_rows ? '(尚无, 未自动建行)' : ''}</span>
             <span>有建议: {calib.proposed}</span>
-            <span>已生效: 0(建议不落库)</span>
+            {/* 「已生效」必须来自后端真实字段(changed/write_back), 不能写死 0 */}
+            <span className={effective.tone === 'warn' ? 'text-amber-500' : undefined}>
+              {effective.text}
+            </span>
+            {calib.concurrency && (
+              <span title={calib.concurrency.note}>
+                并发保护: {calib.concurrency.cross_worker_exclusive ? '跨 worker' : '仅本进程'}
+                (缓存按 worker)
+              </span>
+            )}
             {calib.ok === false && <span className="text-amber-500">计算失败: {calib.error}</span>}
           </div>
           <div className="overflow-x-auto">
