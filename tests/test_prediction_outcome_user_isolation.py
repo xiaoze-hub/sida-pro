@@ -220,7 +220,12 @@ def test_legacy_unowned_row_is_never_touched_by_any_user(db):
 
 
 def test_duplicate_active_rows_block_writes_instead_of_picking_one(db):
-    """同键多条**计分行**(历史重复/索引被删过)时, 不许挑一行改, 也不许再插第三行。"""
+    """同键多条**计分行**(历史重复/索引被删过)时, 不许挑一行改, 也不许再插第三行。
+
+    2026-11-13 收紧: 索引被删掉这件事本身先被评分闸门拦下 —— 写入直接 `scoring_blocked`
+    (唯一约束不可信, 写进去只会有更多重复行)。无论被哪一道挡住, 硬要求都是"一行都不改、
+    不再插第三行"。
+    """
     from src.db.models import AgentPredictionOutcome
 
     with db.engine.begin() as conn:
@@ -248,7 +253,10 @@ def test_duplicate_active_rows_block_writes_instead_of_picking_one(db):
 
     res = _save(user_id="u-a", run_trace_id="run-new", action="hold")
     assert res.written is False
-    assert res.status == "refused_duplicate_rows"
+    assert res.status == "scoring_blocked", (
+        "唯一索引被删 = 计分键不可信, 必须 fail-closed 拒写(不能再挑一行改、也不能再插一行)"
+    )
+    assert "index" in res.reason, res.reason
     rows = _rows(db)
     assert len(rows) == 2, "历史重复行既不能被改也不能被第三行淹没"
     assert [r.action for r in rows] == ["buy", "sell"]

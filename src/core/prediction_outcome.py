@@ -89,7 +89,52 @@ def evaluate_pending_prediction_outcomes(
     - system 桶: 独立统计口径, 这里不评估, 单独报数(绝不并入任何个人成绩);
     - superseded 审计版本: 不是计分行, 不会出现在待评估列表里(存储层已排除);
     - `user_id` 可选: 只评估该用户的行(供按用户范围触发的维护调用)。
+
+    评分闸门(2026-11-13, fail-closed): 计分键唯一性只由 m250 的四条部分唯一索引保证。
+    评估路径先按需**幂等重建**索引(该谓词下无重复键才建, 不删不改任何数据行); 若重建后仍有
+    索引缺失/定义不符(例如存量已有重复键组), 直接返回 `scoring_blocked=True` 的统计骨架,
+    **一条都不回填** —— 宁可显示"评分阻断", 也不输出可能双计的命中率。
     """
+    from src.core.scoring_guard import check_scoring_health
+
+    health = check_scoring_health(allow_repair=True)
+    if health.blocked:
+        logger.error(
+            "预测后验评估被评分闸门阻断(%s): %s", health.reason_code, health.detail
+        )
+        # 只读地报出"欠着多少条"(不评估、不改写), 免得把阻断误读成"没有待评估数据"
+        try:
+            backlog = len(
+                list_pending_prediction_outcomes(
+                    max_horizon_days=max_horizon_days, limit=limit, user_id=user_id
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — 连读取都失败时如实报 -1, 不假装是 0
+            logger.warning("评分阻断下读取待评估条数失败: %r", exc)
+            backlog = -1
+        return {
+            "scoring_blocked": True,
+            "scoring_repaired": list(health.repaired),
+            "scoring_status": health.as_payload(),
+            "total_pending": backlog,
+            "eligible": 0,
+            "evaluated": 0,
+            "skipped_not_due": 0,
+            "skipped_invalid_date": 0,
+            "skipped_no_price": 0,
+            "skipped_unowned_legacy": 0,
+            "skipped_system_bucket": 0,
+            "skipped_ghost_user": 0,
+            "scope": "blocked",
+            "user_scope": (
+                str(user_id).strip() if user_id is not None else "all_user_scoped_rows"
+            ),
+            "note": (
+                "评分阻断: " + health.detail + " —— 本次不评估、不回填、不计分; "
+                "数据一行未改(重建索引只在无重复键时进行)"
+            ),
+        }
+
     pending = list_pending_prediction_outcomes(
         max_horizon_days=max_horizon_days,
         limit=limit,
@@ -104,6 +149,10 @@ def evaluate_pending_prediction_outcomes(
     ghost = count_ghost_user_prediction_outcomes(max_horizon_days=max_horizon_days)
     uid = str(user_id).strip() if user_id is not None else ""
     stats = {
+        "scoring_blocked": False,
+        # 本次评估前是否按需重建过索引(空 = 索引本来就在位)。调用方据此知道"这一刻的命中率
+        # 是在刚恢复的约束下算出来的", 而不是把修复悄悄藏起来。
+        "scoring_repaired": list(health.repaired),
         "total_pending": len(pending),
         "eligible": 0,
         "evaluated": 0,

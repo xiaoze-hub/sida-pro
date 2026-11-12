@@ -491,3 +491,285 @@ def test_m249_keeps_preexisting_ghost_rows_and_adds_not_valid_fk_on_real_pg(pg_e
                     "VALUES ('ghost-2','premarket_outlook','600185','CN','2026-11-11',1,'buy')"
                 )
             )
+
+
+# ── 评分闸门 fail-closed(2026-11-13): 真 PG 上的缺失/伪造/并发/数据不变 ────────
+#
+# 为什么必须在真 PG 上验: 这四条是**部分唯一索引** + 并发 DDL, SQLite 的写事务是库级互斥,
+# 无法等价证明"两个进程同时重建只会留下一份、且不会改数据"。断言全部只碰本次新建的隔离库。
+
+_GUARD_USER_ACTIVE = "ux_prediction_outcome_user_active_key"
+_GUARD_USER_RUN = "ux_prediction_outcome_user_run_key"
+_GUARD_ALL = (
+    _GUARD_USER_ACTIVE,
+    _GUARD_USER_RUN,
+    "ux_prediction_outcome_system_active_key",
+    "ux_prediction_outcome_system_run_key",
+)
+
+
+def _upgrade_legacy_to_250(conn) -> None:
+    """把 LEGACY_DDL 老库跑到 m249+m250(生产升级路径)。"""
+    from src.web import migrations as mig
+
+    mig._m249_prediction_outcome_user_scope(conn)
+    mig._m250_prediction_outcome_versions_and_system_scope(conn)
+
+
+def _insert_owned_rows(conn, rows) -> None:
+    for symbol, trace, action in rows:
+        conn.execute(
+            text(
+                "INSERT INTO agent_prediction_outcomes "
+                "(user_id, owner_scope, run_trace_id, agent_name, stock_symbol, stock_market, "
+                "prediction_date, horizon_days, action, action_label, outcome_status) "
+                "VALUES ('u-a','user',:t,'premarket_outlook',:s,'CN','2026-11-11',1,:a,'买入','pending')"
+            ),
+            {"t": trace, "s": symbol, "a": action},
+        )
+
+
+def _pg_snapshot(eng) -> tuple[list[tuple], dict[str, str]]:
+    """整表快照(所有列, 按 id) + 索引名→定义。用来断言"一行都没变、索引定义正确"。"""
+    with eng.begin() as conn:
+        rows = [tuple(r) for r in conn.execute(text("SELECT * FROM agent_prediction_outcomes ORDER BY id")).fetchall()]
+        idx = {
+            str(r[0]): str(r[1])
+            for r in conn.execute(
+                text("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'agent_prediction_outcomes'")
+            ).fetchall()
+        }
+    return rows, idx
+
+
+def _pg_drop(eng, *names: str) -> None:
+    with eng.begin() as conn:
+        for n in names:
+            conn.execute(text(f"DROP INDEX IF EXISTS {n}"))
+
+
+def _wire_pg(monkeypatch, eng):
+    """让 context_store(写入/回填路径)用这个隔离库 —— 与生产同一份代码路径。"""
+    import src.core.context_store as cs
+    from sqlalchemy.orm import sessionmaker
+
+    monkeypatch.setattr(cs, "SessionLocal", sessionmaker(bind=eng, future=True))
+    return cs
+
+
+def test_pg_missing_index_blocks_write_mark_stats_and_keeps_rows(pg_env, monkeypatch):
+    """缺索引(真 PG): 写入/回填/统计全部 scoring_blocked, 两条 pending 一条都不动。"""
+    from src.core.scoring_guard import check_scoring_health
+    from src.web.api.profile import _accuracy_board
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        _upgrade_legacy_to_250(conn)
+    with pg_env.begin() as conn:
+        _insert_owned_rows(conn, [("600183", "v1", "buy"), ("600519", "v2", "sell")])
+
+    before_rows, before_idx = _pg_snapshot(pg_env)
+    assert set(_GUARD_ALL) <= set(before_idx), before_idx.keys()
+
+    _pg_drop(pg_env, _GUARD_USER_ACTIVE, _GUARD_USER_RUN)
+
+    health = check_scoring_health(pg_env, allow_repair=False)
+    assert health.blocked is True and "index_missing" in health.reason_code
+
+    cs = _wire_pg(monkeypatch, pg_env)
+    res = cs.save_agent_prediction_outcome(
+        agent_name="premarket_outlook",
+        stock_symbol="000001",
+        stock_market="CN",
+        prediction_date="2026-11-12",
+        horizon_days=1,
+        action="buy",
+        action_label="买入",
+        user_id="u-a",
+        owner_scope="user",
+        run_trace_id="v3",
+    )
+    assert res.written is False and res.status == "scoring_blocked", res
+
+    assert cs.mark_agent_prediction_outcome(
+        record_id=1, outcome_price=1.0, outcome_return_pct=1.0
+    ) is False
+
+    from sqlalchemy.orm import sessionmaker
+
+    with sessionmaker(bind=pg_env, future=True)() as s:
+        board = _accuracy_board(s, since="", user_id="u-a")
+    assert board["scoring_blocked"] is True
+    assert board["overall"]["hit_rate"] is None and board["agents"] == []
+
+    after_rows, after_idx = _pg_snapshot(pg_env)
+    assert after_rows == before_rows, "阻断路径不允许改/删/回填任何行"
+    with pg_env.begin() as conn:
+        statuses = [
+            r[0]
+            for r in conn.execute(
+                text("SELECT outcome_status FROM agent_prediction_outcomes ORDER BY id")
+            ).fetchall()
+        ]
+    assert statuses == ["pending", "pending"], f"阻断时一条都不许回填: {statuses}"
+    assert _GUARD_USER_ACTIVE not in after_idx, "只读巡检不得偷偷补索引"
+    assert _GUARD_USER_RUN not in after_idx
+
+
+def test_pg_duplicate_rows_block_eval_and_are_never_cleaned(pg_env, monkeypatch):
+    """有重复键(同键两条计分行): 不建索引、不删不改, 评估直接 scoring_blocked。"""
+    from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
+    from src.core.scoring_guard import check_scoring_health
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        _upgrade_legacy_to_250(conn)
+    _pg_drop(pg_env, _GUARD_USER_ACTIVE, _GUARD_USER_RUN)
+    with pg_env.begin() as conn:
+        # 同键两条计分行(索引缺失期间并发写入的产物)
+        _insert_owned_rows(conn, [("600183", "v1", "buy"), ("600183", "v2", "sell")])
+
+    before_rows, _ = _pg_snapshot(pg_env)
+    health = check_scoring_health(pg_env, allow_repair=True)
+    assert health.blocked is True and "duplicate_rows" in health.reason_code
+    assert _GUARD_USER_ACTIVE in health.duplicate_blocked
+    with pg_env.begin() as conn:
+        exists = conn.execute(
+            text("SELECT 1 FROM pg_indexes WHERE indexname = :n"), {"n": _GUARD_USER_ACTIVE}
+        ).first()
+    assert exists is None, "有重复键就不许建索引(也不许为了建索引删数据)"
+
+    _wire_pg(monkeypatch, pg_env)
+    stats = evaluate_pending_prediction_outcomes()
+    assert stats["scoring_blocked"] is True and stats["evaluated"] == 0
+
+    after_rows, _ = _pg_snapshot(pg_env)
+    assert after_rows == before_rows, "重复行不能被清理/改写"
+
+
+def test_pg_forged_index_and_concurrent_repair_converge_without_data_change(pg_env, monkeypatch):
+    """同名错定义索引必须被识别; 两个线程并发重建后只留一份正确索引, 数据不变。"""
+    import threading
+
+    from src.core.scoring_guard import check_scoring_health, parse_index_ddl
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        _upgrade_legacy_to_250(conn)
+    with pg_env.begin() as conn:
+        _insert_owned_rows(conn, [("600183", "v1", "buy")])
+
+    _pg_drop(pg_env, _GUARD_ALL[0])
+    with pg_env.begin() as conn:
+        # 名字对、语义全错: 非唯一 + 列不全 + 无谓词
+        conn.execute(text(f"CREATE INDEX {_GUARD_USER_ACTIVE} ON agent_prediction_outcomes (user_id)"))
+
+    before_rows, _ = _pg_snapshot(pg_env)
+    read_only = check_scoring_health(pg_env, allow_repair=False)
+    assert read_only.blocked is True
+    assert "index_definition_mismatch" in read_only.reason_code
+    assert {i.name: i for i in read_only.indexes}[_GUARD_USER_ACTIVE].status == "mismatch"
+
+    results: list[bool] = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def worker():
+        barrier.wait()
+        h = check_scoring_health(pg_env, allow_repair=True)
+        with lock:
+            results.append(h.blocked)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+
+    final = check_scoring_health(pg_env, allow_repair=False)
+    assert final.blocked is False, final.detail
+    after_rows, after_idx = _pg_snapshot(pg_env)
+    assert after_rows == before_rows, "重建索引不得改数据"
+
+    # 定义正确性: 唯一 + 列集合 + 谓词(用与运行时相同的解析器再核一遍)
+    parsed = parse_index_ddl(after_idx[_GUARD_USER_ACTIVE])
+    assert parsed and parsed["unique"] is True
+    assert sorted(parsed["columns"]) == sorted(
+        [
+            "user_id",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+        ]
+    )
+    assert "superseded" in parsed["where"] and "IS NOT NULL" in parsed["where"].upper()
+    assert after_idx[_GUARD_USER_ACTIVE].count("CREATE UNIQUE INDEX") == 1
+
+
+def test_pg_m250_success_no_longer_hides_forged_index(pg_env):
+    """"迁移 success=1"不等于"约束在位": 迁移前同名索引就是错定义时, m250 必须在同一次
+    迁移里识别并重建它(不删不改任何数据行), 而不是看到名字就跳过。"""
+    from src.web import migrations as mig
+    from src.core.scoring_guard import check_scoring_health
+
+    with pg_env.begin() as conn:
+        conn.execute(text(LEGACY_DDL))
+        _seed_users(conn, "u-a")
+    with pg_env.begin() as conn:
+        mig._m249_prediction_outcome_user_scope(conn)
+    with pg_env.begin() as conn:
+        # 迁移前的老行: 只有 m249 加的 user_id(owner_scope/run_trace_id 还没加)
+        conn.execute(
+            text(
+                "INSERT INTO agent_prediction_outcomes "
+                "(user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+                "horizon_days, action, action_label, outcome_status) "
+                "VALUES ('u-a','premarket_outlook','600183','CN','2026-11-11',1,'buy','买入','pending')"
+            )
+        )
+        # 迁移前就有人用同一个名字建了个"非唯一、列不全、没谓词"的索引
+        conn.execute(
+            text(f"CREATE INDEX {_GUARD_USER_ACTIVE} ON agent_prediction_outcomes (user_id)")
+        )
+
+    # 注意: m250 会**加列**(owner_scope/run_trace_id), 所以"数据不变"只能按两版共有的列比,
+    # 不能拿 SELECT * 的行宽去比(加列不是改数据)。
+    _stable_cols = (
+        "id, user_id, agent_name, stock_symbol, stock_market, prediction_date, "
+        "horizon_days, action, action_label, outcome_status, outcome_price, outcome_return_pct"
+    )
+
+    def _stable_rows() -> list[tuple]:
+        with pg_env.begin() as conn:
+            return [
+                tuple(r)
+                for r in conn.execute(
+                    text(f"SELECT {_stable_cols} FROM agent_prediction_outcomes ORDER BY id")
+                ).fetchall()
+            ]
+
+    before_rows = _stable_rows()
+    with pg_env.begin() as conn:
+        mig._m250_prediction_outcome_versions_and_system_scope(conn)
+
+    health = check_scoring_health(pg_env, allow_repair=False)
+    assert health.blocked is False, health.detail
+    _, idx = _pg_snapshot(pg_env)
+    assert "CREATE UNIQUE INDEX" in idx[_GUARD_USER_ACTIVE]
+    assert "superseded" in idx[_GUARD_USER_ACTIVE]
+    assert _stable_rows() == before_rows, "m250 修索引不得改数据"
+
+    # 重跑(checksum 变化会重跑)必须幂等: 不炸、不再改数据、结论仍是 ok
+    with pg_env.begin() as conn:
+        mig._m250_prediction_outcome_versions_and_system_scope(conn)
+    again = check_scoring_health(pg_env, allow_repair=False)
+    assert again.blocked is False, again.detail
+    assert _stable_rows() == before_rows

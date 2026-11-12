@@ -283,8 +283,68 @@ def _detached_account_count(db: Session, since: str = "") -> int:
 
 
 def _prediction_hit_stats(db: Session, *, user_id: str) -> dict:
-    """当前账号的预测命中率(user_id 必传: 本表不提供跨账户口径)。"""
-    return _accuracy_board(db, since="", user_id=user_id)["overall"]
+    """当前账号的预测命中率(user_id 必传: 本表不提供跨账户口径)。
+
+    返回 `overall` 的原形状(hit_count/total/hit_rate/scope, 旧前端依赖)并附
+    `scoring_blocked` —— 评分阻断时 hit_rate 恒为 None, 且这个标记永不省略。
+    """
+    board = _accuracy_board(db, since="", user_id=user_id)
+    overall = dict(board.get("overall") or {})
+    overall["scoring_blocked"] = bool(board.get("scoring_blocked", False))
+    if overall["scoring_blocked"]:
+        overall["block_reason_code"] = board.get("block_reason_code")
+        overall["block_reason"] = board.get("block_reason")
+        overall["note"] = board.get("note")
+        overall["scoring_status"] = board.get("scoring_status")
+    return overall
+
+
+def scoring_health_payload(bind=None, *, allow_repair: bool = False) -> dict:
+    """评分闸门的只读快照(不含任何用户数据: 只有索引名/状态类别/聚合计数)。
+
+    `allow_repair=False` 的原因: 这是 GET(个人统计)路径的辅助信息, 不能因为有人刷新页面
+    就触发 DDL。按需重建由启动 / 评估 / 维护路径负责。
+    """
+    from src.core.scoring_guard import check_scoring_health
+
+    return check_scoring_health(bind=bind, allow_repair=allow_repair).as_payload()
+
+
+def _blocked_accuracy_board(health: dict, *, since: str, user_id: str) -> dict:
+    """评分阻断时的命中榜骨架: 数字一律 `None`/0, 原因写清楚, 绝不给出"看起来还行"的比例。"""
+    return {
+        "since": since or None,
+        "scope": "user",
+        "user_scoped": True,
+        "user_scope": str(user_id or ""),
+        "scoring_blocked": True,
+        "scoring_status": health,
+        "block_reason_code": health.get("reason_code") or "unknown",
+        "block_reason": health.get("reason") or "评分可信度检查未通过",
+        "legacy_unscoped_rows": 0,
+        "legacy_untrusted": False,
+        "ghost_user_rows": 0,
+        "detached_account_rows": 0,
+        "system_scoped_rows": 0,
+        "system_pending_rows": 0,
+        "note": (
+            "评分已阻断(scoring_blocked): "
+            + str(health.get("reason") or "")
+            + " —— 四条后验计分唯一索引不可信时, 同键可能已有多条计分行, 任何命中率都会"
+            "双计。本接口不给命中率、不做回填、不清理数据; 恢复索引(重启/维护按需幂等重建)"
+            "后重新查询即可"
+        ),
+        "overall": {
+            "hit_count": 0,
+            "total": 0,
+            "hit_rate": None,
+            "avg_return_pct": None,
+            "scope": "user",
+            "legacy_unscoped_rows": 0,
+            "scoring_blocked": True,
+        },
+        "agents": [],
+    }
 
 
 def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: str) -> dict:
@@ -305,6 +365,7 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
             "since": since or None,
             "scope": "user",
             "user_scoped": True,
+            "scoring_blocked": False,
             "legacy_unscoped_rows": 0,
             "legacy_untrusted": False,
             "ghost_user_rows": 0,
@@ -322,6 +383,12 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
             },
             "agents": [],
         }
+
+    # 评分闸门(fail-closed, 2026-11-13): 四条部分唯一索引不可信时, 同键可能已有多条计分
+    # 行, 任何比例都会双计。此路径**只读巡检**(GET 不触发 DDL), 阻断就不给数字。
+    health = scoring_health_payload(getattr(db, "bind", None), allow_repair=False)
+    if health.get("scoring_blocked"):
+        return _blocked_accuracy_board(health, since=since, user_id=uid)
 
     q = (
         db.query(
@@ -409,6 +476,8 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
         "since": since or None,
         "scope": "user",
         "user_scoped": True,
+        "scoring_blocked": False,
+        "scoring_status": health,
         "legacy_unscoped_rows": legacy,
         "legacy_untrusted": bool(legacy),
         "ghost_user_rows": ghost_rows,
@@ -423,6 +492,7 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
             "avg_return_pct": round(oret_sum / oret_n, 2) if oret_n else None,
             "scope": "user",
             "legacy_unscoped_rows": legacy,
+            "scoring_blocked": False,
         },
         "agents": agents,
     }
@@ -509,6 +579,19 @@ def update_profile(
         # P1: 审计写失败属异常路径, 需留痕(业务已成功, 仅审计缺失)
         logger.warning(f"profile 审计写入失败: {e}")
     return _profile_to_dict(user)
+
+
+@router.get("/scoring/status")
+def scoring_status(
+    _user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """后验计分可信度(索引在位与否) —— 不含任何用户数据, 也不触发 DDL。
+
+    只暴露: 索引名 / 状态类别(ok|missing|mismatch) / 差异类别 / 是否阻断。没有 user_id、
+    没有行内容、没有其他用户的任何标识 —— 任何登录用户看到的是同一份 schema 体检结果。
+    """
+    return scoring_health_payload(getattr(db, "bind", None), allow_repair=False)
 
 
 @router.get("/stats/accuracy")

@@ -35,7 +35,7 @@ class OutcomeSaveResult:
       inserted / appended_superseded / unchanged_same_version / kept_evaluated /
       refused_no_owner / refused_bad_scope / refused_bad_key / refused_no_version /
       refused_duplicate_rows / refused_unknown_user / concurrent_duplicate /
-      db_unavailable / write_failed
+      scoring_blocked / db_unavailable / write_failed
     """
 
     status: str
@@ -89,6 +89,20 @@ def _db_error_kind(exc: BaseException) -> str:
     if "not null" in msg:
         return "not_null"
     return "other"
+
+
+def _scoring_gate(*, bind=None, allow_repair: bool = False):
+    """写入/回填前的评分可信度闸门(fail-closed, 2026-11-13)。
+
+    计分键唯一性完全依赖 `scoring_guard.INDEX_SPECS` 的四条部分唯一索引; 它们缺失或定义
+    不符时, 写入/回填会制造同键重复计分行(命中率双计)。这里不猜、不兜底: 直接问闸门。
+
+    `bind` 传**这次会话自己的绑定引擎**, 保证体检的就是接下来要写的那个库(而不是 import
+    时定下的模块级引擎)。
+    """
+    from src.core.scoring_guard import check_scoring_health
+
+    return check_scoring_health(bind=bind, allow_repair=allow_repair)
 
 
 def save_stock_context_snapshot(
@@ -497,7 +511,30 @@ def save_agent_prediction_outcome(
             reason="缺少 run_trace_id: 同一结果会被重复追加成多版",
         )
 
+    # 评分闸门(fail-closed, 2026-11-13): 计分键唯一性只由 m250 的四条部分唯一索引保证。
+    # 索引缺失/定义错误时并发或重跑会写出第二条计分行(双计分), 因此**拒写**而不是"先写着
+    # 看"。这里只读巡检: 重建由启动/评估/维护路径按需执行, 写路径不在热点上做 DDL。
     db = SessionLocal()
+    health = _scoring_gate(bind=getattr(db, "bind", None))
+    if health.blocked:
+        logger.error(
+            "预测后验不写入(评分阻断: %s): %s/%s/%s h=%s scope=%s user=%r —— 唯一约束不可信, "
+            "写入会制造同键重复计分行; 先恢复索引(重启/维护按需重建)再重试",
+            health.reason_code,
+            agent_name,
+            stock_symbol,
+            date_str,
+            horizon,
+            scope,
+            uid or None,
+        )
+        db.close()
+        return OutcomeSaveResult(
+            status="scoring_blocked",
+            written=False,
+            reason=f"评分阻断({health.reason_code}): {health.detail}",
+        )
+
     try:
         meta_safe = to_jsonable(meta or {})
         if not isinstance(meta_safe, dict):
@@ -779,8 +816,21 @@ def mark_agent_prediction_outcome(
 
     二次修正: 追加的审计版本(`outcome_status='superseded'`)也拒绝回填 —— 否则同一键
     会有两条"evaluated", 命中率重复计数; 计分永远只落在唯一那条计分行上。
+
+    三次修正(2026-11-13): 回填**前**先过评分闸门。唯一索引缺失/定义错误时, "这是一条合法
+    计分行"本身就无法证明(同键可能已有第二条), 此时回填同样是不可信成绩 → 拒绝并记 ERROR。
     """
     db = SessionLocal()
+    gate = _scoring_gate(bind=getattr(db, "bind", None))
+    if gate.blocked:
+        db.close()
+        logger.error(
+            "拒绝回填预测后验(id=%s): 评分阻断(%s) —— %s",
+            record_id,
+            gate.reason_code,
+            gate.detail,
+        )
+        return False
     try:
         rec = (
             db.query(AgentPredictionOutcome)

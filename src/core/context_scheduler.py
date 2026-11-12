@@ -43,6 +43,24 @@ class ContextMaintenanceScheduler:
         self._evaluating = True
         try:
             stats = await asyncio.to_thread(evaluate_pending_prediction_outcomes)
+            if stats.get("scoring_blocked"):
+                # 评分闸门阻断: 索引缺失/定义错误或存量重复键, 本轮一条都没评估 —— 必须
+                # ERROR 级留痕, 否则"评估完成 pending=N evaluated=0"会被误读成"没有到期数据"
+                logger.error(
+                    "[上下文维护] 后验评估被评分闸门阻断(%s): %s —— 本轮不评估/不回填/不计分"
+                    "(欠评估 %s 条)",
+                    (stats.get("scoring_status") or {}).get("reason_code"),
+                    stats.get("note"),
+                    stats.get("total_pending"),
+                )
+            elif stats.get("scoring_repaired"):
+                # 索引本来缺失/错定义, 本轮按需重建后才继续评估 —— 这是"曾经不可信"的证据,
+                # 必须留痕(不能因为自愈成功就当没发生过)
+                logger.warning(
+                    "[上下文维护] 后验计分索引缺失/定义错误, 已在评估前按需重建: %s "
+                    "(数据行未回填/未清理); 请核查索引是怎么丢的",
+                    ", ".join(stats.get("scoring_repaired") or []),
+                )
             level = logging.INFO if stats.get("evaluated", 0) else logging.DEBUG
             logger.log(
                 level,

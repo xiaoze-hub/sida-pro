@@ -7447,6 +7447,28 @@ def _m250_prediction_outcome_versions_and_system_scope(conn: Connection) -> None
         "m250",
     )
 
+    # 四次修正(2026-11-13, fail-closed): 上面四条只保证"**名字**存在且能建出来", 但迁移
+    # success 不等于约束在位 —— 同名索引可能是别人建的错定义(非唯一/列不全/谓词不同), 也可能
+    # 因为存量重复键被跳过。这里按**真实定义**再校验一次(唯一性/列/谓词), 缺失或错定义就按需
+    # 幂等重建(该谓词下无重复键才建; 有重复只记 ERROR, 不删不改任何数据行)。
+    # 重建后仍不可信时不阻断迁移(服务要能起), 但如实记 ERROR —— 应用层写入/评估/统计会据此
+    # 显示 scoring_blocked, 不会拿一份可能双计的数据出命中率。
+    from src.core.scoring_guard import check_scoring_health
+
+    _health = check_scoring_health(conn, allow_repair=True)
+    if _health.blocked:
+        logger.error(
+            "[m250] 迁移完成但评分闸门未通过(%s): %s —— 写入/评估/统计将显示 scoring_blocked, "
+            "需人工核查这批重复行(不自动清理数据)",
+            _health.reason_code,
+            _health.detail,
+        )
+    elif _health.repaired:
+        logger.warning(
+            "[m250] 四条计分唯一索引已按预期定义校验/重建: %s(数据行未回填、未清理)",
+            ", ".join(_health.repaired),
+        )
+
 
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),

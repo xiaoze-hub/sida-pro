@@ -175,8 +175,14 @@ def _prediction_result_label(rec: AgentPredictionOutcome) -> str:
     return "evaluated"
 
 
-def _prediction_scored_flag(rec: AgentPredictionOutcome) -> str:
-    """这一行是否**计入**命中率: superseded 审计版本恒为"否", 其余按状态说明。"""
+def _prediction_scored_flag(rec: AgentPredictionOutcome, *, blocked: bool = False) -> str:
+    """这一行是否**计入**命中率: superseded 审计版本恒为"否", 其余按状态说明。
+
+    评分闸门阻断时一律"否" —— 唯一索引不可信, 这一行是否"唯一计分行"本身就无法证明,
+    导出不能声称它参与计分(否则使用者会拿它算命中率)。
+    """
+    if blocked:
+        return "否(评分阻断)"
     status = (rec.outcome_status or "pending").lower()
     if status == "superseded":
         return "否(审计版本)"
@@ -236,6 +242,19 @@ def export_predictions(
         )
     headers = ["代码", "方向", "目标价", "日期", "结果", "计分", "归属"]
 
+    # 评分闸门(fail-closed): 索引缺失/定义错误时, 导出的"计分"列不得声称"是", 否则使用者
+    # 会拿这份 CSV 直接算命中率。只读巡检, 不做 DDL。
+    from src.core.scoring_guard import check_scoring_health
+
+    health = check_scoring_health(bind=getattr(db, "bind", None), allow_repair=False)
+    blocked = health.blocked
+    if blocked:
+        logger.error(
+            "预测导出处于评分阻断状态(%s): 计分列一律标'否(评分阻断)' —— %s",
+            health.reason_code,
+            health.detail,
+        )
+
     rows: list[list] = []
     for rec in records:
         direction = rec.action_label or rec.action or ""
@@ -245,7 +264,7 @@ def export_predictions(
             _fmt(rec.trigger_price),
             rec.prediction_date,
             _prediction_result_label(rec),
-            _prediction_scored_flag(rec),
+            _prediction_scored_flag(rec, blocked=blocked),
             rec.owner_scope or "user",
         ])
     return _csv_response("predictions.csv", headers, rows)
