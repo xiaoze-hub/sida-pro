@@ -15,6 +15,8 @@
   E. 缺索引时并发体检/重建收敛到"四条索引各一份", 数据不变;
   F. 状态检查与索引体检**不泄露其他用户**(不含 user_id/username/行内容);
   G. PG 与 SQLite 双样本: 两条 pending 行在阻断时**都还是 pending**(一条都没被回填)。
+  H. 库**不可达 / 连接池超时**: 评估/写入/回填一律返回 `scoring_blocked`(或拒写),
+    绝不把连接异常抛给调度方; reason/日志只报异常类型, 不含 SQL/绑定参数/连接串。
 
 测试库纪律(与 test_prediction_outcome_ownership_integrity.py 一致): 每个用例一套
 `tmp_path` 独立 SQLite; 起测清空 DATABASE_*/SIDA_DB*/DATA_DIR/PYTHONPATH; 断言连的就是
@@ -834,3 +836,259 @@ def test_export_marks_predictions_as_not_scored_when_blocked(tmp_path, monkeypat
     assert "计分" in header
     assert "否(评分阻断)" in r.text
     assert ",是" not in r.text.replace("否(评分阻断)", "")
+
+
+# ── H. 库不可达 / 连接池超时: 一律 fail-closed, 不外抛、不泄露原文 ─────────────
+#
+# 审计遗留(2026-11-13): 评估路径原先把 `db.connection()` 直接当实参传给闸门 —— 库不可达
+# 或池超时时它先抛异常, 异常一路冒到调度方: 既没有 `scoring_blocked`, 也就没有"不评估/
+# 不回填"的承诺。下面用**真实**不可达的临时库、真实池超时、真实 IntegrityError 钉住:
+# 对外只报类别, 绝不回显 SQL/绑定参数/连接串/列值。
+
+
+def _unreachable_engine(tmp_path):
+    """真实不可达的临时库: sqlite 指向**不存在**的子目录, 驱动 connect 时直接失败。"""
+    ghost = tmp_path / "no_such_dir" / "guard.db"
+    assert not ghost.parent.exists(), "测试前提: 库文件的父目录不存在"
+    eng = create_engine(f"sqlite:///{ghost}", future=True)
+    assert str(tmp_path) in str(eng.url)
+    return eng
+
+
+def test_evaluation_unreachable_db_returns_scoring_blocked_not_exception(tmp_path, monkeypatch):
+    """真·临时库不可达: 评估返回 blocked 骨架(不是抛异常), 条数如实报 -1。"""
+    import src.core.context_store as cs
+    from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
+
+    eng = _unreachable_engine(tmp_path)
+    # 证明它**真的**连不上(不是靠 monkeypatch 假装的)
+    with pytest.raises(Exception):
+        with eng.connect() as c:
+            c.execute(sqltext("SELECT 1"))
+
+    monkeypatch.setattr(cs, "SessionLocal", sessionmaker(bind=eng, future=True))
+
+    stats = evaluate_pending_prediction_outcomes()
+    assert stats["scoring_blocked"] is True
+    assert stats["evaluated"] == 0 and stats["eligible"] == 0
+    assert stats["total_pending"] == -1, "连条数都读不到时必须报 -1, 不能假装是 0"
+    assert stats["scoring_status"]["reason_code"] in {"unavailable", "check_failed"}
+    blob = json.dumps(stats, ensure_ascii=False, default=str)
+    for leaked in ("unable to open database file", "no_such_dir", "guard.db", "SELECT"):
+        assert leaked not in blob, f"对外结果泄露了驱动原文/路径: {leaked}"
+
+
+def test_evaluation_session_factory_failure_is_blocked_and_sanitized(
+    tmp_path, monkeypatch, caplog
+):
+    """连会话都建不出来(引擎/DSN 配错): 同样 blocked, 连接串与口令不进结果/日志。"""
+    import logging
+
+    import src.core.context_store as cs
+    from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
+
+    secret = "PARAM_SECRET_factory_7c1"
+
+    def _boom(*_a, **_k):
+        raise RuntimeError(f"could not connect: postgresql://acct:{secret}@127.0.0.1:5432/sida")
+
+    monkeypatch.setattr(cs, "SessionLocal", _boom)
+    with caplog.at_level(logging.ERROR, logger="src.core.prediction_outcome"):
+        stats = evaluate_pending_prediction_outcomes()
+
+    assert stats["scoring_blocked"] is True and stats["total_pending"] == -1
+    blob = json.dumps(stats, ensure_ascii=False, default=str)
+    assert secret not in blob and "postgresql://" not in blob
+    assert secret not in caplog.text and "postgresql://" not in caplog.text
+
+
+def test_evaluation_pool_timeout_is_blocked_not_exception(tmp_path, monkeypatch):
+    """真实连接池超时(池只有 1 个连接且被占满): 评估必须 blocked, 且不挂死/不抛错。"""
+    from sqlalchemy.pool import QueuePool
+
+    import src.core.context_store as cs
+    from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
+
+    eng, _ = _make_db(tmp_path, rows=({"user_id": "u-a", "run_trace_id": "run-1"},))
+    pooled = create_engine(
+        str(eng.url),
+        future=True,
+        poolclass=QueuePool,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.2,
+    )
+    monkeypatch.setattr(cs, "SessionLocal", sessionmaker(bind=pooled, future=True))
+    holder = pooled.connect()  # 占满唯一的池连接
+    try:
+        stats = evaluate_pending_prediction_outcomes()
+    finally:
+        holder.close()
+        pooled.dispose()
+
+    assert stats["scoring_blocked"] is True
+    assert stats["evaluated"] == 0 and stats["total_pending"] == -1
+    assert stats["scoring_status"]["reason_code"] in {"unavailable", "check_failed"}
+    blob = json.dumps(stats, ensure_ascii=False, default=str)
+    # 只允许"异常类型名"这种分类; 池内部细节(SQL/配置/语句)一律不许出现。
+    for leaked in ("QueuePool limit", "TimeoutError: ", "SELECT", "pool_size", "sqlite:///"):
+        assert leaked not in blob, f"对外结果泄露了池内部细节: {leaked}"
+    # 数据一行不动(仍是 pending)
+    with eng.begin() as c:
+        statuses = [
+            r[0]
+            for r in c.execute(
+                sqltext("SELECT outcome_status FROM agent_prediction_outcomes ORDER BY id")
+            ).fetchall()
+        ]
+    assert statuses == ["pending"]
+
+
+def test_evaluation_pg_driver_connection_refused_is_blocked_not_exception(monkeypatch, caplog):
+    """生产同款驱动(psycopg2)真实连接被拒: 评估必须 blocked, 不泄露 DSN/驱动原文。
+
+    不连任何既有库: 指向本机保留端口(1), 连接立刻被拒 —— 这是真实的驱动级失败,
+    不是 monkeypatch 出来的异常。
+    """
+    import logging
+
+    import src.core.context_store as cs
+
+    pytest.importorskip("psycopg2")
+    from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
+
+    secret = "PARAM_SECRET_pg_5a2"
+    eng = create_engine(
+        f"postgresql+psycopg2://acct:{secret}@127.0.0.1:1/sida",
+        future=True,
+        connect_args={"connect_timeout": 3},
+    )
+    with pytest.raises(Exception):
+        with eng.connect() as c:
+            c.execute(sqltext("SELECT 1"))
+    monkeypatch.setattr(cs, "SessionLocal", sessionmaker(bind=eng, future=True))
+    with caplog.at_level(logging.ERROR, logger="src.core.prediction_outcome"):
+        stats = evaluate_pending_prediction_outcomes()
+    eng.dispose()
+
+    assert stats["scoring_blocked"] is True
+    assert stats["total_pending"] == -1 and stats["evaluated"] == 0
+    assert stats["scoring_status"]["reason_code"] in {"unavailable", "check_failed"}
+    blob = json.dumps(stats, ensure_ascii=False, default=str)
+    for leaked in (secret, "postgresql://", "127.0.0.1", "psycopg", "connection to server"):
+        assert leaked not in blob, f"对外结果泄露了 DSN/驱动原文: {leaked}"
+    for leaked in (secret, "postgresql://", "psycopg"):
+        assert leaked not in caplog.text, f"日志泄露了 DSN/驱动原文: {leaked}"
+
+
+def test_write_and_backfill_fail_closed_when_db_unreachable(tmp_path, monkeypatch):
+    """写入/回填在库不可达时: 拒写(不抛异常), 对外原因是通用类别而非驱动原文。"""
+    import src.core.context_store as cs
+    from src.core.context_store import mark_agent_prediction_outcome
+
+    eng = _unreachable_engine(tmp_path)
+    monkeypatch.setattr(cs, "SessionLocal", sessionmaker(bind=eng, future=True))
+
+    res = _save(run_trace_id="run-unreachable")
+    assert res.written is False
+    assert res.status == "scoring_blocked", res
+    assert "评分阻断" in res.reason
+    for leaked in ("unable to open", "no_such_dir", "SELECT", "sqlite"):
+        assert leaked not in res.reason, f"拒写原因泄露了驱动原文: {leaked}"
+
+    assert (
+        mark_agent_prediction_outcome(
+            record_id=1, outcome_price=1.0, outcome_return_pct=1.0
+        )
+        is False
+    )
+
+
+def test_integrity_error_never_leaks_sql_or_user_values(tmp_path, monkeypatch, caplog):
+    """故障注入: 真实 IntegrityError(带 SQL/绑定参数/DETAIL 列值)不进 reason 也不进日志。"""
+    import logging
+
+    from sqlalchemy.exc import IntegrityError
+
+    import src.core.context_store as cs
+
+    eng, Session = _make_db(tmp_path)
+    secret = "u-secret-uid-0001"
+
+    def _factory(orig_msg: str):
+        class _Orig(Exception):
+            pass
+
+        class _Failing:
+            def __init__(self):
+                self._inner = Session()
+
+            def add(self, obj):
+                return self._inner.add(obj)
+
+            def commit(self):
+                raise IntegrityError(
+                    "INSERT INTO agent_prediction_outcomes (user_id) VALUES (%(user_id)s)",
+                    {"user_id": secret},
+                    _Orig(orig_msg),
+                )
+
+            def rollback(self):
+                return self._inner.rollback()
+
+            def query(self, *a, **k):
+                return self._inner.query(*a, **k)
+
+            @property
+            def bind(self):
+                return self._inner.bind
+
+            def connection(self):
+                return self._inner.connection()
+
+            def close(self):
+                return self._inner.close()
+
+        return _Failing
+
+    cases = (
+        (
+            "insert or update on table \"agent_prediction_outcomes\" violates foreign key "
+            f"constraint \"apo_user_id_fkey\"\nDETAIL:  Key (user_id)=({secret}) is not "
+            "present in table \"users\".",
+            "refused_unknown_user",
+            "归属用户不存在(user_id 外键校验失败)",
+        ),
+        (
+            "new row for relation \"agent_prediction_outcomes\" violates check constraint "
+            "\"ck_apo_horizon\"\n"
+            f"DETAIL:  Failing row contains (42, premarket_outlook, 600183, {secret}, 2026-11-13, 0).",
+            "write_failed",
+            "完整性约束(other)",
+        ),
+    )
+    for msg, expect_status, expect_reason in cases:
+        monkeypatch.setattr(cs, "SessionLocal", _factory(msg))
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger="src.core.context_store"):
+            res = _save(run_trace_id="run-integrity")
+        assert res.status == expect_status, res
+        assert res.reason == expect_reason, res.reason
+        for leaked in (secret, "DETAIL", "INSERT INTO", "Failing row", "constraint \""):
+            assert leaked not in res.reason, f"对外原因泄露: {leaked}"
+            assert leaked not in caplog.text, f"日志泄露: {leaked}"
+    assert _table_rows(eng) == [], "失败路径不得留下半条数据"
+
+
+def test_error_kind_only_accepts_real_sqlstate_codes():
+    """异常对象里的非 SQLSTATE 内容(可被拼成 SQL/文本)不得当分类码回显。"""
+    from sqlalchemy.exc import IntegrityError
+
+    import src.core.context_store as cs
+
+    class _Orig(Exception):
+        pass
+
+    orig = _Orig("boom")
+    orig.pgcode = "DROP TABLE users; --"
+    assert cs._db_error_kind(IntegrityError("SQL", {}, orig)) == "other"

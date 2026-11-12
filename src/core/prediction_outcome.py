@@ -75,6 +75,79 @@ def _add_trading_days(start: date, n: int) -> date:
     return _calendar_add(start, n)
 
 
+def _blocked_health(reason_code: str, detail: str):
+    """构造"评分阻断"结论 —— 取不到连接/检查抛错时的兜底(不含任何异常原文)。"""
+    from src.core.scoring_guard import STATUS_BLOCKED, ScoringHealth
+
+    return ScoringHealth(status=STATUS_BLOCKED, reason_code=reason_code, detail=detail)
+
+
+def _gate_for_session(db):
+    """用**本会话自己的连接/绑定**过只读闸门; 连接/检查失败一律翻成 blocked。
+
+    审计遗留(2026-11-13): 旧实现直接 `check_scoring_health(bind=db.connection(), ...)`,
+    库不可达 / 连接池超时时 `db.connection()` 先抛异常, 异常一路冒到调度方 —— 既没有
+    `scoring_blocked`, 也没有"不评估、不回填"的承诺。这里把"取连接"和"检查"都收进
+    try/except: 任何失败都返回 blocked(只报异常类型, 不带 SQL/绑定参数/原文)。
+    """
+    from src.core.scoring_guard import check_scoring_health
+
+    bind = None
+    getter = getattr(db, "connection", None)
+    if callable(getter):
+        try:
+            bind = getter()
+        except Exception as exc:  # noqa: BLE001 — 不可达: 只报类型, 绝不外抛
+            kind = type(exc).__name__
+            logger.error("预测后验评估取数据库连接失败, 按评分阻断处理: %s", kind)
+            return _blocked_health(
+                "unavailable",
+                f"无法取得数据库连接({kind}) → 不能断言索引在位, 评分阻断",
+            )
+    if bind is None:
+        # 测试/包装会话可能没有 connection(): 退回会话绑定, 绝不退回模块级默认引擎。
+        bind = getattr(db, "bind", None)
+    if bind is None:
+        return _blocked_health(
+            "unavailable", "无法确定本次评估的数据库绑定 → 不能断言索引在位, 评分阻断"
+        )
+    try:
+        return check_scoring_health(bind=bind, allow_repair=False)
+    except Exception as exc:  # noqa: BLE001 — 闸门承诺不抛; 真抛了也按阻断处理
+        kind = type(exc).__name__
+        logger.error("评分闸门检查异常, 按评分阻断处理: %s", kind)
+        return _blocked_health(
+            "check_failed", f"评分可信度检查失败({kind}) → 不能断言索引在位, 评分阻断"
+        )
+
+
+def _blocked_stats(health, *, backlog: int, user_id: str | None) -> dict:
+    """评分阻断的统计骨架: 不评估、不回填、不计分, 数据一行不改。"""
+    note = (
+        "评分阻断: " + health.detail + " —— 本次不评估、不回填、不计分; "
+        "运行期只检查、不做任何 DDL, 数据一行未改"
+    )
+    if backlog < 0:
+        note += "; 连待评估条数都读不到(数据库不可达), total_pending 记为 -1(不是 0)"
+    return {
+        "scoring_blocked": True,
+        "scoring_repaired": list(health.repaired),
+        "scoring_status": health.as_payload(),
+        "total_pending": backlog,
+        "eligible": 0,
+        "evaluated": 0,
+        "skipped_not_due": 0,
+        "skipped_invalid_date": 0,
+        "skipped_no_price": 0,
+        "skipped_unowned_legacy": 0,
+        "skipped_system_bucket": 0,
+        "skipped_ghost_user": 0,
+        "scope": "blocked",
+        "user_scope": str(user_id).strip() if user_id is not None else "all_user_scoped_rows",
+        "note": note,
+    }
+
+
 def evaluate_pending_prediction_outcomes(
     *,
     max_horizon_days: int = 10,
@@ -101,20 +174,35 @@ def evaluate_pending_prediction_outcomes(
     """
     from src.core import context_store as _cs
 
-    db = _cs.SessionLocal()
+    try:
+        db = _cs.SessionLocal()
+    except Exception as exc:  # noqa: BLE001 — 引擎/池不可用: 按阻断返回, 不外抛
+        # 连会话都建不出来 = 数据库不可达: 没有任何证据能断言索引在位 → fail-closed。
+        kind = type(exc).__name__
+        logger.error("预测后验评估无法建立数据库会话, 按评分阻断处理: %s", kind)
+        return _blocked_stats(
+            _blocked_health(
+                "unavailable",
+                f"无法建立数据库会话({kind}) → 不能断言索引在位, 评分阻断",
+            ),
+            backlog=-1,
+            user_id=user_id,
+        )
     try:
         return _evaluate_pending_with_session(
             db, max_horizon_days=max_horizon_days, limit=limit, user_id=user_id
         )
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:  # noqa: BLE001 — 关闭失败不改变已得出的结论
+            pass
 
 
 def _evaluate_pending_with_session(db, *, max_horizon_days: int, limit: int, user_id: str | None) -> dict:
-    from src.core.scoring_guard import check_scoring_health
-
     # 只读检查: 运行期任何情况下都不在这里建/删索引。
-    health = check_scoring_health(bind=db.connection(), allow_repair=False)
+    # 取连接失败 / 检查抛错都在 `_gate_for_session` 内翻成 blocked, 绝不把异常抛给调度方。
+    health = _gate_for_session(db)
     if health.blocked:
         logger.error(
             "预测后验评估被评分闸门阻断(%s): %s", health.reason_code, health.detail
@@ -137,28 +225,7 @@ def _evaluate_pending_with_session(db, *, max_horizon_days: int, limit: int, use
         except Exception as exc:  # noqa: BLE001 — 连读取都失败时如实报 -1, 不假装是 0
             logger.warning("评分阻断下读取待评估条数失败: %s", type(exc).__name__)
             backlog = -1
-        return {
-            "scoring_blocked": True,
-            "scoring_repaired": list(health.repaired),
-            "scoring_status": health.as_payload(),
-            "total_pending": backlog,
-            "eligible": 0,
-            "evaluated": 0,
-            "skipped_not_due": 0,
-            "skipped_invalid_date": 0,
-            "skipped_no_price": 0,
-            "skipped_unowned_legacy": 0,
-            "skipped_system_bucket": 0,
-            "skipped_ghost_user": 0,
-            "scope": "blocked",
-            "user_scope": (
-                str(user_id).strip() if user_id is not None else "all_user_scoped_rows"
-            ),
-            "note": (
-                "评分阻断: " + health.detail + " —— 本次不评估、不回填、不计分; "
-                "运行期只检查、不做任何 DDL, 数据一行未改"
-            ),
-        }
+        return _blocked_stats(health, backlog=backlog, user_id=user_id)
 
     try:
         pending = list_pending_prediction_outcomes(

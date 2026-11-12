@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -18,6 +19,10 @@ from src.db.models import (
 from src.core.json_safe import to_jsonable
 
 logger = logging.getLogger(__name__)
+
+# SQLSTATE 格式白名单(5 位大写字母/数字)。只允许这种**分类码**出现在日志/对外原因里,
+# 数据库异常原文常把 SQL、绑定参数、列值(user_id/用户名/股票代码)带出来。
+_SQLSTATE_RE = re.compile(r"^[0-9A-Z]{5}$")
 
 
 @dataclass(frozen=True)
@@ -71,10 +76,14 @@ def _db_error_kind(exc: BaseException) -> str:
     - other: 其它完整性错误。
 
     PG 优先用 SQLSTATE(psycopg 的 orig.pgcode), 没有时退回匹配错误文本(sqlite)。
+
+    返回值只用于**分类**, 绝不回显原文: 数据库异常文本常带 SQL、绑定参数、列值
+    (user_id / 股票代码 / 用户名), 写进日志或 API reason 就是泄露。
     """
     orig = getattr(exc, "orig", None)
     code = str(getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None) or "").strip()
-    if code:
+    # SQLSTATE 只接受 5 位 [0-9A-Z]; 其它内容(驱动把消息塞进 pgcode 之类)一律丢弃。
+    if code and _SQLSTATE_RE.fullmatch(code):
         return {
             "23505": "unique",
             "23503": "foreign_key",
@@ -175,7 +184,8 @@ def save_stock_context_snapshot(
         db.commit()
         return True
     except Exception as e:
-        logger.warning(f"保存 stock context snapshot 失败: {e}")
+        # 只记异常类型: 数据库异常原文可能带 SQL/绑定参数/列值。
+        logger.warning("保存 stock context snapshot 失败: %s", type(e).__name__)
         db.rollback()
         return False
     finally:
@@ -259,7 +269,7 @@ def save_news_topic_snapshot(
         db.commit()
         return True
     except Exception as e:
-        logger.warning(f"保存 news topic snapshot 失败: {e}")
+        logger.warning("保存 news topic snapshot 失败: %s", type(e).__name__)
         db.rollback()
         return False
     finally:
@@ -306,7 +316,7 @@ def save_agent_context_run(
         db.commit()
         return True
     except Exception as e:
-        logger.warning(f"保存 agent context run 失败: {e}")
+        logger.warning("保存 agent context run 失败: %s", type(e).__name__)
         db.rollback()
         return False
     finally:
@@ -545,7 +555,13 @@ def save_agent_prediction_outcome(
     # 索引缺失/定义错误时并发或重跑会写出第二条计分行(双计分), 因此**拒写**而不是"先写着
     # 看"。这里只读巡检(复用本会话连接, 不再额外 checkout); 运行期禁止 DDL, 修复只由
     # 启动/迁移角色或运维显式执行。
-    db = SessionLocal()
+    try:
+        db = SessionLocal()
+    except Exception as exc:  # noqa: BLE001 — 引擎/池不可用: 按不可用拒写, 不外抛
+        logger.error("预测后验写入无法建立数据库会话: %s", type(exc).__name__)
+        return OutcomeSaveResult(
+            status="db_unavailable", written=False, reason="数据库不可用(无法建立会话)"
+        )
     health = _scoring_gate_for_session(db)
     if health.blocked:
         logger.error(
@@ -686,14 +702,14 @@ def save_agent_prediction_outcome(
         kind = _db_error_kind(e)
         if kind == "foreign_key":
             logger.error(
-                "预测后验写入被外键拒绝(归属用户不存在?): scope=%s user=%r %s/%s/%s h=%s err=%s",
+                "预测后验写入被外键拒绝(归属用户不存在?): scope=%s user=%r %s/%s/%s h=%s kind=%s",
                 scope,
                 uid or None,
                 agent_name,
                 stock_symbol,
                 date_str,
                 horizon,
-                e,
+                kind,
             )
             return OutcomeSaveResult(
                 status="refused_unknown_user",
@@ -701,19 +717,19 @@ def save_agent_prediction_outcome(
                 reason="归属用户不存在(user_id 外键校验失败)",
             )
         if kind != "unique":
+            # 只报分类: 完整性错误原文会带 SQL / 绑定参数(含 user_id、股票代码)。
             logger.error(
-                "预测后验写入违反完整性约束(%s): scope=%s user=%r %s/%s/%s h=%s err=%s",
-                kind,
+                "预测后验写入违反完整性约束: scope=%s user=%r %s/%s/%s h=%s kind=%s",
                 scope,
                 uid or None,
                 agent_name,
                 stock_symbol,
                 date_str,
                 horizon,
-                e,
+                kind,
             )
             return OutcomeSaveResult(
-                status="write_failed", written=False, reason=f"完整性约束({kind}): {e}"
+                status="write_failed", written=False, reason=f"完整性约束({kind})"
             )
         # 唯一键: 重新读一次, 判断"同版本并发"还是"计分行并发"
         try:
@@ -859,7 +875,15 @@ def mark_agent_prediction_outcome(
     """
     own_db = db is None
     if own_db:
-        db = SessionLocal()
+        try:
+            db = SessionLocal()
+        except Exception as exc:  # noqa: BLE001 — 引擎/池不可用: 拒绝回填, 不外抛
+            logger.error(
+                "拒绝回填预测后验(id=%s): 无法建立数据库会话(%s)",
+                record_id,
+                type(exc).__name__,
+            )
+            return False
     try:
         gate = health if health is not None else _scoring_gate_for_session(db)
         if gate.blocked:
@@ -1269,7 +1293,7 @@ def cleanup_context_data(
         db.commit()
         return deleted
     except Exception as e:
-        logger.warning(f"清理 context 数据失败: {e}")
+        logger.warning("清理 context 数据失败: %s", type(e).__name__)
         db.rollback()
         return deleted
     finally:
