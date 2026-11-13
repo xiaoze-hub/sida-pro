@@ -351,7 +351,7 @@ class ContextMaintenanceScheduler:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
-            misfire_grace_time=600,
+            misfire_grace_time=300,
         )
         self.scheduler.add_job(
             self._cleanup_job,
