@@ -1,4 +1,4 @@
-"""B0.4: 因子标定的样本外(OOS)门禁 —— 权重调整必须在 holdout 段仍成立。"""
+"""B0.4: 因子标定的样本外(OOS)门禁 —— 提案必须在 holdout 段仍成立(只读,不改权重)。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def _seed_dates(db, *, reversed_from: int | None = None):
 
 
 def test_oos_gate_allows_consistent_factor():
-    """样本内外一致 → 权重上调, 无 OOS 拒绝。"""
+    """样本内外一致 → 出可执行加权限提案(只读), 无 OOS 拒绝。"""
     from src.core.factor_calibration import calibrate_factor_weights
     from src.web.models import FactorWeight
 
@@ -56,16 +56,20 @@ def test_oos_gate_allows_consistent_factor():
     try:
         _seed_dates(db)
         res = calibrate_factor_weights("CN", min_samples=5, db=db)
-        row = db.query(FactorWeight).filter_by(factor_code="alpha_score", market="CN").first()
-        assert row.weight > 1.0
+        by_code = {p["factor_code"]: p for p in res["proposals"]}
+        alpha = by_code["alpha_score"]
+        assert alpha["status"] == "proposed"
+        assert alpha["proposed_weight"] > 1.0
+        assert abs(float(alpha["ic_holdout"]) - 1.0) < 1e-9
         assert res["skipped_oos"] == 0
-        assert row.meta.get("last_holdout_ic") == 1.0
+        # 只读:提案不落库
+        assert db.query(FactorWeight).count() == 0
     finally:
         db.close()
 
 
 def test_oos_gate_blocks_sign_flip():
-    """样本外段符号翻转 → 本轮不调权, meta 记录 oos_rejected。"""
+    """样本外段符号翻转 → 不出可执行提案、不调权、不写 History。"""
     from src.core.factor_calibration import calibrate_factor_weights
     from src.web.models import FactorWeight, FactorWeightHistory
 
@@ -73,9 +77,10 @@ def test_oos_gate_blocks_sign_flip():
     try:
         _seed_dates(db, reversed_from=5)  # 后 3 个快照日横截面反向
         res = calibrate_factor_weights("CN", min_samples=5, db=db)
+        by_code = {p["factor_code"]: p for p in res["proposals"]}
+        assert by_code["alpha_score"]["status"] == "skipped_oos_sign_flip"
         row = db.query(FactorWeight).filter_by(factor_code="alpha_score", market="CN").first()
-        assert row.weight == 1.0, "OOS 不通过不得调权"
-        assert row.meta.get("oos_rejected") == "sign_flip"
+        assert row is None, "OOS 不通过不得落任何权重行"
         assert res["skipped_oos"] >= 1
         hist = (db.query(FactorWeightHistory)
                 .filter_by(factor_code="alpha_score", market="CN", reason="auto").all())

@@ -13,11 +13,22 @@ from src.core.entry_candidates import evaluate_entry_candidate_outcomes
 from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
 from src.core.strategy_engine import (
     evaluate_strategy_outcomes,
-    rebalance_strategy_weights,
     refresh_strategy_signals,
 )
 
 logger = logging.getLogger(__name__)
+
+#: 自动调权已停用(2026-11-12 独立审计)。
+#: 旧行为: 每 6h 后验评估后内部调用 `rebalance_strategy_weights(actor=None)`,
+#: 不经任何 HTTP 端点、不留认证身份, 直接改写所有用户共用的全局策略权重 ——
+#: 用户要求的「不得静默自动调权」被完全绕过。现在调度器**只**做只读/评估类工作:
+#: 权重变更只能由具备 manage_settings 的人走
+#: `POST /api/recommendations/strategy-weights/rebalance`(审计记服务端身份)。
+STRATEGY_REBALANCE_DISABLED_REASON = (
+    "自动调权已停用: 策略权重只能由具备 manage_settings 的认证用户手动触发 "
+    "POST /api/recommendations/strategy-weights/rebalance(审计记录身份), "
+    "调度器不会自动改写全局权重"
+)
 
 
 class ContextMaintenanceScheduler:
@@ -117,37 +128,40 @@ class ContextMaintenanceScheduler:
                 strategy_stats.get("skipped_not_due", 0),
                 strategy_stats.get("skipped_no_price", 0),
             )
-            rebalance = await asyncio.to_thread(
-                rebalance_strategy_weights,
-                window_days=45,
-                min_samples=8,
-                alpha=0.35,
-                regime="default",
-            )
-            level = logging.INFO if rebalance.get("changed", 0) else logging.DEBUG
-            logger.log(
-                level,
-                "[上下文维护] 策略调权完成: changed=%s checked=%s skipped_low_sample=%s",
-                rebalance.get("changed", 0),
-                rebalance.get("checked", 0),
-                rebalance.get("skipped_low_sample", 0),
-            )
+            # 自动调权已停用: 这里曾经每 6h 以 actor=None 静默改写全局策略权重。
+            # 调度器不再拥有任何写权重的入口(见 STRATEGY_REBALANCE_DISABLED_REASON)。
+            logger.debug("[上下文维护] %s", STRATEGY_REBALANCE_DISABLED_REASON)
 
-            # Phase 4 → 因子自校准闭环:把 IC/IR 接进每因子权重的轻量标定
-            # (calibrate_all_markets 内部按市场算 IC 并据此调权,不再只是记录)。
+            # Phase 4 → 因子标定:只读产出「建议」,调度器绝不自动改写有效权重;
+            # 改权须人工走既有手工 API(manual 审计),本模块无任何写权开关。
             try:
                 from src.core.factor_calibration import calibrate_all_markets
 
                 fcal = await asyncio.to_thread(calibrate_all_markets)
-                changed = sum(r.get("changed", 0) for r in fcal.values())
+                proposed = sum(r.get("proposed", 0) for r in fcal.values())
+                errors = {m: r["error"] for m, r in fcal.items() if r.get("error")}
                 logger.log(
-                    logging.INFO if changed else logging.DEBUG,
-                    "[上下文维护] 因子自校准完成: changed=%s detail=%s",
-                    changed,
-                    {m: r.get("changed", 0) for m, r in fcal.items()},
+                    logging.WARNING if errors else (
+                        logging.INFO if proposed else logging.DEBUG
+                    ),
+                    "[上下文维护] 因子标定建议完成(未写权重): proposed=%s detail=%s errors=%s",
+                    proposed,
+                    {m: r.get("proposed", 0) for m, r in fcal.items()},
+                    errors or None,
+                )
+                # 观测保留在日志里(只读,不落库):每因子 IC 便于事后核查。
+                logger.debug(
+                    "[上下文维护] 因子标定观测(只读): %s",
+                    {
+                        m: {
+                            p.get("factor_code"): p.get("ic")
+                            for p in r.get("proposals", [])
+                        }
+                        for m, r in fcal.items()
+                    },
                 )
             except Exception as fc_err:
-                logger.debug("[上下文维护] 因子自校准跳过: %s", fc_err)
+                logger.warning("[上下文维护] 因子标定建议失败(未写权重): %s", fc_err)
         except Exception as e:
             logger.exception(f"[上下文维护] 后验评估异常: {e}")
         finally:
@@ -189,28 +203,31 @@ class ContextMaintenanceScheduler:
             snapshot_days=60,
             limit=1200,
         )
-        strategy_rebalance_task = asyncio.to_thread(
-            rebalance_strategy_weights,
-            window_days=45,
-            min_samples=8,
-            alpha=0.35,
-            regime="default",
-        )
-        agent_stats, candidate_stats, strategy_eval_stats, strategy_rebalance_stats = await asyncio.gather(
+        agent_stats, candidate_stats, strategy_eval_stats = await asyncio.gather(
             agent_task,
             candidate_task,
             strategy_eval_task,
-            strategy_rebalance_task,
         )
-        # 因子自校准:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather。
+        # 因子标定建议:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather;
+        # 只读 —— 只回建议,不改有效权重。
         from src.core.factor_calibration import calibrate_all_markets
 
         factor_calibration_stats = await asyncio.to_thread(calibrate_all_markets)
+        fcal_errors = {
+            m: r["error"] for m, r in factor_calibration_stats.items() if r.get("error")
+        }
+        if fcal_errors:
+            logger.warning("[上下文维护] 因子标定建议失败(未写权重): %s", fcal_errors)
         return {
             "agent_predictions": agent_stats,
             "entry_candidates": candidate_stats,
             "strategy_outcomes": strategy_eval_stats,
-            "strategy_rebalance": strategy_rebalance_stats,
+            # 保持键位兼容, 但明确告诉调用方: 自动调权已停用, changed 恒 0。
+            "strategy_rebalance": {
+                "disabled": True,
+                "changed": 0,
+                "reason": STRATEGY_REBALANCE_DISABLED_REASON,
+            },
             "factor_calibration": factor_calibration_stats,
         }
 

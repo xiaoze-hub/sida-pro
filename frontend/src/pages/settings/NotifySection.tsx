@@ -115,6 +115,24 @@ export function NotifySection() {
         )}
       </div>
     </div>
+    <div className="mb-3 rounded-md bg-amber-500/5 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
+      <div className="font-medium text-foreground">部署兼容性（自建 Hermes / Bark）</div>
+      <p className="mt-1">
+        目标在本机或内网时默认会被安全策略拦下，需运维在部署环境设置
+        <code className="mx-1 font-mono text-foreground">SIDA_NOTIFY_PRIVATE_HOSTS</code>
+        （只放行指定主机/IP）。写 CIDR 会放行该网段任意地址，任何解析到该网段的域名
+        都会被放行，不限于预期的服务。
+      </p>
+      <p className="mt-1">
+        若部署设置了
+        <code className="mx-1 font-mono text-foreground">HTTPS_PROXY</code>/
+        <code className="mx-1 font-mono text-foreground">ALL_PROXY</code>，https 渠道会明确失败：
+        <span className="text-foreground">本版本不支持经代理固定目标地址</span>，
+        不会静默直连或降级校验；请把目标域名加入
+        <code className="mx-1 font-mono text-foreground">NO_PROXY</code>
+        或改用直连。
+      </p>
+    </div>
     {channels.length === 0 ? (
       <p className="text-[14px] text-muted-foreground text-center py-6">暂无通知渠道，点击"添加"创建</p>
     ) : (

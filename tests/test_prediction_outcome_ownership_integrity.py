@@ -88,13 +88,23 @@ CREATE TABLE agent_prediction_outcomes (
 
 
 def _engine(tmp_path, name: str):
-    for key in _DB_ENV:
-        os.environ.pop(key, None)
+    # The explicit SQLite URL isolates this engine without clearing DATA_DIR
+    # for the rest of the pytest process.
     path = tmp_path / name
     assert not os.path.exists(path), "测试库必须是新建的, 不许复用既有库文件"
     eng = create_engine(f"sqlite:///{path}", future=True)
     assert str(eng.url).startswith("sqlite:///") and str(tmp_path) in str(eng.url)
     return eng
+
+
+def test_engine_preserves_process_data_dir(tmp_path, monkeypatch):
+    data_dir = str(tmp_path / "isolated-data")
+    monkeypatch.setenv("DATA_DIR", data_dir)
+    eng = _engine(tmp_path, "preserve-env.db")
+    try:
+        assert os.environ["DATA_DIR"] == data_dir
+    finally:
+        eng.dispose()
 
 
 def _legacy_baseline(eng, *, dup_rows: int = 2, user_ids: tuple[str, ...] = ("u-a",)) -> None:

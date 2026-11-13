@@ -5,11 +5,17 @@ export interface FactorWeight {
   market: string
   weight: number
   is_pinned: boolean
+  /** 仅决定只读标定是否跳过该因子; 不表示会自动改权重 */
   auto_calibrate: boolean
   last_ic: number | null
   last_ir: number | null
   last_sample_size: number | null
   last_calibrated_at: string | null
+  /** 历史观测时间(meta 记录), 与 last_ic 同一份数据; 不是实时值 */
+  last_observation_at: string | null
+  /** true = 观测已过期(>7 天)或从未记录 —— UI 必须标明, 不能当当前值 */
+  last_observation_stale: boolean
+  observation_note: string
   reason: string
   updated_at: string | null
 }
@@ -21,15 +27,99 @@ export interface FactorWeightUpdatePayload {
 }
 
 export const factorsApi = {
-  /** 因子权重列表(每因子按市场区分,含最近 IC/IR 标定结果)。 */
+  /**
+   * 因子权重列表(每因子按市场区分,含最近 IC/IR 标定结果)。
+   * 库读/补行失败时后端返回 **503 + 安全文案 + 关联号**(不是 200 空列表):
+   * 调用方必须把 rejection 显示成「加载失败」, 不能渲染成「暂无数据」。
+   */
   list: () => fetchAPI<{ items: FactorWeight[] }>('/factors/weights'),
 
-  /** 更新单个因子权重(手动权重 / 锁定 / 自动标定开关)。 */
+  /** 更新单个因子权重(手动权重 / 锁定 / 标定建议开关)。不会自动调权; 需 manage_settings, 否则 403。 */
   update: (factorCode: string, market: string, patch: FactorWeightUpdatePayload) =>
     fetchAPI<FactorWeight>(`/factors/weights/${factorCode}/${market}`, {
       method: 'POST',
       body: JSON.stringify(patch),
     }),
+
+  /**
+   * 实时计算一轮**只读**标定建议。零写入: `changed` 恒 0、`write_back` 恒 false
+   * (界面要显示这两个真实字段, 不要写死)。
+   * 需 `manage_settings`(受限管理员): 每轮都要扫快照, 不对普通成员开放。
+   * 结果按市场+参数在服务端缓存 60s; computed_at 是实际计算时间, cached 标明是否命中缓存。
+   * 并发保护只有**进程内** single-flight; `concurrency.scope` 恒为 process,
+   * 多 worker 部署下每个 worker 可能各有 1 轮(不是全局互斥)。
+   * **计算失败 = 非 2xx(503)** + 安全文案 + 关联号, 不会以 200 + ok=false 返回;
+   * 调用方必须把 rejection 当作失败显示, 不能只看 `ok` 字段。
+   * 节流窗口内同参数重复失败会回同一条 503(同一关联号), 不会被改写成 429。
+   */
+  calibrate: (market = 'CN', days = 90, horizon = 5, minSamples = 20) =>
+    fetchAPI<FactorCalibrationResp>(
+      `/factors/calibration?market=${market}&days=${days}&horizon=${horizon}&min_samples=${minSamples}`,
+    ),
+}
+
+export interface FactorCalibrationProposal {
+  factor_code: string
+  market: string
+  current_weight: number
+  base_weight: number
+  proposed_weight: number | null
+  target: number | null
+  /** proposed / unchanged / skipped_no_data / skipped_low_sample / skipped_ic_unavailable / skipped_oos_* / skipped_pinned / skipped_disabled */
+  status: string
+  ic: number | null
+  ir: number | null
+  ic_holdout: number | null
+  sample_size: number
+}
+
+export interface FactorCalibrationResp {
+  market: string
+  mode: 'readonly'
+  /**
+   * 成功响应里恒为 true。**计算失败不走本结构**: 后端返回 503 + 安全文案
+   * (fetchAPI 会 reject), 所以页面必须处理 rejection —— 不要只靠翻 `ok`。
+   * 字段保留是为了兼容内层/旧缓存结构, 不能当成「失败也 200」的依据。
+   */
+  ok: boolean
+  error?: string
+  /** 本次实际计算时间(缓存命中时仍为首次计算时间) */
+  computed_at: string
+  cached: boolean
+  cache_age_seconds: number
+  cache_ttl_seconds: number
+  checked: number
+  proposed: number
+  /** 本次真正改了多少条生效权重; 只读模式恒为 0 —— UI 必须显示这个字段, 不要硬编码 */
+  changed: number
+  /** true 才会写回生效权重; 只读模式恒为 false */
+  write_back: boolean
+  /**
+   * 这次计算实际受到的并发保护范围。缓存命中时描述的是产生这份结果的那一轮。
+   * 后端已移除跨 worker 租约: `scope` 恒为 process、`cross_worker_exclusive`
+   * 恒为 false —— 只有本进程 single-flight, 多 worker 下每个 worker 可能各有 1 轮。
+   * `cache_scope` 恒为 process(缓存不跨 worker 共享)。
+   */
+  concurrency?: {
+    scope: 'cluster' | 'process'
+    cross_worker_exclusive: boolean
+    cache_scope: 'process'
+    note: string
+  }
+  /** 失败时的关联号(与后端日志 [err:<ref>] 对应); error 文案里已含, 便于报障 */
+  error_ref?: string
+  /** true = 本轮超出墙钟预算被中止(未写入任何数据) */
+  timeout?: boolean
+  /** 库里已有多少权重行; 0 说明这是「无行」而不是「没样本」 */
+  rows_present: number
+  no_rows: boolean
+  skipped_oos: number
+  skipped_low_sample: number
+  skipped_no_data: number
+  skipped_ic_unavailable: number
+  skipped_pinned: number
+  skipped_disabled: number
+  proposals: FactorCalibrationProposal[]
 }
 
 // ── 因子有效性(B9 数据资产 E1, 2026-09-19) ────────────────────────────────

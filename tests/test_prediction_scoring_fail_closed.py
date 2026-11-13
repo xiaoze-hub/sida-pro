@@ -62,8 +62,9 @@ _ALL = (_ACTIVE, _RUN, _SYS_ACTIVE, _SYS_RUN)
 
 
 def _engine(tmp_path, name: str = "guard.db"):
-    for key in _DB_ENV:
-        os.environ.pop(key, None)
+    # This engine uses an explicit temporary SQLite URL; do not mutate process
+    # environment here. Removing DATA_DIR leaks outside this test and sends later
+    # tests' caches into the repository's real data directory.
     path = tmp_path / name
     assert not os.path.exists(path), "测试库必须是新建的, 不许复用既有库文件"
     eng = create_engine(f"sqlite:///{path}", future=True)
@@ -178,6 +179,16 @@ def _save(**over):
     )
     kw.update(over)
     return save_agent_prediction_outcome(**kw)
+
+
+def test_engine_keeps_process_data_directory(tmp_path, monkeypatch):
+    data_dir = str(tmp_path / "persistent-test-data")
+    monkeypatch.setenv("DATA_DIR", data_dir)
+    eng = _engine(tmp_path, "env_guard.db")
+    try:
+        assert os.environ["DATA_DIR"] == data_dir
+    finally:
+        eng.dispose()
 
 
 def _wire(monkeypatch, eng, Session):

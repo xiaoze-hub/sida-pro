@@ -5,6 +5,12 @@
 - 后台线程调用 → 自带 session 生命周期, 不复用请求 session。
 - 无渠道不是错误, 是 push_status='skipped'(站内仍可见), 避免"沉默失败"。
 
+2026-11-12 复审五(泄漏面):
+- 失败**对外**只有「固定类别 + 关联号」(`src/core/notify_errors.py`): 渠道
+  webhook token / 代理账号密码 / provider 回包 / SQL / DSN 一律不进
+  push_status/push_error/push_channels(这三个字段落库并原样回给 API/通知中心)。
+- 读渠道表失败(db_unavailable)写 failed, 不能被说成 skipped/「未配置通知渠道」。
+
 v0.4.36 (P0 派活 1):
 - 落库后通过 WS Hub 实时推送 (push_notification → _after_push_hook → broadcast_notification + incr_unread)
 - 多用户隔离: WS 按 user_id 分发; 未读计数按 user_id 隔离
@@ -18,6 +24,12 @@ import time as _time_module
 
 from src.db.session import SessionLocal
 from src.db.models import Notification, NotifyChannel, User
+from src.core.error_report import log_failure, new_error_ref
+from src.core.notify_errors import (
+    as_failure,
+    failure_text,
+    public_failure_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +38,6 @@ _BACKGROUND_TASKS: set = set()
 
 # 已启用外发渠道时，站内通知同步外发，避免 info 只出现在右上角。
 _PUSH_LEVELS = {"info", "success", "warning", "error"}
-
 
 def _build_notifier(user_id: str | None = None, channel_ids=None):
     """从 DB 启用渠道构建 NotifierManager，并返回不含密钥的渠道快照。
@@ -106,14 +117,53 @@ def _build_notifier_checked(*, user_id: str | None = None, channel_ids=None):
                 if mgr.add_channel(ch.type, ch.config or {}):
                     ok += 1
             except Exception as e:
+                # `push_channels[].error` 会经 API 原样回给浏览器(前端通知中心
+                # 直接渲染)。异常文本里可能就是 webhook key/token → 只写固定
+                # 类别 + 关联号; 明细由 log_failure 用同一个关联号记日志。
+                failure = as_failure(
+                    e, channel_type=str(ch.type or ""), action="渠道初始化"
+                )
                 record["status"] = "failed"
-                record["error"] = str(e)[:400]
-                logger.warning("[通知中心] 渠道 %s 初始化失败: %s", ch.type, e)
+                record["error"] = failure.public_message[:400]
+                # 只落关联号 + 类型 + 帧位置, 渠道类型走白名单(形态不符会被丢弃)。
+                log_failure(
+                    logger,
+                    "通知渠道初始化",
+                    e,
+                    ref=failure.ref,
+                    context={
+                        "channel_type": str(ch.type or ""),
+                        "category": failure.category,
+                    },
+                )
             records.append(record)
         return (mgr if ok else None), records, audit
     except Exception as e:
-        logger.warning("[通知中心] 读取渠道失败: %s", e)
-        return None, [], {"requested": None, "granted": [], "denied": [], "error": str(e)}
+        # 读渠道是 DB 查询: 异常文本自带 SQL/绑定参数/DSN, 不能进日志。
+        # 同时**必须与「未配置渠道」区分**: 这里返回的 failure 会让调用方写
+        # push_status='failed', 而不是 skipped/未配置 —— 库挂了不是没配渠道。
+        failure = as_failure(e, action="通知渠道读取")
+        log_failure(
+            logger,
+            "通知渠道读取",
+            e,
+            ref=failure.ref,
+            context={"via": "notify_center", "category": failure.category},
+        )
+        return (
+            None,
+            [],
+            {
+                "requested": None,
+                "granted": [],
+                "denied": [],
+                # 只公开「可读类别 + 关联号」; 不放异常原文, 也保留 category 供
+                # 调用方/观测区分 db_unavailable 与其它失败。
+                "failure": failure.public_message,
+                "failure_category": failure.category,
+                "failure_ref": failure.ref,
+            },
+        )
     finally:
         db.close()
 
@@ -165,9 +215,20 @@ def push_notification(
         db.refresh(n)
         nid = int(n.id)  # type: ignore[arg-type]
     except Exception as e:
-        logger.exception("[通知中心] 站内写入失败: %s", e)
-        db.rollback()
-        db.close()
+        # 这里是**真实**的站内写入异常(调用方看到的只是 None, 不会收到异常)。
+        # logger.exception 会把 SQLAlchemy 的 SQL 文本 + [parameters: (...)] +
+        # DSN 连同堆栈原样印进日志; 改成白名单口径: 关联号 + 异常类型 + 帧位置。
+        log_failure(
+            logger,
+            "站内通知写入",
+            e,
+            ref=new_error_ref(),
+            context={"category": str(category or "")},
+        )
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 - 回滚失败也不能把通知失败升级成业务异常
+            pass
         return None
     finally:
         try:
@@ -193,8 +254,20 @@ def push_notification(
             _set_push_status(
                 nid,
                 "failed",
-                "; ".join(err for err in init_errors if err)[:400] or "通知渠道初始化失败",
+                "; ".join(err for err in init_errors if err)[:400]
+                or failure_text("config_invalid", action="渠道初始化"),
                 channels=channel_records,
+            )
+        elif channel_audit.get("failure"):
+            # **数据库故障 ≠ 未配置渠道**(2026-11-12 复审五): 渠道表读不出来是
+            # 真实失败(用户以为"没配渠道", 实际是库/权限问题), 必须写 failed,
+            # 不能落 skipped/「未配置通知渠道」把故障藏起来。文案只有固定类别
+            # (数据库不可用) + 关联号, 不含 SQL/DSN/表名。
+            _set_push_status(
+                nid,
+                "failed",
+                str(channel_audit.get("failure"))[:400],
+                channels=[],
             )
         elif channel_ids is not None:
             # 有明确选择集但一条都不可用(空/全被剔除) → 如实记录, 不外发。
@@ -220,19 +293,78 @@ def push_notification(
         final_channels = _finalize_channel_records(channel_records, result)
         final_status, final_error = _push_result_status(result, final_channels)
         _set_push_status(nid, final_status, final_error, channels=final_channels)
-    except RuntimeError:
-        # 已在事件循环里(异步上下文) → 交给调用方的 loop
+    except RuntimeError as e:
+        # `asyncio.run` 在已有事件循环时会抛 RuntimeError —— 这种才转异步;
+        # 协程**内部**抛出的 RuntimeError 不能当"已在循环里", 否则状态永远停在
+        # pending 且外发实际没发(静默失败)。用「当前有没有 running loop」区分。
         try:
             loop = asyncio.get_running_loop()
-            task = loop.create_task(_async_push(nid, mgr, title, body or title, channel_records))
-            _BACKGROUND_TASKS.add(task)
-            task.add_done_callback(_BACKGROUND_TASKS.discard)
-            _set_push_status(nid, "pending", "异步发送中", channels=channel_records)
-        except Exception as e:
-            _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))
+        except RuntimeError:
+            loop = None
+        if loop is None:
+            failure = as_failure(e, action="通知发送")
+            log_failure(
+                logger,
+                "通知外发",
+                e,
+                ref=failure.ref,
+                context={"notify_id": nid, "category": failure.category},
+            )
+            _set_push_status(
+                nid,
+                "failed",
+                failure.public_message[:400],
+                channels=_finalize_channel_records(
+                    channel_records, {"success": False, "error": failure.public_message}
+                ),
+            )
+        else:
+            # 已在事件循环里(异步上下文) → 交给调用方的 loop
+            try:
+                task = loop.create_task(
+                    _async_push(nid, mgr, title, body or title, channel_records)
+                )
+                _BACKGROUND_TASKS.add(task)
+                task.add_done_callback(_BACKGROUND_TASKS.discard)
+                _set_push_status(nid, "pending", "异步发送中", channels=channel_records)
+            except Exception as e2:
+                failure = as_failure(e2, action="通知异步外发登记")
+                log_failure(
+                    logger,
+                    "通知异步外发登记",
+                    e2,
+                    ref=failure.ref,
+                    context={"notify_id": nid, "category": failure.category},
+                )
+                _set_push_status(
+                    nid,
+                    "failed",
+                    failure.public_message[:400],
+                    channels=_finalize_channel_records(
+                        channel_records,
+                        {"success": False, "error": failure.public_message},
+                    ),
+                )
     except Exception as e:
-        logger.warning("[通知中心] 外发失败: %s", e)
-        _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))
+        # 外发异常文本常含渠道 URL/token(webhook、bot token), 不能进日志。
+        # **也不能进 push_status/push_error/push_channels** —— 那是落库并回给
+        # 浏览器/接口的持久化字段, 泄漏面比日志更大。只写固定类别 + 关联号。
+        failure = as_failure(e, action="通知发送")
+        log_failure(
+            logger,
+            "通知外发",
+            e,
+            ref=failure.ref,
+            context={"notify_id": nid, "category": failure.category},
+        )
+        _set_push_status(
+            nid,
+            "failed",
+            failure.public_message[:400],
+            channels=_finalize_channel_records(
+                channel_records, {"success": False, "error": failure.public_message}
+            ),
+        )
     _after_push_hook(
         user_id, category, level, title, body, link, source, trace_id, nid,
         broadcast_all=broadcast_all,
@@ -285,7 +417,12 @@ def _after_push_hook(
         if user_id:
             incr_unread(user_id, 1)
     except Exception as e:
-        logger.debug("[通知中心] WS Hub 钩子失败 (不影响主流程): %s", e)
+        # 这里是有意静默的降级分支: 只留在 debug, 且只记类型 ——
+        # 异常文本里可能有 payload(标题/正文)或连接串。
+        logger.debug(
+            "[通知中心] WS Hub 钩子失败 (不影响主流程): type=%s",
+            type(e).__name__,
+        )
 
 
 async def push_notification_async(title: str, body: str = "", **kw) -> int | None:
@@ -300,11 +437,21 @@ async def _async_push(nid: int | None, mgr, title: str, body: str, channel_recor
         final_status, final_error = _push_result_status(result, final_channels)
         _set_push_status(nid, final_status, final_error, channels=final_channels)
     except Exception as e:
+        failure = as_failure(e, action="通知异步外发")
+        log_failure(
+            logger,
+            "通知异步外发",
+            e,
+            ref=failure.ref,
+            context={"notify_id": nid, "category": failure.category},
+        )
         _set_push_status(
             nid,
             "failed",
-            str(e)[:400],
-            channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}),
+            failure.public_message[:400],
+            channels=_finalize_channel_records(
+                channel_records, {"success": False, "error": failure.public_message}
+            ),
         )
 
 
@@ -327,7 +474,7 @@ def _finalize_channel_records(records: list[dict], result: dict) -> list[dict]:
             "name": str(original.get("name") or original.get("type") or "未命名渠道"),
             "type": str(original.get("type") or ""),
             "status": str(original.get("status") or "pending"),
-            "error": str(original.get("error") or "")[:400],
+            "error": public_failure_text(original.get("error"), action="渠道初始化")[:400],
         }
         if record["status"] == "failed":
             finalized.append(record)
@@ -337,10 +484,12 @@ def _finalize_channel_records(records: list[dict], result: dict) -> list[dict]:
         receipt = queue.pop(0) if queue else apprise_result
         if receipt is not None:
             record["status"] = "sent" if receipt.get("success") else "failed"
-            record["error"] = str(receipt.get("error") or "")[:400]
+            record["error"] = public_failure_text(receipt.get("error"))[:400]
         else:
             record["status"] = "sent" if result.get("success") else "failed"
-            record["error"] = str(result.get("error") or result.get("skipped") or "")[:400]
+            record["error"] = public_failure_text(
+                result.get("error") or result.get("skipped")
+            )[:400]
         finalized.append(record)
     return finalized
 
@@ -350,7 +499,7 @@ def _push_result_status(result: dict, channels: list[dict]) -> tuple[str, str]:
     failed = [item for item in channels if item.get("status") == "failed"]
     if result.get("success") and not failed:
         return "sent", ""
-    error = str(result.get("error") or result.get("skipped") or "")
+    error = public_failure_text(result.get("error") or result.get("skipped"))
     if not error and failed:
         error = "; ".join(str(item.get("error") or f"{item.get('name') or item.get('type')} 发送失败") for item in failed)
     return "failed", error[:400]
@@ -368,7 +517,14 @@ def _set_push_status(nid: int | None, status: str, err: str = "", *, channels: l
             if channels is not None:
                 n.push_channels = channels
             db.commit()
-    except Exception:
+    except Exception as e:
+        log_failure(
+            logger,
+            "通知推送状态回写",
+            e,
+            ref=new_error_ref(),
+            context={"notify_id": nid},
+        )
         db.rollback()
     finally:
         db.close()
@@ -395,7 +551,13 @@ def _resolve_owner_user_id() -> str | None:
         )
         return str(u.id) if u else None
     except Exception as e:
-        logger.warning("[通知中心] 解析 owner 失败: %s", e)
+        log_failure(
+            logger,
+            "解析通知归属owner",
+            e,
+            ref=new_error_ref(),
+            context={"via": "notify_owner_fallback"},
+        )
         return None
     finally:
         db.close()

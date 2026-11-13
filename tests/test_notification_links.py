@@ -76,8 +76,23 @@ def test_channel_receipts_keep_safe_names_and_per_channel_status():
 
     finalized = _finalize_channel_records(records, result)
 
-    assert finalized == [
-        {"id": 1, "name": "手机 PushPlus", "type": "pushplus", "status": "sent", "error": ""},
-        {"id": 2, "name": "交易 Telegram", "type": "telegram", "status": "failed", "error": "Telegram 发送失败"},
+    # 名称与每渠道状态映射不变(前端靠这两项筛"哪个渠道失败")。
+    assert [(i["id"], i["name"], i["type"], i["status"]) for i in finalized] == [
+        (1, "手机 PushPlus", "pushplus", "sent"),
+        (2, "交易 Telegram", "telegram", "failed"),
     ]
-    assert _push_result_status(result, finalized) == ("failed", "Telegram 发送失败")
+    assert finalized[0]["error"] == ""
+    # 失败文案是**落库并对外**的(push_channels → API → 通知中心), 只允许
+    # 「固定类别 + 关联号」; 上游回执里的任意文本(可能带 token/URL)不转发。
+    assert "失败（内部错误）" in finalized[1]["error"]
+    assert "参考号: ERR-" in finalized[1]["error"]
+    assert "Telegram 发送失败" not in finalized[1]["error"]
+    assert "secret-receipt" not in str(finalized)
+
+    status, err = _push_result_status(result, finalized)
+    assert status == "failed"
+    assert "参考号: ERR-" in err and "Telegram 发送失败" not in err
+
+    # 本仓库自己生成的文案原样保留(不重复包一层)。
+    safe = "通知发送失败（网络连接失败）；参考号: ERR-ABCD1234"
+    assert _push_result_status({"success": False, "error": safe}, []) == ("failed", safe)

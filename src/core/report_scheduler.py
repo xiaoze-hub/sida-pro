@@ -13,6 +13,8 @@ import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from src.core.error_report import log_failure, new_error_ref
+
 logger = logging.getLogger(__name__)
 
 # 默认触发时刻(本地时区)
@@ -58,7 +60,15 @@ def _push_report_notification(
             user_id=user_id,
         )
     except Exception as e:  # noqa: BLE001
-        logger.error("[报告] %s 推送通知异常(未假装成功): %s", report_type, e)
+        # 推送链路的异常文本可能带渠道 URL/token 或 DB 的 SQL/DSN:
+        # 只落关联号 + 类型 + 帧位置(白名单), 不打印原文。
+        log_failure(
+            logger,
+            f"报告推送通知({report_type})",
+            e,
+            ref=new_error_ref(),
+            context={"endpoint": "report_scheduler", "category": report_type},
+        )
         return False
     if nid is None:
         # push_notification 返回 None = 站内落库失败 → 未外发, 不假装

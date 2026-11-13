@@ -17,6 +17,20 @@ def _mem_db():
     return sessionmaker(bind=engine)()
 
 
+def _fake_request():
+    """真实 Starlette Request 壳(带 loopback peer), 供直调端点时取审计 IP。"""
+    from starlette.requests import Request
+
+    return Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+
+
+def _actor():
+    """直接调 handler 时用的服务端身份(HTTP 层由 require_settings_write 提供)。"""
+    from src.web.api.settings import SettingsActor
+
+    return SettingsActor(id="u-test", username="unit-owner", role="owner")
+
+
 def test_list_weights_returns_all_market_factor_pairs():
     """GET 列表返回 5 因子 × 3 市场。"""
     from src.web.api import factors
@@ -37,7 +51,9 @@ def test_update_weight_pins_and_sets_value():
     db = _mem_db()
     try:
         payload = factors.FactorWeightUpdate(weight=1.25, is_pinned=True)
-        res = factors.update_weight("alpha_score", "CN", payload, db=db)
+        res = factors.update_weight(
+            "alpha_score", "CN", payload, request=_fake_request(), db=db, actor=_actor()
+        )
         assert res["weight"] == 1.25
         assert res["is_pinned"] is True
     finally:
@@ -52,7 +68,10 @@ def test_update_weight_unknown_factor_returns_400():
     try:
         payload = factors.FactorWeightUpdate(weight=1.1)
         with pytest.raises(HTTPException) as ei:
-            factors.update_weight("bad_factor", "CN", payload, db=db)
+            factors.update_weight(
+                "bad_factor", "CN", payload, request=_fake_request(), db=db,
+                actor=_actor(),
+            )
         assert ei.value.status_code == 400
     finally:
         db.close()
@@ -65,3 +84,30 @@ def test_factors_router_mounted():
     paths = set(app.openapi().get("paths", {}).keys())
     assert "/api/factors/weights" in paths
     assert "/api/factors/weights/{factor_code}/{market}" in paths
+    # 2026-11-12: 未经审查的提案刷新/落地写入端点已撤除,不得再挂载。
+    assert not [p for p in paths if "/api/factors/proposals" in p]
+
+
+def test_no_proposal_write_handlers_exposed():
+    """模块层也不留提案刷新/落地处理器(避免被重新挂载)。"""
+    from src.web.api import factors
+
+    assert not hasattr(factors, "refresh_proposals")
+    assert not hasattr(factors, "apply_proposal")
+    assert not hasattr(factors, "ProposalApply")
+
+
+def test_list_weights_keeps_legacy_observation_fields():
+    """兼容:列表仍给出最近 IC/IR 观测字段(只读;不再有提案写入槽位)。"""
+    from src.web.api import factors
+
+    db = _mem_db()
+    try:
+        res = factors.list_weights(db=db)
+        item = res["items"][0]
+        for field in ("last_ic", "last_ir", "last_sample_size", "last_calibrated_at"):
+            assert field in item
+        assert "pending_proposal" not in item
+        assert "applied_proposal" not in item
+    finally:
+        db.close()

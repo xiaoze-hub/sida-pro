@@ -125,6 +125,17 @@ def setup_logging():
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     install_log_record_factory()
+    # 第三方库(apprise/httpx/urllib3)的日志正文里有渠道令牌与完整 URL → 在 LogRecord
+    # 层整体替换成「级别 + 类别 + 关联号」, **不靠级别过滤**(级别过滤会漏 WARNING+,
+    # 也会在第三方升版后静默失效)。见 src/core/third_party_log_guard.py。
+    try:
+        from src.core.third_party_log_guard import install_third_party_log_guard
+
+        install_third_party_log_guard()
+    except Exception as e:  # noqa: BLE001 — 装不上只影响脱敏, 不能阻止启动
+        logging.getLogger(__name__).warning(
+            "第三方日志脱敏安装失败(日志正文可能含渠道凭据): type=%s", type(e).__name__
+        )
 
     # reload/server restart 时避免重复 handler 导致日志放大。
     for h in list(root.handlers):
