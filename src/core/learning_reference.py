@@ -920,7 +920,11 @@ def reconcile_system_outcomes(
                         "data_date": target_day.isoformat(),
                         "prediction_date": pred_day.isoformat(),
                         "horizon_days": horizon,
-                        "base_price_date": pred_day.isoformat(),
+                        "base_price_date": (
+                            pred_day.isoformat()
+                            if base_source == "exact_close_on_prediction_date"
+                            else None
+                        ),
                         "base_price_source": base_source,
                         "quote_source": "kline_daily_close",
                         "collected_at": datetime.now(timezone.utc).isoformat(

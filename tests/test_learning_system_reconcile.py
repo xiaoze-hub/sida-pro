@@ -211,7 +211,7 @@ def test_system_pending_to_persisted_evaluated_end_to_end(tmp_path, monkeypatch)
     s.close()
 
     sys_ids = [
-        _seed_system(cs, Session, agent="premarket", symbol="300750", pred_day=pred),
+        _seed_system(cs, Session, agent="premarket", symbol="300750", pred_day=pred, trigger_price=100.0),
         _seed_system(cs, Session, agent="premarket", symbol="300751", pred_day=pred),
         _seed_system(cs, Session, agent="intraday", symbol="300752", pred_day=pred),
     ]
@@ -252,6 +252,12 @@ def test_system_pending_to_persisted_evaluated_end_to_end(tmp_path, monkeypatch)
         audit = (x.meta or {}).get("reconcile")
         assert audit, "system 结果缺少 meta.reconcile 审计字段"
         assert audit["data_date"] == target.isoformat()
+        if x.stock_symbol == "300750":
+            assert audit["base_price_source"] == "trigger_price"
+            assert audit["base_price_date"] is None
+        else:
+            assert audit["base_price_source"] == "exact_close_on_prediction_date"
+            assert audit["base_price_date"] == pred.isoformat()
         assert audit["version"] == lr.SYSTEM_RECONCILE_VERSION
         assert audit["dedupe_rule"]
         assert audit["collected_at"]
