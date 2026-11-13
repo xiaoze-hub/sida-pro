@@ -159,7 +159,8 @@ def evaluate_pending_prediction_outcomes(
     - 历史行(user_id/owner_scope 均为 NULL): 不评估(改不了"属于谁"), 但如实报出被排除量;
     - ghost 行(user_id 指向已不存在的用户): 同样不评估 —— 那等于给一个不存在的账号计分;
       条数在 `skipped_ghost_user` 里如实报出(不清理、不改写);
-    - system 桶: 独立统计口径, 这里不评估, 单独报数(绝不并入任何个人成绩);
+    - system 桶: 独立统计口径, **个人评估路径**不评估它(绝不并入任何个人成绩);
+      成熟结果由独立 `reconcile_system_outcomes` 在 system 桶内持久对账, 单独报数;
     - superseded 审计版本: 不是计分行, 不会出现在待评估列表里(存储层已排除);
     - `user_id` 可选: 只评估该用户的行(供按用户范围触发的维护调用)。
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.db.session import SessionLocal
@@ -953,6 +954,91 @@ def mark_agent_prediction_outcome(
     finally:
         if own_db:
             db.close()
+
+
+def mark_system_prediction_outcome(
+    *,
+    record_id: int,
+    outcome_price: float,
+    outcome_return_pct: float,
+    audit_meta: dict,
+    expected_run_trace_id: str | None = None,
+    db=None,
+    health=None,
+) -> bool:
+    """回填 **system 桶**的成熟对账结果 —— 与个人/历史行硬隔离, 条件更新保证幂等。
+
+    为什么单独一条函数(2026-11-13):
+      * `mark_agent_prediction_outcome` 对 `user_id IS NULL` 一律拒绝 —— 这是个人成绩的
+        正确闸门, 但 system 桶的 user_id **恒为 NULL**, 于是 system 行永远无法持久化,
+        页面只能永远显示 pending。这里补的是\"system 桶自己的回填入口\", 不是放宽那条
+        个人闸门: 本函数在 SQL 的 WHERE 里同时要求
+        `user_id IS NULL AND owner_scope='system' AND outcome_status='pending'`,
+        个人行、注销留档(detached)、历史无归属(双 NULL)都不可能被它命中。
+
+    幂等/并发:
+      * 条件更新(`outcome_status='pending'`)只允许 pending → evaluated 一次; 两个进程
+        同时读到同一 pending 行时, 只有一个 `rowcount == 1`, 另一个返回 False(已被别人写完),
+        不会二次计分、不会覆盖已写结果;
+      * 调用方必须传入从待处理行读到的 `expected_run_trace_id`(有值时), 版本被替换过的
+        行不会被旧批次误写。
+
+    事务:
+      * 本函数**不 commit / 不 rollback** —— 由调用方把整批写入放进一个事务, 失败时统一
+        rollback, 避免\"评估了一半\"的假账。数据库异常原样抛出给调用方处理。
+      * `health` 可选: 调用方传入批次边界只查一次的评分闸门结论; 不传则现查。闸门阻断
+        时拒绝写入(唯一索引不可信时, 无法证明这一行仍是唯一计分行)。
+    """
+    if db is None:
+        raise ValueError("mark_system_prediction_outcome 需要调用方传入会话(批量事务由调用方收口)")
+
+    gate = health if health is not None else _scoring_gate_for_session(db)
+    if gate.blocked:
+        logger.error(
+            "拒绝回填 system 后验(id=%s): 评分阻断(%s) —— %s",
+            record_id,
+            gate.reason_code,
+            gate.detail,
+        )
+        return False
+
+    rid = int(record_id)
+    try:
+        price = float(outcome_price)
+        ret = float(outcome_return_pct)
+    except Exception:  # noqa: BLE001 — 坏数值不写入, 由调用方记为 unknown
+        logger.error("拒绝回填 system 后验(id=%s): 非数值结果", record_id)
+        return False
+    if price <= 0 or not math.isfinite(price):
+        logger.error("拒绝回填 system 后验(id=%s): 成交价非法", record_id)
+        return False
+    if not math.isfinite(ret):
+        logger.error("拒绝回填 system 后验(id=%s): 收益率非法", record_id)
+        return False
+
+    stmt = (
+        update(AgentPredictionOutcome)
+        .where(
+            AgentPredictionOutcome.id == rid,
+            # 硬隔离: 只允许 system 桶的 pending 计分行被写
+            AgentPredictionOutcome.user_id.is_(None),
+            AgentPredictionOutcome.owner_scope == SCOPE_SYSTEM,
+            AgentPredictionOutcome.outcome_status == "pending",
+        )
+        .values(
+            outcome_price=price,
+            outcome_return_pct=ret,
+            outcome_status="evaluated",
+            evaluated_at=datetime.now(),
+            meta=dict(audit_meta or {}),
+        )
+    )
+    trace = str(expected_run_trace_id).strip() if expected_run_trace_id else ""
+    if trace:
+        stmt = stmt.where(AgentPredictionOutcome.run_trace_id == trace)
+
+    result = db.execute(stmt)
+    return int(result.rowcount or 0) == 1
 
 
 def list_pending_prediction_outcomes(

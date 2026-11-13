@@ -5,7 +5,7 @@
 //   1. 旧数据只以**全局聚合**出现(无个股/明细/用户标识), 且明确"非个人成绩";
 //   2. 真实分母与重复键风险必须显示, 样本不足不参评;
 //   3. 评分阻断/请求失败时显式说明, 不编造任何百分比。
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   fail: null as string | null,
   legacy: null as unknown,
   system: null as unknown,
+  run: null as unknown,
+  posts: 0,
 }))
 
 vi.mock('@sida/api', async (importOriginal) => {
@@ -23,6 +25,10 @@ vi.mock('@sida/api', async (importOriginal) => {
       if (api.fail && path.startsWith('/learning/reference')) {
         return Promise.reject(new Error(api.fail))
       }
+      if (path.startsWith('/learning/reference/system/reconcile/run')) {
+        api.posts += 1
+        return Promise.resolve(api.run)
+      }
       if (path === '/learning/reference/legacy') return Promise.resolve(api.legacy)
       if (path === '/learning/reference/system') return Promise.resolve(api.system)
       return Promise.resolve({})
@@ -32,19 +38,21 @@ vi.mock('@sida/api', async (importOriginal) => {
 
 import { LearningReferenceSection } from '@/components/profile/LearningReferenceSection'
 
-function mount() {
+function mount(opts?: { isOwner?: boolean }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
   return render(
     <QueryClientProvider client={client}>
-      <LearningReferenceSection />
+      <LearningReferenceSection isOwner={opts?.isOwner ?? false} />
     </QueryClientProvider>,
   )
 }
 
 beforeEach(() => {
   api.fail = null
+  api.posts = 0
+  api.run = null
   api.legacy = {
     scope: 'legacy_unowned',
     labels: ['历史无归属', '未验证', '仅经验参考', '非个人成绩'],
@@ -76,6 +84,14 @@ beforeEach(() => {
     duplicate_risk: { key_groups_with_duplicates: 0, rows_in_duplicate_groups: 0 },
     overall: { hit_count: 6, total: 10, raw_total: 10, hit_rate: 60.0, basis: 'deduped_first_row_per_key' },
     agents: [{ agent: 'premarket_outlook', hit: 6, total: 10, hit_rate: 60.0, avg_return_pct: 0.3, qualified: true }],
+    automation: {
+      enabled: true,
+      running: true,
+      cron: '40 15 * * mon-fri',
+      timezone: 'Asia/Shanghai',
+      next_run_at: '2026-11-16T15:40:00+08:00',
+      note: '每交易日收盘后自动对账, 只写 system 行',
+    },
     note: 'system 桶(无会话系统调度运行): 与个人成绩独立',
   }
 })
@@ -126,6 +142,68 @@ describe('历史经验参考 / system 桶独立口径', () => {
     expect(block.getByText(/不并入任何账号/)).toBeTruthy()
     expect((await block.findByTestId('reference-agent-row-premarket_outlook')).textContent).toContain('60%')
     expect((await block.findByTestId('profile-system-reference-sample')).textContent).toContain('待评估')
+  })
+
+  it('自动调度状态上屏: 已注册/时区/下次执行', async () => {
+    mount()
+    const automation = await screen.findByTestId('profile-system-automation')
+    await waitFor(() => {
+      const text = automation.textContent || ''
+      expect(text).toContain('已注册')
+      expect(text).toContain('调度器运行中')
+      expect(text).toContain('Asia/Shanghai')
+      expect(text).toContain('2026-11-16T15:40:00+08:00')
+    })
+  })
+
+  it('管理员可手动触发持久对账: 展示真实计数/截断/未知/审计字段', async () => {
+    api.run = {
+      evaluated: 2,
+      writes: 2,
+      total_pending: 5,
+      batch_size: 2,
+      limit: 50,
+      has_more: true,
+      truncated: true,
+      skipped_no_quote: 1,
+      skipped_no_base_price: 0,
+      kline_error_rows: 1,
+      fetch_timeout_rows: 1,
+      skipped_not_mature: 1,
+      skipped_not_due: 0,
+      skipped_concurrent: 1,
+      data_date_min: '2026-11-10',
+      data_date_max: '2026-11-12',
+      version: 'system-reconcile/2026-11-13.1',
+      collected_at: '2026-11-13T08:00:00+00:00',
+      db_committed: true,
+      write_failed: false,
+      note: '已持久回填 2 条 system 成熟结果',
+    }
+    mount({ isOwner: true })
+    const btn = await screen.findByTestId('profile-system-reconcile-button')
+    fireEvent.click(btn)
+    const result = await screen.findByTestId('profile-system-reconcile-result')
+    const text = result.textContent || ''
+    expect(api.posts).toBe(1)
+    expect(text).toContain('已持久化 2 条')
+    expect(text).toContain('候选总数 5 条')
+    expect(text).toContain('本批 2/50 条')
+    expect(text).toContain('已截断')
+    expect(text).toContain('未知单列')
+    expect(text).toContain('无当日行情 1')
+    expect(text).toContain('行情故障 1')
+    expect(text).toContain('数据日 2026-11-10 ~ 2026-11-12')
+    expect(text).toContain('system-reconcile/2026-11-13.1')
+    expect(text).toContain('已提交')
+    expect(text).not.toContain('个股')
+  })
+
+  it('普通成员只能看到"仅管理员可手动触发", 不渲染按钮', async () => {
+    mount()
+    const ownerOnly = await screen.findByTestId('profile-system-reconcile-owner-only')
+    expect(ownerOnly.textContent).toContain('仅管理员')
+    expect(screen.queryByTestId('profile-system-reconcile-button')).toBeNull()
   })
 
   it('评分阻断: 不显示任何数字/百分比, 只说明原因', async () => {

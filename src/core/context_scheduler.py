@@ -1,4 +1,4 @@
-"""上下文维护调度器：后验评估 + 过期数据清理 + 机会自动刷新。"""
+"""上下文维护调度器：后验评估 + system 成熟对账 + 过期数据清理 + 机会自动刷新。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.collectors.kline_collector import kline_source
 from src.core.context_store import cleanup_context_data
 from src.core.entry_candidates import evaluate_entry_candidate_outcomes
+from src.core.learning_reference import (
+    SYSTEM_RECONCILE_JOB_ID,
+    reconcile_system_outcomes,
+)
 from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
 from src.core.strategy_engine import (
     evaluate_strategy_outcomes,
@@ -46,6 +50,7 @@ class ContextMaintenanceScheduler:
         self._evaluating = False
         self._cleaning = False
         self._refreshing = False
+        self._system_reconciling = False
 
     async def _evaluate_job(self):
         if self._evaluating:
@@ -166,6 +171,48 @@ class ContextMaintenanceScheduler:
             logger.exception(f"[上下文维护] 后验评估异常: {e}")
         finally:
             self._evaluating = False
+
+    async def _system_reconcile_job(self):
+        """收盘后自动对账 system 桶成熟结果(只写 system 行, 不调权/不下单)。"""
+        if self._system_reconciling:
+            logger.debug("[上下文维护] 上一轮 system 对账仍在执行，跳过本轮")
+            return
+        self._system_reconciling = True
+        try:
+            with kline_source("system_outcome_reconcile"):
+                stats = await asyncio.to_thread(
+                    reconcile_system_outcomes, trigger="scheduler"
+                )
+            level = logging.WARNING if stats.get("write_failed") else (
+                logging.INFO if stats.get("evaluated") else logging.DEBUG
+            )
+            logger.log(
+                level,
+                "[上下文维护] system 成熟对账完成: total_pending=%s batch=%s "
+                "evaluated=%s unknown(no_quote=%s no_base=%s kline_error=%s) "
+                "skipped_concurrent=%s writes=%s committed=%s %s",
+                stats.get("total_pending"),
+                stats.get("batch_size"),
+                stats.get("evaluated"),
+                stats.get("skipped_no_quote"),
+                stats.get("skipped_no_base_price"),
+                stats.get("kline_error_rows"),
+                stats.get("skipped_concurrent"),
+                stats.get("writes"),
+                stats.get("db_committed"),
+                stats.get("note"),
+            )
+        except Exception as e:  # noqa: BLE001 — 定时任务失败不拖垮其它维护任务
+            logger.exception(f"[上下文维护] system 成熟对账异常: {e}")
+        finally:
+            self._system_reconciling = False
+
+    async def system_reconcile_once(self) -> dict:
+        """手动/测试触发一次持久对账(只写 system 行)。"""
+        with kline_source("system_outcome_reconcile"):
+            return await asyncio.to_thread(
+                reconcile_system_outcomes, trigger="scheduler_manual"
+            )
 
     async def _cleanup_job(self):
         if self._cleaning:
@@ -293,6 +340,20 @@ class ContextMaintenanceScheduler:
             misfire_grace_time=300,
         )
         self.scheduler.add_job(
+            self._system_reconcile_job,
+            "cron",
+            day_of_week="mon-fri",
+            hour=15,
+            minute=40,
+            timezone="Asia/Shanghai",
+            jitter=60,
+            id=SYSTEM_RECONCILE_JOB_ID,
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=600,
+        )
+        self.scheduler.add_job(
             self._cleanup_job,
             "cron",
             hour=4,
@@ -328,7 +389,8 @@ class ContextMaintenanceScheduler:
         except Exception:
             pass
         logger.info(
-            "上下文维护调度器已启动（后验评估间隔 %sh，快照保留 %s 天，后验保留 %s 天，机会自动刷新 01:15/05:30/14:00 UTC）",
+            "上下文维护调度器已启动（后验评估间隔 %sh，快照保留 %s 天，后验保留 %s 天，"
+            "机会自动刷新 01:15/05:30/14:00 UTC，system 成熟对账每工作日 15:40 应用时区）",
             self.eval_interval_hours,
             self.snapshot_retention_days,
             self.outcome_retention_days,

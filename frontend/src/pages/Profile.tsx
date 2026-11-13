@@ -523,8 +523,9 @@ export function Profile() {
           </div>
 
           {/* 历史无归属经验参考 / system 桶独立口径(2026-11-13): 只展示全局聚合,
-              明确"非个人成绩"; 不渲染个股/明细, 不训练、不调权。 */}
-          <LearningReferenceSection />
+              明确"非个人成绩"; 不渲染个股/明细, 不训练、不调权。system 成熟结果由
+              调度器/管理员持久对账(只写 system 行, 不下单), 页面只展示聚合与对账状态。 */}
+          <LearningReferenceSection isOwner={profile?.role === 'owner'} />
         </section>
 
         </SectionPanel>

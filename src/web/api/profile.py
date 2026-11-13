@@ -228,14 +228,13 @@ def _system_evaluated_count(db: Session, since: str = "") -> int:
 
 
 def _system_pending_count(db: Session) -> int:
-    """system 桶里还没评估的行数 —— 它不是"欠评估", 是**设计上不评估**的留档。
+    """system 桶里还没评估的行数 —— 由**独立**的 system 成熟对账处理。
 
-    system 桶的定位(2026-11-12 三次修正, 明确写在这里免得被当成 bug): 只作
-    "系统调度跑过一次预测"的审计留档 —— 没有个人归属, 谁为它负责都证明不了, 所以
-    **不评估、不计入任何命中率**(评估它只会把无主结论混进成绩)。它也不会无限增长:
-    超过后验保留期后由 `cleanup_context_data` 按保留期删除。
-    明确**不做**的事: 不据此自动交易、不把 system 结论包装成"平台成绩"。
-    """
+    定位(2026-11-13 更新): system 桶仍不进入任何人的个人命中率, 也不由个人评估路径
+    回填(无个人归属); 但成熟行会由 `reconcile_system_outcomes`(调度器每工作日收盘后 /
+    管理员手动)按真实交易日历与当日收盘价**持久对账**, 结果写回同一 system 行并带
+    数据日期/规则版本/采集时间。对账只做聚合参考, 不据此自动交易、不包装成"平台成绩"。
+    超过后验保留期后仍由 `cleanup_context_data` 按保留期删除。"""
     q = db.query(func.count(AgentPredictionOutcome.id)).filter(
         AgentPredictionOutcome.user_id.is_(None),
         AgentPredictionOutcome.owner_scope == "system",
@@ -470,8 +469,9 @@ def _accuracy_board(db: Session, since: str = "", min_n: int = 1, *, user_id: st
         )
     if system_pending:
         note += (
-            f"; 其中 {system_pending} 条尚未评估 —— system 桶按设计不评估(无个人归属, "
-            "不据此自动交易), 只作审计留档, 超保留期后由维护清理"
+            f"; 其中 {system_pending} 条尚未成熟/未对账 —— 由独立 system 对账在交易日收盘后 "
+            "处理(个人路径不评估, 无个人归属, 不并入本账号, 不据此自动交易); "
+            "无当日行情/停牌/超时保持 pending"
         )
     return {
         "since": since or None,

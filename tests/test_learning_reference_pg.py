@@ -230,8 +230,11 @@ def test_system_reconcile_preview_is_zero_write_on_real_pg(pg_env):
     s.commit()
 
     def _fetch(symbol, market):
+        from src.core.trading_calendar import add_trading_days
+
+        target = add_trading_days(date.fromisoformat(day), 1)
         return [SimpleNamespace(date=day, close=10.0),
-                SimpleNamespace(date=_today_minus(1), close=11.0)]
+                SimpleNamespace(date=target.isoformat(), close=11.0)]
 
     before = s.execute(text(
         "SELECT count(*), count(outcome_price) FROM agent_prediction_outcomes"
@@ -249,4 +252,62 @@ def test_system_reconcile_preview_is_zero_write_on_real_pg(pg_env):
     assert s.execute(text(
         "SELECT count(*) FROM agent_prediction_outcomes WHERE outcome_status <> 'pending'"
     )).scalar() == 0
+    s.close()
+
+
+def test_system_persistent_reconcile_is_isolated_and_idempotent_on_real_pg(pg_env):
+    """真 PG: system pending -> 持久 evaluated; 个人/历史一行不动; 重跑幂等。"""
+    from src.core.learning_reference import (
+        SYSTEM_RECONCILE_VERSION,
+        reconcile_system_outcomes,
+    )
+    from src.web.models import AgentPredictionOutcome
+
+    s = _session(pg_env)
+    pred = _today_minus(20)
+    target = date.fromisoformat(pred)
+    from src.core.trading_calendar import add_trading_days
+
+    target = add_trading_days(target, 1)
+    _seed_user(s, "u-a")
+    _seed(s, uid=None, agent="sys", action="buy", ret=None, day=pred,
+          symbol="300750", owner_scope="system", status="pending")
+    _seed(s, uid="u-a", agent="a", action="buy", ret=None, day=pred,
+          symbol="600519", owner_scope="user", status="pending")
+    _seed(s, uid=None, agent="legacy", action="buy", ret=None, day=pred,
+          symbol="688981", owner_scope=None, status="pending")
+    s.commit()
+
+    def _fetch(symbol, market):
+        return [SimpleNamespace(date=pred, close=10.0),
+                SimpleNamespace(date=target.isoformat(), close=11.0)]
+
+    result = reconcile_system_outcomes(s, kline_fetcher=_fetch)
+    assert result["executed"] is True and result["db_committed"] is True
+    assert result["writes"] == 1 and result["evaluated"] == 1
+    assert result["total_pending"] == 1 and result["batch_size"] == 1
+    assert result["orders_placed"] == 0 and result["weights_changed"] is False
+
+    sys_row = s.query(AgentPredictionOutcome).filter(
+        AgentPredictionOutcome.owner_scope == "system").one()
+    assert sys_row.outcome_status == "evaluated"
+    assert round(sys_row.outcome_return_pct, 4) == 10.0
+    audit = (sys_row.meta or {}).get("reconcile") or {}
+    assert audit.get("version") == SYSTEM_RECONCILE_VERSION
+    assert audit.get("data_date") == target.isoformat()
+    assert audit.get("collected_at") and audit.get("dedupe_rule")
+
+    # 个人行 / 历史行: 仍是 pending, 没有被 system 对账写入
+    for row in s.query(AgentPredictionOutcome).filter(
+        AgentPredictionOutcome.owner_scope.in_([None, "user"])
+    ).all():
+        assert row.outcome_status == "pending"
+        assert row.outcome_price is None
+
+    evaluated_at = sys_row.evaluated_at
+    result2 = reconcile_system_outcomes(s, kline_fetcher=_fetch)
+    assert result2["evaluated"] == 0 and result2["writes"] == 0
+    s.refresh(sys_row)
+    assert sys_row.outcome_status == "evaluated"
+    assert sys_row.evaluated_at == evaluated_at
     s.close()

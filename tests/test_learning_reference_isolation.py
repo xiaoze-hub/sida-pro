@@ -304,6 +304,9 @@ def test_system_summary_is_independent_and_never_merged(monkeypatch):
     assert body["sample"]["evaluated_rows"] == 2
     assert body["sample"]["directional_sample"] == 2
     assert body["sample"]["pending_rows"] == 1
+    assert body["sample"]["unknown_status_rows"] == 0
+    assert body["unknown"]["pending_rows"] == 1
+    assert body["unknown"]["status_rows"] == 0
     assert body["overall"]["total"] == 2
     # buy 跌 -4% = 未命中; sell 跌 -1% = 命中(方向性口径)
     assert body["overall"]["hit_count"] == 1
@@ -336,11 +339,14 @@ def test_reconcile_preview_is_read_only_and_never_touches_personal(monkeypatch):
     def _boom(**kwargs):
         raise AssertionError("只读对账不得调用任何写入函数")
 
+    from src.core.prediction_outcome import _add_trading_days
+
+    target_day = _add_trading_days(date.fromisoformat(day), 1)
     monkeypatch.setattr(cs, "mark_agent_prediction_outcome", _boom)
     monkeypatch.setattr(cs, "save_agent_prediction_outcome", _boom)
     monkeypatch.setattr(lr, "_default_kline_fetcher", _fake_fetcher({
         SYMBOL_SYS: [SimpleNamespace(date=day, close=10.0),
-                     SimpleNamespace(date=_days_ago(1), close=11.0)],
+                     SimpleNamespace(date=target_day.isoformat(), close=11.0)],
     }))
 
     r = c.post("/lr/system/reconcile", params={"max_horizon_days": 10, "limit": 50})
@@ -349,6 +355,7 @@ def test_reconcile_preview_is_read_only_and_never_touches_personal(monkeypatch):
     assert body["dry_run"] is True and body["read_only"] is True
     assert body["writes"] == 0 and body["executed"] is False
     assert body["total_pending"] == 1, "对账只能看到 system 桶, 绝不能把个人 pending 行算进来"
+    assert body["batch_size"] == 1 and body["has_more"] is False and body["truncated"] is False
     assert body["would_evaluate"] == 1
     assert body["weights_changed"] is False
     assert body["auto_weighting"] is False
@@ -379,8 +386,13 @@ def test_reconcile_preview_skips_future_and_survives_provider_failure(monkeypatc
     monkeypatch.setattr(lr, "_default_kline_fetcher", _fake_fetcher({}))
     body = c.post("/lr/system/reconcile", params={"max_horizon_days": 10, "limit": 50}).json()
     assert body["writes"] == 0
-    assert body["skipped_not_due"] == 1
-    assert body["skipped_no_price"] == 1
+    assert body["total_pending"] == 1
+    assert body["all_pending_rows"] == 2
+    assert body["future_prediction_pending_rows"] == 1
+    assert body["batch_size"] == 1
+    assert body["skipped_not_due"] == 0
+    assert body["skipped_no_price"] == 0
+    assert body["skipped_no_quote"] == 0
     assert body["kline_error_rows"] == 1
     assert body["would_evaluate"] == 0
 
