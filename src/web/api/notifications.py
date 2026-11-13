@@ -6,6 +6,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.core.notify_center import push_notification
+from src.core.notify_errors import public_channel_list, public_saved_error
 from src.core.timezone import beijing_now_naive
 from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
@@ -101,8 +102,11 @@ def _to_out(n: Notification, run: AgentRun | None = None) -> NotificationOut:
         source=n.source or "",
         trace_id=n.trace_id or "",
         push_status=n.push_status or "",
-        push_error=n.push_error or "",
-        push_channels=list(n.push_channels or []),
+        # 历史上(修复前)的行里可能有 webhook key / 代理账号密码 / provider 回包。
+        # 这些行是既成事实: 不改库、不删行、不原地清洗 —— 只在**出口**按形态白名单
+        # 收敛, 认不出的文案换成「历史推送失败（内部错误）；参考号: ERR-...」。
+        push_error=public_saved_error(n.push_error or ""),
+        push_channels=public_channel_list(n.push_channels or []),
         read=n.read_at is not None,
         created_at=n.created_at.isoformat() if n.created_at else "",
     )
@@ -239,17 +243,19 @@ def get_notification_status(
     )
     if not notification:
         raise HTTPException(status_code=404, detail="通知不存在")
+    channels = public_channel_list(notification.push_channels or [])
     return {
         "id": notification.id,
         "push_status": notification.push_status or "",
-        "push_error": notification.push_error or "",
+        # 同 `_to_out`: 历史行只在出口收敛, 数据库保持原样。
+        "push_error": public_saved_error(notification.push_error or ""),
         # 每渠道独立状态 (含 delivered_at/failed_at/receipt)
-        "channels": notification.push_channels or [],
+        "channels": channels,
         # 整次推送的汇总时间 (用第一个成功渠道, 或失败时间)
         "delivered_at": next(
             (
                 c.get("delivered_at")
-                for c in (notification.push_channels or [])
+                for c in channels
                 if c.get("success") and c.get("delivered_at")
             ),
             None,

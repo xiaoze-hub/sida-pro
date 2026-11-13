@@ -61,6 +61,16 @@ def _closed_port() -> int:
     return port
 
 
+@pytest.fixture(autouse=True)
+def _allow_loopback_for_tests(monkeypatch):
+    """本文件用 127.0.0.1 上**已关闭的端口**制造真实 ConnectError(不连外网)。
+
+    SSRF 防护默认拒绝回环目标, 这里走运维同款放行开关显式授权 127.0.0.1
+    (生产里"自建 Hermes 网关在本机"就是这么配), 不放开其它内网/元数据地址。
+    """
+    monkeypatch.setenv("SIDA_NOTIFY_PRIVATE_HOSTS", "127.0.0.1")
+
+
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
     """临时 SQLite(不是仓库/生产库), notify_center.SessionLocal 指过去。"""

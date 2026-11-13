@@ -12,6 +12,7 @@ from src.web.api.auth import get_current_user
 from src.web.models import NotifyChannel, User
 from src.core.notifier import NotifierManager, CHANNEL_TYPES
 from src.core.notify_errors import failure_text, public_failure_text
+from src.core.net_guard import TargetBlocked, TargetUnresolvable
 
 router = APIRouter()
 
@@ -65,13 +66,29 @@ def _channel_test_content() -> str:
     )
 
 
+def _config_error_text(exc: Exception) -> str:
+    """配置校验错误的**对外**文案: 只有固定类别 + 关联号, 不含用户填的 URL/token。
+
+    旧实现 `f"渠道配置无效: {exc}"` 会把异常文本(可能含 webhook URL 的 query 里的
+    token)回给浏览器; SSRF 拦截也要给出"该怎么修"的可读类别, 而不是 500。
+    DNS 解析失败单独成类: 渠道配置本身可能完全正确, 只是域名此刻解析不到(解析器/域名
+    生效), 说成"配置无效"会把人赶到错误的方向。
+    """
+    if isinstance(exc, TargetBlocked):
+        return failure_text("blocked_target", action="渠道配置校验")
+    if isinstance(exc, TargetUnresolvable):
+        return failure_text("dns_failed", action="渠道配置校验")
+    return failure_text("config_invalid", action="渠道配置校验")
+
+
 def _validate_channel(channel_type: str, config: dict) -> None:
     if channel_type not in CHANNEL_TYPES:
-        raise HTTPException(400, f"不支持的通知渠道: {channel_type}")
+        raise HTTPException(400, "不支持的通知渠道类型")
     try:
         NotifierManager().add_channel(channel_type, config or {})
-    except ValueError as exc:
-        raise HTTPException(400, f"渠道配置无效: {exc}") from exc
+    except (ValueError, TargetUnresolvable) as exc:
+        # TargetUnresolvable 是 OSError 不是 ValueError: 不显式接住就会 500。
+        raise HTTPException(400, _config_error_text(exc)) from exc
 
 
 class ChannelCreate(BaseModel):
@@ -173,7 +190,7 @@ async def test_channel(channel_id: int, db: Session = Depends(get_db), user: Use
     try:
         notifier.add_channel(channel.type, channel.config or {})
     except Exception as e:
-        raise HTTPException(400, f"渠道配置无效: {e}")
+        raise HTTPException(400, _config_error_text(e))
 
     result = await notifier.notify_with_result(
         title="测试通知",
