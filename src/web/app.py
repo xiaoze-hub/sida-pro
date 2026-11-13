@@ -67,6 +67,7 @@ from src.web.api import (
     users,
     llm_usage,
     profile,
+    learning_reference,
     export as export_data,
     user_data,
     audit,
@@ -616,6 +617,14 @@ app.include_router(
     profile.router,
     prefix="/api/profile",
     tags=["profile"],
+    dependencies=protected,
+)
+# 历史无归属全局经验参考 / system 桶独立对账(2026-11-13)。三路隔离:
+# 本路由没有任何个人口径, 也不接受 user_id/symbol 参数。
+app.include_router(
+    learning_reference.router,
+    prefix="/api/learning/reference",
+    tags=["learning-reference"],
     dependencies=protected,
 )
 app.include_router(

@@ -17,6 +17,7 @@ import { currentIdentity, scopedKey, useApiQuery, useIdentityScope } from '@/hoo
 import NotifyChannelsSection from '@/components/profile/NotifyChannelsSection'
 import SessionDevicesSection from '@/components/profile/SessionDevicesSection'
 import DataPrivacySection from '@/components/profile/DataPrivacySection'
+import LearningReferenceSection from '@/components/profile/LearningReferenceSection'
 import { useI18n } from '@/hooks/useI18n'
 
 interface ProfileInfo {
@@ -520,6 +521,10 @@ export function Profile() {
               </div>
             )}
           </div>
+
+          {/* 历史无归属经验参考 / system 桶独立口径(2026-11-13): 只展示全局聚合,
+              明确"非个人成绩"; 不渲染个股/明细, 不训练、不调权。 */}
+          <LearningReferenceSection />
         </section>
 
         </SectionPanel>
