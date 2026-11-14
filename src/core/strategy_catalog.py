@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.db.session import SessionLocal
+from src.db.session import SessionLocal, WriteSessionLocal
 from src.db.models import StrategyCatalog, StrategyWeight
 
 
@@ -105,8 +105,20 @@ DEFAULT_STRATEGIES: tuple[StrategySpec, ...] = (
 )
 
 
-def ensure_strategy_catalog() -> None:
-    db = SessionLocal()
+def ensure_strategy_catalog(db=None) -> None:
+    """补齐默认策略目录行(幂等)。
+
+    - `db=None`: 自开写会话并自行 commit(读路径的默认用法);
+    - 传入会话时**不 commit、不 close** —— 事务边界交给调用方, 以便与随后的
+      权重写入落在**同一个事务**里(2026-11-12 复审二: 目录读取原先各自开
+      会话, 读的是副本/别的事务, 与写权重的 before 值可能不是同一时点)。
+
+    「先查有没有再插入」必须全程在写库: 路由会话的 SELECT 会把事务绑到读副本,
+    随后 INSERT 落错引擎(只读副本报错 / 分裂成两条连接)。
+    """
+    own = db is None
+    if own:
+        db = WriteSessionLocal()
     try:
         changed = False
         for spec in DEFAULT_STRATEGIES:
@@ -153,14 +165,27 @@ def ensure_strategy_catalog() -> None:
                 row.params = spec.params or {}
                 changed = True
         if changed:
-            db.commit()
+            if own:
+                db.commit()
+            else:
+                # 调用方持有事务: flush 让后续读看到新行, commit 由调用方决定。
+                db.flush()
     finally:
-        db.close()
+        if own:
+            db.close()
 
 
-def list_strategy_catalog(enabled_only: bool = True) -> list[dict]:
-    ensure_strategy_catalog()
-    db = SessionLocal()
+def list_strategy_catalog(enabled_only: bool = True, *, db=None) -> list[dict]:
+    """列出策略目录。
+
+    传入 `db` 时**不**自行开会话、也不做 ensure 写入 —— 调用方负责在同一事务里
+    先 `ensure_strategy_catalog(db=db)`(调权路径就是这样, 让「读目录 + 读结果 +
+    写权重 + 写审计」同事务)。默认路径保持原行为(自开读会话 + 先 ensure)。
+    """
+    own = db is None
+    if own:
+        ensure_strategy_catalog()
+        db = SessionLocal()
     try:
         q = db.query(StrategyCatalog)
         if enabled_only:
@@ -183,7 +208,8 @@ def list_strategy_catalog(enabled_only: bool = True) -> list[dict]:
             )
         return out
     finally:
-        db.close()
+        if own:
+            db.close()
 
 
 def get_strategy_profile_map() -> dict[str, dict]:

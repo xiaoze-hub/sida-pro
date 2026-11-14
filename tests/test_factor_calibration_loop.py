@@ -1,4 +1,4 @@
-"""因子自校准闭环(M4):calibrate_all_markets 端到端接通评分。"""
+"""因子标定(M4):calibrate_all_markets 只读产出提案,不改评分输入权重。"""
 
 from __future__ import annotations
 
@@ -32,12 +32,14 @@ def _seed_pair(db, sid, *, market, snapshot_date, alpha, ret, horizon=5):
     ))
 
 
-def test_calibrate_all_markets_closes_loop_into_scoring():
-    """端到端:快照+outcome → calibrate_all_markets → CN alpha 权重上调 → 评分 raw_score 提升。"""
+def test_calibrate_all_markets_reports_proposals_without_changing_scoring():
+    """端到端:快照+outcome → 三市场各出提案 → 生效权重仍为 1.0,评分不变。
+
+    2026-11-12: 标定只读,不会自动把提案变成有效权重。
+    """
     from src.core.factor_calibration import calibrate_all_markets
     from src.core.factor_weights import get_factor_weights
-    from src.core.strategy_engine import _compute_factor_breakdown
-    from src.web.models import EntryCandidate
+    from src.web.models import FactorWeight
 
     db = _mem_db()
     try:
@@ -52,19 +54,39 @@ def test_calibrate_all_markets_closes_loop_into_scoring():
 
         res = calibrate_all_markets(db=db, min_samples=5)
         assert set(res) == {"CN", "HK", "US"}
+        assert all(r["mode"] == "readonly" and r["write_back"] is False for r in res.values())
 
+        cn = {p["factor_code"]: p for p in res["CN"]["proposals"]}
+        assert cn["alpha_score"]["status"] == "proposed"
+        assert cn["alpha_score"]["proposed_weight"] > 1.0
+
+        # 只读:三市场都没有落任何权重行
+        assert db.query(FactorWeight).count() == 0
+
+        # 评分输入权重仍是默认 1.0(提案未生效)
         w = get_factor_weights("CN", db=db)
-        assert w["alpha_score"] > 1.0  # IC 闭环把权重抬高
+        assert w["alpha_score"] == 1.0
+    finally:
+        db.close()
 
-        row = EntryCandidate(
-            score=80.0, action="watch", status="active", plan_quality=80,
-            candidate_source="watchlist", is_holding_snapshot=True,
-            signal="", reason="", source_agent="", meta=None,
-        )
-        kw = dict(row=row, strategy_code="pullback", weight=1.0,
-                  risk_level="low", regime_info=None)
-        base = _compute_factor_breakdown(**kw, factor_weights={"alpha_score": 1.0})
-        boosted = _compute_factor_breakdown(**kw, factor_weights=w)
-        assert boosted["raw_score"] > base["raw_score"]
+
+def test_calibrate_all_markets_marks_low_sample_markets(monkeypatch):
+    """无观测的市场如实标 `skipped_no_data`, 不能伪装成「有提案」。
+
+    2026-11-12: 空库从此前笼统的 `skipped_low_sample` 细化为 `skipped_no_data`
+    —— 「一条已走完持有期的样本都没有」和「有样本但不够」是两种故障, 混在一起
+    会让运维按「补样本」去查, 实际是采集/SQL 断了。
+    """
+    from src.core.factor_calibration import calibrate_all_markets
+
+    db = _mem_db()
+    try:
+        res = calibrate_all_markets(db=db, min_samples=5)
+        for market in ("CN", "HK", "US"):
+            statuses = {p["status"] for p in res[market]["proposals"]}
+            assert statuses == {"skipped_no_data"}
+            assert res[market]["proposed"] == 0
+            assert res[market]["skipped_no_data"] == 5
+            assert res[market]["no_rows"] is True
     finally:
         db.close()

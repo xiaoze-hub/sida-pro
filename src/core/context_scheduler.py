@@ -1,4 +1,4 @@
-"""上下文维护调度器：后验评估 + 过期数据清理 + 机会自动刷新。"""
+"""上下文维护调度器：后验评估 + system 成熟对账 + 过期数据清理 + 机会自动刷新。"""
 
 from __future__ import annotations
 
@@ -10,14 +10,29 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.collectors.kline_collector import kline_source
 from src.core.context_store import cleanup_context_data
 from src.core.entry_candidates import evaluate_entry_candidate_outcomes
+from src.core.learning_reference import (
+    SYSTEM_RECONCILE_JOB_ID,
+    reconcile_system_outcomes,
+)
 from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
 from src.core.strategy_engine import (
     evaluate_strategy_outcomes,
-    rebalance_strategy_weights,
     refresh_strategy_signals,
 )
 
 logger = logging.getLogger(__name__)
+
+#: 自动调权已停用(2026-11-12 独立审计)。
+#: 旧行为: 每 6h 后验评估后内部调用 `rebalance_strategy_weights(actor=None)`,
+#: 不经任何 HTTP 端点、不留认证身份, 直接改写所有用户共用的全局策略权重 ——
+#: 用户要求的「不得静默自动调权」被完全绕过。现在调度器**只**做只读/评估类工作:
+#: 权重变更只能由具备 manage_settings 的人走
+#: `POST /api/recommendations/strategy-weights/rebalance`(审计记服务端身份)。
+STRATEGY_REBALANCE_DISABLED_REASON = (
+    "自动调权已停用: 策略权重只能由具备 manage_settings 的认证用户手动触发 "
+    "POST /api/recommendations/strategy-weights/rebalance(审计记录身份), "
+    "调度器不会自动改写全局权重"
+)
 
 
 class ContextMaintenanceScheduler:
@@ -35,6 +50,7 @@ class ContextMaintenanceScheduler:
         self._evaluating = False
         self._cleaning = False
         self._refreshing = False
+        self._system_reconciling = False
 
     async def _evaluate_job(self):
         if self._evaluating:
@@ -43,6 +59,24 @@ class ContextMaintenanceScheduler:
         self._evaluating = True
         try:
             stats = await asyncio.to_thread(evaluate_pending_prediction_outcomes)
+            if stats.get("scoring_blocked"):
+                # 评分闸门阻断: 索引缺失/定义错误或存量重复键, 本轮一条都没评估 —— 必须
+                # ERROR 级留痕, 否则"评估完成 pending=N evaluated=0"会被误读成"没有到期数据"
+                logger.error(
+                    "[上下文维护] 后验评估被评分闸门阻断(%s): %s —— 本轮不评估/不回填/不计分"
+                    "(欠评估 %s 条)",
+                    (stats.get("scoring_status") or {}).get("reason_code"),
+                    stats.get("note"),
+                    stats.get("total_pending"),
+                )
+            elif stats.get("scoring_repaired"):
+                # 兼容旧结果字段: 运行期不再自动重建索引, 正常不会进入这里。若真的出现,
+                # 说明调用链被改回了 DDL 路径, 必须告警核查。
+                logger.warning(
+                    "[上下文维护] 评估路径报告了索引重建(运行期不应发生, 请核查是否误用 "
+                    "allow_repair=True): %s",
+                    ", ".join(stats.get("scoring_repaired") or []),
+                )
             level = logging.INFO if stats.get("evaluated", 0) else logging.DEBUG
             logger.log(
                 level,
@@ -99,41 +133,86 @@ class ContextMaintenanceScheduler:
                 strategy_stats.get("skipped_not_due", 0),
                 strategy_stats.get("skipped_no_price", 0),
             )
-            rebalance = await asyncio.to_thread(
-                rebalance_strategy_weights,
-                window_days=45,
-                min_samples=8,
-                alpha=0.35,
-                regime="default",
-            )
-            level = logging.INFO if rebalance.get("changed", 0) else logging.DEBUG
-            logger.log(
-                level,
-                "[上下文维护] 策略调权完成: changed=%s checked=%s skipped_low_sample=%s",
-                rebalance.get("changed", 0),
-                rebalance.get("checked", 0),
-                rebalance.get("skipped_low_sample", 0),
-            )
+            # 自动调权已停用: 这里曾经每 6h 以 actor=None 静默改写全局策略权重。
+            # 调度器不再拥有任何写权重的入口(见 STRATEGY_REBALANCE_DISABLED_REASON)。
+            logger.debug("[上下文维护] %s", STRATEGY_REBALANCE_DISABLED_REASON)
 
-            # Phase 4 → 因子自校准闭环:把 IC/IR 接进每因子权重的轻量标定
-            # (calibrate_all_markets 内部按市场算 IC 并据此调权,不再只是记录)。
+            # Phase 4 → 因子标定:只读产出「建议」,调度器绝不自动改写有效权重;
+            # 改权须人工走既有手工 API(manual 审计),本模块无任何写权开关。
             try:
                 from src.core.factor_calibration import calibrate_all_markets
 
                 fcal = await asyncio.to_thread(calibrate_all_markets)
-                changed = sum(r.get("changed", 0) for r in fcal.values())
+                proposed = sum(r.get("proposed", 0) for r in fcal.values())
+                errors = {m: r["error"] for m, r in fcal.items() if r.get("error")}
                 logger.log(
-                    logging.INFO if changed else logging.DEBUG,
-                    "[上下文维护] 因子自校准完成: changed=%s detail=%s",
-                    changed,
-                    {m: r.get("changed", 0) for m, r in fcal.items()},
+                    logging.WARNING if errors else (
+                        logging.INFO if proposed else logging.DEBUG
+                    ),
+                    "[上下文维护] 因子标定建议完成(未写权重): proposed=%s detail=%s errors=%s",
+                    proposed,
+                    {m: r.get("proposed", 0) for m, r in fcal.items()},
+                    errors or None,
+                )
+                # 观测保留在日志里(只读,不落库):每因子 IC 便于事后核查。
+                logger.debug(
+                    "[上下文维护] 因子标定观测(只读): %s",
+                    {
+                        m: {
+                            p.get("factor_code"): p.get("ic")
+                            for p in r.get("proposals", [])
+                        }
+                        for m, r in fcal.items()
+                    },
                 )
             except Exception as fc_err:
-                logger.debug("[上下文维护] 因子自校准跳过: %s", fc_err)
+                logger.warning("[上下文维护] 因子标定建议失败(未写权重): %s", fc_err)
         except Exception as e:
             logger.exception(f"[上下文维护] 后验评估异常: {e}")
         finally:
             self._evaluating = False
+
+    async def _system_reconcile_job(self):
+        """收盘后自动对账 system 桶成熟结果(只写 system 行, 不调权/不下单)。"""
+        if self._system_reconciling:
+            logger.debug("[上下文维护] 上一轮 system 对账仍在执行，跳过本轮")
+            return
+        self._system_reconciling = True
+        try:
+            with kline_source("system_outcome_reconcile"):
+                stats = await asyncio.to_thread(
+                    reconcile_system_outcomes, trigger="scheduler"
+                )
+            level = logging.WARNING if stats.get("write_failed") else (
+                logging.INFO if stats.get("evaluated") else logging.DEBUG
+            )
+            logger.log(
+                level,
+                "[上下文维护] system 成熟对账完成: total_pending=%s batch=%s "
+                "evaluated=%s unknown(no_quote=%s no_base=%s kline_error=%s) "
+                "skipped_concurrent=%s writes=%s committed=%s %s",
+                stats.get("total_pending"),
+                stats.get("batch_size"),
+                stats.get("evaluated"),
+                stats.get("skipped_no_quote"),
+                stats.get("skipped_no_base_price"),
+                stats.get("kline_error_rows"),
+                stats.get("skipped_concurrent"),
+                stats.get("writes"),
+                stats.get("db_committed"),
+                stats.get("note"),
+            )
+        except Exception as e:  # noqa: BLE001 — 定时任务失败不拖垮其它维护任务
+            logger.exception(f"[上下文维护] system 成熟对账异常: {e}")
+        finally:
+            self._system_reconciling = False
+
+    async def system_reconcile_once(self) -> dict:
+        """手动/测试触发一次持久对账(只写 system 行)。"""
+        with kline_source("system_outcome_reconcile"):
+            return await asyncio.to_thread(
+                reconcile_system_outcomes, trigger="scheduler_manual"
+            )
 
     async def _cleanup_job(self):
         if self._cleaning:
@@ -171,28 +250,31 @@ class ContextMaintenanceScheduler:
             snapshot_days=60,
             limit=1200,
         )
-        strategy_rebalance_task = asyncio.to_thread(
-            rebalance_strategy_weights,
-            window_days=45,
-            min_samples=8,
-            alpha=0.35,
-            regime="default",
-        )
-        agent_stats, candidate_stats, strategy_eval_stats, strategy_rebalance_stats = await asyncio.gather(
+        agent_stats, candidate_stats, strategy_eval_stats = await asyncio.gather(
             agent_task,
             candidate_task,
             strategy_eval_task,
-            strategy_rebalance_task,
         )
-        # 因子自校准:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather。
+        # 因子标定建议:须在 outcome 评估之后(IC 才新鲜),不能并进上面的 gather;
+        # 只读 —— 只回建议,不改有效权重。
         from src.core.factor_calibration import calibrate_all_markets
 
         factor_calibration_stats = await asyncio.to_thread(calibrate_all_markets)
+        fcal_errors = {
+            m: r["error"] for m, r in factor_calibration_stats.items() if r.get("error")
+        }
+        if fcal_errors:
+            logger.warning("[上下文维护] 因子标定建议失败(未写权重): %s", fcal_errors)
         return {
             "agent_predictions": agent_stats,
             "entry_candidates": candidate_stats,
             "strategy_outcomes": strategy_eval_stats,
-            "strategy_rebalance": strategy_rebalance_stats,
+            # 保持键位兼容, 但明确告诉调用方: 自动调权已停用, changed 恒 0。
+            "strategy_rebalance": {
+                "disabled": True,
+                "changed": 0,
+                "reason": STRATEGY_REBALANCE_DISABLED_REASON,
+            },
             "factor_calibration": factor_calibration_stats,
         }
 
@@ -258,6 +340,20 @@ class ContextMaintenanceScheduler:
             misfire_grace_time=300,
         )
         self.scheduler.add_job(
+            self._system_reconcile_job,
+            "cron",
+            day_of_week="mon-fri",
+            hour=15,
+            minute=40,
+            timezone="Asia/Shanghai",
+            jitter=60,
+            id=SYSTEM_RECONCILE_JOB_ID,
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+        self.scheduler.add_job(
             self._cleanup_job,
             "cron",
             hour=4,
@@ -293,7 +389,8 @@ class ContextMaintenanceScheduler:
         except Exception:
             pass
         logger.info(
-            "上下文维护调度器已启动（后验评估间隔 %sh，快照保留 %s 天，后验保留 %s 天，机会自动刷新 01:15/05:30/14:00 UTC）",
+            "上下文维护调度器已启动（后验评估间隔 %sh，快照保留 %s 天，后验保留 %s 天，"
+            "机会自动刷新 01:15/05:30/14:00 UTC，system 成熟对账每工作日 15:40 应用时区）",
             self.eval_interval_hours,
             self.snapshot_retention_days,
             self.outcome_retention_days,

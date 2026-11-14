@@ -831,6 +831,12 @@ class DailyReportAgent(BaseAgent):
                             "reason": sug.get("reason", ""),
                             "signal": sug.get("signal", ""),
                         },
+                        # P0(2026-11-12): 归属用户 + 版本身份(本次采集时刻)。有 owner → 个人桶;
+                        # 无 owner → 显式 system 桶(绝不猜测绑定真实用户)。同键后续版本只追加
+                        # superseded 审计版本, 不覆盖计分行、也不重复计分。
+                        user_id=_resolve_user_id(context),
+                        owner_scope="user" if _resolve_user_id(context) else "system",
+                        run_trace_id=f"daily_report:{analysis_date}:{data.get('timestamp') or ''}",
                     )
 
         # 保存到历史记录（使用 "*" 表示全局分析）

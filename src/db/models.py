@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     Index,
+    CheckConstraint,
     text,
     false,
 )
@@ -460,6 +461,50 @@ class AnalysisHistory(AuditMixin, Base):
     error = Column(String, nullable=True)  # 降级/失败原因
 
 
+class PremarketFactorEvidence(CreatedAtMixin, Base):
+    """盘前股性因子「生成时冻结快照」的**追加式**凭证(2026-11-12 复审修正)。
+
+    为什么单独一张表, 而不是塞在 `analysis_history.raw_data` 里:
+    `analysis_history` 同键是 upsert(`uq_agent_stock_date_user`), 同一天盘后重跑会
+    **覆盖**前一版的 raw_data —— 生成时冻结的因子快照与采样时点会随正文一起消失,
+    账本就再也证明不了「当时看到了什么」。本表只 INSERT、不 UPDATE(见
+    `src/core/premarket_factor_evidence.py`), 因此重跑不会销毁已有凭证。
+
+    诚实边界(不要读成「报告不可变」):
+    - `analysis_history` 正文仍是可覆盖的; 只保护凭证, 不保护正文历史版本。
+    - 本表没有 unique 约束(同一天可有多条, 每次真实采样一条), 查询方按
+      **`run_trace_id` + 完全相同的 user scope** 绑定到具体某一版报告
+      (`resolve_report_evidence`), 同一天其他版本的凭证不作数 —— 绝不按日期回退。
+    - `run_trace_id` 为 NULL 的行 = 采样发生过但绑定不到报告(旧记录/生成侧没给 trace),
+      只留档, 不参与对账。
+    - `snapshot_sha256` **只用于一致性校验**(检测存储内容是否被改动),
+      不证明来源、不证明采样时点、不证明数据完整。
+    """
+
+    __tablename__ = "premarket_factor_evidence"
+    __table_args__ = (
+        Index("ix_premarket_factor_evidence_date", "analysis_date", "agent_name"),
+        Index("ix_premarket_factor_evidence_user", "user_id", "analysis_date"),
+        Index("ix_premarket_factor_evidence_run", "run_trace_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True)  # 报告归属(系统调度 NULL)
+    agent_name = Column(String, nullable=False, default="premarket_outlook")
+    stock_symbol = Column(String, nullable=False, default="*")
+    analysis_date = Column(String, nullable=False)  # 报告交易日 YYYY-MM-DD
+    # 真实完成采样的时刻, **带时区** ISO8601(如 2026-11-11T08:20:03+08:00)
+    generated_at = Column(String, nullable=False)
+    # 由 generated_at 与 analysis_date 推导, 不接受调用方自称(见 save_analysis)
+    preopen = Column(Boolean, nullable=False, default=False)
+    source = Column(Text, nullable=False, default="")  # 可核验来源描述(表/选择器/过滤)
+    snapshot = Column(JSON, default={})  # 冻结的股性因子原始行
+    snapshot_sha256 = Column(String(64), nullable=True)  # 仅一致性校验
+    # 产生这条凭证的那次报告运行的 trace id(与 raw_data.run_trace_id 严格相等才可对账)
+    run_trace_id = Column(String(64), nullable=True)
+    note = Column(String, nullable=False, default="")
+
+
 class StockContextSnapshot(CreatedAtMixin, Base):
     """按股票/日期保存结构化上下文快照（用于跨天记忆）"""
 
@@ -530,10 +575,53 @@ class AgentContextRun(CreatedAtMixin, Base):
 
 
 class AgentPredictionOutcome(CreatedAtMixin, Base):
-    """建议后验评估记录（用于回放与效果统计）"""
+    """建议后验评估记录（用于回放与效果统计）
+
+    P0(2026-11-12 复审 + 二次修正): 本表原先**没有用户维度** —— 行维度只有
+    (agent_name, stock_symbol, prediction_date, horizon_days), 于是两个真实账户同标的同日
+    的预测落在同一个键上: 后跑的那次会把别人的 pending 行原地改写(收益口径/动作/触发价
+    全变), 统计也只能混着算。现在:
+
+    - `user_id`: 归属用户, 只由调用方**显式传入的 context.user.id** 决定;
+      NULL = 加列之前的**历史行**(归属不可证明, 保留 unknown, 不清洗/不回填/不评估)。
+    - `owner_scope`: 归属桶。'user' = 个人预测; 'system' = 无会话的系统调度运行
+      (**独立桶, user_id 恒为 NULL, 绝不猜测绑定任何真实用户**); NULL = 加列前的历史行。
+    - `run_trace_id`: 这一行的**版本身份**(哪一次运行写下的)。
+    - 版本规则(追加, 不覆盖):
+        * 计分版本 = 同键**最早写入**的那一版(先到先得): 盘前/盘中的第一版是当时能拿到的
+          真实判断, 后续重跑不因"看到了更多行情"而替换它 —— 否则等于事后挑一个更好看的版本;
+        * 同一 (用户, agent, symbol, market, date, horizon) 至多 **一条非 superseded 行**
+          —— 由部分唯一索引 `ux_prediction_outcome_user_active_key` 在 DB 层强制;
+        * 该行就是唯一**计分行**(后验评估/命中率只看它), 后到的其它版本以
+          `outcome_status='superseded'` **追加**为审计版本, 不覆盖、不参与计分;
+        * 同一版本(相同 run_trace_id)重复写入是幂等, 由
+          `ux_prediction_outcome_user_run_key` 兜底;
+        * system 桶同理, 用 `ux_prediction_outcome_system_active_key` /
+          `ux_prediction_outcome_system_run_key`。
+    - 历史行(user_id/owner_scope 均 NULL)不落入任何部分索引, 老库即使已有同键重复也能
+      直接建索引, 不需要先清洗、也不会因为历史脏数据让上线迁移失败。
+
+    归属完整性(2026-11-12 三次修正): `user_id` 是外键 `users.id ON DELETE SET NULL`。
+    - **create_all 建的新库**: 声明式外键(SQLite 侧由 `PRAGMA foreign_keys=ON` 生效)。
+    - **迁移过的老库**: PG 由 m249 补 `agent_prediction_outcomes_user_id_fkey`(同名同语义,
+      以 `NOT VALID` 加上: 存量孤儿行不校验、不改写, 新写入立刻受约束);
+      SQLite 无法在不重建表的前提下加外键, 由 m249 建**等价触发器**实现
+      (trg_pred_outcome_user_fk_ins/upd 校验用户存在, trg_pred_outcome_user_fk_del 删用户
+      时置空)。**schema 表示不同, 行为一致**; 触发器在 `PRAGMA foreign_key_list` 里看不到,
+      DDL 工具也不会把它当外键 —— 这是明确披露的差异, 不是遗漏。
+    - 应用层还有最后一道:`save_agent_prediction_outcome` 把外键错误分型成
+      `refused_unknown_user`, 读取/评估侧把 `user_id` 指向已不存在用户的行(ghost)按
+      "归属不可证明"排除, 既不评估也不呈现为任何人的成绩。
+    """
 
     __tablename__ = "agent_prediction_outcomes"
     __table_args__ = (
+        # system 桶不得绑定真实 user_id —— 与 m250 在迁移库上加的 CHECK 同名同定义,
+        # 让 create_all 的新库与迁移过的老库在"system 桶语义"上也是同一份约束。
+        CheckConstraint(
+            "owner_scope IS DISTINCT FROM 'system' OR user_id IS NULL",
+            name="ck_prediction_outcome_system_scope_no_user",
+        ),
         Index(
             "ix_prediction_agent_stock_date",
             "agent_name",
@@ -541,9 +629,73 @@ class AgentPredictionOutcome(CreatedAtMixin, Base):
             "prediction_date",
         ),
         Index("ix_prediction_status_horizon", "outcome_status", "horizon_days"),
+        # m249: 按用户查询(加列迁移建立, 名字/列必须与迁移逐字一致)
+        Index("ix_prediction_outcome_user", "user_id", "prediction_date"),
+        # m250: 计分行唯一(每键至多一条非 superseded) —— 版本追加的 DB 层保证
+        Index(
+            "ux_prediction_outcome_user_active_key",
+            "user_id",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            unique=True,
+            sqlite_where=text("user_id IS NOT NULL AND outcome_status <> 'superseded'"),
+            postgresql_where=text("user_id IS NOT NULL AND outcome_status <> 'superseded'"),
+        ),
+        # m250: 同一版本幂等(同一 run_trace_id 不能出现两行)
+        Index(
+            "ux_prediction_outcome_user_run_key",
+            "user_id",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            "run_trace_id",
+            unique=True,
+            sqlite_where=text("user_id IS NOT NULL AND run_trace_id IS NOT NULL"),
+            postgresql_where=text("user_id IS NOT NULL AND run_trace_id IS NOT NULL"),
+        ),
+        # m250: system 桶的计分行唯一 / 版本幂等(独立于任何真实用户)
+        Index(
+            "ux_prediction_outcome_system_active_key",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            unique=True,
+            sqlite_where=text("owner_scope = 'system' AND outcome_status <> 'superseded'"),
+            postgresql_where=text("owner_scope = 'system' AND outcome_status <> 'superseded'"),
+        ),
+        Index(
+            "ux_prediction_outcome_system_run_key",
+            "agent_name",
+            "stock_symbol",
+            "stock_market",
+            "prediction_date",
+            "horizon_days",
+            "run_trace_id",
+            unique=True,
+            sqlite_where=text("owner_scope = 'system' AND run_trace_id IS NOT NULL"),
+            postgresql_where=text("owner_scope = 'system' AND run_trace_id IS NOT NULL"),
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # 归属用户(NULL=加列前的历史行: 不可更新/不评估/不计入个人成绩)
+    user_id = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # 归属桶: 'user' / 'system'; NULL = 加列前的历史行(归属不可证明)
+    owner_scope = Column(String(16), nullable=True)
+    # 版本身份: 写这一行的运行 id; 同一键的重复写入靠它幂等
+    run_trace_id = Column(String(200), nullable=True)
+
     agent_name = Column(String, nullable=False)
     stock_symbol = Column(String, nullable=False)
     stock_market = Column(String, nullable=False, default="CN")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from src.core.notifier import NotifierManager
+from src.core.error_report import log_failure, new_error_ref
 from src.db.session import SessionLocal
 from src.db.models import (
     AppSettings,
@@ -285,8 +286,16 @@ async def notify_entry(pos: dict, sig: dict | None) -> None:
             return
         title, body = _format_entry_message(pos, sig)
         await mgr.notify(title, body)
-    except Exception:
-        logger.exception("[模拟盘通知] 建仓通知发送失败")
+    except Exception as e:
+        # 这里是通知发送链路: 异常可能是读渠道表(DSN/SQL)或渠道回执(webhook
+        # token) — 只落关联号 + 类型 + 帧位置, 不打印堆栈原文。
+        log_failure(
+            logger,
+            "模拟盘建仓通知发送",
+            e,
+            ref=new_error_ref(),
+            context={"via": "paper_trading_notifier"},
+        )
 
 
 async def notify_exit(pos: dict, trade: dict) -> None:
@@ -299,8 +308,16 @@ async def notify_exit(pos: dict, trade: dict) -> None:
             return
         title, body = _format_exit_message(pos, trade)
         await mgr.notify(title, body)
-    except Exception:
-        logger.exception("[模拟盘通知] 平仓通知发送失败")
+    except Exception as e:
+        # 这里是通知发送链路: 异常可能是读渠道表(DSN/SQL)或渠道回执(webhook
+        # token) — 只落关联号 + 类型 + 帧位置, 不打印堆栈原文。
+        log_failure(
+            logger,
+            "模拟盘平仓通知发送",
+            e,
+            ref=new_error_ref(),
+            context={"via": "paper_trading_notifier"},
+        )
 
 
 async def send_premarket_plan() -> None:
@@ -339,8 +356,16 @@ async def send_premarket_plan() -> None:
             await mgr.notify(title, body)
         finally:
             db.close()
-    except Exception:
-        logger.exception("[模拟盘通知] 盘前计划发送失败")
+    except Exception as e:
+        # 这里是通知发送链路: 异常可能是读渠道表(DSN/SQL)或渠道回执(webhook
+        # token) — 只落关联号 + 类型 + 帧位置, 不打印堆栈原文。
+        log_failure(
+            logger,
+            "模拟盘盘前计划发送",
+            e,
+            ref=new_error_ref(),
+            context={"via": "paper_trading_notifier"},
+        )
 
 
 async def send_daily_summary() -> None:
@@ -381,8 +406,16 @@ async def send_daily_summary() -> None:
             await mgr.notify(title, body)
         finally:
             db.close()
-    except Exception:
-        logger.exception("[模拟盘通知] 日终摘要发送失败")
+    except Exception as e:
+        # 这里是通知发送链路: 异常可能是读渠道表(DSN/SQL)或渠道回执(webhook
+        # token) — 只落关联号 + 类型 + 帧位置, 不打印堆栈原文。
+        log_failure(
+            logger,
+            "模拟盘日终摘要发送",
+            e,
+            ref=new_error_ref(),
+            context={"via": "paper_trading_notifier"},
+        )
 
 
 async def send_test_notification() -> dict:

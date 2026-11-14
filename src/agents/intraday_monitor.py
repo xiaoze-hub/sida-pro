@@ -2227,6 +2227,12 @@ class IntradayMonitorAgent(BaseAgent):
                     "reason": suggestion.get("reason", ""),
                     "signal": suggestion.get("signal", ""),
                 },
+                # P0(2026-11-12): 归属桶显式声明 —— 有 owner → 个人桶; 无 owner → system 桶
+                # (user_id 恒为空, 绝不猜测绑定真实用户)。版本身份用本次采集时刻: 同一次采集
+                # 重复保存是幂等; 更晚的盘中周期只追加 superseded 审计版本, 不覆盖计分行。
+                user_id=_user_id,
+                owner_scope="user" if _user_id else "system",
+                run_trace_id=f"intraday_monitor:{analysis_date}:{data.get('timestamp') or ''}",
             )
 
         save_agent_context_run(

@@ -32,13 +32,16 @@ from src.db.dialect import (  # noqa: F401
 from src.db.session import (  # noqa: F401
     Base,
     ReadSessionLocal,
+    ReadOnlyBindError,
     RoutingSession,
     SessionLocal,
     WriteSessionLocal,
     engine,
     get_db,
     get_read_engine,
+    get_write_db,
     get_write_engine,
+    pin_write_bind,
     read_engine,
     write_engine,
 )
@@ -86,6 +89,29 @@ def init_db():
     # 所以 ALTER DEFAULT PRIVILEGES 管不到它 —— 必须在每次启动后重新授一遍,
     # 否则任何新建表运行时角色都读不了(表现为发版后新功能一律 500/权限错误)。
     _sync_app_role_grants(mig)
+
+    # 后验计分闸门(2026-11-13, fail-closed): 启动时**按真实定义**校验 m250 的四条部分唯一
+    # 索引(唯一性/列/谓词, 不只看名字)。缺失或有同名错定义就按需幂等重建 —— 前提是该谓词下
+    # 没有重复键组; 有重复则只报 ERROR, 不建索引、不删不改任何数据行。重建后仍不可信时,
+    # 写入/评估/统计一律显示 scoring_blocked。
+    try:
+        import logging
+
+        from src.core.scoring_guard import check_scoring_health
+
+        health = check_scoring_health(mig, allow_repair=True)
+        _log = logging.getLogger(__name__)
+        if health.blocked:
+            _log.error("[scoring] 启动体检: 评分阻断(%s) —— %s", health.reason_code, health.detail)
+        else:
+            _log.info("[scoring] 启动体检: 评分闸门通过 —— %s", health.detail)
+    except Exception as e:  # noqa: BLE001 - 体检失败不得阻断启动, 但必须留痕
+        import logging
+
+        # 只记异常类型: 数据库异常原文可能带 SQL/参数/连接串。
+        logging.getLogger(__name__).warning(
+            "[scoring] 启动体检异常: %s", type(e).__name__
+        )
 
 
 def _sync_app_role_grants(mig) -> None:

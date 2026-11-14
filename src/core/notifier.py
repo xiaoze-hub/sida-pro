@@ -10,7 +10,30 @@ import apprise
 import asyncio
 import httpx
 
+from src.core.error_report import log_failure, new_error_ref
+from src.core.net_guard import (
+    TargetBlocked,
+    TargetUnresolvable,
+    guarded_request,
+    validate_proxy_target,
+    validate_target,
+)
+from src.core.notify_errors import (
+    NotifyFailure,
+    as_failure,
+    classify,
+)
+from src.core.third_party_log_guard import (
+    install_third_party_log_guard,
+    third_party_log_scope,
+)
+
 logger = logging.getLogger(__name__)
+
+# apprise / httpx 的日志正文里有渠道凭据(device_key、webhook key、bot token)和完整
+# URL —— 它们会被 DBLogHandler 原样写进日志表。这里装的是 **LogRecord 层**的替换,
+# 不是调级别: 见 src/core/third_party_log_guard.py 的说明。
+install_third_party_log_guard()
 
 
 def get_global_proxy() -> str:
@@ -229,6 +252,127 @@ def _extract_context_token(updates: dict, user_id: str) -> str | None:
     return None
 
 
+#: Hermes 网关明确"已送达/已接收"的状态词(全部小写比较, 有界枚举)。
+_HERMES_OK_STATUS = frozenset({"delivered", "ok", "sent", "success", "accepted"})
+#: Hermes 网关明确"没送到"的状态词。
+_HERMES_BAD_STATUS = frozenset(
+    {"failed", "error", "rejected", "undelivered", "not_delivered", "denied", "dropped"}
+)
+
+#: iLink 只应指向腾讯自己的域名; 可用环境变量追加自建/测试主机(白名单, 不按 IP 放量)。
+ENV_ILINK_EXTRA_HOSTS = "SIDA_NOTIFY_ILINK_HOSTS"
+_ILINK_HOST_SUFFIX = ".weixin.qq.com"
+
+
+def _raise_for_http_status(resp, *, channel_type: str) -> None:
+    """**HTTP 错误优先**: 非 2xx 先按协议失败归类, 再去解析正文。
+
+    顺序很重要: 403 的 HTML 错误页如果先 `resp.json()`, 会被判成「响应无法解析」,
+    运维就会去查渠道格式而不是凭证/权限。状态码是**有界数值**, 可以带进对外文案。
+    """
+    code = int(getattr(resp, "status_code", 0) or 0)
+    if code < 400:
+        return
+    raise NotifyFailure(
+        "auth_rejected" if code in (401, 403) else "http_rejected",
+        channel_type=channel_type,
+        status=code,
+    )
+
+
+def _hermes_delivery_state(resp) -> str:
+    """Hermes 网关 200 回包的**可证状态**: `confirmed` / `rejected` / `unknown`。
+
+    HTTP 200 **不等于送达**: 网关前面可能挂着登录页/反代错误页(HTML)、维护页或
+    任何非 JSON 正文。旧实现 `except Exception: data = {}` 让非 JSON 200 直接落到
+    `data.get("status") is None` 的"成功"分支 —— 于是"网关其实没转发"被写成 sent。
+    现在的口径:
+
+    - 正文不是 JSON / 不是对象 → `bad_response`(可证失败: 没有送达回执);
+    - 明确的状态词/布尔 ack → confirmed 或 rejected;
+    - 200 但**没有任何可识别的 ack** → `unknown`(上层写 `not_delivered`, 不虚报 sent)。
+    """
+    try:
+        data = resp.json()
+    except (ValueError, UnicodeDecodeError) as exc:  # JSONDecodeError 是 ValueError 子类
+        raise NotifyFailure(
+            "bad_response", channel_type="hermes", status=int(getattr(resp, "status_code", 0) or 0)
+        ) from exc
+    if not isinstance(data, dict):
+        raise NotifyFailure("bad_response", channel_type="hermes")
+
+    status = str(data.get("status") or "").strip().lower()
+    if status in _HERMES_OK_STATUS:
+        return "confirmed"
+    if status in _HERMES_BAD_STATUS:
+        return "rejected"
+    for key in ("delivered", "ok", "success", "accepted"):
+        value = data.get(key)
+        if value is True:
+            return "confirmed"
+        if value is False:
+            return "rejected"
+    return "unknown"
+
+
+def assert_ilink_base_url(base_url: str) -> str:
+    """iLink `base_url` 的主机白名单(防把渠道改成打内网的跳板)。
+
+    `base_url` 在扫码绑定时由腾讯返回, 但 `PUT /api/channels` 可以改写它 ——
+    它是本仓**唯一**由第三方值决定、又能被用户覆盖的出站目标。iLink 的 HTTP 栈在
+    `src.core.wechat_ilink` 内部(自己 new httpx client, 无法在此处固定 IP), 所以这里
+    用**域名后缀白名单**而不是 IP 判定: 对固定域名不存在 rebinding 问题。
+    合法自建/测试主机用 `SIDA_NOTIFY_ILINK_HOSTS`(逗号分隔)显式追加。
+    """
+    from urllib.parse import urlsplit
+
+    raw = str(base_url or "").strip() or "https://ilinkai.weixin.qq.com"
+    try:
+        parsed = urlsplit(raw)
+        host = (parsed.hostname or "").strip().lower()
+        scheme = (parsed.scheme or "").lower()
+    except ValueError as exc:
+        raise TargetBlocked("bad_url") from exc
+    if scheme not in ("http", "https") or not host:
+        raise TargetBlocked("bad_scheme")
+    if host.endswith(_ILINK_HOST_SUFFIX) or host == "weixin.qq.com":
+        return raw
+    extra = {
+        item.strip().lower()
+        for item in (os.environ.get(ENV_ILINK_EXTRA_HOSTS, "") or "").replace(";", ",").split(",")
+        if item.strip()
+    }
+    if host in extra:
+        return raw
+    raise TargetBlocked("host_not_allowed")
+
+
+def _validate_outbound_url(url: str) -> None:
+    """配置期校验: **只为"危险目标"拦人**(`TargetBlocked`); DNS 解析失败放行。
+
+    为什么 DNS 失败不拦: 配置期解析不到 ≠ 配置非法 —— 内网 split-DNS、域名刚建还没生效、
+    解析器临时抖动都会命中, 拦下来等于"保存渠道看运气", 是典型误伤合法配置。真正的安全
+    决策在**连接那一刻**(`guarded_request` 会再校验一次), 解析结果指向内网照样会被拦,
+    所以这里放行不降低防护强度; 解析失败会在发送/测试时如实报 `dns_failed`
+    (「目标域名解析失败」), 而不是谎称"配置无效"。
+    """
+    try:
+        validate_target(url)
+    except TargetUnresolvable:
+        logger.debug("配置期目标暂不可解析, 留待发送时复核(不落地址)")
+        return
+
+
+def _bark_server_url(config: dict) -> str:
+    """自建 Bark 服务器地址(空 = apprise 默认 api.day.app)。"""
+    raw = str(config.get("server_url") or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    if not raw.lower().startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+    return raw
+
+
 class NotifierManager:
     """通知管理器: Apprise 渠道 + 自定义渠道"""
 
@@ -243,6 +387,18 @@ class NotifierManager:
     def add_channel(self, channel_type: str, config: dict) -> bool:
         """添加通知渠道，配置无效时显式报错。"""
         try:
+            if channel_type == "bark" and _bark_server_url(config):
+                # 自建 Bark: apprise 自己解析域名、自己发请求, 我们无法把连接固定到
+                # 校验过的 IP(DNS rebinding 窗口就在 apprise 内部)。所以自建服务器
+                # 改走本模块的直连实现(pinning + 协议校验), 协议与 apprise 一致
+                # (POST {server}/push), 默认 api.day.app 仍走 apprise 不变。
+                if not str(config.get("device_key") or "").strip():
+                    raise ValueError("Bark 需要 device_key")
+                _validate_outbound_url(f"{_bark_server_url(config)}/push")
+                self._custom_channels.append((channel_type, config))
+                self._channel_count += 1
+                logger.info("注册自定义通知渠道: bark (自建服务器, 直连)")
+                return True
             if channel_type in _APPRISE_TYPES:
                 url = build_apprise_url(channel_type, config)
                 if url is None:
@@ -266,13 +422,26 @@ class NotifierManager:
                 ]
                 if missing:
                     raise ValueError(f"{channel_type} 缺少必填配置: {', '.join(missing)}")
+                # 配置期就把"指向内网/元数据"的目标拦掉: 用户能在设置页立刻看到
+                # blocked_target, 而不是等到半夜推送时才失败。
+                if channel_type == "hermes":
+                    _validate_outbound_url(str(config.get("webhook_url") or ""))
+                elif channel_type == "wechat_ilink":
+                    assert_ilink_base_url(str(config.get("base_url") or ""))
                 self._custom_channels.append((channel_type, config))
                 self._channel_count += 1
                 logger.info(f"注册自定义通知渠道: {channel_type}")
             else:
                 raise ValueError(f"不支持的通知渠道: {channel_type}")
         except ValueError as e:
-            logger.error(f"注册通知渠道失败: {e}")
+            # 渠道配置里的 key/token 可能被拼进异常文本 → 只落关联号 + 类型名。
+            log_failure(
+                logger,
+                "通知渠道注册",
+                e,
+                ref=new_error_ref(),
+                context={"channel_type": str(channel_type or "")},
+            )
             raise
         return True
 
@@ -347,24 +516,58 @@ class NotifierManager:
             apprise_ok = False
             last_err = ""
             for attempt in range(0, retry_attempts + 1):
+                attempt_ref = new_error_ref()
                 try:
-                    success = await self._ap.async_notify(
-                        title=title,
-                        body=plain_content,
-                        body_format=apprise.NotifyFormat.TEXT,
-                        attach=attachments,
-                    )
+                    # apprise 的日志正文里带渠道 URL / bark device_key / bot token, 而
+                    # apprise 不在传输层噪音名单里 → 这些 DEBUG 会进 DB 日志表。作用域
+                    # 把本轮关联号绑上去, 正文由 third_party_log_guard 整体替换成
+                    # 「级别 + 类别 + 关联号」。
+                    with third_party_log_scope(ref=attempt_ref, category="apprise"):
+                        success = await self._ap.async_notify(
+                            title=title,
+                            body=plain_content,
+                            body_format=apprise.NotifyFormat.TEXT,
+                            attach=attachments,
+                        )
                     if success:
                         apprise_ok = True
                         # v2.1 §11.5: 每渠道带 delivered_at 时间戳
                         channel_results.append({"type": "apprise", "success": True, "delivered_at": sent_at})
                         logger.info(f"Apprise 通知发送成功: {title}")
                         break
-                    last_err = "Apprise 通知发送失败（可能是网络问题或配置错误）"
-                    logger.error(f"{last_err}: {title}")
+                    # apprise 只回 bool: 没有异常可分类, 归"未确认送达", 但仍给
+                    # 关联号 —— 否则前端只看到一句无法追查的失败。
+                    failure = NotifyFailure(
+                        "not_delivered",
+                        channel_type="apprise",
+                        action="Apprise 通知发送",
+                        ref=attempt_ref,
+                    )
+                    last_err = failure.public_message
+                    log_failure(
+                        logger,
+                        "Apprise 通知外发",
+                        None,
+                        ref=failure.ref,
+                        error_type="NotDelivered",
+                        context={"channel_type": "apprise"},
+                    )
                 except Exception as e:
-                    last_err = f"Apprise 通知异常: {e}"
-                    logger.error(last_err)
+                    # httpx/apprise 的异常文本里可能有 webhook URL 与 token。
+                    failure = as_failure(
+                        e,
+                        channel_type="apprise",
+                        action="Apprise 通知发送",
+                        ref=attempt_ref,
+                    )
+                    last_err = failure.public_message
+                    log_failure(
+                        logger,
+                        "Apprise 通知外发",
+                        e,
+                        ref=failure.ref,
+                        context={"channel_type": "apprise", "category": failure.category},
+                    )
                 if attempt < retry_attempts:
                     await _sleep_retry(attempt + 1)
             if not apprise_ok:
@@ -377,12 +580,18 @@ class NotifierManager:
             ch_ok = False
             last_err = ""
             for attempt in range(0, retry_attempts + 1):
+                attempt_ref = new_error_ref()
                 try:
                     # 支持 Markdown 的渠道使用原始内容，否则使用纯文本
                     ch_content = (
                         content if ch_type in _MARKDOWN_CHANNELS else plain_content
                     )
-                    receipt = await self._send_custom(ch_type, config, title, ch_content)
+                    # 自定义渠道也走 httpx(其 INFO 日志带完整 URL: key=/bot<token>),
+                    # 同样把正文替换成「类别 + 关联号」。
+                    with third_party_log_scope(
+                        ref=attempt_ref, category=str(ch_type or "custom")
+                    ):
+                        receipt = await self._send_custom(ch_type, config, title, ch_content)
                     ch_ok = True
                     # v2.1 §11.5: 每渠道带 delivered_at 时间戳 + channel_id 便于前端标识
                     result_item = {
@@ -395,8 +604,21 @@ class NotifierManager:
                     channel_results.append(result_item)
                     break
                 except Exception as e:
-                    last_err = f"{ch_type} 发送失败: {e}"
-                    logger.error(last_err)
+                    # 同上: 渠道 URL/token 就在异常链里, 对外只给类别 + 关联号。
+                    failure = as_failure(
+                        e,
+                        channel_type=str(ch_type),
+                        action=f"{ch_type} 通知发送",
+                        ref=attempt_ref,
+                    )
+                    last_err = failure.public_message
+                    log_failure(
+                        logger,
+                        "通知渠道外发",
+                        e,
+                        ref=failure.ref,
+                        context={"channel_type": str(ch_type), "category": failure.category},
+                    )
                 if attempt < retry_attempts:
                     await _sleep_retry(attempt + 1)
             if not ch_ok:
@@ -421,8 +643,12 @@ class NotifierManager:
             await self._send_hermes(config, title, content)
         elif ch_type == "wechat_ilink":
             return await self._send_wechat_ilink(config, title, content)
+        elif ch_type == "bark":
+            return await self._send_bark(config, title, content)
         else:
-            logger.warning(f"未知的自定义渠道类型: {ch_type}")
+            # 旧实现只 warning 就 return None, 上层把"没发"当成功写 sent —— 未知类型
+            # 是**配置错误**, 必须失败(否则用户看到"已送达"但一条都没发)。
+            raise ValueError(f"未知的自定义渠道类型: {ch_type}")
 
     async def _send_telegram(self, config: dict, title: str, content: str):
         """Telegram Bot API（支持代理）
@@ -467,31 +693,51 @@ class NotifierManager:
         # 配置代理
         transport = None
         if proxy:
-            transport = httpx.AsyncHTTPTransport(proxy=proxy)
-            logger.debug(f"Telegram 使用代理: {proxy}")
+            # 代理地址也是用户可写的(渠道 config.proxy): 它决定服务端 TCP 连去哪儿。
+            # 按 URL 解析而不是 `startswith("http")` —— 旧写法让 socks5h:// 整条绕过校验。
+            # 口径是 `no_metadata`: 本机/局域网的 clash、squid 是合法常态
+            # (127.0.0.1:7890), 但指向云元数据段(169.254.0.0/16)从来不是正常配置。
+            try:
+                validate_proxy_target(proxy)
+            except TargetUnresolvable as exc:
+                # 代理域名解析不了 = 代理不可用, 不是"渠道配置无效"也不是"目标网络不可达"。
+                raise NotifyFailure("proxy_failed", channel_type="telegram") from exc
+            try:
+                transport = httpx.AsyncHTTPTransport(proxy=proxy)
+            except ImportError as exc:
+                # socks 代理需要 socksio: 部署里没装 → 代理用不了(仍然是有界类别)。
+                raise NotifyFailure("proxy_failed", channel_type="telegram") from exc
+            # 代理 URL 里常带 `http://user:pass@host:port`, 不能整串进日志。
+            logger.debug("Telegram 渠道使用代理发送(地址不落日志)")
 
         try:
             async with httpx.AsyncClient(transport=transport, timeout=30) as client:
                 resp = await client.post(url, json=payload)
+                _raise_for_http_status(resp, channel_type="telegram")
                 data = resp.json()
                 if not data.get("ok"):
-                    raise RuntimeError(f"Telegram API 错误: {data.get('description')}")
+                    # description 是 provider 原文(可能回显 bot token), 不复述。
+                    code = data.get("error_code")
+                    raise NotifyFailure(
+                        "auth_rejected" if code == 401 else "http_rejected",
+                        channel_type="telegram",
+                        status=code if isinstance(code, int) else None,
+                    )
                 logger.info(f"Telegram 通知发送成功: {title}")
-        except httpx.ConnectError as e:
-            if proxy:
-                raise RuntimeError(f"连接代理失败 ({proxy}): {e}")
-            else:
-                raise RuntimeError(f"无法连接 Telegram API（可能需要配置代理）: {e}")
-        except httpx.TimeoutException:
-            raise RuntimeError("请求超时（网络问题或代理配置错误）")
-        except Exception as e:
-            if (
-                "ConnectError" in str(type(e).__name__)
-                or "connection" in str(e).lower()
-            ):
-                if not proxy:
-                    raise RuntimeError(f"网络连接失败，建议配置代理: {e}")
+        except NotifyFailure:
             raise
+        except httpx.ProxyError as e:
+            raise NotifyFailure("proxy_failed", channel_type="telegram") from e
+        except httpx.TimeoutException as e:
+            raise NotifyFailure("timeout", channel_type="telegram") from e
+        except httpx.ConnectError as e:
+            # 走代理时连不上通常就是代理本身不可用, 但代理串不能出现在文案里。
+            raise NotifyFailure(
+                "proxy_failed" if proxy else "network_unreachable",
+                channel_type="telegram",
+            ) from e
+        except Exception as e:
+            raise NotifyFailure(classify(e), channel_type="telegram") from e
 
     async def _send_wecom(self, config: dict, title: str, content: str):
         """企业微信机器人 Webhook"""
@@ -506,10 +752,57 @@ class NotifierManager:
         # P1: 构造器统一 timeout=30, 防无默认超时挂死
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, timeout=30)
+            # 企微网关/反代出错时回 HTML 200/5xx: 先按协议判, 再解析 errcode。
+            _raise_for_http_status(resp, channel_type="wecom")
             data = resp.json()
             if data.get("errcode") != 0:
-                raise RuntimeError(f"企业微信发送失败: {data.get('errmsg')}")
+                # errmsg 是企微原文, 有时会把 webhook key 回显出来 —— 不复述。
+                code = data.get("errcode")
+                raise NotifyFailure(
+                    "auth_rejected" if code == 93000 else "http_rejected",
+                    channel_type="wecom",
+                    status=code if isinstance(code, int) else None,
+                )
             logger.info(f"企业微信通知发送成功: {title}")
+
+    async def _send_bark(self, config: dict, title: str, content: str):
+        """自建 Bark 服务器(Bark v2 `POST /push`), 目标 IP 已校验并固定。
+
+        默认 `api.day.app` 仍走 apprise(host 固定、非用户输入); 只有用户填了
+        `server_url` 才走这里 —— 这样"任意 URL"这条输入不会经过 apprise 自己的
+        DNS 解析(那是 rebinding 防护够不到的地方)。
+        """
+        device_key = str(config.get("device_key") or "").strip()
+        if not device_key:
+            raise ValueError("Bark 需要 device_key")
+        server = _bark_server_url(config)
+        if not server:
+            raise ValueError("Bark 自建直连缺少 server_url")
+
+        payload = {
+            "device_key": device_key,
+            "title": title or "通知",
+            "body": content or "",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await guarded_request(
+                client, "POST", f"{server}/push", json_body=payload
+            )
+        _raise_for_http_status(resp, channel_type="bark")
+        try:
+            data = resp.json()
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise NotifyFailure("bad_response", channel_type="bark") from exc
+        code = data.get("code") if isinstance(data, dict) else None
+        if str(code) != "200":
+            # Bark 用 code 表达业务结果(400 device key 无效 / 500 服务端错), 只带有界数值。
+            raise NotifyFailure(
+                "auth_rejected" if str(code) in ("400", "401", "403") else "http_rejected",
+                channel_type="bark",
+                status=int(code) if str(code).lstrip("-").isdigit() else None,
+            )
+        logger.info("Bark(自建)通知发送成功: %s", title)
+        return {"accepted": True}
 
     async def _send_hermes(self, config: dict, title: str, content: str):
         """Hermes 中转 webhook。
@@ -517,6 +810,12 @@ class NotifierManager:
         用途: 企微群机器人 webhook 不可用时(管理员未开放/uaKey 过期),
         借道 Hermes 网关那条活着的企微长连发消息。
         Hermes 侧用 `--deliver-only` 直转, 零 LLM 开销。
+
+        **200 不等于送达**(2026-11-12 复审六): 网关前面可能挂着登录页、反代错误页、
+        维护页 —— 那些都是 HTTP 200 + HTML。旧实现在 `resp.json()` 失败时把 `data`
+        置空, 于是 `status` 缺失被当成成功, `push_status` 写 sent: 用户以为收到,
+        实际一条没发。现在按协议判定, 区分**可证成功 / 可证失败 / 未知**,
+        未知一律不写 sent(类别 `not_delivered`= "渠道未确认送达")。
         """
         url = (config.get("webhook_url") or "").strip()
         secret = (config.get("secret") or "").strip()
@@ -533,18 +832,25 @@ class NotifierManager:
 
         # P1: 构造器统一 timeout=30, 防无默认超时挂死
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, content=raw, headers=headers, timeout=30)
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"Hermes 中转失败: HTTP {resp.status_code} {resp.text[:200]}"
-                )
-            try:
-                data = resp.json()
-            except Exception:
-                data = {}
-            if data.get("status") not in (None, "delivered", "ok"):
-                raise RuntimeError(f"Hermes 中转未送达: {data}")
-            logger.info(f"Hermes 中转通知发送成功: {title}")
+            # guarded_request: DNS 只解析一次, 校验过的 IP 就是连接的 IP(Host/SNI 保留
+            # 原域名), 且不跟随重定向(302 → 内网是经典 SSRF 绕过)。
+            resp = await guarded_request(
+                client, "POST", url, headers=headers, content=raw
+            )
+        # 非 2xx 先按协议归类(401/403 → 凭证被拒), 再谈正文。
+        _raise_for_http_status(resp, channel_type="hermes")
+        state = _hermes_delivery_state(resp)
+        if state == "rejected":
+            raise NotifyFailure(
+                "http_rejected",
+                channel_type="hermes",
+                status=int(getattr(resp, "status_code", 0) or 0),
+            )
+        if state != "confirmed":
+            # 200 但没有任何可识别 ack: 不猜、不宣称送达。
+            raise NotifyFailure("not_delivered", channel_type="hermes")
+        logger.info("Hermes 中转通知发送成功: %s", title)
+        return {"delivery": "confirmed"}
 
     async def _send_wechat_ilink(self, config: dict, title: str, content: str):
         """个人微信 iLink 直连发送(腾讯官方通道)。
@@ -554,7 +860,9 @@ class NotifierManager:
         context_token 过期时自动 getupdates 刷新并重试一次。
         """
         token = str(config.get("token") or "").strip()
-        base_url = str(config.get("base_url") or "").strip()
+        # base_url 可被 PUT /api/channels 改写 → 必须过域名白名单, 否则这条渠道就是
+        # 一个"向任意主机发 POST"的跳板。
+        base_url = assert_ilink_base_url(str(config.get("base_url") or "").strip())
         wechat_user_id = str(config.get("user_id") or "").strip()
         context_token = str(config.get("context_token") or "").strip() or None
         if not token or not wechat_user_id:
@@ -572,18 +880,31 @@ class NotifierManager:
             )
         except Exception as exc:
             # 会话 token 过期/失效 → getupdates 拉最新 context_token 重试一次
-            logger.warning(f"微信 iLink 首次发送失败({exc}), 刷新 context_token 重试")
+            # iLink 的异常文本带 token/接口地址; 首次失败仍可重试, 只记关联号。
+            first_ref = new_error_ref()
+            log_failure(
+                logger,
+                "个人微信(iLink)首次发送(将刷新会话token重试)",
+                exc,
+                ref=first_ref,
+                context={"channel_type": "wechat_ilink"},
+            )
             try:
                 updates = await wechat_ilink.get_updates(account)
                 new_ctx = _extract_context_token(updates, wechat_user_id)
                 if not new_ctx:
-                    raise RuntimeError(f"未能获取会话 token: {exc}")
+                    raise NotifyFailure("not_delivered", channel_type="wechat_ilink")
                 resp = await wechat_ilink.send_text(
                     account, wechat_user_id, text, context_token=new_ctx
                 )
                 self._persist_context_token(config, new_ctx)
             except Exception as exc2:
-                raise RuntimeError(f"微信 iLink 发送失败: {exc2}")
+                failure = as_failure(
+                    exc2, channel_type="wechat_ilink", action="个人微信(iLink)通知发送"
+                )
+                if failure is exc2:  # 已经是安全异常: 不自我链式, 避免环状 traceback
+                    raise
+                raise failure from exc2
         message_id = str(resp.get("message_id") or "")[:128] if isinstance(resp, dict) else ""
         logger.info(f"个人微信(iLink)通知发送成功: {title}")
         return {"ok": True, "message_id": message_id}
@@ -616,7 +937,14 @@ class NotifierManager:
             finally:
                 db.close()
         except Exception as exc:
-            logger.warning(f"context_token 持久化失败: {exc}")
+            # 这里是 DB 写: 异常文本自带 SQL/绑定参数/DSN。
+            log_failure(
+                logger,
+                "微信 context_token 持久化",
+                exc,
+                ref=new_error_ref(),
+                context={"channel_type": "wechat_ilink"},
+            )
 
     async def _send_serverchan(self, config: dict, title: str, content: str):
         sendkey = config.get("sendkey", "")
@@ -629,9 +957,11 @@ class NotifierManager:
         # P1: 构造器统一 timeout=30, 防无默认超时挂死
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, timeout=30)
+            _raise_for_http_status(resp, channel_type="serverchan")
             data = resp.json()
             if data.get("code") != 0:
-                raise RuntimeError(f"Server酱发送失败: {data.get('message')}")
+                # provider 原文带 sendkey 的风险, 不复述。
+                raise NotifyFailure("http_rejected", channel_type="serverchan")
             logger.info(f"Server酱通知发送成功: {title}")
 
     async def _send_pushplus(self, config: dict, title: str, content: str):
@@ -660,12 +990,15 @@ class NotifierManager:
             try:
                 data = resp.json()
             except Exception as exc:
-                raise RuntimeError("PushPlus 返回了无效 JSON") from exc
+                raise NotifyFailure("bad_response", channel_type="pushplus") from exc
             if str(data.get("code")) != "200":
-                message = str(data.get("msg") or "未知错误")
-                if message == "服务端验证错误":
-                    message += "（可能是重复消息，或 token/topic 参数无效）"
-                raise RuntimeError(f"PushPlus 发送失败: {message}")
+                # msg 是 provider 原文(可能回显 token), 只保留有界数值码。
+                code = data.get("code")
+                raise NotifyFailure(
+                    "auth_rejected" if str(code) in ("903", "401", "403") else "http_rejected",
+                    channel_type="pushplus",
+                    status=int(code) if str(code).lstrip("-").isdigit() else None,
+                )
             logger.info(f"PushPlus 通知发送成功: {title}")
             # data 为 PushPlus 消息流水号，可用于设置页确认 API 已接收。
             return {"accepted": True, "message_id": str(data.get("data") or "")[:128]}

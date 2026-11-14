@@ -52,24 +52,58 @@ function NoData() {
   return <span className="text-[12px] text-muted-foreground">无数据</span>
 }
 
-/** 股性因子(封板/连板/参与度) —— null 一律「无数据」。 */
-function DemonDetail({ demon }: { demon: PremarketRow['signals']['demon'] }) {
-  if (!demon) return <NoData />
-  const seen = [demon.score, demon.grade, demon.n_sealed, demon.max_streak, demon.participation]
+/** 股性因子(封板/连板/参与度) —— null 一律「无数据」并说明原因(不补 0)。
+ *
+ * 2026-11-12 审计: 旧报告自己存了冻结快照、但证明不了盘前可得时, 数值不消失 ——
+ * 以「历史未验证 · 不纳入成绩」标签原样展示, **不许**看起来像盘前信号。
+ */
+function DemonDetail({
+  demon,
+  historical,
+  note,
+}: {
+  demon: PremarketRow['signals']['demon']
+  historical?: PremarketRow['signals']['demon_historical']
+  note: string | null | undefined
+}) {
+  const shown = demon ?? historical ?? null
+  if (!shown) {
+    return (
+      <span className="text-[12px] text-muted-foreground">
+        无数据{note ? `(${note})` : ''}
+      </span>
+    )
+  }
+  const seen = [shown.score, shown.grade, shown.n_sealed, shown.max_streak, shown.participation]
+  const unverified = !demon && !!historical
   if (seen.every((v) => v === null || v === undefined || v === '')) return <NoData />
   return (
     <span className="font-mono">
-      {demon.grade ? <span className="mr-1">{demon.grade}</span> : null}
-      {safeFixed(demon.score, 1)}
+      {shown.grade ? <span className="mr-1">{shown.grade}</span> : null}
+      {safeFixed(shown.score, 1)}
       <span className="ml-2 font-sans text-muted-foreground">
-        封板 {safeInt(demon.n_sealed)} 次 · 最高 {safeInt(demon.max_streak)} 连板
+        封板 {safeInt(shown.n_sealed)} 次 · 最高 {safeInt(shown.max_streak)} 连板
       </span>
-      {demon.participation ? <span className="ml-2 font-sans text-muted-foreground">{demon.participation}</span> : null}
+      {shown.participation ? <span className="ml-2 font-sans text-muted-foreground">{shown.participation}</span> : null}
+      {shown.factor_date ? (
+        <span className="ml-2 font-sans text-muted-foreground" title="因子快照日(只说明上次计算日, 不保证数据已截至报告日前一交易日)">
+          快照日 {shown.factor_date}
+        </span>
+      ) : null}
+      {unverified ? (
+        <span
+          className="ml-2 rounded border border-border px-1 font-sans text-[12px] text-muted-foreground"
+          data-testid="premarket-demon-unverified"
+          title={note ?? '该快照无法证明在报告日盘前可得, 只作历史展示'}
+        >
+          历史未验证 · 不纳入成绩
+        </span>
+      ) : null}
     </span>
   )
 }
 
-/** 价格位置(收盘/当日/连板/20 日) —— 缺 close 且无 note 即「无数据」。 */
+/** 价格位置(盘前口径: 收盘/当日/连板/20 日) —— 缺 close 且无 note 即「无数据」。 */
 function PriceDetail({ price }: { price: PremarketRow['signals']['price'] }) {
   if (!price) return <NoData />
   if (safeNum(price.close) === null) {
@@ -79,11 +113,20 @@ function PriceDetail({ price }: { price: PremarketRow['signals']['price'] }) {
   return (
     <span className="font-mono">
       收盘 {safePrice(price.close)}
+      {price.close_date ? (
+        <span className="ml-1 font-sans text-muted-foreground" data-testid="premarket-close-date">
+          ({price.close_date})
+        </span>
+      ) : null}
       <span className="ml-2">
         <Pct value={price.pct} />
       </span>
       <span className="ml-2 font-sans text-muted-foreground">
-        {streak === null ? '连板 --' : streak > 0 ? `连板 ${safeInt(streak)}` : '非涨停'}
+        {streak === null
+          ? '连板 --'
+          : streak > 0
+            ? `连板 ${safeInt(streak)}(收盘推断)`
+            : '未达涨停阈值(收盘推断)'}
       </span>
       <span className="ml-2 font-sans text-muted-foreground">
         20日 <Pct value={price.pct_20d} /> · 距20日高 <Pct value={price.from_20d_high} />
@@ -143,17 +186,21 @@ function RowDetail({ row }: { row: PremarketRow }) {
         <Field label="目标">{row.target || '--'}</Field>
         <Field label="证伪条件">{row.falsify || '--'}</Field>
         <Field label="批次">{row.batch || '--'}</Field>
-        <Field label="事后表现(收盘价口径)">
+        <Field label="事后表现(收盘价口径 · 事后 · 仅盘前生成计)">
           <span className="font-mono">
             当日 <Pct value={row.outcome?.t0} /> · T+1 <Pct value={row.outcome?.t1} /> · T+3{' '}
             <Pct value={row.outcome?.t3} />
           </span>
           {row.outcome?.note ? <span className="ml-2 text-muted-foreground">{row.outcome.note}</span> : null}
         </Field>
-        <Field label="股性因子">
-          <DemonDetail demon={row.signals?.demon ?? null} />
+        <Field label="股性因子(盘前)">
+          <DemonDetail
+            demon={row.signals?.demon ?? null}
+            historical={row.signals?.demon_historical ?? null}
+            note={row.signals?.demon_note}
+          />
         </Field>
-        <Field label="价格位置">
+        <Field label="价格位置(盘前口径)">
           <PriceDetail price={row.signals?.price ?? null} />
         </Field>
       </dl>
@@ -171,6 +218,10 @@ function PeriodBlock({
   onToggle: (key: string) => void
 }) {
   const s = item.summary
+  // 只有能证明「盘前采样」的期次才算当日盘前候选成绩; 盘后重跑/时点不可证明一律不当成绩。
+  const notEligible = item.premarket_eligible === false
+  const ineligibleLabel =
+    item.preopen === false ? '非盘前生成 · 不计当日候选成绩' : '生成时点不可证明 · 不计当日候选成绩'
   return (
     <div className="mt-3 first:mt-2" data-testid="premarket-period">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border pb-1">
@@ -185,11 +236,74 @@ function PeriodBlock({
             正文异常
           </span>
         )}
+        {notEligible && (
+          <span
+            className="rounded border border-border px-1 text-[12px] text-muted-foreground"
+            data-testid="premarket-not-eligible"
+            title="该期不是报告日 09:30 前采样, 当日/T+1/T+3 不作为盘前候选成绩"
+          >
+            {ineligibleLabel}
+          </span>
+        )}
         <span className="ml-auto text-[12px] text-muted-foreground">
-          潜伏 {safeInt(s?.rows)} 只 · 当日上涨 {safeInt(s?.t0_up)}/{safeInt(s?.t0_scored)} · T+1 上涨{' '}
-          {safeInt(s?.t1_up)}/{safeInt(s?.t1_scored)}
+          {notEligible ? (
+            <>
+              实际完成 {item.report_completed_at ?? item.generated_at ?? '时点不可证明'}
+            </>
+          ) : (
+            <>
+              潜伏 {safeInt(s?.rows)} 只 · 当日上涨 {safeInt(s?.t0_up)}/{safeInt(s?.t0_scored)} · T+1 上涨{' '}
+              {safeInt(s?.t1_up)}/{safeInt(s?.t1_scored)}
+            </>
+          )}
         </span>
       </div>
+
+      {item.pit ? (
+        <div
+          className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-muted-foreground"
+          data-testid="premarket-pit"
+        >
+          <span>
+            盘前取数: 收盘 &lt; {item.pit.price_before}
+            {(item.pit.price_close_dates ?? []).length > 0
+              ? `(实际 ${(item.pit.price_close_dates ?? []).join('、')})`
+              : ''}
+          </span>
+          <span>
+            股性因子: {item.pit.demon_available ?? 0}/{item.row_count} 可用
+            {item.pit.demon_asof ? ` · 快照日 ≤ ${item.pit.demon_asof}` : ''}
+            {(item.pit.demon_unverified ?? 0) > 0
+              ? ` · 历史未验证 ${safeInt(item.pit.demon_unverified)} 行(不纳入成绩)`
+              : ''}
+          </span>
+          <span data-testid="premarket-sample-time">
+            采样时点: {item.generated_at ?? '不可证明'}
+            {item.preopen === false ? '(非盘前)' : item.preopen === null ? '(时点不可证明)' : ''}
+          </span>
+          <span data-testid="premarket-report-completed">
+            报告完成: {item.report_completed_at ?? '不可证明'}
+          </span>
+          {!item.pit.demon_evidence && item.run_trace_id && (
+            <span data-testid="premarket-binding" title={item.pit.binding_reason ?? undefined}>
+              凭证绑定 {item.run_trace_id} · {safeInt(item.pit.evidence_matched ?? 0)} 条
+            </span>
+          )}
+          {item.pit.gate_reason && item.preopen !== true && (
+            <span data-testid="premarket-gate-reason" title={item.pit.gate_reason}>
+              {item.pit.gate_reason}
+            </span>
+          )}
+          {!item.pit.demon_evidence && (
+            <span title={item.pit.demon_reason ?? undefined}>
+              无生成时冻结快照, 股性按盘前不可得留空
+            </span>
+          )}
+          <span>
+            {notEligible ? '当日/T+1/T+3 不计入盘前候选成绩' : '当日/T+1/T+3 为事后表现(收盘价口径)'}
+          </span>
+        </div>
+      ) : null}
 
       {!item.parsed || (item.rows ?? []).length === 0 ? (
         <p className="mt-1.5 text-[12px] text-muted-foreground" data-testid="premarket-unparsed">
@@ -326,8 +440,12 @@ export default function PremarketLedgerSection() {
     <section className="analysis-section" data-testid="premarket-ledger">
       <h2 className="text-[16px] font-semibold">盘前分析</h2>
       <p className="mt-0.5 text-[12px] text-muted-foreground">
-        盘前报告里潜伏表(事件驱动前瞻 · 双轨制)的标的, 用真实行情对账: 当日 / T+1 / T+3 按收盘价算,
-        止损只在写了具体价位时判是否跌破; 潜伏标的由 AI 撰写, 本页只解析、不补造。
+        盘前报告里潜伏表(事件驱动前瞻 · 双轨制)的标的, 用真实行情对账。盘前信号与事后表现分开:
+        位置只用报告日**之前**的收盘(标真实收盘日, 连板为收盘涨幅推断、非交易所涨停确认),
+        股性因子只展示报告生成时冻结、带时区采样时点且证明盘前可见的快照; 当日 / T+1 / T+3
+        是按收盘价算的事后表现, **只有盘前生成且时点可证明的期次**才计入候选成绩 ——
+        盘后重跑会标「非盘前生成」并留空。止损只在写了具体价位时判是否跌破;
+        潜伏标的由 AI 撰写, 本页只解析、不补造。
       </p>
 
       {loading && !data && (

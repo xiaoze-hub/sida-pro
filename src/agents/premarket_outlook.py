@@ -8,6 +8,7 @@ import time
 from collections import Counter
 from datetime import datetime, date, timedelta
 from pathlib import Path
+from typing import Any
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult, apply_scene_binding
 from src.core.ai_client import LLMDegradedError
@@ -19,8 +20,54 @@ def _resolve_user_id(context: AgentContext) -> str | None:
     if user is None:
         return None
     return getattr(user, "id", None)
+
+
+def build_history_raw_data(data: dict, *, extra: dict | None = None) -> dict:
+    """报告落库的 raw_data 白名单（**不要改成整个 `data` 直存**）。
+
+    2026-11-12 复审: 白名单漏了 `demon_factors` / `demon_factors_frozen_at` /
+    `demon_factors_preopen` / `demon_factors_source`, 正文按冻结快照写出了「股性分 88」,
+    账本却因为拿不到凭证一律 unknown —— 同一份报告两处矛盾。这里把生成时冻结的凭证
+    和可核验来源一起带上, 账本与正文才有同一个事实来源。
+
+    注意 `timestamp` 是**整份报告采集完成时刻**, 不是因子快照的采样时点, 不能拿来
+    兜底证明盘前可见(见 `premarket_ambush.demon_evidence_verified`)。
+    """
+    raw = {
+        "us_indices": data.get("us_indices"),
+        "global_indices": data.get("global_indices"),
+        "timestamp": data.get("timestamp"),
+        # 报告版本身份: 盘前凭证只认与这份 raw_data 相同 run_trace_id 的采样(2026-11-12 P0)
+        "run_trace_id": data.get("run_trace_id"),
+        # 生成时冻结的股性因子快照 + 带时区采样时点 + 可核验来源/一致性指纹
+        "demon_factors": data.get("demon_factors"),
+        "demon_factors_asof": data.get("demon_factors_asof"),
+        "demon_factors_dropped": data.get("demon_factors_dropped"),
+        "demon_factors_frozen_at": data.get("demon_factors_frozen_at"),
+        "demon_factors_preopen": data.get("demon_factors_preopen"),
+        "demon_factors_source": data.get("demon_factors_source"),
+        "demon_factors_sha256": data.get("demon_factors_sha256"),
+    }
+    if extra:
+        raw.update(extra)
+    return raw
+
+
+def _report_date(data: dict) -> date | None:
+    """报告交易日(来自带时区的采集时间); 解析不了 → None, 由 save_analysis 用今天兜底。"""
+    from src.core.premarket_ambush import _norm_day
+
+    day = _norm_day(data.get("timestamp"))
+    if day is None:
+        return None
+    try:
+        return date.fromisoformat(day)
+    except ValueError:
+        return None
 from src.core.signals import SignalPackBuilder
 from src.core.analysis_history import save_analysis, get_latest_analysis
+from src.core.timezone import beijing_now
+from src.core.premarket_ambush import factor_snapshot_fingerprint
 from src.core.cn_symbol import get_cn_prefix
 from src.core.suggestion_pool import save_suggestion
 from src.core.context_builder import ContextBuilder
@@ -387,6 +434,11 @@ class PremarketOutlookAgent(BaseAgent):
         mood: dict = {}
         ambush_scored: list = []
         demon_factors: dict = {}
+        demon_factors_asof = None
+        demon_factors_dropped: list[str] = []
+        demon_factors_frozen_at = None
+        demon_factors_preopen = False
+        demon_factors_evidence = None
         try:
             from src.core.ambush_score import enrich_ambush_list
             from src.core.mood_cycle import current_mood
@@ -394,9 +446,47 @@ class PremarketOutlookAgent(BaseAgent):
             mood = current_mood()
             try:
                 from src.core.demon_factors import top_demon_factors
+                from src.core.premarket_ambush import filter_demon_for_generation
+                from src.core.premarket_factor_evidence import (
+                    SOURCE_TOP_N,
+                    build_snapshot_evidence,
+                )
 
                 # 扩大至 Top 50，确保覆盖主线题材中的潜在妖股先锋
-                demon_factors = top_demon_factors(50)
+                # `_sampled` 是**真实读到的原始快照**(过滤前), 落凭证用这一份; 展示/正文用
+                # 门禁过滤后的 kept —— 账本拿到原始样本才能复核「剔除」这一步没做错。
+                _sampled = top_demon_factors(50)
+                # PIT(2026-11-12, 复审修正): 因子表是每股一行的**当前快照**。生成时看到的
+                # 就是当时可见的, 所以这里按「实际完成采样的时点」判定: 09:30 前完成采样时,
+                # 当天早上算的快照(factor_date=D)确实已存在; 收盘后重生成时 factor_date=D
+                # 已含当天封板事件 → 剔除。保留行只标快照日, 不宣称数据已截至 D-1。
+                # 时点必须**带时区**且来自采样完成那一刻(不是报告 timestamp 兜底)。
+                _frozen_at = beijing_now()
+                _pit = filter_demon_for_generation(
+                    _sampled or {},
+                    _frozen_at.strftime("%Y-%m-%d"),
+                    generated_at=_frozen_at.isoformat(),
+                )
+                demon_factors = _pit["kept"]
+                demon_factors_asof = _pit["asof"]
+                demon_factors_dropped = _pit["dropped"]
+                demon_factors_preopen = bool(_pit.get("preopen"))
+                if _sampled:
+                    # 只有真实拿到快照才记凭证时点; 空采样不写「看起来像采样过」的时间。
+                    demon_factors_frozen_at = _pit.get("generated_at")
+                    demon_factors_evidence = build_snapshot_evidence(
+                        snapshot=_sampled,
+                        frozen_at=demon_factors_frozen_at,
+                        report_day=_frozen_at.strftime("%Y-%m-%d"),
+                        dropped=demon_factors_dropped,
+                        asof=demon_factors_asof,
+                        source=SOURCE_TOP_N,
+                        # 绑定到「这一次报告运行」, 账本才不会把同日其他版本的凭证挂过来
+                        run_trace_id=trace_id,
+                    )
+                else:
+                    demon_factors_frozen_at = None
+                    demon_factors_evidence = None
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 先锋组因子不可用: %s", trace_id, e)
             ambush_scored = await asyncio.to_thread(
@@ -432,11 +522,13 @@ class PremarketOutlookAgent(BaseAgent):
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 候选快照落库失败: %s", trace_id, e)
             logger.info(
-                "[%s] 四维埋伏评分完成: %s 条, 情绪=%s, 先锋组=%s",
+                "[%s] 四维埋伏评分完成: %s 条, 情绪=%s, 先锋组=%s(快照日<=%s, 剔除=%s)",
                 trace_id,
                 len(ambush_scored),
                 (mood or {}).get("label", "无数据"),
                 len(demon_factors),
+                demon_factors_asof or "无",
+                len(demon_factors_dropped),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("[%s] 四维埋伏评分失败: %s", trace_id, e)
@@ -513,10 +605,28 @@ class PremarketOutlookAgent(BaseAgent):
             "ambush_scored": ambush_scored,
             "mood": mood,
             "demon_factors": demon_factors,
+            "demon_factors_asof": demon_factors_asof,
+            "demon_factors_dropped": demon_factors_dropped,
+            # 生成时冻结凭证: 历史页只认这份快照 + 这个时点(见 demon_evidence_from_record)
+            "demon_factors_frozen_at": demon_factors_frozen_at,
+            "demon_factors_preopen": demon_factors_preopen,
+            # 可核验来源与一致性指纹。注意 raw_data 里存的是**过滤后**的 kept, 所以这里的
+            # 指纹按 kept 计算(与 raw_data 自洽); 追加式凭证里另存原始样本的指纹。
+            # 指纹**不**证明来源/时点, 只检测存储内容是否一致。
+            "demon_factors_source": demon_factors_evidence["source"]
+            if demon_factors_evidence
+            else None,
+            "demon_factors_sha256": (
+                factor_snapshot_fingerprint(demon_factors) if demon_factors else None
+            ),
+            # 追加式落库用的凭证(不参与覆盖); 无真实采样时为 None
+            "_demon_evidence": demon_factors_evidence,
             "futures_snapshot": futures_snapshot,
             "catalyst_analysis": catalyst_analysis,
             "tdx_wenda": tdx_wenda,
-            "timestamp": datetime.now().isoformat(),
+            # 数据采集完成时刻(带时区)。注意: 它**不是**股性因子快照的采样时点,
+            # 不能拿来兜底证明盘前可见(见 demon_evidence_verified)。
+            "timestamp": beijing_now().isoformat(timespec="seconds"),
             "run_trace_id": trace_id,
         }
 
@@ -658,7 +768,32 @@ class PremarketOutlookAgent(BaseAgent):
                 return "N/A"
 
         lines = []
-        lines.append(f"## 日期：{datetime.now().strftime('%Y-%m-%d')} 盘前\n")
+        from src.core.premarket_ambush import _norm_day
+        from src.core.premarket_factor_evidence import preopen_flag
+
+        _collected_at = str(data.get("timestamp") or "")
+        _report_day = _norm_day(_collected_at) or datetime.now().strftime("%Y-%m-%d")
+        _gen_preopen = preopen_flag(data.get("demon_factors_frozen_at"), _report_day)
+        if _gen_preopen is True:
+            lines.append(f"## 日期：{_report_day} 盘前\n")
+        else:
+            # 盘后/开盘后重跑: 标题不能再自称「盘前」, 否则模型与读者都会把事后信息当盘前结论。
+            _at = _collected_at[:19].replace("T", " ") or "时点未知"
+            _label = "非盘前生成" if _gen_preopen is False else "生成时点不可证明为盘前"
+            lines.append(f"## 日期：{_report_day} {_label}（实际采集 {_at}）\n")
+            lines.append(
+                "> 本次生成不在报告日盘前窗口(09:30 前): 不得把当日盘中/收盘信息当作盘前已知, "
+                "本期输出不作为当日盘前候选。\n"
+            )
+        # PIT(2026-11-12): 写明数据采集时点与盘前口径 —— 模型不得把报告日当天收盘、
+        # 或报告日重算的股性因子快照当成"盘前已知"的信息写进结论。
+        _ts = _collected_at[:16].replace("T", " ")
+        if _ts:
+            lines.append(
+                f"> 数据采集时点：{_ts}。盘前信号只用该时点**之前已收盘**的数据；"
+                "报告日当天收盘不属于盘前可得信息，不要引用。股性因子是采集时冻结的快照"
+                "（见下方快照日），快照日只说明上次计算日，不代表数据已截至报告日前一交易日。\n"
+            )
         symbol_contexts = data.get("symbol_contexts", {}) or {}
         quality_overview = data.get("quality_overview", {}) or {}
 
@@ -819,11 +954,22 @@ class PremarketOutlookAgent(BaseAgent):
         # 妖股先锋组(批次C×B 集成): 题材轮到时先锋名单, 情绪退潮/高潮禁推
         df_map = data.get("demon_factors") or {}
         if df_map:
-            lines.append("## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)")
-            for sym, f in list(df_map.items())[:15]:
+            _df_asof = data.get("demon_factors_asof")
+            lines.append(
+                "## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)"
+                + (f"【因子快照日 ≤ {_df_asof}（数据截止未验证）】" if _df_asof else "【快照日未知】")
+            )
+            _df_dropped = data.get("demon_factors_dropped") or []
+            if _df_dropped:
                 lines.append(
-                    f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) | "
-                    f"近一年封板{f.get('n_sealed')}次 最高{f.get('max_streak')}连板 | {f.get('participation')}"
+                    f"- 已剔除 {len(_df_dropped)} 只: 快照日/生成时点无法证明盘前可见, 不展示。"
+                )
+            for sym, f in list(df_map.items())[:15]:
+                _fd = f.get("factor_date") or "无快照日"
+                lines.append(
+                    f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) "
+                    f"快照日{_fd} | 近一年封板{f.get('n_sealed')}次 最高{f.get('max_streak')}连板 | "
+                    f"{f.get('participation')}"
                 )
             if mood.get("demon_veto"):
                 lines.append("- ⛔ 当前退潮/高潮档位: 先锋组整体禁推(妖股退潮期跌最狠), 只提示不进观察池")
@@ -1377,8 +1523,282 @@ class PremarketOutlookAgent(BaseAgent):
                 content = content.rstrip() + f"\n\n---\nAI: {context.model_label}"
         return content
 
+    def _persist_report(
+        self,
+        *,
+        result: AnalysisResult,
+        data: dict,
+        context: AgentContext,
+        raw_extra: dict | None = None,
+        status: str | None = None,
+        error: str | None = None,
+        report_completed_at: str | None = None,
+    ):
+        """报告唯一的落库入口（正文行 + 追加式盘前凭证）。
+
+        抽出来是为了让测试能**穿越真实 save_analysis 路径**（而不是复制一份白名单
+        再断言）: 盘后重跑、跨时区、缺凭证、冲突都在这里过同一道门。
+
+        返回 `SaveResult`（不再是 bool）: 正文是否落库、证据是否写入、以及「盘前重跑
+        未覆盖盘前正文」这种按规则保留的情形要分开告诉调用方 —— 三种状态不能压成一个
+        False。`report_completed_at` 必须是**报告真正生成完成**的带时区时刻(调用方在
+        生成结束后立刻取); 传 None = 时点不可证明(落 NULL, 门槛 unknown), 绝不拿保存
+        时刻兜底。
+        """
+        from src.core.analysis_history import SaveResult
+
+        evidence = data.get("_demon_evidence")
+        if isinstance(evidence, dict):
+            evidence = {**evidence, "agent_name": self.name}
+        else:
+            evidence = None
+        saved = save_analysis(
+            agent_name=self.name,
+            stock_symbol="*",
+            content=result.content,
+            title=result.title,
+            user_id=_resolve_user_id(context),
+            raw_data=build_history_raw_data(data, extra=raw_extra),
+            analysis_date=_report_date(data),
+            status=status or getattr(result, "status", None) or "success",
+            error=error if error is not None else getattr(result, "error", None),
+            premarket_evidence=evidence,
+            report_completed_at=report_completed_at,
+        )
+        # 兼容历史调用方/旧桩: 万一拿到的是 bool, 包成 SaveResult 再往下走
+        if isinstance(saved, SaveResult):
+            return saved
+        return SaveResult(body_saved=bool(saved))
+
+    @staticmethod
+    def _log_persist_result(saved, *, trace_id: str, label: str) -> None:
+        """把落库的三种真实状态分别告警（不再用一句「失败」吞掉）。
+
+        - 正文没进库 → ERROR（这是真失败, 报告丢了）;
+        - 正文按规则保留（当日已有盘前成功版）→ WARNING 说明「未覆盖」, 别让运维以为写进去了;
+        - 证据没写进 → ERROR（正文在, 但账本只能回落到 raw_data 凭证, 不算完整）。
+        """
+        from src.core.analysis_history import SaveResult
+
+        if not isinstance(saved, SaveResult):
+            if not saved:
+                logger.error("[%s] %s落库失败", trace_id, label)
+            return
+        if saved.content_skipped:
+            logger.warning(
+                "[%s] %s正文未覆盖当日盘前版本(按规则保留): %s",
+                trace_id,
+                label,
+                saved.reason,
+            )
+        elif not saved.body_saved:
+            logger.error("[%s] %s正文落库失败: %s", trace_id, label, saved.reason)
+        if saved.evidence_saved is False:
+            logger.error(
+                "[%s] %s盘前因子凭证未写入(正文在, 账本回落 raw_data): %s",
+                trace_id,
+                label,
+                saved.reason,
+            )
+
+    def _persist_suggestions(
+        self,
+        *,
+        suggestions: Any,
+        context: AgentContext,
+        data: dict,
+        analysis_date: str,
+        user_content: str,
+        result: AnalysisResult,
+        trace_id: str,
+        save_result,
+    ) -> dict:
+        """把建议池 + 预测后验写进库 —— **只在本次是成功盘前正文时**。
+
+        2026-11-12 P0 审计: 这两张表原来在正文落库**之前**无条件写。
+        一张盘后 16:00 (或生成时点不可证明) 的重跑即使正文被按规则保留,
+        建议池也会多出一批「盘前建议」、`agent_prediction_outcomes` 再多一套待后验行 ——
+        profile 的命中率 / 复盘统计直接被重复行灌水。现在:
+
+        - `body_saved and not content_skipped` —— 正文确实是这一版;
+        - `save_result.preopen is True` —— 这一版被证明是报告日 09:30 前生成的盘前报告;
+        任一不满足就只记一条 WARNING 说明「没写 + 为什么」, **不写任何统计表**。
+
+        预测后验(2026-11-12 P0 复审): 存储层改为「只插入, 绝不改写既有结果」——
+        必须带 `user_id`(无归属拒写), 同用户同键的 pending/evaluated 行一律不覆盖,
+        只有 `run_trace_id` 完全相同的重复写入算幂等。因此本函数**只统计真的插入成功的行**
+        (`res.written`), `kept_evaluated` / `refused_*` / `concurrent_duplicate` 计入
+        `outcome_not_written`, 不再像旧代码那样把「没写」当 saved 报出去。
+        """
+        counters = {
+            "suggestion_saved": 0,
+            "suggestion_failed": 0,
+            "outcome_saved": 0,
+            "outcome_version_appended": 0,
+            "outcome_not_written": 0,
+            "outcome_failed": 0,
+            "skipped": False,
+        }
+        if not suggestions:
+            return counters
+        if save_result is None or not getattr(save_result, "body_saved", False):
+            reason = getattr(save_result, "reason", None) or "正文未落库"
+            counters["skipped"] = True
+            logger.warning(
+                "[%s] 不写建议池/预测后验(正文没落库, 写进去就是无正文的假建议): %s",
+                trace_id,
+                reason,
+            )
+            return counters
+        if getattr(save_result, "content_skipped", False):
+            counters["skipped"] = True
+            logger.warning(
+                "[%s] 不写建议池/预测后验(本次正文按规则未覆盖, 保留的是当日盘前成功版): %s",
+                trace_id,
+                getattr(save_result, "reason", None),
+            )
+            return counters
+        preopen = getattr(save_result, "preopen", None)
+        if preopen is not True:
+            counters["skipped"] = True
+            logger.warning(
+                "[%s] 不写建议池/预测后验(非盘前/时点不可证明 preopen=%s, 完成时刻=%s): "
+                "盘后或 unknown 重跑不能伪装盘前成绩, 也不能重复污染命中率",
+                trace_id,
+                preopen,
+                getattr(save_result, "report_completed_at", None),
+            )
+            return counters
+
+        stock_map = {s.symbol: s for s in context.watchlist}
+        packs = data.get("signal_packs", {}) or {}
+        symbol_contexts = data.get("symbol_contexts", {}) or {}
+        analysis_date = analysis_date or (data.get("timestamp") or "")[:10]
+        # 预测后验必须有可核验的归属: 有 context.user → 个人桶; 无会话/系统调度 →
+        # **显式** system 桶(user_id 恒为空, 绝不猜测绑定真实用户)。
+        owner_id = _resolve_user_id(context)
+        owner_scope = "user" if owner_id else "system"
+        trace_id_run = getattr(save_result, "run_trace_id", None)
+        for symbol, sug in suggestions.items():
+            stock = stock_map.get(symbol)
+            if not stock:
+                continue
+            pack = packs.get(symbol)
+            trigger_price = (
+                getattr(pack.quote, "current_price", None) if pack and pack.quote else None
+            )
+            quality_score = (
+                (symbol_contexts.get(symbol, {}) or {}).get("data_quality", {}).get("score")
+            )
+            meta = {
+                "analysis_date": analysis_date,
+                "run_trace_id": getattr(save_result, "run_trace_id", None),
+                "source": "premarket_outlook",
+                "context_quality_score": quality_score,
+                "plan": {
+                    "triggers": sug.get("triggers") if isinstance(sug.get("triggers"), list) else [],
+                    "invalidations": sug.get("invalidations")
+                    if isinstance(sug.get("invalidations"), list)
+                    else [],
+                    "risks": sug.get("risks") if isinstance(sug.get("risks"), list) else [],
+                }
+                if isinstance(sug, dict)
+                else {},
+            }
+            ok = save_suggestion(
+                stock_symbol=symbol,
+                stock_name=stock.name,
+                action=sug["action"],
+                action_label=sug["action_label"],
+                signal=(sug.get("signal") or "") if isinstance(sug, dict) else "",
+                reason=sug.get("reason", ""),
+                agent_name=self.name,
+                agent_label=self.display_name,
+                expires_hours=12,  # 盘前建议当日有效
+                prompt_context=user_content,
+                ai_response=result.content,
+                stock_market=stock.market.value,
+                user_id=_resolve_user_id(context),
+                meta=meta,
+                # 同一报告日的重跑是同一版建议的修订 → 原地改写, 不新增一行
+                dedupe_same_day=True,
+            )
+            if ok:
+                counters["suggestion_saved"] += 1
+            else:
+                counters["suggestion_failed"] += 1
+            for horizon in (1, 5):
+                res = save_agent_prediction_outcome(
+                    agent_name=self.name,
+                    stock_symbol=symbol,
+                    stock_market=stock.market.value,
+                    prediction_date=analysis_date,
+                    horizon_days=horizon,
+                    action=sug.get("action") or "watch",
+                    action_label=sug.get("action_label") or "观望",
+                    confidence=(float(quality_score) / 100.0)
+                    if quality_score is not None
+                    else None,
+                    trigger_price=trigger_price,
+                    meta={
+                        "source": "premarket_outlook",
+                        "run_trace_id": trace_id_run,
+                        "reason": sug.get("reason", ""),
+                        "signal": sug.get("signal", ""),
+                    },
+                    # P0: 归属用户 + 版本身份。个人桶必须有 owner; 无 owner 走显式 system 桶。
+                    user_id=owner_id,
+                    owner_scope=owner_scope,
+                    run_trace_id=trace_id_run,
+                )
+                # 只有**真的写入了计分行**才算 saved; 追加的审计版本单列 version_appended;
+                # 「被拒/幂等/并发」都不是成功, 不能像旧代码那样一律当 saved 报出去。
+                if res.scored:
+                    counters["outcome_saved"] += 1
+                elif res.written:
+                    counters["outcome_version_appended"] += 1
+                elif res.status in ("write_failed", "db_unavailable", "refused_unknown_user"):
+                    counters["outcome_failed"] += 1
+                else:
+                    # refused_* / unchanged / concurrent: 明确"没写", 存储层已按级别记了细节日志。
+                    counters["outcome_not_written"] += 1
+                    logger.info(
+                        "[%s] 预测后验未写入(%s): %s/%s h=%s %s",
+                        trace_id,
+                        res.status,
+                        self.name,
+                        symbol,
+                        horizon,
+                        res.reason,
+                    )
+        logger.info(
+            "[%s] 建议落库完成: suggestion_saved=%s failed=%s outcome_saved=%s "
+            "outcome_version_appended=%s outcome_not_written=%s outcome_failed=%s",
+            trace_id,
+            counters["suggestion_saved"],
+            counters["suggestion_failed"],
+            counters["outcome_saved"],
+            counters["outcome_version_appended"],
+            counters["outcome_not_written"],
+            counters["outcome_failed"],
+        )
+        if counters["suggestion_failed"] or counters["outcome_failed"]:
+            logger.error(
+                "[%s] 建议/预测后验有写入失败: suggestion_failed=%s outcome_failed=%s",
+                trace_id,
+                counters["suggestion_failed"],
+                counters["outcome_failed"],
+            )
+        return counters
+
     def _append_ambush_signal_details(self, text: str, data: dict) -> str:
-        """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。"""
+        """把潜伏表的真实信号明细插到表格后面；解析不到表就原样返回。
+
+        PIT(2026-11-12, 复审修正): 报告日是 `data["timestamp"]`（与 analysis_date 同源）；明细块
+        只用 **report_day 之前** 的收盘。股性因子用 `collect()` 刚冻结进 data 的快照
+        （`demon_factors` + `demon_factors_frozen_at`）—— 它就是这期报告写入 raw_data 的
+        生成时凭证，历史页也只认这份；没有它的股票一律「盘前不可得」，不拿当前表补。
+        """
         from src.core import premarket_ambush as pa
 
         rows = pa.parse_ambush_table(text)
@@ -1391,7 +1811,39 @@ class PremarketOutlookAgent(BaseAgent):
             for sym, v in demon_raw.items():
                 if isinstance(v, dict):
                     demon_by_code[str(sym).split(".")[0]] = v
-        start_day = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
+        report_day = pa._norm_day(data.get("timestamp"))
+        if report_day is None:
+            # 报告日不可解析 ⇒ 无法确定「哪些收盘/快照在盘前」, 不写任何数字(不默认放行)
+            return text
+        # 防御: 传进来的快照只有在**带时区的采样时点**上确实落在 09:30 前才用;
+        # 收盘后重生成/时点不可验证 → 按不可得处理, 与 collect() 同一门禁。
+        # 不拿 data["timestamp"](整份报告采集结束时刻)兜底。
+        _gen_at = data.get("demon_factors_frozen_at")
+        _visible = pa.filter_demon_for_generation(
+            demon_by_code, report_day, generated_at=_gen_at
+        )
+        _preopen_gen = bool(_visible.get("preopen"))
+        demon_by_code = _visible["kept"]
+        notes: dict[str, str] = dict(_visible["notes"])
+        if not _preopen_gen:
+            # 非盘前生成: 这份快照不能当「当日盘前信号」写进正文, 否则正文与账本各说一套。
+            notes = {}
+            demon_by_code = {}
+        dropped = {str(c).split(".")[0] for c in (data.get("demon_factors_dropped") or [])}
+        dropped.update(_visible["dropped"])
+        for code in codes:
+            if code in demon_by_code:
+                notes.pop(code, None)
+                continue
+            if not _preopen_gen:
+                notes[code] = "非盘前生成, 股性因子不作盘前证据, 不展示"
+            else:
+                notes[code] = (
+                    "股性因子快照不在盘前可取范围, 不展示"
+                    if code in dropped
+                    else "该股不在本期盘前因子快照内, 盘前不可得"
+                )
+        start_day = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
         try:
             from src.db.session import get_read_engine
 
@@ -1399,7 +1851,13 @@ class PremarketOutlookAgent(BaseAgent):
         except Exception:  # noqa: BLE001
             engine = None
         signals = pa.collect_signals(
-            codes, demon_by_code=demon_by_code or None, engine=engine, start_day=start_day
+            codes,
+            demon_by_code=demon_by_code,
+            demon_notes=notes,
+            verified_frozen=True,  # 这是生成时冻结、并随 raw_data 落库的同一份快照
+            engine=engine,
+            start_day=start_day,
+            report_day=report_day,
         )
         block = pa.build_signal_block(rows, signals)
         return pa.insert_after_table(text, block)
@@ -1452,6 +1910,8 @@ class PremarketOutlookAgent(BaseAgent):
 
     async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
         """调用 AI 分析并保存到历史/建议池"""
+        from src.core.premarket_factor_evidence import normalize_generated_at
+
         trace_id = str(data.get("run_trace_id") or datetime.now().strftime("%m%d%H%M%S%f")[-10:])
         start_ts = time.monotonic()
         logger.info(
@@ -1502,18 +1962,24 @@ class PremarketOutlookAgent(BaseAgent):
                 status="degraded",
                 error=str(getattr(e, "reason", "") or e),
             )
-            save_analysis(
-                agent_name=self.name,
-                stock_symbol="*",
-                content=result.content,
-                title=result.title,
-                user_id=_resolve_user_id(context),
-                raw_data=result.raw_data,
+            save_analysis_result = self._persist_report(
+                result=result,
+                data=data,
+                context=context,
+                raw_extra={
+                    "status": "degraded",
+                    "error": str(getattr(e, "reason", "") or e),
+                    "fallback_brief": True,
+                    "run_meta": run_meta,
+                },
                 status="degraded",
                 error=result.error,
+                # 事实快报也是"生成完成"在此时; 但它本身是降级正文, 不写建议池/后验
+                report_completed_at=normalize_generated_at(beijing_now()),
             )
+            self._log_persist_result(save_analysis_result, trace_id=trace_id, label="降级快报")
             logger.warning(
-                "[%s] LLM 降级改为事实快报: chars=%s reason=%s",
+                "[%s] LLM 降级改为事实快报: chars=%s reason=%s (降级正文不写建议池/预测后验)",
                 trace_id, len(brief), result.error[:120],
             )
             return result
@@ -1544,99 +2010,16 @@ class PremarketOutlookAgent(BaseAgent):
             except LLMDegradedError as e:
                 logger.warning("[%s] 结构化重试失败(忽略): %s", trace_id, str(e)[:100])
 
-        # 保存各股票建议到建议池
-        stock_map = {s.symbol: s for s in context.watchlist}
-        packs = data.get("signal_packs", {}) or {}
+        # 保存各股票建议到建议池(写入动作在正文落库之后, 见 _persist_suggestions)
         symbol_contexts = data.get("symbol_contexts", {}) or {}
         analysis_date = (data.get("timestamp") or "")[:10] or date.today().strftime(
             "%Y-%m-%d"
         )
-        suggestion_saved = 0
-        suggestion_failed = 0
-        outcome_saved = 0
-        outcome_failed = 0
-        for symbol, sug in suggestions.items():
-            stock = stock_map.get(symbol)
-            if stock:
-                pack = packs.get(symbol)
-                trigger_price = (
-                    getattr(pack.quote, "current_price", None)
-                    if pack and pack.quote
-                    else None
-                )
-                quality_score = (
-                    (symbol_contexts.get(symbol, {}) or {})
-                    .get("data_quality", {})
-                    .get("score")
-                )
-                ok = save_suggestion(
-                    stock_symbol=symbol,
-                    stock_name=stock.name,
-                    action=sug["action"],
-                    action_label=sug["action_label"],
-                    signal=(sug.get("signal") or "") if isinstance(sug, dict) else "",
-                    reason=sug.get("reason", ""),
-                    agent_name=self.name,
-                    agent_label=self.display_name,
-                    expires_hours=12,  # 盘前建议当日有效
-                    prompt_context=user_content,
-                    ai_response=result.content,
-                    stock_market=stock.market.value,
-                    user_id=_resolve_user_id(context),
-                    meta={
-                        "analysis_date": analysis_date,
-                        "source": "premarket_outlook",
-                        "context_quality_score": quality_score,
-                        "plan": {
-                            "triggers": sug.get("triggers")
-                            if isinstance(sug.get("triggers"), list)
-                            else [],
-                            "invalidations": sug.get("invalidations")
-                            if isinstance(sug.get("invalidations"), list)
-                            else [],
-                            "risks": sug.get("risks")
-                            if isinstance(sug.get("risks"), list)
-                            else [],
-                        }
-                        if isinstance(sug, dict)
-                        else {},
-                    },
-                )
-                if ok:
-                    suggestion_saved += 1
-                else:
-                    suggestion_failed += 1
-                for horizon in (1, 5):
-                    ok_outcome = save_agent_prediction_outcome(
-                        agent_name=self.name,
-                        stock_symbol=symbol,
-                        stock_market=stock.market.value,
-                        prediction_date=analysis_date,
-                        horizon_days=horizon,
-                        action=sug.get("action") or "watch",
-                        action_label=sug.get("action_label") or "观望",
-                        confidence=(float(quality_score) / 100.0)
-                        if quality_score is not None
-                        else None,
-                        trigger_price=trigger_price,
-                        meta={
-                            "source": "premarket_outlook",
-                            "reason": sug.get("reason", ""),
-                            "signal": sug.get("signal", ""),
-                        },
-                    )
-                    if ok_outcome:
-                        outcome_saved += 1
-                    else:
-                        outcome_failed += 1
-        logger.info(
-            "[%s] 建议落库完成: suggestion_saved=%s failed=%s outcome_saved=%s failed=%s",
-            trace_id,
-            suggestion_saved,
-            suggestion_failed,
-            outcome_saved,
-            outcome_failed,
-        )
+        # 建议池 / 预测后验的写入**移到正文落库之后**(见 _persist_suggestions):
+        # 先落库才知道这一版是不是「成功盘前正文」; 盘后重跑/降级/时点不可证明一律不写,
+        # 否则会往建议池和命中率里灌一批假装盘前给出的建议(重跑还会重复灌水)。
+        # 报告生成到此真正完成(含结构化重试) → 现在取带时区完成时刻, 与保存时刻分开记。
+        report_completed_at = normalize_generated_at(beijing_now())
 
         compact_context = {}
         context_payload = {}
@@ -1723,17 +2106,13 @@ class PremarketOutlookAgent(BaseAgent):
             len(compact_context),
         )
 
-        # 保存到历史记录
-        history_saved = save_analysis(
-            agent_name=self.name,
-            stock_symbol="*",
-            content=result.content,
-            title=result.title,
-            user_id=_resolve_user_id(context),
-            raw_data={
-                "us_indices": data.get("us_indices"),
-                "global_indices": data.get("global_indices"),
-                "timestamp": data.get("timestamp"),
+        # 保存到历史记录（白名单必须包含生成时冻结的股性因子凭证 —— 少了它, 正文里有
+        # 「股性分 88」而账本一律 unknown, 两处自相矛盾）
+        history_saved = self._persist_report(
+            result=result,
+            data=data,
+            context=context,
+            raw_extra={
                 "quality_overview": quality_overview,
                 "context_summary": compact_context,
                 "context_payload": context_payload,
@@ -1749,16 +2128,31 @@ class PremarketOutlookAgent(BaseAgent):
                 "news_debug": news_debug,
                 "suggestions": suggestions,
             },
+            # 真完成的时刻(报告生成结束时取的带时区时刻), 不是落库时刻
+            report_completed_at=report_completed_at,
         )
-        if history_saved:
+        if history_saved.body_saved and not history_saved.content_skipped:
             logger.info(
                 "[%s] 盘前分析已保存到历史记录: suggestions=%s prompt_chars=%s",
                 trace_id,
                 len(suggestions),
                 len(user_content),
             )
-        else:
-            logger.error("[%s] 盘前分析保存历史记录失败", trace_id)
+        # 真失败/正文按规则保留/证据没写进 三种状态分别告警(不再压成一句「保存失败」)
+        self._log_persist_result(history_saved, trace_id=trace_id, label="盘前报告")
+
+        # 建议池 + 预测后验: 只有「本次正文真的落库且被证明是盘前报告」才写。
+        # 盘后/unknown 重跑、正文被按规则保留、降级报告 → 一律跳过(不伪装盘前、不重复灌统计)。
+        self._persist_suggestions(
+            suggestions=suggestions,
+            context=context,
+            data=data,
+            analysis_date=analysis_date,
+            user_content=user_content,
+            result=result,
+            trace_id=trace_id,
+            save_result=history_saved,
+        )
 
         # C4(批次C, 2026-09-06): 盘前埋伏简报推送(站内+外发渠道), 失败静默不拖垮主流程。
         # M7(2026-09-10): ①只推本人(user_id, 不再 user_id=None 全局广播给所有人);

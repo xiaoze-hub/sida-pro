@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 from datetime import date, datetime, time, timedelta
 from math import sqrt
 
@@ -10,6 +12,7 @@ from sqlalchemy import case, func
 
 from src.collectors.kline_collector import KlineCollector
 from src.core.entry_candidates import refresh_entry_candidates
+from src.core.error_report import log_failure, new_error_ref, public_error
 from src.core.json_safe import to_jsonable
 from src.core.strategy_catalog import (
     ensure_strategy_catalog,
@@ -21,8 +24,9 @@ from src.core.factor_weights import get_factor_weights
 from src.core.timezone import to_iso_with_tz, utc_now
 from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
-from src.db.session import SessionLocal
+from src.db.session import SessionLocal, WriteSessionLocal
 from src.db.models import (
+    AuditLog,
     EntryCandidate,
     MarketRegimeSnapshot,
     NewsCache,
@@ -35,6 +39,12 @@ from src.db.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: 进程内调权序列化(与因子权重同一套理由): 调权是「读当前权重 → 算新权重 →
+#: 写历史」, 两笔并发都读到同一 old_weight 就会写出两行 before 相同的历史,
+#: 之后 `as_of` 回放会把中间那次改动吞掉。跨进程靠 `FOR UPDATE` 行锁(PG/MySQL);
+#: SQLite 忽略行锁, 多进程部署下这里**没有**跨进程保证。
+_REBALANCE_LOCK = threading.RLock()
 
 
 SOURCE_POOL_LABELS = {
@@ -1749,7 +1759,8 @@ def refresh_strategy_signals(
             skip_market_scan=skip_market_scan,
         )
 
-    db = SessionLocal()
+    # 读候选 + 写快照: 必须从第一条语句起就绑写库(路由会话会被 SELECT 带到副本)
+    db = WriteSessionLocal()
     try:
         snapshot, candidates, as_of_dt = _load_signal_candidates(
             db,
@@ -1960,7 +1971,8 @@ def evaluate_strategy_outcomes(
     if not safe_horizons:
         safe_horizons = [1, 3, 5]
 
-    db = SessionLocal()
+    # 读信号 + 写 outcome: 写库会话, 避免「副本读主库写」的事务分裂
+    db = WriteSessionLocal()
     try:
         cutoff = date.today() - timedelta(days=max(7, int(snapshot_days)))
         signals = (
@@ -2094,7 +2106,15 @@ def evaluate_strategy_outcomes(
         return stats
     except Exception as e:
         db.rollback()
-        logger.warning(f"策略后验评估失败: {e}")
+        # 服务端日志也要脱敏: 异常文本里可能带 DSN 口令。
+        ref = new_error_ref()
+        log_failure(
+            logger, "策略后验评估", e, ref=ref,
+            context={
+                "horizons": "-".join(str(int(h)) for h in safe_horizons),
+                "snapshot_days": snapshot_days,
+            },
+        )
         return stats
     finally:
         db.close()
@@ -2141,16 +2161,42 @@ def rebalance_strategy_weights(
     min_samples: int = 8,
     alpha: float = 0.35,
     regime: str = "default",
+    actor: str | None = None,
+    actor_id: str | None = None,
+    ip: str = "",
 ) -> dict:
-    ensure_strategy_catalog()
+    """按近期 outcome 重平衡策略权重(写库)。
+
+    这是**唯一**的策略权重写入口, 且必须由已认证的人触发:
+    `actor` 是服务端认证身份(HTTP 触发时由 `require_settings_write` 给出),
+    **缺失即拒绝**(ValueError)。调度器/后台任务没有身份, 不允许再静默调权 ——
+    历史上这里接受 `actor=None` 的内部调用, 等于让 6h 定时任务绕过所有授权。
+
+    人工调用会与权重改动**同一次 commit** 落一条 `AuditLog`
+    (`action=rebalance_strategy_weights`), 记录是谁、用什么参数、改了几条。
+    """
+    if not (actor or "").strip():
+        raise ValueError(
+            "策略调权必须由已认证用户触发(actor 不可为空); "
+            "自动/后台调权已停用, 不得绕过 manage_settings"
+        )
     reg = (regime or "default").strip() or "default"
     alpha = _clamp(float(alpha or 0.35), 0.05, 0.95)
     window_days = max(7, min(int(window_days or 45), 365))
     min_samples = max(3, min(int(min_samples or 8), 200))
 
-    db = SessionLocal()
+    # 读目录/近期结果 + 写权重/历史/审计: 全部落在写库的**同一事务**。
+    # 2026-11-12 复审二: 原先 `ensure_strategy_catalog()` 与
+    # `list_strategy_catalog()` 各自开会话(目录可能来自读副本/别的事务),
+    # 「默认权重 / 启用开关」与写权重时的 before 值不是同一时点。现在两者都
+    # 用本事务的 db 读, 失败整笔回滚, 不存在「目录读到了、权重没写」的半截状态。
+    db = WriteSessionLocal()
+    # 进程内串行化「读旧值 → 写新值 → 写历史」(见 _REBALANCE_LOCK 注释)。
+    # 用 acquire/release 而非 with 是为了不改动既有 try/except/finally 的缩进层级。
+    _REBALANCE_LOCK.acquire()
     try:
-        catalogs = list_strategy_catalog(enabled_only=True)
+        ensure_strategy_catalog(db=db)
+        catalogs = list_strategy_catalog(enabled_only=True, db=db)
         by_pair, by_all = _aggregate_recent_outcomes(db=db, days=window_days)
 
         changed = 0
@@ -2182,6 +2228,9 @@ def rebalance_strategy_weights(
                     StrategyWeight.market == market,
                     StrategyWeight.regime == reg,
                 )
+                # 行锁(PG/MySQL 生效): 并发调权时后到的事务在这里等前一笔提交,
+                # 从而读到对方写完的 old_weight, 历史链不会出现两行相同 before。
+                .with_for_update()
                 .first()
             )
             old_weight = float(row.weight if row else default_weight)
@@ -2237,6 +2286,7 @@ def rebalance_strategy_weights(
                         "win_rate": round(win_rate, 3),
                         "avg_return_pct": round(avg_ret, 4),
                         "target": round(target, 4),
+                        **({"by": actor} if actor else {}),
                     },
                 )
             )
@@ -2251,6 +2301,26 @@ def rebalance_strategy_weights(
                 }
             )
 
+        db.add(
+            AuditLog(
+                user_id=actor_id,
+                username=actor,
+                action="rebalance_strategy_weights",
+                detail=json.dumps(
+                    {
+                        "window_days": window_days,
+                        "min_samples": min_samples,
+                        "alpha": alpha,
+                        "regime": reg,
+                        "checked": checked,
+                        "changed": changed,
+                        "skipped_low_sample": skipped_low_sample,
+                    },
+                    ensure_ascii=False,
+                ),
+                ip=ip or "",
+            )
+        )
         db.commit()
         return {
             "window_days": window_days,
@@ -2263,7 +2333,17 @@ def rebalance_strategy_weights(
         }
     except Exception as e:
         db.rollback()
-        logger.warning(f"策略调权失败: {e}")
+        ref = new_error_ref()
+        log_failure(
+            logger, "策略调权", e, ref=ref,
+            context={
+                "window_days": window_days,
+                "min_samples": min_samples,
+                "alpha": alpha,
+                "actor": actor,
+                "regime": reg,
+            },
+        )
         return {
             "window_days": window_days,
             "min_samples": min_samples,
@@ -2272,9 +2352,13 @@ def rebalance_strategy_weights(
             "changed": 0,
             "skipped_low_sample": 0,
             "changes": [],
-            "error": str(e),
+            # 调用方(HTTP / 脚本)只能拿到安全文案 + 关联号: 异常原文里可能带
+            # SQL、表名或 DSN。细节见服务端日志 `[err:<ref>]`。
+            "error": public_error("策略调权", ref),
+            "error_ref": ref,
         }
     finally:
+        _REBALANCE_LOCK.release()
         db.close()
 
 

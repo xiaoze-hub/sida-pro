@@ -184,9 +184,10 @@ def evaluate_factor_ic(
             "factors": factors,
         }
     except Exception as e:
-        logger.warning(f"[因子评估] IC 计算失败: {e}")
+        # 只记类型: `str(e)` 里可能带 SQL/绑定参数/DSN, 日志不该留存。
+        logger.warning("[因子评估] IC 计算失败: type=%s", type(e).__name__)
         return {"horizon": int(horizon), "days": int(days), "market": market,
-                "factors": {}, "error": str(e)}
+                "factors": {}, "error": "因子 IC 计算失败", "error_type": type(e).__name__}
     finally:
         if own:
             db.close()

@@ -196,6 +196,13 @@ services:
       - SIDA_DB_URL=postgresql+psycopg2://sida:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@sida-postgres:5432/sida
       # Hermes cron 输出根目录(可选,挂载 ~/.hermes 后自动可用)
       - HERMES_HOME=/hermes
+      # 通知渠道出站目标白名单(2026-11-13): 自建 Hermes 网关 / Bark 若在回环或内网,
+      # 默认会被 SSRF 防护拦下。这里显式从 .env 透传, 否则宿主设了也不进容器。
+      # 默认空 = 不放行任何内网/回环目标(否决式)。CIDR 会放行该网段任意地址,
+      # 且任何解析到该网段的域名都会被放行 —— 优先用精确主机名/单个 IP。
+      - SIDA_NOTIFY_PRIVATE_HOSTS=${SIDA_NOTIFY_PRIVATE_HOSTS:-}
+      # iLink 的 base_url 只允许 *.weixin.qq.com; 非腾讯域名(自建/测试)才需要追加。
+      - SIDA_NOTIFY_ILINK_HOSTS=${SIDA_NOTIFY_ILINK_HOSTS:-}
       # 数据源 key 在「设置 → 接口Key」UI 维护;此处只传 Hermes 必需的环境变量
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1

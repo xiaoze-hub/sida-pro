@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.db.models import (
+    AgentPredictionOutcome,
     ChatConversation,
     ChatMessage,
     Notification,
@@ -427,6 +428,13 @@ def purge_expired_deletions(db: Session | None = None) -> dict:
                     session.query(ChatConversation).filter(
                         ChatConversation.user_id == uid
                     ).delete(synchronize_session=False)
+                # 预测后验: 行必须保留(历史预测不因账号注销消失), 但归属按删除语义置空 ——
+                # 与 create_all 新库的 `ON DELETE SET NULL` 完全一致。迁移库(无外键/旧库)若
+                # 只依赖外键, 这里会留下悬空 user_id(ghost 行), 之后被当成"有归属"评估计分。
+                # 所以显式 UPDATE, 不依赖 FK/触发器是否存在。
+                session.query(AgentPredictionOutcome).filter(
+                    AgentPredictionOutcome.user_id == uid
+                ).update({"user_id": None}, synchronize_session=False)
                 # 其余 user_id FK CASCADE 表(自选/持仓/分析历史等)随 user 行删除
                 session.delete(u)
                 session.commit()

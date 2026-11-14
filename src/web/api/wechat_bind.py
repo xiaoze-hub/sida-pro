@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.core import wechat_ilink
+from src.core.error_report import log_failure, new_error_ref
+from src.core.net_guard import TargetBlocked
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
 from src.web.models import NotifyChannel, User
@@ -48,7 +50,14 @@ async def start_bind():
     try:
         qr = await wechat_ilink.fetch_qr()
     except Exception as exc:
-        logger.error(f"iLink 获取二维码失败: {exc}")
+        # iLink 的异常文本带接口地址/请求头/令牌片段; 只落关联号 + 异常类型 + 帧位置。
+        log_failure(
+            logger,
+            "iLink 获取二维码",
+            exc,
+            ref=new_error_ref(),
+            context={"channel_type": CHANNEL_TYPE, "endpoint": "fetch_qr"},
+        )
         raise HTTPException(status_code=503, detail="微信扫码服务不可用, 请稍后重试")
     return {"qrcode": qr["qrcode"], "qrcode_url": qr["qrcode_url"]}
 
@@ -63,7 +72,13 @@ async def bind_status(
     try:
         result = await wechat_ilink.poll_qr(qrcode)
     except Exception as exc:
-        logger.error(f"iLink 轮询二维码失败: {exc}")
+        log_failure(
+            logger,
+            "iLink 轮询二维码",
+            exc,
+            ref=new_error_ref(),
+            context={"channel_type": CHANNEL_TYPE, "endpoint": "poll_qr"},
+        )
         raise HTTPException(status_code=503, detail="微信扫码服务不可用, 请稍后重试")
 
     if result.get("status") != "success":
@@ -74,8 +89,36 @@ async def bind_status(
     base_url = result.get("base_url") or wechat_ilink.ILINK_BASE_URL
     user_id = result.get("user_id") or ""
     if not account_id or not token:
-        logger.error(f"iLink 扫码确认但凭证不完整: {result}")
+        # 旧实现 `logger.error(f"...凭证不完整: {result}")` —— `result` 里含**完整
+        # bot_token**(扫码确认回执), 等于把微信凭证明文写进日志表/控制台。这里只报
+        # 缺了哪几个字段名(有界枚举), 不落任何取值。
+        missing = [
+            name
+            for name, value in (("account_id", account_id), ("token", token))
+            if not value
+        ]
+        log_failure(
+            logger,
+            "iLink 扫码确认凭证不完整",
+            None,
+            ref=new_error_ref(),
+            error_type="CredentialsIncomplete",
+            context={
+                "channel_type": CHANNEL_TYPE,
+                "endpoint": "poll_qr",
+                "via": ",".join(missing) or "unknown",
+            },
+        )
         raise HTTPException(status_code=502, detail="微信授权凭证不完整, 请重试")
+
+    # base_url 来自腾讯回执, 但落库后可被 PUT /api/channels 改写 → 先过域名白名单,
+    # 不合规的绑定直接拒绝(否则这条渠道就是向任意主机发 POST 的跳板)。
+    from src.core.notifier import assert_ilink_base_url
+
+    try:
+        base_url = assert_ilink_base_url(base_url)
+    except TargetBlocked:
+        raise HTTPException(status_code=502, detail="微信回执的服务器地址不被信任, 请重试")
 
     # upsert: 该用户已绑定则更新, 否则新建
     channel = _find_bound_channel(db, user)
@@ -99,7 +142,10 @@ async def bind_status(
         )
         db.add(channel)
     db.commit()
-    logger.info(f"用户 {user.id} 微信扫码绑定成功 account_id={account_id}")
+    # account_id 是腾讯侧机器人编号(有界), 不含 token; 用参数化格式串避免拼接。
+    logger.info(
+        "用户 %s 微信扫码绑定成功 channel=%s", user.id, CHANNEL_TYPE
+    )
     return {"status": "success", "account_id": account_id, "user_id": user_id}
 
 

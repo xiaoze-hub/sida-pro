@@ -58,8 +58,9 @@ function row(over: Record<string, unknown> = {}) {
     target: '+10%',
     falsify: '提价落空',
     signals: {
-      demon: { score: 78.1, grade: '妖', n_sealed: 12, max_streak: 4, participation: '高度参与' },
-      price: { close: 12.2, pct: 0.83, limit_up_streak: 0, pct_20d: 8.3, from_20d_high: -1.2, note: null },
+      demon: { score: 78.1, grade: '妖', n_sealed: 12, max_streak: 4, participation: '高度参与', factor_date: '2026-11-10' },
+      price: { close: 12.2, close_date: '2026-11-10', pct: 0.83, limit_up_streak: 0, pct_20d: 8.3, from_20d_high: -1.2, note: '盘前口径: 截至 2026-11-10 收盘(报告日 2026-11-11 收盘不计入)' },
+      demon_note: null,
     },
     outcome: { t0: 5.0, t1: -2.86, t3: null, stop_breached: null, note: '止损按收盘价判定' },
     ...over,
@@ -76,6 +77,17 @@ function item(over: Record<string, unknown> = {}) {
     quality: 'ok',
     parsed: true,
     row_count: rows.length,
+    pit: {
+      price_before: '2026-11-11',
+      price_close_dates: ['2026-11-10'],
+      demon_before: '2026-11-11',
+      demon_evidence: true,
+      demon_frozen_at: '2026-11-11T08:20:00',
+      demon_reason: null,
+      demon_asof: '2026-11-10',
+      demon_available: rows.filter((r) => !!(r as { signals?: { demon?: unknown } }).signals?.demon).length,
+      demon_unavailable: rows.filter((r) => !(r as { signals?: { demon?: unknown } }).signals?.demon).length,
+    },
     summary: { rows: rows.length, t0_scored: rows.length, t0_up: 1, t1_scored: 1, t1_up: 0 },
     rows,
     ...over,
@@ -118,6 +130,11 @@ describe('DecisionLedger · 盘前分析区块', () => {
     expect(periods[0].textContent).toContain('潜伏 1 只')
     expect(periods[0].textContent).toContain('当日上涨 1/1')
     expect(periods[0].textContent).toContain('T+1 上涨 0/1')
+    const pit = within(periods[0]).getByTestId('premarket-pit')
+    expect(pit.textContent).toContain('盘前取数: 收盘 < 2026-11-11')
+    expect(pit.textContent).toContain('实际 2026-11-10')
+    expect(pit.textContent).toContain('事后表现')
+    expect(pit.textContent).not.toContain('无生成时冻结快照')
 
     const rows = within(sec).getAllByTestId('premarket-row')
     expect(rows).toHaveLength(2)
@@ -187,7 +204,7 @@ describe('DecisionLedger · 盘前分析区块', () => {
               code: '300750',
               name: '宁德时代',
               tags: [],
-              signals: { demon: null, price: null }, // 信号取不到 → 「无数据」
+              signals: { demon: null, price: null, demon_note: '该期报告未保存生成时的股性因子冻结快照, 无盘前凭证' }, // 信号取不到 → 「无数据」
               outcome: { t0: null, t1: null, t3: null, stop_breached: null, note: '该交易日无K线(休市/停牌)' },
             }),
           ],
@@ -216,14 +233,225 @@ describe('DecisionLedger · 盘前分析区块', () => {
     expect(d1.textContent).toContain('封板 12 次')
     expect(d1.textContent).toContain('最高 4 连板')
     expect(d1.textContent).toContain('12.2') // 收盘价
+    // 盘前口径必须标真实收盘日 + 快照日, 且明确事后表现
+    expect(d1.textContent).toContain('2026-11-10')
+    expect(d1.textContent).toContain('快照日 2026-11-10')
+    expect(d1.textContent).toContain('盘前')
+    expect(d1.textContent).toContain('事后')
 
-    // 再展开缺信号那行 → 两处「无数据」, 且没有把 null 渲染成 0
+    // 再展开缺信号那行 → 两处「无数据」+ 不可得原因, 且没有把 null 渲染成 0
     fireEvent.click(within(within(sec).getAllByTestId('premarket-row')[1]).getByText('明细'))
     await waitFor(() => expect(within(sec).getAllByTestId('premarket-row-detail')).toHaveLength(2))
     const d2 = within(sec).getAllByTestId('premarket-row-detail')[1]
     expect(d2.textContent).toContain('无数据')
+    expect(d2.textContent).toContain('无盘前凭证')
     expect(d2.textContent).toContain('该交易日无K线(休市/停牌)')
     expect(d2.textContent).not.toContain('0.00')
+  })
+
+  it('无生成时冻结凭证: 明说股性按盘前不可得留空, 不拿当前因子表反推', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: null,
+            demon_reason: '该期报告未保存生成时的股性因子冻结快照, 无盘前凭证, 不展示',
+            demon_asof: null,
+            demon_available: 0,
+            demon_unavailable: 1,
+          },
+          rows: [
+            row({
+              signals: {
+                demon: null,
+                price: null,
+                demon_note: '该期报告未保存生成时的股性因子冻结快照, 无盘前凭证',
+              },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+    expect(within(sec).getByTestId('premarket-pit').textContent).toContain('无生成时冻结快照')
+
+    fireEvent.click(within(within(sec).getAllByTestId('premarket-row')[0]).getByText('明细'))
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row-detail')).toHaveLength(1))
+    const d = within(sec).getAllByTestId('premarket-row-detail')[0]
+    expect(d.textContent).toContain('无数据')
+    expect(d.textContent).toContain('无盘前凭证')
+    expect(d.textContent).not.toContain('0.00')
+  })
+
+  it('非盘前生成: 展示真实生成时刻与非盘前标志, 当日/T+1/T+3 绝不当盘前候选成绩', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          premarket_eligible: false,
+          preopen: false,
+          generated_at: '2026-11-11T20:10:00+08:00',
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: '2026-11-11T20:10:00+08:00',
+            demon_reason: '采样时点 2026-11-11T20:10:00+08:00 不在报告日 2026-11-11 盘前(09:30 前)',
+            demon_asof: null,
+            demon_source: null,
+            evidence_rows: 1,
+            preopen: false,
+            generated_at: '2026-11-11T20:10:00+08:00',
+            demon_available: 0,
+            demon_unavailable: 1,
+          },
+          summary: { rows: 1, t0_scored: 0, t0_up: 0, t1_scored: 0, t1_up: 0 },
+          rows: [
+            row({
+              signals: { demon: null, price: null, demon_note: '非盘前生成, 股性因子不作盘前证据, 不展示' },
+              outcome: {
+                t0: null,
+                t1: null,
+                t3: null,
+                stop_breached: null,
+                note: '非盘前生成, 不作为当日盘前候选成绩',
+              },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+
+    const period = within(sec).getAllByTestId('premarket-period')[0]
+    expect(within(period).getByTestId('premarket-not-eligible').textContent).toContain('非盘前生成')
+    // 2026-11-12 P0: 展示的是「整份报告实际完成时刻」, 不是因子采样时点
+    expect(period.textContent).toContain('实际完成 2026-11-11T20:10:00+08:00')
+    expect(period.textContent).not.toContain('当日上涨')
+    expect(within(period).getByTestId('premarket-sample-time').textContent).toContain('(非盘前)')
+    expect(period.textContent).toContain('不计入盘前候选成绩')
+  })
+
+  it('报告 09:30 后才完成: 采样时点在盘前也要显式说「报告完成晚于开盘」, 不冒充盘前', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          premarket_eligible: false,
+          preopen: false,
+          run_trace_id: 'run-late-1005',
+          generated_at: '2026-11-11T08:20:00+08:00', // 因子采样确实在盘前
+          report_completed_at: '2026-11-11T10:05:00+08:00', // 但整份报告 10:05 才完成
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: null,
+            demon_reason: '整份报告生成完成时刻 2026-11-11T10:05:00+08:00 不在报告日 2026-11-11 09:30 前',
+            demon_asof: null,
+            demon_source: null,
+            evidence_rows: 1,
+            run_trace_id: 'run-late-1005',
+            record_scope: 'system',
+            evidence_matched: 0,
+            evidence_source_kind: null,
+            binding_reason: '同一天同一归属下没有这一版报告的凭证(run_trace_id=run-late-1005)',
+            report_completed_at: '2026-11-11T10:05:00+08:00',
+            collection_finished_at: '2026-11-11T08:22:00+08:00',
+            gate_reason: '整份报告生成完成时刻 2026-11-11T10:05:00+08:00 不在报告日 2026-11-11 09:30 前',
+            preopen: false,
+            generated_at: '2026-11-11T08:20:00+08:00',
+            demon_available: 0,
+            demon_unavailable: 1,
+          },
+          summary: { rows: 1, t0_scored: 0, t0_up: 0, t1_scored: 0, t1_up: 0 },
+          rows: [
+            row({
+              signals: { demon: null, price: null, demon_note: '非盘前报告, 股性因子不作盘前证据' },
+              outcome: { t0: null, t1: null, t3: null, stop_breached: null, note: '非盘前生成, 不作为当日盘前候选成绩' },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+    const period = within(sec).getAllByTestId('premarket-period')[0]
+
+    // 采样时点在盘前(08:20), 但「报告完成」10:05 → 非盘前, 两个时点都必须上屏
+    expect(within(period).getByTestId('premarket-sample-time').textContent).toContain('2026-11-11T08:20:00+08:00')
+    const done = within(period).getByTestId('premarket-report-completed')
+    expect(done.textContent).toContain('2026-11-11T10:05:00+08:00')
+    expect(within(period).getByTestId('premarket-gate-reason').textContent).toContain('09:30')
+    expect(period.textContent).toContain('实际完成 2026-11-11T10:05:00+08:00')
+    expect(within(period).getByTestId('premarket-not-eligible').textContent).toContain('非盘前生成')
+    expect(period.textContent).toContain('不计入盘前候选成绩')
+  })
+
+  it('历史未验证: 旧报告冻结快照的数值仍显示, 但标「历史未验证 · 不纳入成绩」且不给涨跌', async () => {
+    mocks.premarket.mockResolvedValue(
+      available([
+        item({
+          premarket_eligible: false,
+          preopen: null,
+          report_completed_at: null,
+          pit: {
+            price_before: '2026-11-11',
+            price_close_dates: ['2026-11-10'],
+            demon_before: '2026-11-11',
+            demon_evidence: false,
+            demon_frozen_at: null,
+            demon_reason: '历史未验证: 缺带时区的生成完成时刻',
+            demon_asof: null,
+            demon_source: null,
+            evidence_rows: 0,
+            preopen: null,
+            generated_at: null,
+            demon_available: 0,
+            demon_unavailable: 1,
+            demon_unverified: 1,
+            demon_unverified_reason: '历史未验证: 缺带时区的生成完成时刻, 无法证明盘前可见; 不纳入盘前候选成绩',
+          },
+          summary: { rows: 1, t0_scored: 0, t0_up: 0, t1_scored: 0, t1_up: 0 },
+          rows: [
+            row({
+              signals: {
+                demon: null,
+                demon_historical: { score: 88, grade: '妖', n_sealed: 12, max_streak: 4, participation: '活跃', factor_date: '2026-11-10' },
+                price: null,
+                demon_note: '历史未验证: 缺带时区的生成完成时刻, 无法证明盘前可见; 不纳入盘前候选成绩',
+              },
+              outcome: { t0: null, t1: null, t3: null, stop_breached: null, note: '生成时点不可证明, 不作为当日盘前候选成绩' },
+            }),
+          ],
+        }),
+      ]),
+    )
+    render(<DecisionLedger />)
+    const sec = await screen.findByTestId('premarket-ledger')
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row')).toHaveLength(1))
+
+    const period = within(sec).getAllByTestId('premarket-period')[0]
+    // 历史数值不消失: 期次行解释有 1 行「历史未验证」
+    expect(period.textContent).toContain('历史未验证')
+
+    fireEvent.click(within(within(sec).getAllByTestId('premarket-row')[0]).getByText('明细'))
+    await waitFor(() => expect(within(sec).getAllByTestId('premarket-row-detail')).toHaveLength(1))
+    const detail = within(sec).getAllByTestId('premarket-row-detail')[0]
+    // 数值照旧展示(不凭空消失), 但必须带「历史未验证 · 不纳入成绩」标签
+    expect(detail.textContent).toContain('88.0')
+    expect(within(detail).getByTestId('premarket-demon-unverified').textContent).toContain('不纳入成绩')
+    // 不冒充盘前成绩: 涨跌一格都不给数字
+    expect(detail.textContent).not.toContain('0.00%')
   })
 
   it('接口报错只降级本区块: 显示一行「盘前分析加载失败」+ 重试, 其他区块照常且不抢 role=alert', async () => {

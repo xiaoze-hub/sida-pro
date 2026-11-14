@@ -296,18 +296,23 @@ export interface PremarketDemonSignal {
   max_streak: number | null
   /** 参与度描述文本 */
   participation: string | null
+  /** 因子快照日; null = 无有效快照日(该行不会被展示) */
+  factor_date: string | null
 }
 
 export interface PremarketPriceSignal {
-  /** 报告日收盘价 */
+  /** 盘前口径: 报告日**之前**最后一个交易日的收盘价, 不是报告日收盘 */
   close: number | null
+  /** close 对应的真实交易日(YYYY-MM-DD); 页面必须展示, 别让人以为是报告日收盘 */
+  close_date: string | null
   /** 当日涨跌(%) */
   pct: number | null
   limit_up_streak: number | null
-  /** 20 日涨跌(%) */
+  /** 20 日涨跌(%); 不足 21 根收盘 → null(不拿短窗口冒充) */
   pct_20d: number | null
-  /** 距 20 日最高(%) —— 负数=在最高点下方 */
+  /** 距 20 日最高(%) —— 负数=在最高点下方; 不足 21 根收盘 → null */
   from_20d_high: number | null
+  /** 口径/缺数原因(如「盘前口径: 截至 X 收盘」/「20日指标需≥21根收盘」) */
   note: string | null
 }
 
@@ -343,19 +348,103 @@ export interface PremarketRow {
   signals: {
     demon: PremarketDemonSignal | null
     price: PremarketPriceSignal | null
+    /** 股性因子为什么不可用(无生成时冻结凭证 / 快照日无法证明盘前可见) */
+    demon_note: string | null
+    /**
+     * 历史未验证快照(2026-11-12 审计): 报告自己存了冻结快照, 但证明不了盘前可得。
+     * 只作历史展示、**不纳入成绩**; 与 `demon`(可验证盘前信号) 严格分开, 不得冒充盘前。
+     */
+    demon_historical?: PremarketDemonSignal | null
   }
   outcome: PremarketOutcome
+}
+
+/** 盘前时点证据: 这一期报告的信号到底用了哪天的数据。 */
+export interface PremarketPit {
+  /** 价格截断上界: 只用 trade_date < price_before 的收盘 */
+  price_before: string
+  /** 实际用到的真实收盘日(可多只) */
+  price_close_dates: string[]
+  /** 股性因子时点上界 */
+  demon_before: string
+  /** true = 该期有可验证的生成时冻结因子快照(采样时点在盘前) */
+  demon_evidence: boolean
+  /** 冻结快照的采样时点(带时区 ISO); null = 无凭证/不可验证 */
+  demon_frozen_at: string | null
+  /** 无凭证/不可用的原因 */
+  demon_reason: string | null
+  /** 冻结快照里最大快照日 */
+  demon_asof: string | null
+  /** 凭证的可核验来源描述(表/选择器/过滤); null = 无 */
+  demon_source: string | null
+  /** 追加式凭证的同日条数(重跑只增不减) */
+  evidence_rows: number
+  /**
+   * 这一期绑定的是哪一次运行(2026-11-12 P0)。同日可能有系统版/本人版/多次重跑,
+   * 只有与正文 `run_trace_id` 相同、归属也相同的凭证才参与对账; null = 旧记录未绑定。
+   */
+  run_trace_id?: string | null
+  /** 正文归属: user=本人, system=系统调度(user_id NULL) */
+  record_scope?: 'user' | 'system' | null
+  /** 与本期绑定的凭证条数(0 = 无凭证可对账, 不按日期回退) */
+  evidence_matched?: number
+  /** 凭证来源: appended=追加式凭证表, raw_data=该报告自己 raw_data 的冻结副本 */
+  evidence_source_kind?: 'appended' | 'raw_data' | null
+  /** 为什么没法绑定/为什么按 unknown(给运维复核用) */
+  binding_reason?: string | null
+  /** 整份报告生成完成时刻(带时区); null = 不可证明 */
+  report_completed_at?: string | null
+  /** 数据采集结束时刻(带时区); null = 不可证明 */
+  collection_finished_at?: string | null
+  /** 报告级盘前门槛的判定说明(09:30 边界/自相矛盾等) */
+  gate_reason?: string | null
+  /** 同日其它版本(系统/本人/重跑), 只供复核, 不参与本期对账 */
+  candidates?: {
+    record_id: number | null
+    run_trace_id: string | null
+    scope: 'user' | 'system' | null
+    preopen: boolean | null
+    report_completed_at: string | null
+    generated_at: string | null
+  }[]
+  /** true=已证明盘前; false=盘后重跑; null=旧记录时点不可证明 */
+  preopen: boolean | null
+  /** 真实采样完成时刻(带时区 ISO); null = 时点不可证明 */
+  generated_at: string | null
+  /** 有可用股性因子的行数 / 不可用行数 */
+  demon_available: number
+  demon_unavailable: number
+  /** 历史未验证快照的行数(展示但明确不纳入成绩; 0 = 无) */
+  demon_unverified?: number
+  /** 历史未验证的原因说明 */
+  demon_unverified_reason?: string | null
 }
 
 export interface PremarketItem {
   /** 报告交易日 YYYY-MM-DD */
   date: string
   record_id: number | null
+  /** 这一期绑定的运行 trace(与凭证严格相等); null = 旧记录未绑定 */
+  run_trace_id?: string | null
+  /** 正文归属(user/system) */
+  record_scope?: 'user' | 'system' | null
   title: string
   quality: 'ok' | 'suspect'
   /** false = 该期报告未解析到潜伏表(rows 必为空, 不补标的) */
   parsed: boolean
   row_count: number
+  /** 该期能否作为「当日盘前候选」对账(只有 preopen=true 才行) */
+  premarket_eligible: boolean
+  /** 盘前/非盘前/不可证明 */
+  preopen: boolean | null
+  /** 真实采样完成时刻(带时区 ISO); null = 时点不可证明 */
+  generated_at: string | null
+  /** 整份报告生成完成时刻(带时区); null = 不可证明。盘前门槛看这个 + 采集结束时刻 */
+  report_completed_at?: string | null
+  /** 数据采集结束时刻(带时区) */
+  collection_finished_at?: string | null
+  /** 盘前/事后时点证据 */
+  pit: PremarketPit
   summary: {
     rows: number
     /** 当日有 K 线的行数 / 其中上涨行数 */

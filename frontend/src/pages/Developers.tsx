@@ -125,8 +125,9 @@ const API_GROUPS = [
     title: '因子有效性 (IC)',
     apis: [
       { method: 'GET', path: '/api/recommendations/strategy-factor-ic?days=90&horizon=5', auth: '登录', desc: '各因子横截面 IC / t / IR / 样本外 IC(pooled 仅参考)' },
-      { method: 'GET', path: '/api/factors/weights', auth: '登录', desc: '因子权重(按市场区分, 含最近标定 IC/IR)' },
-      { method: 'POST', path: '/api/factors/weights/{factor_code}/{market}', auth: 'owner', desc: '调整因子权重 / 锁定 / 自动标定开关' },
+      { method: 'GET', path: '/api/factors/weights', auth: '登录', desc: '因子权重(按市场区分); last_ic/last_ir 为历史观测, 附 last_observation_at / last_observation_stale; 读/补行失败返回 503 + 安全文案 + 关联号(不是 200 空列表)' },
+      { method: 'GET', path: '/api/factors/calibration?market=CN&days=90&horizon=5', auth: 'manage_settings', desc: '实时计算只读标定建议(受限管理员; computed_at / 每因子 sample_size / rows_present / no_rows; **计算失败返回 503 + 安全文案 + 关联号**, 不是 200+ok=false; changed 恒 0, 不落库; 只有进程内 single-flight, 预算不可中断已算的那一次 IC 评估)' },
+      { method: 'POST', path: '/api/factors/weights/{factor_code}/{market}', auth: 'owner 或 manage_settings', desc: '手动调整因子权重 / 锁定 / 标定建议开关(不会自动调权); 审计记服务端身份' },
       { method: 'GET', path: '/api/recommendations/strategy-factors/{signal_run_id}', auth: '登录', desc: '单次信号运行的因子明细' },
     ],
   },
