@@ -1,5 +1,11 @@
 ## [未发布]
 
+### fix-多 worker 并发启动建表竞态
+
+- 生产 `WEB_WORKERS=4` 时四个进程同时进 lifespan → `init_db`；`create_all(checkfirst=True)` 的 checkfirst 只在进程内有效，另一个 worker 仍会 `CREATE` 同名表/类型，报 `DuplicateTable` / `pg_type` 唯一冲突，父进程退出、健康检查永不通过（v0.11.17 首次部署实测）。
+- 启动期 DDL（建表/迁移/撤销表/授权/评分体检）改为在 PG advisory lock 下**跨进程串行**；锁挂独立 AUTOCOMMIT 连接，进程退出自动释放，键与迁移内部锁错开避免自锁。
+- 新增隔离 PG 用例：4 个真实子进程同时 `init_db()` 必须全部成功且无 `DuplicateTable`。
+
 ### test-系统对账测试固定交易日
 
 - 对账未收盘用例固定交易日，避免周末和节假日将未成熟误归类为未来，不改变业务判断。
