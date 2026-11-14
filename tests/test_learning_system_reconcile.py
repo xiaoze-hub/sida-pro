@@ -371,7 +371,8 @@ def test_unknown_cases_never_write_fake_results(tmp_path, monkeypatch):
     Session = sessionmaker(bind=eng)
     monkeypatch.setattr(cs, "SessionLocal", Session)
 
-    today = date.today()
+    # 固定为已知交易日，避免周末或节假日运行时「今日未收盘」变成未来交易日。
+    today = date(2026, 11, 13)
     target = _prev_trading_day(today)
     pred = _mature_pred_day(1, target)
 
