@@ -19,6 +19,13 @@ Base/get_db/DB_URL/DB_PATH/acquire_write`` 仍可用(新代码请直接 import
 ``src.db.session`` / ``src.db.dialect``)。
 """
 
+from __future__ import annotations
+
+import logging
+from contextlib import contextmanager
+
+from sqlalchemy import text
+
 from src.db.backup import backup_db_before_migration, backup_pg_schema_before_migration
 from src.db.dialect import (  # noqa: F401
     DB_PATH,
@@ -63,6 +70,44 @@ def init_db():
     from src.db.dialect import migrate_engine
 
     mig = migrate_engine()
+    # 2026-11-14 P0: WEB_WORKERS=4 时四个进程同时进 lifespan → 并发 init_db。
+    # `create_all(checkfirst=True)` 的 checkfirst 只在本进程内有效, 另一个 worker
+    # 仍会 CREATE 同名表/类型 → pg_type 唯一冲突或 DuplicateTable, 父进程退出,
+    # 容器健康检查永远不过(v0.11.17 首次部署实测)。DDL 段必须**跨进程串行**。
+    with _startup_ddl_lock(mig):
+        _init_db_locked(mig)
+
+
+@contextmanager
+def _startup_ddl_lock(mig_engine):
+    """PG 上把启动期 DDL(建表/迁移/授权/体检)串行化到单实例。
+
+    锁挂独立 AUTOCOMMIT 连接: 会话级 advisory lock 随连接关闭或进程退出自动释放,
+    不会因为某个 worker 崩溃而永久占锁。键与迁移内部锁 +1 错开 —— 同一请求里
+    run_versioned_migrations 还会在自己连接上再取一次迁移锁, 同键会自锁。
+    """
+    if mig_engine.dialect.name != "postgresql":
+        yield
+        return
+    key = 0x534944413031  # ASCII "SIDA01"
+    conn = mig_engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+    try:
+        conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": key})
+    except Exception:
+        conn.close()
+        raise
+    try:
+        yield
+    finally:
+        try:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+        except Exception:  # noqa: BLE001 - 解锁失败不掩盖迁移原始异常; 断连会自动释放
+            logging.getLogger(__name__).warning("启动 DDL advisory unlock 失败(连接断开会自动释放)")
+        conn.close()
+
+
+def _init_db_locked(mig) -> None:
+    """持启动 DDL 锁时执行的建表/迁移/授权/体检(原 init_db 主体)。"""
     Base.metadata.create_all(bind=mig)
     if has_pending_migrations(mig):
         backup_db_before_migration()
