@@ -7508,15 +7508,17 @@ CREATE TABLE IF NOT EXISTS theme_board_daily (
 """
             )
         )
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_board_day_code "
-                "ON theme_board_daily (day, board_code)"
-            )
+    # 索引一律放建表分支**之外**: 表可能是 create_all 先建的(启动路径), 那时分支被跳过,
+    # 命名索引就永远建不出来。IF NOT EXISTS 重跑安全。
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_board_day_code "
+            "ON theme_board_daily (day, board_code)"
         )
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_theme_board_day ON theme_board_daily (day)")
-        )
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_theme_board_day ON theme_board_daily (day)")
+    )
     # 251 在开发期加过一版无 has_quote 的建表(未发版); 这里补列, 保证两种库都能跑。
     _add_column_if_missing(
         conn, "theme_board_daily", "has_quote",
@@ -7537,15 +7539,15 @@ CREATE TABLE IF NOT EXISTS theme_limitup_daily (
 """
             )
         )
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_limitup_day_code "
-                "ON theme_limitup_daily (day, stock_code)"
-            )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_limitup_day_code "
+            "ON theme_limitup_daily (day, stock_code)"
         )
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_theme_limitup_day ON theme_limitup_daily (day)")
-        )
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_theme_limitup_day ON theme_limitup_daily (day)")
+    )
 
 
 MIGRATIONS: tuple[Migration, ...] = (

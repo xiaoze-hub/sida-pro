@@ -325,3 +325,23 @@ def test_refused_collection_is_visible_in_report(db):
     text = te.render_markdown(payload)
     assert "本次采集被拒绝" in text
     assert "source_not_updated_for_day" in text
+
+
+def test_migration_adds_named_index_even_when_create_all_ran_first():
+    """启动路径上 create_all 可能先建表(带 UNIQUE 约束), 迁移仍须补出命名索引。"""
+    from sqlalchemy import create_engine, inspect
+
+    from src.web.migrations import _m251_theme_evolution
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(
+        engine, tables=[ThemeBoardDaily.__table__, ThemeLimitUpDaily.__table__]
+    )
+    with engine.begin() as conn:
+        _m251_theme_evolution(conn)
+    insp = inspect(engine)
+    board_idx = {i["name"] for i in insp.get_indexes("theme_board_daily")}
+    limit_idx = {i["name"] for i in insp.get_indexes("theme_limitup_daily")}
+    assert "uq_theme_board_day_code" in board_idx
+    assert "uq_theme_limitup_day_code" in limit_idx
+    engine.dispose()
