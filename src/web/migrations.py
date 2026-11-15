@@ -7470,6 +7470,84 @@ def _m250_prediction_outcome_versions_and_system_scope(conn: Connection) -> None
         )
 
 
+def _m251_theme_evolution(conn: Connection) -> None:
+    """题材演化观察层(A 通道, 2026-11-15)。
+
+    为什么落库: 现有板块成分接口**只有"此刻"**(`sector_filter.board_constituents`
+    走实时 MCP + TTL 缓存、`tdx_boards.constituents` 同为当前态), 没有任何 as-of
+    版本。想回答"某题材在 D 日有哪些成员、今天比昨天多了谁", 只能从今天起每天
+    存一份快照 —— 历史日永远补不回来, 也不许拿当前成分回填。
+
+    两张表:
+    - `theme_board_daily`: 每天每个板块一行, 成分存 JSON。`state` 三态区分
+      `ok / empty_ok / fetch_failed` —— 空列表不等于"取不到", 更不等于"没有成员"。
+    - `theme_limitup_daily`: 当日涨停池返回的证券代码, 让报告能从库里复算
+      "某题材有多少成员今天涨停", 不依赖事后重新调接口。
+
+    只增表/索引, 不碰任何存量表与数据行; 无外键, 不与用户数据关联(全是公开市场数据)。
+    """
+    id_pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    if not _has_table(conn, "theme_board_daily"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS theme_board_daily (
+    id {id_pk},
+    day VARCHAR(8) NOT NULL,
+    board_code VARCHAR(16) NOT NULL,
+    board_name VARCHAR(64),
+    board_type VARCHAR(16),
+    source VARCHAR(16) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    member_count INTEGER,
+    members_json TEXT,
+    has_quote BOOLEAN,
+    fetched_at TIMESTAMP NOT NULL,
+    error VARCHAR(255)
+)
+"""
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_board_day_code "
+                "ON theme_board_daily (day, board_code)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_theme_board_day ON theme_board_daily (day)")
+        )
+    # 251 在开发期加过一版无 has_quote 的建表(未发版); 这里补列, 保证两种库都能跑。
+    _add_column_if_missing(
+        conn, "theme_board_daily", "has_quote",
+        "ALTER TABLE theme_board_daily ADD COLUMN has_quote BOOLEAN",
+    )
+    if not _has_table(conn, "theme_limitup_daily"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS theme_limitup_daily (
+    id {id_pk},
+    day VARCHAR(8) NOT NULL,
+    stock_code VARCHAR(16) NOT NULL,
+    stock_name VARCHAR(64),
+    source VARCHAR(32) NOT NULL,
+    fetched_at TIMESTAMP NOT NULL
+)
+"""
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_limitup_day_code "
+                "ON theme_limitup_daily (day, stock_code)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_theme_limitup_day ON theme_limitup_daily (day)")
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -7728,6 +7806,8 @@ MIGRATIONS: tuple[Migration, ...] = (
         "prediction_outcome_versions_and_system_scope",
         _m250_prediction_outcome_versions_and_system_scope,
     ),
+    # 题材演化观察层(A 通道): 板块成分当日快照 + 当日涨停池代码; 只增表/索引, 不碰存量数据。
+    Migration(251, "theme_evolution_snapshot", _m251_theme_evolution),
 )
 
 

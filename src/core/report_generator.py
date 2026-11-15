@@ -945,6 +945,33 @@ def _write_report(
 # ──────────────────────────── 入口 ────────────────────────────
 
 
+def write_report_document(
+    job_id: str,
+    title: str,
+    content: str,
+    *,
+    scope: str = "shared",
+    owner_user_id: str | None = None,
+    contains_private_holdings: bool = False,
+    run_time: datetime | None = None,
+) -> dict:
+    """把**已渲染好的** Markdown 写进报告中心(与盘前/盘后同一落盘通道)。
+
+    给"不经过 premarket/postmarket 模板"的模块(如题材演化观察)复用同一套:
+    原子创建(O_EXCL)、fsync、meta 归属、失败删残片。调用方负责正文口径
+    (不含私有持仓时才能传 `scope="shared"`; 判不出按 True 走 private 通道)。
+    """
+    return _write_report(
+        job_id,
+        title,
+        content,
+        run_time or beijing_now(),
+        scope=scope,
+        owner_user_id=owner_user_id,
+        contains_private_holdings=contains_private_holdings,
+    )
+
+
 async def generate_market_report(report_type: str, db=None, user_id: str | None = None) -> dict:
     """生成盘前(premarket)/盘后(postmarket)报告并写入报告中心。
 

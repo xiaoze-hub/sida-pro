@@ -1,5 +1,14 @@
 ## [未发布]
 
+### feat-题材演化观察层（A 通道，只读事后）
+
+- 新增 `src/core/theme_evolution.py`：工作日 15:16 采集当日**板块→成分快照**（`theme_board_daily`，一天一行/板块，成分存 JSON）与当日**涨停池代码**（`theme_limitup_daily`），再生成一份「题材演化观察」报告进报告中心（`scope=shared`，不含任何持仓/自选）。
+- 为什么要落库：现有板块成分接口只有「此刻」（实时 MCP + TTL 缓存 / TQ 当前态），没有 as-of 版本。历史成分**补不回来**，只能从今天起每天存一份；禁止用当天成分解释历史日。
+- 三态区分（不把取不到写成空）：`ok` / `empty_ok` / `fetch_failed`；板块目录为空、TQ 源不新鲜 → 整轮 `refused` 不落空快照；抓取超预算的板块记 `fetch_failed(budget_exhausted)`，不阻塞调度线程。
+- 报告口径：板块覆盖与缺口清单必列；覆盖 < 50% 或涨停池为空 → **不出排名**（`unknown`，不是 0）；「涨停池内成员数」明示为描述量，不是强度/资金/信号；正文禁止交易措辞（`assert_no_trading_wording`）。
+- 按源端分类标记条件/技术板块（昨ST连板/已高送转/连续亏损/最近情绪指数…），其成分由规则筛出、拿来排名会形成循环 → 不参与排名但**数据仍落库**，报告逐个列出供人复核；无行情的板块按同一类处理。概念板块允许一股多属，跨板块不可相加。
+- 迁移 251 只增两表与索引，不碰存量表；`SIDA_THEME_EVOLUTION_ENABLED=0` 可整体关闭。已知边界：历史成分不存在（首日起才有）、无盘中口径、不构成选股信号。
+
 ### fix-多 worker 并发启动建表竞态
 
 - 生产 `WEB_WORKERS=4` 时四个进程同时进 lifespan → `init_db`；`create_all(checkfirst=True)` 的 checkfirst 只在进程内有效，另一个 worker 仍会 `CREATE` 同名表/类型，报 `DuplicateTable` / `pg_type` 唯一冲突，父进程退出、健康检查永不通过（v0.11.17 首次部署实测）。

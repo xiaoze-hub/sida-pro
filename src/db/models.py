@@ -2968,3 +2968,65 @@ class IndexFlowDaily(Base):
     source = Column(String(32), nullable=True)
     created_at = Column(DateTime, default=db_now_naive)
     updated_at = Column(DateTime, default=db_now_naive, onupdate=db_now_naive)
+
+
+# ───────────────────────── 题材演化观察层(A 通道, 2026-11-15) ─────────────────────────
+
+
+class ThemeBoardDaily(Base):
+    """板块成分**当日快照**(一天一行/板块), 追加式, 不回填历史。
+
+    为什么存 JSON 而不是一行一只股票: 每天约 590 个板块、每个板块几十到几百只成分,
+    拆行后一个月就是几百万行; A 通道只需要"当天成分集合"和"与前一日差集",
+    在 Python 里解析 JSON 足够, 且一行的写入天然原子。
+
+    关键: `state` 必须区分三种结果(空列表 ≠ 取不到):
+      - `ok`          成功取到非空成分
+      - `empty_ok`    成功返回但确为空集(可疑, 报告里单列)
+      - `fetch_failed` 取不到(None/异常/源不新鲜) —— 不可当作"无成员"
+    """
+
+    __tablename__ = "theme_board_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    day = Column(String(8), nullable=False)              # YYYYMMDD
+    board_code = Column(String(16), nullable=False)
+    board_name = Column(String(64), nullable=True)
+    board_type = Column(String(16), nullable=True)
+    source = Column(String(16), nullable=False)          # tq / mcp
+    state = Column(String(16), nullable=False)           # ok|empty_ok|fetch_failed
+    member_count = Column(Integer, nullable=True)
+    members_json = Column(Text, nullable=True)           # JSON array[str]; fetch_failed 时为 NULL
+    #: 该板块在行情接口里是否有报价。通达信的"选股条件"板块(如 业绩预升/已高送转/
+    #: 最近情绪指数)有成分但**没有行情**, 与真实题材/行业板块可用数据区分, 不需要按名字硬编码。
+    #: None = 行情批量取数失败 → 该板块类型未知(不参与"是否题材"的推断)。
+    has_quote = Column(Boolean, nullable=True)
+    fetched_at = Column(DateTime, nullable=False, default=db_now_naive)
+    error = Column(String(255), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("day", "board_code", name="uq_theme_board_day_code"),
+        Index("ix_theme_board_day", "day"),
+    )
+
+
+class ThemeLimitUpDaily(Base):
+    """当日涨停池代码快照(报告可复算用)。
+
+    只存"当日涨停池返回了哪些证券", 不存封单/连板等衍生判断; 源为空 → 不写行,
+    报告据此标 unknown, 而不是把空池当"零只涨停"。
+    """
+
+    __tablename__ = "theme_limitup_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    day = Column(String(8), nullable=False)
+    stock_code = Column(String(16), nullable=False)
+    stock_name = Column(String(64), nullable=True)
+    source = Column(String(32), nullable=False)
+    fetched_at = Column(DateTime, nullable=False, default=db_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("day", "stock_code", name="uq_theme_limitup_day_code"),
+        Index("ix_theme_limitup_day", "day"),
+    )

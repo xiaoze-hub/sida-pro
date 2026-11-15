@@ -244,6 +244,19 @@ async def lifespan(app):
                 logger.warning("情绪周期 cron 注册未生效(调度器不可用), 阶段数据需手动 sync")
         except Exception as e:
             logger.error(f"情绪周期 cron 注册失败: {e}")
+        # 题材演化观察(v0.11.19): 工作日 15:16 落板块成分快照 + 出观察报告
+        # 只写 theme_board_daily / theme_limitup_daily 与报告中心, 不碰既有链路;
+        # SIDA_THEME_EVOLUTION_ENABLED=0 可整体关闭。
+        try:
+            from src.core.theme_evolution import register_cron as _theme_evo_register_cron
+
+            _rs_evo = locals().get("report_scheduler")
+            if _theme_evo_register_cron(_rs_evo.scheduler if _rs_evo else None):
+                logger.info("题材演化观察 cron 已注册 (工作日 15:16)")
+            else:
+                logger.warning("题材演化观察 cron 未注册(调度器不可用或已关闭)")
+        except Exception as e:
+            logger.error(f"题材演化观察 cron 注册失败: {e}")
         # K线盘前预缓存(v0.4.10): 工作日 09:20 主动增量入库自选+候选池,
         # 开盘后消费者直接命中 PG 缓存, 对外请求数砍 ~80%
         try:
