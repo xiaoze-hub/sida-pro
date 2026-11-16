@@ -441,6 +441,12 @@ app.include_router(ws_notif_router, prefix="/api", tags=["notif-ws"])
 # 市场指数（公共数据，无需登录）
 app.include_router(market.router, prefix="/api/market", tags=["market"])
 
+# 题材演化观察层（只读、追加证据；销售/交易语义一概没有）
+from src.web.api import theme_evolution as theme_evolution_api  # noqa: E402
+
+app.include_router(theme_evolution_api.router, prefix="/api/theme-evolution",
+                   tags=["theme-evolution"])
+
 # 盘面指数总览（2026-11-03）：八宽基指数的涨跌幅/成交额/四档资金/涨跌家数
 from src.web.api import indexes as indexes_api  # noqa: E402
 

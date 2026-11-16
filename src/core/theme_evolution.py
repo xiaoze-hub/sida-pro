@@ -9,7 +9,7 @@ TTL 缓存、`tdx_boards.constituents` 同为当前态), 没有任何 as-of 版�
 2. 报告只用当日快照 + 当日涨停池代码, 算"某题材有多少成员今天在涨停池里"这类
    **描述量**, 不预测、不给方向。
 
-历史日拿不到就是拿不到 —— 拿今天的成分去解释昨天 = 未来信息, 本模块禁止。
+历史成分需继续查可追溯来源；不能用当前成分解释历史日。
 
 ## 硬约束(违反即视为 bug)
 
@@ -210,10 +210,17 @@ def collect_snapshot(
         "fetched_at": now.isoformat(timespec="seconds"),
         "source": SOURCE_TQ, "source_fresh": fresh, "source_trade_date": source_trade_date,
         "boards_total": len(boards or []), "ok": 0, "empty_ok": 0, "fetch_failed": 0,
-        "stored_boards": 0, "limit_up_count": 0, "limit_up_stored": False,
+        "stored_boards": 0, "limit_up_count": None, "limit_up_stored": False,
+        "limit_up_state": "unavailable", "limit_up_as_of": None,
         "status": "ok", "reason": None, "errors": [],
     }
 
+    # 当前态接口不能提供历史或未来成员；源行情日也不能证明成分的历史有效日。
+    if day != now.strftime("%Y%m%d"):
+        summary["status"] = "refused"
+        summary["reason"] = "current_members_wrong_day"
+        summary["errors"].append("当前成分不能用于其他日期；历史成分需独立来源和时点证据")
+        return summary
     if not boards:
         summary["status"] = "refused"
         summary["reason"] = "board_catalog_empty"
@@ -232,6 +239,13 @@ def collect_snapshot(
         summary["errors"].append(
             f"客户端最新交易日 {source_trade_date} 早于目标日 {day} → 拒绝落库(数据日错配)"
         )
+        return summary
+
+    if (db.execute(select(ThemeBoardDaily.id).where(ThemeBoardDaily.day == day).limit(1)).first()
+            or db.execute(select(ThemeLimitUpDaily.id).where(ThemeLimitUpDaily.day == day).limit(1)).first()):
+        summary["status"] = "refused"
+        summary["reason"] = "snapshot_already_exists"
+        summary["errors"].append("当日已有快照，拒绝覆盖；并发写保护仍待隔离 PostgreSQL 验证")
         return summary
 
     started = time.monotonic()
@@ -293,6 +307,35 @@ def collect_snapshot(
     except Exception as exc:  # noqa: BLE001
         pool = []
         summary["errors"].append(f"limit_up_pool_failed: {type(exc).__name__}: {exc}"[:240])
+    # 必须逐行核验供应商返回的数据日期；请求日期本身不是实际数据日期的证明。
+    # 空池无法区分调用失败与真实空池，一律 unavailable。
+    pool_state = "unavailable" if not pool else "unknown_day"
+    pool_day = None
+    if isinstance(pool, list) and pool and all(isinstance(item, dict) for item in pool):
+        dates = []
+        for item in pool:
+            raw_date = item.get("as_of")
+            try:
+                value = str(raw_date or "")
+                if not (re.fullmatch(r"\d{8}", value) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)):
+                    raise ValueError("invalid date format")
+                dates.append(datetime.strptime(value.replace("-", ""), "%Y%m%d").strftime("%Y%m%d"))
+            except ValueError:
+                dates = []
+                break
+        if dates and len(set(dates)) == 1:
+            pool_day = dates[0]
+            pool_state = "ok" if pool_day == day else "stale_day"
+            if pool_state == "ok" and any(
+                item.get("as_of_basis") != "kline" for item in pool
+            ):
+                pool_state = "unknown_day"
+                pool_day = None
+    summary["limit_up_state"] = pool_state
+    summary["limit_up_as_of"] = pool_day
+    if pool_state != "ok":
+        summary["errors"].append(f"limit_up_pool_{pool_state}")
+        pool = []
     codes = {_norm_code(item.get("code")) for item in pool if isinstance(item, dict)}
     codes.discard("")
     if codes:
@@ -317,6 +360,9 @@ def collect_snapshot(
     elif summary[STATE_FAILED] and not (summary[STATE_OK] or summary[STATE_EMPTY]):
         summary["status"] = "partial"
         summary["reason"] = "all_boards_failed"
+    if not summary["limit_up_stored"]:
+        summary["status"] = "partial"
+        summary["reason"] = summary["reason"] or "limit_up_unavailable"
     logger.info("[theme-evo] 快照完成 day=%s %s", day, {
         k: summary[k] for k in ("ok", "empty_ok", "fetch_failed", "limit_up_count", "status")
     })
@@ -379,8 +425,9 @@ def build_payload(db, *, day: str | None = None, top_n: int = 30,
             "board_type": r.board_type, "board_kind": _kind(r),
             "state": r.state,
             "member_count": r.member_count, "error": r.error,
-            "limit_up_hits": len(hit), "limit_up_codes": hit[:20],
-            "hit_ratio": round(len(hit) / len(members), 4) if members else None,
+            "limit_up_hits": len(hit) if pool_codes and r.state == STATE_OK else None,
+            "limit_up_codes": hit[:20] if pool_codes and r.state == STATE_OK else None,
+            "hit_ratio": round(len(hit) / len(members), 4) if pool_codes and members else None,
             "added_vs_prev": added, "removed_vs_prev": removed,
         })
 
@@ -401,7 +448,7 @@ def build_payload(db, *, day: str | None = None, top_n: int = 30,
 
     screen_rules = sorted(
         (b for b in boards if b["state"] == STATE_OK and b["board_kind"] == "condition_screen"),
-        key=lambda b: (-b["limit_up_hits"], b["board_name"] or ""),
+        key=lambda b: (-(b["limit_up_hits"] or 0), b["board_name"] or ""),
     )
 
     # 占比榜: 小成分板块 1-2 只涨停就能刷出高占比, 所以要求最小成分数与最小命中数,
@@ -427,12 +474,13 @@ def build_payload(db, *, day: str | None = None, top_n: int = 30,
         "prev_day": prev_day,
         "collect": (
             {k: collect.get(k) for k in ("status", "reason", "source_fresh",
-                                         "source_trade_date", "fetched_at", "errors")}
+                                         "source_trade_date", "fetched_at", "errors",
+                                         "limit_up_state", "limit_up_as_of")}
             if collect else None
         ),
         "counts": counts, "boards_total": total, "coverage": round(coverage, 4),
         "limit_up": {
-            "available": bool(pool_codes), "count": len(pool_codes),
+            "available": bool(pool_codes), "count": len(pool_codes) if pool_codes else None,
             "sample": sorted(pool_codes)[:20],
         },
         "ranking_available": ranking_ok, "ranking_reason": ranking_reason,
@@ -447,7 +495,7 @@ def build_payload(db, *, day: str | None = None, top_n: int = 30,
         "screen_rules": screen_rules[:top_n],
         "boards": boards,
         "changes": changed[:top_n],
-        "changes_available": bool(prev_day),
+        "changes_available": any(b["added_vs_prev"] is not None for b in boards),
         "missing": [
             {"board_code": b["board_code"], "board_name": b["board_name"],
              "state": b["state"], "error": b["error"]}
@@ -600,6 +648,8 @@ def run_daily(db=None, *, day: str | None = None, **collect_kwargs) -> dict:
         db = SessionLocal()
     try:
         collect = collect_snapshot(db, day=day, **collect_kwargs)
+        if collect["status"] == "refused":
+            return {"collect": collect, "payload": None, "report": None}
         payload = build_payload(db, day=collect["day"], collect=collect)
         text = render_markdown(payload)
         assert_no_trading_wording(text)
@@ -616,16 +666,19 @@ def run_daily(db=None, *, day: str | None = None, **collect_kwargs) -> dict:
 
 
 def register_cron(scheduler) -> bool:
-    """工作日 15:16 采集 + 出报告。开关 `SIDA_THEME_EVOLUTION_ENABLED`(默认开)。"""
+    """工作日 15:16 采集 + 出报告；仅显式设置开关为 1 时注册。"""
     if scheduler is None or not hasattr(scheduler, "add_job"):
         return False
-    if str(os.getenv(ENV_ENABLED, "1")).strip().lower() in ("0", "false", "no", "off"):
+    if os.getenv(ENV_ENABLED, "").strip() != "1":
         logger.info("[theme-evo] 已通过 %s 关闭, 不注册定时任务", ENV_ENABLED)
         return False
 
     def _run_once():
         try:
             out = run_daily()
+            if out["collect"]["status"] == "refused":
+                logger.warning("[theme-evo] 采集拒绝: %s", out["collect"]["reason"])
+                return
             logger.info("[theme-evo] 日报完成: %s", {
                 "day": out["payload"]["day"],
                 "coverage": out["payload"]["coverage"],

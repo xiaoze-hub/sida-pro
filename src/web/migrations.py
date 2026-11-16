@@ -7476,7 +7476,7 @@ def _m251_theme_evolution(conn: Connection) -> None:
     为什么落库: 现有板块成分接口**只有"此刻"**(`sector_filter.board_constituents`
     走实时 MCP + TTL 缓存、`tdx_boards.constituents` 同为当前态), 没有任何 as-of
     版本。想回答"某题材在 D 日有哪些成员、今天比昨天多了谁", 只能从今天起每天
-    存一份快照 —— 历史日永远补不回来, 也不许拿当前成分回填。
+    存一份当前态记录。当前成分不能回填历史；其他历史来源是否可用需单独核查。
 
     两张表:
     - `theme_board_daily`: 每天每个板块一行, 成分存 JSON。`state` 三态区分
@@ -7547,6 +7547,143 @@ CREATE TABLE IF NOT EXISTS theme_limitup_daily (
     )
     conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_theme_limitup_day ON theme_limitup_daily (day)")
+    )
+
+
+def _m252_theme_observation_evidence(conn: Connection) -> None:
+    """题材演化观察层: 追加式证据三表(2026-11-16)。
+
+    与 251 的 `theme_board_daily / theme_limitup_daily` 是**两套**东西:
+    251 是"当天覆盖写 + 按日删除重建"的快照; 252 是**只追加**的批次/明细,
+    一次采集 = 一个 run, 明细挂 run_id, 同 day 可存多次 attempt。
+
+    为什么必须落库而不是只算: 板块成分接口只有"此刻"(`tdx_boards.constituents`
+    无 as-of 版本), 想回答"某题材今天比昨天多了谁", 只能从今天起每天存一份
+    当前态并保留真实采集时刻。当前成分不能回填历史。
+
+    表定义必须与 `src/core/theme_evolution_store.py` 的 `THEME_OBS_METADATA`
+    逐列一致(有 parity 测试钉住): 生产只走迁移建表, core 的 `create_schema`
+    仅测试用, 两边漂移会让写入在运行时炸。
+
+    只增表/索引, 不碰存量表与数据行; 无外键, 与本仓库用户数据无关。
+    """
+    id_pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+    if not _has_table(conn, "theme_obs_run"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS theme_obs_run (
+    id {id_pk},
+    day VARCHAR(8) NOT NULL,
+    attempt_seq INTEGER NOT NULL,
+    run_key VARCHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    input_partial BOOLEAN NOT NULL,
+    capture_notes TEXT,
+    rule_version VARCHAR(32) NOT NULL,
+    source VARCHAR(16) NOT NULL,
+    source_fresh BOOLEAN,
+    source_trade_date VARCHAR(8),
+    captured_at TIMESTAMP NOT NULL,
+    finished_at TIMESTAMP,
+    boards_total INTEGER NOT NULL,
+    boards_ok INTEGER NOT NULL,
+    boards_empty_ok INTEGER NOT NULL,
+    boards_fetch_failed INTEGER NOT NULL,
+    pool_state VARCHAR(16),
+    pool_data_day VARCHAR(8),
+    pool_date_basis VARCHAR(32),
+    limit_up_count INTEGER,
+    refused_reason VARCHAR(64),
+    error VARCHAR(255)
+)
+"""
+            )
+        )
+    # 索引放建表分支之外: 表可能已被别的路径建过, 分支被跳过就不会再有索引。
+    # IF NOT EXISTS 重跑安全。
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_obs_run_day_attempt "
+            "ON theme_obs_run (day, attempt_seq)"
+        )
+    )
+    conn.execute(
+        text("CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_obs_run_key ON theme_obs_run (run_key)")
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_theme_obs_run_day ON theme_obs_run (day, attempt_seq)")
+    )
+
+    if not _has_table(conn, "theme_obs_board"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS theme_obs_board (
+    id {id_pk},
+    run_id INTEGER NOT NULL,
+    day VARCHAR(8) NOT NULL,
+    board_code VARCHAR(16) NOT NULL,
+    board_name VARCHAR(64),
+    board_type VARCHAR(16),
+    data_day VARCHAR(8),
+    date_basis VARCHAR(32),
+    source VARCHAR(16) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    member_count INTEGER,
+    members_json TEXT,
+    has_quote BOOLEAN,
+    fetched_at TIMESTAMP NOT NULL,
+    error VARCHAR(255)
+)
+"""
+            )
+        )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_obs_board_run_code "
+            "ON theme_obs_board (run_id, board_code)"
+        )
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_theme_obs_board_day ON theme_obs_board (day)")
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_theme_obs_board_run ON theme_obs_board (run_id)")
+    )
+
+    if not _has_table(conn, "theme_obs_limitup"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE IF NOT EXISTS theme_obs_limitup (
+    id {id_pk},
+    run_id INTEGER NOT NULL,
+    day VARCHAR(8) NOT NULL,
+    stock_code VARCHAR(16) NOT NULL,
+    stock_name VARCHAR(64),
+    sector VARCHAR(64),
+    concepts_json TEXT,
+    block_as_of VARCHAR(8),
+    block_source VARCHAR(32),
+    source VARCHAR(16) NOT NULL,
+    fetched_at TIMESTAMP NOT NULL
+)
+"""
+            )
+        )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_theme_obs_limitup_run_code "
+            "ON theme_obs_limitup (run_id, stock_code)"
+        )
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_theme_obs_limitup_day ON theme_obs_limitup (day)")
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_theme_obs_limitup_run ON theme_obs_limitup (run_id)")
     )
 
 
@@ -7810,6 +7947,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ),
     # 题材演化观察层(A 通道): 板块成分当日快照 + 当日涨停池代码; 只增表/索引, 不碰存量数据。
     Migration(251, "theme_evolution_snapshot", _m251_theme_evolution),
+    Migration(252, "theme_observation_evidence", _m252_theme_observation_evidence),
 )
 
 

@@ -36,6 +36,7 @@ import {
   LayoutGrid,
   LineChart,
   List,
+  Radar,
   ServerCog,
   Settings,
   Shield,
@@ -106,6 +107,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // ETF 原入口对已登录用户无额外权限要求；指数页签由工作区单独校验 view_quotes。
   { to: '/market-watch', labelKey: 'nav.marketWatch', icon: BarChart3, group: 'market', mobile: 'more', keywords: ['指数', '宽基', 'ETF'] },
   { to: '/market-mood', labelKey: 'nav.marketMood', icon: Activity, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['题材', '情绪', '复盘', '连板'] },
+  { to: '/theme-evolution', labelKey: 'nav.themeEvolution', icon: Radar, group: 'market', mobile: 'more', perm: 'view_quotes', keywords: ['题材', '演化', '证据', '标签', '概念'] },
   { to: '/opportunities', labelKey: 'nav.opportunities', icon: Sparkles, group: 'opportunity', mobile: 'primary', mobileOrder: 2, perm: 'view_opportunities', keywords: ['扫描', '机会'] },
   { to: '/auction', labelKey: 'nav.auction', icon: Flame, group: 'opportunity', mobile: 'more', perm: 'view_opportunities', keywords: ['竞价', '集合竞价'] },
   // 数智参谋: 独立一级入口(设计稿 §9.3 方案 A) —— 不进分组, 桌面渲染独立高亮卡

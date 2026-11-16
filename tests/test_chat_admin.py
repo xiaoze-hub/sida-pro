@@ -560,5 +560,5 @@ class TestPinnedMigration:
         assert versions == sorted(versions)
         for prev, cur in zip(versions, versions[1:]):
             assert cur == prev + 1, f"迁移版本不连续: {prev} -> {cur}"
-        # 新增迁移时同步改这里的"最新版本"钉子(251=题材演化观察层, 2026-11-15)。
-        assert versions[-1] == 251
+        # 新增迁移时同步改这里的"最新版本"钉子(252=题材观察追加证据三表, 2026-11-16)。
+        assert versions[-1] == 252

@@ -57,7 +57,7 @@ def _members(mapping):
 
 
 def _f_pool(*codes):
-    return lambda day: [{"code": c, "name": f"股{c}"} for c in codes]
+    return lambda day: [{"code": c, "name": f"股{c}", "as_of": day, "as_of_basis": "kline"} for c in codes]
 
 
 # ── 三态 ───────────────────────────────────────────────────────────────────────
@@ -124,23 +124,26 @@ def test_budget_exhaustion_marks_remaining_boards_failed(db):
 
 # ── 幂等 ───────────────────────────────────────────────────────────────────────
 
-def test_same_day_rerun_replaces_rows_without_duplicates(db):
+def test_same_day_rerun_does_not_overwrite_existing_evidence(db):
     te.collect_snapshot(db, day="20261116", now=NOW, source_fresh=True,
                         boards=_boards("A1"), fetch_members=lambda c: ["000001", "000002"],
                         fetch_pool=_f_pool("000001"))
-    te.collect_snapshot(db, day="20261116", now=NOW, source_fresh=True,
+    out = te.collect_snapshot(db, day="20261116", now=NOW, source_fresh=True,
                         boards=_boards("A1"), fetch_members=lambda c: ["000002"],
-                        fetch_pool=_f_pool("000001"))
+                        fetch_pool=_f_pool("000002"))
+    assert out["status"] == "refused"
+    assert out["reason"] == "snapshot_already_exists"
     rows = list(db.execute(select(ThemeBoardDaily)).scalars())
     assert len(rows) == 1
-    assert json.loads(rows[0].members_json) == ["000002"]
-    assert len(list(db.execute(select(ThemeLimitUpDaily)).scalars())) == 1
+    assert json.loads(rows[0].members_json) == ["000001", "000002"]
+    assert [r.stock_code for r in db.execute(select(ThemeLimitUpDaily)).scalars()] == ["000001"]
 
 
 # ── 报告口径 ───────────────────────────────────────────────────────────────────
 
 def _seed(db, day, mapping, pool_codes):
-    te.collect_snapshot(db, day=day, now=NOW, source_fresh=True,
+    captured_at = datetime.strptime(day, "%Y%m%d").replace(hour=15, minute=16, tzinfo=CST)
+    te.collect_snapshot(db, day=day, now=captured_at, source_fresh=True,
                         boards=_boards(*mapping), fetch_members=_members(mapping),
                         fetch_pool=_f_pool(*pool_codes))
 
@@ -163,6 +166,9 @@ def test_empty_pool_means_unknown_not_zero(db):
     assert payload["ranking_available"] is False
     assert "unknown" in (payload["ranking_reason"] or "")
     assert payload["ranking"] == []
+    assert payload["boards"][0]["limit_up_hits"] is None
+    assert payload["boards"][0]["hit_ratio"] is None
+    assert payload["limit_up"]["count"] is None
     # 不写 0 只涨停的假事实
     assert db.execute(select(ThemeLimitUpDaily)).first() is None
 
@@ -173,6 +179,14 @@ def test_low_coverage_blocks_ranking(db):
     assert payload["coverage"] < te.MIN_COVERAGE_FOR_RANKING
     assert payload["ranking_available"] is False
     assert "coverage" in (payload["ranking_reason"] or "")
+
+
+def test_no_comparable_previous_boards_is_unknown(db):
+    _seed(db, "20261116", {"A1": None}, ["000001"])
+    _seed(db, "20261117", {"A1": ["000001"]}, ["000001"])
+    payload = te.build_payload(db, day="20261117")
+    assert payload["changes_available"] is False
+    assert "前后两份快照的成分集合无差异" not in te.render_markdown(payload)
 
 
 def test_changes_need_previous_snapshot_and_report_unknown_first_day(db):
@@ -249,6 +263,10 @@ def test_register_cron_respects_switch_and_missing_scheduler(monkeypatch):
 
     monkeypatch.delenv(te.ENV_ENABLED, raising=False)
     sched = FakeScheduler()
+    assert te.register_cron(sched) is False
+    assert sched.jobs == []
+
+    monkeypatch.setenv(te.ENV_ENABLED, "1")
     assert te.register_cron(sched) is True
     job = sched.jobs[0]
     assert job["id"] == "theme_evolution_daily"

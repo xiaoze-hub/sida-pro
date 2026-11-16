@@ -51,6 +51,7 @@ const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page
 const IndexesPage = lazyWithRetry(() => import('@/pages/Indexes'), 'indexes-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
+const ThemeEvolutionPage = lazyWithRetry(() => import('@/pages/ThemeEvolution'), 'theme-evolution-page')
 // 龙虎榜独立工作区(2026-11-09): 按日看榜 + 选股看买卖席位(archive 只读接口)
 const LhbBoardPage = lazyWithRetry(() => import('@/pages/LhbBoard'), 'lhb-board-page')
 // 国家队 ETF 看板(2026-11-05): 20 只重点宽基 ETF 分钟成交额 + 市场级净申购
@@ -712,6 +713,7 @@ function App() {
               {/* 决策账本(2026-09-18): 登录即可看 —— 后端 /api/decisions/* 也只要求登录 */}
               <Route path="/decision-ledger" element={<DecisionLedgerPage />} />
               <Route path="/theme-mood" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ThemeMoodPage /></PermGuard>} />
+              <Route path="/theme-evolution" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ThemeEvolutionPage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情并入工作台
                   (同路由内切 ?type=index|board); 正文由 Task 7 抽成 IndexBody/BoardBody */}
               <Route path="/index/:symbol" element={<LegacyIndexRedirect type="index" />} />

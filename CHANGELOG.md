@@ -1,13 +1,23 @@
 ## [未发布]
 
-### feat-题材演化观察层（A 通道，只读事后）
+### feat-题材观察 agent 产品接线（默认关闭，未部署）
 
-- 新增 `src/core/theme_evolution.py`：工作日 15:16 采集当日**板块→成分快照**（`theme_board_daily`，一天一行/板块，成分存 JSON）与当日**涨停池代码**（`theme_limitup_daily`），再生成一份「题材演化观察」报告进报告中心（`scope=shared`，不含任何持仓/自选）。
-- 为什么要落库：现有板块成分接口只有「此刻」（实时 MCP + TTL 缓存 / TQ 当前态），没有 as-of 版本。历史成分**补不回来**，只能从今天起每天存一份；禁止用当天成分解释历史日。
-- 三态区分（不把取不到写成空）：`ok` / `empty_ok` / `fetch_failed`；板块目录为空、TQ 源不新鲜 → 整轮 `refused` 不落空快照；抓取超预算的板块记 `fetch_failed(budget_exhausted)`，不阻塞调度线程。
-- 报告口径：板块覆盖与缺口清单必列；覆盖 < 50% 或涨停池为空 → **不出排名**（`unknown`，不是 0）；「涨停池内成员数」明示为描述量，不是强度/资金/信号；正文禁止交易措辞（`assert_no_trading_wording`）。
-- 按源端分类标记条件/技术板块（昨ST连板/已高送转/连续亏损/最近情绪指数…），其成分由规则筛出、拿来排名会形成循环 → 不参与排名但**数据仍落库**，报告逐个列出供人复核；无行情的板块按同一类处理。概念板块允许一股多属，跨板块不可相加。
-- 迁移 251 只增两表与索引，不碰存量表；`SIDA_THEME_EVOLUTION_ENABLED=0` 可整体关闭。已知边界：历史成分不存在（首日起才有）、无盘中口径、不构成选股信号。
+- 新增迁移 252 `theme_observation_evidence`：`theme_obs_run / theme_obs_board / theme_obs_limitup` 三张**只追加**表（一次采集一个 run，同一天可多次 attempt，互不覆盖）。表定义与 `theme_evolution_store.THEME_OBS_METADATA` 逐列对齐，并有 parity 测试钉住；隔离 PG 实跑建表、幂等、索引与读写。
+- 涨停池行新增采集时刻的题材归属（`sector` / `concepts_json` / `block_as_of` / `block_source`）。归属来自源对**同一行**的富化（`tq:get_relation`），`block_as_of` 记录反查日期；它**不是**目标日的历史成分，也不证明当时属于主线。
+- 新增只读接口 `/api/theme-evolution/{days,day/{day},timeline}`：返回批次状态、覆盖计数、按行业/概念聚合的涨停家数、以及演化矩阵。`status=partial` 原样返回（覆盖不完整≠失败≠完整快照）。
+- 产品内调度：工作日 16:10 注册 `theme_evolution_agent_daily`，开关 `SIDA_THEME_EVOLUTION_AGENT=1` 才注册，默认关闭；补 30 分钟 `misfire_grace_time`（此前错过即无痕）。
+- **就绪判据只证明"TQ 日线已覆盖目标日"**（+ 已过 16:10），不证明供应商盘后定稿；接口用 `vendor_finalized_claim=false` 明示。涨停池 `as_of_basis=source_request`（请求日）或缺依据时一律记 unknown，不写进目标日。
+- 未做：前端页面、生产迁移执行、调度开启。旧的 `theme_evolution.py` 链路不再由启动注册，其 251 两表保留（历史迁移不改）。
+
+### fix-题材池数据日不可只凭请求参数
+
+- 东财/降级源按请求日返回时 `as_of_basis=source_request` 只代表**请求参数**，不是响应里证券的实际数据日；实测请求未来日会静默返回最新池。新旧两条采集链都改为：依据缺失或非 K 线验证 → 池子记 unknown、不落当日。
+
+### 题材演化观察层 A 通道（开发草案，未验收）
+
+- 草案默认关闭，未授权生产部署或启用；启动迁移与调度开关是独立路径，仍须验证。
+- 当前态板块成分不等于历史成分；历史来源及可见时点继续核查。涨停池日期缺失或不一致时不用于当日排名。
+- 按名称和行情的分类只是未经证实的启发式；数据覆盖、同日多次运行的不可变性及并发安全均未验收，不得作为生产结论。
 
 ### fix-多 worker 并发启动建表竞态
 
