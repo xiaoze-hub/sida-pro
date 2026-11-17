@@ -465,7 +465,8 @@ def test_chat_py_line_shrink():
     # 2026-10-21: 长期记忆 +5 → 2240；标的核对/零工具拦截 +9 → 2260。
     # 相对 3021 行仍下降 ≥780 行，护栏意图不变。
     # 2026-10-22: 维度缺口采集接线（后台 spawn） +9 → 2305。
-    assert lines <= 2310, f"chat.py 应较 3021 行下降 ≥711, 当前 {lines}"
+    # 2026-11-17: 请求体新增页面锚点类型 stock_instrument(同号个股/指数归属) +5 → 2315。
+    assert lines <= 2320, f"chat.py 应较 3021 行下降 ≥701, 当前 {lines}"
 
 
 def test_exec_thsdk_tool_compat_surface():

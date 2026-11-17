@@ -21,7 +21,9 @@ symbol/market 再取一次数, 它算出的结构可能来自另一批 bar(跨 w
 不跨轮复用。本工具**只**取它: 模型自带的 ``snapshot_digest`` 不再被接受(2026-11-17 审计缺口 3:
 否则上一轮的摘要能在下一轮无声明时被"复用"成同图证据), ``instrument``/``days`` 一律以本轮
 复核结果为准; 模型请求**别的 symbol**、或服务端判定的本轮请求目标(含"正文只写名字"解析出的
-代码, ``REQ_BOUND``)与快照不是同一只时, 直接拒绝, 不跨标的套用。
+代码, ``REQ_BOUND``)与快照不是同一只时, 直接拒绝, 不跨标的套用。**同一只代码也可能不是
+同一张图**: 000001 既可能是平安银行也可能是指上证指数, 所以标的类型(``REQ_BOUND_INSTRUMENT``)
+与快照自述的 ``instrument`` 也必须一致, 否则同样拒绝(2026-11-17 四轮审计)。
 即便如此, 这份声明仍来自客户端: 服务端只证明了"摘要与这份 K 线内容一致", **没有、也不能
 证明用户屏幕上真的显示了这张图** —— 渲染时不写"已核对屏幕"。
 
@@ -102,6 +104,17 @@ def _turn_chart_snapshot() -> dict | None:
         if ref.get(key) in (None, ""):
             return None
     return ref
+
+
+def _req_bound_instrument() -> str | None:
+    """本轮请求目标的类型(服务端判定)。取不到就当没有 —— 旁路不阻断。"""
+    try:
+        from src.harness.context import REQ_BOUND_INSTRUMENT
+
+        value = REQ_BOUND_INSTRUMENT.get()
+    except Exception:  # noqa: BLE001 - 上下文缺失等价于"没有类型证据"
+        return None
+    return str(value or "").strip().lower() or None
 
 
 def _detail_of(exc) -> str:
@@ -324,6 +337,22 @@ async def _tool_get_chan_structure(db: Session, args: dict, user: User | None = 
             "不跨标的套用快照, 未读取任何结构数据。请针对当前图表标的提问。"
         )
 
+    # ③-c 第三层归属核对: 同号个股/指数(000001)只比代码会互相顶替, 类型也必须一致。
+    #      消息入口/recheck 已经按同一口径丢过一次; 这里是工具层兜底(上下文装配路径变化、
+    #      另一轮并发改绑时也不许出现"REQ_BOUND=000001(个股) 却按指数图算结构")。
+    bound_inst = _req_bound_instrument()
+    if bound_inst and bound_inst != str(turned.get("instrument") or "").strip().lower():
+        logger.info(
+            "get_chan_structure 拒绝: 本轮请求类型与快照不一致 user=%s bound=%s/%s turn=%s/%s",
+            getattr(user, "id", None), bound or turned["symbol"], bound_inst,
+            turned["symbol"], turned.get("instrument"),
+        )
+        return (
+            f"本轮请求标的是 {bound or turned['symbol']}({bound_inst}), 而随附的图表快照是 "
+            f"{turned['symbol']}({turned.get('instrument')}): 同号个股/指数不是同一张图, "
+            "不跨标的套用快照, 未读取任何结构数据。请针对当前图表标的提问。"
+        )
+
     _model_digest = args.get("snapshot_digest")
     if _model_digest not in (None, "") and str(_model_digest).strip() != turned["digest"]:
         # 覆盖是确定性行为, 不依赖模型"听话"; 只记事实, 不记摘要内容。
@@ -379,7 +408,7 @@ _CHAN_SCHEMA = {
             "(blocked/candidate/confirmed + 发生日/确认日/价格)与笔(端点/状态/确认日/规则版本)。"
             "**不接受**你传入的摘要: 快照由客户端随本轮消息附上(`chan_snapshot.digest`), "
             "消息入口已用同一取数链重算摘要复核; 你只需按 system 里的"
-            "【本轮图表快照（服务端已复核）】给出 symbol/instrument/days(与服务端复核结果一致)。"
+            "【本轮图表快照（消息入口时已复核）】给出 symbol/instrument/days(与服务端复核结果一致)。"
             "本轮没有随附快照时(或你请求的 symbol 与本轮快照标的不是同一只)本工具直接拒绝, "
             "不得沿用上一轮摘要、不得用用户口述摘要替代、不得自己取一张新快照。"
             "严禁编造摘要或把「没拿到快照」写成「这张图没有结构」。"

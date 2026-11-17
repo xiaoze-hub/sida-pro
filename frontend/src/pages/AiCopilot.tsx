@@ -1436,7 +1436,19 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           },
           ac.signal,
           imageData,
-          sym ? { symbol: sym, market: marketOf(sym) } : undefined,
+          /**
+           * 页面锚点 + 它的**标的类型**（2026-11-17 四审）：`stock_symbol` 只有代码，
+           * 000001 既可能是平安银行也可能是指上证指数；服务端不能从代码证明类型，
+           * 缺这一维就只能把同号快照整份丢弃。这里只报图表页**自己广播过**的类型
+           * （`record.instrument`），取不到就不填 —— 绝不按代码/市场猜。
+           */
+          sym
+            ? {
+                symbol: sym,
+                market: marketOf(sym),
+                instrument: chanForTurn?.record?.instrument,
+              }
+            : undefined,
           mentions.map((m) => ({
             type: m.type,
             value: m.type === 'stock' ? m.symbol : m.id,

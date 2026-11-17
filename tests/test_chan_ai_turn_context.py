@@ -380,7 +380,7 @@ def test_turn_snapshot_reaches_tool_and_overrides_model_digest(client, accounts,
     # 本轮 system 明确给出可信来源（只在本轮消息里）
     system = holder.systems[-1]
     # 注入的是带着具体参数的那一块（配方 prompt 里也提到这个名字, 不能只认标题）
-    assert "【本轮图表快照（服务端已复核）】\nsymbol=600000 market=CN" in system
+    assert "【本轮图表快照（消息入口时已复核）】\nsymbol=600000 market=CN" in system
     assert _short(digest) in system
     assert digest not in system, "system 里只给前 8 位, 否则模型会把它回显进回答/轨迹"
     assert "不等于验证了用户屏幕" in system or "没有、也不能验证用户屏幕" in system
@@ -414,7 +414,7 @@ def test_second_turn_without_snapshot_is_strict_missing(client, accounts, feed, 
     assert "缺少图表快照摘要" in out and "未读取任何结构数据" in out
     assert "[快照归属" not in out
     assert digest not in out
-    assert "【本轮图表快照（服务端已复核）】\nsymbol=" not in holder.systems[-1]
+    assert "【本轮图表快照（消息入口时已复核）】\nsymbol=" not in holder.systems[-1]
     assert digest not in holder.systems[-1]
     assert feed.calls == calls_before, "没有快照时不许自己取一张新快照"
 
@@ -974,7 +974,7 @@ def test_snapshot_dropped_when_conversation_switches_after_preflight(
     assert FINAL_TEXT in text, text
     system = holder.systems[-1]
     assert digest not in system, "旧快照摘要不许注入本轮 system"
-    assert "【本轮图表快照（服务端已复核）】\nsymbol=" not in system
+    assert "【本轮图表快照（消息入口时已复核）】\nsymbol=" not in system
     assert "不一致" in system or "已丢弃" in system
 
     out = holder.outputs[-1]

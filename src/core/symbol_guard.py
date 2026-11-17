@@ -8,6 +8,11 @@
 1. `is_stock_question()`：判断这句话是不是在问具体标的（6 位代码或股票名后缀词）。
 2. `resolve_names()`：把用户写的名字拿去 TQ `get_match_stkinfo` 核对；
    写错/简称不一致时返回可回填的更正说明（如 强锐技术 → 301128 强瑞技术）。
+
+另有两个**只用于归属判定**的旁路（2026-11-17 三轮审计补齐，不改变上面的口径）：
+`is_generic_reference()` 分出"泛指眼前这只"（这家银行）而不是点名；
+`bare_name_codes()` 只做**正向确认**：没有后缀词的名字（贵州茅台）在整段命中行情库时
+才算用户点了名，查不到一律不算 —— 增广覆盖，不猜标的。
 """
 from __future__ import annotations
 
@@ -37,6 +42,18 @@ _STOPWORDS = {"我的持仓", "自选股", "大盘", "两市", "板块", "行业
 _LEAD_NOISE = ("诊断", "分析", "看看", "看一下", "查一下", "点评", "研究", "跟踪")
 _LEAD_CHARS = "和与及跟、，,。 的了对在把"
 
+# 「泛指当前这只」的前缀：抓到后缀词，但说话人指的是**眼前这张图**，不是在点名。
+# 为什么必须分出来（2026-11-17 三轮审计）：快照归属把"名字解析失败"当 fail-closed，
+# 如果连「这家银行」「整个医药」也算"点了名却解析失败"，用户对着浦发银行图表问
+# 「这家银行后面怎么走」就会被整份丢弃 —— 那是把泛指误杀成歧义。
+_GENERIC_PREFIXES = (
+    "这", "那", "该", "本", "此", "其", "哪", "每", "各", "另",
+    "整个", "所有", "全部", "部分", "一些", "各种", "多家", "几家", "几只",
+    "其他", "其它", "别的", "上述", "以上", "国内", "海外", "两市", "主板",
+)
+# 裸后缀词本身（「医药」「银行」）也不是某个具体标的
+_GENERIC_WORDS = frozenset(_NAME_SUFFIX)
+
 
 def _clean(word: str) -> str:
     for noise in _LEAD_NOISE:
@@ -45,6 +62,20 @@ def _clean(word: str) -> str:
             break
     word = word.lstrip(_LEAD_CHARS)
     return word
+
+
+def is_generic_reference(word: str) -> bool:
+    """这个词是不是**泛指**（"这家银行"/"整个医药"/"银行"），而不是点了一只具体的票。
+
+    只用于"要不要把它当成用户点了名"的判定：泛指 → 交给上层按页面锚点/会话绑定处理；
+    具体名（"北方稀土"/"某某科技"）→ 必须解析成唯一代码，解析不出来就 fail-closed。
+    """
+    w = _clean(str(word or "").strip())
+    if not w:
+        return True
+    if w in _GENERIC_WORDS or w in _STOPWORDS:
+        return True
+    return w.startswith(_GENERIC_PREFIXES)
 
 
 def is_stock_question(text: str) -> bool:
@@ -177,6 +208,53 @@ def first_code_from_names(text: str) -> str | None:
     for _, code, _ in (info.get("resolved") or [])[:1]:
         return str(code).split(".")[0] or None
     return None
+
+
+#: 整段名字切分：只在非汉字处断开（空格/标点/数字/字母）。
+_SEGMENT_RE = re.compile(r"[^\u4e00-\u9fa5]+")
+
+
+def bare_name_codes(text: str, limit: int = 2) -> list[tuple[str, str, str]]:
+    """整段汉字（2~4 字、被分隔符隔开的）里能被行情库**直接命中**的名字。
+
+    为什么需要（2026-11-17 三轮审计）：`mention_candidates` 只认「后缀词」
+    （科技/医药/股份…），所以「贵州茅台 缠论怎么样」这类**没有后缀**的名字整句都
+    检测不到，页面停在 600000 时就把 600000 的快照当成本轮结构答出去。
+
+    边界（不猜）：只做**正向确认** —— 行情库查不到的整段一律不返回，绝不返回
+    「可能是在说 XX」。因此这里增广的是"能确认的覆盖"，不是"猜一个标的"；查不到的
+    泛问（「缠论结构怎么样」）仍然一个名字都不产生。
+
+    已知覆盖边界（诚实说明）：紧贴问题词、又没有分隔符的长串（「贵州茅台缠论怎么样」）
+    整段超过 4 字，仍然检测不到 —— 这类句子不会被误判成"解析失败"（不误杀），但也
+    因此发现不了"名字与锚点不是同一只"的冲突。要覆盖这一种，得先有本地名字词典，
+    而不是在这里按形状猜。
+    """
+    out: list[tuple[str, str, str]] = []
+    if not text or _CODE_RE.search(text):
+        return out
+    attempts = 0
+    for raw in _SEGMENT_RE.split(text):
+        # 一次最多查 `limit` 段: TQ 是单线程(17709), 这是旁路, 不能因为一句长问题
+        # 就打好几次检索(未命中也不进缓存, 每轮都会重复发生)。
+        if attempts >= limit:
+            break
+        seg = _clean(raw.strip())
+        if not (2 <= len(seg) <= 4) or seg in _STOPWORDS or is_generic_reference(seg):
+            continue
+        if any(seg == word for word, _c, _n in out):
+            continue
+        attempts += 1
+        hits = _match_cached(seg)
+        if not hits:
+            continue
+        code, name = hits[0]
+        if not re.fullmatch(r"\d{6}", str(code or "")):
+            continue
+        out.append((seg, code, name))
+        if len(out) >= limit:
+            break
+    return out
 
 
 def correction_note(text: str) -> str | None:

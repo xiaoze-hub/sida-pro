@@ -11,7 +11,7 @@ import asyncio
 import logging
 import re
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,6 +38,9 @@ REQ_VIEW: ContextVar[dict | None] = ContextVar("chat_req_view", default=None)
 # 而这份快照**只对这一条消息有效** —— 不许入会话 initial_context、不许写库、
 # 不许跨轮复用（模型/客户端下一轮不带就是没有，见 prepare_chart_snapshot）。
 REQ_CHAN_SNAPSHOT: ContextVar[dict | None] = ContextVar("chat_req_chan_snapshot", default=None)
+# 本轮请求标的的**类型**（stock/index）。同号个股/指数（000001）只有这一维，
+# 工具层用它做最后一层归属核对；判不出来就是 None（不是"大概是股票"）。
+REQ_BOUND_INSTRUMENT: ContextVar[str | None] = ContextVar("chat_req_bound_instrument", default=None)
 
 _CODE_RE = re.compile(r"(?<!\d)([036489]\d{5})(?!\d)")
 
@@ -136,6 +139,12 @@ class TurnTarget:
     problem: str | None = None
     #: 正文里的名字解析出的代码（仅用于说明冲突, 不参与取数）
     name_symbol: str | None = None
+    #: 本目标的**标的类型**（stock/index）。同号个股/指数靠它区分，没有它就不能
+    #: 把任何快照当成本轮可信来源（见 prepare_chart_snapshot）。
+    instrument: str | None = None
+    #: 类型的依据: "code"（仅凭代码可证）/ "page"（本轮页面显式声明）/
+    #: "view"（服务端缓存的页面视图状态）。只用于日志与文案，不是"证明"。
+    instrument_source: str | None = None
 
 
 def resolve_explicit_target(conv, body) -> TurnTarget | None:
@@ -172,13 +181,25 @@ def _name_target(text: str) -> tuple[str | None, str | None]:
     或一句话里出现多只不同名的票, 都不能拿快照硬凑 —— 宁可本轮不给结构。
     """
     try:
-        from src.core.symbol_guard import is_stock_question, resolve_mentions
+        from src.core.symbol_guard import (
+            bare_name_codes, is_generic_reference, is_stock_question, resolve_mentions,
+        )
 
-        if not text or not is_stock_question(text):
-            return None, None            # 这句话没点名任何标的: 交给上层判"无目标"
-        info = resolve_mentions(text) or {}
+        if not text:
+            return None, None
+        info = resolve_mentions(text) if is_stock_question(text) else {}
+        resolved = [(w, c) for (w, c, _n) in (info.get("resolved") or [])]
+        unmapped = [w for (w, *_rest) in (info.get("suggestions") or [])]
+        unmapped += [w for w in (info.get("unknown") or [])]
+        # 泛指眼前这只（「这家银行」「整个医药」）不是点名: 当"没检测到名字"，
+        # 让上层继续按页面锚点/会话绑定走，而不是把一句正常追问判成"解析失败"。
+        resolved = [(w, c) for (w, c) in resolved if not is_generic_reference(w)]
+        unmapped = [w for w in unmapped if not is_generic_reference(w)]
+        if not resolved and not unmapped:
+            # 没有后缀词的名字（「贵州茅台」）：补一次整段确认，只认行情库真的命中的。
+            resolved = [(w, c) for (w, c, _n) in bare_name_codes(text)]
         codes: list[str] = []
-        for _word, code, _name in (info.get("resolved") or []):
+        for _word, code in resolved:
             code6 = str(code or "").split(".")[0].strip()
             if _is_code(code6) and code6 not in codes:
                 codes.append(code6)
@@ -188,9 +209,92 @@ def _name_target(text: str) -> tuple[str | None, str | None]:
     if len(codes) > 1:
         return None, "ambiguous_name"
     if not codes:
-        # 文字像在问个股, 但查不到唯一代码(错别字/已退市/只有相似建议) → 不许猜。
+        if not (resolved or unmapped):
+            return None, None            # 这句话没点名任何标的: 交给上层判"无目标"
+        # 确实点了名却对不到可分析的 A 股代码:
+        #   查不到(错别字/已退市/只有相似建议) 或 命中的是基金/ETF/港股等本链路不支持的
+        #   标的 —— 两种都不许拿锚点那张图顶替。
+        return None, "unresolved_name"
+    if unmapped:
+        # 一句话里还有名字对不上（「浦发银行和某某科技」）: 判不出唯一目标, 不许只按
+        # 对上的那只算 —— 否则另一只票的问题会被这张图"顶替"答掉。
         return None, "unresolved_name"
     return codes[0], None
+
+
+# ── 标的类型（stock/index）证据链 ──────────────────────────────────────────
+# 2026-11-17 三轮审计缺口: `ChatConversation` 只存 `stock_symbol`（可选 `stock_market`），
+# 快照归属三层（消息入口 / 开流后 / 工具）过去只比 6 位代码。于是会话绑 000001
+# （平安银行）时，随附的「上证指数 000001」（instrument=index，摘要完全合法）会被当成
+# 本轮那张图，指数结构被说成"你问的那只票"的结构。
+#
+# 类型只认三种来源，**绝不从代码猜**：
+#   ① `provable_instrument`：仅凭代码可证（600519 只可能是个股、399001 只可能是指数）；
+#   ② 本轮请求里对**页面锚点**的显式声明（`body.stock_instrument`，且锚点就是它）；
+#   ③ 服务端缓存的页面视图状态（`/copilot/context` 上报的 symbol+instrument）。
+# 三者都没有 ⇒ 本轮没有可证的标的身份 ⇒ 快照整份丢弃（同号场景明确 fail-closed）。
+# ②③ 都只是**客户端对"我在看哪张图"的陈述**，服务端比对一致性后使用，不等于证明了主数据。
+
+_INSTRUMENTS = ("stock", "index")
+
+
+def _provable_instrument(symbol: str, market: str | None) -> str | None:
+    """仅凭代码能证明的标的类型；证明不了返回 None（不猜）。旁路失败 = 不可证。"""
+    try:
+        from src.harness.actions import provable_instrument
+
+        mk = (market or "").strip().upper()
+        return provable_instrument(symbol, mk if mk in ("CN", "SH", "SZ", "BJ") else "CN")
+    except Exception:  # noqa: BLE001 - 类型判定是旁路, 失败等于不可证
+        logger.info("标的类型代码证明失败(按不可证处理) symbol=%s", symbol, exc_info=True)
+        return None
+
+
+def _page_instrument(body, symbol: str) -> str | None:
+    """本轮请求对**页面锚点类型**的声明（锚点不是这只票时不算数）。"""
+    raw = str(getattr(body, "stock_instrument", None) or "").strip().lower()
+    if raw not in _INSTRUMENTS:
+        return None
+    anchor = (getattr(body, "stock_symbol", None) or "").strip()
+    if anchor and anchor != symbol:
+        return None                      # 声明说的是另一只票的图, 与本轮目标无关
+    return raw
+
+
+def _view_instrument(conv, symbol: str) -> str | None:
+    """服务端缓存的页面视图状态里的类型（必须同一代码，否则不算）。"""
+    try:
+        from src.harness.viewstate import load_view_state
+
+        uid = getattr(conv, "user_id", None)
+        if not uid:
+            return None
+        # 会话级优先；工作台是整页上报（不带 conversation_id），再回退用户级那条。
+        for conv_id in (getattr(conv, "id", None), None):
+            state = load_view_state(uid, conv_id) or {}
+            if str(state.get("symbol") or "").strip() != symbol:
+                continue
+            inst = str(state.get("instrument") or "").strip().lower()
+            if inst in _INSTRUMENTS:
+                return inst
+    except Exception:  # noqa: BLE001 - 视图状态是旁路
+        return None
+    return None
+
+
+def _instrument_evidence(conv, body, symbol: str,
+                         market: str | None = None) -> tuple[str | None, str | None]:
+    """本轮目标的 (类型, 依据)。没有可信依据就返回 (None, None) —— 调用方必须 fail-closed。"""
+    proof = _provable_instrument(symbol, market)
+    if proof:
+        return proof, "code"             # 代码可证时优先: 页面声明不能把 600000 说成指数
+    declared = _page_instrument(body, symbol)
+    if declared:
+        return declared, "page"
+    cached = _view_instrument(conv, symbol)
+    if cached:
+        return cached, "view"
+    return None, None
 
 
 def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarget:
@@ -202,19 +306,35 @@ def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarge
     显式标的（文字代码/@提及）**永远优先**；但当目标来自页面锚点/会话绑定、而正文里又
     点名了**另一只**股票时，属于"本轮到底在聊哪只"自相矛盾 —— 一样 fail-closed，
     否则用户问北方稀土、页面停在 600000 时，快照会把 600000 的结构答成他问的那只。
+
+    正文**确实点了名**却解析不出唯一代码（错别字/查不到/一句里还有对不上的名字）时，
+    页面锚点与会话绑定都不能替用户决定本轮标的：2026-11-17 三轮审计实测，
+    旧实现在这条分支直接 `return explicit`，于是「图为 600000 + 正文写了别的名字」把
+    600000 的快照当成了本轮那张图。现在这条与 `ambiguous_name` 同样丢弃。
     """
     explicit = resolve_explicit_target(conv, body)
     if explicit is not None:
+        instrument, instrument_source = _instrument_evidence(
+            conv, body, explicit.symbol or "", explicit.market,
+        )
+        explicit = replace(explicit, instrument=instrument,
+                           instrument_source=instrument_source)
         if not resolve_names or explicit.source in ("text", "mention"):
             return explicit
         code, problem = _name_target(getattr(body, "content", "") or "")
+        if problem == "unresolved_name":
+            # 名字解析失败: 锚点/绑定都只是"上一轮留下的位置", 不是本轮标的的证据。
+            return TurnTarget(problem=problem, name_symbol=code)
         if problem == "ambiguous_name":
             return TurnTarget(symbol=explicit.symbol, market=explicit.market,
-                              source=explicit.source, problem=problem)
+                              source=explicit.source, problem=problem,
+                              instrument=explicit.instrument,
+                              instrument_source=explicit.instrument_source)
         if code and code != explicit.symbol:
             return TurnTarget(symbol=explicit.symbol, market=explicit.market,
                               source=explicit.source, problem="name_conflict",
-                              name_symbol=code)
+                              name_symbol=code, instrument=explicit.instrument,
+                              instrument_source=explicit.instrument_source)
         return explicit
     if not resolve_names:
         return TurnTarget(problem="no_target")
@@ -223,7 +343,10 @@ def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarge
     if problem:
         return TurnTarget(problem=problem)
     if code:
-        return TurnTarget(code, _market_of(code), "name")
+        market = _market_of(code)
+        instrument, instrument_source = _instrument_evidence(conv, body, code, market)
+        return TurnTarget(code, market, "name", instrument=instrument,
+                          instrument_source=instrument_source)
     return TurnTarget(problem="no_target")
 
 
@@ -544,29 +667,45 @@ class TurnChartSnapshot:
     ``turn_symbol`` 是**本轮请求目标**（名字解析也在内）: 即便快照被丢弃也会带上,
     让后续 ``enter_request_ctx``/工具复用同一次判定, 不必二次解析(也就不多打一次 TQ),
     同时让"服务端认为这轮在聊哪只票"与"快照属于哪只票"永远只有一个答案。
+
+    ``turn_instrument`` 是同一目标的**类型**（stock/index）: 同号个股/指数只有它能区分,
+    开流后复核（``recheck_turn_snapshot``）与工具层都按它再核一次。
     """
 
     ref: dict | None = None
     note: str | None = None
     turn_symbol: str | None = None
+    turn_instrument: str | None = None
 
 
-def _chart_snapshot_note(ref: dict) -> str:
+def _chart_snapshot_note(ref: dict, instrument_source: str | None = None) -> str:
     """本轮快照注入 system 的说明（只拼进本轮消息, 绝不写回库里 prompt/历史）。
 
     摘要只给**前 8 位**: 模型不需要、也不该拿到完整摘要 —— 取数一律以服务端本轮复核
     结果为准(见 tools_chan), 于是这份 64hex 不必出现在可能被回显/落库的地方。
+
+    文案的时间限定（2026-11-17 三轮审计）: 复核发生在**消息入口那一刻**，不是"此刻仍然
+    一致"。之后 K 线若变化，工具侧会以 409 如实拒绝 —— 不许把这句读成长期有效保证。
     """
     from src.harness.redaction import short_digest
 
+    basis = {
+        "code": "类型由代码证明",
+        "page": "类型来自本轮页面的显式声明(不是代码证明)",
+        "view": "类型来自服务端缓存的页面视图状态(不是代码证明)",
+    }.get(str(instrument_source or ""), "")
+    basis_line = f"{basis}\n" if basis else ""
     return (
-        "【本轮图表快照（服务端已复核）】\n"
+        "【本轮图表快照（消息入口时已复核）】\n"
         f"symbol={ref['symbol']} market={ref['market']} instrument={ref['instrument']} "
         f"interval={ref['interval']} days={ref['days']} "
         f"as_of_day={ref.get('as_of_day') or '未知'}\n"
         f"snapshot_digest={short_digest(ref['digest'])}（只展示前 8 位; 完整摘要由服务端本轮持有,\n"
         "不需要也不要向用户索取或复述）\n"
-        "这是本条消息随附的客户端声明: 服务端只用同一取数链重算摘要确认了「内容一致」, "
+        f"{basis_line}"
+        "这是本条消息随附的客户端声明: 消息入口那一刻服务端只用同一取数链重算摘要确认了"
+        "「内容一致」, 之后 K 线若有更新, 工具会以 409/失败如实拒绝, 不要把这句当成"
+        "「此刻仍然一致」。服务端"
         "没有、也不能验证用户屏幕。调用 get_chan_structure 时就用上面这组参数(工具以本轮"
         "复核结果为准), 不要改写 digest、不要另取新快照、不要向用户再要摘要。"
     )
@@ -605,6 +744,29 @@ def _no_target_note(problem: str, snapshot_symbol: str, *,
         f"（本轮随附的图表快照绑定 {snapshot_symbol}, 但本轮请求标的无法唯一确定: {why}。"
         "整份快照已丢弃, 本轮不提供缠论结构 —— 请用 6 位代码或 @提及 指明标的,"
         "或先在该标的图表页提问。不要把「没有可信归属」当成「这张图没有结构」。）"
+    )
+
+
+def _instrument_unprovable_note(symbol: str, snapshot_instrument: str) -> str:
+    """同号个股/指数且没有可信类型声明时的显式说明（fail-closed, 不给结构）。"""
+    return (
+        f"（本轮随附的图表快照绑定 {symbol}({snapshot_instrument}), 但服务端**无法确认本轮"
+        f"请求标的的类型**: {symbol} 既可能是个股也可能是指数, 代码本身不能证明, "
+        "本轮也没有该标的的页面类型声明。同号不同标的不是同一张图, 整份快照已丢弃 —— "
+        "本轮不提供缠论结构, 也不得按代码猜成个股或指数。"
+        "请在该标的的图表页(个股图/指数图)提问, 或在提问时带上页面类型; "
+        "不要把「没有可信归属」当成「这张图没有结构」。）"
+    )
+
+
+def _instrument_conflict_note(symbol: str, target_instrument: str,
+                              snapshot_instrument: str) -> str:
+    """目标类型与快照类型不一致时的显式说明（同号个股/指数）。"""
+    return (
+        f"（本轮请求标的是 {symbol}({target_instrument}), 而随附的图表快照是 "
+        f"{symbol}({snapshot_instrument}): 同号个股/指数不是同一张图, "
+        "整份快照已丢弃 —— 本轮不提供缠论结构, 也不得引用旧摘要或另取新快照。"
+        "若用户确实在看另一类图, 请在该标的对应的图表页重新提问。）"
     )
 
 
@@ -656,6 +818,31 @@ async def prepare_chart_snapshot(db, conv, body, user,
             f"（本轮随附的图表快照绑定 {declared.symbol}，与当前请求标的 {target} 不一致，"
             "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
         ))
+
+    # 同号个股/指数: 代码相同 ≠ 同一张图。类型只认代码证明/页面声明/视图状态,
+    # 一样都没有就丢（不猜），对不上也丢。
+    target_instrument = (turn_target.instrument or "").strip().lower()
+    if not target_instrument:
+        logger.info(
+            "本轮图表快照缺少可证的标的类型 user=%s symbol=%s snapshot_instrument=%s source=%s",
+            getattr(user, "id", None), declared.symbol, declared.instrument,
+            turn_target.instrument_source,
+        )
+        return TurnChartSnapshot(
+            turn_symbol=target or None,
+            note=_instrument_unprovable_note(declared.symbol, declared.instrument),
+        )
+    if target_instrument != declared.instrument:
+        logger.info(
+            "本轮图表快照类型与请求目标冲突 user=%s symbol=%s target=%s snapshot=%s source=%s",
+            getattr(user, "id", None), declared.symbol, target_instrument,
+            declared.instrument, turn_target.instrument_source,
+        )
+        return TurnChartSnapshot(
+            turn_symbol=target or None, turn_instrument=target_instrument,
+            note=_instrument_conflict_note(declared.symbol, target_instrument,
+                                           declared.instrument),
+        )
 
     # 复核只走**既有只读端点**（同一份 get_klines + 同一套摘要算法），不另写一份校验。
     from src.web.api.chan_snapshot import get_chan_structure as _endpoint
@@ -722,7 +909,8 @@ async def prepare_chart_snapshot(db, conv, body, user,
         getattr(user, "id", None), ref["symbol"], ref["instrument"], ref["days"],
         ref["as_of_day"],
     )
-    return TurnChartSnapshot(ref=ref, note=_chart_snapshot_note(ref), turn_symbol=target)
+    return TurnChartSnapshot(ref=ref, note=_chart_snapshot_note(ref, turn_target.instrument_source),
+                             turn_symbol=target, turn_instrument=target_instrument)
 
 
 async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChartSnapshot | None:
@@ -771,18 +959,28 @@ def recheck_turn_snapshot(snapshot: TurnChartSnapshot | None,
     两个方向都要核: ① 库里的会话此刻是否还指向这份快照的标的; ② 本轮判定出的
     ``turn_symbol``(含名字解析)是否就是快照标的 —— 只看 ① 会漏掉"会话无绑定但正文
     写的是另一只票"这种形态。
+
+    第三个方向是**类型**（2026-11-17 三轮审计）: 同号个股/指数(000001)只看代码会互相
+    顶替, 所以 ``turn_instrument`` 与快照自述 instrument 也必须一致; 判不出类型
+    （``turn_instrument`` 为空）说明消息入口就没证成身份 —— 这份快照不该在这里。
     """
     if not isinstance(snapshot, TurnChartSnapshot) or snapshot.ref is None:
         return snapshot
     bound = (bound_symbol or "").strip()
     symbol = (snapshot.ref.get("symbol") or "").strip()
     turn = (snapshot.turn_symbol or "").strip()
-    if not symbol or (bound and bound != symbol) or (turn and turn != symbol):
+    turn_inst = (snapshot.turn_instrument or "").strip().lower()
+    snap_inst = (snapshot.ref.get("instrument") or "").strip().lower()
+    instrument_drift = bool(not turn_inst or (snap_inst and turn_inst != snap_inst))
+    if (not symbol or (bound and bound != symbol) or (turn and turn != symbol)
+            or instrument_drift):
         logger.info(
-            "本轮图表快照开流后漂移 bound=%s turn=%s snapshot=%s", bound, turn, symbol,
+            "本轮图表快照开流后漂移 bound=%s turn=%s snapshot=%s turn_instrument=%s "
+            "snapshot_instrument=%s", bound, turn, symbol, turn_inst or "-", snap_inst or "-",
         )
         return TurnChartSnapshot(turn_symbol=turn or bound or None, note=(
-            f"（本轮随附的图表快照绑定 {symbol}，与本轮请求标的 {turn or bound} 不一致，"
+            f"（本轮随附的图表快照绑定 {symbol}（{snap_inst or '未知类型'}），与本轮请求标的 "
+            f"{turn or bound}（{turn_inst or '类型未证实'}）不一致，"
             "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
         ))
     return snapshot
@@ -826,6 +1024,9 @@ def enter_request_ctx(db, conv, body, messages: list[dict],
             _append_system_note(messages, chart_snapshot.note)
     return [
         (REQ_BOUND, REQ_BOUND.set(bound)),
+        (REQ_BOUND_INSTRUMENT, REQ_BOUND_INSTRUMENT.set(
+            (chart_snapshot.turn_instrument or None)
+            if isinstance(chart_snapshot, TurnChartSnapshot) else None)),
         (REQ_TEXT, REQ_TEXT.set(getattr(body, "content", "") or "")),
         (REQ_TOOLS, REQ_TOOLS.set(frozenset(recipe.tools) if recipe and recipe.tools else None)),
         (REQ_BUDGET, REQ_BUDGET.set({"max": recipe.max_tool_calls, "used": 0} if recipe else None)),

@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from typing import Literal
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas, charge_tool_budget, schema_tool_name
 from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
@@ -1378,6 +1379,11 @@ class SendMessageBody(BaseModel):
     # 分析成用户主仓 002361（神剑股份），或直接报"没有股票标的"。
     stock_symbol: str | None = None
     stock_market: str | None = None
+    # 2026-11-17: 页面锚点的**标的类型**（stock/index）。同号个股/指数（000001 既可能是
+    # 平安银行也可能是上证指数）只靠代码无法区分，快照归属必须有一维类型证据；缺省时
+    # 服务端会退回"代码可证/服务端缓存的页面视图状态"，再没有就整份丢弃快照（不猜）。
+    # 这是客户端对"我在看哪张图"的声明，服务端只做一致性比对，不等于证明了主数据。
+    stock_instrument: Literal["stock", "index"] | None = None
     # 2026-11-17: 用户当前图表的日线快照引用（严格 schema）。只对这一条消息有效:
     # 消息入口用只读端点复核后放进本轮上下文, 不入库、不进 initial_context、不跨轮复用。
     chart_snapshot: ChartSnapshotBody | None = None

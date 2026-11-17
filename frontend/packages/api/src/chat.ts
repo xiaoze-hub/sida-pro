@@ -190,6 +190,14 @@ export interface ChartSnapshotPayload {
   digest: string
 }
 
+/**
+ * 页面锚点的标的类型（与 `ChartSnapshotPayload.instrument` 同一取值域）。
+ *
+ * 为什么锚点也要带类型：`stock_symbol` 只有 6 位代码，000001 既可能是平安银行
+ * 也可能是指上证指数 —— 服务端**不能**从代码证明类型，同号场景没有这一维就只能丢快照。
+ */
+export type StockInstrument = 'stock' | 'index'
+
 /** 2026-08-13 流式聊天回调: stage=阶段提示 / delta=正文增量 / done=终稿(落库全文) / error=流错误 */
 export interface ChatStreamHandlers {
   onStage?: (message: string) => void
@@ -268,7 +276,13 @@ export const chatApi = {
     handlers: ChatStreamHandlers,
     signal?: AbortSignal,
     imageData?: string,
-    stock?: { symbol: string; market?: string },
+    /**
+     * 页面锚点。`instrument` 是**当前页面这张图的标的类型**（2026-11-17）：
+     * 000001 既可能是平安银行也可能是指上证指数，后端只靠代码无法证明类型，
+     * 同号场景缺这一维就整份丢弃快照（宁可这轮不给结构，也不把指数结构当成个股）。
+     * 页面不知道类型时不要乱填 —— 留空让后端按"代码可证/服务端视图状态"判定。
+     */
+    stock?: { symbol: string; market?: string; instrument?: StockInstrument },
     mentions?: { type: string; value: string; label?: string }[],
     /**
      * 2026-11-17: 本轮同图快照 —— **只**随这一轮的请求体走（`chart_snapshot`）。
@@ -295,6 +309,8 @@ export const chatApi = {
           // 当前查看的标的：让后端把对话绑到这只票，避免模型从持仓里"猜"成别的股票
           stock_symbol: stock?.symbol || undefined,
           stock_market: stock?.market || undefined,
+          // 页面锚点的标的类型：同号个股/指数(000001)只有它能区分（见 sendMessageStream 注释）
+          stock_instrument: stock?.instrument || undefined,
           mentions: mentions?.length ? mentions : undefined,
           /**
            * 2026-11-17: 本轮同图快照。**独立字段**，不进 `content`、不进会话
