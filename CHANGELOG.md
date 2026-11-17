@@ -1,5 +1,9 @@
 ## [未发布]
 
+### feat-缠论结构实验基座
+
+- 新增独立三根原始 K 线严格局部极值实验函数，分别保留结构位置与确认日；尚未实现包含处理、缠论分型、笔、中枢或页面接入，不能用于交易。
+
 ### fix-多 worker 并发启动建表竞态
 
 - 生产 `WEB_WORKERS=4` 时四个进程同时进 lifespan → `init_db`；`create_all(checkfirst=True)` 的 checkfirst 只在进程内有效，另一个 worker 仍会 `CREATE` 同名表/类型，报 `DuplicateTable` / `pg_type` 唯一冲突，父进程退出、健康检查永不通过（v0.11.17 首次部署实测）。
