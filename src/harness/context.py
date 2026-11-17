@@ -7,10 +7,16 @@
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 # 本轮锁定标的（对话绑定或用户点/写的代码）
 REQ_BOUND: ContextVar[str | None] = ContextVar("chat_req_bound", default=None)
@@ -27,6 +33,11 @@ REQ_RECIPE_LABEL: ContextVar[str] = ContextVar("chat_req_recipe", default="")
 # 而这份信息只在 `_build_ai_messages` 里拿得到，管线在另一层调用 —— 用 contextvar 传，
 # 比把 dict 沿 4 层函数签名逐个加参数要稳（漏传一次就退回"猜类型"）。
 REQ_VIEW: ContextVar[dict | None] = ContextVar("chat_req_view", default=None)
+# 本轮图表快照引用（`SendMessageBody.chart_snapshot` 经服务端复核后的那一份）。
+# 为什么是请求上下文：工具在 registry 里按名字分发，那条路径拿不到 HTTP 请求体；
+# 而这份快照**只对这一条消息有效** —— 不许入会话 initial_context、不许写库、
+# 不许跨轮复用（模型/客户端下一轮不带就是没有，见 prepare_chart_snapshot）。
+REQ_CHAN_SNAPSHOT: ContextVar[dict | None] = ContextVar("chat_req_chan_snapshot", default=None)
 
 _CODE_RE = re.compile(r"(?<!\d)([036489]\d{5})(?!\d)")
 
@@ -367,7 +378,200 @@ def inject_premarket_brief(messages: list[dict], db, user, recipe=None) -> bool:
         return False
 
 
-def enter_request_ctx(db, conv, body, messages: list[dict]):
+# ── 本轮图表快照（缠论结构工具的"同图"来源）──────────────────────────────────
+# 事故形态: 模型/客户端会把上一轮、甚至别只票的 `chan_snapshot.digest` 塞进工具参数,
+# 算出的分型就被当成"用户这张图"引用。旧实现只能靠提示词禁止; 现在改成链路约束:
+#   客户端在**本条消息**上显式声明 chart_snapshot(严格 schema) → 消息入口用**既有只读
+#   端点**复核"摘要与此刻这份 K 线一致" → 只放进本轮 ContextVar → 工具以它为准
+#   (覆盖模型自带的 digest), 模型给别的 symbol 则拒绝; 下一轮不带就是没有。
+# 诚实边界: 这仍是一份**客户端声明**。服务端只证明了"摘要与服务器此刻这份 K 线一致",
+# 没有、也不可能证明"用户屏幕上真的显示了这张图" —— 日志与文案都不许写成"已核对屏幕"。
+
+
+class ChartSnapshotBody(BaseModel):
+    """`SendMessageBody.chart_snapshot` 的严格 schema（多一个字段 / 类型不对 → 422）。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    #: 摘要方案号。换版本即证明"不是同一套字节流", 旧值必须被拒, 不能被兼容。
+    schema_name: Literal["sida-chan-snapshot-v2"] = Field(alias="schema")
+    symbol: str = Field(pattern=r"^\d{6}$")
+    market: Literal["CN"] = "CN"
+    instrument: Literal["stock", "index"]
+    interval: Literal["1d"] = "1d"
+    days: int = Field(ge=1, le=2000)
+    #: 完整 64 位小写十六进制; 截短/大写一律拒绝(与端点 422 口径同源, 不"自动修正")。
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class TurnChartSnapshot:
+    """一条消息的图表快照结论：`ref` = 通过复核的可信来源，`note` = 显式缺失说明。"""
+
+    ref: dict | None = None
+    note: str | None = None
+
+
+def _chart_snapshot_note(ref: dict) -> str:
+    """本轮快照注入 system 的说明（只拼进本轮消息, 绝不写回库里 prompt/历史）。"""
+    return (
+        "【本轮图表快照（服务端已复核）】\n"
+        f"symbol={ref['symbol']} market={ref['market']} instrument={ref['instrument']} "
+        f"interval={ref['interval']} days={ref['days']} "
+        f"as_of_day={ref.get('as_of_day') or '未知'}\n"
+        f"snapshot_digest={ref['digest']}\n"
+        "这是本条消息随附的客户端声明: 服务端只用同一取数链重算摘要确认了「内容一致」, "
+        "没有、也不能验证用户屏幕。调用 get_chan_structure 时就用上面这组参数(工具以本轮"
+        "复核结果为准), 不要改写 digest、不要另取新快照、不要向用户再要摘要。"
+    )
+
+
+def _require_chart_snapshot_user(db, user) -> None:
+    """携带图表快照的前提：真实用户身份 + 行情权限（与 HTTP API 同源口径）。"""
+    from fastapi import HTTPException
+
+    if user is None or not getattr(user, "id", None) or getattr(user, "is_service", False):
+        raise HTTPException(
+            status_code=403,
+            detail="图表快照只能由已登录的真实用户携带；当前通道没有可核验的用户，本条消息已拒绝。",
+        )
+    from src.agents.chat.registry import _perm_denied
+    from src.core.permissions import PERM_VIEW_QUOTE
+
+    denied = _perm_denied(user, db, PERM_VIEW_QUOTE)
+    if denied:
+        raise HTTPException(status_code=403, detail=f"无权携带图表快照：{denied}")
+
+
+async def prepare_chart_snapshot(db, conv, body, user) -> TurnChartSnapshot | None:
+    """校验本轮 `body.chart_snapshot`；返回本条消息可用的可信来源（None = 没带）。
+
+    硬拒绝（抛 HTTPException：本条消息不落库、不回答）:
+      * 403 没有真实用户身份（服务令牌/无 id）或没有行情权限;
+      * 409 摘要与当前 K 线内容不一致（图表已变/跨 worker 缓存不一致/同码标的/旧摘要）——
+        **绝不自行刷新或另取一张新快照冒充"用户这张图"**。
+    软丢弃（返回 note：本轮严格缺失，聊天继续）:
+      * 标的不一致（用户这轮问的是另一只票，图上还是上一只）;
+      * 422 该快照当前不满足分型前提; 503/上游异常（校验不了就明说没拿到）。
+    """
+    declared = getattr(body, "chart_snapshot", None)
+    if declared is None:
+        return None
+    from fastapi import HTTPException
+
+    _require_chart_snapshot_user(db, user)
+
+    bound = (getattr(conv, "stock_symbol", None) or "").strip()
+    if bound and bound != declared.symbol:
+        logger.info(
+            "本轮图表快照标的与会话标的冲突 user=%s bound=%s snapshot=%s",
+            getattr(user, "id", None), bound, declared.symbol,
+        )
+        return TurnChartSnapshot(note=(
+            f"（本轮随附的图表快照绑定 {declared.symbol}，与当前会话标的 {bound} 不一致，"
+            "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
+        ))
+
+    # 复核只走**既有只读端点**（同一份 get_klines + 同一套摘要算法），不另写一份校验。
+    from src.web.api.chan_snapshot import get_chan_structure as _endpoint
+
+    try:
+        payload = await asyncio.to_thread(
+            _endpoint,
+            symbol=declared.symbol,
+            snapshot=declared.digest,
+            instrument=declared.instrument,
+            market=declared.market,
+            interval=declared.interval,
+            days=declared.days,
+            _=user,
+        )
+    except HTTPException as exc:
+        status = int(exc.status_code)
+        logger.info(
+            "本轮图表快照复核未通过 user=%s symbol=%s status=%s",
+            getattr(user, "id", None), declared.symbol, status,
+        )
+        if status == 409:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "图表快照已过期或与当前K线内容不一致（服务端重算摘要不符），本条消息已拒绝且未保存。"
+                    "服务端不会自行刷新、也不会另取一张快照冒充当前图；请刷新图表后重发。"
+                ),
+            ) from None
+        return TurnChartSnapshot(note=(
+            f"（本轮图表快照未通过复核(status={status})，已丢弃：本轮不提供缠论结构，"
+            "也不得把「没拿到」写成「这张图没有结构」。）"
+        ))
+    except Exception as exc:  # noqa: BLE001 - 详情只进日志, 不回显给模型/用户
+        logger.warning(
+            "本轮图表快照复核异常 user=%s symbol=%s error=%s",
+            getattr(user, "id", None), declared.symbol, type(exc).__name__,
+        )
+        return TurnChartSnapshot(note=(
+            "（本轮图表快照无法复核（上游异常），已丢弃：本轮不提供缠论结构，"
+            "不得据此推断这张图没有分型/笔。）"
+        ))
+
+    if not isinstance(payload, dict) or payload.get("snapshot_digest") != declared.digest:
+        logger.warning(
+            "本轮图表快照复核结果异常 user=%s symbol=%s",
+            getattr(user, "id", None), declared.symbol,
+        )
+        return TurnChartSnapshot(note=(
+            "（本轮图表快照复核结果与声明不一致，已丢弃：本轮不提供缠论结构。）"
+        ))
+
+    ref = {
+        "symbol": declared.symbol,
+        "market": declared.market,
+        "instrument": declared.instrument,
+        "interval": declared.interval,
+        "days": declared.days,
+        "digest": declared.digest,
+        "as_of_day": payload.get("as_of_day"),
+    }
+    logger.info(
+        "本轮图表快照已复核 user=%s symbol=%s instrument=%s days=%s as_of=%s",
+        getattr(user, "id", None), ref["symbol"], ref["instrument"], ref["days"],
+        ref["as_of_day"],
+    )
+    return TurnChartSnapshot(ref=ref, note=_chart_snapshot_note(ref))
+
+
+async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChartSnapshot | None:
+    """流式入口的**开流前**校验（SSE 一旦开始就改不了 HTTP 状态码, 409/403 要真 409）。
+
+    本条消息没带 chart_snapshot 时零成本返回 None（不查库、不取数）。
+    会话不存在时不在这里报错: 交给开流后的既有"对话不存在"错误事件, 不改语义。
+    """
+    if getattr(body, "chart_snapshot", None) is None:
+        return None
+    from src.db.models import ChatConversation
+    from src.web.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        _require_chart_snapshot_user(db, user)
+        conv = (
+            db.query(ChatConversation)
+            .filter(
+                ChatConversation.id == conversation_id,
+                ChatConversation.user_id == user.id,
+            )
+            .first()
+        )
+        if conv is None:
+            return None
+        sync_conv_symbol(db, conv, body)   # 与开流后同一判定, 保证标的口径一致
+        return await prepare_chart_snapshot(db, conv, body, user)
+    finally:
+        db.close()
+
+
+def enter_request_ctx(db, conv, body, messages: list[dict],
+                      chart_snapshot: TurnChartSnapshot | None = None):
     """装配本轮上下文，返回需要回滚的 token 列表。"""
     recipe, note = apply_mentions(db, conv, body)
     inject_recipe(messages, recipe, note)
@@ -391,12 +595,20 @@ def enter_request_ctx(db, conv, body, messages: list[dict]):
                 bound = first_code_from_names(_body_text)
         except Exception:  # noqa: BLE001  旁路, 解析不出就当没有
             bound = None
+    # 本轮图表快照: 只进本条消息的 system 与本轮 contextvar, 不入库、不跨轮复用。
+    # 必须**无条件 set**(不带的轮次也 set None), 否则租户内复用任务时可能读到上一轮的值。
+    _snap_ref = None
+    if isinstance(chart_snapshot, TurnChartSnapshot):
+        _snap_ref = chart_snapshot.ref
+        if chart_snapshot.note:
+            _append_system_note(messages, chart_snapshot.note)
     return [
         (REQ_BOUND, REQ_BOUND.set(bound)),
         (REQ_TEXT, REQ_TEXT.set(getattr(body, "content", "") or "")),
         (REQ_TOOLS, REQ_TOOLS.set(frozenset(recipe.tools) if recipe and recipe.tools else None)),
         (REQ_BUDGET, REQ_BUDGET.set({"max": recipe.max_tool_calls, "used": 0} if recipe else None)),
         (REQ_RECIPE_LABEL, REQ_RECIPE_LABEL.set(recipe.label if recipe else "")),
+        (REQ_CHAN_SNAPSHOT, REQ_CHAN_SNAPSHOT.set(_snap_ref)),
     ]
 
 

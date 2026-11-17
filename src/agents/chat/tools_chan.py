@@ -15,11 +15,17 @@ symbol/market 再取一次数, 它算出的结构可能来自另一批 bar(跨 w
 
 摘要从哪来(诚实边界, 不可绕过)
 -------------------------------
-``chan_snapshot.digest`` 只存在于用户当前图表响应的日线 JSON 里。本仓库的数智参谋
-上下文管线(``harness/context.py`` 的 ``REQ_VIEW`` / ``viewstate``)目前只携带页面标的、
-周期、区间, **不携带该摘要**, 前端也没有上报它 —— 因此聊天链路里工具经常拿不到摘要。
-拿不到时本工具返回**严格缺失态**(要求先打开/刷新该标的日线图, 从图表响应取
-``chan_snapshot.digest``), 绝不自行取一张新快照冒充"用户那张图"。
+首选来源是**本轮消息**随附的 ``chart_snapshot``: 消息入口(``SendMessageBody.chart_snapshot``)
+用严格 schema 收下, 再调**同一个**只读端点复核"摘要与服务器此刻这份 K 线一致", 通过后只放进
+本轮请求上下文(``harness/context.py::REQ_CHAN_SNAPSHOT``), 不落库、不进会话 initial_context、
+不跨轮复用。本工具优先取它: 模型自带的 ``snapshot_digest``/``instrument``/``days`` 一律被覆盖
+(那些可能是上一轮、别只票或编的), 但模型请求**别的 symbol** 时直接拒绝, 不跨标的套用。
+即便如此, 这份声明仍来自客户端: 服务端只证明了"摘要与这份 K 线内容一致", **没有、也不能
+证明用户屏幕上真的显示了这张图** —— 渲染时不写"已核对屏幕"。
+
+那一轮没带 ``chart_snapshot``(或带了但与当前会话标的不一致、无法复核)时, 工具退回**严格缺失态**
+(要求先打开/刷新该标的日线图, 从图表响应取 ``chan_snapshot.digest``), 绝不自行取一张新快照
+冒充"用户那张图"。
 
 权限与错误
 ----------
@@ -71,6 +77,26 @@ def _as_int(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().lstrip("-").isdigit():
         return int(value.strip())
     return None
+
+
+def _turn_chart_snapshot() -> dict | None:
+    """本轮消息随附、且已由消息入口复核过的图表快照(没有 = 走原始严格缺失态)。
+
+    只读请求上下文: 这份值不落库、不进会话 initial_context, 也不跨轮复用 ——
+    下一轮客户端没带, 这里就是 None, 绝不"沿用上一次的图"。
+    """
+    try:
+        from src.harness.context import REQ_CHAN_SNAPSHOT
+
+        ref = REQ_CHAN_SNAPSHOT.get()
+    except Exception:  # noqa: BLE001 - 上下文缺失等价于"本轮没带", 不影响原链路
+        return None
+    if not isinstance(ref, dict):
+        return None
+    for key in ("symbol", "market", "instrument", "interval", "days", "digest"):
+        if ref.get(key) in (None, ""):
+            return None
+    return ref
 
 
 def _detail_of(exc) -> str:
@@ -132,11 +158,14 @@ def _fmt_pen(p: dict) -> str:
     return line
 
 
-def render_chan_structure(payload: dict) -> str:
+def render_chan_structure(payload: dict, origin: str | None = None) -> str:
     """把端点返回的**统一结果**渲染成人话(字段逐项保留, 不做二次解释)。
 
     只做三件事: 排序原样、截断时标注总数、把口径/未实现/免责声明放在固定位置。
     不新增任何方向判断, 不把分型/笔叫成中枢或买卖点。
+
+    ``origin`` 是快照归属说明(本轮消息携带/缺失), 只解释"这份结构算的是哪份数据",
+    不追加任何方向结论; 措辞里也不许写"已验证用户屏幕"。
     """
     fractals = list(payload.get("fractals") or [])
     pens = list(payload.get("pens") or [])
@@ -163,6 +192,9 @@ def render_chan_structure(payload: dict) -> str:
             f"blocked {counts.get('blocked', 0)}):"
         ),
     ]
+    if origin:
+        # 归属只解释"这份结构算的是哪份数据", 不给方向结论, 也不写"已验证用户屏幕"。
+        lines.insert(2, f"[快照归属: {origin}]")
     shown = fractals[-_MAX_FRACTALS:]
     if len(fractals) > len(shown):
         lines.append(f"(共 {len(fractals)} 条, 仅列最近 {len(shown)} 条)")
@@ -234,42 +266,78 @@ async def _tool_get_chan_structure(db: Session, args: dict, user: User | None = 
     if denied:
         return denied
 
-    # ③ 参数: 只接受显式声明, 不猜 market/instrument, 不补 days。
+    # ③ 参数与信源：本轮复核过的图表快照 > 模型显式声明。
+    #    有本轮快照时以它为准（覆盖模型自带的 digest/instrument/days —— 那些可能是
+    #    上一轮、别只票或干脆是编的）；但模型请求**另一个 symbol** 时必须拒绝：
+    #    绝不把这张图的快照套到另一只票上。没有快照时退回原始严格校验（缺即缺失态）。
+    turned = _turn_chart_snapshot()
+    origin: str | None = None
     symbol = str(args.get("symbol") or "").strip().upper()
-    if not symbol:
-        return "请提供标的代码(symbol), 如 600000。"
-    market = str(args.get("market") or "CN").strip().upper()
-    if market != "CN":
-        return "缠论结构仅支持 A 股日线(market=CN); 其他市场不提供, 不猜测。"
 
-    instrument = str(args.get("instrument") or "").strip().lower()
-    if instrument not in _SUPPORTED_INSTRUMENTS:
-        return (
-            "缺少或非法的 instrument: 必须显式声明 stock(个股) 或 index(指数)。"
-            "000001 之类同码标的不能由服务端猜, 请按用户当前图表类型传入。"
+    if turned:
+        if symbol and symbol != turned["symbol"]:
+            logger.info(
+                "get_chan_structure 拒绝跨标的套用快照 user=%s turn=%s asked=%s",
+                getattr(user, "id", None), turned["symbol"], symbol,
+            )
+            return (
+                f"本轮的图表快照绑定的是 {turned['symbol']}"
+                f"（{turned['instrument']}, days={turned['days']}）, 与你请求的 {symbol} 不一致; "
+                "不跨标的套用别人的快照, 未读取任何结构数据。"
+                "请针对当前图表标的提问, 或先让用户把图表切到该标的。"
+            )
+        _model_digest = args.get("snapshot_digest")
+        if _model_digest is not None and str(_model_digest).strip() != turned["digest"]:
+            # 只记事实, 不记摘要内容; 覆盖是确定性行为, 不依赖模型"听话"。
+            logger.info(
+                "get_chan_structure 以本轮图表快照为准, 忽略模型自带 digest user=%s symbol=%s",
+                getattr(user, "id", None), turned["symbol"],
+            )
+        symbol = turned["symbol"]
+        market = turned["market"]
+        instrument = turned["instrument"]
+        days = turned["days"]
+        digest = turned["digest"]
+        origin = (
+            "本轮消息随附的图表快照(消息入口已用同一取数链重算摘要复核一致; "
+            "仅证明与本轮这份K线一致, 未验证用户屏幕)"
         )
+    else:
+        # 只接受显式声明, 不猜 market/instrument, 不补 days。
+        if not symbol:
+            return "请提供标的代码(symbol), 如 600000。"
+        market = str(args.get("market") or "CN").strip().upper()
+        if market != "CN":
+            return "缠论结构仅支持 A 股日线(market=CN); 其他市场不提供, 不猜测。"
 
-    days = _as_int(args.get("days"))
-    if days is None or not (_MIN_DAYS <= days <= _MAX_DAYS):
-        return (
-            f"缺少或非法的 days: 必须是 {_MIN_DAYS}~{_MAX_DAYS} 的整数, "
-            "且与用户图表请求的 days 完全一致(否则摘要必然对不上)。"
-        )
+        instrument = str(args.get("instrument") or "").strip().lower()
+        if instrument not in _SUPPORTED_INSTRUMENTS:
+            return (
+                "缺少或非法的 instrument: 必须显式声明 stock(个股) 或 index(指数)。"
+                "000001 之类同码标的不能由服务端猜, 请按用户当前图表类型传入。"
+            )
 
-    digest = args.get("snapshot_digest")
-    if digest is None or str(digest).strip() == "":
-        return _MISSING_DIGEST
-    digest = str(digest).strip()
-    if not _DIGEST_RE.match(digest):
-        return (
-            "snapshot_digest 必须是图表响应 `chan_snapshot.digest` 的完整 64 位小写十六进制; "
-            "截短/大写/非十六进制一律不接受(不自动修正), 未读取任何结构数据。"
-            "请让用户刷新图表后重新获取。"
-        )
+        days = _as_int(args.get("days"))
+        if days is None or not (_MIN_DAYS <= days <= _MAX_DAYS):
+            return (
+                f"缺少或非法的 days: 必须是 {_MIN_DAYS}~{_MAX_DAYS} 的整数, "
+                "且与用户图表请求的 days 完全一致(否则摘要必然对不上)。"
+            )
 
-    interval = str(args.get("interval") or "1d").strip().lower()
-    if interval not in ("1d", "d", "day", "daily"):
-        return "缠论结构仅支持日线(interval=1d); 分钟/周/月线不提供分型。"
+        digest = args.get("snapshot_digest")
+        if digest is None or str(digest).strip() == "":
+            return _MISSING_DIGEST
+        digest = str(digest).strip()
+        if not _DIGEST_RE.match(digest):
+            return (
+                "snapshot_digest 必须是图表响应 `chan_snapshot.digest` 的完整 64 位小写十六进制; "
+                "截短/大写/非十六进制一律不接受(不自动修正), 未读取任何结构数据。"
+                "请让用户刷新图表后重新获取。"
+            )
+
+        interval = str(args.get("interval") or "1d").strip().lower()
+        if interval not in ("1d", "d", "day", "daily"):
+            return "缠论结构仅支持日线(interval=1d); 分钟/周/月线不提供分型。"
 
     # ④ 取数: 只走既有只读端点的内部业务逻辑; 任何异常都不外抛、不回显原文。
     from fastapi import HTTPException
@@ -297,7 +365,7 @@ async def _tool_get_chan_structure(db: Session, args: dict, user: User | None = 
         "get_chan_structure ok user=%s symbol=%s instrument=%s as_of=%s",
         getattr(user, "id", None), symbol, instrument, payload.get("as_of_day"),
     )
-    return render_chan_structure(payload)
+    return render_chan_structure(payload, origin=origin)
 
 
 _CHAN_SCHEMA = {
@@ -310,6 +378,9 @@ _CHAN_SCHEMA = {
             "**必须**回传用户图表 `GET /api/klines/{symbol}?interval=1d` 响应里的 "
             "`chan_snapshot.digest`(完整 64 位小写十六进制), 且 symbol/market/instrument/days "
             "必须与该次图表请求完全一致; 服务端会用同一份 K 线重算摘要, 不一致返回 409。"
+            "若本轮 system 已给出【本轮图表快照（服务端已复核）】, 直接按那组参数调用即可"
+            "(服务端以该复核结果为准, 会覆盖你传入的 digest/instrument/days; "
+            "请求别的 symbol 会被拒绝)。"
             "摘要只能来自**真实图表响应/用户提供**, 严禁自己取一张新快照、严禁编造或沿用旧摘要; "
             "没有摘要就不要调用本工具, 直接告诉用户需要打开/刷新图表提供快照。"
             "本工具只描述规则几何, 不含线段/中枢/买卖点, 不构成交易信号; "

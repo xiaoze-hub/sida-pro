@@ -727,6 +727,7 @@ def get_web_content(url: str) -> str:
 
 # 标的/配方上下文统一放在 src/harness/context.py（chat.py 有行数护栏）。
 from src.harness.context import (  # noqa: E402
+    ChartSnapshotBody,
     Mention,
     REQ_BOUND as _REQ_BOUND,
     REQ_BUDGET as _REQ_BUDGET,
@@ -739,6 +740,8 @@ from src.harness.context import (  # noqa: E402
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
     inject_recipe as _inject_recipe,
+    preflight_chart_snapshot as _preflight_chart_snapshot,
+    prepare_chart_snapshot as _prepare_chart_snapshot,
     sync_conv_symbol as _sync_conv_symbol,
 )
 from src.harness.routing import route_for_request as _route_for_request
@@ -1371,6 +1374,9 @@ class SendMessageBody(BaseModel):
     # 分析成用户主仓 002361（神剑股份），或直接报"没有股票标的"。
     stock_symbol: str | None = None
     stock_market: str | None = None
+    # 2026-11-17: 用户当前图表的日线快照引用（严格 schema）。只对这一条消息有效:
+    # 消息入口用只读端点复核后放进本轮上下文, 不入库、不进 initial_context、不跨轮复用。
+    chart_snapshot: ChartSnapshotBody | None = None
 
 
 def _client_from_scene_cfg(db: Session, cfg) -> AIClient | None:
@@ -2099,6 +2105,8 @@ async def send_message(
             raise HTTPException(404, "对话不存在")
 
         _bind_conv_symbol(db, conv, body)
+        # 本轮图表快照: 必须在落库/回答之前校验完(403/409 时这条消息不入库)
+        _snap = await _prepare_chart_snapshot(db, conv, body, user)
 
         # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
         if user.username == "demo":
@@ -2132,7 +2140,7 @@ async def send_message(
         messages_for_ai = await _build_ai_messages(db, conv, user, image_data=body.image_data)
         ai_client = _get_ai_client(db, conv.ai_model_id, user=user)
         ai_response = ""
-        _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
+        _toks = _enter_request_ctx(db, conv, body, messages_for_ai, chart_snapshot=_snap)
         bind_chat(user_id=getattr(user, 'id', None))
         try:
             async for _kind, payload in _run_tool_loop(
@@ -2175,6 +2183,10 @@ async def send_message_stream(
     兼容性: 非流式 POST /messages 保持原样; 本端点仅在流式场景使用。
     消息落库与 send_message 一致: 用户消息在开始时保存, AI 回复全文在流结束时保存。
     """
+    # SSE 一旦开始就无法再改 HTTP 状态码: 本轮图表快照的 403/409 必须在开流前抛出,
+    # 不能退化成 200 + error 事件(那会让"快照过期"看起来像一次普通回答失败)。
+    _snap = await _preflight_chart_snapshot(conversation_id, body, user)
+
     async def gen():
         db = SessionLocal()
         try:
@@ -2239,7 +2251,7 @@ async def send_message_stream(
             # 多轮 tool use + 真流式(2026-08-23 U1): 边流式出字边执行工具
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
-            _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
+            _toks = _enter_request_ctx(db, conv, body, messages_for_ai, chart_snapshot=_snap)
             bind_chat(user_id=getattr(user, 'id', None))
             try:
                 async for kind, payload in _run_tool_loop(
