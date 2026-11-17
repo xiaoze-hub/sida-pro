@@ -412,6 +412,16 @@ def get_stock_list() -> list[dict]:
     return refresh_stock_list()
 
 
+def cached_stock_list() -> list[dict] | None:
+    """**只读**本地磁盘缓存(TTL 内有效); 无缓存/已过期返回 None, 绝不联网。
+
+    给"名字护栏"这类每轮都要用的旁路读: 它只需要一份全市场名单, 不能因为一次缓存
+    过期就在对话链路上发起 5 个市场 ~17s 的抓取(实测), 也绝不能把"抓不到"当成
+    "市场上没有这只票"。
+    """
+    return _load_cache()
+
+
 def _realtime_search(query: str, market: str = "", limit: int = 20) -> list[dict]:
     """东方财富实时搜索 API"""
     import urllib.parse

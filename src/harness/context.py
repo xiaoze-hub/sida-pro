@@ -135,6 +135,7 @@ class TurnTarget:
     market: str | None = None
     source: str = "none"
     #: "no_target"（既无显式标的也没绑定）/ "unresolved_name" / "ambiguous_name"
+    #: / "name_coverage_unknown"（名称索引与 TQ 都不可用, 没法确认正文没点别的票）
     #: / "name_conflict"（正文名字与锚点/会话绑定指向不同的票）
     problem: str | None = None
     #: 正文里的名字解析出的代码（仅用于说明冲突, 不参与取数）
@@ -183,6 +184,7 @@ def _name_target(text: str) -> tuple[str | None, str | None]:
     try:
         from src.core.symbol_guard import (
             bare_name_codes, is_generic_reference, is_stock_question, resolve_mentions,
+            unverified_name_words, whole_text_name_codes,
         )
 
         if not text:
@@ -198,6 +200,15 @@ def _name_target(text: str) -> tuple[str | None, str | None]:
         if not resolved and not unmapped:
             # 没有后缀词的名字（「贵州茅台」）：补一次整段确认，只认行情库真的命中的。
             resolved = [(w, c) for (w, c, _n) in bare_name_codes(text)]
+        if not resolved and not unmapped:
+            # 紧贴提问词、没有分隔符（「贵州茅台缠论怎么样」）：整段窗口确认。
+            # coverage="none" 表示本地索引与 TQ 都不可用 —— 此时"没检测到名字"不能
+            # 当成"用户没点别票"，正文里只要有核对不了的词就整份丢弃快照。
+            hits, coverage = whole_text_name_codes(text)
+            resolved = [(w, c) for (w, c, _n) in hits]
+            if not resolved and coverage == "none" and unverified_name_words(text):
+                logger.info("名字索引与TQ均不可用, 正文含无法核对的具体词, 本轮按无唯一目标处理")
+                return None, "name_coverage_unknown"
         codes: list[str] = []
         for _word, code in resolved:
             code6 = str(code or "").split(".")[0].strip()
@@ -322,8 +333,9 @@ def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarge
         if not resolve_names or explicit.source in ("text", "mention"):
             return explicit
         code, problem = _name_target(getattr(body, "content", "") or "")
-        if problem == "unresolved_name":
-            # 名字解析失败: 锚点/绑定都只是"上一轮留下的位置", 不是本轮标的的证据。
+        if problem and problem != "ambiguous_name":
+            # 名字解析失败 / 无法核对: 锚点/绑定都只是"上一轮留下的位置", 不是本轮
+            # 标的的证据。**新问题类型必须走这条**, 不许因为没写 if 就滑到 `return explicit`。
             return TurnTarget(problem=problem, name_symbol=code)
         if problem == "ambiguous_name":
             return TurnTarget(symbol=explicit.symbol, market=explicit.market,
@@ -734,6 +746,9 @@ def _no_target_note(problem: str, snapshot_symbol: str, *,
     """判不出唯一请求目标时的显式说明（fail-closed, 不给结构）。"""
     why = {
         "unresolved_name": "正文里的标的名没能解析成唯一代码(可能是错别字/已退市/只有相似建议)",
+        "name_coverage_unknown": (
+            "本地标的名称索引与行情库名称检索都不可用, 服务端无法确认正文没有点名其他标的"
+        ),
         "ambiguous_name": "正文里出现了多只不同标的, 无法确定这张图属于哪一只",
         "name_conflict": (
             f"正文里的标的名指向 {name_symbol or '另一只票'}, 与当前标的"
