@@ -1335,4 +1335,4 @@ def test_tool_count_still_73():
     """工具总数 = 73（2026-10-24 新增 search_news / web_search_fallback）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 80
+    assert len(CHAT_TOOL_REGISTRY) == 81

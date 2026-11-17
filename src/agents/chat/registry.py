@@ -3746,6 +3746,19 @@ async def _tool_get_market_ranking(db: Session, args: dict, user: User | None = 
 
 
 
+# ──────────────── 缠论结构只读工具(2026-11-17) ────────────────
+# 位置: 注册表尾部、`_REORDER_TAIL` 重排之前 —— 尾部重排保留 get_market_ranking 为
+# 末位(既有索引钉子), 新工具紧随其后注册, 不破坏 core 前缀。
+# 实现收口在 tools_chan.py:
+#   · 只读: 不写库、不下单, 复用 `src/web/api/chan_snapshot.py` 的同一套分型/笔/摘要校验;
+#   · 必须回传用户图表响应里的 `chan_snapshot.digest` —— 拿不到就返回严格缺失态,
+#     绝不自行取一张新快照冒充同图(上下文管线目前不携带该摘要, 见 tools_chan 模块文档);
+#   · fallback 保持 True: 单股兜底路由也要能看到它(只读、缺摘要只会被拒, 无副作用)。
+from src.agents.chat import tools_chan as _tools_chan  # noqa: E402
+
+_tools_chan.register_chan_tools()
+
+
 # ── 注册顺序修正（2026-10-26）─────────────────────────────────────────────
 # `get_stock_report` 当初被插在「核心段」与「thsdk 段」之间，破坏了本仓
 # **"新工具一律追加到注册表末尾"** 的纪律，直接后果是 `chat_tool_schemas()` 的
@@ -3760,3 +3773,4 @@ for _name in _REORDER_TAIL:
     if _name in _moved:
         CHAT_TOOL_REGISTRY[_name] = _moved[_name]
 del _moved, _name
+

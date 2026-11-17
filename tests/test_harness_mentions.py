@@ -44,12 +44,13 @@ def test_six_recipes_loaded_and_valid():
     # 配方才能真的调到 query_data_domain(domain=lhb.daily)。
     # 2026-11-10: entry_scanner(建仓候选筛查) 为第 14 个 —— 「尾盘有适合建仓的股票吗」这类
     # 无标的的市场级问题原来没有配方认领，被 time-word 抓到单标的 intraday_analyst。
-    assert len(recipes) == 14
+    # 2026-11-17: chan_structure(缠论结构) 为第 15 个 —— 必须回传图表快照摘要。
+    assert len(recipes) == 15
     assert {r.id for r in recipes} == {
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
         "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
-        "devil_advocate", "lhb_reviewer", "entry_scanner",
+        "devil_advocate", "lhb_reviewer", "entry_scanner", "chan_structure",
     }
     for r in recipes:
         assert r.label and r.prompt_fragment

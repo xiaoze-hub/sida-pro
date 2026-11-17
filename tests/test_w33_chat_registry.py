@@ -117,9 +117,11 @@ def test_registry_integrity():
            # 2026-10-24: 本地新闻/政策时间线检索 + 联网兜底(仅系统源取不到时启用)
            "search_news", "web_search_fallback",
            # 2026-10-25: 归因维度 —— 两融(A股杠杆) + 外部宏观(美债/油价/美元/VIX)
-           "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking"}
+           "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking",
+           # 2026-11-17: 缠论结构只读工具(必须回传图表快照摘要; 不自行取新快照)
+           "get_chan_structure"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 80
+    assert len(CHAT_TOOL_REGISTRY) == 81
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -188,9 +190,10 @@ def test_exported_tool_order():
         # 四档资金结构 + 委托粒度(2026-10-23): 客户端口径, 单票 25ms 可进请求路径
         "get_fund_structure", "get_order_granularity", "get_factor_winrate",
            # 2026-10-23 盘后复盘: 涨停/炸板/跌停三池同源同日 + 晋级率 + 情绪周期
-           "get_market_replay", "search_news", "web_search_fallback", "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking"}
-    # 末尾 22 个（2026-10-26: get_stock_report 归位到末尾、排在 get_market_ranking 前）
-    assert set(tail[-24:]) == {"remember_preference", "create_daily_task",
+           "get_market_replay", "search_news", "web_search_fallback", "get_margin_trading", "get_macro_series", "get_range_summary", "get_market_ranking",
+           "get_chan_structure"}
+    # 末尾 25 个（2026-11-17: 缠论结构工具追加在 get_market_ranking 之后、重排之前）
+    assert set(tail[-25:]) == {"remember_preference", "create_daily_task",
                                "get_market_scan_ranks", "get_dark_fund_top",
                                "get_intraday_profile", "get_trend_profile",
                                "get_stock_factors", "get_scenario_matrix",
@@ -199,6 +202,7 @@ def test_exported_tool_order():
                                "list_data_domains", "query_data_domain",
                                "note_new_dimension",
                                "get_premarket_brief", "get_market_replay", "search_news", "web_search_fallback", "get_margin_trading", "get_macro_series", "get_range_summary",
+                               "get_chan_structure",
                                "get_stock_report", "get_market_ranking"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema

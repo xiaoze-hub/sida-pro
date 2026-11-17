@@ -1,6 +1,6 @@
 # 数智参谋 · Harness 配方验收契约
 
-规格事实源。对应实现：`src/harness/recipes/*.yaml`（13 份）、`src/harness/recipes.py`（加载与路由）、
+规格事实源。对应实现：`src/harness/recipes/*.yaml`（14 份）、`src/harness/recipes.py`（加载与路由）、
 `src/harness/pipeline.py`（确定性管线）。
 
 **基准日**：2026-10-22（commit `4faae6c` 起）
