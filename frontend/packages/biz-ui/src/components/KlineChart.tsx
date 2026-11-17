@@ -173,13 +173,20 @@ const CHAN_PEN_COLORS: ChanPenColors = {
  *
  * 为什么必须加长主图请求：线段要**三段确认**，实测 315 只样本在 160 根日 K 内最多只有
  * 2 条已确认线段，`not_enough_confirmed_segments` 就成了默认视图的常态 —— 中枢图层
- * 永远"还不到 3 条"。所以打开这两个子图层时，同一张图直接向服务端要 500 天；
+ * 永远"还不到 3 条"。所以打开这两个子图层时，同一张图直接向服务端要 800 个日历天(约 500 根日 K)；
  * 硬上限 1000（再长对前端渲染/后端取数都不划算，且图例只承诺"近 N 天"）。
  *
  * 不另取一份数据：天数只改主图 `/klines/{symbol}` 的 `days`，摘要依旧由那条响应的
  * `chan_snapshot` 绑定，结构与图仍是**同一份快照**。关掉两个子图层即回落 `initialDays`。
  */
-export const CHAN_STRUCTURE_LOOKBACK_DAYS = 500
+/**
+ * 线段/中枢子图层开启时的回看天数（**日历天**，不是交易日）。
+ *
+ * 2026-11-18 实测：`days` 在后端是日历天（PG 按 `now - days` 截断）。500 日历天≈330 根
+ * 日 K，315 只样本里只有 0~1 条确认线段；800 日历天≈500 根才稳定到 3~4 条，
+ * 中枢（前三段）才可能出现。所以这里用 800，而不是"看起来够长"的 500。
+ */
+export const CHAN_STRUCTURE_LOOKBACK_DAYS = 800
 export const CHAN_STRUCTURE_LOOKBACK_CAP = 1000
 
 /**

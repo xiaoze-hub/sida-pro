@@ -742,22 +742,22 @@ describe('KlineChart 缠论线段子图层', () => {
 describe('线段/中枢子图层打开时加长回看(2026-11-18)', () => {
   const mainKlineCalls = () => H.calls.filter((u) => u.startsWith('/klines/600519?'))
 
-  it('打开线段 → 同一张图改按 500 天请求(图例写明), 关掉回到 initialDays', async () => {
+  it('打开线段 → 同一张图改按 800 天请求(图例写明), 关掉回到 initialDays', async () => {
     await mountWithChan()
     // 默认视图(只开分型/笔): 仍按 initialDays
     expect(mainKlineCalls()[0]).toContain('days=120')
     expect(screen.queryByTestId('chan-lookback-note')).toBeNull()
 
     fireEvent.click(screen.getByTestId('chan-segment-toggle'))
-    // 主图加长到 500(不是另取一份结构数据: 摘要仍由这条响应的 chan_snapshot 绑定)
-    await waitFor(() => expect(mainKlineCalls().some((u) => u.includes('days=500'))).toBe(true), { timeout: 5000 })
+    // 主图加长到 800 个日历天(约 500 根日 K; 不是另取一份结构数据: 摘要仍由这条响应的 chan_snapshot 绑定)
+    await waitFor(() => expect(mainKlineCalls().some((u) => u.includes('days=800'))).toBe(true), { timeout: 5000 })
     // 结构请求跟着同一份快照/同一批天数
     await waitFor(
-      () => expect(H.calls.some((u) => u.includes('/chan-structure') && u.includes('days=500'))).toBe(true),
+      () => expect(H.calls.some((u) => u.includes('/chan-structure') && u.includes('days=800'))).toBe(true),
       { timeout: 5000 },
     )
     const note = await screen.findByTestId('chan-lookback-note', {}, { timeout: 5000 })
-    expect(note.textContent).toContain('已经加载近 500 天'.replace('已经', '已'))
+    expect(note.textContent).toContain('已经加载近 800 天'.replace('已经', '已'))
     expect(note.textContent).toContain('默认 120 天')
 
     // 关掉子图层 → 回到初始天数, 图例上的说明同步消失
@@ -773,7 +773,7 @@ describe('线段/中枢子图层打开时加长回看(2026-11-18)', () => {
     H.klines = () => Promise.resolve(klinesResponse('600519'))
     H.structure = () => Promise.resolve(structureResponse())
     render(<KlineChart symbol="600519" market="CN" instrument="stock" layersVisible={{ chan: true, chanCentre: true }} />)
-    await waitFor(() => expect(mainKlineCalls().some((u) => u.includes('days=500'))).toBe(true), { timeout: 5000 })
+    await waitFor(() => expect(mainKlineCalls().some((u) => u.includes('days=800'))).toBe(true), { timeout: 5000 })
     await waitFor(() => expect(live(centreLines())).toHaveLength(2), { timeout: 5000 })
   })
 })
