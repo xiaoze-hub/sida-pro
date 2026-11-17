@@ -1,5 +1,10 @@
 ## [未发布]
 
+### fix-CI 门禁(2026-11-18)
+
+- 新增 `chan_structure` 配方与 `get_chan_structure` 工具后, 四处"清单/计数"型断言同步(配方 14→15、工具 80→81、chat.py 行数护栏 2310→2320); 不改产品行为。
+- 两处测试自身的时间/顺序依赖修正: scratch SQLite 判据改为"在临时目录且不是仓库 `data/sida.db`"; 转债条款用例的 `as_of` 改相对日期(原先写死 2026-10-16, 过期即红); `test_chat_stream` 不再依赖 settings 缓存里的 `AUTH_PASSWORD`, 首请求后直接重设 owner 密码哈希。
+
 ## release: v0.11.19（缠论结构观察 v1）
 
 ### fix-停靠参谋跟随路由锚点 + 线段/中枢加长回看（前端）
