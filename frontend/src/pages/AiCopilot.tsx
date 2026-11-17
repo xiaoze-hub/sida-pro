@@ -1,7 +1,7 @@
 import { useViewportPanel } from '@/hooks/useViewportPanel'
 import { AssistantAvatar } from '@/components/AssistantAvatar'
 import type { AssistantEntry } from '@/components/AssistantWorkspace'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { safeFixed } from '@/lib/format'
 import {
   applyPendingAction,
@@ -48,11 +48,17 @@ import {
   chartContextOwnerMatches,
   chartContextKey,
   chartContextPrompt,
+  chanSnapshotLabel,
   dismissChartContext,
+  dismissChanSnapshot,
   isChartContextFresh,
+  readChanSnapshotDetailed,
   readChartContextDetailed,
+  resolveChanSnapshotForTurn,
+  subscribeChanSnapshot,
   unpublishChartContext,
   type ChartContext,
+  type ChanSnapshotRead,
 } from '@/lib/copilot/chart-context'
 import { currentAccountId } from '@/lib/copilot/annotationLedger'
 import { ConversationSidebar } from '@/components/copilot/ConversationSidebar'
@@ -648,6 +654,41 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const chipCtx = chartCommittedHere && chartCtx && chartOwnerOk ? chartCtx : activeChartCtx
   /** 过期读数：可以显示"曾经是什么"，但绝不能送进模型，也不能再说它是当前视图。 */
   const chartCtxExpired = chartCtx !== null && !isChartContextFresh(chartCtx, chartClock)
+
+  /**
+   * 本轮同图快照（2026-11-17）—— 参谋侧唯一的读取口。
+   *
+   * 与上面 `chartCtx` 完全独立：那份是"进入时快照"（写会话、撤不回），
+   * 这份是工作台**此刻**屏幕上那张图绑定哪份缠论快照（`KlineChart.onChanSnapshotChange`），
+   * 每轮发送时现取、只进这一轮请求体。所以这里没有"sentChart"式的记账：
+   * 只要仓库里没有这一份（换股/换号/清除/隐藏/过期），下一轮自然就是不带。
+   *
+   * 读的是 `anchorSymbol`（不是上一轮的 `sym`）：界面显示"下一条会带哪一份"，
+   * 真实发送还会在 `send` 里按那一轮标的再读一次（`resolveChanSnapshotForTurn`）。
+   */
+  const [chanTick, setChanTick] = useState(0)
+  const [chanClock, setChanClock] = useState(() => Date.now())
+  useEffect(() => subscribeChanSnapshot(() => setChanTick((v) => v + 1)), [])
+  const chanView = useMemo<ChanSnapshotRead | null>(() => {
+    if (!anchorSymbol) return null
+    // `chanTick`（仓库变更）/ `chanClock`（30s 心跳）都只是"该重读一次"的触发器：
+    // 新鲜度按**渲染这一刻**的 `Date.now()` 算，不能拿挂载时采到的时钟当基准
+    // （那会把刚广播的快照算成"未来时间戳"，显示成过期）。
+    void chanTick
+    void chanClock
+    return readChanSnapshotDetailed(anchorSymbol, null, currentAccountId(), Date.now())
+  }, [anchorSymbol, chanTick, chanClock])
+  /** 有记录时才走 30s 时钟：过期要说出来（"本轮不发送"），不能让旧的一直亮着。 */
+  useEffect(() => {
+    if (!chanView?.record) return
+    const timer = window.setInterval(() => setChanClock(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [chanView?.record])
+  /** 用户点「清除」：撤这只票的当前快照，并让工作台的再次广播在本页会话里不复活。 */
+  const clearChanSnapshot = useCallback(() => {
+    if (chanView?.record) dismissChanSnapshot(chanView.record)
+    setChanTick((v) => v + 1)
+  }, [chanView?.record])
 
   /**
    * 上下文带入（P0）：从个股工作台/外部链接进来时带 `?symbol=600111`，
@@ -1324,6 +1365,30 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
            */
           setSentChart(chartForTurn ? { conversationId: id, symbol: chartForTurn.symbol } : null)
         }
+        /**
+         * 本轮同图快照（2026-11-17）：**在发送这一刻**从工作台的内存仓库现取。
+         *
+         * 为什么必须在这里、不能更早：上面有 `createConversation` 的 `await`，回来时用户
+         * 可能已经换股、换账号、隐藏窗口、点了「清除」，或者工作台那边已经切了图。
+         * 任何在 await 之前算好的 block 都可能已经不代表"现在屏幕上这张图"。
+         *
+         * 复核项（任一不成立就不带，且**不回退**到上一次那份）：
+         *  - owner：`currentAccountId()` 此刻的值必须与记录一致（store 按 owner 分键，天然隔离）；
+         *  - symbol：必须等于本轮请求真正发出去的标的 `sym`（不是渲染时的 anchor）；
+         *  - freshness：超过 2 分钟没有新的图表广播 → 不带；
+         *  - days/shape：仓库里那条记录本身（摘要 64 位 hex、天数为正整数）在读取时再验一次。
+         *
+         * 按代码读、**不按交易所后缀过滤**：参谋这边的 `marketOf()` 给的是 `SH`/`SZ`，
+         * 而图表仓库里记的是市场口径 `CN/HK/US`（两块不是同一套码）。同号多张
+         * （000001 个股 + 指数）读取侧会判歧义、直接不带 —— 宁可少带，不猜。
+         *
+         * 它只进这一轮的 `chart_snapshot` 字段：不进 `content`、不进 `initial_context`、
+         * 不进聊天历史、不落任何存储 —— 所以下一轮它不会"被记住"。
+         */
+        const chanForTurn = sym
+          ? resolveChanSnapshotForTurn({ symbol: sym, owner: currentAccountId() })
+          : null
+        const chartSnapshot = chanForTurn?.block ?? null
         const result = await chatApi.sendMessageStream(
           id,
           content,
@@ -1377,6 +1442,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             value: m.type === 'stock' ? m.symbol : m.id,
             label: m.type === 'stock' ? m.name || m.symbol : m.label,
           })),
+          chartSnapshot,
         )
         if (!isCurrent()) return
         // 2026-10-28: 没拿到终稿 = 失败, 不许把半截正文当成品亮着
@@ -1847,6 +1913,37 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             className="border-b border-border bg-s2 px-3 py-1 text-[12px] text-muted-foreground"
           >
             {chartNotice}
+          </div>
+        ) : null}
+
+        {/*
+          本轮同图快照（2026-11-17）：把「这一轮会随请求体发出去的那份缠论快照」明写在界面上。
+          只显示可读项（代码/类型/市场/周期/天数/摘要前缀），不显示完整摘要与 owner；
+          并明确写出"每轮现取、不写入会话历史"—— 用户才不会以为它能被撤回或会被长期记住。
+          过期记录仍然显示，但必须说清"本轮不发送"（不能只在发送时静默丢掉）。
+        */}
+        {chanView && chanView.record ? (
+          <div
+            data-testid="copilot-chan-snapshot"
+            className="flex flex-wrap items-center gap-1.5 border-b border-border bg-s2 px-3 py-1 text-[12px]"
+          >
+            <span className="text-muted-foreground">本轮同图快照</span>
+            <span className="font-mono tabular-nums text-role-watch">{chanSnapshotLabel(chanView.record)}</span>
+            <span className="text-muted-foreground">
+              {chanView.reason === 'ok'
+                ? '· 只随本轮请求发送，不写入会话历史'
+                : chanView.reason === 'expired'
+                  ? '· 已超过 2 分钟没有新的图表广播，本轮不发送（切一下图会重新带上）'
+                  : '· 本轮不发送'}
+            </span>
+            <button
+              type="button"
+              data-testid="copilot-chan-snapshot-clear"
+              onClick={clearChanSnapshot}
+              className="ml-auto text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              清除
+            </button>
           </div>
         ) : null}
 
