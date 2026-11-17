@@ -61,8 +61,18 @@
   显式加载更长历史才有意义（前端已按"线段/中枢开启时扩展天数"处理）。
 - `not_enough_confirmed_segments` 只能读作"还没凑够"，绝不能显示成"无中枢"。
 
-## 7. 发布状态
+## 7. 发布状态（2026-11-18 已发布并部署）
 
-- 代码在分支 `feat/chan-structure-1117`；生产部署尚未执行。
-- 生产入口与部署通道的可用性以运维记录为准；镜像/tag 状态需回读验证，不能以 health 返回的
-  版本号代替镜像内容。
+- 代码已合入 `main`，tag **v0.11.23**；CI 四片 + coverage ratchet 全绿（此前 v0.11.19/20/21/22
+  连续因测试口径与集合阶段 `PermissionError` 红，逐个修的是**测试**，不是产品行为）。
+- 镜像：`crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:v0.11.23`
+  （国内云机构建，`docker buildx imagetools inspect` 回读 digest
+  `sha256:4ab499c5bcab…3266a`，与容器内镜像 id 一致）。
+- 生产部署：`DEPLOY_OK v0.11.23`，`/api/health` 版本 `v0.11.23`；旧容器
+  `sida-old-v0.11.23-20261118040527-1058638` 以 `restart=no` 保留，回退脚本在
+  `/var/lib/sida-deploy/evidence/20261118-040528-v0.11.23-1058638/rollback.sh`。
+- 生产数据路径回读（容器内直调同一函数，只读）：`002902` 800 根日线 → 57 笔（56 确认/1 候选）、
+  1 条确认线段 + 1 条 blocked；操作口径中枢 `blocked_before_centre`（不足 3 段），
+  `basis=segment_a0`、`strictness=operational_not_strict`。即"覆盖不足"是真实结论，不是接口坏了。
+- 未完成：登录态下的生产 UI 截图（登录需验证码，自动化未过）；HTTP 层带真实用户的端到端
+  （服务令牌被该端点按设计拒绝，401 是预期）。
