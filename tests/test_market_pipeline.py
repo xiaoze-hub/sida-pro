@@ -319,7 +319,8 @@ def test_recipes_still_parse_and_scope_defaults_to_symbol():
     # 2026-10-24: 创新 6 新增 devil_advocate（12 = 11 + 1），纯 prompt 编排不加工具
     # 2026-11-09: 新增 lhb_reviewer（13 = 12 + 1），非 pipeline —— 见下方断言
     # 2026-11-10: 新增 entry_scanner（14 = 13 + 1），market 口径 pipeline
-    assert len(recipes) == 14
+    # 2026-11-18: 新增 chan_structure（15 = 14 + 1），symbol 口径、纯只读结构观察
+    assert len(recipes) == 15
     assert {r.scope for r in recipes.values()} <= {"symbol", "market"}
     # 5 份单标的管线配方不写 scope → 默认 symbol（旧行为，一个字都不许变）
     for rid in ("chip_analyst", "deep_diagnosis", "demon_diagnosis",
@@ -378,7 +379,7 @@ def test_routing_unchanged_for_market_recipes():
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
         "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
-        "devil_advocate", "lhb_reviewer", "entry_scanner",
+        "devil_advocate", "lhb_reviewer", "entry_scanner", "chan_structure",
     }
 
 

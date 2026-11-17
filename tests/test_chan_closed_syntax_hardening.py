@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -61,9 +62,11 @@ def test_running_process_uses_scratch_sqlite_db():
     url = engine.url
     assert url.get_backend_name() == "sqlite", f"测试进程连的不是 SQLite: {url}"
     db_file = Path(str(url.database or "")).resolve()
-    data_dir = Path(os.environ["DATA_DIR"]).resolve()
-    assert db_file.is_relative_to(data_dir), f"库文件不在 scratch DATA_DIR 里: {db_file}"
-    assert data_dir != (Path.cwd() / "data").resolve(), "DATA_DIR 指向了仓库真实 data/"
+    # 判据是"不在仓库真实 data/ 里", 不是"等于 DATA_DIR": CI 的 DATA_DIR 可能与
+    # conftest 的 mkdtemp 不同源(只设 SIDA_DATA_DIR), 拿 DATA_DIR 比会误红。
+    assert db_file.is_relative_to(Path(tempfile.gettempdir()).resolve()), (
+        f"库文件不在临时目录里: {db_file}")
+    assert db_file != (Path.cwd() / "data" / "sida.db").resolve(), "连到了仓库真实 data/sida.db"
     assert db_file.name.endswith(".db")
 
 

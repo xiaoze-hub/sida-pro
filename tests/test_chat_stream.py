@@ -92,7 +92,22 @@ def client(monkeypatch):
         return f"工具 {name} 返回: 主力净流入 +1.2亿"
 
     monkeypatch.setattr(chat_api, "_execute_tool", _fake_execute_tool)
-    return TestClient(app)
+    client = TestClient(app)
+    # 2026-11-18: settings 在 import 期缓存, 本进程若有更早的文件先导入了 settings,
+    # AUTH_PASSWORD 就不会生效, bootstrap 造出的 admin 密码与本用例不符 → 401。
+    # 这里不赌 bootstrap, 直接把 owner 的 hash 设成本用例的密码。
+    client.get("/api/health")
+    from src.web.api.auth import hash_password
+
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.username == "admin").first()
+        if admin is not None:
+            admin.password_hash = hash_password("chat-stream-0606")
+            db.commit()
+    finally:
+        db.close()
+    return client
 
 
 @pytest.fixture(autouse=True)

@@ -412,15 +412,23 @@ def test_term_columns_map_14_fields():
 
 
 def test_terms_upsert_versions_and_latest_wins(maker):
+    # 2026-11-18: 原先写死 2026-10-16, 一旦当天超过 freshness 窗口就整条变红(时间炸弹);
+    # 改用相对日期, 断言的是"版本 upsert + 最新覆盖"而不是某个具体日历日。
+    from datetime import date, timedelta
+
+    d1 = (date.today() - timedelta(days=2)).isoformat()
+    d2 = (date.today() - timedelta(days=1)).isoformat()
+    d3 = date.today().isoformat()
+
     with maker() as s:
-        cbs.upsert_terms(s, "113001", _TERM_RAW, as_of="2026-10-01")
-        cbs.upsert_terms(s, "113001", {**_TERM_RAW, "ZGPrice": 18.0}, as_of="2026-10-16")
-        assert cbs.upsert_terms(s, "113001", {}, as_of="2026-10-17") is False
+        cbs.upsert_terms(s, "113001", _TERM_RAW, as_of=d1)
+        cbs.upsert_terms(s, "113001", {**_TERM_RAW, "ZGPrice": 18.0}, as_of=d2)
+        assert cbs.upsert_terms(s, "113001", {}, as_of=d3) is False
 
     with maker() as s:
         got = cbs.load_terms(s, ["113001"])["113001"]
         assert got["ZGPrice"] == pytest.approx(18.0)
-        assert got["_as_of"] == "2026-10-16"
+        assert got["_as_of"] == d2
         assert got["_stock_code"] == "600519"
         assert cbs.terms_are_fresh(got) is True
 
