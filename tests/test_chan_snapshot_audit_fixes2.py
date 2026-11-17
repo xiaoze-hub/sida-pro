@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """2026-11-17 三轮审计缺口回归（真实路由 / 工具 / SQLite）。
 
-② **名字解析失败时锚点误信旧快照**：`resolve_turn_target` 只在
-   `problem == "ambiguous_name"` 时丢弃目标，`unresolved_name` 直接 `return explicit` ——
+② **名字/表述对不上时锚点误信旧快照**：`resolve_turn_target` 只在
+   `problem == "ambiguous_name"` 时丢弃目标，其它问题码直接 `return explicit` ——
    于是「图为 600000（页面锚点/会话绑定）+ 本轮正文写了别的名字（解析不出）」时，
-   600000 的快照仍被当成这一轮的可信图交给模型。现在：正文**确实点了名**却对不到唯一
-   代码 ⇒ 锚点/绑定也不能替用户决定本轮标的，快照整份丢弃；而「这家银行」「缠论结构怎么样」
-   这类**泛指当前这只**的说法不算点名，不许误杀锚点。
+   600000 的快照仍被当成这一轮的可信图交给模型。现在：正文不满足**封闭追问语法**
+   （`src/core/chan_followup.py`，2026-11-18 六轮审计）⇒ 锚点/绑定也不能替用户决定
+   本轮标的，快照整份丢弃；而「这家银行」「缠论结构怎么样」这类**泛指当前这只**的
+   说法仍在协议内，不许误杀锚点。
 
 ③ **同代码个股/指数混淆**：`ChatConversation` 只存 `stock_symbol`，target/recheck/tool
    三层都只比 6 位代码 —— 会话绑 000001（平安银行）时，随附的「上证指数 000001」快照
@@ -54,21 +55,25 @@ def _turn(text: str, snapshot: dict | None = None, *, anchor: str | None = None,
 
 def test_anchor_snapshot_dropped_when_name_unresolved(
         client, accounts, feed, holder, no_network):
-    """页面锚点 600000 + 正文「北方稀士」(解析不出) → 锚点不能替用户决定本轮标的。"""
+    """页面锚点 600000 + 正文「北方稀士」(核不出来) → 锚点不能替用户决定本轮标的。
+
+    六轮审计后同图归属只认封闭语法；「北方稀士」既不是已验证全名、也不构成合规追问，
+    所以整份快照丢弃（旧实现靠 ``resolve_mentions`` 的"相似建议"给出同一条结论，
+    新实现不猜名字，结论相同但理由更弱：只声明"不在协议内"）。
+    """
     digest = _digest("600000")
     token = _login(client, "a")
     conv_id = _conv(client, token, None, None)          # 会话无绑定, 只有页面锚点
     no_network["is_q"] = True
     no_network["code"] = None
-    no_network["info"] = {"resolved": [],
-                          "suggestions": [("北方稀士", "600111", "北方稀土")],
-                          "unknown": []}
 
     r = _response(client, token, conv_id,
                   _turn("北方稀士 缠论结构怎么样", _snap(digest, symbol="600000"),
                         anchor="600000"))
     assert r.status_code == 200, r.text
-    assert "没能解析成唯一代码" in holder.systems[-1]
+    system = holder.systems[-1]
+    assert "无法唯一确定" in system and "不可读同图" in system
+    assert "封闭追问语法" in system, "说明里要写清本轮只接受有限的追问语法"
     assert _short(digest) not in holder.outputs[-1]
     assert "缺少图表快照摘要" in holder.outputs[-1]
 
@@ -172,7 +177,8 @@ def test_bare_segment_name_conflicts_with_anchor(
         client, accounts, feed, holder, no_network, monkeypatch):
     """「贵州茅台」(无后缀词, is_stock_question=False) 也要能确认出票并判冲突。
 
-    只认行情库**真的能命中**的整段名字: 查不到的一律当"没点名"(不猜、不误杀)。
+    只认**本地全名名单里一字不差**的名字（六轮审计后这是唯一的名字通道）；
+    查不到的一律不在协议内（不猜、不误杀）。
     """
     import src.core.symbol_guard as sg
 
@@ -180,12 +186,15 @@ def test_bare_segment_name_conflicts_with_anchor(
     token = _login(client, "a")
     conv_id = _conv(client, token, "600000", "SH")
     no_network["is_q"] = False
-    monkeypatch.setattr(sg, "bare_name_codes", lambda text, limit=2: [
-        ("贵州茅台", "600519", "贵州茅台"),
-    ])
+    monkeypatch.setattr(sg, "_local_name_pairs",
+                        lambda: [("600519", "贵州茅台"), ("600000", "浦发银行")])
+    monkeypatch.setattr("src.core.chan_followup._NAME_VIEW", {"raw": None, "view": None})
+    sg.reset_local_index()
 
     r = _response(client, token, conv_id,
                   _body("贵州茅台 缠论结构怎么样", _snap(digest, symbol="600000")))
+    sg.reset_local_index()
+    monkeypatch.setattr("src.core.chan_followup._NAME_VIEW", {"raw": None, "view": None})
     assert r.status_code == 200, r.text
     system = holder.systems[-1]
     assert "600519" in system and "自相矛盾" in system
@@ -194,18 +203,22 @@ def test_bare_segment_name_conflicts_with_anchor(
 
 def test_non_ashare_name_does_not_reuse_anchor_snapshot(
         client, accounts, feed, holder, no_network):
-    """名字命中的是基金/ETF(159915) → 与锚点 600000 不是同一只, 不许拿锚点的图顶替。"""
+    """正文写「创业板ETF」这类本链路不支持的标的 → 不许拿锚点 600000 的图顶替。
+
+    六轮审计后不再靠 ``resolve_mentions`` 去解析它（那会把 159915 当"名字命中"），
+    而是按封闭语法直接判"协议外、不可读同图" —— 结论仍是丢弃，理由不再声称
+    "指向了另一只代码"（服务端根本没有核实过它）。
+    """
     digest = _digest("600000")
     token = _login(client, "a")
     conv_id = _conv(client, token, "600000", "SH")
     no_network["code"] = None
-    no_network["info"] = _resolved(("创业板ETF", "159915", "创业板ETF"))
 
     r = _response(client, token, conv_id,
                   _body("创业板ETF 缠论结构怎么样", _snap(digest, symbol="600000")))
     assert r.status_code == 200, r.text
     system = holder.systems[-1]
-    assert "159915" in system and "自相矛盾" in system
+    assert "无法唯一确定" in system and "不可读同图" in system
     assert "缺少图表快照摘要" in holder.outputs[-1]
 
 

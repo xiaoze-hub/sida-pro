@@ -75,6 +75,31 @@ def _resolved(*pairs):
     return {"resolved": list(pairs), "suggestions": [], "unknown": []}
 
 
+@pytest.fixture()
+def local_names(monkeypatch):
+    """本地可信**全名**索引（2026-11-18 起同图归属唯一的名字通道）。
+
+    旧实现用 ``resolve_mentions``（后缀词 + TQ 检索）判"正文点了哪只票"；六轮审计把它
+    换成了封闭语法 + 已验证全名，所以这里钉的是**真实通道**：本地全名名单。
+    """
+    import src.core.symbol_guard as sg
+
+    pairs = [
+        ("600519", "贵州茅台"), ("600000", "浦发银行"), ("600111", "北方稀土"),
+        ("002050", "三花智控"), ("000002", "万科A"), ("601318", "中国平安"),
+    ]
+    monkeypatch.setattr(sg, "_local_name_pairs", lambda: list(pairs))
+    monkeypatch.setattr(sg, "_tq_lookup", lambda word: [])
+    monkeypatch.setattr(sg, "_match_cached", lambda word: [])
+    monkeypatch.setattr("src.core.chan_followup._NAME_VIEW",
+                        {"raw": None, "view": None})
+    sg.reset_local_index()
+    yield sg
+    sg.reset_local_index()
+    monkeypatch.setattr("src.core.chan_followup._NAME_VIEW",
+                        {"raw": None, "view": None})
+
+
 def _response(client, token, conv_id, payload):
     return client.post(f"/api/chat/conversations/{conv_id}/messages",
                        headers=_headers(token), json=payload)
@@ -106,31 +131,29 @@ def test_name_only_question_drops_other_symbol_snapshot(
     assert (_conv_row(conv_id).stock_symbol or "") != "000002"
 
 
-def test_unresolved_name_fails_closed(client, accounts, feed, holder, no_network):
-    """名字能命中但解析不出唯一代码 → fail-closed, 快照整份丢弃。"""
+def test_unresolved_name_fails_closed(client, accounts, feed, holder, no_network,
+                                     local_names):
+    """名字核不出来（错别字/后缀词但不在名单里）→ fail-closed, 快照整份丢弃。"""
     digest = _digest("000002")
     token = _login(client, "a")
     conv_id = _conv(client, token, None, None)
     no_network["code"] = None
-    no_network["info"] = {"resolved": [],
-                          "suggestions": [("北方稀士", "600111", "北方稀土")],
-                          "unknown": []}
 
     r = _response(client, token, conv_id,
                   _body("北方稀士 缠论结构怎么样", _snap(digest, symbol="000002")))
     assert r.status_code == 200, r.text
-    assert "没能解析成唯一代码" in holder.systems[-1]
+    system = holder.systems[-1]
+    assert "无法唯一确定" in system and "不可读同图" in system
     assert _short(digest) not in holder.outputs[-1]
     assert "缺少图表快照摘要" in holder.outputs[-1]
 
 
-def test_ambiguous_names_fail_closed(client, accounts, feed, holder, no_network):
+def test_ambiguous_names_fail_closed(client, accounts, feed, holder, no_network,
+                                     local_names):
     """一句话里两只不同标的 → 判不出唯一目标, 不许拿快照硬凑。"""
     digest = _digest("600111")
     token = _login(client, "a")
     conv_id = _conv(client, token, None, None)
-    no_network["info"] = _resolved(("北方稀土", "600111", "北方稀土"),
-                                   ("三花智控", "002050", "三花智控"))
 
     r = _response(client, token, conv_id,
                   _body("北方稀土和三花智控 缠论结构怎么样",
@@ -169,7 +192,7 @@ def test_explicit_symbol_still_wins_over_name(client, accounts, feed, holder, no
 
 
 def test_bound_conversation_with_other_stock_name_fails_closed(
-        client, accounts, feed, holder, no_network):
+        client, accounts, feed, holder, no_network, local_names):
     """会话绑 600000, 正文却写「北方稀土」(=600111) → 目标自相矛盾, 快照丢掉。
 
     这条不走"无绑定"路径: 目标来自会话绑定, 名字仍须参与核对 —— 否则页面停在 600000、
@@ -179,7 +202,6 @@ def test_bound_conversation_with_other_stock_name_fails_closed(
     token = _login(client, "a")
     conv_id = _conv(client, token, "600000", "SH")
     no_network["code"] = "600111"
-    no_network["info"] = _resolved(("北方稀土", "600111", "北方稀土"))
 
     r = _response(client, token, conv_id,
                   _body("北方稀土 缠论结构怎么样", _snap(digest, symbol="600000")))
@@ -191,13 +213,12 @@ def test_bound_conversation_with_other_stock_name_fails_closed(
 
 
 def test_bound_conversation_with_same_stock_name_still_serves(
-        client, accounts, feed, holder, no_network):
+        client, accounts, feed, holder, no_network, local_names):
     """名字与会话绑定一致时不误伤: 照常取数。"""
     digest = _digest("600000")
     token = _login(client, "a")
     conv_id = _conv(client, token, "600000", "SH")
     no_network["code"] = "600000"
-    no_network["info"] = _resolved(("浦发银行", "600000", "浦发银行"))
 
     r = _response(client, token, conv_id,
                   _body("浦发银行 缠论结构怎么样", _snap(digest, symbol="600000")))
