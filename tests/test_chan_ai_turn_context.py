@@ -192,7 +192,13 @@ class _FakeMsg:
 _SNAP_BLOCK_RE = re.compile(
     r"symbol=(\d{6}) market=(\w+) instrument=(\w+) interval=(\w+) days=(\d+)"
 )
-_DIGEST_RE = re.compile(r"snapshot_digest=([0-9a-f]{64})")
+#: system 里只给前 8 位(完整摘要属于本轮凭据, 见 harness/redaction.py)。
+_DIGEST_RE = re.compile(r"snapshot_digest=([0-9a-f]{8})…")
+
+
+def _short(digest: str) -> str:
+    """摘要的可见形态(前 8 位 + …)—— 工具/轨迹/日志都只应出现这一种。"""
+    return digest[:8] + "…"
 
 
 class _Holder:
@@ -206,7 +212,8 @@ class _Holder:
     def from_prompt(self, messages: list[dict]) -> dict:
         system = str((messages[0] or {}).get("content") or "")
         block = _SNAP_BLOCK_RE.search(system)
-        digest = _DIGEST_RE.search(system)
+        # 模型拿不到完整摘要(系统只给前 8 位), 因此它"自带摘要"的路径必须无从发生;
+        # 这里恒为空串, 与真实模型的可见信息一致。
         if not block:
             return {"symbol": "600000", "instrument": "stock", "days": 60,
                     "snapshot_digest": ""}
@@ -216,7 +223,7 @@ class _Holder:
             "instrument": block.group(3),
             "interval": block.group(4),
             "days": int(block.group(5)),
-            "snapshot_digest": digest.group(1) if digest else "",
+            "snapshot_digest": "",
         }
 
 
@@ -363,7 +370,8 @@ def test_turn_snapshot_reaches_tool_and_overrides_model_digest(client, accounts,
 
     out = holder.outputs[-1]
     assert "【缠论结构·只读观测】600000 CN stock" in out
-    assert digest in out, "工具必须以本轮复核过的摘要为准"
+    assert _short(digest) in out, "工具必须以本轮复核过的摘要为准(只展示前 8 位)"
+    assert digest not in out, "完整摘要不许出现在工具结果里(会经轨迹/回答被持久化)"
     assert "f" * 64 not in out
     assert "[快照归属: 本轮消息随附的图表快照" in out
     assert "未验证用户屏幕" in out
@@ -373,7 +381,8 @@ def test_turn_snapshot_reaches_tool_and_overrides_model_digest(client, accounts,
     system = holder.systems[-1]
     # 注入的是带着具体参数的那一块（配方 prompt 里也提到这个名字, 不能只认标题）
     assert "【本轮图表快照（服务端已复核）】\nsymbol=600000 market=CN" in system
-    assert digest in system
+    assert _short(digest) in system
+    assert digest not in system, "system 里只给前 8 位, 否则模型会把它回显进回答/轨迹"
     assert "不等于验证了用户屏幕" in system or "没有、也不能验证用户屏幕" in system
 
     # 落库的历史与 initial_context 里没有任何摘要
@@ -406,7 +415,7 @@ def test_second_turn_without_snapshot_is_strict_missing(client, accounts, feed, 
     assert "[快照归属" not in out
     assert digest not in out
     assert "【本轮图表快照（服务端已复核）】\nsymbol=" not in holder.systems[-1]
-    assert f"snapshot_digest={digest}" not in holder.systems[-1]
+    assert digest not in holder.systems[-1]
     assert feed.calls == calls_before, "没有快照时不许自己取一张新快照"
 
 
@@ -421,7 +430,7 @@ def test_tool_fills_args_from_turn_snapshot_when_model_omits_them(
     r = _send(client, token, conv_id, _body(snapshot=_snap(digest)))
     assert r.status_code == 200, r.text
     out = holder.outputs[-1]
-    assert "【缠论结构·只读观测】600000 CN stock" in out and digest in out
+    assert "【缠论结构·只读观测】600000 CN stock" in out and _short(digest) in out
 
 
 def test_model_cannot_apply_snapshot_to_another_symbol(client, accounts, feed, holder):
@@ -452,14 +461,14 @@ def test_two_accounts_keep_their_own_snapshot(client, accounts, feed, holder):
 
     assert _send(client, token_a, conv_a, _body(snapshot=_snap(digest_a))).status_code == 200
     out_a = holder.outputs[-1]
-    assert "【缠论结构·只读观测】600000" in out_a and digest_a in out_a
+    assert "【缠论结构·只读观测】600000" in out_a and _short(digest_a) in out_a
 
     holder.outputs.clear()
     assert _send(client, token_b, conv_b,
                  _body("600519 缠论结构怎么看", _snap(digest_b, symbol="600519"))).status_code == 200
     out_b = holder.outputs[-1]
-    assert "【缠论结构·只读观测】600519" in out_b and digest_b in out_b
-    assert digest_a not in out_b
+    assert "【缠论结构·只读观测】600519" in out_b and _short(digest_b) in out_b
+    assert _short(digest_a) not in out_b
 
     # B 拿着 A 的快照（标的不一致）→ 整份丢弃，不得套到 600519 上
     holder.outputs.clear()
@@ -467,7 +476,7 @@ def test_two_accounts_keep_their_own_snapshot(client, accounts, feed, holder):
               _body("600519 缠论结构怎么看", _snap(digest_a, symbol="600000")))
     assert r.status_code == 200, r.text
     out_cross = holder.outputs[-1]
-    assert digest_a not in out_cross and "分型 " not in out_cross
+    assert _short(digest_a) not in out_cross and "分型 " not in out_cross
     assert "缺少图表快照摘要" in out_cross or "不一致" in out_cross
 
 
@@ -483,7 +492,7 @@ def test_symbol_switch_drops_snapshot_but_keeps_chat(client, accounts, feed, hol
               _body("000001 缠论结构怎么看", _snap(digest_a, symbol="600000")))
     assert r.status_code == 200, r.text
     out = holder.outputs[-1]
-    assert digest_a not in out
+    assert _short(digest_a) not in out
     assert "分型 " not in out
     assert "不一致" in out or "缺少图表快照摘要" in out
     # 显式告警进了本轮 system（模型知道"这轮没有可信快照"）
@@ -671,14 +680,14 @@ def test_concurrent_streams_do_not_share_snapshot(client, accounts, feed, holder
     assert all(FINAL_TEXT in t for t in texts), texts
 
     joined = "\n".join(holder.outputs)
-    assert "【缠论结构·只读观测】600000" in joined and digest_a in joined
-    assert "【缠论结构·只读观测】600519" in joined and digest_b in joined
+    assert "【缠论结构·只读观测】600000" in joined and _short(digest_a) in joined
+    assert "【缠论结构·只读观测】600519" in joined and _short(digest_b) in joined
     # 每条工具结果只能带自己的摘要
     for out in holder.outputs:
         if "600000" in out:
-            assert digest_b not in out
+            assert _short(digest_b) not in out
         if "600519" in out:
-            assert digest_a not in out
+            assert _short(digest_a) not in out
 
 
 # ── ⑧ 断连 / 取消：finally 必须 reset ────────────────────────────────────

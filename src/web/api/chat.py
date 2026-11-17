@@ -737,16 +737,18 @@ from src.harness.context import (  # noqa: E402
     REQ_TOOLS as _REQ_TOOLS,
     route_with_persona as _route_with_persona,
     bind_recipe_trace as _bind_recipe_trace,
+    current_bound_symbol as _current_bound_symbol,
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
     inject_recipe as _inject_recipe,
-    plan_conv_symbol as _plan_conv_symbol,
     preflight_chart_snapshot as _preflight_chart_snapshot,
     prepare_chart_snapshot as _prepare_chart_snapshot,
     recheck_turn_snapshot as _recheck_turn_snapshot,
-    sync_conv_symbol as _sync_conv_symbol,
+    # 绑定/读回实现住在 harness(context.py); 保留历史名字(别名)兼容既有调用方。
+    sync_conv_symbol as _bind_conv_symbol,
 )
 from src.harness.routing import route_for_request as _route_for_request
+from src.harness.redaction import log_tool_call as _log_tool_call
 from src.harness.pipeline_router import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
 from src.harness.pipeline import session_context as _pipeline_ctx
 
@@ -1270,7 +1272,7 @@ async def _run_tool_loop_inner(
             })
             for tc in response_msg.tool_calls:
                 tool_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                logger.info(f"Tool call: {tc.function.name}({tool_args})")
+                _log_tool_call(tc.function.name, tool_args)
                 _tool_done += 1
                 yield "stage", _TOOL_STAGE_LABELS.get(tc.function.name, f"正在调用 {tc.function.name}...")
                 if runtime is not None:
@@ -2064,28 +2066,6 @@ def delete_conversation(
 
 
 
-def _bind_conv_symbol(db, conv, body: "SendMessageBody") -> None:
-    """把前端"正在看的标的"绑到对话上(页面切换时跟随更新)。
-
-    判定口径在 src/harness/context.py::resolve_bound_symbol:
-        文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定
-    2026-10-22 事故: 旧实现"对话已绑定就不改" → 002548 页面聊完再问 002114,
-    参谋仍按 002548 作答(系统提示与取数上下文全串在旧票上)。
-
-    调用时机: 只在本条消息**确定要落库/回答**之后(快照校验通过)。`bind_symbol`
-    内部会 commit —— 放在 403/409 之前会让"已拒绝且未保存"的消息悄悄改掉会话标的。
-    """
-    _sync_conv_symbol(db, conv, body)
-
-
-def _current_bound_symbol(db, conversation_id: int) -> str | None:
-    """库里**此刻**的会话标的（绕开 ORM 身份映射，用于落消息前的最后核对）。"""
-    row = (db.query(ChatConversation.stock_symbol)
-           .filter(ChatConversation.id == conversation_id)
-           .first())
-    return ((row[0] if row else None) or "").strip() or None
-
-
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
     conversation_id: int,
@@ -2117,18 +2097,15 @@ async def send_message(
         if not conv:
             raise HTTPException(404, "对话不存在")
 
-        # 本轮图表快照: 必须在落库/回答之前校验完(403/409 时这条消息不入库)。
-        # 先用**只读判定**算出本轮标的喂给校验, 校验通过才落 bind —— 否则被拒的消息
-        # 会因为 bind 里的 commit 把会话悄悄改到它请求的标的。
-        _target, _ = _plan_conv_symbol(conv, body)
-        _snap = await _prepare_chart_snapshot(db, conv, body, user, bound_symbol=_target)
-        _bind_conv_symbol(db, conv, body)
-
-        # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
+        # demo 账号限流必须在任何落库/绑定之前: 被拒的消息不许先把会话标的改掉(2026-11-17 审计)。
         if user.username == "demo":
             from src.core.demo_limit import allow
             if not allow(user.id):
                 raise HTTPException(429, "演示账号每日对话次数已用完(10次/天)。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics")
+
+        # 本轮快照: 落库/回答前校验完(403/409 不入库), 通过才 bind; 不带时零成本返回 None。
+        _snap = await _prepare_chart_snapshot(db, conv, body, user)
+        _bind_conv_symbol(db, conv, body)
 
         # 多模态: 图片先由视觉代理转文字(保存前处理, 保 DB 历史连贯)
         if body.image_data:
@@ -2227,14 +2204,14 @@ async def send_message_stream(
                 yield _sse_event("error", {"message": "对话不存在"})
                 return
 
-            _bind_conv_symbol(db, conv, body)
-
-            # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
+            # demo 限流必须在 bind 之前 —— 被拒的消息不许改会话标的(2026-11-17 审计)。
             if user.username == "demo":
                 from src.core.demo_limit import allow
                 if not allow(user.id):
                     yield _sse_event("error", {"message": "演示账号每日对话次数已用完(10次/天)。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"})
                     return
+
+            _bind_conv_symbol(db, conv, body)
 
             # 多模态: 图片先由 agnes 视觉代理转成文字描述(在保存前处理, 保证 DB 历史连贯)
             if body.image_data:

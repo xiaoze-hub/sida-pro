@@ -114,6 +114,119 @@ def resolve_bound_symbol(conv_symbol: str | None, body_symbol: str | None,
     return conv_symbol or None
 
 
+@dataclass(frozen=True)
+class TurnTarget:
+    """本轮请求目标（最终口径）。
+
+    为什么要有这一层: 旧实现里「本轮该聊哪只票」有两个不一致的答案 ——
+    ``plan_conv_symbol`` 只认「文字代码 / @提及 / 页面锚点 / 会话绑定」，
+    而正文只写名字（「北方稀土 缠论结构怎么样」）时要等 ``enter_request_ctx``
+    才解析成 600111。于是快照归属校验拿不到名字解析结果，**无绑定会话 = 快照可信**，
+    同一轮里 REQ_BOUND=600111 而可信快照是 000002 也能出他票结构（2026-11-17 审计反例）。
+
+    ``source`` 记录目标从哪来（"text"/"mention"/"anchor"/"conversation"/"name"），
+    只用于日志与文案；``problem`` 非空表示**判不出唯一目标**，调用方必须 fail-closed。
+    """
+
+    symbol: str | None = None
+    market: str | None = None
+    source: str = "none"
+    #: "no_target"（既无显式标的也没绑定）/ "unresolved_name" / "ambiguous_name"
+    #: / "name_conflict"（正文名字与锚点/会话绑定指向不同的票）
+    problem: str | None = None
+    #: 正文里的名字解析出的代码（仅用于说明冲突, 不参与取数）
+    name_symbol: str | None = None
+
+
+def resolve_explicit_target(conv, body) -> TurnTarget | None:
+    """只认**显式**标的（不查网络）: 文字代码 > @提及 > 页面锚点 > 会话绑定。"""
+    text = getattr(body, "content", "") or ""
+    anchor = (getattr(body, "stock_symbol", None) or "").strip()
+    conv_symbol = (getattr(conv, "stock_symbol", None) or "").strip()
+
+    code = extract_code(text)
+    if code:
+        return TurnTarget(code, resolve_market(code, anchor, getattr(body, "stock_market", None)),
+                          "text")
+    mention = mention_stock(body)
+    if mention:
+        return TurnTarget(mention, resolve_market(mention, anchor, getattr(body, "stock_market", None)),
+                          "mention")
+    if _is_code(anchor) and anchor != conv_symbol:
+        return TurnTarget(anchor, resolve_market(anchor, anchor, getattr(body, "stock_market", None)),
+                          "anchor")
+    if conv_symbol:
+        # 市场口径与 plan_conv_symbol 完全一致(锚点为空/等于该票时用前端带来的市场)。
+        return TurnTarget(
+            conv_symbol,
+            resolve_market(conv_symbol, anchor, getattr(body, "stock_market", None)),
+            "conversation",
+        )
+    return None
+
+
+def _name_target(text: str) -> tuple[str | None, str | None]:
+    """正文里的股票名 → (代码, 问题)。**旁路**: 任何异常都当"解析不出"。
+
+    "解析模糊/失败一律 fail-closed" 是这里的关键: 名字命中却对不到唯一代码、
+    或一句话里出现多只不同名的票, 都不能拿快照硬凑 —— 宁可本轮不给结构。
+    """
+    try:
+        from src.core.symbol_guard import is_stock_question, resolve_mentions
+
+        if not text or not is_stock_question(text):
+            return None, None            # 这句话没点名任何标的: 交给上层判"无目标"
+        info = resolve_mentions(text) or {}
+        codes: list[str] = []
+        for _word, code, _name in (info.get("resolved") or []):
+            code6 = str(code or "").split(".")[0].strip()
+            if _is_code(code6) and code6 not in codes:
+                codes.append(code6)
+    except Exception:  # noqa: BLE001 - 名字解析是旁路, 失败等于没解析出来
+        logger.info("本轮标的名称解析失败(已按缺失处理)", exc_info=True)
+        return None, "unresolved_name"
+    if len(codes) > 1:
+        return None, "ambiguous_name"
+    if not codes:
+        # 文字像在问个股, 但查不到唯一代码(错别字/已退市/只有相似建议) → 不许猜。
+        return None, "unresolved_name"
+    return codes[0], None
+
+
+def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarget:
+    """本轮请求目标的**最终**口径（显式标的优先，必要时才做名字解析）。
+
+    ``resolve_names=False`` 时与 ``plan_conv_symbol`` 同口径（零网络调用）: 只有
+    携带图表快照的轮次才值得为"名字"多打一次 TQ —— 不带快照的轮次行为完全不变。
+
+    显式标的（文字代码/@提及）**永远优先**；但当目标来自页面锚点/会话绑定、而正文里又
+    点名了**另一只**股票时，属于"本轮到底在聊哪只"自相矛盾 —— 一样 fail-closed，
+    否则用户问北方稀土、页面停在 600000 时，快照会把 600000 的结构答成他问的那只。
+    """
+    explicit = resolve_explicit_target(conv, body)
+    if explicit is not None:
+        if not resolve_names or explicit.source in ("text", "mention"):
+            return explicit
+        code, problem = _name_target(getattr(body, "content", "") or "")
+        if problem == "ambiguous_name":
+            return TurnTarget(symbol=explicit.symbol, market=explicit.market,
+                              source=explicit.source, problem=problem)
+        if code and code != explicit.symbol:
+            return TurnTarget(symbol=explicit.symbol, market=explicit.market,
+                              source=explicit.source, problem="name_conflict",
+                              name_symbol=code)
+        return explicit
+    if not resolve_names:
+        return TurnTarget(problem="no_target")
+    text = getattr(body, "content", "") or ""
+    code, problem = _name_target(text)
+    if problem:
+        return TurnTarget(problem=problem)
+    if code:
+        return TurnTarget(code, _market_of(code), "name")
+    return TurnTarget(problem="no_target")
+
+
 def bind_symbol(db, conv, symbol: str, market: str | None = None) -> None:
     """把标的写回会话(落库失败只回滚, 不抛 —— 上下文不该把对话搞挂)。"""
     conv.stock_symbol = symbol
@@ -151,6 +264,15 @@ def sync_conv_symbol(db, conv, body) -> None:
     if not target or target == (getattr(conv, "stock_symbol", None) or "").strip():
         return
     bind_symbol(db, conv, target, market)
+
+
+def current_bound_symbol(db, conversation_id: int) -> str | None:
+    """库里**此刻**的会话标的(绕开 ORM 身份映射, 用于落消息前的最后核对)。"""
+    from src.db.models import ChatConversation
+
+    row = (db.query(ChatConversation.stock_symbol)
+           .filter(ChatConversation.id == conversation_id).first())
+    return ((row[0] if row else None) or "").strip() or None
 
 
 def apply_mentions(db, conv, body):
@@ -417,20 +539,33 @@ class ChartSnapshotBody(BaseModel):
 
 @dataclass(frozen=True)
 class TurnChartSnapshot:
-    """一条消息的图表快照结论：`ref` = 通过复核的可信来源，`note` = 显式缺失说明。"""
+    """一条消息的图表快照结论：`ref` = 通过复核的可信来源，`note` = 显式缺失说明。
+
+    ``turn_symbol`` 是**本轮请求目标**（名字解析也在内）: 即便快照被丢弃也会带上,
+    让后续 ``enter_request_ctx``/工具复用同一次判定, 不必二次解析(也就不多打一次 TQ),
+    同时让"服务端认为这轮在聊哪只票"与"快照属于哪只票"永远只有一个答案。
+    """
 
     ref: dict | None = None
     note: str | None = None
+    turn_symbol: str | None = None
 
 
 def _chart_snapshot_note(ref: dict) -> str:
-    """本轮快照注入 system 的说明（只拼进本轮消息, 绝不写回库里 prompt/历史）。"""
+    """本轮快照注入 system 的说明（只拼进本轮消息, 绝不写回库里 prompt/历史）。
+
+    摘要只给**前 8 位**: 模型不需要、也不该拿到完整摘要 —— 取数一律以服务端本轮复核
+    结果为准(见 tools_chan), 于是这份 64hex 不必出现在可能被回显/落库的地方。
+    """
+    from src.harness.redaction import short_digest
+
     return (
         "【本轮图表快照（服务端已复核）】\n"
         f"symbol={ref['symbol']} market={ref['market']} instrument={ref['instrument']} "
         f"interval={ref['interval']} days={ref['days']} "
         f"as_of_day={ref.get('as_of_day') or '未知'}\n"
-        f"snapshot_digest={ref['digest']}\n"
+        f"snapshot_digest={short_digest(ref['digest'])}（只展示前 8 位; 完整摘要由服务端本轮持有,\n"
+        "不需要也不要向用户索取或复述）\n"
         "这是本条消息随附的客户端声明: 服务端只用同一取数链重算摘要确认了「内容一致」, "
         "没有、也不能验证用户屏幕。调用 get_chan_structure 时就用上面这组参数(工具以本轮"
         "复核结果为准), 不要改写 digest、不要另取新快照、不要向用户再要摘要。"
@@ -454,23 +589,41 @@ def _require_chart_snapshot_user(db, user) -> None:
         raise HTTPException(status_code=403, detail=f"无权携带图表快照：{denied}")
 
 
-_UNSET = object()
+def _no_target_note(problem: str, snapshot_symbol: str, *,
+                    target_symbol: str | None = None,
+                    name_symbol: str | None = None) -> str:
+    """判不出唯一请求目标时的显式说明（fail-closed, 不给结构）。"""
+    why = {
+        "unresolved_name": "正文里的标的名没能解析成唯一代码(可能是错别字/已退市/只有相似建议)",
+        "ambiguous_name": "正文里出现了多只不同标的, 无法确定这张图属于哪一只",
+        "name_conflict": (
+            f"正文里的标的名指向 {name_symbol or '另一只票'}, 与当前标的"
+            f" {target_symbol or '未知'} 不是同一只, 本轮目标自相矛盾"
+        ),
+    }.get(problem, "既没有显式标的(代码/@提及/页面锚点), 也没有可用的会话绑定")
+    return (
+        f"（本轮随附的图表快照绑定 {snapshot_symbol}, 但本轮请求标的无法唯一确定: {why}。"
+        "整份快照已丢弃, 本轮不提供缠论结构 —— 请用 6 位代码或 @提及 指明标的,"
+        "或先在该标的图表页提问。不要把「没有可信归属」当成「这张图没有结构」。）"
+    )
 
 
 async def prepare_chart_snapshot(db, conv, body, user,
-                                 *, bound_symbol: object = _UNSET) -> TurnChartSnapshot | None:
+                                 *, turn_target: TurnTarget | None = None) -> TurnChartSnapshot | None:
     """校验本轮 `body.chart_snapshot`；返回本条消息可用的可信来源（None = 没带）。
 
-    `bound_symbol` 给"本轮该锁哪只票"的**只读判定结果**（plan_conv_symbol）。不传时退回
-    库里已有的会话标的。校验必须在 bind 之前完成 —— 403/409 的消息按契约"拒绝且未保存"，
-    不许先 commit 一个标的再拒绝。
+    ``turn_target`` 给"本轮请求目标"的**只读判定结果**（``resolve_turn_target``）；
+    不传时在这里补算（含名字解析，仅本轮带快照时才会发生）。**必须**在 bind 之前完成 ——
+    403/409 的消息按契约"拒绝且未保存"，不许先 commit 一个标的再拒绝。
 
     硬拒绝（抛 HTTPException：本条消息不落库、不回答）:
       * 403 没有真实用户身份（服务令牌/无 id）或没有行情权限;
       * 409 摘要与当前 K 线内容不一致（图表已变/跨 worker 缓存不一致/同码标的/旧摘要）——
         **绝不自行刷新或另取一张新快照冒充"用户这张图"**。
     软丢弃（返回 note：本轮严格缺失，聊天继续）:
-      * 标的不一致（用户这轮问的是另一只票，图上还是上一只）;
+      * 标的不一致 —— 本轮请求目标（含名字解析出的代码）与快照标的不是同一只;
+      * 判不出唯一目标（正文只写名字但解析失败/一句话含多只票/既无显式标的也无绑定）——
+        **fail-closed**: 没有可信归属就不给结构，不许把"无绑定"当成"可信";
       * 422 该快照当前不满足分型前提; 503/上游异常（校验不了就明说没拿到）。
     """
     declared = getattr(body, "chart_snapshot", None)
@@ -480,17 +633,27 @@ async def prepare_chart_snapshot(db, conv, body, user,
 
     _require_chart_snapshot_user(db, user)
 
-    if bound_symbol is _UNSET:
-        bound = (getattr(conv, "stock_symbol", None) or "").strip()
-    else:
-        bound = bound_symbol.strip() if isinstance(bound_symbol, str) else ""
-    if bound and bound != declared.symbol:
+    if turn_target is None:
+        turn_target = resolve_turn_target(conv, body, resolve_names=True)
+    if turn_target.problem:
         logger.info(
-            "本轮图表快照标的与会话标的冲突 user=%s bound=%s snapshot=%s",
-            getattr(user, "id", None), bound, declared.symbol,
+            "本轮图表快照无唯一请求目标 user=%s snapshot=%s problem=%s",
+            getattr(user, "id", None), declared.symbol, turn_target.problem,
         )
-        return TurnChartSnapshot(note=(
-            f"（本轮随附的图表快照绑定 {declared.symbol}，与当前会话标的 {bound} 不一致，"
+        return TurnChartSnapshot(
+            turn_symbol=turn_target.symbol or None,
+            note=_no_target_note(turn_target.problem, declared.symbol,
+                                 target_symbol=turn_target.symbol,
+                                 name_symbol=turn_target.name_symbol),
+        )
+    target = (turn_target.symbol or "").strip()
+    if target != declared.symbol:
+        logger.info(
+            "本轮图表快照标的与请求目标冲突 user=%s target=%s snapshot=%s source=%s",
+            getattr(user, "id", None), target, declared.symbol, turn_target.source,
+        )
+        return TurnChartSnapshot(turn_symbol=target or None, note=(
+            f"（本轮随附的图表快照绑定 {declared.symbol}，与当前请求标的 {target} 不一致，"
             "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
         ))
 
@@ -522,7 +685,7 @@ async def prepare_chart_snapshot(db, conv, body, user,
                     "服务端不会自行刷新、也不会另取一张快照冒充当前图；请刷新图表后重发。"
                 ),
             ) from None
-        return TurnChartSnapshot(note=(
+        return TurnChartSnapshot(turn_symbol=target or None, note=(
             f"（本轮图表快照未通过复核(status={status})，已丢弃：本轮不提供缠论结构，"
             "也不得把「没拿到」写成「这张图没有结构」。）"
         ))
@@ -531,7 +694,7 @@ async def prepare_chart_snapshot(db, conv, body, user,
             "本轮图表快照复核异常 user=%s symbol=%s error=%s",
             getattr(user, "id", None), declared.symbol, type(exc).__name__,
         )
-        return TurnChartSnapshot(note=(
+        return TurnChartSnapshot(turn_symbol=target or None, note=(
             "（本轮图表快照无法复核（上游异常），已丢弃：本轮不提供缠论结构，"
             "不得据此推断这张图没有分型/笔。）"
         ))
@@ -541,7 +704,7 @@ async def prepare_chart_snapshot(db, conv, body, user,
             "本轮图表快照复核结果异常 user=%s symbol=%s",
             getattr(user, "id", None), declared.symbol,
         )
-        return TurnChartSnapshot(note=(
+        return TurnChartSnapshot(turn_symbol=target or None, note=(
             "（本轮图表快照复核结果与声明不一致，已丢弃：本轮不提供缠论结构。）"
         ))
 
@@ -559,7 +722,7 @@ async def prepare_chart_snapshot(db, conv, body, user,
         getattr(user, "id", None), ref["symbol"], ref["instrument"], ref["days"],
         ref["as_of_day"],
     )
-    return TurnChartSnapshot(ref=ref, note=_chart_snapshot_note(ref))
+    return TurnChartSnapshot(ref=ref, note=_chart_snapshot_note(ref), turn_symbol=target)
 
 
 async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChartSnapshot | None:
@@ -568,7 +731,7 @@ async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChar
     本条消息没带 chart_snapshot 时零成本返回 None（不查库、不取数）。
     会话不存在时不在这里报错: 交给开流后的既有"对话不存在"错误事件, 不改语义。
 
-    这里**只做判定不落库**: 本轮标的用 plan_conv_symbol 推出来给校验当参照,
+    这里**只做判定不落库**: 本轮标的用 resolve_turn_target(含名字解析)推出来给校验当参照,
     拒绝时(403/409)会话仍然是原来的 A —— 不会出现"报错却已经把会话改成 B"。
     真正的 bind 留到 gen 里、消息确实要保存时(见 `_bind_conv_symbol`)。
     """
@@ -590,8 +753,9 @@ async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChar
         )
         if conv is None:
             return None
-        target, _market = plan_conv_symbol(conv, body)   # 纯判定: 校验失败不留痕
-        return await prepare_chart_snapshot(db, conv, body, user, bound_symbol=target)
+        # 纯判定: 校验失败不留痕。带快照的轮次才做名字解析(无快照路径零网络调用)。
+        target = resolve_turn_target(conv, body, resolve_names=True)
+        return await prepare_chart_snapshot(db, conv, body, user, turn_target=target)
     finally:
         db.close()
 
@@ -603,18 +767,25 @@ def recheck_turn_snapshot(snapshot: TurnChartSnapshot | None,
     preflight 通过 ≠ 现在仍然成立: 开流到真正取库之间, 另一轮可能已经把会话切到了
     别的票(TOCTOU), 客户端带来的声明也不是"已验证的屏幕"。所以这里再核一次标的,
     不一致就整份丢弃 —— SSE 已经开始, 改不了状态码; 与"切标的"同一软丢弃口径。
+
+    两个方向都要核: ① 库里的会话此刻是否还指向这份快照的标的; ② 本轮判定出的
+    ``turn_symbol``(含名字解析)是否就是快照标的 —— 只看 ① 会漏掉"会话无绑定但正文
+    写的是另一只票"这种形态。
     """
     if not isinstance(snapshot, TurnChartSnapshot) or snapshot.ref is None:
         return snapshot
     bound = (bound_symbol or "").strip()
     symbol = (snapshot.ref.get("symbol") or "").strip()
-    if not bound or not symbol or bound == symbol:
-        return snapshot
-    logger.info("本轮图表快照开流后漂移 bound=%s snapshot=%s", bound, symbol)
-    return TurnChartSnapshot(note=(
-        f"（本轮随附的图表快照绑定 {symbol}，与当前会话标的 {bound} 不一致，"
-        "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
-    ))
+    turn = (snapshot.turn_symbol or "").strip()
+    if not symbol or (bound and bound != symbol) or (turn and turn != symbol):
+        logger.info(
+            "本轮图表快照开流后漂移 bound=%s turn=%s snapshot=%s", bound, turn, symbol,
+        )
+        return TurnChartSnapshot(turn_symbol=turn or bound or None, note=(
+            f"（本轮随附的图表快照绑定 {symbol}，与本轮请求标的 {turn or bound} 不一致，"
+            "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
+        ))
+    return snapshot
 
 
 def enter_request_ctx(db, conv, body, messages: list[dict],
@@ -630,6 +801,10 @@ def enter_request_ctx(db, conv, body, messages: list[dict],
             inject_premarket_brief(messages, db, _user, recipe)
     _body_text = getattr(body, "content", "") or ""
     bound = getattr(conv, "stock_symbol", None) or extract_code(_body_text)
+    # 名字解析已经在快照校验里做过一次(带快照的轮次), 这里直接复用结论:
+    # 既省一次 TQ(17709 单线程), 也保证"服务端认为这轮在聊哪只票"与快照归属同源。
+    if not bound and isinstance(chart_snapshot, TurnChartSnapshot):
+        bound = chart_snapshot.turn_symbol or None
     if not bound:
         # 正文只写名字（「北方稀土还能持有吗」）→ 先把名字解析成代码,
         # 否则 bound 为空会让画像判定与配方路由统统落空（实测导致零工具拒答）。

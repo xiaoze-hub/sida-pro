@@ -3751,8 +3751,8 @@ async def _tool_get_market_ranking(db: Session, args: dict, user: User | None = 
 # 末位(既有索引钉子), 新工具紧随其后注册, 不破坏 core 前缀。
 # 实现收口在 tools_chan.py:
 #   · 只读: 不写库、不下单, 复用 `src/web/api/chan_snapshot.py` 的同一套分型/笔/摘要校验;
-#   · 必须回传用户图表响应里的 `chan_snapshot.digest` —— 拿不到就返回严格缺失态,
-#     绝不自行取一张新快照冒充同图(上下文管线目前不携带该摘要, 见 tools_chan 模块文档);
+#   · **只**用本轮消息随附、已由消息入口复核的快照(REQ_CHAN_SNAPSHOT): 模型自带摘要
+#     不再被接受(2026-11-17 二轮审计), 也没有快照就返回严格缺失态, 绝不自行取新快照;
 #   · fallback 保持 True: 单股兜底路由也要能看到它(只读、缺摘要只会被拒, 无副作用)。
 from src.agents.chat import tools_chan as _tools_chan  # noqa: E402
 

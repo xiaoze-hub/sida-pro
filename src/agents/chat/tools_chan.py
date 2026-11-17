@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """数智参谋 · 缠论结构只读工具(2026-11-17)。
 
-为什么必须带 ``snapshot_digest``
---------------------------------
+为什么必须绑定"某一轮的那一份 K 线"
+----------------------------------
 缠论分型/笔是"某一份 K 线响应"的函数, 不是"某个代码"的函数。用户在图表上看到的
 是 ``GET /api/klines/{symbol}?interval=1d`` 的那一次响应; 如果参谋自己按
 symbol/market 再取一次数, 它算出的结构可能来自另一批 bar(跨 worker 缓存、数据源漂移、
 当日 bar 盘中变化), 却会被当成"这张图的缠论结构"引用 —— 那是伪造同图证据。
 
-所以本工具**只有一条取数路径**: 把调用方回传的 ``snapshot_digest`` 原样交给既有只读
-端点 ``GET /api/klines/{symbol}/chan-structure``, 由端点用**同一个** ``get_klines``
+所以本工具**只有一条取数路径**: 把**本轮消息随附**的 ``snapshot_digest`` 原样交给既有
+只读端点 ``GET /api/klines/{symbol}/chan-structure``, 由端点用**同一个** ``get_klines``
 返回重算摘要并逐字节比对(不符 → 409)。分型/笔全部由端点内部同一份 ``ChanSnapshot``
 产出, 本工具**不另算**任何分型/笔, 也不自行取数、不缓存、不猜摘要。
 
@@ -18,14 +18,22 @@ symbol/market 再取一次数, 它算出的结构可能来自另一批 bar(跨 w
 首选来源是**本轮消息**随附的 ``chart_snapshot``: 消息入口(``SendMessageBody.chart_snapshot``)
 用严格 schema 收下, 再调**同一个**只读端点复核"摘要与服务器此刻这份 K 线一致", 通过后只放进
 本轮请求上下文(``harness/context.py::REQ_CHAN_SNAPSHOT``), 不落库、不进会话 initial_context、
-不跨轮复用。本工具优先取它: 模型自带的 ``snapshot_digest``/``instrument``/``days`` 一律被覆盖
-(那些可能是上一轮、别只票或编的), 但模型请求**别的 symbol** 时直接拒绝, 不跨标的套用。
+不跨轮复用。本工具**只**取它: 模型自带的 ``snapshot_digest`` 不再被接受(2026-11-17 审计缺口 3:
+否则上一轮的摘要能在下一轮无声明时被"复用"成同图证据), ``instrument``/``days`` 一律以本轮
+复核结果为准; 模型请求**别的 symbol**、或服务端判定的本轮请求目标(含"正文只写名字"解析出的
+代码, ``REQ_BOUND``)与快照不是同一只时, 直接拒绝, 不跨标的套用。
 即便如此, 这份声明仍来自客户端: 服务端只证明了"摘要与这份 K 线内容一致", **没有、也不能
 证明用户屏幕上真的显示了这张图** —— 渲染时不写"已核对屏幕"。
 
-那一轮没带 ``chart_snapshot``(或带了但与当前会话标的不一致、无法复核)时, 工具退回**严格缺失态**
-(要求先打开/刷新该标的日线图, 从图表响应取 ``chan_snapshot.digest``), 绝不自行取一张新快照
-冒充"用户那张图"。
+那一轮没带 ``chart_snapshot``(或带了但与本轮请求目标不一致、判不出唯一目标、无法复核)时,
+工具退回**严格缺失态**(要求先打开/刷新该标的日线图后重新提问), 绝不自行取一张新快照
+冒充"用户那张图", 也不接受调用方(模型)自带摘要。
+
+摘要不进库
+----------
+完整摘要是"本轮凭据": 轨迹(``copilot_steps.args/result_digest``)与工具日志都由
+``harness/redaction.py`` 收缩成前 8 位, 渲染文本也只展示前 8 位 —— 于是它不会被本功能
+持久化成下一轮可复用的凭据。用户自己在消息正文里贴的摘要属于用户内容, 系统不改写。
 
 权限与错误
 ----------
@@ -39,7 +47,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -49,10 +56,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: 完整 64 位小写十六进制; 截短/大写/非十六进制一律本地拒绝(不"修正")。
-_DIGEST_RE = re.compile(r"\A[0-9a-f]{64}\Z")
-_SUPPORTED_INSTRUMENTS = ("stock", "index")
-#: 端点 Query 的上下界(保持一致; 越界本地就说清, 不发请求)。
+#: 端点 Query 的上下界(与 schema 保持一致)。
 _MIN_DAYS, _MAX_DAYS = 1, 2000
 
 #: 文本渲染上限: 结构是"最近发生了什么", 超长列表对 LLM 只是噪声。
@@ -61,22 +65,23 @@ _MAX_FRACTALS = 40
 _MAX_PENS = 20
 
 _MISSING_DIGEST = (
-    "缺少图表快照摘要(snapshot_digest), 未读取任何结构数据。"
-    "本工具不会自行取一张新快照冒充同图 —— 请先在图表页打开/刷新该标的的日线图, "
-    "把该次 `GET /api/klines/{symbol}?interval=1d` 响应里的 `chan_snapshot.digest` "
-    "(完整 64 位小写十六进制)连同 symbol/market/instrument/days 一起提供; "
-    "如果拿不到摘要, 请如实告诉用户「需要当前图表快照才能对齐缠论结构」, 不要猜、不要编。"
+    "缺少图表快照摘要: 本轮消息没有随附经服务端复核的图表快照, 未读取任何结构数据。"
+    "2026-11-17 起本工具**只**使用本条消息随附的快照(客户端把 `chan_snapshot.digest` "
+    "随消息发出, 消息入口用同一取数链重算摘要复核); 模型自带的 snapshot_digest 一律不接受 —— "
+    "它可能来自上一轮、别的标的或编造, 无法证明是用户当前这张图。"
+    "本工具也不会自行取一张新快照冒充同图 —— 请让用户在图表页打开/刷新该标的日线图后重新提问; "
+    "如果拿不到快照, 请如实告诉用户「需要当前图表快照才能对齐缠论结构」, 不要猜、不要编。"
 )
 
+def _req_bound_symbol() -> str | None:
+    """本轮请求目标(服务端判定, 含名字解析)。取不到就当没有 —— 旁路不阻断。"""
+    try:
+        from src.harness.context import REQ_BOUND
 
-def _as_int(value: Any) -> int | None:
-    if isinstance(value, bool):
+        value = REQ_BOUND.get()
+    except Exception:  # noqa: BLE001 - 上下文缺失等价于"没有判定结果"
         return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value.strip())
-    return None
+    return str(value or "").strip() or None
 
 
 def _turn_chart_snapshot() -> dict | None:
@@ -166,7 +171,12 @@ def render_chan_structure(payload: dict, origin: str | None = None) -> str:
 
     ``origin`` 是快照归属说明(本轮消息携带/缺失), 只解释"这份结构算的是哪份数据",
     不追加任何方向结论; 措辞里也不许写"已验证用户屏幕"。
+
+    摘要只渲染前 8 位: 完整摘要属于"本轮凭据", 出现在工具结果里就会被轨迹/模型回答
+    二次持久化(2026-11-17 审计缺口 2), 而读者只需要能对上"是不是同一份"。
     """
+    from src.harness.redaction import short_digest
+
     fractals = list(payload.get("fractals") or [])
     pens = list(payload.get("pens") or [])
     counts = payload.get("counts") or {}
@@ -183,7 +193,7 @@ def render_chan_structure(payload: dict, origin: str | None = None) -> str:
             f"{payload.get('interval')}"
         ),
         (
-            f"截止日 {payload.get('as_of_day')} · 摘要 {payload.get('snapshot_digest')} · "
+            f"截止日 {payload.get('as_of_day')} · 摘要 {short_digest(payload.get('snapshot_digest'))} · "
             f"分型规则 {payload.get('rules_version')} · 笔规则 {payload.get('pen_rules_version')}"
         ),
         (
@@ -266,78 +276,70 @@ async def _tool_get_chan_structure(db: Session, args: dict, user: User | None = 
     if denied:
         return denied
 
-    # ③ 参数与信源：本轮复核过的图表快照 > 模型显式声明。
-    #    有本轮快照时以它为准（覆盖模型自带的 digest/instrument/days —— 那些可能是
-    #    上一轮、别只票或干脆是编的）；但模型请求**另一个 symbol** 时必须拒绝：
-    #    绝不把这张图的快照套到另一只票上。没有快照时退回原始严格校验（缺即缺失态）。
+    # ③ 信源：**只**接受本轮消息随附、且已由消息入口复核过的快照。
+    #    2026-11-17 审计缺口 3: 旧实现允许模型自带 snapshot_digest 当替代 —— 那可能是
+    #    上一轮(甚至别的票)的摘要, 与"用户这张图"没有任何可核验关系, 于是"同图"承诺失效。
+    #    现在没有本轮快照就是严格缺失态, 模型参数只用来"对照"（symbol 必须是同一只）。
     turned = _turn_chart_snapshot()
     origin: str | None = None
     symbol = str(args.get("symbol") or "").strip().upper()
 
-    if turned:
-        if symbol and symbol != turned["symbol"]:
+    if not turned:
+        if args.get("snapshot_digest") not in (None, ""):
+            # 只记事实, 不记摘要内容 —— 轨迹/日志里也不许留完整摘要(见 harness/redaction.py)。
             logger.info(
-                "get_chan_structure 拒绝跨标的套用快照 user=%s turn=%s asked=%s",
-                getattr(user, "id", None), turned["symbol"], symbol,
+                "get_chan_structure 拒绝模型自带 digest(本轮无复核快照) user=%s symbol=%s",
+                getattr(user, "id", None), symbol or "-",
             )
-            return (
-                f"本轮的图表快照绑定的是 {turned['symbol']}"
-                f"（{turned['instrument']}, days={turned['days']}）, 与你请求的 {symbol} 不一致; "
-                "不跨标的套用别人的快照, 未读取任何结构数据。"
-                "请针对当前图表标的提问, 或先让用户把图表切到该标的。"
-            )
-        _model_digest = args.get("snapshot_digest")
-        if _model_digest is not None and str(_model_digest).strip() != turned["digest"]:
-            # 只记事实, 不记摘要内容; 覆盖是确定性行为, 不依赖模型"听话"。
-            logger.info(
-                "get_chan_structure 以本轮图表快照为准, 忽略模型自带 digest user=%s symbol=%s",
-                getattr(user, "id", None), turned["symbol"],
-            )
-        symbol = turned["symbol"]
-        market = turned["market"]
-        instrument = turned["instrument"]
-        days = turned["days"]
-        digest = turned["digest"]
-        origin = (
-            "本轮消息随附的图表快照(消息入口已用同一取数链重算摘要复核一致; "
-            "仅证明与本轮这份K线一致, 未验证用户屏幕)"
-        )
-    else:
-        # 只接受显式声明, 不猜 market/instrument, 不补 days。
-        if not symbol:
-            return "请提供标的代码(symbol), 如 600000。"
-        market = str(args.get("market") or "CN").strip().upper()
-        if market != "CN":
-            return "缠论结构仅支持 A 股日线(market=CN); 其他市场不提供, 不猜测。"
-
-        instrument = str(args.get("instrument") or "").strip().lower()
-        if instrument not in _SUPPORTED_INSTRUMENTS:
-            return (
-                "缺少或非法的 instrument: 必须显式声明 stock(个股) 或 index(指数)。"
-                "000001 之类同码标的不能由服务端猜, 请按用户当前图表类型传入。"
-            )
-
-        days = _as_int(args.get("days"))
-        if days is None or not (_MIN_DAYS <= days <= _MAX_DAYS):
-            return (
-                f"缺少或非法的 days: 必须是 {_MIN_DAYS}~{_MAX_DAYS} 的整数, "
-                "且与用户图表请求的 days 完全一致(否则摘要必然对不上)。"
-            )
-
-        digest = args.get("snapshot_digest")
-        if digest is None or str(digest).strip() == "":
             return _MISSING_DIGEST
-        digest = str(digest).strip()
-        if not _DIGEST_RE.match(digest):
-            return (
-                "snapshot_digest 必须是图表响应 `chan_snapshot.digest` 的完整 64 位小写十六进制; "
-                "截短/大写/非十六进制一律不接受(不自动修正), 未读取任何结构数据。"
-                "请让用户刷新图表后重新获取。"
-            )
+        logger.info(
+            "get_chan_structure 缺少本轮图表快照 user=%s symbol=%s", getattr(user, "id", None), symbol or "-",
+        )
+        return _MISSING_DIGEST
 
-        interval = str(args.get("interval") or "1d").strip().lower()
-        if interval not in ("1d", "d", "day", "daily"):
-            return "缠论结构仅支持日线(interval=1d); 分钟/周/月线不提供分型。"
+    if symbol and symbol != turned["symbol"]:
+        logger.info(
+            "get_chan_structure 拒绝跨标的套用快照 user=%s turn=%s asked=%s",
+            getattr(user, "id", None), turned["symbol"], symbol,
+        )
+        return (
+            f"本轮的图表快照绑定的是 {turned['symbol']}"
+            f"（{turned['instrument']}, days={turned['days']}）, 与你请求的 {symbol} 不一致; "
+            "不跨标的套用别人的快照, 未读取任何结构数据。"
+            "请针对当前图表标的提问, 或先让用户把图表切到该标的。"
+        )
+
+    # ③-b 第二层归属核对: 本轮请求目标(服务端判定, 含"正文只写名字"解析出的代码)
+    #      必须与快照是同一只。消息入口已按同一口径丢弃过一次；这里是工具层的兜底 ——
+    #      上下文装配路径变化(或另一轮并发改绑)时也不许出现"REQ_BOUND=600111 却按
+    #      000002 算结构"。
+    bound = _req_bound_symbol()
+    if bound and bound != turned["symbol"]:
+        logger.info(
+            "get_chan_structure 拒绝: 本轮请求标的与快照不一致 user=%s bound=%s turn=%s",
+            getattr(user, "id", None), bound, turned["symbol"],
+        )
+        return (
+            f"本轮请求标的是 {bound}, 而随附的图表快照绑定 {turned['symbol']}, 两者不一致: "
+            "不跨标的套用快照, 未读取任何结构数据。请针对当前图表标的提问。"
+        )
+
+    _model_digest = args.get("snapshot_digest")
+    if _model_digest not in (None, "") and str(_model_digest).strip() != turned["digest"]:
+        # 覆盖是确定性行为, 不依赖模型"听话"; 只记事实, 不记摘要内容。
+        logger.info(
+            "get_chan_structure 以本轮图表快照为准, 忽略模型自带 digest user=%s symbol=%s",
+            getattr(user, "id", None), turned["symbol"],
+        )
+    symbol = turned["symbol"]
+    market = turned["market"]
+    instrument = turned["instrument"]
+    days = turned["days"]
+    digest = turned["digest"]
+    origin = (
+        "本轮消息随附的图表快照(消息入口已用同一取数链重算摘要复核一致; "
+        "仅证明与本轮这份K线一致, 未验证用户屏幕)"
+    )
 
     # ④ 取数: 只走既有只读端点的内部业务逻辑; 任何异常都不外抛、不回显原文。
     from fastapi import HTTPException
@@ -373,16 +375,14 @@ _CHAN_SCHEMA = {
     "function": {
         "name": "get_chan_structure",
         "description": (
-            "【只读缠论结构·必须绑定用户当前图表快照】返回某份日线快照上的合并K线分型"
+            "【只读缠论结构·只用本轮图表快照】返回某份日线快照上的合并K线分型"
             "(blocked/candidate/confirmed + 发生日/确认日/价格)与笔(端点/状态/确认日/规则版本)。"
-            "**必须**回传用户图表 `GET /api/klines/{symbol}?interval=1d` 响应里的 "
-            "`chan_snapshot.digest`(完整 64 位小写十六进制), 且 symbol/market/instrument/days "
-            "必须与该次图表请求完全一致; 服务端会用同一份 K 线重算摘要, 不一致返回 409。"
-            "若本轮 system 已给出【本轮图表快照（服务端已复核）】, 直接按那组参数调用即可"
-            "(服务端以该复核结果为准, 会覆盖你传入的 digest/instrument/days; "
-            "请求别的 symbol 会被拒绝)。"
-            "摘要只能来自**真实图表响应/用户提供**, 严禁自己取一张新快照、严禁编造或沿用旧摘要; "
-            "没有摘要就不要调用本工具, 直接告诉用户需要打开/刷新图表提供快照。"
+            "**不接受**你传入的摘要: 快照由客户端随本轮消息附上(`chan_snapshot.digest`), "
+            "消息入口已用同一取数链重算摘要复核; 你只需按 system 里的"
+            "【本轮图表快照（服务端已复核）】给出 symbol/instrument/days(与服务端复核结果一致)。"
+            "本轮没有随附快照时(或你请求的 symbol 与本轮快照标的不是同一只)本工具直接拒绝, "
+            "不得沿用上一轮摘要、不得用用户口述摘要替代、不得自己取一张新快照。"
+            "严禁编造摘要或把「没拿到快照」写成「这张图没有结构」。"
             "本工具只描述规则几何, 不含线段/中枢/买卖点, 不构成交易信号; "
             "失败/无数据/409 一律如实转述, 不得用猜测补齐。"
         ),
@@ -407,15 +407,9 @@ _CHAN_SCHEMA = {
                     "minimum": _MIN_DAYS,
                     "maximum": _MAX_DAYS,
                 },
-                "snapshot_digest": {
-                    "type": "string",
-                    "description": (
-                        "图表日线响应里的 chan_snapshot.digest(完整 64 位小写十六进制); "
-                        "只能来自真实图表响应或用户提供, 缺了就不要调用"
-                    ),
-                },
             },
-            "required": ["symbol", "instrument", "days", "snapshot_digest"],
+            # 摘要不再由模型提供(旧客户端/旧提示词多传的 snapshot_digest 会被服务端忽略)。
+            "required": ["symbol", "instrument", "days"],
         },
     },
 }
@@ -426,6 +420,7 @@ CHAN_TOOLS: tuple[tuple[str, dict, str, Any], ...] = (
         _CHAN_SCHEMA,
         (
             "图表日线快照(chan_snapshot.digest 绑定 bar 内容) → 合并K线分型/笔; "
+            "只认本轮消息随附且经服务端复核的快照(模型自带 digest 不接受); "
             "adjustment=unknown, finality=unverified; 不含中枢/线段/买卖点"
         ),
         _tool_get_chan_structure,

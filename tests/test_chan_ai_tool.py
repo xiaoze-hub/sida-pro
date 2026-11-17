@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -190,6 +191,31 @@ def _call(db, user, **args) -> str:
     return asyncio.run(chat_api._execute_tool(db, "get_chan_structure", args, user=user))
 
 
+@contextmanager
+def _turn(*, symbol: str = "600000", instrument: str = "stock", days: int = 60,
+          digest: str = "a" * 64, bound: str | None = None):
+    """模拟消息入口: 把**本轮已复核**的快照装进请求上下文(2026-11-17 起唯一的信源)。
+
+    工具不再接受调用方自带摘要, 所以凡是要真的取到结构的用例都必须走这个"本轮快照"。
+    """
+    from src.harness.context import REQ_BOUND, REQ_CHAN_SNAPSHOT
+
+    tok_snap = REQ_CHAN_SNAPSHOT.set({
+        "symbol": symbol, "market": "CN", "instrument": instrument,
+        "interval": "1d", "days": days, "digest": digest,
+    })
+    tok_bound = REQ_BOUND.set(bound if bound is not None else symbol)
+    try:
+        yield
+    finally:
+        REQ_BOUND.reset(tok_bound)
+        REQ_CHAN_SNAPSHOT.reset(tok_snap)
+
+
+def _short(digest: str) -> str:
+    return digest[:8] + "…"
+
+
 def _route(text: str):
     from src.agents.chat.registry import chat_tool_schemas
     from src.harness.routing import route_for_request
@@ -210,11 +236,12 @@ def test_tool_registered_with_snapshot_contract():
 
     tool = CHAT_TOOL_REGISTRY["get_chan_structure"]
     fn = tool.schema["function"]
-    assert set(fn["parameters"]["required"]) == {
-        "symbol", "instrument", "days", "snapshot_digest",
-    }
+    # 2026-11-17 二轮审计: 摘要不再由模型提供(模型只"点菜", 快照由服务端本轮持有),
+    # 参数里也不再声明 snapshot_digest —— 免得提示词暗示"可以自己传摘要"。
+    assert set(fn["parameters"]["required"]) == {"symbol", "instrument", "days"}
+    assert "snapshot_digest" not in fn["parameters"]["properties"]
     assert "chan_snapshot.digest" in fn["description"]
-    assert "严禁" in fn["description"] and "新快照" in fn["description"]
+    assert "不接受" in fn["description"] and "新快照" in fn["description"]
     assert "adjustment=unknown" in tool.caliber and "finality=unverified" in tool.caliber
     assert "中枢" in tool.caliber
 
@@ -305,13 +332,19 @@ def test_guest_without_quote_permission_denied_before_fetch(monkeypatch, db, use
     assert feed.calls == 0
 
 
-def test_malformed_digest_rejected_locally(monkeypatch, db, users):
+def test_model_supplied_digest_is_not_accepted(monkeypatch, db, users):
+    """调用方(模型)自带摘要一律不接受: 没有本轮快照就没有结构, 且绝不取数。
+
+    旧实现会把模型给的 64hex 当"用户这张图"直接算 —— 那可能是上一轮或别的票的摘要
+    (2026-11-17 审计缺口 3)。
+    """
     feed = _completed_feed()
     _chart_client(monkeypatch, feed)
-    for bad in ("A" * 64, "a" * 63, "z" * 64):
+    for supplied in ("A" * 64, "a" * 63, "z" * 64, "a" * 64):
         text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock",
-                     days=60, snapshot_digest=bad)
-        assert "完整 64 位小写十六进制" in text
+                     days=60, snapshot_digest=supplied)
+        assert "缺少图表快照摘要" in text
+        assert "模型自带的 snapshot_digest 一律不接受" in text
         assert "分型 " not in text
     assert feed.calls == 0
 
@@ -321,28 +354,35 @@ def test_disabled_account_and_service_token_denied_before_fetch(monkeypatch, db)
 
     feed = _completed_feed()
     _chart_client(monkeypatch, feed)
-    args = dict(symbol="600000", instrument="stock", days=60, snapshot_digest="a" * 64)
-    disabled = SimpleNamespace(id="x", role="member", is_active=False)
-    assert "已禁用或注销" in _call(db, disabled, **args)
-    service = SimpleNamespace(id="x", role="member", is_active=True, is_service=True)
-    assert "需要已登录的用户身份" in _call(db, service, **args)
+    args = dict(symbol="600000", instrument="stock", days=60)
+    with _turn():
+        disabled = SimpleNamespace(id="x", role="member", is_active=False)
+        assert "已禁用或注销" in _call(db, disabled, **args)
+        service = SimpleNamespace(id="x", role="member", is_active=True, is_service=True)
+        assert "需要已登录的用户身份" in _call(db, service, **args)
     assert feed.calls == 0
 
 
-def test_non_cn_and_auto_instrument_rejected_locally(monkeypatch, db, users):
+def test_model_market_and_instrument_do_not_control_the_source(monkeypatch, db, users):
+    """取数口径只看本轮复核结果: 模型给的 market=HK / instrument=auto 不能改变信源。
+
+    旧实现会按模型参数臆测市场与标的类型; 现在这些参数只作对照, 真正生效的是
+    消息入口复核过的那一份(symbol 不同才会被拒绝)。
+    """
     feed = _completed_feed()
-    _chart_client(monkeypatch, feed)
+    client = _chart_client(monkeypatch, feed)
+    digest = _chart_digest(client)
     user = _user(db, USER_ID)
-    hk = _call(db, user, symbol="600000", market="HK", instrument="stock", days=60,
-               snapshot_digest="a" * 64)
-    assert "仅支持 A 股日线" in hk
-    auto = _call(db, user, symbol="600000", market="CN", instrument="auto", days=60,
-                 snapshot_digest="a" * 64)
-    assert "必须显式声明 stock" in auto
-    bad_days = _call(db, user, symbol="600000", market="CN", instrument="stock", days=0,
-                     snapshot_digest="a" * 64)
-    assert "days" in bad_days
-    assert feed.calls == 0
+    with _turn(symbol="600000", instrument="stock", days=60, digest=digest):
+        text = _call(db, user, symbol="600000", market="HK", instrument="auto", days=0)
+    assert "600000 CN stock" in text, text[:200]
+    assert "分型 " in text
+
+    # 没有本轮快照时, 参数再怎么"齐全"也不取数。
+    calls_before = feed.calls
+    text = _call(db, user, symbol="600000", market="CN", instrument="stock", days=60)
+    assert "缺少图表快照摘要" in text
+    assert feed.calls == calls_before
 
 
 # ── ④ 真实图表摘要 → 只读端点 → 统一结果 ──────────────────────────────────
@@ -352,8 +392,9 @@ def test_real_chart_digest_returns_unified_structure(monkeypatch, db, users):
     client = _chart_client(monkeypatch, feed)
     digest = _chart_digest(client)
 
-    text = _call(db, _user(db, USER_ID), symbol="600000", market="CN",
-                 instrument="stock", days=60, snapshot_digest=digest)
+    with _turn(symbol="600000", instrument="stock", days=60, digest=digest):
+        text = _call(db, _user(db, USER_ID), symbol="600000", market="CN",
+                     instrument="stock", days=60)
     # 身份与口径
     assert "600000 CN stock" in text
     assert "身份依据:" in text
@@ -367,25 +408,29 @@ def test_real_chart_digest_returns_unified_structure(monkeypatch, db, users):
     assert "up confirmed" in text and "→" in text
     assert f"内核 {PEN_KERNEL_VERSION}" in text
     assert "未实现(本工具不提供): segment, centre, buy_sell_point" in text
-    # 摘要必须是真实图表响应里的那一份(端点重算后回显)
-    assert digest in text
+    # 只展示前 8 位(完整摘要属于本轮凭据, 不许随工具结果落库)
+    assert _short(digest) in text
+    assert digest not in text
     assert USER_ID not in text, "结果里不许回显用户内部 id"
     assert feed.calls >= 1
 
 
-def test_different_symbol_is_rejected_by_digest(monkeypatch, db, users):
+def test_other_symbol_rejected_without_fetch(monkeypatch, db, users):
+    """本轮快照是 600000, 模型想算 600001 → 直接拒绝, 一次取数都不发。"""
     feed = _completed_feed()
     client = _chart_client(monkeypatch, feed)
     digest = _chart_digest(client, symbol="600000")
 
-    text = _call(db, _user(db, USER_ID), symbol="600001", instrument="stock",
-                 days=60, snapshot_digest=digest)
-    assert "快照校验未通过" in text and "未返回任何结构" in text
-    assert "分型规则" not in text and "未实现(本工具不提供)" not in text
-    assert feed.calls >= 1, "不同标的必须真的重取同一接口再比对摘要, 不能本地拒了就算"
+    calls_before = feed.calls
+    with _turn(symbol="600000", instrument="stock", days=60, digest=digest):
+        text = _call(db, _user(db, USER_ID), symbol="600001", instrument="stock", days=60)
+    assert "不一致" in text and "未读取任何结构数据" in text
+    assert "分型 " not in text
+    assert feed.calls == calls_before, "跨标的必须在取数之前拒绝"
 
 
 def test_stale_digest_after_chart_moves_is_rejected(monkeypatch, db, users):
+    """本轮复核通过后图表又变了(开流到工具调用之间): 端点必须 409, 不许拿旧结构冒充当前图。"""
     feed = _completed_feed()
     client = _chart_client(monkeypatch, feed)
     digest = _chart_digest(client)
@@ -394,19 +439,28 @@ def test_stale_digest_after_chart_moves_is_rejected(monkeypatch, db, users):
     # 同时清空进程内 60s 缓存 —— 等价于"图表请求落在另一个 worker", 这是真实漂移形态。
     feed.bars = feed.bars + [_k(TODAY, _TODAY_OHLC)]
     kl._kl_cache.clear()
-    text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock",
-                 days=60, snapshot_digest=digest)
+    with _turn(symbol="600000", instrument="stock", days=60, digest=digest):
+        text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock", days=60)
     assert "快照校验未通过" in text and "请刷新图表" in text
     assert "分型 " not in text
 
 
-def test_days_mismatch_is_rejected_by_digest(monkeypatch, db, users):
+def test_turn_bound_symbol_must_match_snapshot(monkeypatch, db, users):
+    """工具层兜底: 本轮请求目标(REQ_BOUND, 含"正文只写名字"解析出的代码)与快照不一致 → 拒绝。
+
+    消息入口已按同一口径丢弃过一次; 这里证明即便上下文被别的路径装配(并发/旧入口),
+    也不会出现"REQ_BOUND=600111 却按 000002 算结构"(2026-11-17 审计缺口 1 的第二层)。
+    """
     feed = _completed_feed()
     client = _chart_client(monkeypatch, feed)
-    digest = _chart_digest(client, days=60)
-    text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock",
-                 days=5, snapshot_digest=digest)
-    assert "快照校验未通过" in text
+    digest = _chart_digest(client, symbol="000002")
+
+    calls_before = feed.calls
+    with _turn(symbol="000002", instrument="stock", days=60, digest=digest, bound="600111"):
+        text = _call(db, _user(db, USER_ID), symbol="000002", instrument="stock", days=60)
+    assert "本轮请求标的是 600111" in text and "不一致" in text
+    assert "分型 " not in text
+    assert feed.calls == calls_before
 
 
 def test_no_completed_bars_reports_no_data(monkeypatch, db, users):
@@ -414,8 +468,8 @@ def test_no_completed_bars_reports_no_data(monkeypatch, db, users):
     client = _chart_client(monkeypatch, feed)
     digest = _chart_digest(client)
 
-    text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock",
-                 days=60, snapshot_digest=digest)
+    with _turn(symbol="600000", instrument="stock", days=60, digest=digest):
+        text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock", days=60)
     assert "没有已完成的K线" in text
     assert "分型 " not in text and "未返回任何结构" in text
 
@@ -428,8 +482,8 @@ def test_upstream_error_is_sanitized(monkeypatch, db, users):
     monkeypatch.setattr(kl, "_kl_cache", {})
     monkeypatch.setattr(chan, "_now", lambda: NOW)
 
-    text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock",
-                 days=60, snapshot_digest="a" * 64)
+    with _turn(symbol="600000", instrument="stock", days=60, digest="a" * 64):
+        text = _call(db, _user(db, USER_ID), symbol="600000", instrument="stock", days=60)
     assert "K线数据源暂不可用" in text and "未返回任何结构" in text
     lowered = text.lower()
     for leaked in ("sup3rsecret", "postgresql", "db.internal", "runtimeerror", "traceback"):

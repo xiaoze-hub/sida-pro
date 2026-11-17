@@ -41,8 +41,10 @@ handler-only 的一个：`get_opportunities`。
 口径：`腾讯排行 · 实时快照 · 非复权`；**板块的涨/跌家数不是涨停家数**，两者不可混用。
 
 2026-11-17 新增 `get_chan_structure`（缠论结构只读，追加在注册表尾部、`get_stock_report`/
-`get_market_ranking` 重排之前）：必须回传用户当前图表响应里的 `chan_snapshot.digest`
-（完整 64 位小写十六进制）与 symbol/market=CN/instrument=stock|index/days，服务端用同一份
-`get_klines` 重算摘要，不一致即 409。缺摘要时返回严格缺失态（不取数、不猜、不声称已读取）；
+`get_market_ranking` 重排之前）：**只**使用本轮消息随附、且已由消息入口用同一取数链复核的
+图表快照（`chan_snapshot.digest`）；摘要不由模型提供（2026-11-17 二轮审计：模型自带的
+digest 不再被接受，否则上一轮摘要可被"复用"成同图证据），本轮目标（含正文只写名字时解析出
+的代码）与快照标的须一致，否则在取数前拒绝。缺快照时返回严格缺失态（不取数、不猜、不声称已读取）；
+完整摘要不进轨迹/日志（只留前 8 位，见 `src/harness/redaction.py`）；
 分型/笔复用 `src/web/api/chan_snapshot.py` 的同一套内核，不含中枢/线段/买卖点，不是交易信号。
 `fallback=True`（单股兜底路由可见，只读无副作用）。
