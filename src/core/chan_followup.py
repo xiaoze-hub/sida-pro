@@ -17,8 +17,8 @@
 1. **泛问模板**（不点任何标的，只指当前这张图）::
 
        句子 ::= [客套] [时间] [泛指主语] 核心 [语气]
-       泛指主语 ::= 「泛指指代 + (量词) + 类别词」的**封闭形状**（`is_generic_reference`，
-                    不超过 6 字），或 `_PRONOUN_SUBJECTS` 里那几条明确的当前指代；
+       泛指主语 ::= `_SUBJECT_LITERALS` 里的**完整字面量**（「这/那/该/本/此 + 量词 +
+                    类别词」的有限枚举，外加 `_PRONOUN_SUBJECTS` 里那几条明确的当前指代）；
                     可带一个「的」；**与任一已验证全名同字的一律不算主语**
        核心 ::= `_CORES` 里的**整串字面量**（缠论结构/分型笔/买点/操作类追问）
        客套 ::= `_POLITE` 里的整串字面量    时间 ::= `_TIME` 里的整串字面量
@@ -36,6 +36,20 @@
 判定只有两种结果：**整串匹配**（可用同图）或**不匹配**（不可用同图）。这里没有
 "按字符集剥词"、"按相似度猜"、"按首字认主"这类步骤 —— 因此它可审计、可复现，
 也不存在「词表外简称被吞掉」的破口。
+
+2026-11-18 七轮审计再收两处边界:
+
+* **主语不许有前缀回退**。原先主语判定转交给 `symbol_guard.is_generic_reference`，
+  而它对 `_GENERIC_PHRASES`（整个/所有/其他/别的/上述/主板…）用的是 ``startswith``
+  —— 「其他万科怎么样」于是被当成「泛指这张图」，页面停在 600519 时把茅台的结构
+  答给了万科。现在主语只认 `_SUBJECT_LITERALS` 的**完整字面量**，一个前缀都不放过，
+  也不再向 `symbol_guard` 借任何判定（`_is_subject` 零外部依赖）。
+* **代码必须原样**。`normalize()` 会 NFKC（全角→半角）并删空白/标点，于是
+  ``６００５１９`` / ``600 519`` / ``600-519`` / ``600.519`` 都能被"修复"成一个
+  合法代码 —— 那是从用户没写的书写形式里推断标的身份。现在先对**用户原文**做
+  原样性检查：任何"像 6 位代码"的数字簇必须是**单段、原样 ASCII 6 位连续数字**，
+  全角数字或被空白/标点拆开的数字簇一律拒绝（`_raw_code_problem`）。
+  前端 @ 提及的规范代码字段不经过本模块，保持它自己那条独立校验。
 
 ## 这份协议能证明什么、不能证明什么
 
@@ -100,14 +114,38 @@ POLITE = (
 #: 时间前缀（只说"什么时候看"，不指向任何标的）
 TIME_WORDS = ("", "现在", "目前", "当前", "今天", "如今", "眼下")
 
-#: 只作用于「眼前这张图」的指代（`is_generic_reference` 之外的一字/二字指代）
+#: 只作用于「眼前这张图」的指代（不在"指示代词 + 量词 + 类别词"枚举里的那几条）
 _PRONOUN_SUBJECTS = frozenset({
-    "它", "这只", "那只", "这个", "那个",
-    # 「图」类指代：`is_generic_reference` 的"量词+类别词"表里没有"张"，这里显式列出
+    "它", "这只", "那只", "这个", "那个", "这些", "那些", "这几只", "那几只",
+    "这一只", "那一只",
+    # 「图」类指代：「量词 + 类别词」枚举里没有"张/幅 + 图"这类组合，这里显式列出
     # （只放整串字面量，不做"张/幅/根 + 图"的任意拼接）。
-    "这张图", "那张图", "这幅图", "那张图", "这图", "该图", "本图", "此图",
+    "这张图", "那张图", "这幅图", "这图", "该图", "本图", "此图",
     "这张图表", "那张图表", "这个图", "那个图",
 })
+
+#: 泛指主语的**有限字面量**枚举：指示代词 + 量词 + 类别词。
+#:
+#: 为什么是枚举而不是"形状判定"（2026-11-18 七轮审计）: 上一版把主语判定交给
+#: `symbol_guard.is_generic_reference`，而它对「整个/所有/其他/别的/上述/主板…」
+#: 只用 ``startswith`` —— 「其他万科怎么样」于是被当成泛指，页面停在 600519 时把
+#: 茅台的结构答给了万科。**任何**前缀规则都能被"前缀 + 未知名字"绕过，所以这里只
+#: 认完整字面量：拼接是 import 期一次性完成的有限集合（下表三个元组的所有组合），
+#: 判定时是整串 `in`，不存在"前缀安全"这回事。
+_SUBJECT_HEADS = ("这", "那", "该", "本", "此")
+_SUBJECT_MEASURES = ("", "只", "支", "家", "个", "些", "类", "种", "两", "几")
+_SUBJECT_NOUNS = (
+    "股票", "股", "票", "个股", "标的", "品种", "公司", "板块", "行业",
+    "指数", "市场", "大盘", "品", "块", "银行", "证券", "医药", "汽车",
+    "能源", "科技", "地产", "基金",
+)
+
+_SUBJECT_LITERALS = frozenset(
+    [head + measure + noun
+     for head in _SUBJECT_HEADS
+     for measure in _SUBJECT_MEASURES
+     for noun in _SUBJECT_NOUNS]
+) | _PRONOUN_SUBJECTS
 
 #: 语气词（**单个**字，只允许出现在整句末尾）
 _TAIL_CHARS = frozenset("呢啊吧呀哈哦嘛")
@@ -151,8 +189,55 @@ _MAX_NAME_LEN = 6
 _MAX_SUBJECT_LEN = 6
 
 #: 合法 A 股代码前缀（与 `symbol_guard._CODE_RE` 同口径：00/30/60/68 + 北交所 83/87/43）
-_CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+_CODE_RE = re.compile(r"(?<!\d)([0-9]{6})(?!\d)")
 _VALID_CODE_RE = re.compile(r"^(?:00|30|60|68|83|87|43)\d{4}$")
+
+
+def _digit_clusters(text: str):
+    """把原文里被"空白/封闭标点"串起来的数字段当**一个**数字簇产出: (拼接串, 各段)。
+
+    只用于原样性检查: `600 519` / `600-519` / `600,519` / `6 00519` 都是**一个**
+    数字簇（用户写的是 6 个数字，但被拆开了），NFKC + 删空白会把它们粘成合法代码 ——
+    那等于从"没写出的书写形式"推断标的身份。
+    """
+    n = len(text)
+    i = 0
+    while i < n:
+        if not text[i].isdigit():        # isdigit 覆盖全角/上标/带圈数字
+            i += 1
+            continue
+        runs: list[str] = []
+        j = i
+        while True:
+            start = j
+            while j < n and text[j].isdigit():
+                j += 1
+            runs.append(text[start:j])
+            k = j
+            while k < n and (text[k].isspace() or text[k] in _PUNCT):
+                k += 1
+            if k < n and text[k].isdigit():
+                j = k
+                continue
+            break
+        yield "".join(runs), runs
+        i = max(j, i + 1)
+
+
+def _raw_code_problem(text: str) -> str | None:
+    """用户**原文**里任何"像 6 位代码"的书写必须是原样 ASCII 6 位 → 否则拒绝。
+
+    只检查长度为 6 的数字簇: 那是本协议唯一会认的标的身份长度。其他长度不构成代码
+    （归一化后也不会拼成 6 位，因为 6 位簇已被覆盖），所以不必也不该拒绝。
+    """
+    for digits, runs in _digit_clusters(text or ""):
+        if len(digits) != 6:
+            continue
+        if len(runs) != 1:
+            return "not_in_protocol"          # 被空白/标点拆开 → 不许替他拼
+        if any(ch not in "0123456789" for ch in digits):
+            return "not_in_protocol"          # 全角/上标/带圈 → 不许 NFKC 救活
+    return None
 
 
 @dataclass(frozen=True)
@@ -190,18 +275,18 @@ def _is_core(s: str) -> bool:
 
 
 def _is_subject(s: str, names: dict | None) -> bool:
-    """整串是否是一个"只指眼前这张图"的主语。"""
+    """整串是否是一个"只指眼前这张图"的主语（**只认完整字面量**）。
+
+    2026-11-18 七轮审计: 这里以前会回退到 ``symbol_guard.is_generic_reference``，
+    而它对「整个/所有/其他/别的/上述/主板…」只判 ``startswith`` —— 「其他万科怎么样」
+    于是成了"泛指这张图"。**前缀规则永远挡不住"前缀 + 未知名字"**，所以现在只做
+    整串 ``in _SUBJECT_LITERALS``，连 import 都不做（护栏缺失也无从借道）。
+    """
     if not s:
         return False
     if names and s in names:                # 与已验证全名撞字 → 它是名字，不是泛指
         return False
-    if s in _PRONOUN_SUBJECTS:
-        return True
-    try:
-        from src.core.symbol_guard import is_generic_reference
-    except Exception:  # noqa: BLE001 - 护栏缺失时按不匹配处理（方向安全）
-        return False
-    return bool(is_generic_reference(s))
+    return s in _SUBJECT_LITERALS
 
 
 def _match_qpart(s: str, names: dict | None) -> bool:
@@ -343,7 +428,12 @@ def _reject(s: str, names: dict | None, *, primary: tuple[str, str] | None = Non
 
 def parse(text: str) -> SnapshotText:
     """正文 → 本轮同图判定（唯一入口）。见模块头部的协议定义。"""
-    s = normalize(text)
+    raw = text or ""
+    # ① 先验原样性：全角/被拆开的数字簇不许被 normalize 的 NFKC + 去空白救活。
+    problem = _raw_code_problem(raw)
+    if problem:
+        return SnapshotText("reject", problem=problem)
+    s = normalize(raw)
     if not s:
         return SnapshotText("generic")
     names = _name_index()
@@ -353,6 +443,11 @@ def parse(text: str) -> SnapshotText:
         code = m.group(1)
         if code not in codes:
             codes.append(code)
+    # ② 归一化**只许**改变标点/空白/大小写，不许凭空造出一个代码：归一化后认出的每个
+    #    代码都必须原样出现在用户原文里（否则就是"替用户写了他没写的代码"）。
+    raw_codes = set(_CODE_RE.findall(raw))
+    if any(code not in raw_codes for code in codes):
+        return SnapshotText("reject", problem="not_in_protocol")
     if len(codes) > 1:
         return SnapshotText("reject", problem="ambiguous")
     if codes:

@@ -42,7 +42,12 @@ REQ_CHAN_SNAPSHOT: ContextVar[dict | None] = ContextVar("chat_req_chan_snapshot"
 # 工具层用它做最后一层归属核对；判不出来就是 None（不是"大概是股票"）。
 REQ_BOUND_INSTRUMENT: ContextVar[str | None] = ContextVar("chat_req_bound_instrument", default=None)
 
-_CODE_RE = re.compile(r"(?<!\d)([036489]\d{5})(?!\d)")
+#: 6 位代码必须**原样 ASCII**（2026-11-18 七轮审计）。
+#: 这里刻意用 `[0-9]` 而不是 `\d`：Python 的 `\d` 匹配 Unicode 十进制数字，
+#: 全角「６００５１９」会被 `extract_code` 认成代码并写进会话绑定 —— 那是从用户
+#: 没写的书写形式推断标的身份。`(?<!\d)` 保留 Unicode 语义，所以「６00519」这种
+#: 半全角混写也不会被截尾认成 600519。
+_CODE_RE = re.compile(r"(?<!\d)([036489][0-9]{5})(?!\d)")
 
 
 class Mention(BaseModel):
@@ -222,6 +227,10 @@ def _text_target(text: str) -> tuple[str | None, str | None]:
 # ②③ 都只是**客户端对"我在看哪张图"的陈述**，服务端比对一致性后使用，不等于证明了主数据。
 
 _INSTRUMENTS = ("stock", "index")
+
+#: 快照 schema 的 market 恒为 CN; 这些是 A 股（CN 市场）的交易所写法。
+#: 页面声明的 market 不在其中（HK/US…）时，同码的 CN 快照不是同一张图。
+_CN_MARKETS = frozenset({"CN", "SH", "SZ", "BJ"})
 
 
 def _provable_instrument(symbol: str, market: str | None) -> str | None:
@@ -711,6 +720,9 @@ class TurnChartSnapshot:
     note: str | None = None
     turn_symbol: str | None = None
     turn_instrument: str | None = None
+    #: 本轮目标的**市场**（页面声明或代码前缀推出的 SH/SZ/BJ/CN）。快照 schema 的
+    #: market 恒为 CN，所以只有在它属于 A 股市场时这份 CN 快照才可能是同一张图。
+    turn_market: str | None = None
 
 
 def _chart_snapshot_note(ref: dict, instrument_source: str | None = None) -> str:
@@ -820,6 +832,16 @@ def _instrument_conflict_note(symbol: str, target_instrument: str,
     )
 
 
+def _market_conflict_note(symbol: str, snapshot_market: str,
+                          target_market: str) -> str:
+    """同码但市场对不上时的显式说明（快照只支持 CN, 页面却在别的市场）。"""
+    return (
+        f"（本轮随附的图表快照是 {symbol}({snapshot_market}), 而本轮页面声明的市场是 "
+        f"{target_market}: 市场对不上就不是同一张图, 整份快照已丢弃 —— 本轮不提供缠论"
+        "结构, 也不得引用旧摘要或另取新快照。请在该标的所属市场的图表页重新提问。）"
+    )
+
+
 async def prepare_chart_snapshot(db, conv, body, user,
                                  *, turn_target: TurnTarget | None = None) -> TurnChartSnapshot | None:
     """校验本轮 `body.chart_snapshot`；返回本条消息可用的可信来源（None = 没带）。
@@ -834,6 +856,8 @@ async def prepare_chart_snapshot(db, conv, body, user,
         **绝不自行刷新或另取一张新快照冒充"用户这张图"**。
     软丢弃（返回 note：本轮严格缺失，聊天继续）:
       * 标的不一致 —— 本轮请求目标（含封闭语法解析出的代码）与快照标的不是同一只;
+      * 市场不一致 —— 快照 schema 的 market 恒为 CN，而本轮页面声明的市场不在
+        A 股范围（HK/US…）: 同码也不是同一张图（2026-11-18 七轮审计）;
       * 判不出唯一目标（正文不满足封闭追问语法/一句话含多只票/既无显式标的也无绑定 ——
         见 `followup_out_of_protocol`）——
         **fail-closed**: 没有可信归属就不给结构，不许把"无绑定"当成"可信";
@@ -872,6 +896,19 @@ async def prepare_chart_snapshot(db, conv, body, user,
             "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
         ))
 
+    # 市场: 快照 schema 恒为 CN，代码相同也不等于同一张图（600519 在别的市场是另一只）。
+    # 页面声明的市场不在 A 股范围内时整份丢弃 —— 不许把 CN 的 K 线当成 HK/US 那张。
+    target_market = (turn_target.market or "").strip().upper()
+    if target_market and target_market not in _CN_MARKETS:
+        logger.info(
+            "本轮图表快照市场与请求目标不一致 user=%s symbol=%s target_market=%s snapshot_market=%s",
+            getattr(user, "id", None), declared.symbol, target_market, declared.market,
+        )
+        return TurnChartSnapshot(
+            turn_symbol=target or None, turn_market=target_market,
+            note=_market_conflict_note(declared.symbol, declared.market, target_market),
+        )
+
     # 同号个股/指数: 代码相同 ≠ 同一张图。类型只认代码证明/页面声明/视图状态,
     # 一样都没有就丢（不猜），对不上也丢。
     target_instrument = (turn_target.instrument or "").strip().lower()
@@ -893,6 +930,7 @@ async def prepare_chart_snapshot(db, conv, body, user,
         )
         return TurnChartSnapshot(
             turn_symbol=target or None, turn_instrument=target_instrument,
+            turn_market=target_market or None,
             note=_instrument_conflict_note(declared.symbol, target_instrument,
                                            declared.instrument),
         )
@@ -963,7 +1001,8 @@ async def prepare_chart_snapshot(db, conv, body, user,
         ref["as_of_day"],
     )
     return TurnChartSnapshot(ref=ref, note=_chart_snapshot_note(ref, turn_target.instrument_source),
-                             turn_symbol=target, turn_instrument=target_instrument)
+                             turn_symbol=target, turn_instrument=target_instrument,
+                             turn_market=target_market or None)
 
 
 async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChartSnapshot | None:
@@ -1016,6 +1055,8 @@ def recheck_turn_snapshot(snapshot: TurnChartSnapshot | None,
     第三个方向是**类型**（2026-11-17 三轮审计）: 同号个股/指数(000001)只看代码会互相
     顶替, 所以 ``turn_instrument`` 与快照自述 instrument 也必须一致; 判不出类型
     （``turn_instrument`` 为空）说明消息入口就没证成身份 —— 这份快照不该在这里。
+    第四个方向是**市场**（2026-11-18 七轮审计）: ``turn_market`` 必须落在 A 股市场
+    （CN/SH/SZ/BJ），否则/判不出都按漂移丢弃 —— 快照的 K 线只有 CN 一种。
     """
     if not isinstance(snapshot, TurnChartSnapshot) or snapshot.ref is None:
         return snapshot
@@ -1025,15 +1066,24 @@ def recheck_turn_snapshot(snapshot: TurnChartSnapshot | None,
     turn_inst = (snapshot.turn_instrument or "").strip().lower()
     snap_inst = (snapshot.ref.get("instrument") or "").strip().lower()
     instrument_drift = bool(not turn_inst or (snap_inst and turn_inst != snap_inst))
+    # 市场同一维: 快照 schema 恒为 CN, 本轮目标却可能是别的市场（页面声明）。
+    # 判不出（空）也按漂移处理 —— 与类型同口径, 没有证据就不许把 CN 的 K 线当那张图。
+    turn_mkt = (snapshot.turn_market or "").strip().upper()
+    snap_mkt = (snapshot.ref.get("market") or "").strip().upper()
+    market_drift = bool(not turn_mkt or turn_mkt not in _CN_MARKETS
+                        or (snap_mkt and snap_mkt != "CN"))
     if (not symbol or (bound and bound != symbol) or (turn and turn != symbol)
-            or instrument_drift):
+            or instrument_drift or market_drift):
         logger.info(
             "本轮图表快照开流后漂移 bound=%s turn=%s snapshot=%s turn_instrument=%s "
-            "snapshot_instrument=%s", bound, turn, symbol, turn_inst or "-", snap_inst or "-",
+            "snapshot_instrument=%s turn_market=%s snapshot_market=%s",
+            bound, turn, symbol, turn_inst or "-", snap_inst or "-",
+            turn_mkt or "-", snap_mkt or "-",
         )
         return TurnChartSnapshot(turn_symbol=turn or bound or None, note=(
-            f"（本轮随附的图表快照绑定 {symbol}（{snap_inst or '未知类型'}），与本轮请求标的 "
-            f"{turn or bound}（{turn_inst or '类型未证实'}）不一致，"
+            f"（本轮随附的图表快照绑定 {symbol}（{snap_inst or '未知类型'}, "
+            f"市场 {snap_mkt or '未知'}），与本轮请求标的 {turn or bound}"
+            f"（{turn_inst or '类型未证实'}, 市场 {turn_mkt or '未证实'}）不一致，"
             "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
         ))
     return snapshot
