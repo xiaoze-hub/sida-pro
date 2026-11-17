@@ -1,5 +1,10 @@
 ## [未发布]
 
+### fix-CI 二次校准(2026-11-18)
+
+- `test_chat_stream`: settings 在 import 期缓存, 分片里更早的文件导入后 `AUTH_PASSWORD` 不再生效 → 首次请求前直接建/改 owner 行(现算 hash), 不再依赖 bootstrap。
+- `test_judgment_routing`: TQ 名称缓存是进程级, 被更早用例预热后 `first==0` → 断言前 `clear()`。
+
 ### fix-CI 门禁(2026-11-18)
 
 - 新增 `chan_structure` 配方与 `get_chan_structure` 工具后, 四处"清单/计数"型断言同步(配方 14→15、工具 80→81、chat.py 行数护栏 2310→2320); 不改产品行为。
