@@ -444,6 +444,28 @@ function computeMacd(closes: number[]) {
   return { macd, signal, hist }
 }
 
+/**
+ * 画布位图是否与它的 CSS 盒子脱节(位图 < CSS × DPR)。
+ *
+ * 用来识别「位图还没被某次绘制应用」的故障态 —— 典型值 300×150 就是 canvas 元素未被设过
+ * 尺寸时的浏览器默认位图。只看**有真实 CSS 盒子**的画布: 隐藏的轴/离屏画布不参与判定。
+ *
+ * 为什么要判这个: LWC 在尺寸没变时会直接早退, 不给绘制机会; 此时位图可能还是旧的,
+ * 单靠 `resize(w, h, true)` 修不回来(见 syncChartSize 的注释)。
+ */
+function canvasBitmapStale(container: HTMLElement): boolean {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const canvases = container.querySelectorAll('canvas')
+  for (const canvas of Array.from(canvases)) {
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width <= 0.5 || rect.height <= 0.5) continue
+    // 容差 2px: LWC 把尺寸取偶数, DPR 换算再取整会差 1px
+    if (Math.abs(canvas.width - Math.round(rect.width * dpr)) > 2) return true
+    if (Math.abs(canvas.height - Math.round(rect.height * dpr)) > 2) return true
+  }
+  return false
+}
+
 export default function KlineChart(props: {
   symbol: string
   market: string
@@ -618,6 +640,8 @@ export default function KlineChart(props: {
   ) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  /** 尺寸同步重入闸(1px 抖动会改尺寸, 可能再触发观察器回调; 防无限递归) */
+  const sizeSyncRef = useRef(false)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markerPluginRef = useRef<ReturnType<typeof createSeriesMarkers<Time>> | null>(null)
@@ -1071,15 +1095,79 @@ export default function KlineChart(props: {
     darkPoolSeriesRef.current = darkPoolSeries
     publishPanes()
 
-    // 容器尺寸自适应
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (entry && chart) {
-        chart.applyOptions({ width: entry.contentRect.width })
-        publishPanes()
+    // ── 容器尺寸绑定(2026-11-17 修: 画布位图停在 300×150 被 CSS 拉伸 → K 线细小/糊化) ──
+    /**
+     * 把容器实测宽度同步给图表, 并**当场完成一次绘制**。
+     *
+     * 为什么不能只 `applyOptions({ width })`(旧写法): LWC 的画布位图尺寸由 fancy-canvas 的
+     * `device-pixel-content-box` 观察器**建议**(`_suggestNewBitmapSize`), 真正写进
+     * `canvas.width/height` 要等下一次绘制里的 `applySuggestedBitmapSize()`。也就是说
+     * applyOptions 只改元素/CSS 尺寸, **位图要等一个渲染帧**。文档不产生渲染帧时(后台标签页、
+     * 被遮挡的窗口、观察器还没被喂过尺寸)这一步永远不发生, 于是复现到故障态(真实浏览器实测,
+     * 见 tests/browser): `.tv-lightweight-charts` CSS 已 1096×360, 而 pane 画布 bitmap = 300×150
+     * (浏览器默认) → 300×150 被铺满 1096 宽的 CSS 盒 → K 线变细、整幅糊化, 只能重建图表恢复。
+     *
+     * `chart.resize(w, h, forceRepaint=true)` 走同一条尺寸路径但带 forceRepaint: 取消待执行的
+     * rAF, 当场 `_drawImpl`(里面才 applySuggestedBitmapSize) → 位图在同一次任务里跟上。
+     * LWC 的 resize 只重排尺寸, 不动 timeScale 的可视区间(用户缩放/时间范围保持, 见 case4)。
+     */
+    const CHART_HEIGHT = props.height ?? 360
+    /**
+     * @param contentWidth 观察器给的**内容盒**宽度(优先用: 与旧实现 `entry.contentRect.width` 同口径,
+     *                     不含 padding/border)。不给则退回容器 clientWidth(挂载/可见性回调用)。
+     */
+    const syncChartSize = (contentWidth?: number) => {
+      const el = containerRef.current
+      const activeChart = chartRef.current
+      if (!el || !activeChart || sizeSyncRef.current) return
+      const w = Math.round(contentWidth ?? el.clientWidth)
+      if (w <= 0 || CHART_HEIGHT <= 0) return // 隐藏(display:none / 0 宽)时不把 0 灌给图表
+      sizeSyncRef.current = true
+      try {
+        activeChart.resize(w, CHART_HEIGHT, true)
+        if (canvasBitmapStale(el)) {
+          // 尺寸与上一次相同 → LWC 的 resize 直接早退(不绘制), 位图还是旧的(300×150)。
+          // 用一次 1px 的真实尺寸变化把绘制逼出来, 再回到目标尺寸: 两步都同步绘制、同一任务内完成,
+          // 用户看不到中间态; 尺寸本身回到目标值。
+          activeChart.resize(w, Math.max(1, CHART_HEIGHT - 1), true)
+          activeChart.resize(w, CHART_HEIGHT, true)
+        }
+      } finally {
+        sizeSyncRef.current = false
       }
-    })
-    observer.observe(container)
+    }
+
+    // 挂载即同步一次: 图表创建时若容器宽 0(隐藏 keepalive/分时挡板)或文档没有渲染帧,
+    // 上面那次 constructor 内的尺寸应用不会落到位图 —— 这里补一次同步绘制。
+    syncChartSize()
+
+    let observer: ResizeObserver | null = null
+    const onWindowResize = () => {
+      syncChartSize()
+      publishPanes()
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver((entries) => {
+        // 浏览器会把一帧内的多次变化合成**一次回调的多个 entry**: 最后一条才是最新尺寸。
+        // 旧写法取 entries[0](最早那条), 遇到 [0, 1096] 这种批次会把图表停在 0/旧宽度。
+        const entry = entries[entries.length - 1]
+        if (!entry || entry.contentRect.width <= 0) return
+        syncChartSize(entry.contentRect.width)
+        publishPanes()
+      })
+      observer.observe(container)
+    } else {
+      // 无 ResizeObserver(老浏览器/测试环境): 退回窗口 resize —— 至少不会"永远不同步"
+      window.addEventListener('resize', onWindowResize)
+    }
+
+    // 文档恢复可见/从 bfcache 回来时补一次: 隐藏期间不产生渲染帧, 位图不会被应用(见上),
+    // 回到前台立刻补正 —— 不需要用户手动重读或切周期(周K→日K)。
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncChartSize()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('pageshow', onWindowResize)
 
     // 主题跟随: <html> class 变化(dark 切换) → 重读 token 并 applyOptions, 不重建图表
     const themeObserver = new MutationObserver(() => {
@@ -1245,7 +1333,10 @@ export default function KlineChart(props: {
     return () => {
       unregisterCrosshair()
       hostEl?.removeEventListener('dblclick', onDblClick)
-      observer.disconnect()
+      observer?.disconnect()
+      window.removeEventListener('resize', onWindowResize)
+      window.removeEventListener('pageshow', onWindowResize)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       themeObserver.disconnect()
       markerPluginRef.current?.setMarkers([])
       markerPluginRef.current = null

@@ -21,6 +21,8 @@ obsidian-vault/
 node_modules/
 frontend/dist/
 frontend/.vite/
+# 真实浏览器 fixture 的截图产物(tests/browser/run-browser-check.mjs)
+frontend/.browser-shots/
 .playwright-cli/
 output/playwright/
 pnpm-debug.log*

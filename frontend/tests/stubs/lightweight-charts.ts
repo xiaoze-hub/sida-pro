@@ -54,6 +54,8 @@ interface FakeChart {
   addSeries: () => FakeSeries
   removeSeries: () => void
   applyOptions: () => void
+  /** 尺寸同步(2026-11-17): 组件用 resize(w, h, true) 同步应用尺寸 + 同步绘制 */
+  resize: (width: number, height: number, forceRepaint?: boolean) => void
   remove: () => void
   panes: () => Array<{ getHeight: () => number; setStretchFactor: () => void }>
   timeScale: () => {
@@ -74,6 +76,7 @@ export function createChart(): FakeChart {
     addSeries: () => makeSeries(),
     removeSeries: () => {},
     applyOptions: () => {},
+    resize: () => {},
     remove: () => {},
     panes: () => [
       { getHeight: () => 300, setStretchFactor: () => {} },

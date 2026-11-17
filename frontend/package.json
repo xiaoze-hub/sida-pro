@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "ui:check": "node ../scripts/check_ui_rules.mjs && node --test ../scripts/test_ui_design_rules.mjs",
     "test": "vitest run",
+    "browser:check": "node tests/browser/run-browser-check.mjs",
     "preview": "vite preview",
     "media:check": "node ../scripts/check_product_media.mjs"
   },
