@@ -157,6 +157,61 @@ and keep the digest next to anything you store or display.  :meth:`is_stale`
 answers "was this computed before day X" — a stale result must not be presented
 as today's structure.
 
+The adjustment base is one of :data:`ADJUSTMENT_BASES`
+(``none``/``qfq``/``hfq``/``unknown``).  ``unknown`` is a **declared** absence of
+a verifiable base, not a synonym for ``none``: historical samples frequently
+have no trustworthy adjustment metadata, and requiring a concrete base would
+force a caller to fabricate one.  It is an identity label only — the rules never
+read it — so an ``unknown`` result has the same geometry as the others but is a
+*different sample* (:meth:`SegmentSnapshot.same_source` is ``False``), is never
+rewritten to a "real" base, and must not be mixed with one.  Any other value is
+refused: "I do not know" has one spelling, and a made-up base is not it.
+
+Consumer contract: ``confirmed_segments`` is the only safe view
+---------------------------------------------------------------
+A downstream builder (中枢, 走势, multi-level recursion) must read
+:attr:`SegmentSnapshot.confirmed_segments`, never ``segments``.  That property
+returns **only** ``confirmed`` 第67课 第一种情况 lines and refuses ``candidate``
+(its end may still drift) and ``blocked`` (evidence without a publishable line):
+turning a refusal into geometry invents a pivot out of a decision the kernel
+explicitly declined to take.  ``segments`` stays the full audit view, with
+``blocked_segments`` / ``candidate_segments`` naming the rest.
+
+The membership of a segment is its pen span ``pen_start_index..pen_end_index``
+only.  ``evidence_pen_indices`` deliberately reaches past the end into the next
+segment's span, so a consumer that unions evidence into the geometry would count
+those pens **twice**; spans of consecutive confirmed segments are contiguous and
+disjoint, which is what makes the view usable as a partition.  Nothing here
+builds a 中枢 — that consumer is simply given a set it can trust.
+
+Recall limits (documented, not bugs)
+------------------------------------
+These rules are conservative on purpose.  The price of never inventing a line is
+lower recall, and the limits are enumerated here so no caller mistakes them for
+temporary gaps:
+
+* **initial containment blocks the chain.**  When the first characteristic pair
+  is already contained there is no prior trend to read a merge direction from, so
+  the start is reported as a ``blocked`` :class:`SegmentPending` (reason
+  ``characteristic_initial_containment``, ``blocked_at_pen_index`` = the evidence
+  pen) and everything after it is left undecided.  A defaulted direction would be
+  indistinguishable from a real one, so it is refused.
+* **no re-anchoring.**  A blocked or non-overlapping start is never dropped in
+  favour of a later pen.  Re-anchoring is a rule v2 does not implement: it would
+  make the result depend on how much future data the caller happens to hold, i.e.
+  a lookahead that changes the answer.  ``pen_start_index`` is always the chain
+  start, and extending the prefix cannot move it or unlock the refusal.
+* **no future data.**  Only confirmed pens are evidence and ``confirmed_on`` is
+  the latest freeze among the fractal's elements, so a prefix never asserts
+  something a longer prefix disproves.  Endpoint drift belongs to the open tail.
+* **only 第一种情况.**  A gap (第二种情况), 线段破坏后的重划 and 中枢 remain
+  unimplemented; those inputs end in an explicit ``blocked`` state with a reason,
+  not in a guessed continuation.
+
+If a caller needs a line where v2 reports ``blocked``, the honest options are to
+implement the missing case under a new kernel version or to show the refusal —
+not to relax these limits here.
+
 Not implemented (do not claim otherwise)
 ----------------------------------------
 * 第67课 **第二种情况** (gap → wait for the second characteristic sequence).
@@ -182,6 +237,7 @@ from typing import Literal, Sequence
 from src.core.chan_pen import MIN_INDEX_GAP, PEN_KERNEL_VERSION, PenSnapshot
 
 __all__ = [
+    'ADJUSTMENT_BASES',
     'MIN_PENS',
     'SEGMENT_KERNEL_VERSION',
     'CharacteristicElement',
@@ -206,12 +262,27 @@ __all__ = [
 #: pen that is not the fractal's extreme at all); evidence pens/days are reported
 #: separately from the geometric span; and input validation now also enforces the
 #: pen kernel's merged-index gap and a strictly increasing ISO day order.
+#:
+#: Still v2: the ``'unknown'`` adjustment label and
+#: ``SegmentPending.blocked_at_pen_index`` are reporting fixes, not rule changes —
+#: no segment is added, moved or confirmed differently, the labels are never read
+#: by the rules, and the pending fields only stop pointing at the wrong pen.
 SEGMENT_KERNEL_VERSION = 'chan-segment-v2'
 
 #: A segment needs at least three pens, and their ranges must overlap.
 MIN_PENS = 3
 
-_ADJUSTMENT_BASES = ('none', 'qfq', 'hfq')
+#: Accepted 复权 labels on :class:`SegmentBinding`.
+#:
+#: ``'unknown'`` is a first-class label, not a placeholder to be filled in: many
+#: historical samples have no trustworthy adjustment metadata, and forcing a
+#: caller to declare ``none``/``qfq``/``hfq`` would make it assert a fact it does
+#: not have.  The label is *identity only* — the rules never read it — so two
+#: results under different labels are different samples (different source) even
+#: though their segment geometry is identical.  Nothing rewrites ``'unknown'``
+#: into a "real" base; a caller that later verifies the sample publishes a new
+#: result under the verified label.
+ADJUSTMENT_BASES: tuple[str, ...] = ('none', 'qfq', 'hfq', 'unknown')
 
 _OVERLAP = 'pen_endpoint_range_strict'
 _CHARACTERISTIC = 'reverse_pens'
@@ -268,6 +339,11 @@ class SegmentRules:
     Changing any value while still reporting ``chan-segment-v2`` would make one
     version string describe two different rule sets, so unsupported values
     raise.  A new rule needs a new kernel version *and* a replacement module.
+
+    ``adjustment_labels`` is the accepted :class:`SegmentBinding` vocabulary; it
+    is pinned with the rest because an accepted label is part of the contract a
+    consumer relies on.  ``'unknown'`` is a declared non-verification, not a
+    default: dropping it would force callers to fabricate a base.
     """
 
     kernel_version: str = SEGMENT_KERNEL_VERSION
@@ -284,6 +360,7 @@ class SegmentRules:
     equal_extreme: str = _EQUAL_EXTREME
     evidence: str = _EVIDENCE
     input_gate: str = _INPUT_GATE
+    adjustment_labels: tuple[str, ...] = ADJUSTMENT_BASES
 
     def __post_init__(self) -> None:
         expected = {
@@ -301,6 +378,7 @@ class SegmentRules:
             'equal_extreme': _EQUAL_EXTREME,
             'evidence': _EVIDENCE,
             'input_gate': _INPUT_GATE,
+            'adjustment_labels': ADJUSTMENT_BASES,
         }
         for field, value in expected.items():
             actual = getattr(self, field)
@@ -321,6 +399,15 @@ class SegmentBinding:
     pen series, so a mismatch is the caller's to prevent — the kernel only
     refuses inconsistencies it can see (empty symbol, unknown base, an
     ``as_of_day`` that is not the snapshot's own).
+
+    ``adjust`` is one of :data:`ADJUSTMENT_BASES`.  ``'unknown'`` exists so an
+    unverifiable historical sample can be *declared* as unknown instead of being
+    coerced into ``'none'``/``'qfq'``/``'hfq'``: an invented base is a fabricated
+    fact, and it would also make two genuinely different samples compare as one.
+    It is therefore never treated as ``'none'`` — ``same_source`` requires the
+    labels to be equal, and the label is never rewritten.  Anything else (an
+    empty string, ``'adjusted'``, a made-up name) is refused: an unrecognised
+    base is not the same thing as a base we know we do not know.
     """
 
     symbol: str
@@ -330,8 +417,12 @@ class SegmentBinding:
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str) or not self.symbol.strip():
             raise ValueError('symbol must be a non-empty string')
-        if self.adjust not in _ADJUSTMENT_BASES:
-            raise ValueError(f'unsupported adjustment base {self.adjust!r}; v2 knows {_ADJUSTMENT_BASES}')
+        if self.adjust not in ADJUSTMENT_BASES:
+            raise ValueError(
+                f'unsupported adjustment base {self.adjust!r}; v2 knows {ADJUSTMENT_BASES}. '
+                "Declare 'unknown' when the sample's adjustment cannot be verified — "
+                'never guess none/qfq/hfq on its behalf'
+            )
         if self.as_of_day is not None and not isinstance(self.as_of_day, str):
             raise ValueError('as_of_day must be an ISO day string or None')
 
@@ -449,8 +540,22 @@ class SegmentPending:
     Reported instead of a guessed segment: not enough pens, not enough
     *confirmed* pens, a non-overlapping trio, a tainted pen, or a decision point
     that is closer than :data:`MIN_PENS` pens to the chain start.  The position
-    day and price of the would-be start are kept so the decision is auditable,
-    and ``end_pen_index`` records where the rejected end would have been.
+    day and price of the would-be start are kept so the decision is auditable.
+
+    Where the refusal happened is reported in one of two fields, never both:
+
+    * ``end_pen_index`` — the end the refused span *would* have had, for
+      refusals decided on a span (non-overlapping trio, shorter than
+      :data:`MIN_PENS`, an open candidate awaiting its characteristic pen).
+    * ``blocked_at_pen_index`` — the **evidence pen** whose own value made the
+      decision undefined, for refusals that are a decision at a pen rather than
+      about an end (特征序列 initial containment, ambiguous merge direction).
+      There is no would-be end in those cases, so ``end_pen_index`` stays
+      ``None`` and ``pens_used`` is ``0``: claiming the chain start as the
+      "end" would point the reader at the wrong pen and invent a one-pen span.
+
+    ``pen_start_index`` is always the chain start — a refusal never re-anchors
+    the chain forward (see "Recall limits" in the module docstring).
     """
 
     pen_start_index: int
@@ -462,10 +567,33 @@ class SegmentPending:
     confirmed_pens: int
     detail: str = ''
     end_pen_index: int | None = None
+    blocked_at_pen_index: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.blocked_at_pen_index is not None:
+            if self.status != 'blocked':
+                raise ValueError(
+                    f'blocked_at_pen_index={self.blocked_at_pen_index} on a '
+                    f'{self.status!r} pending; only a blocked refusal has a decision pen'
+                )
+            if self.blocked_at_pen_index < self.pen_start_index:
+                raise ValueError(
+                    f'blocked_at_pen_index={self.blocked_at_pen_index} is before the chain '
+                    f'start {self.pen_start_index}; the decision pen belongs to this chain'
+                )
+        if self.end_pen_index is not None and self.end_pen_index < self.pen_start_index:
+            raise ValueError(
+                f'end_pen_index={self.end_pen_index} is before the chain start '
+                f'{self.pen_start_index}'
+            )
 
     @property
     def pens_used(self) -> int:
-        """How many pens the refused span would have covered (0 when unknown)."""
+        """How many pens the refused end span covered (0 when there is no end).
+
+        A decision-pen refusal (``blocked_at_pen_index``) never had a would-be
+        end, so this stays ``0`` — it is not the number of pens examined.
+        """
         if self.end_pen_index is None:
             return 0
         return self.end_pen_index - self.pen_start_index + 1
@@ -502,7 +630,34 @@ class SegmentSnapshot:
 
     @property
     def confirmed_segments(self) -> tuple[Segment, ...]:
-        return tuple(s for s in self.segments if s.status == 'confirmed')
+        """The **consumer contract**: only lines that are frozen 第67课 第一种情况.
+
+        This is the view a downstream structure builder (中枢, 走势, anything
+        higher level) may consume.  It deliberately excludes:
+
+        * ``candidate`` — the tail's end may still drift, so it is not a line yet;
+        * ``blocked`` — evidence exists but no line may be published (a gap case,
+          an undefined 包含处理 direction, a tainted pen).  Using a blocked entry
+          as geometry would invent a pivot out of a refusal.
+
+        Filtering is on ``status`` **and** on ``reason == 'first_case_no_gap'``:
+        the kernel never emits a ``confirmed`` segment for any other reason, so a
+        doctored entry that sets ``status='confirmed'`` but keeps a refusal
+        reason is refused here rather than downstream.  ``segments`` remains the
+        full audit view; ``blocked_segments`` / ``candidate_segments`` expose the
+        rest by name.
+
+        The membership is the pen span ``pen_start_index..pen_end_index`` only:
+        ``evidence_pen_indices`` reaches past a segment's end into the next
+        segment's span, so a caller that unions evidence into the geometry would
+        count those pens twice.  Spans of consecutive confirmed segments are
+        contiguous and disjoint.
+        """
+        return tuple(
+            s
+            for s in self.segments
+            if s.status == 'confirmed' and s.reason == 'first_case_no_gap'
+        )
 
     @property
     def blocked_segments(self) -> tuple[Segment, ...]:
@@ -963,7 +1118,7 @@ def _build_segment(
         confirmed_on=first.start.confirmed_on,
     )
 
-    def pending(status, reason, detail='', end_pen=None) -> SegmentPending:
+    def pending(status, reason, detail='', end_pen=None, blocked_at=None) -> SegmentPending:
         return SegmentPending(
             pen_start_index=start,
             direction=direction,
@@ -974,6 +1129,7 @@ def _build_segment(
             confirmed_pens=sum(1 for p in trio if p.status == 'confirmed'),
             detail=detail,
             end_pen_index=end_pen,
+            blocked_at_pen_index=blocked_at,
         )
 
     if len(trio) < rules.min_pens:
@@ -1012,15 +1168,34 @@ def _build_segment(
         end_pen=None,
         end_status='candidate',
         evidence: tuple[FractalEvidence, ...] = (),
+        blocked_at: int | None = None,
+        detail: str = '',
     ):
         """Publish a segment, or a pending refusal when the span cannot be one.
 
         A span shorter than :data:`MIN_PENS` is never turned into a
         :class:`Segment`: one pen is not a 线段, and an internal exception would
         hide a legal input behind a crash.
+
+        ``blocked_at`` is passed for refusals that are a *decision at an evidence
+        pen* (undefined 包含处理 direction).  When no line can be published
+        (fewer than :data:`MIN_PENS` pens behind the decision) the refusal is a
+        pending that names that pen in ``blocked_at_pen_index`` and claims no
+        span — instead of pointing ``end_pen_index`` at the chain start and
+        claiming a one-pen decision that never happened.  With three or more pens
+        behind it the refusal is still a ``blocked`` :class:`Segment` covering
+        ``start..best_pen``, exactly as before (audit only, never a line).
         """
         pen_index = best_pen if end_pen is None else end_pen
         used = pen_index - start + 1
+        if blocked_at is not None and used < rules.min_pens:
+            return pending(
+                'blocked',
+                reason,
+                detail or f'blocked at pen {blocked_at}',
+                end_pen=None,
+                blocked_at=blocked_at,
+            )
         if used < rules.min_pens:
             verdict = 'blocked' if status == 'blocked' else 'candidate'
             return pending(
@@ -1119,6 +1294,21 @@ def _build_segment(
             )
         )
         if blocked is not None:
+            # The refusal is a decision *at this pen*: report the evidence pen and
+            # the element that contains it, never a would-be end or a pen count.
+            container = normalizer.elements[-2] if len(normalizer.elements) >= 2 else None
+            container_pen = container.first_pen_index if container is not None else pen_index
+            if blocked == 'characteristic_initial_containment':
+                detail = (
+                    f'pen {pen_index} is contained by the first characteristic element '
+                    f'(pen {container_pen}) and no earlier element pair exists, so the '
+                    '包含处理 direction is undefined; nothing is merged or guessed'
+                )
+            else:
+                detail = (
+                    f'pen {pen_index} is contained by pen {container_pen}, but the pair '
+                    'before it defines no direction (equal high/low); nothing is merged'
+                )
             rejections.append(
                 _rejection(
                     pen,
@@ -1128,7 +1318,10 @@ def _build_segment(
                     'by guessing one',
                 )
             )
-            return close('blocked', blocked), tuple(rejections)  # type: ignore[arg-type]
+            return (
+                close('blocked', blocked, blocked_at=pen_index, detail=detail),
+                tuple(rejections),
+            )  # type: ignore[arg-type]
 
         if len(normalizer.elements) <= before:
             continue  # this element was absorbed: defer the fractal check

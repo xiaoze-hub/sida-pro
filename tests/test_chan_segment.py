@@ -34,7 +34,16 @@ These tests pin the hard parts, not a happy path:
   one-pen "line" and never an internal exception;
 * the result is explicitly bound to one source snapshot (symbol / adjustment /
   as-of day / input digest / pen kernel version).  Two results from different
-  sources are never "the same line", and mixing them raises;
+  sources are never "the same line", and mixing them raises; the adjustment base
+  may be declared ``unknown`` (never coerced to ``none``/``qfq``/``hfq``) because
+  an unverifiable 复权 base must not be fabricated;
+* ``confirmed_segments`` is the only consumer-safe view: it returns only frozen
+  第67课 第一种情况 lines, never ``candidate`` or ``blocked``, and its membership is
+  the pen span only — evidence pens reach past the end into the next span, so
+  folding them in would double count;
+* a ``blocked`` pending that is a decision *at an evidence pen* (undefined 包含处理
+  direction) reports that pen in ``blocked_at_pen_index`` with no span, instead of
+  pointing ``end_pen_index`` at the chain start and claiming a one-pen decision;
 * every input inconsistency (non-contiguous pens, non-alternating directions,
   duplicated merged indices, a pen shorter than the pen kernel's merged-index
   gap, days that are not ISO or not strictly increasing, mixed kernel versions, a
@@ -63,6 +72,7 @@ from src.core.chan_pen import (
     build_chan_pen,
 )
 from src.core.chan_segment import (
+    ADJUSTMENT_BASES,
     MIN_PENS,
     SEGMENT_KERNEL_VERSION,
     FractalEvidence,
@@ -329,6 +339,9 @@ def test_rules_are_versioned_and_every_field_is_pinned():
     assert rules.equal_extreme == 'keep_earlier'
     assert rules.evidence == 'confirmed_pens_only'
     assert rules.input_gate == 'iso_days_strict_and_pen_index_gap'
+    # 'unknown' is a declared identity label, part of the v2 rule set: a caller
+    # must be able to say "the 复权 base is not verified" instead of guessing one.
+    assert rules.adjustment_labels == ADJUSTMENT_BASES == ('none', 'qfq', 'hfq', 'unknown')
 
 
 @pytest.mark.parametrize(
@@ -348,6 +361,8 @@ def test_rules_are_versioned_and_every_field_is_pinned():
         ('equal_extreme', 'keep_later'),
         ('evidence', 'candidate_pens_too'),
         ('input_gate', 'trust_caller'),
+        ('adjustment_labels', ('none', 'qfq', 'hfq')),
+        ('adjustment_labels', ('none', 'qfq', 'hfq', 'unknown', 'auto')),
     ],
 )
 def test_unsupported_rule_values_are_refused(field, value):
@@ -451,6 +466,8 @@ def test_results_from_different_sources_are_never_mixed():
         {'symbol': ''},
         {'symbol': '   '},
         {'adjust': 'adjusted'},
+        {'adjust': ''},
+        {'adjust': 'unknown-ish'},
         {'as_of_day': '2026-01-05'},
         {'as_of_day': None},
         {'as_of_day': 20260105},
@@ -460,6 +477,57 @@ def test_invalid_binding_is_refused(overrides):
     pen_snapshot = build_chan_pen(SEGMENT_ORACLE_BARS)
     with pytest.raises(ValueError):
         segment_from_pens(pen_snapshot, binding=binding_for(pen_snapshot, **overrides))
+
+
+def test_unknown_adjustment_is_an_explicit_label_never_a_guess():
+    """F: an unverifiable 复权 base must be *representable*, not invented.
+
+    Historical samples often have no trustworthy adjustment metadata.  Forcing a
+    caller to declare ``none``/``qfq``/``hfq`` makes it fabricate a fact; the
+    kernel therefore accepts the explicit label ``unknown``.  It is an identity
+    label only — same geometry, different source — so it can never be mixed with
+    a claimed base, and nothing ever rewrites it to a "real" one.
+    """
+    pen_snapshot = build_chan_pen(SEGMENT_ORACLE_BARS)
+    as_of = pen_snapshot.as_of_day
+
+    unknown = segment_from_pens(
+        pen_snapshot, binding=SegmentBinding(symbol='000001.SZ', adjust='unknown', as_of_day=as_of)
+    )
+    assert unknown.binding.adjust == 'unknown'  # never silently rewritten
+    assert unknown.segments == build(pen_snapshot).segments  # rules ignore the label
+
+    claimed = {
+        base: segment_from_pens(
+            pen_snapshot, binding=binding_for(pen_snapshot, adjust=base)
+        )
+        for base in ('none', 'qfq', 'hfq')
+    }
+    for base, other in claimed.items():
+        # Same series, same digest, different sample identity.
+        assert unknown.input_digest == other.input_digest
+        assert unknown.same_source(other) is False, base
+        with pytest.raises(ValueError):
+            unknown.assert_same_source(other)
+    # An unknown base is not "the same line" as another unknown from another symbol.
+    other_symbol = segment_from_pens(
+        pen_snapshot, binding=binding_for(pen_snapshot, symbol='600000.SH', adjust='unknown')
+    )
+    assert unknown.same_source(other_symbol) is False
+    # Two reads that both declare unknown *are* the same sample.
+    repeated = segment_from_pens(
+        pen_snapshot, binding=SegmentBinding(symbol='000001.SZ', adjust='unknown', as_of_day=as_of)
+    )
+    assert unknown.same_source(repeated) is True
+
+    assert 'unknown' in SegmentBinding.__doc__
+    assert 'unknown' in mod_doc()
+
+
+def mod_doc():
+    import src.core.chan_segment as segment_module
+
+    return segment_module.__doc__ or ''
 
 
 # ---------------------------------------------------------------------------
@@ -1425,7 +1493,11 @@ def test_initial_containment_cannot_invent_a_merge_direction():
     pending = snap.pending[0]
     assert pending.status == 'blocked'
     assert pending.reason == 'characteristic_initial_containment'
-    assert pending.end_pen_index == 0
+    # No end was ever a candidate: the refusal is a decision at a pen, so the
+    # span fields stay empty and ``blocked_at_pen_index`` names the evidence.
+    assert pending.end_pen_index is None
+    assert pending.pens_used == 0
+    assert pending.blocked_at_pen_index == 3
     assert [r.reason for r in snap.rejections] == ['characteristic_initial_containment']
 
 
@@ -1442,6 +1514,95 @@ def test_initial_containment_is_always_a_pending_start():
         assert snap.pending[0].status == 'blocked'
         assert snap.pending[0].reason == 'characteristic_initial_containment'
         assert snap.pending[0].pens_used < MIN_PENS
+        assert snap.pending[0].blocked_at_pen_index == 3
+
+
+def test_initial_containment_block_names_the_pen_that_triggered_it():
+    """F-A: pivots 2/6/3/6/3.5/5/2.5 — containment first lands on pen 3.
+
+    The first characteristic pair is pen 1 [3,6] / pen 3 [3,6]: pen 3 is
+    contained by pen 1 and no earlier element pair exists, so the merge
+    direction is undefined and the chain blocks.  The report must say *that*:
+    the pending start stays pen 0 (nothing is re-anchored), the decision points
+    at pen 3, and no one-pen span is claimed for a decision that examined four
+    pens.
+    """
+    snap = build(make_pens([2.0, 6.0, 3.0, 6.0, 3.5, 5.0, 2.5]))
+
+    assert snap.segments == ()
+    assert snap.confirmed_segments == ()
+    assert len(snap.pending) == 1
+    pending = snap.pending[0]
+    assert pending.status == 'blocked'
+    assert pending.reason == 'characteristic_initial_containment'
+    assert (pending.pen_start_index, pending.start_price) == (0, 2.0)
+    # The evidence pen, not the chain start: the block happened at pen 3.
+    assert pending.blocked_at_pen_index == 3
+    # No would-be end: the containment never produced a candidate end.
+    assert pending.end_pen_index is None
+    assert pending.pens_used == 0
+    assert 'pen 3' in pending.detail and 'pen 1' in pending.detail
+    # The detail must not claim the decision covered a single pen.
+    assert 'fewer than the 3' not in pending.detail
+    assert [(r.pen_index, r.reason) for r in snap.rejections] == [
+        (2, 'equal_extreme_kept_earlier'),
+        (3, 'characteristic_initial_containment'),
+    ]
+    # The no-short-line rule still holds: nothing was published as a 线段.
+    assert snap.blocked_segments == ()
+    assert snap.candidate_segments == ()
+
+
+def test_a_blocked_pending_cannot_claim_the_chain_start_as_its_decision():
+    """Guard the shape: a blocked pending either has a real span or a decision pen."""
+    snap = build(make_pens([2.0, 6.0, 3.0, 6.0, 3.5, 5.0, 2.5]))
+    pending = snap.pending[0]
+    assert not (
+        pending.end_pen_index == pending.pen_start_index
+        and pending.pens_used == 1
+        and 'fewer than the 3' in pending.detail
+    )
+    with pytest.raises(ValueError):
+        # A decision pen belongs to a blocked refusal, and it is inside the chain.
+        SegmentPending(
+            pen_start_index=0,
+            direction='up',
+            status='candidate',
+            reason='awaiting_three_pens',
+            start_position_day=_pd(0),
+            start_price=2.0,
+            confirmed_pens=1,
+            blocked_at_pen_index=3,
+        )
+    with pytest.raises(ValueError):
+        SegmentPending(
+            pen_start_index=4,
+            direction='up',
+            status='blocked',
+            reason='characteristic_initial_containment',
+            start_position_day=_pd(4),
+            start_price=2.0,
+            confirmed_pens=3,
+            blocked_at_pen_index=1,
+        )
+
+
+def test_initial_containment_block_is_not_re_anchored_as_the_prefix_grows():
+    """F-C: the conservative block is replay-stable — no future data unlocks it.
+
+    v2 has no re-anchoring rule and no second characteristic sequence for this
+    case, so appending pens may never move the chain start forward or turn the
+    refusal into a line.  If this ever fails, recall was bought with lookahead.
+    """
+    base = [2.0, 6.0, 3.0, 6.0, 3.5, 5.0, 2.5]
+    for extra in ([], [4.5], [4.5, 2.0], [4.5, 2.0, 5.5], [4.5, 2.0, 5.5, 2.2, 4.8]):
+        snap = build(make_pens(base + extra))
+        assert snap.segments == (), extra
+        assert len(snap.pending) == 1
+        pending = snap.pending[0]
+        assert (pending.pen_start_index, pending.start_price) == (0, 2.0), extra
+        assert pending.reason == 'characteristic_initial_containment'
+        assert pending.blocked_at_pen_index == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1650,6 +1811,110 @@ def test_snapshot_properties_expose_only_confirmed_and_flagged_segments():
     assert blocked.candidate_segments == ()
 
 
+# ---------------------------------------------------------------------------
+# confirmed_segments: the only consumer-safe view (anti-misuse regressions)
+# ---------------------------------------------------------------------------
+
+def test_confirmed_segments_returns_confirmed_lines_and_nothing_else():
+    """``confirmed_segments`` is the consumer view: winner-takes-confirmed-only.
+
+    A downstream 中枢/higher-level consumer must read this property, never
+    ``segments`` (or the geometry holes from ``blocked`` become pivots, and a
+    drifting ``candidate`` tail becomes a fixed line).  Verified at the source:
+    it filters on status *and* on the one reason that may carry ``confirmed``.
+    """
+    open_tail = build(make_pens(SEGMENT_ZIGZAG))
+    assert [s.status for s in open_tail.segments] == ['confirmed', 'candidate']
+    assert [s.status for s in open_tail.confirmed_segments] == ['confirmed']
+    assert all(s.status == 'confirmed' for s in open_tail.confirmed_segments)
+    assert all(s.reason == 'first_case_no_gap' for s in open_tail.confirmed_segments)
+    # The candidate tail is still reachable through its own property.
+    assert open_tail.open_segment is open_tail.segments[-1]
+
+    blocked = build(make_pens([5.0, 8.0, 5.0, 12.0, 9.0, 11.5, 8.5]))
+    assert blocked.blocked_segments
+    assert blocked.confirmed_segments == ()
+
+
+def test_confirmed_segments_survives_a_spliced_blocked_or_candidate_entry():
+    """Hostile/misused call sites can hand a doctored snapshot downstream.
+
+    The kernel stops the chain at a ``blocked`` refusal and only the tail may be
+    a ``candidate``, so these tuples cannot come out of a real run.  A consumer
+    view that simply forwarded ``segments`` would publish them as lines; the
+    property must refuse them even when the tuple is forged.
+    """
+    open_tail = build(make_pens(SEGMENT_ZIGZAG))
+    confirmed_seg, candidate_seg = open_tail.segments
+    blocked_seg = build(make_pens([5.0, 8.0, 5.0, 12.0, 9.0, 11.5, 8.5])).segments[0]
+    assert (candidate_seg.status, blocked_seg.status) == ('candidate', 'blocked')
+
+    spliced = replace(open_tail, segments=(blocked_seg, confirmed_seg, candidate_seg))
+    assert spliced.confirmed_segments == (confirmed_seg,)
+    assert len(spliced.blocked_segments) == 1 and len(spliced.candidate_segments) == 1
+
+    # A blocked/candidate entry that has been edited to look frozen is still not
+    # a line: ``confirmed`` is only 第67课 第一种情况 without a gap.
+    forged = replace(
+        blocked_seg,
+        status='confirmed',
+        confirmed_on=max(d for d in (blocked_seg.evidence_confirmed_on, _pd(6)) if d),
+    )
+    assert forged.status == 'confirmed' and forged.reason == 'characteristic_gap_case2'
+    doctored = replace(open_tail, segments=(forged, confirmed_seg))
+    assert doctored.confirmed_segments == (confirmed_seg,)
+    # Nothing about the forgery is hidden: the audit view still carries it, and it
+    # is not promoted into either of the honest status buckets.
+    assert doctored.segments[0] is forged
+    assert doctored.blocked_segments == ()
+    assert doctored.candidate_segments == ()
+    # The unedited blocked entry *is* still visible in the audit bucket.
+    assert spliced.blocked_segments == (blocked_seg,)
+
+
+def test_confirmed_segments_is_a_pen_partition_nothing_double_counted():
+    """``pen_start..pen_end`` is the geometry; evidence pens are *not* in it.
+
+    Evidence (the terminal fractal's elements) deliberately reaches past the
+    segment's end, into the next segment's span.  A consumer that unions spans
+    with ``evidence_pen_indices`` would count those pens twice, so the partition
+    is defined on the span only — pinned here on a real two-segment chain.
+    """
+    prices = [10.0, 11.0, 10.0, 12.0, 11.5, 13.0, 12.0, 12.5, 10.5, 12.0, 11.0, 12.0, 11.5, 12.5, 11.0, 12.0, 11.0]
+    snap = build(make_pens(prices))
+    confirmed = snap.confirmed_segments
+    assert len(confirmed) >= 2
+
+    covered = [i for s in confirmed for i in range(s.pen_start_index, s.pen_end_index + 1)]
+    assert covered == list(range(covered[-1] + 1))  # contiguous, no gap, no overlap
+    assert len(covered) == len(set(covered))
+    assert sum(s.pens_used for s in confirmed) == len(covered)
+
+    # At least one evidence pen sits beyond the frozen end, inside the next span:
+    # unioning the two sets would count that pen twice.
+    beyond = [
+        (segment.pen_end_index, index, nxt.pen_start_index, nxt.pen_end_index)
+        for segment, nxt in zip(confirmed, confirmed[1:])
+        for index in segment.evidence_pen_indices
+        if index > segment.pen_end_index and nxt.pen_start_index <= index <= nxt.pen_end_index
+    ]
+    assert beyond, [(s.pen_end_index, s.evidence_pen_indices) for s in confirmed]
+    # ...and the property itself never folds evidence into a span.
+    assert all(max(s.evidence_pen_indices) > s.pen_end_index or s.pen_end_index < s.pen_start_index
+               for s in confirmed)
+
+
+def test_the_confirmed_view_is_documented_as_the_consumer_contract():
+    """The docstrings must say which view is safe, not just which is complete."""
+    import src.core.chan_segment as mod
+
+    doc = mod.__doc__ or ''
+    assert 'confirmed_segments' in doc
+    property_doc = mod.SegmentSnapshot.confirmed_segments.__doc__ or ''
+    assert 'confirmed' in property_doc
+    assert 'candidate' in property_doc and 'blocked' in property_doc
+
+
 def test_the_trend_helper_refuses_to_invent_a_direction():
     """``_trend`` is the one place a merge direction is read; it never defaults."""
     from src.core.chan_segment import CharacteristicElement, _trend
@@ -1672,6 +1937,10 @@ def test_module_scope_is_honest():
     assert 'Not implemented' in doc
     assert '第二种情况' in doc
     assert '中枢' in doc  # explicitly out of scope, not accidentally claimed
+    # F-C: the recall limits of the conservative rules are stated, not implied.
+    assert 'Recall limits' in doc
+    assert 're-anchoring' in doc
+    assert 'characteristic_initial_containment' in doc
     for forbidden in ('zhongshu', 'centre', 'center', 'pivot', 'buy_sell'):
         assert not any(forbidden in name.lower() for name in dir(mod)), forbidden
     assert mod.SEGMENT_KERNEL_VERSION == 'chan-segment-v2'
