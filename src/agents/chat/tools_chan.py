@@ -252,8 +252,9 @@ def _render_operational_centre(centre: dict) -> list[str]:
             f"basis={centre.get('basis')} strictness={centre.get('strictness')} "
             f"status={status} ({_CENTRE_STATUS_TEXT.get(status, '未知状态')}) "
             f"区间 {zone_text} 确认日 {centre.get('confirmed_on') or '未确认'} "
-            f"可见于 {centre.get('visible_on') or '未知'} "
-            f"链路完整={centre.get('chain_complete')}"
+            f"形成时点 {centre.get('visible_on') or '未知'} "
+            f"状态变化于 {centre.get('state_changed_on') or '未知'} "
+            f"结构终结={centre.get('terminal')}"
         ),
         "口径: 这不是「中枢」, 也不是「严格中枢」(第18课定义未实现); 不是买卖点, 不是交易信号",
     ]

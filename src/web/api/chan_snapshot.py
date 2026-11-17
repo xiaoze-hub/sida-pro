@@ -48,7 +48,7 @@ symbol/market/instrument/interval + 每根 bar 的日期与完整 OHLC + 数据�
   证据笔(特征序列)与几何跨度分开给出: 证据笔通常落在终点之后, 两套集合分别计数。
 * 操作口径中枢来自 ``chan_centre_adapter.centre_from_segment_snapshot``: 原样透传
   ``basis='segment_a0'`` / ``strictness='operational_not_strict'`` / ``status`` /
-  ``chain_complete`` / ``issues`` / ``limitations``。它**不是**「中枢」, 更**不是**
+  ``terminal`` / ``issues`` / ``limitations``。它**不是**「中枢」, 更**不是**
   「严格中枢」(第18课定义未实现); ``not_enough_confirmed_segments`` 只表示"还没凑够",
   绝不显示成「无中枢」; ``no_centre`` 才是实测无交集。
 * 线段/中枢与分型/笔同属一次 ``get_klines`` 的同一份快照: 摘要仍只算一次, 不二次取数、
@@ -807,7 +807,10 @@ def build_operational_centre_payload(result: CentreAdapterResult) -> dict:
         "basis": result.basis,
         "strictness": result.strictness,
         "status": result.status,
-        "chain_complete": result.chain_complete,
+        # 适配器 v2 把原来的 chain_complete 改为 terminal, 语义收紧: 只有
+        # 「已得出中枢/无中枢结论且没有任何 issue(无候选尾/无 pending/无 blocked)」才算闭合。
+        # 这里原样透传, 不改名回 chain_complete —— 旧名字会被读成「没有阻断就算完整」。
+        "terminal": result.terminal,
         "limitations": list(result.limitations),
         "as_of_day": source.as_of_day,
         "absence_reason": result.absence_reason,
@@ -818,7 +821,9 @@ def build_operational_centre_payload(result: CentreAdapterResult) -> dict:
         "structure_start_day": None if centre is None else centre.structure_start_day,
         "structure_start_price": None if centre is None else centre.structure_start_price,
         "confirmed_on": None if centre is None else centre.confirmed_on,
+        # 形成时点(第三段确认日)与生命周期状态变化日是两个时钟: 前者不随延伸漂移。
         "visible_on": result.visible_on,
+        "state_changed_on": result.state_changed_on,
         "lifecycle_status": result.lifecycle_status,
         "issues": [
             {

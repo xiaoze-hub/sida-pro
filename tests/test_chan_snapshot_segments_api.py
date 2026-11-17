@@ -13,7 +13,7 @@
      (否则会被读成一条线, 进而被喂成中枢);
   ③ 证据笔(特征序列)与几何跨度分开给出: 证据笔可以落在终点之后, 不许合并计数;
   ④ ``operational_centre`` 原样透传 ``basis='segment_a0'`` /
-     ``strictness='operational_not_strict'`` / ``status`` / ``chain_complete`` /
+     ``strictness='operational_not_strict'`` / ``status`` / ``terminal`` /
      ``issues`` / ``limitations``, 绝不写成「中枢」或「严格中枢」;
      ``not_enough_confirmed_segments`` 不得显示成「无中枢」;
   ⑤ 继续沿用同一摘要复核与 409: 无摘要 / 摘要畸形 / 身份不明确 / as_of 不一致
@@ -264,8 +264,9 @@ def _explicit_pens(prices: list[float]) -> PenSnapshot:
 
 #: 三条已确认线段的区间无严格正宽度交集 (max low 20 > min high 19.58) → no_centre。
 _NO_CENTRE_PIVOTS = [
-    20.0, 20.97, 20.45, 23.95, 20.55, 21.13, 17.52, 19.24, 15.88, 18.96,
-    15.96, 19.58, 18.68, 19.2, 15.41,
+    # v2(合并K线区间)口径下真正无交集: 第一条 [86, 99] 与第三条 [48, 72] 分离。
+    # 旧的枢轴价夹具 [20,20.97,...] 在计入端点 K 线影线后会变成 centre, 不能再当无中枢用例。
+    93, 97, 87, 98, 93, 96, 63, 65, 49, 64, 51, 71, 58, 68, 47,
 ]
 
 
@@ -292,7 +293,7 @@ def test_segments_and_operational_centre_ride_the_same_snapshot(monkeypatch, aut
     assert segments["rules_version"] == segments["kernel_version"]
     assert segments["source_pen_kernel_version"] == PEN_KERNEL_VERSION == "chan-pen-v1"
     assert centre["schema"] == chan.OPERATIONAL_CENTRE_SCHEMA == "sida-chan-operational-centre-v1"
-    assert centre["adapter_version"] == ADAPTER_VERSION == "chan-centre-adapter-v1"
+    assert centre["adapter_version"] == ADAPTER_VERSION == "chan-centre-adapter-v2"
 
     # 三条已确认线段(几何), 第四条被内核 blocked, 候选为空
     assert segments["counts"] == {"confirmed": 3, "candidate": 0, "blocked": 1, "pending": 0, "total": 4}
@@ -320,7 +321,7 @@ def test_segments_and_operational_centre_ride_the_same_snapshot(monkeypatch, aut
     assert centre["input_kind"] == "segment_kernel_confirmed_prefix"
     assert centre["segments_engine"] == SEGMENTS_ENGINE
     assert centre["status"] == "centre"
-    assert centre["chain_complete"] is False  # 第 4 条被 blocked → 结构不完整
+    assert centre["terminal"] is False  # 第 4 条被 blocked → 结构不完整(非终结)
     assert centre["absence_reason"] is None
     assert centre["confirmed_prefix_length"] == 3
     assert centre["total_segments"] == 4
@@ -411,7 +412,7 @@ def test_candidate_tail_is_driftable_and_not_geometry(monkeypatch, auth_headers)
 
     centre = body["operational_centre"]
     assert centre["status"] == "centre"
-    assert centre["chain_complete"] is True  # 候选尾部不是阻断
+    assert centre["terminal"] is False  # 候选尾部仍可漂移 → 不是终结(旧 chain_complete 会误报 True)
     assert [i["reason"] for i in centre["issues"]] == ["candidate_segment_excluded"]
     assert all(i["blocking"] is False for i in centre["issues"])
     assert center_zone(centre) == (20.92, 24.96)
@@ -441,7 +442,7 @@ def test_not_enough_confirmed_segments_is_never_shown_as_no_centre(monkeypatch, 
     assert centre["status"] != "no_centre"
     assert centre["absence_reason"] == "fewer_than_three_confirmed_segments"
     assert centre["zone"] is None and centre["segment_indices"] is None
-    assert centre["chain_complete"] is True
+    assert centre["terminal"] is False  # 不足三段 = 仍在生长, 不是终结
     # 措辞必须显式区分「不够」与「实测无中枢」
     assert "不等于" in centre["status_note"]
     assert "无中枢" in centre["status_note"]
@@ -467,7 +468,7 @@ def test_blocked_before_centre_is_distinct_from_not_enough(monkeypatch, auth_hea
     assert centre["status"] == "blocked_before_centre"
     assert centre["status"] != "not_enough_confirmed_segments"
     assert centre["absence_reason"] == "segment_kernel_blocked"
-    assert centre["chain_complete"] is False
+    assert centre["terminal"] is False
     assert centre["confirmed_prefix_length"] == 0
     assert centre["zone"] is None
     assert [i["reason"] for i in centre["issues"] if i["blocking"]] == [
@@ -612,7 +613,9 @@ def test_measured_absence_is_reported_as_no_centre_not_as_not_enough():
     assert payload["absence_reason"] == "zero_width_intersection"
     assert payload["zone"] is None and payload["confirmed_on"] is None
     assert payload["confirmed_prefix_length"] == 3
-    assert payload["chain_complete"] is True
+    # v2 的 terminal 只在「结论已出且没有任何 issue」时为 True; 这个夹具后面还有候选尾,
+    # 所以结构仍可生长 → 非终结。但 no_centre 本身是**实测**结论, 与「不够」无关。
+    assert payload["terminal"] is False
     assert "实测" in payload["status_note"]
     assert "不是缺少数据" in payload["status_note"]
     # 与"不够"明确分开
@@ -628,7 +631,9 @@ def test_payload_builders_pass_kernel_labels_through_verbatim(monkeypatch, auth_
     assert rebuilt["basis"] == result.basis == BASIS
     assert rebuilt["strictness"] == result.strictness == STRICTNESS
     assert rebuilt["status"] == result.status
-    assert rebuilt["chain_complete"] == result.chain_complete
+    assert rebuilt["terminal"] == result.terminal
+    assert rebuilt["visible_on"] == result.visible_on
+    assert rebuilt["state_changed_on"] == result.state_changed_on
     assert [i["reason"] for i in rebuilt["issues"]] == [i.reason for i in result.issues]
     assert [i["blocking"] for i in rebuilt["issues"]] == [i.blocking for i in result.issues]
     assert list(rebuilt["limitations"]) == list(result.limitations)
