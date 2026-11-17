@@ -12,8 +12,15 @@ parts rather than a happy path:
   the pair instead of guessing;
 * a window tainted by the unknown-direction envelope yields ``blocked``
   structure, never ``confirmed``;
-* every prefix replays exactly, so no confirmed pen may ever change afterwards;
-* the rule set is versioned and unknown rules are refused (fail-closed).
+* a *foreign* snapshot is re-verified rather than trusted: window completeness,
+  strict three-bar geometry, extremum day/price, status vs seal state, and
+  ``confirmed_on`` exactly equal to the right neighbour's ``sealed_on`` — so a
+  caller cannot publish a pen confirmed before the bar that proves it;
+* every prefix replays exactly, so no confirmed pen may ever change afterwards,
+  and a fixture with real (non-empty) confirmed pens is pinned against a
+  hand-derived earliest-confirmation-day oracle;
+* the rule set is versioned and every field — including ``min_index_gap`` — is
+  pinned to v1, so the version string can only ever mean one rule set.
 """
 from datetime import date, timedelta
 
@@ -26,7 +33,7 @@ from src.core.chan_pen import (
     build_chan_pen,
     pen_from_snapshot,
 )
-from src.core.chan_structure import RawBar, build_chan_structure
+from src.core.chan_structure import Fractal, RawBar, build_chan_structure
 
 from dataclasses import replace
 
@@ -99,18 +106,29 @@ def test_rules_are_versioned_and_unknown_rules_are_refused():
     # Fail-closed: a laxer spacing rule is not silently accepted.
     with pytest.raises(ValueError):
         PenRules(min_index_gap=3)
+    # v1 spacing is *pinned*, not a floor: 5 is a different rule and would make a
+    # snapshot labelled chan-pen-v1 mean two things at once.
+    with pytest.raises(ValueError):
+        PenRules(min_index_gap=5)
+    with pytest.raises(ValueError):
+        PenRules(min_index_gap=4, kernel_version='chan-pen-v1.1')
     with pytest.raises(ValueError):
         PenRules(price_gate='anything_goes')
     with pytest.raises(ValueError):
         PenRules(equal_extreme='keep_later')
+    # The default stays exactly v1, so the pin cannot drift silently.
+    assert PenRules(min_index_gap=4) == PenRules()
 
 
 def test_snapshot_carries_the_rule_set_it_was_built_with():
-    rules = PenRules(min_index_gap=5)
+    rules = PenRules()
     snap = build_chan_pen(bars_of(ZIGZAG), rules=rules)
     assert snap.kernel_version == PEN_KERNEL_VERSION
     assert snap.rules == rules
-    assert snap.rules.min_index_gap == 5
+    assert snap.rules.min_index_gap == MIN_INDEX_GAP
+    # A version string alone must not be enough to claim a different rule set.
+    with pytest.raises(ValueError):
+        build_chan_pen(bars_of(ZIGZAG), rules=PenRules(min_index_gap=5))
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +282,117 @@ def test_same_direction_less_extreme_is_rejected_without_moving_anything():
     ]
 
 
+# A drifting endpoint that is frozen much later than it first appears:
+# bottom@1, top@5, the top drifts to the higher high @7, then bottom@12, top@16.
+# Every raw bar is its own merged bar, so merged index == raw index == day offset.
+PEN_DRIFT_ORACLE = [
+    (6.0, 5.0),   # 0
+    (5.0, 4.0),   # 1  bottom, window (0,1,2) sealed by bar 3 -> confirmed 01-04
+    (5.5, 4.5),   # 2
+    (6.5, 5.5),   # 3
+    (7.5, 6.5),   # 4
+    (8.5, 7.5),   # 5  top, window (4,5,6) sealed by bar 7 -> confirmed 01-08
+    (8.2, 7.2),   # 6  a genuine bottom between the two tops — too close to top@5,
+                  #    so the kernel rejects it for spacing instead of re-anchoring
+    (9.5, 8.5),   # 7  higher high: the open top endpoint drifts here
+    (9.0, 8.0),   # 8
+    (8.6, 7.6),   # 9  seals merged bar 8 -> the top@7 fractal is confirmed 01-10
+    (7.5, 6.5),   # 10
+    (6.5, 5.5),   # 11
+    (6.0, 5.0),   # 12 bottom
+    (6.5, 5.5),   # 13
+    (7.0, 6.0),   # 14 seals merged bar 13 -> bottom@12 confirmed 01-15
+    (7.5, 6.5),   # 15
+    (8.5, 7.5),   # 16 top
+    (8.0, 7.0),   # 17
+    (7.9, 6.9),   # 18 seals merged bar 17 -> top@16 confirmed 01-19
+]
+
+
+def test_a_drifting_endpoint_is_frozen_on_its_evidence_day_and_never_before():
+    """Hand oracle for the earliest day each *confirmed* pen may exist.
+
+    The evidence days are read off the raw list, never off the kernel:
+
+    * merged bar 6 is sealed by raw bar 7, so the top@5 fractal is known 01-08;
+    * merged bar 8 is sealed by raw bar 9, so the drifting top@7 is known 01-10;
+    * merged bar 13 is sealed by raw bar 14, so bottom@12 — the first legal
+      opposite leg below the drifting top — is known 01-15.  That is the first
+      day the pen 1 -> 7 can be *confirmed*;
+    * merged bar 17 is sealed by raw bar 18, so top@16 is known 01-19, which is
+      the first day the pen 7 -> 12 can be confirmed.
+
+    So the two confirmed pens are real, drift-stable, and one of them waits five
+    days after its endpoint's own fractal before it may be published.
+    """
+    bars = bars_of(PEN_DRIFT_ORACLE)
+    structure = build_chan_structure(bars)
+    assert [m.index for m in structure.merged_bars] == list(range(len(PEN_DRIFT_ORACLE)))
+    assert [
+        (f.kind, f.position_merged_index, f.status, f.confirmed_on)
+        for f in structure.fractals
+    ] == [
+        ('bottom', 1, 'confirmed', '2026-01-04'),
+        ('top', 5, 'confirmed', '2026-01-08'),
+        ('bottom', 6, 'confirmed', '2026-01-09'),  # too close: spacing-rejected
+        ('top', 7, 'confirmed', '2026-01-10'),
+        ('bottom', 12, 'confirmed', '2026-01-15'),
+        ('top', 16, 'confirmed', '2026-01-19'),
+    ]
+
+    full = build_chan_pen(bars)
+    assert [(p.start.merged_index, p.end.merged_index, p.status, p.confirmed_on) for p in full.pens] == [
+        (1, 7, 'confirmed', '2026-01-15'),
+        (7, 12, 'confirmed', '2026-01-19'),
+        (12, 16, 'candidate', None),
+    ]
+    assert len(full.confirmed_pens) == 2
+
+    # The drift itself stays auditable: the abandoned top@5 is not erased, and the
+    # too-close bottom@6 is reported rather than silently used as a waypoint.
+    drifted = full.endpoints[1]
+    assert (drifted.kind, drifted.merged_index, drifted.price) == ('top', 7, 9.5)
+    assert (drifted.revisions, drifted.drift_days) == (1, ('2026-01-06',))
+    assert [(r.merged_index, r.reason) for r in full.rejections] == [
+        (6, 'spacing'),
+        (5, 'superseded_by_more_extreme'),
+    ]
+
+    oracle = {(1, 7): '2026-01-15', (7, 12): '2026-01-19'}
+
+    # The tempting prefix: the drifting top is already at 9.5 and its own fractal
+    # is confirmed, yet no pen may be published as confirmed.
+    before_evidence = build_chan_pen(bars[:14])
+    assert [(e.merged_index, e.status) for e in before_evidence.endpoints] == [
+        (1, 'confirmed'),
+        (7, 'candidate'),
+    ]
+    assert before_evidence.endpoints[-1].price == 9.5
+    assert [p.confirmed_on for p in before_evidence.pens] == [None]
+
+    first_seen: dict[tuple[int, int], str] = {}
+    ever: set[tuple[int, int]] = set()
+    for end in range(1, len(bars) + 1):
+        day = bars[end - 1].day
+        snap = build_chan_pen(bars[:end])
+        keys = {(p.start.merged_index, p.end.merged_index) for p in snap.confirmed_pens}
+        for key in keys:
+            first_seen.setdefault(key, day)
+        # A confirmed pen is never retracted by a later prefix.
+        assert ever <= keys, f'{sorted(ever - keys)} disappeared on {day}'
+        ever |= keys
+        for key, confirmed_day in oracle.items():
+            if day < confirmed_day:
+                assert key not in keys, (
+                    f'{key} confirmed on {day}, but its evidence is only {confirmed_day}'
+                )
+            else:
+                assert key in keys, (
+                    f'{key} must be confirmed from {confirmed_day} on, missing on {day}'
+                )
+    assert first_seen == oracle
+
+
 # ---------------------------------------------------------------------------
 # spacing / price gate
 # ---------------------------------------------------------------------------
@@ -305,13 +434,17 @@ def test_price_gate_rejects_a_leg_whose_top_is_inside_the_bottom_range():
     """Same gate, exercised through the whole pipeline.
 
     A foreign snapshot may carry ranges this kernel would never merge itself;
-    the rule must still refuse the pair rather than publish it.
+    the rule must still refuse the pair rather than publish it.  The doctor keeps
+    every window a *strict* three-bar shape (bar 1 is still a bottom: its high
+    sits below both neighbours' highs) and only lifts the bottom's range above
+    the top's — the case the gate exists for.
     """
     structure = build_chan_structure(bars_of(ZIGZAG))
     doctored = replace(
         structure,
         merged_bars=tuple(
-            replace(m, high=9.9) if m.index == 1 else m for m in structure.merged_bars
+            replace(m, high={0: 10.0, 1: 9.0, 2: 9.5}[m.index]) if m.index in (0, 1, 2) else m
+            for m in structure.merged_bars
         ),
     )
     snap = pen_from_snapshot(doctored)
@@ -361,29 +494,53 @@ def test_a_lower_low_extends_the_open_bottom_endpoint():
     ]
 
 
+# A snapshot the kernel itself can produce in which a *lower* low may not take the
+# open bottom endpoint over: bar 15's low (3.0) beats bottom@12 (5.0), but bar 15's
+# own high (10.0) is above top@7's high (9.5), so it is not a legal leg partner of
+# the previous endpoint.  Well-formed bars can get here by gapping a wide bar in a
+# downtrend; the extension must be refused, not silently written into the chain.
+EXTENSION_NOT_LEGAL = [
+    (6.0, 5.0),    # 0
+    (5.0, 4.0),    # 1  bottom
+    (5.5, 4.5),    # 2
+    (6.5, 5.5),    # 3
+    (7.5, 6.5),    # 4
+    (8.5, 7.5),    # 5  top
+    (8.2, 7.2),    # 6  bottom, spacing-rejected
+    (9.5, 8.5),    # 7  higher high: the open top drifts here
+    (9.0, 8.0),    # 8
+    (8.6, 7.6),    # 9  seals 8
+    (7.5, 6.5),    # 10
+    (6.5, 5.5),    # 11
+    (6.0, 5.0),    # 12 bottom
+    (6.5, 5.5),    # 13
+    (10.5, 6.0),   # 14 top, spacing-rejected, widens the range
+    (10.0, 3.0),   # 15 bottom: lower low, but its high is above top@7's high
+    (11.0, 3.5),   # 16
+    (11.5, 6.0),   # 17 seals 16 -> bottom@15 confirmed
+]
+
+
 def test_an_extension_that_breaks_the_price_gate_is_refused():
     """Defence in depth: a more extreme low may not take the endpoint over when
     its own range is not a legal partner of the previous endpoint.
 
-    Well-formed merged bars cannot reach this (a descending leg keeps lowering
-    the highs), but a foreign snapshot must not slip through the same gate the
-    leg itself was checked with.
+    The extension gate re-checks exactly what the leg gate checks, so an
+    over-wide bar cannot smuggle a rewrite in: the open endpoint stays at
+    bottom@12 (price 5.0) and the move is reported as ``extension_not_legal``.
     """
-    structure = build_chan_structure(bars_of(LOWER_LOW))
-    doctored = replace(
-        structure,
-        merged_bars=tuple(
-            replace(m, high=20.0) if m.index == 21 else m for m in structure.merged_bars
-        ),
-    )
-    snap = pen_from_snapshot(doctored)
-    # The leg 13 -> 17 passed (8.0 > 4.0); the extension to 21 does not (8.0 > 20.0).
-    assert [e.merged_index for e in snap.endpoints] == [1, 5, 9, 13, 17]
+    snap = build_chan_pen(bars_of(EXTENSION_NOT_LEGAL))
+    assert [e.merged_index for e in snap.endpoints] == [1, 7, 12]
     assert [(r.merged_index, r.reason) for r in snap.rejections] == [
-        (18, 'spacing'),
-        (21, 'extension_not_legal'),
+        (6, 'spacing'),
+        (5, 'superseded_by_more_extreme'),
+        (14, 'spacing'),
+        (15, 'extension_not_legal'),
     ]
-    assert snap.pens[-1].end_price == 4.0
+    assert snap.endpoints[-1].price == 5.0
+    assert snap.endpoints[-1].revisions == 0
+    assert snap.pens[-1].end_price == 5.0
+    assert [p.status for p in snap.pens] == ['confirmed', 'candidate']
 
 
 # ---------------------------------------------------------------------------
@@ -426,11 +583,18 @@ def test_a_pen_spanning_a_blocked_window_is_reported_blocked():
 
     The live kernel only ever produces an envelope at merged bar 0, so the
     span guard is exercised on a hand-built snapshot: the same rules must
-    still refuse to publish a fixed pen across a blocked fractal.
+    still refuse to publish a fixed pen across a blocked fractal.  The taint is
+    built the way the kernel builds it — an ``envelope_only`` neighbour inside
+    the window — instead of relabelling a clean window, so the fixture stays a
+    snapshot the validator accepts.
     """
     structure = build_chan_structure(bars_of(ZIGZAG))
     tainted = replace(
         structure,
+        merged_bars=tuple(
+            replace(m, envelope_only=True) if m.index == 6 else m
+            for m in structure.merged_bars
+        ),
         fractals=tuple(
             replace(f, status='blocked', confirmed_on=None) if f.position_merged_index == 5 else f
             for f in structure.fractals
@@ -496,6 +660,173 @@ def test_inconsistent_snapshots_are_refused_instead_of_guessed():
                 fractals=structure.fractals
                 + (replace(structure.fractals[1], position_merged_index=99),),
             )
+        )
+
+
+def test_a_confirmed_fractal_cannot_be_confirmed_before_its_right_bar_sealed():
+    """A foreign ``confirmed_on`` earlier than the evidence is a look-ahead leak.
+
+    The top@5 window is (4, 5, 6) and merged bar 6 is sealed only on 2026-01-08,
+    the day raw bar 7 arrives.  A snapshot claiming 2026-01-05 must be refused
+    instead of having that claim copied into a pen's ``confirmed_on`` — otherwise
+    a caller can publish a pen "confirmed" before the bar that proves it.
+    """
+    structure = build_chan_structure(bars_of(ZIGZAG))
+    assert structure.merged_bars[6].sealed_on == '2026-01-08'
+    assert structure.merged_bars[10].sealed_on == '2026-01-12'
+
+    # Before the fix both of these were accepted silently: the first leaked into
+    # the start endpoint's ``confirmed_on``, the second into the *pen's* own
+    # ``confirmed_on`` (2026-01-07 for a window that only sealed on 01-12).
+    for index, early in ((5, '2026-01-05'), (5, '2026-01-07'), (9, '2026-01-07')):
+        forged = replace(
+            structure,
+            fractals=tuple(
+                replace(f, confirmed_on=early) if f.position_merged_index == index else f
+                for f in structure.fractals
+            ),
+        )
+        with pytest.raises(ValueError):
+            pen_from_snapshot(forged)
+
+
+def test_a_fractal_label_alone_does_not_make_a_three_bar_shape():
+    """Merged bar 2 sits inside a rising leg: it is neither a top nor a bottom.
+
+    Relabelling it must be refused, otherwise a foreign snapshot can mint a pen
+    out of bars that never formed a fractal.  The claimed ``confirmed_on`` here
+    *is* the real seal day of bar 3, so only the geometry can reject it.
+    """
+    structure = build_chan_structure(bars_of(ZIGZAG))
+    assert structure.merged_bars[3].sealed_on == '2026-01-05'
+
+    fake_top = Fractal(
+        kind='top',
+        status='confirmed',
+        position_merged_index=2,
+        position_day='2026-01-03',
+        position_price=5.5,
+        confirmed_on='2026-01-05',
+    )
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(structure, fractals=(structure.fractals[0], fake_top) + structure.fractals[1:])
+        )
+
+    fake_bottom = replace(fake_top, kind='bottom', position_price=4.5)
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(structure, fractals=(structure.fractals[0], fake_bottom) + structure.fractals[1:])
+        )
+
+
+def test_fractal_windows_must_have_both_neighbours():
+    """A three-bar window needs bars ``i-1`` and ``i+1``, not just ``i``."""
+    structure = build_chan_structure(bars_of(ZIGZAG))
+    merged = structure.merged_bars
+    first = structure.fractals[0]
+
+    forged_head = replace(
+        first,
+        position_merged_index=0,
+        position_price=merged[0].low,
+        position_day=merged[0].low_day,
+        confirmed_on=merged[0].sealed_on,
+    )
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(structure, fractals=(forged_head,) + structure.fractals[1:])
+        )
+
+    tail = structure.fractals[-1]
+    forged_tail = replace(
+        tail,
+        position_merged_index=len(merged) - 1,
+        position_price=merged[-1].low,
+        position_day=merged[-1].low_day,
+        confirmed_on=None,
+    )
+    assert forged_tail.status == 'candidate'
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(structure, fractals=structure.fractals[:-1] + (forged_tail,))
+        )
+
+
+def test_fractal_position_day_must_match_the_merged_extremum_day():
+    structure = build_chan_structure(bars_of(ZIGZAG))
+    assert structure.fractals[1].position_day == '2026-01-06'
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(
+                structure,
+                fractals=tuple(
+                    replace(f, position_day='2026-01-01') if f.position_merged_index == 5 else f
+                    for f in structure.fractals
+                ),
+            )
+        )
+
+
+def test_fractal_status_must_match_the_window_seal_and_taint():
+    """``confirmed`` / ``candidate`` / ``blocked`` are derived, not free labels."""
+    structure = build_chan_structure(bars_of(ZIGZAG))
+    tail = structure.fractals[-1]
+    assert (tail.position_merged_index, tail.status) == (14, 'candidate')
+
+    # The tail's right bar (15) is still open, so nothing may call it confirmed.
+    sealed_claim = structure.fractals[:-1] + (
+        replace(tail, status='confirmed', confirmed_on='2026-01-16'),
+    )
+    with pytest.raises(ValueError):
+        pen_from_snapshot(replace(structure, fractals=sealed_claim))
+
+    # A window whose right bar *is* sealed is final: it cannot stay a candidate.
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(
+                structure,
+                fractals=tuple(
+                    replace(f, status='candidate', confirmed_on=None)
+                    if f.position_merged_index == 5
+                    else f
+                    for f in structure.fractals
+                ),
+            )
+        )
+
+    # ... and it cannot be called blocked without an unknown-direction bar.
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(
+                structure,
+                fractals=tuple(
+                    replace(f, status='blocked', confirmed_on=None)
+                    if f.position_merged_index == 5
+                    else f
+                    for f in structure.fractals
+                ),
+            )
+        )
+
+
+def test_snapshot_bar_series_and_tail_seal_are_reverified():
+    """Merged bars must be ordered, and only the last one may still be open."""
+    structure = build_chan_structure(bars_of(ZIGZAG))
+    merged = structure.merged_bars
+    assert merged[-1].sealed_on is None
+
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(
+                structure,
+                merged_bars=merged[:-1] + (replace(merged[-1], sealed_on='2026-01-16'),),
+            )
+        )
+    # Duplicating a source index means the series is no longer a prefix replay.
+    with pytest.raises(ValueError):
+        pen_from_snapshot(
+            replace(structure, merged_bars=(replace(merged[0], index=1),) + merged[1:])
         )
 
 

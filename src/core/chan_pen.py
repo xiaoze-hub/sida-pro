@@ -13,9 +13,12 @@ are required; any failure is reported as a :class:`PenRejection` and never
 guessed around:
 
 1. **Alternation** — the endpoints are a top and a bottom.
-2. **Spacing** — the two three-bar fractals must share no bar, i.e. their
-   centre merged indices differ by at least ``MIN_INDEX_GAP = 4``
-   (``j - i >= 4`` puts at least one merged bar in neither window).
+2. **Spacing** — the two three-bar windows must be separated by a merged bar
+   that belongs to *neither* window: ``j - i >= MIN_INDEX_GAP = 4``.  Sharing no
+   bar at all only needs ``j - i >= 3``; v1 is deliberately one bar stricter, so
+   the leg is never a mere abutting of windows.  ``MIN_INDEX_GAP`` is **pinned**
+   by :class:`PenRules` — it is not a tunable floor, because a snapshot labelled
+   ``chan-pen-v1`` must never mean two different rule sets.
 3. **Price** — the top merged bar's range must be at least partly *above* the
    bottom merged bar's range: ``top.high > bottom.high``.  Equality is not
    "above", so it fails closed.
@@ -42,16 +45,23 @@ open (``candidate``) endpoint at the tail of the alternating chain:
   may not move a position.
 * **Same direction, less extreme** — rejected (``not_more_extreme``).
 
-Confirmation
-------------
+Confirmation — why, and exactly when
+------------------------------------
 A reverse fractal alone never confirms anything: a top stays revisable while
 price can still make a higher high, which is exactly the case where a naive
-implementation publishes a pen and then retracts it.  An endpoint is frozen
-(``status='confirmed'``) only when the chain grows a **valid opposite leg** from
-it, because from then on any new extreme is a *new* pen rather than an extension
-of this one.  ``confirmed_on`` is the day that evidence became known (the day
-the opposite fractal's own right merged bar was sealed), never the extremum's
-own day.  So:
+implementation publishes a pen and then retracts it.
+
+An endpoint freezes because the chain **grew a valid opposite leg out of it**,
+and that leg's evidence is the one and only clock: the opposite fractal's
+three-bar window becomes final only when its right merged bar is sealed.  So
+``confirmed_on`` is exactly ``merged_bars[end_index + 1].sealed_on`` — the day
+the opposite fractal became known — never the extremum's own day and never an
+earlier day a caller might prefer.  Freezing is one-way inside a replay: once a
+valid leg exists below a top, any later same-direction extreme starts the *next*
+pen instead of extending this one, which is why a confirmed pen can never be
+rewritten, moved or retracted by a later prefix.
+
+Consequences:
 
 * the last endpoint of the chain is always ``candidate`` and its price may move;
 * every earlier endpoint is ``confirmed`` and immutable, therefore every pen but
@@ -61,16 +71,41 @@ own day.  So:
 
 Fail-closed behaviour
 ---------------------
-* Fractals the structure kernel reports as ``blocked`` (unknown-direction
-  envelope) are never endpoints; they are recorded and their merged index joins
-  ``taint_indices``.  Any pen spanning a tainted index is reported ``blocked``
-  with ``confirmed_on=None`` — readable for audit, never presented as fixed.
-* Unconfirmed (``candidate``) fractals never become structure: they can still
-  disappear from the next prefix.
-* Unknown/inconsistent inputs raise ``ValueError`` instead of being repaired:
-  unsupported rule versions, fractals out of merged-index order, a confirmed
-  fractal without a confirmation day, a confirmation day after ``as_of_day``,
-  or a fractal price that does not match the merged bar it points at.
+``pen_from_snapshot`` accepts snapshots produced *elsewhere*, so nothing is
+trusted: every fact is re-verified and a mismatch raises ``ValueError`` instead
+of being repaired.  For each fractal the kernel re-checks
+
+* merged-index order, and that the centre has both neighbours
+  (``1 <= i <= len(merged_bars) - 2``);
+* the strict three-bar top/bottom geometry itself, so a label alone cannot mint
+  a pen out of bars that never formed a fractal;
+* ``position_day`` **and** ``position_price`` against the merged bar's own
+  extremum;
+* that no bar of the window is an ``envelope_only`` (unknown-direction) bar when
+  the fractal claims ``confirmed``;
+* ``confirmed_on == merged_bars[i + 1].sealed_on`` and
+  ``<= as_of_day`` — a confirmation may never precede the bar that proves it;
+* that ``candidate`` really has an open right bar, and ``blocked`` really has an
+  unknown-direction bar: the status is derived, not a free label.
+
+The snapshot's merged bars are re-verified too: their source ``index`` must be
+strictly increasing, and only the tail bar may be open (``sealed_on is None``).
+A sealed tail would describe structure past ``as_of_day``.
+
+Fractals the structure kernel reports as ``blocked`` are never endpoints; they
+are recorded and their merged index joins ``taint_indices``.  Any pen spanning a
+tainted index is reported ``blocked`` with ``confirmed_on=None`` — readable for
+audit, never presented as fixed.  Unconfirmed (``candidate``) fractals never
+become structure: they can still disappear from the next prefix.
+
+Consumer contract (API responses, frontend)
+-------------------------------------------
+Anything that stores or displays this output must keep the **input snapshot
+digest** next to it — at minimum ``as_of_day`` plus the merged-bar series that
+produced the pens — and must never mix results computed from different price
+adjustment bases (不复权 / 前复权 / 后复权).  The same merged index means a
+different bar under another basis, so a "matching" pen can describe different
+prices; nothing in this module can detect that, the caller owns it.
 
 Not implemented (do not claim otherwise)
 ----------------------------------------
@@ -109,8 +144,9 @@ __all__ = [
 #: Version of the pen rule set.  Any behaviour change needs a new version.
 PEN_KERNEL_VERSION = 'chan-pen-v1'
 
-#: Minimum merged-index distance between the two fractal centres: with a
-#: distance of 4 at least one merged bar belongs to neither three-bar window.
+#: Minimum merged-index distance between the two fractal centres.  Pinned by
+#: :class:`PenRules`: at 4 at least one merged bar belongs to neither three-bar
+#: window (sharing no bar would only need 3), and v1 is exactly this value.
 MIN_INDEX_GAP = 4
 
 _PRICE_GATE = 'top_high_above_bottom_high'
@@ -132,7 +168,14 @@ _RejectReason = Literal[
 
 @dataclass(frozen=True)
 class PenRules:
-    """Versioned rule set.  Unsupported values raise instead of being ignored."""
+    """Versioned rule set.  Unsupported values raise instead of being ignored.
+
+    Every field is *pinned* to what v1 means.  ``min_index_gap`` in particular
+    is not a tunable floor: accepting e.g. 5 while still reporting
+    ``kernel_version='chan-pen-v1'`` would make the same version string describe
+    two different rule sets, so anything but the v1 value is refused.  A new
+    rule needs a new kernel version *and* to replace this module.
+    """
 
     kernel_version: str = PEN_KERNEL_VERSION
     min_index_gap: int = MIN_INDEX_GAP
@@ -145,10 +188,11 @@ class PenRules:
                 f'unsupported pen kernel version {self.kernel_version!r}; '
                 f'this module implements {PEN_KERNEL_VERSION!r}'
             )
-        if self.min_index_gap < MIN_INDEX_GAP:
+        if self.min_index_gap != MIN_INDEX_GAP:
             raise ValueError(
-                f'min_index_gap {self.min_index_gap} is laxer than the v1 rule '
-                f'({MIN_INDEX_GAP}); a different rule needs a new kernel version'
+                f'min_index_gap {self.min_index_gap} is not the v1 rule '
+                f'({MIN_INDEX_GAP}); the gap is pinned per kernel version, so a '
+                'different value needs a new kernel version'
             )
         if self.price_gate != _PRICE_GATE:
             raise ValueError(f'unsupported price_gate {self.price_gate!r}')
@@ -279,9 +323,161 @@ def pen_price_gate_ok(*, top_high: float, bottom_high: float) -> bool:
     return top_high > bottom_high
 
 
+def _validate_merged_bars(merged: Sequence[MergedBar]) -> None:
+    """Merged bars must be ordered source bars and only the tail may be open.
+
+    ``MergedBar.index`` is the *raw* bar that created the merged bar, so it is
+    strictly increasing across the series (a merged bar absorbs several raw
+    bars), while ``Fractal.position_merged_index`` counts positions in this
+    tuple.  Both are checked against the tuple they belong to.
+    """
+    tail = len(merged) - 1
+    previous_source = -1
+    for position, bar in enumerate(merged):
+        if bar.index <= previous_source:
+            raise ValueError(
+                f'merged bar at position {position} has source index {bar.index}, '
+                'which is not strictly after the previous merged bar; the series '
+                'is out of order or duplicated'
+            )
+        previous_source = bar.index
+        if position < tail and bar.sealed_on is None:
+            raise ValueError(
+                f'merged bar {position} is not the tail but has no sealed_on; '
+                'only the last supplied bar may still be forming'
+            )
+        if position == tail and bar.sealed_on is not None:
+            raise ValueError(
+                f'the tail merged bar is sealed on {bar.sealed_on}, which would '
+                'describe structure after as_of_day; the tail must stay open'
+            )
+
+
+def _validate_fractal(
+    snapshot: ChanSnapshot, merged: Sequence[MergedBar], fractal: Fractal
+) -> None:
+    """Re-derive one fractal from the bars instead of trusting its labels.
+
+    Everything a pen would later rely on is checked here: window completeness,
+    strict geometry, extremum day/price, the unknown-direction taint, and the
+    exact confirmation day (the right neighbour's ``sealed_on``).  A failure
+    raises rather than being repaired, because a foreign snapshot that lies
+    about any of it would leak into published pens.
+    """
+    index = fractal.position_merged_index
+    last_centre = len(merged) - 2
+    if not 1 <= index <= last_centre:
+        raise ValueError(
+            f'fractal at merged index {index} needs both neighbouring merged bars; '
+            f'valid centres are 1..{last_centre}'
+        )
+
+    left, middle, right = merged[index - 1], merged[index], merged[index + 1]
+    if fractal.kind == 'top':
+        expected_price, expected_day = middle.high, middle.high_day
+        shaped = (
+            middle.high > left.high
+            and middle.low > left.low
+            and middle.high > right.high
+            and middle.low > right.low
+        )
+    elif fractal.kind == 'bottom':
+        expected_price, expected_day = middle.low, middle.low_day
+        shaped = (
+            middle.low < left.low
+            and middle.high < left.high
+            and middle.low < right.low
+            and middle.high < right.high
+        )
+    else:
+        raise ValueError(f'unknown fractal kind {fractal.kind!r}')
+
+    if not shaped:
+        raise ValueError(
+            f'{fractal.kind} fractal at merged index {index} is not a strict '
+            f'three-bar {fractal.kind} of merged bars '
+            f'{index - 1}, {index}, {index + 1}'
+        )
+    if fractal.position_price != expected_price:
+        raise ValueError(
+            f'fractal at merged index {index} has price {fractal.position_price} '
+            f'but the merged bar extremum is {expected_price}'
+        )
+    if fractal.position_day != expected_day:
+        raise ValueError(
+            f'fractal at merged index {index} has position day '
+            f'{fractal.position_day} but the merged bar extremum day is '
+            f'{expected_day}'
+        )
+
+    tainted = left.envelope_only or middle.envelope_only or right.envelope_only
+    sealed_on = right.sealed_on
+
+    if fractal.status == 'confirmed':
+        if fractal.confirmed_on is None:
+            raise ValueError(
+                f'fractal at merged index {index} is confirmed without a confirmation day'
+            )
+        if tainted:
+            raise ValueError(
+                f'fractal at merged index {index} cannot be confirmed: its window '
+                'contains an unknown-direction envelope bar'
+            )
+        if sealed_on is None:
+            raise ValueError(
+                f'fractal at merged index {index} cannot be confirmed: its right '
+                'merged bar is the still-open tail'
+            )
+        if fractal.confirmed_on != sealed_on:
+            raise ValueError(
+                f'fractal at merged index {index} claims confirmation on '
+                f'{fractal.confirmed_on} but its right merged bar was sealed on '
+                f'{sealed_on}; a confirmation may never precede its evidence'
+            )
+        if fractal.confirmed_on <= fractal.position_day:
+            raise ValueError(
+                f'fractal at merged index {index} is confirmed on '
+                f'{fractal.confirmed_on}, not after its own position day '
+                f'{fractal.position_day}'
+            )
+        if snapshot.as_of_day is None or fractal.confirmed_on > snapshot.as_of_day:
+            raise ValueError(
+                f'fractal at merged index {index} is confirmed after as_of_day'
+            )
+    elif fractal.status == 'candidate':
+        if fractal.confirmed_on is not None:
+            raise ValueError(
+                f'candidate fractal at merged index {index} must not have a confirmation day'
+            )
+        if tainted:
+            raise ValueError(
+                f'fractal at merged index {index} touches an unknown-direction '
+                'envelope, so it must be blocked, not candidate'
+            )
+        if sealed_on is not None:
+            raise ValueError(
+                f'fractal at merged index {index} is a candidate although its right '
+                f'merged bar was sealed on {sealed_on}; a final window is confirmed '
+                'or blocked, never a candidate'
+            )
+    elif fractal.status == 'blocked':
+        if fractal.confirmed_on is not None:
+            raise ValueError(
+                f'blocked fractal at merged index {index} must not have a confirmation day'
+            )
+        if not tainted:
+            raise ValueError(
+                f'fractal at merged index {index} is blocked although no bar of its '
+                'window is an unknown-direction envelope'
+            )
+    else:  # pragma: no cover - structure kernel only emits the three states
+        raise ValueError(f'unknown fractal status {fractal.status!r}')
+
+
 def _validate_snapshot(snapshot: ChanSnapshot) -> None:
     """Refuse an inconsistent structure snapshot instead of repairing it."""
     merged = snapshot.merged_bars
+    _validate_merged_bars(merged)
     previous = -1
     for fractal in snapshot.fractals:
         index = fractal.position_merged_index
@@ -290,36 +486,7 @@ def _validate_snapshot(snapshot: ChanSnapshot) -> None:
                 'fractals must be ordered by strictly increasing merged index'
             )
         previous = index
-        if not 0 <= index < len(merged):
-            raise ValueError(f'fractal merged index {index} is outside the merged bars')
-        bar = merged[index]
-        expected = bar.high if fractal.kind == 'top' else bar.low
-        if fractal.position_price != expected:
-            raise ValueError(
-                f'fractal at merged index {index} has price {fractal.position_price} '
-                f'but the merged bar extremum is {expected}'
-            )
-        if fractal.status == 'confirmed':
-            if fractal.confirmed_on is None:
-                raise ValueError(
-                    f'fractal at merged index {index} is confirmed without a confirmation day'
-                )
-            if snapshot.as_of_day is None or fractal.confirmed_on > snapshot.as_of_day:
-                raise ValueError(
-                    f'fractal at merged index {index} is confirmed after as_of_day'
-                )
-        elif fractal.status == 'candidate':
-            if fractal.confirmed_on is not None:
-                raise ValueError(
-                    f'candidate fractal at merged index {index} must not have a confirmation day'
-                )
-        elif fractal.status == 'blocked':
-            if fractal.confirmed_on is not None:
-                raise ValueError(
-                    f'blocked fractal at merged index {index} must not have a confirmation day'
-                )
-        else:  # pragma: no cover - structure kernel only emits the three states
-            raise ValueError(f'unknown fractal status {fractal.status!r}')
+        _validate_fractal(snapshot, merged, fractal)
 
 
 def _endpoint(fractal: Fractal, bar: MergedBar) -> PenEndpoint:
