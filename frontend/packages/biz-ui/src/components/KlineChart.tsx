@@ -136,21 +136,51 @@ export type { KlineRangeStats, RangeBar } from '../lib/range-stats'
 import {
   auditBarsTransform,
   buildChanMarkers,
+  buildChanPenSegments,
   CHAN_STRUCTURE_TIMEOUT_MS,
+  chanColorWithAlpha,
   chanStatusText,
   normalizeChanStructure,
   pickChanSnapshot,
   startChanRequest,
   type ChanBarsAudit,
+  type ChanChartSnapshot,
   type ChanLayerView,
   type ChanMarkerSpec,
+  type ChanPenColors,
+  type ChanPenSegment,
+  type ChanPenSkip,
   type ChanSnapshotPick,
 } from '../lib/chan-layer'
+
+// 缠论笔(2026-11-17) 的线色: 单一色相区分"结构走向"而不是涨跌/买卖;
+// 待确认用同色压淡 + 虚线(与分型记号"已确认实心/待确认空心"同一套视觉语言)。
+const CHAN_PEN_COLORS: ChanPenColors = {
+  confirmed: '#6d28d9',
+  candidate: chanColorWithAlpha('#6d28d9', 0.6),
+}
+
+/**
+ * 图表时间 → 'YYYY-MM-DD'（与 `dayKey` 同源: UTC 年月日, 不做时区换算）。
+ *
+ * 笔的端点定位要拿"服务端的日期"跟"图上真有哪几根 K 线"逐个对, 所以必须能从
+ * 图表时间反查回日期字符串；用 `dayKey` 已算好的 UTC 年月日拼回去即可, 不另造一套解析。
+ */
+function isoDayFromChartTime(t: Time): string | null {
+  const k = dayKey(t)
+  if (k === null) return null
+  const y = Math.floor(k / 10000)
+  const m = Math.floor((k % 10000) / 100)
+  const d = k % 100
+  return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
 
 // 重导出共享模块的类型/纯函数 —— 既有调用方(`import { fundBarPoint } from '.../KlineChart'`)
 // 与既有测试导入路径零改动; 真源统一在 `../lib/fund-bar`。
 export type { FundFlowBar, KlineInterval } from '../lib/fund-bar'
 export { fundBarPoint, fundBarTime, capitalBarRows } from '../lib/fund-bar'
+// 消费方(数智参谋)可以直接从组件模块拿 `onChanSnapshotChange` 的载荷类型, 不必再记 lib 路径。
+export type { ChanChartSnapshot } from '../lib/chan-layer'
 
 // 与 InteractiveKline.tsx 顶层类型对齐, 暂时不耦合 (改 one-side 即可)
 export interface KlineItem {
@@ -520,6 +550,28 @@ export default function KlineChart(props: {
   layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean; /** 纯时间点标注(2026-10-29) —— 默认开; 独立于 L4 事件层(两者数据源/口径不同) */ annotation?: boolean; /** 缠论分型(2026-11-17) —— **默认关**(需显式 true 才开; 父不传 = 组件自持本地开关) */ chan?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
+  /**
+   * 缠论快照对外广播（2026-11-17，供**数智参谋**等外部工作流绑定自己的结构/笔查询）。
+   *
+   * 载荷 = 「当前这张图**真正落图且可校验**的那份日 K 快照」：
+   * `{ symbol, market, instrument: 'stock'|'index', interval: '1d', days, digest }`。
+   * `digest` 就是图表响应里的 `chan_snapshot.digest`，可原样回传
+   * `GET /klines/{symbol}/chan-structure?...&snapshot=<digest>`。
+   *
+   * 事件语义（与 `lib/chan-layer` 的 `ChanChartSnapshot` 注释同源）：
+   *  - 非 null 只在这几个条件**同时**成立时给出：K 线已落图、摘要完整可校验、
+   *    原始 K 线未被前端渲染链改写（`audit.ok`）、身份/周期/天数与当前 props 一致；
+   *  - 身份字段只用已核实事实（`instrument` 来自响应 `is_index` 标记；拿不到就不给信号，
+   *    **绝不按代码猜**个股/指数）；
+   *  - 切标的/周期/天数、K 线加载失败、重读开始、组件卸载、服务端说"图已变(409)"→ `null`；
+   *  - 结构/笔请求超时或 5xx **不**改变信号（它描述的是图绑定哪份快照，不是结构有没有画出来）；
+   *  - 值未变**不重复**回调（幂等；按 `symbol|market|instrument|interval|days|digest` 去重）；
+   *    首次挂载必定回调一次（还没有可校验的图时为 `null`），消费方以最后一次回调为准；
+   *  - 不发消息、不弹提示、不产生任何网络请求。
+   *
+   * 未传 = 不做任何广播（零开销）。
+   */
+  onChanSnapshotChange?: (snapshot: ChanChartSnapshot | null) => void
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
   onRangeSelect?: (range: { from: string; to: string } | null) => void
   /**
@@ -777,6 +829,22 @@ export default function KlineChart(props: {
    * 与 `AbortController` 双保险: abort 治"还没回来的", 序列号治"已经回来但已过期"。
    */
   const chanSeqRef = useRef(0)
+  /**
+   * 被服务端判为"图已经变了"的那份摘要(409 / 回传摘要与本次请求不一致)。
+   *
+   * 存在意义: `onChanSnapshotChange` 对外广播的是"这张图绑定了哪份快照"。一旦服务端用
+   * 同一份取数重算出了**不同的摘要**, 那份旧摘要就已被证明过期 —— 继续广播它, 等于让
+   * 消费方(数智参谋)拿着一个已知失效的绑定去请求结构。所以这里记下它并让信号转 null,
+   * 直到下一次主数据落图产出新摘要为止。
+   */
+  const [chanStaleDigest, setChanStaleDigest] = useState<string | null>(null)
+  /**
+   * 笔的 line series(每条笔一条 Lightweight Charts 原生 LineSeries)。
+   *
+   * 独立 ref 的意义: 笔是**动态条数**的 series, 必须能和均线/MACD/趋势线分开清理 ——
+   * 关图层、切股/周期、失败/409、旧请求竞态、unmount 都只删自己这一批, 不能连别人的线一起删。
+   */
+  const penSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
 
   /**
    * 「重读图表」动作(2026-11-17 复审修复): 409 / 超时 / K 线加载失败时, 界面上必须有一个
@@ -1221,6 +1289,8 @@ export default function KlineChart(props: {
       // 直到本响应真正带回新摘要才重新允许请求结构。
       chanSeqRef.current += 1
       setChanBinding(null)
+      // 旧摘要的"过期"结论也随新一轮取数作废(新响应会给出新摘要)
+      setChanStaleDigest(null)
       try {
         const days = props.initialDays ?? 120
         // 请求层闸门(见 `daySafeInterval` 头注): 任何路径都不出分钟 K 请求 ——
@@ -1490,6 +1560,8 @@ export default function KlineChart(props: {
           // 409 = 服务端用同一份取数重算摘要后发现"图已经变了"。这是**诚实结果**:
           // 不能拿旧结构继续画, 也不能悄悄自动重试(会把"图变了"变成静默打转)。
           // 给用户一个明确动作: 重读图表主数据 → 拿到新摘要 → 再请求一次。
+          // 同时把这份摘要标记为过期: 对外广播要转 null(别让消费方拿着失效绑定去查)。
+          setChanStaleDigest(digest)
           setChanView({ phase: 'snapshot-mismatch', detail: `图表快照已变化(409): ${detail}` })
           return
         }
@@ -1511,6 +1583,8 @@ export default function KlineChart(props: {
       }
       // 回验: 结构必须声明"算的就是本次请求的那份摘要/那个标的"
       if (structure.snapshotDigest !== digest) {
+        // 服务端给出的摘要与本次请求的不是同一份 = 这份摘要已不能代表当前画面
+        setChanStaleDigest(digest)
         setChanView({
           phase: 'snapshot-mismatch',
           detail: '结构响应回传的快照摘要与本次请求不一致',
@@ -1538,6 +1612,63 @@ export default function KlineChart(props: {
       req.cancel()
     }
   }, [showChanLayer, chanInstrument, chanBinding, interval, props.symbol, props.market, chanBarsFailure])
+
+  // ── 快照广播(2026-11-17): 把"这张图绑定哪份快照"交给外部(数智参谋) ──────────
+  /**
+   * 当前可广播的快照（语义见 `props.onChanSnapshotChange`）。
+   *
+   * 与缠论图层的开关**无关**：外部工作流只用这段摘要去绑定自己的结构/笔查询，
+   * 不需要先打开图例（打开图层只是"把结构画出来"）。但也绝不**推测**：
+   *  - `chanBinding` 必须存在，且代次与当前 `klGenRef` 相等（= 图上这批蜡烛的摘要）；
+   *  - 身份三者（symbol/market/instrument）必须与当前 props 一致（切股瞬间的缝在这里堵掉）；
+   *  - 摘要必须完整可校验（`pickChanSnapshot.ok` + 64 位 hex）；
+   *  - 原始 K 线未被前端渲染链改写（`audit.ok`）；
+   *  - 摘要未被服务端判为"已变化"(409 / 回传不一致)。
+   */
+  const chanSnapshotSignal = useMemo<ChanChartSnapshot | null>(() => {
+    if (!chanBinding) return null
+    if (!chanInstrument || chanBinding.instrument !== chanInstrument) return null
+    if (chanBinding.symbol !== props.symbol || chanBinding.market !== props.market) return null
+    if (chanBinding.generation !== klGenRef.current) return null
+    if (chanBinding.interval !== '1d') return null
+    if (!chanBinding.audit.ok) return null
+    const digest = chanBinding.snapshot.digest
+    if (!chanBinding.snapshot.ok || !digest) return null
+    if (chanStaleDigest !== null && chanStaleDigest === digest) return null
+    return {
+      symbol: chanBinding.symbol,
+      market: chanBinding.market,
+      instrument: chanBinding.instrument,
+      interval: '1d',
+      days: chanBinding.days,
+      digest,
+    }
+  }, [chanBinding, chanInstrument, chanStaleDigest, props.symbol, props.market])
+
+  const onChanSnapshotChangeRef = useRef(props.onChanSnapshotChange)
+  onChanSnapshotChangeRef.current = props.onChanSnapshotChange
+  /** 上一次**真的回调出去**的值（用值键去重: 同一份快照不重复打扰消费方） */
+  const emittedChanSnapshotRef = useRef<string | null>(null)
+  const chanSnapshotKey = (s: ChanChartSnapshot | null) =>
+    s ? `${s.symbol}|${s.market}|${s.instrument}|${s.interval}|${s.days}|${s.digest}` : 'null'
+  useEffect(() => {
+    const cb = onChanSnapshotChangeRef.current
+    if (!cb) return
+    const key = chanSnapshotKey(chanSnapshotSignal)
+    if (key === emittedChanSnapshotRef.current) return
+    emittedChanSnapshotRef.current = key
+    cb(chanSnapshotSignal)
+  }, [chanSnapshotSignal, props.onChanSnapshotChange])
+  // 卸载: 消费方必须立刻解绑, 不能留一个指向已销毁图表的摘要。
+  useEffect(
+    () => () => {
+      const cb = onChanSnapshotChangeRef.current
+      const prev = emittedChanSnapshotRef.current
+      emittedChanSnapshotRef.current = 'null'
+      if (cb && prev !== null && prev !== 'null') cb(null)
+    },
+    [],
+  )
 
   // ── K线形态标注自取(2026-10-10) ─────────────────────────────
   // 数据源: GET /klines/{symbol}/patterns(与主图 /klines/{symbol} 同源同口径, 标注与 K 线对齐)。
@@ -1904,6 +2035,78 @@ export default function KlineChart(props: {
     // 但 ref 变化不会触发重算 —— 由 dataLen 充当这次重算的信号（eslint 看不到这层关系）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showChanLayer, chanView, interval, dataLen])
+
+  // ── 缠论笔(2026-11-17): 同一份快照的笔 → 主图线段 ────────────────────────
+  /**
+   * 笔的绘制材料（只在"图层开 + 日K + 结构就绪"时产出）。
+   *
+   * 定位铁律与分型记号同一套：两个端点日都必须是**图上真有的一根 K 线**，否则整笔不画并
+   * 计数（`skipped`）—— 笔的端点是服务端给的极值日，贴到相邻柱子上就是假定位。
+   * `dataLen` 进 deps 的理由同 `chanMarkers`（K 线集合变了要重新判断端点还在不在）。
+   */
+  const chanPenLayer = useMemo<{ segments: ChanPenSegment[]; skipped: ChanPenSkip[] }>(() => {
+    if (!showChanLayer || chanView.phase !== 'ready' || interval !== '1d') {
+      return { segments: [], skipped: [] }
+    }
+    const barDays = new Set<string>()
+    for (const b of rawKlinesRef.current) {
+      const day = isoDayFromChartTime(b.time)
+      if (day !== null) barDays.add(day)
+    }
+    return buildChanPenSegments(chanView.structure, { barDays, colors: CHAN_PEN_COLORS })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showChanLayer, chanView, interval, dataLen])
+
+  /**
+   * 把笔画成 Lightweight Charts 原生线段（每条笔一条 LineSeries，两个点）。
+   *
+   * 清理责任（本层唯一的硬约束）：**这里只增删自己 push 进 `penSeriesRef` 的 series**。
+   * 关图层 / 切股 / 切周期 / 结构失败或 409 / 旧请求竞态 / unmount 全部走同一条 `clearPens`
+   * —— 均线（`maSeriesRef`）、趋势线、MACD、marker plugin 一条都不许被连带删除。
+   * `props.height` 进 deps: 高度变化会重建图表实例，旧 series 随旧图销毁，必须重新挂。
+   */
+  useEffect(() => {
+    const chart = chartRef.current
+    const clearPens = () => {
+      const own = penSeriesRef.current
+      penSeriesRef.current = []
+      // 图表已被销毁(初始化 effect 的 cleanup 先跑): 这些 series 随图一起没了 —— 不必也
+      // 不该再去碰别人的图, 直接丢掉引用即可。
+      if (!chart || chartRef.current !== chart) return
+      for (const s of own) {
+        try {
+          chart.removeSeries(s)
+        } catch {
+          /* 线已不在图上: 目标已达成(图上不再有这条线), 不额外抛错 */
+        }
+      }
+    }
+    if (!chart) {
+      // 图表还没建好: 不留下"以为画上了"的引用
+      penSeriesRef.current = []
+      return
+    }
+    // 先无条件清场: 切股/周期/关图层/失败时, 上一张图的笔必须立刻消失
+    clearPens()
+    if (!showChanLayer || interval !== '1d' || chanView.phase !== 'ready') return
+    for (const seg of chanPenLayer.segments) {
+      const line = chart.addSeries(LineSeries, {
+        color: seg.color,
+        lineWidth: seg.lineWidth,
+        lineStyle: seg.dashed ? LineStyle.Dashed : LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      // 只有两个点: 服务端起点与终点。不插值、不补中间日、不跨笔连线。
+      line.setData([
+        { time: toChartTime(seg.startDay, '1d'), value: seg.startPrice },
+        { time: toChartTime(seg.endDay, '1d'), value: seg.endPrice },
+      ] as never)
+      penSeriesRef.current.push(line)
+    }
+    return clearPens
+  }, [showChanLayer, chanPenLayer, chanView, interval, props.height, dataLen])
 
   // ── L4 事件 markers + 支撑压力位 price lines + 资金柱 (阶段二+三) ──
   useEffect(() => {
@@ -2544,6 +2747,8 @@ export default function KlineChart(props: {
   const chanStructure = chanView.phase === 'ready' ? chanView.structure : null
   const chanConfirmed = chanStructure ? chanStructure.fractals.filter((f) => f.status === 'confirmed').length : 0
   const chanCandidate = chanStructure ? chanStructure.fractals.filter((f) => f.status === 'candidate').length : 0
+  const chanPenConfirmed = chanStructure ? chanStructure.pens.filter((p) => p.status === 'confirmed').length : 0
+  const chanPenCandidate = chanStructure ? chanStructure.pens.filter((p) => p.status === 'candidate').length : 0
   // 暗盘资金档悬停"四组合用法"(规格 §2): 收盘涨跌 × 暗盘红绿 → 用法提示(证据口径, 非建议)
   const hoverPoolCombo =
     subchart === 'dark_pool' && hoverReadout
@@ -2691,11 +2896,11 @@ export default function KlineChart(props: {
             }`}
             title={
               chanInstrument
-                ? '显示/隐藏缠论分型(仅日K): 已确认=实心大号, 待确认=空心小号; 只标极值结构, 非买卖点'
-                : '无法确认标的是个股还是指数(A股存在同码, 如 000001), 缠论分型图层已禁用'
+                ? '显示/隐藏缠论结构(仅日K): 分型=已确认实心大号/待确认空心小号; 笔=已确认细实线/待确认细虚线; 无买卖语义'
+                : '无法确认标的是个股还是指数(A股存在同码, 如 000001), 缠论结构图层已禁用'
             }
           >
-            🧩 缠论分型
+            🧩 缠论结构
           </button>
         )}
       </div>
@@ -2783,7 +2988,7 @@ export default function KlineChart(props: {
           data-chan-phase={chanView.phase}
           className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground">缠论分型</span>
+          <span className="font-medium text-foreground">缠论结构</span>
           <span
             className={
               chanView.phase === 'snapshot-mismatch' ||
@@ -2826,20 +3031,45 @@ export default function KlineChart(props: {
           data-chan-phase={chanView.phase}
           className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground">缠论分型</span>
+          <span className="font-medium text-foreground">缠论结构</span>
           <span>
             <span style={{ color: CHAN_MARKER_COLORS.top }}>●顶</span>
             <span className="ml-1" style={{ color: CHAN_MARKER_COLORS.bottom }}>●底</span>
-            {' '}已确认(实心大号)
+            {' '}分型 已确认(实心大号)
           </span>
           <span>
             <span style={{ color: CHAN_MARKER_COLORS.top }}>○顶</span>
             <span className="ml-1" style={{ color: CHAN_MARKER_COLORS.bottom }}>○底</span>
-            {' '}待确认(空心小号, 未确认不参与结构判断)
+            {' '}分型 待确认(空心小号, 未确认不参与结构判断)
           </span>
           <span>
-            已确认 {chanConfirmed} · 待确认 {chanCandidate}
+            分型 已确认 {chanConfirmed} · 待确认 {chanCandidate}
           </span>
+          {chanStructure.pensProvided ? (
+            <>
+              <span>
+                <span style={{ color: CHAN_PEN_COLORS.confirmed }}>━</span> 笔 已确认(实线) {chanPenConfirmed}
+                <span className="ml-1" style={{ color: CHAN_PEN_COLORS.candidate }}>┈</span> 待确认(虚线) {chanPenCandidate}
+              </span>
+              {chanStructure.penBlocked > 0 && <span>blocked 笔 {chanStructure.penBlocked} 笔（不绘）</span>}
+              {chanStructure.penDropped > 0 && (
+                <span>
+                  笔脏行 {chanStructure.penDropped} 笔已丢弃（
+                  {Array.from(new Set(chanStructure.penRejects.map((r) => r.reason))).join('/')}）
+                </span>
+              )}
+              {chanStructure.penRejectReason && (
+                <span className="text-amber-600 dark:text-amber-400">
+                  笔不连续/跨批次，整批未绘（{chanStructure.penRejectReason}）
+                </span>
+              )}
+              {chanPenLayer.skipped.length > 0 && (
+                <span>{chanPenLayer.skipped.length} 笔端点日不在图上，未绘制</span>
+              )}
+            </>
+          ) : (
+            <span>笔未提供（本响应不含 pens，后端未给）</span>
+          )}
           {chanStructure.blocked > 0 && <span>blocked {chanStructure.blocked} 个（不绘为结构）</span>}
           {chanStructure.dropped > 0 && <span>脏行 {chanStructure.dropped} 个已丢弃</span>}
           {chanMarkers.skipped.length > 0 && (
@@ -2851,7 +3081,7 @@ export default function KlineChart(props: {
           <span>
             复权口径 {chanStructure.adjustment} · 终局性 {chanStructure.finality}
           </span>
-          <span>仅合并K线分型（不含笔/线段/中枢/买卖点）· 客观标注 · 非投资建议</span>
+          <span>未实现线段/中枢/买卖点 · 笔=规则几何 · 客观标注 · 非投资建议</span>
         </div>
       )}
 

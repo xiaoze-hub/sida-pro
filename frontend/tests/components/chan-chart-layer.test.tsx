@@ -32,6 +32,21 @@ const DIGEST_B = 'b'.repeat(64)
 type Bar = { date: string; open: number; high: number; low: number; close: number; volume?: number }
 type Marker = Record<string, unknown> & { chanDay?: string; chanStatus?: string; text?: string }
 
+/**
+ * 假图表库记下来的一个 series（2026-11-17 笔图层）。
+ *
+ * 笔画在 canvas 上、DOM 里查不到，唯一能核对的真实产物就是"组件究竟往图表里加了哪些
+ * series、每个 series 收到什么数据/样式、最后有没有被移除"。所以这里把 addSeries 的
+ * (类型, 选项) 与 setData 的入参原样记录下来 —— 断言直接打在组件真调用上。
+ */
+type RecSeries = {
+  /** `LineSeries`/`CandlestickSeries` … 的类型标记 */
+  type: string
+  options: Record<string, unknown>
+  data: unknown[]
+  removed: boolean
+}
+
 /** 假后端的可编程面：每个用例自己装 `klines` / `structure` 两个 handler。 */
 const H = vi.hoisted(() => ({
   calls: [] as string[],
@@ -39,6 +54,8 @@ const H = vi.hoisted(() => ({
   opts: [] as Array<{ url: string; options?: Record<string, unknown> }>,
   /** 图层最后一次真正收到的 marker 列表（createSeriesMarkers 初值 + 每次 setMarkers） */
   markers: [] as unknown[],
+  /** 图表里创建过的**全部** series（含蜡烛/均线/笔 …），按创建顺序 */
+  series: [] as Array<{ type: string; options: Record<string, unknown>; data: unknown[]; removed: boolean }>,
   klines: null as null | ((url: string) => Promise<unknown>),
   structure: null as null | ((url: string) => Promise<unknown>),
 }))
@@ -76,12 +93,48 @@ vi.mock('@sida/biz-ui/lib/chan-layer', async (importOriginal) => {
 vi.mock('lightweight-charts', async () => {
   const stub = await import('../../tests/stubs/lightweight-charts')
   const base = stub as unknown as {
-    createChart: () => unknown
+    createChart: () => Record<string, unknown>
     LineStyle: Record<string, number>
   }
   return {
     ...base,
     LineStyle: { ...base.LineStyle, Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3 },
+    // 记录"组件真的往图表里加了什么"：类型 + 选项 + setData 入参 + 是否被移除。
+    createChart: () => {
+      const chart = base.createChart()
+      /** 本图实例名下的 series: `chart.remove()` 销毁整张图时它们一起消失(与真库一致) */
+      const owned: RecSeries[] = []
+      const addSeries = chart.addSeries as (type: unknown) => Record<string, unknown>
+      chart.addSeries = (type: unknown, seriesOptions?: unknown) => {
+        const series = addSeries(type)
+        const rec: RecSeries = {
+          type: String((type as { type?: string } | null)?.type ?? type),
+          options: { ...((seriesOptions as Record<string, unknown>) ?? {}) },
+          data: [],
+          removed: false,
+        }
+        H.series.push(rec)
+        owned.push(rec)
+        const setData = series.setData as (d: unknown) => void
+        series.setData = (d: unknown) => {
+          rec.data = Array.isArray(d) ? [...d] : []
+          setData(d)
+        }
+        series.__rec = rec
+        return series
+      }
+      chart.removeSeries = (series: unknown) => {
+        const rec = (series as { __rec?: RecSeries } | null)?.__rec
+        if (rec) rec.removed = true
+      }
+      // 真 `chart.remove()` 销毁图表 → 图上的 series 全部不存在了。假库必须同样记账,
+      // 否则"重建图表后旧笔线还在不在"这类断言会看到已随旧图销毁的幽灵记录。
+      chart.remove = () => {
+        for (const rec of owned) rec.removed = true
+        owned.length = 0
+      }
+      return chart
+    },
     createSeriesMarkers: (_series: unknown, markers?: unknown[]) => {
       // 组件每次整批替换: 记"最后一次"才是图上现在真实存在的那批
       H.markers = Array.isArray(markers) ? [...markers] : []
@@ -169,6 +222,81 @@ function structureResponse(over: Record<string, unknown> = {}) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// ── 笔（pen）图层夹具（2026-11-17）──────────────────────────────────────
+//
+// 4 根 K 线 + 3 笔，端点**全部**落在真实存在的 K 线日上，三笔首尾相接（服务端笔链口径）：
+//   ① up   confirmed  底 03-03 @29   → 顶 03-04 @33.2   (确认日 03-05)
+//   ② down candidate  顶 03-04 @33.2 → 底 03-05 @31     (确认日必须 null)
+//   ③ up   blocked    底 03-05 @31   → 顶 03-06 @32.5   (只计数, 一根线都不许有)
+const PEN_BARS: Bar[] = [
+  { date: '2026-03-03', open: 30, high: 30.4, low: 28.8, close: 30.2, volume: 800 },
+  { date: '2026-03-04', open: 30.2, high: 33.4, low: 30, close: 33, volume: 900 },
+  { date: '2026-03-05', open: 33, high: 33.4, low: 30.9, close: 31.2, volume: 1000 },
+  { date: '2026-03-06', open: 31.2, high: 32.6, low: 31.1, close: 32.4, volume: 1100 },
+]
+
+const PEN_FRACTALS = [
+  { kind: 'bottom', status: 'confirmed', position_day: '2026-03-03', position_price: 29, confirmed_on: '2026-03-04' },
+  { kind: 'top', status: 'confirmed', position_day: '2026-03-04', position_price: 33.2, confirmed_on: '2026-03-05' },
+  { kind: 'bottom', status: 'confirmed', position_day: '2026-03-05', position_price: 31, confirmed_on: '2026-03-06' },
+]
+
+const PENS_A = [
+  {
+    direction: 'up',
+    status: 'confirmed',
+    confirmed_on: '2026-03-05',
+    kernel_version: 'chan-pen-v1',
+    start: { kind: 'bottom', merged_index: 1, position_day: '2026-03-03', price: 29, status: 'confirmed', confirmed_on: '2026-03-04' },
+    end: { kind: 'top', merged_index: 2, position_day: '2026-03-04', price: 33.2, status: 'confirmed', confirmed_on: '2026-03-05' },
+  },
+  {
+    direction: 'down',
+    status: 'candidate',
+    confirmed_on: null,
+    kernel_version: 'chan-pen-v1',
+    start: { kind: 'top', merged_index: 2, position_day: '2026-03-04', price: 33.2, status: 'confirmed', confirmed_on: '2026-03-05' },
+    end: { kind: 'bottom', merged_index: 3, position_day: '2026-03-05', price: 31, status: 'confirmed', confirmed_on: '2026-03-06' },
+  },
+  {
+    direction: 'up',
+    status: 'blocked',
+    confirmed_on: null,
+    kernel_version: 'chan-pen-v1',
+    start: { kind: 'bottom', merged_index: 3, position_day: '2026-03-05', price: 31, status: 'confirmed', confirmed_on: '2026-03-06' },
+    end: { kind: 'top', merged_index: 4, position_day: '2026-03-06', price: 32.5, status: 'candidate', confirmed_on: null },
+  },
+]
+
+/** 另一只票（000001）的笔：端点整体平移，用来验证切股后旧笔线不会留在新图上。 */
+const PENS_B = [
+  {
+    direction: 'down',
+    status: 'confirmed',
+    confirmed_on: '2026-03-05',
+    kernel_version: 'chan-pen-v1',
+    start: { kind: 'top', merged_index: 1, position_day: '2026-03-03', price: 30.4, status: 'confirmed', confirmed_on: '2026-03-04' },
+    end: { kind: 'bottom', merged_index: 2, position_day: '2026-03-05', price: 30.9, status: 'confirmed', confirmed_on: '2026-03-06' },
+  },
+]
+
+/** 带笔的结构响应（笔在**同一份**已验快照里，摘要与分型一致）。 */
+const penStructure = (over: Record<string, unknown> = {}) =>
+  structureResponse({
+    as_of_day: '2026-03-06',
+    fractals: PEN_FRACTALS,
+    pens: PENS_A,
+    pen_rules_version: 'chan-pen-v1',
+    pen_counts: { total: 3, confirmed: 1, candidate: 1, blocked: 1 },
+    ...over,
+  })
+
+/** 等笔真的落到图上（线到位后才断言样式/端点）。 */
+async function waitForPens(n: number) {
+  await waitFor(() => expect(penSeries()).toHaveLength(n), { timeout: 5000 })
+}
+
+
 /**
  * 等主图 K 线真的落图（状态条出现「N 根K线」）。
  *
@@ -185,10 +313,29 @@ const chanPhase = () => screen.queryByTestId('chan-status')?.getAttribute('data-
 /** 图例上的 phase（就绪后状态条让位给图例，两者同源）。 */
 const chanLegendPhase = () => screen.queryByTestId('chan-legend')?.getAttribute('data-chan-phase') ?? null
 
+/**
+ * 笔的 line series（图上还活着的）。
+ *
+ * 判据：Line 类型 + 明确设了 `lineStyle`（笔独有的样式开关；均线/趋势辅助线都不设它）
+ * + 没被移除。这样断言直接对在"笔图层真的加了哪些线、还在不在"上。
+ */
+const penSeries = () =>
+  H.series.filter(
+    (s) => s.type === 'Line' && typeof s.options.lineStyle === 'number' && !s.removed,
+  )
+
+/** 均线/趋势辅助线（Line 类型但不设 lineStyle）—— 用来验证"笔清场不连带删别人的线"。 */
+const maSeries = () =>
+  H.series.filter((s) => s.type === 'Line' && typeof s.options.lineStyle !== 'number')
+
+/** 'YYYY-MM-DD' → 图表日线时间戳（与组件 `toChartTime` 同口径：UTC 零点秒） */
+const SEC = (day: string) => Date.parse(`${day}T00:00:00Z`) / 1000
+
 beforeEach(() => {
   H.calls.length = 0
   H.opts.length = 0
   H.markers = []
+  H.series.length = 0
   H.klines = (url: string) => Promise.resolve(klinesResponse(url.includes('000001') ? '000001' : '600519'))
   H.structure = () => Promise.resolve(structureResponse())
 })
@@ -269,7 +416,10 @@ describe('KlineChart 缠论分型图层', () => {
     expect(legend.textContent).toContain('current_day_completion_unverified')
     expect(legend.textContent).toContain('复权口径 unknown')
     expect(legend.textContent).toContain('终局性 unverified')
-    expect(legend.textContent).toContain('不含笔/线段/中枢/买卖点')
+    // 未实现的结构层要如实点名(有笔之后仍不许把线段/中枢/买卖点说成已提供)
+    expect(legend.textContent).toContain('未实现线段/中枢/买卖点')
+    // 这份响应里没有 pens 字段 → 图例如实说"笔未提供", 不假装"没有笔"
+    expect(legend.textContent).toContain('笔未提供')
     // 非卡片(与形态/情景图例同风格的一行式小字)
     expect(legend.className).not.toMatch(/rounded-lg border|card-surface/)
   })
@@ -756,5 +906,588 @@ describe('chan-layer 纯函数', () => {
     expect(wrong.problem).toBe('identity-mismatch')
     const missing = pickChanSnapshot({ klines: [] }, { instrument: 'stock', interval: '1d' })
     expect(missing.problem).toBe('missing')
+  })
+})
+
+// ── 笔（pen）图层：真组件 + 真 series 记录（2026-11-17） ─────────────────
+//
+// 断言对象是"组件真的往图表里加/删了什么"：每一笔一条 Lightweight Charts 原生
+// LineSeries（两个点=服务端端点），已确认=细实线、待确认=细虚线、blocked 不画。
+describe('KlineChart 缠论笔图层', () => {
+  /** 打开图层 + 带笔的结构（挂 PEN_BARS 的 4 根 K 线）。 */
+  function mountWithPens(extra: Record<string, unknown> = {}) {
+    H.klines = () => Promise.resolve(klinesResponse('600519', { bars: PEN_BARS }))
+    H.structure = () => Promise.resolve(penStructure(extra))
+    return render(<KlineChart symbol="600519" market="CN" instrument="stock" layersVisible={{ chan: true }} />)
+  }
+
+  it('只画 confirmed/candidate 笔: 已确认细实线、待确认细虚线, 端点逐点等于服务端端点(不插值/不跨日造点)', async () => {
+    mountWithPens()
+    await waitForPens(2)
+
+    const [confirmed, candidate] = penSeries()
+    // 已确认: 实线(Solid=0) 细线(width 1)
+    expect(confirmed.options.lineStyle).toBe(0)
+    expect(confirmed.options.lineWidth).toBe(1)
+    expect(confirmed.data).toEqual([
+      { time: SEC('2026-03-03'), value: 29 },
+      { time: SEC('2026-03-04'), value: 33.2 },
+    ])
+    // 待确认: 虚线(Dashed=2) + 同色压淡(rgba), 两个点同样是服务端端点
+    expect(candidate.options.lineStyle).toBe(2)
+    expect(String(candidate.options.color)).toContain('rgba(')
+    expect(candidate.data).toEqual([
+      { time: SEC('2026-03-04'), value: 33.2 },
+      { time: SEC('2026-03-05'), value: 31 },
+    ])
+
+    // blocked 笔(底 03-05 → 顶 03-06): 一根线都不许有 —— 不是"浅色画一下"
+    expect(penSeries()).toHaveLength(2)
+    for (const s of penSeries()) {
+      const days = (s.data as Array<{ time: number }>).map((p) => p.time)
+      expect(days).not.toContain(SEC('2026-03-06'))
+      expect(days).toHaveLength(2) // 每条线只有两个端点, 没有为了"连起来"补中间日
+    }
+    // 无买卖语义: 线本身不带任何文案/标签(只有几何端点与线型)
+    for (const s of penSeries()) {
+      expect(s.options.title).toBeUndefined()
+      expect(s.options.text).toBeUndefined()
+    }
+  })
+
+  it('图例: 分型与笔分列, 实线=已确认/虚线=待确认, blocked 笔只计数不绘, 未实现线段与中枢', async () => {
+    mountWithPens()
+    const legend = await screen.findByTestId('chan-legend', {}, { timeout: 5000 })
+    expect(legend.getAttribute('data-chan-phase')).toBe('ready')
+
+    expect(legend.textContent).toContain('分型')
+    expect(legend.textContent).toContain('笔')
+    expect(legend.textContent).toContain('已确认(实线) 1')
+    expect(legend.textContent).toContain('待确认(虚线) 1')
+    expect(legend.textContent).toContain('blocked 笔 1 笔（不绘）')
+    // 诚实边界不能因为"多了笔"被挤掉
+    expect(legend.textContent).toContain('复权口径 unknown')
+    expect(legend.textContent).toContain('终局性 unverified')
+    expect(legend.textContent).toContain('未实现线段/中枢/买卖点')
+    expect(legend.textContent).not.toContain('笔未提供')
+    // 图例仍是一行式小字, 不是卡片
+    expect(legend.className).not.toMatch(/rounded-lg border|card-surface/)
+  })
+
+  it('关图层: 笔的 line series 全部移除, 均线与其它标记照旧(不连带删别人的 series)', async () => {
+    H.klines = () => Promise.resolve(klinesResponse('600519', { bars: PEN_BARS }))
+    H.structure = () => Promise.resolve(penStructure())
+    const { rerender } = render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        layersVisible={{ chan: true }}
+        gsSignals={[{ date: '2026-03-03', side: 'G', confirmed: true, price: 30.2 }]}
+      />,
+    )
+    await waitForPens(2)
+    const drawn = penSeries().slice()
+    expect(maSeries().length).toBeGreaterThan(0)
+    const maBefore = maSeries().length
+
+    rerender(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        layersVisible={{ chan: false }}
+        gsSignals={[{ date: '2026-03-03', side: 'G', confirmed: true, price: 30.2 }]}
+      />,
+    )
+    await waitFor(() => expect(penSeries()).toHaveLength(0), { timeout: 5000 })
+    // 每一条旧笔线都被显式移除(不是"留在那儿但看不见")
+    for (const s of drawn) expect(s.removed).toBe(true)
+    // 均线一条都没被删
+    expect(maSeries()).toHaveLength(maBefore)
+    expect(maSeries().every((s) => !s.removed)).toBe(true)
+    // 其它图层的 marker 还在(单一 plugin 整批替换, 不许被笔连带清空)
+    expect((H.markers as Marker[]).filter((m) => m.text === 'G')).toHaveLength(1)
+  })
+
+  it('端点日不在当前画面(停牌/区间外): 这一笔不画, 图例如实说"端点日不在图上"', async () => {
+    mountWithPens({
+      as_of_day: '2026-03-10',
+      // 终点在 03-10 —— 图上根本没有这根 K 线
+      pens: [
+        {
+          direction: 'up',
+          status: 'confirmed',
+          confirmed_on: '2026-03-10',
+          start: { kind: 'bottom', position_day: '2026-03-03', price: 29 },
+          end: { kind: 'top', position_day: '2026-03-10', price: 34 },
+        },
+      ],
+    })
+    const legend = await screen.findByTestId('chan-legend', {}, { timeout: 5000 })
+    await waitFor(() => expect(legend.textContent).toContain('端点日不在图上'), { timeout: 5000 })
+    expect(penSeries()).toHaveLength(0)
+    expect(legend.textContent).toContain('1 笔端点日不在图上，未绘制')
+  })
+
+  it('笔链不连续(疑似混了两个批次): 整批拒收、一根线都不画、并在图例给出原因码', async () => {
+    mountWithPens({
+      pens: [
+        {
+          direction: 'up',
+          status: 'confirmed',
+          confirmed_on: '2026-03-05',
+          start: { kind: 'bottom', position_day: '2026-03-03', price: 29 },
+          end: { kind: 'top', position_day: '2026-03-04', price: 33.2 },
+        },
+        {
+          // 起点不是上一笔的终点(价格对不上) → 不是同一批数据算出来的笔链
+          direction: 'down',
+          status: 'confirmed',
+          confirmed_on: '2026-03-06',
+          start: { kind: 'top', position_day: '2026-03-04', price: 33.9 },
+          end: { kind: 'bottom', position_day: '2026-03-05', price: 31 },
+        },
+      ],
+    })
+    const legend = await screen.findByTestId('chan-legend', {}, { timeout: 5000 })
+    await waitFor(() => expect(legend.textContent).toContain('pen-chain-broken'), { timeout: 5000 })
+    expect(penSeries()).toHaveLength(0)
+    expect(legend.textContent).toContain('不连续')
+  })
+
+  it('切股: 旧图的笔线被移除, 新图只画新标的的笔; 迟到的旧响应不会把旧笔补回新图', async () => {
+    H.klines = (url: string) => {
+      const symbol = url.match(/\/klines\/([^?]+)\?/)?.[1] ?? '600519'
+      return Promise.resolve(
+        klinesResponse(symbol, { bars: PEN_BARS, digest: symbol === '000001' ? DIGEST_B : DIGEST_A }),
+      )
+    }
+    H.structure = (url: string) =>
+      url.includes(`snapshot=${DIGEST_B}`)
+        ? Promise.resolve(
+            penStructure({
+              symbol: '000001',
+              snapshot_digest: DIGEST_B,
+              pens: PENS_B,
+              pen_counts: { total: 1, confirmed: 1, candidate: 0, blocked: 0 },
+            }),
+          )
+        : sleep(60).then(() => penStructure())
+
+    const { rerender } = render(
+      <KlineChart symbol="600519" market="CN" instrument="stock" layersVisible={{ chan: true }} />,
+    )
+    await waitForPens(2)
+    const oldA = penSeries().slice()
+
+    rerender(<KlineChart symbol="000001" market="CN" instrument="stock" layersVisible={{ chan: true }} />)
+    await waitForPens(1)
+    // 新图上的这一笔是 B 的端点(顶 03-03 @30.4 → 底 03-05 @30.9)
+    expect(penSeries()[0].data).toEqual([
+      { time: SEC('2026-03-03'), value: 30.4 },
+      { time: SEC('2026-03-05'), value: 30.9 },
+    ])
+    for (const s of oldA) expect(s.removed).toBe(true)
+
+    // A 的迟到响应落地: 不许补回 A 的笔(否则新图上同时画着两只票的笔)
+    await sleep(200)
+    expect(penSeries()).toHaveLength(1)
+    expect(penSeries()[0].data).toEqual([
+      { time: SEC('2026-03-03'), value: 30.4 },
+      { time: SEC('2026-03-05'), value: 30.9 },
+    ])
+  })
+
+  it('409 快照已变化: 之前画上的笔线全部撤掉, 不在新图上留旧结论', async () => {
+    let structCalls = 0
+    H.klines = () => Promise.resolve(klinesResponse('600519', { bars: PEN_BARS }))
+    H.structure = () => {
+      structCalls += 1
+      if (structCalls === 1) return Promise.resolve(penStructure())
+      const err = new Error('图表快照已变化(内容摘要不匹配), 请刷新图表') as Error & { status: number }
+      err.status = 409
+      return Promise.reject(err)
+    }
+    render(<KlineChart symbol="600519" market="CN" instrument="stock" layersVisible={{ chan: true }} />)
+    await waitForPens(2)
+
+    // 切到周K(笔不适用) → 再切回日K: 第二次结构请求 409
+    fireEvent.click(screen.getByText('周K'))
+    await waitFor(() => expect(chanPhase()).toBe('not-daily'), { timeout: 5000 })
+    expect(penSeries()).toHaveLength(0)
+    fireEvent.click(screen.getByText('日K'))
+    await waitFor(() => expect(chanPhase()).toBe('snapshot-mismatch'), { timeout: 5000 })
+
+    expect(penSeries()).toHaveLength(0)
+    expect(screen.getByTestId('chan-status').textContent).toContain('409')
+    // 旧笔线确实被移除(不是被"新一堆线盖住")
+    expect(H.series.filter((s) => typeof s.options.lineStyle === 'number' && s.removed).length).toBe(2)
+  })
+
+  it('周期切到非日K: 笔线立即撤掉(日线笔不贴到周/月柱上)', async () => {
+    mountWithPens()
+    await waitForPens(2)
+    fireEvent.click(screen.getByText('周K'))
+    await waitFor(() => expect(penSeries()).toHaveLength(0), { timeout: 5000 })
+    expect(chanPhase()).toBe('not-daily')
+  })
+})
+
+// ── onChanSnapshotChange：把"当前画面那份可校验快照"交给外部(数智参谋) ─────
+//
+// 契约(逐条钉住, 消费方据此绑定自己的结构/笔查询):
+//  - 只在 **同一张已落图的日K** + 摘要可校验 + 前端渲染链未改写原始 K 线时给非 null;
+//  - 载荷身份全部来自**已核实的事实**(props.symbol / 响应自述 instrument / 请求的 days),
+//    绝不做"看代码像指数就猜 index"这类推测;
+//  - 切标的/周期/天数、K 线加载失败、重读开始、卸载 → 立刻 null;
+//  - 值没变不重复回调(幂等), 不回消息、不弹提示。
+describe('KlineChart onChanSnapshotChange', () => {
+  const okKlines = (digest: string) => () =>
+    Promise.resolve(klinesResponse('600519', { bars: PEN_BARS, digest }))
+
+  it('落图且 audit.ok: 回调给出摘要与 exact 身份(symbol/market/instrument/interval/days)', async () => {
+    H.klines = okKlines(DIGEST_A)
+    H.structure = () => Promise.resolve(penStructure())
+    const seen: Array<Record<string, unknown> | null> = []
+    render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitFor(() => expect(seen.some((s) => s && s.digest === DIGEST_A)).toBe(true), { timeout: 5000 })
+
+    const signal = seen.filter((s) => s !== null).pop()!
+    expect(signal).toEqual({
+      symbol: '600519',
+      market: 'CN',
+      instrument: 'stock',
+      interval: '1d',
+      days: 120,
+      digest: DIGEST_A,
+    })
+    // 挂载时先给一次 null(还没有可校验的图), 之后才是真信号 —— 不沉默、也不假装
+    expect(seen[0]).toBeNull()
+  })
+
+  it('与缠论图层开关无关: 图层关着也照样给出快照(外部绑定不需要先打开图例)', async () => {
+    H.klines = okKlines(DIGEST_A)
+    H.structure = () => Promise.resolve(penStructure())
+    const seen: Array<Record<string, unknown> | null> = []
+    render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitFor(() => expect(seen.filter(Boolean)).toHaveLength(1), { timeout: 5000 })
+    expect(structureCall()).toBeNull() // 图层关 = 一个结构请求都不发
+    expect(seen.filter(Boolean)[0]!.digest).toBe(DIGEST_A)
+  })
+
+  it('切股: 立刻回调 null(旧图的摘要不许挂在新标的上), 新图落图后再给新摘要', async () => {
+    H.klines = (url: string) => {
+      const symbol = url.match(/\/klines\/([^?]+)\?/)?.[1] ?? '600519'
+      if (symbol === '000001') {
+        return sleep(200).then(() => klinesResponse('000001', { bars: PEN_BARS, digest: DIGEST_B }))
+      }
+      return Promise.resolve(klinesResponse('600519', { bars: PEN_BARS, digest: DIGEST_A }))
+    }
+    H.structure = () => Promise.resolve(penStructure())
+    const seen: Array<Record<string, unknown> | null> = []
+    const { rerender } = render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitFor(() => expect(seen.filter((s) => s && s.digest === DIGEST_A)).toHaveLength(1), { timeout: 5000 })
+
+    rerender(
+      <KlineChart
+        symbol="000001"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    // 新标的的 K 线还没回来 → 必须已经是 null(不许留 A 的摘要)
+    await waitFor(() => expect(seen[seen.length - 1]).toBeNull(), { timeout: 2000 })
+    expect(seen.filter((s) => s && s.symbol === '000001')).toHaveLength(0)
+
+    await waitFor(() => expect(seen.filter((s) => s && s.symbol === '000001')).toHaveLength(1), { timeout: 5000 })
+    expect(seen.filter((s) => s && s.symbol === '000001')[0]).toEqual({
+      symbol: '000001',
+      market: 'CN',
+      instrument: 'stock',
+      interval: '1d',
+      days: 120,
+      digest: DIGEST_B,
+    })
+  })
+
+  it('K 线加载失败: 只有 null(不拿上一份/别人的摘要冒充当前图)', async () => {
+    H.klines = () => Promise.reject(new Error('upstream 502'))
+    const seen: Array<Record<string, unknown> | null> = []
+    render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 5000 })
+    await sleep(80)
+    expect(seen.filter(Boolean)).toHaveLength(0)
+    expect(seen[seen.length - 1]).toBeNull()
+  })
+
+  it('原始 K 线会被前端改写(重复日)/身份不可靠: 一律不给快照', async () => {
+    H.klines = () =>
+      Promise.resolve(klinesResponse('600519', { bars: [PEN_BARS[0], PEN_BARS[1], { ...PEN_BARS[1] }, PEN_BARS[3]] }))
+    const seen: Array<Record<string, unknown> | null> = []
+    render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitForBars()
+    await sleep(80)
+    expect(seen.filter(Boolean)).toHaveLength(0)
+
+    // 没有显式 instrument → 身份不可靠, 不能给出"看起来是 stock"的快照
+    cleanup()
+    seen.length = 0
+    H.klines = () => Promise.resolve(klinesResponse('600519', { bars: PEN_BARS }))
+    render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitForBars()
+    await sleep(80)
+    expect(seen.filter(Boolean)).toHaveLength(0)
+  })
+
+  it('周期切换: 非日K 期间回调 null(横线期/日线的摘要不许挂到周K上), 切回日K 再给出', async () => {
+    H.klines = okKlines(DIGEST_A)
+    H.structure = () => Promise.resolve(penStructure())
+    const seen: Array<Record<string, unknown> | null> = []
+    render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitFor(() => expect(seen.filter(Boolean)).toHaveLength(1), { timeout: 5000 })
+
+    fireEvent.click(screen.getByText('周K'))
+    await waitFor(() => expect(seen[seen.length - 1]).toBeNull(), { timeout: 5000 })
+    // 等到周K 主数据也落地之后, 仍然只有 null(interval 不是 1d 就绝不广播)
+    await sleep(80)
+    expect(seen.filter(Boolean)).toHaveLength(1)
+    expect(seen.some((s) => s && s.interval !== '1d')).toBe(false)
+
+    fireEvent.click(screen.getByText('日K'))
+    await waitFor(() => expect(seen.filter(Boolean)).toHaveLength(2), { timeout: 5000 })
+    expect(seen.filter(Boolean)[1]).toMatchObject({ symbol: '600519', interval: '1d', digest: DIGEST_A })
+  })
+
+  it('卸载: 立刻回调 null(消费方据此解绑, 不留一个指向已销毁图表的摘要)', async () => {
+    H.klines = okKlines(DIGEST_A)
+    const seen: Array<Record<string, unknown> | null> = []
+    const { unmount } = render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitFor(() => expect(seen.filter(Boolean)).toHaveLength(1), { timeout: 5000 })
+    unmount()
+    expect(seen[seen.length - 1]).toBeNull()
+  })
+
+  it('重读图表开始 → null; 结构取数失败(503)本身不改快照, 但重读期间必须为 null', async () => {
+    let structCalls = 0
+    H.klines = okKlines(DIGEST_A)
+    H.structure = () => {
+      structCalls += 1
+      if (structCalls === 1) {
+        const err = new Error('后端暂不可用') as Error & { status: number }
+        err.status = 503
+        return Promise.reject(err)
+      }
+      return Promise.resolve(penStructure())
+    }
+    const seen: Array<Record<string, unknown> | null> = []
+    render(
+      <KlineChart
+        symbol="600519"
+        market="CN"
+        instrument="stock"
+        layersVisible={{ chan: true }}
+        onChanSnapshotChange={(s) => seen.push(s as Record<string, unknown> | null)}
+      />,
+    )
+    await waitFor(() => expect(chanPhase()).toBe('error'), { timeout: 5000 })
+    // 503 是"结构没取到", 不是"图变了" → 快照仍然有效
+    expect(seen.filter(Boolean)).toHaveLength(1)
+
+    seen.length = 0
+    fireEvent.click(screen.getByTestId('chan-retry'))
+    // 重读一开始就把旧绑定作废
+    await waitFor(() => expect(seen[0]).toBeNull(), { timeout: 3000 })
+    // 新图落图后重新给出同一份摘要(内容没变, 摘要就该一样)
+    await waitFor(() => expect(seen.filter((s) => s && s.digest === DIGEST_A).length).toBe(1), { timeout: 5000 })
+  })
+})
+
+// ── 笔的纯函数口径（与服务端 pen 载荷逐条对齐） ──────────────────────────
+describe('chan-layer 笔纯函数', () => {
+  const s = (pens: unknown[] | undefined, over: Record<string, unknown> = {}) => ({
+    snapshot_digest: DIGEST_A,
+    as_of_day: '2026-03-06',
+    fractals: [],
+    pens,
+    ...over,
+  })
+  const okPen = {
+    direction: 'up',
+    status: 'confirmed',
+    confirmed_on: '2026-03-05',
+    start: { kind: 'bottom', position_day: '2026-03-03', price: 29 },
+    end: { kind: 'top', position_day: '2026-03-04', price: 33.2 },
+  }
+
+  it('blocked 笔只计数不绘制; 已确认/候选进入可画集合; 缺 pens 字段 = 未提供(不是"没有笔")', async () => {
+    const { normalizeChanStructure } = await import('@sida/biz-ui/lib/chan-layer')
+    const blocked = {
+      direction: 'down',
+      status: 'blocked',
+      confirmed_on: null,
+      start: { kind: 'top', position_day: '2026-03-04', price: 33.2 },
+      end: { kind: 'bottom', position_day: '2026-03-05', price: 31 },
+    }
+    const candidate = {
+      direction: 'down',
+      status: 'candidate',
+      confirmed_on: null,
+      start: { kind: 'top', position_day: '2026-03-04', price: 33.2 },
+      end: { kind: 'bottom', position_day: '2026-03-05', price: 31 },
+    }
+    const onlyOk = normalizeChanStructure(s([okPen, blocked]))
+    expect(onlyOk!.pensProvided).toBe(true)
+    expect(onlyOk!.pens).toHaveLength(1)
+    expect(onlyOk!.penBlocked).toBe(1)
+    expect(onlyOk!.penDropped).toBe(0)
+    expect(onlyOk!.penRejectReason).toBeNull()
+
+    const withCandidate = normalizeChanStructure(s([okPen, candidate]))
+    expect(withCandidate!.pens.map((p) => p.status)).toEqual(['confirmed', 'candidate'])
+
+    const notProvided = normalizeChanStructure(s(undefined))
+    expect(notProvided!.pensProvided).toBe(false)
+    expect(notProvided!.pens).toEqual([])
+  })
+
+  it('单笔硬前提逐条拒收: 确认日缺失/倒挂/越过 as_of、候选带确认日、方向与端点类型不符、日历非法、start>=end', async () => {
+    const { normalizeChanStructure } = await import('@sida/biz-ui/lib/chan-layer')
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['已确认缺确认日', { ...okPen, confirmed_on: null }],
+      ['确认日倒挂', { ...okPen, confirmed_on: '2026-03-01' }],
+      ['确认日越过 as_of', { ...okPen, confirmed_on: '2026-03-09' }],
+      ['候选带确认日', { ...okPen, status: 'candidate' }],
+      ['方向与端点类型不符', { ...okPen, direction: 'down' }],
+      ['日历非法', { ...okPen, start: { kind: 'bottom', position_day: '2026-02-30', price: 29 } }],
+      ['负价', { ...okPen, end: { kind: 'top', position_day: '2026-03-04', price: -1 } }],
+      ['起点不早于终点', { ...okPen, end: { kind: 'top', position_day: '2026-03-03', price: 33.2 } }],
+      ['端点穿越 as_of', { ...okPen, end: { kind: 'top', position_day: '2026-03-09', price: 33.2 } }],
+      ['status 不认识', { ...okPen, status: 'maybe' }],
+      // blocked 带确认日 = 自相矛盾("不足以确认"却写着哪天确认的)
+      ['blocked 带确认日', { ...okPen, status: 'blocked' }],
+    ]
+    for (const [label, pen] of cases) {
+      const out = normalizeChanStructure(s([pen]))
+      expect(out!.pens, label).toHaveLength(0)
+      expect(out!.penDropped, label).toBe(1)
+      expect(out!.penRejects.length, label).toBe(1)
+    }
+  })
+
+  it('笔链断裂(不同批次的笔): 整批拒收而不是"能连就连" —— 一根都不画并给出原因码', async () => {
+    const { normalizeChanStructure } = await import('@sida/biz-ui/lib/chan-layer')
+    const next = {
+      direction: 'down',
+      status: 'confirmed',
+      confirmed_on: '2026-03-06',
+      start: { kind: 'top', position_day: '2026-03-04', price: 33.9 }, // ≠ 上一笔终点 33.2
+      end: { kind: 'bottom', position_day: '2026-03-05', price: 31 },
+    }
+    const out = normalizeChanStructure(s([okPen, next]))
+    expect(out!.pens).toEqual([])
+    expect(out!.penRejectReason).toBe('pen-chain-broken')
+    expect(out!.penRejects.some((r) => r.reason === 'pen-chain-broken')).toBe(true)
+    // 服务了 2 笔、画了 0 笔: 两笔都要进"拒收"账, 不许有无法解释的差额
+    expect(out!.penDropped).toBe(2)
+  })
+
+  it('笔 → 线段: 端点日都在图上才画; 已确认实线/候选虚线; 两个点就是服务端端点(不插值、不跨日造线)', async () => {
+    const { normalizeChanStructure, buildChanPenSegments } = await import('@sida/biz-ui/lib/chan-layer')
+    const candidate = {
+      direction: 'down',
+      status: 'candidate',
+      confirmed_on: null,
+      start: { kind: 'top', position_day: '2026-03-04', price: 33.2 },
+      end: { kind: 'bottom', position_day: '2026-03-05', price: 31 },
+    }
+    const structure = normalizeChanStructure(s([okPen, candidate]))!
+    const colors = { confirmed: '#6d28d9', candidate: 'rgba(109, 40, 217, 0.6)' }
+
+    const full = buildChanPenSegments(structure, {
+      barDays: new Set(['2026-03-03', '2026-03-04', '2026-03-05']),
+      colors,
+    })
+    expect(full.segments).toHaveLength(2)
+    expect(full.segments[0]).toMatchObject({
+      startDay: '2026-03-03',
+      startPrice: 29,
+      endDay: '2026-03-04',
+      endPrice: 33.2,
+      dashed: false,
+      lineWidth: 1,
+      color: colors.confirmed,
+    })
+    expect(full.segments[1]).toMatchObject({ dashed: true, color: colors.candidate })
+    expect(full.skipped).toEqual([])
+
+    // 终点那天图上没有 K 线 → 这一笔整笔不画(不给端点找"最近的柱子")
+    const partial = buildChanPenSegments(structure, {
+      barDays: new Set(['2026-03-03']),
+      colors,
+    })
+    expect(partial.segments).toHaveLength(0)
+    expect(partial.skipped.map((x) => x.reason)).toEqual([
+      'endpoint-day-not-on-chart',
+      'endpoint-day-not-on-chart',
+    ])
+    // 每段的键可溯源(起点日>终点日), 不含任何买卖语义
+    expect(full.segments[0].key).toBe('2026-03-03>2026-03-04')
   })
 })

@@ -33,6 +33,69 @@ export interface ChanFractal {
   confirmedOn: string | null
 }
 
+/**
+ * 笔（pen）图层（2026-11-17）—— 同一份已验快照的相邻结构连接。
+ *
+ * 口径铁律（与后端 `src/web/api/chan_snapshot.py` 的 `pens[]` 一一对应）：
+ *  - 笔是**规则几何**：相邻两个已确认分型的合法连接，只画服务端给的端点；
+ *    前端不插值、不"补中间日"、不自己找最近柱子（那就是给另一批数据配坐标）。
+ *  - `blocked` 笔只计数，**永不**画成线；`confirmed` 细实线、`candidate` 细虚线。
+ *  - 已确认笔必须带有效确认日（晚于起点、不越过 `as_of_day`）；候选笔必须没有确认日。
+ *  - 笔链必须首尾相接（上一笔终点 == 下一笔起点）；对不上 = 疑似混了不同批次的数据，
+ *    **整批拒收**（不做"能连就连"的部分绘制 —— 那会把两条不同来源的笔拼成一条假走势）。
+ *  - 图上记号**无买卖语义**：线的方向（向上/向下笔）只表示结构走向，不是买卖信号。
+ */
+export type ChanPenDirection = 'up' | 'down'
+export type ChanPenStatus = 'confirmed' | 'candidate' | 'blocked'
+
+/** 一条笔被拒收的原因码（只用于计数/展示，不参与任何"猜一个"的兜底）。 */
+export type ChanPenRejectReason =
+  | 'pen-not-object'
+  | 'pen-bad-direction'
+  | 'pen-bad-status'
+  | 'pen-bad-endpoint'
+  | 'pen-bad-order'
+  | 'pen-direction-mismatch'
+  | 'pen-after-as-of'
+  | 'pen-confirm-day-invalid'
+  | 'pen-candidate-has-confirm'
+  | 'pen-blocked-has-confirm'
+  | 'pen-chain-broken'
+
+/** 笔的一个端点（服务端 `start` / `end`；只留可绘制、可校验的三件事）。 */
+export interface ChanPenEndpoint {
+  kind: ChanFractalKind
+  /** 端点发生日（`position_day`，YYYY-MM-DD） */
+  positionDay: string
+  /** 端点价格（`price`）：分型极值价，必须是有限正数 */
+  price: number
+}
+
+/** 归一化后的一条可画笔（confirmed / candidate）。 */
+export interface ChanPen {
+  direction: ChanPenDirection
+  status: 'confirmed' | 'candidate'
+  /** 已确认笔的封口日；候选笔恒为 null */
+  confirmedOn: string | null
+  start: ChanPenEndpoint
+  end: ChanPenEndpoint
+}
+
+/** 归一化后的笔批次（含"为什么有笔没画"的账）。 */
+export interface ChanPenBatch {
+  /** 可画的笔（服务端顺序 = 笔链顺序） */
+  pens: ChanPen[]
+  /** 服务端标记 blocked 的笔数 —— 只计数，不绘制 */
+  penBlocked: number
+  /** 被拒收的笔数（= `penRejects.length`） */
+  penDropped: number
+  penRejects: Array<{ index: number; reason: ChanPenRejectReason }>
+  /** 整批不可用原因码（非 null 时 `pens` 必为空：不做部分绘制） */
+  rejectReason: ChanPenRejectReason | null
+  /** 本响应是否带 `pens` 字段（缺 = 后端未提供，图例如实说"笔未提供"） */
+  provided: boolean
+}
+
 /** 归一化后的结构（只保留可校验、可绘制需要的字段）。 */
 export interface ChanStructure {
   symbol: string | null
@@ -53,6 +116,17 @@ export interface ChanStructure {
   blocked: number
   /** 脏行被丢掉的个数（不静默改数据：丢掉就要说出来） */
   dropped: number
+  /** 可画的笔（confirmed + candidate），服务端顺序（笔链顺序） */
+  pens: ChanPen[]
+  /** blocked 笔个数（只计数，不绘制） */
+  penBlocked: number
+  /** 被拒收的笔个数 */
+  penDropped: number
+  penRejects: Array<{ index: number; reason: ChanPenRejectReason }>
+  /** 整批笔不可用原因码（如 `pen-chain-broken`）：非 null 时 `pens` 为空 */
+  penRejectReason: ChanPenRejectReason | null
+  /** 本响应是否带 `pens`（false = 后端未提供，不是"没有笔"） */
+  pensProvided: boolean
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -104,6 +178,186 @@ function asText(v: unknown): string | null {
  */
 export function isChanDigest(v: unknown): v is string {
   return typeof v === 'string' && DIGEST_RE.test(v)
+}
+
+// ── 笔（pen）归一化 ───────────────────────────────────────────────────
+//
+// 与分型同一套"服务端说什么就画什么"的口径，但笔多一条**批次**约束：笔是链，
+// 链断了就不是同一批数据算出来的笔。对不上就整批拒收（不给"能连就连"的兜底）。
+
+interface PenEndpointRead {
+  kind: ChanFractalKind
+  day: string
+  price: number
+}
+
+function readPenEndpoint(v: unknown): PenEndpointRead | null {
+  const rec = asRecord(v)
+  if (!rec) return null
+  const kind = rec.kind === 'top' ? 'top' : rec.kind === 'bottom' ? 'bottom' : null
+  const day = asDay(rec.position_day)
+  const raw = rec.price
+  const price = typeof raw === 'number' ? raw : NaN
+  if (!kind || !day) return null
+  if (!Number.isFinite(price) || price <= 0) return null
+  return { kind, day, price }
+}
+
+/** 端点是否逐字相同（日 + 价）—— 笔链连续的唯一判据，不做"差不多"的容差。 */
+function sameEndpoint(a: PenEndpointRead, b: PenEndpointRead): boolean {
+  return a.day === b.day && a.price === b.price
+}
+
+/**
+ * `pens[]` → 归一化笔批次。
+ *
+ * 分三步（顺序有意义）：
+ *  1. **单笔硬前提**：方向/状态可识别、两端点日期日历合法且价格有限正数、起点严格早于终点、
+ *     方向与端点类型一致（up=底→顶）、端点不越过 `as_of_day`；不满足 → 拒收并记原因。
+ *  2. **笔链连续性**（对所有端点合格的单笔，含 blocked）：上一笔终点必须逐字等于下一笔起点；
+ *     一旦对不上，整批拒收（`pen-chain-broken`）—— 混批的笔不能拼成一条线。
+ *     注意 blocked 也要参与链校验：服务端的链本来就把它们串在一起，跳过它们会造出假断裂。
+ *  3. **状态语义**：blocked 只计数；confirmed 必须有有效确认日（> 起点日、≤ as_of_day）；
+ *     candidate 必须没有确认日。任何一条不满足都拒收这条（不猜、不降级）。
+ */
+export function normalizeChanPens(raw: unknown, asOfDay: string | null): ChanPenBatch {
+  const empty: ChanPenBatch = {
+    pens: [],
+    penBlocked: 0,
+    penDropped: 0,
+    penRejects: [],
+    rejectReason: null,
+    provided: false,
+  }
+  if (!Array.isArray(raw)) return empty
+
+  const rejects: Array<{ index: number; reason: ChanPenRejectReason }> = []
+  /** 端点/方向/截止日都合格的单笔（含 blocked）；链校验在下一轮做 */
+  const staged: Array<{ index: number; direction: ChanPenDirection; status: ChanPenStatus; confirmedOn: string | null; start: PenEndpointRead; end: PenEndpointRead }> = []
+
+  raw.forEach((item, index) => {
+    const rec = asRecord(item)
+    if (!rec) {
+      rejects.push({ index, reason: 'pen-not-object' })
+      return
+    }
+    const direction: ChanPenDirection | null =
+      rec.direction === 'up' ? 'up' : rec.direction === 'down' ? 'down' : null
+    if (!direction) {
+      rejects.push({ index, reason: 'pen-bad-direction' })
+      return
+    }
+    const status: ChanPenStatus | null =
+      rec.status === 'confirmed' ? 'confirmed' : rec.status === 'candidate' ? 'candidate' : rec.status === 'blocked' ? 'blocked' : null
+    if (!status) {
+      rejects.push({ index, reason: 'pen-bad-status' })
+      return
+    }
+    const start = readPenEndpoint(rec.start)
+    const end = readPenEndpoint(rec.end)
+    if (!start || !end) {
+      rejects.push({ index, reason: 'pen-bad-endpoint' })
+      return
+    }
+    if (start.day >= end.day) {
+      rejects.push({ index, reason: 'pen-bad-order' })
+      return
+    }
+    // 向上笔 = 底→顶，向下笔 = 顶→底；反了就不是这个方向的笔（不按价格重判方向）
+    const directionOk =
+      direction === 'up' ? start.kind === 'bottom' && end.kind === 'top' : start.kind === 'top' && end.kind === 'bottom'
+    if (!directionOk) {
+      rejects.push({ index, reason: 'pen-direction-mismatch' })
+      return
+    }
+    if (asOfDay && end.day > asOfDay) {
+      // 不许描述快照之后的走势（服务端 as_of_day 是硬边界）
+      rejects.push({ index, reason: 'pen-after-as-of' })
+      return
+    }
+    staged.push({
+      index,
+      direction,
+      status,
+      confirmedOn: asDay(rec.confirmed_on),
+      start,
+      end,
+    })
+  })
+
+  // ② 笔链连续性：服务端顺序就是链顺序，不对就整批作废。
+  let chainBroken = false
+  for (let i = 1; i < staged.length; i += 1) {
+    if (!sameEndpoint(staged[i - 1].end, staged[i].start)) {
+      chainBroken = true
+      for (let j = i; j < staged.length; j += 1) rejects.push({ index: staged[j].index, reason: 'pen-chain-broken' })
+      break
+    }
+  }
+  if (chainBroken) {
+    // 整批作废: 被链断裂牵连的单笔也要记一笔账(否则"服务了 N 笔、画了 0 笔"这段差额
+    // 在界面上无解释)。同一 index 只记一次, `penDropped` 就等于"被拒收的笔数"。
+    const rejected = new Set(rejects.map((r) => r.index))
+    for (const pen of staged) {
+      if (!rejected.has(pen.index)) rejects.push({ index: pen.index, reason: 'pen-chain-broken' })
+    }
+    return {
+      pens: [],
+      penBlocked: 0,
+      penDropped: rejects.length,
+      penRejects: rejects.sort((a, b) => a.index - b.index),
+      rejectReason: 'pen-chain-broken',
+      provided: true,
+    }
+  }
+
+  // ③ 状态语义 + 确认日
+  let penBlocked = 0
+  const pens: ChanPen[] = []
+  for (const pen of staged) {
+    if (pen.status === 'blocked') {
+      // blocked 是"不足以确认"的包络: 带确认日就自相矛盾(服务端同样禁止),
+      // 拒收而不是"当它是已确认"或"当它没确认日"。
+      if (pen.confirmedOn !== null) {
+        rejects.push({ index: pen.index, reason: 'pen-blocked-has-confirm' })
+        continue
+      }
+      penBlocked += 1
+      continue
+    }
+    if (pen.status === 'confirmed') {
+      // 确认日必须自己站得住：合法日历日、晚于起点、不越过 as_of_day
+      if (
+        !pen.confirmedOn ||
+        !isValidCalendarDay(pen.confirmedOn) ||
+        pen.confirmedOn <= pen.start.day ||
+        (asOfDay !== null && pen.confirmedOn > asOfDay)
+      ) {
+        rejects.push({ index: pen.index, reason: 'pen-confirm-day-invalid' })
+        continue
+      }
+    } else if (pen.confirmedOn !== null) {
+      // 候选笔带确认日 = 自相矛盾（不猜"是不是已经确认了"）
+      rejects.push({ index: pen.index, reason: 'pen-candidate-has-confirm' })
+      continue
+    }
+    pens.push({
+      direction: pen.direction,
+      status: pen.status,
+      confirmedOn: pen.confirmedOn,
+      start: { kind: pen.start.kind, positionDay: pen.start.day, price: pen.start.price },
+      end: { kind: pen.end.kind, positionDay: pen.end.day, price: pen.end.price },
+    })
+  }
+
+  return {
+    pens,
+    penBlocked,
+    penDropped: rejects.length,
+    penRejects: rejects.sort((a, b) => a.index - b.index),
+    rejectReason: null,
+    provided: true,
+  }
 }
 
 /**
@@ -164,12 +418,17 @@ export function normalizeChanStructure(raw: unknown): ChanStructure | null {
   // 升序由服务端保证；这里再按发生日稳定排序，避免上游顺序漂移导致 marker 断言失败
   fractals.sort((a, b) => (a.positionDay < b.positionDay ? -1 : a.positionDay > b.positionDay ? 1 : 0))
 
+  // 笔：同一份响应里的 `pens[]`（后端一次取数、一次构建，分型与笔同源）。
+  // 缺失（旧后端/未实现）记 `provided=false`，与"有 pens 但为空"区分开。
+  const asOfDay = asDay(rec.as_of_day)
+  const penBatch = normalizeChanPens(rec.pens, asOfDay)
+
   return {
     symbol: asText(rec.symbol),
     instrument: asText(rec.instrument),
     snapshotDigest: rec.snapshot_digest,
     rulesVersion: asText(rec.rules_version),
-    asOfDay: asDay(rec.as_of_day),
+    asOfDay,
     omittedLatestReason: asText(rec.omitted_latest_reason),
     // 缺失时按后端同口径的默认值呈现（unknown/unverified），不写成"已复权/已终局"
     adjustment: asText(rec.adjustment) ?? 'unknown',
@@ -177,6 +436,12 @@ export function normalizeChanStructure(raw: unknown): ChanStructure | null {
     fractals,
     blocked,
     dropped,
+    pens: penBatch.pens,
+    penBlocked: penBatch.penBlocked,
+    penDropped: penBatch.penDropped,
+    penRejects: penBatch.penRejects,
+    penRejectReason: penBatch.rejectReason,
+    pensProvided: penBatch.provided,
   }
 }
 
@@ -548,6 +813,129 @@ export function buildChanMarkers(structure: Pick<ChanStructure, 'fractals'>, col
   return out
 }
 
+// ── 笔 → 图上线段（只用服务端端点，不插值/不跨日造点） ─────────────────────
+
+export interface ChanPenColors {
+  /** 已确认笔：细实线 */
+  confirmed: string
+  /** 待确认笔：细虚线（同色压淡） */
+  candidate: string
+}
+
+/**
+ * 一条笔在图上要画的那条线。
+ *
+ * `status` 只表达"已确认/待确认"（线型），**不表达买卖**；`direction` 只描述结构走向
+ * （向上笔=底→顶、向下笔=顶→底），也不是买卖方向。
+ */
+export interface ChanPenSegment {
+  /** 可溯源的稳定键：`起点日>终点日`（笔链单调，故唯一） */
+  key: string
+  direction: ChanPenDirection
+  status: 'confirmed' | 'candidate'
+  startDay: string
+  startPrice: number
+  endDay: string
+  endPrice: number
+  /** true = 虚线（待确认）；false = 实线（已确认） */
+  dashed: boolean
+  lineWidth: 1
+  color: string
+}
+
+export type ChanPenSkipReason = 'invalid-pen' | 'endpoint-day-not-on-chart'
+
+export interface ChanPenSkip {
+  key: string
+  reason: ChanPenSkipReason
+  startDay: string
+  endDay: string
+}
+
+/**
+ * 可画笔 → 图表线段（**每条只有两个点**：服务端起点/终点）。
+ *
+ * 两条定位铁律：
+ *  - 两个端点日都必须是**当前画面上真有的一根 K 线**（`barDays`）。少一天就整笔不画，
+ *    并计入 `skipped` —— 绝不把端点贴到"最近的柱子"上（那是给另一批数据配坐标）。
+ *  - 只连服务端自己给出的这一对端点：不按笔链"补点"、不跨笔连线（跨笔连线就是把不同
+ *    批次的笔拼成一条假走势）。
+ */
+export function buildChanPenSegments(
+  structure: Pick<ChanStructure, 'pens'>,
+  opts: { barDays: ReadonlySet<string>; colors: ChanPenColors },
+): { segments: ChanPenSegment[]; skipped: ChanPenSkip[] } {
+  const segments: ChanPenSegment[] = []
+  const skipped: ChanPenSkip[] = []
+  for (const pen of structure.pens) {
+    const key = `${pen.start.positionDay}>${pen.end.positionDay}`
+    // 画之前把硬前提再验一次：调用方绕开 normalize 直接喂脏数据时也不许落到别的柱子上
+    const valid =
+      isValidCalendarDay(pen.start.positionDay) &&
+      isValidCalendarDay(pen.end.positionDay) &&
+      pen.start.positionDay < pen.end.positionDay &&
+      Number.isFinite(pen.start.price) &&
+      pen.start.price > 0 &&
+      Number.isFinite(pen.end.price) &&
+      pen.end.price > 0 &&
+      (pen.status === 'confirmed'
+        ? isValidCalendarDay(pen.confirmedOn) && pen.confirmedOn > pen.start.positionDay
+        : pen.confirmedOn === null)
+    if (!valid) {
+      skipped.push({ key, reason: 'invalid-pen', startDay: pen.start.positionDay, endDay: pen.end.positionDay })
+      continue
+    }
+    if (!opts.barDays.has(pen.start.positionDay) || !opts.barDays.has(pen.end.positionDay)) {
+      skipped.push({
+        key,
+        reason: 'endpoint-day-not-on-chart',
+        startDay: pen.start.positionDay,
+        endDay: pen.end.positionDay,
+      })
+      continue
+    }
+    const confirmed = pen.status === 'confirmed'
+    segments.push({
+      key,
+      direction: pen.direction,
+      status: pen.status,
+      startDay: pen.start.positionDay,
+      startPrice: pen.start.price,
+      endDay: pen.end.positionDay,
+      endPrice: pen.end.price,
+      dashed: !confirmed,
+      lineWidth: 1,
+      color: confirmed ? opts.colors.confirmed : opts.colors.candidate,
+    })
+  }
+  return { segments, skipped }
+}
+
+/**
+ * 「当前画面可绑定的快照」信号（`KlineChart.onChanSnapshotChange` 的载荷）。
+ *
+ * 事件语义（消费方按此绑定自己的结构/笔查询）：
+ *  - 非 null 只在**同一张已落图的日 K** + 摘要可校验（64 位小写 hex）+ 前端渲染链未改写
+ *    原始 K 线（`audit.ok`）+ 身份/周期/天数与当前 props 一致时出现；
+ *  - 身份字段全部是**已核实事实**：`symbol`/`market` 来自图表请求，`instrument` 来自响应的
+ *    `is_index` 标记（缺失则不产生信号，绝不按代码猜），`days` 是本次请求的真实天数；
+ *  - 切标的/周期/天数、K 线加载失败、重读开始、卸载、响应说"图已变(409)"→ `null`；
+ *  - 结构/笔请求**取数失败**（超时/5xx）不改变信号：它描述的是"这张图绑定哪份快照"，
+ *    不是"结构有没有画出来"；
+ *  - 值没变不重复回调（幂等），不发消息、不弹提示。
+ */
+export interface ChanChartSnapshot {
+  symbol: string
+  market: string
+  instrument: 'stock' | 'index'
+  /** 恒为 '1d'：结构与笔只按日线口径提供 */
+  interval: '1d'
+  /** 与图表主数据请求一致的天数 */
+  days: number
+  /** 图表响应 `chan_snapshot.digest`：可直接回传给 `/chan-structure?snapshot=` */
+  digest: string
+}
+
 // ── 图层状态机（展示文案也走纯函数，禁"沉默失败"） ─────────────────────
 
 export type ChanLayerView =
@@ -570,11 +958,11 @@ export function chanStatusText(view: ChanLayerView): string {
     case 'off':
       return ''
     case 'identity-unknown':
-      return '缠论分型需要显式标的类型（stock/index）；当前页面未提供，已禁用（000001 这类同码不得猜）'
+      return '缠论结构（分型/笔）需要显式标的类型（stock/index）；当前页面未提供，已禁用（000001 这类同码不得猜）'
     case 'unsupported':
       return view.detail
     case 'not-daily':
-      return '缠论分型只按日 K 口径提供（服务端仅 1d），当前周期不请求、不绘制'
+      return '缠论结构（分型/笔）只按日 K 口径提供（服务端仅 1d），当前周期不请求、不绘制'
     case 'awaiting-bars':
       return '等待当日 K 线就绪后再绑定缠论结构…'
     case 'bars-failed':
@@ -584,13 +972,23 @@ export function chanStatusText(view: ChanLayerView): string {
     case 'no-snapshot':
       return view.detail
     case 'loading':
-      return '缠论分型加载中…'
+      return '缠论结构（分型/笔）加载中…'
     case 'ready': {
       const c = view.structure.fractals.filter((f) => f.status === 'confirmed').length
       const p = view.structure.fractals.filter((f) => f.status === 'candidate').length
-      const bits = [`已确认 ${c} 个`, `待确认 ${p} 个`]
+      const bits = [`分型 已确认 ${c} 个`, `待确认 ${p} 个`]
       if (view.structure.blocked > 0) bits.push(`blocked ${view.structure.blocked} 个（不绘为结构）`)
       if (view.structure.dropped > 0) bits.push(`脏行 ${view.structure.dropped} 个已丢弃`)
+      if (view.structure.pensProvided) {
+        const pc = view.structure.pens.filter((x) => x.status === 'confirmed').length
+        const pp = view.structure.pens.filter((x) => x.status === 'candidate').length
+        bits.push(`笔 已确认 ${pc} · 待确认 ${pp}`)
+        if (view.structure.penBlocked > 0) bits.push(`blocked 笔 ${view.structure.penBlocked} 笔（不绘）`)
+        if (view.structure.penDropped > 0) bits.push(`笔脏行 ${view.structure.penDropped} 笔已丢弃`)
+        if (view.structure.penRejectReason) bits.push(`笔不可用（${view.structure.penRejectReason}）`)
+      } else {
+        bits.push('笔未提供（本响应不含 pens）')
+      }
       if (view.structure.omittedLatestReason) {
         bits.push(`当日 K 未参与（${view.structure.omittedLatestReason}）`)
       }
