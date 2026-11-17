@@ -135,8 +135,10 @@ class TurnTarget:
     market: str | None = None
     source: str = "none"
     #: "no_target"（既无显式标的也没绑定）/ "unresolved_name" / "ambiguous_name"
-    #: / "name_coverage_unknown"（名称索引与 TQ 都不可用, 没法确认正文没点别的票）
-    #: / "name_conflict"（正文名字与锚点/会话绑定指向不同的票）
+    #: / "name_unverifiable"（一次都没确认出名字, 而整句又不全是泛指/追问用语 —— 名称识别
+    #:   覆盖不到整句, 就不能声称"正文没点别的票"）
+    #: / "ambiguous_target"（正文给了不止一个标的: 多个代码、代码与 @提及 各指一只）
+    #: / "name_conflict"（正文名字与显式标的/锚点/会话绑定指向不同的票）
     problem: str | None = None
     #: 正文里的名字解析出的代码（仅用于说明冲突, 不参与取数）
     name_symbol: str | None = None
@@ -178,8 +180,14 @@ def resolve_explicit_target(conv, body) -> TurnTarget | None:
 def _name_target(text: str) -> tuple[str | None, str | None]:
     """正文里的股票名 → (代码, 问题)。**旁路**: 任何异常都当"解析不出"。
 
-    "解析模糊/失败一律 fail-closed" 是这里的关键: 名字命中却对不到唯一代码、
+    「解析模糊/失败一律 fail-closed」是这里的关键: 名字命中却对不到唯一代码、
     或一句话里出现多只不同名的票, 都不能拿快照硬凑 —— 宁可本轮不给结构。
+
+    **「没认出名字」也不等于「正文没点别的票」**（2026-11-17 五轮审计）: 本地名单只覆盖
+    全名（4/3 字 + 句首两字简称），TQ 兜底只探每段开头 3~4 字，所以段中简称、过期/残缺
+    名单里的全名都可能漏检（`coverage` 是 "local"/"tq"/"none" 都一样）。因此这条路只在
+    **正向可证**时才允许"这句话只指当前页面": 整句都由泛指/追问用语构成
+    （`unverified_name_words` 为空）；否则返回 ``name_unverifiable`` 让上层整份丢弃快照。
     """
     try:
         from src.core.symbol_guard import (
@@ -202,13 +210,44 @@ def _name_target(text: str) -> tuple[str | None, str | None]:
             resolved = [(w, c) for (w, c, _n) in bare_name_codes(text)]
         if not resolved and not unmapped:
             # 紧贴提问词、没有分隔符（「贵州茅台缠论怎么样」）：整段窗口确认。
-            # coverage="none" 表示本地索引与 TQ 都不可用 —— 此时"没检测到名字"不能
-            # 当成"用户没点别票"，正文里只要有核对不了的词就整份丢弃快照。
-            hits, coverage = whole_text_name_codes(text)
+            # 注意：这里的空结果只说明**这次没探到**，不是"正文没点名" —— 覆盖边界
+            # （段中名称、简称、残缺名单）见 symbol_guard 模块头。
+            hits, _coverage = whole_text_name_codes(text)
             resolved = [(w, c) for (w, c, _n) in hits]
-            if not resolved and coverage == "none" and unverified_name_words(text):
-                logger.info("名字索引与TQ均不可用, 正文含无法核对的具体词, 本轮按无唯一目标处理")
-                return None, "name_coverage_unknown"
+        if not resolved and not unmapped:
+            # 一次检测都没确认出名字。两种可能：用户真没点名，或者名字被漏检了 ——
+            # 后者无法排除，所以**只能**用正向证据放行：整句都由泛指/追问用语构成。
+            # 只要句子里还有认不出的词（可能是简称/错别字/新名称），就不能拿页面上的
+            # 旧图顶上（「我想看看贵州茅台缠论怎么样」= 浦发结构答给茅台）。
+            unknown = unverified_name_words(text)
+            if unknown:
+                logger.info(
+                    "名称识别覆盖不到整句(本地名单只认全名/句首, TQ 只探段首), "
+                    "无法确认正文没点别的票 → 本轮按无唯一目标处理 unknown=%s",
+                    unknown[:3],
+                )
+                return None, "name_unverifiable"
+            return None, None            # 整句都是泛指/追问：交给上层按当前页面用
+        # 已经确认出一只名字，也不代表句子只有这一只：「浦发银行还是贵州茅台」里第一遍
+        # 只按后缀词命中了「浦发银行」，剩下那半句还藏着没后缀的票。把已确认的名字词
+        # 抹掉，对**剩余正文**再跑一次整段确认；剩下那半句仍认不出时同样不能放行。
+        rest = text
+        for word, _code in resolved:
+            if word:
+                rest = rest.replace(word, " ")
+        if not unmapped and rest.strip():
+            hits, _ = whole_text_name_codes(rest)
+            for word, code, _n in hits:
+                if code not in {c for _w, c in resolved}:
+                    resolved.append((word, code))
+            if len({c for _w, c in resolved}) == 1:
+                unknown = unverified_name_words(rest)
+                if unknown:
+                    logger.info(
+                        "正文去掉已确认的名字后仍有认不出的表述, 无法排除第二只标的 → "
+                        "本轮按无唯一目标处理 unknown=%s", unknown[:3],
+                    )
+                    return None, "name_unverifiable"
         codes: list[str] = []
         for _word, code in resolved:
             code6 = str(code or "").split(".")[0].strip()
@@ -220,8 +259,6 @@ def _name_target(text: str) -> tuple[str | None, str | None]:
     if len(codes) > 1:
         return None, "ambiguous_name"
     if not codes:
-        if not (resolved or unmapped):
-            return None, None            # 这句话没点名任何标的: 交给上层判"无目标"
         # 确实点了名却对不到可分析的 A 股代码:
         #   查不到(错别字/已退市/只有相似建议) 或 命中的是基金/ETF/港股等本链路不支持的
         #   标的 —— 两种都不许拿锚点那张图顶替。
@@ -308,6 +345,41 @@ def _instrument_evidence(conv, body, symbol: str,
     return None, None
 
 
+def _second_target_in_text(body, explicit: TurnTarget) -> tuple[str, str | None] | None:
+    """显式标的之外，正文里是否还给了**第二个**标的（代码或名字）。旁路，异常=不判定。
+
+    为什么要查（2026-11-17 五轮审计）：「用户写了代码」只证明**那一个**标的，不证明
+    正文没有第二只。旧实现对 ``source in ("text", "mention")`` 直接返回显式标的，
+    于是「600000 和 600519 哪个缠论更好」「600000 我想看看贵州茅台缠论怎么样」都拿着
+    600000 的快照作答 —— 正是"用代码存在忽略第二标的"。
+
+    返回 (problem, name_symbol)；None = 正文没有第二个标的。
+    """
+    symbol = (explicit.symbol or "").strip()
+    text = getattr(body, "content", "") or ""
+    try:
+        others = [c for c in _CODE_RE.findall(text) if c != symbol]
+        if others:
+            return "ambiguous_target", None
+        if explicit.source == "text":
+            mention = mention_stock(body)
+            if mention and mention != symbol:
+                return "ambiguous_target", None     # 文字代码与 @提及 各指一只
+        # 名字检测在出现 6 位代码时会短路（不许改用户明写的标的），所以先剥掉代码，
+        # 再对**剩下的正文**做同一套判定：命中别的票 → name_conflict；还有认不出的词 →
+        # name_unverifiable（不能因为给了代码就宣称"正文没有第二只"）。
+        residual = _CODE_RE.sub(" ", text)
+        code, problem = _name_target(residual)
+    except Exception:  # noqa: BLE001 - 判定旁路：异常当"没发现第二标的"，不改变显式路径
+        logger.info("显式标的的第二标的判定失败(按未发现处理)", exc_info=True)
+        return None
+    if problem:
+        return problem, None
+    if code and code != symbol:
+        return "name_conflict", code
+    return None
+
+
 def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarget:
     """本轮请求目标的**最终**口径（显式标的优先，必要时才做名字解析）。
 
@@ -317,6 +389,9 @@ def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarge
     显式标的（文字代码/@提及）**永远优先**；但当目标来自页面锚点/会话绑定、而正文里又
     点名了**另一只**股票时，属于"本轮到底在聊哪只"自相矛盾 —— 一样 fail-closed，
     否则用户问北方稀土、页面停在 600000 时，快照会把 600000 的结构答成他问的那只。
+
+    显式标的也**不是免检**（``_second_target_in_text``）：一句里两个代码、或代码之外
+    还点了别的名字，同样判不出唯一目标 —— "写了代码"只证明那一个标的。
 
     正文**确实点了名**却解析不出唯一代码（错别字/查不到/一句里还有对不上的名字）时，
     页面锚点与会话绑定都不能替用户决定本轮标的：2026-11-17 三轮审计实测，
@@ -330,7 +405,16 @@ def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarge
         )
         explicit = replace(explicit, instrument=instrument,
                            instrument_source=instrument_source)
-        if not resolve_names or explicit.source in ("text", "mention"):
+        if not resolve_names:
+            return explicit
+        second = _second_target_in_text(body, explicit)
+        if second is not None:
+            problem, name_symbol = second
+            return TurnTarget(symbol=explicit.symbol, market=explicit.market,
+                              source=explicit.source, problem=problem,
+                              name_symbol=name_symbol, instrument=explicit.instrument,
+                              instrument_source=explicit.instrument_source)
+        if explicit.source in ("text", "mention"):
             return explicit
         code, problem = _name_target(getattr(body, "content", "") or "")
         if problem and problem != "ambiguous_name":
@@ -746,10 +830,16 @@ def _no_target_note(problem: str, snapshot_symbol: str, *,
     """判不出唯一请求目标时的显式说明（fail-closed, 不给结构）。"""
     why = {
         "unresolved_name": "正文里的标的名没能解析成唯一代码(可能是错别字/已退市/只有相似建议)",
-        "name_coverage_unknown": (
-            "本地标的名称索引与行情库名称检索都不可用, 服务端无法确认正文没有点名其他标的"
+        "name_unverifiable": (
+            "服务端无法确认正文有没有点名别的标的 —— 名称索引只覆盖一部分写法(本地名单只认"
+            "全名: 4 字/3 字与句首两字简称; 行情库兜底只探每段开头 3~4 字), 简称、句中的"
+            "名称、新上市名称都可能漏检, 所以「没认出名字」不等于「没提别的票」"
         ),
         "ambiguous_name": "正文里出现了多只不同标的, 无法确定这张图属于哪一只",
+        "ambiguous_target": (
+            "正文里给了不止一个标的(多个代码, 或代码与 @提及 各指一只), "
+            "无法确定这张图属于哪一只"
+        ),
         "name_conflict": (
             f"正文里的标的名指向 {name_symbol or '另一只票'}, 与当前标的"
             f" {target_symbol or '未知'} 不是同一只, 本轮目标自相矛盾"
@@ -799,8 +889,11 @@ async def prepare_chart_snapshot(db, conv, body, user,
         **绝不自行刷新或另取一张新快照冒充"用户这张图"**。
     软丢弃（返回 note：本轮严格缺失，聊天继续）:
       * 标的不一致 —— 本轮请求目标（含名字解析出的代码）与快照标的不是同一只;
-      * 判不出唯一目标（正文只写名字但解析失败/一句话含多只票/既无显式标的也无绑定）——
+      * 判不出唯一目标（正文只写名字但解析失败/一句话含多只票/既无显式标的也无绑定/
+        正文有名称识别覆盖不到的表述 —— 见 `name_unverifiable`）——
         **fail-closed**: 没有可信归属就不给结构，不许把"无绑定"当成"可信";
+      * 显式代码之外还点了别的标的（多个代码 / 代码与 @提及 各指一只 / 代码 + 别的名字）——
+        "写了代码"只证明那一个标的，不证明正文没有第二只;
       * 422 该快照当前不满足分型前提; 503/上游异常（校验不了就明说没拿到）。
     """
     declared = getattr(body, "chart_snapshot", None)
