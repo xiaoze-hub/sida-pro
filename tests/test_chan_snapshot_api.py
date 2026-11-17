@@ -8,13 +8,20 @@ symbol/market/instrument 重新取数, 它算的就不是"这张图的缠论结�
 
 本文件钉住:
   ① 图表日线响应必须带内容摘要(`chan_snapshot.digest`), 且摘要绑定
-     symbol/market/instrument/interval + 每根 bar 的日期与**完整** OHLC + 顺序;
+     symbol/market/instrument/interval + 每根 bar 的日期与**完整** OHLC + 顺序
+     + 会影响结构/归属的元信息(每根 partial 标记、每根 source、响应 source/today_bar);
   ② 结构端点**必须**回传该摘要; 服务端用同一 `get_klines` 的返回重算, 不等 → 409;
-  ③ 声明 instrument 不算已验证身份: 强制显式传 instrument 并用响应 `is_index` 反查,
-     同码指数/个股(000001)不互证; auto / 非 CN / 非 1d 一律 422;
+  ③ instrument 是**必填** Query 参数(缺参 422, 不再默认 stock); 声明不算已验证身份:
+     用响应 `is_index` 反查, 同码指数/个股(000001)不互证; 畸形(字符串/数字/None)
+     → 409 而不是静默当 stock; 快照缺 `is_index` 的老响应记 instrument_basis=
+     declared_path(依赖显式 stock 调用路径, 不是独立验证); auto / 非 CN / 非 1d 一律 422;
   ④ 重复或乱序日期 → 422(不自动去重); 当日 bar 不参与计算(沿用 adapter);
-  ⑤ 未登录 → 401; 上游异常不回显异常原文/DSN;
-  ⑥ 响应只有分型(blocked/candidate/confirmed + 发生日/确认日 + 规则版本), 不称中枢。
+     未来日期 bar → 422;
+  ⑤ 未登录 → 401, 账号禁用/注销 → 403; 上游异常不回显异常原文/DSN;
+  ⑥ 响应只有分型(blocked/candidate/confirmed + 发生日/确认日 + 固定规则版本), 不称中枢。
+
+规则版本固定为 `chan-fractal-inclusive-sealed-v1`(包含式合并 + 右邻封口才确认),
+响应、快照、文档三处必须同值 —— 改规则就改版本号, 不许同号换语义。
 
 时间用固定 NOW 钉住(monkeypatch `chan_snapshot._now`), 不随运行日期漂移。
 """
@@ -217,11 +224,45 @@ def test_digest_binds_order_identity_and_ignores_irrelevant_keys():
     assert ordered != _digest(bars, instrument="index")
     assert ordered != _digest(bars, interval="1w")
     assert ordered != _digest(bars, market="HK")
-    # 图表盘中会给末根挂 partial/source/as_of/amount —— 不得改变摘要
-    noisy = [dict(bars[0]), {**bars[1], "partial": True, "source": "live", "as_of": "x", "amount": 1.0}]
+    # 与结构无关的展示字段(量/额/时刻)不改变摘要 —— 摘要描述的是价格结构输入
+    noisy = [dict(bars[0]), {**bars[1], "as_of": "x", "amount": 1.0, "volume": 999.0}]
     assert _digest(noisy) == ordered
     # int 与 float 同值必须同摘要(PG Decimal → JSON float 两条路)
     assert _digest([{**bars[0], "close": 10}]) == _digest([{**bars[0], "close": 10.0}])
+
+
+def test_digest_binds_partial_and_source_because_they_change_meaning():
+    """同样 OHLC 但 partial/source 变了 → 不是同一份快照: 一个"可能未定型/另一个来源"。
+
+    旧 v1 摘要只看 OHLC, 于是"末根从已收盘变成盘中未定型"和"换了数据源"都能伪装成
+    同一摘要, 结构端点会拿别人的数据算这张图的分型。v2 必须把它们编进字节流。
+    """
+    bars = [_bar("2026-11-16", 10.1)]
+    base = _digest(bars)
+    assert base != _digest([{**bars[0], "partial": True}])
+    # partial=False 与"没有这个键"语义相同(adapter 只认 `is True`) → 同摘要
+    assert base == _digest([{**bars[0], "partial": False}])
+    assert base != _digest([{**bars[0], "source": "live"}])
+    assert base != _digest(bars, source="pg_klines_hypertable")
+    assert base != _digest(bars, today_bar="live")
+    assert base != _digest(bars, today_bar="missing")
+
+
+@pytest.mark.parametrize("bad", ["true", 1, 0, None, 1.0])
+def test_malformed_partial_flag_is_rejected_not_ignored(bad):
+    """`partial="true"` 在 adapter 里会 `is True` 判假 → 历史未定型 bar 被当已收盘。
+
+    摘要层必须拒绝畸形值(ValueError → 端点 409), 不许猜成 False。
+    """
+    with pytest.raises(ValueError):
+        _digest([{**_bar("2026-11-16", 10.1), "partial": bad}])
+
+
+def test_malformed_source_is_rejected():
+    with pytest.raises(ValueError):
+        _digest([{**_bar("2026-11-16", 10.1), "source": 123}])
+    with pytest.raises(ValueError):
+        _digest([_bar("2026-11-16", 10.1)], source=123)
 
 
 # ── ③ 正常路径 ──────────────────────────────────────────────────────────
@@ -240,8 +281,11 @@ def test_structure_matches_chart_snapshot_and_never_uses_current_bar(monkeypatch
 
     assert body["snapshot_digest"] == digest
     assert body["instrument"] == "stock"
+    assert body["instrument_basis"] == "response_flag"
     assert body["interval"] == "1d"
-    assert body["rules_version"] == chan.CHAN_FRACTAL_RULES_VERSION == "chan-fractal-v1"
+    # 规则版本: 文档固定值, 响应/快照同源(改规则必须换版本号)
+    assert body["rules_version"] == chan.CHAN_FRACTAL_RULES_VERSION == "chan-fractal-inclusive-sealed-v1"
+    assert chart["chan_snapshot"]["rules_version"] == body["rules_version"]
     assert body["as_of_day"] == "2026-11-16"  # 当日 bar 不参与
     assert body["omitted_latest_reason"] == "current_day_completion_unverified"
     assert all(f["position_day"] != TODAY for f in body["fractals"])
@@ -259,9 +303,9 @@ def test_structure_matches_chart_snapshot_and_never_uses_current_bar(monkeypatch
 
     # 响应只含分型相关字段: 不许夹带合并K线/中枢之类"看起来更强"的结构
     assert set(body) == {
-        "symbol", "market", "instrument", "interval", "rules_version", "snapshot_digest",
-        "as_of_day", "omitted_latest_reason", "source", "adjustment", "finality",
-        "fractals", "counts", "not_implemented", "disclaimer",
+        "symbol", "market", "instrument", "instrument_basis", "interval", "rules_version",
+        "snapshot_digest", "as_of_day", "omitted_latest_reason", "source", "adjustment",
+        "finality", "fractals", "counts", "not_implemented", "disclaimer",
     }
     assert set(body["fractals"][0]) == {
         "kind", "status", "position_day", "position_price", "confirmed_on"
@@ -428,3 +472,237 @@ def test_route_is_registered_on_the_real_app_and_guarded():
     # 不是某种通配路由把任意两段路径都挡成 401。
     miss = client.get("/api/klines/600000/not-a-route")
     assert miss.status_code == 404, miss.text
+
+
+# ── ⑦ 摘要/规则版本常量: 文档固定值, 不许同号换语义 ────────────────────────
+
+
+def test_schema_and_rules_version_are_fixed_and_bumped():
+    # 摘要字节流变了(OHLC → OHLC+partial+source)就必须换 schema 版本
+    assert chan.DIGEST_SCHEMA == "sida-chan-snapshot-v2"
+    assert chan.CHAN_FRACTAL_RULES_VERSION == "chan-fractal-inclusive-sealed-v1"
+
+
+# ── ⑧ instrument 必须显式: 必填 Query 参数, 不再默认 stock ────────────────
+
+
+def test_instrument_query_param_is_required(monkeypatch, auth_headers):
+    """默认 stock 会让"忘了传"被当成"我说了是股票" —— 必须 422, 不许落默认分支。"""
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    digest = _chart(client, auth_headers)["chan_snapshot"]["digest"]
+    r = client.get("/api/klines/600000/chan-structure",
+                   params={"market": "CN", "interval": "1d", "days": 60, "snapshot": digest},
+                   headers=auth_headers)
+    assert r.status_code == 422, r.text
+    assert "fractals" not in r.text
+
+
+def test_openapi_marks_instrument_required_and_documents_allowed_values():
+    from src.web.app import app
+
+    op = app.openapi()["paths"]["/api/klines/{symbol}/chan-structure"]["get"]
+    params = {p["name"]: p for p in op["parameters"]}
+    assert params["instrument"]["required"] is True
+    assert "default" not in params["instrument"]  # 没有隐含默认值
+    assert params["snapshot"]["required"] is True
+
+
+# ── ⑨ 身份标记: 必须布尔; 畸形拒绝; 缺字段如实记 declared_path ──────────────
+
+
+def test_malformed_is_index_is_rejected_not_silently_stock():
+    """`is_index="true"` / 1 这类值不能被猜成 stock(那等于把指数当个股算)。"""
+    legacy_stock = {"symbol": "600000", "market": "CN", "interval": "1d", "klines": []}
+    assert chan.response_instrument(legacy_stock) == "stock"  # 缺字段: 历史 stock 契约
+    assert chan.instrument_identity_basis(legacy_stock) == "declared_path"
+    for bad in ("true", "false", 1, 0, None, 1.0, [], {}):
+        with pytest.raises(ValueError):
+            chan.response_instrument({"is_index": bad, "symbol": "600000"})
+    assert chan.response_instrument({"is_index": True}) == "index"
+    assert chan.response_instrument({"is_index": False}) == "stock"
+    assert chan.instrument_identity_basis({"is_index": False}) == "response_flag"
+
+
+def test_chart_stock_response_declares_boolean_identity(monkeypatch, auth_headers):
+    """个股响应必须显式 `is_index: false`; 缺字段只能留给历史外来响应。"""
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    body = _chart(client, auth_headers)
+    assert body["is_index"] is False
+    assert body["chan_snapshot"]["instrument"] == "stock"
+    assert body["chan_snapshot"]["instrument_basis"] == "response_flag"
+
+
+def test_attach_records_unverified_identity_without_inventing_a_digest():
+    legacy = {"symbol": "600000", "market": "CN", "interval": "1d",
+              "klines": [_bar("2026-11-16", 10.1)]}
+    snap = chan.attach_snapshot_digest(dict(legacy))["chan_snapshot"]
+    # 缺 is_index: 身份来自"显式 stock 调用路径", 如实标注, 摘要仍可用于内容绑定
+    assert snap["instrument"] == "stock"
+    assert snap["instrument_basis"] == "declared_path"
+    assert len(snap["digest"]) == 64
+
+    malformed = {**legacy, "is_index": "true"}
+    snap_bad = chan.attach_snapshot_digest(dict(malformed))["chan_snapshot"]
+    assert snap_bad["digest"] is None
+    assert snap_bad["instrument"] is None
+    assert snap_bad["unavailable_reason"] == "instrument_flag_unverified"
+
+
+def test_structure_endpoint_rejects_malformed_response_identity(monkeypatch, auth_headers):
+    from src.web.api import klines as kl
+
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    body = {"symbol": "600000", "market": "CN", "interval": "1d", "is_index": "true",
+            "klines": [_bar(day, ohlc[1]) for day, ohlc in zip(COMPLETED, _OHLC)]}
+    monkeypatch.setattr(kl, "get_klines", lambda **kwargs: body)
+    r = _structure(client, auth_headers, "0" * 64)
+    assert r.status_code == 409, r.text
+    assert "fractals" not in r.text
+
+
+def test_structure_endpoint_records_declared_path_for_legacy_stock(monkeypatch, auth_headers):
+    from src.web.api import klines as kl
+
+    legacy_bars = [
+        {"date": day, "open": o, "high": h, "low": lo, "close": c}
+        for day, (o, c, h, lo) in zip(COMPLETED, _OHLC)
+    ]
+    digest = chan.compute_snapshot_digest(
+        symbol="600000", market="CN", instrument="stock", interval="1d", bars=legacy_bars
+    )
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    # 响应里没有 is_index 键(历史契约) → 200, 但必须如实记 declared_path
+    monkeypatch.setattr(kl, "get_klines", lambda **kwargs: {
+        "symbol": "600000", "market": "CN", "interval": "1d", "klines": [dict(b) for b in legacy_bars],
+    })
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 200, r.text
+    assert r.json()["instrument_basis"] == "declared_path"
+    assert r.json()["instrument"] == "stock"
+
+
+def test_cross_symbol_response_is_rejected(monkeypatch, auth_headers):
+    from src.web.api import klines as kl
+
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    monkeypatch.setattr(kl, "get_klines", lambda **kwargs: {
+        "symbol": "000001", "market": "CN", "interval": "1d", "is_index": False,
+        "klines": [{"date": "2026-11-16", "open": 10.0, "high": 10.5, "low": 9.5, "close": 10.1}],
+    })
+    r = _structure(client, auth_headers, "0" * 64)
+    assert r.status_code == 409, r.text
+
+
+# ── ⑩ partial/source 漂移: 相同 OHLC 不同含义 → 409 ───────────────────────
+
+
+def test_partial_flag_drift_with_identical_ohlc_conflicts(monkeypatch, auth_headers):
+    """同一批 OHLC, 末根从"已收盘"变成"盘中未定型" → 不是同一份快照。"""
+    from src.web.api import klines as kl
+
+    bars = [
+        {"date": day, "open": o, "high": h, "low": lo, "close": c}
+        for day, (o, c, h, lo) in zip(COMPLETED, _OHLC)
+    ]
+    digest = chan.compute_snapshot_digest(
+        symbol="600000", market="CN", instrument="stock", interval="1d", bars=bars
+    )
+    drifted = [dict(b) for b in bars]
+    drifted[-1] = {**drifted[-1], "partial": True}  # OHLC 一模一样, 只是被标未定型
+    monkeypatch.setattr(kl, "get_klines", lambda **kwargs: {
+        "symbol": "600000", "market": "CN", "interval": "1d", "is_index": False,
+        "source": "pg_klines_hypertable", "today_bar": "live", "klines": drifted,
+    })
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 409, r.text
+
+
+def test_source_change_with_identical_ohlc_conflicts(monkeypatch, auth_headers):
+    from src.web.api import klines as kl
+
+    bars = [
+        {"date": day, "open": o, "high": h, "low": lo, "close": c}
+        for day, (o, c, h, lo) in zip(COMPLETED, _OHLC)
+    ]
+    digest = chan.compute_snapshot_digest(
+        symbol="600000", market="CN", instrument="stock", interval="1d", bars=bars,
+        source="pg_klines_hypertable",
+    )
+    monkeypatch.setattr(kl, "get_klines", lambda **kwargs: {
+        "symbol": "600000", "market": "CN", "interval": "1d", "is_index": False,
+        "source": "tencent_web", "klines": [dict(b) for b in bars],
+    })
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 409, r.text
+
+
+def test_malformed_partial_flag_on_the_wire_conflicts(monkeypatch, auth_headers):
+    """响应里 `partial="true"`(字符串) → 摘要不可校验 → 409, 不许当已收盘算分型。"""
+    from src.web.api import klines as kl
+
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+    bars = [
+        {"date": day, "open": o, "high": h, "low": lo, "close": c}
+        for day, (o, c, h, lo) in zip(COMPLETED, _OHLC)
+    ]
+    dashed = [dict(b) for b in bars]
+    dashed[-1] = {**dashed[-1], "partial": "true"}
+    monkeypatch.setattr(kl, "get_klines", lambda **kwargs: {
+        "symbol": "600000", "market": "CN", "interval": "1d", "is_index": False,
+        "klines": dashed,
+    })
+    r = _structure(client, auth_headers, "0" * 64)
+    assert r.status_code == 409, r.text
+    assert "fractals" not in r.text
+
+    # 图表侧同样不产出摘要, 并注明是"元信息畸形"而不是"没有K线"
+    snap = chan.attach_snapshot_digest({
+        "symbol": "600000", "market": "CN", "interval": "1d", "is_index": False,
+        "klines": dashed,
+    })["chan_snapshot"]
+    assert snap["digest"] is None
+    assert snap["unavailable_reason"] == "bar_metadata_invalid"
+
+
+# ── ⑪ 时间安全: 未来 bar 必须 422, 不是算出一套分型 ───────────────────────
+
+
+def test_future_bar_is_rejected(monkeypatch, auth_headers):
+    future = _completed_bars() + [_k("2026-11-18", (10.0, 12.0, 12.5, 9.9))]
+    client = _client(monkeypatch, _Feed(future))
+    digest = _chart(client, auth_headers)["chan_snapshot"]["digest"]
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 422, r.text
+    assert "未来" in r.json()["detail"]
+    assert "fractals" not in r.json()
+
+
+# ── ⑫ 403: 账号被禁用 → 403(不是 401, 也不是 200) ──────────────────────────
+
+
+def test_disabled_account_is_403_and_leaks_nothing(monkeypatch, auth_headers):
+    from src.web.database import SessionLocal
+    from src.web.models import User
+
+    client = _client(monkeypatch, _Feed(_bars_with_today()))
+
+    def _set_active(flag: bool) -> None:
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == USER_ID).first()
+            user.is_active = flag
+            db.commit()
+        finally:
+            db.close()
+
+    _set_active(False)
+    try:
+        r = _structure(client, auth_headers, "0" * 64)
+        assert r.status_code == 403, r.text
+        text = json.dumps(r.json(), ensure_ascii=False)
+        assert "sqlite" not in text.lower() and "Traceback" not in text
+        assert "fractals" not in text
+    finally:
+        _set_active(True)
