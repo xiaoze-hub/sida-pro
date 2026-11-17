@@ -11,21 +11,30 @@ What is pinned:
   (the digest must match).  Only the contiguous leading run of
   ``confirmed_segments`` becomes :class:`ExternalSegment`; ``candidate`` and
   ``blocked`` entries never do;
-* the range of each segment is read from the pens inside
-  ``pen_start_index..pen_end_index`` — **not** from its endpoints (a confirmed
-  line can have an interior extreme) and **not** from its evidence pens (they
-  reach past the end and would double count);
+* the range of each segment is the **merged-bar interval** (``bar_low``/
+  ``bar_high``) of every pen endpoint inside ``pen_start_index..pen_end_index`` —
+  **not** the pivot prices (a wick beyond the pivot is real price action, and
+  adapter v1 dropping it put ``zd``/``zg`` inside the K-line range) and **not**
+  the evidence pens (they reach past the end and would double count);
+* the v2 range convention is part of ``snapshot_version``
+  (``range=pen_span_endpoint_merged_bar``), so a v1 pivot-price zone can never
+  be mixed with a v2 merged-bar zone;
 * ``confirmed_on`` is copied from the segment kernel and re-verified against the
-  evidence's latest confirmation day and the geometric end day; nothing in the
-  adapter mints a timestamp, and the centre is only visible on the third
-  segment's confirmation day;
+  evidence's latest confirmation day, both endpoint confirmation days and the
+  geometric end day; nothing in the adapter mints a timestamp;
+* ``visible_on`` is the **formation** day (the third segment's confirmation
+  day) and never moves while the centre stands; ``state_changed_on`` is the
+  later evidence day of the lifecycle state, a separate clock;
 * fewer than three confirmed segments is reported as
   ``not_enough_confirmed_segments`` — explicitly *not* "no centre" — and the
   centre kernel is not even called (checked with a monkeypatched spy);
 * a ``blocked`` refusal before three confirmed lines yields
   ``blocked_before_centre`` with the kernel's own reason; a refusal *after* a
-  confirmed centre does not retract or move that centre, it only sets
-  ``chain_complete=False`` — a prefix never contradicts an earlier prefix;
+  confirmed centre does not retract or move that centre, it only makes the
+  result non-``terminal`` — a prefix never contradicts an earlier prefix;
+* ``terminal`` is strict: a 0-segment snapshot, an open candidate tail and a
+  blocking refusal are all non-terminal, because none of them is a closed
+  answer;
 * three non-overlapping (or merely touching) ranges give ``no_centre`` with the
   centre kernel's own ``zero_width_intersection`` label: a measured absence;
 * prefix replay over every bar prefix shows the centre appearing exactly on its
@@ -52,6 +61,7 @@ from src.core.chan_centre_adapter import (
     BASIS,
     INPUT_KIND,
     LIMITATIONS,
+    RANGE_BASIS,
     STRICTNESS,
     CentreSource,
     centre_from_segment_snapshot,
@@ -70,8 +80,12 @@ from src.core.chan_pen import (
     build_chan_pen,
 )
 from src.core.chan_segment import (
+    FractalEvidence,
+    MIN_PENS,
     SEGMENT_KERNEL_VERSION,
+    Segment,
     SegmentBinding,
+    SegmentEndpoint,
     segment_from_pens,
     segment_input_digest,
 )
@@ -110,12 +124,25 @@ CENTRE_PIVOTS = [
 ]
 CENTRE_BARS = zigzag_bars(CENTRE_PIVOTS)
 
-# Three confirmed lines whose ranges share no positive width:
-# [20, 23.95], [15.88, 23.95], [15.88, 19.58] -> max low 20 > min high 19.58.
+# The v1 (pivot-price) no-centre fixture.  Under the v2 merged-bar convention it
+# is a **centre**: the wick of the first line reaches 19 while the last one
+# reaches 20.58, so zd/zg are [19, 20.58] instead of the pivot-only [20, 19.58].
+# Kept as the regression for the convention change, not as a no-centre case.
 NO_CENTRE_PIVOTS = [
     20.0, 20.97, 20.45, 23.95, 20.55, 21.13, 17.52, 19.24, 15.88, 18.96,
     15.96, 19.58, 18.68, 19.2, 15.41,
 ]
+
+# A v2 no-centre fixture: even with every endpoint bar's wick included, the
+# first line [86, 99] and the third [48, 72] stay apart (max low 86 > min high
+# 72).  Segments span pens 0..2, 3..7, 8..10; a pending candidate follows.
+NO_CENTRE_PIVOTS_V2 = [
+    93, 97, 87, 98, 93, 96, 63, 65, 49, 64, 51, 71, 58, 68, 47,
+]
+
+# The same three lines followed by a blocked fourth segment (第67课 第二种情况,
+# not implemented): a measured no-centre whose structure is incomplete.
+NO_CENTRE_BLOCKED_PIVOTS = NO_CENTRE_PIVOTS_V2 + [55, 50, 60, 54]
 
 # A confirmed up segment whose **interior** low (18) is below its start (20) and
 # whose evidence pen 7 (down to 17) reaches past its end.  Endpoint-only ranges
@@ -320,7 +347,9 @@ def test_the_chain_is_bound_to_one_sample():
     assert result.source.as_of_day == pen.as_of_day == segment.as_of_day
     assert result.chain.instrument == _SYMBOL
     assert result.chain.as_of_day == pen.as_of_day
-    assert result.chain.snapshot_version == f'chan-segment-v2|adjust=qfq|pens={segment.input_digest}'
+    assert result.chain.snapshot_version == (
+        f'chan-segment-v2|adjust=qfq|range={RANGE_BASIS}|pens={segment.input_digest}'
+    )
     assert result.chain.basis == BASIS
 
 
@@ -352,6 +381,7 @@ def test_labels_say_operational_segment_a0_and_never_strict():
     result = adapt(segment, pen)
 
     assert (result.basis, result.strictness) == (BASIS, STRICTNESS) == ('segment_a0', 'operational_not_strict')
+    assert result.adapter_version == ADAPTER_VERSION == 'chan-centre-adapter-v2'
     assert result.input_kind == INPUT_KIND == 'segment_kernel_confirmed_prefix'
     assert result.segments_engine == SEGMENTS_ENGINE == 'none'
     assert result.centre_input_kind == 'externally_supplied_completed_segments'
@@ -387,7 +417,7 @@ def test_a_blocked_segment_is_never_geometry_but_never_hidden():
     issue = next(i for i in result.issues if i.blocking)
     assert issue.pen_index == 11 and issue.segment_index == 3
     assert result.blocked_reasons == ('characteristic_initial_containment',)
-    assert result.chain_complete is False
+    assert result.terminal is False
     # and the centre was still built: the refusal is *after* it, not in it
     assert result.status == 'centre'
     assert result.centre.segment_indices == (0, 1, 2)
@@ -401,7 +431,7 @@ def test_a_candidate_tail_is_excluded_without_being_a_block():
 
     assert result.status == 'centre'
     assert result.confirmed_prefix_length == 3
-    assert result.chain_complete is True
+    assert result.terminal is False      # an open candidate tail is not closed
     assert [i.reason for i in result.issues] == ['candidate_segment_excluded']
     assert all(not i.blocking for i in result.issues)
     assert [s.end_day for s in result.segments] == ['2026-01-22', '2026-02-03', '2026-02-15']
@@ -428,7 +458,7 @@ def test_a_blocked_tail_never_retracts_or_moves_a_confirmed_centre():
         24.96,
         '2026-03-05',
     )
-    assert early.chain_complete is True and late.chain_complete is False
+    assert early.terminal is False and late.terminal is False
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +501,38 @@ def test_prefix_replay_never_shows_the_centre_early_and_never_moves_it():
     assert seen[len(CENTRE_BARS)] == final.segments
 
 
+# A 20-pivot series whose fourth segment is an edge touch: the centre extends
+# while its zone and formation day stay put.
+VISIBLE_PIVOTS = [
+    19.82, 21.17, 19.72, 22.79, 21.67, 25.16, 22.1, 24.11, 21.0, 22.83, 21.34,
+    24.51, 21.9, 23.52, 21.08, 23.2, 21.89, 24.08, 22.94, 24.3,
+]
+
+
+def test_visible_on_is_the_formation_day_and_never_drifts():
+    bars = zigzag_bars(VISIBLE_PIVOTS)
+    results = []
+    for length in range(2, len(bars) + 1):
+        pen, segment = real_chain(bars[:length])
+        result = adapt(segment, pen)
+        if result.centre is not None:
+            results.append(result)
+
+    assert results
+    first, last = results[0], results[-1]
+    # formation is knowable exactly once and never re-dated
+    assert first.visible_on == last.visible_on == first.centre.confirmed_on == '2026-03-05'
+    assert {result.visible_on for result in results} == {'2026-03-05'}
+
+    # the lifecycle moved later, and that later fact has its own clock
+    assert last.lifecycle_status == 'extended'
+    assert last.state_changed_on == '2026-03-17'
+    assert last.state_changed_on > last.visible_on
+    assert all(result.visible_on <= result.source.as_of_day for result in results)
+    assert 'lifecycle extended since 2026-03-17' in last.describe()
+    assert 'visible_on stays the formation day' in last.describe()
+
+
 def test_fewer_than_three_confirmed_is_not_a_no_centre_claim():
     for length in (2, 8, 20, 40, 52):
         pen, segment = real_chain(CENTRE_BARS[:length])
@@ -503,8 +565,40 @@ def test_empty_input_fabricates_nothing():
     assert 'NOT ENOUGH' in result.describe()
 
 
+def test_terminal_is_strict_not_merely_no_blocking_refusal():
+    empty_pen = empty_pens()
+    empty_segment = segment_from_pens(
+        empty_pen, binding=SegmentBinding(symbol=_SYMBOL, adjust='none', as_of_day=None)
+    )
+    empty = adapt(empty_segment, empty_pen)
+    assert empty.issues == ()
+    assert empty.terminal is False       # nothing was measured, nothing is closed
+
+    pen, segment = real_chain(CENTRE_BARS[:64])
+    assert segment.segments[-1].status == 'candidate'
+    candidate_tail = adapt(segment, pen)
+    assert candidate_tail.issues and not candidate_tail.issues[0].blocking
+    assert candidate_tail.terminal is False
+
+    blocked_pen, blocked_segment = real_chain(CENTRE_BARS)
+    blocked = adapt(blocked_segment, blocked_pen)
+    assert blocked.blocked_reasons == ('characteristic_initial_containment',)
+    assert blocked.terminal is False
+
+    # a snapshot that ends exactly at the leading three (nothing left out) is
+    # the only shape that may call itself terminal
+    explicit_pen, explicit_segment = explicit_chain(NO_CENTRE_PIVOTS_V2)
+    closed_segment = replace(
+        explicit_segment, segments=explicit_segment.confirmed_segments, pending=()
+    )
+    closed = adapt(closed_segment, explicit_pen)
+    assert closed.issues == ()
+    assert closed.status == 'no_centre'
+    assert closed.terminal is True
+
+
 def test_no_positive_width_intersection_is_a_measured_absence():
-    pen, segment = explicit_chain(NO_CENTRE_PIVOTS)
+    pen, segment = explicit_chain(NO_CENTRE_PIVOTS_V2)
     result = adapt(segment, pen)
 
     assert result.status == 'no_centre'
@@ -515,11 +609,28 @@ def test_no_positive_width_intersection_is_a_measured_absence():
     lows = [s.low for s in result.segments]
     highs = [s.high for s in result.segments]
     assert max(lows) >= min(highs)          # the measurement, re-derived here
-    assert (lows, highs) == ([20.0, 15.88, 15.88], [23.95, 23.95, 19.58])
+    assert (lows, highs) == ([86.0, 48.0, 48.0], [99.0, 99.0, 72.0])
 
     text = result.describe()
     assert 'measured NO centre' in text
     assert 'not missing data' in text
+    # a pending candidate follows the three lines: the interval is measured but
+    # the structure is not closed
+    assert result.terminal is False
+    assert 'INCOMPLETE' in text
+
+
+def test_no_centre_with_a_blocking_tail_is_reported_as_incomplete():
+    pen, segment = explicit_chain(NO_CENTRE_BLOCKED_PIVOTS)
+    result = adapt(segment, pen)
+
+    assert result.status == 'no_centre'
+    assert result.terminal is False
+    assert result.blocked_reasons == ('characteristic_gap_case2',)
+    text = result.describe()
+    assert 'measured NO centre' in text
+    assert 'INCOMPLETE' in text
+    assert 'characteristic_gap_case2' in text
 
 
 def test_a_block_before_three_confirmed_lines_makes_no_claim_at_all():
@@ -532,7 +643,7 @@ def test_a_block_before_three_confirmed_lines_makes_no_claim_at_all():
     assert result.confirmed_prefix_length == 0
     assert result.chain is None
     assert result.centre is None
-    assert result.chain_complete is False
+    assert result.terminal is False
     assert result.blocked_reasons == ('characteristic_initial_containment',)
     issue = result.issues[0]
     assert issue.blocking is True and issue.pen_index == 3
@@ -547,25 +658,64 @@ def test_a_block_before_three_confirmed_lines_makes_no_claim_at_all():
 # the range comes from the pens, and only from the span
 # ---------------------------------------------------------------------------
 
-def test_range_is_read_from_the_span_pens_not_from_endpoints_or_evidence():
+def test_range_is_the_merged_bar_interval_of_the_span_pens():
     pen, segment = explicit_chain(INTERIOR_PIVOTS)
     result = adapt(segment, pen)
     external = result.segments[0]
     source = segment.confirmed_segments[0]
 
-    assert (external.high, external.low) == (26.0, 18.0)
-    assert external.low != external.start_price == 20.0      # endpoint pair would say 20
-    assert external.high == external.end_price
+    span = pen.pens[source.pen_start_index:source.pen_end_index + 1]
+    pivot_prices = [p.start.price for p in span] + [p.end.price for p in span]
+    bar_lows = [e.bar_low for p in span for e in (p.start, p.end)]
+    bar_highs = [e.bar_high for p in span for e in (p.start, p.end)]
 
-    # the evidence pens reach past the end; folding them in would understate low
+    # v2: the merged K-line interval, not the pivots and not the endpoints
+    assert (external.low, external.high) == (min(bar_lows), max(bar_highs))
+    assert (external.low, external.high) == (17.0, 27.0)
+    assert external.low < min(pivot_prices) and external.high > max(pivot_prices)
+    assert external.low != external.start_price == 20.0      # endpoint pair would say 20
+    assert external.start_price < external.end_price < external.high
+
+    # the evidence pens reach past the end; they are not part of the span range
     assert max(source.evidence_pen_indices) > source.pen_end_index
-    evidence_prices = [
-        price
-        for index in source.evidence_pen_indices
-        for price in (pen.pens[index].start.price, pen.pens[index].end.price)
-    ]
-    assert min(evidence_prices) == 17.0
-    assert min([external.low] + evidence_prices) == 17.0 != external.low
+
+
+def test_the_v1_pivot_range_fixture_becomes_a_centre_under_merged_bar_ranges():
+    """The documented convention change: wicks are range, pivots are not."""
+    pen, segment = explicit_chain(NO_CENTRE_PIVOTS)
+    result = adapt(segment, pen)
+
+    def pivot_range(source):
+        span = pen.pens[source.pen_start_index:source.pen_end_index + 1]
+        prices = [p.start.price for p in span] + [p.end.price for p in span]
+        return min(prices), max(prices)
+
+    pivot_ranges = [pivot_range(source) for source in segment.confirmed_segments[:3]]
+    pivot_zd = max(low for low, _ in pivot_ranges)
+    pivot_zg = min(high for _, high in pivot_ranges)
+    # v1 pivot prices saw no positive width; v2 merged bars do
+    assert pivot_zd >= pivot_zg
+    assert result.status == 'centre'
+    assert result.centre is not None
+    assert (result.centre.zd, result.centre.zg) == (19.0, 20.58)
+    assert result.centre.width == pytest.approx(1.58)
+    assert result.centre.confirmed_on == segment.confirmed_segments[2].confirmed_on
+
+
+def test_a_bar_interval_that_contradicts_its_own_pivot_is_refused():
+    pen, segment = explicit_chain(NO_CENTRE_PIVOTS_V2)
+    first = pen.pens[0]
+
+    # a pivot above the bar high / below the bar low / a bar with low > high
+    for endpoint in (
+        replace(first.start, bar_high=first.start.price - 0.5),
+        replace(first.start, bar_low=first.start.price + 0.5),
+        replace(first.start, bar_low=first.start.price, bar_high=first.start.price - 1.0),
+    ):
+        bad_pen = replace(pen, pens=(replace(first, start=endpoint),) + pen.pens[1:])
+        doctored = replace(segment, input_digest=segment_input_digest(bad_pen))
+        with pytest.raises(ValueError, match='merged-bar|bar'):
+            adapt(doctored, bad_pen)
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +825,115 @@ def test_a_binding_as_of_mismatch_is_refused():
     pen, segment = real_chain(CENTRE_BARS)
     with pytest.raises(ValueError, match='binding as_of_day'):
         adapt(replace(segment, as_of_day='2026-03-16'), pen)
+
+
+def _one_pen_segment(index, pen):
+    """A forged 'segment' over a single pen: the shape the adapter must refuse."""
+    source = pen.pens[index]
+    return Segment(
+        start=SegmentEndpoint(
+            kind=source.start.kind,
+            pen_index=index,
+            merged_index=source.start.merged_index,
+            position_day=source.start.position_day,
+            price=source.start.price,
+            status='confirmed',
+            confirmed_on=source.start.confirmed_on,
+            revisions=0,
+            drift_days=(),
+        ),
+        end=SegmentEndpoint(
+            kind=source.end.kind,
+            pen_index=index,
+            merged_index=source.end.merged_index,
+            position_day=source.end.position_day,
+            price=source.end.price,
+            status='confirmed',
+            confirmed_on=source.end.confirmed_on,
+            revisions=0,
+            drift_days=(),
+        ),
+        direction=source.direction,
+        pen_start_index=index,
+        pen_end_index=index,
+        status='confirmed',
+        reason='first_case_no_gap',
+        confirmed_on=source.confirmed_on,
+        characteristic_elements=MIN_PENS,
+        kernel_version=SEGMENT_KERNEL_VERSION,
+    )
+
+
+def test_a_forged_one_pen_segment_cannot_mint_a_centre():
+    pen = make_pens([20.0, 24.0, 22.0, 26.0])
+    base = segment_from_pens(
+        pen, binding=SegmentBinding(symbol=_SYMBOL, adjust='none', as_of_day=pen.as_of_day)
+    )
+    fake = tuple(_one_pen_segment(index, pen) for index in (0, 1, 2))
+    doctored = replace(base, segments=fake, pending=(), input_digest=segment_input_digest(pen))
+
+    with pytest.raises(ValueError, match='MIN_PENS'):
+        adapt(doctored, pen)
+
+
+def test_a_segment_with_an_impossible_element_count_is_refused():
+    pen, segment = real_chain(CENTRE_BARS)
+    first = segment.segments[0]
+    for count in (2, 99):
+        doctored = replace(
+            segment, segments=(replace(first, characteristic_elements=count),) + segment.segments[1:]
+        )
+        with pytest.raises(ValueError, match='characteristic'):
+            adapt(doctored, pen)
+
+
+def test_evidence_must_name_real_supplied_pens_and_their_real_days():
+    pen, segment = real_chain(CENTRE_BARS)
+    first = segment.segments[0]
+    middle = first.evidence[1]
+
+    doctored_evidence = {
+        'pen index outside the series': (
+            FractalEvidence(role='left', pen_indices=first.evidence[0].pen_indices,
+                            high=first.evidence[0].high, low=first.evidence[0].low,
+                            confirmed_on=first.evidence[0].confirmed_on),
+            FractalEvidence(role='middle', pen_indices=(999,), high=middle.high, low=middle.low,
+                            confirmed_on=middle.confirmed_on),
+            FractalEvidence(role='right', pen_indices=first.evidence[2].pen_indices,
+                            high=first.evidence[2].high, low=first.evidence[2].low,
+                            confirmed_on=first.evidence[2].confirmed_on),
+        ),
+        'invented element day': (
+            first.evidence[0],
+            replace(middle, confirmed_on='2026-12-31'),
+            first.evidence[2],
+        ),
+        'evidence pen repeated': (
+            first.evidence[0],
+            replace(middle, pen_indices=(middle.pen_indices[0], middle.pen_indices[0])),
+            first.evidence[2],
+        ),
+    }
+    for evidence in doctored_evidence.values():
+        doctored = replace(
+            segment,
+            segments=(replace(first, evidence=evidence),) + segment.segments[1:],
+        )
+        with pytest.raises(ValueError, match='evidence|pen|froze|element'):
+            adapt(doctored, pen)
+
+
+def test_an_endpoint_confirmation_day_is_rederived_not_trusted():
+    pen, segment = real_chain(CENTRE_BARS)
+    first = segment.segments[0]
+    cases = (
+        replace(first, end=replace(first.end, confirmed_on='2026-12-31')),
+        replace(first, start=replace(first.start, confirmed_on='2026-12-31')),
+    )
+    for doctored_first in cases:
+        doctored = replace(segment, segments=(doctored_first,) + segment.segments[1:])
+        with pytest.raises(ValueError, match='endpoint clock|after the segment'):
+            adapt(doctored, pen)
 
 
 def test_a_doctored_confirmed_segment_is_refused():

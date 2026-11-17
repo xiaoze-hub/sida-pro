@@ -1,5 +1,14 @@
 ## [未发布]
 
+### fix-中枢适配器区间口径与可见时点（chan-centre-adapter-v2）
+
+- 区间口径升级：`src/core/chan_centre_adapter.py` 的线段范围不再只取 `PenEndpoint.price` 枢轴价，改为 span 内所有 pen 端点**合并后 K 线区间** `bar_low`/`bar_high` 的极值。旧口径会把影线丢掉、让 `zd/zg` 落在 K 线区间内部，甚至把 K 线区间本已重叠的中枢误判成 `no_centre`（原 no-centre 夹具 v1 得 [20, 19.58] `no_centre`，v2 得 [19, 20.58] `centre`）。这是输入可证明的最宽区间（span 内端点 bar 的并集），仍是真实段 K 线区间的下界；端点 bar 必须包含自身枢轴价，否则拒绝。
+- 口径不可混用：`CentreSource.snapshot_version` 增加 `range=pen_span_endpoint_merged_bar`，v1 枢轴价中枢与 v2 合并 K 线中枢无法互相 `expect_snapshot_version` 通过；`ADAPTER_VERSION` 升为 `chan-centre-adapter-v2`。
+- `visible_on` 改为**形成时点**（第三段确认日），不再随生命周期状态漂移；新增 `state_changed_on` 表达最新生命周期状态的证据日（`formed` 时等于形成日）。
+- 新增 fail-closed 校验：`pens_used < MIN_PENS`、`characteristic_elements ∉ [MIN_PENS, pens_used]`、evidence 角色/笔索引（必须在输入内、已确认、不重复、元素确认日等于所引 pen 的最新确认日）、`SegmentEndpoint.confirmed_on` 与 pen 端点一致且不晚于段确认日，全部直接 `ValueError`；伪造 1 笔段不再能造中枢。
+- `chain_complete` 重命名为 `terminal` 并收紧语义：只有 `centre`/`no_centre` 且**无任何 issue**（无候选尾、无 pending、无 blocked）才算闭合；0 段空快照与候选尾均为非 terminal。`describe()` 对 `no_centre` 也标 `INCOMPLETE` 并列出 kernel 原始原因。
+- 测试：更新受影响的中心区间/版本/terminal 断言，新增 6 类回归（伪造 1 笔段、0 段空快照、延伸日不提前、旧 no-centre 夹具在 bar 口径下变中心、bar 与枢轴矛盾、篡改端点日期/特征元素数/证据笔）。`test_chan_centre_adapter + segment + operational_centre + pen + structure` 共 233 passed [commit 待回填]
+
 ### fix-缠论参谋同图归属改为封闭追问语法（词表退役）
 
 - 带图表快照的轮次不再用「纯追问词表 + 单字白名单」剥句子来判断"正文有没有点别的票"：那条路不可收敛（`万科怎么样` 里「万」被当虚词吞掉、「科」只剩一字被丢弃 ⇒ 整句判成纯追问，页面停在 600519 时把贵州茅台的结构答给了万科；补别名只能补上已知那只）。

@@ -18,20 +18,48 @@ source, and calls :func:`centre_from_chain` only when that chain is long enough
 and trustworthy.  Every limitation of both kernels is inherited and re-stated in
 the result (``limitations``), never upgraded.
 
-Why the pen snapshot is required
---------------------------------
+Why the pen snapshot is required, and what the range means
+----------------------------------------------------------
 A centre is built from **ranges**, not from endpoint prices
 (:class:`ExternalSegment` documents this).  A confirmed 线段 may contain an
 interior extreme beyond its own endpoints — the kernel checks the extreme in the
 segment's direction, not the opposite one — so the endpoint pair
 ``[min(start,end), max(start,end)]`` is *not* the segment's range in general.
-Substituting the endpoints would silently change ``zd``/``zg`` and could invent or
-erase a centre.  The pen series that produced the segments is therefore a
-mandatory input: the range is the extreme of the pen endpoints inside
-``pen_start_index..pen_end_index``, the same set the segment kernel calls the
-segment's membership.  ``evidence_pen_indices`` deliberately reach *past* the end
-into the next segment's span, so they are **not** folded into the range (that
-would double count and move the zone).
+The pen series that produced the segments is therefore a mandatory input.
+
+Adapter v2 reads the range from the **merged K-line interval** carried by every
+pen endpoint in the span, not from pivot prices::
+
+    range.low  = min(pen.start.bar_low,  pen.end.bar_low   for pen in span)
+    range.high = max(pen.start.bar_high, pen.end.bar_high for pen in span)
+
+``PenEndpoint.bar_low``/``bar_high`` are the merged bar's own low/high at that
+endpoint, so the wick beyond the pivot price is included.  This is a *lower
+bound* of the segment's true K-line range, because the segment also covers the
+merged bars between its endpoints and those bars are not part of
+``PenSnapshot``; it is never narrower than the pivot-price range and it is the
+widest interval recoverable from this input.  Pivot prices are still used for
+the direction checks (an up segment's end must be the highest *pivot* in its
+span).
+
+Version history of this convention:
+
+* ``chan-centre-adapter-v1`` used pivot prices only (``PenEndpoint.price``), so
+  ``zd``/``zg`` sat inside the K-line range and a wick could be ignored;
+* ``chan-centre-adapter-v2`` uses the merged-bar interval above.
+
+A v2 zone is **not comparable** with a v1 zone even for the same pens: the
+range convention changes ``zd``/``zg`` and can turn a ``no_centre`` into a
+``centre``.  :attr:`CentreSource.snapshot_version` therefore carries
+``range=pen_span_endpoint_merged_bar``, so a centre computed under one
+convention can never be passed to, or compared with, one computed under the
+other.
+
+``evidence_pen_indices`` deliberately reach *past* the end into the next
+segment's span, so they are **not** folded into the range (that would double
+count and move the zone).  They are re-verified instead: each evidence pen must
+exist in the input, be ``confirmed``, and its confirmation day must be the one
+the evidence element claims.
 
 If a caller only has the segment snapshot, there is no honest way to know the
 range; the adapter refuses (``ValueError``) instead of guessing.  ``'unknown'``
@@ -40,17 +68,26 @@ sample, never rewritten to ``none``/``qfq``/``hfq``.  The centre kernel has no
 adjustment field, so the label is bound into ``snapshot_version`` — a centre
 computed under one basis can then never be passed to, or compared with, another.
 
-Causality: two clocks, one prefix
----------------------------------
+Causality: three clocks, one prefix
+-----------------------------------
 The adapter invents no timestamps.  Each segment's ``confirmed_on`` is the day
 the segment kernel sealed it, copied verbatim after re-verification against its
-evidence; a centre is only knowable on the third segment's confirmation day, and
-:attr:`CentreAdapterResult.visible_on` exposes that — never the raw structure
-start day.  A prefix never learns from a later prefix: nothing is back-filled,
-and a blocked refusal *after* a confirmed centre does **not** retract the centre
-(the confirmation of the leading three segments is already final).  What it does
-do is set ``chain_complete=False`` and add a blocking issue, so no reader can
-mistake a partially blocked structure for a complete one.
+evidence and against the two endpoint confirmation days.
+
+* :attr:`CentreAdapterResult.visible_on` is the **formation** day — the third
+  segment's confirmation day, the only day on which the centre itself is
+  knowable.  It never moves while the centre stands: an ``extended`` lifecycle
+  state is a later fact about an already-visible centre.
+* :attr:`CentreAdapterResult.state_changed_on` is the day the **latest lifecycle
+  state** became knowable (the evidence day of the last state change), or the
+  formation day when nothing has tested the zone yet.  It moves as the prefix
+  grows; ``visible_on`` does not.
+
+A prefix never learns from a later prefix: nothing is back-filled, and a blocked
+refusal *after* a confirmed centre does **not** retract the centre (the
+confirmation of the leading three segments is already final).  What it does do
+is make :attr:`CentreAdapterResult.terminal` ``False`` and add a blocking issue,
+so no reader can mistake a partially blocked structure for a complete one.
 
 Reported states, one refusal
 ----------------------------
@@ -74,8 +111,15 @@ Reported states, one refusal
 
 ``issues`` always separates a **blocking** refusal (a ``blocked`` segment or
 pending carrying the segment kernel's own reason) from a non-blocking exclusion
-(an open ``candidate`` tail, which may still drift and is therefore not
-geometry).  ``chain_complete`` is ``False`` as soon as one blocking issue exists.
+(an open ``candidate`` tail or a pending candidate, which may still drift and is
+therefore not geometry).
+
+``terminal`` is the *only* "is this answer closed?" flag, and it is deliberately
+strict: ``True`` iff the status is a centre verdict (``centre``/``no_centre``)
+**and** there is no issue of any kind.  So a 0-segment snapshot, an open
+candidate tail and a blocking refusal are all **not terminal** — the old
+``chain_complete`` only meant "no blocking refusal" and was true for the first
+two, which read as "complete" when nothing was complete.
 
 Fail-closed input checks (raise, never repair)
 ----------------------------------------------
@@ -96,6 +140,18 @@ Fail-closed input checks (raise, never repair)
 * pen spans are not the contiguous chain start (no re-anchoring), or they
   overlap/skip, or a span pen is not ``confirmed``, or the segment's endpoints do
   not reproduce the pens' own endpoints (merged index, day, price, kind);
+* the span is shorter than :data:`MIN_PENS` pens (a one- or two-pen "segment" is
+  not a 线段 and can fabricate a zone), or ``characteristic_elements`` is not in
+  ``MIN_PENS..pens_used`` (a confirmed line's terminal fractal needs three
+  elements and can never use more elements than it spans pens);
+* the evidence is not exactly ``left``/``middle``/``right``, or an evidence pen
+  index does not exist in the supplied pens, is repeated, is not ``confirmed``,
+  or an element's ``confirmed_on`` is not the latest day of the pens it names;
+* an endpoint's ``confirmed_on`` does not match the pen endpoint it reproduces,
+  or lies after the segment's own confirmation day;
+* a pen endpoint's ``bar_low``/``bar_high`` is not finite, does not contain its
+  own pivot price, or the derived bar range is degenerate / misses the
+  endpoints (a range contradicting the bars it claims);
 * the derived range does not cover the endpoints, or the segment's end is not the
   span's extreme in the segment's direction (a label contradicting its own pens);
 * ``confirmed_on`` is missing, precedes/equals the geometric end, is later than
@@ -135,6 +191,7 @@ from src.core.chan_operational_centre import (
 from src.core.chan_pen import PenSnapshot
 from src.core.chan_segment import (
     ADJUSTMENT_BASES,
+    MIN_PENS,
     SEGMENT_KERNEL_VERSION,
     Segment,
     SegmentSnapshot,
@@ -146,6 +203,7 @@ __all__ = [
     'BASIS',
     'INPUT_KIND',
     'LIMITATIONS',
+    'RANGE_BASIS',
     'STRICTNESS',
     'AdapterIssue',
     'CentreAdapterResult',
@@ -154,7 +212,7 @@ __all__ = [
 ]
 
 #: Version of this adapter.  Any behaviour change needs a new version.
-ADAPTER_VERSION = 'chan-centre-adapter-v1'
+ADAPTER_VERSION = 'chan-centre-adapter-v2'
 
 #: The identity of this input: a confirmed prefix produced by the segment kernel.
 INPUT_KIND = 'segment_kernel_confirmed_prefix'
@@ -164,6 +222,11 @@ BASIS = _CENTRE_BASIS
 
 #: Inherited honestly: operational geometry, **not** the strict 18th lesson.
 STRICTNESS = _CENTRE_STRICTNESS
+
+#: How a segment's range is read: merged-bar extremes of the endpoint bars of
+#: the pens in the span.  Part of ``snapshot_version`` so v1 pivot-price zones
+#: can never be mixed with v2 merged-bar zones.
+RANGE_BASIS = 'pen_span_endpoint_merged_bar'
 
 #: Everything this result may *not* be read as.  Copied to every result so a
 #: consumer never has to guess which half of the theory is missing.
@@ -223,8 +286,16 @@ class CentreSource:
 
     @property
     def snapshot_version(self) -> str:
-        """The centre chain's ``snapshot_version``: kernel + 复权 label + digest."""
-        return f'{self.segment_kernel}|adjust={self.adjust}|pens={self.pen_digest}'
+        """The centre chain's ``snapshot_version``: kernel + 复权 + range rule + digest.
+
+        ``range=`` is part of the identity on purpose: a v1 pivot-price zone and
+        a v2 merged-bar zone are different measurements of the same pens, so a
+        centre from one must never be re-read, compared or merged with the other.
+        """
+        return (
+            f'{self.segment_kernel}|adjust={self.adjust}'
+            f'|range={RANGE_BASIS}|pens={self.pen_digest}'
+        )
 
     def same_source(self, other: 'CentreSource') -> bool:
         """True only for the very same sample; ``unknown`` is not ``none``."""
@@ -287,9 +358,17 @@ class CentreAdapterResult:
     limitations: tuple[str, ...] = LIMITATIONS
 
     @property
-    def chain_complete(self) -> bool:
-        """False once the segment kernel refused anywhere in the snapshot."""
-        return not any(issue.blocking for issue in self.issues)
+    def terminal(self) -> bool:
+        """Whether this prefix's answer is closed — the only "complete" flag.
+
+        ``True`` only when the prefix reached a centre verdict (``centre`` or
+        ``no_centre``) and nothing was left out: no blocking refusal, no
+        candidate tail, no pending.  A 0-segment snapshot and a snapshot with an
+        open candidate tail are **not** terminal even though nothing was refused
+        — they are still growing.  (The removed ``chain_complete`` meant only
+        "no blocking refusal", which was true for both and read as "complete".)
+        """
+        return self.status in ('centre', 'no_centre') and not self.issues
 
     @property
     def centre(self):
@@ -302,7 +381,24 @@ class CentreAdapterResult:
 
     @property
     def visible_on(self) -> str | None:
-        """The day this structure is knowable — never the raw start day."""
+        """The day the **centre itself** is knowable: the third segment's confirmation day.
+
+        This is the formation clock and it never moves while the centre stands.
+        A later lifecycle state (``extended``/``broken``…) is a *later* fact
+        about an already-visible zone; it is exposed by :attr:`state_changed_on`,
+        never by folding it into this field.
+        """
+        centre = self.centre
+        return None if centre is None else centre.confirmed_on
+
+    @property
+    def state_changed_on(self) -> str | None:
+        """The day the **latest lifecycle state** became knowable.
+
+        Equals the formation day while the centre is ``formed`` and moves when a
+        later segment produces an ``extended``/``unknown``/``broken`` state.
+        ``visible_on`` stays fixed; the two clocks are deliberately separate.
+        """
         return None if self.centre_snapshot is None else self.centre_snapshot.visible_on
 
     @property
@@ -321,6 +417,15 @@ class CentreAdapterResult:
             f'{self.basis}/{self.strictness} centre adapter {self.adapter_version} '
             f'({self.source.symbol}, adjust={self.source.adjust}, as_of={self.source.as_of_day})'
         )
+
+        def incomplete_note() -> str:
+            """Why this prefix is not terminal, in the kernel's own words."""
+            if self.issues:
+                return '; the structure is INCOMPLETE: ' + '; '.join(
+                    issue.reason for issue in self.issues
+                )
+            return '; the structure is INCOMPLETE: no centre verdict was reached'
+
         if self.status == 'centre':
             centre = self.centre
             if centre is None:  # pragma: no cover - status and snapshot are set together
@@ -330,18 +435,23 @@ class CentreAdapterResult:
                 f'{centre.confirmed_on} from the leading confirmed segments '
                 f'{centre.segment_indices} (not a strict 第18课 中枢)'
             )
-            if not self.chain_complete:
+            if self.state_changed_on != centre.confirmed_on:
                 text += (
-                    '; the structure after the confirmed prefix is INCOMPLETE: '
-                    + '; '.join(self.blocked_reasons)
+                    f'; lifecycle {self.lifecycle_status} since {self.state_changed_on}'
+                    ' (visible_on stays the formation day)'
                 )
+            if not self.terminal:
+                text += incomplete_note()
             return text
         if self.status == 'no_centre':
-            return (
+            text = (
                 f'{head}: measured NO centre — the leading three confirmed segment ranges '
                 'share no strictly positive-width interval; this is a measured absence, '
                 'not missing data'
             )
+            if not self.terminal:
+                text += incomplete_note()
+            return text
         if self.status == 'blocked_before_centre':
             return (
                 f'{head}: NO centre claim — the segment kernel blocked before three confirmed '
@@ -457,6 +567,18 @@ def _confirmed_prefix(snapshot: SegmentSnapshot) -> tuple[Segment, ...]:
 def _check_span(segment: Segment, pens, position: int) -> None:
     """Re-verify the pen span without trusting the segment's own labels."""
     start, end = segment.pen_start_index, segment.pen_end_index
+    if segment.pens_used < MIN_PENS:
+        raise ValueError(
+            f'segment {position} spans {segment.pens_used} pen(s), fewer than '
+            f'MIN_PENS={MIN_PENS}; one or two pens are not a 线段 and must never '
+            'be used as centre geometry'
+        )
+    if not (MIN_PENS <= segment.characteristic_elements <= segment.pens_used):
+        raise ValueError(
+            f'segment {position} claims {segment.characteristic_elements} characteristic '
+            f'element(s) over a {segment.pens_used}-pen span; a confirmed line needs at '
+            f'least {MIN_PENS} elements and can never use more elements than it spans pens'
+        )
     if position == 0 and start != 0:
         raise ValueError(
             f'the first confirmed segment starts at pen {start}, not the chain start 0; '
@@ -517,6 +639,78 @@ def _check_span(segment: Segment, pens, position: int) -> None:
                 f'segment {position} {where} endpoint is {endpoint.status!r}; a confirmed '
                 'segment needs both endpoints frozen'
             )
+        if endpoint.confirmed_on is None or endpoint.confirmed_on != pen_endpoint.confirmed_on:
+            raise ValueError(
+                f'segment {position} {where} endpoint is confirmed on '
+                f'{endpoint.confirmed_on!r} but the pen endpoint it reproduces is '
+                f'confirmed on {pen_endpoint.confirmed_on!r}; the endpoint clock is '
+                're-derived, never trusted'
+            )
+        if segment.confirmed_on is not None and _day(
+            endpoint.confirmed_on, f'segment {position} {where} endpoint confirmed_on'
+        ) > _day(segment.confirmed_on, f'segment {position} confirmed_on'):
+            raise ValueError(
+                f'segment {position} {where} endpoint is confirmed on '
+                f'{endpoint.confirmed_on}, after the segment itself '
+                f'({segment.confirmed_on}); a part cannot be sealed after its whole'
+            )
+    _check_evidence(segment, pens, position)
+
+
+def _check_evidence(segment: Segment, pens, position: int) -> None:
+    """Every evidence element must own real, confirmed pens it really names.
+
+    The evidence is the segment's *decision* (the terminal characteristic
+    fractal), and it deliberately reaches past the geometric span.  Nothing
+    downstream re-derives it, so it is re-verified here: the three roles in
+    order, every pen index present in the supplied series, no pen used twice,
+    every referenced pen ``confirmed``, and each element's ``confirmed_on``
+    equal to the latest confirmation day of the pens it names.  A fabricated
+    index, a crossing element or an invented day is a contradiction, not recall.
+    """
+    roles = tuple(element.role for element in segment.evidence)
+    if roles != ('left', 'middle', 'right'):
+        raise ValueError(
+            f'segment {position} evidence roles are {roles}; a confirmed line needs '
+            "exactly ('left', 'middle', 'right')"
+        )
+    used: set[int] = set()
+    for element in segment.evidence:
+        indices = element.pen_indices
+        if not indices:
+            raise ValueError(f'segment {position} has an evidence element with no pen')
+        days: list[str] = []
+        for index in indices:
+            if isinstance(index, bool) or not isinstance(index, int):
+                raise ValueError(
+                    f'segment {position} evidence names pen {index!r}; a pen index must '
+                    'be an integer'
+                )
+            if not (0 <= index < len(pens)):
+                raise ValueError(
+                    f'segment {position} evidence names pen {index}, outside the '
+                    f'{len(pens)} supplied pens'
+                )
+            if index in used:
+                raise ValueError(
+                    f'segment {position} uses pen {index} in two evidence elements; '
+                    'the characteristic sequence may not double count'
+                )
+            used.add(index)
+            pen = pens[index]
+            if pen.status != 'confirmed' or pen.confirmed_on is None:
+                raise ValueError(
+                    f'segment {position} evidence rests on pen {index}, which is '
+                    f'{pen.status!r} (confirmed_on={pen.confirmed_on!r}); a confirmed '
+                    'line may not rest on unfrozen evidence'
+                )
+            days.append(pen.confirmed_on)
+        if element.confirmed_on != max(days):
+            raise ValueError(
+                f'segment {position} evidence element {element.role!r} claims '
+                f'confirmed_on={element.confirmed_on!r} but the pens it names froze on '
+                f'{max(days)}; the evidence clock is re-derived, never trusted'
+            )
 
 
 def _external_segment(
@@ -539,30 +733,80 @@ def _external_segment(
             f'{SEGMENT_KERNEL_VERSION!r}'
         )
 
-    prices = [p.start.price for p in pens[start : end + 1]] + [
-        p.end.price for p in pens[start : end + 1]
-    ]
+    span = pens[start : end + 1]
+    prices = [p.start.price for p in span] + [p.end.price for p in span]
     if any(not isfinite(price) for price in prices):  # pragma: no cover - pen kernel gate
         raise ValueError(f'segment {position} spans a non-finite price')
-    low, high = min(prices), max(prices)
-    if high <= low:
-        raise ValueError(f'segment {position} spans a degenerate range [{low}, {high}]')
+    pivot_low, pivot_high = min(prices), max(prices)
+    if pivot_high <= pivot_low:
+        raise ValueError(
+            f'segment {position} spans a degenerate pivot range '
+            f'[{pivot_low}, {pivot_high}]'
+        )
+
+    # Range convention v2: the merged K-line interval of every pen endpoint in
+    # the span — not the pivot prices.  A wick beyond the pivot is real price
+    # action and belongs to the segment's range; dropping it put zd/zg inside
+    # the K-line range.  This is still a *lower bound* of the segment's true
+    # range (bars between the endpoints are not in PenSnapshot), but it is the
+    # widest interval this input can prove, and it never excludes the pivots.
+    bar_lows: list[float] = []
+    bar_highs: list[float] = []
+    for pen in span:
+        for endpoint in (pen.start, pen.end):
+            bar_low, bar_high = endpoint.bar_low, endpoint.bar_high
+            for name, value in (('bar_low', bar_low), ('bar_high', bar_high)):
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(
+                    value
+                ):
+                    raise ValueError(
+                        f'segment {position} spans a pen endpoint whose {name} is not a '
+                        f'finite price ({value!r})'
+                    )
+            if bar_low > bar_high:
+                raise ValueError(
+                    f'segment {position} spans a merged bar with low {bar_low} above its '
+                    f'own high {bar_high}; that bar is not usable geometry'
+                )
+            if not (bar_low <= endpoint.price <= bar_high):
+                raise ValueError(
+                    f'segment {position} spans a pen endpoint at {endpoint.price} outside '
+                    f'its own merged-bar interval [{bar_low}, {bar_high}]; the bar and its '
+                    'pivot contradict each other'
+                )
+            bar_lows.append(bar_low)
+            bar_highs.append(bar_high)
+    range_low, range_high = min(bar_lows), max(bar_highs)
+    if range_high <= range_low:
+        raise ValueError(
+            f'segment {position} spans a degenerate merged-bar range '
+            f'[{range_low}, {range_high}]'
+        )
+    if range_low > pivot_low or range_high < pivot_high:  # pragma: no cover - bars cover pivots
+        raise ValueError(
+            f'segment {position} merged-bar range [{range_low}, {range_high}] misses its '
+            f'own pivot extremes [{pivot_low}, {pivot_high}]'
+        )
     if segment.start_price == segment.end_price:
         raise ValueError(f'segment {position} has zero length ({segment.start_price})')
-    if direction == 'up' and segment.end_price != high:
+    if direction == 'up' and segment.end_price != pivot_high:
         raise ValueError(
-            f'up segment {position} ends at {segment.end_price} but its pens reach {high}; '
+            f'up segment {position} ends at {segment.end_price} but its pens reach '
+            f'{pivot_high}; '
             'the end must be the span extreme in the segment direction'
         )
-    if direction == 'down' and segment.end_price != low:
+    if direction == 'down' and segment.end_price != pivot_low:
         raise ValueError(
-            f'down segment {position} ends at {segment.end_price} but its pens reach {low}; '
+            f'down segment {position} ends at {segment.end_price} but its pens reach '
+            f'{pivot_low}; '
             'the end must be the span extreme in the segment direction'
         )
-    if low > min(segment.start_price, segment.end_price) or high < max(
+    if range_low > min(segment.start_price, segment.end_price) or range_high < max(
         segment.start_price, segment.end_price
-    ):  # pragma: no cover - low/high are taken over all endpoints
-        raise ValueError(f'segment {position} range [{low}, {high}] misses its own endpoints')
+    ):  # pragma: no cover - the bar range contains every endpoint price
+        raise ValueError(
+            f'segment {position} range [{range_low}, {range_high}] misses its own endpoints'
+        )
 
     start_day = _day(segment.start.position_day, f'segment {position} start day')
     end_day = _day(segment.end.position_day, f'segment {position} end day')
@@ -603,8 +847,8 @@ def _external_segment(
         start_price=float(segment.start_price),
         end_day=segment.end.position_day,
         end_price=float(segment.end_price),
-        high=float(high),
-        low=float(low),
+        high=float(range_high),
+        low=float(range_low),
         status='confirmed',
         confirmed_on=segment.confirmed_on,
     )
