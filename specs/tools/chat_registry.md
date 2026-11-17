@@ -7,8 +7,8 @@
 
 | 名字 | 含义 | 数量 |
 |---|---|---|
-| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **80** |
-| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **79** |
+| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **81** |
+| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **80** |
 | **handler-only** | 有 handler 但 `schema is None`，不暴露给模型 | **1** |
 | **不进兜底** | `fallback=False`，只在挂了它的配方里可见（见 RECIPE-006） | **2** |
 
@@ -39,3 +39,12 @@ handler-only 的一个：`get_opportunities`。
 数据源是腾讯排行（`proxy.finance.qq.com/cgi/cgi-bin/rank/...`），**免配额零 key**；
 之所以不用通达信问小达，是因为它的配额已经用尽（`MCP error -32603`）。
 口径：`腾讯排行 · 实时快照 · 非复权`；**板块的涨/跌家数不是涨停家数**，两者不可混用。
+
+2026-11-17 新增 `get_chan_structure`（缠论结构只读，追加在注册表尾部、`get_stock_report`/
+`get_market_ranking` 重排之前）：**只**使用本轮消息随附、且已由消息入口用同一取数链复核的
+图表快照（`chan_snapshot.digest`）；摘要不由模型提供（2026-11-17 二轮审计：模型自带的
+digest 不再被接受，否则上一轮摘要可被"复用"成同图证据），本轮目标（含正文只写名字时解析出
+的代码）与快照标的须一致，否则在取数前拒绝。缺快照时返回严格缺失态（不取数、不猜、不声称已读取）；
+完整摘要不进轨迹/日志（只留前 8 位，见 `src/harness/redaction.py`）；
+分型/笔复用 `src/web/api/chan_snapshot.py` 的同一套内核，不含中枢/线段/买卖点，不是交易信号。
+`fallback=True`（单股兜底路由可见，只读无副作用）。

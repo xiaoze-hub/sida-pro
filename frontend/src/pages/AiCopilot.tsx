@@ -1,7 +1,7 @@
 import { useViewportPanel } from '@/hooks/useViewportPanel'
 import { AssistantAvatar } from '@/components/AssistantAvatar'
 import type { AssistantEntry } from '@/components/AssistantWorkspace'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { safeFixed } from '@/lib/format'
 import {
   applyPendingAction,
@@ -36,6 +36,8 @@ import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-ancho
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { SettingPendingPreview } from '@/components/copilot/SettingPendingPreview'
 import { describeSettingPreview } from '@/lib/copilot/settingPreview'
+import { readStockRouteAnchor } from '@/lib/copilot/route-anchor'
+import type { RouteAnchor } from '@/lib/copilot/route-anchor'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
@@ -48,11 +50,17 @@ import {
   chartContextOwnerMatches,
   chartContextKey,
   chartContextPrompt,
+  chanSnapshotLabel,
   dismissChartContext,
+  dismissChanSnapshot,
   isChartContextFresh,
+  readChanSnapshotDetailed,
   readChartContextDetailed,
+  resolveChanSnapshotForTurn,
+  subscribeChanSnapshot,
   unpublishChartContext,
   type ChartContext,
+  type ChanSnapshotRead,
 } from '@/lib/copilot/chart-context'
 import { currentAccountId } from '@/lib/copilot/annotationLedger'
 import { ConversationSidebar } from '@/components/copilot/ConversationSidebar'
@@ -379,8 +387,17 @@ interface ConvRecord {
  * 复用而非重写：SSE 走 `chatApi.sendMessageStream`（已含 stage/delta/done/error 与 signal），
  * 不在这里解析流；渲染走 SafeMarkdown（统一 sanitize 策略）。
  */
-export default function AiCopilotPage({ presentation = 'page', visible = true, onBusyChange, entry, entrySearch }: {
+export default function AiCopilotPage({ presentation = 'page', visible = true, onBusyChange, entry, entrySearch, routeAnchor }: {
   presentation?: 'page' | 'mini'; visible?: boolean; onBusyChange?: (busy: boolean) => void; entry?: AssistantEntry | null; entrySearch?: string
+  /**
+   * 停靠面板的**页面锚点**（2026-11-18）：当前路由是不是一张个股/指数工作台。
+   *
+   * 由工作区按 `location` 解析后传进来（`lib/copilot/route-anchor`）。没有它，
+   * 用户直接点悬浮球打开面板时锚点永远空着 —— 请求体只有 `{content}`，
+   * 参谋不知道你在看哪只票，图上的快照也没有可归属的标的。
+   * 显式指定（entry / @提及 / 正文代码）始终优先于它。
+   */
+  routeAnchor?: RouteAnchor | null
 } = {}) {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
@@ -452,8 +469,59 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const [error, setError] = useState<string | null>(null)
   /** 2026-10-28: 坏帧的可见提示（非致命：终稿到达就按终稿显示，别当没发生）。 */
   const [streamNotice, setStreamNotice] = useState<string | null>(null)
-  /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
-  const [anchorSymbol, setAnchorSymbol] = useState('')
+  /**
+   * 当前路由标的的最新值（`pinAnchor` 里读它：回调要跨渲染稳定，不能把路由变化做成闭包依赖）。
+   */
+  const routeAnchorSymbolRef = useRef('')
+  routeAnchorSymbolRef.current = routeAnchor?.symbol ?? ''
+  /**
+   * **显式**锚点（用户/入口/会话绑定）：`null` = 这一视图没有显式指定标的 → 跟随路由。
+   *
+   * 为什么不是单一 `anchorSymbol` state（2026-11-18）：停靠面板打开时用户什么都没输入，
+   * 锚点必须来自当前路由（`/stocks/:symbol`）；一旦用户自己写明了标的（@提及 / 正文代码 /
+   * 从别处带 entry / 打开某个会话），路由就不许再覆盖它。两件事分开存，读取时按优先级合成，
+   * 就没有"effect 先写谁"的时序问题。
+   */
+  const [explicitAnchor, setExplicitAnchor] = useState<{
+    symbol: string
+    market?: string
+    instrument?: 'stock' | 'index'
+  } | null>(null)
+  /**
+   * 用户在该路由标的上点过「清除锚点」：同一个标的别再顶回来（换股才恢复跟随）。
+   * 存标的而不是布尔量 —— 离开再回到同一只票时，用户当时的意图不该被静默复活。
+   */
+  const [dismissedRoute, setDismissedRoute] = useState('')
+  /** `pinAnchor` 读它（同上：回调要跨渲染稳定，不能让"清除过锚点"改掉它的身份） */
+  const dismissedRouteRef = useRef('')
+  dismissedRouteRef.current = dismissedRoute
+  /** 路由锚点（用户清除过的那个标的不算） */
+  const followedAnchor =
+    routeAnchor && routeAnchor.symbol !== dismissedRoute ? routeAnchor : null
+  /** 本页当前的锚点：显式指定优先，其次跟随路由；都没有就是空串（不猜） */
+  const anchorSymbol = explicitAnchor?.symbol || followedAnchor?.symbol || ''
+  /** 锚点的市场/类型（同源）：显式锚点带的就是入口/会话的口径，路由带来的就是页面口径 */
+  const anchorMarket = explicitAnchor?.market || followedAnchor?.market || ''
+  const anchorInstrument = explicitAnchor?.instrument ?? followedAnchor?.instrument ?? null
+  /**
+   * 把锚点钉成显式指定。
+   *
+   * 与当前路由是**同一只票**时不钉：那本来就是"跟随路由"，钉住会让换股跟随失效
+   * （停靠面板在个股页之间切换时，锚点必须跟着走）。例外：用户先点过「清除锚点」，
+   * 之后自己又写明了这只票 —— 那是用户的明确动作，必须生效。
+   */
+  const pinAnchor = useCallback(
+    (symbol: string, extra?: { market?: string; instrument?: 'stock' | 'index' }) => {
+      const next = (symbol || '').trim()
+      if (!next) return
+      if (next === (routeAnchorSymbolRef.current || '') && next !== dismissedRouteRef.current) {
+        setExplicitAnchor(null)
+        return
+      }
+      setExplicitAnchor({ symbol: next, market: extra?.market, instrument: extra?.instrument })
+    },
+    [],
+  )
   /**
    * 图表上下文（P2, 2026-10-29）：从个股工作台带过来的**那一张图**的读数
    * （类型/市场/周期/可视区间/已确认价位）。
@@ -597,7 +665,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setConvBoundSymbol(entry.symbol)
     setMsgs([])
     setError(null)
-    setAnchorSymbol(entry.symbol)
+    pinAnchor(entry.symbol, { market: entry.market })
     // 换入口 = 新会话视图：上一段「已送给某个会话」的记账跟着作废
     setSentChart(null)
     setChartNotice(null)
@@ -619,7 +687,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     } else if (read.dismissed) {
       setChartNotice('你之前清除了这只票的图表上下文，本次未带入；刷新页面后从工作台重新进入可再次带上。')
     }
-  }, [entry, streaming, backgroundPending, detachStream])
+  }, [entry, streaming, backgroundPending, detachStream, pinAnchor])
 
   /**
    * 锚点换标的 → 工作台那张图的上下文立刻失效（P2 隔离）。
@@ -650,6 +718,41 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const chartCtxExpired = chartCtx !== null && !isChartContextFresh(chartCtx, chartClock)
 
   /**
+   * 本轮同图快照（2026-11-17）—— 参谋侧唯一的读取口。
+   *
+   * 与上面 `chartCtx` 完全独立：那份是"进入时快照"（写会话、撤不回），
+   * 这份是工作台**此刻**屏幕上那张图绑定哪份缠论快照（`KlineChart.onChanSnapshotChange`），
+   * 每轮发送时现取、只进这一轮请求体。所以这里没有"sentChart"式的记账：
+   * 只要仓库里没有这一份（换股/换号/清除/隐藏/过期），下一轮自然就是不带。
+   *
+   * 读的是 `anchorSymbol`（不是上一轮的 `sym`）：界面显示"下一条会带哪一份"，
+   * 真实发送还会在 `send` 里按那一轮标的再读一次（`resolveChanSnapshotForTurn`）。
+   */
+  const [chanTick, setChanTick] = useState(0)
+  const [chanClock, setChanClock] = useState(() => Date.now())
+  useEffect(() => subscribeChanSnapshot(() => setChanTick((v) => v + 1)), [])
+  const chanView = useMemo<ChanSnapshotRead | null>(() => {
+    if (!anchorSymbol) return null
+    // `chanTick`（仓库变更）/ `chanClock`（30s 心跳）都只是"该重读一次"的触发器：
+    // 新鲜度按**渲染这一刻**的 `Date.now()` 算，不能拿挂载时采到的时钟当基准
+    // （那会把刚广播的快照算成"未来时间戳"，显示成过期）。
+    void chanTick
+    void chanClock
+    return readChanSnapshotDetailed(anchorSymbol, null, currentAccountId(), Date.now())
+  }, [anchorSymbol, chanTick, chanClock])
+  /** 有记录时才走 30s 时钟：过期要说出来（"本轮不发送"），不能让旧的一直亮着。 */
+  useEffect(() => {
+    if (!chanView?.record) return
+    const timer = window.setInterval(() => setChanClock(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [chanView?.record])
+  /** 用户点「清除」：撤这只票的当前快照，并让工作台的再次广播在本页会话里不复活。 */
+  const clearChanSnapshot = useCallback(() => {
+    if (chanView?.record) dismissChanSnapshot(chanView.record)
+    setChanTick((v) => v + 1)
+  }, [chanView?.record])
+
+  /**
    * 上下文带入（P0）：从个股工作台/外部链接进来时带 `?symbol=600111`，
    * 页面直接进入「正在看」状态，用户不必再输一次代码；带 `?q=` 时预填问题。
    * 用 URLSearchParams 而非 router hook：本页单测裸渲染不带 Router。
@@ -658,7 +761,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     if (typeof window === 'undefined') return
     const sp = new URLSearchParams(entrySearch ?? window.location.search)
     const sym = (sp.get('symbol') || '').trim()
-    if (SYMBOL_RE.test(sym)) setAnchorSymbol(sym)
+    if (SYMBOL_RE.test(sym)) pinAnchor(sym)
     const q = (sp.get('q') || '').trim()
     if (q) setInput(q)
     // 入口扶正 2026-10-23: ?agent= 预填 @ 参谋 mention chip(只预填不自动发送, 等用户点发送);
@@ -677,7 +780,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       setMentions((m) => (m.some((x) => mentionKey(x) === mentionKey(chip)) ? m : [...m, chip]))
     }
     void sp.get('date')
-  }, [entrySearch])
+  }, [entrySearch, pinAnchor])
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: msgs.length || stage ? scroller.current.scrollHeight : 0 })
@@ -821,7 +924,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setConvId(id)
     setConvBoundSymbol(sym)
     // 绑定标的为空就如实清掉锚点：留着上一个会话的代码，等于替这个会话编了个标的
-    setAnchorSymbol(sym)
+    if (sym) pinAnchor(sym)
+    else setExplicitAnchor(null)
     setMsgs(
       rows
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -851,7 +955,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
      * 也不声称"它没有/已清除"——用常驻提示如实说明不可核验，并写清后续行为（见渲染处）。
      */
     setHistoryCtxUnknown(chartState === 'unknown')
-  }, [detachStream])
+  }, [detachStream, pinAnchor])
 
   const startNewConversation = useCallback(() => {
     detachStream() // 2026-10-28: 新会话 → 旧流不许再往这里写(本轮态一并收走)
@@ -1145,7 +1249,20 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
        * `explicit` 说明这个指向是不是用户自己写明的 —— 后台轮据此判断能不能复用旧会话。
        */
       const mentionedStock = mentions.find((m) => m.type === 'stock') as MentionStock | undefined
-      const turnTarget = resolveTurnSymbol({ mentioned: mentionedStock?.symbol, text: words, anchor: anchorSymbol })
+      /**
+       * 发送这一刻的**路由锚点**（2026-11-18 修正）: 停靠面板在页签式工作台里由
+       * `AssistantPageHost` 承载时 `presentation === 'page'`，`AssistantWorkspace` 的
+       * router location 可能是参谋页签自己的路径 —— 渲染期拿到的 routeAnchor 会是 null，
+       * 请求体就只剩 `{content}`。这里在**真正发送的瞬间**再读一次 `window.location`
+       * （当前可见页签的 URL），并在没有显式锚点时用它兜底。显式指定仍然优先。
+       */
+      const routeNow = anchorSymbol
+        ? null
+        : readStockRouteAnchor(window.location.pathname, window.location.search)
+      const turnAnchor = anchorSymbol || routeNow?.symbol || ''
+      const turnAnchorMarket = anchorSymbol ? anchorMarket : (routeNow?.market || '')
+      const turnAnchorInstrument = anchorSymbol ? anchorInstrument : (routeNow?.instrument ?? null)
+      const turnTarget = resolveTurnSymbol({ mentioned: mentionedStock?.symbol, text: words, anchor: turnAnchor })
       // 后台模式：附件暂不支持（附件要先过视觉转写，走原流式路径）
       if (bgMode && !attach) {
         /**
@@ -1208,7 +1325,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       try {
         // 标的解析优先级：@ 指定 > 本条文字里的代码 > 页面锚点（正在看 XXX）
         const sym = turnTarget.symbol
-        if (sym && sym !== anchorSymbol) setAnchorSymbol(sym)
+        // 只有用户**自己写明**的标的才钉成显式锚点（@提及 / 正文代码）；
+        // 沿用页面锚点的那一轮不钉 —— 否则换股跟随会在第一次提问后失效。
+        if (sym && turnTarget.explicit) pinAnchor(sym)
 
         /**
          * 换标的 / 会话快照不可核验 + 当前会话（2026-10-29 三审合并判断）：
@@ -1270,7 +1389,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             sym
               ? {
                   stock_symbol: sym,
-                  stock_market: initialContext.current?.symbol === sym ? initialContext.current.market || marketOf(sym) : marketOf(sym),
+                  /* 市场与发送时同源：锚点自带的（工作台/入口口径）优先，没有才按代码段推 */
+                  stock_market: sym === turnAnchor && turnAnchorMarket ? turnAnchorMarket : marketOf(sym),
                   /**
                    * 图表上下文与页面快照同路（会话级 `initial_context`，后端每轮都会附加到系统提示）。
                    * 语境里明写"进入时快照 / 用户提问才引用 / 不得自动下单与画线"，
@@ -1324,6 +1444,30 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
            */
           setSentChart(chartForTurn ? { conversationId: id, symbol: chartForTurn.symbol } : null)
         }
+        /**
+         * 本轮同图快照（2026-11-17）：**在发送这一刻**从工作台的内存仓库现取。
+         *
+         * 为什么必须在这里、不能更早：上面有 `createConversation` 的 `await`，回来时用户
+         * 可能已经换股、换账号、隐藏窗口、点了「清除」，或者工作台那边已经切了图。
+         * 任何在 await 之前算好的 block 都可能已经不代表"现在屏幕上这张图"。
+         *
+         * 复核项（任一不成立就不带，且**不回退**到上一次那份）：
+         *  - owner：`currentAccountId()` 此刻的值必须与记录一致（store 按 owner 分键，天然隔离）；
+         *  - symbol：必须等于本轮请求真正发出去的标的 `sym`（不是渲染时的 anchor）；
+         *  - freshness：超过 2 分钟没有新的图表广播 → 不带；
+         *  - days/shape：仓库里那条记录本身（摘要 64 位 hex、天数为正整数）在读取时再验一次。
+         *
+         * 按代码读、**不按交易所后缀过滤**：参谋这边的 `marketOf()` 给的是 `SH`/`SZ`，
+         * 而图表仓库里记的是市场口径 `CN/HK/US`（两块不是同一套码）。同号多张
+         * （000001 个股 + 指数）读取侧会判歧义、直接不带 —— 宁可少带，不猜。
+         *
+         * 它只进这一轮的 `chart_snapshot` 字段：不进 `content`、不进 `initial_context`、
+         * 不进聊天历史、不落任何存储 —— 所以下一轮它不会"被记住"。
+         */
+        const chanForTurn = sym
+          ? resolveChanSnapshotForTurn({ symbol: sym, owner: currentAccountId() })
+          : null
+        const chartSnapshot = chanForTurn?.block ?? null
         const result = await chatApi.sendMessageStream(
           id,
           content,
@@ -1371,12 +1515,31 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           },
           ac.signal,
           imageData,
-          sym ? { symbol: sym, market: marketOf(sym) } : undefined,
+          /**
+           * 页面锚点 + 它的**市场/标的类型**（2026-11-17 四审 + 2026-11-18 停靠跟随）：
+           * `stock_symbol` 只有代码，000001 既可能是平安银行也可能是指上证指数；服务端不能
+           * 从代码证明类型，缺这一维就只能把同号快照整份丢弃。
+           *
+           * 来源优先级：
+           *  - 类型：图表**自己广播过**的 `record.instrument` 最可信（那就是这张图），
+           *    取不到才用页面锚点的声明（`?type=index`）—— 都没有就不填，绝不按代码猜；
+           *  - 市场：锚点自带的（工作台页面口径 `CN`），没有才按代码段推（`marketOf`）。
+           */
+          sym
+            ? {
+                symbol: sym,
+                market: sym === turnAnchor && turnAnchorMarket ? turnAnchorMarket : marketOf(sym),
+                instrument:
+                  chanForTurn?.record?.instrument ??
+                  (sym === turnAnchor && turnAnchorInstrument ? turnAnchorInstrument : undefined),
+              }
+            : undefined,
           mentions.map((m) => ({
             type: m.type,
             value: m.type === 'stock' ? m.symbol : m.id,
             label: m.type === 'stock' ? m.name || m.symbol : m.label,
           })),
+          chartSnapshot,
         )
         if (!isCurrent()) return
         // 2026-10-28: 没拿到终稿 = 失败, 不许把半截正文当成品亮着
@@ -1425,7 +1588,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         }
       }
     },
-    [attach, convId, anchorSymbol, mentions, streaming, uploading, backgroundPending, runsState, bgMode, runInBackground, activeChartCtx, chartCtx, sentChart, convLoading],
+    [attach, convId, anchorSymbol, anchorMarket, anchorInstrument, pinAnchor, mentions, streaming, uploading, backgroundPending, runsState, bgMode, runInBackground, activeChartCtx, chartCtx, sentChart, convLoading],
   )
 
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
@@ -1806,7 +1969,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               type="button"
               onClick={() => {
                 setBriefSymbol('')
-                setAnchorSymbol('')
+                setExplicitAnchor(null)
+                // 停靠面板：这只票就是当前路由那只 —— 读到这里之前它来自跟随，
+                // 清掉就记成"用户不要这个锚点"，同一个标的别再顶回来（换股才恢复跟随）
+                setDismissedRoute(routeAnchor?.symbol ?? '')
                 /**
                  * 换标的时的图表上下文（P2 修正, 2026-10-29）：
                  * 还没送出去 → 直接丢掉（工作台那条发布也撤掉，下次进来不复活）；
@@ -1847,6 +2013,37 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             className="border-b border-border bg-s2 px-3 py-1 text-[12px] text-muted-foreground"
           >
             {chartNotice}
+          </div>
+        ) : null}
+
+        {/*
+          本轮同图快照（2026-11-17）：把「这一轮会随请求体发出去的那份缠论快照」明写在界面上。
+          只显示可读项（代码/类型/市场/周期/天数/摘要前缀），不显示完整摘要与 owner；
+          并明确写出"每轮现取、不写入会话历史"—— 用户才不会以为它能被撤回或会被长期记住。
+          过期记录仍然显示，但必须说清"本轮不发送"（不能只在发送时静默丢掉）。
+        */}
+        {chanView && chanView.record ? (
+          <div
+            data-testid="copilot-chan-snapshot"
+            className="flex flex-wrap items-center gap-1.5 border-b border-border bg-s2 px-3 py-1 text-[12px]"
+          >
+            <span className="text-muted-foreground">本轮同图快照</span>
+            <span className="font-mono tabular-nums text-role-watch">{chanSnapshotLabel(chanView.record)}</span>
+            <span className="text-muted-foreground">
+              {chanView.reason === 'ok'
+                ? '· 只随本轮请求发送，不写入会话历史'
+                : chanView.reason === 'expired'
+                  ? '· 已超过 2 分钟没有新的图表广播，本轮不发送（切一下图会重新带上）'
+                  : '· 本轮不发送'}
+            </span>
+            <button
+              type="button"
+              data-testid="copilot-chan-snapshot-clear"
+              onClick={clearChanSnapshot}
+              className="ml-auto text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              清除
+            </button>
           </div>
         ) : null}
 

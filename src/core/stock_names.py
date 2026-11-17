@@ -202,6 +202,24 @@ def names_for(symbols: list[str], market: str = "CN") -> dict[str, str]:
     return out
 
 
+def cached_pairs(market: str = "") -> list[tuple[str, str]] | None:
+    """当前**进程内**索引的 ``(code, name)`` 列表; 未建好/为空返回 None。
+
+    关键区别(2026-11-17 四轮审计): ``None`` 表示"不知道", **不是**"没有名字"。
+    名字护栏据此决定"能不能确认正文没点别的票" —— 把不可用当成空集合, 就会把
+    "查不到" 误当成 "用户没提别票" 而信任页面上的旧快照。
+
+    只读缓存, 不触发全市场抓取(护栏在对话链路上, 不能被 17s 抓取拖住)。
+    """
+    with _lock:
+        if not _built_at or not _indexes:
+            return None
+        idx = _indexes.get(market or "") or _indexes.get("") or {}
+        if not idx:
+            return None
+        return list(idx.items())
+
+
 def reset_cache() -> None:
     """清空进程内索引(测试/运维强制重读用)。"""
     global _indexes, _built_at, _ok, _building

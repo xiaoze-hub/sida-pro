@@ -14,6 +14,7 @@ from src.collectors.kline_collector import KlineCollector
 from src.models.market import MarketCode
 from src.core.trading_calendar import is_trading_day
 from src.web.api.auth import get_current_user
+from src.web.api.chan_snapshot import attach_snapshot_digest
 from src.db.models import User
 
 _APP_TZ = "Asia/Shanghai"
@@ -627,6 +628,9 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
             return hit[1]
         data = (_get_klines_uncached(symbol, market, days, interval) if instrument == "auto"
                 else _get_klines_uncached(symbol, market, days, interval, instrument=instrument))
+        # 2026-11-17: 日线响应挂内容摘要(与每根 OHLC/顺序绑定), 供只读分型端点
+        # `GET /{symbol}/chan-structure` 校验"算的是不是这张图"。仅 1d 生效。
+        attach_snapshot_digest(data)
         _kl_cache[key] = (_time.time(), data)
         return data
 
@@ -762,6 +766,10 @@ def _get_klines_uncached(symbol: str, market: str = "CN", days: int = 60, interv
             "source": "pg_klines_hypertable",
             "asof": pg_asof,
             "today_bar": today_state,
+            # 2026-11-17: 个股分支显式声明"不是指数" —— 旧契约是**缺字段**, 下游
+            # (缠论分型端点)只能靠"用显式 stock 取数路径"间接推断身份。显式 false
+            # 仅供响应与请求交叉检查；此标记来自同一取数分支，不证明上游证券身份。
+            "is_index": False,
         }
         # 2026-10-12: 合成今日 bar 显式标 partial/source/as_of(诚实区分子源)
         _attach_live_bar(resp, symbol, market_code, today_state)
@@ -778,6 +786,8 @@ def _get_klines_uncached(symbol: str, market: str = "CN", days: int = 60, interv
         "days": days,
         "interval": interval,
         "klines": _serialize_klines(klines),
+        # 与 PG 分支同口径: 个股必须显式 is_index=False(不是"缺字段")。
+        "is_index": False,
     }
     if today_state_fb:
         _fb["today_bar"] = today_state_fb
@@ -2049,3 +2059,14 @@ from src.core.layer_precompute import (  # noqa: E402
 )
 
 _register_layer_daily_builder(build_layer_daily_blocks)
+
+
+# ── 只读缠论分型端点(2026-11-17) ────────────────────────────────────────────
+# 独立模块 `chan_snapshot` 里的 `GET /{symbol}/chan-structure` 必须挂在**同一个**
+# /api/klines 前缀下(与图表同源、同鉴权依赖), 但 app.py 的 include 列表不在本次
+# 改动范围内 —— 故在此并入本 router。必须放在 `/{symbol}` 之后也不影响匹配:
+# `/{symbol}` 只匹配单段路径, `/600000/chan-structure` 是两段, 不会被它吞掉
+# (真实 HTTP 由 tests/test_chan_snapshot_api.py 断言, 不做"应该没问题"的推断)。
+from src.web.api.chan_snapshot import router as _chan_snapshot_router  # noqa: E402
+
+router.include_router(_chan_snapshot_router)

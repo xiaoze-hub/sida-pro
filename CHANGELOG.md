@@ -1,5 +1,60 @@
 ## [未发布]
 
+### fix-停靠参谋跟随路由锚点 + 线段/中枢加长回看（前端）
+
+- **停靠面板锚点跟随**：`/stocks/:symbol` 上打开「问参谋」面板时（用户直接点悬浮球，没有 `sida-open-chat` 入口事件），锚点从当前路由解析（`?type=index` 为指数、否则个股；市场按代码段口径 `CN`），换股跟随、离开个股页即清空。请求体因此带上 `stock_symbol` / `stock_market` / `stock_instrument`，并携带图上那份 `chart_snapshot`（图层未上报/换股后不带，不伪造）。
+- **显式指定优先**：entry 带入的另一只票、正文里写明的代码、`@` 提及、打开的历史会话绑定标的都优先于路由，路由不许覆盖；与当前路由同一只票时不钉住（否则换股跟随会失效）。用户点「清除锚点」后同一标的不再顶回来，换股才恢复跟随。
+- 新增 `src/lib/copilot/route-anchor.ts`（纯函数，板块/港股/脏路由一律不产出锚点）+ `AssistantWorkspace` 按 `location` 解析后传给面板；`tests/components/copilot-dock-route-anchor.test.tsx` 用**真 AiCopilot + 真 StockWorkbench + 真 chatApi**（全局 fetch 换成会记账的假后端）断言真正发出去的请求体。
+- **线段/中枢加长回看**：`KlineChart` 在「线段」或「操作口径中枢」子图层打开时，同一条主图请求改按 500 天取数（上限 1000），图例明写「为显示线段/中枢已加载近 N 天（默认 120 天）」；关掉两个子图层回到 `initialDays`。摘要仍由该响应的 `chan_snapshot` 绑定（不另取结构数据），切股/切周期/失败/409 仍按既有代次与清理规则不串。
+- 测试：`chan-segment-layer` 新增加长回看两例（主图与结构请求同按 500 天、图例文案、关闭回退）；既有「打开线段」一例的线条计数改为统计**图上还活着**的线（加长回看会先撤掉旧一批再重建）。`tsc -b` / `tsc -p tsconfig.tests.json` 通过；`chan-chart-layer`(43) + `chan-segment-layer`(16) + `copilot-dock-route-anchor`(6) + 全部 `copilot-*`/`assistant-*`/`kline-*` 组件用例共 455 passed。
+
+### fix-中枢适配器区间口径与可见时点（chan-centre-adapter-v2）
+
+- 区间口径升级：`src/core/chan_centre_adapter.py` 的线段范围不再只取 `PenEndpoint.price` 枢轴价，改为 span 内所有 pen 端点**合并后 K 线区间** `bar_low`/`bar_high` 的极值。旧口径会把影线丢掉、让 `zd/zg` 落在 K 线区间内部，甚至把 K 线区间本已重叠的中枢误判成 `no_centre`（原 no-centre 夹具 v1 得 [20, 19.58] `no_centre`，v2 得 [19, 20.58] `centre`）。这是输入可证明的最宽区间（span 内端点 bar 的并集），仍是真实段 K 线区间的下界；端点 bar 必须包含自身枢轴价，否则拒绝。
+- 口径不可混用：`CentreSource.snapshot_version` 增加 `range=pen_span_endpoint_merged_bar`，v1 枢轴价中枢与 v2 合并 K 线中枢无法互相 `expect_snapshot_version` 通过；`ADAPTER_VERSION` 升为 `chan-centre-adapter-v2`。
+- `visible_on` 改为**形成时点**（第三段确认日），不再随生命周期状态漂移；新增 `state_changed_on` 表达最新生命周期状态的证据日（`formed` 时等于形成日）。
+- 新增 fail-closed 校验：`pens_used < MIN_PENS`、`characteristic_elements ∉ [MIN_PENS, pens_used]`、evidence 角色/笔索引（必须在输入内、已确认、不重复、元素确认日等于所引 pen 的最新确认日）、`SegmentEndpoint.confirmed_on` 与 pen 端点一致且不晚于段确认日，全部直接 `ValueError`；伪造 1 笔段不再能造中枢。
+- `chain_complete` 重命名为 `terminal` 并收紧语义：只有 `centre`/`no_centre` 且**无任何 issue**（无候选尾、无 pending、无 blocked）才算闭合；0 段空快照与候选尾均为非 terminal。`describe()` 对 `no_centre` 也标 `INCOMPLETE` 并列出 kernel 原始原因。
+- 测试：更新受影响的中心区间/版本/terminal 断言，新增 6 类回归（伪造 1 笔段、0 段空快照、延伸日不提前、旧 no-centre 夹具在 bar 口径下变中心、bar 与枢轴矛盾、篡改端点日期/特征元素数/证据笔）。`test_chan_centre_adapter + segment + operational_centre + pen + structure` 共 233 passed [commit 待回填]
+
+### feat-缠论只读接口接入线段与操作口径中枢
+
+- `GET /api/klines/{symbol}/chan-structure` 在同一份图表快照上(同一次 `get_klines`、同一个分型/笔快照)新增 `segments`(内核 `chan-segment-v2`): 只把 **confirmed 前缀**当几何对外, 尾部 candidate 单列并标 `driftable`, `pending`/`blocked` 单列并保留内核原因; `blocked` 条目 `geometry_withheld=true`、**不提供价格几何**(避免被画成线并喂成中枢); 证据笔(特征序列)与几何跨度分开给出, 两套集合分别计数。
+- 同响应新增 `operational_centre`(适配器 `chan-centre-adapter-v1`): 原样透传 `basis=segment_a0` / `strictness=operational_not_strict` / `status` / `chain_complete` / `issues` / `limitations`, 明写"不是「中枢」, 不是「严格中枢」"; `not_enough_confirmed_segments` 不得显示成「无中枢」, `no_centre` 才是实测无交集, `blocked_before_centre` 与两者区分。
+- 分型/笔字段与摘要复核不变; 新增块各自带 schema 与内核/适配器版本号(可选扩展)。内核/适配器/自洽性/来源(as_of、笔序列摘要、标的)任一不符 → 409 整份失败, 不返回半份结果; 无摘要/身份不明确仍 422/409 fail-closed。
+- `not_implemented` 改为真实缺口: `segment_case2_gap`、`segment_destruction_repartition`、`strict_centre_18th_lesson_definition`、`centre_extension_multi_centre_level_upgrade`、`buy_sell_point`、`multi_level_recursion`(不再笼统写 segment/centre)。
+- 参谋工具渲染同源追加线段/操作口径中枢(措辞固定"不是中枢/不是严格中枢", 无新增方向判断); 不把 operational 中枢当买卖点或交易信号。
+- 新增 `tests/test_chan_snapshot_segments_api.py`: 真实 `bars→分型→笔→线段→适配器` 链路, 覆盖字段/标签/版本、候选可漂移、blocked 无几何、证据与跨度分离、409 跨标的不串、空与不足边界, 并对实际 engine 断言只连隔离 scratch SQLite。
+
+### feat-缠论K线新增线段与操作口径中枢子图层（前端，默认关）
+
+- 新增两个**独立**子图层开关 `layersVisible.chanSegments` / `layersVisible.chanCentre`（父不传则组件自持本地开关），**默认关**，与既有分型/笔开关互不影响：关掉任一只撤自己那批 series/价位线，分型记号、笔线、均线与买卖点标记一条不动。
+- 线段几何只认服务端 `segments.confirmed` 前缀（实线、`lineWidth 2`，比笔粗一档）；`candidate_tail` 画虚线且必须服务端显式 `driftable=true`，图例写「候选(细虚线·终点可漂移)」；`blocked`/`pending` **一根线都不画**、不进图例线型示例（只计数，`blocked` 无价格几何）。
+- 操作口径中枢画 price band（`zd`/`zg` 两条 `createPriceLine`），轴标签一律「操作口径·非严格中枢 zd/zg」；`basis`/`strictness` 必须原样是 `segment_a0`/`operational_not_strict`，否则拒画（不许把操作口径说成严格中枢）。
+- `not_enough_confirmed_segments` 措辞明确「不能据此说中枢不存在」，`no_centre` 才写「实测无交集（measured absence）」，`blocked_before_centre` 单列；图例同时透出 `basis=segment_a0`、非买卖点、非交易信号。
+- 跨快照一律拒画并清空自身图层：线段 `as_of_day`/`source_pen_kernel_version` 与结构块不一致、confirmed 前缀在笔链上不连续、中枢 `source.symbol`/`as_of_day`/`pen_digest` 与线段块不一致、结构响应 `market` 与当前图不一致。切股/关层/结构失败/卸载都走先清场再重建。
+- 新增 `tests/components/chan-segment-layer.test.tsx`（14 例，真实组件 + 假图表库）：默认关、粗实线/候选虚线可漂移、blocked 无几何且不画、跨快照/混批拒画、not_enough 与 no_centre 措辞分离、关子图层不连带删他人标记、切股/失败/卸载清场。
+- 前端**不自算**线段与中枢，也不新增方向性结论；线段/中枢均为规则几何，不构成买卖点或交易建议。
+
+### fix-缠论参谋同图归属改为封闭追问语法（词表退役）
+
+- 带图表快照的轮次不再用「纯追问词表 + 单字白名单」剥句子来判断"正文有没有点别的票"：那条路不可收敛（`万科怎么样` 里「万」被当虚词吞掉、「科」只剩一字被丢弃 ⇒ 整句判成纯追问，页面停在 600519 时把贵州茅台的结构答给了万科；补别名只能补上已知那只）。
+- 新增 `src/core/chan_followup.py` 的**封闭正向语法**：只接受①整句为封闭模板（泛指主语 + 追问核心，字面量精确匹配）、②唯一 6 位代码/@提及 + 同一套追问语法、③写在句首且**一字不差的已验证全名**（唯一命中）+ 同一套追问语法；其余一律拒绝同图（允许误拒、不许误答）。归一化只有 NFKC + 去空白 + 封闭标点表 + 小写。
+- 拒绝时本轮不提供结构，并在 system 明说「本轮不可读同图（不是这张图没有结构）」，给出改用 6 位代码/@提及 + 简短问题的回退；**普通不带快照的聊天不受影响**。
+- 已知覆盖限制：名字只认句首全名、且依赖本地可信名单（名单不可用时名字形式直接不支持）；简称、别名、句中名字、口语长句、多标的都判协议外。协议只声明字面识别范围，不声称自然语言绝无歧义。判定过程零网络（不再为归属打 TQ 检索）。
+
+### fix-缠论参谋快照跨标的·旧摘要复用·摘要落库
+
+- 快照归属改为**唯一请求目标**判定：正文里的 6 位代码 / @提及仍优先，但「正文只写名字」（如「北方稀土 缠论结构怎么样」）解析出的代码也参与核对；名字解析失败、一句话多只票、名字与会话绑定/页面锚点指向不同票时一律 fail-closed（丢弃快照并在本轮 system 明说），不再把"会话无绑定"当成"快照可信"。工具层另加 `REQ_BOUND` 与快照标的的第二次核对。
+- `get_chan_structure` **只**接受本轮消息随附并经服务端复核的快照：模型自带的 `snapshot_digest` 不再被接受（旧实现可在下一轮不带快照时沿用上一轮摘要，等于伪造同图证据）；schema 也不再声明该参数。取数口径（instrument/days/market）以复核结果为准。
+- 完整摘要不再随本功能落盘：`copilot_steps.args/result_digest`、工具调用日志、工具渲染文本与 system 说明统一收缩为前 8 位（`src/harness/redaction.py`，只对 `get_chan_structure` 生效，不动其它工具的普通哈希）。用户自己在消息正文里贴的摘要属于用户内容，不改写。
+- demo 账号限流（429）判定移到 bind 之前：被拒消息按契约"拒绝且未保存"，不再先把会话标的改掉。
+- 待后续：system 里的「服务端已复核」指"收到消息时与服务器这份 K 线一致"，不代表工具调用时仍一致（工具会如实 409）；文案层面尚未改称"入口复核"。
+
+### feat-缠论结构实验基座
+
+- 新增独立三根原始 K 线严格局部极值实验函数，分别保留结构位置与确认日；尚未实现包含处理、缠论分型、笔、中枢或页面接入，不能用于交易。
+
 ### fix-多 worker 并发启动建表竞态
 
 - 生产 `WEB_WORKERS=4` 时四个进程同时进 lifespan → `init_db`；`create_all(checkfirst=True)` 的 checkfirst 只在进程内有效，另一个 worker 仍会 `CREATE` 同名表/类型，报 `DuplicateTable` / `pg_type` 唯一冲突，父进程退出、健康检查永不通过（v0.11.17 首次部署实测）。

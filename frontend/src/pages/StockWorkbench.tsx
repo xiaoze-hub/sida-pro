@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { dashboardApi, fetchAPI } from '@sida/api'
 import { usePausedInterval, useTabActive } from '@sida/base-ui'
-import KlineChart, { type KlineInterval, type KlineRangeStats } from '@sida/biz-ui/components/KlineChart'
+import KlineChart, { type ChanChartSnapshot, type KlineInterval, type KlineRangeStats } from '@sida/biz-ui/components/KlineChart'
 import HeaderBand from '@sida/biz-ui/components/workbench/HeaderBand'
 import { QuoteSymbolPicker } from '@/components/QuoteSymbolPicker'
 import { loadQuoteUniverse, preferredQuote, quotePath, rememberQuote } from '@/lib/quote-universe'
@@ -26,6 +26,8 @@ import { AnnotationLinkBar } from '@/components/copilot/AnnotationLinkBar'
 import {
   buildChartContext,
   publishChartContext,
+  publishChanSnapshot,
+  unpublishChanSnapshot,
   unpublishChartContext,
   type ChartContext,
 } from '@/lib/copilot/chart-context'
@@ -495,6 +497,72 @@ export default function StockWorkbench() {
     const key = publishChartContext(chartContext)
     return () => unpublishChartContext(key)
   }, [chartContext, active])
+
+  /**
+   * 「本轮同图快照」发布端（2026-11-17）：把 `KlineChart.onChanSnapshotChange` 交回来的
+   * **那一份**已落图快照（`symbol/market/instrument/interval/days/digest`）放进
+   * `lib/copilot/chart-context` 的按轮仓库，供参谋每轮发送时现取。
+   *
+   * 三条纪律（多一条都不写）：
+   *  1. **owner 现取**：`currentAccountId()` 在这一刻读，不用渲染时的闭包值 ——
+   *     换号后旧图不得挂到新账号名下（读侧还会再比一次）。
+   *  2. **标的对得上**：组件广播的 `symbol` 必须还是本页当前那张图（路由已切走时，
+   *     旧图的迟到广播一律丢；`symbolRef` 存的是最新路由值，不是闭包值）。
+   *  3. **一张图一条**：每次广播先撤上一条（组件回调 null 也走这条路），
+   *     换股/换周期/卸载/页面隐藏都通过同一个 `dropChanSnapshot` 清场。
+   *
+   * 这里**不**发起任何请求、不写 state、不落 localStorage —— 只是内存里的一条当前值。
+   */
+  const chanKeyRef = useRef<string | null>(null)
+  const symbolRef = useRef(symbol)
+  symbolRef.current = symbol
+  const dropChanSnapshot = useCallback(() => {
+    if (chanKeyRef.current) {
+      unpublishChanSnapshot(chanKeyRef.current)
+      chanKeyRef.current = null
+    }
+  }, [])
+  const handleChanSnapshot = useCallback(
+    (snap: ChanChartSnapshot | null) => {
+      // 先撤上一条：组件说"没图了"，上一份就必须当场失效（不许留着被下一轮捡走）
+      dropChanSnapshot()
+      if (!snap) return
+      const owner = currentAccountId()
+      if (!owner) return
+      // 迟到广播（路由已切到别的票）不挂：宁可这一轮不带，也不把旧图说成当前的
+      if (snap.symbol !== symbolRef.current) return
+      chanKeyRef.current = publishChanSnapshot({
+        owner,
+        symbol: snap.symbol,
+        market: snap.market,
+        instrument: snap.instrument,
+        interval: snap.interval,
+        days: snap.days,
+        digest: snap.digest,
+      })
+    },
+    [dropChanSnapshot],
+  )
+  /** 换标的 / 换市场 / 换账号 → 立即撤下（图表重绘会重新广播新的那张）。 */
+  useEffect(() => {
+    dropChanSnapshot()
+    return dropChanSnapshot
+  }, [symbol, MARKET, annotationOwner, dropChanSnapshot])
+  /**
+   * 页面隐藏（切标签/最小化/锁屏）→ 立即撤下。
+   *
+   * 隐藏期间图表可能被浏览器节流、用户也可能在别的标签页换了票；重新可见时本页无法证明
+   * "屏幕上还是那份快照"（组件只在值变化时广播，不会因为重新可见再发一次），所以按
+   * 保守口径处理：这一份作废，等下一次真实的图变化（换股/换周期/新数据）再带上。
+   */
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') dropChanSnapshot()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [dropChanSnapshot])
   // §12: 数据源健康(60s 轮询; 失败/未知一律按不可用 → 灰显, 不假装有数据)
   const { isReady: sourceReady, reasonOf: sourceReason } = useSourceHealth()
   const [statsDismissed, setStatsDismissed] = useState(false)
@@ -638,6 +706,9 @@ export default function StockWorkbench() {
                   onIntervalChange={handleIntervalChange}
                   /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
                   onRangeStats={handleRangeStats}
+                  /* 2026-11-17: 缠论快照对外广播 —— 只把「K 线真的落图且摘要可校验」的那一份
+                     交给参谋（按轮发送，不写会话）。组件在切标的/失败/卸载时回调 null。 */
+                  onChanSnapshotChange={handleChanSnapshot}
                   /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
                   sourceReady={sourceReady}
                   sourceReason={sourceReason}

@@ -28,6 +28,8 @@
  * ——同一标签页换号后，上一个账号的快照还在内存里，不能让新账号的提问带着它进请求。
  */
 
+import type { ChartSnapshotPayload } from '@sida/api'
+
 import { safeFixed, safePercent } from '@/lib/format'
 
 import { currentAccountId } from './annotationLedger'
@@ -489,7 +491,365 @@ export function clearChartContextStore(): void {
   dismissed.clear()
 }
 
-/** 当前仓库条目数（测试/诊断用）。 */
+/** 测试/诊断用：当前仓库条目数。 */
 export function chartContextStoreSize(): number {
   return store.size
+}
+
+// ---------------------------------------------------------------------------
+// 本轮同图快照（2026-11-17）—— 缠论快照 `digest` 的**按轮**通道
+//
+// 与上面那段会话级上下文（`initial_context`）的根本区别：
+//  - 上面那份**一旦送进会话就撤不回**（后端每轮重放），只适合"进入时的页面说明"；
+//  - 这一份是**每一轮现取、只用一次**：用户这一刻屏幕上那张图绑定哪份缠论快照，
+//    只随本轮请求体的 `chart_snapshot` 字段发出去，**不写会话、不写聊天历史、不落地**。
+//    所以"清标的 / 换股 / 换周期 / 换账号 / 刷新 / 卸载 / 页面隐藏 / 用户清除"之后，
+//    下一轮自然取不到 —— 不需要（也没有）撤回接口。
+//
+// 数据来源只有一个：`KlineChart.onChanSnapshotChange` 的回调载荷。组件本身的语义
+// （见 `lib/chan-layer` 的 `ChanChartSnapshot`）已经保证：非 null 只在 K 线真的落图、
+// 摘要 64 位小写 hex、渲染链没改写原始 K 线、身份/周期/天数与 props 一致时给出；
+// 切标的/失败/409/卸载都会回调 null。**本模块不复算也不推测**，只做三件事：
+//  1. 逐字段再验一遍形状（摘要格式、天数、周期、类型、市场、代码）—— 回调方给什么就只认什么；
+//  2. 按 `账号|市场|代码|类型` 存一条**当前图**，同号多张 → 读取侧算歧义，不猜；
+//  3. 读侧带 TTL + owner 复核；发送前必须再读一次（`resolveChanSnapshotForTurn`），
+//     绝不允许把 `await` 之前捕获的值当成"现在的图"。
+//
+// 安全口径：`digest` 不是凭据，服务端会按真实账户/标的重验并比对摘要；这里做的是
+// "不把不属于这一刻、不属于这个账号、或已经撤下的那张图说成当前的"。
+// ---------------------------------------------------------------------------
+
+/** 请求体里那块的 schema 名（后端按它分流；改名字等于改协议，必须两边同改）。 */
+export const CHAN_SNAPSHOT_SCHEMA = 'sida-chan-snapshot-v2' as const
+/**
+ * 按轮读取的新鲜度上限：2 分钟。
+ *
+ * 比会话级上下文（5 分钟）更短，因为这份是"现在这张图"：K 线数据每次刷新都会让摘要变化，
+ * 组件也会重新广播；两分钟内没有任何新广播、又没有任何清场事件，才认为"还是这张图"。
+ * 超过就整轮不带 —— 让参谋反问一次，好过让它拿着旧摘要画结构。
+ */
+export const CHAN_SNAPSHOT_TTL_MS = 2 * 60 * 1000
+/** 界面上展示的摘要前缀长度（不展示完整摘要：它是指纹不是给人读的）。 */
+export const CHAN_SNAPSHOT_SHORT_DIGEST = 8
+/** 天数上限：超过这个量级不可能是"当前这张图"的请求参数，按无效摘要处理。 */
+const CHAN_DAYS_MAX = 5000
+const CHAN_DIGEST_RE = /^[0-9a-f]{64}$/
+const CHAN_INSTRUMENTS: ReadonlyArray<ChanSnapshotInstrument> = ['stock', 'index']
+
+/** 图表回调里能用的标的类型（缠论只按个股/指数提供；板块没有结构）。 */
+export type ChanSnapshotInstrument = 'stock' | 'index'
+
+/** 发布端输入：全部按"可能拿不到"处理（回调载荷逐字段再验）。 */
+export interface ChanSnapshotInput {
+  /** 账号（JWT sub）。发布时必须由页面**当下**取，不能用渲染时的闭包值 */
+  owner?: unknown
+  symbol?: unknown
+  market?: unknown
+  instrument?: unknown
+  interval?: unknown
+  days?: unknown
+  digest?: unknown
+  /** 测试用固定时钟 */
+  now?: number
+}
+
+/** 仓库里的一条"当前图"（比请求体多 owner/capturedAt，**绝不**整条发出去）。 */
+export interface ChanSnapshotRecord {
+  owner: string
+  symbol: string
+  market: ChartMarket
+  instrument: ChanSnapshotInstrument
+  interval: '1d'
+  days: number
+  digest: string
+  /** 组件最近一次广播的时刻（客户端时钟） */
+  capturedAt: number
+}
+
+/** 读取/发送前复核的结论。`block` 只在 `reason === 'ok'` 时非空。 */
+export type ChanSnapshotReason =
+  | 'ok'
+  | 'missing'
+  | 'expired'
+  | 'ambiguous'
+  | 'dismissed'
+  | 'invalid'
+  | 'owner'
+  | 'symbol'
+  | 'days'
+
+export interface ChanSnapshotRead {
+  /** 可直接进请求体的 6 字段块（白名单产出，绝不含 owner/capturedAt） */
+  block: ChartSnapshotPayload | null
+  /** 命中的记录（仅供界面展示；`block` 为空时它也可能有值，例如已过期） */
+  record: ChanSnapshotRecord | null
+  reason: ChanSnapshotReason
+  /** 命中但超过 TTL（`reason === 'expired'` 的别名，界面文案用） */
+  expired: boolean
+}
+
+const chanStore = new Map<string, ChanSnapshotRecord>()
+/** 用户在本页会话里明确清除过的 `账号|市场|代码`（重绘/重新广播不得让它复活）。 */
+const chanDismissed = new Set<string>()
+const chanListeners = new Set<() => void>()
+/** 仓库变更计数（`useSyncExternalStore` 之外的轻量订阅：让参谋页重新读取）。 */
+let chanVersion = 0
+
+function cleanStr(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function notifyChan() {
+  chanVersion += 1
+  for (const fn of [...chanListeners]) {
+    try {
+      fn()
+    } catch {
+      // 订阅者异常不得影响发布端（渲染期抛错会把工作台整页打挂）
+    }
+  }
+}
+
+/** 订阅仓库变更（返回退订函数）。参谋页用它把"这一轮能不能带"刷新到界面。 */
+export function subscribeChanSnapshot(listener: () => void): () => void {
+  chanListeners.add(listener)
+  return () => {
+    chanListeners.delete(listener)
+  }
+}
+
+/** 仓库变更计数（测试/诊断用；只增不减）。 */
+export function chanSnapshotVersion(): number {
+  return chanVersion
+}
+
+/**
+ * 一条记录的作用域 key（`账号|市场|代码`，**不含类型**）。
+ * 用户"清除"针对的是这只票，不是某一张图：同号个股/指数一起撤。
+ */
+export function chanSnapshotScopeKey(
+  rec: Pick<ChanSnapshotRecord, 'owner' | 'market' | 'symbol'>,
+): string {
+  return `${rec.owner}|${rec.market}|${rec.symbol}`
+}
+
+/** 仓库 key（`账号|市场|代码|类型`）：同号个股与指数**并存**，读取侧才算歧义。 */
+export function chanSnapshotKey(
+  rec: Pick<ChanSnapshotRecord, 'owner' | 'market' | 'symbol' | 'instrument'>,
+): string {
+  return `${chanSnapshotScopeKey(rec)}|${rec.instrument}`
+}
+
+/**
+ * 把回调载荷逐字段验成一条记录；任一不成立 → `null`（不补默认值、不截断摘要）。
+ *
+ * - `interval` 必须是 `'1d'`（缠论结构只按日线口径提供；缺失也不猜）；
+ * - `days` 必须是正整数（图表的真实请求天数）；
+ * - `digest` 必须是 64 位小写 hex（组件已校验，这里再验一次，防止别处塞进来的字符串）；
+ * - `instrument` 只认 `stock|index`（组件按响应 `is_index` 标记给出，本模块不按代码猜）。
+ */
+export function buildChanSnapshotRecord(input: ChanSnapshotInput): ChanSnapshotRecord | null {
+  const owner = cleanStr(input.owner)
+  const symbol = cleanStr(input.symbol)
+  const market = cleanStr(input.market).toUpperCase() as ChartMarket
+  const instrument = cleanStr(input.instrument) as ChanSnapshotInstrument
+  const interval = cleanStr(input.interval)
+  const digest = cleanStr(input.digest)
+  const days = input.days
+  if (!owner || !SYMBOL_RE.test(symbol)) return null
+  if (!MARKETS.includes(market)) return null
+  if (!CHAN_INSTRUMENTS.includes(instrument)) return null
+  if (interval !== '1d') return null
+  if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > CHAN_DAYS_MAX) return null
+  if (!CHAN_DIGEST_RE.test(digest)) return null
+  const now = typeof input.now === 'number' && Number.isFinite(input.now) ? input.now : Date.now()
+  return { owner, symbol, market, instrument, interval: '1d', days, digest, capturedAt: now }
+}
+
+/**
+ * 发布/覆盖"当前这张图"。返回仓库 key；被用户清除过 / 载荷不合法 → `null`。
+ *
+ * 传 `null` 给 `raw` 的路径由调用方走 `unpublishChanSnapshot`（组件回调 null 时先撤旧的）。
+ */
+export function publishChanSnapshot(input: ChanSnapshotInput): string | null {
+  const rec = buildChanSnapshotRecord(input)
+  if (!rec) return null
+  if (chanDismissed.has(chanSnapshotScopeKey(rec))) return null
+  const key = chanSnapshotKey(rec)
+  const prev = chanStore.get(key)
+  chanStore.set(key, rec)
+  // 同一张图、同一份摘要重复广播（组件已去重；这里兜底）不算变更
+  if (!prev || prev.digest !== rec.digest || prev.days !== rec.days) notifyChan()
+  if (chanStore.size > STORE_MAX) {
+    const oldest = [...chanStore.entries()].sort((a, b) => a[1].capturedAt - b[1].capturedAt)[0]
+    if (oldest && oldest[0] !== key) chanStore.delete(oldest[0])
+  }
+  return key
+}
+
+/** 撤下某条（换标的/卸载/页面隐藏/组件回调 null）。 */
+export function unpublishChanSnapshot(key: string | null | undefined): void {
+  if (!key) return
+  if (chanStore.delete(key)) notifyChan()
+}
+
+/**
+ * 用户明确清除：把这只票（`账号|市场|代码`，含同号各类型）从仓库撤下，
+ * 并记住"本页会话不要再自动带上"。之后工作台再广播同一只票会被拒绝。
+ */
+export function dismissChanSnapshot(
+  rec: Pick<ChanSnapshotRecord, 'owner' | 'market' | 'symbol'> | null | undefined,
+): void {
+  if (!rec) return
+  const scope = chanSnapshotScopeKey(rec)
+  chanDismissed.add(scope)
+  let changed = false
+  for (const [key, value] of [...chanStore.entries()]) {
+    if (chanSnapshotScopeKey(value) === scope) {
+      chanStore.delete(key)
+      changed = true
+    }
+  }
+  if (changed) notifyChan()
+}
+
+/** 该作用域是否被用户清除过（测试/诊断用）。 */
+export function isChanSnapshotDismissed(
+  rec: Pick<ChanSnapshotRecord, 'owner' | 'market' | 'symbol'>,
+): boolean {
+  return chanDismissed.has(chanSnapshotScopeKey(rec))
+}
+
+/** 白名单产出请求体那一块：**只**有协议里的 6 个字段。 */
+export function chanSnapshotBlock(rec: ChanSnapshotRecord): ChartSnapshotPayload {
+  return {
+    schema: CHAN_SNAPSHOT_SCHEMA,
+    symbol: rec.symbol,
+    market: rec.market,
+    instrument: rec.instrument,
+    interval: rec.interval,
+    days: rec.days,
+    digest: rec.digest,
+  }
+}
+
+/** 记录是否还在新鲜期内（未来时间戳按不可信处理）。 */
+export function isChanSnapshotFresh(rec: ChanSnapshotRecord, now: number = Date.now()): boolean {
+  if (!Number.isFinite(rec.capturedAt)) return false
+  const age = now - rec.capturedAt
+  return age >= 0 && age <= CHAN_SNAPSHOT_TTL_MS
+}
+
+/**
+ * 按 代码(+市场) 读取**当前账号**的这张图（带结论原因）。
+ *
+ * - 不猜类型：同号个股/指数并存 → `ambiguous`；
+ * - 不猜标的：一条都没有 → `missing`；
+ * - 不拿旧图冒充：超 TTL → `expired`（记录仍然返回，界面可显示"曾经是什么"）；
+ * - `expect.owner / symbol / days` 用于**发送前复核**：与期望不符 → 对应 reason，
+ *   调用方必须放弃这一块而不是改用旧值。
+ */
+export function readChanSnapshotDetailed(
+  symbol: string,
+  market?: string | null,
+  owner?: string | null,
+  now: number = Date.now(),
+  expect?: { owner?: string | null; symbol?: string | null; days?: number | null },
+): ChanSnapshotRead {
+  const sym = cleanStr(symbol)
+  const empty = (reason: ChanSnapshotReason): ChanSnapshotRead => ({
+    block: null,
+    record: null,
+    reason,
+    expired: reason === 'expired',
+  })
+  if (!sym) return empty('missing')
+  const who = owner === undefined ? cleanStr(currentAccountId()) : cleanStr(owner)
+  if (!who) return empty('missing')
+  const wantMarket = cleanStr(market).toUpperCase()
+  const hits = [...chanStore.values()].filter(
+    (rec) => rec.symbol === sym && rec.owner === who && (!wantMarket || rec.market === wantMarket),
+  )
+  const dismissed = [...chanDismissed].some(
+    (scope) =>
+      scope.startsWith(`${who}|`) &&
+      scope.endsWith(`|${sym}`) &&
+      (!wantMarket || scope.includes(`|${wantMarket}|`)),
+  )
+  if (expect && cleanStr(expect.owner) && cleanStr(expect.owner) !== who) return empty('owner')
+  if (hits.length === 0) return empty(dismissed ? 'dismissed' : 'missing')
+  if (hits.length > 1) return empty('ambiguous')
+  const rec = hits[0]
+  // 形状再验一次（仓库里只可能有合法记录；这里防的是将来别处直接塞 Map）
+  if (!CHAN_DIGEST_RE.test(rec.digest) || !Number.isInteger(rec.days) || rec.days < 1) return empty('invalid')
+  if (expect && cleanStr(expect.symbol) && cleanStr(expect.symbol) !== rec.symbol) return empty('symbol')
+  if (expect && typeof expect.days === 'number' && expect.days !== rec.days) return empty('days')
+  if (expect && cleanStr(expect.owner) && rec.owner !== cleanStr(expect.owner)) return empty('owner')
+  if (!isChanSnapshotFresh(rec, now)) return { block: null, record: rec, reason: 'expired', expired: true }
+  if (dismissed) return empty('dismissed')
+  return { block: chanSnapshotBlock(rec), record: rec, reason: 'ok', expired: false }
+}
+
+/**
+ * 发送前唯一允许的取快照入口。
+ *
+ * 存在的理由就是**时序**：`createConversation` 是 `await`，回来时用户可能已经换股/换号/
+ * 隐藏窗口/清除上下文。任何在 `await` 之前算好的 block 都不能直接发。所以调用点必须
+ * 紧贴 `sendMessageStream(...)`，每次重新读仓库、重新比 owner 与当前标的。
+ *
+ * 身份（owner）必填且必须与记录一致；标的必填且必须与记录一致；`days` 若给出必须一致。
+ * 任何一项不成立 → `block: null`，本轮就**不带**（绝不回退到"上一次那份"）。
+ */
+export function resolveChanSnapshotForTurn(input: {
+  symbol?: string | null
+  market?: string | null
+  owner?: string | null
+  days?: number | null
+  now?: number
+}): ChanSnapshotRead {
+  const symbol = cleanStr(input.symbol)
+  const owner = input.owner === undefined ? cleanStr(currentAccountId()) : cleanStr(input.owner)
+  if (!symbol || !owner) {
+    return { block: null, record: null, reason: 'missing', expired: false }
+  }
+  return readChanSnapshotDetailed(symbol, input.market ?? null, owner, input.now ?? Date.now(), {
+    owner,
+    symbol,
+    days: input.days ?? null,
+  })
+}
+
+/** 摘要前缀（界面展示用；不展示完整摘要）。 */
+export function chanSnapshotDigestPrefix(rec: Pick<ChanSnapshotRecord, 'digest'>): string {
+  return rec.digest.slice(0, CHAN_SNAPSHOT_SHORT_DIGEST)
+}
+
+/**
+ * 参谋页那一行「本轮同图快照」的文案分段（覆盖请求体里的每一项**可读**内容：
+ * 代码/类型/市场/周期/天数/摘要前缀）。完整摘要与 owner 不展示：前者是指纹，后者是身份。
+ */
+export function chanSnapshotParts(rec: ChanSnapshotRecord): string[] {
+  return [
+    `${rec.symbol}（${rec.instrument === 'index' ? '指数' : '个股'} · ${rec.market}）`,
+    '日线',
+    `近 ${rec.days} 天`,
+    `摘要 ${chanSnapshotDigestPrefix(rec)}…`,
+  ]
+}
+
+/** 单行文案。 */
+export function chanSnapshotLabel(rec: ChanSnapshotRecord): string {
+  return chanSnapshotParts(rec).join(' · ')
+}
+
+/** 测试/登出用：清空仓库与"已清除"名单（生产渲染路径不要调用）。 */
+export function clearChanSnapshotStore(): void {
+  chanStore.clear()
+  chanDismissed.clear()
+  notifyChan()
+}
+
+/** 当前仓库条目数（测试/诊断用）。 */
+export function chanSnapshotStoreSize(): number {
+  return chanStore.size
 }

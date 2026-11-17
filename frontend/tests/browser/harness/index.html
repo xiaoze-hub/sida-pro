@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>kline-size harness</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #fff; }
+      #outer { width: 1096px; }
+      /* mode=zero : 容器一开始宽度 0, 稍后放开 */
+      body.mode-zero #outer { width: 0; overflow: hidden; }
+      /* mode=hidden : 祖先 display:none (keepalive 隐藏页), 稍后显示 */
+      body.mode-hidden #outer { display: none; }
+      /* mode=plain : 容器一开始就是真实宽度(= 生产里"创建时容器已有宽度"的那条路径) */
+      #chart-host { width: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="outer">
+      <div id="chart-host"></div>
+    </div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

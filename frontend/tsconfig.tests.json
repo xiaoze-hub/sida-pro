@@ -5,5 +5,6 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node", "vite/client", "@testing-library/jest-dom"]
   },
-  "include": ["tests", "src", "packages/*/src"]
+  "include": ["tests", "src", "packages/*/src"],
+  "exclude": ["tests/browser"]
 }

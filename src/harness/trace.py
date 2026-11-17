@@ -4,8 +4,10 @@
 配方/提示词改好改坏也没有回放依据, 评测全靠人工抽检 18 次。
 
 做法: 每次问答一行 `copilot_runs`, 每步工具调用一行 `copilot_steps`。
-两处刻意的克制:
+三处刻意的克制:
 - `result_digest` 只存前 500 字 —— 工具返回里有用户持仓/自选, 全量落库是二次留存;
+- **图表快照摘要**只存前 8 位 —— 完整摘要是"本轮凭据", 落库就等于跨轮可复用
+  (2026-11-17 审计缺口 2: 工具参数与"摘要 <64hex>"曾被原样写进 copilot_steps);
 - 所有写入都吞异常 —— 轨迹是旁路, 绝不能因为记录失败把用户的问题搞挂。
 
 读取侧(回放 UI / 评测集)见 `docs/design/agent-kernel.md` P2。
@@ -126,6 +128,12 @@ class CopilotTrace:
         elapsed_ms: int | None = None,
     ) -> None:
         """记一步工具调用。失败不抛。"""
+        from src.harness.redaction import redact_step_args, redact_step_result
+
+        # 只有"摘要类工具"(get_chan_structure)的 args/result 才收缩摘要 ——
+        # 其它工具结果里的普通哈希不能一起打断(见 redaction 模块头注释)。
+        args = redact_step_args(tool, args)
+        result = redact_step_result(tool, result)
         self.sequence += 1
         self.tool_calls += 1
         self.steps.append({"tool": str(tool), "ok": bool(ok), "error": error})

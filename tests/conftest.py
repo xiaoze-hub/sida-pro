@@ -28,13 +28,17 @@ os.environ["DATA_DIR"] = str(_TEST_DATA_DIR)
 os.environ["SIDA_DATA_DIR"] = str(_TEST_DATA_DIR)
 os.environ["SIDA_CACHE_DIR"] = str(_TEST_DATA_DIR / "cache")
 # zhitu vendor 的本地库回退路径(marketdata/vendors/zhitu.py _DB_PATH)也一并隔离
-os.environ.setdefault("SIDA_DB", str(_TEST_DATA_DIR / "sida.db"))
-# 默认 SQLite 库一并隔离: database.py 的 DB_PATH 跟随 DATA_DIR(见 database.py
-# W2.2/E4 注), 再配 SIDA_DB_URL setdefault 双保险。显式传 SIDA_DB_URL 的工作流
-# (test_error_tracker 头注释)不受影响(setdefault)。
-os.environ.setdefault(
-    "SIDA_DB_URL", f"sqlite:///{(_TEST_DATA_DIR / 'sida_test.db')}"
-)
+os.environ["SIDA_DB"] = str(_TEST_DATA_DIR / "sida.db")
+# 2026-11-18 八轮审计: 进程环境可能带着**生产** DB URL（SIDA_DB_URL /
+# DATABASE_URL*）。旧实现用 setdefault ⇒ 外部值原样生效, 测试会直接连生产库;
+# 这里一律清掉再指向 scratch SQLite, 并在 `_assert_scratch_sqlite_engine`
+# 里对**真实 engine** 再断言一次（不只信 env）。显式切库的用例自己用
+# monkeypatch/subprocess 覆盖, 不受影响。
+_SCRATCH_DB_URL = f"sqlite:///{(_TEST_DATA_DIR / 'sida_test.db')}"
+for _db_env in ("SIDA_DB_URL", "DATABASE_URL", "DATABASE_URL_WRITE",
+                "DATABASE_URL_READ", "DATABASE_URL_MIGRATE"):
+    os.environ.pop(_db_env, None)
+os.environ["SIDA_DB_URL"] = _SCRATCH_DB_URL
 # 管理面隔离(2026-11-03): 严格模式要求 admin 受众 token。历史测试大量用
 # "owner 的用户 token" 直接打管理接口, 这里保留过渡期兼容(STRICT=0),
 # 严格路径由 tests/test_admin_surface_isolation.py 显式开启并断言。
@@ -102,6 +106,55 @@ def _init_test_db():
     from src.web.database import init_db
 
     init_db()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _assert_scratch_sqlite_engine(_init_test_db):
+    """测试进程**实际使用的 engine** 必须是 scratch SQLite（2026-11-18 审计）。
+
+    只清 env 不够: 只要有任何模块在覆盖之前 import 过 database/session, engine
+    就已经被烤进模块级常量。这里在建表之后对真实 engine 的 URL 再断言一次:
+    方言是 sqlite, 库文件落在本次 mkdtemp 的 `sida_test_data_*` 目录里,
+    且不是仓库 data/ 下的生产文件。
+    """
+    from src.db.session import engine, read_engine, write_engine
+
+    scratch_root = _TEST_DATA_DIR.resolve()
+    repo_data = (PROJECT_ROOT / "data").resolve()
+    for name, eng in (("engine", engine), ("write_engine", write_engine),
+                      ("read_engine", read_engine)):
+        url = eng.url
+        assert url.get_backend_name() == "sqlite", \
+            f"{name} 必须是隔离 SQLite, 实际方言: {url.get_backend_name()}"
+        db_path = Path(str(url.database or "")).resolve()
+        assert scratch_root in db_path.parents and db_path.name.startswith("sida_test"), \
+            f"{name} 不在 scratch 目录内: {db_path}"
+        assert repo_data not in db_path.parents, f"{name} 指向仓库 data/: {db_path}"
+
+
+@pytest.fixture(autouse=True)
+def _purge_orphan_messages(_assert_scratch_sqlite_engine):
+    """每个用例开始前清掉**孤儿消息**（会话已不存在）。
+
+    为什么需要（2026-11-18 审计）：SQLite 的行 id 会被复用 —— 某个用例删了会话却没删
+    它的消息时，下一条新会话可能拿到同一个 id，于是在详情接口里"凭空"带着上一轮的历史
+    消息（实测 `test_chat_stream.py::test_same_question_twice_has_distinct_persisted_run_ids`
+    在与其他用例同库连跑时多出两条别人的助手消息，单跑却绿）。这是测试卫生问题，不是
+    产品回归：生产库有 FK/级联。这里只删"会话已不存在"的消息，不动任何真实会话。
+    """
+    from sqlalchemy import text
+
+    from src.db.session import write_engine
+
+    try:
+        with write_engine.begin() as conn:
+            conn.execute(text(
+                "DELETE FROM chat_messages WHERE conversation_id NOT IN "
+                "(SELECT id FROM chat_conversations)"
+            ))
+    except Exception:  # noqa: BLE001 - 表还不存在/方言差异时不影响用例
+        pass
+    yield
 
 
 def _is_sqlite(db) -> bool:

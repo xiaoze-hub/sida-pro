@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from typing import Literal
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas, charge_tool_budget, schema_tool_name
 from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
@@ -727,6 +728,7 @@ def get_web_content(url: str) -> str:
 
 # 标的/配方上下文统一放在 src/harness/context.py（chat.py 有行数护栏）。
 from src.harness.context import (  # noqa: E402
+    ChartSnapshotBody,
     Mention,
     REQ_BOUND as _REQ_BOUND,
     REQ_BUDGET as _REQ_BUDGET,
@@ -736,12 +738,18 @@ from src.harness.context import (  # noqa: E402
     REQ_TOOLS as _REQ_TOOLS,
     route_with_persona as _route_with_persona,
     bind_recipe_trace as _bind_recipe_trace,
+    current_bound_symbol as _current_bound_symbol,
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
     inject_recipe as _inject_recipe,
-    sync_conv_symbol as _sync_conv_symbol,
+    preflight_chart_snapshot as _preflight_chart_snapshot,
+    prepare_chart_snapshot as _prepare_chart_snapshot,
+    recheck_turn_snapshot as _recheck_turn_snapshot,
+    # 绑定/读回实现住在 harness(context.py); 保留历史名字(别名)兼容既有调用方。
+    sync_conv_symbol as _bind_conv_symbol,
 )
 from src.harness.routing import route_for_request as _route_for_request
+from src.harness.redaction import log_tool_call as _log_tool_call
 from src.harness.pipeline_router import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
 from src.harness.pipeline import session_context as _pipeline_ctx
 
@@ -1265,7 +1273,7 @@ async def _run_tool_loop_inner(
             })
             for tc in response_msg.tool_calls:
                 tool_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                logger.info(f"Tool call: {tc.function.name}({tool_args})")
+                _log_tool_call(tc.function.name, tool_args)
                 _tool_done += 1
                 yield "stage", _TOOL_STAGE_LABELS.get(tc.function.name, f"正在调用 {tc.function.name}...")
                 if runtime is not None:
@@ -1371,6 +1379,14 @@ class SendMessageBody(BaseModel):
     # 分析成用户主仓 002361（神剑股份），或直接报"没有股票标的"。
     stock_symbol: str | None = None
     stock_market: str | None = None
+    # 2026-11-17: 页面锚点的**标的类型**（stock/index）。同号个股/指数（000001 既可能是
+    # 平安银行也可能是上证指数）只靠代码无法区分，快照归属必须有一维类型证据；缺省时
+    # 服务端会退回"代码可证/服务端缓存的页面视图状态"，再没有就整份丢弃快照（不猜）。
+    # 这是客户端对"我在看哪张图"的声明，服务端只做一致性比对，不等于证明了主数据。
+    stock_instrument: Literal["stock", "index"] | None = None
+    # 2026-11-17: 用户当前图表的日线快照引用（严格 schema）。只对这一条消息有效:
+    # 消息入口用只读端点复核后放进本轮上下文, 不入库、不进 initial_context、不跨轮复用。
+    chart_snapshot: ChartSnapshotBody | None = None
 
 
 def _client_from_scene_cfg(db: Session, cfg) -> AIClient | None:
@@ -2056,17 +2072,6 @@ def delete_conversation(
 
 
 
-def _bind_conv_symbol(db, conv, body: "SendMessageBody") -> None:
-    """把前端"正在看的标的"绑到对话上(页面切换时跟随更新)。
-
-    判定口径在 src/harness/context.py::resolve_bound_symbol:
-        文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定
-    2026-10-22 事故: 旧实现"对话已绑定就不改" → 002548 页面聊完再问 002114,
-    参谋仍按 002548 作答(系统提示与取数上下文全串在旧票上)。
-    """
-    _sync_conv_symbol(db, conv, body)
-
-
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
     conversation_id: int,
@@ -2098,13 +2103,15 @@ async def send_message(
         if not conv:
             raise HTTPException(404, "对话不存在")
 
-        _bind_conv_symbol(db, conv, body)
-
-        # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
+        # demo 账号限流必须在任何落库/绑定之前: 被拒的消息不许先把会话标的改掉(2026-11-17 审计)。
         if user.username == "demo":
             from src.core.demo_limit import allow
             if not allow(user.id):
                 raise HTTPException(429, "演示账号每日对话次数已用完(10次/天)。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics")
+
+        # 本轮快照: 落库/回答前校验完(403/409 不入库), 通过才 bind; 不带时零成本返回 None。
+        _snap = await _prepare_chart_snapshot(db, conv, body, user)
+        _bind_conv_symbol(db, conv, body)
 
         # 多模态: 图片先由视觉代理转文字(保存前处理, 保 DB 历史连贯)
         if body.image_data:
@@ -2112,6 +2119,11 @@ async def send_message(
             if desc:
                 body.content = f"[用户附图内容] {desc}\n\n{body.content}"
                 body.image_data = None  # 主模型用文本, 不传图片
+
+        # 落消息前的最后一道: 校验/开流到此刻之间会话标的可能已被另一轮改掉,
+        # 客户端声明也不是已验证的屏幕 —— 归属对不上就把旧快照整份丢弃。
+        if getattr(_snap, "ref", None) is not None:
+            _snap = _recheck_turn_snapshot(_snap, _current_bound_symbol(db, conversation_id))
 
         # 保存用户消息
         user_msg = ChatMessage(
@@ -2132,7 +2144,7 @@ async def send_message(
         messages_for_ai = await _build_ai_messages(db, conv, user, image_data=body.image_data)
         ai_client = _get_ai_client(db, conv.ai_model_id, user=user)
         ai_response = ""
-        _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
+        _toks = _enter_request_ctx(db, conv, body, messages_for_ai, chart_snapshot=_snap)
         bind_chat(user_id=getattr(user, 'id', None))
         try:
             async for _kind, payload in _run_tool_loop(
@@ -2175,6 +2187,10 @@ async def send_message_stream(
     兼容性: 非流式 POST /messages 保持原样; 本端点仅在流式场景使用。
     消息落库与 send_message 一致: 用户消息在开始时保存, AI 回复全文在流结束时保存。
     """
+    # SSE 一旦开始就无法再改 HTTP 状态码: 本轮图表快照的 403/409 必须在开流前抛出,
+    # 不能退化成 200 + error 事件(那会让"快照过期"看起来像一次普通回答失败)。
+    _snap = await _preflight_chart_snapshot(conversation_id, body, user)
+
     async def gen():
         db = SessionLocal()
         try:
@@ -2194,14 +2210,14 @@ async def send_message_stream(
                 yield _sse_event("error", {"message": "对话不存在"})
                 return
 
-            _bind_conv_symbol(db, conv, body)
-
-            # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
+            # demo 限流必须在 bind 之前 —— 被拒的消息不许改会话标的(2026-11-17 审计)。
             if user.username == "demo":
                 from src.core.demo_limit import allow
                 if not allow(user.id):
                     yield _sse_event("error", {"message": "演示账号每日对话次数已用完(10次/天)。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"})
                     return
+
+            _bind_conv_symbol(db, conv, body)
 
             # 多模态: 图片先由 agnes 视觉代理转成文字描述(在保存前处理, 保证 DB 历史连贯)
             if body.image_data:
@@ -2209,6 +2225,13 @@ async def send_message_stream(
                 if desc:
                     body.content = f"[用户附图内容] {desc}\n\n{body.content}"
                     body.image_data = None
+
+            # 落消息前的最后一道: preflight 通过到此刻之间会话标的可能已被另一轮改掉
+            # (TOCTOU), 旧快照的摘要只属于当时那只票 —— 归属对不上就整份丢弃。
+            _turn_snap = _snap
+            if getattr(_snap, "ref", None) is not None:
+                _turn_snap = _recheck_turn_snapshot(
+                    _snap, _current_bound_symbol(db, conversation_id))
 
             # 保存用户消息
             user_msg = ChatMessage(
@@ -2239,7 +2262,7 @@ async def send_message_stream(
             # 多轮 tool use + 真流式(2026-08-23 U1): 边流式出字边执行工具
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
-            _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
+            _toks = _enter_request_ctx(db, conv, body, messages_for_ai, chart_snapshot=_turn_snap)
             bind_chat(user_id=getattr(user, 'id', None))
             try:
                 async for kind, payload in _run_tool_loop(
