@@ -36,6 +36,7 @@ import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-ancho
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { SettingPendingPreview } from '@/components/copilot/SettingPendingPreview'
 import { describeSettingPreview } from '@/lib/copilot/settingPreview'
+import { readStockRouteAnchor } from '@/lib/copilot/route-anchor'
 import type { RouteAnchor } from '@/lib/copilot/route-anchor'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
@@ -1248,7 +1249,20 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
        * `explicit` 说明这个指向是不是用户自己写明的 —— 后台轮据此判断能不能复用旧会话。
        */
       const mentionedStock = mentions.find((m) => m.type === 'stock') as MentionStock | undefined
-      const turnTarget = resolveTurnSymbol({ mentioned: mentionedStock?.symbol, text: words, anchor: anchorSymbol })
+      /**
+       * 发送这一刻的**路由锚点**（2026-11-18 修正）: 停靠面板在页签式工作台里由
+       * `AssistantPageHost` 承载时 `presentation === 'page'`，`AssistantWorkspace` 的
+       * router location 可能是参谋页签自己的路径 —— 渲染期拿到的 routeAnchor 会是 null，
+       * 请求体就只剩 `{content}`。这里在**真正发送的瞬间**再读一次 `window.location`
+       * （当前可见页签的 URL），并在没有显式锚点时用它兜底。显式指定仍然优先。
+       */
+      const routeNow = anchorSymbol
+        ? null
+        : readStockRouteAnchor(window.location.pathname, window.location.search)
+      const turnAnchor = anchorSymbol || routeNow?.symbol || ''
+      const turnAnchorMarket = anchorSymbol ? anchorMarket : (routeNow?.market || '')
+      const turnAnchorInstrument = anchorSymbol ? anchorInstrument : (routeNow?.instrument ?? null)
+      const turnTarget = resolveTurnSymbol({ mentioned: mentionedStock?.symbol, text: words, anchor: turnAnchor })
       // 后台模式：附件暂不支持（附件要先过视觉转写，走原流式路径）
       if (bgMode && !attach) {
         /**
@@ -1376,7 +1390,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               ? {
                   stock_symbol: sym,
                   /* 市场与发送时同源：锚点自带的（工作台/入口口径）优先，没有才按代码段推 */
-                  stock_market: sym === anchorSymbol && anchorMarket ? anchorMarket : marketOf(sym),
+                  stock_market: sym === turnAnchor && turnAnchorMarket ? turnAnchorMarket : marketOf(sym),
                   /**
                    * 图表上下文与页面快照同路（会话级 `initial_context`，后端每轮都会附加到系统提示）。
                    * 语境里明写"进入时快照 / 用户提问才引用 / 不得自动下单与画线"，
@@ -1514,10 +1528,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           sym
             ? {
                 symbol: sym,
-                market: sym === anchorSymbol && anchorMarket ? anchorMarket : marketOf(sym),
+                market: sym === turnAnchor && turnAnchorMarket ? turnAnchorMarket : marketOf(sym),
                 instrument:
                   chanForTurn?.record?.instrument ??
-                  (sym === anchorSymbol && anchorInstrument ? anchorInstrument : undefined),
+                  (sym === turnAnchor && turnAnchorInstrument ? turnAnchorInstrument : undefined),
               }
             : undefined,
           mentions.map((m) => ({

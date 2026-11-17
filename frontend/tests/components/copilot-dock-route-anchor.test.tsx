@@ -324,6 +324,12 @@ describe('停靠面板跟随当前路由', () => {
     fireEvent.click(screen.getByText('go-dashboard'))
     await waitFor(() => expect(screen.queryByTestId('copilot-context-anchor')).toBeNull())
     await waitFor(() => expect(screen.queryByTestId('copilot-chan-snapshot')).toBeNull())
+    /**
+     * 浏览器里"离开个股页"意味着地址栏也变了（页签式工作台会按当前页签改 URL）；
+     * jsdom 的路由导航不会动 `window.location`，而发送时兜底读的是后者，
+     * 所以这里显式模拟地址栏离开 `/stocks/*`。
+     */
+    window.history.pushState({}, '', '/ai-copilot')
 
     await ask('刚才那只票怎么看')
     expect(lastBody()).toEqual({ content: '刚才那只票怎么看' })
