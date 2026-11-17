@@ -17,7 +17,12 @@ from src.core.tdx_tick_parser import parse_tck, ticks_from_tck, _tck_t_to_hms  #
 from src.core import dark_l2  # noqa: E402
 
 SAMPLE = Path("/home/ubuntu/tdx_data/sz002361_20260827.tck")
-HAS_SAMPLE = SAMPLE.is_file()
+try:
+    # 2026-11-18: 宿主/runner 上该路径可能存在但不可读(如 /home/ubuntu 是别的用户 700 的家目录),
+    # `is_file()` 抛 PermissionError 会让**收集阶段**直接中断整片门禁 —— 这里按"没有样本"处理。
+    HAS_SAMPLE = SAMPLE.is_file()
+except OSError:
+    HAS_SAMPLE = False
 
 
 def test_tck_t_to_hms():

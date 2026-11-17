@@ -1,5 +1,9 @@
 ## [未发布]
 
+### fix-CI 三次校准(2026-11-18)
+
+- `test_tdx_tick_parser`: 样本路径 `is_file()` 在无可读权限的 runner 上抛 `PermissionError`, 直接在**收集阶段**中断整片门禁; 改为按"无样本"跳过。
+
 ### fix-CI 二次校准(2026-11-18)
 
 - `test_chat_stream`: settings 在 import 期缓存, 分片里更早的文件导入后 `AUTH_PASSWORD` 不再生效 → 首次请求前直接建/改 owner 行(现算 hash), 不再依赖 bootstrap。
