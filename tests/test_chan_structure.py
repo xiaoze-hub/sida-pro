@@ -4,6 +4,9 @@ These tests pin the execution model:
 
 * containment is inclusive (``>=`` / ``<=``), so equal extremes merge;
 * the very first containment has no known direction and must not guess one;
+* a bar built by that unknown-direction merge is an *envelope*, never Chan
+  merge output, so no confirmed fractal may use it (such windows are
+  ``blocked``), while a lone first bar is direction-unknown but pristine;
 * every merge is sequential and only uses bars available at that time;
 * a fractal is confirmed only after its right merged bar is sealed, while a
   still-open tail can only be a candidate;
@@ -251,6 +254,172 @@ def test_tail_containment_defers_confirmation_without_early_confirm():
 def test_two_merged_bars_are_not_enough_for_a_fractal():
     snap = build_chan_structure([b('2026-01-01', 3, 1), b('2026-01-02', 5, 2)])
     assert snap.fractals == ()
+
+
+# ---------------------------------------------------------------------------
+# unknown-direction containment must not contaminate confirmed structure
+# ---------------------------------------------------------------------------
+
+def test_unknown_direction_envelope_bar_cannot_confirm_a_fractal():
+    """Counterexample: a top whose left neighbour is an enumeration envelope.
+
+    (5, 1) then (6, 0.5) contain each other, so no direction is known and the
+    kernel keeps ``max(high)``/``min(low)``.  Because the user asked for the
+    sequential rules, the following (7, 2), (6, 1.5), (5, 1.1) *look* like a
+    top around (7, 2) — but that left neighbour was never produced by a Chan
+    merge decision, only by an envelope.  Such a window may not be reported as
+    ``confirmed``.
+    """
+    bars = [
+        b('2026-01-01', 5, 1),
+        b('2026-01-02', 6, 0.5),   # contains bar 0: envelope, direction unknown
+        b('2026-01-03', 7, 2),
+        b('2026-01-04', 6, 1.5),
+        b('2026-01-05', 5, 1.1),
+    ]
+    snap = build_chan_structure(bars)
+
+    # The contaminated bar is created from the envelope, not from a merge rule.
+    assert snap.merged_bars[0].merge_direction == 'unknown'
+    assert snap.merged_bars[0].sources == (0, 1)
+    assert snap.merged_bars[0].envelope_only is True
+    assert (snap.merged_bars[0].high, snap.merged_bars[0].low) == (6, 0.5)
+
+    # The three-bar window (0, 1, 2) is shaped like a top, but it is blocked.
+    assert len(snap.fractals) == 1
+    blocked = snap.fractals[0]
+    assert (blocked.kind, blocked.status) == ('top', 'blocked')
+    assert (blocked.position_merged_index, blocked.position_day, blocked.position_price) == (
+        1,
+        '2026-01-03',
+        7,
+    )
+    assert blocked.confirmed_on is None
+    assert snap.confirmed_fractals == ()
+    assert snap.candidates == ()
+    assert snap.blocked_fractals == (blocked,)
+
+
+def test_multiple_initial_containments_are_all_envelope_only():
+    bars = [
+        b('2026-01-01', 5, 1),
+        b('2026-01-02', 6, 0.5),
+        b('2026-01-03', 5.5, 0.6),   # contained in the envelope
+        b('2026-01-04', 7, 2),
+        b('2026-01-05', 6, 1.5),
+        b('2026-01-06', 5, 1.1),
+    ]
+    snap = build_chan_structure(bars)
+    assert len(snap.merged_bars) == 4
+    first = snap.merged_bars[0]
+    assert first.sources == (0, 1, 2)
+    assert (first.high, first.low) == (6, 0.5)
+    assert first.envelope_only is True
+    assert [m.envelope_only for m in snap.merged_bars[1:]] == [False, False, False]
+    assert snap.confirmed_fractals == ()
+    assert [(f.kind, f.status) for f in snap.fractals] == [('top', 'blocked')]
+
+
+def test_single_bar_unknown_direction_is_pristine_and_usable():
+    """A lone first bar has no direction either, but no merge decision was made.
+
+    Its high/low are the raw values, so a fractal may legitimately use it as a
+    neighbour.  Only an *envelope* (direction-unknown bar that absorbed other
+    bars) is contaminated.
+    """
+    bars = [
+        b('2026-01-01', 3, 1),
+        b('2026-01-02', 5, 2),
+        b('2026-01-03', 4, 1.5),
+        b('2026-01-04', 3, 1.2),
+    ]
+    snap = build_chan_structure(bars)
+    first = snap.merged_bars[0]
+    assert (first.merge_direction, first.sources, first.envelope_only) == ('unknown', (0,), False)
+    assert snap.blocked_fractals == ()
+    assert [(f.kind, f.status, f.position_day, f.confirmed_on) for f in snap.confirmed_fractals] == [
+        ('top', 'confirmed', '2026-01-02', '2026-01-04')
+    ]
+
+
+def test_confirmation_recovers_after_three_clean_merged_bars():
+    """Blocked is terminal, but later clean windows confirm again."""
+    polluted = [
+        b('2026-01-01', 5, 1),
+        b('2026-01-02', 6, 0.5),
+        b('2026-01-03', 7, 2),
+        b('2026-01-04', 6, 1.5),
+        b('2026-01-05', 5, 1.1),
+    ]
+    assert build_chan_structure(polluted).confirmed_fractals == ()
+
+    # Merged bars 2, 3, 4 all descend from the post-envelope sequence and are
+    # clean; a bottom at merged bar 3 is therefore confirmable.
+    bars = polluted + [
+        b('2026-01-06', 5.5, 3),
+        b('2026-01-07', 6, 4),
+    ]
+    snap = build_chan_structure(bars)
+    assert [m.envelope_only for m in snap.merged_bars] == [True, False, False, False, False, False]
+
+    blocked = [f for f in snap.fractals if f.status == 'blocked']
+    assert [(f.kind, f.position_day) for f in blocked] == [('top', '2026-01-03')]
+    assert [(f.kind, f.status, f.position_day, f.confirmed_on) for f in snap.confirmed_fractals] == [
+        ('bottom', 'confirmed', '2026-01-05', '2026-01-07')
+    ]
+
+
+def test_confirmation_resumes_at_the_first_window_of_three_clean_merged_bars():
+    """The earliest recoverable window is merged bars 1, 2, 3 (middle index 2).
+
+    Merged bar 0 is the envelope, so any window touching it is blocked (no
+    shape here, hence no blocked entry).  The window 1/2/3 never touches it and
+    confirms normally once its right bar is sealed — no blanket suppression of
+    the rest of the series.
+    """
+    snap = build_chan_structure([
+        b('2026-01-01', 5, 1),
+        b('2026-01-02', 6, 0.5),   # envelope: merged 0
+        b('2026-01-03', 8, 3),     # merged 1
+        b('2026-01-04', 9, 4),     # merged 2
+        b('2026-01-05', 6, 1.5),   # merged 3
+        b('2026-01-06', 5, 1),     # merges 4; seals merged 3
+    ])
+    assert [m.envelope_only for m in snap.merged_bars] == [True, False, False, False, False]
+    assert snap.blocked_fractals == ()
+    assert [(f.kind, f.status, f.position_merged_index, f.position_day, f.confirmed_on) for f in snap.fractals] == [
+        ('top', 'confirmed', 2, '2026-01-04', '2026-01-06'),
+    ]
+    assert [(f.position_merged_index, f.confirmed_on) for f in snap.confirmed_fractals] == [(2, '2026-01-06')]
+
+
+def test_blocked_fractal_never_upgrades_and_sealed_merged_bars_are_stable():
+    bars = [
+        b('2026-01-01', 5, 1),
+        b('2026-01-02', 6, 0.5),
+        b('2026-01-03', 7, 2),
+        b('2026-01-04', 6, 1.5),
+        b('2026-01-05', 5, 1.1),
+        b('2026-01-06', 5.5, 3),
+        b('2026-01-07', 6, 4),
+        b('2026-01-08', 4, 2),
+    ]
+    seen_blocked = []
+    for end in range(1, len(bars) + 1):
+        snap = build_chan_structure(bars[:end])
+        statuses = {(f.kind, f.position_day): f.status for f in snap.fractals}
+        assert statuses.get(('top', '2026-01-03')) in (None, 'blocked')
+        for key in seen_blocked:
+            assert statuses.get(key) == 'blocked'
+        if statuses.get(('top', '2026-01-03')) == 'blocked':
+            seen_blocked.append(('top', '2026-01-03'))
+
+    full = build_chan_structure(bars)
+    assert [f.status for f in full.fractals if f.position_day == '2026-01-03'] == ['blocked']
+    # A blocked fractal is never exposed through the confirmed/candidate views.
+    assert {f.status for f in full.confirmed_fractals} <= {'confirmed'}
+    assert {f.status for f in full.candidates} <= {'candidate'}
+
 
 
 # ---------------------------------------------------------------------------
