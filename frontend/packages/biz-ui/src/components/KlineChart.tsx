@@ -130,6 +130,21 @@ import {
 
 export type { KlineRangeStats, RangeBar } from '../lib/range-stats'
 
+// 缠论分型图层(2026-11-17): 服务端只读结构的清洗/记号/快照绑定裁决。
+// 数据源 `/klines/{symbol}` 的 `chan_snapshot.digest` + `/klines/{symbol}/chan-structure`。
+// **前端不自算结构**; blocked 不画成结构; 无买卖语义。
+import {
+  auditBarsTransform,
+  buildChanMarkers,
+  chanStatusText,
+  normalizeChanStructure,
+  pickChanSnapshot,
+  type ChanBarsAudit,
+  type ChanLayerView,
+  type ChanMarkerSpec,
+  type ChanSnapshotPick,
+} from '../lib/chan-layer'
+
 // 重导出共享模块的类型/纯函数 —— 既有调用方(`import { fundBarPoint } from '.../KlineChart'`)
 // 与既有测试导入路径零改动; 真源统一在 `../lib/fund-bar`。
 export type { FundFlowBar, KlineInterval } from '../lib/fund-bar'
@@ -153,6 +168,24 @@ export interface KlinesResponse {
   today_bar?: string
   /** 合成今日 bar 的诚实标注(仅 today_bar==='live' 时给); partial=盘中未定型 */
   live_bar?: { partial?: boolean; source?: string; as_of?: string }
+  /**
+   * 缠论分型图层(2026-11-17)的**快照摘要**: 图表主数据响应对"这张图看到的那份日线内容"
+   * 的 sha256(64 位小写十六进制)。仅 `interval=1d` 时由后端挂上。
+   *
+   * 存在意义: 结构是**另一次请求**算出来的, 只有把摘要原样回传给 `/chan-structure`,
+   * 服务端才能证明"结构算的就是这张图"。`digest: null` + `unavailable_reason`
+   * 表示这份响应不可摘要 —— 此时**不能**画结构(没有可校验绑定)。
+   */
+  chan_snapshot?: {
+    schema?: string
+    rules_version?: string
+    instrument?: string
+    interval?: string
+    bars?: number
+    as_of_day?: string | null
+    digest?: string | null
+    unavailable_reason?: string | null
+  } | null
 }
 
 /**
@@ -291,6 +324,14 @@ const EMPTY_SCENARIO_LINES: ScenarioLine[] = []
 const EMPTY_ANNOTATIONS: KlineAnnotationMarker[] = []
 const EMPTY_TRADE_MARKERS: Array<{ date: string; side: 'buy' | 'sell'; text?: string }> = []
 const EMPTY_COST_LINES: Array<{ price: number; title: string }> = []
+
+/**
+ * 缠论分型记号的**结构色**(2026-11-17): 顶=紫、底=青。
+ *
+ * 刻意**不用** A 股涨红跌绿: 分型是结构(极值位置), 不是方向/买卖结论 —— 红绿会被直接
+ * 读成"买点/卖点"。待确认用同色压淡 + `○`, 不另起一套语义色。
+ */
+const CHAN_MARKER_COLORS = { top: '#a855f7', bottom: '#0ea5e9' } as const
 
 /**
  * 情景关键位图层(2026-10-22)的语义色 → 实际颜色(canvas 不认 Tailwind 类, 读 CSS 变量)。
@@ -474,7 +515,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean; /** 纯时间点标注(2026-10-29) —— 默认开; 独立于 L4 事件层(两者数据源/口径不同) */ annotation?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean; /** 纯时间点标注(2026-10-29) —— 默认开; 独立于 L4 事件层(两者数据源/口径不同) */ annotation?: boolean; /** 缠论分型(2026-11-17) —— **默认关**(需显式 true 才开; 父不传 = 组件自持本地开关) */ chan?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -674,6 +715,45 @@ export default function KlineChart(props: {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
   const [dataLen, setDataLen] = useState(0)
+
+  // ── 缠论分型图层(2026-11-17) ─────────────────────────────────
+  /**
+   * 开关: 默认**关**(不干扰原有视图、不给首屏加请求); 父传 `layersVisible.chan` 时以父为准
+   * (与情景关键位同一套受控口径)。
+   */
+  const [chanLocalOn, setChanLocalOn] = useState(false)
+  const showChanLayer = props.layersVisible?.chan ?? chanLocalOn
+  /**
+   * 标的身份: 只认**显式** `instrument='stock'|'index'`。
+   *
+   * 为什么不能猜: A 股指数与个股同码(`000001` = 上证指数 / 平安银行)。前端按代码"看起来
+   * 像指数"去猜, 就会把个股分型画在指数图上; 后端 `/chan-structure` 同样只接受显式
+   * instrument(传 auto 直接 422)。拿不到可靠身份 → 图层禁用, 不发请求。
+   */
+  const chanInstrument: 'stock' | 'index' | null =
+    props.instrument === 'stock' ? 'stock' : props.instrument === 'index' ? 'index' : null
+  /**
+   * 当前画面那份 K 线数据的"结构绑定材料": 摘要 + 数据完整性审计 + 请求参数。
+   *
+   * **每次重新取 K 线都先置 null**(见 load effect): 旧摘要绝不能留给新的标的/周期/天数,
+   * 否则就是拿 A 的摘要去请求 B 的结构 —— 那正是这套 digest 机制要防的事。
+   */
+  const [chanBinding, setChanBinding] = useState<{
+    instrument: 'stock' | 'index'
+    interval: KlineInterval
+    days: number
+    audit: ChanBarsAudit
+    snapshot: ChanSnapshotPick
+  } | null>(null)
+  /** 图层状态机(文案见 `chanStatusText`): 每个 phase 都要在界面说清"为什么画/为什么不画"。 */
+  const [chanView, setChanView] = useState<ChanLayerView>({ phase: 'off' })
+  /**
+   * 竞态序列号: 只有**最后一次**发出的结构请求能写状态。
+   * 切股/切周期/关开关/重取 K 线都会 +1; 迟到的响应(网络慢/后端排队)一律丢弃 ——
+   * 否则 A 的结构会画到 B 的图上, 而且"看起来完全合法"(diff 里看不出来)。
+   * 与 `AbortController` 双保险: abort 治"还没回来的", 序列号治"已经回来但已过期"。
+   */
+  const chanSeqRef = useRef(0)
 
   // ── 图层数据自取(2026-09-18 审计断链修复) ─────────────────────
   // 背景: 后端 /klines/{symbol}/summary 已产出 gs_signals / fund_flow / events /
@@ -1091,6 +1171,10 @@ export default function KlineChart(props: {
       rawKlinesRef.current = []
       rangeBarsRef.current = []
       setDataLen(0)
+      // 缠论分型: 上一张图的"绑定材料"立刻作废(序列号 +1 让在途的结构响应失效),
+      // 直到本响应真正带回新摘要才重新允许请求结构。
+      chanSeqRef.current += 1
+      setChanBinding(null)
       try {
         const days = props.initialDays ?? 120
         // 请求层闸门(见 `daySafeInterval` 头注): 任何路径都不出分钟 K 请求 ——
@@ -1101,6 +1185,20 @@ export default function KlineChart(props: {
         if (cancelled) return
         setLiveBar(res.live_bar ?? null)
         const kl = res.klines || []
+        /*
+         * 缠论分型(2026-11-17): 结构与这张图的绑定材料, 必须在**改写 kl 之前**按原始序列算。
+         *
+         * `auditBarsTransform` 用**原始响应**判断前端渲染链会不会改写数据(剔非法行/重排/去重),
+         * 摘要(`pickChanSnapshot`)同样是针对原始响应的。一旦这里报 not ok, 结构与图上蜡烛
+         * 就不是同一批数据 —— 图层拒绝绘制并说明原因(见 `auditBarsTransform` 头注)。
+         */
+        if (chanInstrument) {
+          const audit = auditBarsTransform(kl)
+          const snapshot = pickChanSnapshot(res, { instrument: chanInstrument, interval: reqInterval })
+          setChanBinding({ instrument: chanInstrument, interval: reqInterval, days, audit, snapshot })
+        } else {
+          setChanBinding(null)
+        }
         // 2026-09-05: 过滤 OHLC 含 null/NaN 的行(周末/预测拼接数据常有空值，
         // lightweight-charts setData 遇 null 直接抛 Value is null 全页崩)。
         const valid = kl.filter(
@@ -1167,7 +1265,7 @@ export default function KlineChart(props: {
     return () => {
       cancelled = true
     }
-  }, [props.symbol, props.market, props.instrument, indexChart, interval, props.initialDays])
+  }, [props.symbol, props.market, props.instrument, chanInstrument, indexChart, interval, props.initialDays])
 
   // ── 图层数据: 按需自取 summary(仅父未接管的分量才发请求) ────────
   useEffect(() => {
@@ -1208,6 +1306,127 @@ export default function KlineChart(props: {
       window.clearTimeout(timer)
     }
   }, [props.symbol, props.market, needLayer, indexChart])
+
+  // ── 缠论分型结构自取(2026-11-17): 只在图层打开 + 日K + 身份可靠 + 数据未改写时请求 ──
+  /*
+   * 为什么独立一条 effect 而不是塞进 load: 结构是**第二个**请求, 依赖的是"主图那份数据"
+   * (摘要 + 完整性审计)。把两条请求绑在一起, 切股/切周期时它们的生命周期就天然对齐 ——
+   * 主数据一变 `chanBinding` 立刻为 null, 结构 effect 随之作废旧结果并重新请求。
+   *
+   * 竞态三重防护:
+   *  1. `chanSeqRef` 序列号: 只有最后一次发的请求能写状态(迟到响应直接丢弃);
+   *  2. `AbortController`: 依赖变化即 abort 在途请求(不白占连接池, 也不落状态);
+   *  3. 摘要/身份**回验**: 响应回传的 `snapshot_digest` 必须等于本次请求的摘要,
+   *     自述 symbol/instrument 必须等于当前图 —— 不一致一律 `snapshot-mismatch`(不画)。
+   */
+  useEffect(() => {
+    // 关图层: 一个结构请求都不发(默认关 = 零请求), 旧状态清掉
+    if (!showChanLayer) {
+      chanSeqRef.current += 1
+      setChanView({ phase: 'off' })
+      return
+    }
+    if (!chanInstrument) {
+      chanSeqRef.current += 1
+      setChanView({ phase: 'identity-unknown' })
+      return
+    }
+    if (props.market !== 'CN') {
+      chanSeqRef.current += 1
+      setChanView({ phase: 'unsupported', detail: `缠论分型只提供 A 股(CN)口径, 当前市场 ${props.market} 不请求` })
+      return
+    }
+    // 服务端只接受 interval=1d; 其它周期不请求, 也不把日线分型贴到周/月/分钟柱子上
+    if (interval !== '1d') {
+      chanSeqRef.current += 1
+      setChanView({ phase: 'not-daily' })
+      return
+    }
+    if (!chanBinding || chanBinding.interval !== '1d' || chanBinding.instrument !== chanInstrument) {
+      chanSeqRef.current += 1
+      setChanView({ phase: 'awaiting-bars' })
+      return
+    }
+    // 前端渲染链改写过原始 K 线(剔行/重排/去重) → 结构与图上蜡烛不是同一批数据, 拒绝绘制
+    if (!chanBinding.audit.ok) {
+      chanSeqRef.current += 1
+      setChanView({ phase: 'bars-unreliable', audit: chanBinding.audit })
+      return
+    }
+    const digest = chanBinding.snapshot.digest
+    if (!chanBinding.snapshot.ok || !digest) {
+      chanSeqRef.current += 1
+      setChanView({ phase: 'no-snapshot', detail: chanBinding.snapshot.detail })
+      return
+    }
+
+    const seq = ++chanSeqRef.current
+    const ctrl = new AbortController()
+    setChanView({ phase: 'loading' })
+    const url =
+      `/klines/${encodeURIComponent(props.symbol)}/chan-structure` +
+      `?market=${encodeURIComponent(props.market)}` +
+      `&instrument=${chanBinding.instrument}` +
+      `&interval=1d&days=${chanBinding.days}` +
+      `&snapshot=${encodeURIComponent(digest)}`
+    fetchAPI<unknown>(url, { signal: ctrl.signal, timeoutMs: SUMMARY_TIMEOUT_MS })
+      .then((payload) => {
+        if (seq !== chanSeqRef.current) return // 已被更新的目标接管: 迟到响应丢弃
+        const structure = normalizeChanStructure(payload)
+        if (!structure) {
+          setChanView({
+            phase: 'no-snapshot',
+            detail: '结构响应缺少可校验的快照摘要或分型序列, 已拒绝绘制',
+          })
+          return
+        }
+        // 回验: 结构必须声明"算的就是本次请求的那份摘要/那个标的"
+        if (structure.snapshotDigest !== digest) {
+          setChanView({
+            phase: 'snapshot-mismatch',
+            detail: '结构响应回传的快照摘要与本次请求不一致',
+          })
+          return
+        }
+        if (structure.symbol && structure.symbol !== props.symbol) {
+          setChanView({
+            phase: 'snapshot-mismatch',
+            detail: `结构响应属于 ${structure.symbol}, 不是当前图 ${props.symbol}`,
+          })
+          return
+        }
+        if (structure.instrument && structure.instrument !== chanBinding.instrument) {
+          setChanView({
+            phase: 'snapshot-mismatch',
+            detail: `结构响应自述标的类型(${structure.instrument})与当前图(${chanBinding.instrument})不一致`,
+          })
+          return
+        }
+        setChanView({ phase: 'ready', structure })
+      })
+      .catch((err: unknown) => {
+        if (seq !== chanSeqRef.current) return
+        const name = (err as { name?: string } | null)?.name
+        if (name === 'AbortError') return // 主动取消: 不写状态(下一轮已经接管)
+        const statusRaw = Number((err as { status?: unknown } | null)?.status)
+        const status = Number.isFinite(statusRaw) && statusRaw > 0 ? statusRaw : null
+        const detail = err instanceof Error && err.message ? err.message : '缠论结构取数失败'
+        if (status === 409) {
+          // 409 = 服务端用同一份取数重算摘要后发现"图已经变了"。这是**诚实结果**:
+          // 不能拿旧结构继续画, 也不能悄悄重试到用户以为"就是这张图"。
+          setChanView({ phase: 'snapshot-mismatch', detail: `图表快照已变化(409): ${detail}` })
+          return
+        }
+        setChanView({
+          phase: 'error',
+          status,
+          detail: `缠论结构取数失败${status ? `(HTTP ${status})` : ''}: ${detail}`,
+        })
+      })
+    return () => {
+      ctrl.abort()
+    }
+  }, [showChanLayer, chanInstrument, chanBinding, interval, props.symbol, props.market])
 
   // ── K线形态标注自取(2026-10-10) ─────────────────────────────
   // 数据源: GET /klines/{symbol}/patterns(与主图 /klines/{symbol} 同源同口径, 标注与 K 线对齐)。
@@ -1539,6 +1758,39 @@ export default function KlineChart(props: {
     onRangeStatsRef.current?.(stats)
   }, [hasStatsCb, visibleRange, effFundFlow, effEvents, effPriceLines, dataLen])
 
+  // ── 缠论分型记号(2026-11-17): 只有"图层开 + 日K + 结构就绪"才产出 ─────────
+  /**
+   * 定位铁律(与标注/交割单同一口径): 分型的 `position_day` 必须是**图上真有的一根 K 线**,
+   * 否则不画、只计数。理由:
+   *  - 服务端剔掉了当日 bar(`omitted_latest_reason`), 但那根蜡烛**仍然画在图上**(摘要含它) ——
+   *    所以结构给的日期是"更早的已完结 bar", 定位是可靠的;
+   *  - 反过来, 若某个分型日在这张图上没有 K 线(停牌/区间不够), 贴到相邻柱子上就是假定位,
+   *    宁可少画一个并告诉用户"N 个分型所在日无 K 线, 未绘制"。
+   *
+   * `dataLen` 进 deps: 换标的/周期/天数后 K 线集合变了, 必须重新判断"这天的柱子还在不在"。
+   */
+  const chanMarkers = useMemo(() => {
+    if (!showChanLayer || chanView.phase !== 'ready' || interval !== '1d') {
+      return { markers: [] as ChanMarkerSpec[], skipped: [] as string[] }
+    }
+    const barKeys = new Set<number>()
+    for (const b of rawKlinesRef.current) {
+      const k = dayKey(b.time)
+      if (k !== null) barKeys.add(k)
+    }
+    const markers: ChanMarkerSpec[] = []
+    const skipped: string[] = []
+    for (const m of buildChanMarkers(chanView.structure, CHAN_MARKER_COLORS)) {
+      const k = dayKey(fundBarTime(m.day, '1d') as Time)
+      if (k === null || !barKeys.has(k)) {
+        skipped.push(m.day)
+        continue
+      }
+      markers.push(m)
+    }
+    return { markers, skipped }
+  }, [showChanLayer, chanView, interval, dataLen])
+
   // ── L4 事件 markers + 支撑压力位 price lines + 资金柱 (阶段二+三) ──
   useEffect(() => {
     const chart = chartRef.current
@@ -1690,6 +1942,26 @@ export default function KlineChart(props: {
         markers.push(
           ...(niuxiongSignalMarkers(effNiuxiong, (d) => toChartTime(d, interval), pc) as never[]),
         )
+      }
+    }
+    // 缠论分型(2026-11-17): 只画服务端给的 confirmed / candidate(blocked 已在清洗层剔除)。
+    // 与其它图层共用**同一个** marker plugin(`setMarkers` 整体替换): 关图层/切股不残留,
+    // 也不会顺手删掉事件/买卖点/标注等别人的记号。
+    // 记号只写"顶/底"(待确认加 ○) —— 没有 买/卖/▲/▼ 之类买卖语义。
+    if (showChanLayer && interval === '1d') {
+      for (const m of chanMarkers.markers) {
+        markers.push({
+          time: fundBarTime(m.day, '1d') as Time,
+          position: m.position,
+          color: m.color,
+          shape: m.shape,
+          size: m.size,
+          text: m.text,
+          // 溯源字段: LWC 只读它认识的键, 多出来的不进画布; 让测试/巡检能按日精确对账
+          chanKind: m.kind,
+          chanStatus: m.status,
+          chanDay: m.day,
+        } as unknown as SeriesMarker<Time>)
       }
     }
     // P2 补搬(2026-09-18): 主力意图箭头 + 涨停/跌停箭头(与 InteractiveKline 同语义/同阈值)
@@ -2027,7 +2299,7 @@ export default function KlineChart(props: {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effEvents, effPriceLines, effCostLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, effScenarioLines, showScenarioLayer, interval, props.sourceReady, effTradeMarkers, effAnnotationMarkers, dataLen, intent, props.symbol, props.market])
+  }, [effEvents, effPriceLines, effCostLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, effScenarioLines, showScenarioLayer, interval, props.sourceReady, effTradeMarkers, effAnnotationMarkers, dataLen, intent, props.symbol, props.market, showChanLayer, chanMarkers])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -2154,6 +2426,10 @@ export default function KlineChart(props: {
   // 所以把**解析后的实际颜色**挂到容器上, 生产巡检(terminal_audit)据此断言
   // "G=红系 / S=绿系" 没被改反(改 CSS token 也拦得住)。
   const gsResolved = readGsColors()
+  // 缠论分型(2026-11-17): 图例要用的读数(只做展示, 判定全在纯函数里)
+  const chanStructure = chanView.phase === 'ready' ? chanView.structure : null
+  const chanConfirmed = chanStructure ? chanStructure.fractals.filter((f) => f.status === 'confirmed').length : 0
+  const chanCandidate = chanStructure ? chanStructure.fractals.filter((f) => f.status === 'candidate').length : 0
   // 暗盘资金档悬停"四组合用法"(规格 §2): 收盘涨跌 × 暗盘红绿 → 用法提示(证据口径, 非建议)
   const hoverPoolCombo =
     subchart === 'dark_pool' && hoverReadout
@@ -2279,6 +2555,35 @@ export default function KlineChart(props: {
             📊 筹码分布
           </button>
         )}
+        {/*
+          缠论分型图层开关(2026-11-17): **默认关**, 打开才请求结构。
+          身份不可靠(页面没传 instrument)时禁用并发请求也不发 —— A 股指数与个股同码
+          (000001), 猜错就是把个股分型画在指数上。禁用原因写进 title, 不让用户对着
+          "点不动的按钮"猜。
+          父组件传了 `layersVisible.chan` 时由父接管(与情景关键位同口径): 此时不渲染本按钮,
+          免得出现"点了没反应"的假控件。
+        */}
+        {props.layersVisible?.chan === undefined && (
+          <button
+            type="button"
+            data-testid="chan-layer-toggle"
+            aria-pressed={showChanLayer}
+            disabled={!chanInstrument}
+            onClick={() => setChanLocalOn((v) => !v)}
+            className={`min-h-[28px] px-2.5 py-1 text-xs rounded font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              showChanLayer
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+            }`}
+            title={
+              chanInstrument
+                ? '显示/隐藏缠论分型(仅日K): 已确认=实心大号, 待确认=空心小号; 只标极值结构, 非买卖点'
+                : '无法确认标的是个股还是指数(A股存在同码, 如 000001), 缠论分型图层已禁用'
+            }
+          >
+            🧩 缠论分型
+          </button>
+        )}
       </div>
       {/* 图表容器与右侧筹码分布图 */}
       {/* L2-B 第2步(2026-10-24): 筹码面板展开时**挤压**画布而不是盖住它。
@@ -2353,6 +2658,71 @@ export default function KlineChart(props: {
       </div>
       {props.enableMinute && mode === 'minute' && (
         <MinutePane symbol={props.symbol} market={props.market} instrument={props.instrument} height={props.height ?? 360} />
+      )}
+
+      {/* 缠论分型图层状态(2026-11-17): **一行式小字, 非卡片** —— 为什么画/为什么不画必须说清楚。
+          覆盖: 身份不可靠 / 非日K / K线被前端改写 / 缺快照摘要 / 409 快照不一致 / 取数失败 /
+          当日K排除 / 复权与终局口径未知。任何一种都禁止沉默(否则用户会把"没画"当成"没有分型")。 */}
+      {showChanLayer && chanView.phase !== 'ready' && (
+        <div
+          data-testid="chan-status"
+          data-chan-phase={chanView.phase}
+          className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground">缠论分型</span>
+          <span
+            className={
+              chanView.phase === 'snapshot-mismatch' ||
+              chanView.phase === 'bars-unreliable' ||
+              chanView.phase === 'error'
+                ? 'text-amber-600 dark:text-amber-400'
+                : undefined
+            }
+          >
+            {chanStatusText(chanView)}
+          </span>
+          {chanView.phase === 'bars-unreliable' && (
+            <span className="text-muted-foreground">（原因码 {chanView.audit.issue}）</span>
+          )}
+        </div>
+      )}
+
+      {/* 缠论分型图例(2026-11-17): 与形态/情景图例**同位置同风格**(一行式小字)。
+          这里只做"形状=语义"映射 + 诚实边界(blocked 未绘 / 当日K排除 / 复权未知 / 终局未验证),
+          不重复读数卡片, 也不把分型说成买卖点。 */}
+      {showChanLayer && chanStructure && (
+        <div
+          data-testid="chan-legend"
+          data-chan-phase={chanView.phase}
+          className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground">缠论分型</span>
+          <span>
+            <span style={{ color: CHAN_MARKER_COLORS.top }}>●顶</span>
+            <span className="ml-1" style={{ color: CHAN_MARKER_COLORS.bottom }}>●底</span>
+            {' '}已确认(实心大号)
+          </span>
+          <span>
+            <span style={{ color: CHAN_MARKER_COLORS.top }}>○顶</span>
+            <span className="ml-1" style={{ color: CHAN_MARKER_COLORS.bottom }}>○底</span>
+            {' '}待确认(空心小号, 未确认不参与结构判断)
+          </span>
+          <span>
+            已确认 {chanConfirmed} · 待确认 {chanCandidate}
+          </span>
+          {chanStructure.blocked > 0 && <span>blocked {chanStructure.blocked} 个（不绘为结构）</span>}
+          {chanStructure.dropped > 0 && <span>脏行 {chanStructure.dropped} 个已丢弃</span>}
+          {chanMarkers.skipped.length > 0 && (
+            <span>{chanMarkers.skipped.length} 个分型所在日无K线，未绘制</span>
+          )}
+          {chanStructure.omittedLatestReason && (
+            <span>当日K未参与计算（{chanStructure.omittedLatestReason}）</span>
+          )}
+          <span>
+            复权口径 {chanStructure.adjustment} · 终局性 {chanStructure.finality}
+          </span>
+          <span>仅合并K线分型（不含笔/线段/中枢/买卖点）· 客观标注 · 非投资建议</span>
+        </div>
       )}
 
       {/* 最新K线新鲜度(2026-09-23): 报障"今日日K不显示"。后端已修(剔桩+补实时),
