@@ -1,5 +1,9 @@
 ## [未发布]
 
+### fix-CI 四次校准(2026-11-18)
+
+- `test_judgment_routing::test_name_lookup_is_cached`: 本地全市场名单可用时这句根本不走 TQ(0 次调用, 比联网更好), 原断言 `first>=1` 因环境而红 → 显式关掉本地索引, 只测 TQ 缓存路径。
+
 ### fix-CI 三次校准(2026-11-18)
 
 - `test_tdx_tick_parser`: 样本路径 `is_file()` 在无可读权限的 runner 上抛 `PermissionError`, 直接在**收集阶段**中断整片门禁; 改为按"无样本"跳过。

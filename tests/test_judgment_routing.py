@@ -44,14 +44,18 @@ def test_explicit_code_wins_and_is_not_rewritten(fake_tq):
     assert fake_tq == []
 
 
-def test_name_lookup_is_cached(fake_tq):
+def test_name_lookup_is_cached(fake_tq, monkeypatch):
     """路由阶段每轮都会解析名字，不能每句都打一次单线程 17709。
 
     注意：一次解析可能对**多个候选词**各查一次（"北方稀土" 与 "北方"），
     所以断言的是「第二次解析不再新增调用」，而不是总数等于 1。
     """
-    # 进程级缓存会被同一分片里更早的用例预热（新增的缠论追问用例也会解析名字），
-    # 先清空再断言，否则 first 可能为 0 而不是"第二次不再新增"。
+    # ① 进程级缓存会被同一分片里更早的用例预热（缠论追问用例也会解析名字）→ 先清空;
+    # ② 本地全市场名单索引若可用, 这句根本不走 TQ(0 次调用, 比走网络更好), 断言
+    #    "first>=1" 会因环境而红 → 显式关掉本地索引, 只测 TQ 缓存这条路径。
+    monkeypatch.setattr(symbol_guard, "_local_name_pairs", lambda: None)
+    monkeypatch.setattr(symbol_guard, "_LOCAL_INDEX",
+                        {"stamp": 0.0, "ok": False, "names": None, "aliases": None})
     symbol_guard._TQ_MATCH_CACHE.clear()
     symbol_guard.first_code_from_names("北方稀土还能拿吗")
     first = len(fake_tq)
