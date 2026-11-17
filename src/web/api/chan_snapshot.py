@@ -76,7 +76,7 @@ DIGEST_SCHEMA = "sida-chan-snapshot-v2"
 CHAN_FRACTAL_RULES_VERSION = "chan-fractal-inclusive-sealed-v1"
 #: 只有完整 64 位小写十六进制才接受; 截短/大写/非十六进制一律 422(不"修正")。
 _DIGEST_RE = re.compile(r"\A[0-9a-f]{64}\Z")
-#: 身份依据: 响应自带布尔 is_index(独立验证) / 只靠显式 stock 取数路径(未验证)。
+#: 身份依据: 响应布尔 is_index / 显式 stock 取数路径；均非独立证券主数据核验。
 IdentityBasis = Literal["response_flag", "declared_path"]
 
 _NOT_IMPLEMENTED: tuple[str, ...] = (
@@ -216,7 +216,8 @@ def compute_snapshot_digest(
 def response_instrument(response: dict) -> Literal["stock", "index"]:
     """从**响应**判定标的类型, 不信调用方声明。
 
-    · ``is_index is True`` → index; ``is_index is False`` → stock(显式, 可独立验证);
+    · ``is_index is True`` → index; ``is_index is False`` → stock。标记可能由
+      同一取数分支生成，只验证内部一致性，不证明证券主数据或上游身份。
     · 键**缺失** → stock: 这是历史 stock 响应契约。此分支的身份依据是"用显式 stock
       调用路径取的数", **不是**对响应内容的独立验证 —— 见 :func:`instrument_identity_basis`,
       调用方必须把这一点如实标出来, 不许当成已验证;
@@ -502,8 +503,7 @@ def get_chan_structure(
         "symbol": symbol,
         "market": "CN",
         "instrument": declared,
-        # 身份依据如实外露: response_flag = 响应自带布尔 is_index(独立验证);
-        # declared_path = 只用显式 stock 取数路径, 不是对响应内容的独立验证。
+        # 身份依据仅表示标记来自响应或调用路径，不代表已独立核验上游证券身份。
         "instrument_basis": identity_basis,
         "interval": resolved_interval,
         "rules_version": CHAN_FRACTAL_RULES_VERSION,

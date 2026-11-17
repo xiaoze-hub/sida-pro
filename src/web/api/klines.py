@@ -768,7 +768,7 @@ def _get_klines_uncached(symbol: str, market: str = "CN", days: int = 60, interv
             "today_bar": today_state,
             # 2026-11-17: 个股分支显式声明"不是指数" —— 旧契约是**缺字段**, 下游
             # (缠论分型端点)只能靠"用显式 stock 取数路径"间接推断身份。显式 false
-            # 让标的类型可独立验证, 同码(000001)指数/个股不再靠调用约定区分。
+            # 仅供响应与请求交叉检查；此标记来自同一取数分支，不证明上游证券身份。
             "is_index": False,
         }
         # 2026-10-12: 合成今日 bar 显式标 partial/source/as_of(诚实区分子源)
