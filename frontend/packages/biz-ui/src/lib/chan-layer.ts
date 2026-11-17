@@ -58,6 +58,31 @@ export interface ChanStructure {
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const DIGEST_RE = /^[0-9a-f]{64}$/
 
+/**
+ * 严格日历日校验（2026-11-17 复审修复）。
+ *
+ * 只过正则是不够的: `2026-02-30` / `2026-13-01` 都是**正则合法、日历非法**的值。
+ * V8 的 `new Date('2026-02-30T00:00:00Z')` 不会给 Invalid Date, 而是**静默归一**到
+ * `2026-03-02` —— 正好是图上真有一根 K 线的日子。于是"2 月 30 日的分型"会被画到
+ * 3 月 2 日的柱子上, 而且看起来完全合法(这是最坏的错法: 错得不像错)。
+ *
+ * 唯一可靠判据是**回读比**: 用 UTC 构造再取回年月日, 三段都必须与输入逐字相同。
+ * 不做任何"修正"(把 30 改成 28/29) —— 修正等于替服务端编数据。
+ */
+export function isValidCalendarDay(v: unknown): v is string {
+  if (typeof v !== 'string' || !DAY_RE.test(v)) return false
+  const y = Number(v.slice(0, 4))
+  const m = Number(v.slice(5, 7))
+  const d = Number(v.slice(8, 10))
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false
+  const t = new Date(Date.UTC(y, m - 1, d))
+  if (Number.isNaN(t.getTime())) return false
+  return (
+    t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d
+  )
+}
+
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 }
@@ -65,7 +90,7 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 function asDay(v: unknown): string | null {
   if (typeof v !== 'string') return null
   const s = v.slice(0, 10)
-  return DAY_RE.test(s) ? s : null
+  return isValidCalendarDay(s) ? s : null
 }
 
 function asText(v: unknown): string | null {
@@ -121,12 +146,19 @@ export function normalizeChanStructure(raw: unknown): ChanStructure | null {
       blocked += 1
       continue
     }
+    // 「已确认」必须带**有效的确认日**且不早于分型日：确认日缺失/非法/倒挂 = 这条"确认"
+    // 无法自证, 丢掉并计数（不替服务端补一个日期, 也不把 candidate 当 confirmed 兜底）。
+    const confirmedOn = asDay(f.confirmed_on)
+    if (status === 'confirmed' && (!confirmedOn || confirmedOn < day)) {
+      dropped += 1
+      continue
+    }
     fractals.push({
       kind,
       status,
       positionDay: day,
       positionPrice: price,
-      confirmedOn: asDay(f.confirmed_on),
+      confirmedOn,
     })
   }
   // 升序由服务端保证；这里再按发生日稳定排序，避免上游顺序漂移导致 marker 断言失败
@@ -146,6 +178,135 @@ export function normalizeChanStructure(raw: unknown): ChanStructure | null {
     blocked,
     dropped,
   }
+}
+
+// ── 请求控制（可取消 + 真超时；2026-11-17 复审修复） ─────────────────────
+
+/**
+ * 结构请求的超时时限。服务端算一份结构是纯本地计算(读快照+分型), 正常远低于 1s;
+ * 20s 已经是"后端排队/连接池被打满"的量级。超时必须**显式失败**, 不许永远 loading。
+ */
+export const CHAN_STRUCTURE_TIMEOUT_MS = 20000
+
+export type ChanRequestResult =
+  | { state: 'ok'; payload: unknown }
+  | { state: 'timeout'; timeoutMs: number }
+  | { state: 'aborted' }
+  | { state: 'error'; error: unknown }
+
+export interface ChanRequest {
+  /** 一定 settle 一次(成功/失败/超时/取消) —— 调用方据此离开 loading */
+  result: Promise<ChanRequestResult>
+  /** 主动取消(切股/关图层/unmount): 立刻 abort 上游并 settle 为 aborted */
+  cancel: () => void
+  /** 是否因为超时而结束(用于文案) */
+  timedOut: () => boolean
+}
+
+/**
+ * 带**真超时**的可取消请求。
+ *
+ * 为什么不能只靠 `fetchAPI(..., { signal, timeoutMs })`: 该实现的超时计时器只在
+ * **没有调用方 signal** 时才会建（`_attemptFetch`: `callerSignal ? null : new AbortController()`）
+ * —— 一旦传了 signal, `timeoutMs` 被静默忽略。而结构请求必须传 signal(切股要能取消),
+ * 于是"后端挂了"这条路径永远不 settle, 图层卡在「加载中…」。
+ *
+ * 这里把两件事拆开做:
+ *  - **取消**: 自己的 `AbortController`, cancel 时 abort 上游;
+ *  - **超时**: 自己的计时器, 到点先 abort 上游、再**独立地** settle 成 timeout ——
+ *    即使上游连 abort 都不理(响应头到了、响应体悬挂, `res.json()` 永不返回),
+ *    调用方也能拿到结果并离开 loading。
+ *
+ * 计时器在 settle 时一律清掉(不泄漏); 结果只写一次(事件竞态下不会"超时后再成功")。
+ */
+export function startChanRequest(opts: {
+  timeoutMs: number
+  /** 发起上游请求(拿到的 signal 必须透传给 fetch, 取消/超时才能真的断开) */
+  request: (signal: AbortSignal) => Promise<unknown>
+  /** 外部取消信号(可选) */
+  signal?: AbortSignal
+}): ChanRequest {
+  const ctrl = new AbortController()
+  const timeoutMs =
+    Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : CHAN_STRUCTURE_TIMEOUT_MS
+  let settled = false
+  let timerFired = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let resolveResult: (r: ChanRequestResult) => void = () => {}
+  const result = new Promise<ChanRequestResult>((resolve) => {
+    resolveResult = resolve
+  })
+
+  const onExternalAbort = () => cancel()
+  const settle = (r: ChanRequestResult) => {
+    if (settled) return
+    settled = true
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+    opts.signal?.removeEventListener?.('abort', onExternalAbort)
+    resolveResult(r)
+  }
+  const cancel = () => {
+    if (settled) return
+    try {
+      ctrl.abort()
+    } catch {
+      /* 已 abort / 环境不支持: 不影响 settle */
+    }
+    settle({ state: 'aborted' })
+  }
+
+  if (opts.signal?.aborted) {
+    cancel()
+    return { result, cancel, timedOut: () => false }
+  }
+  opts.signal?.addEventListener?.('abort', onExternalAbort, { once: true })
+
+  timer = setTimeout(() => {
+    timer = null
+    timerFired = true
+    try {
+      ctrl.abort()
+    } catch {
+      /* ignore */
+    }
+    settle({ state: 'timeout', timeoutMs })
+  }, timeoutMs)
+
+  let pending: Promise<unknown>
+  try {
+    pending = opts.request(ctrl.signal)
+  } catch (error) {
+    settle({ state: 'error', error })
+    return { result, cancel, timedOut: () => timerFired }
+  }
+  // 双分支 then: 上游拒绝(含 abort)不会变成未处理的 unhandled rejection
+  void pending.then(
+    (payload) => {
+      if (settled) return
+      if (timerFired) {
+        settle({ state: 'timeout', timeoutMs })
+        return
+      }
+      settle({ state: 'ok', payload })
+    },
+    (error) => {
+      if (settled) return
+      if (timerFired) {
+        settle({ state: 'timeout', timeoutMs })
+        return
+      }
+      if (ctrl.signal.aborted) {
+        settle({ state: 'aborted' })
+        return
+      }
+      settle({ state: 'error', error })
+    },
+  )
+
+  return { result, cancel, timedOut: () => timerFired }
 }
 
 // ── 图表响应里的快照摘要（结构与图的绑定） ─────────────────────────────
@@ -365,6 +526,10 @@ export function buildChanMarkers(structure: Pick<ChanStructure, 'fractals'>, col
   const out: ChanMarkerSpec[] = []
   for (const f of structure.fractals) {
     if (f.status !== 'confirmed' && f.status !== 'candidate') continue
+    // 日期必须过严格日历校验 + 确认日期必须有效且不早于分型日 —— 画之前再验一次,
+    // 免得调用方绕开 `normalizeChanStructure` 直接喂脏数据时把记号落到别的柱子上。
+    if (!isValidCalendarDay(f.positionDay)) continue
+    if (f.status === 'confirmed' && (!isValidCalendarDay(f.confirmedOn) || f.confirmedOn < f.positionDay)) continue
     const base = f.kind === 'top' ? colors.top : colors.bottom
     const label = f.kind === 'top' ? '顶' : '底'
     const confirmed = f.status === 'confirmed'
@@ -391,6 +556,7 @@ export type ChanLayerView =
   | { phase: 'unsupported'; detail: string }
   | { phase: 'not-daily' }
   | { phase: 'awaiting-bars' }
+  | { phase: 'bars-failed'; detail: string }
   | { phase: 'bars-unreliable'; audit: ChanBarsAudit }
   | { phase: 'no-snapshot'; detail: string }
   | { phase: 'loading' }
@@ -411,6 +577,8 @@ export function chanStatusText(view: ChanLayerView): string {
       return '缠论分型只按日 K 口径提供（服务端仅 1d），当前周期不请求、不绘制'
     case 'awaiting-bars':
       return '等待当日 K 线就绪后再绑定缠论结构…'
+    case 'bars-failed':
+      return view.detail
     case 'bars-unreliable':
       return view.audit.detail
     case 'no-snapshot':

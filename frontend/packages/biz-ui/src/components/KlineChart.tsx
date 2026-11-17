@@ -136,9 +136,11 @@ export type { KlineRangeStats, RangeBar } from '../lib/range-stats'
 import {
   auditBarsTransform,
   buildChanMarkers,
+  CHAN_STRUCTURE_TIMEOUT_MS,
   chanStatusText,
   normalizeChanStructure,
   pickChanSnapshot,
+  startChanRequest,
   type ChanBarsAudit,
   type ChanLayerView,
   type ChanMarkerSpec,
@@ -739,14 +741,35 @@ export default function KlineChart(props: {
    * 否则就是拿 A 的摘要去请求 B 的结构 —— 那正是这套 digest 机制要防的事。
    */
   const [chanBinding, setChanBinding] = useState<{
+    /** 这份 K 线属于哪个标的/市场 —— 绑定必须自证身份, 否则切股时旧摘要会被拿去请求新标的 */
+    symbol: string
+    market: string
     instrument: 'stock' | 'index'
     interval: KlineInterval
     days: number
+    /** 主数据取数代次(`klGenRef`): 只有"这张图上真正画着的那一代数据"的摘要才可用于请求 */
+    generation: number
     audit: ChanBarsAudit
     snapshot: ChanSnapshotPick
   } | null>(null)
   /** 图层状态机(文案见 `chanStatusText`): 每个 phase 都要在界面说清"为什么画/为什么不画"。 */
   const [chanView, setChanView] = useState<ChanLayerView>({ phase: 'off' })
+  /**
+   * 主图 K 线**加载失败**的原始原因(`null` = 没失败)。
+   *
+   * 存在意义: 旧实现里加载失败只是 `error` 文案, 缠论图层却仍报「等待当日 K 线就绪」——
+   * 那是**假等待**(K 线根本不会再来, 除非用户重试)。失败必须向图层状态机如实报失败。
+   */
+  const [chanBarsFailure, setChanBarsFailure] = useState<string | null>(null)
+  /**
+   * 主数据取数代次: 每次 load effect 开跑 +1。`chanBinding.generation` 与之相等, 才说明
+   * 「绑定摘要 + 审计」对应的正是**当前这张图**真正画上去的那份 K 线(而不是上一只票的)。
+   * 这是切股瞬间"旧摘要 × 新标的"那道缝的硬判据(状态更新是异步的, 不能靠 setChanBinding(null) 抢跑)。
+   */
+  const klGenRef = useRef(0)
+  /** 「重读图表」被点过(下一轮 load 必须绕过响应缓存) —— 消费一次即复位 */
+  const reloadRequestedRef = useRef(false)
+  const [chartReloadNonce, setChartReloadNonce] = useState(0)
   /**
    * 竞态序列号: 只有**最后一次**发出的结构请求能写状态。
    * 切股/切周期/关开关/重取 K 线都会 +1; 迟到的响应(网络慢/后端排队)一律丢弃 ——
@@ -754,6 +777,23 @@ export default function KlineChart(props: {
    * 与 `AbortController` 双保险: abort 治"还没回来的", 序列号治"已经回来但已过期"。
    */
   const chanSeqRef = useRef(0)
+
+  /**
+   * 「重读图表」动作(2026-11-17 复审修复): 409 / 超时 / K 线加载失败时, 界面上必须有一个
+   * **真的做事**的按钮 —— 重读图表主数据(绕缓存) → 拿到可能已更新的摘要 → 图层按新摘要
+   * 再请求一次。刻意**不自动**做: 自动重试会把"图变了 / 后端挂了"变成静默打转, 而且 K 线
+   * 没变时摘要也不会变, 循环请求只会空烧后端。
+   *
+   * 点下去先**作废旧结构**(序列表 +1, 绑定清空, 状态回 awaiting-bars): 旧 marker 不许在新
+   * 数据到达前继续挂在这张图上(否则"重读"期间图上显示的是上一份结论)。
+   */
+  const reloadChartAndRetry = useCallback(() => {
+    chanSeqRef.current += 1
+    setChanBinding(null)
+    setChanView({ phase: 'awaiting-bars' })
+    reloadRequestedRef.current = true
+    setChartReloadNonce((n) => n + 1)
+  }, [])
 
   // ── 图层数据自取(2026-09-18 审计断链修复) ─────────────────────
   // 背景: 后端 /klines/{symbol}/summary 已产出 gs_signals / fund_flow / events /
@@ -1158,9 +1198,15 @@ export default function KlineChart(props: {
   // ── 拉数据并 setData ──────────────────────────────────────
   useEffect(() => {
     let cancelled = false
+    // 取数代次(见 `klGenRef` 头注): 本轮产出的摘要只对同代数据有效
+    const gen = ++klGenRef.current
+    // 「重读图表」按钮: 消费一次 → 本轮必须绕过 30s 响应缓存(否则重读到的还是那份旧摘要)
+    const forceReload = reloadRequestedRef.current
+    reloadRequestedRef.current = false
     const load = async () => {
       setLoading(true)
       setError('')
+      setChanBarsFailure(null)
       /*
        * 换标的/换周期/重读开始时**先清掉上一张图的 K 线**（2026-10-29 复审阻断 ②）：
        * `rawKlinesRef` 是 marker 定位的唯一真源（`dayKey` 只认它）。留着它就会出现
@@ -1181,8 +1227,8 @@ export default function KlineChart(props: {
         // 后端无分钟源, 过去把日 K 当分钟序列回传, 前端据此渲染就是错标周期。
         const reqInterval = daySafeInterval(interval)
         const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(reqInterval)}${props.instrument ? `&instrument=${props.instrument}` : ''}`
-        const res = await fetchAPI<KlinesResponse>(query)
-        if (cancelled) return
+        const res = await fetchAPI<KlinesResponse>(query, forceReload ? { cacheMode: 'reload' } : undefined)
+        if (cancelled || gen !== klGenRef.current) return
         setLiveBar(res.live_bar ?? null)
         const kl = res.klines || []
         /*
@@ -1192,13 +1238,10 @@ export default function KlineChart(props: {
          * 摘要(`pickChanSnapshot`)同样是针对原始响应的。一旦这里报 not ok, 结构与图上蜡烛
          * 就不是同一批数据 —— 图层拒绝绘制并说明原因(见 `auditBarsTransform` 头注)。
          */
-        if (chanInstrument) {
-          const audit = auditBarsTransform(kl)
-          const snapshot = pickChanSnapshot(res, { instrument: chanInstrument, interval: reqInterval })
-          setChanBinding({ instrument: chanInstrument, interval: reqInterval, days, audit, snapshot })
-        } else {
-          setChanBinding(null)
-        }
+        const chanAudit = chanInstrument ? auditBarsTransform(kl) : null
+        const chanSnapshot = chanInstrument
+          ? pickChanSnapshot(res, { instrument: chanInstrument, interval: reqInterval })
+          : null
         // 2026-09-05: 过滤 OHLC 含 null/NaN 的行(周末/预测拼接数据常有空值，
         // lightweight-charts setData 遇 null 直接抛 Value is null 全页崩)。
         const valid = kl.filter(
@@ -1247,15 +1290,41 @@ export default function KlineChart(props: {
         }))
         chartRef.current?.timeScale().fitContent()
         setDataLen(valid.length)
+        /*
+         * 绑定**在本代数据真正落图之后**才成立, 且必须自证身份(symbol/market/instrument)与代次:
+         *  - 代次: 期间若又开了新一轮 load(切股/切周期/重读), `klGenRef` 已变 —— 这份摘要
+         *    配的不是图上现在那批蜡烛, 一律不作绑定;
+         *  - 身份: 摘要再往下走会被拿去请求 `/klines/{symbol}/chan-structure`, 只带
+         *    instrument/interval 是不够的(切股瞬间 props 已变、state 还是旧的) —— 那正是
+         *    "拿 A 的摘要请求 B 的结构"的入口。
+         */
+        if (chanAudit && chanSnapshot && gen === klGenRef.current) {
+          setChanBinding({
+            symbol: props.symbol,
+            market: props.market,
+            instrument: chanInstrument as 'stock' | 'index',
+            interval: reqInterval,
+            days,
+            generation: gen,
+            audit: chanAudit,
+            snapshot: chanSnapshot,
+          })
+        } else {
+          setChanBinding(null)
+        }
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : '加载K线失败')
+        if (!cancelled && gen === klGenRef.current) {
+          const message = e instanceof Error ? e.message : '加载K线失败'
+          setError(message)
           setDataLen(0)
           // 加载失败 ⇒ 这张图上没有任何可定位的 K 线：ref 一并清掉，避免后续 effect
           // 拿半截/旧的 K 线给标注定位（复审阻断 ②）。
           rawKlinesRef.current = []
           rangeBarsRef.current = []
           seriesRef.current?.setData([])
+          // 缠论图层: **不许装等待** —— K 线不会自己再来, 必须报失败并给重试入口
+          setChanBinding(null)
+          setChanBarsFailure(message)
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -1265,7 +1334,7 @@ export default function KlineChart(props: {
     return () => {
       cancelled = true
     }
-  }, [props.symbol, props.market, props.instrument, chanInstrument, indexChart, interval, props.initialDays])
+  }, [props.symbol, props.market, props.instrument, chanInstrument, indexChart, interval, props.initialDays, chartReloadNonce])
 
   // ── 图层数据: 按需自取 summary(仅父未接管的分量才发请求) ────────
   useEffect(() => {
@@ -1342,7 +1411,31 @@ export default function KlineChart(props: {
       setChanView({ phase: 'not-daily' })
       return
     }
-    if (!chanBinding || chanBinding.interval !== '1d' || chanBinding.instrument !== chanInstrument) {
+    // K 线加载失败: 明确失败(不是"等待" —— 那份 K 线不会再来了), 并给重试入口
+    if (chanBarsFailure) {
+      chanSeqRef.current += 1
+      setChanView({
+        phase: 'bars-failed',
+        detail: `图表 K 线加载失败（${chanBarsFailure}），结构与这张图无从绑定，未请求；可点「重读图表」重试`,
+      })
+      return
+    }
+    /*
+     * 绑定必须**同时**满足三件事才允许发请求(切股/切周期瞬间的缝就在这里):
+     *  - 身份: `chanBinding.symbol/market` 与当前 props 一致;
+     *  - 代次: `generation` 等于当前 `klGenRef` —— 说明它就是图上这批蜡烛的摘要;
+     *  - 口径: instrument/interval 与当前图一致。
+     * 旧写法只比 instrument/interval, 而 state 更新是异步的: 切股那一帧 props 已是 B,
+     * `chanBinding` 还是 A 的 ⇒ 直接把 A 的摘要发给 `/klines/B/chan-structure`。
+     */
+    if (
+      !chanBinding ||
+      chanBinding.symbol !== props.symbol ||
+      chanBinding.market !== props.market ||
+      chanBinding.generation !== klGenRef.current ||
+      chanBinding.interval !== '1d' ||
+      chanBinding.instrument !== chanInstrument
+    ) {
       chanSeqRef.current += 1
       setChanView({ phase: 'awaiting-bars' })
       return
@@ -1361,59 +1454,42 @@ export default function KlineChart(props: {
     }
 
     const seq = ++chanSeqRef.current
-    const ctrl = new AbortController()
     setChanView({ phase: 'loading' })
     const url =
-      `/klines/${encodeURIComponent(props.symbol)}/chan-structure` +
-      `?market=${encodeURIComponent(props.market)}` +
+      `/klines/${encodeURIComponent(chanBinding.symbol)}/chan-structure` +
+      `?market=${encodeURIComponent(chanBinding.market)}` +
       `&instrument=${chanBinding.instrument}` +
       `&interval=1d&days=${chanBinding.days}` +
       `&snapshot=${encodeURIComponent(digest)}`
-    fetchAPI<unknown>(url, { signal: ctrl.signal, timeoutMs: SUMMARY_TIMEOUT_MS })
-      .then((payload) => {
-        if (seq !== chanSeqRef.current) return // 已被更新的目标接管: 迟到响应丢弃
-        const structure = normalizeChanStructure(payload)
-        if (!structure) {
-          setChanView({
-            phase: 'no-snapshot',
-            detail: '结构响应缺少可校验的快照摘要或分型序列, 已拒绝绘制',
-          })
-          return
-        }
-        // 回验: 结构必须声明"算的就是本次请求的那份摘要/那个标的"
-        if (structure.snapshotDigest !== digest) {
-          setChanView({
-            phase: 'snapshot-mismatch',
-            detail: '结构响应回传的快照摘要与本次请求不一致',
-          })
-          return
-        }
-        if (structure.symbol && structure.symbol !== props.symbol) {
-          setChanView({
-            phase: 'snapshot-mismatch',
-            detail: `结构响应属于 ${structure.symbol}, 不是当前图 ${props.symbol}`,
-          })
-          return
-        }
-        if (structure.instrument && structure.instrument !== chanBinding.instrument) {
-          setChanView({
-            phase: 'snapshot-mismatch',
-            detail: `结构响应自述标的类型(${structure.instrument})与当前图(${chanBinding.instrument})不一致`,
-          })
-          return
-        }
-        setChanView({ phase: 'ready', structure })
-      })
-      .catch((err: unknown) => {
-        if (seq !== chanSeqRef.current) return
-        const name = (err as { name?: string } | null)?.name
-        if (name === 'AbortError') return // 主动取消: 不写状态(下一轮已经接管)
+    /*
+     * 请求走 `startChanRequest`(自己的计时器 + 自己的 AbortController):
+     * `fetchAPI` 在**传了 signal** 时不会建超时计时器(`timeoutMs` 被忽略), 旧写法因此
+     * 在后端卡住时永远停在 loading。取消/超时/成功一律 settle 一次 → 状态机一定离开 loading。
+     */
+    const req = startChanRequest({
+      timeoutMs: CHAN_STRUCTURE_TIMEOUT_MS,
+      request: (signal) => fetchAPI<unknown>(url, { signal }),
+    })
+    void req.result.then((outcome) => {
+      if (seq !== chanSeqRef.current) return // 已被更新的目标接管: 迟到结果丢弃
+      if (outcome.state === 'aborted') return // 主动取消(切股/关图层/unmount): 不写状态
+      if (outcome.state === 'timeout') {
+        setChanView({
+          phase: 'error',
+          status: null,
+          detail: `缠论结构请求超时（${outcome.timeoutMs}ms 未返回，已取消）: 可点「重读图表」重试`,
+        })
+        return
+      }
+      if (outcome.state === 'error') {
+        const err = outcome.error
         const statusRaw = Number((err as { status?: unknown } | null)?.status)
         const status = Number.isFinite(statusRaw) && statusRaw > 0 ? statusRaw : null
         const detail = err instanceof Error && err.message ? err.message : '缠论结构取数失败'
         if (status === 409) {
           // 409 = 服务端用同一份取数重算摘要后发现"图已经变了"。这是**诚实结果**:
-          // 不能拿旧结构继续画, 也不能悄悄重试到用户以为"就是这张图"。
+          // 不能拿旧结构继续画, 也不能悄悄自动重试(会把"图变了"变成静默打转)。
+          // 给用户一个明确动作: 重读图表主数据 → 拿到新摘要 → 再请求一次。
           setChanView({ phase: 'snapshot-mismatch', detail: `图表快照已变化(409): ${detail}` })
           return
         }
@@ -1422,11 +1498,46 @@ export default function KlineChart(props: {
           status,
           detail: `缠论结构取数失败${status ? `(HTTP ${status})` : ''}: ${detail}`,
         })
-      })
+        return
+      }
+      const payload = outcome.payload
+      const structure = normalizeChanStructure(payload)
+      if (!structure) {
+        setChanView({
+          phase: 'no-snapshot',
+          detail: '结构响应缺少可校验的快照摘要或分型序列, 已拒绝绘制',
+        })
+        return
+      }
+      // 回验: 结构必须声明"算的就是本次请求的那份摘要/那个标的"
+      if (structure.snapshotDigest !== digest) {
+        setChanView({
+          phase: 'snapshot-mismatch',
+          detail: '结构响应回传的快照摘要与本次请求不一致',
+        })
+        return
+      }
+      if (structure.symbol && structure.symbol !== chanBinding.symbol) {
+        setChanView({
+          phase: 'snapshot-mismatch',
+          detail: `结构响应属于 ${structure.symbol}, 不是当前图 ${chanBinding.symbol}`,
+        })
+        return
+      }
+      if (structure.instrument && structure.instrument !== chanBinding.instrument) {
+        setChanView({
+          phase: 'snapshot-mismatch',
+          detail: `结构响应自述标的类型(${structure.instrument})与当前图(${chanBinding.instrument})不一致`,
+        })
+        return
+      }
+      setChanView({ phase: 'ready', structure })
+    })
     return () => {
-      ctrl.abort()
+      // 依赖变化(切股/切周期/关图层/重读图表)与 unmount 都取消在途请求: 不白占连接池, 不落状态
+      req.cancel()
     }
-  }, [showChanLayer, chanInstrument, chanBinding, interval, props.symbol, props.market])
+  }, [showChanLayer, chanInstrument, chanBinding, interval, props.symbol, props.market, chanBarsFailure])
 
   // ── K线形态标注自取(2026-10-10) ─────────────────────────────
   // 数据源: GET /klines/{symbol}/patterns(与主图 /klines/{symbol} 同源同口径, 标注与 K 线对齐)。
@@ -1789,6 +1900,9 @@ export default function KlineChart(props: {
       markers.push(m)
     }
     return { markers, skipped }
+    // dataLen 必须留: K 线集合（rawKlinesRef）变了要重新判断"这一天在图上还有没有柱子"，
+    // 但 ref 变化不会触发重算 —— 由 dataLen 充当这次重算的信号（eslint 看不到这层关系）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showChanLayer, chanView, interval, dataLen])
 
   // ── L4 事件 markers + 支撑压力位 price lines + 资金柱 (阶段二+三) ──
@@ -2674,6 +2788,7 @@ export default function KlineChart(props: {
             className={
               chanView.phase === 'snapshot-mismatch' ||
               chanView.phase === 'bars-unreliable' ||
+              chanView.phase === 'bars-failed' ||
               chanView.phase === 'error'
                 ? 'text-amber-600 dark:text-amber-400'
                 : undefined
@@ -2683,6 +2798,21 @@ export default function KlineChart(props: {
           </span>
           {chanView.phase === 'bars-unreliable' && (
             <span className="text-muted-foreground">（原因码 {chanView.audit.issue}）</span>
+          )}
+          {/* 恢复动作(2026-11-17): 409 / 超时 / K线加载失败都必须有**能点的下一步**,
+              而不是让用户对着"为什么没画"干等。重读主数据 → 跟新摘要再请求(不自动重试)。 */}
+          {(chanView.phase === 'snapshot-mismatch' ||
+            chanView.phase === 'error' ||
+            chanView.phase === 'bars-failed') && (
+            <button
+              type="button"
+              data-testid="chan-retry"
+              onClick={reloadChartAndRetry}
+              className="min-h-[24px] rounded border border-border px-2 py-0.5 text-[12px] text-foreground hover:bg-secondary"
+              title="重读图表主数据(绕缓存)并跟随新的快照摘要重新请求结构"
+            >
+              重读图表并重试
+            </button>
           )}
         </div>
       )}
