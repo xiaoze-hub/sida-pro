@@ -37,9 +37,22 @@ symbol/market/instrument/interval + 每根 bar 的日期与完整 OHLC + 数据�
 * 只接受 CN / 1d / 显式 stock|index; 其他市场、其他周期一律 422, 不做猜测。
 * ``source`` 只回传响应自述的来源, 缺省 ``unknown``; ``adjustment`` 恒为
   ``unknown``(本适配器无法证明复权口径), 不冒充。
-* 只输出合并K线**分型**(blocked/candidate/confirmed、发生日、确认日、规则版本)与
-  在**同一份**分型快照上算出的**笔**(端点位置/价格、状态、起点/终点、确认日、笔规则版本)。
-  不含线段/中枢/买卖点, 响应里 ``not_implemented`` 明写, 不允许被读成"中枢"。
+* 只输出合并K线**分型**(blocked/candidate/confirmed、发生日、确认日、规则版本)、
+  在**同一份**分型快照上算出的**笔**、以及在同一份笔快照上算出的**线段**与
+  **操作口径中枢**(operational centre)。不含买卖点、严格中枢、走势类型, 响应里
+  ``not_implemented`` 明写, 不允许被读成"中枢/买卖点都有了"。
+* 线段来自 ``chan_segment.segment_from_pens``(内核 ``chan-segment-v2``), 输入就是产出
+  ``pens`` 的那个 ``PenSnapshot``; 只把 **confirmed 前缀**当几何对外, 尾部 candidate
+  单列并标 ``driftable``(终点仍可漂移), ``pending``/``blocked`` 单列并保留内核原因。
+  ``blocked`` **不提供价格几何**(``geometry_withheld``), 否则会被画成一条线并喂成中枢。
+  证据笔(特征序列)与几何跨度分开给出: 证据笔通常落在终点之后, 两套集合分别计数。
+* 操作口径中枢来自 ``chan_centre_adapter.centre_from_segment_snapshot``: 原样透传
+  ``basis='segment_a0'`` / ``strictness='operational_not_strict'`` / ``status`` /
+  ``chain_complete`` / ``issues`` / ``limitations``。它**不是**「中枢」, 更**不是**
+  「严格中枢」(第18课定义未实现); ``not_enough_confirmed_segments`` 只表示"还没凑够",
+  绝不显示成「无中枢」; ``no_centre`` 才是实测无交集。
+* 线段/中枢与分型/笔同属一次 ``get_klines`` 的同一份快照: 摘要仍只算一次, 不二次取数、
+  不另写摘要。任一环节(内核/适配器/自洽性/来源)不符 → 409 整份失败, 不返回半份结果。
 * 笔由 ``chan_pen.pen_from_snapshot`` 计算, 输入就是产出 ``fractals`` 的那个
   ``ChanSnapshot`` 对象: 一次 ``get_klines``、一次 ``build_chan_structure``, 绝不为笔
   二次取数或按参数重算。笔的每个端点都必须能对回本响应的已确认分型(同合并索引/同日/
@@ -67,6 +80,14 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.core.chan_centre_adapter import (
+    ADAPTER_VERSION as CENTRE_ADAPTER_VERSION,
+    BASIS as OPERATIONAL_CENTRE_BASIS,
+    LIMITATIONS as OPERATIONAL_CENTRE_LIMITATIONS,
+    STRICTNESS as OPERATIONAL_CENTRE_STRICTNESS,
+    CentreAdapterResult,
+    centre_from_segment_snapshot,
+)
 from src.core.chan_kline_adapter import adapt_chart_bars
 from src.core.chan_pen import (
     MIN_INDEX_GAP,
@@ -74,6 +95,15 @@ from src.core.chan_pen import (
     PenEndpoint,
     PenSnapshot,
     pen_from_snapshot,
+)
+from src.core.chan_segment import (
+    MIN_PENS,
+    SEGMENT_KERNEL_VERSION,
+    Segment,
+    SegmentBinding,
+    SegmentSnapshot,
+    segment_from_pens,
+    segment_input_digest,
 )
 from src.core.chan_structure import ChanSnapshot, build_chan_structure
 from src.db.models import User
@@ -94,14 +124,25 @@ CHAN_FRACTAL_RULES_VERSION = "chan-fractal-inclusive-sealed-v1"
 #: 就会把两套规则当成同一套。间距(MIN_INDEX_GAP)=4 根合并K线 + 顶包络高于底包络
 #: + 反向分型封口才冻结, 详见 `src/core/chan_pen.py`。
 CHAN_PEN_RULES_VERSION = PEN_KERNEL_VERSION
+#: 线段规则版本: 直接取内核常量(同 `CHAN_PEN_RULES_VERSION` 的理由 —— 两处字面量
+#: 一旦漂移, 客户端就会把两套规则当成同一套)。
+CHAN_SEGMENT_RULES_VERSION = SEGMENT_KERNEL_VERSION
+#: 线段块/操作口径中枢块的 schema 版本号。新增字段属于**可选**扩展, 但版本号必须跟着
+#: 语义走: 客户端可以据此判断"这份响应里的 segments/operational_centre 是什么口径"。
+SEGMENTS_SCHEMA = "sida-chan-segments-v1"
+OPERATIONAL_CENTRE_SCHEMA = "sida-chan-operational-centre-v1"
 #: 只有完整 64 位小写十六进制才接受; 截短/大写/非十六进制一律 422(不"修正")。
 _DIGEST_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 #: 身份依据: 响应布尔 is_index / 显式 stock 取数路径；均非独立证券主数据核验。
 IdentityBasis = Literal["response_flag", "declared_path"]
 
 _NOT_IMPLEMENTED: tuple[str, ...] = (
-    "segment",        # 线段
-    "centre",         # 中枢
+    # 线段只实现第67课**第一种情况**(无缺口); 以下仍是明确未实现, 不许被读成"都有了"
+    "segment_case2_gap",
+    "segment_destruction_repartition",
+    # 操作口径中枢不是第18课的严格中枢定义, 也不做延伸/多中枢/级别升级/走势类型
+    "strict_centre_18th_lesson_definition",
+    "centre_extension_multi_centre_level_upgrade",
     "buy_sell_point",  # 买卖点
     "multi_level_recursion",
 )
@@ -482,6 +523,413 @@ def _pen_consistency_error(pens: PenSnapshot, structure: ChanSnapshot) -> str | 
     return None
 
 
+# ── 线段(segment) + 操作口径中枢(operational centre) ──────────────────────
+
+#: 每个状态的对外说明: 措辞本身是契约的一部分 —— 「不够」不许说成「无」, 「操作口径」
+#: 不许说成「中枢」/「严格中枢」。
+_STATUS_NOTES: dict[str, str] = {
+    "centre": (
+        "已由前 3 条已确认线段测出操作口径区间(zd/zg); 这是 basis=segment_a0 / "
+        "strictness=operational_not_strict 的几何, 不是「中枢」, 也不是「严格中枢」"
+    ),
+    "no_centre": (
+        "实测结果: 前 3 条已确认线段的区间没有严格正宽度交集(measured absence), "
+        "不是缺少数据, 也不是等一等就会出现"
+    ),
+    "not_enough_confirmed_segments": (
+        "已确认线段不足 3 条, 尚不能给出任何中枢结论; 这**不等于**「无中枢」, "
+        "也不等于「中枢未形成」—— 等更多线段确认是唯一出路"
+    ),
+    "blocked_before_centre": (
+        "线段内核在凑够 3 条已确认线段之前就拒绝出版(blocked), 数据不完整; "
+        "既不说有中枢, 也不说无中枢"
+    ),
+}
+
+_CENTRE_LABEL_NOTE = (
+    "字段名 operational_centre 指 basis=segment_a0 / strictness=operational_not_strict "
+    "的操作口径几何(前 3 条已确认线段区间之交); 不是「中枢」, 不是「严格中枢」"
+    "(第18课定义未实现), 不是买卖点, 不构成交易信号"
+)
+
+_SEGMENT_NOTE = (
+    "线段=chan-segment-v2 第67课第一种情况(无缺口)的规则几何; 只有 confirmed 前缀可当"
+    "几何使用, 尾部 candidate 终点仍可漂移, blocked/pending 是内核拒绝出版, 不提供价格几何; "
+    "证据笔(特征序列)与几何跨度是两套集合, 分别计数"
+)
+
+
+def _segment_endpoint_payload(endpoint) -> dict:
+    return {
+        "kind": endpoint.kind,
+        "pen_index": endpoint.pen_index,
+        "merged_index": endpoint.merged_index,
+        "position_day": endpoint.position_day,
+        "price": endpoint.price,
+        "status": endpoint.status,
+        "confirmed_on": endpoint.confirmed_on,
+        "revisions": endpoint.revisions,
+        "drift_days": list(endpoint.drift_days),
+    }
+
+
+def _segment_geometry_payload(segment: Segment) -> dict:
+    """只放**几何跨度**: 笔区间 + 两端点。证据笔不在这里(见 evidence)。"""
+    return {
+        "direction": segment.direction,
+        "pen_start_index": segment.pen_start_index,
+        "pen_end_index": segment.pen_end_index,
+        "pens_used": segment.pens_used,
+        "start": _segment_endpoint_payload(segment.start),
+        "end": _segment_endpoint_payload(segment.end),
+    }
+
+
+def _segment_evidence_payload(segment: Segment) -> dict:
+    """特征序列(证据笔): 与几何跨度分开, 右元素通常落在终点之后。"""
+    return {
+        "pen_indices": list(segment.evidence_pen_indices),
+        "confirmed_on": segment.evidence_confirmed_on,
+        "fractal_elements": [
+            {
+                "role": element.role,
+                "pen_indices": list(element.pen_indices),
+                "high": element.high,
+                "low": element.low,
+                "confirmed_on": element.confirmed_on,
+            }
+            for element in segment.evidence
+        ],
+        "note": (
+            "证据笔=支撑该线段成立的特征序列笔, 不等于几何跨度内的笔"
+            "(右元素在终点之后); 二者分别计数, 不许合并"
+        ),
+    }
+
+
+def _confirmed_segment_payload(index: int, segment: Segment) -> dict:
+    return {
+        "index": index,
+        "status": "confirmed",
+        "reason": segment.reason,
+        "confirmed_on": segment.confirmed_on,
+        "kernel_version": segment.kernel_version,
+        "characteristic_elements": segment.characteristic_elements,
+        "geometry": _segment_geometry_payload(segment),
+        "evidence": _segment_evidence_payload(segment),
+    }
+
+
+def _candidate_segment_payload(index: int, segment: Segment) -> dict:
+    return {
+        "index": index,
+        "status": "candidate",
+        "reason": segment.reason,
+        "confirmed_on": None,
+        # 尾部候选的终点仍可漂移: 明确标注, 免得被当成已确认几何
+        "driftable": True,
+        "note": "尾部候选线段: 终点价格仍可漂移, 不是已确认几何, 不得当作中枢输入",
+        "kernel_version": segment.kernel_version,
+        "characteristic_elements": segment.characteristic_elements,
+        "geometry": _segment_geometry_payload(segment),
+        "evidence": _segment_evidence_payload(segment),
+    }
+
+
+def _blocked_segment_payload(index: int, segment: Segment) -> dict:
+    """blocked = 内核拒绝出版线段。**不提供价格几何**: 一旦给区间就会被画成线。"""
+    return {
+        "index": index,
+        "status": "blocked",
+        "reason": segment.reason,
+        "direction": segment.direction,
+        "pen_start_index": segment.pen_start_index,
+        "pen_end_index": segment.pen_end_index,
+        "pens_used": segment.pens_used,
+        "geometry_withheld": True,
+        "note": "内核拒绝出版该线段(blocked): 不提供价格区间, 不得作为几何/中枢输入",
+    }
+
+
+def _pending_payload(pending) -> dict:
+    return {
+        "status": pending.status,
+        "reason": pending.reason,
+        "direction": pending.direction,
+        "pen_start_index": pending.pen_start_index,
+        # 只有"对某个跨度下判断"的拒绝才有 would-be 终点; 决策笔拒绝时恒为 None
+        "end_pen_index": pending.end_pen_index,
+        "blocked_at_pen_index": pending.blocked_at_pen_index,
+        "pens_used": pending.pens_used,
+        "confirmed_pens": pending.confirmed_pens,
+        # 审计用: 这条链起点当时是什么, 不是一条线段的端点几何
+        "audit": {
+            "start_position_day": pending.start_position_day,
+            "start_price": pending.start_price,
+        },
+        "detail": pending.detail,
+        "note": "pending 不是线段: 没有几何可画, 只报告内核拒绝的原因与位置",
+    }
+
+
+def build_segments_payload(segment_snapshot: SegmentSnapshot) -> dict:
+    """线段快照 → 对外块: confirmed 前缀(几何) + 候选尾(可漂移) + pending/blocked(原因)。
+
+    ``blocked`` 不携带价格几何; ``evidence`` 与 ``geometry`` 分开。任何"状态与位置
+    自相矛盾"的快照(confirmed 出现在非 confirmed 之后、confirmed 却带着拒绝原因、
+    候选不在尾部)都抛 ``ValueError``, 由端点整份 409 —— 不返回"看起来完整"的混合结果。
+    """
+    if not isinstance(segment_snapshot, SegmentSnapshot):
+        raise ValueError("segment_snapshot must be a SegmentSnapshot")
+    if segment_snapshot.kernel_version != SEGMENT_KERNEL_VERSION:
+        raise ValueError(
+            f"segment snapshot kernel {segment_snapshot.kernel_version!r} is not "
+            f"{SEGMENT_KERNEL_VERSION!r}"
+        )
+
+    confirmed: list[dict] = []
+    blocked: list[dict] = []
+    candidate_tail: dict | None = None
+    seen_non_confirmed = False
+    for index, segment in enumerate(segment_snapshot.segments):
+        if segment.status == "confirmed":
+            if seen_non_confirmed:
+                raise ValueError(
+                    f"confirmed segment at index {index} appears after a non-confirmed one; "
+                    "the confirmed prefix must be the leading run"
+                )
+            if segment.reason != "first_case_no_gap":
+                raise ValueError(
+                    f"segment {index} claims confirmed with reason {segment.reason!r}; "
+                    "the kernel never emits that, so this snapshot is doctored"
+                )
+            confirmed.append(_confirmed_segment_payload(index, segment))
+            continue
+        seen_non_confirmed = True
+        if segment.status == "candidate":
+            if index != len(segment_snapshot.segments) - 1:
+                raise ValueError(f"candidate segment {index} is not the tail")
+            candidate_tail = _candidate_segment_payload(index, segment)
+        elif segment.status == "blocked":
+            blocked.append(_blocked_segment_payload(index, segment))
+        else:  # pragma: no cover - the kernel's Literal already forbids this
+            raise ValueError(f"segment {index} has unknown status {segment.status!r}")
+
+    prefix = segment_snapshot.confirmed_segments
+    if len(prefix) != len(confirmed) or any(
+        left is not right for left, right in zip(prefix, segment_snapshot.segments[: len(prefix)])
+    ):
+        # 前缀必须是**对象相同**的前导连续段: 数一下长度不够, 还要位置一致。
+        raise ValueError(
+            "confirmed_segments is not the leading run of this snapshot's segments; "
+            "refusing to publish a prefix that skips a refusal"
+        )
+
+    counts = {
+        "confirmed": len(confirmed),
+        "candidate": 0 if candidate_tail is None else 1,
+        "blocked": len(blocked),
+        "pending": len(segment_snapshot.pending),
+        "total": len(segment_snapshot.segments),
+    }
+    if counts["confirmed"] + counts["candidate"] + counts["blocked"] != counts["total"]:
+        raise ValueError("segment counts do not add up; the snapshot is inconsistent")
+
+    return {
+        "schema": SEGMENTS_SCHEMA,
+        "kernel_version": segment_snapshot.kernel_version,
+        "rules_version": segment_snapshot.kernel_version,
+        "source_pen_kernel_version": segment_snapshot.source_pen_kernel_version,
+        "as_of_day": segment_snapshot.as_of_day,
+        "input_digest": segment_snapshot.input_digest,
+        "min_pens": MIN_PENS,
+        # 几何: 只给 confirmed 前缀
+        "confirmed": confirmed,
+        # 尾部候选: 明确 driftable, 不是几何
+        "candidate_tail": candidate_tail,
+        # 拒绝/未决: 原因 + 位置, blocked 无价格几何
+        "pending": [_pending_payload(p) for p in segment_snapshot.pending],
+        "blocked": blocked,
+        "rejections": [
+            {
+                "pen_index": rejection.pen_index,
+                "position_day": rejection.position_day,
+                "price": rejection.price,
+                "reason": rejection.reason,
+                "detail": rejection.detail,
+                "audit_only": True,
+            }
+            for rejection in segment_snapshot.rejections
+        ],
+        "counts": counts,
+        "note": _SEGMENT_NOTE,
+    }
+
+
+def build_operational_centre_payload(result: CentreAdapterResult) -> dict:
+    """适配器结果 → 对外块。``basis``/``strictness``/``status``/``issues`` 原样透传。
+
+    ``zone is None`` 有四种含义, 由 ``status`` + ``status_note`` 区分: 实测无交集
+    (``no_centre``)、还没凑够线段(``not_enough_confirmed_segments``)、内核在该点之前
+    就拒绝出版(``blocked_before_centre``)。任何一种都不许被写成「中枢」。
+    """
+    if not isinstance(result, CentreAdapterResult):
+        raise ValueError("result must be a CentreAdapterResult")
+    if result.basis != OPERATIONAL_CENTRE_BASIS or result.strictness != OPERATIONAL_CENTRE_STRICTNESS:
+        raise ValueError(
+            f"centre adapter labels {result.basis!r}/{result.strictness!r} are not "
+            f"{OPERATIONAL_CENTRE_BASIS!r}/{OPERATIONAL_CENTRE_STRICTNESS!r}; refusing to republish them"
+        )
+    if result.status not in _STATUS_NOTES:  # pragma: no cover - Literal-guarded upstream
+        raise ValueError(f"unknown operational centre status {result.status!r}")
+    if tuple(result.limitations) != OPERATIONAL_CENTRE_LIMITATIONS:
+        # 限制清单是内核契约的一部分: 漂移了就不许再声称"原样透传"。
+        raise ValueError("centre adapter limitations drifted from the kernel contract")
+
+    centre = result.centre
+    if (result.status == "centre") != (centre is not None):
+        raise ValueError(
+            f"status {result.status!r} disagrees with whether a centre exists; refusing to publish"
+        )
+
+    zone = None
+    if centre is not None:
+        zone = {"zd": centre.zd, "zg": centre.zg, "width": centre.zg - centre.zd}
+
+    source = result.source
+    return {
+        "schema": OPERATIONAL_CENTRE_SCHEMA,
+        "adapter_version": result.adapter_version,
+        "input_kind": result.input_kind,
+        "centre_input_kind": result.centre_input_kind,
+        "segments_engine": result.segments_engine,
+        # ↓↓↓ 以下五项必须原样透传, 任何改名都会被读成更强的结论
+        "basis": result.basis,
+        "strictness": result.strictness,
+        "status": result.status,
+        "chain_complete": result.chain_complete,
+        "limitations": list(result.limitations),
+        "as_of_day": source.as_of_day,
+        "absence_reason": result.absence_reason,
+        "confirmed_prefix_length": result.confirmed_prefix_length,
+        "total_segments": result.total_segments,
+        "zone": zone,
+        "segment_indices": None if centre is None else list(centre.segment_indices),
+        "structure_start_day": None if centre is None else centre.structure_start_day,
+        "structure_start_price": None if centre is None else centre.structure_start_price,
+        "confirmed_on": None if centre is None else centre.confirmed_on,
+        "visible_on": result.visible_on,
+        "lifecycle_status": result.lifecycle_status,
+        "issues": [
+            {
+                "reason": issue.reason,
+                "detail": issue.detail,
+                "blocking": issue.blocking,
+                "segment_index": issue.segment_index,
+                "pen_index": issue.pen_index,
+            }
+            for issue in result.issues
+        ],
+        "source": {
+            "symbol": source.symbol,
+            "adjust": source.adjust,
+            "pen_digest": source.pen_digest,
+            "segment_kernel": source.segment_kernel,
+            "pen_kernel": source.pen_kernel,
+        },
+        "status_note": _STATUS_NOTES[result.status],
+        "label_note": _CENTRE_LABEL_NOTE,
+    }
+
+
+def build_segment_snapshot(pen_snapshot: PenSnapshot, *, symbol: str) -> SegmentSnapshot:
+    """在**同一个**笔快照上算线段: 不取数、不重算分型/笔。
+
+    ``adjust='unknown'`` 与响应里的 ``adjustment='unknown'`` 同源: 本适配器无法证明
+    复权口径, 于是声明未知, 绝不冒充 none/qfq/hfq。``as_of_day`` 直接取笔快照的截止日
+    (内核会拒绝不一致的绑定)。
+    """
+    binding = SegmentBinding(
+        symbol=symbol,
+        adjust="unknown",
+        as_of_day=pen_snapshot.as_of_day,
+    )
+    return segment_from_pens(pen_snapshot, binding=binding)
+
+
+def _segment_consistency_error(
+    segment_snapshot: SegmentSnapshot,
+    pen_snapshot: PenSnapshot,
+    structure: ChanSnapshot,
+    *,
+    symbol: str,
+) -> str | None:
+    """线段块是否与本次分型/笔快照同源且自洽; ``None`` = 自洽, 否则返回诊断(仅进日志)。"""
+    if segment_snapshot.kernel_version != CHAN_SEGMENT_RULES_VERSION:
+        return f"segment kernel {segment_snapshot.kernel_version!r}"
+    if segment_snapshot.source_pen_kernel_version != pen_snapshot.kernel_version:
+        return "segment snapshot was not derived from this pen kernel"
+    if segment_snapshot.as_of_day != structure.as_of_day or pen_snapshot.as_of_day != structure.as_of_day:
+        return (
+            f"as_of mismatch: segments {segment_snapshot.as_of_day!r}, pens "
+            f"{pen_snapshot.as_of_day!r}, structure {structure.as_of_day!r}"
+        )
+    if segment_snapshot.input_digest != segment_input_digest(pen_snapshot):
+        return "segment input_digest is not this pen series"
+    if segment_snapshot.binding.symbol != symbol or segment_snapshot.binding.adjust != "unknown":
+        return (
+            f"segment binding {segment_snapshot.binding.symbol!r}/"
+            f"{segment_snapshot.binding.adjust!r} is not {symbol!r}/unknown"
+        )
+
+    pens = pen_snapshot.pens
+    expected_start = 0
+    for position, segment in enumerate(segment_snapshot.confirmed_segments):
+        if segment.pen_start_index != expected_start:
+            return (
+                f"confirmed segment {position} starts at pen {segment.pen_start_index}, "
+                f"expected the contiguous chain start {expected_start}"
+            )
+        if not (0 <= segment.pen_start_index < len(pens) and segment.pen_end_index < len(pens)):
+            return f"confirmed segment {position} points outside the pen series"
+        start_pen = pens[segment.pen_start_index]
+        end_pen = pens[segment.pen_end_index]
+        if start_pen.status != "confirmed" or end_pen.status != "confirmed":
+            return f"confirmed segment {position} spans a pen that is not confirmed"
+        if (
+            start_pen.start.merged_index,
+            start_pen.start.position_day,
+            start_pen.start.price,
+            start_pen.start.kind,
+        ) != (
+            segment.start.merged_index,
+            segment.start.position_day,
+            segment.start.price,
+            segment.start.kind,
+        ):
+            return f"confirmed segment {position} start does not match its own start pen"
+        if (
+            end_pen.end.merged_index,
+            end_pen.end.position_day,
+            end_pen.end.price,
+            end_pen.end.kind,
+        ) != (
+            segment.end.merged_index,
+            segment.end.position_day,
+            segment.end.price,
+            segment.end.kind,
+        ):
+            return f"confirmed segment {position} end does not match its own end pen"
+        if segment.confirmed_on is None:
+            return f"confirmed segment {position} has no confirmation day"
+        if segment.confirmed_on <= segment.end.position_day:
+            return f"confirmed segment {position} was confirmed on its own end day"
+        if structure.as_of_day is not None and segment.confirmed_on > structure.as_of_day:
+            return f"confirmed segment {position} is confirmed after as_of_day"
+        expected_start = segment.pen_end_index + 1
+    return None
+
+
 # ── 端点 ────────────────────────────────────────────────────────────────
 
 
@@ -668,6 +1116,54 @@ def get_chan_structure(
 
     pens = [_pen_payload(pen) for pen in pen_snapshot.pens]
 
+    # ⑦ 线段: 输入就是上面那个 pen_snapshot —— 同一次取数 / 一次结构构建 / 一次笔,
+    #    不为线段二次取数, 也不重算分型或笔(重算会静默混用两份"各自自洽"的快照)。
+    try:
+        segment_snapshot = build_segment_snapshot(pen_snapshot, symbol=symbol)
+    except ValueError:
+        logger.warning("chan-segment 内核拒绝(%s): %s", symbol, "ValueError")
+        raise _reject(409, "线段内核拒绝在本次快照上计算; 请刷新图表") from None
+
+    segment_problem = _segment_consistency_error(
+        segment_snapshot, pen_snapshot, structure, symbol=symbol
+    )
+    if segment_problem is not None:
+        logger.warning("chan-segment 自洽性校验失败(%s): %s", symbol, segment_problem)
+        raise _reject(409, "线段与本次分型/笔快照不自洽, 拒绝返回半份结果; 请刷新图表") from None
+
+    try:
+        segments_block = build_segments_payload(segment_snapshot)
+    except ValueError as exc:
+        logger.warning("chan-segment payload 拒绝(%s): %s", symbol, type(exc).__name__)
+        raise _reject(409, "线段快照状态与位置自相矛盾, 请刷新图表") from None
+
+    # ⑧ 操作口径中枢: 适配器只吃**这一个**线段快照 + 产出它的同一份笔快照
+    #    (范围来自笔, 不是端点对); 任一侧不自洽就整份拒绝。
+    try:
+        centre_result = centre_from_segment_snapshot(
+            segment_snapshot, pen_snapshot=pen_snapshot
+        )
+    except ValueError as exc:
+        logger.warning("chan-centre 适配器拒绝(%s): %s", symbol, type(exc).__name__)
+        raise _reject(409, "操作口径中枢适配器拒绝本次线段快照, 请刷新图表") from None
+
+    # 适配器自述的来源必须就是这份快照: 标的 / 截止日 / 笔序列摘要 / 两个内核版本。
+    if (
+        centre_result.source.symbol != symbol
+        or centre_result.source.as_of_day != structure.as_of_day
+        or centre_result.source.pen_digest != segment_snapshot.input_digest
+        or centre_result.source.segment_kernel != CHAN_SEGMENT_RULES_VERSION
+        or centre_result.source.pen_kernel != pen_snapshot.kernel_version
+    ):
+        logger.warning("chan-centre 来源不一致(%s): 适配器结果不属于本次快照", symbol)
+        raise _reject(409, "操作口径中枢结果不属于本次快照, 拒绝返回; 请刷新图表") from None
+
+    try:
+        centre_block = build_operational_centre_payload(centre_result)
+    except ValueError as exc:
+        logger.warning("chan-centre payload 拒绝(%s): %s", symbol, type(exc).__name__)
+        raise _reject(409, "操作口径中枢标签自相矛盾, 请刷新图表") from None
+
     return {
         "symbol": symbol,
         "market": "CN",
@@ -698,10 +1194,23 @@ def get_chan_structure(
             "candidate": sum(1 for p in pens if p["status"] == "candidate"),
             "blocked": sum(1 for p in pens if p["status"] == "blocked"),
         },
+        # 线段: confirmed 前缀才是几何, 候选尾可漂移, blocked/pending 只给原因
+        "segments": segments_block,
+        # 操作口径中枢: basis=segment_a0 / strictness=operational_not_strict
+        "operational_centre": centre_block,
         "not_implemented": list(_NOT_IMPLEMENTED),
-        "disclaimer": "分型与笔均为合并K线上的规则几何; 不含线段/中枢/买卖点, 不构成交易建议",
+        "disclaimer": (
+            "分型、笔与线段均为合并K线/笔链上的规则几何; operational_centre 只是 "
+            "basis=segment_a0 的操作口径几何(不是「中枢」, 不是「严格中枢」), "
+            "不含买卖点, 不构成交易建议"
+        ),
         "pen_disclaimer": (
             "笔=相邻两个已确认分型的合法连接(规则几何): 已确认笔在反向分型右邻封口当日冻结, "
             "最后一笔为候选(candidate)且端点价格仍可漂移; 数据最终性与复权口径未知, 不是交易信号"
+        ),
+        "segment_disclaimer": (
+            "线段=chan-segment-v2 第67课第一种情况的规则几何: 只有 confirmed 前缀可当几何, "
+            "尾部候选终点仍可漂移, blocked/pending 不提供价格几何; "
+            "操作口径中枢不是严格中枢, 也不是买卖点/交易信号"
         ),
     }

@@ -176,6 +176,102 @@ def _fmt_pen(p: dict) -> str:
     return line
 
 
+_MAX_SEGMENTS = 6
+
+#: 操作口径中枢的状态 → 人话。措辞是契约: 「不够」不许写成「无」, 也不许叫「中枢」。
+_CENTRE_STATUS_TEXT = {
+    "centre": "已测出操作口径区间",
+    "no_centre": "实测无交集(measured absence, 不是缺少数据)",
+    "not_enough_confirmed_segments": "已确认线段不足 3 条, 不等于「无中枢」",
+    "blocked_before_centre": "线段内核此前已 blocked, 数据不完整, 不作结论",
+}
+
+
+def _fmt_segment(s: dict) -> str:
+    geometry = s.get("geometry") or {}
+    start = geometry.get("start") or {}
+    end = geometry.get("end") or {}
+    evidence = s.get("evidence") or {}
+    return (
+        f"- #{s.get('index')} {geometry.get('direction')} {s.get('status')} "
+        f"笔 {geometry.get('pen_start_index')}..{geometry.get('pen_end_index')} "
+        f"{start.get('position_day')}@{start.get('price')} → "
+        f"{end.get('position_day')}@{end.get('price')} "
+        f"确认日 {s.get('confirmed_on') or '未确认'} "
+        f"证据笔 {evidence.get('pen_indices')}"
+    )
+
+
+def _render_segments(segments: dict) -> list[str]:
+    """线段块 → 固定几行。blocked/pending 只给原因, 不给价格(不给就不会被画成线)。"""
+    counts = segments.get("counts") or {}
+    confirmed = list(segments.get("confirmed") or [])
+    lines = [
+        (
+            f"线段 {counts.get('total', len(confirmed))} 条"
+            f"(confirmed {counts.get('confirmed', len(confirmed))} / "
+            f"candidate {counts.get('candidate', 0)} / blocked {counts.get('blocked', 0)} / "
+            f"pending {counts.get('pending', 0)}) 内核 {segments.get('kernel_version')}: "
+            "只有 confirmed 前缀是几何"
+        )
+    ]
+    shown = confirmed[-_MAX_SEGMENTS:]
+    if len(confirmed) > len(shown):
+        lines.append(f"(共 {len(confirmed)} 条已确认, 仅列最近 {len(shown)} 条)")
+    lines.extend(_fmt_segment(s) for s in shown)
+    if not shown:
+        lines.append("- 没有已确认线段(空列表, 未用 0 冒充其他结论)")
+    tail = segments.get("candidate_tail")
+    if isinstance(tail, dict):
+        lines.append("候选尾部(可漂移, 不是几何): " + _fmt_segment(tail))
+    for entry in segments.get("blocked") or []:
+        lines.append(
+            f"- blocked #{entry.get('index')} 笔 {entry.get('pen_start_index')}.."
+            f"{entry.get('pen_end_index')} 原因 {entry.get('reason')} "
+            "(内核拒绝出版, 不提供价格几何)"
+        )
+    for entry in segments.get("pending") or []:
+        lines.append(
+            f"- pending {entry.get('status')} 原因 {entry.get('reason')} "
+            f"笔 {entry.get('pen_start_index')}..{entry.get('end_pen_index')} "
+            f"决策笔 {entry.get('blocked_at_pen_index')}"
+        )
+    return lines
+
+
+def _render_operational_centre(centre: dict) -> list[str]:
+    """操作口径中枢 → 固定几行。字段原样引用, 不新增方向判断, 不叫「中枢」。"""
+    zone = centre.get("zone")
+    zone_text = (
+        f"[{zone.get('zd')}, {zone.get('zg')}]" if isinstance(zone, dict) else "无区间"
+    )
+    status = str(centre.get("status") or "unknown")
+    lines = [
+        (
+            "操作口径中枢(operational): "
+            f"basis={centre.get('basis')} strictness={centre.get('strictness')} "
+            f"status={status} ({_CENTRE_STATUS_TEXT.get(status, '未知状态')}) "
+            f"区间 {zone_text} 确认日 {centre.get('confirmed_on') or '未确认'} "
+            f"可见于 {centre.get('visible_on') or '未知'} "
+            f"链路完整={centre.get('chain_complete')}"
+        ),
+        "口径: 这不是「中枢」, 也不是「严格中枢」(第18课定义未实现); 不是买卖点, 不是交易信号",
+    ]
+    issues = centre.get("issues") or []
+    if issues:
+        lines.append(
+            "问题: "
+            + "; ".join(
+                f"{i.get('reason')}{'(阻断)' if i.get('blocking') else '(非阻断)'}"
+                for i in issues
+            )
+        )
+    limitations = centre.get("limitations") or []
+    if limitations:
+        lines.append("限制: " + ", ".join(str(x) for x in limitations))
+    return lines
+
+
 def render_chan_structure(payload: dict, origin: str | None = None) -> str:
     """把端点返回的**统一结果**渲染成人话(字段逐项保留, 不做二次解释)。
 
@@ -237,6 +333,15 @@ def render_chan_structure(payload: dict, origin: str | None = None) -> str:
     if not shown_pens:
         lines.append("- 本份快照没有笔(空列表)")
 
+    # 线段/操作口径中枢: 端点新增块。旧载荷(或旧服务)没有这两个键时整段跳过,
+    # 不补默认值 —— "没给"不等于"没有线段/没有中枢"。
+    segments = payload.get("segments")
+    if isinstance(segments, dict) and segments:
+        lines.extend(_render_segments(segments))
+    centre = payload.get("operational_centre")
+    if isinstance(centre, dict) and centre:
+        lines.extend(_render_operational_centre(centre))
+
     not_implemented = payload.get("not_implemented") or []
     lines.append(
         "未实现(本工具不提供): " + ", ".join(str(x) for x in not_implemented)
@@ -248,6 +353,8 @@ def render_chan_structure(payload: dict, origin: str | None = None) -> str:
         lines.append(f"声明: {payload['disclaimer']}")
     if payload.get("pen_disclaimer"):
         lines.append(f"笔声明: {payload['pen_disclaimer']}")
+    if payload.get("segment_disclaimer"):
+        lines.append(f"线段声明: {payload['segment_disclaimer']}")
     return "\n".join(lines)
 
 
@@ -405,14 +512,18 @@ _CHAN_SCHEMA = {
         "name": "get_chan_structure",
         "description": (
             "【只读缠论结构·只用本轮图表快照】返回某份日线快照上的合并K线分型"
-            "(blocked/candidate/confirmed + 发生日/确认日/价格)与笔(端点/状态/确认日/规则版本)。"
+            "(blocked/candidate/confirmed + 发生日/确认日/价格)、笔(端点/状态/确认日/规则版本)、"
+            "线段(只给 confirmed 前缀几何; 尾部 candidate 可漂移; blocked/pending 只给原因)"
+            "与**操作口径中枢**(basis=segment_a0, strictness=operational_not_strict)。"
             "**不接受**你传入的摘要: 快照由客户端随本轮消息附上(`chan_snapshot.digest`), "
             "消息入口已用同一取数链重算摘要复核; 你只需按 system 里的"
             "【本轮图表快照（消息入口时已复核）】给出 symbol/instrument/days(与服务端复核结果一致)。"
             "本轮没有随附快照时(或你请求的 symbol 与本轮快照标的不是同一只)本工具直接拒绝, "
             "不得沿用上一轮摘要、不得用用户口述摘要替代、不得自己取一张新快照。"
             "严禁编造摘要或把「没拿到快照」写成「这张图没有结构」。"
-            "本工具只描述规则几何, 不含线段/中枢/买卖点, 不构成交易信号; "
+            "操作口径中枢**不是**「中枢」, 更不是「严格中枢」; 它也不是买卖点/交易信号, "
+            "不得据此给出买卖建议, 不得把 not_enough_confirmed_segments 说成「无中枢」。"
+            "本工具只描述规则几何, 不含买卖点, 不构成交易信号; "
             "失败/无数据/409 一律如实转述, 不得用猜测补齐。"
         ),
         "parameters": {
@@ -448,9 +559,10 @@ CHAN_TOOLS: tuple[tuple[str, dict, str, Any], ...] = (
         "get_chan_structure",
         _CHAN_SCHEMA,
         (
-            "图表日线快照(chan_snapshot.digest 绑定 bar 内容) → 合并K线分型/笔; "
+            "图表日线快照(chan_snapshot.digest 绑定 bar 内容) → 合并K线分型/笔/线段 + "
+            "操作口径中枢(basis=segment_a0, 非严格中枢); "
             "只认本轮消息随附且经服务端复核的快照(模型自带 digest 不接受); "
-            "adjustment=unknown, finality=unverified; 不含中枢/线段/买卖点"
+            "adjustment=unknown, finality=unverified; 不含买卖点"
         ),
         _tool_get_chan_structure,
     ),

@@ -9,6 +9,15 @@
 - `chain_complete` 重命名为 `terminal` 并收紧语义：只有 `centre`/`no_centre` 且**无任何 issue**（无候选尾、无 pending、无 blocked）才算闭合；0 段空快照与候选尾均为非 terminal。`describe()` 对 `no_centre` 也标 `INCOMPLETE` 并列出 kernel 原始原因。
 - 测试：更新受影响的中心区间/版本/terminal 断言，新增 6 类回归（伪造 1 笔段、0 段空快照、延伸日不提前、旧 no-centre 夹具在 bar 口径下变中心、bar 与枢轴矛盾、篡改端点日期/特征元素数/证据笔）。`test_chan_centre_adapter + segment + operational_centre + pen + structure` 共 233 passed [commit 待回填]
 
+### feat-缠论只读接口接入线段与操作口径中枢
+
+- `GET /api/klines/{symbol}/chan-structure` 在同一份图表快照上(同一次 `get_klines`、同一个分型/笔快照)新增 `segments`(内核 `chan-segment-v2`): 只把 **confirmed 前缀**当几何对外, 尾部 candidate 单列并标 `driftable`, `pending`/`blocked` 单列并保留内核原因; `blocked` 条目 `geometry_withheld=true`、**不提供价格几何**(避免被画成线并喂成中枢); 证据笔(特征序列)与几何跨度分开给出, 两套集合分别计数。
+- 同响应新增 `operational_centre`(适配器 `chan-centre-adapter-v1`): 原样透传 `basis=segment_a0` / `strictness=operational_not_strict` / `status` / `chain_complete` / `issues` / `limitations`, 明写"不是「中枢」, 不是「严格中枢」"; `not_enough_confirmed_segments` 不得显示成「无中枢」, `no_centre` 才是实测无交集, `blocked_before_centre` 与两者区分。
+- 分型/笔字段与摘要复核不变; 新增块各自带 schema 与内核/适配器版本号(可选扩展)。内核/适配器/自洽性/来源(as_of、笔序列摘要、标的)任一不符 → 409 整份失败, 不返回半份结果; 无摘要/身份不明确仍 422/409 fail-closed。
+- `not_implemented` 改为真实缺口: `segment_case2_gap`、`segment_destruction_repartition`、`strict_centre_18th_lesson_definition`、`centre_extension_multi_centre_level_upgrade`、`buy_sell_point`、`multi_level_recursion`(不再笼统写 segment/centre)。
+- 参谋工具渲染同源追加线段/操作口径中枢(措辞固定"不是中枢/不是严格中枢", 无新增方向判断); 不把 operational 中枢当买卖点或交易信号。
+- 新增 `tests/test_chan_snapshot_segments_api.py`: 真实 `bars→分型→笔→线段→适配器` 链路, 覆盖字段/标签/版本、候选可漂移、blocked 无几何、证据与跨度分离、409 跨标的不串、空与不足边界, 并对实际 engine 断言只连隔离 scratch SQLite。
+
 ### fix-缠论参谋同图归属改为封闭追问语法（词表退役）
 
 - 带图表快照的轮次不再用「纯追问词表 + 单字白名单」剥句子来判断"正文有没有点别的票"：那条路不可收敛（`万科怎么样` 里「万」被当虚词吞掉、「科」只剩一字被丢弃 ⇒ 整句判成纯追问，页面停在 600519 时把贵州茅台的结构答给了万科；补别名只能补上已知那只）。

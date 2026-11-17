@@ -372,14 +372,18 @@ def test_structure_matches_chart_snapshot_and_never_uses_current_bar(monkeypatch
         "symbol", "market", "instrument", "instrument_basis", "interval", "rules_version",
         "snapshot_digest", "as_of_day", "omitted_latest_reason", "source", "adjustment",
         "finality", "fractals", "counts", "not_implemented", "disclaimer",
-        # 笔(pen): 同一快照上的规则几何; 线段/中枢仍未实现(见 not_implemented)
+        # 笔(pen): 同一快照上的规则几何
         "pens", "pen_rules_version", "pen_counts", "pen_disclaimer",
+        # 线段(segment) + 操作口径中枢(operational centre): 同一快照上的新增块
+        "segments", "operational_centre", "segment_disclaimer",
     }
     assert set(body["fractals"][0]) == {
         "kind", "status", "position_day", "position_price", "confirmed_on"
     }
     assert all(f["status"] in {"blocked", "candidate", "confirmed"} for f in body["fractals"])
-    assert "centre" in body["not_implemented"]  # 中枢未实现, 明写而非暗示
+    # 严格中枢(第18课定义)未实现: 明写而非暗示; 操作口径中枢不许被读成它
+    assert "strict_centre_18th_lesson_definition" in body["not_implemented"]
+    assert "segment_case2_gap" in body["not_implemented"]
     assert body["adjustment"] == "unknown"  # 复权口径无法证明 → 如实 unknown
     assert body["finality"] == "unverified"
 
@@ -852,9 +856,12 @@ def test_pen_counts_and_not_implemented_stay_honest(monkeypatch, auth_headers):
     assert body["counts"]["confirmed"] == 4
     assert body["counts"]["candidate"] == 1
 
-    # 笔已接入 → 不再挂在 not_implemented; 线段/中枢仍必须明写未实现
+    # 笔/线段/操作口径中枢已接入 → 不再挂在 not_implemented; 严格中枢与买卖点仍必须明写
     assert "pen" not in body["not_implemented"]
-    assert {"segment", "centre"} <= set(body["not_implemented"])
+    assert "segment" not in body["not_implemented"]
+    assert {"strict_centre_18th_lesson_definition", "buy_sell_point"} <= set(
+        body["not_implemented"]
+    )
 
     # 口径诚实: 规则几何 + 候选可漂移 + 最终性/复权未知 + 非交易信号
     assert body["adjustment"] == "unknown"

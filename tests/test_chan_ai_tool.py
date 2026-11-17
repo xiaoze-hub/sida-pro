@@ -407,7 +407,14 @@ def test_real_chart_digest_returns_unified_structure(monkeypatch, db, users):
     assert "笔 3 笔" in text
     assert "up confirmed" in text and "→" in text
     assert f"内核 {PEN_KERNEL_VERSION}" in text
-    assert "未实现(本工具不提供): segment, centre, buy_sell_point" in text
+    # 线段与操作口径中枢已接入端点 → 工具同源渲染, 但口径必须写成"非严格中枢"
+    assert "线段 " in text and "chan-segment-v2" in text
+    assert "操作口径中枢(operational):" in text
+    assert "basis=segment_a0" in text and "strictness=operational_not_strict" in text
+    assert "不是「中枢」" in text and "不是「严格中枢」" in text
+    assert "未实现(本工具不提供): segment_case2_gap" in text
+    assert "strict_centre_18th_lesson_definition" in text
+    assert "segment, centre" not in text
     # 只展示前 8 位(完整摘要属于本轮凭据, 不许随工具结果落库)
     assert _short(digest) in text
     assert digest not in text
