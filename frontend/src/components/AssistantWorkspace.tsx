@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { TabActiveProvider, useTabActive } from '@sida/base-ui'
 import { AssistantConversationLoader } from '@/components/AssistantConversationLoader'
 import { AssistantActivityContext } from '@/lib/assistant-avatar'
+import { readStockRouteAnchor } from '@/lib/copilot/route-anchor'
 
 export interface AssistantEntry { id: number; symbol: string; market?: string; pageContext?: string }
 interface AssistantController {
@@ -24,6 +25,15 @@ export function AssistantWorkspaceProvider({ children, enabled = true }: { child
   const [miniHost, setMiniHost] = useState<HTMLElement | null>(null)
   const [started, setStarted] = useState(false)
   const [entry, setEntry] = useState<AssistantEntry | null>(null)
+  /**
+   * 当前路由是不是一张个股/指数工作台（2026-11-18）：停靠面板据此跟随"你在看哪只票"。
+   * 没有 entry 时（用户直接点悬浮球打开、或面板开着换股）这是唯一可靠的锚点来源；
+   * 路由离开 `/stocks/:symbol` 就变成 null → 面板锚点随之清空。
+   */
+  const routeAnchor = useMemo(
+    () => readStockRouteAnchor(location.pathname, location.search),
+    [location.pathname, location.search],
+  )
   const entrySequence = useRef(0)
   const parking = useRef<HTMLDivElement>(null)
   const [container] = useState(() => {
@@ -60,7 +70,14 @@ export function AssistantWorkspaceProvider({ children, enabled = true }: { child
     {children}
     <div ref={parking} hidden aria-hidden="true" />
     {started && enabled && createPortal(<TabActiveProvider active={visible}>
-      <AssistantConversationLoader presentation={pageHost ? 'page' : 'mini'} visible={visible} onBusyChange={setBusy} entry={entry} entrySearch={pageHost ? location.search : undefined} />
+      <AssistantConversationLoader
+        presentation={pageHost ? 'page' : 'mini'}
+        visible={visible}
+        onBusyChange={setBusy}
+        entry={entry}
+        entrySearch={pageHost ? location.search : undefined}
+        routeAnchor={routeAnchor}
+      />
     </TabActiveProvider>, container)}
   </AssistantActivityContext.Provider></Context.Provider>
 }

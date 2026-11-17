@@ -36,6 +36,7 @@ import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-ancho
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { SettingPendingPreview } from '@/components/copilot/SettingPendingPreview'
 import { describeSettingPreview } from '@/lib/copilot/settingPreview'
+import type { RouteAnchor } from '@/lib/copilot/route-anchor'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import type { EvidenceItem, UnverifiedNumber } from '@/lib/copilot/types'
 import { extractSymbolChips, marketOf, resolveTurnSymbol } from '@/lib/copilot/symbolChips'
@@ -385,8 +386,17 @@ interface ConvRecord {
  * 复用而非重写：SSE 走 `chatApi.sendMessageStream`（已含 stage/delta/done/error 与 signal），
  * 不在这里解析流；渲染走 SafeMarkdown（统一 sanitize 策略）。
  */
-export default function AiCopilotPage({ presentation = 'page', visible = true, onBusyChange, entry, entrySearch }: {
+export default function AiCopilotPage({ presentation = 'page', visible = true, onBusyChange, entry, entrySearch, routeAnchor }: {
   presentation?: 'page' | 'mini'; visible?: boolean; onBusyChange?: (busy: boolean) => void; entry?: AssistantEntry | null; entrySearch?: string
+  /**
+   * 停靠面板的**页面锚点**（2026-11-18）：当前路由是不是一张个股/指数工作台。
+   *
+   * 由工作区按 `location` 解析后传进来（`lib/copilot/route-anchor`）。没有它，
+   * 用户直接点悬浮球打开面板时锚点永远空着 —— 请求体只有 `{content}`，
+   * 参谋不知道你在看哪只票，图上的快照也没有可归属的标的。
+   * 显式指定（entry / @提及 / 正文代码）始终优先于它。
+   */
+  routeAnchor?: RouteAnchor | null
 } = {}) {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
@@ -458,8 +468,59 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
   const [error, setError] = useState<string | null>(null)
   /** 2026-10-28: 坏帧的可见提示（非致命：终稿到达就按终稿显示，别当没发生）。 */
   const [streamNotice, setStreamNotice] = useState<string | null>(null)
-  /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
-  const [anchorSymbol, setAnchorSymbol] = useState('')
+  /**
+   * 当前路由标的的最新值（`pinAnchor` 里读它：回调要跨渲染稳定，不能把路由变化做成闭包依赖）。
+   */
+  const routeAnchorSymbolRef = useRef('')
+  routeAnchorSymbolRef.current = routeAnchor?.symbol ?? ''
+  /**
+   * **显式**锚点（用户/入口/会话绑定）：`null` = 这一视图没有显式指定标的 → 跟随路由。
+   *
+   * 为什么不是单一 `anchorSymbol` state（2026-11-18）：停靠面板打开时用户什么都没输入，
+   * 锚点必须来自当前路由（`/stocks/:symbol`）；一旦用户自己写明了标的（@提及 / 正文代码 /
+   * 从别处带 entry / 打开某个会话），路由就不许再覆盖它。两件事分开存，读取时按优先级合成，
+   * 就没有"effect 先写谁"的时序问题。
+   */
+  const [explicitAnchor, setExplicitAnchor] = useState<{
+    symbol: string
+    market?: string
+    instrument?: 'stock' | 'index'
+  } | null>(null)
+  /**
+   * 用户在该路由标的上点过「清除锚点」：同一个标的别再顶回来（换股才恢复跟随）。
+   * 存标的而不是布尔量 —— 离开再回到同一只票时，用户当时的意图不该被静默复活。
+   */
+  const [dismissedRoute, setDismissedRoute] = useState('')
+  /** `pinAnchor` 读它（同上：回调要跨渲染稳定，不能让"清除过锚点"改掉它的身份） */
+  const dismissedRouteRef = useRef('')
+  dismissedRouteRef.current = dismissedRoute
+  /** 路由锚点（用户清除过的那个标的不算） */
+  const followedAnchor =
+    routeAnchor && routeAnchor.symbol !== dismissedRoute ? routeAnchor : null
+  /** 本页当前的锚点：显式指定优先，其次跟随路由；都没有就是空串（不猜） */
+  const anchorSymbol = explicitAnchor?.symbol || followedAnchor?.symbol || ''
+  /** 锚点的市场/类型（同源）：显式锚点带的就是入口/会话的口径，路由带来的就是页面口径 */
+  const anchorMarket = explicitAnchor?.market || followedAnchor?.market || ''
+  const anchorInstrument = explicitAnchor?.instrument ?? followedAnchor?.instrument ?? null
+  /**
+   * 把锚点钉成显式指定。
+   *
+   * 与当前路由是**同一只票**时不钉：那本来就是"跟随路由"，钉住会让换股跟随失效
+   * （停靠面板在个股页之间切换时，锚点必须跟着走）。例外：用户先点过「清除锚点」，
+   * 之后自己又写明了这只票 —— 那是用户的明确动作，必须生效。
+   */
+  const pinAnchor = useCallback(
+    (symbol: string, extra?: { market?: string; instrument?: 'stock' | 'index' }) => {
+      const next = (symbol || '').trim()
+      if (!next) return
+      if (next === (routeAnchorSymbolRef.current || '') && next !== dismissedRouteRef.current) {
+        setExplicitAnchor(null)
+        return
+      }
+      setExplicitAnchor({ symbol: next, market: extra?.market, instrument: extra?.instrument })
+    },
+    [],
+  )
   /**
    * 图表上下文（P2, 2026-10-29）：从个股工作台带过来的**那一张图**的读数
    * （类型/市场/周期/可视区间/已确认价位）。
@@ -603,7 +664,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setConvBoundSymbol(entry.symbol)
     setMsgs([])
     setError(null)
-    setAnchorSymbol(entry.symbol)
+    pinAnchor(entry.symbol, { market: entry.market })
     // 换入口 = 新会话视图：上一段「已送给某个会话」的记账跟着作废
     setSentChart(null)
     setChartNotice(null)
@@ -625,7 +686,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     } else if (read.dismissed) {
       setChartNotice('你之前清除了这只票的图表上下文，本次未带入；刷新页面后从工作台重新进入可再次带上。')
     }
-  }, [entry, streaming, backgroundPending, detachStream])
+  }, [entry, streaming, backgroundPending, detachStream, pinAnchor])
 
   /**
    * 锚点换标的 → 工作台那张图的上下文立刻失效（P2 隔离）。
@@ -699,7 +760,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     if (typeof window === 'undefined') return
     const sp = new URLSearchParams(entrySearch ?? window.location.search)
     const sym = (sp.get('symbol') || '').trim()
-    if (SYMBOL_RE.test(sym)) setAnchorSymbol(sym)
+    if (SYMBOL_RE.test(sym)) pinAnchor(sym)
     const q = (sp.get('q') || '').trim()
     if (q) setInput(q)
     // 入口扶正 2026-10-23: ?agent= 预填 @ 参谋 mention chip(只预填不自动发送, 等用户点发送);
@@ -718,7 +779,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       setMentions((m) => (m.some((x) => mentionKey(x) === mentionKey(chip)) ? m : [...m, chip]))
     }
     void sp.get('date')
-  }, [entrySearch])
+  }, [entrySearch, pinAnchor])
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: msgs.length || stage ? scroller.current.scrollHeight : 0 })
@@ -862,7 +923,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
     setConvId(id)
     setConvBoundSymbol(sym)
     // 绑定标的为空就如实清掉锚点：留着上一个会话的代码，等于替这个会话编了个标的
-    setAnchorSymbol(sym)
+    if (sym) pinAnchor(sym)
+    else setExplicitAnchor(null)
     setMsgs(
       rows
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -892,7 +954,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
      * 也不声称"它没有/已清除"——用常驻提示如实说明不可核验，并写清后续行为（见渲染处）。
      */
     setHistoryCtxUnknown(chartState === 'unknown')
-  }, [detachStream])
+  }, [detachStream, pinAnchor])
 
   const startNewConversation = useCallback(() => {
     detachStream() // 2026-10-28: 新会话 → 旧流不许再往这里写(本轮态一并收走)
@@ -1249,7 +1311,9 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
       try {
         // 标的解析优先级：@ 指定 > 本条文字里的代码 > 页面锚点（正在看 XXX）
         const sym = turnTarget.symbol
-        if (sym && sym !== anchorSymbol) setAnchorSymbol(sym)
+        // 只有用户**自己写明**的标的才钉成显式锚点（@提及 / 正文代码）；
+        // 沿用页面锚点的那一轮不钉 —— 否则换股跟随会在第一次提问后失效。
+        if (sym && turnTarget.explicit) pinAnchor(sym)
 
         /**
          * 换标的 / 会话快照不可核验 + 当前会话（2026-10-29 三审合并判断）：
@@ -1311,7 +1375,8 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
             sym
               ? {
                   stock_symbol: sym,
-                  stock_market: initialContext.current?.symbol === sym ? initialContext.current.market || marketOf(sym) : marketOf(sym),
+                  /* 市场与发送时同源：锚点自带的（工作台/入口口径）优先，没有才按代码段推 */
+                  stock_market: sym === anchorSymbol && anchorMarket ? anchorMarket : marketOf(sym),
                   /**
                    * 图表上下文与页面快照同路（会话级 `initial_context`，后端每轮都会附加到系统提示）。
                    * 语境里明写"进入时快照 / 用户提问才引用 / 不得自动下单与画线"，
@@ -1437,16 +1502,22 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
           ac.signal,
           imageData,
           /**
-           * 页面锚点 + 它的**标的类型**（2026-11-17 四审）：`stock_symbol` 只有代码，
-           * 000001 既可能是平安银行也可能是指上证指数；服务端不能从代码证明类型，
-           * 缺这一维就只能把同号快照整份丢弃。这里只报图表页**自己广播过**的类型
-           * （`record.instrument`），取不到就不填 —— 绝不按代码/市场猜。
+           * 页面锚点 + 它的**市场/标的类型**（2026-11-17 四审 + 2026-11-18 停靠跟随）：
+           * `stock_symbol` 只有代码，000001 既可能是平安银行也可能是指上证指数；服务端不能
+           * 从代码证明类型，缺这一维就只能把同号快照整份丢弃。
+           *
+           * 来源优先级：
+           *  - 类型：图表**自己广播过**的 `record.instrument` 最可信（那就是这张图），
+           *    取不到才用页面锚点的声明（`?type=index`）—— 都没有就不填，绝不按代码猜；
+           *  - 市场：锚点自带的（工作台页面口径 `CN`），没有才按代码段推（`marketOf`）。
            */
           sym
             ? {
                 symbol: sym,
-                market: marketOf(sym),
-                instrument: chanForTurn?.record?.instrument,
+                market: sym === anchorSymbol && anchorMarket ? anchorMarket : marketOf(sym),
+                instrument:
+                  chanForTurn?.record?.instrument ??
+                  (sym === anchorSymbol && anchorInstrument ? anchorInstrument : undefined),
               }
             : undefined,
           mentions.map((m) => ({
@@ -1503,7 +1574,7 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
         }
       }
     },
-    [attach, convId, anchorSymbol, mentions, streaming, uploading, backgroundPending, runsState, bgMode, runInBackground, activeChartCtx, chartCtx, sentChart, convLoading],
+    [attach, convId, anchorSymbol, anchorMarket, anchorInstrument, pinAnchor, mentions, streaming, uploading, backgroundPending, runsState, bgMode, runInBackground, activeChartCtx, chartCtx, sentChart, convLoading],
   )
 
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
@@ -1884,7 +1955,10 @@ export default function AiCopilotPage({ presentation = 'page', visible = true, o
               type="button"
               onClick={() => {
                 setBriefSymbol('')
-                setAnchorSymbol('')
+                setExplicitAnchor(null)
+                // 停靠面板：这只票就是当前路由那只 —— 读到这里之前它来自跟随，
+                // 清掉就记成"用户不要这个锚点"，同一个标的别再顶回来（换股才恢复跟随）
+                setDismissedRoute(routeAnchor?.symbol ?? '')
                 /**
                  * 换标的时的图表上下文（P2 修正, 2026-10-29）：
                  * 还没送出去 → 直接丢掉（工作台那条发布也撤掉，下次进来不复活）；

@@ -461,8 +461,10 @@ describe('KlineChart 缠论线段子图层', () => {
       { time: SEC('2026-03-11'), value: 33 },
     ])
 
-    // blocked 线段(笔区间 7..8, 服务端未给价格几何): 总共只有 3 条线, 没有第四条
-    expect(segmentSeries().length + candidateSegmentSeries().length).toBe(3)
+    // blocked 线段(笔区间 7..8, 服务端未给价格几何): 图上只有 3 条线, 没有第四条。
+    // 断言"活着的"而不是历史创建数: 打开子图层会把主图切到更长回看(见加长回看用例),
+    // 期间旧一批被显式移除 —— 残留才算错。
+    expect(live(segmentSeries()).length + live(candidateSegmentSeries()).length).toBe(3)
     for (const s of [...segmentSeries(), ...candidateSegmentSeries()]) {
       expect((s.data as Array<{ time: number }>).length).toBe(2) // 只有两个端点
     }
@@ -734,6 +736,45 @@ describe('KlineChart 缠论线段子图层', () => {
     for (const s of oldSegments) expect(s.removed).toBe(true)
     await waitFor(() => expect(live(centreLines())).toHaveLength(2), { timeout: 5000 })
     for (const l of oldCentre) expect(l.removed).toBe(true)
+  })
+})
+
+describe('线段/中枢子图层打开时加长回看(2026-11-18)', () => {
+  const mainKlineCalls = () => H.calls.filter((u) => u.startsWith('/klines/600519?'))
+
+  it('打开线段 → 同一张图改按 500 天请求(图例写明), 关掉回到 initialDays', async () => {
+    await mountWithChan()
+    // 默认视图(只开分型/笔): 仍按 initialDays
+    expect(mainKlineCalls()[0]).toContain('days=120')
+    expect(screen.queryByTestId('chan-lookback-note')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('chan-segment-toggle'))
+    // 主图加长到 500(不是另取一份结构数据: 摘要仍由这条响应的 chan_snapshot 绑定)
+    await waitFor(() => expect(mainKlineCalls().some((u) => u.includes('days=500'))).toBe(true), { timeout: 5000 })
+    // 结构请求跟着同一份快照/同一批天数
+    await waitFor(
+      () => expect(H.calls.some((u) => u.includes('/chan-structure') && u.includes('days=500'))).toBe(true),
+      { timeout: 5000 },
+    )
+    const note = await screen.findByTestId('chan-lookback-note', {}, { timeout: 5000 })
+    expect(note.textContent).toContain('已经加载近 500 天'.replace('已经', '已'))
+    expect(note.textContent).toContain('默认 120 天')
+
+    // 关掉子图层 → 回到初始天数, 图例上的说明同步消失
+    fireEvent.click(screen.getByTestId('chan-segment-toggle'))
+    await waitFor(
+      () => expect(mainKlineCalls()[mainKlineCalls().length - 1]).toContain('days=120'),
+      { timeout: 5000 },
+    )
+    await waitFor(() => expect(screen.queryByTestId('chan-lookback-note')).toBeNull(), { timeout: 5000 })
+  })
+
+  it('中枢子图层同样触发加长(两个子图层任一打开即可)', async () => {
+    H.klines = () => Promise.resolve(klinesResponse('600519'))
+    H.structure = () => Promise.resolve(structureResponse())
+    render(<KlineChart symbol="600519" market="CN" instrument="stock" layersVisible={{ chan: true, chanCentre: true }} />)
+    await waitFor(() => expect(mainKlineCalls().some((u) => u.includes('days=500'))).toBe(true), { timeout: 5000 })
+    await waitFor(() => expect(live(centreLines())).toHaveLength(2), { timeout: 5000 })
   })
 })
 

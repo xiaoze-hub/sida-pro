@@ -169,6 +169,20 @@ const CHAN_PEN_COLORS: ChanPenColors = {
 }
 
 /**
+ * 线段/中枢子图层打开时的回看天数（2026-11-18）。
+ *
+ * 为什么必须加长主图请求：线段要**三段确认**，实测 315 只样本在 160 根日 K 内最多只有
+ * 2 条已确认线段，`not_enough_confirmed_segments` 就成了默认视图的常态 —— 中枢图层
+ * 永远"还不到 3 条"。所以打开这两个子图层时，同一张图直接向服务端要 500 天；
+ * 硬上限 1000（再长对前端渲染/后端取数都不划算，且图例只承诺"近 N 天"）。
+ *
+ * 不另取一份数据：天数只改主图 `/klines/{symbol}` 的 `days`，摘要依旧由那条响应的
+ * `chan_snapshot` 绑定，结构与图仍是**同一份快照**。关掉两个子图层即回落 `initialDays`。
+ */
+export const CHAN_STRUCTURE_LOOKBACK_DAYS = 500
+export const CHAN_STRUCTURE_LOOKBACK_CAP = 1000
+
+/**
  * 图表时间 → 'YYYY-MM-DD'（与 `dayKey` 同源: UTC 年月日, 不做时区换算）。
  *
  * 笔的端点定位要拿"服务端的日期"跟"图上真有哪几根 K 线"逐个对, 所以必须能从
@@ -828,6 +842,17 @@ export default function KlineChart(props: {
   const [chanCentreLocalOn, setChanCentreLocalOn] = useState(false)
   const showChanCentreLayer = props.layersVisible?.chanCentre ?? chanCentreLocalOn
   /**
+   * 主图回看天数（2026-11-18）：线段/中枢任一子图层打开时加长到
+   * `CHAN_STRUCTURE_LOOKBACK_DAYS`（上限 `CHAN_STRUCTURE_LOOKBACK_CAP`），关掉回落到 `initialDays`。
+   * 只改**同一条**主图请求的 `days`，不另取结构数据（摘要仍由那条响应的 `chan_snapshot` 绑定）。
+   */
+  const baseDays = props.initialDays ?? 120
+  // 结构与线段只提供日线口径(`interval !== '1d'` 时图层本来就不请求), 周/月/分钟图不加长
+  const chanStructureLookback = (showChanSegmentLayer || showChanCentreLayer) && interval === '1d'
+  const requestDays = chanStructureLookback
+    ? Math.min(CHAN_STRUCTURE_LOOKBACK_CAP, Math.max(baseDays, CHAN_STRUCTURE_LOOKBACK_DAYS))
+    : baseDays
+  /**
    * 标的身份: 只认**显式** `instrument='stock'|'index'`。
    *
    * 为什么不能猜: A 股指数与个股同码(`000001` = 上证指数 / 平安银行)。前端按代码"看起来
@@ -1427,7 +1452,9 @@ export default function KlineChart(props: {
       // 旧摘要的"过期"结论也随新一轮取数作废(新响应会给出新摘要)
       setChanStaleDigest(null)
       try {
-        const days = props.initialDays ?? 120
+        // 线段/中枢子图层打开时这里是加长后的天数（见 `requestDays` 头注）：
+        // 图、摘要、结构三者仍绑同一份响应，不另取数据。
+        const days = requestDays
         // 请求层闸门(见 `daySafeInterval` 头注): 任何路径都不出分钟 K 请求 ——
         // 后端无分钟源, 过去把日 K 当分钟序列回传, 前端据此渲染就是错标周期。
         const reqInterval = daySafeInterval(interval)
@@ -1539,7 +1566,7 @@ export default function KlineChart(props: {
     return () => {
       cancelled = true
     }
-  }, [props.symbol, props.market, props.instrument, chanInstrument, indexChart, interval, props.initialDays, chartReloadNonce])
+  }, [props.symbol, props.market, props.instrument, chanInstrument, indexChart, interval, requestDays, chartReloadNonce])
 
   // ── 图层数据: 按需自取 summary(仅父未接管的分量才发请求) ────────
   useEffect(() => {
@@ -3346,6 +3373,14 @@ export default function KlineChart(props: {
           className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground"
         >
           <span className="font-medium text-foreground">缠论结构</span>
+          {/* 加长回看(2026-11-18): 线段要三段确认、中枢要三条已确认线段，默认 120 天几乎必然
+              "不够"。天数改了就写在图上 —— 图上的几何只属于"近 N 天"这份数据，不许让人
+              以为看的是全部历史。 */}
+          {requestDays > baseDays && (
+            <span data-testid="chan-lookback-note">
+              为显示线段/中枢已加载近 {requestDays} 天（默认 {baseDays} 天）
+            </span>
+          )}
           <span>
             <span style={{ color: CHAN_MARKER_COLORS.top }}>●顶</span>
             <span className="ml-1" style={{ color: CHAN_MARKER_COLORS.bottom }}>●底</span>

@@ -1,5 +1,13 @@
 ## [未发布]
 
+### fix-停靠参谋跟随路由锚点 + 线段/中枢加长回看（前端）
+
+- **停靠面板锚点跟随**：`/stocks/:symbol` 上打开「问参谋」面板时（用户直接点悬浮球，没有 `sida-open-chat` 入口事件），锚点从当前路由解析（`?type=index` 为指数、否则个股；市场按代码段口径 `CN`），换股跟随、离开个股页即清空。请求体因此带上 `stock_symbol` / `stock_market` / `stock_instrument`，并携带图上那份 `chart_snapshot`（图层未上报/换股后不带，不伪造）。
+- **显式指定优先**：entry 带入的另一只票、正文里写明的代码、`@` 提及、打开的历史会话绑定标的都优先于路由，路由不许覆盖；与当前路由同一只票时不钉住（否则换股跟随会失效）。用户点「清除锚点」后同一标的不再顶回来，换股才恢复跟随。
+- 新增 `src/lib/copilot/route-anchor.ts`（纯函数，板块/港股/脏路由一律不产出锚点）+ `AssistantWorkspace` 按 `location` 解析后传给面板；`tests/components/copilot-dock-route-anchor.test.tsx` 用**真 AiCopilot + 真 StockWorkbench + 真 chatApi**（全局 fetch 换成会记账的假后端）断言真正发出去的请求体。
+- **线段/中枢加长回看**：`KlineChart` 在「线段」或「操作口径中枢」子图层打开时，同一条主图请求改按 500 天取数（上限 1000），图例明写「为显示线段/中枢已加载近 N 天（默认 120 天）」；关掉两个子图层回到 `initialDays`。摘要仍由该响应的 `chan_snapshot` 绑定（不另取结构数据），切股/切周期/失败/409 仍按既有代次与清理规则不串。
+- 测试：`chan-segment-layer` 新增加长回看两例（主图与结构请求同按 500 天、图例文案、关闭回退）；既有「打开线段」一例的线条计数改为统计**图上还活着**的线（加长回看会先撤掉旧一批再重建）。`tsc -b` / `tsc -p tsconfig.tests.json` 通过；`chan-chart-layer`(43) + `chan-segment-layer`(16) + `copilot-dock-route-anchor`(6) + 全部 `copilot-*`/`assistant-*`/`kline-*` 组件用例共 455 passed。
+
 ### fix-中枢适配器区间口径与可见时点（chan-centre-adapter-v2）
 
 - 区间口径升级：`src/core/chan_centre_adapter.py` 的线段范围不再只取 `PenEndpoint.price` 枢轴价，改为 span 内所有 pen 端点**合并后 K 线区间** `bar_low`/`bar_high` 的极值。旧口径会把影线丢掉、让 `zd/zg` 落在 K 线区间内部，甚至把 K 线区间本已重叠的中枢误判成 `no_centre`（原 no-centre 夹具 v1 得 [20, 19.58] `no_centre`，v2 得 [19, 20.58] `centre`）。这是输入可证明的最宽区间（span 内端点 bar 的并集），仍是真实段 K 线区间的下界；端点 bar 必须包含自身枢轴价，否则拒绝。
