@@ -48,6 +48,10 @@ REQ_BOUND_INSTRUMENT: ContextVar[str | None] = ContextVar("chat_req_bound_instru
 #: 没写的书写形式推断标的身份。`(?<!\d)` 保留 Unicode 语义，所以「６00519」这种
 #: 半全角混写也不会被截尾认成 600519。
 _CODE_RE = re.compile(r"(?<!\d)([036489][0-9]{5})(?!\d)")
+#: 身份标识符的**原样**形状：恰好 6 个 ASCII 数字（2026-11-18 审计）。
+#: 刻意不用 `str.isdigit()` / `\d`：两者都接受全角「６００５１９」，
+#: 一旦放行就会把一个用户没写过的代码绑进会话。
+_IDENTITY_CODE_RE = re.compile(r"[0-9]{6}")
 
 
 class Mention(BaseModel):
@@ -70,20 +74,55 @@ def _market_of(code: str) -> str:
 
 
 def _is_code(value: str | None) -> bool:
-    """是否合法的 6 位 A 股代码。"""
-    v = (value or "").strip()
-    return len(v) == 6 and v.isdigit()
+    """是否**原样**合法的 6 位 A 股代码（只认 ASCII，不做 strip/NFKC 修复）。
+
+    标识符就是身份：用户写「６００５１９」或「 600519 」时，服务端没有依据替
+    他归一成 600519 —— 归一后绑定的标的并不是用户写的那串字符。宁可判为
+    "不是代码"（fail-closed，不绑定），也不做书写形式的推断。
+    """
+    return isinstance(value, str) and bool(_IDENTITY_CODE_RE.fullmatch(value))
 
 
 def mention_stock(body) -> str | None:
-    """取 @ 提及里的股票代码(没有/非法则 None)。"""
+    """取 @ 提及里的股票代码(没有/非原样合法则 None)。"""
     for m in (getattr(body, "mentions", None) or []):
         if (getattr(m, "type", "") or "").lower() != "stock":
             continue
-        v = (getattr(m, "value", "") or "").strip()
+        v = getattr(m, "value", "") or ""
         if _is_code(v):
             return v
     return None
+
+
+def _declared_market(anchor: str | None, market: str | None, symbol: str) -> str | None:
+    """页面是否**显式声明**了这只票的市场；没有声明返回 None（不推断）。
+
+    声明只有当锚点为空（页面没有别的锚点）或锚点就是这只票时才成立；
+    锚点必须原样等于 symbol。
+    """
+    m = (market or "").strip()
+    a = anchor or ""
+    if m and (not a or a == symbol):
+        return m
+    return None
+
+
+def _body_market_declaration(body, symbol: str) -> str | None:
+    """本轮请求体对这只票的市场声明（没有就 None）。"""
+    anchor = getattr(body, "stock_symbol", None)
+    return _declared_market(anchor if isinstance(anchor, str) else "",
+                            getattr(body, "stock_market", None), symbol)
+
+
+def _turn_market(body, symbol: str) -> str:
+    """快照归属用的市场口径：页面显式声明优先，没有声明就是聚合口径 `CN`。
+
+    不沿用 `resolve_market` 的代码前缀推断：那只是"页面没给市场时"的展示口径，
+    不是用户/页面对**交易所**的声明 —— 399001 会被推成 SZ、900901 会被推成 BJ，
+    拿它去要求"与代码段一致"只会误杀正常快照。快照 schema 的 market 本来就是
+    CN，没有具体交易所声明时按 CN（A 股聚合）比对才对。
+    """
+    return _body_market_declaration(body, symbol) or "CN"
 
 
 def resolve_market(symbol: str, anchor: str | None = None, market: str | None = None) -> str:
@@ -91,12 +130,11 @@ def resolve_market(symbol: str, anchor: str | None = None, market: str | None = 
 
     页面锚点就是这只票(或没有锚点)时用前端带来的市场; 其余按代码前缀推断,
     与前端 marketOf 同口径(6→SH / 0,3→SZ / 4,8,9→BJ)。
+
+    锚点比较**原样**（不 strip）: 「 600519 」不是 600519，不能凭它把页面声明的
+    市场套到文字里那只票上（2026-11-18 审计）。
     """
-    m = (market or "").strip()
-    a = (anchor or "").strip()
-    if m and (not a or a == symbol):
-        return m
-    return _market_of(symbol)
+    return _declared_market(anchor, market, symbol) or _market_of(symbol)
 
 
 def resolve_bound_symbol(conv_symbol: str | None, body_symbol: str | None,
@@ -108,14 +146,16 @@ def resolve_bound_symbol(conv_symbol: str | None, body_symbol: str | None,
     - @提及 → 用它(显式动作, 优先于页面)
     - 页面锚点: 合法 6 位码且与旧绑定不同 → 用它(页面切换, 跟随更新)
     - 否则保留旧绑定(没有就都不锁)
+
+    本轮请求带来的标识符（页面锚点 / @提及）必须**原样**是 6 位 ASCII 代码；
+    带空白或全角数字的一律不算（不 strip、不做 NFKC 归一）。
     """
     conv_symbol = (conv_symbol or "").strip()
-    body_symbol = (body_symbol or "").strip()
+    body_symbol = body_symbol if isinstance(body_symbol, str) else ""
     code = extract_code(text or "")
     if code:
         return code
-    mention = (mention or "").strip()
-    if mention:
+    if _is_code(mention):
         return mention
     if _is_code(body_symbol) and body_symbol != conv_symbol:
         return body_symbol
@@ -157,9 +197,14 @@ class TurnTarget:
 
 
 def resolve_explicit_target(conv, body) -> TurnTarget | None:
-    """只认**显式**标的（不查网络）: 文字代码 > @提及 > 页面锚点 > 会话绑定。"""
+    """只认**显式**标的（不查网络）: 文字代码 > @提及 > 页面锚点 > 会话绑定。
+
+    本轮请求里的页面锚点与 @提及必须**原样**是 6 位 ASCII 代码；会话绑定也要求
+    能原样读作代码（库里的历史值同样是身份，不从书写形式推断）。
+    """
     text = getattr(body, "content", "") or ""
-    anchor = (getattr(body, "stock_symbol", None) or "").strip()
+    anchor = getattr(body, "stock_symbol", None)
+    anchor = anchor if isinstance(anchor, str) else ""
     conv_symbol = (getattr(conv, "stock_symbol", None) or "").strip()
 
     code = extract_code(text)
@@ -173,8 +218,9 @@ def resolve_explicit_target(conv, body) -> TurnTarget | None:
     if _is_code(anchor) and anchor != conv_symbol:
         return TurnTarget(anchor, resolve_market(anchor, anchor, getattr(body, "stock_market", None)),
                           "anchor")
-    if conv_symbol:
-        # 市场口径与 plan_conv_symbol 完全一致(锚点为空/等于该票时用前端带来的市场)。
+    if _is_code(conv_symbol):
+        # 市场口径与 plan_conv_symbol 同源(锚点为空/等于该票时用前端带来的市场);
+        # 随后 resolve_turn_target 会把它归一成快照口径（无声明 = CN）。
         return TurnTarget(
             conv_symbol,
             resolve_market(conv_symbol, anchor, getattr(body, "stock_market", None)),
@@ -233,6 +279,28 @@ _INSTRUMENTS = ("stock", "index")
 _CN_MARKETS = frozenset({"CN", "SH", "SZ", "BJ"})
 
 
+def _market_proven_for(symbol: str, market: str, instrument: str | None) -> bool:
+    """页面声明的市场是否与**代码可证**的标的身份一致（严格，不可证即 False）。
+
+    - `CN` 是聚合口径（A 股整体；`?market=CN` 页面本来就这么上报），不是某一家
+      交易所的声明，因此个股/指数在 CN 下都算一致，**不**据它推断交易所；
+    - `SH`/`SZ`/`BJ` 是对**具体交易所**的声明，必须有可证代码前缀支持：
+      600519 是 SH，页面说 SZ 就不是同一只（也不许猜成"大概是吧"）；
+    - 指数不按交易所分（`MARKET_INDICES` 里 A 股指数市场口径全是 CN），
+      所以指数 + SH/SZ/BJ 不可证 —— fail-closed。
+
+    复用 `src.harness.actions.market_matches_symbol`（它内部就是
+    `stock_exchange_of` 的严格前缀映射），不在这里另写一张交易所表。
+    """
+    try:
+        from src.harness.actions import market_matches_symbol
+
+        return market_matches_symbol(symbol, market, instrument or "stock") is True
+    except Exception:  # noqa: BLE001 - 证明不了就是不一致(快照 fail-closed)
+        logger.info("市场与代码段一致性判定失败(按不一致处理) symbol=%s", symbol, exc_info=True)
+        return False
+
+
 def _provable_instrument(symbol: str, market: str | None) -> str | None:
     """仅凭代码能证明的标的类型；证明不了返回 None（不猜）。旁路失败 = 不可证。"""
     try:
@@ -246,11 +314,16 @@ def _provable_instrument(symbol: str, market: str | None) -> str | None:
 
 
 def _page_instrument(body, symbol: str) -> str | None:
-    """本轮请求对**页面锚点类型**的声明（锚点不是这只票时不算数）。"""
+    """本轮请求对**页面锚点类型**的声明（锚点不是这只票时不算数）。
+
+    锚点原样比较：带空白/全角数字的锚点不是一个可用身份，不能借它把类型声明
+    套到本轮目标上。
+    """
     raw = str(getattr(body, "stock_instrument", None) or "").strip().lower()
     if raw not in _INSTRUMENTS:
         return None
-    anchor = (getattr(body, "stock_symbol", None) or "").strip()
+    anchor = getattr(body, "stock_symbol", None)
+    anchor = anchor if isinstance(anchor, str) else ""
     if anchor and anchor != symbol:
         return None                      # 声明说的是另一只票的图, 与本轮目标无关
     return raw
@@ -352,10 +425,13 @@ def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarge
     """
     explicit = resolve_explicit_target(conv, body)
     if explicit is not None:
+        symbol = explicit.symbol or ""
         instrument, instrument_source = _instrument_evidence(
-            conv, body, explicit.symbol or "", explicit.market,
+            conv, body, symbol, explicit.market,
         )
-        explicit = replace(explicit, instrument=instrument,
+        # 市场口径按"页面声明 / 聚合 CN"归一（不把代码前缀推断当身份声明）。
+        explicit = replace(explicit, market=_turn_market(body, symbol),
+                           instrument=instrument,
                            instrument_source=instrument_source)
         if not resolve_names:
             return explicit
@@ -387,7 +463,7 @@ def resolve_turn_target(conv, body, *, resolve_names: bool = False) -> TurnTarge
     if problem:
         return TurnTarget(problem=problem)
     if code:
-        market = _market_of(code)
+        market = _turn_market(body, code)
         instrument, instrument_source = _instrument_evidence(conv, body, code, market)
         return TurnTarget(code, market, "name", instrument=instrument,
                           instrument_source=instrument_source)
@@ -418,7 +494,8 @@ def plan_conv_symbol(conv, body) -> tuple[str | None, str | None]:
     )
     if not target:
         return None, None
-    anchor = (getattr(body, "stock_symbol", None) or "").strip()
+    anchor = getattr(body, "stock_symbol", None)
+    anchor = anchor if isinstance(anchor, str) else ""
     return target, resolve_market(target, anchor, getattr(body, "stock_market", None))
 
 
@@ -447,8 +524,10 @@ def apply_mentions(db, conv, body):
     from src.harness.recipes import get_recipe
 
     mentions = getattr(body, "mentions", None) or []
-    stocks = [m.value.strip() for m in mentions
-              if (m.type or "").lower() == "stock" and re.fullmatch(r"\d{6}", (m.value or "").strip())]
+    # 只认**原样** ASCII 6 位代码: 「６００５１９」/「 600519 」不是用户写的那个
+    # 身份, 不 strip、不做 NFKC 归一（2026-11-18 审计）。
+    stocks = [m.value for m in mentions
+              if (m.type or "").lower() == "stock" and _is_code(getattr(m, "value", None))]
     agents = [m.value.strip() for m in mentions if (m.type or "").lower() == "agent"]
 
     note = None
@@ -842,6 +921,36 @@ def _market_conflict_note(symbol: str, snapshot_market: str,
     )
 
 
+def _market_identity_note(symbol: str, snapshot_market: str, target_market: str,
+                          instrument: str | None) -> str:
+    """页面声明了**具体交易所**、但与代码可证身份矛盾时的显式说明（fail-closed）。
+
+    措辞只陈述能证明的事：代码段属于哪个交易所 / 指数没有交易所口径；不把
+    「页面这么写」说成「标的就在那个市场」。
+    """
+    if (instrument or "").strip().lower() == "index":
+        reason = (
+            f"{symbol} 是指数，A 股指数不按交易所划分（市场口径只有 CN），"
+            f"页面声明的 {target_market} 没有可证依据"
+        )
+    else:
+        try:
+            from src.harness.actions import stock_exchange_of
+
+            proven = stock_exchange_of(symbol) or "无法证明的交易所"
+        except Exception:  # noqa: BLE001 - 文案旁路: 证明不了就如实说
+            proven = "无法证明的交易所"
+        reason = (
+            f"{symbol} 的代码段只可能属于 {proven}，页面却声明 {target_market}"
+        )
+    return (
+        f"（本轮随附的图表快照是 {symbol}({snapshot_market})，而页面声明的市场是 "
+        f"{target_market}：{reason}。市场与标的身份对不上就不是同一张图，整份快照已丢弃 —— "
+        "本轮不提供缠论结构，也不得引用旧摘要或另取新快照。请在该标的所属市场的图表页"
+        "重新提问。）"
+    )
+
+
 async def prepare_chart_snapshot(db, conv, body, user,
                                  *, turn_target: TurnTarget | None = None) -> TurnChartSnapshot | None:
     """校验本轮 `body.chart_snapshot`；返回本条消息可用的可信来源（None = 没带）。
@@ -857,7 +966,9 @@ async def prepare_chart_snapshot(db, conv, body, user,
     软丢弃（返回 note：本轮严格缺失，聊天继续）:
       * 标的不一致 —— 本轮请求目标（含封闭语法解析出的代码）与快照标的不是同一只;
       * 市场不一致 —— 快照 schema 的 market 恒为 CN，而本轮页面声明的市场不在
-        A 股范围（HK/US…）: 同码也不是同一张图（2026-11-18 七轮审计）;
+        A 股范围（HK/US…），或声明了具体交易所（SH/SZ/BJ）却与代码可证前缀
+        矛盾（600519+SZ / 000002+SH / 指数+具体交易所）: 同码也不是同一张图
+        （2026-11-18 七/八轮审计）;
       * 判不出唯一目标（正文不满足封闭追问语法/一句话含多只票/既无显式标的也无绑定 ——
         见 `followup_out_of_protocol`）——
         **fail-closed**: 没有可信归属就不给结构，不许把"无绑定"当成"可信";
@@ -933,6 +1044,22 @@ async def prepare_chart_snapshot(db, conv, body, user,
             turn_market=target_market or None,
             note=_instrument_conflict_note(declared.symbol, target_instrument,
                                            declared.instrument),
+        )
+
+    # 市场第二层（2026-11-18 八轮审计）: 上面只检查了「是不是 A 股写法」，
+    # 但 600519+SZ / 000002+SH / 北交所+SZ 都还在集合里 —— 集合成员不等于
+    # 同一只标的。CN 是聚合口径（无需推断），具体 SH/SZ/BJ 必须与代码可证的
+    # 交易所一致；指数不猜交易所，具体值一律不可证 → fail-closed。
+    if target_market and not _market_proven_for(target, target_market, target_instrument):
+        logger.info(
+            "本轮图表快照市场与标的身份矛盾 user=%s symbol=%s target_market=%s instrument=%s",
+            getattr(user, "id", None), declared.symbol, target_market, target_instrument,
+        )
+        return TurnChartSnapshot(
+            turn_symbol=target or None, turn_instrument=target_instrument,
+            turn_market=target_market,
+            note=_market_identity_note(declared.symbol, declared.market, target_market,
+                                       target_instrument),
         )
 
     # 复核只走**既有只读端点**（同一份 get_klines + 同一套摘要算法），不另写一份校验。
@@ -1055,8 +1182,10 @@ def recheck_turn_snapshot(snapshot: TurnChartSnapshot | None,
     第三个方向是**类型**（2026-11-17 三轮审计）: 同号个股/指数(000001)只看代码会互相
     顶替, 所以 ``turn_instrument`` 与快照自述 instrument 也必须一致; 判不出类型
     （``turn_instrument`` 为空）说明消息入口就没证成身份 —— 这份快照不该在这里。
-    第四个方向是**市场**（2026-11-18 七轮审计）: ``turn_market`` 必须落在 A 股市场
-    （CN/SH/SZ/BJ），否则/判不出都按漂移丢弃 —— 快照的 K 线只有 CN 一种。
+    第四个方向是**市场**（2026-11-18 七/八轮审计）: ``turn_market`` 必须落在 A 股市场
+    （CN/SH/SZ/BJ）且与代码可证的交易所一致（CN 是聚合口径；SH/SZ/BJ 必须与
+    `stock_exchange_of` 的前缀映射相符；指数不接受具体交易所），否则/判不出都按
+    漂移丢弃 —— 快照的 K 线只有 CN 一种。
     """
     if not isinstance(snapshot, TurnChartSnapshot) or snapshot.ref is None:
         return snapshot
@@ -1068,10 +1197,14 @@ def recheck_turn_snapshot(snapshot: TurnChartSnapshot | None,
     instrument_drift = bool(not turn_inst or (snap_inst and turn_inst != snap_inst))
     # 市场同一维: 快照 schema 恒为 CN, 本轮目标却可能是别的市场（页面声明）。
     # 判不出（空）也按漂移处理 —— 与类型同口径, 没有证据就不许把 CN 的 K 线当那张图。
+    # 集合成员不够: 600519+SZ 也"在集合里", 但代码段证明它是 SH。
     turn_mkt = (snapshot.turn_market or "").strip().upper()
     snap_mkt = (snapshot.ref.get("market") or "").strip().upper()
-    market_drift = bool(not turn_mkt or turn_mkt not in _CN_MARKETS
-                        or (snap_mkt and snap_mkt != "CN"))
+    market_drift = bool(
+        not symbol or not turn_mkt or turn_mkt not in _CN_MARKETS
+        or not _market_proven_for(symbol, turn_mkt, turn_inst)
+        or (snap_mkt and snap_mkt != "CN")
+    )
     if (not symbol or (bound and bound != symbol) or (turn and turn != symbol)
             or instrument_drift or market_drift):
         logger.info(

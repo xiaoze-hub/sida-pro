@@ -13,7 +13,9 @@
   ⑦ 旧摘要 → 409，且消息不落库；服务端不自行刷新、不另取快照;
   ⑧ chart_snapshot 严格 schema：大小写/长度/枚举/多字段/类型 → 422;
   ⑨ 真正写进 DB 的 history / initial_context 里没有摘要;
-  ⑩ 本轮 pytest 的 engine 是 scratch 下的隔离 SQLite。
+  ⑩ 本轮 pytest 的 engine 是 scratch 下的隔离 SQLite;
+  ⑪ 页面声明的具体交易所必须与可证代码段一致（600519+SZ / 000002+SH / 北交所+SZ /
+    指数+SH 都丢弃），而 @提及/页面锚点必须是**原样** ASCII 6 位代码（全角/空白不绑定）。
 
 只替换数据源边界（`kl._pg_klines`）与模型（`_get_ai_client`）；摘要、分型、笔、鉴权、
 配额、落库全部走真实实现。
@@ -985,3 +987,144 @@ def test_snapshot_dropped_when_conversation_switches_after_preflight(
     assert row.stock_symbol == "600519", "本轮的旧快照不许把会话改回 600000"
     for m in _msgs(conv_id):
         _no_secret_in(m.content)
+
+
+# ── ⑪ 页面市场声明必须与可证代码段一致 / 身份 token 原样 ASCII ─────────────
+# 2026-11-18 八轮审计: 2b3bc807 只断言 market ∈ {CN,SH,SZ,BJ}, 并未检验这个市场
+# 是不是**这只票**的交易所 —— 600519+页面 SZ、000002+SH、北交所+SZ 都会被放行,
+# 于是 CN 的快照被当成"用户这张图"。全角数字则在 _is_code/mention_stock 里被
+# isdigit() 认成代码, 写进会话标的。
+
+def _target_payload(symbol: str, market: str, snapshot: dict,
+                    instrument: str | None = None) -> dict:
+    payload = {
+        "content": "这只票缠论结构怎么样",
+        "stock_symbol": symbol,
+        "stock_market": market,
+        "chart_snapshot": snapshot,
+    }
+    if instrument is not None:
+        payload["stock_instrument"] = instrument
+    return payload
+
+
+@pytest.mark.parametrize("symbol,market,instrument", [
+    ("600519", "SZ", "stock"),     # 沪市代码, 页面说深市
+    ("000002", "SH", "stock"),     # 深市代码, 页面说沪市
+    ("830799", "SZ", "stock"),     # 北交所代码, 页面说深市
+    ("399001", "SH", "index"),     # 指数不按交易所分, SH 无可证依据
+])
+def test_page_exchange_must_match_provable_code_prefix(
+        client, accounts, feed, holder, symbol, market, instrument, clean_convs):
+    """市场只是集合成员不够: 具体交易所声明必须与 stock_exchange_of 相符。"""
+    digest = _digest(symbol, instrument=instrument)
+    token = _login(client, "a")
+    conv_id = _conv(client, token)
+
+    r = _send(client, token, conv_id, _target_payload(
+        symbol, market,
+        _snap(digest, symbol=symbol, instrument=instrument),
+        instrument=instrument,
+    ))
+    assert r.status_code == 200, r.text
+
+    out = holder.outputs[-1]
+    assert "分型 " not in out, "市场与代码段矛盾时不许给结构"
+    assert _short(digest) not in out
+    assert "缺少图表快照摘要" in out
+
+    system = holder.systems[-1]
+    assert "已丢弃" in system and ("市场" in system or "交易所" in system)
+    assert digest not in system
+    assert _conv_row(conv_id).stock_symbol == symbol, "普通绑定不受影响"
+
+
+@pytest.mark.parametrize("symbol,market,instrument", [
+    ("600519", "SH", "stock"),     # 代码可证 SH
+    ("600519", "CN", "stock"),     # CN 是聚合口径, 不推断交易所
+    ("000002", "SZ", "stock"),     # 000xxx 声明 stock 后, SZ 与 00 前缀一致
+    ("000002", "CN", "stock"),
+    ("830799", "BJ", "stock"),     # 北交所前缀
+    ("399001", "CN", "index"),     # 指数只接受 CN 口径
+])
+def test_coherent_page_exchange_still_uses_snapshot(
+        client, accounts, feed, holder, symbol, market, instrument, clean_convs):
+    """正常代码/正常市场声明不因这次收紧而丢快照。"""
+    digest = _digest(symbol, instrument=instrument)
+    token = _login(client, "a")
+    conv_id = _conv(client, token)
+
+    r = _send(client, token, conv_id, _target_payload(
+        symbol, market,
+        _snap(digest, symbol=symbol, instrument=instrument),
+        instrument=instrument,
+    ))
+    assert r.status_code == 200, r.text
+
+    out = holder.outputs[-1]
+    assert "分型 " in out, f"{symbol}/{market} 的一致声明应照常使用快照: {out[:200]}"
+    assert _short(digest) in out
+    system = holder.systems[-1]
+    assert f"symbol={symbol} market=CN instrument={instrument}" in system
+    assert digest not in system
+
+
+@pytest.mark.parametrize("field,token", [
+    ("mention", "６００５１９"),      # 全角数字: isdigit() 会认, 原样不是代码
+    ("mention", " 600519 "),         # 前后空白: 不替用户 strip 成另一个身份
+    ("mention", "600519６"),          # 半全角混写: 截尾认代码同样是推断
+    ("anchor", "６００５１９"),
+    ("anchor", " 600519 "),
+])
+def test_identity_token_must_be_raw_ascii_digits(
+        client, accounts, feed, holder, field, token, clean_convs):
+    """@提及 / 页面锚点带全角或空白时: 不绑定会话标的, 也不信随附快照。"""
+    digest = _digest("600519")
+    user_token = _login(client, "a")
+    conv_id = _conv(client, user_token)        # 无任何绑定
+
+    payload = {"content": "这只票缠论结构怎么样",
+               "chart_snapshot": _snap(digest, symbol="600519")}
+    if field == "mention":
+        payload["mentions"] = [{"type": "stock", "value": token}]
+    else:
+        payload["stock_symbol"] = token
+        payload["stock_market"] = "SH"
+
+    r = _send(client, user_token, conv_id, payload)
+    assert r.status_code == 200, r.text
+
+    row = _conv_row(conv_id)
+    assert row.stock_symbol in (None, ""), \
+        f"非法身份 token 不许写进会话标的: {row.stock_symbol!r}"
+
+    out = holder.outputs[-1]
+    assert "分型 " not in out and _short(digest) not in out
+    assert "缺少图表快照摘要" in out
+
+    system = holder.systems[-1]
+    assert "已丢弃" in system and digest not in system
+    for m in _msgs(conv_id):
+        _no_secret_in(m.content)
+
+
+def test_index_text_without_page_market_uses_cn_not_prefix(
+        client, accounts, feed, holder, clean_convs):
+    """正文写指数代码、页面没有市场声明时: 不许按代码前缀把它认成 SZ。
+
+    399001 的前缀会被展示口径推成 SZ，但 A 股指数不按交易所分；快照 schema 的
+    market 本来就是 CN。回归: 收紧交易所校验时不能把这类正常快照误杀。
+    """
+    digest = _digest("399001", instrument="index")
+    token = _login(client, "a")
+    conv_id = _conv(client, token)
+
+    r = _send(client, token, conv_id,
+              {"content": "399001 缠论结构怎么看",
+               "chart_snapshot": _snap(digest, symbol="399001", instrument="index")})
+    assert r.status_code == 200, r.text
+
+    out = holder.outputs[-1]
+    assert "分型 " in out and _short(digest) in out
+    system = holder.systems[-1]
+    assert "symbol=399001 market=CN instrument=index" in system
