@@ -246,6 +246,13 @@ def _render_operational_centre(centre: dict) -> list[str]:
         f"[{zone.get('zd')}, {zone.get('zg')}]" if isinstance(zone, dict) else "无区间"
     )
     status = str(centre.get("status") or "unknown")
+    lifecycle = str(centre.get("lifecycle_status") or "未知")
+    # `terminal` 是"这份答案是否闭合"(centre/no_centre 且没有任何 issue)，**不是**"中枢终结"。
+    # 2026-11-18 审计: 旧渲染写成「结构终结=False」，LLM 会读成「中枢仍在延续」——
+    # 那是一个比"结论未闭合"更强、且没有任何字段支撑的结论。这里改成字面口径，并把
+    # 真正表示生命周期阶段的 `lifecycle_status` 一并渲染出来。
+    terminal = centre.get("terminal")
+    terminal_text = "已闭合" if terminal is True else ("未闭合" if terminal is False else "未知")
     lines = [
         (
             "操作口径中枢(operational): "
@@ -254,7 +261,8 @@ def _render_operational_centre(centre: dict) -> list[str]:
             f"区间 {zone_text} 确认日 {centre.get('confirmed_on') or '未确认'} "
             f"形成时点 {centre.get('visible_on') or '未知'} "
             f"状态变化于 {centre.get('state_changed_on') or '未知'} "
-            f"结构终结={centre.get('terminal')}"
+            f"生命周期阶段={lifecycle} "
+            f"本轮结论={terminal_text}(terminal; 指这份答案是否还有未处理的 issue, 不是中枢终结)"
         ),
         "口径: 这不是「中枢」, 也不是「严格中枢」(第18课定义未实现); 不是买卖点, 不是交易信号",
     ]

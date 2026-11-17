@@ -528,7 +528,38 @@ def test_render_keeps_drift_and_truncation_counts():
     assert "未实现(本工具不提供): segment, centre" in text
 
 
-# ── ⑥ 测试隔离: 实际 engine 必须是临时目录 SQLite ────────────────────────
+# ── ⑥ 操作口径中枢的渲染措辞(2026-11-18 审计: 不许把 terminal 说成"中枢终结") ──
+
+def test_render_operational_centre_never_calls_terminal_a_centre_ending():
+    """`terminal` = 本轮结论是否闭合(还有没有未处理的 issue)，不是"中枢终结"。
+
+    审计反例: 旧渲染写「结构终结=False」，而真实语义是「后面还有一条 blocked 段，
+    这份答案没有闭合」。LLM 会把前者读成「中枢仍在延续」—— 一个没有任何字段支撑的
+    更强结论。同时 `lifecycle_status`（真正表示 formed/extended/broken 的字段）必须
+    出现在正文里，否则读者无从判断阶段。
+    """
+    from src.agents.chat.tools_chan import _render_operational_centre
+
+    text = "\n".join(_render_operational_centre({
+        "basis": "segment_a0",
+        "strictness": "operational_not_strict",
+        "status": "centre",
+        "terminal": False,
+        "lifecycle_status": "formed",
+        "zone": {"zd": 20.92, "zg": 24.96},
+        "confirmed_on": "2026-03-05",
+        "visible_on": "2026-03-05",
+        "state_changed_on": "2026-03-05",
+        "issues": [{"reason": "characteristic_initial_containment", "blocking": True}],
+        "limitations": [],
+    }))
+    assert "结构终结" not in text
+    assert "生命周期阶段=formed" in text
+    assert "本轮结论=未闭合" in text
+    assert "不是中枢终结" in text
+
+
+# ── ⑦ 测试隔离: 实际 engine 必须是临时目录 SQLite ────────────────────────
 
 def test_suite_uses_isolated_scratch_sqlite(users):
     from src.web.database import SessionLocal
