@@ -18,6 +18,16 @@
 - 参谋工具渲染同源追加线段/操作口径中枢(措辞固定"不是中枢/不是严格中枢", 无新增方向判断); 不把 operational 中枢当买卖点或交易信号。
 - 新增 `tests/test_chan_snapshot_segments_api.py`: 真实 `bars→分型→笔→线段→适配器` 链路, 覆盖字段/标签/版本、候选可漂移、blocked 无几何、证据与跨度分离、409 跨标的不串、空与不足边界, 并对实际 engine 断言只连隔离 scratch SQLite。
 
+### feat-缠论K线新增线段与操作口径中枢子图层（前端，默认关）
+
+- 新增两个**独立**子图层开关 `layersVisible.chanSegments` / `layersVisible.chanCentre`（父不传则组件自持本地开关），**默认关**，与既有分型/笔开关互不影响：关掉任一只撤自己那批 series/价位线，分型记号、笔线、均线与买卖点标记一条不动。
+- 线段几何只认服务端 `segments.confirmed` 前缀（实线、`lineWidth 2`，比笔粗一档）；`candidate_tail` 画虚线且必须服务端显式 `driftable=true`，图例写「候选(细虚线·终点可漂移)」；`blocked`/`pending` **一根线都不画**、不进图例线型示例（只计数，`blocked` 无价格几何）。
+- 操作口径中枢画 price band（`zd`/`zg` 两条 `createPriceLine`），轴标签一律「操作口径·非严格中枢 zd/zg」；`basis`/`strictness` 必须原样是 `segment_a0`/`operational_not_strict`，否则拒画（不许把操作口径说成严格中枢）。
+- `not_enough_confirmed_segments` 措辞明确「不能据此说中枢不存在」，`no_centre` 才写「实测无交集（measured absence）」，`blocked_before_centre` 单列；图例同时透出 `basis=segment_a0`、非买卖点、非交易信号。
+- 跨快照一律拒画并清空自身图层：线段 `as_of_day`/`source_pen_kernel_version` 与结构块不一致、confirmed 前缀在笔链上不连续、中枢 `source.symbol`/`as_of_day`/`pen_digest` 与线段块不一致、结构响应 `market` 与当前图不一致。切股/关层/结构失败/卸载都走先清场再重建。
+- 新增 `tests/components/chan-segment-layer.test.tsx`（14 例，真实组件 + 假图表库）：默认关、粗实线/候选虚线可漂移、blocked 无几何且不画、跨快照/混批拒画、not_enough 与 no_centre 措辞分离、关子图层不连带删他人标记、切股/失败/卸载清场。
+- 前端**不自算**线段与中枢，也不新增方向性结论；线段/中枢均为规则几何，不构成买卖点或交易建议。
+
 ### fix-缠论参谋同图归属改为封闭追问语法（词表退役）
 
 - 带图表快照的轮次不再用「纯追问词表 + 单字白名单」剥句子来判断"正文有没有点别的票"：那条路不可收敛（`万科怎么样` 里「万」被当虚词吞掉、「科」只剩一字被丢弃 ⇒ 整句判成纯追问，页面停在 600519 时把贵州茅台的结构答给了万科；补别名只能补上已知那只）。

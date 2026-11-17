@@ -416,8 +416,11 @@ describe('KlineChart 缠论分型图层', () => {
     expect(legend.textContent).toContain('current_day_completion_unverified')
     expect(legend.textContent).toContain('复权口径 unknown')
     expect(legend.textContent).toContain('终局性 unverified')
-    // 未实现的结构层要如实点名(有笔之后仍不许把线段/中枢/买卖点说成已提供)
-    expect(legend.textContent).toContain('未实现线段/中枢/买卖点')
+    // 未实现的结构层要如实点名(有了线段/操作口径中枢之后, 仍不许把严格中枢/买卖点说成已提供)
+    expect(legend.textContent).toContain('严格中枢(第18课定义)/买卖点仍未实现')
+    // 本响应不含 segments/operational_centre → 图例如实说"未提供", 不假装"没有线段/没有中枢"
+    expect(legend.textContent).toContain('线段未提供')
+    expect(legend.textContent).toContain('中枢未提供')
     // 这份响应里没有 pens 字段 → 图例如实说"笔未提供", 不假装"没有笔"
     expect(legend.textContent).toContain('笔未提供')
     // 非卡片(与形态/情景图例同风格的一行式小字)
@@ -955,7 +958,7 @@ describe('KlineChart 缠论笔图层', () => {
     }
   })
 
-  it('图例: 分型与笔分列, 实线=已确认/虚线=待确认, blocked 笔只计数不绘, 未实现线段与中枢', async () => {
+  it('图例: 分型与笔分列, 实线=已确认/虚线=待确认, blocked 笔只计数不绘, 线段/中枢未提供时如实说明', async () => {
     mountWithPens()
     const legend = await screen.findByTestId('chan-legend', {}, { timeout: 5000 })
     expect(legend.getAttribute('data-chan-phase')).toBe('ready')
@@ -968,7 +971,10 @@ describe('KlineChart 缠论笔图层', () => {
     // 诚实边界不能因为"多了笔"被挤掉
     expect(legend.textContent).toContain('复权口径 unknown')
     expect(legend.textContent).toContain('终局性 unverified')
-    expect(legend.textContent).toContain('未实现线段/中枢/买卖点')
+    // 这份响应没有 segments/operational_centre: 必须说"未提供", 而不是"没有线段/没有中枢"
+    expect(legend.textContent).toContain('线段未提供')
+    expect(legend.textContent).toContain('中枢未提供')
+    expect(legend.textContent).toContain('严格中枢(第18课定义)/买卖点仍未实现')
     expect(legend.textContent).not.toContain('笔未提供')
     // 图例仍是一行式小字, 不是卡片
     expect(legend.className).not.toMatch(/rounded-lg border|card-surface/)

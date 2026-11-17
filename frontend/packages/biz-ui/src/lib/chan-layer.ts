@@ -127,6 +127,29 @@ export interface ChanStructure {
   penRejectReason: ChanPenRejectReason | null
   /** 本响应是否带 `pens`（false = 后端未提供，不是"没有笔"） */
   pensProvided: boolean
+  /** 服务端自述市场（`market`；与当前图不一致时整份拒画） */
+  market: string | null
+  /** 可画的线段（confirmed 前缀 + 尾部候选），服务端顺序 */
+  segments: ChanSegment[]
+  /** 尾部候选线段（终点可漂移）；没有则 null */
+  segmentCandidate: ChanSegment | null
+  /** blocked 线段个数（只计数，不绘制；服务端不提供价格几何） */
+  segmentBlocked: number
+  /** pending 条数（只计数，不绘制） */
+  segmentPending: number
+  /** 被拒收的线段个数 */
+  segmentDropped: number
+  /** 线段整批不可用原因码（非 null 时 `segments` 为空） */
+  segmentRejectReason: ChanSegmentRejectReason | null
+  /** 本响应是否带 `segments`（false = 后端未提供，不是"没有线段"） */
+  segmentsProvided: boolean
+  /** 操作口径中枢（basis=segment_a0 / operational_not_strict）；null = 没给/被拒 */
+  centre: ChanOperationalCentre | null
+  /** 本响应是否带 `operational_centre`（false = 后端未提供） */
+  centreProvided: boolean
+  /** 中枢块被拒收的原因码（非 null 时 `centre` 必为 null：不画，并说明） */
+  centreRejectReason: ChanCentreRejectReason | null
+  centreRejectDetail: string | null
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -422,10 +445,39 @@ export function normalizeChanStructure(raw: unknown): ChanStructure | null {
   // 缺失（旧后端/未实现）记 `provided=false`，与"有 pens 但为空"区分开。
   const asOfDay = asDay(rec.as_of_day)
   const penBatch = normalizeChanPens(rec.pens, asOfDay)
+  const symbol = asText(rec.symbol)
+
+  // 线段：同一份响应里的 `segments` 块（confirmed 前缀才是几何）。
+  // 跨快照判据就在这一层：`as_of_day` 必须与结构块一致、`source_pen_kernel_version` 必须
+  // 就是本响应的笔内核 —— 对不上整批拒收（不画"看起来像的那几段"）。
+  const segmentBatch = normalizeChanSegments(rec.segments, {
+    asOfDay,
+    symbol,
+    penKernel: asText(rec.pen_rules_version),
+  })
+
+  // 操作口径中枢：同一份响应里的 `operational_centre` 块。
+  // 与线段块的交叉证明：中枢自述的笔序列摘要必须就是线段块的 `input_digest`。
+  const centreBatch = normalizeChanOperationalCentre(rec.operational_centre, {
+    asOfDay,
+    symbol,
+    segmentsDigest: segmentBatch.inputDigest,
+  })
+  // 线段被整批拒收时，中枢也不能画：它声称算自那批线段，而前端已经不认那批几何了。
+  const centre =
+    segmentBatch.rejectReason !== null && centreBatch.centre !== null
+      ? {
+          ...centreBatch,
+          centre: null,
+          rejectReason: 'centre-cross-snapshot' as const,
+          detail: `线段块被拒收（${segmentBatch.rejectReason}），中枢无从绑定，拒绝绘制`,
+        }
+      : centreBatch
 
   return {
-    symbol: asText(rec.symbol),
+    symbol,
     instrument: asText(rec.instrument),
+    market: asText(rec.market),
     snapshotDigest: rec.snapshot_digest,
     rulesVersion: asText(rec.rules_version),
     asOfDay,
@@ -442,6 +494,17 @@ export function normalizeChanStructure(raw: unknown): ChanStructure | null {
     penRejects: penBatch.penRejects,
     penRejectReason: penBatch.rejectReason,
     pensProvided: penBatch.provided,
+    segments: segmentBatch.confirmed,
+    segmentCandidate: segmentBatch.candidateTail,
+    segmentBlocked: segmentBatch.blocked,
+    segmentPending: segmentBatch.pending,
+    segmentDropped: segmentBatch.dropped,
+    segmentRejectReason: segmentBatch.rejectReason,
+    segmentsProvided: segmentBatch.provided,
+    centre: centre.centre,
+    centreProvided: centre.provided,
+    centreRejectReason: centre.rejectReason,
+    centreRejectDetail: centre.detail,
   }
 }
 
@@ -911,6 +974,652 @@ export function buildChanPenSegments(
   return { segments, skipped }
 }
 
+// ── 线段（segment）图层（2026-11-18）──────────────────────────────────────
+//
+// 口径铁律（与后端 `segments` 块 = `sida-chan-segments-v1` / 内核 `chan-segment-v2` 一一对应）：
+//  - **只有 `confirmed` 前缀是几何**：它是笔链上连续、已封口、已过 `as_of_day` 的线段。
+//  - 尾部 `candidate` 单列（`candidate_tail`），必须显式带 `driftable=true` —— 终点仍可漂移，
+//    所以只能虚线画，并在图例里写明"可漂移"。
+//  - `blocked` / `pending` **不提供价格几何**（`blocked` 由服务端显式 `geometry_withheld`）：
+//    只计数、只报原因，**一根线都不画**，也不进图例的线型示例（图例只计数，不给几何样例）。
+//  - 同一份快照：`as_of_day` 必须与结构块一致，`source_pen_kernel_version` 必须与结构块的
+//    笔内核一致，confirmed 前缀必须是笔链上首尾相接的连续段。任一不符 → **整批拒收**
+//    （不做"能画几段画几段"的部分绘制：混批线段拼起来就是一条假的走势）。
+//  - 线段是规则几何，不是买卖点，也不是交易信号。
+
+export type ChanSegmentStatus = 'confirmed' | 'candidate'
+
+/** 线段批次被拒收的原因码（与笔同一风格：只用于计数/展示，不做"猜一个"的兜底）。 */
+export type ChanSegmentRejectReason =
+  | 'segments-not-object'
+  | 'segments-schema-unknown'
+  | 'segments-cross-snapshot'
+  | 'segments-counts-inconsistent'
+  | 'segment-blocked-has-geometry'
+  | 'segment-confirmed-chain-broken'
+  | 'segment-bad-geometry'
+  | 'segment-confirm-day-invalid'
+  | 'segment-candidate-not-driftable'
+
+/** 线段的一个端点（服务端 `geometry.start` / `geometry.end`；只留可绘制、可校验的三件事）。 */
+export interface ChanSegmentEndpoint {
+  kind: ChanFractalKind
+  /** 端点发生日（`position_day`，YYYY-MM-DD） */
+  day: string
+  price: number
+}
+
+/** 一条线段的**几何跨度**（笔区间 + 两端点；证据笔不在几何里，前端也不需要它画线）。 */
+export interface ChanSegmentGeometry {
+  direction: ChanSegmentDirection
+  penStartIndex: number
+  penEndIndex: number
+  start: ChanSegmentEndpoint
+  end: ChanSegmentEndpoint
+}
+
+export type ChanSegmentDirection = 'up' | 'down'
+
+/** 归一化后的一条可画线段（confirmed / candidate）。 */
+export interface ChanSegment {
+  /** 服务端 `segments.confirmed[]` / `candidate_tail` 的序号（可溯源，不做重排） */
+  index: number
+  status: ChanSegmentStatus
+  direction: ChanSegmentDirection
+  /** 已确认线段的封口日；候选恒为 null */
+  confirmedOn: string | null
+  /** true = 终点仍可漂移（只有候选为 true，且服务端必须显式声明） */
+  driftable: boolean
+  startDay: string
+  startPrice: number
+  endDay: string
+  endPrice: number
+}
+
+/** 归一化后的线段批次（含"为什么有线段没画"的账）。 */
+export interface ChanSegmentBatch {
+  confirmed: ChanSegment[]
+  candidateTail: ChanSegment | null
+  /** 服务端 `blocked` 段数 —— 只计数，永不绘制（blocked 无价格几何） */
+  blocked: number
+  /** 服务端 `pending` 条数 —— 只计数，永不绘制（pending 不是线段） */
+  pending: number
+  /** 被拒收的段数 */
+  dropped: number
+  rejectReason: ChanSegmentRejectReason | null
+  /** 本响应是否带 `segments` 块（false = 后端未提供，图例如实说"未提供"） */
+  provided: boolean
+  /** 线段块的笔序列摘要（用于与中枢块交叉核对同一份快照） */
+  inputDigest: string | null
+}
+
+const SEGMENTS_SCHEMA = 'sida-chan-segments-v1'
+
+function readSegmentGeometry(v: unknown): ChanSegmentGeometry | null {
+  const rec = asRecord(v)
+  if (!rec) return null
+  const direction: ChanSegmentDirection | null =
+    rec.direction === 'up' ? 'up' : rec.direction === 'down' ? 'down' : null
+  if (!direction) return null
+  const start = readPenEndpoint(rec.start)
+  const end = readPenEndpoint(rec.end)
+  if (!start || !end) return null
+  if (start.day >= end.day) return null
+  // 向上线段 = 底→顶；向下 = 顶→底（与笔同一口径，不按价格重判方向）
+  const directionOk =
+    direction === 'up' ? start.kind === 'bottom' && end.kind === 'top' : start.kind === 'top' && end.kind === 'bottom'
+  if (!directionOk) return null
+  const penStart = rec.pen_start_index
+  const penEnd = rec.pen_end_index
+  if (!Number.isInteger(penStart) || !Number.isInteger(penEnd)) return null
+  const ps = penStart as number
+  const pe = penEnd as number
+  if (ps < 0 || pe < ps) return null
+  return { direction, penStartIndex: ps, penEndIndex: pe, start, end }
+}
+
+/** 一条可画线段（几何 + 状态 + 漂移标记）；`null` = 这条段本身不合格。 */
+function readSegment(
+  index: number,
+  v: unknown,
+  status: ChanSegmentStatus,
+): { segment: ChanSegment; geometry: ChanSegmentGeometry } | null {
+  const rec = asRecord(v)
+  if (!rec) return null
+  const geometry = readSegmentGeometry(rec.geometry)
+  if (!geometry) return null
+  return {
+    geometry,
+    segment: {
+      index,
+      status,
+      direction: geometry.direction,
+      confirmedOn: status === 'confirmed' ? asDay(rec.confirmed_on) : null,
+      driftable: rec.driftable === true,
+      startDay: geometry.start.day,
+      startPrice: geometry.start.price,
+      endDay: geometry.end.day,
+      endPrice: geometry.end.price,
+    },
+  }
+}
+
+/**
+ * `segments` 块 → 归一化线段批次。
+ *
+ * 顺序有意义：先**整块前提**（对象/schema/同一份快照/计数自洽），再逐段校验，
+ * 最后 confirmed 链连续性。整块前提不满足 → `provided` 语义保留但 `rejectReason` 非 null、
+ * 可画集合为空（调用方据此"不画并说明"，不是"画看起来像的那几段"）。
+ */
+export function normalizeChanSegments(
+  raw: unknown,
+  ctx: { asOfDay: string | null; symbol: string | null; penKernel: string | null },
+): ChanSegmentBatch {
+  const empty: ChanSegmentBatch = {
+    confirmed: [],
+    candidateTail: null,
+    blocked: 0,
+    pending: 0,
+    dropped: 0,
+    rejectReason: null,
+    provided: false,
+    inputDigest: null,
+  }
+  if (raw === undefined || raw === null) return empty
+  const rec = asRecord(raw)
+  if (!rec) return { ...empty, provided: true, rejectReason: 'segments-not-object' }
+
+  const inputDigest = isChanDigest(rec.input_digest) ? rec.input_digest : null
+  const base: ChanSegmentBatch = { ...empty, provided: true, inputDigest }
+
+  // ① schema: 不认识的口径不画（宁可不说，也不按旧口径读新块）
+  if (asText(rec.schema) !== SEGMENTS_SCHEMA) {
+    return { ...base, rejectReason: 'segments-schema-unknown' }
+  }
+  // ② 同一份快照: 截止日 / 笔内核 / 标的 三者对不上 → 整批拒收
+  const asOf = asDay(rec.as_of_day)
+  if (!asOf || (ctx.asOfDay !== null && asOf !== ctx.asOfDay)) {
+    return { ...base, rejectReason: 'segments-cross-snapshot' }
+  }
+  const penKernel = asText(rec.source_pen_kernel_version)
+  if (ctx.penKernel !== null && penKernel !== ctx.penKernel) {
+    return { ...base, rejectReason: 'segments-cross-snapshot' }
+  }
+  // ③ 计数自洽: 服务端自己报的账必须与数组长度一致（不一致说明这份快照是拼出来的）
+  const countsRec = asRecord(rec.counts)
+  const confirmedRaw = Array.isArray(rec.confirmed) ? rec.confirmed : null
+  const blockedRaw = Array.isArray(rec.blocked) ? rec.blocked : null
+  const pendingRaw = Array.isArray(rec.pending) ? rec.pending : []
+  const candidateRaw = rec.candidate_tail
+  const candidateCount = candidateRaw === null || candidateRaw === undefined ? 0 : 1
+  if (!confirmedRaw || !blockedRaw) {
+    return { ...base, rejectReason: 'segments-not-object' }
+  }
+  if (
+    countsRec &&
+    (Number(countsRec.confirmed) !== confirmedRaw.length ||
+      Number(countsRec.blocked) !== blockedRaw.length ||
+      Number(countsRec.pending) !== pendingRaw.length ||
+      Number(countsRec.candidate) !== candidateCount)
+  ) {
+    return { ...base, rejectReason: 'segments-counts-inconsistent' }
+  }
+
+  // ④ blocked 段**不许带价格几何**：带了就说明这份响应把"拒绝出版"的东西也给了区间，
+  //    一旦前端按几何画，它就会被画成一条线（进而被读成中枢）。整批拒收，不挑着画。
+  for (const item of blockedRaw) {
+    const blocked = asRecord(item)
+    if (!blocked) return { ...base, rejectReason: 'segments-not-object' }
+    const leaked =
+      blocked.geometry_withheld !== true ||
+      blocked.geometry !== undefined ||
+      blocked.start !== undefined ||
+      blocked.end !== undefined
+    if (leaked) return { ...base, rejectReason: 'segment-blocked-has-geometry' }
+  }
+
+  // ⑤ 逐段校验（confirmed 前缀 + 尾部候选）
+  const confirmed: ChanSegment[] = []
+  let dropped = 0
+  let expectedStart = 0
+  for (let i = 0; i < confirmedRaw.length; i += 1) {
+    const read = readSegment(i, confirmedRaw[i], 'confirmed')
+    if (!read) {
+      dropped += 1
+      continue
+    }
+    const seg = read.segment
+    // 已确认线段必须自证封口: 合法日历日、晚于终点日、不越过 as_of_day
+    if (
+      !seg.confirmedOn ||
+      !isValidCalendarDay(seg.confirmedOn) ||
+      seg.confirmedOn <= seg.endDay ||
+      seg.confirmedOn > asOf
+    ) {
+      dropped += 1
+      continue
+    }
+    // 前缀连续性: 服务端的 confirmed 是笔链上的连续段(上一段终点笔 + 1 == 本段起点笔)。
+    // 一旦对不上(缺了一段/混了两个批次), 整批拒收 —— 缺了中间一段的"前缀"画出来就是假走势。
+    if (read.geometry.penStartIndex !== expectedStart) {
+      return { ...base, rejectReason: 'segment-confirmed-chain-broken' }
+    }
+    expectedStart = read.geometry.penEndIndex + 1
+    confirmed.push(seg)
+  }
+
+  let candidateTail: ChanSegment | null = null
+  if (candidateRaw !== null && candidateRaw !== undefined) {
+    const tail = readSegment(confirmedRaw.length, candidateRaw, 'candidate')
+    if (!tail) {
+      dropped += 1
+    } else if (!tail.segment.driftable) {
+      // 服务端没说"可漂移"的候选线段 = 无法证明它不会动 → 不画（也不降级成 confirmed）
+      dropped += 1
+    } else if (asDay(asRecord(candidateRaw)?.confirmed_on) !== null) {
+      dropped += 1
+    } else if (tail.segment.endDay > asOf) {
+      dropped += 1
+    } else {
+      candidateTail = tail.segment
+    }
+  }
+
+  return {
+    ...base,
+    confirmed,
+    candidateTail,
+    blocked: blockedRaw.length,
+    pending: pendingRaw.length,
+    dropped,
+    rejectReason: null,
+  }
+}
+
+// ── 操作口径中枢（operational centre）────────────────────────────────────
+//
+// 铁律（与后端 `operational_centre` 块 = `sida-chan-operational-centre-v1` 一一对应）：
+//  - `basis` / `strictness` 必须**原样**是 `segment_a0` / `operational_not_strict`。
+//    一旦不是（比如将来换成严格中枢），前端**拒绝绘制**而不是沿用旧标签 —— 那会把
+//    "操作口径" 说成 "中枢/严格中枢"，是最坏的一种错。
+//  - `zone` 只有 `status='centre'` 时才有；其余状态的 `zone` 必须为 null。
+//  - `not_enough_confirmed_segments` **不是**"无中枢"：它只说"还没凑够 3 条已确认线段"。
+//    只有 `no_centre` 才是实测无交集（measured absence）。
+//  - 中枢是价格带（zd/zg），不是买卖点、不是方向性结论、不是交易信号。
+//  - `visible_on` 等字段允许缺失/改名：拿不到就当 null，**不猜**。
+
+export type ChanCentreStatus = 'centre' | 'no_centre' | 'not_enough_confirmed_segments' | 'blocked_before_centre'
+
+export type ChanCentreRejectReason =
+  | 'centre-not-object'
+  | 'centre-label-mismatch'
+  | 'centre-unknown-status'
+  | 'centre-cross-snapshot'
+  | 'centre-zone-invalid'
+  | 'centre-zone-contradicts-status'
+
+export interface ChanCentreZone {
+  zd: number
+  zg: number
+}
+
+export interface ChanOperationalCentre {
+  status: ChanCentreStatus
+  basis: 'segment_a0'
+  strictness: 'operational_not_strict'
+  chainComplete: boolean
+  /** 只有 status='centre' 且区间合法时才有；否则 null（不许补一个"大概"的带） */
+  zone: ChanCentreZone | null
+  issues: Array<{ reason: string; detail: string | null; blocking: boolean }>
+  limitations: string[]
+  confirmedPrefixLength: number | null
+  totalSegments: number | null
+  asOfDay: string | null
+  /** 该中枢自述何时可见（服务端字段可能后续改名 → 拿不到就 null，不猜） */
+  visibleOn: string | null
+  /** 服务端自述的状态说明（原样透出，不在前端改写结论） */
+  statusNote: string | null
+}
+
+export interface ChanCentreBatch {
+  centre: ChanOperationalCentre | null
+  provided: boolean
+  rejectReason: ChanCentreRejectReason | null
+  detail: string | null
+}
+
+const CENTRE_BASIS = 'segment_a0'
+const CENTRE_STRICTNESS = 'operational_not_strict'
+const CENTRE_STATUSES: readonly ChanCentreStatus[] = [
+  'centre',
+  'no_centre',
+  'not_enough_confirmed_segments',
+  'blocked_before_centre',
+]
+
+/**
+ * `operational_centre` 块 → 归一化操作口径中枢。
+ *
+ * 任何"标签/状态与几何自相矛盾"都返回 `rejectReason`（调用方据此不画并说明），
+ * 绝不改写结论：不改 status、不把 not_enough 说成 no_centre、不升级成严格中枢。
+ */
+export function normalizeChanOperationalCentre(
+  raw: unknown,
+  ctx: { asOfDay: string | null; symbol: string | null; segmentsDigest: string | null },
+): ChanCentreBatch {
+  const empty: ChanCentreBatch = { centre: null, provided: false, rejectReason: null, detail: null }
+  if (raw === undefined || raw === null) return empty
+  const rec = asRecord(raw)
+  if (!rec) return { ...empty, provided: true, rejectReason: 'centre-not-object', detail: '中枢块不是对象' }
+  const provided = true
+
+  // ① 口径标签: 必须原样。改了就不画（宁可空着，也不把操作口径说成严格中枢）
+  if (asText(rec.basis) !== CENTRE_BASIS || asText(rec.strictness) !== CENTRE_STRICTNESS) {
+    return {
+      centre: null,
+      provided,
+      rejectReason: 'centre-label-mismatch',
+      detail: `中枢块口径(${String(rec.basis)}/${String(rec.strictness)})不是 ${CENTRE_BASIS}/${CENTRE_STRICTNESS}，拒绝按旧标签绘制`,
+    }
+  }
+  const statusRaw = asText(rec.status)
+  const status = CENTRE_STATUSES.find((s) => s === statusRaw) ?? null
+  if (!status) {
+    return {
+      centre: null,
+      provided,
+      rejectReason: 'centre-unknown-status',
+      detail: `中枢状态(${String(rec.status)})不认识，拒绝绘制`,
+    }
+  }
+  // ② 同一份快照: 标的 / 截止日 / 笔序列摘要三者都要对得上
+  const source = asRecord(rec.source)
+  const centreSymbol = asText(source?.symbol)
+  if (ctx.symbol !== null && centreSymbol !== null && centreSymbol !== ctx.symbol) {
+    return {
+      centre: null,
+      provided,
+      rejectReason: 'centre-cross-snapshot',
+      detail: `中枢属于 ${centreSymbol}, 不是当前结构 ${ctx.symbol}`,
+    }
+  }
+  const asOf = asDay(rec.as_of_day)
+  if (!asOf || (ctx.asOfDay !== null && asOf !== ctx.asOfDay)) {
+    return {
+      centre: null,
+      provided,
+      rejectReason: 'centre-cross-snapshot',
+      detail: '中枢截止日与结构截止日不一致（疑似混批），拒绝绘制',
+    }
+  }
+  const penDigest = typeof source?.pen_digest === 'string' ? source.pen_digest : null
+  if (ctx.segmentsDigest !== null && penDigest !== null && penDigest !== ctx.segmentsDigest) {
+    return {
+      centre: null,
+      provided,
+      rejectReason: 'centre-cross-snapshot',
+      detail: '中枢的笔序列摘要与线段块不是同一份（疑似混批），拒绝绘制',
+    }
+  }
+
+  // ③ 区间与状态必须一致（两种错法都不许"修一下"）
+  const zoneRec = asRecord(rec.zone)
+  let zone: ChanCentreZone | null = null
+  if (zoneRec) {
+    const zd = zoneRec.zd
+    const zg = zoneRec.zg
+    if (
+      typeof zd !== 'number' ||
+      typeof zg !== 'number' ||
+      !Number.isFinite(zd) ||
+      !Number.isFinite(zg) ||
+      zd <= 0 ||
+      zg <= 0 ||
+      zd >= zg
+    ) {
+      return {
+        centre: null,
+        provided,
+        rejectReason: 'centre-zone-invalid',
+        detail: '中枢区间(zd/zg)不是有限正数且 zd<zg，拒绝绘制',
+      }
+    }
+    zone = { zd, zg }
+  }
+  if (status === 'centre' && !zone) {
+    return {
+      centre: null,
+      provided,
+      rejectReason: 'centre-zone-contradicts-status',
+      detail: '状态说已测出中枢，但没有可画的价格区间(zd/zg)，拒绝绘制',
+    }
+  }
+  if (status !== 'centre' && zone) {
+    return {
+      centre: null,
+      provided,
+      rejectReason: 'centre-zone-contradicts-status',
+      detail: `状态是 ${status} 却带了价格区间，自相矛盾，拒绝绘制`,
+    }
+  }
+
+  const issuesRaw = Array.isArray(rec.issues) ? rec.issues : []
+  const issues: ChanOperationalCentre['issues'] = []
+  for (const item of issuesRaw) {
+    const issue = asRecord(item)
+    if (!issue) continue
+    const reason = asText(issue.reason)
+    if (!reason) continue
+    issues.push({
+      reason,
+      detail: asText(issue.detail),
+      blocking: issue.blocking === true,
+    })
+  }
+  const limitations = Array.isArray(rec.limitations)
+    ? rec.limitations.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    : []
+
+  return {
+    centre: {
+      status,
+      basis: CENTRE_BASIS,
+      strictness: CENTRE_STRICTNESS,
+      chainComplete: rec.chain_complete === true,
+      zone,
+      issues,
+      limitations,
+      confirmedPrefixLength:
+        typeof rec.confirmed_prefix_length === 'number' && Number.isInteger(rec.confirmed_prefix_length)
+          ? rec.confirmed_prefix_length
+          : null,
+      totalSegments:
+        typeof rec.total_segments === 'number' && Number.isInteger(rec.total_segments) ? rec.total_segments : null,
+      asOfDay: asOf,
+      visibleOn: asDay(rec.visible_on),
+      statusNote: asText(rec.status_note),
+    },
+    provided,
+    rejectReason: null,
+    detail: null,
+  }
+}
+
+/**
+ * 操作口径中枢的人话说明（图例/状态条共用；**不是**买卖点、不是方向性结论）。
+ *
+ * 三种"没有区间"的分开说，绝不合并：
+ *  - `not_enough_confirmed_segments`：还没凑够 3 条已确认线段（不能说中枢不存在）；
+ *  - `no_centre`：实测前 3 条已确认线段无交集（measured absence）；
+ *  - `blocked_before_centre`：线段内核在凑够 3 条前就拒绝出版（数据不完整）。
+ */
+export function chanCentreStatusText(centre: ChanOperationalCentre): string {
+  const band = '操作口径·非严格中枢'
+  switch (centre.status) {
+    case 'centre':
+      return centre.zone
+        ? `${band}：价格带 zd ${centre.zone.zd} ~ zg ${centre.zone.zg}（basis=segment_a0 / operational_not_strict，非买卖点、非交易信号）`
+        : `${band}：服务端未给出可画区间`
+    case 'no_centre':
+      return `${band}：实测无交集（no_centre，measured absence——不是缺数据，也不是等一等就有）`
+    case 'not_enough_confirmed_segments':
+      return `${band}未形成：已确认线段还不到 3 条（not_enough_confirmed_segments——不能据此说中枢不存在）`
+    case 'blocked_before_centre':
+      return `${band}：线段内核在凑够 3 条前就拒绝出版（blocked_before_centre，数据不完整，既不说有、也不说没有）`
+    default:
+      return `${band}：状态未知`
+  }
+}
+
+// ── 线段 / 操作口径中枢 → 图上几何 ────────────────────────────────────
+
+export interface ChanSegmentColors {
+  /** 已确认线段：粗实线（比笔粗一档，才是"更大级别"的视觉语言） */
+  confirmed: string
+  /** 候选线段：虚线（同色压淡）+ 图例明写"可漂移" */
+  candidate: string
+  /** 操作口径中枢价格带 */
+  centre: string
+}
+
+/**
+ * 线段/中枢的固定配色（导出给测试与调用方共用同一真源）。
+ *
+ * 与笔的紫色(`#6d28d9`)**刻意不同色**：线段是更大级别的几何，同色会被读成同一条笔。
+ */
+export const CHAN_SEGMENT_COLORS: ChanSegmentColors = {
+  confirmed: '#0e7490',
+  candidate: chanColorWithAlpha('#0e7490', 0.55),
+  centre: '#b45309',
+}
+
+/** 操作口径中枢的价格带标签（图例与轴标签共用同一串字，改一处就同时改）。 */
+export const CHAN_CENTRE_LABEL = '操作口径·非严格中枢'
+
+export interface ChanSegmentLine {
+  key: string
+  status: ChanSegmentStatus
+  /** true = 终点可漂移（候选），图例据此明写"可漂移" */
+  driftable: boolean
+  startDay: string
+  startPrice: number
+  endDay: string
+  endPrice: number
+  dashed: boolean
+  /** 已确认 = 2（较粗）；候选 = 1（细虚线） */
+  lineWidth: 1 | 2
+  color: string
+}
+
+export type ChanSegmentSkipReason = 'invalid-segment' | 'endpoint-day-not-on-chart'
+
+export interface ChanSegmentSkip {
+  key: string
+  reason: ChanSegmentSkipReason
+  startDay: string
+  endDay: string
+}
+
+/**
+ * 可画线段 → 图表线段（每条只有服务端给的两个端点）。
+ *
+ * 与笔同一套定位铁律：两个端点日都必须是**当前画面上真有的一根 K 线**，少一天就整段不画
+ * 并计数 —— 绝不把端点贴到"最近的柱子"上。`blocked` / `pending` 根本不在这里（不进可画集合）。
+ */
+export function buildChanSegmentLines(
+  batch: Pick<ChanSegmentBatch, 'confirmed' | 'candidateTail'>,
+  opts: { barDays: ReadonlySet<string>; colors: ChanSegmentColors },
+): { segments: ChanSegmentLine[]; skipped: ChanSegmentSkip[] } {
+  const segments: ChanSegmentLine[] = []
+  const skipped: ChanSegmentSkip[] = []
+  const all = batch.candidateTail ? [...batch.confirmed, batch.candidateTail] : [...batch.confirmed]
+  for (const seg of all) {
+    const key = `${seg.startDay}>${seg.endDay}`
+    const valid =
+      isValidCalendarDay(seg.startDay) &&
+      isValidCalendarDay(seg.endDay) &&
+      seg.startDay < seg.endDay &&
+      Number.isFinite(seg.startPrice) &&
+      seg.startPrice > 0 &&
+      Number.isFinite(seg.endPrice) &&
+      seg.endPrice > 0 &&
+      (seg.status === 'confirmed'
+        ? isValidCalendarDay(seg.confirmedOn) && seg.confirmedOn > seg.endDay
+        : seg.confirmedOn === null && seg.driftable)
+    if (!valid) {
+      skipped.push({ key, reason: 'invalid-segment', startDay: seg.startDay, endDay: seg.endDay })
+      continue
+    }
+    if (!opts.barDays.has(seg.startDay) || !opts.barDays.has(seg.endDay)) {
+      skipped.push({ key, reason: 'endpoint-day-not-on-chart', startDay: seg.startDay, endDay: seg.endDay })
+      continue
+    }
+    const confirmed = seg.status === 'confirmed'
+    segments.push({
+      key,
+      status: seg.status,
+      driftable: seg.driftable,
+      startDay: seg.startDay,
+      startPrice: seg.startPrice,
+      endDay: seg.endDay,
+      endPrice: seg.endPrice,
+      dashed: !confirmed,
+      lineWidth: confirmed ? 2 : 1,
+      color: confirmed ? opts.colors.confirmed : opts.colors.candidate,
+    })
+  }
+  return { segments, skipped }
+}
+
+/** 操作口径中枢价格带上的一条水平线（zd / zg）。 */
+export interface ChanCentreLine {
+  /** 水平线价位 */
+  price: number
+  /** 轴标签（一律带"操作口径·非严格中枢"，绝不写"中枢"两个字就完事） */
+  title: string
+  /** 价位角色的中文说明（图例用） */
+  role: 'zd' | 'zg'
+}
+
+export interface ChanCentreBand {
+  status: ChanCentreStatus
+  label: string
+  zd: number
+  zg: number
+  color: string
+  /** 固定两条：下沿 zd、上沿 zg（不做矩形/填充：矩形要自绘，容易画成"已确认区域"） */
+  lines: ChanCentreLine[]
+  dashed: boolean
+}
+
+/**
+ * 操作口径中枢 → 价格带（两条水平线）。
+ *
+ * 只有 `status='centre'` 且有合法 `zone` 才产出；其余状态返回 `null` —— 状态本身由
+ * `chanCentreStatusText` 说明，绝不画一个"零高度/大概位置"的带冒充中枢。
+ * 线型固定虚线（DiDot 由调用方给 LineStyle）：它是操作口径，不是已确认结构。
+ */
+export function buildChanCentreBand(
+  centre: ChanOperationalCentre | null,
+  opts: { colors: ChanSegmentColors },
+): ChanCentreBand | null {
+  if (!centre || centre.status !== 'centre' || !centre.zone) return null
+  const { zd, zg } = centre.zone
+  if (!Number.isFinite(zd) || !Number.isFinite(zg) || zd <= 0 || zg <= 0 || zd >= zg) return null
+  return {
+    status: centre.status,
+    label: CHAN_CENTRE_LABEL,
+    zd,
+    zg,
+    color: opts.colors.centre,
+    lines: [
+      { price: zd, title: `${CHAN_CENTRE_LABEL} zd`, role: 'zd' },
+      { price: zg, title: `${CHAN_CENTRE_LABEL} zg`, role: 'zg' },
+    ],
+    dashed: true,
+  }
+}
+
 /**
  * 「当前画面可绑定的快照」信号（`KlineChart.onChanSnapshotChange` 的载荷）。
  *
@@ -988,6 +1697,28 @@ export function chanStatusText(view: ChanLayerView): string {
         if (view.structure.penRejectReason) bits.push(`笔不可用（${view.structure.penRejectReason}）`)
       } else {
         bits.push('笔未提供（本响应不含 pens）')
+      }
+      if (view.structure.segmentsProvided) {
+        bits.push(
+          `线段 已确认 ${view.structure.segments.length} 条` +
+            (view.structure.segmentCandidate ? ' · 候选 1 条(可漂移)' : ''),
+        )
+        if (view.structure.segmentBlocked > 0) bits.push(`blocked 线段 ${view.structure.segmentBlocked} 条（不绘）`)
+        if (view.structure.segmentPending > 0) bits.push(`pending 线段 ${view.structure.segmentPending} 条（不绘）`)
+        if (view.structure.segmentDropped > 0) bits.push(`线段脏行 ${view.structure.segmentDropped} 条已丢弃`)
+        if (view.structure.segmentRejectReason) bits.push(`线段不可用（${view.structure.segmentRejectReason}）`)
+      } else {
+        bits.push('线段未提供（本响应不含 segments）')
+      }
+      if (view.structure.centre) {
+        // 「不够」与「实测没有」必须分开说：not_enough 绝不写成"无中枢"
+        bits.push(chanCentreStatusText(view.structure.centre))
+      } else if (view.structure.centreRejectReason) {
+        bits.push(`中枢块未绘（${view.structure.centreRejectReason}）`)
+      } else if (view.structure.centreProvided) {
+        bits.push('中枢块未给出可画结论')
+      } else {
+        bits.push('中枢未提供（本响应不含 operational_centre）')
       }
       if (view.structure.omittedLatestReason) {
         bits.push(`当日 K 未参与（${view.structure.omittedLatestReason}）`)

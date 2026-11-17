@@ -135,21 +135,29 @@ export type { KlineRangeStats, RangeBar } from '../lib/range-stats'
 // **前端不自算结构**; blocked 不画成结构; 无买卖语义。
 import {
   auditBarsTransform,
+  buildChanCentreBand,
   buildChanMarkers,
   buildChanPenSegments,
+  buildChanSegmentLines,
+  CHAN_CENTRE_LABEL,
+  CHAN_SEGMENT_COLORS,
   CHAN_STRUCTURE_TIMEOUT_MS,
+  chanCentreStatusText,
   chanColorWithAlpha,
   chanStatusText,
   normalizeChanStructure,
   pickChanSnapshot,
   startChanRequest,
   type ChanBarsAudit,
+  type ChanCentreBand,
   type ChanChartSnapshot,
   type ChanLayerView,
   type ChanMarkerSpec,
   type ChanPenColors,
   type ChanPenSegment,
   type ChanPenSkip,
+  type ChanSegmentLine,
+  type ChanSegmentSkip,
   type ChanSnapshotPick,
 } from '../lib/chan-layer'
 
@@ -569,7 +577,14 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean; /** 纯时间点标注(2026-10-29) —— 默认开; 独立于 L4 事件层(两者数据源/口径不同) */ annotation?: boolean; /** 缠论分型(2026-11-17) —— **默认关**(需显式 true 才开; 父不传 = 组件自持本地开关) */ chan?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean; /** 纯时间点标注(2026-10-29) —— 默认开; 独立于 L4 事件层(两者数据源/口径不同) */ annotation?: boolean; /** 缠论分型/笔(2026-11-17) —— **默认关**(需显式 true 才开; 父不传 = 组件自持本地开关) */ chan?: boolean; /**
+   * 缠论**线段**子图层(2026-11-18) —— **默认关**, 且**独立于** `chan`：
+   * 分型/笔开着也不代表要画线段(线段是更大级别), 关掉线段也不许影响分型/笔。
+   * 只有在 `chan` 打开、结构就绪后才有几何可画。
+   */ chanSegments?: boolean; /**
+   * 缠论**操作口径中枢**子图层(2026-11-18) —— **默认关**, 同样独立于 `chan`/`chanSegments`。
+   * 画的是 price band(zd/zg 两条水平线), 标注「操作口径·非严格中枢」；不是买卖点/交易信号。
+   */ chanCentre?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /**
@@ -802,6 +817,17 @@ export default function KlineChart(props: {
   const [chanLocalOn, setChanLocalOn] = useState(false)
   const showChanLayer = props.layersVisible?.chan ?? chanLocalOn
   /**
+   * 子图层开关(2026-11-18): **线段** 与 **操作口径中枢** 各自独立、默认关。
+   *
+   * 为什么不是 `chan` 的从属：线段是比笔更大级别的几何，中枢又只是操作口径的价格带。
+   * 三者任一被关掉都只影响自己那批 series/价位线 —— 不许连带删别人的（分型 marker、笔线、
+   * 均线、买卖点 marker 全部不动）。父传了值就以父为准（与 `chan` 同一套受控口径）。
+   */
+  const [chanSegmentLocalOn, setChanSegmentLocalOn] = useState(false)
+  const showChanSegmentLayer = props.layersVisible?.chanSegments ?? chanSegmentLocalOn
+  const [chanCentreLocalOn, setChanCentreLocalOn] = useState(false)
+  const showChanCentreLayer = props.layersVisible?.chanCentre ?? chanCentreLocalOn
+  /**
    * 标的身份: 只认**显式** `instrument='stock'|'index'`。
    *
    * 为什么不能猜: A 股指数与个股同码(`000001` = 上证指数 / 平安银行)。前端按代码"看起来
@@ -869,6 +895,20 @@ export default function KlineChart(props: {
    * 关图层、切股/周期、失败/409、旧请求竞态、unmount 都只删自己这一批, 不能连别人的线一起删。
    */
   const penSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
+  /**
+   * 线段的 line series(每条 confirmed/candidate 线段一条)。
+   *
+   * 与 `penSeriesRef` 分开的理由一模一样: 线段子图层可以被独立关掉/切股/失败, 清理时只许
+   * 删自己这一批, 笔线/均线/趋势线一条都不许连带删除。
+   */
+  const segmentSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
+  /**
+   * 操作口径中枢价格带的两条水平线(zd / zg)。
+   *
+   * 与支撑压力/成本/情景价位线**分开记账**: 关掉中枢子图层只撤这两条, 别把别人的价位线
+   * 一起 `removePriceLine` 掉。
+   */
+  const centreLinesRef = useRef<Array<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>>>([])
 
   /**
    * 「重读图表」动作(2026-11-17 复审修复): 409 / 超时 / K 线加载失败时, 界面上必须有一个
@@ -1344,10 +1384,14 @@ export default function KlineChart(props: {
         for (const line of priceLinesRef.current) seriesRef.current.removePriceLine(line)
         for (const line of costLinesRef.current) seriesRef.current.removePriceLine(line)
         for (const line of scenarioLinesRef.current) seriesRef.current.removePriceLine(line)
+        // 操作口径中枢价格带(2026-11-18): 随图销毁, 引用也必须清空(不留指向死图的句柄)
+        for (const line of centreLinesRef.current) seriesRef.current.removePriceLine(line)
       }
       priceLinesRef.current = []
       costLinesRef.current = []
       scenarioLinesRef.current = []
+      centreLinesRef.current = []
+      segmentSeriesRef.current = []
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
@@ -1693,6 +1737,15 @@ export default function KlineChart(props: {
         setChanView({
           phase: 'snapshot-mismatch',
           detail: `结构响应自述标的类型(${structure.instrument})与当前图(${chanBinding.instrument})不一致`,
+        })
+        return
+      }
+      // 市场也必须对得上(2026-11-18): 分型/笔/线段/中枢是同一份响应, 市场串了就是整份
+      // 属于另一张图 —— 一条几何都不许画, 线段/中枢也随 structure 一起被拒。
+      if (structure.market && structure.market !== chanBinding.market) {
+        setChanView({
+          phase: 'snapshot-mismatch',
+          detail: `结构响应属于 ${structure.market} 市场, 不是当前图 ${chanBinding.market}`,
         })
         return
       }
@@ -2198,6 +2251,133 @@ export default function KlineChart(props: {
     }
     return clearPens
   }, [showChanLayer, chanPenLayer, chanView, interval, props.height, dataLen])
+
+  // ── 缠论线段子图层(2026-11-18): 同一份快照的 confirmed 前缀 + 尾部候选 ─────────
+  /**
+   * 线段的绘制材料(只在「缠论图层开 + 线段子图层开 + 日K + 结构就绪」时产出)。
+   *
+   * 与笔同一套定位铁律：两个端点日都必须是**图上真有的一根 K 线**，否则整段不画并计数。
+   * `blocked` / `pending` 不在这里(它们没有价格几何, 只进图例计数)。
+   */
+  const chanSegmentLayer = useMemo<{ segments: ChanSegmentLine[]; skipped: ChanSegmentSkip[] }>(() => {
+    if (!showChanLayer || !showChanSegmentLayer || chanView.phase !== 'ready' || interval !== '1d') {
+      return { segments: [], skipped: [] }
+    }
+    const barDays = new Set<string>()
+    for (const b of rawKlinesRef.current) {
+      const day = isoDayFromChartTime(b.time)
+      if (day !== null) barDays.add(day)
+    }
+    return buildChanSegmentLines(
+      { confirmed: chanView.structure.segments, candidateTail: chanView.structure.segmentCandidate },
+      { barDays, colors: CHAN_SEGMENT_COLORS },
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showChanLayer, showChanSegmentLayer, chanView, interval, dataLen])
+
+  /**
+   * 线段 → Lightweight Charts 原生 LineSeries(每段两个点: 服务端起点/终点)。
+   *
+   * 视觉口径(无买卖语义)：已确认 = **粗实线**(lineWidth 2, 比笔粗一档 —— 更大级别)；
+   * 候选 = **细虚线**(lineWidth 1)且必须显式标 `driftable`(图例里写"可漂移")。
+   * 清理责任同笔：只增删 `segmentSeriesRef` 里的 series，别人的一条都不碰。
+   */
+  useEffect(() => {
+    const chart = chartRef.current
+    const clearSegments = () => {
+      const own = segmentSeriesRef.current
+      segmentSeriesRef.current = []
+      if (!chart || chartRef.current !== chart) return
+      for (const s of own) {
+        try {
+          chart.removeSeries(s)
+        } catch {
+          /* 线已不在图上: 目标已达成, 不额外抛错 */
+        }
+      }
+    }
+    if (!chart) {
+      segmentSeriesRef.current = []
+      return
+    }
+    // 先无条件清场: 切股/切周期/关任一开关/失败时, 上一张图的线段必须立刻消失
+    clearSegments()
+    if (!showChanLayer || !showChanSegmentLayer || interval !== '1d' || chanView.phase !== 'ready') return
+    for (const seg of chanSegmentLayer.segments) {
+      const line = chart.addSeries(LineSeries, {
+        color: seg.color,
+        lineWidth: seg.lineWidth,
+        lineStyle: seg.dashed ? LineStyle.Dashed : LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      // 只有两个点: 服务端起点与终点。不插值、不补中间日、不跨线段连线。
+      line.setData([
+        { time: toChartTime(seg.startDay, '1d'), value: seg.startPrice },
+        { time: toChartTime(seg.endDay, '1d'), value: seg.endPrice },
+      ] as never)
+      segmentSeriesRef.current.push(line)
+    }
+    return clearSegments
+  }, [showChanLayer, showChanSegmentLayer, chanSegmentLayer, chanView, interval, props.height, dataLen])
+
+  // ── 操作口径中枢子图层(2026-11-18): 价格带(zd/zg 两条水平线) ─────────────────
+  /**
+   * 价格带材料：只有 `status='centre'` 且有合法区间才产出(见 `buildChanCentreBand`)。
+   *
+   * `not_enough_confirmed_segments` / `no_centre` / `blocked_before_centre` 一律 `null`
+   * —— 它们由图例用**各自的措辞**说明，绝不画一条"大概位置"的线冒充中枢。
+   */
+  const chanCentreBand = useMemo<ChanCentreBand | null>(() => {
+    if (!showChanLayer || !showChanCentreLayer || chanView.phase !== 'ready' || interval !== '1d') return null
+    return buildChanCentreBand(chanView.structure.centre, { colors: CHAN_SEGMENT_COLORS })
+  }, [showChanLayer, showChanCentreLayer, chanView, interval])
+
+  /**
+   * 价格带 → 两条 price line(zd / zg)。
+   *
+   * 用的是蜡烛 series 的 `createPriceLine`(与支撑压力/成本线同一个原生能力), 但**独立记账**：
+   * 关掉中枢子图层只撤自己这两条。`axisLabelVisible` 打开, 标签一律写
+   * 「操作口径·非严格中枢 zd/zg」—— 用户读到的是操作口径, 不是"中枢压力位"。
+   */
+  useEffect(() => {
+    const series = seriesRef.current
+    const clearLines = () => {
+      if (!series) {
+        centreLinesRef.current = []
+        return
+      }
+      for (const line of centreLinesRef.current) {
+        try {
+          series.removePriceLine(line)
+        } catch {
+          /* 线已不在图上: 目标已达成 */
+        }
+      }
+      centreLinesRef.current = []
+    }
+    if (!series) {
+      centreLinesRef.current = []
+      return
+    }
+    clearLines()
+    if (!chanCentreBand) return
+    for (const line of chanCentreBand.lines) {
+      if (!Number.isFinite(line.price)) continue
+      centreLinesRef.current.push(
+        series.createPriceLine({
+          price: line.price,
+          color: chanCentreBand.color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: line.title,
+        } as never),
+      )
+    }
+    return clearLines
+  }, [chanCentreBand, chanView, interval, props.height])
 
   // ── L4 事件 markers + 支撑压力位 price lines + 资金柱 (阶段二+三) ──
   useEffect(() => {
@@ -2840,6 +3020,9 @@ export default function KlineChart(props: {
   const chanCandidate = chanStructure ? chanStructure.fractals.filter((f) => f.status === 'candidate').length : 0
   const chanPenConfirmed = chanStructure ? chanStructure.pens.filter((p) => p.status === 'confirmed').length : 0
   const chanPenCandidate = chanStructure ? chanStructure.pens.filter((p) => p.status === 'candidate').length : 0
+  // 线段子图层(2026-11-18): 图例只做计数, 判定全在纯函数里
+  const chanSegmentConfirmed = chanStructure ? chanStructure.segments.length : 0
+  const chanSegmentHasCandidate = chanStructure ? chanStructure.segmentCandidate !== null : false
   // 暗盘资金档悬停"四组合用法"(规格 §2): 收盘涨跌 × 暗盘红绿 → 用法提示(证据口径, 非建议)
   const hoverPoolCombo =
     subchart === 'dark_pool' && hoverReadout
@@ -2992,6 +3175,46 @@ export default function KlineChart(props: {
             }
           >
             🧩 缠论结构
+          </button>
+        )}
+        {/*
+          缠论子图层开关(2026-11-18): **线段** 与 **操作口径中枢**, 各自独立、默认关。
+          只在缠论图层开着时出现(主图层关着时它们没有几何可画, 摆出来就是假控件);
+          关掉其中任何一个都只撤自己那批 series/价位线, 分型/笔与别人的图层一律不动。
+          父传了 `layersVisible.chanSegments|chanCentre` 时由父接管(不渲染本按钮)。
+        */}
+        {showChanLayer && props.layersVisible?.chanSegments === undefined && (
+          <button
+            type="button"
+            data-testid="chan-segment-toggle"
+            aria-pressed={showChanSegmentLayer}
+            disabled={!chanInstrument}
+            onClick={() => setChanSegmentLocalOn((v) => !v)}
+            className={`min-h-[28px] px-2.5 py-1 text-xs rounded font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              showChanSegmentLayer
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+            }`}
+            title="显示/隐藏缠论线段(仅日K): 已确认=粗实线, 尾部候选=细虚线且终点仍可漂移; blocked/pending 不画; 无买卖语义"
+          >
+            〰 线段
+          </button>
+        )}
+        {showChanLayer && props.layersVisible?.chanCentre === undefined && (
+          <button
+            type="button"
+            data-testid="chan-centre-toggle"
+            aria-pressed={showChanCentreLayer}
+            disabled={!chanInstrument}
+            onClick={() => setChanCentreLocalOn((v) => !v)}
+            className={`min-h-[28px] px-2.5 py-1 text-sm rounded font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              showChanCentreLayer
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+            }`}
+            title="显示/隐藏操作口径中枢(仅日K): zd/zg 价格带两条水平线, 标注「操作口径·非严格中枢」; 不是买卖点, 不构成交易信号"
+          >
+            ▤ 操作口径中枢
           </button>
         )}
       </div>
@@ -3161,6 +3384,57 @@ export default function KlineChart(props: {
           ) : (
             <span>笔未提供（本响应不含 pens，后端未给）</span>
           )}
+          {/* 线段子图层(2026-11-18): 已确认前缀=几何; 候选只画虚线并明写"可漂移";
+              blocked/pending **不给线型样例**(它们没有价格几何), 只计数。 */}
+          {chanStructure.segmentsProvided ? (
+            <>
+              <span data-testid="chan-segment-legend">
+                <span style={{ color: CHAN_SEGMENT_COLORS.confirmed }}>━</span> 线段 已确认(粗实线) {chanSegmentConfirmed}
+                {chanSegmentHasCandidate && (
+                  <>
+                    <span className="ml-1" style={{ color: CHAN_SEGMENT_COLORS.candidate }}>┈</span> 候选(细虚线·终点可漂移) 1
+                  </>
+                )}
+              </span>
+              {chanStructure.segmentBlocked > 0 && (
+                <span>blocked 线段 {chanStructure.segmentBlocked} 段（不绘·服务端未给价格几何）</span>
+              )}
+              {chanStructure.segmentPending > 0 && (
+                <span>pending 线段 {chanStructure.segmentPending} 条（不绘）</span>
+              )}
+              {chanStructure.segmentDropped > 0 && (
+                <span>线段脏行 {chanStructure.segmentDropped} 段已丢弃</span>
+              )}
+              {chanStructure.segmentRejectReason && (
+                <span className="text-amber-600 dark:text-amber-400">
+                  线段整批未绘（{chanStructure.segmentRejectReason}）
+                </span>
+              )}
+              {chanSegmentLayer.skipped.length > 0 && (
+                <span>{chanSegmentLayer.skipped.length} 条线段端点日不在图上，未绘制</span>
+              )}
+            </>
+          ) : (
+            <span>线段未提供（本响应不含 segments，后端未给）</span>
+          )}
+          {/* 操作口径中枢(2026-11-18): 「不够」与「实测没有」分开说; 价格带用独立的子图层开关。 */}
+          {chanStructure.centre ? (
+            <span data-testid="chan-centre-legend">
+              <span style={{ color: CHAN_SEGMENT_COLORS.centre }}>▤</span>{' '}
+              {chanCentreStatusText(chanStructure.centre)}
+              {chanStructure.centre.zone && !chanCentreBand && '（价格带未显示：子图层未开）'}
+              {chanStructure.centre.issues.some((i) => i.blocking) && ' · 结构不完整（见 issues）'}
+            </span>
+          ) : chanStructure.centreRejectReason ? (
+            <span data-testid="chan-centre-legend" className="text-amber-600 dark:text-amber-400">
+              中枢块未绘（{chanStructure.centreRejectReason}）
+              {chanStructure.centreRejectDetail ? `：${chanStructure.centreRejectDetail}` : ''}
+            </span>
+          ) : chanStructure.centreProvided ? (
+            <span data-testid="chan-centre-legend">中枢块未给出可画结论</span>
+          ) : (
+            <span>中枢未提供（本响应不含 operational_centre，后端未给）</span>
+          )}
           {chanStructure.blocked > 0 && <span>blocked {chanStructure.blocked} 个（不绘为结构）</span>}
           {chanStructure.dropped > 0 && <span>脏行 {chanStructure.dropped} 个已丢弃</span>}
           {chanMarkers.skipped.length > 0 && (
@@ -3172,7 +3446,9 @@ export default function KlineChart(props: {
           <span>
             复权口径 {chanStructure.adjustment} · 终局性 {chanStructure.finality}
           </span>
-          <span>未实现线段/中枢/买卖点 · 笔=规则几何 · 客观标注 · 非投资建议</span>
+          <span>
+            严格中枢(第18课定义)/买卖点仍未实现 · 线段=规则几何 · {CHAN_CENTRE_LABEL}=操作口径非严格几何(非买卖点/非交易信号) · 客观标注 · 非投资建议
+          </span>
         </div>
       )}
 
