@@ -1,0 +1,20 @@
+{
+  "instrument": "002361.SZ",
+  "interval": "1d",
+  "source_description": "Local research CSV named tq_daily_20260831_20261113.csv; original producing script version not verified",
+  "original_csv_sha256": "54cbcbf3ef1d34386493dc5c2066563b13f59521620659344e1f6b7a271e33f2",
+  "adjustment": "unknown",
+  "historical_identity": "unknown",
+  "point_in_time_availability": "unknown",
+  "provenance_note": "Retrospective sample for geometric algorithm verification only; not a PIT or source-finality certification.",
+  "rule": "inclusive-containment-sequential-strict-fractal-right-sealed-v1",
+  "bars": [
+    {"day":"2026-08-31", "open":10.33, "high":10.58, "low":10.29, "close":10.56},
+    {"day":"2026-09-01", "open":10.52, "high":11.00, "low":10.40, "close":10.62},
+    {"day":"2026-09-02", "open":10.45, "high":11.32, "low":10.40, "close":11.04},
+    {"day":"2026-09-03", "open":11.00, "high":11.00, "low":10.46, "close":10.55},
+    {"day":"2026-09-04", "open":10.51, "high":11.05, "low":10.45, "close":10.60},
+    {"day":"2026-09-07", "open":10.49, "high":10.55, "low":10.30, "close":10.36}
+  ],
+  "manual_expectation": {"kind":"top", "position_day":"2026-09-02", "position_price":11.32, "candidate_asof":"2026-09-04", "confirmed_on":"2026-09-07", "merged_high":11.32, "merged_low":10.46}
+}
