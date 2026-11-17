@@ -58,26 +58,56 @@ caller-computed ``snapshot_version`` digest) plus ``basis`` and ``as_of_day``.
   ``confirmed_on <= as_of_day`` (no look-ahead), and confirmations are
   non-decreasing along the chain.
 
+Formation vs lifecycle: two different claims
+--------------------------------------------
+A centre that exists here is **already confirmed**: it can only be built once the
+third segment is confirmed, and ``OperationalCentre.confirmed_on`` is that day.
+The lifecycle state is a *later* question asked of the segments that follow, so it
+starts at ``formed`` — never ``candidate``, which would wrongly suggest the zone
+itself is still unconfirmed.  ``OperationalCentreSnapshot.formation_confirmed`` /
+``lifecycle_status`` keep the two apart explicitly.
+
 Lifecycle: only provable states
 -------------------------------
 Measured on the segments *after* the third, left to right, so a return resets the
-question:
+question.  A departure is read off a segment's **endpoint**, never off its range:
+a segment that starts inside the zone and ends above it *has left the zone*, even
+though its range still overlaps.  (v1 read the range; such an exit then hid as a
+re-entry and the following reversal was mis-dated as the first departure, so the
+break could never be confirmed.)
 
-* ``candidate`` — the centre has formed and nothing after it has tested the zone
+* ``formed`` — the centre is confirmed and nothing after it has tested the zone
   yet (``centre_formed_not_tested``);
-* ``extended`` — a later segment re-enters the **closed** interval
-  (``returned_to_zone``), touches an edge only (``touched_edge``), or crosses to
-  the far side (``crossed_through``).  A touch is a return, and crossing through
-  is not "leaving and not coming back": neither is a break;
-* ``unknown`` — a segment lies wholly outside the zone but there is no reverse
-  segment yet, so nothing proves price will not come back
-  (``departure_without_reversal``);
-* ``broken`` — a departure is followed by a *reverse* segment that stays wholly
-  outside on the same side (``left_without_return``); quoted on that reverse
-  segment's confirmation day and terminal afterwards.
+* ``extended`` — a later segment reaches into the **closed** interval and *ends*
+  inside it, i.e. an edge touch or a real return (``touched_edge``,
+  ``returned_to_zone``).  A touch is a return: not a break;
+* ``unknown`` — price ended outside the zone but nothing yet proves it stays
+  away:
+
+  - a segment ended outside the zone and no reverse segment has followed
+    (``departure_without_reversal``);
+  - a segment crossed the zone and ended on the far side, so the zone was
+    traversed rather than left on one side (``crossed_through``); the open
+    departure moves to the new side — leaving one side and proving it on the
+    other are two different claims, and neither is a break;
+  - a reverse segment sits wholly outside on the *opposite* side without
+    traversing the zone (``departure_far_side_unproven``), which a connected
+    chain cannot do; contradictory input is never upgraded to a break;
+* ``broken`` — a departure is followed by a *reverse* segment whose **whole
+  range** stays outside on the same side, never touching the zone
+  (``left_without_return``); quoted on that reverse segment's confirmation day
+  and terminal afterwards.
+
+The third constituent is a centre part, not a departure: an exit taken by segment
+2 (it may already end outside the zone) never breaks its own zone.  When the next
+segment also sits wholly outside on that side, whether the leave began at the
+constituent or at that segment is not decidable from this data, so the state is
+``unknown`` with ``departure_origin_ambiguous=True`` — not a guess.  Both readings
+agree one segment later, and the break is then dated on that later segment.
 
 Every state carries ``visible_on`` (the evidence day, never the raw time) and the
-segment indices it rests on.
+segment indices it rests on; departures also carry ``departure_index`` /
+``departure_side`` so the call can be audited.
 
 Not implemented (do not claim otherwise)
 ----------------------------------------
@@ -113,7 +143,7 @@ __all__ = [
 ]
 
 #: Version of this rule set.  Any behaviour change needs a new version.
-CENTRE_KERNEL_VERSION = 'chan-operational-centre-v1'
+CENTRE_KERNEL_VERSION = 'chan-operational-centre-v2'
 
 #: Where the segments come from: the caller, already completed and confirmed.
 INPUT_KIND = 'externally_supplied_completed_segments'
@@ -129,7 +159,11 @@ SEGMENTS_ENGINE = 'none'
 
 _Directions = ('up', 'down')
 _Direction = Literal['up', 'down']
-_State = Literal['candidate', 'extended', 'broken', 'unknown']
+_Side = Literal['above', 'below']
+_Relation = Literal['above', 'below', 'overlap']
+#: ``formed`` is the confirmed centre with nothing tested yet — the centre itself
+#: is never a ``candidate``; only its lifecycle is still open.
+_State = Literal['formed', 'extended', 'broken', 'unknown']
 _StateReason = Literal[
     'centre_formed_not_tested',
     'returned_to_zone',
@@ -223,6 +257,13 @@ class CentreState:
     time of the zone, never the day the centre's structure started.
     ``evidence_segment_indices`` names the segments the state rests on, so a
     reader can audit the call instead of trusting a label.
+
+    ``departure_index``/``departure_side`` say which segment took price out of
+    the zone and on which side; a departure is read off that segment's *ending*
+    price.  ``departure_origin_ambiguous`` is set when the centre's own third
+    constituent had already ended outside the zone, so whether the leave began at
+    the constituent or at ``departure_index`` cannot be settled — that case is
+    reported as ``unknown`` and never guessed into a break.
     """
 
     state: _State
@@ -230,6 +271,9 @@ class CentreState:
     visible_on: str
     evidence_segment_indices: tuple[int, ...]
     detail: str = ''
+    departure_index: int | None = None
+    departure_side: _Side | None = None
+    departure_origin_ambiguous: bool = False
 
 
 @dataclass(frozen=True)
@@ -255,6 +299,20 @@ class OperationalCentreSnapshot:
         if self.centre is None:
             return None
         return self.state.visible_on if self.state is not None else self.centre.confirmed_on
+
+    @property
+    def formation_confirmed(self) -> bool:
+        """Whether the centre's *formation* is confirmed (it is, iff it exists).
+
+        Deliberately separate from ``state``: the centre is confirmed the moment
+        the third segment is, and no later lifecycle state can unsettle that.
+        """
+        return self.centre is not None
+
+    @property
+    def lifecycle_status(self) -> str | None:
+        """The lifecycle label alone (``formed``/``extended``/``unknown``/``broken``)."""
+        return None if self.state is None else self.state.state
 
 
 def _day(value: str | None, field: str) -> date:
@@ -393,16 +451,36 @@ def _intersection(segments: Sequence[ExternalSegment]) -> tuple[float, float] | 
     return None if zd >= zg else (zd, zg)
 
 
-def _intersects(segment: ExternalSegment, centre: OperationalCentre) -> bool:
-    """Closed-interval overlap: touching an edge is a return."""
-    return segment.low <= centre.zg and segment.high >= centre.zd
+def _zone_relation(segment: ExternalSegment, centre: OperationalCentre) -> _Relation:
+    """Where the segment's *whole range* sits against the closed zone ``[zd, zg]``.
+
+    ``'overlap'`` means it reaches into the zone — the only relation that can be a
+    return; ``'above'``/``'below'`` mean its range never touches the zone at all.
+    """
+    if segment.low > centre.zg:
+        return 'above'
+    if segment.high < centre.zd:
+        return 'below'
+    return 'overlap'
 
 
-def _intersection_reason(segment: ExternalSegment, centre: OperationalCentre) -> _StateReason:
-    if (segment.start_price > centre.zg and segment.end_price < centre.zd) or (
-        segment.start_price < centre.zd and segment.end_price > centre.zg
-    ):
-        return 'crossed_through'
+def _endpoint_side(segment: ExternalSegment, centre: OperationalCentre) -> _Side | None:
+    """Which side of the zone the segment **ends** on; ``None`` inside or on an edge.
+
+    A departure is a statement about where price stopped, not about the path it
+    took: a segment that starts inside the zone and ends above it has left the
+    zone even though its range still overlaps.  Ending exactly on an edge is a
+    touch, and a touch is a return.
+    """
+    if segment.end_price > centre.zg:
+        return 'above'
+    if segment.end_price < centre.zd:
+        return 'below'
+    return None
+
+
+def _return_reason(segment: ExternalSegment, centre: OperationalCentre) -> _StateReason:
+    """Reason for an ``extended`` state: the segment reached in and stayed in."""
     if segment.high == centre.zd or segment.low == centre.zg:
         return 'touched_edge'
     return 'returned_to_zone'
@@ -411,82 +489,153 @@ def _intersection_reason(segment: ExternalSegment, centre: OperationalCentre) ->
 def _evaluate_state(
     segments: Sequence[ExternalSegment], centre: OperationalCentre
 ) -> CentreState:
-    """Conservative left-to-right lifecycle; only provable states are emitted."""
-    tail = list(segments)[3:]
+    """Conservative left-to-right lifecycle; only provable states are emitted.
+
+    The centre is already confirmed here — what is being decided is only what
+    happened *after* it.  A departure is a segment whose **ending** price lies
+    strictly outside the zone: reading the whole range instead lets an exit taken
+    from inside the zone pass as a re-entry, and then the reversal that follows is
+    mis-dated as the first departure (so the break could never be confirmed).
+    """
+    ordered = list(segments)
+    head, tail = ordered[:3], ordered[3:]
+    # The third constituent may already end outside the zone.  Its own exit is
+    # never a departure (a centre is not left by one of its own parts); it only
+    # makes the origin of a *later* departure ambiguous.
+    constituent_exit = _endpoint_side(head[-1], centre) if head else None
+
     if not tail:
         return CentreState(
-            state='candidate',
+            state='formed',
             reason='centre_formed_not_tested',
             visible_on=centre.confirmed_on,
             evidence_segment_indices=(),
-            detail='no segment after the third has tested the zone',
+            detail='the centre is confirmed; no later segment has tested the zone yet',
         )
 
     departure: ExternalSegment | None = None
-    departure_side: str | None = None
+    departure_side: _Side | None = None
+    origin_ambiguous = False
     last = CentreState(
-        state='candidate',
+        state='formed',
         reason='centre_formed_not_tested',
         visible_on=centre.confirmed_on,
         evidence_segment_indices=(),
     )
 
-    for segment in tail:
+    for position, segment in enumerate(tail):
         if segment.confirmed_on is None:  # pragma: no cover - validated upstream
             raise ValueError('segment must be confirmed to be evaluated')
-        if _intersects(segment, centre):
-            # Re-entry resets the question: nothing is "left" any more.
-            departure = None
-            departure_side = None
+        relation = _zone_relation(segment, centre)
+        side = _endpoint_side(segment, centre)
+
+        if side is None:
+            # Ended inside the zone — an edge touch counts as inside — so this is
+            # a real return and nothing is "left" any more.  (A segment whose
+            # endpoint is in the zone necessarily overlaps it.)
+            departure, departure_side, origin_ambiguous = None, None, False
             last = CentreState(
                 state='extended',
-                reason=_intersection_reason(segment, centre),
+                reason=_return_reason(segment, centre),
                 visible_on=segment.confirmed_on,
                 evidence_segment_indices=(segment.index,),
                 detail=(
-                    f'segment {segment.index} [{segment.low}, {segment.high}] touches '
-                    f'the zone [{centre.zd}, {centre.zg}]'
+                    f'segment {segment.index} [{segment.low}, {segment.high}] reaches into '
+                    f'the zone [{centre.zd}, {centre.zg}] and ends inside it'
                 ),
             )
             continue
 
-        side = 'above' if segment.low > centre.zg else 'below'
+        # The segment ended outside the zone: price has left, whatever its range
+        # did on the way out.
         if departure is None:
-            # Outside, but nothing yet refuses to come back.
+            origin_ambiguous = (
+                position == 0 and relation != 'overlap' and constituent_exit == side
+            )
+            detail = (
+                f'segment {segment.index} ended {side} of the zone, outside it; no reverse '
+                'segment has shown that price stays away'
+            )
+            if origin_ambiguous:
+                detail += (
+                    f'; segment {head[-1].index} (a centre constituent) had already ended '
+                    f'{side} of the zone, so whether the departure began at the constituent '
+                    'or here is ambiguous'
+                )
             departure, departure_side = segment, side
             last = CentreState(
                 state='unknown',
                 reason='departure_without_reversal',
                 visible_on=segment.confirmed_on,
                 evidence_segment_indices=(segment.index,),
-                detail=(
-                    f'segment {segment.index} lies wholly {side} the zone; no reverse '
-                    'segment has shown that price stays away'
-                ),
+                detail=detail,
+                departure_index=segment.index,
+                departure_side=side,
+                departure_origin_ambiguous=origin_ambiguous,
             )
             continue
 
-        if side == departure_side:
-            return CentreState(
-                state='broken',
-                reason='left_without_return',
-                visible_on=segment.confirmed_on,
-                evidence_segment_indices=(departure.index, segment.index),
-                detail=(
-                    f'segment {departure.index} left the zone {side} and segment '
-                    f'{segment.index} never came back to it'
-                ),
+        previous = departure.index
+        if side != departure_side:
+            # Left one side and ended on the other: the zone was traversed, not
+            # left behind.  One side's departure does not prove the other's, so
+            # the new side is kept open and nothing is called broken.
+            crossed = relation == 'overlap'
+            detail = (
+                f'segment {previous} left the zone on one side and segment '
+                f'{segment.index} ended {side} of it'
             )
+            if crossed:
+                detail += ', crossing the zone; a traversal is not a break'
+            else:  # pragma: no cover - a connected chain cannot jump the zone
+                detail += (
+                    ' without traversing the zone; a connected chain cannot do that, '
+                    'so contradictory input is never upgraded to a break'
+                )
+            departure, departure_side, origin_ambiguous = segment, side, False
+            last = CentreState(
+                state='unknown',
+                reason='crossed_through' if crossed else 'departure_far_side_unproven',
+                visible_on=segment.confirmed_on,
+                evidence_segment_indices=(previous, segment.index),
+                detail=detail,
+                departure_index=segment.index,
+                departure_side=side,
+            )
+            continue
 
-        # A connected chain cannot jump the zone without touching it, so this is
-        # only reachable from contradictory input; refuse to call it a break.
-        departure, departure_side = segment, side
-        last = CentreState(
-            state='unknown',
-            reason='departure_far_side_unproven',
+        if relation == 'overlap':
+            # Came back into the zone and left again on the same side: the zone
+            # was tested, so this is a fresh departure, not a refusal to return.
+            departure, origin_ambiguous = segment, False
+            last = CentreState(
+                state='unknown',
+                reason='departure_without_reversal',
+                visible_on=segment.confirmed_on,
+                evidence_segment_indices=(previous, segment.index),
+                detail=(
+                    f'segment {previous} left the zone {departure_side} and segment '
+                    f'{segment.index} came back inside it and ended {side} of it again'
+                ),
+                departure_index=segment.index,
+                departure_side=side,
+            )
+            continue
+
+        # Wholly outside on the departure's side, never touching the zone: the
+        # reverse leg refused to come back, which is the break.
+        return CentreState(
+            state='broken',
+            reason='left_without_return',
             visible_on=segment.confirmed_on,
-            evidence_segment_indices=(segment.index,),
-            detail=f'segment {segment.index} is wholly {side} without traversing the zone',
+            evidence_segment_indices=(previous, segment.index),
+            detail=(
+                f'segment {previous} left the zone {side} and segment {segment.index} '
+                f'[{segment.low}, {segment.high}] never touched it again'
+            ),
+            departure_index=previous,
+            departure_side=side,
+            departure_origin_ambiguous=origin_ambiguous,
         )
 
     return last

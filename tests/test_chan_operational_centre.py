@@ -17,11 +17,27 @@ What these tests pin, and why:
   confirmation timing (never before the evidence, never after ``as_of_day``),
   finite prices and non-zero length are re-verified, and a failure raises instead
   of being repaired.
-* The lifecycle is conservative: ``candidate`` until something tests the zone,
-  ``extended`` while price keeps touching it — a touch of the edge is a return,
-  and crossing *through* the zone is not a departure — ``unknown`` when there is
-  a departure but no reverse segment yet, and ``broken`` only when a departure is
-  followed by a reverse segment that stays wholly outside.
+* The lifecycle is conservative and is **not** the centre's formation: a centre
+  that exists is by construction confirmed (``confirmed_on`` = the third
+  segment's confirmation), so its lifecycle state is ``formed`` — never
+  ``candidate``, which would say the zone itself is unconfirmed.  After that,
+  ``extended`` while a segment ends inside the zone (a touch of an edge is
+  inside), ``unknown`` once price has *ended* outside the zone but no reverse
+  segment has stayed away yet, and ``broken`` only when a reverse segment's
+  whole range stays outside on the same side.
+* A departure is read off the **endpoint**, never off the range: a segment that
+  starts inside the zone and ends above it has left, even though its range still
+  overlaps the zone.  Reading the range instead lets such an exit hide as an
+  ``extended`` re-entry, and then the following reversal is mis-dated as the
+  first departure (it is not: it is the proof that the zone was left).
+* A segment that crosses the zone and ends on the far side is not a break
+  either: the new side is kept as the open departure and the state stays
+  ``unknown`` (``crossed_through``).  Leaving one side and proving it on the
+  *other* side is two different claims and neither is a break.
+* The centre's third constituent may itself end outside the zone.  That is not
+  used as a departure (a centre is not left by one of its own parts) — it only
+  makes the origin of a later departure ambiguous, which is reported as
+  ``unknown`` (``departure_origin_ambiguous``) instead of guessed.
 * Prefix replay is checked against a hand-written oracle, so no later
   information can leak backwards, and a formed centre's numbers never move.
 """
@@ -115,6 +131,26 @@ BREAK_CONFS = [12, 22, 33, 42, 52, 62]
 EXTEND_POINTS = _BASE + [(18, 13), (13, 19), (19, 11)]
 EXTEND_CONFS = _BASE_CONFS + [42, 52, 62]
 
+# The exit bug, hand-computed (this is the counterexample the fix exists for):
+#   0: 10 -> 20 up      range [10,20]
+#   1: 20 -> 12 down    range [12,20]
+#   2: 12 -> 18 up      range [12,18]
+#      zd = max(10,12,12) = 12, zg = min(20,20,18) = 18  -> zone [12,18], width 6
+#   3: 18 -> 14 down    range [14,18]  starts on zg, ends INSIDE: still a return
+#   4: 14 -> 23 up      range [14,23]  starts inside (14), ends ABOVE zg=18: LEFT
+#   5: 23 -> 20.5 down  range [20.5,23] wholly above (20.5 > 18): never touches
+# Segments 4 and 5 share the anchor 23, so the pullback is real and connected.
+EXIT_POINTS = [(10, 20), (20, 12), (12, 18), (18, 14), (14, 23), (23, 20.5)]
+EXIT_CONFS = [12, 22, 33, 42, 52, 62]
+
+# Same exit, but the reversal stops exactly on the upper edge zg=18.
+EXIT_TOUCH_POINTS = EXIT_POINTS[:5] + [(23, 18)]
+EXIT_TOUCH_CONFS = EXIT_CONFS
+
+# Same exit, then one leg straight through the zone to the far side (23 -> 10).
+CROSS_POINTS = EXIT_POINTS[:5] + [(23, 10)]
+CROSS_CONFS = EXIT_CONFS
+
 # Zero-width: [17,18] [16,18] [16,17] -> zd=17, zg=17.  A later triple
 # ([16,18] [16,17] [12,17] -> width 1) would qualify, and must not be discovered.
 ZERO_POINTS = [(17, 18), (18, 16), (16, 17), (17, 12)]
@@ -125,15 +161,19 @@ PREFIX_ORACLE = {
     'touch': [
         (1, None, 'insufficient_segments', None),
         (2, None, 'insufficient_segments', None),
-        (3, (12.0, 20.0), 'candidate', 33),
+        (3, (12.0, 20.0), 'formed', 33),
         # 25 -> 20 stops exactly on zg=20: one point, not a departure.
         (4, (12.0, 20.0), 'extended', 42),
-        (5, (12.0, 20.0), 'extended', 52),
+        # 20 -> 26 starts on the edge and ENDS at 26 > zg=20: it left upward, and
+        # no reverse segment has refused to come back yet (v1 said 'extended').
+        (5, (12.0, 20.0), 'unknown', 52),
     ],
     'break': [
         (1, None, 'insufficient_segments', None),
         (2, None, 'insufficient_segments', None),
-        (3, (12.0, 20.0), 'candidate', 33),
+        (3, (12.0, 20.0), 'formed', 33),
+        # 25 -> 22 is wholly above, but the third constituent already ended at 25,
+        # so which segment started the leave is ambiguous: unknown, not broken.
         (4, (12.0, 20.0), 'unknown', 42),
         (5, (12.0, 20.0), 'broken', 52),
         (6, (12.0, 20.0), 'broken', 52),
@@ -141,10 +181,40 @@ PREFIX_ORACLE = {
     'extend': [
         (1, None, 'insufficient_segments', None),
         (2, None, 'insufficient_segments', None),
-        (3, (12.0, 18.0), 'candidate', 33),
+        (3, (12.0, 18.0), 'formed', 33),
         (4, (12.0, 18.0), 'extended', 42),
-        (5, (12.0, 18.0), 'extended', 52),
+        # 13 -> 19 ends at 19 > zg=18: another exit taken from inside the zone.
+        (5, (12.0, 18.0), 'unknown', 52),
+        # 19 -> 11 crosses the zone and ends below it: the zone was traversed, not
+        # left on one side, so this stays undecided (v1 said 'extended').
+        (6, (12.0, 18.0), 'unknown', 62),
+    ],
+    'exit': [
+        (1, None, 'insufficient_segments', None),
+        (2, None, 'insufficient_segments', None),
+        (3, (12.0, 18.0), 'formed', 33),
+        (4, (12.0, 18.0), 'extended', 42),
+        # Segment 4 starts inside and ends at 23 > zg=18: the departure is dated
+        # here, not on the reversal that follows it.
+        (5, (12.0, 18.0), 'unknown', 52),
+        (6, (12.0, 18.0), 'broken', 62),
+    ],
+    'exit_touch': [
+        (1, None, 'insufficient_segments', None),
+        (2, None, 'insufficient_segments', None),
+        (3, (12.0, 18.0), 'formed', 33),
+        (4, (12.0, 18.0), 'extended', 42),
+        (5, (12.0, 18.0), 'unknown', 52),
+        # 23 -> 18 stops on zg: a touch of the near edge is a return, not a break.
         (6, (12.0, 18.0), 'extended', 62),
+    ],
+    'cross': [
+        (1, None, 'insufficient_segments', None),
+        (2, None, 'insufficient_segments', None),
+        (3, (12.0, 18.0), 'formed', 33),
+        (4, (12.0, 18.0), 'extended', 42),
+        (5, (12.0, 18.0), 'unknown', 52),
+        (6, (12.0, 18.0), 'unknown', 62),
     ],
 }
 
@@ -152,6 +222,9 @@ _CHAINS = [
     ('touch', TOUCH_POINTS, TOUCH_CONFS),
     ('break', BREAK_POINTS, BREAK_CONFS),
     ('extend', EXTEND_POINTS, EXTEND_CONFS),
+    ('exit', EXIT_POINTS, EXIT_CONFS),
+    ('exit_touch', EXIT_TOUCH_POINTS, EXIT_TOUCH_CONFS),
+    ('cross', CROSS_POINTS, CROSS_CONFS),
 ]
 
 
@@ -159,7 +232,10 @@ _CHAINS = [
 # labels: an operational prototype, never a strict Chan centre
 # --------------------------------------------------------------------------
 def test_labels_say_operational_and_no_segment_engine():
-    assert CENTRE_KERNEL_VERSION == 'chan-operational-centre-v1'
+    # v2: the lifecycle is read off segment *endpoints*, so an exit taken from
+    # inside the zone is a departure and its reversal can confirm a break.
+    # A behaviour change needs a new version; the old string is gone on purpose.
+    assert CENTRE_KERNEL_VERSION == 'chan-operational-centre-v2'
     assert INPUT_KIND == 'externally_supplied_completed_segments'
     assert BASIS == 'segment_a0'
     assert STRICTNESS == 'operational_not_strict'
@@ -360,10 +436,15 @@ def test_candidate_until_something_tests_the_zone():
     snap = replay_prefixes(build(EXTEND_POINTS, confs=EXTEND_CONFS))[2]  # 3 segments
     _centre, state = _centre_and_state(snap)
     assert isinstance(state, CentreState)
-    assert state.state == 'candidate'
+    # 'candidate' is gone from the vocabulary: a centre that exists at all is
+    # confirmed (third segment's confirmed_on), so its lifecycle state is
+    # 'formed' — calling the zone itself a candidate would deny its own evidence.
+    assert state.state == 'formed'
     assert state.reason == 'centre_formed_not_tested'
     assert state.visible_on == _day(33)
     assert state.evidence_segment_indices == ()
+    assert snap.formation_confirmed is True
+    assert snap.lifecycle_status == 'formed'
 
 
 def test_touching_the_edge_is_a_return_not_a_break():
@@ -419,13 +500,19 @@ def test_return_into_the_zone_interior_is_an_extension():
 
 
 def test_crossing_through_the_zone_is_not_a_break():
-    # 19 -> 11 straddles the zone (19 > zg, 11 < zd): it went through, it did
-    # not stay away, so the centre is still in force.
+    # 19 -> 11 straddles the zone (19 > zg, 11 < zd): it went through it and
+    # ended on the far side.  That is neither a return into the zone (v1 called
+    # it 'extended'/'crossed_through') nor a break on the upper side: the zone
+    # was traversed, so the open departure moves to the lower side and the state
+    # stays undecided.
     snap = centre_from_chain(build(EXTEND_POINTS, confs=EXTEND_CONFS))
     _centre, state = _centre_and_state(snap)
-    assert state.state == 'extended'
+    assert state.state == 'unknown'
     assert state.reason == 'crossed_through'
     assert state.state != 'broken'
+    assert state.departure_side == 'below'
+    assert state.departure_index == 5
+    assert state.evidence_segment_indices == (4, 5)
 
 
 def test_state_is_timestamped_by_its_evidence_not_by_the_raw_time():
@@ -435,6 +522,120 @@ def test_state_is_timestamped_by_its_evidence_not_by_the_raw_time():
     assert state.visible_on == chain.segments[4].confirmed_on
     assert state.visible_on > centre.structure_start_day
     assert state.visible_on <= snap.as_of_day
+
+
+# --------------------------------------------------------------------------
+# departure read off the endpoint, not off the range (the v1 regression)
+# --------------------------------------------------------------------------
+def test_departure_from_inside_the_zone_is_dated_on_the_exit_leg():
+    """The regression this version exists for.
+
+    Zone [12,18] from segments 0-2.  Segment 3 (18 -> 14) is a return that ends
+    inside.  Segment 4 (14 -> 23) starts *inside* the zone and ends above zg, so
+    the zone is left on segment 4 — segment 5 is only the proof of it.
+
+    v1 tested overlap of the segment's whole range and saw [14,23] intersect
+    [12,18], so it reported another re-entry and dated the departure on segment
+    5, where no reversal could ever follow: the break was then unreachable.
+    """
+    snapshots = replay_prefixes(build(EXIT_POINTS, confs=EXIT_CONFS))
+    centre, state = _centre_and_state(snapshots[4])  # five segments, up to seg 4
+    assert (centre.zd, centre.zg) == (12.0, 18.0)
+    assert state.state == 'unknown'
+    assert state.reason == 'departure_without_reversal'
+    assert state.visible_on == _day(52)  # segment 4's own confirmation day
+    assert state.evidence_segment_indices == (4,)
+    assert state.departure_index == 4
+    assert state.departure_side == 'above'
+    # The range does overlap the zone; only the endpoint has left it.
+    seg4 = build(EXIT_POINTS, confs=EXIT_CONFS).segments[4]
+    assert seg4.low == 14.0 < 18.0 and seg4.end_price == 23.0 > 18.0
+
+
+def test_reversal_wholly_above_the_zone_confirms_the_break_on_its_own_day():
+    snapshots = replay_prefixes(build(EXIT_POINTS, confs=EXIT_CONFS))
+    _centre, state = _centre_and_state(snapshots[-1])
+    assert state.state == 'broken'
+    assert state.reason == 'left_without_return'
+    assert state.visible_on == _day(62) == snapshots[-1].as_of_day
+    assert state.evidence_segment_indices == (4, 5)
+    assert state.departure_index == 4
+    assert state.departure_side == 'above'
+    # The five-segment prefix is the same undecided centre: no back-filling.
+    _centre, earlier = _centre_and_state(snapshots[4])
+    assert earlier.state == 'unknown'
+    assert earlier.reason == 'departure_without_reversal'
+    assert earlier.visible_on == _day(52)
+    assert state.visible_on > earlier.visible_on
+
+
+def test_reversal_touching_the_near_edge_is_a_return_not_a_break():
+    # Departure upward on segment 4, then 23 -> 18 stops exactly on zg=18: the
+    # reversal does reach the zone, so the break is not proved.
+    snap = centre_from_chain(build(EXIT_TOUCH_POINTS, confs=EXIT_TOUCH_CONFS))
+    centre, state = _centre_and_state(snap)
+    assert (centre.zd, centre.zg) == (12.0, 18.0)
+    assert state.state == 'extended'
+    assert state.reason == 'touched_edge'
+    assert state.state != 'broken'
+    assert state.visible_on == _day(62)
+
+
+def test_reversal_crossing_to_the_far_side_is_not_a_break():
+    # Left upward on segment 4, then 23 -> 10 goes through the zone and ends
+    # below it.  The old side was abandoned but the zone was traversed, so no
+    # break can be claimed: the open departure moves to the lower side.
+    snap = centre_from_chain(build(CROSS_POINTS, confs=CROSS_CONFS))
+    _centre, state = _centre_and_state(snap)
+    assert state.state == 'unknown'
+    assert state.reason == 'crossed_through'
+    assert state.departure_side == 'below'
+    assert state.evidence_segment_indices == (4, 5)
+
+
+# --------------------------------------------------------------------------
+# the third constituent is not a departure; its own exit is ambiguous
+# --------------------------------------------------------------------------
+def test_third_constituent_ending_outside_leaves_the_origin_ambiguous():
+    # Segment 2 (12 -> 25) already ends above zg=20 and segment 3 (25 -> 22)
+    # never touches the zone.  Whether the leave began at the constituent or at
+    # segment 3 cannot be settled from this data, so it must not be called
+    # broken — the state is unknown, and says why.
+    snapshots = replay_prefixes(build(BREAK_POINTS, confs=BREAK_CONFS))
+    _centre, state = _centre_and_state(snapshots[3])
+    assert state.state == 'unknown'
+    assert state.reason == 'departure_without_reversal'
+    assert state.departure_origin_ambiguous is True
+    assert 'ambiguous' in state.detail
+    # Both readings agree by segment 4, so the break is still provable there —
+    # dated on segment 4, the later of the two candidate days, never earlier.
+    _centre, broken = _centre_and_state(snapshots[4])
+    assert broken.state == 'broken'
+    assert broken.visible_on == _day(52)
+    assert broken.departure_origin_ambiguous is True
+
+
+def test_third_constituent_ending_outside_does_not_by_itself_break_the_zone():
+    # Same third constituent (12 -> 25 ends above), but segment 3 comes back
+    # inside [12,20]: nothing left, so the zone is still being tested.
+    chain = build([(10, 20), (20, 12), (12, 25), (25, 15)], confs=[12, 22, 33, 42])
+    _centre, state = _centre_and_state(centre_from_chain(chain))
+    assert state.state == 'extended'
+    assert state.reason == 'returned_to_zone'
+    assert state.departure_origin_ambiguous is False
+
+
+def test_formation_is_confirmed_and_only_the_lifecycle_moves():
+    chain = build(EXIT_POINTS, confs=EXIT_CONFS)
+    for snap in replay_prefixes(chain)[2:]:
+        assert snap.formation_confirmed is True
+        assert snap.centre.confirmed_on == _day(33)
+        assert snap.lifecycle_status == snap.state.state
+        assert snap.visible_on >= snap.centre.confirmed_on
+    # Without a centre there is no formation to claim and no lifecycle to report.
+    empty = centre_from_chain(build(ZERO_POINTS, confs=ZERO_CONFS))
+    assert empty.formation_confirmed is False
+    assert empty.lifecycle_status is None
 
 
 # --------------------------------------------------------------------------
