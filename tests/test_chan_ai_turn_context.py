@@ -834,3 +834,145 @@ def test_suite_uses_isolated_scratch_sqlite(accounts):
     assert any(p.name.startswith("sida_test_data_") for p in db_path.parents), db_path
     repo_data = (Path(__file__).resolve().parent.parent / "data").resolve()
     assert repo_data not in db_path.parents
+
+
+# ── ⑩ 校验失败不许悄悄改会话标的 / 校验后不许再用旧快照 ─────────────────────
+
+@pytest.fixture()
+def clean_convs(accounts):
+    """本组用例自建的会话连同消息一起删干净。
+
+    SQLite 不 AUTOINCREMENT: 会话行删掉后 id 会被后面的用例复用, 而 purge_users
+    只删引用 users 的表 —— 消息表按 conversation_id 引用, 会留成孤儿并"挂"到
+    复用了同一 id 的新会话上(test_chat_stream 因此会多出历史消息)。收尾时一并清掉。
+    """
+    yield
+    from src.web.database import SessionLocal
+    from src.web.models import ChatConversation, ChatMessage
+
+    db = SessionLocal()
+    try:
+        ids = [row[0] for row in db.query(ChatConversation.id)
+               .filter(ChatConversation.user_id == MEMBER_A).all()]
+        if ids:
+            db.query(ChatMessage).filter(
+                ChatMessage.conversation_id.in_(ids)
+            ).delete(synchronize_session=False)
+            db.query(ChatConversation).filter(
+                ChatConversation.id.in_(ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+    finally:
+        db.close()
+
+
+def _set_symbol(conv_id: int, symbol: str, market: str = "SH") -> None:
+    """直接写库模拟「另一轮对话已经提交了切标的」（不是本请求的路径）。"""
+    from src.web.database import SessionLocal
+    from src.web.models import ChatConversation
+
+    db = SessionLocal()
+    try:
+        conv = db.query(ChatConversation).filter(ChatConversation.id == conv_id).first()
+        assert conv is not None
+        conv.stock_symbol = symbol
+        conv.stock_market = market
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_stale_digest_does_not_rebind_conversation(client, accounts, feed, holder, clean_convs):
+    """409 的那条消息不许留痕: 既不入库, 也不许把会话标的改成它请求的 B。
+
+    回归(2026-11-17): 非流式入口先 `_bind_conv_symbol` 再校验快照 —— bind 内部
+    `db.commit()`, 于是"409 已拒绝且未保存"的消息悄悄把 A 会话改成 B。
+    """
+    stale = _digest("600519")
+    token = _login(client, "a")
+    conv_id = _conv(client, token, "600000", "SH")
+
+    feed.bars[-1] = _k(COMPLETED[-1], (10.7, 9.9, 10.8, 9.2))   # 图表已变 → 摘要过期
+    kl._kl_cache.clear()
+
+    payload = {"content": "600519 缠论结构怎么看", "stock_symbol": "600519",
+               "stock_market": "SH",
+               "chart_snapshot": _snap(stale, symbol="600519")}
+    r = _send(client, token, conv_id, payload)
+    assert r.status_code == 409, r.text
+
+    row = _conv_row(conv_id)
+    assert row.stock_symbol == "600000", "409 的消息不许改会话标的"
+    assert row.stock_market == "SH"
+    assert _msgs(conv_id) == []
+    assert holder.systems == [] and holder.outputs == [], "409 不许进模型/工具"
+
+
+def test_stream_preflight_rejection_does_not_rebind_conversation(client, accounts, feed, holder, clean_convs):
+    """流式入口同理: 开流前的 409 也必须零副作用(不 commit 任何 bind)。"""
+    stale = _digest("600519")
+    token = _login(client, "a")
+    conv_id = _conv(client, token, "600000", "SH")
+
+    feed.bars[-1] = _k(COMPLETED[-1], (10.7, 9.9, 10.8, 9.2))
+    kl._kl_cache.clear()
+
+    payload = {"content": "600519 缠论结构怎么看", "stock_symbol": "600519",
+               "stock_market": "SH",
+               "chart_snapshot": _snap(stale, symbol="600519")}
+    with client.stream("POST", f"/api/chat/conversations/{conv_id}/messages/stream",
+                       headers=_headers(token), json=payload) as resp:
+        assert resp.status_code == 409, resp.read()
+
+    row = _conv_row(conv_id)
+    assert row.stock_symbol == "600000", "preflight 拒绝不许先 bind 再校验"
+    assert _msgs(conv_id) == []
+    assert holder.systems == [] and holder.outputs == []
+
+
+def test_snapshot_dropped_when_conversation_switches_after_preflight(
+        client, accounts, feed, holder, monkeypatch, clean_convs):
+    """TOCTOU: preflight 通过后、gen 真正取会话前，另一轮把会话切到了别的票。
+
+    旧快照是 600000 的，本轮已经没有 600000 的会话身份了 —— 必须丢弃而不是
+    拿旧摘要去回一份「另一只票的结构」。
+    """
+    digest = _digest("600000")
+    token = _login(client, "a")
+    conv_id = _conv(client, token, "600000", "SH")
+
+    real = chat_api._preflight_chart_snapshot
+    switched: list[bool] = []
+
+    async def _preflight_then_other_turn(conversation_id, body, user):
+        snap = await real(conversation_id, body, user)
+        assert snap is not None and snap.ref and snap.ref["symbol"] == "600000", snap
+        if not switched:
+            switched.append(True)
+            _set_symbol(conversation_id, "600519")   # 另一轮已提交的切标的
+        return snap
+
+    monkeypatch.setattr(chat_api, "_preflight_chart_snapshot", _preflight_then_other_turn)
+
+    # 正文不带代码/锚点: 本轮标的只能来自会话(正是被并发改写的那一份)
+    with client.stream("POST", f"/api/chat/conversations/{conv_id}/messages/stream",
+                       headers=_headers(token),
+                       json=_body("这只票缠论结构怎么样", _snap(digest))) as resp:
+        assert resp.status_code == 200, resp.read()
+        text = "".join(resp.iter_text())
+
+    assert switched == [True]
+    assert FINAL_TEXT in text, text
+    system = holder.systems[-1]
+    assert digest not in system, "旧快照摘要不许注入本轮 system"
+    assert "【本轮图表快照（服务端已复核）】\nsymbol=" not in system
+    assert "不一致" in system or "已丢弃" in system
+
+    out = holder.outputs[-1]
+    assert digest not in out and "分型 " not in out
+    assert "缺少图表快照摘要" in out
+
+    row = _conv_row(conv_id)
+    assert row.stock_symbol == "600519", "本轮的旧快照不许把会话改回 600000"
+    for m in _msgs(conv_id):
+        _no_secret_in(m.content)

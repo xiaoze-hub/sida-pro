@@ -740,8 +740,10 @@ from src.harness.context import (  # noqa: E402
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
     inject_recipe as _inject_recipe,
+    plan_conv_symbol as _plan_conv_symbol,
     preflight_chart_snapshot as _preflight_chart_snapshot,
     prepare_chart_snapshot as _prepare_chart_snapshot,
+    recheck_turn_snapshot as _recheck_turn_snapshot,
     sync_conv_symbol as _sync_conv_symbol,
 )
 from src.harness.routing import route_for_request as _route_for_request
@@ -2069,8 +2071,19 @@ def _bind_conv_symbol(db, conv, body: "SendMessageBody") -> None:
         文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定
     2026-10-22 事故: 旧实现"对话已绑定就不改" → 002548 页面聊完再问 002114,
     参谋仍按 002548 作答(系统提示与取数上下文全串在旧票上)。
+
+    调用时机: 只在本条消息**确定要落库/回答**之后(快照校验通过)。`bind_symbol`
+    内部会 commit —— 放在 403/409 之前会让"已拒绝且未保存"的消息悄悄改掉会话标的。
     """
     _sync_conv_symbol(db, conv, body)
+
+
+def _current_bound_symbol(db, conversation_id: int) -> str | None:
+    """库里**此刻**的会话标的（绕开 ORM 身份映射，用于落消息前的最后核对）。"""
+    row = (db.query(ChatConversation.stock_symbol)
+           .filter(ChatConversation.id == conversation_id)
+           .first())
+    return ((row[0] if row else None) or "").strip() or None
 
 
 @router.post("/conversations/{conversation_id}/messages")
@@ -2104,9 +2117,12 @@ async def send_message(
         if not conv:
             raise HTTPException(404, "对话不存在")
 
+        # 本轮图表快照: 必须在落库/回答之前校验完(403/409 时这条消息不入库)。
+        # 先用**只读判定**算出本轮标的喂给校验, 校验通过才落 bind —— 否则被拒的消息
+        # 会因为 bind 里的 commit 把会话悄悄改到它请求的标的。
+        _target, _ = _plan_conv_symbol(conv, body)
+        _snap = await _prepare_chart_snapshot(db, conv, body, user, bound_symbol=_target)
         _bind_conv_symbol(db, conv, body)
-        # 本轮图表快照: 必须在落库/回答之前校验完(403/409 时这条消息不入库)
-        _snap = await _prepare_chart_snapshot(db, conv, body, user)
 
         # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
         if user.username == "demo":
@@ -2120,6 +2136,11 @@ async def send_message(
             if desc:
                 body.content = f"[用户附图内容] {desc}\n\n{body.content}"
                 body.image_data = None  # 主模型用文本, 不传图片
+
+        # 落消息前的最后一道: 校验/开流到此刻之间会话标的可能已被另一轮改掉,
+        # 客户端声明也不是已验证的屏幕 —— 归属对不上就把旧快照整份丢弃。
+        if getattr(_snap, "ref", None) is not None:
+            _snap = _recheck_turn_snapshot(_snap, _current_bound_symbol(db, conversation_id))
 
         # 保存用户消息
         user_msg = ChatMessage(
@@ -2222,6 +2243,13 @@ async def send_message_stream(
                     body.content = f"[用户附图内容] {desc}\n\n{body.content}"
                     body.image_data = None
 
+            # 落消息前的最后一道: preflight 通过到此刻之间会话标的可能已被另一轮改掉
+            # (TOCTOU), 旧快照的摘要只属于当时那只票 —— 归属对不上就整份丢弃。
+            _turn_snap = _snap
+            if getattr(_snap, "ref", None) is not None:
+                _turn_snap = _recheck_turn_snapshot(
+                    _snap, _current_bound_symbol(db, conversation_id))
+
             # 保存用户消息
             user_msg = ChatMessage(
                 conversation_id=conversation_id,
@@ -2251,7 +2279,7 @@ async def send_message_stream(
             # 多轮 tool use + 真流式(2026-08-23 U1): 边流式出字边执行工具
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
-            _toks = _enter_request_ctx(db, conv, body, messages_for_ai, chart_snapshot=_snap)
+            _toks = _enter_request_ctx(db, conv, body, messages_for_ai, chart_snapshot=_turn_snap)
             bind_chat(user_id=getattr(user, 'id', None))
             try:
                 async for kind, payload in _run_tool_loop(

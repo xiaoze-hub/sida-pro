@@ -124,10 +124,11 @@ def bind_symbol(db, conv, symbol: str, market: str | None = None) -> None:
         db.rollback()
 
 
-def sync_conv_symbol(db, conv, body) -> None:
-    """把本轮该聊的标的绑到对话上(页面切换时跟随更新)。
+def plan_conv_symbol(conv, body) -> tuple[str | None, str | None]:
+    """本轮该绑定的 (symbol, market)。**纯判定，不落库**。
 
-    判定见 resolve_bound_symbol; 只在真的变了时才落库, 避免每条消息多一次 commit。
+    快照校验需要知道"本轮到底在聊哪只票"，但校验本身可能失败(403/409) ——
+    那条消息按契约是"拒绝且未保存"，所以校验之前**绝不能**先把标的写进会话。
     """
     target = resolve_bound_symbol(
         getattr(conv, "stock_symbol", None),
@@ -135,10 +136,20 @@ def sync_conv_symbol(db, conv, body) -> None:
         getattr(body, "content", "") or "",
         mention=mention_stock(body),
     )
+    if not target:
+        return None, None
+    anchor = (getattr(body, "stock_symbol", None) or "").strip()
+    return target, resolve_market(target, anchor, getattr(body, "stock_market", None))
+
+
+def sync_conv_symbol(db, conv, body) -> None:
+    """把本轮该聊的标的绑到对话上(页面切换时跟随更新)。
+
+    判定见 resolve_bound_symbol; 只在真的变了时才落库, 避免每条消息多一次 commit。
+    """
+    target, market = plan_conv_symbol(conv, body)
     if not target or target == (getattr(conv, "stock_symbol", None) or "").strip():
         return
-    anchor = (getattr(body, "stock_symbol", None) or "").strip()
-    market = resolve_market(target, anchor, getattr(body, "stock_market", None))
     bind_symbol(db, conv, target, market)
 
 
@@ -443,8 +454,16 @@ def _require_chart_snapshot_user(db, user) -> None:
         raise HTTPException(status_code=403, detail=f"无权携带图表快照：{denied}")
 
 
-async def prepare_chart_snapshot(db, conv, body, user) -> TurnChartSnapshot | None:
+_UNSET = object()
+
+
+async def prepare_chart_snapshot(db, conv, body, user,
+                                 *, bound_symbol: object = _UNSET) -> TurnChartSnapshot | None:
     """校验本轮 `body.chart_snapshot`；返回本条消息可用的可信来源（None = 没带）。
+
+    `bound_symbol` 给"本轮该锁哪只票"的**只读判定结果**（plan_conv_symbol）。不传时退回
+    库里已有的会话标的。校验必须在 bind 之前完成 —— 403/409 的消息按契约"拒绝且未保存"，
+    不许先 commit 一个标的再拒绝。
 
     硬拒绝（抛 HTTPException：本条消息不落库、不回答）:
       * 403 没有真实用户身份（服务令牌/无 id）或没有行情权限;
@@ -461,7 +480,10 @@ async def prepare_chart_snapshot(db, conv, body, user) -> TurnChartSnapshot | No
 
     _require_chart_snapshot_user(db, user)
 
-    bound = (getattr(conv, "stock_symbol", None) or "").strip()
+    if bound_symbol is _UNSET:
+        bound = (getattr(conv, "stock_symbol", None) or "").strip()
+    else:
+        bound = bound_symbol.strip() if isinstance(bound_symbol, str) else ""
     if bound and bound != declared.symbol:
         logger.info(
             "本轮图表快照标的与会话标的冲突 user=%s bound=%s snapshot=%s",
@@ -545,6 +567,10 @@ async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChar
 
     本条消息没带 chart_snapshot 时零成本返回 None（不查库、不取数）。
     会话不存在时不在这里报错: 交给开流后的既有"对话不存在"错误事件, 不改语义。
+
+    这里**只做判定不落库**: 本轮标的用 plan_conv_symbol 推出来给校验当参照,
+    拒绝时(403/409)会话仍然是原来的 A —— 不会出现"报错却已经把会话改成 B"。
+    真正的 bind 留到 gen 里、消息确实要保存时(见 `_bind_conv_symbol`)。
     """
     if getattr(body, "chart_snapshot", None) is None:
         return None
@@ -564,10 +590,31 @@ async def preflight_chart_snapshot(conversation_id: int, body, user) -> TurnChar
         )
         if conv is None:
             return None
-        sync_conv_symbol(db, conv, body)   # 与开流后同一判定, 保证标的口径一致
-        return await prepare_chart_snapshot(db, conv, body, user)
+        target, _market = plan_conv_symbol(conv, body)   # 纯判定: 校验失败不留痕
+        return await prepare_chart_snapshot(db, conv, body, user, bound_symbol=target)
     finally:
         db.close()
+
+
+def recheck_turn_snapshot(snapshot: TurnChartSnapshot | None,
+                          bound_symbol: str | None) -> TurnChartSnapshot | None:
+    """落消息/调工具前的**最后一道**核对: 用此刻的会话标的复核快照归属。
+
+    preflight 通过 ≠ 现在仍然成立: 开流到真正取库之间, 另一轮可能已经把会话切到了
+    别的票(TOCTOU), 客户端带来的声明也不是"已验证的屏幕"。所以这里再核一次标的,
+    不一致就整份丢弃 —— SSE 已经开始, 改不了状态码; 与"切标的"同一软丢弃口径。
+    """
+    if not isinstance(snapshot, TurnChartSnapshot) or snapshot.ref is None:
+        return snapshot
+    bound = (bound_symbol or "").strip()
+    symbol = (snapshot.ref.get("symbol") or "").strip()
+    if not bound or not symbol or bound == symbol:
+        return snapshot
+    logger.info("本轮图表快照开流后漂移 bound=%s snapshot=%s", bound, symbol)
+    return TurnChartSnapshot(note=(
+        f"（本轮随附的图表快照绑定 {symbol}，与当前会话标的 {bound} 不一致，"
+        "整份快照已丢弃：本轮不提供缠论结构，也不得引用旧摘要或另取新快照。）"
+    ))
 
 
 def enter_request_ctx(db, conv, body, messages: list[dict],
