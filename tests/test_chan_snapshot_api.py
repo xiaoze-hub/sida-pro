@@ -18,17 +18,29 @@ symbol/market/instrument 重新取数, 它算的就不是"这张图的缠论结�
   ④ 重复或乱序日期 → 422(不自动去重); 当日 bar 不参与计算(沿用 adapter);
      未来日期 bar → 422;
   ⑤ 未登录 → 401, 账号禁用/注销 → 403; 上游异常不回显异常原文/DSN;
-  ⑥ 响应只有分型(blocked/candidate/confirmed + 发生日/确认日 + 固定规则版本), 不称中枢。
+  ⑥ 响应只有分型(blocked/candidate/confirmed + 发生日/确认日 + 固定规则版本), 不称中枢;
+  ⑦ 笔(pen)由 `chan_pen.pen_from_snapshot` 在同一份**已验摘要**的同一个 structure
+     snapshot 上算出: 一次 `get_klines`、一次 `build_chan_structure`、同一个对象喂给分型
+     与笔; 结果给端点位置(合并索引+日期+价格)/状态/起点终点/confirmed_on/规则版本,
+     `pen_rules_version` 与每笔 `kernel_version` 同源; 笔候选与已确认都是**规则几何**,
+     数据最终性/复权仍 unknown, 不是交易信号; 内核/自洽性校验任何不符 → 409 并整份失败
+     (不返回半份结果, 不以空结果冒充成功)。
 
 规则版本固定为 `chan-fractal-inclusive-sealed-v1`(包含式合并 + 右邻封口才确认),
 响应、快照、文档三处必须同值 —— 改规则就改版本号, 不许同号换语义。
+笔规则版本固定为 `chan-pen-v1`(间距 4 根合并K线 + 顶包络高于底包络 + 反向封口才冻结)。
 
 时间用固定 NOW 钉住(monkeypatch `chan_snapshot._now`), 不随运行日期漂移。
+DB 隔离: 用例只碰 conftest 建在临时 DATA_DIR 下的 SQLite, 见
+`test_suite_uses_isolated_scratch_sqlite` —— 没有隔离就整轮变红, 不许"裸跑真库"。
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import os
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -36,6 +48,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from src.collectors.kline_collector import KlineData
+from src.core.chan_pen import MIN_INDEX_GAP, PEN_KERNEL_VERSION
 from src.web.api import chan_snapshot as chan
 from src.web.api.auth import get_current_user
 
@@ -96,6 +109,22 @@ def _index_payload() -> dict:
     return {"data": {"sh000001": {"day": rows}}}
 
 
+def _loaded_conftest():
+    """取**已加载**的 conftest 模块(pytest 以顶层 `conftest` 名加载它)。
+
+    为什么不用 ``from tests.conftest import purge_users``: 那会按另一个模块名**第二次
+    执行** conftest 的模块体 —— 它内部无条件 ``DATA_DIR = mkdtemp(...)``, 于是同进程里
+    DATA_DIR/SIDA_DATA_DIR 被改指到**另一个**临时目录, 而 ``SIDA_DB_URL`` 仍停在第一次
+    setdefault 的值(库在旧目录), 表现为"DATA_DIR 说 A、库在 B"的隔离分裂。复用一个已
+    加载的模块才能保证整轮只有一个临时目录。
+    """
+    for name in ("conftest", "tests.conftest"):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "purge_users"):
+            return module
+    raise RuntimeError("pytest 尚未加载 conftest, 无法复用 purge_users")
+
+
 @pytest.fixture()
 def auth_headers():
     """真实 JWT + 真实 users 行(隔离 SQLite); 不覆盖 get_current_user 依赖。"""
@@ -124,15 +153,13 @@ def auth_headers():
 
     db = SessionLocal()
     try:
-        from tests.conftest import purge_users
-
-        purge_users(db, ids=[USER_ID])
+        _loaded_conftest().purge_users(db, ids=[USER_ID])
         db.commit()
     finally:
         db.close()
 
 
-def _client(monkeypatch, feed: _Feed, *, with_index: bool = False) -> TestClient:
+def _client(monkeypatch, feed, *, with_index: bool = False) -> TestClient:
     from src.web.api import klines as kl
 
     monkeypatch.setattr(kl, "_pg_klines", feed)
@@ -160,11 +187,50 @@ def _chart(client: TestClient, headers: dict, *, symbol: str = "600000",
     return r.json()
 
 
-def _structure(client: TestClient, headers: dict, digest: str, **overrides):
+def _structure(client: TestClient, headers: dict, digest: str, *, symbol: str = "600000", **overrides):
     params = {"market": "CN", "instrument": "stock", "interval": "1d", "days": 60,
               "snapshot": digest}
     params.update(overrides)
-    return client.get("/api/klines/600000/chan-structure", params=params, headers=headers)
+    return client.get(f"/api/klines/{symbol}/chan-structure", params=params, headers=headers)
+
+
+# ── 笔样例: 干净锯齿, 每根原始K线各自成一根合并K线(合并索引 == 原始索引) ──────
+#
+# 底@1(01-02) → 顶@5(01-06) → 底@9(01-10) → 顶@13(01-14), 中心间距恰为 4
+# (v1 的 MIN_INDEX_GAP)。四个分型都已确认, 于是:
+#   笔① 上 已确认 (起点 01-02@4.0 → 终点 01-06@8.5), confirmed_on=01-12
+#   笔② 下 已确认 (01-06@8.5 → 01-10@5.0),              confirmed_on=01-16
+#   笔③ 上 候选   (01-10@5.0 → 01-14@9.0),              终点仍可漂移
+# 全部在 NOW(2026-11-17) 之前 → 不会被当日 bar 截断, 也没有未来日期问题。
+_PEN_START = date(2026, 1, 1)
+_PEN_HIGHS_LOWS = [
+    (6.0, 5.0),   # 0
+    (5.0, 4.0),   # 1  底
+    (5.5, 4.5),   # 2
+    (6.5, 5.5),   # 3
+    (7.5, 6.5),   # 4
+    (8.5, 7.5),   # 5  顶
+    (8.0, 7.0),   # 6
+    (7.0, 6.0),   # 7
+    (6.5, 5.5),   # 8
+    (6.0, 5.0),   # 9  底
+    (7.0, 6.0),   # 10
+    (7.5, 6.5),   # 11
+    (8.0, 7.0),   # 12
+    (9.0, 8.0),   # 13 顶
+    (8.5, 7.5),   # 14
+    (9.5, 8.5),   # 15 封口 14 号合并K线
+]
+_PEN_DAYS = [(_PEN_START + timedelta(days=i)).isoformat() for i in range(len(_PEN_HIGHS_LOWS))]
+
+
+def _pen_bars() -> list[KlineData]:
+    """(high, low) → open=low / close=high, OHLC 合法且每根各自成合并K线。"""
+    return [_k(day, (low, high, high, low)) for day, (high, low) in zip(_PEN_DAYS, _PEN_HIGHS_LOWS)]
+
+
+def _pen_client(monkeypatch) -> TestClient:
+    return _client(monkeypatch, _Feed(_pen_bars()))
 
 
 # ── ① 图表响应带摘要 ────────────────────────────────────────────────────
@@ -301,11 +367,13 @@ def test_structure_matches_chart_snapshot_and_never_uses_current_bar(monkeypatch
     assert body["counts"]["confirmed"] == 1
     assert body["counts"]["total"] == len(body["fractals"])
 
-    # 响应只含分型相关字段: 不许夹带合并K线/中枢之类"看起来更强"的结构
+    # 响应只含分型/笔相关字段: 不许夹带合并K线/中枢之类"看起来更强"的结构
     assert set(body) == {
         "symbol", "market", "instrument", "instrument_basis", "interval", "rules_version",
         "snapshot_digest", "as_of_day", "omitted_latest_reason", "source", "adjustment",
         "finality", "fractals", "counts", "not_implemented", "disclaimer",
+        # 笔(pen): 同一快照上的规则几何; 线段/中枢仍未实现(见 not_implemented)
+        "pens", "pen_rules_version", "pen_counts", "pen_disclaimer",
     }
     assert set(body["fractals"][0]) == {
         "kind", "status", "position_day", "position_price", "confirmed_on"
@@ -704,5 +772,340 @@ def test_disabled_account_is_403_and_leaks_nothing(monkeypatch, auth_headers):
         text = json.dumps(r.json(), ensure_ascii=False)
         assert "sqlite" not in text.lower() and "Traceback" not in text
         assert "fractals" not in text
+        assert "pens" not in text
     finally:
         _set_active(True)
+
+
+# ── ⑬ 笔(pen): 同一份已验快照上的规则几何 ────────────────────────────────
+#
+# 契约: 笔由 `chan_pen.pen_from_snapshot` 在**同一个** structure snapshot 上算出
+# (一次取数、一次 build_chan_structure、同一个对象), 端点位置/价格/状态/确认日/
+# 规则版本全部给全; 内核拒绝或自身不自洽一律 409 整份失败, 不返回半份结果。
+
+_PEN_FIELDS = {"direction", "status", "confirmed_on", "index_gap", "kernel_version", "start", "end"}
+_ENDPOINT_FIELDS = {
+    "kind", "merged_index", "position_day", "price", "bar_high", "bar_low",
+    "revisions", "drift_days", "status", "confirmed_on",
+}
+
+
+def _pen_response(monkeypatch, auth_headers) -> tuple[TestClient, dict, dict]:
+    client = _pen_client(monkeypatch)
+    chart = _chart(client, auth_headers)
+    digest = chart["chan_snapshot"]["digest"]
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 200, r.text
+    return client, chart, r.json()
+
+
+def test_pens_are_returned_with_positions_status_and_rule_version(monkeypatch, auth_headers):
+    _, _, body = _pen_response(monkeypatch, auth_headers)
+
+    # 规则版本: 与内核同源, 每笔自带同一版本(不许"响应一个版本/笔里另一个版本")
+    assert body["pen_rules_version"] == PEN_KERNEL_VERSION == "chan-pen-v1"
+    assert MIN_INDEX_GAP == 4
+    assert body["pens"], "样例必须产出非空笔, 否则本用例什么都没验"
+    assert all(p["kernel_version"] == body["pen_rules_version"] for p in body["pens"])
+
+    # 手推口径钉死: 两笔已确认 + 一笔候选(候选端点仍可漂移)
+    assert [
+        (p["direction"], p["status"], p["start"]["position_day"], p["start"]["price"],
+         p["end"]["position_day"], p["end"]["price"], p["confirmed_on"])
+        for p in body["pens"]
+    ] == [
+        ("up", "confirmed", "2026-01-02", 4.0, "2026-01-06", 8.5, "2026-01-12"),
+        ("down", "confirmed", "2026-01-06", 8.5, "2026-01-10", 5.0, "2026-01-16"),
+        ("up", "candidate", "2026-01-10", 5.0, "2026-01-14", 9.0, None),
+    ]
+
+    for pen in body["pens"]:
+        assert set(pen) == _PEN_FIELDS
+        assert set(pen["start"]) == _ENDPOINT_FIELDS
+        assert set(pen["end"]) == _ENDPOINT_FIELDS
+        # 笔的两端必须异性, 方向由起点类型唯一决定
+        assert pen["start"]["kind"] != pen["end"]["kind"]
+        assert pen["direction"] == ("up" if pen["start"]["kind"] == "bottom" else "down")
+        # 端点位置: 合并K线索引 + 发生日 + 用到的价格 + 该合并K线的包络
+        assert pen["start"]["merged_index"] < pen["end"]["merged_index"]
+        assert pen["index_gap"] == pen["end"]["merged_index"] - pen["start"]["merged_index"]
+        assert pen["index_gap"] >= MIN_INDEX_GAP
+        assert pen["start"]["bar_low"] <= pen["start"]["price"] <= pen["start"]["bar_high"]
+        assert pen["end"]["bar_low"] <= pen["end"]["price"] <= pen["end"]["bar_high"]
+        assert pen["start"]["status"] == "confirmed"  # 已冻结的起点不会回退
+        assert pen["end"]["status"] in {"candidate", "confirmed"}
+        # 状态与确认日必须互相自洽(候选没有确认日; 已确认必须有)
+        if pen["status"] == "confirmed":
+            assert pen["confirmed_on"] is not None
+        else:
+            assert pen["confirmed_on"] is None
+
+
+def test_pen_counts_and_not_implemented_stay_honest(monkeypatch, auth_headers):
+    _, _, body = _pen_response(monkeypatch, auth_headers)
+
+    assert set(body["pen_counts"]) == {"total", "confirmed", "candidate", "blocked"}
+    assert body["pen_counts"] == {"total": 3, "confirmed": 2, "candidate": 1, "blocked": 0}
+    assert body["pen_counts"]["total"] == len(body["pens"])
+    # 分型 counts 保持原语义(只数分型), 不被笔偷偷改写
+    assert body["counts"]["total"] == len(body["fractals"]) == 5
+    assert body["counts"]["confirmed"] == 4
+    assert body["counts"]["candidate"] == 1
+
+    # 笔已接入 → 不再挂在 not_implemented; 线段/中枢仍必须明写未实现
+    assert "pen" not in body["not_implemented"]
+    assert {"segment", "centre"} <= set(body["not_implemented"])
+
+    # 口径诚实: 规则几何 + 候选可漂移 + 最终性/复权未知 + 非交易信号
+    assert body["adjustment"] == "unknown"
+    assert body["finality"] == "unverified"
+    assert "规则几何" in body["pen_disclaimer"]
+    assert "候选" in body["pen_disclaimer"]
+    assert "复权" in body["pen_disclaimer"]
+    assert "交易信号" in body["pen_disclaimer"]
+    assert "笔" in body["disclaimer"]
+    assert "不构成交易建议" in body["disclaimer"]
+
+
+def test_pens_and_fractals_come_from_one_fetch_and_one_structure_build(monkeypatch, auth_headers):
+    """同一个快照绑定: 一次取数 + 一次 build_chan_structure + 同一个对象喂给笔。"""
+    from src.web.api import klines as kl
+
+    client = _pen_client(monkeypatch)
+    chart = _chart(client, auth_headers)
+    digest = chart["chan_snapshot"]["digest"]
+
+    fetches: list[dict] = []
+    real_get = kl.get_klines
+
+    def _counting_get(*args, **kwargs):
+        fetches.append(kwargs)
+        return real_get(*args, **kwargs)
+
+    builds: list = []
+    real_build = chan.build_chan_structure
+
+    def _counting_build(bars):
+        snapshot = real_build(bars)
+        builds.append(snapshot)
+        return snapshot
+
+    received: list = []
+    real_pen = chan.pen_from_snapshot
+
+    def _counting_pen(snapshot, **kwargs):
+        received.append(snapshot)
+        return real_pen(snapshot, **kwargs)
+
+    monkeypatch.setattr(kl, "get_klines", _counting_get)
+    monkeypatch.setattr(chan, "build_chan_structure", _counting_build)
+    monkeypatch.setattr(chan, "pen_from_snapshot", _counting_pen)
+
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 200, r.text
+    assert r.json()["pens"], "样例必须产出非空笔"
+
+    assert len(fetches) == 1, "结构端点必须复用那次 get_klines, 不许为笔二次取数"
+    assert len(builds) == 1, "分型与笔必须来自同一次 build_chan_structure"
+    assert len(received) == 1, "笔只能算一次"
+    # 同一对象, 不是"同参数再算一遍": 笔的输入就是产出 fractals 的那个快照
+    assert received[0] is builds[0]
+
+
+def test_pen_endpoints_belong_to_the_returned_fractals_and_never_past_as_of_day(
+    monkeypatch, auth_headers
+):
+    """确认日期与快照截止: 端点/确认日必须落在这份响应的分型与 as_of_day 之内。"""
+    _, _, body = _pen_response(monkeypatch, auth_headers)
+    as_of_day = body["as_of_day"]
+    assert as_of_day == "2026-01-16"
+    confirmed_days = {f["confirmed_on"] for f in body["fractals"] if f["confirmed_on"]}
+    by_position = {(f["position_day"], f["position_price"]): f for f in body["fractals"]}
+
+    for pen in body["pens"]:
+        for side in ("start", "end"):
+            endpoint = pen[side]
+            fractal = by_position.get((endpoint["position_day"], endpoint["price"]))
+            assert fractal is not None, f"{side} 端点不在本响应分型里: {endpoint}"
+            assert fractal["status"] == "confirmed"
+            assert fractal["kind"] == endpoint["kind"]
+            assert endpoint["position_day"] <= as_of_day
+            assert endpoint["position_day"] != TODAY
+        if pen["status"] == "confirmed":
+            # confirmed_on 就是终点被冻结那天, 必落在快照截止日内, 且晚于起点发生日
+            assert pen["confirmed_on"] in confirmed_days
+            assert pen["confirmed_on"] <= as_of_day
+            assert pen["confirmed_on"] > pen["start"]["position_day"]
+        else:
+            assert pen["status"] == "candidate"
+            assert pen["confirmed_on"] is None
+            assert pen["end"]["confirmed_on"] is None
+
+
+def test_pen_kernel_rejection_fails_closed(monkeypatch, auth_headers):
+    """内核拒绝(快照不自洽) → 409, 不返回半份结果, 更不返回空笔冒充成功。"""
+    client = _pen_client(monkeypatch)
+    digest = _chart(client, auth_headers)["chan_snapshot"]["digest"]
+
+    def _boom(snapshot, **kwargs):
+        raise ValueError("fractal at merged index 5 claims confirmation on 2026-01-01")
+
+    monkeypatch.setattr(chan, "pen_from_snapshot", _boom)
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 409, r.text
+    body = r.json()
+    assert "pens" not in body and "fractals" not in body
+    assert "笔" in body["detail"]
+    text = json.dumps(body, ensure_ascii=False)
+    assert "merged index" not in text  # 内核原文不外泄(细节只进日志)
+
+
+def test_pen_result_from_a_different_snapshot_fails_closed(monkeypatch, auth_headers):
+    """笔若来自另一批K线(不同截止日) → 409, 不许把别人的笔挂在这次的分型上。"""
+    from src.core.chan_pen import pen_from_snapshot as real_pen
+    from src.core.chan_structure import RawBar, build_chan_structure as real_build
+
+    client = _pen_client(monkeypatch)
+    digest = _chart(client, auth_headers)["chan_snapshot"]["digest"]
+
+    # 同样的锯齿但整体挪到 2025 年: 价格几何相同, 截止日/日期不同
+    foreign_bars = [
+        RawBar(day=f"2025{day[4:]}", open=low, high=high, low=low, close=high)
+        for day, (high, low) in zip(_PEN_DAYS, _PEN_HIGHS_LOWS)
+    ]
+    foreign = real_pen(real_build(foreign_bars))
+    monkeypatch.setattr(chan, "pen_from_snapshot", lambda snapshot, **kwargs: foreign)
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 409, r.text
+    assert "pens" not in r.json()
+
+
+def test_pen_endpoint_not_in_this_snapshot_fails_closed(monkeypatch, auth_headers):
+    """端点被改出一个本快照不存在的价格 → 409(自洽性校验, 不是"照抄内核")。"""
+    from dataclasses import replace as dc_replace
+
+    from src.core.chan_pen import pen_from_snapshot as real_pen
+
+    client = _pen_client(monkeypatch)
+    digest = _chart(client, auth_headers)["chan_snapshot"]["digest"]
+
+    def _doctored(snapshot, **kwargs):
+        result = real_pen(snapshot, **kwargs)
+        first = result.pens[0]
+        moved_start = dc_replace(first.start, price=first.start.price + 0.01)
+        moved_pen = dc_replace(first, start=moved_start)
+        return dc_replace(result, pens=(moved_pen,) + result.pens[1:])
+
+    monkeypatch.setattr(chan, "pen_from_snapshot", _doctored)
+    r = _structure(client, auth_headers, digest)
+    assert r.status_code == 409, r.text
+    assert "pens" not in r.json()
+
+
+def test_pen_without_any_completed_bar_never_pretends_success(monkeypatch, auth_headers):
+    """没有已完成的K线 → 422; 只有一根 → 200 但笔数量为 0(如实空, 不是"算出来了")。"""
+    empty_client = _client(monkeypatch, lambda symbol, market_code, days: ([], None))
+    chart = _chart(empty_client, auth_headers)
+    digest = chart["chan_snapshot"]["digest"]
+    r = _structure(empty_client, auth_headers, digest)
+    assert r.status_code == 422, r.text
+    assert "pens" not in r.json() and "fractals" not in r.json()
+
+    one_bar = _client(monkeypatch, lambda symbol, market_code, days: ([_pen_bars()[0]], _PEN_DAYS[0]))
+    chart_one = _chart(one_bar, auth_headers)
+    ok = _structure(one_bar, auth_headers, chart_one["chan_snapshot"]["digest"])
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["pens"] == [] and body["pen_counts"] == {
+        "total": 0, "confirmed": 0, "candidate": 0, "blocked": 0
+    }
+    assert body["as_of_day"] == _PEN_DAYS[0]  # 截止日如实给出, 不冒充有结构
+
+
+def test_pens_absent_from_conflict_and_auth_failures(monkeypatch, auth_headers):
+    client = _pen_client(monkeypatch)
+    digest = _chart(client, auth_headers)["chan_snapshot"]["digest"]
+
+    tampered = ("0" if digest[0] != "0" else "1") + digest[1:]
+    conflict = _structure(client, auth_headers, tampered)
+    assert conflict.status_code == 409
+    assert "pens" not in conflict.json() and "pen_rules_version" not in conflict.json()
+
+    anon = client.get("/api/klines/600000/chan-structure", params={
+        "market": "CN", "instrument": "stock", "interval": "1d", "days": 60, "snapshot": digest,
+    })
+    assert anon.status_code == 401, anon.text
+    assert "pens" not in anon.json() and "pen_rules_version" not in anon.json()
+
+
+# ── ⑭ 真实 app: 笔能穿过生产响应封装(前端读 data.*) ─────────────────────
+
+
+def test_real_app_serves_pens_inside_the_response_envelope(monkeypatch, auth_headers):
+    """真实 app 上跑一遍: 图表摘要 → 结构端点 → ``data.pens`` 可达且是有内容的笔。
+
+    本文件其它用例用独立 FastAPI() 拿裸响应; 这里钉住**生产 app** 那层统一封装
+    (``{success, data, ...}``): 笔必须出现在前端真正读取的位置, 而不是只在裸响应里。
+    """
+    from src.web.api import klines as kl
+    from src.web.app import app
+
+    monkeypatch.setattr(kl, "_pg_klines", _Feed(_pen_bars()))
+    monkeypatch.setattr(kl, "_finalize_daily_bars", lambda bars, *a, **k: (bars, None))
+    monkeypatch.setattr(kl, "_kl_cache", {})
+    monkeypatch.setattr(chan, "_now", lambda: NOW)
+
+    client = TestClient(app)
+    chart = client.get(
+        "/api/klines/600000",
+        params={"market": "CN", "days": 60, "interval": "1d", "instrument": "stock"},
+        headers=auth_headers,
+    )
+    assert chart.status_code == 200, chart.text
+    digest = chart.json()["data"]["chan_snapshot"]["digest"]
+
+    r = client.get(
+        "/api/klines/600000/chan-structure",
+        params={"market": "CN", "instrument": "stock", "interval": "1d",
+                "days": 60, "snapshot": digest},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()["data"]
+    assert body["pen_rules_version"] == "chan-pen-v1"
+    assert body["pen_counts"] == {"total": 3, "confirmed": 2, "candidate": 1, "blocked": 0}
+    assert [p["status"] for p in body["pens"]] == ["confirmed", "confirmed", "candidate"]
+    assert body["pens"][-1]["confirmed_on"] is None
+    assert body["pens"][-1]["end"]["status"] == "candidate"
+    assert "pen" not in body["not_implemented"]
+
+
+# ── ⑮ 测试隔离: 只碰 conftest 建在临时 DATA_DIR 下的 SQLite ────────────────
+
+
+def test_suite_uses_isolated_scratch_sqlite(auth_headers):
+    """裸跑真库必须变红: 本轮 pytest 的 DB 绑定必须落在临时目录(SQLite), 不是仓库/生产库。
+
+    为什么单独钉一条: 若 shell 里残留 `SIDA_DB_URL`/`DATA_DIR` 指向真库, conftest 的
+    setdefault 不会覆盖它, 整套用例就会往真库写用户/会话。这条断言在那种情况下直接红。
+    """
+    from src.web.database import SessionLocal
+
+    data_dir = Path(os.environ["DATA_DIR"]).resolve()
+    assert data_dir.name.startswith("sida_test_data_"), f"DATA_DIR 不是临时目录: {data_dir}"
+
+    db = SessionLocal()
+    try:
+        url = str(db.get_bind().url)
+    finally:
+        db.close()
+
+    assert url.startswith("sqlite"), f"测试库必须是隔离 SQLite, 实际: {url.split('://')[0]}"
+    db_path = Path(url.split("sqlite:///", 1)[-1]).resolve()
+    # 必须在某个 mkdtemp 出来的测试目录里, 且绝不是仓库 data/ 下的真库
+    assert any(p.name.startswith("sida_test_data_") for p in db_path.parents), (
+        f"测试库不在临时目录内: {db_path}"
+    )
+    repo_data = (Path(__file__).resolve().parent.parent / "data").resolve()
+    assert repo_data not in db_path.parents, f"测试碰了仓库真库: {db_path}"
+

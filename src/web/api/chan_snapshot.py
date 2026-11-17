@@ -37,10 +37,19 @@ symbol/market/instrument/interval + 每根 bar 的日期与完整 OHLC + 数据�
 * 只接受 CN / 1d / 显式 stock|index; 其他市场、其他周期一律 422, 不做猜测。
 * ``source`` 只回传响应自述的来源, 缺省 ``unknown``; ``adjustment`` 恒为
   ``unknown``(本适配器无法证明复权口径), 不冒充。
-* 只输出合并K线**分型**(blocked/candidate/confirmed、发生日、确认日、规则版本)。
-  不含笔/线段/中枢/买卖点, 响应里 ``not_implemented`` 明写, 不允许被读成"中枢"。
+* 只输出合并K线**分型**(blocked/candidate/confirmed、发生日、确认日、规则版本)与
+  在**同一份**分型快照上算出的**笔**(端点位置/价格、状态、起点/终点、确认日、笔规则版本)。
+  不含线段/中枢/买卖点, 响应里 ``not_implemented`` 明写, 不允许被读成"中枢"。
+* 笔由 ``chan_pen.pen_from_snapshot`` 计算, 输入就是产出 ``fractals`` 的那个
+  ``ChanSnapshot`` 对象: 一次 ``get_klines``、一次 ``build_chan_structure``, 绝不为笔
+  二次取数或按参数重算。笔的每个端点都必须能对回本响应的已确认分型(同合并索引/同日/
+  同价/同类型), 任何不符 → 409 整份失败(不返回"分型是这份数据、笔是那份数据"的混合结果)。
+* 笔的 ``confirmed_on`` 就是终点被冻结那天(= 反向分型右邻合并K线的封口日), 必 ≤
+  ``as_of_day``; 最后一笔恒为 ``candidate``(端点仍可漂移), 之前的笔 ``confirmed``。
+  笔候选与已确认都只是**规则几何**, 不是交易信号, 也不代表数据已最终定型。
 * 当日 bar 不参与计算(沿用 ``chan_kline_adapter`` 的保守口径), 但仍在摘要里 ——
   摘要描述的是"图表看到的那份响应", 不是"我们要用的那几根"。
+* 没有任何已完成的K线 → 422: 不许用"200 + 空分型/空笔"冒充"这张图没有结构"。
 * 未来日期 bar → 422(时间不倒退); 重复/乱序日期 → 422(不自动去重)。
 * 鉴权: 未登录 401, 账号禁用/注销 403; 上游异常只回固定文案(细节不进响应)。
 """
@@ -59,7 +68,14 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.core.chan_kline_adapter import adapt_chart_bars
-from src.core.chan_structure import build_chan_structure
+from src.core.chan_pen import (
+    MIN_INDEX_GAP,
+    PEN_KERNEL_VERSION,
+    PenEndpoint,
+    PenSnapshot,
+    pen_from_snapshot,
+)
+from src.core.chan_structure import ChanSnapshot, build_chan_structure
 from src.db.models import User
 from src.web.api.auth import get_current_user
 
@@ -74,13 +90,16 @@ DIGEST_SCHEMA = "sida-chan-snapshot-v2"
 #: `inclusive-sealed` = 包含式合并(等高等低也算包含) + 右邻封口才确认。
 #: 改规则必须改版本号: 同号换语义会让历史结论被当成新规则的结果。
 CHAN_FRACTAL_RULES_VERSION = "chan-fractal-inclusive-sealed-v1"
+#: 笔规则版本: 直接取内核常量, 不在这里另写字面量 —— 两处字符串一旦漂移, 客户端
+#: 就会把两套规则当成同一套。间距(MIN_INDEX_GAP)=4 根合并K线 + 顶包络高于底包络
+#: + 反向分型封口才冻结, 详见 `src/core/chan_pen.py`。
+CHAN_PEN_RULES_VERSION = PEN_KERNEL_VERSION
 #: 只有完整 64 位小写十六进制才接受; 截短/大写/非十六进制一律 422(不"修正")。
 _DIGEST_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 #: 身份依据: 响应布尔 is_index / 显式 stock 取数路径；均非独立证券主数据核验。
 IdentityBasis = Literal["response_flag", "declared_path"]
 
 _NOT_IMPLEMENTED: tuple[str, ...] = (
-    "pen",            # 笔
     "segment",        # 线段
     "centre",         # 中枢
     "buy_sell_point",  # 买卖点
@@ -343,6 +362,126 @@ def attach_snapshot_digest(response: dict) -> dict:
     return response
 
 
+# ── 笔(pen) ─────────────────────────────────────────────────────────────
+
+
+def _endpoint_payload(endpoint: PenEndpoint) -> dict:
+    """一个笔端点 → 响应字段(位置/价格/状态/确认日都逐项给出, 不合并成"一个点")。"""
+    return {
+        "kind": endpoint.kind,
+        "merged_index": endpoint.merged_index,
+        "position_day": endpoint.position_day,
+        "price": endpoint.price,
+        "bar_high": endpoint.bar_high,
+        "bar_low": endpoint.bar_low,
+        # 端点漂移必须可见: 候选端点挪过一次就带 revisions>0 + 被放弃的发生日,
+        # 否则一个"动过的端点"看起来和原装端点一样。
+        "revisions": endpoint.revisions,
+        "drift_days": list(endpoint.drift_days),
+        "status": endpoint.status,
+        "confirmed_on": endpoint.confirmed_on,
+    }
+
+
+def _pen_payload(pen) -> dict:
+    return {
+        "direction": pen.direction,
+        "status": pen.status,
+        "confirmed_on": pen.confirmed_on,
+        "index_gap": pen.index_gap,
+        "kernel_version": pen.kernel_version,
+        "start": _endpoint_payload(pen.start),
+        "end": _endpoint_payload(pen.end),
+    }
+
+
+def _pen_consistency_error(pens: PenSnapshot, structure: ChanSnapshot) -> str | None:
+    """笔结果与本快照是否自洽; ``None`` = 自洽, 否则返回**仅进日志**的诊断。
+
+    ``pen_from_snapshot`` 自己已经复核传入的快照, 但"内核被喂了别人的快照"这件事它
+    看不出来(两份快照各自自洽)。这里补上跨对象对账, 也是本端点唯一的兜底:
+
+    · 截止日/规则版本必须与本次分型快照同源;
+    · 每个端点必须能对回本快照里**同一个**合并索引的已确认分型(同日/同价/同类型) ——
+      端点价格被改过、或整批笔来自另一批K线, 都在这里被挡住;
+    · 笔必须是连续链(上一笔终点 == 下一笔起点), 不许断裂或重叠;
+    · 已确认笔必须有 ``confirmed_on``, 且晚于起点发生日、不越过 ``as_of_day``;
+      候选/受阻笔必须没有 ``confirmed_on``;
+    · 端点发生日不得越过 ``as_of_day``(不许描述快照之后的走势)。
+    """
+    if pens.as_of_day != structure.as_of_day:
+        return f"pen as_of_day {pens.as_of_day!r} != structure {structure.as_of_day!r}"
+    if pens.kernel_version != CHAN_PEN_RULES_VERSION or pens.rules.kernel_version != CHAN_PEN_RULES_VERSION:
+        return f"pen kernel version {pens.kernel_version!r} is not {CHAN_PEN_RULES_VERSION!r}"
+
+    as_of_day = structure.as_of_day
+    merged_total = len(structure.merged_bars)
+    fractals = {f.position_merged_index: f for f in structure.fractals}
+    previous_end: PenEndpoint | None = None
+
+    for position, pen in enumerate(pens.pens):
+        for side, endpoint in (("start", pen.start), ("end", pen.end)):
+            if not 0 <= endpoint.merged_index < merged_total:
+                return f"pen {position} {side} merged index {endpoint.merged_index} out of range"
+            fractal = fractals.get(endpoint.merged_index)
+            if fractal is None or (
+                fractal.kind,
+                fractal.position_day,
+                fractal.position_price,
+                fractal.status,
+            ) != (endpoint.kind, endpoint.position_day, endpoint.price, "confirmed"):
+                return (
+                    f"pen {position} {side} endpoint "
+                    f"{endpoint.merged_index}/{endpoint.position_day}/{endpoint.price} "
+                    "does not belong to this snapshot's confirmed fractals"
+                )
+            if endpoint.status not in ("candidate", "confirmed"):
+                return f"pen {position} {side} has unknown endpoint status {endpoint.status!r}"
+            if endpoint.status == "confirmed" and endpoint.confirmed_on is None:
+                return f"pen {position} {side} is confirmed without a confirmation day"
+            if as_of_day is not None and endpoint.position_day > as_of_day:
+                return f"pen {position} {side} position day {endpoint.position_day} is past as_of_day"
+
+        if pen.start.kind == pen.end.kind:
+            return f"pen {position} joins two {pen.start.kind} fractals"
+        expected_direction = "up" if pen.start.kind == "bottom" else "down"
+        if pen.direction != expected_direction:
+            return f"pen {position} direction {pen.direction!r} != {expected_direction!r}"
+        if pen.index_gap < MIN_INDEX_GAP:
+            return f"pen {position} index gap {pen.index_gap} < {MIN_INDEX_GAP}"
+
+        if pen.status == "confirmed":
+            if pen.confirmed_on is None:
+                return f"pen {position} is confirmed without a confirmation day"
+            if as_of_day is None or pen.confirmed_on > as_of_day:
+                return f"pen {position} confirmed on {pen.confirmed_on} after as_of_day"
+            if pen.confirmed_on <= pen.start.position_day:
+                return f"pen {position} confirmed on {pen.confirmed_on}, not after its own start"
+            if pen.end.status != "confirmed":
+                return f"pen {position} is confirmed although its end is {pen.end.status!r}"
+        elif pen.status == "candidate":
+            if pen.confirmed_on is not None:
+                return f"pen {position} is a candidate with a confirmation day"
+            if pen.end.status != "candidate":
+                return f"pen {position} is a candidate although its end is {pen.end.status!r}"
+        elif pen.status == "blocked":
+            if pen.confirmed_on is not None:
+                return f"pen {position} is blocked with a confirmation day"
+            if not any(pen.start.merged_index <= t <= pen.end.merged_index for t in pens.taint_indices):
+                return f"pen {position} is blocked without a tainted window in its span"
+        else:
+            return f"pen {position} has unknown status {pen.status!r}"
+
+        if previous_end is not None and (
+            pen.start.merged_index,
+            pen.start.position_day,
+            pen.start.price,
+        ) != (previous_end.merged_index, previous_end.position_day, previous_end.price):
+            return f"pen {position} does not continue the chain from the previous pen"
+        previous_end = pen.end
+    return None
+
+
 # ── 端点 ────────────────────────────────────────────────────────────────
 
 
@@ -392,7 +531,7 @@ def get_chan_structure(
     days: int = Query(60, ge=1, le=2000, description="必须与图表请求的 days 一致"),
     _: User = Depends(get_current_user),
 ) -> dict:
-    """只读缠论分型(合并K线 + 分型), 与图表快照内容严格绑定。
+    """只读缠论分型 + 笔, 与图表快照内容严格绑定。
 
     ``instrument`` 是**必填**参数而不是默认 ``stock``: 默认值会把"调用方忘了说"
     记成"调用方声明了股票", 而 A 股同码(000001)下这个差别就是两只不同标的。
@@ -400,10 +539,17 @@ def get_chan_structure(
     鉴权: 只要**真实用户身份**(`get_current_user`)。服务令牌不够 —— 结构结论会
     被当成"这张图的缠论结构"引用, 不能由无用户的批处理通道代签。
 
+    返回 ``fractals`` 与 ``pens``, 两者来自**同一个** ``ChanSnapshot``(一次取数、
+    一次结构构建)。笔带端点位置(合并索引/发生日/价格/包络)、端点状态、起点终点、
+    ``confirmed_on`` 与 ``kernel_version``, 顶层 ``pen_rules_version`` 与之同源。
+    笔候选与已确认都只是规则几何: ``adjustment``/``finality`` 仍是 unknown/unverified,
+    ``pen_disclaimer`` 明写"候选端点仍可漂移、不是交易信号"。
+
     状态即语义:
       401 未登录(含 token 失效); 403 账号禁用/注销;
-      422 参数/数据不满足前提(市场、周期、重复或乱序日期、未来日期);
-      409 摘要与本次服务端响应不一致(图表已变/跨 worker 不一致/身份不符或畸形)。
+      422 参数/数据不满足前提(市场、周期、重复或乱序日期、未来日期、无已完成K线);
+      409 摘要与本次服务端响应不一致(图表已变/跨 worker 不一致/身份不符或畸形),
+          或笔内核拒绝 / 笔与本次分型快照不自洽 —— 这两种情况整份失败, 不返回半份结果。
     """
     # ① 参数必须先收敛再取数: 不猜测市场, 不接受 auto(那是"让服务端猜")。
     if (market or "").strip().upper() != "CN":
@@ -483,6 +629,11 @@ def get_chan_structure(
         status, detail = _SAFE_BAR_ERRORS.get(str(exc), (422, "K线内容不满足分型计算前提, 拒绝计算"))
         raise _reject(status, detail) from None
 
+    # 没有任何已完成的K线: 摘要仍能对上(空序列也有摘要), 于是"200 + 空分型/空笔"会
+    # 被读成"这张图没有结构"。那是无数据冒充成功 —— 必须拒绝。
+    if not chart.bars:
+        raise _reject(422, "没有已完成的K线, 拒绝计算分型/笔(不以空结构冒充成功)")
+
     try:
         structure = build_chan_structure(chart.bars)
     except ValueError as exc:
@@ -499,6 +650,24 @@ def get_chan_structure(
         }
         for fractal in structure.fractals
     ]
+
+    # ⑥ 笔: 输入就是上面那个 structure 对象 —— 一次取数、一次 build, 不为笔二次取数,
+    #    也不重算一遍结构(两份快照各自"自洽"却指向不同数据时, 重算会静默混用)。
+    try:
+        pen_snapshot = pen_from_snapshot(structure)
+    except ValueError as exc:
+        # 内核复核失败 = 这份快照内部不自洽; 不修、不猜, 整份拒绝(细节只进日志)。
+        logger.warning("chan-pen 内核拒绝(%s): %s", symbol, type(exc).__name__)
+        raise _reject(409, "结构快照内部不自洽, 笔内核拒绝计算; 请刷新图表") from None
+
+    problem = _pen_consistency_error(pen_snapshot, structure)
+    if problem is not None:
+        # 分型与笔不是同一份数据(或笔自相矛盾): 返回任何一半都是误导。
+        logger.warning("chan-pen 自洽性校验失败(%s): %s", symbol, problem)
+        raise _reject(409, "笔与本响应分型快照不自洽, 拒绝返回半份结果; 请刷新图表") from None
+
+    pens = [_pen_payload(pen) for pen in pen_snapshot.pens]
+
     return {
         "symbol": symbol,
         "market": "CN",
@@ -521,6 +690,18 @@ def get_chan_structure(
             "candidate": sum(1 for f in fractals if f["status"] == "candidate"),
             "blocked": sum(1 for f in fractals if f["status"] == "blocked"),
         },
+        "pens": pens,
+        "pen_rules_version": CHAN_PEN_RULES_VERSION,
+        "pen_counts": {
+            "total": len(pens),
+            "confirmed": sum(1 for p in pens if p["status"] == "confirmed"),
+            "candidate": sum(1 for p in pens if p["status"] == "candidate"),
+            "blocked": sum(1 for p in pens if p["status"] == "blocked"),
+        },
         "not_implemented": list(_NOT_IMPLEMENTED),
-        "disclaimer": "仅合并K线的三根分型; 不含笔/线段/中枢/买卖点, 不构成交易建议",
+        "disclaimer": "分型与笔均为合并K线上的规则几何; 不含线段/中枢/买卖点, 不构成交易建议",
+        "pen_disclaimer": (
+            "笔=相邻两个已确认分型的合法连接(规则几何): 已确认笔在反向分型右邻封口当日冻结, "
+            "最后一笔为候选(candidate)且端点价格仍可漂移; 数据最终性与复权口径未知, 不是交易信号"
+        ),
     }
