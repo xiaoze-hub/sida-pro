@@ -50,6 +50,9 @@ def test_name_lookup_is_cached(fake_tq):
     注意：一次解析可能对**多个候选词**各查一次（"北方稀土" 与 "北方"），
     所以断言的是「第二次解析不再新增调用」，而不是总数等于 1。
     """
+    # 进程级缓存会被同一分片里更早的用例预热（新增的缠论追问用例也会解析名字），
+    # 先清空再断言，否则 first 可能为 0 而不是"第二次不再新增"。
+    symbol_guard._TQ_MATCH_CACHE.clear()
     symbol_guard.first_code_from_names("北方稀土还能拿吗")
     first = len(fake_tq)
     assert first >= 1

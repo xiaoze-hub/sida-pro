@@ -96,15 +96,29 @@ def client(monkeypatch):
     # 2026-11-18: settings 在 import 期缓存, 本进程若有更早的文件先导入了 settings,
     # AUTH_PASSWORD 就不会生效, bootstrap 造出的 admin 密码与本用例不符 → 401。
     # 这里不赌 bootstrap, 直接把 owner 的 hash 设成本用例的密码。
-    client.get("/api/health")
     from src.web.api.auth import hash_password
 
     db = SessionLocal()
     try:
         admin = db.query(User).filter(User.username == "admin").first()
-        if admin is not None:
+        if admin is None:
+            import uuid
+
+            admin = User(
+                id=str(uuid.uuid4()),
+                username="admin",
+                password_hash=hash_password("chat-stream-0606"),
+                role="owner",
+                permissions=[],
+                provider="local",
+                is_active=True,
+                token_version=1,
+            )
+            db.add(admin)
+        else:
             admin.password_hash = hash_password("chat-stream-0606")
-            db.commit()
+            admin.is_active = True
+        db.commit()
     finally:
         db.close()
     return client
