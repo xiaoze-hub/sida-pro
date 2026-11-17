@@ -1,4 +1,4 @@
-"""Chan-theory v1: 线段 (segments) over an explicitly supplied 笔 (pen) sequence.
+"""Chan-theory v2: 线段 (segments) over an explicitly supplied 笔 (pen) sequence.
 
 Scope and input contract
 ------------------------
@@ -8,8 +8,8 @@ anything after ``as_of_day``, so every result is a deterministic replay of that
 pen prefix.  No graph is fetched here and no snapshot is re-derived: pens are
 the input, segments are the output.
 
-Segment rules v1 (``SEGMENT_KERNEL_VERSION = 'chan-segment-v1'``)
---------------------------------------------------------------
+Segment rules v2 (``SEGMENT_KERNEL_VERSION = 'chan-segment-v2'``)
+-----------------------------------------------------------------
 A segment is a contiguous run of pens of one direction (pens alternate by
 construction, so direction alternates too).  Following 第65/67课 as pinned by
 :class:`SegmentRules`:
@@ -27,17 +27,55 @@ construction, so direction alternates too).  Following 第65/67课 as pinned by
 3. **包含处理** — the characteristic sequence is normalised with the same
    inclusive containment rule as merged bars, **sequentially and
    non-transitively** (each merge is compared with the already-normalised
-   neighbour, so a transitive closure would give a different range).  The merge
-   direction is **pinned to the segment direction** (``up`` keeps ``max`` high /
-   ``max`` low, ``down`` keeps ``min``/``min``): that is the v1 choice, it is the
-   only direction that can print the terminal fractal, and the alternative
-   ("infer the direction from the last two elements") is *not* implemented.
-   If the **first two** elements are contained, the first element's range would
-   depend on a trend that does not exist yet: that is ``blocked``
-   (``characteristic_initial_containment``) instead of invented.
+   neighbour, so a transitive closure would give a different range).
 
-Confirmation time (the important part)
---------------------------------------
+   包含处理 direction (v2)
+   ~~~~~~~~~~~~~~~~~~~~~~~
+   The merge direction is the **trend of the characteristic sequence itself**,
+   exactly as ordinary K-lines are merged: when the new element is contained by
+   its predecessor, the surviving extrema are decided by the move that led into
+   that pair, i.e. by the two most recent **already normalised, non-contained**
+   elements.  Rising (both high and low higher) keeps ``max`` high / ``max`` low,
+   falling keeps ``min``/``min``.
+
+   This replaces v1's "pin the merge to the segment direction" rule, which was a
+   *choice*, not the lesson's rule, and which diverges on real series (v1 could
+   collapse a sequence that 第67课 leaves at four elements, and then either stall
+   the segment forever or confirm it at the wrong endpoint).
+
+   **No prior trend, no merge.**  When the first pair is already contained there
+   is no earlier element pair to read a direction from, so it is reported as
+   ``blocked`` (``characteristic_initial_containment``) instead of silently
+   defaulting to one direction.  A defaulted direction is indistinguishable from
+   a real one after the fact, which is exactly the kind of invention this module
+   refuses.  (Because containment is *inclusive*, two normalised neighbours are
+   always strictly ordered — an equal high or equal low would itself be
+   containment — so the first pair is the only reachable case; the second guard
+   reason ``characteristic_merge_direction_unknown`` exists for a crossing pair
+   that the normalisation must never produce and is kept fail-closed.)
+
+Segment end (the important part)
+--------------------------------
+第67课: "该线段在该顶分型的高点处结束".  The segment therefore ends at the pen that
+**carries the terminal fractal's own extreme**, not merely at "some earlier pen
+with an equal price":
+
+* the middle element of the fractal absorbs one or more reverse pens; its
+  extreme side (``high`` for an up segment) is the start price of one of them;
+* the segment's end pen is the opposite-direction pen immediately *before* that
+  characteristic pen (``i - 1``), whose end price **is** that extreme;
+* if several absorbed pens carry the same extreme (an equal high after
+  normalisation), the **latest** one wins (``equal_fractal_extreme='keep_latest'``).
+  Ending at an earlier equal top would leave a same-price top inside the next
+  segment, which no later segment could ever terminate on, so the latest
+  occurrence is the only self-consistent choice.
+
+Note that this is *not* the open-end drift rule: an open (candidate) endpoint
+still keeps the earlier position on an equal extreme (``equal_extreme``), because
+moving an endpoint on an equal price is churn, not evidence.
+
+Confirmation time
+-----------------
 Only **confirmed** pens are evidence.  A candidate pen may never confirm a
 segment, and the segment's earliest publish day is the latest confirmation day
 among its three fractal elements — i.e. the day the *third* characteristic
@@ -54,14 +92,31 @@ does not rewrite a confirmed segment — it belongs to the next segment or to th
 open one.  A confirmed segment is a pure function of the prefix that produced
 it, which is what makes bar-by-bar replay auditable.
 
+Evidence is reported separately from the geometric span
+-------------------------------------------------------
+A :class:`Segment` carries ``evidence``: the three fractal elements (role,
+absorbed pens, own range, own confirmation day).  Those pens are usually *not*
+inside ``pen_start_index..pen_end_index`` — the fractal's right element is the
+very pen that printed the rejection that ended the walk, so it sits **after** the
+segment's end.  ``evidence_pen_indices`` / ``evidence_confirmed_on`` expose that
+set, and ``pen_end_index`` never absorbs it: a confirmed segment's geometry and
+the evidence that froze it are two different things.
+
 Fail-closed behaviour
 ---------------------
 ``segment_from_pens`` accepts snapshots produced elsewhere, so nothing is
 trusted.  It re-verifies pen order, endpoint continuity (shared merged index,
-day and price), alternating directions, direction-vs-price, kernel version,
-``status``/``confirmed_on`` consistency, ``confirmed_on`` strictly after its own
-position day and never after ``as_of_day``, and that only the tail pen may be a
+day and price), alternating directions, direction-vs-price, the pen kernel's own
+minimum merged-index gap, strictly increasing **ISO position days** per pen and
+across the series, kernel version, ``status``/``confirmed_on`` consistency,
+``confirmed_on`` strictly after its own position day and never after
+``as_of_day``, monotone confirmation days, and that only the tail pen may be a
 candidate.  Any mismatch raises ``ValueError`` instead of being repaired.
+
+Nothing is ever published as a line that cannot be one: when the decision point
+is closer than :data:`MIN_PENS` pens to the chain start, the outcome is a
+``SegmentPending`` (blocked or candidate, with the reason kept) — never a
+one-pen "segment", and never an internal exception.
 
 Reported states, never guesses
 ------------------------------
@@ -75,9 +130,12 @@ Reported states, never guesses
                 elements.  第二种情况 requires the *second* characteristic
                 sequence to print a fractal as well; **not implemented**, so the
                 segment is blocked, not "ended".
-* ``characteristic_initial_containment`` — merge direction would be invented.
+* ``characteristic_initial_containment`` — the first pair is contained: no prior
+                trend exists, so the merge direction would be invented.
+* ``characteristic_merge_direction_unknown`` — the pair before the contained one
+                is ambiguous (equal high or low), same refusal.
 * ``characteristic_fractal_below_prior_extreme`` — the fractal's middle is not
-                the sequence's extreme (an earlier element was more extreme), so
+                the sequence's extreme (an earlier pen was more extreme), so
                 using it as the end would silently move the segment's high/low.
 * ``tainted_pen`` — a pen in the span is ``blocked`` (unknown-direction taint
                 upstream).  The chain stops at a blocked boundary.
@@ -90,9 +148,11 @@ Source binding (do not mix samples)
 A result is bound to exactly one input: ``SegmentBinding`` carries the symbol,
 the price-adjustment base and the as-of day, and the snapshot stores a
 SHA-256 ``input_digest`` of the pen series plus ``source_pen_kernel_version``.
-Two results with different digests, symbols, adjustment bases or kernels
-describe different lines even when the numbers look alike; use
-:meth:`SegmentSnapshot.same_source` / :meth:`SegmentSnapshot.assert_same_source`
+The digest covers the *series* only (symbol/adjust are caller declarations the
+kernel cannot verify); :meth:`SegmentSnapshot.same_source` therefore requires
+digest **and** binding to agree.  Two results with different digests, symbols,
+adjustment bases or kernels describe different lines even when the numbers look
+alike; use :meth:`SegmentSnapshot.same_source` / :meth:`SegmentSnapshot.assert_same_source`
 and keep the digest next to anything you store or display.  :meth:`is_stale`
 answers "was this computed before day X" — a stale result must not be presented
 as today's structure.
@@ -106,7 +166,7 @@ Not implemented (do not claim otherwise)
   does not build one.  No 买卖点, no multi-level recursion, no volume/effort
   rules, no trading signals.
 * No re-anchoring: if the first three pens do not overlap, the chain is blocked
-  rather than restarted from a later pen (that rule is not part of v1).
+  rather than restarted from a later pen (that rule is not part of v2).
 * This is *not* a complete 线段 implementation: it is the verifiable no-gap
   case plus explicit blocked states for everything else.
 """
@@ -115,15 +175,17 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import date
 from math import isfinite
 from typing import Literal, Sequence
 
-from src.core.chan_pen import PEN_KERNEL_VERSION, PenSnapshot
+from src.core.chan_pen import MIN_INDEX_GAP, PEN_KERNEL_VERSION, PenSnapshot
 
 __all__ = [
     'MIN_PENS',
     'SEGMENT_KERNEL_VERSION',
     'CharacteristicElement',
+    'FractalEvidence',
     'Segment',
     'SegmentBinding',
     'SegmentEndpoint',
@@ -137,7 +199,14 @@ __all__ = [
 ]
 
 #: Version of the segment rule set.  Any behaviour change needs a new version.
-SEGMENT_KERNEL_VERSION = 'chan-segment-v1'
+#:
+#: v1 -> v2: 包含处理 direction is read from the characteristic sequence itself
+#: (was: pinned to the segment direction); the segment end is the pen carrying the
+#: fractal's own extreme (was: the first pen at an equal price, which could be a
+#: pen that is not the fractal's extreme at all); evidence pens/days are reported
+#: separately from the geometric span; and input validation now also enforces the
+#: pen kernel's merged-index gap and a strictly increasing ISO day order.
+SEGMENT_KERNEL_VERSION = 'chan-segment-v2'
 
 #: A segment needs at least three pens, and their ranges must overlap.
 MIN_PENS = 3
@@ -147,11 +216,14 @@ _ADJUSTMENT_BASES = ('none', 'qfq', 'hfq')
 _OVERLAP = 'pen_endpoint_range_strict'
 _CHARACTERISTIC = 'reverse_pens'
 _INCLUSION = 'sequential_non_transitive'
-_MERGE_DIRECTION = 'segment_direction'
+_MERGE_DIRECTION = 'recent_two_elements'
+_SEGMENT_END = 'fractal_middle_extreme_pen'
+_EQUAL_FRACTAL_EXTREME = 'keep_latest'
 _GAP_CASE = 'blocked_case2_not_implemented'
 _INITIAL_CONTAINMENT = 'blocked'
 _EQUAL_EXTREME = 'keep_earlier'
 _EVIDENCE = 'confirmed_pens_only'
+_INPUT_GATE = 'iso_days_strict_and_pen_index_gap'
 
 _Direction = Literal['up', 'down']
 _Status = Literal['candidate', 'confirmed', 'blocked']
@@ -161,12 +233,19 @@ _PendingReason = Literal[
     'awaiting_three_confirmed_pens',
     'first_three_pens_no_overlap',
     'tainted_pen',
+    'characteristic_gap_case2',
+    'characteristic_initial_containment',
+    'characteristic_merge_direction_unknown',
+    'characteristic_fractal_below_prior_extreme',
+    'fractal_extreme_pen_missing',
+    'evidence_inconsistent',
 ]
 _SegmentReason = Literal[
     'first_case_no_gap',
     'awaiting_confirmed_characteristic_pen',
     'characteristic_gap_case2',
     'characteristic_initial_containment',
+    'characteristic_merge_direction_unknown',
     'characteristic_fractal_below_prior_extreme',
     'tainted_pen',
 ]
@@ -174,6 +253,7 @@ _RejectReason = Literal[
     'first_three_pens_no_overlap',
     'characteristic_gap_case2',
     'characteristic_initial_containment',
+    'characteristic_merge_direction_unknown',
     'characteristic_fractal_below_prior_extreme',
     'superseded_by_more_extreme',
     'equal_extreme_kept_earlier',
@@ -183,36 +263,44 @@ _RejectReason = Literal[
 
 @dataclass(frozen=True)
 class SegmentRules:
-    """Versioned rule set.  Every field is *pinned* to what v1 means.
+    """Versioned rule set.  Every field is *pinned* to what v2 means.
 
-    Changing any value while still reporting ``chan-segment-v1`` would make one
+    Changing any value while still reporting ``chan-segment-v2`` would make one
     version string describe two different rule sets, so unsupported values
     raise.  A new rule needs a new kernel version *and* a replacement module.
     """
 
     kernel_version: str = SEGMENT_KERNEL_VERSION
     min_pens: int = MIN_PENS
+    min_index_gap: int = MIN_INDEX_GAP
     overlap: str = _OVERLAP
     characteristic_sequence: str = _CHARACTERISTIC
     inclusion: str = _INCLUSION
     merge_direction: str = _MERGE_DIRECTION
+    segment_end: str = _SEGMENT_END
+    equal_fractal_extreme: str = _EQUAL_FRACTAL_EXTREME
     gap_case: str = _GAP_CASE
     initial_containment: str = _INITIAL_CONTAINMENT
     equal_extreme: str = _EQUAL_EXTREME
     evidence: str = _EVIDENCE
+    input_gate: str = _INPUT_GATE
 
     def __post_init__(self) -> None:
         expected = {
             'kernel_version': SEGMENT_KERNEL_VERSION,
             'min_pens': MIN_PENS,
+            'min_index_gap': MIN_INDEX_GAP,
             'overlap': _OVERLAP,
             'characteristic_sequence': _CHARACTERISTIC,
             'inclusion': _INCLUSION,
             'merge_direction': _MERGE_DIRECTION,
+            'segment_end': _SEGMENT_END,
+            'equal_fractal_extreme': _EQUAL_FRACTAL_EXTREME,
             'gap_case': _GAP_CASE,
             'initial_containment': _INITIAL_CONTAINMENT,
             'equal_extreme': _EQUAL_EXTREME,
             'evidence': _EVIDENCE,
+            'input_gate': _INPUT_GATE,
         }
         for field, value in expected.items():
             actual = getattr(self, field)
@@ -243,7 +331,7 @@ class SegmentBinding:
         if not isinstance(self.symbol, str) or not self.symbol.strip():
             raise ValueError('symbol must be a non-empty string')
         if self.adjust not in _ADJUSTMENT_BASES:
-            raise ValueError(f'unsupported adjustment base {self.adjust!r}; v1 knows {_ADJUSTMENT_BASES}')
+            raise ValueError(f'unsupported adjustment base {self.adjust!r}; v2 knows {_ADJUSTMENT_BASES}')
         if self.as_of_day is not None and not isinstance(self.as_of_day, str):
             raise ValueError('as_of_day must be an ISO day string or None')
 
@@ -263,6 +351,23 @@ class CharacteristicElement:
     first_pen_index: int
     last_pen_index: int
     pen_indices: tuple[int, ...]
+    confirmed_on: str | None
+
+
+@dataclass(frozen=True)
+class FractalEvidence:
+    """One element of the terminal fractal a segment's decision rests on.
+
+    ``pen_indices`` are the characteristic (reverse) pens the element absorbed,
+    ``high``/``low`` its normalised range and ``confirmed_on`` the day it froze.
+    The ``right`` element is by construction *after* the segment's end pen, so
+    evidence pens and the segment's geometric span are not the same set.
+    """
+
+    role: Literal['left', 'middle', 'right']
+    pen_indices: tuple[int, ...]
+    high: float
+    low: float
     confirmed_on: str | None
 
 
@@ -292,7 +397,8 @@ class Segment:
     ``status='confirmed'`` is only ever the 第67课 第一种情况 (no gap).
     ``blocked`` keeps the audit-level end price but no ``confirmed_on``.
     ``confirmed_on`` is the earliest day both end prices are final — the day the
-    third characteristic element was frozen.
+    third characteristic element was frozen.  ``pens_used`` is always at least
+    :data:`MIN_PENS`: a shorter span is reported as a :class:`SegmentPending`.
     """
 
     start: SegmentEndpoint
@@ -305,6 +411,7 @@ class Segment:
     confirmed_on: str | None
     characteristic_elements: int
     kernel_version: str
+    evidence: tuple[FractalEvidence, ...] = ()
 
     @property
     def pens_used(self) -> int:
@@ -318,14 +425,32 @@ class Segment:
     def end_price(self) -> float:
         return self.end.price
 
+    @property
+    def evidence_pen_indices(self) -> tuple[int, ...]:
+        """Every characteristic pen the decision rests on, ascending.
+
+        These need not lie inside ``pen_start_index..pen_end_index``: the fractal's
+        right element comes after the end pen.  Keep the two sets apart when
+        displaying or storing a segment.
+        """
+        return tuple(sorted({i for element in self.evidence for i in element.pen_indices}))
+
+    @property
+    def evidence_confirmed_on(self) -> str | None:
+        """The day the last of the fractal's elements froze (== ``confirmed_on``)."""
+        days = [element.confirmed_on for element in self.evidence if element.confirmed_on]
+        return max(days) if days else None
+
 
 @dataclass(frozen=True)
 class SegmentPending:
     """A chain start that cannot become a segment yet (or at all).
 
     Reported instead of a guessed segment: not enough pens, not enough
-    *confirmed* pens, a non-overlapping trio, or a tainted pen.  The position
-    day and price of the would-be start are kept so the decision is auditable.
+    *confirmed* pens, a non-overlapping trio, a tainted pen, or a decision point
+    that is closer than :data:`MIN_PENS` pens to the chain start.  The position
+    day and price of the would-be start are kept so the decision is auditable,
+    and ``end_pen_index`` records where the rejected end would have been.
     """
 
     pen_start_index: int
@@ -336,6 +461,14 @@ class SegmentPending:
     start_price: float
     confirmed_pens: int
     detail: str = ''
+    end_pen_index: int | None = None
+
+    @property
+    def pens_used(self) -> int:
+        """How many pens the refused span would have covered (0 when unknown)."""
+        if self.end_pen_index is None:
+            return 0
+        return self.end_pen_index - self.pen_start_index + 1
 
 
 @dataclass(frozen=True)
@@ -417,7 +550,10 @@ def segment_input_digest(pen_snapshot: PenSnapshot) -> str:
 
     Anything that changes a pen (position, price, status, confirmation day,
     direction, kernel version, as-of day) changes the digest, so two runs can be
-    compared without trusting a label.
+    compared without trusting a label.  The digest names the *series*: the
+    symbol/adjustment in :class:`SegmentBinding` are caller declarations that the
+    kernel cannot verify, so they are deliberately not folded in here and
+    :meth:`SegmentSnapshot.same_source` requires the binding to match too.
     """
     payload = {
         'as_of_day': pen_snapshot.as_of_day,
@@ -451,7 +587,7 @@ def _contains(left: CharacteristicElement, right: CharacteristicElement) -> bool
 def _merge_elements(
     left: CharacteristicElement, right: CharacteristicElement, direction: _Direction
 ) -> CharacteristicElement:
-    """Merge two contained elements in the pinned (segment) direction.
+    """Merge two contained elements in ``direction`` (the K-line rule).
 
     ``up`` keeps ``max`` high / ``max`` low, ``down`` keeps ``min``/``min``; the
     absorbed pen indices and the latest confirmation day are kept so the merge
@@ -472,42 +608,95 @@ def _merge_elements(
     )
 
 
-def _merge_pass(
-    elements: Sequence[CharacteristicElement], direction: _Direction
-) -> tuple[tuple[CharacteristicElement, ...], str | None]:
-    """Sequential, non-transitive 包含处理.  Returns (elements, blocked_reason)."""
-    out: list[CharacteristicElement] = []
-    merges = 0
-    for element in elements:
-        out.append(element)
-        while len(out) >= 2 and _contains(out[-2], out[-1]):
-            if merges == 0 and len(out) == 2:
-                # The very first pair is contained: the first element's range
-                # would depend on a trend that does not exist yet.  Fail closed.
-                return tuple(out), 'initial_containment_direction_ambiguous'
-            out[-2:] = (_merge_elements(out[-2], out[-1], direction),)
-            merges += 1
-    return tuple(out), None
+def _trend(previous: CharacteristicElement, current: CharacteristicElement) -> _Direction | None:
+    """Direction of the move ``previous -> current``; ``None`` when undefined.
+
+    Only a *strict* two-extrema move defines a merge direction.  An equal high or
+    equal low means the pair is (still) a flat/ambiguous step, and defaulting it
+    would invent a direction that nothing in the sequence supports.
+    """
+    if current.high > previous.high and current.low > previous.low:
+        return 'up'
+    if current.high < previous.high and current.low < previous.low:
+        return 'down'
+    return None
+
+
+class _CharacteristicNormalizer:
+    """The single 包含处理 implementation.
+
+    Both the segment walk (on real characteristic pens) and the public
+    :func:`normalize_characteristic_sequence` (on bare ranges) push elements
+    through *this* object, so an audit of the helper audits production and vice
+    versa: there is no second copy of the merge rule to drift.
+
+    The merge direction of a contained pair is the trend of the two most recent
+    already-normalised, non-contained elements — the sequence's own direction, as
+    for K-lines.  When that trend does not exist (first pair) or is not defined
+    (equal high/low), the normaliser blocks instead of picking a side.
+    """
+
+    __slots__ = ('elements', 'merges', 'blocked')
+
+    def __init__(self) -> None:
+        self.elements: list[CharacteristicElement] = []
+        self.merges = 0
+        self.blocked: str | None = None
+
+    def push(self, element: CharacteristicElement) -> str | None:
+        """Add one element; returns a blocked reason if the sequence is undefined."""
+        if self.blocked is not None:  # pragma: no cover - callers stop on a block
+            raise ValueError(f'characteristic sequence is already blocked: {self.blocked}')
+        self.elements.append(element)
+        while len(self.elements) >= 2 and _contains(self.elements[-2], self.elements[-1]):
+            direction = self._merge_direction()
+            if direction is None:
+                if len(self.elements) == 2:
+                    self.blocked = 'characteristic_initial_containment'
+                else:  # pragma: no cover - a normalised pair is always strictly ordered
+                    self.blocked = 'characteristic_merge_direction_unknown'
+                return self.blocked
+            self.elements[-2:] = [_merge_elements(self.elements[-2], self.elements[-1], direction)]
+            self.merges += 1
+        return None
+
+    def _merge_direction(self) -> _Direction | None:
+        """Trend leading into the contained pair: ``elements[-3] -> elements[-2]``.
+
+        ``elements[-1]`` is the element that is contained by ``elements[-2]``, so
+        the move that must decide the merge is the one that produced
+        ``elements[-2]``: that is exactly the K-line rule ("包含关系之前的两根").
+        With fewer than three elements there is no such move.
+        """
+        if len(self.elements) < 3:
+            return None
+        return _trend(self.elements[-3], self.elements[-2])
+
+    @property
+    def ranges(self) -> tuple[tuple[float, float], ...]:
+        return tuple((element.high, element.low) for element in self.elements)
 
 
 def normalize_characteristic_sequence(
-    ranges: Sequence[tuple[float, float]], *, direction: _Direction
+    ranges: Sequence[tuple[float, float]],
 ) -> tuple[tuple[tuple[float, float], ...], str | None]:
-    """Normalise characteristic-sequence ``(high, low)`` ranges for one direction.
+    """Normalise characteristic-sequence ``(high, low)`` ranges.
 
-    Exposed for audit: it is the exact 包含处理 used by the segment walk.  The
-    merge is sequential and non-transitive (each merge compares with the
-    already-normalised neighbour), so a transitive closure of the same ranges
-    would give a different result.  Returns the normalised ranges plus a blocked
-    reason when the first contained pair leaves the direction ambiguous.
+    Exposed for audit: it drives the very same :class:`_CharacteristicNormalizer`
+    the segment walk uses, so this is the production 包含处理, not a parallel
+    reimplementation.  The merge is sequential and non-transitive (each merge
+    compares with the already-normalised neighbour), and its direction is read
+    from the sequence itself (see the module docstring), never from the segment
+    direction.  Returns the normalised ranges plus a blocked reason when the
+    direction is undefined: ``characteristic_initial_containment`` when the first
+    pair is contained, ``characteristic_merge_direction_unknown`` when the pair
+    before a contained one is ambiguous.
     """
-    if direction not in ('up', 'down'):
-        raise ValueError(f'unsupported segment direction {direction!r}')
-    elements = []
+    normalizer = _CharacteristicNormalizer()
     for index, (high, low) in enumerate(ranges):
         if not (isfinite(high) and isfinite(low)) or high < low:
             raise ValueError(f'invalid characteristic range {(high, low)!r} at {index}')
-        elements.append(
+        blocked = normalizer.push(
             CharacteristicElement(
                 high=float(high),
                 low=float(low),
@@ -517,8 +706,9 @@ def normalize_characteristic_sequence(
                 confirmed_on=None,
             )
         )
-    normalised, blocked = _merge_pass(elements, direction)
-    return tuple((e.high, e.low) for e in normalised), blocked
+        if blocked is not None:
+            break
+    return normalizer.ranges, normalizer.blocked
 
 
 def _more_extreme(price: float, reference: float, direction: _Direction) -> bool:
@@ -552,15 +742,45 @@ def _has_gap(left: CharacteristicElement, middle: CharacteristicElement, directi
     return middle.low > left.high if direction == 'up' else middle.high < left.low
 
 
-def _validate_pens(snapshot: PenSnapshot) -> None:
+def _fractal_end_pen(
+    pens, middle: CharacteristicElement, direction: _Direction
+) -> int | None:
+    """The pen that carries the fractal's own extreme (第67课 高点/低点).
+
+    The middle element's extreme side is the *start* price of one of the reverse
+    pens it absorbed (a down pen's high, an up pen's low), and the segment's end
+    is the opposite-direction pen immediately before it — its end price is that
+    extreme.  On an equal extreme the **latest** carrier wins
+    (``equal_fractal_extreme='keep_latest'``).
+    """
+    side = middle.high if direction == 'up' else middle.low
+    carriers = [
+        pen_index - 1
+        for pen_index in middle.pen_indices
+        if pen_index > 0 and pens[pen_index].start.price == side
+    ]
+    return max(carriers) if carriers else None
+
+
+def _check_iso_day(value: str, what: str) -> None:
+    try:
+        date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{what} {value!r} is not an ISO day (YYYY-MM-DD)') from None
+
+
+def _validate_pens(snapshot: PenSnapshot, rules: SegmentRules) -> None:
     """Refuse an inconsistent pen series instead of repairing it."""
     if snapshot.kernel_version != PEN_KERNEL_VERSION:
         raise ValueError(
             f'pen snapshot kernel {snapshot.kernel_version!r} is not '
-            f'{PEN_KERNEL_VERSION!r}; segments v1 only read that pen rule set'
+            f'{PEN_KERNEL_VERSION!r}; segments v2 only read that pen rule set'
         )
     as_of = snapshot.as_of_day
+    if as_of is not None:
+        _check_iso_day(as_of, 'as_of_day')
     previous = None
+    previous_confirm: str | None = None
     last = len(snapshot.pens) - 1
     for index, pen in enumerate(snapshot.pens):
         if pen.kernel_version != PEN_KERNEL_VERSION:
@@ -574,6 +794,12 @@ def _validate_pens(snapshot: PenSnapshot) -> None:
             raise ValueError(
                 f'pen {index} ends at merged index {pen.end.merged_index}, not after '
                 f'its start {pen.start.merged_index}'
+            )
+        gap = pen.end.merged_index - pen.start.merged_index
+        if gap < rules.min_index_gap:
+            raise ValueError(
+                f'pen {index} spans {gap} merged indices, not the {rules.min_index_gap} '
+                'the pen kernel requires; a pen shorter than that is not a leg'
             )
         if pen.start.kind == pen.end.kind:
             raise ValueError(f'pen {index} joins two {pen.start.kind}s')
@@ -593,6 +819,17 @@ def _validate_pens(snapshot: PenSnapshot) -> None:
             raise ValueError(
                 f'down pen {index} ends at {pen.end.price}, not below its start {pen.start.price}'
             )
+        _check_iso_day(pen.start.position_day, f'pen {index} start position day')
+        _check_iso_day(pen.end.position_day, f'pen {index} end position day')
+        if pen.end.position_day <= pen.start.position_day:
+            raise ValueError(
+                f'pen {index} ends on {pen.end.position_day}, not after its start '
+                f'{pen.start.position_day}; a leg must move forward in time'
+            )
+        if as_of is not None and pen.end.position_day > as_of:
+            raise ValueError(
+                f'pen {index} ends on {pen.end.position_day}, after as_of_day {as_of}'
+            )
         if pen.status == 'confirmed':
             if pen.confirmed_on is None:
                 raise ValueError(f'pen {index} is confirmed without a confirmation day')
@@ -600,6 +837,12 @@ def _validate_pens(snapshot: PenSnapshot) -> None:
                 raise ValueError(
                     f'confirmed pen {index} has no confirmed end endpoint; a frozen pen '
                     'always carries the day its end froze'
+                )
+            _check_iso_day(pen.confirmed_on, f'pen {index} confirmation day')
+            if pen.end.status != 'confirmed':
+                raise ValueError(
+                    f'pen {index} is confirmed but its end endpoint is '
+                    f'{pen.end.status!r}'
                 )
             if as_of is not None and pen.confirmed_on > as_of:
                 raise ValueError(
@@ -611,19 +854,46 @@ def _validate_pens(snapshot: PenSnapshot) -> None:
                     f'end position day {pen.end.position_day}; a confirmation may never '
                     'precede the evidence'
                 )
+            if previous_confirm is not None and pen.confirmed_on < previous_confirm:
+                raise ValueError(
+                    f'pen {index} is confirmed on {pen.confirmed_on}, before the previous '
+                    f'pen froze ({previous_confirm}); a prefix never freezes out of order'
+                )
+            previous_confirm = pen.confirmed_on
         else:
             if pen.confirmed_on is not None:
                 raise ValueError(f'pen {index} is {pen.status} but carries a confirmation day')
+            if pen.end.status == 'confirmed':
+                raise ValueError(
+                    f'pen {index} is {pen.status} but its end endpoint claims to be frozen'
+                )
             if pen.status == 'candidate' and index != last:
                 raise ValueError(
                     f'pen {index} is a candidate but is not the tail; an open pen can only '
                     'be the last one of a prefix'
                 )
         for endpoint in (pen.start, pen.end):
-            if endpoint.confirmed_on is not None and endpoint.confirmed_on > (as_of or endpoint.confirmed_on):
+            _check_iso_day(endpoint.position_day, f'pen {index} endpoint day')
+            if endpoint.confirmed_on is not None:
+                _check_iso_day(endpoint.confirmed_on, f'pen {index} endpoint confirmation')
+                if as_of is not None and endpoint.confirmed_on > as_of:
+                    raise ValueError(
+                        f'pen {index} endpoint is confirmed on {endpoint.confirmed_on}, after '
+                        f'as_of_day {as_of}'
+                    )
+                if endpoint.confirmed_on < endpoint.position_day:
+                    raise ValueError(
+                        f'pen {index} endpoint is confirmed on {endpoint.confirmed_on}, before '
+                        f'its own position day {endpoint.position_day}'
+                    )
+                if endpoint.status != 'confirmed':
+                    raise ValueError(
+                        f'pen {index} endpoint is {endpoint.status} but carries a '
+                        'confirmation day'
+                    )
+            elif endpoint.status == 'confirmed':
                 raise ValueError(
-                    f'pen {index} endpoint is confirmed on {endpoint.confirmed_on}, after '
-                    f'as_of_day {as_of}'
+                    f'pen {index} endpoint is confirmed without a confirmation day'
                 )
         if previous is not None:
             if pen.start.merged_index != previous.end.merged_index:
@@ -631,12 +901,17 @@ def _validate_pens(snapshot: PenSnapshot) -> None:
                     f'pen {index} starts at merged index {pen.start.merged_index} but pen '
                     f'{index - 1} ended at {previous.end.merged_index}; pens must share endpoints'
                 )
+            if pen.start.kind != previous.end.kind:
+                raise ValueError(
+                    f'pen {index} starts at a {pen.start.kind} but pen {index - 1} ended at a '
+                    f'{previous.end.kind}; a shared endpoint has one identity'
+                )
             if pen.start.position_day != previous.end.position_day or pen.start.price != previous.end.price:
                 raise ValueError(
                     f'pen {index} start ({pen.start.position_day}@{pen.start.price}) does not '
                     f'meet pen {index - 1} end ({previous.end.position_day}@{previous.end.price})'
                 )
-            if pen.direction == previous.direction:
+            if pen.direction == previous.direction:  # pragma: no cover - kinds alternate above
                 raise ValueError(f'pens {index - 1} and {index} share a direction; segments need alternation')
         previous = pen
 
@@ -688,7 +963,7 @@ def _build_segment(
         confirmed_on=first.start.confirmed_on,
     )
 
-    def pending(status, reason, detail='') -> SegmentPending:
+    def pending(status, reason, detail='', end_pen=None) -> SegmentPending:
         return SegmentPending(
             pen_start_index=start,
             direction=direction,
@@ -698,6 +973,7 @@ def _build_segment(
             start_price=first.start.price,
             confirmed_pens=sum(1 for p in trio if p.status == 'confirmed'),
             detail=detail,
+            end_pen_index=end_pen,
         )
 
     if len(trio) < rules.min_pens:
@@ -706,7 +982,7 @@ def _build_segment(
     for pen_index, pen in enumerate(trio, start=start):
         if pen.status == 'blocked':
             return (
-                pending('blocked', 'tainted_pen', f'pen {pen_index} is blocked'),
+                pending('blocked', 'tainted_pen', f'pen {pen_index} is blocked', end_pen=pen_index),
                 (_rejection(pen, pen_index, 'tainted_pen'),),
             )
     for pen in trio:
@@ -718,25 +994,49 @@ def _build_segment(
     if max(lows) >= min(highs):
         detail = f'max low {max(lows)} >= min high {min(highs)} over pens {start}..{start + 2}'
         return (
-            pending('blocked', 'first_three_pens_no_overlap', detail),
+            pending('blocked', 'first_three_pens_no_overlap', detail, end_pen=start + 2),
             (_rejection(trio[-1], start + 2, 'first_three_pens_no_overlap', detail),),
         )
 
     best_pen = start  # pen whose end is the current extreme of this segment
     revisions = 0
     drift_days: tuple[str, ...] = ()
-    elements: list[CharacteristicElement] = []
-    merges = 0
+    normalizer = _CharacteristicNormalizer()
     rejections: list[SegmentRejection] = []
 
-    def make_segment(status, reason, confirmed_on=None, end_status='candidate'):
-        end_pen = pens[best_pen]
+    def close(
+        status,
+        reason,
+        confirmed_on=None,
+        *,
+        end_pen=None,
+        end_status='candidate',
+        evidence: tuple[FractalEvidence, ...] = (),
+    ):
+        """Publish a segment, or a pending refusal when the span cannot be one.
+
+        A span shorter than :data:`MIN_PENS` is never turned into a
+        :class:`Segment`: one pen is not a 线段, and an internal exception would
+        hide a legal input behind a crash.
+        """
+        pen_index = best_pen if end_pen is None else end_pen
+        used = pen_index - start + 1
+        if used < rules.min_pens:
+            verdict = 'blocked' if status == 'blocked' else 'candidate'
+            return pending(
+                verdict,
+                reason,
+                f'the decision point covers {used} pen(s), fewer than the {rules.min_pens} '
+                'a segment needs; reported as a pending start, not a line',
+                end_pen=pen_index,
+            )
+        end_pen_obj = pens[pen_index]
         end_ep = _segment_endpoint(
-            end_pen,
-            best_pen,
-            end_pen.end,
+            end_pen_obj,
+            pen_index,
+            end_pen_obj.end,
             status=end_status,
-            confirmed_on=end_pen.end.confirmed_on if end_status == 'confirmed' else None,
+            confirmed_on=end_pen_obj.end.confirmed_on if end_status == 'confirmed' else None,
             revisions=revisions,
             drift_days=drift_days,
         )
@@ -745,12 +1045,25 @@ def _build_segment(
             end=end_ep,
             direction=direction,
             pen_start_index=start,
-            pen_end_index=best_pen,
+            pen_end_index=pen_index,
             status=status,
             reason=reason,
             confirmed_on=confirmed_on,
-            characteristic_elements=len(elements),
+            characteristic_elements=len(normalizer.elements),
             kernel_version=rules.kernel_version,
+            evidence=evidence,
+        )
+
+    def evidence_of(left, middle, right) -> tuple[FractalEvidence, ...]:
+        return tuple(
+            FractalEvidence(
+                role=role,
+                pen_indices=element.pen_indices,
+                high=element.high,
+                low=element.low,
+                confirmed_on=element.confirmed_on,
+            )
+            for role, element in (('left', left), ('middle', middle), ('right', right))
         )
 
     for pen_index in range(start + 1, len(pens), 2):
@@ -760,7 +1073,7 @@ def _build_segment(
         if pen.status == 'blocked' or previous_same.status == 'blocked':
             bad_index = pen_index if pen.status == 'blocked' else pen_index - 1
             rejections.append(_rejection(pens[bad_index], bad_index, 'tainted_pen'))
-            return make_segment('blocked', 'tainted_pen'), tuple(rejections)
+            return close('blocked', 'tainted_pen', end_pen=best_pen), tuple(rejections)
 
         # Endpoint drift: only the open extreme may move, and only forward.  The
         # same-direction pen before this element is frozen (a confirmed pen's
@@ -792,9 +1105,10 @@ def _build_segment(
                 )
 
         if pen.status != 'confirmed':
-            return make_segment('candidate', 'awaiting_confirmed_characteristic_pen'), tuple(rejections)
+            return close('candidate', 'awaiting_confirmed_characteristic_pen'), tuple(rejections)
 
-        elements.append(
+        before = len(normalizer.elements)
+        blocked = normalizer.push(
             CharacteristicElement(
                 high=max(pen.start.price, pen.end.price),
                 low=min(pen.start.price, pen.end.price),
@@ -804,75 +1118,112 @@ def _build_segment(
                 confirmed_on=pen.confirmed_on,
             )
         )
-
-        merged_now = False
-        while len(elements) >= 2 and _contains(elements[-2], elements[-1]):
-            if merges == 0 and len(elements) == 2:
-                rejections.append(
-                    _rejection(
-                        pen,
-                        pen_index,
-                        'characteristic_initial_containment',
-                        'the first two characteristic elements are contained; the merge '
-                        'direction cannot be established',
-                    )
+        if blocked is not None:
+            rejections.append(
+                _rejection(
+                    pen,
+                    pen_index,
+                    blocked,  # type: ignore[arg-type]
+                    'the merge direction is undefined here; the sequence is not normalised '
+                    'by guessing one',
                 )
-                return (
-                    make_segment('blocked', 'characteristic_initial_containment'),
-                    tuple(rejections),
-                )
-            elements[-2:] = [_merge_elements(elements[-2], elements[-1], direction)]
-            merges += 1
-            merged_now = True
+            )
+            return close('blocked', blocked), tuple(rejections)  # type: ignore[arg-type]
 
-        if merged_now or len(elements) < 3:
+        if len(normalizer.elements) <= before:
+            continue  # this element was absorbed: defer the fractal check
+        if len(normalizer.elements) < 3:
             continue
 
+        elements = normalizer.elements
         left, middle, right = elements[-3], elements[-2], elements[-1]
         if not _terminal_fractal(left, middle, right, direction):
             continue
 
         middle_price = middle.high if direction == 'up' else middle.low
-        best_price = pens[best_pen].end.price
-        if _more_extreme(best_price, middle_price, direction):
+        # The segment's extreme can only come from a same-direction pen up to the
+        # last element; anything more extreme means this fractal is not the top of
+        # this segment and using it would silently move the high/low.
+        span_price = (
+            max(pens[j].end.price for j in range(start, pen_index, 2))
+            if direction == 'up'
+            else min(pens[j].end.price for j in range(start, pen_index, 2))
+        )
+        end_pen = _fractal_end_pen(pens, middle, direction)
+        evidence = evidence_of(left, middle, right)
+        if _more_extreme(span_price, middle_price, direction):
             rejections.append(
                 _rejection(
                     pens[best_pen],
                     best_pen,
                     'characteristic_fractal_below_prior_extreme',
                     f'the terminal fractal is at {middle_price} but the extreme so far is '
-                    f'{best_price}; using it would move the segment end',
+                    f'{span_price}; using it would move the segment end',
                 )
             )
             return (
-                make_segment('blocked', 'characteristic_fractal_below_prior_extreme'),
+                close(
+                    'blocked',
+                    'characteristic_fractal_below_prior_extreme',
+                    end_pen=end_pen if end_pen is not None else best_pen,
+                    evidence=evidence,
+                ),
+                tuple(rejections),
+            )
+        if end_pen is None:  # pragma: no cover - an element extreme is always a pen end
+            return (
+                close('blocked', 'fractal_extreme_pen_missing', end_pen=best_pen, evidence=evidence),
                 tuple(rejections),
             )
         if _has_gap(left, middle, direction):
             rejections.append(
                 _rejection(
-                    pens[best_pen],
-                    best_pen,
+                    pens[end_pen],
+                    end_pen,
                     'characteristic_gap_case2',
                     '第67课 第二种情况 (gap) needs the second characteristic sequence; '
                     'not implemented',
                 )
             )
-            return make_segment('blocked', 'characteristic_gap_case2'), tuple(rejections)
+            return (
+                close('blocked', 'characteristic_gap_case2', end_pen=end_pen, evidence=evidence),
+                tuple(rejections),
+            )
 
-        confirmed_days = [e.confirmed_on for e in (left, middle, right)]
+        confirmed_days = [element.confirmed_on for element in (left, middle, right)]
         if any(day is None for day in confirmed_days):  # pragma: no cover - elements are confirmed
-            raise ValueError('internal error: a characteristic element lost its confirmation day')
+            return (
+                close('blocked', 'evidence_inconsistent', end_pen=end_pen, evidence=evidence),
+                tuple(rejections),
+            )
         confirmed_on = max(confirmed_days)  # type: ignore[arg-type]
-        if confirmed_on <= pens[best_pen].end.position_day:  # pragma: no cover - invariant guard
-            raise ValueError('segment confirmation precedes its own end position')
-        if best_pen - start + 1 < rules.min_pens:  # pragma: no cover - invariant guard
-            raise ValueError('internal error: a segment shorter than three pens was confirmed')
-        return make_segment('confirmed', 'first_case_no_gap', confirmed_on, end_status='confirmed'), tuple(
-            rejections
+        if confirmed_on <= pens[end_pen].end.position_day:  # pragma: no cover - guarded above
+            # The fractal's third element froze before the pen it certifies even
+            # existed: the evidence and the geometry contradict each other.
+            return (
+                close('blocked', 'evidence_inconsistent', end_pen=end_pen, evidence=evidence),
+                tuple(rejections),
+            )
+        if any(p.status != 'confirmed' for p in pens[start : end_pen + 1]):  # pragma: no cover
+            # Only the tail pen may be a candidate, and the fractal is decided on
+            # confirmed elements, so the span is always confirmed evidence.
+            return (
+                close('blocked', 'evidence_inconsistent', end_pen=end_pen, evidence=evidence),
+                tuple(rejections),
+            )
+        return (
+            close(
+                'confirmed',
+                'first_case_no_gap',
+                confirmed_on,
+                end_pen=end_pen,
+                end_status='confirmed',
+                evidence=evidence,
+            ),
+            tuple(rejections),
         )
 
-    return make_segment('candidate', 'awaiting_confirmed_characteristic_pen'), tuple(rejections)
+    return close('candidate', 'awaiting_confirmed_characteristic_pen'), tuple(rejections)
 
 
 def segment_from_pens(
@@ -890,7 +1241,7 @@ def segment_from_pens(
             f'binding as_of_day {binding.as_of_day!r} does not match the pen snapshot '
             f'({pen_snapshot.as_of_day!r}); bind the result to its own sample'
         )
-    _validate_pens(pen_snapshot)
+    _validate_pens(pen_snapshot, rules)
 
     segments: list[Segment] = []
     pending: list[SegmentPending] = []

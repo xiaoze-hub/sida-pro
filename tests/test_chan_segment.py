@@ -1,4 +1,4 @@
-"""Chan v1 segment (线段) kernel: 第67课第一种情况 only — causal, conservative.
+"""Chan v2 segment (线段) kernel: 第67课第一种情况 only — causal, conservative.
 
 These tests pin the hard parts, not a happy path:
 
@@ -10,9 +10,17 @@ These tests pin the hard parts, not a happy path:
   is reported ``blocked`` (`第二种情况` needs the second characteristic sequence,
   which is deliberately not implemented and never guessed);
 * 包含处理 of the characteristic sequence is sequential and **non-transitive**
-  (a transitive closure would merge different elements), and an initial
-  containment — where the merge direction would have to be invented — is
-  ``blocked`` instead of assumed;
+  (a transitive closure would merge different elements), and its **direction**
+  comes from the sequence itself — the trend of the two most recent normalised,
+  non-contained elements — never from the segment's own direction.  Where that
+  trend does not exist (the first pair is contained) or is undefined (the pair
+  before it is ambiguous), the segment is ``blocked`` instead of guessing a side;
+* the segment ends at the pen carrying the **fractal's own extreme** (第67课
+  "该线段在该顶分型的高点处结束"): not at an earlier pen that merely has an equal
+  price, and never at a pen outside the fractal;
+* evidence (the three fractal elements: pens, range, confirmation day) is
+  reported **separately** from the geometric span — the fractal's right element
+  is necessarily *after* the segment's end;
 * only confirmed pens are evidence: a candidate pen can never confirm a segment,
   and the earliest confirmation day is the day the third characteristic element
   was frozen, never the extreme's own day;
@@ -21,18 +29,24 @@ These tests pin the hard parts, not a happy path:
   the next structure — prefix replay is checked bar by bar;
 * a tainted (``blocked``) pen in the span blocks the segment; nothing is
   published as fixed across it;
+* **nothing shorter than three pens is ever a segment**: such a decision point is
+  a ``SegmentPending`` (candidate or blocked, with the reason kept), never a
+  one-pen "line" and never an internal exception;
 * the result is explicitly bound to one source snapshot (symbol / adjustment /
   as-of day / input digest / pen kernel version).  Two results from different
   sources are never "the same line", and mixing them raises;
 * every input inconsistency (non-contiguous pens, non-alternating directions,
-  duplicated merged indices, mixed kernel versions, a confirmation after
-  ``as_of_day``, a confirmation not after its own position, a pen whose prices
-  contradict its direction) raises ``ValueError`` instead of being repaired.
+  duplicated merged indices, a pen shorter than the pen kernel's merged-index
+  gap, days that are not ISO or not strictly increasing, mixed kernel versions, a
+  confirmation after ``as_of_day``/before its own position, out-of-order
+  confirmations, a pen whose prices contradict its direction) raises
+  ``ValueError`` instead of being repaired.
 
 The hand-built pen series below are *explicit inputs* (the module's contract: a
 pure function of a given pen sequence); one test additionally drives the whole
 bar → fractal → pen → segment pipeline on generated bars and compares against a
-hand-derived oracle.
+hand-derived oracle, and another compares the production walk against a second
+walk built only from the public normaliser.
 """
 from dataclasses import replace
 from datetime import date, timedelta
@@ -40,6 +54,7 @@ from datetime import date, timedelta
 import pytest
 
 from src.core.chan_pen import (
+    MIN_INDEX_GAP,
     PEN_KERNEL_VERSION,
     Pen,
     PenEndpoint,
@@ -50,7 +65,9 @@ from src.core.chan_pen import (
 from src.core.chan_segment import (
     MIN_PENS,
     SEGMENT_KERNEL_VERSION,
+    FractalEvidence,
     SegmentBinding,
+    SegmentPending,
     SegmentRules,
     normalize_characteristic_sequence,
     segment_from_pens,
@@ -104,9 +121,9 @@ def zigzag_bars(pivots, *, step=4, half=0.5, start=_START):
 #   bottom 4.0, top 8.0, bottom 5.0, top 9.0, bottom 6.0, top 10.0,
 #   bottom 7.0, top 9.5, bottom 6.5, top 9.0, bottom 5.5 (open tail)
 # so the first up segment tops out at 10.5 (bar 21) and ends when the
-# characteristic sequence of down pens (8.5/5.5, 9.5/6.5, 10.5/7.5, 10.0/7.0)
-# prints a top fractal at 10.5/7.5.  Its third element is the down pen
-# 10.0 -> 7.0, which is frozen only when bar 39 arrives (see the oracle test).
+# characteristic sequence of down pens (8.5/4.5, 9.5/5.5, 10.5/6.5, 10.0/6.0)
+# prints a top fractal at 10.5/6.5.  Its third element is the down pen
+# 10.0 -> 6.0, which is frozen only when bar 39 arrives (see the oracle test).
 SEGMENT_ZIGZAG = [4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5, 9.0, 5.5]
 SEGMENT_ORACLE_BARS = zigzag_bars(SEGMENT_ZIGZAG)
 
@@ -205,37 +222,132 @@ def build(snapshot, **overrides):
     return segment_from_pens(snapshot, binding=binding_for(snapshot, **overrides))
 
 
+def helper_oracle(prices, *, confirmed=None, first_kind='bottom'):
+    """A *second* walk, built only from the public normaliser.
+
+    It reads the characteristic ranges off the reverse pens, normalises them with
+    :func:`normalize_characteristic_sequence` and applies the 第67课 rules (three
+    element fractal, no gap, extreme carrier) itself.  It shares no code with the
+    kernel's walk, so the two must agree — that is what keeps a single 包含处理
+    implementation honest (v1 had two copies and they drifted).
+
+    Returns ``[(start, end_pen, reason)]`` with ``reason`` in
+    ``{'case1', 'case2', block reason..., 'tail'}``.
+    """
+    snapshot = make_pens(prices, confirmed=confirmed, first_kind=first_kind)
+    pens = snapshot.pens
+    out = []
+    start = 0
+    total = len(pens)
+    while start < total:
+        direction = pens[start].direction
+        if start + 2 >= total:
+            out.append((start, None, 'tail'))
+            break
+        trio = pens[start : start + 3]
+        if max(min(p.start.price, p.end.price) for p in trio) >= min(
+            max(p.start.price, p.end.price) for p in trio
+        ):
+            out.append((start, None, 'no_overlap'))
+            break
+        if any(p.status != 'confirmed' for p in trio):
+            out.append((start, None, 'tail'))
+            break
+
+        decided = None
+        for k in range(start + 1, total, 2):
+            if pens[k].status != 'confirmed':
+                break
+            ranges = [
+                (max(p.start.price, p.end.price), min(p.start.price, p.end.price))
+                for p in pens[start + 1 : k + 1 : 2]
+            ]
+            normalised, blocked = normalize_characteristic_sequence(ranges)
+            if blocked is not None:
+                decided = (start, None, blocked)
+                break
+            if len(normalised) < 3:
+                continue
+            left, middle, right = normalised[-3], normalised[-2], normalised[-1]
+            if direction == 'up':
+                hit = (
+                    middle[0] > left[0] and middle[1] > left[1]
+                    and middle[0] > right[0] and middle[1] > right[1]
+                )
+                side = middle[0]
+                gap = middle[1] > left[0]
+                span_extreme = max(p.end.price for p in pens[start:k:2])
+                moved = span_extreme > side
+            else:
+                hit = (
+                    middle[1] < left[1] and middle[0] < left[0]
+                    and middle[1] < right[1] and middle[0] < right[0]
+                )
+                side = middle[1]
+                gap = middle[0] < left[1]
+                span_extreme = min(p.end.price for p in pens[start:k:2])
+                moved = span_extreme < side
+            if not hit:
+                continue
+            carriers = [j for j in range(start, k, 2) if pens[j].end.price == side]
+            if not carriers:  # pragma: no cover - the extreme always is a pen end
+                decided = (start, None, 'no_carrier')
+                break
+            end_pen = carriers[-1]
+            if moved:
+                decided = (start, None, 'characteristic_fractal_below_prior_extreme')
+            else:
+                decided = (start, end_pen, 'case2' if gap else 'case1')
+            break
+        if decided is None:
+            out.append((start, None, 'tail'))
+            break
+        out.append(decided)
+        if decided[2] != 'case1':
+            break
+        start = decided[1] + 1
+    return out
+
+
 # ---------------------------------------------------------------------------
 # versioning / rules
 # ---------------------------------------------------------------------------
 
 def test_rules_are_versioned_and_every_field_is_pinned():
     rules = SegmentRules()
-    assert rules.kernel_version == SEGMENT_KERNEL_VERSION == 'chan-segment-v1'
+    assert rules.kernel_version == SEGMENT_KERNEL_VERSION == 'chan-segment-v2'
     assert rules.min_pens == MIN_PENS == 3
+    assert rules.min_index_gap == MIN_INDEX_GAP == 4
     assert rules.overlap == 'pen_endpoint_range_strict'
     assert rules.characteristic_sequence == 'reverse_pens'
     assert rules.inclusion == 'sequential_non_transitive'
-    assert rules.merge_direction == 'segment_direction'
+    assert rules.merge_direction == 'recent_two_elements'
+    assert rules.segment_end == 'fractal_middle_extreme_pen'
+    assert rules.equal_fractal_extreme == 'keep_latest'
     assert rules.gap_case == 'blocked_case2_not_implemented'
     assert rules.initial_containment == 'blocked'
     assert rules.equal_extreme == 'keep_earlier'
     assert rules.evidence == 'confirmed_pens_only'
+    assert rules.input_gate == 'iso_days_strict_and_pen_index_gap'
 
 
 @pytest.mark.parametrize(
     'field, value',
     [
-        ('kernel_version', 'chan-segment-v2'),
+        ('kernel_version', 'chan-segment-v1'),
         ('min_pens', 4),
+        ('min_index_gap', 3),
         ('overlap', 'any_touch'),
         ('characteristic_sequence', 'all_pens'),
         ('inclusion', 'transitive_closure'),
-        ('merge_direction', 'inferred_from_elements'),
+        ('merge_direction', 'segment_direction'),
+        ('segment_end', 'first_equal_extreme'),
+        ('equal_fractal_extreme', 'keep_earlier'),
         ('gap_case', 'confirm_anyway'),
         ('initial_containment', 'guess'),
         ('equal_extreme', 'keep_later'),
         ('evidence', 'candidate_pens_too'),
+        ('input_gate', 'trust_caller'),
     ],
 )
 def test_unsupported_rule_values_are_refused(field, value):
@@ -270,6 +382,39 @@ def test_binding_and_input_digest_are_explicit():
     assert segment_input_digest(build_chan_pen(SEGMENT_ORACLE_BARS)) == snap.input_digest
     # A different price series must not look like the same sample.
     assert segment_input_digest(build_chan_pen(OTHER_BARS)) != snap.input_digest
+
+
+def test_digest_owns_every_pen_fact_and_binding_owns_the_sample():
+    """The digest names the series; symbol/adjust are declarations outside it.
+
+    Every pen field that can change the segments must change the digest, and the
+    caller-declared sample identity must still separate two results that share a
+    digest — otherwise two different lines could be compared as one.
+    """
+    snapshot = make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0])
+    base = segment_input_digest(snapshot)
+
+    pen = snapshot.pens[0]
+    mutations = {
+        'price': replace(pen, end=replace(pen.end, price=pen.end.price + 0.25)),
+        'day': replace(pen, end=replace(pen.end, position_day=_pd(9))),
+        'merged index': replace(pen, end=replace(pen.end, merged_index=pen.end.merged_index + 4)),
+        'status': replace(pen, status='candidate', confirmed_on=None),
+        'confirmed_on': replace(pen, confirmed_on=_pd(9)),
+    }
+    for what, broken in mutations.items():
+        forged = replace(snapshot, pens=(broken,) + snapshot.pens[1:])
+        assert segment_input_digest(forged) != base, what
+
+    assert segment_input_digest(replace(snapshot, as_of_day='2030-01-01')) != base
+
+    # Two symbols / adjustment bases over one series: same digest, different source.
+    a = segment_from_pens(snapshot, binding=binding_for(snapshot, symbol='SYM-A', adjust='qfq'))
+    b = segment_from_pens(snapshot, binding=binding_for(snapshot, symbol='SYM-B', adjust='hfq'))
+    assert a.input_digest == b.input_digest
+    assert a.same_source(b) is False
+    with pytest.raises(ValueError):
+        a.assert_same_source(b)
 
 
 def test_results_from_different_sources_are_never_mixed():
@@ -308,6 +453,7 @@ def test_results_from_different_sources_are_never_mixed():
         {'adjust': 'adjusted'},
         {'as_of_day': '2026-01-05'},
         {'as_of_day': None},
+        {'as_of_day': 20260105},
     ],
 )
 def test_invalid_binding_is_refused(overrides):
@@ -361,6 +507,107 @@ def test_pens_must_be_contiguous_and_alternating():
         build(replace(snapshot, as_of_day='2026-03-02'))
 
 
+def test_a_pen_shorter_than_the_pen_index_gap_is_refused():
+    """A 笔 spans at least ``MIN_INDEX_GAP`` merged bars; a two-bar stub may not
+    enter the segment kernel even though its endpoints chain perfectly."""
+    snapshot = make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0])
+    stub_pen = replace(
+        snapshot.pens[0],
+        end=replace(snapshot.pens[0].end, merged_index=snapshot.pens[0].start.merged_index + 3),
+    )
+    chained = (
+        stub_pen,
+        replace(snapshot.pens[1], start=replace(snapshot.pens[1].start, merged_index=stub_pen.end.merged_index)),
+    ) + snapshot.pens[2:]
+    with pytest.raises(ValueError, match='merged indices'):
+        build(replace(snapshot, pens=chained))
+
+    # The same edit one gap up (4) is legal: the check is the pen kernel's rule,
+    # not an off-by-one of this module.
+    legal = (
+        replace(
+            snapshot.pens[0],
+            end=replace(snapshot.pens[0].end, merged_index=snapshot.pens[0].start.merged_index + 4),
+        ),
+        replace(snapshot.pens[1], start=replace(snapshot.pens[1].start, merged_index=4)),
+    ) + snapshot.pens[2:]
+    assert build(replace(snapshot, pens=legal)).segments
+
+
+def test_position_days_must_be_iso_and_strictly_increasing():
+    snapshot = make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5])
+
+    # A pen whose end precedes its own start.
+    with pytest.raises(ValueError, match='not after its start'):
+        build(
+            replace(
+                snapshot,
+                pens=(
+                    replace(snapshot.pens[0], start=replace(snapshot.pens[0].start, position_day='2030-01-01')),
+                )
+                + snapshot.pens[1:],
+            )
+        )
+
+    # A pen that does not move forward in time at all.
+    with pytest.raises(ValueError, match='not after its start'):
+        build(
+            replace(
+                snapshot,
+                pens=(
+                    replace(snapshot.pens[0], end=replace(snapshot.pens[0].end, position_day=snapshot.pens[0].start.position_day)),
+                )
+                + snapshot.pens[1:],
+            )
+        )
+
+    # A non-ISO day is not a date (string compare would silently accept it).
+    with pytest.raises(ValueError, match='ISO day'):
+        build(
+            replace(
+                snapshot,
+                pens=(
+                    replace(snapshot.pens[0], start=replace(snapshot.pens[0].start, position_day='2026-3-2')),
+                )
+                + snapshot.pens[1:],
+            )
+        )
+
+
+def test_days_going_backwards_are_refused():
+    """Later pens dated before earlier ones: a shuffle, not a prefix."""
+    snapshot = make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5])
+    new_pens = []
+    for i, pen in enumerate(snapshot.pens):
+        if i >= 4:
+            start_day = (date(2025, 1, 1) + timedelta(days=i)).isoformat()
+            end_day = (date(2025, 1, 1) + timedelta(days=i + 1)).isoformat()
+            confirm = (date.fromisoformat(end_day) + timedelta(days=1)).isoformat()
+            pen = replace(
+                pen,
+                confirmed_on=confirm,
+                start=replace(pen.start, position_day=start_day, confirmed_on=new_pens[-1].end.confirmed_on),
+                end=replace(pen.end, position_day=end_day, confirmed_on=confirm),
+            )
+        new_pens.append(pen)
+    with pytest.raises(ValueError):
+        build(replace(snapshot, pens=tuple(new_pens)))
+
+
+def test_confirmations_must_not_go_backwards():
+    snapshot = make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5])
+    # Pen 4 freezes only on the last day of the sample, so pen 5 (frozen the next
+    # day) would have to be confirmed *before* its predecessor: impossible in a
+    # replay, where later legs freeze later.
+    late = snapshot.as_of_day
+    forged = tuple(
+        replace(p, confirmed_on=late, end=replace(p.end, confirmed_on=late)) if i == 4 else p
+        for i, p in enumerate(snapshot.pens)
+    )
+    with pytest.raises(ValueError, match='freezes out of order'):
+        build(replace(snapshot, pens=forged))
+
+
 def test_a_confirmed_pen_must_carry_its_confirmation_day():
     snapshot = make_pens([4.0, 8.0, 5.0, 9.0])
     forged = replace(
@@ -400,6 +647,17 @@ def test_a_confirmed_pen_must_carry_its_confirmation_day():
         )
 
 
+def test_pen_status_and_endpoint_status_must_agree():
+    snapshot = make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0])
+    # A "confirmed" pen whose end endpoint still says candidate.
+    forged = tuple(
+        replace(p, end=replace(p.end, status='candidate', confirmed_on=None)) if i == 0 else p
+        for i, p in enumerate(snapshot.pens)
+    )
+    with pytest.raises(ValueError):
+        build(replace(snapshot, pens=forged))
+
+
 def test_pens_from_another_kernel_version_are_refused():
     snapshot = make_pens([4.0, 8.0, 5.0, 9.0])
     mixed = replace(
@@ -410,6 +668,91 @@ def test_pens_from_another_kernel_version_are_refused():
         build(mixed)
     with pytest.raises(ValueError):
         build(replace(snapshot, kernel_version='chan-pen-v2'))
+
+
+def test_every_pen_inconsistency_is_refused_with_its_own_reason():
+    """One case per guard: a foreign snapshot is re-verified field by field.
+
+    A single "raises ValueError" test would let one guard cover for another, so
+    each case pins the message of the guard it targets.
+    """
+    base = make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5])
+
+    def edit(index=None, pen_changes=None, endpoint_changes=None, **snapshot_changes):
+        if index is None:
+            return replace(base, **snapshot_changes)
+        pens = list(base.pens)
+        pen = pens[index]
+        if endpoint_changes:
+            for side, changes in endpoint_changes.items():
+                pen = replace(pen, **{side: replace(getattr(pen, side), **changes)})
+        if pen_changes:
+            pen = replace(pen, **pen_changes)
+        pens[index] = pen
+        return replace(base, pens=tuple(pens), **snapshot_changes)
+
+    cases = [
+        ('unknown status', edit(0, {'status': 'maybe'}), 'unknown status'),
+        ('end index not after start', edit(0, endpoint_changes={'end': {'merged_index': 0}}),
+         'not after'),
+        ('joins two bottoms', edit(0, endpoint_changes={'end': {'kind': 'bottom'}}), 'joins two'),
+        ('direction contradicts kinds', edit(0, {'direction': 'down'}), 'is labelled'),
+        ('non-finite price', edit(0, endpoint_changes={'end': {'price': float('inf')}}),
+         'non-finite'),
+        ('down pen not below its start',
+         edit(1, endpoint_changes={'end': {'price': 9.0, 'bar_high': 10.0}}), 'not below'),
+        ('end day after as_of', edit(0, endpoint_changes={'end': {'position_day': '2030-01-01'}}),
+         'after as_of_day'),
+        ('confirmed after as_of', edit(0, {'confirmed_on': '2030-01-01'},
+                                       endpoint_changes={'end': {'confirmed_on': '2030-01-01'}}),
+         'after as_of_day'),
+        ('confirmed pen, endpoint open',
+         edit(0, endpoint_changes={'end': {'status': 'candidate'}}),
+         'its end endpoint is'),
+        ('candidate pen carrying a day', edit(0, {'status': 'candidate'}), 'carries a confirmation day'),
+        ('candidate not the tail',
+         edit(0, {'status': 'candidate', 'confirmed_on': None},
+              endpoint_changes={'end': {'status': 'candidate', 'confirmed_on': None}}),
+         'not the tail'),
+        ('endpoint confirmed without a day',
+         edit(0, endpoint_changes={'start': {'confirmed_on': None, 'status': 'confirmed'}}),
+         'without a confirmation day'),
+        ('endpoint frozen before its own position',
+         edit(1, endpoint_changes={'start': {'confirmed_on': '2026-01-01'}}), 'before its own'),
+        ('endpoint frozen after as_of',
+         edit(1, endpoint_changes={'start': {'confirmed_on': '2030-01-01'}}), 'after as_of_day'),
+        ('endpoint frozen but marked open',
+         edit(1, endpoint_changes={'start': {'status': 'candidate'}}), 'carries a confirmation day'),
+        ('shared endpoint with another day',
+         edit(1, endpoint_changes={'start': {'position_day': '2026-03-05'}}), 'does not meet'),
+        ('non-ISO confirmation day', edit(0, {'confirmed_on': '2026-3-8'},
+                                         endpoint_changes={'end': {'confirmed_on': '2026-3-8'}}),
+         'ISO day'),
+        ('non-ISO as_of', edit(as_of_day='2026-3-30'), 'ISO day'),
+    ]
+    for name, snapshot, pattern in cases:
+        try:
+            build(snapshot)
+        except ValueError as error:
+            assert pattern in str(error), (name, str(error))
+        else:  # pragma: no cover - only on a regression
+            raise AssertionError(f'{name}: the forged snapshot was accepted')
+
+    # A shared endpoint has one identity, and the kind is part of it: pen 1 is
+    # internally consistent (bottom -> top) but claims a bottom where pen 0
+    # printed a top.
+    second = replace(
+        base.pens[1],
+        start=replace(base.pens[1].start, kind='bottom'),
+        end=replace(base.pens[1].end, kind='top', price=9.0, bar_high=10.0),
+        direction='up',
+    )
+    with pytest.raises(ValueError, match='one identity'):
+        build(replace(base, pens=(base.pens[0], second) + base.pens[2:]))
+
+    # A binding that is not a SegmentBinding is refused before anything else.
+    with pytest.raises(ValueError, match='must be a SegmentBinding'):
+        segment_from_pens(base, binding={'symbol': 'X', 'adjust': 'none', 'as_of_day': base.as_of_day})
 
 
 def test_a_candidate_pen_may_only_be_the_tail():
@@ -472,18 +815,23 @@ def test_the_zigzag_fixture_is_pinned_before_any_segment_claim():
 def test_segment_end_and_earliest_confirmation_are_hand_derived():
     """Hand oracle for the single confirmed up segment.
 
-    * the segment starts at the first pen's start (bottom 4.0, bar 1);
-    * the characteristic sequence (down pens) is ``8.5/5.5``, ``9.5/6.5``,
-      ``10.5/7.5``, ``10.0/7.0`` — the top fractal sits at ``10.5/7.5``, i.e.
-      the segment's high is 10.5 at bar 21 (day 2026-01-22);
-    * that fractal has **no gap** (its second element's low 7.5 sits below the
-      first element's high 9.5), so 第一种情况 applies and the segment ends;
+    * the segment starts at the first pen's start (bottom 3.5, bar 1);
+    * the characteristic sequence (down pens) is ``8.5/4.5``, ``9.5/5.5``,
+      ``10.5/6.5``, ``10.0/6.0``; no two of them are contained, so the
+      normalisation of v2 is the identity here and the top fractal sits at
+      ``10.5/6.5`` — the middle element is the down pen 10.5 -> 6.5, so the
+      segment's end is the up pen *before* it: 5.5 -> 10.5 at bar 21
+      (day 2026-01-22), high 10.5;
+    * the fractal has **no gap** (its second element's low 6.5 sits below the
+      first element's high 8.5), so 第一种情况 applies and the segment ends;
     * the earliest day it may be published is the day the *third* characteristic
-      element (the down pen 10.0 -> 7.0) was frozen: that pen's end (bottom 7.0,
+      element (the down pen 10.0 -> 6.0) was frozen: that pen's end (bottom 6.0,
       bar 33) freezes only when the top at bar 37 is confirmed, whose 3-bar
       window is sealed by bar 38 — i.e. from the bar-39 prefix on, 2026-02-09;
+    * the evidence pens are 3, 5 and 7 — the last of them is *after* the
+      segment's end pen 4, which is exactly why evidence and span are separate;
     * the next down segment cannot be confirmed yet (two characteristic
-      elements only), so it stays ``candidate`` with its end drifted to 7.0.
+      elements only), so it stays ``candidate`` with its end drifted to 6.0.
     """
     bars = SEGMENT_ORACLE_BARS
     pen_snapshot = build_chan_pen(bars)
@@ -524,9 +872,26 @@ def test_segment_end_and_earliest_confirmation_are_hand_derived():
     assert segment.characteristic_elements == 4
     assert segment.pens_used == 5
 
+    # Evidence: the three fractal elements, with the right one outside the span.
+    assert [element.role for element in segment.evidence] == ['left', 'middle', 'right']
+    assert [element.pen_indices for element in segment.evidence] == [(3,), (5,), (7,)]
+    assert [(element.high, element.low) for element in segment.evidence] == [
+        (9.5, 5.5),
+        (10.5, 6.5),
+        (10.0, 6.0),
+    ]
+    assert [element.confirmed_on for element in segment.evidence] == [_d(23), _d(31), _d(39)]
+    assert segment.evidence_pen_indices == (3, 5, 7)
+    assert segment.evidence_confirmed_on == _d(39)
+    assert all(pen > segment.pen_end_index for pen in (7,))
+    assert segment.evidence_pen_indices[-1] > segment.pen_end_index
+
     # Only confirmed pens are evidence for a confirmed segment.
     evidence = pen_snapshot.pens[segment.pen_start_index : segment.pen_end_index + 1]
     assert all(p.status == 'confirmed' for p in evidence)
+    assert all(
+        pen_snapshot.pens[i].status == 'confirmed' for i in segment.evidence_pen_indices
+    )
 
     # The next (down) segment is a candidate whose end already drifted once.
     candidate = snap.open_segment
@@ -537,6 +902,7 @@ def test_segment_end_and_earliest_confirmation_are_hand_derived():
     assert (candidate.end.revisions, candidate.end.drift_days) == (1, (_d(25),))
     assert candidate.confirmed_on is None
     assert candidate.reason == 'awaiting_confirmed_characteristic_pen'
+    assert candidate.evidence == ()  # no fractal yet: no evidence to report
     assert snap.pending == ()
 
 
@@ -568,8 +934,12 @@ def test_a_confirmed_segment_never_appears_before_its_evidence_day():
         for segment in snap.confirmed_segments:
             assert segment.confirmed_on <= day
             assert segment.end.position_day <= day
+            assert segment.pens_used >= MIN_PENS
             for pen in pen_snapshot.pens[segment.pen_start_index : segment.pen_end_index + 1]:
                 assert pen.status == 'confirmed'
+            for pen_index in segment.evidence_pen_indices:
+                assert pen_snapshot.pens[pen_index].status == 'confirmed'
+                assert pen_snapshot.pens[pen_index].confirmed_on <= segment.confirmed_on
             key = (segment.pen_start_index, segment.pen_end_index)
             if key in frozen:
                 assert segment == frozen[key], f'confirmed segment {key} changed on {day}'
@@ -639,8 +1009,320 @@ def test_a_higher_high_after_confirmation_is_not_backfilled():
     assert longer.confirmed_segments[0] == segment
     assert longer.confirmed_segments[0].end.price == 10.0
     assert all(s.end.price != 12.0 for s in longer.confirmed_segments)
-    assert longer.open_segment is not None
-    assert longer.open_segment.status == 'candidate'
+    # The 12.0 belongs to the *next* structure, which is published on its own.
+    assert [s.pen_start_index for s in longer.segments][:2] == [0, 5]
+    assert longer.segments[1].direction == 'down'
+    assert longer.segments[1].pen_end_index > 5
+
+
+# ---------------------------------------------------------------------------
+# regression F1: a legal, fully confirmed pen series must not crash
+# ---------------------------------------------------------------------------
+
+#: The audit's counterexample.  Every pen is confirmed and legitimate (each up pen
+#: rises, each down pen falls, endpoints chain, spacing is 4), yet v1 raised
+#: ``ValueError: internal error: a segment shorter than three pens was confirmed``
+#: at pen 7 because it kept the *first* top (4.00 at pen 0) as the segment end —
+#: a pen that merely ties the fractal's high — and then found a span of one pen.
+CRASH_PIVOTS = [1, 4, 2, 3, 1, 4, 2, 3, 1]
+
+
+def test_a_fully_confirmed_series_never_raises_an_internal_error():
+    snap = build(make_pens(CRASH_PIVOTS))
+    assert snap.confirmed_segments, snap.rejections
+    segment = snap.confirmed_segments[0]
+    assert segment.status == 'confirmed'
+    assert (segment.pen_start_index, segment.pen_end_index) == (0, 4)
+    assert segment.end.price == 4.0
+    assert segment.pens_used == 5
+    # The end pen is the one carrying the fractal's high, not pen 0.
+    assert segment.end.pen_index == 4
+    # The two pens left over are one pen's worth of structure: a pending start,
+    # not a second "segment".
+    assert snap.open_segment is None
+    assert snap.pending[0].pen_start_index == 5
+    assert snap.pending[0].status == 'candidate'
+
+
+def test_the_crash_case_survives_the_real_bar_pipeline():
+    """Same counterexample through bars -> fractals -> pens -> segment."""
+    bars = zigzag_bars([1.0, 4.0, 2.0, 3.0, 1.0, 4.0, 2.0, 3.0, 1.0, 4.0, 2.0])
+    pen_snapshot = build_chan_pen(bars)
+    assert len(pen_snapshot.pens) >= 9
+    assert all(p.status == 'confirmed' for p in pen_snapshot.pens[:-1])
+    snap = segment_from_pens(pen_snapshot, binding=binding_for(pen_snapshot))
+    assert snap.confirmed_segments, snap.rejections
+    for segment in snap.confirmed_segments:
+        assert segment.pens_used >= MIN_PENS
+        assert segment.confirmed_on is not None
+        # Evidence carries the fractal's own extreme.
+        middle = [e for e in segment.evidence if e.role == 'middle']
+        assert len(middle) == 1
+        side = middle[0].high if segment.direction == 'up' else middle[0].low
+        assert side == segment.end.price
+
+
+def test_every_exhaustive_short_series_is_answered_not_raised():
+    """Small exhaustive sweep: the kernel answers (segment or pending), never
+    raises, and never emits a line shorter than three pens."""
+    import itertools
+
+    checked = 0
+    for length in (5, 6, 7):
+        for pivots in itertools.product(range(1, 6), repeat=length):
+            kinds = ['bottom' if i % 2 == 0 else 'top' for i in range(length)]
+            if any(
+                (pivots[i + 1] <= pivots[i]) if kinds[i] == 'bottom' else (pivots[i + 1] >= pivots[i])
+                for i in range(length - 1)
+            ):
+                continue
+            checked += 1
+            snap = build(make_pens(list(pivots)))
+            for segment in snap.segments:
+                assert segment.pens_used >= MIN_PENS, (pivots, segment)
+            assert snap.segments or snap.pending, pivots
+    assert checked > 100
+
+
+# ---------------------------------------------------------------------------
+# regression F1b: an equal extreme must not pick a pen outside the fractal
+# ---------------------------------------------------------------------------
+
+def test_the_segment_ends_at_the_fractal_extreme_not_at_an_equal_earlier_top():
+    """Pens 0 and 4 both top out at 4.00; only pen 4 is the fractal's high.
+
+    v1 compared prices and kept the earlier equal top (pen 0), i.e. it ended the
+    segment on a pen that the terminal fractal does not point at.
+    """
+    snapshot = make_pens(CRASH_PIVOTS)
+    snap = build(snapshot)
+    segment = snap.confirmed_segments[0]
+
+    assert snapshot.pens[0].end_price == snapshot.pens[4].end_price == 4.0
+    assert segment.end.pen_index == 4
+    assert segment.end.position_day == _pd(5)
+    assert segment.pen_end_index == 4
+    # The fractal's middle element is pen 5 (down 4.00 -> 2.00): its high is the
+    # 4.00 both tops share, and "keep_latest" makes pen 4 the end.
+    assert [e.pen_indices for e in segment.evidence] == [(3,), (5,), (7,)]
+    assert [e.high for e in segment.evidence] == [3.0, 4.0, 3.0]
+    # The equal-price drift rejection is still recorded on the open end.
+    assert [r.reason for r in snap.rejections if r.pen_index == 4] == ['equal_extreme_kept_earlier']
+
+
+def test_an_equal_fractal_high_keeps_the_latest_carrier():
+    """Two reverse pens carry the same high inside one middle element.
+
+    ``keep_latest`` is stated, not incidental: ending at the earlier one would
+    leave a same-price top inside the next segment, which no later segment could
+    terminate on.
+    """
+    # Pivots 1, 4, 2, 5, 3, 5, 2.5, 4, 2.5: the reverse pens 5->3 (pen 3) and
+    # 5->2.5 (pen 5) share the high 5.00, and the third one is contained in the
+    # second (5.00/3.00 holds 5.00/2.50), so they merge into one middle element
+    # whose high is carried by *both* pens 2 and 4.
+    prices = [1.0, 4.0, 2.0, 5.0, 3.0, 5.0, 2.5, 4.0, 2.5]
+    snap = build(make_pens(prices))
+    assert len(snap.confirmed_segments) == 1
+    segment = snap.confirmed_segments[0]
+    assert make_pens(prices).pens[2].end_price == make_pens(prices).pens[4].end_price == 5.0
+    assert segment.evidence[1].pen_indices == (3, 5)  # the merged middle element
+    # keep_latest: the end is pen 4 (the later carrier), not pen 2.
+    assert segment.pen_end_index == 4
+    assert segment.end.price == 5.0
+    assert segment.evidence_pen_indices == (1, 3, 5, 7)
+    assert segment.pens_used == 5
+
+
+# ---------------------------------------------------------------------------
+# regression F3/F5: 包含处理 direction comes from the sequence, one implementation
+# ---------------------------------------------------------------------------
+
+def test_inclusion_processing_is_sequential_and_non_transitive():
+    # e0 [5,8], e1 [6,10], e2 [7,9.8]: e2 is contained in e1 only.  Sequential
+    # processing merges e1+e2 into [7,10] and leaves e0 alone -> two elements.
+    # The trend into the contained pair is e0 -> e1 (rising), so the merge is up.
+    normalized, blocked = normalize_characteristic_sequence(
+        [(8.0, 5.0), (10.0, 6.0), (9.8, 7.0)]
+    )
+    assert blocked is None
+    assert normalized == ((8.0, 5.0), (10.0, 7.0))
+    # A transitive closure over the three ranges would collapse them into one.
+    assert len(normalized) == 2
+
+    # The first pair being contained is the case with no prior trend at all:
+    # reported, never guessed (and never defaulted to the segment direction).
+    assert normalize_characteristic_sequence(
+        [(10.0, 5.0), (9.0, 6.0)]
+    ) == (((10.0, 5.0), (9.0, 6.0)), 'characteristic_initial_containment')
+
+    # A rising pair keeps high-high / low-low ...
+    assert normalize_characteristic_sequence(
+        [(8.0, 5.0), (10.0, 6.0), (9.5, 7.0)]
+    ) == (((8.0, 5.0), (10.0, 7.0)), None)
+    # ... and a falling pair keeps low-low, whichever way the *segment* runs.
+    assert normalize_characteristic_sequence(
+        [(10.0, 5.0), (9.0, 4.0), (8.5, 4.5)]
+    ) == (((10.0, 5.0), (8.5, 4.0)), None)
+
+    # No containment -> untouched, order preserved.
+    assert normalize_characteristic_sequence(
+        [(8.0, 5.0), (9.0, 6.0), (10.0, 7.0)]
+    ) == (((8.0, 5.0), (9.0, 6.0), (10.0, 7.0)), None)
+
+    with pytest.raises(ValueError):
+        normalize_characteristic_sequence([(4.0, 5.0)])
+    with pytest.raises(ValueError):
+        normalize_characteristic_sequence([(float('nan'), 5.0)])
+
+
+def test_the_merge_direction_is_the_sequence_trend_not_the_segment_direction():
+    """The audit's F3 counterexample, element by element.
+
+    The sequence turns down in the middle, so a merge "pinned to the segment
+    direction" (v1's choice) and a merge that reads the sequence (第67课, v2)
+    disagree — and v1's collapse also destroys the fractal.
+    """
+    ranges = [(5.0, 2.0), (4.0, 1.0), (4.0, 2.0), (5.0, 2.0), (4.0, 1.0)]
+
+    def pinned(merge_direction, sequence):
+        out = []
+        for high, low in sequence:
+            out.append((high, low))
+            while len(out) >= 2:
+                (h1, l1), (h2, l2) = out[-2], out[-1]
+                contained = (h1 >= h2 and l1 <= l2) or (h2 >= h1 and l2 <= l1)
+                if not contained:
+                    break
+                if merge_direction == 'up':
+                    out[-2:] = [(max(h1, h2), max(l1, l2))]
+                else:
+                    out[-2:] = [(min(h1, h2), min(l1, l2))]
+        return tuple(out)
+
+    # v2: (5,2) then (4,1); the third element is contained and the trend into it
+    # is down (5,2 -> 4,1), so it merges down into (4,1) — no collapse at all.
+    assert normalize_characteristic_sequence(ranges) == (
+        ((5.0, 2.0), (4.0, 1.0), (5.0, 2.0), (4.0, 1.0)),
+        None,
+    )
+    # v1's pinned directions both give a different sequence.
+    assert pinned('up', ranges) == ((5.0, 2.0), (4.0, 1.0))
+    assert pinned('down', ranges) == ((5.0, 2.0), (4.0, 1.0), (5.0, 2.0), (4.0, 1.0))
+    # (down happens to coincide here; the flip case below separates them.)
+
+    # A sequence that turns *both* ways: neither pinned direction can match it.
+    mixed = [(5.0, 1.0), (7.0, 5.0), (10.0, 3.0), (8.0, 4.0), (9.0, 2.0)]
+    assert normalize_characteristic_sequence(mixed) == (
+        ((5.0, 1.0), (10.0, 5.0), (8.0, 2.0)),
+        None,
+    )
+    assert pinned('up', mixed) == ((5.0, 1.0), (10.0, 5.0), (9.0, 4.0))
+    assert pinned('down', mixed) == ((5.0, 1.0), (7.0, 2.0))
+
+
+def test_only_the_first_pair_can_lack_a_merge_direction():
+    """Two normalised, non-contained elements are always strictly ordered.
+
+    Containment is inclusive, so an equal high or an equal low *is* containment:
+    once the first pair is outside each other, the trend into every later pair is
+    defined.  Therefore the only reachable "no direction" state is the first pair
+    being contained — the second guard reason exists for a crossing pair that the
+    normalisation should never produce, and is asserted to stay unreachable here.
+    """
+    import itertools
+
+    ranges = [(t, b) for t in range(3, 9) for b in range(1, 6) if t > b]
+    blocked_reasons = set()
+    for sequence in itertools.product(ranges, repeat=3):
+        _, blocked = normalize_characteristic_sequence(list(sequence))
+        blocked_reasons.add(blocked)
+    assert blocked_reasons == {None, 'characteristic_initial_containment'}
+
+
+def test_the_production_walk_uses_the_sequence_direction():
+    """F3 through the *real* entry point (v1 stalled here forever).
+
+    The same pen series under a pinned-direction merge never prints the fractal,
+    so v1 answered ``candidate`` at pen 0 for ever.  v2 must confirm at pen 6.
+    """
+    prices = [1.0, 5.0, 2.0, 4.0, 1.0, 4.0, 2.0, 5.0, 2.0, 4.0, 1.0]
+    snap = build(make_pens(prices))
+    assert len(snap.confirmed_segments) == 1
+    segment = snap.confirmed_segments[0]
+    assert (segment.pen_start_index, segment.pen_end_index) == (0, 6)
+    assert segment.end.price == 5.0
+    assert segment.reason == 'first_case_no_gap'
+    # ... and its own characteristic sequence is what the helper produces from the
+    # reverse pens that existed at that moment, not the two-element collapse v1
+    # saw (v1 merged the contained pair "up" and lost the fractal).
+    pens = make_pens(prices).pens
+    ranges = [
+        (max(p.start_price, p.end_price), min(p.start_price, p.end_price))
+        for p in pens[1:10:2]
+    ]
+    assert normalize_characteristic_sequence(ranges) == (
+        ((5.0, 2.0), (4.0, 1.0), (5.0, 2.0), (4.0, 1.0)),
+        None,
+    )
+    assert segment.characteristic_elements == 4
+    # The fractal's own pens are 3, 5, 7 and 9; the last of them lies *after* the
+    # segment's end pen 6, which is why evidence and span are reported apart.
+    assert segment.evidence_pen_indices == (3, 5, 7, 9)
+    assert max(segment.evidence_pen_indices) > segment.pen_end_index
+
+
+def test_a_merge_that_flips_direction_mid_sequence_still_terminates():
+    """Up segment whose sequence both rises and falls (down merge inside it)."""
+    prices = [1.0, 5.0, 1.0, 7.0, 5.0, 10.0, 3.0, 8.0, 4.0, 9.0, 2.0]
+    snap = build(make_pens(prices))
+    assert len(snap.confirmed_segments) == 1
+    segment = snap.confirmed_segments[0]
+    assert (segment.pen_start_index, segment.pen_end_index) == (0, 4)
+    assert segment.end.price == 10.0
+    # Ranges [(5,1),(7,5),(10,3),(8,4),(9,2)]: the third and fifth elements are
+    # contained and merged in *opposite* directions -> three elements remain.
+    assert segment.characteristic_elements == 3
+    assert segment.evidence_pen_indices == (1, 3, 5, 7)
+
+
+@pytest.mark.parametrize(
+    'prices',
+    [
+        [4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5, 9.0, 5.5],
+        [1.0, 5.0, 2.0, 4.0, 1.0, 4.0, 2.0, 5.0, 2.0, 4.0, 1.0],
+        [1.0, 5.0, 1.0, 7.0, 5.0, 10.0, 3.0, 8.0, 4.0, 9.0, 2.0],
+        [10.0, 6.0, 8.5, 4.5, 7.0, 5.5, 7.8, 5.0],
+        [5.0, 12.0, 6.0, 9.0, 5.0, 10.5, 7.0, 9.5, 6.5, 8.0],
+        [5.0, 8.0, 5.0, 12.0, 9.0, 11.5, 8.5],
+        [1.0, 4.0, 2.0, 3.0, 1.0, 4.0, 2.0, 3.0, 1.0],
+        [3.0, 5.0, 3.0, 4.0, 1.0, 5.0, 3.0, 4.0, 1.0, 5.0],
+    ],
+)
+def test_the_kernel_and_a_helper_based_walk_agree(prices):
+    """One 包含处理 implementation: the production walk and a walk built from the
+    public normaliser must produce the same confirmed segments and the same first
+    refusal reason."""
+    first_kind = 'bottom' if prices[1] > prices[0] else 'top'
+    oracle = helper_oracle(prices, first_kind=first_kind)
+    snap = build(make_pens(prices, first_kind=first_kind))
+
+    expected = [(start, end) for start, end, reason in oracle if reason == 'case1']
+    actual = [(s.pen_start_index, s.pen_end_index) for s in snap.confirmed_segments]
+    assert actual == expected, (prices, oracle)
+
+    stop = next((item for item in oracle if item[2] != 'case1'), None)
+    if stop is not None and stop[2] not in ('tail', 'no_overlap'):
+        # The production refusal must carry the same reason.
+        reasons = {s.reason for s in snap.segments if s.status == 'blocked'}
+        reasons |= {p.reason for p in snap.pending if p.status == 'blocked'}
+        expected_reason = {
+            'case2': 'characteristic_gap_case2',
+            'characteristic_fractal_below_prior_extreme':
+                'characteristic_fractal_below_prior_extreme',
+            'characteristic_initial_containment': 'characteristic_initial_containment',
+        }.get(stop[2], stop[2])
+        assert expected_reason in reasons, (prices, stop, reasons)
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +1340,7 @@ def test_three_pens_with_zero_intersection_are_not_a_segment():
     assert pending.reason == 'first_three_pens_no_overlap'
     assert (pending.pen_start_index, pending.start_price) == (0, 5.0)
     assert pending.start_position_day == _pd(0)
+    assert pending.end_pen_index == 2
     assert [r.reason for r in snap.rejections] == ['first_three_pens_no_overlap']
     # Nothing after the refusal is fabricated either.
     assert snap.open_segment is None
@@ -679,63 +1362,86 @@ def test_pending_until_three_pens_are_available_and_confirmed():
     assert third_open.pending[0].status == 'candidate'
     assert third_open.segments == ()
 
-    # The day the third pen freezes, the same pens do form a segment start.
+    # The day the third pen freezes the trio is complete, but a *line* still needs
+    # three pens up to its end: the start stays pending until the end can be that
+    # far away, then it becomes a segment.
     third_frozen = build(make_pens([4.0, 8.0, 5.0, 9.0], confirmed=3))
-    assert third_frozen.pending == ()
-    assert third_frozen.segments[0].pen_start_index == 0
+    assert third_frozen.segments == ()
+    assert third_frozen.pending[0].pen_start_index == 0
+    assert third_frozen.pending[0].reason == 'awaiting_confirmed_characteristic_pen'
+    assert third_frozen.pending[0].pens_used == 1
+
+    one_more = build(make_pens([4.0, 8.0, 5.0, 9.0, 6.0], confirmed=4))
+    assert one_more.pending == ()
+    assert one_more.segments[0].pen_start_index == 0
+    assert one_more.segments[0].pens_used == MIN_PENS
+
+
+def test_a_decision_point_shorter_than_three_pens_is_never_a_segment():
+    """F7: v1 published `blocked` Segments covering a single pen.
+
+    A one-pen span is not a 线段 at all, so it is reported as a pending start
+    with the reason kept — not as a Segment, and not as an internal error.
+    """
+    # Taint arrives before the segment could move off its start pen: v1 emitted a
+    # 1-pen blocked Segment here.
+    tainted = build(make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0], statuses={3: 'blocked'}))
+    assert tainted.segments == ()
+    assert len(tainted.pending) == 1
+    assert tainted.pending[0].status == 'blocked'
+    assert tainted.pending[0].reason == 'tainted_pen'
+    assert tainted.pending[0].pens_used == 1
+    assert 'fewer than the 3' in tainted.pending[0].detail
+
+    # Same rule for a candidate that only has one pen behind it.
+    short = build(make_pens([1.0, 5.0, 2.0, 4.0, 1.0]))
+    assert short.segments == ()
+    assert short.pending[0].status == 'candidate'
+    assert short.pending[0].pens_used == 1
+    assert short.open_segment is None
+
+    # With three pens behind the taint the refusal *is* a Segment (>= 3 pens).
+    late_taint = build(make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0], statuses={5: 'blocked'}))
+    assert len(late_taint.segments) == 1
+    assert late_taint.segments[0].status == 'blocked'
+    assert late_taint.segments[0].reason == 'tainted_pen'
+    assert late_taint.segments[0].pens_used == 3
 
 
 # ---------------------------------------------------------------------------
-# 特征序列 包含处理
+# 特征序列 包含处理: initial containment (no prior trend)
 # ---------------------------------------------------------------------------
-
-def test_inclusion_processing_is_sequential_and_non_transitive():
-    # e0 [5,8], e1 [6,10], e2 [7,9.8]: e2 is contained in e1 only.  Sequential
-    # processing merges e1+e2 into [7,10] and leaves e0 alone -> two elements.
-    normalized, blocked = normalize_characteristic_sequence(
-        [(8.0, 5.0), (10.0, 6.0), (9.8, 7.0)], direction='up'
-    )
-    assert blocked is None
-    assert normalized == ((8.0, 5.0), (10.0, 7.0))
-    # A transitive closure over the three ranges would collapse them into one.
-    assert len(normalized) == 2
-    # The first pair being contained is the ambiguous case, reported not guessed.
-    assert normalize_characteristic_sequence(
-        [(10.0, 5.0), (9.0, 6.0)], direction='up'
-    ) == (((10.0, 5.0), (9.0, 6.0)), 'initial_containment_direction_ambiguous')
-
-    # The same contained pair merges differently per segment direction:
-    # an up segment keeps high-high / low-low ...
-    assert normalize_characteristic_sequence(
-        [(8.0, 5.0), (10.0, 6.0), (9.5, 7.0)], direction='up'
-    ) == (((8.0, 5.0), (10.0, 7.0)), None)
-    # ... while a down segment keeps low-low / high-high.
-    assert normalize_characteristic_sequence(
-        [(8.0, 5.0), (10.0, 6.0), (9.5, 7.0)], direction='down'
-    ) == (((8.0, 5.0), (9.5, 6.0)), None)
-
-    # No containment -> untouched, order preserved.
-    assert normalize_characteristic_sequence(
-        [(8.0, 5.0), (9.0, 6.0), (10.0, 7.0)], direction='up'
-    ) == (((8.0, 5.0), (9.0, 6.0), (10.0, 7.0)), None)
-
-    with pytest.raises(ValueError):
-        normalize_characteristic_sequence([(10.0, 5.0)], direction='sideways')
-    with pytest.raises(ValueError):
-        normalize_characteristic_sequence([(4.0, 5.0)], direction='up')
-
 
 def test_initial_containment_cannot_invent_a_merge_direction():
-    """e0 [5,10], e1 [6,9]: e1 is inside e0 and no trend exists yet -> blocked."""
+    """e0 [5,10], e1 [6,9]: e1 is inside e0 and no trend exists yet -> blocked.
+
+    v2 reports it as a pending blocked start: the decision point is one pen away
+    from the chain start, so there is no line to publish either.
+    """
     snap = build(make_pens([5.0, 10.0, 5.0, 9.0, 6.0]))
     assert snap.confirmed_segments == ()
-    assert len(snap.segments) == 1
-    segment = snap.segments[0]
-    assert segment.status == 'blocked'
-    assert segment.reason == 'characteristic_initial_containment'
-    assert segment.confirmed_on is None
-    assert (segment.end.price, segment.end.position_day) == (10.0, _pd(1))
+    assert snap.segments == ()
+    assert len(snap.pending) == 1
+    pending = snap.pending[0]
+    assert pending.status == 'blocked'
+    assert pending.reason == 'characteristic_initial_containment'
+    assert pending.end_pen_index == 0
     assert [r.reason for r in snap.rejections] == ['characteristic_initial_containment']
+
+
+def test_initial_containment_is_always_a_pending_start():
+    """The first contained pair is only ever two elements wide, i.e. pen 3.
+
+    A containment at the first pair cannot have moved the segment's end (the two
+    candidate tops are equal or lower), so the refusal can never cover three
+    pens — it is always reported as a pending start, never as a Segment.
+    """
+    for prices in ([5.0, 10.0, 5.0, 9.0, 6.0], [5.0, 10.0, 5.0, 9.0, 6.0, 9.5, 5.5]):
+        snap = build(make_pens(prices))
+        assert snap.segments == ()
+        assert snap.pending[0].status == 'blocked'
+        assert snap.pending[0].reason == 'characteristic_initial_containment'
+        assert snap.pending[0].pens_used < MIN_PENS
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +1465,10 @@ def test_a_gap_between_the_first_two_elements_blocks_the_segment():
     assert segment.confirmed_on is None
     assert (segment.end.price, segment.end.position_day) == (12.0, _pd(3))
     assert segment.pen_end_index == 2
+    # The fractal is still reported as evidence, without a confirmation day.
+    assert segment.evidence_pen_indices == (1, 3, 5)
+    assert segment.evidence_confirmed_on is not None
+    assert segment.confirmed_on is None
     gap_rejections = [r for r in snap.rejections if r.reason == 'characteristic_gap_case2']
     assert len(gap_rejections) == 1
     assert (gap_rejections[0].pen_index, gap_rejections[0].price) == (2, 12.0)
@@ -771,13 +1481,18 @@ def test_a_fractal_below_a_prior_extreme_is_blocked_not_republished():
     """Elements 12 / 9 / 10.5 / 9.5: the fractal sits at 10.5 but 12 came first.
 
     The segment's real extreme is the earlier 12.0, so the fractal at 10.5 may
-    not be used as the segment's end (that would silently move the high).
+    not be used as the segment's end (that would silently move the high).  The
+    end pen is the fractal's carrier (4), not the earlier 12.0 pen, so the
+    blocked record is still a >= 3 pen span.
     """
     snap = build(make_pens([5.0, 12.0, 6.0, 9.0, 5.0, 10.5, 7.0, 9.5, 6.5, 8.0], confirmed=8))
     assert snap.confirmed_segments == ()
     assert snap.segments[0].status == 'blocked'
     assert snap.segments[0].reason == 'characteristic_fractal_below_prior_extreme'
     assert snap.segments[0].confirmed_on is None
+    assert snap.segments[0].pen_end_index == 4
+    assert snap.segments[0].end.price == 10.5
+    assert snap.segments[0].pens_used == 5
 
 
 def test_a_down_segment_confirms_on_a_bottom_fractal_without_gap():
@@ -785,9 +1500,10 @@ def test_a_down_segment_confirms_on_a_bottom_fractal_without_gap():
 
     Points: top 10.0, bottom 6.0, top 8.5, bottom 4.5, top 7.0, bottom 5.5,
     top 7.8, bottom 5.0.  The down segment's characteristic sequence (up pens)
-    is ``6.0/8.5``, ``4.5/7.0``, ``5.5/7.8``: a 底分型 at ``4.5/7.0`` with no
+    is ``8.5/6.0``, ``7.0/4.5``, ``7.8/5.5``: a 底分型 at ``7.0/4.5`` with no
     gap (7.0 is not below the first element's low 6.0), so it ends at the
-    bottom 4.5 (pivot 3) and waits for the third element (pen 5) to freeze.
+    bottom 4.5 (pivot 3, i.e. the carrier's own pen) and waits for the third
+    element (pen 5) to freeze.
     """
     snapshot = make_pens(
         [10.0, 6.0, 8.5, 4.5, 7.0, 5.5, 7.8, 5.0], confirmed=6, first_kind='top'
@@ -807,6 +1523,9 @@ def test_a_down_segment_confirms_on_a_bottom_fractal_without_gap():
     assert segment.confirmed_on == snapshot.pens[5].confirmed_on
     assert segment.end.kind == 'bottom'
     assert segment.characteristic_elements == 3
+    assert [e.pen_indices for e in segment.evidence] == [(1,), (3,), (5,)]
+    assert segment.evidence_pen_indices == (1, 3, 5)
+    assert segment.pen_end_index == 2  # the evidence pen 5 is after the end
 
     # The following up segment exists but is not confirmed yet.
     follow = snap.open_segment
@@ -822,7 +1541,7 @@ def test_a_down_segment_confirms_on_a_bottom_fractal_without_gap():
 
 def test_a_tainted_pen_in_the_span_blocks_the_segment():
     snapshot = make_pens(
-        [4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5], statuses={3: 'blocked'}
+        [4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5], statuses={5: 'blocked'}
     )
     snap = build(snapshot)
     assert snap.confirmed_segments == ()
@@ -830,9 +1549,17 @@ def test_a_tainted_pen_in_the_span_blocks_the_segment():
     assert len(blocked) == 1
     assert blocked[0].reason == 'tainted_pen'
     assert blocked[0].confirmed_on is None
+    assert blocked[0].pens_used == MIN_PENS
     assert any(r.reason == 'tainted_pen' for r in snap.rejections)
     # Nothing after the taint is published.
     assert snap.pending == ()
+
+    # A taint that lands before the end could leave the start at all is a pending
+    # refusal, not a one-pen "segment".
+    early = build(make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0], statuses={3: 'blocked'}))
+    assert early.segments == ()
+    assert early.pending[0].status == 'blocked'
+    assert early.pending[0].reason == 'tainted_pen'
 
 
 def test_a_tainted_pen_inside_the_first_three_is_a_pending_block():
@@ -879,6 +1606,65 @@ def test_the_kernel_is_pure_and_deterministic():
     assert snapshot.pens == pens_before
 
 
+def test_evidence_is_a_first_class_field_not_a_span_extension():
+    """Evidence is reported, typed and separate from ``pen_end_index``."""
+    segment = build(make_pens(CRASH_PIVOTS)).confirmed_segments[0]
+    assert isinstance(segment.evidence[0], FractalEvidence)
+    # pen_end_index never absorbs evidence pens: the right element is later.
+    assert max(segment.evidence_pen_indices) > segment.pen_end_index
+    # A blocked segment keeps its evidence but no confirmation day.
+    blocked = build(
+        make_pens([5.0, 8.0, 5.0, 12.0, 9.0, 11.5, 8.5])
+    ).segments[0]
+    assert blocked.evidence and blocked.confirmed_on is None
+    assert blocked.evidence_confirmed_on is not None
+
+
+def test_pending_records_the_refused_span():
+    pending = build(make_pens([5.0, 10.0, 4.0, 4.5])).pending[0]
+    assert isinstance(pending, SegmentPending)
+    assert pending.end_pen_index == 2
+    assert pending.pens_used == 3
+    assert pending.direction == 'up'
+
+    # When not even an end is known (fewer than three pens) the span is unknown,
+    # not zero-pens-of-evidence.
+    unknown = build(make_pens([4.0, 8.0, 5.0])).pending[0]
+    assert unknown.end_pen_index is None
+    assert unknown.pens_used == 0
+
+
+def test_snapshot_properties_expose_only_confirmed_and_flagged_segments():
+    confirmed = build(make_pens(CRASH_PIVOTS))
+    assert confirmed.blocked_segments == ()
+    segment = confirmed.confirmed_segments[0]
+    assert (segment.start_price, segment.end_price) == (segment.start.price, segment.end.price)
+    assert confirmed.candidate_segments == ()
+
+    open_tail = build(make_pens([4.0, 8.0, 5.0, 9.0, 6.0, 10.0, 7.0, 9.5, 6.5], confirmed=7))
+    assert [s.status for s in open_tail.candidate_segments] == ['candidate']
+    assert open_tail.open_segment is open_tail.candidate_segments[0]
+
+    blocked = build(make_pens([5.0, 8.0, 5.0, 12.0, 9.0, 11.5, 8.5]))
+    assert [s.reason for s in blocked.blocked_segments] == ['characteristic_gap_case2']
+    assert blocked.candidate_segments == ()
+
+
+def test_the_trend_helper_refuses_to_invent_a_direction():
+    """``_trend`` is the one place a merge direction is read; it never defaults."""
+    from src.core.chan_segment import CharacteristicElement, _trend
+
+    def element(high, low):
+        return CharacteristicElement(high, low, 0, 0, (0,), None)
+
+    assert _trend(element(5.0, 1.0), element(6.0, 2.0)) == 'up'
+    assert _trend(element(6.0, 2.0), element(5.0, 1.0)) == 'down'
+    # Equal high, equal low and crossing pairs all define no direction.
+    assert _trend(element(5.0, 1.0), element(5.0, 2.0)) is None
+    assert _trend(element(5.0, 1.0), element(6.0, 1.0)) is None
+    assert _trend(element(5.0, 1.0), element(6.0, 0.5)) is None
+
+
 def test_module_scope_is_honest():
     import src.core.chan_segment as mod
 
@@ -888,4 +1674,4 @@ def test_module_scope_is_honest():
     assert '中枢' in doc  # explicitly out of scope, not accidentally claimed
     for forbidden in ('zhongshu', 'centre', 'center', 'pivot', 'buy_sell'):
         assert not any(forbidden in name.lower() for name in dir(mod)), forbidden
-    assert mod.SEGMENT_KERNEL_VERSION == 'chan-segment-v1'
+    assert mod.SEGMENT_KERNEL_VERSION == 'chan-segment-v2'
