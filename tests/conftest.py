@@ -132,6 +132,31 @@ def _assert_scratch_sqlite_engine(_init_test_db):
         assert repo_data not in db_path.parents, f"{name} 指向仓库 data/: {db_path}"
 
 
+@pytest.fixture(autouse=True)
+def _purge_orphan_messages(_assert_scratch_sqlite_engine):
+    """每个用例开始前清掉**孤儿消息**（会话已不存在）。
+
+    为什么需要（2026-11-18 审计）：SQLite 的行 id 会被复用 —— 某个用例删了会话却没删
+    它的消息时，下一条新会话可能拿到同一个 id，于是在详情接口里"凭空"带着上一轮的历史
+    消息（实测 `test_chat_stream.py::test_same_question_twice_has_distinct_persisted_run_ids`
+    在与其他用例同库连跑时多出两条别人的助手消息，单跑却绿）。这是测试卫生问题，不是
+    产品回归：生产库有 FK/级联。这里只删"会话已不存在"的消息，不动任何真实会话。
+    """
+    from sqlalchemy import text
+
+    from src.db.session import write_engine
+
+    try:
+        with write_engine.begin() as conn:
+            conn.execute(text(
+                "DELETE FROM chat_messages WHERE conversation_id NOT IN "
+                "(SELECT id FROM chat_conversations)"
+            ))
+    except Exception:  # noqa: BLE001 - 表还不存在/方言差异时不影响用例
+        pass
+    yield
+
+
 def _is_sqlite(db) -> bool:
     try:
         return db.get_bind().dialect.name == "sqlite"

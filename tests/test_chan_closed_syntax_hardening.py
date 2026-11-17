@@ -231,17 +231,51 @@ def test_non_cn_page_market_drops_cn_snapshot(client, accounts, feed, holder, na
     assert (_conv_row(conv_id).stock_symbol or "") == "600519"
 
 
-@pytest.mark.parametrize("market", ["SH", "SZ", "BJ", "CN"])
-def test_cn_exchange_markets_still_serve(client, accounts, feed, holder, name_list, market):
-    """A 股各交易所（SH/SZ/BJ/CN）与快照的 market=CN 是同一市场，不许误杀。"""
-    digest = _digest("600519")
+#: 代码 → 该代码可证的交易所。600519 只可能是 SH（见 src.harness.actions.stock_exchange_of）:
+#: 用例必须拿**对得上**的交易所声明，否则断言的是"错声明也要放行" —— 那正是 2026-11-18
+#: 八轮审计要拦的行为（600519+SZ 曾被当成同一张图）。
+_MARKET_MATCHING_CODE = (("600519", "SH"), ("000002", "SZ"), ("830799", "BJ"))
+
+
+@pytest.mark.parametrize("symbol,market", [*_MARKET_MATCHING_CODE, ("600519", "CN")])
+def test_cn_exchange_markets_still_serve(client, accounts, feed, holder, name_list,
+                                         symbol, market):
+    """A 股各交易所（SH/SZ/BJ）与聚合口径 CN 都是同一市场，代码对得上就不许误杀。
+
+    `000002` 这类 000xxx 代码同时可能是个股与指数（平安银行/上证指数的同号问题），
+    代码本身不可证类型 —— 页面滑到头仍要显式声明 `stock_instrument`，这里按真实页面
+    的行为带上（前端图表页会广播图表自己声明的类型）。
+    """
+    digest = _digest(symbol)
     token = _login(client, "a")
-    conv_id = _conv(client, token, "600519", "SH")
+    conv_id = _conv(client, token, symbol, market if market != "CN" else "SH")
 
     r = _turn(client, token, conv_id, "缠论结构怎么样",
-              _snap(digest, symbol="600519"), anchor="600519", market=market)
+              _snap(digest, symbol=symbol), anchor=symbol, market=market,
+              instrument="stock")
     assert r.status_code == 200, r.text
-    _served(holder, digest, "600519")
+    _served(holder, digest, symbol)
+
+
+@pytest.mark.parametrize("symbol,market", [("600519", "SZ"), ("600519", "BJ")])
+def test_wrong_exchange_declaration_drops_snapshot(client, accounts, feed, holder,
+                                                   name_list, symbol, market):
+    """声明了具体交易所却与代码可证身份矛盾（600519 不可能在 SZ/BJ）→ 整份丢弃。
+
+    以前这里会放行（只校验 market 是否属于 CN/SH/SZ/BJ 集合），用户看到的会是
+    "600519 的 K 线"却带着一个不可能的市场声明 —— 同码不同标的不能被当成同一张图。
+    """
+    digest = _digest(symbol)
+    token = _login(client, "a")
+    conv_id = _conv(client, token, symbol, "SH")
+
+    r = _turn(client, token, conv_id, "缠论结构怎么样",
+              _snap(digest, symbol=symbol), anchor=symbol, market=market)
+    assert r.status_code == 200, r.text
+    out = holder.outputs[-1]
+    assert f"【缠论结构·只读观测】{symbol}" not in out, out[:400]
+    assert digest not in out
+    assert "市场" in (holder.systems[-1] or "")
 
 
 def test_recheck_drops_market_drift():

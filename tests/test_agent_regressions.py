@@ -308,8 +308,10 @@ def _c30_chat_py_line_guard():
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
     # 2026-10-20: TQ 异动资金档案 +3 行 → 2230；2026-10-21 长期记忆注入 +5 行 → 2240。
     # 2026-10-22: 维度缺口采集接线（后台 spawn，逻辑全在 src/core/gap_collector.py）+5 → 2305。
+    # 2026-11-17: 请求体新增页面锚点类型 stock_instrument（同号个股/指数归属）+5 → 2315；
+    #             同步 test_w33_chat_registry.py 的同一条护栏（那边已按 2320 记录）。
     # 逻辑仍在往 src/core、src/harness 抽，护栏只是防止 chat.py 无限膨胀。
-    assert lines <= 2310, f"chat.py 当前 {lines} 行，超护栏"
+    assert lines <= 2320, f"chat.py 当前 {lines} 行，超护栏"
 
 
 def _c31_no_decision_pioneer_in_user_facing_text():
