@@ -1,5 +1,7 @@
 ## [未发布]
 
+## release: v0.11.19（缠论结构观察 v1）
+
 ### fix-停靠参谋跟随路由锚点 + 线段/中枢加长回看（前端）
 
 - **停靠面板锚点跟随**：`/stocks/:symbol` 上打开「问参谋」面板时（用户直接点悬浮球，没有 `sida-open-chat` 入口事件），锚点从当前路由解析（`?type=index` 为指数、否则个股；市场按代码段口径 `CN`），换股跟随、离开个股页即清空。请求体因此带上 `stock_symbol` / `stock_market` / `stock_instrument`，并携带图上那份 `chart_snapshot`（图层未上报/换股后不带，不伪造）。
