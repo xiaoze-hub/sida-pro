@@ -87,6 +87,7 @@ const enUS: Messages = {
     caliberCompare: 'Caliber Compare',
     decisionLedger: 'Decision Ledger',
     lhb: 'Dragon-Tiger List',
+    nationalTeam: 'National Team',
     warReport: 'Capital Report',
     replayTree: 'Replay Tree',
     reports: 'Reports',

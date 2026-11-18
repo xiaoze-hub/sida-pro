@@ -86,6 +86,7 @@ const zhCN = {
     caliberCompare: '口径对照',
     decisionLedger: '决策账本',
     lhb: '龙虎榜',
+    nationalTeam: '国家队动向',
     warReport: '主力战报',
     replayTree: '连板晋级树',
     reports: '报告中心',

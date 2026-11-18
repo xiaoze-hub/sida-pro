@@ -457,6 +457,7 @@ protected = [Depends(get_current_user)]
 from src.core.permissions import (  # noqa: E402
     PERM_VIEW_AUCTION,
     PERM_VIEW_FORECAST,
+    PERM_VIEW_QUOTE,
 )
 from src.web.api._authz import require_perm  # noqa: E402
 from src.web.api import admin_free_tier  # noqa: E402
@@ -1011,6 +1012,16 @@ app.include_router(
     prefix="/api/market",
     tags=["market-fund-structure"],
     dependencies=protected,
+)
+# 国家队动向(2026-11-18): 汇金/证金/外汇局三平台的十大股东持仓 + 环比变动。
+# 季报口径, 只含进入前十大的持仓, 不含宽基 ETF(见 src/core/national_team.py docstring)。
+from src.web.api import national_team as national_team_router  # noqa: E402
+
+app.include_router(
+    national_team_router.router,
+    prefix="/api/national-team",
+    tags=["national-team"],
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_QUOTE))],
 )
 # 全市场三榜扫描(2026-09-01, §6.1): 读快照 + 手动触发
 app.include_router(

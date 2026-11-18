@@ -32,6 +32,7 @@ import {
   FlaskConical,
   Flame,
   KeyRound,
+  Landmark,
   LayoutDashboard,
   LayoutGrid,
   LineChart,
@@ -117,6 +118,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/factor-ic', labelKey: 'nav.factorIC', icon: FlaskConical, group: 'decision', mobile: 'more', perm: 'view_quotes', keywords: ['因子', 'IC'] },
   // 龙虎榜(2026-11-09): 独立工作区 —— 按日看榜 + 选股看买卖席位, 属资金证据域。
   { to: '/lhb', labelKey: 'nav.lhb', icon: List, group: 'decision', mobile: 'more', perm: 'view_quotes', keywords: ['龙虎榜', '席位', '营业部', '游资'] },
+  // 国家队动向(2026-11-18): 汇金/证金/外汇局三平台的季度持仓与环比, 属资金证据域。
+  { to: '/national-team', labelKey: 'nav.nationalTeam', icon: Landmark, group: 'decision', mobile: 'more', perm: 'view_quotes', keywords: ['国家队', '汇金', '证金', '持仓', '股东'] },
   { to: '/reports', labelKey: 'nav.reports', icon: FileText, group: 'research', mobile: 'more', perm: 'view_reports', keywords: ['报告'] },
   // 历史分析并入报告页(?tab=history); 老地址 /history 仍可用
   { to: '/reports?tab=history', labelKey: 'nav.history', icon: Clock, group: null, mobile: 'more', keywords: ['历史', '分析'] },
