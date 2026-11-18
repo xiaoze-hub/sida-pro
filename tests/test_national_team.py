@@ -237,6 +237,9 @@ def test_overview_aggregates_by_group(engine, monkeypatch):
     assert groups["ssb"]["market_cap"] == pytest.approx(300.0)
     # 险资：只有平安
     assert groups["insurance"]["stocks"] == 1
+    # 合计只数**按股票去重**：601988/601398/000333/601318 = 4（601398 同时被汇金与社保持有）
+    assert ov["totals"]["stocks"] == 4
+    assert ov["totals"]["group_stocks_summed"] == 5
     # 未在榜组：证金、外汇局
     absent = {a["group_key"] for a in ov["absent_holders"]}
     assert {"csf", "safe"} <= absent

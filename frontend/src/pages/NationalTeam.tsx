@@ -245,8 +245,7 @@ export default function NationalTeam() {
         <div>{overview?.caliber_note ?? '口径：东方财富十大股东/十大流通股东（季报披露），只含进入前十大的持仓；不含宽基 ETF 持仓；A+H 未拆分。'}</div>
         <div>
           {overview?.holder_scope_note ??
-            '覆盖：中央汇金（投资/资管）、证金公司、全国社保基金各组合、险资（保险公司及产品账户）、外汇局三平台（梧桐树/凤山/坤藤）。'}
-          合计是个股直投口径，不等于国家队总持仓。
+            '覆盖：中央汇金（投资/资管）、证金公司、全国社保基金各组合、险资（保险公司及产品账户）、外汇局三平台（梧桐树/凤山/坤藤）；合计是个股直投口径，不等于国家队总资产。'}
         </div>
       </div>
 
@@ -308,7 +307,10 @@ export default function NationalTeam() {
                 {safeMoneyUnsigned(totals?.market_cap)}
               </div>
               <div className="mt-1 text-[12px] text-muted-foreground">
-                {totals?.stocks ?? 0} 只 · 持股 {fmtShares(totals?.hold_num)}
+                {totals?.stocks ?? 0} 只（去重）· 持股 {fmtShares(totals?.hold_num)}
+                {!!totals?.group_stocks_summed && totals.group_stocks_summed !== totals.stocks
+                  ? ` · 各组相加 ${totals.group_stocks_summed} 只（含跨组重复持有）`
+                  : ''}
                 {!!totals?.market_cap_missing && ` · ${totals.market_cap_missing} 只缺市值`}
               </div>
             </div>

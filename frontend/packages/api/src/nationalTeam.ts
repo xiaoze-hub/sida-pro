@@ -54,7 +54,15 @@ export interface NationalTeamOverview {
   periods: string[]
   groups: NationalTeamGroup[]
   absent_holders: NationalTeamAbsentHolder[]
-  totals: { stocks: number; market_cap: number; hold_num: number; market_cap_missing: number }
+  totals: {
+    /** 全口径**去重**股票只数（同一只票被多组持有只算一只） */
+    stocks: number
+    market_cap: number
+    hold_num: number
+    market_cap_missing: number
+    /** 各组只数之和（>stocks 说明有跨组重复持有） */
+    group_stocks_summed?: number
+  }
   snapshot_at: string | null
   source: string
   caliber_note: string

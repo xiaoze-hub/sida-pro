@@ -828,11 +828,19 @@ GROUP BY c.group_key
             }
         )
 
+    # 合计口径：**只数按股票去重**（同一只票可能同时被汇金与社保持有，组内相加会重复计），
+    # 市值/持股按持仓相加（不同账户持有的是不同股份，相加才是真实敞口）。
+    overall = _rows(
+        engine,
+        f"SELECT COUNT(DISTINCT stock_code) AS n FROM {TABLE} WHERE report_date = :rd AND report_kind = :rk",
+        {"rd": target, "rk": kind},
+    )
     totals = {
-        "stocks": sum(g["stocks"] for g in groups),
+        "stocks": int((overall[0]["n"] if overall else 0) or 0),
         "market_cap": sum(g["market_cap"] for g in groups),
         "hold_num": sum(g["hold_num"] for g in groups),
         "market_cap_missing": sum(g["market_cap_missing"] for g in groups),
+        "group_stocks_summed": sum(g["stocks"] for g in groups),
     }
     present = {g["group_key"] for g in groups}
     absent = [
