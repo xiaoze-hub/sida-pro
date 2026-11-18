@@ -1,5 +1,11 @@
 ## [未发布]
 
+### fix-发版门禁: 缠论用例时间炸弹 + 迁移钉子同步(2026-11-18)
+
+- **`tests/test_chan_ai_turn_context.py` 时间炸弹**：`NOW`/`TODAY`/`COMPLETED` 写死 `2026-11-17`，而指数快照复核路径会带**真实当日**日线 bar ⇒ 11-18 起 adapter 判 `future bar` → 端点 422 → 5 条用例（`test_chan_ai_turn_context` / `test_chan_snapshot_audit_fixes2` / `test_chan_name_trust_audit`）永久失败。修复：`NOW` 取当日（Asia/Shanghai）、`COMPLETED` 取当日之前最近 6 个工作日动态生成；本地 75 passed（修前 5 failed）。
+- **迁移钉子同步到 251**：`test_chat_admin`/`test_premarket_rerun_integrity` 的「最新版本」钉子由 250 → 251；`test_prediction_outcome_ownership_integrity` 的基线升级期望集补 `251`（国家队持仓表）。三文件 52 passed。
+- 上述两条都是**既有**门禁红（与本轮功能无关），但门禁不绿无法发版，随本次一并修掉。
+
 ### feat-国家队动向监控(汇金/证金/外汇局三平台)(2026-11-18)
 
 - **新增页 `/national-team`「国家队动向」**：主体汇总（只数/持股市值/环比变动只数）+ 持仓明细（按主体、代码/名称筛选）+ 季度环比（新进/加仓/减仓/退出），挂在决策组、`view_quotes` 权限。

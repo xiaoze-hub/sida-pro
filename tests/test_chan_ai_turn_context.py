@@ -27,7 +27,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -39,9 +39,24 @@ from src.web.api import chan_snapshot as chan
 from src.web.api import chat as chat_api
 from src.web.api import klines as kl
 
-NOW = datetime(2026, 11, 17, 14, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
-TODAY = "2026-11-17"
-COMPLETED = ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-16"]
+# 时间炸弹修复(2026-11-18): 原先写死 NOW/TODAY=2026-11-17, 而指数快照路径会带上**真实当日**的
+# 日线 bar ⇒ 过了这一天 adapter 判 "future bar" → 422 → 5 条用例永久失败。改为跟随当日生成
+# (与被测代码同一时区), COMPLETED 取当日之前最近的 6 个工作日。
+NOW = datetime.now(ZoneInfo("Asia/Shanghai"))
+TODAY = NOW.strftime("%Y-%m-%d")
+
+
+def _recent_weekdays(end: "date", n: int) -> list[str]:
+    out: list[str] = []
+    cur = end
+    while len(out) < n:
+        cur -= timedelta(days=1)
+        if cur.weekday() < 5:
+            out.append(cur.isoformat())
+    return sorted(out)
+
+
+COMPLETED = _recent_weekdays(NOW.date(), 6)
 
 OWNER_ID = "c0ffee00-3333-4333-8444-chatown00001"
 MEMBER_A = "c0ffee00-3333-4333-8444-chatma000001"
