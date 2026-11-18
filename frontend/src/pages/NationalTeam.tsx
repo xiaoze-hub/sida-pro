@@ -1,13 +1,13 @@
 /**
- * 国家队动向工作区（2026-11-18）。
+ * 国家队 / 机构持仓工作区（2026-11-18）。
  *
- * 目的：把「汇金 / 证金 / 外汇局三平台这个季度拿了什么、加了谁减了谁」做成一个能独立打开的
- * 页面，而不是散在个股 F10 的十大股东里一列姓名。
+ * 目的：把「汇金 / 证金 / 社保 / 险资 / 外汇局三平台这个季度拿了什么、加了谁减了谁」做成一个
+ * 能独立打开的页面，而不是散在个股 F10 的十大股东里一列姓名。
  *
  * 数据契约（来源是代码，不是猜 —— 见 `src/web/api/national_team.py` 与
  * `src/core/national_team.py` 模块 docstring）：
- *  · `GET /api/national-team/overview`  → 主体汇总 + 报告期列表 + 未在榜主体 + 采集时点
- *  · `GET /api/national-team/holdings`  → 明细（holder/q/sort/limit）
+ *  · `GET /api/national-team/overview`  → 机构组汇总（组内账户数/只数/市值）+ 报告期列表 + 采集时点
+ *  · `GET /api/national-team/holdings`  → 明细（holder 传组 key：huijin/csf/ssb/insurance/safe）
  *  · `GET /api/national-team/changes`   → 环比（new / increase / decrease / exit）
  *  · `POST /api/national-team/refresh`  → owner 手动采集，返回 receipt
  *
@@ -122,7 +122,7 @@ function HoldingRow({ item }: { item: NationalTeamHolding }) {
           <span className="ml-2">{item.stock_name || '—'}</span>
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
-          <span>{item.holder_group}</span>
+          <span className="truncate" title={item.holder_name}>{item.holder_name}</span>
           {item.shares_type && <span>· {item.shares_type}</span>}
           {item.change_type && item.change_type !== '不变' && (
             <span className="text-foreground">· {item.change_type}</span>
@@ -184,11 +184,11 @@ export default function NationalTeam() {
     void load(kind, holder)
   }, [kind, holder, load])
 
-  const onRefresh = useCallback(async () => {
+  const onRefresh = useCallback(async (mode: 'targeted' | 'scan' = 'targeted') => {
     setRefreshing(true)
-    setRefreshNote(null)
+    setRefreshNote(mode === 'scan' ? '全市场扫描中（一期两表各约 5.6 万行，约 3-6 分钟）…' : null)
     try {
-      const receipt = await nationalTeamApi.refresh()
+      const receipt = await nationalTeamApi.refresh({ mode })
       const errs = receipt.errors?.length ?? 0
       setRefreshNote(
         receipt.ok
@@ -207,8 +207,8 @@ export default function NationalTeam() {
 
   const totals = overview?.totals
   const holderOptions = useMemo(() => {
-    const opts = [{ key: 'all', label: '全部主体' }]
-    for (const g of overview?.groups ?? []) opts.push({ key: g.holder_key, label: g.holder_group })
+    const opts = [{ key: 'all', label: '全部机构' }]
+    for (const g of overview?.groups ?? []) opts.push({ key: g.group_key, label: g.group_label })
     return opts
   }, [overview])
 
@@ -216,12 +216,17 @@ export default function NationalTeam() {
     <div className="page-container space-y-4">
       <PageHeader
         title="国家队动向"
-        description="汇金 / 证金 / 外汇局三平台的十大股东持仓与季度环比。季报口径，不是实时持仓。"
+        description="汇金 / 证金 / 社保 / 险资 / 外汇局三平台的十大股东持仓与季度环比。季报口径，不是实时持仓。"
         actions={
-          <Button variant="ghost" size="sm" onClick={() => void onRefresh()} disabled={refreshing}>
-            {refreshing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-            采集最新
-          </Button>
+          <>
+            <Button variant="ghost" size="sm" onClick={() => void onRefresh('targeted')} disabled={refreshing}>
+              {refreshing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+              刷新
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void onRefresh('scan')} disabled={refreshing}>
+              全市场扫描
+            </Button>
+          </>
         }
         metadata={
           <>
@@ -240,8 +245,7 @@ export default function NationalTeam() {
         <div>{overview?.caliber_note ?? '口径：东方财富十大股东/十大流通股东（季报披露），只含进入前十大的持仓；不含宽基 ETF 持仓；A+H 未拆分。'}</div>
         <div>
           {overview?.holder_scope_note ??
-            '覆盖主体：中央汇金投资、中央汇金资管、证金公司、外汇局三平台（梧桐树/凤山/坤藤）。'}
-          合计是个股直投口径，不等于国家队总持仓。
+            '覆盖：中央汇金（投资/资管）、证金公司、全国社保基金各组合、险资（保险公司及产品账户）、外汇局三平台（梧桐树/凤山/坤藤）；合计是个股直投口径，不等于国家队总资产。'}
         </div>
       </div>
 
@@ -303,21 +307,24 @@ export default function NationalTeam() {
                 {safeMoneyUnsigned(totals?.market_cap)}
               </div>
               <div className="mt-1 text-[12px] text-muted-foreground">
-                {totals?.stocks ?? 0} 只 · 持股 {fmtShares(totals?.hold_num)}
+                {totals?.stocks ?? 0} 只（去重）· 持股 {fmtShares(totals?.hold_num)}
+                {!!totals?.group_stocks_summed && totals.group_stocks_summed !== totals.stocks
+                  ? ` · 各组相加 ${totals.group_stocks_summed} 只（含跨组重复持有）`
+                  : ''}
                 {!!totals?.market_cap_missing && ` · ${totals.market_cap_missing} 只缺市值`}
               </div>
             </div>
             {overview.groups.map((g) => (
-              <div key={g.holder_key} className="rounded-lg bg-s1 p-3">
+              <div key={g.group_key} className="rounded-lg bg-s1 p-3" title={g.group_desc}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[12px] text-muted-foreground">{g.holder_group}</span>
+                  <span className="text-[12px] text-muted-foreground">{g.group_label}</span>
                   {g.changed_stocks > 0 && (
                     <StatusChip tone="warning">{g.changed_stocks} 只变动</StatusChip>
                   )}
                 </div>
                 <div className="mt-1 text-[16px] font-semibold tabular-nums">{safeMoneyUnsigned(g.market_cap)}</div>
                 <div className="mt-1 text-[12px] tabular-nums text-muted-foreground">
-                  {g.stocks} 只 · {fmtShares(g.hold_num)}
+                  {g.stocks} 只 · {g.holders} 个账户 · {fmtShares(g.hold_num)}
                 </div>
               </div>
             ))}
@@ -326,7 +333,7 @@ export default function NationalTeam() {
           {!!overview.absent_holders?.length && (
             <div className="rounded-lg bg-s1 px-3 py-2 text-[12px] text-muted-foreground">
               本期未在榜：
-              {overview.absent_holders.map((a) => `${a.holder_group}`).join('、')}
+              {overview.absent_holders.map((a) => `${a.group_label}`).join('、')}
               —— 该主体本期未出现在十大股东/十大流通股东（已退出或未进前十），不是采集失败。
             </div>
           )}
@@ -352,7 +359,7 @@ export default function NationalTeam() {
                 </div>
               )}
               {changes?.items.slice(0, 20).map((it) => (
-                <ChangeRow key={`${it.holder_key}-${it.stock_code}-${it.kind}`} item={it} />
+                <ChangeRow key={`${it.group_key}-${it.stock_code}-${it.kind}`} item={it} />
               ))}
               {changes?.available && changes.items.length === 0 && (
                 <div className="px-3 py-3 text-[14px] text-muted-foreground">

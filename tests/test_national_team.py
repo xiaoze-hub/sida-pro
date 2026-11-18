@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""国家队持仓（汇金/证金/外汇局三平台）采集与读取测试（2026-11-18）。
+"""国家队 / 机构持仓（汇金 · 证金 · 社保 · 险资 · 外汇局）采集与读取测试（2026-11-18）。
 
-不打上游：`_query_rows` 用假数据替换，测的是**本仓契约**——
-①迁移确实建表并注册；②非法行丢弃不让「脏 0」进库；③sync 幂等 + 源端消失的行会被删；
-④overview/holdings/changes 的口径（只数、市值合计、环比分类、未在榜主体）；
-⑤表为空时 available=false（不编造）。
+不打上游：`_rows_once` / `_query_names_in` 用假数据替换，测的是**本仓契约**——
+①迁移建表并注册；②名称归类（社保组合 / 险资产品账户 / 汇金 / 证金，且不互相误收）；
+③全市场扫描只留命中行并整期替换；④注册表被填充，定向刷新只查名单里的人；
+⑤汇总按机构组聚合（股票去重、持股相加、账户数）；⑥零变动 vs 没有可比报告期可区分。
 
-不覆盖（见 core docstring 的硬限制）：ETF 持仓、第 11 名以后的持仓、A/H 拆分 —— 上游本就不提供。
+不覆盖（上游本就不提供）：ETF 持仓、第 11 名以后的持仓、A/H 拆分。
 """
 from __future__ import annotations
 
@@ -17,11 +17,12 @@ from src.core import national_team as nt
 from src.web.migrations import MIGRATIONS, run_versioned_migrations
 
 
-def _src_row(code: str, name: str, hold_num: float, *, end="2026-09-30",
-             ratio=None, cap=None, rank=1, change="不变", stype="流通A股"):
+def _src(code: str, name: str, holder: str, hold_num: float, *, end="2026-09-30",
+         ratio=None, cap=None, rank=1, change="不变", stype="流通A股"):
     return {
         "SECURITY_CODE": code,
         "SECURITY_NAME_ABBR": name,
+        "HOLDER_NAME": holder,
         "END_DATE": f"{end} 00:00:00",
         "HOLD_NUM": hold_num,
         "HOLD_NUM_RATIO": ratio,
@@ -40,196 +41,263 @@ def engine(tmp_path):
     eng.dispose()
 
 
-def _fake_query(rows_by_key):
-    """按 (report_table, holder_name, report_date) 返回预设行。"""
+def _fake_scan(rows_by_period):
+    """替换 `_rows_once`：按 (报表, 报告期) 一次返回全量行（模拟不分页）。"""
 
-    def _q(report_table, holder_name, report_date=None, **kwargs):
-        return list(rows_by_key.get((report_table, holder_name, report_date), []))
+    def _rows_once(report_table, filt, page, *, http=None, page_size=2000):
+        period = filt.split("END_DATE='")[1][:10]
+        rows = rows_by_period.get((report_table, period), [])
+        if page > 1:
+            return [], 1, True
+        return list(rows), 1, True
 
-    return _q
+    return _rows_once
 
 
 # ────────────────────────── 迁移 ──────────────────────────
 
 
-def test_migration_registered_and_creates_table(engine):
+def test_migrations_registered(engine):
     versions = [m.version for m in MIGRATIONS]
-    assert 251 in versions, "v251 必须在 MIGRATIONS 元组里注册"
-    assert versions == sorted(versions), "MIGRATIONS 必须按版本升序"
+    assert versions == sorted(versions)
+    assert versions == list(range(versions[0], versions[-1] + 1))
+    assert {251, 252} <= set(versions)
     with engine.connect() as conn:
-        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(national_team_holdings)")).fetchall()}
-    assert {"report_date", "report_kind", "holder_key", "stock_code", "hold_num",
-            "hold_ratio", "market_cap", "change_type"} <= cols
+        hold_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(national_team_holdings)")).fetchall()}
+        reg_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(national_team_holder_registry)")).fetchall()}
+    assert {"report_date", "report_kind", "holder_key", "stock_code", "group_key"} <= hold_cols
+    assert {"holder_name", "group_key", "holder_group", "last_seen"} <= reg_cols
+
+
+# ────────────────────────── 归类 ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    "name,expect",
+    [
+        ("中央汇金投资有限责任公司", "huijin"),
+        ("中央汇金资产管理有限责任公司", "huijin"),
+        ("中国证券金融股份有限公司", "csf"),
+        ("梧桐树投资平台有限责任公司", "safe"),
+        ("北京凤山投资有限责任公司", "safe"),
+        ("北京坤藤投资有限责任公司", "safe"),
+        ("全国社保基金一一三组合", "ssb"),
+        ("全国社保基金四一三组合", "ssb"),
+        ("全国社会保障基金理事会转持二户", "ssb"),
+        ("中国人寿保险股份有限公司-传统-普通保险产品-005L-CT001沪", "insurance"),
+        ("中国平安人寿保险股份有限公司-分红-个险分红", "insurance"),
+        ("中国平安保险(集团)股份有限公司-集团本级-自有资金", "insurance"),
+        ("中国人民财产保险股份有限公司-传统-普通保险产品", "insurance"),
+        ("平安养老保险股份有限公司-传统-普通保险产品", "insurance"),
+        # 不该被收的：普通机构/个人
+        ("香港中央结算有限公司", None),
+        ("中国工商银行股份有限公司", None),
+        ("招商银行股份有限公司-某某基金", None),
+        ("张三", None),
+        ("", None),
+    ],
+)
+def test_classify_holder(name, expect):
+    assert nt.classify_holder(name) == expect
+
+
+def test_holder_key_is_stable_and_grouped():
+    a = nt.holder_key_for("全国社保基金一一三组合", "ssb")
+    b = nt.holder_key_for("全国社保基金一一三组合", "ssb")
+    assert a == b and a.startswith("ssb:") and len(a) <= 32
+    assert a != nt.holder_key_for("全国社保基金一一四组合", "ssb")
 
 
 # ────────────────────────── 归一化 ──────────────────────────
 
 
-def test_normalize_drops_invalid_rows():
-    holder = nt.HOLDER_BY_KEY["huijin_invest"]
+def test_normalize_drops_invalid_and_unclassified():
     raw = [
-        _src_row("601988", "中国银行", 1.887e11, cap=1.27e12, ratio=58.59),
-        _src_row("601", "坏代码", 100.0),            # 代码长度非法
-        _src_row("６０１０００", "全角代码", 100.0),   # 全角数字 → 必须拒绝, 不能"修复"
-        _src_row("600000", "零持股", 0),             # hold_num=0 → 丢弃
-        _src_row("600001", "缺持股", None),
-        {**_src_row("600002", "日期不符", 10.0), "END_DATE": "2026-06-30 00:00:00"},
+        _src("601988", "中国银行", "中央汇金投资有限责任公司", 1.887e11, cap=1.27e12, ratio=58.59),
+        _src("601318", "中国平安", "中国平安人寿保险股份有限公司-分红-个险分红", 5e8, cap=5e9),
+        _src("601", "坏代码", "中央汇金投资有限责任公司", 100.0),
+        _src("６０１０００", "全角代码", "中央汇金投资有限责任公司", 100.0),
+        _src("600000", "零持股", "中央汇金投资有限责任公司", 0),
+        {**_src("600002", "日期不符", "中央汇金投资有限责任公司", 10.0), "END_DATE": "2026-06-30 00:00:00"},
+        _src("600003", "漏网之鱼", "香港中央结算有限公司", 10.0),
     ]
     rows, stats = nt.normalize_rows(
-        raw, holder=holder, report_kind="float", report_date="2026-09-30", snapshot_at="2026-11-18T19:00:00+08:00"
+        raw, holder=None, report_kind="float", report_date="2026-09-30", snapshot_at="2026-11-18T19:00:00+08:00"
     )
-    assert len(rows) == 1 and rows[0]["stock_code"] == "601988"
-    assert rows[0]["holder_key"] == "huijin_invest"
-    assert stats == {"raw": 6, "kept": 1, "dropped_code": 2, "dropped_value": 2, "dropped_date": 1}
+    codes = {r["stock_code"] for r in rows}
+    assert codes == {"601988", "601318"}
+    groups = {r["stock_code"]: r["group_key"] for r in rows}
+    assert groups["601988"] == "huijin" and groups["601318"] == "insurance"
+    assert stats["dropped_unclassified"] == 1
+    assert stats["dropped_code"] == 2 and stats["dropped_value"] == 1 and stats["dropped_date"] == 1
 
 
-# ────────────────────────── 采集 ──────────────────────────
+# ────────────────────────── 全市场扫描 ──────────────────────────
 
 
-def test_sync_is_idempotent_and_removes_stale(engine, monkeypatch):
-    key = (nt.REPORT_TABLES["float"], nt.HOLDER_BY_KEY["huijin_invest"]["name"], "2026-09-30")
+def _scan_rows(period="2026-09-30"):
+    return [
+        _src("601988", "中国银行", "中央汇金投资有限责任公司", 100.0, cap=1000.0, ratio=58.59, end=period),
+        _src("601398", "工商银行", "中央汇金资产管理有限责任公司", 50.0, cap=500.0, ratio=0.28, end=period),
+        _src("601398", "工商银行", "全国社保基金一一三组合", 20.0, cap=200.0, ratio=0.1, end=period),
+        _src("000333", "美的集团", "全国社保基金四一三组合", 10.0, cap=100.0, ratio=1.1, end=period),
+        _src("601318", "中国平安", "中国平安人寿保险股份有限公司-分红-个险分红", 30.0, cap=300.0, ratio=2.6, end=period),
+        _src("600000", "浦发银行", "香港中央结算有限公司", 999.0, cap=999.0, end=period),  # 不归类 → 丢
+    ]
+
+
+def test_scan_keeps_only_institutions_and_replaces_period(engine, monkeypatch):
     rows = {
-        key: [
-            _src_row("601988", "中国银行", 100.0, cap=1000.0),
-            _src_row("601398", "工商银行", 200.0, cap=2000.0),
-        ]
+        (nt.REPORT_TABLES["float"], "2026-09-30"): _scan_rows("2026-09-30"),
+        (nt.REPORT_TABLES["total"], "2026-09-30"): _scan_rows("2026-09-30"),
     }
-    monkeypatch.setattr(nt, "_query_rows", _fake_query(rows))
-
-    first = nt.sync(engine, periods=["2026-09-30"], report_kinds=["float"],
-                    holders=[nt.HOLDER_BY_KEY["huijin_invest"]])
-    assert first["ok"] is True and first["written"] == 2
-
-    # 同一份数据再跑一次：行数不变（幂等），snapshot_at 更新为最新一次采集
-    second = nt.sync(engine, periods=["2026-09-30"], report_kinds=["float"],
-                     holders=[nt.HOLDER_BY_KEY["huijin_invest"]])
-    assert second["written"] == 2
-    h = nt.holdings(engine, report_date="2026-09-30", kind="float")
-    assert h["count"] == 2
-    assert h["items"][0]["snapshot_at"] >= first["snapshot_at"]
-
-    # 源端少了一只（例如调出前十）→ 库里不能残留旧行
-    rows[key] = [_src_row("601988", "中国银行", 100.0, cap=1000.0)]
-    nt.sync(engine, periods=["2026-09-30"], report_kinds=["float"],
-            holders=[nt.HOLDER_BY_KEY["huijin_invest"]])
-    h2 = nt.holdings(engine, report_date="2026-09-30", kind="float")
-    assert h2["count"] == 1 and h2["items"][0]["stock_code"] == "601988"
-
-
-def test_sync_reports_error_when_all_rows_invalid(engine, monkeypatch):
-    key = (nt.REPORT_TABLES["float"], nt.HOLDER_BY_KEY["csf"]["name"], "2026-09-30")
-    monkeypatch.setattr(nt, "_query_rows", _fake_query({key: [_src_row("bad", "坏行", 1.0)]}))
-    rc = nt.sync(engine, periods=["2026-09-30"], report_kinds=["float"],
-                 holders=[nt.HOLDER_BY_KEY["csf"]])
-    assert rc["ok"] is False
-    assert rc["errors"] and "全部非法" in rc["errors"][0]["error"]
-    assert rc["written"] == 0
-
-
-def test_sync_marks_empty_holder_without_writing(engine, monkeypatch):
-    monkeypatch.setattr(nt, "_query_rows", _fake_query({}))
-    rc = nt.sync(engine, periods=["2026-09-30"], report_kinds=["float"],
-                 holders=[nt.HOLDER_BY_KEY["wutongshu"]])
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    rc = nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
     assert rc["ok"] is True
-    assert rc["empty"] == ["2026-09-30/float/wutongshu"]
-    assert rc["written"] == 0
+    assert rc["scanned_rows"]["2026-09-30/float"] == 6
+    assert rc["written"] == 5  # 香港中央结算被丢弃
+    assert rc["groups"]["float"] == {"huijin": 2, "ssb": 2, "insurance": 1}
+
+    # 幂等：同数据再扫一次行数不变
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+    h = nt.holdings(engine, report_date="2026-09-30", kind="float")
+    assert h["count"] == 5
+
+    # 整期替换：源端少几只 → 库里不残留
+    rows[(nt.REPORT_TABLES["float"], "2026-09-30")] = _scan_rows("2026-09-30")[:3]
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+    h2 = nt.holdings(engine, report_date="2026-09-30", kind="float")
+    assert h2["count"] == 3
 
 
-# ────────────────────────── 读取口径 ──────────────────────────
+def test_scan_populates_registry_and_targeted_uses_it(engine, monkeypatch):
+    rows = {(nt.REPORT_TABLES["float"], "2026-09-30"): _scan_rows("2026-09-30")}
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+
+    names = nt.registry_names(engine)
+    assert "全国社保基金一一三组合" in names and "中央汇金投资有限责任公司" in names
+    assert "香港中央结算有限公司" not in names
+    assert set(nt.registry_names(engine, "insurance")) == {
+        "中国平安人寿保险股份有限公司-分红-个险分红"
+    }
+
+    # 定向刷新只查名单里的人（`in (...)`），且能吸收「源端新出现一只」
+    captured: dict[str, list[str]] = {}
+
+    def _fake_names_in(report_table, names_arg, report_date, **kwargs):
+        captured["names"] = list(names_arg)
+        return [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", 100.0, cap=1000.0),
+            _src("600036", "招商银行", "全国社保基金四一三组合", 5.0, cap=50.0),  # 新出现
+        ]
+
+    monkeypatch.setattr(nt, "_query_names_in", _fake_names_in)
+    rc = nt.sync_targeted(engine, periods=["2026-09-30"], report_kinds=["float"])
+    assert rc["written"] == 2
+    assert "香港中央结算有限公司" not in captured["names"]
+    h = nt.holdings(engine, report_date="2026-09-30", kind="float")
+    assert "600036" in {i["stock_code"] for i in h["items"]}
+
+
+# ────────────────────────── 汇总 / 明细 / 环比 ──────────────────────────
 
 
 def _seed_two_periods(engine, monkeypatch):
-    ht = nt.HOLDER_BY_KEY["huijin_asset"]
-    csf = nt.HOLDER_BY_KEY["csf"]
+    cur = _scan_rows("2026-09-30")
+    prev = [
+        _src("601988", "中国银行", "中央汇金投资有限责任公司", 100.0, cap=900.0, end="2026-06-30"),
+        _src("601398", "工商银行", "中央汇金资产管理有限责任公司", 50.0, cap=480.0, end="2026-06-30"),
+        _src("601398", "工商银行", "全国社保基金一一三组合", 20.0, cap=190.0, end="2026-06-30"),
+        _src("000333", "美的集团", "全国社保基金四一三组合", 10.0, cap=95.0, end="2026-06-30"),
+        # 上期持有招商银行（本期退出）
+        _src("600036", "招商银行", "全国社保基金四一三组合", 8.0, cap=80.0, end="2026-06-30"),
+        # 上期没有平安人寿（本期新进）
+    ]
     rows = {
-        (nt.REPORT_TABLES["float"], ht["name"], "2026-09-30"): [
-            _src_row("601318", "中国平安", 500.0, cap=5000.0, ratio=2.6),
-            _src_row("000333", "美的集团", 100.0, cap=900.0, ratio=1.2, change="增持"),
-        ],
-        (nt.REPORT_TABLES["float"], ht["name"], "2026-06-30"): [
-            _src_row("601318", "中国平安", 500.0, cap=4800.0, end="2026-06-30", ratio=2.5),
-            _src_row("600585", "海螺水泥", 300.0, cap=600.0, end="2026-06-30", ratio=1.3),
-        ],
-        (nt.REPORT_TABLES["float"], csf["name"], "2026-09-30"): [
-            _src_row("601988", "中国银行", 700.0, cap=7000.0, rank=2),
-        ],
-        (nt.REPORT_TABLES["float"], csf["name"], "2026-06-30"): [
-            _src_row("601988", "中国银行", 700.0, cap=6900.0, end="2026-06-30", rank=2),
-        ],
+        (nt.REPORT_TABLES["float"], "2026-09-30"): cur,
+        (nt.REPORT_TABLES["float"], "2026-06-30"): prev,
     }
-    monkeypatch.setattr(nt, "_query_rows", _fake_query(rows))
-    nt.sync(engine, periods=["2026-09-30", "2026-06-30"], report_kinds=["float"], holders=[ht, csf])
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2026-06-30", report_kinds=["float"])
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
 
 
-def test_overview_totals_and_absent_holders(engine, monkeypatch):
+def test_overview_aggregates_by_group(engine, monkeypatch):
     _seed_two_periods(engine, monkeypatch)
     ov = nt.overview(engine, kind="float")
     assert ov["available"] is True
-    assert ov["report_date"] == "2026-09-30"
-    assert ov["prev_report_date"] == "2026-06-30"
-    assert ov["totals"]["stocks"] == 3
-    assert ov["totals"]["market_cap"] == pytest.approx(12900.0)
-    keys = {g["holder_key"]: g for g in ov["groups"]}
-    assert keys["huijin_asset"]["stocks"] == 2
-    assert keys["huijin_asset"]["changed_stocks"] == 1  # 美的为新进, 平安持股不变
-    absent = {a["holder_key"] for a in ov["absent_holders"]}
-    assert {"wutongshu", "fengshan", "kunteng"} <= absent
+    assert ov["report_date"] == "2026-09-30" and ov["prev_report_date"] == "2026-06-30"
+    groups = {g["group_key"]: g for g in ov["groups"]}
+    # 汇金系：中国银行 + 工商银行两只（两个账户）
+    assert groups["huijin"]["stocks"] == 2 and groups["huijin"]["holders"] == 2
+    assert groups["huijin"]["market_cap"] == pytest.approx(1500.0)
+    # 社保：工商银行 + 美的集团（两个组合）
+    assert groups["ssb"]["stocks"] == 2 and groups["ssb"]["holders"] == 2
+    assert groups["ssb"]["market_cap"] == pytest.approx(300.0)
+    # 险资：只有平安
+    assert groups["insurance"]["stocks"] == 1
+    # 合计只数**按股票去重**：601988/601398/000333/601318 = 4（601398 同时被汇金与社保持有）
+    assert ov["totals"]["stocks"] == 4
+    assert ov["totals"]["group_stocks_summed"] == 5
+    # 未在榜组：证金、外汇局
+    absent = {a["group_key"] for a in ov["absent_holders"]}
+    assert {"csf", "safe"} <= absent
 
 
 def test_overview_without_data_is_explicit(engine):
     ov = nt.overview(engine, kind="float")
-    assert ov["available"] is False
-    assert "尚未采集" in ov["reason"]
+    assert ov["available"] is False and "尚未采集" in ov["reason"]
 
 
-def test_holdings_filters_and_sorts(engine, monkeypatch):
+def test_holdings_filters_by_group_and_account(engine, monkeypatch):
     _seed_two_periods(engine, monkeypatch)
     all_rows = nt.holdings(engine, kind="float")
-    assert all_rows["count"] == 3
-    assert all_rows["items"][0]["stock_code"] == "601988"  # 市值最大(7000)
+    assert all_rows["count"] == 5
 
-    only_asset = nt.holdings(engine, kind="float", holder="huijin_asset", sort="hold_num", desc=False)
-    assert only_asset["count"] == 2
-    assert [i["stock_code"] for i in only_asset["items"]] == ["000333", "601318"]
+    ssb = nt.holdings(engine, kind="float", holder="ssb")
+    assert ssb["count"] == 2
+    assert {i["group_key"] for i in ssb["items"]} == {"ssb"}
+    # 具体账户名保留在明细里（社保组合 / 险资产品名）
+    assert any("全国社保基金" in (i["holder_name"] or "") for i in ssb["items"])
 
     by_name = nt.holdings(engine, kind="float", q="平安")
     assert by_name["count"] == 1 and by_name["items"][0]["stock_code"] == "601318"
 
 
-def test_changes_zero_movement_is_not_reported_as_missing(engine, monkeypatch):
-    """零变动必须能和「没有可比报告期」区分开（两者都表现为空列表，语义完全不同）。"""
-    ht = nt.HOLDER_BY_KEY["huijin_invest"]
+def test_changes_are_group_level(engine, monkeypatch):
+    _seed_two_periods(engine, monkeypatch)
+    ch = nt.changes(engine, kind="float")
+    kinds = {(i["group_key"], i["stock_code"], i["kind"]) for i in ch["items"]}
+    assert ("insurance", "601318", "new") in kinds       # 平安新进
+    assert ("ssb", "600036", "exit") in kinds            # 招行退出
+    assert ch["available"] is True and ch["computed"] is True
+
+
+def test_changes_zero_movement_is_not_missing(engine, monkeypatch):
     rows = {
-        (nt.REPORT_TABLES["float"], ht["name"], "2026-09-30"): [_src_row("601988", "中国银行", 100.0, cap=1.0)],
-        (nt.REPORT_TABLES["float"], ht["name"], "2026-06-30"): [
-            _src_row("601988", "中国银行", 100.0, cap=1.0, end="2026-06-30")
+        (nt.REPORT_TABLES["float"], "2026-09-30"): [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", 100.0, cap=1.0),
+        ],
+        (nt.REPORT_TABLES["float"], "2026-06-30"): [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", 100.0, cap=1.0, end="2026-06-30"),
         ],
     }
-    monkeypatch.setattr(nt, "_query_rows", _fake_query(rows))
-    nt.sync(engine, periods=["2026-09-30", "2026-06-30"], report_kinds=["float"], holders=[ht])
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2026-06-30", report_kinds=["float"])
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
     ch = nt.changes(engine, kind="float")
-    assert ch["available"] is True and ch["computed"] is True
-    assert ch["items"] == [] and ch["counts"]["unchanged"] == 1
+    assert ch["available"] is True and ch["items"] == [] and ch["counts"]["unchanged"] == 1
     assert "reason" not in ch
 
 
 def test_changes_single_period_is_explicit(engine, monkeypatch):
-    ht = nt.HOLDER_BY_KEY["huijin_invest"]
-    rows = {(nt.REPORT_TABLES["float"], ht["name"], "2026-09-30"): [_src_row("601988", "中国银行", 100.0)]}
-    monkeypatch.setattr(nt, "_query_rows", _fake_query(rows))
-    nt.sync(engine, periods=["2026-09-30"], report_kinds=["float"], holders=[ht])
+    rows = {(nt.REPORT_TABLES["float"], "2026-09-30"): [
+        _src("601988", "中国银行", "中央汇金投资有限责任公司", 100.0)]}
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
     ch = nt.changes(engine, kind="float")
     assert ch["available"] is False and "只有一期数据" in ch["reason"]
-
-
-def test_changes_classifies_new_exit_increase(engine, monkeypatch):
-    _seed_two_periods(engine, monkeypatch)
-    ch = nt.changes(engine, kind="float")
-    kinds = {(i["stock_code"], i["kind"]) for i in ch["items"]}
-    assert ("000333", "new") in kinds        # 上期没有 → 新进
-    assert ("600585", "exit") in kinds       # 本期没有 → 退出
-    assert ch["counts"]["unchanged"] == 2    # 中国平安、中国银行持股数未变
-    assert ch["counts"]["new"] == 1 and ch["counts"]["exit"] == 1
 
 
 def test_routes_mounted():
