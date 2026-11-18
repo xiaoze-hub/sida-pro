@@ -7527,6 +7527,40 @@ CREATE TABLE IF NOT EXISTS national_team_holdings (
     )
 
 
+def _m252_national_team_holder_registry(conn: Connection) -> None:
+    """国家队/机构持有人名单（2026-11-18，加入社保与险资）。
+
+    为什么需要：东财 datacenter **不支持 `like`**（只支持精确等值与 `in (...)`），
+    而社保基金有上百个「全国社保基金×××组合」、险资有数百个「××保险股份有限公司-产品账户」，
+    名字事先不可枚举。做法是从**全市场扫描**里认出这些名字，落到本表；之后每期刷新只需
+    `in (...)` 按名单查，秒级完成，不必每次都拉 5 万多行。
+
+    表很小（当前约数百行），只记录名字与分组，不存持仓数值。
+    """
+    if _has_table(conn, "national_team_holder_registry"):
+        return
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS national_team_holder_registry (
+    holder_name VARCHAR(160) PRIMARY KEY,
+    group_key VARCHAR(16) NOT NULL,
+    holder_group VARCHAR(32),
+    first_seen VARCHAR(10),
+    last_seen VARCHAR(10),
+    rows_seen INTEGER
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_national_team_registry_group "
+            "ON national_team_holder_registry (group_key)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -7787,6 +7821,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     ),
     # 国家队持仓(汇金/证金/外汇局三平台): 报告期×口径×主体×股票唯一, 采集幂等 upsert。
     Migration(251, "national_team_holdings", _m251_national_team_holdings),
+    # 社保组合 / 险资产品账户的名字无法事先枚举, 从全市场扫描里认出来存这里(2026-11-18)。
+    Migration(252, "national_team_holder_registry", _m252_national_team_holder_registry),
 )
 
 

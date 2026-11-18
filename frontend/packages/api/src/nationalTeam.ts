@@ -1,5 +1,5 @@
 /**
- * 国家队动向 API 客户端（2026-11-18）。
+ * 国家队 / 机构持仓 API 客户端（2026-11-18）。
  *
  * **契约来源是代码，不是猜**：`src/web/api/national_team.py`（前缀 `/api/national-team`）
  *  + `src/core/national_team.py` 模块 docstring。
@@ -19,15 +19,18 @@ import { fetchAPI } from './client'
 
 export type NationalTeamReportKind = 'float' | 'total'
 
+/** 机构组汇总（组内多账户合并：只数按股票去重、持股与市值相加）。 */
 export interface NationalTeamGroup {
-  holder_key: string
-  holder_name: string
-  holder_group: string
   group_key: string
+  group_label: string
+  group_desc: string
+  /** 组内命中的股票只数（去重） */
   stocks: number
-  /** 持股数（股） */
+  /** 组内命中的持有人账户数（社保组合 / 险资产品账户各算一个） */
+  holders: number
+  /** 持股数（股，组内相加） */
   hold_num: number
-  /** 持股市值（元） */
+  /** 持股市值（元，组内相加） */
   market_cap: number
   /** 源端缺市值的行数（>0 表示合计是下限） */
   market_cap_missing: number
@@ -36,10 +39,9 @@ export interface NationalTeamGroup {
 }
 
 export interface NationalTeamAbsentHolder {
-  holder_key: string
-  holder_name: string
-  holder_group: string
   group_key: string
+  group_label: string
+  group_desc: string
   note: string
 }
 
@@ -92,9 +94,11 @@ export type NationalTeamChangeKind = 'new' | 'increase' | 'decrease' | 'exit' | 
 
 export interface NationalTeamChangeItem {
   kind: NationalTeamChangeKind
-  holder_key: string
-  holder_name: string
+  group_key: string
+  /** 机构组标签（如「险资」）—— 同组多账户已在后端按股票合并 */
   holder_group: string
+  /** 同 holder_group（保留原字段名，便于旧消费者） */
+  holder_name: string
   stock_code: string
   stock_name: string | null
   /** 本期持股数（退出为 0） */
@@ -108,6 +112,8 @@ export interface NationalTeamChangeItem {
   cur_cap: number | null
   prev_cap: number | null
   change_type: string | null
+  /** 本期命中该股的账户数（组内） */
+  cur_holders?: number
 }
 
 export interface NationalTeamChangesResponse {
@@ -195,11 +201,14 @@ export const nationalTeamApi = {
     )
   },
 
-  /** owner 手动采集（幂等）。非 owner → 后端 403，页面照实提示。 */
-  refresh(periods?: string): Promise<NationalTeamRefreshReceipt> {
-    return fetchAPI<NationalTeamRefreshReceipt>(withQuery('/national-team/refresh', { periods }), {
-      method: 'POST',
-      cacheMode: 'reload',
-    })
+  /**
+   * owner 手动采集（幂等）。非 owner → 后端 403，页面照实提示。
+   * `mode='scan'` 走全市场扫描（数分钟，用于新报告期首采 / 认全社保与险资账户）。
+   */
+  refresh(params: { periods?: string; mode?: 'targeted' | 'scan' } = {}): Promise<NationalTeamRefreshReceipt> {
+    return fetchAPI<NationalTeamRefreshReceipt>(
+      withQuery('/national-team/refresh', { periods: params.periods, mode: params.mode }),
+      { method: 'POST', cacheMode: 'reload' },
+    )
   },
 }
