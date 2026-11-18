@@ -1,5 +1,15 @@
 ## [未发布]
 
+### feat-国家队动向监控(汇金/证金/外汇局三平台)(2026-11-18)
+
+- **新增页 `/national-team`「国家队动向」**：主体汇总（只数/持股市值/环比变动只数）+ 持仓明细（按主体、代码/名称筛选）+ 季度环比（新进/加仓/减仓/退出），挂在决策组、`view_quotes` 权限。
+- **后端**：`src/core/national_team.py` 从东方财富 `RPT_F10_EH_FREEHOLDERS`（十大流通股东）/ `RPT_F10_EH_HOLDERS`（十大股东）按**股东全称精确过滤**采集（源端不支持 `like`，模糊查询会直接报错），落 `national_team_holdings`（迁移 251，`(报告期,口径,主体,股票)` 唯一，幂等 upsert + 源端消失行清理）。
+- **API**：`GET /api/national-team/{overview,holdings,changes}`（biz_cache 10 分钟，读库失败不缓存）+ `POST /refresh`（owner 手动采集，返回 receipt）。表为空一律 `available=false` + reason，不补 0 行。
+- **调度**：`NationalTeamScheduler` 每天 19:40 只查一次「上游最新报告期是否比库里新」，新了才采最近两期（`SIDA_NATIONAL_TEAM_SYNC=0` 可关）。
+- **口径写死在代码与页面上**：季报口径非实时；只含进入前十大股东/十大流通股东的持仓（第 11 名以后上游不提供）；**不含宽基 ETF**（汇金 ETF 重仓只在基金半年报/年报「前十大持有人」披露，东财 datacenter 无此报表）；A+H 混行未拆分。外汇局三平台本期未在榜的事实单独列出，不算采集失败。
+- 实测（2026-11-18 采集 2026-09-30 数据）：汇金投资 8 只 / 50,479 亿、证金 23 只 / 2,171 亿、汇金资管 17 只 / 864 亿，全部环比「不变」。
+- 测试：`tests/test_national_team.py` 10 例（迁移注册、非法行丢弃、sync 幂等与旧行清理、汇总/明细/环比口径、空表显式无数据、路由挂载）；`tsc --noEmit`、`pnpm build`、`ui:check`（仅剩 main 既有 2 条违规）、`check_is_pg_scope`、`check_scoped_queries` 全部通过。
+
 ### fix-CI 四次校准(2026-11-18)
 
 - `test_judgment_routing::test_name_lookup_is_cached`: 本地全市场名单可用时这句根本不走 TQ(0 次调用, 比联网更好), 原断言 `first>=1` 因环境而红 → 显式关掉本地索引, 只测 TQ 缓存路径。

@@ -28,6 +28,7 @@ from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
 from src.core.market_breadth_scheduler import MarketBreadthScheduler
 from src.core.board_anomaly_scheduler import BoardAnomalyScheduler
+from src.core.national_team_scheduler import NationalTeamScheduler
 from src.core.decision_precompute import DecisionPrecomputeScheduler
 from src.core.layer_precompute import LayerPrecomputeScheduler
 from src.web.database import SessionLocal, init_db
@@ -331,6 +332,20 @@ async def lifespan(app):
             logger.info("板块异动采样调度器已启动")
         except Exception as e:
             logger.error(f"板块异动采样调度器启动失败: {e}")
+
+        # 国家队持仓同步(2026-11-18)
+        # 为什么需要: 汇金/证金/外汇局的持仓是季报口径(一年四更), 上游报告期出现得很静默;
+        # 没有调度就只能靠人点刷新, 页面「报告期」会永远停在上次手动采集那期。
+        # 每天 19:40 只查一次「上游最新报告期是否比库里新」, 新了才采最近两期(当期+上期供环比)。
+        try:
+            settings = Settings()
+            rt.national_team_scheduler = NationalTeamScheduler(
+                timezone=settings.app_timezone
+            )
+            rt.national_team_scheduler.start()
+            logger.info("国家队持仓同步调度器已启动")
+        except Exception as e:
+            logger.error(f"国家队持仓同步调度器启动失败: {e}")
 
         # 决策合成预落库(2026-10-10 冗余设计)
         # 为什么需要: /api/decision/{symbol} 是实时计算端点(拉 120 天 K 线 + 明暗盘资金),

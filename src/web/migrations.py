@@ -7470,6 +7470,63 @@ def _m250_prediction_outcome_versions_and_system_scope(conn: Connection) -> None
         )
 
 
+def _m251_national_team_holdings(conn: Connection) -> None:
+    """国家队（汇金/证金/外汇局三平台）季度持仓表（2026-11-18）。
+
+    为什么需要：`/api/national-team/*` 要回答「国家队这个季度拿什么、加了谁减了谁」，
+    数据来自东方财富十大股东 / 十大流通股东报表（按股东全称精确过滤）。上游是季报口径
+    （一年四更），不适合每次请求都打源端，落一张按 (报告期, 口径, 主体, 股票) 唯一的表，
+    采集幂等 upsert，页面只读。
+
+    口径硬约束（写进表设计，不允许下游含糊）：
+    - `report_kind`：`float` = 十大流通股东（覆盖更全）、`total` = 十大股东（带持股比例）；
+    - 只有进入前十大的持仓可见，第 11 名以后上游不提供 —— 这不是采集缺口，是披露规则；
+    - **不含 ETF 持仓**：汇金在宽基 ETF 上的重仓只在基金半年报/年报「前十大持有人」披露，
+      东财 datacenter 没有对应报表（实测 RPT_FUND_HOLDER* 全部「报表配置不存在」），
+      因此本表是**个股直投**口径，页面不得把它说成国家队总持仓；
+    - `market_cap` 直接取源端 `HOLDER_MARKET_CAP`，A+H 混行（如建行）未拆分，
+      不在本表自行乘价重算。
+    """
+    if _has_table(conn, "national_team_holdings"):
+        return
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS national_team_holdings (
+    report_date VARCHAR(10) NOT NULL,
+    report_kind VARCHAR(8) NOT NULL,
+    holder_key VARCHAR(32) NOT NULL,
+    stock_code VARCHAR(6) NOT NULL,
+    holder_name VARCHAR(64) NOT NULL,
+    holder_group VARCHAR(32),
+    group_key VARCHAR(16),
+    stock_name VARCHAR(64),
+    hold_num DOUBLE PRECISION NOT NULL,
+    hold_ratio DOUBLE PRECISION,
+    market_cap DOUBLE PRECISION,
+    holder_rank INTEGER,
+    change_type VARCHAR(16),
+    shares_type VARCHAR(32),
+    snapshot_at VARCHAR(32),
+    source VARCHAR(32)
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_national_team_holdings_pk "
+            "ON national_team_holdings (report_date, report_kind, holder_key, stock_code)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_national_team_holdings_period "
+            "ON national_team_holdings (report_date, report_kind)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -7728,6 +7785,8 @@ MIGRATIONS: tuple[Migration, ...] = (
         "prediction_outcome_versions_and_system_scope",
         _m250_prediction_outcome_versions_and_system_scope,
     ),
+    # 国家队持仓(汇金/证金/外汇局三平台): 报告期×口径×主体×股票唯一, 采集幂等 upsert。
+    Migration(251, "national_team_holdings", _m251_national_team_holdings),
 )
 
 
