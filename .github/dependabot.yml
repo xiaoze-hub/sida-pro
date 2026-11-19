@@ -1,7 +1,7 @@
-# Dependabot 周更配置 (W2.5/E6, 2026-09-09)
-# 三个生态 weekly; 版本升级 PR 各自归一组(每组一个 PR, 控制噪音)。
-# 安全更新: Dependabot security updates(基于告警)自动单独开 PR、不在此分组,
-# 即"版本升级合并走周更组, 安全修复单独走" —— 与整改方案 2.5 第 3 条一致。
+# Dependabot 周更配置 (W2.5/E6, 2026-09-09; 2026-11-19 拆组)
+# 三个生态 weekly; 按 **patch/minor** 与 **major** 分两组, 避免"一次升 119 个包"的巨型 PR
+# (那种 PR 必然 CI 全红、无人可审, 实测长期挂着 3 个红 PR 反而伤害仓库观感)。
+# 安全更新: Dependabot security updates(基于告警)自动单独开 PR、不在此分组。
 version: 2
 updates:
   # Python 后端: requirements-lock.txt 命中 dependabot 的 requirements-*.txt 匹配,
@@ -11,28 +11,44 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
     groups:
-      python-deps:
+      python-patch-minor:
         patterns:
           - '*'
-    open-pull-requests-limit: 5
+        update-types:
+          - minor
+          - patch
+      python-major:
+        patterns:
+          - '*'
+        update-types:
+          - major
 
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
     groups:
-      npm-deps:
+      npm-patch-minor:
         patterns:
           - '*'
-    open-pull-requests-limit: 5
+        update-types:
+          - minor
+          - patch
+      npm-major:
+        patterns:
+          - '*'
+        update-types:
+          - major
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
     groups:
       actions-deps:
         patterns:
           - '*'
-    open-pull-requests-limit: 5

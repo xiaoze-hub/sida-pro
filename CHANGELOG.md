@@ -1,5 +1,11 @@
 ## [未发布]
 
+### chore-依赖升级 PR 拆组，止住"巨型 PR"噪音(2026-11-19)
+
+- `dependabot.yml` 原先每个生态只分一组（`patterns: '*'`），实测开出「一次升 119 个包」的 python PR，必然 CI 全红、无法审阅，长期挂着 3 个红 PR。
+- 改为按 **patch/minor** 与 **major** 两组，并把 `open-pull-requests-limit` 收到 3；安全更新仍由 Dependabot security updates 单独开 PR，不受本次分组影响。
+- 存量 3 个红 PR（#57/#60/#61）与已被 main 取代的 #20 一并关闭，下一轮按新分组重开。
+
 ### fix-依赖漏洞周扫描无法启动(失效的 setup-node SHA)(2026-11-19)
 
 - `audit.yml` 的 `npm-audit` 作业用了 `actions/setup-node@1e60f620…`，该 SHA 在远端**已不存在**（GitHub 解析 `unable to find version`），导致整个周扫描从 9 月起一直**跑不起来**——不是"没有漏洞"，是"扫描器没启动"。
