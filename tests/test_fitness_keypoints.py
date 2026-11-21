@@ -203,7 +203,13 @@ def test_score_run_without_symbol(monkeypatch):
 # ------------------------------------------------------------------- aggregate
 
 
-def test_aggregate_refuses_rates_below_min_samples(monkeypatch):
+@pytest.fixture
+def aggregate_clock(monkeypatch):
+    # 固定被测窗口的时钟，与这组历史运行和已走完的 T+3 行情使用同一时间线。
+    monkeypatch.setattr(fk, "db_now_naive", lambda: datetime(2026, 10, 24, 6))
+
+
+def test_aggregate_refuses_rates_below_min_samples(monkeypatch, aggregate_clock):
     """n < min_samples：只给 n 与原因，`*_rate` 键必须**不存在**（不是 0）。"""
     bars = _bars([
         ("2026-10-20", 34.0, 34.5, 33.5, 34.1),
@@ -227,7 +233,7 @@ def test_aggregate_refuses_rates_below_min_samples(monkeypatch):
         assert forbidden not in out, f"样本不足时不许出现 {forbidden}"
 
 
-def test_aggregate_emits_rates_only_when_n_clears_threshold(monkeypatch):
+def test_aggregate_emits_rates_only_when_n_clears_threshold(monkeypatch, aggregate_clock):
     bars = _bars([
         ("2026-10-20", 34.0, 34.5, 33.5, 34.1),
         ("2026-10-21", 34.1, 36.2, 33.0, 35.5),
@@ -236,8 +242,8 @@ def test_aggregate_emits_rates_only_when_n_clears_threshold(monkeypatch):
     ])
     _patch_bars(monkeypatch, bars)
     db = FakeTraceDB(
-        runs=[_run(run_id="run-1"), _run(run_id="run-2")],
-        steps=[_step(run_id="run-1"), _step(run_id="run-2")],
+        runs=[_run(run_id="run-1"), _run(run_id="run-2"), _run("outside", datetime(2026, 9, 23, 6))],
+        steps=[_step(run_id="run-1"), _step(run_id="run-2"), _step(run_id="outside")],
     )
 
     out = fk.aggregate(db, days=30, min_samples=2)
