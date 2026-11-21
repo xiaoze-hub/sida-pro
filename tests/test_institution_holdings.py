@@ -585,11 +585,10 @@ async def test_etf_gap_is_stated_not_fabricated(seeded):
 
 
 async def test_cross_check_against_api_layer(seeded, monkeypatch):
-    """路由函数与直查必须同一查询、同一结果（缓存直通，engine 指向测试库）。"""
+    """API 与参谋直查共用同一份隔离数据库，对拍真实查询结果。"""
     from src.web.api import national_team as api_mod
 
     monkeypatch.setattr(api_mod, "engine", seeded)
-    monkeypatch.setattr(api_mod, "_cached", lambda key, producer: producer())
 
     api_hold = api_mod.national_team_holdings(
         report_date=None, kind="float", holder="huijin", q=None,
