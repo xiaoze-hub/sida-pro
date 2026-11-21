@@ -711,6 +711,10 @@ def get_copilot_run_baseline(
     """只读 7/30 天运行基线：每场景 n / 状态 / P50·P90 / 可用数据覆盖。
 
     只统计**本人**窗口内已有 run；不补历史、不回填、不迁移。
+
+    **只取聚合需要的列**：不查 `copilot_runs.question`（用户原文）与
+    `copilot_steps.args / result_digest`（可能是持仓/自选摘要）。基线是统计接口，
+    没有理由为了算分位数把敏感内容整行拉进内存再丢掉。
     """
     from datetime import timedelta
 
@@ -721,15 +725,27 @@ def get_copilot_run_baseline(
 
     since = db_now_naive() - timedelta(days=days)
     rows = (
-        db.query(CopilotRun)
+        db.query(
+            CopilotRun.run_id,
+            CopilotRun.recipe,
+            CopilotRun.status,
+            CopilotRun.elapsed_ms,
+            CopilotRun.error,
+            CopilotRun.tool_calls,
+            CopilotRun.conversation_id,
+            CopilotRun.dispatch_reason,
+        )
         .filter(CopilotRun.user_id == str(user.id), CopilotRun.created_at >= since)
         .all()
     )
+    # 聚合只用 run_id 与 elapsed_ms：工具名/参数/摘要都不进这一层。
     steps_by_run: dict[str, list] = {}
     if rows:
         run_ids = [r.run_id for r in rows]
         for step in (
-            db.query(CopilotStep).filter(CopilotStep.run_id.in_(run_ids)).all()
+            db.query(CopilotStep.run_id, CopilotStep.elapsed_ms)
+            .filter(CopilotStep.run_id.in_(run_ids))
+            .all()
         ):
             steps_by_run.setdefault(step.run_id, []).append(step)
     return build_copilot_run_baseline(rows, days=days, steps_by_run=steps_by_run)

@@ -9,17 +9,33 @@
              正文必须过最小长度且不是错误占位。SSE 的 status/progress/ping
              只证明「还在跑」，**不算成功**；半截进度文本也不算终稿。
 
-**时间口径**（只报观测到的，没观测到写 null）：
-  queue_ms            提交 → 首次看到非 queued
+**两种模式（一个只读、一个会写）**：
+  --baseline  只读：GET /api/copilot/baseline?days=7|30，不提交 run、不改数据；
+  默认        会写：提交一条**真实**问答 run（生产上就是一条真实记录），
+              所以生产必须显式 `--allow-production`。
+
+**时间口径**（全部是**探针自己观测**的，只报观测到的；没观测到写 null）：
+  queue_ms                提交 → 首次看到非 queued
   fetch_to_first_step_ms  首次非 queued → 首次看到工具步骤（取数开始）
   first_observed_body_ms  提交 → 首次看到 assistant 正文
-  total_ms            提交 → 终态
-  ttft_available      恒为 False（本入口没有 token 级流；不拿结束时间冒充首字）
+  total_ms                提交 → 终态
+  这些都含客户端轮询粒度（--poll），是**探针视角**的耗时，不是服务端
+  TTFT；`ttft_available` 恒为 False —— 本入口没有 token 级流，绝不拿
+  结束时间冒充首字。
+
+**超时**：默认 660s，略高于服务端单轮硬超时（`RUN_TIMEOUT_S=600`）。
+  探针比服务端先放弃，只会把「服务端还在跑」误判成超时。
 
 **安全边界**：
   - 默认只允许 loopback / 显式 staging；生产域名必须 `--allow-production`；
   - 每个问题都是通用市场问题，不带任何真实用户持仓/自选；
-  - token 只从 env/文件读，输出与日志里不出现 token、密码、带凭据 URL。
+  - 凭据只从 env（`SIDA_PROBE_TOKEN`）或文件（`SIDA_PROBE_TOKEN_FILE`）读；
+    没有「用户名+密码」登录路径 —— 验证码/限流只会让探针产生假失败，
+    还多一个更宽的口令入口；
+  - 输出与日志里不出现 token、密码、带凭据 URL；**不打印回答原文**；
+  - `--cancel-on-timeout` 是**写**操作，默认关闭：只取消本次提交返回的
+    同一个 run_id，且必须先在详情里确认「同一个 run、还没到终态」；
+  - 绿只说明协议通、拿到了终稿，不代表回答的业务质量。
 
 用法：:
 
@@ -52,6 +68,14 @@ from urllib.parse import quote, urlsplit
 DEFAULT_BASE = os.environ.get("SIDA_PROBE_BASE", "http://127.0.0.1:8000")
 DEFAULT_QUESTION = "今天 A 股市场的主线题材是什么？"
 MIN_ANSWER_CHARS = 80
+
+#: 等待 run 终态的默认秒数：**略高于**服务端单轮硬超时（600s），
+#: 否则探针先放弃会把「服务端还在跑」写成超时失败。
+DEFAULT_TIMEOUT_S = 660.0
+DEFAULT_POLL_S = 2.0
+
+#: 取消只对「提交后仍在跑」的这次 run 有意义；这些状态一律不再发取消请求。
+NON_CANCELLABLE = frozenset({"ok", "degraded", "error", "failed", "cancelled", "succeeded"})
 
 #: 明确的生产域名（判不准的远端主机也按生产处理，默认拒绝）。
 PRODUCTION_HOSTS = frozenset({"sida.hengsheng-elec.com", "www.sida.hengsheng-elec.com"})
@@ -178,6 +202,7 @@ class Timeline:
     """只记录**观测到**的时刻；缺失即 None，不用 0 或推断值填充。"""
 
     marks: dict[str, float] = field(default_factory=dict)
+    poll_s: float | None = None      # 观测粒度：这些耗时都含轮询区间
 
     def mark(self, name: str, t: float | None = None) -> None:
         self.marks.setdefault(name, time.monotonic() if t is None else float(t))
@@ -201,19 +226,45 @@ class Timeline:
             # 没有 token 级流事实源：永不自称 TTFT
             "ttft_available": False,
             "first_body_is_final": bool(m.get("first_body_is_final")),
+            # 这些都是探针自己掐表（含轮询粒度），不是服务端指标
+            "measured_by": "probe",
+            "clock": "monotonic",
+            "poll_interval_s": self.poll_s,
         }
 
 
-def make_report(*, base: str, environment: str, layers: dict, timeline: Timeline | None = None) -> dict:
-    """报告只含可复述事实：层结果 + 时间线（已脱敏的 base）。"""
+def make_report(*, base: str, environment: str, layers: dict,
+                timeline: Timeline | None = None) -> dict:
+    """报告只含可复述事实：层结果 + 时间线（已脱敏的 base）。
+
+    `mode/read_only/writes_run` 是给读者的一眼判据：这个模式会不会写一条真实
+    问答记录。**不含回答原文**（只报字符数与失败原因）。
+    """
     ok = all(bool(v.get("ok")) for v in layers.values())
     return {
         "ok": ok,
         "base": safe_text(base),
         "environment": environment,
+        "mode": "probe",
+        "read_only": False,
+        "writes_run": True,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "layers": layers,
         "timeline": (timeline or Timeline()).as_dict(),
+    }
+
+
+def make_baseline_report(*, base: str, environment: str, baseline: dict) -> dict:
+    """只读基线的报告：`read_only=True`，没有 layers 也没有时间线。"""
+    return {
+        "ok": True,
+        "base": safe_text(base),
+        "environment": environment,
+        "mode": "baseline",
+        "read_only": True,
+        "writes_run": False,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "baseline": baseline,
     }
 
 
@@ -273,9 +324,11 @@ def _api_object(body: str) -> dict:
 
 
 def resolve_token(base: str, env: dict | None = None) -> tuple[str, str]:
-    """token 来源：SIDA_PROBE_TOKEN > SIDA_PROBE_TOKEN_FILE > 用户名密码登录。
+    """token 来源：SIDA_PROBE_TOKEN > SIDA_PROBE_TOKEN_FILE。**没有口令路径**。
 
-    返回 (token, source)。登录失败只报 HTTP 状态，**不回显响应体**（可能含细节）。
+    返回 (token, source)。为什么不留用户名+密码登录：登录要过验证码/限流/风控，
+    探针走这条路只会把「登录被拦」误报成产品故障，而且凭据会被送进一个比
+    「直接给一把只读探针 token」更宽的入口。缺 token 就是配置错误（退出码 2）。
     """
     env = os.environ if env is None else env
     token = (env.get("SIDA_PROBE_TOKEN") or "").strip()
@@ -290,24 +343,10 @@ def resolve_token(base: str, env: dict | None = None) -> tuple[str, str]:
             raise ProbeConfigError(f"读不到 SIDA_PROBE_TOKEN_FILE: {e}") from e
         if token:
             return token, "token:file"
-    username = (env.get("SIDA_PROBE_USERNAME") or "").strip()
-    password = env.get("SIDA_PROBE_PASSWORD") or ""
-    if not username or not password:
-        raise ProbeConfigError(
-            "缺少凭据：设置 SIDA_PROBE_TOKEN（或 SIDA_PROBE_TOKEN_FILE），"
-            "或 SIDA_PROBE_USERNAME/SIDA_PROBE_PASSWORD 走登录"
-        )
-    status, body, _ = _request(
-        base, "/api/auth/login", method="POST",
-        payload={"username": username, "password": password}, timeout=20.0,
+    raise ProbeConfigError(
+        "缺少凭据：设置 SIDA_PROBE_TOKEN（或 SIDA_PROBE_TOKEN_FILE）。"
+        "本探针不提供用户名/密码登录路径（验证码与限流会让检查失去可比性）"
     )
-    if status != 200:
-        raise ProbeConfigError(f"登录失败 HTTP {status}（响应体不回显）")
-    data = _api_object(body)
-    token = (data.get("token") or "").strip()
-    if not token:
-        raise ProbeConfigError("登录响应里没有 token")
-    return token, "login"
 
 
 # ── 分层探测 ──────────────────────────────────────────────────────────────
@@ -352,20 +391,55 @@ def _bound_message(body: str, conversation_id: int, run_id: str) -> str:
     return final_answer_text(payload.get("messages") or [], run_id=run_id)
 
 
+def cancel_submitted_run(base: str, token: str, run_id: str) -> dict:
+    """超时后只取消**本次自己刚提交**的那一条 run（写操作，默认不调用）。
+
+    不是「探针失败了就顺手清场」，而是按产品真实协议一步步确认：
+      1. 取详情，`run.run_id` 必须等于提交时服务端返回的 run_id（不是别人的 run）；
+      2. 该 run 必须还没到终态 —— 终态 run 不可取消（服务端会 409）；
+      3. 只对这一条发一次 `POST /runs/{run_id}/cancel`，不批量、不猜 id、不改别的路径。
+    任何一步不满足就放弃并写明原因；取消成功也**不算**这轮问答成功。
+    """
+    if not run_id:
+        return {"attempted": False, "reason": "no_run_id"}
+    path = f"/api/copilot/runs/{quote(run_id, safe='')}"
+    st, body, _ = _request(base, path, token=token, timeout=15.0)
+    if st != 200:
+        return {"attempted": False, "reason": f"detail_http={st}"}
+    run = (_api_object(body).get("run") or {})
+    if not isinstance(run, dict) or run.get("run_id") != run_id:
+        return {"attempted": False, "reason": "run_identity_unverified"}
+    current = (run.get("status") or "").lower()
+    if current in NON_CANCELLABLE:
+        return {"attempted": False, "reason": f"already_terminal:{current}"}
+    cs, cb, _ = _request(base, path + "/cancel", method="POST", token=token, timeout=20.0)
+    payload = _api_object(cb)
+    return {
+        "attempted": True,
+        "http": cs,
+        "ok": cs in (200, 202),
+        "status": (payload.get("status") if isinstance(payload, dict) else None),
+    }
+
+
 def probe_qa(base: str, token: str, *, question: str, min_chars: int,
-             timeout_s: float = 300.0, poll_s: float = 2.0) -> tuple[dict, Timeline]:
+             timeout_s: float = DEFAULT_TIMEOUT_S, poll_s: float = DEFAULT_POLL_S,
+             cancel_on_timeout: bool = False) -> tuple[dict, Timeline]:
     """真问题 → 会话终稿。SSE 未参与判定：进度/心跳不是成功。"""
     tl = Timeline()
+    tl.poll_s = poll_s
     tl.mark("submit")
     status, body, _ = _request(
         base, "/api/copilot/runs", method="POST", token=token,
         payload={"question": question}, timeout=20.0,
     )
     if status not in (200, 202):
-        return {"ok": False, "detail": f"submit={status}", "reasons": [f"submit_http={status}"]}, tl
+        return {"ok": False, "detail": f"submit={status}", "reasons": [f"submit_http={status}"],
+                "cancel": {"attempted": False, "reason": "not_submitted"}}, tl
     run_id = ((_api_object(body)).get("run_id") or "").strip()
     if not run_id:
-        return {"ok": False, "detail": "submit 未返回 run_id", "reasons": ["no_run_id"]}, tl
+        return {"ok": False, "detail": "submit 未返回 run_id", "reasons": ["no_run_id"],
+                "cancel": {"attempted": False, "reason": "no_run_id"}}, tl
 
     deadline = time.monotonic() + timeout_s
     run: dict = {}
@@ -376,11 +450,14 @@ def probe_qa(base: str, token: str, *, question: str, min_chars: int,
     while time.monotonic() < deadline:
         st, rb, _ = _request(base, f"/api/copilot/runs/{quote(run_id, safe='')}", token=token, timeout=15.0)
         if st == 404:
-            return {"ok": False, "detail": "run 详情 404", "reasons": ["run_not_found"]}, tl
+            return {"ok": False, "detail": "run 详情 404", "reasons": ["run_not_found"],
+                    "cancel": {"attempted": False, "reason": "run_not_found"}}, tl
         payload = _api_object(rb)
         run = payload.get("run") or {}
         if st != 200 or not isinstance(run, dict) or run.get("run_id") != run_id:
-            return {"ok": False, "detail": "run 详情身份无法核验", "reasons": ["run_detail_unverified"]}, tl
+            return {"ok": False, "detail": "run 详情身份无法核验",
+                    "reasons": ["run_detail_unverified"],
+                    "cancel": {"attempted": False, "reason": "identity_unverified"}}, tl
         steps = payload.get("steps") or []
         last_status = (run.get("status") or "unknown").lower()
 
@@ -406,11 +483,17 @@ def probe_qa(base: str, token: str, *, question: str, min_chars: int,
         time.sleep(poll_s)
 
     if not tl.has("final"):
+        # 超时收尾默认**不写**；显式开启时也只取消本次提交的同一个 run。
+        cancel_info = (
+            cancel_submitted_run(base, token, run_id)
+            if cancel_on_timeout else {"attempted": False, "reason": "disabled"}
+        )
         return {
             "ok": False,
             "detail": f"等待终态超时 status={last_status}",
             "reasons": [f"timeout_waiting_terminal:{last_status}"],
             "run_id": run_id,
+            "cancel": cancel_info,
         }, tl
 
     # 终稿只认会话最后一条 assistant 正文（不看 SSE、不看半截步骤文本）
@@ -440,12 +523,13 @@ def probe_qa(base: str, token: str, *, question: str, min_chars: int,
         "conversation_id": conversation_id,
         "tool_calls": run.get("tool_calls"),
         "elapsed_ms": run.get("elapsed_ms"),
+        "cancel": {"attempted": False, "reason": "terminal_reached"},
     }, tl
 
 
 def run_probe(*, base: str, allow_production: bool, question: str,
               min_chars: int, timeout_s: float, poll_s: float,
-              env: dict | None = None) -> dict:
+              env: dict | None = None, cancel_on_timeout: bool = False) -> dict:
     min_chars = validate_min_chars(min_chars)
     environment = ensure_allowed(base, allow_production=allow_production)
     layers: dict[str, dict] = {"public": probe_public(base)}
@@ -458,7 +542,7 @@ def run_probe(*, base: str, allow_production: bool, question: str,
     layers["ui"] = probe_ui(base, token)
     qa, timeline = probe_qa(
         base, token, question=question, min_chars=min_chars,
-        timeout_s=timeout_s, poll_s=poll_s,
+        timeout_s=timeout_s, poll_s=poll_s, cancel_on_timeout=cancel_on_timeout,
     )
     layers["qa"] = qa
     return make_report(base=base, environment=environment, layers=layers, timeline=timeline)
@@ -487,9 +571,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="允许对生产发问（会写入一条真实问答记录）")
     p.add_argument("--question", default=DEFAULT_QUESTION)
     p.add_argument("--min-answer-chars", type=int, default=MIN_ANSWER_CHARS)
-    p.add_argument("--timeout", type=float, default=300.0, help="等待 run 终态的秒数")
-    p.add_argument("--poll", type=float, default=2.0)
-    p.add_argument("--baseline", action="store_true", help="只读拉取 7/30 天基线")
+    p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S,
+                   help=f"等待 run 终态的秒数（默认 {DEFAULT_TIMEOUT_S:.0f}s，"
+                        "略高于服务端单轮硬超时 600s）")
+    p.add_argument("--poll", type=float, default=DEFAULT_POLL_S,
+                   help="轮询间隔秒（时间线含这个粒度）")
+    p.add_argument("--baseline", action="store_true",
+                   help="只读拉取 7/30 天基线（不提交 run、不改数据）")
+    p.add_argument("--cancel-on-timeout", action="store_true",
+                   help="超时后取消本次自己提交的同一个 run（写操作，默认关闭）")
     p.add_argument("--json", action="store_true", help="整份 JSON 输出")
     p.add_argument("--out", default="", help="把 JSON 报告写到文件")
     return p
@@ -502,18 +592,16 @@ def main(argv: list[str] | None = None) -> int:
         environment = ensure_allowed(args.base, allow_production=args.allow_production)
         if args.baseline:
             token, _ = resolve_token(args.base)
-            report = {
-                "ok": True,
-                "base": safe_text(args.base),
-                "environment": environment,
-                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "baseline": {str(d): fetch_baseline(args.base, token, d) for d in (7, 30)},
-            }
+            report = make_baseline_report(
+                base=args.base, environment=environment,
+                baseline={str(d): fetch_baseline(args.base, token, d) for d in (7, 30)},
+            )
         else:
             report = run_probe(
                 base=args.base, allow_production=args.allow_production,
                 question=args.question, min_chars=min_chars,
                 timeout_s=args.timeout, poll_s=args.poll,
+                cancel_on_timeout=args.cancel_on_timeout,
             )
     except ProbeConfigError as e:
         print(f"配置错误: {safe_text(str(e))}", file=sys.stderr)
@@ -526,9 +614,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(payload)
     else:
-        print(f"{'OK' if report['ok'] else 'FAIL'} {report['environment']} {report['base']}")
+        print(f"{'OK' if report['ok'] else 'FAIL'} {report['environment']} {report['base']} "
+              f"mode={report.get('mode')} read_only={report.get('read_only')}")
         for name, layer in (report.get("layers") or {}).items():
             print(f"  {name:6s} {'ok' if layer.get('ok') else 'FAIL'}  {layer.get('detail', '')}")
+            cancel = layer.get("cancel") or {}
+            if cancel.get("attempted"):
+                print(f"         cancel http={cancel.get('http')} "
+                      f"ok={cancel.get('ok')} status={cancel.get('status')}")
+            elif cancel.get("reason") not in (None, "disabled", "terminal_reached"):
+                print(f"         cancel skipped: {cancel.get('reason')}")
         tl = report.get("timeline") or {}
         if tl:
             print(f"  queue={tl.get('queue_ms')}ms first_step={tl.get('fetch_to_first_step_ms')}ms "

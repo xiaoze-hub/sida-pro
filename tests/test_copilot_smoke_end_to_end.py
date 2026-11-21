@@ -30,6 +30,8 @@ class _State:
         self.mode = "ok"          # ok | short | hang
         self.answer = QUESTION_ANSWER
         self.token_seen = ""
+        self.cancel_calls: list[str] = []
+        self.cancelled = False
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -78,6 +80,9 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(200, [{"id": "full_dossier"}])
         if path.startswith("/api/copilot/runs/"):
             self.state.polls += 1
+            if self.state.cancelled:
+                return self._send(200, {"run": {"status": "cancelled", "conversation_id": 7},
+                                        "steps": []})
             if self.state.mode == "hang":
                 return self._send(200, {"run": {"status": "running", "conversation_id": 7},
                                         "steps": [{"seq": 1, "tool": "get_quote", "ok": True}]})
@@ -118,6 +123,11 @@ class _Handler(BaseHTTPRequestHandler):
             payload = json.loads(raw or b"{}")
             assert payload.get("question")
             return self._send(200, {"run_id": "r-probe", "status": "queued"})
+        if path.startswith("/api/copilot/runs/") and path.endswith("/cancel"):
+            run_id = path.rsplit("/", 2)[-2]
+            self.state.cancel_calls.append(run_id)
+            self.state.cancelled = True
+            return self._send(200, {"run_id": run_id, "status": "cancelled"})
         return self._send(404, {"detail": "not found"})
 
 
@@ -141,6 +151,7 @@ def _probe(server, **kw):
         base=base, allow_production=False, question="今天主线是什么？",
         min_chars=probe.MIN_ANSWER_CHARS, timeout_s=kw.pop("timeout_s", 3.0),
         poll_s=kw.pop("poll_s", 0.05), env={"SIDA_PROBE_TOKEN": "tok-abc"},
+        **kw,
     )
 
 
@@ -206,3 +217,30 @@ def test_probe_reports_failed_tool_as_degradation_cause(server):
     assert any("degraded" in r for r in qa["reasons"])
     assert qa["failed_tools"] == ["get_kline"]
     assert any("failed_tools=get_kline" in r for r in qa["reasons"])
+
+
+# ── 超时收尾: 只取消自己刚提交的同一个 run (2026-11-21 复审) ───────────────
+def test_probe_does_not_cancel_by_default(server):
+    """默认不写：探针失败不等于可以替用户改 run 状态。"""
+    _, state = server
+    state.mode = "hang"
+    report = _probe(server, timeout_s=0.4)
+
+    assert report["ok"] is False
+    assert state.cancel_calls == []
+    assert report["layers"]["qa"]["cancel"] == {
+        "attempted": False, "reason": "disabled",
+    }
+
+
+def test_probe_cancel_on_timeout_only_touches_its_own_run(server):
+    _, state = server
+    state.mode = "hang"
+    report = _probe(server, timeout_s=0.4, cancel_on_timeout=True)
+
+    assert report["ok"] is False, "取消成功也不代表这轮问答成功"
+    assert state.cancel_calls == ["r-probe"], "只允许取消本次提交返回的同一个 run_id"
+    cancel = report["layers"]["qa"]["cancel"]
+    assert cancel["attempted"] is True
+    assert cancel["ok"] is True
+    assert cancel["http"] == 200

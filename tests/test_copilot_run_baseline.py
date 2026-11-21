@@ -335,3 +335,47 @@ def test_trace_stage_mark_never_raises_on_bad_input():
     trace = CopilotTrace()
     trace.mark_stage("x" * 500)          # 超长名应被截断而不是抛错
     assert len(trace.stages[0]["stage"]) <= 32
+
+
+def test_baseline_selects_only_aggregation_columns(db):
+    """基线只读聚合需要的列。
+
+    `SELECT *` 会把用户问题（原文）和工具 args/result_digest（可能是持仓或
+    自选摘要）整行拉进内存 —— 一个统计接口不该顺手复制一遍敏感内容。
+    """
+    from sqlalchemy import event
+
+    from src.web.api.copilot import get_copilot_run_baseline
+
+    me = str(uuid.uuid4())
+    rid = _add(db, me)
+    db.add(CopilotStep(
+        run_id=rid, seq=1, tool="get_kline", ok=True, elapsed_ms=250,
+        args='{"symbol": "600111"}', result_digest="持仓摘要：600111 成本 12.34",
+    ))
+    db.commit()
+
+    statements: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", _capture)
+    try:
+        data = get_copilot_run_baseline(days=7, db=db, user=_User(me))
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+
+    assert data["runs"] == 1
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    run_sql = [s for s in selects if "copilot_runs" in s]
+    step_sql = [s for s in selects if "copilot_steps" in s]
+    assert run_sql and step_sql, statements
+
+    for sql in run_sql:
+        assert "question" not in sql.lower(), f"基线不该取问题原文: {sql}"
+    for sql in step_sql:
+        low = sql.lower()
+        assert "args" not in low, f"基线不该取工具参数: {sql}"
+        assert "result_digest" not in low, f"基线不该取结果摘要: {sql}"

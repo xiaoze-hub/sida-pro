@@ -31,6 +31,8 @@ import logging
 import time
 import uuid
 from datetime import datetime
+from functools import partial
+from time import monotonic as _monotonic
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -78,6 +80,24 @@ def _slots() -> asyncio.Semaphore:
     if _SLOTS is None:
         _SLOTS = asyncio.Semaphore(MAX_CONCURRENT)
     return _SLOTS
+
+
+def _forget_task(run_id: str, task: asyncio.Task) -> None:
+    """任务终止后清进程内簿记（**含「还没跑到协程体就被取消」的情况**）。
+
+    **为什么要 done 回调**：`_execute` 的 `finally` 只在协程体开始执行后才生效。
+    提交后立刻取消（或事件循环还没调度到它）时，协程体一行都不跑，`finally`
+    永远不执行 —— `_TASKS` / `_ENQUEUED_AT` 就各留一条永不释放的记录。
+
+    **只碰这两个 dict**：不读库、不判归属、不改 run 状态 —— 收尾不是授权点，
+    谁有权提交谁就只该影响自己这次的簿记。
+
+    **身份比对**：同一 run_id 的句柄已被新任务替换时，旧回调不能把新任务抹掉。
+    """
+    current = _TASKS.get(run_id)
+    if current is None or current is task:
+        _TASKS.pop(run_id, None)
+        _ENQUEUED_AT.pop(run_id, None)
 
 
 class SubmitRunBody(BaseModel):
@@ -476,15 +496,19 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
     run 行上的记录（`skills_gateway` 的任务入口不传参，不能因此丢配方）。"""
     stop = asyncio.Event()
     hb = asyncio.create_task(_heartbeat_loop(run_id, stop))
-    # 排队等待只在**本进程**入队过时才有观测值; 重启接管来的 run 没有这段事实,
-    # 不写日志、不拿 created_at 反推（误差会把「不知道」伪装成测量）。
-    enqueued = _ENQUEUED_AT.pop(run_id, None)
-    if enqueued is not None:
-        _stage_log(run_id, "dequeue", int((time.monotonic() - enqueued) * 1000))
-    t0 = db_now_naive()
-    _mark(run_id, status="running")
+    # 计时一律用单调钟：墙钟会被 NTP 校时/时区改动拉回或跳过，把耗时算成负数
+    # 或凭空多出几小时。这里只测「这一段跑了多久」，与日历时间无关。
+    t0 = _monotonic()
     try:
         async with _slots():  # 限流：同时最多 MAX_CONCURRENT 轮在跑
+            _mark(run_id, status="running")
+            # 「dequeue」= **真正拿到并发位、这轮开始跑**，不是「任务被调度起来了」。
+            # 排队等 semaphore 的时间必须留在排队段里；记在这里之前，等于把
+            # 「没人干活」伪装成「干活很慢」。只在**本进程**入队过时才有观测值：
+            # 重启接管来的 run 没有这段事实，不写日志、不拿 created_at 反推。
+            enqueued = _ENQUEUED_AT.pop(run_id, None)
+            if enqueued is not None:
+                _stage_log(run_id, "dequeue", max(0, int((_monotonic() - enqueued) * 1000)))
             inner = asyncio.create_task(asyncio.wait_for(
                 run_copilot_question(
                     user_id=user_id, conversation_id=conversation_id,
@@ -499,7 +523,7 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
                 for t in (inner, watch):
                     if not t.done():
                         t.cancel()
-        elapsed = int((db_now_naive() - t0).total_seconds() * 1000)
+        elapsed = max(0, int((_monotonic() - t0) * 1000))
         if isinstance(watch_res, tuple):
             # 预算中止：审计已写，run 必须落 failed —— 不能因为"有半截答案"就写 ok
             reason, used, _limit = watch_res
@@ -522,7 +546,7 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
         _mark(run_id, status="cancelled", error="用户取消")
         raise
     except Exception as e:  # noqa: BLE001 —— 任何执行失败都要落到 run 上，不能只写日志
-        elapsed = int((db_now_naive() - t0).total_seconds() * 1000)
+        elapsed = max(0, int((_monotonic() - t0) * 1000))
         logger.warning("[copilot_jobs] run %s 失败: %s", run_id, e, exc_info=True)
         _mark(run_id, status="failed", elapsed_ms=elapsed, error=f"{type(e).__name__}: {e}")
     finally:
@@ -530,10 +554,10 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
         hb.cancel()
         _ENQUEUED_AT.pop(run_id, None)
         _TASKS.pop(run_id, None)
-        # 终态阶段: 只报墙钟(ms)。这里不带 status —— 终态真相在 run 行上,
+        # 终态阶段: 只报本次 job 的单调钟耗时(ms)。这里不带 status —— 终态真相在 run 行上,
         # 日志只用来对「排队/执行/收尾」三段做时间轴, 不做第二事实源。
         try:
-            _stage_log(run_id, "job_finish", int((db_now_naive() - t0).total_seconds() * 1000))
+            _stage_log(run_id, "job_finish", max(0, int((_monotonic() - t0) * 1000)))
         except Exception:  # noqa: BLE001 - 观测是旁路
             pass
         # P2-2.2: run 进终态后投递外部回调（best-effort：投递失败不能影响 run 结果，
@@ -591,12 +615,22 @@ async def submit_run(body: SubmitRunBody, user=Depends(get_current_user)):
     finally:
         db.close()
 
-    task = asyncio.create_task(_execute(
-        run_id, user_id=user.id, conversation_id=body.conversation_id,
-        question=body.question, recipe=recipe_id,
-    ))
+    # 入队时刻必须在建任务**之前**记账：`create_task` 返回后任务随时可能开跑，
+    # 先建任务再记账会让执行体读到 None，这一轮的排队观测被静默丢掉。
     _ENQUEUED_AT[run_id] = time.monotonic()
+    try:
+        task = asyncio.create_task(_execute(
+            run_id, user_id=user.id, conversation_id=body.conversation_id,
+            question=body.question, recipe=recipe_id,
+        ))
+    except BaseException:
+        # 连任务都没建起来（例如事件循环已关闭）：这条账目没有归属者，就地清掉。
+        _ENQUEUED_AT.pop(run_id, None)
+        raise
     _TASKS[run_id] = task
+    # 兜住「还没跑到协程体就被取消」的路径：那时 `_execute` 的 finally 不会执行，
+    # 只能靠 done 回调清内存账目（纯进程内簿记，不改状态、不动归属）。
+    task.add_done_callback(partial(_forget_task, run_id))
     return {"run_id": run_id, "status": "queued", "events": f"/api/copilot/runs/{run_id}/events"}
 
 
@@ -732,9 +766,11 @@ async def cancel_run(run_id: str, user=Depends(get_current_user)):
     finally:
         db.close()
 
+    # 先写终态；第一次调度前取消时，协程体不会执行，不能依赖它写库。
+    _mark(run_id, status="cancelled", error="用户取消")
     task = _TASKS.get(run_id)
     if task and not task.done():
-        task.cancel()          # _execute 里会写 cancelled
+        task.cancel()
     else:
-        _mark(run_id, status="cancelled", error="用户取消（任务已不在本进程，按中断处理）")
+        _ENQUEUED_AT.pop(run_id, None)
     return {"run_id": run_id, "status": "cancelled"}

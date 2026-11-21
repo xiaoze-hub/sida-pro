@@ -158,3 +158,61 @@ def test_min_answer_chars_cannot_be_zeroed():
     with pytest.raises(probe.ProbeConfigError):
         probe.validate_min_chars(0)
     assert probe.validate_min_chars(40) == 40
+
+
+# ── 凭据来源: 只认 token, 不留口令路径 (2026-11-21 复审) ───────────────────
+def test_password_login_path_is_removed(monkeypatch):
+    """没有 token 就是配置错误，不许退化成「用户名+密码登录」。
+
+    口令登录要过验证码/限流，探针自己走这条路径只会制造假失败，还会把口令
+    带进一个更宽的入口；凭据只从 env / 文件来。
+    """
+    calls = []
+    monkeypatch.setattr(probe, "_request", lambda *a, **k: calls.append((a, k)) or (200, "{}", ""))
+
+    with pytest.raises(probe.ProbeConfigError) as ei:
+        probe.resolve_token(
+            "http://127.0.0.1:8000",
+            {"SIDA_PROBE_USERNAME": "someone", "SIDA_PROBE_PASSWORD": "pw"},
+        )
+
+    assert calls == [], "口令路径必须彻底移除：不得再向 /api/auth/login 发请求"
+    assert "SIDA_PROBE_TOKEN" in str(ei.value)
+
+
+def test_token_file_is_still_supported(tmp_path):
+    f = tmp_path / "tok"
+    f.write_text("  tok-from-file\n", encoding="utf-8")
+    token, source = probe.resolve_token(
+        "http://127.0.0.1:8000", {"SIDA_PROBE_TOKEN_FILE": str(f)},
+    )
+    assert token == "tok-from-file"
+    assert source == "token:file"
+
+
+# ── 口径: 只读 vs 会写 / 超时略高于服务端 ─────────────────────────────────
+def test_default_timeout_is_just_above_server_run_timeout():
+    """探针比服务端先放弃 = 把「服务端还在跑」误判成超时。"""
+    from src.web.api.copilot_jobs import RUN_TIMEOUT_S
+
+    assert probe.DEFAULT_TIMEOUT_S > RUN_TIMEOUT_S
+    assert probe.DEFAULT_TIMEOUT_S - RUN_TIMEOUT_S <= 120, "略高于即可, 不是无限等"
+
+
+def test_reports_declare_read_only_vs_write():
+    """读者必须能一眼看出这次跑会不会写一条真实问答记录。"""
+    probe_report = probe.make_report(
+        base="http://127.0.0.1:8000", environment="local",
+        layers={"public": {"ok": True, "detail": "health=ok"}},
+    )
+    assert probe_report["mode"] == "probe"
+    assert probe_report["read_only"] is False
+    assert probe_report["writes_run"] is True
+
+    base_report = probe.make_baseline_report(
+        base="http://127.0.0.1:8000", environment="local",
+        baseline={"7": {"days": 7, "runs": 0}},
+    )
+    assert base_report["mode"] == "baseline"
+    assert base_report["read_only"] is True
+    assert base_report["writes_run"] is False

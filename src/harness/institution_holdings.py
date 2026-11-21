@@ -22,6 +22,13 @@
 3. **不接管混合问题**：提到北向/公募/私募/游资/龙虎榜等本模块没有的机构，
    或「汇金 + 某只票能不能买」→ `None`；
 4. **不含宽基 ETF**：这是已知覆盖缺口，遇到 ETF 问句如实说明缺口，不编数字。
+5. **跨期身份只认「同名」**：`holder_key` 由「组 + 股东全称哈希」得出，两期之间只有
+   全称完全一致才算同一账户 —— 不做名称相似度合并（不同险资产品账户就是不同账户），
+   也不做跨期/全库的账户清理。改名的主体在新报告期会以新 key 出现（宁多账、不误并）。
+6. **SQL 只在 worker 线程跑、只拿 Engine**：`answer` 是 async，但 core 查询是同步
+   阻塞的；直接调用会卡住事件循环。这里统一 `asyncio.to_thread` 并把**线程安全的
+   Engine**（连接池）传进去 —— 绝不把请求的 `Session` 带进别的线程（串事务/串连接）。
+   取数异常对外只给统一非敏感提示，底层异常（SQL/连接串/表名）只进服务端日志。
 
 ## 「没有数据」的四种情形必须分开说
 
@@ -31,14 +38,24 @@
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from src.core import national_team as nt
 
+logger = logging.getLogger(__name__)
+
 #: 与路由级 `require_perm(PERM_VIEW_QUOTE)` 同一权限点
 _QUOTE_PERM = "view_quotes"
+
+#: 取数失败的统一对外文案：不透露底层异常/SQL/连接信息（那些只进日志）。
+_FETCH_ERROR_TEXT = (
+    "取数失败：数据库查询未完成（这是取数错误，不代表该机构没有持仓）。请稍后重试，"
+    "或打开同口径页面核对。"
+)
 
 #: 持仓意图词。没有这些词就只是在提机构名，不抢答（改追问）。
 _HOLDING_WORDS: tuple[str, ...] = (
@@ -251,16 +268,98 @@ def _fmt_shares(v: float | None) -> str:
 
 
 def _engine_of(db: Any) -> Any:
-    """Session → Engine；已经是 Engine 就原样返回。拿不到返回 None。"""
+    """从请求上下文里取出**线程安全的 Engine**（拿不到 → None）。
+
+    Engine 自己线程安全（每次 `connect()` 从池里借连接），`Session` **不是** ——
+    把请求线程的 Session 丢进 worker 线程会串事务/串连接，所以这里只取引擎：
+
+    - 传进来的已经是 Engine → 原样用；
+    - 是 Session → `get_bind()`；若绑在单个 `Connection` 上（测试/特殊场景），
+      取它的 `.engine`，不把那条连接带进别线程；
+    - 其他（None / 无法识别的对象）→ None，调用方按「取数不可用」拒绝作答，
+      绝不降级成「零持仓」。
+    """
     if db is None:
         return None
+    from sqlalchemy.engine import Connection, Engine
+
+    if isinstance(db, Engine):
+        return db
     get_bind = getattr(db, "get_bind", None)
     if callable(get_bind):
         try:
-            return get_bind()
-        except Exception:  # noqa: BLE001
+            bind = get_bind()
+        except Exception:  # noqa: BLE001 —— 取不到连接就按不可用处理
             return None
-    return db
+        if isinstance(bind, Engine):
+            return bind
+        inner = getattr(bind, "engine", None)
+        return inner if isinstance(inner, Engine) else None
+    if isinstance(db, Connection):
+        inner = getattr(db, "engine", None)
+        return inner if isinstance(inner, Engine) else None
+    return None
+
+
+class _PeriodUnavailable(Exception):
+    """本模块内就确定不了报告期（只有一期 / 没有该期）—— 文案可直接展示，不查库。"""
+
+
+def _fetch(engine: Any, q: Question) -> dict[str, Any]:
+    """同步取数（**在 worker 线程里跑**）：报告期解析 → core 查询 → 汇总。
+
+    只用 Engine、只读，不碰请求的 Session；任何底层异常原样上抛，由 `answer`
+    统一转成非敏感文案。
+    """
+    periods = nt.persisted_periods(engine, q.kind) if q.period_hint in {"prev", "yoy"} else []
+    if q.period_hint == "prev" and periods:
+        latest = periods[0]
+        prior_quarter = {
+            "03-31": f"{int(latest[:4]) - 1}-12-31",
+            "06-30": f"{latest[:4]}-03-31",
+            "09-30": f"{latest[:4]}-06-30",
+            "12-31": f"{latest[:4]}-09-30",
+        }.get(latest[5:])
+        if not prior_quarter or prior_quarter not in periods:
+            coverage = "只有一期数据" if len(periods) == 1 else "已采集报告期不连续"
+            missing = f"缺少 {prior_quarter}" if prior_quarter else "最新采集日期不是季度末"
+            raise _PeriodUnavailable(
+                f"{coverage}（最新为 {latest}），{missing}，无法回答「上期」：不拿最新一期顶替，也不跳期。"
+            )
+        q.report_date = prior_quarter
+    elif q.period_hint == "yoy" and periods:
+        latest = periods[0]
+        q.report_date = f"{int(latest[:4]) - 1}{latest[4:]}"
+
+    summary: dict[str, Any] = {}
+    if q.mode == "changes":
+        data = nt.changes(
+            engine,
+            report_date=q.report_date,
+            kind=q.kind,
+            holder=q.holder_csv,
+            change=q.change_kinds or None,
+            limit=10,
+        )
+    else:
+        data = nt.holdings(
+            engine,
+            report_date=q.report_date,
+            kind=q.kind,
+            holder=q.holder_csv,
+            q=q.stock_code,
+            sort="market_cap",
+            desc=True,
+            limit=8,
+        )
+        summary = nt.scope_summary(
+            engine,
+            report_date=data.get("report_date"),
+            kind=q.kind,
+            holder=q.holder_csv,
+            q=q.stock_code,
+        )
+    return {"data": data, "summary": summary}
 
 
 def _page_link(q: Question, report_date: str | None, change_kinds: tuple[str, ...]) -> str:
@@ -304,6 +403,14 @@ def _refuse(reason: str, link: str | None = None) -> str:
     return text
 
 
+_HOLDINGS_SORT_LABEL: dict[str, str] = {
+    "market_cap": "持股市值",
+    "hold_num": "持股数",
+    "hold_ratio": "持股比例",
+    "stock_code": "股票代码",
+}
+
+
 def _render_holdings(q: Question, data: dict[str, Any], summary: dict[str, Any]) -> str:
     rows = data.get("items") or []
     count = int(data.get("count") or 0)
@@ -328,7 +435,9 @@ def _render_holdings(q: Question, data: dict[str, Any], summary: dict[str, Any])
     )
     body: list[str] = []
     if rows:
-        body.append("持仓明细（按市值排序）：")
+        # 文案按 core 回显的真实排序写，不自己猜「按市值」。
+        sort_label = _HOLDINGS_SORT_LABEL.get(str(data.get("sort") or "market_cap"), "持股市值")
+        body.append(f"持仓明细（按{sort_label}{'降序' if data.get('desc', True) else '升序'}）：")
         for i, r in enumerate(rows, 1):
             bits = [f"{i}. {r.get('stock_code')} {r.get('stock_name') or '—'}",
                     _fmt_money(r.get("market_cap"))]
@@ -366,7 +475,12 @@ def _render_changes(q: Question, data: dict[str, Any]) -> str:
     rows = data.get("items") or []
     body: list[str] = []
     if rows:
-        body.append("变动明细（" + "/".join(label[k] for k in wanted) + "，按变动股数排序）：")
+        # 文案对齐 core 的真实排序：先变动类型（新进→加仓→减仓→退出），
+        # 同类型内按变动股数绝对值降序（不是全表按股数排序）。
+        body.append(
+            "变动明细（" + "/".join(label[k] for k in wanted)
+            + "；先按变动类型，组内按变动股数绝对值从大到小）："
+        )
         for i, it in enumerate(rows, 1):
             sign = "+" if float(it.get("delta_num") or 0) > 0 else ""
             body.append(
@@ -407,6 +521,8 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
 
     # 权限：服务端重新核 view_quotes（与路由级 require_perm 同一口径）。
     # 用户信息缺失 → 拒绝（不知道是谁，就不能给数据）。
+    # 这一步刻意留在事件循环线程：它用的是请求自带的 Session（trial 计数还要写库），
+    # 跨线程用 Session 会串事务；只有只读持仓查询才 offload 到 worker 线程。
     if user is None or getattr(user, "id", None) is None:
         return _refuse("未识别到登录用户，无法直查机构持仓。请先登录（该页需要行情浏览权限）。")
     try:
@@ -422,48 +538,20 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
     if engine is None:
         return _refuse("数据连接不可用，本次未取到数据（不是「零持仓」）。")
 
-    # 报告期：latest/prev/yoy 都在**本模块**解析成具体日期，再交给 core 校验存在性。
-    periods = nt.persisted_periods(engine, q.kind)
-    if q.period_hint == "prev" and periods:
-        idx = 1
-        q.report_date = periods[idx] if len(periods) > idx else periods[0]
-    elif q.period_hint == "yoy" and periods:
-        latest = periods[0]
-        q.report_date = f"{int(latest[:4]) - 1}{latest[4:]}"
-
+    # 报告期解析 + core 查询全在 worker 线程里跑（core 是同步阻塞 SQL，直接在事件循环
+    # 里调用会卡住整个对话）。`persisted_periods` 也在这段保护内 —— 它同样是查库，
+    # 放在保护外会让一次库故障直接抛穿 async 调用方。
     try:
-        summary: dict[str, Any] = {}
-        if q.mode == "changes":
-            data = nt.changes(
-                engine,
-                report_date=q.report_date,
-                kind=q.kind,
-                holder=q.holder_csv,
-                change=q.change_kinds or None,
-                limit=10,
-            )
-            snapshot = None
-        else:
-            data = nt.holdings(
-                engine,
-                report_date=q.report_date,
-                kind=q.kind,
-                holder=q.holder_csv,
-                q=q.stock_code,
-                sort="market_cap",
-                desc=True,
-                limit=8,
-            )
-            summary = nt.scope_summary(
-                engine,
-                report_date=data.get("report_date"),
-                kind=q.kind,
-                holder=q.holder_csv,
-                q=q.stock_code,
-            )
-            snapshot = summary.get("snapshot_at")
+        payload = await asyncio.to_thread(_fetch, engine, q)
+    except _PeriodUnavailable as exc:
+        return _refuse(str(exc), _page_link(q, None, q.change_kinds))
     except Exception as exc:  # noqa: BLE001 —— 取数失败必须说失败，不能说零变动/无持仓
-        return _refuse(f"取数失败：{str(exc)[:180]}（这是取数错误，不代表该机构没有持仓）。")
+        logger.warning("[institution_holdings] 取数失败: %s", type(exc).__name__)
+        return _refuse(_FETCH_ERROR_TEXT, _page_link(q, q.report_date, q.change_kinds))
+
+    data = payload["data"]
+    summary = payload["summary"]
+    snapshot = summary.get("snapshot_at") if q.mode != "changes" else None
 
     status = str(data.get("status") or "")
     link = _page_link(q, data.get("report_date"), q.change_kinds)

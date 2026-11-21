@@ -21,10 +21,11 @@
 按股东全称精确过滤；季报口径；只含进入前十大的持仓；**不含宽基 ETF**）。
 
 红线
-----
+-----
 - 表为空 → `available=false` + reason，**不编造**任何一行；
 - 上游失败 → 采集 receipt 里 `ok=false` + errors，页面照实展示「部分失败」；
-- 缓存只存成功结果，读库失败不写缓存。
+- 页面和参谋共用落库数据，读请求不访问上游、不缓存旧快照。
+- 对外查询错误不含底层异常、SQL 或连接信息。
 """
 from __future__ import annotations
 
@@ -33,7 +34,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.web.cache.biz_cache import biz_cache
 from src.web.api.auth import require_owner
 from src.web.database import engine
 
@@ -41,19 +41,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_CACHE_TTL = 600  # 季报口径（一年四更），10 分钟缓存足够；refresh 后由 file 层重建
-
-
-def _cached(key: str, producer) -> dict[str, Any]:
-    hit = biz_cache.get_json(key)
-    if isinstance(hit, dict):
-        return hit
-    out = producer()
-    try:
-        biz_cache.set_json(key, out, ttl=_CACHE_TTL)
-    except Exception as exc:  # noqa: BLE001 — 缓存故障不影响读数
-        logger.warning("[national-team] 缓存写入失败: %s", exc)
-    return out
+_SQL_ERROR_TEXT = "国家队持仓查询失败（数据库查询未完成，请稍后重试）"
 
 
 @router.get("")
@@ -85,16 +73,13 @@ def national_team_overview(
     if k not in nt.REPORT_TABLES:
         raise HTTPException(400, f"未知 kind: {kind}（float|total）")
 
-    def _load() -> dict[str, Any]:
-        return nt.overview(engine, report_date=report_date, kind=k)
-
     try:
-        return _cached(f"national_team:overview:{report_date or 'latest'}:{k}", _load)
+        return nt.overview(engine, report_date=report_date, kind=k)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[national-team] overview 失败: %s", exc)
-        raise HTTPException(500, f"国家队持仓汇总查询失败: {exc}") from exc
+        logger.warning("[national-team] overview 失败: %s", type(exc).__name__)
+        raise HTTPException(500, _SQL_ERROR_TEXT) from exc
 
 
 @router.get("/holdings")
@@ -114,7 +99,7 @@ def national_team_holdings(
     if k not in nt.REPORT_TABLES:
         raise HTTPException(400, f"未知 kind: {kind}（float|total）")
 
-    def _load() -> dict[str, Any]:
+    try:
         return nt.holdings(
             engine,
             report_date=report_date,
@@ -126,15 +111,11 @@ def national_team_holdings(
             limit=limit,
             offset=offset,
         )
-
-    key = f"national_team:holdings:{report_date or 'latest'}:{k}:{holder or 'all'}:{q or ''}:{sort}:{int(desc)}:{limit}:{offset}"
-    try:
-        return _cached(key, _load)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[national-team] holdings 失败: %s", exc)
-        raise HTTPException(500, f"国家队持仓明细查询失败: {exc}") from exc
+        logger.warning("[national-team] holdings 失败: %s", type(exc).__name__)
+        raise HTTPException(500, _SQL_ERROR_TEXT) from exc
 
 
 @router.get("/changes")
@@ -151,22 +132,15 @@ def national_team_changes(
     if k not in nt.REPORT_TABLES:
         raise HTTPException(400, f"未知 kind: {kind}（float|total）")
 
-    def _load() -> dict[str, Any]:
+    try:
         return nt.changes(
             engine, report_date=report_date, kind=k, holder=holder, change=change, limit=limit
         )
-
-    key = (
-        f"national_team:changes:{report_date or 'latest'}:{k}:{holder or 'all'}:"
-        f"{change or 'all'}:{limit}"
-    )
-    try:
-        return _cached(key, _load)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[national-team] changes 失败: %s", exc)
-        raise HTTPException(500, f"国家队环比变动查询失败: {exc}") from exc
+        logger.warning("[national-team] changes 失败: %s", type(exc).__name__)
+        raise HTTPException(500, _SQL_ERROR_TEXT) from exc
 
 
 @router.post("/refresh")
@@ -189,20 +163,8 @@ def national_team_refresh(
     try:
         receipt = nt.sync(engine, periods=period_list, mode=m)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[national-team] 采集失败: %s", exc)
-        raise HTTPException(502, f"国家队持仓采集失败: {exc}") from exc
-    # 采集成功后清掉读缓存（只清本模块的确定性 key，不 clear() 整池）。
-    # 机构/变动过滤的 key 带 holder/change 维度，这里只清「全部机构」的常用键；
-    # 其余组合靠 10 分钟 TTL 自然过期 —— 不清整池、不误伤别的模块。
-    for k in nt.REPORT_TABLES:
-        for prefix in (
-            f"national_team:overview:latest:{k}",
-            f"national_team:changes:latest:{k}:all:all:100",
-        ):
-            try:
-                biz_cache.delete(prefix)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[national-team] 缓存清理失败(%s): %s", prefix, exc)
+        logger.warning("[national-team] 采集失败: %s", type(exc).__name__)
+        raise HTTPException(502, "国家队持仓采集失败（上游或数据库不可用，详见服务端日志）") from exc
     return receipt
 
 

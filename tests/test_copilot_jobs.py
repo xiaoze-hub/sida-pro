@@ -12,6 +12,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import time
+from functools import partial
 
 import pytest
 from fastapi import FastAPI
@@ -47,6 +51,7 @@ def Session(monkeypatch):
     import src.db.session as session_mod
     monkeypatch.setattr(session_mod, "SessionLocal", session_factory)
     copilot_jobs._TASKS.clear()
+    copilot_jobs._ENQUEUED_AT.clear()
     return session_factory
 
 
@@ -326,3 +331,146 @@ def test_SSE_推状态并在终态关闭(client, Session):
 
 def test_SSE_对不存在的_run_返回404(client):
     assert client.get("/api/copilot/runs/nope/events").status_code == 404
+
+
+# ── 阶段观测 / 内存账目 / 时钟 (2026-11-21 复审回归) ───────────────────────
+def _stage_payloads(caplog, stage):
+    out = []
+    for rec in caplog.records:
+        msg = rec.getMessage()
+        if "[copilot.stage]" not in msg:
+            continue
+        payload = json.loads(msg.split("] ", 1)[1])
+        if payload.get("stage") == stage:
+            out.append(payload)
+    return out
+
+
+@pytest.fixture()
+def single_slot(monkeypatch):
+    """把并发位压到 1 并重建信号量（`_slots()` 会缓存）。"""
+    monkeypatch.setattr(copilot_jobs, "MAX_CONCURRENT", 1)
+    monkeypatch.setattr(copilot_jobs, "_SLOTS", None)
+    yield
+    monkeypatch.setattr(copilot_jobs, "_SLOTS", None)
+
+
+def test_dequeue_只在真正拿到并发位之后才记(Session, monkeypatch, caplog, single_slot):
+    """「dequeue」必须是**真的开始跑**，不是「任务被调度起来了」。
+
+    排队等 semaphore 的那段时间如果被记成 dequeue，排队等待就被前移成执行时间，
+    阶段日志会把「没人干活」伪装成「干活很慢」。
+    """
+    async def quick(**_kw):
+        return 1
+
+    monkeypatch.setattr(copilot_jobs, "run_copilot_question", quick)
+    _mk_run(Session, "r-queue")
+
+    async def scenario():
+        held = copilot_jobs._slots()
+        await held.acquire()                     # 占满唯一的并发位
+        copilot_jobs._ENQUEUED_AT["r-queue"] = time.monotonic()
+        task = asyncio.create_task(copilot_jobs._execute(
+            "r-queue", user_id="u1", conversation_id=None, question="q"))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.15)                # 仍在排队
+        assert _row(Session, "r-queue").status == "queued"
+        assert _stage_payloads(caplog, "dequeue") == [], "等并发位时不得记 dequeue"
+        assert "r-queue" in copilot_jobs._ENQUEUED_AT, "排队账目必须保留到真正取到并发位"
+        held.release()
+        await task
+
+    with caplog.at_level(logging.INFO, logger=copilot_jobs.logger.name):
+        asyncio.run(scenario())
+
+    payloads = _stage_payloads(caplog, "dequeue")
+    assert len(payloads) == 1
+    assert payloads[0]["run_id"] == "r-queue"
+    assert payloads[0]["ms"] >= 100, f"排队 ~150ms 却被记成 {payloads[0]['ms']}ms"
+    assert "r-queue" not in copilot_jobs._ENQUEUED_AT
+    assert _row(Session, "r-queue").status == "ok"
+
+
+def test_cancel_before_first_schedule_persists_terminal_state(Session):
+    async def scenario():
+        submitted = await copilot_jobs.submit_run(
+            copilot_jobs.SubmitRunBody(question="上证现在多少点"), user=_User(),
+        )
+        rid = submitted["run_id"]
+        task = copilot_jobs._TASKS[rid]
+        await copilot_jobs.cancel_run(rid, user=_User())
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert _row(Session, rid).status == "cancelled"
+        assert rid not in copilot_jobs._TASKS and rid not in copilot_jobs._ENQUEUED_AT
+
+    asyncio.run(scenario())
+
+
+def test_未启动即被取消也要清内存账目():
+    """任务在第一次调度前就被 cancel 时，`_execute` 的 finally 根本不会跑。
+
+    账目不清 = 每个「提交后立刻取消」的 run 都在进程里留一条永不释放的记录。
+    """
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        # 真 Task：cancel 发生在第一次调度之前，协程体一行都不会跑
+        wrapped = loop.create_task(asyncio.sleep(60))
+        copilot_jobs._TASKS["r-never"] = wrapped
+        copilot_jobs._ENQUEUED_AT["r-never"] = time.monotonic()
+        wrapped.add_done_callback(partial(copilot_jobs._forget_task, "r-never"))
+
+        wrapped.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await wrapped
+
+        assert "r-never" not in copilot_jobs._TASKS
+        assert "r-never" not in copilot_jobs._ENQUEUED_AT
+
+    asyncio.run(scenario())
+
+
+def test_提交时先记入队时刻再建任务(client, Session, monkeypatch):
+    """`_ENQUEUED_AT` 必须在 `create_task` **之前**写入。
+
+    原实现先 create_task 再写账目：任务可能在写入之前就被调度，读到 None，
+    于是这一轮永远没有 dequeue 观测值 —— 排队时间被静默丢掉。
+    """
+    seen = {}
+    real_create_task = asyncio.create_task
+
+    def spy_create_task(coro, **kw):
+        seen.setdefault("at_create", set(copilot_jobs._ENQUEUED_AT))
+        return real_create_task(coro, **kw)
+
+    monkeypatch.setattr(copilot_jobs.asyncio, "create_task", spy_create_task)
+    body = client.post("/api/copilot/runs", json={"question": "上证现在多少点"}).json()
+    rid = body["run_id"]
+
+    deadline = time.monotonic() + 5.0
+    while rid in copilot_jobs._TASKS and time.monotonic() < deadline:
+        time.sleep(0.01)                          # 等测试自己的后台任务收尾
+
+    assert rid in seen.get("at_create", set()), "建任务时入队时刻必须已经写入"
+    assert rid not in copilot_jobs._ENQUEUED_AT, "正常结束后账目必须清空"
+    assert rid not in copilot_jobs._TASKS, "正常结束后任务句柄必须清空"
+
+
+def test_耗时用单调钟而不是墙钟(Session, monkeypatch):
+    """墙钟会跳（NTP 校时/夏令时）；耗时只能用 monotonic。"""
+    async def quick(**_kw):
+        return 7
+
+    monkeypatch.setattr(copilot_jobs, "run_copilot_question", quick)
+    from datetime import datetime as _dt
+
+    monkeypatch.setattr(copilot_jobs, "db_now_naive", lambda: _dt(2020, 1, 1))
+    ticks = iter([100.0, 102.5])
+    monkeypatch.setattr(copilot_jobs, "_monotonic", lambda: next(ticks))
+    _mk_run(Session, "r-clock")
+
+    asyncio.run(copilot_jobs._execute("r-clock", user_id="u1", conversation_id=None, question="q"))
+
+    assert _row(Session, "r-clock").elapsed_ms == 2500

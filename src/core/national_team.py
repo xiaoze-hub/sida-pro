@@ -35,6 +35,12 @@
 5. **险资含控股股东自有账户**：中国人寿、中国平安等集团本级自有资金账户也计入险资，
    所以险资合计里含「平安自有资金持平安」这类控股持仓，不是纯二级市场买入。
 
+6. **跨期身份只认「同名」**：`holder_key` = 组 + 股东全称哈希，两期之间只有全称**完全一致**
+   才视为同一账户；`「XX保险-分红」` 与 `「XX保险-传统」` 是不同产品账户，**不按名称相似度合并**，
+   也不做人工账户归并。定向刷新删除的陈旧行严格限定在
+   `(report_date, report_kind, holder_key)` 三个维度内（见 `_delete_stale`）——
+   **没有历史全库清理**，跨期改名的账户会以新 key 另立一行，这是已知限制（宁多账不误并）。
+
 ## 不编造
 
 - 上游失败（网络/配置/解析）→ 抛 `NationalTeamFetchError`，**不写 0 行**；
@@ -1227,6 +1233,9 @@ LIMIT :lim OFFSET :off
         "count": count,
         "limit": lim,
         "offset": off,
+        # 真实排序回显：调用方的文案必须按这两个字段写，不许自己猜「按市值」
+        "sort": order_col,
+        "desc": direction == "DESC",
         "items": items,
         "reason": None if count > 0 else "该机构/关键字在本报告期没有命中持仓",
     }
@@ -1424,6 +1433,8 @@ GROUP BY p.group_key, p.stock_code
         # count = 过滤（机构 + 变动类型）后的准确总量；items 才是被 limit 截断的页
         "count": len(selected),
         "total": len(selected),
+        # 真实排序回显：先按变动类型（新进→加仓→减仓→退出），同类型内按变动股数绝对值降序
+        "sort": "kind_then_delta_abs",
         "items": selected[:lim],
         "truncated": len(selected) > lim,
     }

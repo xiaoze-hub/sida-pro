@@ -358,13 +358,202 @@ async def test_true_zero_change(engine, monkeypatch):
 
 
 async def test_fetch_error_is_reported_as_error(seeded, monkeypatch):
+    """取数异常要说「取数失败」，但**不许把底层异常/SQL/连接信息透给用户**。"""
+
     def _boom(*a, **k):
-        raise RuntimeError("db down")
+        raise RuntimeError("OperationalError: password=sup3rsecret host=db.internal")
 
     monkeypatch.setattr(nt, "holdings", _boom)
     out = await _ask(seeded, "汇金最新持仓")
-    assert "取数失败" in out and "db down" in out
+    assert "取数失败" in out
     assert "零变动" not in out
+    for leak in ("sup3rsecret", "db.internal", "OperationalError", "Traceback"):
+        assert leak not in out, f"底层异常细节泄露: {leak}"
+
+
+async def test_period_lookup_failure_is_guarded(seeded, monkeypatch):
+    """`persisted_periods` 也是查库，必须落在同一段保护里（不能抛穿 async 调用方）。"""
+
+    def _boom(*a, **k):
+        raise RuntimeError("could not connect to server: db.internal:5432")
+
+    monkeypatch.setattr(nt, "persisted_periods", _boom)
+    out = await _ask(seeded, "汇金最新持仓")
+    assert out and "取数失败" in out
+    assert "db.internal" not in out and "could not connect" not in out
+
+
+async def test_prev_period_is_not_substituted_by_latest(engine, monkeypatch):
+    """只有一期时问「上期」→ 明确拒绝；绝不拿最新一期顶替上期（否则口径漂移）。"""
+    rows = {(nt.REPORT_TABLES["float"], PERIOD_CUR): [
+        _src("601398", "工商银行", "中央汇金投资有限责任公司", 100.0, end=PERIOD_CUR, cap=1e8),
+    ]}
+    monkeypatch.setattr(nt, "_rows_once", _fake_rows(rows))
+    nt.scan_period(engine, PERIOD_CUR, report_kinds=["float"])
+
+    out = await _ask(engine, "汇金上期持仓")
+    assert "只有一期数据" in out and "不拿最新一期顶替" in out
+    assert "601198" not in out
+    assert "601398" not in out          # 没有把本期数据包装成「上期」
+    assert "报告期 " not in out
+
+
+# ────────────────────────── 线程 / 连接类型 ──────────────────────────
+
+
+async def test_queries_run_off_the_event_loop_thread(seeded, monkeypatch):
+    """core 是同步阻塞 SQL：必须在 worker 线程跑，且拿到的是 Engine（线程安全）。"""
+    import threading
+
+    from sqlalchemy.engine import Engine
+
+    seen: dict[str, object] = {}
+    real_periods, real_holdings = nt.persisted_periods, nt.holdings
+
+    def _spy_periods(engine, kind="float"):
+        seen["periods_thread"] = threading.current_thread()
+        return real_periods(engine, kind)
+
+    def _spy_holdings(engine, **kw):
+        seen["query_thread"] = threading.current_thread()
+        seen["engine"] = engine
+        return real_holdings(engine, **kw)
+
+    monkeypatch.setattr(nt, "persisted_periods", _spy_periods)
+    monkeypatch.setattr(nt, "holdings", _spy_holdings)
+
+    out = await _ask(seeded, "汇金最新持仓")
+    assert out and "262 条持仓记录" in out
+    assert isinstance(seen["engine"], Engine)
+    assert seen["periods_thread"] is not threading.main_thread()
+    assert seen["query_thread"] is not threading.main_thread()
+
+
+async def test_session_input_is_unwrapped_to_engine(seeded):
+    """请求传的是 Session：只取它的 Engine 进 worker 线程，绝不复用 Session。"""
+    from sqlalchemy.engine import Engine
+    from sqlalchemy.orm import Session
+
+    with Session(seeded) as session:
+        assert ih._engine_of(session) is seeded
+        assert isinstance(ih._engine_of(session), Engine)
+        out = await ih.answer(session, "汇金最新持仓", None, _pro())
+    assert out and "262 条持仓记录" in out
+
+
+def test_engine_of_never_returns_a_session(seeded):
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.orm import Session
+
+    assert ih._engine_of(None) is None
+    assert ih._engine_of("sqlite://") is None
+    with Session(seeded) as session:
+        assert ih._engine_of(session) is seeded
+    # 绑在单条 Connection 上时取它的 Engine（不把连接带进别的线程）
+    with seeded.connect() as conn:
+        assert isinstance(conn, Connection)
+        assert ih._engine_of(conn) is seeded
+
+
+# ────────────────────────── 文案对齐真实排序 ──────────────────────────
+
+
+async def test_sort_wording_matches_real_order(seeded):
+    core = nt.holdings(seeded, kind="float", holder="huijin")
+    assert core["sort"] == "market_cap" and core["desc"] is True
+
+    out = await _ask(seeded, "汇金最新持仓")
+    assert "按持股市值降序" in out
+
+    chg = nt.changes(seeded, kind="float", holder="huijin", limit=500)
+    assert chg["sort"] == "kind_then_delta_abs"
+    order = {"new": 0, "increase": 1, "decrease": 2, "exit": 3}
+    kinds = [i["kind"] for i in chg["items"]]
+    assert kinds == sorted(kinds, key=lambda k: order[k])
+
+    chg_out = await _ask(seeded, "汇金最新持仓变动")
+    assert "先按变动类型" in chg_out and "组内按变动股数绝对值从大到小" in chg_out
+
+
+# ────────────────────────── 刷新后的缓存一致性 ──────────────────────────
+
+
+def test_refresh_reads_committed_revision(seeded, monkeypatch):
+    """刷新写库后，持仓筛选与概览紧接着看到实际结果。"""
+    from src.web.api import national_team as api_mod
+
+    monkeypatch.setattr(api_mod, "engine", seeded)
+
+    def _hold(holder: str) -> dict:
+        return api_mod.national_team_holdings(
+            report_date=None, kind="float", holder=holder, q=None,
+            sort="market_cap", desc=True, limit=8, offset=0,
+        )
+
+    assert _hold("huijin")["count"] == 262
+    assert _hold("ssb")["count"] == 155
+    assert api_mod.national_team_overview(report_date=None, kind="float")["totals"]["stocks"] > 1
+
+    # 新采集（整期重写：scan 是该期完整真值）—— 汇金只剩 1 只，社保全无
+    monkeypatch.setattr(nt, "_rows_once", _fake_rows({
+        (nt.REPORT_TABLES["float"], PERIOD_CUR): [
+            _src("601398", "工商银行", "中央汇金投资有限责任公司", 1.0, end=PERIOD_CUR, cap=1e8),
+        ],
+    }))
+    receipt = api_mod.national_team_refresh(periods=PERIOD_CUR, mode="scan", _owner=None)
+    assert receipt["ok"] is True and receipt["written"] >= 1
+
+    assert _hold("huijin")["count"] == 1
+    assert _hold("ssb")["count"] == 0
+    assert _hold("ssb")["status"] == "empty_result"
+    assert api_mod.national_team_overview(report_date=None, kind="float")["totals"]["stocks"] == 1
+
+
+def test_same_timestamp_revision_is_visible_in_holdings(seeded, monkeypatch):
+    from sqlalchemy import text
+    from src.web.api import national_team as api_mod
+
+    monkeypatch.setattr(api_mod, "engine", seeded)
+    params = dict(report_date=PERIOD_CUR, kind="float", holder="huijin", q="601398",
+                  sort="market_cap", desc=True, limit=8, offset=0)
+    before = api_mod.national_team_holdings(**params)["items"][0]["hold_num"]
+    # 同批修订保持采集时点、期数及行数不变。
+    with seeded.begin() as conn:
+        conn.execute(text("UPDATE national_team_holdings SET hold_num=hold_num+123 "
+                          "WHERE report_kind='float' AND report_date=:d AND stock_code='601398'"),
+                     {"d": PERIOD_CUR})
+    assert api_mod.national_team_holdings(**params)["items"][0]["hold_num"] == before + 123
+
+
+async def test_prev_does_not_skip_a_missing_quarter(engine, monkeypatch):
+    missing = "2026-06-30"
+    rows = {(nt.REPORT_TABLES["float"], end): [
+        _src("601398", "工商银行", "中央汇金投资有限责任公司", 100, end=end, cap=1e8),
+    ] for end in ("2026-09-30", "2026-03-31")}
+    monkeypatch.setattr(nt, "_rows_once", _fake_rows(rows))
+    for _, end in rows:
+        nt.scan_period(engine, end, report_kinds=["float"])
+    out = await _ask(engine, "汇金上期持仓")
+    assert missing in out and "无法回答" in out
+    assert "601398" not in out
+
+
+def test_api_error_text_is_non_sensitive(seeded, monkeypatch):
+    from fastapi import HTTPException
+
+    from src.web.api import national_team as api_mod
+
+    def _boom(*a, **k):
+        raise RuntimeError("password=sup3rsecret host=db.internal table=national_team_holdings")
+
+    monkeypatch.setattr(api_mod, "engine", seeded)
+    monkeypatch.setattr(nt, "overview", _boom)
+    with pytest.raises(HTTPException) as ei:
+        api_mod.national_team_overview(report_date=None, kind="float")
+    detail = str(ei.value.detail)
+    assert detail == api_mod._SQL_ERROR_TEXT
+    for leak in ("sup3rsecret", "db.internal", "national_team_holdings", "RuntimeError"):
+        assert leak not in detail
 
 
 # ────────────────────────── 权限 / 身份 ──────────────────────────
