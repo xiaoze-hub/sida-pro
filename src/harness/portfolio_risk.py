@@ -835,11 +835,15 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
         _trace = getattr(runtime, "trace", None)
         if _trace is not None:
             # 只落条数与市场, 不落代码/价格/账户名 —— 运行记录不留完整私有数据。
+            # 没核验完（无防守位/报价过期/取数失败）必须落 failed：否则 run 以 ok 收尾，
+            # 治理页和基线会把「不能认定安全」记成成功。
+            verified_all = coverage.verified == coverage.total
             try:
                 _trace.step(
                     "portfolio_defense_check",
                     {"scope": "self_holdings", "markets": sorted({r.market for r in rows})},
-                    ok=True,
+                    ok=verified_all,
+                    error=None if verified_all else "holdings_not_fully_verified",
                     result=f"total={coverage.total} verified={coverage.verified} "
                            f"breached={coverage.breached} unknown={coverage.unknown}",
                     elapsed_ms=int((_time.perf_counter() - t0) * 1000),

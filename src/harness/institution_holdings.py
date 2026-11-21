@@ -403,6 +403,28 @@ def _refuse(reason: str, link: str | None = None) -> str:
     return text
 
 
+def _note_failure(runtime, q: "Question", error: str, detail: str | None) -> None:
+    """取数/口径失败也落一步 failed。
+
+    只落「为什么失败」的分类，不落 SQL、连接串或异常正文；落库后
+    `finish_copilot_run` 会据此把 run 判成 degraded/error，而不是 ok。
+    埋点是旁路：任何异常都吞掉，不影响对外作答。
+    """
+    trace = getattr(runtime, "trace", None)
+    if trace is None:
+        return
+    try:
+        trace.step(
+            "institution_holdings",
+            {"scopes": [s["value"] for s in q.scopes], "kind": q.kind, "mode": q.mode},
+            ok=False,
+            error=error[:120],
+            result=(detail or "")[:120] or None,
+        )
+    except Exception:  # noqa: BLE001 —— 埋点失败不影响作答
+        pass
+
+
 _HOLDINGS_SORT_LABEL: dict[str, str] = {
     "market_cap": "持股市值",
     "hold_num": "持股数",
@@ -544,9 +566,13 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
     try:
         payload = await asyncio.to_thread(_fetch, engine, q)
     except _PeriodUnavailable as exc:
+        # 口径性失败（只有一期/期不存在）也要落 failed：run 若以 ok 收尾，
+        # 「没拿到可对比数据」会被治理页与基线记成答完了。
+        _note_failure(runtime, q, "period_unavailable", str(exc))
         return _refuse(str(exc), _page_link(q, None, q.change_kinds))
     except Exception as exc:  # noqa: BLE001 —— 取数失败必须说失败，不能说零变动/无持仓
         logger.warning("[institution_holdings] 取数失败: %s", type(exc).__name__)
+        _note_failure(runtime, q, "fetch_failed", type(exc).__name__)
         return _refuse(_FETCH_ERROR_TEXT, _page_link(q, q.report_date, q.change_kinds))
 
     data = payload["data"]
@@ -557,6 +583,8 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
     link = _page_link(q, data.get("report_date"), q.change_kinds)
 
     if status in {"empty_table", "unknown_period", "insufficient_periods", "empty_result"}:
+        if status != "empty_result":     # empty_result = 该股本期确实没持仓, 是有效答案
+            _note_failure(runtime, q, f"data_unavailable:{status}", None)
         return _refuse(str(data.get("reason") or "没有可展示的数据。"), link)
     if status == "zero_change":
         counts = data.get("counts") or {}

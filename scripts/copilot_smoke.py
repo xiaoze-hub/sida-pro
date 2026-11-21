@@ -85,6 +85,10 @@ _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0", "host.dock
 FAILURE_MARKERS = (
     "任务未能完成，请查看本轮过程。",
     "任务未能完成",
+    # 直查层的「取数失败/口径不足」是拒绝，不是答案：探针必须判失败，
+    # 否则数据源故障会被算成一次成功的问答。
+    "取数失败",
+    "只有一期数据",
 )
 
 TERMINAL_STATUSES = frozenset({"ok", "degraded", "error", "failed", "cancelled", "succeeded"})

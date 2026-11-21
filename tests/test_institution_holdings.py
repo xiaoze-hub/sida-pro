@@ -383,6 +383,39 @@ async def test_period_lookup_failure_is_guarded(seeded, monkeypatch):
     assert "db.internal" not in out and "could not connect" not in out
 
 
+class _Trace:
+    """轨迹句柄替身（字段与 CopilotTrace.step 对齐）。"""
+
+    def __init__(self) -> None:
+        self.steps: list[dict] = []
+        self.run_id = "run-t-ih"
+
+    def step(self, tool, args=None, *, ok=True, error=None, result=None, elapsed_ms=None):
+        self.steps.append({"tool": str(tool), "ok": bool(ok), "error": error,
+                           "result": result, "args": dict(args or {})})
+
+
+async def test_fetch_failure_leaves_a_failed_step(seeded, monkeypatch):
+    """取数失败必须落 failed 步：否则 run 以 ok 收尾，把「没拿到数据」记成答完了。"""
+
+    def _boom(*a, **k):
+        raise RuntimeError("could not connect to server: db.internal:5432")
+
+    monkeypatch.setattr(nt, "persisted_periods", _boom)
+    trace = _Trace()
+    out = await ih.answer(seeded, "汇金最新持仓", None, _pro(),
+                          SimpleNamespace(trace=trace))
+    assert out and "取数失败" in out
+
+    failed = [s for s in trace.steps if not s["ok"]]
+    assert len(failed) == 1
+    assert failed[0]["tool"] == "institution_holdings"
+    assert failed[0]["error"] == "fetch_failed"
+    # 埋点里不许出现连接串/SQL/异常正文
+    payload = f"{failed[0]['args']}{failed[0]['error']}{failed[0]['result']}"
+    assert "db.internal" not in payload and "could not connect" not in payload
+
+
 async def test_prev_period_is_not_substituted_by_latest(engine, monkeypatch):
     """只有一期时问「上期」→ 明确拒绝；绝不拿最新一期顶替上期（否则口径漂移）。"""
     rows = {(nt.REPORT_TABLES["float"], PERIOD_CUR): [

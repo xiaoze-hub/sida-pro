@@ -70,6 +70,16 @@ def test_last_assistant_message_is_the_final_answer():
     assert probe.final_answer_text(messages) == "主线是算力，其次是半导体。"
 
 
+def test_direct_read_refusal_is_not_a_successful_answer():
+    """直查层取数失败的拒绝文案必须判失败（否则数据源故障算成功问答）。"""
+    refuse = ("【机构持仓直查】取数失败：数据库查询未完成（这是取数错误，"
+              "不代表该机构没有持仓）。请稍后重试。\n\n"
+              "站内同口径页面：[打开国家队动向](https://x/national-team)")
+    verdict = probe.evaluate_probe(terminal_status="ok", final_content=refuse, min_chars=40)
+    assert verdict["ok"] is False
+    assert "final_answer_is_error_placeholder" in verdict["reasons"]
+
+
 # ── 目标与凭据 ────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("base", [
     "http://127.0.0.1:8000",

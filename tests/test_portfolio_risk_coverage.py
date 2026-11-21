@@ -684,10 +684,38 @@ def test_fast_path_takes_defense_question_and_leaves_quotes_to_quick_answer(db, 
     steps = [s for s in trace.steps if s["tool"] == "portfolio_defense_check"]
     assert len(steps) == 1
     assert steps[0]["args"] == {"scope": "self_holdings", "markets": ["CN"]}
+    # 全部都核验到了才算这一步成功
+    assert steps[0]["ok"] is True and steps[0]["error"] is None
     # 运行记录不落完整私有数据：只有计数, 没有代码/价格/账户名
     payload = f"{steps[0]['args']}{steps[0]['result']}"
     assert "600519" not in payload and "000001" not in payload
     assert "9.0" not in payload and "主账户" not in payload
+
+
+def test_trace_step_is_failed_when_coverage_incomplete(db, monkeypatch):
+    """没核验完不能记成功：否则治理页/基线把「不能认定安全」记成 ok。"""
+    user = _user(db, "partial")
+    acc = _account(db, "主账户", user.id)
+    st1 = _stock(db, "600519")
+    st2 = _stock(db, "000001")
+    _position(db, acc, st1, user_id=user.id, defense_price=10.0)
+    _position(db, acc, st2, user_id=user.id, defense_price=None)   # 没设防守位 → unknown
+    quotes = {"600519": _quote("600519", 12.0), "000001": _quote("000001", 12.0)}
+    monkeypatch.setattr(
+        "src.core.marketdata_client.md_quote_rows",
+        lambda symbols, market: [quotes[s] for s in symbols if s in quotes],
+    )
+
+    trace = _Trace()
+    out = asyncio.run(answer(db, "我的持仓防守位破了吗？", None, user,
+                             SimpleNamespace(trace=trace)))
+    assert out is not None
+
+    steps = [s for s in trace.steps if s["tool"] == "portfolio_defense_check"]
+    assert len(steps) == 1
+    assert steps[0]["ok"] is False
+    assert steps[0]["error"] == "holdings_not_fully_verified"
+    assert "verified=1" in steps[0]["result"] and "unknown=1" in steps[0]["result"]
 
 
 def test_fast_path_falls_through_for_single_stock_quote(db, monkeypatch):
