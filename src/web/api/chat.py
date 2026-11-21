@@ -1144,14 +1144,13 @@ async def _run_tool_loop_inner(
                    if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
     _stock_q = is_stock_question(_utext)  # 问具体标的时才缓冲首轮(防幻觉)，闲聊照常流式
 
-    # 问价快答: 纯读数问题直接排版工具结果，不走模型（实测 70s → ~3s）
-    if _stock_q:
-        from src.harness.quick_answer import answer as _quick
-        if _qa := await _quick(db, _utext, _REQ_BOUND.get(), user, runtime):
-            yield ("delta" if stream else "text"), _qa
-            if stream:
-                yield ("done", _qa)
-            return
+    from src.harness.direct_answer import answer as _direct
+    if _qa := await _direct(db, _utext, _REQ_BOUND.get(), user, runtime, stock_question=_stock_q,
+                            allow_specialized=_REQ_TOOLS.get() is None and _current_pack() is None):
+        yield ("delta" if stream else "text"), _qa
+        if stream:
+            yield ("done", _qa)
+        return
     # 命中配方则收紧白名单，未命中则限制为实际下发的 schema。
     _route, _ptxt = _route_with_persona(db, _utext, _REQ_BOUND.get(), _stock_q, CHAT_TOOLS, _REQ_TOOLS.get())
     if _ptxt: messages_for_ai.insert(0, {"role": "system", "content": _ptxt})

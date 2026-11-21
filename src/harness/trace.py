@@ -72,6 +72,11 @@ class CopilotTrace:
         # 内存里也留一份步骤摘要 —— finish 时据此推断 ok/degraded/error。
         # 不查库的原因: 轨迹写库本身可能失败(旁路), 推断不能依赖它成功。
         self.steps: list[dict] = []
+        #: 阶段打点(2026-11-21)。只放观测到的瞬时量: stage/ms/ok。
+        #: **刻意不落库**: copilot_runs/copilot_steps 没有阶段列, 迁移不在本次范围;
+        #: 结构化低敏日志(copilot.stage)是本轮唯一事实源, 读取侧基线只用 run 级
+        #: 墙钟, 不把「没测到」写成 0。
+        self.stages: list[dict] = []
         self._started = time.perf_counter()
 
     # -- 写入 ---------------------------------------------------------------
@@ -116,6 +121,8 @@ class CopilotTrace:
         except Exception as e:  # noqa: BLE001 - 轨迹是旁路, 但必须留痕
             # 2026-10-20 教训: 完全静默会让「表建好了却没数据」无从查起(生产实测踩过)
             logger.warning("[trace] open 写库失败: %s: %s", type(e).__name__, e)
+        finally:
+            self.mark_stage("run_open")
 
     def step(
         self,
@@ -176,6 +183,32 @@ class CopilotTrace:
         except Exception as e:  # noqa: BLE001 - 旁路, 但必须留痕
             logger.warning("[trace] 写库失败: %s: %s", type(e).__name__, e)
 
+    def mark_stage(self, name: str, *, ok: bool = True, detail: str | None = None) -> None:
+        """记一个阶段耗时(毫秒, 自本轮开始)。
+
+        **低敏契约**: 结构化日志只写 run_id / stage / ms / ok / detail。
+        `detail` 只允许放枚举式短标签(如 "degraded"、"timeout"), 不许放用户问题、
+        工具参数、持仓或任何可识别个人的内容 —— 这是日志, 不是回放库。
+
+        阶段名截到 32 字符; 本方法永不抛异常(阶段观测不能把问答搞挂)。
+        现状: 仅供日志与内存观测。没有阶段列之前**不落库**, 基线不会凭空补阶段。
+        """
+        try:
+            stage = (str(name) if name is not None else "unknown")[:32] or "unknown"
+            elapsed_ms = int((time.perf_counter() - self._started) * 1000)
+            self.stages.append({"stage": stage, "ms": elapsed_ms, "ok": bool(ok)})
+            payload = {
+                "run_id": self.run_id,
+                "stage": stage,
+                "ms": elapsed_ms,
+                "ok": bool(ok),
+            }
+            if detail:
+                payload["detail"] = _clip(str(detail), 120)
+            logger.info("[copilot.stage] %s", json.dumps(payload, ensure_ascii=False, default=str))
+        except Exception as e:  # noqa: BLE001 - 观测是旁路
+            logger.debug("[trace] mark_stage 失败(忽略): %s: %s", type(e).__name__, e)
+
     # -- 状态推断 -----------------------------------------------------------
     def _infer_status(self, status: str, error: str | None) -> tuple[str, str | None]:
         """把「工具全败/部分失败」从 ok 里拆出来, 让治理页看得到失败率。
@@ -220,6 +253,8 @@ class CopilotTrace:
         """收尾。ok/error 之外还可能是 degraded（部分工具失败）。"""
         status, error = self._infer_status(status, error)
         elapsed_ms = int((time.perf_counter() - self._started) * 1000)
+        # 阶段观测先落日志: 终态推断已完成, 这里只报「这一轮跑到收尾用了多久」。
+        self.mark_stage("run_finish", ok=(status == "ok"), detail=status)
         try:
             from src.db.models import CopilotRun
 

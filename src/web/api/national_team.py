@@ -4,8 +4,14 @@
 ----
     GET  /api/national-team/overview?report_date=&kind=float|total
     GET  /api/national-team/holdings?report_date=&kind=&holder=&q=&sort=&desc=&limit=&offset=
-    GET  /api/national-team/changes?report_date=&kind=&limit=
+    GET  /api/national-team/changes?report_date=&kind=&holder=&change=&limit=
     POST /api/national-team/refresh?mode=targeted|scan   （owner 触发采集，幂等）
+
+读接口的 `status` 区分 `ok` / `empty_table` / `unknown_period` / `insufficient_periods` /
+`zero_change` / `empty_result` —— 前端与参谋直查（`src/harness/institution_holdings.py`）
+都按它措辞，不得把「没有这个报告期」说成「没有持仓」。
+`/changes` 的 `holder`（机构组或具体账户）与 `change`（new/increase/decrease/exit）
+都在 `limit` 截断**之前**过滤，`count` 是该机构该变动类型的准确总量。
 
 `mode=targeted`（默认）按 `national_team_holder_registry` 名单 `in (...)` 刷新最近一期，秒级；
 `mode=scan` 走全市场扫描（一期两表各约 5.6 万行，3-6 分钟）—— 社保各组合 / 险资各产品账户
@@ -58,7 +64,7 @@ def national_team_usage():
         "usage": {
             "GET /overview": "机构组汇总（汇金系/证金/社保/险资/外汇局：只数·账户数·市值·环比变动只数）",
             "GET /holdings": "持仓明细（holder 传组 key：huijin/csf/ssb/insurance/safe，或具体 holder_key）",
-            "GET /changes": "环比变动（按机构组+股票聚合：新进/加仓/减仓/退出）",
+            "GET /changes": "环比变动（holder=机构组/账户, change=new|increase|decrease|exit；均在截断前过滤）",
             "POST /refresh": "手动触发采集（owner）：mode=targeted(默认,秒级) / scan(全市场,数分钟)",
         },
         "caliber": {
@@ -135,6 +141,8 @@ def national_team_holdings(
 def national_team_changes(
     report_date: str | None = Query(None, description="YYYY-MM-DD；缺省最新报告期"),
     kind: str = Query("float"),
+    holder: str | None = Query(None, description="机构组 key 或具体 holder_key，多个用逗号"),
+    change: str | None = Query(None, description="new/increase/decrease/exit，多个用逗号（先过滤再截断）"),
     limit: int = Query(100, ge=1, le=500),
 ):
     from src.core import national_team as nt
@@ -144,10 +152,16 @@ def national_team_changes(
         raise HTTPException(400, f"未知 kind: {kind}（float|total）")
 
     def _load() -> dict[str, Any]:
-        return nt.changes(engine, report_date=report_date, kind=k, limit=limit)
+        return nt.changes(
+            engine, report_date=report_date, kind=k, holder=holder, change=change, limit=limit
+        )
 
+    key = (
+        f"national_team:changes:{report_date or 'latest'}:{k}:{holder or 'all'}:"
+        f"{change or 'all'}:{limit}"
+    )
     try:
-        return _cached(f"national_team:changes:{report_date or 'latest'}:{k}:{limit}", _load)
+        return _cached(key, _load)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -177,11 +191,13 @@ def national_team_refresh(
     except Exception as exc:  # noqa: BLE001
         logger.warning("[national-team] 采集失败: %s", exc)
         raise HTTPException(502, f"国家队持仓采集失败: {exc}") from exc
-    # 采集成功后清掉读缓存（只清本模块的确定性 key，不 clear() 整池）
+    # 采集成功后清掉读缓存（只清本模块的确定性 key，不 clear() 整池）。
+    # 机构/变动过滤的 key 带 holder/change 维度，这里只清「全部机构」的常用键；
+    # 其余组合靠 10 分钟 TTL 自然过期 —— 不清整池、不误伤别的模块。
     for k in nt.REPORT_TABLES:
         for prefix in (
             f"national_team:overview:latest:{k}",
-            f"national_team:changes:latest:{k}:100",
+            f"national_team:changes:latest:{k}:all:all:100",
         ):
             try:
                 biz_cache.delete(prefix)

@@ -47,6 +47,8 @@ export interface NationalTeamAbsentHolder {
 
 export interface NationalTeamOverview {
   available: boolean
+  /** ok / empty_table（还没采集）/ unknown_period（没有这个报告期） */
+  status?: string
   report_date: string | null
   report_kind: NationalTeamReportKind
   report_kind_label?: string
@@ -126,6 +128,8 @@ export interface NationalTeamChangeItem {
 
 export interface NationalTeamChangesResponse {
   available: boolean
+  /** ok / empty_table / unknown_period / insufficient_periods / zero_change / empty_result */
+  status?: string
   report_date: string | null
   prev_report_date: string | null
   report_kind: NationalTeamReportKind
@@ -197,12 +201,22 @@ export const nationalTeamApi = {
   },
 
   changes(
-    params: { report_date?: string; kind?: NationalTeamReportKind; limit?: number } = {},
+    params: {
+      report_date?: string
+      kind?: NationalTeamReportKind
+      /** 机构组 key 或具体 holder_key，多个用逗号 —— 后端在截断前过滤 */
+      holder?: string
+      /** new/increase/decrease/exit，多个用逗号 —— 后端在截断前过滤 */
+      change?: string
+      limit?: number
+    } = {},
   ): Promise<NationalTeamChangesResponse> {
     return fetchAPI<NationalTeamChangesResponse>(
       withQuery('/national-team/changes', {
         report_date: params.report_date,
         kind: params.kind,
+        holder: params.holder,
+        change: params.change,
         limit: params.limit,
       }),
       { cacheMode: 'reload' },

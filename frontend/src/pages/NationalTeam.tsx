@@ -22,6 +22,7 @@
  * 不隐藏、不算成采集失败。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import {
   nationalTeamApi,
@@ -63,6 +64,39 @@ const CHANGE_TONE: Record<NationalTeamChangeItem['kind'], string> = {
 function errText(e: unknown): string {
   if (e instanceof Error && e.message) return e.message
   return '请求失败（未收到有效响应）'
+}
+
+/**
+ * 解析参谋直查给出的深链参数（与 `src/harness/institution_holdings.py` 的 `_page_link` 对齐）。
+ *
+ * 规则：只认已知取值，非法/缺省一律回落到页面缺省（float / 最新一期 / 全部机构 / 无变动过滤）。
+ * 不因链接放宽任何权限 —— 权限判断在路由 PermGuard 与后端 `require_perm`。
+ */
+export interface NationalTeamDeepLink {
+  kind: NationalTeamReportKind
+  reportDate: string | null
+  holder: string
+  change: string[]
+  view: 'holdings' | 'changes' | null
+  q: string
+}
+
+const CHANGE_VALUES = ['new', 'increase', 'decrease', 'exit'] as const
+
+export function parseDeepLink(params: URLSearchParams): NationalTeamDeepLink {
+  const viewRaw = params.get('view')
+  return {
+    kind: params.get('kind') === 'total' ? 'total' : 'float',
+    reportDate: /^\d{4}-\d{2}-\d{2}$/.test(params.get('report_date') || '')
+      ? params.get('report_date')
+      : null,
+    holder: params.get('holder') || 'all',
+    change: (params.get('change') || '')
+      .split(',')
+      .filter((x): x is (typeof CHANGE_VALUES)[number] => (CHANGE_VALUES as readonly string[]).includes(x)),
+    view: viewRaw === 'changes' || viewRaw === 'holdings' ? viewRaw : null,
+    q: params.get('q') || '',
+  }
 }
 
 function fmtSnapshot(iso: string | null | undefined): string {
@@ -140,11 +174,20 @@ function HoldingRow({ item }: { item: NationalTeamHolding }) {
 }
 
 export default function NationalTeam() {
-  const [kind, setKind] = useState<NationalTeamReportKind>('float')
+  // 深链（参谋直查给出的「可复核」链接）：/national-team?kind=&report_date=&holder=&view=&change=&q=
+  // 页面只做定位与同口径查询，不因链接改变权限判断（路由级 PermGuard + 后端 require_perm 仍在）。
+  const [searchParams, setSearchParams] = useSearchParams()
+  // 只在首次挂载读链接；后续用户操作会写回 URL（可分享、可复核）
+  const deepLink = useMemo(() => parseDeepLink(searchParams), [searchParams])
+  const [kind, setKind] = useState<NationalTeamReportKind>(deepLink.kind)
+  const [reportDate, setReportDate] = useState<string | null>(deepLink.reportDate)
+  const [holder, setHolder] = useState<string>(deepLink.holder)
+  const [changeFilter, setChangeFilter] = useState<string[]>(deepLink.change)
+  const focusView = deepLink.view
+  const stockQuery = deepLink.q
   const [overview, setOverview] = useState<NationalTeamOverview | null>(null)
   const [holdings, setHoldings] = useState<NationalTeamHolding[]>([])
   const [changes, setChanges] = useState<NationalTeamChangesResponse | null>(null)
-  const [holder, setHolder] = useState<string>('all')
   const [status, setStatus] = useState<LoadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -152,16 +195,48 @@ export default function NationalTeam() {
   // 竞态守卫：切口径/切主体会连发请求，慢响应的旧请求必须丢弃（否则表与汇总对不上）
   const seq = useRef(0)
 
+  const syncParams = useCallback(
+    (patch: Record<string, string | null>) => {
+      setSearchParams((prev) => {
+        const sp = new URLSearchParams(prev)
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === null || v === '') sp.delete(k)
+          else sp.set(k, v)
+        }
+        return sp
+      }, { replace: true })
+    },
+    [setSearchParams],
+  )
+
   const load = useCallback(
-    async (nextKind: NationalTeamReportKind, nextHolder: string) => {
+    async (
+      nextKind: NationalTeamReportKind,
+      nextHolder: string,
+      nextDate: string | null,
+      nextChange: string[],
+    ) => {
       const my = ++seq.current
       setStatus('loading')
       setError(null)
       try {
         const [ov, list, ch] = await Promise.all([
-          nationalTeamApi.overview({ kind: nextKind }),
-          nationalTeamApi.holdings({ kind: nextKind, holder: nextHolder, limit: 300 }),
-          nationalTeamApi.changes({ kind: nextKind, limit: 60 }),
+          nationalTeamApi.overview({ kind: nextKind, report_date: nextDate ?? undefined }),
+          nationalTeamApi.holdings({
+            kind: nextKind,
+            holder: nextHolder,
+            report_date: nextDate ?? undefined,
+            q: stockQuery || undefined,
+            limit: 300,
+          }),
+          // 机构与变动类型必须在**后端截断前**过滤：不能拿全市场前 60 条再筛机构
+          nationalTeamApi.changes({
+            kind: nextKind,
+            holder: nextHolder === 'all' ? undefined : nextHolder,
+            report_date: nextDate ?? undefined,
+            change: nextChange.length ? nextChange.join(',') : undefined,
+            limit: 60,
+          }),
         ])
         if (my !== seq.current) return
         setOverview(ov)
@@ -177,12 +252,13 @@ export default function NationalTeam() {
         setStatus('error')
       }
     },
-    [],
+    [stockQuery],
   )
 
   useEffect(() => {
-    void load(kind, holder)
-  }, [kind, holder, load])
+    void load(kind, holder, reportDate, changeFilter)
+    // changeFilter 是数组，按内容比较，避免每次渲染都重新取数
+  }, [kind, holder, reportDate, changeFilter.join(','), load]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRefresh = useCallback(async (mode: 'targeted' | 'scan' = 'targeted') => {
     setRefreshing(true)
@@ -197,13 +273,45 @@ export default function NationalTeam() {
             }`
           : `采集部分失败：写入 ${receipt.written} 行，${errs} 个目标失败（见后端日志）`,
       )
-      await load(kind, holder)
+      await load(kind, holder, reportDate, changeFilter)
     } catch (e) {
       setRefreshNote(`采集失败：${errText(e)}`)
     } finally {
       setRefreshing(false)
     }
-  }, [kind, holder, load])
+  }, [kind, holder, reportDate, changeFilter, load])
+
+  const onKindChange = useCallback(
+    (value: NationalTeamReportKind) => {
+      setKind(value)
+      syncParams({ kind: value })
+    },
+    [syncParams],
+  )
+
+  const onHolderChange = useCallback(
+    (value: string) => {
+      setHolder(value)
+      syncParams({ holder: value === 'all' ? null : value })
+    },
+    [syncParams],
+  )
+
+  const toggleChange = useCallback(
+    (value: string) => {
+      setChangeFilter((prev) => {
+        const next = prev.includes(value) ? prev.filter((x) => x !== value) : [...prev, value]
+        syncParams({ change: next.join(',') || null })
+        return next
+      })
+    },
+    [syncParams],
+  )
+
+  const backToLatest = useCallback(() => {
+    setReportDate(null)
+    syncParams({ report_date: null })
+  }, [syncParams])
 
   const totals = overview?.totals
   const holderOptions = useMemo(() => {
@@ -251,6 +359,17 @@ export default function NationalTeam() {
 
       {refreshNote && <div className="rounded-lg bg-s2 px-3 py-2 text-[12px]">{refreshNote}</div>}
 
+      {/* 深链定位说明：链接来自参谋直查（同机构/同报告期/同榜单），不是另一种口径 */}
+      {focusView && (
+        <div className="rounded-lg bg-s1 px-3 py-2 text-[12px] text-muted-foreground">
+          已按链接定位到「{focusView === 'changes' ? '环比变动' : '持仓明细'}」
+          {reportDate ? ` · 报告期 ${reportDate}` : ''}
+          {holder !== 'all' ? ` · ${holderOptions.find((o) => o.key === holder)?.label ?? holder}` : ''}
+          {changeFilter.length ? ` · 变动类型 ${changeFilter.join('/')}` : ''}
+          。口径与本次回答一致，可切换机构/报告期复核。
+        </div>
+      )}
+
       {/* 口径切换 */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-lg bg-s1 p-1">
@@ -258,7 +377,7 @@ export default function NationalTeam() {
             <button
               key={o.value}
               type="button"
-              onClick={() => setKind(o.value)}
+              onClick={() => onKindChange(o.value)}
               title={o.hint}
               className={cn(
                 'rounded-md px-3 py-1.5 text-[14px]',
@@ -281,7 +400,7 @@ export default function NationalTeam() {
           <AlertCircle className="mt-0.5 h-4 w-4 text-destructive" />
           <div className="min-w-0 flex-1">
             <div>国家队数据加载失败：{error}</div>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load(kind, holder)}>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load(kind, holder, reportDate, changeFilter)}>
               重试
             </Button>
           </div>
@@ -292,8 +411,15 @@ export default function NationalTeam() {
         <div className="rounded-lg bg-s1 p-3 text-[14px]">
           <div>{overview.reason || '暂无国家队持仓数据'}</div>
           <div className="mt-1 text-[12px] text-muted-foreground">
-            首次使用需点右上角「采集最新」（owner 权限）或等每日 19:40 的自动同步。
+            {overview.status === 'unknown_period'
+              ? '库里有其它报告期，只是链接指向的这一期没有数据；可回到最新一期或换报告期再看。'
+              : '首次使用需点右上角「刷新 / 全市场扫描」（owner 权限）或等每日 19:40 的自动同步。'}
           </div>
+          {overview.status === 'unknown_period' && (
+            <Button variant="outline" size="sm" className="mt-2" onClick={backToLatest}>
+              回到最新一期
+            </Button>
+          )}
         </div>
       )}
 
@@ -352,6 +478,44 @@ export default function NationalTeam() {
                 </div>
               )}
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1 px-3">
+              <span className="mr-1 text-[12px] text-muted-foreground">只看：</span>
+              {(
+                [
+                  ['new', '新进'],
+                  ['increase', '加仓'],
+                  ['decrease', '减仓'],
+                  ['exit', '退出'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={changeFilter.includes(value)}
+                  onClick={() => toggleChange(value)}
+                  className={cn(
+                    'rounded-md px-2 py-1 text-[12px]',
+                    changeFilter.includes(value)
+                      ? 'bg-s3 font-medium text-foreground'
+                      : 'text-muted-foreground hover:bg-s2',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+              {changeFilter.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChangeFilter([])
+                    syncParams({ change: null })
+                  }}
+                  className="rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-s2"
+                >
+                  清除
+                </button>
+              )}
+            </div>
             <div className="mt-2 divide-y divide-border">
               {!changes?.available && (
                 <div className="px-3 py-3 text-[14px] text-muted-foreground">
@@ -363,13 +527,15 @@ export default function NationalTeam() {
               ))}
               {changes?.available && changes.items.length === 0 && (
                 <div className="px-3 py-3 text-[14px] text-muted-foreground">
-                  本期 {changes.counts.unchanged} 只全部持股数未变
+                  {changeFilter.length
+                    ? '该机构本期没有所选变动类型的记录（不是取数失败）。'
+                    : `本期 ${changes.counts.unchanged} 只全部持股数未变（确实零变动，不是取数失败）。`}
                 </div>
               )}
             </div>
             {changes?.truncated && (
               <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                变动共 {changes.count} 条，此处只显示前 60 条（按变动幅度排序）。
+                变动共 {changes.count} 条（已按机构与变动类型过滤），此处只显示前 60 条（按变动幅度排序）。
               </div>
             )}
           </section>
@@ -388,7 +554,7 @@ export default function NationalTeam() {
                   <button
                     key={o.key}
                     type="button"
-                    onClick={() => setHolder(o.key)}
+                    onClick={() => onHolderChange(o.key)}
                     className={cn(
                       'rounded-md px-2.5 py-1 text-[12px]',
                       holder === o.key ? 'bg-s3 font-medium text-foreground' : 'text-muted-foreground hover:bg-s3',

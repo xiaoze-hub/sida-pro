@@ -307,3 +307,129 @@ def test_routes_mounted():
     for p in ("/api/national-team/overview", "/api/national-team/holdings",
               "/api/national-team/changes", "/api/national-team/refresh"):
         assert p in paths, f"{p} 未挂载"
+
+
+# ────────────────────────── 问句解析（2026-11-21 直查） ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,scope,value",
+    [
+        ("汇金资管这季持仓", "holder", "huijin_asset"),
+        ("中央汇金投资持仓", "holder", "huijin_invest"),
+        ("汇金持仓", "group", "huijin"),
+        ("社保基金持仓", "group", "ssb"),
+        ("中国证券金融持仓", "group", "csf"),
+    ],
+)
+def test_resolve_institution_scopes_prefers_account_over_group(text, scope, value):
+    """账户别名命中后不能再被组别名吃掉：问「汇金资管」不能答「汇金系合计」。"""
+    scopes = nt.resolve_institution_scopes(text)
+    assert scopes and scopes[0]["scope"] == scope and scopes[0]["value"] == value
+    assert len(scopes) == 1
+
+
+def test_resolve_institution_scopes_ignores_unrelated_names():
+    assert nt.resolve_institution_scopes("中国平安持仓") == []
+    assert nt.resolve_institution_scopes("招商银行分红") == []
+
+
+def test_national_team_word_expands_to_all_groups():
+    vals = {s["value"] for s in nt.resolve_institution_scopes("国家队持仓")}
+    assert vals == set(nt.GROUP_ORDER)
+
+
+@pytest.mark.parametrize(
+    "raw,expect",
+    [
+        ("new", ("new",)),
+        ("新进,加仓", ("new", "increase")),
+        (["exit", "减仓"], ("exit", "decrease")),
+        ("bogus", ()),
+        (None, ()),
+    ],
+)
+def test_normalize_change_kinds(raw, expect):
+    assert nt.normalize_change_kinds(raw) == expect
+
+
+# ────────────────────────── 状态区分与过滤顺序 ──────────────────────────
+
+
+def test_overview_unknown_period_is_explicit(engine, monkeypatch):
+    rows = {(nt.REPORT_TABLES["float"], "2026-09-30"): _scan_rows("2026-09-30")}
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+    ov = nt.overview(engine, report_date="2025-12-31", kind="float")
+    assert ov["available"] is False and ov["status"] == "unknown_period"
+    assert "没有 2025-12-31 这一报告期" in ov["reason"]
+    assert ov["periods"] == ["2026-09-30"]
+
+
+def test_holdings_limit_does_not_shrink_total(engine, monkeypatch):
+    """`count` 是过滤后总数；`items` 才是被 limit 截断的页。"""
+    big = [_src(f"{600000 + i:06d}", f"票{i}", "中央汇金投资有限责任公司", 10.0 + i)
+           for i in range(260)]
+    rows = {(nt.REPORT_TABLES["float"], "2026-09-30"): big}
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+    page = nt.holdings(engine, kind="float", holder="huijin", limit=20)
+    assert page["count"] == 260 and len(page["items"]) == 20
+    assert nt.scope_summary(engine, kind="float", holder="huijin")["stocks"] == 260
+
+
+def test_changes_filter_before_limit(engine, monkeypatch):
+    """先按机构+变动过滤再截断：不能拿全市场前 N 条冒充某机构全集。"""
+    cur = [_src(f"{600000 + i:06d}", f"汇金{i}", "中央汇金投资有限责任公司", 10.0)
+           for i in range(5)]
+    cur += [_src(f"{300000 + i:06d}", f"社保{i}", "全国社保基金一一三组合", 20.0)
+            for i in range(150)]
+    rows = {
+        (nt.REPORT_TABLES["float"], "2026-09-30"): cur,
+        # 上期至少留一行，否则该期不会落库、会被当成「只有一期」
+        (nt.REPORT_TABLES["float"], "2026-06-30"): [
+            _src("600999", "旧持仓", "中央汇金投资有限责任公司", 1.0, end="2026-06-30", cap=1.0)
+        ],
+    }
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2026-06-30", report_kinds=["float"])
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+
+    ssb_new = nt.changes(engine, kind="float", holder="ssb", change="new", limit=10)
+    assert ssb_new["counts"]["new"] == 150
+    assert ssb_new["count"] == 150 and ssb_new["truncated"] is True
+    assert len(ssb_new["items"]) == 10
+    assert {i["group_key"] for i in ssb_new["items"]} == {"ssb"}
+    assert ssb_new["status"] == "ok"
+
+
+def test_changes_explicit_older_period_uses_next_period_as_base(engine, monkeypatch):
+    """显式指定较早报告期时，比较基准应是它的**下一期**，不是最新期。"""
+    periods = {"2026-03-31": 10.0, "2026-06-30": 20.0, "2026-09-30": 30.0}
+    rows = {
+        (nt.REPORT_TABLES["float"], p): [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", n, end=p, cap=n)
+        ]
+        for p, n in periods.items()
+    }
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    for p in periods:
+        nt.scan_period(engine, p, report_kinds=["float"])
+    ch = nt.changes(engine, report_date="2026-06-30", kind="float", holder="huijin")
+    assert ch["prev_report_date"] == "2026-03-31"
+    assert ch["items"][0]["kind"] == "increase"
+    assert ch["items"][0]["delta_num"] == pytest.approx(10.0)
+
+
+def test_changes_holder_absent_is_empty_result_not_zero_change(engine, monkeypatch):
+    _seed_two_periods(engine, monkeypatch)
+    ch = nt.changes(engine, kind="float", holder="csf")
+    assert ch["status"] == "empty_result"
+    assert ch["available"] is False
+    assert "不是取数失败" in ch["reason"]
+
+
+def test_holdings_unknown_holder_is_empty_result(engine, monkeypatch):
+    _seed_two_periods(engine, monkeypatch)
+    h = nt.holdings(engine, kind="float", holder="csf")
+    assert h["status"] == "empty_result" and h["count"] == 0

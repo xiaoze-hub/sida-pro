@@ -98,6 +98,162 @@ HOLDERS: tuple[dict[str, str], ...] = (
 HOLDER_BY_KEY: dict[str, dict[str, str]] = {h["key"]: h for h in HOLDERS}
 HOLDER_BY_NAME: dict[str, dict[str, str]] = {h["name"]: h for h in HOLDERS}
 
+# ── 问句解析（2026-11-21 参谋直查）：机构名 → 组 / 具体账户 ──
+#
+# 长别名必须排在短别名前面并按长度降序匹配：`汇金资管` 不能被 `汇金` 抢先归到组，
+# 否则用户明确问「汇金资管」时会被答成汇金系合计（口径漂移）。
+GROUP_ALIASES: tuple[tuple[str, str], ...] = (
+    ("中国证券金融股份有限公司", "csf"),
+    ("中国证券金融", "csf"),
+    ("证金公司", "csf"),
+    ("中证金", "csf"),
+    ("证金", "csf"),
+    ("全国社会保障基金", "ssb"),
+    ("全国社保基金", "ssb"),
+    ("社会保障基金", "ssb"),
+    ("社保基金", "ssb"),
+    ("社保", "ssb"),
+    ("保险资金", "insurance"),
+    ("保险公司", "insurance"),
+    ("保险机构", "insurance"),
+    ("险资", "insurance"),
+    ("国家外汇管理局", "safe"),
+    ("外汇局", "safe"),
+    ("梧桐树", "safe"),
+    ("凤山投资", "safe"),
+    ("坤藤投资", "safe"),
+    ("中央汇金", "huijin"),
+    ("汇金", "huijin"),
+)
+
+#: 具体账户别名（比组更精确 —— 命中后该段文本不再参与组别名匹配）
+HOLDER_ALIASES: tuple[tuple[str, str], ...] = (
+    ("中央汇金资产管理有限责任公司", "huijin_asset"),
+    ("中央汇金投资有限责任公司", "huijin_invest"),
+    ("中央汇金资产管理", "huijin_asset"),
+    ("中央汇金投资", "huijin_invest"),
+    ("汇金资管", "huijin_asset"),
+    ("汇金投资", "huijin_invest"),
+)
+
+#: 「国家队」不是一个组，而是这五组的合计（页面同口径）
+NATIONAL_TEAM_WORDS: tuple[str, ...] = ("国家队",)
+
+#: 变动词 → 变动类型（榜单口径：new/exit 只代表是否进入前十大榜，不是实际买卖）
+CHANGE_KIND_ALIASES: dict[str, tuple[str, ...]] = {
+    "new": ("新进", "新增", "首次进入"),
+    "increase": ("加仓", "增持", "增仓"),
+    "decrease": ("减仓", "减持"),
+    "exit": ("退出", "清仓", "剔除", "落榜"),
+}
+CHANGE_KINDS: tuple[str, ...] = ("new", "increase", "decrease", "exit")
+
+
+def resolve_institution_scopes(text: str) -> list[dict[str, str]]:
+    """把问句里的机构名解析成有序 scope 列表；没写的机构一个都不猜。
+
+    返回 `[{"scope": "group"|"holder", "value": ..., "label": ...}]`：
+    - 先匹配具体账户（汇金投资 / 汇金资管），命中后屏蔽该段，避免又被组别名吃掉；
+    - 再匹配组别名（长的优先）；
+    - 「国家队」展开成全部五组（与页面「全部机构」同口径）。
+
+    纯本地正则式匹配，不发网络、不看会话绑定 —— 绑定里只有个股代码，从来不是机构。
+    """
+    work = text or ""
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(scope: str, value: str, label: str, hit: str) -> None:
+        nonlocal work
+        key = (scope, value)
+        if key not in seen:
+            seen.add(key)
+            out.append({"scope": scope, "value": value, "label": label})
+        work = work.replace(hit, "　")
+
+    for alias, holder_key in sorted(HOLDER_ALIASES, key=lambda x: len(x[0]), reverse=True):
+        if alias and alias in work:
+            _add("holder", holder_key, HOLDER_BY_KEY[holder_key]["group"], alias)
+    for alias, group_key in sorted(GROUP_ALIASES, key=lambda x: len(x[0]), reverse=True):
+        if alias and alias in work:
+            _add("group", group_key, GROUPS[group_key]["label"], alias)
+    if any(w in work for w in NATIONAL_TEAM_WORDS):
+        for gk in GROUP_ORDER:
+            if ("group", gk) not in seen:
+                seen.add(("group", gk))
+                out.append({"scope": "group", "value": gk, "label": GROUPS[gk]["label"]})
+    return out
+
+
+def normalize_change_kinds(value: str | Sequence[str] | None) -> tuple[str, ...]:
+    """变动筛选归一化：接受 `new` / `新进,加仓` 两种写法；认不出的一律忽略。"""
+    if not value:
+        return ()
+    parts = value.split(",") if isinstance(value, str) else list(value)
+    out: list[str] = []
+    for part in parts:
+        p = str(part).strip()
+        if not p:
+            continue
+        if p.lower() in CHANGE_KINDS:
+            out.append(p.lower())
+            continue
+        for kind, aliases in CHANGE_KIND_ALIASES.items():
+            if any(a in p for a in aliases):
+                out.append(kind)
+                break
+    return tuple(dict.fromkeys(out))
+
+
+def _scope_filter(holder: str | None) -> tuple[list[str], list[str], list[str]]:
+    """`holder` 参数 → (组 key, 具体账户 holder_key, 具体账户全称)。
+
+    账户名要单独返回全称：扫描路径落库的 `holder_key` 是 `组:哈希`（见
+    `holder_key_for`），不是 `HOLDERS` 里的 `huijin_invest` 这类种子 key ——
+    只按 holder_key 过滤「汇金资管」会一行都匹配不到。全称过滤两条路径都对。
+    """
+    groups: list[str] = []
+    keys: list[str] = []
+    names: list[str] = []
+    for part in str(holder or "").split(","):
+        p = part.strip()
+        if not p or p == "all":
+            continue
+        if p in GROUPS:
+            groups.append(p)
+        elif p in HOLDER_BY_KEY:
+            names.append(HOLDER_BY_KEY[p]["name"])
+        else:
+            keys.append(p)
+    return groups, keys, names
+
+
+def _scope_sql(
+    alias: str,
+    groups: Sequence[str],
+    keys: Sequence[str],
+    names: Sequence[str] = (),
+) -> tuple[str, dict[str, Any]]:
+    """拼 `holder` 过滤（组 / holder_key / 账户全称，三者 OR），别名是表别名或空串。"""
+    conds: list[str] = []
+    params: dict[str, Any] = {}
+    prefix = f"{alias}." if alias else ""
+    if groups:
+        cols = ", ".join(f":sg{i}" for i in range(len(groups)))
+        conds.append(f"{prefix}group_key IN ({cols})")
+        params.update({f"sg{i}": g for i, g in enumerate(groups)})
+    if keys:
+        cols = ", ".join(f":sh{i}" for i in range(len(keys)))
+        conds.append(f"{prefix}holder_key IN ({cols})")
+        params.update({f"sh{i}": k for i, k in enumerate(keys)})
+    if names:
+        cols = ", ".join(f":sn{i}" for i in range(len(names)))
+        conds.append(f"{prefix}holder_name IN ({cols})")
+        params.update({f"sn{i}": n for i, n in enumerate(names)})
+    if not conds:
+        return "", {}
+    return " AND (" + " OR ".join(conds) + ")", params
+
 #: 险资名称规则（社保/汇金等先判，避免误收）
 _INSURANCE_MARKERS: tuple[str, ...] = (
     "人寿保险",
@@ -740,6 +896,7 @@ def overview(engine: Engine, report_date: str | None = None, kind: str = "float"
     if not target:
         return {
             "available": False,
+            "status": "empty_table",
             "report_date": None,
             "report_kind": kind,
             "periods": [],
@@ -748,6 +905,25 @@ def overview(engine: Engine, report_date: str | None = None, kind: str = "float"
             "source": SOURCE,
             "caliber_note": CALIBER_NOTE,
             "reason": "尚未采集国家队持仓（表为空）",
+        }
+    if report_date and report_date not in periods:
+        # 有这个库、但没有这个报告期 —— 不能渲染成「有数据但全是 0」。
+        return {
+            "available": False,
+            "status": "unknown_period",
+            "report_date": report_date,
+            "report_kind": kind,
+            "report_kind_label": REPORT_KIND_LABEL.get(kind, kind),
+            "prev_report_date": None,
+            "periods": periods,
+            "groups": [],
+            "absent_holders": [],
+            "totals": {"stocks": 0, "market_cap": 0, "hold_num": 0, "market_cap_missing": 0},
+            "snapshot_at": None,
+            "source": SOURCE,
+            "caliber_note": CALIBER_NOTE,
+            "holder_scope_note": HOLDER_SCOPE_NOTE,
+            "reason": f"没有 {report_date} 这一报告期（已采集：{'、'.join(periods[:6])}）",
         }
 
     rows = _rows(
@@ -856,6 +1032,7 @@ GROUP BY c.group_key
     snapshot_at = max((str(r.get("snapshot_at") or "") for r in rows), default="") or None
     return {
         "available": True,
+        "status": "ok",
         "report_date": target,
         "report_kind": kind,
         "report_kind_label": REPORT_KIND_LABEL.get(kind, kind),
@@ -868,6 +1045,84 @@ GROUP BY c.group_key
         "source": SOURCE,
         "caliber_note": CALIBER_NOTE,
         "holder_scope_note": HOLDER_SCOPE_NOTE,
+    }
+
+
+def scope_summary(
+    engine: Engine,
+    *,
+    report_date: str | None = None,
+    kind: str = "float",
+    holder: str | None = None,
+    q: str | None = None,
+) -> dict[str, Any]:
+    """单个机构 scope（组 / 具体账户 / 多组）的合计口径。
+
+    与 `holdings` 共用同一张表与同一组过滤条件，只做聚合 —— 供参谋直查在
+    「先按机构过滤、再截断展示」时给出**准确总量**，不是拿 `len(items)` 冒充。
+    股票只数按 `stock_code` 去重；持股/市值按账户相加（不同账户是不同股份）。
+    """
+    periods = persisted_periods(engine, kind)
+    target = report_date or (periods[0] if periods else None)
+    base: dict[str, Any] = {
+        "report_date": target,
+        "report_kind": kind,
+        "periods": periods,
+        "holder": holder,
+        "stocks": 0,
+        "holders": 0,
+        "hold_num": 0.0,
+        "market_cap": 0.0,
+        "market_cap_missing": 0,
+        "snapshot_at": None,
+        "caliber_note": CALIBER_NOTE,
+    }
+    if not periods:
+        return {**base, "status": "empty_table", "reason": "尚未采集国家队持仓（表为空）"}
+    if report_date and report_date not in periods:
+        return {
+            **base,
+            "status": "unknown_period",
+            "reason": f"没有 {report_date} 这一报告期（已采集：{'、'.join(periods[:6])}）",
+        }
+
+    where = ["report_date = :rd", "report_kind = :rk"]
+    params: dict[str, Any] = {"rd": target, "rk": kind}
+    groups, keys, names = _scope_filter(holder)
+    scope_sql, scope_params = _scope_sql("", groups, keys, names)
+    if scope_sql:
+        where.append(scope_sql.removeprefix(" AND "))
+        params.update(scope_params)
+    if q:
+        where.append("(stock_code LIKE :q OR stock_name LIKE :q OR holder_name LIKE :q)")
+        params["q"] = f"%{q.strip()}%"
+
+    rows = _rows(
+        engine,
+        f"""
+SELECT COUNT(DISTINCT stock_code) AS stocks,
+       COUNT(DISTINCT holder_name) AS holders,
+       SUM(hold_num) AS hold_num,
+       SUM(COALESCE(market_cap, 0)) AS market_cap,
+       SUM(CASE WHEN market_cap IS NULL THEN 1 ELSE 0 END) AS market_cap_missing,
+       MAX(snapshot_at) AS snapshot_at
+FROM {TABLE}
+WHERE {' AND '.join(where)}
+""",
+        params,
+    )
+    r = rows[0] if rows else {}
+    stocks = int(r.get("stocks") or 0)
+    return {
+        **base,
+        "status": "ok" if stocks else "empty_result",
+        "stocks": stocks,
+        "holders": int(r.get("holders") or 0),
+        "hold_num": float(r.get("hold_num") or 0),
+        "market_cap": float(r.get("market_cap") or 0),
+        "market_cap_missing": int(r.get("market_cap_missing") or 0),
+        "snapshot_at": r.get("snapshot_at"),
+        "reason": None if stocks else "该机构/关键字在本报告期没有命中持仓",
     }
 
 
@@ -891,27 +1146,56 @@ def holdings(
     limit: int = 200,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """持仓明细（`holder` 传组 key，如 insurance；或传具体 holder_key）。"""
-    target = report_date or latest_period(engine, kind)
-    if not target:
+    """持仓明细（`holder` 传组 key，如 insurance；或传具体 holder_key；多个用逗号）。
+
+    返回里的 `status` 区分四种「没有数据」的情形，调用方不得把它们都说成「无持仓」：
+      - `empty_table`  ：一张表都没采集过（先采集）；
+      - `unknown_period`：**有这个库、但没有这个报告期**（附已采集期）；
+      - `empty_result` ：报告期有数据，只是该机构/关键字没有命中；
+      - `ok`           ：正常。
+    `count` 恒为**过滤后总数**，`items` 才是被 `limit/offset` 截断的页 —— 调用方不许
+    拿 `len(items)` 当机构全集。
+    """
+    periods = persisted_periods(engine, kind)
+    target = report_date or (periods[0] if periods else None)
+    base = {
+        "report_date": target,
+        "report_kind": kind,
+        "report_kind_label": REPORT_KIND_LABEL.get(kind, kind),
+        "periods": periods,
+        "holder": holder,
+        "caliber_note": CALIBER_NOTE,
+    }
+    if not periods:
         return {
+            **base,
             "available": False,
-            "report_date": None,
+            "status": "empty_table",
             "count": 0,
+            "limit": 0,
+            "offset": 0,
             "items": [],
             "reason": "尚未采集国家队持仓（表为空）",
-            "caliber_note": CALIBER_NOTE,
+        }
+    if report_date and report_date not in periods:
+        return {
+            **base,
+            "available": False,
+            "status": "unknown_period",
+            "count": 0,
+            "limit": 0,
+            "offset": 0,
+            "items": [],
+            "reason": f"没有 {report_date} 这一报告期（已采集：{'、'.join(periods[:6])}）",
         }
 
     where = ["report_date = :rd", "report_kind = :rk"]
     params: dict[str, Any] = {"rd": target, "rk": kind}
-    if holder and holder != "all":
-        if holder in GROUPS:
-            where.append("group_key = :gk")
-            params["gk"] = holder
-        else:
-            where.append("holder_key = :hk")
-            params["hk"] = holder
+    groups, keys, names = _scope_filter(holder)
+    scope_sql, scope_params = _scope_sql("", groups, keys, names)
+    if scope_sql:
+        where.append(scope_sql.removeprefix(" AND "))
+        params.update(scope_params)
     if q:
         where.append("(stock_code LIKE :q OR stock_name LIKE :q OR holder_name LIKE :q)")
         params["q"] = f"%{q.strip()}%"
@@ -935,15 +1219,16 @@ LIMIT :lim OFFSET :off
 """,
         {**params, "lim": lim, "off": off},
     )
+    count = int((total[0]["n"] if total else 0) or 0)
     return {
-        "available": bool(items),
-        "report_date": target,
-        "report_kind": kind,
-        "count": int((total[0]["n"] if total else 0) or 0),
+        **base,
+        "available": count > 0,
+        "status": "ok" if count > 0 else "empty_result",
+        "count": count,
         "limit": lim,
         "offset": off,
         "items": items,
-        "caliber_note": CALIBER_NOTE,
+        "reason": None if count > 0 else "该机构/关键字在本报告期没有命中持仓",
     }
 
 
@@ -952,21 +1237,66 @@ def changes(
     *,
     report_date: str | None = None,
     kind: str = "float",
+    holder: str | None = None,
+    change: str | Sequence[str] | None = None,
     limit: int = 100,
 ) -> dict[str, Any]:
-    """环比变动（按 机构组 + 股票 聚合；组内多账户先合并再比较）。"""
+    """环比变动（按 机构组 + 股票 聚合；组内多账户先合并再比较）。
+
+    `holder` **在 SQL 里先过滤机构**（组 key / 具体账户 key，逗号分隔），`change` 在
+    聚合后按 new/increase/decrease/exit 过滤 —— 两者都在 `limit` 截断**之前**完成，
+    `count` 才是该机构该变动类型的准确总量。绝不先取前 N 条再筛机构（那会把
+    「社保新进 3 只」答成「全市场新进前 60 条里恰好有 3 只社保」）。
+
+    `status` 区分四种「看起来没数据」：`empty_table` / `unknown_period` /
+    `insufficient_periods`（只有一期）/ `zero_change`（有数据但本期确实零变动）/
+    `empty_result`（该机构本期不在榜）。取数异常一律抛，不降级成零变动。
+    """
     periods = persisted_periods(engine, kind)
     target = report_date or (periods[0] if periods else None)
-    if not target or len(periods) < 2:
+    groups, keys, names = _scope_filter(holder)
+    wanted = normalize_change_kinds(change)
+    base: dict[str, Any] = {
+        "report_date": target,
+        "report_kind": kind,
+        "periods": periods,
+        "holder": holder,
+        "change": list(wanted),
+        "counts": {},
+        "count": 0,
+        "items": [],
+        "truncated": False,
+        "caliber_note": CALIBER_NOTE,
+    }
+
+    def _empty(status: str, reason: str, prev: str | None = None) -> dict[str, Any]:
         return {
+            **base,
             "available": False,
-            "report_date": target,
-            "prev_report_date": periods[1] if len(periods) > 1 else None,
-            "counts": {},
-            "items": [],
-            "reason": "只有一期数据，无法计算环比（需至少两个报告期）",
+            "computed": False,
+            "status": status,
+            "prev_report_date": prev,
+            "reason": reason,
         }
-    prev = periods[1] if periods[0] == target else periods[0]
+
+    if not periods:
+        return _empty("empty_table", "尚未采集国家队持仓（表为空）")
+    if report_date and report_date not in periods:
+        return _empty(
+            "unknown_period",
+            f"没有 {report_date} 这一报告期（已采集：{'、'.join(periods[:6])}）",
+        )
+    idx = periods.index(str(target))
+    prev = periods[idx + 1] if idx + 1 < len(periods) else None
+    if prev is None:
+        return _empty(
+            "insufficient_periods",
+            f"只有一期数据（{periods[idx]}），无法计算环比（需至少两个报告期）",
+            prev=None,
+        )
+
+    cur_scope, cur_scope_params = _scope_sql("c", groups, keys, names)
+    prev_scope, prev_scope_params = _scope_sql("p", groups, keys, names)
 
     rows = _rows(
         engine,
@@ -980,15 +1310,14 @@ FROM {TABLE} c
 LEFT JOIN {TABLE} p
   ON p.report_date = :prev AND p.report_kind = c.report_kind
  AND p.holder_key = c.holder_key AND p.stock_code = c.stock_code
-WHERE c.report_date = :cur AND c.report_kind = :rk
+WHERE c.report_date = :cur AND c.report_kind = :rk{cur_scope}
 GROUP BY c.group_key, c.stock_code
 """,
-        {"cur": target, "prev": prev, "rk": kind},
+        {"cur": target, "prev": prev, "rk": kind, **cur_scope_params},
     )
 
     items: list[dict[str, Any]] = []
     counts = {"new": 0, "increase": 0, "decrease": 0, "exit": 0, "unchanged": 0}
-    cur_pairs = {(str(r["group_key"]), str(r["stock_code"])) for r in rows}
     for r in rows:
         cur = float(r["cur_num"] or 0)
         prev_num = r.get("prev_num")
@@ -1027,16 +1356,17 @@ GROUP BY c.group_key, c.stock_code
             }
         )
 
+    cur_pairs = {(str(r["group_key"]), str(r["stock_code"])) for r in rows}
     exits = _rows(
         engine,
         f"""
 SELECT p.group_key, p.stock_code, MAX(p.stock_name) AS stock_name,
        SUM(p.hold_num) AS prev_num, SUM(COALESCE(p.market_cap, 0)) AS prev_cap
 FROM {TABLE} p
-WHERE p.report_date = :prev AND p.report_kind = :rk
+WHERE p.report_date = :prev AND p.report_kind = :rk{prev_scope}
 GROUP BY p.group_key, p.stock_code
 """,
-        {"prev": prev, "rk": kind},
+        {"prev": prev, "rk": kind, **prev_scope_params},
     )
     for r in exits:
         pair = (str(r["group_key"]), str(r["stock_code"]))
@@ -1066,16 +1396,39 @@ GROUP BY p.group_key, p.stock_code
 
     order = {"new": 0, "increase": 1, "decrease": 2, "exit": 3}
     items.sort(key=lambda x: (order.get(x["kind"], 9), -abs(x["delta_num"])))
+    selected = [i for i in items if i["kind"] in wanted] if wanted else items
+
+    material = counts["new"] + counts["increase"] + counts["decrease"] + counts["exit"]
+    # 顺序有意义：先判「该机构根本没进榜」，否则空结果会被误报成「本期零变动」。
+    if not rows and not exits:
+        status = "empty_result"
+    elif material == 0:
+        status = "zero_change"
+    else:
+        status = "ok"
+    if status == "empty_result":
+        return _empty(
+            "empty_result",
+            "该机构本报告期未出现在十大股东/十大流通股东（已退出或未进前十），不是取数失败",
+            prev=prev,
+        )
+
     lim = max(1, min(int(limit), 500))
-    return {
+    out: dict[str, Any] = {
+        **base,
         "available": True,
         "computed": True,
-        "report_date": target,
+        "status": status,
         "prev_report_date": prev,
-        "report_kind": kind,
         "counts": counts,
-        "count": len(items),
-        "items": items[:lim],
-        "truncated": len(items) > lim,
-        "caliber_note": CALIBER_NOTE,
+        # count = 过滤（机构 + 变动类型）后的准确总量；items 才是被 limit 截断的页
+        "count": len(selected),
+        "total": len(selected),
+        "items": selected[:lim],
+        "truncated": len(selected) > lim,
     }
+    if status == "zero_change":
+        out["zero_change"] = True
+    if wanted and not selected:
+        out["empty_of_type"] = True
+    return out

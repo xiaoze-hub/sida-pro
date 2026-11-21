@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -60,6 +61,11 @@ BUDGET_POLL_S = 1.0
 
 #: 进程内任务表（仅用于 cancel；重启后为空，靠心跳接管兜底）
 _TASKS: dict[str, asyncio.Task] = {}
+
+#: 进程内入队时刻（monotonic 秒）。只用于**观测**排队等待：submit → 执行体开跑。
+#: 刻意不落库、不从 created_at 反推 —— 重启后这里没有记录，宁可不报排队，
+#: 也不把「不知道」写成 0ms（与基线口径一致）。
+_ENQUEUED_AT: dict[str, float] = {}
 
 #: 并发上限：执行体在调 LLM 期间必须持有 DB 连接（见 run_copilot_question 的说明），
 #: 所以这里必须限流，否则几个人同时深问就能把连接池吃干。
@@ -148,6 +154,25 @@ def _recorded_recipe(run_id: str | None, user_id: str | None) -> str | None:
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _stage_log(run_id: str, stage: str, elapsed_ms: int | None, *, ok: bool = True) -> None:
+    """结构化低敏阶段日志（与 `trace.mark_stage` 同一形状, 便于日志侧聚合）。
+
+    **只写 run_id/stage/ms/ok**, 不写问题、用户 id、工具参数或上游错误原文 ——
+    阶段观测是排障用的, 不是第二份用户数据留存。没有实测值就不写(不补 0)。
+    """
+    if elapsed_ms is None:
+        return
+    try:
+        logger.info("[copilot.stage] %s", json.dumps({
+            "run_id": run_id,
+            "stage": stage,
+            "ms": int(elapsed_ms),
+            "ok": bool(ok),
+        }, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 - 观测是旁路
+        pass
 
 
 def _run_owner_id(row: Any) -> str | None:
@@ -451,6 +476,11 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
     run 行上的记录（`skills_gateway` 的任务入口不传参，不能因此丢配方）。"""
     stop = asyncio.Event()
     hb = asyncio.create_task(_heartbeat_loop(run_id, stop))
+    # 排队等待只在**本进程**入队过时才有观测值; 重启接管来的 run 没有这段事实,
+    # 不写日志、不拿 created_at 反推（误差会把「不知道」伪装成测量）。
+    enqueued = _ENQUEUED_AT.pop(run_id, None)
+    if enqueued is not None:
+        _stage_log(run_id, "dequeue", int((time.monotonic() - enqueued) * 1000))
     t0 = db_now_naive()
     _mark(run_id, status="running")
     try:
@@ -498,7 +528,14 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
     finally:
         stop.set()
         hb.cancel()
+        _ENQUEUED_AT.pop(run_id, None)
         _TASKS.pop(run_id, None)
+        # 终态阶段: 只报墙钟(ms)。这里不带 status —— 终态真相在 run 行上,
+        # 日志只用来对「排队/执行/收尾」三段做时间轴, 不做第二事实源。
+        try:
+            _stage_log(run_id, "job_finish", int((db_now_naive() - t0).total_seconds() * 1000))
+        except Exception:  # noqa: BLE001 - 观测是旁路
+            pass
         # P2-2.2: run 进终态后投递外部回调（best-effort：投递失败不能影响 run 结果，
         # 也不能让异常冒到 asyncio 的 task 里变成"未取回异常"）
         try:
@@ -558,6 +595,7 @@ async def submit_run(body: SubmitRunBody, user=Depends(get_current_user)):
         run_id, user_id=user.id, conversation_id=body.conversation_id,
         question=body.question, recipe=recipe_id,
     ))
+    _ENQUEUED_AT[run_id] = time.monotonic()
     _TASKS[run_id] = task
     return {"run_id": run_id, "status": "queued", "events": f"/api/copilot/runs/{run_id}/events"}
 
