@@ -692,8 +692,8 @@ def test_fast_path_takes_defense_question_and_leaves_quotes_to_quick_answer(db, 
     assert "9.0" not in payload and "主账户" not in payload
 
 
-def test_trace_step_is_failed_when_coverage_incomplete(db, monkeypatch):
-    """没核验完不能记成功：否则治理页/基线把「不能认定安全」记成 ok。"""
+def test_trace_step_partial_when_user_has_no_defense_line(db, monkeypatch):
+    """「用户没设防守位」是配置状态，不是故障：标 partial，不判失败。"""
     user = _user(db, "partial")
     acc = _account(db, "主账户", user.id)
     st1 = _stock(db, "600519")
@@ -713,9 +713,42 @@ def test_trace_step_is_failed_when_coverage_incomplete(db, monkeypatch):
 
     steps = [s for s in trace.steps if s["tool"] == "portfolio_defense_check"]
     assert len(steps) == 1
+    assert steps[0]["ok"] is True and steps[0]["error"] is None
+    assert "verified=1" in steps[0]["result"] and "unknown=1" in steps[0]["result"]
+    assert "no_defense_line=1" in steps[0]["result"]
+    assert "reasons=no_defense_line:1" in steps[0]["result"]
+
+
+def test_trace_step_is_failed_when_quotes_unavailable(db, monkeypatch):
+    """行情取数失败是数据不可用，必须落 failed：不能把「证不出」记成 ok。"""
+    user = _user(db, "noquote")
+    acc = _account(db, "主账户", user.id)
+    st = _stock(db, "600519")
+    _position(db, acc, st, user_id=user.id, defense_price=10.0)
+    monkeypatch.setattr("src.core.marketdata_client.md_quote_rows", lambda *a, **k: [])
+
+    trace = _Trace()
+    out = asyncio.run(answer(db, "我的持仓防守位破了吗？", None, user,
+                             SimpleNamespace(trace=trace)))
+    assert out is not None and "无法核验" in out
+
+    steps = [s for s in trace.steps if s["tool"] == "portfolio_defense_check"]
+    assert len(steps) == 1
     assert steps[0]["ok"] is False
     assert steps[0]["error"] == "holdings_not_fully_verified"
-    assert "verified=1" in steps[0]["result"] and "unknown=1" in steps[0]["result"]
+    assert "missing_quote:1" in steps[0]["result"]
+
+
+@pytest.mark.parametrize("text", [
+    "汇金持仓破位了吗",
+    "社保持仓跌破防线了吗",
+    "国家队持仓防守位查一下",
+])
+def test_institution_questions_are_not_claimed_as_own_portfolio(text):
+    """点名机构的问句不是「本人持仓」：否则答的是自己账户，机构直查永远轮不到。"""
+    from src.harness.portfolio_risk import is_portfolio_defense_question
+
+    assert is_portfolio_defense_question(text) is False
 
 
 def test_fast_path_falls_through_for_single_stock_quote(db, monkeypatch):

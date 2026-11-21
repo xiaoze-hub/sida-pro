@@ -314,6 +314,18 @@ def test_已完成的不许取消(client, Session):
     assert client.post("/api/copilot/runs/r-fin/cancel").status_code == 409
 
 
+@pytest.mark.parametrize("terminal", ["failed", "error", "cancelled"])
+def test_已是终态的_run_回真实状态而不是谎报取消(client, Session, terminal):
+    """状态机不会再写，接口也不能回「已取消」：前端会拿它当刷新依据。"""
+    _mk_run(Session, f"r-{terminal}", status=terminal)
+    r = client.post(f"/api/copilot/runs/r-{terminal}/cancel")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == terminal
+    assert body["cancelled"] is (terminal == "cancelled")
+    assert _row(Session, f"r-{terminal}").status == terminal
+
+
 def test_别人的_run_看不到也取消不了(client, Session):
     _mk_run(Session, "r-other", status="ok", user_id="u2")
     assert client.get("/api/copilot/runs/r-other/events").status_code == 404

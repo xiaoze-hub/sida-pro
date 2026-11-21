@@ -88,7 +88,9 @@ FAILURE_MARKERS = (
     # 直查层的「取数失败/口径不足」是拒绝，不是答案：探针必须判失败，
     # 否则数据源故障会被算成一次成功的问答。
     "取数失败",
-    "只有一期数据",
+    "无法计算环比",
+    "不做跨期",
+    "尚未采集国家队持仓",
 )
 
 TERMINAL_STATUSES = frozenset({"ok", "degraded", "error", "failed", "cancelled", "succeeded"})

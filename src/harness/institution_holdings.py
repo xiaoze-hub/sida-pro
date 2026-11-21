@@ -311,6 +311,7 @@ def _fetch(engine: Any, q: Question) -> dict[str, Any]:
     只用 Engine、只读，不碰请求的 Session；任何底层异常原样上抛，由 `answer`
     统一转成非敏感文案。
     """
+    prev_override: str | None = None
     periods = nt.persisted_periods(engine, q.kind) if q.period_hint in {"prev", "yoy"} else []
     if q.period_hint == "prev" and periods:
         latest = periods[0]
@@ -328,8 +329,17 @@ def _fetch(engine: Any, q: Question) -> dict[str, Any]:
             )
         q.report_date = prior_quarter
     elif q.period_hint == "yoy" and periods:
-        latest = periods[0]
-        q.report_date = f"{int(latest[:4]) - 1}{latest[4:]}"
+        # 「去年同期」有两种问法，不能混成一句：
+        # · 看持仓 → 看去年同季那一期本身（把报告期挪过去即可）；
+        # · 看变动 → 要的是「本期 vs 去年同季」的对比，报告期必须留在本期，
+        #   否则会变成「去年同季 vs 它的上一季」，答非所问（2026-11-21 复审实证）。
+        base = str(q.report_date or periods[0])
+        last_year = f"{int(base[:4]) - 1}{base[4:]}"
+        if q.mode == "changes":
+            q.report_date = base
+            prev_override = last_year
+        else:
+            q.report_date = last_year
 
     summary: dict[str, Any] = {}
     if q.mode == "changes":
@@ -340,6 +350,7 @@ def _fetch(engine: Any, q: Question) -> dict[str, Any]:
             holder=q.holder_csv,
             change=q.change_kinds or None,
             limit=10,
+            prev_report_date=prev_override,
         )
     else:
         data = nt.holdings(
@@ -482,11 +493,25 @@ def _render_holdings(q: Question, data: dict[str, Any], summary: dict[str, Any])
     return "\n".join(head + [""] + body)
 
 
+def _comparison_label(data: dict[str, Any]) -> str:
+    """比较口径的标题词：环比 / 同比 / 跨期对比。
+
+    绝不把跨期对比写成「环比」—— 跨几个季度的「新进/退出」语义会失真，
+    用户看到日期也未必去算跨度。
+    """
+    gap = data.get("compare_gap")
+    if data.get("comparison") == "yoy":
+        return "同比变动（与去年同季）"
+    if isinstance(gap, int) and gap != 1:
+        return f"与 {data.get('prev_report_date')} 相比（跨 {gap} 个季度）"
+    return "环比变动"
+
+
 def _render_changes(q: Question, data: dict[str, Any]) -> str:
     counts = data.get("counts") or {}
     wanted = q.change_kinds or tuple(nt.CHANGE_KINDS)
     head = [
-        f"【机构持仓直查 · {q.label} · 环比变动】",
+        f"【机构持仓直查 · {q.label} · {_comparison_label(data)}】",
         f"{data.get('report_date')} vs {data.get('prev_report_date')}"
         f"（{nt.REPORT_KIND_LABEL.get(q.kind, q.kind)} · 季报口径）",
         f"新进 {counts.get('new', 0)} · 加仓 {counts.get('increase', 0)}"
@@ -558,6 +583,7 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
 
     engine = _engine_of(db)
     if engine is None:
+        _note_failure(runtime, q, "data_unavailable:engine_unavailable", None)
         return _refuse("数据连接不可用，本次未取到数据（不是「零持仓」）。")
 
     # 报告期解析 + core 查询全在 worker 线程里跑（core 是同步阻塞 SQL，直接在事件循环
@@ -582,14 +608,15 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
     status = str(data.get("status") or "")
     link = _page_link(q, data.get("report_date"), q.change_kinds)
 
-    if status in {"empty_table", "unknown_period", "insufficient_periods", "empty_result"}:
+    if status in {"empty_table", "unknown_period", "insufficient_periods", "empty_result",
+                  "non_adjacent_period", "prev_unavailable"}:
         if status != "empty_result":     # empty_result = 该股本期确实没持仓, 是有效答案
             _note_failure(runtime, q, f"data_unavailable:{status}", None)
         return _refuse(str(data.get("reason") or "没有可展示的数据。"), link)
     if status == "zero_change":
         counts = data.get("counts") or {}
         text_out = (
-            f"【机构持仓直查 · {q.label} · 环比变动】\n"
+            f"【机构持仓直查 · {q.label} · {_comparison_label(data)}】\n"
             f"{data.get('report_date')} vs {data.get('prev_report_date')}"
             f"（{nt.REPORT_KIND_LABEL.get(q.kind, q.kind)}）\n"
             f"本期共 {counts.get('unchanged', 0)} 只持股数与上期完全相同"

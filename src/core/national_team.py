@@ -895,6 +895,34 @@ def latest_period(engine: Engine, kind: str = "float") -> str | None:
     return periods[0] if periods else None
 
 
+#: 季度末 → 季内序位（用于判定两个报告期是否严格相邻）
+_QUARTER_INDEX: dict[str, int] = {"03-31": 0, "06-30": 1, "09-30": 2, "12-31": 3}
+
+
+def prev_quarter(report_date: str | None) -> str | None:
+    """紧邻的上一季报告期；日期不是季度末就返回 None（不猜）。"""
+    text = str(report_date or "")
+    year, _, md = text.partition("-")
+    if len(year) != 4 or not year.isdigit() or md not in _QUARTER_INDEX:
+        return None
+    idx = _QUARTER_INDEX[md]
+    if idx == 0:
+        return f"{int(year) - 1}-12-31"
+    return f"{year}-{('03-31', '06-30', '09-30')[idx - 1]}"
+
+
+def quarters_between(older: str, newer: str) -> int | None:
+    """两个季度末相隔几个季度（newer 更晚）；任一不是季度末返回 None。"""
+    a, b = str(older or ""), str(newer or "")
+    if a[5:] not in _QUARTER_INDEX or b[5:] not in _QUARTER_INDEX:
+        return None
+    try:
+        ya, yb = int(a[:4]), int(b[:4])
+    except ValueError:
+        return None
+    return (yb * 4 + _QUARTER_INDEX[b[5:]]) - (ya * 4 + _QUARTER_INDEX[a[5:]])
+
+
 def overview(engine: Engine, report_date: str | None = None, kind: str = "float") -> dict[str, Any]:
     """按机构组汇总（组内多账户合并；同一股票在同组多账户下按只数去重、持股数相加）。"""
     periods = persisted_periods(engine, kind)
@@ -1249,6 +1277,7 @@ def changes(
     holder: str | None = None,
     change: str | Sequence[str] | None = None,
     limit: int = 100,
+    prev_report_date: str | None = None,
 ) -> dict[str, Any]:
     """环比变动（按 机构组 + 股票 聚合；组内多账户先合并再比较）。
 
@@ -1260,6 +1289,10 @@ def changes(
     `status` 区分四种「看起来没数据」：`empty_table` / `unknown_period` /
     `insufficient_periods`（只有一期）/ `zero_change`（有数据但本期确实零变动）/
     `empty_result`（该机构本期不在榜）。取数异常一律抛，不降级成零变动。
+
+    「上一期」只认**严格相邻的上一季**：已采集期不连续时返回 `non_adjacent_period`，
+    绝不拿早几个季度的一期顶替（跨期比出来的「新进/退出」语义会失真）。
+    `prev_report_date` 用于显式比较期（例如去年同期），同样必须严格相邻才允许。
     """
     periods = persisted_periods(engine, kind)
     target = report_date or (periods[0] if periods else None)
@@ -1296,13 +1329,47 @@ def changes(
             f"没有 {report_date} 这一报告期（已采集：{'、'.join(periods[:6])}）",
         )
     idx = periods.index(str(target))
-    prev = periods[idx + 1] if idx + 1 < len(periods) else None
-    if prev is None:
-        return _empty(
-            "insufficient_periods",
-            f"只有一期数据（{periods[idx]}），无法计算环比（需至少两个报告期）",
-            prev=None,
-        )
+    expected_prev = prev_quarter(str(target))
+    if prev_report_date:
+        prev = str(prev_report_date)
+        if prev not in periods:
+            return _empty(
+                "prev_unavailable",
+                f"没有 {prev} 这一报告期（已采集：{'、'.join(periods[:6])}）",
+                prev=None,
+            )
+        gap = quarters_between(prev, str(target))
+        # 显式比较期允许跨期（同比就是 4 个季度），但必须把跨度说清楚，
+        # 不能标成「环比」。只有同一个报告期或倒序才拒。
+        if gap is None or gap < 1:
+            return _empty(
+                "prev_unavailable",
+                f"{prev} 不是 {target} 之前的报告期，无法做对比（请指定更早的报告期）。",
+                prev=None,
+            )
+    else:
+        candidate = periods[idx + 1] if idx + 1 < len(periods) else None
+        if candidate is None:
+            return _empty(
+                "insufficient_periods",
+                f"没有早于 {periods[idx]} 的报告期（已采集 {len(periods)} 期），无法计算环比"
+                "（需至少两个报告期）；不拿最新一期顶替，也不跳期。",
+                prev=None,
+            )
+        gap = quarters_between(candidate, str(target))
+        if gap != 1:
+            return _empty(
+                "non_adjacent_period",
+                f"缺少 {expected_prev or '紧邻上一季'} 的报告期（更早最近一次是 {candidate}，"
+                f"相隔 {gap} 个季度）；不做跨期环比，可指定报告期再查。",
+                prev=None,
+            )
+        prev = candidate
+        gap = 1
+
+    base["prev_report_date"] = prev
+    base["compare_gap"] = gap
+    base["comparison"] = "qoq" if gap == 1 else ("yoy" if gap == 4 else "cross")
 
     cur_scope, cur_scope_params = _scope_sql("c", groups, keys, names)
     prev_scope, prev_scope_params = _scope_sql("p", groups, keys, names)

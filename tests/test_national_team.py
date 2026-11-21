@@ -297,7 +297,47 @@ def test_changes_single_period_is_explicit(engine, monkeypatch):
     monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
     nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
     ch = nt.changes(engine, kind="float")
-    assert ch["available"] is False and "只有一期数据" in ch["reason"]
+    # 文案不再用「只有一期数据」猜 idx==0：说清「没有更早一期」，且不拿最新一期顶替。
+    assert ch["available"] is False
+    assert "没有早于 2026-09-30 的报告期" in ch["reason"]
+    assert "不拿最新一期顶替" in ch["reason"]
+
+
+def test_changes_refuses_non_adjacent_prev_period(engine, monkeypatch):
+    """缺季时不许拿早几个季度的一期当「上期」：跨期的「新进/退出」会失真。"""
+    rows = {
+        (nt.REPORT_TABLES["float"], "2026-09-30"): [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", 100.0, end="2026-09-30")],
+        (nt.REPORT_TABLES["float"], "2025-09-30"): [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", 80.0, end="2025-09-30")],
+    }
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    nt.scan_period(engine, "2025-09-30", report_kinds=["float"])
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+
+    ch = nt.changes(engine, kind="float")
+
+    assert ch["available"] is False and ch["status"] == "non_adjacent_period"
+    assert "缺少 2026-06-30" in ch["reason"] and "跨期" in ch["reason"]
+    assert ch["items"] == [] and ch["count"] == 0
+
+
+def test_changes_allows_explicit_yoy_prev(engine, monkeypatch):
+    """显式比较期允许跨 4 个季度（同比），但结果必须标成 yoy，不能叫环比。"""
+    rows = {}
+    for period, num in (("2026-09-30", 100.0), ("2026-06-30", 90.0), ("2025-09-30", 60.0)):
+        rows[(nt.REPORT_TABLES["float"], period)] = [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", num, end=period)]
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    for period in ("2025-09-30", "2026-06-30", "2026-09-30"):
+        nt.scan_period(engine, period, report_kinds=["float"])
+
+    ch = nt.changes(engine, kind="float", report_date="2026-09-30",
+                    prev_report_date="2025-09-30")
+
+    assert ch["available"] is True and ch["comparison"] == "yoy"
+    assert ch["prev_report_date"] == "2025-09-30" and ch["compare_gap"] == 4
+    assert ch["counts"]["increase"] == 1
 
 
 def test_routes_mounted():

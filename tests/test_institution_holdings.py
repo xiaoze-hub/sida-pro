@@ -332,7 +332,7 @@ async def test_insufficient_periods_is_explicit(engine, monkeypatch):
     monkeypatch.setattr(nt, "_rows_once", _fake_rows(rows))
     nt.scan_period(engine, PERIOD_CUR, report_kinds=["float"])
     out = await _ask(engine, "汇金最新持股变动")
-    assert "只有一期数据" in out and "无法计算环比" in out
+    assert "没有早于 2026-09-30 的报告期" in out and "无法计算环比" in out
 
 
 async def test_zero_change_is_not_fetch_error(seeded):
@@ -414,6 +414,40 @@ async def test_fetch_failure_leaves_a_failed_step(seeded, monkeypatch):
     # 埋点里不许出现连接串/SQL/异常正文
     payload = f"{failed[0]['args']}{failed[0]['error']}{failed[0]['result']}"
     assert "db.internal" not in payload and "could not connect" not in payload
+
+
+async def test_yoy_change_compares_latest_with_last_year_same_quarter(engine, monkeypatch):
+    """「去年同期」问变动 = 本期 vs 去年同季；不能变成「去年同季 vs 它的上一季」。"""
+    rows = {}
+    for period, num in (("2026-09-30", 100.0), ("2026-06-30", 90.0), ("2025-09-30", 60.0)):
+        rows[(nt.REPORT_TABLES["float"], period)] = [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", num, end=period, cap=1e8)]
+    monkeypatch.setattr(nt, "_rows_once", _fake_rows(rows))
+    for period in ("2025-09-30", "2026-06-30", "2026-09-30"):
+        nt.scan_period(engine, period, report_kinds=["float"])
+
+    out = await _ask(engine, "汇金去年同期新进了哪些")
+
+    assert "2026-09-30 vs 2025-09-30" in out
+    assert "同比变动（与去年同季）" in out
+    assert "环比变动" not in out
+    assert "只有一期数据" not in out
+
+
+async def test_non_adjacent_period_is_refused_not_mislabelled(engine, monkeypatch):
+    """缺季时不能把 5 个季度前的一期当「环比」上期。"""
+    rows = {}
+    for period, num in (("2026-09-30", 100.0), ("2025-09-30", 80.0)):
+        rows[(nt.REPORT_TABLES["float"], period)] = [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", num, end=period, cap=1e8)]
+    monkeypatch.setattr(nt, "_rows_once", _fake_rows(rows))
+    nt.scan_period(engine, "2025-09-30", report_kinds=["float"])
+    nt.scan_period(engine, "2026-09-30", report_kinds=["float"])
+
+    out = await _ask(engine, "汇金最新持仓变动")
+
+    assert "缺少 2026-06-30" in out and "不做跨期" in out
+    assert "环比变动" not in out
 
 
 async def test_prev_period_is_not_substituted_by_latest(engine, monkeypatch):

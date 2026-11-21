@@ -205,7 +205,21 @@ def is_portfolio_defense_question(text: str) -> bool:
         return False
     if not any(w in t for w in _CHECK_WORDS):
         return False
+    # 点名了机构/国家队资金的问句不是「本人持仓」：否则「汇金持仓破位了吗」会拿到
+    # 自己账户的核验（数据是真的，但答的不是他问的对象）。交给机构直查或主流程。
+    if _mentions_institution(t):
+        return False
     return True
+
+
+def _mentions_institution(text: str) -> bool:
+    """正文是否点名了机构/国家队（纯本地词表，解析失败按「没点名」处理）。"""
+    try:
+        from src.core.national_team import resolve_institution_scopes
+
+        return bool(resolve_institution_scopes(text))
+    except Exception:  # noqa: BLE001 - 词表不可用不影响本人持仓核验
+        return False
 
 
 def _explicit_codes(text: str) -> list[str]:
@@ -835,17 +849,22 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
         _trace = getattr(runtime, "trace", None)
         if _trace is not None:
             # 只落条数与市场, 不落代码/价格/账户名 —— 运行记录不留完整私有数据。
-            # 没核验完（无防守位/报价过期/取数失败）必须落 failed：否则 run 以 ok 收尾，
-            # 治理页和基线会把「不能认定安全」记成成功。
-            verified_all = coverage.verified == coverage.total
+            # 「用户没设防守位」是配置状态，不是故障：只标 partial，不判失败；
+            # 行情缺失/过期/取数失败/时钟证不出才是数据不可用，必须落 failed ——
+            # 否则 run 以 ok 收尾，治理页和基线会把「证不出安全」记成成功。
+            reasons = dict(coverage.unknown_reasons)
+            blocking = sum(v for k, v in reasons.items() if k != REASON_NO_LINE)
+            reason_text = ",".join(f"{k}:{v}" for k, v in sorted(reasons.items())) or "-"
+            ok = blocking == 0
             try:
                 _trace.step(
                     "portfolio_defense_check",
                     {"scope": "self_holdings", "markets": sorted({r.market for r in rows})},
-                    ok=verified_all,
-                    error=None if verified_all else "holdings_not_fully_verified",
+                    ok=ok,
+                    error=None if ok else "holdings_not_fully_verified",
                     result=f"total={coverage.total} verified={coverage.verified} "
-                           f"breached={coverage.breached} unknown={coverage.unknown}",
+                           f"breached={coverage.breached} unknown={coverage.unknown} "
+                           f"no_defense_line={coverage.no_defense_line} reasons={reason_text}",
                     elapsed_ms=int((_time.perf_counter() - t0) * 1000),
                 )
             except Exception:  # noqa: BLE001 - 埋点失败不影响作答

@@ -356,8 +356,12 @@ async def run_copilot_question(
 @allow_cross_user  # 后台执行体按 run_id 写状态, 没有请求上下文; run 归属已在提交/查询时校验
 def _mark(run_id: str, *, status: str, error: str | None = None,
           elapsed_ms: int | None = None, tool_calls: int | None = None,
-          conversation_id: int | None = None) -> None:
-    """状态迁移（每次用新 session —— 后台任务不能跨 await 复用一个 session）。"""
+          conversation_id: int | None = None) -> bool:
+    """状态迁移（每次用新 session —— 后台任务不能跨 await 复用一个 session）。
+
+    返回**是否真的写进了目标状态**：状态机拒绝或并发被抢先时为 False，
+    调用方据此回真实状态，不能谎报迁移成功（取消接口曾因此回「已取消」而库里是 failed）。
+    """
     from src.core import copilot_runtime as rt
     from src.db.models import CopilotRun
     from src.db.session import SessionLocal
@@ -366,17 +370,17 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
     try:
         row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
         if row is None:
-            return
+            return False
         # 轨迹可先结算为 degraded/error；执行体随后拿到会话 id。
         # 保留轨迹真实终态，但仍须关联已保存的回答，不能因拒绝状态迁移丢失结果。
         if status == "ok" and row.status in {"degraded", "error"}:
             if conversation_id is not None and row.conversation_id is None:
                 row.conversation_id = conversation_id
                 db.commit()
-            return
+            return row.status == status
         if not rt.can_transition(row.status, status):
             logger.warning("[copilot_jobs] 非法迁移 %s: %s → %s", run_id, row.status, status)
-            return
+            return False
         # 轨迹(trace)已经写过终态时不要覆盖它的真实数字（tool_calls/elapsed 是管线自己测的，
         # 我这里测的是整个 job 的墙钟时间，混着用会让统计口径不一致）
         if rt.is_terminal(row.status) and row.status == status:
@@ -391,7 +395,7 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
                 changed = True
             if changed:
                 db.commit()
-            return
+            return True
         values: dict[Any, Any] = {CopilotRun.status: status}
         if status == "running" and row.heartbeat_at is None:
             values[CopilotRun.heartbeat_at] = db_now_naive()
@@ -412,8 +416,9 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
         ).update(values, synchronize_session=False)
         if not changed:
             logger.info("[copilot_jobs] 状态已变化，跳过迟到更新: %s", run_id)
-            return
+            return False
         db.commit()
+        return True
     finally:
         db.close()
 
@@ -763,14 +768,35 @@ async def cancel_run(run_id: str, user=Depends(get_current_user)):
             raise HTTPException(404, "run 不存在")
         if row.status in ("ok", "degraded", "succeeded"):
             raise HTTPException(409, "该 run 已完成，无法取消")
+        # 已经失败/已取消的 run：状态机不会再写，回包必须照实说，不能谎报取消成功。
+        if row.status in ("failed", "error", "cancelled"):
+            return {"run_id": run_id, "status": row.status,
+                    "cancelled": row.status == "cancelled"}
     finally:
         db.close()
 
     # 先写终态；第一次调度前取消时，协程体不会执行，不能依赖它写库。
-    _mark(run_id, status="cancelled", error="用户取消")
+    applied = _mark(run_id, status="cancelled", error="用户取消")
     task = _TASKS.get(run_id)
     if task and not task.done():
         task.cancel()
     else:
         _ENQUEUED_AT.pop(run_id, None)
+    if not applied:
+        # 读后被心跳接管/并发收尾抢先：以库内真实终态回包（不写任何东西）。
+        from src.db.models import CopilotRun as _Run
+        from src.db.session import SessionLocal as _Session
+
+        probe = _Session()
+        try:
+            current = (
+                probe.query(_Run.status)
+                .filter(_Run.run_id == run_id,
+                        _Run.user_id == str(getattr(user, "id", "") or ""))
+                .scalar()
+            )
+        finally:
+            probe.close()
+        return {"run_id": run_id, "status": current or "unknown",
+                "cancelled": current == "cancelled"}
     return {"run_id": run_id, "status": "cancelled"}
