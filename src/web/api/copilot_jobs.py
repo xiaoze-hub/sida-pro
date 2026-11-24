@@ -799,4 +799,4 @@ async def cancel_run(run_id: str, user=Depends(get_current_user)):
             probe.close()
         return {"run_id": run_id, "status": current or "unknown",
                 "cancelled": current == "cancelled"}
-    return {"run_id": run_id, "status": "cancelled"}
+    return {"run_id": run_id, "status": "cancelled", "cancelled": True}

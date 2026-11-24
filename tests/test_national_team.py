@@ -250,6 +250,31 @@ def test_overview_without_data_is_explicit(engine):
     assert ov["available"] is False and "尚未采集" in ov["reason"]
 
 
+def test_overview_historical_period_compares_its_own_previous_quarter(engine, monkeypatch):
+    """深链指向历史期时，比较基线必须是该期的上一季，不能是「次新一期」或它自己。"""
+    rows = {
+        (nt.REPORT_TABLES["float"], p): [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", n, cap=1000.0, end=p)
+        ]
+        for p, n in (("2026-03-31", 100.0), ("2026-06-30", 120.0), ("2026-09-30", 120.0))
+    }
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    for p in ("2026-03-31", "2026-06-30", "2026-09-30"):
+        nt.scan_period(engine, p, report_kinds=["float"])
+
+    mid = nt.overview(engine, report_date="2026-06-30", kind="float")
+    assert mid["report_date"] == "2026-06-30" and mid["prev_report_date"] == "2026-03-31"
+    assert mid["groups"][0]["changed_stocks"] == 1   # 100 → 120 是真变动，不是「自己和自己比」
+
+    # 与 /changes 同口径：同一期两处给出的比较期一致
+    assert nt.changes(engine, report_date="2026-06-30", kind="float")["prev_report_date"] == "2026-03-31"
+
+
+def test_overview_empty_table_with_report_date_stays_empty_table(engine):
+    ov = nt.overview(engine, report_date="2026-09-30", kind="float")
+    assert ov["status"] == "empty_table" and "尚未采集" in ov["reason"]
+
+
 def test_holdings_filters_by_group_and_account(engine, monkeypatch):
     _seed_two_periods(engine, monkeypatch)
     all_rows = nt.holdings(engine, kind="float")

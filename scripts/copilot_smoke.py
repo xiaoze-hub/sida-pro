@@ -84,13 +84,9 @@ _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0", "host.dock
 #: 只识别系统占位/直查拒绝的开头；正文中「不是取数失败」是有效答复。
 FAILURE_PREFIXES = (
     "任务未能完成",
-    "【机构持仓直查】取数失败：",
-    "【机构持仓直查】数据连接不可用",
-    "【机构持仓直查】没有早于 ",
-    "【机构持仓直查】缺少 ",
-    "【机构持仓直查】尚未采集国家队持仓",
-    "【机构持仓直查】只有一期数据",
-    "【机构持仓直查】已采集报告期不连续",
+    # 直查模块的**全部**拒答共享这一个标记；有效答案写作「【机构持仓直查 · 汇金】」，
+    # 有效空结果写作「【机构持仓直查 · 结果】」。按标记判，不按原因文案列举（必漏）。
+    "【机构持仓直查】",
 )
 
 TERMINAL_STATUSES = frozenset({"ok", "degraded", "error", "failed", "cancelled", "succeeded"})
@@ -461,9 +457,15 @@ def probe_qa(base: str, token: str, *, question: str, min_chars: int,
         payload = _api_object(rb)
         run = payload.get("run") or {}
         if st != 200 or not isinstance(run, dict) or run.get("run_id") != run_id:
-            return {"ok": False, "detail": "run 详情身份无法核验",
-                    "reasons": ["run_detail_unverified"],
-                    "cancel": {"attempted": False, "reason": "identity_unverified"}}, tl
+            # 只有 404 是确定性答案；5xx/断连是传输抖动，等到总超时再判，别把一次抖动
+            # 写成身份不符（那会被读成安全事件）。
+            last_unverified = f"status={st}" if st else "transport_error"
+            if time.monotonic() >= deadline:
+                return {"ok": False, "detail": f"run 详情始终无法核验（{last_unverified}）",
+                        "reasons": [f"run_detail_unverified:{last_unverified}"],
+                        "cancel": {"attempted": False, "reason": "identity_unverified"}}, tl
+            time.sleep(poll_s)
+            continue
         steps = payload.get("steps") or []
         last_status = (run.get("status") or "unknown").lower()
 

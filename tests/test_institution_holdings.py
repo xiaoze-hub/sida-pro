@@ -437,6 +437,8 @@ async def test_zero_change_is_not_fetch_error(seeded):
     out = await _ask(seeded, "证金公司最新持仓变动")
     # 证金没数据 → empty_result（不在榜），不是零变动
     assert "未出现在十大股东" in out and "不是取数失败" in out
+    # 有效结论走「结果」标记；拒答标记只留给「没能回答」，发布探针据此判失败。
+    assert out.startswith("【机构持仓直查 · 结果】")
 
 
 async def test_true_zero_change(engine, monkeypatch):

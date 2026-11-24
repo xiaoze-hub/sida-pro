@@ -460,6 +460,19 @@ def _refuse(reason: str, link: str | None = None) -> str:
     return text
 
 
+def _inform(reason: str, link: str | None = None) -> str:
+    """**有效结论**（如本期不在榜）：与 `_refuse` 分开标记。
+
+    `_refuse` 的方括号标记是「没能回答」的机器可读信号，发布探针据此判失败；
+    本期确实没持仓这类结论必须用不同标记，否则要么被误判成故障、要么只能靠
+    列举原因文案来区分（漏一条就把故障算成成功）。
+    """
+    text = f"【机构持仓直查 · 结果】{reason}"
+    if link:
+        text += f"\n站内同口径页面：[打开国家队动向]({link})"
+    return text
+
+
 def _note_failure(runtime, q: "Question", error: str, detail: str | None) -> None:
     """取数/口径失败也落一步 failed。
 
@@ -661,9 +674,11 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
 
     if status in {"empty_table", "unknown_period", "insufficient_periods", "empty_result",
                   "non_adjacent_period", "prev_unavailable"}:
-        if status != "empty_result":     # empty_result = 该股本期确实没持仓, 是有效答案
-            _note_failure(runtime, q, f"data_unavailable:{status}", None)
-        return _refuse(str(data.get("reason") or "没有可展示的数据。"), link)
+        reason = str(data.get("reason") or "没有可展示的数据。")
+        if status == "empty_result":     # 该股本期确实没持仓 —— 有效结论，不是故障
+            return _inform(reason, link)
+        _note_failure(runtime, q, f"data_unavailable:{status}", None)
+        return _refuse(reason, link)
     if status == "zero_change":
         counts = data.get("counts") or {}
         stock = f" · 标的 {q.stock_code}" if q.stock_code else ""

@@ -87,6 +87,8 @@ class _Handler(BaseHTTPRequestHandler):
             if self.state.mode == "hang":
                 return self._send(200, {"run": {"status": "running", "conversation_id": 7},
                                         "steps": [{"seq": 1, "tool": "get_quote", "ok": True}]})
+            if self.state.mode == "flaky_detail" and self.state.polls == 1:
+                return self._send(500, {"detail": "upstream unavailable"})
             if self.state.mode == "degraded" and self.state.polls >= 2:
                 return self._send(200, {
                     "run": {"status": "degraded", "conversation_id": 7, "tool_calls": 2,
@@ -189,6 +191,23 @@ def test_probe_end_to_end_waits_for_committed_body_after_run_status(server):
     assert report["ok"] is True, report
     assert state.terminal_body_reads == 3
     assert not state.cancel_calls
+
+
+def test_probe_end_to_end_retries_transient_run_detail_failure(server):
+    _, state = server
+    state.mode = "flaky_detail"
+    report = _probe(server)
+    assert report["ok"] is True, report
+    assert state.polls >= 2
+
+
+def test_probe_end_to_end_rejects_institution_refusal_text(server):
+    _, state = server
+    state.answer = ("【机构持仓直查】本模块是个股直投口径（十大股东/十大流通股东），不含宽基 ETF 持仓："
+                    "汇金的沪深300 等 ETF 重仓只在基金半年报/年报的前十大持有人里披露。")
+    report = _probe(server)
+    assert report["ok"] is False
+    assert "final_answer_is_error_placeholder" in report["layers"]["qa"]["reasons"]
 
 
 def test_probe_end_to_end_fails_on_short_answer(server):

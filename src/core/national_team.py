@@ -927,7 +927,7 @@ def overview(engine: Engine, report_date: str | None = None, kind: str = "float"
     """按机构组汇总（组内多账户合并；同一股票在同组多账户下按只数去重、持股数相加）。"""
     periods = persisted_periods(engine, kind)
     target = report_date or (periods[0] if periods else None)
-    if not target:
+    if not periods:
         return {
             "available": False,
             "status": "empty_table",
@@ -977,7 +977,13 @@ GROUP BY group_key
         {"rd": target, "rk": kind},
     )
 
-    prev = periods[1] if len(periods) > 1 else None
+    # 比较基线必须是**所选报告期**的紧邻上一季：用 periods[1] 在历史期深链上会拿本期和
+    # 更新的一期比（甚至自己比自己），与下方 /changes 的口径矛盾。
+    _idx = periods.index(str(target)) if str(target) in periods else None
+    prev = None
+    if _idx is not None and _idx + 1 < len(periods):
+        _cand = periods[_idx + 1]
+        prev = _cand if quarters_between(_cand, str(target)) == 1 else None
     changed: dict[str, int] = {}
     if prev:
         crow = _rows(
