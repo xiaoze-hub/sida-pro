@@ -62,5 +62,15 @@ describe('国家队比较期深链', () => {
     await screen.findByText('未采集此比较期')
     expect(screen.queryByText(`同比基准 ${yoy}`)).toBeNull()
     expect(screen.getByRole('heading', { name: '比较期不可用' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '改看环比' }))
+    await screen.findByText('新进 2')
+    expect(changes).toHaveBeenLastCalledWith(expect.objectContaining({ prev_report_date: undefined }))
+  })
+
+  it('股票名仅筛持仓，不拿整个机构的变动替代个股结果', async () => {
+    render(<MemoryRouter initialEntries={[`${base}&q=茅台`]}><NationalTeam /></MemoryRouter>)
+    await screen.findByText('变动查询需要六位股票代码；当前关键词仅用于筛选持仓。')
+    expect(holdings).toHaveBeenLastCalledWith(expect.objectContaining({ q: '茅台' }))
+    expect(changes).not.toHaveBeenCalled()
   })
 })

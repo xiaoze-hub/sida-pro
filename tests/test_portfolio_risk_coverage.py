@@ -781,6 +781,32 @@ def test_unavailable_institution_resolver_never_reads_own_portfolio(monkeypatch,
     assert "机构范围" in caplog.text and "private failure detail" not in caplog.text
 
 
+def test_unavailable_code_parser_never_widens_portfolio_query(monkeypatch, caplog):
+    from src.harness import pipeline_router, portfolio_risk
+
+    def broken_codes(_):
+        raise RuntimeError("private holdings detail")
+
+    def unexpected_load(*_):
+        pytest.fail("code scope not established; must not read whole portfolio")
+
+    monkeypatch.setattr(pipeline_router, "question_codes", broken_codes)
+    monkeypatch.setattr(portfolio_risk, "load_holdings", unexpected_load)
+    assert asyncio.run(answer(object(), "我的持仓600519跌破防守位了吗", None, SimpleNamespace(id="u"))) is None
+    assert "RuntimeError" in caplog.text and "private holdings detail" not in caplog.text
+
+
+def test_holdings_database_failure_does_not_log_bound_parameters(monkeypatch, caplog):
+    from src.harness import portfolio_risk
+
+    def failed_database(*_):
+        raise RuntimeError("private holdings SQL parameters")
+
+    monkeypatch.setattr(portfolio_risk, "load_holdings", failed_database)
+    assert asyncio.run(answer(object(), "我的持仓跌破防守位了吗", None, SimpleNamespace(id="u"))) is None
+    assert "RuntimeError" in caplog.text and "private holdings SQL parameters" not in caplog.text
+
+
 def test_fast_path_falls_through_for_single_stock_quote(db, monkeypatch):
     """单股问价不能走防守位核验（否则用户永远拿不到纯读数快答）。"""
     user = _user(db, "chain2")

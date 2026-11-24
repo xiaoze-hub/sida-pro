@@ -221,6 +221,7 @@ export default function NationalTeam() {
   // URL 是筛选条件事实源；同一已挂载页面再次打开深链也必须重新按链接取数。
   const deepLink = useMemo(() => parseDeepLink(searchParams), [searchParams])
   const { kind, reportDate, prevReportDate, compareError, holder, change: changeFilter, view: focusView, q: stockQuery } = deepLink
+  const invalidChangeStock = Boolean(stockQuery) && !/^[0-9]{6}$/.test(stockQuery)
   const [overview, setOverview] = useState<NationalTeamOverview | null>(null)
   const [holdings, setHoldings] = useState<NationalTeamHolding[]>([])
   const [changes, setChanges] = useState<NationalTeamChangesResponse | null>(null)
@@ -269,7 +270,7 @@ export default function NationalTeam() {
           }),
           // 机构与变动类型必须在**后端截断前**过滤：不能拿全市场前 60 条再筛机构。
           // 同比深链把比较期一起带给后端；畸形比较期不请求，避免悄悄改算环比。
-          nextCompareError
+          nextCompareError || invalidChangeStock
             ? Promise.resolve(null)
             : nationalTeamApi.changes({
                 kind: nextKind,
@@ -311,7 +312,7 @@ export default function NationalTeam() {
         setStatus('error')
       }
     },
-    [stockQuery],
+    [stockQuery, invalidChangeStock],
   )
 
   useEffect(() => {
@@ -367,7 +368,7 @@ export default function NationalTeam() {
     syncParams({ report_date: null, prev_report_date: null })
   }, [syncParams])
 
-  const useQoQ = useCallback(() => {
+  const switchToQoQ = useCallback(() => {
     syncParams({ prev_report_date: null })
   }, [syncParams])
 
@@ -377,6 +378,7 @@ export default function NationalTeam() {
       ? '比较期不可用'
       : comparisonTitle(changes?.comparison)
   const focusLabel = focusView === 'changes' ? changesHeading : '持仓明细'
+  const canSwitchToQoQ = Boolean(compareError || (prevReportDate && changes?.status === 'prev_unavailable'))
   const comparisonBaseline = changes?.comparison && changes.prev_report_date
     ? `${changes.comparison === 'yoy' ? '同比' : '环比'}基准 ${changes.prev_report_date}`
     : null
@@ -432,16 +434,17 @@ export default function NationalTeam() {
           {reportDate ? ` · 报告期 ${reportDate}` : ''}
           {focusView === 'changes' && changes?.comparison && changes.prev_report_date ? ` · 比较期 ${changes.prev_report_date}` : ''}
           {holder !== 'all' ? ` · ${holderOptions.find((o) => o.key === holder)?.label ?? holder}` : ''}
+          {stockQuery ? ` · 标的筛选 ${stockQuery}` : ''}
           {changeFilter.length ? ` · 变动类型 ${changeFilter.join('/')}` : ''}
           。口径与本次回答一致，可切换机构/报告期复核。
         </div>
       )}
 
-      {focusView === 'changes' && compareError && (
+      {focusView === 'changes' && canSwitchToQoQ && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-s1 px-3 py-2 text-[12px] text-destructive">
           <AlertCircle className="h-3.5 w-3.5" />
-          <span className="min-w-0 flex-1">{compareError}</span>
-          <Button variant="outline" size="sm" onClick={useQoQ}>
+          <span className="min-w-0 flex-1">{compareError ?? '链接要求的同比比较期不可用。'}</span>
+          <Button variant="outline" size="sm" onClick={switchToQoQ}>
             改看环比
           </Button>
         </div>
@@ -600,7 +603,7 @@ export default function NationalTeam() {
             <div className="mt-2 divide-y divide-border">
               {!changes?.available && (
                 <div className="px-3 py-3 text-[14px] text-muted-foreground">
-                  {changes?.reason || '暂无可比报告期'}
+                  {invalidChangeStock ? '变动查询需要六位股票代码；当前关键词仅用于筛选持仓。' : changes?.reason || '暂无可比报告期'}
                 </div>
               )}
               {changes?.items.map((it) => (

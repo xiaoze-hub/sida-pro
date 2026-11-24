@@ -1446,7 +1446,7 @@ GROUP BY h.report_date, h.group_key, h.stock_code
                 "cur_ratio": None,
                 "prev_ratio": None,
                 "cur_cap": r.get("market_cap"),
-                "prev_cap": prior.get("market_cap") if prior is not None else 0.0,
+                "prev_cap": prior.get("market_cap") if prior is not None else None,
                 "change_type": None,
                 "cur_holders": int(r.get("holders") or 0),
             }

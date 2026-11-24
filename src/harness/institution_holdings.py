@@ -44,6 +44,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from fastapi import HTTPException
+
 from src.core import national_team as nt
 
 logger = logging.getLogger(__name__)
@@ -235,7 +237,7 @@ def parse_question(text: str) -> Question:
             from datetime import date
 
             q.report_date = date(y, mo, d).isoformat()
-            q.period_hint = "explicit"
+            q.period_hint = "yoy" if "去年同期" in raw else "explicit"
         except ValueError:
             q.ambiguous = f"【机构持仓直查】「{dm.group(0)}」不是有效日期，请给出报告期（如 2026-09-30）。"
             return q
@@ -363,7 +365,7 @@ def _fetch(engine: Any, q: Question) -> dict[str, Any]:
                 f"{coverage}（最新为 {latest}），{missing}，无法回答「上期」：不拿最新一期顶替，也不跳期。"
             )
         q.report_date = prior_quarter
-    elif q.period_hint == "yoy" and periods:
+    elif q.period_hint == "yoy" and (q.report_date or periods):
         # 「去年同期」有两种问法，不能混成一句：
         # · 看持仓 → 看去年同季那一期本身（把报告期挪过去即可）；
         # · 看变动 → 要的是「本期 vs 去年同季」的对比，报告期必须留在本期，
@@ -621,10 +623,14 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
         from src.core.permissions import enforce_perm
 
         enforce_perm(user, _QUOTE_PERM, db)
-    except Exception as exc:  # noqa: BLE001 —— 权限异常一律保守拒绝
-        detail = getattr(exc, "detail", None)
-        msg = detail.get("message") if isinstance(detail, dict) else detail
-        return _refuse(f"当前账号没有行情浏览权限（{msg or _QUOTE_PERM}），无法直查机构持仓。")
+    except Exception as exc:  # noqa: BLE001 —— fail closed，区分权限拒绝与校验设施故障
+        if isinstance(exc, HTTPException) and exc.status_code in {401, 403}:
+            detail = exc.detail
+            msg = detail.get("message") if isinstance(detail, dict) else detail
+            return _refuse(f"当前账号没有行情浏览权限（{msg or _QUOTE_PERM}），无法直查机构持仓。")
+        logger.warning("[institution_holdings] 权限校验失败: %s", type(exc).__name__)
+        _note_failure(runtime, q, "permission_check_failed", type(exc).__name__)
+        return _refuse("权限校验暂不可用，本次未取到数据，请稍后重试。")
 
     engine = _engine_of(db)
     if engine is None:

@@ -271,6 +271,8 @@ def test_changes_are_group_level(engine, monkeypatch):
     kinds = {(i["group_key"], i["stock_code"], i["kind"]) for i in ch["items"]}
     assert ("insurance", "601318", "new") in kinds       # 平安新进
     assert ("ssb", "600036", "exit") in kinds            # 招行退出
+    new = next(i for i in ch["items"] if i["kind"] == "new" and i["stock_code"] == "601318")
+    assert new["prev_num"] is None and new["prev_cap"] is None  # 上期未上榜，不等于市值为零
     assert ch["available"] is True and ch["computed"] is True
 
 

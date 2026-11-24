@@ -514,7 +514,11 @@ async def test_fetch_failure_leaves_a_failed_step(seeded, monkeypatch):
     assert "db.internal" not in payload and "could not connect" not in payload
 
 
-async def test_yoy_change_compares_latest_with_last_year_same_quarter(engine, monkeypatch):
+@pytest.mark.parametrize("question", [
+    "汇金去年同期新进了哪些",
+    "汇金 2026-09-30 去年同期新进了哪些股",
+])
+async def test_yoy_change_uses_last_year_same_quarter(engine, monkeypatch, question):
     """「去年同期」问变动 = 本期 vs 去年同季；不能变成「去年同季 vs 它的上一季」。"""
     rows = {}
     for period, num in (("2026-09-30", 100.0), ("2026-06-30", 90.0), ("2025-09-30", 60.0)):
@@ -524,7 +528,7 @@ async def test_yoy_change_compares_latest_with_last_year_same_quarter(engine, mo
     for period in ("2025-09-30", "2026-06-30", "2026-09-30"):
         nt.scan_period(engine, period, report_kinds=["float"])
 
-    out = await _ask(engine, "汇金去年同期新进了哪些")
+    out = await _ask(engine, question)
 
     assert "2026-09-30 vs 2025-09-30" in out
     assert "同比变动（与去年同季）" in out
@@ -737,6 +741,20 @@ async def test_no_permission_is_refused(seeded):
     guest = SimpleNamespace(id="u-guest", role="guest")
     out = await ih.answer(seeded, "汇金持仓", None, guest)
     assert out and "没有行情浏览权限" in out
+
+
+async def test_permission_infrastructure_failure_is_not_denial(seeded, monkeypatch, caplog):
+    from src.core import permissions
+
+    def fail(*_):
+        raise RuntimeError("private configuration detail")
+
+    monkeypatch.setattr(permissions, "enforce_perm", fail)
+    trace = _Trace()
+    out = await ih.answer(seeded, "汇金持仓", None, _pro(), SimpleNamespace(trace=trace))
+    assert "权限校验暂不可用" in out and "没有行情浏览权限" not in out
+    assert "private configuration detail" not in out + caplog.text + repr(trace.steps)
+    assert any(not s["ok"] and s["error"] == "permission_check_failed" for s in trace.steps)
 
 
 async def test_non_institution_returns_none(seeded):

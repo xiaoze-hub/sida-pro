@@ -502,12 +502,22 @@ def probe_qa(base: str, token: str, *, question: str, min_chars: int,
             "cancel": cancel_info,
         }, tl
 
-    # 终稿只认会话最后一条 assistant 正文（不看 SSE、不看半截步骤文本）
+    # run 终态与会话正文可能由两个事务依次提交。保留总 deadline，并仅对 ok 短等同 run 终稿。
     if conversation_id:
-        cs, cb, _ = _request(base, f"/api/chat/conversations/{conversation_id}",
-                             token=token, timeout=15.0)
-        if cs == 200:
-            final_content = _bound_message(cb, conversation_id, run_id)
+        body_deadline = min(deadline, time.monotonic() + 8.0)
+        while (remaining := body_deadline - time.monotonic()) > 0:
+            cs, cb, _ = _request(base, f"/api/chat/conversations/{conversation_id}",
+                                 token=token, timeout=remaining)
+            if cs == 200:
+                final_content = _bound_message(cb, conversation_id, run_id)
+            if final_content:
+                if not tl.has("first_body"):
+                    tl.mark("first_body")
+                    tl.marks["first_body_is_final"] = True
+                break
+            if last_status != "ok":
+                break
+            time.sleep(min(max(0.05, poll_s), 0.5, max(0.0, body_deadline - time.monotonic())))
     verdict = evaluate_probe(
         terminal_status=last_status, final_content=final_content, min_chars=min_chars,
     )

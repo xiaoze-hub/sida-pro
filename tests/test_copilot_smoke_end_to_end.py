@@ -27,6 +27,7 @@ QUESTION_ANSWER = "今日主线在算力与半导体，成交额较昨日放大�
 class _State:
     def __init__(self):
         self.polls = 0
+        self.terminal_body_reads = 0
         self.mode = "ok"          # ok | short | hang
         self.answer = QUESTION_ANSWER
         self.token_seen = ""
@@ -104,6 +105,11 @@ class _Handler(BaseHTTPRequestHandler):
                 "steps": [{"seq": 1, "tool": "get_quote", "ok": True, "elapsed_ms": 10}],
             })
         if path.startswith("/api/chat/conversations/"):
+            if self.state.mode == "delayed_commit":
+                if self.state.polls >= 2:
+                    self.state.terminal_body_reads += 1
+                if self.state.terminal_body_reads < 3:
+                    return self._send(200, {"conversation": {"id": 7}, "messages": []})
             content = self.state.answer if self.state.mode != "short" else "好的"
             return self._send(200, {
                 "conversation": {"id": 7},
@@ -174,6 +180,15 @@ def test_probe_end_to_end_success(server):
     # 凭据不进报告
     assert "tok-abc" not in json.dumps(report)
     assert state.token_seen == "Bearer tok-abc"
+
+
+def test_probe_end_to_end_waits_for_committed_body_after_run_status(server):
+    _, state = server
+    state.mode = "delayed_commit"
+    report = _probe(server)
+    assert report["ok"] is True, report
+    assert state.terminal_body_reads == 3
+    assert not state.cancel_calls
 
 
 def test_probe_end_to_end_fails_on_short_answer(server):

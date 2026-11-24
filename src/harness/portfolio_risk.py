@@ -227,14 +227,11 @@ def _explicit_codes(text: str) -> list[str]:
     """正文里明确写出的 6 位代码（去重保序，排除「像 600111 这样的票」举例）。
 
     口径复用 `pipeline_router.question_codes`（同一套正则 + 举例判定），避免两处
-    对「点名了哪只票」判断不一致；导入失败就当作没有点名（保守）。
+    对「点名了哪只票」判断不一致；失败时交回主流程，不能把作用域扩大到全仓。
     """
-    try:
-        from src.harness.pipeline_router import question_codes
+    from src.harness.pipeline_router import question_codes
 
-        return question_codes(text or "")
-    except Exception:  # noqa: BLE001 - 路由层不可用不影响核验主逻辑
-        return []
+    return question_codes(text or "")
 
 
 # ── 取数 ─────────────────────────────────────────────────────────────────
@@ -321,14 +318,14 @@ async def _fetch_quotes(rows: list[HoldingRow]) -> tuple[dict, set[str]]:
     try:
         from src.core.marketdata_client import md_quote_rows
     except Exception as e:  # noqa: BLE001 - 行情客户端不可用 → 全部无法核验, 不是安全
-        logger.warning("portfolio_risk: 行情客户端不可用: %s", e)
+        logger.warning("portfolio_risk: 行情客户端不可用: %s", type(e).__name__)
         return out, set(groups)
 
     for market, symbols in groups.items():
         try:
             items = await asyncio.to_thread(md_quote_rows, sorted(symbols), market)
         except Exception as e:  # noqa: BLE001 - 单市场故障不影响其它市场
-            logger.warning("portfolio_risk: %s 行情批量失败: %s", market, e)
+            logger.warning("portfolio_risk: %s 行情批量失败: %s", market, type(e).__name__)
             failed.add(market)
             continue
         for item in items or []:
@@ -570,7 +567,7 @@ def _market_trading(market: str, now: datetime | None) -> bool:
 
         return bool(is_market_trading_time(market, now))
     except Exception as e:  # noqa: BLE001 - 日历未覆盖年份等; 退成「休市」口径再验日期
-        logger.warning("portfolio_risk: %s 交易时段判定失败: %s", market, e)
+        logger.warning("portfolio_risk: %s 交易时段判定失败: %s", market, type(e).__name__)
         return False
 
 
@@ -819,8 +816,8 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
             return None
 
         t0 = _time.perf_counter()
-        rows, unattributed, zero_qty = load_holdings(db, uid)
         scoped = [c for c in _explicit_codes(text) if c]
+        rows, unattributed, zero_qty = load_holdings(db, uid)
         if scoped:
             rows = [r for r in rows if r.symbol in scoped]
             # 点名收窄后, 「未纳入」的计数(无主行/零数量)属于全量口径, 会误导, 不再展示。
@@ -877,7 +874,7 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
         )
         return out
     except Exception as e:  # noqa: BLE001 - 快路径失败 → 正常走模型
-        logger.warning("portfolio_risk 快路径失败，回落主流程: %s", e)
+        logger.warning("portfolio_risk 快路径失败，回落主流程: %s", type(e).__name__)
         return None
 
 
