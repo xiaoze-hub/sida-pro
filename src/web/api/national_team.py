@@ -129,6 +129,7 @@ def national_team_changes(
         str | None,
         Query(description="同比比较期 YYYY-MM-DD（去年同季）；缺省按严格相邻上一季算环比"),
     ] = None,
+    q: Annotated[str | None, Query(pattern=r"^[0-9]{6}$", description="六位股票代码，按代码精确筛选")] = None,
 ):
     from src.core import national_team as nt
 
@@ -145,6 +146,7 @@ def national_team_changes(
             change=change,
             limit=limit,
             prev_report_date=prev_report_date,
+            q=q,
         )
     except HTTPException:
         raise

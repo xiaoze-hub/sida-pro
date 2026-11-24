@@ -1278,11 +1278,12 @@ def changes(
     change: str | Sequence[str] | None = None,
     limit: int = 100,
     prev_report_date: str | None = None,
+    q: str | None = None,
 ) -> dict[str, Any]:
     """环比变动（按 机构组 + 股票 聚合；组内多账户先合并再比较）。
 
-    `holder` **在 SQL 里先过滤机构**（组 key / 具体账户 key，逗号分隔），`change` 在
-    聚合后按 new/increase/decrease/exit 过滤 —— 两者都在 `limit` 截断**之前**完成，
+    `holder` 与 `q` 在 SQL 里先过滤机构及确切的六位个股代码，`change` 在
+    聚合后按 new/increase/decrease/exit 过滤 —— 都在 `limit` 截断**之前**完成，
     `count` 才是该机构该变动类型的准确总量。绝不先取前 N 条再筛机构（那会把
     「社保新进 3 只」答成「全市场新进前 60 条里恰好有 3 只社保」）。
 
@@ -1305,6 +1306,7 @@ def changes(
         "report_kind": kind,
         "periods": periods,
         "holder": holder,
+        "q": q,
         "change": list(wanted),
         "counts": {},
         "count": 0,
@@ -1379,43 +1381,47 @@ def changes(
                 prev=None,
             )
         prev = candidate
-        gap = 1
 
     base["prev_report_date"] = prev
     base["compare_gap"] = gap
-    base["comparison"] = "qoq" if gap == 1 else ("yoy" if gap == 4 else "cross")
+    base["comparison"] = "qoq" if gap == 1 else "yoy"
 
-    cur_scope, cur_scope_params = _scope_sql("c", groups, keys, names)
-    prev_scope, prev_scope_params = _scope_sql("p", groups, keys, names)
+    scope_sql, scope_params = _scope_sql("h", groups, keys, names)
+    if q is not None:
+        scope_sql += " AND h.stock_code = :stock_code"
+        scope_params["stock_code"] = q
 
-    rows = _rows(
+    # 两期各自加总再比，不能用本期仍在榜的账户去过滤上期。
+    snapshots = _rows(
         engine,
         f"""
-SELECT c.group_key, c.stock_code, MAX(c.stock_name) AS stock_name,
-       SUM(c.hold_num) AS cur_num, SUM(p.hold_num) AS prev_num,
-       COUNT(DISTINCT c.holder_name) AS cur_holders,
-       SUM(COALESCE(c.market_cap, 0)) AS cur_cap,
-       SUM(COALESCE(p.market_cap, 0)) AS prev_cap
-FROM {TABLE} c
-LEFT JOIN {TABLE} p
-  ON p.report_date = :prev AND p.report_kind = c.report_kind
- AND p.holder_key = c.holder_key AND p.stock_code = c.stock_code
-WHERE c.report_date = :cur AND c.report_kind = :rk{cur_scope}
-GROUP BY c.group_key, c.stock_code
+SELECT h.report_date, h.group_key, h.stock_code, MAX(h.stock_name) AS stock_name,
+       SUM(h.hold_num) AS hold_num, COUNT(DISTINCT h.holder_name) AS holders,
+       SUM(COALESCE(h.market_cap, 0)) AS market_cap
+FROM {TABLE} h
+WHERE h.report_date IN (:cur, :prev) AND h.report_kind = :rk{scope_sql}
+GROUP BY h.report_date, h.group_key, h.stock_code
 """,
-        {"cur": target, "prev": prev, "rk": kind, **cur_scope_params},
+        {"cur": target, "prev": prev, "rk": kind, **scope_params},
     )
+    current_rows = [r for r in snapshots if str(r["report_date"]) == target]
+    previous_rows = {
+        (str(r["group_key"]), str(r["stock_code"])): r
+        for r in snapshots if str(r["report_date"]) == prev
+    }
 
     items: list[dict[str, Any]] = []
     counts = {"new": 0, "increase": 0, "decrease": 0, "exit": 0, "unchanged": 0}
-    for r in rows:
-        cur = float(r["cur_num"] or 0)
-        prev_num = r.get("prev_num")
-        if prev_num is None:
+    for r in current_rows:
+        pair = (str(r["group_key"]), str(r["stock_code"]))
+        prior = previous_rows.pop(pair, None)
+        cur = float(r["hold_num"] or 0)
+        prev_num = float(prior["hold_num"] or 0) if prior is not None else 0.0
+        if prior is None:
             kind_ = "new"
             delta = cur
         else:
-            delta = cur - float(prev_num or 0)
+            delta = cur - prev_num
             if abs(delta) < 1:
                 kind_ = "unchanged"
             elif delta > 0:
@@ -1435,35 +1441,20 @@ GROUP BY c.group_key, c.stock_code
                 "stock_code": r["stock_code"],
                 "stock_name": r["stock_name"],
                 "cur_num": cur,
-                "prev_num": float(prev_num) if prev_num is not None else None,
+                "prev_num": prev_num if prior is not None else None,
                 "delta_num": delta,
                 "cur_ratio": None,
                 "prev_ratio": None,
-                "cur_cap": r.get("cur_cap"),
-                "prev_cap": r.get("prev_cap"),
+                "cur_cap": r.get("market_cap"),
+                "prev_cap": prior.get("market_cap") if prior is not None else 0.0,
                 "change_type": None,
-                "cur_holders": int(r.get("cur_holders") or 0),
+                "cur_holders": int(r.get("holders") or 0),
             }
         )
 
-    cur_pairs = {(str(r["group_key"]), str(r["stock_code"])) for r in rows}
-    exits = _rows(
-        engine,
-        f"""
-SELECT p.group_key, p.stock_code, MAX(p.stock_name) AS stock_name,
-       SUM(p.hold_num) AS prev_num, SUM(COALESCE(p.market_cap, 0)) AS prev_cap
-FROM {TABLE} p
-WHERE p.report_date = :prev AND p.report_kind = :rk{prev_scope}
-GROUP BY p.group_key, p.stock_code
-""",
-        {"prev": prev, "rk": kind, **prev_scope_params},
-    )
-    for r in exits:
-        pair = (str(r["group_key"]), str(r["stock_code"]))
-        if pair in cur_pairs:
-            continue
+    for (gk, _), r in previous_rows.items():
         counts["exit"] += 1
-        gk = pair[0]
+        prev_num = float(r["hold_num"] or 0)
         items.append(
             {
                 "kind": "exit",
@@ -1473,12 +1464,12 @@ GROUP BY p.group_key, p.stock_code
                 "stock_code": r["stock_code"],
                 "stock_name": r["stock_name"],
                 "cur_num": 0.0,
-                "prev_num": float(r["prev_num"] or 0),
-                "delta_num": -float(r["prev_num"] or 0),
+                "prev_num": prev_num,
+                "delta_num": -prev_num,
                 "cur_ratio": None,
                 "prev_ratio": None,
                 "cur_cap": None,
-                "prev_cap": r.get("prev_cap"),
+                "prev_cap": r.get("market_cap"),
                 "change_type": "退出",
                 "cur_holders": 0,
             }
@@ -1490,16 +1481,19 @@ GROUP BY p.group_key, p.stock_code
 
     material = counts["new"] + counts["increase"] + counts["decrease"] + counts["exit"]
     # 顺序有意义：先判「该机构根本没进榜」，否则空结果会被误报成「本期零变动」。
-    if not rows and not exits:
+    if not snapshots:
         status = "empty_result"
     elif material == 0:
         status = "zero_change"
     else:
         status = "ok"
     if status == "empty_result":
+        reason = "该机构本报告期未出现在十大股东/十大流通股东（已退出或未进前十），不是取数失败"
+        if q is not None:
+            reason = f"该机构在 {q} 的两个比较期均没有该披露口径的记录，不代表未持有，也不是取数失败"
         return _empty(
             "empty_result",
-            "该机构本报告期未出现在十大股东/十大流通股东（已退出或未进前十），不是取数失败",
+            reason,
             prev=prev,
         )
 
@@ -1511,7 +1505,7 @@ GROUP BY p.group_key, p.stock_code
         "status": status,
         "prev_report_date": prev,
         "counts": counts,
-        # count = 过滤（机构 + 变动类型）后的准确总量；items 才是被 limit 截断的页
+        # count = 过滤（机构 + 标的 + 变动类型）后的准确总量；items 才受 limit 截断
         "count": len(selected),
         "total": len(selected),
         # 真实排序回显：先按变动类型（新进→加仓→减仓→退出），同类型内按变动股数绝对值降序

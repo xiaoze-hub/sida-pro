@@ -301,6 +301,58 @@ async def test_stock_scoped_question_uses_code_filter(seeded):
     assert "q=601398" in out
 
 
+async def test_stock_scoped_changes_link_queries_same_stock_before_limit(seeded, monkeypatch):
+    from urllib.parse import parse_qsl, urlsplit
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.web.api import national_team as api_mod
+
+    out = await _ask(seeded, "汇金这季度加仓了 601398 吗？")
+    assert "标的 601398" in out and "新进 0 · 加仓 1 · 减仓 0 · 退出 0" in out
+    assert "共 1 条" in out
+    link = out.split("[打开国家队动向](", 1)[1].split(")", 1)[0]
+    params = dict(parse_qsl(urlsplit(link).query))
+    assert params.pop("view") == "changes" and params["q"] == "601398"
+
+    monkeypatch.setattr(api_mod, "engine", seeded)
+    app = FastAPI()
+    app.include_router(api_mod.router, prefix="/api/national-team")
+    with TestClient(app) as client:
+        path = "/api/national-team/changes"
+        res = client.get(path, params={**params, "limit": 1})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["count"] == data["counts"]["increase"] == 1
+        assert data["counts"]["new"] == 0 and not data["truncated"]
+        assert [(i["stock_code"], i["delta_num"]) for i in data["items"]] == [("601398", 1000)]
+        empty = client.get(path, params={**params, "q": "999999"}).json()
+        assert empty["status"] == "empty_result" and empty["items"] == []
+        assert "999999" in empty["reason"]
+        assert client.get(path, params={**params, "q": "601398.SH"}).status_code == 422
+
+
+async def test_stock_scoped_change_counts_previous_group_account_that_left(seeded):
+    from sqlalchemy import text
+
+    with seeded.begin() as conn:
+        conn.execute(text("DELETE FROM national_team_holdings WHERE report_kind='float' "
+                          "AND report_date=:d AND stock_code='601398' AND holder_name LIKE '%资产管理%'"),
+                     {"d": PERIOD_CUR})
+    group = nt.changes(seeded, holder="huijin", q="601398")["items"][0]
+    assert (group["kind"], group["cur_num"], group["prev_num"], group["delta_num"]) == (
+        "decrease", 10000, 17000, -7000,
+    )
+    account = nt.changes(seeded, holder="huijin_asset", q="601398")["items"][0]
+    assert (account["kind"], account["delta_num"]) == ("exit", -8000)
+
+
+async def test_multiple_stock_codes_require_explicit_single_stock(seeded):
+    out = await _ask(seeded, "汇金这季度加仓了 601398 和 600005 吗？")
+    assert out and "请一次指定一只股票" in out and "/national-team?" not in out
+
+
 async def test_hujin_asset_account_filter_excludes_hujin_invest(seeded):
     """扫描路径落库的 holder_key 是 `组:哈希`；账户过滤必须走全称，不能只比种子 key。"""
     asset = nt.holdings(seeded, kind="float", holder="huijin_asset")

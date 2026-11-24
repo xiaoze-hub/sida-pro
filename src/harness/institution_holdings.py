@@ -199,9 +199,12 @@ def parse_question(text: str) -> Question:
         q.mode = "changes"
 
     # 个股（只认 6 位代码；名字交给主流程解析，绝不在这条路猜代码）
-    m = _CODE_RE.search(raw)
-    if m:
-        q.stock_code = m.group(1)
+    codes = list(dict.fromkeys(_CODE_RE.findall(raw)))
+    if len(codes) > 1:
+        q.ambiguous = "【机构持仓直查】识别到多个股票代码，请一次指定一只股票。"
+        return q
+    if codes:
+        q.stock_code = codes[0]
 
     # 报告期
     dm = _DATE_RE.search(raw)
@@ -356,6 +359,7 @@ def _fetch(engine: Any, q: Question) -> dict[str, Any]:
             change=q.change_kinds or None,
             limit=10,
             prev_report_date=prev_override,
+            q=q.stock_code,
         )
     else:
         data = nt.holdings(
@@ -521,8 +525,9 @@ def _comparison_label(data: dict[str, Any]) -> str:
 def _render_changes(q: Question, data: dict[str, Any]) -> str:
     counts = data.get("counts") or {}
     wanted = q.change_kinds or tuple(nt.CHANGE_KINDS)
+    stock = f" · 标的 {q.stock_code}" if q.stock_code else ""
     head = [
-        f"【机构持仓直查 · {q.label} · {_comparison_label(data)}】",
+        f"【机构持仓直查 · {q.label}{stock} · {_comparison_label(data)}】",
         f"{data.get('report_date')} vs {data.get('prev_report_date')}"
         f"（{nt.REPORT_KIND_LABEL.get(q.kind, q.kind)} · 季报口径）",
         f"新进 {counts.get('new', 0)} · 加仓 {counts.get('increase', 0)}"
@@ -626,8 +631,9 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
         return _refuse(str(data.get("reason") or "没有可展示的数据。"), link)
     if status == "zero_change":
         counts = data.get("counts") or {}
+        stock = f" · 标的 {q.stock_code}" if q.stock_code else ""
         text_out = (
-            f"【机构持仓直查 · {q.label} · {_comparison_label(data)}】\n"
+            f"【机构持仓直查 · {q.label}{stock} · {_comparison_label(data)}】\n"
             f"{data.get('report_date')} vs {data.get('prev_report_date')}"
             f"（{nt.REPORT_KIND_LABEL.get(q.kind, q.kind)}）\n"
             f"本期共 {counts.get('unchanged', 0)} 只持股数与比较期完全相同"

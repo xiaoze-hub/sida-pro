@@ -212,6 +212,8 @@ export const nationalTeamApi = {
       holder?: string
       /** new/increase/decrease/exit，多个用逗号 —— 后端在截断前过滤 */
       change?: string
+      /** 六位股票代码，按标的精确筛选 */
+      q?: string
       /** 同比比较期（去年同季，YYYY-MM-DD）；缺省按严格相邻上一季算环比 */
       prev_report_date?: string
       limit?: number
@@ -223,6 +225,7 @@ export const nationalTeamApi = {
         kind: params.kind,
         holder: params.holder,
         change: params.change,
+        q: params.q,
         prev_report_date: params.prev_report_date,
         limit: params.limit,
       }),

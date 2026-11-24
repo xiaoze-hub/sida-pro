@@ -276,6 +276,7 @@ export default function NationalTeam() {
                 holder: nextHolder === 'all' ? undefined : nextHolder,
                 report_date: nextDate ?? undefined,
                 prev_report_date: nextPrev ?? undefined,
+                q: stockQuery || undefined,
                 change: nextChange.length ? nextChange.join(',') : undefined,
                 limit: 60,
               }),
@@ -375,6 +376,10 @@ export default function NationalTeam() {
     compareError || changes?.status === 'prev_unavailable'
       ? '比较期不可用'
       : comparisonTitle(changes?.comparison)
+  const focusLabel = focusView === 'changes' ? changesHeading : '持仓明细'
+  const comparisonBaseline = changes?.comparison && changes.prev_report_date
+    ? `${changes.comparison === 'yoy' ? '同比' : '环比'}基准 ${changes.prev_report_date}`
+    : null
   const holderOptions = useMemo(() => {
     const opts = [{ key: 'all', label: '全部机构' }]
     for (const g of overview?.groups ?? []) opts.push({ key: g.group_key, label: g.group_label })
@@ -402,16 +407,7 @@ export default function NationalTeam() {
             <StatusChip tone={overview?.available ? 'info' : 'neutral'}>
               报告期 {overview?.report_date ?? '无数据'}
             </StatusChip>
-            {changes?.comparison === 'yoy' && changes.prev_report_date ? (
-              <StatusChip>同比基准 {changes.prev_report_date}</StatusChip>
-            ) : prevReportDate ? (
-              <StatusChip>同比基准 {prevReportDate}</StatusChip>
-            ) : (
-              !compareError &&
-              overview?.prev_report_date && (
-                <StatusChip>环比基准 {overview.prev_report_date}</StatusChip>
-              )
-            )}
+            {comparisonBaseline && <StatusChip>{comparisonBaseline}</StatusChip>}
             <StatusChip tone="neutral">采集 {fmtSnapshot(overview?.snapshot_at)}</StatusChip>
             <StatusChip tone="neutral">源 东方财富十大股东</StatusChip>
           </>
@@ -432,17 +428,9 @@ export default function NationalTeam() {
       {/* 深链定位说明：链接来自参谋直查（同机构/同报告期/同榜单），不是另一种口径 */}
       {focusView && (
         <div className="rounded-lg bg-s1 px-3 py-2 text-[12px] text-muted-foreground">
-          已按链接定位到「
-          {focusView === 'changes'
-            ? compareError
-              ? '比较期无效（未改算环比）'
-              : prevReportDate
-                ? '同比变动（与去年同季）'
-                : '环比变动'
-            : '持仓明细'}
-          」
+          已按链接定位到「{focusLabel}」
           {reportDate ? ` · 报告期 ${reportDate}` : ''}
-          {focusView === 'changes' && prevReportDate ? ` · 比较期 ${prevReportDate}` : ''}
+          {focusView === 'changes' && changes?.comparison && changes.prev_report_date ? ` · 比较期 ${changes.prev_report_date}` : ''}
           {holder !== 'all' ? ` · ${holderOptions.find((o) => o.key === holder)?.label ?? holder}` : ''}
           {changeFilter.length ? ` · 变动类型 ${changeFilter.join('/')}` : ''}
           。口径与本次回答一致，可切换机构/报告期复核。
@@ -615,7 +603,7 @@ export default function NationalTeam() {
                   {changes?.reason || '暂无可比报告期'}
                 </div>
               )}
-              {changes?.items.slice(0, 20).map((it) => (
+              {changes?.items.map((it) => (
                 <ChangeRow key={`${it.group_key}-${it.stock_code}-${it.kind}`} item={it} />
               ))}
               {changes?.available && changes.items.length === 0 && (
@@ -628,7 +616,7 @@ export default function NationalTeam() {
             </div>
             {changes?.truncated && (
               <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                变动共 {changes.count} 条（已按机构与变动类型过滤），此处只显示前 60 条（按变动幅度排序）。
+                变动共 {changes.count} 条（已按当前条件过滤），此处显示前 {changes.items.length} 条（先按变动类型，同类内按股数变化排序）。
               </div>
             )}
           </section>

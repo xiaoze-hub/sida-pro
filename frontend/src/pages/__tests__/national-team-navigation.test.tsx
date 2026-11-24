@@ -19,7 +19,7 @@ const base = `/national-team?report_date=${current}&holder=huijin&view=changes`
 
 function OpenYoYLink() {
   const navigate = useNavigate()
-  return <button type="button" onClick={() => navigate(`${base}&prev_report_date=${yoy}`)}>打开同比链接</button>
+  return <button type="button" onClick={() => navigate(`${base}&prev_report_date=${yoy}&q=601398`)}>打开同比链接</button>
 }
 
 beforeEach(() => {
@@ -42,7 +42,7 @@ describe('国家队比较期深链', () => {
     render(<MemoryRouter initialEntries={[base]}><OpenYoYLink /><NationalTeam /></MemoryRouter>)
     await screen.findByText('新进 2')
     fireEvent.click(screen.getByRole('button', { name: '打开同比链接' }))
-    await waitFor(() => expect(changes).toHaveBeenLastCalledWith(expect.objectContaining({ report_date: current, prev_report_date: yoy, holder: 'huijin' })))
+    await waitFor(() => expect(changes).toHaveBeenLastCalledWith(expect.objectContaining({ report_date: current, prev_report_date: yoy, holder: 'huijin', q: '601398' })))
     await screen.findByText('新进 9')
     expect(screen.getByRole('heading', { name: '同比变动（与去年同季）' })).toBeTruthy()
   })
@@ -54,5 +54,13 @@ describe('国家队比较期深链', () => {
     fireEvent.click(resume)
     await screen.findByText('新进 2')
     expect(changes).toHaveBeenLastCalledWith(expect.objectContaining({ prev_report_date: undefined }))
+  })
+
+  it('后端拒绝比较期时不展示 URL 指定的同比基准', async () => {
+    changes.mockResolvedValueOnce({ available: false, status: 'prev_unavailable', items: [], reason: '未采集此比较期' })
+    render(<MemoryRouter initialEntries={[`/national-team?view=changes&prev_report_date=${yoy}`]}><NationalTeam /></MemoryRouter>)
+    await screen.findByText('未采集此比较期')
+    expect(screen.queryByText(`同比基准 ${yoy}`)).toBeNull()
+    expect(screen.getByRole('heading', { name: '比较期不可用' })).toBeTruthy()
   })
 })
