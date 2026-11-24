@@ -792,7 +792,8 @@ def test_unavailable_code_parser_never_widens_portfolio_query(monkeypatch, caplo
 
     monkeypatch.setattr(pipeline_router, "question_codes", broken_codes)
     monkeypatch.setattr(portfolio_risk, "load_holdings", unexpected_load)
-    assert asyncio.run(answer(object(), "我的持仓600519跌破防守位了吗", None, SimpleNamespace(id="u"))) is None
+    out = asyncio.run(answer(object(), "我的持仓600519跌破防守位了吗", None, SimpleNamespace(id="u")))
+    assert out and "未完成核验" in out
     assert "RuntimeError" in caplog.text and "private holdings detail" not in caplog.text
 
 
@@ -803,7 +804,8 @@ def test_holdings_database_failure_does_not_log_bound_parameters(monkeypatch, ca
         raise RuntimeError("private holdings SQL parameters")
 
     monkeypatch.setattr(portfolio_risk, "load_holdings", failed_database)
-    assert asyncio.run(answer(object(), "我的持仓跌破防守位了吗", None, SimpleNamespace(id="u"))) is None
+    out = asyncio.run(answer(object(), "我的持仓跌破防守位了吗", None, SimpleNamespace(id="u")))
+    assert out and "未完成核验" in out and "private holdings SQL parameters" not in out
     assert "RuntimeError" in caplog.text and "private holdings SQL parameters" not in caplog.text
 
 
@@ -818,14 +820,21 @@ def test_fast_path_falls_through_for_single_stock_quote(db, monkeypatch):
     assert asyncio.run(answer(db, "600519 现价多少", "600519", user)) is None
 
 
-def test_fast_path_never_breaks_chat_on_unexpected_error(db, monkeypatch):
-    """快路径抛异常必须回落主流程，不能把对答弄挂。"""
+def test_failed_defense_check_returns_unverified_and_marks_trace(db, monkeypatch):
+    """确认是本人防守位核验后，底层异常不能交给模型猜测是否安全。"""
     user = _user(db, "boom")
     monkeypatch.setattr(
         "src.harness.portfolio_risk.load_holdings",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    assert asyncio.run(answer(db, "我的持仓防守位破了吗", None, user)) is None
+    trace = _Trace()
+    out = asyncio.run(answer(db, "我的持仓防守位破了吗", None, user, SimpleNamespace(trace=trace)))
+    assert out and out.startswith("【持仓防守位核验】未完成核验")
+    assert "不能判断是否触及防守位" in out
+    assert len(trace.steps) == 1
+    step = trace.steps[0]
+    assert step["tool"] == "portfolio_defense_check" and step["ok"] is False
+    assert step["error"] == "portfolio_verification_failed" and "boom" not in repr(step)
 
 
 def test_trace_failure_does_not_break_answer(db, monkeypatch):

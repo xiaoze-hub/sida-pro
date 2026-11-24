@@ -2,11 +2,14 @@
 import asyncio
 import sys
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 
 from src import harness
+from src.core.ai_client import AIClient
+from src.db.models import User
 from src.harness import direct_answer, institution_holdings, portfolio_risk, quick_answer
 from src.harness.runtime import AgentRuntime
 from src.harness.trace import CopilotTrace
@@ -112,6 +115,42 @@ async def test_reader_configuration_failure_is_visible_when_no_reader_answers(mo
     assert trace._infer_status("ok", None)[0] == "error"
     assert any(r.levelname == "ERROR" and "institution_holdings" in r.message for r in caplog.records)
     assert "private deployment detail" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unrecovered_reader_runtime_error_is_visible_in_run(monkeypatch, caplog):
+    from src.harness import trace as trace_module
+
+    db = SimpleNamespace(add=lambda _: None, commit=lambda: None, close=lambda: None)
+    monkeypatch.setattr(trace_module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(institution_holdings, "answer", AsyncMock(side_effect=ValueError("private reader data")))
+    trace = CopilotTrace()
+    out = await direct_answer.answer(
+        None, "汇金持仓", None, None, AgentRuntime(trace=trace), stock_question=False, allow_specialized=True,
+    )
+    assert out is None
+    assert trace.steps == [{"tool": "institution_holdings", "ok": False, "error": "reader_execution_error"}]
+    assert trace._infer_status("ok", None)[0] == "error"
+    assert "private reader data" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_failed_portfolio_verification_stays_out_of_model_routing(monkeypatch, stream):
+    def unavailable(*_):
+        raise RuntimeError("holdings store unavailable")
+
+    def unexpected_routing(*_):
+        pytest.fail("a known verification failure must not be handed to the model")
+
+    monkeypatch.setattr(portfolio_risk, "load_holdings", unavailable)
+    monkeypatch.setattr(chat, "_route_with_persona", unexpected_routing)
+    events = [event async for event in chat._run_tool_loop_inner(
+        cast(AIClient, object()), [{"role": "user", "content": "我的持仓跌破防守位了吗"}], object(),
+        cast(User, SimpleNamespace(id="u")), stream=stream,
+    )]
+    assert [kind for kind, _ in events] == (["delta", "done"] if stream else ["text"])
+    assert all(isinstance(text, str) and "未完成核验，不能判断是否触及防守位" in text for _, text in events)
 
 
 @pytest.mark.asyncio

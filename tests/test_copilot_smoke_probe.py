@@ -80,6 +80,13 @@ def test_direct_read_refusal_is_not_a_successful_answer():
     assert "final_answer_is_error_placeholder" in verdict["reasons"]
 
 
+def test_failed_defense_check_text_is_not_a_successful_probe():
+    verdict = probe.evaluate_probe(
+        terminal_status="ok", final_content="【持仓防守位核验】未完成核验，不能判断是否触及防守位。", min_chars=1,
+    )
+    assert verdict["reasons"] == ["final_answer_is_error_placeholder"]
+
+
 @pytest.mark.parametrize("answer", [
     "【机构持仓直查 · 结果】该机构本报告期未出现在十大股东/十大流通股东（已退出或未进前十），不是取数失败",
     "【机构持仓直查 · 汇金系 · 环比变动】\n本期共 3 只持股数与上期完全相同（**确实零变动**，不是取数失败）。",

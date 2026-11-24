@@ -22,7 +22,7 @@ async def answer(db: Session, text: str, bound: str | None, user: User | None,
     readers = ("quick_answer",) if stock_question else ()
     if allow_specialized:
         readers += ("portfolio_risk", "institution_holdings")
-    configuration_failures: list[str] = []
+    reader_failures: list[tuple[str, str]] = []
     for name in readers:
         try:
             # Load each optional reader independently. A broken import must not skip its siblings.
@@ -30,7 +30,7 @@ async def answer(db: Session, text: str, bound: str | None, user: User | None,
             if not iscoroutinefunction(reader):
                 raise TypeError("reader entry point is not async")
         except Exception as exc:  # noqa: BLE001 — module initialization/export is a configuration failure
-            configuration_failures.append(name)
+            reader_failures.append((name, "reader_configuration_error"))
             logger.error("[copilot.direct_answer] reader=%s configuration failed (%s)", name, type(exc).__name__)
             continue
         try:
@@ -38,14 +38,15 @@ async def answer(db: Session, text: str, bound: str | None, user: User | None,
                 return result
         except Exception as exc:  # noqa: BLE001 — best-effort path; cancellation still propagates
             # Never log exception text: it can contain private holdings or connection details.
+            reader_failures.append((name, "reader_execution_error"))
             logger.warning("[copilot.direct_answer] reader=%s failed (%s)", name, type(exc).__name__)
-    # No reader recovered. Persist the configuration signal so a model fallback without
+    # No reader recovered. Persist the failure signal so a model fallback without
     # evidence cannot leave the run recorded as a clean success. Keep routing/cancellation unchanged.
     trace = getattr(runtime, "trace", None)
     if trace is not None:
-        for name in configuration_failures:
+        for name, error in reader_failures:
             try:
-                trace.step(name, ok=False, error="reader_configuration_error")
+                trace.step(name, ok=False, error=error)
             except Exception as exc:  # noqa: BLE001 — telemetry must not block fallback
                 logger.warning("[copilot.direct_answer] reader=%s trace failed (%s)", name, type(exc).__name__)
     return None

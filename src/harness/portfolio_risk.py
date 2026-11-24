@@ -801,21 +801,19 @@ def _px(value: float | None) -> str:
 
 
 async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | None:
-    """核验本人实盘持仓的防守位 → 确定性文本；不适用/不可判 → None 交回主流程。
+    """仅接管已识别且有会话的本人持仓核验。
 
-    返回 None 的三种情况（都刻意保守）:
-      1. 问题不是「本人持仓 + 防守位 + 核查」；
-      2. 没有用户会话（服务令牌/后台线程）—— 私有数据路径一律 fail-closed；
-      3. 取数或判定过程中出现未预期异常（快路径不许把对话弄挂）。
+    不适用时返回 None。已经接管后若无法核验，返回明确的「未核验」结论，不交模型猜测。
     """
-    try:
-        if not is_portfolio_defense_question(text):
-            return None
-        uid = getattr(user, "id", None)
-        if db is None or not uid:
-            return None
+    if not is_portfolio_defense_question(text):
+        return None
+    uid = getattr(user, "id", None)
+    if db is None or not uid:
+        return None
 
-        t0 = _time.perf_counter()
+    t0 = _time.perf_counter()
+    _trace = getattr(runtime, "trace", None)
+    try:
         scoped = [c for c in _explicit_codes(text) if c]
         rows, unattributed, zero_qty = load_holdings(db, uid)
         if scoped:
@@ -844,7 +842,6 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
                 + "。\n\n口径：只核验本人实盘账户的持仓；未做任何写操作。"
             )
 
-        _trace = getattr(runtime, "trace", None)
         if _trace is not None:
             # 只落条数与市场, 不落代码/价格/账户名 —— 运行记录不留完整私有数据。
             # 「用户没设防守位」是配置状态，不是故障：只标 partial，不判失败；
@@ -873,9 +870,18 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
             coverage.total, coverage.verified, coverage.breached, coverage.unknown,
         )
         return out
-    except Exception as e:  # noqa: BLE001 - 快路径失败 → 正常走模型
-        logger.warning("portfolio_risk 快路径失败，回落主流程: %s", type(e).__name__)
-        return None
+    except Exception as exc:  # noqa: BLE001 — 已接管，未知不等于安全
+        logger.warning("portfolio_risk 核验未完成: %s", type(exc).__name__)
+        if _trace is not None:
+            try:
+                _trace.step(
+                    "portfolio_defense_check", {"scope": "self_holdings"},
+                    ok=False, error="portfolio_verification_failed",
+                    elapsed_ms=int((_time.perf_counter() - t0) * 1000),
+                )
+            except Exception as trace_exc:  # noqa: BLE001 — 埋点失败不影响安全答复
+                logger.warning("portfolio_risk 核验轨迹记录失败: %s", type(trace_exc).__name__)
+        return "【持仓防守位核验】未完成核验，不能判断是否触及防守位。请稍后重试。"
 
 
 def _held_codes(db, user_id: str) -> list[str]:
