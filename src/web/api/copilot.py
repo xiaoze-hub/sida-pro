@@ -523,6 +523,234 @@ def get_copilot_metrics(
     }
 
 
+# ── 7/30 天运行基线（只读，2026-11-21）───────────────────────────────────
+# 要回答的问题不是「平均多少毫秒」，而是：**这个场景在窗口里到底有没有可用的测量**。
+# 因此这里只读 `copilot_runs` / `copilot_steps` 既有列，逐项报「测到了几个 / 共几个」：
+#   - 没测到 → None（不是 0ms、不是 0%）；
+#   - 工具耗时逐条累加只作参考，**不是关键路径**（并行工具会被重复计入）；
+#   - 队列等待 / TTFT / 阶段耗时没有落库事实源 → available=False + 原因。
+# 绝不迁移模型、绝不回填历史：窗口外或没有记录的场景 n=0，不凭空补。
+
+BASELINE_WINDOWS: tuple[int, ...] = (7, 30)
+_RUN_STATUSES = ("ok", "degraded", "error", "failed", "cancelled", "running", "queued", "paused")
+_DEGRADED_STATUSES = ("degraded", "error", "failed", "cancelled")
+_DEGRADATION_CAUSES = (
+    "tool_failure", "timeout", "budget_exceeded", "cancelled", "execution_error", "unknown",
+)
+
+
+def percentile_nearest_rank(values, q: float) -> int | None:
+    """nearest-rank 分位数：小样本不插值，返回**真实观测到**的耗时。
+
+    10 个样本的 P90 取第 9 个（不是最大值），与「排序后取 ceiling(q*n)」一致；
+    空集返回 None —— 0ms 和「没测到」必须能区分。
+    """
+    import math
+
+    vals = sorted(int(v) for v in values if v is not None)
+    if not vals:
+        return None
+    if not 0 < q <= 1:
+        raise ValueError(f"q 必须在 (0, 1] 内: {q!r}")
+    idx = max(0, math.ceil(q * len(vals)) - 1)
+    return vals[idx]
+
+
+def classify_degradation_cause(*, error: str | None = None, status: str | None = None) -> str:
+    """把 run.error 的已知写法归因成可计数的枚举（不猜未记录的原因）。
+
+    口径来自真正会写 error 的三处：`trace._infer_status`（failed_tools=…）、
+    `copilot_jobs._execute`（超时/预算/取消）、执行体异常（TypeError: …）。
+    顺序有意义：预算中止的文案里也可能带「已中止」，先认预算再认时间。
+    """
+    text = (error or "").strip()
+    low = text.lower()
+    st = (status or "").strip().lower()
+    if "failed_tools=" in low:
+        return "tool_failure"
+    if "预算超限" in text or ("budget" in low and "exceed" in low):
+        return "budget_exceeded"
+    if "超时" in text or "timeout" in low or "timed out" in low:
+        return "timeout"
+    if st == "cancelled" or "取消" in text:
+        return "cancelled"
+    if text:
+        return "execution_error"
+    return "unknown"
+
+
+def _coverage(n: int, of: int) -> dict:
+    return {"n": n, "of": of, "ratio": round(n / of, 3) if of else None}
+
+
+def _status_counts(rows) -> dict[str, int]:
+    counts = {s: 0 for s in _RUN_STATUSES}
+    for r in rows:
+        st = (getattr(r, "status", None) or "unknown").lower()
+        counts[st] = counts.get(st, 0) + 1
+    return counts
+
+
+def _causes(rows) -> dict[str, int]:
+    out = {c: 0 for c in _DEGRADATION_CAUSES}
+    for r in rows:
+        if (getattr(r, "status", None) or "").lower() in _DEGRADED_STATUSES:
+            cause = classify_degradation_cause(
+                error=getattr(r, "error", None), status=getattr(r, "status", None),
+            )
+            out[cause] = out.get(cause, 0) + 1
+    return out
+
+
+def _scenario_stats(key: str, rows, steps_by_run: dict) -> dict:
+    elapsed = [r.elapsed_ms for r in rows if getattr(r, "elapsed_ms", None) is not None]
+    counts = _status_counts(rows)
+    n = len(rows)
+    step_rows = [s for r in rows for s in (steps_by_run.get(r.run_id) or [])]
+    measured_steps = [s for s in step_rows if getattr(s, "elapsed_ms", None) is not None]
+    ok_n = counts.get("ok", 0)
+    return {
+        "scenario": key,
+        "recipe": None if key == "(默认)" else key,
+        "n": n,
+        "status_counts": counts,
+        "ok_rate": round(ok_n / n, 3) if n else None,
+        "p50_elapsed_ms": percentile_nearest_rank(elapsed, 0.5),
+        "p90_elapsed_ms": percentile_nearest_rank(elapsed, 0.9),
+        "n_measured": len(elapsed),
+        "zero_tool_runs": sum(1 for r in rows if (getattr(r, "tool_calls", 0) or 0) == 0),
+        "degradation_causes": _causes(rows),
+        "n_steps": len(step_rows),
+        "tools_sum_ms": sum(int(s.elapsed_ms) for s in measured_steps),
+    }
+
+
+def build_copilot_run_baseline(rows, *, days: int, steps_by_run: dict | None = None) -> dict:
+    """把窗口内的 run 行聚合成 7/30 天基线（纯函数，不查库、不写库）。
+
+    `rows` 是 CopilotRun 实例或同形对象；`steps_by_run` 是 run_id → [CopilotStep]。
+    """
+    if days not in BASELINE_WINDOWS:
+        raise ValueError(f"基线窗口只支持 {BASELINE_WINDOWS} 天，收到 {days!r}")
+
+    rows = list(rows)
+    steps_by_run = steps_by_run or {}
+    n = len(rows)
+    elapsed = [r.elapsed_ms for r in rows if getattr(r, "elapsed_ms", None) is not None]
+    counts = _status_counts(rows)
+    step_rows = [s for r in rows for s in (steps_by_run.get(r.run_id) or [])]
+    measured_steps = [s for s in step_rows if getattr(s, "elapsed_ms", None) is not None]
+
+    grouped: dict[str, list] = {}
+    for r in rows:
+        key = (getattr(r, "recipe", None) or "").strip() or "(默认)"
+        grouped.setdefault(key, []).append(r)
+    by_scenario = [
+        _scenario_stats(key, items, steps_by_run) for key, items in grouped.items()
+    ]
+    by_scenario.sort(key=lambda x: (-x["n"], x["scenario"]))
+
+    return {
+        "days": days,
+        "scenario_source": "recipe",
+        "runs": n,
+        "status_counts": counts,
+        "ok_rate": round(counts.get("ok", 0) / n, 3) if n else None,
+        "degraded_rate": round(counts.get("degraded", 0) / n, 3) if n else None,
+        # error 与 failed 都是失败终态；分开计数保留差异（failed=执行体/超时层）
+        "error_rate": round((counts.get("error", 0) + counts.get("failed", 0)) / n, 3) if n else None,
+        "latency": {
+            "p50_elapsed_ms": percentile_nearest_rank(elapsed, 0.5),
+            "p90_elapsed_ms": percentile_nearest_rank(elapsed, 0.9),
+            "n_measured": len(elapsed),
+            "n_runs": n,
+            "unit": "ms",
+            "note": "run 级墙钟；不是 TTFT，也不是工具关键路径",
+        },
+        "tools": {
+            "n_steps": len(step_rows),
+            "sum_ms": sum(int(s.elapsed_ms) for s in measured_steps),
+            "note": "工具耗时逐条累加，并行调用会重复计入；不是关键路径",
+        },
+        "degradation_causes": _causes(rows),
+        "coverage": {
+            "elapsed_measured": _coverage(len(elapsed), n),
+            "steps_present": _coverage(
+                sum(1 for r in rows if steps_by_run.get(r.run_id)), n,
+            ),
+            "dispatch_reason_present": _coverage(
+                sum(1 for r in rows if (getattr(r, "dispatch_reason", None) or "").strip()), n,
+            ),
+            "conversation_linked": _coverage(
+                sum(1 for r in rows if getattr(r, "conversation_id", None) is not None), n,
+            ),
+            "queue_wait": {
+                "available": False,
+                "reason": "排队等待只写进程内结构化日志(copilot.stage dequeue)，未落库，不反推",
+            },
+            "ttft": {
+                "available": False,
+                "reason": "未采集首字(TTFT)；run 级墙钟结束时间不能冒充首字",
+            },
+            "stage_timings": {
+                "available": False,
+                "reason": "阶段耗时只写低敏结构化日志(copilot.stage)，模型无阶段列，不迁移",
+            },
+        },
+        "by_scenario": by_scenario,
+        "generated_at": str(db_now_naive()),
+    }
+
+
+@router.get("/baseline")
+def get_copilot_run_baseline(
+    days: int = Query(default=7, description="7 或 30"),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """只读 7/30 天运行基线：每场景 n / 状态 / P50·P90 / 可用数据覆盖。
+
+    只统计**本人**窗口内已有 run；不补历史、不回填、不迁移。
+
+    **只取聚合需要的列**：不查 `copilot_runs.question`（用户原文）与
+    `copilot_steps.args / result_digest`（可能是持仓/自选摘要）。基线是统计接口，
+    没有理由为了算分位数把敏感内容整行拉进内存再丢掉。
+    """
+    from datetime import timedelta
+
+    from src.db.models import CopilotRun, CopilotStep
+
+    if days not in BASELINE_WINDOWS:
+        raise HTTPException(status_code=422, detail="days 仅支持 7 或 30")
+
+    since = db_now_naive() - timedelta(days=days)
+    rows = (
+        db.query(
+            CopilotRun.run_id,
+            CopilotRun.recipe,
+            CopilotRun.status,
+            CopilotRun.elapsed_ms,
+            CopilotRun.error,
+            CopilotRun.tool_calls,
+            CopilotRun.conversation_id,
+            CopilotRun.dispatch_reason,
+        )
+        .filter(CopilotRun.user_id == str(user.id), CopilotRun.created_at >= since)
+        .all()
+    )
+    # 聚合只用 run_id 与 elapsed_ms：工具名/参数/摘要都不进这一层。
+    steps_by_run: dict[str, list] = {}
+    if rows:
+        run_ids = [r.run_id for r in rows]
+        for step in (
+            db.query(CopilotStep.run_id, CopilotStep.elapsed_ms)
+            .filter(CopilotStep.run_id.in_(run_ids))
+            .all()
+        ):
+            steps_by_run.setdefault(step.run_id, []).append(step)
+    return build_copilot_run_baseline(rows, days=days, steps_by_run=steps_by_run)
+
+
 @router.get("/annotations")
 def get_copilot_annotations(
     symbol: str = Query(...),

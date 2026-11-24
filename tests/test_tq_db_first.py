@@ -101,7 +101,8 @@ def _no_rpc(*_a, **_kw):
 
 def test_fresh_snapshot_used_without_rpc(tmp_path, monkeypatch):
     db = _make_db(tmp_path)
-    _insert_quote(db, ts=_ts(10), last=1712.5)
+    ts = _ts(10)   # 由同一行推出预期交易日：跨零点时「现在」与行内日期本就可以不同
+    _insert_quote(db, ts=ts, last=1712.5)
     monkeypatch.setattr(registry, "_pricevol_rpc", _no_rpc)
 
     quote, caliber = registry._db_first_price(db, "600519.SH")
@@ -110,7 +111,7 @@ def test_fresh_snapshot_used_without_rpc(tmp_path, monkeypatch):
     assert caliber.startswith("口径：库内快照 ")
     assert "quote_snapshots" in caliber
     assert "实时 RPC" not in caliber          # 没有回落痕迹
-    assert quote["trade_date"] == datetime.now(_CST).strftime("%Y%m%d")
+    assert quote["trade_date"] == ts[:10].replace("-", "")
 
 
 def test_fresh_snapshot_wins_in_chips_tool(tmp_path, monkeypatch):

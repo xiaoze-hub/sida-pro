@@ -835,6 +835,34 @@ describe('chan-layer 线段/中枢纯函数', () => {
     expect(ok.inputDigest).toBe(SEGMENTS_DIGEST)
   })
 
+  it('线段: candidate_tail 缺失与"真实零候选"分开算账(缺失不许被洗成零)', () => {
+    // ① 显式 null = 本批确实没有尾部候选 → counts.candidate 必须报 0, 报 1 就是拼的
+    const noTail = { ...SEGMENTS, candidate_tail: null }
+    const explicitZero = normalizeChanSegments(
+      { ...noTail, counts: { ...SEGMENTS.counts, candidate: 0 } },
+      ctx,
+    )
+    expect(explicitZero.rejectReason).toBeNull()
+    expect(explicitZero.candidateTail).toBeNull()
+    expect(normalizeChanSegments(noTail, ctx).rejectReason).toBe('segments-counts-inconsistent')
+
+    // ② 缺字段(undefined) ≠ 真实零: 它同样只能报 0; 报有候选却连字段都不给 → 整批拒收
+    const { candidate_tail: _omitted, ...missingTail } = SEGMENTS
+    const missingZero = normalizeChanSegments(
+      { ...missingTail, counts: { ...SEGMENTS.counts, candidate: 0 } },
+      ctx,
+    )
+    expect(missingZero.rejectReason).toBeNull()
+    expect(missingZero.candidateTail).toBeNull()
+    expect(missingZero.confirmed).toHaveLength(2)
+    expect(normalizeChanSegments(missingTail, ctx).rejectReason).toBe('segments-counts-inconsistent')
+
+    // ③ 有对象才是 1 段: counts.candidate 报 0 与字段矛盾 → 拒收
+    expect(
+      normalizeChanSegments({ ...SEGMENTS, counts: { ...SEGMENTS.counts, candidate: 0 } }, ctx).rejectReason,
+    ).toBe('segments-counts-inconsistent')
+  })
+
   it('线段: schema 不认识 / 截止日对不上 / 未声明可漂移的候选 → 不画', () => {
     expect(normalizeChanSegments({ ...SEGMENTS, schema: 'sida-chan-segments-v9' }, ctx).rejectReason).toBe(
       'segments-schema-unknown',

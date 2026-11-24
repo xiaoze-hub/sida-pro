@@ -1151,7 +1151,14 @@ export function normalizeChanSegments(
   const blockedRaw = Array.isArray(rec.blocked) ? rec.blocked : null
   const pendingRaw = Array.isArray(rec.pending) ? rec.pending : []
   const candidateRaw = rec.candidate_tail
-  const candidateCount = candidateRaw === null || candidateRaw === undefined ? 0 : 1
+  // ③-a `candidate_tail` 是三态, 不许塌成"null→0"的二值:
+  //     缺失(undefined) = 服务端没给这一项(本批没有候选可画);
+  //     显式 null      = 真实零候选;
+  //     对象           = 1 段。
+  //   缺失 ≠ 真实零: 只有"字段是对象"才算 1 段, 缺字段时只能报 0 —— 于是 counts 报有候选
+  //   却没给字段, 就是拼出来的批次, 照样整批拒收。这里用显式状态断言, 不做 null→0 强转。
+  const candidateState = candidateRaw === undefined ? 'missing' : candidateRaw === null ? 'none' : 'one'
+  const candidateClaimed = candidateState === 'one' ? 1 : 0
   if (!confirmedRaw || !blockedRaw) {
     return { ...base, rejectReason: 'segments-not-object' }
   }
@@ -1160,7 +1167,8 @@ export function normalizeChanSegments(
     (Number(countsRec.confirmed) !== confirmedRaw.length ||
       Number(countsRec.blocked) !== blockedRaw.length ||
       Number(countsRec.pending) !== pendingRaw.length ||
-      Number(countsRec.candidate) !== candidateCount)
+      // 候选段: 只有 candidate_tail 是对象才算 1; 缺字段/显式 null 都只能报 0
+      Number(countsRec.candidate) !== candidateClaimed)
   ) {
     return { ...base, rejectReason: 'segments-counts-inconsistent' }
   }

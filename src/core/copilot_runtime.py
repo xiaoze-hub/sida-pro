@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+
+from sqlalchemy import and_, or_
 from typing import Iterable
 from src.core.timezone import db_now_naive
 
@@ -54,6 +56,8 @@ TRANSITIONS: dict[str, frozenset[str]] = {
 #: 心跳间隔与接管阈值（秒）
 HEARTBEAT_INTERVAL_S = 30
 STALE_AFTER_S = 120
+#: 从未有过心跳的 queued 行的接管阈值（秒）：排队等并发位是正常的，给足宽限
+QUEUED_STALE_AFTER_S = 900
 
 
 def is_terminal(status: str | None) -> bool:
@@ -92,6 +96,7 @@ def reap_stale_runs(
     *,
     now: datetime | None = None,
     stale_after_s: int = STALE_AFTER_S,
+    queued_stale_after_s: int = QUEUED_STALE_AFTER_S,
     dry_run: bool = False,
 ) -> list[str]:
     """把心跳超时的活跃 run 标成 failed，返回被接管的 run_id 列表。
@@ -100,18 +105,30 @@ def reap_stale_runs(
     "它负责的那个 run 还在跑"。心跳是 run 级的事实。
 
     无心跳的前台流式请求和历史记录无法区分：它们不参与自动接管。
-    仅处理明确启用了心跳且已过期的任务。更新时再次校验心跳和状态，
-    防止读取候选后另一进程刚刷新心跳或完成时被误改。
+    唯一的例外是**从未有过心跳的 queued 行**：提交后到真正入槽之间进程被杀，
+    `heartbeat_at` 永远是 NULL，只按心跳判会把它当成活口永久占用并发配额。
+    这类行按 `created_at` 超时接管（阈值远大于心跳阈值，避免误杀排队中的任务）。
+    更新时再次按同一条件校验，防止读取候选后另一进程刚刷新心跳或完成时被误改。
     """
     from src.db.models import CopilotRun
 
     cutoff = stale_cutoff(now, stale_after_s=stale_after_s)
+    # 「入槽前就崩」的 queued 行从来没有心跳：不能只靠 heartbeat_at 判活口，
+    # 否则它们永久 queued、被并发上限算作占用，用户之后每次提交都 429。
+    # 用 created_at 兜底，并给一个远大于心跳阈值的宽限（排队等并发位是正常的）。
+    queued_cutoff = (now or db_now_naive()) - timedelta(seconds=queued_stale_after_s)
+    stale_filter = or_(
+        and_(CopilotRun.heartbeat_at.is_not(None), CopilotRun.heartbeat_at < cutoff),
+        and_(
+            CopilotRun.heartbeat_at.is_(None),
+            CopilotRun.status == QUEUED,
+            CopilotRun.created_at < queued_cutoff,
+        ),
+    )
     rows: Iterable[CopilotRun] = (
         db.query(CopilotRun)
         .filter(CopilotRun.status.in_(tuple(ACTIVE_STATES)))
-        .filter(
-            CopilotRun.heartbeat_at.is_not(None), CopilotRun.heartbeat_at < cutoff
-        )
+        .filter(stale_filter)
         .all()
     )
 
@@ -125,7 +142,7 @@ def reap_stale_runs(
         count = (
             db.query(CopilotRun)
             .filter(CopilotRun.run_id == row.run_id, CopilotRun.status.in_(tuple(ACTIVE_STATES)))
-            .filter(CopilotRun.heartbeat_at.is_not(None), CopilotRun.heartbeat_at < cutoff)
+            .filter(stale_filter)
             .update({
                 CopilotRun.status: "failed",
                 CopilotRun.error: takeover_error(now),

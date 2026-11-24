@@ -3241,7 +3241,7 @@ export default function KlineChart(props: {
             aria-pressed={showChanCentreLayer}
             disabled={!chanInstrument}
             onClick={() => setChanCentreLocalOn((v) => !v)}
-            className={`min-h-[28px] px-2.5 py-1 text-sm rounded font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+            className={`min-h-[28px] px-2.5 py-1 text-[14px] rounded font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               showChanCentreLayer
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'

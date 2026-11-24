@@ -8,7 +8,7 @@
  * `src/core/national_team.py` 模块 docstring）：
  *  · `GET /api/national-team/overview`  → 机构组汇总（组内账户数/只数/市值）+ 报告期列表 + 采集时点
  *  · `GET /api/national-team/holdings`  → 明细（holder 传组 key：huijin/csf/ssb/insurance/safe）
- *  · `GET /api/national-team/changes`   → 环比（new / increase / decrease / exit）
+ *  · `GET /api/national-team/changes`   → 环比（new / increase / decrease / exit）；带 `prev_report_date` 时为同比
  *  · `POST /api/national-team/refresh`  → owner 手动采集，返回 receipt
  *
  * 三条不可退让的口径（与后端一致，页面必须显式展示，不得省略）：
@@ -22,6 +22,7 @@
  * 不隐藏、不算成采集失败。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import {
   nationalTeamApi,
@@ -63,6 +64,80 @@ const CHANGE_TONE: Record<NationalTeamChangeItem['kind'], string> = {
 function errText(e: unknown): string {
   if (e instanceof Error && e.message) return e.message
   return '请求失败（未收到有效响应）'
+}
+
+/**
+ * 解析参谋直查给出的深链参数（与 `src/harness/institution_holdings.py` 的 `_page_link` 对齐）。
+ *
+ * 规则：只认已知取值，非法/缺省回落到页面缺省（float / 最新一期 / 全部机构 / 无变动过滤）。
+ * 例外：`prev_report_date` 畸形或不是本期去年同季时**显式报错，不回落成环比**。
+ * 不因链接放宽任何权限 —— 权限判断在路由 PermGuard 与后端 `require_perm`。
+ */
+export interface NationalTeamDeepLink {
+  kind: NationalTeamReportKind
+  reportDate: string | null
+  /** 同比比较期（去年同季）；只有合法且确为本期去年同季时才非空 */
+  prevReportDate: string | null
+  /** 链接带了比较期但畸形/非同季 → 明确提示，绝不回落成环比 */
+  compareError: string | null
+  holder: string
+  change: string[]
+  view: 'holdings' | 'changes' | null
+  q: string
+}
+
+const CHANGE_VALUES = ['new', 'increase', 'decrease', 'exit'] as const
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+/** 同比比较期必须是本期年份 −1、月日完全相同的那一季。 */
+export function isSameQuarterLastYear(prev: string, cur: string): boolean {
+  return (
+    DATE_ONLY.test(prev) &&
+    DATE_ONLY.test(cur) &&
+    prev.slice(4) === cur.slice(4) &&
+    Number(prev.slice(0, 4)) === Number(cur.slice(0, 4)) - 1
+  )
+}
+
+/** 变动区标题：只按后端真实 `comparison` 写，跨期不冒充环比。 */
+export function comparisonTitle(comparison?: string): string {
+  if (comparison === 'yoy') return '同比变动（与去年同季）'
+  if (comparison === 'cross') return '跨期对比'
+  return '环比变动'
+}
+
+export function parseDeepLink(params: URLSearchParams): NationalTeamDeepLink {
+  const viewRaw = params.get('view')
+  const reportDate = DATE_ONLY.test(params.get('report_date') || '')
+    ? params.get('report_date')
+    : null
+  const prevRaw = params.get('prev_report_date')
+  let prevReportDate: string | null = null
+  let compareError: string | null = null
+  if (prevRaw !== null) {
+    if (!DATE_ONLY.test(prevRaw)) {
+      compareError = `链接里的同比比较期「${prevRaw || '空值'}」不是有效日期（应为 YYYY-MM-DD），不回落为环比。`
+    } else if (reportDate && prevRaw >= reportDate) {
+      compareError = `链接里的同比比较期「${prevRaw}」不早于本期 ${reportDate}，无法做同比。`
+    } else if (reportDate && !isSameQuarterLastYear(prevRaw, reportDate)) {
+      compareError = `链接里的同比比较期「${prevRaw}」不是本期 ${reportDate} 的去年同季，不回落为环比。`
+    } else {
+      // 本期未知（最新一期）时先带到后端，由 core 按真实报告期校验并明确拒绝。
+      prevReportDate = prevRaw
+    }
+  }
+  return {
+    kind: params.get('kind') === 'total' ? 'total' : 'float',
+    reportDate,
+    prevReportDate,
+    compareError,
+    holder: params.get('holder') || 'all',
+    change: (params.get('change') || '')
+      .split(',')
+      .filter((x): x is (typeof CHANGE_VALUES)[number] => (CHANGE_VALUES as readonly string[]).includes(x)),
+    view: viewRaw === 'changes' || viewRaw === 'holdings' ? viewRaw : null,
+    q: params.get('q') || '',
+  }
 }
 
 function fmtSnapshot(iso: string | null | undefined): string {
@@ -140,11 +215,16 @@ function HoldingRow({ item }: { item: NationalTeamHolding }) {
 }
 
 export default function NationalTeam() {
-  const [kind, setKind] = useState<NationalTeamReportKind>('float')
+  // 深链（参谋直查给出的「可复核」链接）：/national-team?kind=&report_date=&holder=&view=&change=&q=
+  // 页面只做定位与同口径查询，不因链接改变权限判断（路由级 PermGuard + 后端 require_perm 仍在）。
+  const [searchParams, setSearchParams] = useSearchParams()
+  // URL 是筛选条件事实源；同一已挂载页面再次打开深链也必须重新按链接取数。
+  const deepLink = useMemo(() => parseDeepLink(searchParams), [searchParams])
+  const { kind, reportDate, prevReportDate, compareError, holder, change: changeFilter, view: focusView, q: stockQuery } = deepLink
+  const invalidChangeStock = Boolean(stockQuery) && !/^[0-9]{6}$/.test(stockQuery)
   const [overview, setOverview] = useState<NationalTeamOverview | null>(null)
   const [holdings, setHoldings] = useState<NationalTeamHolding[]>([])
   const [changes, setChanges] = useState<NationalTeamChangesResponse | null>(null)
-  const [holder, setHolder] = useState<string>('all')
   const [status, setStatus] = useState<LoadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -152,21 +232,76 @@ export default function NationalTeam() {
   // 竞态守卫：切口径/切主体会连发请求，慢响应的旧请求必须丢弃（否则表与汇总对不上）
   const seq = useRef(0)
 
+  const syncParams = useCallback(
+    (patch: Record<string, string | null>) => {
+      setSearchParams((prev) => {
+        const sp = new URLSearchParams(prev)
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === null || v === '') sp.delete(k)
+          else sp.set(k, v)
+        }
+        return sp
+      }, { replace: true })
+    },
+    [setSearchParams],
+  )
+
   const load = useCallback(
-    async (nextKind: NationalTeamReportKind, nextHolder: string) => {
+    async (
+      nextKind: NationalTeamReportKind,
+      nextHolder: string,
+      nextDate: string | null,
+      nextChange: string[],
+      nextPrev: string | null,
+      nextCompareError: string | null,
+    ) => {
       const my = ++seq.current
       setStatus('loading')
       setError(null)
       try {
         const [ov, list, ch] = await Promise.all([
-          nationalTeamApi.overview({ kind: nextKind }),
-          nationalTeamApi.holdings({ kind: nextKind, holder: nextHolder, limit: 300 }),
-          nationalTeamApi.changes({ kind: nextKind, limit: 60 }),
+          nationalTeamApi.overview({ kind: nextKind, report_date: nextDate ?? undefined }),
+          nationalTeamApi.holdings({
+            kind: nextKind,
+            holder: nextHolder,
+            report_date: nextDate ?? undefined,
+            q: stockQuery || undefined,
+            limit: 300,
+          }),
+          // 机构与变动类型必须在**后端截断前**过滤：不能拿全市场前 60 条再筛机构。
+          // 同比深链把比较期一起带给后端；畸形比较期不请求，避免悄悄改算环比。
+          nextCompareError || invalidChangeStock
+            ? Promise.resolve(null)
+            : nationalTeamApi.changes({
+                kind: nextKind,
+                holder: nextHolder === 'all' ? undefined : nextHolder,
+                report_date: nextDate ?? undefined,
+                prev_report_date: nextPrev ?? undefined,
+                q: stockQuery || undefined,
+                change: nextChange.length ? nextChange.join(',') : undefined,
+                limit: 60,
+              }),
         ])
         if (my !== seq.current) return
         setOverview(ov)
         setHoldings(list.items)
-        setChanges(ch)
+        setChanges(
+          nextCompareError
+            ? {
+                available: false,
+                status: 'prev_unavailable',
+                report_date: nextDate,
+                prev_report_date: null,
+                report_kind: nextKind,
+                counts: { new: 0, increase: 0, decrease: 0, exit: 0, unchanged: 0 },
+                count: 0,
+                items: [],
+                truncated: false,
+                caliber_note: '',
+                reason: nextCompareError,
+              }
+            : ch,
+        )
         setStatus('ready')
       } catch (e) {
         if (my !== seq.current) return
@@ -177,12 +312,13 @@ export default function NationalTeam() {
         setStatus('error')
       }
     },
-    [],
+    [stockQuery, invalidChangeStock],
   )
 
   useEffect(() => {
-    void load(kind, holder)
-  }, [kind, holder, load])
+    void load(kind, holder, reportDate, changeFilter, prevReportDate, compareError)
+    // changeFilter 是数组，按内容比较，避免每次渲染都重新取数
+  }, [kind, holder, reportDate, prevReportDate, compareError, changeFilter.join(','), load]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRefresh = useCallback(async (mode: 'targeted' | 'scan' = 'targeted') => {
     setRefreshing(true)
@@ -197,15 +333,55 @@ export default function NationalTeam() {
             }`
           : `采集部分失败：写入 ${receipt.written} 行，${errs} 个目标失败（见后端日志）`,
       )
-      await load(kind, holder)
+      await load(kind, holder, reportDate, changeFilter, prevReportDate, compareError)
     } catch (e) {
       setRefreshNote(`采集失败：${errText(e)}`)
     } finally {
       setRefreshing(false)
     }
-  }, [kind, holder, load])
+  }, [kind, holder, reportDate, changeFilter, prevReportDate, compareError, load])
+
+  const onKindChange = useCallback(
+    (value: NationalTeamReportKind) => {
+      syncParams({ kind: value })
+    },
+    [syncParams],
+  )
+
+  const onHolderChange = useCallback(
+    (value: string) => {
+      syncParams({ holder: value === 'all' ? null : value })
+    },
+    [syncParams],
+  )
+
+  const toggleChange = useCallback(
+    (value: string) => {
+      const next = changeFilter.includes(value) ? changeFilter.filter((x) => x !== value) : [...changeFilter, value]
+      syncParams({ change: next.join(',') || null })
+    },
+    [changeFilter, syncParams],
+  )
+
+  const backToLatest = useCallback(() => {
+    // 切本期必须清掉旧同比比较期：否则会拿「新本期 vs 旧去年同季」算出一个跨 5 季的伪同比。
+    syncParams({ report_date: null, prev_report_date: null })
+  }, [syncParams])
+
+  const switchToQoQ = useCallback(() => {
+    syncParams({ prev_report_date: null })
+  }, [syncParams])
 
   const totals = overview?.totals
+  const changesHeading =
+    compareError || changes?.status === 'prev_unavailable'
+      ? '比较期不可用'
+      : comparisonTitle(changes?.comparison)
+  const focusLabel = focusView === 'changes' ? changesHeading : '持仓明细'
+  const canSwitchToQoQ = Boolean(compareError || (prevReportDate && changes?.status === 'prev_unavailable'))
+  const comparisonBaseline = changes?.comparison && changes.prev_report_date
+    ? `${changes.comparison === 'yoy' ? '同比' : '环比'}基准 ${changes.prev_report_date}`
+    : null
   const holderOptions = useMemo(() => {
     const opts = [{ key: 'all', label: '全部机构' }]
     for (const g of overview?.groups ?? []) opts.push({ key: g.group_key, label: g.group_label })
@@ -233,7 +409,7 @@ export default function NationalTeam() {
             <StatusChip tone={overview?.available ? 'info' : 'neutral'}>
               报告期 {overview?.report_date ?? '无数据'}
             </StatusChip>
-            {overview?.prev_report_date && <StatusChip>环比基准 {overview.prev_report_date}</StatusChip>}
+            {comparisonBaseline && <StatusChip>{comparisonBaseline}</StatusChip>}
             <StatusChip tone="neutral">采集 {fmtSnapshot(overview?.snapshot_at)}</StatusChip>
             <StatusChip tone="neutral">源 东方财富十大股东</StatusChip>
           </>
@@ -251,6 +427,29 @@ export default function NationalTeam() {
 
       {refreshNote && <div className="rounded-lg bg-s2 px-3 py-2 text-[12px]">{refreshNote}</div>}
 
+      {/* 深链定位说明：链接来自参谋直查（同机构/同报告期/同榜单），不是另一种口径 */}
+      {focusView && (
+        <div className="rounded-lg bg-s1 px-3 py-2 text-[12px] text-muted-foreground">
+          已按链接定位到「{focusLabel}」
+          {reportDate ? ` · 报告期 ${reportDate}` : ''}
+          {focusView === 'changes' && changes?.comparison && changes.prev_report_date ? ` · 比较期 ${changes.prev_report_date}` : ''}
+          {holder !== 'all' ? ` · ${holderOptions.find((o) => o.key === holder)?.label ?? holder}` : ''}
+          {stockQuery ? ` · 标的筛选 ${stockQuery}` : ''}
+          {changeFilter.length ? ` · 变动类型 ${changeFilter.join('/')}` : ''}
+          。口径与本次回答一致，可切换机构/报告期复核。
+        </div>
+      )}
+
+      {focusView === 'changes' && canSwitchToQoQ && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-s1 px-3 py-2 text-[12px] text-destructive">
+          <AlertCircle className="h-3.5 w-3.5" />
+          <span className="min-w-0 flex-1">{compareError ?? '链接要求的同比比较期不可用。'}</span>
+          <Button variant="outline" size="sm" onClick={switchToQoQ}>
+            改看环比
+          </Button>
+        </div>
+      )}
+
       {/* 口径切换 */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-lg bg-s1 p-1">
@@ -258,7 +457,7 @@ export default function NationalTeam() {
             <button
               key={o.value}
               type="button"
-              onClick={() => setKind(o.value)}
+              onClick={() => onKindChange(o.value)}
               title={o.hint}
               className={cn(
                 'rounded-md px-3 py-1.5 text-[14px]',
@@ -281,7 +480,7 @@ export default function NationalTeam() {
           <AlertCircle className="mt-0.5 h-4 w-4 text-destructive" />
           <div className="min-w-0 flex-1">
             <div>国家队数据加载失败：{error}</div>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load(kind, holder)}>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load(kind, holder, reportDate, changeFilter, prevReportDate, compareError)}>
               重试
             </Button>
           </div>
@@ -292,8 +491,15 @@ export default function NationalTeam() {
         <div className="rounded-lg bg-s1 p-3 text-[14px]">
           <div>{overview.reason || '暂无国家队持仓数据'}</div>
           <div className="mt-1 text-[12px] text-muted-foreground">
-            首次使用需点右上角「采集最新」（owner 权限）或等每日 19:40 的自动同步。
+            {overview.status === 'unknown_period'
+              ? '库里有其它报告期，只是链接指向的这一期没有数据；可回到最新一期或换报告期再看。'
+              : '首次使用需点右上角「刷新 / 全市场扫描」（owner 权限）或等每日 19:40 的自动同步。'}
           </div>
+          {overview.status === 'unknown_period' && (
+            <Button variant="outline" size="sm" className="mt-2" onClick={backToLatest}>
+              回到最新一期
+            </Button>
+          )}
         </div>
       )}
 
@@ -338,10 +544,17 @@ export default function NationalTeam() {
             </div>
           )}
 
-          {/* 环比变动 */}
+          {/* 变动：环比 / 同比标题与比较期只按后端真实 comparison 写 */}
           <section className="rounded-lg bg-s1">
             <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-3">
-              <h2 className="text-[16px] font-medium">环比变动</h2>
+              <div className="flex flex-wrap items-baseline gap-2">
+                <h2 className="text-[16px] font-medium">{changesHeading}</h2>
+                {changes?.available && changes.prev_report_date && (
+                  <span className="text-[12px] tabular-nums text-muted-foreground">
+                    {changes.report_date} vs {changes.prev_report_date}
+                  </span>
+                )}
+              </div>
               {changes?.available && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   <StatusChip tone="success">新进 {changes.counts.new}</StatusChip>
@@ -352,24 +565,61 @@ export default function NationalTeam() {
                 </div>
               )}
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1 px-3">
+              <span className="mr-1 text-[12px] text-muted-foreground">只看：</span>
+              {(
+                [
+                  ['new', '新进'],
+                  ['increase', '加仓'],
+                  ['decrease', '减仓'],
+                  ['exit', '退出'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={changeFilter.includes(value)}
+                  onClick={() => toggleChange(value)}
+                  className={cn(
+                    'rounded-md px-2 py-1 text-[12px]',
+                    changeFilter.includes(value)
+                      ? 'bg-s3 font-medium text-foreground'
+                      : 'text-muted-foreground hover:bg-s2',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+              {changeFilter.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => syncParams({ change: null })}
+                  className="rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-s2"
+                >
+                  清除
+                </button>
+              )}
+            </div>
             <div className="mt-2 divide-y divide-border">
               {!changes?.available && (
                 <div className="px-3 py-3 text-[14px] text-muted-foreground">
-                  {changes?.reason || '暂无可比报告期'}
+                  {invalidChangeStock ? '变动查询需要六位股票代码；当前关键词仅用于筛选持仓。' : changes?.reason || '暂无可比报告期'}
                 </div>
               )}
-              {changes?.items.slice(0, 20).map((it) => (
+              {changes?.items.map((it) => (
                 <ChangeRow key={`${it.group_key}-${it.stock_code}-${it.kind}`} item={it} />
               ))}
               {changes?.available && changes.items.length === 0 && (
                 <div className="px-3 py-3 text-[14px] text-muted-foreground">
-                  本期 {changes.counts.unchanged} 只全部持股数未变
+                  {changeFilter.length
+                    ? '该机构本期没有所选变动类型的记录（不是取数失败）。'
+                    : `本期 ${changes.counts.unchanged} 只全部持股数未变（确实零变动，不是取数失败）。`}
                 </div>
               )}
             </div>
             {changes?.truncated && (
               <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                变动共 {changes.count} 条，此处只显示前 60 条（按变动幅度排序）。
+                变动共 {changes.count} 条（已按当前条件过滤），此处显示前 {changes.items.length} 条（先按变动类型，同类内按股数变化排序）。
               </div>
             )}
           </section>
@@ -388,7 +638,7 @@ export default function NationalTeam() {
                   <button
                     key={o.key}
                     type="button"
-                    onClick={() => setHolder(o.key)}
+                    onClick={() => onHolderChange(o.key)}
                     className={cn(
                       'rounded-md px-2.5 py-1 text-[12px]',
                       holder === o.key ? 'bg-s3 font-medium text-foreground' : 'text-muted-foreground hover:bg-s3',

@@ -29,6 +29,7 @@ class FakeRun(Base):
     status = Column(String(16), nullable=False, default="running")
     error = Column(String(512), nullable=True)
     heartbeat_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime(2026, 10, 25, 12, 0, 0))
     finished_at = Column(DateTime, nullable=True)
 
 
@@ -46,8 +47,8 @@ def db(monkeypatch):
     s.close()
 
 
-def _add(db, run_id, status="running", hb=None):
-    db.add(FakeRun(run_id=run_id, status=status, heartbeat_at=hb))
+def _add(db, run_id, status="running", hb=None, created=None):
+    db.add(FakeRun(run_id=run_id, status=status, heartbeat_at=hb, created_at=created))
     db.commit()
 
 
@@ -116,9 +117,29 @@ def test_无心跳的前台或老数据不能猜成超时(db):
 def test_排队中的没心跳不算死(db):
     """queued 本来就没开始跑，不能因为"没心跳"就判死。"""
     now = datetime(2026, 10, 25, 14, 0, 0)
-    _add(db, "waiting", "queued", hb=None)
+    _add(db, "waiting", "queued", hb=None, created=now - timedelta(seconds=30))
     assert rt.reap_stale_runs(db, now=now) == []
     assert db.query(FakeRun).filter_by(run_id="waiting").one().status == "queued"
+
+
+def test_入槽前崩溃的_queued_按创建时间兜底接管(db):
+    """提交后到入槽之间进程被杀 → heartbeat 永远 NULL；只靠心跳会永久占并发位。"""
+    now = datetime(2026, 10, 25, 14, 0, 0)
+    _add(db, "orphan", "queued", hb=None, created=now - timedelta(seconds=rt.QUEUED_STALE_AFTER_S + 60))
+    _add(db, "fresh", "queued", hb=None, created=now - timedelta(seconds=60))
+
+    reaped = rt.reap_stale_runs(db, now=now)
+
+    assert reaped == ["orphan"]
+    assert db.query(FakeRun).filter_by(run_id="orphan").one().status == "failed"
+    assert db.query(FakeRun).filter_by(run_id="fresh").one().status == "queued"
+
+
+def test_无心跳的_running_老行仍是不可判定(db):
+    """历史 running 行没有心跳：可能另一个 worker 还在跑，不按 created_at 猜死。"""
+    now = datetime(2026, 10, 25, 14, 0, 0)
+    _add(db, "legacy-old", "running", hb=None, created=now - timedelta(hours=2))
+    assert rt.reap_stale_runs(db, now=now) == []
 
 
 def test_终态不被接管(db):
