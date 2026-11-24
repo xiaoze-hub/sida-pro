@@ -136,17 +136,22 @@ async def test_unrecovered_reader_runtime_error_is_visible_in_run(monkeypatch, c
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-async def test_failed_portfolio_verification_stays_out_of_model_routing(monkeypatch, stream):
+@pytest.mark.parametrize("question", ["我的持仓跌破防守位了吗", "我的持仓600519现价跌破防守位了吗"])
+async def test_failed_portfolio_verification_stays_out_of_model_routing(monkeypatch, stream, question):
     def unavailable(*_):
         raise RuntimeError("holdings store unavailable")
 
     def unexpected_routing(*_):
         pytest.fail("a known verification failure must not be handed to the model")
 
+    def unexpected_quote(*_):
+        pytest.fail("a defense check must not enter the price-only path")
+
     monkeypatch.setattr(portfolio_risk, "load_holdings", unavailable)
     monkeypatch.setattr(chat, "_route_with_persona", unexpected_routing)
+    monkeypatch.setattr(quick_answer, "resolve_symbol", unexpected_quote)
     events = [event async for event in chat._run_tool_loop_inner(
-        cast(AIClient, object()), [{"role": "user", "content": "我的持仓跌破防守位了吗"}], object(),
+        cast(AIClient, object()), [{"role": "user", "content": question}], object(),
         cast(User, SimpleNamespace(id="u")), stream=stream,
     )]
     assert [kind for kind, _ in events] == (["delta", "done"] if stream else ["text"])
