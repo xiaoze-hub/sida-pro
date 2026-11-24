@@ -51,6 +51,20 @@ LAST_TRADING_DAY = "2026-11-20"
 # ------------------------------------------------------------------ 夹具
 
 
+@pytest.fixture(autouse=True)
+def portfolio_clock(monkeypatch):
+    """直查与固定行情共享时间线；仍走真实时段、时效和三态判定。"""
+    from src.harness import portfolio_risk
+
+    clock = [CLOSED_NOW]
+
+    def evaluate_on_fixture_clock(rows, quotes, *, now=None, **kwargs):
+        return evaluate_holdings(rows, quotes, now=clock[0] if now is None else now, **kwargs)
+
+    monkeypatch.setattr(portfolio_risk, "evaluate_holdings", evaluate_on_fixture_clock)
+    return clock
+
+
 @pytest.fixture()
 def db(tmp_path):
     """独立临时库（不与 conftest 的共享库互污染）。"""
@@ -159,8 +173,9 @@ def _rows(*specs) -> list[HoldingRow]:
 # ------------------------------------------------------------------ ① >8 笔全覆盖
 
 
-def test_more_than_eight_positions_are_all_judged(db, monkeypatch):
+def test_more_than_eight_positions_are_all_judged(db, monkeypatch, portfolio_clock):
     """12 笔持仓全部进分母 —— 发布版按自选展开的上限是 8，这里必须不被它卡住。"""
+    portfolio_clock[0] = TRADING_NOW
     user = _user(db, "heavy")
     acc = _account(db, "主账户", user.id)
     quotes = {}
@@ -187,8 +202,7 @@ def test_more_than_eight_positions_are_all_judged(db, monkeypatch):
     assert cov.total == 12 and cov.verified == 12 and cov.complete is True
     assert cov.breached == 6 and cov.safe == 6
     assert "覆盖 12/12" in text
-    # 12 笔都是当日 15:00 的快照，盘中（10:00）属于「未来时间」→ 会用休市口径；
-    # 这里只断言分母与三值计数，不依赖具体时点文案。
+    # 每笔均为盘中两分钟前的快照，不能降级成休市口径。
     assert sum(1 for v in verdicts if v.status == VERDICT_UNKNOWN) == 0
 
 

@@ -6,7 +6,7 @@
  *
  *  · `GET /overview?report_date&kind` → 主体汇总 + 报告期列表 + 未在榜主体 + 采集时点
  *  · `GET /holdings?report_date&kind&holder&q&sort&desc&limit&offset` → 明细（`count` 是过滤后总数）
- *  · `GET /changes?report_date&kind&limit` → 环比（new / increase / decrease / exit）
+ *  · `GET /changes?report_date&kind&holder&change&limit&prev_report_date` → 环比/同比（new / increase / decrease / exit）
  *  · `POST /refresh?periods=` → owner 手动采集（幂等），返回 receipt（ok/errors/written）
  *
  * 口径（后端写死，前端只转述，不得改写）：
@@ -128,10 +128,14 @@ export interface NationalTeamChangeItem {
 
 export interface NationalTeamChangesResponse {
   available: boolean
-  /** ok / empty_table / unknown_period / insufficient_periods / zero_change / empty_result */
+  /** ok / empty_table / unknown_period / insufficient_periods / zero_change / empty_result / prev_unavailable */
   status?: string
   report_date: string | null
   prev_report_date: string | null
+  /** 后端真实比较口径：qoq 环比 / yoy 同比（去年同季）/ cross 跨期 */
+  comparison?: 'qoq' | 'yoy' | 'cross'
+  /** 本期与比较期相隔几个季度 */
+  compare_gap?: number
   report_kind: NationalTeamReportKind
   counts: Record<NationalTeamChangeKind, number>
   count: number
@@ -208,6 +212,8 @@ export const nationalTeamApi = {
       holder?: string
       /** new/increase/decrease/exit，多个用逗号 —— 后端在截断前过滤 */
       change?: string
+      /** 同比比较期（去年同季，YYYY-MM-DD）；缺省按严格相邻上一季算环比 */
+      prev_report_date?: string
       limit?: number
     } = {},
   ): Promise<NationalTeamChangesResponse> {
@@ -217,6 +223,7 @@ export const nationalTeamApi = {
         kind: params.kind,
         holder: params.holder,
         change: params.change,
+        prev_report_date: params.prev_report_date,
         limit: params.limit,
       }),
       { cacheMode: 'reload' },

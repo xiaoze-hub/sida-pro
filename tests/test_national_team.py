@@ -340,6 +340,69 @@ def test_changes_allows_explicit_yoy_prev(engine, monkeypatch):
     assert ch["counts"]["increase"] == 1
 
 
+def test_changes_explicit_prev_must_be_same_quarter_last_year(engine, monkeypatch):
+    """显式比较期只接受「去年同季」；相邻上一季/其他季度不能静默算成环比或跨期。"""
+    rows = {}
+    for period, num in (("2026-09-30", 100.0), ("2026-06-30", 90.0), ("2025-09-30", 60.0)):
+        rows[(nt.REPORT_TABLES["float"], period)] = [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", num, end=period)]
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    for period in ("2025-09-30", "2026-06-30", "2026-09-30"):
+        nt.scan_period(engine, period, report_kinds=["float"])
+
+    ch = nt.changes(engine, kind="float", report_date="2026-09-30",
+                    prev_report_date="2026-06-30")
+
+    assert ch["available"] is False and ch["status"] == "prev_unavailable"
+    assert "去年同季" in ch["reason"]
+    assert ch.get("comparison") != "qoq"
+    assert ch["items"] == [] and ch["count"] == 0
+
+
+def test_changes_explicit_prev_malformed_is_refused_not_qoq(engine, monkeypatch):
+    """畸形/非季度末的显式比较期必须明确拒绝，不能落回相邻上一季的环比。"""
+    _seed_two_periods(engine, monkeypatch)
+
+    for bad in ("2026-13-31", "2025-09-30T00:00", "去年", "", "  "):
+        ch = nt.changes(engine, kind="float", report_date="2026-09-30",
+                        prev_report_date=bad)
+        assert ch["available"] is False and ch["status"] == "prev_unavailable"
+        assert ch.get("comparison") != "qoq"
+        assert ch["items"] == [] and ch["count"] == 0
+
+
+def test_changes_api_forwards_explicit_yoy_period(engine, monkeypatch):
+    """`/changes` 必须把 prev_report_date 透传到 core，否则同比深链会答成环比。"""
+    from src.web.api import national_team as api_mod
+
+    rows = {}
+    for period, num in (("2026-09-30", 100.0), ("2026-06-30", 90.0), ("2025-09-30", 60.0)):
+        rows[(nt.REPORT_TABLES["float"], period)] = [
+            _src("601988", "中国银行", "中央汇金投资有限责任公司", num, end=period)]
+    monkeypatch.setattr(nt, "_rows_once", _fake_scan(rows))
+    for period in ("2025-09-30", "2026-06-30", "2026-09-30"):
+        nt.scan_period(engine, period, report_kinds=["float"])
+    monkeypatch.setattr(api_mod, "engine", engine)
+
+    got = api_mod.national_team_changes(
+        report_date="2026-09-30", kind="float", holder="huijin", change=None,
+        limit=100, prev_report_date="2025-09-30",
+    )
+    assert got["comparison"] == "yoy"
+    assert got["prev_report_date"] == "2025-09-30" and got["compare_gap"] == 4
+    assert got["counts"]["increase"] == 1
+
+    # 非去年同季 / 畸形显式值：API 也明确拒绝，不能落回相邻上一季的环比。
+    for bad in ("2026-06-30", "2026-13-31"):
+        refused = api_mod.national_team_changes(
+            report_date="2026-09-30", kind="float", holder="huijin", change=None,
+            limit=100, prev_report_date=bad,
+        )
+        assert refused["available"] is False and refused["status"] == "prev_unavailable"
+        assert refused.get("comparison") != "qoq"
+        assert refused["items"] == [] and refused["count"] == 0
+
+
 def test_routes_mounted():
     from src.web.app import app
 

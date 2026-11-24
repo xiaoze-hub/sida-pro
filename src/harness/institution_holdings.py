@@ -106,6 +106,9 @@ class Question:
     scopes: list[dict[str, str]] = field(default_factory=list)
     kind: str = "float"
     report_date: str | None = None
+    #: 同比比较期（去年同季）；只在 changes + 「去年同期」时由 `_fetch` 填，
+    #: 深链必须带上它，否则页面按相邻上一季重算成环比。
+    prev_report_date: str | None = None
     period_hint: str = "latest"          # latest / prev / explicit / yoy
     change_kinds: tuple[str, ...] = ()
     stock_code: str | None = None
@@ -338,6 +341,8 @@ def _fetch(engine: Any, q: Question) -> dict[str, Any]:
         if q.mode == "changes":
             q.report_date = base
             prev_override = last_year
+            # 同口径深链必须能还原「本期 vs 去年同季」；只带本期会让页面算成环比。
+            q.prev_report_date = last_year
         else:
             q.report_date = last_year
 
@@ -374,10 +379,16 @@ def _fetch(engine: Any, q: Question) -> dict[str, Any]:
 
 
 def _page_link(q: Question, report_date: str | None, change_kinds: tuple[str, ...]) -> str:
-    """站内同口径页（页面读这些 query 参数，见 `frontend/src/pages/NationalTeam.tsx`）。"""
+    """站内同口径页（页面读这些 query 参数，见 `frontend/src/pages/NationalTeam.tsx`）。
+
+    `prev_report_date` 只在同比变动时出现：页面拿它调 `/changes`，否则只凭本期
+    `report_date` 会按相邻上一季重算成环比（2026-11-24 复审实证）。
+    """
     params = [f"kind={q.kind}"]
     if report_date:
         params.append(f"report_date={report_date}")
+    if q.mode == "changes" and q.prev_report_date:
+        params.append(f"prev_report_date={q.prev_report_date}")
     if q.holder_csv:
         params.append(f"holder={q.holder_csv}")
     params.append(f"view={q.mode}")
@@ -619,7 +630,7 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
             f"【机构持仓直查 · {q.label} · {_comparison_label(data)}】\n"
             f"{data.get('report_date')} vs {data.get('prev_report_date')}"
             f"（{nt.REPORT_KIND_LABEL.get(q.kind, q.kind)}）\n"
-            f"本期共 {counts.get('unchanged', 0)} 只持股数与上期完全相同"
+            f"本期共 {counts.get('unchanged', 0)} 只持股数与比较期完全相同"
             "（**确实零变动**，不是取数失败）。"
         )
         return text_out + _footer(nt.REPORT_KIND_LABEL.get(q.kind, q.kind), link, None)

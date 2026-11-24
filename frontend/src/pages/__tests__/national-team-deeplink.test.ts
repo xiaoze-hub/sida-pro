@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 
-import { parseDeepLink } from '../NationalTeam'
+import { parseDeepLink, comparisonTitle } from '../NationalTeam'
 
 /**
  * 参谋直查深链（2026-11-21，首批 C 页面对拍）。
@@ -24,6 +24,8 @@ describe('parseDeepLink: 直查链接 → 页面状态', () => {
     expect(got).toEqual({
       kind: 'total',
       reportDate: '2026-09-30',
+      prevReportDate: null,
+      compareError: null,
       holder: 'ssb',
       change: ['new', 'increase'],
       view: 'changes',
@@ -35,6 +37,8 @@ describe('parseDeepLink: 直查链接 → 页面状态', () => {
     expect(parseDeepLink(new URLSearchParams(''))).toEqual({
       kind: 'float',
       reportDate: null,
+      prevReportDate: null,
+      compareError: null,
       holder: 'all',
       change: [],
       view: null,
@@ -57,5 +61,59 @@ describe('parseDeepLink: 直查链接 → 页面状态', () => {
 
   it('只有 view=holdings 也保留（持仓明细定位）', () => {
     expect(parseDeepLink(new URLSearchParams('view=holdings')).view).toBe('holdings')
+  })
+})
+
+describe('parseDeepLink: 同比比较期（2026-11-24）', () => {
+  it('合法的去年同季比较期逐字保留', () => {
+    const got = parseDeepLink(
+      new URLSearchParams(
+        'kind=float&report_date=2026-09-30&prev_report_date=2025-09-30&holder=huijin&view=changes',
+      ),
+    )
+    expect(got.reportDate).toBe('2026-09-30')
+    expect(got.prevReportDate).toBe('2025-09-30')
+    expect(got.compareError).toBeNull()
+  })
+
+  it('畸形比较期显式报错, 不回落成环比', () => {
+    const got = parseDeepLink(
+      new URLSearchParams('report_date=2026-09-30&prev_report_date=2026-09&view=changes'),
+    )
+    expect(got.prevReportDate).toBeNull()
+    expect(got.compareError).toContain('2026-09')
+  })
+
+  it('不是去年同季的显式值显式报错, 不静默改算环比', () => {
+    const got = parseDeepLink(
+      new URLSearchParams('report_date=2026-09-30&prev_report_date=2025-12-31&view=changes'),
+    )
+    expect(got.prevReportDate).toBeNull()
+    expect(got.compareError).toContain('去年同季')
+  })
+
+  it('比较期不早于本期 → 报错, 不拿本期比本期', () => {
+    const got = parseDeepLink(
+      new URLSearchParams('report_date=2026-09-30&prev_report_date=2026-09-30&view=changes'),
+    )
+    expect(got.prevReportDate).toBeNull()
+    expect(got.compareError).not.toBeNull()
+  })
+})
+
+describe('comparisonTitle: 标题按后端真实 comparison 写', () => {
+  it('yoy 写同比, 不能写环比', () => {
+    expect(comparisonTitle('yoy')).toContain('同比')
+    expect(comparisonTitle('yoy')).not.toContain('环比')
+  })
+
+  it('qoq / 缺省写环比', () => {
+    expect(comparisonTitle('qoq')).toBe('环比变动')
+    expect(comparisonTitle(undefined)).toBe('环比变动')
+  })
+
+  it('cross 写跨期, 不冒充环比', () => {
+    expect(comparisonTitle('cross')).toContain('跨期')
+    expect(comparisonTitle('cross')).not.toContain('环比')
   })
 })

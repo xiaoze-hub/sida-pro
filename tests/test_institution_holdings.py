@@ -256,6 +256,8 @@ async def test_changes_filter_before_truncation(seeded):
     assert "新进 150" in out
     assert "共 150 条" in out and "只列前 10 条" in out
     assert "change=new" in out and "holder=ssb" in out
+    # 普通环比深链不携带比较期，页面仍按相邻上一季算。
+    assert "prev_report_date" not in out
 
 
 async def test_changes_filter_by_institution_not_global_top(seeded):
@@ -432,6 +434,10 @@ async def test_yoy_change_compares_latest_with_last_year_same_quarter(engine, mo
     assert "同比变动（与去年同季）" in out
     assert "环比变动" not in out
     assert "只有一期数据" not in out
+    # 深链必须带同比比较期：只带本期 report_date 会让页面重算成环比。
+    assert "report_date=2026-09-30" in out
+    assert "prev_report_date=2025-09-30" in out
+    assert "view=changes" in out
 
 
 async def test_non_adjacent_period_is_refused_not_mislabelled(engine, monkeypatch):

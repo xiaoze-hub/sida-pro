@@ -4,7 +4,7 @@
 ----
     GET  /api/national-team/overview?report_date=&kind=float|total
     GET  /api/national-team/holdings?report_date=&kind=&holder=&q=&sort=&desc=&limit=&offset=
-    GET  /api/national-team/changes?report_date=&kind=&holder=&change=&limit=
+    GET  /api/national-team/changes?report_date=&kind=&holder=&change=&limit=&prev_report_date=
     POST /api/national-team/refresh?mode=targeted|scan   （owner 触发采集，幂等）
 
 读接口的 `status` 区分 `ok` / `empty_table` / `unknown_period` / `insufficient_periods` /
@@ -30,7 +30,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -125,6 +125,10 @@ def national_team_changes(
     holder: str | None = Query(None, description="机构组 key 或具体 holder_key，多个用逗号"),
     change: str | None = Query(None, description="new/increase/decrease/exit，多个用逗号（先过滤再截断）"),
     limit: int = Query(100, ge=1, le=500),
+    prev_report_date: Annotated[
+        str | None,
+        Query(description="同比比较期 YYYY-MM-DD（去年同季）；缺省按严格相邻上一季算环比"),
+    ] = None,
 ):
     from src.core import national_team as nt
 
@@ -134,7 +138,13 @@ def national_team_changes(
 
     try:
         return nt.changes(
-            engine, report_date=report_date, kind=k, holder=holder, change=change, limit=limit
+            engine,
+            report_date=report_date,
+            kind=k,
+            holder=holder,
+            change=change,
+            limit=limit,
+            prev_report_date=prev_report_date,
         )
     except HTTPException:
         raise

@@ -1292,7 +1292,9 @@ def changes(
 
     「上一期」只认**严格相邻的上一季**：已采集期不连续时返回 `non_adjacent_period`，
     绝不拿早几个季度的一期顶替（跨期比出来的「新进/退出」语义会失真）。
-    `prev_report_date` 用于显式比较期（例如去年同期），同样必须严格相邻才允许。
+    `prev_report_date` 只用于**同比**：必须是本期之前正好 4 个季度的同一季末；
+    畸形日期、相邻上一季或其它跨度的显式值一律 `prev_unavailable`，
+    不静默回落成环比、也不把跨期结果标成环比。
     """
     periods = persisted_periods(engine, kind)
     target = report_date or (periods[0] if periods else None)
@@ -1330,21 +1332,33 @@ def changes(
         )
     idx = periods.index(str(target))
     expected_prev = prev_quarter(str(target))
-    if prev_report_date:
+    if prev_report_date is not None:
         prev = str(prev_report_date)
+        gap = quarters_between(prev, str(target))
+        if gap is None:
+            return _empty(
+                "prev_unavailable",
+                f"「{prev}」不是有效的季度末报告期（应为 03-31 / 06-30 / 09-30 / 12-31），"
+                "不做比较，也不回落为环比。",
+                prev=None,
+            )
+        if gap < 1:
+            return _empty(
+                "prev_unavailable",
+                f"{prev} 不是 {target} 之前的报告期，无法做对比（请指定更早的报告期）。",
+                prev=None,
+            )
+        if gap != 4:
+            return _empty(
+                "prev_unavailable",
+                f"{prev} 不是 {target} 的去年同季（相隔 {gap} 个季度）；"
+                "显式比较期只支持同比（去年同季），不回落为环比。",
+                prev=None,
+            )
         if prev not in periods:
             return _empty(
                 "prev_unavailable",
                 f"没有 {prev} 这一报告期（已采集：{'、'.join(periods[:6])}）",
-                prev=None,
-            )
-        gap = quarters_between(prev, str(target))
-        # 显式比较期允许跨期（同比就是 4 个季度），但必须把跨度说清楚，
-        # 不能标成「环比」。只有同一个报告期或倒序才拒。
-        if gap is None or gap < 1:
-            return _empty(
-                "prev_unavailable",
-                f"{prev} 不是 {target} 之前的报告期，无法做对比（请指定更早的报告期）。",
                 prev=None,
             )
     else:
