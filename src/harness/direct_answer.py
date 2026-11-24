@@ -1,6 +1,8 @@
 """Dispatch explicitly supported read-only questions before model routing."""
 from __future__ import annotations
 
+import logging
+from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,20 +12,22 @@ if TYPE_CHECKING:
     from src.harness.runtime import AgentRuntime
 
 
+logger = logging.getLogger(__name__)
+
+
 async def answer(db: Session, text: str, bound: str | None, user: User | None,
                  runtime: AgentRuntime | None, *, stock_question: bool,
                  allow_specialized: bool) -> str | None:
-    if stock_question:
-        from src.harness.quick_answer import answer as quote_answer
-
-        if result := await quote_answer(db, text, bound, user, runtime):
-            return result
-    if not allow_specialized:
-        return None
-
-    from src.harness import institution_holdings, portfolio_risk
-
-    for reader in (portfolio_risk.answer, institution_holdings.answer):
-        if result := await reader(db, text, bound, user, runtime):
-            return result
+    readers = ("quick_answer",) if stock_question else ()
+    if allow_specialized:
+        readers += ("portfolio_risk", "institution_holdings")
+    for name in readers:
+        try:
+            # Load each optional reader independently. A broken import must not skip its siblings.
+            reader = import_module(f"src.harness.{name}").answer
+            if result := await reader(db, text, bound, user, runtime):
+                return result
+        except Exception as exc:  # noqa: BLE001 — best-effort path; cancellation still propagates
+            # Never log exception text: it can contain private holdings or connection details.
+            logger.warning("[copilot.direct_answer] reader=%s failed (%s)", name, type(exc).__name__)
     return None
