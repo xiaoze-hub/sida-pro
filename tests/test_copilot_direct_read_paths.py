@@ -8,6 +8,8 @@ import pytest
 
 from src import harness
 from src.harness import direct_answer, institution_holdings, portfolio_risk, quick_answer
+from src.harness.runtime import AgentRuntime
+from src.harness.trace import CopilotTrace
 from src.web.api import chat
 
 
@@ -71,13 +73,45 @@ async def test_optional_reader_failure_does_not_skip_next_reader(monkeypatch, ca
         monkeypatch.setattr(portfolio_risk, "answer", AsyncMock(side_effect=ValueError("private details")))
     other = AsyncMock(return_value="机构披露结果")
     monkeypatch.setattr(institution_holdings, "answer", other)
+    trace = CopilotTrace()
 
     events = [event async for event in chat._run_tool_loop_inner(
         None, [{"role": "user", "content": "汇金最新报告期新进了哪些股票"}], None,
+        runtime=AgentRuntime(trace=trace),
     )]
     assert events == [("text", "机构披露结果")]
     other.assert_awaited_once()
+    assert trace.steps == []
     assert "portfolio_risk" in caplog.text and "private details" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_reader", [None, object(), lambda *_: "not an async reader"])
+async def test_reader_configuration_failure_is_visible_when_no_reader_answers(monkeypatch, caplog, bad_reader):
+    from src.harness import trace as trace_module
+
+    db = SimpleNamespace(add=lambda _: None, commit=lambda: None, close=lambda: None)
+    monkeypatch.setattr(trace_module, "SessionLocal", lambda: db)
+    trace = trace_module.CopilotTrace()
+    real_import = direct_answer.import_module
+
+    def load(name):
+        if name == institution_holdings.__name__:
+            if bad_reader is None:
+                raise ImportError("private deployment detail")
+            return SimpleNamespace(answer=bad_reader)
+        return real_import(name)
+
+    monkeypatch.setattr(direct_answer, "import_module", load)
+    result = await direct_answer.answer(
+        None, "汇金持仓", None, None, AgentRuntime(trace=trace),
+        stock_question=False, allow_specialized=True,
+    )
+    assert result is None
+    assert trace.steps == [{"tool": "institution_holdings", "ok": False, "error": "reader_configuration_error"}]
+    assert trace._infer_status("ok", None)[0] == "error"
+    assert any(r.levelname == "ERROR" and "institution_holdings" in r.message for r in caplog.records)
+    assert "private deployment detail" not in caplog.text
 
 
 @pytest.mark.asyncio
