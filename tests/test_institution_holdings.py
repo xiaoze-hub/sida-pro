@@ -158,17 +158,34 @@ async def _ask(engine, text, *, user=None, bound=None):
         ("社保基金新进了哪些股", "group", "ssb"),
         ("险资持仓变动", "group", "insurance"),
         ("外汇局三平台持仓", "group", "safe"),
-        ("梧桐树持仓", "group", "safe"),
+        ("梧桐树持仓", "holder", "wutongshu"),
+        ("外汇局梧桐树投资平台持仓", "holder", "wutongshu"),
+        ("凤山投资持仓", "holder", "fengshan"),
+        ("坤藤投资持仓", "holder", "kunteng"),
     ],
 )
 def test_resolve_scopes(text, scope, value):
     scopes = nt.resolve_institution_scopes(text)
-    assert scopes and scopes[0]["scope"] == scope and scopes[0]["value"] == value
+    assert [(s["scope"], s["value"]) for s in scopes] == [(scope, value)]
 
 
 def test_national_team_expands_to_all_groups():
     vals = {s["value"] for s in nt.resolve_institution_scopes("国家队持仓")}
     assert vals == set(nt.GROUP_ORDER)
+
+
+async def test_named_safe_platform_is_not_whole_group(engine, monkeypatch):
+    rows = {(nt.REPORT_TABLES["float"], PERIOD_CUR): [
+        _src("601988", "中国银行", "梧桐树投资平台有限责任公司", 100, end=PERIOD_CUR, cap=1e8),
+        _src("601398", "工商银行", "北京凤山投资有限责任公司", 200, end=PERIOD_CUR, cap=2e8),
+    ]}
+    monkeypatch.setattr(nt, "_rows_once", _fake_rows(rows))
+    nt.scan_period(engine, PERIOD_CUR, report_kinds=["float"])
+    individual = await _ask(engine, "外汇局梧桐树投资平台持仓")
+    assert individual and "601988" in individual and "601398" not in individual
+    assert "holder=wutongshu&" in individual
+    group = await _ask(engine, "外汇局三平台持仓")
+    assert group and "601988" in group and "601398" in group and "holder=safe&" in group
 
 
 def test_plain_company_name_is_not_an_institution():

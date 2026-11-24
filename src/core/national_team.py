@@ -123,11 +123,10 @@ GROUP_ALIASES: tuple[tuple[str, str], ...] = (
     ("保险公司", "insurance"),
     ("保险机构", "insurance"),
     ("险资", "insurance"),
+    ("国家外汇管理局三平台", "safe"),
     ("国家外汇管理局", "safe"),
+    ("外汇局三平台", "safe"),
     ("外汇局", "safe"),
-    ("梧桐树", "safe"),
-    ("凤山投资", "safe"),
-    ("坤藤投资", "safe"),
     ("中央汇金", "huijin"),
     ("汇金", "huijin"),
 )
@@ -140,6 +139,17 @@ HOLDER_ALIASES: tuple[tuple[str, str], ...] = (
     ("中央汇金投资", "huijin_invest"),
     ("汇金资管", "huijin_asset"),
     ("汇金投资", "huijin_invest"),
+    ("梧桐树投资平台有限责任公司", "wutongshu"),
+    ("外汇局梧桐树投资平台", "wutongshu"),
+    ("外汇局梧桐树", "wutongshu"),
+    ("梧桐树投资平台", "wutongshu"),
+    ("梧桐树", "wutongshu"),
+    ("北京凤山投资有限责任公司", "fengshan"),
+    ("外汇局凤山投资", "fengshan"),
+    ("凤山投资", "fengshan"),
+    ("北京坤藤投资有限责任公司", "kunteng"),
+    ("外汇局坤藤投资", "kunteng"),
+    ("坤藤投资", "kunteng"),
 )
 
 #: 「国家队」不是一个组，而是这五组的合计（页面同口径）
@@ -159,7 +169,7 @@ def resolve_institution_scopes(text: str) -> list[dict[str, str]]:
     """把问句里的机构名解析成有序 scope 列表；没写的机构一个都不猜。
 
     返回 `[{"scope": "group"|"holder", "value": ..., "label": ...}]`：
-    - 先匹配具体账户（汇金投资 / 汇金资管），命中后屏蔽该段，避免又被组别名吃掉；
+    - 先匹配具体账户（如汇金资管、梧桐树），命中后屏蔽该段，避免误扩成组；
     - 再匹配组别名（长的优先）；
     - 「国家队」展开成全部五组（与页面「全部机构」同口径）。
 

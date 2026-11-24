@@ -506,7 +506,9 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
     t0 = _monotonic()
     try:
         async with _slots():  # 限流：同时最多 MAX_CONCURRENT 轮在跑
-            _mark(run_id, status="running")
+            # 等槽期间可能已由另一进程取消或回收，库内拒绝迁移就不启动问答。
+            if not _mark(run_id, status="running"):
+                return
             # 「dequeue」= **真正拿到并发位、这轮开始跑**，不是「任务被调度起来了」。
             # 排队等 semaphore 的时间必须留在排队段里；记在这里之前，等于把
             # 「没人干活」伪装成「干活很慢」。只在**本进程**入队过时才有观测值：

@@ -215,10 +215,12 @@ def test_超时标_failed_而不是挂起(Session, monkeypatch):
 def test_轨迹已写终态时仍要补上_conversation_id(Session, monkeypatch):
     """轨迹不知道前端会话 id，只有执行体知道；终态提前返回不能把它一起跳过。"""
     async def ok(**_kw):
+        # 轨迹在已获得执行权的问答内部先落终态，随后问答才交还会话 id。
+        assert copilot_jobs._mark("r-ok2", status="ok") is True
         return 99
 
     monkeypatch.setattr(copilot_jobs, "run_copilot_question", ok)
-    _mk_run(Session, "r-ok2", status="ok")   # 模拟轨迹已写完终态
+    _mk_run(Session, "r-ok2")
 
     asyncio.run(copilot_jobs._execute("r-ok2", user_id="u1", conversation_id=None, question="q"))
 
@@ -403,6 +405,21 @@ def test_dequeue_只在真正拿到并发位之后才记(Session, monkeypatch, c
     assert payloads[0]["ms"] >= 100, f"排队 ~150ms 却被记成 {payloads[0]['ms']}ms"
     assert "r-queue" not in copilot_jobs._ENQUEUED_AT
     assert _row(Session, "r-queue").status == "ok"
+
+
+@pytest.mark.parametrize("terminal", ["cancelled", "failed"])
+def test_executor_does_not_start_after_terminal_state(Session, monkeypatch, terminal):
+    executed = []
+
+    async def unexpected(**_kwargs):
+        executed.append(True)
+        return 1
+
+    monkeypatch.setattr(copilot_jobs, "run_copilot_question", unexpected)
+    _mk_run(Session, "r-terminal", status=terminal)
+    asyncio.run(copilot_jobs._execute("r-terminal", user_id="u1", conversation_id=None, question="q"))
+    assert executed == [], "a terminal run must not start executing"
+    assert _row(Session, "r-terminal").status == terminal
 
 
 def test_cancel_before_first_schedule_persists_terminal_state(Session):
