@@ -80,6 +80,28 @@ def test_direct_read_refusal_is_not_a_successful_answer():
     assert "final_answer_is_error_placeholder" in verdict["reasons"]
 
 
+@pytest.mark.parametrize("answer", [
+    "【机构持仓直查】该机构本报告期未出现在十大股东/十大流通股东（已退出或未进前十），不是取数失败",
+    "【机构持仓直查 · 汇金系 · 环比变动】\n本期共 3 只持股数与上期完全相同（**确实零变动**，不是取数失败）。",
+    "本轮行情已核验。上一轮曾提示『任务未能完成』，本轮已取到数据。",
+])
+def test_successful_answer_can_mention_a_failure_without_being_one(answer):
+    verdict = probe.evaluate_probe(terminal_status="ok", final_content=answer, min_chars=1)
+    assert verdict["ok"] is True
+
+
+@pytest.mark.parametrize("reason", [
+    "数据连接不可用，本次未取到数据（不是「零持仓」）。",
+    "没有早于 2026-09-30 的报告期（已采集 1 期），无法计算环比。",
+    "缺少 2026-06-30 的报告期；不做跨期环比。",
+])
+def test_institution_refusal_prefix_does_not_pass_if_run_status_is_ok(reason):
+    verdict = probe.evaluate_probe(
+        terminal_status="ok", final_content=f"【机构持仓直查】{reason}", min_chars=1,
+    )
+    assert verdict["reasons"] == ["final_answer_is_error_placeholder"]
+
+
 # ── 目标与凭据 ────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("base", [
     "http://127.0.0.1:8000",

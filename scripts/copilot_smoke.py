@@ -81,16 +81,16 @@ NON_CANCELLABLE = frozenset({"ok", "degraded", "error", "failed", "cancelled", "
 PRODUCTION_HOSTS = frozenset({"sida.hengsheng-elec.com", "www.sida.hengsheng-elec.com"})
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0", "host.docker.internal"})
 
-#: 系统占位文案：拿到它等于没有终稿。
-FAILURE_MARKERS = (
-    "任务未能完成，请查看本轮过程。",
+#: 只识别系统占位/直查拒绝的开头；正文中「不是取数失败」是有效答复。
+FAILURE_PREFIXES = (
     "任务未能完成",
-    # 直查层的「取数失败/口径不足」是拒绝，不是答案：探针必须判失败，
-    # 否则数据源故障会被算成一次成功的问答。
-    "取数失败",
-    "无法计算环比",
-    "不做跨期",
-    "尚未采集国家队持仓",
+    "【机构持仓直查】取数失败：",
+    "【机构持仓直查】数据连接不可用",
+    "【机构持仓直查】没有早于 ",
+    "【机构持仓直查】缺少 ",
+    "【机构持仓直查】尚未采集国家队持仓",
+    "【机构持仓直查】只有一期数据",
+    "【机构持仓直查】已采集报告期不连续",
 )
 
 TERMINAL_STATUSES = frozenset({"ok", "degraded", "error", "failed", "cancelled", "succeeded"})
@@ -138,7 +138,7 @@ def evaluate_probe(
     content = (final_content or "").strip()
     if len(content) < min_chars:
         reasons.append("final_answer_missing_or_too_short")
-    elif any(marker in content for marker in FAILURE_MARKERS):
+    elif content.startswith(FAILURE_PREFIXES):
         reasons.append("final_answer_is_error_placeholder")
     return {"ok": not reasons, "reasons": reasons, "final_chars": len(content)}
 
