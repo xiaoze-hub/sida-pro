@@ -765,6 +765,22 @@ def test_institution_questions_are_not_claimed_as_own_portfolio(text):
     assert is_portfolio_defense_question(text) is False
 
 
+def test_unavailable_institution_resolver_never_reads_own_portfolio(monkeypatch, caplog):
+    from src.core import national_team
+    from src.harness import portfolio_risk
+
+    def broken_scope(_):
+        raise RuntimeError("private failure detail")
+
+    def unexpected_load(*_):
+        pytest.fail("scope unresolved; must not read personal holdings")
+
+    monkeypatch.setattr(national_team, "resolve_institution_scopes", broken_scope)
+    monkeypatch.setattr(portfolio_risk, "load_holdings", unexpected_load)
+    assert asyncio.run(answer(object(), "汇金持仓破位了吗", None, SimpleNamespace(id="u"))) is None
+    assert "机构范围" in caplog.text and "private failure detail" not in caplog.text
+
+
 def test_fast_path_falls_through_for_single_stock_quote(db, monkeypatch):
     """单股问价不能走防守位核验（否则用户永远拿不到纯读数快答）。"""
     user = _user(db, "chain2")

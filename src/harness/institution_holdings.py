@@ -42,7 +42,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from src.core import national_team as nt
 
@@ -72,6 +72,7 @@ _ANALYSIS_WORDS: tuple[str, ...] = (
     "走势", "趋势", "支撑", "压力", "目标价", "洗盘", "出货", "涨停", "跌停",
     "后面", "后续", "对比", "哪个好", "建议", "推荐", "能不能买", "还能持有",
     "可以买", "要不要卖", "买入吗", "卖出吗",
+    "破位", "跌破", "击穿", "防守位", "止损",
 )
 
 #: 本模块不覆盖的其他资金/榜单（出现即混合问题，交回主流程）。
@@ -87,6 +88,26 @@ _COMPARE_WORDS: tuple[str, ...] = ("谁", "哪个", "哪家", "相比", "比较"
 _CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 _DATE_RE = re.compile(r"(20\d{2})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*日?")
 _YEAR_RE = re.compile(r"(?<!\d)(20\d{2})\s*年?(?![\d\-/月])")
+
+def _literal_choices(words: Iterable[str]) -> str:
+    return "(?:" + "|".join(re.escape(w) for w in sorted(set(words), key=lambda w: (-len(w), w))) + ")"
+
+
+# 只接受完整的机构汇总句式；复用意图词，不能仅凭句中有「持仓」就把未知标的当空过滤。
+_AGGREGATE_INTENT = _literal_choices((
+    *_HOLDING_WORDS, *(w for aliases in nt.CHANGE_KIND_ALIASES.values() for w in aliases),
+    "持仓变动", "持股变动", "持仓变化", "持股变化", "调仓", "变化", "重仓股",
+))
+_AGGREGATE_QUERY_RE = re.compile(
+    r"(?:(?:请|帮我|查一下|看看|查询|查|的|和|、)){0,6}"
+    r"(?:(?:最新报告期|最新一期|最新|上一期|上期|上个季度|上季度|本报告期|本期|这期|本季度|这季度|这个季度|这季|当前|去年同期)(?:的)?)?"
+    r"(?:(?:十大流通股东|十大股东|流通股东|股东榜|float|total)(?:的)?)?"
+    rf"(?:都)?{_AGGREGATE_INTENT}(?:了)?"
+    r"(?:(?:有)?(?:哪些|什么)(?:股票|个股|股)?|"
+    r"(?:多少|几)(?:只(?:股票|个股|股)?|股|家|亿元?|万元?|元)?|"
+    r"(?:的)?(?:股票|个股)|明细|列表|名单|情况|一览|总量)?",
+    re.IGNORECASE,
+)
 
 _HELP_TEXT = (
     "【机构持仓直查】这条问句还缺关键信息，先确认一下再查：\n"
@@ -198,7 +219,7 @@ def parse_question(text: str) -> Question:
     if q.change_kinds or any(w in raw for w in ("变动", "环比", "调仓", "变化")):
         q.mode = "changes"
 
-    # 个股（只认 6 位代码；名字交给主流程解析，绝不在这条路猜代码）
+    # 个股：只认明确的 6 位代码，不使用会话旧标的或猜名字对应的代码。
     codes = list(dict.fromkeys(_CODE_RE.findall(raw)))
     if len(codes) > 1:
         q.ambiguous = "【机构持仓直查】识别到多个股票代码，请一次指定一只股票。"
@@ -245,6 +266,14 @@ def parse_question(text: str) -> Question:
     if q.mode == "holdings" and not any(w in raw for w in _HOLDING_WORDS):
         q.ambiguous = _HELP_TEXT
         return q
+
+    if q.stock_code is None and not q.etf_gap:
+        aggregate = re.sub(r"[\s，,。！？?！]+", "", _DATE_RE.sub("", rest))
+        if not _AGGREGATE_QUERY_RE.fullmatch(aggregate):
+            q.ambiguous = (
+                "【机构持仓直查】请确认是查单只股票，还是查整家机构。"
+                "单只股票请给出六位股票代码；整家机构可问「最新一期持仓」或「本期新进了哪些股票」。"
+            )
 
     return q
 

@@ -191,6 +191,7 @@ def test_bound_is_never_treated_as_institution():
         "汇金和北向资金谁持仓多",       # 混合资金
         "社保和公募谁重仓中芯国际",     # 混合机构
         "汇金持仓有什么风险",
+        "汇金持仓破位了吗",
         "汇金和社保谁持仓多",           # 多机构比较：要分机构口径，不硬答合计
     ],
 )
@@ -351,6 +352,49 @@ async def test_stock_scoped_change_counts_previous_group_account_that_left(seede
 async def test_multiple_stock_codes_require_explicit_single_stock(seeded):
     out = await _ask(seeded, "汇金这季度加仓了 601398 和 600005 吗？")
     assert out and "请一次指定一只股票" in out and "/national-team?" not in out
+
+
+@pytest.mark.parametrize("question", [
+    "汇金这季度减持贵州茅台了吗",
+    "汇金减持茅台",
+    "汇金在贵州茅台的持仓",
+    "汇金本期减持贵州茅台多少股",
+    "汇金持有万科多少股",
+    "查一下汇金新进中芯国际",
+    "汇金持有五粮液的股票吗",
+])
+async def test_unresolved_stock_name_never_returns_group_summary(seeded, monkeypatch, question):
+    def unexpected_fetch(*_):
+        pytest.fail("unresolved stock name must not run an unscoped institution query")
+
+    monkeypatch.setattr(ih, "_fetch", unexpected_fetch)
+    out = await _ask(seeded, question, bound="601398")  # unrelated prior anchor
+    assert out and "六位股票代码" in out and "/national-team?" not in out
+
+
+@pytest.mark.parametrize("question", [
+    "汇金重仓股有哪些",
+    "汇金买了哪些股票",
+    "汇金都买了什么",
+    "汇金持有股票",
+    "汇金持仓有哪些",
+    "汇金持仓的股票",
+    "汇金持仓一览",
+    "汇金持仓总量",
+    "汇金持股市值多少亿",
+    "汇金持有多少只股票",
+    "汇金拿了多少",
+    "汇金买了多少",
+    "汇金十大流通股东",
+    "请查汇金持仓",
+])
+async def test_explicit_group_holdings_questions_keep_same_scope(seeded, question):
+    q = ih.parse_question(question)
+    assert q.ambiguous is None and q.stock_code is None
+    assert q.scopes == ih.parse_question("汇金最新一期持仓").scopes
+    out = await _ask(seeded, question, bound="601398")
+    assert out and "报告期 2026-09-30" in out and "/national-team?" in out
+    assert "stock_code=" not in out and "六位股票代码" not in out
 
 
 async def test_hujin_asset_account_filter_excludes_hujin_invest(seeded):

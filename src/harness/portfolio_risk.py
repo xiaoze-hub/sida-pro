@@ -207,19 +207,20 @@ def is_portfolio_defense_question(text: str) -> bool:
         return False
     # 点名了机构/国家队资金的问句不是「本人持仓」：否则「汇金持仓破位了吗」会拿到
     # 自己账户的核验（数据是真的，但答的不是他问的对象）。交给机构直查或主流程。
-    if _mentions_institution(t):
+    if _mentions_institution(t) is not False:
         return False
     return True
 
 
-def _mentions_institution(text: str) -> bool:
-    """正文是否点名了机构/国家队（纯本地词表，解析失败按「没点名」处理）。"""
+def _mentions_institution(text: str) -> bool | None:
+    """正文是否点名机构；None 表示识别失败，不得推定为本人持仓。"""
     try:
         from src.core.national_team import resolve_institution_scopes
 
         return bool(resolve_institution_scopes(text))
-    except Exception:  # noqa: BLE001 - 词表不可用不影响本人持仓核验
-        return False
+    except Exception as exc:  # noqa: BLE001 - 未核清主体，不读取本人数据
+        logger.warning("[portfolio_risk] 无法确认机构范围，跳过本人持仓直查 (%s)", type(exc).__name__)
+        return None
 
 
 def _explicit_codes(text: str) -> list[str]:
