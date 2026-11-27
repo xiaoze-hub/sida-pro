@@ -13,7 +13,8 @@
  *   - 缺失数据: KlineItem 为空数组时显示"无数据"占位 (业务硬约束: 禁止编造数字).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { MarketDataStatus, type MarketDataPhase } from './MarketDataStatus'
 import { broadcastCrosshair, registerCrosshair } from '../lib/crosshair-sync'
 import { ascendSeries } from '../lib/series-time'
 import { latestMarkers } from '../lib/marker-limit'
@@ -591,6 +592,7 @@ export default function KlineChart(props: {
    * 历史日=OHLC 分摊近似, 图上显式标 `L1_approx`。
    */
   darkPoolSeries?: DarkPoolPoint[]
+  toolbarEnd?: ReactNode
   /** 阶段三: 事件种类显隐过滤 (默认全部 true). 设 false 该 kind 不渲染 marker */
   kindsVisible?: Partial<Record<KlineEventKind, boolean>>
   /**
@@ -826,9 +828,10 @@ export default function KlineChart(props: {
   const effAccumulationChips = indexChart ? null : (props.mainAccumulationChips ?? accumulationChipsFetched)
   const intentLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
 
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>('')
   const [dataLen, setDataLen] = useState(0)
+  const [dataOrigin, setDataOrigin] = useState<{ source?: string; todayBar?: string } | null>(null)
 
   // ── 缠论分型图层(2026-11-17) ─────────────────────────────────
   /**
@@ -1441,6 +1444,9 @@ export default function KlineChart(props: {
     const load = async () => {
       setLoading(true)
       setError('')
+      setLastBarDate('')
+      setLiveBar(null)
+      setDataOrigin(null)
       setChanBarsFailure(null)
       /*
        * 换标的/换周期/重读开始时**先清掉上一张图的 K 线**（2026-10-29 复审阻断 ②）：
@@ -1469,6 +1475,7 @@ export default function KlineChart(props: {
         const res = await fetchAPI<KlinesResponse>(query, forceReload ? { cacheMode: 'reload' } : undefined)
         if (cancelled || gen !== klGenRef.current) return
         setLiveBar(res.live_bar ?? null)
+        setDataOrigin({ source: res.source, todayBar: res.today_bar })
         const kl = res.klines || []
         /*
          * 缠论分型(2026-11-17): 结构与这张图的绑定材料, 必须在**改写 kl 之前**按原始序列算。
@@ -3073,14 +3080,25 @@ export default function KlineChart(props: {
    */
   const chipPanelVisible =
     !indexChart &&
+    !loading && !error && dataLen > 0 &&
     chipProfileOpen &&
     mode === 'kline' &&
     Array.isArray(effAccumulationChips?.prices) &&
     effAccumulationChips.prices.length > 0
 
+  const dataPhase: MarketDataPhase = loading ? 'loading'
+    : error ? 'failed'
+    : dataLen === 0 ? 'empty'
+    : liveBar?.partial ? 'partial'
+    : interval === '1d' && dataOrigin?.todayBar === 'missing' ? 'historical'
+    : 'available'
+  const isKlineVisible = mode !== 'minute' || !props.enableMinute
+  const dataSourceName = dataOrigin?.source === 'pg_klines_hypertable' ? '行情历史库' : typeof dataOrigin?.source === 'string' ? dataOrigin.source.trim() : undefined
+
   return (
     <div
       className="flex flex-col gap-2"
+      data-testid="kline-workbench"
       data-gs-go={gsResolved.go}
       data-gs-stop={gsResolved.stop}
       data-gs-count={effGsSignals.length}
@@ -3110,15 +3128,6 @@ export default function KlineChart(props: {
             {opt.label}
           </button>
         ))}
-        <span className="ml-2 text-[12px] text-muted-foreground">
-          {loading
-            ? '加载中…'
-            : error
-              ? `错误: ${error}`
-              : dataLen > 0
-                ? `${dataLen} 根K线`
-                : '无数据'}
-        </span>
         {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期/活跃度 */}
         {/* 2026-09-04 去重: 父组件受控(props.subchart)时隐藏本行, 以父为准
             (此前两套副图控件互不同步, Quote 还没传 onSubchartChange)。 */}
@@ -3251,7 +3260,28 @@ export default function KlineChart(props: {
             ▤ 操作口径中枢
           </button>
         )}
+        {props.toolbarEnd && <div className="ml-auto">{props.toolbarEnd}</div>}
       </div>
+      {isKlineVisible && (
+        <div data-testid="kline-freshness" data-phase={dataPhase}>
+          <MarketDataStatus
+            subject="K 线数据状态"
+            phase={dataPhase}
+            date={lastBarDate || undefined}
+            source={dataLen ? (dataSourceName || '未标注') : undefined}
+            label={dataPhase === 'available' ? `${dataLen} 根K线` : dataPhase === 'loading' ? '加载中…' : undefined}
+          >
+            {dataPhase === 'historical' && <span>本次未取得当日日 K</span>}
+            {dataPhase === 'partial' && (
+              <span data-testid="kline-live-partial">
+                盘中未定型（{liveBar?.source || '实时合成'}
+                {liveBar?.as_of ? ` 截至 ${liveBar.as_of.replace('T', ' ').slice(0, 16)}` : ''}）
+              </span>
+            )}
+          </MarketDataStatus>
+        </div>
+      )}
+
       {/* 图表容器与右侧筹码分布图 */}
       {/* L2-B 第2步(2026-10-24): 筹码面板展开时**挤压**画布而不是盖住它。
           做法: 给画布容器留出右侧 152px 槽位, 图表自带 ResizeObserver(见 applyOptions width)
@@ -3266,6 +3296,21 @@ export default function KlineChart(props: {
           className={mode === 'minute' && props.enableMinute ? 'hidden' : 'w-full'}
           style={{ minHeight: props.height ?? 360 }}
         />
+        {isKlineVisible && (dataPhase === 'loading' || dataPhase === 'empty' || dataPhase === 'failed') && (
+          <div data-testid="kline-canvas-state" className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-lg bg-background px-5 text-center text-[14px]">
+            <p className="font-medium text-foreground">
+              {dataPhase === 'loading' ? '正在读取 K 线…' : dataPhase === 'failed' ? '暂时无法读取 K 线' : '当前周期暂无 K 线数据'}
+            </p>
+            {dataPhase !== 'loading' && (
+              <>
+                <p className="text-muted-foreground">{dataPhase === 'failed' ? '本次行情请求未成功，可以稍后重试。' : '可切换周期，或重新读取此标的。'}</p>
+                <button type="button" onClick={reloadChartAndRetry} className="min-h-9 rounded-md bg-s2 px-3 font-medium text-primary hover:bg-s3">
+                  重试 K 线
+                </button>
+              </>
+            )}
+          </div>
+        )}
         {/* K线右侧横向筹码分布山形图 (CYQ 直方图) */}
         {chipPanelVisible && (
           <div
@@ -3491,30 +3536,6 @@ export default function KlineChart(props: {
           <span>
             严格中枢(第18课定义)/买卖点仍未实现 · 线段=规则几何 · {CHAN_CENTRE_LABEL}=操作口径非严格几何(非买卖点/非交易信号) · 客观标注 · 非投资建议
           </span>
-        </div>
-      )}
-
-      {/* 最新K线新鲜度(2026-09-23): 报障"今日日K不显示"。后端已修(剔桩+补实时),
-          前端把"最新一根是哪天"直接写出来 —— 滞后就显式滞后, 绝不把旧数据当实时。
-          判据只用日期比对, 不做交易日推算(节假日不误报"今日缺K")。 */}
-      {lastBarDate && (
-        <div
-          data-testid="kline-freshness"
-          className="mt-1 text-[12px] text-muted-foreground"
-        >
-          {lastBarDate === new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()) ? (
-            <>最新K线 {lastBarDate}（含今日盘中）</>
-          ) : (
-            <>最新K线 {lastBarDate}（今日尚无K线数据）</>
-          )}
-          {/* 2026-10-12: 合成的今日 bar 未定型(分钟聚合/实时日线 forming, 18:00 才批量定型)。
-              诚实小字: 一字符徽章/小字不卡片化 —— 只加一段 muted 小字, 悬停/图例可读。 */}
-          {liveBar?.partial && (
-            <span data-testid="kline-live-partial" className="ml-2 text-muted-foreground">
-              盘中未定型（{liveBar.source || '实时合成'}
-              {liveBar.as_of ? ` 截至 ${liveBar.as_of.replace('T', ' ').slice(0, 16)}` : ''}）
-            </span>
-          )}
         </div>
       )}
 

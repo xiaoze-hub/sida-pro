@@ -10,7 +10,7 @@
 //     延后到首帧之后才发(start unmounted → summary 未必第一); 主数据先于摘要请求发出;
 //     快摘要在途也不阻塞主图出图; 摘要带**显式 45s 超时**(默认 20s 会在冷启动窗口提前掐断);
 //  ② 首帧即挂载: 数据未回时图表壳(周期切换器)+「加载中…」已在(不空白等待);
-//  ③ 失败显式空态: 主数据失败 → 显式「错误: …」(不假报有数据, 也不伪装成「无数据」);
+//  ③ 失败显式空态: 主数据失败 → 显式失败态 + 重试(不假报有数据, 也不伪装成「无数据」);
 //  ④ symbol 切换竞态守卫: 旧标的迟到响应不覆盖新标的(cleanup 置 cancelled)。
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -139,9 +139,11 @@ describe('KlineChart 加载链(perf 回归)', () => {
       main.reject(new Error('klines-down'))
     })
 
-    await waitFor(() => expect(screen.getByText('错误: klines-down')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('暂时无法读取 K 线')).toBeTruthy())
     expect(screen.queryByText(/根K线/)).toBeNull()
     expect(screen.queryByText('无数据')).toBeNull()
+    expect(screen.queryByText(/klines-down/)).toBeNull()
+    expect(screen.getByRole('button', { name: '重试 K 线' })).toBeTruthy()
   })
 
   it('symbol 切换竞态守卫: 旧标的迟到响应不覆盖新标的', async () => {

@@ -369,3 +369,14 @@ describe('HeaderBand 快照时钟(KI-059 方案 B)', () => {
     expect(mocks.fetchAPI).not.toHaveBeenCalled()
   })
 })
+
+
+it('工作台概要保留常用数据、把次要快照收进可展开区域', () => {
+  render(<HeaderBand symbol="002636" market="CN" type="stock" symbolPicker={<button>切换标的</button>} />)
+  expect(screen.getByTestId('workbench-header').contains(screen.getByRole('button', { name: '切换标的' }))).toBe(true)
+  const details = screen.getByTestId('workbench-quote-details')
+  expect(details.hasAttribute('open')).toBe(false)
+  expect(details.textContent).toContain('封单额')
+  expect(details.textContent).not.toContain('今开')
+  expect(screen.getByLabelText('关键行情').textContent).toContain('今开')
+})
