@@ -226,6 +226,7 @@ export interface KlineItem {
 export interface KlinesResponse {
   klines: KlineItem[]
   source?: string
+  is_index?: boolean
   /** 今日 bar 性质: 'pg'(库有真今日 bar) / 'live'(读时合成) / 'missing'(缺, 无数据) */
   today_bar?: string
   /** 合成今日 bar 的诚实标注(仅 today_bar==='live' 时给); partial=盘中未定型 */
@@ -248,6 +249,30 @@ export interface KlinesResponse {
     digest?: string | null
     unavailable_reason?: string | null
   } | null
+}
+
+const KLINE_SOURCE_LABEL = new Map([
+  ['pg_klines_hypertable', '行情历史库'],
+  ['live_synthesized', '分钟线聚合'],
+  ['live_daily', '实时日线'],
+  ['live_index', '指数行情源'],
+  ['live_tq', '通达信实时日线'],
+  ['live_tencent', '腾讯实时日线'],
+  ['live_sina', '新浪实时日线'],
+])
+
+function klineDataPhase(
+  loading: boolean,
+  error: string,
+  dataLen: number,
+  freshness: { historical?: boolean; live?: KlinesResponse['live_bar'] } | null,
+): MarketDataPhase {
+  if (loading) return 'loading'
+  if (error) return 'failed'
+  if (!dataLen) return 'empty'
+  if (freshness?.historical) return 'historical'
+  if (freshness?.live?.partial) return 'partial'
+  return 'available'
 }
 
 /**
@@ -831,7 +856,12 @@ export default function KlineChart(props: {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>('')
   const [dataLen, setDataLen] = useState(0)
-  const [dataOrigin, setDataOrigin] = useState<{ source?: string; todayBar?: string } | null>(null)
+  const [freshness, setFreshness] = useState<{
+    date: string
+    source?: string
+    historical: boolean
+    live?: KlinesResponse['live_bar']
+  } | null>(null)
 
   // ── 缠论分型图层(2026-11-17) ─────────────────────────────────
   /**
@@ -989,12 +1019,6 @@ export default function KlineChart(props: {
   onRangeStatsRef.current = props.onRangeStats
   // 带日期的 K 线(区间统计要按日期与资金柱/事件求交, rawKlinesRef 只有 time/close/volume)
   const rangeBarsRef = useRef<RangeBar[]>([])
-  // 2026-09-23: 末根 K 线日期 → 用于诚实标注"是否含今日"(报障: 今日日K不显示,
-  // 后端已修桩 bar; 前端同时把"最新一根是哪天"显式写出来, 免得滞后被当成实时)
-  const [lastBarDate, setLastBarDate] = useState('')
-  // 2026-10-12: 合成今日 bar 的标注(partial/source/as_of) → 『盘中未定型』小字。
-  // 后端 today_bar==='live' 才给; 定型(18:00 批量)或非合成 → null。
-  const [liveBar, setLiveBar] = useState<{ partial?: boolean; source?: string; as_of?: string } | null>(null)
   // L5 副图: 受控(父传入)或内部自管
   const [subchart, setSubchart] = useState<KlineSubchart>(props.subchart || 'vol')
   /** 运行时 pane 报告: "pane数|各pane高度", 供生产巡检断言(见 publishPanes) */
@@ -1444,9 +1468,7 @@ export default function KlineChart(props: {
     const load = async () => {
       setLoading(true)
       setError('')
-      setLastBarDate('')
-      setLiveBar(null)
-      setDataOrigin(null)
+      setFreshness(null)
       setChanBarsFailure(null)
       /*
        * 换标的/换周期/重读开始时**先清掉上一张图的 K 线**（2026-10-29 复审阻断 ②）：
@@ -1474,8 +1496,6 @@ export default function KlineChart(props: {
         const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(reqInterval)}${props.instrument ? `&instrument=${props.instrument}` : ''}`
         const res = await fetchAPI<KlinesResponse>(query, forceReload ? { cacheMode: 'reload' } : undefined)
         if (cancelled || gen !== klGenRef.current) return
-        setLiveBar(res.live_bar ?? null)
-        setDataOrigin({ source: res.source, todayBar: res.today_bar })
         const kl = res.klines || []
         /*
          * 缠论分型(2026-11-17): 结构与这张图的绑定材料, 必须在**改写 kl 之前**按原始序列算。
@@ -1524,8 +1544,22 @@ export default function KlineChart(props: {
           close: it.close,
           volume: it.volume || 0,
         }))
+        const lastDate = valid.length ? String(valid[valid.length - 1].date).slice(0, 10) : ''
+        const isDaily = reqInterval === '1d'
+        const hasTodayBar = res.today_bar === 'pg' || res.today_bar === 'live'
+        // 今日标记绑定后端末根；若它被过滤，不能把盘中标记挂到更早的 K 线上。
+        const droppedLatest = hasTodayBar && kl.some((bar) => String(bar.date).slice(0, 10) > lastDate)
+        // 指数接口仅在包含当日 K 时返回 today_bar。个股的 missing 也可能只是休市或盘前，
+        // 所以两者都用中性历史标签，只说画出了哪天的数据，不判断是否延迟。
+        setFreshness({
+          date: lastDate,
+          source: res.source,
+          historical: isDaily && (droppedLatest || res.today_bar === 'missing' || (
+            (indexChart || res.is_index === true) && !hasTodayBar
+          )),
+          live: isDaily && res.today_bar === 'live' && !droppedLatest ? res.live_bar : undefined,
+        })
         // v2.1 §10.2④: 区间统计的取数源(带日期 + OHLC)
-        setLastBarDate(valid.length ? String((valid[valid.length - 1] as KlineItem).date).slice(0, 10) : '')
         rangeBarsRef.current = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval) as unknown as number,
           date: String(it.date).slice(0, 10),
@@ -3086,14 +3120,11 @@ export default function KlineChart(props: {
     Array.isArray(effAccumulationChips?.prices) &&
     effAccumulationChips.prices.length > 0
 
-  const dataPhase: MarketDataPhase = loading ? 'loading'
-    : error ? 'failed'
-    : dataLen === 0 ? 'empty'
-    : liveBar?.partial ? 'partial'
-    : interval === '1d' && dataOrigin?.todayBar === 'missing' ? 'historical'
-    : 'available'
+  const dataPhase = klineDataPhase(loading, error, dataLen, freshness)
   const isKlineVisible = mode !== 'minute' || !props.enableMinute
-  const dataSourceName = dataOrigin?.source === 'pg_klines_hypertable' ? '行情历史库' : typeof dataOrigin?.source === 'string' ? dataOrigin.source.trim() : undefined
+  const dataSourceName = KLINE_SOURCE_LABEL.get(freshness?.source ?? '')
+  const liveSourceName = KLINE_SOURCE_LABEL.get(freshness?.live?.source ?? '')
+  const liveAsOf = freshness?.live?.as_of
 
   return (
     <div
@@ -3267,15 +3298,16 @@ export default function KlineChart(props: {
           <MarketDataStatus
             subject="K 线数据状态"
             phase={dataPhase}
-            date={lastBarDate || undefined}
-            source={dataLen ? (dataSourceName || '未标注') : undefined}
+            date={dataLen ? freshness?.date : undefined}
+            source={dataLen ? (dataSourceName ?? '未标注') : undefined}
             label={dataPhase === 'available' ? `${dataLen} 根K线` : dataPhase === 'loading' ? '加载中…' : undefined}
+            neutralHistorical
           >
-            {dataPhase === 'historical' && <span>本次未取得当日日 K</span>}
-            {dataPhase === 'partial' && (
-              <span data-testid="kline-live-partial">
-                盘中未定型（{liveBar?.source || '实时合成'}
-                {liveBar?.as_of ? ` 截至 ${liveBar.as_of.replace('T', ' ').slice(0, 16)}` : ''}）
+            {dataPhase === 'historical' && <span>{dataLen} 根K线</span>}
+            {freshness?.live && dataLen > 0 && (
+              <span data-testid={dataPhase === 'partial' ? 'kline-live-partial' : undefined}>
+                末根来源：{liveSourceName ?? '未标注'}
+                {liveAsOf && <> · 截至 <time dateTime={liveAsOf}>{liveAsOf.replace('T', ' ').slice(0, 16)}</time></>}
               </span>
             )}
           </MarketDataStatus>

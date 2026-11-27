@@ -165,9 +165,13 @@ describe('KlineChart 加载链(perf 回归)', () => {
 
     // 旧标的(002636)的迟到响应必须被丢弃 —— 屏上仍是新标的的 5 根
     await act(async () => {
-      a.resolve({ klines: bars(3) })
+      a.resolve({ klines: bars(3), today_bar: 'missing', source: 'pg_klines_hypertable' })
     })
     expect(screen.getByText('5 根K线')).toBeTruthy()
     expect(screen.queryByText('3 根K线')).toBeNull()
+    const status = screen.getByTestId('kline-freshness')
+    expect(status.getAttribute('data-phase')).toBe('available')
+    expect(status.textContent).toContain('2026-01-05')
+    expect(status.textContent).not.toContain('行情历史库')
   })
 })

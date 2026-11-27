@@ -14,7 +14,7 @@ const LABEL: Record<MarketDataPhase, string> = {
 
 /** Render the date and source supplied by this data set, not the page refresh time. */
 export function MarketDataStatus({
-  phase, date, source, subject, label, children,
+  phase, date, source, subject, label, children, neutralHistorical,
 }: {
   phase: MarketDataPhase
   date?: string
@@ -22,8 +22,9 @@ export function MarketDataStatus({
   subject: string
   label?: string
   children?: ReactNode
+  neutralHistorical?: boolean
 }) {
-  const warning = phase === 'historical' || phase === 'partial' || phase === 'failed'
+  const warning = (phase === 'historical' && !neutralHistorical) || phase === 'partial' || phase === 'failed'
   return (
     <div role="status" aria-label={subject} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground">
       <span className={cn('rounded-md bg-s2 px-2 py-0.5 font-medium', warning && 'text-role-watch')}>{label ?? LABEL[phase]}</span>
