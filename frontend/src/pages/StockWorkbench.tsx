@@ -671,7 +671,7 @@ export default function StockWorkbench() {
               不占横向宽度、不加卡片底与阴影; `shadow-float` 全站仅限框选即问浮条)。
               内层保留 `min-w-0 flex-1`(承重: 没有 `min-w-0`, 图表 canvas 会撑破与右栏并排的 flex 行),
               但去掉边框/底色/内边距 ⇒ 图表直接占满列宽。右栏挤压逻辑(`w-[320px]`/`w-12` + `gap-3`)不变。 */}
-          <section className="border-t border-border pt-2" aria-label="行情主图">
+          <section className="border-t border-border pt-2" aria-label="行情主图" data-studio-chart>
             {/* 服务端标注状态带(2026-10-28; 2026-10-29 加撤销): 图上每条价位线都要能说清
                 "哪来的、能不能撤"。撤销必须用户二次确认（组件内展开确认条），
                 真正的删行与读回由 `revokeAnnotation` 负责 —— 这里只交标注 id。

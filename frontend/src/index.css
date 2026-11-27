@@ -448,3 +448,162 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
     box-shadow: var(--shadow-overlay);
   }
 }
+
+/* Desktop Studio / phase 1. Scope by the active workspace, not mounted keep-alive tabs.
+   Root tokens cover portal menus as well as the page. Dark comfort remains independent.
+   No business colors, canvas, phone layouts, or other routes are changed. */
+@media (min-width: 1024px) {
+  html:has([data-desktop-studio]) {
+    --s0: 216 32% 95%;
+    --s1: var(--studio-swatch-light);
+    --s2: 215 38% 94%;
+    --s3: 218 89% 93%;
+    --s4: 0 0% 100%;
+    --foreground: 219 40% 16%;
+    --muted-foreground: 216 19% 36%;
+    --primary: 221 79% 44%;
+    --accent-foreground: 221 74% 34%;
+    --border: 216 22% 87%;
+    --border-strong: 215 20% 75%;
+    --shadow-panel: 0 2px 4px hsl(220 40% 20% / .04), 0 8px 20px hsl(220 40% 20% / .055);
+    --studio-swatch-light: 210 40% 99%;
+    --studio-swatch-dark: 221 31% 14%;
+    --studio-rail: 215 40% 98%;
+    --studio-summary: 214 73% 97%;
+    --studio-gap: var(--density-4);
+    --studio-radius: .875rem;
+  }
+  html.dark:has([data-desktop-studio]) {
+    --s0: 221 37% 8%;
+    --s1: var(--studio-swatch-dark);
+    --s2: 221 29% 18%;
+    --s3: 220 39% 24%;
+    --s4: 220 29% 23%;
+    --foreground: 214 41% 95%;
+    --muted-foreground: 216 23% 74%;
+    --primary: 216 95% 76%;
+    --accent-foreground: 215 95% 85%;
+    --border: 218 23% 23%;
+    --border-strong: 215 22% 36%;
+    --shadow-panel: 0 5px 18px hsl(220 50% 2% / .22);
+    --studio-rail: 221 35% 11%;
+    --studio-summary: 218 43% 16%;
+  }
+  html.dark[data-theme='dim']:has([data-desktop-studio]) {
+    --s0: 218 23% 10%;
+    --s1: 218 24% 16%;
+    --s2: 218 21% 20%;
+    --s3: 218 27% 24%;
+    --s4: 218 23% 26%;
+    --foreground: 215 29% 90%;
+    --muted-foreground: 215 19% 72%;
+    --studio-rail: 218 24% 13%;
+    --studio-summary: 217 29% 18%;
+  }
+
+  html:has([data-desktop-studio]) [data-shell-aside] {
+    background: hsl(var(--studio-rail));
+  }
+  [data-desktop-studio] [data-testid='workspace-tabs'] {
+    background: hsl(var(--s1));
+    border: 0;
+    border-radius: var(--studio-radius);
+    box-shadow: var(--shadow-panel);
+    padding: .375rem;
+  }
+  [data-desktop-studio] [data-testid='workspace-tab-item'][data-active='true'] {
+    background: hsl(var(--s3));
+    box-shadow: none;
+  }
+  [data-desktop-studio] [data-testid='workspace-tab'][aria-selected='true'] {
+    color: hsl(var(--accent-foreground));
+  }
+  [data-desktop-studio] .page-header { margin-bottom: var(--studio-gap); }
+  [data-desktop-studio] .page-title {
+    font-size: 20px;
+    line-height: 1.25;
+    font-weight: 700;
+    letter-spacing: -.015em;
+  }
+  [data-desktop-studio] .analysis-section,
+  [data-desktop-studio] [data-studio-surface] { border-radius: var(--studio-radius); }
+
+  [data-desktop-studio='home'] [data-studio-surface='summary'] {
+    padding: var(--density-6);
+    background: hsl(var(--studio-summary));
+    box-shadow: var(--shadow-panel);
+  }
+  [data-desktop-studio='home'] [data-studio-kicker] {
+    display: block;
+    color: hsl(var(--accent-foreground));
+    margin-bottom: var(--density-2);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .08em;
+  }
+  [data-desktop-studio='home'] [data-studio-metrics] {
+    border-radius: .625rem;
+    background: hsl(var(--s1));
+    padding: var(--density-3) var(--density-4);
+  }
+  [data-desktop-studio='home'] [data-studio-metrics] .font-num {
+    line-height: 1.35;
+    letter-spacing: -.025em;
+  }
+
+  [data-desktop-studio='quote'] [data-studio-surface='quote'] {
+    background: hsl(var(--studio-summary));
+  }
+  [data-desktop-studio='quote'] [data-studio-chart] {
+    padding-top: var(--density-3);
+  }
+  [data-desktop-studio='quote'] [data-testid='kline-freshness'] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  [data-desktop-studio='settings'] [data-section-workspace] > nav {
+    border-radius: var(--studio-radius);
+    background: hsl(var(--studio-rail));
+  }
+  [data-desktop-studio='settings'] [data-studio-surface='preferences'] {
+    padding: var(--density-6);
+  }
+  [data-desktop-studio='settings'] [data-studio-surface='preferences'] h3 {
+    font-size: 16px;
+  }
+  [data-desktop-studio='settings'] [data-studio-setting] {
+    padding-block: var(--density-3);
+    border-top: 1px solid hsl(var(--border));
+  }
+  [data-desktop-studio='settings'] [data-studio-setting] button {
+    min-height: 2.25rem;
+    padding-inline: .75rem;
+    border: 0;
+    border-radius: .5rem;
+    background: hsl(var(--s2));
+  }
+  [data-desktop-studio='settings'] [data-studio-setting] button:hover,
+  [data-desktop-studio='settings'] [data-studio-setting] button[aria-pressed='true'] {
+    color: hsl(var(--accent-foreground));
+    background: hsl(var(--s3));
+  }
+  [data-desktop-studio='settings'] [data-studio-theme-choice]::before {
+    content: '';
+    display: inline-block;
+    width: .875rem;
+    height: .875rem;
+    border: 1px solid hsl(var(--border-strong));
+    border-radius: .25rem;
+    background: hsl(var(--s1));
+  }
+  [data-desktop-studio='settings'] [data-studio-theme-choice='light']::before {
+    background: hsl(var(--studio-swatch-light));
+  }
+  [data-desktop-studio='settings'] [data-studio-theme-choice='dark']::before {
+    background: hsl(var(--studio-swatch-dark));
+  }
+  [data-desktop-studio='settings'] [data-studio-theme-choice='system']::before {
+    background: hsl(var(--studio-swatch-light));
+    border-inline-end: .4375rem solid hsl(var(--studio-swatch-dark));
+  }
+}

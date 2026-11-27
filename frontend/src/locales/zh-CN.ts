@@ -128,6 +128,7 @@ const zhCN = {
   },
 
   dashboard: {
+    studioOverview: '市场速览',
     title: '驾驶舱',
     subtitle: '市场全景 · 组合工作台',
     indices: '大盘指数',

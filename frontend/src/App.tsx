@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, useRef, Suspense } from
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
 import { List, Sun, Moon, PanelLeftClose, PanelLeftOpen, ScrollText, ArrowRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
+import { desktopStudioPage } from '@/lib/desktop-studio'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { useI18n } from '@/hooks/useI18n'
@@ -647,7 +648,7 @@ function App() {
 
       {/* Content */}
       <a href="#workspace-content" className="skip-link">跳到主要内容</a>
-      <main id="workspace-content" tabIndex={-1} data-shell-main className={`px-4 md:px-6 py-4 md:py-5 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
+      <main id="workspace-content" tabIndex={-1} data-shell-main data-desktop-studio={desktopStudioPage(location.pathname)} className={`px-4 md:px-6 py-4 md:py-5 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
         {/* 页签式工作台(Tab Shell, 2026-10-15): 内容区**最顶部**是页签栏, 下面才是内容。
             页签集在 Routes **外层**持有 ⇒ 关页签只关那一个功能页, 首页常驻, 永不"全关掉"。
             真 keep-alive(2026-10-15): 每个页签一个常驻面板(同时挂载/隐藏不卸), 见 WorkspaceTabShell。
