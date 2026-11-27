@@ -39,6 +39,7 @@ describe('Desktop workspace theme', () => {
     const page = readFileSync(resolve(__dirname, '../../src/pages/FactorIC.tsx'), 'utf8')
     expect(page).not.toMatch(/text-stock-(?:up|down)\b/)
     expect(page).toContain('data-studio-ic-bar')
+    expect(page).not.toMatch(/红=正相关|绿=负相关/)
   })
 
   it.each<UiTheme>(['light', 'dark', 'dim'])('%s workspace preserves readable surfaces and market semantics', (theme) => {
