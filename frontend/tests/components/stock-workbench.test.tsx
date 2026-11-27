@@ -13,7 +13,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
  *  ③ `type=index` → `IndexBody symbol`; `type=board` → `BoardBody code`(Task 7 接线);
  *  ④ 类型/标签切换**只改 query**(`?type=`/`?tab=`)—— 不跳页, 且保留另一个键(切类型不丢标签);
  *  ⑤ 无 symbol → 「缺少代码」兜底;
- *  ⑥ 外壳沿用既有容器惯例 `mx-auto max-w-[1500px] p-3`;
+ *  ⑥ 外壳用共用 `page-container`，不重新加页面级宽度上限;
  *  ⑦ **页面级刷新**(Task 7 复审 Finding 1 + v0.6.0 遗留⑦): 带1 的刷新广播(`onRefresh`)只影响
  *     **正文子树** —— 个股分支仍用 `key={refreshKey}` 重挂载带2(`KlineChart`/`QuickRail`/激活标签
  *     都是"挂载即取数"且无 token 入参); **指数/板块分支改为传 `refreshToken={refreshKey}`** ——
@@ -112,6 +112,7 @@ vi.mock('@sida/biz-ui/components/KlineChart', () => ({
     sourceReason?: (icon: string) => string
     /** 参谋/罗盘价位线(服务端标注通道接通后才会有值; 观测点逐条回显) */
     supportPressure?: Array<{ kind: string; price: number; label: string }>
+    toolbarEnd?: React.ReactNode
   }) => (
     <div
       data-testid="kline"
@@ -122,7 +123,7 @@ vi.mock('@sida/biz-ui/components/KlineChart', () => ({
       data-cost={(p.costLines ?? []).map((l) => `${l.price}|${l.title}`).join(',')}
       /* 参谋罗盘与关键点位画线叠加观测点 */
       data-support-pressure={(p.supportPressure ?? []).map((l) => `${l.kind}:${l.price}:${l.label}`).join(';')}
-    >{`kline:${p.symbol}:${p.market}:${p.height}:${p.initialInterval}:${p.initialDays}`}</div>
+    >{`kline:${p.symbol}:${p.market}:${p.height}:${p.initialInterval}:${p.initialDays}`}{p.toolbarEnd}</div>
   ),
 }))
 
@@ -329,20 +330,30 @@ async function expectTabHasPosition(id: string, expected: string) {
 }
 
 describe('StockWorkbench 三带骨架', () => {
+  it('整页刷新重挂图表，不重复请求参谋快照', async () => {
+    const briefCalls = () => mocks.fetchAPI.mock.calls.filter(([url]) => String(url).startsWith('/copilot/brief/'))
+    renderAt('/stocks/002636')
+    const chart = await screen.findByTestId('kline')
+    expect(screen.getByRole('button', { name: '打开分析' })).toBeTruthy()
+    await waitFor(() => expect(briefCalls()).toHaveLength(1))
+    fireEvent.click(screen.getByText('mock-refresh'))
+    await waitFor(() => expect(screen.getByTestId('kline')).not.toBe(chart))
+    expect(briefCalls()).toHaveLength(1)
+  })
+
   it('个股(默认): 带1 + 主图 + 右栏 + 6 键标签 + 真实「盘口资金」标签, 外壳沿用容器惯例', async () => {
     renderAt('/stocks/002636')
 
     // 带1
     expect(screen.getByTestId('band1').textContent).toContain('band1:002636:CN:stock')
-    // 外壳(mx-auto max-w-none p-3 —— P0-1(2026-09-18): 工作台放开 1500px 上限,
-    // 配合侧栏默认折叠, 把屏宽交给 K 线(铁律: K线是主角, ≥80% 屏宽))
+    // 共用工作台外壳管理留白，不重新引入页面级宽度限制。
     const root = screen.getByTestId('band1').parentElement as HTMLElement
-    expect(root.className).toContain('mx-auto')
-    expect(root.className).toContain('max-w-none')
+    expect(root.classList.contains('page-container')).toBe(true)
+    expect(root.className).not.toMatch(/(?:^|\s)max-w-/)
     expect(root.className).toContain('min-w-0')
 
     // 带2: 主图(日线 / 120 天 / 高 420)+ 右栏固定 320px
-    expect(screen.getByTestId('kline').textContent).toBe('kline:002636:CN:420:1d:120')
+    expect(screen.getByTestId('kline').firstChild?.textContent).toBe('kline:002636:CN:420:1d:120')
     // §12: 事件图标的数据源裁决已从 useSourceHealth 接到图上(tck 不可用 → 拆 判 false)
     expect(screen.getByTestId('kline').getAttribute('data-gate')).toBe(
       'tck=false;wencai=true;reason=tck 不可用(down)',
@@ -595,7 +606,7 @@ describe('StockWorkbench 三带骨架', () => {
 
     expect(screen.getByTestId('kline')).not.toBe(klineBefore)
     expect(screen.getByTestId('rail')).not.toBe(railBefore)
-    expect(screen.getByTestId('kline').textContent).toBe('kline:002636:CN:420:1d:120')
+    expect(screen.getByTestId('kline').firstChild?.textContent).toBe('kline:002636:CN:420:1d:120')
     expect(search()).toContain('tab=news')
     // Task 17: 刷新把带3(含激活标签)一起重挂载 ⇒ 标签卸载并重新挂载(= 重新取数), 且仍是 news
     await expectTabHasPosition('news', 'false')

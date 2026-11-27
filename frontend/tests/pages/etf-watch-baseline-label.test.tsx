@@ -25,11 +25,12 @@ const series = [
   { minute: '0931', amount_yi: 2, cum_yi: 3, baseline_cum_yi: 1.5, complete: true },
 ]
 
-function mockPayloads(baselineDays: number, requested = 20) {
+function mockPayloads(baselineDays: number, requested = 20, fallbackFrom?: string) {
   api.fetchAPI.mockImplementation((url: string) => {
     if (url.startsWith('/etf-watch/intraday')) {
       return Promise.resolve({
         date: '20261106',
+        fallback_from: fallbackFrom,
         phase: 'closed',
         session_phase: 'closed',
         state: 'normal',
@@ -83,4 +84,19 @@ describe('EtfWatch 基线样本文案', () => {
     expect(chart.getAttribute('aria-label') || '').toContain('实际 20/20 个交易日')
     expect(screen.queryByText(/最近 20 个有数据交易日/)).toBeNull()
   })
+})
+
+
+it('历史回退不把旧成交额标成当天', async () => {
+  mockPayloads(2, 20, '20261109')
+  render(<MemoryRouter><EtfWatchPage /></MemoryRouter>)
+  const status = await screen.findByRole('status', { name: 'ETF 分钟数据状态' })
+  expect(status.textContent).toContain('历史回退')
+  expect(status.textContent).toContain('数据截至 2026-11-06')
+  expect(status.textContent).toContain('未取得 2026-11-09')
+  expect(status.textContent).toContain('当前时段为')
+  expect(screen.queryByText(/分钟数据尚未就绪，当前显示最近/)).toBeNull()
+  expect(screen.getByText('数据日累计成交额')).toBeTruthy()
+  expect(screen.queryByText('今日累计成交额')).toBeNull()
+  expect(screen.getByRole('img', { name: /数据日累计成交额与同期基线/ })).toBeTruthy()
 })
