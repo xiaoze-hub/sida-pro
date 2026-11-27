@@ -45,7 +45,7 @@ function Spark({ series, title }: { series: number[]; title: string }) {
             x2={w - pad} y2={h - pad - ((0 - min) / span) * (h - pad * 2)}
             stroke="currentColor" strokeOpacity="0.25" strokeDasharray="2 2" strokeWidth="1" />
       <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2"
-                className={last >= 0 ? 'text-red-400' : 'text-emerald-400'} />
+                className={last >= 0 ? 'text-red-400 lg:text-stock-up' : 'text-emerald-400 lg:text-stock-down'} />
     </svg>
   )
 }
@@ -155,7 +155,7 @@ function icCell(v: number | null, periods: number, minPeriods: number) {
   return {
     text: num(v),
     title: `横截面 IC, 期数 ${periods}`,
-    cls: strong ? (v > 0 ? 'text-red-400' : 'text-emerald-400') : 'text-foreground',
+    cls: strong ? (v > 0 ? 'text-red-400 lg:text-stock-up' : 'text-emerald-400 lg:text-stock-down') : 'text-foreground',
   }
 }
 

@@ -24,6 +24,7 @@ const TabsTrigger = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>
 >(({ className, ...props }, ref) => (
   <TabsPrimitive.Trigger
+    data-ui="segment-tab"
     ref={ref}
     className={cn(
       'whitespace-nowrap rounded px-2.5 py-1 text-[12px] transition-colors',

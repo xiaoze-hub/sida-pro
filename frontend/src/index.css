@@ -449,9 +449,9 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
   }
 }
 
-/* Desktop Studio / phase 1. Scope by the active workspace, not mounted keep-alive tabs.
-   Root tokens cover portal menus as well as the page. Dark comfort remains independent.
-   No business colors, canvas, phone layouts, or other routes are changed. */
+/* Authenticated desktop workspace theme. Keep the boundary on the shell, not a route list.
+   Root tokens cover portal menus as well as the page. Public pages and widths below 1024px
+   keep their existing theme; chart palettes and financial semantics are not overridden. */
 @media (min-width: 1024px) {
   html:has([data-desktop-studio]) {
     --s0: 216 32% 95%;
@@ -472,6 +472,7 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
     --studio-summary: 214 73% 97%;
     --studio-gap: var(--density-4);
     --studio-radius: .875rem;
+    --studio-float: 0 16px 44px hsl(220 44% 16% / .19), 0 3px 10px hsl(220 44% 16% / .10);
   }
   html.dark:has([data-desktop-studio]) {
     --s0: 221 37% 8%;
@@ -488,6 +489,7 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
     --shadow-panel: 0 5px 18px hsl(220 50% 2% / .22);
     --studio-rail: 221 35% 11%;
     --studio-summary: 218 43% 16%;
+    --studio-float: 0 18px 50px hsl(220 50% 2% / .53), 0 2px 9px hsl(220 50% 2% / .30);
   }
   html.dark[data-theme='dim']:has([data-desktop-studio]) {
     --s0: 218 23% 10%;
@@ -504,18 +506,18 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
   html:has([data-desktop-studio]) [data-shell-aside] {
     background: hsl(var(--studio-rail));
   }
-  [data-desktop-studio] [data-testid='workspace-tabs'] {
+  [data-desktop-studio] [data-ui='workspace-tabs'] {
     background: hsl(var(--s1));
     border: 0;
     border-radius: var(--studio-radius);
     box-shadow: var(--shadow-panel);
     padding: .375rem;
   }
-  [data-desktop-studio] [data-testid='workspace-tab-item'][data-active='true'] {
+  [data-desktop-studio] [data-ui='workspace-tab-item'][data-active='true'] {
     background: hsl(var(--s3));
     box-shadow: none;
   }
-  [data-desktop-studio] [data-testid='workspace-tab'][aria-selected='true'] {
+  [data-desktop-studio] [data-ui='workspace-tabs'] [role='tab'][aria-selected='true'] {
     color: hsl(var(--accent-foreground));
   }
   [data-desktop-studio] .page-header { margin-bottom: var(--studio-gap); }
@@ -525,15 +527,57 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
     font-weight: 700;
     letter-spacing: -.015em;
   }
-  [data-desktop-studio] .analysis-section,
+  [data-desktop-studio] :is(.card, .card-hover, .analysis-section),
   [data-desktop-studio] [data-studio-surface] { border-radius: var(--studio-radius); }
 
-  [data-desktop-studio='home'] [data-studio-surface='summary'] {
+  [data-desktop-studio] [data-ui='page-tabs'] {
+    border-color: transparent;
+    border-radius: .625rem;
+  }
+  [data-desktop-studio] [data-ui='page-tabs'] [role='tab'][aria-selected='true'],
+  [data-desktop-studio] [data-ui='segment-tab'][data-state='active'] {
+    background: hsl(var(--s3));
+    color: hsl(var(--accent-foreground));
+  }
+  [data-desktop-studio] [data-ui='page-tabs'] [role='tab'][aria-selected='true']:not(:focus-visible) {
+    box-shadow: none;
+  }
+
+  /* Native data tables only. Chart canvas internals have no thead and remain untouched.
+     Explicitly styled header groups and cell-level market/alert colors remain authoritative. */
+  [data-desktop-studio] table:has(> thead) {
+    font-variant-numeric: tabular-nums;
+  }
+  [data-desktop-studio] table > thead:not([class*='bg-']) {
+    background-color: hsl(var(--s2));
+  }
+  [data-desktop-studio] table > thead th {
+    font-weight: 600;
+  }
+  [data-desktop-studio] [data-studio-stat] {
+    color: hsl(var(--foreground));
+  }
+
+  /* Radix portals live outside main but inside the same document. Scope their shared
+     components to the shell, without adjusting positioning, focus, layering or motion. */
+  html:has([data-desktop-studio]) :is([data-ui='dialog'], [data-ui='popover'], [data-ui='select-menu']) {
+    background-color: hsl(var(--s4));
+    box-shadow: var(--studio-float);
+  }
+  html:has([data-desktop-studio]) :is([data-ui='dialog'][data-placement='center'], [data-ui='popover'], [data-ui='select-menu']) {
+    border-radius: var(--studio-radius);
+  }
+  html:has([data-desktop-studio]) [data-ui='dialog-title'] {
+    line-height: 1.35;
+    letter-spacing: -.01em;
+  }
+
+  [data-desktop-studio] [data-studio-surface='summary'] {
     padding: var(--density-6);
     background: hsl(var(--studio-summary));
     box-shadow: var(--shadow-panel);
   }
-  [data-desktop-studio='home'] [data-studio-kicker] {
+  [data-desktop-studio] [data-studio-kicker] {
     display: block;
     color: hsl(var(--accent-foreground));
     margin-bottom: var(--density-2);
@@ -541,53 +585,53 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
     font-weight: 700;
     letter-spacing: .08em;
   }
-  [data-desktop-studio='home'] [data-studio-metrics] {
+  [data-desktop-studio] [data-studio-metrics] {
     border-radius: .625rem;
     background: hsl(var(--s1));
     padding: var(--density-3) var(--density-4);
   }
-  [data-desktop-studio='home'] [data-studio-metrics] .font-num {
+  [data-desktop-studio] [data-studio-metrics] .font-num {
     line-height: 1.35;
     letter-spacing: -.025em;
   }
 
-  [data-desktop-studio='quote'] [data-studio-surface='quote'] {
+  [data-desktop-studio] [data-studio-surface='quote'] {
     background: hsl(var(--studio-summary));
   }
-  [data-desktop-studio='quote'] [data-studio-chart] {
+  [data-desktop-studio] [data-studio-chart] {
     padding-top: var(--density-3);
   }
-  [data-desktop-studio='quote'] [data-testid='kline-freshness'] {
+  [data-desktop-studio] [data-ui='chart-status'] {
     font-variant-numeric: tabular-nums;
   }
 
-  [data-desktop-studio='settings'] [data-section-workspace] > nav {
+  [data-desktop-studio] [data-section-workspace] > nav {
     border-radius: var(--studio-radius);
     background: hsl(var(--studio-rail));
   }
-  [data-desktop-studio='settings'] [data-studio-surface='preferences'] {
+  [data-desktop-studio] [data-studio-surface='preferences'] {
     padding: var(--density-6);
   }
-  [data-desktop-studio='settings'] [data-studio-surface='preferences'] h3 {
+  [data-desktop-studio] [data-studio-surface='preferences'] h3 {
     font-size: 16px;
   }
-  [data-desktop-studio='settings'] [data-studio-setting] {
+  [data-desktop-studio] [data-studio-setting] {
     padding-block: var(--density-3);
     border-top: 1px solid hsl(var(--border));
   }
-  [data-desktop-studio='settings'] [data-studio-setting] button {
+  [data-desktop-studio] [data-studio-setting] button {
     min-height: 2.25rem;
     padding-inline: .75rem;
     border: 0;
     border-radius: .5rem;
     background: hsl(var(--s2));
   }
-  [data-desktop-studio='settings'] [data-studio-setting] button:hover,
-  [data-desktop-studio='settings'] [data-studio-setting] button[aria-pressed='true'] {
+  [data-desktop-studio] [data-studio-setting] button:hover,
+  [data-desktop-studio] [data-studio-setting] button[aria-pressed='true'] {
     color: hsl(var(--accent-foreground));
     background: hsl(var(--s3));
   }
-  [data-desktop-studio='settings'] [data-studio-theme-choice]::before {
+  [data-desktop-studio] [data-studio-theme-choice]::before {
     content: '';
     display: inline-block;
     width: .875rem;
@@ -596,13 +640,13 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
     border-radius: .25rem;
     background: hsl(var(--s1));
   }
-  [data-desktop-studio='settings'] [data-studio-theme-choice='light']::before {
+  [data-desktop-studio] [data-studio-theme-choice='light']::before {
     background: hsl(var(--studio-swatch-light));
   }
-  [data-desktop-studio='settings'] [data-studio-theme-choice='dark']::before {
+  [data-desktop-studio] [data-studio-theme-choice='dark']::before {
     background: hsl(var(--studio-swatch-dark));
   }
-  [data-desktop-studio='settings'] [data-studio-theme-choice='system']::before {
+  [data-desktop-studio] [data-studio-theme-choice='system']::before {
     background: hsl(var(--studio-swatch-light));
     border-inline-end: .4375rem solid hsl(var(--studio-swatch-dark));
   }

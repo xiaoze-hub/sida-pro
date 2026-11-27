@@ -52,6 +52,7 @@ export default function PageTabs({
   return (
     <div
       className={`inline-flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-s2 p-1 ${className}`}
+      data-ui="page-tabs"
       role="tablist"
       aria-label="页面视图"
       onKeyDown={onKeyDown}

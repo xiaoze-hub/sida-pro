@@ -340,7 +340,7 @@ function KeyUsagePanel({ keyId }: { keyId: number }) {
     <div className="mt-3 grid grid-cols-2 gap-3 border-t border-white/5 pt-3 sm:grid-cols-4">
       <div>
         <div className="text-[12px] text-muted-foreground">今日已用</div>
-        <div className="font-mono text-[16px] font-semibold text-white">{usage.used_today}</div>
+        <div data-studio-stat className="font-mono text-[16px] font-semibold text-white">{usage.used_today}</div>
         <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/5">
           <div className="h-full rounded-full bg-cyan-500 transition-all" style={{ width: `${Math.min(pct, 100)}%` }} />
         </div>
@@ -351,11 +351,11 @@ function KeyUsagePanel({ keyId }: { keyId: number }) {
       </div>
       <div>
         <div className="text-[12px] text-muted-foreground">近 7 天</div>
-        <div className="font-mono text-[16px] font-semibold text-white">{usage.used_7d}</div>
+        <div data-studio-stat className="font-mono text-[16px] font-semibold text-white">{usage.used_7d}</div>
       </div>
       <div>
         <div className="text-[12px] text-muted-foreground">近 30 天</div>
-        <div className="font-mono text-[16px] font-semibold text-white">{usage.used_30d}</div>
+        <div data-studio-stat className="font-mono text-[16px] font-semibold text-white">{usage.used_30d}</div>
       </div>
     </div>
   )
@@ -370,15 +370,15 @@ function UsageOverview({ keys }: { keys: MyApiKey[] }) {
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">活跃 Key</div>
-        <div className="font-mono text-[20px] font-semibold text-white">{activeKeys.length}</div>
+        <div data-studio-stat className="font-mono text-[20px] font-semibold text-white">{activeKeys.length}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">总日限</div>
-        <div className="font-mono text-[20px] font-semibold text-white">{totalLimit}</div>
+        <div data-studio-stat className="font-mono text-[20px] font-semibold text-white">{totalLimit}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">已冻结</div>
-        <div className="font-mono text-[20px] font-semibold text-white">{keys.filter(k => k.status === 'frozen').length}</div>
+        <div data-studio-stat className="font-mono text-[20px] font-semibold text-white">{keys.filter(k => k.status === 'frozen').length}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">已禁用</div>

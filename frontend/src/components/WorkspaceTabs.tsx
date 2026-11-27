@@ -124,6 +124,7 @@ export default function WorkspaceTabs({
     <>
       <div
         data-testid="workspace-tabs"
+        data-ui="workspace-tabs"
         role="tablist"
         aria-label={t('tabs.bar')}
         onKeyDown={(event) => {
@@ -150,6 +151,7 @@ export default function WorkspaceTabs({
             <div
               key={tab.key}
               data-testid="workspace-tab-item"
+              data-ui="workspace-tab-item"
               data-tab-key={tab.key}
               data-active={active ? 'true' : 'false'}
               onContextMenu={(e) => {

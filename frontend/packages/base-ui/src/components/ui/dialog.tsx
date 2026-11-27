@@ -33,6 +33,8 @@ const DialogContent = React.forwardRef<
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
+      data-ui="dialog"
+      data-placement={placement}
       ref={ref}
       onOpenAutoFocus={event => {
         returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -76,6 +78,7 @@ const DialogTitle = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
+    data-ui="dialog-title"
     ref={ref}
     className={cn('text-[16px] font-semibold text-foreground', className)}
     {...props}

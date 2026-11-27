@@ -1,18 +1,34 @@
 import { describe, expect, it } from 'vitest'
-import { desktopStudioPage } from '@/lib/desktop-studio'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import postcss from 'postcss'
 import { contrast, resolved, tokens, type UiTheme } from '../lib/design-token-utils'
 
-describe('Desktop Studio preview', () => {
-  it.each([
-    ['/', 'home'], ['/stocks/600519', 'quote'], ['/stocks/000001/', 'quote'],
-    ['/settings', 'settings'], ['/settings/', 'settings'],
-    ['/stocks', undefined], ['/quotes', undefined], ['/login', undefined],
-    ['/reports', undefined], ['/stocks/600519/reports', undefined], ['/settings-extra', undefined],
-  ] as const)('limits the preview on %s to %s', (path, page) => {
-    expect(desktopStudioPage(path)).toBe(page)
+describe('Desktop workspace theme', () => {
+  it('binds the desktop token scope to the authenticated workspace, not an allowlist of routes', () => {
+    const app = readFileSync(resolve(__dirname, '../../src/App.tsx'), 'utf8')
+    expect(app.match(/data-desktop-studio/g)).toHaveLength(1)
+    expect(app).toMatch(/<RequireAuth[\s\S]*?<main[^>]*data-shell-main data-desktop-studio/)
+    expect(app).not.toContain('desktopStudioPage')
   })
 
-  it.each<UiTheme>(['light', 'dark', 'dim'])('%s preview preserves readable surfaces and market semantics', (theme) => {
+  it('keeps workspace and overlay rules behind the 1024px desktop breakpoint', () => {
+    const css = postcss.parse(readFileSync(resolve(__dirname, '../../src/index.css'), 'utf8'))
+    const studioRules: string[] = []
+    css.walkRules((rule) => {
+      if (!rule.selector.includes('[data-desktop-studio]')) return
+      studioRules.push(rule.selector)
+      expect(rule.parent?.type).toBe('atrule')
+      if (rule.parent?.type === 'atrule') {
+        expect(rule.parent.name).toBe('media')
+        expect(rule.parent.params).toBe('(min-width: 1024px)')
+      }
+    })
+    expect(studioRules.join(' ')).toContain("data-ui='dialog'")
+    expect(studioRules.join(' ')).toContain('table:has(> thead)')
+  })
+
+  it.each<UiTheme>(['light', 'dark', 'dim'])('%s workspace preserves readable surfaces and market semantics', (theme) => {
     const preview = tokens(theme, true)
     const current = tokens(theme)
     const color = (key: string) => resolved(preview, key)
