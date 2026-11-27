@@ -624,7 +624,8 @@ export default function HeaderBand({
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2 pb-2 sm:grid-cols-4 xl:grid-cols-6">
               {detailCells.map(renderCell)}
             </dl>
-            <div className="flex flex-wrap items-center gap-2 pb-2">
+          </details>
+          <div className="flex flex-wrap items-center gap-2 pb-2">
                 {/* KI-059B: /l2 派生读数(封单额/涨停价/连板)无轮询, 标取数时刻防误读成实时。
                     as_of 缺失则整块不渲染(不编时间); 与 QuickRail「快照 HH:MM:SS」同口径。 */}
                 {(() => {
@@ -647,8 +648,7 @@ export default function HeaderBand({
                     </>
                   )
                 })()}
-            </div>
-          </details>
+          </div>
         </>
       ) : null}
 

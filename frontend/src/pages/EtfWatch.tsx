@@ -345,8 +345,13 @@ export default function EtfWatchPage() {
   const supportLag = support?.freshness?.lag_trading_days ?? null
   const intradaySource = sourceText(intraday)
   const intradayDate = intraday?.date?.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
-  const fallbackDate = intraday?.fallback_from?.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
-  const periodLabel = fallbackDate ? '数据日' : '当日'
+  const missingDate = intraday?.fallback_from?.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
+  const partialIntraday = intraday?.state === 'insufficient'
+  const periodLabel = missingDate ? '数据日' : '当日'
+  let intradayPhase: 'historical' | 'partial' | 'available' | 'empty' = 'empty'
+  if (missingDate) intradayPhase = 'historical'
+  else if (partialIntraday) intradayPhase = 'partial'
+  else if (intraday) intradayPhase = 'available'
   const intradayMixed = intraday?.source === 'mixed'
   const dailySource = sourceText(daily)
   // 逐日来源明细只在窗口较小的时候展开（120 日窗口全展开会把脚注挤爆）。
@@ -415,11 +420,11 @@ export default function EtfWatchPage() {
                 <div className="mb-3">
                   <MarketDataStatus
                     subject="ETF 分钟数据状态"
-                    phase={fallbackDate ? 'historical' : intraday ? 'available' : 'empty'}
+                    phase={intradayPhase}
                     date={intradayDate}
-                    label={fallbackDate ? '历史回退' : intraday?.state === 'insufficient' ? '数据不全' : undefined}
+                    label={missingDate ? '历史回退' : partialIntraday ? '数据不全' : undefined}
                   >
-                    {fallbackDate && <span>未取得 {fallbackDate} 的数据；不是当前行情</span>}
+                    {missingDate && <span>未取得 {missingDate} 的数据；不是当前行情</span>}
                   </MarketDataStatus>
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

@@ -64,6 +64,27 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('CopilotCapsule', () => {
+  it('紧凑工具栏不改写旧折叠状态，并直接用当前标的打开分析', async () => {
+    const key = 'copilot_capsule_hidden:600111'
+    localStorage.setItem(key, '1')
+    const onOpen = vi.fn()
+    window.addEventListener('sida-open-chat', onOpen)
+    try {
+      render(<CopilotCapsule symbol="600111" presentation="inline" compact />)
+      const button = screen.getByRole('button', { name: '打开分析' })
+      await waitFor(() => expect(button.getAttribute('title')).toBe(BRIEF.verdict.intent_label))
+      expect(button.classList.contains('fixed')).toBe(false)
+      fireEvent.click(button)
+      expect(onOpen).toHaveBeenCalledTimes(1)
+      expect(onOpen.mock.calls[0][0].detail).toMatchObject({
+        symbol: '600111', pageContext: expect.stringContaining(BRIEF.as_of),
+      })
+      expect(localStorage.getItem(key)).toBe('1')
+    } finally {
+      window.removeEventListener('sida-open-chat', onOpen)
+    }
+  })
+
   it('内联入口忽略旧悬浮位置，收起与恢复始终在原工具栏', async () => {
     localStorage.setItem('copilot_capsule_position', JSON.stringify({ x: 400, y: 200 }))
     render(<CopilotCapsule symbol="600111" presentation="inline" />)

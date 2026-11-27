@@ -344,6 +344,7 @@ describe('HeaderBand 快照时钟(KI-059 方案 B)', () => {
     render(<HeaderBand symbol="002636" market="CN" type="stock" />)
     await waitFor(() => expect(screen.getByTestId('band1-l2-snapshot-clock')).toBeTruthy())
     const el = screen.getByTestId('band1-l2-snapshot-clock')
+    expect(el.closest('details')).toBeNull()
     expect(el.textContent).toBe('快照 10:23:45')
     expect(el.getAttribute('title') || '').toContain('无 30s 轮询')
     // 封单额仍在(时钟是附加披露, 不替代数值)

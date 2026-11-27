@@ -620,7 +620,7 @@ export default function StockWorkbench() {
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
 
   return (
-    <div className="page-container mx-auto min-w-0 max-w-none space-y-2">
+    <div className="page-container min-w-0 space-y-2">
       {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
       <HeaderBand
         symbol={symbol}
