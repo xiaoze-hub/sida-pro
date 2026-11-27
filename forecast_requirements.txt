@@ -31,4 +31,4 @@ baostock>=0.8.8           # 预测引擎 fetch_kline 拉日 K(不复权)
 #    兜住, 并有 tests/test_forecast_baostock_connect_compat.py 两条签名各自回归。
 #    升级/降级 baostock 必须跑该测试, 不要再试图钉版本。
  
-timesfm>=1.0          # Google TimesFM 时序基础模型(替代Lag-Llama,最轻量)
+timesfm>=3.0.2          # Google TimesFM 时序基础模型(替代Lag-Llama,最轻量)
