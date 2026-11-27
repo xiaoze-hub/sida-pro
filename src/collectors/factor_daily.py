@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -102,15 +103,50 @@ def _pct_rank(values: list[float]) -> list[float]:
     return ranks
 
 
+def bars_through_trade_date(bars: list[dict], target: date) -> list[dict]:
+    """Take an ordered target-day prefix; a later bar must not affect it."""
+    prefix = []
+    previous = date.min
+    for bar in bars:
+        raw_day = bar.get("date")
+        try:
+            day = date.fromisoformat(raw_day) if isinstance(raw_day, str) else None
+        except ValueError:
+            return []
+        if day is None or day <= previous:
+            return []
+        if day > target:
+            break
+        prefix.append(bar)
+        previous = day
+    if previous != target:
+        return []
+    # A row with no usable close is not evidence of a target-day close.
+    try:
+        close = float(prefix[-1].get("close", 0))
+    except (ValueError, TypeError):
+        return []
+    return prefix if math.isfinite(close) and close > 0 else []
+
+
 def collect_once(db: Session, limit: int | None = None, trade_date: str | None = None,
                  asof: str | None = None) -> dict:
-    """asof='YYYYMMDD' 时按该日截断日线重算（历史回填用）。"""
-    """跑一轮全市场因子快照。返回统计（写入行数/跳过数）。"""
+    """以同一个交易日作为日线边界和快照标签，拒绝用旧 K 线代填。"""
     from src.db.klines_repo import load_qfq_bars
     from src.db.models import StockFactorDaily
     from sqlalchemy import text
 
-    day = trade_date or datetime.now().strftime("%Y%m%d")
+    if trade_date is not None and asof is not None and trade_date != asof:
+        return {"written": 0, "skipped": 0, "reason": "conflicting_trade_date"}
+    day = trade_date if trade_date is not None else asof
+    if day is None:
+        day = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+    try:
+        if len(day) != 8 or not day.isascii() or not day.isdecimal():
+            raise ValueError
+        target = datetime.strptime(day, "%Y%m%d").date()
+    except ValueError:
+        return {"written": 0, "skipped": 0, "reason": "invalid_trade_date"}
     try:
         with db.get_bind().connect() as conn:
             rows = conn.execute(text(
@@ -133,12 +169,10 @@ def collect_once(db: Session, limit: int | None = None, trade_date: str | None =
         except Exception:  # noqa: BLE001
             skipped += 1
             continue
-        use_bars = bars
-        if asof:
-            use_bars = [b for b in bars if str(b.get("date", "")).replace("-", "") <= asof]
-            if not use_bars:
-                skipped += 1
-                continue
+        use_bars = bars_through_trade_date(bars, target)
+        if not use_bars:
+            skipped += 1
+            continue
         f = compute_factors(use_bars)
         if f["momentum_20"] is None:  # 样本不足整行不写，避免半截数据
             skipped += 1
