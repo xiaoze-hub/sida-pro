@@ -2,18 +2,20 @@
 
 # SIDA Pro · Stock Intelligent Data Analytics
 
-**An AI workspace for stock technical research — market context, charts, watchlists and traceable analysis in one place.**
+**Backtest an idea. Check the AI's evidence. Get alerted when it matters.**
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 ![Version](https://img.shields.io/badge/version-v0.11.27-blue) <!-- Keep aligned with VERSION. -->
 
-[中文](README.zh-CN.md) · [Operation demos](#operation-demos) · [Setup guide](#getting-started) · [Knowledge base](docs/knowledge-base/README.md)
+[中文](README.zh-CN.md) · [Capabilities](#capabilities) · [Operation demos](#operation-demos) · [Setup guide](#getting-started) · [Developer API](https://sida.win/developers)
 
 </div>
 
-![SIDA Pro stock research workspace](frontend/public/media/product/workbench-desktop.webp)
+SIDA Pro is a self-hostable **quantitative research workspace for China's A-share market**. Scan the market for candidates, test ideas with factor analysis, historical backtests and paper trading, and review the data and tool calls behind an AI diagnosis. Configure notifications to follow reports and alerts outside the dashboard. External agents and scripts can call research tools through the **Skill API**.
 
-SIDA connects the steps of personal stock research: understand the market, inspect a symbol, ask a technical question, then review the data and tool calls behind the analysis. It is self-hostable and proprietary; third-party projects retain their own licenses.
+> **Try asking: “Do the money flow, cost distribution and price action tell the same story for this stock?”** The built-in copilot can use the current symbol to select research tools. Open the run to inspect tool parameters, status and timing before drawing your own conclusion.
+
+![AI copilot showing the research tools used in an existing run](frontend/public/media/product/assistant-process.webp)
 
 > Screenshots and recordings: **2026-10-27 · v0.82.2**, real local browser sessions. Quotes are historical capture snapshots, not live prices or performance claims. Missing data, unconfigured models and disconnected optional services are preserved honestly.
 
@@ -34,24 +36,27 @@ Project repository: [SIDA Pro](https://github.com/xiaoze-hub/sida-pro). For the 
 
 The AI clip replays an existing tool history; it does not generate or imply a new AI conclusion. The mobile clip edits a draft without submitting it. Recording scope, limitations and reusable promotion copy are in [the media guide](docs/PRODUCT_DEMO.md).
 
-## A connected research workflow
+## Capabilities
 
 | Module | Purpose |
 | --- | --- |
-| **Market overview** | Index charts, market context and collapsible, customizable dashboard sections |
-| **Stock workspace** | Symbol picker for holdings/watchlists; K-line periods, technical overlays, chips and source labels |
-| **AI assistant** | Full workspace and floating mini view share a conversation; tool steps and run records remain available for review |
-| **Analysis evidence** | Caliber comparison, decision ledger and factor-validity views help distinguish data definitions and evidence |
-| **Personal workspace** | Account-scoped holdings/watchlists, shadow-account trade-journal import and analysis |
-| **Reports & notifications** | Review reports and configure subscriptions/channels; scheduling and delivery require configuration |
-| **System status** | Module dependency map, cached snapshot time, incremental refresh and connection evidence |
-| **Settings & API** | Categorized model/provider, appearance and notification settings; API Key / Skill integration |
+| **Market scanning** | Indices and ETFs, sector heatmaps, theme sentiment, limit-up streaks, call auctions and candidate scans. |
+| **Stock and flow data** | Quotes, technical indicators, cost distribution, fundamentals and news, large-trade analysis, comparisons of flow methodologies, exchange trading disclosures and quarterly institutional holdings. |
+| **Quant research and strategy testing** | Factor IC, IR and out-of-sample checks. The backtest API runs the built-in moving-average crossover strategy with configurable holding periods, stops and targets, returning trades, an equity curve and metrics. Paper trading and a decision ledger are separate tools. |
+| **AI analysis and native agents** | The copilot uses the active symbol and workspace context to call research tools or run specialized auction, theme and risk workflows. Runs are inspectable; proposed chart annotations require user confirmation. |
+| **Forecasting experiments** | Optional forecast engines expose model comparisons and historical validation, separate from strategy backtesting and paper trading. |
+| **Portfolio and trade review** | Account-scoped holdings and watchlists, shadow-account trade imports, reports and analysis history. |
+| **Multi-channel notifications** | Schedule or subscribe to reports and alerts; deliver in-app or through configured channels such as WeChat, WeCom and Telegram. |
+| **Skill API** | Browse the [Skill catalog](https://sida.win/api/skills/catalog) and invoke quote, technical analysis and trading-flow skills over HTTP. See the [developer documentation](https://sida.win/developers) for authentication, permissions and quotas. |
+| **Deployment and governance** | Multi-user permissions, model and channel settings, agent run history and usage, and service and data-source health. |
+
+Backtesting is currently API-based, not a visual strategy editor. Paper trades are simulated, not live orders. Backtests and AI output are not investment advice or promises of returns.
 
 ### Interface gallery
 
-| Market overview | Analysis process |
+| Market overview | Stock workspace |
 | --- | --- |
-| ![Market overview](frontend/public/media/product/dashboard-dark.webp) | ![Existing AI tool history](frontend/public/media/product/assistant-process.webp) |
+| ![Market overview](frontend/public/media/product/dashboard-dark.webp) | ![Stock research workspace](frontend/public/media/product/workbench-desktop.webp) |
 | **Service connection map** | **Categorized settings** |
 | ![System status](frontend/public/media/product/system-light.webp) | ![Settings](frontend/public/media/product/settings-light.webp) |
 
