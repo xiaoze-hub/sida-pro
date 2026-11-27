@@ -8,7 +8,7 @@
  * 2. 基线只收「同日 20/20 只齐备 + 同一批分钟」；没有可比样本时给「不给结论」，
  *    并且把被剔除的原因（篮子缺只 / 缺分钟）逐条摊开，而不是只说「基线不足」。
  */
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -93,9 +93,21 @@ describe('EtfWatch 覆盖口径', () => {
   })
 
   it('回退到残缺日时不将已采集数据说成完整', async () => {
-    mockIntraday({ ...common, state: 'insufficient', fallback_from: '20261110', conclusive: false })
+    mockIntraday({
+      ...common,
+      state: 'insufficient',
+      fallback_from: '20261110',
+      conclusive: false,
+      series: [series[0], { ...series[1], complete: false }],
+      totals: { ...common.totals, coverage: 0.5, full_minutes: 1, strict_minutes: 1, complete_minutes: 1 },
+    })
     render(<MemoryRouter><EtfWatchPage /></MemoryRouter>)
-    expect(await screen.findByText(/最近有数据的交易日 20261106 的已采集数据/)).toBeTruthy()
+    const status = within(await screen.findByRole('status', { name: 'ETF 分钟数据状态' }))
+    expect(status.getByText('历史回退')).toBeTruthy()
+    expect(status.getByText('2026-11-06').getAttribute('datetime')).toBe('2026-11-06')
+    expect(status.getByText(/未取得 2026-11-10 的数据；不是当前行情/)).toBeTruthy()
+    expect(screen.getByText('数据不全・不给结论')).toBeTruthy()
+    expect(screen.getByText(/只代表采到的部分，不是全天成交额/)).toBeTruthy()
     expect(document.body.textContent).not.toContain('的完整数据')
   })
 

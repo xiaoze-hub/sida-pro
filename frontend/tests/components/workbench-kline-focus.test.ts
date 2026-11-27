@@ -7,6 +7,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
 
 const root = resolve(__dirname, '../..')
@@ -14,6 +15,7 @@ const read = (p: string) => readFileSync(resolve(root, p), 'utf-8')
 
 const workbench = read('src/pages/StockWorkbench.tsx')
 const app = read('src/App.tsx')
+const css = postcss.parse(read('src/index.css'))
 
 describe('P0-1 个股工作台: 右栏默认折叠 + 宽度全部给 K 线', () => {
   it('右栏有折叠开关, 且默认值是"折叠"(只有显式存过 1 才展开)', () => {
@@ -35,9 +37,20 @@ describe('P0-1 个股工作台: 右栏默认折叠 + 宽度全部给 K 线', () 
     expect(workbench).toMatch(/RangeStatsCard stats=\{rangeStats\}/)
   })
 
-  it('容器放开 1500px 上限(工作台独占整宽)', () => {
-    expect(workbench).toContain('mx-auto min-w-0 max-w-none')
-    expect(workbench).not.toContain('max-w-[1500px]')
+  it('工作台复用统一页面容器，不另限制图表可用宽度', () => {
+    const shell = workbench.match(/<div className="(page-container\b[^"]*)"/)?.[1]
+    expect(shell?.split(/\s+/)).toContain('min-w-0')
+    expect(shell).not.toMatch(/\bmax-w-(?!none\b)\S+/)
+    const widthCaps: string[] = []
+    css.walkRules(/\.page-container\b/, (rule) => {
+      rule.walkDecls(/^(?:max-width|max-inline-size)$/, (decl) => {
+        if (decl.value !== 'none') widthCaps.push(decl.toString())
+      })
+      rule.walkAtRules('apply', (apply) => {
+        if (/\bmax-w-(?!none\b)\S+/.test(apply.params)) widthCaps.push(apply.params)
+      })
+    })
+    expect(widthCaps).toEqual([])
   })
 })
 
