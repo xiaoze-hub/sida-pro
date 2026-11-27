@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, time
+from datetime import date, datetime, time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from zoneinfo import ZoneInfo
@@ -91,8 +91,35 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
         "ingest_ok_count": stats["ok"],
         "ingest_failed_count": stats["fail"],
     }
-    _save_receipt(receipt)
     stats["coverage_receipt"] = receipt
+    try:
+        _save_receipt(receipt)
+        stats["coverage_receipt_persisted"] = True
+    except OSError as exc:
+        stats["coverage_receipt_persisted"] = False
+        logger.error("市场日线覆盖回执落盘失败: date=%s error=%s", receipt["trade_date"], type(exc).__name__)
     logger.info("市场日线覆盖回执: date=%s status=%s valid=%s expected=%d",
                 receipt["trade_date"], status, valid, expected)
+    return stats
+
+
+def daily_job_with_factors() -> dict:
+    """Run the legacy factor snapshot only after the upstream run has committed."""
+    from src.collectors.factor_daily import collect_once
+    from src.db.session import SessionLocal
+
+    stats = daily_job()
+    receipt = stats.get("coverage_receipt") or {}
+    if not receipt.get("valid_count"):
+        stats["factor_refresh"] = {"written": 0, "reason": "target_bars_unverified_or_empty"}
+        logger.warning("个股因子日快照跳过：目标日日线为空或无法核验 date=%s", receipt.get("trade_date"))
+        return stats
+
+    target = date.fromisoformat(receipt["trade_date"]).strftime("%Y%m%d")
+    try:
+        with SessionLocal() as db:
+            stats["factor_refresh"] = collect_once(db, trade_date=target)
+    except Exception as exc:  # noqa: BLE001 - preserve actual upstream result
+        stats["factor_refresh"] = {"written": 0, "reason": "collect_failed"}
+        logger.error("个股因子日快照计算失败: date=%s error=%s", target, type(exc).__name__)
     return stats

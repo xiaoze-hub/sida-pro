@@ -535,30 +535,6 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"ETF 分钟空源补缺注册失败: {e}")
 
-        # 个股因子日快照(2026-10-21): 收盘后算一次, 给全景诊断的「位置与因子」提供横截面分位。
-        try:
-            from src.core.trading_calendar import is_trading_day
-            from src.collectors.factor_daily import collect_once as _factor_collect
-
-            def _factor_job():
-                from datetime import datetime as _dt
-                if not is_trading_day(_dt.now().date()):
-                    return
-                from src.db.session import SessionLocal
-                db = SessionLocal()
-                try:
-                    _factor_collect(db)
-                finally:
-                    db.close()
-
-            rt.scheduler.scheduler.add_job(
-                _factor_job, "cron", hour=15, minute=35,
-                id="stock-factor-daily", name="个股因子日快照",
-                replace_existing=True, max_instances=1, coalesce=True,
-            )
-            logger.info("个股因子日快照已注册(交易日 15:35)")
-        except Exception as e:
-            logger.error(f"因子快照注册失败: {e}")
 
         # 龙虎榜金额「次日 TQ 回填」(2026-10-20 用户要求): 交易日 08:30 回填上一个交易日。
         # 当日榜单只有东财能枚举, 而 TQ 的 GP02 金额与东财分文不差且晚一天 —— 次日用 TQ 覆写,
@@ -1054,9 +1030,9 @@ async def lifespan(app):
             logger.error(f"龙虎榜机构/营业部明细回填注册失败: {e}")
 
         # 全市场日线(qfq)每日增量(v0.5.87, 老板批"全市场日线回填"): 交易日 16:00
-        # 对全 A 股跑 days=10 增量 upsert, 让连板天梯等逐股日K 覆盖全市场而非仅自选池。
+        # 上游增量提交并核验目标日后，再计算个股因子；不再按独立时钟抢跑。
         try:
-            from src.core.klines_daily_refresh import daily_job as klines_fullmarket_job
+            from src.core.klines_daily_refresh import daily_job_with_factors as klines_fullmarket_job
 
             rt.scheduler.scheduler.add_job(
                 klines_fullmarket_job,
@@ -1070,7 +1046,7 @@ async def lifespan(app):
                 max_instances=1,
                 coalesce=True,
             )
-            logger.info("全市场日线每日增量已注册(交易日 16:00)")
+            logger.info("全市场日线每日增量已注册(16:00，落库核验后计算个股因子)")
         except Exception as e:
             logger.error(f"全市场日线每日增量注册失败: {e}")
 
