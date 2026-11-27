@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date
 
 from sqlalchemy.orm import Session
 
@@ -41,13 +41,14 @@ def _trading_dates(db, days: int) -> list[str]:
 def backfill(db: Session, days: int = 30, limit: int | None = None) -> dict:
     from sqlalchemy import text
 
-    from src.collectors.factor_daily import compute_factors
+    from src.collectors.factor_daily import bars_through_trade_date, compute_factors
     from src.db.klines_repo import load_qfq_bars
     from src.db.models import StockFactorDaily
 
     dates = _trading_dates(db, days)
     if not dates:
         return {"written": 0, "reason": "no_dates"}
+    targets = [(day, date.fromisoformat(day)) for day in dates]
     try:
         with db.get_bind().connect() as conn:
             rows = conn.execute(text(
@@ -71,8 +72,8 @@ def backfill(db: Session, days: int = 30, limit: int | None = None) -> dict:
         if len(bars) < 60:
             skipped += 1
             continue
-        for day in dates:
-            use = [b for b in bars if str(b.get("date", "")).replace("-", "") <= day]
+        for day, target in targets:
+            use = bars_through_trade_date(bars, target)
             if len(use) < 60:
                 continue
             f = compute_factors(use)
