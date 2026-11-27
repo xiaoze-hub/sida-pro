@@ -3294,7 +3294,7 @@ export default function KlineChart(props: {
         {props.toolbarEnd && <div className="ml-auto">{props.toolbarEnd}</div>}
       </div>
       {isKlineVisible && (
-        <div data-testid="kline-freshness" data-phase={dataPhase}>
+        <div data-testid="kline-freshness" data-ui="chart-status" data-phase={dataPhase}>
           <MarketDataStatus
             subject="K 线数据状态"
             phase={dataPhase}

@@ -129,6 +129,7 @@ const enUS: Messages = {
   },
 
   dashboard: {
+    studioOverview: 'Market overview',
     title: 'Dashboard',
     subtitle: 'Market overview · Portfolio workspace',
     indices: 'Market Indices',

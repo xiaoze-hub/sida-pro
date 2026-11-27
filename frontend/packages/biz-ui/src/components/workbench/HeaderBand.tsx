@@ -542,7 +542,7 @@ export default function HeaderBand({
   const scoreText = suggestion ? `${suggestion.score >= 0 ? '+' : ''}${suggestion.score}` : '--'
 
   return (
-    <div className="card-surface rounded-xl bg-card px-4 py-3 shadow-panel" data-testid="workbench-header">
+    <div className="card-surface rounded-xl bg-card px-4 py-3 shadow-panel" data-testid="workbench-header" data-studio-surface="quote">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {/* 返回入口: 只有**确实知道来路**时才画(见 nav-back.ts 的三级降级); 紧凑文字按钮,
             不用卡片包 —— 与带内其它控件同一字阶(11px)。 */}

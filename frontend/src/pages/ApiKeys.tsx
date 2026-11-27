@@ -337,25 +337,25 @@ function KeyUsagePanel({ keyId }: { keyId: number }) {
 
   const pct = usage.daily_limit > 0 ? Math.round((usage.used_today / usage.daily_limit) * 100) : 0
   return (
-    <div className="mt-3 grid grid-cols-2 gap-3 border-t border-white/5 pt-3 sm:grid-cols-4">
+    <div data-studio-usage="panel" className="mt-3 grid grid-cols-2 gap-3 border-t border-white/5 pt-3 sm:grid-cols-4">
       <div>
         <div className="text-[12px] text-muted-foreground">今日已用</div>
-        <div className="font-mono text-[16px] font-semibold text-white">{usage.used_today}</div>
-        <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/5">
-          <div className="h-full rounded-full bg-cyan-500 transition-all" style={{ width: `${Math.min(pct, 100)}%` }} />
+        <div data-studio-stat="normal" className="font-mono text-[16px] font-semibold text-white">{usage.used_today}</div>
+        <div data-studio-usage="track" className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/5">
+          <div data-studio-usage="fill" className="h-full rounded-full bg-cyan-500 transition-all" style={{ width: `${Math.min(pct, 100)}%` }} />
         </div>
       </div>
       <div>
         <div className="text-[12px] text-muted-foreground">今日剩余</div>
-        <div className="font-mono text-[16px] font-semibold text-cyan-400">{usage.remaining_today}</div>
+        <div data-studio-stat="accent" className="font-mono text-[16px] font-semibold text-cyan-400">{usage.remaining_today}</div>
       </div>
       <div>
         <div className="text-[12px] text-muted-foreground">近 7 天</div>
-        <div className="font-mono text-[16px] font-semibold text-white">{usage.used_7d}</div>
+        <div data-studio-stat="normal" className="font-mono text-[16px] font-semibold text-white">{usage.used_7d}</div>
       </div>
       <div>
         <div className="text-[12px] text-muted-foreground">近 30 天</div>
-        <div className="font-mono text-[16px] font-semibold text-white">{usage.used_30d}</div>
+        <div data-studio-stat="normal" className="font-mono text-[16px] font-semibold text-white">{usage.used_30d}</div>
       </div>
     </div>
   )
@@ -370,19 +370,19 @@ function UsageOverview({ keys }: { keys: MyApiKey[] }) {
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">活跃 Key</div>
-        <div className="font-mono text-[20px] font-semibold text-white">{activeKeys.length}</div>
+        <div data-studio-stat="normal" className="font-mono text-[20px] font-semibold text-white">{activeKeys.length}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">总日限</div>
-        <div className="font-mono text-[20px] font-semibold text-white">{totalLimit}</div>
+        <div data-studio-stat="normal" className="font-mono text-[20px] font-semibold text-white">{totalLimit}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">已冻结</div>
-        <div className="font-mono text-[20px] font-semibold text-white">{keys.filter(k => k.status === 'frozen').length}</div>
+        <div data-studio-stat="normal" className="font-mono text-[20px] font-semibold text-white">{keys.filter(k => k.status === 'frozen').length}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[12px] text-muted-foreground">已禁用</div>
-        <div className="font-mono text-[20px] font-semibold text-red-400">{keys.filter(k => k.status === 'disabled').length}</div>
+        <div data-studio-stat="danger" className="font-mono text-[20px] font-semibold text-red-400">{keys.filter(k => k.status === 'disabled').length}</div>
       </InfoCard>
     </div>
   )
