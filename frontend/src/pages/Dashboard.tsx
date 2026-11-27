@@ -728,6 +728,7 @@ export default function DashboardPage() {
           数据**全部取自本页已有 state**(phaseKpi / marketFlow), 不新增请求; 缺数一律 `--`, 不用 0 顶。 */}
       <div
         data-testid="market-conclusion"
+        data-studio-surface="summary"
         className="card-surface mb-4 rounded-xl bg-card p-4"
       >
         {/* 2026-10-24: 右侧曾整片留白(14% 屏高只放 6 个数字) → 挂大盘分时走势带。
@@ -737,6 +738,7 @@ export default function DashboardPage() {
         <div className="min-w-0">
         {/* 结论句(2026-10-24 L2-A): 首屏先给一句非数字结论 —— 此前 8 个数字并排, 读完说不出结论。
             只用本页已有 state, 缺数如实写「未知/尚未识别」, 不用 0 顶。 */}
+        <p data-studio-kicker className="hidden md:block">{t('dashboard.studioOverview')}</p>
         <p className="text-[16px] font-medium leading-snug text-foreground">
           {phaseKpi.loading && !phaseKpi.label
             ? '正在取市场状态…'
@@ -748,7 +750,7 @@ export default function DashboardPage() {
           {phaseKpi.unavailableNote ? <span className="ml-1 text-[12px] text-muted-foreground">（{phaseKpi.unavailableNote}）</span> : null}
         </p>
         {/* 3 个结论数字: 涨停 / 涨跌 / 主线强度(无强度则主线名) */}
-        <div className="mt-2 grid grid-cols-3 gap-3">
+        <div data-studio-metrics className="mt-2 grid grid-cols-3 gap-3">
           <div>
             <div className="text-[12px] text-muted-foreground">涨停</div>
             <div className="font-num text-[20px] font-semibold tabular-nums text-stock-up">{phaseKpi.limitUp ?? '--'}</div>

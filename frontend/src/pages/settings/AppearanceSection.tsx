@@ -45,7 +45,7 @@ export function AppearanceSection() {
   }
 
   return (
-    <section id="sec-appearance" className="analysis-section">
+    <section id="sec-appearance" className="analysis-section" data-studio-surface="preferences">
       <div className="flex items-center justify-between mb-3">
         <div>
           <h3 className="text-[12px] md:text-[14px] font-semibold text-foreground">外观</h3>
@@ -56,7 +56,7 @@ export function AppearanceSection() {
       </div>
 
       {/* 主题 */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2" data-studio-setting="theme">
         <span className="w-12 shrink-0 text-[12px] text-muted-foreground">主题</span>
         {THEME_OPTIONS.map((o) => {
           const Icon = o.icon
@@ -66,6 +66,7 @@ export function AppearanceSection() {
               key={o.id}
               type="button"
               aria-pressed={active}
+              data-studio-theme-choice={o.id}
               onClick={() => setMode(o.id)}
               className={cn(
                 'inline-flex items-center gap-1 rounded border px-2 py-1 text-[12px] transition-colors duration-fast',
@@ -80,7 +81,7 @@ export function AppearanceSection() {
       </div>
 
       {/* 密度 */}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2" data-studio-setting="density">
         <span className="w-12 shrink-0 text-[12px] text-muted-foreground">密度</span>
         {DENSITY_OPTIONS.map((o) => {
           const active = density === o.id
@@ -103,7 +104,7 @@ export function AppearanceSection() {
       </div>
 
       {/* Dim / 焦点模式 */}
-      <div className="mt-3 flex flex-wrap items-center gap-4">
+      <div className="mt-3 flex flex-wrap items-center gap-4" data-studio-setting="options">
         <label className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
           <input type="checkbox" checked={dim} onChange={(e) => setDim(e.target.checked)} />
           <ZoomIn className="h-3.5 w-3.5" />

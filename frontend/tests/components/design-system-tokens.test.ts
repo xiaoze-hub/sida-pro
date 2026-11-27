@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { resolved, tokens, type UiTheme } from '../lib/design-token-utils'
 
 const ROOT = resolve(__dirname, '../..')
 const css = readFileSync(resolve(ROOT, 'src/index.css'), 'utf-8')
@@ -27,17 +28,19 @@ describe('Surface 阶梯', () => {
     expect(tw).toMatch(/heat:\s*\{/)
   })
 
-  it('图表画布比外壳更空一档(暗色: canvas 比 s0 更暗; 亮色: 比 s0 更白)', () => {
-    // 取 HSL 三元组里的**亮度**(第三个分量), 不是色度
-    const lightness = (decl: string) => {
-      const m = decl.match(/--[\w-]+:\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%/)
-      expect(m, `解析不出亮度: ${decl}`).toBeTruthy()
-      return Number(m![3])
+  it.each<UiTheme>(['light', 'dark', 'dim'])('%s 图表画布与页底保持层次（原主题和桌面工作区）', (theme) => {
+    const lightness = (value: string) => {
+      const m = value.match(/^\d+(?:\.\d+)? \d+(?:\.\d+)?% (\d+(?:\.\d+)?)%$/)
+      expect(m, `解析不出亮度: ${value}`).toBeTruthy()
+      return Number(m![1])
     }
-    const darkBlock = css.slice(css.lastIndexOf('--s0:'))
-    const s0 = lightness(darkBlock.match(/--s0: [^;]+/)![0])
-    const canvas = lightness(darkBlock.match(/--chart-canvas: [^;]+/)![0])
-    expect(canvas, '暗色下图表画布必须比页底更暗(更空一档)').toBeLessThan(s0)
+    for (const desktopWorkspace of [false, true]) {
+      const colors = tokens(theme, desktopWorkspace)
+      const s0 = lightness(resolved(colors, '--s0'))
+      const canvas = lightness(resolved(colors, '--chart-canvas'))
+      if (theme === 'light') expect(canvas).toBeGreaterThan(s0)
+      else expect(canvas).toBeLessThan(s0)
+    }
   })
 
   it('背景类不得表达涨跌 —— 由 R12 棘轮兜底(只减不增)', () => {

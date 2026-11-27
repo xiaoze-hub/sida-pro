@@ -5,7 +5,7 @@
 **Backtest an idea. Check the AI's evidence. Get alerted when it matters.**
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.11.28-blue) <!-- Keep aligned with VERSION. -->
+![Version](https://img.shields.io/badge/version-v0.11.29-blue) <!-- Keep aligned with VERSION. -->
 
 [中文](README.zh-CN.md) · [Capabilities](#capabilities) · [Operation demos](#operation-demos) · [Setup guide](#getting-started) · [Developer API](https://sida.win/developers)
 

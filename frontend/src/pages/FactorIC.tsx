@@ -45,6 +45,7 @@ function Spark({ series, title }: { series: number[]; title: string }) {
             x2={w - pad} y2={h - pad - ((0 - min) / span) * (h - pad * 2)}
             stroke="currentColor" strokeOpacity="0.25" strokeDasharray="2 2" strokeWidth="1" />
       <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2"
+                data-studio-ic={last === 0 ? 'neutral' : last > 0 ? 'positive' : 'negative'}
                 className={last >= 0 ? 'text-red-400' : 'text-emerald-400'} />
     </svg>
   )
@@ -156,12 +157,13 @@ function icCell(v: number | null, periods: number, minPeriods: number) {
     text: num(v),
     title: `横截面 IC, 期数 ${periods}`,
     cls: strong ? (v > 0 ? 'text-red-400' : 'text-emerald-400') : 'text-foreground',
+    tone: strong ? (v > 0 ? 'positive' : 'negative') : 'neutral',
   }
 }
 
 /**
  * IC 发散条（2026-10-24 L3-C）：IC 原来只是一个数字 + 颜色, 读者看不出「-0.04 是弱负相关还是有效」。
- * 改成以 0 为中轴的发散条：右侧红=正相关(A股红=好), 左侧绿=负相关, 长度按 |IC|/0.1 归一。
+ * 以 0 为中轴：右正左负，长度按 |IC|/0.1 归一。桌面使用独立统计色，不借用行情方向。
  * 只新增可视化, 不改任何 IC 计算与阈值。
  */
 function IcBar({ value }: { value: number | null | undefined }) {
@@ -173,13 +175,13 @@ function IcBar({ value }: { value: number | null | undefined }) {
       className="ml-2 inline-flex items-center align-middle"
       role="img"
       aria-label={`IC 发散条: ${value}（中轴为 0，右正左负）`}
-      title={`IC=${value}；中轴为 0，右侧红=正相关，左侧绿=负相关`}
+      title={`IC=${value}；中轴为 0，右侧为正相关，左侧为负相关`}
     >
       <span className="relative inline-block h-1.5 w-16 rounded bg-s2">
         {value >= 0 ? (
-          <span className="absolute left-1/2 top-0 h-1.5 rounded-r bg-stock-up" style={{ width: `${pct}%` }} />
+          <span data-studio-ic-bar data-studio-ic="positive" className="absolute left-1/2 top-0 h-1.5 rounded-r bg-stock-up" style={{ width: `${pct}%` }} />
         ) : (
-          <span className="absolute right-1/2 top-0 h-1.5 rounded-l bg-stock-down" style={{ width: `${pct}%` }} />
+          <span data-studio-ic-bar data-studio-ic="negative" className="absolute right-1/2 top-0 h-1.5 rounded-l bg-stock-down" style={{ width: `${pct}%` }} />
         )}
         <span className="absolute left-1/2 top-[-2px] h-2.5 w-px bg-border" />
       </span>
@@ -340,7 +342,7 @@ export default function FactorIC() {
                       <td className="min-w-[140px] px-2 py-1.5">
                         <FactorName code={r.code} />
                       </td>
-                      <td className={`px-2 py-1.5 text-right font-mono ${ic.cls}`} title={ic.title}>
+                      <td data-studio-ic={ic.tone} className={`px-2 py-1.5 text-right font-mono ${ic.cls}`} title={ic.title}>
                         {ic.text}
                         <IcBar value={r.ic_periods >= MIN_PERIODS && typeof r.ic === 'number' ? r.ic : null} />
                       </td>
@@ -348,7 +350,7 @@ export default function FactorIC() {
                         {num(r.ic_t, 2)}
                       </td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{num(r.ir, 2)}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono ${ho.cls}`} title={ho.title}>{ho.text}</td>
+                      <td data-studio-ic={ho.tone} className={`px-2 py-1.5 text-right font-mono ${ho.cls}`} title={ho.title}>{ho.text}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{num(r.ic_pooled)}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{r.sample_size}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">

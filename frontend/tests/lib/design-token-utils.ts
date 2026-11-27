@@ -6,13 +6,19 @@ export type UiTheme = 'light' | 'dark' | 'dim'
 const css = postcss.parse(readFileSync(resolve(__dirname, '../../src/index.css'), 'utf8'))
 
 /** 按真实选择器合并主题，避免将首个 Dim 声明误认成其他主题。 */
-export function tokens(theme: UiTheme): Record<string, string> {
+export function tokens(theme: UiTheme, studio = false): Record<string, string> {
   const values: Record<string, string> = {}
   const selectors = [':root', ...(theme !== 'light' ? ['.dark'] : []), ...(theme === 'dim' ? [".dark[data-theme='dim']"] : [])]
+  if (studio) {
+    selectors.push('html:has([data-desktop-studio])')
+    if (theme !== 'light') selectors.push('html.dark:has([data-desktop-studio])')
+    if (theme === 'dim') selectors.push("html.dark[data-theme='dim']:has([data-desktop-studio])")
+  }
   for (const selector of selectors) {
     css.walkRules((rule) => {
       if (rule.selector !== selector) return
-      if (rule.parent?.type === 'atrule' && rule.parent.name === 'media') return
+      if (rule.parent?.type === 'atrule' && rule.parent.name === 'media' &&
+          (!studio || rule.parent.params !== '(min-width: 768px)')) return
       rule.walkDecls((decl) => { values[decl.prop] = decl.value })
     })
   }

@@ -448,3 +448,216 @@ html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
     box-shadow: var(--shadow-overlay);
   }
 }
+
+/* Authenticated desktop workspace theme. Keep the boundary on the shell, not a route list.
+   Root tokens cover portal menus as well as the page. Public pages and widths below 768px
+   keep their existing theme; chart palettes and financial semantics are not overridden. */
+@media (min-width: 768px) {
+  html:has([data-desktop-studio]) {
+    --s0: 216 32% 95%;
+    --s1: 210 40% 99%;
+    --s2: 215 38% 94%;
+    --s3: 218 89% 93%;
+    --s4: 0 0% 100%;
+    --foreground: 219 40% 16%;
+    --muted-foreground: 216 19% 36%;
+    --primary: 221 79% 44%;
+    --accent-foreground: 221 74% 34%;
+    --studio-ic-positive: 222 70% 39%;
+    --studio-ic-negative: 269 59% 38%;
+    --border: 216 22% 87%;
+    --border-strong: 215 20% 75%;
+    --shadow-panel: 0 2px 4px hsl(220 40% 20% / .04), 0 8px 20px hsl(220 40% 20% / .055);
+    --studio-swatch-light: 210 40% 99%;
+    --studio-swatch-dark: 221 31% 14%;
+    --studio-rail: 215 40% 98%;
+    --studio-summary: 214 73% 97%;
+    --studio-gap: var(--density-4);
+    --studio-radius: .875rem;
+    --studio-float: 0 16px 44px hsl(220 44% 16% / .19), 0 3px 10px hsl(220 44% 16% / .10);
+  }
+  html.dark:has([data-desktop-studio]) {
+    --s0: 221 37% 8%;
+    --s1: 221 31% 14%;
+    --s2: 221 29% 18%;
+    --s3: 220 39% 24%;
+    --s4: 220 29% 23%;
+    --foreground: 214 41% 95%;
+    --muted-foreground: 216 23% 74%;
+    --primary: 216 95% 76%;
+    --accent-foreground: 215 95% 85%;
+    --studio-ic-positive: 219 96% 78%;
+    --studio-ic-negative: 273 83% 80%;
+    --border: 218 23% 23%;
+    --border-strong: 215 22% 36%;
+    --shadow-panel: 0 5px 18px hsl(220 50% 2% / .22);
+    --studio-rail: 221 35% 11%;
+    --studio-summary: 218 43% 16%;
+    --studio-float: 0 18px 50px hsl(220 50% 2% / .53), 0 2px 9px hsl(220 50% 2% / .30);
+  }
+  html.dark[data-theme='dim']:has([data-desktop-studio]) {
+    --s0: 218 23% 10%;
+    --s1: 218 24% 16%;
+    --s2: 218 21% 20%;
+    --s3: 218 27% 24%;
+    --s4: 218 23% 26%;
+    --foreground: 215 29% 90%;
+    --muted-foreground: 215 19% 72%;
+    --studio-rail: 218 24% 13%;
+    --studio-summary: 217 29% 18%;
+  }
+
+  html:has([data-desktop-studio]) [data-shell-aside] {
+    background: hsl(var(--studio-rail));
+  }
+  [data-desktop-studio] [data-ui='workspace-tabs'] {
+    background: hsl(var(--s1));
+    border: 0;
+    border-radius: var(--studio-radius);
+    box-shadow: var(--shadow-panel);
+    padding: .375rem;
+  }
+  [data-desktop-studio] [data-ui='workspace-tab-item'][data-active='true'] {
+    background: hsl(var(--s3));
+    box-shadow: none;
+  }
+  [data-desktop-studio] [data-ui='workspace-tabs'] [role='tab'][aria-selected='true'] {
+    color: hsl(var(--accent-foreground));
+  }
+  [data-desktop-studio] .page-header { margin-bottom: var(--studio-gap); }
+  [data-desktop-studio] .page-title {
+    font-size: 20px;
+    line-height: 1.25;
+    font-weight: 700;
+    letter-spacing: -.015em;
+  }
+  [data-desktop-studio] :is(.card, .card-hover, .analysis-section),
+  [data-desktop-studio] [data-studio-surface] { border-radius: var(--studio-radius); }
+
+  [data-desktop-studio] [data-ui='page-tabs'] {
+    border-color: transparent;
+    border-radius: .625rem;
+  }
+  [data-desktop-studio] [data-ui='page-tabs'] [role='tab'][aria-selected='true'],
+  [data-desktop-studio] [data-ui='segment-tab'][data-state='active'] {
+    background: hsl(var(--s3));
+    color: hsl(var(--accent-foreground));
+  }
+  [data-desktop-studio] [data-ui='page-tabs'] [role='tab'][aria-selected='true']:not(:focus-visible) {
+    box-shadow: none;
+  }
+
+  /* Give data tables the same opaque header band, including sticky headers.
+     A table needing a different semantic header can explicitly opt out. */
+  [data-desktop-studio] table:has(> thead) {
+    font-variant-numeric: tabular-nums;
+  }
+  [data-desktop-studio] table > thead:not([data-studio-header='plain']) {
+    background-color: hsl(var(--s2));
+  }
+  [data-desktop-studio] table > thead th {
+    font-weight: 600;
+  }
+  [data-desktop-studio] [data-studio-stat='normal'] {
+    color: hsl(var(--foreground));
+  }
+  [data-desktop-studio] [data-studio-stat='accent'] { color: hsl(var(--primary)); }
+  [data-desktop-studio] [data-studio-stat='danger'] { color: hsl(var(--destructive)); }
+  [data-desktop-studio] [data-studio-usage='panel'] { border-color: hsl(var(--border)); }
+  [data-desktop-studio] [data-studio-usage='track'] { background-color: hsl(var(--s3)); }
+  [data-desktop-studio] [data-studio-usage='fill'] { background-color: hsl(var(--primary)); }
+  [data-desktop-studio] [data-studio-ic='positive'] { color: hsl(var(--studio-ic-positive)); }
+  [data-desktop-studio] [data-studio-ic='negative'] { color: hsl(var(--studio-ic-negative)); }
+  [data-desktop-studio] [data-studio-ic='neutral'] { color: hsl(var(--muted-foreground)); }
+  [data-desktop-studio] [data-studio-ic-bar] { background-color: currentColor; }
+
+  /* Radix portals live outside main but inside the same document. Scope their shared
+     components to the shell, without adjusting positioning, focus, layering or motion. */
+  html:has([data-desktop-studio]) :is([data-ui='dialog'], [data-ui='popover'], [data-ui='select-menu']) {
+    background-color: hsl(var(--s4));
+    box-shadow: var(--studio-float);
+  }
+  html:has([data-desktop-studio]) :is([data-ui='dialog'][data-placement='center'], [data-ui='popover'], [data-ui='select-menu']) {
+    border-radius: var(--studio-radius);
+  }
+  html:has([data-desktop-studio]) [data-ui='dialog-title'] {
+    line-height: 1.35;
+    letter-spacing: -.01em;
+  }
+
+  [data-desktop-studio] [data-studio-surface='summary'] {
+    padding: var(--density-6);
+    background: hsl(var(--studio-summary));
+    box-shadow: var(--shadow-panel);
+  }
+  [data-desktop-studio] [data-studio-kicker] {
+    color: hsl(var(--accent-foreground));
+    margin-bottom: var(--density-2);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .08em;
+  }
+  [data-desktop-studio] [data-studio-metrics] {
+    border-radius: .625rem;
+    background: hsl(var(--s1));
+    padding: var(--density-3) var(--density-4);
+  }
+  [data-desktop-studio] [data-studio-metrics] .font-num {
+    line-height: 1.35;
+    letter-spacing: -.025em;
+  }
+
+  [data-desktop-studio] [data-studio-surface='quote'] {
+    background: hsl(var(--studio-summary));
+  }
+  [data-desktop-studio] [data-studio-chart] {
+    padding-top: var(--density-3);
+  }
+  [data-desktop-studio] [data-ui='chart-status'] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  [data-desktop-studio] [data-section-workspace] > nav {
+    border-radius: var(--studio-radius);
+    background: hsl(var(--studio-rail));
+  }
+  [data-desktop-studio] [data-studio-surface='preferences'] {
+    padding: var(--density-6);
+  }
+  [data-desktop-studio] [data-studio-surface='preferences'] h3 {
+    font-size: 16px;
+  }
+  [data-desktop-studio] [data-studio-setting] {
+    padding-block: var(--density-3);
+    border-top: 1px solid hsl(var(--border));
+  }
+  [data-desktop-studio] [data-studio-setting] button {
+    min-height: 2.25rem;
+    padding-inline: .75rem;
+    border-radius: .5rem;
+  }
+  [data-desktop-studio] [data-studio-setting] button:hover,
+  [data-desktop-studio] [data-studio-setting] button[aria-pressed='true'] {
+    color: hsl(var(--accent-foreground));
+    background: hsl(var(--s3));
+  }
+  [data-desktop-studio] [data-studio-theme-choice]::before {
+    content: '';
+    display: inline-block;
+    width: .875rem;
+    height: .875rem;
+    border: 1px solid hsl(var(--border-strong));
+    border-radius: .25rem;
+    background: hsl(var(--s1));
+  }
+  [data-desktop-studio] [data-studio-theme-choice='light']::before {
+    background: hsl(var(--studio-swatch-light));
+  }
+  [data-desktop-studio] [data-studio-theme-choice='dark']::before {
+    background: hsl(var(--studio-swatch-dark));
+  }
+  [data-desktop-studio] [data-studio-theme-choice='system']::before {
+    background: hsl(var(--studio-swatch-light));
+    border-inline-end: .4375rem solid hsl(var(--studio-swatch-dark));
+  }
+}
