@@ -119,7 +119,7 @@ def bars_through_trade_date(bars: list[dict], target: date) -> list[dict]:
             break
         prefix.append(bar)
         previous = day
-    if previous != target:
+    if not prefix or previous != target:
         return []
     # A row with no usable close is not evidence of a target-day close.
     try:

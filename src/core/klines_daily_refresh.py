@@ -50,7 +50,7 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
     )
     from src.db.session import engine
     from src.db.klines_repo import count_factor_ready_cn_bars
-    from src.core.trading_calendar import is_trading_day
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day
     from src.models.market import MarketCode
 
     started = _now_cn()
@@ -65,7 +65,16 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
     )
     logger.info("全市场日线增量完成: universe=%d ok=%d fail=%d",
                 len(universe), stats["ok"], stats["fail"])
-    if started.time() < time(15) or not is_trading_day(started.date()):
+    if started.time() < time(15):
+        stats["coverage_skipped"] = "before_close"
+        return stats
+    try:
+        if not is_trading_day(started.date()):
+            stats["coverage_skipped"] = "non_trading_day"
+            return stats
+    except TradingCalendarError:
+        stats["coverage_skipped"] = "calendar_unverified"
+        logger.warning("市场日线覆盖无法核验：缺交易日历 date=%s", started.date())
         return stats
 
     expected = len(main_universe)
@@ -76,7 +85,7 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
             valid = candidate
     except Exception as exc:  # noqa: BLE001 - coverage failure remains explicitly unknown
         logger.warning("市场日线覆盖无法核验: %s", type(exc).__name__)
-    status = ("unverified" if valid is None or not expected else
+    status = ("universe_empty" if not expected else "unverified" if valid is None else
               "empty" if not valid else "complete" if valid == expected else "partial")
     receipt = {
         "version": 1,
@@ -106,20 +115,30 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
 def daily_job_with_factors() -> dict:
     """Run the legacy factor snapshot only after the upstream run has committed."""
     from src.collectors.factor_daily import collect_once
-    from src.db.session import SessionLocal
+    from src.db.session import WriteSessionLocal
 
     stats = daily_job()
     receipt = stats.get("coverage_receipt") or {}
+    coverage = {
+        "coverage_status": receipt.get("status", "not_attempted"),
+        "coverage_valid_count": receipt.get("valid_count"),
+        "coverage_expected_count": receipt.get("expected_count"),
+    }
     if not receipt.get("valid_count"):
-        stats["factor_refresh"] = {"written": 0, "reason": "target_bars_unverified_or_empty"}
-        logger.warning("个股因子日快照跳过：目标日日线为空或无法核验 date=%s", receipt.get("trade_date"))
+        reason = stats.get("coverage_skipped") or {
+            "empty": "target_bars_empty",
+            "universe_empty": "universe_empty",
+        }.get(coverage["coverage_status"], "target_bars_unverified")
+        stats["factor_refresh"] = {"written": 0, "reason": reason, **coverage}
+        if reason not in ("before_close", "non_trading_day"):
+            logger.warning("个股因子日快照跳过: date=%s reason=%s", receipt.get("trade_date"), reason)
         return stats
 
     target = date.fromisoformat(receipt["trade_date"]).strftime("%Y%m%d")
     try:
-        with SessionLocal() as db:
-            stats["factor_refresh"] = collect_once(db, trade_date=target)
+        with WriteSessionLocal() as db:
+            stats["factor_refresh"] = {**collect_once(db, trade_date=target), **coverage}
     except Exception as exc:  # noqa: BLE001 - preserve actual upstream result
-        stats["factor_refresh"] = {"written": 0, "reason": "collect_failed"}
+        stats["factor_refresh"] = {"written": 0, "reason": "collect_failed", **coverage}
         logger.error("个股因子日快照计算失败: date=%s error=%s", target, type(exc).__name__)
     return stats

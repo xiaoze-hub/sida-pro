@@ -17,7 +17,8 @@ def test_scheduled_factor_refresh_waits_for_verified_bar_ingest(monkeypatch, usa
 
     def kline_job() -> dict:
         calls.append('klines committed')
-        return {'coverage_receipt': {'trade_date': '2026-11-27', 'valid_count': 2 if usable else 0}}
+        return {'coverage_receipt': {'trade_date': '2026-11-27', 'valid_count': 2 if usable else 0,
+                                     'expected_count': 2, 'status': 'complete' if usable else 'empty'}}
 
     def collect(got_db: object, *, trade_date: str) -> dict:
         assert got_db is db
@@ -25,10 +26,17 @@ def test_scheduled_factor_refresh_waits_for_verified_bar_ingest(monkeypatch, usa
         return {'written': 2, 'skipped': 0}
 
     monkeypatch.setattr(refresh, 'daily_job', kline_job)
-    monkeypatch.setattr(session, 'SessionLocal', lambda: nullcontext(db))
+    def replica() -> None:
+        pytest.fail('The factor job must not open a routed/replica session')
+
+    monkeypatch.setattr(session, 'SessionLocal', replica)
+    monkeypatch.setattr(session, 'WriteSessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(factor_daily, 'collect_once', collect)
-    refresh.daily_job_with_factors()
+    stats = refresh.daily_job_with_factors()
     assert calls == (['klines committed', '20261127'] if usable else ['klines committed'])
+    assert stats['factor_refresh']['coverage_status'] == ('complete' if usable else 'empty')
+    if not usable:
+        assert stats['factor_refresh']['reason'] == 'target_bars_empty'
 
 
 def test_receipt_disk_failure_preserves_ingest_stats(monkeypatch, tmp_path: Path) -> None:

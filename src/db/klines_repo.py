@@ -18,7 +18,11 @@ CN_TRADING_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def count_factor_ready_cn_bars(engine: Engine, trade_date: date, symbols: list[str]) -> int:
-    """Count target-day bars in the factor input caliber, not raw ingest rows."""
+    """Count usable traded bars, not all input rows of the legacy factor loader.
+
+    The denominator includes halted/unknown-status names; zero-volume rows
+    and flagged bars do not satisfy tradable coverage, even when ingested.
+    """
     if not symbols:
         return 0
     lo = datetime.combine(trade_date, time.min, CN_TRADING_TZ)
