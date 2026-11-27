@@ -21,8 +21,9 @@ vi.mock('../../src/lib/copilot/api', () => ({
 }))
 
 import { CopilotCapsule } from '../../src/components/copilot/CopilotCapsule'
+import type { CopilotBrief } from '../../src/lib/copilot/types'
 
-const BRIEF = {
+const BRIEF: CopilotBrief = {
   symbol: '600111',
   market: 'CN',
   name: '北方稀土',
@@ -31,13 +32,13 @@ const BRIEF = {
   session: { phase: 'intraday', is_trading: true, stale: false, age_s: 3, trade_date: '20261018' },
   quote: { available: true, close: 35.32, change_pct: 1.2, prev_close: 34.9, open: null, high: null, low: null, source: 'tq', as_of: null, degraded_reason: null },
   evidence: {
-    chips: { available: true, caliber: 'CYQ', as_of: null, degraded_reason: null, gated: false, main_cost: 35.2, cost_70_low: 33.44, cost_70_high: 36.96, profit_ratio: 91 },
-    resonance: { available: true, caliber: 'TQ', as_of: null, degraded_reason: null, gated: false, resonance_state: '⭐ 共振向好', activity: 3.2 },
-    microstructure: { available: true, caliber: 'TQ撤单', as_of: null, degraded_reason: null, gated: false, b_cancel_ratio: 0.42, s_cancel_ratio: 0.31, session_fallback: false },
-    wyckoff: { available: true, caliber: '日K', as_of: null, degraded_reason: null, gated: false, recent: [] },
-    auction: { available: false, caliber: '竞价', as_of: null, degraded_reason: null, gated: false },
-    demon: { available: false, caliber: '妖股', as_of: null, degraded_reason: null, gated: false },
-    theme: { available: false, caliber: '题材', as_of: null, degraded_reason: null, gated: false },
+    chips: { available: true, caliber: 'CYQ', as_of: null, degraded_reason: null, gated: false, main_cost: 35.2, cost_70_low: 33.44, cost_70_high: 36.96, profit_ratio: 91, peak_price: null, peak_ratio: null, cost_90_low: null, cost_90_high: null, profit_state: null, concentration: null, pattern: null, status_label: null, signal_level: null, departure_pct: null, lookback_days: null },
+    resonance: { available: true, caliber: 'TQ', as_of: null, degraded_reason: null, gated: false, resonance_state: '⭐ 共振向好', activity: 3.2, gs_zone: null, gs_signal: null, gs_signal_date: null, gs_pending: null, activity_level: null, activity_above_strong: null, activity_streak_days: null, activity_ma5: null, l2_net_wan: null, l2_direction: null, l2_cancel_rate: null, l2_cancel_bias: null, resonance_action: null, resonance_warning: null },
+    microstructure: { available: true, caliber: 'TQ撤单', as_of: null, degraded_reason: null, gated: false, b_cancel_ratio: 0.42, s_cancel_ratio: 0.31, session_fallback: false, cancel_bias: null, activity_score: null, intent_tag: null, intent_desc: null, warning_level: null, volume_ratio: null, turnover_rate: null },
+    wyckoff: { available: true, caliber: '日K', as_of: null, degraded_reason: null, gated: false, recent: [], stage: null, stage_label: null, effort_result: null, markers_count: null, note: null },
+    auction: { available: false, caliber: '竞价', as_of: null, degraded_reason: null, gated: false, verdict_tag: null, verdict_level: null, verdict_action: null, gap_pct: null, open_amount: null, volume_ratio: null, withdraw_rate: null, open_zt_buy: null },
+    demon: { available: false, caliber: '妖股', as_of: null, degraded_reason: null, gated: false, total: null, grade: null, max_streak: null, n_events: null, n_sealed: null, participation: null, dims: {}, flags: [], in_top50: null, rank: null },
+    theme: { available: false, caliber: '题材', as_of: null, degraded_reason: null, gated: false, group: null, rank: null, limit_up_count: null, leader: null, is_top5: null },
   },
   verdict: {
     intent_label: '低位单峰 · 筹码锁定良好',
@@ -64,15 +65,16 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('CopilotCapsule', () => {
-  it('紧凑工具栏不改写旧折叠状态，并直接用当前标的打开分析', async () => {
+  it('紧凑工具栏不改写旧折叠状态，并直接用当前标的打开分析', () => {
     const key = 'copilot_capsule_hidden:600111'
     localStorage.setItem(key, '1')
     const onOpen = vi.fn()
     window.addEventListener('sida-open-chat', onOpen)
     try {
-      render(<CopilotCapsule symbol="600111" presentation="inline" compact />)
+      const view = render(<CopilotCapsule symbol="600111" presentation="inline" compact toolbarBrief={BRIEF} />)
       const button = screen.getByRole('button', { name: '打开分析' })
-      await waitFor(() => expect(button.getAttribute('title')).toBe(BRIEF.verdict.intent_label))
+      const callsBefore = mocks.getCopilotBrief.mock.calls.length
+      expect(button.getAttribute('title')).toContain('打开盘口参谋')
       expect(button.classList.contains('fixed')).toBe(false)
       fireEvent.click(button)
       expect(onOpen).toHaveBeenCalledTimes(1)
@@ -80,6 +82,13 @@ describe('CopilotCapsule', () => {
         symbol: '600111', pageContext: expect.stringContaining(BRIEF.as_of),
       })
       expect(localStorage.getItem(key)).toBe('1')
+      view.rerender(<CopilotCapsule symbol="600519" presentation="inline" compact toolbarBrief={BRIEF} />)
+      fireEvent.click(screen.getByRole('button', { name: '打开分析' }))
+      expect(onOpen.mock.calls[1][0].detail).toMatchObject({
+        symbol: '600519', pageContext: expect.stringContaining('尚无参谋快照'),
+      })
+      expect(onOpen.mock.calls[1][0].detail.pageContext).not.toContain(BRIEF.as_of)
+      expect(mocks.getCopilotBrief.mock.calls).toHaveLength(callsBefore)
     } finally {
       window.removeEventListener('sida-open-chat', onOpen)
     }

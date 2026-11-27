@@ -424,7 +424,9 @@ export default function EtfWatchPage() {
                     date={intradayDate}
                     label={missingDate ? '历史回退' : partialIntraday ? '数据不全' : undefined}
                   >
-                    {missingDate && <span>未取得 {missingDate} 的数据；不是当前行情</span>}
+                    {missingDate && intraday && (
+                      <span>未取得 {missingDate} 的数据；不是当前行情。数据日为{PHASE_LABEL[intraday.phase] || '未知'}，当前时段为{PHASE_LABEL[intraday.session_phase || ''] || '未知'}。</span>
+                    )}
                   </MarketDataStatus>
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -455,15 +457,6 @@ export default function EtfWatchPage() {
                   />
                 </div>
 
-                {intraday?.fallback_from ? (
-                  <div className="mt-3 flex items-start gap-2 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] leading-6 text-role-watch">
-                    <Info className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span>
-                      今日（{intraday.fallback_from}）的分钟数据尚未就绪，当前显示最近有数据的交易日 {intraday.date} 的已采集数据。
-                      这不是今天的行情（数据日 {intraday.date} 为{PHASE_LABEL[intraday.phase] || '未知'}，当前时段 {PHASE_LABEL[intraday.session_phase || ''] || '未知'}）。
-                    </span>
-                  </div>
-                ) : null}
 
                 {intraday?.state === 'insufficient' ? (
                   <div className="mt-3 space-y-1 rounded-lg bg-role-watch/10 px-3 py-2 text-[12px] leading-6 text-role-watch">

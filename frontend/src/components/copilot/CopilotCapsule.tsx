@@ -106,14 +106,19 @@ export function CopilotCapsule({
   stockName,
   presentation = 'floating',
   compact = false,
+  toolbarBrief,
 }: {
   symbol: string
   market?: string
   stockName?: string
   presentation?: 'inline' | 'floating'
   compact?: boolean
+  toolbarBrief?: CopilotBrief | null
 }) {
-  const { data } = useCopilotBrief(symbol, market, { timeoutMs: 15000 })
+  const toolbarOnly = presentation === 'inline' && compact
+  const { data: fetched } = useCopilotBrief(symbol, market, { enabled: !toolbarOnly, timeoutMs: 15000 })
+  const brief = toolbarOnly ? toolbarBrief : fetched
+  const data = brief?.symbol === symbol && brief.market === market ? brief : null
   const [hidden, setHidden] = useState(false)
   const [pos, setPos] = useState<CapsulePosition | null>(readStoredPosition)
   const [dragging, setDragging] = useState(false)
@@ -287,13 +292,13 @@ export function CopilotCapsule({
     onClickCapture: handleClickCapture,
   }
 
-  if (presentation === 'inline' && compact) {
+  if (toolbarOnly) {
     return (
       <button
         type="button"
         onClick={open}
         data-testid="copilot-capsule-open"
-        title={data?.verdict.intent_label || '结合当前标的查看分析证据'}
+        title={CAPSULE_HINT}
         className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md bg-s2 px-2.5 text-[12px] font-medium text-primary hover:bg-s3"
       >
         <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />

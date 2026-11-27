@@ -8,6 +8,7 @@ import HeaderBand from '@sida/biz-ui/components/workbench/HeaderBand'
 import { QuoteSymbolPicker } from '@/components/QuoteSymbolPicker'
 import { loadQuoteUniverse, preferredQuote, quotePath, rememberQuote } from '@/lib/quote-universe'
 import { CopilotCapsule } from '@/components/copilot/CopilotCapsule'
+import { useCopilotBrief } from '@/hooks/useCopilotBrief'
 import { DisciplineCoolDownBanner } from '@/components/DisciplineCoolDownBanner'
 import { DefenseLineBanner } from '@/components/DefenseLineBanner'
 import Fund4Strip, { type Fund4Day } from '@sida/biz-ui/components/Fund4Strip'
@@ -612,9 +613,11 @@ export default function StockWorkbench() {
     if (s) setStatsDismissed(false)
   }, [])
 
+  // The workbench owns the brief; chart refresh remounts only the toolbar button.
+  const { data: toolbarBrief } = useCopilotBrief(symbol, MARKET, { enabled: active && type === 'stock', timeoutMs: 15000 })
   const copilotToolbar = useMemo(
-    () => <CopilotCapsule symbol={symbol} market={MARKET} presentation="inline" compact />,
-    [symbol, MARKET],
+    () => <CopilotCapsule symbol={symbol} market={MARKET} presentation="inline" compact toolbarBrief={toolbarBrief} />,
+    [symbol, MARKET, toolbarBrief],
   )
 
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
@@ -789,9 +792,6 @@ export default function StockWorkbench() {
         </div>
       )}
 
-      {/* AI 数智参谋常驻唤醒胶囊(2026-10-18, 设计稿 §9.2④): 只挂个股分支。
-          指数/板块没有筹码/撤单证据, 挂了只会给出空结论 —— 不挂。
-          挂在这一层(不在 key={refreshKey} 子树内): 页面刷新不重挂载, 胶囊不闪、不重取数。 */}
 
     </div>
   )

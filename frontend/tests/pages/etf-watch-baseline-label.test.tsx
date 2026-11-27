@@ -94,6 +94,8 @@ it('历史回退不把旧成交额标成当天', async () => {
   expect(status.textContent).toContain('历史回退')
   expect(status.textContent).toContain('数据截至 2026-11-06')
   expect(status.textContent).toContain('未取得 2026-11-09')
+  expect(status.textContent).toContain('当前时段为')
+  expect(screen.queryByText(/分钟数据尚未就绪，当前显示最近/)).toBeNull()
   expect(screen.getByText('数据日累计成交额')).toBeTruthy()
   expect(screen.queryByText('今日累计成交额')).toBeNull()
   expect(screen.getByRole('img', { name: /数据日累计成交额与同期基线/ })).toBeTruthy()
