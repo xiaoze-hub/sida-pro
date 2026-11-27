@@ -5,7 +5,7 @@
 **用回测检验想法，让 AI 拿数据说话，把盯盘交给提醒。**
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.11.27-blue) <!-- Keep aligned with VERSION. -->
+![Version](https://img.shields.io/badge/version-v0.11.28-blue) <!-- Keep aligned with VERSION. -->
 
 [English](README.md) · [核心能力](#核心能力) · [操作演示](#操作演示) · [开始使用](#开始使用) · [开发者 API](https://sida.win/developers)
 
