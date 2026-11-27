@@ -70,7 +70,8 @@ vi.mock('@sida/api', () => ({
     if (u.includes('/chan-structure')) {
       return H.structure ? H.structure(u) : Promise.resolve({})
     }
-    if (u.includes('/klines/') && u.includes('?')) {
+    // Count only primary bars, never /summary, /patterns or other layer calls.
+    if (/^\/klines\/[^/?]+\?/.test(u)) {
       return H.klines ? H.klines(u) : Promise.resolve({ klines: [] })
     }
     // summary / patterns / wyckoff / chart-notes / scenario / indicators … 一律空响应:
