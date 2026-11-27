@@ -7,9 +7,38 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
+CN_TRADING_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def count_factor_ready_cn_bars(engine: Engine, trade_date: date, symbols: list[str]) -> int:
+    """Count target-day bars in the factor input caliber, not raw ingest rows."""
+    if not symbols:
+        return 0
+    lo = datetime.combine(trade_date, time.min, CN_TRADING_TZ)
+    hi = lo + timedelta(days=1)
+    with engine.begin() as conn:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        conn.execute(text("SET LOCAL statement_timeout = '12s'"))
+        return conn.execute(text("""
+            SELECT count(*) FROM (
+                SELECT DISTINCT ON (symbol) close, volume, quality_flag
+                FROM klines
+                WHERE period='1d' AND adjust='qfq' AND market='CN'
+                  AND ts >= :lo AND ts < :hi AND symbol = ANY(:symbols)
+                  AND source IN ('tq', 'tencent')
+                ORDER BY symbol, CASE WHEN source='tq' THEN 0 ELSE 1 END, ts
+            ) picked
+            WHERE close > 0 AND close < 'Infinity'::double precision
+              AND volume > 0 AND volume < 'Infinity'::double precision
+              AND quality_flag = 1
+        """), {"lo": lo, "hi": hi, "symbols": symbols}).scalar_one()
 
 
 def _norm_market(market) -> str:
@@ -25,8 +54,6 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
 
     查库失败返回 [] (调用方决定是否联网兜底), 不抛异常。
     """
-    from sqlalchemy import text
-
     try:
         mc_str = _norm_market(market)
         # P0(2026-09-18): 复用主引擎单例(src/db/session.py, 与主引擎同一连接池/参数),
@@ -47,13 +74,18 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
                 ),
                 {"s": symbol, "m": mc_str, "c": cutoff},
             ).fetchall()
-        out, seen = [], set()
+        by_day: dict[str, tuple[int, dict]] = {}
         for r in rows:
-            day = str(r[0])[:10]
-            if day in seen:      # 同一天 tq 已取过，跳过 tencent 副本
+            ts = r[0]
+            day = (
+                ts.astimezone(CN_TRADING_TZ).date().isoformat()
+                if mc_str == "CN" and isinstance(ts, datetime) and ts.utcoffset() is not None
+                else str(ts)[:10]
+            )
+            priority = int(r[6] == "tq")
+            if day in by_day and (mc_str != "CN" or priority <= by_day[day][0]):
                 continue
-            seen.add(day)
-            out.append({
+            by_day[day] = (priority, {
                 "date": day,
                 "open": float(r[1]),
                 "high": float(r[2]),
@@ -61,7 +93,7 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
                 "close": float(r[4]),
                 "volume": float(r[5] or 0),
             })
-        return out
+        return [by_day[day][1] for day in sorted(by_day)]
     except Exception as e:
         logger.warning(f"[klines_repo] 查 PG klines 失败 {symbol}: {e}")
         return []

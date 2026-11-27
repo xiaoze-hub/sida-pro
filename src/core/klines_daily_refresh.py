@@ -8,9 +8,35 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+from datetime import datetime, time
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+
+def _now_cn() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Shanghai"))
+
+
+def _save_receipt(receipt: dict) -> None:
+    """Atomic replace: readers must never see a half-written receipt."""
+    dest = Path(os.environ.get("DATA_DIR") or "./data") / "reports" / "kline_coverage"
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / f"{receipt['trade_date']}.json"
+    tmp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=dest, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            json.dump(receipt, tmp, ensure_ascii=False, sort_keys=True)
+        tmp_path.replace(path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def daily_job(days: int = 10, concurrency: int = 8) -> dict:
@@ -23,9 +49,13 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
         run_backfill,
     )
     from src.db.session import engine
+    from src.db.klines_repo import count_factor_ready_cn_bars
+    from src.core.trading_calendar import is_trading_day
     from src.models.market import MarketCode
 
-    universe = merge_universe(a_share_universe(get_stock_list()), limit_up_symbols())
+    started = _now_cn()
+    main_universe = a_share_universe(get_stock_list())
+    universe = merge_universe(main_universe, limit_up_symbols())
 
     async def ingest(symbol: str, d: int) -> dict:
         return await ingest_symbol(engine, symbol, MarketCode.CN, "1d", d)
@@ -35,4 +65,34 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
     )
     logger.info("全市场日线增量完成: universe=%d ok=%d fail=%d",
                 len(universe), stats["ok"], stats["fail"])
+    if started.time() < time(15) or not is_trading_day(started.date()):
+        return stats
+
+    expected = len(main_universe)
+    valid: int | None = None
+    try:
+        candidate = count_factor_ready_cn_bars(engine, started.date(), main_universe)
+        if 0 <= candidate <= expected:
+            valid = candidate
+    except Exception as exc:  # noqa: BLE001 - coverage failure remains explicitly unknown
+        logger.warning("市场日线覆盖无法核验: %s", type(exc).__name__)
+    status = ("unverified" if valid is None or not expected else
+              "empty" if not valid else "complete" if valid == expected else "partial")
+    receipt = {
+        "version": 1,
+        "trade_date": started.date().isoformat(),
+        "started_at": started.isoformat(),
+        "finished_at": _now_cn().isoformat(),
+        "expected_count": expected,
+        "valid_count": valid,
+        "status": status,
+        "universe": "stock_list_sh_sz_main_chinext_star",
+        "caliber": "cn_qfq_tq_preferred_tencent_close_volume_quality",
+        "ingest_ok_count": stats["ok"],
+        "ingest_failed_count": stats["fail"],
+    }
+    _save_receipt(receipt)
+    stats["coverage_receipt"] = receipt
+    logger.info("市场日线覆盖回执: date=%s status=%s valid=%s expected=%d",
+                receipt["trade_date"], status, valid, expected)
     return stats
