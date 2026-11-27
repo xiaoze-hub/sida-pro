@@ -612,11 +612,15 @@ export default function StockWorkbench() {
     if (s) setStatsDismissed(false)
   }, [])
 
+  const copilotToolbar = useMemo(
+    () => <CopilotCapsule symbol={symbol} market={MARKET} presentation="inline" compact />,
+    [symbol, MARKET],
+  )
+
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
 
   return (
-    <div className="mx-auto min-w-0 max-w-none space-y-4">
-      <QuoteSymbolPicker symbol={symbol} market={MARKET} type={type} defaultIndex={sp.get('default') === '1'} />
+    <div className="page-container mx-auto min-w-0 max-w-none space-y-2">
       {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
       <HeaderBand
         symbol={symbol}
@@ -629,9 +633,8 @@ export default function StockWorkbench() {
         onGotoTab={handleGotoTab}
         onRefresh={handleRefresh}
         back={back}
+        symbolPicker={<QuoteSymbolPicker symbol={symbol} market={MARKET} type={type} defaultIndex={sp.get('default') === '1'} compact />}
       />
-
-      {type === 'stock' ? <CopilotCapsule symbol={symbol} market={MARKET} presentation="inline" /> : null}
 
       {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
       {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
@@ -668,7 +671,7 @@ export default function StockWorkbench() {
               不占横向宽度、不加卡片底与阴影; `shadow-float` 全站仅限框选即问浮条)。
               内层保留 `min-w-0 flex-1`(承重: 没有 `min-w-0`, 图表 canvas 会撑破与右栏并排的 flex 行),
               但去掉边框/底色/内边距 ⇒ 图表直接占满列宽。右栏挤压逻辑(`w-[320px]`/`w-12` + `gap-3`)不变。 */}
-          <section className="mt-3 border-t border-border pt-2">
+          <section className="border-t border-border pt-2" aria-label="行情主图">
             {/* 服务端标注状态带(2026-10-28; 2026-10-29 加撤销): 图上每条价位线都要能说清
                 "哪来的、能不能撤"。撤销必须用户二次确认（组件内展开确认条），
                 真正的删行与读回由 `revokeAnnotation` 负责 —— 这里只交标注 id。
@@ -692,6 +695,7 @@ export default function StockWorkbench() {
                   initialInterval={periodFromUrl ?? '1d'}
                   initialDays={120}
                   height={420}
+                  toolbarEnd={copilotToolbar}
                   /* P1-2: 持仓成本线 —— 该股在真实持仓里且有正成本价时才传(画水平线 + 成本轴标签);
                      无持仓/取不到成本价时 undefined ⇒ 一条不画, 不报错(禁猜/禁默认值)。 */
                   costLines={costLines}

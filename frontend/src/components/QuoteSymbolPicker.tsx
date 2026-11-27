@@ -5,7 +5,7 @@ import { Button } from '@sida/base-ui/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@sida/base-ui/components/ui/popover'
 import { loadQuoteUniverse, quoteChoiceKey, quotePath, rememberQuote, type QuoteUniverse } from '@/lib/quote-universe'
 
-export function QuoteSymbolPicker({ symbol, market, type, defaultIndex }: { symbol: string; market: string; type: string; defaultIndex: boolean }) {
+export function QuoteSymbolPicker({ symbol, market, type, defaultIndex, compact = false }: { symbol: string; market: string; type: string; defaultIndex: boolean; compact?: boolean }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [data, setData] = useState<QuoteUniverse | null>(null)
@@ -19,8 +19,8 @@ export function QuoteSymbolPicker({ symbol, market, type, defaultIndex }: { symb
     if (request === sequence.current) { setData(next); setLoading(false) }
   }
   const selected = `${market}:${symbol}`
-  return <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-card px-4 py-3">
-    <div className="flex flex-wrap items-center gap-2"><span className="text-[14px] font-medium">行情标的</span><span className="text-[12px] text-muted-foreground">{defaultIndex ? '暂无持仓或关注股票，当前显示默认上证指数' : type === 'stock' ? `${market} · ${symbol}` : type === 'index' ? '指数视图' : '板块视图'}</span></div>
+  return <div className={compact ? "flex flex-wrap items-center gap-2" : "flex flex-wrap items-center justify-between gap-2 rounded-xl bg-card px-4 py-3"}>
+    {(!compact || defaultIndex) && <div className="flex flex-wrap items-center gap-2">{!compact && <span className="text-[14px] font-medium">行情标的</span>}<span className="text-[12px] text-muted-foreground">{defaultIndex ? '暂无持仓或关注股票，当前显示默认上证指数' : type === 'stock' ? `${market} · ${symbol}` : type === 'index' ? '指数视图' : '板块视图'}</span></div>}
     <Popover open={open} onOpenChange={value => { setOpen(value); if (value) void load() }}><PopoverTrigger asChild><Button variant="outline" size="sm" data-testid="quote-symbol-picker">切换持仓 / 关注股<ChevronsUpDown className="h-4 w-4" /></Button></PopoverTrigger>
       <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] p-3">
         <label className="mb-3 flex items-center gap-2 rounded-lg border border-input bg-background px-3"><Search className="h-4 w-4 text-muted-foreground" /><input aria-label="搜索持仓与关注股票" value={query} onChange={event => setQuery(event.target.value)} placeholder="名称、代码或市场" className="h-10 min-w-0 flex-1 bg-transparent text-[14px] outline-none" /></label>

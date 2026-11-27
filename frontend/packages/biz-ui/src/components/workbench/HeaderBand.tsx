@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { ArrowLeft, ChevronDown, RefreshCw } from 'lucide-react'
 import { fetchAPI, insightApi } from '@sida/api'
 import { cn } from '@sida/base-ui'
 import FreshnessBadge, { freshnessOf } from '@sida/biz-ui/components/FreshnessBadge'
@@ -283,6 +283,7 @@ export function mapSnapshot(
 
 /** 现价/涨跌幅在顶行已醒目呈现 → 快照行去除, 守住「同一数据点只出现一处」(spec §一)。 */
 const TOP_ROW_KEYS = new Set(['price', 'change_pct'])
+const PRIMARY_SNAPSHOT_KEYS = new Set(['open', 'high', 'low', 'volume', 'amount', 'turnover'])
 
 /**
  * 个股专属 cell(仅 `type === 'stock'` 显示): 涨停价/连板来自 CN-only 的 `/stocks/{s}/l2`,
@@ -391,6 +392,7 @@ export interface HeaderBandProps {
    * **不传 = 不渲染** —— 直接输网址/刷新进入时本就没有可返回的来路, 不给假按钮。
    */
   back?: { label: string; onBack: () => void } | null
+  symbolPicker?: ReactNode
 }
 
 export default function HeaderBand({
@@ -404,6 +406,7 @@ export default function HeaderBand({
   onGotoTab,
   onRefresh,
   back,
+  symbolPicker,
 }: HeaderBandProps) {
   const isStock = showStockOnly(type)
   /** CN-only 数据面闸门: `/stocks/{s}/l2` 是 CN TQ RPC, more-info 对非 CN 直接 400 —— 同代码的境外标的绝不能发, 否则会把 CN 涨停价/PE/PB 画到别的标的上。 */
@@ -528,10 +531,18 @@ export default function HeaderBand({
   // 顶行去重(price/change_pct) + 个股专属 cell 的**类型分流**:
   // index/board 直接不渲染估值/涨停/封单额/连板(它们是 -- 噪声, 且指数/板块无此概念), 而非渲染成 `--`。
   const cells = visibleSnapshotCells(quote, more, l2More, l2Snap, isStock)
+  const mainCells = cells.filter((c) => PRIMARY_SNAPSHOT_KEYS.has(c.key))
+  const detailCells = cells.filter((c) => !PRIMARY_SNAPSHOT_KEYS.has(c.key))
+  const renderCell = (c: SnapshotCell) => (
+    <div key={c.key} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[12px]">
+      <dt className="text-muted-foreground">{c.label}</dt>
+      <dd className="font-mono tabular-nums">{c.value}</dd>
+    </div>
+  )
   const scoreText = suggestion ? `${suggestion.score >= 0 ? '+' : ''}${suggestion.score}` : '--'
 
   return (
-    <div className="card-surface rounded-xl bg-card p-4 shadow-panel">
+    <div className="card-surface rounded-xl bg-card px-4 py-3 shadow-panel" data-testid="workbench-header">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {/* 返回入口: 只有**确实知道来路**时才画(见 nav-back.ts 的三级降级); 紧凑文字按钮,
             不用卡片包 —— 与带内其它控件同一字阶(11px)。 */}
@@ -551,7 +562,7 @@ export default function HeaderBand({
           // 个股: 顶行(名称 + 代码 + 现价 + 涨跌色)逐字节不变
           <>
             <span className="text-[16px] font-semibold">{quote?.name || nameHint || symbol}</span>
-            <span className="font-mono text-[12px] text-muted-foreground">{symbol}</span>
+            <span className="font-mono text-[12px] text-muted-foreground">{market} · {symbol}</span>
             <span className={cn('font-mono text-[16px] font-semibold', toneClass)}>
               {safePrice(quote?.current_price, 2)}
             </span>
@@ -565,7 +576,8 @@ export default function HeaderBand({
           <span className="font-mono text-[12px] text-muted-foreground">{symbol}</span>
         )}
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          {symbolPicker}
           <div className="flex items-center gap-0.5 rounded-lg bg-s2 p-1" role="group" aria-label="类型切换">
             {TYPE_OPTIONS.map((o) => (
               <button
@@ -601,36 +613,43 @@ export default function HeaderBand({
       {/* 快照行**仅个股** —— 其 cell 的值全部来自 `/quotes`(个股)/more-info/l2, 对指数/板块
           既是 `--` 噪声, 又(若发了 /quotes)会把另一标的的今开/最高/最低/成交额画出来。 */}
       {isStock ? (
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-border pt-3 sm:grid-cols-4 xl:grid-cols-6">
-          {cells.map((c) => (
-            <div key={c.key} className="flex min-w-0 flex-col gap-1 text-[12px]">
-              <span className="text-muted-foreground">{c.label}</span>
-              <span className="font-mono">{c.value}</span>
+        <>
+          <dl aria-label="关键行情" className="mt-2 flex flex-wrap gap-x-5 gap-y-1 border-t border-border pt-2">
+            {mainCells.map(renderCell)}
+          </dl>
+          <details className="group mt-1 text-[12px]" data-testid="workbench-quote-details">
+            <summary className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 rounded px-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+              更多行情 <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 group-open:rotate-180" />
+            </summary>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 pb-2 sm:grid-cols-4 xl:grid-cols-6">
+              {detailCells.map(renderCell)}
+            </dl>
+            <div className="flex flex-wrap items-center gap-2 pb-2">
+                {/* KI-059B: /l2 派生读数(封单额/涨停价/连板)无轮询, 标取数时刻防误读成实时。
+                    as_of 缺失则整块不渲染(不编时间); 与 QuickRail「快照 HH:MM:SS」同口径。 */}
+                {(() => {
+                  const clock = asOfClock(l2AsOf)
+                  if (!clock) return null
+                  // 新鲜度徽章(2026-09-20 设计系统 P0): 光有"快照 10:03:12"不够 ——
+                  // 用户还要一眼知道**这份数离现在多久**; 收盘/超窗时角标降权, 时间戳一起淡化。
+                  // 收盘态一律 closed(此时"实时"不存在); 盘中才按年龄判 live/delay/stale
+                  const fresh = freshnessOf(l2AsOf, { marketClosed: !isStock || !sessionPhaseOf().ticking })
+                  return (
+                    <>
+                    <FreshnessBadge info={fresh} />
+                    <span
+                      data-testid="band1-l2-snapshot-clock"
+                      title="封单额/涨停价/连板 等 /l2 读数的取数时刻; 本带无 30s 轮询, 点刷新可重取"
+                      className="font-mono text-[12px] text-muted-foreground"
+                    >
+                      快照 {clock}
+                    </span>
+                    </>
+                  )
+                })()}
             </div>
-          ))}
-          {/* KI-059B: /l2 派生读数(封单额/涨停价/连板)无轮询, 标取数时刻防误读成实时。
-              as_of 缺失则整块不渲染(不编时间); 与 QuickRail「快照 HH:MM:SS」同口径。 */}
-          {(() => {
-            const clock = asOfClock(l2AsOf)
-            if (!clock) return null
-            // 新鲜度徽章(2026-09-20 设计系统 P0): 光有"快照 10:03:12"不够 ——
-            // 用户还要一眼知道**这份数离现在多久**; 收盘/超窗时角标降权, 时间戳一起淡化。
-            // 收盘态一律 closed(此时"实时"不存在); 盘中才按年龄判 live/delay/stale
-            const fresh = freshnessOf(l2AsOf, { marketClosed: !isStock || !sessionPhaseOf().ticking })
-            return (
-              <>
-              <FreshnessBadge info={fresh} />
-              <span
-                data-testid="band1-l2-snapshot-clock"
-                title="封单额/涨停价/连板 等 /l2 读数的取数时刻; 本带无 30s 轮询, 点刷新可重取"
-                className="font-mono text-[12px] text-muted-foreground"
-              >
-                快照 {clock}
-              </span>
-              </>
-            )
-          })()}
-        </div>
+          </details>
+        </>
       ) : null}
 
       {suggestion ? (
@@ -638,7 +657,7 @@ export default function HeaderBand({
           <button
             type="button"
             onClick={() => onGotoTab?.('suggest')}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded border border-border px-2 py-1 text-left hover:bg-s2"
+            className="flex min-w-0 items-center gap-2 rounded px-1 py-1 text-left hover:bg-s2"
           >
             <TechnicalBadge
               label={`建议·${suggestion.action_label}`}

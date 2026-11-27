@@ -166,7 +166,7 @@ describe('KlineChart · 指数图(instrument=index)的取数边界', () => {
     render(
       <KlineChart symbol="000001" market="CN" instrument="index" initialInterval="1d" initialDays={120} height={420} />,
     )
-    await waitFor(() => expect(screen.getByText('无数据')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('当前周期暂无 K 线数据')).toBeTruthy())
 
     cleanup()
     H.calls.length = 0
@@ -174,7 +174,7 @@ describe('KlineChart · 指数图(instrument=index)的取数边界', () => {
     render(
       <KlineChart symbol="000001" market="CN" instrument="index" initialInterval="1d" initialDays={120} height={420} />,
     )
-    await waitFor(() => expect(screen.getByText('错误: 指数K线不可用(000001)')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('暂时无法读取 K 线')).toBeTruthy())
     expect(screen.queryByText(/根K线/)).toBeNull()
   })
 })

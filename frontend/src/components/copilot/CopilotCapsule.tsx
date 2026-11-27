@@ -105,11 +105,13 @@ export function CopilotCapsule({
   market = 'CN',
   stockName,
   presentation = 'floating',
+  compact = false,
 }: {
   symbol: string
   market?: string
   stockName?: string
   presentation?: 'inline' | 'floating'
+  compact?: boolean
 }) {
   const { data } = useCopilotBrief(symbol, market, { timeoutMs: 15000 })
   const [hidden, setHidden] = useState(false)
@@ -283,6 +285,21 @@ export function CopilotCapsule({
     onPointerUp: handlePointerUp,
     onPointerCancel: handlePointerUp,
     onClickCapture: handleClickCapture,
+  }
+
+  if (presentation === 'inline' && compact) {
+    return (
+      <button
+        type="button"
+        onClick={() => { if (hidden) restore(); open() }}
+        data-testid={hidden ? 'copilot-capsule-restore' : 'copilot-capsule-open'}
+        title={data?.verdict.intent_label || '结合当前标的查看分析证据'}
+        className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md bg-s2 px-2.5 text-[12px] font-medium text-primary hover:bg-s3"
+      >
+        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+        {hidden ? '展开分析入口' : '打开分析'}
+      </button>
+    )
   }
 
   if (presentation === 'inline') {

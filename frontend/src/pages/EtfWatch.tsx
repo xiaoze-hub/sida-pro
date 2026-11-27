@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Info, Loader2, RefreshCw } from 'lucide-react'
 import { fetchAPI } from '@sida/api'
+import { MarketDataStatus } from '@sida/biz-ui/components/MarketDataStatus'
 import PageHeader from '@/components/PageHeader'
 import { safeFixed, safeNetInflow } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -218,8 +219,10 @@ function CumChart({
   series,
   baselineDays,
   baselineRequested,
+  periodLabel,
 }: {
   series: IntradayPoint[]
+  periodLabel: string
   baselineDays?: number | null
   baselineRequested?: number | null
 }) {
@@ -250,13 +253,13 @@ function CumChart({
 
   return (
     <div className="w-full overflow-hidden">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-[220px] w-full" role="img" aria-label={`今日累计成交额与同期基线对比（${baseDesc.replace('同期基线（', '').replace(/）$/, '')}）`}>
+      <svg viewBox={`0 0 ${w} ${h}`} className="h-[220px] w-full" role="img" aria-label={`${periodLabel}累计成交额与同期基线对比（${baseDesc.replace('同期基线（', '').replace(/）$/, '')}）`}>
         <path d={basePath} fill="none" stroke="var(--muted-foreground)" strokeWidth="1.5" strokeDasharray="4 3" opacity="0.7" />
         <path d={todayPath} fill="none" stroke="var(--primary)" strokeWidth="2" />
         <line x1={pad.l} y1={h - pad.b} x2={w - pad.r} y2={h - pad.b} stroke="var(--border)" strokeWidth="1" />
       </svg>
       <div className="mt-2 flex flex-wrap items-center gap-4 text-[12px] text-muted-foreground">
-        <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 bg-primary" />今日累计</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 bg-primary" />{periodLabel}累计</span>
         <span className="flex items-center gap-1"><span className="inline-block h-[2px] w-5 border-t border-dashed border-muted-foreground" />{baseDesc}</span>
         <span>纵轴上限 {safeFixed(maxY, 1)} 亿元</span>
       </div>
@@ -341,6 +344,9 @@ export default function EtfWatchPage() {
   const unitInferred = (support?.unit_confidence || 'inferred') === 'inferred'
   const supportLag = support?.freshness?.lag_trading_days ?? null
   const intradaySource = sourceText(intraday)
+  const intradayDate = intraday?.date?.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
+  const fallbackDate = intraday?.fallback_from?.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
+  const periodLabel = fallbackDate ? '数据日' : '当日'
   const intradayMixed = intraday?.source === 'mixed'
   const dailySource = sourceText(daily)
   // 逐日来源明细只在窗口较小的时候展开（120 日窗口全展开会把脚注挤爆）。
@@ -406,8 +412,18 @@ export default function EtfWatchPage() {
               </div>
             ) : (
               <>
+                <div className="mb-3">
+                  <MarketDataStatus
+                    subject="ETF 分钟数据状态"
+                    phase={fallbackDate ? 'historical' : intraday ? 'available' : 'empty'}
+                    date={intradayDate}
+                    label={fallbackDate ? '历史回退' : intraday?.state === 'insufficient' ? '数据不全' : undefined}
+                  >
+                    {fallbackDate && <span>未取得 {fallbackDate} 的数据；不是当前行情</span>}
+                  </MarketDataStatus>
+                </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Stat label="今日累计成交额" value={`${fmt(totals?.cum_yi)} 亿元`} hint={totals?.last_minute ? `截至 ${totals.last_minute.slice(0, 2)}:${totals.last_minute.slice(2)}（已采集）` : undefined} />
+                  <Stat label={`${periodLabel}累计成交额`} value={`${fmt(totals?.cum_yi)} 亿元`} hint={totals?.last_minute ? `截至 ${totals.last_minute.slice(0, 2)}:${totals.last_minute.slice(2)}（已采集）` : undefined} />
                   <Stat label="同期基线均值" value={`${fmt(totals?.baseline_avg_yi)} 亿元`} hint={`基线 ${totals?.baseline_days ?? 0}/${totals?.baseline_days_requested ?? 20} 个交易日（20/20 齐备·同一批分钟）`} />
                   <Stat label="相对基线" value={ratio === null ? '--' : `${fmt(ratio)} 倍`} tone={ratioTone} hint={ratio === null ? '基线不足或数据不全，不外推' : ratio >= 1.15 ? '放量' : ratio <= 0.7 ? '清淡' : '接近常态'} />
                   <Stat label="已采到分钟" value={`${totals?.minutes ?? 0} 分钟`} hint={`20/20 只齐备 ${totals?.complete_minutes ?? totals?.full_minutes ?? 0} 分钟`} />
@@ -428,6 +444,7 @@ export default function EtfWatchPage() {
                 <div className="mt-4">
                   <CumChart
                     series={intraday?.series || []}
+                    periodLabel={periodLabel}
                     baselineDays={totals?.baseline_days ?? null}
                     baselineRequested={totals?.baseline_days_requested ?? 20}
                   />
