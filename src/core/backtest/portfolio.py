@@ -18,7 +18,6 @@ from dataclasses import dataclass
 
 from src.core.backtest import metrics as M
 from src.core.backtest.cost_model import CostModel
-from src.core.backtest.data_adapter import PriceBar, first_index_after
 from src.core.backtest.engine import (
     BTOpenPosition,
     BacktestResult,
@@ -57,19 +56,6 @@ class PortfolioBacktester:
             sample_start=self.cfg.sample_start,
         )
 
-    def _candidate(self, sig: Signal, bars: list[PriceBar]) -> tuple[int, float, int] | None:
-        """为信号找到可成交的入场 (idx, price, 容量内手数); 无则 None。"""
-        ei = first_index_after(bars, sig.signal_date)
-        while ei is not None and ei < len(bars):
-            bar = bars[ei]
-            px = bar.open if sig.entry_price is None else float(sig.entry_price)
-            if px > 0 and self._single._buyable(bars, ei, sig):
-                qty = self._single._cap_qty(self._single.sizer(px), bar.volume)
-                if qty > 0:
-                    return ei, px, qty
-            ei += 1
-        return None
-
     def run(self, signals: list[Signal], bars_by_symbol: dict) -> BacktestResult:
         """按入场日撮合：开盘建仓只使用此前交易日已释放的资源。"""
         planned = []
@@ -77,12 +63,12 @@ class PortfolioBacktester:
             bars = bars_by_symbol.get((sig.symbol, sig.market)) or bars_by_symbol.get(sig.symbol)
             if not bars:
                 continue
-            if self.cfg.sample_end is not None:
-                bars = [b for b in bars if b.date <= self.cfg.sample_end]
+            if self._single.sample_end is not None:
+                bars = [b for b in bars if b.date <= self._single.sample_end]
                 if not bars:
                     continue
             symbol_bars = bars
-            cand = self._candidate(sig, symbol_bars)
+            cand = self._single._entry_candidate(sig, symbol_bars)
             if cand is None:
                 continue
             ei, px, qty = cand
@@ -170,6 +156,6 @@ class PortfolioBacktester:
             skipped_cash=skipped_cash,
             skipped_slots=skipped_slots,
             open_positions=open_positions,
-            sample_start=self.cfg.sample_start,
-            sample_end=self.cfg.sample_end,
+            sample_start=self._single.sample_start,
+            sample_end=self._single.sample_end,
         )

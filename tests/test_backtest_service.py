@@ -466,6 +466,49 @@ def test_metrics_basis_is_declared(monkeypatch):
     assert basis['total_return_max_drawdown_sharpe'] == 'mark_to_market_equity'
 
 
+def test_capped_fallback_outside_ceiling_reports_budget_not_gap(monkeypatch):
+    from datetime import datetime, timezone
+    from src.collectors import kline_collector
+    from src.core.backtest import data_adapter, service
+    from src.db import klines_repo
+
+    monkeypatch.setattr(data_adapter, 'MAX_FALLBACK_BARS', 1)
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
+    monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines',
+                        lambda *_a, **_kw: [PriceBar('2026-12-10', 10, 11, 9, 10, 1000)])
+
+    class AfterFetch(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 12, 11, 9, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(service, 'datetime', AfterFetch)
+    row = service.run_backtest(symbols=['600000'], end_date='2026-11-27')['data_coverage']['600000']
+    assert row['status'] == 'fallback_budget_exhausted_before_window'
+    assert row['first_fallback_bar_after_ceiling'] == '2026-12-10'
+
+
+def test_unclosed_requested_end_is_not_missing_vendor_history(monkeypatch):
+    from datetime import datetime, timezone
+    from src.core.backtest import service
+
+    class Intraday(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 27, 2, tzinfo=timezone.utc)
+
+    bars = _bars() + [PriceBar('2026-11-26', 10, 11, 9, 10, 1000)]
+    monkeypatch.setattr(service, 'datetime', Intraday)
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: bars)
+    result = service.run_backtest(symbols=['600000'], end_date='2026-11-27')
+    row = result['data_coverage']['600000']
+    assert row['expected_last_trading_date'] == '2026-11-27'
+    assert row['observable_end_date'] == '2026-11-26'
+    assert row['end_after_last_bar'] is False
+    assert result['sample_window']['requested_end'] == '2026-11-27'
+    assert result['sample_window']['effective_end'] == '2026-11-26'
+
+
 def test_valid_close_can_drive_signal_when_warmup_open_is_invalid(monkeypatch):
     from dataclasses import replace
     from src.core.backtest import service

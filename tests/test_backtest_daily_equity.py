@@ -98,3 +98,12 @@ def test_flat_account_uses_other_observed_universe_days_after_exit():
     assert result.trades[0].exit_date == days[2]
     assert result.equity_dates == ['', *days]
     assert result.equity_curve[-1] == result.equity_curve[-2]
+
+
+def test_closed_and_never_filled_accounts_share_observed_axis_with_start_only():
+    days = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20']
+    bars = [_bar(d, 10, 11, 9, float('nan') if i == 3 else 10) for i, d in enumerate(days)]
+    runner = Backtester(sample_start=days[0])
+    filled = runner.run([Signal('X', 'CN', days[0], holding_days=1)], {'X': bars})
+    empty = runner.run([], {'X': bars})
+    assert filled.trades and filled.equity_dates == empty.equity_dates == ['', *days[:3], days[-1]]

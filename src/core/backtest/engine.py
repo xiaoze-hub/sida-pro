@@ -135,7 +135,7 @@ def simulate_exit(
             continue
         last_day = bar.date
         held += 1
-        can_sell = is_sellable(j)
+        can_sell = _has_execution_evidence(bar) and is_sellable(j)
         final_session_fill = (bar.close, bar.date, 'eod', held) if can_sell else None
         if not can_sell:
             continue
@@ -198,9 +198,12 @@ def expected_trading_boundary(market: str | None, day: str | None, *, right: boo
     if day is None or not isinstance(market, str) or market.upper() not in {'CN', 'SH', 'SZ', 'BJ'}:
         return None
     try:
-        if is_trading_day(day):
-            return day
-        return (prev_trading_day(day) if right else next_trading_day(day)).isoformat()
+        parsed = _parse_day(day)
+        if parsed is None:
+            return None
+        if is_trading_day(parsed):
+            return parsed.isoformat()
+        return (prev_trading_day(parsed) if right else next_trading_day(parsed)).isoformat()
     except (TradingCalendarError, ValueError, OverflowError):
         return None
 
@@ -234,11 +237,13 @@ class Backtester:
         self.sizer = sizer or fixed_cash_sizer(cash_per_trade, lot)
 
     def _buyable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
-        """一字涨停(全天封死)时买不进 → False; 无法判定(非 A 股代码/缺昨收) → True。"""
+        """拒绝缺日线证据的柱；否则沿用一字涨停判定规则。"""
+        bar = bars[idx]
+        if not _has_execution_evidence(bar):
+            return False
         up = limit_up_price(signal.symbol, _prev_close(bars, idx), signal.is_st)
         if up is None:
             return True
-        bar = bars[idx]
         return not (bar.open >= up - 1e-9 and bar.high <= up + 1e-9)
 
     def _sellable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
@@ -260,6 +265,23 @@ class Backtester:
         cap = (cap // self.lot) * self.lot
         return int(min(int(qty), cap))
 
+    def _entry_candidate(self, signal: Signal, bars: list[PriceBar]) -> tuple[int, float, int] | None:
+        """Signals before the sample start are warmup only, not pending orders."""
+        if self.sample_start is not None and signal.signal_date < self.sample_start:
+            return None
+        idx = first_index_after(bars, signal.signal_date)
+        while idx is not None and idx < len(bars):
+            bar = bars[idx]
+            if self.sample_end is not None and bar.date > self.sample_end:
+                return None
+            price = bar.open if signal.entry_price is None else float(signal.entry_price)
+            if valid_trade_price(price) and self._buyable(bars, idx, signal):
+                qty = self._cap_qty(self.sizer(price), bar.volume)
+                if qty > 0:
+                    return idx, price, qty
+            idx += 1
+        return None
+
     def run_single(self, signal: Signal, bars: list[PriceBar]) -> BTTrade | BTOpenPosition | None:
         """单信号回测:下一交易日开盘入场,逐日止损/止盈/到期平仓。
 
@@ -274,24 +296,10 @@ class Backtester:
             bars = [b for b in bars if b.date <= self.sample_end]
             if not bars:
                 return None
-        ei = first_index_after(bars, signal.signal_date)
-        if ei is None or ei >= len(bars):
+        entry = self._entry_candidate(signal, bars)
+        if entry is None:
             return None
-
-        entry_idx = None
-        entry_price = 0.0
-        qty = 0
-        while ei < len(bars):
-            bar = bars[ei]
-            px = bar.open if signal.entry_price is None else float(signal.entry_price)
-            if px > 0 and self._buyable(bars, ei, signal):
-                q = self._cap_qty(self.sizer(px), bar.volume)
-                if q > 0:
-                    entry_idx, entry_price, qty = ei, px, q
-                    break
-            ei += 1
-        if entry_idx is None:
-            return None
+        entry_idx, entry_price, qty = entry
 
         stop = signal.stop_loss
         target = signal.target_price
@@ -382,36 +390,25 @@ class Backtester:
         "逐交易日净值"契约不符, 导致年化/夏普按笔年化、最大回撤忽略持仓期浮亏。
         """
         positions = [*trades, *open_positions]
+        bounded = self.sample_start is not None or self.sample_end is not None
+        observed_dates = {bar.date for bars in bars_by_symbol.values() for bar in bars
+                          if valid_trade_price(bar.close)
+                          and (self.sample_start is None or bar.date >= self.sample_start)
+                          and (self.sample_end is None or bar.date <= self.sample_end)}
         if not positions:
-            dates = []
-            if self.sample_start is not None or self.sample_end is not None:
-                dates = sorted({bar.date for bars in bars_by_symbol.values() for bar in bars
-                                if (self.sample_start is None or bar.date >= self.sample_start)
-                                and (self.sample_end is None or bar.date <= self.sample_end)
-                                and valid_trade_price(bar.close)})
+            dates = sorted(observed_dates) if bounded else []
             return [self.initial_capital] * (1 + len(dates)), ["", *dates]
 
         start = min(t.entry_date for t in positions)
-        if self.sample_start is not None:
-            start = min(start, self.sample_start)
-        # Keep observed in-window idle days after liquidation. An open position
-        # instead caps the right edge at actual marks/fills, not unrelated prices.
         end = max([t.exit_date for t in trades] + [p.mark_date or p.entry_date for p in open_positions])
-        if self.sample_end is not None and not open_positions:
-            observed_end = max(
-                (bar.date for bars in bars_by_symbol.values() for bar in bars
-                 if bar.date <= self.sample_end and valid_trade_price(bar.close)),
-                default=end,
-            )
-            end = max(end, observed_end)
-        all_dates = sorted(
-            {
-                b.date
-                for bars in bars_by_symbol.values()
-                for b in bars
-                if start <= b.date <= end
-            }
-        )
+        # Bounded flat accounts share one observation axis whether or not they traded.
+        # Open positions cannot extend past their actual marks/fills; legacy runs keep
+        # their fill-to-mark span when no measurement boundary was requested.
+        if not bounded:
+            observed_dates = {d for d in observed_dates if start <= d <= end}
+        elif open_positions:
+            observed_dates = {d for d in observed_dates if d <= end}
+        all_dates = sorted(observed_dates | {p.entry_date for p in positions} | {t.exit_date for t in trades})
         if not all_dates:
             return [self.initial_capital], [""]
 

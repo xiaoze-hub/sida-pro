@@ -144,7 +144,7 @@ def run_backtest(
     if sample_start:
         # Keep the extra history for signal warmup, outside the measured sample.
         history_days = max(history_days, (now.date() - date.fromisoformat(sample_start)).days + 60)
-    explicit_start = start_date  # synthesized end-only bounds are not a user start
+
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
@@ -153,6 +153,8 @@ def run_backtest(
     coverage_start = sample_start or cutoff
     expected_first = expected_trading_boundary(mkt, coverage_start)
     expected_last = expected_trading_boundary(mkt, end_date, right=True)
+    effective_end = min(end_date, ceiling.isoformat()) if end_date else None
+    observable_end = expected_trading_boundary(mkt, effective_end, right=True)
     first_target = expected_first or sample_start
     last_target = expected_last or end_date
     left_edge_capped = history_capped and (sample_start is None or bool(first_target and first_target < cutoff))
@@ -169,17 +171,20 @@ def run_backtest(
     for code in requested[:MAX_SYMBOLS]:
         outside_fallback = None
         after_fallback = None
+        fallback_limit_reached = False
         loaded = []
         if not outside_lookback and not no_market_sessions:
             try:
-                loaded = load_price_history(code, mkt, days=history_days, as_of=now)
+                loaded = load_price_history(code, mkt, days=history_days, as_of=now,
+                                            through=date.fromisoformat(effective_end) if effective_end else None)
             except HistoryOutsideLookback as exc:
                 outside_fallback = exc.latest_date
             except HistoryAfterWindow as exc:
                 after_fallback = exc.first_date
+                fallback_limit_reached = exc.limit_reached
         bars = loaded
-        if end_date:
-            bars = [bar for bar in bars if bar.date <= end_date]
+        if effective_end:
+            bars = [bar for bar in bars if bar.date <= effective_end]
         if no_market_sessions:
             status = 'no_market_sessions'
         elif outside_lookback:
@@ -187,7 +192,8 @@ def run_backtest(
         elif outside_fallback is not None:
             status = 'history_before_lookback'
         elif after_fallback is not None:
-            status = 'history_starts_after_window'
+            status = ('fallback_budget_exhausted_before_window' if fallback_limit_reached
+                      else 'history_starts_after_window')
         elif not loaded:
             status = 'history_unavailable'
         elif not bars:
@@ -221,14 +227,16 @@ def run_backtest(
                               calendar_unverified_days_between_bars=unverified_days,
                               latest_fallback_bar_before_cutoff=outside_fallback,
                               first_fallback_bar_after_ceiling=after_fallback,
+                              oldest_loaded_after_query_cutoff=(loaded_first > cutoff if loaded_first else None),
                               nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
                               invalid_ohlc_bars=invalid_prices,
                               invalid_warmup_ohlc_bars=invalid_warmup,
                               expected_first_trading_date=expected_first,
                               expected_last_trading_date=expected_last,
+                              observable_end_date=observable_end,
                               window_truncated=truncated,
                               left_edge_capped=left_edge_capped,
-                              end_after_last_bar=(window_last < expected_last if window_last and expected_last else None))
+                              end_after_last_bar=(window_last < observable_end if window_last and observable_end else None))
         if status != 'usable':
             skipped_symbols.append(code)
             continue
@@ -238,16 +246,13 @@ def run_backtest(
             start_date=sample_start, end_date=end_date,
             holding_days=holding_days, stop_pct=stop_pct, target_pct=target_pct,
         )
-        if explicit_start:
-            # An explicit start measures from that day; earlier bars are warmup only.
-            produced = [s for s in produced if s.signal_date >= explicit_start]
         signals.extend(produced)
 
     bt = Backtester(
         initial_capital=initial_capital,
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
-        sample_end=end_date,
+        sample_end=effective_end,
         sample_start=sample_start,
     )
     result = bt.run(signals, bars_by_symbol)
@@ -285,7 +290,8 @@ def run_backtest(
         "equity_basis": "initial_capital_then_daily_close",
         "equity_end_policy": "observed_cash_days_to_sample_end_if_flat_otherwise_last_fill_or_mark",
         # Requested bounds vs the window actually measured (open positions cap the right edge).
-        "sample_window": {"effective_start": result.sample_start, "requested_end": result.sample_end,
+        "sample_window": {"effective_start": result.sample_start, "requested_end": end_date,
+                          "effective_end": result.sample_end,
                           "measured_days": len(equity_days)},
         "equity_window": {"first_date": equity_days[0] if equity_days else None,
                           "last_date": equity_days[-1] if equity_days else None,

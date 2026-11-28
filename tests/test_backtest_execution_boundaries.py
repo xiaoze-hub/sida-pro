@@ -69,6 +69,27 @@ def test_intraday_exit_does_not_finance_or_make_room_for_open_buys(limited_by):
     assert (outcome.skipped_cash, outcome.skipped_slots) == ((1, 0) if cash_only else (0, 1))
 
 
+@pytest.mark.parametrize('portfolio', [False, True])
+def test_incomplete_entry_bar_is_skipped_even_with_valid_open_and_volume(portfolio):
+    from dataclasses import replace
+
+    runner = PortfolioBacktester() if portfolio else Backtester()
+    bars = [bar(D0), replace(bar(D1), low=float('nan')), bar(D2), bar(D3)]
+    outcome = runner.run([Signal(A, 'CN', D0, holding_days=1)], {A: bars})
+    trade, = outcome.trades
+    assert trade.entry_date == D2
+
+
+@pytest.mark.parametrize('portfolio', [False, True])
+def test_pre_window_signals_are_warmup_only_in_both_engines(portfolio):
+    runner = (PortfolioBacktester(PortfolioConfig(sample_start=D2)) if portfolio
+              else Backtester(sample_start=D2))
+    bars = [bar(d) for d in (D0, D1, D2, D3)]
+    outcome = runner.run([Signal(A, 'CN', D0, holding_days=1)], {A: bars})
+    assert not outcome.trades and not outcome.open_positions
+    assert outcome.equity_dates == ['', D2, D3]
+
+
 def test_open_position_remains_in_portfolio_and_marks_from_last_observed_bar():
     bt = PortfolioBacktester(PortfolioConfig(initial_capital=5_000, position_pct=0.25, max_positions=1))
     a = Signal(A, "CN", D0, stop_loss=9.5)

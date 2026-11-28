@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import itertools
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from src.core.backtest.data_adapter import PriceBar
@@ -140,17 +141,6 @@ def sweep(
     return rows[: max(1, int(top_n))]
 
 
-def _slice(bars_by_symbol: dict, start: int, end: int | None) -> dict:
-    return {k: v[start:end] for k, v in bars_by_symbol.items()}
-
-
-def _slice_bounds(bars: dict) -> tuple[str | None, str | None]:
-    """Observed bounds of this bar-index slice, shared by ranking and evaluation."""
-    nonempty = [v for v in bars.values() if v]
-    return (min((v[0].date for v in nonempty), default=None),
-            max((v[-1].date for v in nonempty), default=None))
-
-
 def walk_forward(
     bars_by_symbol: dict,
     *,
@@ -167,26 +157,34 @@ def walk_forward(
 
     返回 {windows: [{train_end, test_start, test_end, best_params, is_score, oos_metrics}],
           oos_summary: {windows, avg_sharpe, avg_return, total_trades, total_open_positions}}
-    窗口按各标的 K 线下标切分，不假定跨标的交易日对齐；边界只能由各切片决定。
+    下标对应全标的观察日期的有序并集，不是单一标的 K 线的下标。训练只看切点前，
+    测试可用训练尾部预热均线，但不交易或统计测试窗之前的信号和净值。
     """
     if not bars_by_symbol:
         return {"windows": [], "oos_summary": {"windows": 0, "avg_sharpe": None,
                                                "avg_return": None, "total_trades": 0,
                                                "total_open_positions": 0}}
-    length = min(len(v) for v in bars_by_symbol.values())
-    step = step or test_bars
+    step = test_bars if step is None else step
+    if min(train_bars, test_bars, step) <= 0:
+        raise ValueError("train_bars, test_bars and step must be positive")
+    series = {k: sorted(v, key=lambda b: b.date) for k, v in bars_by_symbol.items() if v}
+    dates_by_symbol = {k: [b.date for b in v] for k, v in series.items()}
+    days = sorted({d for dates in dates_by_symbol.values() for d in dates})
     windows: list[dict] = []
     strategy_kwargs = {k: v for k, v in run_kwargs.items() if k not in ('sample_start', 'sample_end')}
     pos = train_bars
-    while pos + test_bars <= length:
-        train = _slice(bars_by_symbol, 0, pos)
-        test = _slice(bars_by_symbol, pos, pos + test_bars)
-        train_start, train_end = _slice_bounds(train)
+    while pos + test_bars <= len(days):
+        train_start, train_end = days[0], days[pos - 1]
+        test_start, test_end = days[pos], days[pos + test_bars - 1]
+        stops = {k: bisect_left(dates, test_start) for k, dates in dates_by_symbol.items()}
+        train = {k: bars[:stops[k]] for k, bars in series.items()}
         ranked = sweep(train, fasts=fasts, slows=slows, holdings=holdings, by=by,
                        top_n=1, sample_start=train_start, sample_end=train_end, **strategy_kwargs)
         if ranked:
             best = ranked[0]
-            test_start, test_end = _slice_bounds(test)
+            warmup = best["params"]["slow"]
+            test = {k: bars[max(0, stops[k] - warmup):bisect_right(dates_by_symbol[k], test_end)]
+                    for k, bars in series.items()}
             oos = run_once(test, sample_start=test_start, sample_end=test_end,
                            **best["params"], **strategy_kwargs)
             windows.append(
@@ -194,6 +192,9 @@ def walk_forward(
                     "train_end": pos,
                     "test_start": pos,
                     "test_end": pos + test_bars,
+                    "train_end_date": train_end,
+                    "test_start_date": test_start,
+                    "test_end_date": test_end,
                     "best_params": best["params"],
                     "is_score": best["score"],
                     "oos_metrics": oos.metrics,

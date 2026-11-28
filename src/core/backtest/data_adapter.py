@@ -27,10 +27,11 @@ class HistoryOutsideLookback(ValueError):
 
 
 class HistoryAfterWindow(ValueError):
-    """The collector only returned bars newer than the requested ceiling."""
+    """The bounded fallback did not reach this window; upstream history is unknown."""
 
-    def __init__(self, first_date: str):
+    def __init__(self, first_date: str, *, limit_reached: bool):
         self.first_date = first_date
+        self.limit_reached = limit_reached
         super().__init__(f'first fallback bar after window: {first_date}')
 
 
@@ -107,11 +108,15 @@ def from_klines(klines) -> list[PriceBar]:
     return out
 
 
-def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime | None = None) -> list[PriceBar]:
+def load_price_history(
+    symbol: str, market, days: int = 250, *, as_of: datetime | None = None,
+    through: date | None = None,
+) -> list[PriceBar]:
     """PG 优先；as_of 只限制交易日，不冻结复权版本。
 
     两条路径都是查询时可见的前复权，可能含后来修订，不能用于证明历史时点可见性。
-    指定 as_of 且回退结果只在窗口外时按方向报错；不传则保留旧列表契约。
+    指定 as_of 且回退结果只在窗口外时按方向报错；through 可进一步缩小右界。
+    不指定 as_of 时保留旧列表契约。
     """
     # 1. 查 PG klines 表(qfq 分区; 2026-09-08 风险方案1.2/B1: 复权维度入列,
     #    回测序列必须与主源同为前复权, 严禁混入 none 原始价)
@@ -120,6 +125,10 @@ def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime 
     calendar_days = max(1, int(days))
     code = str(getattr(market, 'value', market)).upper()
     bounds = history_window(code, calendar_days, as_of) if as_of is not None else None
+    if bounds is not None and through is not None:
+        bounds = (bounds[0], min(bounds[1], through))
+        if bounds[0] > bounds[1]:
+            return []
     if bounds is None:
         rows = load_qfq_bars(symbol, market, calendar_days)
     else:
@@ -158,7 +167,7 @@ def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime 
     if converted and converted[-1].date < cutoff_day:
         raise HistoryOutsideLookback(converted[-1].date)
     if converted and converted[0].date > upper_day:
-        raise HistoryAfterWindow(converted[0].date)
+        raise HistoryAfterWindow(converted[0].date, limit_reached=len(converted) >= fallback_bars)
     return [bar for bar in converted if cutoff_day <= bar.date <= upper_day][-fallback_bars:]
 
 

@@ -97,7 +97,23 @@ def test_walk_forward_owns_both_slice_bounds_even_with_caller_overrides(monkeypa
     assert output['oos_summary']['windows'] == 1
     assert len(blocks) == 2
     for bars, result in blocks:
-        assert result.sample_start == bars['X'][0].date
         assert result.sample_end == bars['X'][-1].date
         assert result.equity_dates[1] == result.sample_start
         assert all(t.exit_reason != 'eod' for t in result.trades)
+    assert blocks[0][1].sample_start == blocks[0][0]['X'][0].date
+    assert blocks[1][1].sample_start == _trend_bars(80)[60].date
+    assert blocks[1][0]['X'][0].date < blocks[1][1].sample_start
+
+
+def test_walk_forward_short_oos_can_trade_with_training_tail_as_warmup():
+    bars = _trend_bars(80)
+    out = walk_forward({'X': bars}, fasts=(3,), slows=(20,), holdings=(2,))
+    assert out['oos_summary']['windows'] == 1
+    assert out['oos_summary']['total_trades'] > 0
+
+
+def test_walk_forward_uses_one_date_cut_for_staggered_symbols():
+    bars = _trend_bars(95)
+    out = walk_forward({'X': bars[:80], 'Y': bars[15:]}, fasts=(3,), slows=(20,), holdings=(2,))
+    w = out['windows'][0]
+    assert w['train_end_date'] == bars[59].date < w['test_start_date'] == bars[60].date
