@@ -9,18 +9,68 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import date, datetime, timedelta, timezone
 
-from src.core.backtest.data_adapter import load_price_history
-from src.core.backtest.engine import Backtester, Signal
+from src.core.backtest.data_adapter import (
+    MAX_FALLBACK_BARS, HistoryOutsideLookback, PriceBar, history_cutoff_day, load_price_history,
+)
+from src.core.backtest.engine import Backtester, Signal, expected_trading_boundary, positive_trade_volume, valid_ohlc, valid_trade_price
+from src.core.trading_calendar import TradingCalendarError, is_trading_day
 
 MIN_BARS = 30
+MIN_HISTORY_DAYS = 30
 MAX_SYMBOLS = 20
+# Beyond this a request only widens the query/fetch window; coverage flags explain gaps.
+MAX_HISTORY_DAYS = 6000
+
+
+class BacktestDateError(ValueError):
+    """Invalid user-supplied calendar boundary."""
+
+
+def _check_date(name: str, value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = date.fromisoformat(value)
+        if parsed.isoformat() == value:
+            return value
+    except ValueError:
+        pass
+    raise BacktestDateError(f"{name} 必须是有效的 YYYY-MM-DD 日期")
+
+
+def _missing_sessions(
+    market: str, bars: list[PriceBar], calendar: dict[date, bool | None],
+) -> tuple[int | None, int | None]:
+    """Sessions without bars (gaps or halts), plus days outside available calendars."""
+    if market not in {'CN', 'SH', 'SZ', 'BJ'} or not bars:
+        return None, None
+    observed = {bar.date for bar in bars}
+    try:
+        first, last = date.fromisoformat(min(observed)), date.fromisoformat(max(observed))
+    except ValueError:
+        return None, None
+    missing = unknown = checked = 0
+    for offset in range((last - first).days + 1):
+        day = first + timedelta(days=offset)
+        if day not in calendar:
+            try:
+                calendar[day] = is_trading_day(day)
+            except TradingCalendarError:
+                calendar[day] = None
+        if calendar[day] is None:
+            unknown += 1
+        else:
+            checked += 1
+            missing += calendar[day] is True and day.isoformat() not in observed
+    return (missing if checked else None), unknown
 
 
 def _golden_cross_signals(
     symbol: str,
     market: str,
-    bars,
+    bars: list[PriceBar],
     *,
     start_date: str | None,
     end_date: str | None,
@@ -30,8 +80,13 @@ def _golden_cross_signals(
 ) -> list[Signal]:
     closes = [b.close for b in bars]
     out: list[Signal] = []
-    for i in range(20, len(bars)):
-        d = bars[i].date
+    valid_run = 0
+    for i, bar in enumerate(bars):
+        # Both current and previous MA20 must be formed from consecutive valid bars.
+        valid_run = valid_run + 1 if valid_trade_price(bar.close) else 0
+        if valid_run < 21:
+            continue
+        d = bar.date
         if start_date and d < start_date:
             continue
         if end_date and d > end_date:
@@ -69,24 +124,109 @@ def run_backtest(
     participation_rate: float = 0.05,
     days: int = 800,
 ) -> dict:
-    """对给定标的跑金叉策略回测, 返回 trades/净值曲线/指标。"""
+    """截至 end_date（含）回测，不以显式样本边界代替策略退出。"""
+    start_date = _check_date('start_date', start_date)
+    end_date = _check_date('end_date', end_date)
+    if start_date and end_date and start_date > end_date:
+        raise BacktestDateError('start_date 不得晚于 end_date')
+    # load_qfq_bars cuts relative to now; stretch the lookback so an older
+    # requested start is not silently reported as fully covered.
+    requested_days = max(int(days), 1)
+    sample_start = start_date
+    if sample_start is None and end_date:
+        # End-only requests are anchored to their own end, not to today's date.
+        first_ordinal = max(1, date.fromisoformat(end_date).toordinal() - requested_days)
+        sample_start = date.fromordinal(first_ordinal).isoformat()
+    history_days = max(requested_days, MIN_HISTORY_DAYS)
+    now = datetime.now(timezone.utc)
+    if sample_start:
+        # Keep the extra history for signal warmup, outside the measured sample.
+        history_days = max(history_days, (now.date() - date.fromisoformat(sample_start)).days + 60)
+    history_capped = history_days > MAX_HISTORY_DAYS
+    history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
+    cutoff = history_cutoff_day(mkt, history_days, now).isoformat()
+    coverage_start = sample_start or cutoff
+    expected_first = expected_trading_boundary(mkt, coverage_start)
+    expected_last = expected_trading_boundary(mkt, end_date, right=True)
+    first_target = expected_first or sample_start
+    last_target = expected_last or end_date
+    left_edge_capped = history_capped and (sample_start is None or bool(first_target and first_target < cutoff))
+    no_market_sessions = bool(expected_first and expected_last and expected_first > expected_last)
+    outside_lookback = bool(history_capped and last_target and last_target < cutoff)
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
     skipped_symbols: list[str] = []
+    coverage = {}
+    calendar: dict[date, bool | None] = {}
     for sym in list(symbols)[:MAX_SYMBOLS]:
         code = str(sym or "").strip()
         if not code:
             continue
-        bars = load_price_history(code, mkt, days=days)
-        if len(bars) < MIN_BARS:
+        outside_fallback = None
+        loaded = []
+        if not outside_lookback and not no_market_sessions:
+            try:
+                loaded = load_price_history(code, mkt, days=history_days, as_of=now)
+            except HistoryOutsideLookback as exc:
+                outside_fallback = exc.latest_date
+        bars = loaded
+        if end_date:
+            bars = [bar for bar in bars if bar.date <= end_date]
+        if no_market_sessions:
+            status = 'no_market_sessions'
+        elif outside_lookback:
+            status = 'window_before_history_cutoff'
+        elif outside_fallback is not None:
+            status = 'history_before_lookback'
+        elif not loaded:
+            status = 'history_unavailable'
+        elif not bars:
+            status = 'history_starts_after_window'
+        elif sample_start and bars[-1].date < sample_start:
+            status = 'history_ends_before_window'
+        elif len(bars) < MIN_BARS:
+            status = 'insufficient_history'
+        else:
+            status = 'usable'
+        window_last = bars[-1].date if bars and (not sample_start or bars[-1].date >= sample_start) else None
+        loaded_first = loaded[0].date if loaded else None
+        truncated: bool | None = None
+        if left_edge_capped and not no_market_sessions:
+            truncated = True
+        elif loaded_first and loaded_first <= coverage_start:
+            truncated = False
+        elif loaded_first and expected_first:
+            # This compares to the market calendar; it does not assert a vendor gap.
+            truncated = loaded_first > expected_first
+        window_bars = [bar for bar in bars if not sample_start or bar.date >= sample_start]
+        missing_sessions, unverified_days = _missing_sessions(mkt, window_bars, calendar)
+        invalid_prices = sum(not valid_ohlc(bar) for bar in window_bars)
+        invalid_warmup = sum(not valid_ohlc(bar) for bar in bars[:len(bars) - len(window_bars)])
+        coverage[code] = dict(status=status, loaded_first=loaded_first,
+                              loaded_last=loaded[-1].date if loaded else None,
+                              window_last=window_last,
+                              bars_through_end=len(bars),
+                              bars_in_window=len(window_bars),
+                              missing_sessions_between_bars=missing_sessions,
+                              calendar_unverified_days_between_bars=unverified_days,
+                              latest_fallback_bar_before_cutoff=outside_fallback,
+                              nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
+                              invalid_ohlc_bars=invalid_prices,
+                              invalid_warmup_ohlc_bars=invalid_warmup,
+                              expected_first_trading_date=expected_first,
+                              expected_last_trading_date=expected_last,
+                              window_truncated=truncated,
+                              left_edge_capped=left_edge_capped,
+                              end_after_last_bar=(window_last < expected_last if window_last and expected_last else None))
+        if status != 'usable':
             skipped_symbols.append(code)
             continue
         bars_by_symbol[(code, mkt)] = bars
         signals.extend(
             _golden_cross_signals(
                 code, mkt, bars,
-                start_date=start_date, end_date=end_date,
+                start_date=sample_start, end_date=end_date,
                 holding_days=holding_days, stop_pct=stop_pct, target_pct=target_pct,
             )
         )
@@ -95,13 +235,17 @@ def run_backtest(
         initial_capital=initial_capital,
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
+        sample_end=end_date,
+        sample_start=sample_start,
     )
     result = bt.run(signals, bars_by_symbol)
+    equity_days = result.equity_dates[1:]  # Initial cash is not a trading day.
     return {
         "params": {
             "market": mkt,
             "start_date": start_date or "",
             "end_date": end_date or "",
+            "effective_start_date": sample_start or "",
             "holding_days": holding_days,
             "stop_pct": stop_pct,
             "target_pct": target_pct,
@@ -109,12 +253,38 @@ def run_backtest(
             "cash_per_trade": cash_per_trade,
             "participation_rate": participation_rate,
             "strategy": "ma5_cross_ma20",
+            "sample_end_policy": "mark_open_without_forced_exit" if end_date else "legacy_liquidate_if_sellable",
+            "history_days": history_days,
+            "history_capped": history_capped,
+            "history_cutoff_date": cutoff,
+            "coverage_start_date": coverage_start,
+            "fallback_bar_limit": min(history_days, MAX_FALLBACK_BARS),
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),
         "skipped_symbols": skipped_symbols,
+        "data_coverage": coverage,
         "signals": len(signals),
         "skipped_signals": result.skipped,
-        "trades": [asdict(t) for t in result.trades],
+        "execution_basis": "independent_signal_daily_bar",
+        "portfolio_constraint": "none",
+        "session_gap_basis": "calendar_sessions_without_a_bar_includes_possible_halts",
+        "equity_basis": "initial_capital_then_daily_close",
+        "equity_end_policy": "observed_cash_days_to_sample_end_if_flat_otherwise_last_fill_or_mark",
+        "equity_window": {"first_date": equity_days[0] if equity_days else None,
+                          "last_date": equity_days[-1] if equity_days else None,
+                          "observed_days": len(equity_days)},
+        "pnl_basis": {"total_pnl": "realized_net", "unrealized_pnl": "mark_less_buy_outflow_excludes_exit_cost"},
+
+        "initial_capital": result.initial_capital,
+        "trades": [
+            {**asdict(t), "entry_price": round(t.entry_price, 4), "exit_price": round(t.exit_price, 4)}
+            for t in result.trades
+        ],
+        "open_positions": [
+            {**asdict(p), "entry_price": round(p.entry_price, 4), "mark_price": round(p.mark_price, 4),
+             "unrealized_pnl": round(p.unrealized_pnl, 4)}
+            for p in result.open_positions
+        ],
         "equity_curve": result.equity_curve,
         "equity_dates": result.equity_dates,
         "metrics": result.metrics,

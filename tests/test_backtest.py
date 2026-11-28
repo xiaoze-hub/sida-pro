@@ -109,6 +109,7 @@ def test_backtest_run_aggregates():
     res = Backtester().run(sigs, {("X", "CN"): bars})
     assert len(res.trades) == 1 and res.metrics["trades"] == 1
     # 入场 01-02 → 到期 01-05, 逐日曲线共 4 个交易日
-    assert len(res.equity_curve) == len(res.equity_dates) == 4
-    assert res.equity_dates[0] == "2026-01-02"
+    assert len(res.equity_curve) == len(res.equity_dates) == 5
+    assert res.equity_dates[:2] == ["", "2026-01-02"]
+    assert res.equity_curve[0] == res.initial_capital
     assert abs(res.equity_curve[-1] - (res.initial_capital + res.trades[0].pnl)) < 1e-6

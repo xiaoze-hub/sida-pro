@@ -50,20 +50,25 @@ def _norm_market(market) -> str:
     return "CN" if mc in ("SH", "SZ", "BJ") else mc
 
 
-def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
+def load_qfq_bars(symbol: str, market, days: int = 250, *, date_cutoff: date | None = None) -> list[dict]:
     """按 (symbol, market) 取前复权日 K(升序)。
 
     返回 [{date, open, high, low, close, volume}] —— 与 core 的 PriceBar 字段对齐,
     由调用方自行映射, 避免数据层依赖 core 的类型。
 
     查库失败返回 [] (调用方决定是否联网兜底), 不抛异常。
+    日线回测可传含首日的日期下界；其他调用方保留原滚动时间下界。
     """
     try:
         mc_str = _norm_market(market)
         # P0(2026-09-18): 复用主引擎单例(src/db/session.py, 与主引擎同一连接池/参数),
         # 禁止 per-call create_engine+dispose。
         from src.db.session import engine
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        if date_cutoff is None:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        else:
+            tz = CN_TRADING_TZ if mc_str == 'CN' else timezone.utc
+            cutoff = datetime.combine(date_cutoff, time.min, tz)
         with engine.connect() as conn:
             rows = conn.execute(
                 text(

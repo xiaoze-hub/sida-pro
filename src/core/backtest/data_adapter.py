@@ -8,8 +8,28 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+# Latest daily bars retained by the collector fallback; deep history is PG-first.
+MAX_FALLBACK_BARS = 800
+
+
+class HistoryOutsideLookback(ValueError):
+    """The collector has history, but none falls inside the lookback."""
+
+    def __init__(self, latest_date: str):
+        self.latest_date = latest_date
+        super().__init__(f'latest fallback bar before lookback: {latest_date}')
+
+
+def history_cutoff_day(market: str, days: int, now: datetime) -> date:
+    """Inclusive market date label shared by the repository and the collector."""
+    cutoff = now.astimezone(timezone.utc) - timedelta(days=days)
+    if market.upper() in {'CN', 'SH', 'SZ', 'BJ'}:
+        cutoff = cutoff.astimezone(ZoneInfo('Asia/Shanghai'))
+    return cutoff.date()
 
 
 @dataclass(frozen=True)
@@ -45,8 +65,10 @@ def from_klines(klines) -> list[PriceBar]:
     return out
 
 
-def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
-    """优先从 PG klines 表查; 库里没有或不够再 fallback 到 KlineCollector 实时拉。
+def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime | None = None) -> list[PriceBar]:
+    """PG 优先。指定 as_of 用统一日历窗口，仅有旧柱时抛出 HistoryOutsideLookback。
+
+    不传 as_of 的调用保留滚动 PG 和采集器原契约，不按回测样本裁剪。
 
     2026-08-17: 引入 TimescaleDB hypertable, K线持久化后, 回测不再每次联网。
     性能: 查库 ~70ms, 联网 ~500ms (单只股 800 天)。
@@ -57,9 +79,12 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
     #    回测序列必须与主源同为前复权, 严禁混入 none 原始价)
     from src.db.klines_repo import load_qfq_bars
 
-    rows = load_qfq_bars(symbol, market, days)
+    calendar_days = max(1, int(days))
+    day_cutoff = (history_cutoff_day(str(getattr(market, 'value', market)), calendar_days, as_of)
+                  if as_of is not None else None)
+    rows = (load_qfq_bars(symbol, market, calendar_days, date_cutoff=day_cutoff)
+            if day_cutoff is not None else load_qfq_bars(symbol, market, calendar_days))
     if rows:
-        # 库里有数据就直接用(用户传 days 只是 hint, 实际取所有行)
         return [
             PriceBar(
                 date=r["date"],
@@ -72,7 +97,8 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
             for r in rows
         ]
 
-    # 2. Fallback: 走 KlineCollector 拉
+    # 2. Collector 的 days 是日 K 根数，不是 PG 的自然日跨度。日期越早，
+    # 只放宽 PG 查库范围，不让回退的取数门槛突破固定预算。
     from src.collectors.kline_collector import KlineCollector
     from src.models.market import MarketCode
 
@@ -80,12 +106,22 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
         mc = market if isinstance(market, MarketCode) else MarketCode(str(market).upper())
     except Exception:
         mc = MarketCode.CN
+    fallback_bars = min(calendar_days, MAX_FALLBACK_BARS) if day_cutoff is not None else calendar_days
     try:
-        klines = KlineCollector(mc).get_klines(symbol, days=days)
+        klines = KlineCollector(mc).get_klines(symbol, days=fallback_bars)
     except Exception as e:
         logger.warning(f"[回测] 拉取 {symbol} K线失败: {e}")
         return []
-    return from_klines(klines)
+    # 按日历截掉兜底序列中超出回看范围的旧柱；根数上限仍可能缩短左端覆盖。
+    converted = from_klines(klines)
+    if day_cutoff is None:
+        return converted
+    cutoff_day = day_cutoff.isoformat()
+    returned = converted[-fallback_bars:]
+    in_window = [bar for bar in returned if bar.date >= cutoff_day]
+    if returned and not in_window:
+        raise HistoryOutsideLookback(returned[-1].date)
+    return in_window
 
 
 def first_index_after(bars: list[PriceBar], date: str) -> int | None:

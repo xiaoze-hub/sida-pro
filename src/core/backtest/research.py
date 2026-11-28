@@ -5,6 +5,7 @@
 - `walk_forward`: 训练窗内选参、测试窗只读评估, 逐窗滚动, 汇总样本外表现。
 
 诚实约束: 训练窗选参与测试窗评估**严格分离**; 汇总只报测试窗指标, 不拿训练窗数字充数。
+`trades`/`oos_trades` 只数已平仓；无法在末日成交的仓位留作未平仓并单独披露。
 """
 
 from __future__ import annotations
@@ -121,6 +122,7 @@ def sweep(
                 "params": {"fast": fast, "slow": slow, "holding_days": hold},
                 "metrics": res.metrics,
                 "trades": len(res.trades),
+                "open_positions": len(res.open_positions),
                 "score": _score(res.metrics, by),
             }
         )
@@ -173,6 +175,7 @@ def walk_forward(
                     "is_score": best["score"],
                     "oos_metrics": oos.metrics,
                     "oos_trades": len(oos.trades),
+                    "oos_open_positions": len(oos.open_positions),
                 }
             )
         pos += step
