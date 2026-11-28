@@ -114,7 +114,8 @@ def run_backtest(
             status = 'usable'
         coverage[code] = dict(status=status, loaded_first=loaded[0].date if loaded else None,
                               loaded_last=loaded[-1].date if loaded else None,
-                              bars_through_end=len(bars))
+                              bars_through_end=len(bars),
+                              bars_in_window=sum(not start_date or bar.date >= start_date for bar in bars))
         if status != 'usable':
             skipped_symbols.append(code)
             continue
@@ -131,7 +132,7 @@ def run_backtest(
         initial_capital=initial_capital,
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
-        close_at_sample_end=end_date is None,
+        sample_end=end_date,
     )
     result = bt.run(signals, bars_by_symbol)
     return {
@@ -146,6 +147,7 @@ def run_backtest(
             "cash_per_trade": cash_per_trade,
             "participation_rate": participation_rate,
             "strategy": "ma5_cross_ma20",
+            "sample_end_policy": "mark_open_without_forced_exit" if end_date else "legacy_liquidate_if_sellable",
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),
         "skipped_symbols": skipped_symbols,
@@ -153,9 +155,9 @@ def run_backtest(
         "signals": len(signals),
         "skipped_signals": result.skipped,
         "execution_basis": "independent_signal_daily_bar",
-        "equity_basis": "daily_close_metrics_from_initial_capital",
+        "equity_basis": "initial_capital_then_daily_close",
         "pnl_basis": {"total_pnl": "realized_net", "unrealized_pnl": "mark_less_buy_outflow_excludes_exit_cost"},
-        # equity_curve 只含每日收盘点；绩效的首个基准点是建仓前期初资金。
+
         "initial_capital": result.initial_capital,
         "trades": [
             {**asdict(t), "entry_price": round(t.entry_price, 4), "exit_price": round(t.exit_price, 4)}

@@ -82,7 +82,7 @@ class BTOpenPosition:
     mark_price: float
     buy_cash_delta: float
     unrealized_pnl: float
-    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end"]
+    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_exhausted"]
 
 
 @dataclass
@@ -177,6 +177,10 @@ def _positive_volume(value: float) -> float:
     return volume if math.isfinite(volume) and volume > 0 else 0.0
 
 
+def _valid_price(value: float | None) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
 class Backtester:
     def __init__(
         self,
@@ -187,13 +191,13 @@ class Backtester:
         sizer: PositionSizer | None = None,
         participation_rate: float = 0.05,
         *,
-        close_at_sample_end: bool = True,
+        sample_end: str | None = None,
     ) -> None:
         self.cost = cost_model or CostModel()
         self.initial_capital = float(initial_capital)
         self.lot = max(1, int(lot))
         self.participation_rate = max(0.0, float(participation_rate))
-        self.close_at_sample_end = close_at_sample_end
+        self.sample_end = sample_end
         self.sizer = sizer or fixed_cash_sizer(cash_per_trade, lot)
 
     def _buyable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
@@ -211,7 +215,7 @@ class Backtester:
         bar = bars[idx]
         if not _positive_volume(bar.volume):
             return False
-        if not all(math.isfinite(p) and p > 0 for p in (bar.open, bar.high, bar.low, bar.close)):
+        if not all(_valid_price(p) for p in (bar.open, bar.high, bar.low, bar.close)):
             return False
         dn = limit_down_price(
             signal.symbol, bars[idx - 1].close if idx > 0 else None, signal.is_st
@@ -269,7 +273,7 @@ class Backtester:
             target=target,
             max_hold=max_hold,
             sellable=lambda j: self._sellable(bars, j, signal),
-            close_at_sample_end=self.close_at_sample_end,
+            close_at_sample_end=self.sample_end is None,
         )
         return self._position_result(signal, bars, entry_idx, entry_price, qty, exit_fill)
 
@@ -282,13 +286,15 @@ class Backtester:
             entry_day = bars[entry_idx].date
             latest_day = max(b.date for b in bars[entry_idx:])
             reason = "t_plus_one" if latest_day == entry_day else "untradeable"
-            if reason != "t_plus_one" and not self.close_at_sample_end:
+            if self.sample_end is not None and latest_day < self.sample_end:
+                reason = "history_exhausted"
+            elif reason != "t_plus_one" and latest_day == self.sample_end:
                 last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
                 if self._sellable(bars, last_idx, signal):
                     reason = "sample_end"
             mark = max(
                 (b for b in reversed(bars[entry_idx:])
-                 if b.date >= entry_day and math.isfinite(b.close) and b.close > 0),
+                 if b.date >= entry_day and _valid_price(b.close)),
                 key=lambda b: b.date, default=None,
             )
             mark_price = mark.close if mark is not None else entry_price
@@ -338,9 +344,9 @@ class Backtester:
             return [self.initial_capital], [""]
 
         start = min(t.entry_date for t in positions)
-        # 仍有持仓时净值延伸至输入范围的最后一天；停更标的只沿用最近观测。
-        end = (max(b.date for bars in bars_by_symbol.values() for b in bars) if open_positions
-               else max(t.exit_date for t in trades))
+        # Stop at the last actual exit or open-position mark; unrelated symbols
+        # cannot extend the measured holding period beyond the evidence.
+        end = max([t.exit_date for t in trades] + [p.mark_date or p.entry_date for p in open_positions])
         all_dates = sorted(
             {
                 b.date
@@ -354,7 +360,7 @@ class Backtester:
 
         close_by_key: dict = {}
         for key, bars in bars_by_symbol.items():
-            close_by_key[key] = {b.date: b.close for b in bars if math.isfinite(b.close) and b.close > 0}
+            close_by_key[key] = {b.date: b.close for b in bars if _valid_price(b.close)}
 
         entries: dict[str, list[tuple[int, BTTrade | BTOpenPosition]]] = {}
         exits: dict[str, list[tuple[int, BTTrade]]] = {}
@@ -365,8 +371,8 @@ class Backtester:
 
         cash = self.initial_capital
         open_pos: list[dict] = []
-        curve: list[float] = []
-        dates: list[str] = []
+        curve: list[float] = [self.initial_capital]
+        dates: list[str] = [""]
 
         for d in all_dates:
             # 先出场(回款)再入场(占款), 同日不重复计
@@ -428,7 +434,7 @@ class Backtester:
             trades=trades,
             equity_curve=curve,
             equity_dates=dates,
-            metrics=M.summarize([self.initial_capital, *curve] if trades or open_positions else curve, pnls),
+            metrics=M.summarize(curve, pnls),
             initial_capital=self.initial_capital,
             skipped=skipped,
             open_positions=open_positions,

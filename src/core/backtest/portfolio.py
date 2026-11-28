@@ -149,7 +149,7 @@ class PortfolioBacktester:
             trades=trades,
             equity_curve=curve,
             equity_dates=dates,
-            metrics=M.summarize([self.cfg.initial_capital, *curve] if trades or open_positions else curve, [t.pnl for t in trades]),
+            metrics=M.summarize(curve, [t.pnl for t in trades]),
             initial_capital=self.cfg.initial_capital,
             skipped=skipped_cash + skipped_slots,
             skipped_cash=skipped_cash,

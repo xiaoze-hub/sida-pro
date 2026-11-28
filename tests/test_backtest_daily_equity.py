@@ -22,8 +22,9 @@ def test_equity_curve_is_daily_and_spans_all_bars():
     res = Backtester().run([sig], {("X", "CN"): bars})
     assert res.trades, "应有 1 笔成交"
     # 入场 01-02, 末根平仓 → 曲线覆盖 01-02..01-10 共 9 个交易日
-    assert len(res.equity_curve) == len(res.equity_dates) == 9
-    assert res.equity_dates == [f"2026-01-{d:02d}" for d in range(2, 11)]
+    assert len(res.equity_curve) == len(res.equity_dates) == 10
+    assert res.equity_dates == ["", *(f"2026-01-{d:02d}" for d in range(2, 11))]
+    assert res.metrics == M.summarize(res.equity_curve, [t.pnl for t in res.trades])
 
 
 def test_equity_marks_floating_loss():

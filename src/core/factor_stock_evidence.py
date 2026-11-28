@@ -63,16 +63,32 @@ def capture(
     day: date, rosters: list[list[str]], *, earliest: datetime, now: Callable[[], datetime],
 ) -> list[dict]:
     """One bounded read across the observed rosters; missing fields are never imputed."""
-    def unavailable(reason: str) -> list[dict]:
-        return [{'status': reason, 'rows': None} for _ in rosters]
-
     if not rosters:
         return []
-    if sum(map(len, rosters)) > MAX_MEMBER_SLOTS:
-        return unavailable('member_budget_exceeded')
-    symbols = sorted({m[:6] for members in rosters for m in members if _SUPPORTED.fullmatch(m)})
+    # Keep the global payload cap but admit each roster whole. Smallest first
+    # maximizes the number of complete rosters; ties retain input order.
+    selected: dict[int, set[str]] = {}
+    result: list[dict] = [{'status': 'no_supported_members', 'rows': None} for _ in rosters]
+    remaining = MAX_MEMBER_SLOTS
+    for i in sorted(range(len(rosters)), key=lambda idx: len(rosters[idx])):
+        members = rosters[i]
+        supported = {m[:6] for m in members if _SUPPORTED.fullmatch(m)}
+        if not supported:
+            continue
+        if len(members) > remaining:
+            result[i]['status'] = 'member_budget_exceeded'
+            continue
+        selected[i] = supported
+        remaining -= len(members)
+    symbols = sorted(set().union(*selected.values()))
+
+    def unavailable(reason: str) -> list[dict]:
+        for i in selected:
+            result[i]['status'] = reason
+        return result
+
     if not symbols:
-        return unavailable('no_supported_members')
+        return result
     started = now()
     if not _after_close(started, day) or started < earliest:
         return unavailable('clock_outside_capture_window')
@@ -88,9 +104,10 @@ def capture(
         return unavailable('unsupported_backend')
     if set(data) != set(symbols):
         return unavailable('incomplete_read')
-    return [{
-        'status': 'observed', 'read_started_at': _stamp(started), 'read_finished_at': _stamp(finished),
-        'source': 'primary_db_visible_rows', 'factor_lineage_verified': False,
-        'rows': [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in members],
-    } if any(_SUPPORTED.fullmatch(member) for member in members)
-        else {'status': 'no_supported_members', 'rows': None} for members in rosters]
+    for i in selected:
+        result[i] = {
+            'status': 'observed', 'read_started_at': _stamp(started), 'read_finished_at': _stamp(finished),
+            'source': 'primary_db_visible_rows', 'factor_lineage_verified': False,
+            'rows': [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in rosters[i]],
+        }
+    return result

@@ -44,6 +44,7 @@ def test_unsellable_sample_end_is_open_and_valued_net_of_buy_cost(portfolio, end
     buy = cost.fill("buy", 10, 100)
     ending = initial + buy.cash_delta + 100 * close
     assert outcome.equity_curve[-1] == pytest.approx(ending)
+    assert outcome.equity_dates[0] == '' and outcome.equity_curve[0] == initial
     assert outcome.equity_dates[-1] == bars[-1].date
     assert outcome.metrics["total_pnl"] == 0
     assert outcome.metrics["trades"] == 0
@@ -76,7 +77,7 @@ def test_open_position_remains_in_portfolio_and_marks_from_last_observed_bar():
     assert outcome.trades == []
     assert outcome.skipped_slots == 1
     position, = outcome.open_positions
-    assert (position.mark_date, outcome.equity_dates[-1]) == (D2, D3)
+    assert (position.mark_date, outcome.equity_dates[-1]) == (D2, D2)
     expected = outcome.initial_capital + CostModel().fill("buy", 10, position.quantity).cash_delta + 9 * position.quantity
     assert outcome.equity_curve[-1] == pytest.approx(expected)
 
@@ -135,14 +136,16 @@ def test_requested_end_date_excludes_future_fill_and_marks(monkeypatch):
 
 
 @pytest.mark.parametrize("portfolio", [False, True])
-def test_invalid_last_close_does_not_pollute_mark_or_equity(portfolio):
+@pytest.mark.parametrize("invalid_close", [0.0, None])
+def test_invalid_last_close_does_not_pollute_mark_or_equity(portfolio, invalid_close):
     runner = PortfolioBacktester() if portfolio else Backtester()
-    bars = [bar(D0), bar(D1), bar(D2, 9.8), bar(D3, 0, volume=0)]
+    bars = [bar(D0), bar(D1), bar(D2, 9.8), PriceBar(D3, 10, 10, 10, invalid_close, 100_000)]
     outcome = runner.run([Signal(A, "CN", D0)], {A: bars})
     assert not outcome.trades
     position, = outcome.open_positions
     assert (position.mark_date, position.mark_price) == (D2, 9.8)
-    assert outcome.equity_curve[-1] == outcome.equity_curve[-2]
+    assert outcome.equity_dates[-1] == D2
+    assert outcome.equity_curve[-1] == pytest.approx(outcome.initial_capital + position.unrealized_pnl)
 
 
 def test_unknown_volume_does_not_raise_or_create_exit():
@@ -172,11 +175,21 @@ def test_explicit_end_does_not_force_trade_on_sellable_final_day(monkeypatch):
     position, = result['open_positions']
     assert (position['mark_date'], position['exit_blocked_reason']) == (D2, 'sample_end')
     assert result['pnl_basis']['total_pnl'] == 'realized_net'
-    assert result['equity_basis'] == 'daily_close_metrics_from_initial_capital'
+    assert result['equity_basis'] == 'initial_capital_then_daily_close'
+    assert result['params']['sample_end_policy'] == 'mark_open_without_forced_exit'
 
     expired = service.run_backtest(symbols=[A], end_date=D2, holding_days=1)
     assert expired['trades'][0]['exit_reason'] == 'expire'
     assert not expired['open_positions']
+
+
+def test_history_ends_before_requested_boundary(monkeypatch):
+    prefix = [bar(f'2026-10-{day:02d}') for day in range(1, 29)]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_k: [*prefix, bar(D0, 10.5), bar(D1, 10.5)])
+    result = service.run_backtest(symbols=[A], start_date=D0, end_date=D3)
+    position, = result['open_positions']
+    assert (position['mark_date'], position['exit_blocked_reason']) == (D1, 'history_exhausted')
+    assert result['data_coverage'][A]['bars_in_window'] == 2
 
 
 def test_dates_and_history_availability_do_not_masquerade_as_no_signals(monkeypatch):

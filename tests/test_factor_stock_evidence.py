@@ -58,11 +58,18 @@ def test_no_positive_evidence_when_backend_returns_incomplete_set(monkeypatch, r
     assert batch == {'status': expected, 'rows': None}
 
 
-def test_global_budget_rejects_whole_batch_without_query(monkeypatch):
+def test_small_roster_survives_large_roster_without_truncation(monkeypatch):
     monkeypatch.setattr(evidence, 'MAX_MEMBER_SLOTS', 1)
-    monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: pytest.fail('must not read'))
-    batch, other = evidence.capture(DAY, [['000001.SZ'], ['000001.SZ']], earliest=NOW, now=lambda: NOW)
-    assert batch == other == {'status': 'member_budget_exceeded', 'rows': None}
+    def read(_day, symbols):
+        assert symbols == ['000001']
+        return {'000001': {}}
+
+    monkeypatch.setattr(evidence, 'load_stock_observations', read)
+    large, small, second = evidence.capture(
+        DAY, [['000002.SZ', '000003.SZ'], ['000001.SZ'], ['000002.SZ']], earliest=NOW, now=lambda: NOW,
+    )
+    assert large == second == {'status': 'member_budget_exceeded', 'rows': None}
+    assert small['status'] == 'observed' and len(small['rows']) == 1
 
 
 def test_only_unsupported_members_never_claim_a_database_read(monkeypatch):

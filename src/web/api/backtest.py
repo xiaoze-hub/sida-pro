@@ -18,8 +18,8 @@ router = APIRouter()
 class BacktestIn(BaseModel):
     symbols: list[str] = Field(default_factory=list, max_length=20)
     market: str = "CN"
-    start_date: str = ""
-    end_date: str = ""
+    start_date: str = Field("", description="有效的 YYYY-MM-DD 日期（留空不限）")
+    end_date: str = Field("", description="有效的 YYYY-MM-DD 日期（含当日，显式边界不强制平仓）")
     holding_days: int = Field(10, ge=1, le=60)
     stop_pct: float = Field(0.08, ge=0.0, le=0.5)
     target_pct: float = Field(0.15, ge=0.0, le=1.0)
