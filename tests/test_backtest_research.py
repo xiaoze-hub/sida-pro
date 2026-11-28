@@ -55,10 +55,65 @@ def test_walk_forward_separates_train_and_test():
     summ = out["oos_summary"]
     assert summ["windows"] == len(out["windows"])
     assert summ["total_trades"] == sum(w["oos_trades"] for w in out["windows"])
+    assert summ["total_open_positions"] == sum(w["oos_open_positions"] for w in out["windows"])
     # 汇总只来自测试窗(样本外), 不混入训练窗指标
     assert summ["avg_sharpe"] is None or isinstance(summ["avg_sharpe"], float)
+
+
+def test_walk_forward_does_not_liquidate_on_the_window_end_bar():
+    """A slice's final bar is not a taker exit: positions stay open and are disclosed."""
+    from src.core.backtest.data_adapter import PriceBar
+    from src.core.backtest.research import run_once
+
+    days = [f"2026-{month:02d}-{day:02d}" for month, day in
+            ((10, 1), (10, 2), (10, 5), (10, 6), (10, 7), (10, 8), (10, 9))]
+    bars = [PriceBar(d, 10, 10.2, 9.8, 10 + i * 0.01, 100_000) for i, d in enumerate(days)]
+    without_end = run_once({'X': bars}, fast=3, slow=5, holding_days=10)
+    with_end = run_once({'X': bars}, fast=3, slow=5, holding_days=10, sample_end=days[-1])
+    assert with_end.sample_end == days[-1]
+    assert len(with_end.open_positions) >= len(without_end.open_positions)
+    assert not any(t.exit_date == days[-1] and t.exit_reason == "eod" for t in with_end.trades)
 
 
 def test_walk_forward_empty_universe():
     out = walk_forward({})
     assert out["windows"] == [] and out["oos_summary"]["windows"] == 0
+
+
+def test_walk_forward_owns_both_slice_bounds_even_with_caller_overrides(monkeypatch):
+    from src.core.backtest import research
+
+    blocks = []
+    original = research.run_once
+
+    def record(bars, **kwargs):
+        result = original(bars, **kwargs)
+        blocks.append((bars, result))
+        return result
+
+    monkeypatch.setattr(research, 'run_once', record)
+    output = research.walk_forward({'X': _trend_bars(80)}, fasts=(3,), slows=(20,), holdings=(60,),
+                                   train_bars=60, test_bars=20, sample_start=None, sample_end=None)
+    assert output['oos_summary']['windows'] == 1
+    assert len(blocks) == 2
+    for bars, result in blocks:
+        assert result.sample_end == bars['X'][-1].date
+        assert result.equity_dates[1] == result.sample_start
+        assert all(t.exit_reason != 'eod' for t in result.trades)
+    assert blocks[0][1].sample_start == blocks[0][0]['X'][0].date
+    assert blocks[1][1].sample_start == _trend_bars(80)[60].date
+    assert blocks[1][0]['X'][0].date < blocks[1][1].sample_start
+
+
+def test_walk_forward_short_oos_can_trade_with_training_tail_as_warmup():
+    bars = _trend_bars(80)
+    out = walk_forward({'X': bars}, fasts=(3,), slows=(20,), holdings=(2,))
+    assert out['oos_summary']['windows'] == 1
+    assert out['oos_summary']['total_trades'] > 0
+
+
+def test_walk_forward_uses_one_date_cut_for_staggered_symbols():
+    bars = _trend_bars(95)
+    out = walk_forward({'X': bars[:80], 'Y': bars[15:]}, fasts=(3,), slows=(20,), holdings=(2,))
+    w = out['windows'][0]
+    assert w['train_end_date'] == bars[59].date < w['test_start_date'] == bars[60].date

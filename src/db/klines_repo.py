@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 CN_TRADING_TZ = ZoneInfo("Asia/Shanghai")
 
 
+def daily_bar_label(ts: datetime | str) -> str:
+    """Recover the Shanghai storage label, not the driver's session date."""
+    stamp = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
+    if stamp.utcoffset() is not None:
+        stamp = stamp.astimezone(CN_TRADING_TZ)
+    return stamp.date().isoformat()
+
+
 def count_factor_ready_cn_bars(engine: Engine, trade_date: date, symbols: list[str]) -> int:
     """Count usable traded bars, not all input rows of the legacy factor loader.
 
@@ -50,20 +58,32 @@ def _norm_market(market) -> str:
     return "CN" if mc in ("SH", "SZ", "BJ") else mc
 
 
-def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
+def load_qfq_bars(symbol: str, market, days: int = 250, *, date_cutoff: date | None = None,
+                  date_ceiling: date | None = None) -> list[dict]:
     """按 (symbol, market) 取前复权日 K(升序)。
 
     返回 [{date, open, high, low, close, volume}] —— 与 core 的 PriceBar 字段对齐,
     由调用方自行映射, 避免数据层依赖 core 的类型。
 
     查库失败返回 [] (调用方决定是否联网兜底), 不抛异常。
+    日线回测可传含首日的日期下界与含当日的上界；其他调用方保留原滚动时间下界。
     """
     try:
         mc_str = _norm_market(market)
         # P0(2026-09-18): 复用主引擎单例(src/db/session.py, 与主引擎同一连接池/参数),
         # 禁止 per-call create_engine+dispose。
         from src.db.session import engine
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        if date_cutoff is None:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        else:
+            # 日线统一以上海零点落库, 首日/末日边界必须用同一时区, 否则港美会被多排一天。
+            cutoff = datetime.combine(date_cutoff, time.min, CN_TRADING_TZ)
+        ceiling = (datetime.combine(date_ceiling + timedelta(days=1), time.min, CN_TRADING_TZ)
+                   if date_ceiling is not None else None)
+        params = {"s": symbol, "m": mc_str, "c": cutoff}
+        upper_predicate = "AND ts < :ce " if ceiling is not None else ""
+        if ceiling is not None:
+            params["ce"] = ceiling
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
@@ -73,19 +93,15 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
                     "SELECT ts, open, high, low, close, volume, coalesce(source,'') AS src "
                     "FROM klines "
                     "WHERE symbol=:s AND market=:m AND period='1d' AND adjust='qfq' "
-                    "  AND ts >= :c AND coalesce(source,'') IN ('tq','tencent') "
+                    "  AND ts >= :c " + upper_predicate +
+                    "  AND coalesce(source,'') IN ('tq','tencent') "
                     "ORDER BY ts ASC, CASE WHEN coalesce(source,'')='tq' THEN 0 ELSE 1 END"
                 ),
-                {"s": symbol, "m": mc_str, "c": cutoff},
+                params,
             ).fetchall()
         by_day: dict[str, tuple[int, dict]] = {}
         for r in rows:
-            ts = r[0]
-            day = (
-                ts.astimezone(CN_TRADING_TZ).date().isoformat()
-                if mc_str == "CN" and isinstance(ts, datetime) and ts.utcoffset() is not None
-                else str(ts)[:10]
-            )
+            day = daily_bar_label(r[0])
             priority = int(r[6] == "tq")
             if day in by_day and (mc_str != "CN" or priority <= by_day[day][0]):
                 continue

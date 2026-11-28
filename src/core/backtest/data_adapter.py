@@ -8,8 +8,76 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+
+from src.db.klines_repo import CN_TRADING_TZ
+from src.models.market import MARKETS, MarketCode
 
 logger = logging.getLogger(__name__)
+# Latest daily bars retained by the collector fallback; deep history is PG-first.
+MAX_FALLBACK_BARS = 800
+
+
+class HistoryOutsideLookback(ValueError):
+    """The collector has history, but none falls inside the lookback."""
+
+    def __init__(self, latest_date: str):
+        self.latest_date = latest_date
+        super().__init__(f'latest fallback bar before lookback: {latest_date}')
+
+
+class HistoryAfterWindow(ValueError):
+    """The bounded fallback did not reach this window; upstream history is unknown."""
+
+    def __init__(self, first_date: str, *, limit_reached: bool):
+        self.first_date = first_date
+        self.limit_reached = limit_reached
+        super().__init__(f'first fallback bar after window: {first_date}')
+
+
+def _aware(now: datetime) -> datetime:
+    """Reject host-local assumptions: naive input is UTC, never the deployment TZ."""
+    return now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now
+
+
+def history_cutoff_day(days: int, now: datetime) -> date:
+    """Inclusive first date label; all markets share the daily-bar storage clock."""
+    return (_aware(now).astimezone(timezone.utc) - timedelta(days=days)).astimezone(CN_TRADING_TZ).date()
+
+
+CN_MARKET_CODES = frozenset({'CN', 'SH', 'SZ', 'BJ'})
+
+
+def parse_backtest_market(market: str | MarketCode) -> MarketCode:
+    code = getattr(market, 'value', market).strip().upper() or 'CN'
+    try:
+        return MarketCode.CN if code in CN_MARKET_CODES else MarketCode(code)
+    except ValueError as exc:
+        raise ValueError(f'unsupported market: {market!r}; expected CN, HK or US') from exc
+
+
+def last_closed_session(market: str, as_of: datetime) -> date:
+    """Upper date label excluding open sessions; not a guarantee of vendor finality."""
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day, prev_trading_day
+
+    meta = MARKETS[parse_backtest_market(market)]
+    local = _aware(as_of).astimezone(meta.get_tz())
+    day = local.date()
+    close = meta.sessions[-1].end
+    if meta.code != MarketCode.CN:
+        # No HK/US holiday table here. This is only a ceiling; actual bars
+        # determine the last observed session. Use exchange-local time (incl. US DST).
+        return day if local.time() >= close else day - timedelta(days=1)
+    try:
+        return day if is_trading_day(day) and local.time() >= close else prev_trading_day(day)
+    except TradingCalendarError:
+        return day - timedelta(days=1)
+
+
+def history_window(market: str, days: int, as_of: datetime) -> tuple[date, date]:
+    """Inclusive date bounds; this does not reconstruct historical adjustment vintages."""
+    end = last_closed_session(market, as_of)
+    return min(history_cutoff_day(days, as_of), end), end
 
 
 @dataclass(frozen=True)
@@ -45,21 +113,34 @@ def from_klines(klines) -> list[PriceBar]:
     return out
 
 
-def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
-    """优先从 PG klines 表查; 库里没有或不够再 fallback 到 KlineCollector 实时拉。
+def load_price_history(
+    symbol: str, market, days: int = 250, *, as_of: datetime | None = None,
+    through: date | None = None,
+) -> list[PriceBar]:
+    """PG 优先；as_of 只限制交易日，不冻结复权版本。
 
-    2026-08-17: 引入 TimescaleDB hypertable, K线持久化后, 回测不再每次联网。
-    性能: 查库 ~70ms, 联网 ~500ms (单只股 800 天)。
-    B4.5(2026-09-10): 查库逻辑下沉 `src/db/klines_repo.py`, 本模块不再依赖 web 层
-    (core 反向依赖收敛, 见 tests/test_w41_core_web_dependency.py)。
+    两条路径都是查询时可见的前复权，可能含后来修订，不能用于证明历史时点可见性。
+    指定 as_of 且回退结果只在窗口外时按方向报错；through 可进一步缩小右界。
+    through 必须搭配 as_of；两者均不传时保留旧列表契约。
     """
     # 1. 查 PG klines 表(qfq 分区; 2026-09-08 风险方案1.2/B1: 复权维度入列,
     #    回测序列必须与主源同为前复权, 严禁混入 none 原始价)
     from src.db.klines_repo import load_qfq_bars
 
-    rows = load_qfq_bars(symbol, market, days)
+    if through is not None and as_of is None:
+        raise ValueError('through requires as_of')
+    calendar_days = max(1, int(days))
+    mc = parse_backtest_market(market)
+    bounds = history_window(mc.value, calendar_days, as_of) if as_of is not None else None
+    if bounds is not None and through is not None:
+        if through < bounds[0]:
+            return []
+        bounds = (bounds[0], min(bounds[1], through))
+    if bounds is None:
+        rows = load_qfq_bars(symbol, market, calendar_days)
+    else:
+        rows = load_qfq_bars(symbol, market, calendar_days, date_cutoff=bounds[0], date_ceiling=bounds[1])
     if rows:
-        # 库里有数据就直接用(用户传 days 只是 hint, 实际取所有行)
         return [
             PriceBar(
                 date=r["date"],
@@ -72,20 +153,25 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
             for r in rows
         ]
 
-    # 2. Fallback: 走 KlineCollector 拉
+    # 2. Collector 的 days 是日 K 根数，不是 PG 的自然日跨度。日期越早，
+    # 只放宽 PG 查库范围，不让回退的取数门槛突破固定预算。
     from src.collectors.kline_collector import KlineCollector
-    from src.models.market import MarketCode
-
+    fallback_bars = min(calendar_days, MAX_FALLBACK_BARS) if bounds is not None else calendar_days
     try:
-        mc = market if isinstance(market, MarketCode) else MarketCode(str(market).upper())
-    except Exception:
-        mc = MarketCode.CN
-    try:
-        klines = KlineCollector(mc).get_klines(symbol, days=days)
+        klines = KlineCollector(mc).get_klines(symbol, days=fallback_bars)
     except Exception as e:
         logger.warning(f"[回测] 拉取 {symbol} K线失败: {e}")
         return []
-    return from_klines(klines)
+    # 按日历截掉兜底序列中超出回看范围的旧柱；根数上限仍可能缩短左端覆盖。
+    converted = from_klines(klines)
+    if bounds is None:
+        return converted
+    cutoff_day, upper_day = bounds[0].isoformat(), bounds[1].isoformat()
+    if converted and converted[-1].date < cutoff_day:
+        raise HistoryOutsideLookback(converted[-1].date)
+    if converted and converted[0].date > upper_day:
+        raise HistoryAfterWindow(converted[0].date, limit_reached=len(converted) >= fallback_bars)
+    return [bar for bar in converted if cutoff_day <= bar.date <= upper_day][-fallback_bars:]
 
 
 def first_index_after(bars: list[PriceBar], date: str) -> int | None:

@@ -1,7 +1,8 @@
 """回测绩效指标 —— 纯函数,仅依赖标准库。
 
 约定:
-- equity_curve: list[float],逐(交易日)净值序列(含浮动盈亏),首元素为期初资金。
+- 指标输入 equity_curve 首元素为期初资金，随后为逐交易日收盘净值（含浮动盈亏）。
+- 引擎/API 返回同一条净值曲线；期初基准的日期为 ""，不是一个交易日收盘。
 - trade_pnls: list[float],每笔已平仓交易的净盈亏(已扣成本)。
 """
 
@@ -150,7 +151,7 @@ def avg_win_loss(trade_pnls: list[float]) -> tuple[float, float]:
 
 
 def summarize(equity_curve: list[float], trade_pnls: list[float]) -> dict:
-    """汇总所有绩效指标为一个 dict。"""
+    """汇总已实现交易与逐日净值指标；未平仓数量/浮盈由引擎追加。"""
     rets = daily_returns(equity_curve)
     avg_w, avg_l = avg_win_loss(trade_pnls)
     return {
