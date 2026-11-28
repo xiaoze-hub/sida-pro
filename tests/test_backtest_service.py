@@ -153,14 +153,16 @@ def test_window_before_lookback_cap_is_not_a_source_gap(monkeypatch):
     assert coverage['left_edge_capped'] is True
 
 
-def test_history_cutoff_for_cn_uses_shanghai_calendar_day():
+def test_history_cutoff_uses_bar_persistence_timezone_for_every_market():
     from datetime import date, datetime, timezone
     from src.core.backtest.data_adapter import history_cutoff_day
     from src.models.market import MarketCode
 
-    utc = datetime(2026, 11, 27, 18, tzinfo=timezone.utc)  # 02:00 in Shanghai the next morning.
+    # Daily bars are persisted at Shanghai midnight for all markets, so the label
+    # boundary follows Shanghai midnight rather than the exchange's own session.
+    utc = datetime(2026, 11, 27, 18, tzinfo=timezone.utc)  # 02:00 Shanghai on the 28th.
     assert history_cutoff_day(MarketCode.CN, 1, utc) == date(2026, 11, 27)
-    assert history_cutoff_day(MarketCode.US, 1, utc) == date(2026, 11, 26)
+    assert history_cutoff_day(MarketCode.US, 1, utc) == date(2026, 11, 27)
 
 
 def test_ancient_start_is_capped(monkeypatch):
@@ -310,12 +312,12 @@ def test_collector_trim_reports_observed_outside_window_instead_of_no_history(mo
     monkeypatch.setattr(service, 'datetime', Clock)
     monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
     monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_k: [
-        PriceBar('2026-10-20', 10, 11, 9, 10, 1000),
+        PriceBar('2025-01-02', 10, 11, 9, 10, 1000),
     ])
     result = service.run_backtest(symbols=['600000'], days=30)
     coverage = result['data_coverage']['600000']
     assert coverage['status'] == 'history_before_lookback'
-    assert coverage['latest_fallback_bar_before_cutoff'] == '2026-10-20'
+    assert coverage['latest_fallback_bar_before_cutoff'] == '2025-01-02'
     assert coverage['bars_in_window'] == 0 and result['trades'] == []
 
 
@@ -335,8 +337,9 @@ def test_backtest_passes_same_calendar_cutoff_to_database_and_fallback(monkeypat
     from src.core.backtest import data_adapter
     from src.db import klines_repo
 
-    def no_rows(_symbol, _market, days, *, date_cutoff=None):
+    def no_rows(_symbol, _market, days, *, date_cutoff=None, date_ceiling=None):
         assert days == 1 and date_cutoff == date(2026, 11, 27)
+        assert date_ceiling == date(2026, 11, 28)  # 18:00Z is already the next Shanghai day.
         return []
 
     last = PriceBar('2026-11-27', 10, 11, 9, 10, 1000.0)
@@ -345,6 +348,57 @@ def test_backtest_passes_same_calendar_cutoff_to_database_and_fallback(monkeypat
     rows = data_adapter.load_price_history('600000', 'CN', days=1,
                                            as_of=datetime(2026, 11, 27, 18, tzinfo=timezone.utc))
     assert rows == [last]
+
+
+def test_repeated_symbol_is_deduplicated_before_sizing(monkeypatch):
+    from src.core.backtest import service
+
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: _bars())
+    once = service.run_backtest(symbols=['600000'])
+    twice = service.run_backtest(symbols=['600000', '600000'])
+    assert twice['signals'] == once['signals'] and twice['trades'] == once['trades']
+    assert list(twice['data_coverage']) == ['600000']
+    overflow = service.run_backtest(symbols=[f'6000{i:02d}' for i in range(23)])
+    assert len(overflow['skipped_symbols']) == 3
+
+
+def test_naive_as_of_is_utc_not_host_local():
+    from datetime import date, datetime
+    from src.core.backtest.data_adapter import history_cutoff_day, history_window
+
+    naive = datetime(2026, 11, 27, 18)
+    assert history_cutoff_day('CN', 1, naive) == date(2026, 11, 27)
+    assert history_window('CN', 0, naive) == (date(2026, 11, 28), date(2026, 11, 28))
+
+
+def test_history_window_caps_bars_newer_than_as_of(monkeypatch):
+    from datetime import datetime, timezone
+    from src.collectors import kline_collector
+    from src.core.backtest import data_adapter
+    from src.db import klines_repo
+
+    seen = {}
+
+    def repo(_symbol, _market, days, *, date_cutoff=None, date_ceiling=None):
+        seen['ceiling'] = date_ceiling
+        return []
+
+    bars = [PriceBar(d, 10, 11, 9, 10, 1000) for d in ('2026-11-26', '2026-11-27', '2026-11-30')]
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', repo)
+    monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_k: bars)
+    rows = data_adapter.load_price_history('600000', 'CN', days=30, as_of=datetime(2026, 11, 27, 9, tzinfo=timezone.utc))
+    assert seen['ceiling'].isoformat() == '2026-11-27'
+    assert [bar.date for bar in rows] == ['2026-11-26', '2026-11-27']
+
+
+def test_short_lookback_still_clears_the_bar_floor(monkeypatch):
+    from src.core.backtest import service
+
+    requested = {}
+    monkeypatch.setattr(service, 'load_price_history',
+                        lambda _s, _m, days=0, **_kw: requested.setdefault('days', days) and _bars())
+    service.run_backtest(symbols=['600000'], days=1)
+    assert requested['days'] >= service.MIN_HISTORY_DAYS >= service.MIN_BARS
 
 
 def test_legacy_history_reader_keeps_collector_reply_without_raising(monkeypatch):
@@ -356,6 +410,15 @@ def test_legacy_history_reader_keeps_collector_reply_without_raising(monkeypatch
     monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
     monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_kw: [old])
     assert data_adapter.load_price_history('600000', 'CN', days=1) == [old]
+
+
+def test_metrics_basis_is_declared(monkeypatch):
+    from src.core.backtest import service
+
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: _bars())
+    basis = service.run_backtest(symbols=['600000'])['metrics_basis']
+    assert basis['trades_win_rate_profit_factor_total_pnl'] == 'realized_closed_only'
+    assert basis['total_return_max_drawdown_sharpe'] == 'mark_to_market_equity'
 
 
 def test_valid_close_can_drive_signal_when_warmup_open_is_invalid(monkeypatch):

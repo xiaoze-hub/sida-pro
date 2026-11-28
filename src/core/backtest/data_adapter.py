@@ -24,12 +24,23 @@ class HistoryOutsideLookback(ValueError):
         super().__init__(f'latest fallback bar before lookback: {latest_date}')
 
 
+_BAR_TZ = ZoneInfo('Asia/Shanghai')  # klines are persisted at Shanghai midnight for every market.
+
+
+def _aware(now: datetime) -> datetime:
+    """Reject host-local assumptions: naive input is UTC, never the deployment TZ."""
+    return now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now
+
+
 def history_cutoff_day(market: str, days: int, now: datetime) -> date:
-    """Inclusive market date label shared by the repository and the collector."""
-    cutoff = now.astimezone(timezone.utc) - timedelta(days=days)
-    if market.upper() in {'CN', 'SH', 'SZ', 'BJ'}:
-        cutoff = cutoff.astimezone(ZoneInfo('Asia/Shanghai'))
-    return cutoff.date()
+    """Inclusive first date label, anchored to the bar persistence timezone."""
+    return (_aware(now).astimezone(timezone.utc) - timedelta(days=days)).astimezone(_BAR_TZ).date()
+
+
+def history_window(market: str, days: int, as_of: datetime) -> tuple[date, date]:
+    """Point-in-time window: inclusive first session label and the as_of session label."""
+    end = _aware(as_of).astimezone(_BAR_TZ).date()
+    return history_cutoff_day(market, days, as_of), end
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,7 @@ def from_klines(klines) -> list[PriceBar]:
 
 
 def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime | None = None) -> list[PriceBar]:
+    """含 as_of 的时点窗口；不传 as_of 时保留原滚动查库与兜底契约。"""
     """PG 优先。指定 as_of 用统一日历窗口，仅有旧柱时抛出 HistoryOutsideLookback。
 
     不传 as_of 的调用保留滚动 PG 和采集器原契约，不按回测样本裁剪。
@@ -80,9 +92,10 @@ def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime 
     from src.db.klines_repo import load_qfq_bars
 
     calendar_days = max(1, int(days))
-    day_cutoff = (history_cutoff_day(str(getattr(market, 'value', market)), calendar_days, as_of)
-                  if as_of is not None else None)
-    rows = (load_qfq_bars(symbol, market, calendar_days, date_cutoff=day_cutoff)
+    cutoff, upper = ((history_window(str(getattr(market, 'value', market)), calendar_days, as_of))
+                     if as_of is not None else (None, None))
+    day_cutoff = cutoff
+    rows = (load_qfq_bars(symbol, market, calendar_days, date_cutoff=day_cutoff, date_ceiling=upper)
             if day_cutoff is not None else load_qfq_bars(symbol, market, calendar_days))
     if rows:
         return [
@@ -116,9 +129,10 @@ def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime 
     converted = from_klines(klines)
     if day_cutoff is None:
         return converted
-    cutoff_day = day_cutoff.isoformat()
+    assert upper is not None  # history_window always returns both bounds with as_of.
+    cutoff_day, upper_day = day_cutoff.isoformat(), upper.isoformat()
     returned = converted[-fallback_bars:]
-    in_window = [bar for bar in returned if bar.date >= cutoff_day]
+    in_window = [bar for bar in returned if cutoff_day <= bar.date <= upper_day]
     if returned and not in_window:
         raise HistoryOutsideLookback(returned[-1].date)
     return in_window

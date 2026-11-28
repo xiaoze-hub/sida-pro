@@ -98,6 +98,9 @@ class BacktestResult:
     skipped_cash: int = 0   # B2.1: 因现金不足被跳过
     skipped_slots: int = 0  # B2.1: 因并发持仓上限被跳过
     open_positions: list[BTOpenPosition] = field(default_factory=list)
+    # Requested sample bounds, so a shorter measured window is visible instead of implied.
+    sample_start: str | None = None
+    sample_end: str | None = None
 
 
 PositionSizer = Callable[[float], int]  # price -> qty
@@ -497,6 +500,8 @@ class Backtester:
             initial_capital=self.initial_capital,
             skipped=skipped,
             open_positions=open_positions,
+            sample_start=self.sample_start,
+            sample_end=self.sample_end,
         )
 
 

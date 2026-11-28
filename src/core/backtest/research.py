@@ -73,8 +73,13 @@ def run_once(
     initial_capital: float = 1_000_000.0,
     cash_per_trade: float = 100_000.0,
     participation_rate: float = 0.05,
+    sample_end: str | None = None,
 ):
-    """用给定参数跑一次金叉策略, 返回 BacktestResult。"""
+    """用给定参数跑一次金叉策略, 返回 BacktestResult。
+
+    传 `sample_end` 时末日不强平, 窗口末端无法卖出的仓位留作未平仓;
+    研究切片必须传它, 否则会得到一个窗口外不可能发生的末日成交。
+    """
     signals: list[Signal] = []
     for key, bars in bars_by_symbol.items():
         symbol, market = key if isinstance(key, tuple) else (str(key), "CN")
@@ -89,6 +94,7 @@ def run_once(
         initial_capital=initial_capital,
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
+        sample_end=sample_end,
     )
     return bt.run(signals, bars_by_symbol)
 
@@ -134,6 +140,12 @@ def _slice(bars_by_symbol: dict, start: int, end: int | None) -> dict:
     return {k: v[start:end] for k, v in bars_by_symbol.items()}
 
 
+def _slice_end(bars: dict) -> str | None:
+    """Last observed date of a slice, so its final bar is not force-liquidated."""
+    dates = [v[-1].date for v in bars.values() if v]
+    return max(dates) if dates else None
+
+
 def walk_forward(
     bars_by_symbol: dict,
     *,
@@ -153,7 +165,8 @@ def walk_forward(
     """
     if not bars_by_symbol:
         return {"windows": [], "oos_summary": {"windows": 0, "avg_sharpe": None,
-                                               "avg_return": None, "total_trades": 0}}
+                                               "avg_return": None, "total_trades": 0,
+                                               "total_open_positions": 0}}
     length = min(len(v) for v in bars_by_symbol.values())
     step = step or test_bars
     windows: list[dict] = []
@@ -165,7 +178,7 @@ def walk_forward(
                        top_n=1, **run_kwargs)
         if ranked:
             best = ranked[0]
-            oos = run_once(test, **best["params"], **run_kwargs)
+            oos = run_once(test, **best["params"], sample_end=_slice_end(test), **run_kwargs)
             windows.append(
                 {
                     "train_end": pos,
@@ -191,5 +204,6 @@ def walk_forward(
             "avg_sharpe": round(sum(sharpes) / len(sharpes), 4) if sharpes else None,
             "avg_return": round(sum(rets) / len(rets), 6) if rets else None,
             "total_trades": sum(w["oos_trades"] for w in windows),
+            "total_open_positions": sum(w["oos_open_positions"] for w in windows),
         },
     }

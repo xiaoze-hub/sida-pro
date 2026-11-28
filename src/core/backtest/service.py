@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 
@@ -18,7 +19,8 @@ from src.core.backtest.engine import Backtester, Signal, expected_trading_bounda
 from src.core.trading_calendar import TradingCalendarError, is_trading_day
 
 MIN_BARS = 30
-MIN_HISTORY_DAYS = 30
+# Calendar floor that can actually yield MIN_BARS sessions (5/7 weekdays plus holidays).
+MIN_HISTORY_DAYS = math.ceil(MIN_BARS * 7 / 5) + 8
 MAX_SYMBOLS = 20
 # Beyond this a request only widens the query/fetch window; coverage flags explain gaps.
 MAX_HISTORY_DAYS = 6000
@@ -159,10 +161,10 @@ def run_backtest(
     skipped_symbols: list[str] = []
     coverage = {}
     calendar: dict[date, bool | None] = {}
-    for sym in list(symbols)[:MAX_SYMBOLS]:
-        code = str(sym or "").strip()
-        if not code:
-            continue
+    # A repeated code would otherwise open two independent positions and double-count PnL.
+    requested = list(dict.fromkeys(code for code in (str(s or "").strip() for s in symbols) if code))
+    skipped_symbols.extend(requested[MAX_SYMBOLS:])
+    for code in requested[:MAX_SYMBOLS]:
         outside_fallback = None
         loaded = []
         if not outside_lookback and not no_market_sessions:
@@ -270,10 +272,17 @@ def run_backtest(
         "session_gap_basis": "calendar_sessions_without_a_bar_includes_possible_halts",
         "equity_basis": "initial_capital_then_daily_close",
         "equity_end_policy": "observed_cash_days_to_sample_end_if_flat_otherwise_last_fill_or_mark",
+        # Requested bounds vs the window actually measured (open positions cap the right edge).
+        "sample_window": {"requested_start": result.sample_start, "requested_end": result.sample_end,
+                          "measured_days": len(equity_days)},
         "equity_window": {"first_date": equity_days[0] if equity_days else None,
                           "last_date": equity_days[-1] if equity_days else None,
                           "observed_days": len(equity_days)},
         "pnl_basis": {"total_pnl": "realized_net", "unrealized_pnl": "mark_less_buy_outflow_excludes_exit_cost"},
+        # Curve-based metrics include open positions; trade statistics never do.
+        "metrics_basis": {"total_return_max_drawdown_sharpe": "mark_to_market_equity",
+                          "trades_win_rate_profit_factor_total_pnl": "realized_closed_only",
+                          "annualization_window": "equity_dates[1:]"},
 
         "initial_capital": result.initial_capital,
         "trades": [
