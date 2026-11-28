@@ -7,16 +7,15 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, timezone
 from typing import Callable
-from zoneinfo import ZoneInfo
 
 from src.core import factor_stock_evidence, tdx_boards, trading_calendar
 from src.db.factor_theme_observations import append_observations
 from src.db.session import WriteSessionLocal
 
 logger = logging.getLogger(__name__)
-CN = ZoneInfo('Asia/Shanghai')
+
 _BOARD = re.compile(r'88[0-9]{4}\.SH')
 _MEMBER = re.compile(r'[0-9]{6}\.(?:SH|SZ|BJ)')
 MAX_BOARDS = 12

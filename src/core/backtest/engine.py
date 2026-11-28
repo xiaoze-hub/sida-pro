@@ -82,9 +82,7 @@ class BTOpenPosition:
     mark_price: float
     buy_cash_delta: float
     unrealized_pnl: float
-    # history_short_of_sample_end states only what the provided bars show; it does not
-    # prove provider truncation (a weekend or holiday boundary looks identical).
-    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_short_of_sample_end"]
+    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end"]
 
 
 @dataclass
@@ -201,12 +199,14 @@ class Backtester:
         participation_rate: float = 0.05,
         *,
         sample_end: str | None = None,
+        sample_start: str | None = None,
     ) -> None:
         self.cost = cost_model or CostModel()
         self.initial_capital = float(initial_capital)
         self.lot = max(1, int(lot))
         self.participation_rate = max(0.0, float(participation_rate))
         self.sample_end = sample_end
+        self.sample_start = sample_start
         self.sizer = sizer or fixed_cash_sizer(cash_per_trade, lot)
 
     def _buyable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
@@ -294,13 +294,13 @@ class Backtester:
             buy = self.cost.fill("buy", entry_price, qty)
             entry_day = bars[entry_idx].date
             latest_day = max(b.date for b in bars[entry_idx:])
-            reason = "t_plus_one" if latest_day == entry_day else "untradeable"
-            if self.sample_end is not None and latest_day < self.sample_end:
-                reason = "history_short_of_sample_end"
-            elif reason != "t_plus_one" and latest_day == self.sample_end:
+            # Only label a reason the bars actually support: an explicit window leaves
+            # the position open by choice, not because provider history was missing.
+            if latest_day == entry_day:
+                reason = "t_plus_one"
+            else:
                 last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
-                if self._sellable(bars, last_idx, signal):
-                    reason = "sample_end"
+                reason = "sample_end" if self.sample_end is not None and self._sellable(bars, last_idx, signal) else "untradeable"
             mark = max(
                 (b for b in reversed(bars[entry_idx:])
                  if b.date >= entry_day and _valid_price(b.close)),
@@ -353,6 +353,8 @@ class Backtester:
             return [self.initial_capital], [""]
 
         start = min(t.entry_date for t in positions)
+        if self.sample_start is not None:
+            start = min(start, self.sample_start)
         # Stop at the last actual exit or open-position mark; unrelated symbols
         # cannot extend the measured holding period beyond the evidence.
         end = max([t.exit_date for t in trades] + [p.mark_date or p.entry_date for p in open_positions])

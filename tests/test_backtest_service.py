@@ -88,3 +88,19 @@ def test_backtest_router_importable():
     from src.web.api.backtest import router
 
     assert any(r.path == "/run" for r in router.routes)
+
+
+def test_ancient_start_is_capped(monkeypatch):
+    from src.core.backtest import service
+    from src.core.backtest.data_adapter import PriceBar
+
+    seen = {}
+
+    def load(_symbol, _market, days=250):
+        seen['days'] = days
+        return [PriceBar(date='1990-01-02', open=10, high=10, low=10, close=10, volume=1000)] * 40
+
+    monkeypatch.setattr(service, 'load_price_history', load)
+    result = service.run_backtest(symbols=['600000'], start_date='1990-01-01')
+    assert seen['days'] == service.MAX_HISTORY_DAYS
+    assert result['params']['history_capped'] is True

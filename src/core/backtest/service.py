@@ -16,6 +16,8 @@ from src.core.backtest.engine import Backtester, Signal
 
 MIN_BARS = 30
 MAX_SYMBOLS = 20
+# Beyond this a request only widens the query/fetch window; coverage flags explain gaps.
+MAX_HISTORY_DAYS = 6000
 
 
 class BacktestDateError(ValueError):
@@ -97,6 +99,8 @@ def run_backtest(
     earliest = start_date or end_date
     if earliest:
         history_days = max(history_days, (date.today() - date.fromisoformat(earliest)).days + 60)
+    history_capped = history_days > MAX_HISTORY_DAYS
+    history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
@@ -142,6 +146,7 @@ def run_backtest(
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
         sample_end=end_date,
+        sample_start=start_date,
     )
     result = bt.run(signals, bars_by_symbol)
     return {
@@ -158,6 +163,7 @@ def run_backtest(
             "strategy": "ma5_cross_ma20",
             "sample_end_policy": "mark_open_without_forced_exit" if end_date else "legacy_liquidate_if_sellable",
             "history_days": history_days,
+            "history_capped": history_capped,
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),
         "skipped_symbols": skipped_symbols,

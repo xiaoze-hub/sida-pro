@@ -174,6 +174,15 @@ def test_engine_enforces_sample_end_without_caller_filtering():
     assert (position.mark_date, position.exit_blocked_reason) == (D2, 'sample_end')
 
 
+def test_portfolio_engine_accepts_sample_end():
+    from src.core.backtest.portfolio import PortfolioBacktester, PortfolioConfig
+
+    bars = [bar(D0, 10.5), bar(D1, 10.5), bar(D2, 10.6), bar(D3, 13.0)]
+    outcome = PortfolioBacktester(PortfolioConfig(sample_end=D2)).run([Signal(A, 'CN', D0)], {A: bars})
+    assert not outcome.trades
+    assert outcome.open_positions[0].exit_blocked_reason == 'sample_end'
+
+
 @pytest.mark.parametrize('portfolio', [False, True])
 def test_duplicate_final_day_keeps_legacy_sellable_sample_exit(portfolio):
     runner = PortfolioBacktester() if portfolio else Backtester()
@@ -205,8 +214,20 @@ def test_history_ends_before_requested_boundary(monkeypatch):
     monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_k: [*prefix, bar(D0, 10.5), bar(D1, 10.5)])
     result = service.run_backtest(symbols=[A], start_date=D0, end_date=D3)
     position, = result['open_positions']
-    assert (position['mark_date'], position['exit_blocked_reason']) == (D1, 'history_short_of_sample_end')
+    # Entered on the final bar, so T+1 is the honest reason; coverage records the gap.
+    assert (position['mark_date'], position['exit_blocked_reason']) == (D1, 't_plus_one')
     assert result['data_coverage'][A]['bars_in_window'] == 2
+    assert result['data_coverage'][A]['end_after_last_bar'] is True
+
+
+def test_weekend_boundary_is_not_reported_as_missing_history(monkeypatch):
+    prefix = [bar(f'2026-10-{day:02d}') for day in range(1, 29)]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_k: [*prefix, bar(D0, 10.5), bar(D1, 10.5)])
+    result = service.run_backtest(symbols=[A], start_date=prefix[0].date, end_date='2026-11-21', holding_days=60)
+    position, = result['open_positions']
+    # A non-trading-day boundary is described by the literal reason, not as missing history.
+    assert position['exit_blocked_reason'] in {'sample_end', 't_plus_one', 'untradeable'}
+    assert result['data_coverage'][A]['end_after_last_bar'] is True
 
 
 def test_dates_and_history_availability_do_not_masquerade_as_no_signals(monkeypatch):

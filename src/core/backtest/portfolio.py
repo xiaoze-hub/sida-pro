@@ -37,6 +37,7 @@ class PortfolioConfig:
     lot: int = 100
     participation_rate: float = 0.05
     sample_end: str | None = None   # 显式样本截止日: 不强制平仓, 与单信号引擎同规则
+    sample_start: str | None = None  # 显式样本起始日: 保留空仓期, 与单信号引擎同规则
 
 
 class PortfolioBacktester:
@@ -53,6 +54,7 @@ class PortfolioBacktester:
             lot=self.cfg.lot,
             participation_rate=self.cfg.participation_rate,
             sample_end=self.cfg.sample_end,
+            sample_start=self.cfg.sample_start,
         )
 
     def _candidate(self, sig: Signal, bars: list[PriceBar]) -> tuple[int, float, int] | None:
@@ -75,22 +77,28 @@ class PortfolioBacktester:
             bars = bars_by_symbol.get((sig.symbol, sig.market)) or bars_by_symbol.get(sig.symbol)
             if not bars:
                 continue
-            cand = self._candidate(sig, bars)
+            if self.cfg.sample_end is not None:
+                bars = [b for b in bars if b.date <= self.cfg.sample_end]
+                if not bars:
+                    continue
+            symbol_bars = bars
+            cand = self._candidate(sig, symbol_bars)
             if cand is None:
                 continue
             ei, px, qty = cand
             exit_fill = simulate_exit(
-                bars,
+                symbol_bars,
                 ei,
                 stop=sig.stop_loss,
                 target=sig.target_price,
                 max_hold=max(1, int(sig.holding_days or 10)),
-                sellable=lambda j: self._single._sellable(bars, j, sig),
+                sellable=lambda j: self._single._sellable(symbol_bars, j, sig),
+                close_at_sample_end=self._single.sample_end is None,
             )
             planned.append(
                 {
                     "sig": sig,
-                    "bars": bars,
+                    "bars": symbol_bars,
                     "entry_idx": ei,
                     "entry_date": bars[ei].date,
                     "entry_price": px,

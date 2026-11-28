@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.core.backtest.service import BacktestDateError, run_backtest
 from src.web.api.auth import get_current_user
@@ -19,10 +21,10 @@ class BacktestIn(BaseModel):
     symbols: list[str] = Field(default_factory=list, max_length=20)
     market: str = "CN"
     start_date: str = Field(
-        "", pattern=r"^$|^\d{4}-\d{2}-\d{2}$", description="有效的 YYYY-MM-DD 日期（留空不限）",
+        "", pattern=r"^$|^[0-9]{4}-[0-9]{2}-[0-9]{2}$", description="有效的 YYYY-MM-DD 日期（留空不限）",
     )
     end_date: str = Field(
-        "", pattern=r"^$|^\d{4}-\d{2}-\d{2}$",
+        "", pattern=r"^$|^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
         description="有效的 YYYY-MM-DD 日期（含当日，显式边界不强制平仓）",
     )
     holding_days: int = Field(10, ge=1, le=60)
@@ -30,6 +32,14 @@ class BacktestIn(BaseModel):
     target_pct: float = Field(0.15, ge=0.0, le=1.0)
     initial_capital: float = Field(1_000_000.0, gt=0, le=1e10)
     cash_per_trade: float = Field(100_000.0, gt=0, le=1e10)
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _calendar_date(cls, value: str) -> str:
+        """Reject impossible dates through the schema so 422 bodies keep one shape."""
+        if value and date.fromisoformat(value).isoformat() != value:
+            raise ValueError("必须是有效的 YYYY-MM-DD 日期")
+        return value
 
 
 @router.post("/run")
@@ -53,4 +63,7 @@ def run_backtest_endpoint(
             cash_per_trade=payload.cash_per_trade,
         )
     except BacktestDateError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=[{"loc": ["body", "date"], "msg": str(exc), "type": "value_error"}],
+        ) from exc
