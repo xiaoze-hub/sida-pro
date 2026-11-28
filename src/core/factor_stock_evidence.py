@@ -19,10 +19,6 @@ MAX_MEMBER_SLOTS = 1500
 _SUPPORTED = re.compile(r'(?:(?:60|68)[0-9]{4}\.SH|(?:00|30)[0-9]{4}\.SZ)')
 
 
-def _after_close(value: datetime, day: date) -> bool:
-    return capture_window(value, day)
-
-
 def capture_window(value: datetime, day: date) -> bool:
     """Shared gate: same Shanghai trading day at or after the close."""
     if value.utcoffset() is None:
@@ -80,11 +76,12 @@ def capture(
         supported = {m[:6] for m in members if _SUPPORTED.fullmatch(m)}
         if not supported:
             continue
-        if len(members) > remaining:
+        # Charge what is actually read; unsupported identities carry no query cost.
+        if len(supported) > remaining:
             result[i]['status'] = 'member_budget_exceeded'
             continue
         selected[i] = supported
-        remaining -= len(members)
+        remaining -= len(supported)
     symbols = sorted(set().union(*selected.values()))
 
     def unavailable(reason: str) -> list[dict]:

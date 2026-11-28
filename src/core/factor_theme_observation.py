@@ -34,10 +34,7 @@ def _timestamp(value: object) -> datetime | None:
 
 
 def _capture_window(instant: datetime, trade_day: date) -> bool:
-    if instant.utcoffset() is None:
-        return False
-    local = instant.astimezone(CN)
-    return local.date() == trade_day and local.time() >= time(15)
+    return factor_stock_evidence.capture_window(instant, trade_day)
 
 
 def _iso_day(raw: object) -> date | None:
@@ -88,7 +85,7 @@ def capture_after_daily_refresh(
     board_config: str, stats: dict, *, now: Callable[[], datetime],
 ) -> dict:
     """Consume only actual coverage/factor receipts from the scheduler; no backfill or ranking."""
-    boards = {code.strip() for code in board_config.split(',')}
+    boards = {code.strip().upper() for code in board_config.split(',')}
     if (not 1 <= len(boards) <= MAX_BOARDS
             or any(not _BOARD.fullmatch(code) or code in tdx_boards.EXCLUDED_SECTORS for code in boards)):
         return {'written': 0, 'reason': 'invalid_board_config'}

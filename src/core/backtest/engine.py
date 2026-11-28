@@ -82,7 +82,9 @@ class BTOpenPosition:
     mark_price: float
     buy_cash_delta: float
     unrealized_pnl: float
-    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_exhausted"]
+    # history_short_of_sample_end states only what the provided bars show; it does not
+    # prove provider truncation (a weekend or holiday boundary looks identical).
+    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_short_of_sample_end"]
 
 
 @dataclass
@@ -294,7 +296,7 @@ class Backtester:
             latest_day = max(b.date for b in bars[entry_idx:])
             reason = "t_plus_one" if latest_day == entry_day else "untradeable"
             if self.sample_end is not None and latest_day < self.sample_end:
-                reason = "history_exhausted"
+                reason = "history_short_of_sample_end"
             elif reason != "t_plus_one" and latest_day == self.sample_end:
                 last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
                 if self._sellable(bars, last_idx, signal):

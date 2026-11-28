@@ -88,6 +88,8 @@ def test_daily_job_persists_observation_without_authorizing_a_rank(monkeypatch, 
     (THEME, False, 2, 'receipt_not_persisted'),
     (THEME, True, 0, 'factor_unavailable'),
     ('880741.ＳＨ', True, 2, 'invalid_board_config'),
+    ('880741.SH,880742.SH,880743.SH,880744.SH,880745.SH,880746.SH,880747.SH,'
+     '880748.SH,880749.SH,880750.SH,880751.SH,880752.SH,880753.SH', True, 2, 'invalid_board_config'),
 ])
 def test_ineligible_run_does_not_fetch_members(monkeypatch, selector, persisted, written, expected_reason):
     install_upstream(monkeypatch, persisted=persisted, written=written)
@@ -97,6 +99,16 @@ def test_ineligible_run_does_not_fetch_members(monkeypatch, selector, persisted,
     status = refresh.daily_job_with_factors().get('theme_observation', {'reason': 'disabled'})
     assert status['reason'] == expected_reason
     assert stored_rows() == []
+
+
+def test_lowercase_board_config_is_normalized(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', '880741.sh')
+    seen = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda code: seen.append(code) or ['000001.SZ'])
+    result = refresh.daily_job_with_factors()['theme_observation']
+    assert seen == [THEME]
+    assert result['written'] == 1
 
 
 def test_same_evidence_idempotent_later_retrieval_preserves_both(monkeypatch):

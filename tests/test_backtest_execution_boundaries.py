@@ -205,7 +205,7 @@ def test_history_ends_before_requested_boundary(monkeypatch):
     monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_k: [*prefix, bar(D0, 10.5), bar(D1, 10.5)])
     result = service.run_backtest(symbols=[A], start_date=D0, end_date=D3)
     position, = result['open_positions']
-    assert (position['mark_date'], position['exit_blocked_reason']) == (D1, 'history_exhausted')
+    assert (position['mark_date'], position['exit_blocked_reason']) == (D1, 'history_short_of_sample_end')
     assert result['data_coverage'][A]['bars_in_window'] == 2
 
 

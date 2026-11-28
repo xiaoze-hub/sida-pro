@@ -94,8 +94,9 @@ def run_backtest(
     # load_qfq_bars cuts relative to now; stretch the lookback so an older
     # requested start is not silently reported as fully covered.
     history_days = max(int(days), 30)
-    if start_date:
-        history_days = max(history_days, (date.today() - date.fromisoformat(start_date)).days + 60)
+    earliest = start_date or end_date
+    if earliest:
+        history_days = max(history_days, (date.today() - date.fromisoformat(earliest)).days + 60)
     mkt = (market or "CN").strip().upper() or "CN"
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
@@ -117,12 +118,13 @@ def run_backtest(
             status = 'insufficient_history'
         else:
             status = 'usable'
-        if start_date and loaded and loaded[0].date > start_date:
-            status = 'window_truncated'
         coverage[code] = dict(status=status, loaded_first=loaded[0].date if loaded else None,
                               loaded_last=loaded[-1].date if loaded else None,
                               bars_through_end=len(bars),
-                              bars_in_window=sum(not start_date or bar.date >= start_date for bar in bars))
+                              bars_in_window=sum(not start_date or bar.date >= start_date for bar in bars),
+                              window_truncated=bool(start_date and loaded and loaded[0].date > start_date),
+                              # A non-trading-day boundary also produces this; it is not proof of missing data.
+                              end_after_last_bar=bool(end_date and loaded and loaded[-1].date < end_date))
         if status != 'usable':
             skipped_symbols.append(code)
             continue
@@ -171,7 +173,11 @@ def run_backtest(
             {**asdict(t), "entry_price": round(t.entry_price, 4), "exit_price": round(t.exit_price, 4)}
             for t in result.trades
         ],
-        "open_positions": [asdict(p) for p in result.open_positions],
+        "open_positions": [
+            {**asdict(p), "entry_price": round(p.entry_price, 4), "mark_price": round(p.mark_price, 4),
+             "unrealized_pnl": round(p.unrealized_pnl, 4)}
+            for p in result.open_positions
+        ],
         "equity_curve": result.equity_curve,
         "equity_dates": result.equity_dates,
         "metrics": result.metrics,

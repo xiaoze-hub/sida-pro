@@ -36,6 +36,7 @@ class PortfolioConfig:
     max_positions: int = 10      # 并发持仓上限
     lot: int = 100
     participation_rate: float = 0.05
+    sample_end: str | None = None   # 显式样本截止日: 不强制平仓, 与单信号引擎同规则
 
 
 class PortfolioBacktester:
@@ -51,6 +52,7 @@ class PortfolioBacktester:
             cash_per_trade=self.cfg.initial_capital * self.cfg.position_pct,
             lot=self.cfg.lot,
             participation_rate=self.cfg.participation_rate,
+            sample_end=self.cfg.sample_end,
         )
 
     def _candidate(self, sig: Signal, bars: list[PriceBar]) -> tuple[int, float, int] | None:
