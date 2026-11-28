@@ -113,11 +113,12 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
 
 
 def daily_job_with_factors() -> dict:
-    """Run the legacy factor snapshot only after the upstream run has committed."""
+    """Run factors after daily commits, then optionally record theme observations."""
     from src.collectors.factor_daily import collect_once
     from src.db.session import WriteSessionLocal
 
     stats = daily_job()
+    board_config = os.environ.get("SIDA_FACTOR_THEME_OBSERVATION_BOARDS", "").strip()
     receipt = stats.get("coverage_receipt") or {}
     coverage = {
         "coverage_status": receipt.get("status", "not_attempted"),
@@ -130,6 +131,8 @@ def daily_job_with_factors() -> dict:
             "universe_empty": "universe_empty",
         }.get(coverage["coverage_status"], "target_bars_unverified")
         stats["factor_refresh"] = {"written": 0, "reason": reason, **coverage}
+        if board_config:
+            stats["theme_observation"] = {"written": 0, "reason": "factor_unavailable"}
         if reason not in ("before_close", "non_trading_day"):
             logger.warning("个股因子日快照跳过: date=%s reason=%s", receipt.get("trade_date"), reason)
         return stats
@@ -141,4 +144,14 @@ def daily_job_with_factors() -> dict:
     except Exception as exc:  # noqa: BLE001 - preserve actual upstream result
         stats["factor_refresh"] = {"written": 0, "reason": "collect_failed", **coverage}
         logger.error("个股因子日快照计算失败: date=%s error=%s", target, type(exc).__name__)
+    if board_config:
+        try:
+            from src.core.factor_theme_observation import capture_after_daily_refresh
+
+            stats["theme_observation"] = capture_after_daily_refresh(board_config, stats, now=_now_cn)
+            if "reason" in stats["theme_observation"]:
+                logger.warning("题材成员盘后观测跳过: date=%s reason=%s", target, stats["theme_observation"]["reason"])
+        except Exception as exc:  # preserve upstream commits even if this independent write fails
+            stats["theme_observation"] = {"written": 0, "reason": "capture_failed"}
+            logger.error("题材成员盘后观测失败: date=%s error=%s", target, type(exc).__name__)
     return stats
