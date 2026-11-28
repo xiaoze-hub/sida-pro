@@ -35,6 +35,9 @@ def test_freezes_each_member_without_conflating_chart_and_trade_status(monkeypat
     rows = {row['symbol']: row for row in batch['rows']}
     assert list(rows) == MEMBERS
     assert rows['000001.SZ']['day_bar']['volume'] == 200
+    assert rows['000001.SZ']['day_bar']['trade_date'] == DAY.isoformat()
+    assert batch['factor_rows_missing'] == 3
+    assert batch['supported_member_count'] == 4
     assert rows['000001.SZ']['factor_values']['momentum_20'] == 2.5
     assert rows['000001.SZ']['factor_values']['volume_z20'] is None
     assert rows['000001.SZ']['has_valid_traded_bar'] is True

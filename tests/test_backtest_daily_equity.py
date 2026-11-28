@@ -64,3 +64,18 @@ def test_validate_equity_curve_contract():
     with pytest.raises(ValueError):
         M.validate_equity_curve([100, 101], ["", ""])
     M.validate_equity_curve([100, 101], ["", "2026-01-02"])
+
+
+@pytest.mark.parametrize('portfolio', [False, True])
+def test_explicit_window_keeps_observed_cash_days_after_final_exit(portfolio):
+    from src.core.backtest.portfolio import PortfolioBacktester, PortfolioConfig
+
+    days = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20']
+    bars = [_bar(day, 10, 10.5, 9.5, 10) for day in days]
+    sig = Signal('X', 'CN', days[0], holding_days=1)
+    runner = (PortfolioBacktester(PortfolioConfig(sample_start=days[0], sample_end=days[3]))
+              if portfolio else Backtester(sample_start=days[0], sample_end=days[3]))
+    outcome = runner.run([sig], {'X': bars})
+    assert outcome.trades[0].exit_date == days[2]
+    assert outcome.equity_dates == ['', *days[:4]]
+    assert outcome.equity_curve[-1] == outcome.equity_curve[-2]

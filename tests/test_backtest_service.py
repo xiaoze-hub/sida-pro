@@ -247,3 +247,33 @@ def test_invalid_prices_and_market_adjusted_end_are_disclosed(monkeypatch):
     assert coverage['invalid_ohlc_bars'] == 1
     assert coverage['expected_last_trading_date'] == '2026-11-20'
     assert coverage['end_after_last_bar'] is False
+
+
+def test_invalid_warmup_close_cannot_create_a_golden_cross(monkeypatch):
+    from datetime import date, timedelta
+    from src.core.backtest import service
+
+    first = date(2026, 10, 5)
+    bars = [PriceBar((first + timedelta(days=i)).isoformat(), 10, 11, 9, 0 if i == 21 else 10, 1000)
+            for i in range(50)]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: bars)
+    result = service.run_backtest(symbols=['600000'], start_date=bars[22].date)
+    assert result['signals'] == 0
+    assert result['data_coverage']['600000']['invalid_warmup_ohlc_bars'] == 1
+
+
+def test_implicit_window_does_not_claim_full_coverage_for_short_history(monkeypatch):
+    from datetime import datetime, timezone
+    from src.core.backtest import service
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 27, 9, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(service, 'datetime', Clock)
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: _bars()[:30])
+    recent = service.run_backtest(symbols=['600000'], days=450)['data_coverage']['600000']
+    deep = service.run_backtest(symbols=['600000'], days=2000)['data_coverage']['600000']
+    assert recent['window_truncated'] is True
+    assert deep['window_truncated'] is None  # Static calendar does not cover the cutoff.

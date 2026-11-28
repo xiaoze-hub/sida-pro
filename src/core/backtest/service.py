@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 
-from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, history_cutoff_day, load_price_history
+from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, PriceBar, history_cutoff_day, load_price_history
 from src.core.backtest.engine import Backtester, Signal, expected_trading_boundary, positive_trade_volume, valid_trade_price
 
 MIN_BARS = 30
@@ -37,10 +37,14 @@ def _check_date(name: str, value: str | None) -> str | None:
     raise BacktestDateError(f"{name} 必须是有效的 YYYY-MM-DD 日期")
 
 
+def _has_valid_ohlc(bar: PriceBar) -> bool:
+    return all(valid_trade_price(p) for p in (bar.open, bar.high, bar.low, bar.close))
+
+
 def _golden_cross_signals(
     symbol: str,
     market: str,
-    bars,
+    bars: list[PriceBar],
     *,
     start_date: str | None,
     end_date: str | None,
@@ -50,8 +54,13 @@ def _golden_cross_signals(
 ) -> list[Signal]:
     closes = [b.close for b in bars]
     out: list[Signal] = []
-    for i in range(20, len(bars)):
-        d = bars[i].date
+    valid_run = 0
+    for i, bar in enumerate(bars):
+        # Both current and previous MA20 must be formed from consecutive valid bars.
+        valid_run = valid_run + 1 if _has_valid_ohlc(bar) else 0
+        if valid_run < 21:
+            continue
+        d = bar.date
         if start_date and d < start_date:
             continue
         if end_date and d > end_date:
@@ -110,12 +119,13 @@ def run_backtest(
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
-    expected_first = expected_trading_boundary(mkt, sample_start)
-    expected_last = expected_trading_boundary(mkt, end_date, right=True)
     cutoff = history_cutoff_day(mkt, history_days, now).isoformat()
+    coverage_start = sample_start or cutoff
+    expected_first = expected_trading_boundary(mkt, coverage_start)
+    expected_last = expected_trading_boundary(mkt, end_date, right=True)
     first_target = expected_first or sample_start
     last_target = expected_last or end_date
-    left_edge_capped = bool(history_capped and first_target and first_target < cutoff)
+    left_edge_capped = history_capped and (sample_start is None or bool(first_target and first_target < cutoff))
     no_market_sessions = bool(expected_first and expected_last and expected_first > expected_last)
     outside_lookback = bool(history_capped and last_target and last_target < cutoff)
     bars_by_symbol: dict = {}
@@ -147,18 +157,16 @@ def run_backtest(
         window_last = bars[-1].date if bars and (not sample_start or bars[-1].date >= sample_start) else None
         loaded_first = loaded[0].date if loaded else None
         truncated: bool | None = None
-        if not sample_start or (loaded_first and loaded_first <= sample_start):
-            truncated = False
-        elif left_edge_capped and not no_market_sessions:
+        if left_edge_capped and not no_market_sessions:
             truncated = True
+        elif loaded_first and loaded_first <= coverage_start:
+            truncated = False
         elif loaded_first and expected_first:
             # This compares to the market calendar; it does not assert a vendor gap.
             truncated = loaded_first > expected_first
         window_bars = [bar for bar in bars if not sample_start or bar.date >= sample_start]
-        invalid_prices = sum(
-            not all(valid_trade_price(price) for price in (bar.open, bar.high, bar.low, bar.close))
-            for bar in window_bars
-        )
+        invalid_prices = sum(not _has_valid_ohlc(bar) for bar in window_bars)
+        invalid_warmup = sum(not _has_valid_ohlc(bar) for bar in bars[:len(bars) - len(window_bars)])
         coverage[code] = dict(status=status, loaded_first=loaded_first,
                               loaded_last=loaded[-1].date if loaded else None,
                               window_last=window_last,
@@ -166,6 +174,7 @@ def run_backtest(
                               bars_in_window=len(window_bars),
                               nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
                               invalid_ohlc_bars=invalid_prices,
+                              invalid_warmup_ohlc_bars=invalid_warmup,
                               expected_first_trading_date=expected_first,
                               expected_last_trading_date=expected_last,
                               window_truncated=truncated,
@@ -209,6 +218,7 @@ def run_backtest(
             "history_days": history_days,
             "history_capped": history_capped,
             "history_cutoff_date": cutoff,
+            "coverage_start_date": coverage_start,
             "fallback_bar_limit": min(history_days, MAX_FALLBACK_BARS),
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),
@@ -218,6 +228,7 @@ def run_backtest(
         "skipped_signals": result.skipped,
         "execution_basis": "independent_signal_daily_bar",
         "equity_basis": "initial_capital_then_daily_close",
+        "equity_end_policy": "observed_cash_days_to_sample_end_if_flat_otherwise_last_fill_or_mark",
         "equity_window": {"first_date": equity_days[0] if equity_days else None,
                           "last_date": equity_days[-1] if equity_days else None,
                           "observed_days": len(equity_days)},

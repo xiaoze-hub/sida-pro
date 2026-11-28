@@ -29,7 +29,7 @@ def _statement(dialect: str):
 
 
 def boards_with_stock_evidence(db: Session, trade_date: str, boards: set[str]) -> set[str]:
-    """Read the latest committed record for each requested board on the writer."""
+    """Read the daily-bar/halt retry flag, not factor or ranking readiness."""
     if not boards:
         return set()
     pin_write_bind(db)

@@ -48,7 +48,7 @@ def _stamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
-def _row(member: str, raw: Mapping[str, Any] | None) -> dict[str, Any]:
+def _row(member: str, raw: Mapping[str, Any] | None, day: date) -> dict[str, Any]:
     row: dict[str, Any] = dict(symbol=member, status='unsupported_identity', day_bar=None,
                                has_valid_traded_bar=None, factor_values=None, is_st=None,
                                trading_status='unknown', halt_record=None)
@@ -57,7 +57,8 @@ def _row(member: str, raw: Mapping[str, Any] | None) -> dict[str, Any]:
     row['status'] = 'checked'
     traded = False
     bar_ts = raw.get('bar_ts')
-    if bar_ts is not None and (not isinstance(bar_ts, datetime) or bar_ts.utcoffset() is None):
+    if bar_ts is not None and (not isinstance(bar_ts, datetime) or bar_ts.utcoffset() is None
+                               or bar_ts.astimezone(CN_TRADING_TZ).date() != day):
         row['status'] = 'bar_timestamp_unverified'
     elif isinstance(bar_ts, datetime):
         bar = {key: _finite(raw.get(key)) for key in ('open', 'high', 'low', 'close', 'volume')}
@@ -66,7 +67,7 @@ def _row(member: str, raw: Mapping[str, Any] | None) -> dict[str, Any]:
                   and v is not None and 0 < l <= min(o, c) <= max(o, c) <= h
                   and v > 0 and raw.get('quality_flag') == 1)
         row['day_bar'] = {**bar, 'source': raw['source'], 'ts': _stamp(bar_ts),
-                          'adjust': 'qfq', 'quality_flag': raw.get('quality_flag')}
+                          'trade_date': day.isoformat(), 'adjust': 'qfq', 'quality_flag': raw.get('quality_flag')}
         row['has_valid_traded_bar'] = traded
     if raw.get('factor_id') is not None:
         row['factor_values'] = {key: _finite(raw.get(key)) for key in FACTOR_FIELDS}
@@ -124,7 +125,7 @@ def capture(
     if set(data) != set(symbols):
         return unavailable('incomplete_read')
     for i in selected:
-        rows = [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in rosters[i]]
+        rows = [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None, day) for member in rosters[i]]
         # This is daily-bar/halt coverage for supported members, not proof of
         # complete membership, ST, factor lineage, or tradability.
         supported_rows = [row for row in rows if row['status'] != 'unsupported_identity']
@@ -145,6 +146,9 @@ def capture(
             'status': status,
             'read_started_at': _stamp(started), 'read_finished_at': _stamp(finished),
             'source': 'primary_db_visible_rows', 'factor_lineage_verified': False,
+            'supported_member_count': len(supported_rows),
+            'day_bar_or_halt_covered': covered,
+            'factor_rows_missing': sum(row['factor_values'] is None for row in supported_rows),
             'rows': rows,
         }
     return result

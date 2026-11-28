@@ -377,9 +377,17 @@ class Backtester:
         start = min(t.entry_date for t in positions)
         if self.sample_start is not None:
             start = min(start, self.sample_start)
-        # Stop at the last actual exit or open-position mark; unrelated symbols
-        # cannot extend the measured holding period beyond the evidence.
+        # Keep observed in-window idle days after liquidation. An open position
+        # instead caps the right edge at actual marks/fills, not unrelated prices.
         end = max([t.exit_date for t in trades] + [p.mark_date or p.entry_date for p in open_positions])
+        if self.sample_end is not None and not open_positions:
+            traded_keys = {self._bar_key(trade, bars_by_symbol) for trade in trades}
+            observed_end = max(
+                (bar.date for key in traded_keys for bar in bars_by_symbol.get(key, ())
+                 if bar.date <= self.sample_end and valid_trade_price(bar.close)),
+                default=end,
+            )
+            end = max(end, observed_end)
         all_dates = sorted(
             {
                 b.date
