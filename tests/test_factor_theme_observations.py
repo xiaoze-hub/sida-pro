@@ -3,6 +3,7 @@ import json
 
 import pytest
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.collectors import factor_daily
 from src.core import klines_daily_refresh as refresh, tdx_boards
@@ -73,6 +74,10 @@ def test_daily_job_persists_observation_without_authorizing_a_rank(monkeypatch, 
     assert doc['status'] == state
     assert doc['members'] == members
     assert doc['dayline_coverage']['status'] == 'partial'
+    assert doc['version'] == 2
+    assert doc['stock_evidence'] == {
+        'status': 'unsupported_backend' if state == 'observed' else 'no_observed_members', 'rows': None,
+    }
 
 
 @pytest.mark.parametrize('selector,persisted,written,expected_reason', [
@@ -151,3 +156,22 @@ def test_write_error_rolls_back_all_observations_and_preserves_upstream_result(m
     assert result['theme_observation'] == {'written': 0, 'reason': 'capture_failed'}
     assert stored_rows() == []
     assert 'private diagnostic must not be logged' not in caplog.text
+
+
+def test_read_failure_does_not_discard_theme_members(monkeypatch, caplog):
+    from src.core import factor_stock_evidence
+
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000001.SZ'])
+
+    def fail(*_):
+        raise SQLAlchemyError('private diagnostic')
+
+    monkeypatch.setattr(factor_stock_evidence, 'load_stock_observations', fail)
+    assert refresh.daily_job_with_factors()['theme_observation']['written'] == 1
+    (_, row), = stored_rows()
+    assert row['ranking_eligible'] is False
+    assert row['members'] == ['000001.SZ']
+    assert row['stock_evidence'] == {'status': 'read_failed', 'rows': None}
+    assert 'private diagnostic' not in caplog.text

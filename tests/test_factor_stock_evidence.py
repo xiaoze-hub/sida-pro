@@ -1,0 +1,73 @@
+from datetime import date, datetime, timedelta, timezone
+
+import pytest
+
+from src.core import factor_stock_evidence as evidence
+
+DAY = date(2026, 11, 27)
+NOW = datetime(2026, 11, 27, 8, 35, tzinfo=timezone.utc)
+MEMBERS = ['000001.SZ', '000002.SZ', '000003.SZ', '600001.SH', '600001.SZ', '920001.BJ']
+
+
+def test_freezes_each_member_without_conflating_chart_and_trade_status(monkeypatch):
+    price = {'bar_ts': NOW - timedelta(hours=8), 'source': 'tq', 'open': 10.0, 'high': 11.0,
+             'low': 9.0, 'close': 10.1, 'volume': 200, 'quality_flag': 1}
+    raw = {
+        '000001': {**price, 'factor_id': 12, 'momentum_20': 2.5, 'volume_z20': float('nan')},
+        '000002': {**price, 'volume': 0, 'halt_id': 2, 'halt_start': '2026-11-26',
+                   'halt_end': '', 'halt_source': 'manual'},
+        '000003': {**price, 'halt_id': 3, 'halt_start': '2026-11-27', 'halt_end': '2026-11-27',
+                   'halt_source': 'announcement'},
+        '600001': {},
+    }
+
+    def read(day, symbols):
+        assert day == DAY
+        assert symbols == ['000001', '000002', '000003', '600001']
+        return raw
+
+    monkeypatch.setattr(evidence, 'load_stock_observations', read)
+    result = evidence.capture(DAY, [MEMBERS, ['000001.SZ']], earliest=NOW, now=lambda: NOW)
+    batch, other = result
+    assert batch['status'] == 'observed'
+    assert batch['read_finished_at'] == NOW.isoformat()
+    assert batch['factor_lineage_verified'] is False
+    rows = {row['symbol']: row for row in batch['rows']}
+    assert list(rows) == MEMBERS
+    assert rows['000001.SZ']['day_bar']['volume'] == 200
+    assert rows['000001.SZ']['factor_values']['momentum_20'] == 2.5
+    assert rows['000001.SZ']['factor_values']['volume_z20'] is None
+    assert rows['000001.SZ']['has_valid_traded_bar'] is True
+    assert rows['000001.SZ']['trading_status'] == 'unknown'
+    assert rows['000002.SZ']['has_valid_traded_bar'] is False
+    assert rows['000002.SZ']['trading_status'] == 'halt_recorded'
+    assert rows['000003.SZ']['trading_status'] == 'conflicting_evidence'
+    assert rows['600001.SH']['day_bar'] is None
+    assert rows['600001.SH']['factor_values'] is None
+    assert rows['600001.SZ']['status'] == 'unsupported_identity'
+    assert rows['920001.BJ']['status'] == 'unsupported_identity'
+    assert all(row['is_st'] is None for row in rows.values())
+    raw['000001']['momentum_20'] = -9
+    assert other['rows'][0]['factor_values']['momentum_20'] == 2.5
+
+
+@pytest.mark.parametrize('result, expected', [(None, 'unsupported_backend'), ({}, 'incomplete_read')])
+def test_no_positive_evidence_when_backend_returns_incomplete_set(monkeypatch, result, expected):
+    monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: result)
+    batch, = evidence.capture(DAY, [['000001.SZ']], earliest=NOW, now=lambda: NOW)
+    assert batch == {'status': expected, 'rows': None}
+
+
+def test_global_budget_rejects_whole_batch_without_query(monkeypatch):
+    monkeypatch.setattr(evidence, 'MAX_MEMBER_SLOTS', 1)
+    monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: pytest.fail('must not read'))
+    batch, other = evidence.capture(DAY, [['000001.SZ'], ['000001.SZ']], earliest=NOW, now=lambda: NOW)
+    assert batch == other == {'status': 'member_budget_exceeded', 'rows': None}
+
+
+@pytest.mark.parametrize('finished', [NOW - timedelta(seconds=1), NOW + timedelta(hours=8)])
+def test_late_or_reversed_clock_cannot_authorize_read(monkeypatch, finished):
+    monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: {'000001': {}})
+    clock = iter((NOW, finished))
+    batch, = evidence.capture(DAY, [['000001.SZ']], earliest=NOW, now=lambda: next(clock))
+    assert batch == {'status': 'clock_outside_capture_window', 'rows': None}
