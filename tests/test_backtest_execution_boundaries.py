@@ -157,6 +157,23 @@ def test_unknown_volume_does_not_raise_or_create_exit():
     assert outcome.open_positions[0].exit_blocked_reason == "untradeable"
 
 
+@pytest.mark.parametrize('bad', [float('nan'), float('inf')])
+def test_unusable_previous_close_does_not_crash_limit_prices(bad):
+    bars = [PriceBar(D0, 10, 10, 10, 10, 100_000), PriceBar(D1, bad, bad, bad, bad, 100_000),
+            PriceBar(D2, 10, 10, 10, 10, 100_000)]
+    outcome = Backtester().run([Signal(A, 'CN', D0)], {A: bars})
+    assert not outcome.trades
+    assert outcome.open_positions[0].exit_blocked_reason == 't_plus_one'
+
+
+def test_engine_enforces_sample_end_without_caller_filtering():
+    bars = [bar(D0, 10.5), bar(D1, 10.5), bar(D2, 10.6), bar(D3, 13.0)]
+    outcome = Backtester(sample_end=D2).run([Signal(A, 'CN', D0)], {A: bars})
+    assert not outcome.trades
+    position, = outcome.open_positions
+    assert (position.mark_date, position.exit_blocked_reason) == (D2, 'sample_end')
+
+
 @pytest.mark.parametrize('portfolio', [False, True])
 def test_duplicate_final_day_keeps_legacy_sellable_sample_exit(portfolio):
     runner = PortfolioBacktester() if portfolio else Backtester()

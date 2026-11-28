@@ -91,6 +91,11 @@ def run_backtest(
     end_date = _check_date('end_date', end_date)
     if start_date and end_date and start_date > end_date:
         raise BacktestDateError('start_date 不得晚于 end_date')
+    # load_qfq_bars cuts relative to now; stretch the lookback so an older
+    # requested start is not silently reported as fully covered.
+    history_days = max(int(days), 30)
+    if start_date:
+        history_days = max(history_days, (date.today() - date.fromisoformat(start_date)).days + 60)
     mkt = (market or "CN").strip().upper() or "CN"
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
@@ -100,7 +105,7 @@ def run_backtest(
         code = str(sym or "").strip()
         if not code:
             continue
-        loaded = load_price_history(code, mkt, days=days)
+        loaded = load_price_history(code, mkt, days=history_days)
         bars = loaded
         if end_date:
             bars = [bar for bar in bars if bar.date <= end_date]
@@ -112,6 +117,8 @@ def run_backtest(
             status = 'insufficient_history'
         else:
             status = 'usable'
+        if start_date and loaded and loaded[0].date > start_date:
+            status = 'window_truncated'
         coverage[code] = dict(status=status, loaded_first=loaded[0].date if loaded else None,
                               loaded_last=loaded[-1].date if loaded else None,
                               bars_through_end=len(bars),
@@ -148,6 +155,7 @@ def run_backtest(
             "participation_rate": participation_rate,
             "strategy": "ma5_cross_ma20",
             "sample_end_policy": "mark_open_without_forced_exit" if end_date else "legacy_liquidate_if_sellable",
+            "history_days": history_days,
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),
         "skipped_symbols": skipped_symbols,

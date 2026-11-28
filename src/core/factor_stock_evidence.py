@@ -20,6 +20,11 @@ _SUPPORTED = re.compile(r'(?:(?:60|68)[0-9]{4}\.SH|(?:00|30)[0-9]{4}\.SZ)')
 
 
 def _after_close(value: datetime, day: date) -> bool:
+    return capture_window(value, day)
+
+
+def capture_window(value: datetime, day: date) -> bool:
+    """Shared gate: same Shanghai trading day at or after the close."""
     if value.utcoffset() is None:
         return False
     local = value.astimezone(CN_TRADING_TZ)
@@ -90,7 +95,7 @@ def capture(
     if not symbols:
         return result
     started = now()
-    if not _after_close(started, day) or started < earliest:
+    if not capture_window(started, day) or started < earliest:
         return unavailable('clock_outside_capture_window')
     try:
         data = load_stock_observations(day, symbols)
@@ -98,7 +103,7 @@ def capture(
         logger.warning('逐股盘后证据读取失败: date=%s error=%s', day, type(exc).__name__)
         return unavailable('read_failed')
     finished = now()
-    if not _after_close(finished, day) or finished < started:
+    if not capture_window(finished, day) or finished < started:
         return unavailable('clock_outside_capture_window')
     if data is None:
         return unavailable('unsupported_backend')

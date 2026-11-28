@@ -112,7 +112,7 @@ def capture_after_daily_refresh(
     # A board dayline probe is only a warning signal; it is never membership provenance.
     gateway_day = tdx_boards.latest_trade_date()
     last = now()
-    if not _capture_window(last, trade_day) or last < begin:
+    if not factor_stock_evidence.capture_window(last, trade_day) or last < begin:
         return {'written': 0, 'reason': 'clock_outside_capture_window'}
     probe_day = _iso_day(gateway_day)
     gateway_status = ('same_day' if probe_day == trade_day else 'unknown' if probe_day is None
@@ -121,7 +121,7 @@ def capture_after_daily_refresh(
     for board in sorted(boards):
         status, members = _normalize_reply(tdx_boards.constituents(board))
         fetched = now()
-        if not _capture_window(fetched, trade_day) or fetched < last:
+        if not factor_stock_evidence.capture_window(fetched, trade_day) or fetched < last:
             return {'written': 0, 'reason': 'clock_outside_capture_window'}
         last = fetched
         observations.append({
@@ -141,8 +141,13 @@ def capture_after_daily_refresh(
     else:
         reason = 'gateway_dayline_stale' if gateway_status == 'stale' else 'gateway_dayline_unverified'
         snapshots = [{'status': reason, 'rows': None} for _ in observed]
+    # Absence of evidence must keep the member-level reason it came from.
+    unobserved = {
+        'unavailable': 'source_unavailable', 'source_empty': 'source_empty',
+        'invalid_response': 'invalid_member_response',
+    }
     for row in observations:
-        row['stock_evidence'] = {'status': 'no_observed_members', 'rows': None}
+        row['stock_evidence'] = {'status': unobserved.get(row['status'], 'not_observed'), 'rows': None}
     for row, snapshot in zip(observed, snapshots, strict=True):
         row['stock_evidence'] = snapshot
     with WriteSessionLocal.begin() as db:
@@ -156,4 +161,6 @@ def capture_after_daily_refresh(
                trade_day, inserted, coverage['status'], member_counts, evidence_counts)
     return {'written': inserted, 'observation_ids': observation_ids, 'status': 'degraded' if degraded else 'recorded',
             'data_trade_date': trade_day.isoformat(), 'coverage_status': coverage['status'],
+            'ranking_eligible': False, 'membership_freshness': 'unverified',
+            'gateway_dayline_status': gateway_status,
             'member_status_counts': member_counts, 'stock_evidence_status_counts': evidence_counts}

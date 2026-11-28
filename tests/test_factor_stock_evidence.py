@@ -90,6 +90,14 @@ def test_postgres_projection_matches_persisted_factor_contract():
         assert clause in stmt.string
 
 
+def test_insert_statement_follows_live_dialect():
+    from src.db import factor_theme_observations as store
+
+    assert 'RETURNING observation_id' in store._statement('postgresql')[0].text
+    sqlite_statement, is_pg = store._statement('sqlite')
+    assert not is_pg and 'RETURNING' not in sqlite_statement.text
+
+
 @pytest.mark.parametrize('finished', [NOW - timedelta(seconds=1), NOW + timedelta(hours=8)])
 def test_late_or_reversed_clock_cannot_authorize_read(monkeypatch, finished):
     monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: {'000001': {}})

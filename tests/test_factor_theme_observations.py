@@ -76,9 +76,11 @@ def test_daily_job_persists_observation_without_authorizing_a_rank(monkeypatch, 
     assert doc['members'] == members
     assert doc['dayline_coverage']['status'] == 'partial'
     assert doc['version'] == 2
-    assert doc['stock_evidence'] == {
-        'status': 'unsupported_backend' if state == 'observed' else 'no_observed_members', 'rows': None,
-    }
+    expected_evidence = {'observed': 'unsupported_backend', 'unavailable': 'source_unavailable',
+                         'source_empty': 'source_empty', 'invalid_response': 'invalid_member_response'}[state]
+    assert doc['stock_evidence'] == {'status': expected_evidence, 'rows': None}
+    assert result['theme_observation']['ranking_eligible'] is False
+    assert result['theme_observation']['gateway_dayline_status'] == 'same_day'
 
 
 @pytest.mark.parametrize('selector,persisted,written,expected_reason', [

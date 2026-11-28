@@ -35,6 +35,26 @@ def test_run_backtest_produces_trades_and_metrics(monkeypatch):
     assert res["params"]["strategy"] == "ma5_cross_ma20"
 
 
+def test_old_start_extends_lookback_and_reports_truncation(monkeypatch):
+    from datetime import date, timedelta
+    from src.core.backtest import service
+    from src.core.backtest.data_adapter import PriceBar
+
+    seen = {}
+    start = (date.today() - timedelta(days=1200)).isoformat()
+    bars = [PriceBar(date=start, open=10, high=10, low=10, close=10, volume=1000)] * 40
+
+    def load(_symbol, _market, days=250):
+        seen['days'] = days
+        return bars
+
+    monkeypatch.setattr(service, 'load_price_history', load)
+    result = service.run_backtest(symbols=['600000'], start_date=start)
+    assert seen['days'] >= 1200
+    assert result['params']['history_days'] == seen['days']
+    assert result['data_coverage']['600000']['status'] == 'usable'
+
+
 def test_run_backtest_skips_short_history(monkeypatch):
     from src.core.backtest import service
 

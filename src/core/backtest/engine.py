@@ -181,6 +181,13 @@ def _valid_price(value: float | None) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
+def _prev_close(bars: list[PriceBar], idx: int) -> float | None:
+    """Limit prices need a usable prior close; NaN/None would crash the rounding helper."""
+    if idx <= 0 or not _valid_price(bars[idx - 1].close):
+        return None
+    return bars[idx - 1].close
+
+
 class Backtester:
     def __init__(
         self,
@@ -202,9 +209,7 @@ class Backtester:
 
     def _buyable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
         """一字涨停(全天封死)时买不进 → False; 无法判定(非 A 股代码/缺昨收) → True。"""
-        up = limit_up_price(
-            signal.symbol, bars[idx - 1].close if idx > 0 else None, signal.is_st
-        )
+        up = limit_up_price(signal.symbol, _prev_close(bars, idx), signal.is_st)
         if up is None:
             return True
         bar = bars[idx]
@@ -217,9 +222,7 @@ class Backtester:
             return False
         if not all(_valid_price(p) for p in (bar.open, bar.high, bar.low, bar.close)):
             return False
-        dn = limit_down_price(
-            signal.symbol, bars[idx - 1].close if idx > 0 else None, signal.is_st
-        )
+        dn = limit_down_price(signal.symbol, _prev_close(bars, idx), signal.is_st)
         if dn is None:
             return True
         return not (bar.open <= dn + 1e-9 and bar.low >= dn - 1e-9)
@@ -243,6 +246,10 @@ class Backtester:
         """
         if not bars:
             return None
+        if self.sample_end is not None:
+            bars = [b for b in bars if b.date <= self.sample_end]
+            if not bars:
+                return None
         ei = first_index_after(bars, signal.signal_date)
         if ei is None or ei >= len(bars):
             return None

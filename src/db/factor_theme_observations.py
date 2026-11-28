@@ -11,24 +11,35 @@ from src.db.dialect import insert_ignore_sql
 from src.db.session import pin_write_bind
 
 
-_INSERT = text(insert_ignore_sql(
-    'factor_theme_observations', ('observation_id', 'trade_date', 'board_code', 'fetched_at', 'payload'),
-    conflict_cols=('observation_id',),
-))
-_INSERT_PG = text(_INSERT.text + ' RETURNING observation_id')
+_COLUMNS = ('observation_id', 'trade_date', 'board_code', 'fetched_at', 'payload')
+_INSERT = {
+    dialect: text(insert_ignore_sql('factor_theme_observations', _COLUMNS, conflict_cols=('observation_id',))
+                  + (' RETURNING observation_id' if dialect == 'postgresql' else ''))
+    for dialect in ('postgresql', 'sqlite')
+}
+
+
+def _statement(dialect: str):
+    """Pick SQL by the live connection's dialect, not the import-time process env."""
+    if dialect in _INSERT:
+        return _INSERT[dialect], dialect == 'postgresql'
+    return text(insert_ignore_sql(
+        'factor_theme_observations', _COLUMNS, conflict_cols=('observation_id',),
+    )), False
 
 
 def append_observations(db: Session, observations: list[dict]) -> tuple[list[str], int]:
     """Exact replays skip; distinct captures remain separate. Caller commits the batch."""
     pin_write_bind(db)
     conn = db.connection()
-    pg = conn.dialect.name == 'postgresql'
+    statement, pg = _statement(conn.dialect.name)
     refs: list[str] = []
     inserted = 0
     for observation in observations:
         payload = json.dumps(observation, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
         ref = hashlib.sha256(payload.encode('utf-8')).hexdigest()
-        with conn.execute(_INSERT_PG if pg else _INSERT, {
+        # Per-row execution keeps each conflict outcome attributable to one observation.
+        with conn.execute(statement, {
             'observation_id': ref, 'trade_date': observation['data_trade_date'],
             'board_code': observation['board_code'], 'fetched_at': observation['fetched_at'], 'payload': payload,
         }) as result:
