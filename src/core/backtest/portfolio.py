@@ -6,7 +6,7 @@ mark-to-market 出净值曲线。
 
 约束(全部可配):
 - 现金: 建仓支出(含费) ≤ 当前可用现金(不足则按手数缩量, 缩不到一手则跳过);
-- 并发: 同时持仓数 ≤ `max_positions`(同日出场先释放槽位);
+- 并发: 同时持仓数 ≤ `max_positions`（日线开盘买入不能依赖当日卖出释放资金/槽位）；
 - 仓位: 单笔目标名义 = `initial_capital × position_pct`;
 - 容量: 单笔 ≤ 当日成交量 × `participation_rate`(与 B0.2 同口径);
 - 涨跌停: 一字涨停买不进 / 一字跌停卖不出(复用内核规则与 `simulate_exit`)。
@@ -18,8 +18,9 @@ from dataclasses import dataclass
 
 from src.core.backtest import metrics as M
 from src.core.backtest.cost_model import CostModel
-from src.core.backtest.data_adapter import first_index_after
+from src.core.backtest.data_adapter import PriceBar, first_index_after
 from src.core.backtest.engine import (
+    BTOpenPosition,
     BacktestResult,
     Backtester,
     BTTrade,
@@ -52,7 +53,7 @@ class PortfolioBacktester:
             participation_rate=self.cfg.participation_rate,
         )
 
-    def _candidate(self, sig: Signal, bars: list):
+    def _candidate(self, sig: Signal, bars: list[PriceBar]) -> tuple[int, float, int] | None:
         """为信号找到可成交的入场 (idx, price, 容量内手数); 无则 None。"""
         ei = first_index_after(bars, sig.signal_date)
         while ei is not None and ei < len(bars):
@@ -66,7 +67,7 @@ class PortfolioBacktester:
         return None
 
     def run(self, signals: list[Signal], bars_by_symbol: dict) -> BacktestResult:
-        """按入场日时序撮合: 先释放到期/出场, 再受现金与槽位约束建仓。"""
+        """按入场日撮合：开盘建仓只使用此前交易日已释放的资源。"""
         planned = []
         for sig in signals:
             bars = bars_by_symbol.get((sig.symbol, sig.market)) or bars_by_symbol.get(sig.symbol)
@@ -76,7 +77,7 @@ class PortfolioBacktester:
             if cand is None:
                 continue
             ei, px, qty = cand
-            exit_price, exit_date, exit_reason, held = simulate_exit(
+            exit_fill = simulate_exit(
                 bars,
                 ei,
                 stop=sig.stop_loss,
@@ -92,34 +93,32 @@ class PortfolioBacktester:
                     "entry_date": bars[ei].date,
                     "entry_price": px,
                     "want_qty": qty,
-                    "exit_price": exit_price,
-                    "exit_date": exit_date,
-                    "exit_reason": exit_reason,
-                    "held": held,
+                    "exit_fill": exit_fill,
                 }
             )
 
         planned.sort(key=lambda x: (x["entry_date"], x["sig"].symbol))
 
         cash = float(self.cfg.initial_capital)
-        open_pos: list[dict] = []   # 仅需 exit_date 以释放槽位
+        active: list[BTTrade | BTOpenPosition] = []
         trades: list[BTTrade] = []
+        open_positions: list[BTOpenPosition] = []
         skipped_cash = skipped_slots = 0
 
         for p in planned:
             d = p["entry_date"]
-            # 1) 先释放当日及之前出场的持仓(回款 + 腾槽位)
+            # 日线只保证先前交易日的卖出早于本次开盘（包括当日跳空卖出也不预支）。
             still_open = []
-            for op in open_pos:
-                if op["exit_date"] <= d:
+            for op in active:
+                if isinstance(op, BTTrade) and op.exit_date < d:
                     # 建仓支出已在入场日扣减; 出场仅回款(含卖出规费)
-                    cash += self.cost.fill("sell", op["exit_price"], op["qty"]).cash_delta
+                    cash += self.cost.fill("sell", op.exit_price, op.quantity).cash_delta
                 else:
                     still_open.append(op)
-            open_pos = still_open
+            active = still_open
 
             # 2) 并发上限
-            if len(open_pos) >= max(1, int(self.cfg.max_positions)):
+            if len(active) >= max(1, int(self.cfg.max_positions)):
                 skipped_slots += 1
                 continue
 
@@ -134,42 +133,26 @@ class PortfolioBacktester:
 
             buy = self.cost.fill("buy", p["entry_price"], qty)
             cash += buy.cash_delta  # 负数
-            open_pos.append(
-                {
-                    "entry_price": p["entry_price"],
-                    "exit_price": p["exit_price"],
-                    "exit_date": p["exit_date"],
-                    "qty": qty,
-                }
+            outcome = self._single._position_result(
+                p["sig"], p["bars"], p["entry_idx"], p["entry_price"], qty, p["exit_fill"],
             )
-            rt = self.cost.round_trip_pnl(p["entry_price"], p["exit_price"], qty)
-            trades.append(
-                BTTrade(
-                    symbol=p["sig"].symbol,
-                    market=p["sig"].market,
-                    entry_date=p["entry_date"],
-                    entry_price=round(p["entry_price"], 4),
-                    exit_date=p["exit_date"],
-                    exit_price=round(p["exit_price"], 4),
-                    quantity=qty,
-                    pnl=rt["pnl"],
-                    pnl_pct=rt["pnl_pct"],
-                    fees=rt["total_cost"],
-                    exit_reason=p["exit_reason"],
-                    holding_bars=p["held"],
-                )
-            )
+            active.append(outcome)
+            if isinstance(outcome, BTTrade):
+                trades.append(outcome)
+            else:
+                open_positions.append(outcome)
 
         trades_sorted = sorted(trades, key=lambda t: (t.exit_date, t.entry_date))
-        curve, dates = self._single._daily_equity_curve(trades_sorted, bars_by_symbol)
+        curve, dates = self._single._daily_equity_curve(trades_sorted, bars_by_symbol, open_positions)
         M.validate_equity_curve(curve, dates)
         return BacktestResult(
             trades=trades,
             equity_curve=curve,
             equity_dates=dates,
-            metrics=M.summarize(curve, [t.pnl for t in trades]),
+            metrics=M.summarize([self.cfg.initial_capital, *curve] if dates[0] else curve, [t.pnl for t in trades]),
             initial_capital=self.cfg.initial_capital,
             skipped=skipped_cash + skipped_slots,
             skipped_cash=skipped_cash,
             skipped_slots=skipped_slots,
+            open_positions=open_positions,
         )

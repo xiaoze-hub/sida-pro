@@ -69,7 +69,7 @@ def run_backtest(
     participation_rate: float = 0.05,
     days: int = 800,
 ) -> dict:
-    """对给定标的跑金叉策略回测, 返回 trades/净值曲线/指标。"""
+    """截至 end_date（含）回测金叉策略，开始日前的行情只作指标热身。"""
     mkt = (market or "CN").strip().upper() or "CN"
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
@@ -79,6 +79,8 @@ def run_backtest(
         if not code:
             continue
         bars = load_price_history(code, mkt, days=days)
+        if end_date:
+            bars = [bar for bar in bars if bar.date <= end_date]
         if len(bars) < MIN_BARS:
             skipped_symbols.append(code)
             continue
@@ -114,7 +116,14 @@ def run_backtest(
         "skipped_symbols": skipped_symbols,
         "signals": len(signals),
         "skipped_signals": result.skipped,
-        "trades": [asdict(t) for t in result.trades],
+        "execution_basis": "independent_signal_daily_bar",
+        # equity_curve 只含每日收盘点；绩效的首个基准点是建仓前期初资金。
+        "initial_capital": result.initial_capital,
+        "trades": [
+            {**asdict(t), "entry_price": round(t.entry_price, 4), "exit_price": round(t.exit_price, 4)}
+            for t in result.trades
+        ],
+        "open_positions": [asdict(p) for p in result.open_positions],
         "equity_curve": result.equity_curve,
         "equity_dates": result.equity_dates,
         "metrics": result.metrics,
