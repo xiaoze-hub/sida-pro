@@ -8,11 +8,20 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 # Latest daily bars retained by the collector fallback; deep history is PG-first.
 MAX_FALLBACK_BARS = 800
+
+
+def history_cutoff_day(market: str, days: int, now: datetime) -> date:
+    """Earliest possible date label; timestamp precision is only available in PG."""
+    cutoff = now.astimezone(timezone.utc) - timedelta(days=days)
+    if market.upper() in {'CN', 'SH', 'SZ', 'BJ'}:
+        cutoff = cutoff.astimezone(ZoneInfo('Asia/Shanghai'))
+    return cutoff.date()
 
 
 @dataclass(frozen=True)
@@ -91,7 +100,7 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
         logger.warning(f"[回测] 拉取 {symbol} K线失败: {e}")
         return []
     # 按日历截掉兜底序列中超出回看范围的旧柱；根数上限仍可能缩短左端覆盖。
-    cutoff_day = (datetime.now(timezone.utc) - timedelta(days=calendar_days)).date().isoformat()
+    cutoff_day = history_cutoff_day(mc, calendar_days, datetime.now(timezone.utc)).isoformat()
     return [bar for bar in from_klines(klines)[-fallback_bars:] if bar.date >= cutoff_day]
 
 

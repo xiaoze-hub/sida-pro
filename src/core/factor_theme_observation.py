@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 from typing import Callable
 
 from src.core import factor_stock_evidence, tdx_boards, trading_calendar
+from src.core.klines_daily_refresh import COVERAGE_CALIBER, COVERAGE_UNIVERSE
 from src.db.factor_theme_observations import append_observations
 from src.db.session import WriteSessionLocal
 
@@ -70,8 +71,7 @@ def _coverage(receipt: dict, now: datetime) -> tuple[dict | None, str | None]:
         return None, 'trade_date'
     valid, expected = receipt.get('valid_count'), receipt.get('expected_count')
     for key, expected_value in {
-        'version': 1, 'caliber': 'cn_qfq_tq_preferred_tencent_close_volume_quality',
-        'universe': 'stock_list_sh_sz_main_chinext_star',
+        'version': 1, 'caliber': COVERAGE_CALIBER, 'universe': COVERAGE_UNIVERSE,
     }.items():
         if receipt.get(key) != expected_value:
             return None, key

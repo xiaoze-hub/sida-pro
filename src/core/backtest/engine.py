@@ -83,7 +83,7 @@ class BTOpenPosition:
     buy_cash_delta: float
     unrealized_pnl: float
     # history_end: bars end before the last expected market session, not proof of a vendor gap.
-    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_end"]
+    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_end", "boundary_unverified"]
 
 
 @dataclass
@@ -182,9 +182,9 @@ def valid_trade_price(value: float | None) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
-def expected_trading_boundary(market: str, day: str | None, *, right: bool = False) -> str | None:
+def expected_trading_boundary(market: str | None, day: str | None, *, right: bool = False) -> str | None:
     """First/last A-share session inside a calendar boundary; unverifiable stays unknown."""
-    if day is None or market.upper() not in {'CN', 'SH', 'SZ', 'BJ'}:
+    if day is None or not isinstance(market, str) or market.upper() not in {'CN', 'SH', 'SZ', 'BJ'}:
         return None
     try:
         if is_trading_day(day):
@@ -315,7 +315,12 @@ class Backtester:
                 last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
                 if self.sample_end is not None and self._sellable(bars, last_idx, signal):
                     expected_end = expected_trading_boundary(signal.market, self.sample_end, right=True)
-                    reason = "history_end" if expected_end and latest_day < expected_end else "sample_end"
+                    if latest_day == self.sample_end or (expected_end and latest_day == expected_end):
+                        reason = "sample_end"
+                    elif expected_end and latest_day < expected_end:
+                        reason = "history_end"
+                    else:
+                        reason = "boundary_unverified"
                 else:
                     reason = "untradeable"
             mark = max(

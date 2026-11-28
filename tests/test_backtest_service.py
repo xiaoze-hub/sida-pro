@@ -128,6 +128,41 @@ def test_backtest_router_importable():
     assert any(r.path == "/run" for r in router.routes)
 
 
+def test_invalid_dates_use_the_same_schema_error():
+    import pytest
+    from pydantic import ValidationError
+    from src.web.api.backtest import BacktestIn
+
+    items = []
+    for invalid in ('2026-02-30', '2026-02-30T00:00:00', '2026-11-27T25:00:00', 'not-a-date'):
+        with pytest.raises(ValidationError) as caught:
+            BacktestIn.model_validate({'end_date': invalid})
+        error, = caught.value.errors()
+        items.append((error['loc'], error['type'], error['msg']))
+    assert len(set(items)) == 1 and 'YYYY-MM-DD' in items[0][-1]
+
+
+def test_window_before_lookback_cap_is_not_a_source_gap(monkeypatch):
+    import pytest
+    from src.core.backtest import service
+
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: pytest.fail('window is outside the query budget'))
+    coverage = service.run_backtest(symbols=['600000'], end_date='2005-01-01')['data_coverage']['600000']
+    assert coverage['status'] == 'window_before_history_cutoff'
+    assert coverage['window_truncated'] is True
+    assert coverage['left_edge_capped'] is True
+
+
+def test_history_cutoff_for_cn_uses_shanghai_calendar_day():
+    from datetime import date, datetime, timezone
+    from src.core.backtest.data_adapter import history_cutoff_day
+    from src.models.market import MarketCode
+
+    utc = datetime(2026, 11, 27, 18, tzinfo=timezone.utc)  # 02:00 in Shanghai the next morning.
+    assert history_cutoff_day(MarketCode.CN, 1, utc) == date(2026, 11, 27)
+    assert history_cutoff_day(MarketCode.US, 1, utc) == date(2026, 11, 26)
+
+
 def test_ancient_start_is_capped(monkeypatch):
     from src.core.backtest import service
     from src.core.backtest.data_adapter import PriceBar

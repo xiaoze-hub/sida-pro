@@ -218,6 +218,13 @@ def test_friday_last_bar_meets_saturday_cutoff(volume, reason):
     assert position.exit_blocked_reason == reason
 
 
+def test_open_position_does_not_claim_unverifiable_calendar_coverage():
+    bars = [bar(D1), bar(D2), bar(D3)]
+    outcome = Backtester(sample_end='2035-11-30').run([Signal(A, 'CN', D1)], {A: bars})
+    position, = outcome.open_positions
+    assert position.exit_blocked_reason == 'boundary_unverified'
+
+
 @pytest.mark.parametrize('portfolio', [False, True])
 def test_duplicate_final_day_keeps_legacy_sellable_sample_exit(portfolio):
     runner = PortfolioBacktester() if portfolio else Backtester()

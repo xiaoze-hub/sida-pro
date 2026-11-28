@@ -125,10 +125,21 @@ def capture(
         return unavailable('incomplete_read')
     for i in selected:
         rows = [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in rosters[i]]
-        status = 'observed'
-        if any(row['status'] == 'bar_timestamp_unverified' for row in rows):
+        # This is daily-bar/halt coverage for supported members, not proof of
+        # complete membership, ST, factor lineage, or tradability.
+        supported_rows = [row for row in rows if row['status'] != 'unsupported_identity']
+        covered = sum(
+            row['status'] == 'checked' and (
+                row['trading_status'] == 'halt_recorded'
+                or (row['has_valid_traded_bar'] is True and row['halt_record'] is None)
+            ) for row in supported_rows
+        )
+        if covered == len(supported_rows):
+            status = 'observed'
+        elif covered or any(row['status'] == 'bar_timestamp_unverified'
+                            or row['trading_status'] == 'conflicting_evidence' for row in supported_rows):
             status = 'partial'
-        elif not any(row['has_valid_traded_bar'] is True for row in rows):
+        else:
             status = 'no_valid_day_bar'
         result[i] = {
             'status': status,

@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _THEME_BOARDS_ENV = 'SIDA_FACTOR_THEME_OBSERVATION_BOARDS'
 _CN_TZ = ZoneInfo('Asia/Shanghai')
+COVERAGE_UNIVERSE = 'stock_list_sh_sz_main_chinext_star'
+COVERAGE_CALIBER = 'cn_qfq_tq_preferred_tencent_close_volume_quality'
 
 
 def _now_cn() -> datetime:
@@ -107,8 +109,8 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
         "expected_count": expected,
         "valid_count": valid,
         "status": status,
-        "universe": "stock_list_sh_sz_main_chinext_star",
-        "caliber": "cn_qfq_tq_preferred_tencent_close_volume_quality",
+        "universe": COVERAGE_UNIVERSE,
+        "caliber": COVERAGE_CALIBER,
         "ingest_ok_count": stats["ok"],
         "ingest_failed_count": stats["fail"],
     }

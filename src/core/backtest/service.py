@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 
-from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, load_price_history
+from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, history_cutoff_day, load_price_history
 from src.core.backtest.engine import Backtester, Signal, expected_trading_boundary, positive_trade_volume, valid_trade_price
 
 MIN_BARS = 30
@@ -103,15 +103,21 @@ def run_backtest(
         first_ordinal = max(1, date.fromisoformat(end_date).toordinal() - requested_days)
         sample_start = date.fromordinal(first_ordinal).isoformat()
     history_days = max(requested_days, MIN_HISTORY_DAYS)
+    now = datetime.now(timezone.utc)
     if sample_start:
         # Keep the extra history for signal warmup, outside the measured sample.
-        today_utc = datetime.now(timezone.utc).date()  # Same wall clock as the PG lookback.
-        history_days = max(history_days, (today_utc - date.fromisoformat(sample_start)).days + 60)
+        history_days = max(history_days, (now.date() - date.fromisoformat(sample_start)).days + 60)
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
     expected_first = expected_trading_boundary(mkt, sample_start)
     expected_last = expected_trading_boundary(mkt, end_date, right=True)
+    cutoff = history_cutoff_day(mkt, history_days, now).isoformat()
+    first_target = expected_first or sample_start
+    last_target = expected_last or end_date
+    left_edge_capped = bool(history_capped and first_target and first_target < cutoff)
+    no_market_sessions = bool(expected_first and expected_last and expected_first > expected_last)
+    outside_lookback = bool(history_capped and last_target and last_target < cutoff)
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
     skipped_symbols: list[str] = []
@@ -120,12 +126,14 @@ def run_backtest(
         code = str(sym or "").strip()
         if not code:
             continue
-        loaded = load_price_history(code, mkt, days=history_days)
+        loaded = [] if outside_lookback or no_market_sessions else load_price_history(code, mkt, days=history_days)
         bars = loaded
         if end_date:
             bars = [bar for bar in bars if bar.date <= end_date]
-        if expected_first and expected_last and expected_first > expected_last:
+        if no_market_sessions:
             status = 'no_market_sessions'
+        elif outside_lookback:
+            status = 'window_before_history_cutoff'
         elif not loaded:
             status = 'history_unavailable'
         elif not bars:
@@ -141,6 +149,8 @@ def run_backtest(
         truncated: bool | None = None
         if not sample_start or (loaded_first and loaded_first <= sample_start):
             truncated = False
+        elif left_edge_capped and not no_market_sessions:
+            truncated = True
         elif loaded_first and expected_first:
             # This compares to the market calendar; it does not assert a vendor gap.
             truncated = loaded_first > expected_first
@@ -159,6 +169,7 @@ def run_backtest(
                               expected_first_trading_date=expected_first,
                               expected_last_trading_date=expected_last,
                               window_truncated=truncated,
+                              left_edge_capped=left_edge_capped,
                               end_after_last_bar=(window_last < expected_last if window_last and expected_last else None))
         if status != 'usable':
             skipped_symbols.append(code)
@@ -197,6 +208,7 @@ def run_backtest(
             "sample_end_policy": "mark_open_without_forced_exit" if end_date else "legacy_liquidate_if_sellable",
             "history_days": history_days,
             "history_capped": history_capped,
+            "history_cutoff_date": cutoff,
             "fallback_bar_limit": min(history_days, MAX_FALLBACK_BARS),
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),

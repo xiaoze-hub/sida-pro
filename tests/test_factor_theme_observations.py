@@ -100,6 +100,25 @@ def test_separate_job_requires_a_same_day_completion_receipt(monkeypatch):
     assert stored_rows() == []
 
 
+def test_scheduler_status_projection_does_not_decode_observation_payload(monkeypatch):
+    from src.db import factor_theme_observations as repo
+
+    observed = {'data_trade_date': '2026-11-27', 'fetched_at': NOW.isoformat(), 'board_code': THEME,
+                'status': 'observed', 'stock_evidence': {'status': 'observed', 'rows': ['retained evidence']}}
+    later = {**observed, 'fetched_at': (NOW + timedelta(minutes=15)).isoformat(),
+             'stock_evidence': {'status': 'partial', 'rows': []}}
+    with WriteSessionLocal() as db:
+        repo.append_observations(db, [observed])
+        db.commit()
+        with monkeypatch.context() as patch:
+            patch.setattr(repo.json, 'loads', lambda *_a, **_k: pytest.fail('probe decoded payload'))
+            assert repo.boards_with_stock_evidence(db, observed['data_trade_date'], {THEME}) == {THEME}
+        repo.append_observations(db, [later])
+        db.commit()
+        assert repo.boards_with_stock_evidence(db, observed['data_trade_date'], {THEME}) == set()
+    assert len(stored_rows()) == 2
+
+
 def test_late_receipt_retries_then_stops_after_a_committed_batch(monkeypatch):
     from src.core import factor_stock_evidence
 

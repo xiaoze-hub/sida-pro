@@ -29,7 +29,7 @@ def test_freezes_each_member_without_conflating_chart_and_trade_status(monkeypat
     monkeypatch.setattr(evidence, 'load_stock_observations', read)
     result = evidence.capture(DAY, [MEMBERS, ['000001.SZ']], earliest=NOW, now=lambda: NOW)
     batch, other = result
-    assert batch['status'] == 'observed'
+    assert batch['status'] == 'partial'
     assert batch['read_finished_at'] == NOW.isoformat()
     assert batch['factor_lineage_verified'] is False
     rows = {row['symbol']: row for row in batch['rows']}
@@ -49,6 +49,16 @@ def test_freezes_each_member_without_conflating_chart_and_trade_status(monkeypat
     assert all(row['is_st'] is None for row in rows.values())
     raw['000001']['momentum_20'] = -9
     assert other['rows'][0]['factor_values']['momentum_20'] == 2.5
+
+
+def test_known_halt_resolves_daily_bar_gap_but_unsupported_members_stay_unknown(monkeypatch):
+    monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: {
+        '000001': {'halt_id': 1, 'halt_start': '2026-11-27', 'halt_end': '', 'halt_source': 'manual'},
+    })
+    batch, = evidence.capture(DAY, [['000001.SZ', '920001.BJ']], earliest=NOW, now=lambda: NOW)
+    assert batch['status'] == 'observed'
+    assert batch['rows'][0]['trading_status'] == 'halt_recorded'
+    assert batch['rows'][1]['trading_status'] == 'unknown'
 
 
 @pytest.mark.parametrize('result, expected', [(None, 'unsupported_backend'), ({}, 'incomplete_read')])

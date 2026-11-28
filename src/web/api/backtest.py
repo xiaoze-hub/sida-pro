@@ -39,21 +39,19 @@ class BacktestIn(BaseModel):
         if not isinstance(value, str):
             return value
         cleaned = value.strip()
-        if cleaned[10:11] in ('T', ' '):
-            # Preserve the date in a valid ISO timestamp, without a time-zone shift.
-            day = cleaned[:10]
-            if date.fromisoformat(day).isoformat() == day:
-                datetime.fromisoformat(cleaned)
-                return day
-        return cleaned
-
-    @field_validator("start_date", "end_date")
-    @classmethod
-    def _calendar_date(cls, value: str) -> str:
-        """Reject impossible dates through the schema so 422 bodies keep one shape."""
-        if value and date.fromisoformat(value).isoformat() != value:
-            raise ValueError("必须是有效的 YYYY-MM-DD 日期")
-        return value
+        if not cleaned:
+            return ''
+        try:
+            if cleaned[10:11] in ('T', ' '):
+                # Keep the timestamp's local calendar date, without a timezone shift.
+                day = datetime.fromisoformat(cleaned).date().isoformat()
+                if cleaned.startswith(day):
+                    return day
+            elif date.fromisoformat(cleaned).isoformat() == cleaned:
+                return cleaned
+        except ValueError:
+            pass
+        raise ValueError("必须是有效的 YYYY-MM-DD 日期")
 
     @field_validator("end_date")
     @classmethod
