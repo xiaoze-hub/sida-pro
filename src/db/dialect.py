@@ -274,10 +274,15 @@ def upsert_sql(
     )
 
 
-def insert_ignore_sql(table: str, insert_cols: Sequence[str]) -> str:
-    """双方言"冲突即跳过"插入: PG 走 ON CONFLICT DO NOTHING, SQLite 走 OR IGNORE。"""
+def insert_ignore_sql(
+    table: str, insert_cols: Sequence[str], *, conflict_cols: Sequence[str] = (),
+) -> str:
+    """冲突即跳过；指定冲突列时两个方言都只忽略该唯一键的冲突。"""
     cols = ", ".join(insert_cols)
     vals = ", ".join(f":{c}" for c in insert_cols)
+    if conflict_cols:
+        key = ", ".join(conflict_cols)
+        return f"INSERT INTO {table} ({cols}) VALUES ({vals}) ON CONFLICT ({key}) DO NOTHING"
     if is_postgres():
         return f"INSERT INTO {table} ({cols}) VALUES ({vals}) ON CONFLICT DO NOTHING"
     return f"INSERT OR IGNORE INTO {table} ({cols}) VALUES ({vals})"

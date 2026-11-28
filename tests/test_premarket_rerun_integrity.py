@@ -669,7 +669,7 @@ def test_m247_and_m248_bodies_untouched_and_m249_adds_the_user_scope(tmp_path, m
 
     versions = [m.version for m in mig.MIGRATIONS]
     assert versions == sorted(versions) and len(versions) == len(set(versions))
-    assert versions[-1] == 252, (
+    assert versions[-1] == 253, (
         "新增列/索引必须排在新版本号上; 历史版本(246/247/248/249)号段不得跳号或复用"
     )
 
