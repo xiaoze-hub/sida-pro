@@ -25,6 +25,7 @@ def install_upstream(monkeypatch, *, receipt=None, persisted=True, written=2):
                                                      'coverage_receipt_persisted': persisted})
     monkeypatch.setattr(refresh, '_now_cn', lambda: NOW)
     monkeypatch.setattr(trading_calendar, 'is_trading_day', lambda _: True)
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-27')
     monkeypatch.setattr(factor_daily, 'collect_once', lambda *_a, **_k: {'written': written, 'skipped': 0})
 
 
@@ -114,7 +115,7 @@ def test_same_evidence_idempotent_later_retrieval_preserves_both(monkeypatch):
 def test_capture_finishing_after_shanghai_date_change_is_not_written(monkeypatch):
     install_upstream(monkeypatch)
     monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
-    clocks = iter([NOW, NOW + timedelta(hours=9)])
+    clocks = iter([NOW, NOW, NOW + timedelta(hours=9)])
     monkeypatch.setattr(refresh, '_now_cn', lambda: next(clocks))
     monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['600001.SH'])
     status = refresh.daily_job_with_factors()['theme_observation']
@@ -175,3 +176,20 @@ def test_read_failure_does_not_discard_theme_members(monkeypatch, caplog):
     assert row['members'] == ['000001.SZ']
     assert row['stock_evidence'] == {'status': 'read_failed', 'rows': None}
     assert 'private diagnostic' not in caplog.text
+
+
+def test_stale_gateway_is_recorded_not_presented_as_current(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-26')
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000001.SZ'])
+    result = refresh.daily_job_with_factors()['theme_observation']
+    assert result['written'] == 1
+    assert result['status'] == 'degraded'
+    assert result['member_status_counts'] == {'observed': 1}
+    assert result['stock_evidence_status_counts'] == {'gateway_dayline_stale': 1}
+    (_, row), = stored_rows()
+    assert row['source_as_of'] is None
+    assert row['gateway_dayline_date'] == '2026-11-26'
+    assert row['membership_freshness'] == 'unverified'
+    assert row['stock_evidence']['status'] == 'gateway_dayline_stale'

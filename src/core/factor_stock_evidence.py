@@ -71,11 +71,13 @@ def capture(
     if sum(map(len, rosters)) > MAX_MEMBER_SLOTS:
         return unavailable('member_budget_exceeded')
     symbols = sorted({m[:6] for members in rosters for m in members if _SUPPORTED.fullmatch(m)})
+    if not symbols:
+        return unavailable('no_supported_members')
     started = now()
     if not _after_close(started, day) or started < earliest:
         return unavailable('clock_outside_capture_window')
     try:
-        data = load_stock_observations(day, symbols) if symbols else {}
+        data = load_stock_observations(day, symbols)
     except (SQLAlchemyError, ValueError) as exc:
         logger.warning('逐股盘后证据读取失败: date=%s error=%s', day, type(exc).__name__)
         return unavailable('read_failed')
@@ -90,4 +92,5 @@ def capture(
         'status': 'observed', 'read_started_at': _stamp(started), 'read_finished_at': _stamp(finished),
         'source': 'primary_db_visible_rows', 'factor_lineage_verified': False,
         'rows': [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in members],
-    } for members in rosters]
+    } if any(_SUPPORTED.fullmatch(member) for member in members)
+        else {'status': 'no_supported_members', 'rows': None} for members in rosters]

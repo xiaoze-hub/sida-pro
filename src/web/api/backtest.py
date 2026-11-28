@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.core.backtest.service import run_backtest
+from src.core.backtest.service import BacktestDateError, run_backtest
 from src.web.api.auth import get_current_user
 from src.web.models import User
 
@@ -35,14 +35,17 @@ def run_backtest_endpoint(
     symbols = [s for s in (payload.symbols or []) if str(s).strip()]
     if not symbols:
         raise HTTPException(status_code=400, detail="symbols 不能为空")
-    return run_backtest(
-        symbols=symbols,
-        market=payload.market,
-        start_date=payload.start_date.strip()[:10] or None,
-        end_date=payload.end_date.strip()[:10] or None,
-        holding_days=payload.holding_days,
-        stop_pct=payload.stop_pct,
-        target_pct=payload.target_pct,
-        initial_capital=payload.initial_capital,
-        cash_per_trade=payload.cash_per_trade,
-    )
+    try:
+        return run_backtest(
+            symbols=symbols,
+            market=payload.market,
+            start_date=payload.start_date.strip() or None,
+            end_date=payload.end_date.strip() or None,
+            holding_days=payload.holding_days,
+            stop_pct=payload.stop_pct,
+            target_pct=payload.target_pct,
+            initial_capital=payload.initial_capital,
+            cash_per_trade=payload.cash_per_trade,
+        )
+    except BacktestDateError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

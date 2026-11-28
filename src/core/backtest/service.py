@@ -9,12 +9,29 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import date
 
 from src.core.backtest.data_adapter import load_price_history
 from src.core.backtest.engine import Backtester, Signal
 
 MIN_BARS = 30
 MAX_SYMBOLS = 20
+
+
+class BacktestDateError(ValueError):
+    """Invalid user-supplied calendar boundary."""
+
+
+def _check_date(name: str, value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = date.fromisoformat(value)
+        if parsed.isoformat() == value:
+            return value
+    except ValueError:
+        pass
+    raise BacktestDateError(f"{name} 必须是有效的 YYYY-MM-DD 日期")
 
 
 def _golden_cross_signals(
@@ -69,19 +86,36 @@ def run_backtest(
     participation_rate: float = 0.05,
     days: int = 800,
 ) -> dict:
-    """截至 end_date（含）回测金叉策略，开始日前的行情只作指标热身。"""
+    """截至 end_date（含）回测，不以显式样本边界代替策略退出。"""
+    start_date = _check_date('start_date', start_date)
+    end_date = _check_date('end_date', end_date)
+    if start_date and end_date and start_date > end_date:
+        raise BacktestDateError('start_date 不得晚于 end_date')
     mkt = (market or "CN").strip().upper() or "CN"
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
     skipped_symbols: list[str] = []
+    coverage = {}
     for sym in list(symbols)[:MAX_SYMBOLS]:
         code = str(sym or "").strip()
         if not code:
             continue
-        bars = load_price_history(code, mkt, days=days)
+        loaded = load_price_history(code, mkt, days=days)
+        bars = loaded
         if end_date:
             bars = [bar for bar in bars if bar.date <= end_date]
-        if len(bars) < MIN_BARS:
+        if not loaded:
+            status = 'history_unavailable'
+        elif not bars or (start_date and bars[-1].date < start_date):
+            status = 'no_bars_in_window'
+        elif len(bars) < MIN_BARS:
+            status = 'insufficient_history'
+        else:
+            status = 'usable'
+        coverage[code] = dict(status=status, loaded_first=loaded[0].date if loaded else None,
+                              loaded_last=loaded[-1].date if loaded else None,
+                              bars_through_end=len(bars))
+        if status != 'usable':
             skipped_symbols.append(code)
             continue
         bars_by_symbol[(code, mkt)] = bars
@@ -97,6 +131,7 @@ def run_backtest(
         initial_capital=initial_capital,
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
+        close_at_sample_end=end_date is None,
     )
     result = bt.run(signals, bars_by_symbol)
     return {
@@ -114,9 +149,12 @@ def run_backtest(
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),
         "skipped_symbols": skipped_symbols,
+        "data_coverage": coverage,
         "signals": len(signals),
         "skipped_signals": result.skipped,
         "execution_basis": "independent_signal_daily_bar",
+        "equity_basis": "daily_close_metrics_from_initial_capital",
+        "pnl_basis": {"total_pnl": "realized_net", "unrealized_pnl": "mark_less_buy_outflow_excludes_exit_cost"},
         # equity_curve 只含每日收盘点；绩效的首个基准点是建仓前期初资金。
         "initial_capital": result.initial_capital,
         "trades": [

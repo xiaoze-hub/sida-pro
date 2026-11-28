@@ -97,6 +97,8 @@ def test_api_returns_open_position_separately_with_independent_signal_basis(monk
     expected, = Backtester().run([Signal(A, "CN", D0)], {A: bars}).open_positions
     with TestClient(app) as client:
         response = client.post("/api/backtest/run", json={"symbols": [A]})
+        malformed = client.post("/api/backtest/run", json={"symbols": [A], "end_date": "2026-11-27-extra"})
+    assert malformed.status_code == 422
     assert response.status_code == 200
     result = response.json()
     assert result["trades"] == []
@@ -150,3 +152,40 @@ def test_unknown_volume_does_not_raise_or_create_exit():
     outcome = Backtester().run([Signal(A, "CN", D0)], {A: bars})
     assert not outcome.trades
     assert outcome.open_positions[0].exit_blocked_reason == "untradeable"
+
+
+@pytest.mark.parametrize('portfolio', [False, True])
+def test_duplicate_final_day_keeps_legacy_sellable_sample_exit(portfolio):
+    runner = PortfolioBacktester() if portfolio else Backtester()
+    outcome = runner.run([Signal(A, 'CN', D0)], {A: [bar(D0), bar(D1), bar(D2), bar(D2)]})
+    assert not outcome.open_positions
+    trade, = outcome.trades
+    assert (trade.exit_date, trade.exit_reason, trade.holding_bars) == (D2, 'eod', 1)
+
+
+def test_explicit_end_does_not_force_trade_on_sellable_final_day(monkeypatch):
+    prefix = [bar(f'2026-10-{day:02d}') for day in range(1, 29)]
+    bars = [*prefix, bar(D0, 10.5), bar(D1, 10.5), bar(D2, 10.6), bar(D3, 13.0)]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_k: bars)
+    result = service.run_backtest(symbols=[A], end_date=D2)
+    assert result['trades'] == []
+    position, = result['open_positions']
+    assert (position['mark_date'], position['exit_blocked_reason']) == (D2, 'sample_end')
+    assert result['pnl_basis']['total_pnl'] == 'realized_net'
+    assert result['equity_basis'] == 'daily_close_metrics_from_initial_capital'
+
+    expired = service.run_backtest(symbols=[A], end_date=D2, holding_days=1)
+    assert expired['trades'][0]['exit_reason'] == 'expire'
+    assert not expired['open_positions']
+
+
+def test_dates_and_history_availability_do_not_masquerade_as_no_signals(monkeypatch):
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_k: [bar(D0), bar(D1)])
+    for bad in ('2026/11/27', '2026-11-01x', '2026-11-31'):
+        with pytest.raises(service.BacktestDateError):
+            service.run_backtest(symbols=[A], end_date=bad)
+    with pytest.raises(service.BacktestDateError):
+        service.run_backtest(symbols=[A], start_date=D2, end_date=D0)
+    outcome = service.run_backtest(symbols=[A], end_date='2023-10-01')
+    assert outcome['data_coverage'][A]['status'] == 'no_bars_in_window'
+    assert outcome['skipped_symbols'] == [A]

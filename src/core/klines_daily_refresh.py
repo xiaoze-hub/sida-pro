@@ -132,7 +132,8 @@ def daily_job_with_factors() -> dict:
         }.get(coverage["coverage_status"], "target_bars_unverified")
         stats["factor_refresh"] = {"written": 0, "reason": reason, **coverage}
         if board_config:
-            stats["theme_observation"] = {"written": 0, "reason": "factor_unavailable"}
+            stats["theme_observation"] = {"written": 0, "reason": "factor_unavailable", "upstream_reason": reason}
+            logger.info("题材成员盘后观测未执行: date=%s upstream=%s", receipt.get("trade_date"), reason)
         if reason not in ("before_close", "non_trading_day"):
             logger.warning("个股因子日快照跳过: date=%s reason=%s", receipt.get("trade_date"), reason)
         return stats

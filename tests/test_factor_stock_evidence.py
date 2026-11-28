@@ -65,6 +65,24 @@ def test_global_budget_rejects_whole_batch_without_query(monkeypatch):
     assert batch == other == {'status': 'member_budget_exceeded', 'rows': None}
 
 
+def test_only_unsupported_members_never_claim_a_database_read(monkeypatch):
+    monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: pytest.fail('must not read'))
+    batch, = evidence.capture(DAY, [['920001.BJ']], earliest=NOW, now=lambda: NOW)
+    assert batch == {'status': 'no_supported_members', 'rows': None}
+
+
+def test_postgres_projection_matches_persisted_factor_contract():
+    from sqlalchemy.dialects import postgresql
+    from src.db import factor_stock_evidence as repo
+    from src.db.models import StockFactorDaily
+
+    assert set(repo.FACTOR_FIELDS) <= set(StockFactorDaily.__table__.columns.keys())
+    stmt = repo._READ.compile(dialect=postgresql.dialect())
+    assert set(stmt.params) == {'symbols', 'lo', 'hi', 'iso_date', 'compact_date'}
+    for clause in ("market = 'CN'", "period = '1d'", "adjust = 'qfq'", "source IN ('tq', 'tencent')"):
+        assert clause in stmt.string
+
+
 @pytest.mark.parametrize('finished', [NOW - timedelta(seconds=1), NOW + timedelta(hours=8)])
 def test_late_or_reversed_clock_cannot_authorize_read(monkeypatch, finished):
     monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: {'000001': {}})

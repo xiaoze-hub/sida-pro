@@ -82,7 +82,7 @@ class BTOpenPosition:
     mark_price: float
     buy_cash_delta: float
     unrealized_pnl: float
-    exit_blocked_reason: Literal["t_plus_one", "untradeable"]
+    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end"]
 
 
 @dataclass
@@ -109,6 +109,7 @@ def simulate_exit(
     target: float | None,
     max_hold: int,
     sellable: Callable[[int], bool] | None = None,
+    close_at_sample_end: bool = True,
 ) -> tuple[float, str, str, int] | None:
     """逐日止损/止盈/到期撮合，供单笔与组合引擎共用。
 
@@ -116,19 +117,22 @@ def simulate_exit(
     - T+1: 入场日当天不检查(从 entry_idx+1 起);
     - 跳空: 开盘已越过止损/止盈按开盘价成交;
     - 一字跌停(sellable(j)=False)时止损/到期顺延到下一可成交日;
-    - 全程未触发 → 仅在最后一根可卖时按收盘退出(eod)，否则保留持仓。
+    - 仅在启用样本末日退出、且最后一个有效推进的交易日可卖时做 eod 撮合。
     """
     is_sellable = sellable or (lambda _j: True)
     last_day = bars[entry_idx].date
     held = 0
+    last_sellable = None
     for j in range(entry_idx + 1, len(bars)):
         bar = bars[j]
         if bar.date <= last_day:
             continue
         last_day = bar.date
         held += 1
+        last_sellable = None
         if not is_sellable(j):
             continue
+        last_sellable = bar
         if stop and stop > 0:
             if bar.open <= stop:  # 跳空跌破
                 return bar.open, bar.date, "stop_loss", held
@@ -141,8 +145,8 @@ def simulate_exit(
                 return target, bar.date, "target", held
         if held >= max_hold:
             return bar.close, bar.date, "expire", held
-        if j == len(bars) - 1:
-            return bar.close, bar.date, "eod", held
+    if close_at_sample_end and last_sellable is not None:
+        return last_sellable.close, last_sellable.date, "eod", held
     return None
 
 
@@ -182,11 +186,14 @@ class Backtester:
         lot: int = 100,
         sizer: PositionSizer | None = None,
         participation_rate: float = 0.05,
+        *,
+        close_at_sample_end: bool = True,
     ) -> None:
         self.cost = cost_model or CostModel()
         self.initial_capital = float(initial_capital)
         self.lot = max(1, int(lot))
         self.participation_rate = max(0.0, float(participation_rate))
+        self.close_at_sample_end = close_at_sample_end
         self.sizer = sizer or fixed_cash_sizer(cash_per_trade, lot)
 
     def _buyable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
@@ -262,6 +269,7 @@ class Backtester:
             target=target,
             max_hold=max_hold,
             sellable=lambda j: self._sellable(bars, j, signal),
+            close_at_sample_end=self.close_at_sample_end,
         )
         return self._position_result(signal, bars, entry_idx, entry_price, qty, exit_fill)
 
@@ -273,6 +281,11 @@ class Backtester:
             buy = self.cost.fill("buy", entry_price, qty)
             entry_day = bars[entry_idx].date
             latest_day = max(b.date for b in bars[entry_idx:])
+            reason = "t_plus_one" if latest_day == entry_day else "untradeable"
+            if reason != "t_plus_one" and not self.close_at_sample_end:
+                last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
+                if self._sellable(bars, last_idx, signal):
+                    reason = "sample_end"
             mark = max(
                 (b for b in reversed(bars[entry_idx:])
                  if b.date >= entry_day and math.isfinite(b.close) and b.close > 0),
@@ -283,7 +296,7 @@ class Backtester:
                 symbol=signal.symbol, market=signal.market, entry_date=entry_day,
                 entry_price=entry_price, quantity=qty, mark_date=mark.date if mark else None, mark_price=mark_price,
                 buy_cash_delta=buy.cash_delta, unrealized_pnl=round(buy.cash_delta + qty * mark_price, 4),
-                exit_blocked_reason="t_plus_one" if latest_day == entry_day else "untradeable",
+                exit_blocked_reason=reason,
             )
         exit_price, exit_date, exit_reason, held = exit_fill
         rt = self.cost.round_trip_pnl(entry_price, exit_price, qty)
@@ -415,7 +428,7 @@ class Backtester:
             trades=trades,
             equity_curve=curve,
             equity_dates=dates,
-            metrics=M.summarize([self.initial_capital, *curve] if dates[0] else curve, pnls),
+            metrics=M.summarize([self.initial_capital, *curve] if trades or open_positions else curve, pnls),
             initial_capital=self.initial_capital,
             skipped=skipped,
             open_positions=open_positions,
