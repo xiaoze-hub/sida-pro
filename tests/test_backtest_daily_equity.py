@@ -24,7 +24,9 @@ def test_equity_curve_is_daily_and_spans_all_bars():
     # 入场 01-02, 末根平仓 → 曲线覆盖 01-02..01-10 共 9 个交易日
     assert len(res.equity_curve) == len(res.equity_dates) == 10
     assert res.equity_dates == ["", *(f"2026-01-{d:02d}" for d in range(2, 11))]
-    assert res.metrics == M.summarize(res.equity_curve, [t.pnl for t in res.trades])
+    core = {k: v for k, v in res.metrics.items() if k not in {'open_positions', 'unrealized_pnl'}}
+    assert core == M.summarize(res.equity_curve, [t.pnl for t in res.trades])
+    assert res.metrics['open_positions'] == 0
 
 
 def test_equity_marks_floating_loss():

@@ -172,6 +172,8 @@ def test_engine_enforces_sample_end_without_caller_filtering():
     assert not outcome.trades
     position, = outcome.open_positions
     assert (position.mark_date, position.exit_blocked_reason) == (D2, 'sample_end')
+    assert outcome.metrics['open_positions'] == 1
+    assert outcome.metrics['unrealized_pnl'] == position.unrealized_pnl
 
 
 def test_portfolio_engine_accepts_sample_end():
@@ -181,6 +183,14 @@ def test_portfolio_engine_accepts_sample_end():
     outcome = PortfolioBacktester(PortfolioConfig(sample_end=D2)).run([Signal(A, 'CN', D0)], {A: bars})
     assert not outcome.trades
     assert outcome.open_positions[0].exit_blocked_reason == 'sample_end'
+
+
+def test_bars_ending_before_boundary_are_labelled_history_end():
+    prefix = [bar(f'2026-10-{day:02d}') for day in range(1, 29)]
+    sample = [*prefix, bar(D0, 10.5), bar(D1, 10.5)]
+    outcome = Backtester(sample_end=D3).run([Signal(A, 'CN', prefix[-2].date)], {A: sample})
+    position, = outcome.open_positions
+    assert position.exit_blocked_reason == 'history_end'
 
 
 @pytest.mark.parametrize('portfolio', [False, True])
@@ -226,7 +236,7 @@ def test_weekend_boundary_is_not_reported_as_missing_history(monkeypatch):
     result = service.run_backtest(symbols=[A], start_date=prefix[0].date, end_date='2026-11-21', holding_days=60)
     position, = result['open_positions']
     # A non-trading-day boundary is described by the literal reason, not as missing history.
-    assert position['exit_blocked_reason'] in {'sample_end', 't_plus_one', 'untradeable'}
+    assert position['exit_blocked_reason'] in {'sample_end', 'history_end', 't_plus_one', 'untradeable'}
     assert result['data_coverage'][A]['end_after_last_bar'] is True
 
 

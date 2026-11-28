@@ -82,7 +82,9 @@ class BTOpenPosition:
     mark_price: float
     buy_cash_delta: float
     unrealized_pnl: float
-    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end"]
+    # history_end: the supplied bars stop before the requested boundary (may be a data
+    # gap or a non-trading-day boundary); sample_end means the boundary was reached.
+    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_end"]
 
 
 @dataclass
@@ -300,7 +302,12 @@ class Backtester:
                 reason = "t_plus_one"
             else:
                 last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
-                reason = "sample_end" if self.sample_end is not None and self._sellable(bars, last_idx, signal) else "untradeable"
+                if self.sample_end is not None and latest_day < self.sample_end:
+                    reason = "history_end"
+                elif self.sample_end is not None and self._sellable(bars, last_idx, signal):
+                    reason = "sample_end"
+                else:
+                    reason = "untradeable"
             mark = max(
                 (b for b in reversed(bars[entry_idx:])
                  if b.date >= entry_day and _valid_price(b.close)),
@@ -358,6 +365,8 @@ class Backtester:
         # Stop at the last actual exit or open-position mark; unrelated symbols
         # cannot extend the measured holding period beyond the evidence.
         end = max([t.exit_date for t in trades] + [p.mark_date or p.entry_date for p in open_positions])
+        if self.sample_end is not None:
+            end = max(end, self.sample_end)
         all_dates = sorted(
             {
                 b.date
@@ -441,11 +450,16 @@ class Backtester:
         M.validate_equity_curve(curve, dates)
 
         pnls = [t.pnl for t in trades]
+        metrics = M.summarize(curve, pnls)
+        metrics.update(
+            open_positions=len(open_positions),
+            unrealized_pnl=round(sum(p.unrealized_pnl for p in open_positions), 4),
+        )
         return BacktestResult(
             trades=trades,
             equity_curve=curve,
             equity_dates=dates,
-            metrics=M.summarize(curve, pnls),
+            metrics=metrics,
             initial_capital=self.initial_capital,
             skipped=skipped,
             open_positions=open_positions,

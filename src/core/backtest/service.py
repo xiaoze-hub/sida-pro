@@ -96,9 +96,11 @@ def run_backtest(
     # load_qfq_bars cuts relative to now; stretch the lookback so an older
     # requested start is not silently reported as fully covered.
     history_days = max(int(days), 30)
-    earliest = start_date or end_date
-    if earliest:
-        history_days = max(history_days, (date.today() - date.fromisoformat(earliest)).days + 60)
+    if start_date:
+        history_days = max(history_days, (date.today() - date.fromisoformat(start_date)).days + 60)
+    if end_date:
+        # End-only requests must still reach `days` back from the requested end.
+        history_days = max(history_days, (date.today() - date.fromisoformat(end_date)).days + int(days) + 60)
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"

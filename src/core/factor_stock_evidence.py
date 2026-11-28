@@ -14,8 +14,10 @@ from src.db.factor_stock_evidence import FACTOR_FIELDS, load_stock_observations
 from src.db.klines_repo import CN_TRADING_TZ
 
 logger = logging.getLogger(__name__)
-# Bound stored entries including overlap between boards; never truncate a roster.
-MAX_MEMBER_SLOTS = 1500
+# Global read budget, aligned with the caller's per-board reply cap. A selected roster
+# is stored whole (including unsupported identities), so the payload bound is
+# MAX_MEMBERS rows per admitted board rather than this read budget.
+MAX_MEMBER_SLOTS = 6000
 _SUPPORTED = re.compile(r'(?:(?:60|68)[0-9]{4}\.SH|(?:00|30)[0-9]{4}\.SZ)')
 
 

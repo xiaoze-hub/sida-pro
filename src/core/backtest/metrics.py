@@ -151,7 +151,7 @@ def avg_win_loss(trade_pnls: list[float]) -> tuple[float, float]:
 
 
 def summarize(equity_curve: list[float], trade_pnls: list[float]) -> dict:
-    """汇总所有绩效指标为一个 dict。"""
+    """汇总已实现交易与逐日净值指标；未平仓数量/浮盈由引擎追加。"""
     rets = daily_returns(equity_curve)
     avg_w, avg_l = avg_win_loss(trade_pnls)
     return {

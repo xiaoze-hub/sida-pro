@@ -155,11 +155,16 @@ class PortfolioBacktester:
         trades_sorted = sorted(trades, key=lambda t: (t.exit_date, t.entry_date))
         curve, dates = self._single._daily_equity_curve(trades_sorted, bars_by_symbol, open_positions)
         M.validate_equity_curve(curve, dates)
+        metrics = M.summarize(curve, [t.pnl for t in trades])
+        metrics.update(
+            open_positions=len(open_positions),
+            unrealized_pnl=round(sum(p.unrealized_pnl for p in open_positions), 4),
+        )
         return BacktestResult(
             trades=trades,
             equity_curve=curve,
             equity_dates=dates,
-            metrics=M.summarize(curve, [t.pnl for t in trades]),
+            metrics=metrics,
             initial_capital=self.cfg.initial_capital,
             skipped=skipped_cash + skipped_slots,
             skipped_cash=skipped_cash,
