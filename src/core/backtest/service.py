@@ -144,6 +144,7 @@ def run_backtest(
     if sample_start:
         # Keep the extra history for signal warmup, outside the measured sample.
         history_days = max(history_days, (now.date() - date.fromisoformat(sample_start)).days + 60)
+    explicit_start = start_date  # synthesized end-only bounds are not a user start
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
@@ -225,13 +226,15 @@ def run_backtest(
             skipped_symbols.append(code)
             continue
         bars_by_symbol[(code, mkt)] = bars
-        signals.extend(
-            _golden_cross_signals(
-                code, mkt, bars,
-                start_date=sample_start, end_date=end_date,
-                holding_days=holding_days, stop_pct=stop_pct, target_pct=target_pct,
-            )
+        produced = _golden_cross_signals(
+            code, mkt, bars,
+            start_date=sample_start, end_date=end_date,
+            holding_days=holding_days, stop_pct=stop_pct, target_pct=target_pct,
         )
+        if explicit_start:
+            # An explicit start measures from that day; earlier bars are warmup only.
+            produced = [s for s in produced if s.signal_date >= explicit_start]
+        signals.extend(produced)
 
     bt = Backtester(
         initial_capital=initial_capital,
@@ -273,7 +276,7 @@ def run_backtest(
         "equity_basis": "initial_capital_then_daily_close",
         "equity_end_policy": "observed_cash_days_to_sample_end_if_flat_otherwise_last_fill_or_mark",
         # Requested bounds vs the window actually measured (open positions cap the right edge).
-        "sample_window": {"requested_start": result.sample_start, "requested_end": result.sample_end,
+        "sample_window": {"effective_start": result.sample_start, "requested_end": result.sample_end,
                           "measured_days": len(equity_days)},
         "equity_window": {"first_date": equity_days[0] if equity_days else None,
                           "last_date": equity_days[-1] if equity_days else None,
@@ -285,15 +288,9 @@ def run_backtest(
                           "annualization_window": "equity_dates[1:]"},
 
         "initial_capital": result.initial_capital,
-        "trades": [
-            {**asdict(t), "entry_price": round(t.entry_price, 4), "exit_price": round(t.exit_price, 4)}
-            for t in result.trades
-        ],
-        "open_positions": [
-            {**asdict(p), "entry_price": round(p.entry_price, 4), "mark_price": round(p.mark_price, 4),
-             "unrealized_pnl": round(p.unrealized_pnl, 4)}
-            for p in result.open_positions
-        ],
+        # Fills stay exact so prices, fees and pnl reconcile with the ledger.
+        "trades": [asdict(t) for t in result.trades],
+        "open_positions": [asdict(p) for p in result.open_positions],
         "equity_curve": result.equity_curve,
         "equity_dates": result.equity_dates,
         "metrics": result.metrics,

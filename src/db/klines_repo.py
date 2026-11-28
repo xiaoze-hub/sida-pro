@@ -90,9 +90,10 @@ def load_qfq_bars(symbol: str, market, days: int = 250, *, date_cutoff: date | N
         by_day: dict[str, tuple[int, dict]] = {}
         for r in rows:
             ts = r[0]
+            # 日线统一以上海零点落库, 日期标签也必须用同一时钟, 否则港美在 UTC 会话下少一天。
             day = (
                 ts.astimezone(CN_TRADING_TZ).date().isoformat()
-                if mc_str == "CN" and isinstance(ts, datetime) and ts.utcoffset() is not None
+                if isinstance(ts, datetime) and ts.utcoffset() is not None
                 else str(ts)[:10]
             )
             priority = int(r[6] == "tq")

@@ -339,7 +339,7 @@ def test_backtest_passes_same_calendar_cutoff_to_database_and_fallback(monkeypat
 
     def no_rows(_symbol, _market, days, *, date_cutoff=None, date_ceiling=None):
         assert days == 1 and date_cutoff == date(2026, 11, 27)
-        assert date_ceiling == date(2026, 11, 28)  # 18:00Z is already the next Shanghai day.
+        assert date_ceiling == date(2026, 11, 27)  # 18:00Z is 02:00 Shanghai, so the 27th is the last final bar.
         return []
 
     last = PriceBar('2026-11-27', 10, 11, 9, 10, 1000.0)
@@ -368,7 +368,8 @@ def test_naive_as_of_is_utc_not_host_local():
 
     naive = datetime(2026, 11, 27, 18)
     assert history_cutoff_day('CN', 1, naive) == date(2026, 11, 27)
-    assert history_window('CN', 0, naive) == (date(2026, 11, 28), date(2026, 11, 28))
+    # 02:00 Shanghai on the 28th: the first label is the 28th but the last final session is the 27th.
+    assert history_window('CN', 0, naive) == (date(2026, 11, 27), date(2026, 11, 27))
 
 
 def test_history_window_caps_bars_newer_than_as_of(monkeypatch):
@@ -410,6 +411,32 @@ def test_legacy_history_reader_keeps_collector_reply_without_raising(monkeypatch
     monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
     monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_kw: [old])
     assert data_adapter.load_price_history('600000', 'CN', days=1) == [old]
+
+
+def test_last_closed_session_excludes_the_intraday_provisional_bar():
+    from datetime import date, datetime, timezone
+    from src.core.backtest.data_adapter import last_closed_session
+
+    # 13:00Z is 21:00 Shanghai: the session bar is final.
+    assert last_closed_session('CN', datetime(2026, 11, 27, 13, tzinfo=timezone.utc)) == date(2026, 11, 27)
+    # 02:00Z is 10:00 Shanghai: today's bar is still being rewritten.
+    assert last_closed_session('CN', datetime(2026, 11, 27, 2, tzinfo=timezone.utc)) == date(2026, 11, 26)
+    # Saturday has no session of its own.
+    assert last_closed_session('CN', datetime(2026, 11, 21, 4, tzinfo=timezone.utc)) == date(2026, 11, 20)
+
+
+def test_newer_than_ceiling_bars_are_not_reported_as_old_history(monkeypatch):
+    from datetime import datetime, timezone
+    from src.collectors import kline_collector
+    from src.core.backtest import data_adapter
+    from src.db import klines_repo
+
+    recent = [PriceBar('2026-12-10', 10, 11, 9, 10, 1000)]
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
+    monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_k: recent)
+    rows = data_adapter.load_price_history('600000', 'CN', days=30,
+                                           as_of=datetime(2026, 11, 27, 9, tzinfo=timezone.utc))
+    assert rows == []  # window mismatch, not "history is too old"
 
 
 def test_metrics_basis_is_declared(monkeypatch):

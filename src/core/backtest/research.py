@@ -178,7 +178,9 @@ def walk_forward(
                        top_n=1, **run_kwargs)
         if ranked:
             best = ranked[0]
-            oos = run_once(test, **best["params"], sample_end=_slice_end(test), **run_kwargs)
+            # Build once: an explicit sample_end in run_kwargs must not be passed twice.
+            oos_kwargs = {"sample_end": _slice_end(test), **run_kwargs}
+            oos = run_once(test, **best["params"], **oos_kwargs)
             windows.append(
                 {
                     "train_end": pos,

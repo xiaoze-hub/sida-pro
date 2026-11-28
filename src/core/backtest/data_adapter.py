@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -37,10 +37,27 @@ def history_cutoff_day(market: str, days: int, now: datetime) -> date:
     return (_aware(now).astimezone(timezone.utc) - timedelta(days=days)).astimezone(_BAR_TZ).date()
 
 
+def last_closed_session(market: str, as_of: datetime) -> date:
+    """Latest session whose daily bar is final: before 15:00 Shanghai it is the previous one."""
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day, prev_trading_day
+
+    local = _aware(as_of).astimezone(_BAR_TZ)
+    day = local.date()
+    try:
+        if local.time() < time(15, 0):
+            # prev_trading_day already walks back to the latest trading day.
+            day = prev_trading_day(day)
+        elif not is_trading_day(day):
+            day = prev_trading_day(day)
+    except (TradingCalendarError, ValueError, OverflowError):
+        return local.date()
+    return day
+
+
 def history_window(market: str, days: int, as_of: datetime) -> tuple[date, date]:
-    """Point-in-time window: inclusive first session label and the as_of session label."""
-    end = _aware(as_of).astimezone(_BAR_TZ).date()
-    return history_cutoff_day(market, days, as_of), end
+    """Point-in-time window of final bars: inclusive first label and last closed session."""
+    end = last_closed_session(market, as_of)
+    return min(history_cutoff_day(market, days, as_of), end), end
 
 
 @dataclass(frozen=True)
@@ -133,7 +150,9 @@ def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime 
     cutoff_day, upper_day = day_cutoff.isoformat(), upper.isoformat()
     returned = converted[-fallback_bars:]
     in_window = [bar for bar in returned if cutoff_day <= bar.date <= upper_day]
-    if returned and not in_window:
+    if returned and not in_window and returned[-1].date < cutoff_day:
+        # Only the genuinely-earlier direction is a lookback miss; newer-than-ceiling
+        # bars are a window problem the caller reports as history_starts_after_window.
         raise HistoryOutsideLookback(returned[-1].date)
     return in_window
 
