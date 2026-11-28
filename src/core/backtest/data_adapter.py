@@ -45,17 +45,22 @@ def history_cutoff_day(days: int, now: datetime) -> date:
     return (_aware(now).astimezone(timezone.utc) - timedelta(days=days)).astimezone(CN_TRADING_TZ).date()
 
 
+CN_MARKET_CODES = frozenset({'CN', 'SH', 'SZ', 'BJ'})
+
+
+def parse_backtest_market(market: str | MarketCode) -> MarketCode:
+    code = getattr(market, 'value', market).strip().upper() or 'CN'
+    try:
+        return MarketCode.CN if code in CN_MARKET_CODES else MarketCode(code)
+    except ValueError as exc:
+        raise ValueError(f'unsupported market: {market!r}; expected CN, HK or US') from exc
+
+
 def last_closed_session(market: str, as_of: datetime) -> date:
     """Upper date label excluding open sessions; not a guarantee of vendor finality."""
     from src.core.trading_calendar import TradingCalendarError, is_trading_day, prev_trading_day
 
-    code = market.upper()
-    if code in {'SH', 'SZ', 'BJ'}:
-        code = 'CN'
-    try:
-        meta = MARKETS[MarketCode(code)]
-    except ValueError:
-        return _aware(as_of).astimezone(CN_TRADING_TZ).date() - timedelta(days=1)
+    meta = MARKETS[parse_backtest_market(market)]
     local = _aware(as_of).astimezone(meta.get_tz())
     day = local.date()
     close = meta.sessions[-1].end
@@ -116,19 +121,21 @@ def load_price_history(
 
     两条路径都是查询时可见的前复权，可能含后来修订，不能用于证明历史时点可见性。
     指定 as_of 且回退结果只在窗口外时按方向报错；through 可进一步缩小右界。
-    不指定 as_of 时保留旧列表契约。
+    through 必须搭配 as_of；两者均不传时保留旧列表契约。
     """
     # 1. 查 PG klines 表(qfq 分区; 2026-09-08 风险方案1.2/B1: 复权维度入列,
     #    回测序列必须与主源同为前复权, 严禁混入 none 原始价)
     from src.db.klines_repo import load_qfq_bars
 
+    if through is not None and as_of is None:
+        raise ValueError('through requires as_of')
     calendar_days = max(1, int(days))
-    code = str(getattr(market, 'value', market)).upper()
-    bounds = history_window(code, calendar_days, as_of) if as_of is not None else None
+    mc = parse_backtest_market(market)
+    bounds = history_window(mc.value, calendar_days, as_of) if as_of is not None else None
     if bounds is not None and through is not None:
-        bounds = (bounds[0], min(bounds[1], through))
-        if bounds[0] > bounds[1]:
+        if through < bounds[0]:
             return []
+        bounds = (bounds[0], min(bounds[1], through))
     if bounds is None:
         rows = load_qfq_bars(symbol, market, calendar_days)
     else:
@@ -149,10 +156,6 @@ def load_price_history(
     # 2. Collector 的 days 是日 K 根数，不是 PG 的自然日跨度。日期越早，
     # 只放宽 PG 查库范围，不让回退的取数门槛突破固定预算。
     from src.collectors.kline_collector import KlineCollector
-    try:
-        mc = MarketCode(code)
-    except ValueError:
-        mc = MarketCode.CN
     fallback_bars = min(calendar_days, MAX_FALLBACK_BARS) if bounds is not None else calendar_days
     try:
         klines = KlineCollector(mc).get_klines(symbol, days=fallback_bars)

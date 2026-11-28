@@ -29,12 +29,12 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Callable, Literal
 
 from src.core.backtest import metrics as M
 from src.core.backtest.cost_model import CostModel
-from src.core.backtest.data_adapter import PriceBar, first_index_after
+from src.core.backtest.data_adapter import CN_MARKET_CODES, PriceBar, first_index_after
 from src.core.limit_rules import limit_down_price, limit_up_price
 from src.core.trading_calendar import TradingCalendarError, add_trading_days, is_trading_day, next_trading_day, prev_trading_day
 
@@ -195,7 +195,7 @@ def _has_execution_evidence(bar: PriceBar) -> bool:
 
 def expected_trading_boundary(market: str | None, day: str | None, *, right: bool = False) -> str | None:
     """First/last A-share session inside a calendar boundary; unverifiable stays unknown."""
-    if day is None or not isinstance(market, str) or market.upper() not in {'CN', 'SH', 'SZ', 'BJ'}:
+    if day is None or not isinstance(market, str) or market.upper() not in CN_MARKET_CODES:
         return None
     try:
         parsed = _parse_day(day)
@@ -215,6 +215,17 @@ def _prev_close(bars: list[PriceBar], idx: int) -> float | None:
     return bars[idx - 1].close
 
 
+def _validate_sample_date(value: str | None, name: str) -> None:
+    if value is None:
+        return
+    try:
+        if date.fromisoformat(value).isoformat() == value:
+            return
+    except (ValueError, TypeError):
+        pass
+    raise ValueError(f'{name} must be YYYY-MM-DD')
+
+
 class Backtester:
     def __init__(
         self,
@@ -232,6 +243,10 @@ class Backtester:
         self.initial_capital = float(initial_capital)
         self.lot = max(1, int(lot))
         self.participation_rate = max(0.0, float(participation_rate))
+        _validate_sample_date(sample_start, 'sample_start')
+        _validate_sample_date(sample_end, 'sample_end')
+        if sample_start is not None and sample_end is not None and sample_start > sample_end:
+            raise ValueError('sample_start must not be after sample_end')
         self.sample_end = sample_end
         self.sample_start = sample_start
         self.sizer = sizer or fixed_cash_sizer(cash_per_trade, lot)
@@ -265,9 +280,18 @@ class Backtester:
         cap = (cap // self.lot) * self.lot
         return int(min(int(qty), cap))
 
+    def _includes_signal(self, signal: Signal) -> bool:
+        return ((self.sample_start is None or signal.signal_date >= self.sample_start)
+                and (self.sample_end is None or signal.signal_date <= self.sample_end))
+
+    def _effective_sample_start(self, dates: list[str]) -> str | None:
+        if self.sample_start is None and self.sample_end is not None and len(dates) > 1:
+            return dates[1]
+        return self.sample_start
+
     def _entry_candidate(self, signal: Signal, bars: list[PriceBar]) -> tuple[int, float, int] | None:
         """Signals before the sample start are warmup only, not pending orders."""
-        if self.sample_start is not None and signal.signal_date < self.sample_start:
+        if not self._includes_signal(signal):
             return None
         idx = first_index_after(bars, signal.signal_date)
         while idx is not None and idx < len(bars):
@@ -466,6 +490,8 @@ class Backtester:
         open_positions: list[BTOpenPosition] = []
         skipped = 0
         for sig in signals:
+            if not self._includes_signal(sig):
+                continue
             bars = bars_by_symbol.get((sig.symbol, sig.market)) or bars_by_symbol.get(sig.symbol)
             if not bars:
                 skipped += 1
@@ -497,7 +523,7 @@ class Backtester:
             initial_capital=self.initial_capital,
             skipped=skipped,
             open_positions=open_positions,
-            sample_start=self.sample_start,
+            sample_start=self._effective_sample_start(dates),
             sample_end=self.sample_end,
         )
 

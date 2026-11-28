@@ -156,6 +156,6 @@ class PortfolioBacktester:
             skipped_cash=skipped_cash,
             skipped_slots=skipped_slots,
             open_positions=open_positions,
-            sample_start=self._single.sample_start,
+            sample_start=self._single._effective_sample_start(dates),
             sample_end=self._single.sample_end,
         )

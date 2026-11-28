@@ -507,6 +507,45 @@ def test_unclosed_requested_end_is_not_missing_vendor_history(monkeypatch):
     assert row['end_after_last_bar'] is False
     assert result['sample_window']['requested_end'] == '2026-11-27'
     assert result['sample_window']['effective_end'] == '2026-11-26'
+    empty = service.run_backtest(symbols=['600000'], start_date='2026-11-27', end_date='2026-11-27')
+    assert empty['data_coverage']['600000']['status'] == 'window_after_history_ceiling'
+    assert empty['trades'] == [] and empty['sample_window']['effective_start'] is None
+
+
+def test_through_without_as_of_is_rejected_before_query(monkeypatch):
+    from datetime import date
+    import pytest
+    from src.core.backtest.data_adapter import load_price_history
+    from src.db import klines_repo
+
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
+    with pytest.raises(ValueError, match='as_of'):
+        load_price_history('600000', 'CN', through=date(2026, 11, 21))
+
+
+def test_unknown_market_is_never_labeled_as_valid_cn_history(monkeypatch):
+    import pytest
+    from pydantic import ValidationError
+    from src.core.backtest import service
+    from src.web.api.backtest import BacktestIn
+
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: _bars())
+    with pytest.raises(ValueError, match='market'):
+        service.run_backtest(symbols=['600000'], market='CNX')
+    with pytest.raises(ValidationError, match='market'):
+        BacktestIn(symbols=['600000'], market='CNX')
+
+
+def test_warmup_does_not_mask_leading_window_gap(monkeypatch):
+    from src.core.backtest import service
+
+    bars = _bars()[:30] + [PriceBar('2026-11-25', 10, 11, 9, 10, 1000)]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: bars)
+    out = service.run_backtest(symbols=['600000'], start_date='2026-11-23', end_date='2026-11-25')
+    row = out['data_coverage']['600000']
+    assert row['loaded_first'] < '2026-11-23' < row['window_first'] == '2026-11-25'
+    assert row['window_truncated'] is True
+    assert row['end_after_last_bar'] is False
 
 
 def test_valid_close_can_drive_signal_when_warmup_open_is_invalid(monkeypatch):

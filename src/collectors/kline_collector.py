@@ -807,6 +807,7 @@ class KlineCollector:
             from datetime import datetime, timedelta, timezone
             from sqlalchemy import text
             # P0(2026-09-18): 复用主引擎单例, 禁止 per-call create_engine+dispose。
+            from src.db.klines_repo import daily_bar_label
             from src.db.session import engine
             cutoff = datetime.now(timezone.utc) - timedelta(days=max(days, 5) * 2)
             with engine.connect() as conn:
@@ -821,7 +822,7 @@ class KlineCollector:
                     {"s": symbol, "m": self.market.value, "adj": adjust, "c": cutoff},
                 ).fetchall()
             out = [
-                KlineData(date=str(r[0])[:10], open=float(r[1]), high=float(r[2]),
+                KlineData(date=daily_bar_label(r[0]), open=float(r[1]), high=float(r[2]),
                           low=float(r[3]), close=float(r[4]),
                           # P1: volume 缺失保持 None
                           volume=float(r[5]) if r[5] is not None else None)

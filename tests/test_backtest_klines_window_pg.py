@@ -77,6 +77,11 @@ def test_ceiling_none_keeps_the_cutoff_bar(pg):
 
 @pytest.mark.parametrize('symbol,market', [('00700', 'HK'), ('AAPL', 'US')])
 def test_non_cn_storage_labels_agree_with_window_in_utc_session(pg, symbol, market):
+    from src.collectors.kline_collector import KlineCollector
+    from src.models.market import MarketCode
+
     day = date(2026, 11, 27)
     rows = pg(symbol, market, date_cutoff=day, date_ceiling=day)
     assert [row['date'] for row in rows] == [day.isoformat()]
+    collector_rows = KlineCollector(MarketCode(market))._pg_read(symbol, days=10000)
+    assert [row.date for row in collector_rows] == [day.isoformat()]

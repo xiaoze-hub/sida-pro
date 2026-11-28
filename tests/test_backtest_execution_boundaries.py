@@ -88,6 +88,22 @@ def test_pre_window_signals_are_warmup_only_in_both_engines(portfolio):
     outcome = runner.run([Signal(A, 'CN', D0, holding_days=1)], {A: bars})
     assert not outcome.trades and not outcome.open_positions
     assert outcome.equity_dates == ['', D2, D3]
+    assert outcome.skipped == 0
+
+
+@pytest.mark.parametrize('value', ['2026-11-17T00:00:00Z', '2026-6-01'])
+def test_direct_engines_require_canonical_date_boundaries(value):
+    with pytest.raises(ValueError, match='YYYY-MM-DD'):
+        Backtester(sample_start=value)
+    with pytest.raises(ValueError, match='YYYY-MM-DD'):
+        PortfolioBacktester(PortfolioConfig(sample_end=value))
+
+
+def test_end_only_reports_start_used_for_metrics():
+    bars = [bar(d) for d in (D0, D1, D2, D3)]
+    for runner in (Backtester(sample_end=D3), PortfolioBacktester(PortfolioConfig(sample_end=D3))):
+        out = runner.run([Signal(A, 'CN', D0, holding_days=1)], {A: bars})
+        assert out.sample_start == out.equity_dates[1] == D0
 
 
 def test_open_position_remains_in_portfolio_and_marks_from_last_observed_bar():

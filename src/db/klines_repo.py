@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 CN_TRADING_TZ = ZoneInfo("Asia/Shanghai")
 
 
+def daily_bar_label(ts: datetime | str) -> str:
+    """Recover the Shanghai storage label, not the driver's session date."""
+    stamp = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
+    if stamp.utcoffset() is not None:
+        stamp = stamp.astimezone(CN_TRADING_TZ)
+    return stamp.date().isoformat()
+
+
 def count_factor_ready_cn_bars(engine: Engine, trade_date: date, symbols: list[str]) -> int:
     """Count usable traded bars, not all input rows of the legacy factor loader.
 
@@ -93,13 +101,7 @@ def load_qfq_bars(symbol: str, market, days: int = 250, *, date_cutoff: date | N
             ).fetchall()
         by_day: dict[str, tuple[int, dict]] = {}
         for r in rows:
-            ts = r[0]
-            # 日线统一以上海零点落库, 日期标签也必须用同一时钟, 否则港美在 UTC 会话下少一天。
-            day = (
-                ts.astimezone(CN_TRADING_TZ).date().isoformat()
-                if isinstance(ts, datetime) and ts.utcoffset() is not None
-                else str(ts)[:10]
-            )
+            day = daily_bar_label(r[0])
             priority = int(r[6] == "tq")
             if day in by_day and (mc_str != "CN" or priority <= by_day[day][0]):
                 continue

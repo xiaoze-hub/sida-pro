@@ -10,6 +10,7 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
+from src.core.backtest.data_adapter import parse_backtest_market
 from src.core.backtest.service import run_backtest
 from src.web.api.auth import get_current_user
 from src.web.models import User
@@ -32,6 +33,11 @@ class BacktestIn(BaseModel):
     target_pct: float = Field(0.15, ge=0.0, le=1.0)
     initial_capital: float = Field(1_000_000.0, gt=0, le=1e10)
     cash_per_trade: float = Field(100_000.0, gt=0, le=1e10)
+
+    @field_validator("market")
+    @classmethod
+    def _market_code(cls, value: str) -> str:
+        return parse_backtest_market(value).value
 
     @field_validator("start_date", "end_date", mode="before")
     @classmethod

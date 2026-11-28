@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from src.core.backtest.data_adapter import (
     MAX_FALLBACK_BARS, HistoryAfterWindow, HistoryOutsideLookback, PriceBar, history_window, load_price_history,
+    parse_backtest_market,
 )
 from src.core.backtest.engine import Backtester, Signal, expected_trading_boundary, positive_trade_volume, valid_ohlc, valid_trade_price
 from src.core.trading_calendar import TradingCalendarError, is_trading_day
@@ -46,7 +47,7 @@ def _missing_sessions(
     market: str, bars: list[PriceBar], calendar: dict[date, bool | None],
 ) -> tuple[int | None, int | None]:
     """Sessions without bars (gaps or halts), plus days outside available calendars."""
-    if market not in {'CN', 'SH', 'SZ', 'BJ'} or not bars:
+    if market != 'CN' or not bars:
         return None, None
     observed = {bar.date for bar in bars}
     try:
@@ -147,7 +148,7 @@ def run_backtest(
 
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
-    mkt = (market or "CN").strip().upper() or "CN"
+    mkt = parse_backtest_market(market).value
     first_possible, ceiling = history_window(mkt, history_days, now)
     cutoff = first_possible.isoformat()
     coverage_start = sample_start or cutoff
@@ -160,6 +161,7 @@ def run_backtest(
     left_edge_capped = history_capped and (sample_start is None or bool(first_target and first_target < cutoff))
     no_market_sessions = bool(expected_first and expected_last and expected_first > expected_last)
     outside_lookback = bool(history_capped and last_target and last_target < cutoff)
+    window_after_ceiling = bool(sample_start and sample_start > ceiling.isoformat())
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
     skipped_symbols: list[str] = []
@@ -173,7 +175,7 @@ def run_backtest(
         after_fallback = None
         fallback_limit_reached = False
         loaded = []
-        if not outside_lookback and not no_market_sessions:
+        if not (outside_lookback or no_market_sessions or window_after_ceiling):
             try:
                 loaded = load_price_history(code, mkt, days=history_days, as_of=now,
                                             through=date.fromisoformat(effective_end) if effective_end else None)
@@ -187,6 +189,8 @@ def run_backtest(
             bars = [bar for bar in bars if bar.date <= effective_end]
         if no_market_sessions:
             status = 'no_market_sessions'
+        elif window_after_ceiling:
+            status = 'window_after_history_ceiling'
         elif outside_lookback:
             status = 'window_before_history_cutoff'
         elif outside_fallback is not None:
@@ -204,22 +208,25 @@ def run_backtest(
             status = 'insufficient_history'
         else:
             status = 'usable'
-        window_last = bars[-1].date if bars and (not sample_start or bars[-1].date >= sample_start) else None
+        window_bars = [bar for bar in bars if bar.date >= coverage_start]
+        window_first = window_bars[0].date if window_bars else None
+        window_last = window_bars[-1].date if window_bars else None
         loaded_first = loaded[0].date if loaded else None
         truncated: bool | None = None
         if left_edge_capped and not no_market_sessions:
             truncated = True
-        elif loaded_first and loaded_first <= coverage_start:
-            truncated = False
-        elif loaded_first and expected_first:
-            # This compares to the market calendar; it does not assert a vendor gap.
-            truncated = loaded_first > expected_first
-        window_bars = [bar for bar in bars if not sample_start or bar.date >= sample_start]
+        elif window_first:
+            # A pre-window warmup bar is not evidence of coverage inside the window.
+            if expected_first is not None:
+                truncated = window_first > expected_first
+            elif window_first == coverage_start:
+                truncated = False
         missing_sessions, unverified_days = _missing_sessions(mkt, window_bars, calendar)
         invalid_prices = sum(not valid_ohlc(bar) for bar in window_bars)
         invalid_warmup = sum(not valid_ohlc(bar) for bar in bars[:len(bars) - len(window_bars)])
         coverage[code] = dict(status=status, loaded_first=loaded_first,
                               loaded_last=loaded[-1].date if loaded else None,
+                              window_first=window_first,
                               window_last=window_last,
                               bars_through_end=len(bars),
                               bars_in_window=len(window_bars),
@@ -253,7 +260,7 @@ def run_backtest(
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
         sample_end=effective_end,
-        sample_start=sample_start,
+        sample_start=None if window_after_ceiling else sample_start,
     )
     result = bt.run(signals, bars_by_symbol)
     equity_days = result.equity_dates[1:]  # Initial cash is not a trading day.
@@ -286,7 +293,8 @@ def run_backtest(
         "execution_basis": "independent_signal_daily_bar",
         "price_adjustment_basis": "qfq_visible_at_query_time_not_point_in_time",
         "portfolio_constraint": "none",
-        "session_gap_basis": "calendar_sessions_without_a_bar_includes_possible_halts",
+        "session_gap_basis": ("calendar_sessions_without_a_bar_includes_possible_halts"
+                              if mkt == 'CN' else "market_calendar_unavailable"),
         "equity_basis": "initial_capital_then_daily_close",
         "equity_end_policy": "observed_cash_days_to_sample_end_if_flat_otherwise_last_fill_or_mark",
         # Requested bounds vs the window actually measured (open positions cap the right edge).
