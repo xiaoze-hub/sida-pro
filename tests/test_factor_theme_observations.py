@@ -100,6 +100,23 @@ def test_separate_job_requires_a_same_day_completion_receipt(monkeypatch):
     assert stored_rows() == []
 
 
+def test_unchanged_degraded_retry_keeps_first_capture_until_evidence_changes(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-26')
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000001.SZ'])
+    refresh.daily_job_with_factors()
+    first = refresh.daily_theme_observation_job()
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=15))
+    unchanged = refresh.daily_theme_observation_job()
+    assert first['written'] == 1 and unchanged['written'] == 0
+    assert unchanged['observation_ids'] == first['observation_ids']
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000002.SZ'])
+    changed = refresh.daily_theme_observation_job()
+    assert changed['written'] == 1 and changed['observation_ids'] != first['observation_ids']
+    assert [doc['fetched_at'] for _, doc in stored_rows()] == [NOW.isoformat(), (NOW + timedelta(minutes=15)).isoformat()]
+
+
 def test_scheduler_status_projection_does_not_decode_observation_payload(monkeypatch):
     from src.db import factor_theme_observations as repo
 

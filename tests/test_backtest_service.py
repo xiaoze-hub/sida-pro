@@ -277,3 +277,43 @@ def test_implicit_window_does_not_claim_full_coverage_for_short_history(monkeypa
     deep = service.run_backtest(symbols=['600000'], days=2000)['data_coverage']['600000']
     assert recent['window_truncated'] is True
     assert deep['window_truncated'] is None  # Static calendar does not cover the cutoff.
+
+
+def test_inside_window_gap_is_separate_from_covered_edges(monkeypatch):
+    from datetime import date, timedelta
+    from src.core.backtest import service
+    from src.core.trading_calendar import is_trading_day
+
+    first, last = date(2026, 10, 12), date(2026, 11, 26)
+    dates = [first + timedelta(days=i) for i in range((last - first).days + 1)]
+    missing = date(2026, 11, 10)
+    bars = [PriceBar(d.isoformat(), 10, 11, 9, 10, 1000) for d in dates if is_trading_day(d) and d != missing]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: [*bars[:-1], bars[-2], bars[-1]])
+    result = service.run_backtest(symbols=['600000'], start_date=first.isoformat(), end_date=last.isoformat())
+    coverage = result['data_coverage']['600000']
+    assert coverage['window_truncated'] is False and coverage['end_after_last_bar'] is False
+    assert coverage['missing_sessions_between_bars'] == 1
+
+
+def test_collector_trim_reports_observed_outside_window_instead_of_no_history(monkeypatch):
+    from datetime import datetime, timezone
+    from src.collectors import kline_collector
+    from src.core.backtest import data_adapter, service
+    from src.db import klines_repo
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 23, 8, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(data_adapter, 'datetime', Clock)
+    monkeypatch.setattr(service, 'datetime', Clock)
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_: [])
+    monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_k: [
+        PriceBar('2026-10-20', 10, 11, 9, 10, 1000),
+    ])
+    result = service.run_backtest(symbols=['600000'], days=30)
+    coverage = result['data_coverage']['600000']
+    assert coverage['status'] == 'history_before_lookback'
+    assert coverage['latest_fallback_bar_before_cutoff'] == '2026-10-20'
+    assert coverage['bars_in_window'] == 0 and result['trades'] == []

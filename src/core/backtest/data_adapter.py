@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 MAX_FALLBACK_BARS = 800
 
 
+class HistoryOutsideLookback(ValueError):
+    """The collector has history, but none falls inside the lookback."""
+
+    def __init__(self, latest_date: str):
+        self.latest_date = latest_date
+        super().__init__(f'latest fallback bar before lookback: {latest_date}')
+
+
 def history_cutoff_day(market: str, days: int, now: datetime) -> date:
     """Earliest possible date label; timestamp precision is only available in PG."""
     cutoff = now.astimezone(timezone.utc) - timedelta(days=days)
@@ -70,6 +78,7 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
     from src.db.klines_repo import load_qfq_bars
 
     calendar_days = max(1, int(days))
+    started = datetime.now(timezone.utc)
     rows = load_qfq_bars(symbol, market, calendar_days)
     if rows:
         return [
@@ -100,8 +109,12 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
         logger.warning(f"[回测] 拉取 {symbol} K线失败: {e}")
         return []
     # 按日历截掉兜底序列中超出回看范围的旧柱；根数上限仍可能缩短左端覆盖。
-    cutoff_day = history_cutoff_day(mc, calendar_days, datetime.now(timezone.utc)).isoformat()
-    return [bar for bar in from_klines(klines)[-fallback_bars:] if bar.date >= cutoff_day]
+    cutoff_day = history_cutoff_day(mc, calendar_days, started).isoformat()
+    returned = from_klines(klines)[-fallback_bars:]
+    in_window = [bar for bar in returned if bar.date >= cutoff_day]
+    if returned and not in_window:
+        raise HistoryOutsideLookback(returned[-1].date)
+    return in_window
 
 
 def first_index_after(bars: list[PriceBar], date: str) -> int | None:

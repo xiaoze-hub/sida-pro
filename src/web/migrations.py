@@ -7570,6 +7570,7 @@ def _m253_factor_theme_observations(conn: Connection) -> None:
             board_code VARCHAR(9) NOT NULL,
             fetched_at VARCHAR(40) NOT NULL,
             stock_evidence_ready BOOLEAN NOT NULL,
+            evidence_fingerprint VARCHAR(64) NOT NULL,
             payload TEXT NOT NULL
         )
     """))

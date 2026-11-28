@@ -9,10 +9,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, PriceBar, history_cutoff_day, load_price_history
+from src.core.backtest.data_adapter import (
+    MAX_FALLBACK_BARS, HistoryOutsideLookback, PriceBar, history_cutoff_day, load_price_history,
+)
 from src.core.backtest.engine import Backtester, Signal, expected_trading_boundary, positive_trade_volume, valid_trade_price
+from src.core.trading_calendar import TradingCalendarError, is_trading_day
 
 MIN_BARS = 30
 MIN_HISTORY_DAYS = 30
@@ -39,6 +42,22 @@ def _check_date(name: str, value: str | None) -> str | None:
 
 def _has_valid_ohlc(bar: PriceBar) -> bool:
     return all(valid_trade_price(p) for p in (bar.open, bar.high, bar.low, bar.close))
+
+
+def _missing_sessions(market: str, bars: list[PriceBar]) -> int | None:
+    """Missing date labels between first/last in-window bars, not a vendor fault diagnosis."""
+    if market not in {'CN', 'SH', 'SZ', 'BJ'} or not bars:
+        return None
+    observed = {bar.date for bar in bars}
+    try:
+        first, last = date.fromisoformat(min(observed)), date.fromisoformat(max(observed))
+        count = 0
+        for offset in range((last - first).days + 1):
+            day = first + timedelta(days=offset)
+            count += is_trading_day(day) and day.isoformat() not in observed
+        return count
+    except (TradingCalendarError, ValueError):
+        return None
 
 
 def _golden_cross_signals(
@@ -136,7 +155,13 @@ def run_backtest(
         code = str(sym or "").strip()
         if not code:
             continue
-        loaded = [] if outside_lookback or no_market_sessions else load_price_history(code, mkt, days=history_days)
+        outside_fallback = None
+        loaded = []
+        if not outside_lookback and not no_market_sessions:
+            try:
+                loaded = load_price_history(code, mkt, days=history_days)
+            except HistoryOutsideLookback as exc:
+                outside_fallback = exc.latest_date
         bars = loaded
         if end_date:
             bars = [bar for bar in bars if bar.date <= end_date]
@@ -144,6 +169,8 @@ def run_backtest(
             status = 'no_market_sessions'
         elif outside_lookback:
             status = 'window_before_history_cutoff'
+        elif outside_fallback is not None:
+            status = 'history_before_lookback'
         elif not loaded:
             status = 'history_unavailable'
         elif not bars:
@@ -172,6 +199,8 @@ def run_backtest(
                               window_last=window_last,
                               bars_through_end=len(bars),
                               bars_in_window=len(window_bars),
+                              missing_sessions_between_bars=_missing_sessions(mkt, window_bars),
+                              latest_fallback_bar_before_cutoff=outside_fallback,
                               nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
                               invalid_ohlc_bars=invalid_prices,
                               invalid_warmup_ohlc_bars=invalid_warmup,
