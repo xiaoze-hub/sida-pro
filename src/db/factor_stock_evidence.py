@@ -52,7 +52,8 @@ def load_stock_observations(day: date, symbols: list[str]) -> dict[str, dict[str
                   iso_date=day.isoformat(), compact_date=day.strftime('%Y%m%d'))
     with get_write_engine().begin() as conn:
         conn.execute(text('SET TRANSACTION READ ONLY'))
-        conn.execute(text("SET LOCAL statement_timeout = '8s'"))
+        # Three LATERAL probes per symbol at the same 6000-symbol scale as the coverage query.
+        conn.execute(text("SET LOCAL statement_timeout = '15s'"))
         with conn.execute(_READ, params) as result:
             rows = {}
             for row in result.mappings():

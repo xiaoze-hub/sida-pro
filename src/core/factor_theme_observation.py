@@ -91,6 +91,10 @@ def _coverage(receipt: dict, now: datetime) -> tuple[dict | None, str | None]:
         'started_at': started.astimezone(timezone.utc).isoformat(),
         'finished_at': finished.astimezone(timezone.utc).isoformat(),
         'caliber': receipt['caliber'], 'universe': receipt['universe'],
+        # Keep the receipt self-describing: version gates re-validation, counters describe the run.
+        'version': receipt['version'],
+        'ingest_ok_count': receipt.get('ingest_ok_count'),
+        'ingest_failed_count': receipt.get('ingest_failed_count'),
     }, None
 
 

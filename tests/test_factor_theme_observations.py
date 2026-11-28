@@ -203,6 +203,8 @@ def test_retry_cron_is_opt_in_and_bounded_to_the_shanghai_session(monkeypatch):
     scheduler = BackgroundScheduler(timezone=timezone.utc)
     assert refresh.register_theme_observation(scheduler) is False
     assert scheduler.get_jobs() == []
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', '880741.XX')
+    assert refresh.register_theme_observation(scheduler) is False  # invalid config fails at boot
     monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
     assert refresh.register_theme_observation(scheduler) is True
     job, = scheduler.get_jobs()
@@ -211,11 +213,13 @@ def test_retry_cron_is_opt_in_and_bounded_to_the_shanghai_session(monkeypatch):
     before = datetime(2026, 11, 27, 8, 59, tzinfo=timezone.utc)
     fire = job.trigger.get_next_fire_time(None, before)
     assert fire == datetime(2026, 11, 27, 9, tzinfo=timezone.utc)
-    last = datetime(2026, 11, 27, 11, 45, tzinfo=timezone.utc)
+    # A slow upstream is still consumable after 19:45, and the tail ends at 23:45 Shanghai.
+    late = datetime(2026, 11, 27, 13, 45, tzinfo=timezone.utc)
+    assert job.trigger.get_next_fire_time(None, late) == late
+    assert job.trigger.get_next_fire_time(late, late + timedelta(seconds=1)) == datetime(2026, 11, 27, 14, tzinfo=timezone.utc)
+    last = datetime(2026, 11, 27, 15, 45, tzinfo=timezone.utc)
     assert job.trigger.get_next_fire_time(None, last) == last
-    catchup = datetime(2026, 11, 27, 13, 45, tzinfo=timezone.utc)
-    assert job.trigger.get_next_fire_time(last, last + timedelta(seconds=1)) == catchup
-    assert job.trigger.get_next_fire_time(catchup, catchup + timedelta(seconds=1)) == datetime(2026, 11, 30, 9, tzinfo=timezone.utc)
+    assert job.trigger.get_next_fire_time(last, last + timedelta(seconds=1)) == datetime(2026, 11, 30, 9, tzinfo=timezone.utc)
 
 
 def collect_then_observe():

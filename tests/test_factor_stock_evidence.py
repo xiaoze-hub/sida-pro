@@ -36,6 +36,8 @@ def test_freezes_each_member_without_conflating_chart_and_trade_status(monkeypat
     assert list(rows) == MEMBERS
     assert rows['000001.SZ']['day_bar']['volume'] == 200
     assert rows['000001.SZ']['day_bar']['trade_date'] == DAY.isoformat()
+    # ts stays on the same CN calendar as trade_date; a UTC stamp would read as the previous day.
+    assert rows['000001.SZ']['day_bar']['ts'] == '2026-11-27T08:35:00+08:00'
     assert batch['factor_rows_missing'] == 3
     assert batch['supported_member_count'] == 4
     assert rows['000001.SZ']['factor_values']['momentum_20'] == 2.5

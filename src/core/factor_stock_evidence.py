@@ -48,6 +48,13 @@ def _stamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _bar_stamp(value: datetime) -> str:
+    """Bar marker on the CN calendar: klines store Shanghai midnight, so UTC shifts the date."""
+    if value.utcoffset() is None:
+        raise ValueError('a bar timestamp with an explicit offset is required')
+    return value.astimezone(CN_TRADING_TZ).isoformat()
+
+
 def _row(member: str, raw: Mapping[str, Any] | None, day: date) -> dict[str, Any]:
     row: dict[str, Any] = dict(symbol=member, status='unsupported_identity', day_bar=None,
                                has_valid_traded_bar=None, factor_values=None, is_st=None,
@@ -66,7 +73,7 @@ def _row(member: str, raw: Mapping[str, Any] | None, day: date) -> dict[str, Any
         traded = (o is not None and h is not None and l is not None and c is not None
                   and v is not None and 0 < l <= min(o, c) <= max(o, c) <= h
                   and v > 0 and raw.get('quality_flag') == 1)
-        row['day_bar'] = {**bar, 'source': raw['source'], 'ts': _stamp(bar_ts),
+        row['day_bar'] = {**bar, 'source': raw['source'], 'ts': _bar_stamp(bar_ts),
                           'trade_date': day.isoformat(), 'adjust': 'qfq', 'quality_flag': raw.get('quality_flag')}
         row['has_valid_traded_bar'] = traded
     if raw.get('factor_id') is not None:

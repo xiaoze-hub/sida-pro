@@ -186,14 +186,15 @@ def daily_job_with_factors() -> dict:
 def register_theme_observation(scheduler: BaseScheduler) -> bool:
     if not os.environ.get(_THEME_BOARDS_ENV, '').strip():
         return False
-    from apscheduler.triggers.combining import OrTrigger
     from apscheduler.triggers.cron import CronTrigger
 
-    trigger = OrTrigger([
-        CronTrigger(day_of_week='mon-fri', hour='17-19', minute='*/15', timezone=_CN_TZ),
-        CronTrigger(day_of_week='mon-fri', hour=_THEME_FINAL_ATTEMPT.hour,
-                    minute=_THEME_FINAL_ATTEMPT.minute, timezone=_CN_TZ),
-    ])
+    # Same-day receipt only; the tail runs late so a slow upstream is not lost.
+    trigger = CronTrigger(day_of_week='mon-fri', hour='17-23', minute='*/15', timezone=_CN_TZ)
+    from src.core.factor_theme_observation import configured_boards
+
+    if not configured_boards(os.environ[_THEME_BOARDS_ENV]):
+        logger.error('盘后题材成员观测配置无效, 未注册: %s', _THEME_BOARDS_ENV)
+        return False
     scheduler.add_job(
         daily_theme_observation_job, trigger, id='factor-theme-observation', name='盘后题材成员观测',
         replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=300,
@@ -238,12 +239,17 @@ def daily_theme_observation_job() -> dict:
             try:
                 with WriteSessionLocal() as db:
                     pending = boards - boards_with_stock_evidence(db, day.isoformat(), boards)
+            except Exception as exc:  # the source was never contacted; do not blame capture
+                result = {'written': 0, 'reason': 'evidence_lookup_failed'}
+                logger.error('题材成员证据状态查询失败: date=%s error=%s', day, type(exc).__name__)
+            else:
                 if not pending:
                     return {'written': 0, 'reason': 'observation_already_committed'}
-                result = capture_after_daily_refresh(','.join(sorted(pending)), receipt, now=_now_cn)
-            except Exception as exc:  # evidence failure cannot disturb committed factors
-                result = {'written': 0, 'reason': 'capture_failed'}
-                logger.error('题材成员盘后观测失败: date=%s error=%s', day, type(exc).__name__)
+                try:
+                    result = capture_after_daily_refresh(','.join(sorted(pending)), receipt, now=_now_cn)
+                except Exception as exc:  # evidence failure cannot disturb committed factors
+                    result = {'written': 0, 'reason': 'capture_failed'}
+                    logger.error('题材成员盘后观测失败: date=%s error=%s', day, type(exc).__name__)
     if 'reason' in result:
         waiting = result['reason'] == 'factor_receipt_missing' and now.astimezone(_CN_TZ).time() < _THEME_FINAL_ATTEMPT
         logger.log(logging.INFO if waiting else logging.WARNING,
