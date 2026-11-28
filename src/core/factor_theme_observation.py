@@ -10,7 +10,7 @@ from datetime import date, datetime, time, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from src.core import tdx_boards, trading_calendar
+from src.core import factor_stock_evidence, tdx_boards, trading_calendar
 from src.db.factor_theme_observations import append_observations
 from src.db.session import WriteSessionLocal
 
@@ -111,11 +111,20 @@ def capture_after_daily_refresh(
             return {'written': 0, 'reason': 'clock_outside_capture_window'}
         last = fetched
         observations.append({
-            'version': 1, 'board_code': board, 'data_trade_date': trade_day.isoformat(),
+            'version': 2, 'board_code': board, 'data_trade_date': trade_day.isoformat(),
             'fetched_at': fetched.astimezone(timezone.utc).isoformat(), 'source': 'tq_sector_members',
             'source_as_of': None, 'ranking_eligible': False, 'status': status, 'members': members,
             'dayline_coverage': coverage, 'factor_rows_written': written,
         })
+    # No DB write is open while reading the stock evidence or contacting the source.
+    observed = [row for row in observations if row['status'] == 'observed']
+    snapshots = factor_stock_evidence.capture(
+        trade_day, [row['members'] for row in observed], earliest=last, now=now,
+    )
+    for row in observations:
+        row['stock_evidence'] = {'status': 'no_observed_members', 'rows': None}
+    for row, snapshot in zip(observed, snapshots, strict=True):
+        row['stock_evidence'] = snapshot
     with WriteSessionLocal.begin() as db:
         observation_ids, inserted = append_observations(db, observations)
     logger.info('题材成员盘后观测已提交: date=%s batches=%d inserted=%d', trade_day, len(boards), inserted)
