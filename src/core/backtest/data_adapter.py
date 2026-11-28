@@ -25,7 +25,7 @@ class HistoryOutsideLookback(ValueError):
 
 
 def history_cutoff_day(market: str, days: int, now: datetime) -> date:
-    """Earliest possible date label; timestamp precision is only available in PG."""
+    """Inclusive market date label shared by the repository and the collector."""
     cutoff = now.astimezone(timezone.utc) - timedelta(days=days)
     if market.upper() in {'CN', 'SH', 'SZ', 'BJ'}:
         cutoff = cutoff.astimezone(ZoneInfo('Asia/Shanghai'))
@@ -65,7 +65,7 @@ def from_klines(klines) -> list[PriceBar]:
     return out
 
 
-def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
+def load_price_history(symbol: str, market, days: int = 250, *, as_of: datetime | None = None) -> list[PriceBar]:
     """按自然日回看 PG；只有无库内结果时才走有独立日 K 根数上限的兜底。
 
     2026-08-17: 引入 TimescaleDB hypertable, K线持久化后, 回测不再每次联网。
@@ -78,8 +78,9 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
     from src.db.klines_repo import load_qfq_bars
 
     calendar_days = max(1, int(days))
-    started = datetime.now(timezone.utc)
-    rows = load_qfq_bars(symbol, market, calendar_days)
+    day_cutoff = history_cutoff_day(str(getattr(market, 'value', market)), calendar_days,
+                                   as_of or datetime.now(timezone.utc))
+    rows = load_qfq_bars(symbol, market, calendar_days, date_cutoff=day_cutoff)
     if rows:
         return [
             PriceBar(
@@ -109,7 +110,7 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
         logger.warning(f"[回测] 拉取 {symbol} K线失败: {e}")
         return []
     # 按日历截掉兜底序列中超出回看范围的旧柱；根数上限仍可能缩短左端覆盖。
-    cutoff_day = history_cutoff_day(mc, calendar_days, started).isoformat()
+    cutoff_day = day_cutoff.isoformat()
     returned = from_klines(klines)[-fallback_bars:]
     in_window = [bar for bar in returned if bar.date >= cutoff_day]
     if returned and not in_window:

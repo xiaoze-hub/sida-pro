@@ -79,3 +79,12 @@ def test_explicit_window_keeps_observed_cash_days_after_final_exit(portfolio):
     assert outcome.trades[0].exit_date == days[2]
     assert outcome.equity_dates == ['', *days[:4]]
     assert outcome.equity_curve[-1] == outcome.equity_curve[-2]
+
+
+def test_explicit_window_with_no_fills_reports_observed_cash_days():
+    days = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19']
+    bars = [_bar(day, 10, 11, 9, 10) for day in days]
+    runner = Backtester(sample_start=days[1], sample_end=days[2])
+    result = runner.run([], {'X': bars})
+    assert result.equity_dates == ['', *days[1:3]]
+    assert result.equity_curve == [result.initial_capital] * len(result.equity_dates)

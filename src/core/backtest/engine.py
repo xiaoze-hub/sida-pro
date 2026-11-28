@@ -118,22 +118,23 @@ def simulate_exit(
     - T+1: 入场日当天不检查(从 entry_idx+1 起);
     - 跳空: 开盘已越过止损/止盈按开盘价成交;
     - 一字跌停(sellable(j)=False)时止损/到期顺延到下一可成交日;
-    - 仅在启用样本末日退出、且最后一个有效推进的交易日可卖时做 eod 撮合。
+    - `eod` 只在最后一个实际推进的日期可卖时成交；若末日无法卖出，返回 None
+      并保留未平仓头寸。绝不倒填到较早的可卖日。
     """
     is_sellable = sellable or (lambda _j: True)
     last_day = bars[entry_idx].date
     held = 0
-    last_sellable = None
+    final_session_fill = None
     for j in range(entry_idx + 1, len(bars)):
         bar = bars[j]
         if bar.date <= last_day:
             continue
         last_day = bar.date
         held += 1
-        last_sellable = None
-        if not is_sellable(j):
+        can_sell = is_sellable(j)
+        final_session_fill = (bar.close, bar.date, 'eod', held) if can_sell else None
+        if not can_sell:
             continue
-        last_sellable = bar
         if stop and stop > 0:
             if bar.open <= stop:  # 跳空跌破
                 return bar.open, bar.date, "stop_loss", held
@@ -146,9 +147,7 @@ def simulate_exit(
                 return target, bar.date, "target", held
         if held >= max_hold:
             return bar.close, bar.date, "expire", held
-    if close_at_sample_end and last_sellable is not None:
-        return last_sellable.close, last_sellable.date, "eod", held
-    return None
+    return final_session_fill if close_at_sample_end else None
 
 
 def fixed_cash_sizer(cash_per_trade: float, lot: int = 100) -> PositionSizer:
@@ -372,7 +371,13 @@ class Backtester:
         """
         positions = [*trades, *open_positions]
         if not positions:
-            return [self.initial_capital], [""]
+            dates = []
+            if self.sample_start is not None or self.sample_end is not None:
+                dates = sorted({bar.date for bars in bars_by_symbol.values() for bar in bars
+                                if (self.sample_start is None or bar.date >= self.sample_start)
+                                and (self.sample_end is None or bar.date <= self.sample_end)
+                                and valid_trade_price(bar.close)})
+            return [self.initial_capital] * (1 + len(dates)), ["", *dates]
 
         start = min(t.entry_date for t in positions)
         if self.sample_start is not None:

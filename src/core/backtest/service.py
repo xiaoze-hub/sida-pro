@@ -44,20 +44,30 @@ def _has_valid_ohlc(bar: PriceBar) -> bool:
     return all(valid_trade_price(p) for p in (bar.open, bar.high, bar.low, bar.close))
 
 
-def _missing_sessions(market: str, bars: list[PriceBar]) -> int | None:
-    """Missing date labels between first/last in-window bars, not a vendor fault diagnosis."""
+def _missing_sessions(market: str, bars: list[PriceBar]) -> tuple[int | None, int | None]:
+    """Missing sessions in covered calendar years, and count of unknown calendar days."""
     if market not in {'CN', 'SH', 'SZ', 'BJ'} or not bars:
-        return None
+        return None, None
     observed = {bar.date for bar in bars}
     try:
         first, last = date.fromisoformat(min(observed)), date.fromisoformat(max(observed))
-        count = 0
-        for offset in range((last - first).days + 1):
-            day = first + timedelta(days=offset)
-            count += is_trading_day(day) and day.isoformat() not in observed
-        return count
-    except (TradingCalendarError, ValueError):
-        return None
+    except ValueError:
+        return None, None
+    missing = unknown = checked = 0
+    unknown_years: set[int] = set()
+    for offset in range((last - first).days + 1):
+        day = first + timedelta(days=offset)
+        if day.year in unknown_years:
+            unknown += 1
+            continue
+        try:
+            missing += is_trading_day(day) and day.isoformat() not in observed
+        except TradingCalendarError:
+            unknown_years.add(day.year)
+            unknown += 1
+        else:
+            checked += 1
+    return (missing if checked else None), unknown
 
 
 def _golden_cross_signals(
@@ -159,7 +169,7 @@ def run_backtest(
         loaded = []
         if not outside_lookback and not no_market_sessions:
             try:
-                loaded = load_price_history(code, mkt, days=history_days)
+                loaded = load_price_history(code, mkt, days=history_days, as_of=now)
             except HistoryOutsideLookback as exc:
                 outside_fallback = exc.latest_date
         bars = loaded
@@ -192,6 +202,7 @@ def run_backtest(
             # This compares to the market calendar; it does not assert a vendor gap.
             truncated = loaded_first > expected_first
         window_bars = [bar for bar in bars if not sample_start or bar.date >= sample_start]
+        missing_sessions, unverified_days = _missing_sessions(mkt, window_bars)
         invalid_prices = sum(not _has_valid_ohlc(bar) for bar in window_bars)
         invalid_warmup = sum(not _has_valid_ohlc(bar) for bar in bars[:len(bars) - len(window_bars)])
         coverage[code] = dict(status=status, loaded_first=loaded_first,
@@ -199,7 +210,8 @@ def run_backtest(
                               window_last=window_last,
                               bars_through_end=len(bars),
                               bars_in_window=len(window_bars),
-                              missing_sessions_between_bars=_missing_sessions(mkt, window_bars),
+                              missing_sessions_between_bars=missing_sessions,
+                              calendar_unverified_days_between_bars=unverified_days,
                               latest_fallback_bar_before_cutoff=outside_fallback,
                               nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
                               invalid_ohlc_bars=invalid_prices,

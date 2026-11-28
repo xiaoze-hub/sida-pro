@@ -22,7 +22,7 @@ def _bars() -> list[PriceBar]:
 def test_run_backtest_produces_trades_and_metrics(monkeypatch):
     from src.core.backtest import service
 
-    monkeypatch.setattr(service, "load_price_history", lambda code, mkt, days=800: _bars())
+    monkeypatch.setattr(service, "load_price_history", lambda *_a, **_kw: _bars())
     res = service.run_backtest(symbols=["600000"], start_date="2026-06-01",
                                end_date="2026-08-30", holding_days=5)
 
@@ -44,7 +44,7 @@ def test_old_start_extends_lookback_and_reports_truncation(monkeypatch):
     start = (date.today() - timedelta(days=1200)).isoformat()
     bars = [PriceBar(date=start, open=10, high=10, low=10, close=10, volume=1000)] * 40
 
-    def load(_symbol, _market, days=250):
+    def load(_symbol, _market, days=250, **_kw):
         seen['days'] = days
         return bars
 
@@ -65,7 +65,7 @@ def test_end_only_old_window_still_loads(monkeypatch):
     end = '2024-08-20'  # The calendar fixture does not cover the effective start.
     bars = [PriceBar(date=end, open=10, high=10, low=10, close=10, volume=1000)] * 40
 
-    def load(_symbol, _market, days=250):
+    def load(_symbol, _market, days=250, **_kw):
         seen['days'] = days
         return bars
 
@@ -117,7 +117,7 @@ def test_end_only_window_excludes_warmup_from_reported_coverage(monkeypatch):
 def test_run_backtest_skips_short_history(monkeypatch):
     from src.core.backtest import service
 
-    monkeypatch.setattr(service, "load_price_history", lambda code, mkt, days=800: [])
+    monkeypatch.setattr(service, "load_price_history", lambda *_a, **_kw: [])
     res = service.run_backtest(symbols=["600000"])
     assert res["trades"] == [] and res["skipped_symbols"] == ["600000"]
 
@@ -169,7 +169,7 @@ def test_ancient_start_is_capped(monkeypatch):
 
     seen = {}
 
-    def load(_symbol, _market, days=250):
+    def load(_symbol, _market, days=250, **_kw):
         seen['days'] = days
         return [PriceBar(date='1990-01-02', open=10, high=10, low=10, close=10, volume=1000)] * 40
 
@@ -203,7 +203,7 @@ def test_old_window_widens_pg_cutoff_not_collector_bar_budget(monkeypatch):
 
     calls = {}
 
-    def read(_symbol, _market, days):
+    def read(_symbol, _market, days, **_kw):
         calls['pg_days'] = days
         return []
 
@@ -308,7 +308,7 @@ def test_collector_trim_reports_observed_outside_window_instead_of_no_history(mo
 
     monkeypatch.setattr(data_adapter, 'datetime', Clock)
     monkeypatch.setattr(service, 'datetime', Clock)
-    monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_: [])
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
     monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_k: [
         PriceBar('2026-10-20', 10, 11, 9, 10, 1000),
     ])
@@ -317,3 +317,31 @@ def test_collector_trim_reports_observed_outside_window_instead_of_no_history(mo
     assert coverage['status'] == 'history_before_lookback'
     assert coverage['latest_fallback_bar_before_cutoff'] == '2026-10-20'
     assert coverage['bars_in_window'] == 0 and result['trades'] == []
+
+
+def test_gap_count_keeps_verified_segment_when_early_calendar_is_unknown(monkeypatch):
+    from src.core.backtest import service
+
+    bars = [PriceBar(d, 10, 11, 9, 10, 1000) for d in ('2024-12-30', '2025-01-02', '2025-01-06')]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: bars)
+    coverage = service.run_backtest(symbols=['600000'], start_date='2024-12-30', end_date='2025-01-06')['data_coverage']['600000']
+    assert coverage['missing_sessions_between_bars'] == 1  # Jan 3; Jan 1 is a holiday.
+    assert coverage['calendar_unverified_days_between_bars'] == 2
+
+
+def test_backtest_passes_same_calendar_cutoff_to_database_and_fallback(monkeypatch):
+    from datetime import date, datetime, timezone
+    from src.collectors import kline_collector
+    from src.core.backtest import data_adapter
+    from src.db import klines_repo
+
+    def no_rows(_symbol, _market, days, *, date_cutoff=None):
+        assert days == 1 and date_cutoff == date(2026, 11, 27)
+        return []
+
+    last = PriceBar('2026-11-27', 10, 11, 9, 10, 1000.0)
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', no_rows)
+    monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_k: [last])
+    rows = data_adapter.load_price_history('600000', 'CN', days=1,
+                                           as_of=datetime(2026, 11, 27, 18, tzinfo=timezone.utc))
+    assert rows == [last]
