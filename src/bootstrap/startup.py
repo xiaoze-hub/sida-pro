@@ -1309,16 +1309,10 @@ async def lifespan(app):
 
         # 题材成员取数独立于全市场增量，后移到标定之后；没有同日就绪回执则不触网。
         try:
-            from os import getenv
-            from src.core.klines_daily_refresh import daily_theme_observation_job
+            from src.core.klines_daily_refresh import register_theme_observation
 
-            if getenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', '').strip():
-                rt.scheduler.scheduler.add_job(
-                    daily_theme_observation_job, 'cron', day_of_week='mon-fri', hour=16, minute=50,
-                    id='factor-theme-observation', name='盘后题材成员观测',
-                    replace_existing=True, max_instances=1, coalesce=True,
-                )
-                logger.info('盘后题材成员观测已注册（16:50，需同日因子完成回执）')
+            if register_theme_observation(rt.scheduler.scheduler):
+                logger.info('盘后题材成员观测已注册（17:00–19:45，每15分钟检查同日回执）')
         except Exception as e:
             logger.error('盘后题材成员观测注册失败: %s', type(e).__name__)
 

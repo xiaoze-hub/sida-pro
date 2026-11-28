@@ -14,14 +14,19 @@ import os
 from datetime import date, datetime, time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from apscheduler.schedulers.base import BaseScheduler
 
 logger = logging.getLogger(__name__)
 _THEME_BOARDS_ENV = 'SIDA_FACTOR_THEME_OBSERVATION_BOARDS'
+_CN_TZ = ZoneInfo('Asia/Shanghai')
 
 
 def _now_cn() -> datetime:
-    return datetime.now(ZoneInfo("Asia/Shanghai"))
+    return datetime.now(_CN_TZ)
 
 
 def _report_path(report: str, day: date) -> Path:
@@ -175,15 +180,35 @@ def daily_job_with_factors() -> dict:
     return stats
 
 
+def register_theme_observation(scheduler: BaseScheduler) -> bool:
+    if not os.environ.get(_THEME_BOARDS_ENV, '').strip():
+        return False
+    scheduler.add_job(
+        daily_theme_observation_job, 'cron', day_of_week='mon-fri', hour='17-19', minute='*/15',
+        timezone=_CN_TZ, id='factor-theme-observation', name='盘后题材成员观测',
+        replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=300,
+    )
+    return True
+
+
 def daily_theme_observation_job() -> dict:
     """Separate optional gateway workload; requires a completed factor run today."""
     from src.core.factor_theme_observation import capture_after_daily_refresh, factor_receipt_state
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day
+    from src.db.factor_theme_observations import has_observations
+    from src.db.session import WriteSessionLocal
 
     config = os.environ.get(_THEME_BOARDS_ENV, '').strip()
     if not config:
         return {'written': 0, 'reason': 'disabled'}
     now = _now_cn()
     day = now.date()
+    try:
+        if not is_trading_day(day):
+            return {'written': 0, 'reason': 'non_trading_day'}
+    except TradingCalendarError:
+        logger.warning('题材成员盘后观测无交易日历: date=%s', day)
+        return {'written': 0, 'reason': 'calendar_unverified'}
     try:
         with _report_path('factor_theme_ready', day).open(encoding='utf-8') as file:
             receipt = json.load(file)
@@ -197,11 +222,16 @@ def daily_theme_observation_job() -> dict:
             result = {'written': 0, 'reason': reason}
         else:
             try:
+                with WriteSessionLocal() as db:
+                    if has_observations(db, day.isoformat()):
+                        return {'written': 0, 'reason': 'observation_already_committed'}
                 result = capture_after_daily_refresh(config, receipt, now=_now_cn)
             except Exception as exc:  # evidence failure cannot disturb committed factors
                 result = {'written': 0, 'reason': 'capture_failed'}
                 logger.error('题材成员盘后观测失败: date=%s error=%s', day, type(exc).__name__)
     if 'reason' in result:
-        logger.warning('题材成员盘后观测未完成: date=%s reason=%s receipt_check=%s',
-                       day, result['reason'], result.get('receipt_check', '-'))
+        waiting = result['reason'] == 'factor_receipt_missing' and now.astimezone(_CN_TZ).time() < time(19, 45)
+        logger.log(logging.INFO if waiting else logging.WARNING,
+                   '题材成员盘后观测未完成: date=%s reason=%s receipt_check=%s',
+                   day, result['reason'], result.get('receipt_check', '-'))
     return result

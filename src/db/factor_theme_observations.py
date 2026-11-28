@@ -28,6 +28,14 @@ def _statement(dialect: str):
     )), False
 
 
+def has_observations(db: Session, trade_date: str) -> bool:
+    """Check the writer, not a replica, before retrying the daily batch."""
+    pin_write_bind(db)
+    return bool(db.execute(text(
+        'SELECT EXISTS (SELECT 1 FROM factor_theme_observations WHERE trade_date = :day)',
+    ), {'day': trade_date}).scalar_one())
+
+
 def append_observations(db: Session, observations: list[dict]) -> tuple[list[str], int]:
     """Exact replays skip; distinct captures remain separate. Caller commits the batch."""
     pin_write_bind(db)

@@ -100,6 +100,40 @@ def test_separate_job_requires_a_same_day_completion_receipt(monkeypatch):
     assert stored_rows() == []
 
 
+def test_late_receipt_retries_then_stops_after_a_committed_batch(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    calls = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda code: calls.append(code) or ['000001.SZ'])
+    assert refresh.daily_theme_observation_job()['reason'] == 'factor_receipt_missing'
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=45))
+    refresh.daily_job_with_factors()
+    assert refresh.daily_theme_observation_job()['written'] == 1
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=60))
+    assert refresh.daily_theme_observation_job()['reason'] == 'observation_already_committed'
+    assert calls == [THEME]
+    assert len(stored_rows()) == 1
+
+
+def test_retry_cron_is_opt_in_and_bounded_to_the_shanghai_session(monkeypatch):
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    scheduler = BackgroundScheduler(timezone=timezone.utc)
+    assert refresh.register_theme_observation(scheduler) is False
+    assert scheduler.get_jobs() == []
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    assert refresh.register_theme_observation(scheduler) is True
+    job, = scheduler.get_jobs()
+    assert job.func is refresh.daily_theme_observation_job
+    assert (job.misfire_grace_time, job.max_instances, job.coalesce) == (300, 1, True)
+    before = datetime(2026, 11, 27, 8, 59, tzinfo=timezone.utc)
+    fire = job.trigger.get_next_fire_time(None, before)
+    assert fire == datetime(2026, 11, 27, 9, tzinfo=timezone.utc)
+    last = datetime(2026, 11, 27, 11, 45, tzinfo=timezone.utc)
+    assert job.trigger.get_next_fire_time(None, last) == last
+    assert job.trigger.get_next_fire_time(last, last + timedelta(seconds=1)) == datetime(2026, 11, 30, 9, tzinfo=timezone.utc)
+
+
 def collect_then_observe():
     stats = refresh.daily_job_with_factors()
     result = stats.get('theme_observation', {'written': 0, 'reason': 'disabled'})
@@ -137,16 +171,17 @@ def test_lowercase_board_config_is_normalized(monkeypatch):
 
 
 def test_same_evidence_idempotent_later_retrieval_preserves_both(monkeypatch):
+    from src.core.factor_theme_observation import capture_after_daily_refresh
+
     install_upstream(monkeypatch)
-    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    upstream = {**refresh.daily_job(), 'factor_refresh': {'written': 2}}
     monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['600001.SH'])
-    first = collect_then_observe()['theme_observation']
-    same = refresh.daily_theme_observation_job()
+    first = capture_after_daily_refresh(THEME, upstream, now=lambda: NOW)
+    same = capture_after_daily_refresh(THEME, upstream, now=lambda: NOW)
     assert same['written'] == 0
     assert first['observation_ids'] == same['observation_ids']
-    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=1))
     monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['600002.SH'])
-    second = refresh.daily_theme_observation_job()
+    second = capture_after_daily_refresh(THEME, upstream, now=lambda: NOW + timedelta(minutes=1))
     assert second['written'] == 1
     assert [doc['members'] for _, doc in stored_rows()] == [['600001.SH'], ['600002.SH']]
 

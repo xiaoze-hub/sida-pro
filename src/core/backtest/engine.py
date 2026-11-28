@@ -171,7 +171,7 @@ def _parse_day(s):
         return None
 
 
-def _positive_volume(value: float) -> float:
+def positive_trade_volume(value: float) -> float:
     try:
         volume = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -222,7 +222,7 @@ class Backtester:
     def _sellable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
         """无有效成交量或一字跌停不可卖；缺限价时保留日线模型原假设。"""
         bar = bars[idx]
-        if not _positive_volume(bar.volume):
+        if not positive_trade_volume(bar.volume):
             return False
         if not all(_valid_price(p) for p in (bar.open, bar.high, bar.low, bar.close)):
             return False
@@ -233,7 +233,7 @@ class Backtester:
 
     def _cap_qty(self, qty: int, volume: float) -> int:
         """按当日成交量参与率裁剪(向下取整到一手); 无成交量数据 → 0(保守不可成交)。"""
-        vol = _positive_volume(volume)
+        vol = positive_trade_volume(volume)
         if vol <= 0 or qty <= 0:
             return 0
         cap = int(vol * self.participation_rate)
@@ -365,8 +365,6 @@ class Backtester:
         # Stop at the last actual exit or open-position mark; unrelated symbols
         # cannot extend the measured holding period beyond the evidence.
         end = max([t.exit_date for t in trades] + [p.mark_date or p.entry_date for p in open_positions])
-        if self.sample_end is not None:
-            end = max(end, self.sample_end)
         all_dates = sorted(
             {
                 b.date

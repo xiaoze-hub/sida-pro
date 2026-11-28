@@ -9,10 +9,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime, timezone
 
 from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, load_price_history
-from src.core.backtest.engine import Backtester, Signal
+from src.core.backtest.engine import Backtester, Signal, positive_trade_volume
 from src.core.trading_calendar import TradingCalendarError, is_trading_day, next_trading_day
 
 MIN_BARS = 30
@@ -115,7 +115,8 @@ def run_backtest(
     history_days = max(requested_days, MIN_HISTORY_DAYS)
     if sample_start:
         # Keep the extra history for signal warmup, outside the measured sample.
-        history_days = max(history_days, (date.today() - date.fromisoformat(sample_start)).days + 60)
+        today_utc = datetime.now(timezone.utc).date()  # Same wall clock as the PG lookback.
+        history_days = max(history_days, (today_utc - date.fromisoformat(sample_start)).days + 60)
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
@@ -150,11 +151,13 @@ def run_backtest(
         elif loaded_first and expected_first:
             # This compares to the market calendar; it does not assert a vendor gap.
             truncated = loaded_first > expected_first
+        window_bars = [bar for bar in bars if not sample_start or bar.date >= sample_start]
         coverage[code] = dict(status=status, loaded_first=loaded_first,
                               loaded_last=loaded[-1].date if loaded else None,
                               window_last=window_last,
                               bars_through_end=len(bars),
-                              bars_in_window=sum(not sample_start or bar.date >= sample_start for bar in bars),
+                              bars_in_window=len(window_bars),
+                              nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
                               expected_first_trading_date=expected_first,
                               window_truncated=truncated,
                               # A non-trading-day boundary also produces this; it is not proof of missing data.

@@ -200,6 +200,15 @@ def test_bars_ending_before_boundary_are_labelled_history_end():
 
 
 @pytest.mark.parametrize('portfolio', [False, True])
+def test_sample_end_does_not_extend_stale_mark_on_unrelated_symbols(portfolio):
+    runner = PortfolioBacktester(PortfolioConfig(sample_end=D3)) if portfolio else Backtester(sample_end=D3)
+    outcome = runner.run([Signal(A, 'CN', D0)], {A: [bar(D0), bar(D1), bar(D2)], B: [bar(D2), bar(D3)]})
+    position, = outcome.open_positions
+    assert position.mark_date == D2
+    assert outcome.equity_dates[-1] == D2
+
+
+@pytest.mark.parametrize('portfolio', [False, True])
 def test_duplicate_final_day_keeps_legacy_sellable_sample_exit(portfolio):
     runner = PortfolioBacktester() if portfolio else Backtester()
     outcome = runner.run([Signal(A, 'CN', D0)], {A: [bar(D0), bar(D1), bar(D2), bar(D2)]})

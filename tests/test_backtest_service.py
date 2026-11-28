@@ -57,7 +57,7 @@ def test_old_start_extends_lookback_and_reports_truncation(monkeypatch):
 
 
 def test_end_only_old_window_still_loads(monkeypatch):
-    from datetime import date
+    from datetime import date, datetime, timezone
     from src.core.backtest import service
     from src.core.backtest.data_adapter import PriceBar
 
@@ -71,7 +71,7 @@ def test_end_only_old_window_still_loads(monkeypatch):
 
     monkeypatch.setattr(service, 'load_price_history', load)
     result = service.run_backtest(symbols=['600000'], end_date=end)
-    expected_days = min(service.MAX_HISTORY_DAYS, (date.today() - date.fromisoformat(end)).days + 860)
+    expected_days = min(service.MAX_HISTORY_DAYS, (datetime.now(timezone.utc).date() - date.fromisoformat(end)).days + 860)
     assert seen['days'] == expected_days
     assert result['data_coverage']['600000']['status'] == 'usable'
     assert result['data_coverage']['600000']['window_truncated'] is None  # calendar not verified at the historical left edge
@@ -161,7 +161,7 @@ def test_end_coverage_uses_last_bar_inside_requested_window(monkeypatch):
 
 
 def test_old_window_widens_pg_cutoff_not_collector_bar_budget(monkeypatch):
-    from datetime import date, timedelta
+    from datetime import datetime, timedelta, timezone
     from src.collectors import kline_collector
     from src.core.backtest import service
     from src.db import klines_repo
@@ -179,8 +179,23 @@ def test_old_window_widens_pg_cutoff_not_collector_bar_budget(monkeypatch):
 
     monkeypatch.setattr(klines_repo, 'load_qfq_bars', read)
     monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', collect)
-    end = (date.today() - timedelta(days=2400)).isoformat()
+    end = (datetime.now(timezone.utc).date() - timedelta(days=2400)).isoformat()
     result = service.run_backtest(symbols=['600000'], end_date=end, days=800)
 
     assert calls == {'pg_days': 3260, 'collector_bars': 800}
     assert result['data_coverage']['600000']['status'] == 'history_unavailable'
+
+
+def test_volume_without_positive_evidence_is_disclosed_in_window(monkeypatch):
+    from dataclasses import replace
+    from typing import cast
+    from src.core.backtest import service
+
+    prefix = _bars()[:30]
+    bars = [*prefix, replace(prefix[0], date='2026-07-01', volume=0.0),
+            replace(prefix[0], date='2026-07-02', volume=cast(float, None)),
+            replace(prefix[0], date='2026-07-03', volume=0.0)]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: bars)
+    coverage = service.run_backtest(symbols=['600000'], start_date='2026-07-01', end_date='2026-07-02')['data_coverage']['600000']
+    assert coverage['bars_in_window'] == 2
+    assert coverage['nonpositive_or_unknown_volume_bars'] == 2
