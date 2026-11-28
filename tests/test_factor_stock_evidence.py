@@ -78,6 +78,25 @@ def test_only_unsupported_members_never_claim_a_database_read(monkeypatch):
     assert batch == {'status': 'no_supported_members', 'rows': None}
 
 
+def test_decimal_and_naive_timestamp_are_kept_separate(monkeypatch):
+    from decimal import Decimal
+
+    price = {'bar_ts': NOW, 'source': 'tq', 'open': Decimal('10.1'), 'high': Decimal('11'),
+             'low': Decimal('9'), 'close': Decimal('10.2'), 'volume': 200, 'quality_flag': 1,
+             'factor_id': 2, 'momentum_20': Decimal('2.5'), 'vol_20': True}
+    monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: {
+        '000001': price, '000002': {**price, 'bar_ts': NOW.replace(tzinfo=None)},
+    })
+    batch, = evidence.capture(DAY, [['000001.SZ', '000002.SZ']], earliest=NOW, now=lambda: NOW)
+    good, unknown = batch['rows']
+    assert good['day_bar']['close'] == 10.2 and good['has_valid_traded_bar'] is True
+    assert good['factor_values']['vol_20'] is None
+    assert batch['status'] == 'partial'
+    assert unknown['status'] == 'bar_timestamp_unverified'
+    assert unknown['day_bar'] is None and unknown['has_valid_traded_bar'] is None
+    assert unknown['factor_values']['momentum_20'] == 2.5
+
+
 def test_postgres_projection_matches_persisted_factor_contract():
     from sqlalchemy.dialects import postgresql
     from src.db import factor_stock_evidence as repo

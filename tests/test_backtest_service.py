@@ -57,12 +57,12 @@ def test_old_start_extends_lookback_and_reports_truncation(monkeypatch):
 
 
 def test_end_only_old_window_still_loads(monkeypatch):
-    from datetime import date, timedelta
+    from datetime import date
     from src.core.backtest import service
     from src.core.backtest.data_adapter import PriceBar
 
     seen = {}
-    end = (date.today() - timedelta(days=1200)).isoformat()
+    end = '2024-08-20'  # The calendar fixture does not cover the effective start.
     bars = [PriceBar(date=end, open=10, high=10, low=10, close=10, volume=1000)] * 40
 
     def load(_symbol, _market, days=250):
@@ -71,8 +71,27 @@ def test_end_only_old_window_still_loads(monkeypatch):
 
     monkeypatch.setattr(service, 'load_price_history', load)
     result = service.run_backtest(symbols=['600000'], end_date=end)
-    assert seen['days'] == 2060
+    expected_days = min(service.MAX_HISTORY_DAYS, (date.today() - date.fromisoformat(end)).days + 860)
+    assert seen['days'] == expected_days
     assert result['data_coverage']['600000']['status'] == 'usable'
+    assert result['data_coverage']['600000']['window_truncated'] is None  # calendar not verified at the historical left edge
+
+
+def test_weekend_left_edge_with_first_trading_day_is_not_truncated(monkeypatch):
+    from datetime import date, timedelta
+    from src.core.backtest import service
+
+    monday = date(2026, 6, 8)
+    bars = [
+        PriceBar(date=(monday + timedelta(days=offset)).isoformat(), open=10, high=10,
+                 low=10, close=10, volume=1000)
+        for offset in range(45) if (monday + timedelta(days=offset)).weekday() < 5
+    ]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: bars)
+
+    result = service.run_backtest(symbols=['600000'], start_date='2026-06-06')
+    assert result['data_coverage']['600000']['window_truncated'] is False
+    result = service.run_backtest(symbols=['600000'], start_date='2026-06-05')
     assert result['data_coverage']['600000']['window_truncated'] is True
 
 

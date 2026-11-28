@@ -5,12 +5,12 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from src.core.backtest.service import BacktestDateError, run_backtest
+from src.core.backtest.service import run_backtest
 from src.web.api.auth import get_current_user
 from src.web.models import User
 
@@ -33,12 +33,34 @@ class BacktestIn(BaseModel):
     initial_capital: float = Field(1_000_000.0, gt=0, le=1e10)
     cash_per_trade: float = Field(100_000.0, gt=0, le=1e10)
 
+    @field_validator("start_date", "end_date", mode="before")
+    @classmethod
+    def _normalize_date_input(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if cleaned[10:11] in ('T', ' '):
+            # Preserve the date in a valid ISO timestamp, without a time-zone shift.
+            day = cleaned[:10]
+            if date.fromisoformat(day).isoformat() == day:
+                datetime.fromisoformat(cleaned)
+                return day
+        return cleaned
+
     @field_validator("start_date", "end_date")
     @classmethod
     def _calendar_date(cls, value: str) -> str:
         """Reject impossible dates through the schema so 422 bodies keep one shape."""
         if value and date.fromisoformat(value).isoformat() != value:
             raise ValueError("必须是有效的 YYYY-MM-DD 日期")
+        return value
+
+    @field_validator("end_date")
+    @classmethod
+    def _date_order(cls, value: str, info: ValidationInfo) -> str:
+        start = info.data.get('start_date')
+        if start and value and value < start:
+            raise ValueError('end_date 不得早于 start_date')
         return value
 
 
@@ -50,20 +72,14 @@ def run_backtest_endpoint(
     symbols = [s for s in (payload.symbols or []) if str(s).strip()]
     if not symbols:
         raise HTTPException(status_code=400, detail="symbols 不能为空")
-    try:
-        return run_backtest(
-            symbols=symbols,
-            market=payload.market,
-            start_date=payload.start_date.strip() or None,
-            end_date=payload.end_date.strip() or None,
-            holding_days=payload.holding_days,
-            stop_pct=payload.stop_pct,
-            target_pct=payload.target_pct,
-            initial_capital=payload.initial_capital,
-            cash_per_trade=payload.cash_per_trade,
-        )
-    except BacktestDateError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=[{"loc": ["body", "date"], "msg": str(exc), "type": "value_error"}],
-        ) from exc
+    return run_backtest(
+        symbols=symbols,
+        market=payload.market,
+        start_date=payload.start_date or None,
+        end_date=payload.end_date or None,
+        holding_days=payload.holding_days,
+        stop_pct=payload.stop_pct,
+        target_pct=payload.target_pct,
+        initial_capital=payload.initial_capital,
+        cash_per_trade=payload.cash_per_trade,
+    )

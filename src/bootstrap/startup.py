@@ -1307,6 +1307,21 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"每日跨源指标标定注册失败: {e}")
 
+        # 题材成员取数独立于全市场增量，后移到标定之后；没有同日就绪回执则不触网。
+        try:
+            from os import getenv
+            from src.core.klines_daily_refresh import daily_theme_observation_job
+
+            if getenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', '').strip():
+                rt.scheduler.scheduler.add_job(
+                    daily_theme_observation_job, 'cron', day_of_week='mon-fri', hour=16, minute=50,
+                    id='factor-theme-observation', name='盘后题材成员观测',
+                    replace_existing=True, max_instances=1, coalesce=True,
+                )
+                logger.info('盘后题材成员观测已注册（16:50，需同日因子完成回执）')
+        except Exception as e:
+            logger.error('盘后题材成员观测注册失败: %s', type(e).__name__)
+
         # 题材情绪分(2026-10-08): 盘中实时刷新(交易日 9:30-15:00 每 10 分钟,
         # source='intraday') + 收盘定型(15:05, source='close'+settled_at, 幂等)。
         # 取代旧的单一 15:45 扫描 —— 15:05 定型早于 demon 落涨停事件无关紧要:

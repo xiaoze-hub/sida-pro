@@ -13,8 +13,10 @@ from datetime import date
 
 from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, load_price_history
 from src.core.backtest.engine import Backtester, Signal
+from src.core.trading_calendar import TradingCalendarError, is_trading_day, next_trading_day
 
 MIN_BARS = 30
+MIN_HISTORY_DAYS = 30
 MAX_SYMBOLS = 20
 # Beyond this a request only widens the query/fetch window; coverage flags explain gaps.
 MAX_HISTORY_DAYS = 6000
@@ -34,6 +36,15 @@ def _check_date(name: str, value: str | None) -> str | None:
     except ValueError:
         pass
     raise BacktestDateError(f"{name} 必须是有效的 YYYY-MM-DD 日期")
+
+
+def _expected_window_start(market: str, start: str | None) -> str | None:
+    if start is None or market not in {'CN', 'SH', 'SZ', 'BJ'}:
+        return None
+    try:
+        return start if is_trading_day(start) else next_trading_day(start).isoformat()
+    except TradingCalendarError:
+        return None
 
 
 def _golden_cross_signals(
@@ -95,19 +106,20 @@ def run_backtest(
         raise BacktestDateError('start_date 不得晚于 end_date')
     # load_qfq_bars cuts relative to now; stretch the lookback so an older
     # requested start is not silently reported as fully covered.
-    requested_days = max(int(days), MIN_BARS)
+    requested_days = max(int(days), 1)
     sample_start = start_date
     if sample_start is None and end_date:
         # End-only requests are anchored to their own end, not to today's date.
         first_ordinal = max(1, date.fromisoformat(end_date).toordinal() - requested_days)
         sample_start = date.fromordinal(first_ordinal).isoformat()
-    history_days = requested_days
+    history_days = max(requested_days, MIN_HISTORY_DAYS)
     if sample_start:
         # Keep the extra history for signal warmup, outside the measured sample.
         history_days = max(history_days, (date.today() - date.fromisoformat(sample_start)).days + 60)
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
+    expected_first = _expected_window_start(mkt, sample_start)
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
     skipped_symbols: list[str] = []
@@ -122,19 +134,29 @@ def run_backtest(
             bars = [bar for bar in bars if bar.date <= end_date]
         if not loaded:
             status = 'history_unavailable'
-        elif not bars or (sample_start and bars[-1].date < sample_start):
-            status = 'no_bars_in_window'
+        elif not bars:
+            status = 'history_starts_after_window'
+        elif sample_start and bars[-1].date < sample_start:
+            status = 'history_ends_before_window'
         elif len(bars) < MIN_BARS:
             status = 'insufficient_history'
         else:
             status = 'usable'
         window_last = bars[-1].date if bars and (not sample_start or bars[-1].date >= sample_start) else None
-        coverage[code] = dict(status=status, loaded_first=loaded[0].date if loaded else None,
+        loaded_first = loaded[0].date if loaded else None
+        truncated: bool | None = None
+        if not sample_start or (loaded_first and loaded_first <= sample_start):
+            truncated = False
+        elif loaded_first and expected_first:
+            # This compares to the market calendar; it does not assert a vendor gap.
+            truncated = loaded_first > expected_first
+        coverage[code] = dict(status=status, loaded_first=loaded_first,
                               loaded_last=loaded[-1].date if loaded else None,
                               window_last=window_last,
                               bars_through_end=len(bars),
                               bars_in_window=sum(not sample_start or bar.date >= sample_start for bar in bars),
-                              window_truncated=bool(sample_start and loaded and loaded[0].date > sample_start),
+                              expected_first_trading_date=expected_first,
+                              window_truncated=truncated,
                               # A non-trading-day boundary also produces this; it is not proof of missing data.
                               end_after_last_bar=bool(end_date and window_last and window_last < end_date))
         if status != 'usable':
@@ -157,6 +179,7 @@ def run_backtest(
         sample_start=sample_start,
     )
     result = bt.run(signals, bars_by_symbol)
+    equity_days = result.equity_dates[1:]  # Initial cash is not a trading day.
     return {
         "params": {
             "market": mkt,
@@ -182,6 +205,9 @@ def run_backtest(
         "skipped_signals": result.skipped,
         "execution_basis": "independent_signal_daily_bar",
         "equity_basis": "initial_capital_then_daily_close",
+        "equity_window": {"first_date": equity_days[0] if equity_days else None,
+                          "last_date": equity_days[-1] if equity_days else None,
+                          "observed_days": len(equity_days)},
         "pnl_basis": {"total_pnl": "realized_net", "unrealized_pnl": "mark_less_buy_outflow_excludes_exit_cost"},
 
         "initial_capital": result.initial_capital,

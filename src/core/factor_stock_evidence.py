@@ -6,6 +6,8 @@ import math
 import re
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, time, timezone
+from decimal import Decimal
+from numbers import Integral, Real
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -30,10 +32,20 @@ def capture_window(value: datetime, day: date) -> bool:
 
 
 def _finite(value: Any) -> float | int | None:
-    return value if type(value) in (float, int) and math.isfinite(value) else None
+    if isinstance(value, bool) or not isinstance(value, (Decimal, Real)):
+        return None
+    if isinstance(value, Integral):
+        return int(value)
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _stamp(value: datetime) -> str:
+    if value.utcoffset() is None:
+        raise ValueError('a timestamp with an explicit offset is required')
     return value.astimezone(timezone.utc).isoformat()
 
 
@@ -45,13 +57,16 @@ def _row(member: str, raw: Mapping[str, Any] | None) -> dict[str, Any]:
         return row
     row['status'] = 'checked'
     traded = False
-    if raw.get('bar_ts') is not None:
+    bar_ts = raw.get('bar_ts')
+    if bar_ts is not None and (not isinstance(bar_ts, datetime) or bar_ts.utcoffset() is None):
+        row['status'] = 'bar_timestamp_unverified'
+    elif isinstance(bar_ts, datetime):
         bar = {key: _finite(raw.get(key)) for key in ('open', 'high', 'low', 'close', 'volume')}
         o, h, l, c, v = (bar[key] for key in ('open', 'high', 'low', 'close', 'volume'))
         traded = (o is not None and h is not None and l is not None and c is not None
                   and v is not None and 0 < l <= min(o, c) <= max(o, c) <= h
                   and v > 0 and raw.get('quality_flag') == 1)
-        row['day_bar'] = {**bar, 'source': raw['source'], 'ts': _stamp(raw['bar_ts']),
+        row['day_bar'] = {**bar, 'source': raw['source'], 'ts': _stamp(bar_ts),
                           'adjust': 'qfq', 'quality_flag': raw.get('quality_flag')}
         row['has_valid_traded_bar'] = traded
     if raw.get('factor_id') is not None:
@@ -68,7 +83,7 @@ def capture(
     """One bounded read across the observed rosters; missing fields are never imputed."""
     if not rosters:
         return []
-    # Keep the global payload cap but admit each roster whole. Smallest first
+    # Keep the global read budget but admit each roster whole. Smallest first
     # maximizes the number of complete rosters; ties retain input order.
     selected: dict[int, set[str]] = {}
     result: list[dict] = [{'status': 'no_supported_members', 'rows': None} for _ in rosters]
@@ -109,9 +124,11 @@ def capture(
     if set(data) != set(symbols):
         return unavailable('incomplete_read')
     for i in selected:
+        rows = [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in rosters[i]]
         result[i] = {
-            'status': 'observed', 'read_started_at': _stamp(started), 'read_finished_at': _stamp(finished),
+            'status': 'partial' if any(row['status'] == 'bar_timestamp_unverified' for row in rows) else 'observed',
+            'read_started_at': _stamp(started), 'read_finished_at': _stamp(finished),
             'source': 'primary_db_visible_rows', 'factor_lineage_verified': False,
-            'rows': [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in rosters[i]],
+            'rows': rows,
         }
     return result

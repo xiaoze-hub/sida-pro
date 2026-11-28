@@ -99,7 +99,13 @@ def test_api_returns_open_position_separately_with_independent_signal_basis(monk
     with TestClient(app) as client:
         response = client.post("/api/backtest/run", json={"symbols": [A]})
         malformed = client.post("/api/backtest/run", json={"symbols": [A], "end_date": "2026-11-27-extra"})
+        timestamp = client.post("/api/backtest/run", json={"symbols": [A], "end_date": f" {D1}T00:00:00.000Z "})
+        reversed_range = client.post("/api/backtest/run", json={"symbols": [A], "start_date": D2, "end_date": D0})
     assert malformed.status_code == 422
+    assert timestamp.status_code == 200 and timestamp.json()['params']['end_date'] == D1
+    assert reversed_range.status_code == 422
+    error, = reversed_range.json()['detail']
+    assert error['loc'] == ['body', 'end_date'] and error['input'] == D0 and 'ctx' in error
     assert response.status_code == 200
     result = response.json()
     assert result["trades"] == []
@@ -213,6 +219,10 @@ def test_explicit_end_does_not_force_trade_on_sellable_final_day(monkeypatch):
     assert result['pnl_basis']['total_pnl'] == 'realized_net'
     assert result['equity_basis'] == 'initial_capital_then_daily_close'
     assert result['params']['sample_end_policy'] == 'mark_open_without_forced_exit'
+    sampled_days = result['equity_dates'][1:]
+    assert result['equity_window'] == {
+        'first_date': sampled_days[0], 'last_date': D2, 'observed_days': len(sampled_days),
+    }
 
     expired = service.run_backtest(symbols=[A], end_date=D2, holding_days=1)
     assert expired['trades'][0]['exit_reason'] == 'expire'
@@ -248,5 +258,5 @@ def test_dates_and_history_availability_do_not_masquerade_as_no_signals(monkeypa
     with pytest.raises(service.BacktestDateError):
         service.run_backtest(symbols=[A], start_date=D2, end_date=D0)
     outcome = service.run_backtest(symbols=[A], end_date='2023-10-01')
-    assert outcome['data_coverage'][A]['status'] == 'no_bars_in_window'
+    assert outcome['data_coverage'][A]['status'] == 'history_starts_after_window'
     assert outcome['skipped_symbols'] == [A]
