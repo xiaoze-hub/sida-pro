@@ -1,6 +1,7 @@
 """Read the presently visible day bar, factor row and halt evidence together."""
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy import text
 from src.db.dialect import is_postgres
 from src.db.klines_repo import CN_TRADING_TZ
 from src.db.session import get_write_engine
+
+logger = logging.getLogger(__name__)
 
 FACTOR_FIELDS = (
     'momentum_20', 'momentum_60', 'vol_20', 'volume_z20', 'position_120',
@@ -55,6 +58,7 @@ def load_stock_observations(day: date, symbols: list[str]) -> dict[str, dict[str
             for row in result.mappings():
                 symbol = row['symbol']
                 if symbol in rows:
+                    logger.warning('逐股盘后证据重复行: date=%s symbol=%s', day, symbol)
                     raise ValueError('ambiguous stock evidence')
                 rows[symbol] = dict(row)
             return rows

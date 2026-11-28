@@ -7569,12 +7569,14 @@ def _m253_factor_theme_observations(conn: Connection) -> None:
             trade_date VARCHAR(10) NOT NULL,
             board_code VARCHAR(9) NOT NULL,
             fetched_at VARCHAR(40) NOT NULL,
+            stock_evidence_ready BOOLEAN NOT NULL,
+            evidence_fingerprint VARCHAR(64) NOT NULL,
             payload TEXT NOT NULL
         )
     """))
     conn.execute(text("""
         CREATE INDEX IF NOT EXISTS ix_factor_theme_observations_lookup
-        ON factor_theme_observations (trade_date, board_code, fetched_at)
+        ON factor_theme_observations (trade_date, board_code, fetched_at DESC, observation_id DESC)
     """))
 
 
