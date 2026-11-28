@@ -1,0 +1,390 @@
+from datetime import datetime, timedelta, timezone
+import json
+
+import pytest
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
+
+from src.collectors import factor_daily
+from src.core import klines_daily_refresh as refresh, tdx_boards
+from src.db.session import WriteSessionLocal
+
+
+THEME = '880741.SH'
+NOW = datetime(2026, 11, 27, 8, 35, tzinfo=timezone.utc)
+
+
+def install_upstream(monkeypatch, *, receipt=None, persisted=True, written=2):
+    from src.core import trading_calendar
+
+    default = {'version': 1, 'trade_date': '2026-11-27', 'started_at': '2026-11-27T16:00:00+08:00',
+               'finished_at': '2026-11-27T16:30:00+08:00', 'expected_count': 10, 'valid_count': 7,
+               'status': 'partial', 'caliber': 'cn_qfq_tq_preferred_tencent_close_volume_quality',
+               'universe': 'stock_list_sh_sz_main_chinext_star'}
+    monkeypatch.setattr(refresh, 'daily_job', lambda: {'coverage_receipt': default if receipt is None else receipt,
+                                                     'coverage_receipt_persisted': persisted})
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW)
+    monkeypatch.setattr(trading_calendar, 'is_trading_day', lambda _: True)
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-27')
+    monkeypatch.setattr(factor_daily, 'collect_once', lambda *_a, **_k: {'written': written, 'skipped': 0})
+
+
+def stored_rows():
+    with WriteSessionLocal() as db:
+        return [(row.observation_id, json.loads(row.payload)) for row in db.execute(text(
+            'SELECT observation_id, payload FROM factor_theme_observations ORDER BY fetched_at, observation_id'
+        ))]
+
+
+@pytest.fixture(autouse=True)
+def _clean_observations(monkeypatch, tmp_path):
+    monkeypatch.delenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', raising=False)
+    monkeypatch.setenv('DATA_DIR', str(tmp_path))
+    yield
+    with WriteSessionLocal() as db:
+        if inspect(db.connection()).has_table('factor_theme_observations'):
+            db.execute(text('DELETE FROM factor_theme_observations'))
+            db.commit()
+
+
+@pytest.mark.parametrize('reply,state,members', [
+    (None, 'unavailable', None),
+    ([], 'source_empty', []),
+    (['600001.SH', '000001.SZ', '600001.SH'], 'observed', ['000001.SZ', '600001.SH']),
+    (['bad'], 'invalid_response', None),
+    (['600001.SH', 'bad'], 'partial_member_response', ['600001.SH']),
+])
+def test_daily_job_persists_observation_without_authorizing_a_rank(monkeypatch, reply, state, members):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    calls = []
+
+    def constituents(board):
+        calls.append(board)
+        return reply
+
+    monkeypatch.setattr(tdx_boards, 'constituents', constituents)
+    result = refresh.daily_job_with_factors()
+    assert calls == []
+    assert stored_rows() == []
+    assert result['theme_observation']['reason'] == 'queued_for_observation'
+    result['theme_observation'] = refresh.daily_theme_observation_job()
+    assert calls == [THEME]
+    assert result['theme_observation']['written'] == 1
+    (ref, doc), = stored_rows()
+    assert result['theme_observation']['observation_ids'] == [ref]
+    assert doc['board_code'] == THEME
+    assert doc['data_trade_date'] == '2026-11-27'
+    assert doc['fetched_at'] == NOW.isoformat()
+    assert doc['source_as_of'] is None
+    assert doc['ranking_eligible'] is False
+    assert doc['status'] == state
+    assert doc['members'] == members
+    assert doc['market_run']['dayline_coverage']['status'] == 'partial'
+    assert doc['market_run']['factor_rows_written'] == 2
+    assert doc['version'] == 2
+    assert doc['rejected_member_count'] == (None if reply is None else int('bad' in reply))
+    expected_evidence = {'observed': 'unsupported_backend', 'partial_member_response': 'unsupported_backend',
+                         'unavailable': 'source_unavailable',
+                         'source_empty': 'source_empty', 'invalid_response': 'invalid_member_response'}[state]
+    assert doc['stock_evidence'] == {'status': expected_evidence, 'rows': None}
+    assert result['theme_observation']['ranking_eligible'] is False
+    assert result['theme_observation']['gateway_dayline_status'] == 'same_day'
+
+
+def test_separate_job_requires_a_same_day_completion_receipt(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: pytest.fail('must not access TQ without a receipt'))
+    assert refresh.daily_theme_observation_job()['reason'] == 'factor_receipt_missing'
+    refresh.daily_job_with_factors()
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(days=3))
+    assert refresh.daily_theme_observation_job()['reason'] == 'factor_receipt_missing'
+    assert stored_rows() == []
+
+
+def test_unchanged_degraded_retry_keeps_first_capture_until_evidence_changes(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-26')
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000001.SZ'])
+    refresh.daily_job_with_factors()
+    first = refresh.daily_theme_observation_job()
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=70))
+    unchanged = refresh.daily_theme_observation_job()
+    assert first['written'] == 1 and unchanged['written'] == 0
+    assert unchanged['observation_ids'] == first['observation_ids']
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=130))
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000002.SZ'])
+    changed = refresh.daily_theme_observation_job()
+    assert changed['written'] == 1 and changed['observation_ids'] != first['observation_ids']
+    assert [doc['fetched_at'] for _, doc in stored_rows()] == [NOW.isoformat(), (NOW + timedelta(minutes=130)).isoformat()]
+
+
+def test_scheduler_status_projection_does_not_decode_observation_payload(monkeypatch):
+    from src.db import factor_theme_observations as repo
+
+    observed = {'data_trade_date': '2026-11-27', 'fetched_at': NOW.isoformat(), 'board_code': THEME,
+                'status': 'observed', 'stock_evidence': {'status': 'observed', 'rows': ['retained evidence']}}
+    later = {**observed, 'fetched_at': (NOW + timedelta(minutes=15)).isoformat(),
+             'stock_evidence': {'status': 'partial', 'rows': []}}
+    with WriteSessionLocal() as db:
+        repo.append_observations(db, [observed])
+        db.commit()
+        with monkeypatch.context() as patch:
+            patch.setattr(repo.json, 'loads', lambda *_a, **_k: pytest.fail('probe decoded payload'))
+            assert repo.boards_with_stock_evidence(db, observed['data_trade_date'], {THEME}) == {THEME}
+        repo.append_observations(db, [later])
+        db.commit()
+        assert repo.boards_with_stock_evidence(db, observed['data_trade_date'], {THEME}) == set()
+    assert len(stored_rows()) == 2
+
+
+def test_late_receipt_retries_then_stops_after_a_committed_batch(monkeypatch):
+    from src.core import factor_stock_evidence
+
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    calls = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda code: calls.append(code) or ['000001.SZ'])
+    assert refresh.daily_theme_observation_job()['reason'] == 'factor_receipt_missing'
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=45))
+    refresh.daily_job_with_factors()
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-26')
+    first = refresh.daily_theme_observation_job()
+    assert first['written'] == 1 and first['status'] == 'degraded'
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-27')
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [
+        {'status': 'observed', 'rows': [{'symbol': '000001.SZ', 'has_valid_traded_bar': True}]},
+    ])
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=70))
+    refreshed = refresh.daily_theme_observation_job()
+    assert refreshed['written'] == 1  # Market-wide coverage can remain partial.
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=75))
+    assert refresh.daily_theme_observation_job()['reason'] == 'observation_already_committed'
+    assert calls == [THEME, THEME]
+    assert len(stored_rows()) == 2
+
+
+def test_retry_fetches_only_boards_without_usable_stock_evidence(monkeypatch):
+    from src.core import factor_stock_evidence
+
+    other = '880742.SH'
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', f'{THEME},{other}')
+    calls = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda board: calls.append(board) or ['000001.SZ'])
+    usable = {'status': 'observed', 'rows': [{'symbol': '000001.SZ', 'has_valid_traded_bar': True}]}
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [usable, {'status': 'read_failed', 'rows': None}])
+    refresh.daily_job_with_factors()
+    assert refresh.daily_theme_observation_job()['written'] == 2
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=70))
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [usable])
+    assert refresh.daily_theme_observation_job()['written'] == 1
+    assert calls == [THEME, other, other]
+    assert refresh.daily_theme_observation_job()['reason'] == 'observation_already_committed'
+
+
+def test_latest_capture_is_ordered_by_instant_not_offset_text():
+    from src.db import factor_theme_observations as repo
+
+    day = '2026-11-27'
+    observed = {'data_trade_date': day, 'board_code': THEME, 'status': 'observed',
+                'stock_evidence': {'status': 'observed', 'rows': []}}
+    prior = {**observed, 'fetched_at': '2026-11-27T16:35:00+08:00'}
+    later = {**observed, 'fetched_at': '2026-11-27T08:36:00+00:00',
+             'stock_evidence': {'status': 'partial', 'rows': []}}
+    with WriteSessionLocal.begin() as db:
+        assert repo.append_observations(db, [prior, later])[1] == 2
+    with WriteSessionLocal() as db:
+        assert repo.boards_with_stock_evidence(db, day, {THEME}) == set()
+    assert [doc['fetched_at'] for _, doc in stored_rows()] == ['2026-11-27T08:35:00+00:00', later['fetched_at']]
+
+
+def test_partial_stock_evidence_stays_incomplete_without_quarter_hour_gateway_repeats(monkeypatch):
+    from src.core import factor_stock_evidence
+    from src.db.factor_theme_observations import boards_with_stock_evidence
+
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    calls = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda board: calls.append(board) or ['000001.SZ'])
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [
+        {'status': 'no_valid_day_bar', 'rows': [{'symbol': '000001.SZ', 'trading_status': 'unknown'}]},
+    ])
+    refresh.daily_job_with_factors()
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW.replace(hour=9, minute=0))
+    assert refresh.daily_theme_observation_job()['written'] == 1
+    for minute in (15, 30):
+        monkeypatch.setattr(refresh, '_now_cn', lambda: NOW.replace(hour=9, minute=minute))
+        assert refresh.daily_theme_observation_job()['reason'] == 'deferred_board_retry'
+    assert calls == [THEME]
+    with WriteSessionLocal() as db:
+        assert not boards_with_stock_evidence(db, '2026-11-27', {THEME})
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW.replace(hour=9, minute=45))
+    second = refresh.daily_theme_observation_job()
+    assert second['written'] == 0 and calls == [THEME, THEME]
+    assert len(stored_rows()) == 1
+
+
+def test_retry_cron_is_opt_in_and_bounded_to_the_shanghai_session(monkeypatch):
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    scheduler = BackgroundScheduler(timezone=timezone.utc)
+    assert refresh.register_theme_observation(scheduler) is False
+    assert scheduler.get_jobs() == []
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', '880741.XX')
+    assert refresh.register_theme_observation(scheduler) is False  # invalid config fails at boot
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    assert refresh.register_theme_observation(scheduler) is True
+    job, = scheduler.get_jobs()
+    assert job.func is refresh.daily_theme_observation_job
+    assert (job.misfire_grace_time, job.max_instances, job.coalesce) == (300, 1, True)
+    before = datetime(2026, 11, 27, 8, 59, tzinfo=timezone.utc)
+    fire = job.trigger.get_next_fire_time(None, before)
+    assert fire == datetime(2026, 11, 27, 9, tzinfo=timezone.utc)
+    # A slow upstream is still consumable after 19:45, and the tail ends at 23:45 Shanghai.
+    late = datetime(2026, 11, 27, 13, 45, tzinfo=timezone.utc)
+    assert job.trigger.get_next_fire_time(None, late) == late
+    assert job.trigger.get_next_fire_time(late, late + timedelta(seconds=1)) == datetime(2026, 11, 27, 14, tzinfo=timezone.utc)
+    last = datetime(2026, 11, 27, 15, 45, tzinfo=timezone.utc)
+    assert job.trigger.get_next_fire_time(None, last) == last
+    assert job.trigger.get_next_fire_time(last, last + timedelta(seconds=1)) == datetime(2026, 11, 30, 9, tzinfo=timezone.utc)
+
+
+def collect_then_observe():
+    stats = refresh.daily_job_with_factors()
+    result = stats.get('theme_observation', {'written': 0, 'reason': 'disabled'})
+    if result['reason'] == 'queued_for_observation':
+        result = refresh.daily_theme_observation_job()
+    return {**stats, 'theme_observation': result}
+
+
+@pytest.mark.parametrize('selector,persisted,written,expected_reason', [
+    ('', True, 2, 'disabled'),
+    (THEME, False, 2, 'receipt_not_persisted'),
+    (THEME, True, 0, 'factor_unavailable'),
+    ('880741.ＳＨ', True, 2, 'invalid_board_config'),
+    ('880741.SH,880742.SH,880743.SH,880744.SH,880745.SH,880746.SH,880747.SH,'
+     '880748.SH,880749.SH,880750.SH,880751.SH,880752.SH,880753.SH', True, 2, 'invalid_board_config'),
+])
+def test_ineligible_run_does_not_fetch_members(monkeypatch, selector, persisted, written, expected_reason):
+    install_upstream(monkeypatch, persisted=persisted, written=written)
+    if selector:
+        monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', selector)
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: pytest.fail('unqualified work must not fetch'))
+    status = collect_then_observe()['theme_observation']
+    assert status['reason'] == expected_reason
+    assert stored_rows() == []
+
+
+def test_lowercase_board_config_is_normalized(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', ' ,880741.sh,, ')
+    seen = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda code: seen.append(code) or ['000001.SZ'])
+    result = collect_then_observe()['theme_observation']
+    assert seen == [THEME]
+    assert result['written'] == 1
+
+
+def test_same_evidence_idempotent_later_retrieval_preserves_both(monkeypatch):
+    from src.core.factor_theme_observation import capture_after_daily_refresh
+
+    install_upstream(monkeypatch)
+    upstream = {**refresh.daily_job(), 'factor_refresh': {'written': 2}}
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['600001.SH'])
+    first = capture_after_daily_refresh(THEME, upstream, now=lambda: NOW)
+    same = capture_after_daily_refresh(THEME, upstream, now=lambda: NOW)
+    assert same['written'] == 0
+    assert first['observation_ids'] == same['observation_ids']
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['600002.SH'])
+    second = capture_after_daily_refresh(THEME, upstream, now=lambda: NOW + timedelta(minutes=1))
+    assert second['written'] == 1
+    assert [doc['members'] for _, doc in stored_rows()] == [['600001.SH'], ['600002.SH']]
+
+
+def test_capture_finishing_after_shanghai_date_change_is_not_written(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    refresh.daily_job_with_factors()
+    clocks = iter([NOW, NOW, NOW, NOW + timedelta(hours=9)])
+    monkeypatch.setattr(refresh, '_now_cn', lambda: next(clocks))
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['600001.SH'])
+    status = refresh.daily_theme_observation_job()
+    assert status['reason'] == 'clock_outside_capture_window'
+    assert stored_rows() == []
+
+
+@pytest.mark.parametrize('key,bad,reason', [
+    ('trade_date', '2026-11-26', 'factor_receipt_missing'),
+    ('started_at', '2026-11-27T16:00:00', 'receipt_unverified'),
+    ('finished_at', '2026-11-27T16:37:00+08:00', 'factor_receipt_unverified'),
+    ('status', 'complete', 'receipt_unverified'),
+    ('valid_count', True, 'receipt_unverified'), ('caliber', 'unknown', 'receipt_unverified'),
+])
+def test_bad_upstream_receipt_never_reads_gateway(monkeypatch, key, bad, reason):
+    install_upstream(monkeypatch)
+    upstream = refresh.daily_job()
+    upstream['coverage_receipt'][key] = bad
+    monkeypatch.setattr(refresh, 'daily_job', lambda: upstream)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: pytest.fail('bad receipt fetched members'))
+    assert collect_then_observe()['theme_observation']['reason'] == reason
+    assert stored_rows() == []
+
+
+def test_write_error_rolls_back_all_observations_and_preserves_upstream_result(monkeypatch, caplog):
+    from src.core import factor_theme_observation as capture
+
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', f'{THEME},880742.SH')
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['600001.SH'])
+    append = capture.append_observations
+
+    def fail_after_write(db, observations):
+        append(db, observations[:1])
+        raise RuntimeError('private diagnostic must not be logged')
+
+    monkeypatch.setattr(capture, 'append_observations', fail_after_write)
+    result = collect_then_observe()
+    assert result['factor_refresh']['written'] == 2
+    assert result['theme_observation'] == {'written': 0, 'reason': 'capture_failed'}
+    assert stored_rows() == []
+    assert 'private diagnostic must not be logged' not in caplog.text
+
+
+def test_read_failure_does_not_discard_theme_members(monkeypatch, caplog):
+    from src.core import factor_stock_evidence
+
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000001.SZ'])
+
+    def fail(*_):
+        raise SQLAlchemyError('private diagnostic')
+
+    monkeypatch.setattr(factor_stock_evidence, 'load_stock_observations', fail)
+    assert collect_then_observe()['theme_observation']['written'] == 1
+    (_, row), = stored_rows()
+    assert row['ranking_eligible'] is False
+    assert row['members'] == ['000001.SZ']
+    assert row['stock_evidence'] == {'status': 'read_failed', 'rows': None}
+    assert 'private diagnostic' not in caplog.text
+
+
+def test_stale_gateway_is_recorded_not_presented_as_current(monkeypatch):
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-26')
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000001.SZ'])
+    result = collect_then_observe()['theme_observation']
+    assert result['written'] == 1
+    assert result['status'] == 'degraded'
+    assert result['member_status_counts'] == {'observed': 1}
+    assert result['stock_evidence_status_counts'] == {'gateway_dayline_stale': 1}
+    (_, row), = stored_rows()
+    assert row['source_as_of'] is None
+    assert row['gateway_dayline_date'] == '2026-11-26'
+    assert row['membership_freshness'] == 'unverified'
+    assert row['stock_evidence']['status'] == 'gateway_dayline_stale'

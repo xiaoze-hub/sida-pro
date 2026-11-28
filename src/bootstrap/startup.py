@@ -1307,6 +1307,17 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"每日跨源指标标定注册失败: {e}")
 
+        # 题材成员取数独立于全市场增量，后移到标定之后；没有同日就绪回执则不触网。
+        try:
+            from src.core.klines_daily_refresh import register_theme_observation
+
+            if register_theme_observation(rt.scheduler.scheduler):
+                logger.info('盘后题材成员观测已注册（17:00–23:45 每15分钟查就绪，已留证但未齐的板块每小时 :45 补采）')
+            else:
+                logger.debug('盘后题材成员观测未启用')
+        except Exception as e:
+            logger.error('盘后题材成员观测注册失败: %s', type(e).__name__)
+
         # 题材情绪分(2026-10-08): 盘中实时刷新(交易日 9:30-15:00 每 10 分钟,
         # source='intraday') + 收盘定型(15:05, source='close'+settled_at, 幂等)。
         # 取代旧的单一 15:45 扫描 —— 15:05 定型早于 demon 落涨停事件无关紧要:

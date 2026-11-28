@@ -207,7 +207,7 @@ def test_baseline_246_with_legacy_duplicates_upgrades_and_reruns(tmp_path):
                 sqltext("SELECT version, success FROM schema_migrations WHERE version >= 247")
             ).fetchall()
         )
-    assert applied == {247: 1, 248: 1, 249: 1, 250: 1, 251: 1, 252: 1}, applied
+    assert applied == {247: 1, 248: 1, 249: 1, 250: 1, 251: 1, 252: 1, 253: 1}, applied
 
     # 2) 存量重复行一条不动(不删、不改写), 且归属列全空
     assert _legacy_core_rows(eng) == before
