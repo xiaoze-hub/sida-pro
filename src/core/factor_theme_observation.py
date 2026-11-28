@@ -98,14 +98,19 @@ def _coverage(receipt: dict, now: datetime) -> tuple[dict | None, str | None]:
     }, None
 
 
-def _normalize_reply(reply: list[str] | None) -> tuple[str, list[str] | None]:
+def _normalize_reply(reply: list[str] | None) -> tuple[str, list[str] | None, int | None]:
+    """Count malformed entries without storing potentially arbitrary source text."""
     if reply is None:
-        return 'unavailable', None
-    if not isinstance(reply, list) or len(reply) > MAX_MEMBERS or any(
-        not isinstance(member, str) or not _MEMBER.fullmatch(member) for member in reply
-    ):
-        return 'invalid_response', None
-    return ('observed', sorted(set(reply))) if reply else ('source_empty', [])
+        return 'unavailable', None, None
+    if not isinstance(reply, list) or len(reply) > MAX_MEMBERS:
+        return 'invalid_response', None, None
+    if not reply:
+        return 'source_empty', [], 0
+    valid = [member for member in reply if isinstance(member, str) and _MEMBER.fullmatch(member)]
+    rejected = len(reply) - len(valid)
+    if not valid:
+        return 'invalid_response', None, rejected
+    return ('partial_member_response' if rejected else 'observed', sorted(set(valid)), rejected)
 
 
 def configured_boards(board_config: str) -> set[str]:
@@ -152,7 +157,7 @@ def capture_after_daily_refresh(
                       else 'stale' if probe_day < trade_day else 'future')
     observations = []
     for board in sorted(boards):
-        status, members = _normalize_reply(tdx_boards.constituents(board))
+        status, members, rejected = _normalize_reply(tdx_boards.constituents(board))
         fetched = now()
         if not factor_stock_evidence.capture_window(fetched, trade_day) or fetched < last:
             return {'written': 0, 'reason': 'clock_outside_capture_window'}
@@ -161,12 +166,13 @@ def capture_after_daily_refresh(
             'version': 2, 'board_code': board, 'data_trade_date': trade_day.isoformat(),
             'fetched_at': fetched.astimezone(timezone.utc).isoformat(), 'source': 'tq_sector_members',
             'source_as_of': None, 'ranking_eligible': False, 'status': status, 'members': members,
+            'rejected_member_count': rejected,
             'membership_freshness': 'unverified', 'gateway_dayline_date': probe_day.isoformat() if probe_day else None,
             'gateway_dayline_status': gateway_status,
             'market_run': {'dayline_coverage': coverage, 'factor_rows_written': written},
         })
     # No DB write is open while reading the stock evidence or contacting the source.
-    observed = [row for row in observations if row['status'] == 'observed']
+    observed = [row for row in observations if row['members']]
     if gateway_status == 'same_day':
         snapshots = factor_stock_evidence.capture(
             trade_day, [row['members'] for row in observed], earliest=last, now=now,

@@ -74,7 +74,8 @@ def _row(member: str, raw: Mapping[str, Any] | None, day: date) -> dict[str, Any
                   and v is not None and 0 < l <= min(o, c) <= max(o, c) <= h
                   and v > 0 and raw.get('quality_flag') == 1)
         row['day_bar'] = {**bar, 'source': raw['source'], 'ts': _bar_stamp(bar_ts),
-                          'trade_date': day.isoformat(), 'adjust': 'qfq', 'quality_flag': raw.get('quality_flag')}
+                          'trade_date': day.isoformat(), 'adjust': 'qfq', 'quality_flag': raw.get('quality_flag'),
+                          'has_valid_traded_bar': traded}
         row['has_valid_traded_bar'] = traded
     if raw.get('factor_id') is not None:
         row['factor_values'] = {key: _finite(raw.get(key)) for key in FACTOR_FIELDS}

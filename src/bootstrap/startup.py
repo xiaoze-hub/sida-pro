@@ -1312,7 +1312,7 @@ async def lifespan(app):
             from src.core.klines_daily_refresh import register_theme_observation
 
             if register_theme_observation(rt.scheduler.scheduler):
-                logger.info('盘后题材成员观测已注册（17:00–19:45 每15分钟，21:45 最后一次）')
+                logger.info('盘后题材成员观测已注册（17:00–23:45 每15分钟查就绪，已留证但未齐的板块每小时 :45 补采）')
             else:
                 logger.debug('盘后题材成员观测未启用')
         except Exception as e:

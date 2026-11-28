@@ -45,6 +45,8 @@ def test_freezes_each_member_without_conflating_chart_and_trade_status(monkeypat
     assert rows['000001.SZ']['has_valid_traded_bar'] is True
     assert rows['000001.SZ']['trading_status'] == 'unknown'
     assert rows['000002.SZ']['has_valid_traded_bar'] is False
+    assert rows['000001.SZ']['day_bar']['has_valid_traded_bar'] is True
+    assert rows['000002.SZ']['day_bar']['has_valid_traded_bar'] is False
     assert rows['000002.SZ']['trading_status'] == 'halt_recorded'
     assert rows['000003.SZ']['trading_status'] == 'conflicting_evidence'
     assert rows['600001.SH']['day_bar'] is None
@@ -143,6 +145,10 @@ def test_postgres_projection_matches_persisted_factor_contract():
     assert set(repo.FACTOR_FIELDS) <= set(StockFactorDaily.__table__.columns.keys())
     stmt = repo._READ.compile(dialect=postgresql.dialect())
     assert set(stmt.params) == {'symbols', 'lo', 'hi', 'iso_date', 'compact_date'}
+    projection = stmt.string.split('FROM unnest', 1)[0]
+    for name in ('b.ts AS bar_ts', 'b.source', 'b.quality_flag', 'f.id AS factor_id',
+                 'h.id AS halt_id', 'h.start_date AS halt_start', 'h.end_date AS halt_end', 'h.source AS halt_source'):
+        assert name in projection
     for clause in ("market = 'CN'", "period = '1d'", "adjust = 'qfq'", "source IN ('tq', 'tencent')"):
         assert clause in stmt.string
 

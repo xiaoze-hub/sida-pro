@@ -23,7 +23,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _THEME_BOARDS_ENV = 'SIDA_FACTOR_THEME_OBSERVATION_BOARDS'
 _CN_TZ = ZoneInfo('Asia/Shanghai')
-_THEME_FINAL_ATTEMPT = time(21, 45)
+_THEME_FINAL_ATTEMPT = time(23, 45)
+_THEME_RETRY_MINUTE = 45
+_THEME_MISFIRE_SECONDS = 300
 COVERAGE_UNIVERSE = 'stock_list_sh_sz_main_chinext_star'
 COVERAGE_CALIBER = 'cn_qfq_tq_preferred_tencent_close_volume_quality'
 
@@ -197,7 +199,7 @@ def register_theme_observation(scheduler: BaseScheduler) -> bool:
         return False
     scheduler.add_job(
         daily_theme_observation_job, trigger, id='factor-theme-observation', name='盘后题材成员观测',
-        replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=300,
+        replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=_THEME_MISFIRE_SECONDS,
     )
     return True
 
@@ -206,7 +208,7 @@ def daily_theme_observation_job() -> dict:
     """Separate optional gateway workload; requires a completed factor run today."""
     from src.core.factor_theme_observation import capture_after_daily_refresh, configured_boards, factor_receipt_state
     from src.core.trading_calendar import TradingCalendarError, is_trading_day
-    from src.db.factor_theme_observations import boards_with_stock_evidence
+    from src.db.factor_theme_observations import latest_board_evidence
     from src.db.session import WriteSessionLocal
 
     config = os.environ.get(_THEME_BOARDS_ENV, '').strip()
@@ -238,13 +240,22 @@ def daily_theme_observation_job() -> dict:
         else:
             try:
                 with WriteSessionLocal() as db:
-                    pending = boards - boards_with_stock_evidence(db, day.isoformat(), boards)
+                    state = latest_board_evidence(db, day.isoformat(), boards)
             except Exception as exc:  # the source was never contacted; do not blame capture
                 result = {'written': 0, 'reason': 'evidence_lookup_failed'}
                 logger.error('题材成员证据状态查询失败: date=%s error=%s', day, type(exc).__name__)
             else:
+                pending = {board for board in boards if not state.get(board)}
                 if not pending:
                     return {'written': 0, 'reason': 'observation_already_committed'}
+                # First capture can consume a late receipt at any tick. Once any
+                # observation is stored, retry incomplete boards at :45 (plus grace),
+                # not at every receipt poll. An unknown halt is still not coverage.
+                minute = now.astimezone(_CN_TZ).minute
+                if not _THEME_RETRY_MINUTE <= minute <= _THEME_RETRY_MINUTE + _THEME_MISFIRE_SECONDS // 60:
+                    pending -= state.keys()
+                    if not pending:
+                        return {'written': 0, 'reason': 'deferred_board_retry'}
                 try:
                     result = capture_after_daily_refresh(','.join(sorted(pending)), receipt, now=_now_cn)
                 except Exception as exc:  # evidence failure cannot disturb committed factors

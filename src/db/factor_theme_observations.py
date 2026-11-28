@@ -39,20 +39,25 @@ def _statement(dialect: str):
     )), False
 
 
-def boards_with_stock_evidence(db: Session, trade_date: str, boards: set[str]) -> set[str]:
-    """Read the daily-bar/halt retry flag, not factor or ranking readiness."""
+def latest_board_evidence(db: Session, trade_date: str, boards: set[str]) -> dict[str, bool]:
+    """Read only latest board keys and bar/halt readiness, never payloads."""
     if not boards:
-        return set()
+        return {}
     pin_write_bind(db)
     latest = text('''
-        SELECT board_code FROM (
+        SELECT board_code, stock_evidence_ready FROM (
             SELECT board_code, stock_evidence_ready,
                    ROW_NUMBER() OVER (PARTITION BY board_code ORDER BY fetched_at DESC, observation_id DESC) AS recency
             FROM factor_theme_observations WHERE trade_date = :day AND board_code IN :boards
-        ) AS ranked WHERE recency = 1 AND stock_evidence_ready
+        ) AS ranked WHERE recency = 1
     ''').bindparams(bindparam('boards', expanding=True))
     with db.execute(latest, {'day': trade_date, 'boards': sorted(boards)}) as result:
-        return set(result.scalars())
+        return {row.board_code: bool(row.stock_evidence_ready) for row in result}
+
+
+def boards_with_stock_evidence(db: Session, trade_date: str, boards: set[str]) -> set[str]:
+    """Read the daily-bar/halt retry flag, not factor or ranking readiness."""
+    return {board for board, ready in latest_board_evidence(db, trade_date, boards).items() if ready}
 
 
 def append_observations(db: Session, observations: list[dict]) -> tuple[list[str], int]:

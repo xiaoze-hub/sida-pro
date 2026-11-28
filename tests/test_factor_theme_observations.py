@@ -51,7 +51,8 @@ def _clean_observations(monkeypatch, tmp_path):
     (None, 'unavailable', None),
     ([], 'source_empty', []),
     (['600001.SH', '000001.SZ', '600001.SH'], 'observed', ['000001.SZ', '600001.SH']),
-    (['600001.SH', 'bad'], 'invalid_response', None),
+    (['bad'], 'invalid_response', None),
+    (['600001.SH', 'bad'], 'partial_member_response', ['600001.SH']),
 ])
 def test_daily_job_persists_observation_without_authorizing_a_rank(monkeypatch, reply, state, members):
     install_upstream(monkeypatch)
@@ -82,7 +83,9 @@ def test_daily_job_persists_observation_without_authorizing_a_rank(monkeypatch, 
     assert doc['market_run']['dayline_coverage']['status'] == 'partial'
     assert doc['market_run']['factor_rows_written'] == 2
     assert doc['version'] == 2
-    expected_evidence = {'observed': 'unsupported_backend', 'unavailable': 'source_unavailable',
+    assert doc['rejected_member_count'] == (None if reply is None else int('bad' in reply))
+    expected_evidence = {'observed': 'unsupported_backend', 'partial_member_response': 'unsupported_backend',
+                         'unavailable': 'source_unavailable',
                          'source_empty': 'source_empty', 'invalid_response': 'invalid_member_response'}[state]
     assert doc['stock_evidence'] == {'status': expected_evidence, 'rows': None}
     assert result['theme_observation']['ranking_eligible'] is False
@@ -107,14 +110,15 @@ def test_unchanged_degraded_retry_keeps_first_capture_until_evidence_changes(mon
     monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000001.SZ'])
     refresh.daily_job_with_factors()
     first = refresh.daily_theme_observation_job()
-    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=15))
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=70))
     unchanged = refresh.daily_theme_observation_job()
     assert first['written'] == 1 and unchanged['written'] == 0
     assert unchanged['observation_ids'] == first['observation_ids']
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=130))
     monkeypatch.setattr(tdx_boards, 'constituents', lambda _: ['000002.SZ'])
     changed = refresh.daily_theme_observation_job()
     assert changed['written'] == 1 and changed['observation_ids'] != first['observation_ids']
-    assert [doc['fetched_at'] for _, doc in stored_rows()] == [NOW.isoformat(), (NOW + timedelta(minutes=15)).isoformat()]
+    assert [doc['fetched_at'] for _, doc in stored_rows()] == [NOW.isoformat(), (NOW + timedelta(minutes=130)).isoformat()]
 
 
 def test_scheduler_status_projection_does_not_decode_observation_payload(monkeypatch):
@@ -153,7 +157,7 @@ def test_late_receipt_retries_then_stops_after_a_committed_batch(monkeypatch):
     monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [
         {'status': 'observed', 'rows': [{'symbol': '000001.SZ', 'has_valid_traded_bar': True}]},
     ])
-    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=60))
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=70))
     refreshed = refresh.daily_theme_observation_job()
     assert refreshed['written'] == 1  # Market-wide coverage can remain partial.
     monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=75))
@@ -174,7 +178,7 @@ def test_retry_fetches_only_boards_without_usable_stock_evidence(monkeypatch):
     monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [usable, {'status': 'read_failed', 'rows': None}])
     refresh.daily_job_with_factors()
     assert refresh.daily_theme_observation_job()['written'] == 2
-    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=15))
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=70))
     monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [usable])
     assert refresh.daily_theme_observation_job()['written'] == 1
     assert calls == [THEME, other, other]
@@ -195,6 +199,32 @@ def test_latest_capture_is_ordered_by_instant_not_offset_text():
     with WriteSessionLocal() as db:
         assert repo.boards_with_stock_evidence(db, day, {THEME}) == set()
     assert [doc['fetched_at'] for _, doc in stored_rows()] == ['2026-11-27T08:35:00+00:00', later['fetched_at']]
+
+
+def test_partial_stock_evidence_stays_incomplete_without_quarter_hour_gateway_repeats(monkeypatch):
+    from src.core import factor_stock_evidence
+    from src.db.factor_theme_observations import boards_with_stock_evidence
+
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
+    calls = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda board: calls.append(board) or ['000001.SZ'])
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [
+        {'status': 'no_valid_day_bar', 'rows': [{'symbol': '000001.SZ', 'trading_status': 'unknown'}]},
+    ])
+    refresh.daily_job_with_factors()
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW.replace(hour=9, minute=0))
+    assert refresh.daily_theme_observation_job()['written'] == 1
+    for minute in (15, 30):
+        monkeypatch.setattr(refresh, '_now_cn', lambda: NOW.replace(hour=9, minute=minute))
+        assert refresh.daily_theme_observation_job()['reason'] == 'deferred_board_retry'
+    assert calls == [THEME]
+    with WriteSessionLocal() as db:
+        assert not boards_with_stock_evidence(db, '2026-11-27', {THEME})
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW.replace(hour=9, minute=45))
+    second = refresh.daily_theme_observation_job()
+    assert second['written'] == 0 and calls == [THEME, THEME]
+    assert len(stored_rows()) == 1
 
 
 def test_retry_cron_is_opt_in_and_bounded_to_the_shanghai_session(monkeypatch):
