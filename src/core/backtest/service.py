@@ -13,7 +13,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 
 from src.core.backtest.data_adapter import (
-    MAX_FALLBACK_BARS, HistoryOutsideLookback, PriceBar, history_cutoff_day, load_price_history,
+    MAX_FALLBACK_BARS, HistoryAfterWindow, HistoryOutsideLookback, PriceBar, history_window, load_price_history,
 )
 from src.core.backtest.engine import Backtester, Signal, expected_trading_boundary, positive_trade_volume, valid_ohlc, valid_trade_price
 from src.core.trading_calendar import TradingCalendarError, is_trading_day
@@ -37,7 +37,7 @@ def _check_date(name: str, value: str | None) -> str | None:
         parsed = date.fromisoformat(value)
         if parsed.isoformat() == value:
             return value
-    except ValueError:
+    except (TypeError, ValueError):
         pass
     raise BacktestDateError(f"{name} 必须是有效的 YYYY-MM-DD 日期")
 
@@ -148,7 +148,8 @@ def run_backtest(
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
-    cutoff = history_cutoff_day(mkt, history_days, now).isoformat()
+    first_possible, ceiling = history_window(mkt, history_days, now)
+    cutoff = first_possible.isoformat()
     coverage_start = sample_start or cutoff
     expected_first = expected_trading_boundary(mkt, coverage_start)
     expected_last = expected_trading_boundary(mkt, end_date, right=True)
@@ -167,12 +168,15 @@ def run_backtest(
     skipped_symbols.extend(requested[MAX_SYMBOLS:])
     for code in requested[:MAX_SYMBOLS]:
         outside_fallback = None
+        after_fallback = None
         loaded = []
         if not outside_lookback and not no_market_sessions:
             try:
                 loaded = load_price_history(code, mkt, days=history_days, as_of=now)
             except HistoryOutsideLookback as exc:
                 outside_fallback = exc.latest_date
+            except HistoryAfterWindow as exc:
+                after_fallback = exc.first_date
         bars = loaded
         if end_date:
             bars = [bar for bar in bars if bar.date <= end_date]
@@ -182,6 +186,8 @@ def run_backtest(
             status = 'window_before_history_cutoff'
         elif outside_fallback is not None:
             status = 'history_before_lookback'
+        elif after_fallback is not None:
+            status = 'history_starts_after_window'
         elif not loaded:
             status = 'history_unavailable'
         elif not bars:
@@ -214,6 +220,7 @@ def run_backtest(
                               missing_sessions_between_bars=missing_sessions,
                               calendar_unverified_days_between_bars=unverified_days,
                               latest_fallback_bar_before_cutoff=outside_fallback,
+                              first_fallback_bar_after_ceiling=after_fallback,
                               nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
                               invalid_ohlc_bars=invalid_prices,
                               invalid_warmup_ohlc_bars=invalid_warmup,
@@ -262,6 +269,7 @@ def run_backtest(
             "history_days": history_days,
             "history_capped": history_capped,
             "history_cutoff_date": cutoff,
+            "history_ceiling_date": ceiling.isoformat(),
             "coverage_start_date": coverage_start,
             "fallback_bar_limit": min(history_days, MAX_FALLBACK_BARS),
         },
@@ -271,6 +279,7 @@ def run_backtest(
         "signals": len(signals),
         "skipped_signals": result.skipped,
         "execution_basis": "independent_signal_daily_bar",
+        "price_adjustment_basis": "qfq_visible_at_query_time_not_point_in_time",
         "portfolio_constraint": "none",
         "session_gap_basis": "calendar_sessions_without_a_bar_includes_possible_halts",
         "equity_basis": "initial_capital_then_daily_close",

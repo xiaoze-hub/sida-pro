@@ -72,6 +72,10 @@ def load_qfq_bars(symbol: str, market, days: int = 250, *, date_cutoff: date | N
             cutoff = datetime.combine(date_cutoff, time.min, CN_TRADING_TZ)
         ceiling = (datetime.combine(date_ceiling + timedelta(days=1), time.min, CN_TRADING_TZ)
                    if date_ceiling is not None else None)
+        params = {"s": symbol, "m": mc_str, "c": cutoff}
+        upper_predicate = "AND ts < :ce " if ceiling is not None else ""
+        if ceiling is not None:
+            params["ce"] = ceiling
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
@@ -81,11 +85,11 @@ def load_qfq_bars(symbol: str, market, days: int = 250, *, date_cutoff: date | N
                     "SELECT ts, open, high, low, close, volume, coalesce(source,'') AS src "
                     "FROM klines "
                     "WHERE symbol=:s AND market=:m AND period='1d' AND adjust='qfq' "
-                    "  AND ts >= :c AND (:ce IS NULL OR ts < :ce) "
+                    "  AND ts >= :c " + upper_predicate +
                     "  AND coalesce(source,'') IN ('tq','tencent') "
                     "ORDER BY ts ASC, CASE WHEN coalesce(source,'')='tq' THEN 0 ELSE 1 END"
                 ),
-                {"s": symbol, "m": mc_str, "c": cutoff, "ce": ceiling},
+                params,
             ).fetchall()
         by_day: dict[str, tuple[int, dict]] = {}
         for r in rows:

@@ -161,8 +161,7 @@ def test_history_cutoff_uses_bar_persistence_timezone_for_every_market():
     # Daily bars are persisted at Shanghai midnight for all markets, so the label
     # boundary follows Shanghai midnight rather than the exchange's own session.
     utc = datetime(2026, 11, 27, 18, tzinfo=timezone.utc)  # 02:00 Shanghai on the 28th.
-    assert history_cutoff_day(MarketCode.CN, 1, utc) == date(2026, 11, 27)
-    assert history_cutoff_day(MarketCode.US, 1, utc) == date(2026, 11, 27)
+    assert history_cutoff_day(1, utc) == date(2026, 11, 27)
 
 
 def test_ancient_start_is_capped(monkeypatch):
@@ -367,7 +366,7 @@ def test_naive_as_of_is_utc_not_host_local():
     from src.core.backtest.data_adapter import history_cutoff_day, history_window
 
     naive = datetime(2026, 11, 27, 18)
-    assert history_cutoff_day('CN', 1, naive) == date(2026, 11, 27)
+    assert history_cutoff_day(1, naive) == date(2026, 11, 27)
     # 02:00 Shanghai on the 28th: the first label is the 28th but the last final session is the 27th.
     assert history_window('CN', 0, naive) == (date(2026, 11, 27), date(2026, 11, 27))
 
@@ -425,18 +424,37 @@ def test_last_closed_session_excludes_the_intraday_provisional_bar():
     assert last_closed_session('CN', datetime(2026, 11, 21, 4, tzinfo=timezone.utc)) == date(2026, 11, 20)
 
 
+def test_final_bar_uses_market_clock_and_fails_conservatively_without_calendar():
+    from datetime import date, datetime, timezone
+    from src.core.backtest.data_adapter import last_closed_session
+
+    assert last_closed_session('HK', datetime(2026, 11, 27, 7, 30, tzinfo=timezone.utc)) == date(2026, 11, 26)
+    # Shanghai is already Saturday, but the Friday session in New York is still open.
+    assert last_closed_session('US', datetime(2026, 11, 27, 18, tzinfo=timezone.utc)) == date(2026, 11, 26)
+    assert last_closed_session('CN', datetime(2024, 11, 27, 2, tzinfo=timezone.utc)) == date(2024, 11, 26)
+
+
 def test_newer_than_ceiling_bars_are_not_reported_as_old_history(monkeypatch):
     from datetime import datetime, timezone
+    import pytest
     from src.collectors import kline_collector
-    from src.core.backtest import data_adapter
+    from src.core.backtest import data_adapter, service
     from src.db import klines_repo
 
     recent = [PriceBar('2026-12-10', 10, 11, 9, 10, 1000)]
     monkeypatch.setattr(klines_repo, 'load_qfq_bars', lambda *_a, **_kw: [])
     monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', lambda *_a, **_k: recent)
-    rows = data_adapter.load_price_history('600000', 'CN', days=30,
-                                           as_of=datetime(2026, 11, 27, 9, tzinfo=timezone.utc))
-    assert rows == []  # window mismatch, not "history is too old"
+    clock = datetime(2026, 11, 27, 9, tzinfo=timezone.utc)
+    with pytest.raises(data_adapter.HistoryAfterWindow) as error:
+        data_adapter.load_price_history('600000', 'CN', days=30, as_of=clock)
+    assert error.value.first_date == '2026-12-10'
+    monkeypatch.setattr(service, 'load_price_history',
+                        lambda *a, **kw: data_adapter.load_price_history(*a, days=kw['days'], as_of=clock))
+    report = service.run_backtest(symbols=['600000'])
+    coverage = report['data_coverage']['600000']
+    assert coverage['status'] == 'history_starts_after_window'
+    assert coverage['first_fallback_bar_after_ceiling'] == '2026-12-10'
+    assert report['price_adjustment_basis'] == 'qfq_visible_at_query_time_not_point_in_time'
 
 
 def test_metrics_basis_is_declared(monkeypatch):

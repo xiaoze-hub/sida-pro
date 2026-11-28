@@ -73,6 +73,7 @@ def run_once(
     initial_capital: float = 1_000_000.0,
     cash_per_trade: float = 100_000.0,
     participation_rate: float = 0.05,
+    sample_start: str | None = None,
     sample_end: str | None = None,
 ):
     """用给定参数跑一次金叉策略, 返回 BacktestResult。
@@ -94,8 +95,11 @@ def run_once(
         initial_capital=initial_capital,
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
+        sample_start=sample_start,
         sample_end=sample_end,
     )
+    if sample_start is not None:
+        signals = [signal for signal in signals if signal.signal_date >= sample_start]
     return bt.run(signals, bars_by_symbol)
 
 
@@ -140,10 +144,11 @@ def _slice(bars_by_symbol: dict, start: int, end: int | None) -> dict:
     return {k: v[start:end] for k, v in bars_by_symbol.items()}
 
 
-def _slice_end(bars: dict) -> str | None:
-    """Last observed date of a slice, so its final bar is not force-liquidated."""
-    dates = [v[-1].date for v in bars.values() if v]
-    return max(dates) if dates else None
+def _slice_bounds(bars: dict) -> tuple[str | None, str | None]:
+    """Observed bounds of this bar-index slice, shared by ranking and evaluation."""
+    nonempty = [v for v in bars.values() if v]
+    return (min((v[0].date for v in nonempty), default=None),
+            max((v[-1].date for v in nonempty), default=None))
 
 
 def walk_forward(
@@ -161,7 +166,8 @@ def walk_forward(
     """滚动验证: 训练窗选参(含 warmup), 测试窗只读评估。
 
     返回 {windows: [{train_end, test_start, test_end, best_params, is_score, oos_metrics}],
-          oos_summary: {windows, avg_sharpe, avg_return, total_trades}}
+          oos_summary: {windows, avg_sharpe, avg_return, total_trades, total_open_positions}}
+    窗口按各标的 K 线下标切分，不假定跨标的交易日对齐；边界只能由各切片决定。
     """
     if not bars_by_symbol:
         return {"windows": [], "oos_summary": {"windows": 0, "avg_sharpe": None,
@@ -170,17 +176,19 @@ def walk_forward(
     length = min(len(v) for v in bars_by_symbol.values())
     step = step or test_bars
     windows: list[dict] = []
+    strategy_kwargs = {k: v for k, v in run_kwargs.items() if k not in ('sample_start', 'sample_end')}
     pos = train_bars
     while pos + test_bars <= length:
         train = _slice(bars_by_symbol, 0, pos)
         test = _slice(bars_by_symbol, pos, pos + test_bars)
+        train_start, train_end = _slice_bounds(train)
         ranked = sweep(train, fasts=fasts, slows=slows, holdings=holdings, by=by,
-                       top_n=1, **run_kwargs)
+                       top_n=1, sample_start=train_start, sample_end=train_end, **strategy_kwargs)
         if ranked:
             best = ranked[0]
-            # Build once: an explicit sample_end in run_kwargs must not be passed twice.
-            oos_kwargs = {"sample_end": _slice_end(test), **run_kwargs}
-            oos = run_once(test, **best["params"], **oos_kwargs)
+            test_start, test_end = _slice_bounds(test)
+            oos = run_once(test, sample_start=test_start, sample_end=test_end,
+                           **best["params"], **strategy_kwargs)
             windows.append(
                 {
                     "train_end": pos,

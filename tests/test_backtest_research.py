@@ -78,3 +78,26 @@ def test_walk_forward_does_not_liquidate_on_the_window_end_bar():
 def test_walk_forward_empty_universe():
     out = walk_forward({})
     assert out["windows"] == [] and out["oos_summary"]["windows"] == 0
+
+
+def test_walk_forward_owns_both_slice_bounds_even_with_caller_overrides(monkeypatch):
+    from src.core.backtest import research
+
+    blocks = []
+    original = research.run_once
+
+    def record(bars, **kwargs):
+        result = original(bars, **kwargs)
+        blocks.append((bars, result))
+        return result
+
+    monkeypatch.setattr(research, 'run_once', record)
+    output = research.walk_forward({'X': _trend_bars(80)}, fasts=(3,), slows=(20,), holdings=(60,),
+                                   train_bars=60, test_bars=20, sample_start=None, sample_end=None)
+    assert output['oos_summary']['windows'] == 1
+    assert len(blocks) == 2
+    for bars, result in blocks:
+        assert result.sample_start == bars['X'][0].date
+        assert result.sample_end == bars['X'][-1].date
+        assert result.equity_dates[1] == result.sample_start
+        assert all(t.exit_reason != 'eod' for t in result.trades)
