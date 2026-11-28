@@ -36,7 +36,7 @@ from src.core.backtest import metrics as M
 from src.core.backtest.cost_model import CostModel
 from src.core.backtest.data_adapter import PriceBar, first_index_after
 from src.core.limit_rules import limit_down_price, limit_up_price
-from src.core.trading_calendar import add_trading_days
+from src.core.trading_calendar import TradingCalendarError, add_trading_days, is_trading_day, next_trading_day, prev_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +82,7 @@ class BTOpenPosition:
     mark_price: float
     buy_cash_delta: float
     unrealized_pnl: float
-    # history_end: the supplied bars stop before the requested boundary (may be a data
-    # gap or a non-trading-day boundary); sample_end means the boundary was reached.
+    # history_end: bars end before the last expected market session, not proof of a vendor gap.
     exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_end"]
 
 
@@ -179,13 +178,25 @@ def positive_trade_volume(value: float) -> float:
     return volume if math.isfinite(volume) and volume > 0 else 0.0
 
 
-def _valid_price(value: float | None) -> bool:
+def valid_trade_price(value: float | None) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
+def expected_trading_boundary(market: str, day: str | None, *, right: bool = False) -> str | None:
+    """First/last A-share session inside a calendar boundary; unverifiable stays unknown."""
+    if day is None or market.upper() not in {'CN', 'SH', 'SZ', 'BJ'}:
+        return None
+    try:
+        if is_trading_day(day):
+            return day
+        return (prev_trading_day(day) if right else next_trading_day(day)).isoformat()
+    except (TradingCalendarError, ValueError, OverflowError):
+        return None
 
 
 def _prev_close(bars: list[PriceBar], idx: int) -> float | None:
     """Limit prices need a usable prior close; NaN/None would crash the rounding helper."""
-    if idx <= 0 or not _valid_price(bars[idx - 1].close):
+    if idx <= 0 or not valid_trade_price(bars[idx - 1].close):
         return None
     return bars[idx - 1].close
 
@@ -224,7 +235,7 @@ class Backtester:
         bar = bars[idx]
         if not positive_trade_volume(bar.volume):
             return False
-        if not all(_valid_price(p) for p in (bar.open, bar.high, bar.low, bar.close)):
+        if not all(valid_trade_price(p) for p in (bar.open, bar.high, bar.low, bar.close)):
             return False
         dn = limit_down_price(signal.symbol, _prev_close(bars, idx), signal.is_st)
         if dn is None:
@@ -302,15 +313,14 @@ class Backtester:
                 reason = "t_plus_one"
             else:
                 last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
-                if self.sample_end is not None and latest_day < self.sample_end:
-                    reason = "history_end"
-                elif self.sample_end is not None and self._sellable(bars, last_idx, signal):
-                    reason = "sample_end"
+                if self.sample_end is not None and self._sellable(bars, last_idx, signal):
+                    expected_end = expected_trading_boundary(signal.market, self.sample_end, right=True)
+                    reason = "history_end" if expected_end and latest_day < expected_end else "sample_end"
                 else:
                     reason = "untradeable"
             mark = max(
                 (b for b in reversed(bars[entry_idx:])
-                 if b.date >= entry_day and _valid_price(b.close)),
+                 if b.date >= entry_day and valid_trade_price(b.close)),
                 key=lambda b: b.date, default=None,
             )
             mark_price = mark.close if mark is not None else entry_price
@@ -378,7 +388,7 @@ class Backtester:
 
         close_by_key: dict = {}
         for key, bars in bars_by_symbol.items():
-            close_by_key[key] = {b.date: b.close for b in bars if _valid_price(b.close)}
+            close_by_key[key] = {b.date: b.close for b in bars if valid_trade_price(b.close)}
 
         entries: dict[str, list[tuple[int, BTTrade | BTOpenPosition]]] = {}
         exits: dict[str, list[tuple[int, BTTrade]]] = {}

@@ -208,6 +208,16 @@ def test_sample_end_does_not_extend_stale_mark_on_unrelated_symbols(portfolio):
     assert outcome.equity_dates[-1] == D2
 
 
+@pytest.mark.parametrize('volume,reason', [(100_000, 'sample_end'), (0, 'untradeable')])
+def test_friday_last_bar_meets_saturday_cutoff(volume, reason):
+    friday = '2026-11-20'
+    bars = [bar(D2), bar(D3), bar(friday, volume=volume)]
+    outcome = Backtester(sample_end='2026-11-21').run([Signal(A, 'CN', D2)], {A: bars})
+    position, = outcome.open_positions
+    assert position.mark_date == friday
+    assert position.exit_blocked_reason == reason
+
+
 @pytest.mark.parametrize('portfolio', [False, True])
 def test_duplicate_final_day_keeps_legacy_sellable_sample_exit(portfolio):
     runner = PortfolioBacktester() if portfolio else Backtester()

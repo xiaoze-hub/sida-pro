@@ -193,14 +193,18 @@ def register_theme_observation(scheduler: BaseScheduler) -> bool:
 
 def daily_theme_observation_job() -> dict:
     """Separate optional gateway workload; requires a completed factor run today."""
-    from src.core.factor_theme_observation import capture_after_daily_refresh, factor_receipt_state
+    from src.core.factor_theme_observation import capture_after_daily_refresh, configured_boards, factor_receipt_state
     from src.core.trading_calendar import TradingCalendarError, is_trading_day
-    from src.db.factor_theme_observations import has_observations
+    from src.db.factor_theme_observations import boards_with_stock_evidence
     from src.db.session import WriteSessionLocal
 
     config = os.environ.get(_THEME_BOARDS_ENV, '').strip()
     if not config:
         return {'written': 0, 'reason': 'disabled'}
+    boards = configured_boards(config)
+    if not boards:
+        logger.warning('题材成员盘后观测未配置有效板块代码')
+        return {'written': 0, 'reason': 'invalid_board_config'}
     now = _now_cn()
     day = now.date()
     try:
@@ -223,9 +227,10 @@ def daily_theme_observation_job() -> dict:
         else:
             try:
                 with WriteSessionLocal() as db:
-                    if has_observations(db, day.isoformat()):
-                        return {'written': 0, 'reason': 'observation_already_committed'}
-                result = capture_after_daily_refresh(config, receipt, now=_now_cn)
+                    pending = boards - boards_with_stock_evidence(db, day.isoformat(), boards)
+                if not pending:
+                    return {'written': 0, 'reason': 'observation_already_committed'}
+                result = capture_after_daily_refresh(','.join(sorted(pending)), receipt, now=_now_cn)
             except Exception as exc:  # evidence failure cannot disturb committed factors
                 result = {'written': 0, 'reason': 'capture_failed'}
                 logger.error('题材成员盘后观测失败: date=%s error=%s', day, type(exc).__name__)

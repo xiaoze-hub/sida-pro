@@ -16,10 +16,9 @@ from src.db.factor_stock_evidence import FACTOR_FIELDS, load_stock_observations
 from src.db.klines_repo import CN_TRADING_TZ
 
 logger = logging.getLogger(__name__)
-# Global read budget, aligned with the caller's per-board reply cap. A selected roster
-# is stored whole (including unsupported identities), so the payload bound is
-# MAX_MEMBERS rows per admitted board rather than this read budget.
+# Query deduplicates symbols, while each admitted roster serializes every member.
 MAX_MEMBER_SLOTS = 6000
+MAX_EVIDENCE_ROWS = 12_000
 _SUPPORTED = re.compile(r'(?:(?:60|68)[0-9]{4}\.SH|(?:00|30)[0-9]{4}\.SZ)')
 
 
@@ -85,21 +84,22 @@ def capture(
         return []
     # Keep the global read budget but admit each roster whole. Smallest first
     # maximizes the number of complete rosters; ties retain input order.
-    selected: dict[int, set[str]] = {}
+    selected: list[int] = []
+    read_symbols: set[str] = set()
     result: list[dict] = [{'status': 'no_supported_members', 'rows': None} for _ in rosters]
-    remaining = MAX_MEMBER_SLOTS
+    remaining_rows = MAX_EVIDENCE_ROWS
     for i in sorted(range(len(rosters)), key=lambda idx: len(rosters[idx])):
         members = rosters[i]
         supported = {m[:6] for m in members if _SUPPORTED.fullmatch(m)}
         if not supported:
             continue
-        # Charge what is actually read; unsupported identities carry no query cost.
-        if len(supported) > remaining:
+        if len(read_symbols | supported) > MAX_MEMBER_SLOTS or len(members) > remaining_rows:
             result[i]['status'] = 'member_budget_exceeded'
             continue
-        selected[i] = supported
-        remaining -= len(supported)
-    symbols = sorted(set().union(*selected.values()))
+        selected.append(i)
+        read_symbols.update(supported)
+        remaining_rows -= len(members)
+    symbols = sorted(read_symbols)
 
     def unavailable(reason: str) -> list[dict]:
         for i in selected:
@@ -125,8 +125,13 @@ def capture(
         return unavailable('incomplete_read')
     for i in selected:
         rows = [_row(member, data[member[:6]] if _SUPPORTED.fullmatch(member) else None) for member in rosters[i]]
+        status = 'observed'
+        if any(row['status'] == 'bar_timestamp_unverified' for row in rows):
+            status = 'partial'
+        elif not any(row['has_valid_traded_bar'] is True for row in rows):
+            status = 'no_valid_day_bar'
         result[i] = {
-            'status': 'partial' if any(row['status'] == 'bar_timestamp_unverified' for row in rows) else 'observed',
+            'status': status,
             'read_started_at': _stamp(started), 'read_finished_at': _stamp(finished),
             'source': 'primary_db_visible_rows', 'factor_lineage_verified': False,
             'rows': rows,

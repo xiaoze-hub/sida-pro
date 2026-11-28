@@ -104,13 +104,20 @@ def _normalize_reply(reply: list[str] | None) -> tuple[str, list[str] | None]:
     return ('observed', sorted(set(reply))) if reply else ('source_empty', [])
 
 
+def configured_boards(board_config: str) -> set[str]:
+    boards = {code.strip().upper() for code in board_config.split(',') if code.strip()}
+    if (not 1 <= len(boards) <= MAX_BOARDS
+            or any(not _BOARD.fullmatch(code) or code in tdx_boards.EXCLUDED_SECTORS for code in boards)):
+        return set()
+    return boards
+
+
 def capture_after_daily_refresh(
     board_config: str, stats: dict, *, now: Callable[[], datetime],
 ) -> dict:
     """Consume only actual coverage/factor receipts from the scheduler; no backfill or ranking."""
-    boards = {code.strip().upper() for code in board_config.split(',')}
-    if (not 1 <= len(boards) <= MAX_BOARDS
-            or any(not _BOARD.fullmatch(code) or code in tdx_boards.EXCLUDED_SECTORS for code in boards)):
+    boards = configured_boards(board_config)
+    if not boards:
         return {'written': 0, 'reason': 'invalid_board_config'}
     if stats.get('coverage_receipt_persisted') is not True:
         return {'written': 0, 'reason': 'receipt_not_persisted'}

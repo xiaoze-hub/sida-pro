@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from src.db.dialect import insert_ignore_sql
@@ -28,12 +28,25 @@ def _statement(dialect: str):
     )), False
 
 
-def has_observations(db: Session, trade_date: str) -> bool:
-    """Check the writer, not a replica, before retrying the daily batch."""
+def boards_with_stock_evidence(db: Session, trade_date: str, boards: set[str]) -> set[str]:
+    """Read the latest committed record for each requested board on the writer."""
+    if not boards:
+        return set()
     pin_write_bind(db)
-    return bool(db.execute(text(
-        'SELECT EXISTS (SELECT 1 FROM factor_theme_observations WHERE trade_date = :day)',
-    ), {'day': trade_date}).scalar_one())
+    latest = text('''
+        SELECT board_code, payload FROM (
+            SELECT board_code, payload,
+                   ROW_NUMBER() OVER (PARTITION BY board_code ORDER BY fetched_at DESC, observation_id DESC) AS recency
+            FROM factor_theme_observations WHERE trade_date = :day AND board_code IN :boards
+        ) AS ranked WHERE recency = 1
+    ''').bindparams(bindparam('boards', expanding=True))
+    complete: set[str] = set()
+    with db.execute(latest, {'day': trade_date, 'boards': sorted(boards)}) as result:
+        for code, payload in result:
+            doc = json.loads(payload)
+            if doc.get('status') == 'observed' and (doc.get('stock_evidence') or {}).get('status') == 'observed':
+                complete.add(code)
+    return complete
 
 
 def append_observations(db: Session, observations: list[dict]) -> tuple[list[str], int]:

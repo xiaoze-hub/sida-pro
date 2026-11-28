@@ -12,8 +12,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 
 from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, load_price_history
-from src.core.backtest.engine import Backtester, Signal, positive_trade_volume
-from src.core.trading_calendar import TradingCalendarError, is_trading_day, next_trading_day
+from src.core.backtest.engine import Backtester, Signal, expected_trading_boundary, positive_trade_volume, valid_trade_price
 
 MIN_BARS = 30
 MIN_HISTORY_DAYS = 30
@@ -36,15 +35,6 @@ def _check_date(name: str, value: str | None) -> str | None:
     except ValueError:
         pass
     raise BacktestDateError(f"{name} 必须是有效的 YYYY-MM-DD 日期")
-
-
-def _expected_window_start(market: str, start: str | None) -> str | None:
-    if start is None or market not in {'CN', 'SH', 'SZ', 'BJ'}:
-        return None
-    try:
-        return start if is_trading_day(start) else next_trading_day(start).isoformat()
-    except TradingCalendarError:
-        return None
 
 
 def _golden_cross_signals(
@@ -120,7 +110,8 @@ def run_backtest(
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
-    expected_first = _expected_window_start(mkt, sample_start)
+    expected_first = expected_trading_boundary(mkt, sample_start)
+    expected_last = expected_trading_boundary(mkt, end_date, right=True)
     bars_by_symbol: dict = {}
     signals: list[Signal] = []
     skipped_symbols: list[str] = []
@@ -133,7 +124,9 @@ def run_backtest(
         bars = loaded
         if end_date:
             bars = [bar for bar in bars if bar.date <= end_date]
-        if not loaded:
+        if expected_first and expected_last and expected_first > expected_last:
+            status = 'no_market_sessions'
+        elif not loaded:
             status = 'history_unavailable'
         elif not bars:
             status = 'history_starts_after_window'
@@ -152,16 +145,21 @@ def run_backtest(
             # This compares to the market calendar; it does not assert a vendor gap.
             truncated = loaded_first > expected_first
         window_bars = [bar for bar in bars if not sample_start or bar.date >= sample_start]
+        invalid_prices = sum(
+            not all(valid_trade_price(price) for price in (bar.open, bar.high, bar.low, bar.close))
+            for bar in window_bars
+        )
         coverage[code] = dict(status=status, loaded_first=loaded_first,
                               loaded_last=loaded[-1].date if loaded else None,
                               window_last=window_last,
                               bars_through_end=len(bars),
                               bars_in_window=len(window_bars),
                               nonpositive_or_unknown_volume_bars=sum(not positive_trade_volume(bar.volume) for bar in window_bars),
+                              invalid_ohlc_bars=invalid_prices,
                               expected_first_trading_date=expected_first,
+                              expected_last_trading_date=expected_last,
                               window_truncated=truncated,
-                              # A non-trading-day boundary also produces this; it is not proof of missing data.
-                              end_after_last_bar=bool(end_date and window_last and window_last < end_date))
+                              end_after_last_bar=(window_last < expected_last if window_last and expected_last else None))
         if status != 'usable':
             skipped_symbols.append(code)
             continue

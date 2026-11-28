@@ -101,6 +101,8 @@ def test_separate_job_requires_a_same_day_completion_receipt(monkeypatch):
 
 
 def test_late_receipt_retries_then_stops_after_a_committed_batch(monkeypatch):
+    from src.core import factor_stock_evidence
+
     install_upstream(monkeypatch)
     monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', THEME)
     calls = []
@@ -108,11 +110,39 @@ def test_late_receipt_retries_then_stops_after_a_committed_batch(monkeypatch):
     assert refresh.daily_theme_observation_job()['reason'] == 'factor_receipt_missing'
     monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=45))
     refresh.daily_job_with_factors()
-    assert refresh.daily_theme_observation_job()['written'] == 1
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-26')
+    first = refresh.daily_theme_observation_job()
+    assert first['written'] == 1 and first['status'] == 'degraded'
+    monkeypatch.setattr(tdx_boards, 'latest_trade_date', lambda: '2026-11-27')
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [
+        {'status': 'observed', 'rows': [{'symbol': '000001.SZ', 'has_valid_traded_bar': True}]},
+    ])
     monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=60))
+    refreshed = refresh.daily_theme_observation_job()
+    assert refreshed['written'] == 1  # Market-wide coverage can remain partial.
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=75))
     assert refresh.daily_theme_observation_job()['reason'] == 'observation_already_committed'
-    assert calls == [THEME]
-    assert len(stored_rows()) == 1
+    assert calls == [THEME, THEME]
+    assert len(stored_rows()) == 2
+
+
+def test_retry_fetches_only_boards_without_usable_stock_evidence(monkeypatch):
+    from src.core import factor_stock_evidence
+
+    other = '880742.SH'
+    install_upstream(monkeypatch)
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', f'{THEME},{other}')
+    calls = []
+    monkeypatch.setattr(tdx_boards, 'constituents', lambda board: calls.append(board) or ['000001.SZ'])
+    usable = {'status': 'observed', 'rows': [{'symbol': '000001.SZ', 'has_valid_traded_bar': True}]}
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [usable, {'status': 'read_failed', 'rows': None}])
+    refresh.daily_job_with_factors()
+    assert refresh.daily_theme_observation_job()['written'] == 2
+    monkeypatch.setattr(refresh, '_now_cn', lambda: NOW + timedelta(minutes=15))
+    monkeypatch.setattr(factor_stock_evidence, 'capture', lambda *_a, **_kw: [usable])
+    assert refresh.daily_theme_observation_job()['written'] == 1
+    assert calls == [THEME, other, other]
+    assert refresh.daily_theme_observation_job()['reason'] == 'observation_already_committed'
 
 
 def test_retry_cron_is_opt_in_and_bounded_to_the_shanghai_session(monkeypatch):
@@ -162,7 +192,7 @@ def test_ineligible_run_does_not_fetch_members(monkeypatch, selector, persisted,
 
 def test_lowercase_board_config_is_normalized(monkeypatch):
     install_upstream(monkeypatch)
-    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', '880741.sh')
+    monkeypatch.setenv('SIDA_FACTOR_THEME_OBSERVATION_BOARDS', ' ,880741.sh,, ')
     seen = []
     monkeypatch.setattr(tdx_boards, 'constituents', lambda code: seen.append(code) or ['000001.SZ'])
     result = collect_then_observe()['theme_observation']

@@ -69,13 +69,35 @@ def test_small_roster_survives_large_roster_without_truncation(monkeypatch):
         DAY, [['000002.SZ', '000003.SZ'], ['000001.SZ'], ['000002.SZ']], earliest=NOW, now=lambda: NOW,
     )
     assert large == second == {'status': 'member_budget_exceeded', 'rows': None}
-    assert small['status'] == 'observed' and len(small['rows']) == 1
+    assert small['status'] == 'no_valid_day_bar' and len(small['rows']) == 1
 
 
 def test_only_unsupported_members_never_claim_a_database_read(monkeypatch):
     monkeypatch.setattr(evidence, 'load_stock_observations', lambda *_: pytest.fail('must not read'))
     batch, = evidence.capture(DAY, [['920001.BJ']], earliest=NOW, now=lambda: NOW)
     assert batch == {'status': 'no_supported_members', 'rows': None}
+
+
+def test_overlapping_boards_only_charge_new_symbols_to_the_read_budget(monkeypatch):
+    monkeypatch.setattr(evidence, 'MAX_MEMBER_SLOTS', 2)
+
+    def read(_day, symbols):
+        assert symbols == ['000001', '000002']
+        return {symbol: {} for symbol in symbols}
+
+    monkeypatch.setattr(evidence, 'load_stock_observations', read)
+    rosters = [['000001.SZ'], ['000001.SZ', '000002.SZ']]
+    batches = evidence.capture(DAY, rosters, earliest=NOW, now=lambda: NOW)
+    assert [[row['symbol'] for row in batch['rows']] for batch in batches] == rosters
+
+
+def test_read_dedup_does_not_remove_per_roster_payload_budget(monkeypatch):
+    monkeypatch.setattr(evidence, 'MAX_EVIDENCE_ROWS', 2)
+    monkeypatch.setattr(evidence, 'load_stock_observations', lambda _day, symbols: {symbol: {} for symbol in symbols})
+    roster = ['000001.SZ', '920001.BJ']
+    first, second = evidence.capture(DAY, [roster, roster], earliest=NOW, now=lambda: NOW)
+    assert [row['symbol'] for row in first['rows']] == roster
+    assert second == {'status': 'member_budget_exceeded', 'rows': None}
 
 
 def test_decimal_and_naive_timestamp_are_kept_separate(monkeypatch):

@@ -199,3 +199,16 @@ def test_volume_without_positive_evidence_is_disclosed_in_window(monkeypatch):
     coverage = service.run_backtest(symbols=['600000'], start_date='2026-07-01', end_date='2026-07-02')['data_coverage']['600000']
     assert coverage['bars_in_window'] == 2
     assert coverage['nonpositive_or_unknown_volume_bars'] == 2
+
+
+def test_invalid_prices_and_market_adjusted_end_are_disclosed(monkeypatch):
+    from dataclasses import replace
+    from src.core.backtest import service
+
+    prefix = _bars()[:30]
+    bars = [*prefix, replace(prefix[0], date='2026-11-20', close=float('nan'))]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: bars)
+    coverage = service.run_backtest(symbols=['600000'], start_date='2026-11-20', end_date='2026-11-21')['data_coverage']['600000']
+    assert coverage['invalid_ohlc_bars'] == 1
+    assert coverage['expected_last_trading_date'] == '2026-11-20'
+    assert coverage['end_after_last_bar'] is False
