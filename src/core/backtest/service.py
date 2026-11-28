@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date
 
-from src.core.backtest.data_adapter import load_price_history
+from src.core.backtest.data_adapter import MAX_FALLBACK_BARS, load_price_history
 from src.core.backtest.engine import Backtester, Signal
 
 MIN_BARS = 30
@@ -95,12 +95,16 @@ def run_backtest(
         raise BacktestDateError('start_date 不得晚于 end_date')
     # load_qfq_bars cuts relative to now; stretch the lookback so an older
     # requested start is not silently reported as fully covered.
-    history_days = max(int(days), 30)
-    if start_date:
-        history_days = max(history_days, (date.today() - date.fromisoformat(start_date)).days + 60)
-    if end_date:
-        # End-only requests must still reach `days` back from the requested end.
-        history_days = max(history_days, (date.today() - date.fromisoformat(end_date)).days + int(days) + 60)
+    requested_days = max(int(days), MIN_BARS)
+    sample_start = start_date
+    if sample_start is None and end_date:
+        # End-only requests are anchored to their own end, not to today's date.
+        first_ordinal = max(1, date.fromisoformat(end_date).toordinal() - requested_days)
+        sample_start = date.fromordinal(first_ordinal).isoformat()
+    history_days = requested_days
+    if sample_start:
+        # Keep the extra history for signal warmup, outside the measured sample.
+        history_days = max(history_days, (date.today() - date.fromisoformat(sample_start)).days + 60)
     history_capped = history_days > MAX_HISTORY_DAYS
     history_days = min(history_days, MAX_HISTORY_DAYS)
     mkt = (market or "CN").strip().upper() or "CN"
@@ -118,19 +122,21 @@ def run_backtest(
             bars = [bar for bar in bars if bar.date <= end_date]
         if not loaded:
             status = 'history_unavailable'
-        elif not bars or (start_date and bars[-1].date < start_date):
+        elif not bars or (sample_start and bars[-1].date < sample_start):
             status = 'no_bars_in_window'
         elif len(bars) < MIN_BARS:
             status = 'insufficient_history'
         else:
             status = 'usable'
+        window_last = bars[-1].date if bars and (not sample_start or bars[-1].date >= sample_start) else None
         coverage[code] = dict(status=status, loaded_first=loaded[0].date if loaded else None,
                               loaded_last=loaded[-1].date if loaded else None,
+                              window_last=window_last,
                               bars_through_end=len(bars),
-                              bars_in_window=sum(not start_date or bar.date >= start_date for bar in bars),
-                              window_truncated=bool(start_date and loaded and loaded[0].date > start_date),
+                              bars_in_window=sum(not sample_start or bar.date >= sample_start for bar in bars),
+                              window_truncated=bool(sample_start and loaded and loaded[0].date > sample_start),
                               # A non-trading-day boundary also produces this; it is not proof of missing data.
-                              end_after_last_bar=bool(end_date and loaded and loaded[-1].date < end_date))
+                              end_after_last_bar=bool(end_date and window_last and window_last < end_date))
         if status != 'usable':
             skipped_symbols.append(code)
             continue
@@ -138,7 +144,7 @@ def run_backtest(
         signals.extend(
             _golden_cross_signals(
                 code, mkt, bars,
-                start_date=start_date, end_date=end_date,
+                start_date=sample_start, end_date=end_date,
                 holding_days=holding_days, stop_pct=stop_pct, target_pct=target_pct,
             )
         )
@@ -148,7 +154,7 @@ def run_backtest(
         cash_per_trade=cash_per_trade,
         participation_rate=participation_rate,
         sample_end=end_date,
-        sample_start=start_date,
+        sample_start=sample_start,
     )
     result = bt.run(signals, bars_by_symbol)
     return {
@@ -156,6 +162,7 @@ def run_backtest(
             "market": mkt,
             "start_date": start_date or "",
             "end_date": end_date or "",
+            "effective_start_date": sample_start or "",
             "holding_days": holding_days,
             "stop_pct": stop_pct,
             "target_pct": target_pct,
@@ -166,6 +173,7 @@ def run_backtest(
             "sample_end_policy": "mark_open_without_forced_exit" if end_date else "legacy_liquidate_if_sellable",
             "history_days": history_days,
             "history_capped": history_capped,
+            "fallback_bar_limit": min(history_days, MAX_FALLBACK_BARS),
         },
         "universe": sorted(bars_by_symbol.keys(), key=lambda k: k[0]),
         "skipped_symbols": skipped_symbols,

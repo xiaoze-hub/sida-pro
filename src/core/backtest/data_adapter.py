@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
+# Latest daily bars retained by the collector fallback; deep history is PG-first.
+MAX_FALLBACK_BARS = 800
 
 
 @dataclass(frozen=True)
@@ -46,7 +49,7 @@ def from_klines(klines) -> list[PriceBar]:
 
 
 def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
-    """优先从 PG klines 表查; 库里没有或不够再 fallback 到 KlineCollector 实时拉。
+    """按自然日回看 PG；只有无库内结果时才走有独立日 K 根数上限的兜底。
 
     2026-08-17: 引入 TimescaleDB hypertable, K线持久化后, 回测不再每次联网。
     性能: 查库 ~70ms, 联网 ~500ms (单只股 800 天)。
@@ -57,9 +60,9 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
     #    回测序列必须与主源同为前复权, 严禁混入 none 原始价)
     from src.db.klines_repo import load_qfq_bars
 
-    rows = load_qfq_bars(symbol, market, days)
+    calendar_days = max(1, int(days))
+    rows = load_qfq_bars(symbol, market, calendar_days)
     if rows:
-        # 库里有数据就直接用(用户传 days 只是 hint, 实际取所有行)
         return [
             PriceBar(
                 date=r["date"],
@@ -72,7 +75,8 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
             for r in rows
         ]
 
-    # 2. Fallback: 走 KlineCollector 拉
+    # 2. Collector 的 days 是日 K 根数，不是 PG 的自然日跨度。日期越早，
+    # 只放宽 PG 查库范围，不让回退的取数门槛突破固定预算。
     from src.collectors.kline_collector import KlineCollector
     from src.models.market import MarketCode
 
@@ -80,12 +84,15 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
         mc = market if isinstance(market, MarketCode) else MarketCode(str(market).upper())
     except Exception:
         mc = MarketCode.CN
+    fallback_bars = min(calendar_days, MAX_FALLBACK_BARS)
     try:
-        klines = KlineCollector(mc).get_klines(symbol, days=days)
+        klines = KlineCollector(mc).get_klines(symbol, days=fallback_bars)
     except Exception as e:
         logger.warning(f"[回测] 拉取 {symbol} K线失败: {e}")
         return []
-    return from_klines(klines)
+    # 按日历截掉兜底序列中超出回看范围的旧柱；根数上限仍可能缩短左端覆盖。
+    cutoff_day = (datetime.now(timezone.utc) - timedelta(days=calendar_days)).date().isoformat()
+    return [bar for bar in from_klines(klines)[-fallback_bars:] if bar.date >= cutoff_day]
 
 
 def first_index_after(bars: list[PriceBar], date: str) -> int | None:

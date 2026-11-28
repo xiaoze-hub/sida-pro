@@ -71,9 +71,28 @@ def test_end_only_old_window_still_loads(monkeypatch):
 
     monkeypatch.setattr(service, 'load_price_history', load)
     result = service.run_backtest(symbols=['600000'], end_date=end)
-    assert seen['days'] >= 1200
+    assert seen['days'] == 2060
     assert result['data_coverage']['600000']['status'] == 'usable'
-    assert result['data_coverage']['600000']['window_truncated'] is False
+    assert result['data_coverage']['600000']['window_truncated'] is True
+
+
+def test_end_only_window_excludes_warmup_from_reported_coverage(monkeypatch):
+    from datetime import date, timedelta
+    from src.core.backtest import service
+
+    end = date(2026, 6, 30)
+    loaded = [
+        PriceBar(date=(end - timedelta(days=offset)).isoformat(), open=10, high=10,
+                 low=10, close=10, volume=1000)
+        for offset in range(60, -1, -1)
+    ]
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: loaded)
+    result = service.run_backtest(symbols=['600000'], end_date=end.isoformat(), days=30)
+
+    coverage = result['data_coverage']['600000']
+    assert coverage['bars_through_end'] == 61
+    assert coverage['bars_in_window'] == 31
+    assert coverage['window_truncated'] is False
 
 
 def test_run_backtest_skips_short_history(monkeypatch):
@@ -104,3 +123,45 @@ def test_ancient_start_is_capped(monkeypatch):
     result = service.run_backtest(symbols=['600000'], start_date='1990-01-01')
     assert seen['days'] == service.MAX_HISTORY_DAYS
     assert result['params']['history_capped'] is True
+
+
+def test_end_coverage_uses_last_bar_inside_requested_window(monkeypatch):
+    from dataclasses import replace
+    from src.core.backtest import service
+
+    sample = _bars()[:30]
+    later = replace(sample[-1], date='2026-07-06')
+    monkeypatch.setattr(service, 'load_price_history', lambda *_a, **_kw: [*sample, later])
+    result = service.run_backtest(symbols=['600000'], end_date='2026-07-03')
+
+    coverage = result['data_coverage']['600000']
+    assert coverage['status'] == 'usable'
+    assert coverage['loaded_last'] == '2026-07-06'
+    assert coverage['bars_in_window'] == len(sample)
+    assert coverage['end_after_last_bar'] is True
+
+
+def test_old_window_widens_pg_cutoff_not_collector_bar_budget(monkeypatch):
+    from datetime import date, timedelta
+    from src.collectors import kline_collector
+    from src.core.backtest import service
+    from src.db import klines_repo
+
+    calls = {}
+
+    def read(_symbol, _market, days):
+        calls['pg_days'] = days
+        return []
+
+    def collect(_self, _symbol, days, adjust='qfq'):
+        calls['collector_bars'] = days
+        assert adjust == 'qfq'
+        return []
+
+    monkeypatch.setattr(klines_repo, 'load_qfq_bars', read)
+    monkeypatch.setattr(kline_collector.KlineCollector, 'get_klines', collect)
+    end = (date.today() - timedelta(days=2400)).isoformat()
+    result = service.run_backtest(symbols=['600000'], end_date=end, days=800)
+
+    assert calls == {'pg_days': 3260, 'collector_bars': 800}
+    assert result['data_coverage']['600000']['status'] == 'history_unavailable'
