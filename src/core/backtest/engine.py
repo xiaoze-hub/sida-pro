@@ -27,15 +27,16 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Callable
+from typing import Callable, Literal
 
 from src.core.backtest import metrics as M
 from src.core.backtest.cost_model import CostModel
 from src.core.backtest.data_adapter import PriceBar, first_index_after
 from src.core.limit_rules import limit_down_price, limit_up_price
-from src.core.trading_calendar import add_trading_days
+from src.core.trading_calendar import TradingCalendarError, add_trading_days, is_trading_day, next_trading_day, prev_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,21 @@ class BTTrade:
     holding_bars: int
 
 
+@dataclass(frozen=True)
+class BTOpenPosition:
+    symbol: str
+    market: str
+    entry_date: str
+    entry_price: float
+    quantity: int
+    mark_date: str | None  # None = 未观测到有效收盘，净值暂按入场价计
+    mark_price: float
+    buy_cash_delta: float
+    unrealized_pnl: float
+    # history_end: bars end before the last expected market session, not proof of a vendor gap.
+    exit_blocked_reason: Literal["t_plus_one", "untradeable", "sample_end", "history_end", "boundary_unverified"]
+
+
 @dataclass
 class BacktestResult:
     trades: list[BTTrade]
@@ -80,6 +96,7 @@ class BacktestResult:
     skipped: int = 0
     skipped_cash: int = 0   # B2.1: 因现金不足被跳过
     skipped_slots: int = 0  # B2.1: 因并发持仓上限被跳过
+    open_positions: list[BTOpenPosition] = field(default_factory=list)
 
 
 PositionSizer = Callable[[float], int]  # price -> qty
@@ -93,36 +110,44 @@ def simulate_exit(
     target: float | None,
     max_hold: int,
     sellable: Callable[[int], bool] | None = None,
-) -> tuple[float, str, str, int]:
-    """逐日止损/止盈/到期撮合(B2.1 抽出, 供单笔与组合引擎共用, 行为零变更)。
+    close_at_sample_end: bool = True,
+) -> tuple[float, str, str, int] | None:
+    """逐日止损/止盈/到期撮合，供单笔与组合引擎共用。
 
     返回 (exit_price, exit_date, exit_reason, holding_bars)。
     - T+1: 入场日当天不检查(从 entry_idx+1 起);
     - 跳空: 开盘已越过止损/止盈按开盘价成交;
     - 一字跌停(sellable(j)=False)时止损/到期顺延到下一可成交日;
-    - 全程未触发 → 最后一根收盘(eod)。
+    - `eod` 只在最后一个实际推进的日期可卖时成交；若末日无法卖出，返回 None
+      并保留未平仓头寸。绝不倒填到较早的可卖日。
     """
     is_sellable = sellable or (lambda _j: True)
+    last_day = bars[entry_idx].date
+    held = 0
+    final_session_fill = None
     for j in range(entry_idx + 1, len(bars)):
-        held = j - entry_idx
         bar = bars[j]
+        if bar.date <= last_day:
+            continue
+        last_day = bar.date
+        held += 1
+        can_sell = is_sellable(j)
+        final_session_fill = (bar.close, bar.date, 'eod', held) if can_sell else None
+        if not can_sell:
+            continue
         if stop and stop > 0:
             if bar.open <= stop:  # 跳空跌破
-                if is_sellable(j):
-                    return bar.open, bar.date, "stop_loss", held
+                return bar.open, bar.date, "stop_loss", held
             elif bar.low <= stop:
-                if is_sellable(j):
-                    return stop, bar.date, "stop_loss", held
+                return stop, bar.date, "stop_loss", held
         if target and target > 0:
             if bar.open >= target:  # 跳空冲高
                 return bar.open, bar.date, "target", held
             if bar.high >= target:
                 return target, bar.date, "target", held
         if held >= max_hold:
-            if is_sellable(j):
-                return bar.close, bar.date, "expire", held
-    last = bars[-1]
-    return last.close, last.date, "eod", len(bars) - 1 - entry_idx
+            return bar.close, bar.date, "expire", held
+    return final_session_fill if close_at_sample_end else None
 
 
 def fixed_cash_sizer(cash_per_trade: float, lot: int = 100) -> PositionSizer:
@@ -144,6 +169,37 @@ def _parse_day(s):
         return None
 
 
+def positive_trade_volume(value: float) -> float:
+    try:
+        volume = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return volume if math.isfinite(volume) and volume > 0 else 0.0
+
+
+def valid_trade_price(value: float | None) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
+def expected_trading_boundary(market: str | None, day: str | None, *, right: bool = False) -> str | None:
+    """First/last A-share session inside a calendar boundary; unverifiable stays unknown."""
+    if day is None or not isinstance(market, str) or market.upper() not in {'CN', 'SH', 'SZ', 'BJ'}:
+        return None
+    try:
+        if is_trading_day(day):
+            return day
+        return (prev_trading_day(day) if right else next_trading_day(day)).isoformat()
+    except (TradingCalendarError, ValueError, OverflowError):
+        return None
+
+
+def _prev_close(bars: list[PriceBar], idx: int) -> float | None:
+    """Limit prices need a usable prior close; NaN/None would crash the rounding helper."""
+    if idx <= 0 or not valid_trade_price(bars[idx - 1].close):
+        return None
+    return bars[idx - 1].close
+
+
 class Backtester:
     def __init__(
         self,
@@ -153,54 +209,61 @@ class Backtester:
         lot: int = 100,
         sizer: PositionSizer | None = None,
         participation_rate: float = 0.05,
+        *,
+        sample_end: str | None = None,
+        sample_start: str | None = None,
     ) -> None:
         self.cost = cost_model or CostModel()
         self.initial_capital = float(initial_capital)
         self.lot = max(1, int(lot))
         self.participation_rate = max(0.0, float(participation_rate))
+        self.sample_end = sample_end
+        self.sample_start = sample_start
         self.sizer = sizer or fixed_cash_sizer(cash_per_trade, lot)
 
     def _buyable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
         """一字涨停(全天封死)时买不进 → False; 无法判定(非 A 股代码/缺昨收) → True。"""
-        up = limit_up_price(
-            signal.symbol, bars[idx - 1].close if idx > 0 else None, signal.is_st
-        )
+        up = limit_up_price(signal.symbol, _prev_close(bars, idx), signal.is_st)
         if up is None:
             return True
         bar = bars[idx]
         return not (bar.open >= up - 1e-9 and bar.high <= up + 1e-9)
 
     def _sellable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
-        """一字跌停(全天封死)时卖不出 → False; 无法判定 → True。"""
-        dn = limit_down_price(
-            signal.symbol, bars[idx - 1].close if idx > 0 else None, signal.is_st
-        )
+        """无有效成交量或一字跌停不可卖；缺限价时保留日线模型原假设。"""
+        bar = bars[idx]
+        if not positive_trade_volume(bar.volume):
+            return False
+        if not all(valid_trade_price(p) for p in (bar.open, bar.high, bar.low, bar.close)):
+            return False
+        dn = limit_down_price(signal.symbol, _prev_close(bars, idx), signal.is_st)
         if dn is None:
             return True
-        bar = bars[idx]
         return not (bar.open <= dn + 1e-9 and bar.low >= dn - 1e-9)
 
     def _cap_qty(self, qty: int, volume: float) -> int:
         """按当日成交量参与率裁剪(向下取整到一手); 无成交量数据 → 0(保守不可成交)。"""
-        try:
-            vol = float(volume or 0.0)
-        except Exception:
-            vol = 0.0
+        vol = positive_trade_volume(volume)
         if vol <= 0 or qty <= 0:
             return 0
         cap = int(vol * self.participation_rate)
         cap = (cap // self.lot) * self.lot
         return int(min(int(qty), cap))
 
-    def run_single(self, signal: Signal, bars: list[PriceBar]) -> BTTrade | None:
+    def run_single(self, signal: Signal, bars: list[PriceBar]) -> BTTrade | BTOpenPosition | None:
         """单信号回测:下一交易日开盘入场,逐日止损/止盈/到期平仓。
 
         B0.2(2026-09-09): 涨跌停不可成交 —— 一字涨停买不进(顺延到下一可成交日,
         全程封板则该信号作废); 一字跌停卖不出(止损/到期顺延); 成交量参与率上限
         (单笔 ≤ 当日成交量 × participation_rate, 不足一手则顺延/作废)。
+        买入后未能卖出返回 BTOpenPosition；没有买入则返回 None。
         """
         if not bars:
             return None
+        if self.sample_end is not None:
+            bars = [b for b in bars if b.date <= self.sample_end]
+            if not bars:
+                return None
         ei = first_index_after(bars, signal.signal_date)
         if ei is None or ei >= len(bars):
             return None
@@ -224,24 +287,62 @@ class Backtester:
         target = signal.target_price
         max_hold = max(1, int(signal.holding_days or 10))
 
-        # B2.1: 出场撮合抽到 simulate_exit(单笔/组合引擎共用), 行为与原实现一致
-        exit_price, exit_date, exit_reason, held = simulate_exit(
+        exit_fill = simulate_exit(
             bars,
             entry_idx,
             stop=stop,
             target=target,
             max_hold=max_hold,
             sellable=lambda j: self._sellable(bars, j, signal),
+            close_at_sample_end=self.sample_end is None,
         )
+        return self._position_result(signal, bars, entry_idx, entry_price, qty, exit_fill)
 
+    def _position_result(
+        self, signal: Signal, bars: list[PriceBar], entry_idx: int, entry_price: float, qty: int,
+        exit_fill: tuple[float, str, str, int] | None,
+    ) -> BTTrade | BTOpenPosition:
+        if exit_fill is None:
+            buy = self.cost.fill("buy", entry_price, qty)
+            entry_day = bars[entry_idx].date
+            latest_day = max(b.date for b in bars[entry_idx:])
+            # Only label a reason the bars actually support: an explicit window leaves
+            # the position open by choice, not because provider history was missing.
+            if latest_day == entry_day:
+                reason = "t_plus_one"
+            else:
+                last_idx = next(i for i in range(entry_idx + 1, len(bars)) if bars[i].date == latest_day)
+                if self.sample_end is not None and self._sellable(bars, last_idx, signal):
+                    expected_end = expected_trading_boundary(signal.market, self.sample_end, right=True)
+                    if latest_day == self.sample_end or (expected_end and latest_day == expected_end):
+                        reason = "sample_end"
+                    elif expected_end and latest_day < expected_end:
+                        reason = "history_end"
+                    else:
+                        reason = "boundary_unverified"
+                else:
+                    reason = "untradeable"
+            mark = max(
+                (b for b in reversed(bars[entry_idx:])
+                 if b.date >= entry_day and valid_trade_price(b.close)),
+                key=lambda b: b.date, default=None,
+            )
+            mark_price = mark.close if mark is not None else entry_price
+            return BTOpenPosition(
+                symbol=signal.symbol, market=signal.market, entry_date=entry_day,
+                entry_price=entry_price, quantity=qty, mark_date=mark.date if mark else None, mark_price=mark_price,
+                buy_cash_delta=buy.cash_delta, unrealized_pnl=round(buy.cash_delta + qty * mark_price, 4),
+                exit_blocked_reason=reason,
+            )
+        exit_price, exit_date, exit_reason, held = exit_fill
         rt = self.cost.round_trip_pnl(entry_price, exit_price, qty)
         return BTTrade(
             symbol=signal.symbol,
             market=signal.market,
             entry_date=bars[entry_idx].date,
-            entry_price=round(entry_price, 4),
+            entry_price=entry_price,
             exit_date=exit_date,
-            exit_price=round(exit_price, 4),
+            exit_price=exit_price,
             quantity=qty,
             pnl=rt["pnl"],
             pnl_pct=rt["pnl_pct"],
@@ -251,7 +352,7 @@ class Backtester:
         )
 
     @staticmethod
-    def _bar_key(trade: BTTrade, bars_by_symbol: dict):
+    def _bar_key(trade: BTTrade | BTOpenPosition, bars_by_symbol: dict):
         """定位该笔交易在 bars_by_symbol 中的键((symbol, market) 优先, 退化为 symbol)。"""
         key = (trade.symbol, trade.market)
         if key in bars_by_symbol:
@@ -261,18 +362,37 @@ class Backtester:
         return None
 
     def _daily_equity_curve(
-        self, trades: list[BTTrade], bars_by_symbol: dict
+        self, trades: list[BTTrade], bars_by_symbol: dict, open_positions: list[BTOpenPosition],
     ) -> tuple[list[float], list[str]]:
         """逐交易日净值曲线 = 现金 + 持仓当日收盘市值(含浮动盈亏)。
 
         B0.1(2026-09-09): 原实现按平仓笔累积已实现盈亏, 与 metrics.py 的
         "逐交易日净值"契约不符, 导致年化/夏普按笔年化、最大回撤忽略持仓期浮亏。
         """
-        if not trades:
-            return [self.initial_capital], [""]
+        positions = [*trades, *open_positions]
+        if not positions:
+            dates = []
+            if self.sample_start is not None or self.sample_end is not None:
+                dates = sorted({bar.date for bars in bars_by_symbol.values() for bar in bars
+                                if (self.sample_start is None or bar.date >= self.sample_start)
+                                and (self.sample_end is None or bar.date <= self.sample_end)
+                                and valid_trade_price(bar.close)})
+            return [self.initial_capital] * (1 + len(dates)), ["", *dates]
 
-        start = min(t.entry_date for t in trades)
-        end = max(t.exit_date for t in trades)
+        start = min(t.entry_date for t in positions)
+        if self.sample_start is not None:
+            start = min(start, self.sample_start)
+        # Keep observed in-window idle days after liquidation. An open position
+        # instead caps the right edge at actual marks/fills, not unrelated prices.
+        end = max([t.exit_date for t in trades] + [p.mark_date or p.entry_date for p in open_positions])
+        if self.sample_end is not None and not open_positions:
+            traded_keys = {self._bar_key(trade, bars_by_symbol) for trade in trades}
+            observed_end = max(
+                (bar.date for key in traded_keys for bar in bars_by_symbol.get(key, ())
+                 if bar.date <= self.sample_end and valid_trade_price(bar.close)),
+                default=end,
+            )
+            end = max(end, observed_end)
         all_dates = sorted(
             {
                 b.date
@@ -286,18 +406,19 @@ class Backtester:
 
         close_by_key: dict = {}
         for key, bars in bars_by_symbol.items():
-            close_by_key[key] = {b.date: b.close for b in bars}
+            close_by_key[key] = {b.date: b.close for b in bars if valid_trade_price(b.close)}
 
-        entries: dict[str, list[tuple[int, BTTrade]]] = {}
+        entries: dict[str, list[tuple[int, BTTrade | BTOpenPosition]]] = {}
         exits: dict[str, list[tuple[int, BTTrade]]] = {}
-        for idx, t in enumerate(trades):
+        for idx, t in enumerate(positions):
             entries.setdefault(t.entry_date, []).append((idx, t))
-            exits.setdefault(t.exit_date, []).append((idx, t))
+            if isinstance(t, BTTrade):
+                exits.setdefault(t.exit_date, []).append((idx, t))
 
         cash = self.initial_capital
         open_pos: list[dict] = []
-        curve: list[float] = []
-        dates: list[str] = []
+        curve: list[float] = [self.initial_capital]
+        dates: list[str] = [""]
 
         for d in all_dates:
             # 先出场(回款)再入场(占款), 同日不重复计
@@ -306,23 +427,21 @@ class Backtester:
                 cash += sell.cash_delta
                 open_pos = [p for p in open_pos if p["tid"] != idx]
             for idx, t in entries.get(d, []):
-                buy = self.cost.fill("buy", t.entry_price, t.quantity)
-                cash += buy.cash_delta
+                cash += (t.buy_cash_delta if isinstance(t, BTOpenPosition)
+                         else self.cost.fill("buy", t.entry_price, t.quantity).cash_delta)
                 open_pos.append(
                     {
                         "tid": idx,
                         "key": self._bar_key(t, bars_by_symbol),
                         "qty": t.quantity,
-                        "entry_price": t.entry_price,
+                        "last_close": t.entry_price,
                     }
                 )
 
             mv = 0.0
             for p in open_pos:
-                px = close_by_key.get(p["key"], {}).get(d)
-                if px is None:
-                    px = p["entry_price"]  # 当日无行情(停牌等)按成本估值, 保守
-                mv += p["qty"] * px
+                p["last_close"] = close_by_key.get(p["key"], {}).get(d, p["last_close"])
+                mv += p["qty"] * p["last_close"]
             curve.append(round(cash + mv, 4))
             dates.append(d)
 
@@ -336,6 +455,7 @@ class Backtester:
         bars_by_symbol: 键可为 (symbol, market) 或 symbol。
         """
         trades: list[BTTrade] = []
+        open_positions: list[BTOpenPosition] = []
         skipped = 0
         for sig in signals:
             bars = bars_by_symbol.get((sig.symbol, sig.market)) or bars_by_symbol.get(sig.symbol)
@@ -346,20 +466,29 @@ class Backtester:
             if t is None:
                 skipped += 1
                 continue
-            trades.append(t)
+            if isinstance(t, BTOpenPosition):
+                open_positions.append(t)
+            else:
+                trades.append(t)
 
         trades_sorted = sorted(trades, key=lambda t: (t.exit_date, t.entry_date))
-        curve, dates = self._daily_equity_curve(trades_sorted, bars_by_symbol)
+        curve, dates = self._daily_equity_curve(trades_sorted, bars_by_symbol, open_positions)
         M.validate_equity_curve(curve, dates)
 
         pnls = [t.pnl for t in trades]
+        metrics = M.summarize(curve, pnls)
+        metrics.update(
+            open_positions=len(open_positions),
+            unrealized_pnl=round(sum(p.unrealized_pnl for p in open_positions), 4),
+        )
         return BacktestResult(
             trades=trades,
             equity_curve=curve,
             equity_dates=dates,
-            metrics=M.summarize(curve, pnls),
+            metrics=metrics,
             initial_capital=self.initial_capital,
             skipped=skipped,
+            open_positions=open_positions,
         )
 
 

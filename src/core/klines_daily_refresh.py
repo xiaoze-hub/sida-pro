@@ -14,29 +14,43 @@ import os
 from datetime import date, datetime, time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+if TYPE_CHECKING:
+    from apscheduler.schedulers.base import BaseScheduler
+
 logger = logging.getLogger(__name__)
+_THEME_BOARDS_ENV = 'SIDA_FACTOR_THEME_OBSERVATION_BOARDS'
+_CN_TZ = ZoneInfo('Asia/Shanghai')
+COVERAGE_UNIVERSE = 'stock_list_sh_sz_main_chinext_star'
+COVERAGE_CALIBER = 'cn_qfq_tq_preferred_tencent_close_volume_quality'
 
 
 def _now_cn() -> datetime:
-    return datetime.now(ZoneInfo("Asia/Shanghai"))
+    return datetime.now(_CN_TZ)
 
 
-def _save_receipt(receipt: dict) -> None:
+def _report_path(report: str, day: date) -> Path:
+    return Path(os.environ.get('DATA_DIR') or './data') / 'reports' / report / f'{day.isoformat()}.json'
+
+
+def _save_json(path: Path, receipt: dict) -> None:
     """Atomic replace: readers must never see a half-written receipt."""
-    dest = Path(os.environ.get("DATA_DIR") or "./data") / "reports" / "kline_coverage"
-    dest.mkdir(parents=True, exist_ok=True)
-    path = dest / f"{receipt['trade_date']}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path | None = None
     try:
-        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=dest, delete=False) as tmp:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
             tmp_path = Path(tmp.name)
             json.dump(receipt, tmp, ensure_ascii=False, sort_keys=True)
         tmp_path.replace(path)
     finally:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
+
+
+def _save_receipt(receipt: dict) -> None:
+    _save_json(_report_path('kline_coverage', date.fromisoformat(receipt['trade_date'])), receipt)
 
 
 def daily_job(days: int = 10, concurrency: int = 8) -> dict:
@@ -95,8 +109,8 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
         "expected_count": expected,
         "valid_count": valid,
         "status": status,
-        "universe": "stock_list_sh_sz_main_chinext_star",
-        "caliber": "cn_qfq_tq_preferred_tencent_close_volume_quality",
+        "universe": COVERAGE_UNIVERSE,
+        "caliber": COVERAGE_CALIBER,
         "ingest_ok_count": stats["ok"],
         "ingest_failed_count": stats["fail"],
     }
@@ -113,11 +127,12 @@ def daily_job(days: int = 10, concurrency: int = 8) -> dict:
 
 
 def daily_job_with_factors() -> dict:
-    """Run the legacy factor snapshot only after the upstream run has committed."""
+    """Run factors after daily commits; never contact the board gateway here."""
     from src.collectors.factor_daily import collect_once
     from src.db.session import WriteSessionLocal
 
     stats = daily_job()
+    board_config = os.environ.get(_THEME_BOARDS_ENV, '').strip()
     receipt = stats.get("coverage_receipt") or {}
     coverage = {
         "coverage_status": receipt.get("status", "not_attempted"),
@@ -130,6 +145,9 @@ def daily_job_with_factors() -> dict:
             "universe_empty": "universe_empty",
         }.get(coverage["coverage_status"], "target_bars_unverified")
         stats["factor_refresh"] = {"written": 0, "reason": reason, **coverage}
+        if board_config:
+            stats["theme_observation"] = {"written": 0, "reason": "factor_unavailable", "upstream_reason": reason}
+            logger.info("题材成员盘后观测未执行: date=%s upstream=%s", receipt.get("trade_date"), reason)
         if reason not in ("before_close", "non_trading_day"):
             logger.warning("个股因子日快照跳过: date=%s reason=%s", receipt.get("trade_date"), reason)
         return stats
@@ -141,4 +159,86 @@ def daily_job_with_factors() -> dict:
     except Exception as exc:  # noqa: BLE001 - preserve actual upstream result
         stats["factor_refresh"] = {"written": 0, "reason": "collect_failed", **coverage}
         logger.error("个股因子日快照计算失败: date=%s error=%s", target, type(exc).__name__)
+    if board_config:
+        factor = stats['factor_refresh']
+        written = factor.get('written')
+        if stats.get('coverage_receipt_persisted') is not True:
+            preparation = {'written': 0, 'reason': 'receipt_not_persisted'}
+        elif factor.get('reason') or type(written) is not int or written <= 0:
+            preparation = {'written': 0, 'reason': 'factor_unavailable',
+                           'upstream_reason': factor.get('reason') or 'no_factor_rows'}
+        else:
+            ready = {'version': 1, 'factor_finished_at': _now_cn().isoformat(),
+                     'coverage_receipt': receipt, 'coverage_receipt_persisted': True,
+                     'factor_refresh': {'written': written}}
+            try:
+                _save_json(_report_path('factor_theme_ready', date.fromisoformat(receipt['trade_date'])), ready)
+                preparation = {'written': 0, 'reason': 'queued_for_observation'}
+            except OSError as exc:
+                preparation = {'written': 0, 'reason': 'factor_receipt_write_failed'}
+                logger.warning('题材观测就绪回执写入失败: date=%s error=%s', target, type(exc).__name__)
+        stats['theme_observation'] = preparation
+        logger.info('题材观测就绪状态: date=%s reason=%s', target, preparation['reason'])
     return stats
+
+
+def register_theme_observation(scheduler: BaseScheduler) -> bool:
+    if not os.environ.get(_THEME_BOARDS_ENV, '').strip():
+        return False
+    scheduler.add_job(
+        daily_theme_observation_job, 'cron', day_of_week='mon-fri', hour='17-19', minute='*/15',
+        timezone=_CN_TZ, id='factor-theme-observation', name='盘后题材成员观测',
+        replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=300,
+    )
+    return True
+
+
+def daily_theme_observation_job() -> dict:
+    """Separate optional gateway workload; requires a completed factor run today."""
+    from src.core.factor_theme_observation import capture_after_daily_refresh, configured_boards, factor_receipt_state
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day
+    from src.db.factor_theme_observations import boards_with_stock_evidence
+    from src.db.session import WriteSessionLocal
+
+    config = os.environ.get(_THEME_BOARDS_ENV, '').strip()
+    if not config:
+        return {'written': 0, 'reason': 'disabled'}
+    boards = configured_boards(config)
+    if not boards:
+        logger.warning('题材成员盘后观测未配置有效板块代码')
+        return {'written': 0, 'reason': 'invalid_board_config'}
+    now = _now_cn()
+    day = now.date()
+    try:
+        if not is_trading_day(day):
+            return {'written': 0, 'reason': 'non_trading_day'}
+    except TradingCalendarError:
+        logger.warning('题材成员盘后观测无交易日历: date=%s', day)
+        return {'written': 0, 'reason': 'calendar_unverified'}
+    try:
+        with _report_path('factor_theme_ready', day).open(encoding='utf-8') as file:
+            receipt = json.load(file)
+    except FileNotFoundError:
+        result = {'written': 0, 'reason': 'factor_receipt_missing'}
+    except (OSError, ValueError):
+        result = {'written': 0, 'reason': 'factor_receipt_unreadable'}
+    else:
+        reason = factor_receipt_state(receipt, now)
+        if reason:
+            result = {'written': 0, 'reason': reason}
+        else:
+            try:
+                with WriteSessionLocal() as db:
+                    pending = boards - boards_with_stock_evidence(db, day.isoformat(), boards)
+                if not pending:
+                    return {'written': 0, 'reason': 'observation_already_committed'}
+                result = capture_after_daily_refresh(','.join(sorted(pending)), receipt, now=_now_cn)
+            except Exception as exc:  # evidence failure cannot disturb committed factors
+                result = {'written': 0, 'reason': 'capture_failed'}
+                logger.error('题材成员盘后观测失败: date=%s error=%s', day, type(exc).__name__)
+    if 'reason' in result:
+        waiting = result['reason'] == 'factor_receipt_missing' and now.astimezone(_CN_TZ).time() < time(19, 45)
+        logger.log(logging.INFO if waiting else logging.WARNING,
+                   '题材成员盘后观测未完成: date=%s reason=%s receipt_check=%s',
+                   day, result['reason'], result.get('receipt_check', '-'))
+    return result

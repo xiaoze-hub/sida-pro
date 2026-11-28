@@ -7561,6 +7561,25 @@ CREATE TABLE IF NOT EXISTS national_team_holder_registry (
     )
 
 
+def _m253_factor_theme_observations(conn: Connection) -> None:
+    """Actual collection attempts, not effective-dated historical membership."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS factor_theme_observations (
+            observation_id VARCHAR(64) PRIMARY KEY NOT NULL,
+            trade_date VARCHAR(10) NOT NULL,
+            board_code VARCHAR(9) NOT NULL,
+            fetched_at VARCHAR(40) NOT NULL,
+            stock_evidence_ready BOOLEAN NOT NULL,
+            evidence_fingerprint VARCHAR(64) NOT NULL,
+            payload TEXT NOT NULL
+        )
+    """))
+    conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_factor_theme_observations_lookup
+        ON factor_theme_observations (trade_date, board_code, fetched_at DESC, observation_id DESC)
+    """))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -7823,6 +7842,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(251, "national_team_holdings", _m251_national_team_holdings),
     # 社保组合 / 险资产品账户的名字无法事先枚举, 从全市场扫描里认出来存这里(2026-11-18)。
     Migration(252, "national_team_holder_registry", _m252_national_team_holder_registry),
+    Migration(253, "factor_theme_observations", _m253_factor_theme_observations),
 )
 
 

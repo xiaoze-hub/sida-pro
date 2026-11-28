@@ -22,8 +22,11 @@ def test_equity_curve_is_daily_and_spans_all_bars():
     res = Backtester().run([sig], {("X", "CN"): bars})
     assert res.trades, "应有 1 笔成交"
     # 入场 01-02, 末根平仓 → 曲线覆盖 01-02..01-10 共 9 个交易日
-    assert len(res.equity_curve) == len(res.equity_dates) == 9
-    assert res.equity_dates == [f"2026-01-{d:02d}" for d in range(2, 11)]
+    assert len(res.equity_curve) == len(res.equity_dates) == 10
+    assert res.equity_dates == ["", *(f"2026-01-{d:02d}" for d in range(2, 11))]
+    core = {k: v for k, v in res.metrics.items() if k not in {'open_positions', 'unrealized_pnl'}}
+    assert core == M.summarize(res.equity_curve, [t.pnl for t in res.trades])
+    assert res.metrics['open_positions'] == 0
 
 
 def test_equity_marks_floating_loss():
@@ -61,3 +64,27 @@ def test_validate_equity_curve_contract():
     with pytest.raises(ValueError):
         M.validate_equity_curve([100, 101], ["", ""])
     M.validate_equity_curve([100, 101], ["", "2026-01-02"])
+
+
+@pytest.mark.parametrize('portfolio', [False, True])
+def test_explicit_window_keeps_observed_cash_days_after_final_exit(portfolio):
+    from src.core.backtest.portfolio import PortfolioBacktester, PortfolioConfig
+
+    days = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20']
+    bars = [_bar(day, 10, 10.5, 9.5, 10) for day in days]
+    sig = Signal('X', 'CN', days[0], holding_days=1)
+    runner = (PortfolioBacktester(PortfolioConfig(sample_start=days[0], sample_end=days[3]))
+              if portfolio else Backtester(sample_start=days[0], sample_end=days[3]))
+    outcome = runner.run([sig], {'X': bars})
+    assert outcome.trades[0].exit_date == days[2]
+    assert outcome.equity_dates == ['', *days[:4]]
+    assert outcome.equity_curve[-1] == outcome.equity_curve[-2]
+
+
+def test_explicit_window_with_no_fills_reports_observed_cash_days():
+    days = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19']
+    bars = [_bar(day, 10, 11, 9, 10) for day in days]
+    runner = Backtester(sample_start=days[1], sample_end=days[2])
+    result = runner.run([], {'X': bars})
+    assert result.equity_dates == ['', *days[1:3]]
+    assert result.equity_curve == [result.initial_capital] * len(result.equity_dates)
